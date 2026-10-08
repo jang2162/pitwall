@@ -78,10 +78,24 @@
 - 레포를 건드리고 싶지 않은 프로젝트는 "개인 전용" 모드로 전환 → 같은 파일 구조를 `<appdata>/projects/<id>/config/`에 저장
 - 기존 설정 임포트 (편의): `.idea/runConfigurations/*.xml`, `.idea/dataSources.xml`, `.vscode/launch.json`, `.vscode/tasks.json`
 
+### 설정 파일 스키마 버전 (D23)
+- 모든 설정 파일(`project.toml`, `run/*.toml`, `db/*.toml`, `settings.toml`, `keymap.toml`, `relay.toml`) 첫 줄에 `schema = <정수>`
+- 앱이 구버전 파일을 읽으면 **자동 마이그레이션** → 원본은 `.pitwall/.backup/<파일>.v<N>`(프로젝트) / `<appdata>/backup/`(전역)에 보관 후 새 형식으로 저장
+- 커밋되는 `.pitwall/` 파일이 마이그레이션되면 알림 표시 (팀원과 앱 버전이 다를 수 있으므로 "변경 사항 커밋 필요" 안내)
+- 앱보다 **새 버전** 스키마 파일은 읽기 전용으로 열고 업데이트 안내 (덮어쓰지 않음)
+- 마이그레이션은 버전별 순차 함수(`v1→v2→v3`)로 구현, 각 단계 테스트 픽스처 유지
+
+### 로그 · 진단 (D22)
+- 로그: `<appdata>/logs/` 회전 로그(코어 · UI · LSP · DAP · Relay 별), 기본 7일 보관
+- 사용 통계(텔레메트리) 수집 없음
+- 크래시 리포트: 기본 꺼짐. 켜면 크래시 시 스택 · 버전 · OS만 전송(경로 · 코드 · 비밀 제외), 전송 전 내용 확인 가능
+- "진단 정보 복사": 버전 · OS · 활성 기능 · 최근 오류 로그를 클립보드로 (이슈 제보용)
+
 ### 프로젝트 설정 예시
 
 ```toml
 # .pitwall/project.toml
+schema = 1
 name = "billing-api"
 [languages]
 enabled = ["kotlin", "sql"]

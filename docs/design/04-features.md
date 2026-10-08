@@ -40,6 +40,7 @@ pitwall <path>[:line[:col]]
 | F2-2 | 단일 인스턴스 전달 + `path:line:col` 파싱 | P0 |
 | F2-3 | OS 파일 연결 (Open With), `pitwall://open?path=` 딥링크 | P1 |
 | F2-4 | 루트 후보 추천 + 생성 시 자동 감지 체크리스트 | P0 (추천) / P1 (체크리스트) |
+| F2-5 | **git worktree 경로 인식**: 미등록 워크트리면 메인 저장소 프로젝트에 연결해 해당 워크트리로 열기 (Orca 워크트리 대응) | P0 |
 
 ## F3. 파일 트리 & 탐색
 
@@ -109,6 +110,7 @@ pitwall <path>[:line[:col]]
 | F5-17 | blame 뷰 (거터 annotate), 클릭 시 해당 커밋으로 이동, "이 커밋 이전으로 blame" | P0 |
 | F5-18 | **선택 영역 히스토리** (`git log -L`) | P1 |
 | F5-19 | 커밋 기준 파일 열기 (특정 리비전 내용 보기) | P1 |
+| F5-20 | Git 호스팅 연동: PR 목록(GitHub/GitLab) + 브라우저로 열기. PR 리뷰 · 코멘트는 웹에서 (D20) | P2 |
 
 ## F6. 데이터베이스
 
@@ -178,10 +180,34 @@ id = "orca";     command = "orca {project_root}"         # 사용자가 실제 O
 | 방향 | 방식 |
 |---|---|
 | Pitwall → Orca | 외부 도구 레지스트리의 명령 템플릿 실행 (`{project_root}` 등 변수 치환) |
-| Orca → Pitwall | Orca 설정 → 앱 추가: 메뉴 라벨 `Pitwall`, Terminal 명령 `pitwall` → Orca가 경로를 넘겨 실행하면 F2 흐름(프로젝트 찾기/생성)으로 처리 |
+| Orca → Pitwall | Orca **Settings → General → Open in menu**에 앱 추가: 라벨 `Pitwall`, 명령 `pitwall` |
 
-- `pitwall` CLI는 디렉터리 · 파일 · `path:line[:col]` 인자를 모두 받는다 (F2-2)
-- CLI 설치 경로: macOS `/usr/local/bin/pitwall` (앱 메뉴 "Shell 명령 설치"), Orca가 PATH를 못 찾는 경우를 위해 절대 경로도 안내
+#### Orca "Open in" 동작 (Orca 소스 `src/main/external-editor-launch.ts` · 공식 문서 확인, 2026-10)
+
+| 항목 | 확인 내용 | Pitwall 대응 |
+|---|---|---|
+| 등록 형식 | 앱마다 `{ label, command }`만 저장, 최대 8개. 기본값 VS Code(`code`) | 라벨 `Pitwall`, 명령 `pitwall` |
+| 넘기는 인자 | **절대 경로 1개만** 명령 뒤에 붙임. 치환 변수(`{file}` 등) 없음, **줄/열 번호 없음** | `pitwall <절대경로>`만 처리하면 됨. `path:line` 형식은 Orca 경로로는 오지 않음 |
+| 경로 종류 | ① 워크트리 사이드바 "Open in" → **워크트리 디렉터리** ② 소스 컨트롤 변경 파일 우클릭 → **파일 절대 경로** | 디렉터리 · 파일 둘 다 F2 흐름으로 처리 |
+| 실행 방식 | 공백 없는 명령: PATH에서 찾아 `spawn(command, [path])` 직접 실행 / 공백 포함 명령: `/bin/sh -c "<command> <이스케이프된 경로>"` | 옵션이 필요하면 `pitwall --reuse-window` 같은 복합 명령도 가능 |
+| PATH | 시작 시 로그인 셸 PATH를 가져옴 → `/usr/local/bin`, `~/.local/bin` 등 인식 | CLI 설치 경로가 셸 PATH에 있으면 됨. 안 되면 절대 경로(`/usr/local/bin/pitwall`) 등록 |
+| 경로 검증 | 존재하는 절대 경로가 아니면 실행 안 함 | — |
+| SSH 워크트리 | VS Code(`code`/`code-insiders`)만 Remote-SSH로 열림, **다른 앱은 로컬 경로 전용** | Orca의 원격 워크트리는 Pitwall로 열 수 없음 → Pitwall Relay로 같은 원격 경로를 직접 열도록 안내 |
+
+#### 워크트리 경로 처리 (F2-5)
+Orca는 작업마다 별도 `git worktree` 디렉터리를 만들기 때문에, 그대로 두면 Orca에서 열 때마다 "프로젝트 찾기"가 뜬다.
+- `pitwall <path>` 처리 시 경로가 등록되지 않은 git worktree면 `git rev-parse --git-common-dir`로 **메인 저장소를 찾아 그 프로젝트에 연결**
+- 프로젝트 창에서 해당 워크트리를 **활성 워크트리로 전환**해 연다 (파일 트리 · git · 터미널 루트가 워크트리 기준). 상단 브랜치 팝업에 워크트리 목록 표시 (F5-15)
+- 워크트리별 상태(열린 탭 등)는 프로젝트 로컬 상태에 워크트리 경로 단위로 저장
+- 메인 저장소도 미등록이면 F2 흐름(루트 후보에 메인 저장소 추천)
+
+#### 워크트리와 `.pitwall/` 개인 설정
+- `.pitwall/*.toml`(커밋됨)은 워크트리에도 그대로 존재
+- `.pitwall/*.local.toml`(gitignore)은 새 워크트리에 없음 → Pitwall은 **워크트리에 없으면 메인 저장소의 `.local.toml`을 읽음**
+- Orca 쪽에서 복사하고 싶다면 저장소 루트 `.worktreeinclude`에 `.pitwall/project.local.toml` 같은 **리터럴 경로**를 적으면 됨 (Orca는 glob 미지원) — 설정 화면에 안내
+
+#### F8-6 안내 화면
+- 설정 > 외부 도구 > "Orca에서 Pitwall 열기": 위 등록 값 표시 + 복사 버튼, `pitwall` CLI 설치 여부 · 셸 PATH 포함 여부 검사
 
 ## F9. 원격 연결 (Relay)
 → 상세는 [08-remote-mobile.md](08-remote-mobile.md)
@@ -227,6 +253,8 @@ id = "orca";     command = "orca {project_root}"         # 사용자가 실제 O
 | F11-5 | 알림 · 백그라운드 작업 상태바 | P0 |
 | F11-6 | 설정 UI (전역/프로젝트) + 파일 직접 편집 | P1 |
 | F11-7 | UI 언어 한국어/영어 (Fluent) | P1 |
+| F11-10 | 진단: 로컬 로그 보기, "진단 정보 복사"(버전 · OS · 설정 요약, 비밀 제외), 크래시 리포트 전송은 **사용자가 켠 경우에만** (D22) | P1 |
+| F11-11 | 자동 업데이트: stable / preview 채널 선택 (D21) | P1 |
 
 ## F12. 모바일 컴패니언 — **보류**
 

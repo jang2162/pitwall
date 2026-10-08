@@ -15,6 +15,7 @@
 | [08-remote-mobile.md](08-remote-mobile.md) | Relay 기반 원격 연결 (Zed 방식 설치 · 재연결), 모바일(보류) |
 | [09-references.md](09-references.md) | 참고 앱 조사와 시사점 |
 | [10-ui.md](10-ui.md) | 화면 구성 · UI 스택 · 키보드/마우스 조작 |
+| [11-m0-plan.md](11-m0-plan.md) | M0(기반) 작업 분할 |
 
 ## 한 줄 요약
 

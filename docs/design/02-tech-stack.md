@@ -117,6 +117,19 @@ macOS 우선 항목:
 - 외부 도구 감지: `/Applications`, JetBrains Toolbox 경로, `mdfind`로 번들 ID 검색
 - 플랫폼 의존 코드는 `pw-platform` 크레이트에 격리 → 다른 OS 지원 시 구현만 추가
 
+## 3-1. 배포 · 업데이트 (D21)
+
+| 항목 | 결정 |
+|---|---|
+| 배포 위치 | **GitHub Releases** (설치 파일 + 업데이트 매니페스트 `latest.json`) |
+| 자동 업데이트 | Tauri `plugin-updater` (서명된 업데이트 패키지 검증) |
+| 채널 | **stable / preview** 2개 — preview는 태그 `vX.Y.Z-preview.N`, 설정에서 선택 |
+| macOS | **Apple Developer 계정**(연 $99)으로 서명 · 공증, Homebrew cask 제공 |
+| Windows | 코드 서명은 출시 시점에 결정 (초기엔 미서명 + SmartScreen 안내) |
+| Linux | AppImage(자동 업데이트) / deb / rpm |
+| Relay | Desktop과 같은 릴리스에 musl 정적 바이너리 포함 (버전 정확히 일치, 08) |
+| 빌드 | GitHub Actions: 태그 푸시 → 3개 OS 빌드 · 서명 · 릴리스 업로드 |
+
 ## 4. 레포 구조 (예정)
 
 ```
