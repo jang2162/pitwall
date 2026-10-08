@@ -23,7 +23,7 @@
 - Git = 읽기 `gitoxide`, 쓰기 `git CLI` / DB = `sqlx`+드라이버 / 디버깅 = **DAP** / 코드 인텔리전스 = **LSP + tree-sitter**
 - 에디터는 "뷰어 우선, 가벼운 편집" (CodeMirror 6)
 - **macOS 우선**, Linux/Windows 지원
-- 확장: 선언형 확장(테마 · 언어) + WASM 플러그인, 내장 기능도 확장 API 위에서 구현
+- 확장: 선언형 확장(테마 · 언어 · 키맵) + WASM 플러그인, 내장 기능도 확장 API 위에서 구현
 - 원격: 원격 머신에 **Pitwall Relay** 설치 → 직접 연결(LAN · Tailscale), SSH 대체. 중계 서버 없음
 - 모바일: **보류** (MVP · 로드맵 제외)
 - MCP: 툴별 on/off · 프리셋 · 등급별 자동 승인
