@@ -16,7 +16,7 @@
 | 터미널 | xterm.js + `portable-pty` | 실행 콘솔/터미널 공용 |
 | Git 읽기 | **gitoxide (`gix`)** | log/graph/status/blame/diff를 빠르게 |
 | Git 쓰기 | **git CLI** | commit/merge/rebase/checkout/push — 훅, 서명, credential helper 존중 |
-| DB | **sqlx** (Postgres/MySQL/SQLite), `tiberius`(MSSQL), `redis-rs`, (Oracle은 후순위) | 드라이버 추상화 계층 위에 얹음 |
+| DB | **sqlx** (Postgres/MySQL/SQLite) + **`redis-rs`** (Redis) | 드라이버 추상화 계층 위에 얹음. MSSQL(`tiberius`)은 이후, Oracle 등은 JDBC 브리지 확장 검토 |
 | DB 그리드 | Glide Data Grid (canvas) | 수십만 행 가상 스크롤 |
 | SQL 편집 | CodeMirror `@codemirror/lang-sql` + 스키마 기반 자동완성 | |
 | 디버깅 | **DAP 클라이언트** (Rust 구현) | js-debug, debugpy, codelldb, delve, java-debug |
@@ -27,9 +27,9 @@
 | 파일 감시 | `notify` (+ debounce) | |
 | 로컬 저장소 | SQLite (`rusqlite`) + TOML 설정 파일 | |
 | 비밀 | `keyring` (macOS Keychain / Windows Credential / Secret Service) | |
-| 원격 | **Pitwall Relay 데몬** + 연결 계층 `pw-link` (QUIC `quinn` / WebSocket, Noise `snow`) | 직접 연결 → Relay Hub 경유 → SSH(`russh`) 대체 순 (08 참고) |
-| Relay Hub | Rust `axum` 단일 바이너리 (도커 이미지 제공) | 셀프호스팅 가능, E2E 암호문만 중계 + 푸시 전송 |
-| 모바일 | **React Native (Expo)** + `uniffi`로 `pw-link` 네이티브 모듈 | iOS 우선 (macOS 우선 정책과 일관) |
+| 원격 | **Pitwall Relay 데몬** + 연결 계층 `pw-link` (QUIC `quinn`, Noise `snow`, mDNS) | 직접 연결(LAN/Tailscale) → SSH(`russh`) 대체. 중계 서버 없음 (08 참고) |
+| 모바일 | **React Native (Expo)** + `uniffi`로 `pw-link` Kotlin 바인딩 | **Android 먼저**, 포그라운드 서비스로 상시 연결 |
+| 라이선스 검사 | `cargo-deny`, `license-checker`(npm) | MIT 프로젝트 — 허용형 라이선스만 |
 | 확장 런타임 | `wasmtime` (WASM Component Model, WIT) | 권한 기반 샌드박스 (07 참고) |
 | 테마 | 디자인 토큰 → CSS 변수, VS Code 테마 import | |
 | UI 언어(i18n) | **Fluent** (`fluent-rs` / `@fluent/bundle`) | 코어 · 데스크톱 · 모바일 공용 리소스 |
@@ -58,7 +58,7 @@
 
 ### 2.2 에디터: CodeMirror 6 vs Monaco
 - Monaco는 VS Code 수준 기능이지만 무겁고(수 MB, 워커 다수) 다중 인스턴스에 약함
-- 본 앱은 "보기 · 비교 · 작은 수정" 중심 → CodeMirror 6
+- 편집 수준은 **L2 + 멀티 커서**로 결정 (D7) — CodeMirror 6이 자동완성 · 멀티 커서(`allowMultipleSelections`, 사각 선택)를 기본 지원하므로 충분 → CodeMirror 6
 - LSP 기능(hover, go-to-def, diagnostics, completion)은 코어의 LSP 클라이언트 결과를 CodeMirror 확장으로 연결
 
 ### 2.3 Git: gitoxide + git CLI 하이브리드
@@ -89,7 +89,7 @@
 | Linux (x64/arm64, AppImage/deb/rpm) | Tier 2 | CI 빌드 + 스모크 테스트, WebKitGTK 성능 검증 |
 | Windows (x64/arm64, msi) | Tier 2 | CI 빌드 + 스모크 테스트, WebView2 |
 | Relay (원격) | Linux x64/arm64(musl 정적) Tier 1, macOS Tier 1, Windows Tier 2 | 원격 서버는 대부분 Linux이므로 Relay는 Linux도 1급 |
-| 모바일 | iOS Tier 1, Android Tier 2 | |
+| 모바일 | **Android Tier 1**, iOS 이후 | |
 
 macOS 우선 항목:
 - 네이티브 메뉴바, `⌘` 단축키 체계, 전체화면/탭 창, Keychain
@@ -104,8 +104,7 @@ pitwall/
 ├─ apps/
 │  ├─ desktop/           # Tauri 앱 (src-tauri + React UI)
 │  ├─ relay/             # pitwall-relay: 헤드리스 코어 데몬 (원격 설치용 겸 MCP 서버)
-│  ├─ hub/               # Relay Hub (셀프호스팅 중계 서버)
-│  └─ mobile/            # Expo 앱 (iOS/Android)
+│  └─ mobile/            # Expo 앱 (Android 우선)
 ├─ crates/
 │  ├─ pw-core/           # 프로젝트/워크스페이스, 이벤트 버스, 설정
 │  ├─ pw-rpc/            # RPC 타입/프로토콜, transport(IPC/stdio/ws)
@@ -116,7 +115,7 @@ pitwall/
 │  ├─ pw-dap/            # DAP 클라이언트
 │  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지
 │  ├─ pw-index/          # tree-sitter 심볼 인덱스
-│  ├─ pw-link/           # 기기 키 · 페어링 · Noise 세션 · 전송(직접/Hub/SSH)
+│  ├─ pw-link/           # 기기 키 · 페어링 · Noise 세션 · 전송(QUIC/SSH) · Tailscale 검색
 │  ├─ pw-relay/          # Relay 데몬, 기기별 권한, SSH 설치 부트스트랩
 │  ├─ pw-ext/            # 확장 로더, 매니페스트, wasmtime 호스트, 기여 레지스트리
 │  ├─ pw-i18n/           # Fluent 리소스 로딩

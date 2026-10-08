@@ -61,14 +61,17 @@ pitwall <path>[:line[:col]]
 | F4-1 | 탭 에디터, 스플릿, 구문 강조(tree-sitter) | P0 |
 | F4-2 | 기본 편집, 저장, 외부 변경 시 리로드(미저장 충돌 시 diff 제시) | P0 |
 | F4-3 | LSP: hover, 정의로 이동, 참조 찾기, 구현으로 이동, 진단(문제 패널), 문서 심볼(아웃라인) | P0 |
-| F4-4 | LSP: 자동완성, 시그니처 도움말, rename, code action, 포맷 | P1 |
+| F4-4 | LSP: 자동완성, 시그니처 도움말, rename, code action, 포맷 (편집 L2) | P1 |
 | F4-5 | 언어 서버 자동 설치/업데이트 관리 UI | P1 |
 | F4-6 | 거터: git 변경 표시(추가/수정/삭제), 클릭 시 인라인 diff/되돌리기 | P0 |
 | F4-7 | 인라인 blame (현재 라인 작성자 · 시점 · 커밋 메시지) | P0 |
 | F4-8 | 내비게이션 히스토리 (뒤로/앞으로), 브레드크럼 | P1 |
-| F4-9 | 미니맵, 폴딩, 멀티 커서 | P2 |
+| F4-9 | 멀티 커서 (추가 커서, 다음 일치 항목 선택, 사각/컬럼 선택) | P1 |
+| F4-10 | 폴딩, 괄호 매칭, 들여쓰기 가이드 | P1 |
+| F4-11 | 미니맵 | P2 |
 
-초기 지원 언어(LSP 기준): TypeScript/JavaScript, Kotlin/Java, Python, Go, Rust, SQL, JSON/YAML/TOML, Markdown
+- 편집 수준: **L2 + 멀티 커서** (D7). 고급 리팩터링 · 라이브 템플릿 등은 비목표 → 외부 도구로 열기
+- 주력 언어 미정 (D6): 언어 지원은 전부 확장 정의(07)로 범용 구현. 구문 강조는 주요 언어 전반을 기본 제공하고, LSP 기본 번들 언어는 M4 시작 시 결정
 
 ## F5. Git
 
@@ -97,7 +100,7 @@ pitwall <path>[:line[:col]]
 | F5-12 | merge, rebase, cherry-pick, revert, reset(soft/mixed/hard 경고) | P0 (merge/cherry-pick) / P1 (나머지) |
 | F5-13 | **3-way 머지 충돌 해결 도구** (ours/base/theirs + 결과) | P0 |
 | F5-14 | 인터랙티브 리베이스 UI (reorder/squash/fixup/drop/reword) | P1 |
-| F5-15 | worktree 목록/생성 (에이전트 병렬 작업용 — Orca 연계) | P1 |
+| F5-15 | worktree 목록/생성/전환 (일반 git 기능, Orca 전용 연계는 하지 않음) | P1 |
 
 ### 5-4. 코드에서 이력 보기
 | ID | 기능 | 우선 |
@@ -111,9 +114,10 @@ pitwall <path>[:line[:col]]
 
 | ID | 기능 | 우선 |
 |---|---|---|
-| F6-1 | 연결 관리 (Postgres, MySQL/MariaDB, SQLite) — 테스트 연결, SSH 터널, SSL | P0 |
-| F6-2 | 추가 드라이버: MSSQL, Redis(키 브라우저) | P1 |
-| F6-3 | 추가 드라이버: Oracle, MongoDB, ClickHouse | P2 |
+| F6-1 | 연결 관리 (PostgreSQL, MySQL/MariaDB, SQLite) — 테스트 연결, SSH 터널, SSL | P0 |
+| F6-2 | **Redis**: 키 브라우저(패턴 스캔, 타입별 뷰어: string/hash/list/set/zset/stream/JSON), TTL 표시 · 수정, 명령 콘솔, DB 번호 전환, 클러스터/Sentinel은 P1 | P0 |
+| F6-3 | 추가 드라이버: MSSQL | P2 |
+| F6-3b | JDBC 브리지 확장 (Oracle 등 기타 DB) | P2 (확장) |
 | F6-4 | 스키마 탐색기 (DB/스키마/테이블/뷰/컬럼/인덱스/FK), DDL 보기 | P0 |
 | F6-5 | SQL 콘솔: 실행(현재 문장/선택/전체), 다중 결과 탭, 취소, 실행 계획 | P0 |
 | F6-6 | 스키마 기반 SQL 자동완성 (테이블/컬럼/별칭) | P1 |
@@ -127,6 +131,9 @@ pitwall <path>[:line[:col]]
 
 ## F7. 실행 환경 & 디버깅
 
+> **후순위 (D6)** — 마일스톤 M6. 단, 내장 터미널(F7-9)은 M1에 포함.
+> 아래 우선순위 표기는 M6 내부 기준 (P0 = M6 필수).
+
 | ID | 기능 | 우선 |
 |---|---|---|
 | F7-1 | 실행 구성 CRUD (`.pitwall/run/*.toml`) — shell, npm/pnpm 스크립트, gradle/maven 태스크, cargo, go, python, docker-compose | P0 |
@@ -135,9 +142,9 @@ pitwall <path>[:line[:col]]
 | F7-4 | 프로세스 관리: 동시 실행, 재시작, 중지(트리 kill), 포트 표시 | P0 |
 | F7-5 | 복합 구성 (여러 구성을 순서/병렬 실행, before-launch 태스크) | P1 |
 | F7-6 | env / `.env` 파일 / 프로필 지원 | P0 |
-| F7-7 | 디버그 (DAP): launch/attach, 브레이크포인트(조건/로그포인트/hit count), 스텝, 콜스택, 변수/워치, 디버그 콘솔(evaluate) | P0 (Node, Python, JVM attach) / P1 (Go, Rust/C++) |
+| F7-7 | 디버그 (DAP): launch/attach, 브레이크포인트(조건/로그포인트/hit count), 스텝, 콜스택, 변수/워치, 디버그 콘솔(evaluate) | P0 (범용 DAP + 기본 번들 어댑터는 주력 언어 결정 후 선정) |
 | F7-8 | 예외 브레이크포인트, 핫 리로드/Hot code replace(가능한 어댑터) | P1 |
-| F7-9 | 내장 터미널 (프로젝트 루트, 여러 탭) | P0 |
+| F7-9 | 내장 터미널 (프로젝트 루트, 여러 탭) | **P0 — M1에 포함** |
 | F7-10 | 테스트 러너 통합 (트리 결과, 실패 이동) | P2 |
 | F7-11 | 원격 실행 + 포트 포워딩 | P1 |
 
@@ -145,11 +152,12 @@ pitwall <path>[:line[:col]]
 
 | ID | 기능 | 우선 |
 |---|---|---|
-| F8-1 | 외부 도구 레지스트리: Orca, Zed, IntelliJ(IDEA/WebStorm 등 JetBrains Toolbox 스크립트), VS Code, Cursor, Finder/Explorer, 터미널 | P0 |
+| F8-1 | 외부 도구 레지스트리: Orca, Zed, IntelliJ(IDEA/WebStorm 등 JetBrains Toolbox 스크립트), VS Code, Cursor, Finder/Explorer, 터미널 — 모두 **터미널 명령 템플릿** 방식으로 통일 | P0 |
 | F8-2 | 커맨드 템플릿: `{project_root}`, `{file}`, `{line}`, `{column}`, `{branch}` 변수 | P0 |
 | F8-3 | 설치 자동 감지 (PATH, 기본 설치 경로, Toolbox) | P1 |
 | F8-4 | 단축키: "기본 도구로 열기"(`⌘⇧E`), 현재 파일/라인 유지 | P0 |
 | F8-5 | 원격 프로젝트: 도구별 원격 열기 지원(Zed `ssh://`, VS Code `--remote ssh-remote+`, JetBrains Gateway) | P2 |
+| F8-6 | **Orca → Pitwall**: Orca의 "앱 추가"(메뉴 라벨 + Terminal 명령)에 등록할 값 안내 화면, `pitwall` CLI 설치 여부 확인 | P0 |
 
 기본 템플릿 예:
 ```toml
@@ -160,8 +168,20 @@ id = "idea";     command = "idea --line {line} {file}"   # 프로젝트 루트�
 [[tools]]
 id = "vscode";   command = "code -g {file}:{line}:{column} {project_root}"
 [[tools]]
-id = "orca";     command = "orca {project_root}"         # 실제 CLI 확인 필요 (06-roadmap 미결정 사항)
+id = "orca";     command = "orca {project_root}"         # 사용자가 실제 Orca 실행 명령으로 수정 가능
 ```
+
+### Orca 연동 범위 (D5)
+
+**양방향 열기, 터미널 명령 방식까지만** 지원한다. worktree 연계 · 에이전트 상태 공유 같은 깊은 연동은 하지 않는다.
+
+| 방향 | 방식 |
+|---|---|
+| Pitwall → Orca | 외부 도구 레지스트리의 명령 템플릿 실행 (`{project_root}` 등 변수 치환) |
+| Orca → Pitwall | Orca 설정 → 앱 추가: 메뉴 라벨 `Pitwall`, Terminal 명령 `pitwall` → Orca가 경로를 넘겨 실행하면 F2 흐름(프로젝트 찾기/생성)으로 처리 |
+
+- `pitwall` CLI는 디렉터리 · 파일 · `path:line[:col]` 인자를 모두 받는다 (F2-2)
+- CLI 설치 경로: macOS `/usr/local/bin/pitwall` (앱 메뉴 "Shell 명령 설치"), Orca가 PATH를 못 찾는 경우를 위해 절대 경로도 안내
 
 ## F9. 원격 연결 (Relay)
 → 상세는 [08-remote-mobile.md](08-remote-mobile.md)
@@ -171,12 +191,11 @@ id = "orca";     command = "orca {project_root}"         # 실제 CLI 확인 필
 | F9-1 | `pitwall-relay` 설치 (한 줄 설치 스크립트, Homebrew/apt, 서비스 등록) | P1 |
 | F9-2 | Desktop에서 "SSH로 Relay 설치" (`~/.ssh/config` 임포트, 업로드 · 서비스 등록 자동) | P1 |
 | F9-3 | QR/코드 페어링, 기기 목록 · 권한(role) · 해제 | P1 |
-| F9-4 | 연결: 직접(LAN/Tailscale) → Relay Hub 경유 → SSH 대체 | P1 (직접/SSH) / P1 (Hub) |
+| F9-4 | 연결: 직접(LAN/Tailscale, QUIC) → SSH 대체. Tailscale 기기 자동 검색 | P1 |
 | F9-5 | 원격 프로젝트: 파일 트리 · 에디터 · git · LSP · 실행 · 터미널 · DB | P1 |
 | F9-6 | 원격 디버그 + 포트 포워딩 | P1 |
 | F9-7 | 세션 유지 · 재접속 시 이어보기 | P1 |
 | F9-8 | Relay 자동 업데이트, 버전 호환 협상 | P1 |
-| F9-9 | Relay Hub 셀프호스팅 (단일 바이너리/도커) | P1 |
 | F9-10 | DB SSH 터널 (로컬 프로젝트에서도 사용) | P0 (F6-1에 포함) |
 | F9-11 | Dev Container / WSL 타깃 | P2 |
 
@@ -208,11 +227,11 @@ id = "orca";     command = "orca {project_root}"         # 실제 CLI 확인 필
 
 | ID | 기능 | 우선 |
 |---|---|---|
-| F12-1 | 페어링 · 다중 Desktop/Relay 연결 | P0 |
+| F12-1 | **Android** 앱, 페어링 · 다중 Desktop/Relay 연결 (Tailscale/LAN) | P0 |
 | F12-2 | 프로젝트 대시보드 (브랜치, 변경 수, 실행 상태) | P0 |
-| F12-3 | 푸시 알림 (실행 종료/실패, 브레이크포인트 정지, MCP 승인 요청) — E2E 암호화 | P0 |
+| F12-3 | 알림 (실행 종료/실패, 브레이크포인트 정지, MCP 승인 요청) — 포그라운드 서비스 상시 연결 + 로컬 알림, 서버 푸시 없음 | P0 |
 | F12-4 | MCP 승인/거절 (diff 보기, 생체인증 확인) | P0 |
-| F12-5 | 실행 구성 시작/중지/재시작, 로그 tail | P0 |
+| F12-5 | 실행 구성 시작/중지/재시작, 로그 tail (데스크톱 M6 이후) | P1 |
 | F12-6 | Git 조회 (상태, diff, 로그, 커밋 상세) | P0 |
 | F12-7 | Git 간단 조작 (fetch/pull, 체크아웃, 커밋, push) | P1 |
 | F12-8 | 파일 읽기 전용 뷰어, 문제 목록, 저장 쿼리 실행(읽기 전용) | P1 |

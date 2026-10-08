@@ -9,7 +9,7 @@
 │  ┌──▼──────────────────────────────────────────────────────────┐  │
 │  │ Host Router  — project_id → Host 연결로 라우팅                │  │
 │  └──┬───────────────────────────────┬──────────────────────────┘  │
-│     │ in-process                    │ pw-link (직접/Hub/SSH)        │
+│     │ in-process                    │ pw-link (QUIC 직접 / SSH)     │
 │  ┌──▼──────────────┐                │                             │
 │  │ Local Host      │                │                             │
 │  │ (pw-core 등)     │                │                             │
@@ -73,7 +73,9 @@
 | 프로젝트 로컬 상태 | `<appdata>/projects/<id>/` | SQLite | 열린 탭, 레이아웃, 브레이크포인트, 쿼리 히스토리, 심볼 인덱스 캐시 |
 | 비밀 | OS 키체인 | | DB 비밀번호, SSH 패스프레이즈, 토큰. 설정 파일에는 `secret_ref`만 |
 
-- `.pitwall/`는 기본 **커밋 가능** 형태로 설계. 개인용 덮어쓰기는 `.pitwall/*.local.toml` (자동으로 `.gitignore` 추천)
+- **하이브리드 정책 (D9)**: `.pitwall/*.toml`은 커밋, 개인용 덮어쓰기는 `.pitwall/*.local.toml` — 프로젝트 생성 시 `.pitwall/.gitignore`에 `*.local.toml` 자동 추가
+- 병합 순서: 내장 기본값 → `.pitwall/*.toml` → `.pitwall/*.local.toml`
+- 레포를 건드리고 싶지 않은 프로젝트는 "개인 전용" 모드로 전환 → 같은 파일 구조를 `<appdata>/projects/<id>/config/`에 저장
 - 기존 설정 임포트 (편의): `.idea/runConfigurations/*.xml`, `.idea/dataSources.xml`, `.vscode/launch.json`, `.vscode/tasks.json`
 
 ### 프로젝트 설정 예시
@@ -85,7 +87,7 @@ name = "billing-api"
 enabled = ["kotlin", "sql"]
 
 [open_with]          # 프로젝트별 외부 도구 오버라이드
-default = "orca"
+default = "orca"     # 외부 도구 id (04 F8)
 ```
 
 ```toml
@@ -120,16 +122,17 @@ host_ref = "bastion"
 
 상세는 [08-remote-mobile.md](08-remote-mobile.md).
 - 원격 머신에 `pitwall-relay`를 설치(서비스 상주)하고 QR/코드로 페어링
-- 연결: 직접(QUIC/TLS) → Relay Hub 경유 → SSH stdio 순으로 시도, 모두 Noise로 종단간 암호화
+- 연결: 직접(QUIC, LAN/Tailscale) → SSH stdio 순으로 시도, 모두 Noise로 인증 · 암호화. 중계 서버(Hub)는 두지 않음
 - Relay는 상주 데몬이므로 연결이 끊겨도 실행 중 프로세스 · 로그 · 디버그 세션 유지
 - 포트 포워딩: 원격 웹 서버 · 디버그 포트를 로컬로 포워딩 (DAP attach용)
 - DB는 원격 프로젝트면 Relay에서 직접 연결, 로컬 프로젝트는 SSH 터널 옵션 제공
 
 ## 7. 보안
 
+
 - MCP HTTP 서버는 `127.0.0.1`에만 바인드 + 기동 시 생성되는 Bearer 토큰 필수
 - 위험 작업(파괴적 git, DB 쓰기, 실행 구성의 임의 커맨드 실행)은 MCP 경유 시 UI 승인 필요 (→ 05-mcp.md)
-- Relay ↔ 기기 간 통신은 Noise 종단간 암호화, Hub는 내용 열람 불가
+- Relay ↔ 기기 간 통신은 Noise 인증 · 암호화, Relay는 Tailscale/LAN 인터페이스에만 바인드(기본)
 - RPC 메서드마다 필요 권한(role) 메타데이터 → Relay가 페어링 기기의 role로 검사 (모바일 = 제한 role)
 - 확장은 WASM 샌드박스 + 설치 시 승인한 capability만 사용
 - 프로젝트 설정의 실행 커맨드는 "신뢰된 프로젝트"에서만 실행 (VS Code Workspace Trust와 유사)

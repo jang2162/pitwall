@@ -103,5 +103,7 @@ capabilities = ["fs:read:project", "process:spawn:gradlew", "net:github.com"]
 | v1.x | Git 저장소 URL 설치, 서명 검증 |
 | v2 | 공개 레지스트리 (GitHub 기반 인덱스 저장소 방식) |
 
+- 본체는 **MIT**. 확장은 각자 라이선스를 선언(`license` 필드), 내장 확장은 MIT 또는 허용형 라이선스만
+
 - 프로젝트 추천 확장: `.pitwall/project.toml`의 `recommended_extensions`
 - 원격 host에는 "코어 쪽 확장"(L1 언어/LSP 정의, L2)만 동기화, UI 쪽(테마/L3)은 로컬에서만
