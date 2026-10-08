@@ -3,8 +3,8 @@
 ## 1. 개요
 
 - **원격**: 원격 머신에 **Pitwall Relay**를 설치해서 연결한다. 연결은 **직접 연결(LAN · Tailscale)**만 사용하고, SSH는 Relay 설치 보조와 대체 연결 수단으로 쓴다
-- **모바일**: 데스크톱 또는 원격 Relay에 붙어서 **내용 확인 + 간단한 조작**을 하는 컴패니언 앱 (**Android 먼저**)
-- 원격과 모바일은 **같은 연결 계층(`pw-link`)**을 공유한다
+- **모바일**: **보류 (D13)** — 6절은 향후 검토용 초안. 연결 계층(`pw-link`)과 role 구조만 모바일을 고려해 유지
+- 원격 설치 · 재연결 방식은 **Zed 원격 개발 구조**를 참고 (UI 로컬 / 헤드리스 서버 원격, 버전 일치 서버 자동 설치, 데몬 재사용)
 - **중계 서버(Relay Hub)는 만들지 않는다.** NAT · 방화벽 문제는 Tailscale에 맡긴다. 단, 전송 계층을 추상화해 두어 필요해지면 Hub를 나중에 추가할 수 있게 한다
 
 ## 2. 구성 요소
@@ -50,10 +50,28 @@
 ## 4. 설치 & 페어링
 
 ### Relay 설치
-1. 원격 머신에서 한 줄 설치: `curl -fsSL https://.../install.sh | sh` (또는 Homebrew/apt/단일 바이너리)
-   - 또는 Desktop에서 "SSH로 Relay 설치" — SSH 접속 → 바이너리 업로드 → 서비스 등록까지 자동
-2. `pitwall-relay pair` → 터미널에 **QR 코드 + 6자리 코드** 표시
-3. Desktop/Mobile에서 QR 스캔 또는 코드 입력 → 페어링 완료
+
+**방법 A. 원격에서 직접 설치** — `curl -fsSL https://.../install.sh | sh` (또는 Homebrew/apt/단일 바이너리) → 서비스 등록
+
+**방법 B. Desktop에서 SSH로 설치 (Zed 방식)**
+1. 시스템 `ssh` 바이너리 사용 (사용자의 `~/.ssh/config`, 에이전트, ProxyJump, ControlMaster를 그대로 존중). 비밀번호는 설정에 저장하지 않고 키 인증 권장, 프롬프트는 GUI askpass로 처리
+2. 원격 OS/아키텍처 감지 (`uname -sm`)
+3. `~/.pitwall-relay/pitwall-relay-{channel}-{version}` 존재 여부 확인 — **Desktop 버전과 정확히 일치**해야 함
+4. 없으면 설치:
+   - 기본: 원격이 릴리스 서버에서 직접 다운로드 + 해시 검증
+   - `upload_binary_over_ssh = true`: Desktop이 로컬로 받아 SSH로 업로드 (원격 인터넷 제한 환경)
+   - 수동: 릴리스 바이너리를 위 경로 · 이름 규칙으로 직접 배치
+5. 상주 서비스 등록(systemd user / launchd) 또는 SSH 세션 기반 데몬으로 기동
+6. 오래된 버전 바이너리 정리 (최근 2개 유지)
+
+### 연결 · 재연결 (프록시 모드)
+- 연결할 때마다 `pitwall-relay proxy`를 실행 → 데몬이 없으면 띄우고, 있으면 기존 데몬에 붙음
+- 데몬 재사용에 실패하면(버전 불일치, 손상) 새 데몬으로 교체하고 로그 남김
+- Tailscale/LAN 직접 연결(QUIC)이 가능하면 데이터 경로는 직접 연결, 불가하면 SSH 채널 위로 그대로 운영
+
+### 페어링 (직접 연결용)
+1. `pitwall-relay pair` → 터미널에 **QR 코드 + 6자리 코드** 표시 (SSH로 설치한 경우 Desktop이 SSH 채널로 자동 페어링)
+2. Desktop에서 코드 입력 → 페어링 완료
 
 ### 보안 모델
 - 기기마다 Ed25519 키쌍 생성, 페어링 시 공개키 교환 (TOFU + 짧은 코드로 확인)
@@ -65,7 +83,31 @@
 - 기기 해제(revoke) 즉시 반영, 페어링 코드는 5분 만료
 - Relay가 노출하는 프로젝트 경로는 화이트리스트 (`relay.toml`의 `roots`)
 
-### Relay 설정 예
+### 원격 호스트 등록 예 (Desktop 쪽)
+
+```toml
+# ~/.pitwall/settings.toml
+[[remote_hosts]]
+nickname = "build-server"
+host = "build.tail1234.ts.net"     # Tailscale MagicDNS 또는 ~/.ssh/config 호스트명
+username = "dev"                   # 기본: 로컬 사용자명
+port = 22
+ssh_args = ["-o", "ServerAliveInterval=30"]
+upload_binary_over_ssh = false
+projects = ["~/work/billing-api"]
+
+[[remote_hosts.port_forwards]]
+local_port = 8080
+remote_port = 8080
+
+[[remote_hosts.port_forwards]]
+local_port = 5005                  # 원격 JVM 디버그 포트
+remote_port = 5005
+remote_host = "localhost"          # 다른 호스트(Docker 등)로 바꿀 수 있음
+local_host = "127.0.0.1"           # "0.0.0.0"이면 모든 로컬 인터페이스에서 수신
+```
+
+### Relay 설정 예 (원격 쪽)
 
 ```toml
 # ~/.config/pitwall/relay.toml
@@ -88,10 +130,32 @@ stop_lsp_after = "30m"
 | 실행 · 디버그 | Relay에서 프로세스 실행, DAP 중계, **포트 포워딩**(원격 웹서버/디버그 포트 → 로컬) |
 | 터미널 | Relay의 PTY |
 | DB | Relay에서 직접 연결 (내부망 DB 접근에 유리) |
-| MCP | 원격 머신의 에이전트도 Relay의 로컬 MCP 엔드포인트 사용 → 승인 요청은 페어링된 Desktop/Mobile로 전달 |
+| MCP | 원격 머신의 에이전트도 Relay의 로컬 MCP 엔드포인트 사용 → 승인 요청은 연결된 Desktop으로 전달 |
 | 세션 유지 | Relay가 상주하므로 연결이 끊겨도 실행 중 프로세스 · 로그 유지, 재접속 시 이어보기 |
+| 미저장 편집 | **Desktop 로컬에 보관** (연결 끊김에도 유실 없음), 재접속 시 복원 · 원격 파일이 그사이 바뀌었으면 diff로 충돌 해결 |
+| 원격 터미널에서 `pitwall <file>` | 원격 Relay가 연결된 Desktop에 "파일 열기" 이벤트 전달 (Zed가 지원하지 못하는 부분 — 에이전트가 원격에서 작업할 때 유용) |
 
-## 6. 모바일
+### 로컬 / 원격 역할 분담 (Zed와 동일 원칙)
+
+| Desktop (로컬) | Relay (원격) |
+|---|---|
+| UI, 테마, 키맵, 레이아웃 | 소스 코드, 파일 감시 |
+| tree-sitter 하이라이트(열린 파일) | LSP, 심볼 인덱스, 텍스트 검색 |
+| 미저장 편집, 최근 프로젝트 | git, 실행 · 디버그, 터미널, DB 연결 |
+| 비밀(키체인) — 필요한 것만 세션 동안 전달 | 프로젝트 설정(`.pitwall/`) |
+
+### 설정 위치
+- **로컬 설정**: UI 관련 (폰트, 테마)
+- **Relay 설정**: 서버 영향 (`relay.toml` — LSP 경로, 프록시, roots)
+- **프로젝트 설정**: `.pitwall/` — Desktop과 Relay 양쪽이 읽음
+
+### 제약
+- 파일 10만 개 이상인 루트(`~`, `/`)는 성능 저하 → 프로젝트 폴더 단위로 열도록 유도 (F9-10)
+- 지원 원격 플랫폼: Linux x64/arm64(musl 정적), macOS. 32bit 미지원, Windows 원격은 이후
+
+## 6. 모바일 — 보류 (향후 검토용 초안)
+
+> **D13: MVP 및 현재 로드맵에서 제외.** 모바일로 확인할 정보가 구체화되면 이 절을 기준으로 재검토한다.
 
 ### 6.1 목표
 "자리를 비웠을 때 확인하고, 막힌 것을 풀어주는 앱" — 코딩/편집은 하지 않는다.

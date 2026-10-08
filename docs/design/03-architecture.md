@@ -28,7 +28,7 @@
 **핵심: "Host" = 한 머신에서 프로젝트를 다루는 헤드리스 서비스.**
 - 로컬 프로젝트 → 데스크톱 프로세스 안의 Local Host가 처리
 - 원격 프로젝트 → 원격에 설치된 `pitwall-relay`가 처리, 데스크톱은 같은 RPC를 `pw-link` 위로 전달
-- 모바일도 같은 RPC를 `pw-link`로 사용 (기기 role에 따라 허용 메서드 제한)
+- (보류) 모바일을 붙일 경우에도 같은 RPC를 `pw-link`로 사용하도록 role 메타데이터를 유지
 - 확장(`pw-ext`)은 Host 안에서 로드 → 원격 Relay에서도 같은 확장이 동작
 - UI와 MCP는 Host가 로컬인지 원격인지 몰라도 된다
 
@@ -118,7 +118,7 @@ read_only = false
 host_ref = "bastion"
 ```
 
-## 6. 원격 · 모바일 연결 구조
+## 6. 원격 연결 구조
 
 상세는 [08-remote-mobile.md](08-remote-mobile.md).
 - 원격 머신에 `pitwall-relay`를 설치(서비스 상주)하고 QR/코드로 페어링
@@ -133,6 +133,6 @@ host_ref = "bastion"
 - MCP HTTP 서버는 `127.0.0.1`에만 바인드 + 기동 시 생성되는 Bearer 토큰 필수
 - 위험 작업(파괴적 git, DB 쓰기, 실행 구성의 임의 커맨드 실행)은 MCP 경유 시 UI 승인 필요 (→ 05-mcp.md)
 - Relay ↔ 기기 간 통신은 Noise 인증 · 암호화, Relay는 Tailscale/LAN 인터페이스에만 바인드(기본)
-- RPC 메서드마다 필요 권한(role) 메타데이터 → Relay가 페어링 기기의 role로 검사 (모바일 = 제한 role)
+- RPC 메서드마다 필요 권한(role) 메타데이터 → Relay가 페어링 기기의 role로 검사 (readonly 등 제한 role)
 - 확장은 WASM 샌드박스 + 설치 시 승인한 capability만 사용
 - 프로젝트 설정의 실행 커맨드는 "신뢰된 프로젝트"에서만 실행 (VS Code Workspace Trust와 유사)

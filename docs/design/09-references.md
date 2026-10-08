@@ -29,7 +29,7 @@
 ### DB
 | 앱 | 라이선스 | 참고 포인트 |
 |---|---|---|
-| **DBX** (t8y2/dbx) | 확인 필요 | Tauri 2 + Vue, `sqlx`/`tiberius`/`redis-rs`/`mongodb` — Pitwall과 거의 같은 스택. 드라이버 추상화 구조 참고 (2026년 신생, 성숙도 확인 필요) |
+| **DBX** (t8y2/dbx) | **Apache-2.0** (MIT 프로젝트에서 차용 가능, 고지 필요) | Tauri 2 + Vue 3 + CodeMirror 6, `sqlx`/`tiberius`/`redis-rs`/`mongodb`. 스타 2.5만 · 커밋 7.9천으로 성숙. 크레이트 분할(types/sql/drivers/driver-*), SQL 위험도 분류, JDBC agent, SQLite 격리 워커, MCP · CLI 동반 → **02 §2.7에 반영** |
 | TablePlus | 상용 | 경량 네이티브 DB 클라이언트 UX 기준점, 연결 색상 태그(프로덕션 경고) |
 | Beekeeper Studio | GPLv3(Community) | SQL 콘솔/그리드 UX. **GPL이라 코드 차용 불가**(MIT 프로젝트) — UX만 참고 |
 | DbGate | 오픈소스(라이선스 확인 필요) | SQL + NoSQL 통합, 데스크톱/웹 동시 제공 |
@@ -48,9 +48,11 @@
 |---|---|
 | **JetBrains IDE 내장 MCP 서버** | 실행 구성 실행 · 터미널 명령 등 툴 제공, **노출 툴 개별 on/off**, 실행 시 확인 프롬프트(+"brave mode"로 생략), 클라이언트 설정 자동 등록(전역/프로젝트) → 05-mcp 권한 모델 · F10-5와 동일 방향, 툴 on/off 설정 추가 검토 |
 
-## 3. 설계 반영 제안
-1. **포지션 재확인**: Orca가 원격 · 모바일 · diff 리뷰를 이미 제공 → Pitwall 고유 가치(DB, git 그래프/머지/blame, 실행/디버그, LSP 탐색)에 일정 집중
-2. **모바일(M8) 범위 축소 검토**: 에이전트 모니터링은 Orca 모바일에 맡기고, Pitwall 모바일은 Pitwall MCP 승인 · 실행 상태 · DB/git 조회로 한정 (또는 보류)
-3. **MCP 툴 개별 on/off** 설정 추가 (JetBrains 방식)
-4. **DBX 코드 검토** — 라이선스가 허용형이면 드라이버 계층 참고
-5. Zed 원격 방식(버전 일치 서버 자동 설치, 데몬 재연결, 미저장 편집 로컬 보관)을 F9 상세 설계에 반영
+## 3. 설계 반영 결과
+
+| 제안 | 결과 |
+|---|---|
+| 포지션 재확인 (Orca와 겹치는 원격 · 모바일 · diff 리뷰) | 모바일 **보류**(D13). Pitwall 고유 가치(DB · git · 실행/디버그 · LSP)에 집중 |
+| MCP 툴 개별 on/off | **반영** — 05 §3-1, F10-6 (D14) |
+| DBX 코드 검토 | **확인 완료: Apache-2.0** — 02 §2.7 크레이트 구조, F6-9 위험도 분류, F6-3b JDBC 방식 (D15) |
+| Zed 원격 방식 | **반영** — 08 §4~5, F9 (D16) |

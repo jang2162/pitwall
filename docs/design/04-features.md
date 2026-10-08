@@ -117,13 +117,13 @@ pitwall <path>[:line[:col]]
 | F6-1 | 연결 관리 (PostgreSQL, MySQL/MariaDB, SQLite) — 테스트 연결, SSH 터널, SSL | P0 |
 | F6-2 | **Redis**: 키 브라우저(패턴 스캔, 타입별 뷰어: string/hash/list/set/zset/stream/JSON), TTL 표시 · 수정, 명령 콘솔, DB 번호 전환, 클러스터/Sentinel은 P1 | P0 |
 | F6-3 | 추가 드라이버: MSSQL | P2 |
-| F6-3b | JDBC 브리지 확장 (Oracle 등 기타 DB) | P2 (확장) |
+| F6-3b | JDBC 브리지 확장 (Oracle 등 기타 DB) — DBX의 JDBC agent 방식(별도 JVM 프로세스 + 드라이버 jar 설치) 참고 | P2 (확장) |
 | F6-4 | 스키마 탐색기 (DB/스키마/테이블/뷰/컬럼/인덱스/FK), DDL 보기 | P0 |
 | F6-5 | SQL 콘솔: 실행(현재 문장/선택/전체), 다중 결과 탭, 취소, 실행 계획 | P0 |
 | F6-6 | 스키마 기반 SQL 자동완성 (테이블/컬럼/별칭) | P1 |
 | F6-7 | 결과 그리드: 가상 스크롤, 정렬/필터, 셀 상세(JSON 뷰어), 복사(CSV/JSON/INSERT 문) | P0 |
 | F6-8 | 테이블 데이터 편집 (셀 수정 → 변경 미리보기 → 트랜잭션 커밋) | P1 |
-| F6-9 | 안전장치: 연결별 read-only, 프로덕션 태그(색상 + `UPDATE/DELETE` without WHERE 경고), 수동 커밋 모드 | P0 |
+| F6-9 | 안전장치: 연결별 read-only, 프로덕션 태그(색상), 수동 커밋 모드, **SQL 위험도 분류**(파서 기반: 조회 / 쓰기 / WHERE 없는 UPDATE·DELETE / DDL / DROP·TRUNCATE) → 등급별 확인 · 차단 (DBX `dbx-sql` 방식 참고) | P0 |
 | F6-10 | 쿼리 히스토리 · 즐겨찾기 쿼리 (`.pitwall/queries/*.sql` 공유 가능) | P1 |
 | F6-11 | 결과 내보내기 (CSV/JSON/XLSX) | P1 |
 | F6-12 | ER 다이어그램 | P2 |
@@ -189,15 +189,18 @@ id = "orca";     command = "orca {project_root}"         # 사용자가 실제 O
 | ID | 기능 | 우선 |
 |---|---|---|
 | F9-1 | `pitwall-relay` 설치 (한 줄 설치 스크립트, Homebrew/apt, 서비스 등록) | P1 |
-| F9-2 | Desktop에서 "SSH로 Relay 설치" (`~/.ssh/config` 임포트, 업로드 · 서비스 등록 자동) | P1 |
+| F9-2 | Desktop에서 "SSH로 Relay 설치" — **버전 정확히 일치** 확인 후 자동 설치. 기본은 원격이 직접 다운로드, 인터넷 제한 환경은 로컬에서 받아 SSH로 업로드(`upload_binary_over_ssh`) | P1 |
 | F9-3 | QR/코드 페어링, 기기 목록 · 권한(role) · 해제 | P1 |
 | F9-4 | 연결: 직접(LAN/Tailscale, QUIC) → SSH 대체. Tailscale 기기 자동 검색 | P1 |
 | F9-5 | 원격 프로젝트: 파일 트리 · 에디터 · git · LSP · 실행 · 터미널 · DB | P1 |
-| F9-6 | 원격 디버그 + 포트 포워딩 | P1 |
-| F9-7 | 세션 유지 · 재접속 시 이어보기 | P1 |
-| F9-8 | Relay 자동 업데이트, 버전 호환 협상 | P1 |
-| F9-10 | DB SSH 터널 (로컬 프로젝트에서도 사용) | P0 (F6-1에 포함) |
-| F9-11 | Dev Container / WSL 타깃 | P2 |
+| F9-6 | 원격 디버그 + **연결별 포트 포워딩 설정** (`local_port`/`remote_port`/`remote_host`) | P1 |
+| F9-7 | 세션 유지 · 재접속 시 이어보기 (Relay 데몬 재사용) | P1 |
+| F9-8 | **미저장 편집 로컬 보관** — 연결이 끊겨도 편집 내용 유지, 재접속 시 복원 | P1 |
+| F9-9 | Relay 자동 업데이트 (Desktop 업데이트 시 버전 맞춰 재설치), 구버전 정리 | P1 |
+| F9-10 | 대형 디렉터리 경고 (`~`, `/` 등 파일 10만 개 이상 루트 열기 시 하위 폴더 선택 유도) | P1 |
+| F9-11 | 연결 진단: 연결 로그 보기, 단계별(SSH → 설치 → 데몬 → 핸드셰이크) 실패 표시 | P1 |
+| F9-12 | DB SSH 터널 (로컬 프로젝트에서도 사용) | P0 (F6-1에 포함) |
+| F9-13 | Dev Container / WSL 타깃 | P2 |
 
 ## F10. 에이전트 연동 (MCP)
 → 상세는 [05-mcp.md](05-mcp.md)
@@ -208,7 +211,8 @@ id = "orca";     command = "orca {project_root}"         # 사용자가 실제 O
 | F10-2 | 프로젝트/실행구성/DB연결/외부도구 설정 툴 | P0 |
 | F10-3 | 조회 툴 (진단, 실행 로그, git 상태, DB 스키마) | P0 |
 | F10-4 | 승인 UI + 감사 로그 | P0 |
-| F10-5 | 에이전트 클라이언트 설정 자동 등록 (Claude Code `.mcp.json`, Orca 등) | P1 |
+| F10-5 | 에이전트 클라이언트 설정 자동 등록 (전역/프로젝트, Claude Code `.mcp.json` 등) | P1 |
+| F10-6 | **툴별 노출 on/off**, 그룹 · 프리셋, 등급별 자동 승인, 프로젝트별 덮어쓰기 (05 §3-1) | P0 |
 
 ## F11. 공통 UX
 
@@ -222,22 +226,12 @@ id = "orca";     command = "orca {project_root}"         # 사용자가 실제 O
 | F11-6 | 설정 UI (전역/프로젝트) + 파일 직접 편집 | P1 |
 | F11-7 | UI 언어 한국어/영어 (Fluent) | P1 |
 
-## F12. 모바일 컴패니언
-→ 상세는 [08-remote-mobile.md](08-remote-mobile.md) 6절
+## F12. 모바일 컴패니언 — **보류**
 
-| ID | 기능 | 우선 |
-|---|---|---|
-| F12-1 | **Android** 앱, 페어링 · 다중 Desktop/Relay 연결 (Tailscale/LAN) | P0 |
-| F12-2 | 프로젝트 대시보드 (브랜치, 변경 수, 실행 상태) | P0 |
-| F12-3 | 알림 (실행 종료/실패, 브레이크포인트 정지, MCP 승인 요청) — 포그라운드 서비스 상시 연결 + 로컬 알림, 서버 푸시 없음 | P0 |
-| F12-4 | MCP 승인/거절 (diff 보기, 생체인증 확인) | P0 |
-| F12-5 | 실행 구성 시작/중지/재시작, 로그 tail (데스크톱 M6 이후) | P1 |
-| F12-6 | Git 조회 (상태, diff, 로그, 커밋 상세) | P0 |
-| F12-7 | Git 간단 조작 (fetch/pull, 체크아웃, 커밋, push) | P1 |
-| F12-8 | 파일 읽기 전용 뷰어, 문제 목록, 저장 쿼리 실행(읽기 전용) | P1 |
-| F12-9 | 디버그 상태 보기 · 계속/스텝, 간단 터미널, 홈 위젯 | P2 |
-
-> 모바일 비대상: 파일 편집, 파괴적 git 작업, 충돌 해결, 프로덕션 DB 쓰기
+모바일에서 확인할 정보가 아직 구체적이지 않아 **MVP 및 현재 로드맵에서 제외**한다 (D13).
+- 08 §6의 내용은 향후 검토용 초안으로만 유지
+- 다만 모바일을 나중에 붙일 수 있도록 다음 구조는 유지: 전송 독립 RPC, 메서드별 role 메타데이터(`readonly` 등), `pw-link` 기기 페어링
+- 재검토 시점: M7(원격) 완료 후, 실제로 "자리 비운 동안 확인하고 싶은 정보"가 쌓였을 때
 
 ## F13. 확장 (테마 · 언어 · 플러그인)
 → 상세는 [07-extensibility.md](07-extensibility.md)

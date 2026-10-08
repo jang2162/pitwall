@@ -47,7 +47,7 @@
 | `db_connection_upsert` | 연결 추가/수정 — 비밀번호는 툴 인자로 받지 않고 UI 입력 요청 또는 env 참조 | write |
 | `db_connection_test` | 연결 테스트 | read |
 | `db_schema` | 스키마/테이블/컬럼/인덱스 조회 | read |
-| `db_query` | SQL 실행. 기본 **읽기 전용 트랜잭션 + 행 제한** | read / dangerous(쓰기) |
+| `db_query` | SQL 실행. 기본 **읽기 전용 트랜잭션 + 행 제한**. SQL 위험도 분류(04 F6-9) 결과로 등급 결정 | read / dangerous(쓰기 · DDL) |
 
 ### Git
 | 툴 | 설명 | 권한 |
@@ -81,9 +81,41 @@
 
 - 정책은 전역/프로젝트 설정에서 조정 가능 (`[mcp.policy]`)
 - 모든 MCP 호출은 감사 로그(프로젝트 로컬 SQLite)에 기록 → UI "에이전트 활동" 패널
-- **승인 요청 라우팅**: Desktop 창이 활성 → Desktop 다이얼로그 / 자리 비움(유휴 N분) 또는 Desktop 미실행(원격 Relay) → 연결 중인 **모바일(Android) 로컬 알림**. 먼저 응답한 기기의 결정 적용, 타임아웃 시 거절
+- **승인 요청 라우팅**: 해당 프로젝트 창이 열린 Desktop에 다이얼로그 + OS 알림. 원격 Relay에서 온 요청도 연결된 Desktop으로 전달. 타임아웃(기본 5분) 시 거절. (모바일 승인은 모바일 보류에 따라 제외)
 - 원격 머신에서 도는 에이전트도 해당 Relay의 MCP 엔드포인트를 사용 → 같은 승인 흐름
 - 확장(WASM 플러그인)이 추가한 MCP 툴은 `<ext-id>.<tool>` 이름으로 노출, 권한 등급은 확장 매니페스트에 선언
+
+## 3-1. 툴 노출 설정 (툴별 on/off)
+
+JetBrains IDE 내장 MCP 서버의 "Exposed Tools" 방식을 따른다. 권한 등급(3절)과 별개로 **툴 자체를 에이전트에게 보이지 않게** 할 수 있다.
+
+| 항목 | 설계 |
+|---|---|
+| 단위 | 툴 단위 on/off (꺼진 툴은 `tools/list`에 나오지 않음 → 에이전트 컨텍스트 토큰도 절약) |
+| 그룹 | 모듈 그룹(project / run / debug / db / git / code / open_with / 확장별) 일괄 on/off |
+| 프리셋 | `read-only`(조회 툴만) · `standard`(기본: 조회 + 설정) · `full`(실행 · DB 쓰기 포함) |
+| 범위 | 전역 기본값 → 프로젝트별 덮어쓰기 (`.pitwall/project.toml` 또는 `.local.toml`) |
+| 자동 승인 | 등급별 "확인 없이 실행" 토글 (JetBrains의 brave mode에 해당). `dangerous` 등급은 자동 승인 불가 |
+| 변경 반영 | 설정 변경 시 MCP `notifications/tools/list_changed` 전송 → 연결된 에이전트가 즉시 갱신 |
+| 확장 툴 | 확장이 추가한 툴은 **기본 꺼짐**, 사용자가 켜야 노출 |
+| UI | 설정 > MCP: 툴 목록(이름 · 설명 · 등급 · 최근 호출 수), 검색, 그룹 토글, 입력 스키마 미리보기 |
+
+```toml
+# ~/.pitwall/settings.toml (전역) — 프로젝트에서 같은 키로 덮어쓰기
+[mcp]
+preset = "standard"
+auto_approve = ["read", "write"]      # "exec" 추가 가능, "dangerous"는 불가
+
+[mcp.tools]
+db_query = true
+run_start = false                      # 개별 툴 끄기
+"dev.pitwall.ext-kafka.*" = true       # 확장 툴 켜기 (glob)
+```
+
+### 클라이언트 자동 등록 (F10-5)
+- 전역 등록: Claude Code(`~/.claude.json`), Cursor, Codex 등 감지된 클라이언트 설정에 `pitwall mcp` 항목 추가
+- 프로젝트 등록: 프로젝트 루트의 `.mcp.json` 등에 추가 → 해당 프로젝트에서만 Pitwall 툴 노출
+- 등록 전 변경 diff를 보여주고 승인 후 기록, 해제(제거)도 같은 화면에서
 
 ## 4. 리소스 & 프롬프트 (MCP Resources/Prompts)
 

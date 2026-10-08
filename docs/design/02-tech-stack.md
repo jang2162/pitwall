@@ -28,11 +28,11 @@
 | 로컬 저장소 | SQLite (`rusqlite`) + TOML 설정 파일 | |
 | 비밀 | `keyring` (macOS Keychain / Windows Credential / Secret Service) | |
 | 원격 | **Pitwall Relay 데몬** + 연결 계층 `pw-link` (QUIC `quinn`, Noise `snow`, mDNS) | 직접 연결(LAN/Tailscale) → SSH(`russh`) 대체. 중계 서버 없음 (08 참고) |
-| 모바일 | **React Native (Expo)** + `uniffi`로 `pw-link` Kotlin 바인딩 | **Android 먼저**, 포그라운드 서비스로 상시 연결 |
+| 모바일 | (보류) React Native (Expo) 후보 | D13 — 로드맵 제외 |
 | 라이선스 검사 | `cargo-deny`, `license-checker`(npm) | MIT 프로젝트 — 허용형 라이선스만 |
 | 확장 런타임 | `wasmtime` (WASM Component Model, WIT) | 권한 기반 샌드박스 (07 참고) |
 | 테마 | 디자인 토큰 → CSS 변수, VS Code 테마 import | |
-| UI 언어(i18n) | **Fluent** (`fluent-rs` / `@fluent/bundle`) | 코어 · 데스크톱 · 모바일 공용 리소스 |
+| UI 언어(i18n) | **Fluent** (`fluent-rs` / `@fluent/bundle`) | 코어 · 데스크톱 공용 리소스 |
 | 문법 | tree-sitter 문법을 **WASM으로 동적 로드** | 언어 추가를 확장으로 |
 | RPC | 자체 JSON-RPC 2.0 (serde) over Tauri IPC / stdio / WebSocket | 타입은 `ts-rs`/`specta`로 TS 생성 |
 | MCP | **`rmcp`** (공식 Rust MCP SDK) | stdio + Streamable HTTP |
@@ -81,6 +81,26 @@
 - 코어 API는 Rust 타입으로 정의 → `specta`로 TS 타입 생성, MCP 툴 스키마도 같은 타입에서 `schemars`로 생성
 - 하나의 정의에서 UI · MCP · 원격 프로토콜이 파생됨 → 불일치 방지
 
+### 2.7 DB 계층: DBX 구조 참고
+
+[DBX](https://github.com/t8y2/dbx)(Apache-2.0, Tauri 2 + Vue 3 + CodeMirror 6, Rust `sqlx`/`tiberius`/`redis-rs`)는 Pitwall과 스택이 거의 같고 성숙한(2026-10 기준 스타 2.5만) DB 클라이언트다. Apache-2.0은 MIT 프로젝트에서 차용 가능(라이선스 · NOTICE 고지, 변경 표기 필요).
+
+DBX의 크레이트 분할을 참고해 `pw-db`를 다음처럼 나눈다:
+
+| Pitwall | 참고한 DBX 크레이트 | 역할 |
+|---|---|---|
+| `pw-db-types` | `dbx-types` | 연결 · 쿼리 · 메타데이터 공용 타입 |
+| `pw-db-sql` | `dbx-sql` | SQL 파싱(sqlparser-rs), 방언, **위험도 분류**, DDL/DML 생성 |
+| `pw-db-driver` | `dbx-drivers`, `dbx-driver-support` | 드라이버 trait, 생명주기, 실행 제한(행 수 · 타임아웃), SSH 터널 |
+| `pw-db-driver-{postgres,mysql,sqlite,redis}` | `dbx-driver-*` | 드라이버별 구현 (드라이버마다 크레이트 분리 → 빌드 · 의존성 격리) |
+| `pw-db` | `dbx-core` | 연결 풀, 쿼리 실행/스트리밍, 스키마 캐시, 히스토리 |
+| (P2) JDBC 브리지 확장 | `dbx-driver-agent`, `agents/` | 별도 JVM 프로세스 + 드라이버 jar 설치 |
+
+추가로 참고할 점:
+- SQLite 파일은 **격리된 워커 프로세스**에서 연다(`dbx-sqlite-worker`) → 손상 파일/긴 쿼리가 메인 프로세스를 막지 않음
+- DBX도 MCP 서버(`dbx-mcp`)와 CLI를 같은 코어 위에 제공 → Pitwall의 헤드리스 Host 원칙과 일치
+- 구현 착수(M3) 전에 드라이버 trait · 위험도 분류 · Redis 뷰어 코드를 검토하고, 차용 시 `THIRD_PARTY_NOTICES.md`에 기록
+
 ## 3. 지원 플랫폼 — macOS 우선
 
 | 플랫폼 | 등급 | 내용 |
@@ -89,7 +109,7 @@
 | Linux (x64/arm64, AppImage/deb/rpm) | Tier 2 | CI 빌드 + 스모크 테스트, WebKitGTK 성능 검증 |
 | Windows (x64/arm64, msi) | Tier 2 | CI 빌드 + 스모크 테스트, WebView2 |
 | Relay (원격) | Linux x64/arm64(musl 정적) Tier 1, macOS Tier 1, Windows Tier 2 | 원격 서버는 대부분 Linux이므로 Relay는 Linux도 1급 |
-| 모바일 | **Android Tier 1**, iOS 이후 | |
+| 모바일 | 보류 | |
 
 macOS 우선 항목:
 - 네이티브 메뉴바, `⌘` 단축키 체계, 전체화면/탭 창, Keychain
@@ -104,13 +124,13 @@ pitwall/
 ├─ apps/
 │  ├─ desktop/           # Tauri 앱 (src-tauri + React UI)
 │  ├─ relay/             # pitwall-relay: 헤드리스 코어 데몬 (원격 설치용 겸 MCP 서버)
-│  └─ mobile/            # Expo 앱 (Android 우선)
+│  └─ (mobile/)          # 보류
 ├─ crates/
 │  ├─ pw-core/           # 프로젝트/워크스페이스, 이벤트 버스, 설정
 │  ├─ pw-rpc/            # RPC 타입/프로토콜, transport(IPC/stdio/ws)
 │  ├─ pw-fs/             # 파일 트리, 감시, 검색
 │  ├─ pw-git/            # gix 읽기 + CLI 쓰기
-│  ├─ pw-db/             # DB 드라이버 추상화, 쿼리 실행, 스키마 인트로스펙션
+│  ├─ pw-db*/            # pw-db, pw-db-types, pw-db-sql, pw-db-driver(-postgres/-mysql/-sqlite/-redis) (§2.7)
 │  ├─ pw-lsp/            # LSP 클라이언트, 서버 관리자
 │  ├─ pw-dap/            # DAP 클라이언트
 │  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지
@@ -123,8 +143,8 @@ pitwall/
 │  └─ pw-mcp/            # MCP 서버 (rmcp)
 ├─ packages/
 │  ├─ ui/                # React 컴포넌트
-│  ├─ rpc-client/        # 생성된 TS 타입 + 클라이언트 (데스크톱 · 모바일 공용)
-│  ├─ domain/            # 공용 상태/포맷 로직 (데스크톱 · 모바일 공용)
+│  ├─ rpc-client/        # 생성된 TS 타입 + 클라이언트 (데스크톱 · MCP 등 클라이언트 공용)
+│  ├─ domain/            # 공용 상태/포맷 로직 (데스크톱 · MCP 등 클라이언트 공용)
 │  └─ ext-api/           # L3 UI 패널 확장용 TS API
 ├─ extensions/           # 내장 확장 (기본 테마, 언어, 외부 도구, 언어팩)
 └─ docs/
