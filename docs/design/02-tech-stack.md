@@ -8,7 +8,7 @@
 | 코어 언어 | **Rust** (tokio) | git/DB/LSP/DAP/PTY/SSH 생태계가 모두 Rust에 존재 |
 | UI | **React 19 + TypeScript + Vite** | 가상화 리스트 · 그리드 · 에디터 생태계 |
 | UI 상태 | Zustand + TanStack Query | 코어 이벤트 스트림 → 쿼리 캐시 무효화 |
-| UI 컴포넌트 | Radix UI primitives + Tailwind | 키보드 접근성, IDE형 밀도 높은 레이아웃 |
+| UI 컴포넌트 | Radix UI primitives + Tailwind v4 (shadcn/ui 방식) | 키보드 접근성, IDE형 밀도 높은 레이아웃 — 전체 UI 스택은 [10-ui.md](10-ui.md) §3 |
 | 레이아웃(도킹) | dockview | 탭/스플릿/도킹 패널 |
 | 에디터 | **CodeMirror 6** | 경량, 뷰어 우선. Monaco 대비 번들 · 메모리 작음 |
 | 구문 강조 | 코어: **tree-sitter** / UI: Lezer(CodeMirror) + tree-sitter 하이라이트 결과 오버레이 | 언어 범위는 tree-sitter 기준 |
