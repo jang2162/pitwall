@@ -9,7 +9,7 @@
 │  ┌──▼──────────────────────────────────────────────────────────┐  │
 │  │ Host Router  — project_id → Host 연결로 라우팅                │  │
 │  └──┬───────────────────────────────┬──────────────────────────┘  │
-│     │ in-process                    │ SSH stdio (JSON-RPC)        │
+│     │ in-process                    │ pw-link (직접/Hub/SSH)        │
 │  ┌──▼──────────────┐                │                             │
 │  │ Local Host      │                │                             │
 │  │ (pw-core 등)     │                │                             │
@@ -19,7 +19,7 @@
 └─────────────────────────────────────┼─────────────────────────────┘
                                       ▼
                         ┌────── 원격 머신 ───────┐
-                        │ pitwall-host (동일 코어) │
+                        │ pitwall-relay (동일 코어)│
                         │ fs / git / lsp / dap /  │
                         │ run / db(옵션)           │
                         └────────────────────────┘
@@ -27,7 +27,9 @@
 
 **핵심: "Host" = 한 머신에서 프로젝트를 다루는 헤드리스 서비스.**
 - 로컬 프로젝트 → 데스크톱 프로세스 안의 Local Host가 처리
-- 원격 프로젝트 → 원격에 배포된 `pitwall-host`가 처리, 데스크톱은 같은 RPC를 SSH 위로 전달
+- 원격 프로젝트 → 원격에 설치된 `pitwall-relay`가 처리, 데스크톱은 같은 RPC를 `pw-link` 위로 전달
+- 모바일도 같은 RPC를 `pw-link`로 사용 (기기 role에 따라 허용 메서드 제한)
+- 확장(`pw-ext`)은 Host 안에서 로드 → 원격 Relay에서도 같은 확장이 동작
 - UI와 MCP는 Host가 로컬인지 원격인지 몰라도 된다
 
 ## 2. 코어 모듈 (Host 내부)
@@ -42,7 +44,7 @@
 | `run` | 실행 구성, 태스크 감지, 프로세스/PTY, 로그 버퍼 | `run.output`, `run.exited` |
 | `dap` | 디버그 세션, 브레이크포인트, 스택/변수 | `dap.stopped`, `dap.output` |
 | `db` | 연결 풀, 쿼리 실행(스트리밍), 스키마 캐시 | `db.queryProgress` |
-| `secrets` | 키체인 접근 (로컬에서만; 원격 host에는 필요 시 전달) | |
+| `secrets` | 키체인 접근 (로컬에서만; 원격 Relay에는 필요 시 전달) | |
 
 - 모든 모듈은 `ProjectContext`(루트 경로, 설정, 이벤트 버스, 취소 토큰)를 받는다
 - 장기 작업은 `Task` 추상(진행률, 취소)으로 통일 → UI 상태바 / MCP 둘 다 표시 가능
@@ -114,18 +116,20 @@ read_only = false
 host_ref = "bastion"
 ```
 
-## 6. 원격 연결 구조
+## 6. 원격 · 모바일 연결 구조
 
-1. 사용자가 SSH 호스트 등록 (`~/.ssh/config` 호스트 자동 임포트)
-2. 연결 시 원격의 OS/아키텍처 감지 → 버전이 맞는 `pitwall-host` 바이너리를 업로드(또는 원격에서 다운로드)하여 `~/.pitwall-server/<version>/`에 설치
-3. `ssh host pitwall-host --stdio` 로 기동, JSON-RPC 연결
-4. 포트 포워딩: 원격에서 실행한 웹 서버 · 디버그 포트를 로컬로 포워딩 (DAP attach용)
-5. 재연결: 연결이 끊겨도 원격 host는 유예 시간(기본 10분) 동안 프로세스를 유지 → 재접속 시 세션 복구
-6. DB 연결은 두 가지 모드: (a) 로컬에서 SSH 터널, (b) 원격 host에서 직접 연결 — 프로젝트가 원격이면 (b) 기본
+상세는 [08-remote-mobile.md](08-remote-mobile.md).
+- 원격 머신에 `pitwall-relay`를 설치(서비스 상주)하고 QR/코드로 페어링
+- 연결: 직접(QUIC/TLS) → Relay Hub 경유 → SSH stdio 순으로 시도, 모두 Noise로 종단간 암호화
+- Relay는 상주 데몬이므로 연결이 끊겨도 실행 중 프로세스 · 로그 · 디버그 세션 유지
+- 포트 포워딩: 원격 웹 서버 · 디버그 포트를 로컬로 포워딩 (DAP attach용)
+- DB는 원격 프로젝트면 Relay에서 직접 연결, 로컬 프로젝트는 SSH 터널 옵션 제공
 
 ## 7. 보안
 
 - MCP HTTP 서버는 `127.0.0.1`에만 바인드 + 기동 시 생성되는 Bearer 토큰 필수
 - 위험 작업(파괴적 git, DB 쓰기, 실행 구성의 임의 커맨드 실행)은 MCP 경유 시 UI 승인 필요 (→ 05-mcp.md)
-- 원격 host는 SSH 채널 stdio로만 통신 (원격 포트 개방 없음)
+- Relay ↔ 기기 간 통신은 Noise 종단간 암호화, Hub는 내용 열람 불가
+- RPC 메서드마다 필요 권한(role) 메타데이터 → Relay가 페어링 기기의 role로 검사 (모바일 = 제한 role)
+- 확장은 WASM 샌드박스 + 설치 시 승인한 capability만 사용
 - 프로젝트 설정의 실행 커맨드는 "신뢰된 프로젝트"에서만 실행 (VS Code Workspace Trust와 유사)

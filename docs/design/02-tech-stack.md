@@ -27,7 +27,13 @@
 | 파일 감시 | `notify` (+ debounce) | |
 | 로컬 저장소 | SQLite (`rusqlite`) + TOML 설정 파일 | |
 | 비밀 | `keyring` (macOS Keychain / Windows Credential / Secret Service) | |
-| 원격 | **SSH (`russh`) + 원격 에이전트 바이너리 `pitwall-host`** | VS Code Remote/Zed Remote 방식 |
+| 원격 | **Pitwall Relay 데몬** + 연결 계층 `pw-link` (QUIC `quinn` / WebSocket, Noise `snow`) | 직접 연결 → Relay Hub 경유 → SSH(`russh`) 대체 순 (08 참고) |
+| Relay Hub | Rust `axum` 단일 바이너리 (도커 이미지 제공) | 셀프호스팅 가능, E2E 암호문만 중계 + 푸시 전송 |
+| 모바일 | **React Native (Expo)** + `uniffi`로 `pw-link` 네이티브 모듈 | iOS 우선 (macOS 우선 정책과 일관) |
+| 확장 런타임 | `wasmtime` (WASM Component Model, WIT) | 권한 기반 샌드박스 (07 참고) |
+| 테마 | 디자인 토큰 → CSS 변수, VS Code 테마 import | |
+| UI 언어(i18n) | **Fluent** (`fluent-rs` / `@fluent/bundle`) | 코어 · 데스크톱 · 모바일 공용 리소스 |
+| 문법 | tree-sitter 문법을 **WASM으로 동적 로드** | 언어 추가를 확장으로 |
 | RPC | 자체 JSON-RPC 2.0 (serde) over Tauri IPC / stdio / WebSocket | 타입은 `ts-rs`/`specta`로 TS 생성 |
 | MCP | **`rmcp`** (공식 Rust MCP SDK) | stdio + Streamable HTTP |
 | 패키징 | Tauri bundler (dmg/msi/AppImage/deb), 자동 업데이트 plugin-updater | |
@@ -75,9 +81,21 @@
 - 코어 API는 Rust 타입으로 정의 → `specta`로 TS 타입 생성, MCP 툴 스키마도 같은 타입에서 `schemars`로 생성
 - 하나의 정의에서 UI · MCP · 원격 프로토콜이 파생됨 → 불일치 방지
 
-## 3. 지원 플랫폼
-- macOS (arm64/x64), Windows (x64), Linux (x64, AppImage/deb)
-- 우선순위: macOS → Linux → Windows
+## 3. 지원 플랫폼 — macOS 우선
+
+| 플랫폼 | 등급 | 내용 |
+|---|---|---|
+| **macOS** (Apple Silicon 우선, x64) | **Tier 1** | 개발 · QA 기준 플랫폼. 서명 · 공증(notarization), Homebrew cask, 유니버설 바이너리 |
+| Linux (x64/arm64, AppImage/deb/rpm) | Tier 2 | CI 빌드 + 스모크 테스트, WebKitGTK 성능 검증 |
+| Windows (x64/arm64, msi) | Tier 2 | CI 빌드 + 스모크 테스트, WebView2 |
+| Relay (원격) | Linux x64/arm64(musl 정적) Tier 1, macOS Tier 1, Windows Tier 2 | 원격 서버는 대부분 Linux이므로 Relay는 Linux도 1급 |
+| 모바일 | iOS Tier 1, Android Tier 2 | |
+
+macOS 우선 항목:
+- 네이티브 메뉴바, `⌘` 단축키 체계, 전체화면/탭 창, Keychain
+- Finder 연동: "Pitwall로 열기" 빠른 동작(Quick Action), Dock 아이콘에 파일 드롭, `open -a Pitwall <path>`
+- 외부 도구 감지: `/Applications`, JetBrains Toolbox 경로, `mdfind`로 번들 ID 검색
+- 플랫폼 의존 코드는 `pw-platform` 크레이트에 격리 → 다른 OS 지원 시 구현만 추가
 
 ## 4. 레포 구조 (예정)
 
@@ -85,7 +103,9 @@
 pitwall/
 ├─ apps/
 │  ├─ desktop/           # Tauri 앱 (src-tauri + React UI)
-│  └─ host/              # pitwall-host: 헤드리스 코어 바이너리 (원격 배포용 겸 MCP 서버)
+│  ├─ relay/             # pitwall-relay: 헤드리스 코어 데몬 (원격 설치용 겸 MCP 서버)
+│  ├─ hub/               # Relay Hub (셀프호스팅 중계 서버)
+│  └─ mobile/            # Expo 앱 (iOS/Android)
 ├─ crates/
 │  ├─ pw-core/           # 프로젝트/워크스페이스, 이벤트 버스, 설정
 │  ├─ pw-rpc/            # RPC 타입/프로토콜, transport(IPC/stdio/ws)
@@ -96,11 +116,18 @@ pitwall/
 │  ├─ pw-dap/            # DAP 클라이언트
 │  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지
 │  ├─ pw-index/          # tree-sitter 심볼 인덱스
-│  ├─ pw-remote/         # SSH, 원격 host 부트스트랩
+│  ├─ pw-link/           # 기기 키 · 페어링 · Noise 세션 · 전송(직접/Hub/SSH)
+│  ├─ pw-relay/          # Relay 데몬, 기기별 권한, SSH 설치 부트스트랩
+│  ├─ pw-ext/            # 확장 로더, 매니페스트, wasmtime 호스트, 기여 레지스트리
+│  ├─ pw-i18n/           # Fluent 리소스 로딩
+│  ├─ pw-platform/       # OS별 통합 (macOS 우선)
 │  └─ pw-mcp/            # MCP 서버 (rmcp)
 ├─ packages/
 │  ├─ ui/                # React 컴포넌트
-│  └─ rpc-client/        # 생성된 TS 타입 + 클라이언트
+│  ├─ rpc-client/        # 생성된 TS 타입 + 클라이언트 (데스크톱 · 모바일 공용)
+│  ├─ domain/            # 공용 상태/포맷 로직 (데스크톱 · 모바일 공용)
+│  └─ ext-api/           # L3 UI 패널 확장용 TS API
+├─ extensions/           # 내장 확장 (기본 테마, 언어, 외부 도구, 언어팩)
 └─ docs/
 ```
 - Rust: cargo workspace / TS: pnpm workspace
