@@ -13,6 +13,7 @@
 | [06-roadmap.md](06-roadmap.md) | 마일스톤, MVP 범위, 리스크, **결정 기록** |
 | [07-extensibility.md](07-extensibility.md) | 테마 · UI 언어 · 코드 언어 · 플러그인 확장 구조 |
 | [08-remote-mobile.md](08-remote-mobile.md) | Relay 기반 원격 연결, 모바일 컴패니언 앱 |
+| [09-references.md](09-references.md) | 참고 앱 조사와 시사점 |
 
 ## 한 줄 요약
 
