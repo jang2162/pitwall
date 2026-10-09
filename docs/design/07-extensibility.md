@@ -26,15 +26,17 @@ engines = { pitwall = ">=1.0" }
 authors = ["..."]
 
 [contributes.languages.kotlin]
-extensions = ["kt", "kts"]
+linguist = "Kotlin"                         # GitHub Linguist 언어 이름 (§4.3) — 확장자 · 파일명은 Linguist 데이터 사용
+extensions = ["kt", "kts"]                  # (선택) Linguist에 추가로 매핑할 확장자
 grammar = "grammars/kotlin.wasm"          # tree-sitter WASM
 queries = "queries/kotlin/"                # highlights.scm, outline.scm, tags.scm, injections.scm
 line_comment = "//"
 
 [contributes.language_servers.kotlin-lsp]
 languages = ["kotlin"]
-install = { github_release = "Kotlin/kotlin-lsp", asset = "kotlin-lsp-{os}-{arch}.zip" }
-command = "bin/kotlin-lsp"
+mason = "kotlin-lsp"                        # Mason registry 패키지 이름 (§4.4) — 설치 정보는 registry에서
+# install = { github_release = "...", asset = "..." }   # registry에 없을 때만 직접 정의
+command = "kotlin-lsp"                      # registry의 bin 이름 또는 설치 폴더 기준 경로
 
 [contributes.debug_adapters.java]
 languages = ["kotlin", "java"]
@@ -80,6 +82,52 @@ capabilities = ["fs:read:project", "process:spawn:gradlew", "net:github.com"]
 | 언어 주입 규칙 | 코드 안 SQL/정규식/HTML 하이라이트 | 없음 |
 
 - 기본 언어도 모두 이 구조의 "내장 확장"으로 제공 → 언어 추가 시 코어 수정 불필요
+
+### 4.3 언어 판별 — GitHub Linguist 데이터 (D28)
+
+파일 → 언어 판별은 직접 표를 만들지 않고 **GitHub Linguist**(MIT)의 데이터를 사용한다.
+
+| Linguist 데이터 | Pitwall 용도 |
+|---|---|
+| `languages.yml` (확장자 · 파일명 · 인터프리터(shebang) · 별칭 · 색상 · 유형) | 파일 언어 판별, 언어 배지 색, 파일 아이콘 매핑 키 |
+| `heuristics.yml` (`.h`, `.m`, `.pl` 등 모호한 확장자 판별 규칙) | 모호한 확장자를 내용 일부로 판별 |
+| `vendor.yml` · `documentation.yml` | 벤더 · 문서 파일 판별 → 파일 트리 흐림 표시, 검색에서 제외 옵션 |
+| 생성 파일 규칙 (`generated` 판별) | diff에서 생성 파일 접기 (lockfile, 빌드 산출물 등) |
+
+**판별 순서**
+1. 사용자/프로젝트 설정의 명시적 매핑 (`[languages.mapping] "*.conf" = "nginx"`)
+2. `.gitattributes`의 `linguist-language` · `linguist-vendored` · `linguist-generated` · `linguist-documentation` (GitHub와 같은 결과)
+3. 에디터 모드라인 (vim / emacs)
+4. 파일명 → 확장자(heuristics 포함) → shebang
+5. 확장(L1)이 추가한 확장자 매핑
+6. 판별 실패 → 플레인 텍스트
+
+**운영**
+- 빌드 시 Linguist YAML을 압축 테이블로 변환해 코어(`pw-lang`)에 내장. 업데이트는 스크립트로 주기적 갱신(Linguist 버전 고정)
+- 언어 ID는 Linguist 이름 기준 → 언어 확장은 `linguist = "<이름>"`으로 연결 (tree-sitter 문법 · LSP · DAP)
+- heuristics의 정규식은 Rust `regex`로 컴파일 (Ruby 전용 문법은 변환 스크립트에서 처리, 실패 항목은 건너뜀 + 로그)
+- `THIRD_PARTY_NOTICES.md`에 Linguist MIT 고지
+
+### 4.4 LSP · DAP · 포매터 설치 — Mason registry (D29)
+
+언어 서버 · 디버거 · 포매터의 "어디서 받아 어떻게 설치하나" 정보는 **Mason registry**(Neovim mason.nvim의 패키지 정의 저장소)를 사용한다. Pitwall은 registry를 **데이터로만** 읽고, 설치는 자체 설치기가 한다 (mason.nvim 코드는 사용하지 않음).
+
+| 항목 | 설계 |
+|---|---|
+| 데이터 | 패키지별 `package.yaml`: 이름 · 설명 · **라이선스(SPDX)** · 언어 · 분류(LSP/DAP/Formatter/Linter) · `source.id`(purl + 버전) · 플랫폼별 자산 · `bin` · `share` |
+| 가져오기 | registry 릴리스 산출물(JSON 번들)을 내려받아 `$CACHE/registry/`에 저장, 하루 1회 갱신 확인. 오프라인이면 마지막 캐시 사용 |
+| 고정 | Pitwall 릴리스마다 검증한 registry 버전을 기본으로 고정, 설정에서 "최신 registry 사용" 선택 가능 |
+| 설치 위치 | `$DATA/tools/<패키지>/<버전>/`, 실행 파일 링크는 `$DATA/tools/bin/` (PATH에 넣지 않고 Pitwall이 절대 경로로 실행) |
+| 설치기 (purl 유형별) | `github`(릴리스 자산 다운로드 · 압축 해제), `generic`(URL), `npm`, `pypi`(전용 venv), `cargo`, `golang`, `openvsx`(VS Code 확장 형태 디버거: codelldb · js-debug 등) — 우선 `github` · `generic` · `npm` · `pypi` · `openvsx` 구현 |
+| 툴체인 | `npm` · `pypi` · `cargo` · `golang` 설치에 필요한 node · python 등은 **런타임 제공자(03 §5-1, mise 등)**에서 찾음. 없으면 "node가 필요합니다 — mise로 설치" 안내 |
+| 검증 | registry에 체크섬이 있으면 검증, 없으면 HTTPS + 버전 고정. 설치 전 **라이선스 · 출처 표시 후 사용자 확인**(최초 1회) |
+| 업데이트 | 설치본 버전 vs registry 버전 비교 → 업데이트 알림, 이전 버전 1개 보관(롤백) |
+| 언어 확장 연결 | 언어 확장은 `mason = "<패키지명>"`만 적음. registry에 없는 서버만 `install = {...}`로 직접 정의 |
+| 사용자 지정 | 설정에서 서버 경로 직접 지정 가능 (시스템에 이미 설치된 서버 사용 — 예: mise로 설치한 `rust-analyzer`) |
+| 원격 | Relay가 원격 머신에서 같은 방식으로 설치 (`$DATA/tools/` on remote) |
+| 라이선스 | registry 저장소 라이선스는 착수 시 재확인(Apache-2.0으로 알려짐) → 고지. 개별 도구 라이선스는 각 패키지 정의의 SPDX 표시 |
+
+**관리 화면 (F4-5)**: 설치된 도구 목록(이름 · 버전 · 언어 · 라이선스 · 크기), 검색 → 설치/업데이트/제거, 설치 로그 보기
 
 ## 5. 플러그인 API (L2 WASM) 개요
 

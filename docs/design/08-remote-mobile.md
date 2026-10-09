@@ -56,7 +56,7 @@
 **방법 B. Desktop에서 SSH로 설치 (Zed 방식)**
 1. 시스템 `ssh` 바이너리 사용 (사용자의 `~/.ssh/config`, 에이전트, ProxyJump, ControlMaster를 그대로 존중). 비밀번호는 설정에 저장하지 않고 키 인증 권장, 프롬프트는 GUI askpass로 처리
 2. 원격 OS/아키텍처 감지 (`uname -sm`)
-3. `~/.pitwall-relay/pitwall-relay-{channel}-{version}` 존재 여부 확인 — **Desktop 버전과 정확히 일치**해야 함
+3. `~/.local/share/pitwall/relay/pitwall-relay-{channel}-{version}` 존재 여부 확인 (원격의 `$XDG_DATA_HOME` 존중) — **Desktop 버전과 정확히 일치**해야 함
 4. 없으면 설치:
    - 기본: 원격이 릴리스 서버에서 직접 다운로드 + 해시 검증
    - `upload_binary_over_ssh = true`: Desktop이 로컬로 받아 SSH로 업로드 (원격 인터넷 제한 환경)
@@ -86,7 +86,7 @@
 ### 원격 호스트 등록 예 (Desktop 쪽)
 
 ```toml
-# ~/.pitwall/settings.toml
+# ~/.config/pitwall/settings.toml
 [[remote_hosts]]
 nickname = "build-server"
 host = "build.tail1234.ts.net"     # Tailscale MagicDNS 또는 ~/.ssh/config 호스트명

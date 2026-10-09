@@ -25,6 +25,9 @@
 | 텍스트 검색 | `grep-searcher`/`grep-regex` (ripgrep 라이브러리) | |
 | 심볼 인덱스 | tree-sitter tags → SQLite(FTS5) | LSP 미기동/미지원 언어 폴백 |
 | 파일 감시 | `notify` (+ debounce) | |
+| 파일 위치 | **XDG Base Directory** (`etcetera` 크레이트, macOS도 XDG) | 03 §5-0 |
+| 언어 판별 | **GitHub Linguist** 데이터(`languages.yml` · `heuristics.yml` 등) → 빌드 시 내장 테이블 | 07 §4.3 |
+| LSP/DAP 설치 정보 | **Mason registry** (`package.yaml`, purl 기반) + 자체 설치기 | 07 §4.4 |
 | 런타임 환경 | **mise** 연동(CLI 호출 · JSON 출력) 우선, direnv/asdf/로그인 셸 대체 | 필수 의존 아님 (03 §5-1) |
 | 저장소 개발 도구 버전 | `mise.toml` (Rust · Node · pnpm 고정) | 워크트리 · CI · 에이전트 간 동일 버전 |
 | 로컬 저장소 | SQLite (`rusqlite`) + TOML 설정 파일 | |
@@ -73,7 +76,8 @@
 - IntelliJ PSI 수준 인덱서는 비목표
 - 1차: 언어별 LSP (rust-analyzer, tsserver/vtsls, pyright/basedpyright, gopls, jdtls, kotlin-lsp 등)
 - 2차(폴백/즉시성): tree-sitter tags로 만든 심볼 인덱스 — LSP 기동 전에도 "심볼로 이동" 가능
-- LSP 서버 바이너리는 자동 다운로드 관리 (Zed/Mason 방식, `~/.pitwall/servers`)
+- LSP · DAP · 포매터 설치 정보는 **Mason registry**를 데이터로 사용, 설치는 자체 설치기 → `$DATA/tools/` (07 §4.4)
+- 파일 언어 판별은 **GitHub Linguist** 데이터 (07 §4.3)
 
 ### 2.5 디버깅: DAP
 - 언어별 디버거를 직접 구현하지 않고 Debug Adapter Protocol만 구현
@@ -150,6 +154,8 @@ pitwall/
 │  ├─ pw-dap/            # DAP 클라이언트
 │  ├─ pw-runtime/        # 런타임 제공자 (mise · direnv · asdf · 로그인 셸), env 캐시
 │  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지
+│  ├─ pw-lang/           # 언어 판별 (Linguist 데이터 테이블, .gitattributes, 모드라인)
+│  ├─ pw-tools/          # Mason registry 읽기 · 도구 설치기 (LSP/DAP/포매터)
 │  ├─ pw-index/          # tree-sitter 심볼 인덱스
 │  ├─ pw-link/           # 기기 키 · 페어링 · Noise 세션 · 전송(QUIC/SSH) · Tailscale 검색
 │  ├─ pw-relay/          # Relay 데몬, 기기별 권한, SSH 설치 부트스트랩

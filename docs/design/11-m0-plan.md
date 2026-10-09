@@ -16,7 +16,7 @@ M0 목표: **기능은 없지만 이후 모든 기능이 올라갈 뼈대가 동
 | **M0-05** | RPC 계약 | `pw-rpc`: JSON-RPC 2.0, 메서드 정의 매크로(이름 · 입력/출력 타입 · **role 메타데이터** · 권한 등급), 스트림(`streamId` + credit), 이벤트 구독, 취소 | M0-01 | 단위 테스트: 요청/응답 · 스트림 · 취소 · 권한 거부 |
 | **M0-06** | 타입 생성 | `specta`로 TS 타입 + `rpc-client` 생성, `schemars`로 JSON Schema 생성 (MCP · 폼용), CI에서 생성물 최신 여부 검사 | M0-05 | TS에서 타입 안전하게 호출 |
 | **M0-07** | Host 추상 · 이벤트 버스 | `pw-core`: `Host` trait, `LocalHost`(in-process), `ProjectContext`, 이벤트 버스, `Task`(진행률 · 취소), Host Router(project_id → Host) | M0-05 | Tauri IPC transport로 UI ↔ LocalHost 왕복 |
-| **M0-08** | 설정 계층 | TOML 로딩/병합(내장 → `.pitwall/*.toml` → `*.local.toml`, 워크트리면 메인 저장소 `.local` 폴백), **`schema` 버전 · 마이그레이션 프레임워크 · 백업**, 파일 감시로 재로드, 개인 전용 모드 | M0-07 | 마이그레이션 v0→v1 샘플 테스트 |
+| **M0-08** | 설정 계층 | **XDG 경로 해석(`$CONFIG`/`$DATA`/`$STATE`/`$CACHE`, `PITWALL_*_DIR` 덮어쓰기, Windows 대응)**, TOML 로딩/병합(내장 → `.pitwall/*.toml` → `*.local.toml`, 워크트리면 메인 저장소 `.local` 폴백), **`schema` 버전 · 마이그레이션 프레임워크 · 백업**, 파일 감시로 재로드, 개인 전용 모드 | M0-07 | 마이그레이션 v0→v1 샘플 테스트 |
 | **M0-09** | 프로젝트 레지스트리 | `state.db`(SQLite), 프로젝트 CRUD, 최근 목록, 경로 → 프로젝트 해석(가장 깊은 루트, **git worktree → 메인 저장소**, F2-5), 루트 후보 추천(.git · 빌드 파일) | M0-07, M0-08 | 해석 규칙 단위 테스트 (중첩 · 워크트리 · 심링크) |
 | **M0-10** | CLI · 단일 인스턴스 | `pitwall <path>` (디렉터리 · 파일 · `path:line:col`), single-instance로 기존 앱에 전달, "Shell 명령 설치"(macOS `/usr/local/bin`), `pitwall mcp` 서브커맨드 진입점 | M0-04, M0-09 | Orca "Open in"과 같은 방식(`spawn("pitwall", [absPath])`)으로 호출 시 올바른 창 활성화 |
 | **M0-11** | UI 기반 | React 19 + Vite + Tailwind v4 + Radix, 디자인 토큰 → CSS 변수, 라이트/다크(OS 연동), dockview 기본 레이아웃(툴 윈도우 바 · 에디터 영역 · 하단 · 상태바 자리), TanStack Query + 이벤트 무효화 | M0-04, M0-06 | 레이아웃 저장/복원, 테마 전환 |

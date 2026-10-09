@@ -101,7 +101,7 @@ JetBrains IDE 내장 MCP 서버의 "Exposed Tools" 방식을 따른다. 권한 �
 | UI | 설정 > MCP: 툴 목록(이름 · 설명 · 등급 · 최근 호출 수), 검색, 그룹 토글, 입력 스키마 미리보기 |
 
 ```toml
-# ~/.pitwall/settings.toml (전역) — 프로젝트에서 같은 키로 덮어쓰기
+# ~/.config/pitwall/settings.toml (전역) — 프로젝트에서 같은 키로 덮어쓰기
 [mcp]
 preset = "standard"
 auto_approve = ["read", "write"]      # "exec" 추가 가능, "dangerous"는 불가

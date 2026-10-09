@@ -67,27 +67,49 @@
 
 ## 5. 데이터 저장
 
+### 5-0. 파일 위치 — XDG 규칙 (D27)
+
+macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · Zed 등 개발 도구 관례, `~/Library/Application Support` 대신). Windows는 표준 폴더에 대응시킨다.
+
+| 이름 | 용도 | macOS / Linux 기본값 | Windows |
+|---|---|---|---|
+| `$CONFIG` | **사람이 편집하는 설정만** | `$XDG_CONFIG_HOME/pitwall` → `~/.config/pitwall` | `%APPDATA%\pitwall\config` |
+| `$DATA` | 앱이 관리하는 영구 데이터 | `$XDG_DATA_HOME/pitwall` → `~/.local/share/pitwall` | `%LOCALAPPDATA%\pitwall\data` |
+| `$STATE` | 로그 · 백업 · 감사 기록 | `$XDG_STATE_HOME/pitwall` → `~/.local/state/pitwall` | `%LOCALAPPDATA%\pitwall\state` |
+| `$CACHE` | 지워도 되는 캐시 | `$XDG_CACHE_HOME/pitwall` → `~/.cache/pitwall` | `%LOCALAPPDATA%\pitwall\cache` |
+
+- 환경 변수로 개별 덮어쓰기: `PITWALL_CONFIG_DIR`, `PITWALL_DATA_DIR`, `PITWALL_STATE_DIR`, `PITWALL_CACHE_DIR` (테스트 · 포터블 실행용)
+- **`$CONFIG` 규칙**: 텍스트(TOML)만, 비밀 · 기기 고유 상태 · 캐시 없음 → **chezmoi · yadm 등 dotfiles 도구로 그대로 동기화 가능** (기기 간 설정 동기화의 기본 방법)
+- 기기 고유 값이 필요하면 `settings.local.toml`(같은 폴더, dotfiles에서 제외 권장)으로 분리
+- 원격 Relay도 같은 규칙: `~/.config/pitwall/relay.toml`, 바이너리 `~/.local/share/pitwall/relay/`
+- 설정 화면의 "파일로 열기"는 `$CONFIG`의 실제 파일을 연다. "설정 폴더 열기" · "경로 복사" 액션 제공
+
+
 | 범위 | 위치 | 형식 | 내용 |
 |---|---|---|---|
-| 앱 전역 | `~/.pitwall/` (OS별 app data dir) | `settings.toml`, `state.db`(SQLite) | 전역 설정, 프로젝트 레지스트리, 최근 목록, 원격 호스트, 외부 도구 목록 |
+| 범위 | 위치 (§5-0 XDG) | 형식 | 내용 |
+|---|---|---|---|
+| 전역 설정 | `$CONFIG/` | TOML | `settings.toml`(전역 설정 · 원격 호스트 · 외부 도구), `keymap.toml`, `themes/`, 개인 전용 프로젝트 설정 `projects/<slug>/` |
+| 앱 데이터 | `$DATA/` | SQLite · 바이너리 | `state.db`(프로젝트 레지스트리 · 최근 목록), `projects/<id>/`(열린 탭 · 레이아웃 · 브레이크포인트 · 쿼리 히스토리), `extensions/`, `tools/`(LSP · DAP 설치본, §07 4.4), `relay/` |
+| 상태 · 로그 | `$STATE/` | 텍스트 | `logs/`, `backup/`(마이그레이션 원본), 감사 로그 |
+| 캐시 | `$CACHE/` | 다양 | 심볼 인덱스, registry 캐시, 원격 파일 캐시 — 지워도 재생성 |
 | 프로젝트 공유 설정 | `<project>/.pitwall/project.toml`, `run/*.toml`, `db/*.toml` | TOML | 커밋 가능. 실행 구성, DB 연결(비밀 제외), 외부 도구 오버라이드 |
-| 프로젝트 로컬 상태 | `<appdata>/projects/<id>/` | SQLite | 열린 탭, 레이아웃, 브레이크포인트, 쿼리 히스토리, 심볼 인덱스 캐시 |
 | 비밀 | OS 키체인 | | DB 비밀번호, SSH 패스프레이즈, 토큰. 설정 파일에는 `secret_ref`만 |
 
 - **하이브리드 정책 (D9)**: `.pitwall/*.toml`은 커밋, 개인용 덮어쓰기는 `.pitwall/*.local.toml` — 프로젝트 생성 시 `.pitwall/.gitignore`에 `*.local.toml` 자동 추가
 - 병합 순서: 내장 기본값 → `.pitwall/*.toml` → `.pitwall/*.local.toml`
-- 레포를 건드리고 싶지 않은 프로젝트는 "개인 전용" 모드로 전환 → 같은 파일 구조를 `<appdata>/projects/<id>/config/`에 저장
+- 레포를 건드리고 싶지 않은 프로젝트는 "개인 전용" 모드로 전환 → 같은 파일 구조를 `$CONFIG/projects/<slug>/`에 저장 (사람이 편집하는 설정이므로 `$CONFIG`)
 - 기존 설정 임포트 (편의): `.idea/runConfigurations/*.xml`, `.idea/dataSources.xml`, `.vscode/launch.json`, `.vscode/tasks.json`
 
 ### 설정 파일 스키마 버전 (D23)
 - 모든 설정 파일(`project.toml`, `run/*.toml`, `db/*.toml`, `settings.toml`, `keymap.toml`, `relay.toml`) 첫 줄에 `schema = <정수>`
-- 앱이 구버전 파일을 읽으면 **자동 마이그레이션** → 원본은 `.pitwall/.backup/<파일>.v<N>`(프로젝트) / `<appdata>/backup/`(전역)에 보관 후 새 형식으로 저장
+- 앱이 구버전 파일을 읽으면 **자동 마이그레이션** → 원본은 `.pitwall/.backup/<파일>.v<N>`(프로젝트) / `$STATE/backup/`(전역)에 보관 후 새 형식으로 저장
 - 커밋되는 `.pitwall/` 파일이 마이그레이션되면 알림 표시 (팀원과 앱 버전이 다를 수 있으므로 "변경 사항 커밋 필요" 안내)
 - 앱보다 **새 버전** 스키마 파일은 읽기 전용으로 열고 업데이트 안내 (덮어쓰지 않음)
 - 마이그레이션은 버전별 순차 함수(`v1→v2→v3`)로 구현, 각 단계 테스트 픽스처 유지
 
 ### 로그 · 진단 (D22)
-- 로그: `<appdata>/logs/` 회전 로그(코어 · UI · LSP · DAP · Relay 별), 기본 7일 보관
+- 로그: `$STATE/logs/` 회전 로그(코어 · UI · LSP · DAP · Relay 별), 기본 7일 보관
 - 사용 통계(텔레메트리) 수집 없음
 - 크래시 리포트: 기본 꺼짐. 켜면 크래시 시 스택 · 버전 · OS만 전송(경로 · 코드 · 비밀 제외), 전송 전 내용 확인 가능
 - "진단 정보 복사": 버전 · OS · 활성 기능 · 최근 오류 로그를 클립보드로 (이슈 제보용)
