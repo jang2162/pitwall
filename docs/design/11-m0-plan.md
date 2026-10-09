@@ -9,9 +9,9 @@ M0 목표: **기능은 없지만 이후 모든 기능이 올라갈 뼈대가 동
 
 | ID | 작업 | 내용 | 선행 | 완료 기준 |
 |---|---|---|---|---|
-| **M0-01** | 저장소 골격 | cargo workspace + pnpm workspace, 02 §4 디렉터리 구조, rustfmt/clippy/eslint/prettier, `rust-toolchain.toml`, `.editorconfig` | — | `cargo check` · `pnpm -r build` 통과 |
+| **M0-01** | 저장소 골격 | cargo workspace + pnpm workspace, 02 §4 디렉터리 구조, rustfmt/clippy/eslint/prettier, `rust-toolchain.toml`, `.editorconfig`, **`mise.toml`(Rust · Node · pnpm 버전 고정 + `build`/`test`/`lint` 태스크)** | — | 새 워크트리에서 `mise install && mise run test` 통과 |
 | **M0-02** | 개발 규칙 문서 | `CLAUDE.md`/`AGENTS.md`(에이전트용 규칙: 구조 · 명령 · 테스트 · 커밋 규칙), `CONTRIBUTING.md`, 커밋 메시지 규칙 | M0-01 | 에이전트가 문서만 보고 빌드 · 테스트 실행 가능 |
-| **M0-03** | CI | GitHub Actions: lint · test (3 OS), `cargo-deny`(라이선스 · 취약점), `license-checker`(npm), `THIRD_PARTY_NOTICES.md` 생성 | M0-01 | PR마다 그린 |
+| **M0-03** | CI | GitHub Actions: `mise` 액션으로 같은 도구 버전 설치 → lint · test (3 OS), `cargo-deny`(라이선스 · 취약점), `license-checker`(npm), `THIRD_PARTY_NOTICES.md` 생성 | M0-01 | PR마다 그린 |
 | **M0-04** | Tauri 셸 | Tauri 2 앱, macOS overlay 타이틀바, 다중 창(웰컴 / 프로젝트 / 설정), 웹뷰 기본 동작 차단(`⌘R`, 줌, 뒤로가기) | M0-01 | 빈 창 3종이 뜸 |
 | **M0-05** | RPC 계약 | `pw-rpc`: JSON-RPC 2.0, 메서드 정의 매크로(이름 · 입력/출력 타입 · **role 메타데이터** · 권한 등급), 스트림(`streamId` + credit), 이벤트 구독, 취소 | M0-01 | 단위 테스트: 요청/응답 · 스트림 · 취소 · 권한 거부 |
 | **M0-06** | 타입 생성 | `specta`로 TS 타입 + `rpc-client` 생성, `schemars`로 JSON Schema 생성 (MCP · 폼용), CI에서 생성물 최신 여부 검사 | M0-05 | TS에서 타입 안전하게 호출 |
@@ -52,5 +52,6 @@ M0-01 ─┬─ M0-02
 - 키맵 커스텀 UI (파일 편집만 동작)
 
 ## 4. 착수 전 준비물
+- 개발 머신에 mise 설치 (도구 버전은 `mise.toml`이 관리)
 - Apple Developer 계정 (M0-19 서명 · 공증)
 - GitHub 저장소 Actions · Releases 권한, updater 서명 키 생성 · 보관(Secrets)

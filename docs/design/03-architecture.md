@@ -41,6 +41,7 @@
 | `git` | status/log/graph/blame/diff, 쓰기 작업, 저장소 감시 | `git.refsChanged`, `git.statusChanged` |
 | `index` | tree-sitter 파싱, 심볼 인덱스 | `index.progress` |
 | `lsp` | 언어 서버 수명주기, 요청 프록시, 진단 집계 | `lsp.diagnostics`, `lsp.status` |
+| `runtime` | 런타임 환경 해석 (mise · direnv · asdf · 로그인 셸 · 수동), 디렉터리별 env 캐시 — §5-1 | `runtime.changed` |
 | `run` | 실행 구성, 태스크 감지, 프로세스/PTY, 로그 버퍼 | `run.output`, `run.exited` |
 | `dap` | 디버그 세션, 브레이크포인트, 스택/변수 | `dap.stopped`, `dap.output` |
 | `db` | 연결 풀, 쿼리 실행(스트리밍), 스키마 캐시 | `db.queryProgress` |
@@ -100,6 +101,11 @@ name = "billing-api"
 [languages]
 enabled = ["kotlin", "sql"]
 
+[runtime]            # 선택 — 생략 시 자동 감지
+provider = "auto"    # auto | mise | direnv | asdf | shell | none
+[runtime.env]        # 수동 덮어쓰기 (제공자 결과 위에 적용)
+JAVA_HOME = "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home"
+
 [open_with]          # 프로젝트별 외부 도구 오버라이드
 default = "orca"     # 외부 도구 id (04 F8)
 ```
@@ -131,6 +137,43 @@ read_only = false
 [ssh_tunnel]            # 선택
 host_ref = "bastion"
 ```
+
+## 5-1. 런타임 환경 (D26)
+
+GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버전(Node/Java/Python 등)을 모른다. Pitwall은 **런타임 버전을 직접 설치 · 관리하지 않고**, 외부 도구가 계산한 환경을 받아 프로세스를 띄울 때 적용한다.
+
+### 런타임 제공자 (Runtime Provider)
+
+| 순서 | 제공자 | 감지 조건 | 환경 얻는 방법 |
+|---|---|---|---|
+| 1 | **mise** (우선 지원) | `mise` 실행 파일 존재 + 프로젝트에 `mise.toml` / `.mise.toml` / `.tool-versions` 등 | `mise env --json` (cwd = 대상 디렉터리) |
+| 2 | direnv | `.envrc` 존재 + `direnv` 설치 | `direnv export json` |
+| 3 | asdf | `.tool-versions` + `asdf` 설치 (mise 없을 때) | `asdf` shim 경로를 PATH에 추가 |
+| 4 | **로그인 셸** (기본 대체) | 항상 | 앱 시작 시 `$SHELL -lic env` 결과 (Orca의 PATH 가져오기와 같은 방식) |
+| 5 | 수동 지정 | `.pitwall/project.toml`의 `[runtime]` | 설정값을 위 결과에 덮어씀 |
+
+- 자동 선택이 기본, 프로젝트 설정에서 제공자 고정 가능 (`provider = "mise" | "direnv" | "asdf" | "shell" | "none"`)
+- mise는 **필수 의존이 아님** — 없으면 로그인 셸 환경으로 동작
+- 결과는 `RuntimeEnv { path, vars, tools: [{name, version, source_file}] }`로 통일
+
+### 적용 대상
+모든 프로세스 실행은 `runtime` 모듈을 거친다: **내장 터미널, LSP 서버, DAP 어댑터, 실행 구성, 태스크, MCP를 통한 실행, git 훅 실행 환경**
+
+### 캐시 · 무효화
+- 키: (프로젝트, 디렉터리). 모노레포 하위 폴더별로 다른 버전 가능
+- 무효화: `mise.toml` · `.tool-versions` · `.envrc` · `.nvmrc` 등 버전 파일 변경(파일 감시), 사용자 "환경 다시 읽기" 액션
+- 런타임 변경 시 `runtime.changed` 이벤트 → 영향받는 LSP 재시작 제안, 새 터미널부터 적용
+
+### 신뢰
+- mise 설정은 hook · env 스크립트를 실행할 수 있음 → **신뢰된 프로젝트(F1-7)에서만** 제공자 실행
+- 신뢰 전: 로그인 셸 환경만 사용, 상태바에 "런타임 환경 미적용(신뢰 필요)" 표시
+- mise 자체 신뢰(`mise trust`)가 안 된 경우 안내 + 버튼으로 실행 (사용자 확인 후)
+
+### 미설치 버전
+- 제공자가 "설치되지 않은 버전"을 보고하면 알림: [`mise install` 실행] (터미널 탭에서 실행해 출력 표시)
+
+### 원격
+- Relay도 같은 `runtime` 모듈 사용 → 원격 머신의 mise/셸 환경 기준
 
 ## 6. 원격 연결 구조
 

@@ -25,6 +25,8 @@
 | 텍스트 검색 | `grep-searcher`/`grep-regex` (ripgrep 라이브러리) | |
 | 심볼 인덱스 | tree-sitter tags → SQLite(FTS5) | LSP 미기동/미지원 언어 폴백 |
 | 파일 감시 | `notify` (+ debounce) | |
+| 런타임 환경 | **mise** 연동(CLI 호출 · JSON 출력) 우선, direnv/asdf/로그인 셸 대체 | 필수 의존 아님 (03 §5-1) |
+| 저장소 개발 도구 버전 | `mise.toml` (Rust · Node · pnpm 고정) | 워크트리 · CI · 에이전트 간 동일 버전 |
 | 로컬 저장소 | SQLite (`rusqlite`) + TOML 설정 파일 | |
 | 비밀 | `keyring` (macOS Keychain / Windows Credential / Secret Service) | |
 | 원격 | **Pitwall Relay 데몬** + 연결 계층 `pw-link` (QUIC `quinn`, Noise `snow`, mDNS) | 직접 연결(LAN/Tailscale) → SSH(`russh`) 대체. 중계 서버 없음 (08 참고) |
@@ -146,6 +148,7 @@ pitwall/
 │  ├─ pw-db*/            # pw-db, pw-db-types, pw-db-sql, pw-db-driver(-postgres/-mysql/-sqlite/-redis) (§2.7)
 │  ├─ pw-lsp/            # LSP 클라이언트, 서버 관리자
 │  ├─ pw-dap/            # DAP 클라이언트
+│  ├─ pw-runtime/        # 런타임 제공자 (mise · direnv · asdf · 로그인 셸), env 캐시
 │  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지
 │  ├─ pw-index/          # tree-sitter 심볼 인덱스
 │  ├─ pw-link/           # 기기 키 · 페어링 · Noise 세션 · 전송(QUIC/SSH) · Tailscale 검색

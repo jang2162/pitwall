@@ -11,10 +11,10 @@
 | F1-1 | 프로젝트 레지스트리 | 로컬/원격 프로젝트 목록, 태그, 즐겨찾기, 최근 사용순 | P0 |
 | F1-2 | 프로젝트별 창 | 프로젝트마다 독립 창 · 레이아웃 · 프로세스 | P0 |
 | F1-3 | 프로젝트 스위처 | `⌘⇧P` 퍼지 검색으로 다른 프로젝트 열기/전환 (Search Everywhere의 프로젝트 탭) | P0 |
-| F1-4 | 자동 감지 | 생성 시 언어, 빌드 툴, 실행 태스크, DB 설정(`.env`, `application.yml`, `docker-compose.yml`)을 스캔하여 제안 | P1 |
+| F1-4 | 자동 감지 | 생성 시 언어, 빌드 툴, 실행 태스크, DB 설정(`.env`, `application.yml`, `docker-compose.yml`), **런타임 버전(mise 등, F14)**을 스캔하여 제안 | P1 |
 | F1-5 | 기존 IDE 설정 임포트 | `.idea`, `.vscode` 실행 구성 · 데이터소스 임포트 | P1 |
 | F1-6 | 멀티 루트 | 하나의 프로젝트에 여러 폴더(모노레포 외 분리 레포 묶음) | P2 |
-| F1-7 | 신뢰 모델 | 처음 여는 프로젝트는 "제한 모드"(실행 · 태스크 · LSP 자동기동 금지) | P1 |
+| F1-7 | 신뢰 모델 | 처음 여는 프로젝트는 "제한 모드"(실행 · 태스크 · LSP 자동기동 · 런타임 제공자(mise 등) 실행 금지) | P1 |
 
 ## F2. 파일로 앱 실행 → 프로젝트 찾기/생성
 
@@ -138,8 +138,8 @@ pitwall <path>[:line[:col]]
 
 | ID | 기능 | 우선 |
 |---|---|---|
-| F7-1 | 실행 구성 CRUD (`.pitwall/run/*.toml`) — shell, npm/pnpm 스크립트, gradle/maven 태스크, cargo, go, python, docker-compose | P0 |
-| F7-2 | 태스크 자동 감지 (package.json scripts, Makefile, gradle tasks, justfile, compose 서비스) → 원클릭 실행 | P0 |
+| F7-1 | 실행 구성 CRUD (`.pitwall/run/*.toml`) — shell, npm/pnpm 스크립트, gradle/maven 태스크, cargo, go, python, docker-compose, **`mise-task`** | P0 |
+| F7-2 | 태스크 자동 감지 (package.json scripts, Makefile, gradle tasks, justfile, compose 서비스, **mise tasks**(`mise tasks ls --json`)) → 원클릭 실행 | P0 |
 | F7-3 | 실행 콘솔: PTY, ANSI 색상, 검색, 파일:라인 링크 클릭 이동, 로그 레벨 하이라이트 | P0 |
 | F7-4 | 프로세스 관리: 동시 실행, 재시작, 중지(트리 kill), 포트 표시 | P0 |
 | F7-5 | 복합 구성 (여러 구성을 순서/병렬 실행, before-launch 태스크) | P1 |
@@ -263,6 +263,19 @@ Orca는 작업마다 별도 `git worktree` 디렉터리를 만들기 때문에, 
 - 다만 모바일을 나중에 붙일 수 있도록 다음 구조는 유지: 전송 독립 RPC, 메서드별 role 메타데이터(`readonly` 등), `pw-link` 기기 페어링
 - 재검토 시점: M7(원격) 완료 후, 실제로 "자리 비운 동안 확인하고 싶은 정보"가 쌓였을 때
 
+## F14. 런타임 환경 (mise 등)
+→ 상세는 [03-architecture.md](03-architecture.md) §5-1
+
+| ID | 기능 | 우선 |
+|---|---|---|
+| F14-1 | 런타임 제공자 추상 + **로그인 셸 환경** 기본 적용 (터미널 · 이후 모든 프로세스) | P0 (M1) |
+| F14-2 | **mise 제공자**: `mise env --json`으로 디렉터리별 환경, 버전 파일 변경 시 재계산 | P0 (M1) |
+| F14-3 | direnv · asdf 제공자, 프로젝트별 제공자 고정 · `[runtime.env]` 수동 덮어쓰기 | P1 |
+| F14-4 | 상태바 런타임 표시 (`node 22.11 · java 21 (mise)`), 클릭 시 값과 출처 파일 | P1 |
+| F14-5 | 미설치 버전 알림 → `mise install` 실행 버튼, `mise trust` 안내 | P1 |
+| F14-6 | 런타임 변경 시 LSP 재시작 제안 | P1 (M4) |
+| F14-7 | Relay(원격)에서 같은 제공자 사용 | P1 (M7) |
+
 ## F13. 확장 (테마 · 언어 · 플러그인)
 → 상세는 [07-extensibility.md](07-extensibility.md)
 
@@ -292,6 +305,6 @@ Orca는 작업마다 별도 `git worktree` 디렉터리를 만들기 때문에, 
 ├──┴──────────────┴──────────────────────────────────────────────┤
 │ 실행 | 디버그 | 문제 | 터미널 | Git 로그 | 쿼리 결과                 │
 ├───────────────────────────────────────────────────────────────┤
-│ 상태바: LSP 상태 · 인덱싱 · 브랜치 ↑1↓2 · 원격 호스트 · MCP 연결 수        │
+│ 상태바: LSP 상태 · 인덱싱 · 브랜치 ↑1↓2 · 런타임 · 원격 호스트 · MCP 연결 수 │
 └───────────────────────────────────────────────────────────────┘
 ```
