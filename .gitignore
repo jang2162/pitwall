@@ -1,0 +1,27 @@
+
+
+# 에이전트 전달 문서와 세션 스크래치
+.superpowers/
+# 에이전트 워크트리
+/.worktrees/
+# codegraph 인덱스(로컬에서 다시 만드는 생성물)
+/.codegraph/
+# Orca 개인용 이슈 명령
+/.orca/issue-command
+
+
+# START Ruler Generated Files
+/.agents/skills
+/.claude/skills
+/.codex/config.toml
+/.codex/config.toml.bak
+/.mcp.json
+/.mcp.json.bak
+/.opencode/skills
+/AGENTS.md
+/AGENTS.md.bak
+/CLAUDE.md
+/CLAUDE.md.bak
+/opencode.json
+/opencode.json.bak
+# END Ruler Generated Files

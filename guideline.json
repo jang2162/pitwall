@@ -1,0 +1,56 @@
+{
+  "version": 2,
+  "form": "ruler",
+  "agents": [
+    "claude",
+    "codex"
+  ],
+  "sources": {
+    "default": {
+      "server": "https://guideline.develma.com",
+      "items": [
+        "mcp/codegraph",
+        "mcp/context7",
+        "rules/base/00-agent.md",
+        "rules/base/01-git.md",
+        "rules/base/02-delegation.md",
+        "rules/base/03-comments.md",
+        "rules/base/04-citation.md",
+        "rules/base/05-verification.md",
+        "rules/base/06-worktree-setup.md",
+        "rules/base/07-worktree-cleanup.md",
+        "rules/base/08-shared-resources.md",
+        "rules/base/09-worker-brief.md",
+        "rules/base/10-package-manager.md",
+        "rules/base/11-docs-layout.md",
+        "rules/base/12-handoff-docs.md",
+        "rules/base/SETUP.md",
+        "rules/codegraph/00-index.md",
+        "rules/codegraph/01-orca-setup.md",
+        "rules/codegraph/SETUP.md",
+        "rules/lefthook/00-toolchain.md",
+        "rules/lefthook/01-pre-push.md",
+        "rules/lefthook/02-post-checkout.md",
+        "rules/mise/00-source.md",
+        "rules/mise/01-path.md",
+        "rules/mise/02-pnpm.md",
+        "rules/mise/SETUP.md",
+        "rules/orca/05-switch.md",
+        "rules/orca/06-orca-yaml.md",
+        "rules/orca/SETUP.md",
+        "rules/oxc/00-version.md",
+        "rules/oxc/01-formatting.md",
+        "rules/ruler/00-sources.md",
+        "rules/ruler/01-nested.md",
+        "rules/ruler/02-documents.md",
+        "rules/rust/00-fmt-lint.md",
+        "rules/rust/01-toolchain.md",
+        "rules/tiergear/00-switch.md",
+        "rules/tiergear/01-launch.md",
+        "rules/tiergear/02-orca-spawn.md",
+        "skills/guideline-export",
+        "skills/orca-worker"
+      ]
+    }
+  }
+}

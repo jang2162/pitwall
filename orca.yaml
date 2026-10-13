@@ -1,0 +1,8 @@
+scripts:
+  setup: |
+    set -e
+    mise trust
+    mise install
+    if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; fi
+    npx -y @colbymchenry/codegraph init || echo "codegraph init 실패: 인덱스 없이 진행"
+setupAgentStartupPolicy: wait-for-setup
