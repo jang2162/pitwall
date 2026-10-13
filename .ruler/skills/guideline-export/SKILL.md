@@ -28,7 +28,7 @@ description: 이 프로젝트의 지침 중 다른 프로젝트에서도 쓸 만
    - MCP 설정: `.mcp.json`, `.codex/config.toml`, `.cursor/mcp.json`, `.ruler/ruler.toml` 의 `[mcp_servers]`·`[agents.<에이전트>.mcp_servers]`, `.ruler/mcp.json`
    - `sync-guideline`·`guideline-sync` 가 쓴 사본은 원본의 사본이므로 스택 후보로 다시 올리지 않는다: `.ruler/<스택>/`(원본 스택과 같은 이름), `docs/guideline/`, 색인(`.ruler/<스택>/99-reference.md`, 지침 파일의 `## <스택> 참조 지침` 절), 관리 지침(`.ruler/guideline.md`, 지침 파일의 `## 공용 지침 관리` 절), 지침 파일의 `guideline:begin`~`guideline:end` 블록과 `guideline.json`·`guideline-lock.json`. 세팅 문서 사본(`docs/guideline/<스택>/SETUP.md`)도 `docs/guideline/` 에 든다. frontmatter 를 뗀 원본과 다르면 그 차이를 `이미 있음 / 충돌` 표에 보고한다.
    - 프로젝트 바꿈(`.ruler/<스택>/override.md`, `.ruler/<스택>/override.d/*.md`, 지침 파일의 `## <스택> 프로젝트 바꿈` 절)은 그 프로젝트가 원본을 의도적으로 바꾼 것이다. 스택 후보로 올리지 않고 4번의 「프로젝트 바꿈」 표에 보인다.
-   - 생성물과 원본이 함께 있으면(ruler 를 쓰는 프로젝트의 `CLAUDE.md`, `.claude/agents/`, `.mcp.json`) 원본(`.ruler/`)만 읽는다. 두 파일이 서로 사본이면 하나만 읽는다.
+   - 생성물과 원본이 함께 있으면(ruler 를 쓰는 프로젝트의 `AGENTS.md`·`CLAUDE.md`, `.claude/agents/`, `.mcp.json`) 원본(`.ruler/`)만 읽는다. 두 파일이 서로 사본이면 하나만 읽는다.
 
 2. **원본의 구성을 파악한다.** `guideline list <원본 폴더>` 를 돌려 스택(지침 파일과 칸)·스킬·서브에이전트·MCP 를 보고, 관련 있는 파일과 `docs/authoring.md` 를 읽는다.
 

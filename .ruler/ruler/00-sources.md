@@ -6,7 +6,7 @@
 | --- | --- |
 | 소스(수정 대상) | `.ruler/*.md`, `.ruler/skills/` |
 | 설정 | `.ruler/ruler.toml` |
-| 생성물(직접 수정 금지) | `AGENTS.md`, `CLAUDE.md`, 에이전트별 설정·스킬 경로(`.codex/config.toml`, `.claude/`, `.agents/` 등), 이들의 `.bak` |
+| 생성물(직접 수정 금지) | `AGENTS.md`(Claude Code 도 이것을 읽는다), 에이전트별 설정·스킬 경로(`.codex/config.toml`, `.claude/`, `.agents/` 등), 이들의 `.bak` |
 
 생성물에 지침을 써 넣지 않는다. 지침을 고치려면 소스를 고치고 `ruler apply` 를 돌린다.
 
@@ -14,6 +14,13 @@
 
 - **Why:** 생성물은 다음 apply 에서 통째로 덮어써진다. 생성물이 소스로 다시 읽히는 설정이면 apply 마다 자기 자신을 덧붙여 중복 헤더로 오염된다.
 - **How to apply:** 어떤 파일이 생성물인지 헷갈리면 `.ruler/ruler.toml` 의 에이전트 목록과 `.gitignore` 의 Ruler 블록을 본다. 블록 안에 있으면 생성물이다.
+
+## Claude Code 도 `AGENTS.md` 를 읽게 하고 저장소에 `CLAUDE.md` 를 두지 않는다
+
+`ruler.toml` 의 `[agents.claude]` 에 `output_path = "AGENTS.md"` 를 두어 생성물을 `AGENTS.md` 한 벌로 만든다(세팅은 `docs/guideline/ruler/SETUP.md`). 저장소 안에 `CLAUDE.md`·`.claude/CLAUDE.md`·`CLAUDE.local.md` 를 만들지 않는다. `/init` 등이 만들었으면 지운다.
+
+- **Why:** Claude Code 는 작업 디렉터리나 그 위에 이 세 파일 중 하나라도 있으면 `AGENTS.md` 를 읽지 않고 그 파일만 읽는다. 하나만 남아도 ruler 지침 전체가 경고 없이 빠진다. `~/.claude/CLAUDE.md` 는 이 판정에 들지 않아 함께 읽힌다.
+- **How to apply:** 개인 지침은 `CLAUDE.local.md` 대신 `~/.claude/CLAUDE.md` 에 쓴다. 지침이 안 먹는 것 같으면 `/memory` 목록에 `AGENTS.md` 경로가 있는지, `claude --version` 이 v2.1.281 이상인지 본다.
 
 ## ruler 는 devDependency 로 고정하고 설치본으로 부른다
 

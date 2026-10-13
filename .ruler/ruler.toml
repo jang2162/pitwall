@@ -55,3 +55,6 @@ args = ["-y", "@colbymchenry/codegraph", "serve", "--mcp"]
 type = "stdio"
 command = "npx"
 args = ["-y", "@upstash/context7-mcp"]
+
+[agents.claude]
+output_path = "AGENTS.md"

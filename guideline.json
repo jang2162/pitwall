@@ -43,6 +43,7 @@
         "rules/ruler/00-sources.md",
         "rules/ruler/01-nested.md",
         "rules/ruler/02-documents.md",
+        "rules/ruler/SETUP.md",
         "rules/rust/00-fmt-lint.md",
         "rules/rust/01-toolchain.md",
         "rules/tiergear/00-switch.md",

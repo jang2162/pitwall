@@ -1,7 +1,7 @@
 {
   "version": 2,
   "revisions": {
-    "default": 19
+    "default": 20
   },
   "sources": {
     "default:mcp/codegraph": "01d216780214053bd3728391bbb87db603034af0d566ca43dc52bc228378cc00",
@@ -35,15 +35,16 @@
     "default:rules/orca/SETUP.md": "cb49f07b7fb192f376ff40672866ee878cec64e5d73d1829b91cc8ac32944cd3",
     "default:rules/oxc/00-version.md": "b6358ea4358d8b9df6e2ca52d2b0a8dfa3047d4a0e9c8b6d0a8c3a532b8b5f57",
     "default:rules/oxc/01-formatting.md": "6b1b6ed02c4c5ee9406c3a4d4c0254cfd26e4c5851dbcb4d68d980ba92caf2a2",
-    "default:rules/ruler/00-sources.md": "88d4bd5b9578324256a9493686c05c98dc1586a978af4f8de848652a6a9f9d27",
-    "default:rules/ruler/01-nested.md": "55199f7569e7ad1fe5d58e9d193f7e5137bcd9d0431b00772131f35d7abe4c40",
+    "default:rules/ruler/00-sources.md": "3818b076744f962c1d84a7897abf0b9bf69e02af7288840671170d99d0253379",
+    "default:rules/ruler/01-nested.md": "aac752f0592f7c5d863df6da387504a5b62809b5fcdaca201e3774f68bc7367a",
     "default:rules/ruler/02-documents.md": "5ec1a082098d747b22905bea5178f76bd9d46b84db83216506b874da3ab08189",
+    "default:rules/ruler/SETUP.md": "a39cccbe591d83034567c291707a1e9a6ce17359b8ce40135cdc05dcfd867407",
     "default:rules/rust/00-fmt-lint.md": "587dd296f7997dd33afb9165364e89d8217f04115ad063568d3688c6f0c88535",
     "default:rules/rust/01-toolchain.md": "1248f6c80854e07cd09b591e9c1c8cac1e1359f646d43b1443a7445ee5d8ff86",
     "default:rules/tiergear/00-switch.md": "f07c95ca2a29356b6e42f3a1f156872c37df7d89c521539adfd27c06d838a907",
     "default:rules/tiergear/01-launch.md": "0c9ac57eb259330694b7175f4da76373e111d83f0e6b665492cf6413964b2fc0",
     "default:rules/tiergear/02-orca-spawn.md": "150896fe165ccb4508c6d302f01962c521ff5aa93ad1fecb4a8b7aa7d8255551",
-    "default:skills/guideline-export": "7f7ee8d777638cfa7ec07583d730d74c93038aa28ce17d090200f70d9ec80940",
+    "default:skills/guideline-export": "410661cf5e1afd5e91146070db113e4986e687b01ebf3e6815d7e22243027acb",
     "default:skills/orca-worker": "21c16400cced87f4d35cee13adf38f62def59244408ba41aa5dc00c1074d6568"
   },
   "outputs": [
@@ -95,7 +96,7 @@
     {
       "path": ".ruler/guideline.md",
       "items": [],
-      "hash": "7d82524cfeab042c3105a4bc214556a39a3845878ccff94ad4a595adaddd0410"
+      "hash": "3c5eecf6ad6dac16842d10eae726bf0d6e5830f1a98286e03314e538e515441d"
     },
     {
       "path": ".ruler/lefthook/99-reference.md",
@@ -152,7 +153,7 @@
       "items": [
         "default:rules/ruler/00-sources.md"
       ],
-      "hash": "776b0d8f4e78eee9dc76ec88f0bb6916532138ff39587b41e12df4648851e7f8"
+      "hash": "0d8e552e9a0a13f80609a72b03456b592f1b146a13a49151e7645701aafabc8e"
     },
     {
       "path": ".ruler/ruler/99-reference.md",
@@ -176,7 +177,7 @@
       "items": [
         "default:skills/guideline-export"
       ],
-      "hash": "3b3890349c16fab379dc6f756993264675a1a3e6320128489d2464e5961e9dc8"
+      "hash": "d73cc61af3bcea5f3d34bff122c6e09f71bbdd246d95ba0b0159f64b02b91d90"
     },
     {
       "path": ".ruler/skills/orca-worker/SKILL.md",
@@ -396,7 +397,7 @@
       "items": [
         "default:rules/ruler/01-nested.md"
       ],
-      "hash": "c36f8a1b07994792f0324ef85d5a93a5548307421f932858e2b7f5743224516c"
+      "hash": "97439b56a3bfdcafa5e8b90059543057a583b239b76b229a268c625280b74b0b"
     },
     {
       "path": "docs/guideline/ruler/02-documents.md",
@@ -404,6 +405,13 @@
         "default:rules/ruler/02-documents.md"
       ],
       "hash": "774daf294c636b65e069bb21e920af0c5ce24e82bdecd1dcb3d532889ff4b922"
+    },
+    {
+      "path": "docs/guideline/ruler/SETUP.md",
+      "items": [
+        "default:rules/ruler/SETUP.md"
+      ],
+      "hash": "a39cccbe591d83034567c291707a1e9a6ce17359b8ce40135cdc05dcfd867407"
     },
     {
       "path": "docs/guideline/rust/01-toolchain.md",

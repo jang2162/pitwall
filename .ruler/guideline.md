@@ -13,3 +13,4 @@
 | codegraph | `docs/guideline/codegraph/SETUP.md` |
 | mise | `docs/guideline/mise/SETUP.md` |
 | orca | `docs/guideline/orca/SETUP.md` |
+| ruler | `docs/guideline/ruler/SETUP.md` |
