@@ -1,0 +1,4 @@
+# mise.toml 의 rust 버전과 같은 값이어야 한다. 올릴 때 둘을 함께 고친다.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

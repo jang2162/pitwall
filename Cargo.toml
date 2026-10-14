@@ -1,0 +1,10 @@
+[workspace]
+resolver = "3"
+# apps/*/src-tauri 는 첫 Tauri 앱이 생기는 M0-04 에서 추가한다. 맞는 경로가 없는 글롭은 cargo 가 매니페스트 로드 실패로 처리한다.
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.0.0"
+publish = false

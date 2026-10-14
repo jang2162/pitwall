@@ -1,0 +1,19 @@
+{
+  "ignorePatterns": [
+    ".ruler/",
+    "docs/",
+    "AGENTS.md",
+    "guideline.json",
+    "guideline-lock.json",
+    "pnpm-lock.yaml",
+    "target/",
+    ".codegraph/",
+    ".worktrees/",
+    ".claude/",
+    ".agents/",
+    ".codex/",
+    ".opencode/",
+    ".mcp.json",
+    "opencode.json"
+  ]
+}

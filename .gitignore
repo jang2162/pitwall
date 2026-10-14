@@ -23,3 +23,9 @@
 /opencode.json
 /opencode.json.bak
 # END Ruler Generated Files
+
+# 빌드 산출물과 의존성
+/target/
+node_modules/
+dist/
+*.tsbuildinfo

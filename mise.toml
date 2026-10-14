@@ -2,3 +2,33 @@
 node = "24.21.0"
 pnpm = "10.33.0"
 rust = "1.99.0"
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.148"
+
+[tasks.install-deps]
+description = "Node 의존성 설치(lockfile 고정)"
+run = "pnpm install --frozen-lockfile"
+
+[tasks.build]
+description = "Rust 워크스페이스 빌드"
+run = "cargo build --workspace"
+
+[tasks.test]
+description = "Rust(nextest) 와 TS(Vitest) 테스트"
+depends = ["install-deps"]
+run = ["cargo nextest run --workspace --no-tests=fail", "pnpm -r --if-present run test"]
+
+[tasks.lint]
+description = "fmt 검사 + clippy + oxlint + tsc"
+depends = ["install-deps"]
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+  "pnpm exec oxfmt --check .",
+  "pnpm exec oxlint",
+  "pnpm -r --if-present run typecheck",
+]
+
+[tasks.fmt]
+description = "포맷 적용"
+depends = ["install-deps"]
+run = ["cargo fmt --all", "pnpm exec oxfmt ."]

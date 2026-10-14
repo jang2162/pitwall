@@ -1,0 +1,35 @@
+# pre-commit 은 staged 파일만 고치고, pre-push 는 저장소 전체를 검사한다(고치지 않는다).
+# 도구는 전부 설치본(pnpm exec / cargo)으로 부른다. pnpx 를 쓰지 않는다.
+pre-commit:
+  parallel: true
+  jobs:
+    - name: oxfmt
+      glob: "*.{js,ts,json,md,yml,yaml}"
+      run: "pnpm exec oxfmt {staged_files}"
+      stage_fixed: true
+    - name: oxlint
+      glob: "*.{js,ts}"
+      run: "pnpm exec oxlint {staged_files}"
+    - name: rustfmt
+      glob: "*.rs"
+      run: "cargo fmt --all"
+      stage_fixed: true
+
+pre-push:
+  jobs:
+    - name: fmt-check
+      run: "cargo fmt --all --check && pnpm exec oxfmt --check ."
+    - name: clippy
+      run: "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+    - name: oxlint
+      run: "pnpm exec oxlint"
+    - name: tsc
+      run: "pnpm -r --if-present run typecheck"
+
+# 순차 실행이다 — 런타임이 맞은 뒤에 설치가 돌아야 한다.
+post-checkout:
+  jobs:
+    - name: runtime
+      run: "if command -v mise >/dev/null; then mise trust && mise install; else echo 'mise 가 없어 런타임 버전을 맞추지 못했다'; fi"
+    - name: deps
+      run: "pnpm install"

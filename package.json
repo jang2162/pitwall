@@ -1,0 +1,15 @@
+{
+  "name": "pitwall",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare": "pnpm exec ruler apply && pnpm exec lefthook install"
+  },
+  "devDependencies": {
+    "@intellectronica/ruler": "^0.3.44",
+    "lefthook": "^2.2.2",
+    "oxfmt": "^0.73.0",
+    "oxlint": "^1.88.0",
+    "typescript": "^7.0.2"
+  }
+}
