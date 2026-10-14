@@ -295,6 +295,22 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
+### BSD 2-Clause "Simplified" License (BSD-2-Clause)
+
+Used by: Inflector 0.11.4
+
+```text
+Copyright (c) <year> <owner> 
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
 ### BSD 3-Clause "New" or "Revised" License (BSD-3-Clause)
 
 Used by: alloc-stdlib 0.3.0
@@ -381,6 +397,67 @@ Used by: schemars_derive 0.8.22
 
 ```text
 #![allow(clippy::all)]
+// Copied from regex_syntax crate to avoid pulling in the whole crate just for a utility function
+// https://github.com/rust-lang/regex/blob/431c4e4867e1eb33eb39b23ed47c9934b2672f8f/regex-syntax/src/lib.rs
+//
+// Copyright (c) 2014 The Rust Project Developers
+//
+// Permission is hereby granted, free of charge, to any
+// person obtaining a copy of this software and associated
+// documentation files (the "Software"), to deal in the
+// Software without restriction, including without
+// limitation the rights to use, copy, modify, merge,
+// publish, distribute, sublicense, and/or sell copies of
+// the Software, and to permit persons to whom the Software
+// is furnished to do so, subject to the following
+// conditions:
+//
+// The above copyright notice and this permission notice
+// shall be included in all copies or substantial portions
+// of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+// ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+// TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+// PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+// SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+// IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
+pub fn escape(text: &str) -> String {
+    let mut quoted = String::new();
+    escape_into(text, &mut quoted);
+    quoted
+}
+
+fn escape_into(text: &str, buf: &mut String) {
+    buf.reserve(text.len());
+    for c in text.chars() {
+        if is_meta_character(c) {
+            buf.push('\\');
+        }
+        buf.push(c);
+    }
+}
+
+fn is_meta_character(c: char) -> bool {
+    match c {
+        '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$'
+        | '#' | '&' | '-' | '~' => true,
+        _ => false,
+    }
+}
+```
+
+### MIT License (MIT)
+
+Used by: schemars 1.2.3
+
+```text
+#![allow(clippy::all)]
+use crate::_alloc_prelude::*;
 // Copied from regex_syntax crate to avoid pulling in the whole crate just for a utility function
 // https://github.com/rust-lang/regex/blob/431c4e4867e1eb33eb39b23ed47c9934b2672f8f/regex-syntax/src/lib.rs
 //
@@ -2602,7 +2679,7 @@ SOFTWARE.
 
 ### MIT License (MIT)
 
-Used by: block2 0.6.2, brotli-decompressor 6.0.1, cesu8 1.1.0, dispatch2 0.3.1, dlopen2 0.8.2, dlopen2_derive 0.4.3, dpi 0.1.2, jni-sys-macros 0.4.1, ndk 0.9.0, ndk-context 0.1.1, ndk-sys 0.6.0+11769913, objc2 0.6.5, objc2-app-kit 0.3.2, objc2-cloud-kit 0.3.2, objc2-core-data 0.3.2, objc2-core-foundation 0.3.2, objc2-core-graphics 0.3.2, objc2-core-image 0.3.2, objc2-core-location 0.3.2, objc2-core-text 0.3.2, objc2-encode 4.1.0, objc2-exception-helper 0.1.1, objc2-foundation 0.3.2, objc2-quartz-core 0.3.2, objc2-ui-kit 0.3.2, objc2-user-notifications 0.3.2, objc2-web-kit 0.3.2, r-efi 5.3.0, r-efi 6.0.0, webview2-com 0.39.1, webview2-com-macros 0.8.1, webview2-com-sys 0.39.1, winapi-i686-pc-windows-gnu 0.4.0, winapi-x86_64-pc-windows-gnu 0.4.0, windows 0.62.2, windows_aarch64_gnullvm 0.42.2, windows_aarch64_msvc 0.42.2, windows_i686_gnu 0.42.2, windows_i686_msvc 0.42.2, windows_x86_64_gnu 0.42.2, windows_x86_64_gnullvm 0.42.2, windows_x86_64_msvc 0.42.2, windows-collections 0.3.2, windows-core 0.62.2, windows-future 0.3.2, windows-implement 0.60.2, windows-interface 0.59.3, windows-link 0.2.1, windows-numerics 0.3.1, windows-result 0.4.1, windows-strings 0.5.1, windows-sys 0.45.0, windows-sys 0.61.2, windows-targets 0.42.2, windows-threading 0.2.1, windows-version 0.1.7
+Used by: block2 0.6.2, brotli-decompressor 6.0.1, cesu8 1.1.0, dispatch2 0.3.1, dlopen2 0.8.2, dlopen2_derive 0.4.3, dpi 0.1.2, jni-sys-macros 0.4.1, ndk 0.9.0, ndk-context 0.1.1, ndk-sys 0.6.0+11769913, objc2 0.6.5, objc2-app-kit 0.3.2, objc2-cloud-kit 0.3.2, objc2-core-data 0.3.2, objc2-core-foundation 0.3.2, objc2-core-graphics 0.3.2, objc2-core-image 0.3.2, objc2-core-location 0.3.2, objc2-core-text 0.3.2, objc2-encode 4.1.0, objc2-exception-helper 0.1.1, objc2-foundation 0.3.2, objc2-quartz-core 0.3.2, objc2-ui-kit 0.3.2, objc2-user-notifications 0.3.2, objc2-web-kit 0.3.2, r-efi 5.3.0, r-efi 6.0.0, specta 2.0.0-rc.25, specta-macros 2.0.0-rc.25, specta-serde 0.0.12, specta-typescript 0.0.12, webview2-com 0.39.1, webview2-com-macros 0.8.1, webview2-com-sys 0.39.1, winapi-i686-pc-windows-gnu 0.4.0, winapi-x86_64-pc-windows-gnu 0.4.0, windows 0.62.2, windows_aarch64_gnullvm 0.42.2, windows_aarch64_msvc 0.42.2, windows_i686_gnu 0.42.2, windows_i686_msvc 0.42.2, windows_x86_64_gnu 0.42.2, windows_x86_64_gnullvm 0.42.2, windows_x86_64_msvc 0.42.2, windows-collections 0.3.2, windows-core 0.62.2, windows-future 0.3.2, windows-implement 0.60.2, windows-interface 0.59.3, windows-link 0.2.1, windows-numerics 0.3.1, windows-result 0.4.1, windows-strings 0.5.1, windows-sys 0.45.0, windows-sys 0.61.2, windows-targets 0.42.2, windows-threading 0.2.1, windows-version 0.1.7
 
 ```text
 MIT License
@@ -2895,7 +2972,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### MIT License (MIT)
 
-Used by: schemars 0.8.22, schemars_derive 0.8.22
+Used by: schemars 0.8.22, schemars 1.2.3, schemars_derive 0.8.22, schemars_derive 1.2.3
 
 ```text
 MIT License
@@ -3501,7 +3578,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License (MIT)
 
-Used by: adler2 2.0.1, anyhow 1.0.104, atomic-waker 1.1.2, camino 1.2.6, cargo_metadata 0.19.2, cargo-platform 0.1.9, displaydoc 0.2.7, dtoa 1.0.11, dyn-clone 1.0.20, erased-serde 0.4.10, fastrand 2.5.0, itoa 1.0.18, num_enum 0.7.6, num_enum_derive 0.7.6, once_cell 1.21.4, pin-project-lite 0.2.17, proc-macro-crate 1.3.1, proc-macro-crate 2.0.2, proc-macro-crate 3.5.0, proc-macro2 1.0.107, quote 1.0.47, rustversion 1.0.23, semver 1.0.28, serde 1.0.229, serde_core 1.0.229, serde_derive 1.0.229, serde_derive_internals 0.29.1, serde_json 1.0.154, serde_repr 0.1.21, serde-untagged 0.1.9, servo_arc 0.4.3, syn 1.0.109, syn 2.0.119, syn 3.0.9, thiserror 1.0.69, thiserror 2.0.21, thiserror-impl 1.0.69, thiserror-impl 2.0.21, typeid 1.0.3, unicode-ident 1.0.27, wasi 0.11.1+wasi-snapshot-preview1, wasip2 1.0.4+wasi-0.2.12, wasm-streams 0.5.0, wit-bindgen 0.57.1, x11 2.21.0, x11-dl 2.21.0, zmij 1.0.23
+Used by: adler2 2.0.1, anyhow 1.0.104, atomic-waker 1.1.2, camino 1.2.6, cargo_metadata 0.19.2, cargo-platform 0.1.9, displaydoc 0.2.7, dtoa 1.0.11, dyn-clone 1.0.20, erased-serde 0.4.10, fastrand 2.5.0, inventory 0.3.25, itoa 1.0.18, num_enum 0.7.6, num_enum_derive 0.7.6, once_cell 1.21.4, pin-project-lite 0.2.17, proc-macro-crate 1.3.1, proc-macro-crate 2.0.2, proc-macro-crate 3.5.0, proc-macro2 1.0.107, quote 1.0.47, ref-cast 1.0.27, ref-cast-impl 1.0.27, rustversion 1.0.23, semver 1.0.28, serde 1.0.229, serde_core 1.0.229, serde_derive 1.0.229, serde_derive_internals 0.29.1, serde_derive_internals 0.30.0, serde_json 1.0.154, serde_repr 0.1.21, serde-untagged 0.1.9, servo_arc 0.4.3, syn 1.0.109, syn 2.0.119, syn 3.0.9, thiserror 1.0.69, thiserror 2.0.21, thiserror-impl 1.0.69, thiserror-impl 2.0.21, typeid 1.0.3, unicode-ident 1.0.27, wasi 0.11.1+wasi-snapshot-preview1, wasip2 1.0.4+wasi-0.2.12, wasm-streams 0.5.0, wit-bindgen 0.57.1, x11 2.21.0, x11-dl 2.21.0, zmij 1.0.23
 
 ```text
 Permission is hereby granted, free of charge, to any

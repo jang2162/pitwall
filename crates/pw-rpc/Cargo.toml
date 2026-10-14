@@ -6,11 +6,20 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+# specta · schemars 는 feature 뒤에 두지 않는다. `rpc_method!` 가 펼쳐지는 곳은 호출한 크레이트라
+# 매크로 안의 `#[cfg(feature = ...)]` 는 pw-rpc 가 아니라 호출 크레이트의 feature 로 판정된다.
+# 또 MCP 툴 레지스트리(M0-17)가 실행 중에 schemars 로 입력 스키마를 만든다.
 [dependencies]
+inventory = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["rt", "sync", "macros"] }
 tokio-util = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "test-util"] }
+schemars = { workspace = true }
+serde_json = { workspace = true }
+specta = { workspace = true }

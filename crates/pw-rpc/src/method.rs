@@ -8,7 +8,7 @@ use std::fmt;
 
 use serde::de::DeserializeOwned;
 use serde::ser::SerializeSeq;
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// 권한 등급. 값과 순서는 `docs/design/05-mcp.md` §3 「권한 모델」 표를 따른다.
 ///
@@ -20,7 +20,20 @@ use serde::{Serialize, Serializer};
 /// 입력에 따라 등급이 오르는 메서드(`db_query` 의 read / dangerous 등)는 조회용과 쓰기용으로 나누거나
 /// (`db.query` read / `db.execute` dangerous), 높은 등급으로 선언하고 `roles` 를 명시한다.
 /// 둘 중 어느 쪽을 정책으로 할지는 MCP 툴 레지스트리(M0-17)에서 확정한다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
     Read,
@@ -30,7 +43,18 @@ pub enum Tier {
 }
 
 /// 호출자(페어링 기기)의 role. 값은 `docs/design/08-remote-mobile.md` 「보안 모델」 절을 따른다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     /// Desktop. 전체.
@@ -104,7 +128,7 @@ impl Serialize for RoleSet {
 }
 
 /// 응답 형태. `unary` 는 결과 하나, `stream` 은 `streamId` 를 돌려주고 청크를 `stream.chunk` 로 보낸다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum MethodKind {
     Unary,
@@ -112,15 +136,16 @@ pub enum MethodKind {
 }
 
 /// 메서드 하나의 메타데이터. `rpc_method!` 가 상수로 만든다.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MethodMeta {
     /// `<module>.<action>` (`docs/design/03-architecture.md` §4).
     pub name: &'static str,
     pub kind: MethodKind,
     pub tier: Tier,
+    #[specta(type = Vec<Role>)]
     pub roles: RoleSet,
-    /// 입력 타입의 소스 표기(`stringify!`). 타입 생성은 M0-06 이 실제 타입으로 한다 — 이 문자열은 표시용이다.
+    /// 입력 타입의 소스 표기(`stringify!`). 표시용이다 — 타입 생성은 [`MethodInfo`](crate::MethodInfo) 의 실제 타입으로 한다.
     pub params: &'static str,
     /// unary 는 결과 타입, stream 은 청크 항목 타입의 소스 표기.
     pub output: &'static str,
@@ -197,20 +222,24 @@ const fn starts_with(s: &[u8], prefix: &[u8]) -> bool {
     true
 }
 
-/// 선언된 메서드. `rpc_method!` 가 구현한다 — 손으로 구현하지 않는다(컴파일 타임 검사를 건너뛴다).
+/// 선언된 메서드. `rpc_method!` 가 구현한다 — 손으로 구현하지 않는다(컴파일 타임 검사와 레지스트리 등록을 건너뛴다).
+///
+/// 입출력 타입은 `specta::Type`(TS 타입)과 `schemars::JsonSchema`(MCP · 폼 스키마)를 derive 해야 한다.
+/// 64비트 정수와 `serde_json::Value` 필드는 TS 로 내보낼 때 표식이 필요하다 — [`JsNumber`](crate::JsNumber) ·
+/// [`JsonValue`](crate::JsonValue).
 pub trait Method: Copy + Send + Sync + 'static {
-    type Params: DeserializeOwned + Send + 'static;
+    type Params: DeserializeOwned + specta::Type + schemars::JsonSchema + Send + 'static;
     const META: MethodMeta;
 }
 
 /// 결과 하나를 돌려주는 메서드.
 pub trait UnaryMethod: Method {
-    type Result: Serialize + Send + 'static;
+    type Result: Serialize + specta::Type + schemars::JsonSchema + Send + 'static;
 }
 
 /// `streamId` 를 돌려주고 `Item` 청크를 credit 만큼 보내는 메서드.
 pub trait StreamMethod: Method {
-    type Item: Serialize + Send + 'static;
+    type Item: Serialize + specta::Type + schemars::JsonSchema + Send + 'static;
 }
 
 /// RPC 메서드를 선언한다. 한 번에 여러 개를 선언할 수 있다.
@@ -218,7 +247,7 @@ pub trait StreamMethod: Method {
 /// ```
 /// use pw_rpc::rpc_method;
 ///
-/// #[derive(serde::Deserialize)]
+/// #[derive(serde::Deserialize, specta::Type, schemars::JsonSchema)]
 /// pub struct LogParams { pub limit: u32 }
 ///
 /// rpc_method! {
@@ -242,6 +271,7 @@ pub trait StreamMethod: Method {
 /// - `result:` 는 unary, `stream:` 은 스트림 메서드가 된다.
 /// - `tier` 는 [`Tier`] 의 변형 이름, `roles` 는 [`Role`] 의 변형 이름이다.
 ///   `roles` 를 생략하면 [`RoleSet::default_for`] 를 쓴다.
+/// - 선언은 [`methods`](crate::methods) 레지스트리에 등록된다 — 핸들러를 붙이지 않아도 타입 생성 대상이다.
 /// - 이름 규칙 · role 규칙은 [`MethodMeta::validate`] 가 컴파일 타임에 검사한다.
 ///   `roles: []` 는 생략과 다르게 빈 집합이라 빌드가 실패한다.
 ///
@@ -276,6 +306,7 @@ macro_rules! rpc_method {
         impl $crate::UnaryMethod for $name {
             type Result = $result;
         }
+        $crate::__private::inventory::submit! { $crate::MethodInfo::unary::<$name>() }
         $crate::rpc_method! { $($rest)* }
     };
     (
@@ -295,6 +326,7 @@ macro_rules! rpc_method {
         impl $crate::StreamMethod for $name {
             type Item = $item;
         }
+        $crate::__private::inventory::submit! { $crate::MethodInfo::stream::<$name>() }
         $crate::rpc_method! { $($rest)* }
     };
 }

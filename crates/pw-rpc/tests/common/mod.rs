@@ -10,12 +10,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, specta::Type, schemars::JsonSchema)]
 pub struct EchoParams {
     pub text: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, specta::Type, schemars::JsonSchema)]
 pub struct CountParams {
     pub n: u32,
     /// 이 번호의 청크를 보낸 뒤 오류로 끝낸다.

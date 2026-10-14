@@ -2,8 +2,11 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
+
+use crate::typegen::JsonValue;
 
 /// 오류 코드.
 ///
@@ -27,15 +30,42 @@ pub mod code {
     pub const PERMISSION_DENIED: i32 = -32001;
     /// 요청이나 스트림이 취소됐다.
     pub const CANCELLED: i32 = -32002;
+
+    /// 위 코드 전부(상수 이름, 값). 생성기가 TS 상수로 내보낸다 — 코드를 더하면 여기에도 더한다.
+    pub const ALL: [(&str, i32); 7] = [
+        ("PARSE_ERROR", PARSE_ERROR),
+        ("INVALID_REQUEST", INVALID_REQUEST),
+        ("METHOD_NOT_FOUND", METHOD_NOT_FOUND),
+        ("INVALID_PARAMS", INVALID_PARAMS),
+        ("INTERNAL_ERROR", INTERNAL_ERROR),
+        ("PERMISSION_DENIED", PERMISSION_DENIED),
+        ("CANCELLED", CANCELLED),
+    ];
 }
 
-/// JSON-RPC 2.0 오류 객체. 와이어 형식 그대로 직렬화된다.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// JSON-RPC 2.0 오류 객체. 와이어 형식 그대로 직렬화된다. `data` 가 없으면 키를 생략한다.
+#[derive(Debug, Clone, PartialEq, Deserialize, specta::Type)]
 pub struct RpcError {
     pub code: i32,
     pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // 직렬화를 손으로 쓰는 이유: `skip_serializing_if` 를 달면 specta 가 직렬화 · 역직렬화 형태를 갈라
+    // 타입을 둘로 내보낸다. `data?:` 는 두 방향 모두에 맞는 한 형태다.
+    #[serde(default)]
+    #[specta(optional, type = JsonValue)]
     pub data: Option<Value>,
+}
+
+impl Serialize for RpcError {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let len = if self.data.is_some() { 3 } else { 2 };
+        let mut s = serializer.serialize_struct("RpcError", len)?;
+        s.serialize_field("code", &self.code)?;
+        s.serialize_field("message", &self.message)?;
+        if let Some(data) = &self.data {
+            s.serialize_field("data", data)?;
+        }
+        s.end()
+    }
 }
 
 impl RpcError {

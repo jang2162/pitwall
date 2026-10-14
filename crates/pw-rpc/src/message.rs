@@ -1,20 +1,113 @@
 //! JSON-RPC 2.0 메시지: 들어오는 요청의 검증과 나가는 응답 · 알림의 직렬화.
 
 use serde::de::DeserializeOwned;
-use serde::ser::SerializeMap;
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
+use specta::Type;
 
 use crate::error::RpcError;
+use crate::typegen::{JsNumber, JsonValue};
 
 /// 요청 id. JSON-RPC 2.0 은 숫자 · 문자열 · null 을 허용한다.
 /// 숫자는 정수(i64)만 받는다 — 분수 id 는 명세가 비권장하고 비교가 불안정하다.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// TS 로는 `number` 다 — id 는 클라이언트가 고르므로 2^53 안에 머문다([`JsNumber`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(untagged)]
 pub enum Id {
-    Number(i64),
+    Number(#[specta(type = JsNumber)] i64),
     String(String),
+    // untagged 단위 변형은 serde 로는 `null` 인데 specta 는 `"Null"` 로 그린다. 그래서 타입을 덮는다.
+    #[specta(type = ())]
     Null,
+}
+
+/// `jsonrpc` 필드. 값은 `"2.0"` 하나다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub enum JsonRpcVersion {
+    #[serde(rename = "2.0")]
+    V2,
+}
+
+/// 클라이언트 → 서버 요청 · 알림의 와이어 형식. `id` 가 없으면 알림이다.
+///
+/// 서버는 이 타입으로 역직렬화하지 않는다 — 오류마다 다른 응답을 내려고 손으로 검증한다(`parse`).
+/// 이 타입은 형식의 선언이고 클라이언트(TS 생성 · 골든 메시지)가 쓴다. 둘이 맞는지는 이 파일의 테스트가 본다.
+///
+/// 없는 `id` · `params` 는 키를 생략한다 — `"id": null` 은 알림이 아니라 null id 요청이다.
+/// 직렬화를 손으로 쓰는 이유는 [`RpcError`] 와 같다(`skip_serializing_if` 를 달면 specta 가 타입을 둘로 가른다).
+#[derive(Debug, Clone, PartialEq, Deserialize, Type)]
+pub struct RequestMessage {
+    pub jsonrpc: JsonRpcVersion,
+    #[serde(default)]
+    #[specta(optional)]
+    pub id: Option<Id>,
+    pub method: String,
+    #[serde(default)]
+    #[specta(optional, type = JsonValue)]
+    pub params: Option<Value>,
+}
+
+impl Serialize for RequestMessage {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let len = 2 + usize::from(self.id.is_some()) + usize::from(self.params.is_some());
+        let mut s = serializer.serialize_struct("RequestMessage", len)?;
+        s.serialize_field("jsonrpc", &self.jsonrpc)?;
+        if let Some(id) = &self.id {
+            s.serialize_field("id", id)?;
+        }
+        s.serialize_field("method", &self.method)?;
+        if let Some(params) = &self.params {
+            s.serialize_field("params", params)?;
+        }
+        s.end()
+    }
+}
+
+impl RequestMessage {
+    pub fn request(id: Id, method: impl Into<String>, params: Value) -> Self {
+        Self {
+            jsonrpc: JsonRpcVersion::V2,
+            id: Some(id),
+            method: method.into(),
+            params: Some(params),
+        }
+    }
+
+    pub fn notification(method: impl Into<String>, params: Value) -> Self {
+        Self {
+            jsonrpc: JsonRpcVersion::V2,
+            id: None,
+            method: method.into(),
+            params: Some(params),
+        }
+    }
+}
+
+/// 서버 → 클라이언트 응답의 와이어 형식. [`Response`] 가 이 형태로 직렬화된다.
+#[derive(Serialize, Type)]
+#[serde(untagged)]
+pub enum ResponseMessage<'a> {
+    Success {
+        jsonrpc: JsonRpcVersion,
+        id: &'a Id,
+        #[specta(type = JsonValue)]
+        result: &'a Value,
+    },
+    Failure {
+        jsonrpc: JsonRpcVersion,
+        id: &'a Id,
+        error: &'a RpcError,
+    },
+}
+
+/// 서버 → 클라이언트 알림의 와이어 형식. [`Notification`] 이 이 형태로 직렬화된다.
+#[derive(Serialize, Type)]
+pub struct NotificationMessage<'a> {
+    pub jsonrpc: JsonRpcVersion,
+    pub method: &'a str,
+    #[specta(type = JsonValue)]
+    pub params: &'a Value,
 }
 
 /// 검증을 통과한 요청 또는 알림. `id` 가 없으면 알림이다.
@@ -99,14 +192,17 @@ impl Response {
 
 impl Serialize for Response {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(3))?;
-        map.serialize_entry("jsonrpc", "2.0")?;
-        map.serialize_entry("id", &self.id)?;
+        let jsonrpc = JsonRpcVersion::V2;
+        let id = &self.id;
         match &self.outcome {
-            Ok(result) => map.serialize_entry("result", result)?,
-            Err(error) => map.serialize_entry("error", error)?,
+            Ok(result) => ResponseMessage::Success {
+                jsonrpc,
+                id,
+                result,
+            },
+            Err(error) => ResponseMessage::Failure { jsonrpc, id, error },
         }
-        map.end()
+        .serialize(serializer)
     }
 }
 
@@ -125,11 +221,12 @@ impl Notification {
 
 impl Serialize for Notification {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(3))?;
-        map.serialize_entry("jsonrpc", "2.0")?;
-        map.serialize_entry("method", self.method)?;
-        map.serialize_entry("params", &self.params)?;
-        map.end()
+        NotificationMessage {
+            jsonrpc: JsonRpcVersion::V2,
+            method: self.method,
+            params: &self.params,
+        }
+        .serialize(serializer)
     }
 }
 
@@ -229,6 +326,23 @@ mod tests {
             parse(json!({"jsonrpc": "2.0", "id": 1, "result": 3})).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn request_message_is_what_parse_accepts() {
+        let req = RequestMessage::request(Id::Number(3), "git.log", json!({"limit": 1}));
+        let parsed = parse(serde_json::to_value(&req).unwrap()).unwrap().unwrap();
+        assert_eq!(parsed.id, Some(Id::Number(3)));
+        assert_eq!(parsed.method, "git.log");
+        assert_eq!(parsed.params, json!({"limit": 1}));
+
+        let note = RequestMessage::notification("stream.cancel", json!({"streamId": 1}));
+        let value = serde_json::to_value(&note).unwrap();
+        assert_eq!(
+            value,
+            json!({"jsonrpc": "2.0", "method": "stream.cancel", "params": {"streamId": 1}})
+        );
+        assert_eq!(parse(value).unwrap().unwrap().id, None);
     }
 
     #[test]

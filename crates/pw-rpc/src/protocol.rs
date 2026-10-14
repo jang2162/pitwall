@@ -6,9 +6,11 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use specta::Type;
 
 use crate::error::RpcError;
 use crate::message::Id;
+use crate::typegen::{JsNumber, JsonValue};
 
 /// 클라이언트 → 서버(알림). 진행 중인 **unary** 요청을 취소한다. 취소된 요청은 `CANCELLED` 오류로 응답된다.
 /// 스트림은 요청 id 가 아니라 `streamId` 로 취소한다([`STREAM_CANCEL`]).
@@ -28,52 +30,72 @@ pub const EVENTS_UNSUBSCRIBE: &str = "events.unsubscribe";
 /// 서버 → 클라이언트. 구독에 맞는 이벤트 하나.
 pub const EVENTS_EVENT: &str = "events.event";
 
+/// 위 이름 전부(상수 이름, 값). 생성기가 TS 상수로 내보낸다 — 이름을 더하면 여기에도 더한다.
+pub const NAMES: [(&str, &str); 8] = [
+    ("REQUEST_CANCEL", REQUEST_CANCEL),
+    ("STREAM_CREDIT", STREAM_CREDIT),
+    ("STREAM_CANCEL", STREAM_CANCEL),
+    ("STREAM_CHUNK", STREAM_CHUNK),
+    ("STREAM_END", STREAM_END),
+    ("EVENTS_SUBSCRIBE", EVENTS_SUBSCRIBE),
+    ("EVENTS_UNSUBSCRIBE", EVENTS_UNSUBSCRIBE),
+    ("EVENTS_EVENT", EVENTS_EVENT),
+];
+
+/// 세션 안의 일련번호(1부터). TS 로는 `number` 다([`JsNumber`]).
 pub type StreamId = u64;
+/// 허브 안의 일련번호. TS 로는 `number` 다([`JsNumber`]).
 pub type SubscriptionId = u64;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelRequestParams {
     pub id: Id,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamCreditParams {
+    #[specta(type = JsNumber)]
     pub stream_id: StreamId,
     pub credit: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamCancelParams {
+    #[specta(type = JsNumber)]
     pub stream_id: StreamId,
 }
 
 /// 스트림 메서드 요청의 응답. 초기 credit 은 0 이다 — 클라이언트가 이 id 로 `stream.credit` 을 보내야 청크가 온다.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamOpened {
+    #[specta(type = JsNumber)]
     pub stream_id: StreamId,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamChunk {
+    #[specta(type = JsNumber)]
     pub stream_id: StreamId,
+    #[specta(type = JsonValue)]
     pub data: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamEnd {
+    #[specta(type = JsNumber)]
     pub stream_id: StreamId,
     #[serde(flatten)]
     pub outcome: StreamOutcome,
 }
 
 /// 스트림의 종료 상태. 와이어에서는 `status` 필드로 구분한다.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum StreamOutcome {
     /// 핸들러가 정상 종료했다.
@@ -86,30 +108,34 @@ pub enum StreamOutcome {
 
 /// `docs/design/03-architecture.md` §4 의 `events.subscribe({ projectId, topics })`.
 /// 토픽은 정확히 일치해야 한다(와일드카드 없음).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscribeParams {
     pub project_id: String,
     pub topics: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Subscribed {
+    #[specta(type = JsNumber)]
     pub subscription_id: SubscriptionId,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UnsubscribeParams {
+    #[specta(type = JsNumber)]
     pub subscription_id: SubscriptionId,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct EventMessage {
+    #[specta(type = JsNumber)]
     pub subscription_id: SubscriptionId,
     pub project_id: String,
     pub topic: String,
+    #[specta(type = JsonValue)]
     pub payload: Value,
 }
