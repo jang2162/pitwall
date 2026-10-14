@@ -26,8 +26,9 @@ mise trust && mise install && pnpm install
 | Rust 워크스페이스 빌드 + TS 패키지 빌드                                                   | `mise run build`      |
 | 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                              | `mise run dev`        |
 | 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                      | `mise run test`       |
-| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint)                                     | `mise run lint`       |
+| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                | `mise run lint`       |
 | 포맷 적용                                                                                 | `mise run fmt`        |
+| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                  | `mise run gen`        |
 | 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부 | `mise run licenses`   |
 | `THIRD_PARTY_NOTICES.md` 다시 만들기                                                      | `mise run notices`    |
 | Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                            | `mise run advisories` |
@@ -42,6 +43,15 @@ pnpm --filter @pitwall/domain test                 # 패키지 하나(예: @pitw
 ```
 
 **테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N test(s) run: N passed`), doctest 는 크레이트마다 `test result: ok. N passed` 줄, Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.
+
+## RPC 타입 생성
+
+RPC 의 TS 타입·메서드 목록·JSON Schema 는 `rpc_method!` 선언과 그 입출력 Rust 타입에서만 나온다(`docs/design/02-tech-stack.md` §2.6). TS 타입을 손으로 쓰지 않는다.
+
+- **선언이나 그 타입을 바꾸면 `mise run gen` 을 돌려 생성물을 함께 커밋한다.** 생성물은 `packages/rpc-client/src/generated/`(`rpc.ts`·`schema.json`)와 `packages/rpc-client/test/fixtures/`(시험용 메서드의 `rpc.ts`, 실제 Rust 세션이 주고받은 `golden.json`)다. 손으로 고치지 않는다. 최신이 아니면 `mise run lint`·push 전 훅·CI 가 실패한다(`--check` 로 비교만 하고 쓰지 않는다).
+- 생성물은 oxfmt 가 포맷하지 않는다(`.oxfmtrc.json` 의 `ignorePatterns`). 포맷하면 생성기 출력과 커밋된 파일이 달라져 최신 검사가 바이트 비교를 할 수 없다. oxlint·tsc 는 생성물도 검사한다.
+- 입출력 타입은 `specta::Type` 과 `schemars::JsonSchema` 를 derive 한다. TS 로 내보낼 수 없는 필드는 생성이 실패하며 필드 이름을 알려 준다 — 64비트 정수는 `#[specta(type = pw_rpc::JsNumber)]`(값이 2^53 미만일 때만), `serde_json::Value` 는 `#[specta(type = pw_rpc::JsonValue)]`. `skip_serializing_if` 는 specta 가 타입을 직렬화·역직렬화용 둘로 가르므로 쓰지 않는다(`pw_rpc::RpcError` 의 직렬화 참고).
+- **메서드를 선언한 크레이트는 `crates/pw-rpc-gen` 의 의존성으로 넣고 `src/main.rs` 에서 링크를 강제한다.** 레지스트리(`pw_rpc::methods`)는 링크된 크레이트의 선언만 보므로, 빠뜨리면 그 메서드가 오류 없이 생성물에서 빠진다.
 
 ## 의존성과 라이선스
 

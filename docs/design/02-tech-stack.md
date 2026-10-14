@@ -147,6 +147,7 @@ pitwall/
 ├─ crates/
 │  ├─ pw-core/           # 프로젝트/워크스페이스, 이벤트 버스, 설정
 │  ├─ pw-rpc/            # RPC 타입/프로토콜, transport(IPC/stdio/ws)
+│  ├─ pw-rpc-gen/        # RPC 선언 → TS 타입 · JSON Schema 생성기 (`mise run gen`, 출력은 packages/rpc-client)
 │  ├─ pw-fs/             # 파일 트리, 감시, 검색
 │  ├─ pw-git/            # gix 읽기 + CLI 쓰기
 │  ├─ pw-db*/            # pw-db, pw-db-types, pw-db-sql, pw-db-driver(-postgres/-mysql/-sqlite/-redis) (§2.7)

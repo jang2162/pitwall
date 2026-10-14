@@ -6,3 +6,4 @@
 | --- | --- |
 | 빌드·테스트를 하위 단위로(한 크레이트, 한 패키지, 한 테스트) 실행하거나, 커밋 메시지·PR 을 쓸 때 | `CONTRIBUTING.md` |
 | 의존성(Cargo·npm)을 추가·변경하거나, 코드를 복사해 넣거나, `mise run licenses`·`advisories` 가 실패할 때 | `CONTRIBUTING.md` 「의존성과 라이선스」 절 |
+| `rpc_method!` 선언이나 그 입출력 타입을 추가·변경할 때, `mise run lint` 의 RPC 생성물 검사가 실패할 때 | `CONTRIBUTING.md` 「RPC 타입 생성」 절 |
