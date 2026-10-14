@@ -4,11 +4,11 @@ pre-commit:
   parallel: true
   jobs:
     - name: oxfmt
-      glob: "*.{js,mjs,ts,json,md,yml,yaml}"
+      glob: "*.{js,mjs,cjs,jsx,ts,tsx,json,md,yml,yaml,css,html}"
       run: "pnpm exec oxfmt --no-error-on-unmatched-pattern {staged_files}"
       stage_fixed: true
     - name: oxlint
-      glob: "*.{js,mjs,ts}"
+      glob: "*.{js,mjs,cjs,jsx,ts,tsx}"
       run: "pnpm exec oxlint --deny-warnings {staged_files}"
     - name: rustfmt
       glob: "*.rs"
@@ -32,9 +32,10 @@ pre-push:
       run: "node scripts/licenses.mjs notices --check"
 
 # 순차 실행이다 — 런타임이 맞은 뒤에 설치가 돌아야 한다.
+# 세 번째 인자({3})가 0 이면 파일 단위 체크아웃(git checkout -- <파일>)이라 브랜치가 바뀌지 않았으므로 건너뛴다.
 post-checkout:
   jobs:
     - name: runtime
-      run: "if command -v mise >/dev/null; then mise trust && mise install; else echo 'mise 가 없어 런타임 버전을 맞추지 못했다'; fi"
+      run: "[ '{3}' = 0 ] && exit 0; if command -v mise >/dev/null; then mise trust && mise install; else echo 'mise 가 없어 런타임 버전을 맞추지 못했다'; fi"
     - name: deps
-      run: "pnpm install"
+      run: "[ '{3}' = 0 ] && exit 0; pnpm install"
