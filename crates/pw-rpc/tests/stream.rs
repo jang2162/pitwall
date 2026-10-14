@@ -284,3 +284,25 @@ async fn detached_sink_cannot_send_after_the_stream_was_cancelled() {
     assert_eq!(sent.unwrap_err().code, code::CANCELLED);
     h.assert_quiet().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn detached_sink_waiting_for_credit_is_woken_with_an_error_when_the_stream_ends() {
+    let (router, probe) = detached_router();
+    let mut h = Harness::new(router, Role::Owner);
+    h.request(1, "test.detached", serde_json::Value::Null);
+    h.next_response().await.result_as::<StreamOpened>().unwrap();
+    probe.started.notified().await;
+    // credit 을 주지 않는다. 떼어 낸 send 는 credit 을 기다리며 멈춘다.
+    probe.gate.notify_one();
+    tokio::task::yield_now().await;
+    probe.go.notify_one();
+    let end: StreamEnd = h.next_notification(STREAM_END).await;
+    assert_eq!(end.outcome, StreamOutcome::Completed);
+
+    let sent = tokio::time::timeout(std::time::Duration::from_secs(1), probe.result)
+        .await
+        .expect("detached send was never woken")
+        .unwrap();
+    assert_eq!(sent.unwrap_err().code, code::CANCELLED);
+    h.assert_quiet().await;
+}
