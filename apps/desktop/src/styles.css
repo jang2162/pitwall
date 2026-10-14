@@ -1,0 +1,43 @@
+/* 디자인 토큰·테마는 M0-11 에서 들어온다. 여기는 창 틀만 잡는다. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 다른 OS 는 기본 장식(네이티브 타이틀바)을 쓰므로 웹뷰 안에 타이틀바를 그리지 않는다. */
+.titlebar {
+  display: none;
+}
+
+/* macOS overlay 타이틀바. 높이는 네이티브 타이틀바(28px)와 맞추고,
+   왼쪽 78px 은 기본 위치에 놓인 신호등 버튼 자리다. */
+:root[data-platform="mac"] .titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  height: 28px;
+  padding-left: 78px;
+  padding-right: 78px;
+  font-weight: 600;
+}
+
+.content {
+  flex: 1;
+}

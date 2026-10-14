@@ -1,0 +1,15 @@
+// 창 종류는 Rust 가 창을 만들 때 붙이는 `?window=` 쿼리로 받는다(src-tauri/src/windows.rs 의 WindowKind).
+export type WindowKind = "welcome" | "project" | "settings";
+
+const KINDS: readonly WindowKind[] = ["welcome", "project", "settings"];
+
+export function parseWindowKind(search: string): WindowKind {
+  const value = new URLSearchParams(search).get("window");
+  return KINDS.find((kind) => kind === value) ?? "welcome";
+}
+
+export const WINDOW_TITLES: Record<WindowKind, string> = {
+  welcome: "Pitwall",
+  project: "Project",
+  settings: "Settings",
+};

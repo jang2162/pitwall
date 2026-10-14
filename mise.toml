@@ -14,8 +14,14 @@ description = "Node 의존성 설치(lockfile 고정)"
 run = "pnpm install --frozen-lockfile"
 
 [tasks.build]
-description = "Rust 워크스페이스 빌드"
-run = "cargo build --workspace"
+description = "Rust 워크스페이스 빌드 + TS 패키지 빌드"
+depends = ["install-deps"]
+run = ["cargo build --workspace", "pnpm -r --if-present run build"]
+
+[tasks.dev]
+description = "데스크톱 앱을 개발 모드로 실행(워크트리 전용 포트)"
+depends = ["install-deps"]
+run = "node apps/desktop/scripts/dev.mjs"
 
 [tasks.test]
 description = "Rust(nextest) 와 TS(Vitest) 테스트"
