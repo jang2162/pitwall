@@ -11,9 +11,8 @@ ignore = [
   # proc-macro-error 관리 중단. Linux 에서 tauri → wry → gtk-rs 0.18 이 끌어온다. 업스트림에 대체가 없다.
   { id = "RUSTSEC-2024-0370", reason = "gtk-rs 0.18 via tauri/wry on Linux; no maintained replacement upstream" },
 ]
-# 위 ignore 는 Tauri 트리(M0-04)를 위한 것이라 이 시점에는 걸리는 크레이트가 없다. M0-04 병합 뒤 "warn" 으로 되돌려
-# 낡은 ignore 를 드러나게 한다.
-unused-ignored-advisory = "allow"
+# 업스트림이 고쳐 ignore 가 낡으면 경고로 드러낸다.
+unused-ignored-advisory = "warn"
 
 [licenses]
 # 허용 라이선스의 정본이다. MIT 프로젝트이므로 허용형만 둔다(docs/design/02-tech-stack.md 「라이선스 검사」 행).
@@ -37,8 +36,8 @@ allow = [
 confidence-threshold = 0.9
 # 목록은 npm 과 함께 쓰므로 Rust 쪽에서 안 쓰이는 항목이 있는 것이 정상이다.
 unused-allowed-license = "allow"
-# 아래 예외도 Tauri 트리(M0-04)를 위한 것이라 이 시점에는 쓰이지 않는다. M0-04 병합 뒤 "warn" 으로 되돌린다.
-unused-license-exception = "allow"
+# Tauri 를 올려 아래 예외 크레이트가 트리에서 빠지면 경고로 드러낸다. 그때 예외와 about.toml 을 함께 걷는다.
+unused-license-exception = "warn"
 
 # MPL-2.0 은 파일 단위 약한 copyleft 라 전역 allow 에 넣지 않는다. Tauri 의 전이 의존성에 한해, 수정 없이 쓰는
 # 조건으로 크레이트 단위로만 허용한다(docs/design/02-tech-stack.md 「라이선스 검사」 행).
