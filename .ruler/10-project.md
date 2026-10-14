@@ -13,7 +13,7 @@
 | --- | --- |
 | `crates/` | Rust 라이브러리·바이너리 크레이트. `Cargo.toml` 의 `members = ["crates/*"]` 로 워크스페이스에 자동 편입된다 |
 | `packages/` | TypeScript 공용 패키지(`@pitwall/*`) |
-| `apps/` | 실행 앱(데스크톱·relay 데몬) |
+| `apps/` | 실행 앱(데스크톱·relay 데몬). Rust 크레이트는 `Cargo.toml` 의 `members` 에 경로로 하나씩 적는다(데스크톱은 `apps/desktop/src-tauri`) |
 | `extensions/` | 내장 확장 |
 | `docs/design/` | 설계 문서(정본) |
 
@@ -24,6 +24,7 @@
 도구 버전은 `mise.toml` 이 고정한다. 세팅은 `CONTRIBUTING.md` 「세팅」, 명령과 하위 단위 실행법은 「명령」 절을 따른다. 태스크 목록은 `mise tasks`.
 
 - 빌드 `mise run build`, 테스트 `mise run test`, 검사 `mise run lint`, 포맷 적용 `mise run fmt`.
+- 데스크톱 앱은 `mise run dev` 로 띄운다. 개발 서버 포트를 저장소 경로로 정해(`apps/desktop/scripts/dev.mjs`) 워크트리끼리 겹치지 않는다. vite·`tauri dev` 를 직접 띄우지 않는다 — `PITWALL_DEV_PORT` 가 없으면 시작하지 않는다.
 - **「통과」를 보고하기 전에 실행된 테스트 개수를 읽는다.** 0개면 통과가 아니다(`base` 스택 「통과를 보기 전에」 절). 어느 줄을 읽는지는 `CONTRIBUTING.md` 「명령」 절. Rust 쪽은 태스크가 `--no-tests=fail` 을 줘서 0개면 실패하지만 TS 쪽은 그렇지 않다.
 - 커밋 훅(lefthook)은 `--no-verify` 로 건너뛰지 않는다.
 

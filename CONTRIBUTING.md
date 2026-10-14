@@ -6,6 +6,7 @@
 
 - [mise](https://mise.jdx.dev) — Node·pnpm·Rust·cargo-nextest·cargo-deny·cargo-about·actionlint 버전을 `mise.toml` 로 고정해 설치한다. cargo-about 은 소스에서 빌드하므로 처음 `mise install` 이 1분 남짓 더 걸린다.
 - mise 가 셸에 활성화돼 있어야 `pnpm`·`cargo` 가 PATH 에 잡힌다. `mise doctor` 에서 `activated: yes` 인지 본다.
+- Linux 는 Tauri 2 가 컴파일에 쓰는 시스템 라이브러리(WebKitGTK 4.1 등)를 따로 설치한다. 목록은 [Tauri 2 Prerequisites](https://v2.tauri.app/start/prerequisites/#linux) 이고, CI 의 `Tauri system dependencies` 단계가 같은 목록을 쓴다.
 - 그 밖의 도구를 따로 설치하지 않는다. `npm`·`yarn` 을 쓰지 않는다(패키지 매니저는 pnpm).
 
 ## 세팅
@@ -22,7 +23,8 @@ mise trust && mise install && pnpm install
 
 | 하려는 일                                                                                 | 명령                  |
 | ----------------------------------------------------------------------------------------- | --------------------- |
-| Rust 워크스페이스 빌드                                                                    | `mise run build`      |
+| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                   | `mise run build`      |
+| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                              | `mise run dev`        |
 | 전체 테스트(Rust nextest + TS Vitest)                                                     | `mise run test`       |
 | 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint)                                     | `mise run lint`       |
 | 포맷 적용                                                                                 | `mise run fmt`        |
