@@ -246,7 +246,11 @@ fn build_router(host_id: &str, bus: &EventBus, tasks: &TaskSpawner) -> Router {
                         biased;
                         received = events.recv(), if bus_open => received,
                         status = handle.wait() => {
-                            sink.send(DemoTaskUpdate::Finished { task_id, status }).await?;
+                            sink.send(DemoTaskUpdate::Finished {
+                                task_id,
+                                outcome: status,
+                            })
+                            .await?;
                             return Ok(());
                         }
                     };

@@ -20,7 +20,9 @@ pub const TOPIC_PROGRESS: &str = "task.progress";
 /// 종료 알림의 토픽. 페이로드는 [`TaskFinishedEvent`]. 작업마다 정확히 한 번 나간다.
 pub const TOPIC_FINISHED: &str = "task.finished";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum TaskStatus {
     Running,
@@ -35,14 +37,20 @@ impl TaskStatus {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// 진행 양은 2^53 안에 머문다고 보고 TS `number` 로 낸다(pw-rpc `JsNumber`).
+/// 없는 값은 키를 빼지 않고 `null` 로 보낸다 — specta 가 `skip_serializing_if` 를 TS 로 표현하지 못한다.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskProgress {
+    #[specta(type = pw_rpc::JsNumber)]
     pub done: u64,
     /// 전체 양을 모르면 `None`(UI 는 불확정 진행 막대).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[specta(type = Option<pw_rpc::JsNumber>)]
     pub total: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub message: Option<String>,
 }
 

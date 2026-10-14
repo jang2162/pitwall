@@ -1,11 +1,13 @@
 //! Host 가 직접 처리하는 RPC 메서드. 지금은 왕복 확인용 최소한만 둔다 — 기능 메서드는 각 모듈이 선언한다.
 
-use pw_rpc::rpc_method;
+use pw_rpc::{JsNumber, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::task::{TaskId, TaskProgress, TaskStatus};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PingParams {
     /// 그대로 돌려받는 값. 클라이언트가 응답을 자기 요청과 맞춰 보는 데 쓴다.
@@ -13,14 +15,18 @@ pub struct PingParams {
     pub nonce: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub struct Pong {
     pub nonce: String,
     pub host_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub struct HostInfo {
     pub host_id: String,
@@ -31,10 +37,13 @@ pub struct HostInfo {
     pub arch: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub struct DemoTaskParams {
     pub steps: u32,
+    #[specta(type = JsNumber)]
     pub interval_ms: u64,
 }
 
@@ -45,7 +54,9 @@ impl DemoTaskParams {
 }
 
 /// 데모 작업 스트림의 청크. 진행 알림이 여러 번, 종료 알림이 마지막에 한 번 온다.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
 // rename_all 은 변형 이름만 바꾼다. 필드도 다른 메시지처럼 camelCase 로 나가게 rename_all_fields 를 함께 둔다.
 #[serde(
     tag = "kind",
@@ -54,13 +65,15 @@ impl DemoTaskParams {
 )]
 pub enum DemoTaskUpdate {
     Progress {
+        #[specta(type = JsNumber)]
         task_id: TaskId,
         progress: TaskProgress,
     },
     Finished {
+        #[specta(type = JsNumber)]
         task_id: TaskId,
-        #[serde(flatten)]
-        status: TaskStatus,
+        // 펼치지(flatten) 않고 중첩한다. specta 는 enum 변형 안의 flatten 을 무시해 TS 타입이 와이어와 달라진다.
+        outcome: TaskStatus,
     },
 }
 
@@ -106,15 +119,15 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_value(&progress).unwrap(),
-            json!({"kind": "progress", "taskId": 7, "progress": {"done": 1, "total": 2}})
+            json!({"kind": "progress", "taskId": 7, "progress": {"done": 1, "total": 2, "message": null}})
         );
         let finished = DemoTaskUpdate::Finished {
             task_id: 7,
-            status: TaskStatus::Failed {
+            outcome: TaskStatus::Failed {
                 error: "boom".into(),
             },
         };
-        let wire = json!({"kind": "finished", "taskId": 7, "status": "failed", "error": "boom"});
+        let wire = json!({"kind": "finished", "taskId": 7, "outcome": {"status": "failed", "error": "boom"}});
         assert_eq!(serde_json::to_value(&finished).unwrap(), wire);
         assert_eq!(
             serde_json::from_value::<DemoTaskUpdate>(wire).unwrap(),

@@ -134,7 +134,7 @@ async fn demo_task_streams_progress_then_completion() {
     assert!(matches!(
         updates.last(),
         Some(DemoTaskUpdate::Finished {
-            status: TaskStatus::Completed,
+            outcome: TaskStatus::Completed,
             ..
         })
     ));
@@ -240,7 +240,7 @@ async fn demo_stream_ends_even_if_its_finish_event_is_dropped() {
     assert!(matches!(
         last,
         Some(DemoTaskUpdate::Finished {
-            status: TaskStatus::Completed,
+            outcome: TaskStatus::Completed,
             ..
         })
     ));
