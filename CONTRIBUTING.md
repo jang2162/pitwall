@@ -5,12 +5,13 @@
 ## 준비물
 
 - [mise](https://mise.jdx.dev) — Node·pnpm·Rust·cargo-nextest 버전을 `mise.toml` 로 고정해 설치한다.
+- mise 가 셸에 활성화돼 있어야 `pnpm`·`cargo` 가 PATH 에 잡힌다. `mise doctor` 에서 `activated: yes` 인지 본다.
 - 그 밖의 도구를 따로 설치하지 않는다. `npm`·`yarn` 을 쓰지 않는다(패키지 매니저는 pnpm).
 
 ## 세팅
 
 ```bash
-mise install && pnpm install
+mise trust && mise install && pnpm install
 ```
 
 `pnpm install` 은 `prepare` 스크립트로 git 훅(lefthook)과 에이전트 지침 생성(`ruler apply`)도 함께 설치한다.
@@ -34,7 +35,7 @@ cargo nextest run -p pw-core crate_name            # 이름에 crate_name 이 �
 pnpm --filter @pitwall/domain test                 # 패키지 하나(예: @pitwall/domain)
 ```
 
-**테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N tests run: N passed`), Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.
+**테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N test(s) run: N passed`), Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.
 
 ## 커밋 메시지
 
