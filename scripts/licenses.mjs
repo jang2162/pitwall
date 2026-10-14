@@ -79,18 +79,50 @@ function aboutExceptions(about) {
     );
 }
 
-// npm 패키지 단위 예외. 이유가 없는 예외는 받지 않는다 — 다음 사람이 걷어도 되는지 판정할 근거가 없어진다.
+// npm 패키지 단위 예외. 형식을 엄격하게 본다 — 이 파일의 실수는 대개 「통과」로 나타나 아무도 모른다.
+// 이유가 없는 예외는 받지 않는다(다음 사람이 걷어도 되는지 판정할 근거가 없어진다). 모르는 키(`version` 등)는
+// 버전 한정처럼 읽히지만 실제로는 이름 전체에 적용되므로 거부한다. 같은 패키지가 두 번 나오면 두 번째가 조용히
+// 묻히므로 거부한다.
+const NPM_EXCEPTION_KEYS = ["package", "allow", "reason"];
+
 function npmExceptions() {
+  if (!existsSync(join(root, npmExceptionsPath))) {
+    throw new Error(
+      `${npmExceptionsPath} 가 없다. 예외가 없으면 파일을 지우지 말고 [[exceptions]] 항목만 비운다`,
+    );
+  }
   const file = readToml(npmExceptionsPath);
+  const seen = new Set();
   return (file.arrays.get("exceptions") ?? []).map((e) => {
-    const [name] = strings(e.package, `${npmExceptionsPath} [[exceptions]] package`);
-    const allow = strings(e.allow, `${npmExceptionsPath} ${name} 예외의 allow`);
-    const [reason] = strings(e.reason, `${npmExceptionsPath} ${name} 예외의 reason`);
-    if (!name || allow.length === 0 || !reason?.trim()) {
+    const where = `${npmExceptionsPath} [[exceptions]]`;
+    const unknown = Object.keys(e).filter((k) => !NPM_EXCEPTION_KEYS.includes(k));
+    if (unknown.length) {
       throw new Error(
-        `${npmExceptionsPath}: ${name || "(이름 없음)"} 예외에 package·allow·reason 이 다 있어야 한다`,
+        `${where}: 모르는 키 ${unknown.join(", ")} — 쓸 수 있는 키는 ${NPM_EXCEPTION_KEYS.join("·")} 뿐이다`,
       );
     }
+    for (const key of NPM_EXCEPTION_KEYS) {
+      if (((e[key] ?? "").match(/"/g)?.length ?? 0) % 2) {
+        throw new Error(
+          `${where}: ${key} 값의 따옴표가 닫히지 않았다 — 값 안에 # 을 쓰면 그 뒤가 주석으로 잘린다`,
+        );
+      }
+    }
+    const [name] = strings(e.package, `${where} package`);
+    if (!e.allow?.startsWith("[")) {
+      throw new Error(`${where}: ${name} 예외의 allow 는 배열이어야 한다(allow = ["<라이선스>"])`);
+    }
+    const allow = strings(e.allow, `${where} ${name} 예외의 allow`);
+    const [reason] = strings(e.reason, `${where} ${name} 예외의 reason`);
+    if (!name || allow.length === 0 || !reason?.trim()) {
+      throw new Error(
+        `${where}: ${name || "(이름 없음)"} 예외에 package·allow·reason 이 다 있어야 한다`,
+      );
+    }
+    if (seen.has(name)) {
+      throw new Error(`${where}: ${name} 예외가 두 번 있다. 한 항목으로 합친다`);
+    }
+    seen.add(name);
     return { name, allow, reason };
   });
 }
@@ -236,8 +268,9 @@ function fenced(text) {
   return `${fence}text\n${text.replace(/\r\n/g, "\n").trimEnd()}\n${fence}`;
 }
 
-// cargo-about 의 stderr 에서 「그래프에 없는 크레이트의 설정」 경고만 한 줄로 줄인다. about.toml 의 크레이트별
-// 예외가 아직 없는 Tauri 트리를 위한 것이라 M0-04 전까지는 매번 나온다. 나머지 경고·오류는 그대로 보인다.
+// cargo-about 의 stderr 에서 「그래프에 없는 크레이트의 설정」 경고만 한 줄로 줄인다. 트리에서 빠진 크레이트의
+// 예외가 about.toml 에 남으면 나온다 — deny.toml 의 unused-license-exception 경고와 같이 보고 두 곳에서 걷는다.
+// 나머지 경고·오류는 그대로 보인다.
 function cargoAbout() {
   const r = spawnSync("cargo", ["about", "generate", "--format", "json"], {
     cwd: root,
