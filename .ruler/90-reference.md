@@ -5,3 +5,4 @@
 | 언제 | 읽을 파일 |
 | --- | --- |
 | 빌드·테스트를 하위 단위로(한 크레이트, 한 패키지, 한 테스트) 실행하거나, 커밋 메시지·PR 을 쓸 때 | `CONTRIBUTING.md` |
+| 의존성(Cargo·npm)을 추가·변경하거나, 코드를 복사해 넣거나, `mise run licenses`·`advisories` 가 실패할 때 | `CONTRIBUTING.md` 「의존성과 라이선스」 절 |

@@ -21,7 +21,7 @@
 
 ## 빌드·테스트·검사는 mise 태스크로 한다
 
-도구 버전(Node·pnpm·Rust·cargo-nextest)은 `mise.toml` 이 고정한다. 세팅은 `CONTRIBUTING.md` 「세팅」, 명령과 하위 단위 실행법은 「명령」 절을 따른다. 태스크 목록은 `mise tasks`.
+도구 버전은 `mise.toml` 이 고정한다. 세팅은 `CONTRIBUTING.md` 「세팅」, 명령과 하위 단위 실행법은 「명령」 절을 따른다. 태스크 목록은 `mise tasks`.
 
 - 빌드 `mise run build`, 테스트 `mise run test`, 검사 `mise run lint`, 포맷 적용 `mise run fmt`.
 - **「통과」를 보고하기 전에 실행된 테스트 개수를 읽는다.** 0개면 통과가 아니다(`base` 스택 「통과를 보기 전에」 절). 어느 줄을 읽는지는 `CONTRIBUTING.md` 「명령」 절. Rust 쪽은 태스크가 `--no-tests=fail` 을 줘서 0개면 실패하지만 TS 쪽은 그렇지 않다.
