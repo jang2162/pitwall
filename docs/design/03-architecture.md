@@ -60,7 +60,7 @@
 ## 4. RPC 설계
 
 - JSON-RPC 2.0, 메서드명 `<module>.<action>` (예: `git.log`, `db.query.execute`)
-- 요청은 항상 `projectId` 포함 → Host Router가 라우팅
+- Host Router 는 연결 단위로 라우팅한다. 클라이언트는 `projectId`(또는 프로젝트가 없는 창은 `hostId`)로 Host 연결을 열고, 그 연결의 요청 · 스트림 · 구독 id 는 그 Host 세션 안에서만 유효하다. 기능 메서드의 params 에는 여전히 `projectId` 를 넣어 Host 안에서 `ProjectContext` 를 고른다. 여러 Host 의 프로젝트를 한 세션에서 다루는 클라이언트(MCP 서버)는 Host 별 연결을 하나씩 두고 요청마다 `projectId` 로 연결을 고른다. 프로젝트를 다른 Host 로 다시 묶으면 그 프로젝트의 기존 연결은 닫고 새로 연다.
 - 대용량 응답(로그, 쿼리 결과, git log)은 **스트림**: `streamId`를 반환하고 `stream.chunk` 알림으로 전달, 백프레셔는 credit 방식
 - 이벤트 구독: `events.subscribe({ projectId, topics })`
 - 타입 정의 단일 소스: Rust 구조체 → specta(TS) / schemars(JSON Schema, MCP)

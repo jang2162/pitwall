@@ -12,6 +12,7 @@
 
 - `--project` 미지정 시 cwd로 프로젝트 자동 해석 (F2와 같은 규칙)
 - 앱 미실행 + 헤드리스 모드: 승인이 필요한 툴은 거부(또는 `--approve-mode` 정책에 따름)
+- MCP 서버는 Host 별 연결 풀을 두고 툴 호출의 `projectId` 로 라우팅한다([03-architecture.md](03-architecture.md) 「RPC 설계」)
 
 ## 2. 툴 목록
 
