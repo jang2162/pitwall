@@ -5,7 +5,7 @@ pre-commit:
   jobs:
     - name: oxfmt
       glob: "*.{js,ts,json,md,yml,yaml}"
-      run: "pnpm exec oxfmt {staged_files}"
+      run: "pnpm exec oxfmt --no-error-on-unmatched-pattern {staged_files}"
       stage_fixed: true
     - name: oxlint
       glob: "*.{js,ts}"
