@@ -15,3 +15,7 @@ tauri-build = { version = "2.7.2", features = [] }
 
 [dependencies]
 tauri = { version = "2.12.3", features = [] }
+
+[dev-dependencies]
+# 창 열기 함수를 MockRuntime 위에서 시험한다(tauri::test::mock_app).
+tauri = { version = "2.12.3", features = ["test"] }

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "overlay 타이틀바(data-tauri-drag-region)로 창을 옮기고 더블클릭으로 최대화하는 권한, 그리고 Tauri 가 debug 빌드에 넣는 개발자 도구 단축키(⌥⌘I / Ctrl+Shift+I)가 부르는 명령의 권한. 그 명령은 release 빌드(devtools 기능 없음)에는 없다.",
+  "description": "overlay 타이틀바(data-tauri-drag-region)로 창을 옮기고 더블클릭으로 최대화하는 권한, 그리고 Tauri 가 debug 빌드에 넣는 개발자 도구 단축키(⌥⌘I / Ctrl+Shift+I)가 부르는 명령의 권한. 그 명령은 release 빌드에는 컴파일되지 않는다 — tauri 의 devtools feature 를 켜면 release 에서도 열린다.",
   "windows": ["welcome", "settings", "project-*"],
   "permissions": [
     "core:window:allow-start-dragging",

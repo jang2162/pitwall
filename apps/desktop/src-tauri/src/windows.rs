@@ -52,6 +52,9 @@ fn next_project_label() -> String {
     )
 }
 
+// 아래 open_* 를 Tauri command 에서 부를 때는 async command 로 만든다. Windows 에서 동기 command·이벤트 핸들러
+// 안에서 창을 만들면 deadlock 난다(tauri 2.12 WebviewWindowBuilder::new 문서 「Known issues」). 메뉴 이벤트 경로는
+// WebView2 콜백 밖이라 해당하지 않는다고 보지만 Windows 에서 확인하지 않았다.
 pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
     open_single(app, WindowKind::Welcome, WELCOME_LABEL)
 }
@@ -132,11 +135,34 @@ mod tests {
         }
     }
 
+    fn labels<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
+        app.webview_windows().into_keys().collect()
+    }
+
     #[test]
-    fn project_labels_are_unique() {
-        let first = next_project_label();
-        let second = next_project_label();
-        assert_ne!(first, second);
-        assert!(first.starts_with("project-") && second.starts_with("project-"));
+    fn settings_window_is_opened_once_and_reused() {
+        let app = tauri::test::mock_app();
+        let first = open_settings(app.handle()).unwrap();
+        let second = open_settings(app.handle()).unwrap();
+        assert_eq!(first.label(), SETTINGS_LABEL);
+        assert_eq!(second.label(), SETTINGS_LABEL);
+        assert_eq!(labels(app.handle()), [SETTINGS_LABEL]);
+    }
+
+    #[test]
+    fn welcome_window_is_opened_once_and_reused() {
+        let app = tauri::test::mock_app();
+        open_welcome(app.handle()).unwrap();
+        open_welcome(app.handle()).unwrap();
+        assert_eq!(labels(app.handle()), [WELCOME_LABEL]);
+    }
+
+    #[test]
+    fn every_project_window_request_opens_a_new_window() {
+        let app = tauri::test::mock_app();
+        let first = open_project(app.handle()).unwrap();
+        let second = open_project(app.handle()).unwrap();
+        assert_ne!(first.label(), second.label());
+        assert_eq!(app.webview_windows().len(), 2);
     }
 }

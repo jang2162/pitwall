@@ -6,6 +6,8 @@ body,
   margin: 0;
 }
 
+/* UI 크롬의 텍스트 드래그 선택을 막는다(10-ui §3 성능 규칙). WebKit 에서는 하위 contenteditable(CodeMirror 등)의
+   선택·편집까지 막을 수 있으므로, 편집 영역이 들어오면(M0-11) 그 요소에 user-select: text 를 준다. */
 body {
   font-family: system-ui, sans-serif;
   font-size: 13px;

@@ -6,7 +6,10 @@
 // PITWALL_DEV_PORT 를 직접 지정한다.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { dirname, resolve } from "node:path";
+import { rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,21 +27,24 @@ console.log(`[pitwall dev] ${repoRoot} → ${devUrl}`);
 // 실제 devUrl 은 여기서만 넘긴다. tauri.conf.json 의 devUrl(포트 0)은 쓸 수 없는 자리표시다 — 지우면 debug 빌드의
 // generate_context! 가 ../dist 를 요구해 프론트엔드를 빌드하기 전에는 cargo build·clippy 가 실패하고,
 // 실제 포트를 적어 두면 그 값이 다시 모든 워크트리의 공용 포트가 된다.
-const result = spawnSync(
-  "pnpm",
-  [
-    "exec",
-    "tauri",
-    "dev",
-    "--config",
-    JSON.stringify({ build: { devUrl } }),
-    ...process.argv.slice(2),
-  ],
-  {
-    cwd: appDir,
-    stdio: "inherit",
-    env: { ...process.env, PITWALL_DEV_PORT: String(port) },
-    shell: process.platform === "win32",
-  },
-);
-process.exit(result.status ?? 1);
+//
+// 설정은 JSON 문자열이 아니라 파일 경로로 넘긴다. 문자열의 큰따옴표는 Windows 의 셸·인자 파싱을 거치며 벗겨진다.
+// CLI 도 pnpm(Windows 에서는 .cmd 셈이라 셸 없이는 실행되지 않는다) 대신 node 로 직접 불러 셸을 거치지 않는다.
+const configPath = join(tmpdir(), `pitwall-dev-${port}.json`);
+writeFileSync(configPath, JSON.stringify({ build: { devUrl } }));
+const tauriCli = createRequire(join(appDir, "package.json")).resolve("@tauri-apps/cli/tauri.js");
+
+try {
+  const result = spawnSync(
+    process.execPath,
+    [tauriCli, "dev", "--config", configPath, ...process.argv.slice(2)],
+    {
+      cwd: appDir,
+      stdio: "inherit",
+      env: { ...process.env, PITWALL_DEV_PORT: String(port) },
+    },
+  );
+  process.exitCode = result.status ?? 1;
+} finally {
+  rmSync(configPath, { force: true });
+}
