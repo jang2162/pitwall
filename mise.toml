@@ -1,6 +1,6 @@
 [tools]
 node = "24.21.0"
-pnpm = "10.33.0"
+"npm:pnpm" = "10.33.0"
 rust = "1.99.0"
 "aqua:nextest-rs/nextest/cargo-nextest" = "0.9.148"
 
@@ -24,7 +24,7 @@ run = [
   "cargo fmt --all --check",
   "cargo clippy --workspace --all-targets --all-features -- -D warnings",
   "pnpm exec oxfmt --check .",
-  "pnpm exec oxlint",
+  "pnpm exec oxlint --deny-warnings",
   "pnpm -r --if-present run typecheck",
 ]
 

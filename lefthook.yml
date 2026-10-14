@@ -9,10 +9,10 @@ pre-commit:
       stage_fixed: true
     - name: oxlint
       glob: "*.{js,ts}"
-      run: "pnpm exec oxlint {staged_files}"
+      run: "pnpm exec oxlint --deny-warnings {staged_files}"
     - name: rustfmt
       glob: "*.rs"
-      run: "cargo fmt --all"
+      run: "rustfmt --edition 2024 {staged_files}"
       stage_fixed: true
 
 pre-push:
@@ -22,7 +22,7 @@ pre-push:
     - name: clippy
       run: "cargo clippy --workspace --all-targets --all-features -- -D warnings"
     - name: oxlint
-      run: "pnpm exec oxlint"
+      run: "pnpm exec oxlint --deny-warnings"
     - name: tsc
       run: "pnpm -r --if-present run typecheck"
 
