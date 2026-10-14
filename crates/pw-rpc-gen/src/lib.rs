@@ -18,7 +18,7 @@ use schemars::generate::SchemaSettings;
 use schemars::{Schema, SchemaGenerator};
 use serde_json::{Map, Value, json};
 use specta::Types;
-use specta::datatype::DataType;
+use specta::datatype::{DataType, Field, Fields};
 use specta_typescript::{Exporter, Typescript};
 
 /// 재생성 명령. 생성물 머리에 적힌다.
@@ -48,6 +48,8 @@ pub fn typescript(methods: &[&MethodInfo]) -> Result<String, specta_typescript::
         })
         .collect();
 
+    reject_flatten_in_enum_variants(&types)?;
+
     let exporter: Exporter = Typescript::default().into();
     let exporter = exporter
         .framework_prelude(format!(
@@ -56,6 +58,48 @@ pub fn typescript(methods: &[&MethodInfo]) -> Result<String, specta_typescript::
         ))
         .framework_runtime(move |fe| render_runtime(&fe, &entries).map(Cow::Owned));
     Typescript::from(exporter).export(&types, specta_serde::Format)
+}
+
+/// specta-serde(0.0.12)가 붙이는 serde `flatten` 속성의 키.
+const SERDE_FLATTEN: &str = "serde:field:flatten";
+
+/// enum 변형 안의 `#[serde(flatten)]` 을 거부한다.
+///
+/// specta-serde 는 struct 의 flatten 은 펼쳐 그리지만 enum 변형 필드의 flatten 은 **오류 없이 무시**해, TS 타입은 중첩인데
+/// 와이어는 평탄해진다(JSON Schema 쪽 schemars 는 맞게 평탄하다). 생성이 성공해 버리면 아무 검사도 이 불일치를 못 잡으므로
+/// 여기서 실패시킨다. 고치는 법: 변형 안에서는 펼치지 말고 필드로 중첩한다.
+fn reject_flatten_in_enum_variants(types: &Types) -> Result<(), specta_typescript::Error> {
+    for named in types.into_unsorted_iter() {
+        let Some(DataType::Enum(e)) = &named.ty else {
+            continue;
+        };
+        for (variant, v) in &e.variants {
+            let fields: Vec<(String, &Field)> = match &v.fields {
+                Fields::Unit => Vec::new(),
+                Fields::Unnamed(f) => f
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| (i.to_string(), f))
+                    .collect(),
+                Fields::Named(f) => f.fields.iter().map(|(n, f)| (n.to_string(), f)).collect(),
+            };
+            for (field, f) in fields {
+                if f.attributes.contains_key(SERDE_FLATTEN) {
+                    let message = format!(
+                        "`{}::{variant}.{field}` uses #[serde(flatten)] inside an enum variant; \
+                         specta would emit a nested TS type while serde writes it flat. Nest the field instead.",
+                        named.name
+                    );
+                    return Err(specta_typescript::Error::framework(
+                        message.clone(),
+                        message,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 클라이언트가 쓰는 내장 프로토콜 타입. 메서드가 참조하지 않아도 항상 내보낸다.
@@ -334,6 +378,35 @@ mod tests {
 
     fn query() -> MethodInfo {
         MethodInfo::unary::<Query>()
+    }
+
+    #[derive(Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+    #[serde(tag = "status")]
+    pub enum Outcome {
+        Done,
+        Failed { error: String },
+    }
+
+    #[derive(Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+    #[serde(tag = "kind")]
+    pub enum Flattened {
+        Finished {
+            #[serde(flatten)]
+            outcome: Outcome,
+        },
+    }
+
+    rpc_method! {
+        /// enum 변형 안에서 flatten 하는 결과.
+        pub FlattenedResult: "gen.flattened" { params: (), result: Flattened, tier: Read }
+    }
+
+    #[test]
+    fn flatten_inside_an_enum_variant_fails_generation() {
+        let info = MethodInfo::unary::<FlattenedResult>();
+        let error = typescript(&[&info]).expect_err("flatten in a variant must not generate");
+        let message = error.to_string();
+        assert!(message.contains("Flattened::Finished.outcome"), "{message}");
     }
 
     #[test]
