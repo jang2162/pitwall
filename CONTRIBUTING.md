@@ -25,7 +25,7 @@ mise trust && mise install && pnpm install
 | ----------------------------------------------------------------------------------------- | --------------------- |
 | Rust 워크스페이스 빌드 + TS 패키지 빌드                                                   | `mise run build`      |
 | 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                              | `mise run dev`        |
-| 전체 테스트(Rust nextest + TS Vitest)                                                     | `mise run test`       |
+| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                      | `mise run test`       |
 | 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint)                                     | `mise run lint`       |
 | 포맷 적용                                                                                 | `mise run fmt`        |
 | 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부 | `mise run licenses`   |
@@ -37,10 +37,11 @@ mise trust && mise install && pnpm install
 ```bash
 cargo nextest run -p pw-core                       # 크레이트 하나(예: pw-core)
 cargo nextest run -p pw-core crate_name            # 이름에 crate_name 이 든 테스트만
+cargo test -p pw-rpc --doc                         # 크레이트 하나의 doctest(nextest 는 doctest 를 돌리지 않는다)
 pnpm --filter @pitwall/domain test                 # 패키지 하나(예: @pitwall/domain)
 ```
 
-**테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N test(s) run: N passed`), Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.
+**테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N test(s) run: N passed`), doctest 는 크레이트마다 `test result: ok. N passed` 줄, Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.
 
 ## 의존성과 라이선스
 
