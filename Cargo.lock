@@ -2222,8 +2222,13 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 name = "pitwall-desktop"
 version = "0.0.0"
 dependencies = [
+ "pw-core",
+ "pw-rpc",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
+ "tokio",
 ]
 
 [[package]]
@@ -2372,6 +2377,13 @@ dependencies = [
 [[package]]
 name = "pw-core"
 version = "0.0.0"
+dependencies = [
+ "pw-rpc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
 
 [[package]]
 name = "pw-rpc"
