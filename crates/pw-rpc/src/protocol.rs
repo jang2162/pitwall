@@ -10,7 +10,8 @@ use serde_json::Value;
 use crate::error::RpcError;
 use crate::message::Id;
 
-/// 클라이언트 → 서버(알림). 진행 중인 unary 요청을 취소한다. 취소된 요청은 `CANCELLED` 오류로 응답된다.
+/// 클라이언트 → 서버(알림). 진행 중인 **unary** 요청을 취소한다. 취소된 요청은 `CANCELLED` 오류로 응답된다.
+/// 스트림은 요청 id 가 아니라 `streamId` 로 취소한다([`STREAM_CANCEL`]).
 pub const REQUEST_CANCEL: &str = "request.cancel";
 /// 클라이언트 → 서버(알림). 스트림에 credit 을 더한다. 서버는 받은 credit 만큼만 청크를 보낸다.
 pub const STREAM_CREDIT: &str = "stream.credit";

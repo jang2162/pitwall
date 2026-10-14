@@ -24,9 +24,14 @@ depends = ["install-deps"]
 run = "node apps/desktop/scripts/dev.mjs"
 
 [tasks.test]
-description = "Rust(nextest) 와 TS(Vitest) 테스트"
+description = "Rust(nextest · doctest) 와 TS(Vitest) 테스트"
 depends = ["install-deps"]
-run = ["cargo nextest run --workspace --no-tests=fail", "pnpm -r --if-present run test"]
+# nextest 는 doctest 를 돌리지 않는다. 문서의 사용 예는 cargo test --doc 로 따로 돌린다.
+run = [
+  "cargo nextest run --workspace --no-tests=fail",
+  "cargo test --workspace --doc",
+  "pnpm -r --if-present run test",
+]
 
 [tasks.lint]
 description = "fmt 검사 + clippy + oxlint + tsc"

@@ -3,11 +3,15 @@
 mod common;
 
 use common::{APP_ERROR, Harness, base_router};
-use pw_rpc::Role;
+use std::sync::Arc;
+
+use pw_rpc::protocol::StreamCancelParams;
 use pw_rpc::protocol::{
     STREAM_CHUNK, STREAM_END, StreamChunk, StreamEnd, StreamId, StreamOpened, StreamOutcome,
 };
+use pw_rpc::{Role, RpcError, StreamSink, code, rpc_method};
 use serde_json::json;
+use tokio::sync::{Notify, oneshot};
 
 async fn open_count(h: &mut Harness, n: u32) -> StreamId {
     h.request(1, "test.count", json!({"n": n}));
@@ -138,4 +142,145 @@ fn stream_end_wire_format_names_the_status() {
         serde_json::to_value(&cancelled).unwrap(),
         json!({"streamId": 3, "status": "cancelled"})
     );
+}
+
+rpc_method! {
+    /// async 본문에서 패닉한다.
+    PanicStream: "test.panicStream" { params: (), stream: u32, tier: Read }
+
+    /// sink 를 떼어 낸 태스크로 옮기고, `go` 가 오면 끝난다.
+    Detached: "test.detached" { params: (), stream: u32, tier: Read }
+
+    /// sink 를 떼어 낸 태스크로 옮기고 끝나지 않는다.
+    DetachedForever: "test.detachedForever" { params: (), stream: u32, tier: Read }
+}
+
+fn boom() -> Result<(), RpcError> {
+    panic!("stream handler panic for test")
+}
+
+#[tokio::test(start_paused = true)]
+async fn handler_panic_ends_the_stream_as_failed() {
+    let mut router = base_router();
+    router.stream(PanicStream, |_ctx, (), _sink: StreamSink<u32>| async move {
+        boom()
+    });
+    let mut h = Harness::new(router, Role::Owner);
+    h.request(1, "test.panicStream", serde_json::Value::Null);
+    let id = h
+        .next_response()
+        .await
+        .result_as::<StreamOpened>()
+        .unwrap()
+        .stream_id;
+    let end: StreamEnd = h.next_notification(STREAM_END).await;
+    assert_eq!(end.stream_id, id);
+    match end.outcome {
+        StreamOutcome::Failed { error } => assert_eq!(error.code, code::INTERNAL_ERROR),
+        other => panic!("expected failed, got {other:?}"),
+    }
+}
+
+/// 떼어 낸 sink 의 전송 시점(`gate`)과 그 결과를 쥔 탐침.
+struct DetachProbe {
+    go: Arc<Notify>,
+    gate: Arc<Notify>,
+    started: Arc<Notify>,
+    result: oneshot::Receiver<Result<(), RpcError>>,
+}
+
+fn detached_router() -> (pw_rpc::Router, DetachProbe) {
+    let (go, gate, started) = (
+        Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
+    );
+    let (tx, result) = oneshot::channel();
+    let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
+    let mut router = base_router();
+    for (method, finishes) in [("detached", true), ("forever", false)] {
+        let (go, gate, started, tx) = (go.clone(), gate.clone(), started.clone(), tx.clone());
+        let handler = move |_ctx, (), sink: StreamSink<u32>| {
+            let (go, gate, started, tx) = (go.clone(), gate.clone(), started.clone(), tx.clone());
+            async move {
+                tokio::spawn(async move {
+                    gate.notified().await;
+                    let sent = sink.send(7).await;
+                    if let Some(tx) = tx.lock().unwrap().take() {
+                        let _ = tx.send(sent);
+                    }
+                });
+                started.notify_one();
+                if finishes {
+                    go.notified().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+                Ok(())
+            }
+        };
+        match method {
+            "detached" => router.stream(Detached, handler),
+            _ => router.stream(DetachedForever, handler),
+        };
+    }
+    (
+        router,
+        DetachProbe {
+            go,
+            gate,
+            started,
+            result,
+        },
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn detached_sink_cannot_send_after_the_stream_completed() {
+    let (router, probe) = detached_router();
+    let mut h = Harness::new(router, Role::Owner);
+    h.request(1, "test.detached", serde_json::Value::Null);
+    let id = h
+        .next_response()
+        .await
+        .result_as::<StreamOpened>()
+        .unwrap()
+        .stream_id;
+    // 떼어 낸 send 가 쓸 credit 이 남아 있게 한다.
+    credit(&h, id, 5);
+    probe.started.notified().await;
+    probe.go.notify_one();
+    let end: StreamEnd = h.next_notification(STREAM_END).await;
+    assert_eq!(end.outcome, StreamOutcome::Completed);
+
+    probe.gate.notify_one();
+    let sent = probe.result.await.unwrap();
+    assert_eq!(sent.unwrap_err().code, code::CANCELLED);
+    h.assert_quiet().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn detached_sink_cannot_send_after_the_stream_was_cancelled() {
+    let (router, probe) = detached_router();
+    let mut h = Harness::new(router, Role::Owner);
+    h.request(1, "test.detachedForever", serde_json::Value::Null);
+    let id = h
+        .next_response()
+        .await
+        .result_as::<StreamOpened>()
+        .unwrap()
+        .stream_id;
+    credit(&h, id, 5);
+    probe.started.notified().await;
+    h.notify(
+        "stream.cancel",
+        serde_json::to_value(StreamCancelParams { stream_id: id }).unwrap(),
+    );
+    let end: StreamEnd = h.next_notification(STREAM_END).await;
+    assert_eq!(end.outcome, StreamOutcome::Cancelled);
+
+    probe.gate.notify_one();
+    let sent = probe.result.await.unwrap();
+    assert_eq!(sent.unwrap_err().code, code::CANCELLED);
+    h.assert_quiet().await;
 }

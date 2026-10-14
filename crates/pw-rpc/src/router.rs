@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -18,6 +18,7 @@ use crate::events::EventHub;
 use crate::message::{Outbound, notification};
 use crate::method::{MethodMeta, Role, StreamMethod, UnaryMethod};
 use crate::protocol::{STREAM_CHUNK, StreamChunk, StreamId};
+use crate::session::lock;
 
 pub(crate) type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 pub(crate) type UnaryFn =
@@ -73,9 +74,28 @@ impl Ctx {
     }
 }
 
+/// 스트림 하나의 공유 상태. sink 와 세션이 함께 갖는다.
+pub(crate) struct StreamState {
+    pub credit: Semaphore,
+    /// `stream.end` 가 이미 나갔는가. 청크 전송과 end 전송을 이 잠금 하나로 직렬화한다 —
+    /// 핸들러가 sink 를 떼어 낸 태스크로 옮겨도 end 뒤에는 청크가 나가지 못한다.
+    /// credit 을 닫는 것만으로는 이미 permit 을 얻은 send 와의 경합이 남는다.
+    pub ended: Mutex<bool>,
+}
+
+impl StreamState {
+    pub fn new() -> Self {
+        // 초기 credit 0. 클라이언트가 응답의 streamId 를 알기 전에 청크가 나가지 않는다.
+        Self {
+            credit: Semaphore::new(0),
+            ended: Mutex::new(false),
+        }
+    }
+}
+
 pub(crate) struct RawSink {
     pub stream_id: StreamId,
-    pub credit: Arc<Semaphore>,
+    pub state: Arc<StreamState>,
     pub out: UnboundedSender<Outbound>,
 }
 
@@ -93,16 +113,23 @@ impl<T: Serialize> StreamSink<T> {
     /// credit 이 생길 때까지 기다린 뒤 청크 하나를 보내고 credit 1 을 쓴다.
     ///
     /// 백프레셔는 이 대기 하나로 걸린다 — 클라이언트가 credit 을 주지 않으면 핸들러가 여기서 멈춘다.
+    /// 스트림이 이미 끝났거나 취소됐으면 아무것도 보내지 않고 `CANCELLED` 를 돌려준다.
     pub async fn send(&self, item: T) -> Result<(), RpcError> {
         // 직렬화를 credit 보다 먼저 한다. 보내지 못할 항목이 credit 을 쓰지 않게.
         let data = serde_json::to_value(item).map_err(|e| RpcError::internal(e.to_string()))?;
+        // 스트림이 끝나면 credit 이 닫혀 기다리던 send 도 여기서 깨어나 오류로 끝난다.
         let permit = self
             .raw
+            .state
             .credit
             .acquire()
             .await
             .map_err(|_| RpcError::cancelled())?;
         permit.forget();
+        let ended = lock(&self.raw.state.ended);
+        if *ended {
+            return Err(RpcError::cancelled());
+        }
         let chunk = StreamChunk {
             stream_id: self.raw.stream_id,
             data,
@@ -132,7 +159,7 @@ impl Router {
     /// unary 메서드에 핸들러를 붙인다.
     ///
     /// # Panics
-    /// 같은 이름이 이미 등록돼 있으면 패닉한다(프로그래밍 오류).
+    /// 같은 이름이 이미 등록돼 있거나 메타데이터가 [`MethodMeta::validate`] 를 통과하지 못하면 패닉한다(프로그래밍 오류).
     pub fn unary<M, F, Fut>(&mut self, _method: M, handler: F) -> &mut Self
     where
         M: UnaryMethod,
@@ -154,7 +181,7 @@ impl Router {
     /// 스트림 메서드에 핸들러를 붙인다. 핸들러가 `Ok` 로 끝나면 스트림은 completed, `Err` 면 failed 로 닫힌다.
     ///
     /// # Panics
-    /// 같은 이름이 이미 등록돼 있으면 패닉한다(프로그래밍 오류).
+    /// 같은 이름이 이미 등록돼 있거나 메타데이터가 [`MethodMeta::validate`] 를 통과하지 못하면 패닉한다(프로그래밍 오류).
     pub fn stream<M, F, Fut>(&mut self, _method: M, handler: F) -> &mut Self
     where
         M: StreamMethod,
@@ -175,6 +202,10 @@ impl Router {
     }
 
     fn insert(&mut self, meta: MethodMeta, handler: Handler) -> &mut Self {
+        // rpc_method! 는 이 검사를 컴파일 타임에 한다. Method 를 손으로 구현한 경우를 여기서 막는다.
+        if let Err(reason) = meta.validate() {
+            panic!("rpc method `{}` is invalid: {reason}", meta.name);
+        }
         let previous = self.entries.insert(meta.name, Entry { meta, handler });
         assert!(
             previous.is_none(),

@@ -94,3 +94,17 @@ async fn malformed_subscribe_is_invalid_params() {
     h.request(1, "events.subscribe", json!({"topics": ["fs.changed"]}));
     assert_eq!(err_code(&h.next_response().await), code::INVALID_PARAMS);
 }
+
+#[tokio::test]
+async fn subscribe_after_close_is_rejected() {
+    let mut h = Harness::new(base_router(), Role::Owner);
+    h.session.close();
+    h.request(
+        1,
+        "events.subscribe",
+        json!({"projectId": "p1", "topics": ["fs.changed"]}),
+    );
+    assert_eq!(err_code(&h.next_response().await), code::CANCELLED);
+    assert_eq!(h.events.subscription_count(), 0);
+    assert_eq!(h.events.publish("p1", "fs.changed", &()).unwrap(), 0);
+}

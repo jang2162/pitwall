@@ -14,6 +14,12 @@ use serde::{Serialize, Serializer};
 ///
 /// 디스패처는 이 값을 강제하지 않는다 — 승인 정책(자동 허용 · UI 승인)은 이 값을 읽는 MCP 계층이 정한다.
 /// 호출 가능 여부는 [`RoleSet`] 이 정한다.
+///
+/// 메서드가 도달할 수 있는 **가장 높은** 등급으로 선언한다. `roles` 를 생략하면 등급에서 role 이 정해지므로
+/// (`read` 는 readonly 까지 연다), 낮게 선언하면 그 위의 조작이 조용히 열린다.
+/// 입력에 따라 등급이 오르는 메서드(`db_query` 의 read / dangerous 등)는 조회용과 쓰기용으로 나누거나
+/// (`db.query` read / `db.execute` dangerous), 높은 등급으로 선언하고 `roles` 를 명시한다.
+/// 둘 중 어느 쪽을 정책으로 할지는 MCP 툴 레지스트리(M0-17)에서 확정한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
@@ -237,6 +243,19 @@ pub trait StreamMethod: Method {
 /// - `tier` 는 [`Tier`] 의 변형 이름, `roles` 는 [`Role`] 의 변형 이름이다.
 ///   `roles` 를 생략하면 [`RoleSet::default_for`] 를 쓴다.
 /// - 이름 규칙 · role 규칙은 [`MethodMeta::validate`] 가 컴파일 타임에 검사한다.
+///   `roles: []` 는 생략과 다르게 빈 집합이라 빌드가 실패한다.
+///
+/// ```compile_fail
+/// pw_rpc::rpc_method! {
+///     Nobody: "x.nobody" { params: (), result: (), tier: Read, roles: [] }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// pw_rpc::rpc_method! {
+///     ReadonlyWrite: "x.write" { params: (), result: (), tier: Write, roles: [Owner, Readonly] }
+/// }
+/// ```
 #[macro_export]
 macro_rules! rpc_method {
     () => {};
@@ -252,7 +271,7 @@ macro_rules! rpc_method {
         $($rest:tt)*
     ) => {
         $crate::__rpc_method_define! {
-            [$($doc)*] $vis $name, $method, $params, Unary, $result, $tier, [$($($role)*)?]
+            [$($doc)*] $vis $name, $method, $params, Unary, $result, $tier, [$(explicit $($role)*)?]
         }
         impl $crate::UnaryMethod for $name {
             type Result = $result;
@@ -271,7 +290,7 @@ macro_rules! rpc_method {
         $($rest:tt)*
     ) => {
         $crate::__rpc_method_define! {
-            [$($doc)*] $vis $name, $method, $params, Stream, $item, $tier, [$($($role)*)?]
+            [$($doc)*] $vis $name, $method, $params, Stream, $item, $tier, [$(explicit $($role)*)?]
         }
         impl $crate::StreamMethod for $name {
             type Item = $item;
@@ -285,7 +304,7 @@ macro_rules! rpc_method {
 macro_rules! __rpc_method_define {
     (
         [$($doc:literal)*] $vis:vis $name:ident, $method:literal, $params:ty,
-        $kind:ident, $output:ty, $tier:ident, [$($role:ident)*]
+        $kind:ident, $output:ty, $tier:ident, [$($roles:tt)*]
     ) => {
         $(#[doc = $doc])*
         #[derive(Debug, Clone, Copy, Default)]
@@ -297,7 +316,7 @@ macro_rules! __rpc_method_define {
                 name: $method,
                 kind: $crate::MethodKind::$kind,
                 tier: $crate::Tier::$tier,
-                roles: $crate::__rpc_roles!($tier; $($role)*),
+                roles: $crate::__rpc_roles!($tier; $($roles)*),
                 params: stringify!($params),
                 output: stringify!($output),
                 doc: concat!($($doc, "\n"),*),
@@ -316,8 +335,9 @@ macro_rules! __rpc_roles {
     ($tier:ident;) => {
         $crate::RoleSet::default_for($crate::Tier::$tier)
     };
-    ($tier:ident; $($role:ident)+) => {
-        $crate::RoleSet::EMPTY $(.with($crate::Role::$role))+
+    // `roles: []` 는 생략과 다르다. 빈 집합이 되어 validate 가 컴파일 에러로 만든다.
+    ($tier:ident; explicit $($role:ident)*) => {
+        $crate::RoleSet::EMPTY $(.with($crate::Role::$role))*
     };
 }
 

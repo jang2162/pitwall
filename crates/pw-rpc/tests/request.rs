@@ -177,3 +177,88 @@ fn registering_a_method_twice_panics() {
     let mut router = base_router();
     router.unary(common::Echo, |_ctx, p: EchoParams| async move { Ok(p) });
 }
+
+pw_rpc::rpc_method! {
+    /// future 를 만들기 전에 패닉한다.
+    SyncPanic: "test.syncPanic" { params: (), result: (), tier: Read }
+
+    /// 스트림판.
+    SyncPanicStream: "test.syncPanicStream" { params: (), stream: u32, tier: Read }
+}
+
+type HandlerFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), pw_rpc::RpcError>> + Send>>;
+
+fn panics_before_the_future(_ctx: pw_rpc::Ctx, _params: ()) -> HandlerFuture {
+    panic!("sync-part panic for test")
+}
+
+fn stream_panics_before_the_future(
+    _ctx: pw_rpc::Ctx,
+    _params: (),
+    _sink: pw_rpc::StreamSink<u32>,
+) -> HandlerFuture {
+    panic!("sync-part panic for test")
+}
+
+#[tokio::test(start_paused = true)]
+async fn panic_in_the_synchronous_part_of_a_handler_is_an_internal_error() {
+    let mut router = base_router();
+    router
+        .unary(SyncPanic, panics_before_the_future)
+        .stream(SyncPanicStream, stream_panics_before_the_future);
+    let mut h = Harness::new(router, Role::Owner);
+
+    // 패닉이 transport 의 호출자로 새지 않는다.
+    let escaped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h.request(1, "test.syncPanic", Value::Null);
+    }));
+    assert!(escaped.is_ok(), "panic escaped handle_value");
+    let res = h.next_response().await;
+    assert_eq!(
+        (res.id.clone(), err_code(&res)),
+        (Id::Number(1), code::INTERNAL_ERROR)
+    );
+
+    // id 1 이 진행 중 맵에 남지 않았다.
+    h.request(1, "test.echo", json!({"text": "again"}));
+    assert_eq!(
+        h.next_response().await.result_as::<EchoParams>().unwrap(),
+        EchoParams {
+            text: "again".into()
+        }
+    );
+
+    h.request(2, "test.syncPanicStream", Value::Null);
+    assert_eq!(err_code(&h.next_response().await), code::INTERNAL_ERROR);
+    h.notify("stream.credit", json!({"streamId": 1, "credit": 10}));
+    h.assert_quiet().await;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HandMade;
+
+impl pw_rpc::Method for HandMade {
+    type Params = ();
+    // rpc_method! 라면 컴파일되지 않을 선언: readonly 에게 write 를 연다.
+    const META: pw_rpc::MethodMeta = pw_rpc::MethodMeta {
+        name: "test.handMade",
+        kind: MethodKind::Unary,
+        tier: Tier::Write,
+        roles: pw_rpc::RoleSet::EMPTY.with(Role::Readonly),
+        params: "()",
+        output: "()",
+        doc: "",
+    };
+}
+
+impl pw_rpc::UnaryMethod for HandMade {
+    type Result = ();
+}
+
+#[test]
+#[should_panic(expected = "is invalid")]
+fn registering_a_hand_made_invalid_method_panics() {
+    let mut router = pw_rpc::Router::new();
+    router.unary(HandMade, |_ctx, ()| async { Ok(()) });
+}

@@ -176,3 +176,42 @@ async fn closing_the_session_cancels_everything_in_flight() {
     tokio::task::yield_now().await;
     assert!(!probe.reached.load(Ordering::SeqCst));
 }
+
+/// 취소와 핸들러 완료가 같은 poll 에서 둘 다 준비된 경우에도 취소가 이긴다.
+///
+/// select 가 `biased` 가 아니면 준비된 갈래를 무작위로 고르므로 한 번에 1/2 확률로 핸들러가 이긴다.
+/// 64번 되풀이해 그 경우를 놓칠 확률을 2^-64 로 만든다 — 결정적이지는 않지만 사실상 빠짐없이 잡는다.
+#[tokio::test]
+async fn cancel_wins_even_when_the_handler_became_ready_in_the_same_poll() {
+    for round in 0..64 {
+        let (router, probe) = gated_router();
+        let mut h = Harness::new(router, Role::Owner);
+        h.request(1, "test.gated", Value::Null);
+        wait_started(&probe).await;
+        h.notify("request.cancel", json!({"id": 1}));
+        probe.gate.notify_one();
+        let res = h.next_response().await;
+        assert_eq!(err_code(&res), code::CANCELLED, "unary, round {round}");
+
+        let (router, probe) = gated_router();
+        let mut h = Harness::new(router, Role::Owner);
+        h.request(1, "test.gatedStream", Value::Null);
+        let id = h
+            .next_response()
+            .await
+            .result_as::<StreamOpened>()
+            .unwrap()
+            .stream_id;
+        h.notify("stream.credit", json!({"streamId": id, "credit": 10}));
+        let _: StreamChunk = h.next_notification(STREAM_CHUNK).await;
+        wait_started(&probe).await;
+        h.notify("stream.cancel", json!({"streamId": id}));
+        probe.gate.notify_one();
+        let end: StreamEnd = h.next_notification(STREAM_END).await;
+        assert_eq!(
+            end.outcome,
+            StreamOutcome::Cancelled,
+            "stream, round {round}"
+        );
+    }
+}
