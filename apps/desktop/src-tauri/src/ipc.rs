@@ -1,7 +1,9 @@
 //! Tauri IPC transport: 웹뷰의 JSON-RPC 메시지를 Host 연결로 실어 나른다.
 //!
-//! - `rpc_connect({ target, channel })`: [`HostRouter`] 로 Host 를 골라 연결을 열고 연결 id 를 돌려준다.
-//!   Host 가 보내는 메시지(응답 · 스트림 청크 · 이벤트)는 `channel` 로 온다.
+//! - `rpc_page()`: 이 웹뷰의 현재 페이지 세대. 프런트엔드는 문서가 뜰 때 한 번 받아 둔다.
+//! - `rpc_connect({ target, channel, page })`: [`HostRouter`] 로 Host 를 골라 연결을 열고 연결 id 를 돌려준다.
+//!   Host 가 보내는 메시지(응답 · 스트림 청크 · 이벤트)는 `channel` 로 온다. 연결이 닫히면 마지막에
+//!   [`CLOSED_FRAME`] 하나가 온다.
 //! - `rpc_send({ conn, frame })`: JSON-RPC 메시지 하나를 그 연결로 보낸다.
 //! - `rpc_disconnect({ conn })`: 연결을 닫는다.
 //!
@@ -11,13 +13,13 @@
 //!
 //! 로컬 창은 데스크톱 사용자 본인이므로 호출자 role 은 owner 다.
 //!
-//! 연결을 여는 사이(`rpc_connect` 의 `await`)에 웹뷰가 다시 로드되거나 닫히면 정리 훅은 이미 지나갔다. 그래서 웹뷰마다
-//! 페이지 세대를 두고, 연결을 열기 시작할 때의 세대가 등록할 때까지 그대로이고 웹뷰가 살아 있을 때만 등록한다.
-//! ⚠ 이 세대 검사가 못 막는 것: WKWebView 는 `PageLoadEvent::Started` 뒤 새 문서가 커밋되기 전까지 옛 페이지의 JS 를
-//! 계속 돌린다. 그 사이 옛 페이지가 **새로** 부른 `rpc_connect` 는 새 세대를 읽어 등록된다. invoke 가 어느 문서에서
-//! 왔는지 Tauri 가 알려 주지 않아 여기서는 가를 수 없다. 그래서 프런트엔드 transport(`src/tauri-transport.ts`)가
-//! `beforeunload` 뒤로는 연결을 열지 않고, 그 사이 열린 연결은 스스로 닫는다. 그 transport 를 거치지 않고
-//! `rpc_connect` 를 부르는 코드를 만들지 않는다.
+//! 리로드와의 경합은 페이지 세대로 막는다. 웹뷰마다 세대를 두고 `PageLoadEvent::Started` 마다 새 값으로 바꾼다.
+//! Started 는 새 문서가 **커밋된** 시점이다(wry 가 세 백엔드 모두 커밋에 건다 — WKWebView `didCommitNavigation`,
+//! WebView2 `ContentLoading`, WebKitGTK `Committed`). 그래서 새 문서의 JS 가 `rpc_page` 로 받는 세대는 언제나 새 값이고,
+//! 옛 문서가 들고 있던 세대는 낡았다. invoke 는 어느 문서에서 왔는지 알려 주지 않으므로, 문서가 받은 세대를
+//! `rpc_connect` 에 실어 보내게 하고, 등록할 때 그 세대가 아직 현재이고 창이 살아 있을 때만 받는다.
+//! 커밋 직전에 옛 문서가 보낸 `rpc_connect` 가 Started 뒤에 처리돼도 낡은 세대라 거절된다 — 옛 문서는 응답을 받지 못해
+//! 스스로 닫지 못하므로 등록되면 다음 리로드까지 유휴 연결로 남는다.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,6 +34,11 @@ use tauri::webview::PageLoadEvent;
 use tauri::{Builder, Manager, Runtime, State, Webview, Window, WindowEvent};
 
 pub type ConnId = u64;
+
+/// 연결이 닫혔음을 알리는 채널의 마지막 메시지. JSON-RPC 메시지가 아니다 — 프런트엔드 transport 가 가로채
+/// `onClose` 로 바꾼다(`src/tauri-transport.ts`). Host 쪽이 먼저 닫는 경우(원격 Host 끊김 등)에도 대기 중 호출이
+/// 다음 `send` 실패까지 걸려 있지 않게 한다.
+pub const CLOSED_FRAME: &str = r#"{"pitwallTransport":"closed"}"#;
 
 /// 웹뷰 label → 그 웹뷰의 현재 페이지와 그 페이지가 연 연결들.
 type ConnTable = HashMap<String, PageConns>;
@@ -146,6 +153,7 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
     builder
         .manage(IpcState::new(router))
         .invoke_handler(tauri::generate_handler![
+            rpc_page,
             rpc_connect,
             rpc_send,
             rpc_disconnect
@@ -171,14 +179,20 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
 // Session 이 메시지를 처리하며 tokio 태스크를 띄우므로 command 는 async 로 둔다 — Tauri 의 async command 는
 // tokio 런타임 위에서 돌고, 동기 command 는 메인 스레드에서 돌아 런타임이 없다.
 #[tauri::command]
+async fn rpc_page<R: Runtime>(webview: Webview<R>, state: State<'_, IpcState>) -> Result<u64, ()> {
+    Ok(state.current_page(webview.label()))
+}
+
+/// `page` 는 이 문서가 `rpc_page` 로 받은 세대다. 지금 세대가 아니면 연결을 닫고 `PageGone` 을 돌려준다.
+#[tauri::command]
 async fn rpc_connect<R: Runtime>(
     webview: Webview<R>,
     state: State<'_, IpcState>,
     target: Target,
     channel: Channel<Value>,
+    page: u64,
 ) -> Result<ConnId, IpcError> {
     let label = webview.label().to_owned();
-    let page = state.current_page(&label);
     let conn = state
         .router
         .connect(&target, Caller::new(Role::Owner))
@@ -196,9 +210,11 @@ async fn rpc_connect<R: Runtime>(
         // 연결이 닫히면 Host 가 남은 메시지(취소된 스트림의 stream.end 등)를 보낸 뒤 None 을 돌려준다.
         while let Some(frame) = source.recv().await {
             if channel.send(frame).is_err() {
-                break;
+                return;
             }
         }
+        let closed: Value = serde_json::from_str(CLOSED_FRAME).expect("CLOSED_FRAME is JSON");
+        let _ = channel.send(closed);
     });
     Ok(id)
 }
@@ -308,10 +324,11 @@ mod tests {
     }
 
     fn connect(webview: &WebviewWindow<MockRuntime>, channel: u32, target: Value) -> ConnId {
+        let page = invoke(webview, "rpc_page", json!({})).unwrap();
         let id = invoke(
             webview,
             "rpc_connect",
-            json!({"target": target, "channel": format!("__CHANNEL__:{channel}")}),
+            json!({"target": target, "channel": format!("__CHANNEL__:{channel}"), "page": page}),
         )
         .unwrap();
         serde_json::from_value(id).unwrap()
@@ -420,7 +437,7 @@ mod tests {
         let err = invoke(
             &w,
             "rpc_connect",
-            json!({"target": {"projectId": "nope"}, "channel": "__CHANNEL__:2"}),
+            json!({"target": {"projectId": "nope"}, "channel": "__CHANNEL__:2", "page": 1}),
         )
         .unwrap_err();
         assert_eq!(
@@ -503,6 +520,9 @@ mod tests {
         on_page_load(w.as_ref(), PageLoadEvent::Started);
         assert_eq!(f.app.state::<IpcState>().connection_count("welcome"), 0);
         assert_eq!(wait_finished(&mut finished), TaskStatus::Cancelled);
+        // Host 쪽에서 닫힌 연결의 채널은 종료 표시로 끝난다.
+        let closed: Value = serde_json::from_str(CLOSED_FRAME).unwrap();
+        while next_frame(&f, 4) != closed {}
         // 새 페이지는 다시 연결할 수 있다.
         connect(&w, 5, json!({"hostId": "local"}));
         assert_eq!(f.app.state::<IpcState>().connection_count("welcome"), 1);
@@ -557,5 +577,39 @@ mod tests {
         assert!(dropped.load(Ordering::SeqCst));
         assert_eq!(state.connection_count("gone"), 0);
         assert!(state.conns().get("gone").is_none());
+    }
+
+    /// 리뷰 재현: 옛 문서가 커밋 직전에 보낸 `rpc_connect` 가 Started 뒤에 처리되는 경우. 옛 문서는 응답을 받지 못해 닫을
+    /// 수도 없으므로, 그 연결은 등록되면 안 된다. 옛 문서는 자기가 받은 세대를 실어 보낸다.
+    #[test]
+    fn a_connect_sent_by_the_old_page_is_refused_after_the_reload() {
+        let f = fixture();
+        let w = window(&f.app, "welcome");
+        let state = f.app.state::<IpcState>();
+        let old_page = state.current_page("welcome");
+        on_page_load(w.as_ref(), PageLoadEvent::Started);
+
+        let err = invoke(
+            &w,
+            "rpc_connect",
+            json!({"target": {"hostId": "local"}, "channel": "__CHANNEL__:8", "page": old_page}),
+        )
+        .unwrap_err();
+        assert_eq!(err, json!({"kind": "pageGone"}));
+        assert_eq!(state.connection_count("welcome"), 0);
+    }
+
+    #[test]
+    fn rpc_page_hands_out_a_new_generation_after_each_reload() {
+        let f = fixture();
+        let w = window(&f.app, "welcome");
+        let first = invoke(&w, "rpc_page", json!({})).unwrap();
+        assert_eq!(invoke(&w, "rpc_page", json!({})).unwrap(), first);
+        on_page_load(w.as_ref(), PageLoadEvent::Started);
+        let second = invoke(&w, "rpc_page", json!({})).unwrap();
+        assert_ne!(second, first);
+        // 새 문서는 새 세대로 연결할 수 있다.
+        connect(&w, 3, json!({"hostId": "local"}));
+        assert_eq!(f.app.state::<IpcState>().connection_count("welcome"), 1);
     }
 }

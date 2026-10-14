@@ -1,14 +1,15 @@
 import { RpcClient } from "@pitwall/rpc-client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { connectHost, setLeavingForTest } from "./tauri-transport";
+import { connectHost } from "./tauri-transport";
 
 // Tauri 의 IPC 는 웹뷰 밖에서 돌지 않는다. invoke 와 Channel 을 바꿔 끼워 transport 의 동작만 본다.
 const ipc = vi.hoisted(() => {
   const channels: { onmessage: (frame: unknown) => void }[] = [];
   const calls: { cmd: string; args: Record<string, unknown> }[] = [];
+  // rpc_page 는 모듈을 불러올 때 한 번 불린다. 그때 쓰일 기본 응답이라 여기서 정한다.
   let respond: (cmd: string) => Promise<unknown> = async (cmd) =>
-    cmd === "rpc_connect" ? 7 : null;
+    cmd === "rpc_page" ? 3 : cmd === "rpc_connect" ? 7 : null;
   return {
     channels,
     calls,
@@ -38,17 +39,15 @@ beforeEach(() => {
   ipc.channels.length = 0;
   ipc.calls.length = 0;
   ipc.setResponder(async (cmd) => (cmd === "rpc_connect" ? 7 : null));
-  setLeavingForTest(false);
 });
-
-afterEach(() => setLeavingForTest(false));
 
 describe("Tauri IPC transport", () => {
   it("round-trips a typed call through rpc_send and the channel", async () => {
     const conn = await connectHost({ hostId: "local" });
     expect(ipc.calls[0]).toMatchObject({
       cmd: "rpc_connect",
-      args: { target: { hostId: "local" } },
+      // 모듈을 불러올 때 rpc_page 로 받아 둔 세대를 싣는다.
+      args: { target: { hostId: "local" }, page: 3 },
     });
     const client = new RpcClient(conn.transport);
 
@@ -107,18 +106,18 @@ describe("Tauri IPC transport", () => {
     expect(closed).toHaveBeenCalledTimes(1);
   });
 
-  it("does not open connections once the page is unloading", async () => {
-    setLeavingForTest(true);
-    await expect(connectHost({ hostId: "local" })).rejects.toThrow("unloading");
-    expect(ipc.calls).toEqual([]);
-  });
+  it("treats the closed frame from Rust as a closed transport", async () => {
+    const conn = await connectHost({ hostId: "local" });
+    const client = new RpcClient(conn.transport);
+    const closed = vi.fn();
+    conn.transport.onClose!(closed);
+    const seen = vi.fn();
+    conn.transport.onMessage(seen);
 
-  it("closes a connection that finished opening after unloading began", async () => {
-    ipc.setResponder(async (cmd) => {
-      if (cmd === "rpc_connect") setLeavingForTest(true);
-      return cmd === "rpc_connect" ? 7 : null;
-    });
-    await expect(connectHost({ hostId: "local" })).rejects.toThrow("unloading");
-    expect(ipc.calls.map((c) => c.cmd)).toEqual(["rpc_connect", "rpc_disconnect"]);
+    const pending = client.call("host.info");
+    ipc.channels[0]!.onmessage({ pitwallTransport: "closed" });
+    await expect(pending).rejects.toThrow("rpc transport closed");
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(seen).not.toHaveBeenCalled();
   });
 });
