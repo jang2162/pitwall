@@ -1,0 +1,21 @@
+# cargo-about 설정. THIRD_PARTY_NOTICES.md 의 Rust 부분을 만든다(scripts/licenses.mjs notices).
+# accepted 는 deny.toml 의 [licenses].allow 와 같아야 한다 — 다르면 `mise run licenses` 가 실패한다.
+accepted = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "0BSD",
+  "Zlib",
+  "Unicode-3.0",
+  "BlueOak-1.0.0",
+  "Python-2.0",
+]
+# 고지는 배포물에 들어가는 것만 싣는다. 개발·빌드 의존성은 배포되지 않는다.
+ignore-dev-dependencies = true
+ignore-build-dependencies = true
+# publish = false 인 우리 크레이트는 서드파티가 아니다.
+private = { ignore = true }

@@ -25,6 +25,11 @@ pre-push:
       run: "pnpm exec oxlint --deny-warnings"
     - name: tsc
       run: "pnpm -r --if-present run typecheck"
+    - name: actionlint
+      run: "actionlint"
+    # 의존성을 바꾸고 `mise run notices` 를 잊으면 CI 의 licenses 잡이 실패한다. 그 전에 여기서 잡는다.
+    - name: notices
+      run: "node scripts/licenses.mjs notices --check"
 
 # 순차 실행이다 — 런타임이 맞은 뒤에 설치가 돌아야 한다.
 post-checkout:

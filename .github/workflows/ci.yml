@@ -1,0 +1,77 @@
+# 도구 버전은 전부 mise.toml 이 정본이다. 로컬과 같은 `mise run <태스크>` 를 부르므로 단계를 여기서 다시 쓰지 않는다.
+# 액션은 커밋 SHA 로 고정한다(태그는 옮겨질 수 있다). 올릴 때 주석의 버전도 함께 고친다.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # mise 자체의 버전. 도구 버전이 아니라 mise.toml 을 읽는 쪽의 버전이다.
+  MISE_VERSION: 2026.4.3
+
+jobs:
+  check:
+    name: lint · test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+
+      - name: pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - run: pnpm install --frozen-lockfile
+      - run: mise run lint
+      - run: mise run test
+
+  licenses:
+    name: licenses · notices
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+
+      - name: pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - run: pnpm install --frozen-lockfile
+      # cargo-deny 는 advisories 검사에 RustSec 데이터베이스를 네트워크로 받는다.
+      # npm 라이선스 검사는 이 OS(Linux)에 설치된 패키지만 본다. macOS·Windows 전용 바이너리 패키지는 보지 않는다.
+      - run: mise run licenses

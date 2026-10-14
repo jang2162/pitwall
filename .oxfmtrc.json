@@ -6,6 +6,7 @@
     "/guideline.json",
     "/guideline-lock.json",
     "/pnpm-lock.yaml",
+    "/THIRD_PARTY_NOTICES.md",
     "/target/",
     "/.codegraph/",
     "/.worktrees/",

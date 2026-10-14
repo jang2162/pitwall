@@ -1,0 +1,50 @@
+# cargo-deny 설정. `mise run licenses` 가 부른다.
+
+[graph]
+# 비워 두면 모든 타깃의 의존성을 본다. 3 OS 에 배포하므로 좁히지 않는다.
+targets = []
+all-features = true
+
+[advisories]
+# 취약점·관리 중단 공지는 기본값(전부 실패)을 쓴다. 무시할 공지는 ID 와 이유를 함께 적는다.
+ignore = []
+
+[licenses]
+# 허용 라이선스의 정본이다. MIT 프로젝트이므로 허용형만 둔다(docs/design/02-tech-stack.md 「라이선스 검사」 행).
+# scripts/licenses.mjs 가 이 목록을 읽어 npm 의존성도 검사하고, about.toml 의 accepted 와 같은지도 검사한다.
+# 형식을 바꾸면 그 스크립트의 파서가 못 읽는다 — 한 줄에 따옴표 친 SPDX ID 하나씩 둔다.
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "0BSD",
+  "Zlib",
+  "Unicode-3.0",
+  "BlueOak-1.0.0",
+  # argparse(npm, ruler 의 전이 의존성)가 쓴다. PSF 계열 허용형이다.
+  "Python-2.0",
+]
+confidence-threshold = 0.9
+# 목록은 npm 과 함께 쓰므로 Rust 쪽에서 안 쓰이는 항목이 있는 것이 정상이다.
+unused-allowed-license = "allow"
+exceptions = []
+
+[licenses.private]
+# publish = false 인 우리 크레이트도 검사한다. 워크스페이스 라이선스(MIT)가 목록에서 빠지면 바로 실패한다.
+ignore = false
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# 워크스페이스 내부 path 의존성은 버전이 없어도 와일드카드로 보지 않는다.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
