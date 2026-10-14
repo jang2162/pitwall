@@ -1,7 +1,7 @@
 //! 장기 작업(`Task`): 진행률 보고, 취소, 완료 · 실패 · 취소 상태. 진행과 종료는 이벤트 버스로도 알린다.
 //!
 //! UI 상태바와 MCP 가 같은 작업을 보도록 진행 알림은 버스의 [`TOPIC_PROGRESS`] · [`TOPIC_FINISHED`] 로 나간다
-//! (`docs/design/03-architecture.md` §2).
+//! (`docs/design/03-architecture.md` 「코어 모듈」 절).
 
 use std::future::Future;
 use std::sync::Arc;
@@ -220,7 +220,8 @@ impl TaskHandle {
     }
 }
 
-/// 작업이 패닉해 태스크가 풀려도 종료 상태와 종료 알림이 나가게 한다. 안 나가면 UI 가 영원히 「진행 중」으로 본다.
+/// 작업이 끝까지 돌지 못하고 태스크가 버려져도(패닉, 런타임 종료) 종료 상태와 종료 알림이 나가게 한다.
+/// 안 나가면 UI 가 영원히 「진행 중」으로 본다. drop 에서는 둘을 구분할 수 없어 같은 문구로 알린다.
 struct FinishGuard {
     id: TaskId,
     title: String,
@@ -247,10 +248,13 @@ impl FinishGuard {
 impl Drop for FinishGuard {
     fn drop(&mut self) {
         self.finish(TaskStatus::Failed {
-            error: "task panicked".into(),
+            error: TASK_ABORTED.into(),
         });
     }
 }
+
+/// 작업이 패닉했거나 런타임이 닫혀 작업이 버려졌을 때의 실패 문구.
+pub const TASK_ABORTED: &str = "task aborted (panicked or runtime shut down)";
 
 #[cfg(test)]
 mod tests {
@@ -279,6 +283,14 @@ mod tests {
 
     type BoxedWork = std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 
+    /// 시간 제한이 있는 `wait`. 취소가 전파되지 않는 회귀가 무한 대기가 아니라 실패로 끝나게 한다.
+    /// `start_paused` 테스트에서도 다른 타이머가 없으면 곧바로 만료된다.
+    async fn wait(handle: &mut TaskHandle) -> TaskStatus {
+        tokio::time::timeout(Duration::from_secs(5), handle.wait())
+            .await
+            .expect("task did not finish in time")
+    }
+
     #[tokio::test(start_paused = true)]
     async fn progress_is_reported_and_published() {
         let (bus, spawner) = spawner();
@@ -293,7 +305,7 @@ mod tests {
             }
             Ok(())
         });
-        assert_eq!(handle.wait().await, TaskStatus::Completed);
+        assert_eq!(wait(&mut handle).await, TaskStatus::Completed);
         assert_eq!(handle.progress().done, 2);
 
         let mut topics = Vec::new();
@@ -318,7 +330,7 @@ mod tests {
         assert!(counter.load(Ordering::SeqCst) > 0);
 
         handle.cancel();
-        assert_eq!(handle.wait().await, TaskStatus::Cancelled);
+        assert_eq!(wait(&mut handle).await, TaskStatus::Cancelled);
         let stopped_at = counter.load(Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(counter.load(Ordering::SeqCst), stopped_at);
@@ -332,7 +344,7 @@ mod tests {
         let counter = Arc::new(AtomicU64::new(0));
         let mut handle = spawner.spawn("tick", ticking(Arc::clone(&counter)));
         parent.cancel();
-        assert_eq!(handle.wait().await, TaskStatus::Cancelled);
+        assert_eq!(wait(&mut handle).await, TaskStatus::Cancelled);
     }
 
     #[tokio::test(start_paused = true)]
@@ -340,7 +352,7 @@ mod tests {
         let (_bus, spawner) = spawner();
         let mut handle = spawner.spawn("tick", ticking(Arc::new(AtomicU64::new(0))));
         drop(handle.cancel_on_drop());
-        assert_eq!(handle.wait().await, TaskStatus::Cancelled);
+        assert_eq!(wait(&mut handle).await, TaskStatus::Cancelled);
     }
 
     #[tokio::test]
@@ -349,16 +361,16 @@ mod tests {
         let mut sub = bus.subscribe(Filter::all().topics([TOPIC_FINISHED]));
         let mut failed = spawner.spawn("fail", |_ctx| async { Err("boom".to_owned()) });
         assert_eq!(
-            failed.wait().await,
+            wait(&mut failed).await,
             TaskStatus::Failed {
                 error: "boom".into()
             }
         );
         let mut panicked = spawner.spawn("panic", |_ctx| async { panic!("task panic for test") });
         assert_eq!(
-            panicked.wait().await,
+            wait(&mut panicked).await,
             TaskStatus::Failed {
-                error: "task panicked".into()
+                error: TASK_ABORTED.into()
             }
         );
         // 패닉해도 종료 알림은 나간다.

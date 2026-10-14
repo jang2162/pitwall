@@ -4,10 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use pw_core::bus::DEFAULT_CAPACITY;
 use pw_core::methods::{DemoTaskUpdate, HostInfo, Pong};
-use pw_core::task::{TOPIC_FINISHED, TaskFinishedEvent};
+use pw_core::task::{TOPIC_FINISHED, TOPIC_PROGRESS, TaskFinishedEvent, TaskProgressEvent};
 use pw_core::{
-    Connection, Filter, Host, HostRouter, LocalHost, Received, Scope, Target, TaskStatus,
+    Connection, Filter, Host, HostRouter, LocalHost, Received, Scope, Target, TaskProgress,
+    TaskStatus,
 };
 use pw_rpc::protocol::{EventMessage, StreamEnd, StreamOpened, StreamOutcome};
 use pw_rpc::{Caller, Role, code};
@@ -191,6 +193,59 @@ async fn closing_the_connection_cancels_the_task() {
     assert_eq!(finished_status(&mut finished).await, TaskStatus::Cancelled);
 }
 
+/// 스트림 핸들러가 credit 을 기다리는 사이 다른 작업의 진행 알림이 구독 상한을 넘게 쌓여 이 작업의 종료 알림이
+/// 버려져도, 스트림은 작업 상태를 보고 끝나야 한다(리뷰 F1 재현).
+#[tokio::test(start_paused = true)]
+async fn demo_stream_ends_even_if_its_finish_event_is_dropped() {
+    let host = LocalHost::new("local");
+    let mut c = Client::connect(&host, Role::Owner).await;
+    let mut finished = host
+        .bus()
+        .subscribe(Filter::all().scope(Scope::Host).topics([TOPIC_FINISHED]));
+    c.request(1, "host.demoTask", json!({"steps": 1, "intervalMs": 10}));
+    let opened: StreamOpened = from(c.result(1).await);
+    // credit 을 주지 않으므로 핸들러는 첫 진행 청크를 보내려다 멈춘 채 작업이 끝난다.
+    assert_eq!(finished_status(&mut finished).await, TaskStatus::Completed);
+
+    for done in 0..(DEFAULT_CAPACITY as u64 + 44) {
+        let other = TaskProgressEvent {
+            task_id: 9999,
+            title: "other".into(),
+            progress: TaskProgress {
+                done,
+                ..TaskProgress::default()
+            },
+        };
+        host.bus()
+            .publish(Scope::Host, TOPIC_PROGRESS, &other)
+            .unwrap();
+    }
+    c.notify(
+        "stream.credit",
+        json!({"streamId": opened.stream_id, "credit": 100}),
+    );
+
+    let mut last = None;
+    let end = loop {
+        let frame = c.next().await;
+        match frame["method"].as_str() {
+            Some("stream.chunk") => {
+                last = Some(from::<DemoTaskUpdate>(frame["params"]["data"].clone()))
+            }
+            Some("stream.end") => break from::<StreamEnd>(frame["params"].clone()),
+            _ => panic!("unexpected frame {frame}"),
+        }
+    };
+    assert_eq!(end.outcome, StreamOutcome::Completed);
+    assert!(matches!(
+        last,
+        Some(DemoTaskUpdate::Finished {
+            status: TaskStatus::Completed,
+            ..
+        })
+    ));
+}
+
 #[tokio::test]
 async fn invalid_demo_params_are_rejected() {
     let host = LocalHost::new("local");
@@ -244,7 +299,11 @@ async fn closing_a_project_cancels_its_tasks_and_frees_the_id() {
         Ok(())
     });
     assert!(host.close_project("p1"));
-    assert_eq!(handle.wait().await, TaskStatus::Cancelled);
+    // 시간 제한: 취소가 전파되지 않는 회귀는 무한 대기가 아니라 실패로 끝나야 한다.
+    let status = tokio::time::timeout(Duration::from_secs(5), handle.wait())
+        .await
+        .expect("project task was not cancelled");
+    assert_eq!(status, TaskStatus::Cancelled);
     assert!(project.cancellation().is_cancelled());
     assert!(host.project("p1").is_none());
     assert!(

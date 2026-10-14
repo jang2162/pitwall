@@ -16,12 +16,9 @@ use crate::host::{BoxFuture, Connection, FrameSink, FrameSource, Host, HostError
 use crate::methods::{
     DemoTaskParams, DemoTaskUpdate, HostDemoTask, HostInfo, HostInfoMethod, HostPing, Pong,
 };
-use crate::task::{
-    TOPIC_FINISHED, TOPIC_PROGRESS, TaskCtx, TaskFinishedEvent, TaskProgress, TaskProgressEvent,
-    TaskSpawner,
-};
+use crate::task::{TOPIC_PROGRESS, TaskCtx, TaskProgress, TaskProgressEvent, TaskSpawner};
 
-/// 프로젝트 하나를 다루는 모듈들이 받는 문맥(`docs/design/03-architecture.md` §2).
+/// 프로젝트 하나를 다루는 모듈들이 받는 문맥(`docs/design/03-architecture.md` 「코어 모듈」 절).
 /// 설정은 M0-08(설정 계층)이 붙인다.
 #[derive(Clone)]
 pub struct ProjectContext {
@@ -234,41 +231,43 @@ fn build_router(host_id: &str, bus: &EventBus, tasks: &TaskSpawner) -> Router {
                 let mut events = bus.subscribe(
                     Filter::all()
                         .scope(tasks.scope().clone())
-                        .topics([TOPIC_PROGRESS, TOPIC_FINISHED]),
+                        .topics([TOPIC_PROGRESS]),
                 );
-                let handle = tasks.spawn("demo", move |ctx| demo_work(ctx, params));
+                let mut handle = tasks.spawn("demo", move |ctx| demo_work(ctx, params));
                 // 스트림이 취소되면(stream.cancel · 연결 닫힘) pw-rpc 가 이 future 를 버린다. 그때 작업도 멈춘다.
                 let _cancel_task = handle.cancel_on_drop();
                 let task_id = handle.id();
-                while let Some(received) = events.recv().await {
-                    // 밀린 진행 알림은 버려져도 된다 — 다음 알림이 더 새 값이다. 종료 알림은 마지막이라 버려지지 않는다.
-                    let Received::Event(event) = received else {
-                        continue;
+                let mut bus_open = true;
+                loop {
+                    // 종료는 버스가 아니라 작업 상태로 본다. 구독은 Host 범위 전체를 받으므로, 이 핸들러가 credit 을
+                    // 기다리는 동안 다른 작업의 알림이 상한을 넘게 쌓이면 이 작업의 종료 알림이 버려질 수 있다.
+                    // biased 로 남은 진행 알림을 먼저 비워 마지막 진행이 종료보다 앞서 나가게 한다.
+                    let received = tokio::select! {
+                        biased;
+                        received = events.recv(), if bus_open => received,
+                        status = handle.wait() => {
+                            sink.send(DemoTaskUpdate::Finished { task_id, status }).await?;
+                            return Ok(());
+                        }
                     };
-                    let update = if event.topic == TOPIC_PROGRESS {
-                        let e: TaskProgressEvent = decode(&event.payload)?;
-                        if e.task_id != task_id {
+                    // 밀린 진행 알림(Lagged)은 버려져도 된다 — 다음 알림이 더 새 값이다.
+                    let event = match received {
+                        Some(Received::Event(event)) => event,
+                        Some(Received::Lagged(_)) => continue,
+                        None => {
+                            bus_open = false;
                             continue;
                         }
-                        DemoTaskUpdate::Progress {
+                    };
+                    let e: TaskProgressEvent = decode(&event.payload)?;
+                    if e.task_id == task_id {
+                        sink.send(DemoTaskUpdate::Progress {
                             task_id,
                             progress: e.progress,
-                        }
-                    } else {
-                        let e: TaskFinishedEvent = decode(&event.payload)?;
-                        if e.task_id != task_id {
-                            continue;
-                        }
-                        sink.send(DemoTaskUpdate::Finished {
-                            task_id,
-                            status: e.status,
                         })
                         .await?;
-                        return Ok(());
-                    };
-                    sink.send(update).await?;
+                    }
                 }
-                Err(RpcError::internal("event bus closed"))
             }
         });
     router

@@ -1,8 +1,10 @@
-//! Host Router: project_id → Host. UI · MCP 가 어느 Host 에 연결할지 정한다(`docs/design/03-architecture.md` §1).
+//! Host Router: project_id → Host. UI · MCP 가 어느 Host 에 연결할지 정한다(`docs/design/03-architecture.md` 「전체 구조」 절).
 //!
 //! 라우팅은 **연결 단위**다. 연결 하나는 한 Host 의 pw-rpc 세션 하나이고, 그 위의 스트림 id · 구독 id ·
 //! 요청 id 는 그 세션 안에서만 유일하다. 요청마다 Host 를 고르면 `stream.credit` 처럼 projectId 가 없는 제어 메시지를
 //! 어느 Host 로 보낼지와 Host 사이의 id 충돌을 transport 가 따로 풀어야 한다.
+//! 계약(재바인딩하면 기존 연결을 닫고 새로 연다 등)은 `docs/design/03-architecture.md` 「RPC 설계」 절이 정본이다.
+//! `bind_project` 는 이미 열린 연결을 옮기지 않는다.
 
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};

@@ -46,7 +46,12 @@ impl DemoTaskParams {
 
 /// 데모 작업 스트림의 청크. 진행 알림이 여러 번, 종료 알림이 마지막에 한 번 온다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+// rename_all 은 변형 이름만 바꾼다. 필드도 다른 메시지처럼 camelCase 로 나가게 rename_all_fields 를 함께 둔다.
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum DemoTaskUpdate {
     Progress {
         task_id: TaskId,
@@ -80,5 +85,40 @@ rpc_method! {
         params: DemoTaskParams,
         stream: DemoTaskUpdate,
         tier: Read,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn demo_task_update_wire_format_is_camel_case() {
+        let progress = DemoTaskUpdate::Progress {
+            task_id: 7,
+            progress: TaskProgress {
+                done: 1,
+                total: Some(2),
+                message: None,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&progress).unwrap(),
+            json!({"kind": "progress", "taskId": 7, "progress": {"done": 1, "total": 2}})
+        );
+        let finished = DemoTaskUpdate::Finished {
+            task_id: 7,
+            status: TaskStatus::Failed {
+                error: "boom".into(),
+            },
+        };
+        let wire = json!({"kind": "finished", "taskId": 7, "status": "failed", "error": "boom"});
+        assert_eq!(serde_json::to_value(&finished).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<DemoTaskUpdate>(wire).unwrap(),
+            finished
+        );
     }
 }

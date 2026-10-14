@@ -1,4 +1,4 @@
-//! `Host` 추상: 한 머신에서 프로젝트를 다루는 헤드리스 서비스(`docs/design/03-architecture.md` §1).
+//! `Host` 추상: 한 머신에서 프로젝트를 다루는 헤드리스 서비스(`docs/design/03-architecture.md` 「전체 구조」 절).
 //!
 //! UI · MCP 는 Host 가 로컬인지 원격인지 모른다. 그래서 Host 와 주고받는 것은 **직렬화된 JSON-RPC 메시지뿐**이다 —
 //! [`Host::connect`] 가 연결 하나를 열고, 그 위로 메시지 한 건씩([`serde_json::Value`])을 보내고 받는다.
