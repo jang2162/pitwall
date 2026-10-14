@@ -5,39 +5,79 @@
 //   node scripts/licenses.mjs notices --check   커밋된 THIRD_PARTY_NOTICES.md 가 최신인지 검사(고치지 않는다)
 //
 // 허용 목록의 정본은 deny.toml 의 [licenses].allow 다. Rust 는 cargo-deny 가, npm 은 이 스크립트가 같은 목록으로 본다.
+// 크레이트 단위 예외([[licenses.exceptions]])는 Rust 에만 있고 npm 에는 적용하지 않는다.
 // license-checker 대신 pnpm licenses list 를 쓴다. license-checker 는 npm 의 중첩 node_modules 배치를 전제하고
 // 관리도 멈췄다. pnpm licenses 는 pnpm 내장이라 의존성을 더 들이지 않고 워크스페이스 전체를 본다.
 // ⚠ 지금 OS 에 설치된 패키지만 본다. 다른 OS 전용 바이너리 패키지(@esbuild/win32-x64 등)는 검사하지 않는다.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const noticesPath = join(root, "THIRD_PARTY_NOTICES.md");
+const vendoredPath = join(root, "licenses", "vendored.md");
 
-// 따옴표 친 문자열 배열 하나만 읽는 좁은 TOML 파서. deny.toml·about.toml 의 형식(한 줄에 항목 하나)에 기대고 있다.
-function readStringArray(file, section, key) {
+// deny.toml·about.toml 을 읽는 좁은 TOML 파서. 표 머리(`[a]`, `[[a]]`)와 `키 = 값` 만 알고, 값은 원문 그대로 둔다
+// (여러 줄 배열은 `]` 로 시작하는 줄까지 이어 붙인다). 문자열 안의 `#` 은 주석으로 잘못 읽는다 — 두 파일에 그런 값이 없다.
+function readToml(file) {
   const text = readFileSync(join(root, file), "utf8");
-  let current = null;
-  let inArray = false;
-  const values = [];
+  const tables = new Map([["", {}]]);
+  const arrays = new Map();
+  let table = tables.get("");
+  let pending = null;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/#.*$/, "").trim();
-    if (inArray) {
-      if (line.startsWith("]")) return values;
-      const m = line.match(/^"([^"]+)",?$/);
-      if (m) values.push(m[1]);
-      else if (line) throw new Error(`${file}: ${key} 배열의 줄을 읽지 못했다: ${raw}`);
+    if (pending) {
+      pending.value += ` ${line}`;
+      if (line.startsWith("]")) {
+        table[pending.key] = pending.value;
+        pending = null;
+      }
       continue;
     }
-    const header = line.match(/^\[([^\]]+)\]$/);
-    if (header) current = header[1];
-    else if (current === section && new RegExp(`^${key}\\s*=\\s*\\[$`).test(line)) inArray = true;
+    if (!line) continue;
+    let m;
+    if ((m = line.match(/^\[\[([^\]]+)\]\]$/))) {
+      table = {};
+      if (!arrays.has(m[1])) arrays.set(m[1], []);
+      arrays.get(m[1]).push(table);
+    } else if ((m = line.match(/^\[([^\]]+)\]$/))) {
+      table = {};
+      tables.set(m[1], table);
+    } else if ((m = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.*)$/))) {
+      if (m[2] === "[") pending = { key: m[1], value: m[2] };
+      else table[m[1]] = m[2];
+    } else throw new Error(`${file}: 읽지 못한 줄: ${raw}`);
   }
-  throw new Error(`${file}: ${section ?? "(최상위)"} 의 ${key} 배열을 찾지 못했다`);
+  if (pending) throw new Error(`${file}: ${pending.key} 배열이 닫히지 않았다`);
+  return { tables, arrays };
 }
+
+// 문자열 배열 값(원문)에서 항목을 꺼낸다. 값이 없으면 실패한다 — 키 이름이 틀려 빈 목록으로 통과하는 것을 막는다.
+function strings(value, where) {
+  if (value === undefined) throw new Error(`${where} 가 없다`);
+  return [...value.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+}
+
+// 「크레이트:라이선스」 문자열 목록. deny.toml 과 about.toml 의 크레이트 단위 예외를 같은 모양으로 비교한다.
+function denyExceptions(deny) {
+  return (deny.arrays.get("licenses.exceptions") ?? []).flatMap((e) => {
+    const [crate] = strings(e.crate, "deny.toml [[licenses.exceptions]] crate");
+    return strings(e.allow, `deny.toml ${crate} 예외의 allow`).map((l) => `${crate}:${l}`);
+  });
+}
+
+function aboutExceptions(about) {
+  return [...about.tables]
+    .filter(([name, t]) => name !== "" && t.accepted !== undefined)
+    .flatMap(([name, t]) =>
+      strings(t.accepted, `about.toml [${name}] accepted`).map((l) => `${name}:${l}`),
+    );
+}
+
+const sameSet = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
 
 function run(cmd, args) {
   // Windows 의 pnpm 은 pnpm.cmd 라 셸을 거쳐야 찾힌다.
@@ -52,9 +92,15 @@ function run(cmd, args) {
 
 function pnpmLicenses(prodOnly) {
   const out = run("pnpm", ["licenses", "list", "--json", ...(prodOnly ? ["--prod"] : [])]).trim();
-  // 패키지가 하나도 없으면 JSON 대신 "No licenses in packages found" 를 출력한다.
-  if (!out.startsWith("{")) return [];
-  return Object.values(JSON.parse(out)).flat();
+  // 패키지가 하나도 없으면 JSON 대신 이 문구를 출력한다. 빈 결과는 이 문구일 때만 인정한다 — 그 밖에 JSON 이 아닌
+  // 출력(경고 줄이 앞에 붙는 등)을 빈 결과로 보면 검사가 0개로 조용히 통과한다.
+  if (out === "No licenses in packages found") return [];
+  try {
+    return Object.values(JSON.parse(out)).flat();
+  } catch {
+    console.error(`pnpm licenses list 의 출력을 JSON 으로 읽지 못했다:\n${out.slice(0, 500)}`);
+    process.exit(1);
+  }
 }
 
 // SPDX 식 판정. OR 는 하나라도, AND 는 전부 허용돼야 한다. `X WITH Y` 는 그 문자열 그대로 목록에 있어야 한다.
@@ -98,13 +144,21 @@ function spdxAllowed(expr, allow) {
 }
 
 function check() {
-  const allowList = readStringArray("deny.toml", "licenses", "allow");
-  const accepted = readStringArray("about.toml", null, "accepted");
+  const deny = readToml("deny.toml");
+  const about = readToml("about.toml");
+  const allowList = strings(deny.tables.get("licenses")?.allow, "deny.toml [licenses] allow");
+  const accepted = strings(about.tables.get("").accepted, "about.toml accepted");
   let failed = false;
 
-  if (JSON.stringify([...allowList].sort()) !== JSON.stringify([...accepted].sort())) {
+  if (!sameSet(allowList, accepted)) {
     console.error(
       "about.toml 의 accepted 가 deny.toml 의 [licenses].allow 와 다르다. 두 목록을 같게 맞춘다.",
+    );
+    failed = true;
+  }
+  if (!sameSet(denyExceptions(deny), aboutExceptions(about))) {
+    console.error(
+      "about.toml 의 크레이트별 accepted 가 deny.toml 의 [[licenses.exceptions]] 와 다르다. 크레이트와 라이선스를 같게 맞춘다.",
     );
     failed = true;
   }
@@ -123,6 +177,13 @@ function check() {
       failed = true;
     }
   }
+  // dev 의존성(oxfmt·typescript 등)이 늘 있으므로 0개는 pnpm 출력을 못 읽었다는 뜻이다.
+  if (packages.length === 0) {
+    console.error(
+      "npm 패키지를 하나도 찾지 못했다. pnpm install 이 됐는지, pnpm licenses list 출력이 맞는지 본다.",
+    );
+    failed = true;
+  }
   if (failed) process.exit(1);
   console.log(`npm 라이선스 검사 통과: 패키지 ${packages.length}개`);
 }
@@ -134,8 +195,40 @@ function fenced(text) {
   return `${fence}text\n${text.replace(/\r\n/g, "\n").trimEnd()}\n${fence}`;
 }
 
+// cargo-about 의 stderr 에서 「그래프에 없는 크레이트의 설정」 경고만 한 줄로 줄인다. about.toml 의 크레이트별
+// 예외가 아직 없는 Tauri 트리를 위한 것이라 M0-04 전까지는 매번 나온다. 나머지 경고·오류는 그대로 보인다.
+function cargoAbout() {
+  const r = spawnSync("cargo", ["about", "generate", "--format", "json"], {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+    shell: process.platform === "win32",
+  });
+  if (r.error) throw r.error;
+  // cargo-about 의 로그 줄은 파이프로 받아도 ANSI 색 코드가 붙는다. 그것을 지우려면 ESC 를 직접 맞춰야 한다.
+  // eslint-disable-next-line no-control-regex
+  const blocks = r.stderr.replace(/\x1b\[[0-9;]*m/g, "").split(/\n\s*\n/);
+  const absent = blocks.filter((b) =>
+    b.startsWith("warning: config found for a crate not present in the graph"),
+  );
+  const rest = blocks
+    .filter((b) => !absent.includes(b))
+    .join("\n")
+    .trim();
+  if (rest) process.stderr.write(`${rest}\n`);
+  if (absent.length)
+    console.error(
+      `cargo-about: 의존성 그래프에 없는 크레이트 설정 ${absent.length}개(about.toml 의 크레이트별 예외)`,
+    );
+  if (r.status !== 0) {
+    console.error(`cargo about generate 실패(exit ${r.status})`);
+    process.exit(1);
+  }
+  return JSON.parse(r.stdout);
+}
+
 function rustSection() {
-  const about = JSON.parse(run("cargo", ["about", "generate", "--format", "json"]));
+  const about = cargoAbout();
   const lines = ["## Rust crates", ""];
   if (about.licenses.length === 0) return [...lines, "None.", ""];
   const licenses = [...about.licenses].sort(
@@ -193,9 +286,19 @@ function npmSection() {
   return lines;
 }
 
+// 의존성이 아니라 저장소에 복사해 넣은 코드·데이터(DBX 코드 차용, Linguist 데이터 등)의 고지는 손으로 쓴다.
+// 첫 `## ` 절부터를 그대로 싣는다. 그 위의 안내문은 이 파일을 고치는 사람을 위한 것이다.
+function vendoredSection() {
+  const text = readFileSync(vendoredPath, "utf8").replace(/\r\n/g, "\n");
+  const at = text.search(/^## /m);
+  if (at < 0) throw new Error("licenses/vendored.md 에 `## ` 절이 없다");
+  return [text.slice(at).trimEnd(), ""];
+}
+
 function renderNotices() {
   return [
-    "<!-- 생성물이다. 직접 고치지 말고 `mise run notices` 로 다시 만든다(생성기: scripts/licenses.mjs). -->",
+    "<!-- 생성물이다. 직접 고치지 말고 `mise run notices` 로 다시 만든다(생성기: scripts/licenses.mjs).",
+    "     손으로 쓰는 고지(복사해 넣은 코드)는 licenses/vendored.md 에 쓴다. -->",
     "",
     "# Third-party notices",
     "",
@@ -203,6 +306,7 @@ function renderNotices() {
     "",
     ...rustSection(),
     ...npmSection(),
+    ...vendoredSection(),
   ]
     .join("\n")
     .replace(/\n+$/, "\n");
