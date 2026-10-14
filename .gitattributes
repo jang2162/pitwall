@@ -1,0 +1,20 @@
+# 텍스트는 OS 와 무관하게 LF 로 체크아웃한다. Windows 의 git 은 기본 core.autocrlf=true 라 이게 없으면
+# CRLF 로 받아 oxfmt --check 가 전 파일을 「포맷 안 됨」 으로 판정한다(CI windows-latest 잡).
+* text=auto eol=lf
+
+# 바이너리는 줄바꿈 변환·diff 를 하지 않는다.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.wasm binary
