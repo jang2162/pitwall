@@ -44,7 +44,7 @@ body {
   flex: 1;
 }
 
-/* 임시 화면(src/host-demo.tsx). 그 파일과 함께 지운다. */
+/* 웰컴 창의 Host 연결 확인 패널(src/host-demo.tsx). 그 파일과 함께 지운다. */
 .host-demo {
   padding: 16px 24px;
 }

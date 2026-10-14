@@ -13,9 +13,11 @@
 //!
 //! 연결을 여는 사이(`rpc_connect` 의 `await`)에 웹뷰가 다시 로드되거나 닫히면 정리 훅은 이미 지나갔다. 그래서 웹뷰마다
 //! 페이지 세대를 두고, 연결을 열기 시작할 때의 세대가 등록할 때까지 그대로이고 웹뷰가 살아 있을 때만 등록한다.
-//! ⚠ 남는 틈: WKWebView 는 `PageLoadEvent::Started` 뒤 새 문서가 커밋되기 전까지 옛 페이지의 JS 를 계속 돌린다.
-//! 그 사이 옛 페이지가 **새로** 부른 `rpc_connect` 는 새 세대를 읽어 등록되고, 다음 리로드나 창 닫힘까지 유휴 연결로
-//! 남는다(작업은 돌지 않는다). invoke 가 어느 문서에서 왔는지 Tauri 가 알려 주지 않아 여기서는 가를 수 없다.
+//! ⚠ 이 세대 검사가 못 막는 것: WKWebView 는 `PageLoadEvent::Started` 뒤 새 문서가 커밋되기 전까지 옛 페이지의 JS 를
+//! 계속 돌린다. 그 사이 옛 페이지가 **새로** 부른 `rpc_connect` 는 새 세대를 읽어 등록된다. invoke 가 어느 문서에서
+//! 왔는지 Tauri 가 알려 주지 않아 여기서는 가를 수 없다. 그래서 프런트엔드 transport(`src/tauri-transport.ts`)가
+//! `beforeunload` 뒤로는 연결을 열지 않고, 그 사이 열린 연결은 스스로 닫는다. 그 transport 를 거치지 않고
+//! `rpc_connect` 를 부르는 코드를 만들지 않는다.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
