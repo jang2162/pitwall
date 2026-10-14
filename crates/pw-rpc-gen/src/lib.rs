@@ -189,7 +189,9 @@ fn jsdoc(doc: &str, indent: &str) -> String {
 /// JSON Schema 파일: 메서드마다 입력(`params`)과 출력(`result` · `item`)의 독립 스키마(draft 2020-12).
 ///
 /// 입력은 역직렬화, 출력은 직렬화 기준으로 만든다(serde 속성이 방향마다 다를 수 있다).
-/// 각 스키마는 자기 `$defs` 를 갖는다 — MCP 툴의 `inputSchema` 로 그대로 쓸 수 있게.
+/// 각 스키마는 자기 `$defs` 를 갖는다. struct 입력은 루트가 `"type": "object"` 라 MCP 툴의 `inputSchema` 로 그대로 쓴다.
+/// **그렇지 않은 입력이 있다** — `()` 는 `{"type": "null"}`, enum 은 루트가 `oneOf` 다. MCP 는 `inputSchema` 에
+/// object 를 요구하므로, 그 매핑(`()` → 빈 object)이나 거부는 MCP 툴 레지스트리(M0-17)가 정한다.
 pub fn json_schema(methods: &[&MethodInfo]) -> String {
     let mut out = Map::new();
     for info in methods {
