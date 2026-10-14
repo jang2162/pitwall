@@ -1,0 +1,12 @@
+# npm 패키지 단위 라이선스 예외. scripts/licenses.mjs check 가 읽는다.
+#
+# 전역 허용 목록(deny.toml 의 [licenses].allow)에 없는 라이선스를 패키지 하나에 한해 허용한다. cargo-deny 의
+# 크레이트 단위 예외([[licenses.exceptions]])와 같은 성격이지만 조건이 하나 더 있다 — 개발 의존성에만 유효하다.
+# 같은 패키지가 배포 의존성(pnpm licenses list --prod, THIRD_PARTY_NOTICES.md 의 npm 절)에 나타나면 검사가 실패한다.
+# 항목마다 package·allow·reason 을 모두 쓴다. 트리에서 빠져 쓰이지 않는 예외는 경고가 나오니 그때 걷는다.
+# 좁은 파서로 읽는다 — 표는 `[[exceptions]]` 머리로 쓰고, 값 안에 `#` 을 쓰지 않는다.
+
+[[exceptions]]
+package = "caniuse-lite"
+allow = ["CC-BY-4.0"]
+reason = "browserslist 의 브라우저 지원 데이터. @vitejs/plugin-react → @babel/core → browserslist 로 들어오는 빌드 도구 의존성이라 배포물에 들어가지 않는다"

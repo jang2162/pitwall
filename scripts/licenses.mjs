@@ -5,7 +5,8 @@
 //   node scripts/licenses.mjs notices --check   커밋된 THIRD_PARTY_NOTICES.md 가 최신인지 검사(고치지 않는다)
 //
 // 허용 목록의 정본은 deny.toml 의 [licenses].allow 다. Rust 는 cargo-deny 가, npm 은 이 스크립트가 같은 목록으로 본다.
-// 크레이트 단위 예외([[licenses.exceptions]])는 Rust 에만 있고 npm 에는 적용하지 않는다.
+// 크레이트 단위 예외([[licenses.exceptions]])는 Rust 에만 적용한다. npm 의 패키지 단위 예외는
+// licenses/npm-exceptions.toml 에 따로 두고, 개발 의존성에만 유효하다(배포 의존성에 나타나면 실패).
 // license-checker 대신 pnpm licenses list 를 쓴다. license-checker 는 npm 의 중첩 node_modules 배치를 전제하고
 // 관리도 멈췄다. pnpm licenses 는 pnpm 내장이라 의존성을 더 들이지 않고 워크스페이스 전체를 본다.
 // ⚠ 지금 OS 에 설치된 패키지만 본다. 다른 OS 전용 바이너리 패키지(@esbuild/win32-x64 등)는 검사하지 않는다.
@@ -18,6 +19,7 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const noticesPath = join(root, "THIRD_PARTY_NOTICES.md");
 const vendoredPath = join(root, "licenses", "vendored.md");
+const npmExceptionsPath = join("licenses", "npm-exceptions.toml");
 
 // deny.toml·about.toml 을 읽는 좁은 TOML 파서. 표 머리(`[a]`, `[[a]]`)와 `키 = 값` 만 알고, 값은 원문 그대로 둔다
 // (여러 줄 배열은 `]` 로 시작하는 줄까지 이어 붙인다). 문자열 안의 `#` 은 주석으로 잘못 읽는다 — 두 파일에 그런 값이 없다.
@@ -75,6 +77,22 @@ function aboutExceptions(about) {
     .flatMap(([name, t]) =>
       strings(t.accepted, `about.toml [${name}] accepted`).map((l) => `${name}:${l}`),
     );
+}
+
+// npm 패키지 단위 예외. 이유가 없는 예외는 받지 않는다 — 다음 사람이 걷어도 되는지 판정할 근거가 없어진다.
+function npmExceptions() {
+  const file = readToml(npmExceptionsPath);
+  return (file.arrays.get("exceptions") ?? []).map((e) => {
+    const [name] = strings(e.package, `${npmExceptionsPath} [[exceptions]] package`);
+    const allow = strings(e.allow, `${npmExceptionsPath} ${name} 예외의 allow`);
+    const [reason] = strings(e.reason, `${npmExceptionsPath} ${name} 예외의 reason`);
+    if (!name || allow.length === 0 || !reason?.trim()) {
+      throw new Error(
+        `${npmExceptionsPath}: ${name || "(이름 없음)"} 예외에 package·allow·reason 이 다 있어야 한다`,
+      );
+    }
+    return { name, allow, reason };
+  });
 }
 
 const sameSet = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
@@ -165,16 +183,39 @@ function check() {
 
   const allow = new Set(allowList);
   const packages = pnpmLicenses(false);
-  for (const p of packages) {
-    let ok;
-    try {
-      ok = spdxAllowed(p.license, allow);
-    } catch {
-      ok = false;
-    }
-    if (!ok) {
-      console.error(`허용되지 않은 라이선스: ${p.name}@${p.versions.join(",")} — ${p.license}`);
+  const prodNames = new Set(pnpmLicenses(true).map((p) => p.name));
+  const exceptions = npmExceptions();
+  const used = new Set();
+  for (const exception of exceptions) {
+    if (prodNames.has(exception.name)) {
+      console.error(
+        `${exception.name} 이 배포 의존성에 있다. ${npmExceptionsPath} 의 예외는 개발 의존성에만 유효하다 — 의존성을 바꾸거나 라이선스를 다시 판단한다.`,
+      );
       failed = true;
+    }
+  }
+  for (const p of packages) {
+    const exception = exceptions.find((e) => e.name === p.name);
+    const allowed = (list) => {
+      try {
+        return spdxAllowed(p.license, list);
+      } catch {
+        return false;
+      }
+    };
+    if (allowed(allow)) continue;
+    if (exception && allowed(new Set([...allow, ...exception.allow]))) {
+      used.add(exception.name);
+      continue;
+    }
+    console.error(`허용되지 않은 라이선스: ${p.name}@${p.versions.join(",")} — ${p.license}`);
+    failed = true;
+  }
+  for (const exception of exceptions) {
+    if (!used.has(exception.name)) {
+      console.warn(
+        `경고: 쓰이지 않는 예외 — ${exception.name}. 트리에서 빠졌으면 ${npmExceptionsPath} 에서 걷는다.`,
+      );
     }
   }
   // dev 의존성(oxfmt·typescript 등)이 늘 있으므로 0개는 pnpm 출력을 못 읽었다는 뜻이다.
