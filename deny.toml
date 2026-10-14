@@ -7,12 +7,18 @@ all-features = true
 
 [advisories]
 # 취약점·관리 중단 공지는 기본값(전부 실패)을 쓴다. 무시할 공지는 ID 와 이유를 함께 적는다.
-ignore = []
+ignore = [
+  # proc-macro-error 관리 중단. Linux 에서 tauri → wry → gtk-rs 0.18 이 끌어온다. 업스트림에 대체가 없다.
+  { id = "RUSTSEC-2024-0370", reason = "gtk-rs 0.18 via tauri/wry on Linux; no maintained replacement upstream" },
+]
+# 위 ignore 는 Tauri 트리(M0-04)를 위한 것이라 이 시점에는 걸리는 크레이트가 없다. M0-04 병합 뒤 "warn" 으로 되돌려
+# 낡은 ignore 를 드러나게 한다.
+unused-ignored-advisory = "allow"
 
 [licenses]
 # 허용 라이선스의 정본이다. MIT 프로젝트이므로 허용형만 둔다(docs/design/02-tech-stack.md 「라이선스 검사」 행).
 # scripts/licenses.mjs 가 이 목록을 읽어 npm 의존성도 검사하고, about.toml 의 accepted 와 같은지도 검사한다.
-# 형식을 바꾸면 그 스크립트의 파서가 못 읽는다 — 한 줄에 따옴표 친 SPDX ID 하나씩 둔다.
+# 그 스크립트는 좁은 TOML 파서로 읽는다 — 표는 `[[licenses.exceptions]]` 처럼 표 머리로 쓰고 인라인 표로 바꾸지 않는다.
 allow = [
   "MIT",
   "MIT-0",
@@ -31,7 +37,31 @@ allow = [
 confidence-threshold = 0.9
 # 목록은 npm 과 함께 쓰므로 Rust 쪽에서 안 쓰이는 항목이 있는 것이 정상이다.
 unused-allowed-license = "allow"
-exceptions = []
+# 아래 예외도 Tauri 트리(M0-04)를 위한 것이라 이 시점에는 쓰이지 않는다. M0-04 병합 뒤 "warn" 으로 되돌린다.
+unused-license-exception = "allow"
+
+# MPL-2.0 은 파일 단위 약한 copyleft 라 전역 allow 에 넣지 않는다. Tauri 의 전이 의존성에 한해, 수정 없이 쓰는
+# 조건으로 크레이트 단위로만 허용한다(docs/design/02-tech-stack.md 「라이선스 검사」 행).
+# about.toml 의 크레이트별 accepted 와 같아야 한다 — 다르면 `mise run licenses` 가 실패한다.
+[[licenses.exceptions]]
+crate = "cssparser"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "cssparser-macros"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "dtoa-short"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "option-ext"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "selectors"
+allow = ["MPL-2.0"]
 
 [licenses.private]
 # publish = false 인 우리 크레이트도 검사한다. 워크스페이스 라이선스(MIT)가 목록에서 빠지면 바로 실패한다.

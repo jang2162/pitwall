@@ -34,7 +34,7 @@
 | 비밀 | `keyring` (macOS Keychain / Windows Credential / Secret Service) | |
 | 원격 | **Pitwall Relay 데몬** + 연결 계층 `pw-link` (QUIC `quinn`, Noise `snow`, mDNS) | 직접 연결(LAN/Tailscale) → SSH(`russh`) 대체. 중계 서버 없음 (08 참고) |
 | 모바일 | (보류) React Native (Expo) 후보 | D13 — 로드맵 제외 |
-| 라이선스 검사 | `cargo-deny`, `pnpm licenses list`(npm, `scripts/licenses.mjs`) | MIT 프로젝트 — 허용형 라이선스만 |
+| 라이선스 검사 | `cargo-deny`, `pnpm licenses list`(npm, `scripts/licenses.mjs`) | MIT 프로젝트 — 허용형 라이선스만. MPL-2.0 은 Tauri 전이 의존성에 한해 크레이트 단위 예외(수정 없이 사용, `deny.toml` `[[licenses.exceptions]]`) |
 | 확장 런타임 | `wasmtime` (WASM Component Model, WIT) | 권한 기반 샌드박스 (07 참고) |
 | 테마 | 디자인 토큰 → CSS 변수, VS Code 테마 import | |
 | UI 언어(i18n) | **Fluent** (`fluent-rs` / `@fluent/bundle`) | 코어 · 데스크톱 공용 리소스 |
