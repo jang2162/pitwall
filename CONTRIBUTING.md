@@ -50,8 +50,8 @@ RPC 의 TS 타입·메서드 목록·JSON Schema 는 `rpc_method!` 선언과 그
 
 - **선언이나 그 타입을 바꾸면 `mise run gen` 을 돌려 생성물을 함께 커밋한다.** 생성물은 `packages/rpc-client/src/generated/`(`rpc.ts`·`schema.json`)와 `packages/rpc-client/test/fixtures/`(시험용 메서드의 `rpc.ts`, 실제 Rust 세션이 주고받은 `golden.json`)다. 손으로 고치지 않는다. 최신이 아니면 `mise run lint`·push 전 훅·CI 가 실패한다(`--check` 로 비교만 하고 쓰지 않는다).
 - 생성물은 oxfmt 가 포맷하지 않는다(`.oxfmtrc.json` 의 `ignorePatterns`). 포맷하면 생성기 출력과 커밋된 파일이 달라져 최신 검사가 바이트 비교를 할 수 없다. oxlint·tsc 는 생성물도 검사한다.
-- 입출력 타입은 `specta::Type` 과 `schemars::JsonSchema` 를 derive 한다. TS 로 내보낼 수 없는 필드는 생성이 실패하며 필드 이름을 알려 준다 — 64비트 정수는 `#[specta(type = pw_rpc::JsNumber)]`(값이 2^53 미만일 때만), `serde_json::Value` 는 `#[specta(type = pw_rpc::JsonValue)]`. `skip_serializing_if` 는 specta 가 타입을 직렬화·역직렬화용 둘로 가르므로 쓰지 않는다(`pw_rpc::RpcError` 의 직렬화 참고).
-- **메서드를 선언한 크레이트는 `crates/pw-rpc-gen` 의 `Cargo.toml` 의존성과 `src/main.rs` 의 `use <크레이트> as _;` 두 곳에 더한다.** 레지스트리(`pw_rpc::methods`)는 링크된 크레이트의 선언만 본다. `use` 를 빠뜨리면 링커가 그 크레이트를 버려 메서드가 오류 없이 생성물에서 빠지고 `--check` 도 통과한다.
+- 입출력 타입은 `specta::Type` 과 `schemars::JsonSchema` 를 derive 한다. TS 로 내보낼 수 없는 필드는 생성이 실패하며 필드 이름을 알려 준다 — 64비트 정수는 `#[specta(type = pw_rpc::JsNumber)]`(값이 2^53 미만일 때만), `serde_json::Value` 는 `#[specta(type = pw_rpc::JsonValue)]`. `skip_serializing_if` 는 specta 가 타입을 직렬화·역직렬화용 둘로 가르므로 쓰지 않는다(`pw_rpc::RpcError` 의 직렬화 참고). **enum 변형 안의 `#[serde(flatten)]` 은 specta 가 오류 없이 무시해** TS 타입이 와이어와 달라진다 — 변형 안에서는 펼치지 말고 필드로 중첩한다(`pw_core::methods::DemoTaskUpdate`).
+- **메서드를 선언한 크레이트는 `crates/pw-rpc-gen` 의 `Cargo.toml` 의존성과 `src/main.rs` 의 `use <크레이트> as _;` 두 곳에 더한다.** 레지스트리(`pw_rpc::methods`)는 링크된 크레이트의 선언만 본다. `use` 를 빠뜨리면 링커가 그 크레이트를 버려 메서드가 오류 없이 생성물에서 빠지고 `--check` 도 통과한다. 그 빠뜨림은 `apps/desktop/src-tauri` 의 `generated_rpc_covers_the_router` 테스트(생성물의 메서드 == 앱의 Host 가 등록한 메서드)가 잡는다. 앱에 Host 나 Router 를 더하면 그 테스트의 비교 대상에도 더한다.
 - `schema.json` 의 입력 스키마가 MCP `inputSchema`(object 필수)로 그대로 쓰이는 것은 struct 입력뿐이다. `()` 는 `{"type": "null"}`, enum 은 `oneOf` 루트다.
 
 ## 의존성과 라이선스
