@@ -2,15 +2,33 @@
 // Regenerate: mise run gen
 
 /** 선언된 unary 메서드: 이름 → 입력 · result 타입. */
-export type UnaryMethods = Record<never, never>;
+export type UnaryMethods = {
+	/**
+	 * Host 의 종류 · 버전 · OS.
+	 */
+	"host.info": { params: null; result: HostInfo };
+	/**
+	 * 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.
+	 */
+	"host.ping": { params: PingParams; result: Pong };
+};
 
 /** 선언된 stream 메서드: 이름 → 입력 · item 타입. */
-export type StreamMethods = Record<never, never>;
+export type StreamMethods = {
+	/**
+	 * 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.
+	 * Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.
+	 */
+	"host.demoTask": { params: DemoTaskParams; item: DemoTaskUpdate };
+};
 
 export type MethodName = keyof UnaryMethods | keyof StreamMethods;
 
 /** 메서드 메타데이터(권한 등급 · role · 문서). */
 export const METHODS: Record<MethodName, MethodMeta> = {
+	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n"},
+	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n"},
+	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n"},
 };
 
 /** 내장 프로토콜 메서드 이름. */
@@ -43,11 +61,28 @@ export type CancelRequestParams = {
 	id: Id,
 };
 
+export type DemoTaskParams = {
+	steps: number,
+	intervalMs: number,
+};
+
+/**  데모 작업 스트림의 청크. 진행 알림이 여러 번, 종료 알림이 마지막에 한 번 온다. */
+export type DemoTaskUpdate = { kind: "progress"; taskId: number; progress: TaskProgress } | { kind: "finished"; taskId: number; outcome: TaskStatus };
+
 export type EventMessage = {
 	subscriptionId: number,
 	projectId: string,
 	topic: string,
 	payload: JsonValue,
+};
+
+export type HostInfo = {
+	hostId: string,
+	/**  `local`(데스크톱 프로세스 안) 또는 `relay`(원격 데몬). */
+	kind: string,
+	version: string,
+	os: string,
+	arch: string,
 };
 
 /**
@@ -91,6 +126,16 @@ export type NotificationMessage = {
 	jsonrpc: JsonRpcVersion,
 	method: string,
 	params: JsonValue,
+};
+
+export type PingParams = {
+	/**  그대로 돌려받는 값. 클라이언트가 응답을 자기 요청과 맞춰 보는 데 쓴다. */
+	nonce?: string,
+};
+
+export type Pong = {
+	nonce: string,
+	hostId: string,
 };
 
 /**
@@ -172,6 +217,19 @@ export type SubscribeParams = {
 export type Subscribed = {
 	subscriptionId: number,
 };
+
+/**
+ *  진행 양은 2^53 안에 머문다고 보고 TS `number` 로 낸다(pw-rpc `JsNumber`).
+ *  없는 값은 키를 빼지 않고 `null` 로 보낸다 — specta 가 `skip_serializing_if` 를 TS 로 표현하지 못한다.
+ */
+export type TaskProgress = {
+	done: number,
+	/**  전체 양을 모르면 `None`(UI 는 불확정 진행 막대). */
+	total?: number | null,
+	message?: string | null,
+};
+
+export type TaskStatus = { status: "running" } | { status: "completed" } | { status: "failed"; error: string } | { status: "cancelled" };
 
 /**
  *  권한 등급. 값과 순서는 `docs/design/05-mcp.md` §3 「권한 모델」 표를 따른다.

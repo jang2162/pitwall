@@ -7,6 +7,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# 메서드를 선언한 크레이트. 여기 더하고 src/main.rs 에 `use <크레이트> as _;` 도 더한다.
+pw-core = { path = "../pw-core" }
 pw-rpc = { path = "../pw-rpc" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
