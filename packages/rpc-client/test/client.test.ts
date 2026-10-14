@@ -1,6 +1,6 @@
 // 클라이언트의 동작(credit 보충, 취소, 구독 해제, 닫기)을 in-memory transport 와 손으로 움직이는 서버로 본다.
 // 와이어 형식이 Rust 와 같은지는 golden.test.ts 가 본다.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createMemoryTransportPair, RpcCallError, RpcClient, type Transport } from "../src";
 import { ERROR_CODE } from "../src/generated/rpc";
@@ -28,6 +28,10 @@ class FakeServer {
 
   notify(method: string, params: unknown): void {
     this.transport.send(JSON.stringify({ jsonrpc: "2.0", method, params }));
+  }
+
+  transportSend(text: string): void {
+    this.transport.send(text);
   }
 
   /** 지금까지 받은 알림 중 `method` 의 params. */
@@ -172,5 +176,125 @@ describe("RpcClient", () => {
     );
     await settle();
     expect(server.received).toEqual([]);
+  });
+});
+
+/** `send` 가 처음 `failures` 번 던지는 transport. 받은 프레임은 없다. */
+function flakyTransport(failures: number): Transport & { sent: string[] } {
+  let left = failures;
+  const sent: string[] = [];
+  return {
+    sent,
+    send(text) {
+      if (left > 0) {
+        left--;
+        throw new Error("send failed");
+      }
+      sent.push(text);
+    },
+    onMessage: () => () => {},
+  };
+}
+
+// 대기 항목 표는 비공개다. 누수 여부만 보려고 들여다본다.
+const pendingCount = (client: object) =>
+  (client as unknown as { pending: Map<number, unknown> }).pending.size;
+
+describe("RpcClient transport failures", () => {
+  it("fails every pending call, stream and subscription when the transport closes", async () => {
+    const [clientSide, serverSide] = createMemoryTransportPair();
+    const client = new RpcClient<UnaryMethods, StreamMethods>(clientSide);
+    const server = new FakeServer(serverSide);
+    const call = client.call("fixture.wait");
+    const opened = client.stream("fixture.count", { n: 5 });
+    const unopened = client.stream("fixture.count", { n: 5 });
+    const subscribing = client.subscribe({ projectId: "p", topics: ["t"] }, () => {});
+    await settle();
+    server.reply(2, { streamId: 1 });
+    await settle();
+
+    clientSide.close();
+    await expect(call).rejects.toThrow("rpc transport closed");
+    await expect(opened[Symbol.asyncIterator]().next()).rejects.toThrow("rpc transport closed");
+    await expect(unopened[Symbol.asyncIterator]().next()).rejects.toThrow("rpc transport closed");
+    await expect(subscribing).rejects.toThrow("rpc transport closed");
+    await expect(client.call("fixture.fail")).rejects.toThrow("closed");
+    expect(pendingCount(client)).toBe(0);
+  });
+
+  it("rejects the call whose send throws and keeps no pending entry", async () => {
+    const transport = flakyTransport(3);
+    const client = new RpcClient<UnaryMethods, StreamMethods>(transport);
+
+    await expect(client.call("fixture.fail")).rejects.toThrow("send failed");
+    // stream() 은 동기로 던지지 않고 반복에서 그 오류를 낸다.
+    const stream = client.stream("fixture.count", { n: 1 });
+    await expect(stream[Symbol.asyncIterator]().next()).rejects.toThrow("send failed");
+    await expect(client.subscribe({ projectId: "p", topics: [] }, () => {})).rejects.toThrow(
+      "send failed",
+    );
+    expect(pendingCount(client)).toBe(0);
+
+    // transport 가 살아나면 다음 호출은 그대로 나간다.
+    void client.call("fixture.fail");
+    expect(transport.sent.map((t) => JSON.parse(t).id)).toEqual([4]);
+  });
+
+  it("ends the stream with the error when a credit cannot be sent", async () => {
+    const [clientSide, serverSide] = createMemoryTransportPair();
+    const client = new RpcClient<UnaryMethods, StreamMethods>(clientSide);
+    const server = new FakeServer(serverSide);
+    const stream = client.stream("fixture.count", { n: 5 });
+    const iterator = stream[Symbol.asyncIterator]();
+    await settle();
+    const realSend = clientSide.send;
+    clientSide.send = () => {
+      throw new Error("credit lost");
+    };
+    server.reply(1, { streamId: 4 });
+    await expect(iterator.next()).rejects.toThrow("credit lost");
+    clientSide.send = realSend;
+  });
+
+  it("ignores frames that are not JSON objects", async () => {
+    const { client, server } = setup();
+    const call = client.call("fixture.fail");
+    await settle();
+    for (const frame of ["null", "5", '"x"', "[1]"]) server.transportSend(frame);
+    server.reply(1, null);
+    await expect(call).resolves.toBeNull();
+  });
+});
+
+describe("RpcClient abort signals", () => {
+  it("ends an already-aborted stream without an error and sends nothing", async () => {
+    const { client, server } = setup();
+    const abort = new AbortController();
+    abort.abort();
+    const items: number[] = [];
+    for await (const item of client.stream("fixture.count", { n: 1 }, { signal: abort.signal }))
+      items.push(item);
+    await settle();
+    expect(items).toEqual([]);
+    expect(server.received).toEqual([]);
+  });
+
+  it("removes the abort listener once a call or stream settles", async () => {
+    const { client, server } = setup();
+    const abort = new AbortController();
+    const remove = vi.spyOn(abort.signal, "removeEventListener");
+
+    const call = client.call("fixture.fail", null, { signal: abort.signal });
+    await settle();
+    server.reply(1, null);
+    await call;
+    expect(remove).toHaveBeenCalledTimes(1);
+
+    const stream = client.stream("fixture.count", { n: 1 }, { signal: abort.signal });
+    await settle();
+    server.reply(2, { streamId: 1 });
+    server.notify("stream.end", { streamId: 1, status: "completed" });
+    for await (const _ of stream) void _;
+    expect(remove).toHaveBeenCalledTimes(2);
   });
 });

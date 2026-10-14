@@ -1,19 +1,23 @@
 import {
   ERROR_CODE,
   PROTOCOL,
+  type CancelRequestParams,
   type EventMessage,
   type JsonValue,
   type NotificationMessage,
   type RequestMessage,
   type ResponseMessage,
   type RpcError,
+  type StreamCancelParams,
   type StreamChunk,
+  type StreamCreditParams,
   type StreamEnd,
   type StreamMethods,
   type StreamOpened,
   type SubscribeParams,
   type Subscribed,
   type UnaryMethods,
+  type UnsubscribeParams,
 } from "./generated/rpc";
 import type { Transport } from "./transport";
 
@@ -33,9 +37,20 @@ export interface StreamOptions {
    * 다시 이만큼으로 채운다. 기본 32.
    */
   window?: number;
-  /** 중단하면 `stream.cancel` 을 보낸다. 반복은 오류 없이 끝난다. */
+  /** 중단하면 `stream.cancel` 을 보낸다. 반복은 오류 없이 끝난다. 이미 중단된 signal 이면 요청을 보내지 않는다. */
   signal?: AbortSignal;
 }
+
+// 클라이언트가 보내는 내장 프로토콜 알림의 params. 생성된 타입으로 묶어, Rust 쪽 와이어 이름이 바뀌면 tsc 가 잡는다.
+type ClientNotifications = {
+  [PROTOCOL.REQUEST_CANCEL]: CancelRequestParams;
+  [PROTOCOL.STREAM_CREDIT]: StreamCreditParams;
+  [PROTOCOL.STREAM_CANCEL]: StreamCancelParams;
+};
+type Notify = <M extends keyof ClientNotifications>(
+  method: M,
+  params: ClientNotifications[M],
+) => void;
 
 // 입력이 `null` 일 수 있는 메서드(Rust 의 `()` · `Option`)는 params 를 생략할 수 있다. 생략하면 `null` 을 보낸다.
 type Args<P, O> = null extends P ? [params?: P, options?: O] : [params: P, options?: O];
@@ -76,10 +91,13 @@ type Pending =
  *
  * 응답과 그 뒤에 바로 오는 알림(스트림 청크 · 이벤트)의 경합을 막으려고, 스트림 · 구독의 응답은 수신 처리 안에서
  * 동기적으로 등록한다 — Promise 가 풀리기를 기다리면 그 사이에 도착한 알림을 놓친다.
+ *
+ * transport 가 닫히면(`Transport.onClose`) `close()` 와 같이 정리한다. `send` 가 던지면 그 호출만 오류로 끝낸다.
  */
 export class RpcClient<U extends UnaryMap = UnaryMethods, S extends StreamMap = StreamMethods> {
   private readonly transport: Transport;
   private readonly detach: () => void;
+  private readonly detachClose: () => void;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private readonly streams = new Map<number, StreamState<unknown>>();
@@ -89,6 +107,8 @@ export class RpcClient<U extends UnaryMap = UnaryMethods, S extends StreamMap = 
   constructor(transport: Transport) {
     this.transport = transport;
     this.detach = transport.onMessage((text) => this.receive(text));
+    this.detachClose =
+      transport.onClose?.(() => this.teardown(new Error("rpc transport closed"))) ?? (() => {});
   }
 
   /** unary 메서드를 부른다. */
@@ -102,20 +122,29 @@ export class RpcClient<U extends UnaryMap = UnaryMethods, S extends StreamMap = 
         reject(cancelledError());
         return;
       }
+      const onAbort = () => {
+        if (!this.pending.delete(id)) return;
+        try {
+          this.notify(PROTOCOL.REQUEST_CANCEL, { id });
+        } catch {
+          // 보내지 못해도 호출자에게는 취소로 끝난다. 서버의 늦은 응답은 대기 항목이 없어 버려진다.
+        }
+        reject(cancelledError());
+      };
+      // 응답 뒤에도 리스너가 남으면, 오래 사는 signal 하나를 여러 호출에 쓸 때 클로저가 쌓인다.
+      const release = () => signal?.removeEventListener("abort", onAbort);
       const id = this.request(method, params, {
         kind: "unary",
-        resolve: (value) => resolve(value as U[K]["result"]),
-        reject,
-      });
-      signal?.addEventListener(
-        "abort",
-        () => {
-          if (!this.pending.delete(id)) return;
-          this.notify(PROTOCOL.REQUEST_CANCEL, { id });
-          reject(cancelledError());
+        resolve: (value) => {
+          release();
+          resolve(value as U[K]["result"]);
         },
-        { once: true },
-      );
+        reject: (error) => {
+          release();
+          reject(error);
+        },
+      });
+      if (this.pending.has(id)) signal?.addEventListener("abort", onAbort, { once: true });
     });
   }
 
@@ -130,11 +159,16 @@ export class RpcClient<U extends UnaryMap = UnaryMethods, S extends StreamMap = 
     );
     const signal = options?.signal;
     if (signal?.aborted) {
-      state.end({ status: "cancelled" });
+      // 시작 뒤 중단과 같게 오류 없이 끝난다. 요청은 보내지 않는다.
+      state.cancel();
       return new RpcStream(state);
     }
     this.request(method, params, { kind: "stream", stream: state as StreamState<unknown> });
-    signal?.addEventListener("abort", () => state.cancel(), { once: true });
+    if (signal && !state.stopped) {
+      const onAbort = () => state.cancel();
+      signal.addEventListener("abort", onAbort, { once: true });
+      state.onStop(() => signal.removeEventListener("abort", onAbort));
+    }
     return new RpcStream(state);
   }
 
@@ -155,34 +189,40 @@ export class RpcClient<U extends UnaryMap = UnaryMethods, S extends StreamMap = 
 
   /** 리스너를 떼고, 진행 중인 요청을 거부하고, 스트림을 끝낸다. 서버에는 아무것도 보내지 않는다. */
   close(): void {
+    this.teardown(new Error("rpc client closed"));
+  }
+
+  private teardown(error: Error): void {
     if (this.closed) return;
     this.closed = true;
     this.detach();
-    const error = new Error("rpc client closed");
-    for (const pending of this.pending.values()) {
-      if (pending.kind === "stream") pending.stream.fail(error);
-      else pending.reject(error);
-    }
-    for (const stream of this.streams.values()) stream.fail(error);
+    this.detachClose();
+    const pending = [...this.pending.values()];
+    const streams = [...this.streams.values()];
     this.pending.clear();
     this.streams.clear();
     this.subscriptions.clear();
+    for (const p of pending) settleWithError(p, error);
+    for (const stream of streams) stream.fail(error);
   }
 
-  private notify(method: string, params: JsonValue): void {
+  private readonly notify: Notify = (method, params) => {
     this.send({ jsonrpc: "2.0", method, params });
-  }
+  };
 
   private request(method: string, params: unknown, pending: Pending): number {
     const id = this.nextId++;
     if (this.closed) {
-      const error = new Error("rpc client closed");
-      if (pending.kind === "stream") pending.stream.fail(error);
-      else pending.reject(error);
+      settleWithError(pending, new Error("rpc client closed"));
       return id;
     }
     this.pending.set(id, pending);
-    this.send({ jsonrpc: "2.0", id, method, params: (params ?? null) as JsonValue });
+    try {
+      this.send({ jsonrpc: "2.0", id, method, params: (params ?? null) as JsonValue });
+    } catch (error) {
+      this.pending.delete(id);
+      settleWithError(pending, error);
+    }
     return id;
   }
 
@@ -197,6 +237,8 @@ export class RpcClient<U extends UnaryMap = UnaryMethods, S extends StreamMap = 
     } catch {
       return;
     }
+    // 객체가 아닌 프레임에 `in` 을 쓰면 TypeError 가 transport 리스너 밖으로 던져진다.
+    if (typeof message !== "object" || message === null || Array.isArray(message)) return;
     if ("method" in message) this.onNotification(message);
     else this.onResponse(message);
   }
@@ -218,6 +260,8 @@ export class RpcClient<U extends UnaryMap = UnaryMethods, S extends StreamMap = 
         else {
           const { streamId } = result as StreamOpened;
           this.streams.set(streamId, pending.stream);
+          // 서버의 stream.end 없이 끝나는 경우(credit · cancel 전송 실패)에도 표에서 걷는다.
+          pending.stream.onFinish(() => this.streams.delete(streamId));
           pending.stream.open(streamId);
         }
         return;
@@ -241,11 +285,11 @@ export class RpcClient<U extends UnaryMap = UnaryMethods, S extends StreamMap = 
 
   private unsubscribe(subscriptionId: number): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.request(
-        PROTOCOL.EVENTS_UNSUBSCRIBE,
-        { subscriptionId },
-        { kind: "unary", resolve: () => resolve(), reject },
-      );
+      this.request(PROTOCOL.EVENTS_UNSUBSCRIBE, { subscriptionId } satisfies UnsubscribeParams, {
+        kind: "unary",
+        resolve: () => resolve(),
+        reject,
+      });
     });
   }
 
@@ -271,11 +315,16 @@ export class RpcClient<U extends UnaryMap = UnaryMethods, S extends StreamMap = 
   }
 }
 
+function settleWithError(pending: Pending, error: unknown): void {
+  if (pending.kind === "stream") pending.stream.fail(error);
+  else pending.reject(error);
+}
+
 type Outcome = { done: true } | { error: unknown };
 
 /** 스트림 하나의 수신 상태. 청크는 `window` 만큼 credit 을 준 뒤에만 온다. */
 class StreamState<T> {
-  private readonly notify: (method: string, params: JsonValue) => void;
+  private readonly notify: Notify;
   private readonly window: number;
   private streamId: number | undefined;
   private granted = 0;
@@ -283,13 +332,32 @@ class StreamState<T> {
   private cancelRequested = false;
   private outcome: Outcome | undefined;
   private readonly buffer: T[] = [];
+  private readonly stopHooks: (() => void)[] = [];
+  private readonly finishHooks: (() => void)[] = [];
   private waiter:
     | { resolve: (r: IteratorResult<T>) => void; reject: (e: unknown) => void }
     | undefined;
 
-  constructor(notify: (method: string, params: JsonValue) => void, window: number) {
+  constructor(notify: Notify, window: number) {
     this.notify = notify;
     this.window = Math.max(1, Math.floor(window));
+  }
+
+  /** 끝났거나 소비자가 취소했다. */
+  get stopped(): boolean {
+    return this.outcome !== undefined || this.cancelRequested;
+  }
+
+  /** 끝나거나 취소될 때 한 번 부른다. */
+  onStop(hook: () => void): void {
+    if (this.stopped) hook();
+    else this.stopHooks.push(hook);
+  }
+
+  /** 끝날 때(서버의 stream.end, 오류, 닫힘) 한 번 부른다. */
+  onFinish(hook: () => void): void {
+    if (this.outcome) hook();
+    else this.finishHooks.push(hook);
   }
 
   open(streamId: number): void {
@@ -321,9 +389,9 @@ class StreamState<T> {
   }
 
   cancel(): void {
-    if (this.outcome || this.cancelRequested) return;
+    if (this.stopped) return;
     this.cancelRequested = true;
-    if (this.streamId !== undefined) this.sendCancel();
+    this.runStopHooks();
     // 취소 뒤 버퍼의 청크는 버리고 반복을 끝낸다. 서버의 stream.end(cancelled)는 상태 정리에만 쓰인다.
     this.buffer.length = 0;
     if (this.waiter) {
@@ -331,6 +399,7 @@ class StreamState<T> {
       this.waiter = undefined;
       resolve({ value: undefined, done: true });
     }
+    this.sendCancel();
   }
 
   next(): Promise<IteratorResult<T>> {
@@ -355,6 +424,8 @@ class StreamState<T> {
   private finish(outcome: Outcome): void {
     if (this.outcome) return;
     this.outcome = outcome;
+    this.runStopHooks();
+    for (const hook of this.finishHooks.splice(0)) hook();
     const waiter = this.waiter;
     if (!waiter) return;
     this.waiter = undefined;
@@ -362,15 +433,30 @@ class StreamState<T> {
     else waiter.resolve({ value: undefined, done: true });
   }
 
+  private runStopHooks(): void {
+    for (const hook of this.stopHooks.splice(0)) hook();
+  }
+
   private grant(credit: number): void {
     if (credit <= 0 || this.streamId === undefined) return;
+    try {
+      this.notify(PROTOCOL.STREAM_CREDIT, { streamId: this.streamId, credit });
+    } catch (error) {
+      // credit 이 안 가면 청크도 오지 않는다. 기다리게 두지 않고 그 오류로 끝낸다.
+      this.fail(error);
+      return;
+    }
     this.granted += credit;
-    this.notify(PROTOCOL.STREAM_CREDIT, { streamId: this.streamId, credit });
   }
 
   private sendCancel(): void {
     if (this.streamId === undefined) return;
-    this.notify(PROTOCOL.STREAM_CANCEL, { streamId: this.streamId });
+    try {
+      this.notify(PROTOCOL.STREAM_CANCEL, { streamId: this.streamId });
+    } catch {
+      // 반복은 이미 끝났다. 서버의 stream.end 가 오지 않을 것이므로 여기서 상태를 닫는다.
+      this.finish({ done: true });
+    }
   }
 }
 
