@@ -53,6 +53,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      # 데스크톱 크레이트(Tauri 2)를 clippy·nextest 가 컴파일하는 데 필요한 시스템 라이브러리.
+      # 목록은 Tauri 2 공식 문서 「Prerequisites → Linux(Debian/Ubuntu)」 그대로다. macOS 는 Xcode 명령행 도구,
+      # Windows 는 MSVC 빌드 도구와 WebView2 런타임이 GitHub 러너 이미지에 이미 들어 있어 단계가 없다.
+      - name: Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
       - run: pnpm install --frozen-lockfile
       - run: mise run lint
       - run: mise run test
