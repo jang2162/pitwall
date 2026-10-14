@@ -1,0 +1,17 @@
+[package]
+name = "pw-rpc-gen"
+description = "Generates TypeScript types and JSON Schema from pw-rpc method declarations"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pw-rpc = { path = "../pw-rpc" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+specta-serde = { workspace = true }
+specta-typescript = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }

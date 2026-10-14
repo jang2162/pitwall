@@ -34,7 +34,7 @@ run = [
 ]
 
 [tasks.lint]
-description = "fmt 검사 + clippy + oxlint + tsc"
+description = "fmt 검사 + clippy + oxlint + tsc + actionlint + 생성물 최신 여부"
 depends = ["install-deps"]
 run = [
   "cargo fmt --all --check",
@@ -43,6 +43,16 @@ run = [
   "pnpm exec oxlint --deny-warnings",
   "pnpm -r --if-present run typecheck",
   "actionlint",
+  # 생성물(packages/rpc-client)이 RPC 선언과 맞는지. 쓰지 않고 비교만 한다 — 고치려면 `mise run gen`.
+  "cargo run -q -p pw-rpc-gen --bin pw-rpc-gen -- --check",
+  "cargo run -q -p pw-rpc-gen --bin pw-rpc-gen-fixtures -- --check",
+]
+
+[tasks.gen]
+description = "RPC 선언에서 TS 타입 · JSON Schema · 클라이언트 테스트 고정 입력 생성(packages/rpc-client)"
+run = [
+  "cargo run -q -p pw-rpc-gen --bin pw-rpc-gen",
+  "cargo run -q -p pw-rpc-gen --bin pw-rpc-gen-fixtures",
 ]
 
 [tasks.fmt]

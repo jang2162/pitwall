@@ -15,6 +15,8 @@
     "/.codex/",
     "/.opencode/",
     "/.mcp.json",
-    "/opencode.json"
+    "/opencode.json",
+    "/packages/rpc-client/src/generated/",
+    "/packages/rpc-client/test/fixtures/"
   ]
 }

@@ -27,6 +27,9 @@ pre-push:
       run: "pnpm -r --if-present run typecheck"
     - name: actionlint
       run: "actionlint"
+    # RPC 선언을 바꾸고 `mise run gen` 을 잊으면 CI 의 lint 가 실패한다. 그 전에 여기서 잡는다.
+    - name: rpc-gen
+      run: "cargo run -q -p pw-rpc-gen --bin pw-rpc-gen -- --check && cargo run -q -p pw-rpc-gen --bin pw-rpc-gen-fixtures -- --check"
     # 의존성을 바꾸고 `mise run notices` 를 잊으면 CI 의 licenses 잡이 실패한다. 그 전에 여기서 잡는다.
     - name: notices
       run: "node scripts/licenses.mjs notices --check"
