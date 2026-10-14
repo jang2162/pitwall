@@ -14,8 +14,14 @@ path = "src/main.rs"
 tauri-build = { version = "2.7.2", features = [] }
 
 [dependencies]
+pw-core = { path = "../../../crates/pw-core" }
+pw-rpc = { path = "../../../crates/pw-rpc" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 tauri = { version = "2.12.3", features = [] }
 
 [dev-dependencies]
 # 창 열기 함수를 MockRuntime 위에서 시험한다(tauri::test::mock_app).
 tauri = { version = "2.12.3", features = ["test"] }
+# IPC 테스트에서 채널 메시지를 기다릴 시간 제한.
+tokio = { workspace = true, features = ["time"] }

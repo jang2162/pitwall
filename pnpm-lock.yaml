@@ -26,6 +26,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@tauri-apps/api':
+        specifier: ^2.12.3
+        version: 2.12.3
       react:
         specifier: ^19.3.0
         version: 19.3.0
@@ -732,6 +735,9 @@ packages:
     resolution: {integrity: sha512-9/c9PWdr5GCIHkkxiHM1HjNBQMVdftP4O8QTcoUAaRza2FSqJ4axbf8QAnBuE6BIGQDl71SaRPeDdDYid5ecTw==}
     cpu: [x64]
     os: [win32]
+
+  '@tauri-apps/api@2.12.3':
+    resolution: {integrity: sha512-9s0PKw0p4r3kFq92jhpivYSp+cSht15o0gXpZxuQd0+dV9KCexEVkNaLELVoLdJWyoH4KlfQo5h3W2LIM8siJg==}
 
   '@tauri-apps/cli-darwin-arm64@2.12.2':
     resolution: {integrity: sha512-Lk3zaBTfzNvA7670Al5PNgo2M/95uaDPe1yp+ILJeDOmol87XiYuK5E5+FUbK5e6U6OORx9qpZdOo2U+5tETtQ==}
@@ -1863,6 +1869,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.64.6':
     optional: true
+
+  '@tauri-apps/api@2.12.3': {}
 
   '@tauri-apps/cli-darwin-arm64@2.12.2':
     optional: true

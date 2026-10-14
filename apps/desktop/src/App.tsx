@@ -1,3 +1,4 @@
+import { HostDemo } from "./host-demo";
 import { WINDOW_TITLES, type WindowKind } from "./window-kind";
 
 export function App({ kind }: { kind: WindowKind }) {
@@ -7,7 +8,7 @@ export function App({ kind }: { kind: WindowKind }) {
       <header className="titlebar" data-tauri-drag-region>
         <span data-tauri-drag-region>{WINDOW_TITLES[kind]}</span>
       </header>
-      <main className="content" />
+      <main className="content">{kind === "welcome" && <HostDemo />}</main>
     </div>
   );
 }

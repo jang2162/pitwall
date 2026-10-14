@@ -43,3 +43,15 @@ body {
 .content {
   flex: 1;
 }
+
+/* 임시 화면(src/host-demo.tsx). 그 파일과 함께 지운다. */
+.host-demo {
+  padding: 16px 24px;
+}
+
+.host-demo .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
