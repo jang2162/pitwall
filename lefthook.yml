@@ -4,11 +4,11 @@ pre-commit:
   parallel: true
   jobs:
     - name: oxfmt
-      glob: "*.{js,ts,json,md,yml,yaml}"
+      glob: "*.{js,mjs,ts,json,md,yml,yaml}"
       run: "pnpm exec oxfmt --no-error-on-unmatched-pattern {staged_files}"
       stage_fixed: true
     - name: oxlint
-      glob: "*.{js,ts}"
+      glob: "*.{js,mjs,ts}"
       run: "pnpm exec oxlint --deny-warnings {staged_files}"
     - name: rustfmt
       glob: "*.rs"

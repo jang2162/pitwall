@@ -6,12 +6,15 @@ on:
   pull_request:
   push:
     branches: [main]
+  # 새 취약점 공지는 코드가 안 바뀌어도 올라온다. PR 이 없는 날에도 잡히게 매일 advisories 만 돌린다.
+  schedule:
+    - cron: "0 0 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -22,11 +25,14 @@ env:
 jobs:
   check:
     name: lint · test (${{ matrix.os }})
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # cargo-about 소스 빌드가 들어가는 첫 실행(캐시 없음)을 감안한 값이다.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -50,10 +56,15 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: mise run lint
       - run: mise run test
+      # npm 라이선스 검사는 그 OS 에 설치된 패키지만 본다. OS 전용 바이너리 패키지(esbuild·rollup·oxc 등)를
+      # 각 OS 에서 보도록 매트릭스마다 돌린다. 네트워크가 필요 없다.
+      - run: node scripts/licenses.mjs check
 
   licenses:
     name: licenses · notices
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -72,6 +83,28 @@ jobs:
           restore-keys: pnpm-store-${{ runner.os }}-
 
       - run: pnpm install --frozen-lockfile
-      # cargo-deny 는 advisories 검사에 RustSec 데이터베이스를 네트워크로 받는다.
-      # npm 라이선스 검사는 이 OS(Linux)에 설치된 패키지만 본다. macOS·Windows 전용 바이너리 패키지는 보지 않는다.
+      # cargo-deny licenses·bans·sources + npm 라이선스 + THIRD_PARTY_NOTICES.md 최신 여부. PR 을 막는다.
       - run: mise run licenses
+
+  advisories:
+    name: advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # PR 에서는 경고만 한다 — 새 공지는 그 PR 의 변경과 무관하게 올라와 모든 PR 을 깨뜨린다.
+    # main push 와 매일 schedule 에서는 실패시킨다.
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    env:
+      # mise run 은 기본으로 mise.toml 의 빠진 도구를 전부 설치한다. 아래 install_args 로 고른 것만 쓰게 끈다.
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          # cargo-deny 와 그것이 부르는 cargo 만 있으면 된다. 소스 빌드하는 cargo-about 등은 받지 않는다.
+          # node 는 mise 가 npm:pnpm 버전을 풀 때 npm 을 부르므로 함께 둔다(없으면 경고가 난다).
+          install_args: node rust aqua:EmbarkStudios/cargo-deny
+
+      # RustSec 데이터베이스를 네트워크로 받는다.
+      - run: mise run advisories
