@@ -10,6 +10,12 @@
 //! ([`pw_core::FrameSink`] 계약).
 //!
 //! 로컬 창은 데스크톱 사용자 본인이므로 호출자 role 은 owner 다.
+//!
+//! 연결을 여는 사이(`rpc_connect` 의 `await`)에 웹뷰가 다시 로드되거나 닫히면 정리 훅은 이미 지나갔다. 그래서 웹뷰마다
+//! 페이지 세대를 두고, 연결을 열기 시작할 때의 세대가 등록할 때까지 그대로이고 웹뷰가 살아 있을 때만 등록한다.
+//! ⚠ 남는 틈: WKWebView 는 `PageLoadEvent::Started` 뒤 새 문서가 커밋되기 전까지 옛 페이지의 JS 를 계속 돌린다.
+//! 그 사이 옛 페이지가 **새로** 부른 `rpc_connect` 는 새 세대를 읽어 등록되고, 다음 리로드나 창 닫힘까지 유휴 연결로
+//! 남는다(작업은 돌지 않는다). invoke 가 어느 문서에서 왔는지 Tauri 가 알려 주지 않아 여기서는 가를 수 없다.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,12 +31,19 @@ use tauri::{Builder, Manager, Runtime, State, Webview, Window, WindowEvent};
 
 pub type ConnId = u64;
 
-/// 웹뷰 label → 그 웹뷰가 연 연결들.
-type ConnTable = HashMap<String, HashMap<ConnId, Box<dyn FrameSink>>>;
+/// 웹뷰 label → 그 웹뷰의 현재 페이지와 그 페이지가 연 연결들.
+type ConnTable = HashMap<String, PageConns>;
+
+struct PageConns {
+    /// 페이지 세대. 다시 로드될 때마다 앱 전체에서 유일한 새 값을 받는다.
+    page: u64,
+    conns: HashMap<ConnId, Box<dyn FrameSink>>,
+}
 
 pub struct IpcState {
     router: Arc<HostRouter>,
     next_conn: AtomicU64,
+    next_page: AtomicU64,
     conns: Mutex<ConnTable>,
 }
 
@@ -39,6 +52,7 @@ impl IpcState {
         Self {
             router,
             next_conn: AtomicU64::new(1),
+            next_page: AtomicU64::new(1),
             conns: Mutex::default(),
         }
     }
@@ -47,16 +61,70 @@ impl IpcState {
         self.conns.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// 이 웹뷰의 연결을 모두 닫는다. 닫은 수를 돌려준다.
-    pub fn close_webview(&self, label: &str) -> usize {
+    fn new_page(&self) -> PageConns {
+        PageConns {
+            page: self.next_page.fetch_add(1, Ordering::Relaxed),
+            conns: HashMap::new(),
+        }
+    }
+
+    /// 이 웹뷰의 현재 페이지 세대. 처음 보는 웹뷰면 세대를 새로 매긴다.
+    fn current_page(&self, label: &str) -> u64 {
+        let mut table = self.conns();
+        table
+            .entry(label.to_owned())
+            .or_insert_with(|| self.new_page())
+            .page
+    }
+
+    /// 웹뷰에 새 페이지가 로드되기 시작했다. 옛 페이지의 연결을 모두 닫고 세대를 바꾼다. 닫은 수를 돌려준다.
+    pub fn page_reloaded(&self, label: &str) -> usize {
         // 잠금 밖에서 버린다. 연결을 버리면 Host 쪽 정리(세션 close)가 돈다.
+        let removed = {
+            let mut table = self.conns();
+            std::mem::replace(
+                table
+                    .entry(label.to_owned())
+                    .or_insert_with(|| self.new_page()),
+                self.new_page(),
+            )
+        };
+        removed.conns.len()
+    }
+
+    /// 웹뷰가 사라졌다. 연결을 모두 닫는다. 닫은 수를 돌려준다.
+    pub fn close_webview(&self, label: &str) -> usize {
         let removed = self.conns().remove(label);
-        removed.map_or(0, |conns| conns.len())
+        removed.map_or(0, |page| page.conns.len())
+    }
+
+    /// 연결을 등록한다. 연결을 여는 사이 페이지가 바뀌었거나(`page` 가 낡음) 웹뷰가 사라졌으면(`alive` 가 거짓)
+    /// 등록하지 않는다 — 그때 `sink` 는 버려져 연결이 닫힌다.
+    fn register(
+        &self,
+        label: &str,
+        page: u64,
+        alive: bool,
+        id: ConnId,
+        sink: Box<dyn FrameSink>,
+    ) -> bool {
+        let mut table = self.conns();
+        if !alive {
+            table.remove(label);
+            return false;
+        }
+        match table.get_mut(label) {
+            Some(current) if current.page == page => {
+                current.conns.insert(id, sink);
+                true
+            }
+            _ => false,
+        }
     }
 
     #[cfg(test)]
     pub fn connection_count(&self, label: &str) -> usize {
-        self.conns().get(label).map_or(0, HashMap::len)
+        self.conns().get(label).map_or(0, |page| page.conns.len())
     }
 }
 
@@ -67,6 +135,8 @@ pub enum IpcError {
     Host { error: HostError },
     /// 이 웹뷰가 연 연결이 아니거나 이미 닫혔다.
     UnknownConnection { conn: ConnId },
+    /// 연결을 여는 사이 웹뷰가 다시 로드되거나 닫혔다. 연결은 닫았다.
+    PageGone,
 }
 
 /// transport 를 앱에 붙인다: 상태, command, 웹뷰가 닫히거나 다시 로드될 때의 정리.
@@ -79,12 +149,14 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             rpc_disconnect
         ])
         .on_window_event(on_window_event)
-        .on_page_load(|webview, payload| {
-            // 새로고침하면 프론트엔드는 연결 id 와 채널을 잃는다. 남은 연결은 아무도 닫지 못하므로 여기서 닫는다.
-            if payload.event() == PageLoadEvent::Started {
-                webview.state::<IpcState>().close_webview(webview.label());
-            }
-        })
+        .on_page_load(|webview, payload| on_page_load(webview, payload.event()))
+}
+
+/// 새로고침하면 프론트엔드는 연결 id 와 채널을 잃는다. 남은 연결은 아무도 닫지 못하므로 새 페이지가 시작될 때 닫는다.
+pub fn on_page_load<R: Runtime>(webview: &Webview<R>, event: PageLoadEvent) {
+    if event == PageLoadEvent::Started {
+        webview.state::<IpcState>().page_reloaded(webview.label());
+    }
 }
 
 /// 창이 사라지면 그 창의 연결을 닫는다. 창마다 웹뷰가 하나라 창 label 이 곧 웹뷰 label 이다.
@@ -103,21 +175,19 @@ async fn rpc_connect<R: Runtime>(
     target: Target,
     channel: Channel<Value>,
 ) -> Result<ConnId, IpcError> {
+    let label = webview.label().to_owned();
+    let page = state.current_page(&label);
     let conn = state
         .router
         .connect(&target, Caller::new(Role::Owner))
         .await
         .map_err(|error| IpcError::Host { error })?;
     let id = state.next_conn.fetch_add(1, Ordering::Relaxed);
-    let label = webview.label().to_owned();
-    state
-        .conns()
-        .entry(label.clone())
-        .or_default()
-        .insert(id, conn.sink);
-    // 연결을 기다리는 사이에 웹뷰가 닫혔으면 정리 훅은 이미 지나갔다. 여기서 직접 닫는다.
-    if webview.app_handle().get_webview_window(&label).is_none() {
-        state.close_webview(&label);
+    // Tauri 는 Destroyed 를 창별 훅에 넘기기 전에 매니저에서 창을 지운다. 그래서 이 확인과 훅 중 어느 쪽이 먼저든
+    // 닫힌 창의 연결은 남지 않는다.
+    let alive = webview.app_handle().get_webview_window(&label).is_some();
+    if !state.register(&label, page, alive, id, conn.sink) {
+        return Err(IpcError::PageGone);
     }
     let mut source = conn.source;
     tauri::async_runtime::spawn(async move {
@@ -141,7 +211,7 @@ async fn rpc_send<R: Runtime>(
     let conns = state.conns();
     let sink = conns
         .get(webview.label())
-        .and_then(|c| c.get(&conn))
+        .and_then(|page| page.conns.get(&conn))
         .ok_or(IpcError::UnknownConnection { conn })?;
     sink.send(frame);
     Ok(())
@@ -156,7 +226,7 @@ async fn rpc_disconnect<R: Runtime>(
     let removed = state
         .conns()
         .get_mut(webview.label())
-        .and_then(|c| c.remove(&conn));
+        .and_then(|page| page.conns.remove(&conn));
     match removed {
         Some(_) => Ok(()),
         None => Err(IpcError::UnknownConnection { conn }),
@@ -413,5 +483,77 @@ mod tests {
         };
         assert_eq!(end["params"]["streamId"], stream_id);
         assert_eq!(end["params"]["status"], "cancelled");
+    }
+
+    #[test]
+    fn page_reload_closes_the_pages_connections_and_cancels_their_work() {
+        let f = fixture();
+        let w = window(&f.app, "welcome");
+        let conn = connect(&w, 4, json!({"hostId": "local"}));
+        let mut finished = finished_events(&f.host);
+        start_demo(&f, &w, conn, 4);
+
+        // 로드가 끝난 것(Finished)으로는 닫지 않는다.
+        on_page_load(w.as_ref(), PageLoadEvent::Finished);
+        assert_eq!(f.app.state::<IpcState>().connection_count("welcome"), 1);
+
+        // mock 런타임은 페이지 로드 이벤트를 내지 않는다. 앱에 건 것과 같은 훅을 직접 부른다.
+        on_page_load(w.as_ref(), PageLoadEvent::Started);
+        assert_eq!(f.app.state::<IpcState>().connection_count("welcome"), 0);
+        assert_eq!(wait_finished(&mut finished), TaskStatus::Cancelled);
+        // 새 페이지는 다시 연결할 수 있다.
+        connect(&w, 5, json!({"hostId": "local"}));
+        assert_eq!(f.app.state::<IpcState>().connection_count("welcome"), 1);
+    }
+
+    /// 버려지면 표시하는 sink. 등록되지 않은 연결이 실제로 닫히는지(버려지는지) 본다.
+    struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+
+    impl FrameSink for DropFlag {
+        fn send(&self, _frame: Value) {}
+    }
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn flag() -> (Arc<std::sync::atomic::AtomicBool>, Box<dyn FrameSink>) {
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (dropped.clone(), Box::new(DropFlag(dropped)))
+    }
+
+    #[test]
+    fn a_connect_that_races_a_reload_is_closed_not_registered() {
+        let f = fixture();
+        let w = window(&f.app, "welcome");
+        let state = f.app.state::<IpcState>();
+        // rpc_connect 가 연결을 여는 동안(await) 페이지가 다시 로드된 경우.
+        let page = state.current_page("welcome");
+        on_page_load(w.as_ref(), PageLoadEvent::Started);
+        let (dropped, sink) = flag();
+        assert!(!state.register("welcome", page, true, 100, sink));
+        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(state.connection_count("welcome"), 0);
+
+        // 세대가 그대로면 등록된다.
+        let page = state.current_page("welcome");
+        let (dropped, sink) = flag();
+        assert!(state.register("welcome", page, true, 101, sink));
+        assert!(!dropped.load(Ordering::SeqCst));
+        assert_eq!(state.connection_count("welcome"), 1);
+    }
+
+    #[test]
+    fn a_connect_that_races_a_window_close_is_closed_not_registered() {
+        let f = fixture();
+        let state = f.app.state::<IpcState>();
+        let page = state.current_page("gone");
+        let (dropped, sink) = flag();
+        assert!(!state.register("gone", page, false, 1, sink));
+        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(state.connection_count("gone"), 0);
+        assert!(state.conns().get("gone").is_none());
     }
 }
