@@ -1,0 +1,82 @@
+// 디자인 토큰(docs/design/07-extensibility.md §3 「테마」)과 그 값을 CSS 변수로 주입하는 규칙.
+//
+// 토큰 이름(`ui.background`)은 테마 파일의 키이고, 화면은 CSS 변수(`--pw-ui-background`)로만 읽는다. 기본 테마의 값은
+// 데이터 파일(default-theme.json)이다 — 내장 확장(M0-15)이 들어오면 그 파일이 확장의 `themes/*.json` 으로 옮겨 간다.
+
+/** 화면이 읽는 토큰. 테마 파일의 변형(light·dark)은 이것을 전부 정의해야 한다. */
+export const TOKENS = [
+  "ui.background",
+  "ui.foreground",
+  "ui.mutedForeground",
+  "ui.border",
+  "ui.panelBackground",
+  "ui.toolbarBackground",
+  "ui.statusBarBackground",
+  "ui.statusBarForeground",
+  "ui.hoverBackground",
+  "ui.activeBackground",
+  "ui.accent",
+  "ui.accentForeground",
+  "tab.activeBackground",
+  "tab.activeForeground",
+  "tab.inactiveBackground",
+  "tab.inactiveForeground",
+  "editor.background",
+  "editor.foreground",
+] as const;
+
+export type TokenName = (typeof TOKENS)[number];
+export type Appearance = "light" | "dark";
+export type TokenValues = Record<TokenName, string>;
+
+export interface Theme {
+  id: string;
+  label: string;
+  variants: Record<Appearance, TokenValues>;
+}
+
+// 마디는 영숫자만 받는다. `-` 를 허용하면 `a.b-c` 와 `a.b.c` 가 같은 변수(`--pw-a-b-c`)가 된다.
+// 대소문자는 그대로 둔다 — CSS 사용자 정의 속성은 대소문자를 가리므로 `ui.fooBar` 와 `ui.foo.bar` 가 갈린다.
+const TOKEN_NAME = /^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)+$/;
+
+/** 토큰 이름 → CSS 변수 이름. `ui.mutedForeground` → `--pw-ui-mutedForeground`. */
+export function tokenCssVar(name: string): string {
+  if (!TOKEN_NAME.test(name)) throw new Error(`토큰 이름이 아니다: ${name}`);
+  return `--pw-${name.replaceAll(".", "-")}`;
+}
+
+/**
+ * 테마 파일(JSON)을 검사해 읽는다. 변형마다 TOKENS 를 전부 문자열로 정의해야 한다. 모르는 토큰은 버린다 — 더 새 앱을
+ * 위해 만든 테마가 이 앱에서도 열려야 하고, 주입되는 변수 집합이 테마마다 달라지면 앞 테마의 값이 남는다.
+ */
+export function parseTheme(input: unknown): Theme {
+  if (!isObject(input)) throw new Error("테마 파일이 객체가 아니다");
+  const { id, label, variants } = input;
+  if (typeof id !== "string" || id === "") throw new Error("테마 id 가 없다");
+  if (typeof label !== "string") throw new Error(`테마 ${id}: label 이 문자열이 아니다`);
+  if (!isObject(variants)) throw new Error(`테마 ${id}: variants 가 객체가 아니다`);
+  const parsed = {} as Record<Appearance, TokenValues>;
+  for (const appearance of ["light", "dark"] as const) {
+    const values = variants[appearance];
+    if (!isObject(values)) throw new Error(`테마 ${id}: ${appearance} 변형이 없다`);
+    const tokens = {} as TokenValues;
+    for (const token of TOKENS) {
+      const value = values[token];
+      if (typeof value !== "string" || value.trim() === "") {
+        throw new Error(`테마 ${id}: ${appearance}.${token} 이 없다`);
+      }
+      tokens[token] = value;
+    }
+    parsed[appearance] = tokens;
+  }
+  return { id, label, variants: parsed };
+}
+
+/** `style` 은 보통 `document.documentElement.style` 이다. */
+export function applyTokens(style: Pick<CSSStyleDeclaration, "setProperty">, values: TokenValues) {
+  for (const token of TOKENS) style.setProperty(tokenCssVar(token), values[token]);
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

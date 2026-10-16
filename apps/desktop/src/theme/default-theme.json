@@ -1,0 +1,46 @@
+{
+  "id": "pitwall-default",
+  "label": "Pitwall",
+  "variants": {
+    "light": {
+      "ui.background": "#f7f8fa",
+      "ui.foreground": "#1e1f22",
+      "ui.mutedForeground": "#6c707e",
+      "ui.border": "#dfe1e5",
+      "ui.panelBackground": "#f7f8fa",
+      "ui.toolbarBackground": "#f2f3f5",
+      "ui.statusBarBackground": "#f2f3f5",
+      "ui.statusBarForeground": "#494b57",
+      "ui.hoverBackground": "#dfe1e5",
+      "ui.activeBackground": "#d5e1fb",
+      "ui.accent": "#3574f0",
+      "ui.accentForeground": "#ffffff",
+      "tab.activeBackground": "#ffffff",
+      "tab.activeForeground": "#1e1f22",
+      "tab.inactiveBackground": "#f2f3f5",
+      "tab.inactiveForeground": "#6c707e",
+      "editor.background": "#ffffff",
+      "editor.foreground": "#080808"
+    },
+    "dark": {
+      "ui.background": "#1e1f22",
+      "ui.foreground": "#dfe1e5",
+      "ui.mutedForeground": "#868a91",
+      "ui.border": "#393b40",
+      "ui.panelBackground": "#2b2d30",
+      "ui.toolbarBackground": "#2b2d30",
+      "ui.statusBarBackground": "#2b2d30",
+      "ui.statusBarForeground": "#b4b8bf",
+      "ui.hoverBackground": "#393b40",
+      "ui.activeBackground": "#2e436e",
+      "ui.accent": "#3574f0",
+      "ui.accentForeground": "#ffffff",
+      "tab.activeBackground": "#1e1f22",
+      "tab.activeForeground": "#dfe1e5",
+      "tab.inactiveBackground": "#2b2d30",
+      "tab.inactiveForeground": "#868a91",
+      "editor.background": "#1e1f22",
+      "editor.foreground": "#bcbec4"
+    }
+  }
+}

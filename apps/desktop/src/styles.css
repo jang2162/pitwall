@@ -1,25 +1,47 @@
-/* 디자인 토큰·테마는 M0-11 에서 들어온다. 여기는 창 틀만 잡는다. */
+@import "tailwindcss";
+
+/* 색은 디자인 토큰(src/theme/tokens.ts)에서만 온다. Tailwind 의 기본 팔레트를 비워 토큰이 아닌 색(`bg-blue-500` 등)을
+   쓰면 클래스가 아무것도 만들지 않게 한다. 토큰의 CSS 변수는 런타임에 문서 루트에 주입된다. */
+@theme {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@theme inline {
+  --color-ui-background: var(--pw-ui-background);
+  --color-ui-foreground: var(--pw-ui-foreground);
+  --color-ui-muted-foreground: var(--pw-ui-mutedForeground);
+  --color-ui-border: var(--pw-ui-border);
+  --color-ui-panel: var(--pw-ui-panelBackground);
+  --color-ui-toolbar: var(--pw-ui-toolbarBackground);
+  --color-ui-statusbar: var(--pw-ui-statusBarBackground);
+  --color-ui-statusbar-foreground: var(--pw-ui-statusBarForeground);
+  --color-ui-hover: var(--pw-ui-hoverBackground);
+  --color-ui-active: var(--pw-ui-activeBackground);
+  --color-ui-accent: var(--pw-ui-accent);
+  --color-ui-accent-foreground: var(--pw-ui-accentForeground);
+  --color-editor-background: var(--pw-editor-background);
+  --color-editor-foreground: var(--pw-editor-foreground);
+}
+
 html,
 body,
 #root {
   height: 100%;
-  margin: 0;
 }
 
 /* UI 크롬의 텍스트 드래그 선택을 막는다(10-ui §3 성능 규칙). WebKit 에서는 하위 contenteditable(CodeMirror 등)의
-   선택·편집까지 막을 수 있으므로, 편집 영역이 들어오면(M0-11) 그 요소에 user-select: text 를 준다. */
+   선택·편집까지 막을 수 있으므로, 편집 영역이 들어오면 그 요소에 user-select: text 를 준다. */
 body {
-  font-family: system-ui, sans-serif;
+  font-family: var(--font-sans);
   font-size: 13px;
+  background: var(--pw-ui-background);
+  color: var(--pw-ui-foreground);
   -webkit-user-select: none;
   user-select: none;
   cursor: default;
-}
-
-.window {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
 }
 
 /* 다른 OS 는 기본 장식(네이티브 타이틀바)을 쓰므로 웹뷰 안에 타이틀바를 그리지 않는다. */
@@ -40,18 +62,26 @@ body {
   font-weight: 600;
 }
 
-.content {
-  flex: 1;
-}
-
-/* 웰컴 창의 Host 연결 확인 패널(src/host-demo.tsx). 그 파일과 함께 지운다. */
-.host-demo {
-  padding: 16px 24px;
-}
-
-.host-demo .row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0;
+/* dockview 의 색을 토큰으로 바꾼다. 구조 변수(크기 · 간격)는 dockview 의 라이트 테마(`themeLight`)가 준 것을 쓰고 색만
+   덮는다. `:root` 를 붙여 dockview.css 의 `.dockview-theme-light` 보다 우선한다 — 두 파일의 불러오는 순서와 무관하게. */
+:root .dockview-theme-light {
+  color-scheme: inherit;
+  --dv-group-view-background-color: var(--pw-ui-panelBackground);
+  --dv-tabs-and-actions-container-background-color: var(--pw-tab-inactiveBackground);
+  --dv-tabs-and-actions-container-font-size: 12px;
+  --dv-tabs-and-actions-container-height: 28px;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--pw-tab-activeBackground);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--pw-tab-inactiveBackground);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--pw-tab-activeBackground);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--pw-tab-inactiveBackground);
+  --dv-tab-divider-color: var(--pw-ui-border);
+  --dv-activegroup-visiblepanel-tab-color: var(--pw-tab-activeForeground);
+  --dv-activegroup-hiddenpanel-tab-color: var(--pw-tab-inactiveForeground);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--pw-tab-inactiveForeground);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--pw-tab-inactiveForeground);
+  --dv-separator-border: var(--pw-ui-border);
+  --dv-paneview-header-border-color: var(--pw-ui-border);
+  --dv-icon-hover-background-color: var(--pw-ui-hoverBackground);
+  --dv-paneview-active-outline-color: var(--pw-ui-accent);
+  --dv-active-sash-color: var(--pw-ui-accent);
 }

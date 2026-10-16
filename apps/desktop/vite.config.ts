@@ -1,3 +1,4 @@
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
@@ -11,7 +12,7 @@ export default defineConfig(({ command, mode }) => {
     throw new Error("PITWALL_DEV_PORT 가 없다. 개발 서버는 `mise run dev` 로 띄운다.");
   }
   return {
-    plugins: [react()],
+    plugins: [react(), tailwindcss()],
     clearScreen: false,
     server: {
       host: "127.0.0.1",
