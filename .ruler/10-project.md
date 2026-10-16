@@ -38,6 +38,7 @@
   - 바이너리를 상대 경로로 띄웠으면 명령줄에 워크트리 경로가 없어 위 패턴이 못 잡는다 — `pgrep -f target/debug/pitwall` 로 후보를 찾고 `lsof -a -p <pid> -d cwd` 로 그 워크트리인지 본다.
   - `orca computer` 는 뒤에 있는 창을 `--window-id` 로 골라도 앞 창의 트리를 줄 수 있다. 창을 바꿀 때는 먼저 System Events 로 그 창에 `AXRaise` 를 보낸다.
   - CGEvent 처럼 화면 좌표를 받는 도구에 창 기준 좌표(`orca computer` 의 스크린샷 · 트리 기준)를 넘기지 않는다. 창 위치(`orca computer list-windows` 의 x · y)를 더해 넘긴다 — 틀리면 오류 없이 빈자리를 누른다.
+  - 창을 읽거나 누르기 전에 화면 잠금을 본다(`ioreg -n Root -d1 -a | grep -A1 CGSSessionScreenIsLocked` 가 `<true/>` 면 잠김). **화면이 잠긴 동안 키 입력(System Events `keystroke`, CGEvent)을 보내지 않는다 — 잠금 화면의 암호 칸으로 들어간다.** 잠금 중의 증상과 그동안 할 수 있는 것(메뉴 accelerator 읽기, 메뉴 Quit)은 `CONTRIBUTING.md` 「명령」 절.
   - 끝나면 그 pid 가 없고 개발 서버 포트에 LISTEN 이 없는지(`lsof -nP -iTCP:<포트> -sTCP:LISTEN`) 본다.
 
 ## 커밋과 PR
