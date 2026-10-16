@@ -111,7 +111,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: ^3.2.4
-        version: 3.2.7(@types/node@24.19.2)
+        version: 3.2.7(@types/node@24.19.2)(happy-dom@21.0.3)(jiti@2.7.0)(lightningcss@1.32.0)
 
   packages/rpc-client:
     devDependencies:
