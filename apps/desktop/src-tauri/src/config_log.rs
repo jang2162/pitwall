@@ -46,10 +46,17 @@ pub fn log_event(event: &Event) {
 
 /// 읽기 실패. 앱은 이전 설정(처음이면 내장 기본값)으로 계속 돈다.
 pub fn log_fault(scope: &Scope, fault: &ConfigFault) {
+    // 메시지는 `ConfigError` 의 Display(`{경로}: {내용}`)라 경로를 앞에 단다. 경로는 `path` 필드가 따로 싣는다.
+    let message = fault
+        .path
+        .as_deref()
+        .and_then(|path| fault.message.strip_prefix(path))
+        .and_then(|rest| rest.strip_prefix(": "))
+        .unwrap_or(&fault.message);
     tracing::warn!(
         scope = scope_name(scope),
         path = fault.path.as_deref().unwrap_or("-"),
-        error = %summarize(&fault.message),
+        error = %summarize(message),
         "config could not be read; keeping the previous values"
     );
 }
@@ -181,7 +188,7 @@ mod tests {
         let logs = tmp.path().join("logs");
         let fault = ConfigFault {
             message:
-                "TOML parse error at line 1, column 1\n  |\n1 | x = = 1\n  | ^\nexpected value"
+                "/cfg/settings.toml: TOML parse error at line 1, column 1\n  |\n1 | x = = 1\n  | ^\nexpected value"
                     .into(),
             path: Some("/cfg/settings.toml".into()),
         };
@@ -193,6 +200,15 @@ mod tests {
         );
         let core = core_log(&logs);
         assert!(core.contains("scope=\"project:p1\""), "{core}");
+        assert_eq!(
+            core.matches("/cfg/settings.toml").count(),
+            1,
+            "경로는 path 필드에 한 번만: {core}"
+        );
+        assert!(
+            core.contains("error=TOML parse error at line 1, column 1; expected value"),
+            "{core}"
+        );
         assert!(core.contains("expected value"), "{core}");
         assert!(!core.contains("x = = 1"), "{core}");
     }
