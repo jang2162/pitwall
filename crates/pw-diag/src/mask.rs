@@ -107,7 +107,11 @@ pub fn mask(text: &str, home: Option<&Path>) -> String {
     out = VITE_FS
         .replace_all(&out, format!("/@fs/{PATH}"))
         .into_owned();
-    if let Some(home) = home.and_then(Path::to_str) {
+    let home = home.and_then(Path::to_str);
+    let user = home
+        .and_then(|h| h.rsplit(['/', '\\']).find(|p| !p.is_empty()))
+        .filter(|u| u.len() >= 2);
+    if let Some(home) = home {
         let parts: Vec<&str> = home.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
         if !parts.is_empty() {
             // 홈과 그 아래 경로를 한 덩어리로 가린다. 홈만 바꾸고 나머지를 경로 규칙에 맡기면, 경로 규칙이 모르는
@@ -127,11 +131,6 @@ pub fn mask(text: &str, home: Option<&Path>) -> String {
                 Regex::new(&format!(r"(?i){lead}{body}(?:[/\\]{}|\b|$)", *PATH_TAIL)).unwrap();
             out = home_path.replace_all(&out, PATH).into_owned();
         }
-        let user = parts.last().copied().unwrap_or_default();
-        if user.len() >= 2 {
-            let word = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(user))).unwrap();
-            out = word.replace_all(&out, USER).into_owned();
-        }
     }
     out = URL_USERINFO
         .replace_all(&out, format!("${{1}}{REDACTED}@"))
@@ -150,6 +149,12 @@ pub fn mask(text: &str, home: Option<&Path>) -> String {
     out = UNIX_PATH
         .replace_all(&out, format!("${{1}}{PATH}"))
         .into_owned();
+    // 사용자 이름은 경로를 다 걷은 뒤에 가린다. 먼저 가리면 이름이 든 경로(`/tmp/-Users-alice-x/`)가 `<user>` 에서 끊겨
+    // 경로 규칙이 앞부분만 잡는다.
+    if let Some(user) = user {
+        let word = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(user))).unwrap();
+        out = word.replace_all(&out, USER).into_owned();
+    }
     // 경로를 먼저 걷는다. 숫자가 든 긴 경로가 불투명 문자열 규칙에 먼저 걸리면 `<secret>` 으로 잘못 이름 붙는다.
     OPAQUE
         .replace_all(&out, |c: &Captures<'_>| {
@@ -225,6 +230,17 @@ mod tests {
             assert!(!masked.contains("acme"), "{text} → {masked}");
             assert_eq!(masked, want, "{text}");
         }
+    }
+
+    #[test]
+    fn paths_that_contain_the_user_name_stay_one_path() {
+        assert_eq!(
+            mask(
+                r#"path="/private/tmp/c-501/-Users-alice-IdeaProjects-x/app/settings.toml" by alice"#,
+                home()
+            ),
+            r#"path="<path>" by <user>"#
+        );
     }
 
     #[test]
