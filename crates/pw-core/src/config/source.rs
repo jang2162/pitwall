@@ -28,9 +28,11 @@ pub const PROJECT_BACKUP_DIR: &str = ".backup";
 /// 프로젝트 설정 폴더에서 한 단계 아래까지 읽는 하위 폴더.
 const PROJECT_SUBDIRS: &[&str] = &["run", "db"];
 
-/// 내장 기본값 — 아직 기능 모듈이 키를 정하지 않아 **예시 키만** 둔다. 기능이 키를 정하면 여기를 그 모듈의 기본값으로 바꾼다.
+/// 내장 기본값 — 키를 정한 기능은 자기 기본값을 여기에 둔다. 아직 키가 없는 자리는 **예시 키**(`sample`)만 있다.
+/// - `diagnostics.crash_reports`: 크래시 리포트 전송(opt-in, 설계 D22). 데스크톱이 읽는다(`apps/desktop/src-tauri/src/diag.rs`).
 const BUILTIN_PROJECT: &str = "schema = 1\n\n[sample]\ngreeting = \"hello\"\n";
-const BUILTIN_SETTINGS: &str = "schema = 1\n\n[sample]\ngreeting = \"hello\"\n";
+const BUILTIN_SETTINGS: &str =
+    "schema = 1\n\n[sample]\ngreeting = \"hello\"\n\n[diagnostics]\ncrash_reports = false\n";
 
 /// 스냅숏: 파일 id 마다 병합된 값과, 이번 읽기에서 생긴 알림.
 #[derive(
@@ -874,7 +876,11 @@ mod tests {
         assert_eq!(ids, ["settings"]);
         assert_eq!(
             snap.file("settings").unwrap().value,
-            json!({"sample": {"greeting": "hi"}, "machine": "laptop"})
+            json!({
+                "sample": {"greeting": "hi"},
+                "machine": "laptop",
+                "diagnostics": {"crash_reports": false}
+            })
         );
         assert!(paths.state.join("backup/settings.toml.v0").is_file());
     }

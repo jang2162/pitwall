@@ -3,13 +3,12 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, PoisonError, RwLock};
+use std::sync::{Arc, LazyLock, PoisonError, RwLock};
 
 use regex::Regex;
 
 use crate::logging::{CORE, UI};
 use crate::mask::mask;
-use crate::panic::CRASH_REPORTS_ENABLED;
 use crate::rolling::dated_files;
 
 /// 구성요소마다 싣는 최근 경고 · 오류 수.
@@ -28,11 +27,14 @@ static ENTRY_HEAD: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap()
 });
 
+type CrashReports = Arc<dyn Fn() -> bool + Send + Sync>;
+
 pub struct Diagnostics {
     log_dir: PathBuf,
     app_version: String,
     home: Option<PathBuf>,
     features: RwLock<Vec<String>>,
+    crash_reports: RwLock<CrashReports>,
 }
 
 impl Diagnostics {
@@ -43,6 +45,7 @@ impl Diagnostics {
             app_version: app_version.into(),
             home: std::env::home_dir(),
             features: RwLock::default(),
+            crash_reports: RwLock::new(Arc::new(|| false)),
         }
     }
 
@@ -64,6 +67,14 @@ impl Diagnostics {
             .unwrap_or_else(PoisonError::into_inner) = features;
     }
 
+    /// 「crash reports」 줄의 값을 읽는 함수. 진단을 모을 때마다 부른다(설정을 다시 읽으면 따라간다). 넣지 않으면 꺼짐.
+    pub fn set_crash_reports(&self, read: impl Fn() -> bool + Send + Sync + 'static) {
+        *self
+            .crash_reports
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Arc::new(read);
+    }
+
     /// 가린 진단 텍스트.
     pub fn collect(&self) -> String {
         let features = self
@@ -76,7 +87,13 @@ impl Diagnostics {
         } else {
             "release"
         };
-        let crash = if CRASH_REPORTS_ENABLED { "on" } else { "off" };
+        let read = Arc::clone(
+            &self
+                .crash_reports
+                .read()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        let crash = if read() { "on" } else { "off" };
         let mut text = format!(
             "Pitwall diagnostics\n\
              version: {} ({build} build)\n\
@@ -214,6 +231,20 @@ mod tests {
         assert!(text.contains("crash reports: off\n"), "{text}");
         assert!(text.contains("features: diag, host, log\n"), "{text}");
         assert!(text.contains("(core log):\n(none)\n"), "{text}");
+    }
+
+    #[test]
+    fn crash_reports_line_follows_the_setting() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = TestDir::new();
+        let diag = diagnostics(dir.path());
+        let enabled = Arc::new(AtomicBool::new(true));
+        let read = Arc::clone(&enabled);
+        diag.set_crash_reports(move || read.load(Ordering::SeqCst));
+        assert!(diag.collect().contains("crash reports: on\n"));
+        enabled.store(false, Ordering::SeqCst);
+        assert!(diag.collect().contains("crash reports: off\n"));
     }
 
     #[test]

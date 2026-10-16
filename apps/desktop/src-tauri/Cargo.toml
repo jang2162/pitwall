@@ -28,3 +28,5 @@ tracing = "0.1.44"
 tauri = { version = "2.12.3", features = ["test"] }
 # IPC 테스트에서 채널 메시지를 기다릴 시간 제한.
 tokio = { workspace = true, features = ["time"] }
+# 설정 스토어를 임시 폴더에 열어 크래시 설정 · 설정 오류 로그를 시험한다.
+tempfile = "3.27.0"

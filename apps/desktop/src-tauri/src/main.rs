@@ -4,9 +4,10 @@
 use std::sync::Arc;
 
 use pw_core::config::AppPaths;
-use pw_core::{HostRouter, LocalHost};
+use pw_core::{HostRouter, LocalHost, Scope};
 use pw_diag::Diagnostics;
 
+mod config_log;
 mod diag;
 mod ipc;
 mod menu;
@@ -42,6 +43,15 @@ fn main() {
             .iter()
             .filter_map(|m| m.name.split_once('.').map(|(module, _)| module.to_owned())),
     );
+    if let Some(config) = host.config() {
+        let global = config.global.clone();
+        diagnostics.set_crash_reports(move || diag::crash_reports_enabled(&global));
+        // 처음 읽기의 실패는 Host 를 만드는 중에 이벤트로 나가 아래 구독이 받지 못한다. 여기서 따로 남긴다.
+        if let Some(fault) = config.global.fault() {
+            config_log::log_fault(&Scope::Host, &fault);
+        }
+    }
+    let config_events = config_log::subscribe(host.bus());
     let router = Arc::new(HostRouter::new());
     router
         .add_host(host.clone())
@@ -53,9 +63,10 @@ fn main() {
         .menu(menu::build)
         .on_menu_event(menu::handle)
         .setup(move |app| {
+            tauri::async_runtime::spawn(config_log::run(config_events));
             // 감시를 못 켜도 앱은 뜬다 — 설정은 시작할 때 읽은 값으로 남는다.
             if let Err(e) = host.watch_config(tauri::async_runtime::handle().inner()) {
-                eprintln!("config watch disabled: {e}");
+                tracing::warn!(%e, "config watch disabled");
             }
             windows::open_welcome(app.handle())?;
             Ok(())

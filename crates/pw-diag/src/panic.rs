@@ -1,17 +1,16 @@
-//! 패닉 훅과 크래시 리포트 설정 자리.
+//! 패닉 훅.
 //!
 //! 크래시 리포트는 기본 꺼짐이고 전송 코드는 아직 없다(`docs/design/03-architecture.md` 「로그 · 진단 (D22)」 절).
+//! 켜고 끄는 값은 전역 설정의 `[diagnostics] crash_reports` 이고 진단 텍스트에만 실린다([`Diagnostics::set_crash_reports`]).
 //! 지금 하는 것은 패닉의 메시지 · 위치 · 스택을 코어 로그에 남기는 것까지다. 전송을 붙일 때는 D22 대로
 //! 스택 · 버전 · OS 만 보내고(경로 · 코드 · 비밀 제외) 보내기 전에 내용을 보여 준다.
+//!
+//! [`Diagnostics::set_crash_reports`]: crate::Diagnostics::set_crash_reports
 
 use std::backtrace::Backtrace;
 use std::panic::PanicHookInfo;
 
 use crate::logging::PANIC_TARGET;
-
-/// 크래시 리포트를 보낼지. 기본 꺼짐(opt-in, D22).
-// M0-08 설정으로 이전 예정 — 설정 계층이 들어오면 `settings.toml` 의 값으로 바꾸고 이 상수를 걷는다.
-pub const CRASH_REPORTS_ENABLED: bool = false;
 
 /// 패닉을 코어 로그에 남기는 훅을 건다. 원래 훅(stderr 출력)도 이어서 부른다.
 ///

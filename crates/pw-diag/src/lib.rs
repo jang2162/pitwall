@@ -3,7 +3,7 @@
 //! - [`logging`]: tracing 구독자. `$STATE/logs/` 아래 구성요소별(코어 · UI) 회전 로그, 기본 7일 보관.
 //! - [`methods`]: `log.write`(웹뷰 로그 받기) · `diag.collect`(진단 텍스트).
 //! - [`Diagnostics`]: 「진단 정보 복사」 텍스트를 만들고 [`mask`] 로 가린다.
-//! - [`install_panic_hook`]: 패닉의 메시지 · 위치 · 스택을 코어 로그에 남긴다. 크래시 리포트는 설정 자리만 있다.
+//! - [`install_panic_hook`]: 패닉의 메시지 · 위치 · 스택을 코어 로그에 남긴다. 크래시 리포트는 켜고 끄는 값만 있고 전송은 없다.
 //!
 //! 로그 디렉터리는 인자로 받는다. 경로 해석(`$STATE`)은 설정 계층(M0-08)의 몫이다.
 //!
@@ -31,6 +31,6 @@ mod test_dir;
 
 pub use logging::{LogConfig, init, subscriber};
 pub use mask::mask;
-pub use panic::{CRASH_REPORTS_ENABLED, install_panic_hook};
+pub use panic::install_panic_hook;
 pub use report::Diagnostics;
 pub use rolling::{Clock, RollingFile, SystemClock};
