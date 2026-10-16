@@ -127,8 +127,9 @@ pub fn mask(text: &str, home: Option<&Path>) -> String {
                 .map(|p| regex::escape(p))
                 .collect::<Vec<_>>()
                 .join(r"[/\\]+");
-            let home_path =
-                Regex::new(&format!(r"(?i){lead}{body}(?:[/\\]{}|\b|$)", *PATH_TAIL)).unwrap();
+            // 홈 바로 뒤의 경로 글자도 함께 가린다. 낱말 경계에서 멈추면 이름 앞부분이 같은 형제 폴더
+            // (`/Users/alice.old/…` · `C:\Users\Carol-2\…`)의 뒤쪽이 샌다 — `.` · `-` 앞에서 끊겨 경로 규칙에도 안 걸린다.
+            let home_path = Regex::new(&format!(r"(?i){lead}{body}{}", *PATH_TAIL)).unwrap();
             out = home_path.replace_all(&out, PATH).into_owned();
         }
     }
@@ -151,9 +152,22 @@ pub fn mask(text: &str, home: Option<&Path>) -> String {
         .into_owned();
     // 사용자 이름은 경로를 다 걷은 뒤에 가린다. 먼저 가리면 이름이 든 경로(`/tmp/-Users-alice-x/`)가 `<user>` 에서 끊겨
     // 경로 규칙이 앞부분만 잡는다.
+    // 이미 넣은 자리표시는 건너뛴다. 사용자 이름이 `path` · `user` 같은 낱말이면 `<path>` 안을 다시 가려 `<<user>>` 가 된다.
     if let Some(user) = user {
-        let word = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(user))).unwrap();
-        out = word.replace_all(&out, USER).into_owned();
+        let word = Regex::new(&format!(
+            r"(?i)<(?:path|user|secret|redacted)>|\b{}\b",
+            regex::escape(user)
+        ))
+        .unwrap();
+        out = word
+            .replace_all(&out, |c: &Captures<'_>| {
+                if c[0].starts_with('<') {
+                    c[0].to_owned()
+                } else {
+                    USER.to_owned()
+                }
+            })
+            .into_owned();
     }
     // 경로를 먼저 걷는다. 숫자가 든 긴 경로가 불투명 문자열 규칙에 먼저 걸리면 `<secret>` 으로 잘못 이름 붙는다.
     OPAQUE
@@ -185,6 +199,41 @@ mod tests {
         assert!(!masked.contains("alice"), "{masked}");
         assert!(!masked.contains("secret-project"), "{masked}");
         assert_eq!(masked, "opened <path> for <user>");
+    }
+
+    #[test]
+    fn sibling_folders_that_share_the_home_prefix_are_masked_whole() {
+        let unix = [
+            "/Users/alice.old/acme-client/x",
+            "/Users/alice-backup/acme-client/x",
+        ];
+        for text in unix {
+            assert_eq!(mask(text, home()), "<path>", "{text}");
+        }
+        let carol = Some(Path::new(r"C:\Users\Carol"));
+        for text in [
+            r"C:\Users\Carol.old\acme-client\x",
+            r"C:\Users\Carol-2\acme-client\x",
+        ] {
+            assert_eq!(mask(text, carol), "<path>", "{text}");
+        }
+        // 홈 하나만 있는 경로도 그대로 가린다.
+        assert_eq!(mask("cd /Users/alice; ls", home()), "cd <path>; ls");
+    }
+
+    #[test]
+    fn placeholders_survive_a_user_name_that_is_a_placeholder_word() {
+        for user in ["path", "user", "secret", "redacted"] {
+            let home = format!("/home/{user}");
+            let text = format!(
+                "open /home/{user}/x failed at /var/y by {user} key token=abc ghp_A1b2C3d4E5f6G7h8I9j0K1l2"
+            );
+            assert_eq!(
+                mask(&text, Some(Path::new(&home))),
+                "open <path> failed at <path> by <user> key token=<redacted> <secret>",
+                "{user}"
+            );
+        }
     }
 
     #[test]
