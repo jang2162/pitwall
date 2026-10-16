@@ -115,6 +115,8 @@ pub enum ConfigNotice {
         found: u32,
         supported: u32,
     },
+    /// 가리키는 파일이 없는 심링크라 건너뛰었다(dotfiles 가 아직 동기화되지 않은 경우 등).
+    BrokenLink { path: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,8 +201,10 @@ impl ConfigSource {
     /// 폴백은 **파일 단위**다 — 워크트리에 `<id>.local.toml` 이 있으면 그것만 쓰고 메인 쪽 같은 id 는 읽지 않는다.
     pub fn project(root: &Path) -> Self {
         let dir = root.join(PROJECT_DIR);
-        let local_fallback = linked_worktree(root)
-            .and_then(|link| link.map_to_main(root))
+        // 워크트리 판정은 실제 경로로 한다. 워크트리 하위 폴더를 가리키는 심링크로 열면 조상에서 `.git` 을 못 찾는다.
+        let real_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let local_fallback = linked_worktree(&real_root)
+            .and_then(|link| link.map_to_main(&real_root))
             .map(|main_root| {
                 let dir = main_root.join(PROJECT_DIR);
                 ScanDir {
@@ -311,7 +315,8 @@ impl ConfigSource {
     /// 파일 하나라도 읽기 · 파싱 · 마이그레이션에 실패하면 스냅숏 전체가 오류다 — 일부만 반영된 설정을 만들지 않는다.
     pub fn load(&self) -> Result<ConfigSnapshot, ConfigError> {
         let mut entries: BTreeMap<String, Entry<'_>> = BTreeMap::new();
-        for found in list(&self.primary.dir, self.subdirs)? {
+        let mut broken = Vec::new();
+        for found in list(&self.primary.dir, self.subdirs, &mut broken)? {
             let entry = entries.entry(found.id.clone()).or_default();
             if found.local {
                 entry.local = Some((found, &self.primary));
@@ -320,7 +325,7 @@ impl ConfigSource {
             }
         }
         if let Some(fallback) = &self.local_fallback {
-            for found in list(&fallback.dir, self.subdirs)? {
+            for found in list(&fallback.dir, self.subdirs, &mut broken)? {
                 if found.local {
                     let entry = entries.entry(found.id.clone()).or_default();
                     if entry.local.is_none() {
@@ -334,6 +339,11 @@ impl ConfigSource {
         }
 
         let mut snapshot = ConfigSnapshot::default();
+        snapshot
+            .notices
+            .extend(broken.into_iter().map(|p| ConfigNotice::BrokenLink {
+                path: p.display().to_string(),
+            }));
         for (id, entry) in entries {
             let mut value = Map::new();
             let mut layers = Vec::new();
@@ -449,9 +459,15 @@ struct Found {
 }
 
 /// `dir/*.toml` 과 `dir/<sub>/*.toml`. 숨김 파일(`.` 으로 시작)은 건너뛴다. 폴더가 없으면 빈 목록.
-fn list(dir: &Path, subdirs: &[&str]) -> Result<Vec<Found>, ConfigError> {
+/// 심링크는 따라가서 판정한다 — dotfiles 도구(stow · yadm · chezmoi 링크 모드)가 `$CONFIG/*.toml` 을 링크로 둔다(§5-0).
+/// 대상이 없는 심링크는 `broken` 에 모은다(조용히 빠지면 사용자에게는 「설정이 안 먹는다」 로만 보인다).
+fn list(
+    dir: &Path,
+    subdirs: &[&str],
+    broken: &mut Vec<PathBuf>,
+) -> Result<Vec<Found>, ConfigError> {
     let mut out = Vec::new();
-    let scan = |rel_dir: Option<&str>, out: &mut Vec<Found>| -> Result<(), ConfigError> {
+    let mut scan = |rel_dir: Option<&str>, out: &mut Vec<Found>| -> Result<(), ConfigError> {
         let here = rel_dir.map_or_else(|| dir.to_path_buf(), |r| dir.join(r));
         let read = match fs::read_dir(&here) {
             Ok(read) => read,
@@ -473,8 +489,25 @@ fn list(dir: &Path, subdirs: &[&str]) -> Result<Vec<Found>, ConfigError> {
             let Some(stem) = name.strip_suffix(".toml") else {
                 continue;
             };
-            if name.starts_with('.') || !item.file_type().is_ok_and(|t| t.is_file()) {
+            if name.starts_with('.') {
                 continue;
+            }
+            match fs::metadata(item.path()) {
+                Ok(meta) if meta.is_file() => {}
+                Ok(_) => continue,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::NotFound
+                        && item.file_type().is_ok_and(|t| t.is_symlink()) =>
+                {
+                    broken.push(item.path());
+                    continue;
+                }
+                Err(e) => {
+                    return Err(ConfigError::Io {
+                        path: item.path(),
+                        message: e.to_string(),
+                    });
+                }
             }
             let (stem, local) = match stem.strip_suffix(".local") {
                 Some(s) => (s, true),
@@ -728,6 +761,96 @@ mod tests {
                 Some(ConfigError::InvalidSlug(bad.to_owned()))
             );
         }
+    }
+
+    /// dotfiles 도구가 둔 심링크를 따라 읽고, 대상이 없는 링크는 알림으로 남긴다(§5-0 dotfiles 동기화).
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_files_are_read_and_broken_links_are_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(tmp.path());
+        let dotfiles = tmp.path().join("dotfiles");
+        write(
+            &dotfiles.join("settings.toml"),
+            "schema = 1\n[sample]\ngreeting = \"from dotfiles\"\n",
+        );
+        fs::create_dir_all(&paths.config).unwrap();
+        std::os::unix::fs::symlink(
+            dotfiles.join("settings.toml"),
+            paths.config.join("settings.toml"),
+        )
+        .unwrap();
+        let missing = paths.config.join("keymap.toml");
+        std::os::unix::fs::symlink(dotfiles.join("absent.toml"), &missing).unwrap();
+
+        let snap = ConfigSource::global(&paths).load().unwrap();
+        assert_eq!(
+            snap.get("settings", "sample.greeting"),
+            Some(&json!("from dotfiles"))
+        );
+        assert_eq!(
+            snap.notices,
+            [ConfigNotice::BrokenLink {
+                path: missing.display().to_string()
+            }]
+        );
+        assert!(snap.file("keymap").is_none());
+    }
+
+    /// 같은 v0 파일을 여러 로더가 동시에 읽어도(메인 체크아웃과 워크트리가 같은 메인 `.local.toml` 을 여는 경우) 실패하지 않는다.
+    #[test]
+    fn concurrent_loads_migrating_the_same_file_all_succeed() {
+        const THREADS: usize = 8;
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join(".pitwall/project.toml");
+        for round in 0..20 {
+            write(&file, &format!("name = \"r{round}\"\n"));
+            let barrier = std::sync::Barrier::new(THREADS);
+            let errors: Vec<_> = std::thread::scope(|s| {
+                let handles: Vec<_> = (0..THREADS)
+                    .map(|_| {
+                        s.spawn(|| {
+                            barrier.wait();
+                            ConfigSource::project(tmp.path()).load().err()
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .filter_map(|h| h.join().unwrap())
+                    .collect()
+            });
+            assert!(errors.is_empty(), "round {round}: {errors:?}");
+            assert_eq!(
+                fs::read_to_string(&file).unwrap(),
+                format!("schema = 1\nname = \"r{round}\"\n")
+            );
+        }
+        // 임시 파일이 남지 않는다.
+        let leftovers: Vec<_> = fs::read_dir(tmp.path().join(".pitwall"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n.to_string_lossy().ends_with(".pitwall-tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    /// 워크트리 하위 폴더를 가리키는 심링크로 열어도 메인 체크아웃 폴백을 찾는다.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_into_a_worktree_subfolder_keeps_the_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, wt) = fake_worktree(tmp.path());
+        fs::create_dir_all(wt.join("sub")).unwrap();
+        write(
+            &main.join("sub/.pitwall/project.local.toml"),
+            "schema = 1\nport = 7\n",
+        );
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(wt.join("sub"), &link).unwrap();
+
+        let snap = ConfigSource::project(&link).load().unwrap();
+        assert_eq!(snap.get("project", "port"), Some(&json!(7)));
     }
 
     #[test]

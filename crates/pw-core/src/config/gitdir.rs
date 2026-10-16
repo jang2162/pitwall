@@ -102,6 +102,19 @@ mod tests {
         assert_eq!(linked_worktree(&wt).unwrap().main_top, main);
     }
 
+    /// bare 저장소(`repo.git`)에 붙은 워크트리에는 메인 체크아웃이 없다.
+    #[test]
+    fn worktree_of_a_bare_repository_has_no_main_checkout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let admin = tmp.path().join("repo.git/worktrees/wt");
+        fs::create_dir_all(&admin).unwrap();
+        fs::write(admin.join("commondir"), "../..\n").unwrap();
+        let wt = tmp.path().join("wt");
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        assert_eq!(linked_worktree(&wt), None);
+    }
+
     #[test]
     fn submodule_and_plain_dirs_are_not_worktrees() {
         let tmp = tempfile::tempdir().unwrap();

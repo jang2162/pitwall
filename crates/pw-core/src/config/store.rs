@@ -69,6 +69,8 @@ struct Inner {
     bus: EventBus,
     scope: Scope,
     state: Mutex<State>,
+    /// 다시 읽기를 한 번에 하나로 묶는다. 겹치면 먼저 읽고 늦게 끝난 쪽이 새 스냅숏을 옛 것으로 덮을 수 있다.
+    reloading: Mutex<()>,
 }
 
 struct State {
@@ -93,6 +95,7 @@ impl ConfigStore {
                     snapshot: Arc::new(snapshot),
                     fault: fault.clone(),
                 }),
+                reloading: Mutex::new(()),
             }),
         };
         if let Some(fault) = fault {
@@ -114,7 +117,13 @@ impl ConfigStore {
     }
 
     /// 디스크에서 다시 읽는다. 실패하면 이전 스냅숏을 유지하고 오류를 돌려준다(이벤트도 낸다).
+    /// 디스크 IO 를 하므로 비동기 문맥에서는 `spawn_blocking` 으로 부른다.
     pub fn reload(&self) -> Result<Arc<ConfigSnapshot>, ConfigError> {
+        let _serial = self
+            .inner
+            .reloading
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         match self.inner.source.load() {
             Ok(next) => {
                 let next = Arc::new(next);
@@ -180,8 +189,9 @@ impl ConfigStore {
                 }
                 // 감시 대상을 먼저 맞추고 읽는다. 거꾸로 하면 읽은 뒤 새 폴더를 감시하기 전까지의 쓰기를 놓친다.
                 let _ = sync_watches(&mut watcher, &mut watched, store.source().watch_targets());
-                // 실패는 reload 가 이벤트로 알린다.
-                let _ = store.reload();
+                // 실패는 reload 가 이벤트로 알린다. 마이그레이션 쓰기까지 하는 블로킹 IO 라 워커 스레드 밖에서 돌린다.
+                let reloading = store.clone();
+                let _ = tokio::task::spawn_blocking(move || reloading.reload()).await;
             }
         });
         Ok(())

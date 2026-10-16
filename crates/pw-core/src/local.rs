@@ -172,13 +172,19 @@ impl LocalHost {
         root: PathBuf,
         source: Option<ConfigSource>,
     ) -> Result<ProjectContext, HostError> {
-        let mut projects = self.projects.lock().unwrap_or_else(PoisonError::into_inner);
+        let lock = || self.projects.lock().unwrap_or_else(PoisonError::into_inner);
+        if lock().contains_key(&id) {
+            return Err(HostError::ProjectAlreadyOpen(id));
+        }
+        // 설정 읽기(디스크 IO · 마이그레이션 쓰기)는 프로젝트 표의 락 밖에서 한다. 그 락은 `config.get` 핸들러도 잡는다.
+        let config = source
+            .map(|source| ConfigStore::open(source, self.bus.clone(), Scope::Project(id.clone())));
+        let mut projects = lock();
+        // 락을 놓은 사이에 같은 id 가 열렸으면 그쪽이 이긴다. 이쪽이 읽은 설정은 버린다.
         if projects.contains_key(&id) {
             return Err(HostError::ProjectAlreadyOpen(id));
         }
         let cancel = self.cancel.child_token();
-        let config = source
-            .map(|source| ConfigStore::open(source, self.bus.clone(), Scope::Project(id.clone())));
         let ctx = ProjectContext {
             id: id.clone(),
             root: root.into(),

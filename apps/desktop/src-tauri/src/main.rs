@@ -19,8 +19,14 @@ fn local_host(paths: AppPaths) -> LocalHost {
 }
 
 fn main() {
-    let paths =
-        AppPaths::from_env().expect("앱 디렉터리를 정하지 못했다(HOME 또는 PITWALL_*_DIR 를 본다)");
+    let paths = match AppPaths::from_env() {
+        Ok(paths) => paths,
+        Err(e) => {
+            // 패닉(Debug 형식, exit 101) 대신 변수 이름이 든 문장으로 끝낸다. 창을 띄우기 전이라 다이얼로그는 없다.
+            eprintln!("pitwall: {e}");
+            std::process::exit(2);
+        }
+    };
     let host = Arc::new(local_host(paths));
     let router = Arc::new(HostRouter::new());
     router

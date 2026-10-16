@@ -157,6 +157,23 @@
                   "supported"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "가리키는 파일이 없는 심링크라 건너뛰었다(dotfiles 가 아직 동기화되지 않은 경우 등).",
+                "properties": {
+                  "kind": {
+                    "const": "brokenLink",
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path"
+                ],
+                "type": "object"
               }
             ]
           },

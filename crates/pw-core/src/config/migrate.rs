@@ -11,6 +11,8 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use toml_edit::{DocumentMut, Item, value};
 
@@ -298,19 +300,53 @@ fn write_backup(dir: &Path, rel: &Path, version: u32, contents: &str) -> std::io
     unreachable!("1.. is unbounded")
 }
 
+/// 같은 폴더의 임시 파일에 쓰고 rename 한다.
+/// - `path` 가 심링크면 **링크가 가리키는 파일**을 고친다. 링크를 rename 으로 덮으면 dotfiles 연결이 끊긴다.
+/// - 원래 권한을 임시 파일에 옮긴다(0600 인 파일이 0644 가 되지 않게).
+/// - 임시 이름은 pid · 카운터 · 시각으로 고유하게 만든다. 고정 이름이면 같은 파일을 동시에 마이그레이션하는 두 로더
+///   (메인 체크아웃과 그 워크트리가 같은 메인 `.local.toml` 을 읽는 경우, 두 앱이 `$CONFIG` 를 함께 쓰는 경우)가
+///   서로의 임시 파일을 rename 해 한쪽이 ENOENT 로 실패한다.
 fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    let name = path
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let target = fs::canonicalize(path)?;
+    let permissions = fs::metadata(&target)?.permissions();
+    let name = target
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // 확장자가 `.toml` 이 아니어야 파일 감시가 임시 파일을 설정 변경으로 보지 않는다.
-    let tmp = path.with_file_name(format!(".{name}.pitwall-tmp"));
-    {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    loop {
+        // 확장자가 `.toml` 이 아니어야 파일 감시가 임시 파일을 설정 변경으로 보지 않는다.
+        let tmp = target.with_file_name(format!(
+            ".{name}.{}.{}.{nanos}.pitwall-tmp",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed),
+        ));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        };
+        let written = file
+            .write_all(contents.as_bytes())
+            .and_then(|()| file.sync_all())
+            .and_then(|()| fs::set_permissions(&tmp, permissions.clone()))
+            .and_then(|()| {
+                drop(file);
+                fs::rename(&tmp, &target)
+            });
+        if written.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        return written;
     }
-    fs::rename(&tmp, path)
 }
 
 #[cfg(test)]
@@ -437,6 +473,70 @@ mod tests {
                 Err(MigrateError::InvalidSchema(_))
             ));
         }
+    }
+
+    /// 설계 D23: 원본 보관이 실패하면 파일을 쓰지 않는다.
+    #[test]
+    fn failed_backup_leaves_the_original_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("project.toml");
+        fs::write(&file, "name = \"v0\"\n").unwrap();
+        // 보관 폴더 자리에 파일을 둬서 create_dir_all 이 실패하게 한다.
+        let backups = tmp.path().join("backup");
+        fs::write(&backups, "not a dir").unwrap();
+        let err = migrate_file(
+            &file,
+            Path::new("project.toml"),
+            Schemas::builtin().get("project"),
+            &backups,
+        )
+        .unwrap_err();
+        assert!(matches!(err, FileMigrateError::Io { .. }), "{err}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "name = \"v0\"\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewrite_keeps_permissions_and_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dotfiles = tmp.path().join("dotfiles");
+        fs::create_dir_all(&dotfiles).unwrap();
+        let target = dotfiles.join("settings.toml");
+        fs::write(&target, "x = 1\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        let config = tmp.path().join("config");
+        fs::create_dir_all(&config).unwrap();
+        let link = config.join("settings.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = migrate_file(
+            &link,
+            Path::new("settings.toml"),
+            Schemas::builtin().get("settings"),
+            &tmp.path().join("backup"),
+        )
+        .unwrap();
+        assert!(result.migrated.changed());
+        // 링크는 링크로 남고, 고쳐진 것은 대상 파일이다.
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "schema = 1\nx = 1\n");
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::read_to_string(result.backup.unwrap()).unwrap(),
+            "x = 1\n"
+        );
+        // 임시 파일이 남지 않는다.
+        assert_eq!(fs::read_dir(&dotfiles).unwrap().count(), 1);
     }
 
     #[test]

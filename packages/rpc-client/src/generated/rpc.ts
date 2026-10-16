@@ -105,7 +105,9 @@ export type ConfigNotice =
 /**  구버전 파일을 올려 썼다. 커밋되는 파일이면 「변경 사항 커밋 필요」 안내 대상이다(설계 D23). */
 { kind: "migrated"; path: string; from: number; to: number; backup: string } | 
 /**  앱보다 새 버전이라 읽기 전용으로 열었다(업데이트 안내 대상). */
-{ kind: "futureSchema"; path: string; found: number; supported: number };
+{ kind: "futureSchema"; path: string; found: number; supported: number } | 
+/**  가리키는 파일이 없는 심링크라 건너뛰었다(dotfiles 가 아직 동기화되지 않은 경우 등). */
+{ kind: "brokenLink"; path: string };
 
 /**  해석된 앱 디렉터리(`docs/design/03-architecture.md` 「5-0. 파일 위치 — XDG 규칙」). UTF-8 이 아닌 경로는 손실 변환된다. */
 export type ConfigPathsInfo = {
