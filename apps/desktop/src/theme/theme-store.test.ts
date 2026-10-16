@@ -155,15 +155,42 @@ describe("native window theme", () => {
     expect(store.getState().appearance).toBe("dark");
   });
 
+  // 웹뷰의 prefers-color-scheme 은 창 테마를 따른다. 창이 고정된 동안 system.current() 는 OS 가 아니라 고정한 값을
+  // 주고, set(null) 이 끝나야 OS 값을 준다. 이 모형에서는 고정을 푼 뒤 다시 읽어야만 OS 값에 닿는다.
   it("re-reads the OS appearance once the native pin is released", async () => {
-    const native = fakeNative();
-    const { store, system } = setup("light", undefined, native);
-    store.getState().setPreference("dark");
-    // 고정한 동안 OS 쪽 값이 바뀌었지만 수동 선택이라 받지 않았다.
-    system.change("dark");
-    store.getState().setPreference("light");
+    const os: Appearance = "dark";
+    let pinned: Appearance | null = null;
+    const pending: (() => void)[] = [];
+    const system: SystemAppearance = {
+      current: () => pinned ?? os,
+      subscribe: () => () => {},
+    };
+    const native: NativeWindowTheme = {
+      set: (theme) =>
+        new Promise<void>((resolve) =>
+          pending.push(() => {
+            pinned = theme;
+            resolve();
+          }),
+        ),
+    };
+    const release = async () => {
+      for (const done of pending.splice(0)) done();
+      await flush();
+    };
+    const store = createThemeStore({
+      system,
+      storage: fakeStorage("light"),
+      native,
+      apply: () => {},
+    });
+    await release();
+    expect(store.getState().appearance).toBe("light");
+
     store.getState().setPreference("system");
-    await flush();
+    // set(null) 이 아직 안 끝났다 — 창은 라이트로 고정돼 있어 지금 읽으면 라이트다.
+    expect(store.getState().appearance).toBe("light");
+    await release();
     expect(store.getState().appearance).toBe("dark");
   });
 

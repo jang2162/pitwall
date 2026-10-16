@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildDefaultLayout,
+  EDITOR_TAB,
+  keepEditor,
   LAYOUT_STORAGE_KEY,
   LAYOUT_VERSION,
   PANELS,
@@ -157,32 +159,96 @@ describe("broken saved layout", () => {
 });
 
 describe("persistLayout", () => {
-  it("saves once after a burst of layout changes, and flushes a pending save on pagehide", async () => {
+  // dockview 는 같은 흐름의 변경을 마이크로태스크로 모아 onDidLayoutChange 를 한 번 낸다.
+  const settle = () => Promise.resolve();
+
+  it("saves within one frame of the first change, without later changes pushing it back", async () => {
+    vi.useFakeTimers();
+    const api = dockview();
+    buildDefaultLayout(api);
+    const storage = memoryStorage();
+    const setItem = vi.spyOn(storage, "setItem");
+    const persisted = persistLayout(api, storage, { frameMs: 16, win: new EventTarget() });
+
+    api.getPanel("terminal")!.api.moveTo({ group: edge(api, "right") });
+    await settle();
+    vi.advanceTimersByTime(10);
+    // 크기 조절처럼 이어지는 변경. 저장 시점을 미루지 않는다.
+    api.getPanel("git")!.api.moveTo({ group: edge(api, "left") });
+    await settle();
+    vi.advanceTimersByTime(5);
+    expect(setItem).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(setItem).toHaveBeenCalledTimes(1);
+
+    const restored = dockview();
+    restoreLayout(restored, storage);
+    expect(placement(restored)).toMatchObject({ terminal: "right", git: "left" });
+    persisted.dispose();
+  });
+
+  it("flushes a pending save on pagehide", async () => {
     vi.useFakeTimers();
     const api = dockview();
     buildDefaultLayout(api);
     const storage = memoryStorage();
     const setItem = vi.spyOn(storage, "setItem");
     const win = new EventTarget();
-    const persisted = persistLayout(api, storage, { delayMs: 300, win });
-
-    api.getPanel("terminal")!.api.moveTo({ group: edge(api, "right") });
-    api.getPanel("git")!.api.moveTo({ group: edge(api, "left") });
-    // dockview 는 변경을 마이크로태스크로 모아 onDidLayoutChange 를 한 번 낸다.
-    await Promise.resolve();
-    vi.advanceTimersByTime(299);
-    expect(setItem).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(setItem).toHaveBeenCalledTimes(1);
+    const persisted = persistLayout(api, storage, { frameMs: 16, win });
 
     api.getPanel("run")!.api.moveTo({ group: edge(api, "right") });
-    await Promise.resolve();
+    await settle();
     win.dispatchEvent(new Event("pagehide"));
-    expect(setItem).toHaveBeenCalledTimes(2);
-
+    expect(setItem).toHaveBeenCalledTimes(1);
     const restored = dockview();
     restoreLayout(restored, storage);
-    expect(placement(restored)).toMatchObject({ terminal: "right", git: "left", run: "right" });
+    expect(placement(restored).run).toBe("right");
     persisted.dispose();
+  });
+});
+
+describe("editor area", () => {
+  it("puts the editor back in the centre when a save has none", () => {
+    const first = dockview();
+    buildDefaultLayout(first);
+    first.getPanel("editor")!.api.close();
+    expect(first.getPanel("editor")).toBeUndefined();
+    const storage = memoryStorage();
+    saveLayout(first, storage);
+
+    const second = dockview();
+    expect(restoreLayout(second, storage)).toBe("restored");
+    expect(placement(second)).toEqual(defaultPlacement);
+  });
+
+  it("gives the editor its no-close tab even in a save made before the tab existed", () => {
+    const first = dockview();
+    buildDefaultLayout(first);
+    const layout = first.toJSON();
+    delete layout.panels.editor!.tabComponent;
+    layout.panels.project!.tabComponent = EDITOR_TAB;
+    const storage = memoryStorage(JSON.stringify({ version: LAYOUT_VERSION, layout }));
+
+    const second = dockview();
+    restoreLayout(second, storage);
+    const restored = second.toJSON().panels;
+    expect(restored.editor!.tabComponent).toBe(EDITOR_TAB);
+    expect(restored.project!.tabComponent).toBeUndefined();
+  });
+
+  it("puts a removed editor back in the centre, and leaves a moved one alone", async () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    const guard = keepEditor(api);
+
+    api.getPanel("editor")!.api.close();
+    await Promise.resolve();
+    expect(placement(api).editor).toBe("editor");
+
+    api.getPanel("editor")!.api.moveTo({ group: edge(api, "bottom") });
+    await Promise.resolve();
+    expect(api.panels.filter((p) => p.id === "editor")).toHaveLength(1);
+    expect(placement(api).editor).toBe("bottom");
+    guard.dispose();
   });
 });

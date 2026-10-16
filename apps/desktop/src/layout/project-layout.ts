@@ -3,6 +3,11 @@
 //
 // 저장본은 `{ version, layout: dockview.toJSON() }` 이다. 읽을 수 없거나(JSON · 버전 · dockview 검사) 이 앱이 모르는
 // 패널이 들어 있으면 버리고 기본 레이아웃으로 연다. 모르는 패널을 그대로 열면 dockview 는 오류 없이 빈 탭을 만든다.
+//
+// 에디터 영역은 닫을 수 없다. 툴 윈도우 바에 에디터 자리가 없어, 닫히면 되돌릴 UI 가 없다. 탭에서 닫기를 빼고
+// (`EDITOR_TAB`), dockview 가 따로 가진 닫기 경로(포커스된 탭의 Delete · Backspace, api 의 close)는 `keepEditor` 가
+// 가운데에 다시 넣는다 — dockview 에는 닫기를 거부하는 이벤트가 없다. 에디터가 없는 저장본(닫기를 막기 전에 저장된 것)도
+// 복원한 뒤 가운데에 다시 넣는다.
 
 import type { DockviewApi, SerializedDockview } from "dockview-react";
 
@@ -14,14 +19,19 @@ export interface PanelSpec {
   /** 기본 레이아웃에서 놓이는 곳. 닫았다가 툴 윈도우 바로 다시 열 때도 이리로 돌아온다. */
   home: Dock | "editor";
   component: PanelComponent;
+  /** 탭 머리의 종류. project-window.tsx 의 TAB_COMPONENTS 키. 없으면 dockview 기본 탭(닫기 있음). */
+  tab?: typeof EDITOR_TAB;
 }
+
+/** 닫기(× · 가운데 클릭)가 없는 탭. */
+export const EDITOR_TAB = "noClose";
 
 /** 패널 내용의 종류. project-window.tsx 의 COMPONENTS 가 이 이름마다 컴포넌트를 둔다. */
 export type PanelComponent = "toolWindow" | "editorArea";
 
 // 10-ui §2.4 「구역별 구성」 표의 툴 윈도우. 순서가 기본 레이아웃의 탭 순서이고, 각 무리의 첫 패널이 처음에 보인다.
 export const PANELS: readonly PanelSpec[] = [
-  { id: "editor", title: "에디터", home: "editor", component: "editorArea" },
+  { id: "editor", title: "에디터", home: "editor", component: "editorArea", tab: EDITOR_TAB },
   { id: "project", title: "프로젝트", home: "left", component: "toolWindow" },
   { id: "commit", title: "커밋", home: "left", component: "toolWindow" },
   { id: "database", title: "DB 탐색기", home: "left", component: "toolWindow" },
@@ -32,6 +42,8 @@ export const PANELS: readonly PanelSpec[] = [
   { id: "problems", title: "문제", home: "bottom", component: "toolWindow" },
   { id: "terminal", title: "터미널", home: "bottom", component: "toolWindow" },
   { id: "git", title: "Git", home: "bottom", component: "toolWindow" },
+  { id: "queryResults", title: "쿼리 결과", home: "bottom", component: "toolWindow" },
+  { id: "searchResults", title: "검색 결과", home: "bottom", component: "toolWindow" },
   { id: "notifications", title: "알림", home: "right", component: "toolWindow" },
   { id: "agent", title: "에이전트 활동", home: "right", component: "toolWindow" },
 ];
@@ -64,21 +76,25 @@ function ensureDock(api: DockviewApi, dock: Dock) {
   );
 }
 
+// 가운데 grid 의 그룹. 없으면 만든다. 위치 없이 더한 패널은 활성 그룹(edge group 일 수 있다)으로 가므로 늘 그룹을 집어 준다.
+function centreGroup(api: DockviewApi) {
+  return api.groups.find((g) => g.api.location.type === "grid") ?? api.addGroup();
+}
+
 function addPanel(api: DockviewApi, panel: PanelSpec, inactive: boolean) {
-  const position =
-    panel.home === "editor" ? undefined : { referenceGroup: ensureDock(api, panel.home).id };
+  const group = panel.home === "editor" ? centreGroup(api) : ensureDock(api, panel.home);
   return api.addPanel({
     id: panel.id,
     title: panel.title,
     component: panel.component,
-    position,
+    tabComponent: panel.tab,
+    position: { referenceGroup: group.id },
     inactive,
   });
 }
 
 export function buildDefaultLayout(api: DockviewApi) {
   api.clear();
-  // 에디터 영역을 먼저 둔다. 위치 없이 더한 패널은 활성 그룹으로 가므로, edge group 이 먼저 있으면 에디터가 그 안에 들어간다.
   addPanel(api, spec("editor")!, false);
   for (const dock of DOCKS) {
     PANELS.filter((p) => p.home === dock).forEach((panel, i) => addPanel(api, panel, i > 0));
@@ -103,6 +119,10 @@ function readSaved(raw: string): SerializedDockview | undefined {
     const known = spec(id);
     const component = (panel as { contentComponent?: unknown } | null)?.contentComponent;
     if (!known || component !== known.component) return undefined;
+    // 탭 종류는 저장본이 아니라 이 앱의 패널 정의를 따른다 — 닫기를 막기 전의 저장본도 에디터 탭에 닫기가 없게.
+    const normalized = panel as { tabComponent?: string };
+    if (known.tab) normalized.tabComponent = known.tab;
+    else delete normalized.tabComponent;
   }
   return layout as SerializedDockview;
 }
@@ -125,6 +145,7 @@ export function restoreLayout(api: DockviewApi, storage: LayoutStorage): Restore
   if (layout) {
     try {
       api.fromJSON(layout);
+      if (!api.getPanel("editor")) addPanel(api, spec("editor")!, false);
       return "restored";
     } catch (error) {
       console.warn("[layout] 저장된 레이아웃을 열지 못했다", error);
@@ -153,16 +174,22 @@ export function saveLayout(api: DockviewApi, storage: LayoutStorage) {
 }
 
 /**
- * 레이아웃이 바뀔 때마다 저장한다. 드래그 · 크기 조절은 변경을 잇달아 내므로 `delayMs` 동안 모아 한 번 쓴다.
- * 창이 닫히면 기다리던 저장을 바로 쓴다 — 마지막 변경 직후 앱을 끄면 그 변경이 사라지지 않게.
+ * 레이아웃이 바뀔 때마다 저장한다. 크기 조절처럼 잇달아 오는 변경은 한 프레임(`frameMs`) 안의 것만 모아 한 번 쓴다 —
+ * localStorage 쓰기는 동기이고 저장본이 작아 매 프레임 써도 싸다. 오래 모으면 그 사이 앱을 끄는 순간의 변경이 사라진다.
+ * 창을 닫으면(pagehide) 기다리던 저장을 바로 쓴다. ⚠ 앱 종료(메뉴 Quit · ⌘Q)에는 pagehide · beforeunload · unload ·
+ * visibilitychange 가 오지 않는다(WKWebView 에서 리스너가 localStorage 에 남긴 기록이 재실행 뒤 없었다). 종료 쪽은
+ * 저장 타이머가 종료보다 먼저 도는 데 기댄다. 잰 것: 툴 윈도우 바 버튼을 CGEvent 로 누르고 System Events 로 메뉴 Quit 을
+ * 누른 뒤 재실행해 활성 탭을 읽었더니, 누른 직후(약 20ms 뒤) Quit 을 요청해도 변경이 남았다. 메뉴 Quit 은 요청부터
+ * 종료까지 수백 ms 걸려 그 사이 타이머가 돈다 — 그래서 이 방법으로는 300ms 동안 모아 쓰는 방식도 남아 둘을 가르지 못한다.
+ * 종료가 이보다 빠른 경로(강제 종료 · 크래시)의 마지막 한 프레임은 지켜지지 않는다.
  */
 export function persistLayout(
   api: DockviewApi,
   storage: LayoutStorage,
   {
-    delayMs = 300,
+    frameMs = 16,
     win = window,
-  }: { delayMs?: number; win?: Pick<EventTarget, "addEventListener" | "removeEventListener"> } = {},
+  }: { frameMs?: number; win?: Pick<EventTarget, "addEventListener" | "removeEventListener"> } = {},
 ) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const flush = () => {
@@ -172,8 +199,8 @@ export function persistLayout(
     saveLayout(api, storage);
   };
   const changed = api.onDidLayoutChange(() => {
-    if (timer !== undefined) clearTimeout(timer);
-    timer = setTimeout(flush, delayMs);
+    // 첫 변경에서 잡은 시점에 쓴다. 뒤 변경이 시점을 미루지 않게 — 손을 떼지 않고 이어지는 크기 조절도 한 프레임마다 저장된다.
+    timer ??= setTimeout(flush, frameMs);
   });
   win.addEventListener("pagehide", flush);
   return {
@@ -184,6 +211,17 @@ export function persistLayout(
       win.removeEventListener("pagehide", flush);
     },
   };
+}
+
+/** 에디터 패널이 어떤 경로로든 지워지면 가운데에 다시 넣는다. */
+export function keepEditor(api: DockviewApi) {
+  return api.onDidRemovePanel((panel) => {
+    if (panel.id !== "editor") return;
+    // 옮기기 · clear 뒤 기본 레이아웃처럼 같은 흐름 안에서 다시 생기는 경우가 있어, 흐름이 끝난 뒤에 본다.
+    queueMicrotask(() => {
+      if (!api.getPanel("editor")) addPanel(api, spec("editor")!, false);
+    });
+  });
 }
 
 /** 툴 윈도우 바에서 고른 패널을 앞에 띄운다. 닫혀 있으면 제자리(`home`)에 다시 연다. */

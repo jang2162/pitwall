@@ -4,8 +4,10 @@ import "dockview-react/dist/styles/dockview.css";
 
 import {
   type DockviewApi,
+  DockviewDefaultTab,
   DockviewReact,
   type DockviewReadyEvent,
+  type IDockviewPanelHeaderProps,
   type IDockviewPanelProps,
   themeLight,
 } from "dockview-react";
@@ -31,6 +33,8 @@ import { useRpcQuery } from "../rpc/host";
 import { ThemeSwitcher, useTheme } from "../theme/theme-switcher";
 import {
   type Dock,
+  EDITOR_TAB,
+  keepEditor,
   type LayoutStorage,
   type PanelComponent,
   PANELS,
@@ -74,6 +78,11 @@ function EditorAreaPlaceholder() {
 const COMPONENTS: Record<PanelComponent, (props: IDockviewPanelProps) => ReactNode> = {
   toolWindow: ToolWindowPlaceholder,
   editorArea: EditorAreaPlaceholder,
+};
+
+// hideClose 는 × 버튼과 가운데 클릭 닫기를 함께 끈다. 키보드 닫기는 막지 못한다 — keepEditor 가 받는다.
+const TAB_COMPONENTS = {
+  [EDITOR_TAB]: (props: IDockviewPanelHeaderProps) => <DockviewDefaultTab {...props} hideClose />,
 };
 
 function ToolWindowBar({
@@ -149,7 +158,11 @@ export function ProjectDock({
   useEffect(() => {
     if (!api) return;
     const persisted = persistLayout(api, storage);
-    return () => persisted.dispose();
+    const editor = keepEditor(api);
+    return () => {
+      editor.dispose();
+      persisted.dispose();
+    };
   }, [api, storage]);
 
   return (
@@ -157,6 +170,7 @@ export function ProjectDock({
       className="min-w-0 flex-1"
       theme={themeLight}
       components={COMPONENTS}
+      tabComponents={TAB_COMPONENTS}
       onReady={onReady}
     />
   );

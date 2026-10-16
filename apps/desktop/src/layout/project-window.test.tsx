@@ -68,3 +68,30 @@ it("keeps saving layout changes after StrictMode remounts effects, and restores 
   expect(restored.getPanel("commit")).toBeUndefined();
   expect(restored.getPanel("project")).toBeDefined();
 });
+
+function tabOf(title: string) {
+  const tab = [...document.querySelectorAll<HTMLElement>("[role=tab]")].find(
+    (el) => el.textContent === title,
+  );
+  if (!tab) throw new Error(`탭 ${title} 이 없다`);
+  return tab;
+}
+
+it("draws the editor tab without a close button, unlike tool window tabs", async () => {
+  await mount(memoryStorage());
+  expect(tabOf("에디터").querySelector(".dv-default-tab-action")).toBeNull();
+  expect(tabOf("프로젝트").querySelector(".dv-default-tab-action")).not.toBeNull();
+});
+
+it("keeps the editor when its focused tab gets Delete", async () => {
+  const api = await mount(memoryStorage());
+  const tab = tabOf("에디터");
+  await act(async () => {
+    tab.focus();
+    tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+  });
+  expect(api.getPanel("editor")).toBeDefined();
+  expect(api.groups.find((g) => g.panels.some((p) => p.id === "editor"))?.api.location.type).toBe(
+    "grid",
+  );
+});
