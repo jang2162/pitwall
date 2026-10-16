@@ -44,6 +44,12 @@ pnpm --filter @pitwall/domain test                 # 패키지 하나(예: @pitw
 
 **테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N test(s) run: N passed`), doctest 는 크레이트마다 `test result: ok. N passed` 줄, Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.
 
+Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오류 없이 빈 문자열이 온다. 시험에서 CSS 내용을 보려면 `node:fs` 로 읽는다(`apps/desktop/src/theme/tokens.test.ts`).
+
+데스크톱 앱(`mise run dev`)을 손으로 확인할 때:
+
+- WKWebView 의 HTML5 드래그 앤 드롭(dockview 탭 이동 등)은 합성 입력(`orca computer drag`·CGEvent)으로 시작되지 않는다. 앱 안에서 확인하려면 debug 빌드의 Web Inspector(⌥⌘I) 콘솔에서 dockview api 로 같은 이동(`panel.api.moveTo`)을 부른다 — api 는 `.dv-dockview` 의 가장 가까운 React 요소에서 fiber 를 올라가 `onApi` prop 을 가진 컴포넌트의 첫 state(없으면 `alternate`)에 있다. 드래그 입력 자체는 Chromium(Playwright 로 개발 서버를 연다) 또는 사람이 확인한다.
+
 ## RPC 타입 생성
 
 RPC 의 TS 타입·메서드 목록·JSON Schema 는 `rpc_method!` 선언과 그 입출력 Rust 타입에서만 나온다(`docs/design/02-tech-stack.md` §2.6). TS 타입을 손으로 쓰지 않는다.

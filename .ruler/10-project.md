@@ -28,6 +28,16 @@
 - **「통과」를 보고하기 전에 실행된 테스트 개수를 읽는다.** 0개면 통과가 아니다(`base` 스택 「통과를 보기 전에」 절). 어느 줄을 읽는지는 `CONTRIBUTING.md` 「명령」 절. Rust 쪽은 태스크가 `--no-tests=fail` 을 줘서 0개면 실패하지만 TS 쪽은 그렇지 않다.
 - 커밋 훅(lefthook)은 `--no-verify` 로 건너뛰지 않는다.
 
+## 데스크톱 앱은 이름이 아니라 pid 로 고르고 끈다
+
+데스크톱 앱의 바이너리 이름은 모든 워크트리에서 `pitwall` 이다. 앱을 고르거나 끌 때 이름(`orca computer --app pitwall`, `tell application "pitwall"`, `pkill pitwall`)을 쓰지 않고 그 워크트리의 pid 를 쓴다.
+
+- **Why:** 여러 워크트리가 동시에 앱을 띄우면 이름은 어느 앱이든 집는다. 다른 워크트리의 앱을 보고 확인했다고 적거나, 남의 앱을 꺼서 그쪽 확인을 조용히 깨뜨린다 — 꺼진 쪽에는 오류 없이 앱이 사라진 것으로만 보인다.
+- **How to apply:**
+  - pid 는 그 워크트리 경로로 찾는다: `pgrep -f '<워크트리>/target/debug/pitwall'`. 이후 `orca computer --app pid:<pid>`, System Events `first process whose unix id is <pid>` 로 다룬다. 끌 때도 그 pid 프로세스의 메뉴 Quit 을 누른다.
+  - `orca computer` 는 뒤에 있는 창을 `--window-id` 로 골라도 앞 창의 트리를 줄 수 있다. 창을 바꿀 때는 먼저 System Events 로 그 창에 `AXRaise` 를 보낸다.
+  - 끝나면 그 pid 가 없고 개발 서버 포트에 LISTEN 이 없는지(`lsof -nP -iTCP:<포트> -sTCP:LISTEN`) 본다.
+
 ## 커밋과 PR
 
 커밋 메시지는 `CONTRIBUTING.md` 「커밋 메시지」, PR 은 「PR 흐름」 절을 따른다. stage 는 경로를 명시한다(`base` 스택 「git add -A」 절).
