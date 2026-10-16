@@ -52,16 +52,27 @@ function mergeLastGood(
   }
 }
 
+/** 이 창이 직전에 쓴 바인딩과, 그것을 만든 기본 키맵. */
+export interface PreviousKeymap {
+  readonly base: readonly Binding[];
+  readonly bindings: readonly Binding[];
+}
+
 export function resolveKeymap(
   base: readonly Binding[],
   config: ConfigView | undefined,
-  previous: readonly Binding[] | undefined,
+  previous: PreviousKeymap | undefined,
   platform: Platform,
   lastGood?: LastGoodKeymap,
 ): ResolvedKeymap {
   const user = config?.snapshot.files.find((f) => f.id === KEYMAP_CONFIG_ID)?.value;
   const fault = config?.error && isKeymapFile(config.error.path) ? config.error.message : undefined;
-  const kept = () => previous ?? mergeLastGood(base, lastGood, platform);
+  // 기본 키맵이 바뀌었으면(번들 → 확장 레지스트리, default-keymap.ts) 직전 바인딩은 옛 기본 키맵 위의 것이다. 그때는
+  // 마지막 성공값을 새 기본 키맵 위에 다시 병합한다 — 직전 것을 그대로 두면 사용자 파일을 고칠 때까지 새 기본 키맵이
+  // 적용되지 않는다.
+  const kept = () =>
+    (previous?.base === base ? previous.bindings : undefined) ??
+    mergeLastGood(base, lastGood, platform);
   // 설정을 아직 받지 못했다(창이 막 뜸). 「파일 없음」이 아니므로 기본 키맵으로 메뉴를 되돌리지 않고, 마지막 성공값도 덮지 않는다.
   if (!config) return { bindings: kept() ?? base, warnings: [] };
   try {

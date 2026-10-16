@@ -12,6 +12,7 @@ import { App } from "../App";
 import { createThemeStore } from "../theme/theme-store";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
+import { DEFAULT_KEYMAP_TOML as DEFAULT_KEYMAP_TOML_FOR_TEST } from "./default-keymap";
 import type { KeymapNative } from "./native";
 
 declare global {
@@ -22,6 +23,9 @@ const host = vi.hoisted(() => ({
   keymap: undefined as unknown,
   /** `keymap.get` 의 응답 파일 텍스트. `undefined` 면 번들 기본 키맵과 같은 파일, `null` 이면 오류로 답한다. */
   registryKeymap: undefined as string | null | undefined,
+  /** `keymap.get` 응답을 늦출 시간(ms). 설정보다 늦게 오는 경우를 만든다. */
+  registryDelayMs: 0,
+  keymapGets: 0,
   error: null as ConfigView["error"],
   emitHostEvent: (_topic: string) => {},
   hostSubscriptions: [] as string[][],
@@ -51,16 +55,23 @@ vi.mock("../tauri-transport", async () => {
               },
               error: host.error,
             } satisfies ConfigView);
-          case "keymap.get":
-            if (host.registryKeymap === null) {
-              return send({ id: m.id, error: { code: -32603, message: "internal error" } });
-            }
-            return reply({
-              id: "pitwall-default",
-              extension: "dev.pitwall.keymap-default",
-              kind: "base",
-              content: host.registryKeymap ?? DEFAULT_KEYMAP_TOML,
-            } satisfies KeymapFile);
+          case "keymap.get": {
+            host.keymapGets++;
+            const answer = () => {
+              if (host.registryKeymap === null) {
+                return send({ id: m.id, error: { code: -32603, message: "internal error" } });
+              }
+              reply({
+                id: "pitwall-default",
+                extension: "dev.pitwall.keymap-default",
+                kind: "base",
+                content: host.registryKeymap ?? DEFAULT_KEYMAP_TOML,
+              } satisfies KeymapFile);
+            };
+            if (host.registryDelayMs > 0) setTimeout(answer, host.registryDelayMs);
+            else answer();
+            return;
+          }
           case "host.info":
             return reply({
               hostId: "local",
@@ -117,6 +128,8 @@ beforeEach(() => {
   vi.spyOn(console, "info").mockImplementation(() => {});
   host.keymap = undefined;
   host.registryKeymap = undefined;
+  host.registryDelayMs = 0;
+  host.keymapGets = 0;
   host.error = null;
   host.hostSubscriptions = [];
   localStorage.clear();
@@ -352,7 +365,6 @@ linux = "ctrl+j"
   );
 });
 
-// 오류 응답은 TanStack Query 가 몇 번 다시 부른 뒤에야 오류가 된다 — 그동안 번들 키맵을 쓰는지만 본다.
 it("keeps the bundled default keymap when the registry fails or sends a broken file", async () => {
   for (const reply of [null, "schema = 1\n[[bindings]]\naction = 1\n"]) {
     host.registryKeymap = reply;
@@ -362,17 +374,41 @@ it("keeps the bundled default keymap when the registry fails or sends a broken f
     );
     expect(await press("KeyA", { metaKey: true, shiftKey: true })).toBe(true);
     expect(dialog()).not.toBeNull();
-    if (reply !== null) {
-      expect(log.warn).toHaveBeenCalledWith(
-        expect.stringMatching(
-          /^keymap pitwall-default not loaded from the extension registry, using the bundled copy: /,
-        ),
-        "keymap",
-      );
-    }
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^keymap pitwall-default not loaded from the extension registry, using the bundled copy: /,
+      ),
+      "keymap",
+    );
     expect(log.info).not.toHaveBeenCalledWith(expect.stringMatching(/^keymap /), "keymap");
     act(() => root!.unmount());
     root = undefined;
     document.body.innerHTML = "";
+    log.warn.mockClear();
   }
+});
+
+it("applies a registry default keymap that arrives after a malformed keymap.toml", async () => {
+  host.keymap = { bindings: [{ action: "action.find", key: "cmd+nope" }] };
+  host.registryKeymap = DEFAULT_KEYMAP_TOML_FOR_TEST.replace('mac = "cmd+,"', 'mac = "cmd+j"');
+  host.registryDelayMs = 50;
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  await mount("settings");
+  await act(async () => new Promise((r) => setTimeout(r, 80)));
+  expect(native.syncMenu).toHaveBeenLastCalledWith(
+    expect.objectContaining({ "settings.open": "Super+KeyJ", "action.find": "Super+Shift+KeyA" }),
+  );
+  expect(document.querySelector("[role=alert]")?.textContent).toContain("cmd+nope");
+});
+
+it("asks the registry for the default keymap once, not on every focus", async () => {
+  await mount("settings");
+  expect(host.keymapGets).toBe(1);
+  await act(async () => {
+    // TanStack Query 의 focusManager 는 window 의 visibilitychange 를 듣는다.
+    window.dispatchEvent(new Event("visibilitychange"));
+  });
+  await settle();
+  expect(host.keymapGets).toBe(1);
+  expect(log.warn).not.toHaveBeenCalled();
 });

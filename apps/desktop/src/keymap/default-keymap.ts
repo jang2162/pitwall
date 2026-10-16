@@ -51,3 +51,14 @@ export function chooseDefaultKeymap(
     return { bindings: bundled(), source: { kind: "bundled" }, error };
   }
 }
+
+/**
+ * 「번들 키맵을 쓴다」고 알릴 이유. 레지스트리 키맵을 받아 쓰고 있으면 그 뒤의 조회 오류는 이유가 아니다(`data` 가 있다).
+ */
+export function registryKeymapProblem(
+  query: { data?: unknown; error: unknown },
+  chosen: DefaultKeymap,
+): string | undefined {
+  if (query.data === undefined && query.error) return String(query.error);
+  return chosen.error;
+}

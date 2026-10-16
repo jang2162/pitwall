@@ -26,11 +26,11 @@ import {
 
 import { useRpcQuery } from "../rpc/host";
 import { contextLayers } from "./context";
-import { chooseDefaultKeymap, DEFAULT_KEYMAP_ID } from "./default-keymap";
+import { chooseDefaultKeymap, DEFAULT_KEYMAP_ID, registryKeymapProblem } from "./default-keymap";
 import { FindActionDialog } from "./find-action";
 import type { KeymapNative } from "./native";
 import { keymapPlatform } from "./platform";
-import { type LastGoodKeymap, resolveKeymap } from "./resolve";
+import { type LastGoodKeymap, type PreviousKeymap, resolveKeymap } from "./resolve";
 
 /** 키로 실행한 액션이 같은 눌림의 메뉴 accelerator 로 또 오는 것을 버리는 시간 창. */
 export const MENU_DUPLICATE_MS = 300;
@@ -122,13 +122,19 @@ export function KeymapProvider({
   const [registry] = useState(() => new ActionRegistry());
   const platform = useMemo(() => keymapPlatform(navigator.userAgent), []);
   // 기본 키맵은 확장 레지스트리에서 받고, 받기 전 · 실패하면 번들 것을 쓴다(default-keymap.ts).
-  const registryKeymap = useRpcQuery("keymap.get", { id: DEFAULT_KEYMAP_ID });
+  // 레지스트리는 앱이 시작할 때 한 번 읽으므로 다시 부를 일이 없다. 창 포커스 · 재연결 때마다 다시 부르지 않고, 실패도
+  // 다시 부르지 않는다(실패는 번들 키맵으로 이미 덮여 있다).
+  const registryKeymap = useRpcQuery(
+    "keymap.get",
+    { id: DEFAULT_KEYMAP_ID },
+    { staleTime: Infinity, retry: false },
+  );
   const defaultKeymap = useMemo(
     () => chooseDefaultKeymap(registryKeymap.data, platform),
     [registryKeymap.data, platform],
   );
   const base = defaultKeymap.bindings;
-  const registryProblem = registryKeymap.error ? String(registryKeymap.error) : defaultKeymap.error;
+  const registryProblem = registryKeymapProblem(registryKeymap, defaultKeymap);
   const registryExtension =
     defaultKeymap.source.kind === "registry" ? defaultKeymap.source.extension : undefined;
   useEffect(() => {
@@ -145,15 +151,15 @@ export function KeymapProvider({
     }
   }, [registryProblem, registryExtension, log]);
   const config = useRpcQuery("config.get", {});
-  const previous = useRef<readonly Binding[]>(undefined);
+  const previous = useRef<PreviousKeymap>(undefined);
   const resolved = useMemo(
     () => resolveKeymap(base, config.data, previous.current, platform, readLastGood()),
     [base, config.data, platform],
   );
   useEffect(() => {
-    previous.current = resolved.bindings;
+    previous.current = { base, bindings: resolved.bindings };
     if (resolved.good) writeLastGood(resolved.good);
-  }, [resolved]);
+  }, [base, resolved]);
   useEffect(() => {
     if (!resolved.error) return;
     console.warn("[keymap] 사용자 키맵을 읽지 못해 이전 키맵을 쓴다", resolved.error);

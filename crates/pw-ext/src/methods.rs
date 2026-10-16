@@ -6,7 +6,7 @@ use pw_rpc::{JsonValue, Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::{KeymapKind, Severity};
-use crate::registry::{Appearance, Registry};
+use crate::registry::{Appearance, MAX_CONTENT_BYTES, Registry};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -326,11 +326,28 @@ fn keymap_file(registry: &Registry, id: &str) -> Result<KeymapFile, RpcError> {
     let keymap = registry
         .keymap(id)
         .ok_or_else(|| RpcError::invalid_params(format!("unknown keymap `{id}`")))?;
-    // 크기는 등록할 때 MAX_CONTENT_BYTES 로 막았다. 그 뒤에 파일이 바뀌었을 수 있어 읽기 · UTF-8 실패는 오류로 낸다.
-    let bytes = keymap
-        .file
+    // 등록한 뒤에 파일이 바뀌었을 수 있다 — 크기 상한을 읽기 전에 다시 보고, 읽기 · UTF-8 실패는 오류로 낸다.
+    let file = &keymap.file;
+    let too_big = |size: u64| {
+        RpcError::internal(format!(
+            "{}: {size} bytes, over the {MAX_CONTENT_BYTES}-byte limit",
+            file.display()
+        ))
+    };
+    let size = file
+        .root
+        .size(&file.path)
+        .map_err(|e| RpcError::internal(format!("{}: {e}", file.display())))?;
+    if size > MAX_CONTENT_BYTES {
+        return Err(too_big(size));
+    }
+    let bytes = file
         .read()
-        .map_err(|e| RpcError::internal(format!("{}: {e}", keymap.file.display())))?;
+        .map_err(|e| RpcError::internal(format!("{}: {e}", file.display())))?;
+    // 크기를 본 뒤 읽기 전에 커졌을 수도 있다.
+    if bytes.len() as u64 > MAX_CONTENT_BYTES {
+        return Err(too_big(bytes.len() as u64));
+    }
     let content = String::from_utf8(bytes.into_owned())
         .map_err(|_| RpcError::internal(format!("{}: not UTF-8", keymap.file.display())))?;
     Ok(KeymapFile {
@@ -439,6 +456,44 @@ mod tests {
         )
         .await;
         assert_eq!(reply["error"]["data"], "unknown keymap `nope`", "{reply}");
+    }
+
+    #[tokio::test]
+    async fn keymap_get_refuses_a_file_that_grew_over_the_limit_after_loading() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("vim");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("extension.toml"),
+            "id = \"dev.example.vim\"\nname = \"Vim\"\nversion = \"1.0.0\"\nengines = { pitwall = \"*\" }\n\
+             [contributes.keymaps.vim]\nkind = \"bindings\"\nfile = \"vim.toml\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("vim.toml"), "schema = 1\n").unwrap();
+        let registry = Registry::from_roots(
+            &Version::new(0, 0, 0),
+            [crate::ExtensionRoot::Dir(root.clone())],
+        );
+        assert_eq!(registry.diagnostics(), []);
+        let request =
+            json!({"jsonrpc": "2.0", "id": 1, "method": "keymap.get", "params": {"id": "vim"}});
+
+        std::fs::write(
+            root.join("vim.toml"),
+            "#".repeat(MAX_CONTENT_BYTES as usize + 1),
+        )
+        .unwrap();
+        let reply = call(registry, request).await;
+        let data = reply["error"]["data"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{reply}"));
+        assert!(
+            data.ends_with(&format!(
+                "{} bytes, over the {MAX_CONTENT_BYTES}-byte limit",
+                MAX_CONTENT_BYTES + 1
+            )),
+            "{data}"
+        );
     }
 
     #[tokio::test]

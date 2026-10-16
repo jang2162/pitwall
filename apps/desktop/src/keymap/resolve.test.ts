@@ -98,7 +98,7 @@ describe("resolveKeymap", () => {
     const resolved = resolveKeymap(
       base,
       view({ bindings: [{ action: "action.find", key: "cmd+nope" }] }),
-      previous,
+      { base, bindings: previous },
       "mac",
     );
     expect(resolved.bindings).toBe(previous);
@@ -126,10 +126,34 @@ describe("resolveKeymap", () => {
         { bindings: [{ action: "action.find", key: "cmd+nope" }] },
         { message: "expected `]`", path: "/cfg/pitwall/keymap.toml" },
       ),
-      base,
+      { base, bindings: base },
       "mac",
     );
     expect(resolved).toEqual({ bindings: base, error: "expected `]`", warnings: [] });
+  });
+
+  it("re-merges the last good user keymap when the default keymap changes under a malformed file", () => {
+    const value = { bindings: [{ action: "action.find", key: "cmd+k" }] };
+    const previous = resolveKeymap(base, view(value), undefined, "mac").bindings;
+    // 확장 레지스트리에서 온 새 기본 키맵: 설정 열기를 ⌘J 로 둔다.
+    const registryBase = readDefaultKeymap(
+      parseKeymapToml(DEFAULT_KEYMAP_TOML.replace('mac = "cmd+,"', 'mac = "cmd+j"')),
+      "mac",
+    );
+    expect(registryBase.find((b) => b.action === "settings.open")?.key).toBe("cmd+j");
+    const malformed = view({ bindings: [{ action: "action.find", key: "cmd+nope" }] });
+    const resolved = resolveKeymap(registryBase, malformed, { base, bindings: previous }, "mac", {
+      value,
+    });
+    expect(find(resolved.bindings)).toEqual(["cmd+k"]);
+    expect(resolved.bindings).toEqual(
+      resolveKeymap(registryBase, view(value), undefined, "mac").bindings,
+    );
+    expect(resolved.error).toContain("cmd+nope");
+    // 마지막 성공값도 없으면 새 기본 키맵 그대로다.
+    expect(
+      resolveKeymap(registryBase, malformed, { base, bindings: previous }, "mac").bindings,
+    ).toBe(registryBase);
   });
 
   it("falls back to the app-wide last good keymap in a window that has none yet", () => {

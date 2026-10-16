@@ -111,12 +111,22 @@ export function useHost(): HostConnection {
   return host;
 }
 
+/** `useRpcQuery` 가 TanStack Query 에 그대로 넘기는 선택 옵션. */
+export interface RpcQueryOptions {
+  staleTime?: number;
+  retry?: boolean | number;
+}
+
 /** 이 창의 Host 에 unary 메서드를 쿼리로 부른다. 연결되기 전에는 부르지 않고 기다린다. */
-export function useRpcQuery<M extends UnaryMethod>(method: M, params: UnaryMethods[M]["params"]) {
+export function useRpcQuery<M extends UnaryMethod>(
+  method: M,
+  params: UnaryMethods[M]["params"],
+  options: RpcQueryOptions = {},
+) {
   const { client, key } = useHost();
   return useQuery(
     client
-      ? rpcQueryOptions(client, key, method, params)
+      ? { ...rpcQueryOptions(client, key, method, params), ...options }
       : { queryKey: rpcQueryKey(key, method, params ?? null), queryFn: skipToken },
   );
 }
