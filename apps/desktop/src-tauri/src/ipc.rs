@@ -152,11 +152,14 @@ pub enum IpcError {
 pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Builder<R> {
     builder
         .manage(IpcState::new(router))
+        // Tauri 는 invoke handler 를 하나만 받으므로 앱의 다른 command 도 여기에 둔다.
         .invoke_handler(tauri::generate_handler![
             rpc_page,
             rpc_connect,
             rpc_send,
-            rpc_disconnect
+            rpc_disconnect,
+            crate::menu::keymap_sync_menu,
+            crate::windows::open_settings_window
         ])
         .on_window_event(on_window_event)
         .on_page_load(|webview, payload| on_page_load(webview, payload.event()))

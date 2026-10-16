@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildDefaultLayout,
+  collapseAllDocks,
   EDITOR_TAB,
+  hiddenPanels,
   keepEditor,
   LAYOUT_STORAGE_KEY,
   LAYOUT_VERSION,
@@ -13,6 +15,8 @@ import {
   restoreLayout,
   saveLayout,
   showPanel,
+  toggleToolWindow,
+  trackHiddenPanels,
 } from "./project-layout";
 
 // React 가 아니라 dockview-core 로 같은 api 를 만든다. 패널 내용은 빈 요소면 된다.
@@ -23,8 +27,13 @@ function dockview(): DockviewApi {
     createComponent: () => ({ element: document.createElement("div"), init: () => {} }),
   });
   api.layout(1280, 760);
+  // 앱(project-window.tsx 의 ProjectDock)처럼 닫기를 숨김으로 기록한다.
+  trackHiddenPanels(api);
   return api;
 }
+
+/** 닫기가 숨김으로 기록되기를 기다린다(trackHiddenPanels 는 흐름이 끝난 뒤에 본다). */
+const settle = () => new Promise<void>((resolve) => queueMicrotask(resolve));
 
 function memoryStorage(initial?: string) {
   const items = new Map<string, string>();
@@ -100,27 +109,65 @@ describe("save and restore", () => {
     expect(placement(second)).toEqual({ ...defaultPlacement, terminal: "right" });
   });
 
-  it("brings a closed tool window back at home on restore, behind the restored active tab", () => {
+  it("keeps a closed tool window hidden after restore and reopens it where it was closed", async () => {
     const first = dockview();
     buildDefaultLayout(first);
     first.getPanel("structure")!.api.setActive();
+    first.getPanel("terminal")!.api.moveTo({ group: edge(first, "right") });
     first.getPanel("commit")!.api.close();
+    first.getPanel("terminal")!.api.close();
+    await settle();
     const storage = memoryStorage();
     saveLayout(first, storage);
 
     const second = dockview();
     restoreLayout(second, storage);
-    expect(placement(second)).toEqual(defaultPlacement);
+    const { commit: _commit, terminal: _terminal, ...visible } = defaultPlacement;
+    expect(placement(second)).toEqual(visible);
+    expect([...hiddenPanels(second).entries()]).toEqual([
+      ["commit", "left"],
+      ["terminal", "right"],
+    ]);
     expect(edge(second, "left").activePanel?.id).toBe("structure");
+
+    showPanel(second, "terminal");
+    expect(placement(second).terminal).toBe("right");
+    expect(hiddenPanels(second).has("terminal")).toBe(false);
   });
 
-  it("reopens a tool window closed during the session at home from the tool window bar", () => {
+  it("reopens a tool window closed during the session where it was", async () => {
     const api = dockview();
     buildDefaultLayout(api);
     api.getPanel("commit")!.api.close();
+    await settle();
     showPanel(api, "commit");
     expect(placement(api).commit).toBe("left");
     expect(edge(api, "left").activePanel?.id).toBe("commit");
+  });
+
+  it("does not take a moved tool window for a hidden one", async () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    api.getPanel("terminal")!.api.moveTo({ group: edge(api, "right") });
+    await settle();
+    expect(hiddenPanels(api).size).toBe(0);
+  });
+
+  it("ignores unknown entries in the saved hidden list", () => {
+    const first = dockview();
+    buildDefaultLayout(first);
+    const storage = memoryStorage(
+      JSON.stringify({
+        version: LAYOUT_VERSION,
+        layout: first.toJSON(),
+        hidden: { nope: "left", editor: "left", commit: "top", project: "right" },
+      }),
+    );
+    const second = dockview();
+    expect(restoreLayout(second, storage)).toBe("restored");
+    // project 는 저장본의 레이아웃에도 있으므로 보이는 쪽을 믿는다.
+    expect(hiddenPanels(second).size).toBe(0);
+    expect(placement(second)).toEqual(defaultPlacement);
   });
 
   it("puts a tool window missing from the save at its home", () => {
@@ -138,45 +185,50 @@ describe("save and restore", () => {
     expect(placement(second).queryResults).toBe("bottom");
   });
 
-  it("leaves a moved tool window where it was moved", () => {
+  it("leaves a moved tool window where it was moved", async () => {
     const first = dockview();
     buildDefaultLayout(first);
     first.getPanel("terminal")!.api.moveTo({ group: edge(first, "right") });
     first.getPanel("commit")!.api.close();
+    await settle();
     const storage = memoryStorage();
     saveLayout(first, storage);
 
     const second = dockview();
     restoreLayout(second, storage);
-    expect(placement(second)).toEqual({ ...defaultPlacement, terminal: "right" });
+    const { commit: _commit, ...rest } = defaultPlacement;
+    expect(placement(second)).toEqual({ ...rest, terminal: "right" });
     expect(second.panels.filter((p) => p.id === "terminal")).toHaveLength(1);
   });
 });
 
 describe("collapsed tool window dock", () => {
   // 왼쪽 툴 윈도우를 모두 닫으면 dockview 가 비게 된 edge 그룹을 접는다.
-  function emptyLeft() {
+  async function emptyLeft() {
     const api = dockview();
     buildDefaultLayout(api);
     for (const panel of PANELS.filter((p) => p.home === "left"))
       api.getPanel(panel.id)!.api.close();
+    await settle();
     expect(api.getEdgeGroup("left")!.isCollapsed()).toBe(true);
     return api;
   }
 
-  it("is expanded after restoring a save in which it was collapsed", () => {
-    const first = emptyLeft();
+  it("is expanded when a hidden tool window is reopened into it after restore", async () => {
+    const first = await emptyLeft();
     const storage = memoryStorage();
     saveLayout(first, storage);
 
     const second = dockview();
     restoreLayout(second, storage);
+    expect(placement(second).project).toBeUndefined();
+    showPanel(second, "project");
     expect(placement(second).project).toBe("left");
     expect(second.getEdgeGroup("left")!.isCollapsed()).toBe(false);
   });
 
-  it("is expanded when the tool window bar puts a panel into it", () => {
-    const api = emptyLeft();
+  it("is expanded when the tool window bar puts a panel into it", async () => {
+    const api = await emptyLeft();
     showPanel(api, "project");
     expect(api.getEdgeGroup("left")!.isCollapsed()).toBe(false);
   });
@@ -187,6 +239,43 @@ describe("collapsed tool window dock", () => {
     api.getEdgeGroup("left")!.collapse();
     showPanel(api, "commit");
     expect(api.getEdgeGroup("left")!.isCollapsed()).toBe(false);
+  });
+});
+
+describe("tool window actions", () => {
+  it("shows a tool window, and collapses its dock when it is already the active one", () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    toggleToolWindow(api, "commit");
+    expect(api.activePanel?.id).toBe("commit");
+    expect(api.getEdgeGroup("left")!.isCollapsed()).toBe(false);
+
+    toggleToolWindow(api, "commit");
+    expect(api.getEdgeGroup("left")!.isCollapsed()).toBe(true);
+    expect(placement(api).commit).toBe("left");
+
+    toggleToolWindow(api, "commit");
+    expect(api.getEdgeGroup("left")!.isCollapsed()).toBe(false);
+  });
+
+  it("reopens a hidden tool window", async () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    api.getPanel("terminal")!.api.close();
+    await settle();
+    toggleToolWindow(api, "terminal");
+    expect(placement(api).terminal).toBe("bottom");
+    expect(api.activePanel?.id).toBe("terminal");
+  });
+
+  it("collapses every dock and keeps the panels", () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    collapseAllDocks(api);
+    for (const dock of ["left", "right", "bottom"] as const) {
+      expect(api.getEdgeGroup(dock)!.isCollapsed()).toBe(true);
+    }
+    expect(placement(api)).toEqual(defaultPlacement);
   });
 });
 

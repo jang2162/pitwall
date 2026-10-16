@@ -64,6 +64,12 @@ pub fn open_settings<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWin
     open_single(app, WindowKind::Settings, SETTINGS_LABEL)
 }
 
+/// 웹뷰의 `settings.open` 액션(src/keymap/actions.ts). 창을 만드므로 async command 다(위 주석).
+#[tauri::command]
+pub async fn open_settings_window<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    open_settings(&app).map(drop).map_err(|e| e.to_string())
+}
+
 /// 프로젝트 모델이 아직 없으므로(M0-09·M0-12) 부를 때마다 빈 프로젝트 창을 하나 더 연다.
 pub fn open_project<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
     build(app, WindowKind::Project, &next_project_label())

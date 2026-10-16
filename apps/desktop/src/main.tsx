@@ -37,7 +37,7 @@ if (!root) throw new Error("#root 가 index.html 에 없다");
 createRoot(root).render(
   <StrictMode>
     <ThemeStoreProvider store={themeStore}>
-      <App kind={parseWindowKind(window.location.search)} />
+      <App kind={parseWindowKind(window.location.search)} log={log} />
     </ThemeStoreProvider>
   </StrictMode>,
 );

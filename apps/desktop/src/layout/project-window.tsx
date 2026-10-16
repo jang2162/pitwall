@@ -27,8 +27,10 @@ import {
   SquareTerminal,
   TriangleAlert,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
+import { toolWindowActions } from "../keymap/actions";
+import { useRegisterActions } from "../keymap/keymap-provider";
 import { useRpcQuery } from "../rpc/host";
 import { ThemeSwitcher, useTheme } from "../theme/theme-switcher";
 import {
@@ -41,6 +43,7 @@ import {
   persistLayout,
   restoreLayout,
   showPanel,
+  trackHiddenPanels,
 } from "./project-layout";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -58,9 +61,14 @@ const ICONS: Record<string, LucideIcon> = {
   agent: Bot,
 };
 
+// `data-tool-window` 는 키맵 컨텍스트의 툴 윈도우 층이다(src/keymap/context.ts).
 function ToolWindowPlaceholder({ api }: IDockviewPanelProps) {
   return (
-    <div className="flex h-full items-center justify-center bg-ui-panel text-ui-muted-foreground">
+    <div
+      data-tool-window={api.id}
+      tabIndex={-1}
+      className="flex h-full items-center justify-center bg-ui-panel text-ui-muted-foreground"
+    >
       {api.title} — 툴 윈도우 자리
     </div>
   );
@@ -159,7 +167,9 @@ export function ProjectDock({
     if (!api) return;
     const persisted = persistLayout(api, storage);
     const editor = keepEditor(api);
+    const hidden = trackHiddenPanels(api);
     return () => {
+      hidden.dispose();
       editor.dispose();
       persisted.dispose();
     };
@@ -178,6 +188,10 @@ export function ProjectDock({
 
 export function ProjectWindow() {
   const [api, setApi] = useState<DockviewApi>();
+  const apiRef = useRef<DockviewApi>(undefined);
+  apiRef.current = api;
+  const actions = useMemo(() => toolWindowActions(() => apiRef.current), []);
+  useRegisterActions(actions);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1">

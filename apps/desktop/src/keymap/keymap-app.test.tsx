@@ -1,0 +1,233 @@
+// @vitest-environment happy-dom
+// 앱(App)을 가짜 Host 에 붙여 띄우고 키 이벤트를 넣는다: 한글 입력 상태의 ⌘⇧A, 툴 윈도우 다시 열기,
+// keymap.toml 덮어쓰기가 Host 범위 config.changed 로 재시작 없이 반영되는 것, 메뉴 accelerator 동기화.
+
+import type { ConfigView, HostInfo } from "@pitwall/rpc-client";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+import { App } from "../App";
+import { createThemeStore } from "../theme/theme-store";
+import { ThemeStoreProvider } from "../theme/theme-switcher";
+import type { KeymapNative } from "./native";
+
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean;
+}
+
+const host = vi.hoisted(() => ({
+  keymap: undefined as unknown,
+  error: null as ConfigView["error"],
+  emitHostEvent: (_topic: string) => {},
+  hostSubscriptions: [] as string[][],
+}));
+
+vi.mock("../tauri-transport", async () => {
+  const { createMemoryTransportPair: pair } = await import("@pitwall/rpc-client");
+  return {
+    connectHost: async () => {
+      const [client, server] = pair();
+      const subs = new Map<number, { projectId?: string; topics: string[] }>();
+      let next = 1;
+      const send = (m: object) => server.send(JSON.stringify({ jsonrpc: "2.0", ...m }));
+      server.onMessage((text) => {
+        const m = JSON.parse(text) as { id?: number; method: string; params: never };
+        const reply = (result: unknown) => send({ id: m.id, result });
+        switch (m.method) {
+          case "config.get":
+            return reply({
+              snapshot: {
+                files:
+                  host.keymap === undefined
+                    ? []
+                    : [{ id: "keymap", value: host.keymap as never, layers: [] }],
+                notices: [],
+              },
+              error: host.error,
+            } satisfies ConfigView);
+          case "host.info":
+            return reply({
+              hostId: "local",
+              kind: "local",
+              version: "0",
+              os: "t",
+              arch: "t",
+            } satisfies HostInfo);
+          case "events.subscribe": {
+            const id = next++;
+            const p = m.params as { projectId?: string; topics: string[] };
+            subs.set(id, p);
+            if (p.projectId === undefined) host.hostSubscriptions.push(p.topics);
+            return reply({ subscriptionId: id });
+          }
+          case "events.unsubscribe":
+            return reply(null);
+        }
+      });
+      host.emitHostEvent = (topic) => {
+        for (const [subscriptionId, s] of subs) {
+          if (s.projectId !== undefined || !s.topics.includes(topic)) continue;
+          send({
+            method: "events.event",
+            params: { subscriptionId, projectId: null, topic, payload: {} },
+          });
+        }
+      };
+      return { transport: client, close: async () => {} };
+    },
+  };
+});
+
+let root: Root | undefined;
+const native = {
+  syncMenu: vi.fn<KeymapNative["syncMenu"]>(async () => {}),
+  onMenuAction: vi.fn<KeymapNative["onMenuAction"]>(() => () => {}),
+  openSettings: vi.fn<KeymapNative["openSettings"]>(async () => {}),
+};
+
+beforeEach(() => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+  );
+  vi.spyOn(console, "info").mockImplementation(() => {});
+  host.keymap = undefined;
+  host.error = null;
+  host.hostSubscriptions = [];
+  localStorage.clear();
+  native.syncMenu.mockClear();
+  native.openSettings.mockClear();
+});
+
+afterEach(() => {
+  act(() => root?.unmount());
+  root = undefined;
+  document.body.innerHTML = "";
+  vi.restoreAllMocks();
+});
+
+async function mount(kind: "project" | "settings") {
+  const element = document.createElement("div");
+  element.style.width = "1280px";
+  element.style.height = "800px";
+  document.body.append(element);
+  const store = createThemeStore({
+    system: { current: () => "light", subscribe: () => () => {} },
+    storage: { read: () => undefined, write: () => {} },
+    apply: () => {},
+  });
+  root = createRoot(element);
+  await act(async () =>
+    root!.render(
+      <ThemeStoreProvider store={store}>
+        <App kind={kind} native={native} />
+      </ThemeStoreProvider>,
+    ),
+  );
+  await settle();
+}
+
+const settle = () => act(async () => new Promise((r) => setTimeout(r, 20)));
+
+async function press(code: string, mods: Partial<KeyboardEventInit> = {}, key = code) {
+  let prevented = false;
+  await act(async () => {
+    const event = new KeyboardEvent("keydown", {
+      code,
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...mods,
+    });
+    (document.activeElement ?? document.body).dispatchEvent(event);
+    prevented = event.defaultPrevented;
+    document.body.dispatchEvent(new KeyboardEvent("keyup", { code, key, bubbles: true, ...mods }));
+  });
+  await settle();
+  return prevented;
+}
+
+const dialog = () => document.querySelector("[cmdk-dialog]");
+
+it("opens Find Action with ⌘⇧A even when the IME sends a hangul key, but not while composing", async () => {
+  await mount("settings");
+  expect(await press("KeyA", { metaKey: true, shiftKey: true, isComposing: true }, "ㅁ")).toBe(
+    false,
+  );
+  expect(dialog()).toBeNull();
+
+  expect(await press("KeyA", { metaKey: true, shiftKey: true }, "ㅁ")).toBe(true);
+  expect(dialog()).not.toBeNull();
+  const items = [...document.querySelectorAll("[cmdk-item]")].map((e) => e.textContent);
+  expect(items).toContain("설정⌘,");
+});
+
+it("finds an action from a half-composed hangul query and runs it", async () => {
+  await mount("settings");
+  await press("KeyA", { metaKey: true, shiftKey: true }, "ㅁ");
+  const input = document.querySelector<HTMLInputElement>("[cmdk-input]")!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, "설ㅈ");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+  const items = [...document.querySelectorAll("[cmdk-item]")];
+  expect(items.map((e) => e.textContent)).toEqual(["설정⌘,"]);
+  await act(async () => (items[0] as HTMLElement).click());
+  await settle();
+  expect(dialog()).toBeNull();
+  expect(native.openSettings).toHaveBeenCalledTimes(1);
+});
+
+it("reopens a closed tool window with its shortcut", async () => {
+  await mount("project");
+  const terminalTab = () =>
+    [...document.querySelectorAll<HTMLElement>(".dv-tab")].find((t) =>
+      t.textContent?.includes("터미널"),
+    );
+  // 터미널을 닫는다(탭의 × 와 같은 경로) — 앱은 숨김으로 기록한다.
+  await act(async () =>
+    terminalTab()!.querySelector<HTMLElement>(".dv-default-tab-action")!.click(),
+  );
+  await settle();
+  expect(terminalTab()).toBeUndefined();
+
+  expect(await press("F12", { altKey: true })).toBe(true);
+  expect(terminalTab()).toBeDefined();
+  // 다시 연 툴 윈도우가 앞에 보인다.
+  expect(document.querySelector('[data-tool-window="terminal"]')).not.toBeNull();
+});
+
+it("applies a keymap.toml change without a restart and syncs the menu", async () => {
+  await mount("settings");
+  expect(host.hostSubscriptions).toContainEqual(["config.changed", "config.error"]);
+  expect(native.syncMenu).toHaveBeenLastCalledWith(
+    expect.objectContaining({ "action.find": "Super+Shift+KeyA", "settings.open": "Super+Comma" }),
+  );
+
+  host.keymap = { bindings: [{ action: "action.find", key: "cmd+k" }] };
+  await act(async () => host.emitHostEvent("config.changed"));
+  await settle();
+  expect(native.syncMenu).toHaveBeenLastCalledWith(
+    expect.objectContaining({ "action.find": "Super+KeyK" }),
+  );
+  expect(await press("KeyA", { metaKey: true, shiftKey: true })).toBe(false);
+  expect(dialog()).toBeNull();
+  expect(await press("KeyK", { metaKey: true })).toBe(true);
+  expect(dialog()).not.toBeNull();
+});
+
+it("keeps the previous keymap and shows the error when keymap.toml is malformed", async () => {
+  host.keymap = { bindings: [{ action: "action.find", key: "cmd+k" }] };
+  await mount("settings");
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  host.keymap = { bindings: [{ action: "action.find", key: "cmd+nope" }] };
+  await act(async () => host.emitHostEvent("config.changed"));
+  await settle();
+  expect(document.querySelector("[role=alert]")?.textContent).toContain("cmd+nope");
+  expect(await press("KeyK", { metaKey: true })).toBe(true);
+  expect(dialog()).not.toBeNull();
+});
