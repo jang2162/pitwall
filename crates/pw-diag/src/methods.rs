@@ -96,7 +96,9 @@ pub fn register(router: &mut Router, diagnostics: Arc<Diagnostics>) {
 pub fn write_ui_batch(batch: UiLogBatch) {
     let over = batch.entries.len().saturating_sub(MAX_BATCH_ENTRIES);
     for entry in batch.entries.into_iter().take(MAX_BATCH_ENTRIES) {
-        let message = clip(&entry.message, MAX_MESSAGE_BYTES);
+        // 줄바꿈을 이스케이프한다. 메시지 안의 `\n<시각> ERROR …` 가 파일에서 별개 항목으로 읽히면(진단 텍스트의
+        // 「최근 오류」 등) 웹뷰가 코어 로그 항목을 위조할 수 있다.
+        let message = escape_newlines(clip(&entry.message, MAX_MESSAGE_BYTES));
         let source = entry.source.as_deref().map(|s| clip(s, 128));
         match entry.level {
             UiLogLevel::Debug => tracing::debug!(target: UI_TARGET, source, "{message}"),
@@ -108,6 +110,14 @@ pub fn write_ui_batch(batch: UiLogBatch) {
     let dropped = u64::from(batch.dropped) + over as u64;
     if dropped > 0 {
         tracing::warn!(target: UI_TARGET, dropped, "dropped UI log entries (queue or batch limit)");
+    }
+}
+
+fn escape_newlines(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains(['\n', '\r']) {
+        text.replace('\r', "\\r").replace('\n', "\\n").into()
+    } else {
+        text.into()
     }
 }
 
@@ -206,6 +216,28 @@ mod tests {
             "201번째 항목부터 버린다"
         );
         assert!(ui.contains("dropped=5"), "{ui}");
+    }
+
+    #[test]
+    fn newlines_in_ui_messages_cannot_forge_entries() {
+        let dir = TestDir::new();
+        let mut config = LogConfig::new(dir.path());
+        config.clock = FakeClock::at("2026-10-16");
+        tracing::subscriber::with_default(subscriber(&config).unwrap(), || {
+            write_ui_batch(UiLogBatch {
+                entries: vec![entry(
+                    UiLogLevel::Info,
+                    "ok\n2026-10-16T00:00:00.000001Z ERROR pw_core: forged\r\nend",
+                )],
+                dropped: 0,
+            });
+        });
+        let ui = fs::read_to_string(dir.path().join("ui.2026-10-16.log")).unwrap();
+        assert_eq!(ui.lines().count(), 1, "{ui}");
+        assert!(
+            ui.contains(r"ok\n2026-10-16T00:00:00.000001Z ERROR pw_core: forged\r\nend"),
+            "{ui}"
+        );
     }
 
     #[tokio::test]
