@@ -1,0 +1,80 @@
+# Pitwall 기본 키맵(docs/design/10-ui.md §4.1 · §4.2 — IntelliJ 기본 키맵 기준).
+# 형식은 packages/keymap/src/keymap-file.ts 머리 주석. OS별 표기: mac = IntelliJ macOS, win · linux = IntelliJ Windows.
+# 지금 실행할 수 있는 액션만 둔다 — 기능이 생길 때 그 액션의 키를 §4.2 표에서 옮겨 온다.
+schema = 1
+
+# 검색 · 이동
+
+[[bindings]]
+action = "action.find"
+mac = "cmd+shift+a"
+win = "ctrl+shift+a"
+linux = "ctrl+shift+a"
+
+# 툴 윈도우 · 창
+
+[[bindings]]
+action = "toolWindow.project"
+mac = "cmd+1"
+win = "alt+1"
+linux = "alt+1"
+
+[[bindings]]
+action = "toolWindow.commit"
+mac = "cmd+0"
+win = "alt+0"
+linux = "alt+0"
+
+[[bindings]]
+action = "toolWindow.git"
+mac = "cmd+9"
+win = "alt+9"
+linux = "alt+9"
+
+[[bindings]]
+action = "toolWindow.run"
+mac = "cmd+4"
+win = "alt+4"
+linux = "alt+4"
+
+[[bindings]]
+action = "toolWindow.debug"
+mac = "cmd+5"
+win = "alt+5"
+linux = "alt+5"
+
+[[bindings]]
+action = "toolWindow.problems"
+mac = "cmd+6"
+win = "alt+6"
+linux = "alt+6"
+
+[[bindings]]
+action = "toolWindow.structure"
+mac = "cmd+7"
+win = "alt+7"
+linux = "alt+7"
+
+[[bindings]]
+action = "toolWindow.database"
+mac = "cmd+8"
+win = "alt+8"
+linux = "alt+8"
+
+[[bindings]]
+action = "toolWindow.terminal"
+mac = "alt+f12"
+win = "alt+f12"
+linux = "alt+f12"
+
+[[bindings]]
+action = "toolWindow.hideAll"
+mac = "cmd+shift+f12"
+win = "ctrl+shift+f12"
+linux = "ctrl+shift+f12"
+
+[[bindings]]
+action = "settings.open"
+mac = "cmd+,"
+win = "ctrl+alt+s"
+linux = "ctrl+alt+s"
