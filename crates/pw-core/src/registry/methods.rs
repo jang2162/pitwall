@@ -98,7 +98,8 @@ rpc_method! {
         tier: Read,
     }
 
-    /// 레지스트리 파일(`$DATA/state.db`)의 상태. `memory` 면 이번 세션의 변경이 저장되지 않는다.
+    /// 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면
+    /// `reason` 을 배너로 보여 준다.
     pub ProjectStorage: "project.storage" {
         params: (),
         result: StorageStatus,
@@ -154,7 +155,8 @@ rpc_method! {
 
 fn rpc_error(e: RegistryError) -> RpcError {
     match e {
-        RegistryError::Db(_) => RpcError::internal(e.to_string()),
+        // 입력이 아니라 Host 쪽 상태(파일을 쓸 수 없음 · DB 오류)라 invalid params 가 아니다.
+        RegistryError::Db(_) | RegistryError::Unavailable(_) => RpcError::internal(e.to_string()),
         _ => RpcError::invalid_params(e.to_string()),
     }
 }

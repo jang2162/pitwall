@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::bus::{EventBus, Scope};
@@ -231,6 +231,8 @@ pub enum RegistryError {
         reason: String,
     },
     InvalidName,
+    /// 레지스트리 파일에 쓸 수 없는 상태다([`StorageStatus`] 가 `readOnly` · `memory`). 쓴 것이 종료 때 사라지지 않게 거절한다.
+    Unavailable(String),
     Db(String),
 }
 
@@ -247,6 +249,9 @@ impl fmt::Display for RegistryError {
                 write!(f, "{}: {reason}", path.display())
             }
             RegistryError::InvalidName => f.write_str("project name must not be empty"),
+            RegistryError::Unavailable(reason) => {
+                write!(f, "the project registry cannot be saved: {reason}")
+            }
             RegistryError::Db(e) => write!(f, "project registry: {e}"),
         }
     }
@@ -522,8 +527,13 @@ impl Registry {
         self.inner.db.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// 열린 저장소. 잠김으로 메모리에 떨어져 있었으면 파일을 다시 열어 본다 — 메모리 DB 는 쓰기를 받지 않으므로 갈아타도 잃는 것이 없다.
+    /// 잠김이 이어지는 동안에는 호출마다 [`store::BUSY_TIMEOUT`] 까지 기다린다.
     fn opened<'g>(slot: &'g mut Option<store::Opened>, inner: &Inner) -> &'g mut store::Opened {
-        slot.get_or_insert_with(|| store::open(&inner.file, inner.busy))
+        if slot.as_ref().is_none_or(|opened| opened.retry) {
+            *slot = Some(store::open(&inner.file, inner.busy));
+        }
+        slot.as_mut().expect("방금 채웠다")
     }
 
     fn read<T>(
@@ -539,8 +549,14 @@ impl Registry {
         f: impl FnOnce(&Transaction<'_>) -> Result<T, RegistryError>,
     ) -> Result<T, RegistryError> {
         let mut guard = self.lock();
-        let conn = &mut Self::opened(&mut guard, &self.inner).conn;
-        let tx = conn.transaction()?;
+        let opened = Self::opened(&mut guard, &self.inner);
+        if let Some(reason) = opened.status.unwritable_reason() {
+            return Err(RegistryError::Unavailable(reason.to_owned()));
+        }
+        // IMMEDIATE: 읽은 뒤 쓰기로 올라가는 deferred 트랜잭션은 다른 프로세스와 겹치면 기다리지 않고 바로 실패한다([`store`] 머리 주석).
+        let tx = opened
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let out = f(&tx)?;
         tx.commit()?;
         Ok(out)
@@ -614,10 +630,7 @@ fn load_one(conn: &Connection, id: &str) -> Result<Project, RegistryError> {
 
 /// `only` 가 있으면 그 프로젝트만.
 fn load(conn: &Connection, only: Option<&str>) -> Result<Vec<Project>, RegistryError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, host, favorite, config_mode, slug, created_at, opened_at
-         FROM projects WHERE ?1 IS NULL OR id = ?1",
-    )?;
+    let mut stmt = conn.prepare(store::SELECT_PROJECTS)?;
     let mut projects: Vec<Project> = stmt
         .query_map([only], |row| {
             Ok(Project {
@@ -639,20 +652,14 @@ fn load(conn: &Connection, only: Option<&str>) -> Result<Vec<Project>, RegistryE
         .enumerate()
         .map(|(i, p)| (p.id.clone(), i))
         .collect();
-    let mut roots = conn.prepare(
-        "SELECT project_id, path FROM project_roots
-         WHERE ?1 IS NULL OR project_id = ?1 ORDER BY project_id, position",
-    )?;
+    let mut roots = conn.prepare(store::SELECT_ROOTS)?;
     for row in roots.query_map([only], |row| Ok((row.get::<_, String>(0)?, row.get(1)?)))? {
         let (id, path) = row?;
         if let Some(&i) = index.get(&id) {
             projects[i].roots.push(path);
         }
     }
-    let mut tags = conn.prepare(
-        "SELECT project_id, tag FROM project_tags
-         WHERE ?1 IS NULL OR project_id = ?1 ORDER BY project_id, tag",
-    )?;
+    let mut tags = conn.prepare(store::SELECT_TAGS)?;
     for row in tags.query_map([only], |row| Ok((row.get::<_, String>(0)?, row.get(1)?)))? {
         let (id, tag) = row?;
         if let Some(&i) = index.get(&id) {

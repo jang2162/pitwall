@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::config::gitdir::linked_worktree;
+use super::path::worktree_link;
 
 /// 비교할 등록 루트 하나.
 pub struct RootEntry<'a, P> {
@@ -36,7 +36,7 @@ pub struct Worktree {
 /// `path` 는 정규화된 경로여야 한다.
 pub fn resolve<'a, P>(path: &Path, roots: &'a [RootEntry<'a, P>]) -> Option<Matched<'a, P>> {
     let direct = deepest(path, roots);
-    let Some(link) = linked_worktree(path) else {
+    let Some(link) = worktree_link(path) else {
         return direct.map(plain);
     };
     if let Some(entry) = direct

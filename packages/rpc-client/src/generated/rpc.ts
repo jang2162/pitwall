@@ -72,7 +72,8 @@ export type UnaryMethods = {
 	worktree: ActiveWorktree | null,
 } | null };
 	/**
-	 * 레지스트리 파일(`$DATA/state.db`)의 상태. `memory` 면 이번 세션의 변경이 저장되지 않는다.
+	 * 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면
+	 * `reason` 을 배너로 보여 준다.
 	 */
 	"project.storage": { params: null; result: StorageStatus };
 	/**
@@ -109,7 +110,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.markOpened": {"name":"project.markOpened","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트를 열었다고 기록한다(최근 목록 순서).\n"},
 	"project.recent": {"name":"project.recent","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"RecentParams","output":"Vec<Project>","doc":" 최근에 연 프로젝트, 최근 것부터. 연 적 없는 프로젝트는 빠진다.\n"},
 	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n"},
-	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `memory` 면 이번 세션의 변경이 저장되지 않는다.\n"},
+	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n"},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n"},
 };
 
@@ -417,13 +418,21 @@ export type RpcError = {
 	data?: JsonValue,
 };
 
-/**  레지스트리 저장소의 상태. 앱은 `memory` 일 때 「프로젝트 목록을 저장하지 못한다」를 알린다. */
+/**
+ *  레지스트리 저장소의 상태. `ok` · `recovered` 만 쓸 수 있다 — 나머지에서 쓰기는 오류로 거절한다(쓴 것이 종료 때 사라지지 않게).
+ *  정상이 아니면 웰컴 화면(M0-12)이 `reason` 을 배너로 보여 준다.
+ */
 export type StorageStatus = 
 /**  파일을 정상으로 열었다. */
 { kind: "ok"; path: string } | 
-/**  손상된 파일을 `backup` 으로 옮기고 빈 레지스트리로 새로 만들었다. */
+/**  손상(SQLite 파일이 아님 · 무결성 검사 실패)된 파일을 `backup` 으로 옮기고 빈 레지스트리로 새로 만들었다. */
 { kind: "recovered"; path: string; backup: string; reason: string } | 
-/**  파일을 쓸 수 없어 메모리 DB 로 떴다. 이번 세션의 변경은 저장되지 않는다. 파일은 건드리지 않았다. */
+/**  파일을 읽기만 한다: 이 앱보다 새 스키마(앱을 내린 경우), 또는 읽기 전용 파일 · 폴더. 목록 · 해석은 되고 쓰기는 거절한다. */
+{ kind: "readOnly"; path: string; reason: string } | 
+/**
+ *  파일을 쓸 수도 읽을 수도 없어 빈 메모리 DB 로 떴다. 파일은 건드리지 않았다. 목록은 비어 보이고 쓰기는 거절한다.
+ *  잠김이 이유면 다음 호출 때 파일을 다시 열어 본다.
+ */
 { kind: "memory"; path: string; reason: string };
 
 export type StreamCancelParams = {

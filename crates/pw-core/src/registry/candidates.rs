@@ -7,6 +7,10 @@
 //!
 //! 같은 폴더는 한 번만 나오고, 앞 순번 자리에 이유를 모아 붙인다.
 //!
+//! **연결 워크트리 안에서 나온 후보(2 · 3)는 메인 체크아웃 쪽 같은 위치로 옮긴다** — 워크트리 경로가 프로젝트로 등록되면
+//! F2-5(워크트리는 메인 저장소 프로젝트의 활성 워크트리로 연다)가 어긋난다. 워크트리 꼭대기는 1 과 합쳐지고, 메인 쪽에 없는 폴더
+//! (워크트리에만 있는 새 폴더)는 빠진다. 빌드 파일 이름은 워크트리에서 본 것이다. 워크트리 자체를 등록하려면 「폴더 직접 선택」.
+//!
 //! **너무 넓은 폴더는 후보가 아니다**: 홈 디렉터리, 홈의 조상(`/Users` 등), 파일 시스템 루트. 홈에 `.git` 이 있는(dotfiles 저장소)
 //! 경우도 마찬가지다 — 홈을 프로젝트로 열면 파일 감시 · 검색이 홈 전체를 훑는다. 그런 폴더가 필요하면 「폴더 직접 선택」 으로 고른다.
 //! 위로 올라가기는 홈에서 멈춘다(홈 밖의 경로면 루트까지 간다).
@@ -14,7 +18,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::config::gitdir::linked_worktree;
+use super::path::worktree_link;
 
 /// 루트 후보로 보는 빌드 파일(F2 흐름). 이름이 정확히 같은 파일만 본다.
 pub const BUILD_FILES: &[&str] = &[
@@ -56,12 +60,13 @@ pub fn candidates(path: &Path, home: Option<&Path>) -> Vec<Candidate> {
     };
     let too_broad = |dir: &Path| dir.parent().is_none() || home.is_some_and(|h| h.starts_with(dir));
 
+    let link = worktree_link(start);
     let mut out: Vec<Candidate> = Vec::new();
-    if let Some(link) = linked_worktree(start)
+    if let Some(link) = &link
         && !too_broad(&link.main_top)
     {
         out.push(Candidate {
-            path: link.main_top,
+            path: link.main_top.clone(),
             worktree_main: true,
             ..Candidate::default()
         });
@@ -91,18 +96,31 @@ pub fn candidates(path: &Path, home: Option<&Path>) -> Vec<Candidate> {
         }
     }
 
-    if let Some(root) = vcs_root {
-        merge(
-            &mut out,
-            Candidate {
-                path: root,
-                vcs: true,
-                ..Candidate::default()
-            },
-        );
-    }
-    for build in builds {
-        merge(&mut out, build);
+    let found = vcs_root
+        .map(|root| Candidate {
+            path: root,
+            vcs: true,
+            ..Candidate::default()
+        })
+        .into_iter()
+        .chain(builds);
+    for candidate in found {
+        let candidate = match &link {
+            None => candidate,
+            Some(link) => {
+                let Some(main) = link.map_to_main(&candidate.path) else {
+                    continue;
+                };
+                if too_broad(&main) || !main.is_dir() {
+                    continue;
+                }
+                Candidate {
+                    path: main,
+                    ..candidate
+                }
+            }
+        };
+        merge(&mut out, candidate);
     }
     out
 }

@@ -6,9 +6,13 @@
 //!   대소문자를 무시하는 Linux 파일 시스템(ext4 casefold 등)은 `realpath` 가 대소문자를 고치지 않아 다른 경로로 본다.
 //! - 없는 부분(아직 만들지 않은 파일 등)은 가장 깊은 있는 조상까지만 실제 경로로 바꾸고 나머지는 글자 그대로 잇는다.
 //!   그 나머지의 `..` 는 글자로 푼다 — 없는 구성 요소는 심링크일 수 없으므로 글자로 푸는 것이 맞다.
+//! - Windows 에서 `canonicalize` 가 붙이는 verbatim 접두(`\\?\C:\…`)는 걷는다([`simplify`]). 저장 · 표시 · 다른 프로세스
+//!   (터미널 cwd, 외부 도구 인자)로 넘기는 경로가 모두 이것이고, `cmd.exe` 등은 그 접두를 받지 못한다.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+
+use crate::config::gitdir::{WorktreeLink, linked_worktree};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathRejected {
@@ -36,10 +40,57 @@ pub fn normalize(path: &Path) -> Result<PathBuf, PathRejected> {
                 Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
             }
         }
-        return Ok(real);
+        return Ok(simplify(real));
     }
     // 루트조차 canonicalize 되지 않는 경우(없는 드라이브 등): 글자로만 정리한다.
-    Ok(lexical(path))
+    Ok(simplify(lexical(path)))
+}
+
+/// [`linked_worktree`] 의 결과를 이 모듈의 비교 규칙에 맞춘다(`main_top` 은 `canonicalize` 에서 와서 verbatim 접두가 있을 수 있다).
+pub fn worktree_link(path: &Path) -> Option<WorktreeLink> {
+    linked_worktree(path).map(|link| WorktreeLink {
+        worktree_top: simplify(link.worktree_top),
+        main_top: simplify(link.main_top),
+    })
+}
+
+/// Windows verbatim 경로를 보통 경로로 바꾼다. 다른 OS 에서는 그대로 돌려준다.
+pub fn simplify(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(plain) = path.to_str().and_then(strip_verbatim) {
+        return PathBuf::from(plain);
+    }
+    path
+}
+
+/// `\\?\C:\a` → `C:\a`, `\\?\UNC\server\share\a` → `\\server\share\a`. 접두를 걷으면 뜻이 바뀌는 경로는 `None` 이라
+/// verbatim 그대로 둔다: 260자(MAX_PATH) 이상, 장치 이름(`con` 등)인 구성 요소, `.` · 공백으로 끝나는 구성 요소, Win32 경로에
+/// 못 쓰는 문자. 문자열만 보는 함수라 모든 OS 에서 시험한다.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn strip_verbatim(path: &str) -> Option<String> {
+    const MAX_PATH: usize = 260;
+    let rest = path.strip_prefix(r"\\?\")?;
+    let (plain, body) = if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        (format!(r"\\{unc}"), unc)
+    } else {
+        let drive = rest.as_bytes();
+        if drive.len() < 3 || !drive[0].is_ascii_alphabetic() || &drive[1..3] != b":\\" {
+            return None;
+        }
+        (rest.to_owned(), &rest[3..])
+    };
+    let safe = plain.len() < MAX_PATH
+        && body.split('\\').filter(|c| !c.is_empty()).all(|component| {
+            let stem = component
+                .split('.')
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            !component.ends_with(['.', ' '])
+                && !component.contains(['<', '>', ':', '"', '/', '|', '?', '*'])
+                && !super::slug::WINDOWS_DEVICES.contains(&stem.as_str())
+        });
+    safe.then_some(plain)
 }
 
 fn lexical(path: &Path) -> PathBuf {
@@ -59,6 +110,43 @@ fn lexical(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbatim_prefixes_are_stripped_only_when_the_meaning_stays() {
+        assert_eq!(
+            strip_verbatim(r"\\?\C:\Users\me\proj").as_deref(),
+            Some(r"C:\Users\me\proj")
+        );
+        assert_eq!(strip_verbatim(r"\\?\d:\").as_deref(), Some(r"d:\"));
+        assert_eq!(
+            strip_verbatim(r"\\?\UNC\server\share\repo").as_deref(),
+            Some(r"\\server\share\repo")
+        );
+        // 보통 경로 · 다른 verbatim 형식은 건드리지 않는다.
+        assert_eq!(strip_verbatim(r"C:\Users"), None);
+        assert_eq!(strip_verbatim(r"\\?\Volume{0000}\x"), None);
+        // 걷으면 뜻이 바뀌는 경로는 verbatim 으로 둔다.
+        assert_eq!(strip_verbatim(r"\\?\C:\dir\con"), None);
+        assert_eq!(strip_verbatim(r"\\?\C:\dir\NUL.txt"), None);
+        assert_eq!(strip_verbatim(r"\\?\C:\trailing.\x"), None);
+        assert_eq!(strip_verbatim(r"\\?\C:\space \x"), None);
+        assert_eq!(strip_verbatim(r"\\?\C:\a|b"), None);
+        let long = format!(r"\\?\C:\{}", "x".repeat(300));
+        assert_eq!(strip_verbatim(&long), None);
+    }
+
+    /// Windows 에서는 정규화 결과에 verbatim 접두가 없다.
+    #[cfg(windows)]
+    #[test]
+    fn normalized_paths_have_no_verbatim_prefix_on_windows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let normalized = normalize(tmp.path()).unwrap();
+        assert!(
+            !normalized.to_str().unwrap().starts_with(r"\\?\"),
+            "{normalized:?}"
+        );
+        assert!(normalized.is_dir());
+    }
 
     #[test]
     fn relative_paths_are_rejected() {

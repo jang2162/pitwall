@@ -12,7 +12,8 @@
 /// slug 의 최대 길이(바이트). 번호 접미사(`-2`)를 붙이기 전의 길이다.
 const MAX_LEN: usize = 48;
 const FALLBACK: &str = "project";
-const WINDOWS_DEVICES: &[&str] = &[
+/// Windows 장치 이름. 확장자가 붙어도(`nul.txt`) 장치를 가리킨다.
+pub(super) const WINDOWS_DEVICES: &[&str] = &[
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];

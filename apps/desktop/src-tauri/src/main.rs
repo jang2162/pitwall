@@ -51,12 +51,7 @@ fn main() {
             config_log::log_fault(&Scope::Host, &fault);
         }
     }
-    // 레지스트리를 여기서 열어 손상 · 잠김으로 대체된 경우를 로그에 남긴다(앱은 그래도 뜬다).
-    if let Some(status) = host.registry().map(|r| r.status())
-        && !matches!(status, pw_core::registry::StorageStatus::Ok { .. })
-    {
-        tracing::warn!(?status, "project registry is not using its file normally");
-    }
+    let registry = host.registry().cloned();
     let config_events = config_log::subscribe(host.bus());
     let router = Arc::new(HostRouter::new());
     router
@@ -70,6 +65,18 @@ fn main() {
         .on_menu_event(menu::handle)
         .setup(move |app| {
             tauri::async_runtime::spawn(config_log::run(config_events));
+            // 레지스트리를 미리 열어 정상이 아니면(손상 · 잠김 · 읽기 전용) 로그에 남긴다. 열기는 잠긴 파일을 최대 2초 기다리고
+            // 무결성 검사를 하므로 창을 띄우는 스레드가 아니라 블로킹 스레드에서 한다.
+            if let Some(registry) = registry {
+                tauri::async_runtime::spawn_blocking(move || {
+                    let status = registry.status();
+                    if status.unwritable_reason().is_some()
+                        || matches!(status, pw_core::registry::StorageStatus::Recovered { .. })
+                    {
+                        tracing::warn!(?status, "project registry is not using its file normally");
+                    }
+                });
+            }
             // 감시를 못 켜도 앱은 뜬다 — 설정은 시작할 때 읽은 값으로 남는다.
             if let Err(e) = host.watch_config(tauri::async_runtime::handle().inner()) {
                 tracing::warn!(%e, "config watch disabled");

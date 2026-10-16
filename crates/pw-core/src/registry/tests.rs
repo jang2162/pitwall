@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use super::*;
 use crate::bus::{DEFAULT_CAPACITY, Filter, Received};
@@ -88,10 +89,11 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
-/// `main` 에 커밋 하나가 있는 저장소를 만들고 `wt` 에 연결 워크트리를 붙인다. 둘 다 정규화된 경로.
+/// `main` 에 있는 파일을 커밋한 저장소를 만들고 `wt` 에 연결 워크트리를 붙인다. 둘 다 정규화된 경로.
 fn repo_with_worktree(main: &Path, wt: &Path) -> (PathBuf, PathBuf) {
     fs::create_dir_all(main).unwrap();
     git(main, &["init", "-q"]);
+    git(main, &["add", "-A"]);
     git(
         main,
         &["commit", "-q", "--allow-empty", "--no-verify", "-m", "init"],
@@ -357,6 +359,158 @@ fn corrupt_registry_is_set_aside_and_the_app_keeps_working() {
     assert_eq!(f.registry.get(&p.id).unwrap(), p);
 }
 
+/// 「열었음」 시각은 앞서 기록한 어느 것보다 크다. 시계가 뒤로 가거나(다른 기기에서 동기화된 파일 등) 같은 밀리초여도
+/// 최근 목록의 맨 앞은 방금 연 프로젝트다.
+#[test]
+fn opened_at_always_moves_past_the_latest_record() {
+    let f = Fixture::new();
+    let ahead = f.add(&f.dir("ahead"));
+    let now = f.add(&f.dir("now"));
+    let future = now_ms() + 3_600_000;
+    f.registry
+        .write(|tx| {
+            tx.execute(
+                "UPDATE projects SET opened_at = ?2 WHERE id = ?1",
+                params![ahead.id, future],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let opened = f.registry.mark_opened(&now.id).unwrap();
+    assert!(opened.opened_at.unwrap() > future);
+    assert_eq!(f.registry.recent(1).unwrap()[0].id, now.id);
+}
+
+/// 같은 파일을 연 레지스트리 둘(= 프로세스 둘)이 동시에 써도 `database is locked` 로 실패하지 않는다.
+/// 쓰기가 deferred 트랜잭션이면 읽은 뒤 쓰기로 올라갈 때 busy timeout 을 거치지 않고 바로 실패한다.
+#[test]
+fn concurrent_writers_on_one_file_wait_instead_of_failing() {
+    use std::sync::{Arc, Barrier};
+
+    const REGISTRIES: usize = 2;
+    const THREADS: usize = 2;
+    const CREATES: usize = 50;
+    let f = Fixture::new();
+    let registries: Vec<Registry> = (0..REGISTRIES)
+        .map(|_| Registry::new(f.paths.clone(), None, EventBus::new(DEFAULT_CAPACITY)))
+        .collect();
+    let barrier = Arc::new(Barrier::new(REGISTRIES * THREADS));
+    let mut handles = Vec::new();
+    for (r, registry) in registries.iter().enumerate() {
+        for t in 0..THREADS {
+            let registry = registry.clone();
+            let barrier = Arc::clone(&barrier);
+            let roots: Vec<PathBuf> = (0..CREATES)
+                .map(|i| f.dir(&format!("c/{r}-{t}-{i}")))
+                .collect();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                roots
+                    .into_iter()
+                    .filter_map(|root| {
+                        let project = registry.create(NewProject {
+                            root,
+                            ..NewProject::default()
+                        });
+                        let opened = project.and_then(|p| registry.mark_opened(&p.id));
+                        opened.err()
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+    }
+    let errors: Vec<RegistryError> = handles
+        .into_iter()
+        .flat_map(|h| h.join().unwrap())
+        .collect();
+    assert_eq!(errors, Vec::new());
+    assert_eq!(
+        f.registry.list().unwrap().len(),
+        REGISTRIES * THREADS * CREATES
+    );
+}
+
+/// 잠김으로 메모리에 떨어지면 목록은 비고 쓰기는 거절된다. 잠김이 풀리면 다음 호출에서 파일로 돌아간다.
+#[test]
+fn locked_registry_refuses_writes_and_recovers_once_unlocked() {
+    let f = Fixture::new();
+    let kept = f.add(&f.dir("kept"));
+    let file = f.paths.data.join(store::FILE_NAME);
+    let holder = Connection::open(&file).unwrap();
+    holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+
+    let locked = Registry::with_busy_timeout(
+        f.paths.clone(),
+        None,
+        EventBus::new(DEFAULT_CAPACITY),
+        Duration::from_millis(50),
+    );
+    assert!(matches!(locked.status(), StorageStatus::Memory { .. }));
+    assert_eq!(locked.list().unwrap(), Vec::new());
+    let refused = locked.create(NewProject {
+        root: f.dir("lost"),
+        ..NewProject::default()
+    });
+    assert!(
+        matches!(refused, Err(RegistryError::Unavailable(_))),
+        "{refused:?}"
+    );
+
+    holder.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(locked.list().unwrap(), vec![kept.clone()]);
+    assert!(matches!(locked.status(), StorageStatus::Ok { .. }));
+    assert!(
+        locked
+            .create(NewProject {
+                root: f.dir("saved"),
+                ..NewProject::default()
+            })
+            .is_ok()
+    );
+}
+
+/// 앱을 내려 새 스키마 파일을 만나면 목록 · 해석은 되고 쓰기는 거절된다. 파일은 그대로다.
+#[test]
+fn newer_registry_is_readable_but_not_writable() {
+    let f = Fixture::new();
+    let kept = f.add(&f.dir("kept"));
+    let file = f.paths.data.join(store::FILE_NAME);
+    Connection::open(&file)
+        .unwrap()
+        .pragma_update(None, "user_version", store::supported_version() + 1)
+        .unwrap();
+    let before = fs::read(&file).unwrap();
+
+    let older_app = Registry::new(f.paths.clone(), None, EventBus::new(DEFAULT_CAPACITY));
+    assert!(matches!(older_app.status(), StorageStatus::ReadOnly { .. }));
+    assert_eq!(older_app.list().unwrap(), vec![kept.clone()]);
+    assert_eq!(
+        older_app
+            .resolve(&f.base.join("work/kept/x.rs"))
+            .unwrap()
+            .unwrap()
+            .project
+            .id,
+        kept.id
+    );
+    for refused in [
+        older_app.mark_opened(&kept.id).map(|_| ()),
+        older_app.delete(&kept.id),
+        older_app
+            .create(NewProject {
+                root: f.dir("new"),
+                ..NewProject::default()
+            })
+            .map(|_| ()),
+    ] {
+        assert!(
+            matches!(refused, Err(RegistryError::Unavailable(ref r)) if r.contains("newer")),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(fs::read(&file).unwrap(), before);
+}
+
 // --- 경로 → 프로젝트 해석 ---
 
 #[test]
@@ -589,17 +743,29 @@ fn candidates_never_include_home_or_its_ancestors() {
     assert_eq!(f.registry.candidates(&f.base).unwrap(), Vec::new());
 }
 
+/// 워크트리 안에서 나온 후보는 메인 체크아웃 쪽 경로로 옮긴다 — 워크트리 경로가 프로젝트로 등록되지 않게(F2-5).
 #[test]
-fn candidates_in_a_worktree_offer_the_main_checkout_first() {
+fn candidates_in_a_worktree_point_into_the_main_checkout() {
     let f = Fixture::new();
-    let (main, wt) = repo_with_worktree(&f.dir("repo"), &f.base.join("work/wt"));
-    fs::write(wt.join("pyproject.toml"), "").unwrap();
-    fs::create_dir_all(wt.join("pkg")).unwrap();
-    let list = f.registry.candidates(&wt.join("pkg")).unwrap();
-    assert_eq!(candidate_paths(&list), [s(&main), s(&wt)]);
-    assert!(list[0].worktree_main);
-    assert!(list[1].vcs);
-    assert_eq!(list[1].build_files, ["pyproject.toml"]);
+    f.file("repo/Cargo.toml");
+    f.file("repo/pkg/package.json");
+    let (main, wt) = repo_with_worktree(&f.base.join("work/repo"), &f.base.join("work/wt"));
+    fs::create_dir_all(wt.join("pkg/src")).unwrap();
+    // 워크트리에만 있는 새 폴더는 메인 쪽에 대응하는 곳이 없다.
+    fs::create_dir_all(wt.join("scratch")).unwrap();
+    fs::write(wt.join("scratch/go.mod"), "").unwrap();
+
+    let list = f.registry.candidates(&wt.join("pkg/src")).unwrap();
+    assert_eq!(candidate_paths(&list), [s(&main), s(&main.join("pkg"))]);
+    assert!(
+        list[0].worktree_main && list[0].vcs,
+        "워크트리 꼭대기는 메인 꼭대기와 합쳐진다"
+    );
+    assert_eq!(list[0].build_files, ["Cargo.toml"]);
+    assert_eq!(list[1].build_files, ["package.json"]);
+
+    let list = f.registry.candidates(&wt.join("scratch")).unwrap();
+    assert_eq!(candidate_paths(&list), [s(&main)]);
 }
 
 #[test]
