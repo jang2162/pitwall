@@ -50,13 +50,45 @@ module = "plugin.wasm"
 capabilities = ["fs:read:project", "process:spawn:gradlew", "net:github.com"]
 ```
 
+테마 · 외부 도구 · UI 번역 기여(키맵은 [10-ui.md §4.6](10-ui.md)):
+
+```toml
+[contributes.themes.dusk]                   # 표 이름 = 테마 id = 테마 파일의 `id` (§3)
+file = "themes/dusk.json"
+
+[contributes.external_tools.zed]            # 04 F8-1 · F8-2
+label = "Zed"
+command = "zed {project_root} {file}:{line}:{column}"   # 변수: {project_root} {file} {line} {column} {branch}
+platforms = ["macos", "linux"]              # (선택) macos | linux | windows, 없으면 모든 OS
+
+[contributes.translations.ko]               # 표 이름 = BCP 47 언어 태그
+dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ftl) 폴더 (§4.1)
+```
+
+### 레지스트리 (`crates/pw-ext`)
+
+| 항목 | 규칙 |
+|---|---|
+| 필수 키 | `id`(`.` 로 나눈 소문자 · 숫자 · `-` 마디 둘 이상), `name`, `version`(semver), `engines.pitwall`(semver 범위). `authors` · `description` · `license` 는 선택 |
+| 기여 이름 | `[contributes.<종류>.<이름>]` 의 이름은 소문자 · 숫자 · `-`(UI 번역만 언어 태그) |
+| 모르는 것 | 모르는 기여 종류 · 모르는 키는 **경고하고 버린다** — 더 새 Pitwall 용 확장도 이 앱이 아는 기여는 쓴다. 앱이 꼭 알아야 하는 변화는 `engines.pitwall` 로 막는다. 아는 키의 형식이 틀리면 오류 |
+| 경로 | 매니페스트의 경로는 확장 폴더 기준 `/` 상대 경로. 절대 경로 · `..` · `\` · `:` 는 오류. 심볼릭 링크로 폴더 밖에 닿는 것도 오류. 가리키는 파일 · 폴더가 없으면 오류 |
+| 오류 처리 | 진단에 파일 · 줄 · 열을 붙인다. 오류가 하나라도 있는 확장은 **통째로 등록하지 않는다**(경고만 있으면 등록). 진단은 로그와 `ext.list` 로 나간다 |
+| 엔진 버전 | `engines.pitwall` 범위가 앱 버전을 포함하지 않으면 등록하지 않는다. 내장 확장은 앱과 함께 빌드되므로 `"*"` |
+| 겹침 | 내장 → 사용자 확장(폴더 이름순) 순서로 읽고, 확장 id · 테마 id · 키맵 id · 외부 도구 id 가 먼저 등록된 것과 겹치면 나중 것을 거절한다. 사용자 확장이 내장 기본값을 말없이 가리지 못한다 |
+| 내용 | 레지스트리는 기여의 메타데이터와 파일 위치만 검사 · 보관한다. 내용은 지금 소비자가 있는 테마만 읽어 겉모양(`id` · `label` · 변형 하나 이상)을 본다. 토큰 검사는 화면(`parseTheme`)이 한다. 키맵 · 번역 파일의 형식은 각 기능이 정한다. `[wasm]` 은 읽고 검사만 한다 |
+| 내장 확장 | 저장소 `extensions/<폴더>/` 를 **빌드할 때 바이너리에 묶는다**(`crates/pw-ext/build.rs`). Tauri 리소스 폴더처럼 실행 중에 디스크에서 읽지 않는다 — 개발 실행 · 빌드본 · 시험에서 경로가 갈리지 않고, 설치본이 망가져도 기본 테마 · 키맵이 남고, Tauri 가 없는 relay 데몬도 같은 내장 확장을 쓴다 |
+| 사용자 확장 | `$DATA/extensions/<폴더>/extension.toml`(03 §5-0). 앱 시작 때 한 번 읽는다. `extension.toml` 이 없는 폴더는 경고하고 건너뛴다. 설치 흐름(§6)은 아직 없다 |
+| RPC | `ext.list`(확장 · 진단), `theme.list`, `theme.get { id }`(테마 파일 내용) |
+
 ## 3. 테마
 
 | 항목 | 설계 |
 |---|---|
 | 구조 | **디자인 토큰** (`ui.background`, `editor.foreground`, `git.added`, `graph.lane.1` ...) → CSS 변수로 주입 |
 | 구문 색상 | tree-sitter 캡처 이름 기준 (`keyword`, `function.method`, `string.special` ...) |
-| 형식 | `themes/*.json` — 한 파일에 light/dark 변형 포함 가능. 모양은 `{ id, label, variants: { light: {토큰: 값}, dark: {…} } }`. 토큰 이름은 `.` 로 나눈 영숫자 마디, CSS 변수는 `--pw-` + `.`→`-`(대소문자 유지). 변형은 앱이 아는 토큰을 전부 정의해야 하고 모르는 토큰은 버린다. 앱이 아는 토큰의 정본은 `TOKENS` 목록(`apps/desktop/src/theme/tokens.ts`). 지금 구현(`parseTheme`, `apps/desktop/src/theme/tokens.ts`)은 내장 기본 테마만 읽으므로 두 변형을 모두 요구한다. 한쪽만 있는 테마는 M0-15 에서 받는다 |
+| 형식 | `themes/*.json` — 한 파일에 light/dark 변형 포함 가능. 모양은 `{ id, label, variants: { light: {토큰: 값}, dark: {…} } }`. 토큰 이름은 `.` 로 나눈 영숫자 마디, CSS 변수는 `--pw-` + `.`→`-`(대소문자 유지). 변형은 하나 이상 있어야 하고, 있는 변형은 앱이 아는 토큰을 전부 정의해야 하며 모르는 토큰은 버린다. 앱이 아는 토큰의 정본은 `TOKENS` 목록(`apps/desktop/src/theme/tokens.ts`). **한쪽 변형만 있는 테마는 어느 외관(시스템 · 라이트 · 다크)을 골라도 그 변형을 칠하고**, 네이티브 창(신호등 · 스크롤바 · 메뉴)도 그 외관으로 고정한다. 고른 외관은 저장된 채 남아 두 변형이 있는 테마로 바꾸면 다시 쓰인다(`resolveAppearance`). 기본 테마로 떨어뜨리지 않는 것은 사용자가 고른 테마가 OS 외관이 바뀔 때 사라지지 않게 하려는 것이다 |
+| 기본 테마 | 내장 확장 `extensions/theme-default`(§2 「레지스트리」). 화면은 첫 그림을 번들에 묶은 같은 파일로 칠하고, 확장 레지스트리에서 `theme.get` 으로 받은 테마로 바꾼다 — RPC 왕복을 기다려 칠하면 첫 그림이 토큰 없이 나가 깜빡인다. 받지 못하면 번들 것을 쓰고 경고를 남긴다. 번들보다 먼저 도는 `theme-boot.js` 는 저장된 선택으로 `color-scheme` 만 정한다. 테마를 고르는 설정이 생기면 boot 도 고른 테마에 있는 변형을 알아야 한다(한쪽 변형 테마에서 반대 외관이 한 번 비친다) |
 | 가져오기 | **VS Code 테마 import** (TextMate scope → tree-sitter capture 매핑 테이블), JetBrains `.icls`는 P2 |
 | 기타 | OS 다크모드 자동 전환, 아이콘 팩(파일 아이콘), 폰트/밀도(compact/comfortable), 고대비 |
 | 일관성 | 커밋 그래프 · DB 그리드 · 터미널(ANSI 16색)까지 같은 토큰을 사용 — canvas 렌더러도 토큰을 구독 |
