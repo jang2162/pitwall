@@ -45,6 +45,7 @@ export function tokenCssVar(name: string): string {
   return `--pw-${name.replaceAll(".", "-")}`;
 }
 
+// 두 변형을 모두 요구하는 것은 지금 내장 기본 테마만 읽기 때문이다. 한쪽만 있는 테마는 M0-15 에서 받는다(docs/design/07-extensibility.md 「테마」 절 「형식」 행).
 /**
  * 테마 파일(JSON)을 검사해 읽는다. 변형마다 TOKENS 를 전부 문자열로 정의해야 한다. 모르는 토큰은 버린다 — 더 새 앱을
  * 위해 만든 테마가 이 앱에서도 열려야 하고, 주입되는 변수 집합이 테마마다 달라지면 앞 테마의 값이 남는다.

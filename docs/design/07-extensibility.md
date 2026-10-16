@@ -56,7 +56,7 @@ capabilities = ["fs:read:project", "process:spawn:gradlew", "net:github.com"]
 |---|---|
 | 구조 | **디자인 토큰** (`ui.background`, `editor.foreground`, `git.added`, `graph.lane.1` ...) → CSS 변수로 주입 |
 | 구문 색상 | tree-sitter 캡처 이름 기준 (`keyword`, `function.method`, `string.special` ...) |
-| 형식 | `themes/*.json` — 한 파일에 light/dark 변형 포함 가능. 모양은 `{ id, label, variants: { light: {토큰: 값}, dark: {…} } }`. 토큰 이름은 `.` 로 나눈 영숫자 마디, CSS 변수는 `--pw-` + `.`→`-`(대소문자 유지). 변형은 앱이 아는 토큰을 전부 정의해야 하고 모르는 토큰은 버린다. 앱이 아는 토큰의 정본은 `TOKENS` 목록(`apps/desktop/src/theme/tokens.ts`) |
+| 형식 | `themes/*.json` — 한 파일에 light/dark 변형 포함 가능. 모양은 `{ id, label, variants: { light: {토큰: 값}, dark: {…} } }`. 토큰 이름은 `.` 로 나눈 영숫자 마디, CSS 변수는 `--pw-` + `.`→`-`(대소문자 유지). 변형은 앱이 아는 토큰을 전부 정의해야 하고 모르는 토큰은 버린다. 앱이 아는 토큰의 정본은 `TOKENS` 목록(`apps/desktop/src/theme/tokens.ts`). 지금 구현(`parseTheme`, `apps/desktop/src/theme/tokens.ts`)은 내장 기본 테마만 읽으므로 두 변형을 모두 요구한다. 한쪽만 있는 테마는 M0-15 에서 받는다 |
 | 가져오기 | **VS Code 테마 import** (TextMate scope → tree-sitter capture 매핑 테이블), JetBrains `.icls`는 P2 |
 | 기타 | OS 다크모드 자동 전환, 아이콘 팩(파일 아이콘), 폰트/밀도(compact/comfortable), 고대비 |
 | 일관성 | 커밋 그래프 · DB 그리드 · 터미널(ANSI 16색)까지 같은 토큰을 사용 — canvas 렌더러도 토큰을 구독 |
