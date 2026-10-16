@@ -83,6 +83,7 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
   - `PITWALL_*_DIR` 가 상대 경로면 시작 오류(실행 위치마다 다른 폴더가 되므로). 상대 경로인 `XDG_*_HOME` 은 XDG 명세대로 무시
   - Windows 는 `XDG_*` 를 보지 않는다. 구현: `pw_core::config::paths`
 - **`$CONFIG` 규칙**: 텍스트(TOML)만, 비밀 · 기기 고유 상태 · 캐시 없음 → **chezmoi · yadm 등 dotfiles 도구로 그대로 동기화 가능** (기기 간 설정 동기화의 기본 방법)
+  - 설정 파일이 심링크면 따라가서 읽고, 마이그레이션은 링크가 아니라 **대상 파일**을 고친다(권한 유지). 대상이 없는 심링크는 건너뛰고 알림(`brokenLink`)으로 남긴다
 - 기기 고유 값이 필요하면 `settings.local.toml`(같은 폴더, dotfiles에서 제외 권장)으로 분리
 - 원격 Relay도 같은 규칙: `~/.config/pitwall/relay.toml`, 바이너리 `~/.local/share/pitwall/relay/`
 - 설정 화면의 "파일로 열기"는 `$CONFIG`의 실제 파일을 연다. "설정 폴더 열기" · "경로 복사" 액션 제공
@@ -99,13 +100,14 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
 | 프로젝트 공유 설정 | `<project>/.pitwall/project.toml`, `run/*.toml`, `db/*.toml` | TOML | 커밋 가능. 실행 구성, DB 연결(비밀 제외), 외부 도구 오버라이드 |
 | 비밀 | OS 키체인 | | DB 비밀번호, SSH 패스프레이즈, 토큰. 설정 파일에는 `secret_ref`만 |
 
-- **하이브리드 정책 (D9)**: `.pitwall/*.toml`은 커밋, 개인용 덮어쓰기는 `.pitwall/*.local.toml` — 프로젝트 생성 시 `.pitwall/.gitignore`에 `*.local.toml` 자동 추가
+- **하이브리드 정책 (D9)**: `.pitwall/*.toml`은 커밋, 개인용 덮어쓰기는 `.pitwall/*.local.toml` — 프로젝트 생성 시 `.pitwall/.gitignore`에 `*.local.toml` 과 `.backup/` 자동 추가
 - 병합 순서: 내장 기본값 → `.pitwall/*.toml` → `.pitwall/*.local.toml`
   - 단위는 파일 id(`.pitwall/` 기준 경로에서 `.toml`/`.local.toml` 을 뗀 것: `project`, `run/dev-server`). 읽는 범위는 `.pitwall/*.toml` 과 `run/` · `db/` 한 단계, 전역은 `$CONFIG/*.toml`(하위 폴더 제외)
   - 병합 규칙: 양쪽이 테이블이면 키별 재귀 병합, 그 밖(스칼라 · 배열 · 테이블의 배열 · 타입이 다른 값)은 위 레이어가 통째로 이긴다. 배열은 이어 붙이지 않는다. 위 레이어에서 키를 지우는 문법은 없다(`pw_core::config::merge`)
   - 파일 하나라도 읽기 · 파싱 · 마이그레이션에 실패하면 그 설정 전체가 실패다. 다시 읽기(파일 감시)에서 실패하면 **이전 설정을 유지**하고 `config.error` 이벤트를 낸다. 처음 읽기에서 실패하면 내장 기본값만으로 시작한다. 성공했고 값이 바뀐 파일 id 나 알림(마이그레이션 · 새 스키마)이 있으면 `config.changed`
+  - 「전체 실패」 는 메모리의 설정에 대한 것이다. **디스크의 마이그레이션은 파일 단위로 일어난다** — 다른 파일이 깨져 있어도 앞선 파일의 마이그레이션은 쓰인다(원본은 백업)
 - 워크트리 폴백: 프로젝트 루트가 연결 워크트리(`git worktree add`) 안이면 `.local.toml` 이 없을 때 메인 체크아웃의 같은 위치 `.pitwall/` 의 것을 쓴다. **파일 단위 폴백**이다 — 워크트리에 `<id>.local.toml` 이 있으면 그것만 쓰고 메인 쪽과 병합하지 않는다. 판정은 `.git` 파일 → gitdir 의 `commondir` 로 하고 git 을 실행하지 않는다
-- 레포를 건드리고 싶지 않은 프로젝트는 "개인 전용" 모드로 전환 → 같은 파일 구조를 `$CONFIG/projects/<slug>/`에 저장 (사람이 편집하는 설정이므로 `$CONFIG`)
+- 레포를 건드리고 싶지 않은 프로젝트는 "개인 전용" 모드로 전환 → 같은 파일 구조를 `$CONFIG/projects/<slug>/`에 저장 (사람이 편집하는 설정이므로 `$CONFIG`). 전환하면 저장소 `.pitwall/` 은 읽지 않는다
   - slug 는 프로젝트 레지스트리가 정하고 경로 한 칸(`[A-Za-z0-9._-]`, `.` 으로 시작하지 않음)만 받는다. 그 폴더의 마이그레이션 원본은 `$STATE/backup/projects/<slug>/`(`$CONFIG` 에 TOML 외 파일을 두지 않으므로)
 - 기존 설정 임포트 (편의): `.idea/runConfigurations/*.xml`, `.idea/dataSources.xml`, `.vscode/launch.json`, `.vscode/tasks.json`
 

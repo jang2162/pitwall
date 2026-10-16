@@ -21,7 +21,7 @@ M0 목표: **기능은 없지만 이후 모든 기능이 올라갈 뼈대가 동
 | **M0-10** | CLI · 단일 인스턴스 | `pitwall <path>` (디렉터리 · 파일 · `path:line:col`), single-instance로 기존 앱에 전달, "Shell 명령 설치"(macOS `/usr/local/bin`), `pitwall mcp` 서브커맨드 진입점 | M0-04, M0-09 | Orca "Open in"과 같은 방식(`spawn("pitwall", [absPath])`)으로 호출 시 올바른 창 활성화 |
 | **M0-11** | UI 기반 | React 19 + Vite + Tailwind v4 + Radix, 디자인 토큰 → CSS 변수, 라이트/다크(OS 연동), dockview 기본 레이아웃(툴 윈도우 바 · 에디터 영역 · 하단 · 상태바 자리), TanStack Query + 이벤트 무효화 | M0-04, M0-06 | 레이아웃 저장/복원, 테마 전환 |
 | **M0-12** | 웰컴 창 · 프로젝트 찾기 | S1(목록 · 새 프로젝트 · 폴더 열기 · 드롭), S2(루트 후보 팝업), S3(생성 시트 — 자동 감지 결과는 빈 목록) | M0-09, M0-11 | 10-ui §2.1~2.3 화면 동작 |
-| **M0-13** | 키맵 엔진 · 액션 | `packages/keymap`: 액션 레지스트리, `when` 컨텍스트, 더블 탭, `KeyboardEvent.code` 매칭, IME 조합 중 무시, 기본 키맵 파일 + `keymap.toml` 덮어쓰기, 네이티브 메뉴 accelerator 동기화, 액션 찾기(`⌘⇧A`, cmdk) | M0-11 | 한글 입력 상태에서 `⌘⇧A` 동작, 덮어쓰기 반영 |
+| **M0-13** | 키맵 엔진 · 액션 | `packages/keymap`: 액션 레지스트리, `when` 컨텍스트, 더블 탭, `KeyboardEvent.code` 매칭, IME 조합 중 무시, 기본 키맵 파일 + `keymap.toml` 덮어쓰기, 네이티브 메뉴 accelerator 동기화, 액션 찾기(`⌘⇧A`, cmdk). 선행 하위 작업: Host 범위 이벤트(전역 설정 변경 등)를 프로젝트 없는 창이 구독할 수 있게 한다 | M0-11 | 한글 입력 상태에서 `⌘⇧A` 동작, 덮어쓰기 반영 |
 | **M0-14** | i18n | Fluent 리소스(ko/en), Rust · TS 공용 로딩, 언어 전환 | M0-11 | 웰컴 창 전체 번역 |
 | **M0-15** | 확장 레지스트리 골격 | `pw-ext`: `extension.toml` 파서, 기여 레지스트리(테마 · 키맵 · 언어 · 외부 도구 · UI 번역), **내장 확장**으로 기본 테마 · 기본 키맵 · 외부 도구 목록 등록 (WASM 런타임은 이후) | M0-08 | 기본 테마/키맵이 확장 경로로 로드됨 |
 | **M0-16** | 외부 도구로 열기 (최소) | 외부 도구 레지스트리 + 명령 템플릿 실행(Orca · Zed · IntelliJ · VS Code · Finder · 터미널), `⌥F1` 팝업, `⌘⌥E` | M0-13, M0-15 | 각 도구로 프로젝트 열기 (F8 P0 일부 선행) |
