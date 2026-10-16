@@ -20,7 +20,8 @@ ignore-build-dependencies = true
 # publish = false 인 우리 크레이트는 서드파티가 아니다.
 private = { ignore = true }
 
-# 크레이트 단위 예외. deny.toml 의 [[licenses.exceptions]] 와 같아야 한다(MPL-2.0 을 쓰는 Tauri 전이 의존성).
+# 크레이트 단위 예외. deny.toml 의 [[licenses.exceptions]] 와 같아야 한다(MPL-2.0 을 쓰는 Tauri 전이 의존성,
+# BSL-1.0 을 쓰는 클립보드 플러그인의 Windows 전용 전이 의존성 — 이유는 deny.toml 의 예외 옆 주석).
 # 트리에서 빠진 크레이트가 남으면 cargo-about 이 「config found for a crate not present in the graph」 경고를 낸다(실패 아님).
 [cssparser]
 accepted = ["MPL-2.0"]
@@ -40,3 +41,9 @@ accepted = ["MPL-2.0"]
 # deny.toml 의 notify 예외와 같다(CC0-1.0, 설계가 지정한 파일 감시 크레이트).
 [notify]
 accepted = ["CC0-1.0"]
+
+[clipboard-win]
+accepted = ["BSL-1.0"]
+
+[error-code]
+accepted = ["BSL-1.0"]

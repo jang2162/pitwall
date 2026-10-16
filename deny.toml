@@ -69,6 +69,16 @@ allow = ["MPL-2.0"]
 crate = "notify"
 allow = ["CC0-1.0"]
 
+# BSL-1.0(Boost)은 허용형이고 바이너리 배포에는 고지 의무도 없지만, 목록을 넓히지 않으려고 전역 allow 에 넣지 않는다.
+# 클립보드 플러그인(tauri-plugin-clipboard-manager → arboard)의 Windows 전용 전이 의존성 두 개에 한해 크레이트 단위로 허용한다.
+[[licenses.exceptions]]
+crate = "clipboard-win"
+allow = ["BSL-1.0"]
+
+[[licenses.exceptions]]
+crate = "error-code"
+allow = ["BSL-1.0"]
+
 [licenses.private]
 # publish = false 인 우리 크레이트도 검사한다. 워크스페이스 라이선스(MIT)가 목록에서 빠지면 바로 실패한다.
 ignore = false
