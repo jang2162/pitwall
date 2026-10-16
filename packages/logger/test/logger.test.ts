@@ -63,6 +63,20 @@ describe("UiLogger", () => {
     ]);
   });
 
+  it("hands out one flush promise while a batch is in flight", async () => {
+    const r = recorder();
+    const log = new UiLogger({ send: r.send, maxBatch: 1 });
+    log.info("1");
+    for (let i = 0; i < 100; i++) log.info(`more ${i}`);
+    const first = log.flush();
+    expect(log.flush()).toBe(first);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(r.send).toHaveBeenCalledTimes(1);
+    await r.settle();
+    expect(r.send).toHaveBeenCalledTimes(2);
+    expect(log.flush()).toBe(first);
+  });
+
   it("drops the oldest entries past the queue limit and reports the count", async () => {
     const r = recorder();
     const log = new UiLogger({ send: r.send, maxBatch: 100, maxQueue: 3 });
@@ -125,6 +139,20 @@ describe("captureGlobalErrors", () => {
       ["nope", "unhandledrejection"],
     ]);
     expect(errors[0]?.[0]).toContain("TypeError: boom");
+  });
+
+  it("keeps the message when the stack has no header (JavaScriptCore)", () => {
+    const jsc = new Error("REVIEW-PROBE boom");
+    jsc.stack = "module code@http://127.0.0.1:1420/src/main.tsx:28:18";
+    expect(describeError(jsc)).toBe(
+      "Error: REVIEW-PROBE boom\nmodule code@http://127.0.0.1:1420/src/main.tsx:28:18",
+    );
+    const v8 = new TypeError("bad");
+    expect(describeError(v8)).toBe(v8.stack);
+    expect(describeError(v8).startsWith("TypeError: bad\n")).toBe(true);
+    const bare = new RangeError("no stack");
+    bare.stack = undefined;
+    expect(describeError(bare)).toBe("RangeError: no stack");
   });
 
   it("describes non-error values", () => {

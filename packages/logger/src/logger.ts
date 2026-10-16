@@ -38,7 +38,7 @@ export class UiLogger {
   private queue: UiLogEntry[] = [];
   private dropped = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
-  private inFlight: Promise<void> | undefined;
+  private draining: Promise<void> | undefined;
 
   constructor(options: LoggerOptions) {
     this.send = options.send;
@@ -77,7 +77,9 @@ export class UiLogger {
       this.queue.splice(0, over);
       this.dropped += over;
     }
-    if (this.queue.length >= this.maxBatch) {
+    // 보내는 중이면 그 루프가 이어서 보낸다. 여기서 flush 를 부르면 항목마다 대기자가 하나씩 쌓인다.
+    // 타이머는 루프가 끝나는 순간에 들어온 항목을 위한 안전망이다.
+    if (this.queue.length >= this.maxBatch && !this.draining) {
       void this.flush();
     } else {
       this.timer ??= setTimeout(() => {
@@ -87,41 +89,47 @@ export class UiLogger {
     }
   }
 
-  /** 쌓인 것을 지금 보낸다. 보내는 중이면 그것이 끝난 뒤 남은 것을 보낸다. 대기열이 빌 때 풀린다. */
-  async flush(): Promise<void> {
+  /** 쌓인 것을 지금 보낸다. 보내는 중이면 그 루프의 Promise 를 돌려준다. 대기열이 비거나 보내기가 실패하면 풀린다. */
+  flush(): Promise<void> {
     if (this.timer !== undefined) {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
+    this.draining ??= this.drain().finally(() => {
+      this.draining = undefined;
+    });
+    return this.draining;
+  }
+
+  private async drain(): Promise<void> {
     while (this.queue.length > 0 || this.dropped > 0) {
-      if (this.inFlight) {
-        await this.inFlight;
-        continue;
-      }
       const entries = this.queue.splice(0, this.maxBatch);
       const carried = this.dropped;
-      const batch: UiLogBatch = { entries, dropped: carried };
       this.dropped = 0;
-      this.inFlight = this.send(batch).then(
-        () => {},
-        () => {
-          this.dropped += entries.length + carried;
-        },
-      );
       try {
-        await this.inFlight;
-      } finally {
-        this.inFlight = undefined;
+        await this.send({ entries, dropped: carried });
+      } catch {
+        // 끊긴 연결에 같은 것을 되풀이해 보내지 않는다. 다음 묶음이 버린 수를 알린다.
+        this.dropped += entries.length + carried;
+        return;
       }
-      // 실패한 묶음의 수만 남았으면 그 알림을 보내려고 다시 돌지 않는다 — 끊긴 연결에 계속 보내게 된다.
-      if (this.queue.length === 0) break;
     }
   }
 }
 
-/** 오류 값을 로그 한 줄로. Error 면 스택(없으면 이름과 메시지)을 쓴다. */
+/**
+ * 오류 값을 로그 한 줄로. Error 면 `이름: 메시지` 를 먼저 쓰고 스택을 붙인다.
+ *
+ * V8(WebView2 · Node)의 stack 은 `이름: 메시지` 로 시작하지만 JavaScriptCore(macOS · Linux 웹뷰)의 stack 은 프레임만
+ * 있다. stack 만 쓰면 WebKit 에서 오류 메시지가 로그에서 빠진다.
+ */
 export function describeError(error: unknown): string {
-  if (error instanceof Error) return error.stack ?? `${error.name}: ${error.message}`;
+  if (error instanceof Error) {
+    const head = error.message ? `${error.name}: ${error.message}` : error.name;
+    const stack = error.stack;
+    if (!stack) return head;
+    return stack.startsWith(head) ? stack : `${head}\n${stack}`;
+  }
   if (typeof error === "string") return error;
   try {
     return JSON.stringify(error) ?? String(error);
