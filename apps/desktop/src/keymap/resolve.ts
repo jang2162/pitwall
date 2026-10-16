@@ -40,6 +40,7 @@ export function resolveKeymap(
     return fault ? { bindings, error: fault } : { bindings };
   } catch (e) {
     if (!(e instanceof KeymapFileError)) throw e;
-    return { bindings: previous ?? base, error: `keymap.toml: ${e.problems.join("; ")}` };
+    // 문법 오류가 있으면 그것이 지금 파일의 문제다 — 스냅숏의 형식 오류는 그 전 내용의 것이다.
+    return { bindings: previous ?? base, error: fault ?? `keymap.toml: ${e.problems.join("; ")}` };
   }
 }

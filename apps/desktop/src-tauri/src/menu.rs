@@ -7,6 +7,7 @@
 //! 창에 [`MENU_ACTION_EVENT`] 로 액션 id 를 보낸다(`src/keymap/native.ts`).
 
 use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
@@ -22,27 +23,36 @@ const FIND_ACTION: &str = "action.find";
 /// 메뉴에서 고른 웹뷰 액션을 포커스된 창에 보내는 이벤트. `src/keymap/native.ts` 의 `MENU_ACTION_EVENT`.
 pub const MENU_ACTION_EVENT: &str = "keymap://run-action";
 
-/// 키맵이 단축키를 정하는 메뉴 항목. `keymap_sync_menu` 가 이것만 바꾼다 — 메뉴에 없는 액션은 메뉴에 넣지 않는다.
+/// 키맵이 단축키를 정하는 메뉴 항목과 그 항목이 든 하위 메뉴. `keymap_sync_menu` 가 이것만 바꾼다 — 메뉴에 없는 액션은
+/// 메뉴에 넣지 않는다.
 pub struct KeymapMenuItems<R: Runtime> {
-    items: Vec<MenuItem<R>>,
+    entries: Mutex<Vec<(Submenu<R>, MenuItem<R>)>>,
 }
 
 impl<R: Runtime> KeymapMenuItems<R> {
-    /// 받은 accelerator 를 메뉴 항목에 건다. 받은 맵에 없는 항목은 그대로 둔다. `None` 이면 단축키 표시를 지운다.
-    /// 반환값은 바꾼 항목의 id. 한 항목이 실패해도 나머지는 건다.
+    /// 받은 accelerator 로 메뉴 항목을 바꾼다. 받은 맵에 없는 항목은 그대로 둔다. `None` 이면 단축키 표시를 지운다.
+    /// 반환값은 바꾼 항목의 id. 한 항목이 실패해도 나머지는 바꾼다.
+    ///
+    /// 항목의 단축키를 고치지 않고 **같은 자리에 새 항목을 만들어 바꿔 끼운다.** muda 0.20 의 macOS `set_accelerator(None)`
+    /// 은 아무것도 하지 않아 단축키를 지울 수 없다(unbind 한 키가 메뉴에 남았다). 새 항목에는 `set_accelerator` 로 키를
+    /// 건다 — `MenuItem::with_id` 는 읽지 못한 accelerator 를 오류 없이 버리므로 여기서 실패를 받는다.
     pub fn apply(
         &self,
         accelerators: &HashMap<String, Option<String>>,
     ) -> Result<Vec<String>, String> {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
         let mut applied = Vec::new();
         let mut errors = Vec::new();
-        for item in &self.items {
-            let id = item.id().as_ref();
-            let Some(accelerator) = accelerators.get(id) else {
+        for (parent, item) in entries.iter_mut() {
+            let id = item.id().as_ref().to_owned();
+            let Some(accelerator) = accelerators.get(&id) else {
                 continue;
             };
-            match item.set_accelerator(accelerator.as_deref()) {
-                Ok(()) => applied.push(id.to_owned()),
+            match replace(parent, item, accelerator.as_deref()) {
+                Ok(fresh) => {
+                    *item = fresh;
+                    applied.push(id);
+                }
                 Err(e) => errors.push(format!("{id}: {e}")),
             }
         }
@@ -52,6 +62,31 @@ impl<R: Runtime> KeymapMenuItems<R> {
             Err(errors.join("; "))
         }
     }
+}
+
+fn replace<R: Runtime>(
+    parent: &Submenu<R>,
+    item: &MenuItem<R>,
+    accelerator: Option<&str>,
+) -> tauri::Result<MenuItem<R>> {
+    let fresh = MenuItem::with_id(
+        item.app_handle(),
+        item.id().clone(),
+        item.text()?,
+        item.is_enabled()?,
+        None::<&str>,
+    )?;
+    if accelerator.is_some() {
+        fresh.set_accelerator(accelerator)?;
+    }
+    let position = parent
+        .items()?
+        .iter()
+        .position(|i| i.id() == item.id())
+        .unwrap_or(0);
+    parent.remove(item)?;
+    parent.insert(&fresh, position)?;
+    Ok(fresh)
 }
 
 /// 웹뷰의 키맵 엔진이 병합한 단축키(액션 id → muda accelerator 또는 `null`)를 메뉴에 건다.
@@ -82,9 +117,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         true,
         Some("CmdOrCtrl+Shift+KeyA"),
     )?;
-    app.manage(KeymapMenuItems {
-        items: vec![settings.clone(), find_action.clone()],
-    });
     let new_project = MenuItem::with_id(
         app,
         NEW_PROJECT_WINDOW,
@@ -183,6 +215,17 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             )?,
         ],
     )?;
+
+    #[cfg(target_os = "macos")]
+    let settings_parent = app_menu.clone();
+    #[cfg(not(target_os = "macos"))]
+    let settings_parent = file_menu.clone();
+    app.manage(KeymapMenuItems {
+        entries: Mutex::new(vec![
+            (settings_parent, settings),
+            (help_menu.clone(), find_action),
+        ]),
+    });
 
     let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
     #[cfg(target_os = "macos")]

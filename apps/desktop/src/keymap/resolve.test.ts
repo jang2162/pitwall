@@ -110,6 +110,19 @@ describe("resolveKeymap", () => {
     expect(resolved.error).toBe("expected `]`");
   });
 
+  it("reports the TOML error, not the older snapshot's format error, when both are there", () => {
+    const resolved = resolveKeymap(
+      base,
+      view(
+        { bindings: [{ action: "action.find", key: "cmd+nope" }] },
+        { message: "expected `]`", path: "/cfg/pitwall/keymap.toml" },
+      ),
+      base,
+      "mac",
+    );
+    expect(resolved).toEqual({ bindings: base, error: "expected `]`" });
+  });
+
   it("does not blame the keymap for another config file's error", () => {
     const resolved = resolveKeymap(
       base,

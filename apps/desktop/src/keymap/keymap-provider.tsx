@@ -92,7 +92,7 @@ export function KeymapProvider({
   children,
 }: {
   native: KeymapNative;
-  log?: Pick<UiLogger, "warn">;
+  log?: Pick<UiLogger, "warn" | "debug">;
   children: ReactNode;
 }) {
   const [registry] = useState(() => new ActionRegistry());
@@ -123,7 +123,11 @@ export function KeymapProvider({
   const [engine] = useState(
     () =>
       new KeymapEngine({
-        run: (action) => registry.run(action),
+        run: (action) => {
+          const ran = registry.run(action);
+          if (ran) log?.debug(`ran ${action} from a key`, "keymap");
+          return ran;
+        },
         // 팝업이 열려 있는 동안 단축키는 팝업이 받는다 — 뒤의 창에서 액션이 돌지 않게.
         isEnabled: (action) => !popupOpen.current && registry.isEnabled(action),
         context: () =>
@@ -161,9 +165,10 @@ export function KeymapProvider({
   useEffect(
     () =>
       native.onMenuAction((action) => {
-        if (!registry.run(action)) console.warn("[keymap] menu action not available here", action);
+        if (registry.run(action)) log?.debug(`ran ${action} from the menu`, "keymap");
+        else console.warn("[keymap] menu action not available here", action);
       }),
-    [native, registry],
+    [native, registry, log],
   );
 
   const layout = useLayoutMap();
