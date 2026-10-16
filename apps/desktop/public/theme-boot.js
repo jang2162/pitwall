@@ -3,6 +3,8 @@
 // 인라인 스크립트가 아닌 파일인 것은 CSP(default-src 'self', tauri.conf.json)가 인라인 스크립트를 막기 때문이다.
 // 저장 키와 값은 src/theme/adapters.ts 의 THEME_STORAGE_KEY · theme-store.ts 의 ThemePreference 를 따른다
 // (src/theme/theme-boot.test.ts 가 맞는지 본다).
+// 테마의 변형은 보지 않는다 — 지금 칠할 수 있는 테마는 두 변형이 있는 기본 테마뿐이다. 테마를 고르는 설정이 생길 때 할 일은
+// docs/design/07-extensibility.md 「3. 테마」 「기본 테마」 행.
 (function () {
   var preference = null;
   try {

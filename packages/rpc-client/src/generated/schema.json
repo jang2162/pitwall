@@ -315,6 +315,171 @@
       ],
       "tier": "read"
     },
+    "ext.list": {
+      "description": "등록된 확장과 읽는 중에 나온 진단.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "ContributionIds": {
+            "properties": {
+              "externalTools": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "keymaps": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "languages": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "themes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "translations": {
+                "description": "언어 태그.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "themes",
+              "keymaps",
+              "languages",
+              "externalTools",
+              "translations"
+            ],
+            "type": "object"
+          },
+          "DiagnosticSeverity": {
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "type": "string"
+          },
+          "ExtensionDiagnostic": {
+            "properties": {
+              "column": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "description": "1부터 센다. 위치를 모르면 없다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/DiagnosticSeverity"
+              }
+            },
+            "required": [
+              "severity",
+              "file",
+              "line",
+              "column",
+              "message"
+            ],
+            "type": "object"
+          },
+          "ExtensionInfo": {
+            "properties": {
+              "builtin": {
+                "type": "boolean"
+              },
+              "contributes": {
+                "$ref": "#/$defs/ContributionIds"
+              },
+              "id": {
+                "type": "string"
+              },
+              "location": {
+                "description": "`builtin:<폴더>` 또는 폴더의 절대 경로.",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "wasm": {
+                "description": "`[wasm]` 이 있는가. 지금은 실행하지 않는다.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "version",
+              "builtin",
+              "location",
+              "contributes",
+              "wasm"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "diagnostics": {
+            "description": "읽는 중에 나온 오류 · 경고. 오류가 있는 확장은 `extensions` 에 없다.",
+            "items": {
+              "$ref": "#/$defs/ExtensionDiagnostic"
+            },
+            "type": "array"
+          },
+          "extensions": {
+            "description": "등록된 확장. 내장이 먼저다.",
+            "items": {
+              "$ref": "#/$defs/ExtensionInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "extensions",
+          "diagnostics"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "host.demoTask": {
       "description": "진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\nTask · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.",
       "item": {
@@ -1743,6 +1908,114 @@
         "owner"
       ],
       "tier": "write"
+    },
+    "theme.get": {
+      "description": "테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "content": {
+            "description": "테마 파일(JSON) 그대로. 토큰 검사는 화면(`parseTheme`)이 한다."
+          },
+          "extension": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "extension",
+          "content"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "theme.list": {
+      "description": "등록된 테마 목록.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "ThemeAppearance": {
+            "enum": [
+              "light",
+              "dark"
+            ],
+            "type": "string"
+          },
+          "ThemeInfo": {
+            "properties": {
+              "appearances": {
+                "description": "파일에 있는 변형. 하나뿐이면 어느 외관을 골라도 그 변형을 쓴다(07 「3. 테마」 「형식」 행).",
+                "items": {
+                  "$ref": "#/$defs/ThemeAppearance"
+                },
+                "type": "array"
+              },
+              "extension": {
+                "description": "기여한 확장의 id.",
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "extension",
+              "appearances"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "themes": {
+            "items": {
+              "$ref": "#/$defs/ThemeInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "themes"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
     }
   }
 }

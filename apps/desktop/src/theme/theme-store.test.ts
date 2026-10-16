@@ -7,7 +7,7 @@ import {
   type SystemAppearance,
   type ThemePreference,
 } from "./theme-store";
-import type { Appearance } from "./tokens";
+import type { Appearance, Theme, TokenValues } from "./tokens";
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -50,31 +50,47 @@ function fakeStorage(initial?: ThemePreference) {
   return storage;
 }
 
-function setup(os: Appearance, saved?: ThemePreference, native?: NativeWindowTheme) {
+// 스토어는 토큰 값을 보지 않는다. 어느 변형이 있는지만 본다.
+const values = {} as TokenValues;
+const bothVariants: Theme = {
+  id: "both",
+  label: "Both",
+  variants: { light: values, dark: values },
+};
+const darkOnly: Theme = { id: "dusk", label: "Dusk", variants: { dark: values } };
+
+function setup(
+  os: Appearance,
+  saved?: ThemePreference,
+  native?: NativeWindowTheme,
+  theme: Theme = bothVariants,
+) {
   const system = fakeOs(os);
   const storage = fakeStorage(saved);
-  const apply = vi.fn<(a: Appearance) => void>();
-  const store = createThemeStore({ system, storage, native, apply });
-  return { system, storage, apply, store };
+  const apply = vi.fn<(t: Theme, a: Appearance) => void>();
+  const store = createThemeStore({ system, storage, native, theme, apply });
+  /** 칠한 외관만 차례로. */
+  const applied = () => apply.mock.calls.map(([, appearance]) => appearance);
+  return { system, storage, apply, applied, store };
 }
 
 describe("theme store", () => {
   it("applies the OS appearance synchronously at creation when nothing is saved", () => {
-    const { store, apply } = setup("dark");
+    const { store, applied } = setup("dark");
     expect(store.getState()).toMatchObject({ preference: "system", appearance: "dark" });
-    expect(apply.mock.calls).toEqual([["dark"]]);
+    expect(applied()).toEqual(["dark"]);
   });
 
   it("follows OS changes while the preference is system", () => {
-    const { store, system, apply } = setup("light");
+    const { store, system, applied } = setup("light");
     system.change("dark");
     expect(store.getState().appearance).toBe("dark");
     system.change("light");
-    expect(apply.mock.calls).toEqual([["light"], ["dark"], ["light"]]);
+    expect(applied()).toEqual(["light", "dark", "light"]);
   });
 
   it("keeps a manual choice when the OS changes, and saves it", () => {
-    const { store, system, storage, apply } = setup("light");
+    const { store, system, storage, applied } = setup("light");
     store.getState().setPreference("dark");
     expect(store.getState().appearance).toBe("dark");
     expect(storage.value()).toBe("dark");
@@ -82,7 +98,7 @@ describe("theme store", () => {
     system.change("dark");
     system.change("light");
     expect(store.getState().appearance).toBe("dark");
-    expect(apply.mock.calls).toEqual([["light"], ["dark"]]);
+    expect(applied()).toEqual(["light", "dark"]);
   });
 
   it("returns to the current OS appearance when switched back to system", () => {
@@ -95,9 +111,9 @@ describe("theme store", () => {
   });
 
   it("restores a saved manual choice over the OS appearance", () => {
-    const { store, apply } = setup("light", "dark");
+    const { store, applied } = setup("light", "dark");
     expect(store.getState()).toMatchObject({ preference: "dark", appearance: "dark" });
-    expect(apply.mock.calls).toEqual([["dark"]]);
+    expect(applied()).toEqual(["dark"]);
   });
 
   it("follows a choice made in another window", () => {
@@ -114,6 +130,41 @@ describe("theme store", () => {
     system.change("dark");
     storage.otherWindowWrites("dark");
     expect(store.getState().appearance).toBe("light");
+  });
+});
+
+describe("a theme with one variant", () => {
+  it("paints its only variant whatever is chosen, and keeps the choice", () => {
+    const { store, storage, applied } = setup("light", undefined, undefined, darkOnly);
+    expect(store.getState()).toMatchObject({ preference: "system", appearance: "dark" });
+    store.getState().setPreference("light");
+    expect(store.getState()).toMatchObject({ preference: "light", appearance: "dark" });
+    expect(storage.value()).toBe("light");
+    expect(applied()).toEqual(["dark"]);
+  });
+
+  it("uses the chosen appearance again once the theme has both variants", () => {
+    const { store, system, apply } = setup("light", "light", undefined, darkOnly);
+    expect(store.getState().appearance).toBe("dark");
+    store.getState().setTheme(bothVariants);
+    expect(store.getState().appearance).toBe("light");
+    store.getState().setPreference("system");
+    system.change("dark");
+    expect(store.getState().appearance).toBe("dark");
+    expect(apply.mock.calls).toEqual([
+      [darkOnly, "dark"],
+      [bothVariants, "light"],
+      [bothVariants, "dark"],
+    ]);
+  });
+
+  it("repaints when the theme changes even if the appearance does not", () => {
+    const { store, apply } = setup("dark");
+    store.getState().setTheme(darkOnly);
+    expect(apply.mock.calls).toEqual([
+      [bothVariants, "dark"],
+      [darkOnly, "dark"],
+    ]);
   });
 });
 
@@ -146,6 +197,19 @@ describe("native window theme", () => {
     const native = fakeNative();
     setup("light", "dark", native);
     expect(native.set.mock.calls).toEqual([["dark"]]);
+  });
+
+  it("pins the native window to the only variant of a theme, then follows the OS again", async () => {
+    const native = fakeNative();
+    const { store, system } = setup("light", undefined, native, darkOnly);
+    expect(native.set.mock.calls).toEqual([["dark"]]);
+    // 고정된 동안 OS 변화(실제로는 고정한 값의 메아리)는 받지 않는다.
+    system.change("light");
+    expect(store.getState().appearance).toBe("dark");
+    store.getState().setTheme(bothVariants);
+    expect(native.set.mock.calls).toEqual([["dark"], [null]]);
+    await flush();
+    expect(store.getState().appearance).toBe("light");
   });
 
   it("treats the Tauri window theme event as an OS change", () => {
@@ -182,6 +246,7 @@ describe("native window theme", () => {
       system,
       storage: fakeStorage("light"),
       native,
+      theme: bothVariants,
       apply: () => {},
     });
     await release();

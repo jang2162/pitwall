@@ -1,7 +1,10 @@
+import { RpcClient } from "@pitwall/rpc-client";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import defaultTheme from "../../../extensions/theme-default/themes/default.json";
 import { App } from "./App";
+import { connectHost } from "./tauri-transport";
 import "./styles.css";
 import {
   documentThemeApplier,
@@ -9,7 +12,7 @@ import {
   mediaAppearance,
   tauriWindowTheme,
 } from "./theme/adapters";
-import defaultTheme from "./theme/default-theme.json";
+import { applyRegistryTheme } from "./theme/registry-theme";
 import { createThemeStore } from "./theme/theme-store";
 import { ThemeStoreProvider } from "./theme/theme-switcher";
 import { parseTheme } from "./theme/tokens";
@@ -23,13 +26,31 @@ const platform = detectPlatform(navigator.userAgent);
 installWebviewGuards(window, platform);
 document.documentElement.dataset.platform = platform.mac ? "mac" : "other";
 
-// 렌더 전에 만든다 — 첫 그림부터 저장된 테마의 색으로 그린다.
+// 렌더 전에 만든다 — 첫 그림부터 저장된 테마의 색으로 그린다. 번들의 기본 테마로 먼저 칠하고 확장 레지스트리의 것으로
+// 바꾼다(theme/registry-theme.ts).
 const themeStore = createThemeStore({
   system: mediaAppearance(window),
   storage: localPreferenceStorage(window),
   native: tauriWindowTheme(),
-  apply: documentThemeApplier(document.documentElement, parseTheme(defaultTheme)),
+  theme: parseTheme(defaultTheme),
+  apply: documentThemeApplier(document.documentElement),
 });
+void applyRegistryTheme(
+  themeStore,
+  async () => {
+    // src-tauri/src/main.rs 의 LOCAL_HOST_ID. 레지스트리는 이 기기의 Host 가 갖는다.
+    const conn = await connectHost({ hostId: "local" });
+    const client = new RpcClient(conn.transport);
+    return {
+      client,
+      close() {
+        client.close();
+        void conn.close();
+      },
+    };
+  },
+  log,
+);
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root 가 index.html 에 없다");

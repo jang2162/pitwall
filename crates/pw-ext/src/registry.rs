@@ -1,0 +1,707 @@
+//! 기여 레지스트리: 내장 확장과 사용자 확장(`$DATA/extensions/<폴더>/`)을 읽어 기여를 모은다.
+//!
+//! 등록 규칙(오류 처리 · 엔진 버전 · 겹침 · 어디까지 읽는가)의 정본은 `docs/design/07-extensibility.md` 「2. 확장 매니페스트」 「레지스트리 (`crates/pw-ext`)」 표다.
+
+use std::path::{Path, PathBuf};
+
+use semver::Version;
+use serde_json::Value;
+
+use crate::builtin;
+use crate::manifest::{
+    Diagnostic, ExternalToolDecl, KeymapDecl, KeymapKind, LanguageDecl, Manifest, PathRef, Pos,
+    Severity, TranslationDecl, parse_manifest,
+};
+use crate::source::{EntryKind, ExtensionRoot, MANIFEST, RelPath, SourceError};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Appearance {
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    pub const ALL: [Appearance; 2] = [Appearance::Light, Appearance::Dark];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Appearance::Light => "light",
+            Appearance::Dark => "dark",
+        }
+    }
+}
+
+/// 읽어 둔 테마 파일. 토큰 검사는 화면이 한다 — 앱이 아는 토큰 목록의 정본이 UI 쪽(`TOKENS`)에 있다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedTheme {
+    pub id: String,
+    pub label: String,
+    /// 파일에 있는 변형. 하나 이상이다.
+    pub appearances: Vec<Appearance>,
+    /// 파일 내용 그대로.
+    pub content: Value,
+}
+
+/// 등록된 확장 하나.
+#[derive(Debug, Clone)]
+pub struct Extension {
+    pub manifest: Manifest,
+    pub root: ExtensionRoot,
+    /// `manifest.contributes.themes` 와 같은 순서.
+    pub themes: Vec<LoadedTheme>,
+}
+
+/// 확장 폴더 안의 파일 하나. 내장이면 바이너리에서, 아니면 디스크에서 읽는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedFile {
+    pub root: ExtensionRoot,
+    pub path: RelPath,
+}
+
+impl ResolvedFile {
+    pub fn read(&self) -> Result<std::borrow::Cow<'static, [u8]>, SourceError> {
+        self.root.read(&self.path)
+    }
+
+    /// 사람이 읽는 위치(`builtin:keymap-default/keymaps/default.toml` 또는 절대 경로).
+    pub fn display(&self) -> String {
+        self.root.display(Some(&self.path))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedKeymap {
+    pub extension: String,
+    pub id: String,
+    pub kind: KeymapKind,
+    pub file: ResolvedFile,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadOptions {
+    /// 이 앱의 버전. `engines.pitwall` 범위와 맞춰 본다.
+    pub engine: Version,
+    /// 사용자 확장 폴더(`$DATA/extensions`). 없으면 내장만 읽는다.
+    pub user_dir: Option<PathBuf>,
+}
+
+impl LoadOptions {
+    /// 사용자 확장을 `$DATA/extensions/` 에서 찾는다(`docs/design/03-architecture.md` 「5-0. 파일 위치 — XDG 규칙」).
+    pub fn with_data_dir(engine: Version, data: &Path) -> Self {
+        Self {
+            engine,
+            user_dir: Some(data.join(USER_DIR)),
+        }
+    }
+}
+
+/// `$DATA` 아래 사용자 확장 폴더 이름.
+pub const USER_DIR: &str = "extensions";
+
+#[derive(Debug, Clone, Default)]
+pub struct Registry {
+    extensions: Vec<Extension>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl Registry {
+    /// 내장 확장과 `user_dir` 아래 폴더들을 읽는다. 진단은 [`Self::diagnostics`] 와 로그(tracing)에 남는다.
+    pub fn load(options: &LoadOptions) -> Self {
+        let mut roots = builtin::roots();
+        let mut registry = Self::default();
+        if let Some(dir) = &options.user_dir {
+            roots.extend(registry.discover(dir));
+        }
+        for root in roots {
+            registry.add(&options.engine, root);
+        }
+        for d in &registry.diagnostics {
+            match d.severity {
+                Severity::Error => tracing::error!(target: "pw_ext", "{d}"),
+                Severity::Warning => tracing::warn!(target: "pw_ext", "{d}"),
+            }
+        }
+        registry
+    }
+
+    /// 주어진 폴더들만 읽는다(시험 · 도구용). 내장 확장은 넘긴 것만 읽는다.
+    pub fn from_roots(engine: &Version, roots: impl IntoIterator<Item = ExtensionRoot>) -> Self {
+        let mut registry = Self::default();
+        for root in roots {
+            registry.add(engine, root);
+        }
+        registry
+    }
+
+    pub fn extensions(&self) -> &[Extension] {
+        &self.extensions
+    }
+
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn themes(&self) -> impl Iterator<Item = (&Extension, &LoadedTheme)> {
+        self.extensions
+            .iter()
+            .flat_map(|e| e.themes.iter().map(move |t| (e, t)))
+    }
+
+    pub fn theme(&self, id: &str) -> Option<(&Extension, &LoadedTheme)> {
+        self.themes().find(|(_, t)| t.id == id)
+    }
+
+    pub fn keymaps(&self) -> impl Iterator<Item = (&Extension, &KeymapDecl)> {
+        self.extensions
+            .iter()
+            .flat_map(|e| e.manifest.contributes.keymaps.iter().map(move |k| (e, k)))
+    }
+
+    /// 키맵 기여와 그 파일. 파일 내용은 키맵 엔진이 [`ResolvedFile::read`] 로 읽는다.
+    pub fn keymap(&self, id: &str) -> Option<ResolvedKeymap> {
+        self.keymaps()
+            .find(|(_, k)| k.id == id)
+            .map(|(e, k)| ResolvedKeymap {
+                extension: e.manifest.id.clone(),
+                id: k.id.clone(),
+                kind: k.kind,
+                file: ResolvedFile {
+                    root: e.root.clone(),
+                    path: k.file.path.clone(),
+                },
+            })
+    }
+
+    pub fn external_tools(&self) -> impl Iterator<Item = (&Extension, &ExternalToolDecl)> {
+        self.extensions.iter().flat_map(|e| {
+            e.manifest
+                .contributes
+                .external_tools
+                .iter()
+                .map(move |t| (e, t))
+        })
+    }
+
+    pub fn languages(&self) -> impl Iterator<Item = (&Extension, &LanguageDecl)> {
+        self.extensions
+            .iter()
+            .flat_map(|e| e.manifest.contributes.languages.iter().map(move |l| (e, l)))
+    }
+
+    pub fn translations(&self) -> impl Iterator<Item = (&Extension, &TranslationDecl)> {
+        self.extensions.iter().flat_map(|e| {
+            e.manifest
+                .contributes
+                .translations
+                .iter()
+                .map(move |t| (e, t))
+        })
+    }
+
+    /// `dir` 바로 아래 폴더들. 이름순이고 `.` 으로 시작하는 것은 건너뛴다. 폴더가 없으면 사용자 확장이 없는 것이다.
+    fn discover(&mut self, dir: &Path) -> Vec<ExtensionRoot> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(e) => {
+                self.diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    file: dir.display().to_string(),
+                    pos: None,
+                    message: format!("cannot list extensions: {e}"),
+                });
+                return Vec::new();
+            }
+        };
+        let mut folders: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        folders.sort();
+        folders.into_iter().map(ExtensionRoot::Dir).collect()
+    }
+
+    fn add(&mut self, engine: &Version, root: ExtensionRoot) {
+        let manifest_path = RelPath::parse(MANIFEST).expect("constant path");
+        let file = root.display(Some(&manifest_path));
+        let source = match root.read(&manifest_path) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(SourceError::NotFound) => {
+                self.diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    file: root.display(None),
+                    pos: None,
+                    message: format!("no {MANIFEST}; the folder is not loaded as an extension"),
+                });
+                return;
+            }
+            Err(e) => {
+                self.push_error(&file, None, format!("cannot read: {e}"));
+                return;
+            }
+        };
+        let (manifest, diagnostics) = parse_manifest(&source, &file);
+        self.diagnostics.extend(diagnostics);
+        let Some(manifest) = manifest else { return };
+
+        let errors_before = self.error_count();
+        if !manifest.engine.matches(engine) {
+            self.push_error(
+                &file,
+                manifest.engine_pos,
+                format!(
+                    "requires Pitwall {} (engines.pitwall), this is {engine}",
+                    manifest.engine
+                ),
+            );
+        }
+        if self.extensions.iter().any(|e| e.manifest.id == manifest.id) {
+            self.push_error(
+                &file,
+                manifest.id_pos,
+                format!("extension `{}` is already loaded", manifest.id),
+            );
+        }
+        self.check_files(&root, &file, &manifest);
+        self.check_unique_ids(&file, &manifest);
+        let themes = self.read_themes(&root, &file, &manifest);
+        if self.error_count() == errors_before {
+            self.extensions.push(Extension {
+                manifest,
+                root,
+                themes,
+            });
+        }
+    }
+
+    fn check_files(&mut self, root: &ExtensionRoot, file: &str, manifest: &Manifest) {
+        let c = &manifest.contributes;
+        let mut expected: Vec<(&PathRef, EntryKind)> = Vec::new();
+        expected.extend(c.themes.iter().map(|t| (&t.file, EntryKind::File)));
+        expected.extend(c.keymaps.iter().map(|k| (&k.file, EntryKind::File)));
+        for language in &c.languages {
+            expected.extend(language.grammar.iter().map(|p| (p, EntryKind::File)));
+            expected.extend(language.queries.iter().map(|p| (p, EntryKind::Dir)));
+        }
+        expected.extend(c.translations.iter().map(|t| (&t.dir, EntryKind::Dir)));
+        expected.extend(manifest.wasm.iter().map(|w| (&w.module, EntryKind::File)));
+        for (path_ref, want) in expected {
+            let problem = match root.kind(&path_ref.path) {
+                Ok(kind) if kind == want => continue,
+                Ok(EntryKind::Dir) => "is a folder, expected a file".to_owned(),
+                Ok(EntryKind::File) => "is a file, expected a folder".to_owned(),
+                Err(e) => e.to_string(),
+            };
+            self.push_error(file, path_ref.pos, format!("`{}` {problem}", path_ref.path));
+        }
+    }
+
+    fn check_unique_ids(&mut self, file: &str, manifest: &Manifest) {
+        let c = &manifest.contributes;
+        let mut taken = Vec::new();
+        for (id, pos) in c.themes.iter().map(|t| (&t.id, t.pos)) {
+            if let Some((e, _)) = self.theme(id) {
+                taken.push((
+                    pos,
+                    format!("theme `{id}` is already provided by `{}`", e.manifest.id),
+                ));
+            }
+        }
+        for (id, pos) in c.keymaps.iter().map(|k| (&k.id, k.pos)) {
+            if let Some(k) = self.keymap(id) {
+                taken.push((
+                    pos,
+                    format!("keymap `{id}` is already provided by `{}`", k.extension),
+                ));
+            }
+        }
+        for (id, pos) in c.external_tools.iter().map(|t| (&t.id, t.pos)) {
+            if let Some((e, _)) = self.external_tools().find(|(_, t)| &t.id == id) {
+                taken.push((
+                    pos,
+                    format!(
+                        "external tool `{id}` is already provided by `{}`",
+                        e.manifest.id
+                    ),
+                ));
+            }
+        }
+        for (pos, message) in taken {
+            self.push_error(file, pos, message);
+        }
+    }
+
+    fn read_themes(
+        &mut self,
+        root: &ExtensionRoot,
+        file: &str,
+        manifest: &Manifest,
+    ) -> Vec<LoadedTheme> {
+        let mut out = Vec::new();
+        for decl in &manifest.contributes.themes {
+            // 없는 파일은 check_files 가 이미 오류로 남겼다.
+            let Ok(bytes) = root.read(&decl.file.path) else {
+                continue;
+            };
+            match parse_theme_file(&bytes, &decl.id) {
+                Ok(theme) => out.push(theme),
+                Err(e) => self.push_error(
+                    file,
+                    decl.file.pos,
+                    format!("theme file `{}`: {e}", decl.file.path),
+                ),
+            }
+        }
+        out
+    }
+
+    fn push_error(&mut self, file: &str, pos: Option<Pos>, message: String) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            file: file.to_owned(),
+            pos,
+            message,
+        });
+    }
+
+    fn error_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .count()
+    }
+}
+
+/// 테마 파일의 겉모양만 본다: `id`(= 기여 이름) · `label` · `variants` 에 light · dark 중 하나 이상이 객체로.
+fn parse_theme_file(bytes: &[u8], id: &str) -> Result<LoadedTheme, String> {
+    let content: Value = serde_json::from_slice(bytes).map_err(|e| format!("invalid JSON: {e}"))?;
+    let file_id = content.get("id").and_then(Value::as_str);
+    if file_id != Some(id) {
+        return Err(format!(
+            "`id` must be `{id}` (the contribution name), found {file_id:?}"
+        ));
+    }
+    let label = content
+        .get("label")
+        .and_then(Value::as_str)
+        .ok_or("`label` must be a string")?
+        .to_owned();
+    let variants = content
+        .get("variants")
+        .and_then(Value::as_object)
+        .ok_or("`variants` must be an object")?;
+    let mut appearances = Vec::new();
+    for appearance in Appearance::ALL {
+        match variants.get(appearance.key()) {
+            None => {}
+            Some(Value::Object(_)) => appearances.push(appearance),
+            Some(_) => return Err(format!("`variants.{}` must be an object", appearance.key())),
+        }
+    }
+    if appearances.is_empty() {
+        return Err("`variants` needs `light`, `dark` or both".to_owned());
+    }
+    Ok(LoadedTheme {
+        id: id.to_owned(),
+        label,
+        appearances,
+        content,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    fn engine() -> Version {
+        Version::new(1, 2, 0)
+    }
+
+    /// `files` 를 임시 폴더에 쓴 확장 하나.
+    fn ext(dir: &Path, folder: &str, files: &[(&str, &str)]) -> ExtensionRoot {
+        let root = dir.join(folder);
+        for (path, content) in files {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, content).unwrap();
+        }
+        ExtensionRoot::Dir(root)
+    }
+
+    fn manifest(id: &str, engine: &str, body: &str) -> String {
+        format!(
+            "id = \"{id}\"\nname = \"N\"\nversion = \"1.0.0\"\nengines = {{ pitwall = \"{engine}\" }}\n{body}"
+        )
+    }
+
+    const DARK_ONLY: &str =
+        r##"{"id": "dusk", "label": "Dusk", "variants": {"dark": {"ui.background": "#000"}}}"##;
+
+    fn messages(registry: &Registry) -> Vec<String> {
+        registry
+            .diagnostics()
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn loads_a_single_variant_theme_and_reports_its_appearance() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = ext(
+            dir.path(),
+            "dusk",
+            &[
+                (
+                    "extension.toml",
+                    &manifest(
+                        "dev.example.dusk",
+                        ">=1.0",
+                        "[contributes.themes.dusk]\nfile = \"themes/dusk.json\"\n",
+                    ),
+                ),
+                ("themes/dusk.json", DARK_ONLY),
+            ],
+        );
+        let registry = Registry::from_roots(&engine(), [root]);
+        assert_eq!(messages(&registry), Vec::<String>::new());
+        let (extension, theme) = registry.theme("dusk").unwrap();
+        assert_eq!(extension.manifest.id, "dev.example.dusk");
+        assert_eq!(theme.appearances, [Appearance::Dark]);
+        assert_eq!(theme.label, "Dusk");
+    }
+
+    #[test]
+    fn rejects_an_extension_for_another_pitwall_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = ext(
+            dir.path(),
+            "next",
+            &[("extension.toml", &manifest("dev.example.next", ">=2.0", ""))],
+        );
+        let registry = Registry::from_roots(&engine(), [root]);
+        assert!(registry.extensions().is_empty());
+        let file = dir.path().join("next/extension.toml");
+        assert_eq!(
+            messages(&registry),
+            [format!(
+                "{}:4:23: error: requires Pitwall >=2.0 (engines.pitwall), this is 1.2.0",
+                file.display()
+            )]
+        );
+    }
+
+    #[test]
+    fn accepts_an_extension_whose_range_covers_this_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = ext(
+            dir.path(),
+            "ok",
+            &[(
+                "extension.toml",
+                &manifest("dev.example.ok", ">=1.0, <2", ""),
+            )],
+        );
+        let registry = Registry::from_roots(&engine(), [root]);
+        assert_eq!(messages(&registry), Vec::<String>::new());
+        assert_eq!(registry.extensions().len(), 1);
+    }
+
+    #[test]
+    fn rejects_missing_files_and_wrong_kinds_with_the_manifest_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "[contributes.keymaps.vim]\nkind = \"bindings\"\nfile = \"keymaps/vim.toml\"\n\n[contributes.translations.ko]\ndir = \"i18n/ko.ftl\"\n";
+        let root = ext(
+            dir.path(),
+            "broken",
+            &[
+                ("extension.toml", &manifest("dev.example.broken", "*", body)),
+                ("i18n/ko.ftl", ""),
+            ],
+        );
+        let registry = Registry::from_roots(&engine(), [root]);
+        assert!(registry.extensions().is_empty());
+        let file = dir
+            .path()
+            .join("broken/extension.toml")
+            .display()
+            .to_string();
+        assert_eq!(
+            messages(&registry),
+            [
+                format!("{file}:7:8: error: `keymaps/vim.toml` not found"),
+                format!("{file}:10:7: error: `i18n/ko.ftl` is a file, expected a folder"),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_theme_reached_through_a_symlink_out_of_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("elsewhere")).unwrap();
+        fs::write(dir.path().join("elsewhere/dusk.json"), DARK_ONLY).unwrap();
+        let root = ext(
+            dir.path(),
+            "sneaky",
+            &[(
+                "extension.toml",
+                &manifest(
+                    "dev.example.sneaky",
+                    "*",
+                    "[contributes.themes.dusk]\nfile = \"themes/dusk.json\"\n",
+                ),
+            )],
+        );
+        std::os::unix::fs::symlink(
+            dir.path().join("elsewhere"),
+            dir.path().join("sneaky/themes"),
+        )
+        .unwrap();
+        let registry = Registry::from_roots(&engine(), [root]);
+        assert!(registry.extensions().is_empty());
+        assert!(
+            messages(&registry)[0]
+                .ends_with("error: `themes/dusk.json` resolves outside the extension folder"),
+            "{:?}",
+            messages(&registry)
+        );
+    }
+
+    #[test]
+    fn keeps_the_first_extension_when_ids_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let theme = "[contributes.themes.dusk]\nfile = \"dusk.json\"\n";
+        let first = ext(
+            dir.path(),
+            "a",
+            &[
+                ("extension.toml", &manifest("dev.example.a", "*", theme)),
+                ("dusk.json", DARK_ONLY),
+            ],
+        );
+        let same_id = ext(
+            dir.path(),
+            "b",
+            &[("extension.toml", &manifest("dev.example.a", "*", ""))],
+        );
+        let same_theme = ext(
+            dir.path(),
+            "c",
+            &[
+                ("extension.toml", &manifest("dev.example.c", "*", theme)),
+                ("dusk.json", DARK_ONLY),
+            ],
+        );
+        let registry = Registry::from_roots(&engine(), [first, same_id, same_theme]);
+        let ids: Vec<&str> = registry
+            .extensions()
+            .iter()
+            .map(|e| e.manifest.id.as_str())
+            .collect();
+        assert_eq!(ids, ["dev.example.a"]);
+        let messages = messages(&registry);
+        assert!(
+            messages[0].ends_with("1:6: error: extension `dev.example.a` is already loaded"),
+            "{messages:?}"
+        );
+        assert!(
+            messages[1]
+                .ends_with("5:21: error: theme `dusk` is already provided by `dev.example.a`"),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_theme_files_with_a_wrong_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases = [
+            (
+                r#"{"id": "other", "label": "x", "variants": {"dark": {}}}"#,
+                "`id` must be `dusk`",
+            ),
+            (
+                r#"{"id": "dusk", "label": "x", "variants": {}}"#,
+                "needs `light`, `dark` or both",
+            ),
+            (
+                r#"{"id": "dusk", "label": "x", "variants": {"light": 1}}"#,
+                "`variants.light` must be an object",
+            ),
+            ("not json", "invalid JSON"),
+        ];
+        for (i, (content, expected)) in cases.into_iter().enumerate() {
+            let root = ext(
+                dir.path(),
+                &format!("t{i}"),
+                &[
+                    (
+                        "extension.toml",
+                        &manifest(
+                            &format!("dev.example.t{i}"),
+                            "*",
+                            "[contributes.themes.dusk]\nfile = \"dusk.json\"\n",
+                        ),
+                    ),
+                    ("dusk.json", content),
+                ],
+            );
+            let registry = Registry::from_roots(&engine(), [root]);
+            assert!(registry.extensions().is_empty());
+            assert!(
+                messages(&registry)[0].contains(expected),
+                "{:?}",
+                messages(&registry)
+            );
+        }
+    }
+
+    #[test]
+    fn discovers_user_extensions_after_the_builtin_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        ext(
+            dir.path(),
+            "dusk",
+            &[
+                ("extension.toml", &manifest("dev.example.dusk", "*", "")),
+                ("unused.txt", ""),
+            ],
+        );
+        ext(dir.path(), "not-an-extension", &[("README.md", "")]);
+        ext(dir.path(), ".hidden", &[("extension.toml", "broken")]);
+        let registry = Registry::load(&LoadOptions {
+            engine: engine(),
+            user_dir: Some(dir.path().to_owned()),
+        });
+        let ids: Vec<&str> = registry
+            .extensions()
+            .iter()
+            .map(|e| e.manifest.id.as_str())
+            .collect();
+        assert!(ids.ends_with(&["dev.example.dusk"]), "{ids:?}");
+        assert!(ids.contains(&"dev.pitwall.theme-default"), "{ids:?}");
+        let warning = messages(&registry)
+            .into_iter()
+            .find(|m| m.contains("not-an-extension"))
+            .unwrap();
+        assert!(
+            warning
+                .ends_with("warning: no extension.toml; the folder is not loaded as an extension"),
+            "{warning}"
+        );
+    }
+
+    #[test]
+    fn a_missing_user_folder_means_builtin_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Registry::load(&LoadOptions {
+            engine: engine(),
+            user_dir: Some(dir.path().join("absent")),
+        });
+        assert!(registry.extensions().iter().all(|e| e.root.is_builtin()));
+    }
+}

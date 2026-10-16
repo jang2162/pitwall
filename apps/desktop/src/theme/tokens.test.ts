@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { documentThemeApplier } from "./adapters";
-import defaultThemeFile from "./default-theme.json";
-import { parseTheme, tokenCssVar, TOKENS } from "./tokens";
+import defaultThemeFile from "../../../../extensions/theme-default/themes/default.json";
+import { parseTheme, resolveAppearance, themeAppearances, tokenCssVar, TOKENS } from "./tokens";
 
 const defaultTheme = parseTheme(defaultThemeFile);
 
@@ -30,8 +30,24 @@ describe("parseTheme", () => {
   it("accepts the default theme with both variants complete", () => {
     expect(defaultTheme.id).toBe("pitwall-default");
     for (const appearance of ["light", "dark"] as const) {
-      expect(Object.keys(defaultTheme.variants[appearance]).sort()).toEqual([...TOKENS].sort());
+      expect(Object.keys(defaultTheme.variants[appearance]!).sort()).toEqual([...TOKENS].sort());
     }
+  });
+
+  it("accepts a theme with only one variant", () => {
+    const theme = parseTheme({
+      ...defaultThemeFile,
+      variants: { dark: defaultThemeFile.variants.dark },
+    });
+    expect(themeAppearances(theme)).toEqual(["dark"]);
+    expect(theme.variants.light).toBeUndefined();
+  });
+
+  it("rejects a theme without any variant, or with a variant that is not an object", () => {
+    expect(() => parseTheme({ ...defaultThemeFile, variants: {} })).toThrow("변형이 하나도 없다");
+    expect(() => parseTheme({ ...defaultThemeFile, variants: { light: "#fff" } })).toThrow(
+      "light 변형이 객체가 아니다",
+    );
   });
 
   it("rejects a variant that misses a token", () => {
@@ -53,24 +69,41 @@ describe("parseTheme", () => {
   });
 });
 
+describe("resolveAppearance", () => {
+  it("keeps the wanted appearance when the theme has it, otherwise uses the theme's only variant", () => {
+    const darkOnly = parseTheme({
+      ...defaultThemeFile,
+      variants: { dark: defaultThemeFile.variants.dark },
+    });
+    const lightOnly = parseTheme({
+      ...defaultThemeFile,
+      variants: { light: defaultThemeFile.variants.light },
+    });
+    expect(resolveAppearance(defaultTheme, "light")).toBe("light");
+    expect(resolveAppearance(defaultTheme, "dark")).toBe("dark");
+    expect(resolveAppearance(darkOnly, "light")).toBe("dark");
+    expect(resolveAppearance(lightOnly, "dark")).toBe("light");
+  });
+});
+
 describe("documentThemeApplier", () => {
   it("injects every token of the variant as a CSS variable on the root", () => {
     const root = document.createElement("html");
-    const apply = documentThemeApplier(root, defaultTheme);
+    const apply = documentThemeApplier(root);
 
-    apply("dark");
+    apply(defaultTheme, "dark");
     expect(root.style.getPropertyValue("--pw-ui-background")).toBe(
       defaultThemeFile.variants.dark["ui.background"],
     );
     for (const token of TOKENS) {
       expect(root.style.getPropertyValue(tokenCssVar(token))).toBe(
-        defaultTheme.variants.dark[token],
+        defaultTheme.variants.dark![token],
       );
     }
     expect(root.dataset.theme).toBe("dark");
     expect(root.style.colorScheme).toBe("dark");
 
-    apply("light");
+    apply(defaultTheme, "light");
     expect(root.style.getPropertyValue("--pw-editor-background")).toBe(
       defaultThemeFile.variants.light["editor.background"],
     );

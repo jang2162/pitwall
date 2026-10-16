@@ -80,9 +80,11 @@ export function tauriWindowTheme(): NativeWindowTheme | undefined {
 }
 
 /** 문서 루트에 토큰 · `data-theme` · `color-scheme` 을 쓴다. `color-scheme` 이 웹뷰의 스크롤바 · 폼 컨트롤 색을 정한다. */
-export function documentThemeApplier(root: HTMLElement, theme: Theme) {
-  return (appearance: Appearance) => {
-    applyTokens(root.style, theme.variants[appearance]);
+export function documentThemeApplier(root: HTMLElement) {
+  return (theme: Theme, appearance: Appearance) => {
+    const values = theme.variants[appearance];
+    if (!values) throw new Error(`테마 ${theme.id}: ${appearance} 변형이 없다`);
+    applyTokens(root.style, values);
     root.dataset.theme = appearance;
     root.style.colorScheme = appearance;
   };

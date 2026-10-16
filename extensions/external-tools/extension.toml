@@ -1,0 +1,50 @@
+# 기본 외부 도구 목록(docs/design/04-features.md F8-1 · F8-2). 명령 템플릿의 변수는 {project_root} · {file} · {line} ·
+# {column} · {branch} 다. 템플릿을 치환해 실행하는 것은 외부 도구 기능(M0-16)이 한다.
+id = "dev.pitwall.external-tools"
+name = "Pitwall External Tools"
+version = "0.1.0"
+engines = { pitwall = "*" }
+authors = ["Pitwall contributors"]
+license = "MIT"
+
+[contributes.external_tools.orca]
+label = "Orca"
+# 사용자가 실제 Orca 실행 명령으로 고칠 수 있다(F8 「Orca 연동 범위」).
+command = "orca {project_root}"
+
+[contributes.external_tools.zed]
+label = "Zed"
+command = "zed {project_root} {file}:{line}:{column}"
+
+[contributes.external_tools.idea]
+label = "IntelliJ IDEA"
+# JetBrains Toolbox 가 만드는 셸 스크립트 이름. 프로젝트만 열 때는 `idea {project_root}`.
+command = "idea --line {line} {file}"
+
+[contributes.external_tools.vscode]
+label = "Visual Studio Code"
+command = "code -g {file}:{line}:{column} {project_root}"
+
+[contributes.external_tools.cursor]
+label = "Cursor"
+command = "cursor -g {file}:{line}:{column} {project_root}"
+
+[contributes.external_tools.finder]
+label = "Finder"
+command = "open {project_root}"
+platforms = ["macos"]
+
+[contributes.external_tools.explorer]
+label = "Explorer"
+command = "explorer {project_root}"
+platforms = ["windows"]
+
+[contributes.external_tools.file-manager]
+label = "File Manager"
+command = "xdg-open {project_root}"
+platforms = ["linux"]
+
+[contributes.external_tools.terminal]
+label = "Terminal"
+command = "open -a Terminal {project_root}"
+platforms = ["macos"]

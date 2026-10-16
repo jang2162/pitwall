@@ -1,0 +1,22 @@
+[package]
+name = "pw-ext"
+description = "Pitwall extensions: extension.toml manifests, built-in extensions, contribution registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pw-rpc = { path = "../pw-rpc" }
+schemars = { workspace = true }
+semver = "1.0.28"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+# 오류 위치(줄 · 열)를 내려고 span 을 남기는 toml_edit 로 읽는다. 버전은 pw-core 와 같게 둔다.
+toml_edit = "0.25.17"
+tracing = "0.1.44"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "macros"] }

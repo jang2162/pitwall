@@ -1,9 +1,9 @@
 // 디자인 토큰(docs/design/07-extensibility.md §3 「테마」)과 그 값을 CSS 변수로 주입하는 규칙.
 //
-// 토큰 이름(`ui.background`)은 테마 파일의 키이고, 화면은 CSS 변수(`--pw-ui-background`)로만 읽는다. 기본 테마의 값은
-// 데이터 파일(default-theme.json)이다 — 내장 확장(M0-15)이 들어오면 그 파일이 확장의 `themes/*.json` 으로 옮겨 간다.
+// 토큰 이름(`ui.background`)은 테마 파일의 키이고, 화면은 CSS 변수(`--pw-ui-background`)로만 읽는다. 기본 테마는 내장
+// 확장의 파일(extensions/theme-default/themes/default.json)이다.
 
-/** 화면이 읽는 토큰. 테마 파일의 변형(light·dark)은 이것을 전부 정의해야 한다. */
+/** 화면이 읽는 토큰. 테마 파일의 변형(light·dark)은 있으면 이것을 전부 정의해야 한다. */
 export const TOKENS = [
   "ui.background",
   "ui.foreground",
@@ -32,8 +32,11 @@ export type TokenValues = Record<TokenName, string>;
 export interface Theme {
   id: string;
   label: string;
-  variants: Record<Appearance, TokenValues>;
+  /** 하나 이상 있다. 어느 외관을 칠할지는 `resolveAppearance`. */
+  variants: Partial<Record<Appearance, TokenValues>>;
 }
+
+const APPEARANCES = ["light", "dark"] as const;
 
 // 마디는 영숫자만 받는다. `-` 를 허용하면 `a.b-c` 와 `a.b.c` 가 같은 변수(`--pw-a-b-c`)가 된다.
 // 대소문자는 그대로 둔다 — CSS 사용자 정의 속성은 대소문자를 가리므로 `ui.fooBar` 와 `ui.foo.bar` 가 갈린다.
@@ -45,10 +48,10 @@ export function tokenCssVar(name: string): string {
   return `--pw-${name.replaceAll(".", "-")}`;
 }
 
-// 두 변형을 모두 요구하는 것은 지금 내장 기본 테마만 읽기 때문이다. 한쪽만 있는 테마는 M0-15 에서 받는다(docs/design/07-extensibility.md 「테마」 절 「형식」 행).
 /**
- * 테마 파일(JSON)을 검사해 읽는다. 변형마다 TOKENS 를 전부 문자열로 정의해야 한다. 모르는 토큰은 버린다 — 더 새 앱을
- * 위해 만든 테마가 이 앱에서도 열려야 하고, 주입되는 변수 집합이 테마마다 달라지면 앞 테마의 값이 남는다.
+ * 테마 파일(JSON)을 검사해 읽는다. light · dark 변형 중 하나 이상이 있어야 하고, 있는 변형은 TOKENS 를 전부 문자열로
+ * 정의해야 한다. 모르는 토큰은 버린다 — 더 새 앱을 위해 만든 테마가 이 앱에서도 열려야 하고, 주입되는 변수 집합이
+ * 테마마다 달라지면 앞 테마의 값이 남는다.
  */
 export function parseTheme(input: unknown): Theme {
   if (!isObject(input)) throw new Error("테마 파일이 객체가 아니다");
@@ -56,10 +59,11 @@ export function parseTheme(input: unknown): Theme {
   if (typeof id !== "string" || id === "") throw new Error("테마 id 가 없다");
   if (typeof label !== "string") throw new Error(`테마 ${id}: label 이 문자열이 아니다`);
   if (!isObject(variants)) throw new Error(`테마 ${id}: variants 가 객체가 아니다`);
-  const parsed = {} as Record<Appearance, TokenValues>;
-  for (const appearance of ["light", "dark"] as const) {
+  const parsed: Theme["variants"] = {};
+  for (const appearance of APPEARANCES) {
     const values = variants[appearance];
-    if (!isObject(values)) throw new Error(`테마 ${id}: ${appearance} 변형이 없다`);
+    if (values === undefined) continue;
+    if (!isObject(values)) throw new Error(`테마 ${id}: ${appearance} 변형이 객체가 아니다`);
     const tokens = {} as TokenValues;
     for (const token of TOKENS) {
       const value = values[token];
@@ -70,7 +74,22 @@ export function parseTheme(input: unknown): Theme {
     }
     parsed[appearance] = tokens;
   }
+  if (!parsed.light && !parsed.dark) throw new Error(`테마 ${id}: light · dark 변형이 하나도 없다`);
   return { id, label, variants: parsed };
+}
+
+/** 테마에 있는 변형. */
+export function themeAppearances(theme: Theme): Appearance[] {
+  return APPEARANCES.filter((appearance) => theme.variants[appearance]);
+}
+
+/**
+ * 고른 외관(`wanted`)에 실제로 칠할 변형. 한쪽 변형만 있는 테마는 어느 외관을 골라도 그 변형을 칠한다 — 규칙의 정본은
+ * docs/design/07-extensibility.md 「3. 테마」 「형식」 행.
+ */
+export function resolveAppearance(theme: Theme, wanted: Appearance): Appearance {
+  if (theme.variants[wanted]) return wanted;
+  return wanted === "light" ? "dark" : "light";
 }
 
 /** `style` 은 보통 `document.documentElement.style` 이다. */

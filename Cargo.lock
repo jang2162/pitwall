@@ -2534,6 +2534,7 @@ version = "0.0.0"
 dependencies = [
  "pw-core",
  "pw-diag",
+ "pw-ext",
  "pw-rpc",
  "serde",
  "serde_json",
@@ -2722,6 +2723,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-ext"
+version = "0.0.0"
+dependencies = [
+ "pw-rpc",
+ "schemars 1.2.3",
+ "semver",
+ "serde",
+ "serde_json",
+ "specta",
+ "tempfile",
+ "tokio",
+ "toml_edit 0.25.17+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
 name = "pw-rpc"
 version = "0.0.0"
 dependencies = [
@@ -2740,6 +2757,7 @@ version = "0.0.0"
 dependencies = [
  "pw-core",
  "pw-diag",
+ "pw-ext",
  "pw-rpc",
  "schemars 1.2.3",
  "serde",

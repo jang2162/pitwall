@@ -17,6 +17,10 @@ export type UnaryMethods = {
 	 */
 	"diag.collect": { params: null; result: DiagnosticsText };
 	/**
+	 * 등록된 확장과 읽는 중에 나온 진단.
+	 */
+	"ext.list": { params: null; result: ExtensionList };
+	/**
 	 * Host 의 종류 · 버전 · OS.
 	 */
 	"host.info": { params: null; result: HostInfo };
@@ -80,6 +84,14 @@ export type UnaryMethods = {
 	 * 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.
 	 */
 	"project.update": { params: UpdateProjectParams; result: Project };
+	/**
+	 * 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.
+	 */
+	"theme.get": { params: ThemeGetParams; result: ThemeFile };
+	/**
+	 * 등록된 테마 목록.
+	 */
+	"theme.list": { params: null; result: ThemeList };
 };
 
 /** 선언된 stream 메서드: 이름 → 입력 · item 타입. */
@@ -98,6 +110,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n"},
 	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n"},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n"},
+	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n"},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n"},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n"},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n"},
@@ -112,6 +125,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n"},
 	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n"},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n"},
+	"theme.get": {"name":"theme.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ThemeGetParams","output":"ThemeFile","doc":" 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.\n"},
+	"theme.list": {"name":"theme.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ThemeList","doc":" 등록된 테마 목록.\n"},
 };
 
 /** 내장 프로토콜 메서드 이름. */
@@ -218,6 +233,15 @@ export type ConfigView = {
 	error: ConfigFault | null,
 };
 
+export type ContributionIds = {
+	themes: string[],
+	keymaps: string[],
+	languages: string[],
+	externalTools: string[],
+	/**  언어 태그. */
+	translations: string[],
+};
+
 export type CreateProjectParams = {
 	/**  절대 경로. 있는 폴더여야 한다. */
 	root: string,
@@ -237,6 +261,8 @@ export type DemoTaskParams = {
 /**  데모 작업 스트림의 청크. 진행 알림이 여러 번, 종료 알림이 마지막에 한 번 온다. */
 export type DemoTaskUpdate = { kind: "progress"; taskId: number; progress: TaskProgress } | { kind: "finished"; taskId: number; outcome: TaskStatus };
 
+export type DiagnosticSeverity = "error" | "warning";
+
 export type DiagnosticsText = {
 	/**  경로 · 비밀 · 홈 디렉터리 이름을 가린 텍스트. 이슈 제보에 그대로 붙여 넣을 수 있다. */
 	text: string,
@@ -248,6 +274,34 @@ export type EventMessage = {
 	projectId: string | null,
 	topic: string,
 	payload: JsonValue,
+};
+
+export type ExtensionDiagnostic = {
+	severity: DiagnosticSeverity,
+	file: string,
+	/**  1부터 센다. 위치를 모르면 없다. */
+	line: number | null,
+	column: number | null,
+	message: string,
+};
+
+export type ExtensionInfo = {
+	id: string,
+	name: string,
+	version: string,
+	builtin: boolean,
+	/**  `builtin:<폴더>` 또는 폴더의 절대 경로. */
+	location: string,
+	contributes: ContributionIds,
+	/**  `[wasm]` 이 있는가. 지금은 실행하지 않는다. */
+	wasm: boolean,
+};
+
+export type ExtensionList = {
+	/**  등록된 확장. 내장이 먼저다. */
+	extensions: ExtensionInfo[],
+	/**  읽는 중에 나온 오류 · 경고. 오류가 있는 확장은 `extensions` 에 없다. */
+	diagnostics: ExtensionDiagnostic[],
 };
 
 export type HostInfo = {
@@ -497,6 +551,32 @@ export type TaskProgress = {
 };
 
 export type TaskStatus = { status: "running" } | { status: "completed" } | { status: "failed"; error: string } | { status: "cancelled" };
+
+export type ThemeAppearance = "light" | "dark";
+
+export type ThemeFile = {
+	id: string,
+	extension: string,
+	/**  테마 파일(JSON) 그대로. 토큰 검사는 화면(`parseTheme`)이 한다. */
+	content: JsonValue,
+};
+
+export type ThemeGetParams = {
+	id: string,
+};
+
+export type ThemeInfo = {
+	id: string,
+	label: string,
+	/**  기여한 확장의 id. */
+	extension: string,
+	/**  파일에 있는 변형. 하나뿐이면 어느 외관을 골라도 그 변형을 쓴다(07 「3. 테마」 「형식」 행). */
+	appearances: ThemeAppearance[],
+};
+
+export type ThemeList = {
+	themes: ThemeInfo[],
+};
 
 /**
  *  권한 등급. 값과 순서는 `docs/design/05-mcp.md` §3 「권한 모델」 표를 따른다.

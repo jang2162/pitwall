@@ -6,6 +6,7 @@ use std::sync::Arc;
 use pw_core::config::AppPaths;
 use pw_core::{HostRouter, LocalHost, Scope};
 use pw_diag::Diagnostics;
+use pw_ext::{LoadOptions, Registry};
 
 mod config_log;
 mod diag;
@@ -17,11 +18,27 @@ mod windows;
 const LOCAL_HOST_ID: &str = "local";
 
 /// 앱이 쓰는 LocalHost. 생성물과 등록된 메서드를 맞춰 보는 테스트도 이것을 쓴다.
-fn local_host(paths: AppPaths, diagnostics: Arc<Diagnostics>) -> LocalHost {
+fn local_host(
+    paths: AppPaths,
+    diagnostics: Arc<Diagnostics>,
+    extensions: Arc<Registry>,
+) -> LocalHost {
     LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
+        .methods(move |router| pw_ext::methods::register(router, extensions))
         .build()
+}
+
+/// 내장 확장과 `$DATA/extensions/` 의 사용자 확장. 진단은 로그에 남는다(로깅을 켠 뒤에 부른다).
+fn load_extensions(paths: &AppPaths) -> Arc<Registry> {
+    let engine = env!("CARGO_PKG_VERSION")
+        .parse()
+        .expect("Cargo 패키지 버전은 semver 다");
+    Arc::new(Registry::load(&LoadOptions::with_data_dir(
+        engine,
+        &paths.data,
+    )))
 }
 
 fn main() {
@@ -35,7 +52,8 @@ fn main() {
         }
     };
     let diagnostics = diag::init(&paths);
-    let host = Arc::new(local_host(paths, Arc::clone(&diagnostics)));
+    let extensions = load_extensions(&paths);
+    let host = Arc::new(local_host(paths, Arc::clone(&diagnostics), extensions));
     // 「활성 기능」은 지금 Host 가 처리하는 메서드의 모듈 이름이다. 확장 · 설정 기능이 들어오면 그것으로 바꾼다.
     diagnostics.set_features(
         host.router()
@@ -117,6 +135,7 @@ mod tests {
         let host = local_host(
             AppPaths::under(&std::env::temp_dir().join("pitwall-generated-rpc-test-absent")),
             Arc::new(Diagnostics::new("unused-log-dir", "0.0.0")),
+            Arc::new(Registry::default()),
         );
         let routed: BTreeSet<String> = host
             .router()

@@ -1,0 +1,11 @@
+# 기본 키맵. 키맵 파일의 내용과 형식은 키맵 엔진(packages/keymap)이 정한다 — 이 매니페스트는 자리만 등록한다.
+id = "dev.pitwall.keymap-default"
+name = "Pitwall Default Keymap"
+version = "0.1.0"
+engines = { pitwall = "*" }
+authors = ["Pitwall contributors"]
+license = "MIT"
+
+[contributes.keymaps.pitwall-default]
+kind = "base"
+file = "keymaps/default.toml"

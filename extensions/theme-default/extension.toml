@@ -1,0 +1,11 @@
+# 기본 테마. 앱에 묶이는 내장 확장이다(crates/pw-ext 「내장 확장」).
+id = "dev.pitwall.theme-default"
+name = "Pitwall Default Theme"
+version = "0.1.0"
+# 내장 확장은 앱과 함께 빌드되므로 어느 앱 버전에도 맞는다.
+engines = { pitwall = "*" }
+authors = ["Pitwall contributors"]
+license = "MIT"
+
+[contributes.themes.pitwall-default]
+file = "themes/default.json"
