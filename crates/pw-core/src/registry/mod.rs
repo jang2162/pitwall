@@ -275,30 +275,51 @@ struct Inner {
     file: PathBuf,
     paths: AppPaths,
     home: Option<PathBuf>,
-    busy: Duration,
+    timings: Timings,
     bus: EventBus,
     db: Mutex<Option<store::Opened>>,
+}
+
+/// 잠긴 파일을 다루는 시간. 기본값은 [`store`] 의 상수다. 시험은 짧게 준다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timings {
+    /// 처음 열 때와 쓰기가 잠긴 파일을 기다리는 시간.
+    pub busy: Duration,
+    /// 잠김으로 메모리에 떨어진 뒤 파일을 다시 열어 보는 간격. 그 안의 호출은 메모리 결과를 바로 돌려준다.
+    pub retry_interval: Duration,
+    /// 다시 열어 볼 때 기다리는 시간.
+    pub retry_busy: Duration,
+}
+
+impl Default for Timings {
+    fn default() -> Self {
+        Self {
+            busy: store::BUSY_TIMEOUT,
+            retry_interval: store::RETRY_INTERVAL,
+            retry_busy: store::RETRY_BUSY_TIMEOUT,
+        }
+    }
 }
 
 impl Registry {
     /// `$DATA/state.db` 의 레지스트리. 파일은 처음 쓰일 때 연다. `home` 은 후보 추천이 너무 넓은 폴더를 거르는 데 쓴다.
     pub fn new(paths: AppPaths, home: Option<PathBuf>, bus: EventBus) -> Self {
-        Self::with_busy_timeout(paths, home, bus, store::BUSY_TIMEOUT)
+        Self::with_timings(paths, home, bus, Timings::default())
     }
 
-    /// 잠긴 파일을 기다리는 시간을 정해 만든다(시험용).
-    pub fn with_busy_timeout(
+    /// 잠긴 파일을 다루는 시간을 정해 만든다(시험용).
+    pub fn with_timings(
         paths: AppPaths,
         home: Option<PathBuf>,
         bus: EventBus,
-        busy: Duration,
+        timings: Timings,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 file: paths.data.join(store::FILE_NAME),
                 paths,
                 home,
-                busy,
+                timings,
                 bus,
                 db: Mutex::new(None),
             }),
@@ -527,11 +548,23 @@ impl Registry {
         self.inner.db.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// 열린 저장소. 잠김으로 메모리에 떨어져 있었으면 파일을 다시 열어 본다 — 메모리 DB 는 쓰기를 받지 않으므로 갈아타도 잃는 것이 없다.
-    /// 잠김이 이어지는 동안에는 호출마다 [`store::BUSY_TIMEOUT`] 까지 기다린다.
+    /// 열린 저장소. 잠김으로 메모리에 떨어져 있었으면 [`Timings::retry_interval`] 이 지난 뒤 파일을 다시 열어 본다 — 메모리 DB 는
+    /// 쓰기를 받지 않으므로 갈아타도 잃는 것이 없다. 잠김이 이어지는 동안의 비용은 간격마다 한 번 [`Timings::retry_busy`] 다.
     fn opened<'g>(slot: &'g mut Option<store::Opened>, inner: &Inner) -> &'g mut store::Opened {
-        if slot.as_ref().is_none_or(|opened| opened.retry) {
-            *slot = Some(store::open(&inner.file, inner.busy));
+        let t = inner.timings;
+        match slot {
+            None => *slot = Some(store::open(&inner.file, t.busy)),
+            Some(opened)
+                if opened
+                    .locked_at
+                    .is_some_and(|at| at.elapsed() >= t.retry_interval) =>
+            {
+                let fresh = store::open(&inner.file, t.retry_busy);
+                // 짧은 대기는 다시 여는 동안만이다. 열린 연결의 쓰기는 다른 프로세스를 처음과 같이 기다린다.
+                let _ = fresh.conn.busy_timeout(t.busy);
+                *slot = Some(fresh);
+            }
+            Some(_) => {}
         }
         slot.as_mut().expect("방금 채웠다")
     }

@@ -56,6 +56,7 @@ export const ERROR_CODE = {
 	INTERNAL_ERROR: -32603,
 	PERMISSION_DENIED: -32001,
 	CANCELLED: -32002,
+	STORAGE_UNAVAILABLE: -32003,
 } as const;
 
 /** 선언한 메서드가 쓸 수 없는 접두사. */

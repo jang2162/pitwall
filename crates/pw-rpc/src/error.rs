@@ -30,9 +30,12 @@ pub mod code {
     pub const PERMISSION_DENIED: i32 = -32001;
     /// 요청이나 스트림이 취소됐다.
     pub const CANCELLED: i32 = -32002;
+    /// Host 의 저장소(프로젝트 레지스트리 `state.db` 등)에 지금 쓸 수 없어 쓰기를 거절했다. 입력은 문제없다 — 받은 쪽은 저장소 상태
+    /// (`project.storage`)를 다시 읽어 이유를 보여 준다.
+    pub const STORAGE_UNAVAILABLE: i32 = -32003;
 
     /// 위 코드 전부(상수 이름, 값). 생성기가 TS 상수로 내보낸다 — 코드를 더하면 여기에도 더한다.
-    pub const ALL: [(&str, i32); 7] = [
+    pub const ALL: [(&str, i32); 8] = [
         ("PARSE_ERROR", PARSE_ERROR),
         ("INVALID_REQUEST", INVALID_REQUEST),
         ("METHOD_NOT_FOUND", METHOD_NOT_FOUND),
@@ -40,6 +43,7 @@ pub mod code {
         ("INTERNAL_ERROR", INTERNAL_ERROR),
         ("PERMISSION_DENIED", PERMISSION_DENIED),
         ("CANCELLED", CANCELLED),
+        ("STORAGE_UNAVAILABLE", STORAGE_UNAVAILABLE),
     ];
 }
 

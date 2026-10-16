@@ -191,3 +191,51 @@ async fn host_without_app_dirs_has_no_registry() {
         i64::from(code::METHOD_NOT_FOUND)
     );
 }
+
+/// 쓸 수 없는 레지스트리(여기서는 이 앱보다 새 스키마)에 쓰면 일반 내부 오류가 아니라 전용 코드로 거절된다. 읽기는 된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn writes_to_an_unwritable_registry_get_the_storage_code() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(tmp.path()).unwrap();
+    let paths = AppPaths::under(&base.join("app"));
+    let root = base.join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(base.join("other")).unwrap();
+    {
+        let seed =
+            pw_core::registry::Registry::new(paths.clone(), None, pw_core::EventBus::new(16));
+        seed.create(pw_core::registry::NewProject {
+            root: root.clone(),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+    rusqlite::Connection::open(paths.data.join("state.db"))
+        .unwrap()
+        .pragma_update(None, "user_version", 99)
+        .unwrap();
+
+    let host = LocalHost::with_config("local", paths);
+    let mut c = Client::connect(&host, Role::Owner).await;
+    let status: StorageStatus = c.ok("project.storage", Value::Null).await;
+    assert!(
+        matches!(status, StorageStatus::ReadOnly { .. }),
+        "{status:?}"
+    );
+    let list: Vec<Project> = c.ok("project.list", Value::Null).await;
+    assert_eq!(list.len(), 1);
+    let frame = c
+        .call("project.create", json!({"root": base.join("other")}))
+        .await;
+    assert_eq!(
+        frame["error"]["code"],
+        json!(code::STORAGE_UNAVAILABLE),
+        "{frame}"
+    );
+    assert!(
+        frame["error"]["data"]
+            .as_str()
+            .is_some_and(|d| d.contains("newer")),
+        "{frame}"
+    );
+}

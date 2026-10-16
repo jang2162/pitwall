@@ -437,11 +437,15 @@ fn locked_registry_refuses_writes_and_recovers_once_unlocked() {
     let holder = Connection::open(&file).unwrap();
     holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
 
-    let locked = Registry::with_busy_timeout(
+    let locked = Registry::with_timings(
         f.paths.clone(),
         None,
         EventBus::new(DEFAULT_CAPACITY),
-        Duration::from_millis(50),
+        Timings {
+            busy: Duration::from_millis(50),
+            retry_interval: Duration::ZERO,
+            retry_busy: Duration::from_millis(50),
+        },
     );
     assert!(matches!(locked.status(), StorageStatus::Memory { .. }));
     assert_eq!(locked.list().unwrap(), Vec::new());
@@ -465,6 +469,75 @@ fn locked_registry_refuses_writes_and_recovers_once_unlocked() {
             })
             .is_ok()
     );
+}
+
+/// 잠김이 이어지는 동안 호출마다 처음 열기만큼 기다리지 않는다: 재시도 간격 안의 호출은 메모리 결과를 바로 돌려주고,
+/// 재시도 열기는 짧게 기다리며, 다시 연 연결의 쓰기는 처음과 같이 오래 기다린다.
+#[test]
+fn locked_registry_retries_cheaply_and_restores_the_write_timeout() {
+    use std::time::Instant;
+
+    let f = Fixture::new();
+    f.add(&f.dir("kept"));
+    let file = f.paths.data.join(store::FILE_NAME);
+    let lock = || {
+        let holder = Connection::open(&file).unwrap();
+        holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        holder
+    };
+    let timings = |retry_interval| Timings {
+        busy: Duration::from_millis(1000),
+        retry_interval,
+        retry_busy: Duration::from_millis(20),
+    };
+    let quick = Duration::from_millis(500);
+
+    // 간격 안: 다시 열지 않는다(잠김이 풀려도 간격이 지나기 전까지는 메모리다).
+    let holder = lock();
+    let waiting = Registry::with_timings(
+        f.paths.clone(),
+        None,
+        EventBus::new(DEFAULT_CAPACITY),
+        timings(Duration::from_secs(3600)),
+    );
+    assert!(matches!(waiting.status(), StorageStatus::Memory { .. }));
+    for _ in 0..3 {
+        let started = Instant::now();
+        assert_eq!(waiting.list().unwrap(), Vec::new());
+        assert!(started.elapsed() < quick, "{:?}", started.elapsed());
+    }
+    holder.execute_batch("ROLLBACK").unwrap();
+    drop(holder);
+    assert!(matches!(waiting.status(), StorageStatus::Memory { .. }));
+
+    // 간격이 지나면: 재시도는 retry_busy 만큼만 기다린다.
+    let holder = lock();
+    let retrying = Registry::with_timings(
+        f.paths.clone(),
+        None,
+        EventBus::new(DEFAULT_CAPACITY),
+        timings(Duration::ZERO),
+    );
+    assert!(matches!(retrying.status(), StorageStatus::Memory { .. }));
+    let started = Instant::now();
+    assert_eq!(retrying.list().unwrap(), Vec::new());
+    assert!(started.elapsed() < quick, "{:?}", started.elapsed());
+    holder.execute_batch("ROLLBACK").unwrap();
+    drop(holder);
+    assert_eq!(retrying.list().unwrap().len(), 1, "풀리면 파일로 돌아온다");
+
+    // 다시 연 연결의 쓰기는 busy(1초)까지 기다린다 — 300ms 쥐었다 놓는 쓰기에 실패하지 않는다.
+    let holder = lock();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        holder.execute_batch("ROLLBACK").unwrap();
+    });
+    let created = retrying.create(NewProject {
+        root: f.dir("after-retry"),
+        ..NewProject::default()
+    });
+    release.join().unwrap();
+    assert!(created.is_ok(), "{created:?}");
 }
 
 /// 앱을 내려 새 스키마 파일을 만나면 목록 · 해석은 되고 쓰기는 거절된다. 파일은 그대로다.

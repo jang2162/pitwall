@@ -135,6 +135,7 @@ export const ERROR_CODE = {
 	INTERNAL_ERROR: -32603,
 	PERMISSION_DENIED: -32001,
 	CANCELLED: -32002,
+	STORAGE_UNAVAILABLE: -32003,
 } as const;
 
 /** 선언한 메서드가 쓸 수 없는 접두사. */
@@ -431,7 +432,7 @@ export type StorageStatus =
 { kind: "readOnly"; path: string; reason: string } | 
 /**
  *  파일을 쓸 수도 읽을 수도 없어 빈 메모리 DB 로 떴다. 파일은 건드리지 않았다. 목록은 비어 보이고 쓰기는 거절한다.
- *  잠김이 이유면 다음 호출 때 파일을 다시 열어 본다.
+ *  잠김이 이유면 5초(`RETRY_INTERVAL`)마다 파일을 다시 열어 본다.
  */
 { kind: "memory"; path: string; reason: string };
 

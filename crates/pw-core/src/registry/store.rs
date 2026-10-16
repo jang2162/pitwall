@@ -12,7 +12,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,10 @@ use serde::{Deserialize, Serialize};
 pub const FILE_NAME: &str = "state.db";
 /// 다른 프로세스가 쓰는 중일 때 기다리는 시간. 넘으면 잠김으로 본다.
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+/// 잠김으로 메모리에 떨어진 뒤 파일을 다시 열어 보는 간격과, 그 재시도 열기가 기다리는 시간.
+/// 잠김이 이어지는 동안 레지스트리 호출마다 [`BUSY_TIMEOUT`] 을 다시 기다리지 않게 한다(호출은 뮤텍스로 줄을 선다).
+pub const RETRY_INTERVAL: Duration = Duration::from_secs(5);
+pub const RETRY_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
 type Migration = fn(&Transaction<'_>) -> rusqlite::Result<()>;
 
@@ -91,7 +96,7 @@ pub enum StorageStatus {
     /// 파일을 읽기만 한다: 이 앱보다 새 스키마(앱을 내린 경우), 또는 읽기 전용 파일 · 폴더. 목록 · 해석은 되고 쓰기는 거절한다.
     ReadOnly { path: String, reason: String },
     /// 파일을 쓸 수도 읽을 수도 없어 빈 메모리 DB 로 떴다. 파일은 건드리지 않았다. 목록은 비어 보이고 쓰기는 거절한다.
-    /// 잠김이 이유면 다음 호출 때 파일을 다시 열어 본다.
+    /// 잠김이 이유면 5초(`RETRY_INTERVAL`)마다 파일을 다시 열어 본다.
     Memory { path: String, reason: String },
 }
 
@@ -110,9 +115,9 @@ impl StorageStatus {
 pub struct Opened {
     pub conn: Connection,
     pub status: StorageStatus,
-    /// 다음 호출 때 파일을 다시 열어 볼 것인가(잠김으로 메모리에 떨어진 경우). 메모리 DB 에는 쓰기를 받지 않으므로
-    /// 갈아탈 때 잃는 것이 없다.
-    pub retry: bool,
+    /// 잠김으로 메모리에 떨어졌으면 그 시각. 레지스트리가 [`RETRY_INTERVAL`] 뒤에 파일을 다시 열어 본다 — 메모리 DB 에는
+    /// 쓰기를 받지 않으므로 갈아탈 때 잃는 것이 없다.
+    pub locked_at: Option<Instant>,
 }
 
 /// `file` 을 열고 최신 스키마로 올린다. 실패해도 읽을 수 있는 연결을 돌려준다.
@@ -126,7 +131,7 @@ pub fn open_with(file: &Path, busy: Duration, migrations: &[Migration]) -> Opene
         Ok(Ready::Writable(conn)) => Opened {
             conn,
             status: StorageStatus::Ok { path: display },
-            retry: false,
+            locked_at: None,
         },
         Ok(Ready::ReadOnly(conn, reason)) => Opened {
             conn,
@@ -134,7 +139,7 @@ pub fn open_with(file: &Path, busy: Duration, migrations: &[Migration]) -> Opene
                 path: display,
                 reason,
             },
-            retry: false,
+            locked_at: None,
         },
         Err(Failure::Corrupt(reason)) => match recover(file, busy, migrations) {
             Ok((conn, backup)) => Opened {
@@ -144,12 +149,12 @@ pub fn open_with(file: &Path, busy: Duration, migrations: &[Migration]) -> Opene
                     backup: backup.display().to_string(),
                     reason,
                 },
-                retry: false,
+                locked_at: None,
             },
-            Err(e) => memory(display, format!("{reason}; recovery failed: {e}"), false),
+            Err(e) => memory(display, format!("{reason}; recovery failed: {e}"), None),
         },
-        Err(Failure::Busy(reason)) => memory(display, reason, true),
-        Err(Failure::Other(reason)) => memory(display, reason, false),
+        Err(Failure::Busy(reason)) => memory(display, reason, Some(Instant::now())),
+        Err(Failure::Other(reason)) => memory(display, reason, None),
     }
 }
 
@@ -221,21 +226,32 @@ fn try_open(file: &Path, busy: Duration, migrations: &[Migration]) -> Result<Rea
     Ok(Ready::Writable(conn))
 }
 
-/// 파일이나 폴더가 쓰기 금지인가. 폴더가 막히면 저널 파일을 못 만들어 첫 쓰기에서야 실패하므로 미리 본다.
-/// Windows 는 폴더의 읽기 전용 속성이 쓰기를 막지 않고(사용자 지정 아이콘 표시로 쓰인다) 판정에 쓰지 않는다.
+/// 파일이나 폴더가 이 프로세스에게 쓰기 금지인가. 폴더가 막히면 저널 파일을 못 만들어 첫 쓰기에서야 실패하므로 미리 본다.
+/// 폴더는 권한 비트가 아니라 **실제로 파일을 만들어 보고** 판정한다 — 쓰기 비트는 있어도 이 사용자에게는 막힌 폴더(다른 사용자 소유),
+/// 읽기 전용으로 마운트된 볼륨, 쓰기를 막지 않는 Windows 폴더 읽기 전용 속성을 모두 같은 방법으로 가린다.
 fn unwritable(conn: &Connection, file: &Path) -> Option<String> {
+    static PROBES: AtomicU64 = AtomicU64::new(0);
     if conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(false) {
         return Some("the file is read-only".into());
     }
-    #[cfg(unix)]
-    if let Some(dir) = file.parent()
-        && fs::metadata(dir).is_ok_and(|m| m.permissions().readonly())
+    let dir = file.parent()?;
+    // 같은 폴더를 여는 다른 프로세스 · 스레드와 이름이 겹치지 않게 pid 와 프로세스 안 순번을 붙인다.
+    let probe = dir.join(format!(
+        ".{FILE_NAME}.probe-{}-{}",
+        std::process::id(),
+        PROBES.fetch_add(1, Ordering::Relaxed)
+    ));
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
     {
-        return Some(format!("{} is read-only", dir.display()));
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            None
+        }
+        Err(e) => Some(format!("{} is not writable: {e}", dir.display())),
     }
-    #[cfg(not(unix))]
-    let _ = file;
-    None
 }
 
 fn read_only(conn: Connection, reason: String) -> Result<Ready, Failure> {
@@ -253,9 +269,14 @@ fn prepare(conn: &Connection, busy: Duration) -> rusqlite::Result<()> {
     conn.pragma_update(None, "foreign_keys", true)
 }
 
-/// 단계마다 쓰기 잠금을 먼저 잡고 그 안에서 버전을 다시 읽는다. 다른 프로세스가 같은 새 파일을 동시에 처음 열어 먼저 올렸으면
-/// 그 단계를 건너뛴다(밖에서 읽은 버전으로 돌리면 `table projects already exists` 로 실패한다).
+/// 올릴 것이 있을 때만 단계마다 쓰기 잠금을 먼저 잡고 그 안에서 버전을 다시 읽는다. 다른 프로세스가 같은 새 파일을 동시에 처음
+/// 열어 먼저 올렸으면 그 단계를 건너뛴다(밖에서 읽은 버전으로 돌리면 `table projects already exists` 로 실패한다).
+/// 이미 최신이면 잠금 없이 끝낸다 — 최신 파일을 여는 것이 다른 프로세스의 쓰기를 기다리지 않게.
 fn migrate(conn: &mut Connection, migrations: &[Migration]) -> Result<(), Failure> {
+    let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if current as usize >= migrations.len() {
+        return Ok(());
+    }
     for (from, step) in migrations.iter().enumerate() {
         let from = from as u32;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -291,7 +312,7 @@ fn recover(
     }
 }
 
-fn memory(path: String, mut reason: String, retry: bool) -> Opened {
+fn memory(path: String, mut reason: String, locked_at: Option<Instant>) -> Opened {
     let mut conn = Connection::open_in_memory().expect("메모리 DB 는 열린다");
     // 빈 메모리 DB 에서도 마이그레이션이 실패하면 단계 자체의 버그다. 그래도 앱은 띄운다 — 표가 없으니 이후 읽기가
     // 오류를 돌려줄 뿐이고, 이유는 상태에 남는다.
@@ -304,7 +325,7 @@ fn memory(path: String, mut reason: String, retry: bool) -> Opened {
     Opened {
         conn,
         status: StorageStatus::Memory { path, reason },
-        retry,
+        locked_at,
     }
 }
 

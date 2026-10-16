@@ -74,6 +74,32 @@ fn concurrent_first_opens_all_succeed() {
     }
 }
 
+/// 최신 파일을 여는 것은 쓰기가 아니다 — 다른 연결이 쓰기 트랜잭션을 쥐고 있어도 기다리지 않고 연다.
+#[test]
+fn opening_a_current_file_does_not_wait_for_another_writer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("state.db");
+    drop(open(&file, BUSY_TIMEOUT));
+    let holder = Connection::open(&file).unwrap();
+    holder
+        .execute_batch(
+            "BEGIN IMMEDIATE; INSERT INTO projects (id, name, host, config_mode, slug, created_at)
+             VALUES ('p', 'p', 'local', 'repository', 'p', 0);",
+        )
+        .unwrap();
+    let started = Instant::now();
+    let opened = open(&file, BUSY_TIMEOUT);
+    let took = started.elapsed();
+    holder.execute_batch("ROLLBACK").unwrap();
+    assert!(
+        matches!(opened.status, StorageStatus::Ok { .. }),
+        "{:?}",
+        opened.status
+    );
+    // 쓰기 잠금을 기다렸다면 BUSY_TIMEOUT(2초) 근처다. 느린 CI 를 감안해 넉넉히 잡는다.
+    assert!(took < Duration::from_millis(500), "{took:?}");
+}
+
 /// 실패한 단계는 통째로 되돌린다 — 버전도 표도 그 단계 전 그대로다.
 #[test]
 fn failing_step_rolls_back_and_leaves_the_file_alone() {
@@ -89,7 +115,10 @@ fn failing_step_rolls_back_and_leaves_the_file_alone() {
         "{:?}",
         opened.status
     );
-    assert!(!opened.retry, "잠김이 아니면 다시 열어 보지 않는다");
+    assert_eq!(
+        opened.locked_at, None,
+        "잠김이 아니면 다시 열어 보지 않는다"
+    );
     let conn = Connection::open(&file).unwrap();
     assert_eq!(version(&conn), 1);
     let leftover: i64 = conn
@@ -224,7 +253,7 @@ fn locked_file_falls_back_to_memory_and_asks_for_a_retry() {
         panic!("{:?}", opened.status);
     };
     assert!(reason.contains("locked"), "{reason}");
-    assert!(opened.retry);
+    assert!(opened.locked_at.is_some());
     holder.execute_batch("ROLLBACK").unwrap();
     // 잠김은 손상이 아니다 — 파일을 옮기지 않았다.
     assert!(!tmp.path().join("state.db.corrupt").exists());
@@ -265,7 +294,7 @@ fn read_only_file_or_folder_opens_read_only() {
     let status = open(&file, BUSY_TIMEOUT).status;
     set_mode(&dir, 0o755);
     assert!(
-        matches!(&status, StorageStatus::ReadOnly { reason, .. } if reason.contains("data is read-only")),
+        matches!(&status, StorageStatus::ReadOnly { reason, .. } if reason.contains("is not writable")),
         "{status:?}"
     );
 }

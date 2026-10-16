@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use pw_rpc::{Router, RpcError, rpc_method};
+use pw_rpc::{Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -155,8 +155,12 @@ rpc_method! {
 
 fn rpc_error(e: RegistryError) -> RpcError {
     match e {
-        // 입력이 아니라 Host 쪽 상태(파일을 쓸 수 없음 · DB 오류)라 invalid params 가 아니다.
-        RegistryError::Db(_) | RegistryError::Unavailable(_) => RpcError::internal(e.to_string()),
+        RegistryError::Db(_) => RpcError::internal(e.to_string()),
+        // 입력이 아니라 Host 쪽 상태라 invalid params 가 아니고, UI 가 배너를 갱신하도록 일반 내부 오류와 코드를 가른다.
+        RegistryError::Unavailable(_) => {
+            RpcError::new(code::STORAGE_UNAVAILABLE, "storage unavailable")
+                .with_data(serde_json::Value::String(e.to_string()))
+        }
         _ => RpcError::invalid_params(e.to_string()),
     }
 }
