@@ -10,6 +10,8 @@ publish.workspace = true
 etcetera = "0.11.0"
 notify = "8.2.0"
 pw-rpc = { path = "../pw-rpc" }
+# 프로젝트 레지스트리 `$DATA/state.db`. bundled: 시스템 SQLite 버전 차이(OS · 배포판)에 기대지 않는다.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 # 메서드 입출력 타입은 TS 타입(specta)과 JSON Schema(schemars)를 함께 derive 한다(pw-rpc 의 Method 경계).
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

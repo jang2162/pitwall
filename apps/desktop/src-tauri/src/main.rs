@@ -51,6 +51,12 @@ fn main() {
             config_log::log_fault(&Scope::Host, &fault);
         }
     }
+    // 레지스트리를 여기서 열어 손상 · 잠김으로 대체된 경우를 로그에 남긴다(앱은 그래도 뜬다).
+    if let Some(status) = host.registry().map(|r| r.status())
+        && !matches!(status, pw_core::registry::StorageStatus::Ok { .. })
+    {
+        tracing::warn!(?status, "project registry is not using its file normally");
+    }
     let config_events = config_log::subscribe(host.bus());
     let router = Arc::new(HostRouter::new());
     router

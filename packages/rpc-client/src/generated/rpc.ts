@@ -29,6 +29,56 @@ export type UnaryMethods = {
 	 * 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.
 	 */
 	"log.write": { params: UiLogBatch; result: null };
+	/**
+	 * 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).
+	 * 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.
+	 */
+	"project.candidates": { params: PathParams; result: RootCandidate[] };
+	/**
+	 * 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.
+	 */
+	"project.create": { params: CreateProjectParams; result: Project };
+	/**
+	 * 레지스트리에서 지운다. 프로젝트 폴더와 설정 파일은 그대로 둔다.
+	 */
+	"project.delete": { params: ProjectIdParams; result: null };
+	/**
+	 * 프로젝트 하나. 없으면 invalid params 오류.
+	 */
+	"project.get": { params: ProjectIdParams; result: Project };
+	/**
+	 * 등록된 프로젝트 전부, 이름순.
+	 */
+	"project.list": { params: null; result: Project[] };
+	/**
+	 * 프로젝트를 열었다고 기록한다(최근 목록 순서).
+	 */
+	"project.markOpened": { params: ProjectIdParams; result: Project };
+	/**
+	 * 최근에 연 프로젝트, 최근 것부터. 연 적 없는 프로젝트는 빠진다.
+	 */
+	"project.recent": { params: RecentParams; result: Project[] };
+	/**
+	 * 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.
+	 * 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.
+	 */
+	"project.resolve": { params: PathParams; result: {
+	project: Project,
+	/**  경로를 포함한 등록 루트. */
+	root: string,
+	/**  정규화한 입력 경로. */
+	path: string,
+	/**  등록되지 않은 연결 워크트리를 거쳐 메인 저장소 프로젝트로 왔으면 그 워크트리(F2-5). 창은 이것을 활성 워크트리로 연다. */
+	worktree: ActiveWorktree | null,
+} | null };
+	/**
+	 * 레지스트리 파일(`$DATA/state.db`)의 상태. `memory` 면 이번 세션의 변경이 저장되지 않는다.
+	 */
+	"project.storage": { params: null; result: StorageStatus };
+	/**
+	 * 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.
+	 */
+	"project.update": { params: UpdateProjectParams; result: Project };
 };
 
 /** 선언된 stream 메서드: 이름 → 입력 · item 타입. */
@@ -51,6 +101,16 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n"},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n"},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n"},
+	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n"},
+	"project.create": {"name":"project.create","kind":"unary","tier":"write","roles":["owner"],"params":"CreateProjectParams","output":"Project","doc":" 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.\n"},
+	"project.delete": {"name":"project.delete","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"()","doc":" 레지스트리에서 지운다. 프로젝트 폴더와 설정 파일은 그대로 둔다.\n"},
+	"project.get": {"name":"project.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트 하나. 없으면 invalid params 오류.\n"},
+	"project.list": {"name":"project.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"Vec<Project>","doc":" 등록된 프로젝트 전부, 이름순.\n"},
+	"project.markOpened": {"name":"project.markOpened","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트를 열었다고 기록한다(최근 목록 순서).\n"},
+	"project.recent": {"name":"project.recent","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"RecentParams","output":"Vec<Project>","doc":" 최근에 연 프로젝트, 최근 것부터. 연 적 없는 프로젝트는 빠진다.\n"},
+	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n"},
+	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `memory` 면 이번 세션의 변경이 저장되지 않는다.\n"},
+	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n"},
 };
 
 /** 내장 프로토콜 메서드 이름. */
@@ -78,6 +138,13 @@ export const ERROR_CODE = {
 
 /** 선언한 메서드가 쓸 수 없는 접두사. */
 export const RESERVED_PREFIXES = ["rpc.", "request.", "stream.", "events."] as const;
+
+export type ActiveWorktree = {
+	/**  워크트리 꼭대기. */
+	top: string,
+	/**  프로젝트 루트에 대응하는 워크트리 안의 폴더. 파일 트리 · 터미널 · 설정의 기준. */
+	root: string,
+};
 
 export type CancelRequestParams = {
 	id: Id,
@@ -113,6 +180,13 @@ export type ConfigLayer = {
 	readOnly: boolean,
 };
 
+/**  프로젝트 설정을 어디에 두는가(설계 D9). */
+export type ConfigMode = 
+/**  저장소의 `<root>/.pitwall/`. */
+"repository" | 
+/**  개인 전용 `$CONFIG/projects/<slug>/`. 저장소의 `.pitwall/` 은 읽지 않는다. */
+"personal";
+
 export type ConfigNotice = 
 /**  구버전 파일을 올려 썼다. 커밋되는 파일이면 「변경 사항 커밋 필요」 안내 대상이다(설계 D23). */
 { kind: "migrated"; path: string; from: number; to: number; backup: string } | 
@@ -140,6 +214,17 @@ export type ConfigSnapshot = {
 export type ConfigView = {
 	snapshot: ConfigSnapshot,
 	error: ConfigFault | null,
+};
+
+export type CreateProjectParams = {
+	/**  절대 경로. 있는 폴더여야 한다. */
+	root: string,
+	/**  없으면 루트 폴더 이름. */
+	name?: string | null,
+	/**  없으면 `repository`. */
+	configMode?: ConfigMode | null,
+	favorite?: boolean | null,
+	tags?: string[] | null,
 };
 
 export type DemoTaskParams = {
@@ -221,6 +306,11 @@ export type NotificationMessage = {
 	params: JsonValue,
 };
 
+export type PathParams = {
+	/**  절대 경로. 파일이든 폴더든, 없는 경로든 된다. */
+	path: string,
+};
+
 export type PingParams = {
 	/**  그대로 돌려받는 값. 클라이언트가 응답을 자기 요청과 맞춰 보는 데 쓴다. */
 	nonce?: string,
@@ -229,6 +319,45 @@ export type PingParams = {
 export type Pong = {
 	nonce: string,
 	hostId: string,
+};
+
+/**  등록된 프로젝트. 경로는 [`path::normalize`] 로 정규화된 절대 경로다. */
+export type Project = {
+	/**  `$DATA/projects/<id>/` 에도 쓰이는 id(16자리 16진수). */
+	id: string,
+	name: string,
+	/**  프로젝트가 있는 Host. 지금은 언제나 `local`. */
+	host: string,
+	/**  첫 번째가 주 루트다. 지금은 하나뿐이고, 여럿은 멀티 루트(F1-6)가 연다. */
+	roots: string[],
+	favorite: boolean,
+	/**  정렬 · 중복 제거된 태그. */
+	tags: string[],
+	configMode: ConfigMode,
+	/**  개인 전용 설정 폴더 이름. 만들 때 정하고 바뀌지 않는다([`slug`]). */
+	slug: string,
+	/**  만든 시각(유닉스 밀리초). */
+	createdAt: number,
+	/**  마지막으로 연 시각(유닉스 밀리초). 한 번도 안 열었으면 `null`. */
+	openedAt: number | null,
+};
+
+export type ProjectIdParams = {
+	id: string,
+};
+
+/**  고칠 것만 채운다. */
+export type ProjectPatch = {
+	name?: string | null,
+	favorite?: boolean | null,
+	/**  통째로 바꾼다. */
+	tags?: string[] | null,
+	configMode?: ConfigMode | null,
+};
+
+export type RecentParams = {
+	/**  없으면 20. */
+	limit?: number | null,
 };
 
 /**
@@ -247,6 +376,17 @@ export type RequestMessage = {
 	params?: JsonValue,
 };
 
+/**  경로를 포함하는 프로젝트. */
+export type Resolution = {
+	project: Project,
+	/**  경로를 포함한 등록 루트. */
+	root: string,
+	/**  정규화한 입력 경로. */
+	path: string,
+	/**  등록되지 않은 연결 워크트리를 거쳐 메인 저장소 프로젝트로 왔으면 그 워크트리(F2-5). 창은 이것을 활성 워크트리로 연다. */
+	worktree: ActiveWorktree | null,
+};
+
 /**  서버 → 클라이언트 응답의 와이어 형식. [`Response`] 가 이 형태로 직렬화된다. */
 export type ResponseMessage = ({ jsonrpc: JsonRpcVersion; id: Id; result: JsonValue }) & { error?: never } | ({ jsonrpc: JsonRpcVersion; id: Id; error: RpcError }) & { result?: never };
 
@@ -259,12 +399,32 @@ export type Role =
 /**  조회만. */
 "readonly";
 
+/**  루트 후보 하나. 순서와 이유의 규칙은 [`candidates`]. */
+export type RootCandidate = {
+	path: string,
+	/**  연결 워크트리의 메인 체크아웃 꼭대기. */
+	worktreeMain: boolean,
+	/**  가장 가까운 VCS 루트(`.git`). */
+	vcs: boolean,
+	/**  이 폴더에 있는 빌드 파일 이름. */
+	buildFiles: string[],
+};
+
 /**  JSON-RPC 2.0 오류 객체. 와이어 형식 그대로 직렬화된다. `data` 가 없으면 키를 생략한다. */
 export type RpcError = {
 	code: number,
 	message: string,
 	data?: JsonValue,
 };
+
+/**  레지스트리 저장소의 상태. 앱은 `memory` 일 때 「프로젝트 목록을 저장하지 못한다」를 알린다. */
+export type StorageStatus = 
+/**  파일을 정상으로 열었다. */
+{ kind: "ok"; path: string } | 
+/**  손상된 파일을 `backup` 으로 옮기고 빈 레지스트리로 새로 만들었다. */
+{ kind: "recovered"; path: string; backup: string; reason: string } | 
+/**  파일을 쓸 수 없어 메모리 DB 로 떴다. 이번 세션의 변경은 저장되지 않는다. 파일은 건드리지 않았다. */
+{ kind: "memory"; path: string; reason: string };
 
 export type StreamCancelParams = {
 	streamId: number,
@@ -359,4 +519,9 @@ export type UiLogLevel = "debug" | "info" | "warn" | "error";
 
 export type UnsubscribeParams = {
 	subscriptionId: number,
+};
+
+export type UpdateProjectParams = {
+	id: string,
+	patch: ProjectPatch,
 };

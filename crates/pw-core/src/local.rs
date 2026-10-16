@@ -13,11 +13,12 @@ use tokio_util::sync::CancellationToken;
 use crate::ProjectId;
 use crate::bus::{DEFAULT_CAPACITY, EventBus, Filter, Received, Scope};
 use crate::config::methods::{ConfigGet, ConfigPathsInfo, ConfigPathsMethod, ConfigView};
-use crate::config::{AppPaths, ConfigSource, ConfigStore, DEFAULT_DEBOUNCE};
+use crate::config::{AppPaths, ConfigSource, ConfigStore, DEFAULT_DEBOUNCE, PathEnv};
 use crate::host::{BoxFuture, Connection, FrameSink, FrameSource, Host, HostError, HostId};
 use crate::methods::{
     DemoTaskParams, DemoTaskUpdate, HostDemoTask, HostInfo, HostInfoMethod, HostPing, Pong,
 };
+use crate::registry::Registry;
 use crate::task::{TOPIC_PROGRESS, TaskCtx, TaskProgress, TaskProgressEvent, TaskSpawner};
 
 /// 프로젝트 하나를 다루는 모듈들이 받는 문맥(`docs/design/03-architecture.md` 「코어 모듈」 절).
@@ -84,6 +85,7 @@ pub struct LocalHost {
     cancel: CancellationToken,
     projects: Projects,
     config: Option<HostConfig>,
+    registry: Option<Registry>,
 }
 
 impl LocalHost {
@@ -92,7 +94,7 @@ impl LocalHost {
         Self::builder(id).build()
     }
 
-    /// 전역 설정(`paths.config`)을 읽어 든 Host. `config.paths` · `config.get` 을 처리한다.
+    /// 전역 설정(`paths.config`)을 읽어 든 Host. `config.paths` · `config.get` 과 프로젝트 레지스트리(`project.*`)를 처리한다.
     /// 전역 설정을 읽지 못해도 내장 기본값으로 뜬다([`ConfigStore::open`]). 파일 감시는 [`Self::watch_config`] 로 켠다.
     pub fn with_config(id: impl Into<HostId>, paths: AppPaths) -> Self {
         Self::builder(id).config(paths).build()
@@ -116,8 +118,15 @@ impl LocalHost {
             global: ConfigStore::open(ConfigSource::global(&paths), bus.clone(), Scope::Host),
             paths,
         });
+        // 레지스트리는 처음 쓰일 때 `$DATA/state.db` 를 연다 — Host 를 만들기만 해서는 디스크에 쓰지 않는다.
+        let registry = config
+            .as_ref()
+            .map(|c| Registry::new(c.paths.clone(), PathEnv::current().home, bus.clone()));
         let projects = Projects::default();
         let mut router = build_router(&id, &bus, &tasks, config.as_ref(), &projects);
+        if let Some(registry) = &registry {
+            crate::registry::methods::register(&mut router, registry);
+        }
         // 코어 메서드를 먼저 붙이고 확장을 붙인다. 같은 이름을 두 번 붙이면 Router 가 패닉한다.
         for extend in extensions {
             extend(&mut router);
@@ -132,11 +141,17 @@ impl LocalHost {
             cancel,
             projects,
             config,
+            registry,
         }
     }
 
     pub fn config(&self) -> Option<&HostConfig> {
         self.config.as_ref()
+    }
+
+    /// 프로젝트 레지스트리(`project.*`). 설정(앱 디렉터리)을 붙여 만든 Host 에만 있다.
+    pub fn registry(&self) -> Option<&Registry> {
+        self.registry.as_ref()
     }
 
     /// 전역 설정 파일 감시를 켠다. Host 가 버려지면 멈춘다. 설정 없는 Host 면 아무것도 하지 않는다.
@@ -252,7 +267,7 @@ impl LocalHostBuilder {
         self
     }
 
-    /// `host.*` · `config.*` 에 더해 붙일 메서드. 여러 번 부르면 부른 순서대로 붙는다.
+    /// `host.*` · `config.*` · `project.*` 에 더해 붙일 메서드. 여러 번 부르면 부른 순서대로 붙는다.
     #[must_use]
     pub fn methods(mut self, extend: impl FnOnce(&mut Router) + 'static) -> Self {
         self.extensions.push(Box::new(extend));
