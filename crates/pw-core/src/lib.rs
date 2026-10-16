@@ -17,7 +17,7 @@ pub mod task;
 
 pub use bus::{EventBus, Filter, Received, Scope, Subscription};
 pub use host::{BoxFuture, Connection, FrameSink, FrameSource, Host, HostError, HostId, Target};
-pub use local::{HostConfig, LocalHost, ProjectContext};
+pub use local::{HostConfig, LocalHost, LocalHostBuilder, ProjectContext};
 pub use router::HostRouter;
 pub use task::{TaskCtx, TaskHandle, TaskProgress, TaskSpawner, TaskStatus};
 

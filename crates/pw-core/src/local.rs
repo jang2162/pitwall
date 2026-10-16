@@ -89,16 +89,25 @@ pub struct LocalHost {
 impl LocalHost {
     /// 설정 없는 Host. `config.*` 메서드가 없다.
     pub fn new(id: impl Into<HostId>) -> Self {
-        Self::build(id.into(), None)
+        Self::builder(id).build()
     }
 
     /// 전역 설정(`paths.config`)을 읽어 든 Host. `config.paths` · `config.get` 을 처리한다.
     /// 전역 설정을 읽지 못해도 내장 기본값으로 뜬다([`ConfigStore::open`]). 파일 감시는 [`Self::watch_config`] 로 켠다.
     pub fn with_config(id: impl Into<HostId>, paths: AppPaths) -> Self {
-        Self::build(id.into(), Some(paths))
+        Self::builder(id).config(paths).build()
     }
 
-    fn build(id: HostId, paths: Option<AppPaths>) -> Self {
+    /// 설정과 코어 밖 메서드(로그 · 진단 등)를 골라 붙여 만든다. `new` · `with_config` 도 이것의 줄임이다.
+    pub fn builder(id: impl Into<HostId>) -> LocalHostBuilder {
+        LocalHostBuilder {
+            id: id.into(),
+            paths: None,
+            extensions: Vec::new(),
+        }
+    }
+
+    fn build(id: HostId, paths: Option<AppPaths>, extensions: Vec<Extension>) -> Self {
         let hub = EventHub::new();
         let bus = EventBus::with_rpc_hub(DEFAULT_CAPACITY, hub.clone());
         let cancel = CancellationToken::new();
@@ -108,7 +117,12 @@ impl LocalHost {
             paths,
         });
         let projects = Projects::default();
-        let router = Arc::new(build_router(&id, &bus, &tasks, config.as_ref(), &projects));
+        let mut router = build_router(&id, &bus, &tasks, config.as_ref(), &projects);
+        // 코어 메서드를 먼저 붙이고 확장을 붙인다. 같은 이름을 두 번 붙이면 Router 가 패닉한다.
+        for extend in extensions {
+            extend(&mut router);
+        }
+        let router = Arc::new(router);
         Self {
             id,
             router,
@@ -218,6 +232,35 @@ impl LocalHost {
             }
             None => false,
         }
+    }
+}
+
+type Extension = Box<dyn FnOnce(&mut Router)>;
+
+/// [`LocalHost::builder`]. 설정과 메서드 확장을 함께 고를 수 있다.
+pub struct LocalHostBuilder {
+    id: HostId,
+    paths: Option<AppPaths>,
+    extensions: Vec<Extension>,
+}
+
+impl LocalHostBuilder {
+    /// 전역 설정을 읽는다([`LocalHost::with_config`] 와 같다).
+    #[must_use]
+    pub fn config(mut self, paths: AppPaths) -> Self {
+        self.paths = Some(paths);
+        self
+    }
+
+    /// `host.*` · `config.*` 에 더해 붙일 메서드. 여러 번 부르면 부른 순서대로 붙는다.
+    #[must_use]
+    pub fn methods(mut self, extend: impl FnOnce(&mut Router) + 'static) -> Self {
+        self.extensions.push(Box::new(extend));
+        self
+    }
+
+    pub fn build(self) -> LocalHost {
+        LocalHost::build(self.id, self.paths, self.extensions)
     }
 }
 

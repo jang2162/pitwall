@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pw_core::bus::DEFAULT_CAPACITY;
-use pw_core::methods::{DemoTaskUpdate, HostInfo, Pong};
+use pw_core::methods::{DemoTaskUpdate, HostInfo, PingParams, Pong};
 use pw_core::task::{TOPIC_FINISHED, TOPIC_PROGRESS, TaskFinishedEvent, TaskProgressEvent};
 use pw_core::{
     Connection, Filter, Host, HostRouter, LocalHost, Received, Scope, Target, TaskProgress,
@@ -393,4 +393,34 @@ async fn host_without_config_has_no_config_methods() {
     let mut c = Client::connect(&host, Role::Owner).await;
     c.request(1, "config.get", json!({}));
     assert_eq!(error_code(&mut c, 1).await, code::METHOD_NOT_FOUND);
+}
+
+pw_rpc::rpc_method! {
+    /// `LocalHostBuilder::methods` 시험용.
+    TestEcho: "test.echo" {
+        params: PingParams,
+        result: PingParams,
+        tier: Read,
+    }
+}
+
+#[tokio::test]
+async fn builder_combines_config_and_extra_methods() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = pw_core::config::AppPaths::under(tmp.path());
+    let host = LocalHost::builder("local")
+        .config(paths.clone())
+        .methods(|router| {
+            router.unary(TestEcho, |_ctx, params| async move { Ok(params) });
+        })
+        .build();
+    assert_eq!(host.config().map(|c| &c.paths), Some(&paths));
+    let names: Vec<_> = host.router().methods().iter().map(|m| m.name).collect();
+    for name in ["host.ping", "config.get", "test.echo"] {
+        assert!(names.contains(&name), "{name} missing: {names:?}");
+    }
+
+    let mut c = Client::connect(&host, Role::Owner).await;
+    c.request(1, "test.echo", json!({"nonce": "hi"}));
+    assert_eq!(c.result(1).await, json!({"nonce": "hi"}));
 }
