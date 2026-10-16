@@ -26,6 +26,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@pitwall/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
       '@pitwall/rpc-client':
         specifier: workspace:*
         version: link:../../packages/rpc-client
@@ -65,6 +68,19 @@ importers:
         version: 3.2.7(@types/node@24.19.2)
 
   packages/domain:
+    devDependencies:
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@24.19.2)
+
+  packages/logger:
+    dependencies:
+      '@pitwall/rpc-client':
+        specifier: workspace:*
+        version: link:../rpc-client
     devDependencies:
       typescript:
         specifier: ^7.0.2

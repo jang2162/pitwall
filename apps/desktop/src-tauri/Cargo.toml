@@ -15,10 +15,13 @@ tauri-build = { version = "2.7.2", features = [] }
 
 [dependencies]
 pw-core = { path = "../../../crates/pw-core" }
+pw-diag = { path = "../../../crates/pw-diag" }
 pw-rpc = { path = "../../../crates/pw-rpc" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tauri = { version = "2.12.3", features = [] }
+tauri-plugin-clipboard-manager = "2.5.0"
+tracing = "0.1.44"
 
 [dev-dependencies]
 # 창 열기 함수를 MockRuntime 위에서 시험한다(tauri::test::mock_app).

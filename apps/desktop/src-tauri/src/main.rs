@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use pw_core::config::AppPaths;
 use pw_core::{HostRouter, LocalHost};
+use pw_diag::Diagnostics;
 
+mod diag;
 mod ipc;
 mod menu;
 mod windows;
@@ -14,11 +16,15 @@ mod windows;
 const LOCAL_HOST_ID: &str = "local";
 
 /// 앱이 쓰는 LocalHost. 생성물과 등록된 메서드를 맞춰 보는 테스트도 이것을 쓴다.
-fn local_host(paths: AppPaths) -> LocalHost {
-    LocalHost::with_config(LOCAL_HOST_ID, paths)
+fn local_host(paths: AppPaths, diagnostics: Arc<Diagnostics>) -> LocalHost {
+    LocalHost::builder(LOCAL_HOST_ID)
+        .config(paths)
+        .methods(move |router| pw_diag::methods::register(router, diagnostics))
+        .build()
 }
 
 fn main() {
+    // 경로 해석이 로깅보다 먼저다(로그 폴더가 `$STATE/logs`). 그래서 이 실패는 stderr 에만 남는다.
     let paths = match AppPaths::from_env() {
         Ok(paths) => paths,
         Err(e) => {
@@ -27,13 +33,23 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let host = Arc::new(local_host(paths));
+    let diagnostics = diag::init(&paths);
+    let host = Arc::new(local_host(paths, Arc::clone(&diagnostics)));
+    // 「활성 기능」은 지금 Host 가 처리하는 메서드의 모듈 이름이다. 확장 · 설정 기능이 들어오면 그것으로 바꾼다.
+    diagnostics.set_features(
+        host.router()
+            .methods()
+            .iter()
+            .filter_map(|m| m.name.split_once('.').map(|(module, _)| module.to_owned())),
+    );
     let router = Arc::new(HostRouter::new());
     router
         .add_host(host.clone())
         .expect("빈 라우터에 Host 를 처음 등록한다");
 
     ipc::install(tauri::Builder::default(), router)
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .manage(diagnostics)
         .menu(menu::build)
         .on_menu_event(menu::handle)
         .setup(move |app| {
@@ -74,9 +90,10 @@ mod tests {
             .cloned()
             .collect();
         // 없는 폴더를 가리켜 실제 `$CONFIG` 를 읽지 않는다. 파일이 없으면 아무것도 쓰지 않는다.
-        let host = local_host(AppPaths::under(
-            &std::env::temp_dir().join("pitwall-generated-rpc-test-absent"),
-        ));
+        let host = local_host(
+            AppPaths::under(&std::env::temp_dir().join("pitwall-generated-rpc-test-absent")),
+            Arc::new(Diagnostics::new("unused-log-dir", "0.0.0")),
+        );
         let routed: BTreeSet<String> = host
             .router()
             .methods()

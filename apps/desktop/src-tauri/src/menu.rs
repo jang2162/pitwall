@@ -1,10 +1,11 @@
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Runtime};
 
-use crate::windows;
+use crate::{diag, windows};
 
 const NEW_PROJECT_WINDOW: &str = "new-project-window";
 const OPEN_SETTINGS: &str = "open-settings";
+const COPY_DIAGNOSTICS: &str = "copy-diagnostics";
 
 // 단축키는 키맵 엔진(M0-13)이 들어오면 거기서 동기화한다. 지금은 OS 관례(⌘,)만 둔다.
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
@@ -90,7 +91,21 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ],
     )?;
 
-    let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu])?;
+    // macOS 는 제목이 「Help」인 메뉴를 도움말 메뉴로 잡아 검색 칸을 붙인다.
+    let help_menu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[&MenuItem::with_id(
+            app,
+            COPY_DIAGNOSTICS,
+            "Copy Diagnostic Info",
+            true,
+            None::<&str>,
+        )?],
+    )?;
+
+    let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
     #[cfg(target_os = "macos")]
     menu.prepend(&app_menu)?;
 
@@ -99,11 +114,16 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
 pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let result = match event.id().as_ref() {
-        NEW_PROJECT_WINDOW => windows::open_project(app).map(drop),
-        OPEN_SETTINGS => windows::open_settings(app).map(drop),
+        NEW_PROJECT_WINDOW => windows::open_project(app)
+            .map(drop)
+            .map_err(|e| e.to_string()),
+        OPEN_SETTINGS => windows::open_settings(app)
+            .map(drop)
+            .map_err(|e| e.to_string()),
+        COPY_DIAGNOSTICS => diag::copy_to_clipboard(app),
         _ => Ok(()),
     };
     if let Err(error) = result {
-        eprintln!("메뉴 {:?} 처리 실패: {error}", event.id());
+        tracing::error!(menu = ?event.id(), %error, "menu action failed");
     }
 }

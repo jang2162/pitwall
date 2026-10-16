@@ -3,9 +3,12 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
 import "./styles.css";
+import { installUiLog } from "./ui-log";
 import { detectPlatform, installWebviewGuards } from "./webview-guards";
 import { parseWindowKind } from "./window-kind";
 
+const log = installUiLog(window);
+log.info(`window opened: ${parseWindowKind(window.location.search)}`, "main");
 const platform = detectPlatform(navigator.userAgent);
 installWebviewGuards(window, platform);
 document.documentElement.dataset.platform = platform.mac ? "mac" : "other";
