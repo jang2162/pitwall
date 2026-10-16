@@ -56,6 +56,24 @@ mod tests {
     use crate::test_dir::TestDir;
 
     #[test]
+    fn panic_hook_keeps_calling_the_previous_hook() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let called = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&called);
+        std::panic::set_hook(Box::new(move |_| seen.store(true, Ordering::SeqCst)));
+        install_panic_hook();
+        let result = std::panic::catch_unwind(|| panic!("chained"));
+        let _ = std::panic::take_hook();
+        assert!(result.is_err());
+        assert!(
+            called.load(Ordering::SeqCst),
+            "원래 훅(stderr 출력 등)이 불리지 않았다"
+        );
+    }
+
+    #[test]
     fn panic_hook_writes_message_location_and_stack_to_the_core_log() {
         let dir = TestDir::new();
         let mut config = LogConfig::new(dir.path());

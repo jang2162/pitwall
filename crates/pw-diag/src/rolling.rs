@@ -310,6 +310,10 @@ pub(crate) mod tests {
             "core.2026-10-15.log",
             "ui.2026-10-01.log", // 다른 구성요소: core 정리가 건드리지 않는다
             "core.backup.log",   // 이름 모양이 다르다: 건드리지 않는다
+            // 모양이 다른데 사전순으로는 기준 날짜보다 작은 이름. 모양 검사만이 이것들을 지킨다.
+            "core.0-old.log",
+            "core.2026-old.log",
+            "core.2026-01-1x.log",
             "notes.txt",
         ] {
             fs::write(dir.path().join(name), "x").unwrap();
@@ -319,9 +323,12 @@ pub(crate) mod tests {
         assert_eq!(
             names(dir.path()),
             [
+                "core.0-old.log",
+                "core.2026-01-1x.log",
                 "core.2026-10-10.log",
                 "core.2026-10-15.log",
                 "core.2026-10-16.log",
+                "core.2026-old.log",
                 "core.backup.log",
                 "notes.txt",
                 "ui.2026-10-01.log",
