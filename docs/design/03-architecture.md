@@ -109,6 +109,10 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
 - 워크트리 폴백: 프로젝트 루트가 연결 워크트리(`git worktree add`) 안이면 `.local.toml` 이 없을 때 메인 체크아웃의 같은 위치 `.pitwall/` 의 것을 쓴다. **파일 단위 폴백**이다 — 워크트리에 `<id>.local.toml` 이 있으면 그것만 쓰고 메인 쪽과 병합하지 않는다. 판정은 `.git` 파일 → gitdir 의 `commondir` 로 하고 git 을 실행하지 않는다
 - 레포를 건드리고 싶지 않은 프로젝트는 "개인 전용" 모드로 전환 → 같은 파일 구조를 `$CONFIG/projects/<slug>/`에 저장 (사람이 편집하는 설정이므로 `$CONFIG`). 전환하면 저장소 `.pitwall/` 은 읽지 않는다
   - slug 는 프로젝트 레지스트리가 정하고 경로 한 칸(`[A-Za-z0-9._-]`, `.` 으로 시작하지 않음)만 받는다. 그 폴더의 마이그레이션 원본은 `$STATE/backup/projects/<slug>/`(`$CONFIG` 에 TOML 외 파일을 두지 않으므로)
+  - 레지스트리가 만드는 slug 는 더 좁다: 이름에서 소문자로 만들고(대소문자를 무시하는 파일 시스템에서 `App` · `app` 이 같은 폴더다), 끝의 `.` 를 떼고, Windows 장치 이름(`con` 등)은 `_` 를 붙인다. 레지스트리에 있거나 **디스크에 그 폴더가 이미 있으면**(지운 프로젝트의 설정 등) `-2`, `-3` … 을 붙인다. 프로젝트 이름을 바꿔도 slug 는 그대로다. 구현: `pw_core::registry::slug`
+- 프로젝트 레지스트리 `$DATA/state.db`(SQLite, `rusqlite`): 스키마 버전은 `PRAGMA user_version`, 단계별 마이그레이션은 단계마다 트랜잭션 하나. 처음 쓰일 때 연다
+  - 열기 실패가 앱을 막지 않는다: **손상**(SQLite 가 아님 · 무결성 검사 실패)이면 파일을 `state.db.corrupt`(겹치면 `.1` …)로 옮기고 새로 만든다. **잠김 · 권한 · 앱보다 새 스키마**면 파일을 건드리지 않고 메모리 DB 로 뜬다(그 세션의 변경은 남지 않는다). 상태는 RPC `project.storage` 와 시작 로그로 알린다
+  - 레지스트리에서 지워도 프로젝트 폴더 · `.pitwall/` · 개인 전용 설정 폴더는 남는다. 변경은 Host 범위 이벤트 `project.changed`(`kind`: created · updated · deleted · opened)
 - 기존 설정 임포트 (편의): `.idea/runConfigurations/*.xml`, `.idea/dataSources.xml`, `.vscode/launch.json`, `.vscode/tasks.json`
 
 ### 설정 파일 스키마 버전 (D23)
