@@ -153,6 +153,43 @@ describe("save and restore", () => {
   });
 });
 
+describe("collapsed tool window dock", () => {
+  // 왼쪽 툴 윈도우를 모두 닫으면 dockview 가 비게 된 edge 그룹을 접는다.
+  function emptyLeft() {
+    const api = dockview();
+    buildDefaultLayout(api);
+    for (const panel of PANELS.filter((p) => p.home === "left"))
+      api.getPanel(panel.id)!.api.close();
+    expect(api.getEdgeGroup("left")!.isCollapsed()).toBe(true);
+    return api;
+  }
+
+  it("is expanded after restoring a save in which it was collapsed", () => {
+    const first = emptyLeft();
+    const storage = memoryStorage();
+    saveLayout(first, storage);
+
+    const second = dockview();
+    restoreLayout(second, storage);
+    expect(placement(second).project).toBe("left");
+    expect(second.getEdgeGroup("left")!.isCollapsed()).toBe(false);
+  });
+
+  it("is expanded when the tool window bar puts a panel into it", () => {
+    const api = emptyLeft();
+    showPanel(api, "project");
+    expect(api.getEdgeGroup("left")!.isCollapsed()).toBe(false);
+  });
+
+  it("is expanded when the tool window bar picks a panel already in it", () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    api.getEdgeGroup("left")!.collapse();
+    showPanel(api, "commit");
+    expect(api.getEdgeGroup("left")!.isCollapsed()).toBe(false);
+  });
+});
+
 describe("broken saved layout", () => {
   const valid = () => {
     const api = dockview();

@@ -88,7 +88,7 @@ function centreGroup(api: DockviewApi) {
 
 function addPanel(api: DockviewApi, panel: PanelSpec, inactive: boolean) {
   const group = panel.home === "editor" ? centreGroup(api) : ensureDock(api, panel.home);
-  return api.addPanel({
+  const added = api.addPanel({
     id: panel.id,
     title: panel.title,
     component: panel.component,
@@ -96,6 +96,13 @@ function addPanel(api: DockviewApi, panel: PanelSpec, inactive: boolean) {
     position: { referenceGroup: group.id },
     inactive,
   });
+  expandDock(added.group.api);
+  return added;
+}
+
+// dockview 는 비게 된 edge 그룹을 접는다. 거기에 패널을 넣어도 접힌 채라 탭 머리만 보이므로 펼친다.
+function expandDock(group: { location: { type: string }; isCollapsed(): boolean; expand(): void }) {
+  if (group.location.type === "edge" && group.isCollapsed()) group.expand();
 }
 
 export function buildDefaultLayout(api: DockviewApi) {
@@ -242,6 +249,7 @@ export function showPanel(api: DockviewApi, id: string) {
   const existing = api.getPanel(id);
   if (existing) {
     existing.api.setActive();
+    expandDock(existing.group.api);
     return;
   }
   const panel = spec(id);
