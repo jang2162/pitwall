@@ -239,3 +239,37 @@ async fn writes_to_an_unwritable_registry_get_the_storage_code() {
         "{frame}"
     );
 }
+
+/// 프로젝트 없는 창(웰컴 화면, M0-12)의 길: `projectId` 없는 `events.subscribe` 가 `project.create` 뒤 `project.changed` 를 받는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_scope_subscribers_hear_project_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(tmp.path()).unwrap();
+    let root = base.join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    let host = LocalHost::with_config("local", AppPaths::under(&base.join("app")));
+    // 이벤트는 Read 등급 정보만 싣는다 — readonly 기기도 받는다(pw-rpc events 모듈 머리 주석).
+    let mut watcher = Client::connect(&host, Role::Readonly).await;
+    let _: Value = watcher
+        .ok("events.subscribe", json!({"topics": [TOPIC_CHANGED]}))
+        .await;
+    let mut owner = Client::connect(&host, Role::Owner).await;
+    let created: Project = owner.ok("project.create", json!({"root": root})).await;
+
+    let frame = tokio::time::timeout(Duration::from_secs(5), watcher.conn.source.recv())
+        .await
+        .expect("timed out waiting for the event")
+        .expect("connection closed");
+    assert_eq!(frame["method"], json!("events.event"), "{frame}");
+    let params = &frame["params"];
+    assert_eq!(params["topic"], json!(TOPIC_CHANGED));
+    assert_eq!(params["projectId"], Value::Null, "Host 범위 이벤트");
+    let change: ProjectChanged = serde_json::from_value(params["payload"].clone()).unwrap();
+    assert_eq!(
+        change,
+        ProjectChanged {
+            kind: ChangeKind::Created,
+            project_id: created.id
+        }
+    );
+}
