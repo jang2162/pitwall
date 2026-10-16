@@ -10,7 +10,8 @@ import {
 } from "./theme-store";
 import { type Appearance, applyTokens, type Theme } from "./tokens";
 
-// M0-08 설정으로 이전 예정. 지금은 웹뷰의 localStorage 에 둔다 — 코어 설정 파일(M0-08 소유)을 쓰지 않으려는 임시 자리다.
+// 설정 쓰기 경로(RPC)가 생기면 설정으로 이전한다. 지금은 웹뷰의 localStorage 에 둔다 — 설정 계층은 읽기만 있고 UI 가
+// 코어 설정 파일을 직접 쓰지 않으려는 임시 자리다.
 // localStorage 는 origin 별이라 `mise run dev` 의 개발 서버(워크트리마다 다른 포트)와 빌드본은 서로의 값을 보지 못한다.
 export const THEME_STORAGE_KEY = "pitwall.theme.preference";
 

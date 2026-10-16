@@ -36,6 +36,7 @@
 - **How to apply:**
   - pid 는 그 워크트리 경로로 찾는다: `pgrep -f '<워크트리>/target/debug/pitwall'`. 이후 `orca computer --app pid:<pid>`, System Events `first process whose unix id is <pid>` 로 다룬다. 끌 때도 그 pid 프로세스의 메뉴 Quit 을 누른다.
   - `orca computer` 는 뒤에 있는 창을 `--window-id` 로 골라도 앞 창의 트리를 줄 수 있다. 창을 바꿀 때는 먼저 System Events 로 그 창에 `AXRaise` 를 보낸다.
+  - CGEvent 처럼 화면 좌표를 받는 도구에 창 기준 좌표(`orca computer` 의 스크린샷 · 트리 기준)를 넘기지 않는다. 창 위치(`orca computer list-windows` 의 x · y)를 더해 넘긴다 — 틀리면 오류 없이 빈자리를 누른다.
   - 끝나면 그 pid 가 없고 개발 서버 포트에 LISTEN 이 없는지(`lsof -nP -iTCP:<포트> -sTCP:LISTEN`) 본다.
 
 ## 커밋과 PR

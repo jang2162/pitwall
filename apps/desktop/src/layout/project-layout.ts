@@ -8,6 +8,11 @@
 // (`EDITOR_TAB`), dockview 가 따로 가진 닫기 경로(포커스된 탭의 Delete · Backspace, api 의 close)는 `keepEditor` 가
 // 가운데에 다시 넣는다 — dockview 에는 닫기를 거부하는 이벤트가 없다. 에디터가 없는 저장본(닫기를 막기 전에 저장된 것)도
 // 복원한 뒤 가운데에 다시 넣는다.
+//
+// 복원할 때 이 앱이 아는 툴 윈도우 중 저장본에 없는 것은 제자리(`home`)에 채운다. 그래서 닫은 툴 윈도우는 재시작하면
+// 돌아오고, 새로 더한 툴 윈도우도 저장본이 있는 사용자에게 나타난다. 하단 툴 윈도우 바도 툴 윈도우를 여는 액션도 아직
+// 없어(액션은 M0-13), 닫은 것을 되돌릴 다른 길이 없기 때문이다. 옮겨 둔 툴 윈도우는 저장본에 있으므로 그 자리에 둔다.
+// M0-13 이 툴 윈도우 열기 액션을 넣을 때, 닫기를 「숨기기」로 바꾸고 이 채우기를 걷을지 다시 정한다.
 
 import type { DockviewApi, SerializedDockview } from "dockview-react";
 
@@ -127,6 +132,14 @@ function readSaved(raw: string): SerializedDockview | undefined {
   return layout as SerializedDockview;
 }
 
+// 저장본에 없는 패널을 제자리에 넣는다(머리 주석). 툴 윈도우는 뒤에 숨겨 넣어 복원된 활성 탭을 바꾸지 않는다.
+function fillMissingPanels(api: DockviewApi) {
+  for (const panel of PANELS) {
+    if (api.getPanel(panel.id)) continue;
+    addPanel(api, panel, panel.home !== "editor");
+  }
+}
+
 /**
  * 저장본으로 레이아웃을 연다. 없으면 기본 레이아웃(`default`), 깨졌으면 저장본을 지우고 기본 레이아웃(`recovered`).
  */
@@ -145,7 +158,7 @@ export function restoreLayout(api: DockviewApi, storage: LayoutStorage): Restore
   if (layout) {
     try {
       api.fromJSON(layout);
-      if (!api.getPanel("editor")) addPanel(api, spec("editor")!, false);
+      fillMissingPanels(api);
       return "restored";
     } catch (error) {
       console.warn("[layout] 저장된 레이아웃을 열지 못했다", error);

@@ -55,9 +55,9 @@ async function mount(storage: ReturnType<typeof memoryStorage>) {
 it("keeps saving layout changes after StrictMode remounts effects, and restores them", async () => {
   const storage = memoryStorage();
   const api = await mount(storage);
-  expect(api.getPanel("commit")).toBeDefined();
+  expect(edge(api).activePanel?.id).toBe("project");
 
-  await act(async () => api.getPanel("commit")!.api.close());
+  await act(async () => api.getPanel("structure")!.api.setActive());
   await vi.waitFor(() => expect(storage.items.has(LAYOUT_STORAGE_KEY)).toBe(true), {
     timeout: 2000,
   });
@@ -65,9 +65,14 @@ it("keeps saving layout changes after StrictMode remounts effects, and restores 
   act(() => root!.unmount());
   root = undefined;
   const restored = await mount(storage);
-  expect(restored.getPanel("commit")).toBeUndefined();
-  expect(restored.getPanel("project")).toBeDefined();
+  expect(edge(restored).activePanel?.id).toBe("structure");
 });
+
+/** 왼쪽 툴 윈도우의 그룹. */
+function edge(api: DockviewApi) {
+  const id = api.getEdgeGroup("left")!.id;
+  return api.groups.find((g) => g.id === id)!;
+}
 
 function tabOf(title: string) {
   const tab = [...document.querySelectorAll<HTMLElement>("[role=tab]")].find(

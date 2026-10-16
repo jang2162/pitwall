@@ -100,19 +100,56 @@ describe("save and restore", () => {
     expect(placement(second)).toEqual({ ...defaultPlacement, terminal: "right" });
   });
 
-  it("restores a closed panel as closed, and the tool window bar reopens it at home", () => {
+  it("brings a closed tool window back at home on restore, behind the restored active tab", () => {
     const first = dockview();
     buildDefaultLayout(first);
+    first.getPanel("structure")!.api.setActive();
     first.getPanel("commit")!.api.close();
     const storage = memoryStorage();
     saveLayout(first, storage);
 
     const second = dockview();
     restoreLayout(second, storage);
-    expect(second.getPanel("commit")).toBeUndefined();
-    showPanel(second, "commit");
-    expect(placement(second).commit).toBe("left");
-    expect(edge(second, "left").activePanel?.id).toBe("commit");
+    expect(placement(second)).toEqual(defaultPlacement);
+    expect(edge(second, "left").activePanel?.id).toBe("structure");
+  });
+
+  it("reopens a tool window closed during the session at home from the tool window bar", () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    api.getPanel("commit")!.api.close();
+    showPanel(api, "commit");
+    expect(placement(api).commit).toBe("left");
+    expect(edge(api, "left").activePanel?.id).toBe("commit");
+  });
+
+  it("puts a tool window missing from the save at its home", () => {
+    const first = dockview();
+    buildDefaultLayout(first);
+    const layout = first.toJSON();
+    // 툴 윈도우를 더하기 전에 만든 저장본처럼, 하단의 「쿼리 결과」를 저장본에서 뺀다.
+    delete layout.panels.queryResults;
+    const bottom = layout.edgeGroups!.bottom!.group as { views: string[] };
+    bottom.views = bottom.views.filter((id) => id !== "queryResults");
+    const storage = memoryStorage(JSON.stringify({ version: LAYOUT_VERSION, layout }));
+
+    const second = dockview();
+    expect(restoreLayout(second, storage)).toBe("restored");
+    expect(placement(second).queryResults).toBe("bottom");
+  });
+
+  it("leaves a moved tool window where it was moved", () => {
+    const first = dockview();
+    buildDefaultLayout(first);
+    first.getPanel("terminal")!.api.moveTo({ group: edge(first, "right") });
+    first.getPanel("commit")!.api.close();
+    const storage = memoryStorage();
+    saveLayout(first, storage);
+
+    const second = dockview();
+    restoreLayout(second, storage);
+    expect(placement(second)).toEqual({ ...defaultPlacement, terminal: "right" });
+    expect(second.panels.filter((p) => p.id === "terminal")).toHaveLength(1);
   });
 });
 
