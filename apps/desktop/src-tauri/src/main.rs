@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use pw_core::config::AppPaths;
 use pw_core::{HostRouter, LocalHost};
 
 mod ipc;
@@ -13,20 +14,27 @@ mod windows;
 const LOCAL_HOST_ID: &str = "local";
 
 /// 앱이 쓰는 LocalHost. 생성물과 등록된 메서드를 맞춰 보는 테스트도 이것을 쓴다.
-fn local_host() -> LocalHost {
-    LocalHost::new(LOCAL_HOST_ID)
+fn local_host(paths: AppPaths) -> LocalHost {
+    LocalHost::with_config(LOCAL_HOST_ID, paths)
 }
 
 fn main() {
+    let paths =
+        AppPaths::from_env().expect("앱 디렉터리를 정하지 못했다(HOME 또는 PITWALL_*_DIR 를 본다)");
+    let host = Arc::new(local_host(paths));
     let router = Arc::new(HostRouter::new());
     router
-        .add_host(Arc::new(local_host()))
+        .add_host(host.clone())
         .expect("빈 라우터에 Host 를 처음 등록한다");
 
     ipc::install(tauri::Builder::default(), router)
         .menu(menu::build)
         .on_menu_event(menu::handle)
-        .setup(|app| {
+        .setup(move |app| {
+            // 감시를 못 켜도 앱은 뜬다 — 설정은 시작할 때 읽은 값으로 남는다.
+            if let Err(e) = host.watch_config(tauri::async_runtime::handle().inner()) {
+                eprintln!("config watch disabled: {e}");
+            }
             windows::open_welcome(app.handle())?;
             Ok(())
         })
@@ -59,7 +67,10 @@ mod tests {
             .keys()
             .cloned()
             .collect();
-        let host = local_host();
+        // 없는 폴더를 가리켜 실제 `$CONFIG` 를 읽지 않는다. 파일이 없으면 아무것도 쓰지 않는다.
+        let host = local_host(AppPaths::under(
+            &std::env::temp_dir().join("pitwall-generated-rpc-test-absent"),
+        ));
         let routed: BTreeSet<String> = host
             .router()
             .methods()

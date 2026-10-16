@@ -62,6 +62,13 @@ allow = ["MPL-2.0"]
 crate = "selectors"
 allow = ["MPL-2.0"]
 
+# CC0-1.0 은 퍼블릭 도메인 헌정이라 고지 · 소스 공개 의무가 없지만, 허용형 목록의 성격(저작권 라이선스)과 달라 전역 allow 에
+# 넣지 않는다. 설계가 파일 감시로 지정한 notify(docs/design/02-tech-stack.md 「파일 감시」 · 「라이선스 검사」 행)에 한해 허용한다.
+# about.toml 의 [notify] accepted 와 같아야 한다.
+[[licenses.exceptions]]
+crate = "notify"
+allow = ["CC0-1.0"]
+
 [licenses.private]
 # publish = false 인 우리 크레이트도 검사한다. 워크스페이스 라이선스(MIT)가 목록에서 빠지면 바로 실패한다.
 ignore = false

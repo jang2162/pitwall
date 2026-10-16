@@ -4,6 +4,14 @@
 /** 선언된 unary 메서드: 이름 → 입력 · result 타입. */
 export type UnaryMethods = {
 	/**
+	 * 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).
+	 */
+	"config.get": { params: ConfigGetParams; result: ConfigView };
+	/**
+	 * 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.
+	 */
+	"config.paths": { params: null; result: ConfigPathsInfo };
+	/**
 	 * Host 의 종류 · 버전 · OS.
 	 */
 	"host.info": { params: null; result: HostInfo };
@@ -26,6 +34,8 @@ export type MethodName = keyof UnaryMethods | keyof StreamMethods;
 
 /** 메서드 메타데이터(권한 등급 · role · 문서). */
 export const METHODS: Record<MethodName, MethodMeta> = {
+	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n"},
+	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n"},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n"},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n"},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n"},
@@ -59,6 +69,63 @@ export const RESERVED_PREFIXES = ["rpc.", "request.", "stream.", "events."] as c
 
 export type CancelRequestParams = {
 	id: Id,
+};
+
+/**  마지막 읽기의 실패. 성공하면 사라진다. */
+export type ConfigFault = {
+	message: string,
+	/**  문제가 난 파일. 파일과 무관하면 `null`. */
+	path: string | null,
+};
+
+export type ConfigFile = {
+	/**  설정 폴더 기준 경로에서 `.toml`/`.local.toml` 을 뗀 것. 구분자는 항상 `/`. */
+	id: string,
+	/**  레이어를 병합한 값(JSON 객체). `schema` 키는 뺀다. */
+	value: JsonValue,
+	/**  아래(먼저 적용)부터 위 순서. */
+	layers: ConfigLayer[],
+};
+
+export type ConfigGetParams = {
+	/**  없으면 전역 설정, 있으면 그 프로젝트의 설정. */
+	projectId?: string | null,
+};
+
+export type ConfigLayer = {
+	origin: LayerOrigin,
+	/**  파일 경로. 내장 기본값이면 `null`. */
+	path: string | null,
+	schema: number,
+	/**  앱보다 새 스키마라 읽기만 하고 쓰지 않는 파일. */
+	readOnly: boolean,
+};
+
+export type ConfigNotice = 
+/**  구버전 파일을 올려 썼다. 커밋되는 파일이면 「변경 사항 커밋 필요」 안내 대상이다(설계 D23). */
+{ kind: "migrated"; path: string; from: number; to: number; backup: string } | 
+/**  앱보다 새 버전이라 읽기 전용으로 열었다(업데이트 안내 대상). */
+{ kind: "futureSchema"; path: string; found: number; supported: number };
+
+/**  해석된 앱 디렉터리(`docs/design/03-architecture.md` 「5-0. 파일 위치 — XDG 규칙」). UTF-8 이 아닌 경로는 손실 변환된다. */
+export type ConfigPathsInfo = {
+	config: string,
+	data: string,
+	state: string,
+	cache: string,
+};
+
+/**  스냅숏: 파일 id 마다 병합된 값과, 이번 읽기에서 생긴 알림. */
+export type ConfigSnapshot = {
+	/**  id 순으로 정렬돼 있다. */
+	files: ConfigFile[],
+	notices: ConfigNotice[],
+};
+
+/**  지금 적용 중인 설정과, 마지막 다시 읽기의 실패(있으면). 실패해도 `snapshot` 은 직전에 성공한 값이다. */
+export type ConfigView = {
+	snapshot: ConfigSnapshot,
+	error: ConfigFault | null,
 };
 
 export type DemoTaskParams = {
@@ -102,6 +169,12 @@ export type JsonRpcVersion = "2.0";
  *  specta 의 `Value` 구현은 숫자를 i64/u64 로 표현해 TS 내보내기가 BigInt 금지로 실패한다.
  */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue };
+
+export type LayerOrigin = "builtin" | 
+/**  `<id>.toml` — 커밋되는 공유 설정(전역이면 그냥 설정 파일). */
+"shared" | 
+/**  `<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다. */
+"local";
 
 /**  응답 형태. `unary` 는 결과 하나, `stream` 은 `streamId` 를 돌려주고 청크를 `stream.chunk` 로 보낸다. */
 export type MethodKind = "unary" | "stream";

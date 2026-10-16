@@ -36,3 +36,7 @@ accepted = ["MPL-2.0"]
 
 [selectors]
 accepted = ["MPL-2.0"]
+
+# deny.toml 의 notify 예외와 같다(CC0-1.0, 설계가 지정한 파일 감시 크레이트).
+[notify]
+accepted = ["CC0-1.0"]

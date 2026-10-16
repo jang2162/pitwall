@@ -311,3 +311,86 @@ async fn closing_a_project_cancels_its_tasks_and_frees_the_id() {
             .is_ok()
     );
 }
+
+async fn error_code(c: &mut Client, id: i64) -> i32 {
+    let frame = c.next().await;
+    assert_eq!(frame["id"], json!(id), "{frame}");
+    from(frame["error"]["code"].clone())
+}
+
+#[tokio::test]
+async fn config_methods_read_paths_and_snapshots() {
+    use pw_core::config::methods::{ConfigPathsInfo, ConfigView};
+    use pw_core::config::{AppPaths, ConfigSource};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(&tmp.path().join("app"));
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(
+        paths.config.join("settings.toml"),
+        "schema = 1\n[sample]\ngreeting = \"global\"\n",
+    )
+    .unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join(".pitwall")).unwrap();
+    std::fs::write(
+        root.join(".pitwall/project.toml"),
+        "schema = 1\nname = \"repo\"\n",
+    )
+    .unwrap();
+
+    let host = LocalHost::with_config("local", paths.clone());
+    let project = host
+        .open_project_with_config("p1".into(), root.clone(), ConfigSource::project(&root))
+        .unwrap();
+    host.open_project("bare".into(), tmp.path().join("bare"))
+        .unwrap();
+    let mut c = Client::connect(&host, Role::Readonly).await;
+
+    c.request(1, "config.paths", Value::Null);
+    let info: ConfigPathsInfo = from(c.result(1).await);
+    assert_eq!(info.state, paths.state.display().to_string());
+
+    c.request(2, "config.get", json!({}));
+    let global: ConfigView = from(c.result(2).await);
+    assert_eq!(global.error, None);
+    assert_eq!(
+        global.snapshot.get("settings", "sample.greeting"),
+        Some(&json!("global"))
+    );
+
+    c.request(3, "config.get", json!({"projectId": "p1"}));
+    let view: ConfigView = from(c.result(3).await);
+    assert_eq!(view.snapshot.get("project", "name"), Some(&json!("repo")));
+
+    c.request(4, "config.get", json!({"projectId": "bare"}));
+    assert_eq!(error_code(&mut c, 4).await, code::INVALID_PARAMS);
+    c.request(5, "config.get", json!({"projectId": "nope"}));
+    assert_eq!(error_code(&mut c, 5).await, code::INVALID_PARAMS);
+
+    // 프로젝트 설정의 다시 읽기 결과가 RPC 구독자에게 간다.
+    c.request(
+        6,
+        "events.subscribe",
+        json!({"projectId": "p1", "topics": ["config.changed", "config.error"]}),
+    );
+    c.result(6).await;
+    std::fs::write(
+        root.join(".pitwall/project.toml"),
+        "schema = 1\nname = \"edited\"\n",
+    )
+    .unwrap();
+    project.config().unwrap().reload().unwrap();
+    let event: EventMessage = from(c.notification("events.event").await);
+    assert_eq!(event.topic, "config.changed");
+    assert_eq!(event.payload["changed"], json!(["project"]));
+}
+
+#[tokio::test]
+async fn host_without_config_has_no_config_methods() {
+    let host = LocalHost::new("local");
+    assert!(host.config().is_none());
+    let mut c = Client::connect(&host, Role::Owner).await;
+    c.request(1, "config.get", json!({}));
+    assert_eq!(error_code(&mut c, 1).await, code::METHOD_NOT_FOUND);
+}

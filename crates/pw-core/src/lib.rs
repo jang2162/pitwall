@@ -5,8 +5,10 @@
 //! - [`EventBus`]: 범위 · 토픽 기반 발행/구독. 느린 구독자는 오래된 이벤트부터 잃는다.
 //! - [`TaskSpawner`] · [`TaskHandle`]: 진행률 · 취소가 있는 장기 작업.
 //! - [`methods`]: Host 자신이 처리하는 RPC 메서드.
+//! - [`config`]: 설정 계층(파일 위치 · 병합 · 스키마 마이그레이션 · 감시).
 
 pub mod bus;
+pub mod config;
 mod host;
 mod local;
 pub mod methods;
@@ -15,7 +17,7 @@ pub mod task;
 
 pub use bus::{EventBus, Filter, Received, Scope, Subscription};
 pub use host::{BoxFuture, Connection, FrameSink, FrameSource, Host, HostError, HostId, Target};
-pub use local::{LocalHost, ProjectContext};
+pub use local::{HostConfig, LocalHost, ProjectContext};
 pub use router::HostRouter;
 pub use task::{TaskCtx, TaskHandle, TaskProgress, TaskSpawner, TaskStatus};
 

@@ -12,6 +12,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ProjectId;
 use crate::bus::{DEFAULT_CAPACITY, EventBus, Filter, Received, Scope};
+use crate::config::methods::{ConfigGet, ConfigPathsInfo, ConfigPathsMethod, ConfigView};
+use crate::config::{AppPaths, ConfigSource, ConfigStore, DEFAULT_DEBOUNCE};
 use crate::host::{BoxFuture, Connection, FrameSink, FrameSource, Host, HostError, HostId};
 use crate::methods::{
     DemoTaskParams, DemoTaskUpdate, HostDemoTask, HostInfo, HostInfoMethod, HostPing, Pong,
@@ -19,7 +21,6 @@ use crate::methods::{
 use crate::task::{TOPIC_PROGRESS, TaskCtx, TaskProgress, TaskProgressEvent, TaskSpawner};
 
 /// 프로젝트 하나를 다루는 모듈들이 받는 문맥(`docs/design/03-architecture.md` 「코어 모듈」 절).
-/// 설정은 M0-08(설정 계층)이 붙인다.
 #[derive(Clone)]
 pub struct ProjectContext {
     id: ProjectId,
@@ -27,6 +28,7 @@ pub struct ProjectContext {
     bus: EventBus,
     tasks: TaskSpawner,
     cancel: CancellationToken,
+    config: Option<ConfigStore>,
 }
 
 impl ProjectContext {
@@ -57,7 +59,21 @@ impl ProjectContext {
     pub fn cancellation(&self) -> &CancellationToken {
         &self.cancel
     }
+
+    /// 프로젝트 설정. [`LocalHost::open_project_with_config`] 로 연 프로젝트만 있다.
+    pub fn config(&self) -> Option<&ConfigStore> {
+        self.config.as_ref()
+    }
 }
+
+/// Host 범위 설정: 해석된 앱 디렉터리와 전역 설정(`$CONFIG`).
+#[derive(Clone)]
+pub struct HostConfig {
+    pub paths: AppPaths,
+    pub global: ConfigStore,
+}
+
+type Projects = Arc<Mutex<HashMap<ProjectId, ProjectContext>>>;
 
 pub struct LocalHost {
     id: HostId,
@@ -66,17 +82,33 @@ pub struct LocalHost {
     bus: EventBus,
     tasks: TaskSpawner,
     cancel: CancellationToken,
-    projects: Mutex<HashMap<ProjectId, ProjectContext>>,
+    projects: Projects,
+    config: Option<HostConfig>,
 }
 
 impl LocalHost {
+    /// 설정 없는 Host. `config.*` 메서드가 없다.
     pub fn new(id: impl Into<HostId>) -> Self {
-        let id = id.into();
+        Self::build(id.into(), None)
+    }
+
+    /// 전역 설정(`paths.config`)을 읽어 든 Host. `config.paths` · `config.get` 을 처리한다.
+    /// 전역 설정을 읽지 못해도 내장 기본값으로 뜬다([`ConfigStore::open`]). 파일 감시는 [`Self::watch_config`] 로 켠다.
+    pub fn with_config(id: impl Into<HostId>, paths: AppPaths) -> Self {
+        Self::build(id.into(), Some(paths))
+    }
+
+    fn build(id: HostId, paths: Option<AppPaths>) -> Self {
         let hub = EventHub::new();
         let bus = EventBus::with_rpc_hub(DEFAULT_CAPACITY, hub.clone());
         let cancel = CancellationToken::new();
         let tasks = TaskSpawner::new(bus.clone(), Scope::Host, cancel.child_token());
-        let router = Arc::new(build_router(&id, &bus, &tasks));
+        let config = paths.map(|paths| HostConfig {
+            global: ConfigStore::open(ConfigSource::global(&paths), bus.clone(), Scope::Host),
+            paths,
+        });
+        let projects = Projects::default();
+        let router = Arc::new(build_router(&id, &bus, &tasks, config.as_ref(), &projects));
         Self {
             id,
             router,
@@ -84,7 +116,24 @@ impl LocalHost {
             bus,
             tasks,
             cancel,
-            projects: Mutex::default(),
+            projects,
+            config,
+        }
+    }
+
+    pub fn config(&self) -> Option<&HostConfig> {
+        self.config.as_ref()
+    }
+
+    /// 전역 설정 파일 감시를 켠다. Host 가 버려지면 멈춘다. 설정 없는 Host 면 아무것도 하지 않는다.
+    pub fn watch_config(&self, runtime: &tokio::runtime::Handle) -> notify::Result<()> {
+        match &self.config {
+            Some(config) => {
+                config
+                    .global
+                    .watch(runtime, DEFAULT_DEBOUNCE, self.cancel.child_token())
+            }
+            None => Ok(()),
         }
     }
 
@@ -102,11 +151,34 @@ impl LocalHost {
     }
 
     pub fn open_project(&self, id: ProjectId, root: PathBuf) -> Result<ProjectContext, HostError> {
+        self.open(id, root, None)
+    }
+
+    /// 설정을 붙여 연다. `source` 는 저장소 모드면 [`ConfigSource::project`], 개인 전용이면 [`ConfigSource::personal`].
+    /// 설정 변경 이벤트는 이 프로젝트 범위로 나간다. 파일 감시는 `ctx.config()` 의 [`ConfigStore::watch`] 에
+    /// `ctx.cancellation()` 을 넘겨 켠다 — 그러면 프로젝트를 닫을 때 함께 멈춘다.
+    pub fn open_project_with_config(
+        &self,
+        id: ProjectId,
+        root: PathBuf,
+        source: ConfigSource,
+    ) -> Result<ProjectContext, HostError> {
+        self.open(id, root, Some(source))
+    }
+
+    fn open(
+        &self,
+        id: ProjectId,
+        root: PathBuf,
+        source: Option<ConfigSource>,
+    ) -> Result<ProjectContext, HostError> {
         let mut projects = self.projects.lock().unwrap_or_else(PoisonError::into_inner);
         if projects.contains_key(&id) {
             return Err(HostError::ProjectAlreadyOpen(id));
         }
         let cancel = self.cancel.child_token();
+        let config = source
+            .map(|source| ConfigStore::open(source, self.bus.clone(), Scope::Project(id.clone())));
         let ctx = ProjectContext {
             id: id.clone(),
             root: root.into(),
@@ -115,6 +187,7 @@ impl LocalHost {
                 .tasks
                 .scoped(Scope::Project(id.clone()), cancel.clone()),
             cancel,
+            config,
         };
         projects.insert(id, ctx.clone());
         Ok(ctx)
@@ -185,8 +258,43 @@ impl FrameSource for LocalSource {
     }
 }
 
-fn build_router(host_id: &str, bus: &EventBus, tasks: &TaskSpawner) -> Router {
+fn build_router(
+    host_id: &str,
+    bus: &EventBus,
+    tasks: &TaskSpawner,
+    config: Option<&HostConfig>,
+    projects: &Projects,
+) -> Router {
     let mut router = Router::new();
+    if let Some(config) = config {
+        let paths = ConfigPathsInfo::from(&config.paths);
+        let global = config.global.clone();
+        let projects = Arc::clone(projects);
+        router
+            .unary(ConfigPathsMethod, move |_ctx, ()| {
+                let paths = paths.clone();
+                async move { Ok(paths) }
+            })
+            .unary(ConfigGet, move |_ctx, params| {
+                let view = match params.project_id {
+                    None => Ok(ConfigView::from(&global)),
+                    Some(id) => {
+                        let projects = projects.lock().unwrap_or_else(PoisonError::into_inner);
+                        match projects.get(&id) {
+                            None => Err(RpcError::invalid_params(format!(
+                                "project `{id}` is not open"
+                            ))),
+                            Some(ctx) => ctx.config().map(ConfigView::from).ok_or_else(|| {
+                                RpcError::invalid_params(format!(
+                                    "project `{id}` was opened without config"
+                                ))
+                            }),
+                        }
+                    }
+                };
+                async move { view }
+            });
+    }
     let ping_host = host_id.to_owned();
     let info = HostInfo {
         host_id: host_id.to_owned(),
