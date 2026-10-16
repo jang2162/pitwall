@@ -8,10 +8,8 @@ import {
   KeymapEngine,
   type LayoutMap,
   menuAccelerators,
-  parseKeymapToml,
   type Platform,
   reachableBindings,
-  readDefaultKeymap,
   reservedReason,
 } from "@pitwall/keymap";
 import type { UiLogger } from "@pitwall/logger";
@@ -28,7 +26,7 @@ import {
 
 import { useRpcQuery } from "../rpc/host";
 import { contextLayers } from "./context";
-import { DEFAULT_KEYMAP_TOML } from "./default-keymap";
+import { chooseDefaultKeymap, DEFAULT_KEYMAP_ID } from "./default-keymap";
 import { FindActionDialog } from "./find-action";
 import type { KeymapNative } from "./native";
 import { keymapPlatform } from "./platform";
@@ -118,15 +116,34 @@ export function KeymapProvider({
   children,
 }: {
   native: KeymapNative;
-  log?: Pick<UiLogger, "warn" | "debug">;
+  log?: Pick<UiLogger, "info" | "warn" | "debug">;
   children: ReactNode;
 }) {
   const [registry] = useState(() => new ActionRegistry());
   const platform = useMemo(() => keymapPlatform(navigator.userAgent), []);
-  const base = useMemo(
-    () => readDefaultKeymap(parseKeymapToml(DEFAULT_KEYMAP_TOML), platform),
-    [platform],
+  // 기본 키맵은 확장 레지스트리에서 받고, 받기 전 · 실패하면 번들 것을 쓴다(default-keymap.ts).
+  const registryKeymap = useRpcQuery("keymap.get", { id: DEFAULT_KEYMAP_ID });
+  const defaultKeymap = useMemo(
+    () => chooseDefaultKeymap(registryKeymap.data, platform),
+    [registryKeymap.data, platform],
   );
+  const base = defaultKeymap.bindings;
+  const registryProblem = registryKeymap.error ? String(registryKeymap.error) : defaultKeymap.error;
+  const registryExtension =
+    defaultKeymap.source.kind === "registry" ? defaultKeymap.source.extension : undefined;
+  useEffect(() => {
+    if (registryProblem) {
+      log?.warn(
+        `keymap ${DEFAULT_KEYMAP_ID} not loaded from the extension registry, using the bundled copy: ${registryProblem}`,
+        "keymap",
+      );
+    } else if (registryExtension) {
+      log?.info(
+        `keymap ${DEFAULT_KEYMAP_ID} applied from extension ${registryExtension}`,
+        "keymap",
+      );
+    }
+  }, [registryProblem, registryExtension, log]);
   const config = useRpcQuery("config.get", {});
   const previous = useRef<readonly Binding[]>(undefined);
   const resolved = useMemo(

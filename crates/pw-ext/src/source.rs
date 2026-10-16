@@ -136,6 +136,17 @@ impl ExtensionRoot {
         }
     }
 
+    /// 파일 크기(바이트).
+    pub fn size(&self, rel: &RelPath) -> Result<u64, SourceError> {
+        match self {
+            ExtensionRoot::Builtin { .. } => self.read(rel).map(|bytes| bytes.len() as u64),
+            ExtensionRoot::Dir(dir) => {
+                let path = resolve_inside(dir, rel)?;
+                Ok(std::fs::metadata(path).map_err(io_error)?.len())
+            }
+        }
+    }
+
     pub fn read(&self, rel: &RelPath) -> Result<Cow<'static, [u8]>, SourceError> {
         match self {
             ExtensionRoot::Builtin { folder } => {

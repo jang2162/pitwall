@@ -731,6 +731,134 @@
       ],
       "tier": "read"
     },
+    "keymap.get": {
+      "description": "키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "KeymapContributionKind": {
+            "oneOf": [
+              {
+                "const": "base",
+                "description": "전체 키맵. 기본 키맵 대신 하나를 고른다.",
+                "type": "string"
+              },
+              {
+                "const": "bindings",
+                "description": "베이스 위에 병합하는 일부 바인딩.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "content": {
+            "description": "키맵 파일(TOML) 텍스트 그대로. 형식 검사는 키맵 엔진(packages/keymap)이 한다.",
+            "type": "string"
+          },
+          "extension": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/KeymapContributionKind"
+          }
+        },
+        "required": [
+          "id",
+          "extension",
+          "kind",
+          "content"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "keymap.list": {
+      "description": "등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "KeymapContributionKind": {
+            "oneOf": [
+              {
+                "const": "base",
+                "description": "전체 키맵. 기본 키맵 대신 하나를 고른다.",
+                "type": "string"
+              },
+              {
+                "const": "bindings",
+                "description": "베이스 위에 병합하는 일부 바인딩.",
+                "type": "string"
+              }
+            ]
+          },
+          "KeymapInfo": {
+            "properties": {
+              "extension": {
+                "description": "기여한 확장의 id.",
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/KeymapContributionKind"
+              }
+            },
+            "required": [
+              "id",
+              "extension",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "keymaps": {
+            "items": {
+              "$ref": "#/$defs/KeymapInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "keymaps"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "log.write": {
       "description": "UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.",
       "kind": "unary",

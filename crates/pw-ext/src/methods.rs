@@ -5,7 +5,7 @@ use std::sync::Arc;
 use pw_rpc::{JsonValue, Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
-use crate::manifest::Severity;
+use crate::manifest::{KeymapKind, Severity};
 use crate::registry::{Appearance, Registry};
 
 #[derive(
@@ -127,6 +127,65 @@ pub struct ThemeFile {
     pub content: serde_json::Value,
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum KeymapContributionKind {
+    /// 전체 키맵. 기본 키맵 대신 하나를 고른다.
+    Base,
+    /// 베이스 위에 병합하는 일부 바인딩.
+    Bindings,
+}
+
+impl From<KeymapKind> for KeymapContributionKind {
+    fn from(kind: KeymapKind) -> Self {
+        match kind {
+            KeymapKind::Base => KeymapContributionKind::Base,
+            KeymapKind::Bindings => KeymapContributionKind::Bindings,
+        }
+    }
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct KeymapInfo {
+    pub id: String,
+    /// 기여한 확장의 id.
+    pub extension: String,
+    pub kind: KeymapContributionKind,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct KeymapList {
+    pub keymaps: Vec<KeymapInfo>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct KeymapGetParams {
+    pub id: String,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct KeymapFile {
+    pub id: String,
+    pub extension: String,
+    pub kind: KeymapContributionKind,
+    /// 키맵 파일(TOML) 텍스트 그대로. 형식 검사는 키맵 엔진(packages/keymap)이 한다.
+    pub content: String,
+}
+
 rpc_method! {
     /// 등록된 확장과 읽는 중에 나온 진단.
     pub ExtList: "ext.list" {
@@ -148,13 +207,37 @@ rpc_method! {
         result: ThemeFile,
         tier: Read,
     }
+
+    /// 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.
+    pub KeymapListMethod: "keymap.list" {
+        params: (),
+        result: KeymapList,
+        tier: Read,
+    }
+
+    /// 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.
+    pub KeymapGet: "keymap.get" {
+        params: KeymapGetParams,
+        result: KeymapFile,
+        tier: Read,
+    }
 }
 
-/// 세 메서드의 핸들러를 붙인다. 레지스트리는 시작할 때 한 번 읽은 것이다.
+/// 메서드의 핸들러를 붙인다. 레지스트리는 시작할 때 한 번 읽은 것이다.
 pub fn register(router: &mut Router, registry: Arc<Registry>) {
     let list = Arc::clone(&registry);
     let themes = Arc::clone(&registry);
+    let keymaps = Arc::clone(&registry);
+    let keymap = Arc::clone(&registry);
     router
+        .unary(KeymapListMethod, move |_ctx, ()| {
+            let result = keymap_list(&keymaps);
+            async move { Ok(result) }
+        })
+        .unary(KeymapGet, move |_ctx, params: KeymapGetParams| {
+            let result = keymap_file(&keymap, &params.id);
+            async move { result }
+        })
         .unary(ExtList, move |_ctx, ()| {
             let result = extension_list(&list);
             async move { Ok(result) }
@@ -226,6 +309,38 @@ fn theme_list(registry: &Registry) -> ThemeList {
     }
 }
 
+fn keymap_list(registry: &Registry) -> KeymapList {
+    KeymapList {
+        keymaps: registry
+            .keymaps()
+            .map(|(e, k)| KeymapInfo {
+                id: k.id.clone(),
+                extension: e.manifest.id.clone(),
+                kind: k.kind.into(),
+            })
+            .collect(),
+    }
+}
+
+fn keymap_file(registry: &Registry, id: &str) -> Result<KeymapFile, RpcError> {
+    let keymap = registry
+        .keymap(id)
+        .ok_or_else(|| RpcError::invalid_params(format!("unknown keymap `{id}`")))?;
+    // 크기는 등록할 때 MAX_CONTENT_BYTES 로 막았다. 그 뒤에 파일이 바뀌었을 수 있어 읽기 · UTF-8 실패는 오류로 낸다.
+    let bytes = keymap
+        .file
+        .read()
+        .map_err(|e| RpcError::internal(format!("{}: {e}", keymap.file.display())))?;
+    let content = String::from_utf8(bytes.into_owned())
+        .map_err(|_| RpcError::internal(format!("{}: not UTF-8", keymap.file.display())))?;
+    Ok(KeymapFile {
+        id: keymap.id,
+        extension: keymap.extension,
+        kind: keymap.kind.into(),
+        content,
+    })
+}
+
 fn theme_file(registry: &Registry, id: &str) -> Result<ThemeFile, RpcError> {
     let (extension, theme) = registry
         .theme(id)
@@ -291,6 +406,39 @@ mod tests {
             "{reply}"
         );
         assert_eq!(reply["error"]["data"], "unknown theme `nope`", "{reply}");
+    }
+
+    #[tokio::test]
+    async fn keymap_list_and_get_return_the_builtin_default_keymap() {
+        let reply = call(
+            builtin_registry(),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "keymap.list"}),
+        )
+        .await;
+        assert_eq!(
+            reply["result"]["keymaps"],
+            json!([{"id": "pitwall-default", "extension": "dev.pitwall.keymap-default", "kind": "base"}]),
+            "{reply}"
+        );
+
+        let reply = call(
+            builtin_registry(),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "keymap.get", "params": {"id": "pitwall-default"}}),
+        )
+        .await;
+        assert_eq!(
+            reply["result"]["content"],
+            include_str!("../../../extensions/keymap-default/keymaps/default.toml"),
+            "{reply}"
+        );
+        assert_eq!(reply["result"]["kind"], "base");
+
+        let reply = call(
+            builtin_registry(),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "keymap.get", "params": {"id": "nope"}}),
+        )
+        .await;
+        assert_eq!(reply["error"]["data"], "unknown keymap `nope`", "{reply}");
     }
 
     #[tokio::test]

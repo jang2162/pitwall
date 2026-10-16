@@ -29,6 +29,14 @@ export type UnaryMethods = {
 	 */
 	"host.ping": { params: PingParams; result: Pong };
 	/**
+	 * 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.
+	 */
+	"keymap.get": { params: KeymapGetParams; result: KeymapFile };
+	/**
+	 * 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.
+	 */
+	"keymap.list": { params: null; result: KeymapList };
+	/**
 	 * UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.
 	 * 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.
 	 */
@@ -114,6 +122,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n"},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n"},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n"},
+	"keymap.get": {"name":"keymap.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"KeymapGetParams","output":"KeymapFile","doc":" 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.\n"},
+	"keymap.list": {"name":"keymap.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"KeymapList","doc":" 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.\n"},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n"},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n"},
 	"project.create": {"name":"project.create","kind":"unary","tier":"write","roles":["owner"],"params":"CreateProjectParams","output":"Project","doc":" 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.\n"},
@@ -330,6 +340,35 @@ export type JsonRpcVersion = "2.0";
  *  specta 의 `Value` 구현은 숫자를 i64/u64 로 표현해 TS 내보내기가 BigInt 금지로 실패한다.
  */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue };
+
+export type KeymapContributionKind = 
+/**  전체 키맵. 기본 키맵 대신 하나를 고른다. */
+"base" | 
+/**  베이스 위에 병합하는 일부 바인딩. */
+"bindings";
+
+export type KeymapFile = {
+	id: string,
+	extension: string,
+	kind: KeymapContributionKind,
+	/**  키맵 파일(TOML) 텍스트 그대로. 형식 검사는 키맵 엔진(packages/keymap)이 한다. */
+	content: string,
+};
+
+export type KeymapGetParams = {
+	id: string,
+};
+
+export type KeymapInfo = {
+	id: string,
+	/**  기여한 확장의 id. */
+	extension: string,
+	kind: KeymapContributionKind,
+};
+
+export type KeymapList = {
+	keymaps: KeymapInfo[],
+};
 
 export type LayerOrigin = "builtin" | 
 /**  `<id>.toml` — 커밋되는 공유 설정(전역이면 그냥 설정 파일). */

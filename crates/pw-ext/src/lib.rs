@@ -4,7 +4,7 @@
 //! - [`source`]: 확장 폴더 안의 경로와 두 출처(바이너리에 묶인 내장 · 디스크).
 //! - [`builtin`]: 저장소의 `extensions/` 를 묶은 내장 확장.
 //! - [`registry`]: 내장과 `$DATA/extensions/` 를 읽어 테마 · 키맵 · 언어 · 외부 도구 · UI 번역 기여를 모은다.
-//! - [`methods`]: `ext.list` · `theme.list` · `theme.get` RPC.
+//! - [`methods`]: `ext.list` · `theme.list` · `theme.get` · `keymap.list` · `keymap.get` RPC.
 //!
 //! L2 WASM 런타임은 아직 없다 — `[wasm]` 은 읽고 검사만 한다.
 
@@ -75,24 +75,29 @@ mod tests {
         );
     }
 
-    /// 기본 키맵 파일(`extensions/keymap-default/keymaps/default.toml`)의 내용과 형식은 키맵 엔진이 정하고 그쪽 작업이
-    /// 만든다. 그 파일이 들어오기 전에는 keymap-default 가 「파일 없음」 하나로 빠지는 것이 맞는 상태다 — 들어오면 이 기대를
-    /// 「진단 없음 · `pitwall-default` 키맵 등록」으로 바꾼다.
     #[test]
-    fn builtin_diagnostics_are_only_the_missing_default_keymap_file() {
+    fn builtin_extensions_load_without_diagnostics() {
         let registry = builtin_registry();
-        let messages: Vec<String> = registry
-            .diagnostics()
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        assert_eq!(registry.diagnostics(), []);
+        assert_eq!(registry.extensions().len(), 3);
+    }
+
+    #[test]
+    fn the_default_keymap_loads_through_the_builtin_extension() {
+        let keymap = builtin_registry().keymap("pitwall-default").unwrap();
+        assert_eq!(keymap.extension, "dev.pitwall.keymap-default");
+        assert_eq!(keymap.kind, KeymapKind::Base);
         assert_eq!(
-            messages,
-            ["builtin:keymap-default/extension.toml:11:8: error: `keymaps/default.toml` not found"]
+            keymap.file.display(),
+            "builtin:keymap-default/keymaps/default.toml"
+        );
+        assert_eq!(
+            keymap.file.read().unwrap().as_ref(),
+            include_bytes!("../../../extensions/keymap-default/keymaps/default.toml")
         );
     }
 
-    /// 매니페스트 자체는 맞다: 같은 매니페스트를 키맵 파일과 함께 디스크에 두면 등록되고 파일 위치를 내준다.
+    /// 디스크에 둔 확장에서도 같은 매니페스트가 키맵을 등록하고 그 파일의 디스크 위치를 내준다.
     #[test]
     fn the_default_keymap_manifest_resolves_its_file() {
         let dir = tempfile::tempdir().unwrap();

@@ -95,6 +95,9 @@ impl LoadOptions {
     }
 }
 
+/// 레지스트리나 RPC 가 내용을 통째로 읽는 파일(테마 · 키맵)의 크기 상한. 넘으면 오류다 — 시작할 때 메모리에 올린다.
+pub const MAX_CONTENT_BYTES: u64 = 1024 * 1024;
+
 /// `$DATA` 아래 사용자 확장 폴더 이름.
 pub const USER_DIR: &str = "extensions";
 
@@ -278,20 +281,37 @@ impl Registry {
 
     fn check_files(&mut self, root: &ExtensionRoot, file: &str, manifest: &Manifest) {
         let c = &manifest.contributes;
-        let mut expected: Vec<(&PathRef, EntryKind)> = Vec::new();
-        expected.extend(c.themes.iter().map(|t| (&t.file, EntryKind::File)));
-        expected.extend(c.keymaps.iter().map(|k| (&k.file, EntryKind::File)));
+        // (경로, 종류, 레지스트리나 RPC 가 내용을 읽는가). 읽는 파일만 크기를 본다.
+        let mut expected: Vec<(&PathRef, EntryKind, bool)> = Vec::new();
+        expected.extend(c.themes.iter().map(|t| (&t.file, EntryKind::File, true)));
+        expected.extend(c.keymaps.iter().map(|k| (&k.file, EntryKind::File, true)));
         for language in &c.languages {
-            expected.extend(language.grammar.iter().map(|p| (p, EntryKind::File)));
-            expected.extend(language.queries.iter().map(|p| (p, EntryKind::Dir)));
+            expected.extend(language.grammar.iter().map(|p| (p, EntryKind::File, false)));
+            expected.extend(language.queries.iter().map(|p| (p, EntryKind::Dir, false)));
         }
-        expected.extend(c.translations.iter().map(|t| (&t.dir, EntryKind::Dir)));
-        expected.extend(manifest.wasm.iter().map(|w| (&w.module, EntryKind::File)));
-        for (path_ref, want) in expected {
+        expected.extend(
+            c.translations
+                .iter()
+                .map(|t| (&t.dir, EntryKind::Dir, false)),
+        );
+        expected.extend(
+            manifest
+                .wasm
+                .iter()
+                .map(|w| (&w.module, EntryKind::File, false)),
+        );
+        for (path_ref, want, read) in expected {
             let problem = match root.kind(&path_ref.path) {
-                Ok(kind) if kind == want => continue,
-                Ok(EntryKind::Dir) => "is a folder, expected a file".to_owned(),
-                Ok(EntryKind::File) => "is a file, expected a folder".to_owned(),
+                Ok(kind) if kind != want => match kind {
+                    EntryKind::Dir => "is a folder, expected a file".to_owned(),
+                    EntryKind::File => "is a file, expected a folder".to_owned(),
+                },
+                Ok(_) if !read => continue,
+                Ok(_) => match root.size(&path_ref.path) {
+                    Ok(size) if size <= MAX_CONTENT_BYTES => continue,
+                    Ok(size) => format!("is {size} bytes, over the {MAX_CONTENT_BYTES}-byte limit"),
+                    Err(e) => e.to_string(),
+                },
                 Err(e) => e.to_string(),
             };
             self.push_error(file, path_ref.pos, format!("`{}` {problem}", path_ref.path));
@@ -301,32 +321,49 @@ impl Registry {
     fn check_unique_ids(&mut self, file: &str, manifest: &Manifest) {
         let c = &manifest.contributes;
         let mut taken = Vec::new();
-        for (id, pos) in c.themes.iter().map(|t| (&t.id, t.pos)) {
-            if let Some((e, _)) = self.theme(id) {
+        let mut check = |kind: &str, id: &str, pos, owner: Option<&str>| {
+            if let Some(owner) = owner {
                 taken.push((
                     pos,
-                    format!("theme `{id}` is already provided by `{}`", e.manifest.id),
+                    format!("{kind} `{id}` is already provided by `{owner}`"),
                 ));
             }
+        };
+        for t in &c.themes {
+            check(
+                "theme",
+                &t.id,
+                t.pos,
+                self.theme(&t.id).map(|(e, _)| e.manifest.id.as_str()),
+            );
         }
-        for (id, pos) in c.keymaps.iter().map(|k| (&k.id, k.pos)) {
-            if let Some(k) = self.keymap(id) {
-                taken.push((
-                    pos,
-                    format!("keymap `{id}` is already provided by `{}`", k.extension),
-                ));
-            }
+        for k in &c.keymaps {
+            let owner = self
+                .keymaps()
+                .find(|(_, x)| x.id == k.id)
+                .map(|(e, _)| e.manifest.id.as_str());
+            check("keymap", &k.id, k.pos, owner);
         }
-        for (id, pos) in c.external_tools.iter().map(|t| (&t.id, t.pos)) {
-            if let Some((e, _)) = self.external_tools().find(|(_, t)| &t.id == id) {
-                taken.push((
-                    pos,
-                    format!(
-                        "external tool `{id}` is already provided by `{}`",
-                        e.manifest.id
-                    ),
-                ));
-            }
+        for t in &c.external_tools {
+            let owner = self
+                .external_tools()
+                .find(|(_, x)| x.id == t.id)
+                .map(|(e, _)| e.manifest.id.as_str());
+            check("external tool", &t.id, t.pos, owner);
+        }
+        for l in &c.languages {
+            let owner = self
+                .languages()
+                .find(|(_, x)| x.id == l.id)
+                .map(|(e, _)| e.manifest.id.as_str());
+            check("language", &l.id, l.pos, owner);
+        }
+        for t in &c.translations {
+            let owner = self
+                .translations()
+                .find(|(_, x)| x.locale == t.locale)
+                .map(|(e, _)| e.manifest.id.as_str());
+            check("translation", &t.locale, t.pos, owner);
         }
         for (pos, message) in taken {
             self.push_error(file, pos, message);
@@ -614,6 +651,121 @@ mod tests {
                 .ends_with("5:21: error: theme `dusk` is already provided by `dev.example.a`"),
             "{messages:?}"
         );
+    }
+
+    /// 키맵 · 외부 도구 · 언어 · UI 번역도 먼저 등록된 것을 지킨다. 각 겹침은 그 기여 하나만 겹치는 확장으로 따로 본다.
+    #[test]
+    fn keeps_the_first_keymap_tool_language_and_translation() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "[contributes.keymaps.vim]\nkind = \"bindings\"\nfile = \"vim.toml\"\n\n\
+                    [contributes.external_tools.zed]\nlabel = \"Zed\"\ncommand = \"zed {project_root}\"\n\n\
+                    [contributes.languages.kotlin]\nlinguist = \"Kotlin\"\n\n\
+                    [contributes.translations.ko]\ndir = \"i18n/ko\"\n";
+        let first = ext(
+            dir.path(),
+            "a",
+            &[
+                ("extension.toml", &manifest("dev.example.a", "*", body)),
+                ("vim.toml", ""),
+                ("i18n/ko/main.ftl", ""),
+            ],
+        );
+        let cases = [
+            (
+                "keymap",
+                "[contributes.keymaps.vim]\nkind = \"base\"\nfile = \"vim.toml\"\n",
+            ),
+            (
+                "external tool",
+                "[contributes.external_tools.zed]\nlabel = \"Z\"\ncommand = \"z\"\n",
+            ),
+            (
+                "language",
+                "[contributes.languages.kotlin]\nlinguist = \"Kotlin\"\n",
+            ),
+            (
+                "translation",
+                "[contributes.translations.ko]\ndir = \"i18n/ko\"\n",
+            ),
+        ];
+        let mut roots = vec![first];
+        for (i, (_, body)) in cases.iter().enumerate() {
+            roots.push(ext(
+                dir.path(),
+                &format!("b{i}"),
+                &[
+                    (
+                        "extension.toml",
+                        &manifest(&format!("dev.example.b{i}"), "*", body),
+                    ),
+                    ("vim.toml", ""),
+                    ("i18n/ko/main.ftl", ""),
+                ],
+            ));
+        }
+        let registry = Registry::from_roots(&engine(), roots);
+        let ids: Vec<&str> = registry
+            .extensions()
+            .iter()
+            .map(|e| e.manifest.id.as_str())
+            .collect();
+        assert_eq!(ids, ["dev.example.a"]);
+        let messages = messages(&registry);
+        assert_eq!(messages.len(), cases.len(), "{messages:?}");
+        for ((kind, _), message) in cases.iter().zip(&messages) {
+            assert!(
+                message.contains(&format!("error: {kind} `"))
+                    && message.ends_with("is already provided by `dev.example.a`"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_theme_or_keymap_file_over_the_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = format!(
+            r#"{{"id": "dusk", "label": "Dusk", "variants": {{"dark": {{}}}}, "pad": "{}"}}"#,
+            "x".repeat(MAX_CONTENT_BYTES as usize)
+        );
+        let body = "[contributes.themes.dusk]\nfile = \"dusk.json\"\n\n[contributes.keymaps.vim]\nkind = \"base\"\nfile = \"vim.toml\"\n";
+        let root = ext(
+            dir.path(),
+            "big",
+            &[
+                ("extension.toml", &manifest("dev.example.big", "*", body)),
+                ("dusk.json", &big),
+                ("vim.toml", &"#".repeat(MAX_CONTENT_BYTES as usize + 1)),
+            ],
+        );
+        let registry = Registry::from_roots(&engine(), [root]);
+        assert!(registry.extensions().is_empty());
+        let messages = messages(&registry);
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert!(messages[0].contains("`dusk.json` is"), "{messages:?}");
+        assert!(
+            messages[1].ends_with(&format!(
+                "`vim.toml` is {} bytes, over the {MAX_CONTENT_BYTES}-byte limit",
+                MAX_CONTENT_BYTES + 1
+            )),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_a_content_file_at_the_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "[contributes.keymaps.vim]\nkind = \"base\"\nfile = \"vim.toml\"\n";
+        let root = ext(
+            dir.path(),
+            "edge",
+            &[
+                ("extension.toml", &manifest("dev.example.edge", "*", body)),
+                ("vim.toml", &"#".repeat(MAX_CONTENT_BYTES as usize)),
+            ],
+        );
+        let registry = Registry::from_roots(&engine(), [root]);
+        assert_eq!(messages(&registry), Vec::<String>::new());
     }
 
     #[test]

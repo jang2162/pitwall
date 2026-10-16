@@ -64,7 +64,7 @@ export function App({
 }: {
   kind: WindowKind;
   native?: KeymapNative;
-  log?: Pick<UiLogger, "warn" | "debug">;
+  log?: Pick<UiLogger, "info" | "warn" | "debug">;
 }) {
   const [queryClient] = useState(() => new QueryClient());
   return (

@@ -2,14 +2,16 @@
 // 앱(App)을 가짜 Host 에 붙여 띄우고 키 이벤트를 넣는다: 한글 입력 상태의 ⌘⇧A, 툴 윈도우 다시 열기,
 // keymap.toml 덮어쓰기가 Host 범위 config.changed 로 재시작 없이 반영되는 것, 메뉴 accelerator 동기화.
 
-import type { ConfigView, HostInfo } from "@pitwall/rpc-client";
+import type { ConfigView, HostInfo, KeymapFile } from "@pitwall/rpc-client";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { App } from "../App";
 import { createThemeStore } from "../theme/theme-store";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
+import { parseTheme } from "../theme/tokens";
 import type { KeymapNative } from "./native";
 
 declare global {
@@ -18,6 +20,8 @@ declare global {
 
 const host = vi.hoisted(() => ({
   keymap: undefined as unknown,
+  /** `keymap.get` 의 응답 파일 텍스트. `undefined` 면 번들 기본 키맵과 같은 파일, `null` 이면 오류로 답한다. */
+  registryKeymap: undefined as string | null | undefined,
   error: null as ConfigView["error"],
   emitHostEvent: (_topic: string) => {},
   hostSubscriptions: [] as string[][],
@@ -25,6 +29,7 @@ const host = vi.hoisted(() => ({
 
 vi.mock("../tauri-transport", async () => {
   const { createMemoryTransportPair: pair } = await import("@pitwall/rpc-client");
+  const { DEFAULT_KEYMAP_TOML } = await import("./default-keymap");
   return {
     connectHost: async () => {
       const [client, server] = pair();
@@ -46,6 +51,16 @@ vi.mock("../tauri-transport", async () => {
               },
               error: host.error,
             } satisfies ConfigView);
+          case "keymap.get":
+            if (host.registryKeymap === null) {
+              return send({ id: m.id, error: { code: -32603, message: "internal error" } });
+            }
+            return reply({
+              id: "pitwall-default",
+              extension: "dev.pitwall.keymap-default",
+              kind: "base",
+              content: host.registryKeymap ?? DEFAULT_KEYMAP_TOML,
+            } satisfies KeymapFile);
           case "host.info":
             return reply({
               hostId: "local",
@@ -79,6 +94,8 @@ vi.mock("../tauri-transport", async () => {
   };
 });
 
+const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+
 let root: Root | undefined;
 let menuListener: ((action: string) => void) | undefined;
 const native = {
@@ -99,11 +116,14 @@ beforeEach(() => {
   );
   vi.spyOn(console, "info").mockImplementation(() => {});
   host.keymap = undefined;
+  host.registryKeymap = undefined;
   host.error = null;
   host.hostSubscriptions = [];
   localStorage.clear();
   native.syncMenu.mockClear();
   native.openSettings.mockClear();
+  log.info.mockClear();
+  log.warn.mockClear();
 });
 
 afterEach(() => {
@@ -121,13 +141,14 @@ async function mount(kind: "project" | "settings") {
   const store = createThemeStore({
     system: { current: () => "light", subscribe: () => () => {} },
     storage: { read: () => undefined, write: () => {} },
+    theme: parseTheme(defaultTheme),
     apply: () => {},
   });
   root = createRoot(element);
   await act(async () =>
     root!.render(
       <ThemeStoreProvider store={store}>
-        <App kind={kind} native={native} />
+        <App kind={kind} native={native} log={log} />
       </ThemeStoreProvider>,
     ),
   );
@@ -308,4 +329,50 @@ it("leaves a default key another action took off the menu", async () => {
   expect(native.syncMenu).toHaveBeenLastCalledWith(
     expect.objectContaining({ "action.find": null, "settings.open": "Super+Shift+KeyA" }),
   );
+});
+
+it("takes the default keymap from the extension registry", async () => {
+  host.registryKeymap = `schema = 1
+
+[[bindings]]
+action = "action.find"
+mac = "cmd+j"
+win = "ctrl+j"
+linux = "ctrl+j"
+`;
+  await mount("settings");
+  expect(native.syncMenu).toHaveBeenLastCalledWith(
+    expect.objectContaining({ "action.find": "Super+KeyJ" }),
+  );
+  expect(await press("KeyJ", { metaKey: true })).toBe(true);
+  expect(dialog()).not.toBeNull();
+  expect(log.info).toHaveBeenCalledWith(
+    "keymap pitwall-default applied from extension dev.pitwall.keymap-default",
+    "keymap",
+  );
+});
+
+// 오류 응답은 TanStack Query 가 몇 번 다시 부른 뒤에야 오류가 된다 — 그동안 번들 키맵을 쓰는지만 본다.
+it("keeps the bundled default keymap when the registry fails or sends a broken file", async () => {
+  for (const reply of [null, "schema = 1\n[[bindings]]\naction = 1\n"]) {
+    host.registryKeymap = reply;
+    await mount("settings");
+    expect(native.syncMenu).toHaveBeenLastCalledWith(
+      expect.objectContaining({ "action.find": "Super+Shift+KeyA" }),
+    );
+    expect(await press("KeyA", { metaKey: true, shiftKey: true })).toBe(true);
+    expect(dialog()).not.toBeNull();
+    if (reply !== null) {
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^keymap pitwall-default not loaded from the extension registry, using the bundled copy: /,
+        ),
+        "keymap",
+      );
+    }
+    expect(log.info).not.toHaveBeenCalledWith(expect.stringMatching(/^keymap /), "keymap");
+    act(() => root!.unmount());
+    root = undefined;
+    document.body.innerHTML = "";
+  }
 });
