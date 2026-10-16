@@ -12,6 +12,11 @@ export type UnaryMethods = {
 	 */
 	"config.paths": { params: null; result: ConfigPathsInfo };
 	/**
+	 * 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.
+	 * 경로 · 비밀 · 홈 디렉터리 이름은 가린다.
+	 */
+	"diag.collect": { params: null; result: DiagnosticsText };
+	/**
 	 * Host 의 종류 · 버전 · OS.
 	 */
 	"host.info": { params: null; result: HostInfo };
@@ -19,6 +24,11 @@ export type UnaryMethods = {
 	 * 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.
 	 */
 	"host.ping": { params: PingParams; result: Pong };
+	/**
+	 * UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.
+	 * 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.
+	 */
+	"log.write": { params: UiLogBatch; result: null };
 };
 
 /** 선언된 stream 메서드: 이름 → 입력 · item 타입. */
@@ -36,9 +46,11 @@ export type MethodName = keyof UnaryMethods | keyof StreamMethods;
 export const METHODS: Record<MethodName, MethodMeta> = {
 	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n"},
 	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n"},
+	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n"},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n"},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n"},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n"},
+	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n"},
 };
 
 /** 내장 프로토콜 메서드 이름. */
@@ -137,6 +149,11 @@ export type DemoTaskParams = {
 
 /**  데모 작업 스트림의 청크. 진행 알림이 여러 번, 종료 알림이 마지막에 한 번 온다. */
 export type DemoTaskUpdate = { kind: "progress"; taskId: number; progress: TaskProgress } | { kind: "finished"; taskId: number; outcome: TaskStatus };
+
+export type DiagnosticsText = {
+	/**  경로 · 비밀 · 홈 디렉터리 이름을 가린 텍스트. 이슈 제보에 그대로 붙여 넣을 수 있다. */
+	text: string,
+};
 
 export type EventMessage = {
 	subscriptionId: number,
@@ -319,6 +336,21 @@ export type TaskStatus = { status: "running" } | { status: "completed" } | { sta
  *  둘 중 어느 쪽을 정책으로 할지는 MCP 툴 레지스트리(M0-17)에서 확정한다.
  */
 export type Tier = "read" | "write" | "exec" | "dangerous";
+
+export type UiLogBatch = {
+	entries: UiLogEntry[],
+	/**  보내기 전에 웹뷰 쪽 대기열이 넘쳐 버린 항목 수. */
+	dropped?: number,
+};
+
+export type UiLogEntry = {
+	level: UiLogLevel,
+	message: string,
+	/**  어디서 남겼는지(모듈 이름, `window.error` 등). 경로나 사용자 입력을 넣지 않는다. */
+	source?: string | null,
+};
+
+export type UiLogLevel = "debug" | "info" | "warn" | "error";
 
 export type UnsubscribeParams = {
 	subscriptionId: number,

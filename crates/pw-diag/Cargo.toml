@@ -1,0 +1,25 @@
+[package]
+name = "pw-diag"
+description = "Pitwall logging and diagnostics: rotating log files, UI log intake, diagnostic report, panic hook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pw-rpc = { path = "../pw-rpc" }
+regex = "1.13.1"
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+specta = { workspace = true, features = ["derive"] }
+tracing = "0.1.44"
+# ansi 를 끈다 — 로그 파일에 색 코드가 섞이지 않게. tracing-log(log 크레이트 연결)도 지금은 받지 않는다.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
+  "fmt",
+  "registry",
+  "std",
+] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }

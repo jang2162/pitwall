@@ -290,6 +290,31 @@
       ],
       "tier": "read"
     },
+    "diag.collect": {
+      "description": "「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n경로 · 비밀 · 홈 디렉터리 이름은 가린다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "text": {
+            "description": "경로 · 비밀 · 홈 디렉터리 이름을 가린 텍스트. 이슈 제보에 그대로 붙여 넣을 수 있다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "host.demoTask": {
       "description": "진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\nTask · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.",
       "item": {
@@ -540,6 +565,74 @@
         "readonly"
       ],
       "tier": "read"
+    },
+    "log.write": {
+      "description": "UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "UiLogEntry": {
+            "properties": {
+              "level": {
+                "$ref": "#/$defs/UiLogLevel"
+              },
+              "message": {
+                "type": "string"
+              },
+              "source": {
+                "default": null,
+                "description": "어디서 남겼는지(모듈 이름, `window.error` 등). 경로나 사용자 입력을 넣지 않는다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "level",
+              "message"
+            ],
+            "type": "object"
+          },
+          "UiLogLevel": {
+            "enum": [
+              "debug",
+              "info",
+              "warn",
+              "error"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dropped": {
+            "default": 0,
+            "description": "보내기 전에 웹뷰 쪽 대기열이 넘쳐 버린 항목 수.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/$defs/UiLogEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
     }
   }
 }

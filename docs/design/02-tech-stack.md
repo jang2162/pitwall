@@ -148,6 +148,7 @@ pitwall/
 │  ├─ pw-core/           # 프로젝트/워크스페이스, 이벤트 버스, 설정
 │  ├─ pw-rpc/            # RPC 타입/프로토콜, transport(IPC/stdio/ws)
 │  ├─ pw-rpc-gen/        # RPC 선언 → TS 타입 · JSON Schema 생성기 (`mise run gen`, 출력은 packages/rpc-client)
+│  ├─ pw-diag/           # 로그(tracing, 구성요소별 회전 파일) · 진단 정보 · 패닉 훅 (03 「로그 · 진단 (D22)」)
 │  ├─ pw-fs/             # 파일 트리, 감시, 검색
 │  ├─ pw-git/            # gix 읽기 + CLI 쓰기
 │  ├─ pw-db*/            # pw-db, pw-db-types, pw-db-sql, pw-db-driver(-postgres/-mysql/-sqlite/-redis) (§2.7)
@@ -168,6 +169,7 @@ pitwall/
 │  ├─ ui/                # React 컴포넌트
 │  ├─ rpc-client/        # 생성된 TS 타입 + 클라이언트 (데스크톱 · MCP 등 클라이언트 공용)
 │  ├─ domain/            # 공용 상태/포맷 로직 (데스크톱 · MCP 등 클라이언트 공용)
+│  ├─ logger/            # 웹뷰 로그를 묶어 코어의 `log.write` 로 보내는 로거
 │  └─ ext-api/           # L3 UI 패널 확장용 TS API
 ├─ extensions/           # 내장 확장 (기본 테마, 언어, 외부 도구, 언어팩)
 └─ docs/

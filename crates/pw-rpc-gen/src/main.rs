@@ -9,6 +9,7 @@ use std::process::ExitCode;
 
 // 메서드를 선언한 크레이트. 링크를 강제하는 줄이다 — 지우면 그 크레이트의 메서드가 생성물에서 조용히 빠진다.
 use pw_core as _;
+use pw_diag as _;
 
 use pw_rpc_gen::{Output, emit, json_schema, or_exit, typescript};
 
