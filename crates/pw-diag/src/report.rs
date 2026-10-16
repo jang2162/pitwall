@@ -97,6 +97,8 @@ impl Diagnostics {
                 Ok(entries) if entries.is_empty() => text.push_str("(none)\n"),
                 Ok(entries) => {
                     for entry in entries {
+                        // 가린 뒤 자른다. 먼저 자르면 경계에 걸린 토큰이 모양 규칙보다 짧아져 앞부분이 샌다.
+                        let entry = truncate(&mask(&entry, self.home.as_deref()), ENTRY_MAX_BYTES);
                         text.push_str(&entry);
                         text.push('\n');
                     }
@@ -104,6 +106,7 @@ impl Diagnostics {
                 Err(e) => text.push_str(&format!("(could not read logs: {e})\n")),
             }
         }
+        // 머리 줄(버전 · 기능 · 읽기 오류)도 가린다. 이미 가린 항목에 다시 걸어도 결과가 바뀌지 않는다.
         mask(&text, self.home.as_deref())
     }
 }
@@ -123,7 +126,7 @@ fn recent_entries(dir: &Path, component: &str, limit: usize) -> io::Result<Vec<S
             split_entries(&tail)
                 .into_iter()
                 .filter(|(level, _)| matches!(*level, "WARN" | "ERROR"))
-                .map(|(_, entry)| truncate(entry, ENTRY_MAX_BYTES)),
+                .map(|(_, entry)| entry.to_owned()),
         );
     }
     let skip = entries.len().saturating_sub(limit);
@@ -259,6 +262,26 @@ mod tests {
             text.contains("(ui log):\n2026-10-16T01:00:04.000001Z ERROR uncaught TypeError"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn tokens_on_the_truncation_boundary_do_not_leak() {
+        let dir = TestDir::new();
+        let ghp = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2";
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJlc2lnbmF0dXJl";
+        let head = "2026-10-16T01:00:00.000001Z ERROR pw_core: ";
+        let mut lines = String::new();
+        // 토큰이 ENTRY_MAX_BYTES 경계 바로 앞에서 시작해 경계를 넘게 한다.
+        for token in [ghp, jwt] {
+            let pad = "x ".repeat((ENTRY_MAX_BYTES - head.len() - 10) / 2);
+            lines.push_str(&format!("{head}{pad}{token} tail\n"));
+        }
+        fs::write(dir.path().join("core.2026-10-16.log"), lines).unwrap();
+        let text = diagnostics(dir.path()).collect();
+        for leaked in ["ghp_", "A1b2", "eyJ"] {
+            assert!(!text.contains(leaked), "`{leaked}` leaked:\n{text}");
+        }
+        assert_eq!(text.matches("<secret>").count(), 2, "{text}");
     }
 
     #[test]
