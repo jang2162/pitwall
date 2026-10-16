@@ -10,6 +10,7 @@ import {
   menuAccelerators,
   parseKeymapToml,
   type Platform,
+  reachableBindings,
   readDefaultKeymap,
   reservedReason,
 } from "@pitwall/keymap";
@@ -31,7 +32,30 @@ import { DEFAULT_KEYMAP_TOML } from "./default-keymap";
 import { FindActionDialog } from "./find-action";
 import type { KeymapNative } from "./native";
 import { keymapPlatform } from "./platform";
-import { resolveKeymap } from "./resolve";
+import { type LastGoodKeymap, resolveKeymap } from "./resolve";
+
+/** 키로 실행한 액션이 같은 눌림의 메뉴 accelerator 로 또 오는 것을 버리는 시간 창. */
+export const MENU_DUPLICATE_MS = 300;
+
+// 앱 전체(같은 origin 의 창들)가 함께 쓰는 마지막으로 읽힌 사용자 키맵(resolve.ts 머리 주석). 저장소가 막혀도 동작한다.
+const LAST_GOOD_KEY = "pitwall.keymap.lastGood";
+
+function readLastGood(): LastGoodKeymap | undefined {
+  try {
+    const raw = localStorage.getItem(LAST_GOOD_KEY);
+    return raw === null ? undefined : (JSON.parse(raw) as LastGoodKeymap);
+  } catch {
+    return undefined;
+  }
+}
+
+function writeLastGood(good: LastGoodKeymap) {
+  try {
+    localStorage.setItem(LAST_GOOD_KEY, JSON.stringify(good));
+  } catch {
+    // 못 남겨도 이 창은 자기 직전 키맵(`previous`)으로 버틴다.
+  }
+}
 
 export interface ShortcutLabel {
   readonly text: string;
@@ -45,6 +69,8 @@ export interface KeymapContextValue {
   readonly platform: Platform;
   /** 사용자 키맵 파일의 오류. 있으면 `bindings` 는 마지막으로 읽힌 키맵이다. */
   readonly error?: string;
+  /** 사용자 키맵 파일의 경고(그 OS 에 없는 키 등). */
+  readonly warnings: readonly string[];
   /** 액션의 단축키 라벨(병합 순서). */
   shortcuts(action: string): ShortcutLabel[];
   openFindAction(): void;
@@ -104,30 +130,43 @@ export function KeymapProvider({
   const config = useRpcQuery("config.get", {});
   const previous = useRef<readonly Binding[]>(undefined);
   const resolved = useMemo(
-    () => resolveKeymap(base, config.data, previous.current, platform),
+    () => resolveKeymap(base, config.data, previous.current, platform, readLastGood()),
     [base, config.data, platform],
   );
   useEffect(() => {
     previous.current = resolved.bindings;
-  }, [resolved.bindings]);
+    if (resolved.good) writeLastGood(resolved.good);
+  }, [resolved]);
   useEffect(() => {
     if (!resolved.error) return;
     console.warn("[keymap] 사용자 키맵을 읽지 못해 이전 키맵을 쓴다", resolved.error);
     log?.warn(`keymap.toml ignored, keeping the previous keymap: ${resolved.error}`, "keymap");
   }, [resolved.error, log]);
+  const warnings = resolved.warnings.join("; ");
+  useEffect(() => {
+    if (!warnings) return;
+    console.warn("[keymap]", warnings);
+    log?.warn(`keymap.toml: ${warnings}`, "keymap");
+  }, [warnings, log]);
 
   const [findOpen, setFindOpen] = useState(false);
   const popupOpen = useRef(false);
   popupOpen.current = findOpen;
 
+  // 키로 실행한 마지막 액션. 같은 눌림이 메뉴 accelerator 로도 와서 두 번 실행되는 것을 막는다(아래 onMenuAction).
+  const lastKeyRun = useRef<{ action: string; at: number }>(undefined);
   const [engine] = useState(
     () =>
       new KeymapEngine({
         run: (action) => {
           const ran = registry.run(action);
-          if (ran) log?.debug(`ran ${action} from a key`, "keymap");
+          if (ran) {
+            lastKeyRun.current = { action, at: performance.now() };
+            log?.debug(`ran ${action} from a key`, "keymap");
+          }
           return ran;
         },
+        allowsRepeat: (action) => registry.allowsRepeat(action),
         // 팝업이 열려 있는 동안 단축키는 팝업이 받는다 — 뒤의 창에서 액션이 돌지 않게.
         isEnabled: (action) => !popupOpen.current && registry.isEnabled(action),
         context: () =>
@@ -151,22 +190,41 @@ export function KeymapProvider({
     };
   }, [engine]);
 
-  // 메뉴 accelerator 는 병합 결과에서 만든다(packages/keymap keymap-file.ts 머리 주석). 어떤 액션이 메뉴에 있는지는
+  // 메뉴 accelerator 는 병합 결과에서 만든다(packages/keymap keymap-file.ts 머리 주석). 가려진 키는 빼고 보낸다
+  // (`reachableBindings`). 어떤 액션이 메뉴에 있는지는
   // 네이티브만 알므로, 아는 액션 전부를 보내고 메뉴에 없는 것은 네이티브가 버린다. 키가 모두 지워진 액션도 `null` 로
   // 보내야 메뉴의 옛 단축키가 지워진다 — 그래서 바인딩이 아니라 기본 키맵 · 레지스트리의 액션 목록에서 고른다.
   const version = useRegistryVersion(registry);
   useEffect(() => {
     const ids = [...new Set([...base.map((b) => b.action), ...registry.list().map((a) => a.id)])];
     native
-      .syncMenu(menuAccelerators(resolved.bindings, ids))
+      .syncMenu(menuAccelerators(resolved.bindings, ids, platform))
       .catch((e: unknown) => console.warn("[keymap] menu sync failed", e));
-  }, [native, base, registry, resolved.bindings, version]);
+  }, [native, base, registry, resolved.bindings, version, platform]);
 
+  // ⚠ 한 번의 키 눌림이 웹뷰 keydown 과 메뉴 accelerator 둘 다로 올 수 있다. macOS(WKWebView)는 웹이 처리(preventDefault)한
+  // key equivalent 를 메뉴로 보내지 않는다고 보지만 실측하지 않았고, Windows · Linux 는 순서 · 배타성을 모른다. 그래서
+  // 키로 실행한 직후(`MENU_DUPLICATE_MS` 안) 같은 액션이 메뉴로 오면 버린다. 이 가드가 있어도 **메뉴에 넣는 액션은 두 번
+  // 실행돼도 결과가 같아야 한다**(열기 · 보이기) — 가드의 시간 창 밖에서 늦게 온 메뉴 이벤트는 걸러지지 않는다. 토글
+  // 액션을 메뉴에 넣으려면 먼저 그 경로가 정말 한 번만 오는지 실측하거나 더 단단한 중복 제거를 둔다(src-tauri/src/menu.rs).
   useEffect(
     () =>
       native.onMenuAction((action) => {
-        if (registry.run(action)) log?.debug(`ran ${action} from the menu`, "keymap");
-        else console.warn("[keymap] menu action not available here", action);
+        const last = lastKeyRun.current;
+        if (last?.action === action && performance.now() - last.at < MENU_DUPLICATE_MS) {
+          log?.debug(`dropped ${action} from the menu: the key already ran it`, "keymap");
+          return;
+        }
+        // 팝업이 열린 채 메뉴에서 고르면 팝업을 닫고 실행한다. 메뉴 이벤트로는 마우스로 고른 것인지 키인지 알 수 없는데,
+        // 마우스로 메뉴를 고른 것을 조용히 무시하면 고장으로 보인다.
+        const run = () => {
+          if (registry.run(action)) log?.debug(`ran ${action} from the menu`, "keymap");
+          else console.warn("[keymap] menu action not available here", action);
+        };
+        if (popupOpen.current) {
+          setFindOpen(false);
+          setTimeout(run, 0);
+        } else run();
       }),
     [native, registry, log],
   );
@@ -178,8 +236,9 @@ export function KeymapProvider({
       bindings: resolved.bindings,
       platform,
       error: resolved.error,
+      warnings: resolved.warnings,
       shortcuts: (action) =>
-        resolved.bindings
+        reachableBindings(resolved.bindings)
           .filter((b) => b.action === action)
           .map((b) => ({
             text: formatSequence(b.sequence, platform, layout),
@@ -198,17 +257,22 @@ export function KeymapProvider({
   );
 }
 
-/** 키맵 파일 오류를 창 아래에 띄운다(10-ui §4.5 「오류는 알림으로」 — 알림 기능이 생기기 전의 최소 표시). */
+/** 키맵 파일 오류 · 경고를 창 아래에 띄운다(10-ui §4.5 「오류는 알림으로」 — 알림 기능이 생기기 전의 최소 표시). */
 export function KeymapErrorBar() {
-  const { error } = useKeymap();
-  if (!error) return null;
+  const { error, warnings } = useKeymap();
+  const text = error
+    ? `키맵 파일 오류 — 이전 키맵을 쓰는 중: ${error}`
+    : warnings.length > 0
+      ? `키맵 파일 경고: ${warnings.join("; ")}`
+      : undefined;
+  if (!text) return null;
   return (
     <div
       role="alert"
       className="flex-none truncate border-t border-ui-accent bg-ui-panel px-2 py-0.5 text-[11px] text-ui-foreground"
-      title={error}
+      title={text}
     >
-      키맵 파일 오류 — 이전 키맵을 쓰는 중: {error}
+      {text}
     </div>
   );
 }

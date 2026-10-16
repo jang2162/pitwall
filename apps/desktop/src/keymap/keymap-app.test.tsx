@@ -80,9 +80,15 @@ vi.mock("../tauri-transport", async () => {
 });
 
 let root: Root | undefined;
+let menuListener: ((action: string) => void) | undefined;
 const native = {
   syncMenu: vi.fn<KeymapNative["syncMenu"]>(async () => {}),
-  onMenuAction: vi.fn<KeymapNative["onMenuAction"]>(() => () => {}),
+  onMenuAction: vi.fn<KeymapNative["onMenuAction"]>((listener) => {
+    menuListener = listener;
+    return () => {
+      if (menuListener === listener) menuListener = undefined;
+    };
+  }),
   openSettings: vi.fn<KeymapNative["openSettings"]>(async () => {}),
 };
 
@@ -230,4 +236,73 @@ it("keeps the previous keymap and shows the error when keymap.toml is malformed"
   expect(document.querySelector("[role=alert]")?.textContent).toContain("cmd+nope");
   expect(await press("KeyK", { metaKey: true })).toBe(true);
   expect(dialog()).not.toBeNull();
+});
+
+const fromMenu = async (action: string) => {
+  await act(async () => menuListener!(action));
+  await settle();
+};
+
+it("runs an action once when the same press also arrives from the menu", async () => {
+  await mount("settings");
+  expect(await press("Comma", { metaKey: true }, ",")).toBe(true);
+  await fromMenu("settings.open");
+  expect(native.openSettings).toHaveBeenCalledTimes(1);
+  // 시간 창이 지난 뒤 메뉴에서 고른 것은 실행한다.
+  await act(async () => new Promise((r) => setTimeout(r, 320)));
+  await fromMenu("settings.open");
+  expect(native.openSettings).toHaveBeenCalledTimes(2);
+});
+
+it("does not run shortcuts behind an open Find Action popup", async () => {
+  await mount("settings");
+  await press("KeyA", { metaKey: true, shiftKey: true });
+  expect(dialog()).not.toBeNull();
+  expect(await press("Comma", { metaKey: true }, ",")).toBe(false);
+  expect(native.openSettings).not.toHaveBeenCalled();
+  expect(dialog()).not.toBeNull();
+});
+
+it("closes Find Action and runs an action picked from the menu", async () => {
+  await mount("settings");
+  await press("KeyA", { metaKey: true, shiftKey: true });
+  await fromMenu("settings.open");
+  expect(dialog()).toBeNull();
+  expect(native.openSettings).toHaveBeenCalledTimes(1);
+});
+
+it("does not toggle a tool window again while its key is held", async () => {
+  await mount("project");
+  const leftCollapsed = () => document.querySelector('[data-tool-window="project"]') === null;
+  await press("Digit1", { metaKey: true }, "1");
+  expect(leftCollapsed()).toBe(false);
+  // 누르고 있는 동안 오는 반복 keydown.
+  for (let i = 0; i < 3; i++) await press("Digit1", { metaKey: true, repeat: true }, "1");
+  expect(leftCollapsed()).toBe(false);
+});
+
+it("uses the last good keymap in a window opened while keymap.toml is malformed", async () => {
+  host.keymap = { bindings: [{ action: "action.find", key: "cmd+k" }] };
+  await mount("settings");
+  act(() => root!.unmount());
+  root = undefined;
+  document.body.innerHTML = "";
+
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  host.keymap = { bindings: [{ action: "action.find", key: "cmd+nope" }] };
+  native.syncMenu.mockClear();
+  await mount("settings");
+  expect(native.syncMenu).toHaveBeenLastCalledWith(
+    expect.objectContaining({ "action.find": "Super+KeyK" }),
+  );
+  expect(await press("KeyK", { metaKey: true })).toBe(true);
+  expect(dialog()).not.toBeNull();
+});
+
+it("leaves a default key another action took off the menu", async () => {
+  host.keymap = { bindings: [{ action: "settings.open", key: "cmd+shift+a" }] };
+  await mount("settings");
+  expect(native.syncMenu).toHaveBeenLastCalledWith(
+    expect.objectContaining({ "action.find": null, "settings.open": "Super+Shift+KeyA" }),
+  );
 });

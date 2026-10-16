@@ -3,6 +3,7 @@ import {
   parseKeymapToml,
   type Platform,
   readDefaultKeymap,
+  readDefaultKeymapWithWarnings,
   reservedReason,
 } from "@pitwall/keymap";
 import type { ConfigView } from "@pitwall/rpc-client";
@@ -25,7 +26,11 @@ const ACTION_IDS = new Set(
 
 describe("default keymap file", () => {
   it.each(PLATFORMS)("reads on %s, binds only actions that exist, and no OS-reserved key", (p) => {
-    const bindings = defaults(p);
+    const { bindings, warnings } = readDefaultKeymapWithWarnings(
+      parseKeymapToml(DEFAULT_KEYMAP_TOML),
+      p,
+    );
+    expect(warnings).toEqual([]);
     expect(bindings.length).toBeGreaterThan(0);
     for (const b of bindings) {
       expect(ACTION_IDS, b.action).toContain(b.action);
@@ -64,8 +69,12 @@ describe("resolveKeymap", () => {
     bindings.filter((b) => b.action === "action.find").map((b) => b.key);
 
   it("is the default keymap without a user file", () => {
-    expect(resolveKeymap(base, view(undefined), undefined, "mac")).toEqual({ bindings: base });
-    expect(resolveKeymap(base, undefined, undefined, "mac")).toEqual({ bindings: base });
+    const none = { bindings: base, warnings: [], good: { value: null } };
+    expect(resolveKeymap(base, view(undefined), undefined, "mac")).toEqual(none);
+    expect(resolveKeymap(base, undefined, undefined, "mac")).toEqual({
+      bindings: base,
+      warnings: [],
+    });
   });
 
   it("applies the user's keymap.toml", () => {
@@ -120,7 +129,41 @@ describe("resolveKeymap", () => {
       base,
       "mac",
     );
-    expect(resolved).toEqual({ bindings: base, error: "expected `]`" });
+    expect(resolved).toEqual({ bindings: base, error: "expected `]`", warnings: [] });
+  });
+
+  it("falls back to the app-wide last good keymap in a window that has none yet", () => {
+    const lastGood = { value: { bindings: [{ action: "action.find", key: "cmd+k" }] } };
+    const malformed = resolveKeymap(
+      base,
+      view({ bindings: [{ action: "action.find", key: "cmd+nope" }] }),
+      undefined,
+      "mac",
+      lastGood,
+    );
+    expect(find(malformed.bindings)).toEqual(["cmd+k"]);
+    expect(malformed.good).toBeUndefined();
+    // 띄울 때부터 TOML 이 틀렸으면 설정 계층의 스냅숏에는 keymap 이 없다.
+    const broken = resolveKeymap(
+      base,
+      view(undefined, { message: "expected `]`", path: "/cfg/pitwall/keymap.toml" }),
+      undefined,
+      "mac",
+      lastGood,
+    );
+    expect(find(broken.bindings)).toEqual(["cmd+k"]);
+  });
+
+  it("keeps the last good keymap before the config arrives, and does not hand back a value", () => {
+    const lastGood = { value: { bindings: [{ action: "action.find", key: "cmd+k" }] } };
+    const early = resolveKeymap(base, undefined, undefined, "mac", lastGood);
+    expect(find(early.bindings)).toEqual(["cmd+k"]);
+    expect(early.good).toBeUndefined();
+  });
+
+  it("hands back what it read so it can become the last good keymap", () => {
+    const value = { bindings: [{ action: "action.find", key: "cmd+k" }] };
+    expect(resolveKeymap(base, view(value), undefined, "mac").good).toEqual({ value });
   });
 
   it("does not blame the keymap for another config file's error", () => {

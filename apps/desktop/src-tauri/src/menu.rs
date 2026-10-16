@@ -3,8 +3,13 @@
 //! (`packages/keymap`)에만 있다 — 메뉴는 결과만 받는다. 키맵 파일이 바뀌면 웹뷰가 Host 범위 `config.changed` 로 알고
 //! 다시 보내므로 메뉴도 재시작 없이 바뀐다.
 //!
-//! 메뉴 항목을 고르면(단축키로 고른 것 포함): 네이티브가 할 수 있는 것(설정 창)은 여기서 하고, 웹뷰의 액션은 포커스된
-//! 창에 [`MENU_ACTION_EVENT`] 로 액션 id 를 보낸다(`src/keymap/native.ts`).
+//! 메뉴 항목을 고르면(단축키로 고른 것 포함): 키맵 액션은 포커스된 창에 [`MENU_ACTION_EVENT`] 로 액션 id 를 보내
+//! 웹뷰가 실행한다(`src/keymap/native.ts`). 설정 창처럼 네이티브가 할 수 있는 것도 포커스된 창이 있으면 웹뷰로 보낸다 —
+//! 웹뷰가 「키로 방금 실행한 액션이 같은 눌림의 accelerator 로 또 온 것」을 버리는 가드(`src/keymap/keymap-provider.tsx`
+//! 의 `MENU_DUPLICATE_MS`)를 같이 타게. 포커스된 창이 없을 때(macOS 에서 창을 모두 닫음)만 여기서 직접 한다.
+//!
+//! ⚠ 메뉴에 넣는 액션은 두 번 실행돼도 결과가 같아야 한다(열기 · 보이기). 가드는 짧은 시간 창만 본다. 토글 액션을 메뉴에
+//! 넣으려면 그 전에 키 경로와 메뉴 경로가 한 번만 오는지 플랫폼마다 실측하거나 더 단단한 중복 실행 가드를 둔다.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -90,7 +95,7 @@ fn replace<R: Runtime>(
 }
 
 /// 웹뷰의 키맵 엔진이 병합한 단축키(액션 id → muda accelerator 또는 `null`)를 메뉴에 건다.
-/// 창마다 같은 값을 보내므로 여러 번 불려도 결과는 같다.
+/// 창마다 같은 값을 보내므로 여러 번 불려도 결과는 같다. 여기 단축키를 거는 액션은 두 번 실행돼도 결과가 같아야 한다(머리 주석).
 /// 단위 시험이 없다 — muda 는 macOS 에서 메뉴 항목을 메인 스레드에서만 만들게 해 시험 스레드에서 패닉한다. 앱을 띄워
 /// keymap.toml 을 고치고 메뉴의 단축키 표시가 바뀌는지로 확인한다.
 #[tauri::command]
@@ -239,9 +244,11 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         NEW_PROJECT_WINDOW => windows::open_project(app)
             .map(drop)
             .map_err(|e| e.to_string()),
-        SETTINGS_ACTION => windows::open_settings(app)
-            .map(drop)
-            .map_err(|e| e.to_string()),
+        SETTINGS_ACTION => run_in_focused_window(app, SETTINGS_ACTION).or_else(|_| {
+            windows::open_settings(app)
+                .map(drop)
+                .map_err(|e| e.to_string())
+        }),
         COPY_DIAGNOSTICS => diag::copy_to_clipboard(app),
         FIND_ACTION => run_in_focused_window(app, FIND_ACTION),
         _ => Ok(()),
