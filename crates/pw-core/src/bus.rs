@@ -8,8 +8,8 @@
 //! 멈춘 사이 다른 발행이 쌓여 특정 작업의 마지막 이벤트(완료 알림 등)도 버려질 수 있다. 「끝났는가」처럼 놓치면
 //! 영원히 기다리게 되는 사실은 버스로 기다리지 말고 출처의 상태를 직접 본다(작업은 `TaskHandle::wait`).
 //!
-//! 프로젝트 범위 이벤트는 같은 `publish` 안에서 pw-rpc [`EventHub`] 로도 나간다 — UI · MCP 의
-//! `events.subscribe` 가 받는 길이다. 그 쪽 전달은 pw-rpc 세션의 무한 outbound 큐에 들어가므로
+//! 이벤트는 같은 `publish` 안에서 pw-rpc [`EventHub`] 로도 나간다 — UI · MCP 의 `events.subscribe` 가 받는 길이다.
+//! 프로젝트 범위는 그 `projectId` 로, Host 범위는 `projectId` 없이 구독한 쪽으로 간다. 그 쪽 전달은 pw-rpc 세션의 무한 outbound 큐에 들어가므로
 //! 이 상한이 적용되지 않는다(pw-rpc `Session` 의 outbound 주석). transport 가 큐를 바로 비우는 동안만 묶인다.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -28,7 +28,7 @@ pub const DEFAULT_CAPACITY: usize = 256;
 /// 이벤트의 범위.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Scope {
-    /// 프로젝트에 속하지 않는 Host 전체의 이벤트. pw-rpc 구독은 프로젝트 단위라 RPC 로는 나가지 않는다.
+    /// 프로젝트에 속하지 않는 Host 전체의 이벤트. RPC 로는 `projectId` 없이 구독한 쪽에 나간다.
     Host,
     Project(ProjectId),
 }
@@ -128,7 +128,7 @@ impl EventBus {
         Self::build(capacity, None)
     }
 
-    /// 프로젝트 범위 이벤트를 `hub` 의 RPC 구독에도 내보내는 버스.
+    /// 이벤트를 `hub` 의 RPC 구독에도 내보내는 버스.
     ///
     /// # Panics
     /// `capacity` 가 0 이면 패닉한다.
@@ -182,8 +182,11 @@ impl EventBus {
                 delivered += 1;
             }
         }
-        if let (Some(hub), Scope::Project(project)) = (&self.inner.hub, &event.scope) {
-            hub.publish(project, &event.topic, &event.payload)?;
+        if let Some(hub) = &self.inner.hub {
+            match &event.scope {
+                Scope::Project(project) => hub.publish(project, &event.topic, &event.payload)?,
+                Scope::Host => hub.publish_host(&event.topic, &event.payload)?,
+            };
         }
         Ok(delivered)
     }
@@ -265,8 +268,9 @@ impl Drop for Subscription {
 mod tests {
     use std::time::Duration;
 
-    use pw_rpc::{Caller, Role, Router, Session};
+    use pw_rpc::{Caller, Outbound, Role, Router, Session};
     use serde_json::json;
+    use tokio::sync::mpsc::UnboundedReceiver;
 
     use super::*;
 
@@ -363,15 +367,9 @@ mod tests {
         assert_eq!(bus.publish(Scope::Host, "x", &()).unwrap(), 0);
     }
 
-    #[tokio::test]
-    async fn project_events_reach_rpc_subscribers_and_host_events_do_not() {
-        let hub = EventHub::new();
-        let bus = EventBus::with_rpc_hub(4, hub.clone());
-        let (session, mut rx) =
-            Session::new(Arc::new(Router::new()), hub, Caller::new(Role::Owner));
+    async fn rpc_subscribe(session: &Session, rx: &mut UnboundedReceiver<Outbound>, params: Value) {
         session.handle_value(json!({
-            "jsonrpc": "2.0", "id": 1, "method": "events.subscribe",
-            "params": {"projectId": "p1", "topics": ["fs.changed"]},
+            "jsonrpc": "2.0", "id": 1, "method": "events.subscribe", "params": params,
         }));
         assert!(
             rx.recv()
@@ -382,14 +380,41 @@ mod tests {
                 .outcome
                 .is_ok()
         );
+    }
 
-        bus.publish(Scope::Host, "fs.changed", &"host").unwrap();
-        bus.publish(project("p1"), "fs.changed", &"p1").unwrap();
-
-        let note = rx.recv().await.unwrap().into_notification().unwrap();
+    fn next_event(rx: &mut UnboundedReceiver<Outbound>) -> pw_rpc::protocol::EventMessage {
+        let note = rx.try_recv().unwrap().into_notification().unwrap();
         assert_eq!(note.method, pw_rpc::protocol::EVENTS_EVENT);
-        let message: pw_rpc::protocol::EventMessage = note.params_as().unwrap();
-        assert_eq!(message.payload, json!("p1"));
-        assert!(rx.try_recv().is_err());
+        note.params_as().unwrap()
+    }
+
+    #[tokio::test]
+    async fn each_scope_reaches_only_rpc_subscribers_of_that_scope() {
+        let hub = EventHub::new();
+        let bus = EventBus::with_rpc_hub(4, hub.clone());
+        let router = Arc::new(Router::new());
+        let (in_project, mut project_rx) =
+            Session::new(Arc::clone(&router), hub.clone(), Caller::new(Role::Owner));
+        let (host, mut host_rx) = Session::new(router, hub, Caller::new(Role::Readonly));
+        rpc_subscribe(
+            &in_project,
+            &mut project_rx,
+            json!({"projectId": "p1", "topics": ["config.changed"]}),
+        )
+        .await;
+        rpc_subscribe(&host, &mut host_rx, json!({"topics": ["config.changed"]})).await;
+
+        bus.publish(Scope::Host, "config.changed", &"host").unwrap();
+        bus.publish(project("p1"), "config.changed", &"p1").unwrap();
+
+        let message = next_event(&mut project_rx);
+        assert_eq!(
+            (message.project_id.as_deref(), message.payload),
+            (Some("p1"), json!("p1"))
+        );
+        assert!(project_rx.try_recv().is_err());
+        let message = next_event(&mut host_rx);
+        assert_eq!((message.project_id, message.payload), (None, json!("host")));
+        assert!(host_rx.try_recv().is_err());
     }
 }

@@ -20,15 +20,19 @@ interface FakeHostOptions {
  */
 function fakeHost({ holdInfo = false, emitRightAfterSubscribe }: FakeHostOptions = {}) {
   const [clientSide, serverSide] = createMemoryTransportPair();
-  const subscriptions = new Map<number, { projectId: string; topics: string[] }>();
+  const subscriptions = new Map<number, { projectId?: string; topics: string[] }>();
   let nextSubscription = 1;
   let version = 0;
   const infoCalls = vi.fn<(id: number) => void>();
   const unsubscribeCalls = vi.fn();
   const cancels: number[] = [];
   const send = (message: object) => serverSide.send(JSON.stringify({ jsonrpc: "2.0", ...message }));
-  const event = (subscriptionId: number, projectId: string, topic: string, payload: unknown) =>
-    send({ method: "events.event", params: { subscriptionId, projectId, topic, payload } });
+  const event = (
+    subscriptionId: number,
+    projectId: string | null,
+    topic: string,
+    payload: unknown,
+  ) => send({ method: "events.event", params: { subscriptionId, projectId, topic, payload } });
 
   serverSide.onMessage((text) => {
     const message = JSON.parse(text) as { id?: number; method: string; params: unknown };
@@ -52,10 +56,11 @@ function fakeHost({ holdInfo = false, emitRightAfterSubscribe }: FakeHostOptions
         return;
       case "events.subscribe": {
         const id = nextSubscription++;
-        const sub = message.params as { projectId: string; topics: string[] };
+        const sub = message.params as { projectId?: string; topics: string[] };
         subscriptions.set(id, sub);
         reply({ subscriptionId: id });
-        if (emitRightAfterSubscribe) event(id, sub.projectId, emitRightAfterSubscribe, null);
+        if (emitRightAfterSubscribe)
+          event(id, sub.projectId ?? null, emitRightAfterSubscribe, null);
         return;
       }
       case "events.unsubscribe": {
@@ -71,9 +76,10 @@ function fakeHost({ holdInfo = false, emitRightAfterSubscribe }: FakeHostOptions
     unsubscribeCalls,
     cancels,
     subscriptions,
-    emit(projectId: string, topic: string, payload: unknown = null) {
+    /** `projectId` 가 `null` 이면 Host 범위 이벤트 — `projectId` 없이 연 구독만 받는다(pw-rpc EventHub 와 같은 규칙). */
+    emit(projectId: string | null, topic: string, payload: unknown = null) {
       for (const [subscriptionId, sub] of subscriptions) {
-        if (sub.projectId !== projectId || !sub.topics.includes(topic)) continue;
+        if ((sub.projectId ?? null) !== projectId || !sub.topics.includes(topic)) continue;
         event(subscriptionId, projectId, topic, payload);
       }
     },
@@ -154,6 +160,24 @@ describe("connectEventInvalidation", () => {
     host.emit("p1", "host.changed");
     await vi.waitFor(() => expect(versionOf(observer)).toBe("0.0.3"));
     expect(host.infoCalls).toHaveBeenCalledTimes(3);
+
+    invalidation.dispose();
+    unsubscribe();
+  });
+
+  it("subscribes without a project id for the host scope and refetches on host events", async () => {
+    const { host, observer, unsubscribe } = setup();
+    await vi.waitFor(() => expect(versionOf(observer)).toBe("0.0.1"));
+    const invalidation = connectEventInvalidation(host.client, queryClient, null, [hostChanged]);
+    await invalidation.ready;
+    expect([...host.subscriptions.values()]).toEqual([{ topics: ["host.changed"] }]);
+    await vi.waitFor(() => expect(versionOf(observer)).toBe("0.0.2"));
+
+    host.emit("p1", "host.changed");
+    await settle();
+    expect(host.infoCalls).toHaveBeenCalledTimes(2);
+    host.emit(null, "host.changed");
+    await vi.waitFor(() => expect(versionOf(observer)).toBe("0.0.3"));
 
     invalidation.dispose();
     unsubscribe();

@@ -11,10 +11,22 @@ import { hostKey, rpcQueryKey, rpcQueryOptions, type UnaryMethod } from "./queri
 const LOG = "[host]";
 
 /**
- * 이벤트 → 쿼리 무효화 규칙. 이벤트를 내는 기능이 그 쿼리와 함께 여기에 더한다. 지금은 RPC 로 나가는 이벤트가 없다
- * (invalidation.ts 머리 주석) — 프로젝트 창이 프로젝트 id 로 연결하게 되면(M0-12) 그 창에서 구독이 열린다.
+ * 프로젝트 범위 이벤트 → 쿼리 무효화 규칙. 이벤트를 내는 기능이 그 쿼리와 함께 여기에 더한다. 프로젝트 창이 프로젝트 id 로
+ * 연결하게 되면(M0-12) 그 창에서 구독이 열린다.
  */
 export const RPC_INVALIDATIONS: readonly InvalidationRule[] = [];
+
+/**
+ * Host 범위 이벤트 → 쿼리 무효화 규칙. 모든 창이 프로젝트와 무관하게 구독한다. 전역 설정(`$CONFIG`, keymap.toml 포함)이
+ * 다시 읽히거나 읽기가 실패하면 `config.get` 을 다시 부른다(crates/pw-core/src/config/store.rs 의 토픽).
+ */
+export function hostInvalidations(host: string): readonly InvalidationRule[] {
+  const keys = [rpcQueryKey(host, "config.get")];
+  return [
+    { topic: "config.changed", keys },
+    { topic: "config.error", keys },
+  ];
+}
 
 export interface HostConnection {
   target: HostTarget;
@@ -30,10 +42,13 @@ const HostContext = createContext<HostConnection | undefined>(undefined);
 export function HostProvider({
   target,
   invalidations = RPC_INVALIDATIONS,
+  hostScopeInvalidations = hostInvalidations,
   children,
 }: {
   target: HostTarget;
   invalidations?: readonly InvalidationRule[];
+  /** 모듈 상수(함수)로 넘긴다 — 렌더마다 새 함수를 주면 렌더마다 구독을 다시 연다. */
+  hostScopeInvalidations?: (host: string) => readonly InvalidationRule[];
   children: ReactNode;
 }) {
   const [client, setClient] = useState<RpcClient>();
@@ -74,6 +89,17 @@ export function HostProvider({
     );
     return () => invalidation.dispose();
   }, [client, target, queryClient, invalidations]);
+
+  useEffect(() => {
+    if (!client) return;
+    const invalidation = connectEventInvalidation(
+      client,
+      queryClient,
+      null,
+      hostScopeInvalidations(key),
+    );
+    return () => invalidation.dispose();
+  }, [client, key, queryClient, hostScopeInvalidations]);
 
   const value = useMemo(() => ({ target, key, client }), [target, key, client]);
   return <HostContext value={value}>{children}</HostContext>;

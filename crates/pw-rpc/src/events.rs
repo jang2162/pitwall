@@ -1,4 +1,8 @@
 //! 이벤트 구독 허브. 세션들의 `events.subscribe` 를 모아 두고 `publish` 를 맞는 구독에 나눠 준다.
+//!
+//! 구독의 범위는 둘이다: 프로젝트 하나(`projectId`)이거나 Host 전체(`projectId` 없음). 프로젝트 구독은 Host 범위
+//! 이벤트를 받지 않고 Host 구독은 프로젝트 이벤트를 받지 않는다 — 둘 다 필요한 창은 구독을 둘 연다.
+//! 구독할 수 있는 role 은 범위와 무관하게 같다(내장 프로토콜은 모든 role 이 쓴다, `crate::protocol` 머리 주석).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -26,7 +30,8 @@ struct HubState {
 }
 
 struct Subscriber {
-    project_id: String,
+    /// `None` 이면 Host 범위.
+    project_id: Option<String>,
     topics: HashSet<String>,
     out: UnboundedSender<Outbound>,
 }
@@ -45,17 +50,35 @@ impl EventHub {
         topic: &str,
         payload: &T,
     ) -> serde_json::Result<usize> {
+        self.publish_scoped(Some(project_id), topic, payload)
+    }
+
+    /// Host 범위(프로젝트 없음)의 `topic` 이벤트를 `projectId` 없이 구독한 쪽에 보낸다. 반환값은 전달한 구독 수.
+    pub fn publish_host<T: Serialize>(
+        &self,
+        topic: &str,
+        payload: &T,
+    ) -> serde_json::Result<usize> {
+        self.publish_scoped(None, topic, payload)
+    }
+
+    fn publish_scoped<T: Serialize>(
+        &self,
+        project_id: Option<&str>,
+        topic: &str,
+        payload: &T,
+    ) -> serde_json::Result<usize> {
         let payload = serde_json::to_value(payload)?;
         let mut state = lock(&self.state);
         let mut delivered = 0;
         let mut dead = Vec::new();
         for (id, sub) in &state.subscribers {
-            if sub.project_id != project_id || !sub.topics.contains(topic) {
+            if sub.project_id.as_deref() != project_id || !sub.topics.contains(topic) {
                 continue;
             }
             let message = EventMessage {
                 subscription_id: *id,
-                project_id: project_id.to_owned(),
+                project_id: project_id.map(str::to_owned),
                 topic: topic.to_owned(),
                 payload: payload.clone(),
             };
@@ -78,7 +101,7 @@ impl EventHub {
 
     pub(crate) fn subscribe(
         &self,
-        project_id: String,
+        project_id: Option<String>,
         topics: Vec<String>,
         out: UnboundedSender<Outbound>,
     ) -> SubscriptionId {

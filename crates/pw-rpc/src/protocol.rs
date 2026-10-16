@@ -111,7 +111,10 @@ pub enum StreamOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscribeParams {
-    pub project_id: String,
+    /// 없으면(`null` 이거나 키가 없으면) Host 범위 — 어느 프로젝트에도 속하지 않는 이벤트(전역 설정 변경 등)를 받는다.
+    /// 프로젝트 없는 창(웰컴 · 설정)이 이것으로 구독한다. 한 구독은 한 범위만 받는다.
+    #[serde(default)]
+    pub project_id: Option<String>,
     pub topics: Vec<String>,
 }
 
@@ -134,7 +137,8 @@ pub struct UnsubscribeParams {
 pub struct EventMessage {
     #[specta(type = JsNumber)]
     pub subscription_id: SubscriptionId,
-    pub project_id: String,
+    /// Host 범위 이벤트면 `null`.
+    pub project_id: Option<String>,
     pub topic: String,
     #[specta(type = JsonValue)]
     pub payload: Value,

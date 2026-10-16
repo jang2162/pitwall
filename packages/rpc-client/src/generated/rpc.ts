@@ -157,7 +157,8 @@ export type DiagnosticsText = {
 
 export type EventMessage = {
 	subscriptionId: number,
-	projectId: string,
+	/**  Host 범위 이벤트면 `null`. */
+	projectId: string | null,
 	topic: string,
 	payload: JsonValue,
 };
@@ -302,7 +303,11 @@ export type StreamOutcome =
  *  토픽은 정확히 일치해야 한다(와일드카드 없음).
  */
 export type SubscribeParams = {
-	projectId: string,
+	/**
+	 *  없으면(`null` 이거나 키가 없으면) Host 범위 — 어느 프로젝트에도 속하지 않는 이벤트(전역 설정 변경 등)를 받는다.
+	 *  프로젝트 없는 창(웰컴 · 설정)이 이것으로 구독한다. 한 구독은 한 범위만 받는다.
+	 */
+	projectId?: string | null,
 	topics: string[],
 };
 

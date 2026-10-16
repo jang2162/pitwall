@@ -2,8 +2,8 @@
 //
 // 규칙 하나가 토픽 하나에 무효화할 쿼리 키(접두사)를 붙인다. 무효화된 쿼리 중 화면에 붙어 있는 것만 다시 불린다.
 // 구독이 열리면 규칙의 키를 한 번 무효화한다 — 구독 전에 받아 둔 응답은 그 사이의 이벤트를 놓쳤을 수 있다.
-// ⚠ 이벤트는 프로젝트 범위만 RPC 로 나간다(crates/pw-core/src/bus.rs 의 `EventBus::publish`). Host 범위 이벤트
-// (`task.progress` 등 Host 작업의 알림)는 구독해도 오지 않는다.
+// 구독 하나는 범위 하나만 받는다(crates/pw-rpc/src/events.rs 머리 주석). 프로젝트 이벤트와 Host 범위 이벤트(전역 설정
+// 변경 등)를 둘 다 받는 창은 이것을 범위마다 한 번씩 부른다.
 
 import type { EventMessage, RpcClient, Subscription } from "@pitwall/rpc-client";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
@@ -23,10 +23,11 @@ export interface EventInvalidation {
   dispose(): void;
 }
 
+/** `projectId` 가 `null` 이면 Host 범위를 구독한다. */
 export function connectEventInvalidation(
   client: RpcClient,
   queryClient: QueryClient,
-  projectId: string,
+  projectId: string | null,
   rules: readonly InvalidationRule[],
 ): EventInvalidation {
   const topics = [...new Set(rules.map((r) => r.topic))];
@@ -49,7 +50,7 @@ export function connectEventInvalidation(
     topics.length === 0
       ? Promise.resolve()
       : client
-          .subscribe({ projectId, topics }, onEvent)
+          .subscribe(projectId === null ? { topics } : { projectId, topics }, onEvent)
           .then((opened) => {
             subscription = opened;
             // 구독이 열리기 전에 dispose 됐으면 연 즉시 닫는다.

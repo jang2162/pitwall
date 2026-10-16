@@ -192,7 +192,7 @@ async fn record() -> Vec<Value> {
     r.receive(1).await;
 
     let subscribe = SubscribeParams {
-        project_id: "p1".into(),
+        project_id: Some("p1".into()),
         topics: vec!["fs.changed".into()],
     };
     r.request(4, EVENTS_SUBSCRIBE, &subscribe);

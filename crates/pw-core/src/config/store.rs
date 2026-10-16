@@ -4,8 +4,7 @@
 //! - 성공하면 값이 바뀐 파일 id 나 알림(마이그레이션 · 새 스키마)이 있을 때만 [`TOPIC_CHANGED`] 를 낸다.
 //!   저장만 하고 내용이 같은 변경(에디터의 touch, 마이그레이션 뒤 재기록)은 조용하다.
 //!
-//! ⚠ 전역 설정은 [`Scope::Host`] 로 낸다. Host 범위 이벤트는 RPC `events.subscribe` 로 나가지 않는다(`crate::bus` 머리 주석) —
-//! UI 는 지금 전역 설정 변경을 구독으로 받지 못하고 `config.get` 으로 다시 읽어야 한다.
+//! 전역 설정은 [`Scope::Host`] 로 낸다. RPC 로는 `projectId` 없이 `events.subscribe` 한 쪽이 받는다(`crate::bus` 머리 주석).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

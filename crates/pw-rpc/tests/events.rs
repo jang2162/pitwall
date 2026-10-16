@@ -38,7 +38,7 @@ async fn subscriber_receives_matching_events_only() {
         event,
         EventMessage {
             subscription_id: sub,
-            project_id: "p1".into(),
+            project_id: Some("p1".into()),
             topic: "fs.changed".into(),
             payload: json!({"path": "a.rs"}),
         }
@@ -88,10 +88,45 @@ async fn dropping_the_session_removes_its_subscriptions() {
     assert_eq!(events.publish("p1", "fs.changed", &()).unwrap(), 0);
 }
 
+#[tokio::test(start_paused = true)]
+async fn subscribing_without_a_project_receives_host_events_only() {
+    let mut h = Harness::new(base_router(), Role::Readonly);
+    h.request(1, "events.subscribe", json!({"topics": ["config.changed"]}));
+    let sub = h
+        .next_response()
+        .await
+        .result_as::<Subscribed>()
+        .unwrap()
+        .subscription_id;
+
+    assert_eq!(h.events.publish("p1", "config.changed", &1).unwrap(), 0);
+    assert_eq!(h.events.publish_host("config.changed", &2).unwrap(), 1);
+    let event: EventMessage = h.next_notification(EVENTS_EVENT).await;
+    assert_eq!(
+        event,
+        EventMessage {
+            subscription_id: sub,
+            project_id: None,
+            topic: "config.changed".into(),
+            payload: json!(2),
+        }
+    );
+    assert_eq!(h.events.publish_host("fs.changed", &()).unwrap(), 0);
+    h.assert_quiet().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_project_subscription_does_not_receive_host_events() {
+    let mut h = Harness::new(base_router(), Role::Owner);
+    subscribe(&mut h, 1, "p1", &["config.changed"]).await;
+    assert_eq!(h.events.publish_host("config.changed", &()).unwrap(), 0);
+    h.assert_quiet().await;
+}
+
 #[tokio::test]
 async fn malformed_subscribe_is_invalid_params() {
     let mut h = Harness::new(base_router(), Role::Owner);
-    h.request(1, "events.subscribe", json!({"topics": ["fs.changed"]}));
+    h.request(1, "events.subscribe", json!({"projectId": "p1"}));
     assert_eq!(err_code(&h.next_response().await), code::INVALID_PARAMS);
 }
 

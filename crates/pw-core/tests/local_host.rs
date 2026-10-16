@@ -281,7 +281,7 @@ async fn project_events_reach_rpc_subscribers() {
         0
     );
     let event: EventMessage = from(c.notification("events.event").await);
-    assert_eq!(event.project_id, "p1");
+    assert_eq!(event.project_id.as_deref(), Some("p1"));
     assert_eq!(event.payload, json!({"path": "a"}));
 }
 
@@ -384,6 +384,58 @@ async fn config_methods_read_paths_and_snapshots() {
     let event: EventMessage = from(c.notification("events.event").await);
     assert_eq!(event.topic, "config.changed");
     assert_eq!(event.payload["changed"], json!(["project"]));
+}
+
+/// 프로젝트 없는 연결(웰컴 · 설정 창)이 전역 설정의 다시 읽기 결과를 `projectId` 없는 구독으로 받는다.
+/// 같은 연결의 프로젝트 구독에는 가지 않는다.
+#[tokio::test]
+async fn a_connection_without_a_project_receives_global_config_changes() {
+    use pw_core::config::AppPaths;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(tmp.path());
+    std::fs::create_dir_all(&paths.config).unwrap();
+    let host = LocalHost::with_config("local", paths.clone());
+    let mut c = Client::connect(&host, Role::Readonly).await;
+    c.request(
+        1,
+        "events.subscribe",
+        json!({"projectId": "p1", "topics": ["config.changed"]}),
+    );
+    c.result(1).await;
+    c.request(
+        2,
+        "events.subscribe",
+        json!({"topics": ["config.changed", "config.error"]}),
+    );
+    let host_sub = c.result(2).await["subscriptionId"].clone();
+
+    std::fs::write(
+        paths.config.join("keymap.toml"),
+        "schema = 1\n[[bindings]]\naction = \"action.find\"\nkey = \"cmd+k\"\n",
+    )
+    .unwrap();
+    host.config().unwrap().global.reload().unwrap();
+    let event: EventMessage = from(c.notification("events.event").await);
+    assert_eq!(json!(event.subscription_id), host_sub);
+    assert_eq!(event.project_id, None);
+    assert_eq!(event.topic, "config.changed");
+    assert_eq!(event.payload["changed"], json!(["keymap"]));
+
+    std::fs::write(
+        paths.config.join("keymap.toml"),
+        "schema = 1\n[[bindings]\n",
+    )
+    .unwrap();
+    assert!(host.config().unwrap().global.reload().is_err());
+    let event: EventMessage = from(c.notification("events.event").await);
+    assert_eq!(event.topic, "config.error");
+    // 프로젝트 구독(1)으로는 아무것도 오지 않았다 — 위 두 알림이 이 연결이 받은 전부다.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), c.conn.source.recv())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
