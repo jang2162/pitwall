@@ -49,6 +49,8 @@ Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오�
 데스크톱 앱(`mise run dev`)을 손으로 확인할 때:
 
 - WKWebView 의 HTML5 드래그 앤 드롭(dockview 탭 이동 등)은 합성 입력(`orca computer drag`·CGEvent)으로 시작되지 않는다. 앱 안에서 확인하려면 debug 빌드의 Web Inspector(⌥⌘I) 콘솔에서 dockview api 로 같은 이동(`panel.api.moveTo`)을 부른다 — api 는 `.dv-dockview` 의 가장 가까운 React 요소에서 fiber 를 올라가 `onApi` prop 을 가진 컴포넌트의 첫 state(없으면 `alternate`)에 있다. 드래그 입력 자체는 Chromium(Playwright 로 개발 서버를 연다) 또는 사람이 확인한다.
+- 화면이 잠겨 있으면(`ioreg -n Root -d1 -a | grep -A1 CGSSessionScreenIsLocked` 가 true) `orca computer` 는 「AX reads blocked … toggle Orca Computer Use」 로, `screencapture` 는 「could not create image」 로 실패한다. 권한 문제가 아니므로 설정을 바꾸지 말고 잠금을 먼저 본다. 잠긴 동안에도 System Events 로 메뉴 항목(`AXMenuItemCmdChar`·`AXMenuItemCmdModifiers`)을 읽고 누를 수는 있다. **잠긴 동안 키 입력(System Events `keystroke`, CGEvent)을 보내지 않는다** — 잠금 화면의 암호 칸으로 들어간다.
+- `mise run dev` 중 `createContext` 를 부르는 모듈을 고치면 HMR 이 context 를 새로 만들어, 그 context 를 쓰는 컴포넌트가 「Provider 밖에서 …」 오류로 깨진다. 앱을 다시 띄운다.
 - `mise run dev` 는 개발 서버를 그대로 열어 `tauri.conf.json` 의 CSP 가 적용되지 않는다(인라인 스크립트 · `eval` 이 돈다). CSP 아래 동작은 `pnpm --filter @pitwall/desktop tauri build --debug --no-bundle` 로 만든 `target/debug/pitwall` 을 실행해 확인한다(tauri://localhost). 그 바이너리는 다음 `mise run build`·`dev` 가 덮어쓴다.
 
 ## RPC 타입 생성

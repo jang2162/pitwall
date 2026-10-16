@@ -3,6 +3,10 @@
 //! 구독의 범위는 둘이다: 프로젝트 하나(`projectId`)이거나 Host 전체(`projectId` 없음). 프로젝트 구독은 Host 범위
 //! 이벤트를 받지 않고 Host 구독은 프로젝트 이벤트를 받지 않는다 — 둘 다 필요한 창은 구독을 둘 연다.
 //! 구독할 수 있는 role 은 범위와 무관하게 같다(내장 프로토콜은 모든 role 이 쓴다, `crate::protocol` 머리 주석).
+//!
+//! ⚠ 토픽별 role 검사가 없으므로 **이벤트 payload 는 Read 등급 정보만 싣는다** — readonly · mobile 기기도 구독하면 받는다.
+//! Owner 전용 정보(다른 프로젝트의 경로, relay 페어링 상태 등)를 실을 토픽이 생기면 그 전에 토픽별 role 메타(메서드의
+//! `roles` 와 같은 모양)를 더한다. relay 연결 전에 구현한다(`docs/design/08-remote-mobile.md` 「RPC」 행).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
