@@ -273,12 +273,15 @@ it("closes Find Action and runs an action picked from the menu", async () => {
 
 it("does not toggle a tool window again while its key is held", async () => {
   await mount("project");
-  const leftCollapsed = () => document.querySelector('[data-tool-window="project"]') === null;
+  const collapsedDocks = () => document.querySelectorAll(".dv-edge-collapsed").length;
   await press("Digit1", { metaKey: true }, "1");
-  expect(leftCollapsed()).toBe(false);
-  // 누르고 있는 동안 오는 반복 keydown.
+  expect(collapsedDocks()).toBe(0);
+  // 누르고 있는 동안 오는 반복 keydown 은 토글하지 않는다.
   for (let i = 0; i < 3; i++) await press("Digit1", { metaKey: true, repeat: true }, "1");
-  expect(leftCollapsed()).toBe(false);
+  expect(collapsedDocks()).toBe(0);
+  // 다시 누르면 토글한다 — 접힘을 이 클래스로 볼 수 있다는 확인이기도 하다.
+  await press("Digit1", { metaKey: true }, "1");
+  expect(collapsedDocks()).toBe(1);
 });
 
 it("uses the last good keymap in a window opened while keymap.toml is malformed", async () => {
