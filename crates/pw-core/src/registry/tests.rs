@@ -381,53 +381,51 @@ fn opened_at_always_moves_past_the_latest_record() {
     assert_eq!(f.registry.recent(1).unwrap()[0].id, now.id);
 }
 
-/// 같은 파일을 연 레지스트리 둘(= 프로세스 둘)이 동시에 써도 `database is locked` 로 실패하지 않는다.
-/// 쓰기가 deferred 트랜잭션이면 읽은 뒤 쓰기로 올라갈 때 busy timeout 을 거치지 않고 바로 실패한다.
+/// 같은 파일을 연 레지스트리 여럿(= 프로세스 여럿)이 동시에 써도 `database is locked` 로 실패하지 않는다.
+/// 쓰기가 deferred 트랜잭션이면 읽은 뒤 쓰기로 올라갈 때 busy timeout 을 거치지 않고 바로 실패한다. 그 경쟁은 타이밍에 달려
+/// 한 라운드로는 놓칠 수 있어 라운드를 되풀이한다(deferred 로 되돌린 코드에서 한 라운드 놓칠 확률 약 1/4 — 4 연결 × 50 쓰기로 잼).
 #[test]
 fn concurrent_writers_on_one_file_wait_instead_of_failing() {
     use std::sync::{Arc, Barrier};
 
-    const REGISTRIES: usize = 2;
-    const THREADS: usize = 2;
+    const ROUNDS: usize = 4;
+    const REGISTRIES: usize = 4;
     const CREATES: usize = 50;
-    let f = Fixture::new();
-    let registries: Vec<Registry> = (0..REGISTRIES)
-        .map(|_| Registry::new(f.paths.clone(), None, EventBus::new(DEFAULT_CAPACITY)))
-        .collect();
-    let barrier = Arc::new(Barrier::new(REGISTRIES * THREADS));
-    let mut handles = Vec::new();
-    for (r, registry) in registries.iter().enumerate() {
-        for t in 0..THREADS {
-            let registry = registry.clone();
-            let barrier = Arc::clone(&barrier);
-            let roots: Vec<PathBuf> = (0..CREATES)
-                .map(|i| f.dir(&format!("c/{r}-{t}-{i}")))
-                .collect();
-            handles.push(std::thread::spawn(move || {
-                barrier.wait();
-                roots
-                    .into_iter()
-                    .filter_map(|root| {
-                        let project = registry.create(NewProject {
-                            root,
-                            ..NewProject::default()
-                        });
-                        let opened = project.and_then(|p| registry.mark_opened(&p.id));
-                        opened.err()
-                    })
-                    .collect::<Vec<_>>()
-            }));
-        }
+    for round in 0..ROUNDS {
+        let f = Fixture::new();
+        let barrier = Arc::new(Barrier::new(REGISTRIES));
+        let handles: Vec<_> = (0..REGISTRIES)
+            .map(|r| {
+                // 연결은 레지스트리마다 하나다 — 스레드가 같은 레지스트리를 나누면 그 사이에는 잠금 경쟁이 없다.
+                let registry =
+                    Registry::new(f.paths.clone(), None, EventBus::new(DEFAULT_CAPACITY));
+                let barrier = Arc::clone(&barrier);
+                let roots: Vec<PathBuf> =
+                    (0..CREATES).map(|i| f.dir(&format!("c/{r}-{i}"))).collect();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    roots
+                        .into_iter()
+                        .filter_map(|root| {
+                            registry
+                                .create(NewProject {
+                                    root,
+                                    ..NewProject::default()
+                                })
+                                .and_then(|p| registry.mark_opened(&p.id))
+                                .err()
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let errors: Vec<RegistryError> = handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect();
+        assert_eq!(errors, Vec::new(), "round {round}");
+        assert_eq!(f.registry.list().unwrap().len(), REGISTRIES * CREATES);
     }
-    let errors: Vec<RegistryError> = handles
-        .into_iter()
-        .flat_map(|h| h.join().unwrap())
-        .collect();
-    assert_eq!(errors, Vec::new());
-    assert_eq!(
-        f.registry.list().unwrap().len(),
-        REGISTRIES * THREADS * CREATES
-    );
 }
 
 /// 잠김으로 메모리에 떨어지면 목록은 비고 쓰기는 거절된다. 잠김이 풀리면 다음 호출에서 파일로 돌아간다.
