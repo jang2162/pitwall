@@ -267,13 +267,28 @@ export function formatSequence(seq: KeySequence, platform: Platform, layout?: La
   return seq.strokes.map((s) => strokeLabel(s, platform, layout)).join(", ");
 }
 
+// 그 OS 의 키보드에 없는 키. Mac 키보드에는 Insert 가 없다(메뉴에 넣으면 빈 글자 + ⌘ 로 보였다).
+const MISSING_CODES: Record<Platform, ReadonlySet<string>> = {
+  mac: new Set(["Insert"]),
+  win: new Set(),
+  linux: new Set(),
+};
+
+/** 그 OS 에서 누를 수 없는 키가 들었으면 그 키의 `code`. 아니면 `undefined`. */
+export function missingKey(seq: KeySequence, platform: Platform): string | undefined {
+  if (seq.kind !== "strokes") return undefined;
+  return seq.strokes.find((s) => MISSING_CODES[platform].has(s.code))?.code;
+}
+
 /**
  * Tauri(muda) 메뉴 accelerator 문자열. 한 번 누르기만 된다 — 연속 키 · 더블 탭은 메뉴가 표현하지 못해 `undefined`.
+ * `platform` 을 주면 그 OS 에 없는 키(`missingKey`)도 `undefined` 다.
  * 키 이름은 `code` 를 그대로 쓴다(muda 가 `KeyA` · `Digit1` · `Comma` 를 받는다). `cmd` 는 `Super` 다 — macOS 에서 ⌘,
  * 그 밖에서 Win 키다. `CmdOrCtrl` 는 쓰지 않는다 — OS별 차이는 키맵 파일이 이미 갈라 두었다.
  */
-export function toAccelerator(seq: KeySequence): string | undefined {
+export function toAccelerator(seq: KeySequence, platform?: Platform): string | undefined {
   if (seq.kind !== "strokes" || seq.strokes.length !== 1) return undefined;
+  if (platform && missingKey(seq, platform)) return undefined;
   const s = seq.strokes[0]!;
   const mods = [s.cmd && "Super", s.ctrl && "Control", s.alt && "Alt", s.shift && "Shift"].filter(
     (m): m is string => Boolean(m),

@@ -2,6 +2,8 @@
 // 네이티브 메뉴의 accelerator 도 이 결과에서 만든다(`menuAccelerators`).
 //
 // 파일 형식(기본 키맵과 사용자 덮어쓰기가 같다):
+//   schema = 1                 # 없으면 설정 계층이 처음 읽을 때 맨 위에 넣어 파일을 다시 쓴다(03 §5)
+//
 //   [[bindings]]
 //   action = "action.find"
 //   key = "cmd+shift+a"        # 모든 OS. 아래 OS별 키가 있으면 그 OS 에서는 그것이 이긴다
@@ -14,14 +16,17 @@
 //   key = "ctrl+v"
 //
 // 그 OS 의 키가 없는 바인딩은 그 OS 에서 없는 것으로 본다. 모르는 필드는 오류다 — 오타(`acton`)가 조용히 무시되지 않게.
+// 그 OS 키보드에 없는 키(macOS 의 Insert)는 오류가 아니라 경고다(`warnings`) — 바인딩은 남지만 누를 수 없다.
 
 import { parse as parseToml } from "smol-toml";
 
 import {
   type KeySequence,
+  missingKey,
   parseKeySequence,
   type Platform,
   sameSequence,
+  strokeKey,
   toAccelerator,
 } from "./keys";
 import { parseWhen, type WhenExpr } from "./when";
@@ -51,6 +56,8 @@ export interface Unbind {
 export interface UserKeymap {
   readonly bindings: readonly UserBinding[];
   readonly unbind: readonly Unbind[];
+  /** 막지는 않지만 알릴 것(그 OS 에 없는 키 등). */
+  readonly warnings: readonly string[];
 }
 
 export class KeymapFileError extends Error {
@@ -76,6 +83,7 @@ function isTable(v: unknown): v is Table {
 
 class Reader {
   readonly problems: string[] = [];
+  readonly warnings: string[] = [];
   constructor(readonly platform: Platform) {}
 
   string(t: Table, field: string, where: string): string | undefined {
@@ -150,11 +158,11 @@ class Reader {
       if (text !== undefined && text !== key) this.sequence(text, `${where}.${f}`);
     }
     if (!action || key === undefined) return undefined;
-    const sequence = this.sequence(
-      key,
-      `${where}.${t[this.platform] !== undefined ? this.platform : "key"}`,
-    );
+    const field = `${where}.${t[this.platform] !== undefined ? this.platform : "key"}`;
+    const sequence = this.sequence(key, field);
     if (!sequence) return undefined;
+    const missing = missingKey(sequence, this.platform);
+    if (missing) this.warnings.push(`${field}: "${key}" 의 ${missing} 는 이 OS 키보드에 없다`);
     return { action, sequence, key, ...when, source };
   }
 }
@@ -187,6 +195,14 @@ function checkRoot(r: Reader, root: unknown, allowed: Set<string>): root is Tabl
  * 틀리면 `KeymapFileError` — 앱에 묶여 나가는 파일이므로 시험이 잡는다.
  */
 export function readDefaultKeymap(root: unknown, platform: Platform): Binding[] {
+  return readDefaultKeymapWithWarnings(root, platform).bindings;
+}
+
+/** `readDefaultKeymap` 과 같고 경고도 돌려준다(기본 키맵에 경고가 없는지 시험이 본다). */
+export function readDefaultKeymapWithWarnings(
+  root: unknown,
+  platform: Platform,
+): { bindings: Binding[]; warnings: string[] } {
   const r = new Reader(platform);
   const out: Binding[] = [];
   if (checkRoot(r, root, new Set(["schema", "bindings"]))) {
@@ -197,7 +213,7 @@ export function readDefaultKeymap(root: unknown, platform: Platform): Binding[] 
     }
   }
   if (r.problems.length > 0) throw new KeymapFileError(r.problems);
-  return out;
+  return { bindings: out, warnings: r.warnings };
 }
 
 /**
@@ -206,7 +222,7 @@ export function readDefaultKeymap(root: unknown, platform: Platform): Binding[] 
  * crates/pw-core/src/config/source.rs 의 `ConfigSource::load`).
  */
 export function readUserKeymap(root: unknown, platform: Platform): UserKeymap {
-  if (root === undefined) return { bindings: [], unbind: [] };
+  if (root === undefined) return { bindings: [], unbind: [], warnings: [] };
   const r = new Reader(platform);
   const bindings: UserBinding[] = [];
   const unbind: Unbind[] = [];
@@ -233,7 +249,7 @@ export function readUserKeymap(root: unknown, platform: Platform): UserKeymap {
     }
   }
   if (r.problems.length > 0) throw new KeymapFileError(r.problems);
-  return { bindings, unbind };
+  return { bindings, unbind, warnings: r.warnings };
 }
 
 function unbinds(u: Unbind, b: Binding): boolean {
@@ -261,6 +277,37 @@ export function mergeKeymap(base: readonly Binding[], user: UserKeymap): Binding
   ];
 }
 
+/**
+ * 늘 다른 바인딩에 가려져 실행될 수 없는 바인딩을 뺀다. 메뉴 accelerator · 액션 찾기 라벨은 이것을 쓴다 — 가려진 키를
+ * 보이면 거짓 표시다(사용자가 ⇧⌘A 를 설정에 주면 액션 찾기 옆의 ⇧⌘A 는 동작하지 않는다).
+ * 가려졌다고 보는 것은 조건 없는 바인딩뿐이다(조건이 있으면 그 조건이 참일 때 이긴다, engine.ts `best`):
+ * - 뒤에 같은 키의 조건 없는 다른 액션 바인딩이 있다(같은 깊이에서는 뒤가 이긴다).
+ * - 한 번 누르기인데 조건 없는 연속 키가 그 누름으로 시작한다(연속 키가 이긴다).
+ */
+export function reachableBindings(bindings: readonly Binding[]): Binding[] {
+  return bindings.filter((b, i) => {
+    if (b.when) return true;
+    const later = bindings.slice(i + 1);
+    if (
+      later.some((o) => !o.when && o.action !== b.action && sameSequence(o.sequence, b.sequence))
+    ) {
+      return false;
+    }
+    if (b.sequence.kind === "strokes" && b.sequence.strokes.length === 1) {
+      const first = strokeKey(b.sequence.strokes[0]!);
+      const prefixOf = bindings.some(
+        (o) =>
+          !o.when &&
+          o.sequence.kind === "strokes" &&
+          o.sequence.strokes.length > 1 &&
+          strokeKey(o.sequence.strokes[0]!) === first,
+      );
+      if (prefixOf) return false;
+    }
+    return true;
+  });
+}
+
 /** 액션마다 키 목록(병합 순서). 액션 찾기 · 툴팁에 보인다. 첫 항목이 대표 키다. */
 export function keysByAction(bindings: readonly Binding[]): Map<string, Binding[]> {
   const out = new Map<string, Binding[]>();
@@ -273,17 +320,22 @@ export function keysByAction(bindings: readonly Binding[]): Map<string, Binding[
 }
 
 /**
- * 네이티브 메뉴에 둘 accelerator. 메뉴 항목이 있는 액션만 받는다(`menuActions`). 액션마다 조건 없는 첫 한 번 누르기
- * 바인딩을 쓰고, 없으면 `null`(메뉴에 단축키를 표시하지 않는다) — 연속 키 · 더블 탭은 메뉴가 표현하지 못한다.
+ * 네이티브 메뉴에 둘 accelerator. 메뉴 항목이 있는 액션만 받는다(`menuActions`). 액션마다 가려지지 않은
+ * (`reachableBindings`) 조건 없는 첫 한 번 누르기 바인딩을 쓰고, 없으면 `null`(메뉴에 단축키를 표시하지 않는다) —
+ * 연속 키 · 더블 탭 · 그 OS 에 없는 키는 메뉴가 표현하지 못한다.
  */
 export function menuAccelerators(
   bindings: readonly Binding[],
   menuActions: readonly string[],
+  platform: Platform,
 ): Record<string, string | null> {
+  const reachable = reachableBindings(bindings);
   const out: Record<string, string | null> = {};
   for (const action of menuActions) {
-    const b = bindings.find((x) => x.action === action && !x.when && toAccelerator(x.sequence));
-    out[action] = b ? toAccelerator(b.sequence)! : null;
+    const b = reachable.find(
+      (x) => x.action === action && !x.when && toAccelerator(x.sequence, platform),
+    );
+    out[action] = b ? toAccelerator(b.sequence, platform)! : null;
   }
   return out;
 }

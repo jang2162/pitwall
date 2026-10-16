@@ -9,6 +9,8 @@ export interface Action {
   /** 액션 찾기에서 함께 찾는 낱말(영문 이름 등). */
   readonly keywords?: readonly string[];
   readonly run: () => void | Promise<void>;
+  /** 키를 누르고 있어 반복되는 keydown 으로도 실행하는가. 없으면 거짓(엔진 머리 주석). */
+  readonly repeat?: boolean;
   /** 지금 실행할 수 없으면 거짓. 없으면 늘 참. 거짓이면 키도 가져가지 않는다. */
   readonly enabled?: () => boolean;
 }
@@ -37,6 +39,10 @@ export class ActionRegistry {
   isEnabled(id: string): boolean {
     const action = this.actions.get(id);
     return action !== undefined && (action.enabled?.() ?? true);
+  }
+
+  allowsRepeat(id: string): boolean {
+    return this.actions.get(id)?.repeat === true;
   }
 
   list(): Action[] {

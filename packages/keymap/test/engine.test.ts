@@ -14,7 +14,10 @@ function keymap(toml: string): Binding[] {
   return readDefaultKeymap(parseKeymapToml(toml), "mac");
 }
 
-function setup(bindings: Binding[], { disabled = [] as string[] } = {}) {
+function setup(
+  bindings: Binding[],
+  { disabled = [] as string[], repeatable = [] as string[] } = {},
+) {
   let clock = 0;
   let layers: ContextLayers = [{}, {}, {}];
   const ran: string[] = [];
@@ -25,6 +28,7 @@ function setup(bindings: Binding[], { disabled = [] as string[] } = {}) {
       return true;
     },
     isEnabled: (action) => !disabled.includes(action),
+    allowsRepeat: (action) => repeatable.includes(action),
     context: () => layers,
     now: () => clock,
     chordTimeoutMs: 1000,
@@ -87,13 +91,38 @@ key = "cmd+1"
     expect(engine.keydown(key("KeyA", { ...cmdShift, altKey: true })).handled).toBe(false);
   });
 
-  it.each([
-    ["isComposing", { isComposing: true }],
-    ["keyCode 229", { keyCode: 229 }],
-  ])("ignores keys while the IME is composing (%s)", (_, flags) => {
+  it("ignores keys while the IME is composing, even with ⌘", () => {
     const { engine, ran } = setup(bindings);
-    expect(engine.keydown(key("KeyA", cmdShift, { key: "ㅁ", ...flags })).handled).toBe(false);
+    expect(engine.keydown(key("KeyA", cmdShift, { key: "ㅁ", isComposing: true })).handled).toBe(
+      false,
+    );
     expect(ran).toEqual([]);
+  });
+
+  it("ignores a keyCode 229 key without ⌘ or Ctrl (Safari's composition-ending Enter)", () => {
+    const { engine, ran } = setup(keymap(`[[bindings]]\naction = "run"\nkey = "shift+enter"\n`));
+    expect(engine.keydown(key("Enter", { shiftKey: true }, { keyCode: 229 })).handled).toBe(false);
+    expect(ran).toEqual([]);
+  });
+
+  it("matches a ⌘ key the IME reports as keyCode 229 when nothing is being composed", () => {
+    const { engine, ran } = setup(bindings);
+    expect(
+      engine.keydown(key("Digit1", { metaKey: true }, { key: "1", keyCode: 229 })).action,
+    ).toBe("toolWindow.project");
+    expect(ran).toEqual(["toolWindow.project"]);
+  });
+
+  it("takes but does not rerun a held key unless the action allows repeat", () => {
+    const { engine, ran } = setup(bindings, { repeatable: ["action.find"] });
+    engine.keydown(key("Digit1", { metaKey: true }));
+    expect(engine.keydown(key("Digit1", { metaKey: true }, { repeat: true }))).toEqual({
+      handled: true,
+    });
+    expect(ran).toEqual(["toolWindow.project"]);
+    engine.keydown(key("KeyA", cmdShift));
+    engine.keydown(key("KeyA", cmdShift, { repeat: true }));
+    expect(ran).toEqual(["toolWindow.project", "action.find", "action.find"]);
   });
 
   it("leaves keys of actions this window does not run", () => {

@@ -5,6 +5,7 @@ import {
   KeymapFileError,
   menuAccelerators,
   mergeKeymap,
+  reachableBindings,
   parseKeymapToml,
   readDefaultKeymap,
   readUserKeymap,
@@ -165,11 +166,58 @@ key = "cmd+shift+p"
       "mac",
     );
     expect(
-      menuAccelerators(mergeKeymap(base, user), ["action.find", "settings.open", "help.none"]),
+      menuAccelerators(
+        mergeKeymap(base, user),
+        ["action.find", "settings.open", "help.none"],
+        "mac",
+      ),
     ).toEqual({
       "action.find": "Super+Shift+KeyP",
       "settings.open": "Super+Comma",
       "help.none": null,
     });
+  });
+});
+
+describe("reachableBindings", () => {
+  const merged = (toml: string) => mergeKeymap(base, readUserKeymap(parseKeymapToml(toml), "mac"));
+
+  it("drops a default key another action took later, from the menu too", () => {
+    const bindings = merged(`[[bindings]]\naction = "settings.open"\nkey = "cmd+shift+a"\n`);
+    expect(show(reachableBindings(bindings))).not.toContain("action.find=⇧⌘A");
+    expect(show(reachableBindings(bindings))).toContain("settings.open=⇧⌘A");
+    expect(menuAccelerators(bindings, ["action.find", "settings.open"], "mac")).toEqual({
+      "action.find": null,
+      "settings.open": "Super+Shift+KeyA",
+    });
+  });
+
+  it("drops a single key that starts a chord", () => {
+    const bindings = merged(`[[bindings]]\naction = "mac.only"\nkey = "cmd+1 cmd+2"\n`);
+    expect(show(reachableBindings(bindings))).not.toContain("toolWindow.project=⌘1");
+  });
+
+  it("keeps a conditional binding — its condition can win", () => {
+    const bindings = merged(
+      `[[bindings]]\naction = "settings.open"\nkey = "cmd+shift+a"\nwhen = "editorFocus"\n`,
+    );
+    expect(show(reachableBindings(bindings))).toContain("action.find=⇧⌘A");
+  });
+});
+
+describe("keys missing on this OS", () => {
+  it("warns about a key the OS keyboard lacks and keeps it off the menu", () => {
+    const user = readUserKeymap(
+      parseKeymapToml(`[[bindings]]\naction = "settings.open"\nkey = "cmd+insert"\n`),
+      "mac",
+    );
+    expect(user.warnings).toEqual([expect.stringContaining("Insert")]);
+    expect(menuAccelerators(mergeKeymap(base, user), ["settings.open"], "mac")).toEqual({
+      "settings.open": null,
+    });
+    expect(
+      readUserKeymap(parseKeymapToml(`[[bindings]]\naction = "a"\nkey = "ctrl+insert"\n`), "win")
+        .warnings,
+    ).toEqual([]);
   });
 });

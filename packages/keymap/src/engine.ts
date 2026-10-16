@@ -4,6 +4,11 @@
 // - IME 조합 중(`isComposing`, 또는 keyCode 229)인 키는 보지 않는다 — 한글을 조합하다 Enter 로 확정하는 키가 단축키로
 //   실행되지 않게(§4.4 「IME 조합 중」). keyCode 229 를 함께 보는 이유: Safari(WebKit)는 조합을 끝낸 Enter 의 keydown 을
 //   `isComposing: false`, keyCode 229 로 보낸다.
+//   예외: `isComposing` 이 거짓이고 ⌘ 나 Ctrl 이 눌린 keydown 은 keyCode 229 여도 `code` 로 맞춘다. 입력기가 ⌘ 조합을
+//   「입력기가 처리한 키」(229)로 보고하면 한글 입력 상태의 ⌘1 이 통째로 무시되기 때문이다 — ⌘ · Ctrl 조합은 글자를
+//   조합하지 않는다. 실제 WebKit 이 그렇게 보고하는지는 사람이 한글 입력 상태에서 확인할 항목이다.
+// - 누르고 있어 반복되는 keydown(`repeat`)은 액션이 반복을 허락할 때(`allowsRepeat`)만 실행한다. 툴 윈도우 토글처럼
+//   반복되면 깜빡이는 액션이 기본이라, 허락하지 않으면 키만 가져가고 실행하지 않는다.
 // - 연속 키: 첫 누름이 어떤 연속 키의 앞부분이면 그 키를 가져가고(`pending`) 다음 누름을 `chordTimeoutMs` 동안 기다린다.
 //   같은 첫 누름이 한 번 누르기 바인딩이기도 하면 연속 키가 이긴다(VS Code 와 같다). 다음 누름이 이어지지 않으면 기다림을
 //   버리고 그 누름을 새로 본다.
@@ -38,6 +43,8 @@ export interface EngineOptions {
   run(action: string): boolean;
   /** 이 창에서 지금 실행할 수 있는 액션인가. 아니면 그 바인딩은 없는 것으로 본다. */
   isEnabled(action: string): boolean;
+  /** 누르고 있어 반복되는 keydown 으로도 실행하는가. 없으면 거짓. */
+  allowsRepeat?(action: string): boolean;
   /** 지금의 컨텍스트 층(안쪽부터). */
   context(): ContextLayers;
   now?(): number;
@@ -69,7 +76,8 @@ interface Tap {
 }
 
 export function isComposingEvent(e: KeyEventLike): boolean {
-  return e.isComposing === true || e.keyCode === 229;
+  if (e.isComposing === true) return true;
+  return e.keyCode === 229 && !e.metaKey && !e.ctrlKey;
 }
 
 export class KeymapEngine {
@@ -108,12 +116,13 @@ export class KeymapEngine {
     if (!stroke) return NOT_HANDLED;
 
     const now = this.now();
+    const repeat = e.repeat === true;
     if (this.pending && now - this.pending.at <= this.chordTimeoutMs) {
-      const outcome = this.match([...this.pending.strokes, stroke], now);
+      const outcome = this.match([...this.pending.strokes, stroke], now, repeat);
       if (outcome.handled) return outcome;
     }
     this.pending = undefined;
-    return this.match([stroke], now);
+    return this.match([stroke], now, repeat);
   }
 
   keyup(e: KeyEventLike): KeyOutcome {
@@ -160,7 +169,7 @@ export class KeymapEngine {
     this.tap = { modifier, downAt: now, second: false };
   }
 
-  private match(strokes: Stroke[], now: number): KeyOutcome {
+  private match(strokes: Stroke[], now: number, repeat = false): KeyOutcome {
     const keys = strokes.map(strokeKey);
     const startsWith = (seq: KeySequence) =>
       seq.kind === "strokes" &&
@@ -181,7 +190,9 @@ export class KeymapEngine {
     }
     this.pending = undefined;
     const binding = this.best(live, layers);
-    return binding ? this.run(binding) : NOT_HANDLED;
+    if (!binding) return NOT_HANDLED;
+    if (repeat && !this.options.allowsRepeat?.(binding.action)) return { handled: true };
+    return this.run(binding);
   }
 
   private pick(test: (b: Binding) => boolean): Binding | undefined {
