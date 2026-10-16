@@ -10,3 +10,23 @@
 package = "caniuse-lite"
 allow = ["CC-BY-4.0"]
 reason = "browserslist 의 브라우저 지원 데이터. @vitejs/plugin-react → @babel/core → browserslist 로 들어오는 빌드 도구 의존성이라 배포물에 들어가지 않는다"
+
+[[exceptions]]
+package = "lightningcss"
+allow = ["MPL-2.0"]
+reason = "Tailwind v4 의 CSS 변환기(@tailwindcss/vite → @tailwindcss/node → lightningcss, 플랫폼 바이너리 포함). MPL-2.0 은 파일 단위 copyleft 이고, 빌드 도구로만 쓰여 배포 번들에 들어가지 않는다. 플랫폼 패키지는 CI 의 세 OS(macOS arm64 · Linux x64 gnu · Windows x64)마다 하나씩이라 각 OS 에서 나머지 둘은 쓰이지 않는 예외로 경고된다"
+
+[[exceptions]]
+package = "lightningcss-darwin-arm64"
+allow = ["MPL-2.0"]
+reason = "Tailwind v4 의 CSS 변환기(@tailwindcss/vite → @tailwindcss/node → lightningcss, 플랫폼 바이너리 포함). MPL-2.0 은 파일 단위 copyleft 이고, 빌드 도구로만 쓰여 배포 번들에 들어가지 않는다. 플랫폼 패키지는 CI 의 세 OS(macOS arm64 · Linux x64 gnu · Windows x64)마다 하나씩이라 각 OS 에서 나머지 둘은 쓰이지 않는 예외로 경고된다"
+
+[[exceptions]]
+package = "lightningcss-linux-x64-gnu"
+allow = ["MPL-2.0"]
+reason = "Tailwind v4 의 CSS 변환기(@tailwindcss/vite → @tailwindcss/node → lightningcss, 플랫폼 바이너리 포함). MPL-2.0 은 파일 단위 copyleft 이고, 빌드 도구로만 쓰여 배포 번들에 들어가지 않는다. 플랫폼 패키지는 CI 의 세 OS(macOS arm64 · Linux x64 gnu · Windows x64)마다 하나씩이라 각 OS 에서 나머지 둘은 쓰이지 않는 예외로 경고된다"
+
+[[exceptions]]
+package = "lightningcss-win32-x64-msvc"
+allow = ["MPL-2.0"]
+reason = "Tailwind v4 의 CSS 변환기(@tailwindcss/vite → @tailwindcss/node → lightningcss, 플랫폼 바이너리 포함). MPL-2.0 은 파일 단위 copyleft 이고, 빌드 도구로만 쓰여 배포 번들에 들어가지 않는다. 플랫폼 패키지는 CI 의 세 OS(macOS arm64 · Linux x64 gnu · Windows x64)마다 하나씩이라 각 OS 에서 나머지 둘은 쓰이지 않는 예외로 경고된다"
