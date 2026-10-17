@@ -155,6 +155,15 @@ impl Catalog {
         })
     }
 
+    /// Host 가 핸들러를 붙인 메서드의 툴만 남긴다. 실행 파일에 선언이 링크돼 있어도 그 Host(예: 헤드리스)가 등록하지 않은
+    /// 메서드는 `tools/list` 에 내지 않는다 — 내면 부를 때 method-not-found 가 된다.
+    #[must_use]
+    pub fn routed_by(mut self, router: &pw_rpc::Router) -> Self {
+        let routed: Vec<&str> = router.methods().iter().map(|m| m.name).collect();
+        self.tools.retain(|t| routed.contains(&t.method));
+        self
+    }
+
     pub fn tools(&self) -> &[Tool] {
         &self.tools
     }

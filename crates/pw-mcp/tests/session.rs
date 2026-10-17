@@ -204,10 +204,10 @@ fn read_rows(conn: &rusqlite::Connection) -> Vec<(Option<String>, String, String
         .collect()
 }
 
-/// 툴은 `mcp: true` 로 고른 선언뿐이다. 새 RPC 가 생겨도 이 목록은 저절로 늘지 않는다 — 늘리려면 선언에 `mcp: true` 를
-/// 달고 이 목록을 함께 고친다.
+/// 카탈로그는 `mcp: true` 로 고른 선언만 툴로 만든다. 이 시험 바이너리에 링크된 선언(pw-core 와 이 파일의 시험용 선언)만 본다 —
+/// 실제로 툴이 되는 메서드의 고정 목록은 모든 메서드 크레이트가 링크되는 데스크톱 크레이트의 `mcp_tools_are_exactly_these`.
 #[test]
-fn only_methods_marked_mcp_become_tools() {
+fn the_catalog_follows_the_mcp_flag() {
     let catalog = Catalog::linked();
     let names: Vec<_> = catalog.tools().iter().map(|t| t.name.as_str()).collect();
     assert_eq!(names, ["mcptest_write", "project_info", "project_list"]);
@@ -622,4 +622,25 @@ async fn a_stateless_client_without_a_subscription_gets_no_list_changed() {
     assert_eq!(handler.list_changed.load(Ordering::SeqCst), 0);
     client.cancel().await.unwrap();
     cancel.cancel();
+}
+
+/// 선언은 링크돼 있어도 Host 가 처리하지 않는 메서드(여기서는 `mcptest.write`)는 카탈로그에서 빠진다.
+#[test]
+fn the_catalog_keeps_only_methods_the_host_routes() {
+    let host = LocalHost::new("local");
+    let names: Vec<_> = Catalog::linked()
+        .routed_by(host.router())
+        .tools()
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert!(names.is_empty(), "{names:?}");
+    let f = Fixture::new();
+    let names: Vec<_> = Catalog::linked()
+        .routed_by(f.host.router())
+        .tools()
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert_eq!(names, ["mcptest_write", "project_info", "project_list"]);
 }

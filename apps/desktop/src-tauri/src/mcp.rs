@@ -143,13 +143,18 @@ async fn proxy(paths: &AppPaths, key: &str, request: &SessionRequest) -> Option<
     }
 }
 
-async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
-    let host = Arc::new(
+/// 앱 없이 뜬 `pitwall mcp` 의 Host: 코어 메서드(`host.*` · `config.*` · `project.*`)만, 레지스트리는 읽기 전용.
+pub fn headless_host(paths: &AppPaths) -> Arc<LocalHost> {
+    Arc::new(
         LocalHost::builder(crate::LOCAL_HOST_ID)
             .config(paths.clone())
             .read_only_registry()
             .build(),
-    );
+    )
+}
+
+async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
+    let host = headless_host(&paths);
     if let Err(e) = host.watch_config(&tokio::runtime::Handle::current()) {
         tracing::warn!(%e, "config watch disabled; tools/list_changed will not follow settings");
     }
@@ -190,7 +195,8 @@ pub fn services(host: &Arc<LocalHost>, paths: &AppPaths, transport: &'static str
         global,
         bus: host.bus().clone(),
         audit: Arc::new(AuditLog::under_state(&paths.state)),
-        catalog: Arc::new(Catalog::linked()),
+        // 실행 파일에 링크된 선언 중 이 Host 가 실제로 처리하는 것만. 헤드리스는 코어 메서드만 등록한다.
+        catalog: Arc::new(Catalog::linked().routed_by(host.router())),
         approval: Approval::Unavailable,
         transport,
     })
