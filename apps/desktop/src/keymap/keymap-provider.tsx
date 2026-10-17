@@ -33,6 +33,12 @@ import type { KeymapNative } from "./native";
 import { keymapPlatform } from "./platform";
 import { type LastGoodKeymap, type PreviousKeymap, resolveKeymap } from "./resolve";
 
+/**
+ * 창이 띄운 팝업(`useKeymapPopup`)이 열려 있어도 네이티브 메뉴에서 고르면 도는 액션. 다른 창을 열 뿐 팝업 뒤의 창 내용을 바꾸지
+ * 않는 것만 둔다. 앱 종료 · 창 닫기 같은 OS 기본 메뉴 항목은 키맵 액션이 아니라 이 규칙과 무관하게 돈다.
+ */
+export const MENU_ACTIONS_OVER_POPUPS: ReadonlySet<string> = new Set(["settings.open"]);
+
 /** 키로 실행한 액션이 같은 눌림의 메뉴 accelerator 로 또 오는 것을 버리는 시간 창. */
 export const MENU_DUPLICATE_MS = 300;
 
@@ -72,6 +78,8 @@ export interface KeymapContextValue {
   readonly warnings: readonly string[];
   /** 액션의 단축키 라벨(병합 순서). */
   shortcuts(action: string): ShortcutLabel[];
+  /** 창이 띄운 팝업 상태로 보아 지금 실행할 수 있는가 — 키와 같은 기준(액션 찾기 목록이 쓴다). */
+  runnable(action: string): boolean;
   openFindAction(): void;
   /** 팝업이 열렸다고 알린다(`useKeymapPopup`). 닫는 함수를 돌려준다. */
   enterPopup(): () => void;
@@ -190,6 +198,11 @@ export function KeymapProvider({
   const findOpenRef = useRef(false);
   findOpenRef.current = findOpen;
   const isPopupOpen = useCallback(() => findOpenRef.current || otherPopups.current > 0, []);
+  // 창이 띄운 팝업이 열려 있으면 팝업 액션만, 아니면 팝업 아닌 액션만 돈다. 키 · 메뉴 · 액션 찾기 목록이 같은 기준을 쓴다.
+  const windowGate = useCallback(
+    (action: string) => otherPopups.current > 0 === registry.isPopup(action),
+    [registry],
+  );
   const enterPopup = useCallback(() => {
     otherPopups.current++;
     let left = false;
@@ -265,6 +278,10 @@ export function KeymapProvider({
         }
         // 액션 찾기가 열린 채 메뉴에서 고르면 팝업을 닫고 실행한다. 메뉴 이벤트로는 마우스로 고른 것인지 키인지 알 수 없는데,
         // 마우스로 메뉴를 고른 것을 조용히 무시하면 고장으로 보인다. 창이 띄운 팝업(`useKeymapPopup`)은 그 팝업이 닫는다.
+        if (!windowGate(action) && !MENU_ACTIONS_OVER_POPUPS.has(action)) {
+          log?.debug(`dropped ${action} from the menu: a popup is open`, "keymap");
+          return;
+        }
         const run = () => {
           if (registry.run(action)) log?.debug(`ran ${action} from the menu`, "keymap");
           else console.warn("[keymap] menu action not available here", action);
@@ -274,7 +291,7 @@ export function KeymapProvider({
           setTimeout(run, 0);
         } else run();
       }),
-    [native, registry, log],
+    [native, registry, log, windowGate],
   );
 
   const layout = useLayoutMap();
@@ -294,8 +311,9 @@ export function KeymapProvider({
           })),
       openFindAction: () => setFindOpen(true),
       enterPopup,
+      runnable: (action) => windowGate(action) && registry.isEnabled(action),
     }),
-    [registry, resolved, platform, layout, enterPopup],
+    [registry, resolved, platform, layout, enterPopup, windowGate],
   );
 
   return (

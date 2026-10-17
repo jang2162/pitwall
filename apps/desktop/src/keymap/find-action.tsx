@@ -12,12 +12,12 @@ export function FindActionDialog({
   open: boolean;
   onOpenChange(open: boolean): void;
 }) {
-  const { registry, shortcuts } = useKeymap();
+  const { registry, shortcuts, runnable } = useKeymap();
   useRegistryVersion(registry);
   const actions = open
     ? registry
         .list()
-        .filter((a) => registry.isEnabled(a.id) && !a.popup && a.id !== "action.find")
+        .filter((a) => runnable(a.id) && a.id !== "action.find")
         .sort((a, b) => a.label.localeCompare(b.label, "ko"))
     : [];
 
