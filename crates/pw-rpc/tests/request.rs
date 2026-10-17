@@ -167,6 +167,7 @@ fn registered_methods_are_enumerable_with_their_metadata() {
             "params": "()",
             "output": "()",
             "doc": " mobile 에게도 허용한 조작.\n",
+            "mcp": true,
         })
     );
 }
@@ -249,6 +250,7 @@ impl pw_rpc::Method for HandMade {
         params: "()",
         output: "()",
         doc: "",
+        mcp: false,
     };
 }
 

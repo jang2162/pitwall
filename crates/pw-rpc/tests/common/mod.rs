@@ -29,6 +29,7 @@ rpc_method! {
         params: EchoParams,
         result: EchoParams,
         tier: Read,
+        mcp: true,
     }
 
     /// 설정을 쓴다. owner 만.
@@ -44,6 +45,7 @@ rpc_method! {
         result: (),
         tier: Exec,
         roles: [Owner, Mobile],
+        mcp: true,
     }
 
     /// 0 부터 n-1 까지 청크로 보낸다.

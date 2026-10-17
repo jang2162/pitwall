@@ -151,6 +151,9 @@ pub struct MethodMeta {
     pub output: &'static str,
     /// 선언의 문서 주석. MCP 툴 설명의 원천.
     pub doc: &'static str,
+    /// MCP 툴로 내보내는가. 선언에서 `mcp: true` 로 고른 메서드만 툴이 된다 — 새 메서드는 말없이 툴이 되지 않는다.
+    /// 툴 이름 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` §2-1).
+    pub mcp: bool,
 }
 
 /// 내장 프로토콜 메서드가 쓰는 접두사. 선언한 메서드는 이 이름들을 쓸 수 없다.
@@ -190,6 +193,10 @@ impl MethodMeta {
         // readonly 는 「조회만」이다. 조회가 아닌 등급에 readonly 를 열면 그 role 의 정의가 깨진다.
         if self.roles.contains(Role::Readonly) && !matches!(self.tier, Tier::Read) {
             return Err("readonly role may only call read-tier methods");
+        }
+        // MCP 툴 호출은 결과 하나를 돌려준다. 스트림을 툴로 옮기는 규칙(요약 · `detail`)은 아직 없다.
+        if self.mcp && matches!(self.kind, MethodKind::Stream) {
+            return Err("stream methods cannot be MCP tools yet");
         }
         Ok(())
     }
@@ -271,6 +278,7 @@ pub trait StreamMethod: Method {
 /// - `result:` 는 unary, `stream:` 은 스트림 메서드가 된다.
 /// - `tier` 는 [`Tier`] 의 변형 이름, `roles` 는 [`Role`] 의 변형 이름이다.
 ///   `roles` 를 생략하면 [`RoleSet::default_for`] 를 쓴다.
+/// - `mcp: true` 를 단 메서드만 MCP 툴이 된다([`MethodMeta::mcp`]). 생략하면 `false` 다. 스트림 메서드에는 달 수 없다.
 /// - 선언은 [`methods`](crate::methods) 레지스트리에 등록된다 — 핸들러를 붙이지 않아도 타입 생성 대상이다.
 /// - 이름 규칙 · role 규칙은 [`MethodMeta::validate`] 가 컴파일 타임에 검사한다.
 ///   `roles: []` 는 생략과 다르게 빈 집합이라 빌드가 실패한다.
@@ -278,6 +286,12 @@ pub trait StreamMethod: Method {
 /// ```compile_fail
 /// pw_rpc::rpc_method! {
 ///     Nobody: "x.nobody" { params: (), result: (), tier: Read, roles: [] }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// pw_rpc::rpc_method! {
+///     StreamTool: "x.tail" { params: (), stream: String, tier: Read, mcp: true }
 /// }
 /// ```
 ///
@@ -296,12 +310,14 @@ macro_rules! rpc_method {
             result: $result:ty,
             tier: $tier:ident
             $(, roles: [$($role:ident),* $(,)?])?
+            $(, mcp: $mcp:literal)?
             $(,)?
         }
         $($rest:tt)*
     ) => {
         $crate::__rpc_method_define! {
-            [$($doc)*] $vis $name, $method, $params, Unary, $result, $tier, [$(explicit $($role)*)?]
+            [$($doc)*] $vis $name, $method, $params, Unary, $result, $tier, [$(explicit $($role)*)?],
+            [$($mcp)?]
         }
         impl $crate::UnaryMethod for $name {
             type Result = $result;
@@ -316,12 +332,14 @@ macro_rules! rpc_method {
             stream: $item:ty,
             tier: $tier:ident
             $(, roles: [$($role:ident),* $(,)?])?
+            $(, mcp: $mcp:literal)?
             $(,)?
         }
         $($rest:tt)*
     ) => {
         $crate::__rpc_method_define! {
-            [$($doc)*] $vis $name, $method, $params, Stream, $item, $tier, [$(explicit $($role)*)?]
+            [$($doc)*] $vis $name, $method, $params, Stream, $item, $tier, [$(explicit $($role)*)?],
+            [$($mcp)?]
         }
         impl $crate::StreamMethod for $name {
             type Item = $item;
@@ -336,7 +354,7 @@ macro_rules! rpc_method {
 macro_rules! __rpc_method_define {
     (
         [$($doc:literal)*] $vis:vis $name:ident, $method:literal, $params:ty,
-        $kind:ident, $output:ty, $tier:ident, [$($roles:tt)*]
+        $kind:ident, $output:ty, $tier:ident, [$($roles:tt)*], [$($mcp:literal)?]
     ) => {
         $(#[doc = $doc])*
         #[derive(Debug, Clone, Copy, Default)]
@@ -352,6 +370,7 @@ macro_rules! __rpc_method_define {
                 params: stringify!($params),
                 output: stringify!($output),
                 doc: concat!($($doc, "\n"),*),
+                mcp: $crate::__rpc_mcp!($($mcp)?),
             };
         }
 
@@ -373,6 +392,17 @@ macro_rules! __rpc_roles {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __rpc_mcp {
+    () => {
+        false
+    };
+    ($mcp:literal) => {
+        $mcp
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,6 +416,7 @@ mod tests {
             params: "()",
             output: "()",
             doc: "",
+            mcp: false,
         }
     }
 

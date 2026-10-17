@@ -80,3 +80,14 @@ fn tier_and_role_read_back_from_their_wire_names() {
     );
     assert!(serde_json::from_str::<Tier>("\"Read\"").is_err());
 }
+
+/// MCP 노출은 선언에서 `mcp: true` 로 고른 것뿐이다. `roles` 와 함께 써도, 생략해도 된다. 생략하면 꺼짐.
+#[test]
+fn only_declarations_marked_mcp_are_tools() {
+    let marked: Vec<_> = methods()
+        .iter()
+        .filter(|m| m.meta.mcp)
+        .map(|m| m.meta.name)
+        .collect();
+    assert_eq!(marked, ["test.echo", "test.restart"]);
+}
