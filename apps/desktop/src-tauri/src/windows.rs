@@ -84,11 +84,18 @@ pub const PROJECT_OPEN_EVENT: &str = "project://open";
 /// 프로젝트 창 label → 그 창이 아직 꺼내지 않은 열기 요청(온 순서). 새 창의 첫 요청도 여기로 간다(쿼리로 싣지 않는다 —
 /// 경로가 하나다).
 #[derive(Default)]
-pub struct PendingOpens(Mutex<HashMap<String, Vec<ProjectOpen>>>);
+pub struct PendingOpens {
+    queues: Mutex<HashMap<String, Vec<ProjectOpen>>>,
+    /// [`open_project`] 한 번(창 확인 → 큐 → 창 만들기)을 통째로 직렬화한다. 같은 프로젝트로 두 요청이 동시에 오면 둘 다
+    /// 「창 없음」을 보고 둘째의 큐 초기화가 첫째의 요청을 지우기 때문이다. 큐 잠금과 따로 둔다 — 창 만들기는 메인 스레드를
+    /// 기다리는데, 메인 스레드에서 도는 동기 명령 [`take_pending_project_opens`] 가 이 잠금을 기다리면 교착한다.
+    /// 그래서 `open_project` 는 메인 스레드에서 부르지 않는다(지금은 블로킹 스레드에서만 부른다).
+    opening: Mutex<()>,
+}
 
 impl PendingOpens {
     fn queues(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<ProjectOpen>>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.queues.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn push(&self, label: &str, open: ProjectOpen) {
@@ -173,7 +180,14 @@ pub fn open_project<R: Runtime>(
 ) -> tauri::Result<WebviewWindow<R>> {
     let label = project_label(project_id);
     let pending = app.state::<PendingOpens>();
-    if let Some(window) = focus(app, &label)? {
+    let _opening = pending
+        .opening
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let existing = focus(app, &label)?;
+    #[cfg(test)]
+    tests::after_focus_check();
+    if let Some(window) = existing {
         if !open.is_empty() {
             pending.push(&label, open.clone());
             app.emit_to(EventTarget::webview_window(&label), PROJECT_OPEN_EVENT, ())?;
@@ -239,7 +253,22 @@ fn build_at<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Condvar};
+    use std::time::Duration;
+
     use super::*;
+
+    type Hook = Arc<dyn Fn() + Send + Sync>;
+
+    /// [`open_project`] 가 창을 확인한 직후에 부르는 시험용 자리. 동시 요청 시험이 두 스레드를 거기서 만나게 한다.
+    static AFTER_FOCUS_CHECK: Mutex<Option<Hook>> = Mutex::new(None);
+
+    pub(super) fn after_focus_check() {
+        let hook = AFTER_FOCUS_CHECK.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 
     #[test]
     fn query_values_match_frontend_window_kinds() {
@@ -370,6 +399,41 @@ mod tests {
             take(app.handle(), &window),
             [file("/r/a.rs", None), file("/r/b.rs", Some(2))]
         );
+    }
+
+    /// 창이 없는 프로젝트로 두 요청이 동시에 온다. 두 스레드는 창 확인 직후에 서로를 기다린다(최대 300ms) — 직렬화가 없으면
+    /// 둘 다 「창 없음」을 본 채 만나 한쪽 요청이 사라지거나 창 만들기가 실패한다. 직렬화돼 있으면 둘째는 첫째가 창을 만든
+    /// 뒤에야 확인에 닿으므로 첫째는 기다림이 끝나는 대로 혼자 가고, 둘째는 열린 창의 큐에 넣는다.
+    #[test]
+    fn two_simultaneous_requests_for_a_project_without_a_window_both_arrive() {
+        let app = app();
+        let met = Arc::new((Mutex::new(0usize), Condvar::new()));
+        let hook_met = Arc::clone(&met);
+        *AFTER_FOCUS_CHECK.lock().unwrap() = Some(Arc::new(move || {
+            let (count, arrived) = &*hook_met;
+            let mut count = count.lock().unwrap();
+            *count += 1;
+            arrived.notify_all();
+            let _ = arrived
+                .wait_timeout_while(count, Duration::from_millis(300), |n| *n < 2)
+                .unwrap();
+        }));
+        let threads = ["/r/a.rs", "/r/b.rs"].map(|path| {
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                open_project(&handle, "aaaa", &file(path, None))
+                    .map(drop)
+                    .map_err(|e| e.to_string())
+            })
+        });
+        let results = threads.map(|t| t.join().unwrap());
+        *AFTER_FOCUS_CHECK.lock().unwrap() = None;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert_eq!(labels(app.handle()), ["project-aaaa"]);
+        let window = app.get_webview_window("project-aaaa").unwrap();
+        let mut got = take(app.handle(), &window);
+        got.sort_by(|x, y| x.file.cmp(&y.file));
+        assert_eq!(got, [file("/r/a.rs", None), file("/r/b.rs", None)]);
     }
 
     #[test]
