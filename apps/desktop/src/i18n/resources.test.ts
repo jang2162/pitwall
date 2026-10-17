@@ -76,15 +76,22 @@ describe("built-in translations", () => {
     expect(used.size).toBeGreaterThan(50);
   });
 
-  it.each(LOCALES)("have every message the native menu uses (%s)", (locale) => {
-    const menu = readFileSync(
-      fileURLToPath(new URL("../../src-tauri/src/menu.rs", import.meta.url)),
-      "utf8",
-    );
-    const menuIds = [...new Set([...menu.matchAll(/"(menu-[a-z-]+)"/g)].map((m) => m[1]!))];
-    expect(menuIds.length).toBeGreaterThan(20);
+  it.each(LOCALES)("have every message the native menu and dialogs use (%s)", (locale) => {
+    const source = ["menu.rs", "shell_command.rs"]
+      .map((file) =>
+        readFileSync(
+          fileURLToPath(new URL(`../../src-tauri/src/${file}`, import.meta.url)),
+          "utf8",
+        ),
+      )
+      .join("\n");
+    const nativeIds = [
+      ...new Set([...source.matchAll(/"((?:menu|shell-command)-[a-z-]+)"/g)].map((m) => m[1]!)),
+    ];
+    expect(nativeIds.filter((id) => id.startsWith("shell-command-")).length).toBe(5);
     const { t, problems } = strictTranslator(locale);
-    for (const id of menuIds) t(id, { app: "Pitwall" });
+    const vars = { app: "Pitwall", target: "/t", previous: "/p", error: "e" };
+    for (const id of nativeIds) t(id, vars);
     expect(problems).toEqual([]);
   });
 });

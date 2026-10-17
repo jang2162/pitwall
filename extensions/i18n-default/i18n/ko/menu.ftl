@@ -31,3 +31,19 @@ menu-fullscreen = 전체 화면 전환
 
 menu-find-action = 액션 찾기…
 menu-copy-diagnostics = 진단 정보 복사
+
+## 「Shell 명령 설치」 결과 대화상자(apps/desktop/src-tauri/src/shell_command.rs). $target: 명령을 설치한 자리.
+
+shell-command-title = Shell 명령 설치
+shell-command-installed = 'pitwall' 명령을 { $target } 에 설치했다.
+
+    터미널에서 `pitwall <경로>` 를 실행하면 Pitwall 에서 연다.
+shell-command-already = { $target } 의 'pitwall' 명령이 이미 이 앱을 연다.
+# $previous: 옛 링크가 가리키던 것
+shell-command-replaced = 'pitwall' 명령을 { $target } 에 설치했다.
+
+    { $previous } 를 가리키던 링크를 바꿨다.
+# $error: 실패한 이유
+shell-command-failed = 'pitwall' 명령을 설치하지 못했다.
+
+    { $error }

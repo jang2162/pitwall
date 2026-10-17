@@ -171,6 +171,14 @@ mod tests {
         assert_eq!(ko.format("menu-quit", Some(&args)), "Pitwall 종료");
         let en = builtin().localizer(&["en".into()]);
         assert_eq!(en.format("menu-quit", Some(&args)), "Quit Pitwall");
+        // 여러 줄 메시지의 빈 줄은 문단 사이로 남고 들여쓰기는 걷힌다(Shell 명령 설치 대화상자).
+        let mut args = FluentArgs::new();
+        args.set("target", "/usr/local/bin/pitwall");
+        assert_eq!(
+            en.format("shell-command-installed", Some(&args)),
+            "Installed the 'pitwall' command at /usr/local/bin/pitwall.\n\n\
+             Run `pitwall <path>` in a terminal to open it in Pitwall."
+        );
     }
 
     /// 고른 언어에 없는 메시지는 폴백 언어에서 찾고, 어디에도 없으면 id 를 낸다.

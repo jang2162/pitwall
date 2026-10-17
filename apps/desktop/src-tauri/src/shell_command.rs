@@ -278,21 +278,30 @@ fn install_current_exe() -> Result<(PathBuf, Installed), InstallError> {
 
 /// 설치하고 결과를 네이티브 대화상자로 알린다. 관리자 암호 창을 기다릴 수 있으므로 블로킹 스레드에서 부른다.
 fn install_and_report<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    use pw_i18n::FluentArgs;
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
+    // 대화상자 문장은 UI 언어로 만든다(extensions/i18n-default/i18n/*/menu.ftl). 언어 상태가 없으면(시험) 메시지 id 가 보인다.
+    let l = app
+        .try_state::<std::sync::Arc<pw_i18n::I18n>>()
+        .map(|i18n| i18n.localizer());
+    let say = |id: &str, args: &[(&str, String)]| {
+        let mut fluent = FluentArgs::new();
+        for (name, value) in args {
+            fluent.set(*name, value.clone());
+        }
+        l.as_ref()
+            .map_or_else(|| id.to_owned(), |l| l.format(id, Some(&fluent)))
+    };
     let (text, kind, result) = match install_current_exe() {
         Ok((target, installed)) => {
-            let target = target.display();
+            let target = ("target", target.display().to_string());
             let text = match installed {
-                Installed::New => format!(
-                    "Installed the 'pitwall' command at {target}.\n\nRun `pitwall <path>` in a terminal to open it in Pitwall."
-                ),
-                Installed::Already => {
-                    format!("The 'pitwall' command at {target} already opens this app.")
-                }
-                Installed::Replaced { previous } => format!(
-                    "Installed the 'pitwall' command at {target}.\n\nIt replaced a link to {}.",
-                    previous.display()
+                Installed::New => say("shell-command-installed", &[target]),
+                Installed::Already => say("shell-command-already", &[target]),
+                Installed::Replaced { previous } => say(
+                    "shell-command-replaced",
+                    &[target, ("previous", previous.display().to_string())],
                 ),
             };
             (text, MessageDialogKind::Info, Ok(()))
@@ -304,7 +313,7 @@ fn install_and_report<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         Err(e) => {
             tracing::error!(error = %e, "shell command install failed");
             (
-                format!("Could not install the 'pitwall' command.\n\n{e}"),
+                say("shell-command-failed", &[("error", e.to_string())]),
                 MessageDialogKind::Error,
                 Err(e.to_string()),
             )
@@ -313,7 +322,7 @@ fn install_and_report<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let mut dialog = app
         .dialog()
         .message(text)
-        .title("Install Shell Command")
+        .title(say("shell-command-title", &[]))
         .kind(kind);
     // 부모 없는 대화상자는 앱이 활성화되지 않았으면 화면에 오르지 않았다(macOS, 창 목록에 오프스크린으로만 생김).
     // 창이 있으면 그 창의 시트로 띄운다 — 포커스된 창, 없으면 아무 창.

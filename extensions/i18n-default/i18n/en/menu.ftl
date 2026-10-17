@@ -31,3 +31,19 @@ menu-fullscreen = Toggle Full Screen
 
 menu-find-action = Find Action…
 menu-copy-diagnostics = Copy Diagnostic Info
+
+## "Install Shell Command" result dialog (apps/desktop/src-tauri/src/shell_command.rs). $target: where the command was installed.
+
+shell-command-title = Install Shell Command
+shell-command-installed = Installed the 'pitwall' command at { $target }.
+
+    Run `pitwall <path>` in a terminal to open it in Pitwall.
+shell-command-already = The 'pitwall' command at { $target } already opens this app.
+# $previous: what the old link pointed to
+shell-command-replaced = Installed the 'pitwall' command at { $target }.
+
+    It replaced a link to { $previous }.
+# $error: why it failed
+shell-command-failed = Could not install the 'pitwall' command.
+
+    { $error }
