@@ -14,17 +14,17 @@ import { ProjectWindow } from "./layout/project-window";
 import { HostProvider } from "./rpc/host";
 import { ThemeSwitcher, useTheme } from "./theme/theme-switcher";
 import { tauriWelcomeNative, type WelcomeNative } from "./welcome/native";
-import { WelcomeWindow } from "./welcome/welcome-window";
+import { type WelcomeLog, WelcomeWindow } from "./welcome/welcome-window";
 import { WINDOW_TITLES, type WindowKind } from "./window-kind";
 
 // src-tauri/src/main.rs 의 LOCAL_HOST_ID. 프로젝트 모델이 생기기 전이라(M0-09 · M0-12) 모든 창이 Host 를 직접 고른다.
 const LOCAL_HOST = { hostId: "local" };
 
-function Welcome({ native }: { native: WelcomeNative }) {
+function Welcome({ native, log }: { native: WelcomeNative; log?: WelcomeLog }) {
   return (
     <>
       <main className="flex min-h-0 flex-1 flex-col">
-        <WelcomeWindow native={native} />
+        <WelcomeWindow native={native} log={log} />
       </main>
       <footer className="flex h-[22px] flex-none items-center justify-end border-t border-ui-border bg-ui-statusbar px-2 text-ui-statusbar-foreground">
         <ThemeSwitcher />
@@ -86,7 +86,7 @@ export function App({
             <header className="titlebar bg-ui-toolbar" data-tauri-drag-region>
               <span data-tauri-drag-region>{WINDOW_TITLES[kind]}</span>
             </header>
-            {kind === "welcome" && <Welcome native={welcomeNative} />}
+            {kind === "welcome" && <Welcome native={welcomeNative} log={log} />}
             {kind === "project" && <ProjectWindow />}
             {kind === "settings" && <SettingsWindow />}
             <KeymapErrorBar />

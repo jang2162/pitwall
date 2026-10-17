@@ -180,6 +180,7 @@ const native = {
 } satisfies WelcomeNative;
 
 let root: Root | undefined;
+const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -201,6 +202,8 @@ beforeEach(() => {
   host.failWrites = undefined;
   for (const fn of Object.values(native)) fn.mockClear();
   keymapNative.openSettings.mockClear();
+  log.info.mockClear();
+  log.warn.mockClear();
 });
 
 afterEach(() => {
@@ -226,7 +229,7 @@ async function mount() {
     root!.render(
       <StrictMode>
         <ThemeStoreProvider store={store}>
-          <App kind="welcome" native={keymapNative} welcomeNative={native} />
+          <App kind="welcome" native={keymapNative} welcomeNative={native} log={log} />
         </ThemeStoreProvider>
       </StrictMode>,
     ),
@@ -672,4 +675,12 @@ it("follows the real IME order: a composing Esc keeps S3 and S2 open, the Enter 
   expect(findDialog()).not.toBeNull();
   await press("Escape", {}, "Escape");
   expect(findDialog()).toBeNull();
+});
+
+it("logs what it asks the native side to do, and every failure", async () => {
+  await mount();
+  native.openProjectWindow.mockRejectedValueOnce(new Error("unknown project"));
+  await press("Enter");
+  expect(log.info).toHaveBeenCalledWith('open project window: {"projectId":"b"}', "welcome");
+  expect(log.warn).toHaveBeenCalledWith("프로젝트 열기 failed: unknown project", "welcome");
 });

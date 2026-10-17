@@ -6,6 +6,7 @@
 // 목록에서 제거(⌘⌫)는 검색 칸이 비어 있을 때만 키를 가져간다 — 검색어를 지우려던 ⌘⌫ 가 프로젝트를 지우지 않게.
 // 클릭은 고르기만 하고 여는 것은 더블클릭이다.
 
+import type { UiLogger } from "@pitwall/logger";
 import type { Project } from "@pitwall/rpc-client";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { useQueryClient } from "@tanstack/react-query";
@@ -55,7 +56,10 @@ function Kbd({ text }: { text: string | undefined }) {
   return text ? <kbd className="font-sans text-[11px] text-ui-muted-foreground">{text}</kbd> : null;
 }
 
-export function WelcomeWindow({ native }: { native: WelcomeNative }) {
+/** 웰컴 창이 UI 로그(`$STATE/logs/ui.*.log`)에 남기는 것: 네이티브 동작과 실패. */
+export type WelcomeLog = Pick<UiLogger, "info" | "warn">;
+
+export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: WelcomeLog }) {
   const { client, key } = useHost();
   const queryClient = useQueryClient();
   const { platform, shortcuts } = useKeymap();
@@ -80,8 +84,11 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
   useKeymapPopup(menuOpen);
 
   const fail = useCallback(
-    (what: string) => (e: unknown) => setError(STRINGS.errors.action(what, errorText(e))),
-    [],
+    (what: string) => (e: unknown) => {
+      setError(STRINGS.errors.action(what, errorText(e)));
+      log?.warn(`${what} failed: ${errorText(e)}`, "welcome");
+    },
+    [log],
   );
   const refreshList = useCallback(
     () => queryClient.invalidateQueries({ queryKey: rpcQueryKey(key, "project.list") }),
@@ -103,9 +110,10 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
     (args: OpenProjectWindowArgs) => {
       setError(undefined);
       setNotice(undefined);
+      log?.info(`open project window: ${JSON.stringify(args)}`, "welcome");
       return native.openProjectWindow(args).catch(fail(STRINGS.errors.open));
     },
-    [native, fail],
+    [native, fail, log],
   );
 
   /** 고르거나 끌어다 놓은 폴더: 이미 그 루트의 프로젝트면 열고, 아니면 S3. */
@@ -213,9 +221,11 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
   const reveal = useCallback(
     (project: Project) => {
       const root = project.roots[0];
-      if (root !== undefined) void native.reveal(root).catch(fail(STRINGS.errors.reveal));
+      if (root === undefined) return;
+      log?.info(`reveal: ${root}`, "welcome");
+      void native.reveal(root).catch(fail(STRINGS.errors.reveal));
     },
-    [native, fail],
+    [native, fail, log],
   );
 
   const actions = useMemo(
