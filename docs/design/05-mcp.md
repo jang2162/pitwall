@@ -23,11 +23,12 @@
   - 헤드리스는 레지스트리를 **읽기만** 한다: 파일이 없으면 빈 목록, 손상 · 마이그레이션이 필요한 파일도 건드리지 않고 빈 목록이다(복구 · 마이그레이션은 레지스트리를 소유한 앱의 일). 승인 경로가 없으므로 `read` 툴만 성공한다
   - Windows 는 소켓이 아직 없어 언제나 헤드리스다
 - **위치**: `$STATE/run/<해시>.sock`. 경로가 `sun_path` 한도(103바이트, macOS 104 · Linux 108 의 작은 쪽)를 넘으면 `<임시 폴더>/pitwall-<uid>/<해시>.sock`(macOS `$TMPDIR` 는 사용자 전용). 양쪽이 같은 규칙으로 고른다
-- **그 사용자만 붙는다**: 폴더는 0700 · 이 사용자 소유 · 심링크 아님(서버는 만들거나 0700 으로 고치고, 다른 사용자 소유 · 심링크면 소켓을 열지 않는다. 클라이언트는 같은 검사를 통과한 폴더에만 붙는다), 소켓 파일 0600, 연결마다 양쪽이 상대 uid(`getpeereid` · `SO_PEERCRED`)를 본다. macOS 는 소켓 파일 권한으로 connect 를 막지 않으므로 폴더 권한이 실제 방어선이다
+- **그 사용자만 붙는다**: 폴더는 0700 · 이 사용자 소유 · 심링크 아님(서버는 만들거나 0700 으로 고치고, 다른 사용자 소유 · 심링크면 소켓을 열지 않는다. 클라이언트는 같은 검사를 통과한 폴더에만 붙는다), 소켓 파일 0600, 연결마다 양쪽이 상대 uid(`getpeereid` · `SO_PEERCRED`)를 본다(`pw_mcp::socket::peer_allowed` — 다른 uid · 자격을 못 읽은 연결은 거절). macOS 는 소켓 파일 권한으로 connect 를 막지 않으므로 폴더 권한이 실제 방어선이다
 - **워크트리 격리**: 소켓 이름의 해시는 단일 인스턴스 키(debug: 빌드 폴더 + `$DATA`, release: 앱 identifier — `apps/desktop/src-tauri/src/instance.rs`)와 `$STATE` 로 만든다. 다른 워크트리 · 다른 `$DATA` 의 `pitwall mcp` 는 다른 이름을 계산해 이 앱에 붙지 않고 헤드리스로 돈다
 - **이미 있는 소켓**: 붙어 보고 받으면 다른 앱이 쓰는 중이라 열지 않는다. 받지 않으면(앱이 죽고 남은 파일) 지우고 연다. 소켓이 아닌 파일 · 심링크는 지우지 않는다. 앱이 끝날 때 소켓 파일이 남을 수 있는데, 다음 시작이 이 규칙으로 바꾼다
 - **핸드셰이크**: 연결 직후 클라이언트가 JSON 한 줄(`protocol: "pitwall-mcp/1"`, `project`, `cwd`), 서버가 한 줄(`ok`, `error`)로 답한다. 그 뒤는 MCP 바이트다. 프로젝트 해석(`project.resolve`)은 앱이 한다
 - **끊김**: 앱이 도중에 닫히면 프록시는 응답을 기다리던 요청마다 JSON-RPC 오류(`-32001`)를 stdout 에 쓰고 stderr 에 이유를 남긴 뒤 **종료 코드 1** 로 끝난다. 클라이언트가 stdin 을 닫으면 소켓의 쓰기 쪽을 닫아 앱 쪽 세션을 끝내고(남은 응답은 5초까지 옮긴다) 0 으로 끝난다. 앱 쪽 세션이 끝나면 그 세션의 Host 연결 · 설정 감시 · 버스 구독도 걷힌다
+- **세션은 프로젝트 설정을 쓰지 않는다**: 노출 판정용으로 세션 프로젝트의 설정을 읽을 때 구버전 파일은 메모리에서만 올린다(`ConfigSource::without_writes`). 커밋된 `.pitwall/project.toml` 에 `schema` 가 써지거나 저장소에 `.backup/` 이 생기지 않는다. 그 설정의 이벤트는 세션 전용 버스로 내 앱의 버스에 같은 프로젝트의 `config.*` 가 한 번 더 나가지 않는다
 - **stdout 에는 MCP 바이트만**: 로그는 `$STATE/logs/mcp.<날짜>.log`, 경고 이상은 stderr 에도 쓴다. `pitwall mcp` 는 확장을 읽지 않는다
 - 사용법 오류는 종료 코드 2
 
@@ -92,7 +93,8 @@
 
 툴은 손으로 등록하지 않고 RPC 선언(`rpc_method!`)에서 만든다. 구현: `crates/pw-mcp/src/catalog.rs`.
 
-- **노출은 선언이 고른다**: `rpc_method!` 의 선택 필드 `mcp: true` 를 단 메서드만 툴이 된다. 생략하면 꺼짐 — **새 RPC 는 말없이 툴이 되지 않는다**(UI 전용 메서드 `host.demoTask` · `project.markOpened` 등). `crates/pw-mcp/tests/session.rs` 의 `only_methods_marked_mcp_become_tools` 가 노출 목록을 고정하므로, 툴을 늘리려면 선언과 그 목록을 함께 고친다. 스트림 메서드에는 달 수 없다(컴파일 오류)
+- **노출은 선언이 고른다**: `rpc_method!` 의 선택 필드 `mcp: true` 를 단 메서드만 툴이 된다. 생략하면 꺼짐 — **새 RPC 는 말없이 툴이 되지 않는다**(UI 전용 메서드 `host.demoTask` · `project.markOpened` · `i18n.setLanguage` 등). 툴이 되는 메서드의 고정 목록은 모든 메서드 크레이트가 링크되는 데스크톱 크레이트의 `mcp_tools_are_exactly_these`(`apps/desktop/src-tauri/src/main.rs`)가 지킨다 — 어느 크레이트의 선언에 `mcp: true` 를 달아도 거기서 실패하므로, 툴을 늘리려면 선언과 그 목록을 함께 고친다. 스트림 메서드에는 달 수 없다(컴파일 오류)
+- **세션의 툴은 그 Host 가 처리하는 것만**: 카탈로그는 실행 파일에 링크된 선언에서 만들고, 세션을 여는 Host 의 라우터가 가진 메서드로 거른다. 헤드리스 Host 는 코어 메서드만 등록하므로 다른 크레이트의 툴이 생겨도 헤드리스 `tools/list` 에는 나오지 않는다
 - **role 은 노출을 정하지 않는다**: role 은 「어느 기기가 부를 수 있나」다. MCP 세션은 Host 에 **owner** 로 붙고(로컬 소켓 · stdio 로만 오는 이 사용자의 프로세스다), 부를 수 있는지는 「툴 노출 설정」 → 「권한 모델」 절이 정한다
 - **이름**: RPC 이름의 `.` → `_`, camelCase → snake_case(`project.list` → `project_list`, `project.markOpened` → `project_mark_opened`). `[a-z0-9_]` 64자 이내, 겹치면 시작 시 실패
 - **설명 · 등급**: 선언의 문서 주석과 `tier`. `read` 툴에는 `readOnlyHint` 를 단다
@@ -118,6 +120,7 @@
 ### 감사 로그
 
 - **한 파일 `$STATE/mcp/audit.db`(SQLite)** 에 `project_id` 열을 둔다. 프로젝트를 정하지 않는 호출(`project_list`)은 `project_id` 가 `NULL` 이다. 프로젝트마다 파일을 두지 않는 이유: 어느 프로젝트에도 속하지 않는 호출이 있고, `$STATE` 가 감사 기록의 자리이며([03-architecture.md](03-architecture.md) 「데이터 저장」 표), 보관 기간 정리가 한 곳에서 끝난다. 「에이전트 활동」 패널은 `project_id` 로 거른다
+- 파일 0600, 새로 만드는 폴더 0700(이미 있는 폴더의 권한은 바꾸지 않는다). 툴 이름은 64자, 오류 · 거절 이유는 512자까지 남긴다(노출 안 된 툴 호출은 클라이언트가 보낸 이름을 그대로 남기므로)
 - 한 행 = `tools/call` 하나: 시각 · 세션 id · 클라이언트(`clientInfo` 이름 버전) · 프로젝트 · 툴 · 인자 요약 · 결과(`ok` · `error` · `denied`) · 오류나 거절 이유 · 결과 크기(바이트) · 소요(ms). **결과 내용은 남기지 않는다.** 노출되지 않은 툴 호출도 `denied` 로 남는다
 - **인자 요약**: 키를 단어로 갈라(camelCase · `_` · `-`) `password` · `secret` · `token` · `key` · `auth` · `credential` · `cookie` · `private` 등이 있으면 값을 `[redacted]` 로 바꾼다. 글자열은 80자, 배열은 8개, 깊이 3, 전체 1024바이트까지. 키 이름으로 못 거르는 비밀이 남을 수 있으므로 비밀을 툴 인자로 받지 않는다는 규칙(`db_connection_upsert`)이 첫 방어선이다. 목록은 `pw_mcp::audit::SECRET_WORDS`
 - 여러 프로세스(앱, 헤드리스 `pitwall mcp` 여럿)가 같은 파일에 쓴다(`BEGIN IMMEDIATE`, 2초 대기). 기록이 실패해도 툴 호출은 실패시키지 않고 경고 로그를 남긴다 — 쓰기 등급 툴을 열 때 다시 정한다. 보관 기간 · 지우기는 감사 로그 UI 와 함께 정한다
@@ -134,7 +137,7 @@ JetBrains IDE 내장 MCP 서버의 "Exposed Tools" 방식을 따른다. 권한 �
 | 단위 | 툴 단위 on/off (꺼진 툴은 `tools/list`에 나오지 않음 → 에이전트 컨텍스트 토큰도 절약) |
 | 그룹 | 모듈 그룹(project / run / debug / db / git / code / open_with / 확장별) 일괄 on/off |
 | 프리셋 | `read-only`(조회 툴만) · `standard`(기본: 조회 + 설정) · `full`(실행 · DB 쓰기 포함) |
-| 범위 | 전역 기본값 → 프로젝트별 덮어쓰기 (`.pitwall/project.toml` 또는 `.local.toml`, 개인 전용 프로젝트는 `$CONFIG/projects/<slug>/project.toml`) |
+| 범위 | 전역 기본값 → 프로젝트별 덮어쓰기 (`.pitwall/project.toml` 또는 `.local.toml`, 개인 전용 프로젝트는 `$CONFIG/projects/<slug>/project.toml`). **커밋되는 공유 설정(`.pitwall/project.toml`)은 노출을 좁히기만 한다** — 프리셋을 넓히거나 꺼진 툴을 켜는 것은 전역 · `.pitwall/*.local.toml` · 개인 전용 설정만 한다. 저장소를 클론한 것만으로 에이전트에게 열리는 툴이 늘지 않게 한다 |
 | 자동 승인 | 등급별 "확인 없이 실행" 토글 (JetBrains의 brave mode에 해당). `dangerous` 등급은 자동 승인 불가 |
 | 변경 반영 | 설정 변경 시 MCP `notifications/tools/list_changed` 전송 → 연결된 에이전트가 즉시 갱신 |
 | 확장 툴 | 확장이 추가한 툴은 **기본 꺼짐**, 사용자가 켜야 노출 |
@@ -142,6 +145,8 @@ JetBrains IDE 내장 MCP 서버의 "Exposed Tools" 방식을 따른다. 권한 �
 
 지금 구현(`crates/pw-mcp/src/exposure.rs`):
 - 읽는 키는 `preset` 과 `[mcp.tools]` 다. 전역 `[mcp]` 위에 프로젝트 `[mcp]` 를 설정 계층의 병합 규칙으로 덮는다(`[mcp.tools]` 는 키별로 합쳐진다). 내장 기본값은 `preset = "standard"`
+- 「공유 설정은 좁히기만」: 저장소 모드 프로젝트는 공유 레이어까지 읽은 노출과, 공유 레이어를 뺀(전역 + `.local.toml`) 노출이 **둘 다 켠 툴**만 켠다(`Exposure::narrowed_by`). 개인 전용 프로젝트의 `project.toml` 은 개인 설정이라 넓힐 수 있다
+- 노출은 **세션 프로젝트**의 설정으로 정한다. 프로젝트 툴에 다른 프로젝트의 `projectId` 를 넘겨도 그 프로젝트의 `[mcp]` 는 보지 않는다 — 지금 툴은 모두 `read` 다. 대상 프로젝트 기준으로 바꿀지는 승인 경로와 함께 정한다
 - 프리셋은 등급으로 고른다: `read-only` = `read`, `standard` = `read` · `write`, `full` = 전부
 - 판정 순서: 툴 이름과 정확히 같은 키 → 맞는 glob(`*` 는 아무 글자열) 중 가장 긴 것 → 프리셋. 모듈 그룹 on/off 는 지금 glob 으로 쓴다(`"project_*" = false`)
 - 잘못된 값은 버리고 경고 로그를 남긴다. 모르는 프리셋은 가장 좁은 `read-only` 로 본다
