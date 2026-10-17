@@ -1,0 +1,31 @@
+[package]
+name = "pw-i18n"
+description = "Pitwall UI language: Fluent resources from the extension registry, language choice, the language setting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fluent-bundle = "0.16.0"
+pw-core = { path = "../pw-core" }
+pw-ext = { path = "../pw-ext" }
+pw-rpc = { path = "../pw-rpc" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+# OS 의 선호 언어 목록. 설정이 "system" 일 때 고르는 근거다.
+sys-locale = "0.3.2"
+# 언어 설정 쓰기(파일 IO)를 블로킹 스레드로 보낸다.
+tokio = { workspace = true, features = ["rt"] }
+# 언어 설정(`settings.toml` 의 `ui.language`)을 한 키만 고쳐 쓴다 — 주석 · 서식을 남긴다. 버전은 pw-core 와 같게 둔다.
+toml_edit = "0.25.17"
+tracing = "0.1.44"
+# fluent-bundle 이 번들의 언어를 이 타입으로 받는다. fluent-bundle 이 쓰는 버전과 같게 둔다.
+unic-langid = "0.9.6"
+
+[dev-dependencies]
+semver = "1.0.28"
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "macros"] }

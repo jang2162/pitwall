@@ -17,6 +17,7 @@ tauri-build = { version = "2.7.2", features = [] }
 pw-core = { path = "../../../crates/pw-core" }
 pw-diag = { path = "../../../crates/pw-diag" }
 pw-ext = { path = "../../../crates/pw-ext" }
+pw-i18n = { path = "../../../crates/pw-i18n" }
 pw-rpc = { path = "../../../crates/pw-rpc" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -30,10 +31,12 @@ tracing = "0.1.44"
 [dev-dependencies]
 # 창 열기 함수를 MockRuntime 위에서 시험한다(tauri::test::mock_app).
 tauri = { version = "2.12.3", features = ["test"] }
-# IPC 테스트에서 채널 메시지를 기다릴 시간 제한.
-tokio = { workspace = true, features = ["time"] }
+# IPC 테스트에서 채널 메시지를 기다릴 시간 제한. 언어 변경을 따라가는 시험(src/i18n.rs)은 tokio 런타임에서 돈다.
+tokio = { workspace = true, features = ["time", "rt", "macros"] }
 # 설정 스토어를 임시 폴더에 열어 크래시 설정 · 설정 오류 로그를 시험한다.
 tempfile = "3.27.0"
+# 내장 확장만으로 레지스트리를 만든다(Registry::from_roots 가 앱 버전을 받는다).
+semver = "1.0.28"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"

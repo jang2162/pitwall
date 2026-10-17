@@ -731,6 +731,131 @@
       ],
       "tier": "read"
     },
+    "i18n.get": {
+      "description": "지금 쓸 UI 언어와 그 Fluent 리소스, 등록된 언어 목록.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "I18nResource": {
+            "properties": {
+              "extension": {
+                "type": "string"
+              },
+              "file": {
+                "description": "사람이 읽는 위치(`builtin:i18n-default/i18n/ko/app.ftl` 또는 절대 경로).",
+                "type": "string"
+              },
+              "locale": {
+                "type": "string"
+              },
+              "source": {
+                "description": "`.ftl` 파일 내용 그대로.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "locale",
+              "extension",
+              "file",
+              "source"
+            ],
+            "type": "object"
+          },
+          "LanguageInfo": {
+            "properties": {
+              "extension": {
+                "description": "기여한 확장의 id.",
+                "type": "string"
+              },
+              "locale": {
+                "description": "BCP 47 언어 태그.",
+                "type": "string"
+              },
+              "name": {
+                "description": "그 언어로 쓴 그 언어의 이름(`language-name` 메시지, 없으면 태그).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "locale",
+              "name",
+              "extension"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "languages": {
+            "description": "등록된 언어(등록 순서). 언어 고르기 목록이다.",
+            "items": {
+              "$ref": "#/$defs/LanguageInfo"
+            },
+            "type": "array"
+          },
+          "locales": {
+            "description": "쓸 언어 순서. 첫째가 고른 언어, 끝이 폴백(`en`)이다.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "resources": {
+            "description": "`locales` 의 리소스. `locales` 순서, 언어 안에서는 파일 이름순이다.",
+            "items": {
+              "$ref": "#/$defs/I18nResource"
+            },
+            "type": "array"
+          },
+          "setting": {
+            "description": "설정 값(`\"system\"` 또는 언어 태그). 설정이 잘못됐으면 `\"system\"`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "setting",
+          "locales",
+          "languages",
+          "resources"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "i18n.setLanguage": {
+      "description": "UI 언어 설정(전역 `settings.toml` 의 `ui.language`)을 바꾼다. 그 키만 고쳐 쓰고 설정을 다시 읽는다 — 열린 창 ·\n메뉴는 `config.changed` 로 바뀐다. 모르는 언어면 invalid params, 파일을 고칠 수 없으면(TOML 이 깨졌다 등) 쓰지\n않고 오류다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "language": {
+            "description": "`\"system\"` 또는 등록된 언어 태그.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "language"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "keymap.get": {
       "description": "키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.",
       "kind": "unary",

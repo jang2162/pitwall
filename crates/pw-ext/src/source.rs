@@ -147,6 +147,42 @@ impl ExtensionRoot {
         }
     }
 
+    /// 폴더 `rel` 바로 아래의 파일들(하위 폴더 · `.` 으로 시작하는 항목 · 이름이 UTF-8 이 아닌 것은 빼고). 이름순이다.
+    pub fn files_in(&self, rel: &RelPath) -> Result<Vec<RelPath>, SourceError> {
+        let mut names: Vec<String> = match self {
+            ExtensionRoot::Builtin { folder } => {
+                let prefix = format!("{folder}/{rel}/");
+                crate::builtin::files()
+                    .iter()
+                    .filter_map(|(path, _)| path.strip_prefix(&prefix))
+                    .filter(|rest| !rest.contains('/'))
+                    .map(str::to_owned)
+                    .collect()
+            }
+            ExtensionRoot::Dir(dir) => {
+                let path = resolve_inside(dir, rel)?;
+                let mut names = Vec::new();
+                for entry in std::fs::read_dir(path).map_err(io_error)? {
+                    let entry = entry.map_err(SourceError::Io)?;
+                    let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                        continue;
+                    };
+                    // 링크는 따라가서 본다. 폴더 밖을 가리키는 링크는 읽을 때(`read`) 거절된다.
+                    if !name.starts_with('.') && entry.path().is_file() {
+                        names.push(name);
+                    }
+                }
+                names
+            }
+        };
+        names.retain(|n| !n.starts_with('.'));
+        names.sort();
+        Ok(names
+            .into_iter()
+            .map(|name| RelPath(format!("{rel}/{name}")))
+            .collect())
+    }
+
     pub fn read(&self, rel: &RelPath) -> Result<Cow<'static, [u8]>, SourceError> {
         match self {
             ExtensionRoot::Builtin { folder } => {

@@ -42,6 +42,24 @@ pub struct LoadedTheme {
     pub content: Value,
 }
 
+/// 읽어 둔 UI 번역 하나(언어 하나). 내용(Fluent 문법)은 등록할 때 검사했다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedTranslation {
+    /// BCP 47 언어 태그. 기여 이름 그대로다.
+    pub locale: String,
+    /// 그 언어 폴더의 `.ftl` 파일. 이름순이다.
+    pub files: Vec<TranslationFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranslationFile {
+    /// 사람이 읽는 위치(`builtin:i18n-default/i18n/ko/app.ftl` 또는 절대 경로).
+    pub display: String,
+    /// 파일 이름(`app.ftl`).
+    pub name: String,
+    pub source: String,
+}
+
 /// 등록된 확장 하나.
 #[derive(Debug, Clone)]
 pub struct Extension {
@@ -49,6 +67,8 @@ pub struct Extension {
     pub root: ExtensionRoot,
     /// `manifest.contributes.themes` 와 같은 순서.
     pub themes: Vec<LoadedTheme>,
+    /// `manifest.contributes.translations` 와 같은 순서.
+    pub translations: Vec<LoadedTranslation>,
 }
 
 /// 확장 폴더 안의 파일 하나. 내장이면 바이너리에서, 아니면 디스크에서 읽는다.
@@ -191,6 +211,13 @@ impl Registry {
             .flat_map(|e| e.manifest.contributes.languages.iter().map(move |l| (e, l)))
     }
 
+    /// 읽어 둔 UI 번역. 등록 순서(내장 → 사용자 확장)다.
+    pub fn loaded_translations(&self) -> impl Iterator<Item = (&Extension, &LoadedTranslation)> {
+        self.extensions
+            .iter()
+            .flat_map(|e| e.translations.iter().map(move |t| (e, t)))
+    }
+
     pub fn translations(&self) -> impl Iterator<Item = (&Extension, &TranslationDecl)> {
         self.extensions.iter().flat_map(|e| {
             e.manifest
@@ -270,11 +297,13 @@ impl Registry {
         self.check_files(&root, &file, &manifest);
         self.check_unique_ids(&file, &manifest);
         let themes = self.read_themes(&root, &file, &manifest);
+        let translations = self.read_translations(&root, &manifest);
         if self.error_count() == errors_before {
             self.extensions.push(Extension {
                 manifest,
                 root,
                 themes,
+                translations,
             });
         }
     }
@@ -394,6 +423,86 @@ impl Registry {
         out
     }
 
+    /// 언어 폴더 바로 아래의 `.ftl` 파일을 읽어 Fluent 문법을 검사한다(다른 파일 · 하위 폴더는 보지 않는다). 오류는 그 `.ftl`
+    /// 파일의 줄 · 열로 남기고 확장 전체를 거절한다 — 잘못된 번역이 앱을 멈추지 않고 그 확장만 빠진다. 한 언어 안에서 같은
+    /// 메시지 id 를 두 파일이 정의해도 오류다(어느 쪽이 이길지 파일 이름에 기대게 된다).
+    fn read_translations(
+        &mut self,
+        root: &ExtensionRoot,
+        manifest: &Manifest,
+    ) -> Vec<LoadedTranslation> {
+        let manifest_file = root.display(Some(&RelPath::parse(MANIFEST).expect("constant path")));
+        let mut out = Vec::new();
+        for decl in &manifest.contributes.translations {
+            // 없는 폴더는 check_files 가 이미 오류로 남겼다.
+            let Ok(paths) = root.files_in(&decl.dir.path) else {
+                continue;
+            };
+            let paths: Vec<RelPath> = paths
+                .into_iter()
+                .filter(|p| p.as_str().ends_with(".ftl"))
+                .collect();
+            if paths.is_empty() {
+                self.push_error(
+                    &manifest_file,
+                    decl.dir.pos,
+                    format!(
+                        "translation `{}`: `{}` has no .ftl files",
+                        decl.locale, decl.dir.path
+                    ),
+                );
+                continue;
+            }
+            let mut files = Vec::new();
+            let mut defined: Vec<(String, String)> = Vec::new();
+            for path in paths {
+                let display = root.display(Some(&path));
+                let source = match read_text(root, &path) {
+                    Ok(source) => source,
+                    Err(e) => {
+                        self.push_error(&display, None, e);
+                        continue;
+                    }
+                };
+                match fluent_ids(&source) {
+                    Ok(ids) => {
+                        for id in ids {
+                            if let Some((_, first)) = defined.iter().find(|(x, _)| *x == id) {
+                                let message =
+                                    format!("message `{id}` is already defined in {first}");
+                                self.push_error(&display, None, message);
+                            } else {
+                                defined.push((id, display.clone()));
+                            }
+                        }
+                    }
+                    Err(errors) => {
+                        for (pos, message) in errors {
+                            self.push_error(&display, Some(pos_at(&source, pos)), message);
+                        }
+                        continue;
+                    }
+                }
+                let name = path
+                    .as_str()
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
+                files.push(TranslationFile {
+                    display,
+                    name,
+                    source,
+                });
+            }
+            out.push(LoadedTranslation {
+                locale: decl.locale.clone(),
+                files,
+            });
+        }
+        out
+    }
+
     fn push_error(&mut self, file: &str, pos: Option<Pos>, message: String) {
         self.diagnostics.push(Diagnostic {
             severity: Severity::Error,
@@ -408,6 +517,59 @@ impl Registry {
             .iter()
             .filter(|d| d.severity == Severity::Error)
             .count()
+    }
+}
+
+/// 크기 상한([`MAX_CONTENT_BYTES`])을 넘지 않는 UTF-8 텍스트 파일.
+fn read_text(root: &ExtensionRoot, path: &RelPath) -> Result<String, String> {
+    let size = root.size(path).map_err(|e| e.to_string())?;
+    if size > MAX_CONTENT_BYTES {
+        return Err(format!(
+            "{size} bytes, over the {MAX_CONTENT_BYTES}-byte limit"
+        ));
+    }
+    let bytes = root.read(path).map_err(|e| e.to_string())?;
+    String::from_utf8(bytes.into_owned()).map_err(|_| "not UTF-8".to_owned())
+}
+
+/// Fluent 리소스가 정의한 메시지 · 용어 id(용어는 `-` 를 붙인다). 문법 오류가 있으면 (바이트 위치, 설명) 목록.
+fn fluent_ids(source: &str) -> Result<Vec<String>, Vec<(usize, String)>> {
+    use fluent_syntax::ast::Entry;
+    match fluent_syntax::parser::parse(source) {
+        Ok(resource) => Ok(resource
+            .body
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Message(m) => Some(m.id.name.to_owned()),
+                Entry::Term(t) => Some(format!("-{}", t.id.name)),
+                _ => None,
+            })
+            .collect()),
+        Err((_, errors)) => Err(errors
+            .into_iter()
+            .map(|e| (e.pos.start, format!("invalid Fluent: {}", e.kind)))
+            .collect()),
+    }
+}
+
+/// 바이트 위치의 줄 · 열(1부터, 열은 글자 수).
+fn pos_at(source: &str, offset: usize) -> Pos {
+    let mut end = offset.min(source.len());
+    while !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    let before = &source[..end];
+    let line = before.matches('\n').count() + 1;
+    let column = before
+        .rsplit('\n')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .count()
+        + 1;
+    Pos {
+        line: u32::try_from(line).unwrap_or(u32::MAX),
+        column: u32::try_from(column).unwrap_or(u32::MAX),
     }
 }
 
@@ -510,6 +672,169 @@ mod tests {
         assert_eq!(extension.manifest.id, "dev.example.dusk");
         assert_eq!(theme.appearances, [Appearance::Dark]);
         assert_eq!(theme.label, "Dusk");
+    }
+
+    const KO_PACK: &str = "[contributes.translations.ko-kp]\ndir = \"i18n/ko-kp\"\n";
+
+    #[test]
+    fn loads_translation_files_in_name_order_and_skips_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = ext(
+            dir.path(),
+            "pack",
+            &[
+                (
+                    "extension.toml",
+                    &manifest("dev.example.pack", "*", KO_PACK),
+                ),
+                ("i18n/ko-kp/b.ftl", "b = 나\n"),
+                ("i18n/ko-kp/a.ftl", "a = 가\n-brand = 핏월\n"),
+                ("i18n/ko-kp/README.md", "not fluent"),
+                ("i18n/ko-kp/nested/c.ftl", "c = 다\n"),
+            ],
+        );
+        let registry = Registry::from_roots(&engine(), [root]);
+        assert_eq!(messages(&registry), Vec::<String>::new());
+        let (extension, translation) = registry.loaded_translations().next().unwrap();
+        assert_eq!(extension.manifest.id, "dev.example.pack");
+        assert_eq!(translation.locale, "ko-kp");
+        let names: Vec<&str> = translation.files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["a.ftl", "b.ftl"]);
+        assert_eq!(translation.files[1].source, "b = 나\n");
+    }
+
+    /// 잘못된 .ftl 은 그 파일의 줄 · 열로 오류가 나고 그 확장만 빠진다 — 다른 확장과 앱은 그대로다.
+    #[test]
+    fn a_broken_ftl_file_rejects_only_its_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let broken = ext(
+            dir.path(),
+            "broken",
+            &[
+                (
+                    "extension.toml",
+                    &manifest("dev.example.broken", "*", KO_PACK),
+                ),
+                ("i18n/ko-kp/app.ftl", "ok = 좋다\n한글키 = 값\n"),
+            ],
+        );
+        let fine = ext(
+            dir.path(),
+            "fine",
+            &[
+                (
+                    "extension.toml",
+                    &manifest(
+                        "dev.example.fine",
+                        "*",
+                        "[contributes.translations.fr]\ndir = \"fr\"\n",
+                    ),
+                ),
+                ("fr/app.ftl", "ok = bien\n"),
+            ],
+        );
+        let registry = Registry::from_roots(&engine(), [broken, fine]);
+        let ids: Vec<&str> = registry
+            .extensions()
+            .iter()
+            .map(|e| e.manifest.id.as_str())
+            .collect();
+        assert_eq!(ids, ["dev.example.fine"]);
+        let file = dir.path().join("broken/i18n/ko-kp/app.ftl");
+        let messages = messages(&registry);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(
+            messages[0].starts_with(&format!("{}:2:1: error: invalid Fluent: ", file.display())),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_message_defined_twice_in_one_language_and_an_empty_language_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let twice = ext(
+            dir.path(),
+            "twice",
+            &[
+                (
+                    "extension.toml",
+                    &manifest("dev.example.twice", "*", KO_PACK),
+                ),
+                ("i18n/ko-kp/a.ftl", "same = 하나\n"),
+                ("i18n/ko-kp/b.ftl", "same = 둘\n"),
+            ],
+        );
+        let empty = ext(
+            dir.path(),
+            "empty",
+            &[
+                (
+                    "extension.toml",
+                    &manifest(
+                        "dev.example.empty",
+                        "*",
+                        "[contributes.translations.fr]\ndir = \"fr\"\n",
+                    ),
+                ),
+                ("fr/notes.txt", ""),
+            ],
+        );
+        let registry = Registry::from_roots(&engine(), [twice, empty]);
+        assert!(registry.extensions().is_empty());
+        let a = dir.path().join("twice/i18n/ko-kp/a.ftl");
+        let b = dir.path().join("twice/i18n/ko-kp/b.ftl");
+        let manifest_file = dir.path().join("empty/extension.toml");
+        assert_eq!(
+            messages(&registry),
+            [
+                format!(
+                    "{}: error: message `same` is already defined in {}",
+                    b.display(),
+                    a.display()
+                ),
+                format!(
+                    "{}:6:7: error: translation `fr`: `fr` has no .ftl files",
+                    manifest_file.display()
+                ),
+            ]
+        );
+    }
+
+    /// 내장과 같은 언어 태그를 가진 언어 팩은 거절된다(07 「레지스트리」 표 「겹침」 행) — 먼저 등록된 내장이 이긴다.
+    #[test]
+    fn a_language_pack_cannot_replace_a_builtin_language() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack = ext(
+            dir.path(),
+            "ko",
+            &[
+                (
+                    "extension.toml",
+                    &manifest(
+                        "dev.example.ko",
+                        "*",
+                        "[contributes.translations.ko]\ndir = \"ko\"\n",
+                    ),
+                ),
+                ("ko/app.ftl", "language-name = 가짜\n"),
+            ],
+        );
+        let mut roots = builtin::roots();
+        roots.push(pack);
+        let registry = Registry::from_roots(&engine(), roots);
+        let owner: Vec<&str> = registry
+            .loaded_translations()
+            .filter(|(_, t)| t.locale == "ko")
+            .map(|(e, _)| e.manifest.id.as_str())
+            .collect();
+        assert_eq!(owner, ["dev.pitwall.i18n-default"]);
+        let messages = messages(&registry);
+        assert!(
+            messages.iter().any(|m| m.ends_with(
+                "error: translation `ko` is already provided by `dev.pitwall.i18n-default`"
+            )),
+            "{messages:?}"
+        );
     }
 
     #[test]

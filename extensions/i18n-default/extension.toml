@@ -1,0 +1,15 @@
+# 기본 UI 번역(한국어 · 영어). 언어 하나는 그 언어의 Fluent 리소스(.ftl) 폴더다 — 형식과 언어 고르기는 crates/pw-i18n.
+# 언어 팩 확장도 같은 `[contributes.translations.<언어 태그>]` 로 언어를 더한다.
+id = "dev.pitwall.i18n-default"
+name = "Pitwall Default Translations"
+version = "0.1.0"
+engines = { pitwall = "*" }
+authors = ["Pitwall contributors"]
+license = "MIT"
+
+# 폴백 언어(빠진 메시지를 채운다)다. 모든 메시지가 여기 있어야 한다.
+[contributes.translations.en]
+dir = "i18n/en"
+
+[contributes.translations.ko]
+dir = "i18n/ko"

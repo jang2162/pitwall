@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use pw_core as _;
 use pw_diag as _;
 use pw_ext as _;
+use pw_i18n as _;
 
 use pw_rpc_gen::{Output, emit, json_schema, or_exit, typescript};
 

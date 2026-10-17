@@ -29,6 +29,16 @@ export type UnaryMethods = {
 	 */
 	"host.ping": { params: PingParams; result: Pong };
 	/**
+	 * 지금 쓸 UI 언어와 그 Fluent 리소스, 등록된 언어 목록.
+	 */
+	"i18n.get": { params: null; result: I18nState };
+	/**
+	 * UI 언어 설정(전역 `settings.toml` 의 `ui.language`)을 바꾼다. 그 키만 고쳐 쓰고 설정을 다시 읽는다 — 열린 창 ·
+	 * 메뉴는 `config.changed` 로 바뀐다. 모르는 언어면 invalid params, 파일을 고칠 수 없으면(TOML 이 깨졌다 등) 쓰지
+	 * 않고 오류다.
+	 */
+	"i18n.setLanguage": { params: SetLanguageParams; result: null };
+	/**
 	 * 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.
 	 */
 	"keymap.get": { params: KeymapGetParams; result: KeymapFile };
@@ -122,6 +132,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n"},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n"},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n"},
+	"i18n.get": {"name":"i18n.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"I18nState","doc":" 지금 쓸 UI 언어와 그 Fluent 리소스, 등록된 언어 목록.\n"},
+	"i18n.setLanguage": {"name":"i18n.setLanguage","kind":"unary","tier":"write","roles":["owner"],"params":"SetLanguageParams","output":"()","doc":" UI 언어 설정(전역 `settings.toml` 의 `ui.language`)을 바꾼다. 그 키만 고쳐 쓰고 설정을 다시 읽는다 — 열린 창 ·\n 메뉴는 `config.changed` 로 바뀐다. 모르는 언어면 invalid params, 파일을 고칠 수 없으면(TOML 이 깨졌다 등) 쓰지\n 않고 오류다.\n"},
 	"keymap.get": {"name":"keymap.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"KeymapGetParams","output":"KeymapFile","doc":" 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.\n"},
 	"keymap.list": {"name":"keymap.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"KeymapList","doc":" 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.\n"},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n"},
@@ -323,6 +335,26 @@ export type HostInfo = {
 	arch: string,
 };
 
+export type I18nResource = {
+	locale: string,
+	extension: string,
+	/**  사람이 읽는 위치(`builtin:i18n-default/i18n/ko/app.ftl` 또는 절대 경로). */
+	file: string,
+	/**  `.ftl` 파일 내용 그대로. */
+	source: string,
+};
+
+export type I18nState = {
+	/**  설정 값(`"system"` 또는 언어 태그). 설정이 잘못됐으면 `"system"`. */
+	setting: string,
+	/**  쓸 언어 순서. 첫째가 고른 언어, 끝이 폴백(`en`)이다. */
+	locales: string[],
+	/**  등록된 언어(등록 순서). 언어 고르기 목록이다. */
+	languages: LanguageInfo[],
+	/**  `locales` 의 리소스. `locales` 순서, 언어 안에서는 파일 이름순이다. */
+	resources: I18nResource[],
+};
+
 /**
  *  요청 id. JSON-RPC 2.0 은 숫자 · 문자열 · null 을 허용한다.
  *  숫자는 정수(i64)만 받는다 — 분수 id 는 명세가 비권장하고 비교가 불안정하다.
@@ -368,6 +400,15 @@ export type KeymapInfo = {
 
 export type KeymapList = {
 	keymaps: KeymapInfo[],
+};
+
+export type LanguageInfo = {
+	/**  BCP 47 언어 태그. */
+	locale: string,
+	/**  그 언어로 쓴 그 언어의 이름(`language-name` 메시지, 없으면 태그). */
+	name: string,
+	/**  기여한 확장의 id. */
+	extension: string,
 };
 
 export type LayerOrigin = "builtin" | 
@@ -510,6 +551,11 @@ export type RpcError = {
 	code: number,
 	message: string,
 	data?: JsonValue,
+};
+
+export type SetLanguageParams = {
+	/**  `"system"` 또는 등록된 언어 태그. */
+	language: string,
 };
 
 /**

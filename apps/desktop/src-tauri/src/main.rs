@@ -7,11 +7,14 @@ use pw_core::config::AppPaths;
 use pw_core::{HostRouter, LocalHost, Scope};
 use pw_diag::Diagnostics;
 use pw_ext::{LoadOptions, Registry};
+use pw_i18n::I18n;
+use tauri::Manager as _;
 
 mod cli;
 mod config_log;
 mod detach;
 mod diag;
+mod i18n;
 mod instance;
 mod ipc;
 mod launch;
@@ -23,16 +26,24 @@ mod windows;
 const LOCAL_HOST_ID: &str = "local";
 
 /// 앱이 쓰는 LocalHost. 생성물과 등록된 메서드를 맞춰 보는 테스트도 이것을 쓴다.
+/// UI 언어(`i18n`)는 Host 를 만든 뒤 그 전역 설정을 붙인다.
 fn local_host(
     paths: AppPaths,
     diagnostics: Arc<Diagnostics>,
     extensions: Arc<Registry>,
+    i18n: Arc<I18n>,
 ) -> LocalHost {
-    LocalHost::builder(LOCAL_HOST_ID)
+    let methods = Arc::clone(&i18n);
+    let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
         .methods(move |router| pw_ext::methods::register(router, extensions))
-        .build()
+        .methods(move |router| pw_i18n::methods::register(router, methods))
+        .build();
+    if let Some(config) = host.config() {
+        i18n.attach_config(config.global.clone());
+    }
+    host
 }
 
 /// 내장 확장과 `$DATA/extensions/` 의 사용자 확장. 진단은 로그에 남는다(로깅을 켠 뒤에 부른다).
@@ -94,6 +105,9 @@ fn start<R: tauri::Runtime>(
     (argv, cwd): (Vec<String>, String),
 ) {
     tauri::async_runtime::spawn(config_log::run(config_events));
+    if let Some(i18n) = app.try_state::<Arc<I18n>>() {
+        i18n::follow_in_menu(app, Arc::clone(&i18n), i18n::subscribe(host.bus()));
+    }
     // 레지스트리를 미리 열어 상태를 로그에 남긴다(정상이 아니면 경고 — 손상 · 잠김 · 읽기 전용). 열기는 잠긴 파일을 최대 2초 기다리고
     // 무결성 검사를 하므로 창을 띄우는 스레드가 아니라 블로킹 스레드에서 한다.
     if let Some(registry) = host.registry().cloned() {
@@ -133,10 +147,12 @@ fn main() {
     };
     let diagnostics = diag::init(&paths);
     let extensions = load_extensions(&paths);
+    let i18n = i18n::init(&extensions);
     let host = Arc::new(local_host(
         paths.clone(),
         Arc::clone(&diagnostics),
         extensions,
+        Arc::clone(&i18n),
     ));
     // 「활성 기능」은 지금 Host 가 처리하는 메서드의 모듈 이름이다. 확장 · 설정 기능이 들어오면 그것으로 바꾼다.
     diagnostics.set_features(
@@ -181,6 +197,8 @@ fn main() {
         .manage(launch::Launch::new(host.registry().cloned()))
         .manage(windows::PendingOpens::default())
         .manage(diagnostics)
+        // 메뉴(`menu::build`)가 지금 언어로 글자를 만든다 — 메뉴보다 먼저 등록한다.
+        .manage(i18n)
         .menu(menu::build)
         .on_menu_event(menu::handle)
         .setup(move |app| {
@@ -213,11 +231,16 @@ mod tests {
 
     use super::*;
 
+    fn no_languages() -> Arc<I18n> {
+        Arc::new(I18n::new(pw_i18n::Catalog::default(), Vec::new()))
+    }
+
     fn host_under(dir: &std::path::Path) -> LocalHost {
         local_host(
             AppPaths::under(dir),
             Arc::new(Diagnostics::new(dir.join("logs"), "0.0.0")),
             Arc::new(Registry::default()),
+            no_languages(),
         )
     }
 
@@ -307,6 +330,7 @@ mod tests {
             AppPaths::under(&std::env::temp_dir().join("pitwall-generated-rpc-test-absent")),
             Arc::new(Diagnostics::new("unused-log-dir", "0.0.0")),
             Arc::new(Registry::default()),
+            no_languages(),
         );
         let routed: BTreeSet<String> = host
             .router()

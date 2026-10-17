@@ -300,13 +300,13 @@ fn write_backup(dir: &Path, rel: &Path, version: u32, contents: &str) -> std::io
     unreachable!("1.. is unbounded")
 }
 
-/// 같은 폴더의 임시 파일에 쓰고 rename 한다.
+/// 같은 폴더의 임시 파일에 쓰고 rename 한다. `path` 는 이미 있어야 한다. 설정 파일을 고치는 기능(언어 설정 쓰기 등)도 이것을 쓴다.
 /// - `path` 가 심링크면 **링크가 가리키는 파일**을 고친다. 링크를 rename 으로 덮으면 dotfiles 연결이 끊긴다.
 /// - 원래 권한을 임시 파일에 옮긴다(0600 인 파일이 0644 가 되지 않게).
 /// - 임시 이름은 pid · 카운터 · 시각으로 고유하게 만든다. 고정 이름이면 같은 파일을 동시에 마이그레이션하는 두 로더
 ///   (메인 체크아웃과 그 워크트리가 같은 메인 `.local.toml` 을 읽는 경우, 두 앱이 `$CONFIG` 를 함께 쓰는 경우)가
 ///   서로의 임시 파일을 rename 해 한쪽이 ENOENT 로 실패한다.
-fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let target = fs::canonicalize(path)?;
