@@ -124,18 +124,29 @@ fn open_target<R: Runtime>(app: &AppHandle<R>, target: OpenTarget) {
         );
         return;
     };
-    // 디렉터리는 「그 프로젝트를 연다」로 끝난다. 파일(또는 아직 없는 경로)만 에디터로 넘긴다.
-    let file = (!Path::new(&resolution.path).is_dir()).then_some(resolution.path);
     let open = ProjectOpen {
         worktree: resolution.worktree.map(|w| w.top),
-        line: file.as_ref().and(target.line),
-        col: file.as_ref().and(target.col),
-        file,
+        file: Some(resolution.path),
+        line: target.line,
+        col: target.col,
     };
     log_err(
         "open project window",
         open_project(app, &resolution.project.id, &open),
     );
+}
+
+/// 디렉터리는 「그 프로젝트를 연다」로 끝난다. 파일(또는 아직 없는 경로)만 에디터로 넘기고, 파일이 없으면 줄 · 열도 버린다.
+/// CLI 와 웰컴 창(S2 → S3 가 Orca 의 워크트리 디렉터리를 `file` 로 넘기기도 한다)이 모두 [`open_project`] 에서 이것을 지난다.
+fn without_directory_file(mut open: ProjectOpen) -> ProjectOpen {
+    if open.file.as_deref().is_some_and(|f| Path::new(f).is_dir()) {
+        open.file = None;
+    }
+    if open.file.is_none() {
+        open.line = None;
+        open.col = None;
+    }
+    open
 }
 
 /// 등록된 프로젝트의 창을 열거나 앞으로 가져오고 「열었음」(`project.markOpened`)을 기록한다.
@@ -151,7 +162,8 @@ pub fn open_project<R: Runtime>(
         .ok_or_else(|| "the project registry is not available".to_owned())?;
     // 없는 id 로 창을 만들지 않는다. label 에 들어가므로 웹뷰가 넘긴 아무 문자열이 창이 되지 않게 하는 검사이기도 하다.
     registry.get(project_id).map_err(|e| e.to_string())?;
-    windows::open_project(app, project_id, open).map_err(|e| e.to_string())?;
+    let open = without_directory_file(open.clone());
+    windows::open_project(app, project_id, &open).map_err(|e| e.to_string())?;
     // 읽기 전용 레지스트리 등으로 기록하지 못해도 창은 열렸다.
     if let Err(e) = registry.mark_opened(project_id) {
         tracing::warn!(project_id, %e, "cannot record the project as opened");
@@ -248,6 +260,7 @@ mod tests {
             );
             let app = mock_app();
             app.manage(Launch::new(Some(registry.clone())));
+            app.manage(windows::PendingOpens::default());
             Self {
                 _tmp: tmp,
                 base,
@@ -288,9 +301,27 @@ mod tests {
             url.query_pairs().into_owned().collect()
         }
 
+        /// 그 프로젝트 창이 마운트할 때 꺼내는 것(창이 부르는 명령 그대로).
+        fn opens(&self, project_id: &str) -> Vec<ProjectOpen> {
+            let window = self
+                .app
+                .get_webview_window(&windows::project_label(project_id))
+                .expect("프로젝트 창");
+            windows::take_pending_project_opens(window, self.app.state())
+        }
+
         /// 웰컴 창이 부르는 명령 그대로.
         fn take(&self) -> Option<FindProjectRequest> {
             take_pending_find_project(self.app.state::<Launch>())
+        }
+    }
+
+    fn open_file(path: &Path, line: Option<u32>, col: Option<u32>) -> ProjectOpen {
+        ProjectOpen {
+            file: Some(path.display().to_string()),
+            line,
+            col,
+            ..ProjectOpen::default()
         }
     }
 
@@ -320,9 +351,9 @@ mod tests {
         assert_eq!(f.labels(), std::slice::from_ref(&label));
         assert_eq!(
             f.query(&label),
-            pairs(&[("window", "project"), ("project", &id)]),
-            "디렉터리는 파일을 넘기지 않는다"
+            pairs(&[("window", "project"), ("project", &id)])
         );
+        assert_eq!(f.opens(&id), [], "디렉터리는 파일을 넘기지 않는다");
         assert!(f.registry.get(&id).unwrap().opened_at.is_some());
         assert_eq!(f.take(), None);
     }
@@ -335,16 +366,28 @@ mod tests {
         fs::write(root.join("src/a.rs"), "").unwrap();
         let id = f.add(&root);
         f.run(&["src/a.rs:3:9"], &root);
-        let file = root.join("src/a.rs").display().to_string();
         assert_eq!(
-            f.query(&windows::project_label(&id)),
-            pairs(&[
-                ("window", "project"),
-                ("project", &id),
-                ("file", &file),
-                ("line", "3"),
-                ("col", "9"),
-            ])
+            f.opens(&id),
+            [open_file(&root.join("src/a.rs"), Some(3), Some(9))]
+        );
+    }
+
+    /// 창이 없는 프로젝트에 파일 둘. 첫 파일이 창을 만들고 둘째는 「이미 있는 창」으로 간다 — 막 만든 웹뷰는 아직 리스너가
+    /// 없으므로 이벤트에 실었다면 둘째가 사라진다. 창이 마운트할 때 꺼내는 큐에는 둘 다 있어야 한다.
+    #[test]
+    fn two_files_for_a_project_without_a_window_both_arrive() {
+        let f = Fixture::new();
+        let root = f.dir("repo");
+        fs::write(root.join("a.rs"), "").unwrap();
+        fs::write(root.join("b.rs"), "").unwrap();
+        let id = f.add(&root);
+        let a = root.join("a.rs");
+        let b = root.join("b.rs");
+        f.run(&[a.to_str().unwrap(), b.to_str().unwrap()], &f.base);
+        assert_eq!(f.labels(), [windows::project_label(&id)]);
+        assert_eq!(
+            f.opens(&id),
+            [open_file(&a, None, None), open_file(&b, None, None)]
         );
     }
 
@@ -355,13 +398,41 @@ mod tests {
         let id = f.add(&main);
         f.run(&[wt.to_str().unwrap()], &f.base);
         assert_eq!(
-            f.query(&windows::project_label(&id)),
-            pairs(&[
-                ("window", "project"),
-                ("project", &id),
-                ("worktree", wt.to_str().unwrap()),
-            ])
+            f.opens(&id),
+            [ProjectOpen {
+                worktree: Some(wt.display().to_string()),
+                ..ProjectOpen::default()
+            }]
         );
+    }
+
+    /// 웰컴 창(`open_project_window`)이 워크트리 디렉터리를 `file` 로 넘겨도 파일로 보내지 않는다(받는 쪽 방어).
+    #[test]
+    fn a_directory_passed_as_the_file_is_dropped_with_its_line_and_column() {
+        let f = Fixture::new();
+        let (main, wt) = fake_worktree(&f);
+        let id = f.add(&main);
+        let directory = ProjectOpen {
+            worktree: Some(wt.display().to_string()),
+            file: Some(wt.display().to_string()),
+            line: Some(1),
+            col: Some(2),
+        };
+        open_project(f.app.handle(), &id, &directory).unwrap();
+        assert_eq!(
+            f.opens(&id),
+            [ProjectOpen {
+                worktree: Some(wt.display().to_string()),
+                ..ProjectOpen::default()
+            }]
+        );
+        // 남는 것이 없으면 창만 앞으로 가져온다. 파일 없는 줄 · 열도 버린다.
+        let only_lines = ProjectOpen {
+            line: Some(3),
+            ..ProjectOpen::default()
+        };
+        open_project(f.app.handle(), &id, &only_lines).unwrap();
+        assert_eq!(f.opens(&id), []);
     }
 
     #[test]
@@ -441,20 +512,9 @@ mod tests {
         fs::write(root.join("b.rs"), "").unwrap();
         let id = f.add(&root);
         f.run(&[root.to_str().unwrap()], &f.base);
-        let received = Arc::new(Mutex::new(Vec::<String>::new()));
-        let sink = Arc::clone(&received);
-        f.app
-            .get_webview_window(&windows::project_label(&id))
-            .unwrap()
-            .listen(windows::PROJECT_OPEN_EVENT, move |e| {
-                sink.lock().unwrap().push(e.payload().to_owned())
-            });
+        assert_eq!(f.opens(&id), []);
         f.run(&["b.rs:2"], &root);
         assert_eq!(f.labels(), [windows::project_label(&id)]);
-        let file = root.join("b.rs").display().to_string();
-        assert_eq!(
-            *received.lock().unwrap(),
-            [format!(r#"{{"file":"{file}","line":2}}"#)]
-        );
+        assert_eq!(f.opens(&id), [open_file(&root.join("b.rs"), Some(2), None)]);
     }
 }

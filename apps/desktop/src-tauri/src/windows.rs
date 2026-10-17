@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
+
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, EventTarget, Manager, Runtime, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, EventTarget, Manager, Runtime, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 
@@ -71,9 +74,49 @@ fn encode_query_value(value: &str) -> String {
 pub const WELCOME_LABEL: &str = "welcome";
 pub const SETTINGS_LABEL: &str = "settings";
 
-/// 이미 열린 프로젝트 창에 [`ProjectOpen`] 을 보내는 이벤트. 새로 만드는 창은 같은 값을 쿼리로 받는다
-/// (`src/project-open.ts`).
+/// 프로젝트 창에 「꺼낼 열기 요청이 있다」를 알리는 이벤트. payload 는 없다 — 요청은 [`PendingOpens`] 에 쌓이고 창이
+/// [`take_pending_project_opens`] 로 꺼낸다(`src/project-open.ts`).
+///
+/// 이벤트에 요청을 실으면 막 만든 창이 잃는다: Tauri 는 JS 리스너가 등록된 웹뷰에만 이벤트를 보내고 쌓아 두지 않는다.
+/// 창은 마운트할 때 리스너를 먼저 걸고 큐를 꺼내므로, 리스너가 없던 사이에 온 요청은 그 꺼내기가 받는다.
 pub const PROJECT_OPEN_EVENT: &str = "project://open";
+
+/// 프로젝트 창 label → 그 창이 아직 꺼내지 않은 열기 요청(온 순서). 새 창의 첫 요청도 여기로 간다(쿼리로 싣지 않는다 —
+/// 경로가 하나다).
+#[derive(Default)]
+pub struct PendingOpens(Mutex<HashMap<String, Vec<ProjectOpen>>>);
+
+impl PendingOpens {
+    fn queues(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<ProjectOpen>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn push(&self, label: &str, open: ProjectOpen) {
+        self.queues()
+            .entry(label.to_owned())
+            .or_default()
+            .push(open);
+    }
+
+    /// 새로 만드는 창의 큐. 같은 label 의 닫힌 창이 꺼내지 않고 남긴 요청은 버린다.
+    fn reset(&self, label: &str, first: Option<ProjectOpen>) {
+        self.queues()
+            .insert(label.to_owned(), first.into_iter().collect());
+    }
+
+    pub fn take(&self, label: &str) -> Vec<ProjectOpen> {
+        self.queues().remove(label).unwrap_or_default()
+    }
+}
+
+/// 프로젝트 창이 마운트할 때와 [`PROJECT_OPEN_EVENT`] 를 받을 때 부른다. 부른 창의 요청만 꺼낸다(꺼내면 비운다).
+#[tauri::command]
+pub fn take_pending_project_opens<R: Runtime>(
+    window: WebviewWindow<R>,
+    pending: State<'_, PendingOpens>,
+) -> Vec<ProjectOpen> {
+    pending.take(window.label())
+}
 
 /// 프로젝트 창에서 열 것. 모두 비면 창만 앞으로 가져온다.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -94,18 +137,6 @@ pub struct ProjectOpen {
 impl ProjectOpen {
     fn is_empty(&self) -> bool {
         *self == Self::default()
-    }
-
-    fn query(&self) -> Vec<(&'static str, String)> {
-        [
-            ("worktree", self.worktree.clone()),
-            ("file", self.file.clone()),
-            ("line", self.line.map(|n| n.to_string())),
-            ("col", self.col.map(|n| n.to_string())),
-        ]
-        .into_iter()
-        .filter_map(|(key, value)| value.map(|v| (key, v)))
-        .collect()
     }
 }
 
@@ -132,33 +163,29 @@ pub async fn open_settings_window<R: Runtime>(app: AppHandle<R>) -> Result<(), S
     open_settings(&app).map(drop).map_err(|e| e.to_string())
 }
 
-/// 프로젝트 창을 연다. 그 프로젝트의 창이 이미 있으면 앞으로 가져오고 `open` 을 이벤트로 보낸다. 없으면
-/// `?window=project&project=<id>` 와 `open` 을 쿼리로 실은 창을 만든다. 프로젝트가 레지스트리에 있는지는 부르는 쪽이 본다
-/// (`launch::open_project`).
+/// 프로젝트 창을 연다. `open` 은 그 창의 [`PendingOpens`] 큐에 넣는다. 창이 이미 있으면 앞으로 가져오고
+/// [`PROJECT_OPEN_EVENT`] 로 알린다. 없으면 `?window=project&project=<id>` 창을 만든다(창은 마운트할 때 큐를 꺼낸다).
+/// 프로젝트가 레지스트리에 있는지는 부르는 쪽이 본다(`launch::open_project`).
 pub fn open_project<R: Runtime>(
     app: &AppHandle<R>,
     project_id: &str,
     open: &ProjectOpen,
 ) -> tauri::Result<WebviewWindow<R>> {
     let label = project_label(project_id);
+    let pending = app.state::<PendingOpens>();
     if let Some(window) = focus(app, &label)? {
         if !open.is_empty() {
-            app.emit_to(
-                EventTarget::webview_window(&label),
-                PROJECT_OPEN_EVENT,
-                open,
-            )?;
+            pending.push(&label, open.clone());
+            app.emit_to(EventTarget::webview_window(&label), PROJECT_OPEN_EVENT, ())?;
         }
         return Ok(window);
     }
-    let query = open.query();
-    let mut params = vec![("project", project_id)];
-    params.extend(query.iter().map(|(key, value)| (*key, value.as_str())));
+    pending.reset(&label, (!open.is_empty()).then(|| open.clone()));
     build_at(
         app,
         WindowKind::Project,
         &label,
-        WindowKind::Project.url_with(&params),
+        WindowKind::Project.url_with(&[("project", project_id)]),
     )
 }
 
@@ -274,9 +301,27 @@ mod tests {
         }
     }
 
+    fn app() -> tauri::App<tauri::test::MockRuntime> {
+        let app = tauri::test::mock_app();
+        app.manage(PendingOpens::default());
+        app
+    }
+
+    fn take<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>) -> Vec<ProjectOpen> {
+        take_pending_project_opens(window.clone(), app.state())
+    }
+
+    fn file(path: &str, line: Option<u32>) -> ProjectOpen {
+        ProjectOpen {
+            file: Some(path.into()),
+            line,
+            ..ProjectOpen::default()
+        }
+    }
+
     #[test]
     fn a_project_window_is_opened_once_per_project() {
-        let app = tauri::test::mock_app();
+        let app = app();
         let first = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
         let again = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
         let other = open_project(app.handle(), "bbbb", &ProjectOpen::default()).unwrap();
@@ -289,8 +334,8 @@ mod tests {
     }
 
     #[test]
-    fn a_new_project_window_gets_the_request_in_its_query() {
-        let app = tauri::test::mock_app();
+    fn a_new_project_window_carries_only_its_project_and_queues_the_request() {
+        let app = app();
         let open = ProjectOpen {
             worktree: Some("/wt".into()),
             file: Some("/wt/a.rs".into()),
@@ -302,25 +347,47 @@ mod tests {
         let query: Vec<(String, String)> = url.query_pairs().into_owned().collect();
         assert_eq!(
             query,
-            [
-                ("window", "project"),
-                ("project", "aaaa"),
-                ("worktree", "/wt"),
-                ("file", "/wt/a.rs"),
-                ("line", "3"),
-                ("col", "4"),
-            ]
-            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            [("window", "project"), ("project", "aaaa")].map(|(k, v)| (k.to_owned(), v.to_owned()))
+        );
+        assert_eq!(take(app.handle(), &window), [open]);
+        assert_eq!(take(app.handle(), &window), [], "꺼내면 비운다");
+    }
+
+    /// 창이 아직 리스너를 걸지 않았어도(막 만든 창) 요청이 사라지지 않는다 — 창은 마운트할 때 꺼낸다.
+    #[test]
+    fn requests_wait_in_order_until_the_window_takes_them() {
+        let app = app();
+        let window = open_project(app.handle(), "aaaa", &file("/r/a.rs", None)).unwrap();
+        open_project(app.handle(), "aaaa", &file("/r/b.rs", Some(2))).unwrap();
+        open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        let other = open_project(app.handle(), "bbbb", &ProjectOpen::default()).unwrap();
+        assert_eq!(
+            take(app.handle(), &other),
+            [],
+            "다른 창의 요청은 꺼내지 않는다"
+        );
+        assert_eq!(
+            take(app.handle(), &window),
+            [file("/r/a.rs", None), file("/r/b.rs", Some(2))]
         );
     }
 
     #[test]
-    fn an_open_project_window_gets_the_request_as_an_event() {
-        use std::sync::{Arc, Mutex};
+    fn a_new_window_drops_what_a_closed_window_left_unclaimed() {
+        let app = app();
+        app.state::<PendingOpens>()
+            .push("project-aaaa", file("/stale.rs", None));
+        let window = open_project(app.handle(), "aaaa", &file("/r/a.rs", None)).unwrap();
+        assert_eq!(take(app.handle(), &window), [file("/r/a.rs", None)]);
+    }
+
+    #[test]
+    fn an_open_project_window_is_notified_only_when_something_was_queued() {
+        use std::sync::Arc;
 
         use tauri::Listener;
 
-        let app = tauri::test::mock_app();
+        let app = app();
         let window = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
         let received = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = Arc::clone(&received);
@@ -329,16 +396,9 @@ mod tests {
         });
         // 빈 요청은 창만 앞으로 가져온다.
         open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
-        let open = ProjectOpen {
-            file: Some("/r/a.rs".into()),
-            line: Some(7),
-            ..ProjectOpen::default()
-        };
-        open_project(app.handle(), "aaaa", &open).unwrap();
-        assert_eq!(
-            *received.lock().unwrap(),
-            [r#"{"file":"/r/a.rs","line":7}"#]
-        );
+        open_project(app.handle(), "aaaa", &file("/r/a.rs", Some(7))).unwrap();
+        assert_eq!(*received.lock().unwrap(), ["null"]);
+        assert_eq!(take(app.handle(), &window), [file("/r/a.rs", Some(7))]);
         assert_eq!(labels(app.handle()), ["project-aaaa"]);
     }
 }

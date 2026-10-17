@@ -1,38 +1,25 @@
-// 프로젝트 창이 받는 열기 요청(src-tauri/src/windows.rs 의 ProjectOpen). 새로 만든 창은 쿼리로, 이미 열린 창은
-// `project://open` 이벤트로 받는다. 받을 에디터가 아직 없어 지금은 로그만 남긴다(M0-10).
+// 프로젝트 창이 받는 열기 요청(src-tauri/src/windows.rs 의 ProjectOpen · PendingOpens). 요청은 Rust 의 창별 큐에 쌓이고,
+// 창은 마운트할 때와 `project://open` 알림을 받을 때 `take_pending_project_opens` 로 꺼낸다. 새 창의 첫 요청도 같은 큐로
+// 온다(쿼리에는 프로젝트 id 만 있다). 받을 에디터가 아직 없어 지금은 로그만 남긴다(M0-10).
 
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-/** src-tauri/src/windows.rs 의 `PROJECT_OPEN_EVENT`. */
+/** src-tauri/src/windows.rs 의 `PROJECT_OPEN_EVENT`. payload 는 없다. */
 export const PROJECT_OPEN_EVENT = "project://open";
 
 export interface ProjectOpen {
   /** 활성 워크트리의 꼭대기(`ActiveWorktree.top`). */
   worktree?: string;
-  /** 열 파일의 절대 경로. */
+  /** 열 파일의 절대 경로. 디렉터리는 Rust 가 걸러 오지 않는다. */
   file?: string;
   line?: number;
   col?: number;
 }
 
-/** 프로젝트 창의 쿼리(`?window=project&project=<id>&worktree=…&file=…&line=…&col=…`). */
-export function parseProjectQuery(search: string): { projectId?: string; open: ProjectOpen } {
-  const params = new URLSearchParams(search);
-  const text = (key: string) => params.get(key) ?? undefined;
-  const number = (key: string) => {
-    const value = Number(params.get(key));
-    return Number.isInteger(value) && value >= 1 ? value : undefined;
-  };
-  const open: ProjectOpen = {};
-  const worktree = text("worktree");
-  const file = text("file");
-  const line = number("line");
-  const col = number("col");
-  if (worktree !== undefined) open.worktree = worktree;
-  if (file !== undefined) open.file = file;
-  if (line !== undefined) open.line = line;
-  if (col !== undefined) open.col = col;
-  return { projectId: text("project"), open };
+/** 프로젝트 창의 쿼리(`?window=project&project=<id>`)에서 프로젝트 id. */
+export function projectIdFromQuery(search: string): string | undefined {
+  return new URLSearchParams(search).get("project") ?? undefined;
 }
 
 /** 로그 한 줄용 표기. 비었으면 `undefined`. */
@@ -46,14 +33,46 @@ export function describeOpen(open: ProjectOpen): string | undefined {
   return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
-/** 이 창을 대상으로 보낸 열기 요청을 듣는다. 해제 함수를 돌려준다. */
-export function listenProjectOpen(listener: (open: ProjectOpen) => void): () => void {
+/** 큐와 알림. 시험은 가짜를 넣는다. */
+export interface ProjectOpenSource {
+  /** 이 창에 온 알림을 듣는다. 해제 함수로 끝난다. */
+  listen(onNotify: () => void): Promise<() => void>;
+  /** 이 창의 큐를 꺼낸다(꺼내면 비운다). */
+  take(): Promise<ProjectOpen[]>;
+}
+
+export const tauriProjectOpenSource: ProjectOpenSource = {
+  listen: (onNotify) => getCurrentWebviewWindow().listen(PROJECT_OPEN_EVENT, () => onNotify()),
+  take: () => invoke<ProjectOpen[]>("take_pending_project_opens"),
+};
+
+/**
+ * 요청을 온 순서대로 `onOpen` 에 넘긴다. **리스너를 건 뒤에 처음 꺼낸다** — 리스너가 없던 사이(창을 만드는 중)에 쌓인 요청은
+ * 그 꺼내기가 받고, 그 뒤의 요청은 알림이 부르는 꺼내기가 받는다. 꺼내기는 하나씩 차례로 한다(순서를 지킨다).
+ * 해제 함수를 돌려준다.
+ */
+export function watchProjectOpens(
+  source: ProjectOpenSource,
+  onOpen: (open: ProjectOpen) => void,
+  onError: (e: unknown) => void = (e) => console.warn("[project] open requests", e),
+): () => void {
   let disposed = false;
   let unlisten: (() => void) | undefined;
-  getCurrentWebviewWindow()
-    .listen<ProjectOpen>(PROJECT_OPEN_EVENT, (e) => listener(e.payload))
-    .then((off) => (disposed ? off() : (unlisten = off)))
-    .catch((e: unknown) => console.warn("[project] open listen failed", e));
+  let chain = Promise.resolve();
+  const drain = () => {
+    chain = chain
+      .then(() => (disposed ? [] : source.take()))
+      .then((opens) => opens.forEach(onOpen))
+      .catch(onError);
+  };
+  source
+    .listen(drain)
+    .then((off) => {
+      if (disposed) off();
+      else unlisten = off;
+      drain();
+    })
+    .catch(onError);
   return () => {
     disposed = true;
     unlisten?.();

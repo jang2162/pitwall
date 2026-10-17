@@ -16,7 +16,12 @@ import { applyRegistryTheme } from "./theme/registry-theme";
 import { createThemeStore } from "./theme/theme-store";
 import { ThemeStoreProvider } from "./theme/theme-switcher";
 import { parseTheme } from "./theme/tokens";
-import { describeOpen, listenProjectOpen, parseProjectQuery } from "./project-open";
+import {
+  describeOpen,
+  projectIdFromQuery,
+  tauriProjectOpenSource,
+  watchProjectOpens,
+} from "./project-open";
 import { installUiLog } from "./ui-log";
 import { detectPlatform, installWebviewGuards } from "./webview-guards";
 import { parseWindowKind } from "./window-kind";
@@ -24,14 +29,10 @@ import { parseWindowKind } from "./window-kind";
 const log = installUiLog(window);
 const windowKind = parseWindowKind(window.location.search);
 log.info(`window opened: ${windowKind}`, "main");
-// 프로젝트 창이 받은 열기 요청(src-tauri/src/launch.rs). 받을 에디터가 생기면 그쪽으로 넘긴다.
+// 프로젝트 창이 받은 열기 요청(src-tauri/src/launch.rs · windows.rs). 받을 에디터가 생기면 그쪽으로 넘긴다.
 if (windowKind === "project") {
-  const { projectId, open } = parseProjectQuery(window.location.search);
-  log.info(
-    `project window: ${projectId ?? "(none)"}${describeOpen(open) ? `, ${describeOpen(open)}` : ""}`,
-    "project",
-  );
-  listenProjectOpen((request) =>
+  log.info(`project window: ${projectIdFromQuery(window.location.search) ?? "(none)"}`, "project");
+  watchProjectOpens(tauriProjectOpenSource, (request) =>
     log.info(`open request: ${describeOpen(request) ?? "(focus only)"}`, "project"),
   );
 }

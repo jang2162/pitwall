@@ -1,26 +1,83 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { describeOpen, parseProjectQuery } from "./project-open";
+import {
+  describeOpen,
+  type ProjectOpen,
+  type ProjectOpenSource,
+  projectIdFromQuery,
+  watchProjectOpens,
+} from "./project-open";
 
-describe("parseProjectQuery", () => {
-  it("reads what Rust puts in a new project window's query", () => {
-    // src-tauri/src/windows.rs 의 query_values_are_percent_encoded 와 같은 인코딩.
-    expect(
-      parseProjectQuery(
-        "?window=project&project=ab12&worktree=%2Fwt&file=%2Fa%20b%2Fc%2Bd%26e%3Df%2F%ED%95%9C.rs&line=3&col=4",
-      ),
-    ).toEqual({
-      projectId: "ab12",
-      open: { worktree: "/wt", file: "/a b/c+d&e=f/한.rs", line: 3, col: 4 },
-    });
+/** Rust 쪽 큐를 흉내 낸다. `listen` 이 끝나기 전까지 알림은 아무에게도 가지 않는다(Tauri 는 쌓아 두지 않는다). */
+function fakeSource() {
+  const queue: ProjectOpen[] = [];
+  let notify: (() => void) | undefined;
+  const calls: string[] = [];
+  let finishListen!: () => void;
+  const listened = new Promise<void>((resolve) => (finishListen = resolve));
+  const source: ProjectOpenSource = {
+    async listen(onNotify) {
+      calls.push("listen");
+      await listened;
+      notify = onNotify;
+      return () => (notify = undefined);
+    },
+    take: vi.fn(async () => {
+      calls.push("take");
+      return queue.splice(0);
+    }),
+  };
+  return {
+    source,
+    calls,
+    finishListen,
+    /** Rust 의 `open_project`: 큐에 넣고 알린다. */
+    push(open: ProjectOpen) {
+      queue.push(open);
+      notify?.();
+    },
+  };
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe("projectIdFromQuery", () => {
+  it("reads the project id Rust puts in a project window's query", () => {
+    expect(projectIdFromQuery("?window=project&project=ab12")).toBe("ab12");
+    expect(projectIdFromQuery("?window=project")).toBeUndefined();
+  });
+});
+
+describe("watchProjectOpens", () => {
+  it("keeps requests that arrived before the listener and delivers them in order", async () => {
+    const fake = fakeSource();
+    const got: ProjectOpen[] = [];
+    watchProjectOpens(fake.source, (o) => got.push(o));
+    // 창을 만드는 중: 리스너가 아직 없어 알림은 사라지고 요청은 큐에 남는다.
+    fake.push({ file: "/r/a.rs" });
+    fake.push({ file: "/r/b.rs", line: 2 });
+    fake.finishListen();
+    await settle();
+    expect(got).toEqual([{ file: "/r/a.rs" }, { file: "/r/b.rs", line: 2 }]);
+    expect(fake.calls.slice(0, 2)).toEqual(["listen", "take"]);
+    // 리스너가 선 뒤의 요청은 알림이 부르는 꺼내기가 받는다.
+    fake.push({ worktree: "/wt" });
+    await settle();
+    expect(got).toEqual([{ file: "/r/a.rs" }, { file: "/r/b.rs", line: 2 }, { worktree: "/wt" }]);
   });
 
-  it("leaves out what is missing or not a positive integer", () => {
-    expect(parseProjectQuery("?window=project&project=ab12&line=0&col=x")).toEqual({
-      projectId: "ab12",
-      open: {},
-    });
-    expect(parseProjectQuery("?window=project")).toEqual({ projectId: undefined, open: {} });
+  it("stops taking after it is disposed", async () => {
+    const fake = fakeSource();
+    const got: ProjectOpen[] = [];
+    const stop = watchProjectOpens(fake.source, (o) => got.push(o));
+    fake.finishListen();
+    await settle();
+    // 알림이 꺼내기를 예약한 직후(같은 틱)에 해제해도 꺼내지 않는다 — 큐는 다음 창(같은 label)이 받는다.
+    fake.push({ file: "/r/a.rs" });
+    stop();
+    await settle();
+    expect(got).toEqual([]);
+    expect(fake.source.take).toHaveBeenCalledTimes(1);
   });
 });
 

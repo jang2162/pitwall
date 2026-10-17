@@ -123,6 +123,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(launch::Launch::new(registry.clone()))
+        .manage(windows::PendingOpens::default())
         .manage(diagnostics)
         .menu(menu::build)
         .on_menu_event(menu::handle)
