@@ -81,6 +81,22 @@ describe("watchProjectOpens", () => {
   });
 });
 
+describe("watchProjectOpens when the listener cannot be registered", () => {
+  it("still takes what was already queued", async () => {
+    const take = vi.fn(async () => [{ file: "/r/a.rs" }]);
+    const errors: unknown[] = [];
+    const got: ProjectOpen[] = [];
+    watchProjectOpens(
+      { listen: async () => Promise.reject(new Error("no ipc")), take },
+      (o) => got.push(o),
+      (e) => errors.push(e),
+    );
+    await settle();
+    expect(got).toEqual([{ file: "/r/a.rs" }]);
+    expect(errors).toHaveLength(1);
+  });
+});
+
 describe("describeOpen", () => {
   it("names the worktree and the file location", () => {
     expect(describeOpen({ worktree: "/wt", file: "/wt/a.rs", line: 3, col: 4 })).toBe(

@@ -72,7 +72,11 @@ export function watchProjectOpens(
       else unlisten = off;
       drain();
     })
-    .catch(onError);
+    .catch((e: unknown) => {
+      // 알림은 못 받아도 이미 쌓인 요청(새 창의 첫 요청 등)은 꺼낸다.
+      onError(e);
+      drain();
+    });
   return () => {
     disposed = true;
     unlisten?.();
