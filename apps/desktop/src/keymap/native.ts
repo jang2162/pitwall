@@ -1,4 +1,4 @@
-// 키맵이 네이티브(Tauri)와 주고받는 것: 메뉴 accelerator 동기화, 메뉴에서 고른 액션, 설정 창 열기.
+// 키맵이 네이티브(Tauri)와 주고받는 것: 메뉴 accelerator 동기화, 메뉴에서 고른 액션, 설정 창 열기, Shell 명령 설치.
 // 시험 · 브라우저에서는 Tauri 가 없으므로 이 인터페이스로 갈아 끼운다.
 
 import { invoke } from "@tauri-apps/api/core";
@@ -13,6 +13,8 @@ export interface KeymapNative {
   /** 네이티브 메뉴에서 고른 액션. 해제 함수를 돌려준다. */
   onMenuAction(listener: (action: string) => void): () => void;
   openSettings(): Promise<void>;
+  /** 「Shell 명령 설치」(F2-1). macOS 에만 있다. 결과는 네이티브 대화상자가 알린다(src-tauri/src/shell_command.rs). */
+  installShellCommand?(): Promise<void>;
 }
 
 export const tauriKeymapNative: KeymapNative = {
@@ -31,4 +33,7 @@ export const tauriKeymapNative: KeymapNative = {
     };
   },
   openSettings: () => invoke("open_settings_window"),
+  ...(/Mac/.test(navigator.userAgent) && {
+    installShellCommand: () => invoke<void>("install_shell_command"),
+  }),
 };

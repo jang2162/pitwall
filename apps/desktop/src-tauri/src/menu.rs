@@ -19,11 +19,15 @@ use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
 use crate::{diag, windows};
 
-const NEW_PROJECT_WINDOW: &str = "new-project-window";
+/// 프로젝트 창은 프로젝트에 묶여 열리므로(`launch::open_project`) 빈 프로젝트 창 대신 웰컴 창(새 프로젝트 · 폴더 열기)을 연다.
+const WELCOME_WINDOW: &str = "welcome-window";
 const COPY_DIAGNOSTICS: &str = "copy-diagnostics";
 /// 키맵 액션 id 를 그대로 메뉴 id 로 쓰는 항목.
 const SETTINGS_ACTION: &str = "settings.open";
 const FIND_ACTION: &str = "action.find";
+/// 「Shell 명령 설치」(F2-1). macOS 앱 메뉴에만 있다.
+#[cfg(target_os = "macos")]
+const CLI_INSTALL_ACTION: &str = "cli.install";
 
 /// 메뉴에서 고른 웹뷰 액션을 포커스된 창에 보내는 이벤트. `src/keymap/native.ts` 의 `MENU_ACTION_EVENT`.
 pub const MENU_ACTION_EVENT: &str = "keymap://run-action";
@@ -122,10 +126,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         true,
         Some("CmdOrCtrl+Shift+KeyA"),
     )?;
-    let new_project = MenuItem::with_id(
+    let welcome = MenuItem::with_id(app, WELCOME_WINDOW, "Welcome Window", true, None::<&str>)?;
+    #[cfg(target_os = "macos")]
+    let cli_install = MenuItem::with_id(
         app,
-        NEW_PROJECT_WINDOW,
-        "New Project Window",
+        CLI_INSTALL_ACTION,
+        "Install Shell Command",
         true,
         None::<&str>,
     )?;
@@ -139,6 +145,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::about(app, None, None)?,
             &PredefinedMenuItem::separator(app)?,
             &settings,
+            &cli_install,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::services(app, None)?,
             &PredefinedMenuItem::separator(app)?,
@@ -156,7 +163,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         "File",
         true,
         &[
-            &new_project,
+            &welcome,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, None)?,
         ],
@@ -168,7 +175,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         "File",
         true,
         &[
-            &new_project,
+            &welcome,
             &settings,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, None)?,
@@ -225,11 +232,15 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let settings_parent = app_menu.clone();
     #[cfg(not(target_os = "macos"))]
     let settings_parent = file_menu.clone();
+    #[allow(unused_mut)]
+    let mut entries = vec![
+        (settings_parent.clone(), settings),
+        (help_menu.clone(), find_action),
+    ];
+    #[cfg(target_os = "macos")]
+    entries.push((settings_parent, cli_install));
     app.manage(KeymapMenuItems {
-        entries: Mutex::new(vec![
-            (settings_parent, settings),
-            (help_menu.clone(), find_action),
-        ]),
+        entries: Mutex::new(entries),
     });
 
     let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
@@ -241,9 +252,14 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
 pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let result = match event.id().as_ref() {
-        NEW_PROJECT_WINDOW => windows::open_project(app)
+        WELCOME_WINDOW => windows::open_welcome(app)
             .map(drop)
             .map_err(|e| e.to_string()),
+        #[cfg(target_os = "macos")]
+        CLI_INSTALL_ACTION => run_in_focused_window(app, CLI_INSTALL_ACTION).or_else(|_| {
+            crate::shell_command::install_in_background(app);
+            Ok(())
+        }),
         SETTINGS_ACTION => run_in_focused_window(app, SETTINGS_ACTION).or_else(|_| {
             windows::open_settings(app)
                 .map(drop)

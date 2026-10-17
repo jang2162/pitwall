@@ -159,7 +159,10 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             rpc_send,
             rpc_disconnect,
             crate::menu::keymap_sync_menu,
-            crate::windows::open_settings_window
+            crate::windows::open_settings_window,
+            crate::launch::open_project_window,
+            crate::launch::take_pending_find_project,
+            crate::shell_command::install_shell_command
         ])
         .on_window_event(on_window_event)
         .on_page_load(|webview, payload| on_page_load(webview, payload.event()))

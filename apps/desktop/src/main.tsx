@@ -16,12 +16,25 @@ import { applyRegistryTheme } from "./theme/registry-theme";
 import { createThemeStore } from "./theme/theme-store";
 import { ThemeStoreProvider } from "./theme/theme-switcher";
 import { parseTheme } from "./theme/tokens";
+import { describeOpen, listenProjectOpen, parseProjectQuery } from "./project-open";
 import { installUiLog } from "./ui-log";
 import { detectPlatform, installWebviewGuards } from "./webview-guards";
 import { parseWindowKind } from "./window-kind";
 
 const log = installUiLog(window);
-log.info(`window opened: ${parseWindowKind(window.location.search)}`, "main");
+const windowKind = parseWindowKind(window.location.search);
+log.info(`window opened: ${windowKind}`, "main");
+// 프로젝트 창이 받은 열기 요청(src-tauri/src/launch.rs). 받을 에디터가 생기면 그쪽으로 넘긴다.
+if (windowKind === "project") {
+  const { projectId, open } = parseProjectQuery(window.location.search);
+  log.info(
+    `project window: ${projectId ?? "(none)"}${describeOpen(open) ? `, ${describeOpen(open)}` : ""}`,
+    "project",
+  );
+  listenProjectOpen((request) =>
+    log.info(`open request: ${describeOpen(request) ?? "(focus only)"}`, "project"),
+  );
+}
 const platform = detectPlatform(navigator.userAgent);
 installWebviewGuards(window, platform);
 document.documentElement.dataset.platform = platform.mac ? "mac" : "other";
@@ -58,7 +71,7 @@ if (!root) throw new Error("#root 가 index.html 에 없다");
 createRoot(root).render(
   <StrictMode>
     <ThemeStoreProvider store={themeStore}>
-      <App kind={parseWindowKind(window.location.search)} log={log} />
+      <App kind={windowKind} log={log} />
     </ThemeStoreProvider>
   </StrictMode>,
 );

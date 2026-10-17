@@ -50,7 +50,13 @@ function AppActions({ native }: { native: KeymapNative }) {
   const { openFindAction } = useKeymap();
   const setTheme = useTheme((s) => s.setPreference);
   const actions = useMemo(
-    () => appActions({ openFindAction, openSettings: native.openSettings, setTheme }),
+    () =>
+      appActions({
+        openFindAction,
+        openSettings: native.openSettings,
+        setTheme,
+        installShellCommand: native.installShellCommand,
+      }),
     [openFindAction, native, setTheme],
   );
   useRegisterActions(actions);

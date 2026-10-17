@@ -11,7 +11,10 @@ export function appActions(deps: {
   openFindAction(): void;
   openSettings(): Promise<void>;
   setTheme(preference: ThemePreference): void;
+  /** 없으면(macOS 가 아니면) 액션을 등록하지 않는다. */
+  installShellCommand?: () => Promise<void>;
 }): Action[] {
+  const { installShellCommand } = deps;
   return [
     {
       id: "action.find",
@@ -25,6 +28,20 @@ export function appActions(deps: {
       keywords: ["Settings", "Preferences"],
       run: deps.openSettings,
     },
+    ...(installShellCommand
+      ? [
+          {
+            id: "cli.install",
+            label: "Shell 명령 설치",
+            keywords: ["Install Shell Command", "Create Command-line Launcher", "pitwall", "PATH"],
+            // 실패 · 취소는 네이티브가 대화상자 · 로그로 알린다.
+            run: () =>
+              installShellCommand().catch((e: unknown) =>
+                console.info("[cli] shell command not installed", e),
+              ),
+          } satisfies Action,
+        ]
+      : []),
     ...(
       [
         ["light", "라이트"],

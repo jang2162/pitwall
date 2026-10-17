@@ -8,10 +8,14 @@ use pw_core::{HostRouter, LocalHost, Scope};
 use pw_diag::Diagnostics;
 use pw_ext::{LoadOptions, Registry};
 
+mod cli;
 mod config_log;
 mod diag;
+mod instance;
 mod ipc;
+mod launch;
 mod menu;
+mod shell_command;
 mod windows;
 
 /// 데스크톱 프로세스 안의 Host 의 id. 프론트엔드가 프로젝트 없이 연결할 때 이 id 로 고른다(src/host-demo.tsx).
@@ -41,7 +45,31 @@ fn load_extensions(paths: &AppPaths) -> Arc<Registry> {
     )))
 }
 
+/// `pitwall mcp`(M0-17). 앱을 띄우지 않고 단일 인스턴스로 전달하지도 않는다. stdout 은 MCP 의 stdio 가 쓰므로 비워 둔다.
+fn run_mcp() -> ! {
+    eprintln!("pitwall mcp: not implemented yet");
+    std::process::exit(2);
+}
+
+/// 단일 인스턴스 키(instance.rs). debug 빌드만 빌드 폴더와 `$DATA` 로 가른다.
+fn instance_identifier(base: &str, paths: &AppPaths) -> String {
+    if !cfg!(debug_assertions) {
+        return instance::identifier(base, None);
+    }
+    // 아직 없는 `$DATA` 도 나중에 만들어진 뒤와 같은 값이 나오게 레지스트리와 같은 정규화를 쓴다.
+    let data =
+        pw_core::registry::path::normalize(&paths.data).unwrap_or_else(|_| paths.data.clone());
+    instance::identifier(
+        base,
+        Some((std::path::Path::new(env!("CARGO_MANIFEST_DIR")), &data)),
+    )
+}
+
 fn main() {
+    // 서브커맨드는 무엇보다 먼저 가른다 — 로그 · 확장 · Host 를 만들지 않고, 단일 인스턴스 플러그인에도 닿지 않는다.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "mcp") {
+        run_mcp();
+    }
     // 경로 해석이 로깅보다 먼저다(로그 폴더가 `$STATE/logs`). 그래서 이 실패는 stderr 에만 남는다.
     let paths = match AppPaths::from_env() {
         Ok(paths) => paths,
@@ -53,7 +81,11 @@ fn main() {
     };
     let diagnostics = diag::init(&paths);
     let extensions = load_extensions(&paths);
-    let host = Arc::new(local_host(paths, Arc::clone(&diagnostics), extensions));
+    let host = Arc::new(local_host(
+        paths.clone(),
+        Arc::clone(&diagnostics),
+        extensions,
+    ));
     // 「활성 기능」은 지금 Host 가 처리하는 메서드의 모듈 이름이다. 확장 · 설정 기능이 들어오면 그것으로 바꾼다.
     diagnostics.set_features(
         host.router()
@@ -76,8 +108,21 @@ fn main() {
         .add_host(host.clone())
         .expect("빈 라우터에 Host 를 처음 등록한다");
 
+    let mut context = tauri::generate_context!();
+    let identifier = instance_identifier(&context.config().identifier, &paths);
+    tracing::info!(%identifier, "single-instance key");
+    context.config_mut().identifier = identifier;
+
+    // 단일 인스턴스 플러그인은 가장 먼저 등록한다 — 두 번째 실행은 이 플러그인의 setup 에서 인자와 cwd 를 기존 앱에 넘기고
+    // 종료하므로 그 뒤의 플러그인 · setup 이 돌지 않는다.
     ipc::install(tauri::Builder::default(), router)
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            launch::dispatch(app, argv, cwd)
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .manage(launch::Launch::new(registry.clone()))
         .manage(diagnostics)
         .menu(menu::build)
         .on_menu_event(menu::handle)
@@ -99,10 +144,12 @@ fn main() {
             if let Err(e) = host.watch_config(tauri::async_runtime::handle().inner()) {
                 tracing::warn!(%e, "config watch disabled");
             }
-            windows::open_welcome(app.handle())?;
+            // 첫 실행의 인자도 두 번째 실행과 같은 길로 연다(launch.rs 머리 주석).
+            let (argv, cwd) = launch::invocation_from_env();
+            launch::dispatch(app.handle(), argv, cwd);
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("Tauri 앱을 시작하지 못했다");
 }
 

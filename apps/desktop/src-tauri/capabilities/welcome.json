@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "welcome",
+  "description": "웰컴 창(M0-12)만 쓰는 권한: S1 「폴더 열기」 의 폴더 선택 대화상자(dialog open), 목록 항목의 「Finder 에서 보기」(opener reveal). 모든 창에 공통인 권한은 default.json 에 있다.",
+  "windows": ["welcome"],
+  "permissions": ["dialog:allow-open", "opener:allow-reveal-item-in-dir"]
+}

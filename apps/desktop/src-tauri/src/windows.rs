@@ -1,6 +1,8 @@
-use std::sync::atomic::{AtomicU32, Ordering};
-
-use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use serde::Serialize;
+use tauri::{
+    AppHandle, Emitter, EventTarget, Manager, Runtime, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 
 /// 창 종류. 프론트엔드는 하나의 엔트리에서 `?window=` 쿼리로 종류를 받는다(src/window-kind.ts).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,7 +22,19 @@ impl WindowKind {
     }
 
     pub fn url(self) -> WebviewUrl {
-        WebviewUrl::App(format!("index.html?window={}", self.query_value()).into())
+        self.url_with(&[])
+    }
+
+    /// `?window=` 뒤에 쿼리 인자를 더 붙인 주소. 값은 퍼센트 인코딩한다(프론트엔드는 `URLSearchParams` 로 읽는다).
+    pub fn url_with(self, params: &[(&str, &str)]) -> WebviewUrl {
+        let mut url = format!("index.html?window={}", self.query_value());
+        for (key, value) in params {
+            url.push('&');
+            url.push_str(key);
+            url.push('=');
+            url.push_str(&encode_query_value(value));
+        }
+        WebviewUrl::App(url.into())
     }
 
     fn title(self) -> &'static str {
@@ -40,16 +54,64 @@ impl WindowKind {
     }
 }
 
+/// RFC 3986 의 unreserved 문자만 그대로 두고 나머지 바이트는 `%XX` 로. 공백도 `+` 가 아니라 `%20` 이다
+/// (`URLSearchParams` 는 `+` 를 공백으로 읽으므로 `+` 자체도 인코딩해야 한다).
+fn encode_query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 pub const WELCOME_LABEL: &str = "welcome";
 pub const SETTINGS_LABEL: &str = "settings";
 
-static NEXT_PROJECT_ID: AtomicU32 = AtomicU32::new(1);
+/// 이미 열린 프로젝트 창에 [`ProjectOpen`] 을 보내는 이벤트. 새로 만드는 창은 같은 값을 쿼리로 받는다
+/// (`src/project-open.ts`).
+pub const PROJECT_OPEN_EVENT: &str = "project://open";
 
-fn next_project_label() -> String {
-    format!(
-        "project-{}",
-        NEXT_PROJECT_ID.fetch_add(1, Ordering::Relaxed)
-    )
+/// 프로젝트 창에서 열 것. 모두 비면 창만 앞으로 가져온다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectOpen {
+    /// 활성 워크트리의 꼭대기(`ActiveWorktree::top`). 등록 안 된 워크트리 경로로 왔을 때(F2-5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
+    /// 열 파일의 절대 경로. 받는 에디터가 아직 없어 창은 로그만 남긴다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub col: Option<u32>,
+}
+
+impl ProjectOpen {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn query(&self) -> Vec<(&'static str, String)> {
+        [
+            ("worktree", self.worktree.clone()),
+            ("file", self.file.clone()),
+            ("line", self.line.map(|n| n.to_string())),
+            ("col", self.col.map(|n| n.to_string())),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|v| (key, v)))
+        .collect()
+    }
+}
+
+/// 프로젝트 창의 label. 프로젝트마다 창이 하나라(03-architecture §3) label 이 곧 「그 프로젝트의 창」이다.
+pub fn project_label(project_id: &str) -> String {
+    format!("project-{project_id}")
 }
 
 // 아래 open_* 를 Tauri command 에서 부를 때는 async command 로 만든다. Windows 에서 동기 command·이벤트 핸들러
@@ -70,9 +132,45 @@ pub async fn open_settings_window<R: Runtime>(app: AppHandle<R>) -> Result<(), S
     open_settings(&app).map(drop).map_err(|e| e.to_string())
 }
 
-/// 프로젝트 모델이 아직 없으므로(M0-09·M0-12) 부를 때마다 빈 프로젝트 창을 하나 더 연다.
-pub fn open_project<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
-    build(app, WindowKind::Project, &next_project_label())
+/// 프로젝트 창을 연다. 그 프로젝트의 창이 이미 있으면 앞으로 가져오고 `open` 을 이벤트로 보낸다. 없으면
+/// `?window=project&project=<id>` 와 `open` 을 쿼리로 실은 창을 만든다. 프로젝트가 레지스트리에 있는지는 부르는 쪽이 본다
+/// (`launch::open_project`).
+pub fn open_project<R: Runtime>(
+    app: &AppHandle<R>,
+    project_id: &str,
+    open: &ProjectOpen,
+) -> tauri::Result<WebviewWindow<R>> {
+    let label = project_label(project_id);
+    if let Some(window) = focus(app, &label)? {
+        if !open.is_empty() {
+            app.emit_to(
+                EventTarget::webview_window(&label),
+                PROJECT_OPEN_EVENT,
+                open,
+            )?;
+        }
+        return Ok(window);
+    }
+    let query = open.query();
+    let mut params = vec![("project", project_id)];
+    params.extend(query.iter().map(|(key, value)| (*key, value.as_str())));
+    build_at(
+        app,
+        WindowKind::Project,
+        &label,
+        WindowKind::Project.url_with(&params),
+    )
+}
+
+/// 그 label 의 창이 있으면 앞으로 가져와 돌려준다.
+fn focus<R: Runtime>(app: &AppHandle<R>, label: &str) -> tauri::Result<Option<WebviewWindow<R>>> {
+    let Some(window) = app.get_webview_window(label) else {
+        return Ok(None);
+    };
+    window.unminimize()?;
+    window.show()?;
+    window.set_focus()?;
+    Ok(Some(window))
 }
 
 fn open_single<R: Runtime>(
@@ -80,22 +178,20 @@ fn open_single<R: Runtime>(
     kind: WindowKind,
     label: &str,
 ) -> tauri::Result<WebviewWindow<R>> {
-    if let Some(window) = app.get_webview_window(label) {
-        window.unminimize()?;
-        window.show()?;
-        window.set_focus()?;
+    if let Some(window) = focus(app, label)? {
         return Ok(window);
     }
-    build(app, kind, label)
+    build_at(app, kind, label, kind.url())
 }
 
-fn build<R: Runtime>(
+fn build_at<R: Runtime>(
     app: &AppHandle<R>,
     kind: WindowKind,
     label: &str,
+    url: WebviewUrl,
 ) -> tauri::Result<WebviewWindow<R>> {
     let (width, height) = kind.inner_size();
-    let builder = WebviewWindowBuilder::new(app, label, kind.url())
+    let builder = WebviewWindowBuilder::new(app, label, url)
         .title(kind.title())
         .inner_size(width, height)
         // 웹뷰 설정으로 끌 수 있는 기본 동작은 여기서 끈다. 설정이 없는 것은 src/webview-guards.ts 가 막는다.
@@ -164,11 +260,85 @@ mod tests {
     }
 
     #[test]
-    fn every_project_window_request_opens_a_new_window() {
+    fn query_values_are_percent_encoded() {
+        match WindowKind::Project.url_with(&[("project", "ab12"), ("file", "/a b/c+d&e=f/한.rs")])
+        {
+            WebviewUrl::App(path) => assert_eq!(
+                path.to_str(),
+                Some(
+                    "index.html?window=project&project=ab12\
+                     &file=%2Fa%20b%2Fc%2Bd%26e%3Df%2F%ED%95%9C.rs"
+                )
+            ),
+            other => panic!("앱 내부 URL 이어야 한다: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_project_window_is_opened_once_per_project() {
         let app = tauri::test::mock_app();
-        let first = open_project(app.handle()).unwrap();
-        let second = open_project(app.handle()).unwrap();
-        assert_ne!(first.label(), second.label());
-        assert_eq!(app.webview_windows().len(), 2);
+        let first = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        let again = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        let other = open_project(app.handle(), "bbbb", &ProjectOpen::default()).unwrap();
+        assert_eq!(first.label(), "project-aaaa");
+        assert_eq!(again.label(), "project-aaaa");
+        assert_eq!(other.label(), "project-bbbb");
+        let mut labels = labels(app.handle());
+        labels.sort();
+        assert_eq!(labels, ["project-aaaa", "project-bbbb"]);
+    }
+
+    #[test]
+    fn a_new_project_window_gets_the_request_in_its_query() {
+        let app = tauri::test::mock_app();
+        let open = ProjectOpen {
+            worktree: Some("/wt".into()),
+            file: Some("/wt/a.rs".into()),
+            line: Some(3),
+            col: Some(4),
+        };
+        let window = open_project(app.handle(), "aaaa", &open).unwrap();
+        let url = window.url().unwrap();
+        let query: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+        assert_eq!(
+            query,
+            [
+                ("window", "project"),
+                ("project", "aaaa"),
+                ("worktree", "/wt"),
+                ("file", "/wt/a.rs"),
+                ("line", "3"),
+                ("col", "4"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        );
+    }
+
+    #[test]
+    fn an_open_project_window_gets_the_request_as_an_event() {
+        use std::sync::{Arc, Mutex};
+
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        let window = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        let received = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = Arc::clone(&received);
+        window.listen(PROJECT_OPEN_EVENT, move |event| {
+            sink.lock().unwrap().push(event.payload().to_owned())
+        });
+        // 빈 요청은 창만 앞으로 가져온다.
+        open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        let open = ProjectOpen {
+            file: Some("/r/a.rs".into()),
+            line: Some(7),
+            ..ProjectOpen::default()
+        };
+        open_project(app.handle(), "aaaa", &open).unwrap();
+        assert_eq!(
+            *received.lock().unwrap(),
+            [r#"{"file":"/r/a.rs","line":7}"#]
+        );
+        assert_eq!(labels(app.handle()), ["project-aaaa"]);
     }
 }
