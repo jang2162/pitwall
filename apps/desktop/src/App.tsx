@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { useAppStrings } from "./i18n/app-strings";
 import { I18nProvider, useI18n } from "./i18n/i18n-provider";
+import { selectedLanguage } from "./i18n/localization";
 
 import { appActions } from "./keymap/actions";
 import {
@@ -54,14 +55,14 @@ function SettingsWindow() {
 /** UI 언어(settings.toml 의 `ui.language`). 고르면 `i18n.setLanguage` 가 그 키만 고쳐 쓰고, 바뀐 언어는 `config.changed` 로 온다. */
 function LanguageSelect() {
   const T = useAppStrings().settings;
-  const { setting, languages, setLanguage } = useI18n();
+  const { setting, locales, languages, setLanguage } = useI18n();
   const [error, setError] = useState<string>();
   return (
     <div className="mt-2 flex items-center gap-3">
       <label className="flex items-center gap-3">
         <span>{T.language}</span>
         <select
-          value={setting ?? "system"}
+          value={selectedLanguage(setting ?? "system", locales)}
           disabled={setting === undefined}
           onChange={(e) => {
             setError(undefined);

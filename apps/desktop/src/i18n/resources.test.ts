@@ -10,7 +10,13 @@ import { describe, expect, it } from "vitest";
 
 import { welcomeStrings } from "../welcome/strings";
 import { appStrings } from "./app-strings";
-import { BUNDLED_LOCALES, BUNDLED_RESOURCES, initialLocales, type Translate } from "./localization";
+import {
+  BUNDLED_LOCALES,
+  BUNDLED_RESOURCES,
+  initialLocales,
+  selectedLanguage,
+  type Translate,
+} from "./localization";
 
 const LOCALES = ["en", "ko"];
 
@@ -102,5 +108,14 @@ describe("initialLocales", () => {
     expect(initialLocales(undefined, ["ko-KR", "en-US"])).toEqual(["ko", "en"]);
     expect(initialLocales(["fr", "en"], ["ja-JP"])).toEqual(["en"]);
     expect(initialLocales(undefined, [])).toEqual(["en"]);
+  });
+});
+
+describe("selectedLanguage", () => {
+  it("shows the language in use when the setting names it differently", () => {
+    expect(selectedLanguage("system", ["ko", "en"])).toBe("system");
+    expect(selectedLanguage("ko", ["ko", "en"])).toBe("ko");
+    expect(selectedLanguage("ko-KR", ["ko", "en"])).toBe("ko");
+    expect(selectedLanguage("ja", ["en"])).toBe("en");
   });
 });

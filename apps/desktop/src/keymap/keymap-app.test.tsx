@@ -29,6 +29,8 @@ const host = vi.hoisted(() => ({
   error: null as ConfigView["error"],
   emitHostEvent: (_topic: string) => {},
   hostSubscriptions: [] as string[][],
+  /** `i18n.get` 이 돌려줄 설정 값(사람이 적은 그대로). 고른 언어는 언제나 한국어다. */
+  languageSetting: "ko",
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -47,7 +49,7 @@ vi.mock("../tauri-transport", async () => {
         switch (m.method) {
           // 화면 문자열을 한국어로 고정한다 — 액션 이름으로 찾는 시험이 브라우저 언어에 기대지 않게.
           case "i18n.get":
-            return reply(i18nState("ko"));
+            return reply(i18nState("ko", host.languageSetting));
           case "config.get":
             return reply({
               snapshot: {
@@ -136,6 +138,7 @@ beforeEach(() => {
   host.keymapGets = 0;
   host.error = null;
   host.hostSubscriptions = [];
+  host.languageSetting = "ko";
   localStorage.clear();
   native.syncMenu.mockClear();
   native.openSettings.mockClear();
@@ -419,4 +422,13 @@ it("asks the registry for the default keymap once, not on every focus", async ()
   await settle();
   expect(host.keymapGets).toBe(1);
   expect(log.warn).not.toHaveBeenCalled();
+});
+
+/** 설정 값이 등록 태그와 다르게 적혀 있어도(`ko-KR`) 설정 창의 언어 고르기는 실제로 쓰는 한국어를 보인다 — 「시스템」이 아니다. */
+it("shows the language in use in the settings window when the setting names it as ko-KR", async () => {
+  host.languageSetting = "ko-KR";
+  await mount("settings");
+  const select = document.querySelector<HTMLSelectElement>("main select")!;
+  expect(select.value).toBe("ko");
+  expect(select.selectedOptions[0]?.textContent).toBe("한국어");
 });

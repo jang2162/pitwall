@@ -79,6 +79,15 @@ export function initialLocales(
   return chosen === FALLBACK ? [FALLBACK] : [chosen, FALLBACK];
 }
 
+/**
+ * 언어 고르기(설정 창)에 보일 값. `"system"` 이면 그대로, 아니면 **실제로 쓰는 언어**(`locales[0]`)다 — 설정 값을 사람이
+ * `ko-KR` · `KO` 처럼 등록 태그와 다르게 적었거나 설치되지 않은 언어를 적었어도, 목록에 있는 값 중 화면에 쓰이는 언어를
+ * 보인다(목록에 없는 값이면 controlled select 가 첫 옵션 「시스템」을 보여 오해를 낳는다). 설정 값은 고쳐 쓰지 않는다.
+ */
+export function selectedLanguage(setting: string, locales: readonly string[]): string {
+  return setting === "system" ? "system" : (locales[0] ?? FALLBACK);
+}
+
 /** 메시지 하나를 만든다. 없는 메시지는 id 를 그대로 낸다(`ReactLocalization.getString`). */
 export type Translate = (id: string, vars?: Record<string, FluentVariable>) => string;
 
