@@ -11,8 +11,13 @@
 //! debug 바이너리에는 쓸 수 없다.
 //!
 //! 떼지 않는 것: 부모가 launchd(pid 1)면 — Finder · Dock · LaunchServices 로 뜬 실행 — 그 프로세스가 앱이다. 표식이 있는
-//! 자식도 그대로 앱이 된다. 개발 서버 아래(`mise run dev`, [`DEV_SERVER_ENV`] 가 있다)도 떼지 않는다 — `tauri dev` 는 자기가
-//! 띄운 프로세스가 끝나면 앱이 끝난 것으로 본다. Windows 는 떼지 않는다: release 는 GUI 서브시스템이라 cmd · PowerShell 이 기다리지 않고 콘솔에도
+//! 자식도 그대로 앱이 된다. debug 빌드의 개발 서버 아래(`mise run dev`, [`DEV_SERVER_ENV`] 가 있다)도 떼지 않는다 —
+//! `tauri dev` 는 자기가 띄운 프로세스가 끝나면 앱이 끝난 것으로 본다. release 는 그 변수를 보지 않는다([`under_dev_server`]).
+//!
+//! 다시 띄우지 못하면 오류를 stderr 에 내고 0 이 아닌 코드로 끝난다([`exit_after_respawn`]) — 소켓을 이미 내려놓았으므로 이
+//! 프로세스가 앱이 되면 이후의 `pitwall` 이 저마다 새 앱이 된다.
+//!
+//! 남은 틈: 부모가 먼저 끝나 고아가 된 호출(부모 pid 가 1)은 터미널 세션 안에 있어도 떼지 않는다. Windows 는 떼지 않는다: release 는 GUI 서브시스템이라 cmd · PowerShell 이 기다리지 않고 콘솔에도
 //! 붙지 않는다(debug 콘솔 빌드는 이월).
 
 /// 떼어 띄운 자식이라는 표식. 자식은 시작하자마자 지운다 — 앱이 띄우는 터미널 · 프로세스가 물려받으면 그 안의 `pitwall` 이
@@ -21,6 +26,25 @@ pub const MARKER_ENV: &str = "PITWALL_DETACHED";
 
 /// `apps/desktop/scripts/dev.mjs` 가 `tauri dev` 에 주는 개발 서버 포트.
 pub const DEV_SERVER_ENV: &str = "PITWALL_DEV_PORT";
+
+/// `mise run dev` 아래인가. `tauri dev` 는 debug 빌드만 띄우므로 release 에서는 변수가 있어도 거짓이다 — 앱이 띄운 터미널이
+/// 변수를 물려받아도 그 안의 release `pitwall` 은 뗀다.
+pub fn under_dev_server(release: bool, variable_set: bool) -> bool {
+    !release && variable_set
+}
+
+/// [`respawn`] 결과 → 이 프로세스의 종료 코드와 stderr 에 낼 문장.
+pub fn exit_after_respawn(result: &std::io::Result<u32>) -> (i32, Option<String>) {
+    match result {
+        Ok(_) => (0, None),
+        Err(e) => (
+            1,
+            Some(format!(
+                "pitwall: cannot start the app in the background: {e}"
+            )),
+        ),
+    }
+}
 
 /// 떼어 띄울지. `parent` 는 부모 pid(모르면 `None` — 떼지 않는다), `marked` 는 [`MARKER_ENV`] 가 있었는지,
 /// `dev_server` 는 [`DEV_SERVER_ENV`] 가 있는지.
@@ -98,6 +122,27 @@ mod tests {
     #[test]
     fn the_app_under_tauri_dev_stays_its_child() {
         assert!(!should_detach(Some(4242), false, true));
+    }
+
+    #[test]
+    fn only_debug_builds_listen_to_the_dev_server_variable() {
+        assert!(under_dev_server(false, true));
+        assert!(!under_dev_server(false, false));
+        assert!(
+            !under_dev_server(true, true),
+            "release 는 변수를 보지 않는다"
+        );
+    }
+
+    #[test]
+    fn a_failed_respawn_exits_with_an_error_instead_of_becoming_the_app() {
+        assert_eq!(exit_after_respawn(&Ok(4242)), (0, None));
+        let failed = exit_after_respawn(&Err(std::io::Error::other("no fork")));
+        assert_eq!(failed.0, 1);
+        assert_eq!(
+            failed.1.as_deref(),
+            Some("pitwall: cannot start the app in the background: no fork")
+        );
     }
 
     #[test]

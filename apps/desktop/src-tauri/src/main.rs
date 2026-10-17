@@ -70,19 +70,20 @@ fn instance_identifier(base: &str, paths: &AppPaths, release: bool) -> String {
 }
 
 /// 앱을 떼어 띄우고 이 프로세스는 끝낸다(detach.rs). 단일 인스턴스 소켓을 먼저 내려놓는다 — 자식이 아직 살아 있는 이
-/// 프로세스를 「기존 앱」으로 보고 인자를 넘긴 뒤 끝나 버리지 않게. 띄우지 못하면 이 프로세스가 앱이 된다(그때는 소켓을 이미
-/// 내려놓아 다음 실행이 기존 앱을 찾지 못한다 — 로그에 남긴다).
-fn detach_and_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+/// 프로세스를 「기존 앱」으로 보고 인자를 넘긴 뒤 끝나 버리지 않게. 띄우지 못하면 오류를 내고 0 이 아닌 코드로 끝난다
+/// (소켓을 이미 내려놓았으므로 이 프로세스가 앱이 되면 안 된다).
+fn detach_and_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> ! {
     tauri_plugin_single_instance::destroy(app);
-    match detach::respawn() {
-        Ok(child) => {
-            tracing::info!(child, "detached the app from the launching process");
-            std::process::exit(0);
-        }
-        Err(e) => {
-            tracing::warn!(%e, "cannot detach; running in the launching process without single-instance forwarding")
-        }
+    let result = detach::respawn();
+    match &result {
+        Ok(child) => tracing::info!(child, "detached the app from the launching process"),
+        Err(e) => tracing::error!(%e, "cannot detach the app from the launching process"),
     }
+    let (code, message) = detach::exit_after_respawn(&result);
+    if let Some(message) = message {
+        eprintln!("{message}");
+    }
+    std::process::exit(code);
 }
 
 /// 주 인스턴스가 된 앱의 시작(setup 본체). 첫 실행의 인자도 두 번째 실행과 같은 [`launch::dispatch`] 로 연다.
@@ -182,7 +183,10 @@ fn main() {
             if detach::should_detach(
                 detach::parent_pid(),
                 detached,
-                std::env::var_os(detach::DEV_SERVER_ENV).is_some(),
+                detach::under_dev_server(
+                    RELEASE,
+                    std::env::var_os(detach::DEV_SERVER_ENV).is_some(),
+                ),
             ) {
                 detach_and_exit(app.handle());
             }
