@@ -12,8 +12,8 @@
 //! - 바꿔 끼우기: 두 경로 모두 같은 폴더의 임시 링크를 `rename`(권한 상승 경로는 `mv -fh`)으로 옮긴다 — 바꾸는 동안
 //!   `pitwall` 이 없는 순간이 없다. 비링크 검사와 바꿔 끼우기 사이는 원자가 아니다(그 틈에 생긴 파일은 덮인다). 틈은 검사 직후
 //!   한 번의 `symlink` 호출 길이다.
-//! - 출처: 실행 중인 바이너리가 디스크 이미지(`/Volumes/…`)나 App Translocation 아래면 거절한다 — 언마운트 · 재시작 뒤 링크가
-//!   끊긴다. Applications 로 옮긴 뒤 다시 하라고 알린다.
+//! - 출처: 실행 중인 바이너리가 읽기 전용 볼륨(`/Volumes/…`, 배포 DMG)이나 App Translocation 아래면 거절한다 — 꺼내기 ·
+//!   재시작 뒤 링크가 끊긴다. Applications 로 옮긴 뒤 다시 하라고 알린다. 쓰기 가능한 디스크 이미지는 놓친다([`check_source`]).
 
 use std::fs;
 use std::io::ErrorKind;
@@ -70,18 +70,44 @@ fn failed(what: &str, path: &Path, e: std::io::Error) -> InstallError {
     InstallError::Failed(format!("{what} {}: {e}", path.display()))
 }
 
-/// 링크가 가리켜도 되는 출처인가. 디스크 이미지(`/Volumes/…`)와 App Translocation(격리 속성이 붙은 채 다운로드 폴더에서 연
-/// 앱을 macOS 가 읽기 전용 임시 위치에서 돌린다)은 언마운트 · 재시작 뒤 사라진다.
-pub fn check_source(source: &Path) -> Result<(), InstallError> {
-    let transient = source.starts_with("/Volumes")
-        || source
-            .components()
-            .any(|c| c.as_os_str() == "AppTranslocation");
-    if transient {
+/// 링크가 가리켜도 되는 출처인가. 거절하는 것:
+/// - App Translocation(격리 속성이 붙은 채 다운로드 폴더에서 연 앱을 macOS 가 읽기 전용 임시 위치에서 돌린다) — 재시작 뒤 사라진다.
+/// - `/Volumes/…` 의 **읽기 전용** 볼륨 — 배포 DMG 처럼 꺼내면 사라진다. 외장 디스크에 영구 설치한 앱(쓰기 가능)은 받는다.
+///   쓰기 가능한 디스크 이미지(UDRW 등)에서 돌리면 놓친다 — 드물고, 그때는 꺼낸 뒤 링크가 끊긴다.
+///
+/// `read_only` 는 경로가 있는 볼륨이 읽기 전용인지([`read_only_volume`], 시험은 가짜를 넣는다).
+pub fn check_source(source: &Path, read_only: impl Fn(&Path) -> bool) -> Result<(), InstallError> {
+    let translocated = source
+        .components()
+        .any(|c| c.as_os_str() == "AppTranslocation");
+    let disk_image = source.starts_with("/Volumes") && read_only(source);
+    if translocated || disk_image {
         Err(InstallError::TransientSource(source.to_path_buf()))
     } else {
         Ok(())
     }
+}
+
+/// `path` 가 있는 볼륨이 읽기 전용으로 마운트됐는가(`statfs` 의 `MNT_RDONLY`). 알 수 없으면 거짓.
+#[cfg(target_os = "macos")]
+pub fn read_only_volume(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut buf = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: `c_path` 는 NUL 로 끝나는 경로이고 `buf` 는 statfs 하나를 담을 쓰기 가능한 공간이다. 성공(0)일 때만 읽는다.
+    if unsafe { libc::statfs(c_path.as_ptr(), buf.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    let flags = unsafe { buf.assume_init() }.f_flags;
+    flags & libc::MNT_RDONLY as u32 != 0
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn read_only_volume(_path: &Path) -> bool {
+    false
 }
 
 /// `target` 에 `source` 를 가리키는 심링크를 둔다. 권한이 없으면 `elevate(source, target)` 로 다시 한다.
@@ -244,7 +270,7 @@ fn install_current_exe() -> Result<(PathBuf, Installed), InstallError> {
     let source = std::env::current_exe()
         .and_then(fs::canonicalize)
         .map_err(|e| InstallError::Failed(format!("cannot locate the app binary: {e}")))?;
-    check_source(&source)?;
+    check_source(&source, read_only_volume)?;
     let installed = install(&source, &target, elevate_with_osascript)?;
     tracing::info!(source = %source.display(), target = %target.display(), ?installed, "shell command installed");
     Ok((target, installed))
@@ -450,23 +476,47 @@ mod tests {
     }
 
     #[test]
-    fn a_disk_image_or_translocated_app_is_refused() {
-        for transient in [
-            "/Volumes/Pitwall/Pitwall.app/Contents/MacOS/pitwall",
-            "/private/var/folders/x/T/AppTranslocation/1234/d/Pitwall.app/Contents/MacOS/pitwall",
-        ] {
-            assert_eq!(
-                check_source(Path::new(transient)),
-                Err(InstallError::TransientSource(transient.into()))
-            );
-        }
+    fn a_read_only_volume_or_translocated_app_is_refused() {
+        let dmg = "/Volumes/Pitwall/Pitwall.app/Contents/MacOS/pitwall";
+        assert_eq!(
+            check_source(Path::new(dmg), |_| true),
+            Err(InstallError::TransientSource(dmg.into()))
+        );
+        let translocated =
+            "/private/var/folders/x/T/AppTranslocation/1234/d/Pitwall.app/Contents/MacOS/pitwall";
+        assert_eq!(
+            check_source(Path::new(translocated), |_| false),
+            Err(InstallError::TransientSource(translocated.into())),
+            "읽기 전용 여부와 상관없이 거절"
+        );
+    }
+
+    #[test]
+    fn a_writable_external_volume_and_ordinary_places_are_accepted() {
+        assert_eq!(
+            check_source(
+                Path::new("/Volumes/External/Applications/Pitwall.app/Contents/MacOS/pitwall"),
+                |_| false
+            ),
+            Ok(())
+        );
         for kept in [
             "/Applications/Pitwall.app/Contents/MacOS/pitwall",
             "/Users/me/code/pitwall/target/debug/pitwall",
             "/VolumesX/pitwall",
         ] {
-            assert_eq!(check_source(Path::new(kept)), Ok(()));
+            assert_eq!(check_source(Path::new(kept), |_| true), Ok(()), "{kept}");
         }
+    }
+
+    /// 실제 statfs: macOS 의 시스템 볼륨(`/`)은 읽기 전용으로 마운트되고 임시 폴더는 쓸 수 있다.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn statfs_reports_read_only_volumes() {
+        assert!(read_only_volume(Path::new("/")));
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!read_only_volume(tmp.path()));
+        assert!(!read_only_volume(Path::new("/no/such/path")));
     }
 
     /// 경로에 셸 · AppleScript 가 특별히 보는 글자를 넣는다. 명령으로 해석되면 `PWNED` 가 생긴다.
