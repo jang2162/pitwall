@@ -1,0 +1,478 @@
+// @vitest-environment happy-dom
+// 웰컴 창(App kind="welcome")을 가짜 Host · 가짜 네이티브(native.ts)에 붙여 S1 → S2 → S3 흐름을 키 · 클릭으로 돌린다.
+// 프로젝트 창 열기 · 보류 요청은 M0-10 이 만드는 Tauri 명령이라 여기서는 네이티브 어댑터를 가짜로 바꿔 부른 인자만 본다.
+
+import type {
+  ConfigView,
+  CreateProjectParams,
+  HostInfo,
+  KeymapFile,
+  Project,
+  Resolution,
+  RootCandidate,
+  StorageStatus,
+} from "@pitwall/rpc-client";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
+import { App } from "../App";
+import type { KeymapNative } from "../keymap/native";
+import { createThemeStore } from "../theme/theme-store";
+import { ThemeStoreProvider } from "../theme/theme-switcher";
+import { parseTheme } from "../theme/tokens";
+import type { DragDropEvent, FindProjectRequest, WelcomeNative } from "./native";
+
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean;
+}
+
+const host = vi.hoisted(() => ({
+  projects: [] as Project[],
+  storage: { kind: "ok", path: "/d/state.db" } as StorageStatus,
+  candidates: [] as RootCandidate[],
+  resolve: (_path: string): Resolution | null => null,
+  calls: [] as { method: string; params: unknown }[],
+  emitHostEvent: (_topic: string) => {},
+}));
+
+vi.mock("../tauri-transport", async () => {
+  const { createMemoryTransportPair: pair } = await import("@pitwall/rpc-client");
+  const { DEFAULT_KEYMAP_TOML } = await import("../keymap/default-keymap");
+  return {
+    connectHost: async () => {
+      const [client, server] = pair();
+      const subs = new Map<number, { projectId?: string; topics: string[] }>();
+      let next = 1;
+      const send = (m: object) => server.send(JSON.stringify({ jsonrpc: "2.0", ...m }));
+      server.onMessage((text) => {
+        const m = JSON.parse(text) as { id?: number; method: string; params: never };
+        const reply = (result: unknown) => send({ id: m.id, result });
+        const fail = (message: string) => send({ id: m.id, error: { code: -32602, message } });
+        host.calls.push({ method: m.method, params: m.params });
+        switch (m.method) {
+          case "config.get":
+            return reply({
+              snapshot: { files: [], notices: [] },
+              error: null,
+            } satisfies ConfigView);
+          case "keymap.get":
+            return reply({
+              id: "pitwall-default",
+              extension: "dev.pitwall.keymap-default",
+              kind: "base",
+              content: DEFAULT_KEYMAP_TOML,
+            } satisfies KeymapFile);
+          case "host.info":
+            return reply({
+              hostId: "local",
+              kind: "local",
+              version: "0",
+              os: "t",
+              arch: "t",
+            } satisfies HostInfo);
+          case "events.subscribe": {
+            const id = next++;
+            subs.set(id, m.params);
+            return reply({ subscriptionId: id });
+          }
+          case "events.unsubscribe":
+            return reply(null);
+          case "project.list":
+            return reply([...host.projects].sort((a, b) => a.name.localeCompare(b.name)));
+          case "project.storage":
+            return reply(host.storage);
+          case "project.candidates":
+            return reply(host.candidates);
+          case "project.resolve":
+            return reply(host.resolve((m.params as { path: string }).path));
+          case "project.delete": {
+            const { id } = m.params as { id: string };
+            host.projects = host.projects.filter((p) => p.id !== id);
+            return reply(null);
+          }
+          case "project.create": {
+            const p = m.params as CreateProjectParams;
+            if (host.projects.some((x) => x.roots[0] === p.root))
+              return fail("already a project root");
+            const created = project(`n${host.projects.length}`, p.name ?? "?", p.root);
+            host.projects.push(created);
+            return reply(created);
+          }
+        }
+      });
+      host.emitHostEvent = (topic) => {
+        for (const [subscriptionId, s] of subs) {
+          if (s.projectId !== undefined || !s.topics.includes(topic)) continue;
+          send({
+            method: "events.event",
+            params: { subscriptionId, projectId: null, topic, payload: {} },
+          });
+        }
+      };
+      return { transport: client, close: async () => {} };
+    },
+  };
+});
+
+function project(id: string, name: string, root: string, extra: Partial<Project> = {}): Project {
+  return {
+    id,
+    name,
+    host: "local",
+    roots: [root],
+    favorite: false,
+    tags: [],
+    configMode: "repository",
+    slug: name,
+    createdAt: 1,
+    openedAt: null,
+    ...extra,
+  };
+}
+
+const keymapNative: KeymapNative = {
+  syncMenu: async () => {},
+  onMenuAction: () => () => {},
+  openSettings: async () => {},
+};
+
+let pending: FindProjectRequest | null = null;
+let findListener: (() => void) | undefined;
+let dropListener: ((e: DragDropEvent) => void) | undefined;
+let pickedFolder: string | null = null;
+const native = {
+  openProjectWindow: vi.fn<WelcomeNative["openProjectWindow"]>(async () => {}),
+  takePendingFindProject: vi.fn<WelcomeNative["takePendingFindProject"]>(async () => {
+    const taken = pending;
+    pending = null;
+    return taken;
+  }),
+  onFindProjectRequested: vi.fn<WelcomeNative["onFindProjectRequested"]>((l) => {
+    findListener = l;
+    return () => (findListener = undefined);
+  }),
+  pickFolder: vi.fn<WelcomeNative["pickFolder"]>(async () => pickedFolder),
+  reveal: vi.fn<WelcomeNative["reveal"]>(async () => {}),
+  onDragDrop: vi.fn<WelcomeNative["onDragDrop"]>((l) => {
+    dropListener = l;
+    return () => (dropListener = undefined);
+  }),
+} satisfies WelcomeNative;
+
+let root: Root | undefined;
+
+beforeEach(() => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+  );
+  host.projects = [
+    project("a", "web-console", "/w/web-console", { openedAt: 20 }),
+    project("b", "billing-api", "/w/billing-api", { favorite: true, openedAt: 10, tags: ["work"] }),
+    project("c", "infra", "/w/infra"),
+  ];
+  host.storage = { kind: "ok", path: "/d/state.db" };
+  host.candidates = [];
+  host.resolve = () => null;
+  host.calls = [];
+  pending = null;
+  pickedFolder = null;
+  for (const fn of Object.values(native)) fn.mockClear();
+});
+
+afterEach(() => {
+  act(() => root?.unmount());
+  root = undefined;
+  document.body.innerHTML = "";
+  vi.restoreAllMocks();
+});
+
+const settle = () => act(async () => new Promise((r) => setTimeout(r, 20)));
+
+async function mount() {
+  const element = document.createElement("div");
+  document.body.append(element);
+  const store = createThemeStore({
+    system: { current: () => "light", subscribe: () => () => {} },
+    storage: { read: () => undefined, write: () => {} },
+    theme: parseTheme(defaultTheme),
+    apply: () => {},
+  });
+  root = createRoot(element);
+  await act(async () =>
+    root!.render(
+      <ThemeStoreProvider store={store}>
+        <App kind="welcome" native={keymapNative} welcomeNative={native} />
+      </ThemeStoreProvider>,
+    ),
+  );
+  await settle();
+}
+
+async function press(code: string, mods: Partial<KeyboardEventInit> = {}, key = code) {
+  let prevented = false;
+  await act(async () => {
+    const event = new KeyboardEvent("keydown", {
+      code,
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...mods,
+    });
+    (document.activeElement ?? document.body).dispatchEvent(event);
+    prevented = event.defaultPrevented;
+    document.body.dispatchEvent(new KeyboardEvent("keyup", { code, key, bubbles: true, ...mods }));
+  });
+  await settle();
+  return prevented;
+}
+
+async function type(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+}
+
+const rows = () => [...document.querySelectorAll<HTMLElement>("[cmdk-root] [cmdk-item]")];
+const rowNames = () => rows().map((r) => r.querySelector("span:nth-of-type(1)")?.textContent);
+const selectedRow = () => document.querySelector<HTMLElement>('[cmdk-item][data-selected="true"]');
+const searchInput = () => document.querySelector<HTMLInputElement>("[cmdk-input]")!;
+const sheet = () =>
+  document.querySelector<HTMLElement>('[data-keymap-context="createProjectSheet"]');
+const calls = (method: string) => host.calls.filter((c) => c.method === method);
+const button = (text: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+    b.textContent?.includes(text),
+  );
+
+it("lists favorites first, then recent, then the rest, and opens the selected row with Enter", async () => {
+  await mount();
+  expect(rowNames()).toEqual(["billing-api", "web-console", "infra"]);
+  const first = rows()[0]!;
+  expect(first.textContent).toContain("/w/billing-api");
+  expect(first.textContent).toContain("work");
+  expect(first.querySelector('[aria-label="즐겨찾기"]')).not.toBeNull();
+
+  await press("ArrowDown");
+  expect(selectedRow()?.textContent).toContain("web-console");
+  await press("Enter");
+  expect(native.openProjectWindow).toHaveBeenCalledWith({ projectId: "a" });
+});
+
+it("selects on click and opens on double click", async () => {
+  await mount();
+  const infra = rows()[2]!;
+  await act(async () => {
+    infra.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    infra.click();
+  });
+  await settle();
+  expect(selectedRow()?.textContent).toContain("infra");
+  expect(native.openProjectWindow).not.toHaveBeenCalled();
+  await act(async () => infra.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  expect(native.openProjectWindow).toHaveBeenCalledWith({ projectId: "c" });
+});
+
+it("removes the selected project with ⌘⌫ only while the search box is empty", async () => {
+  await mount();
+  await type(searchInput(), "infra");
+  expect(rowNames()).toEqual(["infra"]);
+  // 검색어가 있으면 ⌘⌫ 는 입력 칸의 것(검색어 지우기)이다.
+  expect(await press("Backspace", { metaKey: true })).toBe(false);
+  expect(calls("project.delete")).toEqual([]);
+
+  await type(searchInput(), "");
+  expect(selectedRow()?.textContent).toContain("billing-api");
+  expect(await press("Backspace", { metaKey: true })).toBe(true);
+  expect(calls("project.delete")).toEqual([{ method: "project.delete", params: { id: "b" } }]);
+  expect(rowNames()).toEqual(["web-console", "infra"]);
+});
+
+it("filters by a half-composed hangul query and keeps shortcuts working in the search box", async () => {
+  host.projects.push(project("k", "결제-서버", "/w/pay"));
+  await mount();
+  await type(searchInput(), "결ㅈ");
+  expect(rowNames()).toEqual(["결제-서버"]);
+  // 조합을 확정하는 Enter 는 열지 않는다.
+  await press("Enter", { isComposing: true }, "Enter");
+  expect(native.openProjectWindow).not.toHaveBeenCalled();
+  // 한글 입력 상태의 ⌘O(key 가 'ㅐ')는 code 로 맞아 폴더 열기가 돈다.
+  expect(await press("KeyO", { metaKey: true }, "ㅐ")).toBe(true);
+  expect(native.pickFolder).toHaveBeenCalledTimes(1);
+  await press("Enter");
+  expect(native.openProjectWindow).toHaveBeenCalledWith({ projectId: "k" });
+});
+
+it("takes a pending find request on mount and walks S2 → S3 → the project window", async () => {
+  pending = { path: "/w/app/wt/src/App.kt", line: 12, col: 3 };
+  host.candidates = [
+    { path: "/w/app", worktreeMain: true, vcs: false, buildFiles: [] },
+    { path: "/w/app/wt/src", worktreeMain: false, vcs: false, buildFiles: ["build.gradle.kts"] },
+  ];
+  host.resolve = (path) =>
+    path === "/w/app/wt/src/App.kt" && host.projects.some((p) => p.roots[0] === "/w/app")
+      ? {
+          project: host.projects.find((p) => p.roots[0] === "/w/app")!,
+          root: "/w/app",
+          path,
+          worktree: { top: "/w/app/wt", root: "/w/app/wt" },
+        }
+      : null;
+  await mount();
+  expect(calls("project.candidates")).toEqual([
+    { method: "project.candidates", params: { path: "/w/app/wt/src/App.kt" } },
+  ]);
+  const dialog = document.querySelector("[cmdk-dialog]")!;
+  expect(dialog.textContent).toContain("/w/app/wt/src/App.kt 를 열 프로젝트");
+  const items = [...dialog.querySelectorAll<HTMLElement>("[cmdk-item]")];
+  expect(items.map((i) => i.textContent)).toEqual([
+    "/w/app워크트리의 메인 저장소 (추천)",
+    "/w/app/wt/srcbuild.gradle.kts",
+    "폴더 직접 선택…",
+    "프로젝트 없이 파일만 열기단일 파일 뷰어 창은 아직 없다",
+  ]);
+  expect(items[3]!.getAttribute("aria-disabled")).toBe("true");
+
+  await press("Enter");
+  expect(document.querySelector("[cmdk-dialog]")).toBeNull();
+  expect(sheet()?.textContent).toContain("새 프로젝트: app");
+  expect(sheet()?.textContent).toContain("감지된 항목이 없다");
+  await act(async () =>
+    sheet()!.querySelector<HTMLInputElement>('input[value="personal"]')!.click(),
+  );
+
+  expect(await press("Enter", { metaKey: true })).toBe(true);
+  expect(calls("project.create").map((c) => c.params)).toEqual([
+    { root: "/w/app", name: "app", configMode: "personal" },
+  ]);
+  expect(sheet()).toBeNull();
+  expect(native.openProjectWindow).toHaveBeenCalledWith({
+    projectId: "n3",
+    worktree: "/w/app/wt",
+    file: "/w/app/wt/src/App.kt",
+    line: 12,
+    col: 3,
+  });
+});
+
+it("opens S2 when a find request arrives later, and goes back to it when the folder dialog is cancelled", async () => {
+  await mount();
+  expect(native.takePendingFindProject).toHaveBeenCalledTimes(1);
+  expect(document.querySelector("[cmdk-dialog]")).toBeNull();
+
+  pending = { path: "/w/x/file.txt" };
+  await act(async () => findListener!());
+  await settle();
+  const pick = [...document.querySelectorAll<HTMLElement>("[cmdk-dialog] [cmdk-item]")].find(
+    (i) => i.textContent === "폴더 직접 선택…",
+  )!;
+  await act(async () => pick.click());
+  await settle();
+  expect(native.pickFolder).toHaveBeenCalledWith("/w/x");
+  expect(document.querySelector("[cmdk-dialog]")).not.toBeNull();
+
+  await press("Escape", {}, "Escape");
+  expect(document.querySelector("[cmdk-dialog]")).toBeNull();
+  expect(sheet()).toBeNull();
+});
+
+it("keeps window shortcuts away from the list while the sheet is open", async () => {
+  await mount();
+  expect(await press("KeyN", { metaKey: true })).toBe(true);
+  expect(sheet()).not.toBeNull();
+  // 시트가 열려 있으면 ⌘⌫ · ⌘O 는 뒤의 목록 · 창 액션으로 가지 않는다.
+  expect(await press("Backspace", { metaKey: true })).toBe(false);
+  expect(await press("KeyO", { metaKey: true })).toBe(false);
+  expect(calls("project.delete")).toEqual([]);
+  expect(native.pickFolder).not.toHaveBeenCalled();
+  // 루트가 없으면 만들 수 없다 — ⌘↩ 는 키를 가져가지 않는다.
+  expect(await press("Enter", { metaKey: true })).toBe(false);
+
+  pickedFolder = "/w/new-thing";
+  await act(async () => button("변경")!.click());
+  await settle();
+  expect(sheet()!.querySelector<HTMLInputElement>("input")!.value).toBe("new-thing");
+  await act(async () => button("취소")!.click());
+  await settle();
+  expect(sheet()).toBeNull();
+  expect(calls("project.create")).toEqual([]);
+  // 시트가 닫히면 창 단축키가 돌아온다.
+  expect(await press("Backspace", { metaKey: true })).toBe(true);
+  expect(calls("project.delete")).toHaveLength(1);
+});
+
+it("opens a dropped folder that is already a project, and offers S3 for a new one", async () => {
+  host.resolve = (path) =>
+    path === "/w/infra"
+      ? { project: host.projects[2]!, root: "/w/infra", path, worktree: null }
+      : path === "/w/infra/sub"
+        ? { project: host.projects[2]!, root: "/w/infra", path, worktree: null }
+        : null;
+  await mount();
+  await act(async () => dropListener!({ kind: "enter" }));
+  expect(document.body.textContent).toContain("폴더를 놓으면 새 프로젝트를 만든다");
+  await act(async () => dropListener!({ kind: "drop", paths: ["/w/infra"] }));
+  await settle();
+  expect(document.body.textContent).not.toContain("폴더를 놓으면");
+  expect(native.openProjectWindow).toHaveBeenCalledWith({ projectId: "c" });
+  expect(sheet()).toBeNull();
+
+  await act(async () => dropListener!({ kind: "drop", paths: ["/w/infra/sub"] }));
+  await settle();
+  expect(sheet()?.textContent).toContain("새 프로젝트: sub");
+  expect(sheet()?.textContent).toContain("/w/infra/sub");
+});
+
+it("shows the create error in the sheet and keeps it open", async () => {
+  await mount();
+  pickedFolder = "/w/infra";
+  host.resolve = () => null;
+  await press("KeyO", { metaKey: true });
+  expect(sheet()).not.toBeNull();
+  await press("Enter", { metaKey: true });
+  expect(sheet()?.querySelector('[role="alert"]')?.textContent).toContain("already a project root");
+  expect(native.openProjectWindow).not.toHaveBeenCalled();
+});
+
+it("removes and reveals from the context menu", async () => {
+  await mount();
+  const infra = rows()[2]!;
+  await act(async () =>
+    infra.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }),
+    ),
+  );
+  await settle();
+  expect(selectedRow()?.textContent).toContain("infra");
+  const menuItems = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+  expect(menuItems().map((i) => i.textContent)).toEqual([
+    "열기",
+    "Finder 에서 보기",
+    "목록에서 제거⌘⌫",
+  ]);
+  await act(async () => menuItems()[1]!.click());
+  await settle();
+  expect(native.reveal).toHaveBeenCalledWith("/w/infra");
+});
+
+it("shows a non-ok registry as a banner and disables writes when it is read-only", async () => {
+  host.storage = { kind: "readOnly", path: "/d/state.db", reason: "newer schema" };
+  await mount();
+  expect(document.querySelector('[role="status"]')?.textContent).toContain("newer schema");
+  expect(button("새 프로젝트")!.disabled).toBe(true);
+  expect(await press("KeyN", { metaKey: true })).toBe(false);
+  expect(await press("Backspace", { metaKey: true })).toBe(false);
+});
+
+it("refetches the list when the registry publishes project.changed", async () => {
+  await mount();
+  host.projects.push(project("d", "docs", "/w/docs"));
+  expect(rowNames()).not.toContain("docs");
+  await act(async () => host.emitHostEvent("project.changed"));
+  await settle();
+  expect(rowNames()).toContain("docs");
+});

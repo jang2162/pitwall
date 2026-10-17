@@ -11,6 +11,32 @@ mac = "cmd+shift+a"
 win = "ctrl+shift+a"
 linux = "ctrl+shift+a"
 
+# 프로젝트 · 웰컴 창(10-ui §2.1 · §2.3). 웰컴 창에만 등록되는 액션이라 다른 창의 같은 키와 부딪히지 않는다(registry.ts 머리 주석).
+
+[[bindings]]
+action = "project.new"
+mac = "cmd+n"
+win = "ctrl+n"
+linux = "ctrl+n"
+
+[[bindings]]
+action = "project.openFolder"
+mac = "cmd+o"
+win = "ctrl+o"
+linux = "ctrl+o"
+
+[[bindings]]
+action = "project.removeFromList"
+mac = "cmd+backspace"
+win = "delete"
+linux = "delete"
+
+[[bindings]]
+action = "project.create"
+mac = "cmd+enter"
+win = "ctrl+enter"
+linux = "ctrl+enter"
+
 # 툴 윈도우 · 창
 
 [[bindings]]

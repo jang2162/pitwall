@@ -242,7 +242,11 @@ it("reopens a closed tool window with its shortcut", async () => {
 
 it("applies a keymap.toml change without a restart and syncs the menu", async () => {
   await mount("settings");
-  expect(host.hostSubscriptions).toContainEqual(["config.changed", "config.error"]);
+  expect(host.hostSubscriptions).toContainEqual([
+    "config.changed",
+    "config.error",
+    "project.changed",
+  ]);
   expect(native.syncMenu).toHaveBeenLastCalledWith(
     expect.objectContaining({ "action.find": "Super+Shift+KeyA", "settings.open": "Super+Comma" }),
   );

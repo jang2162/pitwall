@@ -2,7 +2,6 @@ import type { UiLogger } from "@pitwall/logger";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
-import { HostDemo } from "./host-demo";
 import { appActions } from "./keymap/actions";
 import {
   KeymapErrorBar,
@@ -14,16 +13,18 @@ import { type KeymapNative, tauriKeymapNative } from "./keymap/native";
 import { ProjectWindow } from "./layout/project-window";
 import { HostProvider } from "./rpc/host";
 import { ThemeSwitcher, useTheme } from "./theme/theme-switcher";
+import { tauriWelcomeNative, type WelcomeNative } from "./welcome/native";
+import { WelcomeWindow } from "./welcome/welcome-window";
 import { WINDOW_TITLES, type WindowKind } from "./window-kind";
 
 // src-tauri/src/main.rs 의 LOCAL_HOST_ID. 프로젝트 모델이 생기기 전이라(M0-09 · M0-12) 모든 창이 Host 를 직접 고른다.
 const LOCAL_HOST = { hostId: "local" };
 
-function WelcomeWindow() {
+function Welcome({ native }: { native: WelcomeNative }) {
   return (
     <>
-      <main className="min-h-0 flex-1 overflow-auto">
-        <HostDemo />
+      <main className="flex min-h-0 flex-1 flex-col">
+        <WelcomeWindow native={native} />
       </main>
       <footer className="flex h-[22px] flex-none items-center justify-end border-t border-ui-border bg-ui-statusbar px-2 text-ui-statusbar-foreground">
         <ThemeSwitcher />
@@ -66,10 +67,12 @@ function AppActions({ native }: { native: KeymapNative }) {
 export function App({
   kind,
   native = tauriKeymapNative,
+  welcomeNative = tauriWelcomeNative,
   log,
 }: {
   kind: WindowKind;
   native?: KeymapNative;
+  welcomeNative?: WelcomeNative;
   log?: Pick<UiLogger, "info" | "warn" | "debug">;
 }) {
   const [queryClient] = useState(() => new QueryClient());
@@ -83,7 +86,7 @@ export function App({
             <header className="titlebar bg-ui-toolbar" data-tauri-drag-region>
               <span data-tauri-drag-region>{WINDOW_TITLES[kind]}</span>
             </header>
-            {kind === "welcome" && <WelcomeWindow />}
+            {kind === "welcome" && <Welcome native={welcomeNative} />}
             {kind === "project" && <ProjectWindow />}
             {kind === "settings" && <SettingsWindow />}
             <KeymapErrorBar />

@@ -9,6 +9,7 @@ import {
 import type { ConfigView } from "@pitwall/rpc-client";
 import { describe, expect, it } from "vitest";
 
+import { createProjectActions, welcomeActions } from "../welcome/actions";
 import { appActions, toolWindowActions } from "./actions";
 import { DEFAULT_KEYMAP_TOML } from "./default-keymap";
 import { resolveKeymap } from "./resolve";
@@ -21,6 +22,18 @@ const ACTION_IDS = new Set(
   [
     ...appActions({ openFindAction() {}, openSettings: async () => {}, setTheme() {} }),
     ...toolWindowActions(() => undefined),
+    ...welcomeActions({
+      platform: "mac",
+      selected: () => undefined,
+      searchEmpty: () => true,
+      writable: () => true,
+      newProject() {},
+      openFolder: async () => {},
+      open() {},
+      reveal() {},
+      remove() {},
+    }),
+    ...createProjectActions({ canSubmit: () => true, submit() {} }),
   ].map((a) => a.id),
 );
 

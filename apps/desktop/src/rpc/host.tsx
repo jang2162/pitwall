@@ -18,13 +18,22 @@ export const RPC_INVALIDATIONS: readonly InvalidationRule[] = [];
 
 /**
  * Host 범위 이벤트 → 쿼리 무효화 규칙. 모든 창이 프로젝트와 무관하게 구독한다. 전역 설정(`$CONFIG`, keymap.toml 포함)이
- * 다시 읽히거나 읽기가 실패하면 `config.get` 을 다시 부른다(crates/pw-core/src/config/store.rs 의 토픽).
+ * 다시 읽히거나 읽기가 실패하면 `config.get` 을 다시 부른다(crates/pw-core/src/config/store.rs 의 토픽). 프로젝트
+ * 레지스트리가 바뀌면(만들기 · 고치기 · 지우기 · 열기, crates/pw-core/src/registry/mod.rs 의 `TOPIC_CHANGED`) 프로젝트
+ * 목록을 다시 부른다 — 다른 창 · CLI 가 바꾼 것도 웰컴 창에 보인다.
  */
 export function hostInvalidations(host: string): readonly InvalidationRule[] {
-  const keys = [rpcQueryKey(host, "config.get")];
+  const config = [rpcQueryKey(host, "config.get")];
+  const projects = [
+    rpcQueryKey(host, "project.list"),
+    rpcQueryKey(host, "project.recent"),
+    rpcQueryKey(host, "project.get"),
+    rpcQueryKey(host, "project.resolve"),
+  ];
   return [
-    { topic: "config.changed", keys },
-    { topic: "config.error", keys },
+    { topic: "config.changed", keys: config },
+    { topic: "config.error", keys: config },
+    { topic: "project.changed", keys: projects },
   ];
 }
 
