@@ -13,6 +13,11 @@ export interface Action {
   readonly repeat?: boolean;
   /** 지금 실행할 수 없으면 거짓. 없으면 늘 참. 거짓이면 키도 가져가지 않는다. */
   readonly enabled?: () => boolean;
+  /**
+   * 팝업(시트 · 대화상자) 안의 액션인가. 창이 팝업이 열린 동안 키를 이런 액션에만 준다 — 뒤의 창 액션이 돌지 않고, 팝업의
+   * `⌘↩` 같은 단축키는 돈다. 팝업이 열려 있을 때만 등록하거나 `enabled` 로 막는다. 액션 찾기에는 나오지 않는다.
+   */
+  readonly popup?: boolean;
 }
 
 export class ActionRegistry {
@@ -39,6 +44,10 @@ export class ActionRegistry {
   isEnabled(id: string): boolean {
     const action = this.actions.get(id);
     return action !== undefined && (action.enabled?.() ?? true);
+  }
+
+  isPopup(id: string): boolean {
+    return this.actions.get(id)?.popup === true;
   }
 
   allowsRepeat(id: string): boolean {

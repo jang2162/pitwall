@@ -16,6 +16,7 @@ import type { UiLogger } from "@pitwall/logger";
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -72,6 +73,8 @@ export interface KeymapContextValue {
   /** 액션의 단축키 라벨(병합 순서). */
   shortcuts(action: string): ShortcutLabel[];
   openFindAction(): void;
+  /** 팝업이 열렸다고 알린다(`useKeymapPopup`). 닫는 함수를 돌려준다. */
+  enterPopup(): () => void;
 }
 
 const KeymapContext = createContext<KeymapContextValue | undefined>(undefined);
@@ -89,6 +92,15 @@ export function useRegisterActions(actions: readonly Action[]) {
     const offs = actions.map((a) => registry.register(a));
     return () => offs.forEach((off) => off());
   }, [registry, actions]);
+}
+
+/**
+ * 창이 띄운 팝업(시트 · 대화상자 · 우클릭 메뉴)이 열려 있는 동안 키를 팝업 액션(`Action.popup`)에만 준다 — 액션 찾기와 같다.
+ * 팝업을 그리는 컴포넌트가 자기 `open` 으로 부른다.
+ */
+export function useKeymapPopup(open: boolean) {
+  const { enterPopup } = useKeymap();
+  useEffect(() => (open ? enterPopup() : undefined), [open, enterPopup]);
 }
 
 /** 레지스트리가 바뀌면 다시 그린다. */
@@ -173,8 +185,20 @@ export function KeymapProvider({
   }, [warnings, log]);
 
   const [findOpen, setFindOpen] = useState(false);
-  const popupOpen = useRef(false);
-  popupOpen.current = findOpen;
+  // 액션 찾기 말고 창이 띄운 팝업의 수(`useKeymapPopup`). 렌더가 아니라 키 처리에서만 읽으므로 ref 다.
+  const otherPopups = useRef(0);
+  const findOpenRef = useRef(false);
+  findOpenRef.current = findOpen;
+  const isPopupOpen = useCallback(() => findOpenRef.current || otherPopups.current > 0, []);
+  const enterPopup = useCallback(() => {
+    otherPopups.current++;
+    let left = false;
+    return () => {
+      if (left) return;
+      left = true;
+      otherPopups.current--;
+    };
+  }, []);
 
   // 키로 실행한 마지막 액션. 같은 눌림이 메뉴 accelerator 로도 와서 두 번 실행되는 것을 막는다(아래 onMenuAction).
   const lastKeyRun = useRef<{ action: string; at: number }>(undefined);
@@ -190,10 +214,11 @@ export function KeymapProvider({
           return ran;
         },
         allowsRepeat: (action) => registry.allowsRepeat(action),
-        // 팝업이 열려 있는 동안 단축키는 팝업이 받는다 — 뒤의 창에서 액션이 돌지 않게.
-        isEnabled: (action) => !popupOpen.current && registry.isEnabled(action),
+        // 팝업이 열려 있는 동안 단축키는 팝업이 받는다 — 뒤의 창에서 액션이 돌지 않게. 팝업 액션은 팝업이 열려 있을 때만 돈다.
+        isEnabled: (action) =>
+          isPopupOpen() === registry.isPopup(action) && registry.isEnabled(action),
         context: () =>
-          contextLayers(document.activeElement, { popupOpen: popupOpen.current, platform }),
+          contextLayers(document.activeElement, { popupOpen: isPopupOpen(), platform }),
       }),
   );
   useEffect(() => engine.setBindings(resolved.bindings), [engine, resolved.bindings]);
@@ -238,13 +263,13 @@ export function KeymapProvider({
           log?.debug(`dropped ${action} from the menu: the key already ran it`, "keymap");
           return;
         }
-        // 팝업이 열린 채 메뉴에서 고르면 팝업을 닫고 실행한다. 메뉴 이벤트로는 마우스로 고른 것인지 키인지 알 수 없는데,
-        // 마우스로 메뉴를 고른 것을 조용히 무시하면 고장으로 보인다.
+        // 액션 찾기가 열린 채 메뉴에서 고르면 팝업을 닫고 실행한다. 메뉴 이벤트로는 마우스로 고른 것인지 키인지 알 수 없는데,
+        // 마우스로 메뉴를 고른 것을 조용히 무시하면 고장으로 보인다. 창이 띄운 팝업(`useKeymapPopup`)은 그 팝업이 닫는다.
         const run = () => {
           if (registry.run(action)) log?.debug(`ran ${action} from the menu`, "keymap");
           else console.warn("[keymap] menu action not available here", action);
         };
-        if (popupOpen.current) {
+        if (findOpenRef.current) {
           setFindOpen(false);
           setTimeout(run, 0);
         } else run();
@@ -268,8 +293,9 @@ export function KeymapProvider({
             reserved: reservedReason(b.sequence, platform),
           })),
       openFindAction: () => setFindOpen(true),
+      enterPopup,
     }),
-    [registry, resolved, platform, layout],
+    [registry, resolved, platform, layout, enterPopup],
   );
 
   return (
