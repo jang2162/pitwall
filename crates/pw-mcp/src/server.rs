@@ -16,9 +16,9 @@ use pw_core::{EventBus, Filter, HostRouter, Scope, Target};
 use pw_rpc::{Caller, Role};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, SubscriptionFilter,
 };
-use rmcp::service::{MaybeSendFuture, NotificationContext, RequestContext};
+use rmcp::service::{MaybeSendFuture, NotificationContext, RequestContext, SubscriptionContext};
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -98,14 +98,15 @@ where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    let session = Session::open(services, &request, cancel.child_token()).await?;
-    let guard = cancel.child_token();
+    // 세션이 어떻게 끝나든(정상 · 초기화 실패 · 패닉) 그 세션의 설정 감시 · 버스 구독 · list_changed 태스크 · Host 연결을 걷는다.
+    let session_cancel = cancel.child_token();
+    let _stop = session_cancel.clone().drop_guard();
+    let session = Session::open(services, &request, session_cancel.clone()).await?;
     let running = session
-        .serve_with_ct(io, guard.clone())
+        .serve_with_ct(io, session_cancel.clone())
         .await
         .map_err(|e| ServeError::Initialize(e.to_string()))?;
     let result = running.waiting().await;
-    guard.cancel();
     tracing::debug!(?result, "mcp session ended");
     Ok(())
 }
@@ -127,7 +128,7 @@ struct Inner {
     project: Option<SessionProject>,
     exposure: watch::Receiver<Arc<Exposure>>,
     id: String,
-    /// 세션이 끝나면 취소된다(설정 감시 · list_changed 태스크).
+    /// 세션이 끝나면 취소된다([`serve`] 가 취소한다). 설정 감시 · 버스 구독 · list_changed 태스크가 여기에 묶인다.
     cancel: CancellationToken,
     client_info: Mutex<Option<String>>,
 }
@@ -397,19 +398,19 @@ impl ServerHandler for Session {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        if let Some(info) = context.peer.peer_info() {
+        // 2026-07-28 은 요청마다 `_meta` 로, 그 전 버전은 initialize 로 온다. `client_info` 가 둘 다 본다.
+        if let Some(info) = context.client_info() {
             *self
                 .inner
                 .client_info
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(format!(
-                "{} {}",
-                info.client_info.name, info.client_info.version
-            ));
+                .unwrap_or_else(PoisonError::into_inner) =
+                Some(format!("{} {}", info.name, info.version));
         }
         self.call(request).await.map(Into::into)
     }
 
+    /// 2025-11-25 까지의 클라이언트: initialize 뒤 세션 내내 `tools/list_changed` 를 보낸다.
     fn on_initialized(
         &self,
         context: NotificationContext<RoleServer>,
@@ -417,34 +418,87 @@ impl ServerHandler for Session {
         let peer = context.peer.clone();
         let session = self.clone();
         async move {
-            let mut exposure = session.inner.exposure.clone();
-            let cancel = session.inner.cancel.clone();
-            let mut shown: BTreeSet<String> =
-                session.visible().iter().map(|t| t.name.clone()).collect();
             tokio::spawn(async move {
+                let cancel = session.inner.cancel.clone();
+                let mut changes = session.changes();
                 loop {
                     tokio::select! {
                         () = cancel.cancelled() => return,
-                        changed = exposure.changed() => if changed.is_err() { return },
+                        changed = changes.next() => if !changed { return },
                     }
-                    let now = exposure
-                        .borrow_and_update()
-                        .visible(&session.inner.services.catalog);
-                    if now != shown {
-                        shown = now;
-                        if peer.notify_tool_list_changed().await.is_err() {
-                            return;
-                        }
+                    if peer.notify_tool_list_changed().await.is_err() {
+                        return;
                     }
                 }
             });
         }
     }
+
+    /// 2026-07-28 클라이언트: 알림은 `subscriptions/listen` 으로 연 구독으로만 간다. 툴 목록 변경만 받는다.
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.supported_by(&self.get_info().capabilities))
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
+        let cancel = self.inner.cancel.clone();
+        if context.accepted().tools_list_changed != Some(true) {
+            tokio::select! {
+                () = cancel.cancelled() => {}
+                () = context.cancelled() => {}
+            }
+            return Ok(());
+        }
+        let mut changes = self.changes();
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => return Ok(()),
+                () = context.cancelled() => return Ok(()),
+                changed = changes.next() => if !changed { return Ok(()) },
+            }
+            if context.sink().notify_tool_list_changed().await.is_err() {
+                return Ok(());
+            }
+        }
+    }
 }
 
-impl Drop for Inner {
-    fn drop(&mut self) {
-        self.cancel.cancel();
+/// 보이는 툴 집합이 바뀔 때마다 깨어난다. 설정이 바뀌어도 보이는 툴이 같으면 깨지 않는다.
+struct Changes {
+    exposure: watch::Receiver<Arc<Exposure>>,
+    catalog: Arc<Catalog>,
+    shown: BTreeSet<String>,
+}
+
+impl Changes {
+    /// 다음 변경까지 기다린다. 설정 감시가 끝났으면 `false`.
+    async fn next(&mut self) -> bool {
+        loop {
+            if self.exposure.changed().await.is_err() {
+                return false;
+            }
+            let now = self.exposure.borrow_and_update().visible(&self.catalog);
+            if now != self.shown {
+                self.shown = now;
+                return true;
+            }
+        }
+    }
+}
+
+impl Session {
+    fn changes(&self) -> Changes {
+        let mut exposure = self.inner.exposure.clone();
+        let shown = exposure
+            .borrow_and_update()
+            .visible(&self.inner.services.catalog);
+        Changes {
+            exposure,
+            catalog: Arc::clone(&self.inner.services.catalog),
+            shown,
+        }
     }
 }
 

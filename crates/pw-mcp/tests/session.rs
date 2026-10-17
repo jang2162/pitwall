@@ -13,8 +13,9 @@ use pw_mcp::policy::Approval;
 use pw_mcp::{Catalog, Services, SessionRequest};
 use pw_rpc::{RpcError, rpc_method};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
+use rmcp::model::{ProtocolVersion, ServerNotification, SubscriptionFilter};
 use rmcp::service::{MaybeSendFuture, NotificationContext, RunningService};
-use rmcp::{ClientHandler, RoleClient, ServiceExt};
+use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient, ServiceExt};
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -367,4 +368,94 @@ async fn a_session_without_a_project_requires_project_id() {
     assert_eq!(result.is_error, Some(true), "{}", text(&result));
     client.cancel().await.unwrap();
     cancel.cancel();
+}
+
+/// 2026-07-28 클라이언트(초기화 핸드셰이크 없음 — Claude Code 2.1.302 가 이것으로 붙는다): clientInfo 는 요청마다 오고,
+/// 툴 목록 변경은 `subscriptions/listen` 구독으로만 간다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stateless_client_gets_client_info_audited_and_list_changes_by_subscription() {
+    let f = Fixture::new();
+    f.host
+        .watch_config(&tokio::runtime::Handle::current())
+        .unwrap();
+    let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+    let (r, w) = tokio::io::split(server_io);
+    let cancel = CancellationToken::new();
+    tokio::spawn(pw_mcp::serve(
+        f.services(),
+        SessionRequest::default(),
+        (r, w),
+        cancel.clone(),
+    ));
+    let client = Client::default()
+        .serve_with_lifecycle(
+            client_io,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .unwrap();
+    let list = call(&client, "project_list", json!({})).await;
+    assert_eq!(list.is_error, Some(false));
+    audit_rows(&f.paths.state, 1);
+    let conn = rusqlite_open(&f.paths.state.join("mcp/audit.db")).unwrap();
+    let recorded: Option<String> = conn
+        .query_row("SELECT client FROM calls", [], |r| r.get(0))
+        .unwrap();
+    assert!(
+        recorded.is_some_and(|c| c.starts_with("rmcp")),
+        "clientInfo 가 감사 로그에 없다"
+    );
+
+    let mut subscription = client
+        .peer()
+        .listen(SubscriptionFilter::builder().tools_list_changed().build())
+        .await
+        .unwrap();
+    std::fs::create_dir_all(&f.paths.config).unwrap();
+    std::fs::write(
+        f.paths.config.join("settings.toml"),
+        "schema = 1\n[mcp.tools]\nproject_list = false\n",
+    )
+    .unwrap();
+    let note = tokio::time::timeout(Duration::from_secs(10), subscription.next())
+        .await
+        .expect("구독으로 tools/list_changed 가 오지 않았다")
+        .unwrap();
+    assert!(
+        matches!(
+            note,
+            Some(ServerNotification::ToolListChangedNotification(_))
+        ),
+        "{note:?}"
+    );
+    assert_eq!(tool_names(&client).await, ["mcptest_write", "project_info"]);
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// 클라이언트가 끊으면 세션이 쥔 것(버스 구독 · Host 연결 · list_changed 태스크)이 모두 걷힌다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_finished_session_releases_its_subscriptions() {
+    let f = Fixture::new();
+    let before = f.host.bus().subscriber_count();
+    let (client, _, _cancel) = f
+        .connect(SessionRequest {
+            project: None,
+            cwd: Some(f.work("alpha")),
+        })
+        .await;
+    call(&client, "project_list", json!({})).await;
+    assert!(f.host.bus().subscriber_count() > before);
+    client.cancel().await.unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while f.host.bus().subscriber_count() != before {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "세션이 끝났는데 버스 구독이 남았다: {} > {before}",
+            f.host.bus().subscriber_count()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
