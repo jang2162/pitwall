@@ -223,6 +223,24 @@ pub fn migrate_file(
     migrator: Option<&Migrator>,
     backup_dir: &Path,
 ) -> Result<FileMigration, FileMigrateError> {
+    migrate_file_with(path, rel, migrator, Some(backup_dir))
+}
+
+/// [`migrate_file`] 과 같게 읽고 올리지만 **디스크에 아무것도 쓰지 않는다**(보관본 · 새 내용 모두). 올린 결과는 돌려준
+/// 문서에만 있다. 설정을 소유하지 않는 읽기(MCP 세션의 노출 판정)가 쓴다.
+pub fn migrate_in_memory(
+    path: &Path,
+    migrator: Option<&Migrator>,
+) -> Result<FileMigration, FileMigrateError> {
+    migrate_file_with(path, Path::new(""), migrator, None)
+}
+
+fn migrate_file_with(
+    path: &Path,
+    rel: &Path,
+    migrator: Option<&Migrator>,
+    backup_dir: Option<&Path>,
+) -> Result<FileMigration, FileMigrateError> {
     let io = |error| FileMigrateError::Io {
         path: path.to_path_buf(),
         error,
@@ -259,6 +277,13 @@ pub fn migrate_file(
             backup: None,
         });
     }
+    let Some(backup_dir) = backup_dir else {
+        return Ok(FileMigration {
+            doc,
+            migrated,
+            backup: None,
+        });
+    };
     let backup = write_backup(backup_dir, rel, migrated.from, &original).map_err(io)?;
     write_atomic(path, &doc.to_string()).map_err(io)?;
     Ok(FileMigration {

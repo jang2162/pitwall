@@ -17,7 +17,7 @@ use toml_edit::DocumentMut;
 use super::gitdir::linked_worktree;
 use super::merge::{merge, to_json};
 use super::migrate::{
-    FileMigrateError, MigrateError, SCHEMA_KEY, Schemas, migrate_file, schema_of,
+    FileMigrateError, MigrateError, SCHEMA_KEY, Schemas, migrate_file, migrate_in_memory, schema_of,
 };
 use super::paths::AppPaths;
 
@@ -195,6 +195,10 @@ pub struct ConfigSource {
     subdirs: &'static [&'static str],
     defaults: BTreeMap<String, String>,
     schemas: Arc<Schemas>,
+    /// 구버전 파일을 올려 디스크에 쓰는가. 끄면 올린 결과는 메모리에만 있다([`Self::without_writes`]).
+    writes: bool,
+    /// 공유 레이어(`<id>.toml`)를 읽는가([`Self::without_shared`]).
+    shared: bool,
 }
 
 impl ConfigSource {
@@ -224,6 +228,8 @@ impl ConfigSource {
             subdirs: PROJECT_SUBDIRS,
             defaults: BTreeMap::from([("project".to_owned(), BUILTIN_PROJECT.to_owned())]),
             schemas: Arc::new(Schemas::builtin()),
+            writes: true,
+            shared: true,
         }
     }
 
@@ -249,6 +255,8 @@ impl ConfigSource {
             subdirs: PROJECT_SUBDIRS,
             defaults: BTreeMap::from([("project".to_owned(), BUILTIN_PROJECT.to_owned())]),
             schemas: Arc::new(Schemas::builtin()),
+            writes: true,
+            shared: true,
         })
     }
 
@@ -263,6 +271,8 @@ impl ConfigSource {
             subdirs: &[],
             defaults: BTreeMap::from([("settings".to_owned(), BUILTIN_SETTINGS.to_owned())]),
             schemas: Arc::new(Schemas::builtin()),
+            writes: true,
+            shared: true,
         }
     }
 
@@ -284,6 +294,22 @@ impl ConfigSource {
     #[must_use]
     pub fn with_schemas(mut self, schemas: Schemas) -> Self {
         self.schemas = Arc::new(schemas);
+        self
+    }
+
+    /// 디스크에 쓰지 않고 읽는다: 구버전 파일은 메모리에서만 올리고(보관본도 만들지 않는다) `Migrated` 알림도 내지 않는다.
+    /// 설정을 소유하지 않는 프로세스 · 세션(MCP 세션의 노출 판정)이 저장소의 커밋된 파일을 고치지 않게 한다.
+    #[must_use]
+    pub fn without_writes(mut self) -> Self {
+        self.writes = false;
+        self
+    }
+
+    /// 공유 레이어(`<id>.toml`, 프로젝트면 커밋되는 파일)를 빼고 내장 기본값 · `<id>.local.toml` 만 읽는다.
+    /// 「커밋된 설정은 좁히기만 한다」 같은 규칙이 공유 레이어가 없을 때의 값과 비교하는 데 쓴다.
+    #[must_use]
+    pub fn without_shared(mut self) -> Self {
+        self.shared = false;
         self
     }
 
@@ -358,10 +384,17 @@ impl ConfigSource {
                 (LayerOrigin::Local, entry.local),
             ] {
                 let Some((found, scan)) = found else { continue };
+                if origin == LayerOrigin::Shared && !self.shared {
+                    continue;
+                }
                 let path = scan.dir.join(&found.rel);
                 let display = path.display().to_string();
-                let (doc, read_only) = match migrate_file(&path, &found.rel, migrator, &scan.backup)
-                {
+                let migrated = if self.writes {
+                    migrate_file(&path, &found.rel, migrator, &scan.backup)
+                } else {
+                    migrate_in_memory(&path, migrator)
+                };
+                let (doc, read_only) = match migrated {
                     Ok(m) => {
                         if let Some(backup) = &m.backup {
                             snapshot.notices.push(ConfigNotice::Migrated {
@@ -716,6 +749,51 @@ mod tests {
         );
         // 보관 폴더(`.backup`)는 설정으로 읽히지 않는다.
         assert_eq!(snap.files.len(), 2);
+    }
+
+    /// 쓰지 않는 읽기: 구버전 파일을 메모리에서만 올린다. 파일 바이트 · 보관 폴더 · 알림 모두 그대로다.
+    #[test]
+    fn without_writes_migrates_in_memory_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pw = tmp.path().join(PROJECT_DIR);
+        let file = pw.join("project.toml");
+        write(&file, "# hand written\n[mcp]\npreset = \"read-only\"\n");
+        let snap = ConfigSource::project(tmp.path())
+            .without_writes()
+            .load()
+            .unwrap();
+        assert_eq!(snap.get("project", "mcp.preset"), Some(&json!("read-only")));
+        assert_eq!(snap.file("project").unwrap().layers[1].schema, 1);
+        assert!(snap.notices.is_empty(), "{:?}", snap.notices);
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "# hand written\n[mcp]\npreset = \"read-only\"\n"
+        );
+        assert!(!pw.join(PROJECT_BACKUP_DIR).exists());
+    }
+
+    #[test]
+    fn without_shared_skips_the_committed_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pw = tmp.path().join(PROJECT_DIR);
+        write(&pw.join("project.toml"), "schema = 1\n[a]\nshared = 1\n");
+        write(
+            &pw.join("project.local.toml"),
+            "schema = 1\n[a]\nlocal = 2\n",
+        );
+        let snap = ConfigSource::project(tmp.path())
+            .without_shared()
+            .load()
+            .unwrap();
+        assert_eq!(snap.get("project", "a"), Some(&json!({"local": 2})));
+        let origins: Vec<_> = snap
+            .file("project")
+            .unwrap()
+            .layers
+            .iter()
+            .map(|l| l.origin)
+            .collect();
+        assert_eq!(origins, [LayerOrigin::Builtin, LayerOrigin::Local]);
     }
 
     #[test]
