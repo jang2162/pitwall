@@ -136,6 +136,22 @@ fn insecure(path: &Path, why: &str) -> io::Error {
     )
 }
 
+/// 연결 상대(`getpeereid` · `SO_PEERCRED` 의 uid)가 이 사용자인가. 서버(accept)와 클라이언트(connect) 둘 다 이것으로 가른다.
+/// 자격을 읽지 못한 연결도 거절한다.
+pub fn peer_allowed(peer: io::Result<u32>, uid: u32) -> io::Result<()> {
+    match peer {
+        Ok(peer) if peer == uid => Ok(()),
+        Ok(peer) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("the peer is another user (uid {peer})"),
+        )),
+        Err(e) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("cannot read the peer credentials: {e}"),
+        )),
+    }
+}
+
 /// 소켓을 연다. 끝나면 [`Listener`] 를 버리면 파일이 지워진다.
 pub fn bind(path: &Path, uid: u32) -> io::Result<Listener> {
     let dir = path.parent().unwrap_or(Path::new("/"));
@@ -232,16 +248,9 @@ pub async fn accept_loop(
                 }
             },
         };
-        match stream.peer_cred().map(|c| c.uid()) {
-            Ok(peer) if peer == listener.uid => {}
-            Ok(peer) => {
-                tracing::warn!(peer, "rejected an mcp socket connection from another user");
-                continue;
-            }
-            Err(e) => {
-                tracing::warn!(%e, "rejected an mcp socket connection without peer credentials");
-                continue;
-            }
+        if let Err(e) = peer_allowed(stream.peer_cred().map(|c| c.uid()), listener.uid) {
+            tracing::warn!(%e, "rejected an mcp socket connection");
+            continue;
         }
         let services = Arc::clone(&services);
         let counted = Counted::new(&connections);
@@ -335,10 +344,7 @@ pub async fn write_line<W: tokio::io::AsyncWrite + Unpin, T: Serialize>(
 pub async fn connect(path: &Path, uid: u32, request: SessionRequest) -> io::Result<UnixStream> {
     check_endpoint(path, uid)?;
     let mut stream = UnixStream::connect(path).await?;
-    let peer = stream.peer_cred()?.uid();
-    if peer != uid {
-        return Err(insecure(path, "is served by another user"));
-    }
+    peer_allowed(stream.peer_cred().map(|c| c.uid()), uid)?;
     write_line(
         &mut stream,
         &Hello {
@@ -401,4 +407,19 @@ fn fnv(parts: &[&[u8]]) -> u64 {
         }
     }
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_same_uid_is_allowed() {
+        assert!(peer_allowed(Ok(501), 501).is_ok());
+        let other = peer_allowed(Ok(502), 501).unwrap_err();
+        assert_eq!(other.kind(), io::ErrorKind::PermissionDenied);
+        assert!(other.to_string().contains("502"), "{other}");
+        let unknown = peer_allowed(Err(io::Error::other("no creds")), 501).unwrap_err();
+        assert_eq!(unknown.kind(), io::ErrorKind::PermissionDenied);
+    }
 }
