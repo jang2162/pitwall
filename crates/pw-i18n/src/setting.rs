@@ -3,7 +3,9 @@
 //!
 //! - 주석 · 서식 · 다른 키는 그대로 둔다(toml_edit). 값이 이미 같으면 쓰지 않는다.
 //! - 파일이 없으면 `schema = 1` 과 그 키만으로 만든다. 파일을 읽거나 TOML 로 읽을 수 없으면 **쓰지 않고** 오류다 — 사람이
-//!   고치다 만 파일을 덮지 않는다.
+//!   고치다 만 파일을 덮지 않는다. 설정 계층이 손대지 않는 파일(`schema` 가 앱보다 새 버전이거나 정수가 아님,
+//!   `pw_core::config::migrate`)도 쓰지 않는다 — 새 버전 Pitwall 이 쓴 파일에 옛 모양의 키를 섞지 않는다. 옛 버전(`schema`
+//!   없음)은 고쳐 쓴다 — 다시 읽을 때 설정 계층이 마이그레이션한다.
 //! - 심링크는 링크가 아니라 대상 파일을 고친다(dotfiles 연결을 끊지 않는다). 대상이 없는 링크는 오류다.
 //! - 같은 파일을 다른 프로세스(편집기 · 다른 Pitwall)가 쓰는 경합: 읽은 내용으로 새 내용을 만든 뒤 쓰기 직전에 다시 읽어
 //!   달라졌으면 새로 읽은 것으로 다시 만든다(몇 번까지). 다시 읽은 뒤 rename 까지의 아주 짧은 틈은 막지 못한다 — 그 사이에
@@ -13,13 +15,16 @@ use std::fs;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
-use pw_core::config::migrate::write_atomic;
+use pw_core::config::migrate::{Schemas, schema_of, write_atomic};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::language::LANGUAGE_KEY;
 
 /// 전역 설정 파일 이름(`docs/design/03-architecture.md` 「설정 파일」 표).
 pub const SETTINGS_FILE: &str = "settings.toml";
+
+/// 설정 계층이 `settings.toml` 을 부르는 종류 이름(`Schemas::builtin`).
+const SETTINGS_KIND: &str = "settings";
 
 /// 경합으로 다시 만드는 횟수.
 const ATTEMPTS: usize = 3;
@@ -59,6 +64,16 @@ impl std::error::Error for WriteError {}
 
 /// `config_dir/settings.toml` 의 `ui.language` 를 `value` 로 둔다. 바꿨으면 참, 이미 그 값이면 거짓.
 pub fn write_language(config_dir: &Path, value: &str) -> Result<bool, WriteError> {
+    write_language_with(config_dir, value, &mut |_| {})
+}
+
+/// [`write_language`] 본체. `before_recheck` 는 새 내용을 만든 뒤 · 다시 읽기 직전에 불린다 — 시험이 그 틈에 다른 쓰기를
+/// 끼워 경합을 만든다.
+fn write_language_with(
+    config_dir: &Path,
+    value: &str,
+    before_recheck: &mut dyn FnMut(&Path),
+) -> Result<bool, WriteError> {
     let path = config_dir.join(SETTINGS_FILE);
     let io_err = |error| WriteError::Io {
         path: path.clone(),
@@ -75,6 +90,7 @@ pub fn write_language(config_dir: &Path, value: &str) -> Result<bool, WriteError
             return Ok(false);
         }
         // 쓰기 직전에 다시 본다. 그 사이 바뀌었으면 새 내용으로 다시 만든다.
+        before_recheck(&path);
         if read(&path).map_err(io_err)? != current {
             continue;
         }
@@ -130,6 +146,18 @@ fn with_language(current: Option<&str>, value: &str) -> Result<String, String> {
             .map_err(|e: toml_edit::TomlError| format!("not valid TOML, not changing it: {e}"))?,
         None => "schema = 1\n".parse().expect("constant TOML"),
     };
+    let supported = Schemas::builtin()
+        .get(SETTINGS_KIND)
+        .map_or(0, |m| m.current());
+    match schema_of(&doc) {
+        Ok(version) if version <= supported => {}
+        Ok(version) => {
+            return Err(format!(
+                "`schema = {version}` is newer than this app reads (up to {supported}), not changing it"
+            ));
+        }
+        Err(e) => return Err(format!("{e}, not changing it")),
+    }
     let (table, key) = LANGUAGE_KEY.split_once('.').expect("dotted key");
     let ui = doc
         .entry(table)
@@ -191,6 +219,67 @@ mod tests {
             assert!(matches!(e, WriteError::Invalid { .. }), "{e}");
             assert_eq!(fs::read_to_string(&file).unwrap(), text);
         }
+    }
+
+    /// 설정 계층이 손대지 않는 파일(앱보다 새 `schema`, 정수가 아닌 `schema`)은 고치지 않는다. 옛 파일(`schema` 없음)은 고친다.
+    #[test]
+    fn refuses_a_file_from_a_newer_schema_and_keeps_an_old_one_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(SETTINGS_FILE);
+        for text in ["schema = 9\nx = 1\n", "schema = \"one\"\n", "schema = -1\n"] {
+            fs::write(&file, text).unwrap();
+            let e = write_language(dir.path(), "ko").unwrap_err();
+            assert!(matches!(e, WriteError::Invalid { .. }), "{e}");
+            assert_eq!(fs::read_to_string(&file).unwrap(), text);
+        }
+        fs::write(&file, "x = 1\n").unwrap();
+        assert!(write_language(dir.path(), "ko").unwrap());
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "x = 1\n\n[ui]\nlanguage = \"ko\"\n"
+        );
+    }
+
+    /// 새 내용을 만든 뒤 다른 쪽이 파일을 고치면 다시 읽어 그 변경 위에 언어를 쓴다 — 다른 쪽의 키를 덮지 않는다.
+    #[test]
+    fn rebuilds_on_top_of_a_change_made_while_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(SETTINGS_FILE);
+        fs::write(&file, "schema = 1\n").unwrap();
+        let mut edits = 0;
+        let changed = write_language_with(dir.path(), "ko", &mut |path| {
+            if edits == 0 {
+                fs::write(path, "schema = 1\n[diagnostics]\ncrash_reports = true\n").unwrap();
+            }
+            edits += 1;
+        })
+        .unwrap();
+        assert!(changed);
+        assert_eq!(edits, 2, "한 번 다시 만들었다");
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "schema = 1\n[diagnostics]\ncrash_reports = true\n\n[ui]\nlanguage = \"ko\"\n"
+        );
+    }
+
+    /// 쓸 때마다 파일이 바뀌면 몇 번 다시 해 보고 쓰지 않은 채 `Busy` 로 끝난다.
+    #[test]
+    fn gives_up_when_the_file_keeps_changing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(SETTINGS_FILE);
+        fs::write(&file, "schema = 1\n").unwrap();
+        let mut edits = 0;
+        let e = write_language_with(dir.path(), "ko", &mut |path| {
+            edits += 1;
+            fs::write(path, format!("schema = 1\nedit = {edits}\n")).unwrap();
+        })
+        .unwrap_err();
+        assert!(matches!(e, WriteError::Busy { .. }), "{e}");
+        assert_eq!(edits, ATTEMPTS);
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            format!("schema = 1\nedit = {ATTEMPTS}\n")
+        );
     }
 
     #[cfg(unix)]
