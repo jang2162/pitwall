@@ -13,7 +13,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 pub const DEFAULT_TARGET: &str = "/usr/local/bin/pitwall";
 pub const TARGET_ENV: &str = "PITWALL_SHELL_COMMAND_TARGET";
@@ -222,11 +222,22 @@ fn install_and_report<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             )
         }
     };
-    app.dialog()
+    let mut dialog = app
+        .dialog()
         .message(text)
         .title("Install Shell Command")
-        .kind(kind)
-        .show(|_| {});
+        .kind(kind);
+    // 부모 없는 대화상자는 앱이 활성화되지 않았으면 화면에 오르지 않았다(macOS, 창 목록에 오프스크린으로만 생김).
+    // 창이 있으면 그 창의 시트로 띄운다 — 포커스된 창, 없으면 아무 창.
+    let windows = app.webview_windows();
+    let parent = windows
+        .values()
+        .find(|w| w.is_focused().unwrap_or(false))
+        .or_else(|| windows.values().next());
+    if let Some(parent) = parent {
+        dialog = dialog.parent(parent);
+    }
+    dialog.show(|_| {});
     result
 }
 
