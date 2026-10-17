@@ -526,6 +526,15 @@ it("reveals and removes from the context menu, and keeps window shortcuts away w
   await settle();
   expect(native.reveal).toHaveBeenCalledWith("/w/infra");
 
+  // 실패 문구도 메뉴와 같은 이름(macOS 면 Finder)으로 말한다.
+  native.reveal.mockRejectedValueOnce(new Error("no such folder"));
+  await openMenu(rows()[2]!);
+  await act(async () => menuItems()[1]!.click());
+  await settle();
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+    "Finder 에서 보기 실패: no such folder",
+  );
+
   await openMenu(rows()[2]!);
   await act(async () => menuItems()[2]!.click());
   await settle();
@@ -721,7 +730,7 @@ it("draws the whole welcome window in English when the host picks en", async () 
   expect(hangul()).toEqual([]);
 
   await openFind({ path: "/w/x/file.txt" });
-  expect(findDialog()?.textContent).toContain("Project to open /w/x/file.txt");
+  expect(findDialog()?.textContent).toContain("Choose a project for /w/x/file.txt");
   expect(findDialog()?.textContent).toContain("Choose Folder…");
   await press("Escape", {}, "Escape");
   await press("KeyN", { metaKey: true });

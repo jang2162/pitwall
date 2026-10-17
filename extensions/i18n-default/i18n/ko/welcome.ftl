@@ -82,7 +82,13 @@ welcome-error-action = { $what } 실패: { $message }
 welcome-error-open = 프로젝트 열기
 welcome-error-remove = 목록에서 제거
 welcome-error-pick-folder = 폴더 선택
-welcome-error-reveal = 파일 관리자에서 보기
+# $platform: mac | win | linux
+welcome-error-reveal =
+    { $platform ->
+        [mac] Finder 에서 보기
+        [win] 탐색기에서 보기
+       *[other] 파일 관리자에서 보기
+    }
 welcome-error-create = 프로젝트 만들기
 welcome-error-find-project = 프로젝트 찾기 요청 읽기
 welcome-error-candidates = 루트 후보 찾기

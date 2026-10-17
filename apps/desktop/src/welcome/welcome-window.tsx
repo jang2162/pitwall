@@ -227,9 +227,9 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
       const root = project.roots[0];
       if (root === undefined) return;
       log?.info(`reveal: ${root}`, "welcome");
-      void native.reveal(root).catch(fail(S.errors.reveal));
+      void native.reveal(root).catch(fail(S.errors.reveal(platform)));
     },
-    [native, fail, log, S],
+    [native, fail, log, S, platform],
   );
 
   const actions = useMemo(

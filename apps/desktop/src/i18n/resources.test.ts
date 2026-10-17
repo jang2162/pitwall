@@ -77,6 +77,7 @@ describe("built-in translations", () => {
     for (const platform of ["mac", "win", "linux"] as const) {
       welcomeStrings(t).menu.reveal(platform);
       welcomeStrings(t).actions.reveal(platform);
+      welcomeStrings(t).errors.reveal(platform);
     }
     expect(problems).toEqual([]);
     expect(used.size).toBeGreaterThan(50);

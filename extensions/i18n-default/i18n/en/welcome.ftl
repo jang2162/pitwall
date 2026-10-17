@@ -49,7 +49,7 @@ welcome-storage-memory = Could not open the project list file. The list looks em
 
 welcome-find-label = Find Project
 # $path: the file or folder being opened
-welcome-find-title = Project to open { $path }
+welcome-find-title = Choose a project for { $path }
 welcome-find-search = Folder path
 welcome-find-empty = No matching candidates
 welcome-find-loading = Looking for candidates…
@@ -82,7 +82,13 @@ welcome-error-action = { $what } failed: { $message }
 welcome-error-open = Open project
 welcome-error-remove = Remove from list
 welcome-error-pick-folder = Choose folder
-welcome-error-reveal = Show in file manager
+# $platform: mac | win | linux
+welcome-error-reveal =
+    { $platform ->
+        [mac] Reveal in Finder
+        [win] Show in Explorer
+       *[other] Show in file manager
+    }
 welcome-error-create = Create project
 welcome-error-find-project = Read the find-project request
 welcome-error-candidates = Find root candidates

@@ -14,7 +14,7 @@ export function welcomeStrings(t: Translate) {
     open: t("welcome-error-open"),
     remove: t("welcome-error-remove"),
     pickFolder: t("welcome-error-pick-folder"),
-    reveal: t("welcome-error-reveal"),
+    reveal: (platform: Platform) => t("welcome-error-reveal", { platform }),
     create: t("welcome-error-create"),
     findProject: t("welcome-error-find-project"),
     candidates: t("welcome-error-candidates"),
