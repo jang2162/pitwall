@@ -1,7 +1,7 @@
 {
   "version": 2,
   "revisions": {
-    "default": 20
+    "default": 22
   },
   "sources": {
     "default:mcp/codegraph": "01d216780214053bd3728391bbb87db603034af0d566ca43dc52bc228378cc00",
@@ -41,9 +41,6 @@
     "default:rules/ruler/SETUP.md": "a39cccbe591d83034567c291707a1e9a6ce17359b8ce40135cdc05dcfd867407",
     "default:rules/rust/00-fmt-lint.md": "587dd296f7997dd33afb9165364e89d8217f04115ad063568d3688c6f0c88535",
     "default:rules/rust/01-toolchain.md": "1248f6c80854e07cd09b591e9c1c8cac1e1359f646d43b1443a7445ee5d8ff86",
-    "default:rules/tiergear/00-switch.md": "f07c95ca2a29356b6e42f3a1f156872c37df7d89c521539adfd27c06d838a907",
-    "default:rules/tiergear/01-launch.md": "0c9ac57eb259330694b7175f4da76373e111d83f0e6b665492cf6413964b2fc0",
-    "default:rules/tiergear/02-orca-spawn.md": "150896fe165ccb4508c6d302f01962c521ff5aa93ad1fecb4a8b7aa7d8255551",
     "default:skills/guideline-export": "410661cf5e1afd5e91146070db113e4986e687b01ebf3e6815d7e22243027acb",
     "default:skills/orca-worker": "21c16400cced87f4d35cee13adf38f62def59244408ba41aa5dc00c1074d6568"
   },
@@ -220,18 +217,6 @@
         "default:skills/orca-worker"
       ],
       "hash": "84715e3b693649831cd757ba544d2d6a6bf66c11a9bb1b38bca0d7b6d0e69a89"
-    },
-    {
-      "path": ".ruler/tiergear/00-switch.md",
-      "items": [
-        "default:rules/tiergear/00-switch.md"
-      ],
-      "hash": "2cce393bb6224de79242619219807fe3a6208589a86a782281a54e5046561a1f"
-    },
-    {
-      "path": ".ruler/tiergear/99-reference.md",
-      "items": [],
-      "hash": "0f7402bcaa2c4dd7ca503b26c8c20e5f835eb9ef144274b6a045602cc1c6d1f6"
     },
     {
       "path": "docs/guideline/README.md",
@@ -419,20 +404,6 @@
         "default:rules/rust/01-toolchain.md"
       ],
       "hash": "ce1da0b970f9e5684ad556f07971ee0e9eef9e6528cf49381e0ceb8958dde3b0"
-    },
-    {
-      "path": "docs/guideline/tiergear/01-launch.md",
-      "items": [
-        "default:rules/tiergear/01-launch.md"
-      ],
-      "hash": "081913ec78898ec180adfad31395e4520fb662264fb11f5fd022021fd9410a8c"
-    },
-    {
-      "path": "docs/guideline/tiergear/02-orca-spawn.md",
-      "items": [
-        "default:rules/tiergear/02-orca-spawn.md"
-      ],
-      "hash": "6520268c514405d76e39de0a8f41a32deb0580d25e1a6bf8194e396152849f19"
     }
   ]
 }

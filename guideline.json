@@ -46,9 +46,6 @@
         "rules/ruler/SETUP.md",
         "rules/rust/00-fmt-lint.md",
         "rules/rust/01-toolchain.md",
-        "rules/tiergear/00-switch.md",
-        "rules/tiergear/01-launch.md",
-        "rules/tiergear/02-orca-spawn.md",
         "skills/guideline-export",
         "skills/orca-worker"
       ]
