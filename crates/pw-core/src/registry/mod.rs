@@ -5,12 +5,14 @@
 //! - [`resolve`]: 경로 → 프로젝트(가장 깊은 루트, 워크트리 → 메인 저장소).
 //! - [`candidates`]: 루트 후보 추천과 그 순서.
 //! - [`slug`]: 개인 전용 설정 폴더 이름.
+//! - [`info`]: 프로젝트 요약(빌드 파일 · 언어 · 설정 파일 이름).
 //! - [`methods`]: 레지스트리 RPC(`project.*`).
 //!
 //! 레지스트리는 처음 쓰일 때 파일을 연다. Host 를 만들기만 해서는 `$DATA` 에 아무것도 생기지 않는다.
 //! 변경은 [`Scope::Host`] 의 [`TOPIC_CHANGED`] 이벤트로 나간다.
 
 pub mod candidates;
+pub mod info;
 pub mod methods;
 pub mod path;
 pub mod resolve;
@@ -278,6 +280,8 @@ struct Inner {
     timings: Timings,
     bus: EventBus,
     db: Mutex<Option<store::Opened>>,
+    /// [`store::open`] 또는 읽기 전용 프로세스의 [`store::open_read_only`].
+    open: fn(&Path, Duration) -> store::Opened,
 }
 
 /// 잠긴 파일을 다루는 시간. 기본값은 [`store`] 의 상수다. 시험은 짧게 준다.
@@ -307,6 +311,16 @@ impl Registry {
         Self::with_timings(paths, home, bus, Timings::default())
     }
 
+    /// 파일을 만들지도 고치지도 않는 레지스트리([`store::open_read_only`]). 앱 없이 뜬 `pitwall mcp` 가 쓴다 — 마이그레이션 ·
+    /// 손상 복구는 앱이 한다. 쓰기 메서드는 [`RegistryError::Unavailable`] 로 거절된다.
+    pub fn read_only(paths: AppPaths, home: Option<PathBuf>, bus: EventBus) -> Self {
+        let mut registry = Self::new(paths, home, bus);
+        Arc::get_mut(&mut registry.inner)
+            .expect("방금 만든 레지스트리는 공유되지 않았다")
+            .open = store::open_read_only;
+        registry
+    }
+
     /// 잠긴 파일을 다루는 시간을 정해 만든다(시험용).
     pub fn with_timings(
         paths: AppPaths,
@@ -322,6 +336,7 @@ impl Registry {
                 timings,
                 bus,
                 db: Mutex::new(None),
+                open: store::open,
             }),
         }
     }
@@ -365,6 +380,12 @@ impl Registry {
 
     pub fn get(&self, id: &str) -> Result<Project, RegistryError> {
         self.read(|conn| load_one(conn, id))
+    }
+
+    /// 프로젝트 요약([`info`]). 루트 폴더를 읽으므로 레지스트리 잠금을 놓고 본다.
+    pub fn info(&self, id: &str) -> Result<info::ProjectInfo, RegistryError> {
+        let project = self.get(id)?;
+        Ok(info::info(project, &self.inner.paths))
     }
 
     pub fn create(&self, new: NewProject) -> Result<Project, RegistryError> {
@@ -553,13 +574,13 @@ impl Registry {
     fn opened<'g>(slot: &'g mut Option<store::Opened>, inner: &Inner) -> &'g mut store::Opened {
         let t = inner.timings;
         match slot {
-            None => *slot = Some(store::open(&inner.file, t.busy)),
+            None => *slot = Some((inner.open)(&inner.file, t.busy)),
             Some(opened)
                 if opened
                     .locked_at
                     .is_some_and(|at| at.elapsed() >= t.retry_interval) =>
             {
-                let fresh = store::open(&inner.file, t.retry_busy);
+                let fresh = (inner.open)(&inner.file, t.retry_busy);
                 // 짧은 대기는 다시 여는 동안만이다. 열린 연결의 쓰기는 다른 프로세스를 처음과 같이 기다린다.
                 let _ = fresh.conn.busy_timeout(t.busy);
                 *slot = Some(fresh);

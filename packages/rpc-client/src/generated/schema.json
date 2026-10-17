@@ -1401,6 +1401,175 @@
       ],
       "tier": "read"
     },
+    "project.info": {
+      "description": "프로젝트 요약: 루트, 빌드 파일, 빌드 파일에서 짐작한 언어, 설정 폴더와 그 안의 설정 파일 이름. 없는 id 면 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "기능 메서드의 프로젝트 지정(`docs/design/03-architecture.md` §4). MCP 서버는 세션의 프로젝트가 있으면 이 키를 채워 준다.",
+        "properties": {
+          "projectId": {
+            "description": "프로젝트 id(`project_list` 의 `id`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ConfigMode": {
+            "description": "프로젝트 설정을 어디에 두는가(설계 D9).",
+            "oneOf": [
+              {
+                "const": "repository",
+                "description": "저장소의 `<root>/.pitwall/`.",
+                "type": "string"
+              },
+              {
+                "const": "personal",
+                "description": "개인 전용 `$CONFIG/projects/<slug>/`. 저장소의 `.pitwall/` 은 읽지 않는다.",
+                "type": "string"
+              }
+            ]
+          },
+          "ConfigSummary": {
+            "description": "설정을 어디서 읽는가와 거기 있는 파일. 내용은 담지 않는다.",
+            "properties": {
+              "dir": {
+                "description": "저장소 모드면 `<root>/.pitwall`, 개인 전용이면 `$CONFIG/projects/<slug>`.",
+                "type": "string"
+              },
+              "files": {
+                "description": "그 폴더의 설정 파일 id(`project`, `run/dev-server` …). `.local.toml` 은 같은 id 로 합친다. 이름순.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "mode": {
+                "$ref": "#/$defs/ConfigMode"
+              }
+            },
+            "required": [
+              "mode",
+              "dir",
+              "files"
+            ],
+            "type": "object"
+          },
+          "Project": {
+            "description": "등록된 프로젝트. 경로는 [`path::normalize`] 로 정규화된 절대 경로다.",
+            "properties": {
+              "configMode": {
+                "$ref": "#/$defs/ConfigMode"
+              },
+              "createdAt": {
+                "description": "만든 시각(유닉스 밀리초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "favorite": {
+                "type": "boolean"
+              },
+              "host": {
+                "description": "프로젝트가 있는 Host. 지금은 언제나 `local`.",
+                "type": "string"
+              },
+              "id": {
+                "description": "`$DATA/projects/<id>/` 에도 쓰이는 id(16자리 16진수).",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "openedAt": {
+                "description": "마지막으로 연 시각(유닉스 밀리초). 한 번도 안 열었으면 `null`.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "roots": {
+                "description": "첫 번째가 주 루트다. 지금은 하나뿐이고, 여럿은 멀티 루트(F1-6)가 연다.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "slug": {
+                "description": "개인 전용 설정 폴더 이름. 만들 때 정하고 바뀌지 않는다([`slug`]).",
+                "type": "string"
+              },
+              "tags": {
+                "description": "정렬 · 중복 제거된 태그.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "host",
+              "roots",
+              "favorite",
+              "tags",
+              "configMode",
+              "slug",
+              "createdAt",
+              "openedAt"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "buildFiles": {
+            "description": "주 루트에 있는 빌드 파일 이름(루트 후보와 같은 목록 · 순서).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "config": {
+            "$ref": "#/$defs/ConfigSummary"
+          },
+          "languages": {
+            "description": "빌드 파일에서 짐작한 언어(`rust`, `typescript` …). 먼저 나온 빌드 파일 순.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "project": {
+            "$ref": "#/$defs/Project"
+          },
+          "rootExists": {
+            "description": "주 루트 폴더가 디스크에 있는가. 없으면(옮기거나 지운 폴더) 아래 목록은 비어 있다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project",
+          "rootExists",
+          "buildFiles",
+          "languages",
+          "config"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "project.list": {
       "description": "등록된 프로젝트 전부, 이름순.",
       "kind": "unary",

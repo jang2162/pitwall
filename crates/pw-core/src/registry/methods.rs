@@ -1,7 +1,10 @@
 //! 프로젝트 레지스트리 RPC(`project.*`).
 //!
 //! 권한 등급과 role:
-//! - 목록 · 최근 · 조회 · 저장소 상태는 `read`, 모든 role. 레지스트리 안의 것만 돌려준다.
+//! - 목록 · 최근 · 조회 · 저장소 상태는 `read`, 모든 role. 레지스트리 안의 것만 돌려준다. 요약(`project.info`)도 `read` · 모든 role 이다 —
+//!   등록된 루트 바로 아래의 파일 이름만 본다.
+//!
+//! MCP 툴(`mcp: true`)은 `project.list` · `project.info` 둘이다(`docs/design/05-mcp.md` §2-1).
 //! - 해석 · 후보는 `read` 지만 **owner 만**: 받은 임의의 경로를 따라 디스크를 본다(있는지, `.git` · 빌드 파일이 있는지).
 //!   readonly · mobile 기기가 이것으로 Host 의 파일 시스템을 더듬을 수 있으면 「조회만」의 범위를 넘는다.
 //! - 생성 · 수정 · 삭제 · 「열었음」 기록은 `write`, owner 만(등급의 기본값). 지우는 것은 레지스트리 행뿐이고 폴더 · 설정 파일은
@@ -13,6 +16,7 @@ use std::path::PathBuf;
 use pw_rpc::{Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 
+use super::info::ProjectInfo;
 use super::{
     ConfigMode, NewProject, Project, ProjectPatch, Registry, RegistryError, Resolution,
     RootCandidate, StorageStatus,
@@ -37,6 +41,16 @@ pub struct RecentParams {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectIdParams {
     pub id: String,
+}
+
+/// 기능 메서드의 프로젝트 지정(`docs/design/03-architecture.md` §4). MCP 서버는 세션의 프로젝트가 있으면 이 키를 채워 준다.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectScopedParams {
+    /// 프로젝트 id(`project_list` 의 `id`).
+    pub project_id: String,
 }
 
 #[derive(
@@ -82,6 +96,15 @@ rpc_method! {
         params: (),
         result: Vec<Project>,
         tier: Read,
+        mcp: true,
+    }
+
+    /// 프로젝트 요약: 루트, 빌드 파일, 빌드 파일에서 짐작한 언어, 설정 폴더와 그 안의 설정 파일 이름. 없는 id 면 invalid params 오류.
+    pub ProjectInfoMethod: "project.info" {
+        params: ProjectScopedParams,
+        result: ProjectInfo,
+        tier: Read,
+        mcp: true,
     }
 
     /// 최근에 연 프로젝트, 최근 것부터. 연 적 없는 프로젝트는 빠진다.
@@ -189,6 +212,10 @@ pub fn register(router: &mut Router, registry: &Registry) {
     let r = registry.clone();
     router.unary(ProjectGet, move |_ctx, params| {
         blocking(r.clone(), move |r| r.get(&params.id))
+    });
+    let r = registry.clone();
+    router.unary(ProjectInfoMethod, move |_ctx, params| {
+        blocking(r.clone(), move |r| r.info(&params.project_id))
     });
     let r = registry.clone();
     router.unary(ProjectStorage, move |_ctx, ()| {

@@ -29,10 +29,10 @@ export type MethodName = keyof UnaryMethods | keyof StreamMethods;
 
 /** 메서드 메타데이터(권한 등급 · role · 문서). */
 export const METHODS: Record<MethodName, MethodMeta> = {
-	"fixture.echo": {"name":"fixture.echo","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"EchoParams","output":"EchoResult","doc":" 입력을 `repeatCount` 번 이어 붙여 돌려준다.\n"},
-	"fixture.count": {"name":"fixture.count","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"CountParams","output":"u32","doc":" 0 부터 n-1 까지 청크로 보낸다.\n"},
-	"fixture.fail": {"name":"fixture.fail","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"()","doc":" 애플리케이션 오류를 돌려준다.\n"},
-	"fixture.wait": {"name":"fixture.wait","kind":"unary","tier":"exec","roles":["owner","mobile"],"params":"()","output":"()","doc":" 끝나지 않는다. 취소 시험용.\n"},
+	"fixture.echo": {"name":"fixture.echo","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"EchoParams","output":"EchoResult","doc":" 입력을 `repeatCount` 번 이어 붙여 돌려준다.\n","mcp":false},
+	"fixture.count": {"name":"fixture.count","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"CountParams","output":"u32","doc":" 0 부터 n-1 까지 청크로 보낸다.\n","mcp":false},
+	"fixture.fail": {"name":"fixture.fail","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"()","doc":" 애플리케이션 오류를 돌려준다.\n","mcp":false},
+	"fixture.wait": {"name":"fixture.wait","kind":"unary","tier":"exec","roles":["owner","mobile"],"params":"()","output":"()","doc":" 끝나지 않는다. 취소 시험용.\n","mcp":false},
 };
 
 /** 내장 프로토콜 메서드 이름. */
@@ -126,6 +126,11 @@ export type MethodMeta = {
 	output: string,
 	/**  선언의 문서 주석. MCP 툴 설명의 원천. */
 	doc: string,
+	/**
+	 *  MCP 툴로 내보내는가. 선언에서 `mcp: true` 로 고른 메서드만 툴이 된다 — 새 메서드는 말없이 툴이 되지 않는다.
+	 *  툴 이름 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` §2-1).
+	 */
+	mcp: boolean,
 };
 
 /**  서버 → 클라이언트 알림의 와이어 형식. [`Notification`] 이 이 형태로 직렬화된다. */

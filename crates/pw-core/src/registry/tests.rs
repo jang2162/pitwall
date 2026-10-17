@@ -858,3 +858,74 @@ fn candidates_without_a_repository_list_build_folders_up_to_home() {
     );
     assert!(list.iter().all(|c| !c.vcs));
 }
+
+/// 앱 없이 뜬 `pitwall mcp` 의 레지스트리: 있는 파일은 읽고, 파일 · 폴더를 만들거나 고치지 않는다.
+#[test]
+fn a_read_only_registry_reads_without_creating_or_writing() {
+    let f = Fixture::new();
+    // 파일이 없으면 메모리로 뜨고 `$DATA` 도 만들지 않는다.
+    let absent = Registry::read_only(f.paths.clone(), None, f.bus.clone());
+    assert!(absent.list().unwrap().is_empty());
+    assert!(matches!(absent.status(), StorageStatus::Memory { .. }));
+    assert!(!f.paths.data.exists(), "읽기 전용 열기가 폴더를 만들었다");
+
+    let root = f.dir("proj");
+    let created = f.add(&root);
+    let file = f.registry.file().to_path_buf();
+    let before = fs::read(&file).unwrap();
+
+    let reader = Registry::read_only(f.paths.clone(), None, f.bus.clone());
+    assert_eq!(reader.list().unwrap(), vec![created.clone()]);
+    assert_eq!(
+        reader.status(),
+        StorageStatus::ReadOnly {
+            path: file.display().to_string(),
+            reason: store::READ_ONLY_BY_REQUEST.into(),
+        }
+    );
+    assert!(matches!(
+        reader.mark_opened(&created.id),
+        Err(RegistryError::Unavailable(_))
+    ));
+    assert!(matches!(
+        reader.create(NewProject {
+            root: f.dir("other"),
+            ..NewProject::default()
+        }),
+        Err(RegistryError::Unavailable(_))
+    ));
+    assert_eq!(fs::read(&file).unwrap(), before, "파일이 바뀌었다");
+}
+
+/// 손상된 파일을 앱처럼 옮겨 복구하지 않는다 — 복구는 레지스트리를 소유한 앱의 일이다.
+#[test]
+fn a_read_only_registry_leaves_a_corrupt_file_alone() {
+    let f = Fixture::new();
+    fs::create_dir_all(&f.paths.data).unwrap();
+    let file = f.paths.data.join(store::FILE_NAME);
+    fs::write(&file, b"not a database").unwrap();
+    let reader = Registry::read_only(f.paths.clone(), None, f.bus.clone());
+    assert!(matches!(reader.status(), StorageStatus::Memory { .. }));
+    assert!(reader.list().unwrap().is_empty());
+    assert_eq!(fs::read(&file).unwrap(), b"not a database");
+    let entries: Vec<_> = fs::read_dir(&f.paths.data)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [std::ffi::OsString::from(store::FILE_NAME)]);
+}
+
+#[test]
+fn info_summarises_a_registered_project() {
+    let f = Fixture::new();
+    let root = f.dir("proj");
+    f.file("proj/Cargo.toml");
+    let created = f.add(&root);
+    let info = f.registry.info(&created.id).unwrap();
+    assert_eq!(info.project, created);
+    assert_eq!(info.languages, ["rust"]);
+    assert!(matches!(
+        f.registry.info("nope"),
+        Err(RegistryError::NotFound(_))
+    ));
+}

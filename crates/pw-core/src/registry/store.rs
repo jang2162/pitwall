@@ -158,6 +158,59 @@ pub fn open_with(file: &Path, busy: Duration, migrations: &[Migration]) -> Opene
     }
 }
 
+/// [`open_read_only`] 로 연 파일의 `readOnly` 이유.
+pub const READ_ONLY_BY_REQUEST: &str =
+    "opened read-only by a process that does not own the registry (`pitwall mcp` without the app)";
+
+/// 읽기만 하는 프로세스(앱 없이 뜬 `pitwall mcp`)의 열기. 파일 · 폴더를 **만들지도 고치지도 않는다** — 마이그레이션 · 손상 복구
+/// (파일 옮기기)는 레지스트리를 소유한 앱의 일이다. 그래서 [`open`] 과 달리:
+/// - 파일이 없으면 빈 메모리 DB(`memory`). 폴더를 만들지 않는다.
+/// - 손상 · 이 앱보다 낮은 스키마(올려야 읽힌다)도 `memory` 다. 파일은 그대로 둔다.
+/// - 그 밖에는 `readOnly`(이유 [`READ_ONLY_BY_REQUEST`], 앱보다 새 스키마면 그 이유).
+pub fn open_read_only(file: &Path, busy: Duration) -> Opened {
+    let display = file.display().to_string();
+    if !file.is_file() {
+        return memory(display, "the registry file does not exist yet".into(), None);
+    }
+    match try_open_read_only(file, busy) {
+        Ok((conn, reason)) => Opened {
+            conn,
+            status: StorageStatus::ReadOnly {
+                path: display,
+                reason,
+            },
+            locked_at: None,
+        },
+        Err(Failure::Busy(reason)) => memory(display, reason, Some(Instant::now())),
+        Err(e) => memory(display, e.into_reason(), None),
+    }
+}
+
+fn try_open_read_only(file: &Path, busy: Duration) -> Result<(Connection, String), Failure> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = Connection::open_with_flags(file, flags)?;
+    conn.busy_timeout(busy)?;
+    let check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if check != "ok" {
+        return Err(Failure::Corrupt(format!("integrity check: {check}")));
+    }
+    let version: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let latest = supported_version();
+    let reason = if version > latest {
+        format!("schema version {version} is newer than this app supports ({latest})")
+    } else if version < latest {
+        return Err(Failure::Other(format!(
+            "schema version {version} needs migrating by the app ({latest})"
+        )));
+    } else {
+        READ_ONLY_BY_REQUEST.to_owned()
+    };
+    match read_only(conn, reason)? {
+        Ready::ReadOnly(conn, reason) => Ok((conn, reason)),
+        Ready::Writable(_) => unreachable!("read_only 은 ReadOnly 만 돌려준다"),
+    }
+}
+
 enum Ready {
     Writable(Connection),
     ReadOnly(Connection, String),

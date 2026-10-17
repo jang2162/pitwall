@@ -69,6 +69,10 @@ export type UnaryMethods = {
 	 */
 	"project.get": { params: ProjectIdParams; result: Project };
 	/**
+	 * 프로젝트 요약: 루트, 빌드 파일, 빌드 파일에서 짐작한 언어, 설정 폴더와 그 안의 설정 파일 이름. 없는 id 면 invalid params 오류.
+	 */
+	"project.info": { params: ProjectScopedParams; result: ProjectInfo };
+	/**
 	 * 등록된 프로젝트 전부, 이름순.
 	 */
 	"project.list": { params: null; result: Project[] };
@@ -125,30 +129,31 @@ export type MethodName = keyof UnaryMethods | keyof StreamMethods;
 
 /** 메서드 메타데이터(권한 등급 · role · 문서). */
 export const METHODS: Record<MethodName, MethodMeta> = {
-	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n"},
-	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n"},
-	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n"},
-	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n"},
-	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n"},
-	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n"},
-	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n"},
-	"i18n.get": {"name":"i18n.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"I18nState","doc":" 지금 쓸 UI 언어와 그 Fluent 리소스, 등록된 언어 목록.\n"},
-	"i18n.setLanguage": {"name":"i18n.setLanguage","kind":"unary","tier":"write","roles":["owner"],"params":"SetLanguageParams","output":"()","doc":" UI 언어 설정(전역 `settings.toml` 의 `ui.language`)을 바꾼다. 그 키만 고쳐 쓰고 설정을 다시 읽는다 — 열린 창 ·\n 메뉴는 `config.changed` 로 바뀐다. 모르는 언어면 invalid params, 파일을 고칠 수 없으면(TOML 이 깨졌다 등) 쓰지\n 않고 오류다.\n"},
-	"keymap.get": {"name":"keymap.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"KeymapGetParams","output":"KeymapFile","doc":" 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.\n"},
-	"keymap.list": {"name":"keymap.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"KeymapList","doc":" 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.\n"},
-	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n"},
-	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n"},
-	"project.create": {"name":"project.create","kind":"unary","tier":"write","roles":["owner"],"params":"CreateProjectParams","output":"Project","doc":" 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.\n"},
-	"project.delete": {"name":"project.delete","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"()","doc":" 레지스트리에서 지운다. 프로젝트 폴더와 설정 파일은 그대로 둔다.\n"},
-	"project.get": {"name":"project.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트 하나. 없으면 invalid params 오류.\n"},
-	"project.list": {"name":"project.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"Vec<Project>","doc":" 등록된 프로젝트 전부, 이름순.\n"},
-	"project.markOpened": {"name":"project.markOpened","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트를 열었다고 기록한다(최근 목록 순서).\n"},
-	"project.recent": {"name":"project.recent","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"RecentParams","output":"Vec<Project>","doc":" 최근에 연 프로젝트, 최근 것부터. 연 적 없는 프로젝트는 빠진다.\n"},
-	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n"},
-	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n"},
-	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n"},
-	"theme.get": {"name":"theme.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ThemeGetParams","output":"ThemeFile","doc":" 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.\n"},
-	"theme.list": {"name":"theme.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ThemeList","doc":" 등록된 테마 목록.\n"},
+	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n","mcp":false},
+	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n","mcp":false},
+	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":false},
+	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":false},
+	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false},
+	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n","mcp":false},
+	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n","mcp":false},
+	"i18n.get": {"name":"i18n.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"I18nState","doc":" 지금 쓸 UI 언어와 그 Fluent 리소스, 등록된 언어 목록.\n","mcp":false},
+	"i18n.setLanguage": {"name":"i18n.setLanguage","kind":"unary","tier":"write","roles":["owner"],"params":"SetLanguageParams","output":"()","doc":" UI 언어 설정(전역 `settings.toml` 의 `ui.language`)을 바꾼다. 그 키만 고쳐 쓰고 설정을 다시 읽는다 — 열린 창 ·\n 메뉴는 `config.changed` 로 바뀐다. 모르는 언어면 invalid params, 파일을 고칠 수 없으면(TOML 이 깨졌다 등) 쓰지\n 않고 오류다.\n","mcp":false},
+	"keymap.get": {"name":"keymap.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"KeymapGetParams","output":"KeymapFile","doc":" 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.\n","mcp":false},
+	"keymap.list": {"name":"keymap.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"KeymapList","doc":" 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.\n","mcp":false},
+	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n","mcp":false},
+	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":false},
+	"project.create": {"name":"project.create","kind":"unary","tier":"write","roles":["owner"],"params":"CreateProjectParams","output":"Project","doc":" 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.\n","mcp":false},
+	"project.delete": {"name":"project.delete","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"()","doc":" 레지스트리에서 지운다. 프로젝트 폴더와 설정 파일은 그대로 둔다.\n","mcp":false},
+	"project.get": {"name":"project.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트 하나. 없으면 invalid params 오류.\n","mcp":false},
+	"project.info": {"name":"project.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectScopedParams","output":"ProjectInfo","doc":" 프로젝트 요약: 루트, 빌드 파일, 빌드 파일에서 짐작한 언어, 설정 폴더와 그 안의 설정 파일 이름. 없는 id 면 invalid params 오류.\n","mcp":true},
+	"project.list": {"name":"project.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"Vec<Project>","doc":" 등록된 프로젝트 전부, 이름순.\n","mcp":true},
+	"project.markOpened": {"name":"project.markOpened","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트를 열었다고 기록한다(최근 목록 순서).\n","mcp":false},
+	"project.recent": {"name":"project.recent","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"RecentParams","output":"Vec<Project>","doc":" 최근에 연 프로젝트, 최근 것부터. 연 적 없는 프로젝트는 빠진다.\n","mcp":false},
+	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n","mcp":false},
+	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n","mcp":false},
+	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":false},
+	"theme.get": {"name":"theme.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ThemeGetParams","output":"ThemeFile","doc":" 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.\n","mcp":false},
+	"theme.list": {"name":"theme.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ThemeList","doc":" 등록된 테마 목록.\n","mcp":false},
 };
 
 /** 내장 프로토콜 메서드 이름. */
@@ -247,6 +252,15 @@ export type ConfigSnapshot = {
 	/**  id 순으로 정렬돼 있다. */
 	files: ConfigFile[],
 	notices: ConfigNotice[],
+};
+
+/**  설정을 어디서 읽는가와 거기 있는 파일. 내용은 담지 않는다. */
+export type ConfigSummary = {
+	mode: ConfigMode,
+	/**  저장소 모드면 `<root>/.pitwall`, 개인 전용이면 `$CONFIG/projects/<slug>`. */
+	dir: string,
+	/**  그 폴더의 설정 파일 id(`project`, `run/dev-server` …). `.local.toml` 은 같은 id 로 합친다. 이름순. */
+	files: string[],
 };
 
 /**  지금 적용 중인 설정과, 마지막 다시 읽기의 실패(있으면). 실패해도 `snapshot` 은 직전에 성공한 값이다. */
@@ -433,6 +447,11 @@ export type MethodMeta = {
 	output: string,
 	/**  선언의 문서 주석. MCP 툴 설명의 원천. */
 	doc: string,
+	/**
+	 *  MCP 툴로 내보내는가. 선언에서 `mcp: true` 로 고른 메서드만 툴이 된다 — 새 메서드는 말없이 툴이 되지 않는다.
+	 *  툴 이름 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` §2-1).
+	 */
+	mcp: boolean,
 };
 
 /**  서버 → 클라이언트 알림의 와이어 형식. [`Notification`] 이 이 형태로 직렬화된다. */
@@ -482,6 +501,17 @@ export type ProjectIdParams = {
 	id: string,
 };
 
+export type ProjectInfo = {
+	project: Project,
+	/**  주 루트 폴더가 디스크에 있는가. 없으면(옮기거나 지운 폴더) 아래 목록은 비어 있다. */
+	rootExists: boolean,
+	/**  주 루트에 있는 빌드 파일 이름(루트 후보와 같은 목록 · 순서). */
+	buildFiles: string[],
+	/**  빌드 파일에서 짐작한 언어(`rust`, `typescript` …). 먼저 나온 빌드 파일 순. */
+	languages: string[],
+	config: ConfigSummary,
+};
+
 /**  고칠 것만 채운다. */
 export type ProjectPatch = {
 	name?: string | null,
@@ -489,6 +519,12 @@ export type ProjectPatch = {
 	/**  통째로 바꾼다. */
 	tags?: string[] | null,
 	configMode?: ConfigMode | null,
+};
+
+/**  기능 메서드의 프로젝트 지정(`docs/design/03-architecture.md` §4). MCP 서버는 세션의 프로젝트가 있으면 이 키를 채워 준다. */
+export type ProjectScopedParams = {
+	/**  프로젝트 id(`project_list` 의 `id`). */
+	projectId: string,
 };
 
 export type RecentParams = {

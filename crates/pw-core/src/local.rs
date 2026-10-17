@@ -105,11 +105,17 @@ impl LocalHost {
         LocalHostBuilder {
             id: id.into(),
             paths: None,
+            read_only_registry: false,
             extensions: Vec::new(),
         }
     }
 
-    fn build(id: HostId, paths: Option<AppPaths>, extensions: Vec<Extension>) -> Self {
+    fn build(
+        id: HostId,
+        paths: Option<AppPaths>,
+        read_only_registry: bool,
+        extensions: Vec<Extension>,
+    ) -> Self {
         let hub = EventHub::new();
         let bus = EventBus::with_rpc_hub(DEFAULT_CAPACITY, hub.clone());
         let cancel = CancellationToken::new();
@@ -119,9 +125,14 @@ impl LocalHost {
             paths,
         });
         // 레지스트리는 처음 쓰일 때 `$DATA/state.db` 를 연다 — Host 를 만들기만 해서는 디스크에 쓰지 않는다.
-        let registry = config
-            .as_ref()
-            .map(|c| Registry::new(c.paths.clone(), PathEnv::current().home, bus.clone()));
+        let registry = config.as_ref().map(|c| {
+            let open = if read_only_registry {
+                Registry::read_only
+            } else {
+                Registry::new
+            };
+            open(c.paths.clone(), PathEnv::current().home, bus.clone())
+        });
         let projects = Projects::default();
         let mut router = build_router(&id, &bus, &tasks, config.as_ref(), &projects);
         if let Some(registry) = &registry {
@@ -256,6 +267,7 @@ type Extension = Box<dyn FnOnce(&mut Router)>;
 pub struct LocalHostBuilder {
     id: HostId,
     paths: Option<AppPaths>,
+    read_only_registry: bool,
     extensions: Vec<Extension>,
 }
 
@@ -267,6 +279,13 @@ impl LocalHostBuilder {
         self
     }
 
+    /// 레지스트리를 읽기만 한다([`Registry::read_only`]). 앱 없이 뜬 `pitwall mcp` 처럼 레지스트리를 소유하지 않는 프로세스가 쓴다.
+    #[must_use]
+    pub fn read_only_registry(mut self) -> Self {
+        self.read_only_registry = true;
+        self
+    }
+
     /// `host.*` · `config.*` · `project.*` 에 더해 붙일 메서드. 여러 번 부르면 부른 순서대로 붙는다.
     #[must_use]
     pub fn methods(mut self, extend: impl FnOnce(&mut Router) + 'static) -> Self {
@@ -275,7 +294,12 @@ impl LocalHostBuilder {
     }
 
     pub fn build(self) -> LocalHost {
-        LocalHost::build(self.id, self.paths, self.extensions)
+        LocalHost::build(
+            self.id,
+            self.paths,
+            self.read_only_registry,
+            self.extensions,
+        )
     }
 }
 

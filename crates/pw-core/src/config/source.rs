@@ -31,8 +31,9 @@ const PROJECT_SUBDIRS: &[&str] = &["run", "db"];
 /// 내장 기본값 — 키를 정한 기능은 자기 기본값을 여기에 둔다. 아직 키가 없는 자리는 **예시 키**(`sample`)만 있다.
 /// - `diagnostics.crash_reports`: 크래시 리포트 전송(opt-in, 설계 D22). 데스크톱이 읽는다(`apps/desktop/src-tauri/src/diag.rs`).
 /// - `ui.language`: UI 언어. `"system"` 이면 OS 언어를 따른다(`crates/pw-i18n`, `docs/design/07-extensibility.md` §4.1).
+/// - `mcp.preset`: MCP 툴 노출 프리셋(`docs/design/05-mcp.md` 「툴 노출 설정」 절). `crates/pw-mcp` 가 읽는다. 프로젝트 설정의 `[mcp]` 가 덮는다.
 const BUILTIN_PROJECT: &str = "schema = 1\n\n[sample]\ngreeting = \"hello\"\n";
-const BUILTIN_SETTINGS: &str = "schema = 1\n\n[sample]\ngreeting = \"hello\"\n\n[diagnostics]\ncrash_reports = false\n\n[ui]\nlanguage = \"system\"\n";
+const BUILTIN_SETTINGS: &str = "schema = 1\n\n[sample]\ngreeting = \"hello\"\n\n[diagnostics]\ncrash_reports = false\n\n[ui]\nlanguage = \"system\"\n\n[mcp]\npreset = \"standard\"\n";
 
 /// 스냅숏: 파일 id 마다 병합된 값과, 이번 읽기에서 생긴 알림.
 #[derive(
@@ -880,7 +881,8 @@ mod tests {
                 "sample": {"greeting": "hi"},
                 "machine": "laptop",
                 "diagnostics": {"crash_reports": false},
-                "ui": {"language": "system"}
+                "ui": {"language": "system"},
+                "mcp": {"preset": "standard"}
             })
         );
         assert!(paths.state.join("backup/settings.toml.v0").is_file());
