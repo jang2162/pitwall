@@ -34,11 +34,11 @@
 
 - **Why:** 여러 워크트리가 동시에 앱을 띄우면 이름은 어느 앱이든 집는다. 다른 워크트리의 앱을 보고 확인했다고 적거나, 남의 앱을 꺼서 그쪽 확인을 조용히 깨뜨린다 — 꺼진 쪽에는 오류 없이 앱이 사라진 것으로만 보인다.
 - **How to apply:**
-  - pid 는 그 워크트리 경로로 찾는다: `pgrep -f '<워크트리>/target/debug/pitwall'`. 이후 `orca computer --app pid:<pid>`, System Events `first process whose unix id is <pid>` 로 다룬다. 끌 때도 그 pid 프로세스의 메뉴 Quit 을 누른다.
+  - pid 는 그 워크트리 경로로 찾는다: `pgrep -f '<워크트리>/target/debug/pitwall'`. 이후 `orca computer --app pid:<pid>`, System Events `first process whose unix id is <pid>` 로 다룬다. 끌 때도 그 pid 프로세스의 앱 메뉴 종료 항목을 누른다 — 항목 이름은 UI 언어를 따른다(en `"Quit Pitwall"`, ko `"Pitwall 종료"`, `CONTRIBUTING.md` 「명령」).
   - 바이너리를 상대 경로로 띄웠으면 명령줄에 워크트리 경로가 없어 위 패턴이 못 잡는다 — `pgrep -f target/debug/pitwall` 로 후보를 찾고 `lsof -a -p <pid> -d cwd` 로 그 워크트리인지 본다.
   - `orca computer` 는 뒤에 있는 창을 `--window-id` 로 골라도 앞 창의 트리를 줄 수 있다. 창을 바꿀 때는 먼저 System Events 로 그 창에 `AXRaise` 를 보낸다.
   - CGEvent 처럼 화면 좌표를 받는 도구에 창 기준 좌표(`orca computer` 의 스크린샷 · 트리 기준)를 넘기지 않는다. 창 위치(`orca computer list-windows` 의 x · y)를 더해 넘긴다 — 틀리면 오류 없이 빈자리를 누른다.
-  - 창을 읽거나 누르기 전에 화면 잠금을 본다(`ioreg -n Root -d1 -a | grep -A1 CGSSessionScreenIsLocked` 가 `<true/>` 면 잠김). **화면이 잠긴 동안 키 입력(System Events `keystroke`, CGEvent)을 보내지 않는다 — 잠금 화면의 암호 칸으로 들어간다.** 잠금 중의 증상과 그동안 할 수 있는 것(메뉴 accelerator 읽기, 메뉴 Quit)은 `CONTRIBUTING.md` 「명령」 절.
+  - 창을 읽거나 누르기 전에 화면 잠금을 본다(`ioreg -n Root -d1 -a | grep -A1 CGSSessionScreenIsLocked` 가 `<true/>` 면 잠김). **화면이 잠긴 동안 키 입력(System Events `keystroke`, CGEvent)을 보내지 않는다 — 잠금 화면의 암호 칸으로 들어간다.** 잠금 중의 증상과 그동안 할 수 있는 것(메뉴 accelerator 읽기, 메뉴의 종료 항목)은 `CONTRIBUTING.md` 「명령」 절.
   - 끝나면 그 pid 가 없고 개발 서버 포트에 LISTEN 이 없는지(`lsof -nP -iTCP:<포트> -sTCP:LISTEN`) 본다.
 
 ## 커밋과 PR
