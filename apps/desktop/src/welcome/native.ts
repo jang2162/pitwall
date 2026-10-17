@@ -4,6 +4,7 @@
 // - 명령 `open_project_window` { projectId, worktree?, file?, line?, col? } — 그 프로젝트 창을 열거나 앞으로 가져오고
 //   `project.markOpened` 를 갱신한다. `worktree` 는 활성 워크트리의 꼭대기(`ActiveWorktree.top`), `file` 은 절대 경로.
 // - 이벤트 `find-project-requested` + 명령 `take_pending_find_project` → { path, line?, col? } | null. 꺼내면 비워진다.
+// - 명령 `path_kind` { path } → "file" | "dir" | "missing" — 끌어다 놓은 경로를 가른다.
 //   웰컴 창은 뜰 때와 이벤트를 받을 때 꺼내 본다 — 창이 뜨기 전에 온 요청도 놓치지 않게.
 
 import { invoke } from "@tauri-apps/api/core";
@@ -90,7 +91,6 @@ export const tauriWelcomeNative: WelcomeNative = {
         }),
       "drag-drop",
     ),
-  // TODO(M0-10 리베이스 회차): src-tauri 에 `path_kind` 명령을 두고 그것을 부른다. 그 전까지는 폴더로 본다 — 끌어다 놓은 파일도
-  // 지금처럼 S3 으로 가고, 만들기가 「있는 폴더여야 한다」로 거절한다.
-  pathKind: async () => "dir",
+  // src-tauri/src/launch.rs 의 `path_kind`. RPC 가 아니라 Tauri 명령이다 — 앱이 띄운 창의 드롭만 가르면 된다.
+  pathKind: (path) => invoke<PathKind>("path_kind", { path }),
 };

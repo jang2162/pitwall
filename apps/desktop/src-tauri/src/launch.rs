@@ -220,6 +220,33 @@ pub async fn open_project_window<R: Runtime>(
         .map_err(|e| e.to_string())?
 }
 
+/// 경로가 가리키는 것. 웰컴 창이 끌어다 놓은 경로를 폴더(새 프로젝트) · 파일(F2 갈래)로 가른다 — 드롭 payload 에는
+/// 경로만 온다(src/welcome/native.ts 의 `pathKind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PathKind {
+    File,
+    Dir,
+    Missing,
+}
+
+/// 심링크는 따라간다(폴더를 가리키는 링크는 폴더). 상대 경로 · 읽을 수 없는 경로는 `Missing` — 드롭은 절대 경로를 준다.
+pub fn path_kind_of(path: &Path) -> PathKind {
+    if !path.is_absolute() {
+        return PathKind::Missing;
+    }
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_dir() => PathKind::Dir,
+        Ok(_) => PathKind::File,
+        Err(_) => PathKind::Missing,
+    }
+}
+
+#[tauri::command]
+pub fn path_kind(path: String) -> PathKind {
+    path_kind_of(Path::new(&path))
+}
+
 /// 보류된 「프로젝트 찾기」 요청을 꺼낸다(꺼내면 비운다). 없으면 `null`.
 #[tauri::command]
 pub fn take_pending_find_project(launch: State<'_, Launch>) -> Option<FindProjectRequest> {
@@ -240,6 +267,31 @@ mod tests {
     use tauri::test::{MockRuntime, mock_app};
 
     use super::*;
+
+    #[test]
+    fn path_kind_tells_files_folders_and_missing_paths_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(tmp.path()).unwrap();
+        let file = base.join("a.txt");
+        fs::write(&file, "x").unwrap();
+        let dir = base.join("dir");
+        fs::create_dir(&dir).unwrap();
+        assert_eq!(path_kind_of(&file), PathKind::File);
+        assert_eq!(path_kind_of(&dir), PathKind::Dir);
+        assert_eq!(path_kind_of(&base.join("nope")), PathKind::Missing);
+        // 시험의 cwd(이 크레이트 폴더)에 있는 파일이어도 상대 경로는 받지 않는다.
+        assert!(Path::new("Cargo.toml").exists());
+        assert_eq!(path_kind_of(Path::new("Cargo.toml")), PathKind::Missing);
+        #[cfg(unix)]
+        {
+            let link = base.join("link");
+            std::os::unix::fs::symlink(&dir, &link).unwrap();
+            assert_eq!(path_kind_of(&link), PathKind::Dir);
+        }
+        // 웹뷰가 받는 문자열(src/welcome/native.ts 의 `PathKind`).
+        assert_eq!(serde_json::to_value(PathKind::Dir).unwrap(), "dir");
+        assert_eq!(serde_json::to_value(PathKind::Missing).unwrap(), "missing");
+    }
 
     struct Fixture {
         _tmp: tempfile::TempDir,
