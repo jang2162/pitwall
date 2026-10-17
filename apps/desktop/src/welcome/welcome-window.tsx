@@ -294,12 +294,13 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
                           <span className="ml-1 text-ui-muted-foreground">({T.list.remote})</span>
                         )}
                       </span>
+                      {/* 경로는 앞에서 자른다 — 프로젝트를 가르는 것은 끝 조각이다. rtl 로 말줄임을 앞에 두고 글자 순서는 LRM 으로 지킨다. */}
                       <span
-                        className="min-w-0 flex-1 truncate text-ui-muted-foreground"
+                        dir="rtl"
+                        className="min-w-0 flex-1 truncate text-left text-ui-muted-foreground"
                         title={project.roots[0]}
                       >
-                        {isRemote(project) ? `${project.host}:` : ""}
-                        {project.roots[0]}
+                        {`\u200e${isRemote(project) ? `${project.host}:` : ""}${project.roots[0]}\u200e`}
                       </span>
                       {project.tags.map((tag) => (
                         <span

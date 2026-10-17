@@ -89,7 +89,7 @@ export function CreateProjectSheet({
         <Dialog.Content
           aria-describedby={undefined}
           data-keymap-context="createProjectSheet"
-          className="fixed top-0 left-1/2 flex w-[560px] max-w-[94vw] -translate-x-1/2 flex-col gap-3 rounded-b-md border border-t-0 border-ui-border bg-ui-panel px-4 py-3 text-ui-foreground shadow-lg"
+          className="sheet-top fixed left-1/2 flex w-[560px] max-w-[94vw] -translate-x-1/2 flex-col gap-3 rounded-b-md border border-t-0 border-ui-border bg-ui-panel px-4 py-3 text-ui-foreground shadow-lg"
         >
           <Dialog.Title className="text-sm font-semibold">
             {T.title(name.trim() || baseName(root))}
@@ -109,14 +109,14 @@ export function CreateProjectSheet({
             </label>
             <span className="ml-2">{T.root}</span>
             <span className="min-w-0 flex-1 truncate text-ui-muted-foreground" title={root}>
-              {root}
+              {root || T.rootNone}
             </span>
             <button type="button" className={BUTTON} onClick={() => void changeRoot()}>
-              {T.changeRoot}
+              {root ? T.changeRoot : T.chooseRoot}
             </button>
           </div>
-          <fieldset className="flex items-center gap-3">
-            <legend className="float-left mr-1">{T.configMode}</legend>
+          <div role="radiogroup" aria-label={T.configMode} className="flex items-center gap-3">
+            <span>{T.configMode}</span>
             {(
               [
                 ["repository", T.repository],
@@ -134,7 +134,7 @@ export function CreateProjectSheet({
                 {label}
               </label>
             ))}
-          </fieldset>
+          </div>
           <section>
             <h3 className="mb-1 text-[12px] font-semibold">{T.detected}</h3>
             <p className="text-ui-muted-foreground">{T.detectedEmpty}</p>

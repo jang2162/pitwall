@@ -62,6 +62,15 @@ body {
   font-weight: 600;
 }
 
+/* 창 위에서 내려오는 시트(S3). macOS 는 시트가 overlay 타이틀바 아래에서 내려와 신호등 · 창 제목을 덮지 않는다. */
+.sheet-top {
+  top: 0;
+}
+
+:root[data-platform="mac"] .sheet-top {
+  top: 28px;
+}
+
 /* dockview 의 색을 토큰으로 바꾼다. 구조 변수(크기 · 간격)는 dockview 의 라이트 테마(`themeLight`)가 준 것을 쓰고 색만
    덮는다. `:root` 를 붙여 dockview.css 의 `.dockview-theme-light` 보다 우선한다 — 두 파일의 불러오는 순서와 무관하게. */
 :root .dockview-theme-light {

@@ -67,6 +67,8 @@ export const STRINGS = {
     name: "이름",
     root: "루트",
     changeRoot: "변경",
+    chooseRoot: "선택…",
+    rootNone: "고르지 않음",
     configMode: "설정 저장",
     repository: ".pitwall/ 에 저장(커밋)",
     personal: "개인 전용",

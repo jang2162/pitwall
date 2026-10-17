@@ -393,7 +393,7 @@ it("keeps window shortcuts away from the list while the sheet is open", async ()
   expect(await press("Enter", { metaKey: true })).toBe(false);
 
   pickedFolder = "/w/new-thing";
-  await act(async () => button("변경")!.click());
+  await act(async () => button("선택…")!.click());
   await settle();
   expect(sheet()!.querySelector<HTMLInputElement>("input")!.value).toBe("new-thing");
   await act(async () => button("취소")!.click());
