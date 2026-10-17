@@ -95,7 +95,7 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
 |---|---|---|---|
 | 전역 설정 | `$CONFIG/` | TOML | `settings.toml`(전역 설정 · 원격 호스트 · 외부 도구), `keymap.toml`, `themes/`, 개인 전용 프로젝트 설정 `projects/<slug>/` |
 | 앱 데이터 | `$DATA/` | SQLite · 바이너리 | `state.db`(프로젝트 레지스트리 · 최근 목록), `projects/<id>/`(열린 탭 · 레이아웃 · 브레이크포인트 · 쿼리 히스토리), `extensions/`, `tools/`(LSP · DAP 설치본, §07 4.4), `relay/` |
-| 상태 · 로그 | `$STATE/` | 텍스트 | `logs/`, `backup/`(마이그레이션 원본), 감사 로그 |
+| 상태 · 로그 | `$STATE/` | 텍스트 · SQLite | `logs/`, `backup/`(마이그레이션 원본), MCP 감사 로그 `mcp/audit.db`, 실행 중 앱의 MCP 소켓 `run/`([05-mcp.md](05-mcp.md) 「로컬 소켓과 헤드리스」) |
 | 캐시 | `$CACHE/` | 다양 | 심볼 인덱스, registry 캐시, 원격 파일 캐시 — 지워도 재생성 |
 | 프로젝트 공유 설정 | `<project>/.pitwall/project.toml`, `run/*.toml`, `db/*.toml` | TOML | 커밋 가능. 실행 구성, DB 연결(비밀 제외), 외부 도구 오버라이드 |
 | 비밀 | OS 키체인 | | DB 비밀번호, SSH 패스프레이즈, 토큰. 설정 파일에는 `secret_ref`만 |
