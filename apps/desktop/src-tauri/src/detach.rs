@@ -29,11 +29,14 @@ pub fn should_detach(parent: Option<u32>, marked: bool, dev_server: bool) -> boo
 }
 
 /// 이 프로세스의 부모 pid. Windows 에서는 `None`(위 머리 주석).
+#[cfg(unix)]
 pub fn parent_pid() -> Option<u32> {
-    #[cfg(unix)]
-    return Some(std::os::unix::process::parent_id());
-    #[cfg(not(unix))]
-    return None;
+    Some(std::os::unix::process::parent_id())
+}
+
+#[cfg(not(unix))]
+pub fn parent_pid() -> Option<u32> {
+    None
 }
 
 /// 같은 실행 파일 · 인자 · cwd 로 떼어 낸 자식을 띄운다. 자식의 pid 를 돌려준다.

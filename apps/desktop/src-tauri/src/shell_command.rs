@@ -152,6 +152,7 @@ fn symlink(_source: &Path, _link: &Path) -> std::io::Result<()> {
 /// 관리자 권한으로 도는 셸 스크립트. `$1` 출처, `$2` 대상, `$3` 대상의 폴더. 경로는 스크립트 글자에 넣지 않고 위치 인자로
 /// 넘긴다(AppleScript 의 `quoted form of` 로 인용) — 경로의 따옴표 · 공백 · `$(…)` 가 명령이 되지 않는다.
 /// 비링크면 3 으로 끝난다(암호 창이 떠 있는 동안 다른 설치기가 놓은 파일을 root 가 지우지 않게).
+#[cfg(target_os = "macos")]
 pub const ELEVATED_SH: &str = r#"set -e
 /bin/mkdir -p "$3"
 if [ -e "$2" ] && [ ! -L "$2" ]; then exit 3; fi
@@ -161,6 +162,7 @@ tmp="$3/.pitwall-link-$$"
 /bin/mv -fh "$tmp" "$2" || { /bin/rm -f "$tmp"; exit 1; }"#;
 
 /// [`ELEVATED_SH`] 가 「비링크」 로 끝낸 종료 코드.
+#[cfg(target_os = "macos")]
 const NOT_A_LINK_STATUS: &str = "(3)";
 
 /// [`ELEVATED_SH`] 를 `do shell script` 로 돌리는 AppleScript. `admin` 이 거짓이면 권한 상승 없이 돈다(시험용).
