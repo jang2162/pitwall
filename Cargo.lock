@@ -2891,6 +2891,7 @@ dependencies = [
  "pw-diag",
  "pw-ext",
  "pw-i18n",
+ "pw-mcp",
  "pw-rpc",
  "semver",
  "serde",
@@ -2903,7 +2904,9 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

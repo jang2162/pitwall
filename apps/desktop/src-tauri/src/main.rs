@@ -18,6 +18,7 @@ mod i18n;
 mod instance;
 mod ipc;
 mod launch;
+mod mcp;
 mod menu;
 mod shell_command;
 mod windows;
@@ -57,10 +58,30 @@ fn load_extensions(paths: &AppPaths) -> Arc<Registry> {
     )))
 }
 
-/// `pitwall mcp`(M0-17). 앱을 띄우지 않고 단일 인스턴스로 전달하지도 않는다. stdout 은 MCP 의 stdio 가 쓰므로 비워 둔다.
+/// `pitwall mcp`(mcp.rs). 앱을 띄우지 않고 단일 인스턴스로 전달하지도 않는다. stdout 은 MCP 의 stdio 가 쓴다.
+/// 실행 중인 앱의 소켓은 그 앱과 같은 단일 인스턴스 키로 찾는다 — 다른 워크트리 · 다른 `$DATA` 의 앱에 붙지 않는다.
 fn run_mcp() -> ! {
-    eprintln!("pitwall mcp: not implemented yet");
-    std::process::exit(2);
+    let args: Vec<_> = std::env::args_os().skip(2).collect();
+    let code = mcp::run(&args, |paths| {
+        single_instance_key(&context().config().identifier, paths)
+    });
+    std::process::exit(code);
+}
+
+/// Tauri 문맥. 앱과 `pitwall mcp` 가 같은 identifier 를 읽도록 한 자리에서 만든다(매크로가 자산을 한 번만 넣는다).
+fn context() -> tauri::Context {
+    tauri::generate_context!()
+}
+
+/// 단일 인스턴스 키(instance.rs): 빌드 종류별 키에 시험 접미사(`PITWALL_TEST_INSTANCE`, debug 만)를 붙인 것.
+/// MCP 소켓 이름도 이 키로 정한다(mcp.rs).
+fn single_instance_key(base: &str, paths: &AppPaths) -> String {
+    instance::with_test_suffix(
+        instance_identifier(base, paths, RELEASE),
+        std::env::var(instance::TEST_KEY_ENV).ok().as_deref(),
+        // `RELEASE` 와 따로 판정한다 — 그 상수가 틀려도 시험 바이너리는 시험 키를 쓴다.
+        cfg!(debug_assertions),
+    )
 }
 
 /// 이 빌드가 release 인가. 단일 인스턴스 키를 고른다([`instance_identifier`]). 시험(debug)이 이 값으로 dev 키를 보는지 지킨다.
@@ -175,15 +196,10 @@ fn main() {
         .add_host(host.clone())
         .expect("빈 라우터에 Host 를 처음 등록한다");
 
-    let mut context = tauri::generate_context!();
-    let identifier = instance::with_test_suffix(
-        instance_identifier(&context.config().identifier, &paths, RELEASE),
-        std::env::var(instance::TEST_KEY_ENV).ok().as_deref(),
-        // `RELEASE` 와 따로 판정한다 — 그 상수가 틀려도 시험 바이너리는 시험 키를 쓴다.
-        cfg!(debug_assertions),
-    );
+    let mut context = context();
+    let identifier = single_instance_key(&context.config().identifier, &paths);
     tracing::info!(%identifier, "single-instance key");
-    context.config_mut().identifier = identifier;
+    context.config_mut().identifier = identifier.clone();
 
     // 단일 인스턴스 플러그인은 가장 먼저 등록한다 — 두 번째 실행은 이 플러그인의 setup 에서 인자와 cwd 를 기존 앱에 넘기고
     // 종료하므로 그 뒤의 플러그인 · setup 이 돌지 않는다.
@@ -219,6 +235,9 @@ fn main() {
                 config_events,
                 launch::invocation_from_env(),
             );
+            // 주 인스턴스만 MCP 소켓을 연다(떼어 띄우기 전의 프로세스 · 두 번째 실행은 여기 오지 않는다).
+            #[cfg(unix)]
+            mcp::serve_socket(host.clone(), paths.clone(), identifier.clone());
             Ok(())
         })
         .run(context)

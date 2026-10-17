@@ -18,6 +18,7 @@ pw-core = { path = "../../../crates/pw-core" }
 pw-diag = { path = "../../../crates/pw-diag" }
 pw-ext = { path = "../../../crates/pw-ext" }
 pw-i18n = { path = "../../../crates/pw-i18n" }
+pw-mcp = { path = "../../../crates/pw-mcp" }
 pw-rpc = { path = "../../../crates/pw-rpc" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -27,6 +28,15 @@ tauri-plugin-dialog = "2.8.3"
 tauri-plugin-opener = "2.7.2"
 tauri-plugin-single-instance = "2.5.4"
 tracing = "0.1.44"
+# `pitwall mcp` 는 Tauri 를 띄우지 않으므로 자기 런타임을 만든다(io-std: stdio 를 MCP 로 쓴다).
+tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "time"] }
+tokio-util = { workspace = true }
+# `pitwall mcp` 의 로그(`$STATE/logs/mcp.<날짜>.log` + stderr 경고). 버전 · 기능은 pw-diag 와 같게 둔다.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
+  "fmt",
+  "registry",
+  "std",
+] }
 
 [dev-dependencies]
 # 창 열기 함수를 MockRuntime 위에서 시험한다(tauri::test::mock_app).
