@@ -32,6 +32,8 @@ import type { FindProjectRequest, OpenProjectWindowArgs, WelcomeNative } from ".
 import {
   errorText,
   existingProjectFor,
+  isStorageUnavailable,
+  openArgsFor,
   isRemote,
   parentDir,
   sortProjects,
@@ -71,6 +73,8 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
   const [search, setSearch] = useState("");
   const [flow, setFlow] = useState<Flow>({ kind: "idle" });
   const [error, setError] = useState<string>();
+  /** 오류는 아니지만 알릴 것(만든 프로젝트가 열려던 파일을 포함하지 않음 등). */
+  const [notice, setNotice] = useState<string>();
   const [dropping, setDropping] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   useKeymapPopup(menuOpen);
@@ -83,10 +87,22 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
     () => queryClient.invalidateQueries({ queryKey: rpcQueryKey(key, "project.list") }),
     [queryClient, key],
   );
+  // 쓰기가 STORAGE_UNAVAILABLE 로 거절되면 저장소 상태가 바뀐 것이다 — 배너 · 쓰기 비활성을 창 포커스를 기다리지 않고 맞춘다
+  // (docs/design/03-architecture.md §5-0).
+  const writeFailed = useCallback(
+    (what: string) => (e: unknown) => {
+      fail(what)(e);
+      if (!isStorageUnavailable(e)) return;
+      void queryClient.invalidateQueries({ queryKey: rpcQueryKey(key, "project.storage") });
+      void refreshList();
+    },
+    [fail, queryClient, key, refreshList],
+  );
 
   const openWindow = useCallback(
     (args: OpenProjectWindowArgs) => {
       setError(undefined);
+      setNotice(undefined);
       return native.openProjectWindow(args).catch(fail(STRINGS.errors.open));
     },
     [native, fail],
@@ -118,23 +134,50 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
   }, [native, fail, openFolder]);
 
   // 파일로 실행했는데 프로젝트를 못 찾은 요청(F2). 창이 뜰 때와 알림을 받을 때 꺼낸다.
+  // 꺼낸 요청은 effect 가 해제된 뒤에 와도 버리지 않는다 — Rust 쪽은 꺼낼 때 비우므로 버리면 다시 꺼낼 수 없다. StrictMode 는
+  // effect 를 붙였다 떼고 다시 붙이는데, 첫 take 가 요청을 가져가고 둘째는 null 을 받는다. 컴포넌트 상태는 그 사이에도 남으므로
+  // 첫 응답을 그대로 넣는다(정말 언마운트됐으면 setState 는 아무 일도 하지 않는다 — 창이 닫힌 것이다).
   useEffect(() => {
-    let disposed = false;
     const take = () => {
       native
         .takePendingFindProject()
         .then((request) => {
-          if (!disposed && request) setFlow({ kind: "find", request });
+          if (request) setFlow({ kind: "find", request });
         })
         .catch(fail(STRINGS.errors.findProject));
     };
     take();
-    const off = native.onFindProjectRequested(take);
-    return () => {
-      disposed = true;
-      off();
-    };
+    return native.onFindProjectRequested(take);
   }, [native, fail]);
+
+  /** 경로를 담은 등록 프로젝트를 그 파일과 함께 연다. 그 경로를 담은 프로젝트가 없으면 거짓. */
+  const openPathInProject = useCallback(
+    async (request: FindProjectRequest): Promise<boolean> => {
+      if (!client) return false;
+      const resolution = await client.call("project.resolve", { path: request.path });
+      const args = resolution && openArgsFor(resolution, resolution.project.id, request);
+      if (!args) return false;
+      await openWindow(args);
+      return true;
+    },
+    [client, openWindow],
+  );
+
+  /** 끌어다 놓은 것. 폴더는 「폴더 열기」와 같고, 파일은 F2(`pitwall <파일>`)와 같은 갈래다 — 프로젝트 안이면 열고 아니면 S2. */
+  const openDropped = useCallback(
+    async (path: string) => {
+      setError(undefined);
+      const kind = await native.pathKind(path).catch(() => "dir" as const);
+      if (kind === "dir") return openFolder(path);
+      const request = { path };
+      const opened = await openPathInProject(request).catch((e: unknown) => {
+        fail(STRINGS.errors.open)(e);
+        return true;
+      });
+      if (!opened) setFlow({ kind: "find", request });
+    },
+    [native, openFolder, openPathInProject, fail],
+  );
 
   useEffect(
     () =>
@@ -143,9 +186,9 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
         setDropping(false);
         // 여럿을 놓으면 첫 번째만 연다 — 멀티 루트(F1-6)가 생기면 다시 본다.
         const [first] = event.paths;
-        if (first !== undefined) void openFolder(first);
+        if (first !== undefined) void openDropped(first);
       }),
-    [native, openFolder],
+    [native, openDropped],
   );
 
   const byId = (id: string) => list.find((p) => p.id === id);
@@ -163,9 +206,9 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
       await client
         .call("project.delete", { id: project.id })
         .then(refreshList)
-        .catch(fail(STRINGS.errors.remove));
+        .catch(writeFailed(STRINGS.errors.remove));
     },
-    [client, refreshList, fail],
+    [client, refreshList, writeFailed],
   );
   const reveal = useCallback(
     (project: Project) => {
@@ -206,7 +249,6 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
     setMenuTarget(project);
   };
 
-  const removeKey = shortcuts("project.removeFromList")[0]?.text;
   const T = STRINGS;
   return (
     <div className="relative flex min-h-0 flex-1">
@@ -326,9 +368,9 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
                       {T.menu.reveal(platform)}
                     </MenuItem>
                     <ContextMenu.Separator className="my-1 h-px bg-ui-border" />
+                    {/* 단축키를 적지 않는다 — 메뉴가 열린 동안은 창 단축키가 꺼져(useKeymapPopup) ⌘⌫ 가 돌지 않는다. */}
                     <MenuItem disabled={readOnly} onSelect={() => void removeProject(menuTarget)}>
-                      <span className="flex-1">{T.menu.remove}</span>
-                      <Kbd text={removeKey} />
+                      {T.menu.remove}
                     </MenuItem>
                   </>
                 )}
@@ -343,6 +385,15 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
             title={error}
           >
             {error}
+          </div>
+        )}
+        {notice && (
+          <div
+            role="status"
+            className="flex-none truncate border-t border-ui-border px-3 py-0.5 text-[12px] text-ui-muted-foreground"
+            title={notice}
+          >
+            {notice}
           </div>
         )}
         <div className="flex flex-none gap-2 border-t border-ui-border px-3 py-2">
@@ -398,29 +449,33 @@ export function WelcomeWindow({ native }: { native: WelcomeNative }) {
           initialRoot={flow.root}
           readOnly={readOnly}
           pickFolder={native.pickFolder}
+          onWriteError={writeFailed(STRINGS.errors.create)}
           onCancel={() => setFlow({ kind: "idle" })}
           onCreated={async (project) => {
             const origin = flow.origin;
             setFlow({ kind: "idle" });
             void refreshList();
-            await openWindow({ projectId: project.id, ...(origin && (await originArgs(origin))) });
+            const args = origin && (await originArgs(origin, project.id));
+            await openWindow(args ?? { projectId: project.id });
+            if (origin && !args) setNotice(STRINGS.notices.fileNotInProject(origin.path));
           }}
         />
       )}
     </div>
   );
 
-  /** S2 에서 왔으면 원래 파일 경로를 다시 해석해 활성 워크트리(F2-5)와 열 파일을 함께 넘긴다. */
-  async function originArgs(origin: FindProjectRequest): Promise<Partial<OpenProjectWindowArgs>> {
+  /**
+   * S2 에서 왔으면 원래 경로를 다시 해석해, 만든 프로젝트가 그 경로를 포함할 때만 활성 워크트리(F2-5)와 열 파일을 넘긴다.
+   * 워크트리 꼭대기(`top`)로 다시 해석하지 않는다 — 프로젝트 루트가 메인 체크아웃의 하위 폴더면 꼭대기는 그 프로젝트 밖이다.
+   */
+  async function originArgs(
+    origin: FindProjectRequest,
+    projectId: string,
+  ): Promise<OpenProjectWindowArgs | undefined> {
     const resolution = client
       ? await client.call("project.resolve", { path: origin.path }).catch(() => null)
       : null;
-    return {
-      ...(resolution?.worktree && { worktree: resolution.worktree.top }),
-      file: resolution?.path ?? origin.path,
-      ...(origin.line != null && { line: origin.line }),
-      ...(origin.col != null && { col: origin.col }),
-    };
+    return openArgsFor(resolution, projectId, origin);
   }
 }
 

@@ -77,6 +77,9 @@ export const STRINGS = {
     cancel: "취소",
     submit: "만들기",
   },
+  notices: {
+    fileNotInProject: (path: string) => `만든 프로젝트가 ${path} 를 담지 않아 프로젝트 창만 열었다`,
+  },
   errors: {
     action: (what: string, message: string) => `${what} 실패: ${message}`,
     open: "프로젝트 열기",

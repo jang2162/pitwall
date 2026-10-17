@@ -1,7 +1,15 @@
 // 웰컴 창의 화면 밖 규칙: 목록 순서, 후보의 이유, 경로 조각, 저장소 상태 배너, 폴더를 열 때 기존 프로젝트로 갈지.
 
-import type { Project, Resolution, RootCandidate, StorageStatus } from "@pitwall/rpc-client";
+import {
+  ERROR_CODE,
+  type Project,
+  type Resolution,
+  type RootCandidate,
+  RpcCallError,
+  type StorageStatus,
+} from "@pitwall/rpc-client";
 
+import type { FindProjectRequest, OpenProjectWindowArgs } from "./native";
 import { STRINGS } from "./strings";
 
 /** 즐겨찾기 → 최근에 연 것 → 연 적 없는 것(이름순). `project.list` 는 이름순이다. */
@@ -77,6 +85,36 @@ export function existingProjectFor(
       : undefined;
   }
   return resolution.path === resolution.root ? { projectId: resolution.project.id } : undefined;
+}
+
+/**
+ * 경로(`pitwall <path>` · 끌어다 놓은 파일)를 `projectId` 의 창으로 열 때 넘길 인자. `resolution` 은 그 경로를 `project.resolve`
+ * 한 결과다. 프로젝트가 그 경로를 포함하지 않으면(S2 에서 다른 폴더를 골랐다 등) `undefined` — 창만 열고 파일은 넘기지 않는다.
+ * 경로가 프로젝트 루트 · 워크트리 꼭대기 · 워크트리 안 루트 자리면 폴더라 파일로 넘기지 않는다. 그 밖의 하위 폴더는 여기서
+ * 가릴 수 없다(JS 는 디렉터리인지 모른다) — `open_project_window` 가 디렉터리 `file` 을 버린다(src-tauri, M0-10).
+ */
+export function openArgsFor(
+  resolution: Resolution | null,
+  projectId: string,
+  request: FindProjectRequest,
+): OpenProjectWindowArgs | undefined {
+  if (resolution?.project.id !== projectId) return undefined;
+  const { worktree, path } = resolution;
+  const folder = path === resolution.root || path === worktree?.root || path === worktree?.top;
+  return {
+    projectId,
+    ...(worktree && { worktree: worktree.top }),
+    ...(!folder && {
+      file: path,
+      ...(request.line != null && { line: request.line }),
+      ...(request.col != null && { col: request.col }),
+    }),
+  };
+}
+
+/** 레지스트리 파일을 쓸 수 없어 거절된 쓰기(`STORAGE_UNAVAILABLE`, docs/design/03-architecture.md §5-0). */
+export function isStorageUnavailable(e: unknown): boolean {
+  return e instanceof RpcCallError && e.code === ERROR_CODE.STORAGE_UNAVAILABLE;
 }
 
 /** RPC 오류 등을 한 줄로. */

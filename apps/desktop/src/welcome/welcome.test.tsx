@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 // 웰컴 창(App kind="welcome")을 가짜 Host · 가짜 네이티브(native.ts)에 붙여 S1 → S2 → S3 흐름을 키 · 클릭으로 돌린다.
+// 앱(main.tsx)처럼 StrictMode 로 렌더한다 — effect 를 붙였다 떼고 다시 붙여도 흐름이 깨지지 않아야 한다.
 // 프로젝트 창 열기 · 보류 요청은 M0-10 이 만드는 Tauri 명령이라 여기서는 네이티브 어댑터를 가짜로 바꿔 부른 인자만 본다.
 
 import type {
@@ -12,7 +13,7 @@ import type {
   RootCandidate,
   StorageStatus,
 } from "@pitwall/rpc-client";
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -33,6 +34,8 @@ const host = vi.hoisted(() => ({
   storage: { kind: "ok", path: "/d/state.db" } as StorageStatus,
   candidates: [] as RootCandidate[],
   resolve: (_path: string): Resolution | null => null,
+  /** 쓰기(만들기 · 지우기)를 STORAGE_UNAVAILABLE 로 거절하고 저장소를 이 상태로 바꾼다. */
+  failWrites: undefined as StorageStatus | undefined,
   calls: [] as { method: string; params: unknown }[],
   emitHostEvent: (_topic: string) => {},
 }));
@@ -51,6 +54,13 @@ vi.mock("../tauri-transport", async () => {
         const reply = (result: unknown) => send({ id: m.id, result });
         const fail = (message: string) => send({ id: m.id, error: { code: -32602, message } });
         host.calls.push({ method: m.method, params: m.params });
+        if (host.failWrites && (m.method === "project.delete" || m.method === "project.create")) {
+          host.storage = host.failWrites;
+          return send({
+            id: m.id,
+            error: { code: -32003, message: "storage unavailable", data: "locked" },
+          });
+        }
         switch (m.method) {
           case "config.get":
             return reply({
@@ -132,16 +142,23 @@ function project(id: string, name: string, root: string, extra: Partial<Project>
   };
 }
 
-const keymapNative: KeymapNative = {
+let menuListener: ((action: string) => void) | undefined;
+const keymapNative = {
   syncMenu: async () => {},
-  onMenuAction: () => () => {},
-  openSettings: async () => {},
-};
+  onMenuAction: (listener: (action: string) => void) => {
+    menuListener = listener;
+    return () => {
+      if (menuListener === listener) menuListener = undefined;
+    };
+  },
+  openSettings: vi.fn<KeymapNative["openSettings"]>(async () => {}),
+} satisfies KeymapNative;
 
 let pending: FindProjectRequest | null = null;
 let findListener: (() => void) | undefined;
 let dropListener: ((e: DragDropEvent) => void) | undefined;
 let pickedFolder: string | null = null;
+let pathKinds: Record<string, "file" | "dir" | "missing"> = {};
 const native = {
   openProjectWindow: vi.fn<WelcomeNative["openProjectWindow"]>(async () => {}),
   takePendingFindProject: vi.fn<WelcomeNative["takePendingFindProject"]>(async () => {
@@ -159,6 +176,7 @@ const native = {
     dropListener = l;
     return () => (dropListener = undefined);
   }),
+  pathKind: vi.fn<WelcomeNative["pathKind"]>(async (path) => pathKinds[path] ?? "dir"),
 } satisfies WelcomeNative;
 
 let root: Root | undefined;
@@ -179,7 +197,10 @@ beforeEach(() => {
   host.calls = [];
   pending = null;
   pickedFolder = null;
+  pathKinds = {};
+  host.failWrites = undefined;
   for (const fn of Object.values(native)) fn.mockClear();
+  keymapNative.openSettings.mockClear();
 });
 
 afterEach(() => {
@@ -203,9 +224,11 @@ async function mount() {
   root = createRoot(element);
   await act(async () =>
     root!.render(
-      <ThemeStoreProvider store={store}>
-        <App kind="welcome" native={keymapNative} welcomeNative={native} />
-      </ThemeStoreProvider>,
+      <StrictMode>
+        <ThemeStoreProvider store={store}>
+          <App kind="welcome" native={keymapNative} welcomeNative={native} />
+        </ThemeStoreProvider>
+      </StrictMode>,
     ),
   );
   await settle();
@@ -233,6 +256,30 @@ async function type(input: HTMLInputElement, value: string) {
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+}
+
+/**
+ * 한글 입력기가 실제로 보내는 순서를 흉내 낸다: compositionstart → 조합 중 keydown(isComposing, keyCode 229) → input →
+ * compositionend. 값은 조합이 끝난 글자까지 넣는다.
+ */
+async function compose(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        code: "KeyR",
+        key: "Process",
+        keyCode: 229,
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+    input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: value }));
   });
   await settle();
 }
@@ -323,9 +370,10 @@ it("takes a pending find request on mount and walks S2 → S3 → the project wi
         }
       : null;
   await mount();
-  expect(calls("project.candidates")).toEqual([
-    { method: "project.candidates", params: { path: "/w/app/wt/src/App.kt" } },
-  ]);
+  // StrictMode 는 쿼리를 두 번 부를 수 있다 — 같은 경로로만 불렸는지 본다.
+  expect(new Set(calls("project.candidates").map((c) => JSON.stringify(c.params)))).toEqual(
+    new Set([JSON.stringify({ path: "/w/app/wt/src/App.kt" })]),
+  );
   const dialog = document.querySelector("[cmdk-dialog]")!;
   expect(dialog.textContent).toContain("/w/app/wt/src/App.kt 를 열 프로젝트");
   const items = [...dialog.querySelectorAll<HTMLElement>("[cmdk-item]")];
@@ -361,7 +409,7 @@ it("takes a pending find request on mount and walks S2 → S3 → the project wi
 
 it("opens S2 when a find request arrives later, and goes back to it when the folder dialog is cancelled", async () => {
   await mount();
-  expect(native.takePendingFindProject).toHaveBeenCalledTimes(1);
+  expect(native.takePendingFindProject).toHaveBeenCalled();
   expect(document.querySelector("[cmdk-dialog]")).toBeNull();
 
   pending = { path: "/w/x/file.txt" };
@@ -438,25 +486,39 @@ it("shows the create error in the sheet and keeps it open", async () => {
   expect(native.openProjectWindow).not.toHaveBeenCalled();
 });
 
-it("removes and reveals from the context menu", async () => {
+it("reveals and removes from the context menu, and keeps window shortcuts away while it is open", async () => {
   await mount();
-  const infra = rows()[2]!;
-  await act(async () =>
-    infra.dispatchEvent(
-      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }),
-    ),
-  );
-  await settle();
-  expect(selectedRow()?.textContent).toContain("infra");
   const menuItems = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+  const openMenu = async (row: HTMLElement) => {
+    await act(async () =>
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }),
+      ),
+    );
+    await settle();
+  };
+  await openMenu(rows()[2]!);
+  expect(selectedRow()?.textContent).toContain("infra");
+  // 메뉴가 열린 동안 창 단축키는 꺼져 있으므로 메뉴에 단축키를 적지 않는다.
   expect(menuItems().map((i) => i.textContent)).toEqual([
     "열기",
     "Finder 에서 보기",
-    "목록에서 제거⌘⌫",
+    "목록에서 제거",
   ]);
+  expect(await press("KeyN", { metaKey: true })).toBe(false);
+  expect(sheet()).toBeNull();
+  expect(await press("Backspace", { metaKey: true })).toBe(false);
+  expect(calls("project.delete")).toEqual([]);
+
   await act(async () => menuItems()[1]!.click());
   await settle();
   expect(native.reveal).toHaveBeenCalledWith("/w/infra");
+
+  await openMenu(rows()[2]!);
+  await act(async () => menuItems()[2]!.click());
+  await settle();
+  expect(calls("project.delete").map((c) => c.params)).toEqual([{ id: "c" }]);
+  expect(rowNames()).toEqual(["billing-api", "web-console"]);
 });
 
 it("shows a non-ok registry as a banner and disables writes when it is read-only", async () => {
@@ -475,4 +537,139 @@ it("refetches the list when the registry publishes project.changed", async () =>
   await act(async () => host.emitHostEvent("project.changed"));
   await settle();
   expect(rowNames()).toContain("docs");
+});
+
+/** S2 를 띄운다: 보류 요청 → 알림. */
+async function openFind(request: FindProjectRequest) {
+  pending = request;
+  await act(async () => findListener!());
+  await settle();
+}
+
+const findDialog = () => document.querySelector("[cmdk-dialog]");
+const findItem = (text: string) =>
+  [...document.querySelectorAll<HTMLElement>("[cmdk-dialog] [cmdk-item]")].find((i) =>
+    i.textContent?.startsWith(text),
+  )!;
+
+it("does not pass a folder as the file to open (a worktree directory from `pitwall <dir>`)", async () => {
+  host.candidates = [{ path: "/w/app", worktreeMain: true, vcs: false, buildFiles: [] }];
+  host.resolve = (path) => {
+    const app = host.projects.find((p) => p.roots[0] === "/w/app");
+    return app && path === "/w/app/.worktrees/x"
+      ? { project: app, root: "/w/app", path, worktree: { top: path, root: path } }
+      : null;
+  };
+  await mount();
+  await openFind({ path: "/w/app/.worktrees/x", line: 4 });
+  await press("Enter");
+  await press("Enter", { metaKey: true });
+  expect(native.openProjectWindow).toHaveBeenCalledWith({
+    projectId: "n3",
+    worktree: "/w/app/.worktrees/x",
+  });
+});
+
+it("opens only the project window when the chosen folder does not hold the file", async () => {
+  await mount();
+  await openFind({ path: "/w/x/file.txt", line: 3 });
+  pickedFolder = "/elsewhere/proj";
+  await act(async () => findItem("폴더 직접 선택").click());
+  await settle();
+  await press("Enter", { metaKey: true });
+  expect(calls("project.create").map((c) => c.params)).toEqual([
+    { root: "/elsewhere/proj", name: "proj", configMode: "repository" },
+  ]);
+  expect(native.openProjectWindow).toHaveBeenCalledWith({ projectId: "n3" });
+  expect(document.querySelector('[role="status"]')?.textContent).toContain(
+    "/w/x/file.txt 를 담지 않아",
+  );
+});
+
+it("keeps window shortcuts away from the list while S2 is open", async () => {
+  await mount();
+  await openFind({ path: "/w/x/file.txt" });
+  expect(findDialog()).not.toBeNull();
+  expect(await press("Backspace", { metaKey: true })).toBe(false);
+  expect(await press("KeyO", { metaKey: true })).toBe(false);
+  expect(calls("project.delete")).toEqual([]);
+  expect(native.pickFolder).not.toHaveBeenCalled();
+});
+
+it("drops native menu actions that would act behind an open sheet, but still opens settings", async () => {
+  await mount();
+  await press("KeyN", { metaKey: true });
+  expect(sheet()).not.toBeNull();
+  await act(async () => menuListener!("action.find"));
+  await settle();
+  expect(findDialog()).toBeNull();
+  await act(async () => menuListener!("settings.open"));
+  await settle();
+  expect(keymapNative.openSettings).toHaveBeenCalledTimes(1);
+  expect(sheet()).not.toBeNull();
+
+  // 시트를 닫으면 메뉴의 액션 찾기가 다시 돈다.
+  await press("Escape", {}, "Escape");
+  await act(async () => menuListener!("action.find"));
+  await settle();
+  expect(findDialog()).not.toBeNull();
+});
+
+it("refreshes the storage banner as soon as a write is refused as STORAGE_UNAVAILABLE", async () => {
+  await mount();
+  expect(document.querySelector('[role="status"]')).toBeNull();
+  host.failWrites = { kind: "memory", path: "/d/state.db", reason: "database is locked" };
+  expect(await press("Backspace", { metaKey: true })).toBe(true);
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("storage unavailable");
+  expect(document.querySelector('[role="status"]')?.textContent).toContain("database is locked");
+  expect(button("새 프로젝트")!.disabled).toBe(true);
+});
+
+it("opens a dropped file in the project that holds it, and offers S2 for any other file", async () => {
+  pathKinds = { "/w/infra/src/a.rs": "file", "/w/x/b.txt": "file" };
+  host.resolve = (path) =>
+    path.startsWith("/w/infra/")
+      ? { project: host.projects[2]!, root: "/w/infra", path, worktree: null }
+      : null;
+  await mount();
+  await act(async () => dropListener!({ kind: "drop", paths: ["/w/infra/src/a.rs"] }));
+  await settle();
+  expect(native.openProjectWindow).toHaveBeenCalledWith({
+    projectId: "c",
+    file: "/w/infra/src/a.rs",
+  });
+  expect(sheet()).toBeNull();
+
+  await act(async () => dropListener!({ kind: "drop", paths: ["/w/x/b.txt"] }));
+  await settle();
+  expect(findDialog()?.textContent).toContain("/w/x/b.txt 를 열 프로젝트");
+  expect(sheet()).toBeNull();
+});
+
+it("follows the real IME order: a composing Esc keeps S3 and S2 open, the Enter after composing does not open", async () => {
+  host.projects.push(project("k", "결제-서버", "/w/pay"));
+  await mount();
+  await compose(searchInput(), "결제");
+  expect(rowNames()).toEqual(["결제-서버"]);
+  // WebKit 은 조합을 끝낸 Enter 를 isComposing false · keyCode 229 로 보낸다.
+  await press("Enter", { keyCode: 229 }, "Enter");
+  expect(native.openProjectWindow).not.toHaveBeenCalled();
+
+  await press("KeyN", { metaKey: true });
+  const name = sheet()!.querySelector<HTMLInputElement>("input")!;
+  await compose(name, "새");
+  await press("Escape", { isComposing: true, keyCode: 229 }, "Escape");
+  expect(sheet()).not.toBeNull();
+  // WebKit 은 조합을 끝내는 키를 isComposing 없이 keyCode 229 로 보내기도 한다.
+  await press("Escape", { keyCode: 229 }, "Escape");
+  expect(sheet()).not.toBeNull();
+  await press("Escape", {}, "Escape");
+  expect(sheet()).toBeNull();
+
+  await openFind({ path: "/w/x/file.txt" });
+  await compose(document.querySelector<HTMLInputElement>("[cmdk-dialog] [cmdk-input]")!, "폴");
+  await press("Escape", { isComposing: true, keyCode: 229 }, "Escape");
+  expect(findDialog()).not.toBeNull();
+  await press("Escape", {}, "Escape");
+  expect(findDialog()).toBeNull();
 });

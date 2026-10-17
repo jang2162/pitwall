@@ -5,6 +5,7 @@ import {
   baseName,
   candidateReasons,
   existingProjectFor,
+  openArgsFor,
   parentDir,
   sortProjects,
   storageBanner,
@@ -90,4 +91,51 @@ it("shows a banner for every non-ok registry and blocks writes only when they ar
   ).toMatchObject({ readOnly: false, text: expect.stringContaining("/s.bak") });
   expect(storageBanner({ kind: "readOnly", path: "/s", reason: "newer" })?.readOnly).toBe(true);
   expect(storageBanner({ kind: "memory", path: "/s", reason: "locked" })?.readOnly).toBe(true);
+});
+
+describe("openArgsFor", () => {
+  const app = p("app", { roots: ["/w/app"] });
+  const at = (path: string, worktree: Resolution["worktree"] = null): Resolution => ({
+    project: app,
+    root: "/w/app",
+    path,
+    worktree,
+  });
+
+  it("passes the file with its line and column when the project holds it", () => {
+    expect(
+      openArgsFor(at("/w/app/src/a.ts"), "app", { path: "/w/app/src/a.ts", line: 3, col: null }),
+    ).toEqual({
+      projectId: "app",
+      file: "/w/app/src/a.ts",
+      line: 3,
+    });
+  });
+
+  it("opens a worktree at its top and passes the file inside it", () => {
+    const worktree = { top: "/w/wt", root: "/w/wt/svc" };
+    expect(openArgsFor(at("/w/wt/svc/a.ts", worktree), "app", { path: "/w/wt/svc/a.ts" })).toEqual({
+      projectId: "app",
+      worktree: "/w/wt",
+      file: "/w/wt/svc/a.ts",
+    });
+  });
+
+  it("does not pass the project root, the worktree top or the worktree root as a file", () => {
+    const worktree = { top: "/w/wt", root: "/w/wt/svc" };
+    for (const path of ["/w/wt", "/w/wt/svc"]) {
+      expect(openArgsFor(at(path, worktree), "app", { path, line: 1 })).toEqual({
+        projectId: "app",
+        worktree: "/w/wt",
+      });
+    }
+    expect(openArgsFor(at("/w/app"), "app", { path: "/w/app", line: 1 })).toEqual({
+      projectId: "app",
+    });
+  });
+
+  it("gives nothing when the path is in another project or in none", () => {
+    expect(openArgsFor(at("/w/app/a.ts"), "other", { path: "/w/app/a.ts" })).toBeUndefined();
+    expect(openArgsFor(null, "app", { path: "/x/a.ts" })).toBeUndefined();
+  });
 });

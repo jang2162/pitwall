@@ -31,6 +31,9 @@ export interface FindProjectRequest {
   col?: number | null;
 }
 
+/** 경로가 가리키는 것. */
+export type PathKind = "file" | "dir" | "missing";
+
 export type DragDropEvent =
   | { kind: "enter" }
   | { kind: "leave" }
@@ -47,6 +50,8 @@ export interface WelcomeNative {
   reveal(path: string): Promise<void>;
   /** 창에 끌어다 놓은 파일 · 폴더. 해제 함수를 돌려준다. */
   onDragDrop(listener: (event: DragDropEvent) => void): () => void;
+  /** 끌어다 놓은 경로가 파일인지 폴더인지(드롭 payload 에는 경로만 온다). */
+  pathKind(path: string): Promise<PathKind>;
 }
 
 /** Tauri 의 `listen` 은 Promise 로 해제 함수를 준다. 받기 전에 해제되면 받는 즉시 푼다. */
@@ -85,4 +90,7 @@ export const tauriWelcomeNative: WelcomeNative = {
         }),
       "drag-drop",
     ),
+  // TODO(M0-10 리베이스 회차): src-tauri 에 `path_kind` 명령을 두고 그것을 부른다. 그 전까지는 폴더로 본다 — 끌어다 놓은 파일도
+  // 지금처럼 S3 으로 가고, 만들기가 「있는 폴더여야 한다」로 거절한다.
+  pathKind: async () => "dir",
 };
