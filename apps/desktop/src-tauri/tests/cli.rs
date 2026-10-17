@@ -235,3 +235,33 @@ fn a_bad_argument_is_a_usage_error_without_stdout() {
     assert!(stdout.is_empty(), "{stdout:?}");
     assert!(stderr.contains("usage: pitwall mcp"), "{stderr}");
 }
+
+/// 앱 없이 뜬 `pitwall mcp` 는 레지스트리를 소유하지 않는다 — 손상된 파일을 앱처럼 옮겨 복구하지 않고 빈 목록으로 답한다.
+#[test]
+fn headless_mcp_leaves_a_corrupt_registry_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(tmp.path()).unwrap();
+    let data = dir.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("state.db"), b"not a database").unwrap();
+
+    let mut mcp = Mcp::spawn(&dir, &[], &dir);
+    initialize(&mut mcp);
+    let list = mcp.call(
+        2,
+        "tools/call",
+        json!({"name": "project_list", "arguments": {}}),
+    );
+    assert_eq!(list["result"]["content"][0]["text"], json!("[]"), "{list}");
+    let (code, _, stderr) = mcp.finish();
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(
+        std::fs::read(data.join("state.db")).unwrap(),
+        b"not a database"
+    );
+    let entries: Vec<_> = std::fs::read_dir(&data)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [std::ffi::OsString::from("state.db")]);
+}
