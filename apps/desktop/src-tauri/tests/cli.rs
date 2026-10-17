@@ -7,8 +7,30 @@ use std::time::{Duration, Instant};
 /// 실행해 끝을 기다린다. 끝나지 않으면(분기가 깨져 앱이 떴다) 죽이고 실패한다.
 ///
 /// `PITWALL_DETACHED` 를 줘 떼어 띄운 자식으로 보이게 한다 — 분기가 깨져도 앱이 이 시험 밖으로 떨어져 나가 남지 않고, 이
-/// 자식 pid 로 끌 수 있다(src/detach.rs).
+/// 자식 pid 로 끌 수 있다(src/detach.rs). `PITWALL_TEST_INSTANCE` 로 단일 인스턴스 키를 이 실행만의 것으로 갈라 사람의 앱에
+/// 닿지 않게 하고(src/instance.rs), 끝나면 그 키의 소켓을 지운다 — kill 은 플러그인의 정리를 건너뛴다.
 fn run(args: &[&str], dir: &std::path::Path) -> (Option<i32>, Vec<u8>, String) {
+    let suffix = format!("cli{}", std::process::id());
+    let finished = run_with_key(args, dir, &suffix);
+    remove_sockets(&suffix);
+    finished.unwrap_or_else(|message| panic!("{message}"))
+}
+
+/// macOS 플러그인의 소켓 `/tmp/<identifier 의 . - 를 _ 로>_si.sock`. 다른 OS 는 파일을 남기지 않는다.
+fn remove_sockets(suffix: &str) {
+    let tail = format!("_test_{suffix}_si.sock");
+    for entry in std::fs::read_dir("/tmp").into_iter().flatten().flatten() {
+        if entry.file_name().to_string_lossy().ends_with(&tail) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn run_with_key(
+    args: &[&str],
+    dir: &std::path::Path,
+    suffix: &str,
+) -> Result<(Option<i32>, Vec<u8>, String), String> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_pitwall"))
         .args(args)
         .env("PITWALL_CONFIG_DIR", dir.join("config"))
@@ -16,6 +38,7 @@ fn run(args: &[&str], dir: &std::path::Path) -> (Option<i32>, Vec<u8>, String) {
         .env("PITWALL_STATE_DIR", dir.join("state"))
         .env("PITWALL_CACHE_DIR", dir.join("cache"))
         .env("PITWALL_DETACHED", "1")
+        .env("PITWALL_TEST_INSTANCE", suffix)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -28,7 +51,10 @@ fn run(args: &[&str], dir: &std::path::Path) -> (Option<i32>, Vec<u8>, String) {
         if Instant::now() > deadline {
             child.kill().unwrap();
             child.wait().unwrap();
-            panic!("`pitwall {}` 이 끝나지 않았다 — 앱이 떴다", args.join(" "));
+            return Err(format!(
+                "`pitwall {}` 이 끝나지 않았다 — 앱이 떴다",
+                args.join(" ")
+            ));
         }
         std::thread::sleep(Duration::from_millis(20));
     };
@@ -46,7 +72,7 @@ fn run(args: &[&str], dir: &std::path::Path) -> (Option<i32>, Vec<u8>, String) {
         .unwrap()
         .read_to_string(&mut stderr)
         .unwrap();
-    (status.code(), stdout, stderr)
+    Ok((status.code(), stdout, stderr))
 }
 
 /// `pitwall mcp`(M0-17 전의 자리): 앱을 띄우지 않고 2 로 끝나며 stdout 에 아무것도 쓰지 않는다(MCP 가 stdio 를 쓴다).

@@ -15,6 +15,25 @@
 
 use std::path::Path;
 
+/// 시험이 띄우는 바이너리의 키를 시험 전용으로 가르는 접미사(`tests/cli.rs`). 시험이 실패해 그 바이너리가 앱이 되어도 사람의
+/// 앱(같은 빌드 · 같은 키)으로 전달되거나 사람의 키로 소켓을 남기지 않게 한다. **debug 빌드에서만 듣는다** — release 바이너리는
+/// 변수가 있어도 키를 바꾸지 않으므로 사람이 우연히 정식 앱의 단일 인스턴스를 가를 수 없다.
+pub const TEST_KEY_ENV: &str = "PITWALL_TEST_INSTANCE";
+
+/// [`TEST_KEY_ENV`] 를 붙인 키. 접미사는 영숫자 1~16자만 받는다(소켓 경로 길이 · D-Bus 이름 규칙). 아니면 그대로.
+pub fn with_test_suffix(identifier: String, suffix: Option<&str>, debug: bool) -> String {
+    match suffix {
+        Some(s)
+            if debug
+                && (1..=16).contains(&s.len())
+                && s.bytes().all(|b| b.is_ascii_alphanumeric()) =>
+        {
+            format!("{identifier}.test-{s}")
+        }
+        _ => identifier,
+    }
+}
+
 /// 단일 인스턴스 키로 쓸 identifier. `dev` 가 `None` 이면(release) `base` 그대로.
 pub fn identifier(base: &str, dev: Option<(&Path, &Path)>) -> String {
     match dev {
@@ -93,6 +112,24 @@ mod tests {
         );
         assert_ne!(a, BASE);
         assert!(a.starts_with("dev.pitwall.desktop.dev-"));
+    }
+
+    #[test]
+    fn a_test_suffix_splits_the_key_only_in_debug_builds() {
+        let key = || "dev.pitwall.desktop".to_owned();
+        assert_eq!(
+            with_test_suffix(key(), Some("cli42"), true),
+            "dev.pitwall.desktop.test-cli42"
+        );
+        assert_eq!(
+            with_test_suffix(key(), Some("cli42"), false),
+            "dev.pitwall.desktop",
+            "release 는 듣지 않는다"
+        );
+        for bad in ["", "a.b", "../x", "12345678901234567"] {
+            assert_eq!(with_test_suffix(key(), Some(bad), true), key(), "{bad:?}");
+        }
+        assert_eq!(with_test_suffix(key(), None, true), key());
     }
 
     #[test]

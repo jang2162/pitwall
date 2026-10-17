@@ -160,7 +160,12 @@ fn main() {
         .expect("빈 라우터에 Host 를 처음 등록한다");
 
     let mut context = tauri::generate_context!();
-    let identifier = instance_identifier(&context.config().identifier, &paths, RELEASE);
+    let identifier = instance::with_test_suffix(
+        instance_identifier(&context.config().identifier, &paths, RELEASE),
+        std::env::var(instance::TEST_KEY_ENV).ok().as_deref(),
+        // `RELEASE` 와 따로 판정한다 — 그 상수가 틀려도 시험 바이너리는 시험 키를 쓴다.
+        cfg!(debug_assertions),
+    );
     tracing::info!(%identifier, "single-instance key");
     context.config_mut().identifier = identifier;
 
