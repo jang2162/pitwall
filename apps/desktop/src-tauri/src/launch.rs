@@ -288,8 +288,9 @@ mod tests {
             url.query_pairs().into_owned().collect()
         }
 
+        /// 웰컴 창이 부르는 명령 그대로.
         fn take(&self) -> Option<FindProjectRequest> {
-            self.app.state::<Launch>().pending().take()
+            take_pending_find_project(self.app.state::<Launch>())
         }
     }
 
