@@ -387,11 +387,19 @@ impl Registry {
                 .map(|(e, _)| e.manifest.id.as_str());
             check("language", &l.id, l.pos, owner);
         }
-        for t in &c.translations {
+        // 언어 태그는 대소문자를 가리지 않는다(BCP 47) — `KO` 팩이 내장 `ko` 옆에 따로 등록되지 않게. 한 매니페스트 안에서
+        // 대소문자만 다른 두 표(`ko` · `KO`)도 겹침이다(TOML 은 둘을 다른 키로 본다).
+        for (i, t) in c.translations.iter().enumerate() {
             let owner = self
                 .translations()
-                .find(|(_, x)| x.locale == t.locale)
-                .map(|(e, _)| e.manifest.id.as_str());
+                .find(|(_, x)| x.locale.eq_ignore_ascii_case(&t.locale))
+                .map(|(e, _)| e.manifest.id.as_str())
+                .or_else(|| {
+                    c.translations[..i]
+                        .iter()
+                        .any(|x| x.locale.eq_ignore_ascii_case(&t.locale))
+                        .then_some(manifest.id.as_str())
+                });
             check("translation", &t.locale, t.pos, owner);
         }
         for (pos, message) in taken {
@@ -797,6 +805,62 @@ mod tests {
                     manifest_file.display()
                 ),
             ]
+        );
+    }
+
+    /// 대소문자만 다른 언어 태그도 같은 언어다 — 내장 `ko` 옆의 `KO` 팩, 한 매니페스트 안의 `fr` · `FR` 은 거절된다.
+    #[test]
+    fn language_tags_collide_regardless_of_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let upper = ext(
+            dir.path(),
+            "upper",
+            &[
+                (
+                    "extension.toml",
+                    &manifest(
+                        "dev.example.upper",
+                        "*",
+                        "[contributes.translations.KO]\ndir = \"ko\"\n",
+                    ),
+                ),
+                ("ko/app.ftl", "menu-file = 대문자파일\n"),
+            ],
+        );
+        let twice = ext(
+            dir.path(),
+            "twice",
+            &[
+                (
+                    "extension.toml",
+                    &manifest(
+                        "dev.example.twice",
+                        "*",
+                        "[contributes.translations.fr]\ndir = \"fr\"\n\n[contributes.translations.FR]\ndir = \"fr\"\n",
+                    ),
+                ),
+                ("fr/app.ftl", "menu-file = Fichier\n"),
+            ],
+        );
+        let mut roots = builtin::roots();
+        roots.extend([upper, twice]);
+        let registry = Registry::from_roots(&engine(), roots);
+        let locales: Vec<&str> = registry
+            .loaded_translations()
+            .map(|(_, t)| t.locale.as_str())
+            .collect();
+        assert_eq!(locales, ["en", "ko"]);
+        let messages = messages(&registry);
+        assert!(
+            messages.iter().any(|m| m.ends_with(
+                "error: translation `KO` is already provided by `dev.pitwall.i18n-default`"
+            )),
+            "{messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m
+                .ends_with("error: translation `FR` is already provided by `dev.example.twice`")),
+            "{messages:?}"
         );
     }
 
