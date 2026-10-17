@@ -1,0 +1,54 @@
+[package]
+name = "pw-mcp"
+description = "Pitwall MCP server: tools generated from RPC declarations, exposure settings, tier policy, audit log, local socket transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pw-core = { path = "../pw-core" }
+pw-rpc = { path = "../pw-rpc" }
+# MCP 서버. 툴은 손으로 등록하지 않고 RPC 선언에서 만든다 — `#[tool]` 매크로(macros)는 쓰지 않는다.
+# transport-async-rw: stdio · 로컬 소켓 모두 AsyncRead/AsyncWrite 쌍으로 넘긴다.
+rmcp = { version = "3.5.1", default-features = false, features = [
+  "server",
+  "transport-async-rw",
+] }
+# 감사 로그 `$STATE/mcp/audit.db`. 버전 · 기능은 pw-core 와 같게 둔다.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
+  "rt",
+  "sync",
+  "macros",
+  "time",
+  "io-util",
+  "io-std",
+  "net",
+] }
+tokio-util = { workspace = true }
+tracing = "0.1.44"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.190"
+
+[dev-dependencies]
+rmcp = { version = "3.5.1", default-features = false, features = [
+  "client",
+  "server",
+  "transport-async-rw",
+] }
+tempfile = "3.27.0"
+tokio = { workspace = true, features = [
+  "rt",
+  "rt-multi-thread",
+  "sync",
+  "macros",
+  "time",
+  "io-util",
+  "net",
+  "test-util",
+] }
