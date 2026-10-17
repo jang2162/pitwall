@@ -10,6 +10,7 @@ import {
   sortProjects,
   storageBanner,
 } from "./projects";
+import { KO_WELCOME } from "../i18n/testing";
 
 const p = (id: string, extra: Partial<Project> = {}): Project => ({
   id,
@@ -79,18 +80,28 @@ describe("paths", () => {
 
 it("lists candidate reasons in the 10-ui §2.2 order", () => {
   expect(
-    candidateReasons({ path: "/w", worktreeMain: true, vcs: true, buildFiles: ["Cargo.toml"] }),
+    candidateReasons(
+      { path: "/w", worktreeMain: true, vcs: true, buildFiles: ["Cargo.toml"] },
+      KO_WELCOME,
+    ),
   ).toBe("워크트리의 메인 저장소 · .git · Cargo.toml");
 });
 
 it("shows a banner for every non-ok registry and blocks writes only when they are rejected", () => {
-  expect(storageBanner({ kind: "ok", path: "/s" })).toBeUndefined();
-  expect(storageBanner(undefined)).toBeUndefined();
+  expect(storageBanner({ kind: "ok", path: "/s" }, KO_WELCOME)).toBeUndefined();
+  expect(storageBanner(undefined, KO_WELCOME)).toBeUndefined();
   expect(
-    storageBanner({ kind: "recovered", path: "/s", backup: "/s.bak", reason: "corrupt" }),
+    storageBanner(
+      { kind: "recovered", path: "/s", backup: "/s.bak", reason: "corrupt" },
+      KO_WELCOME,
+    ),
   ).toMatchObject({ readOnly: false, text: expect.stringContaining("/s.bak") });
-  expect(storageBanner({ kind: "readOnly", path: "/s", reason: "newer" })?.readOnly).toBe(true);
-  expect(storageBanner({ kind: "memory", path: "/s", reason: "locked" })?.readOnly).toBe(true);
+  expect(
+    storageBanner({ kind: "readOnly", path: "/s", reason: "newer" }, KO_WELCOME)?.readOnly,
+  ).toBe(true);
+  expect(
+    storageBanner({ kind: "memory", path: "/s", reason: "locked" }, KO_WELCOME)?.readOnly,
+  ).toBe(true);
 });
 
 describe("openArgsFor", () => {

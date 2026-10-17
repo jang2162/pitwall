@@ -4,9 +4,10 @@
 import type { Action, Platform } from "@pitwall/keymap";
 import type { Project } from "@pitwall/rpc-client";
 
-import { STRINGS } from "./strings";
+import type { WelcomeStrings } from "./strings";
 
 export function welcomeActions(deps: {
+  strings: WelcomeStrings;
   platform: Platform;
   /** 목록에서 고른 프로젝트. */
   selected(): Project | undefined;
@@ -20,6 +21,7 @@ export function welcomeActions(deps: {
   reveal(project: Project): unknown;
   remove(project: Project): unknown;
 }): Action[] {
+  const T = deps.strings.actions;
   const hasSelection = () => deps.selected() !== undefined;
   const withSelected = (run: (p: Project) => unknown) => () => {
     const p = deps.selected();
@@ -28,34 +30,34 @@ export function welcomeActions(deps: {
   return [
     {
       id: "project.new",
-      label: STRINGS.actions.newProject,
+      label: T.newProject,
       keywords: ["New Project"],
       enabled: deps.writable,
       run: deps.newProject,
     },
     {
       id: "project.openFolder",
-      label: STRINGS.actions.openFolder,
+      label: T.openFolder,
       keywords: ["Open Folder", "Open"],
       run: deps.openFolder,
     },
     {
       id: "project.open",
-      label: STRINGS.actions.open,
+      label: T.open,
       keywords: ["Open Project"],
       enabled: hasSelection,
       run: withSelected(deps.open),
     },
     {
       id: "project.reveal",
-      label: STRINGS.actions.reveal(deps.platform),
+      label: T.reveal(deps.platform),
       keywords: ["Reveal in Finder", "Show in Explorer"],
       enabled: hasSelection,
       run: withSelected(deps.reveal),
     },
     {
       id: "project.removeFromList",
-      label: STRINGS.actions.remove,
+      label: T.remove,
       keywords: ["Remove from List"],
       enabled: () => hasSelection() && deps.searchEmpty() && deps.writable(),
       run: withSelected(deps.remove),
@@ -64,11 +66,15 @@ export function welcomeActions(deps: {
 }
 
 /** S3 생성 시트가 열려 있는 동안의 팝업 액션. */
-export function createProjectActions(deps: { canSubmit(): boolean; submit(): unknown }): Action[] {
+export function createProjectActions(deps: {
+  strings: WelcomeStrings;
+  canSubmit(): boolean;
+  submit(): unknown;
+}): Action[] {
   return [
     {
       id: "project.create",
-      label: STRINGS.actions.create,
+      label: deps.strings.actions.create,
       popup: true,
       enabled: deps.canSubmit,
       run: () => void deps.submit(),

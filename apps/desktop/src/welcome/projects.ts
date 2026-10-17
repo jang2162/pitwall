@@ -10,7 +10,7 @@ import {
 } from "@pitwall/rpc-client";
 
 import type { FindProjectRequest, OpenProjectWindowArgs } from "./native";
-import { STRINGS } from "./strings";
+import type { WelcomeStrings } from "./strings";
 
 /** 즐겨찾기 → 최근에 연 것 → 연 적 없는 것(이름순). `project.list` 는 이름순이다. */
 export function sortProjects(projects: readonly Project[]): Project[] {
@@ -42,9 +42,9 @@ export function parentDir(path: string): string {
 }
 
 /** 후보 줄의 이유(10-ui §2.2 `.git · build.gradle.kts`). */
-export function candidateReasons(candidate: RootCandidate): string {
+export function candidateReasons(candidate: RootCandidate, T: WelcomeStrings): string {
   return [
-    ...(candidate.worktreeMain ? [STRINGS.find.worktreeMain] : []),
+    ...(candidate.worktreeMain ? [T.find.worktreeMain] : []),
     ...(candidate.vcs ? [".git"] : []),
     ...candidate.buildFiles,
   ].join(" · ");
@@ -57,17 +57,20 @@ export interface StorageBanner {
 }
 
 /** 정상(`ok`)이 아니면 보여 줄 배너. `project.storage` 문서: 웰컴 화면은 정상이 아니면 `reason` 을 배너로 보여 준다. */
-export function storageBanner(status: StorageStatus | undefined): StorageBanner | undefined {
+export function storageBanner(
+  status: StorageStatus | undefined,
+  T: WelcomeStrings,
+): StorageBanner | undefined {
   switch (status?.kind) {
     case undefined:
     case "ok":
       return undefined;
     case "recovered":
-      return { text: STRINGS.storage.recovered(status.reason, status.backup), readOnly: false };
+      return { text: T.storage.recovered(status.reason, status.backup), readOnly: false };
     case "readOnly":
-      return { text: STRINGS.storage.readOnly(status.reason), readOnly: true };
+      return { text: T.storage.readOnly(status.reason), readOnly: true };
     case "memory":
-      return { text: STRINGS.storage.memory(status.reason), readOnly: true };
+      return { text: T.storage.memory(status.reason), readOnly: true };
   }
 }
 

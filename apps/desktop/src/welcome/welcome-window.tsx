@@ -40,7 +40,7 @@ import {
   sortProjects,
   storageBanner,
 } from "./projects";
-import { STRINGS } from "./strings";
+import { useWelcomeStrings } from "./strings";
 
 type Flow =
   | { kind: "idle" }
@@ -63,9 +63,10 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
   const { client, key } = useHost();
   const queryClient = useQueryClient();
   const { platform, shortcuts } = useKeymap();
+  const S = useWelcomeStrings();
   const projects = useRpcQuery("project.list", null);
   const storage = useRpcQuery("project.storage", null);
-  const banner = storageBanner(storage.data);
+  const banner = storageBanner(storage.data, S);
   const readOnly = banner?.readOnly === true;
   const list = useMemo(() => sortProjects(projects.data ?? []), [projects.data]);
 
@@ -85,10 +86,10 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
 
   const fail = useCallback(
     (what: string) => (e: unknown) => {
-      setError(STRINGS.errors.action(what, errorText(e)));
+      setError(S.errors.action(what, errorText(e)));
       log?.warn(`${what} failed: ${errorText(e)}`, "welcome");
     },
-    [log],
+    [log, S],
   );
   const refreshList = useCallback(
     () => queryClient.invalidateQueries({ queryKey: rpcQueryKey(key, "project.list") }),
@@ -111,9 +112,9 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
       setError(undefined);
       setNotice(undefined);
       log?.info(`open project window: ${JSON.stringify(args)}`, "welcome");
-      return native.openProjectWindow(args).catch(fail(STRINGS.errors.open));
+      return native.openProjectWindow(args).catch(fail(S.errors.open));
     },
-    [native, fail, log],
+    [native, fail, log, S],
   );
 
   /** 고르거나 끌어다 놓은 폴더: 이미 그 루트의 프로젝트면 열고, 아니면 S3. */
@@ -122,7 +123,7 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
       if (!client) return;
       setError(undefined);
       const resolution = await client.call("project.resolve", { path }).catch((e: unknown) => {
-        fail(STRINGS.errors.open)(e);
+        fail(S.errors.open)(e);
         return undefined;
       });
       if (resolution === undefined) return;
@@ -130,17 +131,20 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
       if (existing) await openWindow(existing);
       else setFlow({ kind: "create", root: path });
     },
-    [client, fail, openWindow],
+    [client, fail, openWindow, S],
   );
 
   const pickAndOpenFolder = useCallback(async () => {
     const picked = await native.pickFolder().catch((e: unknown) => {
-      fail(STRINGS.errors.pickFolder)(e);
+      fail(S.errors.pickFolder)(e);
       return null;
     });
     if (picked !== null) await openFolder(picked);
-  }, [native, fail, openFolder]);
+  }, [native, fail, openFolder, S]);
 
+  // 언어가 바뀌어도 아래 effect 를 다시 붙이지 않는다 — 붙일 때마다 보류 요청을 꺼내러 간다.
+  const failRef = useRef<(e: unknown) => void>(() => {});
+  failRef.current = fail(S.errors.findProject);
   // 파일로 실행했는데 프로젝트를 못 찾은 요청(F2). 창이 뜰 때와 알림을 받을 때 꺼낸다.
   // 꺼낸 요청은 effect 가 해제된 뒤에 와도 버리지 않는다 — Rust 쪽은 꺼낼 때 비우므로 버리면 다시 꺼낼 수 없다. StrictMode 는
   // effect 를 붙였다 떼고 다시 붙이는데, 첫 take 가 요청을 가져가고 둘째는 null 을 받는다. 컴포넌트 상태는 그 사이에도 남으므로
@@ -152,11 +156,11 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
         .then((request) => {
           if (request) setFlow({ kind: "find", request });
         })
-        .catch(fail(STRINGS.errors.findProject));
+        .catch((e: unknown) => failRef.current(e));
     };
     take();
     return native.onFindProjectRequested(take);
-  }, [native, fail]);
+  }, [native]);
 
   /** 경로를 담은 등록 프로젝트를 그 파일과 함께 연다. 그 경로를 담은 프로젝트가 없으면 거짓. */
   const openPathInProject = useCallback(
@@ -179,12 +183,12 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
       if (kind === "dir") return openFolder(path);
       const request = { path };
       const opened = await openPathInProject(request).catch((e: unknown) => {
-        fail(STRINGS.errors.open)(e);
+        fail(S.errors.open)(e);
         return true;
       });
       if (!opened) setFlow({ kind: "find", request });
     },
-    [native, openFolder, openPathInProject, fail],
+    [native, openFolder, openPathInProject, fail, S],
   );
 
   useEffect(
@@ -214,23 +218,24 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
       await client
         .call("project.delete", { id: project.id })
         .then(refreshList)
-        .catch(writeFailed(STRINGS.errors.remove));
+        .catch(writeFailed(S.errors.remove));
     },
-    [client, refreshList, writeFailed],
+    [client, refreshList, writeFailed, S],
   );
   const reveal = useCallback(
     (project: Project) => {
       const root = project.roots[0];
       if (root === undefined) return;
       log?.info(`reveal: ${root}`, "welcome");
-      void native.reveal(root).catch(fail(STRINGS.errors.reveal));
+      void native.reveal(root).catch(fail(S.errors.reveal));
     },
-    [native, fail, log],
+    [native, fail, log, S],
   );
 
   const actions = useMemo(
     () =>
       welcomeActions({
+        strings: S,
         platform,
         selected: () => selectedProject.current(),
         searchEmpty: () => searchEmpty.current,
@@ -241,7 +246,7 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
         reveal,
         remove: removeProject,
       }),
-    [platform, pickAndOpenFolder, openWindow, reveal, removeProject],
+    [S, platform, pickAndOpenFolder, openWindow, reveal, removeProject],
   );
   useRegisterActions(actions);
 
@@ -259,7 +264,7 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
     setMenuTarget(project);
   };
 
-  const T = STRINGS;
+  const T = S;
   return (
     <div className="relative flex min-h-0 flex-1">
       <nav
@@ -446,7 +451,7 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
                 ),
               )
               .catch((e: unknown) => {
-                fail(STRINGS.errors.pickFolder)(e);
+                fail(S.errors.pickFolder)(e);
                 setFlow({ kind: "find", request });
               });
           }}
@@ -459,7 +464,7 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
           initialRoot={flow.root}
           readOnly={readOnly}
           pickFolder={native.pickFolder}
-          onWriteError={writeFailed(STRINGS.errors.create)}
+          onWriteError={writeFailed(S.errors.create)}
           onCancel={() => setFlow({ kind: "idle" })}
           onCreated={async (project) => {
             const origin = flow.origin;
@@ -467,7 +472,7 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
             void refreshList();
             const args = origin && (await originArgs(origin, project.id));
             await openWindow(args ?? { projectId: project.id });
-            if (origin && !args) setNotice(STRINGS.notices.fileNotInProject(origin.path));
+            if (origin && !args) setNotice(S.notices.fileNotInProject(origin.path));
           }}
         />
       )}

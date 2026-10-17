@@ -38,11 +38,14 @@ const host = vi.hoisted(() => ({
   failWrites: undefined as StorageStatus | undefined,
   calls: [] as { method: string; params: unknown }[],
   emitHostEvent: (_topic: string) => {},
+  /** `i18n.get` 이 고른 언어. 시험은 기본으로 한국어에 고정한다(브라우저 언어에 기대지 않는다). */
+  locale: "ko",
 }));
 
 vi.mock("../tauri-transport", async () => {
   const { createMemoryTransportPair: pair } = await import("@pitwall/rpc-client");
   const { DEFAULT_KEYMAP_TOML } = await import("../keymap/default-keymap");
+  const { i18nState } = await import("../i18n/testing");
   return {
     connectHost: async () => {
       const [client, server] = pair();
@@ -62,6 +65,11 @@ vi.mock("../tauri-transport", async () => {
           });
         }
         switch (m.method) {
+          case "i18n.get":
+            return reply(i18nState(host.locale));
+          case "i18n.setLanguage":
+            host.locale = (m.params as { language: string }).language;
+            return reply(null);
           case "config.get":
             return reply({
               snapshot: { files: [], notices: [] },
@@ -200,6 +208,7 @@ beforeEach(() => {
   pickedFolder = null;
   pathKinds = {};
   host.failWrites = undefined;
+  host.locale = "ko";
   for (const fn of Object.values(native)) fn.mockClear();
   keymapNative.openSettings.mockClear();
   log.info.mockClear();
@@ -683,4 +692,86 @@ it("logs what it asks the native side to do, and every failure", async () => {
   await press("Enter");
   expect(log.info).toHaveBeenCalledWith('open project window: {"projectId":"b"}', "welcome");
   expect(log.warn).toHaveBeenCalledWith("프로젝트 열기 failed: unknown project", "welcome");
+});
+
+/** 상태바의 테마 고르기: 묶음 이름과 「시스템」 버튼 이름. */
+const footerThemeLabel = () => {
+  const system = document.querySelector('footer [data-testid="theme-system"]');
+  return `${system?.parentElement?.getAttribute("aria-label")} / ${system?.getAttribute("aria-label")}`;
+};
+
+it("draws the whole welcome window in English when the host picks en", async () => {
+  host.locale = "en";
+  await mount();
+  expect(searchInput().placeholder).toBe("Search projects");
+  expect(document.querySelector("nav")?.getAttribute("aria-label")).toBe("Welcome");
+  expect(document.querySelector("nav")?.textContent).toBe("ProjectsRemote HostsExtensions");
+  expect(button("New Project…")).toBeDefined();
+  expect(button("Open Folder…")).toBeDefined();
+  expect(rows()[0]!.querySelector('[aria-label="Favorite"]')).not.toBeNull();
+  expect(footerThemeLabel()).toBe("Theme / System Theme");
+  // 보이는 글자뿐 아니라 툴팁 · 화면 읽기 이름 · 자리 표시 글자에도 한국어가 남지 않는다.
+  const hangul = () =>
+    [
+      document.body.textContent ?? "",
+      ...[...document.querySelectorAll("[title], [aria-label], [placeholder]")].flatMap((e) =>
+        ["title", "aria-label", "placeholder"].map((name) => e.getAttribute(name) ?? ""),
+      ),
+    ].filter((text) => /[가-힣]/.test(text));
+  expect(hangul()).toEqual([]);
+
+  await openFind({ path: "/w/x/file.txt" });
+  expect(findDialog()?.textContent).toContain("Project to open /w/x/file.txt");
+  expect(findDialog()?.textContent).toContain("Choose Folder…");
+  await press("Escape", {}, "Escape");
+  await press("KeyN", { metaKey: true });
+  expect(sheet()?.textContent).toContain("New Project: ");
+  expect(sheet()?.textContent).toContain("Nothing detected");
+  expect(hangul()).toEqual([]);
+});
+
+/** 한글 조합 필터는 UI 언어와 무관하다 — 영어 화면에서도 조합 중인 검색어로 목록이 맞는다. */
+it("filters by a composing hangul query in the English UI too", async () => {
+  host.locale = "en";
+  host.projects.push(project("k", "결제-서버", "/w/pay"));
+  await mount();
+  await compose(searchInput(), "결ㅈ");
+  expect(rowNames()).toEqual(["결제-서버"]);
+  await press("Enter", { keyCode: 229 }, "Enter");
+  expect(native.openProjectWindow).not.toHaveBeenCalled();
+});
+
+/**
+ * 액션 찾기의 언어 액션 → `i18n.setLanguage` → Host 범위 `config.changed` → `i18n.get` 다시 부르기. 창을 다시 띄우지 않고 바뀐다 —
+ * 검색어 · 선택이 그대로 남는다.
+ */
+it("switches the language from Find Action without remounting the window", async () => {
+  await mount();
+  expect(button("새 프로젝트…")).toBeDefined();
+  await type(searchInput(), "bill");
+
+  await press("KeyA", { metaKey: true, shiftKey: true }, "A");
+  const languageAction = [
+    ...document.querySelectorAll<HTMLElement>("[cmdk-dialog] [cmdk-item]"),
+  ].find((e) => e.textContent === "언어: English");
+  expect(languageAction).toBeDefined();
+  await act(async () => languageAction!.click());
+  await settle();
+  expect(calls("i18n.setLanguage").map((c) => c.params)).toEqual([{ language: "en" }]);
+
+  await act(async () => host.emitHostEvent("config.changed"));
+  await settle();
+  expect(button("New Project…")).toBeDefined();
+  expect(searchInput().placeholder).toBe("Search projects");
+  expect(searchInput().value).toBe("bill");
+  expect(rowNames()).toEqual(["billing-api"]);
+  expect(footerThemeLabel()).toBe("Theme / System Theme");
+
+  // 액션 이름도 바뀐다.
+  await press("KeyA", { metaKey: true, shiftKey: true }, "A");
+  const names = [...document.querySelectorAll("[cmdk-dialog] [cmdk-item]")].map(
+    (e) => e.textContent,
+  );
+  expect(names).toContain("Language: 한국어");
+  expect(names.some((n) => n?.startsWith("New Project"))).toBe(true);
 });

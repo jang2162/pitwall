@@ -1,8 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { KO_APP } from "../i18n/testing";
 import { appActions } from "./actions";
 
-const base = { openFindAction() {}, openSettings: async () => {}, setTheme() {} };
+const base = {
+  strings: KO_APP,
+  languages: [],
+  setLanguage: async () => {},
+  openFindAction() {},
+  openSettings: async () => {},
+  setTheme() {},
+};
 
 describe("appActions", () => {
   // src-tauri/src/menu.rs 의 CLI_INSTALL_ACTION 과 같은 id 여야 메뉴에서 고른 것이 이 액션으로 온다.

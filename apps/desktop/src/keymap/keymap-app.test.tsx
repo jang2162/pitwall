@@ -34,6 +34,7 @@ const host = vi.hoisted(() => ({
 vi.mock("../tauri-transport", async () => {
   const { createMemoryTransportPair: pair } = await import("@pitwall/rpc-client");
   const { DEFAULT_KEYMAP_TOML } = await import("./default-keymap");
+  const { i18nState } = await import("../i18n/testing");
   return {
     connectHost: async () => {
       const [client, server] = pair();
@@ -44,6 +45,9 @@ vi.mock("../tauri-transport", async () => {
         const m = JSON.parse(text) as { id?: number; method: string; params: never };
         const reply = (result: unknown) => send({ id: m.id, result });
         switch (m.method) {
+          // 화면 문자열을 한국어로 고정한다 — 액션 이름으로 찾는 시험이 브라우저 언어에 기대지 않게.
+          case "i18n.get":
+            return reply(i18nState("ko"));
           case "config.get":
             return reply({
               snapshot: {

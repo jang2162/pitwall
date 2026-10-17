@@ -2,6 +2,8 @@
 
 import { Command } from "cmdk";
 
+import { useAppStrings } from "../i18n/app-strings";
+import { useI18n } from "../i18n/i18n-provider";
 import { SEARCH_ITEM_CLASS, SearchPopup } from "../ui/search-popup";
 import { useKeymap, useRegistryVersion } from "./keymap-provider";
 
@@ -13,21 +15,23 @@ export function FindActionDialog({
   onOpenChange(open: boolean): void;
 }) {
   const { registry, shortcuts, runnable } = useKeymap();
+  const T = useAppStrings().findAction;
+  const { locales } = useI18n();
   useRegistryVersion(registry);
   const actions = open
     ? registry
         .list()
         .filter((a) => runnable(a.id) && a.id !== "action.find")
-        .sort((a, b) => a.label.localeCompare(b.label, "ko"))
+        .sort((a, b) => a.label.localeCompare(b.label, locales[0]))
     : [];
 
   return (
     <SearchPopup
       open={open}
       onOpenChange={onOpenChange}
-      label="액션 찾기"
-      placeholder="액션 이름"
-      empty="맞는 액션이 없다"
+      label={T.label}
+      placeholder={T.placeholder}
+      empty={T.empty}
     >
       {actions.map((action) => {
         const keys = shortcuts(action.id);
@@ -47,7 +51,7 @@ export function FindActionDialog({
             {keys.map((k) => (
               <kbd
                 key={k.text}
-                title={k.reserved ? `OS 예약 키(${k.reserved}) — 앱에 오지 않는다` : undefined}
+                title={k.reserved ? T.reserved(k.reserved) : undefined}
                 className={`font-sans text-[11px] text-ui-muted-foreground ${k.reserved ? "line-through" : ""}`}
               >
                 {k.text}

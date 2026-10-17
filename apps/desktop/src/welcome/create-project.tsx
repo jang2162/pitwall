@@ -12,9 +12,7 @@ import { useHost } from "../rpc/host";
 import { keepOpenWhileComposing } from "../ui/ime";
 import { createProjectActions } from "./actions";
 import { baseName, errorText } from "./projects";
-import { STRINGS } from "./strings";
-
-const T = STRINGS.create;
+import { useWelcomeStrings } from "./strings";
 
 const BUTTON =
   "rounded-sm border border-ui-border bg-ui-panel px-2 py-0.5 hover:bg-ui-hover disabled:opacity-50";
@@ -40,6 +38,8 @@ export function CreateProjectSheet({
 }) {
   const { client } = useHost();
   const { shortcuts } = useKeymap();
+  const S = useWelcomeStrings();
+  const T = S.create;
   const [root, setRoot] = useState(initialRoot);
   const [name, setName] = useState(baseName(initialRoot));
   const nameEdited = useRef(false);
@@ -62,7 +62,7 @@ export function CreateProjectSheet({
       });
       await onCreated(project);
     } catch (e) {
-      setError(STRINGS.errors.action(STRINGS.errors.create, errorText(e)));
+      setError(S.errors.action(S.errors.create, errorText(e)));
       setBusy(false);
       onWriteError(e);
     }
@@ -72,14 +72,18 @@ export function CreateProjectSheet({
 
   const actions = useMemo(
     () =>
-      createProjectActions({ canSubmit: () => enabled.current(), submit: () => submit.current() }),
-    [],
+      createProjectActions({
+        strings: S,
+        canSubmit: () => enabled.current(),
+        submit: () => submit.current(),
+      }),
+    [S],
   );
   useRegisterActions(actions);
 
   async function changeRoot() {
     const picked = await pickFolder(root || undefined).catch((e: unknown) => {
-      setError(STRINGS.errors.action(STRINGS.errors.pickFolder, errorText(e)));
+      setError(S.errors.action(S.errors.pickFolder, errorText(e)));
       return null;
     });
     if (picked === null) return;

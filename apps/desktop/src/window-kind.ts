@@ -8,8 +8,5 @@ export function parseWindowKind(search: string): WindowKind {
   return KINDS.find((kind) => kind === value) ?? "welcome";
 }
 
-export const WINDOW_TITLES: Record<WindowKind, string> = {
-  welcome: "Pitwall",
-  project: "Project",
-  settings: "Settings",
-};
+/** 웰컴 창의 제목 줄. 앱 이름이라 번역하지 않는다 — 다른 창의 제목은 UI 언어를 따른다(i18n/app-strings.ts). */
+export const WELCOME_TITLE = "Pitwall";

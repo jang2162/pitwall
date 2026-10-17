@@ -25,6 +25,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
+import { useAppStrings } from "../i18n/app-strings";
 import { useRpcQuery } from "../rpc/host";
 import { contextLayers } from "./context";
 import { chooseDefaultKeymap, DEFAULT_KEYMAP_ID, registryKeymapProblem } from "./default-keymap";
@@ -327,10 +328,11 @@ export function KeymapProvider({
 /** 키맵 파일 오류 · 경고를 창 아래에 띄운다(10-ui §4.5 「오류는 알림으로」 — 알림 기능이 생기기 전의 최소 표시). */
 export function KeymapErrorBar() {
   const { error, warnings } = useKeymap();
+  const T = useAppStrings().keymap;
   const text = error
-    ? `키맵 파일 오류 — 이전 키맵을 쓰는 중: ${error}`
+    ? T.error(error)
     : warnings.length > 0
-      ? `키맵 파일 경고: ${warnings.join("; ")}`
+      ? T.warning(warnings.join("; "))
       : undefined;
   if (!text) return null;
   return (

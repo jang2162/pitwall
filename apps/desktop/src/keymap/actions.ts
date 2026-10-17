@@ -4,10 +4,15 @@
 import type { Action } from "@pitwall/keymap";
 import type { DockviewApi } from "dockview-react";
 
+import type { AppStrings } from "../i18n/app-strings";
 import { collapseAllDocks, PANELS, toggleToolWindow } from "../layout/project-layout";
 import type { ThemePreference } from "../theme/theme-store";
 
 export function appActions(deps: {
+  strings: AppStrings;
+  /** 등록된 UI 언어(그 언어로 쓴 이름). 언어마다 액션 하나와 「시스템」 액션을 둔다. */
+  languages: readonly { locale: string; name: string }[];
+  setLanguage(language: string): Promise<void>;
   openFindAction(): void;
   openSettings(): Promise<void>;
   setTheme(preference: ThemePreference): void;
@@ -15,16 +20,22 @@ export function appActions(deps: {
   installShellCommand?: () => Promise<void>;
 }): Action[] {
   const { installShellCommand } = deps;
+  const T = deps.strings.actions;
+  // 실패(설정 파일을 고칠 수 없음 등)는 RPC 오류로 온다. 설정 창은 화면에 보이고, 액션은 로그로 남긴다.
+  const setLanguage = (language: string) => () =>
+    deps
+      .setLanguage(language)
+      .catch((e: unknown) => console.warn("[i18n] language not changed", language, e));
   return [
     {
       id: "action.find",
-      label: "액션 찾기",
+      label: T.find,
       keywords: ["Find Action", "command palette"],
       run: deps.openFindAction,
     },
     {
       id: "settings.open",
-      label: "설정",
+      label: T.settings,
       keywords: ["Settings", "Preferences"],
       run: deps.openSettings,
     },
@@ -32,7 +43,7 @@ export function appActions(deps: {
       ? [
           {
             id: "cli.install",
-            label: "Shell 명령 설치",
+            label: T.cliInstall,
             keywords: ["Install Shell Command", "Create Command-line Launcher", "pitwall", "PATH"],
             // 실패 · 취소는 네이티브가 대화상자 · 로그로 알린다.
             run: () =>
@@ -42,17 +53,23 @@ export function appActions(deps: {
           } satisfies Action,
         ]
       : []),
-    ...(
-      [
-        ["light", "라이트"],
-        ["dark", "다크"],
-        ["system", "시스템"],
-      ] as const
-    ).map(([preference, name]): Action => ({
+    ...(["light", "dark", "system"] as const).map((preference): Action => ({
       id: `theme.${preference}`,
-      label: `테마: ${name}`,
+      label: T.theme(preference),
       keywords: [`Theme ${preference}`],
       run: () => deps.setTheme(preference),
+    })),
+    {
+      id: "language.system",
+      label: T.languageSystem,
+      keywords: ["Language System", "언어"],
+      run: setLanguage("system"),
+    },
+    ...deps.languages.map(({ locale, name }): Action => ({
+      id: `language.${locale}`,
+      label: T.language(name),
+      keywords: [`Language ${locale}`, "언어"],
+      run: setLanguage(locale),
     })),
   ];
 }

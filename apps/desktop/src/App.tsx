@@ -2,6 +2,9 @@ import type { UiLogger } from "@pitwall/logger";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
+import { useAppStrings } from "./i18n/app-strings";
+import { I18nProvider, useI18n } from "./i18n/i18n-provider";
+
 import { appActions } from "./keymap/actions";
 import {
   KeymapErrorBar,
@@ -15,7 +18,7 @@ import { HostProvider } from "./rpc/host";
 import { ThemeSwitcher, useTheme } from "./theme/theme-switcher";
 import { tauriWelcomeNative, type WelcomeNative } from "./welcome/native";
 import { type WelcomeLog, WelcomeWindow } from "./welcome/welcome-window";
-import { WINDOW_TITLES, type WindowKind } from "./window-kind";
+import { WELCOME_TITLE, type WindowKind } from "./window-kind";
 
 // src-tauri/src/main.rs 의 LOCAL_HOST_ID. 프로젝트 모델이 생기기 전이라(M0-09 · M0-12) 모든 창이 Host 를 직접 고른다.
 const LOCAL_HOST = { hostId: "local" };
@@ -33,16 +36,55 @@ function Welcome({ native, log }: { native: WelcomeNative; log?: WelcomeLog }) {
   );
 }
 
-// 설정 화면(10-ui §2.7)이 들어오기 전까지 외관 > 테마만 둔다.
+// 설정 화면(10-ui §2.7)이 들어오기 전까지 외관 > 테마 · 언어만 둔다.
 function SettingsWindow() {
+  const T = useAppStrings().settings;
   return (
     <main className="flex-1 px-6 py-4">
-      <h2 className="mb-2 text-sm font-semibold">외관</h2>
+      <h2 className="mb-2 text-sm font-semibold">{T.appearance}</h2>
       <div className="flex items-center gap-3">
-        <span>테마</span>
+        <span>{T.theme}</span>
         <ThemeSwitcher />
       </div>
+      <LanguageSelect />
     </main>
+  );
+}
+
+/** UI 언어(settings.toml 의 `ui.language`). 고르면 `i18n.setLanguage` 가 그 키만 고쳐 쓰고, 바뀐 언어는 `config.changed` 로 온다. */
+function LanguageSelect() {
+  const T = useAppStrings().settings;
+  const { setting, languages, setLanguage } = useI18n();
+  const [error, setError] = useState<string>();
+  return (
+    <div className="mt-2 flex items-center gap-3">
+      <label className="flex items-center gap-3">
+        <span>{T.language}</span>
+        <select
+          value={setting ?? "system"}
+          disabled={setting === undefined}
+          onChange={(e) => {
+            setError(undefined);
+            setLanguage(e.target.value).catch((err: unknown) =>
+              setError(T.languageFailed(err instanceof Error ? err.message : String(err))),
+            );
+          }}
+          className="rounded-sm border border-ui-border bg-ui-background px-1.5 py-0.5"
+        >
+          <option value="system">{T.languageSystem}</option>
+          {languages.map((l) => (
+            <option key={l.locale} value={l.locale}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error && (
+        <span role="alert" className="text-[12px] text-ui-accent">
+          {error}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -50,18 +92,28 @@ function SettingsWindow() {
 function AppActions({ native }: { native: KeymapNative }) {
   const { openFindAction } = useKeymap();
   const setTheme = useTheme((s) => s.setPreference);
+  const strings = useAppStrings();
+  const { languages, setLanguage } = useI18n();
   const actions = useMemo(
     () =>
       appActions({
+        strings,
+        languages,
+        setLanguage,
         openFindAction,
         openSettings: native.openSettings,
         setTheme,
         installShellCommand: native.installShellCommand,
       }),
-    [openFindAction, native, setTheme],
+    [strings, languages, setLanguage, openFindAction, native, setTheme],
   );
   useRegisterActions(actions);
   return null;
+}
+
+function WindowTitle({ kind }: { kind: WindowKind }) {
+  const titles = useAppStrings().windowTitles;
+  return <span data-tauri-drag-region>{kind === "welcome" ? WELCOME_TITLE : titles[kind]}</span>;
 }
 
 export function App({
@@ -79,19 +131,21 @@ export function App({
   return (
     <QueryClientProvider client={queryClient}>
       <HostProvider target={LOCAL_HOST}>
-        <KeymapProvider native={native} log={log}>
-          <AppActions native={native} />
-          <div className="flex h-full flex-col bg-ui-background text-ui-foreground">
-            {/* macOS 에서는 웹뷰가 타이틀바 자리까지 덮으므로 이 줄이 창을 옮기는 손잡이가 된다. */}
-            <header className="titlebar bg-ui-toolbar" data-tauri-drag-region>
-              <span data-tauri-drag-region>{WINDOW_TITLES[kind]}</span>
-            </header>
-            {kind === "welcome" && <Welcome native={welcomeNative} log={log} />}
-            {kind === "project" && <ProjectWindow />}
-            {kind === "settings" && <SettingsWindow />}
-            <KeymapErrorBar />
-          </div>
-        </KeymapProvider>
+        <I18nProvider log={log}>
+          <KeymapProvider native={native} log={log}>
+            <AppActions native={native} />
+            <div className="flex h-full flex-col bg-ui-background text-ui-foreground">
+              {/* macOS 에서는 웹뷰가 타이틀바 자리까지 덮으므로 이 줄이 창을 옮기는 손잡이가 된다. */}
+              <header className="titlebar bg-ui-toolbar" data-tauri-drag-region>
+                <WindowTitle kind={kind} />
+              </header>
+              {kind === "welcome" && <Welcome native={welcomeNative} log={log} />}
+              {kind === "project" && <ProjectWindow />}
+              {kind === "settings" && <SettingsWindow />}
+              <KeymapErrorBar />
+            </div>
+          </KeymapProvider>
+        </I18nProvider>
       </HostProvider>
     </QueryClientProvider>
   );

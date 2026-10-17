@@ -7578,6 +7578,24 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
+### @fluent/bundle 0.19.1 (Apache-2.0)
+
+Homepage: https://projectfluent.org
+
+No license file in the package.
+
+### @fluent/react 0.15.2 (Apache-2.0)
+
+Homepage: https://projectfluent.org
+
+No license file in the package.
+
+### @fluent/sequence 0.8.0 (Apache-2.0)
+
+Homepage: https://projectfluent.org
+
+No license file in the package.
+
 ### @radix-ui/primitive 1.2.0 (MIT)
 
 Homepage: https://radix-ui.com/primitives
@@ -8767,6 +8785,12 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+### cached-iterable 0.3.0 (Apache-2.0)
+
+Homepage: https://github.com/projectfluent/cached-iterable#readme
+
+No license file in the package.
 
 ### cmdk 1.1.1 (MIT)
 

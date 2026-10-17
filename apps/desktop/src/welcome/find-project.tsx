@@ -8,9 +8,8 @@ import { useRpcQuery } from "../rpc/host";
 import { SEARCH_ITEM_CLASS, SearchPopup } from "../ui/search-popup";
 import type { FindProjectRequest } from "./native";
 import { candidateReasons, errorText } from "./projects";
-import { STRINGS } from "./strings";
+import { useWelcomeStrings } from "./strings";
 
-const T = STRINGS.find;
 const PICK_FOLDER = "__pick-folder";
 const FILE_ONLY = "__file-only";
 
@@ -26,6 +25,8 @@ export function FindProjectPopup({
   onCancel(): void;
 }) {
   useKeymapPopup(true);
+  const S = useWelcomeStrings();
+  const T = S.find;
   const candidates = useRpcQuery("project.candidates", { path: request.path });
   const list = candidates.data ?? [];
   return (
@@ -40,7 +41,7 @@ export function FindProjectPopup({
       {candidates.isPending && <Command.Loading className="px-3 py-1">{T.loading}</Command.Loading>}
       {candidates.error && (
         <div role="alert" className="px-3 py-1 text-ui-accent">
-          {STRINGS.errors.action(STRINGS.errors.candidates, errorText(candidates.error))}
+          {S.errors.action(S.errors.candidates, errorText(candidates.error))}
         </div>
       )}
       {list.map((candidate, i) => (
@@ -55,7 +56,7 @@ export function FindProjectPopup({
             {candidate.path}
           </span>
           <span className="flex-none text-[11px] text-ui-muted-foreground">
-            {candidateReasons(candidate)}
+            {candidateReasons(candidate, S)}
             {i === 0 && ` (${T.recommended})`}
           </span>
         </Command.Item>

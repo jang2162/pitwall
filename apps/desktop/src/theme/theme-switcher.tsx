@@ -3,6 +3,7 @@ import { Monitor, Moon, Sun } from "lucide-react";
 import { createContext, type ReactNode, useContext } from "react";
 import { useStore } from "zustand";
 
+import { useAppStrings } from "../i18n/app-strings";
 import type { ThemePreference, ThemeState, ThemeStore } from "./theme-store";
 
 const ThemeStoreContext = createContext<ThemeStore | undefined>(undefined);
@@ -23,19 +24,20 @@ export function useTheme<T>(selector: (state: ThemeState) => T): T {
   return useStore(store, selector);
 }
 
-const OPTIONS: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
-  { value: "system", label: "시스템 테마", icon: Monitor },
-  { value: "light", label: "라이트 테마", icon: Sun },
-  { value: "dark", label: "다크 테마", icon: Moon },
+const OPTIONS: { value: ThemePreference; icon: typeof Sun }[] = [
+  { value: "system", icon: Monitor },
+  { value: "light", icon: Sun },
+  { value: "dark", icon: Moon },
 ];
 
 export function ThemeSwitcher() {
   const preference = useTheme((s) => s.preference);
   const setPreference = useTheme((s) => s.setPreference);
+  const T = useAppStrings().theme;
   return (
     <ToggleGroup.Root
       type="single"
-      aria-label="테마"
+      aria-label={T.label}
       value={preference}
       // 이미 눌린 항목을 다시 누르면 Radix 는 빈 값을 준다. 선택 해제는 없으므로 무시한다.
       onValueChange={(value) => {
@@ -43,12 +45,12 @@ export function ThemeSwitcher() {
       }}
       className="flex items-center"
     >
-      {OPTIONS.map(({ value, label, icon: Icon }) => (
+      {OPTIONS.map(({ value, icon: Icon }) => (
         <ToggleGroup.Item
           key={value}
           value={value}
-          aria-label={label}
-          title={label}
+          aria-label={T[value]}
+          title={T[value]}
           data-testid={`theme-${value}`}
           className="flex h-[18px] w-[22px] items-center justify-center rounded-sm text-ui-muted-foreground hover:bg-ui-hover focus-visible:outline-1 focus-visible:outline-ui-accent data-[state=on]:bg-ui-active data-[state=on]:text-ui-foreground"
         >

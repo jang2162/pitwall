@@ -13,6 +13,7 @@ import { createProjectActions, welcomeActions } from "../welcome/actions";
 import { appActions, toolWindowActions } from "./actions";
 import { DEFAULT_KEYMAP_TOML } from "./default-keymap";
 import { resolveKeymap } from "./resolve";
+import { KO_APP, KO_WELCOME } from "../i18n/testing";
 
 const PLATFORMS: Platform[] = ["mac", "win", "linux"];
 const defaults = (platform: Platform) =>
@@ -20,9 +21,17 @@ const defaults = (platform: Platform) =>
 
 const ACTION_IDS = new Set(
   [
-    ...appActions({ openFindAction() {}, openSettings: async () => {}, setTheme() {} }),
+    ...appActions({
+      strings: KO_APP,
+      languages: [],
+      setLanguage: async () => {},
+      openFindAction() {},
+      openSettings: async () => {},
+      setTheme() {},
+    }),
     ...toolWindowActions(() => undefined),
     ...welcomeActions({
+      strings: KO_WELCOME,
       platform: "mac",
       selected: () => undefined,
       searchEmpty: () => true,
@@ -33,7 +42,7 @@ const ACTION_IDS = new Set(
       reveal() {},
       remove() {},
     }),
-    ...createProjectActions({ canSubmit: () => true, submit() {} }),
+    ...createProjectActions({ strings: KO_WELCOME, canSubmit: () => true, submit() {} }),
   ].map((a) => a.id),
 );
 
