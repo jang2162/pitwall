@@ -10,6 +10,7 @@ use pw_ext::{LoadOptions, Registry};
 
 mod cli;
 mod config_log;
+mod detach;
 mod diag;
 mod instance;
 mod ipc;
@@ -51,9 +52,12 @@ fn run_mcp() -> ! {
     std::process::exit(2);
 }
 
+/// 이 빌드가 release 인가. 단일 인스턴스 키를 고른다([`instance_identifier`]). 시험(debug)이 이 값으로 dev 키를 보는지 지킨다.
+const RELEASE: bool = !cfg!(debug_assertions);
+
 /// 단일 인스턴스 키(instance.rs). debug 빌드만 빌드 폴더와 `$DATA` 로 가른다.
-fn instance_identifier(base: &str, paths: &AppPaths) -> String {
-    if !cfg!(debug_assertions) {
+fn instance_identifier(base: &str, paths: &AppPaths, release: bool) -> String {
+    if release {
         return instance::identifier(base, None);
     }
     // 아직 없는 `$DATA` 도 나중에 만들어진 뒤와 같은 값이 나오게 레지스트리와 같은 정규화를 쓴다.
@@ -65,11 +69,58 @@ fn instance_identifier(base: &str, paths: &AppPaths) -> String {
     )
 }
 
+/// 앱을 떼어 띄우고 이 프로세스는 끝낸다(detach.rs). 단일 인스턴스 소켓을 먼저 내려놓는다 — 자식이 아직 살아 있는 이
+/// 프로세스를 「기존 앱」으로 보고 인자를 넘긴 뒤 끝나 버리지 않게. 띄우지 못하면 이 프로세스가 앱이 된다(그때는 소켓을 이미
+/// 내려놓아 다음 실행이 기존 앱을 찾지 못한다 — 로그에 남긴다).
+fn detach_and_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    tauri_plugin_single_instance::destroy(app);
+    match detach::respawn() {
+        Ok(child) => {
+            tracing::info!(child, "detached the app from the launching process");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            tracing::warn!(%e, "cannot detach; running in the launching process without single-instance forwarding")
+        }
+    }
+}
+
+/// 주 인스턴스가 된 앱의 시작(setup 본체). 첫 실행의 인자도 두 번째 실행과 같은 [`launch::dispatch`] 로 연다.
+fn start<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    host: &LocalHost,
+    config_events: pw_core::Subscription,
+    (argv, cwd): (Vec<String>, String),
+) {
+    tauri::async_runtime::spawn(config_log::run(config_events));
+    // 레지스트리를 미리 열어 상태를 로그에 남긴다(정상이 아니면 경고 — 손상 · 잠김 · 읽기 전용). 열기는 잠긴 파일을 최대 2초 기다리고
+    // 무결성 검사를 하므로 창을 띄우는 스레드가 아니라 블로킹 스레드에서 한다.
+    if let Some(registry) = host.registry().cloned() {
+        tauri::async_runtime::spawn_blocking(move || {
+            let status = registry.status();
+            if matches!(status, pw_core::registry::StorageStatus::Ok { .. }) {
+                tracing::info!(?status, "project registry opened");
+            } else {
+                tracing::warn!(?status, "project registry is not using its file normally");
+            }
+        });
+    }
+    // 감시를 못 켜도 앱은 뜬다 — 설정은 시작할 때 읽은 값으로 남는다.
+    if let Err(e) = host.watch_config(tauri::async_runtime::handle().inner()) {
+        tracing::warn!(%e, "config watch disabled");
+    }
+    launch::dispatch(app, argv, cwd);
+}
+
 fn main() {
     // 서브커맨드는 무엇보다 먼저 가른다 — 로그 · 확장 · Host 를 만들지 않고, 단일 인스턴스 플러그인에도 닿지 않는다.
     if std::env::args_os().nth(1).is_some_and(|a| a == "mcp") {
         run_mcp();
     }
+    // 떼어 띄운 자식이면 표식을 지운다 — 앱이 띄우는 프로세스(터미널 등)가 물려받지 않게(detach.rs 머리 주석).
+    let detached = std::env::var_os(detach::MARKER_ENV).is_some();
+    // SAFETY: 아직 스레드를 띄우기 전이다(로그 · 런타임 · Tauri 모두 이 아래에서 시작한다).
+    unsafe { std::env::remove_var(detach::MARKER_ENV) };
     // 경로 해석이 로깅보다 먼저다(로그 폴더가 `$STATE/logs`). 그래서 이 실패는 stderr 에만 남는다.
     let paths = match AppPaths::from_env() {
         Ok(paths) => paths,
@@ -101,7 +152,6 @@ fn main() {
             config_log::log_fault(&Scope::Host, &fault);
         }
     }
-    let registry = host.registry().cloned();
     let config_events = config_log::subscribe(host.bus());
     let router = Arc::new(HostRouter::new());
     router
@@ -109,7 +159,7 @@ fn main() {
         .expect("빈 라우터에 Host 를 처음 등록한다");
 
     let mut context = tauri::generate_context!();
-    let identifier = instance_identifier(&context.config().identifier, &paths);
+    let identifier = instance_identifier(&context.config().identifier, &paths, RELEASE);
     tracing::info!(%identifier, "single-instance key");
     context.config_mut().identifier = identifier;
 
@@ -122,32 +172,26 @@ fn main() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(launch::Launch::new(registry.clone()))
+        .manage(launch::Launch::new(host.registry().cloned()))
         .manage(windows::PendingOpens::default())
         .manage(diagnostics)
         .menu(menu::build)
         .on_menu_event(menu::handle)
         .setup(move |app| {
-            tauri::async_runtime::spawn(config_log::run(config_events));
-            // 레지스트리를 미리 열어 상태를 로그에 남긴다(정상이 아니면 경고 — 손상 · 잠김 · 읽기 전용). 열기는 잠긴 파일을 최대 2초 기다리고
-            // 무결성 검사를 하므로 창을 띄우는 스레드가 아니라 블로킹 스레드에서 한다.
-            if let Some(registry) = registry {
-                tauri::async_runtime::spawn_blocking(move || {
-                    let status = registry.status();
-                    if matches!(status, pw_core::registry::StorageStatus::Ok { .. }) {
-                        tracing::info!(?status, "project registry opened");
-                    } else {
-                        tracing::warn!(?status, "project registry is not using its file normally");
-                    }
-                });
+            // 여기까지 왔으면 기존 앱이 없다(있으면 단일 인스턴스 플러그인이 인자를 넘기고 끝냈다).
+            if detach::should_detach(
+                detach::parent_pid(),
+                detached,
+                std::env::var_os(detach::DEV_SERVER_ENV).is_some(),
+            ) {
+                detach_and_exit(app.handle());
             }
-            // 감시를 못 켜도 앱은 뜬다 — 설정은 시작할 때 읽은 값으로 남는다.
-            if let Err(e) = host.watch_config(tauri::async_runtime::handle().inner()) {
-                tracing::warn!(%e, "config watch disabled");
-            }
-            // 첫 실행의 인자도 두 번째 실행과 같은 길로 연다(launch.rs 머리 주석).
-            let (argv, cwd) = launch::invocation_from_env();
-            launch::dispatch(app.handle(), argv, cwd);
+            start(
+                app.handle(),
+                &host,
+                config_events,
+                launch::invocation_from_env(),
+            );
             Ok(())
         })
         .run(context)
@@ -159,6 +203,76 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    fn host_under(dir: &std::path::Path) -> LocalHost {
+        local_host(
+            AppPaths::under(dir),
+            Arc::new(Diagnostics::new(dir.join("logs"), "0.0.0")),
+            Arc::new(Registry::default()),
+        )
+    }
+
+    #[test]
+    fn release_builds_share_one_single_instance_key() {
+        let paths = AppPaths::under(std::path::Path::new("/somewhere"));
+        assert_eq!(
+            instance_identifier("dev.pitwall.desktop", &paths, true),
+            "dev.pitwall.desktop"
+        );
+    }
+
+    /// 이 빌드(시험은 debug)가 실제로 고르는 키. [`RELEASE`] 가 뒤집히면 워크트리끼리 다시 섞인다.
+    #[test]
+    fn this_debug_build_keys_by_build_and_data() {
+        let a = AppPaths::under(std::path::Path::new("/data-a"));
+        let b = AppPaths::under(std::path::Path::new("/data-b"));
+        let key = instance_identifier("dev.pitwall.desktop", &a, RELEASE);
+        assert!(key.starts_with("dev.pitwall.desktop.dev-"), "{key}");
+        assert_ne!(key, instance_identifier("dev.pitwall.desktop", &b, RELEASE));
+    }
+
+    /// 인자를 준 첫 실행(setup 본체)이 두 번째 실행과 같은 열기 경로로 프로젝트 창을 연다.
+    #[test]
+    fn a_cold_start_with_a_path_opens_its_project_window() {
+        use tauri::Manager;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(tmp.path()).unwrap();
+        let root = base.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let host = host_under(&base.join("app"));
+        let registry = host.registry().cloned().unwrap();
+        let id = registry
+            .create(pw_core::registry::NewProject {
+                root: root.clone(),
+                ..Default::default()
+            })
+            .unwrap()
+            .id;
+        let app = tauri::test::mock_app();
+        app.manage(launch::Launch::new(Some(registry)));
+        app.manage(windows::PendingOpens::default());
+        let events = config_log::subscribe(host.bus());
+        start(
+            app.handle(),
+            &host,
+            events,
+            (
+                vec!["/usr/local/bin/pitwall".into(), "repo".into()],
+                base.display().to_string(),
+            ),
+        );
+        let label = windows::project_label(&id);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.get_webview_window(&label).is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "프로젝트 창이 열리지 않았다"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.get_webview_window(windows::WELCOME_LABEL).is_none());
+    }
 
     /// 생성물(`packages/rpc-client`)의 메서드 목록 == 앱의 Host 가 실제로 등록한 메서드 목록.
     ///

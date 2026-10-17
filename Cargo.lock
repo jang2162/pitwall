@@ -2809,6 +2809,7 @@ dependencies = [
 name = "pitwall-desktop"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "pw-core",
  "pw-diag",
  "pw-ext",
