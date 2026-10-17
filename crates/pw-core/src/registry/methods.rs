@@ -4,7 +4,7 @@
 //! - 목록 · 최근 · 조회 · 저장소 상태는 `read`, 모든 role. 레지스트리 안의 것만 돌려준다. 요약(`project.info`)도 `read` · 모든 role 이다 —
 //!   등록된 루트 바로 아래의 파일 이름만 본다.
 //!
-//! MCP 툴(`mcp: true`)은 `project.list` · `project.info` 둘이다(`docs/design/05-mcp.md` §2-1).
+//! MCP 툴(`mcp: true`)은 `project.list` · `project.info` 둘이다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
 //! - 해석 · 후보는 `read` 지만 **owner 만**: 받은 임의의 경로를 따라 디스크를 본다(있는지, `.git` · 빌드 파일이 있는지).
 //!   readonly · mobile 기기가 이것으로 Host 의 파일 시스템을 더듬을 수 있으면 「조회만」의 범위를 넘는다.
 //! - 생성 · 수정 · 삭제 · 「열었음」 기록은 `write`, owner 만(등급의 기본값). 지우는 것은 레지스트리 행뿐이고 폴더 · 설정 파일은

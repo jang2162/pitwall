@@ -1,4 +1,4 @@
-//! 툴 목록: `rpc_method!` 선언 중 `mcp: true` 인 것에서 만든다(`docs/design/05-mcp.md` §2-1).
+//! 툴 목록: `rpc_method!` 선언 중 `mcp: true` 인 것에서 만든다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
 //!
 //! 툴마다 스키마를 손으로 쓰지 않는다 — 이름 · 설명 · 등급은 [`MethodMeta`], 입출력 스키마는 선언의 Rust 타입(schemars)에서 온다.
 //!

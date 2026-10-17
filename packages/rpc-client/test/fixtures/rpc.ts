@@ -128,7 +128,7 @@ export type MethodMeta = {
 	doc: string,
 	/**
 	 *  MCP 툴로 내보내는가. 선언에서 `mcp: true` 로 고른 메서드만 툴이 된다 — 새 메서드는 말없이 툴이 되지 않는다.
-	 *  툴 이름 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` §2-1).
+	 *  툴 이름 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
 	 */
 	mcp: boolean,
 };
