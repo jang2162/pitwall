@@ -6,8 +6,14 @@
 //!   골랐으므로 `pitwall` 이 이 앱을 띄우게 하는 것이 요청이다(옮긴 앱 · 다른 빌드의 옛 링크). 무엇을 바꿨는지 알린다.
 //!   **심링크가 아닌 파일 · 폴더는 건드리지 않는다** — Pitwall 이 만든 것이 아니다.
 //! - 권한이 없을 때(`/usr/local/bin` 은 대개 root 소유이고, Apple Silicon 의 새 macOS 에는 폴더가 없기도 하다): `osascript`
-//!   의 `with administrator privileges` 로 macOS 관리자 암호 창을 띄워 `mkdir -p` · `ln -sfn` 을 한다(VS Code 의 「Install
-//!   'code' command」 와 같은 방법). 사람이 취소하면 아무것도 바꾸지 않고 끝낸다.
+//!   의 `with administrator privileges` 로 macOS 관리자 암호 창을 띄워 같은 일을 root 셸에서 한다(VS Code 의 「Install
+//!   'code' command」 와 같은 방법, [`ELEVATED_SH`]). 암호 창이 떠 있는 동안 대상이 바뀔 수 있으므로 **비링크 검사를 그 셸
+//!   안에서 다시 한다.** 사람이 취소하면 아무것도 바꾸지 않고 끝낸다.
+//! - 바꿔 끼우기: 두 경로 모두 같은 폴더의 임시 링크를 `rename`(권한 상승 경로는 `mv -fh`)으로 옮긴다 — 바꾸는 동안
+//!   `pitwall` 이 없는 순간이 없다. 비링크 검사와 바꿔 끼우기 사이는 원자가 아니다(그 틈에 생긴 파일은 덮인다). 틈은 검사 직후
+//!   한 번의 `symlink` 호출 길이다.
+//! - 출처: 실행 중인 바이너리가 디스크 이미지(`/Volumes/…`)나 App Translocation 아래면 거절한다 — 언마운트 · 재시작 뒤 링크가
+//!   끊긴다. Applications 로 옮긴 뒤 다시 하라고 알린다.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -35,6 +41,8 @@ pub enum InstallError {
     NotALink(PathBuf),
     /// 관리자 권한 요청을 사람이 취소했다.
     Cancelled,
+    /// 실행 중인 위치가 사라질 곳이다(디스크 이미지 · App Translocation).
+    TransientSource(PathBuf),
     Failed(String),
 }
 
@@ -47,6 +55,12 @@ impl std::fmt::Display for InstallError {
                 path.display()
             ),
             InstallError::Cancelled => f.write_str("cancelled"),
+            InstallError::TransientSource(path) => write!(
+                f,
+                "Pitwall is running from {}, which goes away when the disk image is ejected or the Mac restarts. \
+                 Move Pitwall to the Applications folder, open it from there, and install the command again.",
+                path.display()
+            ),
             InstallError::Failed(reason) => f.write_str(reason),
         }
     }
@@ -54,6 +68,20 @@ impl std::fmt::Display for InstallError {
 
 fn failed(what: &str, path: &Path, e: std::io::Error) -> InstallError {
     InstallError::Failed(format!("{what} {}: {e}", path.display()))
+}
+
+/// 링크가 가리켜도 되는 출처인가. 디스크 이미지(`/Volumes/…`)와 App Translocation(격리 속성이 붙은 채 다운로드 폴더에서 연
+/// 앱을 macOS 가 읽기 전용 임시 위치에서 돌린다)은 언마운트 · 재시작 뒤 사라진다.
+pub fn check_source(source: &Path) -> Result<(), InstallError> {
+    let transient = source.starts_with("/Volumes")
+        || source
+            .components()
+            .any(|c| c.as_os_str() == "AppTranslocation");
+    if transient {
+        Err(InstallError::TransientSource(source.to_path_buf()))
+    } else {
+        Ok(())
+    }
 }
 
 /// `target` 에 `source` 를 가리키는 심링크를 둔다. 권한이 없으면 `elevate(source, target)` 로 다시 한다.
@@ -121,38 +149,69 @@ fn symlink(_source: &Path, _link: &Path) -> std::io::Result<()> {
     ))
 }
 
-/// 관리자 권한으로 `mkdir -p <폴더> && ln -sfn <source> <target>`. 경로는 스크립트 글자에 넣지 않고 `argv` 로 넘겨
-/// `quoted form of` 로 셸 인용한다 — 경로의 따옴표 · 공백이 스크립트나 셸 명령을 깨지 않는다.
+/// 관리자 권한으로 도는 셸 스크립트. `$1` 출처, `$2` 대상, `$3` 대상의 폴더. 경로는 스크립트 글자에 넣지 않고 위치 인자로
+/// 넘긴다(AppleScript 의 `quoted form of` 로 인용) — 경로의 따옴표 · 공백 · `$(…)` 가 명령이 되지 않는다.
+/// 비링크면 3 으로 끝난다(암호 창이 떠 있는 동안 다른 설치기가 놓은 파일을 root 가 지우지 않게).
+pub const ELEVATED_SH: &str = r#"set -e
+/bin/mkdir -p "$3"
+if [ -e "$2" ] && [ ! -L "$2" ]; then exit 3; fi
+tmp="$3/.pitwall-link-$$"
+/bin/rm -f "$tmp"
+/bin/ln -s "$1" "$tmp"
+/bin/mv -fh "$tmp" "$2" || { /bin/rm -f "$tmp"; exit 1; }"#;
+
+/// [`ELEVATED_SH`] 가 「비링크」 로 끝낸 종료 코드.
+const NOT_A_LINK_STATUS: &str = "(3)";
+
+/// [`ELEVATED_SH`] 를 `do shell script` 로 돌리는 AppleScript. `admin` 이 거짓이면 권한 상승 없이 돈다(시험용).
+/// argv: 출처, 대상, 폴더, 셸 스크립트.
 #[cfg(target_os = "macos")]
-pub const ELEVATED_SCRIPT: [&str; 3] = [
-    "on run argv",
-    "do shell script \"/bin/mkdir -p \" & quoted form of (item 3 of argv) & \" && /bin/ln -sfn \" & quoted form of (item 1 of argv) & \" \" & quoted form of (item 2 of argv) with prompt \"Pitwall wants to install the 'pitwall' shell command.\" with administrator privileges",
-    "end run",
-];
+fn osascript_lines(admin: bool) -> [String; 3] {
+    let privileges = if admin {
+        " with prompt \"Pitwall wants to install the 'pitwall' shell command.\" with administrator privileges"
+    } else {
+        ""
+    };
+    [
+        "on run argv".to_owned(),
+        format!(
+            "do shell script \"/bin/sh -c \" & quoted form of (item 4 of argv) & \" pitwall \" & quoted form of (item 1 of argv) & \" \" & quoted form of (item 2 of argv) & \" \" & quoted form of (item 3 of argv){privileges}"
+        ),
+        "end run".to_owned(),
+    ]
+}
 
 #[cfg(target_os = "macos")]
-fn elevate_with_osascript(source: &Path, target: &Path) -> Result<(), InstallError> {
+fn run_osascript(source: &Path, target: &Path, admin: bool) -> Result<(), InstallError> {
     let parent = target.parent().unwrap_or(Path::new("/"));
     let mut command = std::process::Command::new("/usr/bin/osascript");
-    for line in ELEVATED_SCRIPT {
+    for line in osascript_lines(admin) {
         command.arg("-e").arg(line);
     }
     let output = command
         .arg(source)
         .arg(target)
         .arg(parent)
+        .arg(ELEVATED_SH)
         .output()
         .map_err(|e| InstallError::Failed(format!("cannot run osascript: {e}")))?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // 암호 창의 취소는 AppleScript 오류 -128(「User canceled.」).
+    // 암호 창의 취소는 AppleScript 오류 -128(「User canceled.」). 셸의 종료 코드 N 은 「… (N)」 으로 끝난다.
     if stderr.contains("(-128)") {
         Err(InstallError::Cancelled)
+    } else if stderr.trim_end().ends_with(NOT_A_LINK_STATUS) {
+        Err(InstallError::NotALink(target.to_path_buf()))
     } else {
         Err(InstallError::Failed(stderr.trim().to_owned()))
     }
+}
+
+#[cfg(target_os = "macos")]
+fn elevate_with_osascript(source: &Path, target: &Path) -> Result<(), InstallError> {
+    run_osascript(source, target, true)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -183,6 +242,7 @@ fn install_current_exe() -> Result<(PathBuf, Installed), InstallError> {
     let source = std::env::current_exe()
         .and_then(fs::canonicalize)
         .map_err(|e| InstallError::Failed(format!("cannot locate the app binary: {e}")))?;
+    check_source(&source)?;
     let installed = install(&source, &target, elevate_with_osascript)?;
     tracing::info!(source = %source.display(), target = %target.display(), ?installed, "shell command installed");
     Ok((target, installed))
@@ -387,14 +447,79 @@ mod tests {
         assert!(matches!(result, Err(InstallError::Failed(_))), "{result:?}");
     }
 
-    /// 권한 상승 스크립트가 AppleScript 로 컴파일되는지(실행하면 관리자 암호 창이 뜨므로 컴파일만 한다).
+    #[test]
+    fn a_disk_image_or_translocated_app_is_refused() {
+        for transient in [
+            "/Volumes/Pitwall/Pitwall.app/Contents/MacOS/pitwall",
+            "/private/var/folders/x/T/AppTranslocation/1234/d/Pitwall.app/Contents/MacOS/pitwall",
+        ] {
+            assert_eq!(
+                check_source(Path::new(transient)),
+                Err(InstallError::TransientSource(transient.into()))
+            );
+        }
+        for kept in [
+            "/Applications/Pitwall.app/Contents/MacOS/pitwall",
+            "/Users/me/code/pitwall/target/debug/pitwall",
+            "/VolumesX/pitwall",
+        ] {
+            assert_eq!(check_source(Path::new(kept)), Ok(()));
+        }
+    }
+
+    /// 경로에 셸 · AppleScript 가 특별히 보는 글자를 넣는다. 명령으로 해석되면 `PWNED` 가 생긴다.
+    #[cfg(target_os = "macos")]
+    fn awkward(d: &Dirs) -> (PathBuf, PathBuf) {
+        let dir = d.bin.join("it's \"a\" $(touch PWNED) `touch PWNED`");
+        (dir.join("pitwall"), d.bin.join("PWNED"))
+    }
+
+    /// 실제 osascript 와 셸 스크립트를 권한 상승만 빼고 돌린다(암호 창이 뜨지 않는다).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_elevated_script_links_and_replaces_without_running_paths() {
+        let d = dirs();
+        let (target, pwned) = awkward(&d);
+        assert_eq!(run_osascript(&d.app, &target, false), Ok(()));
+        assert_eq!(fs::read_link(&target).unwrap(), d.app);
+        // 디렉터리를 가리키는 링크도 그 안으로 들어가지 않고 링크 자체를 바꾼다(`mv -h`).
+        fs::remove_file(&target).unwrap();
+        std::os::unix::fs::symlink(&d.bin, &target).unwrap();
+        assert_eq!(run_osascript(&d.app, &target, false), Ok(()));
+        assert_eq!(fs::read_link(&target).unwrap(), d.app);
+        assert!(!pwned.exists(), "경로가 명령으로 실행됐다");
+        let parent = target.parent().unwrap();
+        assert_eq!(
+            fs::read_dir(parent).unwrap().count(),
+            1,
+            "임시 링크가 남지 않는다"
+        );
+        assert_eq!(fs::read_dir(&d.bin).unwrap().count(), 1);
+    }
+
+    /// 암호 창이 떠 있는 동안 비링크가 생긴 경우: root 셸이 다시 검사해 건드리지 않는다.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_elevated_script_refuses_a_file_that_appeared() {
+        let d = dirs();
+        let (target, _) = awkward(&d);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, "#!/bin/sh\n").unwrap();
+        assert_eq!(
+            run_osascript(&d.app, &target, false),
+            Err(InstallError::NotALink(target.clone()))
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "#!/bin/sh\n");
+    }
+
+    /// 권한 상승 판 AppleScript 가 컴파일되는지(실행하면 관리자 암호 창이 뜨므로 컴파일만 한다).
     #[cfg(target_os = "macos")]
     #[test]
     fn the_elevated_script_compiles() {
         let tmp = tempfile::tempdir().unwrap();
         let mut command = std::process::Command::new("/usr/bin/osacompile");
         command.arg("-o").arg(tmp.path().join("install.scpt"));
-        for line in ELEVATED_SCRIPT {
+        for line in osascript_lines(true) {
             command.arg("-e").arg(line);
         }
         let output = command.output().unwrap();
