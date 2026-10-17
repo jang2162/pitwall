@@ -10,7 +10,8 @@
 //! "project_*" = true           # glob(`*` 는 아무 글자열)
 //! ```
 //!
-//! 판정 순서: 이름이 정확히 같은 항목 → 맞는 glob 중 가장 긴 것 → 프리셋. 프리셋은 등급으로 고른다 — `read-only` 는 `read`,
+//! 판정 순서: 이름이 정확히 같은 항목 → 맞는 glob 중 가장 긴 것 → 프리셋. **커밋되는 공유 프로젝트 설정
+//! (`.pitwall/project.toml`)은 좁히기만 한다** — 넓히는 것은 전역 · `.local.toml` · 개인 전용 설정만([`Exposure::narrowed_by`]). 프리셋은 등급으로 고른다 — `read-only` 는 `read`,
 //! `standard` 는 `read` · `write`, `full` 은 전부. 전역 → 프로젝트 병합은 설정 계층의 규칙(`pw_core::config::merge`)이라
 //! `[mcp.tools]` 는 키별로 합쳐진다.
 //!
@@ -59,6 +60,8 @@ pub struct Exposure {
     pub preset: Preset,
     /// `[mcp.tools]` 의 (이름 또는 glob, 켬).
     pub tools: Vec<(String, bool)>,
+    /// 이 위로는 열리지 않는다([`Self::narrowed_by`]).
+    pub ceiling: Option<Box<Exposure>>,
 }
 
 impl Default for Exposure {
@@ -67,6 +70,7 @@ impl Default for Exposure {
         Self {
             preset: Preset::Standard,
             tools: Vec::new(),
+            ceiling: None,
         }
     }
 }
@@ -111,10 +115,31 @@ impl Exposure {
             }
             Some(other) => warnings.push(format!("mcp.tools must be a table, found {other}")),
         }
-        (Self { preset, tools }, warnings)
+        (
+            Self {
+                preset,
+                tools,
+                ceiling: None,
+            },
+            warnings,
+        )
+    }
+
+    /// `ceiling` 이 켜지 않은 툴은 켜지 않는다. 커밋되는 공유 프로젝트 설정은 노출을 좁히기만 한다 — 공유 레이어까지 읽은 값을
+    /// 공유 레이어를 뺀 값(전역 + `.local.toml`)으로 누른다. 저장소를 클론한 것만으로 에이전트에게 열리는 툴이 늘지 않는다.
+    #[must_use]
+    pub fn narrowed_by(self, ceiling: Exposure) -> Self {
+        Self {
+            ceiling: Some(Box::new(ceiling)),
+            ..self
+        }
     }
 
     pub fn enabled(&self, tool: &Tool) -> bool {
+        self.own(tool) && self.ceiling.as_ref().is_none_or(|c| c.enabled(tool))
+    }
+
+    fn own(&self, tool: &Tool) -> bool {
         if let Some((_, on)) = self.tools.iter().find(|(p, _)| *p == tool.name) {
             return *on;
         }
@@ -215,6 +240,39 @@ mod tests {
         assert_eq!(
             exposure.tools,
             [("a".to_owned(), false), ("b".to_owned(), true)]
+        );
+    }
+
+    /// 공유 설정이 넓히려 해도(프리셋 full, 꺼진 툴 켜기) 상한(전역 + 로컬)을 넘지 않는다. 좁히는 것은 그대로 먹고, 로컬은 넓힌다.
+    #[test]
+    fn a_ceiling_lets_shared_settings_narrow_but_not_widen() {
+        let global = json!({"preset": "read-only", "tools": {"project_info": false}});
+        let shared = json!({"preset": "full", "tools": {"project_info": true, "project_list": false, "*": true}});
+        let (with_shared, _) = Exposure::from_layers(Some(&global), Some(&shared));
+        let (ceiling, _) = Exposure::from_layers(Some(&global), None);
+        let exposure = with_shared.narrowed_by(ceiling);
+        let on = |name: &str, tier| exposure.enabled(&Tool::fake(name, tier));
+        assert!(
+            !on("project_info", Tier::Read),
+            "공유가 켠 툴은 전역이 끈 채로"
+        );
+        assert!(
+            !on("settings_set", Tier::Write),
+            "공유의 full 은 전역 read-only 를 넘지 않는다"
+        );
+        assert!(!on("project_list", Tier::Read), "공유가 끈 툴은 꺼진다");
+        assert!(on("project_open", Tier::Read));
+
+        // 로컬(.local.toml)이 켠 것은 상한에도 들어가 켜진다.
+        let local = json!({"tools": {"project_info": true}});
+        let mut merged = shared.as_object().unwrap().clone();
+        pw_core::config::merge::merge(&mut merged, local.as_object().unwrap().clone());
+        let (with_shared, _) = Exposure::from_layers(Some(&global), Some(&Value::Object(merged)));
+        let (ceiling, _) = Exposure::from_layers(Some(&global), Some(&local));
+        assert!(
+            with_shared
+                .narrowed_by(ceiling)
+                .enabled(&Tool::fake("project_info", Tier::Read))
         );
     }
 

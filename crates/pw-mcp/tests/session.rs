@@ -459,3 +459,167 @@ async fn a_finished_session_releases_its_subscriptions() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
+
+/// 폴더 아래 모든 파일의 (상대 경로, 바이트).
+fn tree(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.push((
+                    path.strip_prefix(dir).unwrap().to_path_buf(),
+                    std::fs::read(&path).unwrap(),
+                ));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// 세션은 프로젝트 설정을 읽기만 한다: 사람이 손으로 쓴 v0 `.pitwall/project.toml` 이 있어도 세션을 열고 툴을 불러도
+/// 프로젝트 폴더의 바이트가 하나도 바뀌지 않고 `.backup/` 도 생기지 않는다. 그 파일의 `[mcp]` 는 노출에 반영된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_never_writes_the_project_folder() {
+    let f = Fixture::new();
+    let project = f.work("beta");
+    std::fs::create_dir_all(project.join(".pitwall")).unwrap();
+    std::fs::write(
+        project.join(".pitwall/project.toml"),
+        "# hand written\n[mcp.tools]\nproject_info = false\n",
+    )
+    .unwrap();
+    let before = tree(&project);
+    let (client, _, cancel) = f
+        .connect(SessionRequest {
+            project: None,
+            cwd: Some(project.clone()),
+        })
+        .await;
+    assert_eq!(tool_names(&client).await, ["mcptest_write", "project_list"]);
+    call(&client, "project_list", json!({})).await;
+    client.cancel().await.unwrap();
+    cancel.cancel();
+    assert_eq!(tree(&project), before, "세션이 프로젝트 폴더를 고쳤다");
+    assert!(!project.join(".pitwall/.backup").exists());
+}
+
+/// 세션의 프로젝트 설정 이벤트는 세션 안에서 끝난다 — 앱 버스에 `config.*` 를 한 번 더 내지 않는다(깨진 설정이어도).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_does_not_echo_project_config_events_on_the_app_bus() {
+    let f = Fixture::new();
+    let project = f.work("gamma");
+    std::fs::create_dir_all(project.join(".pitwall")).unwrap();
+    std::fs::write(project.join(".pitwall/project.toml"), "not = [valid").unwrap();
+    let mut events = f.host.bus().subscribe(
+        pw_core::Filter::all()
+            .topics([pw_core::config::TOPIC_CHANGED, pw_core::config::TOPIC_ERROR]),
+    );
+    let (client, _, cancel) = f
+        .connect(SessionRequest {
+            project: None,
+            cwd: Some(project),
+        })
+        .await;
+    call(&client, "project_list", json!({})).await;
+    assert!(
+        events.try_recv().is_none(),
+        "앱 버스에 세션의 설정 이벤트가 나갔다"
+    );
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// 커밋되는 `.pitwall/project.toml` 은 노출을 넓히지 못한다. 넓히는 것은 `.local.toml` 이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_project_config_cannot_widen_exposure() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(&f.paths.config).unwrap();
+    std::fs::write(
+        f.paths.config.join("settings.toml"),
+        "schema = 1\n[mcp]\npreset = \"read-only\"\n",
+    )
+    .unwrap();
+    f.host.config().unwrap().global.reload().unwrap();
+    let pitwall = f.work("alpha/.pitwall");
+    std::fs::create_dir_all(&pitwall).unwrap();
+    std::fs::write(
+        pitwall.join("project.toml"),
+        "schema = 1\n[mcp]\npreset = \"full\"\n[mcp.tools]\nmcptest_write = true\n\"*\" = true\n",
+    )
+    .unwrap();
+    let request = || SessionRequest {
+        project: None,
+        cwd: Some(f.work("alpha")),
+    };
+    let (client, _, cancel) = f.connect(request()).await;
+    assert_eq!(tool_names(&client).await, ["project_info", "project_list"]);
+    client.cancel().await.unwrap();
+    cancel.cancel();
+
+    std::fs::write(
+        pitwall.join("project.local.toml"),
+        "schema = 1\n[mcp.tools]\nmcptest_write = true\n",
+    )
+    .unwrap();
+    let (client, _, cancel) = f.connect(request()).await;
+    assert_eq!(
+        tool_names(&client).await,
+        ["mcptest_write", "project_info", "project_list"]
+    );
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// 2026-07-28 클라이언트는 구독(`subscriptions/listen`)을 열지 않으면 `tools/list_changed` 를 받지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stateless_client_without_a_subscription_gets_no_list_changed() {
+    let f = Fixture::new();
+    f.host
+        .watch_config(&tokio::runtime::Handle::current())
+        .unwrap();
+    let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+    let (r, w) = tokio::io::split(server_io);
+    let cancel = CancellationToken::new();
+    tokio::spawn(pw_mcp::serve(
+        f.services(),
+        SessionRequest::default(),
+        (r, w),
+        cancel.clone(),
+    ));
+    let handler = Client::default();
+    let client = handler
+        .clone()
+        .serve_with_lifecycle(
+            client_io,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(tool_names(&client).await.len(), 3);
+    std::fs::create_dir_all(&f.paths.config).unwrap();
+    std::fs::write(
+        f.paths.config.join("settings.toml"),
+        "schema = 1\n[mcp.tools]\nproject_list = false\n",
+    )
+    .unwrap();
+    // 변경이 서버에 닿았음을 목록으로 확인한 뒤, 알림이 오지 않았는지 본다.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while tool_names(&client).await.len() != 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "설정 변경이 반영되지 않았다"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(handler.list_changed.load(Ordering::SeqCst), 0);
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}

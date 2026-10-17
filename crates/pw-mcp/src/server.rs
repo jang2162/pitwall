@@ -9,9 +9,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
-use pw_core::config::{AppPaths, ConfigStore, TOPIC_CHANGED};
-use pw_core::registry::Resolution;
+use pw_core::config::{AppPaths, ConfigSource, ConfigStore, TOPIC_CHANGED};
 use pw_core::registry::methods::PathParams;
+use pw_core::registry::{ConfigMode, Resolution};
 use pw_core::{EventBus, Filter, HostRouter, Scope, Target};
 use pw_rpc::{Caller, Role};
 use rmcp::model::{
@@ -152,37 +152,13 @@ impl Session {
             None => None,
             Some(path) => resolve(&client, path).await,
         };
-        let project_store = resolved.as_ref().and_then(|r| {
-            let root = r
-                .worktree
-                .as_ref()
-                .map_or_else(|| PathBuf::from(&r.root), |w| PathBuf::from(&w.root));
-            match r.project.config_source(&services.paths, &root) {
-                Ok(source) => {
-                    let store = ConfigStore::open(
-                        source,
-                        services.bus.clone(),
-                        Scope::Project(r.project.id.clone()),
-                    );
-                    if let Err(e) = store.watch(
-                        &tokio::runtime::Handle::current(),
-                        pw_core::config::DEFAULT_DEBOUNCE,
-                        cancel.child_token(),
-                    ) {
-                        tracing::warn!(%e, "project config watch disabled for the mcp session");
-                    }
-                    Some(store)
-                }
-                Err(e) => {
-                    tracing::warn!(%e, "cannot read the project config for the mcp session");
-                    None
-                }
-            }
-        });
+        let project_config = resolved
+            .as_ref()
+            .and_then(|r| ProjectConfig::open(&services.paths, r, &cancel));
         let exposure = exposure_feed(
             services.global.clone(),
-            project_store,
             &services.bus,
+            project_config,
             cancel.clone(),
         );
         let project = resolved.map(|r| SessionProject { id: r.project.id });
@@ -526,32 +502,95 @@ async fn resolve(client: &HostClient, path: PathBuf) -> Option<Resolution> {
     }
 }
 
-/// 전역 · 프로젝트 설정의 `[mcp]` 를 읽고, `config.changed` 가 오면 다시 읽는다.
+/// 세션 프로젝트의 설정. **디스크에 쓰지 않고** 읽는다 — 세션을 열었다고 커밋된 `.pitwall/project.toml` 이 마이그레이션되거나
+/// 저장소에 `.backup/` 이 생기면 안 된다(조회만 하는 에이전트가 저장소를 고친다). 이벤트는 세션 전용 버스로 낸다 — 앱의
+/// 버스로 내면 앱이 연 같은 프로젝트의 설정 이벤트(`config.changed` · `config.error`)가 세션마다 한 번 더 나간다.
+struct ProjectConfig {
+    store: ConfigStore,
+    bus: EventBus,
+    /// 저장소 모드면 공유 레이어를 뺀 읽기. 커밋된 설정은 노출을 좁히기만 한다(`docs/design/05-mcp.md` 「툴 노출 설정」 절).
+    /// 개인 전용 프로젝트의 `project.toml` 은 개인 설정이라 없다.
+    without_shared: Option<ConfigSource>,
+}
+
+impl ProjectConfig {
+    fn open(paths: &AppPaths, r: &Resolution, cancel: &CancellationToken) -> Option<Self> {
+        let root = r
+            .worktree
+            .as_ref()
+            .map_or_else(|| PathBuf::from(&r.root), |w| PathBuf::from(&w.root));
+        let source = match r.project.config_source(paths, &root) {
+            Ok(source) => source.without_writes(),
+            Err(e) => {
+                tracing::warn!(%e, "cannot read the project config for the mcp session");
+                return None;
+            }
+        };
+        let without_shared = (r.project.config_mode == ConfigMode::Repository)
+            .then(|| source.clone().without_shared());
+        let bus = EventBus::new(16);
+        let store = ConfigStore::open(source, bus.clone(), Scope::Project(r.project.id.clone()));
+        if let Err(e) = store.watch(
+            &tokio::runtime::Handle::current(),
+            pw_core::config::DEFAULT_DEBOUNCE,
+            cancel.child_token(),
+        ) {
+            tracing::warn!(%e, "project config watch disabled for the mcp session");
+        }
+        Some(Self {
+            store,
+            bus,
+            without_shared,
+        })
+    }
+}
+
+/// 전역 · 프로젝트 설정의 `[mcp]` 를 읽고, `config.changed`(전역은 앱 버스, 프로젝트는 세션 버스)가 오면 다시 읽는다.
 fn exposure_feed(
     global: ConfigStore,
-    project: Option<ConfigStore>,
     bus: &EventBus,
+    project: Option<ProjectConfig>,
     cancel: CancellationToken,
 ) -> watch::Receiver<Arc<Exposure>> {
+    let mut global_events = bus.subscribe(Filter::all().scope(Scope::Host).topics([TOPIC_CHANGED]));
+    let mut project_events = project
+        .as_ref()
+        .map(|p| p.bus.subscribe(Filter::all().topics([TOPIC_CHANGED])));
     let read = move || {
         let g = global.snapshot();
-        let p = project.as_ref().map(|p| p.snapshot());
-        let (exposure, warnings) = Exposure::from_layers(
-            g.get("settings", exposure::KEY),
+        let global_mcp = g.get("settings", exposure::KEY);
+        let p = project.as_ref().map(|p| p.store.snapshot());
+        let (mut exposure, mut warnings) = Exposure::from_layers(
+            global_mcp,
             p.as_ref().and_then(|p| p.get("project", exposure::KEY)),
         );
-        for w in warnings {
+        if let Some(source) = project.as_ref().and_then(|p| p.without_shared.as_ref()) {
+            // 공유 레이어를 뺀 값을 다시 읽는다. 읽지 못하면(로컬 파일이 깨짐) 전역만을 상한으로 둔다 — 넓어지지 않는다.
+            let local = source.load().ok();
+            let (ceiling, _) = Exposure::from_layers(
+                global_mcp,
+                local.as_ref().and_then(|s| s.get("project", exposure::KEY)),
+            );
+            exposure = exposure.narrowed_by(ceiling);
+        }
+        for w in warnings.drain(..) {
             tracing::warn!("{w}");
         }
         Arc::new(exposure)
     };
     let (tx, rx) = watch::channel(read());
-    let mut events = bus.subscribe(Filter::all().topics([TOPIC_CHANGED]));
     tokio::spawn(async move {
         loop {
+            let project_changed = async {
+                match project_events.as_mut() {
+                    Some(events) => events.recv().await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
                 () = cancel.cancelled() => return,
-                received = events.recv() => if received.is_none() { return },
+                received = global_events.recv() => if received.is_none() { return },
+                received = project_changed => if received.is_none() { return },
             }
             // 값이 같으면 수신자를 깨우지 않는다.
             let next = read();
