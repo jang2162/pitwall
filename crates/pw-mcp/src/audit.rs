@@ -27,6 +27,9 @@ pub const MAX_STRING: usize = 80;
 pub const MAX_ITEMS: usize = 8;
 pub const MAX_DEPTH: usize = 3;
 pub const MAX_SUMMARY: usize = 1024;
+/// 툴 이름 · 오류나 거절 이유의 최대 글자 수. 노출 안 된 툴 호출은 클라이언트가 보낸 이름을 그대로 남기므로 자른다.
+pub const MAX_TOOL: usize = crate::catalog::MAX_NAME;
+pub const MAX_DETAIL: usize = 512;
 /// 값을 지우는 키의 단어(camelCase · snake_case · kebab-case 로 가른 단어 하나가 이것과 같으면). 비교는 소문자로.
 pub const SECRET_WORDS: &[&str] = &[
     "password",
@@ -140,11 +143,13 @@ impl AuditLog {
 }
 
 fn open(file: &Path) -> rusqlite::Result<Connection> {
+    let io = |path: &Path, e: std::io::Error| {
+        rusqlite::Error::InvalidPath(PathBuf::from(format!("{}: {e}", path.display())))
+    };
     if let Some(dir) = file.parent() {
-        fs::create_dir_all(dir).map_err(|e| {
-            rusqlite::Error::InvalidPath(PathBuf::from(format!("{}: {e}", dir.display())))
-        })?;
+        private_dir(dir).map_err(|e| io(dir, e))?;
     }
+    private_file(file).map_err(|e| io(file, e))?;
     let mut conn = Connection::open(file)?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
     let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -164,6 +169,41 @@ fn open(file: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
+/// 감사 로그는 인자 요약 · 프로젝트 · 클라이언트를 담는다. 같은 머신의 다른 사용자가 읽지 못하게 새로 만드는 폴더는 0700,
+/// 파일은 0600 이다(SQLite 는 저널 파일을 본 파일과 같은 권한으로 만든다). 이미 있는 폴더의 권한은 바꾸지 않는다.
+#[cfg(unix)]
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    if dir.is_dir() {
+        return Ok(());
+    }
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+}
+
+#[cfg(not(unix))]
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dir)
+}
+
+#[cfg(unix)]
+fn private_file(file: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .mode(0o600)
+        .open(file)?;
+    fs::set_permissions(file, fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn private_file(_file: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 fn insert(conn: &mut Connection, e: &Entry) -> rusqlite::Result<()> {
     let at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -178,10 +218,10 @@ fn insert(conn: &mut Connection, e: &Entry) -> rusqlite::Result<()> {
             e.session,
             e.client,
             e.project_id,
-            e.tool,
-            e.args,
+            clip(&e.tool, MAX_TOOL),
+            clip(&e.args, MAX_SUMMARY),
             e.outcome.as_str(),
-            e.detail,
+            e.detail.as_deref().map(|d| clip(d, MAX_DETAIL)),
             e.result_size.map(|n| n as i64),
             e.duration.as_millis() as i64,
         ],
@@ -247,7 +287,12 @@ fn summarize_value(value: &Value, depth: usize) -> Value {
 }
 
 fn truncate(s: &str) -> String {
-    match s.char_indices().nth(MAX_STRING) {
+    clip(s, MAX_STRING)
+}
+
+/// `max` 글자까지 남기고 넘으면 `…` 를 붙인다.
+fn clip(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
         Some((end, _)) => format!("{}…", &s[..end]),
         None => s.to_owned(),
     }
@@ -334,6 +379,38 @@ mod tests {
             &json!({"k": (0..2000).map(|i| i.to_string()).collect::<Vec<_>>().join(",")}),
         );
         assert!(huge.len() <= MAX_SUMMARY + "…".len());
+    }
+
+    /// 파일은 0600, 새로 만든 폴더는 0700. 클라이언트가 보낸 긴 툴 이름 · 긴 이유는 잘린다.
+    #[cfg(unix)]
+    #[test]
+    fn the_file_is_private_and_long_fields_are_clipped() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let log = AuditLog::under_state(&tmp.path().join("state"));
+        log.record(&Entry {
+            session: "s".into(),
+            client: None,
+            project_id: None,
+            tool: "x".repeat(10_000),
+            args: "{}".into(),
+            outcome: Outcome::Denied,
+            detail: Some("y".repeat(10_000)),
+            result_size: None,
+            duration: Duration::ZERO,
+        })
+        .unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(log.file()), 0o600);
+        assert_eq!(mode(log.file().parent().unwrap()), 0o700);
+        let conn = Connection::open(log.file()).unwrap();
+        let (tool, detail): (String, String) = conn
+            .query_row("SELECT tool, detail FROM calls", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(tool.chars().count(), MAX_TOOL + 1);
+        assert_eq!(detail.chars().count(), MAX_DETAIL + 1);
     }
 
     #[test]
