@@ -73,7 +73,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: mise run lint
+      # nextest 의 ci 프로필(.config/nextest.toml)은 첫 실패에서 멈추지 않는다 — 실패한 시험을 한 번에 다 본다.
       - run: mise run test
+        env:
+          NEXTEST_PROFILE: ci
       # npm 라이선스 검사는 그 OS 에 설치된 패키지만 본다. OS 전용 바이너리 패키지(esbuild·rollup·oxc 등)를
       # 각 OS 에서 보도록 매트릭스마다 돌린다. 네트워크가 필요 없다.
       - run: node scripts/licenses.mjs check

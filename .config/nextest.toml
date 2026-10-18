@@ -1,0 +1,4 @@
+# CI 는 `NEXTEST_PROFILE=ci` 로 이 프로필을 쓴다(.github/workflows/ci.yml). 로컬 기본(default)은 첫 실패에서 멈춘다.
+[profile.ci]
+# 한 OS 에서 처음 도는 시험이 여럿 실패해도 한 번의 실행으로 전부 드러낸다.
+fail-fast = false
