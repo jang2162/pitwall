@@ -313,6 +313,15 @@ fn journal_mode(conn: &Connection) -> String {
         .unwrap()
 }
 
+/// `PRAGMA synchronous` 의 값.
+const NORMAL: u32 = 1;
+const FULL: u32 = 2;
+
+fn synchronous(conn: &Connection) -> u32 {
+    conn.pragma_query_value(None, "synchronous", |row| row.get(0))
+        .unwrap()
+}
+
 fn insert(conn: &Connection, id: &str) {
     conn.execute(
         "INSERT INTO projects (id, name, host, config_mode, slug, created_at)
@@ -343,6 +352,11 @@ fn writable_opens_use_wal() {
     let opened = open(&tmp.path().join("state.db"), BUSY_TIMEOUT);
     assert!(matches!(opened.status, StorageStatus::Ok { .. }));
     assert_eq!(journal_mode(&opened.conn), "wal");
+    assert_eq!(
+        synchronous(&opened.conn),
+        NORMAL,
+        "WAL 은 커밋마다 동기화하지 않는다"
+    );
 }
 
 /// 이 앱의 옛 빌드가 만든 rollback 저널 파일은 처음 열 때 WAL 로 바뀐다. 옛 빌드가 같은 파일을 열어 둔 채여도 깨지지 않는다 —
@@ -373,6 +387,11 @@ fn a_rollback_file_switches_to_wal_while_an_older_build_keeps_using_it() {
         opened.status
     );
     assert_eq!(journal_mode(&opened.conn), "delete");
+    assert_eq!(
+        synchronous(&opened.conn),
+        FULL,
+        "rollback 저널에서는 NORMAL 을 쓰지 않는다"
+    );
     old.execute_batch("COMMIT").unwrap();
     insert(&opened.conn, "while-old-read");
     drop(opened);
@@ -514,4 +533,94 @@ fn a_migration_finished_by_another_writer_while_waiting_is_not_a_failure() {
         opened.status
     );
     assert_eq!(version(&opened.conn), 1);
+}
+
+/// 비정상 종료로 `-wal` · `-shm` 이 남은 파일이 손상이면: 검사 연결이 닫히며 남은 WAL 프레임을 손상된 파일에 옮기고 사이드카를
+/// [`corrupt_crash_image`] 에서 WAL 프레임에만 있는 행의 id.
+const FRAME_ONLY_ID: &str = "row-only-in-the-wal-frames";
+
+/// 앱이 연 채로 비정상 종료한 상태의 손상 파일(`state.db` · `-wal` · `-shm`)을 `crashed/` 에 만든다. 메인 파일의 1페이지 뒤
+/// (WAL 에 없는 색인 페이지들)가 깨져 있다.
+fn corrupt_crash_image(tmp: &Path) -> PathBuf {
+    let live = tmp.join("live");
+    let crashed = tmp.join("crashed");
+    fs::create_dir_all(&crashed).unwrap();
+    let app = open(&live.join("state.db"), BUSY_TIMEOUT);
+    insert(&app.conn, "a");
+    // 표 · 색인 페이지를 메인 파일로 옮겨 두고 한 번 더 쓴다 — WAL 에는 바뀐 페이지만 남는다.
+    app.conn
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+    insert(&app.conn, FRAME_ONLY_ID);
+    // 앱이 연 채로 떠 둔 것 = 비정상 종료 이미지. 열린 파일은 공유 모드가 맞는 `fs::read` 로 읽는다(Windows).
+    for name in ["state.db", "state.db-wal", "state.db-shm"] {
+        fs::write(crashed.join(name), fs::read(live.join(name)).unwrap()).unwrap();
+    }
+    drop(app);
+    let file = crashed.join("state.db");
+    // 1페이지 뒤(WAL 에 없는 색인 페이지들)를 깨뜨린다.
+    let mut bytes = fs::read(&file).unwrap();
+    assert!(
+        bytes.len() > 4096,
+        "체크포인트로 페이지가 메인 파일에 있어야 한다"
+    );
+    bytes[4096..].fill(0x5a);
+    fs::write(&file, bytes).unwrap();
+
+    file
+}
+
+/// 지운 뒤 파일을 옮긴다 — 프레임은 `.corrupt` 안에 남고, 옮긴 자리에 사이드카가 따로 남지 않는다.
+#[test]
+fn a_corrupt_file_left_with_a_wal_is_moved_aside_with_its_frames() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = corrupt_crash_image(tmp.path());
+    let crashed = file.parent().unwrap().to_path_buf();
+    let opened = open(&file, BUSY_TIMEOUT);
+    let StorageStatus::Recovered { backup, .. } = &opened.status else {
+        panic!("{:?}", opened.status);
+    };
+    assert_eq!(Path::new(backup), crashed.join("state.db.corrupt"));
+    assert_eq!(count(&opened.conn), 0);
+    drop(opened);
+    assert_eq!(entries(&crashed), ["state.db", "state.db.corrupt"]);
+    let moved = fs::read(crashed.join("state.db.corrupt")).unwrap();
+    assert!(
+        moved
+            .windows(FRAME_ONLY_ID.len())
+            .any(|w| w == FRAME_ONLY_ID.as_bytes()),
+        "WAL 에만 있던 쓰기가 옮긴 파일 안에 있다"
+    );
+}
+
+/// 다른 프로세스가 손상 파일을 열고 있어 `-wal` · `-shm` 이 남아 있으면 파일과 함께 옮긴다 — 새 파일 옆에 옛 WAL 이 남아 새
+/// 파일에 섞이지 않게. Windows 는 SQLite 가 공유 삭제 없이 연 파일을 옮길 수 없어(복구가 실패해 `memory` 로) 이 경우가 없다.
+#[cfg(unix)]
+#[test]
+fn a_corrupt_file_another_process_holds_is_moved_with_its_sidecars() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = corrupt_crash_image(tmp.path());
+    let crashed = file.parent().unwrap().to_path_buf();
+    let other = Connection::open(&file).unwrap();
+    let _: u32 = other
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+
+    let opened = open(&file, BUSY_TIMEOUT);
+    assert!(
+        matches!(opened.status, StorageStatus::Recovered { .. }),
+        "{:?}",
+        opened.status
+    );
+    let names = entries(&crashed);
+    assert!(
+        names.contains(&"state.db.corrupt-wal".to_owned()),
+        "{names:?}"
+    );
+    assert!(
+        names.contains(&"state.db.corrupt-shm".to_owned()),
+        "{names:?}"
+    );
+    assert_eq!(count(&opened.conn), 0, "새 파일은 옛 WAL 을 읽지 않는다");
+    drop(other);
 }

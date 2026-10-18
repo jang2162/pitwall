@@ -162,8 +162,10 @@ pub fn open_with(file: &Path, busy: Duration, migrations: &[Migration]) -> Opene
 pub const READ_ONLY_BY_REQUEST: &str =
     "opened read-only by a process that does not own the registry (`pitwall mcp` without the app)";
 
-/// 읽기만 하는 프로세스(앱 없이 뜬 `pitwall mcp`)의 열기. 파일 · 폴더를 **만들지도 고치지도 않는다** — 마이그레이션 · 손상 복구
-/// (파일 옮기기)는 레지스트리를 소유한 앱의 일이다. 그래서 [`open`] 과 달리:
+/// 읽기만 하는 프로세스(앱 없이 뜬 `pitwall mcp`)의 열기. **마이그레이션 · 손상 복구(파일 옮기기)를 하지 않는다** — 레지스트리를
+/// 소유한 앱의 일이다. 행을 쓰지 않지만(`query_only`) SQLite 의 WAL 사이드카는 다룬다: 연 동안 `-wal` · `-shm` 을 두고, 앱이
+/// 비정상 종료로 남긴 `-wal` 은 마지막 연결로 닫힐 때 파일에 옮긴다(이미 커밋된 쓰기라 논리 내용은 같다, 05-mcp 「로컬 소켓과
+/// 헤드리스」). 그래서 [`open`] 과 달리:
 /// - 파일이 없으면 빈 메모리 DB(`memory`). 폴더를 만들지 않는다.
 /// - 손상 · 이 앱보다 낮은 스키마(올려야 읽힌다)도 `memory` 다. 파일은 그대로 둔다.
 /// - 그 밖에는 `readOnly`(이유 [`READ_ONLY_BY_REQUEST`], 앱보다 새 스키마면 그 이유).
@@ -299,15 +301,24 @@ fn try_open(file: &Path, busy: Duration, migrations: &[Migration]) -> Result<Rea
     Ok(Ready::Writable(conn))
 }
 
-/// 쓰는 연결은 WAL 로 쓴다(03-architecture 「state.db」). rollback 저널에서는 커밋이 느린 디스크(Windows CI 실측 약 70ms)에서
-/// 쉬지 않고 쓰는 연결이 잠금을 곧바로 다시 잡아 busy 폴링으로 기다리는 다른 프로세스가 2초 안에 끼어들지 못했다. WAL 은 읽기가
-/// 쓰기를 기다리지 않고 커밋의 디스크 동기화도 한 번이다. 로컬 파일 시스템을 전제한다(`$DATA` 는 로컬).
+/// 쓰는 연결은 WAL 로, 커밋마다 디스크 동기화하지 않고(`synchronous = NORMAL`) 쓴다(03-architecture 「state.db」).
+///
+/// 이유는 커밋이 쓰기 잠금을 쥐는 시간이다. 쉬지 않고 쓰는 프로세스는 잠금을 놓자마자 다시 잡으므로, busy 폴링으로 자다 깨는
+/// 다른 프로세스는 잠금이 비는 짧은 틈을 놓친다 — 커밋이 몇 ms 를 넘으면 2초 안에 끼어들지 못한다(트랜잭션 안에 지연을 넣어 잰
+/// 문턱: 2ms 통과, 5ms 가끔 실패, 10ms 이상 늘 실패). Windows CI 에서 커밋은 rollback 저널로 약 70ms, WAL + 기본 `FULL` 로도
+/// 약 28ms 였고, 시간의 대부분이 커밋마다의 디스크 동기화다. WAL 의 `NORMAL` 은 체크포인트 때만 동기화한다 — 파일이 깨지지는
+/// 않고, 전원이 나가면 마지막 커밋 몇 개를 잃을 수 있다. 레지스트리는 다시 등록하면 되는 데이터라 받아들인다. rollback 저널에서는
+/// `NORMAL` 이 드물게 파일을 깨뜨릴 수 있어(SQLite 문서) WAL 로 바뀐 연결에만 쓴다. WAL 은 로컬 파일 시스템을 전제한다(`$DATA` 는
+/// 로컬).
 ///
 /// 모드는 파일 머리에 남아 한 번 바꾸면 다음부터는 그대로다 — 이 앱의 옛 빌드가 연 연결도 다음 접근에서 WAL 로 따라온다. 다른
-/// 연결이 쓰는 중이라 이번에 못 바꾸면 rollback 저널로 쓰고 다음 열기에서 다시 해 본다. 열기를 실패시키지 않는다.
+/// 연결이 쓰는 중이라 이번에 못 바꾸면 rollback 저널(`FULL`)로 쓰고 다음 열기에서 다시 해 본다. 열기를 실패시키지 않는다.
 fn use_wal(conn: &Connection) {
-    let _ =
+    let mode =
         conn.pragma_update_and_check(None, "journal_mode", "wal", |row| row.get::<_, String>(0));
+    if mode.is_ok_and(|mode| mode.eq_ignore_ascii_case("wal")) {
+        let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+    }
 }
 
 fn quick_check(conn: &Connection) -> rusqlite::Result<String> {
@@ -324,7 +335,10 @@ fn unwritable_error(e: &rusqlite::Error) -> bool {
 
 /// 쓰기 연결로 읽지 못한 파일을 읽기만 하는 연결로 연다. 먼저 `SQLITE_OPEN_READ_ONLY`(앱이 열고 있어 `-wal` · `-shm` 이 있으면
 /// 이것으로 읽힌다), 그것도 안 되면 바뀌지 않는 파일(`immutable`)로 연다 — `-shm` 을 만들 수 없는 폴더에서 `-wal` 이 없는 WAL
-/// 파일은 SQLite 가 달리 읽지 못한다. 그 폴더에는 어느 연결도 `-wal` 을 만들 수 없으므로 연 동안 파일이 바뀌지 않는다.
+/// 파일은 SQLite 가 달리 읽지 못한다. 이 사용자는 그 폴더에 `-wal` 을 만들 수 없어 이 사용자의 프로세스가 연 동안 파일을 바꾸지
+/// 않는다. 폴더 소유자 같은 다른 사용자가 같은 파일에 쓰면 이 연결은 잠금 없이 읽으므로 낡은 결과나 깨진 읽기(`SQLITE_CORRUPT`)를
+/// 받을 수 있다 — 같은 `$DATA` 를 다른 사용자와 나눠 쓰는 경우뿐이고, 깨진 읽기로 손상 판정이 나도 쓰기 금지 폴더라 복구의
+/// 파일 옮기기가 실패해 `memory` 로 떨어질 뿐 파일은 그대로다.
 fn open_unwritable(file: &Path, busy: Duration) -> Result<(Connection, String), Failure> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let read_only = Connection::open_with_flags(file, flags).and_then(|conn| {
