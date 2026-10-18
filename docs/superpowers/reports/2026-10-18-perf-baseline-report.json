@@ -1,0 +1,405 @@
+{
+  "schema": 1,
+  "definitions": {
+    "start": "wall clock just before the harness spawns `<bundle>/Contents/MacOS/pitwall <project>` (CLI cold start of a registered project)",
+    "end": "the project window's `perf_first_frame` mark: second requestAnimationFrame after the first React commit, timestamped by the app on receipt",
+    "idle": "memory sampled idle_secs after the first-frame mark",
+    "memory": "sum of phys_footprint (Activity Monitor's Memory column) over the processes whose responsible pid is the app instance (the app and the WebKit WebContent/GPU/Networking it requested); the launch is spawned with responsibility disclaimed so that this group is the instance alone",
+    "cache": "warm disk cache, new processes: no purge between runs; warm-up runs and excluded runs (window hidden before its first frame, screen locked) are recorded but left out of the medians"
+  },
+  "build": {
+    "profile": "release",
+    "app": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m0-20-perf/target/release/bundle/macos/Pitwall.app",
+    "binary": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m0-20-perf/target/release/bundle/macos/Pitwall.app/Contents/MacOS/pitwall"
+  },
+  "commit": {
+    "sha": "c1263c4840951a9d98fe10de53beb7b85ee2431b",
+    "dirty": false
+  },
+  "os": {
+    "name": "macOS",
+    "version": "27.0.1",
+    "build": "26A434"
+  },
+  "hardware": {
+    "model": "Mac17,9",
+    "cpu": "Apple M5 Pro",
+    "cpus": 15,
+    "memory_bytes": 51539607552
+  },
+  "settings": {
+    "runs": 5,
+    "warmup": 1,
+    "idle_secs": 10
+  },
+  "runs": [
+    {
+      "index": 0,
+      "warmup": true,
+      "excluded": null,
+      "cold_start_ms": 779.76513671875,
+      "launcher_main_ms": 228.154052734375,
+      "app_main_ms": 315.098876953125,
+      "launcher_pid": 12132,
+      "app_pid": 12162,
+      "group": 12162,
+      "detached": true,
+      "memory": {
+        "footprint_bytes": 124850400,
+        "rss_bytes": 281247744,
+        "processes": [
+          {
+            "pid": 12191,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 56853416,
+            "rss_bytes": 86458368
+          },
+          {
+            "pid": 12162,
+            "name": "pitwall",
+            "footprint_bytes": 37635272,
+            "rss_bytes": 122765312
+          },
+          {
+            "pid": 12190,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 17007360,
+            "rss_bytes": 33980416
+          },
+          {
+            "pid": 12480,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5865976,
+            "rss_bytes": 12107776
+          },
+          {
+            "pid": 12192,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5079592,
+            "rss_bytes": 16072704
+          },
+          {
+            "pid": 12189,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2408784,
+            "rss_bytes": 9863168
+          }
+        ]
+      },
+      "leftovers": [],
+      "killed": false
+    },
+    {
+      "index": 1,
+      "warmup": false,
+      "excluded": null,
+      "cold_start_ms": 468.801025390625,
+      "launcher_main_ms": 7.4453125,
+      "app_main_ms": 81.6162109375,
+      "launcher_pid": 16381,
+      "app_pid": 16382,
+      "group": 16382,
+      "detached": true,
+      "memory": {
+        "footprint_bytes": 125784312,
+        "rss_bytes": 270532608,
+        "processes": [
+          {
+            "pid": 16385,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 56968080,
+            "rss_bytes": 82116608
+          },
+          {
+            "pid": 16382,
+            "name": "pitwall",
+            "footprint_bytes": 37569832,
+            "rss_bytes": 123027456
+          },
+          {
+            "pid": 16384,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 17826536,
+            "rss_bytes": 30703616
+          },
+          {
+            "pid": 16388,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5751288,
+            "rss_bytes": 11993088
+          },
+          {
+            "pid": 16386,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5161464,
+            "rss_bytes": 12763136
+          },
+          {
+            "pid": 16383,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2507112,
+            "rss_bytes": 9928704
+          }
+        ]
+      },
+      "leftovers": [],
+      "killed": false
+    },
+    {
+      "index": 2,
+      "warmup": false,
+      "excluded": "window hidden before its first frame",
+      "cold_start_ms": 3249.56103515625,
+      "launcher_main_ms": 8.452880859375,
+      "app_main_ms": 94.551025390625,
+      "launcher_pid": 20147,
+      "app_pid": 20149,
+      "group": 20149,
+      "detached": true,
+      "memory": {
+        "footprint_bytes": 117805352,
+        "rss_bytes": 269893632,
+        "processes": [
+          {
+            "pid": 20152,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 48333736,
+            "rss_bytes": 80953344
+          },
+          {
+            "pid": 20149,
+            "name": "pitwall",
+            "footprint_bytes": 38503672,
+            "rss_bytes": 123764736
+          },
+          {
+            "pid": 20151,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 17548032,
+            "rss_bytes": 30490624
+          },
+          {
+            "pid": 20154,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5751288,
+            "rss_bytes": 11976704
+          },
+          {
+            "pid": 20153,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5046800,
+            "rss_bytes": 12648448
+          },
+          {
+            "pid": 20150,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2621824,
+            "rss_bytes": 10059776
+          }
+        ]
+      },
+      "leftovers": [],
+      "killed": false
+    },
+    {
+      "index": 3,
+      "warmup": false,
+      "excluded": null,
+      "cold_start_ms": 421.460205078125,
+      "launcher_main_ms": 4.986083984375,
+      "app_main_ms": 78.597900390625,
+      "launcher_pid": 23410,
+      "app_pid": 23627,
+      "group": 23627,
+      "detached": true,
+      "memory": {
+        "footprint_bytes": 124293344,
+        "rss_bytes": 273203200,
+        "processes": [
+          {
+            "pid": 23634,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 53822424,
+            "rss_bytes": 83755008
+          },
+          {
+            "pid": 23627,
+            "name": "pitwall",
+            "footprint_bytes": 39142624,
+            "rss_bytes": 124485632
+          },
+          {
+            "pid": 23633,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 17924816,
+            "rss_bytes": 30359552
+          },
+          {
+            "pid": 23638,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5751288,
+            "rss_bytes": 11993088
+          },
+          {
+            "pid": 23636,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5095928,
+            "rss_bytes": 12648448
+          },
+          {
+            "pid": 23631,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2556264,
+            "rss_bytes": 9961472
+          }
+        ]
+      },
+      "leftovers": [],
+      "killed": false
+    },
+    {
+      "index": 4,
+      "warmup": false,
+      "excluded": null,
+      "cold_start_ms": 472.43798828125,
+      "launcher_main_ms": 5.76611328125,
+      "app_main_ms": 87.02001953125,
+      "launcher_pid": 27151,
+      "app_pid": 27153,
+      "group": 27153,
+      "detached": true,
+      "memory": {
+        "footprint_bytes": 125473040,
+        "rss_bytes": 275447808,
+        "processes": [
+          {
+            "pid": 27156,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 54150056,
+            "rss_bytes": 83673088
+          },
+          {
+            "pid": 27153,
+            "name": "pitwall",
+            "footprint_bytes": 39175440,
+            "rss_bytes": 125288448
+          },
+          {
+            "pid": 27155,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 18858752,
+            "rss_bytes": 31866880
+          },
+          {
+            "pid": 27178,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5751288,
+            "rss_bytes": 11993088
+          },
+          {
+            "pid": 27157,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5063160,
+            "rss_bytes": 12746752
+          },
+          {
+            "pid": 27154,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2474344,
+            "rss_bytes": 9879552
+          }
+        ]
+      },
+      "leftovers": [],
+      "killed": false
+    },
+    {
+      "index": 5,
+      "warmup": false,
+      "excluded": null,
+      "cold_start_ms": 467.35498046875,
+      "launcher_main_ms": 7.468994140625,
+      "app_main_ms": 81.7431640625,
+      "launcher_pid": 30631,
+      "app_pid": 30632,
+      "group": 30632,
+      "detached": true,
+      "memory": {
+        "footprint_bytes": 125702392,
+        "rss_bytes": 269778944,
+        "processes": [
+          {
+            "pid": 30647,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 56607656,
+            "rss_bytes": 81297408
+          },
+          {
+            "pid": 30632,
+            "name": "pitwall",
+            "footprint_bytes": 38241504,
+            "rss_bytes": 123682816
+          },
+          {
+            "pid": 30646,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 17548032,
+            "rss_bytes": 30294016
+          },
+          {
+            "pid": 30649,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5751288,
+            "rss_bytes": 11976704
+          },
+          {
+            "pid": 30648,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5030416,
+            "rss_bytes": 12599296
+          },
+          {
+            "pid": 30633,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2523496,
+            "rss_bytes": 9928704
+          }
+        ]
+      },
+      "leftovers": [],
+      "killed": false
+    }
+  ],
+  "summary": {
+    "cold_start_ms": {
+      "median": 468.0780029296875,
+      "min": 421.460205078125,
+      "max": 472.43798828125,
+      "n": 4
+    },
+    "app_main_ms": {
+      "median": 81.6796875,
+      "min": 78.597900390625,
+      "max": 87.02001953125,
+      "n": 4
+    },
+    "footprint_bytes": {
+      "median": 125587716.0,
+      "min": 124293344.0,
+      "max": 125784312.0,
+      "n": 4
+    },
+    "rss_bytes": {
+      "median": 271867904.0,
+      "min": 269778944.0,
+      "max": 275447808.0,
+      "n": 4
+    }
+  },
+  "targets": {
+    "cold_start_ms": 1500.0,
+    "idle_footprint_bytes": 314572800,
+    "cold_start_met": true,
+    "idle_footprint_met": true
+  }
+}
