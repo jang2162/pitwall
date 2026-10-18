@@ -58,7 +58,8 @@ file = "themes/dusk.json"
 
 [contributes.external_tools.zed]            # 04 F8-1 · F8-2
 label = "Zed"
-command = "zed {project_root} {file}:{line}:{column}"   # 변수: {project_root} {file} {line} {column} {branch}
+command = ["zed", "{project_root}"]         # argv 배열, 셸 없이 실행. 변수: {project_root} {branch}
+file_command = ["zed", "{project_root}", "{file}:{line}:{column}"]   # (선택) 파일까지 열 때. {file} {line} {column} 도 쓴다
 platforms = ["macos", "linux"]              # (선택) macos | linux | windows, 없으면 모든 OS
 
 [contributes.translations.ko]               # 표 이름 = BCP 47 언어 태그
@@ -72,6 +73,7 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 | 필수 키 | `id`(`.` 로 나눈 소문자 · 숫자 · `-` 마디 둘 이상), `name`, `version`(semver), `engines.pitwall`(semver 범위). `authors` · `description` · `license` 는 선택 |
 | 기여 이름 | `[contributes.<종류>.<이름>]` 의 이름은 소문자 · 숫자 · `-`(UI 번역만 언어 태그) |
 | 모르는 것 | 모르는 기여 종류 · 모르는 키는 **경고하고 버린다** — 더 새 Pitwall 용 확장도 이 앱이 아는 기여는 쓴다. 앱이 꼭 알아야 하는 변화는 `engines.pitwall` 로 막는다. 아는 키의 형식이 틀리면 오류 |
+| 외부 도구 명령 | `command` · `file_command` 는 **문자열 배열**이다. 문자열(셸 명령)이면 형식 오류다. 첫 요소는 실행 파일이라 변수를 쓸 수 없고 비면 오류다. 변수는 요소 안 어디에나 쓸 수 있고(`"{file}:{line}"`) 모르는 변수 · 짝 없는 중괄호는 오류, 중괄호를 글자로 쓰는 문법은 없다. `command` 에 파일 변수(`{file}` · `{line}` · `{column}`)를 쓰면, `file_command` 가 `{file}` 을 쓰지 않으면 오류다. 치환 · 실행 규칙은 04 F8 「기본 템플릿 예」(`crates/pw-ext/src/template.rs`) |
 | 경로 | 매니페스트의 경로는 확장 폴더 기준 `/` 상대 경로. 절대 경로 · `..` · `\` · `:` 는 오류. 심볼릭 링크로 폴더 밖에 닿는 것도 오류. 가리키는 파일 · 폴더가 없으면 오류 |
 | 오류 처리 | 진단에 파일 · 줄 · 열을 붙인다. 오류가 하나라도 있는 확장은 **통째로 등록하지 않는다**(경고만 있으면 등록). 진단은 로그와 `ext.list` 로 나간다 |
 | 엔진 버전 | `engines.pitwall` 범위가 앱 버전을 포함하지 않으면 등록하지 않는다. 내장 확장은 앱과 함께 빌드되므로 `"*"` |

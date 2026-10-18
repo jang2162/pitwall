@@ -177,17 +177,28 @@ pitwall <path>[:line[:col]]
 | F8-5 | 원격 프로젝트: 도구별 원격 열기 지원(Zed `ssh://`, VS Code `--remote ssh-remote+`, JetBrains Gateway) | P2 |
 | F8-6 | **Orca → Pitwall**: Orca의 "앱 추가"(메뉴 라벨 + Terminal 명령)에 등록할 값 안내 화면, `pitwall` CLI 설치 여부 확인 | P0 |
 
-기본 템플릿 예:
+기본 템플릿 예(전체 목록은 `extensions/external-tools/extension.toml`):
 ```toml
-[[tools]]
-id = "zed";      command = "zed {project_root} {file}:{line}:{column}"
-[[tools]]
-id = "idea";     command = "idea --line {line} {file}"   # 프로젝트 루트는 idea {project_root}
-[[tools]]
-id = "vscode";   command = "code -g {file}:{line}:{column} {project_root}"
-[[tools]]
-id = "orca";     command = "orca {project_root}"         # 사용자가 실제 Orca 실행 명령으로 수정 가능
+[contributes.external_tools.zed]
+label = "Zed"
+command = ["zed", "{project_root}"]                                  # 프로젝트만 연다
+file_command = ["zed", "{project_root}", "{file}:{line}:{column}"]   # 파일까지 연다(선택)
+
+[contributes.external_tools.idea]
+label = "IntelliJ IDEA"
+command = ["idea", "{project_root}"]
+file_command = ["idea", "{project_root}", "--line", "{line}", "--column", "{column}", "{file}"]
+
+[contributes.external_tools.vscode]
+label = "Visual Studio Code"
+command = ["code", "{project_root}"]
+file_command = ["code", "{project_root}", "-g", "{file}:{line}:{column}"]
 ```
+
+- **명령은 argv 배열이고 셸 없이 실행한다.** 치환한 요소 하나가 그대로 인자 한 칸이다 — 경로 · 파일 · 브랜치 이름의 공백 · 따옴표 · `$(…)` · `;` · 개행은 글자일 뿐이라 인자를 깨거나 명령을 주입하지 못한다. 문자열 명령은 받지 않는다(매니페스트 형식 오류). 첫 요소(실행 파일)에는 변수를 쓸 수 없다
+- `{project_root}` · `{file}` 은 절대 경로다. `{project_root}` 는 **활성 워크트리**(F2-5)의 프로젝트 루트, 없으면 등록된 주 루트다
+- `command` 는 프로젝트만 연다 — `{file}` · `{line}` · `{column}` 을 쓸 수 없다. `file_command` 는 `{file}` 을 써야 한다. 파일 문맥이 있고 `file_command` 가 있으면 그것을, 아니면 `command` 를 쓴다. 파일만 있고 줄 · 열이 없으면 `{line}` · `{column}` 은 1 이다
+- 쓰인 변수에 값이 없으면(`{branch}` 를 읽지 못함 등) 실행하지 않고 그 변수를 오류로 알린다. 그 요소만 빼지 않는다 — `--line {line}` 같은 옵션 · 값 짝이 깨진다
 
 ### Orca 연동 범위 (D5)
 
