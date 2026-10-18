@@ -199,11 +199,16 @@ file_command = ["code", "{project_root}", "-g", "{file}:{line}:{column}"]
 - `{project_root}` · `{file}` 은 절대 경로다. `{project_root}` 는 **활성 워크트리**(F2-5)의 프로젝트 루트, 없으면 등록된 주 루트다
 - `command` 는 프로젝트만 연다 — `{file}` · `{line}` · `{column}` 을 쓸 수 없다. `file_command` 는 `{file}` 을 써야 한다. 파일 문맥이 있고 `file_command` 가 있으면 그것을, 아니면 `command` 를 쓴다. 파일만 있고 줄 · 열이 없으면 `{line}` · `{column}` 은 1 이다
 - 쓰인 변수에 값이 없으면(`{branch}` 를 읽지 못함 등) 실행하지 않고 그 변수를 오류로 알린다. 그 요소만 빼지 않는다 — `--line {line}` 같은 옵션 · 값 짝이 깨진다
+- `open` 은 받은 경로를 LaunchServices 로 다시 해석한다 — 번들(`*.app`) 폴더는 열지 않고 실행한다. 프로젝트 폴더를 `open` 에 넘기는 도구는 실행하지 않는 형태(`-R` 등)를 쓴다. 그래서 기본 Finder 도구는 폴더를 「열지」 않고 상위 폴더에서 골라 「보여 준다」(`open -R`, 웰컴 창 「Finder 에서 보기」 와 같다). 그래도 사용자가 옛 형태로 덮어쓸 수 있으므로, 실행 파일이 `open` 이면 `{project_root}` · `{file}` 값이 **번들 폴더**(이름이 `app` · `appex` · `bundle` · `framework` · `plugin` · `xpc` · `prefpane` · `saver` · `kext` · `workflow` · `action` · `qlgenerator` · `mdimporter` 확장자로 끝나거나 `Contents/Info.plist` 가 있는 폴더)일 때 실행하지 않고 그 이유를 알린다(`bundlePath`). `open -a <앱> <번들>` 은 번들을 그 앱에 문서로 넘길 뿐 실행하지 않는 것을 실측했다(macOS 27.0.1)
 - `{branch}` 는 git 을 실행하지 않고 프로젝트 루트에서 가장 가까운 `.git`(워크트리면 `gitdir:` 이 가리키는 곳)의 `HEAD` 에서 읽는다. 분리된 HEAD · 저장소 밖이면 값이 없다
 - 사용자 덮어쓰기 · 기본 도구 · 프로젝트 설정이 고를 수 있는 것: 03 「`[open_with]`」
 
 실행(`crates/pw-open-with`):
 - 실행 파일은 이름이면 **로그인 셸 PATH**(03 §5-1)에서 찾고, 경로면 절대 경로여야 한다. 자식에게도 그 PATH 를 준다. 작업 디렉터리는 `{project_root}`
+  - PATH 의 상대 · 빈 항목(`.`, `node_modules/.bin`)은 찾기에도 자식의 PATH 에도 쓰지 않는다 — 자식의 cwd(남의 저장소일 수 있는 프로젝트 루트) 기준으로 풀려 저장소 안의 파일이 잡힐 수 있다
+  - Windows 는 cmd.exe 의 찾기 규칙을 따른다: 이름이 PATHEXT 확장자로 끝나면 그 이름만, 아니면 PATHEXT 를 붙인 이름만 본다(확장자 없는 이름 그대로는 보지 않는다 — VS Code · Cursor 의 `bin` 에 있는 WSL 용 셸 스크립트 `code` 가 `code.cmd` 보다 먼저 잡히지 않게)
+  - Windows 에서 `.cmd` · `.bat` 런처는 Rust std 가 `cmd.exe` 로 감싸 띄운다 — 셸 문자열은 아니지만 std 의 배치 인자 이스케이프에 기댄다. 이스케이프할 수 없는 인자는 실행하지 않는다(`spawnFailed`)
+  - 활성 워크트리(`worktree`)와 파일은 절대 경로만 받는다(아니면 invalid params)
 - 띄운 도구는 **Pitwall 과 따로 산다** — 새 세션(`setsid`)이라 Pitwall 의 터미널 · 프로세스 그룹 신호를 받지 않고, stdio 는 `/dev/null`(파이프면 Pitwall 이 끝난 뒤 쓰기에서 죽는다), Pitwall 이 끝나면 launchd · init 이 넘겨받는다. 스레드 하나가 자식을 거둬 좀비가 남지 않는다
 - 실행 파일을 못 찾음 · 띄우기 실패 · **1.5초 안에 0 이 아닌 코드로 끝남**(`open -a` 가 앱을 못 찾음, CLI 가 인자를 거절함)은 번역된 문장(도구 · 이유 · 실행한 명령)으로 창에 알린다. 조용히 아무 일도 안 일어나지 않게. Windows 는 끝 코드를 보지 않는다(`explorer.exe` 는 성공해도 1)
 - 웹뷰는 도구 id 와 문맥(프로젝트, 활성 워크트리, 있으면 파일 · 줄 · 열)만 넘긴다(`openWith.run`). 명령 문자열을 만들어 넘기지 않는다
