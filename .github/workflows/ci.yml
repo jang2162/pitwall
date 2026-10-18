@@ -70,6 +70,60 @@ jobs:
       # 각 OS 에서 보도록 매트릭스마다 돌린다. 네트워크가 필요 없다.
       - run: node scripts/licenses.mjs check
 
+  # 성능 기준선(docs/design/06-roadmap.md 「성능 목표 (검증 기준)」). macOS release 번들의 콜드 스타트 · 유휴 메모리를 재
+  # job summary 와 artifact 로 남긴다. 무엇을 재는지는 CONTRIBUTING.md 「성능 기준선」 절.
+  # 러너는 느리고 들쭉날쭉하므로 기록만 한다 — 목표를 넘어도(pw-perf 는 넘어도 0 으로 끝난다), 측정이 실패해도 PR 을 막지
+  # 않는다(continue-on-error). 러너에 창이 그려지지 않으면 첫 프레임 표시가 오지 않아 시간 제한으로 실패한다.
+  perf:
+    name: perf baseline (macOS)
+    if: github.event_name != 'schedule'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    env:
+      # mise run 은 기본으로 mise.toml 의 빠진 도구를 전부 설치한다. 아래 install_args 로 고른 것만 쓰게 끈다.
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          # 번들 빌드(Tauri CLI 는 node_modules)와 측정에 필요한 것만 받는다.
+          install_args: node npm:pnpm rust
+
+      - name: pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - run: pnpm install --frozen-lockfile
+      - run: mise run perf -- --out target/perf/ci
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f target/perf/ci/summary.md ]; then
+            cat target/perf/ci/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No performance summary: the measurement did not finish (see the perf step's log)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # result.json · summary.md 와 회마다의 표시 파일 · 앱 로그(run-*/app/state/logs).
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: perf-baseline
+          path: target/perf/ci
+          if-no-files-found: warn
+
   licenses:
     name: licenses · notices
     if: github.event_name != 'schedule'
