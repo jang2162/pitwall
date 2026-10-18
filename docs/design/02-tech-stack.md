@@ -154,7 +154,8 @@ pitwall/
 │  ├─ pw-db*/            # pw-db, pw-db-types, pw-db-sql, pw-db-driver(-postgres/-mysql/-sqlite/-redis) (§2.7)
 │  ├─ pw-lsp/            # LSP 클라이언트, 서버 관리자
 │  ├─ pw-dap/            # DAP 클라이언트
-│  ├─ pw-runtime/        # 런타임 제공자 (mise · direnv · asdf · 로그인 셸), env 캐시
+│  ├─ pw-runtime/        # 런타임 제공자 (mise · direnv · asdf · 로그인 셸), env 캐시 — 지금은 로그인 셸 PATH 만(03 §5-1)
+│  ├─ pw-open-with/      # 외부 도구로 열기: 도구 목록(확장 + 전역 설정) · 기본 도구 · 셸 없는 실행 (04 F8)
 │  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지
 │  ├─ pw-lang/           # 언어 판별 (Linguist 데이터 테이블, .gitattributes, 모드라인)
 │  ├─ pw-tools/          # Mason registry 읽기 · 도구 설치기 (LSP/DAP/포매터)

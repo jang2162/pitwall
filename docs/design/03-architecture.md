@@ -97,7 +97,7 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
 | 앱 데이터 | `$DATA/` | SQLite · 바이너리 | `state.db`(프로젝트 레지스트리 · 최근 목록), `projects/<id>/`(열린 탭 · 레이아웃 · 브레이크포인트 · 쿼리 히스토리), `extensions/`, `tools/`(LSP · DAP 설치본, §07 4.4), `relay/` |
 | 상태 · 로그 | `$STATE/` | 텍스트 · SQLite | `logs/`, `backup/`(마이그레이션 원본), MCP 감사 로그 `mcp/audit.db`, 실행 중 앱의 MCP 소켓 `run/`([05-mcp.md](05-mcp.md) 「로컬 소켓과 헤드리스」) |
 | 캐시 | `$CACHE/` | 다양 | 심볼 인덱스, registry 캐시, 원격 파일 캐시 — 지워도 재생성 |
-| 프로젝트 공유 설정 | `<project>/.pitwall/project.toml`, `run/*.toml`, `db/*.toml` | TOML | 커밋 가능. 실행 구성, DB 연결(비밀 제외), 외부 도구 오버라이드 |
+| 프로젝트 공유 설정 | `<project>/.pitwall/project.toml`, `run/*.toml`, `db/*.toml` | TOML | 커밋 가능. 실행 구성, DB 연결(비밀 제외), 기본 외부 도구 고르기(명령은 정의하지 못한다 — 「`[open_with]`」) |
 | 비밀 | OS 키체인 | | DB 비밀번호, SSH 패스프레이즈, 토큰. 설정 파일에는 `secret_ref`만 |
 
 - **하이브리드 정책 (D9)**: `.pitwall/*.toml`은 커밋, 개인용 덮어쓰기는 `.pitwall/*.local.toml` — 프로젝트 생성 시 `.pitwall/.gitignore`에 `*.local.toml` 과 `.backup/` 자동 추가
@@ -153,8 +153,8 @@ provider = "auto"    # auto | mise | direnv | asdf | shell | none
 [runtime.env]        # 수동 덮어쓰기 (제공자 결과 위에 적용)
 JAVA_HOME = "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home"
 
-[open_with]          # 프로젝트별 외부 도구 오버라이드
-default = "orca"     # 외부 도구 id (04 F8)
+[open_with]          # 이 프로젝트의 기본 외부 도구 — 등록된 도구 중에서 고르기만 한다(아래 「`[open_with]`」)
+default = "zed"      # 외부 도구 id (04 F8)
 ```
 
 ```toml
@@ -185,6 +185,32 @@ read_only = false
 host_ref = "bastion"
 ```
 
+### `[open_with]` — 외부 도구 설정 (04 F8)
+
+도구 목록은 확장의 `[contributes.external_tools.<id>]`(기본 목록은 내장 확장 `extensions/external-tools`) 위에 **전역 설정**을 덮은 것이다. 구현: `crates/pw-open-with`
+
+```toml
+# $CONFIG/settings.toml (또는 settings.local.toml)
+[open_with]
+default = "zed"                                    # 기본 도구(⌘⌥E)
+
+[open_with.tools.zed]                              # 등록된 도구 고치기 — 적은 키만 바꾼다
+command = ["/opt/zed/bin/zed", "{project_root}"]
+
+[open_with.tools.my-editor]                        # 새 도구 — label · command 가 있어야 한다
+label = "My Editor"
+command = ["my-editor", "{project_root}"]
+file_command = ["my-editor", "--goto", "{file}:{line}"]
+platforms = ["macos"]                              # (선택) 다른 플랫폼 도구를 이 OS 로 옮길 때도 쓴다
+```
+
+- 명령 형식은 매니페스트와 같다(argv 배열, 첫 요소에 변수 금지 — 04 F8 「기본 템플릿 예」, 07 「레지스트리」 표의 「외부 도구 명령」 행)
+- 고칠 때 `command` 를 적으면 확장의 `file_command` 는 버린다(같이 적은 것만 남는다) — 실행 파일을 바꿨는데 파일을 열 때만 옛 실행 파일이 도는 일이 없게. `file_command` 만 적으면 그것만 바꾼다
+- 형식이 틀린 도구는 목록에 「쓸 수 없음」 으로 남고 실행하면 그 이유를 알린다. 확장의 명령으로 조용히 물러나지 않는다 — 고치려던 명령 대신 옛 명령이 돌면 안 된다
+- **프로젝트 설정**(`.pitwall/project.toml` · `.local.toml` · 개인 전용 `project.toml`)은 `[open_with] default` 로 **등록된 도구 중에서 고르기만** 한다. 명령을 정의하거나 바꿀 수 없다 — 저장소를 클론해 열기만 했는데 Pitwall 이 그 저장소가 정한 명령을 실행하면 안 된다(MCP 노출의 「공유 설정은 좁히기만」 과 같은 원리, 05 「툴 노출 설정」). 프로젝트 설정의 `[open_with.tools]` 는 경고하고 버린다
+  - 프로젝트 설정은 **디스크에 쓰지 않고** 읽는다 — 외부 도구로 열었다고 커밋된 파일이 마이그레이션되거나 `.backup/` 이 생기지 않는다
+- 기본 도구: 프로젝트 설정 → 전역 설정 순. 고른 도구가 이 OS 의 목록에 없으면 다음 것으로 넘어간다. 아무것도 없으면 **`⌘⌥E` 가 「다음에서 열기」 팝업을 열고** 기본 도구가 없다(또는 고른 도구를 쓸 수 없다)고 알린다 — 설치됐는지 모르는 도구(예: Orca)를 내장 기본값으로 두지 않는다
+
 ## 5-1. 런타임 환경 (D26)
 
 GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버전(Node/Java/Python 등)을 모른다. Pitwall은 **런타임 버전을 직접 설치 · 관리하지 않고**, 외부 도구가 계산한 환경을 받아 프로세스를 띄울 때 적용한다.
@@ -196,12 +222,17 @@ GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버
 | 1 | **mise** (우선 지원) | `mise` 실행 파일 존재 + 프로젝트에 `mise.toml` / `.mise.toml` / `.tool-versions` 등 | `mise env --json` (cwd = 대상 디렉터리) |
 | 2 | direnv | `.envrc` 존재 + `direnv` 설치 | `direnv export json` |
 | 3 | asdf | `.tool-versions` + `asdf` 설치 (mise 없을 때) | `asdf` shim 경로를 PATH에 추가 |
-| 4 | **로그인 셸** (기본 대체) | 항상 | 앱 시작 시 `$SHELL -lic env` 결과 (Orca의 PATH 가져오기와 같은 방식) |
+| 4 | **로그인 셸** (기본 대체) | 항상 | `$SHELL -lic env` 결과 (Orca의 PATH 가져오기와 같은 방식). 앱 시작을 막지 않게 처음 쓸 때 한 번 가져온다 |
 | 5 | 수동 지정 | `.pitwall/project.toml`의 `[runtime]` | 설정값을 위 결과에 덮어씀 |
 
 - 자동 선택이 기본, 프로젝트 설정에서 제공자 고정 가능 (`provider = "mise" | "direnv" | "asdf" | "shell" | "none"`)
 - mise는 **필수 의존이 아님** — 없으면 로그인 셸 환경으로 동작
 - 결과는 `RuntimeEnv { path, vars, tools: [{name, version, source_file}] }`로 통일
+- **M0 의 최소판(`crates/pw-runtime`)은 4번의 PATH 만** 가져온다 — 지금은 외부 도구 실행(04 F8)만 쓴다. Finder · Dock · `open` 으로 띄운 GUI 앱의 PATH 는 launchd 의 것(`/usr/bin:/bin:/usr/sbin:/sbin`)이라 `zed` · `code` · `idea` 를 못 찾는다(터미널에서 띄운 앱은 터미널 PATH 를 물려받아 가려진다)
+  - `<셸> -l -i -c "printf 표식; /usr/bin/env -0; printf 표식"` 의 두 표식 사이에서 `PATH=` 를 읽는다 — 시작 파일이 stdout 에 찍는 잡음은 표식 바깥이라 버려진다. 셸은 `$SHELL`, 없으면 계정의 셸(`getpwuid_r`)
+  - 셸은 `setsid` 로 제어 터미널 없이 돈다(대화형 셸이 터미널을 잡으려다 멈추지 않게). 시작 파일이 무거운 일을 건너뛸 수 있게 `PITWALL_RESOLVING_ENVIRONMENT=1` 을 준다
+  - 5초 안에 PATH 를 찍지 않으면 셸의 세션을 통째로 죽이고, 실패 · 시간 초과 · PATH 없음이면 앱 프로세스의 PATH 로 물러난다. 무엇을 썼는지는 로그(`PATH from the login shell` · `using the process PATH`)로 남는다
+  - 앱 시작이 아니라 **처음 쓸 때** 가져오고(「다음에서 열기」 팝업을 열면 미리 시작한다), 앱이 끝날 때까지 캐시한다. 셸 설정을 바꾼 뒤 다시 읽기는 아직 없다(「환경 다시 읽기」 와 함께)
 
 ### 적용 대상
 모든 프로세스 실행은 `runtime` 모듈을 거친다: **내장 터미널, LSP 서버, DAP 어댑터, 실행 구성, 태스크, MCP를 통한 실행, git 훅 실행 환경**

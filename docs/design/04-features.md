@@ -199,6 +199,14 @@ file_command = ["code", "{project_root}", "-g", "{file}:{line}:{column}"]
 - `{project_root}` · `{file}` 은 절대 경로다. `{project_root}` 는 **활성 워크트리**(F2-5)의 프로젝트 루트, 없으면 등록된 주 루트다
 - `command` 는 프로젝트만 연다 — `{file}` · `{line}` · `{column}` 을 쓸 수 없다. `file_command` 는 `{file}` 을 써야 한다. 파일 문맥이 있고 `file_command` 가 있으면 그것을, 아니면 `command` 를 쓴다. 파일만 있고 줄 · 열이 없으면 `{line}` · `{column}` 은 1 이다
 - 쓰인 변수에 값이 없으면(`{branch}` 를 읽지 못함 등) 실행하지 않고 그 변수를 오류로 알린다. 그 요소만 빼지 않는다 — `--line {line}` 같은 옵션 · 값 짝이 깨진다
+- `{branch}` 는 git 을 실행하지 않고 프로젝트 루트에서 가장 가까운 `.git`(워크트리면 `gitdir:` 이 가리키는 곳)의 `HEAD` 에서 읽는다. 분리된 HEAD · 저장소 밖이면 값이 없다
+- 사용자 덮어쓰기 · 기본 도구 · 프로젝트 설정이 고를 수 있는 것: 03 「`[open_with]`」
+
+실행(`crates/pw-open-with`):
+- 실행 파일은 이름이면 **로그인 셸 PATH**(03 §5-1)에서 찾고, 경로면 절대 경로여야 한다. 자식에게도 그 PATH 를 준다. 작업 디렉터리는 `{project_root}`
+- 띄운 도구는 **Pitwall 과 따로 산다** — 새 세션(`setsid`)이라 Pitwall 의 터미널 · 프로세스 그룹 신호를 받지 않고, stdio 는 `/dev/null`(파이프면 Pitwall 이 끝난 뒤 쓰기에서 죽는다), Pitwall 이 끝나면 launchd · init 이 넘겨받는다. 스레드 하나가 자식을 거둬 좀비가 남지 않는다
+- 실행 파일을 못 찾음 · 띄우기 실패 · **1.5초 안에 0 이 아닌 코드로 끝남**(`open -a` 가 앱을 못 찾음, CLI 가 인자를 거절함)은 번역된 문장(도구 · 이유 · 실행한 명령)으로 창에 알린다. 조용히 아무 일도 안 일어나지 않게. Windows 는 끝 코드를 보지 않는다(`explorer.exe` 는 성공해도 1)
+- 웹뷰는 도구 id 와 문맥(프로젝트, 활성 워크트리, 있으면 파일 · 줄 · 열)만 넘긴다(`openWith.run`). 명령 문자열을 만들어 넘기지 않는다
 
 ### Orca 연동 범위 (D5)
 
@@ -206,7 +214,7 @@ file_command = ["code", "{project_root}", "-g", "{file}:{line}:{column}"]
 
 | 방향 | 방식 |
 |---|---|
-| Pitwall → Orca | 외부 도구 레지스트리의 명령 템플릿 실행 (`{project_root}` 등 변수 치환) |
+| Pitwall → Orca | 외부 도구 레지스트리의 명령 템플릿 실행. 기본값 `command = ["orca", "open"]` · `file_command = ["orca", "file", "open", "{file}", "--line", "{line}", "--column", "{column}", "--focus"]`. Orca CLI 에 폴더 · 워크트리를 여는 명령이 없어 **프로젝트만 열 때는 Orca 를 앞으로 가져오기만 하고**, 파일이 있으면 그 파일의 워크트리로 창을 옮긴다. `orca repo add --path` 는 쓰지 않는다(열기가 아니라 영구 등록이고, 활성 워크트리를 별도 저장소로 등록하게 된다) |
 | Orca → Pitwall | Orca **Settings → General → Open in menu**에 앱 추가: 라벨 `Pitwall`, 명령 `pitwall` |
 
 #### Orca "Open in" 동작 (Orca 소스 `src/main/external-editor-launch.ts` · 공식 문서 확인, 2026-10)
