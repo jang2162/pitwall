@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 # 측정마다 임시 `$DATA` 에 프로젝트 하나를 등록한다.
 pw-core = { path = "../pw-core" }
+# 회 폴더의 MCP 소켓이 길이 제한 안(`$STATE/run`)에 드는지 앱과 같은 규칙으로 본다.
+pw-mcp = { path = "../pw-mcp" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

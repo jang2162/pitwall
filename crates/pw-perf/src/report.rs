@@ -6,16 +6,17 @@ use crate::stats::{Summary, summarize};
 
 /// 목표(docs/design/06-roadmap.md 「성능 목표 (검증 기준)」). 넘어도 측정은 실패하지 않는다 — 기록만 한다.
 pub const TARGET_COLD_START_MS: f64 = 1500.0;
-/// 300 MB 를 300 MiB(300 × 2^20 바이트)로 본다. 요약도 MiB 로 적는다.
-pub const TARGET_IDLE_FOOTPRINT_BYTES: u64 = 300 * MIB;
-const MIB: u64 = 1024 * 1024;
+/// 06 의 「300MB」 는 300 × 10^6 바이트로 본다(MB 보다 엄격한 쪽). 요약도 MB(10^6) 로 적는다.
+pub const TARGET_IDLE_FOOTPRINT_BYTES: u64 = 300 * MB;
+const MB: u64 = 1_000_000;
+const GIB: u64 = 1 << 30;
 
 /// 무엇에서 무엇까지 쟀는가. 결과 파일만 받은 사람도 읽을 수 있게 결과에 함께 싣는다(정본은 CONTRIBUTING.md
 /// 「성능 기준선」 절).
 pub const DEFINITIONS: Definitions = Definitions {
     start: "wall clock just before the harness spawns `<bundle>/Contents/MacOS/pitwall <project>` (CLI cold start of a registered project)",
     end: "the project window's `perf_first_frame` mark: second requestAnimationFrame after the first React commit, timestamped by the app on receipt",
-    idle: "memory sampled idle_secs after the first-frame mark",
+    idle: "memory sampled idle_secs after the first-frame mark; a run whose window was hidden at any time before the sample, or whose screen was locked, is excluded",
     memory: "sum of phys_footprint (Activity Monitor's Memory column) over the processes whose responsible pid is the app instance (the app and the WebKit WebContent/GPU/Networking it requested); the launch is spawned with responsibility disclaimed so that this group is the instance alone",
     cache: "warm disk cache, new processes: no purge between runs; warm-up runs and excluded runs (window hidden before its first frame, screen locked) are recorded but left out of the medians",
 };
@@ -39,6 +40,10 @@ pub struct Report {
     pub hardware: Hardware,
     pub settings: Settings,
     pub runs: Vec<Run>,
+    /// 중앙값에 든 회 수(준비 회와 제외한 회를 뺀 것).
+    pub valid_runs: usize,
+    /// 유효한 회가 `--runs` 의 절반보다 적을 때의 경고([`too_few_valid`]). 있으면 pw-perf 는 3 으로 끝난다.
+    pub warning: Option<String>,
     pub summary: Summaries,
     pub targets: Targets,
 }
@@ -137,6 +142,21 @@ pub struct Targets {
     pub idle_footprint_met: Option<bool>,
 }
 
+pub fn valid_runs(runs: &[Run]) -> usize {
+    runs.iter()
+        .filter(|r| !r.warmup && r.excluded.is_none())
+        .count()
+}
+
+/// 유효한 회가 요청한 측정 회 수의 절반보다 적은가 — 중앙값이 몇 회의 값일 뿐이라 기준선으로 읽으면 안 된다.
+pub fn too_few_valid(valid: usize, requested: usize) -> Option<String> {
+    (valid * 2 < requested).then(|| {
+        format!(
+            "only {valid} of {requested} measured runs are valid (the rest were excluded); the medians are not a baseline — rerun with the project window unobscured"
+        )
+    })
+}
+
 /// 준비 운전(warm-up)과 제외한 회를 뺀 회만 모은다.
 pub fn summarize_runs(runs: &[Run]) -> Summaries {
     let measured: Vec<&Run> = runs
@@ -167,8 +187,8 @@ pub fn targets(summary: &Summaries) -> Targets {
     }
 }
 
-fn mib(bytes: f64) -> String {
-    format!("{:.1}", bytes / MIB as f64)
+fn mb(bytes: f64) -> String {
+    format!("{:.1}", bytes / MB as f64)
 }
 
 fn met(value: Option<bool>) -> &'static str {
@@ -188,6 +208,10 @@ pub fn markdown(report: &Report) -> String {
     };
     push(&mut out, "## Pitwall performance baseline".into());
     push(&mut out, String::new());
+    if let Some(warning) = &report.warning {
+        push(&mut out, format!("> **Warning:** {warning}."));
+        push(&mut out, String::new());
+    }
     if report.build.profile != "release" {
         push(
             &mut out,
@@ -217,14 +241,15 @@ pub fn markdown(report: &Report) -> String {
             hw.cpu.as_deref().unwrap_or("?"),
             hw.cpus.map_or("?".into(), |n| n.to_string()),
             hw.memory_bytes
-                .map_or("?".into(), |b| (b / (MIB * 1024)).to_string()),
+                .map_or("?".into(), |b| (b / GIB).to_string()),
         ),
     );
     push(
         &mut out,
         format!(
-            "- runs: {} measured ({} excluded) + {} warm-up · idle = {}s after the first frame",
+            "- runs: {} measured ({} valid, {} excluded) + {} warm-up · idle = {}s after the first frame · MB = 10^6 bytes",
             report.settings.runs,
+            report.valid_runs,
             report
                 .runs
                 .iter()
@@ -256,11 +281,11 @@ pub fn markdown(report: &Report) -> String {
         push(
             &mut out,
             format!(
-                "| idle memory (phys_footprint, app + WebKit) | {} MiB | {} – {} MiB | < {} MiB ({}) |",
-                mib(m.median),
-                mib(m.min),
-                mib(m.max),
-                t.idle_footprint_bytes / MIB,
+                "| idle memory (phys_footprint, app + WebKit) | {} MB | {} – {} MB | < {} MB ({}) |",
+                mb(m.median),
+                mb(m.min),
+                mb(m.max),
+                t.idle_footprint_bytes / MB,
                 met(t.idle_footprint_met)
             ),
         );
@@ -269,10 +294,10 @@ pub fn markdown(report: &Report) -> String {
         push(
             &mut out,
             format!(
-                "| idle memory (RSS, same processes; reference) | {} MiB | {} – {} MiB | |",
-                mib(r.median),
-                mib(r.min),
-                mib(r.max)
+                "| idle memory (RSS, same processes; reference) | {} MB | {} – {} MB | |",
+                mb(r.median),
+                mb(r.min),
+                mb(r.max)
             ),
         );
     }
@@ -288,8 +313,7 @@ pub fn markdown(report: &Report) -> String {
     push(&mut out, String::new());
     push(
         &mut out,
-        "| run | cold start (ms) | app main (ms) | footprint (MiB) | RSS (MiB) | processes |"
-            .into(),
+        "| run | cold start (ms) | app main (ms) | footprint (MB) | RSS (MB) | processes |".into(),
     );
     push(&mut out, "| --- | --- | --- | --- | --- | --- |".into());
     for run in &report.runs {
@@ -297,7 +321,7 @@ pub fn markdown(report: &Report) -> String {
             .memory
             .processes
             .iter()
-            .map(|p| format!("{} {}", p.name, mib(p.footprint_bytes as f64)))
+            .map(|p| format!("{} {}", p.name, mb(p.footprint_bytes as f64)))
             .collect();
         push(
             &mut out,
@@ -310,8 +334,8 @@ pub fn markdown(report: &Report) -> String {
                     .map_or(String::new(), |why| format!(" (excluded: {why})")),
                 run.cold_start_ms,
                 run.app_main_ms.map_or("?".into(), |v| format!("{v:.0}")),
-                mib(run.memory.footprint_bytes as f64),
-                mib(run.memory.rss_bytes as f64),
+                mb(run.memory.footprint_bytes as f64),
+                mb(run.memory.rss_bytes as f64),
                 names.join(" · ")
             ),
         );
@@ -357,15 +381,15 @@ mod tests {
     #[test]
     fn warm_up_runs_stay_out_of_the_medians() {
         let runs = [
-            run(0, true, 5000.0, 900 * MIB),
-            run(1, false, 700.0, 200 * MIB),
-            run(2, false, 900.0, 250 * MIB),
-            run(3, false, 800.0, 220 * MIB),
+            run(0, true, 5000.0, 900 * MB),
+            run(1, false, 700.0, 200 * MB),
+            run(2, false, 900.0, 250 * MB),
+            run(3, false, 800.0, 220 * MB),
         ];
         let s = summarize_runs(&runs);
         let cold = s.cold_start_ms.unwrap();
         assert_eq!((cold.median, cold.max, cold.n), (800.0, 900.0, 3));
-        assert_eq!(s.footprint_bytes.unwrap().median, (220 * MIB) as f64);
+        assert_eq!(s.footprint_bytes.unwrap().median, (220 * MB) as f64);
         let t = targets(&s);
         assert_eq!(t.cold_start_met, Some(true));
         assert_eq!(t.idle_footprint_met, Some(true));
@@ -373,16 +397,43 @@ mod tests {
 
     #[test]
     fn excluded_runs_stay_out_of_the_medians() {
-        let mut hidden = run(2, false, 47000.0, 100 * MIB);
+        let mut hidden = run(2, false, 47000.0, 100 * MB);
         hidden.excluded = Some("window hidden before its first frame".into());
-        let runs = [run(1, false, 500.0, 116 * MIB), hidden];
+        let runs = [run(1, false, 500.0, 116 * MB), hidden];
         let cold = summarize_runs(&runs).cold_start_ms.unwrap();
         assert_eq!((cold.median, cold.max, cold.n), (500.0, 500.0, 1));
     }
 
     #[test]
+    fn fewer_valid_runs_than_half_the_request_warn() {
+        assert_eq!(too_few_valid(3, 5), None);
+        assert_eq!(too_few_valid(2, 4), None);
+        assert!(too_few_valid(2, 5).unwrap().contains("only 2 of 5"));
+        assert!(too_few_valid(0, 1).is_some());
+        let mut hidden = run(2, false, 47000.0, 100 * MB);
+        hidden.excluded = Some("hidden".into());
+        let runs = [run(0, true, 900.0, 1), run(1, false, 500.0, 1), hidden];
+        assert_eq!(valid_runs(&runs), 1);
+    }
+
+    /// 06 의 300MB 는 10^6 바이트 단위다 — 300 MiB(314.6 × 10^6)는 넘은 것으로 본다.
+    #[test]
+    fn the_memory_target_is_in_decimal_megabytes() {
+        let runs = [run(0, false, 500.0, 300 * 1024 * 1024)];
+        assert_eq!(
+            targets(&summarize_runs(&runs)).idle_footprint_met,
+            Some(false)
+        );
+        let runs = [run(0, false, 500.0, 299_000_000)];
+        assert_eq!(
+            targets(&summarize_runs(&runs)).idle_footprint_met,
+            Some(true)
+        );
+    }
+
+    #[test]
     fn a_median_over_the_target_is_reported_not_failed() {
-        let runs = [run(0, false, 1600.0, 310 * MIB)];
+        let runs = [run(0, false, 1600.0, 310 * MB)];
         let t = targets(&summarize_runs(&runs));
         assert_eq!(t.cold_start_met, Some(false));
         assert_eq!(t.idle_footprint_met, Some(false));

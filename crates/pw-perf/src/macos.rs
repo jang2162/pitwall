@@ -8,20 +8,62 @@
 //! 한다 — 떼어 다시 띄운 앱과 그 앱이 요청한 WebKit 프로세스가 모두 그 pid 를 물려받으므로, 그 값을 가진 프로세스가 곧
 //! 그 앱 인스턴스의 것이다(다른 Pitwall · Safari · 다른 앱의 WebKit 은 섞이지 않는다).
 //!
-//! 두 함수는 공개 헤더에 없는 libSystem 의 심볼이다(Chromium · LLDB 가 같은 용도로 쓴다). 책임 프로세스는 TCC 권한 요청을
-//! 누구 이름으로 할지에만 쓰이고 성능과는 무관하다.
+//! 두 함수는 공개 헤더에 없는 libSystem 의 심볼이다(Chromium · LLDB 가 같은 용도로 쓴다). 링크하지 않고 실행할 때
+//! `dlsym` 으로 찾는다 — 앞으로의 OS 가 심볼을 빼도 이 크레이트의 빌드 · 시험 바이너리 적재는 깨지지 않고, 측정만
+//! 「이 OS 에서는 못 잰다」 로 실패한다([`check_responsibility`]). 책임 프로세스는 TCC 권한 요청을 누구 이름으로 할지에만
+//! 쓰이고 성능과는 무관하다.
 
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::OnceLock;
 
-unsafe extern "C" {
-    fn responsibility_get_pid_responsible_for_pid(pid: libc::pid_t) -> libc::pid_t;
-    fn responsibility_spawnattrs_setdisclaim(
-        attrs: *mut libc::posix_spawnattr_t,
-        disclaim: libc::c_int,
-    ) -> libc::c_int;
+type ResponsibleFn = unsafe extern "C" fn(libc::pid_t) -> libc::pid_t;
+type DisclaimFn = unsafe extern "C" fn(*mut libc::posix_spawnattr_t, libc::c_int) -> libc::c_int;
+
+const RESPONSIBLE: &CStr = c"responsibility_get_pid_responsible_for_pid";
+const DISCLAIM: &CStr = c"responsibility_spawnattrs_setdisclaim";
+
+struct Responsibility {
+    responsible: ResponsibleFn,
+    disclaim: DisclaimFn,
+}
+
+fn lookup(name: &CStr) -> Option<*mut libc::c_void> {
+    // SAFETY: RTLD_DEFAULT 에서 이름으로 찾기만 한다.
+    let symbol = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
+    (!symbol.is_null()).then_some(symbol)
+}
+
+fn responsibility() -> Option<&'static Responsibility> {
+    static FOUND: OnceLock<Option<Responsibility>> = OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            let (responsible, disclaim) = (lookup(RESPONSIBLE)?, lookup(DISCLAIM)?);
+            // SAFETY: 두 심볼의 시그니처는 위 타입과 같다(Chromium 의 선언과 같은 것).
+            Some(unsafe {
+                Responsibility {
+                    responsible: std::mem::transmute::<*mut libc::c_void, ResponsibleFn>(
+                        responsible,
+                    ),
+                    disclaim: std::mem::transmute::<*mut libc::c_void, DisclaimFn>(disclaim),
+                }
+            })
+        })
+        .as_ref()
+}
+
+/// 이 OS 가 책임 프로세스 함수를 주는가. 없으면 앱 인스턴스의 WebKit 프로세스를 고를 수 없어 재지 않는다.
+pub fn check_responsibility() -> Result<(), String> {
+    match responsibility() {
+        Some(_) => Ok(()),
+        None => Err(format!(
+            "this macOS does not provide {} / {}; the harness cannot tell the app's WebKit processes apart here, so it does not measure",
+            RESPONSIBLE.to_string_lossy(),
+            DISCLAIM.to_string_lossy()
+        )),
+    }
 }
 
 fn cstring(bytes: &[u8]) -> std::io::Result<CString> {
@@ -70,6 +112,8 @@ pub fn spawn_disclaimed(
         .chain([ptr::null_mut()])
         .collect();
     let cwd_c = cstring(cwd.as_os_str().as_bytes())?;
+    let found = responsibility()
+        .ok_or_else(|| std::io::Error::other(check_responsibility().unwrap_err()))?;
     let null = c"/dev/null";
 
     // SAFETY: attr · actions 는 init 이 성공한 뒤에만 쓰고 destroy 로 놓는다. 넘기는 문자열과 배열은 이 함수가 끝날 때까지 산다.
@@ -88,7 +132,7 @@ pub fn spawn_disclaimed(
         let mut pid: libc::pid_t = 0;
         let result = (|| {
             check(
-                responsibility_spawnattrs_setdisclaim(&mut attr, 1),
+                (found.disclaim)(&mut attr, 1),
                 "responsibility_spawnattrs_setdisclaim",
             )?;
             for (fd, flags) in [
@@ -142,9 +186,12 @@ pub fn try_wait(pid: u32) -> std::io::Result<Option<i32>> {
     }
 }
 
-pub fn responsible_pid(pid: u32) -> u32 {
+/// 책임 프로세스의 pid. 함수가 없는 OS 거나 모르는 pid 면 `None`.
+pub fn responsible_pid(pid: u32) -> Option<u32> {
+    let found = responsibility()?;
     // SAFETY: pid 값만 넘긴다. 모르는 pid 면 -1 이 온다.
-    unsafe { responsibility_get_pid_responsible_for_pid(pid as libc::pid_t) as u32 }
+    let responsible = unsafe { (found.responsible)(pid as libc::pid_t) };
+    u32::try_from(responsible).ok()
 }
 
 pub fn all_pids() -> Vec<u32> {
@@ -271,8 +318,8 @@ mod tests {
         while try_wait(pid).unwrap().is_none() {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert_eq!(responsible, pid);
-        assert_ne!(responsible_pid(std::process::id()), pid);
+        assert_eq!(responsible, Some(pid));
+        assert_ne!(responsible_pid(std::process::id()), Some(pid));
     }
 
     #[test]
