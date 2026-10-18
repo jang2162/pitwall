@@ -10,6 +10,11 @@ all-features = true
 ignore = [
   # proc-macro-error 관리 중단. Linux 에서 tauri → wry → gtk-rs 0.18 이 끌어온다. 업스트림에 대체가 없다.
   { id = "RUSTSEC-2024-0370", reason = "gtk-rs 0.18 via tauri/wry on Linux; no maintained replacement upstream" },
+  # zbus 5 의 하위 크레이트 관리 중단(zbus 6 에 합쳐졌다). Linux 에서 tauri-plugin-opener · tauri-plugin-single-instance →
+  # zbus 5 가 끌어온다. 두 플러그인의 최신판(2.x, 3.0 alpha 도)이 zbus ^5.9 다. 플러그인이 zbus 6 으로 옮기면 걷는다.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant via zbus 5 from tauri-plugin-opener/single-instance; remove when they move to zbus 6" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names via zbus 5 from tauri-plugin-opener/single-instance; remove when they move to zbus 6" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via zbus 5 from tauri-plugin-opener/single-instance; remove when they move to zbus 6" },
 ]
 # 업스트림이 고쳐 ignore 가 낡으면 경고로 드러낸다.
 unused-ignored-advisory = "warn"
