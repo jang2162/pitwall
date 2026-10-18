@@ -29,6 +29,8 @@
 node_modules/
 dist/
 *.tsbuildinfo
+# SwiftPM 빌드 캐시(워크트리 셋업 중 생긴다. 남아 있으면 워크트리 삭제가 막힌다)
+/.build/
 
 # 브라우저 확인 도구(Playwright MCP)가 작업 디렉터리에 남기는 콘솔 로그 · 스냅숏
 .playwright-mcp/
