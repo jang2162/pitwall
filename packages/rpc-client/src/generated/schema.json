@@ -1068,7 +1068,7 @@
           },
           "worktree": {
             "default": null,
-            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`). 그 워크트리의 `.local.toml` 을 읽는다.",
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리의 `.local.toml` 을 읽는다.",
             "type": [
               "string",
               "null"
@@ -1197,7 +1197,7 @@
       "tier": "read"
     },
     "openWith.run": {
-      "description": "프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.",
+      "description": "프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1241,7 +1241,7 @@
           },
           "worktree": {
             "default": null,
-            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`). `{project_root}` 와 작업 디렉터리가 그 워크트리 안의 프로젝트 루트가 된다.",
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). `{project_root}` 와 작업 디렉터리가 그 워크트리 안의 프로젝트 루트가 된다.",
             "type": [
               "string",
               "null"
@@ -1361,6 +1361,23 @@
                   "kind",
                   "program",
                   "message"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`open`(macOS LaunchServices)에 번들 폴더(`*.app` 등)를 넘기려 했다 — `open` 은 번들을 열지 않고 실행하므로 띄우지 않았다.",
+                "properties": {
+                  "kind": {
+                    "const": "bundlePath",
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path"
                 ],
                 "type": "object"
               },

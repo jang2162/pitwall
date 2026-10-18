@@ -55,7 +55,7 @@ pub struct OpenWithListParams {
     /// 있으면 그 프로젝트의 설정(`[open_with] default`)까지 보고 기본 도구를 고른다.
     #[serde(default)]
     pub project_id: Option<String>,
-    /// 활성 워크트리의 꼭대기(`ActiveWorktree.top`). 그 워크트리의 `.local.toml` 을 읽는다.
+    /// 활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리의 `.local.toml` 을 읽는다.
     #[serde(default)]
     pub worktree: Option<String>,
 }
@@ -79,7 +79,7 @@ pub struct OpenWithRunParams {
     /// 없으면 기본 도구. 기본 도구가 없으면 `noDefault` 로 끝난다(창은 「다음에서 열기」 팝업을 연다).
     #[serde(default)]
     pub tool: Option<String>,
-    /// 활성 워크트리의 꼭대기(`ActiveWorktree.top`). `{project_root}` 와 작업 디렉터리가 그 워크트리 안의 프로젝트 루트가 된다.
+    /// 활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). `{project_root}` 와 작업 디렉터리가 그 워크트리 안의 프로젝트 루트가 된다.
     #[serde(default)]
     pub worktree: Option<String>,
     /// 열 파일의 절대 경로. 있으면 도구의 `file_command` 를 쓴다(없으면 `command`).
@@ -116,6 +116,8 @@ pub enum LaunchProblem {
     },
     /// 실행 파일을 띄우지 못했다(권한 등).
     SpawnFailed { program: String, message: String },
+    /// `open`(macOS LaunchServices)에 번들 폴더(`*.app` 등)를 넘기려 했다 — `open` 은 번들을 열지 않고 실행하므로 띄우지 않았다.
+    BundlePath { path: String },
     /// 띄운 런처가 곧바로 0 이 아닌 코드로 끝났다. 신호로 끝났으면 `code` 가 없다.
     Exited { code: Option<i32> },
 }
@@ -158,7 +160,7 @@ rpc_method! {
     }
 
     /// 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는
-    /// 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
+    /// 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
     pub OpenWithRun: "openWith.run" {
         params: OpenWithRunParams,
         result: OpenWithOutcome,

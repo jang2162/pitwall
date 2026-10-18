@@ -37,7 +37,9 @@ impl Fixture {
             &Version::new(0, 0, 0),
             pw_ext::builtin::roots(),
         ));
+        // 상대 항목(`relative-dir`)은 찾기에도 자식의 PATH 에도 쓰이지 않는다.
         let path = std::env::join_paths([
+            PathBuf::from("relative-dir"),
             bin.clone(),
             PathBuf::from("/usr/bin"),
             PathBuf::from("/bin"),
@@ -164,8 +166,12 @@ fn names_with_shell_syntax_reach_the_tool_as_exact_arguments() {
     );
     let (cwd, path) = f.env("fake-tool");
     assert_eq!(PathBuf::from(cwd), root);
-    // 자식은 찾을 때 쓴 PATH 를 받는다.
+    // 자식은 찾을 때 쓴 PATH 를 받되 절대 경로 항목만 받는다.
     assert!(path.starts_with(&f.bin.display().to_string()), "{path}");
+    assert!(
+        std::env::split_paths(&path).all(|p| p.is_absolute()),
+        "{path}"
+    );
     assert!(!pwned.exists(), "a name was run as a command");
 
     // 파일이 없으면 프로젝트만 여는 command.
@@ -459,4 +465,126 @@ fn lists_this_platforms_tools_with_settings_problems() {
     assert!(list.tools[1].opens_files);
     let terminal = list.tools.last().unwrap();
     assert!(!terminal.opens_files, "{terminal:?} has no file_command");
+}
+
+/// `open` 은 번들 폴더(`Tool.app`)를 열지 않고 실행한다. 저장소 이름이 `Tool.app` 이고 커밋된 설정이 기본 도구를 Finder 로 골라도,
+/// 사용자가 Finder 명령을 옛 형태(`open {project_root}`)로 덮어써도 넘기지 않는다. 실행 파일 `open` 은 가짜다(사람의 LaunchServices 를
+/// 부르지 않는다) — 막지 못하면 가짜가 받은 argv 를 적는다.
+#[cfg(target_os = "macos")]
+#[test]
+fn never_hands_a_bundle_folder_to_open() {
+    let f = Fixture::new(
+        "schema = 1\n\n[open_with.tools.finder-old]\nlabel = \"Finder (old)\"\ncommand = [\"open\", \"{project_root}\"]\nfile_command = [\"open\", \"{file}\"]\n",
+    );
+    f.fake_tool("open");
+    let root = f.tmp.path().join("clone/Tool.app");
+    fs::create_dir_all(root.join("Contents/MacOS")).unwrap();
+    fs::create_dir_all(root.join(".pitwall")).unwrap();
+    fs::write(
+        root.join(".pitwall/project.toml"),
+        "schema = 1\n[open_with]\ndefault = \"finder\"\n",
+    )
+    .unwrap();
+    let project = f.project(&root);
+    let bundle = PathBuf::from(&project.roots[0]);
+    for tool in [None, Some("finder"), Some("finder-old"), Some("terminal")] {
+        let outcome = f.run(OpenWithRunParams {
+            project_id: project.id.clone(),
+            tool: tool.map(str::to_owned),
+            ..OpenWithRunParams::default()
+        });
+        assert!(
+            matches!(&outcome, OpenWithOutcome::Failed { problem: LaunchProblem::BundlePath { path }, .. } if *path == bundle.display().to_string()),
+            "{tool:?}: {outcome:?}"
+        );
+    }
+    // 파일 쪽도 같다: 프로젝트(일반 폴더) 안의 번들을 파일로 열 때.
+    let plain = f.project(&f.tmp.path().join("plain"));
+    let inner = PathBuf::from(&plain.roots[0]).join("Inner.app");
+    fs::create_dir_all(&inner).unwrap();
+    let outcome = f.run(OpenWithRunParams {
+        project_id: plain.id.clone(),
+        tool: Some("finder-old".to_owned()),
+        file: Some(inner.display().to_string()),
+        ..OpenWithRunParams::default()
+    });
+    assert!(
+        matches!(
+            &outcome,
+            OpenWithOutcome::Failed {
+                problem: LaunchProblem::BundlePath { .. },
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !f.tmp.path().join("open.argv").exists(),
+        "a bundle reached open"
+    );
+    // 번들이 아닌 폴더는 그대로 넘긴다.
+    let outcome = f.run(OpenWithRunParams {
+        project_id: plain.id,
+        tool: Some("finder".to_owned()),
+        ..OpenWithRunParams::default()
+    });
+    assert!(
+        matches!(&outcome, OpenWithOutcome::Launched { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        f.received("open"),
+        [
+            "-R".to_owned(),
+            PathBuf::from(&plain.roots[0]).display().to_string()
+        ]
+    );
+}
+
+/// 상대 경로 워크트리는 Pitwall 의 cwd 기준으로 풀려 `{project_root}` 가 상대 경로가 된다 — 실제로 그 워크트리를 가리키는 상대
+/// 경로여도 거절한다.
+#[test]
+fn rejects_a_relative_worktree() {
+    let f = Fixture::new(&settings_with_tool(
+        "fake",
+        r#"["fake-tool", "{project_root}"]"#,
+        r#"["fake-tool", "{file}"]"#,
+    ));
+    f.fake_tool("fake-tool");
+    let main = f.tmp.path().join("repo");
+    fs::create_dir_all(main.join(".git/worktrees/wt")).unwrap();
+    let project = f.project(&main.join("app"));
+    let wt = f.tmp.path().join("wt");
+    fs::create_dir_all(wt.join("app")).unwrap();
+    fs::write(
+        wt.join(".git"),
+        format!("gitdir: {}\n", main.join(".git/worktrees/wt").display()),
+    )
+    .unwrap();
+    fs::write(main.join(".git/worktrees/wt/commondir"), "../..\n").unwrap();
+    let wt = fs::canonicalize(&wt).unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let up = "../".repeat(cwd.components().count() - 1);
+    let relative = format!("{up}{}", wt.display().to_string().trim_start_matches('/'));
+    assert!(Path::new(&relative).join(".git").is_file(), "{relative}");
+
+    let err = f
+        .open_with
+        .run(&OpenWithRunParams {
+            project_id: project.id.clone(),
+            tool: Some("fake".into()),
+            worktree: Some(relative.clone()),
+            ..OpenWithRunParams::default()
+        })
+        .unwrap_err();
+    assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
+    let err = f
+        .open_with
+        .list(&OpenWithListParams {
+            project_id: Some(project.id),
+            worktree: Some(relative),
+        })
+        .unwrap_err();
+    assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
 }

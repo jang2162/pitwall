@@ -65,6 +65,7 @@ open-with-failed = { $tool } 로 열지 못했다: { $reason }
 # $command: 실행한 명령줄(터미널에서 직접 해 볼 수 있게)
 open-with-command = 명령: { $command }
 open-with-dismiss = 닫기
+open-with-default-tool = 기본 외부 도구
 open-with-list-failed = 외부 도구 목록을 읽지 못했다: { $error }
 open-with-problem-unknown-tool = 이 시스템에서 쓸 수 없는 도구다
 # $message: settings.toml 의 문제
@@ -79,6 +80,8 @@ open-with-problem-not-found =
         [login] 「{ $program }」 를 로그인 셸 PATH 에서 찾지 못했다
        *[process] 「{ $program }」 를 앱의 PATH 에서 찾지 못했다(로그인 셸 PATH 를 읽지 못했다)
     }
+# $path: 번들 폴더
+open-with-problem-bundle-path = { $path } 는 앱 번들이라 「open」 이 보여 주지 않고 실행한다 — 실행하지 않았다
 # $program: 실행 파일 경로, $message: OS 오류
 open-with-problem-spawn-failed = { $program } 를 띄우지 못했다({ $message })
 # $code: 종료 코드, 신호로 끝났으면 "signal"

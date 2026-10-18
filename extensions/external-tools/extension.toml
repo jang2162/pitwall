@@ -50,8 +50,10 @@ file_command = ["cursor", "{project_root}", "-g", "{file}:{line}:{column}"]
 
 [contributes.external_tools.finder]
 label = "Finder"
-command = ["open", "{project_root}"]
-# 파일은 그 폴더를 열고 파일을 골라 둔다.
+# 폴더를 「열지」 않고 상위 폴더에서 골라 「보여 준다」(-R, 웰컴 창 「Finder 에서 보기」 와 같은 뜻). `open <폴더>` 는 이름이 `.app`
+# 등으로 끝나는 번들 폴더를 열지 않고 실행한다 — 저장소 이름이 `Tool.app` 이면 그 안의 실행 파일이 돈다. Pitwall 은 `open` 에
+# 번들 경로를 아예 넘기지 않는다(crates/pw-open-with launch.rs `is_bundle`).
+command = ["open", "-R", "{project_root}"]
 file_command = ["open", "-R", "{file}"]
 platforms = ["macos"]
 
@@ -69,6 +71,6 @@ platforms = ["linux"]
 
 [contributes.external_tools.terminal]
 label = "Terminal"
-# 그 폴더에서 새 Terminal 창을 연다.
+# 그 폴더에서 새 Terminal 창을 연다. `-a <앱>` 은 경로를 그 앱에 문서로 넘겨 번들을 실행하지 않는다(실측) — 번들 경로는 위 Finder 처럼 넘기지 않는다.
 command = ["open", "-a", "Terminal", "{project_root}"]
 platforms = ["macos"]

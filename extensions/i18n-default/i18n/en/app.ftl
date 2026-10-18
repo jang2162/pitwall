@@ -65,6 +65,7 @@ open-with-failed = Could not open with { $tool }: { $reason }
 # $command: the command line that was run, for trying it in a terminal
 open-with-command = Command: { $command }
 open-with-dismiss = Dismiss
+open-with-default-tool = the default external tool
 open-with-list-failed = Could not read the external tools: { $error }
 open-with-problem-unknown-tool = the tool is not available on this system
 # $message: what is wrong in settings.toml
@@ -79,6 +80,8 @@ open-with-problem-not-found =
         [login] “{ $program }” is not on the login shell PATH
        *[process] “{ $program }” is not on the app's PATH (the login shell PATH could not be read)
     }
+# $path: the bundle folder
+open-with-problem-bundle-path = { $path } is an app bundle, which “open” would run instead of showing — not run
 # $program: the program path; $message: the OS error
 open-with-problem-spawn-failed = { $program } could not start ({ $message })
 # $code: the exit code, or "signal" when a signal ended it

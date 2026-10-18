@@ -54,6 +54,8 @@ export function appStrings(t: Translate) {
       failed: (tool: string, reason: string) => t("open-with-failed", { tool, reason }),
       command: (command: string) => t("open-with-command", { command }),
       dismiss: t("open-with-dismiss"),
+      /** 도구를 고르지 않고(⌘⌥E) 실행이 오류로 끝났을 때 도구 이름 자리. */
+      defaultTool: t("open-with-default-tool"),
       listFailed: (error: string) => t("open-with-list-failed", { error }),
       problem: {
         unknownTool: t("open-with-problem-unknown-tool"),
@@ -64,6 +66,7 @@ export function appStrings(t: Translate) {
         /** `source`: 찾아본 PATH 가 로그인 셸의 것(`login`)인가 앱 프로세스의 것(`process`)인가. */
         notFound: (program: string, source: "login" | "process") =>
           t("open-with-problem-not-found", { program, source }),
+        bundlePath: (path: string) => t("open-with-problem-bundle-path", { path }),
         spawnFailed: (program: string, message: string) =>
           t("open-with-problem-spawn-failed", { program, message }),
         /** `code`: 종료 코드, 신호로 끝났으면 `"signal"`. */

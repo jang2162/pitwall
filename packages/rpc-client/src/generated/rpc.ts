@@ -57,7 +57,7 @@ export type UnaryMethods = {
 	"openWith.list": { params: OpenWithListParams; result: OpenWithList };
 	/**
 	 * 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는
-	 * 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
+	 * 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
 	 */
 	"openWith.run": { params: OpenWithRunParams; result: OpenWithOutcome };
 	/**
@@ -151,7 +151,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"keymap.list": {"name":"keymap.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"KeymapList","doc":" 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.\n","mcp":false},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n","mcp":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false},
-	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false},
+	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":false},
 	"project.create": {"name":"project.create","kind":"unary","tier":"write","roles":["owner"],"params":"CreateProjectParams","output":"Project","doc":" 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.\n","mcp":false},
 	"project.delete": {"name":"project.delete","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"()","doc":" 레지스트리에서 지운다. 프로젝트 폴더와 설정 파일은 그대로 둔다.\n","mcp":false},
@@ -470,6 +470,8 @@ export type LaunchProblem =
 { kind: "notFound"; program: string; loginShellPath: boolean } | 
 /**  실행 파일을 띄우지 못했다(권한 등). */
 { kind: "spawnFailed"; program: string; message: string } | 
+/**  `open`(macOS LaunchServices)에 번들 폴더(`*.app` 등)를 넘기려 했다 — `open` 은 번들을 열지 않고 실행하므로 띄우지 않았다. */
+{ kind: "bundlePath"; path: string } | 
 /**  띄운 런처가 곧바로 0 이 아닌 코드로 끝났다. 신호로 끝났으면 `code` 가 없다. */
 { kind: "exited"; code: number | null };
 
@@ -518,7 +520,7 @@ export type OpenWithList = {
 export type OpenWithListParams = {
 	/**  있으면 그 프로젝트의 설정(`[open_with] default`)까지 보고 기본 도구를 고른다. */
 	projectId?: string | null,
-	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`). 그 워크트리의 `.local.toml` 을 읽는다. */
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리의 `.local.toml` 을 읽는다. */
 	worktree?: string | null,
 };
 
@@ -536,7 +538,7 @@ export type OpenWithRunParams = {
 	projectId: string,
 	/**  없으면 기본 도구. 기본 도구가 없으면 `noDefault` 로 끝난다(창은 「다음에서 열기」 팝업을 연다). */
 	tool?: string | null,
-	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`). `{project_root}` 와 작업 디렉터리가 그 워크트리 안의 프로젝트 루트가 된다. */
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). `{project_root}` 와 작업 디렉터리가 그 워크트리 안의 프로젝트 루트가 된다. */
 	worktree?: string | null,
 	/**  열 파일의 절대 경로. 있으면 도구의 `file_command` 를 쓴다(없으면 `command`). */
 	file?: string | null,

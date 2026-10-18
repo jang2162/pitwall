@@ -26,7 +26,9 @@ use pw_rpc::{RpcError, code};
 use pw_runtime::{LOGIN_PATH, LoginPath, PathSource, ResolvedPath};
 
 use crate::context::OpenContext;
-use crate::launch::{EARLY_EXIT, Spawned, find_program, spawn_detached};
+use crate::launch::{
+    EARLY_EXIT, Spawned, find_program, is_bundle, is_launch_services_open, spawn_detached,
+};
 use crate::methods::{
     DefaultToolInfo, ExternalToolInfo, LaunchProblem, OpenWithList, OpenWithListParams,
     OpenWithOutcome, OpenWithRunParams,
@@ -186,6 +188,12 @@ impl OpenWith {
             let root = project.root().to_path_buf();
             return Ok((project, root));
         };
+        // 상대 경로면 Pitwall 의 cwd 기준으로 풀려 `{project_root}` 가 상대 경로가 된다(04 F8 「절대 경로」).
+        if !Path::new(top).is_absolute() {
+            return Err(RpcError::invalid_params(format!(
+                "worktree `{top}` must be an absolute path"
+            )));
+        }
         let root = linked_worktree(Path::new(top)).and_then(|link| {
             let rel = project.root().strip_prefix(&link.main_top).ok()?;
             Some(link.worktree_top.join(rel))
@@ -329,6 +337,26 @@ impl OpenWith {
                 },
             );
         };
+        // `open` 은 번들 폴더를 열지 않고 실행한다 — 저장소 이름이 `Tool.app` 이면 클론해 열기만 했는데 그 안의 실행 파일이 돈다.
+        // 사용자가 Finder 명령을 옛 형태(`open {project_root}`)로 덮어써도 여기서 막는다(launch.rs `is_bundle`).
+        if is_launch_services_open(&program) {
+            let used = |var: &str| template.iter().any(|e| e.contains(var));
+            let bundle = [
+                (used("{project_root}"), Some(&ctx.project_root)),
+                (used("{file}"), ctx.file.as_ref()),
+            ]
+            .into_iter()
+            .find_map(|(used, path)| path.filter(|p| used && is_bundle(p)));
+            if let Some(path) = bundle {
+                return failed(
+                    &tool.label,
+                    argv.clone(),
+                    LaunchProblem::BundlePath {
+                        path: path.display().to_string(),
+                    },
+                );
+            }
+        }
         let mut launched_argv = vec![program.display().to_string()];
         launched_argv.extend_from_slice(&argv[1..]);
         match spawn_detached(

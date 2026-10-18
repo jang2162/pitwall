@@ -40,6 +40,8 @@ export function describeProblem(T: Strings, problem: LaunchProblem): string {
       return T.problem.notFound(problem.program, problem.loginShellPath ? "login" : "process");
     case "spawnFailed":
       return T.problem.spawnFailed(problem.program, problem.message);
+    case "bundlePath":
+      return T.problem.bundlePath(problem.path);
     case "exited":
       return T.problem.exited(problem.code === null ? "signal" : String(problem.code));
   }
@@ -132,7 +134,7 @@ export function useOpenWith({
         })
         .catch((e: unknown) => {
           console.warn(LOG, "openWith.run failed", e);
-          onError(latest.current.T.failed(tool ?? "?", errorText(e)));
+          onError(latest.current.T.failed(tool ?? latest.current.T.defaultTool, errorText(e)));
           return undefined;
         });
       if (outcome) handle(outcome, forTarget);
