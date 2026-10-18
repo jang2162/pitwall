@@ -416,10 +416,10 @@ mod tests {
         assert_eq!(valid_runs(&runs), 1);
     }
 
-    /// 06 의 300MB 는 10^6 바이트 단위다 — 300 MiB(314.6 × 10^6)는 넘은 것으로 본다.
+    /// 06 의 300MB 는 10^6 바이트 단위다 — 300 × 10^6 과 300 MiB(314.6 × 10^6) 사이의 값은 넘은 것으로 본다.
     #[test]
     fn the_memory_target_is_in_decimal_megabytes() {
-        let runs = [run(0, false, 500.0, 300 * 1024 * 1024)];
+        let runs = [run(0, false, 500.0, 305_000_000)];
         assert_eq!(
             targets(&summarize_runs(&runs)).idle_footprint_met,
             Some(false)
