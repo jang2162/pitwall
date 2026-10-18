@@ -13,6 +13,7 @@ pub mod merge;
 pub mod methods;
 pub mod migrate;
 pub mod paths;
+mod robust;
 mod source;
 mod store;
 

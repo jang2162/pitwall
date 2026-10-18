@@ -528,7 +528,7 @@ fn list(
             if name.starts_with('.') {
                 continue;
             }
-            match fs::metadata(item.path()) {
+            match super::robust::retrying(|| fs::metadata(item.path())) {
                 Ok(meta) if meta.is_file() => {}
                 Ok(_) => continue,
                 Err(e)
@@ -565,10 +565,11 @@ fn list(
 }
 
 fn read_doc(path: &Path) -> Result<DocumentMut, ConfigError> {
-    let text = fs::read_to_string(path).map_err(|e| ConfigError::Io {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
+    let text =
+        super::robust::retrying(|| fs::read_to_string(path)).map_err(|e| ConfigError::Io {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })?;
     text.parse()
         .map_err(|e: toml_edit::TomlError| ConfigError::Parse {
             path: path.to_path_buf(),

@@ -245,7 +245,7 @@ fn migrate_file_with(
         path: path.to_path_buf(),
         error,
     };
-    let original = fs::read_to_string(path).map_err(io)?;
+    let original = super::robust::retrying(|| fs::read_to_string(path)).map_err(io)?;
     let mut doc: DocumentMut =
         original
             .parse()
@@ -334,8 +334,9 @@ fn write_backup(dir: &Path, rel: &Path, version: u32, contents: &str) -> std::io
 pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    let target = fs::canonicalize(path)?;
-    let permissions = fs::metadata(&target)?.permissions();
+    // 다른 로더가 같은 파일을 바꿔 끼우는 순간이면 Windows 에서 잠깐 「없음」 · 접근 거부가 난다(`robust`).
+    let target = super::robust::retrying(|| fs::canonicalize(path))?;
+    let permissions = super::robust::retrying(|| fs::metadata(&target))?.permissions();
     let name = target
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -365,7 +366,7 @@ pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
             .and_then(|()| fs::set_permissions(&tmp, permissions.clone()))
             .and_then(|()| {
                 drop(file);
-                fs::rename(&tmp, &target)
+                super::robust::retrying(|| fs::rename(&tmp, &target))
             });
         if written.is_err() {
             let _ = fs::remove_file(&tmp);
