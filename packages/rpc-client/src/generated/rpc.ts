@@ -52,6 +52,15 @@ export type UnaryMethods = {
 	 */
 	"log.write": { params: UiLogBatch; result: null };
 	/**
+	 * 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.
+	 */
+	"openWith.list": { params: OpenWithListParams; result: OpenWithList };
+	/**
+	 * 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는
+	 * 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
+	 */
+	"openWith.run": { params: OpenWithRunParams; result: OpenWithOutcome };
+	/**
 	 * 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).
 	 * 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.
 	 */
@@ -141,6 +150,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"keymap.get": {"name":"keymap.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"KeymapGetParams","output":"KeymapFile","doc":" 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.\n","mcp":false},
 	"keymap.list": {"name":"keymap.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"KeymapList","doc":" 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.\n","mcp":false},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n","mcp":false},
+	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false},
+	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":false},
 	"project.create": {"name":"project.create","kind":"unary","tier":"write","roles":["owner"],"params":"CreateProjectParams","output":"Project","doc":" 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.\n","mcp":false},
 	"project.delete": {"name":"project.delete","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"()","doc":" 레지스트리에서 지운다. 프로젝트 폴더와 설정 파일은 그대로 둔다.\n","mcp":false},
@@ -289,6 +300,13 @@ export type CreateProjectParams = {
 	tags?: string[] | null,
 };
 
+/**  기본 도구. */
+export type DefaultToolInfo = { kind: "tool"; id: string } | 
+/**  프로젝트 · 전역 설정 어디에도 `open_with.default` 가 없다. */
+{ kind: "unset" } | 
+/**  고른 도구가 이 OS 의 목록에 없다. */
+{ kind: "unknown"; id: string };
+
 export type DemoTaskParams = {
 	steps: number,
 	intervalMs: number,
@@ -338,6 +356,19 @@ export type ExtensionList = {
 	extensions: ExtensionInfo[],
 	/**  읽는 중에 나온 오류 · 경고. 오류가 있는 확장은 `extensions` 에 없다. */
 	diagnostics: ExtensionDiagnostic[],
+};
+
+export type ExternalToolInfo = {
+	id: string,
+	label: string,
+	/**  기여한 확장의 id. 전역 설정에서만 정의한 도구면 `null`. */
+	extension: string | null,
+	/**  전역 설정(`[open_with.tools.<id>]`)이 고쳤거나 더했는가. */
+	fromSettings: boolean,
+	/**  파일까지 여는 명령(`file_command`)이 있는가. */
+	opensFiles: boolean,
+	/**  설정 형식 오류. 있으면 실행하지 않는다(실행하면 `invalidTool` 로 끝난다). */
+	problem: string | null,
 };
 
 export type HostInfo = {
@@ -425,6 +456,23 @@ export type LanguageInfo = {
 	extension: string,
 };
 
+/**  실행하지 못한 이유. 화면은 `kind` 로 번역된 문장을 고른다. */
+export type LaunchProblem = 
+/**  이 OS 의 목록에 없는 도구 id. */
+{ kind: "unknownTool" } | 
+/**  설정 형식 오류(`ExternalToolInfo.problem`). */
+{ kind: "invalidTool"; message: string } | 
+/**  명령이 쓰는 변수에 이 문맥의 값이 없다(중괄호 없는 이름, 예: `branch`). */
+{ kind: "missingVariable"; variable: string } | 
+/**  프로젝트 루트(작업 디렉터리)가 없다. */
+{ kind: "projectRootMissing"; path: string } | 
+/**  실행 파일을 찾지 못했다. `loginShellPath` 는 찾아본 PATH 가 로그인 셸의 것인가(아니면 앱 프로세스의 것). */
+{ kind: "notFound"; program: string; loginShellPath: boolean } | 
+/**  실행 파일을 띄우지 못했다(권한 등). */
+{ kind: "spawnFailed"; program: string; message: string } | 
+/**  띄운 런처가 곧바로 0 이 아닌 코드로 끝났다. 신호로 끝났으면 `code` 가 없다. */
+{ kind: "exited"; code: number | null };
+
 export type LayerOrigin = "builtin" | 
 /**  `<id>.toml` — 커밋되는 공유 설정(전역이면 그냥 설정 파일). */
 "shared" | 
@@ -459,6 +507,41 @@ export type NotificationMessage = {
 	jsonrpc: JsonRpcVersion,
 	method: string,
 	params: JsonValue,
+};
+
+export type OpenWithList = {
+	/**  이 OS 에서 쓸 수 있는 도구(`platforms` 로 거른 것). 확장 순서, 그 뒤에 설정에서만 정의한 도구. */
+	tools: ExternalToolInfo[],
+	default: DefaultToolInfo,
+};
+
+export type OpenWithListParams = {
+	/**  있으면 그 프로젝트의 설정(`[open_with] default`)까지 보고 기본 도구를 고른다. */
+	projectId?: string | null,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`). 그 워크트리의 `.local.toml` 을 읽는다. */
+	worktree?: string | null,
+};
+
+export type OpenWithOutcome = { kind: "launched"; tool: string; label: string; 
+/**  띄운 argv(첫 요소는 찾은 실행 파일의 절대 경로). */
+argv: string[]; pid: number } | { kind: "failed"; tool: string; 
+/**  목록에 없는 도구면 id. */
+label: string; 
+/**  치환까지 마친 argv. 치환 전에 실패했으면 비어 있다. */
+argv: string[]; problem: LaunchProblem } | 
+/**  도구를 고르지 않았고 기본 도구도 없다. `configured` 는 설정이 고른, 이 OS 에 없는 도구. */
+{ kind: "noDefault"; configured: string | null };
+
+export type OpenWithRunParams = {
+	projectId: string,
+	/**  없으면 기본 도구. 기본 도구가 없으면 `noDefault` 로 끝난다(창은 「다음에서 열기」 팝업을 연다). */
+	tool?: string | null,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`). `{project_root}` 와 작업 디렉터리가 그 워크트리 안의 프로젝트 루트가 된다. */
+	worktree?: string | null,
+	/**  열 파일의 절대 경로. 있으면 도구의 `file_command` 를 쓴다(없으면 `command`). */
+	file?: string | null,
+	line?: number | null,
+	column?: number | null,
 };
 
 export type PathParams = {

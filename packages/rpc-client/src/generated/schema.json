@@ -1052,6 +1052,438 @@
       ],
       "tier": "write"
     },
+    "openWith.list": {
+      "description": "이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "default": null,
+            "description": "있으면 그 프로젝트의 설정(`[open_with] default`)까지 보고 기본 도구를 고른다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`). 그 워크트리의 `.local.toml` 을 읽는다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DefaultToolInfo": {
+            "description": "기본 도구.",
+            "oneOf": [
+              {
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "tool",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트 · 전역 설정 어디에도 `open_with.default` 가 없다.",
+                "properties": {
+                  "kind": {
+                    "const": "unset",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "고른 도구가 이 OS 의 목록에 없다.",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "unknown",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "ExternalToolInfo": {
+            "properties": {
+              "extension": {
+                "description": "기여한 확장의 id. 전역 설정에서만 정의한 도구면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fromSettings": {
+                "description": "전역 설정(`[open_with.tools.<id>]`)이 고쳤거나 더했는가.",
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "opensFiles": {
+                "description": "파일까지 여는 명령(`file_command`)이 있는가.",
+                "type": "boolean"
+              },
+              "problem": {
+                "description": "설정 형식 오류. 있으면 실행하지 않는다(실행하면 `invalidTool` 로 끝난다).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "extension",
+              "fromSettings",
+              "opensFiles",
+              "problem"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "default": {
+            "$ref": "#/$defs/DefaultToolInfo"
+          },
+          "tools": {
+            "description": "이 OS 에서 쓸 수 있는 도구(`platforms` 로 거른 것). 확장 순서, 그 뒤에 설정에서만 정의한 도구.",
+            "items": {
+              "$ref": "#/$defs/ExternalToolInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tools",
+          "default"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "openWith.run": {
+      "description": "프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "column": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "file": {
+            "default": null,
+            "description": "열 파일의 절대 경로. 있으면 도구의 `file_command` 를 쓴다(없으면 `command`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "tool": {
+            "default": null,
+            "description": "없으면 기본 도구. 기본 도구가 없으면 `noDefault` 로 끝난다(창은 「다음에서 열기」 팝업을 연다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`). `{project_root}` 와 작업 디렉터리가 그 워크트리 안의 프로젝트 루트가 된다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LaunchProblem": {
+            "description": "실행하지 못한 이유. 화면은 `kind` 로 번역된 문장을 고른다.",
+            "oneOf": [
+              {
+                "description": "이 OS 의 목록에 없는 도구 id.",
+                "properties": {
+                  "kind": {
+                    "const": "unknownTool",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 형식 오류(`ExternalToolInfo.problem`).",
+                "properties": {
+                  "kind": {
+                    "const": "invalidTool",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "명령이 쓰는 변수에 이 문맥의 값이 없다(중괄호 없는 이름, 예: `branch`).",
+                "properties": {
+                  "kind": {
+                    "const": "missingVariable",
+                    "type": "string"
+                  },
+                  "variable": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "variable"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트 루트(작업 디렉터리)가 없다.",
+                "properties": {
+                  "kind": {
+                    "const": "projectRootMissing",
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "실행 파일을 찾지 못했다. `loginShellPath` 는 찾아본 PATH 가 로그인 셸의 것인가(아니면 앱 프로세스의 것).",
+                "properties": {
+                  "kind": {
+                    "const": "notFound",
+                    "type": "string"
+                  },
+                  "loginShellPath": {
+                    "type": "boolean"
+                  },
+                  "program": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "program",
+                  "loginShellPath"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "실행 파일을 띄우지 못했다(권한 등).",
+                "properties": {
+                  "kind": {
+                    "const": "spawnFailed",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "program": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "program",
+                  "message"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "띄운 런처가 곧바로 0 이 아닌 코드로 끝났다. 신호로 끝났으면 `code` 가 없다.",
+                "properties": {
+                  "code": {
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "const": "exited",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "code"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "properties": {
+              "argv": {
+                "description": "띄운 argv(첫 요소는 찾은 실행 파일의 절대 경로).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "launched",
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tool": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tool",
+              "label",
+              "argv",
+              "pid"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "argv": {
+                "description": "치환까지 마친 argv. 치환 전에 실패했으면 비어 있다.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "failed",
+                "type": "string"
+              },
+              "label": {
+                "description": "목록에 없는 도구면 id.",
+                "type": "string"
+              },
+              "problem": {
+                "$ref": "#/$defs/LaunchProblem"
+              },
+              "tool": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tool",
+              "label",
+              "argv",
+              "problem"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "도구를 고르지 않았고 기본 도구도 없다. `configured` 는 설정이 고른, 이 OS 에 없는 도구.",
+            "properties": {
+              "configured": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "noDefault",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "configured"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
     "project.candidates": {
       "description": "경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.",
       "kind": "unary",

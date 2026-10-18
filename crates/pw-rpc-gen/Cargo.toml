@@ -12,6 +12,7 @@ pw-core = { path = "../pw-core" }
 pw-diag = { path = "../pw-diag" }
 pw-ext = { path = "../pw-ext" }
 pw-i18n = { path = "../pw-i18n" }
+pw-open-with = { path = "../pw-open-with" }
 pw-rpc = { path = "../pw-rpc" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

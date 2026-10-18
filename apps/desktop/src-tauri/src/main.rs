@@ -8,6 +8,7 @@ use pw_core::{HostRouter, LocalHost, Scope};
 use pw_diag::Diagnostics;
 use pw_ext::{LoadOptions, Registry};
 use pw_i18n::I18n;
+use pw_open_with::{HostParts, OpenWith};
 use tauri::Manager as _;
 
 mod cli;
@@ -35,14 +36,25 @@ fn local_host(
     i18n: Arc<I18n>,
 ) -> LocalHost {
     let methods = Arc::clone(&i18n);
+    let open_with = Arc::new(OpenWith::new(Arc::clone(&extensions)));
+    let open_with_methods = Arc::clone(&open_with);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
         .methods(move |router| pw_ext::methods::register(router, extensions))
         .methods(move |router| pw_i18n::methods::register(router, methods))
+        .methods(move |router| pw_open_with::methods::register(router, open_with_methods))
         .build();
     if let Some(config) = host.config() {
         i18n.attach_config(config.global.clone());
+        // 외부 도구 실행(⌥F1 · ⌘⌥E)이 전역 설정 · 프로젝트 레지스트리를 쓴다. 로그인 셸 PATH 는 처음 쓸 때 가져온다 — 시작을 늦추지 않는다.
+        if let Some(projects) = host.registry() {
+            open_with.attach(HostParts {
+                paths: config.paths.clone(),
+                global: config.global.clone(),
+                projects: projects.clone(),
+            });
+        }
     }
     host
 }

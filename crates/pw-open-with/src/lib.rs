@@ -1,0 +1,392 @@
+//! 외부 도구로 열기(`docs/design/04-features.md` F8-1 · F8-2 · F8-4).
+//!
+//! - [`tools`]: 확장의 외부 도구 위에 전역 설정을 덮은 이 OS 의 목록, 기본 도구 고르기(프로젝트 설정은 고르기만 한다).
+//! - [`context`]: 템플릿 변수의 값(활성 워크트리 기준 프로젝트 루트, 파일 · 줄 · 열, 브랜치).
+//! - [`launch`]: 실행 파일 찾기(로그인 셸 PATH, `crates/pw-runtime`)와 셸 없는 떼어 띄우기.
+//! - [`methods`]: `openWith.list` · `openWith.run` RPC.
+//!
+//! 명령 형식(argv 배열, 첫 요소에 변수 금지, `command` · `file_command`)은 `pw_ext::template`.
+
+pub mod context;
+pub mod launch;
+pub mod methods;
+pub mod tools;
+
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+use pw_core::config::gitdir::linked_worktree;
+use pw_core::config::{AppPaths, ConfigStore};
+use pw_core::registry::{Project, Registry as Projects, RegistryError};
+use pw_ext::Registry;
+use pw_ext::template::{SubstituteError, substitute};
+use pw_rpc::{RpcError, code};
+use pw_runtime::{LOGIN_PATH, LoginPath, PathSource, ResolvedPath};
+
+use crate::context::OpenContext;
+use crate::launch::{EARLY_EXIT, Spawned, find_program, spawn_detached};
+use crate::methods::{
+    DefaultToolInfo, ExternalToolInfo, LaunchProblem, OpenWithList, OpenWithListParams,
+    OpenWithOutcome, OpenWithRunParams,
+};
+use crate::tools::{DefaultTool, SETTINGS_KEY, Tool};
+
+/// Host 를 만든 뒤에 붙이는 것(Host 의 메서드는 Host 를 만드는 중에 붙으므로).
+#[derive(Clone)]
+pub struct HostParts {
+    pub paths: AppPaths,
+    /// 전역 설정(`$CONFIG/settings.toml` · `settings.local.toml`).
+    pub global: ConfigStore,
+    pub projects: Projects,
+}
+
+/// 실행 파일을 찾을 PATH.
+pub enum PathProvider {
+    /// 로그인 셸에서 한 번 가져온 것(앱).
+    Login(&'static LoginPath),
+    /// 정해진 값(시험).
+    Fixed(ResolvedPath),
+}
+
+impl PathProvider {
+    fn get(&self) -> &ResolvedPath {
+        match self {
+            PathProvider::Login(login) => login.get(),
+            PathProvider::Fixed(path) => path,
+        }
+    }
+}
+
+pub struct OpenWith {
+    extensions: Arc<Registry>,
+    host: OnceLock<HostParts>,
+    path: PathProvider,
+    early_exit: Duration,
+}
+
+impl OpenWith {
+    pub fn new(extensions: Arc<Registry>) -> Self {
+        Self {
+            extensions,
+            host: OnceLock::new(),
+            path: PathProvider::Login(&LOGIN_PATH),
+            early_exit: EARLY_EXIT,
+        }
+    }
+
+    #[must_use]
+    pub fn with_path(mut self, path: PathProvider) -> Self {
+        self.path = path;
+        self
+    }
+
+    #[must_use]
+    pub fn with_early_exit(mut self, early_exit: Duration) -> Self {
+        self.early_exit = early_exit;
+        self
+    }
+
+    /// 두 번째부터는 무시한다.
+    pub fn attach(&self, parts: HostParts) {
+        let _ = self.host.set(parts);
+    }
+
+    /// 로그인 셸 PATH 가져오기를 백그라운드로 시작한다(이미 했으면 아무것도 하지 않는다).
+    pub fn prefetch_path(&self) {
+        if let PathProvider::Login(login) = self.path {
+            login.prefetch();
+        }
+    }
+
+    fn host(&self) -> Result<&HostParts, RpcError> {
+        self.host
+            .get()
+            .ok_or_else(|| RpcError::internal("open with is not attached to a host config"))
+    }
+
+    fn tools(&self, host: &HostParts) -> Vec<Tool> {
+        let snapshot = host.global.snapshot();
+        let mut warnings = Vec::new();
+        let list = tools::tools(
+            &self.extensions,
+            snapshot.get("settings", SETTINGS_KEY),
+            tools::current_platform(),
+            &mut warnings,
+        );
+        for w in warnings {
+            tracing::warn!(target: "pw_open_with", "settings: {w}");
+        }
+        list
+    }
+
+    /// 프로젝트 설정의 `open_with.default`. 디스크에 쓰지 않고 읽는다 — 열기만 했다고 커밋된 `.pitwall/project.toml` 이
+    /// 마이그레이션되면 안 된다. 읽지 못하면 경고하고 없는 것으로 본다(전역 기본값을 쓴다).
+    fn project_default(
+        host: &HostParts,
+        project: &Project,
+        root: &Path,
+    ) -> Option<serde_json::Value> {
+        let source = match project.config_source(&host.paths, root) {
+            Ok(source) => source.without_writes(),
+            Err(e) => {
+                tracing::warn!(target: "pw_open_with", %e, project = %project.id, "cannot read the project config");
+                return None;
+            }
+        };
+        let snapshot = match source.load() {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                tracing::warn!(target: "pw_open_with", %e, project = %project.id, "cannot read the project config; using the global default tool");
+                return None;
+            }
+        };
+        if snapshot.get("project", "open_with.tools").is_some() {
+            tracing::warn!(
+                target: "pw_open_with",
+                project = %project.id,
+                "`[open_with.tools]` in a project config is ignored: project settings can only pick the default among registered tools"
+            );
+        }
+        snapshot.get("project", "open_with.default").cloned()
+    }
+
+    fn default_tool(
+        &self,
+        host: &HostParts,
+        project: Option<(&Project, &Path)>,
+        tools: &[Tool],
+    ) -> DefaultTool {
+        let project_default = project.and_then(|(p, root)| Self::project_default(host, p, root));
+        let global = host.global.snapshot();
+        let mut warnings = Vec::new();
+        let picked = tools::default_tool(
+            project_default.as_ref(),
+            global.get("settings", "open_with.default"),
+            tools,
+            &mut warnings,
+        );
+        for w in warnings {
+            tracing::warn!(target: "pw_open_with", "{w}");
+        }
+        picked
+    }
+
+    /// 프로젝트와, 활성 워크트리가 있으면 그 워크트리 안의 프로젝트 루트(`ActiveWorktree::root` 와 같은 계산). `worktree` 는
+    /// 창이 받은 `ActiveWorktree::top` 이다 — 그 워크트리의 메인 체크아웃 안에 프로젝트 루트가 있어야 한다(git 을 실행하지 않고
+    /// `.git` 파일 · `commondir` 로 본다, `pw_core::config::gitdir`).
+    fn project_and_root(
+        host: &HostParts,
+        id: &str,
+        worktree: Option<&str>,
+    ) -> Result<(Project, PathBuf), RpcError> {
+        let project = host.projects.get(id).map_err(registry_error)?;
+        let Some(top) = worktree else {
+            let root = project.root().to_path_buf();
+            return Ok((project, root));
+        };
+        let root = linked_worktree(Path::new(top)).and_then(|link| {
+            let rel = project.root().strip_prefix(&link.main_top).ok()?;
+            Some(link.worktree_top.join(rel))
+        });
+        match root {
+            Some(root) => Ok((project, root)),
+            None => Err(RpcError::invalid_params(format!(
+                "`{top}` is not a worktree of project `{id}`"
+            ))),
+        }
+    }
+
+    pub fn list(&self, params: &OpenWithListParams) -> Result<OpenWithList, RpcError> {
+        let host = self.host()?;
+        let tools = self.tools(host);
+        let project = match &params.project_id {
+            Some(id) => Some(Self::project_and_root(
+                host,
+                id,
+                params.worktree.as_deref(),
+            )?),
+            None => None,
+        };
+        let default = self.default_tool(
+            host,
+            project.as_ref().map(|(p, r)| (p, r.as_path())),
+            &tools,
+        );
+        Ok(OpenWithList {
+            tools: tools
+                .into_iter()
+                .map(|t| ExternalToolInfo {
+                    opens_files: t.file_command.is_some(),
+                    id: t.id,
+                    label: t.label,
+                    extension: t.extension,
+                    from_settings: t.from_settings,
+                    problem: t.problem,
+                })
+                .collect(),
+            default: match default {
+                DefaultTool::Tool(id) => DefaultToolInfo::Tool { id },
+                DefaultTool::Unset => DefaultToolInfo::Unset,
+                DefaultTool::Unknown(id) => DefaultToolInfo::Unknown { id },
+            },
+        })
+    }
+
+    pub fn run(&self, params: &OpenWithRunParams) -> Result<OpenWithOutcome, RpcError> {
+        let host = self.host()?;
+        let file = match &params.file {
+            Some(f) if !Path::new(f).is_absolute() => {
+                return Err(RpcError::invalid_params(format!(
+                    "file `{f}` must be an absolute path"
+                )));
+            }
+            f => f.as_ref().map(PathBuf::from),
+        };
+        let (project, project_root) =
+            Self::project_and_root(host, &params.project_id, params.worktree.as_deref())?;
+        let tools = self.tools(host);
+        let id = match &params.tool {
+            Some(id) => id.clone(),
+            None => match self.default_tool(host, Some((&project, &project_root)), &tools) {
+                DefaultTool::Tool(id) => id,
+                DefaultTool::Unset => return Ok(OpenWithOutcome::NoDefault { configured: None }),
+                DefaultTool::Unknown(id) => {
+                    return Ok(OpenWithOutcome::NoDefault {
+                        configured: Some(id),
+                    });
+                }
+            },
+        };
+        let failed = |label: &str, argv: Vec<String>, problem: LaunchProblem| {
+            tracing::warn!(target: "pw_open_with", tool = %id, ?argv, ?problem, "cannot open with the external tool");
+            Ok(OpenWithOutcome::Failed {
+                tool: id.clone(),
+                label: label.to_owned(),
+                argv,
+                problem,
+            })
+        };
+        let Some(tool) = tools.iter().find(|t| t.id == id) else {
+            return failed(&id, Vec::new(), LaunchProblem::UnknownTool);
+        };
+        if let Some(message) = &tool.problem {
+            return failed(
+                &tool.label,
+                Vec::new(),
+                LaunchProblem::InvalidTool {
+                    message: message.clone(),
+                },
+            );
+        }
+        let ctx = OpenContext {
+            project_root,
+            file,
+            line: params.line,
+            column: params.column,
+        };
+        let template = match (&ctx.file, &tool.file_command) {
+            (Some(_), Some(file_command)) => file_command,
+            _ => &tool.command,
+        };
+        let argv = match substitute(template, &ctx.vars()) {
+            Ok(argv) => argv,
+            Err(SubstituteError::Missing(variable)) => {
+                return failed(
+                    &tool.label,
+                    Vec::new(),
+                    LaunchProblem::MissingVariable { variable },
+                );
+            }
+            Err(SubstituteError::Invalid(message)) => {
+                return failed(
+                    &tool.label,
+                    Vec::new(),
+                    LaunchProblem::InvalidTool { message },
+                );
+            }
+        };
+        if !ctx.project_root.is_dir() {
+            return failed(
+                &tool.label,
+                argv,
+                LaunchProblem::ProjectRootMissing {
+                    path: ctx.project_root.display().to_string(),
+                },
+            );
+        }
+        let path = self.path.get();
+        let login_shell_path = matches!(path.source, PathSource::LoginShell { .. });
+        let program_name = &argv[0];
+        let Some(program) = find_program(program_name, &path.path) else {
+            return failed(
+                &tool.label,
+                argv.clone(),
+                LaunchProblem::NotFound {
+                    program: program_name.clone(),
+                    login_shell_path,
+                },
+            );
+        };
+        let mut launched_argv = vec![program.display().to_string()];
+        launched_argv.extend_from_slice(&argv[1..]);
+        match spawn_detached(
+            &program,
+            &argv[1..],
+            &ctx.project_root,
+            &path.path,
+            self.early_exit,
+        ) {
+            Ok(Spawned::Running { pid }) => {
+                tracing::info!(
+                    target: "pw_open_with",
+                    tool = %id, pid, argv = ?launched_argv, cwd = %ctx.project_root.display(),
+                    path_from_login_shell = login_shell_path,
+                    "opened with the external tool"
+                );
+                Ok(OpenWithOutcome::Launched {
+                    tool: id.clone(),
+                    label: tool.label.clone(),
+                    argv: launched_argv,
+                    pid,
+                })
+            }
+            Ok(Spawned::Exited { code, .. }) => {
+                failed(&tool.label, launched_argv, LaunchProblem::Exited { code })
+            }
+            Err(e) => failed(
+                &tool.label,
+                launched_argv,
+                LaunchProblem::SpawnFailed {
+                    program: program.display().to_string(),
+                    message: e.to_string(),
+                },
+            ),
+        }
+    }
+}
+
+fn registry_error(e: RegistryError) -> RpcError {
+    match e {
+        RegistryError::Db(_) => RpcError::internal(e.to_string()),
+        RegistryError::Unavailable(_) => {
+            RpcError::new(code::STORAGE_UNAVAILABLE, "storage unavailable")
+                .with_data(serde_json::Value::String(e.to_string()))
+        }
+        _ => RpcError::invalid_params(e.to_string()),
+    }
+}
+
+/// 시험에서 쓰는 고정 PATH.
+pub fn fixed_path(path: impl Into<OsString>) -> PathProvider {
+    PathProvider::Fixed(ResolvedPath {
+        path: path.into(),
+        source: PathSource::LoginShell {
+            shell: PathBuf::from("/bin/sh"),
+        },
+    })
+}
+
+#[cfg(all(test, unix))]
+mod tests;

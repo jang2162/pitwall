@@ -2892,6 +2892,7 @@ dependencies = [
  "pw-ext",
  "pw-i18n",
  "pw-mcp",
+ "pw-open-with",
  "pw-rpc",
  "semver",
  "serde",
@@ -3156,6 +3157,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-open-with"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "pw-core",
+ "pw-ext",
+ "pw-rpc",
+ "pw-runtime",
+ "schemars 1.2.3",
+ "semver",
+ "serde",
+ "serde_json",
+ "specta",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "pw-rpc"
 version = "0.0.0"
 dependencies = [
@@ -3176,6 +3196,7 @@ dependencies = [
  "pw-diag",
  "pw-ext",
  "pw-i18n",
+ "pw-open-with",
  "pw-rpc",
  "schemars 1.2.3",
  "serde",
@@ -3184,6 +3205,15 @@ dependencies = [
  "specta-serde",
  "specta-typescript",
  "tokio",
+]
+
+[[package]]
+name = "pw-runtime"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

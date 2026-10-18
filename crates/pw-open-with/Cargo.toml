@@ -1,0 +1,29 @@
+[package]
+name = "pw-open-with"
+description = "Pitwall open with: the external tool list, the default tool, and launching a tool on a project"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pw-core = { path = "../pw-core" }
+pw-ext = { path = "../pw-ext" }
+pw-rpc = { path = "../pw-rpc" }
+pw-runtime = { path = "../pw-runtime" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+# 실행(디스크 IO · 프로세스 · 로그인 셸 PATH 기다리기)을 블로킹 스레드로 보낸다.
+tokio = { workspace = true, features = ["rt"] }
+tracing = "0.1.44"
+
+[target."cfg(unix)".dependencies]
+# setsid(2). 버전은 데스크톱 크레이트와 같게 둔다.
+libc = "0.2.190"
+
+[dev-dependencies]
+semver = "1.0.28"
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "macros"] }
