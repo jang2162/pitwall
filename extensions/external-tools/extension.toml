@@ -11,9 +11,10 @@ license = "MIT"
 
 [contributes.external_tools.orca]
 label = "Orca"
-# Orca CLI 에는 폴더를 여는 명령이 없다. 프로젝트를 Orca 에 등록하고(repo add), 파일은 Orca 탭으로 연다.
-# 사용자가 실제 Orca 실행 명령으로 고칠 수 있다(F8 「Orca 연동 범위」).
-command = ["orca", "repo", "add", "--path", "{project_root}"]
+# Orca CLI 에는 폴더 · 워크트리를 열거나 활성화하는 명령이 없다. 프로젝트만 열 때는 Orca 를 띄우거나 앞으로 가져오기만 한다
+# (`repo add` 는 열기가 아니라 사람의 Orca 에 영구 등록을 남기고, 활성 워크트리를 별도 저장소로 등록하게 된다). 파일이 있으면
+# `file open --focus` 가 그 파일의 워크트리로 창을 옮긴다(04 F8 「Orca 연동 범위」). 사용자가 실제 Orca 실행 명령으로 고칠 수 있다.
+command = ["orca", "open"]
 file_command = [
   "orca",
   "file",
