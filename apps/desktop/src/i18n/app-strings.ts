@@ -1,4 +1,4 @@
-// 모든 창이 함께 쓰는 문자열(액션 · 액션 찾기 · 테마와 언어 고르기 · 키맵 파일 오류 · 창 제목). 내용은 Fluent 리소스
+// 모든 창이 함께 쓰는 문자열(액션 · 액션 찾기 · 테마와 언어 고르기 · 키맵 파일 오류 · 창 제목 · 다음에서 열기). 내용은 Fluent 리소스
 // (extensions/i18n-default/i18n/*/app.ftl)에 있고, 이 파일은 화면 자리와 메시지 id 를 잇는다. 여기 적은 id 가 ko · en 리소스에
 // 모두 있는지는 resources.test.ts 가 본다.
 
@@ -38,6 +38,37 @@ export function appStrings(t: Translate) {
     keymap: {
       error: (error: string) => t("keymap-file-error", { error }),
       warning: (warnings: string) => t("keymap-file-warning", { warnings }),
+    },
+    openWith: {
+      action: t("action-open-with"),
+      actionDefault: t("action-open-with-default"),
+      label: t("open-with-label"),
+      title: (project: string) => t("open-with-title", { project }),
+      placeholder: t("open-with-placeholder"),
+      empty: t("open-with-empty"),
+      loading: t("open-with-loading"),
+      defaultBadge: t("open-with-default-badge"),
+      unavailable: (reason: string) => t("open-with-unavailable", { reason }),
+      noDefault: t("open-with-no-default"),
+      unknownDefault: (tool: string) => t("open-with-unknown-default", { tool }),
+      failed: (tool: string, reason: string) => t("open-with-failed", { tool, reason }),
+      command: (command: string) => t("open-with-command", { command }),
+      dismiss: t("open-with-dismiss"),
+      listFailed: (error: string) => t("open-with-list-failed", { error }),
+      problem: {
+        unknownTool: t("open-with-problem-unknown-tool"),
+        invalidTool: (message: string) => t("open-with-problem-invalid-tool", { message }),
+        missingVariable: (variable: string) =>
+          t("open-with-problem-missing-variable", { variable }),
+        projectRootMissing: (path: string) => t("open-with-problem-project-root-missing", { path }),
+        /** `source`: 찾아본 PATH 가 로그인 셸의 것(`login`)인가 앱 프로세스의 것(`process`)인가. */
+        notFound: (program: string, source: "login" | "process") =>
+          t("open-with-problem-not-found", { program, source }),
+        spawnFailed: (program: string, message: string) =>
+          t("open-with-problem-spawn-failed", { program, message }),
+        /** `code`: 종료 코드, 신호로 끝났으면 `"signal"`. */
+        exited: (code: string) => t("open-with-problem-exited", { code }),
+      },
     },
     settings: {
       appearance: t("settings-appearance"),

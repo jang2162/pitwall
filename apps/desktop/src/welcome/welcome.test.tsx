@@ -8,6 +8,9 @@ import type {
   CreateProjectParams,
   HostInfo,
   KeymapFile,
+  OpenWithList,
+  OpenWithOutcome,
+  OpenWithRunParams,
   Project,
   Resolution,
   RootCandidate,
@@ -15,7 +18,7 @@ import type {
 } from "@pitwall/rpc-client";
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { App } from "../App";
@@ -40,6 +43,11 @@ const host = vi.hoisted(() => ({
   emitHostEvent: (_topic: string) => {},
   /** `i18n.get` 이 고른 언어. 시험은 기본으로 한국어에 고정한다(브라우저 언어에 기대지 않는다). */
   locale: "ko",
+  openWithList: { tools: [], default: { kind: "unset" } } as OpenWithList,
+  openWithRun: (_params: OpenWithRunParams): OpenWithOutcome => ({
+    kind: "noDefault",
+    configured: null,
+  }),
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -101,6 +109,10 @@ vi.mock("../tauri-transport", async () => {
             return reply([...host.projects].sort((a, b) => a.name.localeCompare(b.name)));
           case "project.storage":
             return reply(host.storage);
+          case "openWith.list":
+            return reply(host.openWithList);
+          case "openWith.run":
+            return reply(host.openWithRun(m.params as OpenWithRunParams));
           case "project.candidates":
             return reply(host.candidates);
           case "project.resolve":
@@ -209,6 +221,8 @@ beforeEach(() => {
   pathKinds = {};
   host.failWrites = undefined;
   host.locale = "ko";
+  host.openWithList = { tools: [], default: { kind: "unset" } };
+  host.openWithRun = () => ({ kind: "noDefault", configured: null });
   for (const fn of Object.values(native)) fn.mockClear();
   keymapNative.openSettings.mockClear();
   log.info.mockClear();
@@ -515,6 +529,7 @@ it("reveals and removes from the context menu, and keeps window shortcuts away w
   expect(menuItems().map((i) => i.textContent)).toEqual([
     "열기",
     "Finder 에서 보기",
+    "다음에서 열기…",
     "목록에서 제거",
   ]);
   expect(await press("KeyN", { metaKey: true })).toBe(false);
@@ -536,7 +551,7 @@ it("reveals and removes from the context menu, and keeps window shortcuts away w
   );
 
   await openMenu(rows()[2]!);
-  await act(async () => menuItems()[2]!.click());
+  await act(async () => menuItems()[3]!.click());
   await settle();
   expect(calls("project.delete").map((c) => c.params)).toEqual([{ id: "c" }]);
   expect(rowNames()).toEqual(["billing-api", "web-console"]);
@@ -783,4 +798,112 @@ it("switches the language from Find Action without remounting the window", async
   );
   expect(names).toContain("Language: 한국어");
   expect(names.some((n) => n?.startsWith("New Project"))).toBe(true);
+});
+
+describe("open with an external tool", () => {
+  const tool = (id: string, label: string, problem: string | null = null) => ({
+    id,
+    label,
+    extension: "dev.pitwall.external-tools",
+    fromSettings: false,
+    opensFiles: true,
+    problem,
+  });
+  const popupItems = () => [...document.querySelectorAll<HTMLElement>("[cmdk-dialog] [cmdk-item]")];
+  const popupText = () => document.querySelector("[cmdk-dialog]")?.textContent ?? "";
+  const alertText = () => document.querySelector('[role="alert"]')?.textContent;
+
+  beforeEach(() => {
+    host.openWithList = {
+      tools: [
+        tool("zed", "Zed"),
+        tool("idea", "IntelliJ IDEA", "`command` is empty"),
+        tool("finder", "Finder"),
+      ],
+      default: { kind: "tool", id: "finder" },
+    };
+  });
+
+  it("opens the popup from the context menu, marks the default and runs the picked tool", async () => {
+    host.openWithRun = (params) => ({
+      kind: "launched",
+      tool: params.tool ?? "?",
+      label: "Zed",
+      argv: ["/usr/local/bin/zed", "/w/infra"],
+      pid: 42,
+    });
+    await mount();
+    await act(async () =>
+      rows()[2]!.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }),
+      ),
+    );
+    await settle();
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (i) => i.textContent === "다음에서 열기…",
+    );
+    await act(async () => item!.click());
+    await settle();
+    expect(popupText()).toContain("다음에서 열기: infra");
+    // 메뉴가 닫히며 돌려놓은 포커스가 팝업의 입력 칸을 덮지 않는다.
+    expect(document.activeElement?.getAttribute("placeholder")).toBe("도구 이름");
+    expect(calls("openWith.list").map((c) => c.params)).toContainEqual({
+      projectId: "c",
+      worktree: null,
+    });
+    expect(popupItems().map((i) => i.textContent)).toEqual([
+      "Zed",
+      "IntelliJ IDEA쓸 수 없음: `command` is empty",
+      "Finder기본",
+    ]);
+    expect(popupItems()[1]!.getAttribute("data-disabled")).toBe("true");
+    // 팝업이 열린 동안 창 단축키(⌘⌥E · ⌘N)는 돌지 않는다.
+    expect(await press("KeyE", { metaKey: true, altKey: true })).toBe(false);
+    expect(await press("KeyN", { metaKey: true })).toBe(false);
+    expect(calls("openWith.run")).toEqual([]);
+    // 한글 조합을 확정하는 Enter 는 고르지 않는다.
+    await press("Enter", { isComposing: true, keyCode: 229 }, "Enter");
+    await settle();
+    expect(calls("openWith.run")).toEqual([]);
+    await press("Enter");
+    await settle();
+    expect(document.querySelector("[cmdk-dialog]")).toBeNull();
+    expect(calls("openWith.run").map((c) => c.params)).toEqual([
+      { projectId: "c", tool: "zed", worktree: null },
+    ]);
+  });
+
+  it("opens the selected project with the default tool and says why it failed", async () => {
+    host.openWithRun = () => ({
+      kind: "failed",
+      tool: "zed",
+      label: "Zed",
+      argv: ["zed", "/w/billing-api"],
+      problem: { kind: "notFound", program: "zed", loginShellPath: true },
+    });
+    await mount();
+    expect(await press("KeyE", { metaKey: true, altKey: true }, "´")).toBe(true);
+    await settle();
+    expect(calls("openWith.run").map((c) => c.params)).toEqual([
+      { projectId: "b", tool: null, worktree: null },
+    ]);
+    expect(alertText()).toBe(
+      "Zed 로 열지 못했다: 「zed」 를 로그인 셸 PATH 에서 찾지 못했다 — 명령: zed /w/billing-api",
+    );
+  });
+
+  it("asks for a tool when there is no default", async () => {
+    host.openWithRun = () => ({ kind: "noDefault", configured: "explorer" });
+    await mount();
+    await press("KeyE", { metaKey: true, altKey: true });
+    await settle();
+    expect(popupText()).toContain("기본 도구 「explorer」 는 이 시스템에서 쓸 수 없다");
+    await press("Escape");
+    await settle();
+    expect(document.querySelector("[cmdk-dialog]")).toBeNull();
+    // ⌥F1 은 고른 프로젝트로 팝업을 연다.
+    await press("F1", { altKey: true });
+    await settle();
+    expect(popupText()).toContain("다음에서 열기: billing-api");
+  });
 });

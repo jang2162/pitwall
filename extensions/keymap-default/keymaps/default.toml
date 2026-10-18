@@ -37,6 +37,20 @@ mac = "cmd+enter"
 win = "ctrl+enter"
 linux = "ctrl+enter"
 
+# 외부 도구(10-ui 「외부 도구 · 프로젝트」, 04 F8-4). 프로젝트 창과 웰컴 창(고른 프로젝트)에 등록된다.
+
+[[bindings]]
+action = "openWith.popup"
+mac = "alt+f1"
+win = "alt+f1"
+linux = "alt+f1"
+
+[[bindings]]
+action = "openWith.default"
+mac = "cmd+alt+e"
+win = "ctrl+alt+e"
+linux = "ctrl+alt+e"
+
 # 툴 윈도우 · 창
 
 [[bindings]]

@@ -2,7 +2,7 @@
 // 프로젝트 찾기(S2) → 생성 시트(S3) 흐름을 이 창이 이끈다. 네이티브와 주고받는 것은 native.ts 한 곳이다.
 //
 // 키보드: 목록은 cmdk 라 ↑↓ · Enter(열기)를 cmdk 가 받는다 — 한글 조합을 확정하는 Enter 는 열지 않는다. 나머지(새 프로젝트 ·
-// 폴더 열기 · 목록에서 제거 · 파일 관리자에서 보기)는 키맵 액션이고 기본 키는 extensions/keymap-default/keymaps/default.toml.
+// 폴더 열기 · 목록에서 제거 · 파일 관리자에서 보기 · 외부 도구로 열기)는 키맵 액션이고 기본 키는 extensions/keymap-default/keymaps/default.toml.
 // 목록에서 제거(⌘⌫)는 검색 칸이 비어 있을 때만 키를 가져간다 — 검색어를 지우려던 ⌘⌫ 가 프로젝트를 지우지 않게.
 // 클릭은 고르기만 하고 여는 것은 더블클릭이다.
 
@@ -22,7 +22,9 @@ import {
   useState,
 } from "react";
 
+import { useAppStrings } from "../i18n/app-strings";
 import { useKeymap, useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
+import { useOpenWith } from "../open-with/open-with";
 import { useHost, useRpcQuery } from "../rpc/host";
 import { rpcQueryKey } from "../rpc/queries";
 import { searchFilter } from "../ui/search-popup";
@@ -249,6 +251,16 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
     [S, platform, pickAndOpenFolder, openWindow, reveal, removeProject],
   );
   useRegisterActions(actions);
+  // 외부 도구로 열기(⌥F1 · ⌘⌥E)는 고른 프로젝트를 연다. 우클릭 메뉴는 그 줄의 프로젝트로 팝업을 연다.
+  const openWithStrings = useAppStrings().openWith;
+  const openWith = useOpenWith({
+    target: () => {
+      const p = selectedProject.current();
+      return p ? { projectId: p.id, name: p.name } : undefined;
+    },
+    onError: setError,
+  });
+  useRegisterActions(openWith.actions);
 
   // 클릭은 고르기만 한다(cmdk 는 클릭을 onSelect 로 보낸다). 키보드 Enter 의 onSelect 만 연다.
   const pointerSelect = useRef(false);
@@ -382,6 +394,15 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
                     <MenuItem onSelect={() => reveal(menuTarget)}>
                       {T.menu.reveal(platform)}
                     </MenuItem>
+                    <MenuItem
+                      onSelect={() => {
+                        const target = { projectId: menuTarget.id, name: menuTarget.name };
+                        // 메뉴가 닫히며 포커스를 목록에 돌려놓은 뒤에 연다 — 먼저 열면 팝업의 입력 칸이 포커스를 잃는다.
+                        setTimeout(() => openWith.openPopup(target), 0);
+                      }}
+                    >
+                      {openWithStrings.action}
+                    </MenuItem>
                     <ContextMenu.Separator className="my-1 h-px bg-ui-border" />
                     {/* 단축키를 적지 않는다 — 메뉴가 열린 동안은 창 단축키가 꺼져(useKeymapPopup) ⌘⌫ 가 돌지 않는다. */}
                     <MenuItem disabled={readOnly} onSelect={() => void removeProject(menuTarget)}>
@@ -434,6 +455,7 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
           {T.drop}
         </div>
       )}
+      {openWith.popup}
       {flow.kind === "find" && (
         <FindProjectPopup
           request={flow.request}

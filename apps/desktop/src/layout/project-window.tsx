@@ -29,8 +29,12 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAppStrings } from "../i18n/app-strings";
 import { toolWindowActions } from "../keymap/actions";
 import { useRegisterActions } from "../keymap/keymap-provider";
+import { activeWorktree } from "../open-with/active-worktree";
+import { type OpenWithTarget, useOpenWith } from "../open-with/open-with";
+import { projectIdFromQuery } from "../project-open";
 import { useRpcQuery } from "../rpc/host";
 import { ThemeSwitcher, useTheme } from "../theme/theme-switcher";
 import {
@@ -186,7 +190,47 @@ export function ProjectDock({
   );
 }
 
-export function ProjectWindow() {
+/** 이 창의 프로젝트를 외부 도구로 연다(⌥F1 · ⌘⌥E, open-with/open-with.tsx). 실패 문장은 상태바 위 한 줄에 둔다. */
+function ProjectOpenWith({ projectId }: { projectId: string }) {
+  const T = useAppStrings().openWith;
+  const project = useRpcQuery("project.get", { id: projectId });
+  const [error, setError] = useState<string>();
+  const target = useRef<OpenWithTarget>(undefined);
+  target.current = project.data
+    ? { projectId, name: project.data.name, worktree: activeWorktree() }
+    : undefined;
+  const { actions, popup } = useOpenWith({ target: () => target.current, onError: setError });
+  useRegisterActions(actions);
+  return (
+    <>
+      {popup}
+      {error && (
+        <div
+          role="alert"
+          className="flex flex-none items-center gap-2 border-t border-ui-accent px-2 py-0.5 text-[12px]"
+        >
+          <span className="min-w-0 flex-1 truncate" title={error}>
+            {error}
+          </span>
+          <button
+            type="button"
+            onClick={() => setError(undefined)}
+            className="flex-none text-ui-muted-foreground hover:text-ui-foreground"
+          >
+            {T.dismiss}
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+export function ProjectWindow({
+  projectId = projectIdFromQuery(window.location.search),
+}: {
+  /** 창 쿼리의 프로젝트 id(`?project=`). 없으면 외부 도구 액션이 없다. */
+  projectId?: string;
+}) {
   const [api, setApi] = useState<DockviewApi>();
   const apiRef = useRef<DockviewApi>(undefined);
   apiRef.current = api;
@@ -199,6 +243,7 @@ export function ProjectWindow() {
         <ProjectDock storage={window.localStorage} onApi={setApi} />
         <ToolWindowBar dock="right" api={api} />
       </div>
+      {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
       <StatusBar />
     </div>
   );

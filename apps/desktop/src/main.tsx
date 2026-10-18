@@ -12,6 +12,7 @@ import {
   mediaAppearance,
   tauriWindowTheme,
 } from "./theme/adapters";
+import { rememberActiveWorktree } from "./open-with/active-worktree";
 import { applyRegistryTheme } from "./theme/registry-theme";
 import { createThemeStore } from "./theme/theme-store";
 import { ThemeStoreProvider } from "./theme/theme-switcher";
@@ -32,9 +33,10 @@ log.info(`window opened: ${windowKind}`, "main");
 // 프로젝트 창이 받은 열기 요청(src-tauri/src/launch.rs · windows.rs). 받을 에디터가 생기면 그쪽으로 넘긴다.
 if (windowKind === "project") {
   log.info(`project window: ${projectIdFromQuery(window.location.search) ?? "(none)"}`, "project");
-  watchProjectOpens(tauriProjectOpenSource, (request) =>
-    log.info(`open request: ${describeOpen(request) ?? "(focus only)"}`, "project"),
-  );
+  watchProjectOpens(tauriProjectOpenSource, (request) => {
+    log.info(`open request: ${describeOpen(request) ?? "(focus only)"}`, "project");
+    rememberActiveWorktree(request);
+  });
 }
 const platform = detectPlatform(navigator.userAgent);
 installWebviewGuards(window, platform);

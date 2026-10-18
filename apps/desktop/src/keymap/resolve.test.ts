@@ -9,6 +9,7 @@ import {
 import type { ConfigView } from "@pitwall/rpc-client";
 import { describe, expect, it } from "vitest";
 
+import { openWithActions } from "../open-with/open-with";
 import { createProjectActions, welcomeActions } from "../welcome/actions";
 import { appActions, toolWindowActions } from "./actions";
 import { DEFAULT_KEYMAP_TOML } from "./default-keymap";
@@ -43,6 +44,12 @@ const ACTION_IDS = new Set(
       remove() {},
     }),
     ...createProjectActions({ strings: KO_WELCOME, canSubmit: () => true, submit() {} }),
+    ...openWithActions({
+      strings: KO_APP.openWith,
+      enabled: () => true,
+      openPopup() {},
+      openDefault() {},
+    }),
   ].map((a) => a.id),
 );
 
@@ -72,6 +79,11 @@ describe("default keymap file", () => {
     expect(label("mac", "toolWindow.terminal")).toEqual(["⌥F12"]);
     expect(label("mac", "settings.open")).toEqual(["⌘,"]);
     expect(label("win", "settings.open")).toEqual(["Ctrl+Alt+S"]);
+    // 10-ui 「외부 도구 · 프로젝트」
+    expect(label("mac", "openWith.popup")).toEqual(["⌥F1"]);
+    expect(label("win", "openWith.popup")).toEqual(["Alt+F1"]);
+    expect(label("mac", "openWith.default")).toEqual(["⌥⌘E"]);
+    expect(label("linux", "openWith.default")).toEqual(["Ctrl+Alt+E"]);
   });
 });
 
