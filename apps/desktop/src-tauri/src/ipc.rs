@@ -324,7 +324,15 @@ mod tests {
                 cmd: cmd.into(),
                 callback: CallbackFn(0),
                 error: CallbackFn(1),
-                url: "tauri://localhost".parse().unwrap(),
+                // 앱 페이지의 주소. Windows(WebView2)는 커스텀 프로토콜을 `http://tauri.localhost` 로 연다 — 다른 주소는 원격 페이지로
+                // 보아 명령 권한이 없다(`rpc_page not allowed`). Tauri `test` 모듈 문서와 같은 분기다.
+                url: if cfg!(any(windows, target_os = "android")) {
+                    "http://tauri.localhost"
+                } else {
+                    "tauri://localhost"
+                }
+                .parse()
+                .unwrap(),
                 body: InvokeBody::Json(args),
                 headers: Default::default(),
                 invoke_key: INVOKE_KEY.to_string(),

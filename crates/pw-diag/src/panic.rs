@@ -91,7 +91,12 @@ mod tests {
             "{core}"
         );
         assert!(core.contains("stack backtrace:"), "{core}");
-        assert!(core.contains("src/panic.rs:"), "{core}");
+        // 패닉 위치는 `file!()` 이라 구분자가 OS 마다 다르다(Windows 로그에는 `location="crates\\pw-diag\\src\\panic.rs:…"`).
+        assert!(
+            core.lines()
+                .any(|l| l.contains("location=") && l.contains("panic.rs:")),
+            "{core}"
+        );
         assert!(
             core.contains("panic_hook_writes_message_location_and_stack"),
             "스택에 시험 함수 프레임이 있어야 한다: {core}"
