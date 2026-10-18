@@ -44,7 +44,8 @@ const host = vi.hoisted(() => ({
   /** `i18n.get` 이 고른 언어. 시험은 기본으로 한국어에 고정한다(브라우저 언어에 기대지 않는다). */
   locale: "ko",
   openWithList: { tools: [], default: { kind: "unset" } } as OpenWithList,
-  openWithRun: (_params: OpenWithRunParams): OpenWithOutcome => ({
+  /** `null` 이면 invalid params 오류로 답한다. */
+  openWithRun: (_params: OpenWithRunParams): OpenWithOutcome | null => ({
     kind: "noDefault",
     configured: null,
   }),
@@ -111,8 +112,10 @@ vi.mock("../tauri-transport", async () => {
             return reply(host.storage);
           case "openWith.list":
             return reply(host.openWithList);
-          case "openWith.run":
-            return reply(host.openWithRun(m.params as OpenWithRunParams));
+          case "openWith.run": {
+            const outcome = host.openWithRun(m.params as OpenWithRunParams);
+            return outcome === null ? fail("unknown project") : reply(outcome);
+          }
           case "project.candidates":
             return reply(host.candidates);
           case "project.resolve":
@@ -845,8 +848,8 @@ describe("open with an external tool", () => {
     await act(async () => item!.click());
     await settle();
     expect(popupText()).toContain("다음에서 열기: infra");
-    // 팝업의 입력 칸에 포커스가 있다. happy-dom 은 메뉴가 닫히며 포커스를 되돌리는 동작을 재현하지 않아, 메뉴 뒤에 여는 지연
-    // (welcome-window.tsx 의 setTimeout)은 이 확인이 지키지 못한다.
+    // 팝업의 입력 칸에 포커스가 있다. happy-dom 은 메뉴가 닫히며 포커스를 되돌리는 동작을 재현하지 않아, 그 되돌리기를 막는
+    // 처리(welcome-window.tsx 의 onCloseAutoFocus)는 이 확인이 지키지 못한다.
     expect(document.activeElement?.getAttribute("placeholder")).toBe("도구 이름");
     expect(calls("openWith.list").map((c) => c.params)).toContainEqual({
       projectId: "c",
@@ -891,6 +894,14 @@ describe("open with an external tool", () => {
     expect(alertText()).toBe(
       "Zed 로 열지 못했다: 「zed」 를 로그인 셸 PATH 에서 찾지 못했다 — 명령: zed /w/billing-api",
     );
+  });
+
+  it("names the default tool when running it fails with an error", async () => {
+    host.openWithRun = () => null;
+    await mount();
+    await press("KeyE", { metaKey: true, altKey: true });
+    await settle();
+    expect(alertText()).toBe("기본 외부 도구 로 열지 못했다: unknown project (-32602)");
   });
 
   it("asks for a tool when there is no default", async () => {

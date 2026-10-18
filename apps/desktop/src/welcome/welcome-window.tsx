@@ -265,6 +265,7 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
   // 클릭은 고르기만 한다(cmdk 는 클릭을 onSelect 로 보낸다). 키보드 Enter 의 onSelect 만 연다.
   const pointerSelect = useRef(false);
   const [menuTarget, setMenuTarget] = useState<Project>();
+  const keepFocusOnClose = useRef(false);
   const onContextMenu = (e: MouseEvent) => {
     const id = (e.target as Element).closest("[cmdk-item]")?.getAttribute("data-value");
     const project = id ? byId(id) : undefined;
@@ -385,7 +386,15 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
               </div>
             </ContextMenu.Trigger>
             <ContextMenu.Portal>
-              <ContextMenu.Content className="min-w-[180px] rounded-md border border-ui-border bg-ui-panel py-1 text-ui-foreground shadow-lg">
+              <ContextMenu.Content
+                onCloseAutoFocus={(e) => {
+                  // 「다음에서 열기…」 는 팝업을 띄운다 — 메뉴가 닫히며 포커스를 목록에 돌려놓으면 팝업 입력 칸의 포커스를 뺏는다.
+                  // 그 항목일 때만 되돌리기를 막는다(다른 항목은 목록으로 돌아가야 키로 이어 다룬다).
+                  if (keepFocusOnClose.current) e.preventDefault();
+                  keepFocusOnClose.current = false;
+                }}
+                className="min-w-[180px] rounded-md border border-ui-border bg-ui-panel py-1 text-ui-foreground shadow-lg"
+              >
                 {menuTarget && (
                   <>
                     <MenuItem onSelect={() => void openWindow({ projectId: menuTarget.id })}>
@@ -396,9 +405,8 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
                     </MenuItem>
                     <MenuItem
                       onSelect={() => {
-                        const target = { projectId: menuTarget.id, name: menuTarget.name };
-                        // 메뉴가 닫히며 포커스를 목록에 돌려놓은 뒤에 연다 — 먼저 열면 팝업의 입력 칸이 포커스를 잃는다.
-                        setTimeout(() => openWith.openPopup(target), 0);
+                        keepFocusOnClose.current = true;
+                        openWith.openPopup({ projectId: menuTarget.id, name: menuTarget.name });
                       }}
                     >
                       {openWithStrings.action}
