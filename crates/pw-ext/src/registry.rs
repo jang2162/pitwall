@@ -639,6 +639,12 @@ mod tests {
         ExtensionRoot::Dir(root)
     }
 
+    /// 진단에 나오는 파일 경로: 확장 폴더 + 매니페스트의 상대 경로([`ExtensionRoot::display`] 와 같은 꼴). Windows 에서는
+    /// 확장 폴더 뒤만 `\` 이고 상대 경로 안은 `/` 다 — `dir.join("x/a/b")` 로 쓰면 `x` 뒤 구분자가 달라진다.
+    fn shown(dir: &Path, folder: &str, rel: &str) -> PathBuf {
+        dir.join(folder).join(rel)
+    }
+
     fn manifest(id: &str, engine: &str, body: &str) -> String {
         format!(
             "id = \"{id}\"\nname = \"N\"\nversion = \"1.0.0\"\nengines = {{ pitwall = \"{engine}\" }}\n{body}"
@@ -748,7 +754,7 @@ mod tests {
             .map(|e| e.manifest.id.as_str())
             .collect();
         assert_eq!(ids, ["dev.example.fine"]);
-        let file = dir.path().join("broken/i18n/ko-kp/app.ftl");
+        let file = shown(dir.path(), "broken", "i18n/ko-kp/app.ftl");
         let messages = messages(&registry);
         assert_eq!(messages.len(), 1, "{messages:?}");
         assert!(
@@ -789,9 +795,9 @@ mod tests {
         );
         let registry = Registry::from_roots(&engine(), [twice, empty]);
         assert!(registry.extensions().is_empty());
-        let a = dir.path().join("twice/i18n/ko-kp/a.ftl");
-        let b = dir.path().join("twice/i18n/ko-kp/b.ftl");
-        let manifest_file = dir.path().join("empty/extension.toml");
+        let a = shown(dir.path(), "twice", "i18n/ko-kp/a.ftl");
+        let b = shown(dir.path(), "twice", "i18n/ko-kp/b.ftl");
+        let manifest_file = shown(dir.path(), "empty", "extension.toml");
         assert_eq!(
             messages(&registry),
             [
@@ -911,7 +917,7 @@ mod tests {
         );
         let registry = Registry::from_roots(&engine(), [root]);
         assert!(registry.extensions().is_empty());
-        let file = dir.path().join("next/extension.toml");
+        let file = shown(dir.path(), "next", "extension.toml");
         assert_eq!(
             messages(&registry),
             [format!(
@@ -951,9 +957,7 @@ mod tests {
         );
         let registry = Registry::from_roots(&engine(), [root]);
         assert!(registry.extensions().is_empty());
-        let file = dir
-            .path()
-            .join("broken/extension.toml")
+        let file = shown(dir.path(), "broken", "extension.toml")
             .display()
             .to_string();
         assert_eq!(

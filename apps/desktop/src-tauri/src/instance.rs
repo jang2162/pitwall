@@ -195,7 +195,8 @@ mod tests {
     #[test]
     fn release_keys_follow_the_normalized_data_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let real = std::fs::canonicalize(tmp.path()).unwrap();
+        // Windows 의 canonicalize 는 verbatim 접두를 붙인다 — normalize 가 돌려주는 꼴로 맞춘다.
+        let real = pw_core::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap());
         let default = real.join("default");
         let custom = real.join("perf").join("data");
         std::fs::create_dir_all(&default).unwrap();

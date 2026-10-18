@@ -21,7 +21,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let tmp = tempfile::tempdir().unwrap();
-        let base = fs::canonicalize(tmp.path()).unwrap();
+        let base = real(tmp.path());
         let paths = AppPaths::under(&base.join("app"));
         let bus = EventBus::new(DEFAULT_CAPACITY);
         let registry = Registry::new(paths.clone(), Some(base.join("home")), bus.clone());
@@ -62,8 +62,14 @@ impl Fixture {
     }
 }
 
+/// 실제 경로. Windows 의 canonicalize 는 verbatim 접두(`\\?\`)를 붙인다 — 레지스트리가 저장하는 꼴((`path::simplify`))로 맞춘다.
+fn real(path: &Path) -> PathBuf {
+    path::simplify(fs::canonicalize(path).unwrap())
+}
+
+/// 레지스트리가 내는 꼴의 경로 문자열. Windows 에서 `join("a/b")` 는 `\a/b` 로 구분자가 섞이므로 마디를 OS 구분자로 다시 잇는다.
 fn s(path: &Path) -> String {
-    path.display().to_string()
+    path.components().collect::<PathBuf>().display().to_string()
 }
 
 fn git(dir: &Path, args: &[&str]) {
@@ -99,10 +105,7 @@ fn repo_with_worktree(main: &Path, wt: &Path) -> (PathBuf, PathBuf) {
         &["commit", "-q", "--allow-empty", "--no-verify", "-m", "init"],
     );
     git(main, &["worktree", "add", "-q", "-b", "feature", &s(wt)]);
-    (
-        fs::canonicalize(main).unwrap(),
-        fs::canonicalize(wt).unwrap(),
-    )
+    (real(main), real(wt))
 }
 
 // --- CRUD · 최근 목록 · slug ---

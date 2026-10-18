@@ -718,17 +718,20 @@ mod tests {
         let snap = source.load().unwrap();
         assert_eq!(snap.get("project", "port"), Some(&json!(1)));
         let local = snap.file("project").unwrap().layers.last().unwrap().clone();
-        let own = wt.join(".pitwall/project.local.toml");
+        // 경로 문자열과 비교한다 — 마디마다 join 해야 Windows 에서 구분자가 같다.
+        let own = wt.join(PROJECT_DIR).join("project.local.toml");
         assert_eq!(local.path, Some(own.display().to_string()));
     }
 
     #[test]
     fn old_files_are_migrated_with_project_backup_and_notice() {
         let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join(".pitwall/run/dev.toml");
+        // 알림의 경로 문자열과 비교한다 — 마디마다 join 해야 Windows 에서 구분자가 같다.
+        let pw = tmp.path().join(PROJECT_DIR);
+        let file = pw.join("run").join("dev.toml");
         write(&file, "# 개발 서버\ncommand = \"x\"\n");
         let snap = ConfigSource::project(tmp.path()).load().unwrap();
-        let backup = tmp.path().join(".pitwall/.backup/run/dev.toml.v0");
+        let backup = pw.join(".backup").join("run").join("dev.toml.v0");
         assert_eq!(
             snap.notices,
             [ConfigNotice::Migrated {

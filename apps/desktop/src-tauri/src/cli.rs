@@ -116,13 +116,26 @@ mod tests {
 
     use super::*;
 
+    /// 시험의 절대 경로는 유닉스 꼴(`/r/a`)로 쓴다. Windows 에서는 드라이브가 있어야 절대 경로라 `C:` 를 붙인다.
+    fn abs(p: &str) -> String {
+        if cfg!(windows) && p.starts_with('/') {
+            format!("C:{p}")
+        } else {
+            p.to_owned()
+        }
+    }
+
     fn args(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| (*s).to_owned()).collect()
+        list.iter().map(|s| abs(s)).collect()
     }
 
     fn open(list: &[&str], cwd: &str, existing: &[&str]) -> Vec<OpenTarget> {
-        let existing: HashSet<PathBuf> = existing.iter().map(PathBuf::from).collect();
-        match parse(&args(list), Some(Path::new(cwd)), |p| existing.contains(p)).0 {
+        let existing: HashSet<PathBuf> = existing.iter().map(|p| PathBuf::from(abs(p))).collect();
+        match parse(&args(list), Some(Path::new(&abs(cwd))), |p| {
+            existing.contains(p)
+        })
+        .0
+        {
             Command::Open(targets) => targets,
             Command::Mcp => panic!("mcp 가 아니다"),
         }
@@ -130,7 +143,7 @@ mod tests {
 
     fn target(path: &str, line: Option<u32>, col: Option<u32>) -> OpenTarget {
         OpenTarget {
-            path: path.into(),
+            path: abs(path).into(),
             line,
             col,
         }
@@ -242,7 +255,7 @@ mod tests {
     fn flags_are_skipped_and_double_dash_ends_them() {
         let (command, skipped) = parse(
             &args(&["-psn_0_123", "/a", "--", "-weird"]),
-            Some(Path::new("/w")),
+            Some(Path::new(&abs("/w"))),
             |_| false,
         );
         assert_eq!(

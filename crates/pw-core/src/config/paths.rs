@@ -279,6 +279,8 @@ mod tests {
         assert_eq!(paths.cache, Path::new("/home/u/.cache/pitwall"));
     }
 
+    // Unix 계열 규칙의 절대 경로 판정은 호스트의 `Path::is_absolute` 다. Windows 호스트에서는 `/x` 가 절대가 아니고 이 계열을 쓰지 않는다.
+    #[cfg(unix)]
     #[test]
     fn the_default_data_dir_ignores_only_the_data_override() {
         let env = unix_home()
@@ -298,6 +300,8 @@ mod tests {
         );
     }
 
+    // Unix 계열 규칙의 절대 경로 판정은 호스트의 `Path::is_absolute` 다. Windows 호스트에서는 `/x` 가 절대가 아니고 이 계열을 쓰지 않는다.
+    #[cfg(unix)]
     #[test]
     fn xdg_vars_beat_home_and_pitwall_vars_beat_xdg() {
         let env = unix_home()
@@ -335,6 +339,8 @@ mod tests {
         );
     }
 
+    // Unix 계열 규칙의 절대 경로 판정은 호스트의 `Path::is_absolute` 다. Windows 호스트에서는 `/x` 가 절대가 아니고 이 계열을 쓰지 않는다.
+    #[cfg(unix)]
     #[test]
     fn overrides_alone_need_no_home() {
         let env = PathEnv::empty(OsFamily::Unix)

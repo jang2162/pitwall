@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn path_kind_tells_files_folders_and_missing_paths_apart() {
         let tmp = tempfile::tempdir().unwrap();
-        let base = fs::canonicalize(tmp.path()).unwrap();
+        let base = pw_core::registry::path::simplify(fs::canonicalize(tmp.path()).unwrap());
         let file = base.join("a.txt");
         fs::write(&file, "x").unwrap();
         let dir = base.join("dir");
@@ -295,7 +295,7 @@ mod tests {
 
     struct Fixture {
         _tmp: tempfile::TempDir,
-        /// 정규화된 임시 폴더.
+        /// 정규화된 임시 폴더. Windows 의 canonicalize 는 verbatim 접두를 붙이므로 레지스트리가 저장하는 꼴(simplify)로 맞춘다.
         base: PathBuf,
         registry: Registry,
         app: tauri::App<MockRuntime>,
@@ -304,7 +304,7 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let tmp = tempfile::tempdir().unwrap();
-            let base = fs::canonicalize(tmp.path()).unwrap();
+            let base = pw_core::registry::path::simplify(fs::canonicalize(tmp.path()).unwrap());
             let registry = Registry::new(
                 AppPaths::under(&base.join("app")),
                 None,
@@ -420,7 +420,8 @@ mod tests {
         f.run(&["src/a.rs:3:9"], &root);
         assert_eq!(
             f.opens(&id),
-            [open_file(&root.join("src/a.rs"), Some(3), Some(9))]
+            // 여는 경로는 정규화된(OS 구분자) 문자열이다 — Windows 에서 `join("src/a.rs")` 는 구분자가 섞인다.
+            [open_file(&root.join("src").join("a.rs"), Some(3), Some(9))]
         );
     }
 

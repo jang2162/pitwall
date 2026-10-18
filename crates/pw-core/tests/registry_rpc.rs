@@ -53,12 +53,18 @@ impl Client {
     }
 }
 
+/// 실제 경로. Windows 의 canonicalize 는 verbatim 접두(`\\?\`)를 붙인다 — 레지스트리가 저장하는 꼴로 맞춘다.
+fn real(path: &std::path::Path) -> std::path::PathBuf {
+    pw_core::registry::path::simplify(std::fs::canonicalize(path).unwrap())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn project_methods_round_trip() {
     let tmp = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(tmp.path()).unwrap();
+    let base = real(tmp.path());
     let paths = AppPaths::under(&base.join("app"));
-    let root = base.join("work/proj");
+    // 레지스트리는 OS 구분자로 낸다 — 마디마다 join 해야 Windows 에서 문자열이 같다.
+    let root = base.join("work").join("proj");
     std::fs::create_dir_all(root.join("src")).unwrap();
     let host = LocalHost::with_config("local", paths.clone());
     let mut events = host
@@ -196,7 +202,7 @@ async fn host_without_app_dirs_has_no_registry() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn writes_to_an_unwritable_registry_get_the_storage_code() {
     let tmp = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(tmp.path()).unwrap();
+    let base = real(tmp.path());
     let paths = AppPaths::under(&base.join("app"));
     let root = base.join("proj");
     std::fs::create_dir_all(&root).unwrap();
@@ -244,7 +250,7 @@ async fn writes_to_an_unwritable_registry_get_the_storage_code() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_scope_subscribers_hear_project_changes() {
     let tmp = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(tmp.path()).unwrap();
+    let base = real(tmp.path());
     let root = base.join("proj");
     std::fs::create_dir_all(&root).unwrap();
     let host = LocalHost::with_config("local", AppPaths::under(&base.join("app")));

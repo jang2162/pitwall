@@ -160,7 +160,8 @@ mod tests {
     #[test]
     fn dot_segments_resolve_and_missing_tail_is_kept() {
         let tmp = tempfile::tempdir().unwrap();
-        let real = fs::canonicalize(tmp.path()).unwrap();
+        // Windows 의 canonicalize 는 verbatim 접두를 붙이고 normalize 는 걷는다.
+        let real = simplify(fs::canonicalize(tmp.path()).unwrap());
         fs::create_dir_all(real.join("a/b")).unwrap();
         assert_eq!(
             normalize(&tmp.path().join("a/./b/../b")).unwrap(),
@@ -201,7 +202,7 @@ mod tests {
     #[test]
     fn case_insensitive_file_systems_compare_by_disk_case() {
         let tmp = tempfile::tempdir().unwrap();
-        let real = fs::canonicalize(tmp.path()).unwrap();
+        let real = simplify(fs::canonicalize(tmp.path()).unwrap());
         fs::create_dir_all(real.join("CaseDir/Inner")).unwrap();
         let other_case = real.join("casedir/inner");
         if !other_case.exists() {

@@ -332,7 +332,8 @@ mod tests {
         use tauri::Manager;
 
         let tmp = tempfile::tempdir().unwrap();
-        let base = std::fs::canonicalize(tmp.path()).unwrap();
+        // Windows 의 canonicalize 는 verbatim 접두를 붙인다 — 레지스트리가 저장하는 꼴로 맞춘다.
+        let base = pw_core::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap());
         let root = base.join("repo");
         std::fs::create_dir_all(&root).unwrap();
         let host = host_under(&base.join("app"));

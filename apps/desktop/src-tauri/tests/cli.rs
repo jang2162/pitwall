@@ -133,10 +133,15 @@ fn initialize(mcp: &mut Mcp) -> Value {
     init
 }
 
+/// 실제 경로. Windows 의 canonicalize 는 verbatim 접두(`\\?\`)를 붙인다 — 레지스트리가 저장하는 꼴로 맞춘다.
+fn real(path: &std::path::Path) -> std::path::PathBuf {
+    pw_core::registry::path::simplify(std::fs::canonicalize(path).unwrap())
+}
+
 #[test]
 fn headless_mcp_serves_read_tools_over_clean_stdio() {
     let tmp = tempfile::tempdir().unwrap();
-    let dir = std::fs::canonicalize(tmp.path()).unwrap();
+    let dir = real(tmp.path());
     let paths = AppPaths::under(&dir);
     let registry = Registry::new(paths.clone(), None, EventBus::new(16));
     let mut ids = Vec::new();
@@ -240,7 +245,7 @@ fn a_bad_argument_is_a_usage_error_without_stdout() {
 #[test]
 fn headless_mcp_leaves_a_corrupt_registry_alone() {
     let tmp = tempfile::tempdir().unwrap();
-    let dir = std::fs::canonicalize(tmp.path()).unwrap();
+    let dir = real(tmp.path());
     let data = dir.join("data");
     std::fs::create_dir_all(&data).unwrap();
     std::fs::write(data.join("state.db"), b"not a database").unwrap();

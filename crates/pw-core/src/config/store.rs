@@ -330,7 +330,8 @@ mod tests {
     #[test]
     fn failed_reload_keeps_previous_snapshot_and_reports() {
         let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join(".pitwall/project.toml");
+        // 오류의 경로 문자열과 비교한다 — 마디마다 join 해야 Windows 에서 구분자가 같다.
+        let file = tmp.path().join(".pitwall").join("project.toml");
         write(&file, "schema = 1\nname = \"good\"\n");
         let (store, mut events) = store(tmp.path());
         let before = store.snapshot();
