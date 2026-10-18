@@ -17,7 +17,7 @@ pub const DEFINITIONS: Definitions = Definitions {
     end: "the project window's `perf_first_frame` mark: second requestAnimationFrame after the first React commit, timestamped by the app on receipt",
     idle: "memory sampled idle_secs after the first-frame mark",
     memory: "sum of phys_footprint (Activity Monitor's Memory column) over the processes whose responsible pid is the app instance (the app and the WebKit WebContent/GPU/Networking it requested); the launch is spawned with responsibility disclaimed so that this group is the instance alone",
-    cache: "warm disk cache, new processes: no purge between runs; warm-up runs are recorded but left out of the medians",
+    cache: "warm disk cache, new processes: no purge between runs; warm-up runs and excluded runs (window hidden before its first frame, screen locked) are recorded but left out of the medians",
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +84,8 @@ pub struct Settings {
 pub struct Run {
     pub index: usize,
     pub warmup: bool,
+    /// 기준선에서 뺀 이유(창이 첫 프레임 전에 가려졌다, 화면이 잠겼다). `None` 이면 유효한 회다.
+    pub excluded: Option<String>,
     /// 시작 → 첫 프레임.
     pub cold_start_ms: f64,
     /// 시작 → 띄운 프로세스(CLI)가 `main` 에 들어온 때.
@@ -135,9 +137,12 @@ pub struct Targets {
     pub idle_footprint_met: Option<bool>,
 }
 
-/// 준비 운전(warm-up)을 뺀 회만 모은다.
+/// 준비 운전(warm-up)과 제외한 회를 뺀 회만 모은다.
 pub fn summarize_runs(runs: &[Run]) -> Summaries {
-    let measured: Vec<&Run> = runs.iter().filter(|r| !r.warmup).collect();
+    let measured: Vec<&Run> = runs
+        .iter()
+        .filter(|r| !r.warmup && r.excluded.is_none())
+        .collect();
     let values = |f: &dyn Fn(&Run) -> Option<f64>| -> Option<Summary> {
         summarize(&measured.iter().filter_map(|r| f(r)).collect::<Vec<_>>())
     };
@@ -218,8 +223,15 @@ pub fn markdown(report: &Report) -> String {
     push(
         &mut out,
         format!(
-            "- runs: {} measured + {} warm-up (left out of the medians) · idle = {}s after the first frame",
-            report.settings.runs, report.settings.warmup, report.settings.idle_secs
+            "- runs: {} measured ({} excluded) + {} warm-up · idle = {}s after the first frame",
+            report.settings.runs,
+            report
+                .runs
+                .iter()
+                .filter(|r| !r.warmup && r.excluded.is_some())
+                .count(),
+            report.settings.warmup,
+            report.settings.idle_secs
         ),
     );
     push(&mut out, String::new());
@@ -290,9 +302,12 @@ pub fn markdown(report: &Report) -> String {
         push(
             &mut out,
             format!(
-                "| {}{} | {:.0} | {} | {} | {} | {} |",
+                "| {}{}{} | {:.0} | {} | {} | {} | {} |",
                 run.index,
                 if run.warmup { " (warm-up)" } else { "" },
+                run.excluded
+                    .as_deref()
+                    .map_or(String::new(), |why| format!(" (excluded: {why})")),
                 run.cold_start_ms,
                 run.app_main_ms.map_or("?".into(), |v| format!("{v:.0}")),
                 mib(run.memory.footprint_bytes as f64),
@@ -321,6 +336,7 @@ mod tests {
         Run {
             index,
             warmup,
+            excluded: None,
             cold_start_ms: cold,
             launcher_main_ms: Some(5.0),
             app_main_ms: Some(40.0),
@@ -353,6 +369,15 @@ mod tests {
         let t = targets(&s);
         assert_eq!(t.cold_start_met, Some(true));
         assert_eq!(t.idle_footprint_met, Some(true));
+    }
+
+    #[test]
+    fn excluded_runs_stay_out_of_the_medians() {
+        let mut hidden = run(2, false, 47000.0, 100 * MIB);
+        hidden.excluded = Some("window hidden before its first frame".into());
+        let runs = [run(1, false, 500.0, 116 * MIB), hidden];
+        let cold = summarize_runs(&runs).cold_start_ms.unwrap();
+        assert_eq!((cold.median, cold.max, cold.n), (500.0, 500.0, 1));
     }
 
     #[test]

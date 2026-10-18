@@ -26,12 +26,27 @@ it("only the measurement query asks for the mark", () => {
   expect(perfMarkRequested("?window=project&perf=0")).toBe(false);
 });
 
+function visibility(initial: DocumentVisibilityState) {
+  const listeners = new Set<() => void>();
+  return {
+    visibilityState: initial,
+    addEventListener: (_: string, l: () => void) => void listeners.add(l),
+    removeEventListener: (_: string, l: () => void) => void listeners.delete(l),
+    set(state: DocumentVisibilityState) {
+      this.visibilityState = state;
+      for (const l of listeners) l();
+    },
+    listeners,
+  };
+}
+
 it("marks once, on the second frame after the first commit", () => {
   const frames: (() => void)[] = [];
   const onFrame = vi.fn();
   const frame = (callback: () => void) => void frames.push(callback);
   root = createRoot(document.createElement("div"));
-  act(() => root!.render(<FirstFrameMark onFrame={onFrame} frame={frame} />));
+  const doc = visibility("visible");
+  act(() => root!.render(<FirstFrameMark onFrame={onFrame} frame={frame} doc={doc} />));
 
   expect(frames).toHaveLength(1);
   frames.shift()!();
@@ -39,5 +54,24 @@ it("marks once, on the second frame after the first commit", () => {
   expect(frames).toHaveLength(1);
   frames.shift()!();
   expect(onFrame).toHaveBeenCalledTimes(1);
+  expect(onFrame).toHaveBeenCalledWith({ hidden: false });
   expect(frames).toHaveLength(0);
+  expect(doc.listeners.size).toBe(0);
+});
+
+it("reports a window that was hidden before its first frame", () => {
+  const frames: (() => void)[] = [];
+  const onFrame = vi.fn();
+  const doc = visibility("visible");
+  root = createRoot(document.createElement("div"));
+  act(() =>
+    root!.render(
+      <FirstFrameMark onFrame={onFrame} frame={(cb) => void frames.push(cb)} doc={doc} />,
+    ),
+  );
+  doc.set("hidden");
+  doc.set("visible");
+  frames.shift()!();
+  frames.shift()!();
+  expect(onFrame).toHaveBeenCalledWith({ hidden: true });
 });

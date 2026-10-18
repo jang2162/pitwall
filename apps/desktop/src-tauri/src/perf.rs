@@ -1,7 +1,8 @@
 //! 성능 측정 표시(docs/design/06-roadmap.md 「성능 목표 (검증 기준)」, 재는 쪽은 `crates/pw-perf`).
 //!
 //! [`MARK_ENV`] 에 파일 경로를 주고 띄우면 앱이 두 시각을 그 파일에 JSON 한 줄씩 덧붙인다 — `main` 에 들어온 때와 프로젝트
-//! 창이 첫 화면을 그린 때(`first_frame`). 변수가 없으면 아무것도 쓰지 않고, 프로젝트 창 주소에 `perf=1` 도 붙지 않아
+//! 창이 첫 화면을 그린 때(`first_frame`). `first_frame` 에는 그 전에 창이 가려져 있었는지(`hidden`)도 싣는다 — 가려진
+//! 창은 WebKit 이 프레임을 미뤄 그 회의 수치가 기준선이 아니다. 변수가 없으면 아무것도 쓰지 않고, 프로젝트 창 주소에 `perf=1` 도 붙지 않아
 //! 프론트엔드는 표시 코드를 돌리지 않는다(src/perf-mark.ts).
 //!
 //! 변수를 지우지 않는 이유: CLI 콜드 스타트는 앱을 떼어 다시 띄우는데(detach.rs) 그 자식이 같은 환경을 물려받아야 첫 프레임을
@@ -34,12 +35,12 @@ impl PerfMarks {
     }
 
     /// `event` 와 지금 시각을 덧붙인다. 쓰지 못하면 로그만 남긴다 — 표시 파일이 앱을 막지 않는다.
-    pub fn record(&self, event: &str, window: Option<&str>) {
+    pub fn record(&self, event: &str, window: Option<&str>, hidden: Option<bool>) {
         let Some(file) = &self.file else { return };
         let epoch_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
-        let line = mark_line(event, std::process::id(), epoch_ms, window);
+        let line = mark_line(event, std::process::id(), epoch_ms, window, hidden);
         let written = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -52,10 +53,17 @@ impl PerfMarks {
 }
 
 /// 표시 한 줄(개행 포함). 형식은 `crates/pw-perf` 의 `Mark` 가 읽는다.
-fn mark_line(event: &str, pid: u32, epoch_ms: f64, window: Option<&str>) -> String {
-    let mut line =
-        serde_json::json!({ "event": event, "pid": pid, "epoch_ms": epoch_ms, "window": window })
-            .to_string();
+fn mark_line(
+    event: &str,
+    pid: u32,
+    epoch_ms: f64,
+    window: Option<&str>,
+    hidden: Option<bool>,
+) -> String {
+    let mut line = serde_json::json!({
+        "event": event, "pid": pid, "epoch_ms": epoch_ms, "window": window, "hidden": hidden,
+    })
+    .to_string();
     line.push('\n');
     line
 }
@@ -67,10 +75,15 @@ pub fn project_query<R: Runtime>(app: &AppHandle<R>) -> Option<(&'static str, &'
         .then_some(QUERY)
 }
 
-/// 프로젝트 창이 첫 화면을 그렸다(src/perf-mark.ts). 측정 모드가 아니면 아무것도 하지 않는다.
+/// 프로젝트 창이 첫 화면을 그렸다(src/perf-mark.tsx). `hidden` 은 그 전에 문서가 한 번이라도 가려졌는가. 측정 모드가
+/// 아니면 아무것도 하지 않는다.
 #[tauri::command]
-pub fn perf_first_frame<R: Runtime>(window: WebviewWindow<R>, marks: State<'_, PerfMarks>) {
-    marks.record("first_frame", Some(window.label()));
+pub fn perf_first_frame<R: Runtime>(
+    window: WebviewWindow<R>,
+    marks: State<'_, PerfMarks>,
+    hidden: bool,
+) {
+    marks.record("first_frame", Some(window.label()), Some(hidden));
 }
 
 #[cfg(test)]
@@ -79,12 +92,12 @@ mod tests {
 
     #[test]
     fn a_mark_is_one_json_line() {
-        let line = mark_line("first_frame", 42, 1.5, Some("project-a"));
+        let line = mark_line("first_frame", 42, 1.5, Some("project-a"), Some(true));
         assert!(line.ends_with('\n') && !line.trim_end().contains('\n'));
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(
             v,
-            serde_json::json!({"event": "first_frame", "pid": 42, "epoch_ms": 1.5, "window": "project-a"})
+            serde_json::json!({"event": "first_frame", "pid": 42, "epoch_ms": 1.5, "window": "project-a", "hidden": true})
         );
     }
 
@@ -92,11 +105,11 @@ mod tests {
     fn marks_append_to_the_file_only_in_measurement_mode() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("marks.jsonl");
-        PerfMarks::at(None).record("main", None);
+        PerfMarks::at(None).record("main", None, None);
         assert!(!file.exists());
         let marks = PerfMarks::at(Some(file.clone()));
-        marks.record("main", None);
-        marks.record("first_frame", Some("project-a"));
+        marks.record("main", None, None);
+        marks.record("first_frame", Some("project-a"), Some(false));
         let text = std::fs::read_to_string(&file).unwrap();
         let events: Vec<String> = text
             .lines()

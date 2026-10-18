@@ -71,8 +71,8 @@ void applyRegistryTheme(
 );
 
 // src-tauri/src/perf.rs 의 perf_first_frame. 측정 모드가 아니면 그리지 않는다(perf-mark.tsx).
-function markFirstFrame() {
-  invoke("perf_first_frame").catch((e: unknown) =>
+function markFirstFrame(mark: { hidden: boolean }) {
+  invoke("perf_first_frame", mark).catch((e: unknown) =>
     log.warn(`perf mark failed: ${String(e)}`, "perf"),
   );
 }

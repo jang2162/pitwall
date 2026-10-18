@@ -124,8 +124,11 @@ mod measure {
         for index in 0..total {
             let run = run_once(&opts, &out, index, index < opts.warmup)?;
             eprintln!(
-                "pw-perf: run {index}{}: cold start {:.0} ms, idle footprint {:.1} MiB ({} processes)",
+                "pw-perf: run {index}{}{}: cold start {:.0} ms, idle footprint {:.1} MiB ({} processes)",
                 if run.warmup { " (warm-up)" } else { "" },
+                run.excluded
+                    .as_deref()
+                    .map_or(String::new(), |why| format!(" (excluded: {why})")),
                 run.cold_start_ms,
                 run.memory.footprint_bytes as f64 / 1048576.0,
                 run.memory.processes.len()
@@ -387,9 +390,18 @@ mod measure {
                 "run {index}: the app {app_pid} exited before the idle sample"
             ));
         }
+        // 첫 프레임 전에 창이 가려졌거나 측정 중에 화면이 잠겼으면 WebKit 이 프레임 · GPU 메모리를 줄여 그 회는 기준선이 아니다.
+        let excluded = if frame.hidden == Some(true) {
+            Some("window hidden before its first frame".to_owned())
+        } else if screen_locked()? {
+            Some("screen locked during the run".to_owned())
+        } else {
+            None
+        };
         Ok(Run {
             index,
             warmup,
+            excluded,
             cold_start_ms,
             launcher_main_ms: since(marks::first(&all, "main", Some(launcher))),
             app_main_ms: since(marks::first(&all, "main", Some(app_pid))),

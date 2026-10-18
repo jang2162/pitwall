@@ -11,6 +11,9 @@ pub struct Mark {
     pub epoch_ms: f64,
     #[serde(default)]
     pub window: Option<String>,
+    /// `first_frame` 만: 그 전에 창(문서)이 한 번이라도 가려졌는가.
+    #[serde(default)]
+    pub hidden: Option<bool>,
 }
 
 /// 읽을 수 없는 줄은 건너뛴다 — 앱이 아직 쓰는 중인 마지막 줄이 반쪽일 수 있다.
@@ -38,7 +41,7 @@ mod tests {
             "\n",
             r#"{"event":"main","pid":11,"epoch_ms":2.0,"window":null}"#,
             "\n",
-            r#"{"event":"first_frame","pid":11,"epoch_ms":3.5,"window":"project-a"}"#,
+            r#"{"event":"first_frame","pid":11,"epoch_ms":3.5,"window":"project-a","hidden":true}"#,
             "\n",
             r#"{"event":"first_fr"#,
         );
@@ -48,6 +51,8 @@ mod tests {
         assert_eq!(first(&marks, "main", Some(11)).unwrap().epoch_ms, 2.0);
         let frame = first(&marks, "first_frame", None).unwrap();
         assert_eq!(frame.window.as_deref(), Some("project-a"));
+        assert_eq!(frame.hidden, Some(true));
+        assert_eq!(first(&marks, "main", None).unwrap().hidden, None);
         assert!(first(&marks, "first_frame", Some(10)).is_none());
     }
 }

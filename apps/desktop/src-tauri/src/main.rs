@@ -167,7 +167,7 @@ fn main() {
         run_mcp();
     }
     let perf = perf::PerfMarks::from_env();
-    perf.record("main", None);
+    perf.record("main", None, None);
     // 떼어 띄운 자식이면 표식을 지운다 — 앱이 띄우는 프로세스(터미널 등)가 물려받지 않게(detach.rs 머리 주석).
     let detached = std::env::var_os(detach::MARKER_ENV).is_some();
     // SAFETY: 아직 스레드를 띄우기 전이다(로그 · 런타임 · Tauri 모두 이 아래에서 시작한다).
