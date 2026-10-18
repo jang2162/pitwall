@@ -528,7 +528,9 @@ fn list(
             if name.starts_with('.') {
                 continue;
             }
-            match super::robust::retrying(|| fs::metadata(item.path())) {
+            match super::robust::retrying(|| fs::metadata(item.path()))
+                .map_err(super::robust::labeled("read the metadata of", &item.path()))
+            {
                 Ok(meta) if meta.is_file() => {}
                 Ok(_) => continue,
                 Err(e)
@@ -565,8 +567,9 @@ fn list(
 }
 
 fn read_doc(path: &Path) -> Result<DocumentMut, ConfigError> {
-    let text =
-        super::robust::retrying(|| fs::read_to_string(path)).map_err(|e| ConfigError::Io {
+    let text = super::robust::retrying(|| fs::read_to_string(path))
+        .map_err(super::robust::labeled("read", path))
+        .map_err(|e| ConfigError::Io {
             path: path.to_path_buf(),
             message: e.to_string(),
         })?;

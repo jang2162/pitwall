@@ -16,6 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use toml_edit::{DocumentMut, Item, value};
 
+use super::robust::labeled;
+
 pub const SCHEMA_KEY: &str = "schema";
 
 /// 한 단계: 버전 `n` 문서를 `n+1` 형식으로 바꾼다.
@@ -245,7 +247,9 @@ fn migrate_file_with(
         path: path.to_path_buf(),
         error,
     };
-    let original = super::robust::retrying(|| fs::read_to_string(path)).map_err(io)?;
+    let original = super::robust::retrying(|| fs::read_to_string(path))
+        .map_err(labeled("read", path))
+        .map_err(io)?;
     let mut doc: DocumentMut =
         original
             .parse()
@@ -296,7 +300,7 @@ fn migrate_file_with(
 fn write_backup(dir: &Path, rel: &Path, version: u32, contents: &str) -> std::io::Result<PathBuf> {
     let base = dir.join(rel);
     if let Some(parent) = base.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(labeled("create the backup folder", parent))?;
     }
     let name = base
         .file_name()
@@ -312,14 +316,15 @@ fn write_backup(dir: &Path, rel: &Path, version: u32, contents: &str) -> std::io
             .open(&candidate)
         {
             Ok(mut file) => {
-                file.write_all(contents.as_bytes())?;
-                file.sync_all()?;
+                file.write_all(contents.as_bytes())
+                    .and_then(|()| file.sync_all())
+                    .map_err(labeled("write the backup", &candidate))?;
                 return Ok(candidate);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 candidate = stem.with_file_name(format!("{name}.v{version}.{n}"));
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(labeled("create the backup", &candidate)(e)),
         }
     }
     unreachable!("1.. is unbounded")
@@ -335,8 +340,11 @@ pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     // 다른 로더가 같은 파일을 바꿔 끼우는 순간이면 Windows 에서 잠깐 「없음」 · 접근 거부가 난다(`robust`).
-    let target = super::robust::retrying(|| fs::canonicalize(path))?;
-    let permissions = super::robust::retrying(|| fs::metadata(&target))?.permissions();
+    let target =
+        super::robust::retrying(|| fs::canonicalize(path)).map_err(labeled("resolve", path))?;
+    let permissions = super::robust::retrying(|| fs::metadata(&target))
+        .map_err(labeled("read the permissions of", &target))?
+        .permissions();
     let name = target
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -358,15 +366,24 @@ pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
         {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
+            Err(e) => return Err(labeled("create the temporary file", &tmp)(e)),
         };
         let written = file
             .write_all(contents.as_bytes())
             .and_then(|()| file.sync_all())
-            .and_then(|()| fs::set_permissions(&tmp, permissions.clone()))
+            .map_err(labeled("write the temporary file", &tmp))
+            .and_then(|()| {
+                fs::set_permissions(&tmp, permissions.clone())
+                    .map_err(labeled("set the permissions of", &tmp))
+            })
             .and_then(|()| {
                 drop(file);
-                super::robust::retrying(|| fs::rename(&tmp, &target))
+                super::robust::retrying(|| fs::rename(&tmp, &target)).map_err(|e| {
+                    std::io::Error::new(
+                        e.kind(),
+                        format!("replace {} with {}: {e}", target.display(), tmp.display()),
+                    )
+                })
             });
         if written.is_err() {
             let _ = fs::remove_file(&tmp);
@@ -575,5 +592,33 @@ mod tests {
         assert_eq!(first, dir.join("run/dev.toml.v0"));
         assert_eq!(second, dir.join("run/dev.toml.v0.1"));
         assert_eq!(fs::read_to_string(first).unwrap(), "first");
+    }
+
+    /// 설정 파일 하나의 오류는 모두 그 파일 경로로 보고되므로, io 오류 메시지에 실패한 연산과 실제 경로를 남긴다(Windows CI 의
+    /// 「파일을 찾을 수 없다」가 어느 연산에서 났는지 알 수 없었다). 종류는 그대로다.
+    #[test]
+    fn io_errors_name_the_operation_and_the_real_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing.toml");
+        let error = write_atomic(&missing, "x").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            error
+                .to_string()
+                .starts_with(&format!("resolve {}: ", missing.display())),
+            "{error}"
+        );
+
+        // 보관 폴더 자리에 파일이 있다.
+        let blocked = tmp.path().join("backup");
+        fs::write(&blocked, "").unwrap();
+        let error = write_backup(&blocked, Path::new("run/dev.toml"), 0, "x").unwrap_err();
+        assert!(
+            error.to_string().starts_with(&format!(
+                "create the backup folder {}: ",
+                blocked.join("run").display()
+            )),
+            "{error}"
+        );
     }
 }
