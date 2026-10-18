@@ -14,6 +14,7 @@ pub mod manifest;
 pub mod methods;
 pub mod registry;
 pub mod source;
+pub mod template;
 
 pub use manifest::{Diagnostic, KeymapKind, Manifest, Pos, Severity};
 pub use registry::{

@@ -1,5 +1,7 @@
-# 기본 외부 도구 목록(docs/design/04-features.md F8-1 · F8-2). 명령 템플릿의 변수는 {project_root} · {file} · {line} ·
-# {column} · {branch} 다. 템플릿을 치환해 실행하는 것은 외부 도구 기능(M0-16)이 한다.
+# 기본 외부 도구 목록(docs/design/04-features.md F8-1 · F8-2). 명령은 셸 없이 실행하는 argv 배열이다 — 치환한 요소 하나가
+# 그대로 인자 한 칸이다(공백 · 따옴표 · `$` 는 글자). 첫 요소는 실행 파일이라 변수를 쓸 수 없다. 변수: {project_root} ·
+# {branch}, 파일까지 여는 `file_command` 에서는 {file} · {line} · {column} 도. 규칙은 crates/pw-ext/src/template.rs,
+# 실행은 crates/pw-open-with. 사용자가 settings.toml 의 [open_with.tools.<id>] 로 덮어쓸 수 있다(03 「[open_with]」).
 id = "dev.pitwall.external-tools"
 name = "Pitwall External Tools"
 version = "0.1.0"
@@ -9,42 +11,53 @@ license = "MIT"
 
 [contributes.external_tools.orca]
 label = "Orca"
+# Orca CLI 에는 폴더를 여는 명령이 없다. 프로젝트를 Orca 에 등록하고(repo add), 파일은 Orca 탭으로 연다.
 # 사용자가 실제 Orca 실행 명령으로 고칠 수 있다(F8 「Orca 연동 범위」).
-command = "orca {project_root}"
+command = ["orca", "repo", "add", "--path", "{project_root}"]
+file_command = ["orca", "file", "open", "{file}", "--line", "{line}", "--column", "{column}", "--focus"]
 
 [contributes.external_tools.zed]
 label = "Zed"
-command = "zed {project_root} {file}:{line}:{column}"
+command = ["zed", "{project_root}"]
+file_command = ["zed", "{project_root}", "{file}:{line}:{column}"]
 
 [contributes.external_tools.idea]
 label = "IntelliJ IDEA"
-# JetBrains Toolbox 가 만드는 셸 스크립트 이름. 프로젝트만 열 때는 `idea {project_root}`.
-command = "idea --line {line} {file}"
+# JetBrains Toolbox 가 만드는 셸 스크립트 이름(Toolbox 의 scripts 폴더가 PATH 에 있어야 한다).
+command = ["idea", "{project_root}"]
+file_command = ["idea", "{project_root}", "--line", "{line}", "--column", "{column}", "{file}"]
 
 [contributes.external_tools.vscode]
 label = "Visual Studio Code"
-command = "code -g {file}:{line}:{column} {project_root}"
+command = ["code", "{project_root}"]
+file_command = ["code", "{project_root}", "-g", "{file}:{line}:{column}"]
 
 [contributes.external_tools.cursor]
 label = "Cursor"
-command = "cursor -g {file}:{line}:{column} {project_root}"
+command = ["cursor", "{project_root}"]
+file_command = ["cursor", "{project_root}", "-g", "{file}:{line}:{column}"]
 
 [contributes.external_tools.finder]
 label = "Finder"
-command = "open {project_root}"
+command = ["open", "{project_root}"]
+# 파일은 그 폴더를 열고 파일을 골라 둔다.
+file_command = ["open", "-R", "{file}"]
 platforms = ["macos"]
 
 [contributes.external_tools.explorer]
 label = "Explorer"
-command = "explorer {project_root}"
+command = ["explorer", "{project_root}"]
+# `/select,<경로>` 는 한 인자다.
+file_command = ["explorer", "/select,{file}"]
 platforms = ["windows"]
 
 [contributes.external_tools.file-manager]
 label = "File Manager"
-command = "xdg-open {project_root}"
+command = ["xdg-open", "{project_root}"]
 platforms = ["linux"]
 
 [contributes.external_tools.terminal]
 label = "Terminal"
-command = "open -a Terminal {project_root}"
+# 그 폴더에서 새 Terminal 창을 연다.
+command = ["open", "-a", "Terminal", "{project_root}"]
 platforms = ["macos"]

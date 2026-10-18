@@ -1047,7 +1047,7 @@ mod tests {
     fn keeps_the_first_keymap_tool_language_and_translation() {
         let dir = tempfile::tempdir().unwrap();
         let body = "[contributes.keymaps.vim]\nkind = \"bindings\"\nfile = \"vim.toml\"\n\n\
-                    [contributes.external_tools.zed]\nlabel = \"Zed\"\ncommand = \"zed {project_root}\"\n\n\
+                    [contributes.external_tools.zed]\nlabel = \"Zed\"\ncommand = [\"zed\", \"{project_root}\"]\n\n\
                     [contributes.languages.kotlin]\nlinguist = \"Kotlin\"\n\n\
                     [contributes.translations.ko]\ndir = \"i18n/ko\"\n";
         let first = ext(
@@ -1066,7 +1066,7 @@ mod tests {
             ),
             (
                 "external tool",
-                "[contributes.external_tools.zed]\nlabel = \"Z\"\ncommand = \"z\"\n",
+                "[contributes.external_tools.zed]\nlabel = \"Z\"\ncommand = [\"z\"]\n",
             ),
             (
                 "language",

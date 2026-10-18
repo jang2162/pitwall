@@ -10,6 +10,7 @@ use semver::{Version, VersionReq};
 use toml_edit::{Document, Item, TableLike};
 
 use crate::source::RelPath;
+use crate::template::{CommandKind, check_command};
 
 /// 파일 안의 위치. 줄 · 열은 1부터 센다(열은 문자 단위).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,8 +133,10 @@ pub struct ExternalToolDecl {
     pub id: String,
     pub pos: Option<Pos>,
     pub label: String,
-    /// 명령 템플릿. 변수는 [`TEMPLATE_VARS`] 만 쓴다.
-    pub command: String,
+    /// 프로젝트를 여는 명령(argv 템플릿). 규칙은 [`crate::template`].
+    pub command: Vec<String>,
+    /// 파일까지 여는 명령(선택). 파일 문맥이 있고 이것이 있으면 `command` 대신 쓴다.
+    pub file_command: Option<Vec<String>>,
     /// 비어 있으면 모든 OS.
     pub platforms: Vec<Platform>,
 }
@@ -154,9 +157,6 @@ pub struct Wasm {
     pub module: PathRef,
     pub capabilities: Vec<String>,
 }
-
-/// 외부 도구 명령 템플릿의 변수.
-pub const TEMPLATE_VARS: [&str; 5] = ["project_root", "file", "line", "column", "branch"];
 
 /// 매니페스트를 읽는다. 오류가 없을 때만 `Some` 이다. 경고는 어느 쪽이든 함께 돌려준다.
 pub fn parse_manifest(source: &str, file: &str) -> (Option<Manifest>, Vec<Diagnostic>) {
@@ -360,20 +360,17 @@ impl Parser<'_> {
                         let mut f =
                             Fields::new(entry, at.clone(), &format!("external tool `{id}`"));
                         let label = f.string(self, "label", true);
-                        let command = f.string(self, "command", true);
-                        if let Some((command, span)) = &command
-                            && let Err(e) = check_template(command)
-                        {
-                            self.error(span.clone(), format!("external tool `{id}`: {e}"));
-                        }
+                        let command = f.command(self, &id, CommandKind::Project, true);
+                        let file_command = f.command(self, &id, CommandKind::File, false);
                         let platforms = f.platforms(self, &id);
                         f.finish(self);
-                        if let (Some((label, _)), Some((command, _))) = (label, command) {
+                        if let (Some((label, _)), Some(command)) = (label, command) {
                             out.external_tools.push(ExternalToolDecl {
                                 pos: self.pos(&at),
                                 id,
                                 label,
                                 command,
+                                file_command,
                                 platforms,
                             });
                         }
@@ -545,6 +542,41 @@ impl<'t> Fields<'t> {
         }
     }
 
+    /// 외부 도구 명령(`command` · `file_command`). 문자열 배열만 받는다 — 셸 문자열은 공백 경로가 인자를 깨고 파일 · 브랜치
+    /// 이름으로 명령이 주입되므로 받지 않는다(규칙은 [`crate::template`]).
+    fn command(
+        &mut self,
+        p: &mut Parser<'_>,
+        id: &str,
+        kind: CommandKind,
+        required: bool,
+    ) -> Option<Vec<String>> {
+        let key = kind.key();
+        let item = self.item(p, key, required)?;
+        let argv: Option<Vec<String>> = item.as_array().and_then(|array| {
+            array
+                .iter()
+                .map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        });
+        let Some(argv) = argv else {
+            p.error(
+                item.span(),
+                format!(
+                    "external tool `{id}`: `{key}` must be an array of strings like [\"zed\", \"{{project_root}}\"] — shell command strings are not accepted"
+                ),
+            );
+            return None;
+        };
+        match check_command(kind, &argv) {
+            Ok(()) => Some(argv),
+            Err(e) => {
+                p.error(item.span(), format!("external tool `{id}`: `{key}` {e}"));
+                None
+            }
+        }
+    }
+
     fn platforms(&mut self, p: &mut Parser<'_>, id: &str) -> Vec<Platform> {
         let Some(item) = self.item(p, "platforms", false) else {
             return Vec::new();
@@ -623,30 +655,6 @@ fn is_locale(s: &str) -> bool {
         && parts.all(|p| (1..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
-/// `{name}` 변수가 [`TEMPLATE_VARS`] 안에 있고 중괄호가 짝을 이루는지 본다.
-fn check_template(command: &str) -> Result<(), String> {
-    let mut rest = command;
-    while let Some(i) = rest.find(['{', '}']) {
-        if rest[i..].starts_with('}') {
-            return Err(format!("command `{command}` has an unmatched `}}`"));
-        }
-        let after = &rest[i + 1..];
-        let end = after
-            .find(['{', '}'])
-            .filter(|&j| after[j..].starts_with('}'))
-            .ok_or_else(|| format!("command `{command}` has an unmatched `{{`"))?;
-        let name = &after[..end];
-        if !TEMPLATE_VARS.contains(&name) {
-            return Err(format!(
-                "command `{command}` uses unknown variable `{{{name}}}` (known: {})",
-                TEMPLATE_VARS.map(|v| format!("{{{v}}}")).join(", ")
-            ));
-        }
-        rest = &after[end + 1..];
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,7 +702,8 @@ line_comment = "//"
 
 [contributes.external_tools.zed]
 label = "Zed"
-command = "zed {{project_root}} {{file}}:{{line}}:{{column}}"
+command = ["zed", "{{project_root}}"]
+file_command = ["zed", "{{project_root}}", "{{file}}:{{line}}:{{column}}"]
 platforms = ["macos", "linux"]
 
 [contributes.translations.ko]
@@ -726,10 +735,13 @@ capabilities = ["fs:read:project"]
                 .as_str(),
             "queries/kotlin"
         );
+        let zed = &m.contributes.external_tools[0];
+        assert_eq!(zed.command, ["zed", "{project_root}"]);
         assert_eq!(
-            m.contributes.external_tools[0].platforms,
-            [Platform::Macos, Platform::Linux]
+            zed.file_command.as_deref(),
+            Some(&["zed", "{project_root}", "{file}:{line}:{column}"].map(String::from)[..])
         );
+        assert_eq!(zed.platforms, [Platform::Macos, Platform::Linux]);
         assert_eq!(m.contributes.translations[0].locale, "ko");
         assert_eq!(m.wasm.unwrap().module.path.as_str(), "plugin.wasm");
     }
@@ -841,22 +853,67 @@ file = "vim.toml"
 
 [contributes.external_tools.zed]
 label = "Zed"
-command = "zed {{root}}"
+command = ["zed", "{{root}}"]
 
 [contributes.external_tools.code]
 label = "Code"
-command = "code {{file"
+command = ["code", "{{file"]
 platforms = ["beos"]
+
+[contributes.external_tools.idea]
+label = "IDEA"
+command = ["{{project_root}}/idea"]
+file_command = ["idea", "{{project_root}}"]
 "#
         );
         let (manifest, diagnostics) = parse(&source);
         assert!(manifest.is_none());
         let errors = errors(&diagnostics);
-        assert_eq!(errors.len(), 4, "{errors:?}");
+        assert_eq!(errors.len(), 6, "{errors:?}");
         assert!(errors[0].contains("kind `overlay` must be `base` or `bindings`"));
         assert!(errors[1].contains("unknown variable `{root}`"));
         assert!(errors[2].contains("unmatched `{`"));
         assert!(errors[3].contains("platform `beos`"));
+        assert!(
+            errors[4].contains("`command` program `{project_root}/idea` cannot use variables"),
+            "{errors:?}"
+        );
+        assert!(
+            errors[5].contains("`file_command` does not use `{file}`"),
+            "{errors:?}"
+        );
+    }
+
+    /// 셸 문자열 명령은 받지 않는다 — 형식 오류로 진단한다(공백 경로가 인자를 깨고 셸로 돌리면 이름으로 명령이 주입된다).
+    #[test]
+    fn rejects_shell_string_commands() {
+        let source = format!(
+            "{MINIMAL}\n[contributes.external_tools.zed]\nlabel = \"Zed\"\ncommand = \"zed {{project_root}}\"\n"
+        );
+        let (manifest, diagnostics) = parse(&source);
+        assert!(manifest.is_none());
+        assert_eq!(
+            errors(&diagnostics),
+            [format!(
+                "{FILE}:9:11: error: external tool `zed`: `command` must be an array of strings like [\"zed\", \"{{project_root}}\"] — shell command strings are not accepted"
+            )]
+        );
+    }
+
+    /// 파일 변수는 `file_command` 에만 쓴다 — 파일이 없는 문맥(프로젝트 창)에서도 `command` 는 늘 치환된다.
+    #[test]
+    fn keeps_file_variables_out_of_the_project_command() {
+        let source = format!(
+            "{MINIMAL}\n[contributes.external_tools.zed]\nlabel = \"Zed\"\ncommand = [\"zed\", \"{{file}}:{{line}}\"]\n"
+        );
+        let (manifest, diagnostics) = parse(&source);
+        assert!(manifest.is_none());
+        let errors = errors(&diagnostics);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("uses `{file}`, which only `file_command` can use"),
+            "{errors:?}"
+        );
     }
 
     #[test]
@@ -869,16 +926,5 @@ platforms = ["beos"]
         assert_eq!(errors.len(), 2, "{errors:?}");
         assert!(errors[0].contains("`Dusk` is not a valid name"));
         assert!(errors[1].contains("`korean` is not a valid name"));
-    }
-
-    #[test]
-    fn template_check_accepts_every_known_variable() {
-        assert_eq!(
-            check_template("t {project_root} {file}:{line}:{column} {branch}"),
-            Ok(())
-        );
-        assert_eq!(check_template("open -a Terminal"), Ok(()));
-        assert!(check_template("x }").is_err());
-        assert!(check_template("x {a{file}}").is_err());
     }
 }
