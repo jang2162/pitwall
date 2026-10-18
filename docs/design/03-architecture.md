@@ -54,7 +54,7 @@
 
 - **한 프로세스, 프로젝트당 한 창** (IntelliJ와 동일한 감각)
 - 프로젝트 창을 닫으면 해당 프로젝트의 LSP/DAP/실행 프로세스 정리 (실행 중 프로세스는 확인 후)
-- 단일 인스턴스: 두 번째 실행(`pitwall path`)은 기존 인스턴스에 인자와 cwd 를 전달하고 종료. 첫 실행도 같은 열기 경로를 지난다(04 F2 「명령줄 규칙」). 키는 앱 identifier 하나다 — release 는 그대로 하나, **debug 빌드는 identifier 에 「빌드한 크레이트 폴더 + `$DATA`」의 해시를 붙여** 워크트리마다 · 데이터 폴더마다 갈린다(여러 워크트리의 dev 앱이 서로에게 전달되지 않게). 그래서 Windows · Linux 의 dev 빌드는 웹뷰 데이터 폴더(localStorage)도 키마다 따로다
+- 단일 인스턴스: 두 번째 실행(`pitwall path`)은 기존 인스턴스에 인자와 cwd 를 전달하고 종료. 첫 실행도 같은 열기 경로를 지난다(04 F2 「명령줄 규칙」). 키는 앱 identifier 하나다 — release 는 그대로 하나, **debug 빌드는 identifier 에 「빌드한 크레이트 폴더 + `$DATA`」의 해시를 붙여** 워크트리마다 · 데이터 폴더마다 갈린다(여러 워크트리의 dev 앱이 서로에게 전달되지 않게). release 빌드도 `PITWALL_DATA_DIR` 로 기본이 아닌 `$DATA` 를 주면 identifier 에 그 `$DATA` 의 해시를 붙인다 — 기본 `$DATA` 의 정식 앱은 키 하나 그대로이고, 임시 데이터로 띄운 release 빌드(성능 측정 · 시험)는 정식 앱과 인자를 주고받지 않는다. 그래서 Windows · Linux 에서는 키가 갈린 빌드마다 웹뷰 데이터 폴더(localStorage)도 따로다. macOS WKWebView 는 키가 아니라 번들 identifier 로 저장소를 정하므로, 기본이 아닌 `$DATA` 로 뜬 앱(debug 포함)은 그 `$DATA` 로 정한 별도 웹뷰 저장소(`data_store_identifier`, macOS 14+)를 쓴다
 - 웰컴 창: 최근 프로젝트, 원격 호스트, 새 프로젝트
 
 ## 4. RPC 설계
