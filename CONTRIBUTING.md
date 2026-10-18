@@ -75,7 +75,7 @@ Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오�
 - **측정 모드**: 앱은 `PITWALL_PERF_MARK=<파일>` 이 있을 때만 그 파일에 표시를 남긴다. 없으면 프로젝트 창 주소에 `perf=1` 이 붙지 않아 프론트엔드는 표시 컴포넌트를 그리지 않는다.
 - **유휴 메모리**: 첫 프레임 10초 뒤(`--idle-secs`)의 `phys_footprint`(Activity Monitor 의 「메모리」 와 같은 값)를 그 앱 인스턴스의 프로세스 전부에서 합친다. 300 MB 는 300 MiB 로 본다. RSS 도 참고로 남긴다 — 공유 페이지를 프로세스마다 다시 세어 footprint 보다 크게 나온다.
 - **프로세스 고르기**: WKWebView 의 WebContent · GPU · Networking 은 앱의 자식이 아니라 launchd 가 띄우는 XPC 프로세스이고, 책임 프로세스(responsible pid)를 요청한 쪽에서 물려받는다. 터미널에서 띄우면 앱도 WebKit 도 터미널 앱을 책임 프로세스로 가져 그 터미널의 다른 프로세스와 구별되지 않는다. 그래서 하네스는 실행 파일을 책임 프로세스를 끊고(`responsibility_spawnattrs_setdisclaim`) 띄운다 — 떼어 띄운 앱이 자기 pid 를 책임 프로세스로 갖고, 그 값을 가진 프로세스가 곧 그 인스턴스의 것이다(다른 Pitwall · Safari · 다른 앱의 WebKit 은 섞이지 않는다). 앱의 책임 프로세스가 앱 pid 도 띄운 pid 도 아니면 그 회는 실패한다. 회마다 고른 프로세스와 각자의 값이 결과에 남는다.
-- **반복과 캐시**: 준비 1회 + 측정 5회(`--warmup`, `--runs`). 준비 회는 결과에 남기되 중앙값 · 범위에서 뺀다 — 첫 실행은 디스크 캐시가 찬 정도가 다르다. 회 사이에 캐시를 비우지 않으므로(`sudo purge` 를 쓰지 않는다) **warm 디스크 캐시의 새 프로세스**를 잰 수치다.
+- **반복과 캐시**: 준비 1회 + 측정 5회(`--warmup`, `--runs`). 준비 회와 아래 「화면 잠금 · 가려진 창」 으로 제외한 회는 결과에 남기되 중앙값 · 범위에서 뺀다 — 첫 실행은 디스크 캐시가 찬 정도가 다르다. 회 사이에 캐시를 비우지 않으므로(`sudo purge` 를 쓰지 않는다) **warm 디스크 캐시의 새 프로세스**를 잰 수치다.
 
 결과는 `target/perf/<시각>/`(`--out` 으로 바꾼다)의 `result.json`(빌드 · 커밋 · OS · 하드웨어 · 회별 값 · 중앙값 · 범위)과 `summary.md` 다. 회마다 `run-<N>/` 에 그 회의 임시 `PITWALL_*_DIR`(`app/`), 프로젝트, 표시 파일(`marks.jsonl`)이 남고 앱 로그는 `run-<N>/app/state/logs` 에 있다. 목표를 넘어도 0 으로 끝난다(기록만 한다).
 
@@ -83,7 +83,7 @@ Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오�
 
 - **사람의 데이터**: 회마다 임시 `PITWALL_*_DIR` 에 프로젝트 하나를 등록해 쓰고, 물려받은 `PITWALL_*` 변수는 지운다. WKWebView 의 웹 저장소(localStorage)만은 번들 identifier 로 정해져 `~/Library/WebKit/dev.pitwall.desktop` 를 같은 identifier 의 다른 release 빌드와 함께 쓴다 — 회마다 새 프로젝트 id 로 도크 배치가 남는다.
 - **단일 인스턴스**: release 빌드는 키가 하나라 어디서 띄운 release Pitwall(정식 앱, 다른 워크트리의 번들)이든 인자를 받아 간다 — 그러면 띄운 프로세스가 곧바로 끝나 엉뚱하게 빠른 수치가 나온다. 하네스는 debug 가 아닌 `pitwall` 이 떠 있으면 시작하지 않고, 회 중에 띄운 프로세스가 앱을 남기지 않고 끝나면 「같은 키의 다른 Pitwall 이 인자를 받아 갔다」로 실패한다.
-- **화면 잠금 · 가려진 창**: 화면이 잠겨 있으면 시작하지 않는다(WebKit 이 프레임을 미뤄 기준선이 아니다). 창이 가려지거나 다른 Space 에 있어도 표시가 늦거나 오지 않는다 — 60초(`--timeout-secs`) 안에 오지 않으면 실패한다. 회마다 프로젝트 창이 한 번 앞에 뜬다(기본 6번).
+- **화면 잠금 · 가려진 창**: 화면이 잠겨 있으면 시작하지 않는다. 창이 가려지거나(다른 앱 · 다른 워크트리의 앱 창) 다른 Space 에 있으면 WebKit 이 프레임을 미루고 GPU · WebContent 메모리도 줄여, 그 회의 두 수치가 모두 기준선이 아니다. 그래서 첫 프레임 전에 문서가 한 번이라도 가려졌으면(`visibilitychange`) 표시에 `hidden` 이 실리고, 하네스는 그 회와 측정 중(유휴 표본 직후 확인)에 화면이 잠긴 회를 사유(`excluded`)와 함께 제외한다. 표시가 60초(`--timeout-secs`) 안에 오지 않으면 실패한다. 회마다 프로젝트 창이 한 번 앞에 뜬다(기본 6번) — 측정 중에는 그 창을 가리지 않는다. 첫 프레임 뒤에 가려진 것은 잡지 않는다.
 - **끄기**: 그 앱 pid 에 AppKit 종료 요청(정상 종료라 단일 인스턴스 소켓을 지운다) → SIGTERM → SIGKILL 순으로 끈다. 사람이 띄운 다른 Pitwall 은 건드리지 않는다. 끈 뒤 그 인스턴스의 프로세스가 남아 있으면 실패한다.
 
 다시 재기: `mise run perf`(번들을 다시 만든다). 만든 번들을 다시 재기만 할 때는 `cargo run -q --release -p pw-perf -- --app target/release/bundle/macos/Pitwall.app`. 인자는 `mise run perf -- --runs 3` 처럼 넘긴다. 기준선을 갱신할 때는 커밋하지 않은 변경이 없는 트리에서 재고(`commit.dirty` 가 false), `docs/superpowers/reports/<날짜>-perf-baseline-report.md` 와 같은 이름의 `.json` 으로 남긴다.
