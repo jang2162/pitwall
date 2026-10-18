@@ -16,6 +16,7 @@ import {
   Bot,
   Bug,
   Database,
+  ExternalLink,
   FolderTree,
   GitBranch,
   GitCommitHorizontal,
@@ -129,7 +130,8 @@ function ToolWindowBar({
   );
 }
 
-function StatusBar() {
+/** `extra` 는 오른쪽 끝(테마 고르기 앞)에 둔다 — 툴바가 생기기 전의 「외부 도구로 열기」 버튼 자리. */
+function StatusBar({ extra }: { extra?: ReactNode }) {
   const info = useRpcQuery("host.info", null);
   const appearance = useTheme((s) => s.appearance);
   return (
@@ -144,6 +146,7 @@ function StatusBar() {
       </span>
       <span className="flex-1" />
       <span data-testid="status-appearance">{appearance}</span>
+      {extra}
       <ThemeSwitcher />
     </footer>
   );
@@ -190,7 +193,10 @@ export function ProjectDock({
   );
 }
 
-/** 이 창의 프로젝트를 외부 도구로 연다(⌥F1 · ⌘⌥E, open-with/open-with.tsx). 실패 문장은 상태바 위 한 줄에 둔다. */
+/**
+ * 이 창의 프로젝트를 외부 도구로 연다(⌥F1 · ⌘⌥E, open-with/open-with.tsx). 실패 문장은 상태바 위 한 줄에 둔다. 상태바의 버튼은
+ * 10-ui 툴바의 「외부 도구로 열기」 자리다 — 툴바가 생기면 옮긴다.
+ */
 function ProjectOpenWith({ projectId }: { projectId: string }) {
   const T = useAppStrings().openWith;
   const project = useRpcQuery("project.get", { id: projectId });
@@ -199,7 +205,10 @@ function ProjectOpenWith({ projectId }: { projectId: string }) {
   target.current = project.data
     ? { projectId, name: project.data.name, worktree: activeWorktree() }
     : undefined;
-  const { actions, popup } = useOpenWith({ target: () => target.current, onError: setError });
+  const { actions, popup, openPopup } = useOpenWith({
+    target: () => target.current,
+    onError: setError,
+  });
   useRegisterActions(actions);
   return (
     <>
@@ -221,6 +230,20 @@ function ProjectOpenWith({ projectId }: { projectId: string }) {
           </button>
         </div>
       )}
+      <StatusBar
+        extra={
+          <button
+            type="button"
+            title={T.action}
+            aria-label={T.action}
+            disabled={!project.data}
+            onClick={() => openPopup()}
+            className="flex items-center rounded-sm px-1 hover:bg-ui-hover"
+          >
+            <ExternalLink size={11} aria-hidden />
+          </button>
+        }
+      />
     </>
   );
 }
@@ -243,8 +266,7 @@ export function ProjectWindow({
         <ProjectDock storage={window.localStorage} onApi={setApi} />
         <ToolWindowBar dock="right" api={api} />
       </div>
-      {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
-      <StatusBar />
+      {projectId !== undefined ? <ProjectOpenWith projectId={projectId} /> : <StatusBar />}
     </div>
   );
 }
