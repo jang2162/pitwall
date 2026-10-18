@@ -71,6 +71,9 @@ fn encode_query_value(value: &str) -> String {
     out
 }
 
+/// 웹뷰 데이터 저장소 id(instance.rs 의 `webview_store_id`). 기본 `$DATA` 로 뜬 앱은 `None` — 번들의 기본 저장소를 쓴다.
+pub struct WebviewStore(pub Option<[u8; 16]>);
+
 pub const WELCOME_LABEL: &str = "welcome";
 pub const SETTINGS_LABEL: &str = "settings";
 
@@ -242,6 +245,12 @@ fn build_at<R: Runtime>(
         //   macOS·Linux 는 true 일 때만 줌 폴리필을 넣고, WKWebView 의 핀치 확대(allowsMagnification)는 기본이 꺼짐이다.
         // - 스와이프 뒤로/앞으로: wry 의 back_forward_navigation_gestures 기본값(false)이 세 OS 모두 끈다.
         .zoom_hotkeys_enabled(false);
+    // 기본이 아닌 `$DATA` 로 뜬 앱은 localStorage 를 그 `$DATA` 의 저장소에 둔다(instance.rs 머리 주석). macOS 14+ 만 —
+    // 그보다 낮은 macOS 와 다른 OS 에서는 wry 가 무시한다.
+    let builder = match app.try_state::<WebviewStore>().and_then(|store| store.0) {
+        Some(id) => builder.data_store_identifier(id),
+        None => builder,
+    };
 
     // macOS 는 웹뷰를 타이틀바 자리까지 늘리고 신호등 버튼만 남긴다. 그 자리는 프론트엔드가 비워 둔다
     // (src/styles.css 의 .titlebar). 다른 OS 는 기본 장식을 쓴다.

@@ -87,10 +87,10 @@ fn context() -> tauri::Context {
 }
 
 /// 단일 인스턴스 키(instance.rs): 빌드 종류별 키에 시험 접미사(`PITWALL_TEST_INSTANCE`, debug 만)를 붙인 것.
-/// MCP 소켓 이름도 이 키로 정한다(mcp.rs).
+/// MCP 소켓 이름도 이 키로 정한다(mcp.rs). 앱 · 두 번째 실행 · `pitwall mcp` 가 모두 이것으로 계산한다.
 fn single_instance_key(base: &str, paths: &AppPaths) -> String {
     instance::with_test_suffix(
-        instance_identifier(base, paths, RELEASE),
+        instance_identifier(base, paths, custom_data(paths).as_deref(), RELEASE),
         std::env::var(instance::TEST_KEY_ENV).ok().as_deref(),
         // `RELEASE` 와 따로 판정한다 — 그 상수가 틀려도 시험 바이너리는 시험 키를 쓴다.
         cfg!(debug_assertions),
@@ -100,10 +100,22 @@ fn single_instance_key(base: &str, paths: &AppPaths) -> String {
 /// 이 빌드가 release 인가. 단일 인스턴스 키를 고른다([`instance_identifier`]). 시험(debug)이 이 값으로 dev 키를 보는지 지킨다.
 const RELEASE: bool = !cfg!(debug_assertions);
 
-/// 단일 인스턴스 키(instance.rs). debug 빌드만 빌드 폴더와 `$DATA` 로 가른다.
-fn instance_identifier(base: &str, paths: &AppPaths, release: bool) -> String {
+/// 이 실행의 기본이 아닌 `$DATA`(instance.rs 의 `custom_data`). 기본 `$DATA` 로 떴으면 `None`.
+fn custom_data(paths: &AppPaths) -> Option<std::path::PathBuf> {
+    let default = AppPaths::default_data(&pw_core::config::PathEnv::current()).ok();
+    instance::custom_data(&paths.data, default.as_deref())
+}
+
+/// 단일 인스턴스 키(instance.rs). debug 빌드는 빌드 폴더와 `$DATA` 로, release 빌드는 기본이 아닌 `$DATA`(`custom`)로만
+/// 가른다.
+fn instance_identifier(
+    base: &str,
+    paths: &AppPaths,
+    custom: Option<&std::path::Path>,
+    release: bool,
+) -> String {
     if release {
-        return instance::identifier(base, None);
+        return instance::release_identifier(base, custom);
     }
     // 아직 없는 `$DATA` 도 나중에 만들어진 뒤와 같은 값이 나오게 레지스트리와 같은 정규화를 쓴다.
     let data =
@@ -215,6 +227,10 @@ fn main() {
     let identifier = single_instance_key(&context.config().identifier, &paths);
     tracing::info!(%identifier, "single-instance key");
     context.config_mut().identifier = identifier.clone();
+    let webview_store = custom_data(&paths).map(|data| instance::webview_store_id(&data));
+    if let Some(id) = webview_store {
+        tracing::info!(store = %instance::uuid_string(id), "webview data store");
+    }
 
     // 단일 인스턴스 플러그인은 가장 먼저 등록한다 — 두 번째 실행은 이 플러그인의 setup 에서 인자와 cwd 를 기존 앱에 넘기고
     // 종료하므로 그 뒤의 플러그인 · setup 이 돌지 않는다.
@@ -227,6 +243,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(launch::Launch::new(host.registry().cloned()))
         .manage(windows::PendingOpens::default())
+        .manage(windows::WebviewStore(webview_store))
         .manage(diagnostics)
         .manage(perf)
         // 메뉴(`menu::build`)가 지금 언어로 글자를 만든다 — 메뉴보다 먼저 등록한다.
@@ -280,12 +297,19 @@ mod tests {
     }
 
     #[test]
-    fn release_builds_share_one_single_instance_key() {
+    fn release_builds_with_the_default_data_share_one_single_instance_key() {
         let paths = AppPaths::under(std::path::Path::new("/somewhere"));
         assert_eq!(
-            instance_identifier("dev.pitwall.desktop", &paths, true),
+            instance_identifier("dev.pitwall.desktop", &paths, None, true),
             "dev.pitwall.desktop"
         );
+        let custom = instance_identifier(
+            "dev.pitwall.desktop",
+            &paths,
+            Some(std::path::Path::new("/tmp/perf/data")),
+            true,
+        );
+        assert!(custom.starts_with("dev.pitwall.desktop.data-"), "{custom}");
     }
 
     /// 이 빌드(시험은 debug)가 실제로 고르는 키. [`RELEASE`] 가 뒤집히면 워크트리끼리 다시 섞인다.
@@ -293,9 +317,12 @@ mod tests {
     fn this_debug_build_keys_by_build_and_data() {
         let a = AppPaths::under(std::path::Path::new("/data-a"));
         let b = AppPaths::under(std::path::Path::new("/data-b"));
-        let key = instance_identifier("dev.pitwall.desktop", &a, RELEASE);
+        let key = instance_identifier("dev.pitwall.desktop", &a, None, RELEASE);
         assert!(key.starts_with("dev.pitwall.desktop.dev-"), "{key}");
-        assert_ne!(key, instance_identifier("dev.pitwall.desktop", &b, RELEASE));
+        assert_ne!(
+            key,
+            instance_identifier("dev.pitwall.desktop", &b, None, RELEASE)
+        );
     }
 
     /// 인자를 준 첫 실행(setup 본체)이 두 번째 실행과 같은 열기 경로로 프로젝트 창을 연다.

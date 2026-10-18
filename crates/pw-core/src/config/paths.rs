@@ -231,6 +231,14 @@ impl AppPaths {
         Self::resolve(&PathEnv::current())
     }
 
+    /// `PITWALL_DATA_DIR` 를 보지 않은 `$DATA` — 덮어쓰지 않은 실행이 쓰는 기본 자리. 데스크톱 앱이 「기본이 아닌
+    /// `$DATA` 로 떴는가」 를 가르는 데 쓴다(apps/desktop/src-tauri/src/instance.rs).
+    pub fn default_data(env: &PathEnv) -> Result<PathBuf, PathError> {
+        let mut env = env.clone();
+        env.vars.remove(Dir::Data.override_var());
+        Dir::Data.resolve(&env)
+    }
+
     /// 네 디렉터리를 한 루트 아래에 둔다. 테스트 · 포터블 실행용.
     pub fn under(root: &Path) -> Self {
         Self {
@@ -269,6 +277,25 @@ mod tests {
         assert_eq!(paths.data, Path::new("/home/u/.local/share/pitwall"));
         assert_eq!(paths.state, Path::new("/home/u/.local/state/pitwall"));
         assert_eq!(paths.cache, Path::new("/home/u/.cache/pitwall"));
+    }
+
+    #[test]
+    fn the_default_data_dir_ignores_only_the_data_override() {
+        let env = unix_home()
+            .var("PITWALL_DATA_DIR", "/override/data")
+            .var("XDG_DATA_HOME", "/xdg/data");
+        assert_eq!(
+            AppPaths::resolve(&env).unwrap().data,
+            Path::new("/override/data")
+        );
+        assert_eq!(
+            AppPaths::default_data(&env).unwrap(),
+            Path::new("/xdg/data/pitwall")
+        );
+        assert_eq!(
+            AppPaths::default_data(&unix_home()).unwrap(),
+            Path::new("/home/u/.local/share/pitwall")
+        );
     }
 
     #[test]
