@@ -845,7 +845,8 @@ describe("open with an external tool", () => {
     await act(async () => item!.click());
     await settle();
     expect(popupText()).toContain("다음에서 열기: infra");
-    // 메뉴가 닫히며 돌려놓은 포커스가 팝업의 입력 칸을 덮지 않는다.
+    // 팝업의 입력 칸에 포커스가 있다. happy-dom 은 메뉴가 닫히며 포커스를 되돌리는 동작을 재현하지 않아, 메뉴 뒤에 여는 지연
+    // (welcome-window.tsx 의 setTimeout)은 이 확인이 지키지 못한다.
     expect(document.activeElement?.getAttribute("placeholder")).toBe("도구 이름");
     expect(calls("openWith.list").map((c) => c.params)).toContainEqual({
       projectId: "c",

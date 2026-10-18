@@ -170,6 +170,20 @@ mod tests {
             Some(tool)
         );
         assert_eq!(find_program("my bin/tool", &path), None);
+        // PATH 의 상대 폴더는 보지 않는다 — 무엇의 상대인지(앱의 cwd)에 따라 다른 실행 파일이 잡힌다. 이 상대 경로는 지금 cwd 에서
+        // 보면 `bin` 을 가리킨다.
+        let cwd = std::env::current_dir().unwrap();
+        let up = "../".repeat(cwd.components().count() - 1);
+        let relative = PathBuf::from(format!(
+            "{up}{}",
+            bin.display().to_string().trim_start_matches('/')
+        ));
+        assert!(
+            relative.is_relative() && relative.join("tool").is_file(),
+            "{}",
+            relative.display()
+        );
+        assert_eq!(find_program("tool", relative.as_os_str()), None);
         assert_eq!(find_program("./tool", &path), None);
     }
 

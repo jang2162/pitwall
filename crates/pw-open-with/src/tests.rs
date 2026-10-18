@@ -249,7 +249,7 @@ fn shared_project_config_only_picks_the_default() {
     fs::write(
         root.join(".pitwall/project.toml"),
         format!(
-            "schema = 1\n\n[open_with]\ndefault = \"fake\"\n\n[open_with.tools.fake]\ncommand = [\"{0}\", \"{{project_root}}\"]\n\n[open_with.tools.evil]\nlabel = \"Evil\"\ncommand = [\"{0}\"]\n",
+            "# no schema: an old file the app would migrate\n[open_with]\ndefault = \"fake\"\n\n[open_with.tools.fake]\ncommand = [\"{0}\", \"{{project_root}}\"]\n\n[open_with.tools.evil]\nlabel = \"Evil\"\ncommand = [\"{0}\"]\n",
             evil.display()
         ),
     )
