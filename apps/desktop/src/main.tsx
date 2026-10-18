@@ -1,9 +1,11 @@
 import { RpcClient } from "@pitwall/rpc-client";
+import { invoke } from "@tauri-apps/api/core";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import defaultTheme from "../../../extensions/theme-default/themes/default.json";
 import { App } from "./App";
+import { FirstFrameMark, perfMarkRequested } from "./perf-mark";
 import { connectHost } from "./tauri-transport";
 import "./styles.css";
 import {
@@ -68,6 +70,13 @@ void applyRegistryTheme(
   log,
 );
 
+// src-tauri/src/perf.rs 의 perf_first_frame. 측정 모드가 아니면 그리지 않는다(perf-mark.tsx).
+function markFirstFrame() {
+  invoke("perf_first_frame").catch((e: unknown) =>
+    log.warn(`perf mark failed: ${String(e)}`, "perf"),
+  );
+}
+
 const root = document.getElementById("root");
 if (!root) throw new Error("#root 가 index.html 에 없다");
 
@@ -76,5 +85,6 @@ createRoot(root).render(
     <ThemeStoreProvider store={themeStore}>
       <App kind={windowKind} log={log} />
     </ThemeStoreProvider>
+    {perfMarkRequested(window.location.search) && <FirstFrameMark onFrame={markFirstFrame} />}
   </StrictMode>,
 );

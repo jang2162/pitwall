@@ -21,6 +21,7 @@ mod ipc;
 mod launch;
 mod mcp;
 mod menu;
+mod perf;
 mod shell_command;
 mod windows;
 
@@ -165,6 +166,8 @@ fn main() {
     if std::env::args_os().nth(1).is_some_and(|a| a == "mcp") {
         run_mcp();
     }
+    let perf = perf::PerfMarks::from_env();
+    perf.record("main", None);
     // 떼어 띄운 자식이면 표식을 지운다 — 앱이 띄우는 프로세스(터미널 등)가 물려받지 않게(detach.rs 머리 주석).
     let detached = std::env::var_os(detach::MARKER_ENV).is_some();
     // SAFETY: 아직 스레드를 띄우기 전이다(로그 · 런타임 · Tauri 모두 이 아래에서 시작한다).
@@ -225,6 +228,7 @@ fn main() {
         .manage(launch::Launch::new(host.registry().cloned()))
         .manage(windows::PendingOpens::default())
         .manage(diagnostics)
+        .manage(perf)
         // 메뉴(`menu::build`)가 지금 언어로 글자를 만든다 — 메뉴보다 먼저 등록한다.
         .manage(i18n)
         .menu(menu::build)

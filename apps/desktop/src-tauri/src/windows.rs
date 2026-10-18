@@ -195,11 +195,13 @@ pub fn open_project<R: Runtime>(
         return Ok(window);
     }
     pending.reset(&label, (!open.is_empty()).then(|| open.clone()));
+    let mut query = vec![("project", project_id)];
+    query.extend(crate::perf::project_query(app));
     build_at(
         app,
         WindowKind::Project,
         &label,
-        WindowKind::Project.url_with(&[("project", project_id)]),
+        WindowKind::Project.url_with(&query),
     )
 }
 
@@ -380,6 +382,21 @@ mod tests {
         );
         assert_eq!(take(app.handle(), &window), [open]);
         assert_eq!(take(app.handle(), &window), [], "꺼내면 비운다");
+    }
+
+    /// 측정 모드(perf.rs)면 프로젝트 창 주소에 `perf=1` 이 붙어 프론트엔드가 첫 프레임 표시를 남긴다.
+    #[test]
+    fn a_project_window_in_measurement_mode_asks_for_the_first_frame_mark() {
+        let app = app();
+        app.manage(crate::perf::PerfMarks::at(Some("/tmp/marks.jsonl".into())));
+        let window = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        let query: Vec<(String, String)> =
+            window.url().unwrap().query_pairs().into_owned().collect();
+        assert_eq!(
+            query,
+            [("window", "project"), ("project", "aaaa"), ("perf", "1")]
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        );
     }
 
     /// 창이 아직 리스너를 걸지 않았어도(막 만든 창) 요청이 사라지지 않는다 — 창은 마운트할 때 꺼낸다.

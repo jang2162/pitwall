@@ -164,7 +164,8 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             crate::launch::take_pending_find_project,
             crate::launch::path_kind,
             crate::windows::take_pending_project_opens,
-            crate::shell_command::install_shell_command
+            crate::shell_command::install_shell_command,
+            crate::perf::perf_first_frame
         ])
         .on_window_event(on_window_event)
         .on_page_load(|webview, payload| on_page_load(webview, payload.event()))
