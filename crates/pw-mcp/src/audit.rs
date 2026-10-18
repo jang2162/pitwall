@@ -126,7 +126,7 @@ impl AuditLog {
         &self.file
     }
 
-    /// 한 행을 쓴다. 디스크 IO 를 하므로 비동기 문맥에서는 `spawn_blocking` 으로 부른다.
+    /// 한 행을 쓴다. 디스크 IO 를 하므로 비동기 문맥에서 부르지 않는다 — 세션은 기록 스레드(`server.rs` `audit_writer`)에서 부른다.
     pub fn record(&self, entry: &Entry) -> Result<(), String> {
         let mut guard = self.conn.lock().unwrap_or_else(PoisonError::into_inner);
         if guard.is_none() {

@@ -131,6 +131,29 @@ struct Inner {
     /// 세션이 끝나면 취소된다([`serve`] 가 취소한다). 설정 감시 · 버스 구독 · list_changed 태스크가 여기에 묶인다.
     cancel: CancellationToken,
     client_info: Mutex<Option<String>>,
+    /// 감사 기록 큐([`audit_writer`]). 세션의 호출 순서대로 쓰인다.
+    audit: std::sync::mpsc::Sender<Entry>,
+}
+
+/// 세션 하나의 감사 기록을 **받은 순서대로** 쓰는 스레드를 띄우고 그 큐를 돌려준다. 호출마다 `spawn_blocking` 으로 쓰면 blocking
+/// 풀의 스레드 배정과 잠금 획득 순서에 보장이 없어 행 순서(`id`)가 호출 순서와 갈린다. 응답은 큐에 넣기만 하고 기록을 기다리지
+/// 않는다. 세션이 끝나 큐의 송신 쪽이 모두 버려지면 남은 기록을 쓰고 스레드가 끝난다.
+fn audit_writer(log: Arc<AuditLog>, session: &str) -> std::sync::mpsc::Sender<Entry> {
+    let (tx, rx) = std::sync::mpsc::channel::<Entry>();
+    let spawned = std::thread::Builder::new()
+        .name("mcp-audit".to_owned())
+        .spawn(move || {
+            for entry in rx {
+                if let Err(e) = log.record(&entry) {
+                    tracing::warn!(%e, tool = entry.tool, "cannot write the mcp audit log");
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        // 받는 쪽이 없으니 보내기가 실패하고 그때마다 경고가 남는다(audit 머리 주석: 기록 실패는 경고로만).
+        tracing::warn!(%e, session, "cannot start the mcp audit writer");
+    }
+    tx
 }
 
 impl Session {
@@ -163,6 +186,7 @@ impl Session {
         );
         let project = resolved.map(|r| SessionProject { id: r.project.id });
         let id = session_id();
+        let audit = audit_writer(Arc::clone(&services.audit), &id);
         tracing::info!(
             session = %id,
             transport = services.transport,
@@ -178,6 +202,7 @@ impl Session {
                 id,
                 cancel,
                 client_info: Mutex::new(None),
+                audit,
             }),
         })
     }
@@ -323,13 +348,10 @@ impl Session {
             result_size,
             duration: started.elapsed(),
         };
-        let log = Arc::clone(&self.inner.services.audit);
-        // 응답을 기다리게 하지 않는다. 기록 실패는 경고로만 남는다(audit 머리 주석).
-        tokio::task::spawn_blocking(move || {
-            if let Err(e) = log.record(&entry) {
-                tracing::warn!(%e, tool = entry.tool, "cannot write the mcp audit log");
-            }
-        });
+        // 응답을 기다리게 하지 않는다 — 큐에 넣기만 한다. 기록 실패는 경고로만 남는다(audit 머리 주석).
+        if let Err(e) = self.inner.audit.send(entry) {
+            tracing::warn!(tool = e.0.tool, "cannot queue the mcp audit log entry");
+        }
     }
 }
 
