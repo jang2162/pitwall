@@ -39,7 +39,8 @@ pub enum Installed {
 pub enum InstallError {
     /// 대상이 심링크가 아닌 파일 · 폴더다.
     NotALink(PathBuf),
-    /// 관리자 권한 요청을 사람이 취소했다.
+    /// 관리자 권한 요청을 사람이 취소했다. 권한 상승(암호 창)은 macOS 에만 있다.
+    #[cfg(target_os = "macos")]
     Cancelled,
     /// 실행 중인 위치가 사라질 곳이다(디스크 이미지 · App Translocation).
     TransientSource(PathBuf),
@@ -54,6 +55,7 @@ impl std::fmt::Display for InstallError {
                 "{} already exists and is not a link Pitwall created. Remove it and try again.",
                 path.display()
             ),
+            #[cfg(target_os = "macos")]
             InstallError::Cancelled => f.write_str("cancelled"),
             InstallError::TransientSource(path) => write!(
                 f,
@@ -306,6 +308,7 @@ fn install_and_report<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             };
             (text, MessageDialogKind::Info, Ok(()))
         }
+        #[cfg(target_os = "macos")]
         Err(InstallError::Cancelled) => {
             tracing::info!("shell command install cancelled");
             return Err(InstallError::Cancelled.to_string());
@@ -338,7 +341,8 @@ fn install_and_report<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     result
 }
 
-/// 메뉴 경로(포커스된 창이 없을 때). 메인 스레드를 막지 않게 블로킹 스레드로 보낸다.
+/// 메뉴 경로(포커스된 창이 없을 때). 메인 스레드를 막지 않게 블로킹 스레드로 보낸다. 메뉴 항목은 macOS 앱 메뉴에만 있다.
+#[cfg(target_os = "macos")]
 pub fn install_in_background<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -452,14 +456,17 @@ mod tests {
         let target = d.bin.join("pitwall");
 
         readonly();
-        assert_eq!(
-            install(&d.app, &target, |_, _| Err(InstallError::Cancelled)),
-            Err(InstallError::Cancelled)
-        );
-        assert!(
-            fs::symlink_metadata(&target).is_err(),
-            "취소하면 아무것도 만들지 않는다"
-        );
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                install(&d.app, &target, |_, _| Err(InstallError::Cancelled)),
+                Err(InstallError::Cancelled)
+            );
+            assert!(
+                fs::symlink_metadata(&target).is_err(),
+                "취소하면 아무것도 만들지 않는다"
+            );
+        }
 
         let called = Cell::new(false);
         let result = install(&d.app, &target, |source, target| {

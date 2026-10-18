@@ -90,6 +90,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// 시작 파일이 우연히 찍을 수 없는 표식. 셸이 따로 해석하지 않는 글자(영숫자 · `_`)만 쓴다.
+#[cfg(unix)]
 fn marker() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
