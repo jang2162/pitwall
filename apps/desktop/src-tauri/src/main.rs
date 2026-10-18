@@ -268,6 +268,7 @@ fn main() {
                 config_events,
                 launch::invocation_from_env(),
             );
+            perf::watch_parent(app.handle());
             // 주 인스턴스만 MCP 소켓을 연다(떼어 띄우기 전의 프로세스 · 두 번째 실행은 여기 오지 않는다).
             #[cfg(unix)]
             mcp::serve_socket(host.clone(), paths.clone(), identifier.clone());

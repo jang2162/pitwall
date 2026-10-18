@@ -56,6 +56,31 @@ it("marks once, on the second frame after the first commit", () => {
   expect(onFrame).toHaveBeenCalledTimes(1);
   expect(onFrame).toHaveBeenCalledWith({ hidden: false });
   expect(frames).toHaveLength(0);
+});
+
+it("keeps reporting each time the window is hidden after its first frame", () => {
+  const frames: (() => void)[] = [];
+  const onHidden = vi.fn();
+  const doc = visibility("visible");
+  root = createRoot(document.createElement("div"));
+  act(() =>
+    root!.render(
+      <FirstFrameMark
+        onFrame={() => {}}
+        onHidden={onHidden}
+        frame={(cb) => void frames.push(cb)}
+        doc={doc}
+      />,
+    ),
+  );
+  frames.shift()!();
+  frames.shift()!();
+  doc.set("hidden");
+  doc.set("visible");
+  doc.set("hidden");
+  expect(onHidden).toHaveBeenCalledTimes(2);
+  act(() => root!.unmount());
+  root = undefined;
   expect(doc.listeners.size).toBe(0);
 });
 

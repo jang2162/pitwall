@@ -3,8 +3,9 @@
 //
 // 「첫 화면」 = 첫 React 커밋 뒤 두 번째 애니메이션 프레임. 형제 컴포넌트의 effect 는 같은 커밋(창 내용 전체)이 끝난 뒤에
 // 돌고, 첫 rAF 콜백은 그 커밋을 담은 프레임을 그리기 전에 불리므로 한 프레임 더 기다린다. 화면이 잠겼거나 창이 가려지면
-// WebKit 이 rAF 를 미뤄 표시가 늦게 오거나 오지 않는다 — 그 전에 문서가 한 번이라도 가려졌으면(`visibilitychange`) 표시에
-// `hidden` 을 실어 측정하는 쪽이 그 회를 기준선에서 뺀다.
+// WebKit 이 rAF 를 미루고 메모리를 줄인다 — 첫 프레임 전에 문서가 한 번이라도 가려졌으면(`visibilitychange`) 표시에
+// `hidden` 을 싣고, 그 뒤에도 가려질 때마다 `onHidden` 을 불러 측정하는 쪽이 유휴 표본 전에 가려진 회를 기준선에서 뺀다.
+// 그래서 리스너는 첫 프레임 뒤에도 떼지 않는다(측정 모드에서만 그려지는 컴포넌트다).
 
 import { useEffect } from "react";
 
@@ -23,10 +24,12 @@ const animationFrame = (callback: () => void) => void window.requestAnimationFra
 
 export function FirstFrameMark({
   onFrame,
+  onHidden,
   frame = animationFrame,
   doc = document,
 }: {
   onFrame: (mark: { hidden: boolean }) => void;
+  onHidden?: () => void;
   frame?: (callback: () => void) => void;
   doc?: Visibility;
 }) {
@@ -34,12 +37,13 @@ export function FirstFrameMark({
     let cancelled = false;
     let hidden = doc.visibilityState === "hidden";
     const watch = () => {
-      if (doc.visibilityState === "hidden") hidden = true;
+      if (doc.visibilityState !== "hidden") return;
+      hidden = true;
+      if (!cancelled) onHidden?.();
     };
     doc.addEventListener("visibilitychange", watch);
     frame(() =>
       frame(() => {
-        doc.removeEventListener("visibilitychange", watch);
         if (!cancelled) onFrame({ hidden });
       }),
     );
@@ -48,6 +52,6 @@ export function FirstFrameMark({
       cancelled = true;
       doc.removeEventListener("visibilitychange", watch);
     };
-  }, [onFrame, frame, doc]);
+  }, [onFrame, onHidden, frame, doc]);
   return null;
 }
