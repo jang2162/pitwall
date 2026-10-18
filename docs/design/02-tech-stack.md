@@ -149,6 +149,7 @@ pitwall/
 │  ├─ pw-rpc/            # RPC 타입/프로토콜, transport(IPC/stdio/ws)
 │  ├─ pw-rpc-gen/        # RPC 선언 → TS 타입 · JSON Schema 생성기 (`mise run gen`, 출력은 packages/rpc-client)
 │  ├─ pw-diag/           # 로그(tracing, 구성요소별 회전 파일) · 진단 정보 · 패닉 훅 (03 「로그 · 진단 (D22)」)
+│  ├─ pw-perf/           # 콜드 스타트 · 유휴 메모리 측정 하네스 (`mise run perf`, 06 「성능 목표 (검증 기준)」)
 │  ├─ pw-fs/             # 파일 트리, 감시, 검색
 │  ├─ pw-git/            # gix 읽기 + CLI 쓰기
 │  ├─ pw-db*/            # pw-db, pw-db-types, pw-db-sql, pw-db-driver(-postgres/-mysql/-sqlite/-redis) (§2.7)

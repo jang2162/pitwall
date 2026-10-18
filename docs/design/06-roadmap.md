@@ -32,6 +32,8 @@
 | 파일 퍼지 검색 (10만 파일) | 키 입력당 < 30ms |
 | 쿼리 결과 10만 행 그리드 | 스크롤 60fps, 스트리밍 표시 |
 
+콜드 스타트 · 유휴 메모리는 `mise run perf`(macOS release 번들)로 잰다. 시작점 · 끝점 · 메모리 지표 · 반복 방법은 `CONTRIBUTING.md` 「성능 기준선」 절, 잰 기준선은 그때의 커밋 · 기기와 함께 `docs/superpowers/reports/*-perf-baseline-report.md` 에 남는다.
+
 ## 3. 리스크
 
 | 리스크 | 영향 | 대응 |

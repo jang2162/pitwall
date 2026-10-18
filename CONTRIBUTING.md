@@ -33,6 +33,7 @@ mise trust && mise install && pnpm install
 | 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부 | `mise run licenses`   |
 | `THIRD_PARTY_NOTICES.md` 다시 만들기                                                      | `mise run notices`    |
 | Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                            | `mise run advisories` |
+| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)      | `mise run perf`       |
 
 하위 단위만 돌릴 때:
 
@@ -61,6 +62,33 @@ Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오�
 - **GUI 앱의 PATH(로그인 셸 PATH 가져오기)는 터미널에서 띄운 앱으로 확인하지 못한다.** `mise run dev` · 바이너리 직접 실행은 물론 **`open` 도 호출한 터미널의 환경을 앱에 넘긴다**(macOS 27 에서 확인 — `launchctl getenv PATH` 가 비어 있는데 `open -n -a …` 로 띄운 앱의 PATH 가 터미널 것이었다). launchd 환경 그대로 띄우려면 `pnpm --filter @pitwall/desktop tauri build --debug --bundles app` 로 번들을 만들고 `launchctl submit -l <라벨> -- /usr/bin/env PITWALL_CONFIG_DIR=… PITWALL_DATA_DIR=… PITWALL_STATE_DIR=… PITWALL_CACHE_DIR=… <번들>/Contents/MacOS/pitwall <경로>` 로 띄운다(앱 PATH 는 `ps eww -p <pid>` 로 본다). `submit` 작업은 앱이 끝나도 launchd 가 다시 띄우므로 **끝낼 때는 메뉴 종료가 아니라 `launchctl remove <라벨>`** 로 끝내고 `launchctl list` 에 라벨이 없는지 본다
 - 창이 앞에 없으면 `orca computer` 의 키 입력은 `window_not_focused` 로 거절된다. 사람의 포커스를 빼앗지 않고 누르려면 System Events 로 그 pid 의 창에서 웹 요소를 찾아 `AXPress` 한다 — `entire contents` 는 웹뷰 안으로 내려가지 않으므로 `UI elements` 를 재귀로 따라간다. 버튼은 `aria-label` 이 `description`, cmdk 목록 항목은 보이는 글자가 `title` 이다. 창 목록(`window 1`)이 몇 초씩 비는 일이 있어(-1719) 재시도가 필요하다
 - `mise run dev` 는 개발 서버를 그대로 열어 `tauri.conf.json` 의 CSP 가 적용되지 않는다(인라인 스크립트 · `eval` 이 돈다). CSP 아래 동작은 `pnpm --filter @pitwall/desktop tauri build --debug --no-bundle` 로 만든 `target/debug/pitwall` 을 실행해 확인한다(tauri://localhost). 그 바이너리는 다음 `mise run build`·`dev` 가 덮어쓴다.
+
+## 성능 기준선
+
+`mise run perf`(macOS)는 데스크톱 앱 release 번들(`target/release/bundle/macos/Pitwall.app`)을 만들고 `crates/pw-perf` 로 콜드 스타트와 유휴 메모리를 여러 번 잰다. 목표는 [`docs/design/06-roadmap.md`](docs/design/06-roadmap.md) 「성능 목표 (검증 기준)」 절이다. debug 빌드 수치는 기준선이 아니다 — 결과의 `build.profile` 이 잰 빌드를 적는다(바이너리가 놓인 `target/<프로필>/` 로 판정).
+
+무엇을 재는가:
+
+- **시작 경로**: CLI 콜드 스타트 — `<번들>/Contents/MacOS/pitwall <프로젝트>` 로 등록된 프로젝트 하나를 연다. 실행 파일은 앱을 떼어 다시 띄우므로(`apps/desktop/src-tauri/src/detach.rs`) 그 비용까지 든다. 웰컴 창을 거치는 경로(인자 없이 실행해 목록에서 열기)는 재지 않는다.
+- **시작점**: 하네스가 실행 파일을 띄우기 직전의 벽시계.
+- **끝점**: 프로젝트 창의 첫 화면 — 첫 React 커밋 뒤 두 번째 `requestAnimationFrame` 에서 웹뷰가 `perf_first_frame` 명령을 부르고, 앱이 그것을 받은 때의 벽시계(`apps/desktop/src/perf-mark.tsx`, `apps/desktop/src-tauri/src/perf.rs`). IPC 한 번만큼 늦게 찍힌다. 결과에는 떼어 띄운 앱이 `main` 에 들어온 때도 함께 남는다.
+- **측정 모드**: 앱은 `PITWALL_PERF_MARK=<파일>` 이 있을 때만 그 파일에 표시를 남긴다. 없으면 프로젝트 창 주소에 `perf=1` 이 붙지 않아 프론트엔드는 표시 컴포넌트를 그리지 않는다.
+- **유휴 메모리**: 첫 프레임 10초 뒤(`--idle-secs`)의 `phys_footprint`(Activity Monitor 의 「메모리」 와 같은 값)를 그 앱 인스턴스의 프로세스 전부에서 합친다. 300 MB 는 300 MiB 로 본다. RSS 도 참고로 남긴다 — 공유 페이지를 프로세스마다 다시 세어 footprint 보다 크게 나온다.
+- **프로세스 고르기**: WKWebView 의 WebContent · GPU · Networking 은 앱의 자식이 아니라 launchd 가 띄우는 XPC 프로세스이고, 책임 프로세스(responsible pid)를 요청한 쪽에서 물려받는다. 터미널에서 띄우면 앱도 WebKit 도 터미널 앱을 책임 프로세스로 가져 그 터미널의 다른 프로세스와 구별되지 않는다. 그래서 하네스는 실행 파일을 책임 프로세스를 끊고(`responsibility_spawnattrs_setdisclaim`) 띄운다 — 떼어 띄운 앱이 자기 pid 를 책임 프로세스로 갖고, 그 값을 가진 프로세스가 곧 그 인스턴스의 것이다(다른 Pitwall · Safari · 다른 앱의 WebKit 은 섞이지 않는다). 앱의 책임 프로세스가 앱 pid 도 띄운 pid 도 아니면 그 회는 실패한다. 회마다 고른 프로세스와 각자의 값이 결과에 남는다.
+- **반복과 캐시**: 준비 1회 + 측정 5회(`--warmup`, `--runs`). 준비 회는 결과에 남기되 중앙값 · 범위에서 뺀다 — 첫 실행은 디스크 캐시가 찬 정도가 다르다. 회 사이에 캐시를 비우지 않으므로(`sudo purge` 를 쓰지 않는다) **warm 디스크 캐시의 새 프로세스**를 잰 수치다.
+
+결과는 `target/perf/<시각>/`(`--out` 으로 바꾼다)의 `result.json`(빌드 · 커밋 · OS · 하드웨어 · 회별 값 · 중앙값 · 범위)과 `summary.md` 다. 회마다 `run-<N>/` 에 그 회의 임시 `PITWALL_*_DIR`(`app/`), 프로젝트, 표시 파일(`marks.jsonl`)이 남고 앱 로그는 `run-<N>/app/state/logs` 에 있다. 목표를 넘어도 0 으로 끝난다(기록만 한다).
+
+지키는 것과 멈추는 경우:
+
+- **사람의 데이터**: 회마다 임시 `PITWALL_*_DIR` 에 프로젝트 하나를 등록해 쓰고, 물려받은 `PITWALL_*` 변수는 지운다. WKWebView 의 웹 저장소(localStorage)만은 번들 identifier 로 정해져 `~/Library/WebKit/dev.pitwall.desktop` 를 같은 identifier 의 다른 release 빌드와 함께 쓴다 — 회마다 새 프로젝트 id 로 도크 배치가 남는다.
+- **단일 인스턴스**: release 빌드는 키가 하나라 어디서 띄운 release Pitwall(정식 앱, 다른 워크트리의 번들)이든 인자를 받아 간다 — 그러면 띄운 프로세스가 곧바로 끝나 엉뚱하게 빠른 수치가 나온다. 하네스는 debug 가 아닌 `pitwall` 이 떠 있으면 시작하지 않고, 회 중에 띄운 프로세스가 앱을 남기지 않고 끝나면 「같은 키의 다른 Pitwall 이 인자를 받아 갔다」로 실패한다.
+- **화면 잠금 · 가려진 창**: 화면이 잠겨 있으면 시작하지 않는다(WebKit 이 프레임을 미뤄 기준선이 아니다). 창이 가려지거나 다른 Space 에 있어도 표시가 늦거나 오지 않는다 — 60초(`--timeout-secs`) 안에 오지 않으면 실패한다. 회마다 프로젝트 창이 한 번 앞에 뜬다(기본 6번).
+- **끄기**: 그 앱 pid 에 AppKit 종료 요청(정상 종료라 단일 인스턴스 소켓을 지운다) → SIGTERM → SIGKILL 순으로 끈다. 사람이 띄운 다른 Pitwall 은 건드리지 않는다. 끈 뒤 그 인스턴스의 프로세스가 남아 있으면 실패한다.
+
+다시 재기: `mise run perf`(번들을 다시 만든다). 만든 번들을 다시 재기만 할 때는 `cargo run -q --release -p pw-perf -- --app target/release/bundle/macos/Pitwall.app`. 인자는 `mise run perf -- --runs 3` 처럼 넘긴다. 기준선을 갱신할 때는 커밋하지 않은 변경이 없는 트리에서 재고(`commit.dirty` 가 false), `docs/superpowers/reports/<날짜>-perf-baseline-report.md` 와 같은 이름의 `.json` 으로 남긴다.
+
+보지 않는 것: Linux · Windows, 캐시를 비운 진짜 콜드 기동, 웰컴 창 경로, LSP · 프로젝트 여러 개, 06 의 나머지 목표(git 그래프 · 퍼지 검색 · 그리드). CI 의 `perf` 잡은 같은 태스크를 돌려 job summary 와 artifact(`perf-baseline`)로 남긴다 — 러너는 느리고 들쭉날쭉하므로 기준선이 아니라 추세 참고다.
 
 ## RPC 타입 생성
 
@@ -94,6 +122,7 @@ MIT 프로젝트라 의존성은 허용형 라이선스만 쓴다(`docs/design/0
 | `check`      | PR, main push       | macOS·Linux·Windows 에서 `mise run lint`, `mise run test`, npm 라이선스 검사 | PR 을 막는다                                     |
 | `licenses`   | PR, main push       | Linux 에서 `mise run licenses`                                               | PR 을 막는다                                     |
 | `advisories` | PR, main push, 매일 | `mise run advisories`                                                        | PR 에서는 경고만, main push·매일 실행에서는 실패 |
+| `perf`       | PR, main push       | macOS 에서 `mise run perf`, 결과를 job summary · artifact(`perf-baseline`)로 | 막지 않는다(기록만, 「성능 기준선」)             |
 
 ## 커밋 메시지
 
