@@ -187,10 +187,21 @@ pub fn open_read_only(file: &Path, busy: Duration) -> Opened {
 }
 
 fn try_open_read_only(file: &Path, busy: Duration) -> Result<(Connection, String), Failure> {
-    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    // 쓰기 가능한 연결로 열고 쓰지 않는다(질의는 [`read_only`] 의 `query_only` 가 막는다). `SQLITE_OPEN_READ_ONLY` 로 WAL 파일을
+    // 열면, 앱이 닫혀 `-wal` · `-shm` 이 없을 때 그 둘을 만들고 닫으면서 지우지 못해 남긴다 — 쓸 수 있는 연결은 마지막으로 닫힐
+    // 때 걷는다. 만들지 않는 플래그라 파일이 없으면 만들지 않는다. 앱이 비정상 종료로 남긴 `-wal` 이 있으면 마지막 연결로 닫히며
+    // 그 내용(이미 커밋된 쓰기)을 파일에 옮긴다.
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = Connection::open_with_flags(file, flags)?;
     conn.busy_timeout(busy)?;
-    let check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    let (conn, check) = match quick_check(&conn) {
+        Ok(check) => (conn, check),
+        Err(e) if unwritable_error(&e) => {
+            drop(conn);
+            open_unwritable(file, busy)?
+        }
+        Err(e) => return Err(e.into()),
+    };
     if check != "ok" {
         return Err(Failure::Corrupt(format!("integrity check: {check}")));
     }
@@ -251,10 +262,18 @@ fn try_open(file: &Path, busy: Duration, migrations: &[Migration]) -> Result<Rea
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let mut conn = Connection::open_with_flags(file, flags)?;
+    let conn = Connection::open_with_flags(file, flags)?;
     prepare(&conn, busy)?;
     // 파일이 SQLite 가 아니면 여기서 처음 드러난다(열기 자체는 게으르다). b-tree 가 깨진 경우는 오류가 아니라 문장으로 온다.
-    let check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    let (mut conn, check) = match quick_check(&conn) {
+        Ok(check) => (conn, check),
+        // 쓰기 금지 폴더의 WAL 파일. 읽기만 하는 연결로 다시 열면 아래 `unwritable` 이 읽기 전용으로 돌린다.
+        Err(e) if unwritable_error(&e) => {
+            drop(conn);
+            open_unwritable(file, busy)?
+        }
+        Err(e) => return Err(e.into()),
+    };
     if check != "ok" {
         return Err(Failure::Corrupt(format!("integrity check: {check}")));
     }
@@ -275,18 +294,90 @@ fn try_open(file: &Path, busy: Duration, migrations: &[Migration]) -> Result<Rea
         }
         return read_only(conn, reason);
     }
+    use_wal(&conn);
     migrate(&mut conn, migrations)?;
     Ok(Ready::Writable(conn))
+}
+
+/// 쓰는 연결은 WAL 로 쓴다(03-architecture 「state.db」). rollback 저널에서는 커밋이 느린 디스크(Windows CI 실측 약 70ms)에서
+/// 쉬지 않고 쓰는 연결이 잠금을 곧바로 다시 잡아 busy 폴링으로 기다리는 다른 프로세스가 2초 안에 끼어들지 못했다. WAL 은 읽기가
+/// 쓰기를 기다리지 않고 커밋의 디스크 동기화도 한 번이다. 로컬 파일 시스템을 전제한다(`$DATA` 는 로컬).
+///
+/// 모드는 파일 머리에 남아 한 번 바꾸면 다음부터는 그대로다 — 이 앱의 옛 빌드가 연 연결도 다음 접근에서 WAL 로 따라온다. 다른
+/// 연결이 쓰는 중이라 이번에 못 바꾸면 rollback 저널로 쓰고 다음 열기에서 다시 해 본다. 열기를 실패시키지 않는다.
+fn use_wal(conn: &Connection) {
+    let _ =
+        conn.pragma_update_and_check(None, "journal_mode", "wal", |row| row.get::<_, String>(0));
+}
+
+fn quick_check(conn: &Connection) -> rusqlite::Result<String> {
+    conn.query_row("PRAGMA quick_check", [], |row| row.get(0))
+}
+
+/// 쓰기 금지 파일 · 폴더 때문에 이 연결로 파일을 읽지 못했는가. WAL 파일은 `-shm` 을 만들 수 없으면 쓰기 연결로 읽히지 않는다.
+fn unwritable_error(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(ErrorCode::ReadOnly | ErrorCode::CannotOpen)
+    )
+}
+
+/// 쓰기 연결로 읽지 못한 파일을 읽기만 하는 연결로 연다. 먼저 `SQLITE_OPEN_READ_ONLY`(앱이 열고 있어 `-wal` · `-shm` 이 있으면
+/// 이것으로 읽힌다), 그것도 안 되면 바뀌지 않는 파일(`immutable`)로 연다 — `-shm` 을 만들 수 없는 폴더에서 `-wal` 이 없는 WAL
+/// 파일은 SQLite 가 달리 읽지 못한다. 그 폴더에는 어느 연결도 `-wal` 을 만들 수 없으므로 연 동안 파일이 바뀌지 않는다.
+fn open_unwritable(file: &Path, busy: Duration) -> Result<(Connection, String), Failure> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let read_only = Connection::open_with_flags(file, flags).and_then(|conn| {
+        conn.busy_timeout(busy)?;
+        let check = quick_check(&conn)?;
+        Ok((conn, check))
+    });
+    match read_only {
+        Err(e) if unwritable_error(&e) => {
+            let conn = Connection::open_with_flags(
+                immutable_uri(file),
+                flags | OpenFlags::SQLITE_OPEN_URI,
+            )?;
+            let check = quick_check(&conn)?;
+            Ok((conn, check))
+        }
+        other => Ok(other?),
+    }
+}
+
+/// `file:` URI(`?immutable=1`). 경로의 `%` · `?` · `#` 은 URI 에서 뜻이 있어 퍼센트로 적는다. Windows 의 `C:\a` 는 `file:/C:/a` 다.
+fn immutable_uri(file: &Path) -> String {
+    let path = file.to_string_lossy().replace('\\', "/");
+    let mut uri = String::from("file:");
+    if !path.starts_with('/') {
+        uri.push('/');
+    }
+    for c in path.chars() {
+        match c {
+            '%' => uri.push_str("%25"),
+            '?' => uri.push_str("%3F"),
+            '#' => uri.push_str("%23"),
+            c => uri.push(c),
+        }
+    }
+    uri.push_str("?immutable=1");
+    uri
 }
 
 /// 파일이나 폴더가 이 프로세스에게 쓰기 금지인가. 폴더가 막히면 저널 파일을 못 만들어 첫 쓰기에서야 실패하므로 미리 본다.
 /// 폴더는 권한 비트가 아니라 **실제로 파일을 만들어 보고** 판정한다 — 쓰기 비트는 있어도 이 사용자에게는 막힌 폴더(다른 사용자 소유),
 /// 읽기 전용으로 마운트된 볼륨, 쓰기를 막지 않는 Windows 폴더 읽기 전용 속성을 모두 같은 방법으로 가린다.
 fn unwritable(conn: &Connection, file: &Path) -> Option<String> {
+    // 폴더를 먼저 본다 — 쓰기 금지 폴더의 WAL 파일은 읽기만 하는 연결로 다시 열었으므로 그 연결은 언제나 읽기 전용이다.
+    unwritable_folder(file).or_else(|| {
+        conn.is_readonly(rusqlite::MAIN_DB)
+            .unwrap_or(false)
+            .then(|| "the file is read-only".to_owned())
+    })
+}
+
+fn unwritable_folder(file: &Path) -> Option<String> {
     static PROBES: AtomicU64 = AtomicU64::new(0);
-    if conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(false) {
-        return Some("the file is read-only".into());
-    }
     let dir = file.parent()?;
     // 같은 폴더를 여는 다른 프로세스 · 스레드와 이름이 겹치지 않게 pid 와 프로세스 안 순번을 붙인다.
     let probe = dir.join(format!(
@@ -332,14 +423,28 @@ fn migrate(conn: &mut Connection, migrations: &[Migration]) -> Result<(), Failur
     }
     for (from, step) in migrations.iter().enumerate() {
         let from = from as u32;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let version: u32 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > from {
-            continue;
+        let refused = match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
+            Ok(tx) => {
+                let version: u32 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+                if version <= from {
+                    step(&tx)?;
+                    tx.pragma_update(None, "user_version", from + 1)?;
+                    tx.commit()?;
+                }
+                continue;
+            }
+            Err(e) => e,
+        };
+        // 쓰기 잠금을 기다리다 시간을 넘겼다. 같은 새 파일을 동시에 처음 연 다른 연결이 그 사이 이 단계를 올리고 곧바로 쓰기를
+        // 이어 가면 쓰기 잠금이 비는 틈은 짧아 기다리는 쪽이 계속 진다(디스크 동기화가 느린 Windows 에서 늘 그랬다). 읽기는 그
+        // 틈에도 되므로 버전을 다시 읽어, 이미 올라갔으면 잠금 없이 넘어간다.
+        if refused.sqlite_error_code() == Some(ErrorCode::DatabaseBusy) {
+            let version: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+            if version > from {
+                continue;
+            }
         }
-        step(&tx)?;
-        tx.pragma_update(None, "user_version", from + 1)?;
-        tx.commit()?;
+        return Err(refused.into());
     }
     Ok(())
 }

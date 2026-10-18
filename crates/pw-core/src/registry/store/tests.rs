@@ -241,20 +241,29 @@ fn unreadable_newer_schema_falls_back_to_memory() {
     );
 }
 
+/// 다른 프로세스가 파일을 통째로 잠근 상태. WAL 에서는 쓰기 트랜잭션이 읽기를 막지 않으므로 `locking_mode = EXCLUSIVE` 로 파일
+/// 잠금을 쥔다. 잠금은 연결을 닫아야 풀린다.
+fn lock_file(file: &Path) -> Connection {
+    let holder = Connection::open(file).unwrap();
+    holder
+        .execute_batch("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE")
+        .unwrap();
+    holder
+}
+
 #[test]
 fn locked_file_falls_back_to_memory_and_asks_for_a_retry() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("state.db");
     drop(open(&file, BUSY_TIMEOUT));
-    let holder = Connection::open(&file).unwrap();
-    holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let holder = lock_file(&file);
     let opened = open(&file, Duration::from_millis(50));
     let StorageStatus::Memory { reason, .. } = &opened.status else {
         panic!("{:?}", opened.status);
     };
     assert!(reason.contains("locked"), "{reason}");
     assert!(opened.locked_at.is_some());
-    holder.execute_batch("ROLLBACK").unwrap();
+    drop(holder);
     // 잠김은 손상이 아니다 — 파일을 옮기지 않았다.
     assert!(!tmp.path().join("state.db.corrupt").exists());
     assert!(matches!(
@@ -297,4 +306,212 @@ fn read_only_file_or_folder_opens_read_only() {
         matches!(&status, StorageStatus::ReadOnly { reason, .. } if reason.contains("is not writable")),
         "{status:?}"
     );
+}
+
+fn journal_mode(conn: &Connection) -> String {
+    conn.pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .unwrap()
+}
+
+fn insert(conn: &Connection, id: &str) {
+    conn.execute(
+        "INSERT INTO projects (id, name, host, config_mode, slug, created_at)
+         VALUES (?1, ?1, 'local', 'repository', ?1, 0)",
+        [id],
+    )
+    .unwrap();
+}
+
+fn count(conn: &Connection) -> u32 {
+    conn.query_row("SELECT count(*) FROM projects", [], |row| row.get(0))
+        .unwrap()
+}
+
+/// 폴더의 파일 이름들(정렬). 읽기 전용 열기가 `-wal` · `-shm` 을 만들지 않는지 본다.
+fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn writable_opens_use_wal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let opened = open(&tmp.path().join("state.db"), BUSY_TIMEOUT);
+    assert!(matches!(opened.status, StorageStatus::Ok { .. }));
+    assert_eq!(journal_mode(&opened.conn), "wal");
+}
+
+/// 이 앱의 옛 빌드가 만든 rollback 저널 파일은 처음 열 때 WAL 로 바뀐다. 옛 빌드가 같은 파일을 열어 둔 채여도 깨지지 않는다 —
+/// 그 연결은 다음 접근에서 WAL 로 따라오고, 읽기 트랜잭션 중이라 이번에 못 바꾸면 rollback 으로 쓰고 다음 열기에서 바꾼다.
+#[test]
+fn a_rollback_file_switches_to_wal_while_an_older_build_keeps_using_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("state.db");
+    drop(open(&file, BUSY_TIMEOUT));
+    let old = Connection::open(&file).unwrap();
+    old.busy_timeout(BUSY_TIMEOUT).unwrap();
+    assert_eq!(
+        old.pragma_update_and_check(None, "journal_mode", "delete", |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap(),
+        "delete"
+    );
+    insert(&old, "before");
+
+    // 옛 연결이 읽기 트랜잭션 중: 이번에는 못 바꾸지만 열기는 성공하고 쓸 수 있다.
+    old.execute_batch("BEGIN; SELECT count(*) FROM projects;")
+        .unwrap();
+    let opened = open(&file, Duration::from_millis(50));
+    assert!(
+        matches!(opened.status, StorageStatus::Ok { .. }),
+        "{:?}",
+        opened.status
+    );
+    assert_eq!(journal_mode(&opened.conn), "delete");
+    old.execute_batch("COMMIT").unwrap();
+    insert(&opened.conn, "while-old-read");
+    drop(opened);
+
+    // 옛 연결이 열려 있지만 쉬는 중: 바꾼다. 옛 연결은 그대로 읽고 쓴다.
+    let opened = open(&file, BUSY_TIMEOUT);
+    assert!(matches!(opened.status, StorageStatus::Ok { .. }));
+    assert_eq!(journal_mode(&opened.conn), "wal");
+    insert(&old, "old-after-switch");
+    insert(&opened.conn, "new-after-switch");
+    assert_eq!(count(&old), 4);
+    assert_eq!(count(&opened.conn), 4);
+    assert_eq!(journal_mode(&old), "wal");
+}
+
+/// 앱 없이 뜬 `pitwall mcp` 의 읽기 전용 열기(`SQLITE_OPEN_READ_ONLY`)가 WAL 파일을 읽는다:
+/// (a) 앱이 열고 있어 `-wal` · `-shm` 이 있을 때 — 체크포인트 전의 쓰기까지 보인다.
+/// (b) 앱이 닫혀 `-wal` · `-shm` 이 없을 때 — 파일을 바로 읽고 `-wal` · `-shm` 을 만들지 않는다.
+#[test]
+fn read_only_opens_read_wal_files_with_and_without_the_app() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("state.db");
+
+    let app = open(&file, BUSY_TIMEOUT);
+    insert(&app.conn, "a");
+    assert!(tmp.path().join("state.db-wal").exists());
+    let reader = open_read_only(&file, BUSY_TIMEOUT);
+    assert!(
+        matches!(reader.status, StorageStatus::ReadOnly { .. }),
+        "(a) {:?}",
+        reader.status
+    );
+    assert_eq!(count(&reader.conn), 1, "(a) 체크포인트 전의 쓰기도 보인다");
+    insert(&app.conn, "b");
+    assert_eq!(count(&reader.conn), 2, "(a) 열린 뒤의 쓰기도 보인다");
+    drop(reader);
+    drop(app);
+
+    let before = entries(tmp.path());
+    assert_eq!(before, ["state.db"], "앱이 닫히면 -wal · -shm 이 걷힌다");
+    let reader = open_read_only(&file, BUSY_TIMEOUT);
+    assert!(
+        matches!(reader.status, StorageStatus::ReadOnly { .. }),
+        "(b) {:?}",
+        reader.status
+    );
+    assert_eq!(count(&reader.conn), 2);
+    drop(reader);
+    assert_eq!(entries(tmp.path()), before, "(b) 아무 파일도 만들지 않는다");
+}
+
+/// (c) `$DATA` 폴더가 쓰기 금지일 때 — 앱이 닫혀 있든(파일만) 열고 있든(`-wal` · `-shm` 있음) 읽는다.
+/// root 처럼 권한을 무시하는 계정이면 확인할 것이 없다.
+#[cfg(unix)]
+#[test]
+fn read_only_opens_read_wal_files_in_a_read_only_folder() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let set_mode = |path: &Path, mode: u32| {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("data");
+    let file = dir.join("state.db");
+    let app = open(&file, BUSY_TIMEOUT);
+    insert(&app.conn, "a");
+    drop(app);
+
+    set_mode(&dir, 0o555);
+    if fs::write(dir.join("probe"), "").is_ok() {
+        set_mode(&dir, 0o755);
+        return;
+    }
+    let closed = open_read_only(&file, BUSY_TIMEOUT);
+    let closed_count =
+        matches!(closed.status, StorageStatus::ReadOnly { .. }).then(|| count(&closed.conn));
+    let closed_status = closed.status.clone();
+    drop(closed);
+    // 앱 자신의 열기도 같은 폴더에서 읽기 전용으로 뜬다(메모리로 빠지지 않는다).
+    let app_status = open(&file, BUSY_TIMEOUT).status;
+    let after = entries(&dir);
+    set_mode(&dir, 0o755);
+    assert_eq!(
+        closed_count,
+        Some(1),
+        "(c) 앱이 닫혀 있을 때: {closed_status:?}"
+    );
+    assert!(
+        matches!(&app_status, StorageStatus::ReadOnly { reason, .. } if reason.contains("is not writable")),
+        "{app_status:?}"
+    );
+    assert_eq!(after, ["state.db"]);
+
+    let app = open(&file, BUSY_TIMEOUT);
+    insert(&app.conn, "b");
+    set_mode(&dir, 0o555);
+    let running = open_read_only(&file, BUSY_TIMEOUT);
+    let running_count =
+        matches!(running.status, StorageStatus::ReadOnly { .. }).then(|| count(&running.conn));
+    let running_status = running.status.clone();
+    drop(running);
+    set_mode(&dir, 0o755);
+    drop(app);
+    assert_eq!(
+        running_count,
+        Some(2),
+        "(c) 앱이 열고 있을 때: {running_status:?}"
+    );
+}
+
+/// 같은 새 파일을 먼저 연 다른 프로세스가 마이그레이션하고 곧바로 쓰기를 이어 가면, 이 열기는 마이그레이션 단계의 쓰기 잠금을 끝내
+/// 못 잡는다. 그 사이 단계가 이미 올라갔으면 실패가 아니다 — 메모리로 빠지지 않고 연다(Windows CI 에서 레지스트리 넷 중 셋이 이렇게
+/// 빠졌다). 다른 연결은 열기가 버전 0 을 읽고 쓰기 잠금을 기다리는 동안 커밋하고, 놓자마자 다시 쓰기 잠금을 쥔다 — 폴링으로
+/// 기다리는 열기는 그 틈을 놓친다.
+#[test]
+fn a_migration_finished_by_another_writer_while_waiting_is_not_a_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("state.db");
+    let mut other = Connection::open(&file).unwrap();
+    let busy = Duration::from_millis(300);
+    let tx = other
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+    let writer = {
+        let file = file.clone();
+        std::thread::spawn(move || open(&file, busy))
+    };
+    // 열기는 버전 0 을 읽고 마이그레이션 단계의 쓰기 잠금을 300ms 까지 기다리는 중이다.
+    std::thread::sleep(Duration::from_millis(150));
+    v0_to_v1(&tx).unwrap();
+    tx.pragma_update(None, "user_version", 1).unwrap();
+    tx.commit().unwrap();
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let opened = writer.join().unwrap();
+    other.execute_batch("ROLLBACK").unwrap();
+    assert!(
+        matches!(opened.status, StorageStatus::Ok { .. }),
+        "{:?}",
+        opened.status
+    );
+    assert_eq!(version(&opened.conn), 1);
 }

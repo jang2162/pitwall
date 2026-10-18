@@ -431,14 +431,38 @@ fn concurrent_writers_on_one_file_wait_instead_of_failing() {
     }
 }
 
+/// 다른 프로세스가 파일을 통째로 잠근 상태. WAL 에서는 쓰기 트랜잭션이 읽기를 막지 않으므로 `locking_mode = EXCLUSIVE` 로 파일
+/// 잠금을 쥔다. 잠금은 연결을 닫아야 풀린다.
+fn lock_file(file: &Path) -> Connection {
+    let holder = Connection::open(file).unwrap();
+    holder
+        .execute_batch("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE")
+        .unwrap();
+    holder
+}
+
+/// `f.registry` 를 열지 않고 프로젝트 하나를 파일에 써 둔다 — 열린 WAL 연결은 파일에 공유 잠금을 쥐어 [`lock_file`] 을 막는다.
+fn seed(f: &Fixture, rel: &str) -> Project {
+    let seeding = Registry::new(
+        f.paths.clone(),
+        Some(f.base.join("home")),
+        EventBus::new(DEFAULT_CAPACITY),
+    );
+    seeding
+        .create(NewProject {
+            root: f.dir(rel),
+            ..NewProject::default()
+        })
+        .unwrap()
+}
+
 /// 잠김으로 메모리에 떨어지면 목록은 비고 쓰기는 거절된다. 잠김이 풀리면 다음 호출에서 파일로 돌아간다.
 #[test]
 fn locked_registry_refuses_writes_and_recovers_once_unlocked() {
     let f = Fixture::new();
-    let kept = f.add(&f.dir("kept"));
+    let kept = seed(&f, "kept");
     let file = f.paths.data.join(store::FILE_NAME);
-    let holder = Connection::open(&file).unwrap();
-    holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let holder = lock_file(&file);
 
     let locked = Registry::with_timings(
         f.paths.clone(),
@@ -461,7 +485,7 @@ fn locked_registry_refuses_writes_and_recovers_once_unlocked() {
         "{refused:?}"
     );
 
-    holder.execute_batch("ROLLBACK").unwrap();
+    drop(holder);
     assert_eq!(locked.list().unwrap(), vec![kept.clone()]);
     assert!(matches!(locked.status(), StorageStatus::Ok { .. }));
     assert!(
@@ -481,13 +505,9 @@ fn locked_registry_retries_cheaply_and_restores_the_write_timeout() {
     use std::time::Instant;
 
     let f = Fixture::new();
-    f.add(&f.dir("kept"));
+    seed(&f, "kept");
     let file = f.paths.data.join(store::FILE_NAME);
-    let lock = || {
-        let holder = Connection::open(&file).unwrap();
-        holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
-        holder
-    };
+    let lock = || lock_file(&file);
     let timings = |retry_interval| Timings {
         busy: Duration::from_millis(1000),
         retry_interval,
@@ -509,7 +529,6 @@ fn locked_registry_retries_cheaply_and_restores_the_write_timeout() {
         assert_eq!(waiting.list().unwrap(), Vec::new());
         assert!(started.elapsed() < quick, "{:?}", started.elapsed());
     }
-    holder.execute_batch("ROLLBACK").unwrap();
     drop(holder);
     assert!(matches!(waiting.status(), StorageStatus::Memory { .. }));
 
@@ -525,12 +544,13 @@ fn locked_registry_retries_cheaply_and_restores_the_write_timeout() {
     let started = Instant::now();
     assert_eq!(retrying.list().unwrap(), Vec::new());
     assert!(started.elapsed() < quick, "{:?}", started.elapsed());
-    holder.execute_batch("ROLLBACK").unwrap();
     drop(holder);
     assert_eq!(retrying.list().unwrap().len(), 1, "풀리면 파일로 돌아온다");
 
-    // 다시 연 연결의 쓰기는 busy(1초)까지 기다린다 — 300ms 쥐었다 놓는 쓰기에 실패하지 않는다.
-    let holder = lock();
+    // 다시 연 연결의 쓰기는 busy(1초)까지 기다린다 — 300ms 쥐었다 놓는 쓰기에 실패하지 않는다. `retrying` 이 파일을 열고
+    // 있으므로 파일 잠금 대신 다른 연결의 쓰기 트랜잭션으로 막는다.
+    let holder = Connection::open(&file).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
     let release = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(300));
         holder.execute_batch("ROLLBACK").unwrap();
