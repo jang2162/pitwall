@@ -40,6 +40,14 @@ jobs:
         with:
           version: ${{ env.MISE_VERSION }}
 
+      # lint 가 부르는 rustfmt · clippy 를 rust-toolchain.toml 그대로 깐다. mise 의 rust 는 ~/.cargo/bin 을 가리키는 심링크라
+      # mise 캐시가 맞으면 설치를 건너뛰고, 툴체인(~/.rustup)은 그 캐시에 없다. 그러면 첫 cargo 호출이 툴체인을 자동 설치하는데
+      # mise 가 준 RUSTUP_TOOLCHAIN 이 툴체인 파일을 가려 러너의 minimal 프로필(rustfmt · clippy 없음)로만 깔린다.
+      # RUSTUP_TOOLCHAIN 을 뺀 채 인자 없이 부르면 툴체인 파일대로 깔고, 이미 있으면 빠진 components 만 더한다.
+      - name: Rust toolchain components
+        shell: bash
+        run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
+
       - name: pnpm store path
         id: pnpm-store
         shell: bash
