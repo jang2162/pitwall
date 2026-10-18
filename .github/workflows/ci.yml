@@ -74,6 +74,7 @@ jobs:
   # job summary 와 artifact 로 남긴다. 무엇을 재는지는 CONTRIBUTING.md 「성능 기준선」 절.
   # 러너는 느리고 들쭉날쭉하므로 기록만 한다 — 목표를 넘어도(pw-perf 는 넘어도 0 으로 끝난다), 측정이 실패해도 PR 을 막지
   # 않는다(continue-on-error). 러너에 창이 그려지지 않으면 첫 프레임 표시가 오지 않아 시간 제한으로 실패한다.
+  # 유효한 회가 --runs 의 절반보다 적으면(가려짐 · 잠금으로 빠진 회가 많으면) pw-perf 는 3 으로 끝나 step 이 실패로 보인다.
   perf:
     name: perf baseline (macOS)
     if: github.event_name != 'schedule'
