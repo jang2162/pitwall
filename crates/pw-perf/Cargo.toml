@@ -1,0 +1,17 @@
+[package]
+name = "pw-perf"
+description = "Measures desktop app cold start and idle memory (performance baseline)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 측정마다 임시 `$DATA` 에 프로젝트 하나를 등록한다.
+pw-core = { path = "../pw-core" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[target."cfg(target_os = \"macos\")".dependencies]
+# 프로세스 목록 · `phys_footprint` · responsible pid · sysctl.
+libc = "0.2.190"

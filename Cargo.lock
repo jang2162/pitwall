@@ -3176,6 +3176,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-perf"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "pw-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pw-rpc"
 version = "0.0.0"
 dependencies = [

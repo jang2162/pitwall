@@ -48,6 +48,16 @@ run = [
   "cargo run -q -p pw-rpc-gen --bin pw-rpc-gen-fixtures -- --check",
 ]
 
+# 데스크톱 앱 release 번들을 만들고 콜드 스타트 · 유휴 메모리를 잰다(macOS). 측정 방법은 CONTRIBUTING.md 「성능 기준선」 절.
+# 프로젝트 창이 회마다 한 번 뜬다. 인자는 마지막 명령(pw-perf)에 붙는다 — 예: `mise run perf -- --runs 3`.
+[tasks.perf]
+description = "release 번들의 콜드 스타트 · 유휴 메모리 측정(macOS, 결과는 target/perf/)"
+depends = ["install-deps"]
+run = [
+  "pnpm --filter @pitwall/desktop tauri build --bundles app",
+  "cargo run -q --release -p pw-perf -- --app target/release/bundle/macos/Pitwall.app",
+]
+
 [tasks.gen]
 description = "RPC 선언에서 TS 타입 · JSON Schema · 클라이언트 테스트 고정 입력 생성(packages/rpc-client)"
 run = [
