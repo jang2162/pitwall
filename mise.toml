@@ -8,6 +8,9 @@ rust = "1.99.0"
 # `os = ["macos/arm64"]` 형식은 여기서 쓰는 mise(2026.4.3)가 모르고 도구를 통째로 건너뛴다. 빌드는 CI 에서 mise-action 캐시가 덮는다.
 "cargo:cargo-about" = { version = "0.9.2", features = "cli" }
 "aqua:rhysd/actionlint" = "1.7.12"
+# actionlint 가 워크플로의 `run:` 스크립트를 검사할 때 부른다. 고정하지 않으면 PATH 의 아무 shellcheck(다른 프로젝트의
+# 버전 없는 mise shim 이면 actionlint 가 실패한다)를 집는다.
+"aqua:koalaman/shellcheck" = "0.11.0"
 
 [tasks.install-deps]
 description = "Node 의존성 설치(lockfile 고정)"
