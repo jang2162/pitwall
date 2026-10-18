@@ -461,6 +461,8 @@ mod measure {
             pw_perf::log_field(&log, "webview data store", "store"),
         ) {
             let _ = std::fs::remove_dir_all(root.join(store.to_lowercase()));
+            // 이 측정이 처음 만든 폴더면 비어 있다 — 비었을 때만 지운다(다른 앱의 저장소가 있으면 남는다).
+            let _ = std::fs::remove_dir(root);
         }
         dir.keep_and_remove(&out.join(format!("run-{index}")));
         let leftover_note = |pids: &[u32], sockets: &[PathBuf]| {
