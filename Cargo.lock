@@ -3187,6 +3187,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-release"
+version = "0.0.0"
+dependencies = [
+ "semver",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "pw-rpc"
 version = "0.0.0"
 dependencies = [
