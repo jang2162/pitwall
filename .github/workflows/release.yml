@@ -1,0 +1,306 @@
+# 릴리스(docs/design/02-tech-stack.md §3-1). 만드는 법 · dry-run · Secrets 는 CONTRIBUTING.md 「릴리스」 절.
+#
+# - 태그 `vX.Y.Z` push → stable, `vX.Y.Z-preview.N` → preview(GitHub Release 를 prerelease 로). 태그는 소스 버전(워크스페이스
+#   Cargo.toml)과 같아야 한다 — 다르면 plan 잡이 실패한다(crates/pw-release).
+# - 그 밖의 트리거는 dry-run 이다: 빌드 · 서명 · 공증 · updater 서명 · 매니페스트까지 하고 결과는 워크플로 아티팩트로만 남긴다.
+#
+# dry-run 이 Release · 태그 · 매니페스트를 건드리지 않는 것은 구조로 보장한다:
+# 1. 워크플로 기본 권한이 `contents: read` 다. plan · build · manifest 잡의 GITHUB_TOKEN 은 Release · 태그 · ref 를 쓰지 못한다.
+# 2. 쓰기 권한(`contents: write`)은 publish 잡에만 있고, 그 잡은 tag push 이벤트이면서 plan 이 publish=true(ref 가
+#    refs/tags/v<소스 버전>)일 때만 돈다. pull_request · workflow_dispatch(태그를 골라도) 는 조건을 못 채운다.
+# 3. 매니페스트(latest.json)는 Release 자산으로만 공개된다 — 그 업로드가 publish 잡에만 있다. 상설 브랜치 · 릴리스를 고치지 않는다.
+#
+# 액션은 커밋 SHA 로 고정한다(태그는 옮겨질 수 있다). 올릴 때 주석의 버전도 함께 고친다.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # dry-run: 이 파이프라인을 바꾼 PR. workflow_dispatch 는 기본 브랜치에 이 파일이 있어야 다른 브랜치로 부를 수 있어서,
+  # 처음 시험은 이 경로로 한다. 포크 PR 은 Secrets 가 없어 plan 잡에서 건너뛴다.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - apps/desktop/src-tauri/tauri.release.conf.json
+      - crates/pw-release/**
+  # dry-run: 아무 브랜치(예: 버전을 올린 PR 의 브랜치)로. 이 파일이 main 에 들어간 뒤부터 쓸 수 있다.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # mise 자체의 버전(ci.yml 과 같다).
+  MISE_VERSION: 2026.4.3
+  # mise run 이 아니라 도구를 직접 부르지만, mise 가 빠진 도구를 저절로 깔지 않게 고른 것만 쓴다.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+
+jobs:
+  plan:
+    name: plan
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      channel: ${{ steps.plan.outputs.channel }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      publish: ${{ steps.plan.outputs.publish }}
+      wix_version: ${{ steps.plan.outputs.wix_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: rust
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-plan
+
+      # 태그가 소스 버전과 다르면 여기서 실패한다. 태그가 아닌 ref 는 dry-run(publish=false)이다.
+      - id: plan
+        run: |
+          cargo run -q -p pw-release -- plan --ref "$GITHUB_REF" | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "### Release plan ($GITHUB_EVENT_NAME, $GITHUB_REF)"
+            echo '```'
+            cargo run -q -p pw-release -- plan --ref "$GITHUB_REF"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: build (${{ matrix.platform }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 유니버설 바이너리(02 §3 Tier 1). updater 산출물은 .app.tar.gz 하나를 두 아키텍처가 함께 쓴다.
+          - platform: macos
+            os: macos-latest
+            bundles: app,dmg
+            target: universal-apple-darwin
+          # 코드 서명 없음(D21). updater 서명은 한다.
+          - platform: windows
+            os: windows-latest
+            bundles: msi
+            target: ""
+          # AppImage 가 자동 업데이트 대상이다. deb · rpm 은 패키지만 낸다(02 §3-1).
+          - platform: linux
+            os: ubuntu-22.04
+            bundles: appimage,deb,rpm
+            target: ""
+    runs-on: ${{ matrix.os }}
+    # 유니버설 빌드(두 아키텍처) + 공증 대기를 감안한 값이다.
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          # 번들 빌드(Tauri CLI 는 node_modules)에 필요한 것만 받는다.
+          install_args: node npm:pnpm rust
+
+      # 툴체인을 rust-toolchain.toml 그대로 깔고(ci.yml 의 같은 단계 주석) 유니버설 빌드의 두 타깃을 더한다.
+      - name: Rust toolchain
+        run: |
+          env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
+          if [ "${{ matrix.platform }}" = macos ]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          fi
+
+      - name: pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-${{ matrix.platform }}
+
+      # Tauri 2 공식 문서 「Prerequisites → Linux(Debian/Ubuntu)」 목록(ci.yml 과 같다). AppImage 는 `file` 을 쓴다.
+      - name: Tauri system dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - run: pnpm install --frozen-lockfile
+
+      # Developer ID 인증서를 이 잡만의 키체인에 넣는다. 비밀 값은 echo · set -x 로 찍지 않고 파일로만 쓴다(RUNNER_TEMP).
+      # 키체인 · 인증서 · p8 파일은 마지막 단계(always)가 지운다.
+      - name: Import the signing certificate (macOS)
+        if: matrix.platform == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/pitwall-signing.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain" > /dev/null
+          # codesign 이 찾도록 검색 목록 맨 앞에 둔다(기존 목록은 유지).
+          existing=$(security list-keychains -d user | tr -d '"' | xargs)
+          # shellcheck disable=SC2086 # 키체인 경로 목록을 낱낱의 인자로 넘긴다.
+          security list-keychains -d user -s "$keychain" $existing
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          # 공증(notarytool)은 App Store Connect API 키 파일을 경로로 받는다.
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8" >> "$GITHUB_ENV"
+          security find-identity -v -p codesigning "$keychain" | grep -q "Developer ID Application"
+
+      # 태그가 곧 소스 버전이라(plan) 앱 버전은 Cargo.toml 그대로다. MSI 만 prerelease 를 숫자로 받아 버전을 따로 준다.
+      # Tauri 는 macOS 에서 APPLE_SIGNING_IDENTITY 로 서명하고 APPLE_API_* 가 있으면 공증 · 스테이플까지 한다.
+      - name: Build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_ISSUER: ${{ matrix.platform == 'macos' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ matrix.platform == 'macos' && secrets.APPLE_API_KEY || '' }}
+          WIX_VERSION: ${{ needs.plan.outputs.wix_version }}
+        run: |
+          args=(--bundles "${{ matrix.bundles }}" --config src-tauri/tauri.release.conf.json)
+          if [ -n "${{ matrix.target }}" ]; then
+            args+=(--target "${{ matrix.target }}")
+          fi
+          if [ "${{ matrix.platform }}" = windows ]; then
+            args+=(--config "{\"bundle\":{\"windows\":{\"wix\":{\"version\":\"$WIX_VERSION\"}}}}")
+          fi
+          pnpm --filter @pitwall/desktop tauri build "${args[@]}"
+
+      # 서명 · 공증이 실제로 됐는지 로그에 남긴다(dry-run 의 확인 자리). 하나라도 아니면 실패한다.
+      - name: Verify signing and notarization (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          app=target/universal-apple-darwin/release/bundle/macos/Pitwall.app
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=2 "$app" 2>&1 | grep -E "^(Authority|TeamIdentifier|Runtime|Timestamp)"
+          lipo -archs "$app/Contents/MacOS/pitwall"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+
+      - name: Collect artifacts
+        run: |
+          out="dist/${{ matrix.platform }}"
+          mkdir -p "$out"
+          case "${{ matrix.platform }}" in
+            macos)
+              bundle=target/universal-apple-darwin/release/bundle
+              cp "$bundle"/macos/*.app.tar.gz "$bundle"/macos/*.app.tar.gz.sig "$bundle"/dmg/*.dmg "$out"/ ;;
+            windows)
+              bundle=target/release/bundle
+              cp "$bundle"/msi/*.msi "$bundle"/msi/*.msi.sig "$out"/ ;;
+            linux)
+              bundle=target/release/bundle
+              cp "$bundle"/appimage/*.AppImage "$bundle"/appimage/*.AppImage.sig \
+                "$bundle"/deb/*.deb "$bundle"/rpm/*.rpm "$out"/ ;;
+          esac
+          ls -l "$out"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove signing material (macOS)
+        if: always() && matrix.platform == 'macos'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/pitwall-signing.keychain-db" 2> /dev/null || true
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP"/AuthKey_*.p8
+
+  manifest:
+    name: updater manifest
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: rust
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-plan
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: artifacts
+
+      # 주소는 이 버전의 Release 자산(releases/download/<tag>/…)이다. dry-run 이면 그 Release 는 없다.
+      - run: |
+          cargo run -q -p pw-release -- manifest --ref "$GITHUB_REF" --repo "$GITHUB_REPOSITORY" \
+            --dir artifacts --date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/${{ needs.plan.outputs.tag }}" \
+            --out latest.json
+          cat latest.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-manifest
+          path: latest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # 유일하게 쓰기 권한을 가진 잡. tag push 이고 plan 이 공개로 판정했을 때만 돈다(머리 주석 2).
+  publish:
+    name: publish
+    needs: [plan, manifest]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: assets
+          merge-multiple: true
+
+      # draft 로 만들어 자산을 다 올린 뒤 공개한다 — 올리는 중에 releases/latest 가 매니페스트 없는 Release 를 가리키지 않게.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          PRERELEASE: ${{ needs.plan.outputs.prerelease }}
+        run: |
+          flags=(--draft --verify-tag --title "Pitwall $VERSION" --generate-notes)
+          if [ "$PRERELEASE" = true ]; then
+            flags+=(--prerelease)
+          fi
+          ls -l assets
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${flags[@]}" assets/*
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
