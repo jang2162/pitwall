@@ -66,4 +66,8 @@ update-check-failed = 업데이트를 확인하지 못했다.
 update-install-failed = 업데이트를 설치하지 못했다.
 
     { $error }
+# deb · rpm 설치본은 스스로 업데이트하지 않는다.
+update-package-manager = { $app } { $current } 는 시스템 패키지(deb · rpm)로 설치되어 스스로 업데이트하지 않는다.
+
+    패키지 관리자로 업데이트하거나 릴리스 페이지에서 새 패키지를 받는다.
 update-dev-build = 개발 빌드는 업데이트를 확인하지 않는다.

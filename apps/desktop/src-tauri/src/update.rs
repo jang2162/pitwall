@@ -127,6 +127,23 @@ impl std::fmt::Display for CheckError {
     }
 }
 
+impl CheckError {
+    /// 이 설치 형식은 앱이 스스로 업데이트하지 않는가 — Linux 의 deb · rpm 설치본. 매니페스트에는 `linux-x86_64-appimage` 만
+    /// 있어(`crates/pw-release` 의 `PLATFORMS`) 그 설치본은 새 버전이 있을 때 대상을 못 찾는다(`TargetNotFound` ·
+    /// `TargetsNotFound`). 고장이 아니라 패키지 관리자로 업데이트하는 형식이다. macOS · Windows 에서 같은 오류는 매니페스트가
+    /// 잘못된 것이라 오류로 둔다.
+    fn is_package_managed(&self, linux: bool) -> bool {
+        linux
+            && matches!(
+                self,
+                CheckError::Updater(
+                    tauri_plugin_updater::Error::TargetNotFound(_)
+                        | tauri_plugin_updater::Error::TargetsNotFound(_)
+                )
+            )
+    }
+}
+
 impl From<tauri_plugin_updater::Error> for CheckError {
     fn from(e: tauri_plugin_updater::Error) -> Self {
         CheckError::Updater(e)
@@ -240,6 +257,14 @@ async fn run<R: Runtime>(app: &AppHandle<R>, trigger: Trigger) {
     tracing::info!(?trigger, ?channel, %current, "checking for updates");
     let update = match find(app, channel).await {
         Ok(update) => update,
+        Err(e) if e.is_package_managed(cfg!(target_os = "linux")) => {
+            tracing::info!(?trigger, error = %e, "this installation is updated by its package manager");
+            if trigger == Trigger::Menu {
+                let text = say(app, "update-package-manager", &[("current", current)]);
+                notify(app, MessageDialogKind::Info, text).await;
+            }
+            return;
+        }
         Err(e) => {
             tracing::warn!(?trigger, error = %e, "update check failed");
             if trigger == Trigger::Menu {
@@ -365,6 +390,29 @@ mod tests {
             assets.push(json!({"name": "latest.json", "browser_download_url": format!("https://x/{tag}/latest.json")}));
         }
         json!({"tag_name": tag, "draft": false, "prerelease": tag.contains('-'), "assets": assets})
+    }
+
+    /// deb · rpm 설치본(Linux 에서 대상을 못 찾음)은 오류가 아니라 패키지 관리자 안내다. 다른 오류와 다른 OS 는 오류로 둔다.
+    #[test]
+    fn missing_linux_targets_mean_a_package_managed_install() {
+        use tauri_plugin_updater::Error;
+        let targets = || {
+            CheckError::Updater(Error::TargetsNotFound(vec![
+                "linux-x86_64-deb".into(),
+                "linux-x86_64".into(),
+            ]))
+        };
+        assert!(targets().is_package_managed(true));
+        assert!(
+            CheckError::Updater(Error::TargetNotFound("linux-x86_64".into()))
+                .is_package_managed(true)
+        );
+        assert!(
+            !targets().is_package_managed(false),
+            "macOS · Windows 는 매니페스트 오류"
+        );
+        assert!(!CheckError::Updater(Error::ReleaseNotFound).is_package_managed(true));
+        assert!(!CheckError::Releases("403".into()).is_package_managed(true));
     }
 
     #[test]

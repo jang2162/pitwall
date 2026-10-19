@@ -66,4 +66,8 @@ update-check-failed = Could not check for updates.
 update-install-failed = Could not install the update.
 
     { $error }
+# The deb/rpm install found a newer release but cannot update itself.
+update-package-manager = { $app } { $current } was installed with a system package (deb or rpm), so it does not update itself.
+
+    Update it with your package manager, or download a new package from the release page.
 update-dev-build = Development builds do not check for updates.
