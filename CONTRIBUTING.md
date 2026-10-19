@@ -142,15 +142,18 @@ MIT 프로젝트라 의존성은 허용형 라이선스만 쓴다(`docs/design/0
 **dry-run(공개 없이 시험).** 공개하는 실행(tag push)과 같은 빌드를 하되 Release · 태그를 만들지 않는다 — 쓰기 권한(`contents: write`)이 tag push 에서만 도는 `publish` 잡에만 있다(워크플로 머리 주석).
 
 - **실서명인 것**: macOS 의 Developer ID 서명 · 공증 · 스테이플. 그것이 실제로 통과하는지 보는 것이 dry-run 의 목적이다.
-- **일회용 키인 것**: updater 서명. dry-run 은 잡 안에서 만든 키로 서명하고 그 키 · 서명을 버린다. 운영 updater 키(`TAURI_SIGNING_PRIVATE_KEY`)는 tag push 실행에만 env 로 들어간다(`crates/pw-release` 의 `updater_key`).
+- **일회용 키인 것**: build 잡의 updater 서명. build 잡은 어떤 실행(tag push 포함)에서도 잡 안에서 만든 키로 서명하고 그 키 · 서명을 버린다. tag push 의 공개 실행에서만 `sign-updater` 잡이 build 산출물(`.app.tar.gz` · `.msi` · `.AppImage`)을 운영 키로 다시 서명한다(`tauri signer sign --app-version <버전>` — 빌드 서명과 같은 trusted comment 를 단다). 잡 순서는 공개 실행이 build → sign-updater → manifest → publish, dry-run 이 build → manifest 다.
+- **규칙: 운영 updater 키(`secrets.TAURI_SIGNING_*`)를 참조하는 잡은 `sign-updater` 하나뿐이다. 다른 잡에 넣지 않는다 — 조건식 안에도.** Secret 을 참조하는 잡의 runner 에는 그 값이 내려가고, 같은 잡에서 도는 PR 코드(빌드 스크립트 · npm 의존성)가 runner 메모리에서 읽어 낼 수 있다. updater 키는 잃거나 새면 바꿀 수 없다(아래 경고). 그래서 `sign-updater` 는 저장소를 checkout 하지도 빌드하지도 않는다 — lockfile 과 같은 버전의 Tauri CLI 를 `pnpm dlx` 로 받아 서명만 한다. 쓰기 토큰을 가진 `publish` 잡도 저장소를 checkout 하지 않고 plan 출력과 아티팩트만 쓴다. `crates/pw-release/tests/workflow.rs` 가 이 구조(Secret 참조 위치, checkout 없음, 실행 조건, `--app-version`, 도구 버전)를 지킨다.
 - **아티팩트에 남는 것(3일)**: 플랫폼마다 `report-<플랫폼>`(산출물 이름과 SHA-256, macOS 는 서명 · 공증 검증 로그)과 `release-manifest`(`latest.json` — 서명 칸은 자리표시 `dry-run`)뿐이다. dmg · msi · AppImage · deb · rpm · `.app.tar.gz` · `.sig` 는 올리지 않는다 — 공개 저장소의 아티팩트는 로그인한 누구나 받을 수 있어, 올리면 병합 안 된 코드의 서명 · 공증 바이너리가 배포된다. 설치 파일을 손으로 받아 보려면 로컬에서 만든다(아래 「로컬에서 updater 확인」).
 - PR 이 `.github/workflows/release.yml` · `apps/desktop/src-tauri/tauri.release.conf.json` · `apps/desktop/src-tauri/tauri.conf.json` · `apps/desktop/src-tauri/src/update.rs` · `crates/pw-release/` · `Cargo.toml` · `Cargo.lock` 을 바꾸면 그 PR 에서 돈다(버전을 올린 PR 이 저절로 돈다). 같은 저장소의 브랜치만이다 — 포크 PR 은 Secrets 가 없어 건너뛴다.
-- 이 워크플로가 main 에 들어간 뒤로는 아무 브랜치로나 부른다: Actions → Release → Run workflow, 또는 `gh workflow run release.yml --ref <브랜치>`. `workflow_dispatch` 는 기본 브랜치에 파일이 있어야 다른 브랜치로 부를 수 있다. 태그를 골라 불러도 dry-run 이다.
+- 이 워크플로가 main 에 들어간 뒤로는 아무 브랜치로나 부른다: Actions → Release → Run workflow, 또는 `gh workflow run release.yml --ref <브랜치>`. `workflow_dispatch` 는 기본 브랜치에 파일이 있어야 다른 브랜치로 부를 수 있다. 태그를 골라 불러도 dry-run 이다 — 공개는 plan 이 이벤트(`push`)까지 보고 한 곳에서 판정한다(`crates/pw-release` 의 `plan`).
 - 볼 것: macOS 잡의 「Verify signing and notarization」 단계(codesign · `lipo` 두 아키텍처 · `stapler validate` · `spctl` 이 「Notarized Developer ID」, `report-macos` 에도 남는다), `release-manifest` 의 `latest.json`(플랫폼 키 4개).
 
-**publish 를 다시 돌릴 때.** 앞선 실행이 draft 까지 만들고 멈췄으면 그 실행을 다시 돌린다(Actions → 실패한 실행 → Re-run) — publish 잡이 같은 태그의 draft 를 찾아 자산을 덮어 올리고(`gh release upload --clobber`) 공개한다. 이미 공개된 릴리스는 손대지 않고 실패한다(`crates/pw-release` 의 `publish_action`) — 공개된 자산을 바꾸면 이미 받은 사람과 바이트가 달라진다. 고쳐야 하면 버전을 올려 새로 낸다.
+**publish 를 다시 돌릴 때.** 앞선 실행이 draft 까지 만들고 멈췄으면 그 실행을 다시 돌린다(Actions → 실패한 실행 → Re-run) — publish 잡이 같은 태그의 draft 를 찾아 자산을 덮어 올리고(`gh release upload --clobber`) 공개한다. 이미 공개된 릴리스는 손대지 않고 실패한다 — 공개된 자산을 바꾸면 이미 받은 사람과 바이트가 달라진다. 고쳐야 하면 버전을 올려 새로 낸다. 알려진 틈: 상태를 본 뒤 업로드 전에 사람이 그 draft 를 손으로 공개하면 `--clobber` 가 공개 자산을 바꾼다 — 재실행 중에는 draft 를 손으로 공개하지 않는다.
 
 **매니페스트와 채널.** Release 마다 그 릴리스의 `latest.json` 하나가 자산으로 붙는다. stable 앱은 `releases/latest/download/latest.json`(GitHub 가 prerelease · draft 를 건너뛴다), preview 앱은 GitHub API 의 릴리스 목록에서 `latest.json` 을 가진 가장 높은 버전의 것을 읽는다(`apps/desktop/src-tauri/src/update.rs`). 플랫폼 키는 `darwin-aarch64` · `darwin-x86_64`(유니버설 하나) · `linux-x86_64-appimage` · `windows-x86_64` 다. deb · rpm 설치본은 자동 업데이트하지 않는다 — 맨 `linux-x86_64` 키를 두면 그 설치본이 AppImage 를 받아 설치하려 든다. 그 설치본에서 「업데이트 확인…」 을 고르면 오류 대신 「패키지 관리자로 업데이트한다」 안내가 뜬다.
+
+**태그 ruleset.** 저장소 ruleset 으로 `v*` 태그 생성을 관리자로 제한한다(설정은 사람이 한다 — Settings → Rules → Rulesets, 대상 태그 `v*`, 생성 · 갱신 · 삭제 제한, 우회는 관리자만). 「태그 커밋이 main 의 조상」 검사는 태그 커밋 자신의 `release.yml` 이 집행하므로, 쓰기 권한자가 그 검사를 지운 커밋에 태그를 달면 막지 못한다 — ruleset 이 그 앞을 막는다.
 
 **Secrets.** 저장소 Settings → Secrets and variables → Actions 에 9개가 있어야 한다. 값은 로그에 찍지 않는다(워크플로는 파일로만 쓰고 잡 끝에 지운다).
 
