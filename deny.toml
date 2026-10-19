@@ -15,6 +15,14 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant via zbus 5 from tauri-plugin-opener/single-instance; remove when they move to zbus 6" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names via zbus 5 from tauri-plugin-opener/single-instance; remove when they move to zbus 6" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via zbus 5 from tauri-plugin-opener/single-instance; remove when they move to zbus 6" },
+  # zip 4 의 압축 풀기 취약점 3건(SUID 비트 보존 · 대상 밖 심링크 · 심링크를 따라간 권한 적용). tauri-plugin-updater 2.14 가
+  # `zip = "4"` 로 묶어 cargo update 로 못 올리고, 같은 `zip` feature 가 macOS 의 .app.tar.gz 에 필요한 tar · flate2 도 켜서
+  # 끌 수도 없다. 무시하는 이유: ① zip 은 updater 의 Windows 전용 의존성이다. ② `ZipArchive` 는 minisign 서명 검증을 통과한
+  # 바이트에만 돈다(updater.rs `install` 이 `verify` 뒤에 `install_inner` 를 부른다). ③ 우리 Windows 산출물은 zip 이 아닌
+  # raw .msi 라, 이 경로를 타려면 우리 키로 서명된 악성 zip 이 있어야 한다. 플러그인이 zip ≥9 로 옮기면 걷는다.
+  { id = "RUSTSEC-2026-0367", reason = "zip 4 via tauri-plugin-updater (Windows only, extracts only signature-verified bytes, we ship raw msi); remove when the plugin moves to zip >= 9" },
+  { id = "RUSTSEC-2026-0368", reason = "zip 4 via tauri-plugin-updater (Windows only, extracts only signature-verified bytes, we ship raw msi); remove when the plugin moves to zip >= 9" },
+  { id = "RUSTSEC-2026-0369", reason = "zip 4 via tauri-plugin-updater (Windows only, extracts only signature-verified bytes, we ship raw msi); remove when the plugin moves to zip >= 9" },
 ]
 # 업스트림이 고쳐 ignore 가 낡으면 경고로 드러낸다.
 unused-ignored-advisory = "warn"
