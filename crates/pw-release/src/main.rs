@@ -1,20 +1,18 @@
 //! `pw-release` — 릴리스 워크플로의 판정(src/lib.rs). 사용법:
 //!
 //! ```text
-//! pw-release plan --ref <GITHUB_REF> --on-main <true|false>
-//!     이 실행의 버전 · 태그 · 채널 · 공개 여부 · MSI 버전 · Linux 번들 · updater 키 · 바이너리 업로드를 `key=value` 줄로
-//!     stdout 에 낸다($GITHUB_OUTPUT 에 붙인다). 태그(`refs/tags/v…`)가 소스 버전과 다르거나 main 밖이면 실패한다.
+//! pw-release plan --ref <GITHUB_REF> --event <GITHUB_EVENT_NAME> --on-main <true|false>
+//!     이 실행의 버전 · 태그 · 채널 · 공개 여부 · MSI 버전 · Linux 번들 · 바이너리 업로드를 `key=value` 줄로 stdout 에
+//!     낸다($GITHUB_OUTPUT 에 붙인다). 공개는 push 이벤트의 태그뿐이고, 그 태그가 소스 버전과 다르거나 main 밖이면 실패한다.
 //!     `--on-main` 은 이 커밋이 origin/main 의 조상인지(`git merge-base --is-ancestor`).
-//! pw-release publish-action --existing <none|draft|published>
-//!     같은 태그의 Release 상태에 따라 `create` · `resume` 을 낸다. 이미 공개됐으면 실패한다.
-//! pw-release manifest --ref <GITHUB_REF> --on-main <true|false> --repo <owner/name> --dir <산출물 폴더> --date <RFC 3339> --out <파일> [--notes <글>]
+//! pw-release manifest --ref <GITHUB_REF> --event <GITHUB_EVENT_NAME> --on-main <true|false> --repo <owner/name> --dir <산출물 폴더> --date <RFC 3339> --out <파일> [--notes <글>]
 //!     updater 매니페스트(latest.json)를 쓴다.
 //! ```
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use pw_release::{SOURCE_VERSION, manifest, plan, publish_action};
+use pw_release::{SOURCE_VERSION, manifest, plan};
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
@@ -64,12 +62,13 @@ fn flag(options: &[(String, String)], key: &str) -> Result<bool, String> {
 fn run(args: Vec<String>) -> Result<(), String> {
     let (command, rest) = args
         .split_first()
-        .ok_or("usage: pw-release plan|manifest|publish-action …")?;
+        .ok_or("usage: pw-release plan|manifest …")?;
     match command.as_str() {
         "plan" => {
-            let options = options(rest, &["ref", "on-main"])?;
+            let options = options(rest, &["ref", "event", "on-main"])?;
             let plan = plan(
                 required(&options, "ref")?,
+                required(&options, "event")?,
                 SOURCE_VERSION,
                 flag(&options, "on-main")?,
             )
@@ -80,10 +79,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "manifest" => {
             let options = options(
                 rest,
-                &["ref", "on-main", "repo", "dir", "date", "out", "notes"],
+                &[
+                    "ref", "event", "on-main", "repo", "dir", "date", "out", "notes",
+                ],
             )?;
             let plan = plan(
                 required(&options, "ref")?,
+                required(&options, "event")?,
                 SOURCE_VERSION,
                 flag(&options, "on-main")?,
             )
@@ -100,16 +102,6 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())? + "\n";
             std::fs::write(out, text).map_err(|e| format!("cannot write {out}: {e}"))
         }
-        "publish-action" => {
-            let options = options(rest, &["existing"])?;
-            println!(
-                "{}",
-                publish_action(required(&options, "existing")?).map_err(|e| e.to_string())?
-            );
-            Ok(())
-        }
-        other => Err(format!(
-            "unknown command {other} (plan | manifest | publish-action)"
-        )),
+        other => Err(format!("unknown command {other} (plan | manifest)")),
     }
 }
