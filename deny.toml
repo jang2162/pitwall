@@ -84,6 +84,14 @@ allow = ["BSL-1.0"]
 crate = "error-code"
 allow = ["BSL-1.0"]
 
+# CDLA-Permissive-2.0(데이터용 허용형)은 전역 allow 에 넣지 않는다. 자동 업데이트(tauri-plugin-updater → reqwest →
+# rustls-platform-verifier)가 끌어오는 webpki-root-certs 는 wasm32 전용 의존성이라 배포하는 3 OS 바이너리에 들어가지 않는다
+# (`cargo tree -e normal -i webpki-root-certs --target <배포 타깃>` 이 비어 있다). [graph] targets = [] 가 모든 타깃을 봐서
+# 걸릴 뿐이다. 배포 타깃의 그래프에 들어오면 이 예외를 걷고 다시 판단한다. about.toml 의 [webpki-root-certs] 와 같아야 한다.
+[[licenses.exceptions]]
+crate = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
+
 [licenses.private]
 # publish = false 인 우리 크레이트도 검사한다. 워크스페이스 라이선스(MIT)가 목록에서 빠지면 바로 실패한다.
 ignore = false

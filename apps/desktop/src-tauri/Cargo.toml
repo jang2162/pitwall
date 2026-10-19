@@ -28,9 +28,20 @@ tauri-plugin-clipboard-manager = "2.5.0"
 tauri-plugin-dialog = "2.8.3"
 tauri-plugin-opener = "2.7.2"
 tauri-plugin-single-instance = "2.5.4"
+# 자동 업데이트(src/update.rs). 받은 패키지를 tauri.conf.json 의 공개 키로 검증해 설치한다.
+tauri-plugin-updater = "2.14.0"
+# preview 채널이 GitHub API 의 릴리스 목록에서 매니페스트를 고른다(src/update.rs). updater 와 같은 버전 · TLS 구성(rustls,
+# 암호 제공자는 ring)이라 크레이트가 늘지 않는다. updater 처럼 첫 요청 전에 ring 제공자를 기본으로 건다.
+reqwest = { version = "0.13.5", default-features = false, features = [
+  "rustls-no-provider",
+  "system-proxy",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# preview 매니페스트를 태그의 버전으로 고른다(src/update.rs). 시험은 내장 확장 레지스트리에 앱 버전을 줄 때도 쓴다.
+semver = "1.0.28"
 tracing = "0.1.44"
-# `pitwall mcp` 는 Tauri 를 띄우지 않으므로 자기 런타임을 만든다(io-std: stdio 를 MCP 로 쓴다).
-tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "time"] }
+# `pitwall mcp` 는 Tauri 를 띄우지 않으므로 자기 런타임을 만든다(io-std: stdio 를 MCP 로 쓴다). sync: 업데이트 대화상자의 답을 기다린다.
+tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "time", "sync"] }
 tokio-util = { workspace = true }
 # `pitwall mcp` 의 로그(`$STATE/logs/mcp.<날짜>.log` + stderr 경고). 버전 · 기능은 pw-diag 와 같게 둔다.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = [
@@ -46,8 +57,6 @@ tauri = { version = "2.12.3", features = ["test"] }
 tokio = { workspace = true, features = ["time", "rt", "macros"] }
 # 설정 스토어를 임시 폴더에 열어 크래시 설정 · 설정 오류 로그를 시험한다.
 tempfile = "3.27.0"
-# 내장 확장만으로 레지스트리를 만든다(Registry::from_roots 가 앱 버전을 받는다).
-semver = "1.0.28"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"

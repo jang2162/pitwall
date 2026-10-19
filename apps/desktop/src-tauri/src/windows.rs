@@ -7,6 +7,17 @@ use tauri::{
     WebviewWindowBuilder,
 };
 
+/// 네이티브 대화상자의 부모 창: 포커스된 창, 없으면 아무 창. 부모 없는 대화상자는 앱이 활성화되지 않았으면 화면에 오르지
+/// 않았다(macOS, 창 목록에 오프스크린으로만 생김) — 창이 있으면 그 창의 시트로 띄운다.
+pub fn dialog_parent<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
+    let windows = app.webview_windows();
+    windows
+        .values()
+        .find(|w| w.is_focused().unwrap_or(false))
+        .or_else(|| windows.values().next())
+        .cloned()
+}
+
 /// 창 종류. 프론트엔드는 하나의 엔트리에서 `?window=` 쿼리로 종류를 받는다(src/window-kind.ts).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowKind {

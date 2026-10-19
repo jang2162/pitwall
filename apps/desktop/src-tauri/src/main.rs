@@ -23,6 +23,7 @@ mod mcp;
 mod menu;
 mod perf;
 mod shell_command;
+mod update;
 mod windows;
 
 /// 데스크톱 프로세스 안의 Host 의 id. 프론트엔드가 프로젝트 없이 연결할 때 이 id 로 고른다(src/App.tsx 의 `LOCAL_HOST`).
@@ -217,6 +218,8 @@ fn main() {
             config_log::log_fault(&Scope::Host, &fault);
         }
     }
+    let update_settings = update::Settings(host.config().map(|c| c.global.clone()));
+    let auto_update = update::auto_check(RELEASE, custom_data(&paths).is_some());
     let config_events = config_log::subscribe(host.bus());
     let router = Arc::new(HostRouter::new());
     router
@@ -241,11 +244,13 @@ fn main() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(launch::Launch::new(host.registry().cloned()))
         .manage(windows::PendingOpens::default())
         .manage(windows::WebviewStore(webview_store))
         .manage(diagnostics)
         .manage(perf)
+        .manage(update_settings)
         // 메뉴(`menu::build`)가 지금 언어로 글자를 만든다 — 메뉴보다 먼저 등록한다.
         .manage(i18n)
         .menu(menu::build)
@@ -269,6 +274,7 @@ fn main() {
                 launch::invocation_from_env(),
             );
             perf::watch_parent(app.handle());
+            update::on_startup(app.handle(), auto_update);
             // 주 인스턴스만 MCP 소켓을 연다(떼어 띄우기 전의 프로세스 · 두 번째 실행은 여기 오지 않는다).
             #[cfg(unix)]
             mcp::serve_socket(host.clone(), paths.clone(), identifier.clone());
