@@ -31,6 +31,7 @@ menu-fullscreen = Toggle Full Screen
 
 menu-find-action = Find Action…
 menu-copy-diagnostics = Copy Diagnostic Info
+menu-check-updates = Check for Updates…
 
 ## "Install Shell Command" result dialog (apps/desktop/src-tauri/src/shell_command.rs). $target: where the command was installed.
 
@@ -47,3 +48,26 @@ shell-command-replaced = Installed the 'pitwall' command at { $target }.
 shell-command-failed = Could not install the 'pitwall' command.
 
     { $error }
+
+## Update dialogs (apps/desktop/src-tauri/src/update.rs). $app: the app name, $current: the running version, $version: the new version.
+
+update-title = Software Update
+update-available = { $app } { $version } is available. You have { $current }.
+
+    Install it and restart { $app } now?
+update-install = Install and Restart
+update-later = Later
+update-none = { $app } { $current } is the latest version.
+# $error: why it failed
+update-check-failed = Could not check for updates.
+
+    { $error }
+# $error: why it failed
+update-install-failed = Could not install the update.
+
+    { $error }
+# The deb/rpm install found a newer release but cannot update itself.
+update-package-manager = { $app } { $current } was installed with a system package (deb or rpm), so it does not update itself.
+
+    Update it with your package manager, or download a new package from the release page.
+update-dev-build = Development builds do not check for updates.

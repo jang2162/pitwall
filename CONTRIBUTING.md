@@ -127,6 +127,57 @@ MIT 프로젝트라 의존성은 허용형 라이선스만 쓴다(`docs/design/0
 | `advisories` | PR, main push, 매일 | `mise run advisories`                                                        | PR 에서는 경고만, main push·매일 실행에서는 실패 |
 | `perf`       | PR, main push       | macOS 에서 `mise run perf`, 결과를 job summary · artifact(`perf-baseline`)로 | 막지 않는다(기록만, 「성능 기준선」)             |
 
+## 릴리스
+
+`.github/workflows/release.yml` 이 태그에서 3 OS 설치 파일과 updater 매니페스트를 만들어 GitHub Release 에 올린다. 결정과 이유는 [`docs/design/02-tech-stack.md`](docs/design/02-tech-stack.md) §3-1 이다.
+
+**태그와 버전.** 버전의 원천은 워크스페이스 `Cargo.toml` 의 `[workspace.package] version` 이다(데스크톱 크레이트가 그것을 쓰고, `tauri.conf.json` 에는 `version` 을 두지 않는다 — `crates/pw-release` 의 시험이 지킨다). `package.json` 의 `version` 은 쓰지 않는다.
+
+- stable 은 `vX.Y.Z`, preview 는 `vX.Y.Z-preview.N`(N 은 0~65535 의 숫자, GitHub Release 를 prerelease 로 낸다). 그 밖의 prerelease(`-rc.1` 등)와 빌드 메타데이터(`+…`)는 거절한다.
+- 태그는 그 커밋의 소스 버전 앞에 `v` 를 붙인 것과 같아야 하고, 태그 커밋이 `origin/main` 의 조상이어야 한다(리뷰를 거친 커밋만 공개한다). 둘 중 하나라도 아니면 워크플로의 `plan` 잡이 실패하고 아무것도 만들지 않는다.
+- 순서: ① 워크스페이스 버전을 올리는 커밋(`Cargo.lock` 도 함께 바뀐다 — `cargo metadata` 한 번이면 갱신된다)을 PR 로 main 에 병합한다. 그 PR 은 `Cargo.toml` 을 바꾸므로 dry-run 이 저절로 돈다 — 통과를 보고 병합한다. ② main 의 그 커밋에 태그를 달아 push 한다(`git tag v0.1.0-preview.1 <커밋> && git push origin v0.1.0-preview.1`). ③ 워크플로가 3 OS 빌드 → 매니페스트 → draft Release 에 자산을 다 올린 뒤 공개한다.
+- **preview 는 Linux 에 AppImage 만 낸다. deb · rpm 은 stable 태그에서만 빌드 · 첨부한다** — 패키지 관리자(dpkg · rpm)가 `X.Y.Z-preview.N` 을 `X.Y.Z` 보다 높게 정렬해, preview 패키지를 설치한 사람이 같은 X.Y.Z 의 stable 로 올라가지 못한다(rpm 은 Version 에 `-` 도 받지 않는다). preview 를 쓰는 Linux 사용자는 자동 업데이트되는 AppImage 를 쓴다. 규칙은 `crates/pw-release` 의 `linux_bundles` 다.
+- MSI 는 prerelease 를 숫자로만 받아 preview 의 N 을 넷째 칸에 둔다(`0.1.0-preview.2` → `0.1.0.2`). Windows Installer 는 넷째 칸을 비교하지 않지만 Tauri 의 MSI 는 다른 버전을 늘 덮어 설치한다(`bundle.windows.allowDowngrades` 기본값 true).
+
+**dry-run(공개 없이 시험).** 공개하는 실행(tag push)과 같은 빌드를 하되 Release · 태그를 만들지 않는다 — 쓰기 권한(`contents: write`)이 tag push 에서만 도는 `publish` 잡에만 있다(워크플로 머리 주석).
+
+- **실서명인 것**: macOS 의 Developer ID 서명 · 공증 · 스테이플. 그것이 실제로 통과하는지 보는 것이 dry-run 의 목적이다.
+- **일회용 키인 것**: build 잡의 updater 서명. build 잡은 어떤 실행(tag push 포함)에서도 잡 안에서 만든 키로 서명하고 그 키 · 서명을 버린다. tag push 의 공개 실행에서만 `sign-updater` 잡이 build 산출물(`.app.tar.gz` · `.msi` · `.AppImage`)을 운영 키로 다시 서명한다(`tauri signer sign --app-version <버전>` — 빌드 서명과 같은 trusted comment 를 단다). 잡 순서는 공개 실행이 build → sign-updater → manifest → publish, dry-run 이 build → manifest 다.
+- **규칙: 운영 updater 키(`secrets.TAURI_SIGNING_*`)를 참조하는 잡은 `sign-updater` 하나뿐이다. 다른 잡에 넣지 않는다 — 조건식 안에도.** Secret 을 참조하는 잡의 runner 에는 그 값이 내려가고, 같은 잡에서 도는 PR 코드(빌드 스크립트 · npm 의존성)가 runner 메모리에서 읽어 낼 수 있다. updater 키는 잃거나 새면 바꿀 수 없다(아래 경고). 그래서 `sign-updater` 는 저장소를 checkout 하지도 빌드하지도 않는다 — lockfile 과 같은 버전의 Tauri CLI 를 `pnpm dlx` 로 받아 서명만 한다. 쓰기 토큰을 가진 `publish` 잡도 저장소를 checkout 하지 않고 plan 출력과 아티팩트만 쓴다. `crates/pw-release/tests/workflow.rs` 가 이 구조(Secret 참조 위치, checkout 없음, 실행 조건, `--app-version`, 도구 버전)를 지킨다.
+- **아티팩트에 남는 것(3일)**: 플랫폼마다 `report-<플랫폼>`(산출물 이름과 SHA-256, macOS 는 서명 · 공증 검증 로그)과 `release-manifest`(`latest.json` — 서명 칸은 자리표시 `dry-run`)뿐이다. dmg · msi · AppImage · deb · rpm · `.app.tar.gz` · `.sig` 는 올리지 않는다 — 공개 저장소의 아티팩트는 로그인한 누구나 받을 수 있어, 올리면 병합 안 된 코드의 서명 · 공증 바이너리가 배포된다. 설치 파일을 손으로 받아 보려면 로컬에서 만든다(아래 「로컬에서 updater 확인」).
+- PR 이 `.github/workflows/release.yml` · `apps/desktop/src-tauri/tauri.release.conf.json` · `apps/desktop/src-tauri/tauri.conf.json` · `apps/desktop/src-tauri/src/update.rs` · `crates/pw-release/` · `Cargo.toml` · `Cargo.lock` 을 바꾸면 그 PR 에서 돈다(버전을 올린 PR 이 저절로 돈다). 같은 저장소의 브랜치만이다 — 포크 PR 은 Secrets 가 없어 건너뛴다.
+- 이 워크플로가 main 에 들어간 뒤로는 아무 브랜치로나 부른다: Actions → Release → Run workflow, 또는 `gh workflow run release.yml --ref <브랜치>`. `workflow_dispatch` 는 기본 브랜치에 파일이 있어야 다른 브랜치로 부를 수 있다. 태그를 골라 불러도 dry-run 이다 — 공개는 plan 이 이벤트(`push`)까지 보고 한 곳에서 판정한다(`crates/pw-release` 의 `plan`).
+- 볼 것: macOS 잡의 「Verify signing and notarization」 단계(codesign · `lipo` 두 아키텍처 · `stapler validate` · `spctl` 이 「Notarized Developer ID」, `report-macos` 에도 남는다), `release-manifest` 의 `latest.json`(플랫폼 키 4개).
+
+**publish 를 다시 돌릴 때.** 앞선 실행이 draft 까지 만들고 멈췄으면 그 실행을 다시 돌린다(Actions → 실패한 실행 → Re-run) — publish 잡이 같은 태그의 draft 를 찾아 자산을 덮어 올리고(`gh release upload --clobber`) 공개한다. 이미 공개된 릴리스는 손대지 않고 실패한다 — 공개된 자산을 바꾸면 이미 받은 사람과 바이트가 달라진다. 고쳐야 하면 버전을 올려 새로 낸다. 알려진 틈: 상태를 본 뒤 업로드 전에 사람이 그 draft 를 손으로 공개하면 `--clobber` 가 공개 자산을 바꾼다 — 재실행 중에는 draft 를 손으로 공개하지 않는다.
+
+**매니페스트와 채널.** Release 마다 그 릴리스의 `latest.json` 하나가 자산으로 붙는다. stable 앱은 `releases/latest/download/latest.json`(GitHub 가 prerelease · draft 를 건너뛴다), preview 앱은 GitHub API 의 릴리스 목록에서 `latest.json` 을 가진 가장 높은 버전의 것을 읽는다(`apps/desktop/src-tauri/src/update.rs`). 플랫폼 키는 `darwin-aarch64` · `darwin-x86_64`(유니버설 하나) · `linux-x86_64-appimage` · `windows-x86_64` 다. deb · rpm 설치본은 자동 업데이트하지 않는다 — 맨 `linux-x86_64` 키를 두면 그 설치본이 AppImage 를 받아 설치하려 든다. 그 설치본에서 「업데이트 확인…」 을 고르면 오류 대신 「패키지 관리자로 업데이트한다」 안내가 뜬다.
+
+**태그 ruleset.** 저장소 ruleset 으로 `v*` 태그 생성을 관리자로 제한한다(설정은 사람이 한다 — Settings → Rules → Rulesets, 대상 태그 `v*`, 생성 · 갱신 · 삭제 제한, 우회는 관리자만). 「태그 커밋이 main 의 조상」 검사는 태그 커밋 자신의 `release.yml` 이 집행하므로, 쓰기 권한자가 그 검사를 지운 커밋에 태그를 달면 막지 못한다 — ruleset 이 그 앞을 막는다.
+
+**Secrets.** 저장소 Settings → Secrets and variables → Actions 에 9개가 있어야 한다. 값은 로그에 찍지 않는다(워크플로는 파일로만 쓰고 잡 끝에 지운다).
+
+| Secret                               | 내용                                                       | 다시 만드는 법                                                                                                                                 |
+| ------------------------------------ | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APPLE_CERTIFICATE`                  | Developer ID Application 인증서 + 개인 키 `.p12` 의 base64 | 키체인 접근에서 인증서를 `.p12` 로 내보내 `base64 -i cert.p12`. 인증서 자체는 developer.apple.com → Certificates 에서 Account Holder 가 만든다 |
+| `APPLE_CERTIFICATE_PASSWORD`         | 그 `.p12` 의 암호                                          | 내보낼 때 정한다                                                                                                                               |
+| `APPLE_SIGNING_IDENTITY`             | `Developer ID Application: 이름 (TEAMID)`                  | `security find-identity -v -p codesigning` 의 따옴표 안                                                                                        |
+| `APPLE_API_ISSUER`                   | App Store Connect API Issuer ID                            | App Store Connect → 사용자 및 액세스 → 통합 → App Store Connect API                                                                            |
+| `APPLE_API_KEY`                      | 그 화면의 Key ID                                           | 같은 화면에서 키를 만든다(Developer 이상)                                                                                                      |
+| `APPLE_API_KEY_P8`                   | `AuthKey_<KeyID>.p8` 파일의 **내용**                       | 키를 만들 때 한 번만 받는다. 잃으면 키를 폐기하고 새로 만든다(`APPLE_API_KEY` 도 바뀐다)                                                       |
+| `TAURI_SIGNING_PRIVATE_KEY`          | updater 서명 개인 키 파일 내용                             | `pnpm --filter @pitwall/desktop exec tauri signer generate -w <파일>` — **새로 만들면 아래 경고**                                              |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 그 키의 암호                                               | 키를 만들 때 정한다                                                                                                                            |
+| `KEYCHAIN_PASSWORD`                  | 러너의 임시 키체인 암호                                    | 아무 무작위 값(`openssl rand -base64 24`)                                                                                                      |
+
+> **⚠ updater 개인 키를 잃으면 이미 설치된 앱은 업데이트를 받지 못한다.** 설치된 앱은 빌드에 들어 있는 공개 키(`tauri.conf.json` 의 `plugins.updater.pubkey`)로만 서명을 검증한다. 개인 키나 그 암호를 잃어 새 키로 서명하면 그 앱들은 모든 새 릴리스를 거절하고, 사람이 새 버전을 직접 받아 설치해야 한다. 키 파일과 암호를 저장소 밖 두 곳 이상(암호 관리자 등)에 보관한다. 키를 바꿀 때도 같다 — 새 공개 키를 넣은 릴리스를 **옛 키로** 서명해 한 번 낸 뒤에 새 키로 넘어간다.
+
+**로컬에서 updater 확인.** 사람의 updater 키와 키체인의 Developer ID 로 로컬 서명하지 않는다(실제 서명 · 공증은 dry-run 몫이다).
+
+- 시험 전용 키 쌍을 임시 폴더에 만들고(`tauri signer generate --ci -p <암호> -w <임시 폴더>/test.key`), release 번들을 `--config src-tauri/tauri.release.conf.json --config <임시 json>` 으로 만든다. 임시 json 에 `version` 과 `plugins.updater` 의 `pubkey`(시험 공개 키) · `dangerousInsecureTransportProtocol: true`(localhost http) 를 넣고, 빌드 환경에 `TAURI_SIGNING_PRIVATE_KEY`(시험 개인 키) · `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 를 준다.
+- 매니페스트 주소는 빌드할 때 `PITWALL_UPDATE_STABLE_MANIFEST` · `PITWALL_UPDATE_RELEASES_API`(GitHub API 의 릴리스 목록 꼴 JSON)로 바꾼다. 실행 중 환경 변수로는 바뀌지 않는다.
+- 시작할 때의 자동 확인은 release 빌드가 기본 `$DATA` 로 떴을 때만 한다. 임시 `PITWALL_*_DIR` 로 띄운 앱은 메뉴 「업데이트 확인…」(macOS 앱 메뉴, 그 밖은 도움말 메뉴)으로 확인한다. debug 빌드는 메뉴로도 확인하지 않는다.
+- 업데이트는 실행 중인 `.app` 을 바꿔 끼우고 다시 띄운다. 시험할 `.app` 은 임시 폴더에 복사해 그것을 띄운다(`target/` 의 번들 · `/Applications` 를 바꾸지 않게). 다시 뜬 앱은 pid 가 바뀐다.
+
 ## 커밋 메시지
 
 영어 [conventional commits](https://www.conventionalcommits.org) 로 쓴다.

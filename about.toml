@@ -47,3 +47,7 @@ accepted = ["BSL-1.0"]
 
 [error-code]
 accepted = ["BSL-1.0"]
+
+# deny.toml 의 webpki-root-certs 예외와 같다(CDLA-Permissive-2.0, wasm32 전용 — 배포 바이너리에 들어가지 않는다).
+[webpki-root-certs]
+accepted = ["CDLA-Permissive-2.0"]

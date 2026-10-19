@@ -21,11 +21,13 @@ use pw_i18n::{FluentArgs, I18n, Localizer};
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
-use crate::{diag, windows};
+use crate::{diag, update, windows};
 
 /// 프로젝트 창은 프로젝트에 묶여 열리므로(`launch::open_project`) 빈 프로젝트 창 대신 웰컴 창(새 프로젝트 · 폴더 열기)을 연다.
 const WELCOME_WINDOW: &str = "welcome-window";
 const COPY_DIAGNOSTICS: &str = "copy-diagnostics";
+/// 「업데이트 확인…」(src/update.rs). 웹뷰 액션이 아니라 여기서 직접 한다 — 창이 없어도 동작한다.
+const CHECK_UPDATES: &str = "check-updates";
 /// 키맵 액션 id 를 그대로 메뉴 id 로 쓰는 항목.
 const SETTINGS_ACTION: &str = "settings.open";
 const FIND_ACTION: &str = "action.find";
@@ -219,6 +221,14 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         None::<&str>,
     )?;
     item("menu-welcome-window", Labeled::Item(welcome.clone()));
+    let check_updates = MenuItem::with_id(
+        app,
+        CHECK_UPDATES,
+        t("menu-check-updates"),
+        true,
+        None::<&str>,
+    )?;
+    item("menu-check-updates", Labeled::Item(check_updates.clone()));
     #[cfg(target_os = "macos")]
     let cli_install = MenuItem::with_id(
         app,
@@ -274,6 +284,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             true,
             &[
                 &about.1,
+                &check_updates,
                 &PredefinedMenuItem::separator(app)?,
                 &settings,
                 &cli_install,
@@ -395,7 +406,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         "menu-copy-diagnostics",
         Labeled::Item(copy_diagnostics.clone()),
     );
-    // 액션 찾기는 IntelliJ 처럼 Help 에 둔다.
+    // 액션 찾기는 IntelliJ 처럼 Help 에 둔다. macOS 가 아니면 앱 메뉴가 없으므로 업데이트 확인도 Help 에 둔다.
     let help_menu = Submenu::with_items(
         app,
         t("menu-help"),
@@ -404,6 +415,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &find_action,
             &PredefinedMenuItem::separator(app)?,
             &copy_diagnostics,
+            #[cfg(not(target_os = "macos"))]
+            &check_updates,
         ],
     )?;
     // macOS 는 제목이 영어 「Help」인 메뉴만 스스로 도움말 메뉴로 잡아 검색 칸을 붙인다. 번역된 제목에서도 붙게 직접 알린다.
@@ -467,6 +480,10 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
                 .map_err(|e| e.to_string())
         }),
         COPY_DIAGNOSTICS => diag::copy_to_clipboard(app),
+        CHECK_UPDATES => {
+            update::on_menu(app);
+            Ok(())
+        }
         FIND_ACTION => run_in_focused_window(app, FIND_ACTION),
         _ => Ok(()),
     };

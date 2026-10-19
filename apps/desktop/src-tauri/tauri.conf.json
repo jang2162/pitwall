@@ -15,6 +15,12 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFGMzA5NzAwQkM5NjIyMDMKUldRRElwYThBSmN3cjQ4OHAreWRDK04wL3lUcnJYblJDaTRYMW1Ecmk5UG84ZFMxemFTZStaRUEK",
+      "requireSignedVersion": true
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

@@ -339,12 +339,21 @@ fn write_backup(dir: &Path, rel: &Path, version: u32, contents: &str) -> std::io
 pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    // 다른 로더가 같은 파일을 바꿔 끼우는 순간이면 Windows 에서 잠깐 「없음」 · 접근 거부가 난다(`robust`).
-    let target =
-        super::robust::retrying(|| fs::canonicalize(path)).map_err(labeled("resolve", path))?;
-    let permissions = super::robust::retrying(|| fs::metadata(&target))
-        .map_err(labeled("read the permissions of", &target))?
-        .permissions();
+    // 다른 로더가 같은 파일을 바꿔 끼우는 순간이면 Windows 에서 잠깐 「없음」 · 접근 거부가 난다(`robust`). 경로 해석과 권한
+    // 읽기를 한 번에 다시 한다 — 해석이 바꿔 끼워지는 옛 파일을 집으면 그 경로(`$Extend\$Deleted`)는 다시 생기지 않는다.
+    let (target, permissions) = super::robust::retrying(|| {
+        let target = fs::canonicalize(path).map_err(labeled("resolve", path))?;
+        if super::robust::in_deleted_store(&target) {
+            return Err(labeled("resolve", path)(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("resolved to a replaced file at {}", target.display()),
+            )));
+        }
+        let permissions = fs::metadata(&target)
+            .map_err(labeled("read the permissions of", &target))?
+            .permissions();
+        Ok((target, permissions))
+    })?;
     let name = target
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

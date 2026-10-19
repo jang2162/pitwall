@@ -28,6 +28,20 @@ pub(crate) fn retrying<T>(op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     retry_while(op, ephemeral, PATIENCE)
 }
 
+/// Windows 가 POSIX 방식으로 지운 파일을 열린 핸들이 닫힐 때까지 옮겨 두는 자리(`\\?\C:\$Extend\$Deleted\…`) 안의 경로인가.
+///
+/// `fs::rename` 은 Windows 에서 `MoveFileExW` 가 접근 거부로 실패하면 POSIX 방식(`FILE_RENAME_FLAG_POSIX_SEMANTICS`)으로 다시
+/// 바꿔 끼운다(Rust std `library/std/src/sys/fs/windows.rs` 의 `rename`) — 다른 로더가 대상을 열고 있을 때다. 그렇게 덮인 옛
+/// 파일은 열린 핸들이 닫힐 때까지 이 자리로 옮겨진다. `fs::canonicalize` 는 파일을 열어 그 핸들의 최종 경로(`GetFinalPathNameByHandleW`)를
+/// 돌려주므로, 바꿔 끼우는 순간 옛 파일을 열었으면 이 자리를 돌려준다. 그 경로는 곧 사라지고 다시 생기지 않으므로 같은 경로로
+/// 다시 시도해도 소용이 없다 — 원래 경로부터 다시 해석해야 한다(Windows CI 의 `concurrent_loads_migrating_the_same_file_all_succeed`
+/// 가 `read the permissions of \\?\C:\$Extend\$Deleted\…: os error 2` 로 실패했다). 경로 글자로만 보므로 모든 OS 에서 같다.
+pub(crate) fn in_deleted_store(path: &Path) -> bool {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
+        .contains(r"\$extend\$deleted\")
+}
+
 /// `ERROR_SHARING_VIOLATION`.
 const SHARING_VIOLATION: i32 = 32;
 
@@ -102,6 +116,20 @@ mod tests {
             retry_while(|| Err(not_found()), |_| true, Duration::from_millis(50));
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn paths_in_the_deleted_store_are_recognised() {
+        assert!(in_deleted_store(Path::new(
+            r"\\?\C:\$Extend\$Deleted\0011000000012E5A6F8B1D30"
+        )));
+        assert!(in_deleted_store(Path::new(r"\\?\D:\$EXTEND\$DELETED\x")));
+        assert!(!in_deleted_store(Path::new(
+            r"\\?\C:\Users\a\AppData\Roaming\pitwall\settings.toml"
+        )));
+        assert!(!in_deleted_store(Path::new(
+            "/home/a/.config/pitwall/settings.toml"
+        )));
     }
 
     /// 다른 OS 에서는 rename 이 원자적이라 다시 시도할 일시 오류가 없다.

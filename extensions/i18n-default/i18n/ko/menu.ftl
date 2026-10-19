@@ -31,6 +31,7 @@ menu-fullscreen = 전체 화면 전환
 
 menu-find-action = 액션 찾기…
 menu-copy-diagnostics = 진단 정보 복사
+menu-check-updates = 업데이트 확인…
 
 ## 「Shell 명령 설치」 결과 대화상자(apps/desktop/src-tauri/src/shell_command.rs). $target: 명령을 설치한 자리.
 
@@ -47,3 +48,26 @@ shell-command-replaced = 'pitwall' 명령을 { $target } 에 설치했다.
 shell-command-failed = 'pitwall' 명령을 설치하지 못했다.
 
     { $error }
+
+## 업데이트 대화상자(apps/desktop/src-tauri/src/update.rs). $app: 앱 이름, $current: 실행 중인 버전, $version: 새 버전.
+
+update-title = 소프트웨어 업데이트
+update-available = { $app } { $version } 이 나왔다. 지금 버전은 { $current } 이다.
+
+    설치하고 { $app } 를 다시 시작할까?
+update-install = 설치하고 다시 시작
+update-later = 나중에
+update-none = { $app } { $current } 가 최신 버전이다.
+# $error: 실패한 이유
+update-check-failed = 업데이트를 확인하지 못했다.
+
+    { $error }
+# $error: 실패한 이유
+update-install-failed = 업데이트를 설치하지 못했다.
+
+    { $error }
+# deb · rpm 설치본은 스스로 업데이트하지 않는다.
+update-package-manager = { $app } { $current } 는 시스템 패키지(deb · rpm)로 설치되어 스스로 업데이트하지 않는다.
+
+    패키지 관리자로 업데이트하거나 릴리스 페이지에서 새 패키지를 받는다.
+update-dev-build = 개발 빌드는 업데이트를 확인하지 않는다.

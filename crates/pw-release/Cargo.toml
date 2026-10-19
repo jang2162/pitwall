@@ -1,0 +1,15 @@
+[package]
+name = "pw-release"
+description = "Release pipeline helpers: tag/version check and the updater manifest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 태그의 버전을 읽고 채널(stable · preview)을 가른다.
+semver = "1.0.28"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"
