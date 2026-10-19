@@ -134,17 +134,23 @@ MIT 프로젝트라 의존성은 허용형 라이선스만 쓴다(`docs/design/0
 **태그와 버전.** 버전의 원천은 워크스페이스 `Cargo.toml` 의 `[workspace.package] version` 이다(데스크톱 크레이트가 그것을 쓰고, `tauri.conf.json` 에는 `version` 을 두지 않는다 — `crates/pw-release` 의 시험이 지킨다). `package.json` 의 `version` 은 쓰지 않는다.
 
 - stable 은 `vX.Y.Z`, preview 는 `vX.Y.Z-preview.N`(N 은 0~65535 의 숫자, GitHub Release 를 prerelease 로 낸다). 그 밖의 prerelease(`-rc.1` 등)와 빌드 메타데이터(`+…`)는 거절한다.
-- 태그는 그 커밋의 소스 버전 앞에 `v` 를 붙인 것과 같아야 한다. 다르면 워크플로의 `plan` 잡이 실패하고 아무것도 만들지 않는다.
-- 순서: ① 워크스페이스 버전을 올리는 커밋(`Cargo.lock` 도 함께 바뀐다 — `cargo metadata` 한 번이면 갱신된다)을 PR 로 main 에 병합한다. 병합 전에 그 브랜치로 dry-run 을 돌린다. ② main 의 그 커밋에 태그를 달아 push 한다(`git tag v0.1.0-preview.1 <커밋> && git push origin v0.1.0-preview.1`). ③ 워크플로가 3 OS 빌드 → 매니페스트 → draft Release 에 자산을 다 올린 뒤 공개한다.
+- 태그는 그 커밋의 소스 버전 앞에 `v` 를 붙인 것과 같아야 하고, 태그 커밋이 `origin/main` 의 조상이어야 한다(리뷰를 거친 커밋만 공개한다). 둘 중 하나라도 아니면 워크플로의 `plan` 잡이 실패하고 아무것도 만들지 않는다.
+- 순서: ① 워크스페이스 버전을 올리는 커밋(`Cargo.lock` 도 함께 바뀐다 — `cargo metadata` 한 번이면 갱신된다)을 PR 로 main 에 병합한다. 그 PR 은 `Cargo.toml` 을 바꾸므로 dry-run 이 저절로 돈다 — 통과를 보고 병합한다. ② main 의 그 커밋에 태그를 달아 push 한다(`git tag v0.1.0-preview.1 <커밋> && git push origin v0.1.0-preview.1`). ③ 워크플로가 3 OS 빌드 → 매니페스트 → draft Release 에 자산을 다 올린 뒤 공개한다.
+- **preview 는 Linux 에 AppImage 만 낸다. deb · rpm 은 stable 태그에서만 빌드 · 첨부한다** — 패키지 관리자(dpkg · rpm)가 `X.Y.Z-preview.N` 을 `X.Y.Z` 보다 높게 정렬해, preview 패키지를 설치한 사람이 같은 X.Y.Z 의 stable 로 올라가지 못한다(rpm 은 Version 에 `-` 도 받지 않는다). preview 를 쓰는 Linux 사용자는 자동 업데이트되는 AppImage 를 쓴다. 규칙은 `crates/pw-release` 의 `linux_bundles` 다.
 - MSI 는 prerelease 를 숫자로만 받아 preview 의 N 을 넷째 칸에 둔다(`0.1.0-preview.2` → `0.1.0.2`). Windows Installer 는 넷째 칸을 비교하지 않지만 Tauri 의 MSI 는 다른 버전을 늘 덮어 설치한다(`bundle.windows.allowDowngrades` 기본값 true).
 
-**dry-run(공개 없이 시험).** 빌드 · macOS 서명 · 공증 · updater 서명 · 매니페스트까지 하고 결과는 워크플로 아티팩트(`release-macos` · `release-windows` · `release-linux` · `release-manifest`, 14일)로만 남긴다. Release · 태그를 만들지 않는다 — 쓰기 권한(`contents: write`)이 tag push 에서만 도는 `publish` 잡에만 있다(워크플로 머리 주석).
+**dry-run(공개 없이 시험).** 공개하는 실행(tag push)과 같은 빌드를 하되 Release · 태그를 만들지 않는다 — 쓰기 권한(`contents: write`)이 tag push 에서만 도는 `publish` 잡에만 있다(워크플로 머리 주석).
 
-- PR 이 `.github/workflows/release.yml` · `apps/desktop/src-tauri/tauri.release.conf.json` · `crates/pw-release/` 를 바꾸면 그 PR 에서 돈다. 같은 저장소의 브랜치만이다 — 포크 PR 은 Secrets 가 없어 건너뛴다.
+- **실서명인 것**: macOS 의 Developer ID 서명 · 공증 · 스테이플. 그것이 실제로 통과하는지 보는 것이 dry-run 의 목적이다.
+- **일회용 키인 것**: updater 서명. dry-run 은 잡 안에서 만든 키로 서명하고 그 키 · 서명을 버린다. 운영 updater 키(`TAURI_SIGNING_PRIVATE_KEY`)는 tag push 실행에만 env 로 들어간다(`crates/pw-release` 의 `updater_key`).
+- **아티팩트에 남는 것(3일)**: 플랫폼마다 `report-<플랫폼>`(산출물 이름과 SHA-256, macOS 는 서명 · 공증 검증 로그)과 `release-manifest`(`latest.json` — 서명 칸은 자리표시 `dry-run`)뿐이다. dmg · msi · AppImage · deb · rpm · `.app.tar.gz` · `.sig` 는 올리지 않는다 — 공개 저장소의 아티팩트는 로그인한 누구나 받을 수 있어, 올리면 병합 안 된 코드의 서명 · 공증 바이너리가 배포된다. 설치 파일을 손으로 받아 보려면 로컬에서 만든다(아래 「로컬에서 updater 확인」).
+- PR 이 `.github/workflows/release.yml` · `apps/desktop/src-tauri/tauri.release.conf.json` · `apps/desktop/src-tauri/tauri.conf.json` · `apps/desktop/src-tauri/src/update.rs` · `crates/pw-release/` · `Cargo.toml` · `Cargo.lock` 을 바꾸면 그 PR 에서 돈다(버전을 올린 PR 이 저절로 돈다). 같은 저장소의 브랜치만이다 — 포크 PR 은 Secrets 가 없어 건너뛴다.
 - 이 워크플로가 main 에 들어간 뒤로는 아무 브랜치로나 부른다: Actions → Release → Run workflow, 또는 `gh workflow run release.yml --ref <브랜치>`. `workflow_dispatch` 는 기본 브랜치에 파일이 있어야 다른 브랜치로 부를 수 있다. 태그를 골라 불러도 dry-run 이다.
-- 볼 것: macOS 잡의 「Verify signing and notarization」 단계(codesign · `lipo` 두 아키텍처 · `stapler validate` · `spctl` 이 「Notarized Developer ID」), `release-manifest` 의 `latest.json`(플랫폼 키 4개).
+- 볼 것: macOS 잡의 「Verify signing and notarization」 단계(codesign · `lipo` 두 아키텍처 · `stapler validate` · `spctl` 이 「Notarized Developer ID」, `report-macos` 에도 남는다), `release-manifest` 의 `latest.json`(플랫폼 키 4개).
 
-**매니페스트와 채널.** Release 마다 그 릴리스의 `latest.json` 하나가 자산으로 붙는다. stable 앱은 `releases/latest/download/latest.json`(GitHub 가 prerelease · draft 를 건너뛴다), preview 앱은 GitHub API 의 릴리스 목록에서 `latest.json` 을 가진 가장 높은 버전의 것을 읽는다(`apps/desktop/src-tauri/src/update.rs`). 플랫폼 키는 `darwin-aarch64` · `darwin-x86_64`(유니버설 하나) · `linux-x86_64-appimage` · `windows-x86_64` 다. deb · rpm 설치본은 자동 업데이트하지 않는다 — 맨 `linux-x86_64` 키를 두면 그 설치본이 AppImage 를 받아 설치하려 든다.
+**publish 를 다시 돌릴 때.** 앞선 실행이 draft 까지 만들고 멈췄으면 그 실행을 다시 돌린다(Actions → 실패한 실행 → Re-run) — publish 잡이 같은 태그의 draft 를 찾아 자산을 덮어 올리고(`gh release upload --clobber`) 공개한다. 이미 공개된 릴리스는 손대지 않고 실패한다(`crates/pw-release` 의 `publish_action`) — 공개된 자산을 바꾸면 이미 받은 사람과 바이트가 달라진다. 고쳐야 하면 버전을 올려 새로 낸다.
+
+**매니페스트와 채널.** Release 마다 그 릴리스의 `latest.json` 하나가 자산으로 붙는다. stable 앱은 `releases/latest/download/latest.json`(GitHub 가 prerelease · draft 를 건너뛴다), preview 앱은 GitHub API 의 릴리스 목록에서 `latest.json` 을 가진 가장 높은 버전의 것을 읽는다(`apps/desktop/src-tauri/src/update.rs`). 플랫폼 키는 `darwin-aarch64` · `darwin-x86_64`(유니버설 하나) · `linux-x86_64-appimage` · `windows-x86_64` 다. deb · rpm 설치본은 자동 업데이트하지 않는다 — 맨 `linux-x86_64` 키를 두면 그 설치본이 AppImage 를 받아 설치하려 든다. 그 설치본에서 「업데이트 확인…」 을 고르면 오류 대신 「패키지 관리자로 업데이트한다」 안내가 뜬다.
 
 **Secrets.** 저장소 Settings → Secrets and variables → Actions 에 9개가 있어야 한다. 값은 로그에 찍지 않는다(워크플로는 파일로만 쓰고 잡 끝에 지운다).
 

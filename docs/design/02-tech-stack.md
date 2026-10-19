@@ -111,7 +111,7 @@ DBX의 크레이트 분할을 참고해 `pw-db`를 다음처럼 나눈다:
 
 | 플랫폼 | 등급 | 내용 |
 |---|---|---|
-| **macOS** (Apple Silicon 우선, x64) | **Tier 1** | 개발 · QA 기준 플랫폼. 서명 · 공증(notarization), Homebrew cask, 유니버설 바이너리 |
+| **macOS** (Apple Silicon 우선, x64) | **Tier 1** | 개발 · QA 기준 플랫폼. 서명 · 공증(notarization), Homebrew cask(M0 이후), 유니버설 바이너리 |
 | Linux (x64/arm64, AppImage/deb/rpm) | Tier 2 | CI 빌드 + 스모크 테스트, WebKitGTK 성능 검증 |
 | Windows (x64/arm64, msi) | Tier 2 | CI 빌드 + 스모크 테스트, WebView2 |
 | Relay (원격) | Linux x64/arm64(musl 정적) Tier 1, macOS Tier 1, Windows Tier 2 | 원격 서버는 대부분 Linux이므로 Relay는 Linux도 1급 |
@@ -132,11 +132,11 @@ macOS 우선 항목:
 | 채널 | **stable / preview** 2개 — preview는 태그 `vX.Y.Z-preview.N`, 설정에서 선택(전역 `settings.toml` 의 `[update] channel`, 내장 기본값 `"stable"`) |
 | 매니페스트 위치 | 릴리스마다 **그 릴리스의 자산**으로 `latest.json` 하나. stable 앱은 `releases/latest/download/latest.json`(GitHub 가 prerelease · draft 를 건너뛴다), preview 앱은 GitHub REST API 의 릴리스 목록에서 `latest.json` 을 가진 가장 높은 버전(stable 포함)의 것을 읽는다. 이유: preview 릴리스가 stable 매니페스트를 덮어쓸 자리가 구조적으로 없고, gh-pages 브랜치나 상설 릴리스 같은 저장소 인프라를 새로 두지 않는다. 대가: preview 확인은 GitHub API 의 인증 없는 한도(IP 당 시간당 60회)를 쓴다 — 넘으면 그 확인만 실패한다 |
 | 버전 원천 | **소스**(워크스페이스 `Cargo.toml` 의 `version`). 태그는 그 커밋의 소스 버전과 같아야 하고 다르면 워크플로가 실패한다. 이유: 태그에서 버전을 써 넣으면 `CARGO_PKG_VERSION`(로그 · 확장 엔진 버전 · 진단)과 번들 버전이 갈리거나 CI 가 소스를 고쳐야 한다. 같은 커밋을 로컬에서 빌드해도 같은 버전이 나온다. 대가: 릴리스마다 버전을 올리는 커밋이 하나 필요하다 |
-| macOS | **Apple Developer 계정**(연 $99)으로 서명 · 공증, **유니버설** dmg + updater 패키지(`.app.tar.gz`, 두 아키텍처 키가 함께 쓴다), Homebrew cask 제공 |
+| macOS | **Apple Developer 계정**(연 $99)으로 서명 · 공증, **유니버설** dmg + updater 패키지(`.app.tar.gz`, 두 아키텍처 키가 함께 쓴다), Homebrew cask 제공(M0 이후) |
 | Windows | 코드 서명은 출시 시점에 결정 (초기엔 미서명 + SmartScreen 안내). msi 만 낸다. MSI 버전은 prerelease 를 숫자로만 받아 preview 의 N 을 넷째 칸에 둔다(`0.1.0-preview.2` → `0.1.0.2`) |
-| Linux | AppImage(자동 업데이트) / deb / rpm. 매니페스트 키는 `linux-x86_64-appimage` 다 — 맨 `linux-x86_64` 를 쓰면 deb · rpm 설치본이 AppImage 를 받아 설치하려 든다 |
+| Linux | AppImage(자동 업데이트) / deb / rpm. **preview 는 AppImage 만, deb · rpm 은 stable 만** — 이유: 패키지 관리자(dpkg · rpm)가 `X.Y.Z-preview.N` 을 `X.Y.Z` 보다 높게 정렬해 preview 패키지에서 같은 X.Y.Z 의 stable 로 올라가지 못한다(rpm 은 Version 에 `-` 도 받지 않는다). preview 를 쓰는 Linux 사용자는 자동 업데이트되는 AppImage 를 쓴다. 매니페스트 키는 `linux-x86_64-appimage` 다 — 맨 `linux-x86_64` 를 쓰면 deb · rpm 설치본이 AppImage 를 받아 설치하려 든다. deb · rpm 설치본의 「업데이트 확인…」 은 패키지 관리자 안내를 띄운다 |
 | Relay | Desktop과 같은 릴리스에 musl 정적 바이너리 포함 (버전 정확히 일치, 08) |
-| 빌드 | GitHub Actions(`.github/workflows/release.yml`): 태그 푸시 → plan(태그 = 소스 버전) → 3개 OS 빌드 · 서명 · 공증 → 매니페스트 → draft Release 에 자산을 다 올린 뒤 공개. 그 밖의 트리거(릴리스 파이프라인을 바꾼 PR, `workflow_dispatch`)는 **dry-run** — 같은 빌드 · 서명 · 공증을 하고 결과는 워크플로 아티팩트로만 남긴다. Release 를 쓰는 권한은 tag push 에서만 도는 잡에만 있다. 절차는 `CONTRIBUTING.md` 「릴리스」 |
+| 빌드 | GitHub Actions(`.github/workflows/release.yml`): 태그 푸시 → plan(태그 = 소스 버전, 태그 커밋이 main 의 조상) → 3개 OS 빌드 · 서명 · 공증 → 매니페스트 → draft Release 에 자산을 다 올린 뒤 공개. 그 밖의 트리거(릴리스 파이프라인을 바꾼 PR, `workflow_dispatch`)는 **dry-run** — 같은 빌드와 Apple 서명 · 공증을 하되 updater 서명은 잡 안에서 만든 일회용 키로 하고, 아티팩트로는 체크섬 · 검증 로그 · `latest.json` 같은 글만 남긴다(공개 저장소의 아티팩트는 누구나 받을 수 있어 서명된 바이너리를 올리지 않는다). 운영 updater 키는 tag push 실행에만 들어간다. Release 를 쓰는 권한은 tag push 에서만 도는 잡에만 있다. 절차는 `CONTRIBUTING.md` 「릴리스」 |
 
 ## 4. 레포 구조 (예정)
 
