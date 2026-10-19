@@ -34,7 +34,7 @@
 | 비밀 | `keyring` (macOS Keychain / Windows Credential / Secret Service) | |
 | 원격 | **Pitwall Relay 데몬** + 연결 계층 `pw-link` (QUIC `quinn`, Noise `snow`, mDNS) | 직접 연결(LAN/Tailscale) → SSH(`russh`) 대체. 중계 서버 없음 (08 참고) |
 | 모바일 | (보류) React Native (Expo) 후보 | D13 — 로드맵 제외 |
-| 라이선스 검사 | `cargo-deny`, `pnpm licenses list`(npm, `scripts/licenses.mjs`) | MIT 프로젝트 — 허용형 라이선스만. MPL-2.0 은 Tauri 전이 의존성에 한해 크레이트 단위 예외(수정 없이 사용, `deny.toml` `[[licenses.exceptions]]`). CC0-1.0(퍼블릭 도메인 헌정, 의무 없음)은 파일 감시 `notify` 에 한해 같은 방식의 크레이트 단위 예외. BSL-1.0(Boost, 허용형 · 바이너리 배포에 고지 의무 없음)은 클립보드 플러그인의 Windows 전용 전이 의존성(`clipboard-win` · `error-code`)에 한해 같은 방식의 크레이트 단위 예외 — 전역 허용 목록에는 넣지 않는다. npm 도 dev 전용 패키지에 한해 패키지 단위 예외(이유 필수, prod 에 나타나면 실패, `licenses/npm-exceptions.toml`) |
+| 라이선스 검사 | `cargo-deny`, `pnpm licenses list`(npm, `scripts/licenses.mjs`) | MIT 프로젝트 — 허용형 라이선스만. MPL-2.0 은 Tauri 전이 의존성에 한해 크레이트 단위 예외(수정 없이 사용, `deny.toml` `[[licenses.exceptions]]`). CC0-1.0(퍼블릭 도메인 헌정, 의무 없음)은 파일 감시 `notify` 에 한해 같은 방식의 크레이트 단위 예외. BSL-1.0(Boost, 허용형 · 바이너리 배포에 고지 의무 없음)은 클립보드 플러그인의 Windows 전용 전이 의존성(`clipboard-win` · `error-code`)에 한해 같은 방식의 크레이트 단위 예외 — 전역 허용 목록에는 넣지 않는다. CDLA-Permissive-2.0(데이터용 허용형)은 자동 업데이트(`tauri-plugin-updater` → `reqwest` → `rustls-platform-verifier`)가 끌어오는 `webpki-root-certs` 에 한해 같은 방식의 크레이트 단위 예외 — wasm32 전용 의존성이라 배포하는 3 OS 바이너리에 들어가지 않는다(`cargo tree -e normal -i webpki-root-certs --target <배포 타깃>` 이 비어 있다). 배포 타깃의 그래프에 들어오면 예외를 걷고 다시 판단한다. npm 도 dev 전용 패키지에 한해 패키지 단위 예외(이유 필수, prod 에 나타나면 실패, `licenses/npm-exceptions.toml`) |
 | 확장 런타임 | `wasmtime` (WASM Component Model, WIT) | 권한 기반 샌드박스 (07 참고) |
 | 테마 | 디자인 토큰 → CSS 변수, VS Code 테마 import | |
 | UI 언어(i18n) | **Fluent** (`fluent-rs` / `@fluent/bundle`) | 코어 · 데스크톱 공용 리소스 |
@@ -127,14 +127,16 @@ macOS 우선 항목:
 
 | 항목 | 결정 |
 |---|---|
-| 배포 위치 | **GitHub Releases** (설치 파일 + 업데이트 매니페스트 `latest.json`) |
-| 자동 업데이트 | Tauri `plugin-updater` (서명된 업데이트 패키지 검증) |
-| 채널 | **stable / preview** 2개 — preview는 태그 `vX.Y.Z-preview.N`, 설정에서 선택 |
-| macOS | **Apple Developer 계정**(연 $99)으로 서명 · 공증, Homebrew cask 제공 |
-| Windows | 코드 서명은 출시 시점에 결정 (초기엔 미서명 + SmartScreen 안내) |
-| Linux | AppImage(자동 업데이트) / deb / rpm |
+| 배포 위치 | **GitHub Releases** (설치 파일 + 그 릴리스의 업데이트 매니페스트 `latest.json`) |
+| 자동 업데이트 | Tauri `plugin-updater` (서명된 업데이트 패키지 검증). 서명에 실린 버전이 매니페스트의 버전과 다르면 거절한다(`requireSignedVersion` — 옛 릴리스의 서명된 패키지에 높은 버전을 붙인 매니페스트로 되돌리지 못하게). 시작할 때 조용히 확인(새 버전이 있을 때만 묻는다) + 메뉴 「업데이트 확인…」. 시작 확인은 release 빌드가 기본 `$DATA` 로 떴을 때만 한다 — 개발 · 측정 · 시험 실행은 네트워크에 나가지 않는다 |
+| 채널 | **stable / preview** 2개 — preview는 태그 `vX.Y.Z-preview.N`, 설정에서 선택(전역 `settings.toml` 의 `[update] channel`, 내장 기본값 `"stable"`) |
+| 매니페스트 위치 | 릴리스마다 **그 릴리스의 자산**으로 `latest.json` 하나. stable 앱은 `releases/latest/download/latest.json`(GitHub 가 prerelease · draft 를 건너뛴다), preview 앱은 GitHub REST API 의 릴리스 목록에서 `latest.json` 을 가진 가장 높은 버전(stable 포함)의 것을 읽는다. 이유: preview 릴리스가 stable 매니페스트를 덮어쓸 자리가 구조적으로 없고, gh-pages 브랜치나 상설 릴리스 같은 저장소 인프라를 새로 두지 않는다. 대가: preview 확인은 GitHub API 의 인증 없는 한도(IP 당 시간당 60회)를 쓴다 — 넘으면 그 확인만 실패한다 |
+| 버전 원천 | **소스**(워크스페이스 `Cargo.toml` 의 `version`). 태그는 그 커밋의 소스 버전과 같아야 하고 다르면 워크플로가 실패한다. 이유: 태그에서 버전을 써 넣으면 `CARGO_PKG_VERSION`(로그 · 확장 엔진 버전 · 진단)과 번들 버전이 갈리거나 CI 가 소스를 고쳐야 한다. 같은 커밋을 로컬에서 빌드해도 같은 버전이 나온다. 대가: 릴리스마다 버전을 올리는 커밋이 하나 필요하다 |
+| macOS | **Apple Developer 계정**(연 $99)으로 서명 · 공증, **유니버설** dmg + updater 패키지(`.app.tar.gz`, 두 아키텍처 키가 함께 쓴다), Homebrew cask 제공 |
+| Windows | 코드 서명은 출시 시점에 결정 (초기엔 미서명 + SmartScreen 안내). msi 만 낸다. MSI 버전은 prerelease 를 숫자로만 받아 preview 의 N 을 넷째 칸에 둔다(`0.1.0-preview.2` → `0.1.0.2`) |
+| Linux | AppImage(자동 업데이트) / deb / rpm. 매니페스트 키는 `linux-x86_64-appimage` 다 — 맨 `linux-x86_64` 를 쓰면 deb · rpm 설치본이 AppImage 를 받아 설치하려 든다 |
 | Relay | Desktop과 같은 릴리스에 musl 정적 바이너리 포함 (버전 정확히 일치, 08) |
-| 빌드 | GitHub Actions: 태그 푸시 → 3개 OS 빌드 · 서명 · 릴리스 업로드 |
+| 빌드 | GitHub Actions(`.github/workflows/release.yml`): 태그 푸시 → plan(태그 = 소스 버전) → 3개 OS 빌드 · 서명 · 공증 → 매니페스트 → draft Release 에 자산을 다 올린 뒤 공개. 그 밖의 트리거(릴리스 파이프라인을 바꾼 PR, `workflow_dispatch`)는 **dry-run** — 같은 빌드 · 서명 · 공증을 하고 결과는 워크플로 아티팩트로만 남긴다. Release 를 쓰는 권한은 tag push 에서만 도는 잡에만 있다. 절차는 `CONTRIBUTING.md` 「릴리스」 |
 
 ## 4. 레포 구조 (예정)
 
