@@ -51,6 +51,8 @@ export function projectStrings(t: Translate) {
     trust: {
       status: t("status-trust-needed"),
       statusHint: t("status-trust-needed-hint"),
+      unsavable: t("status-trust-unsavable"),
+      unsavableHint: t("status-trust-unsavable-hint"),
       title: (name: string) => t("trust-dialog-title", { name }),
       body: t("trust-dialog-body"),
       trust: t("trust-dialog-trust"),

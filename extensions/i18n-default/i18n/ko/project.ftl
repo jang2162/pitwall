@@ -84,6 +84,8 @@ runtime-reload-failed = 런타임 환경을 다시 읽지 못했다
 
 status-trust-needed = 런타임 환경 미적용(신뢰 필요)
 status-trust-needed-hint = 이 프로젝트를 신뢰하기 전에는 로그인 셸 환경만 쓴다. 눌러서 신뢰한다
+status-trust-unsavable = 런타임 환경 미적용(신뢰를 저장할 수 없음)
+status-trust-unsavable-hint = 프로젝트 레지스트리에 쓸 수 없어(읽기 전용 · 메모리) 이 프로젝트를 신뢰할 수 없다. 로그인 셸 환경만 쓴다
 # $name: 프로젝트 이름
 trust-dialog-title = 「{ $name }」 프로젝트를 신뢰할까?
 trust-dialog-body =

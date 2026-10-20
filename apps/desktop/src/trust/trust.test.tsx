@@ -23,6 +23,8 @@ const host = vi.hoisted(() => ({
   trust: undefined as boolean | undefined,
   claims: 0,
   sets: [] as boolean[],
+  /** `project.storage` 의 상태. readOnly · memory 면 쓰기 둘이 `STORAGE_UNAVAILABLE` 로 거절된다. */
+  storage: "ok" as "ok" | "memory",
   /** 있으면 `project.setTrust` 가 이 오류로 거절한다. */
   setError: undefined as { code: number; message: string; data?: string } | undefined,
   emit: (_topic: string, _payload: unknown) => {},
@@ -86,8 +88,19 @@ vi.mock("../tauri-transport", async () => {
             } satisfies Project);
           case "project.trust":
             return reply(state());
+          case "project.storage":
+            return reply(
+              host.storage === "ok"
+                ? { kind: "ok", path: "/data/state.db" }
+                : { kind: "memory", path: "/data/state.db", reason: "locked" },
+            );
           case "project.claimTrustPrompt": {
             host.claims += 1;
+            if (host.storage !== "ok")
+              return send({
+                id: m.id,
+                error: { code: -32003, message: "storage unavailable", data: "locked" },
+              });
             const first = host.trust === undefined;
             if (first) host.trust = false;
             return reply(first);
@@ -144,6 +157,7 @@ beforeEach(() => {
   host.claims = 0;
   host.sets = [];
   host.setError = undefined;
+  host.storage = "ok";
   localStorage.clear();
 });
 
@@ -263,10 +277,27 @@ it("untrusts from an action and reports a failed save", async () => {
   expect(host.sets).toEqual([false]);
   expect(trustStatus()).not.toBeNull();
 
+  // 그사이 레지스트리가 잠겨 메모리로 떨어졌다: 저장이 거절되면 저장소 상태를 다시 읽어 항목이 바뀐다.
   host.setError = { code: -32003, message: "storage unavailable", data: "the registry is locked" };
   await click(trustStatus());
+  host.storage = "memory";
   await click(button("신뢰"));
   expect(document.body.textContent).toContain("프로젝트 신뢰를 저장하지 못했다");
   expect(document.body.textContent).toContain("the registry is locked");
-  expect(trustStatus()).not.toBeNull();
+  expect(trustStatus()?.textContent).toBe("런타임 환경 미적용(신뢰를 저장할 수 없음)");
+});
+
+it("neither asks nor offers trust when the registry cannot be saved", async () => {
+  host.storage = "memory";
+  await mount();
+  expect(host.claims).toBe(1);
+  expect(dialog()).toBeNull();
+  const item = trustStatus();
+  expect(item?.tagName).toBe("SPAN");
+  expect(item?.textContent).toBe("런타임 환경 미적용(신뢰를 저장할 수 없음)");
+  await click(item);
+  expect(dialog()).toBeNull();
+  await findAndRun("이 프로젝트 신뢰…").catch(() => {});
+  expect(dialog()).toBeNull();
+  expect(host.sets).toEqual([]);
 });

@@ -85,6 +85,8 @@ runtime-reload-failed = Could not reload the runtime environment
 
 status-trust-needed = Runtime environment not applied (trust required)
 status-trust-needed-hint = Until you trust this project, only the login shell environment is used. Click to trust it
+status-trust-unsavable = Runtime environment not applied (trust cannot be saved)
+status-trust-unsavable-hint = The project registry cannot be written (read-only or in memory), so this project cannot be trusted. Only the login shell environment is used
 # $name: project name
 trust-dialog-title = Trust the project “{ $name }”?
 trust-dialog-body =

@@ -4,10 +4,11 @@
 //
 // 다이얼로그는 한 번만 뜬다: 창은 띄우기 전에 `project.claimTrustPrompt` 를 부르고, Host 가 「묻지 않음」 을 「미신뢰」 로 바꾼
 // 호출에만 `true` 를 준다 — 같은 프로젝트의 다른 창이 먼저 물었거나 이 창이 다시 불러도(재연결) 두 번 뜨지 않는다. 답하지
-// 않고 닫으면 미신뢰로 남고 상태바 항목에서 다시 연다.
+// 않고 닫으면 미신뢰로 남고 상태바 항목에서 다시 연다. 레지스트리에 쓸 수 없으면(`project.storage` 가 readOnly · memory)
+// 묻지 않고, 상태바 항목은 누를 수 없는 「신뢰를 저장할 수 없음」 이 되며 두 액션은 꺼진다.
 
 import type { Action } from "@pitwall/keymap";
-import { RpcCallError } from "@pitwall/rpc-client";
+import { ERROR_CODE, RpcCallError, type StorageStatus } from "@pitwall/rpc-client";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ShieldAlert } from "lucide-react";
 import {
@@ -43,6 +44,8 @@ export function trustActions(deps: {
   strings: ProjectStrings["trust"];
   /** 지금 신뢰하는가. 모르면(읽기 전 · 실패) `undefined` — 두 액션 다 꺼진다. */
   trusted(): boolean | undefined;
+  /** 레지스트리에 쓸 수 있는가. 거짓이면 두 액션 다 꺼진다. */
+  writable(): boolean;
   /** 확인 다이얼로그를 연다. 신뢰는 다이얼로그의 버튼으로만 한다. */
   openDialog(): void;
   setTrust(trusted: boolean): Promise<void>;
@@ -54,14 +57,14 @@ export function trustActions(deps: {
       id: TRUST_ACTION,
       label: T.trustAction,
       keywords: ["Trust Project", "Workspace Trust", "신뢰"],
-      enabled: () => deps.trusted() === false,
+      enabled: () => deps.writable() && deps.trusted() === false,
       run: () => deps.openDialog(),
     },
     {
       id: UNTRUST_ACTION,
       label: T.untrustAction,
       keywords: ["Untrust Project", "Restricted Mode", "신뢰"],
-      enabled: () => deps.trusted() === true,
+      enabled: () => deps.writable() && deps.trusted() === true,
       run: () =>
         deps
           .setTrust(false)
@@ -75,16 +78,37 @@ export function trustActions(deps: {
 interface TrustContextValue {
   projectId: string;
   trusted: boolean | undefined;
+  /** 레지스트리에 쓸 수 있는가(모르면 참 — 상태를 읽기 전에 항목을 바꿔 그리지 않게). */
+  writable: boolean;
+}
+
+/** `project.storage` 의 상태로 쓸 수 있는가. 모르면 참. */
+export function storageWritable(kind: StorageStatus["kind"] | undefined): boolean {
+  return kind !== "readOnly" && kind !== "memory";
 }
 
 const TrustContext = createContext<TrustContextValue | undefined>(undefined);
 
-/** 상태바 항목: 신뢰하지 않은 프로젝트에서만 「런타임 환경 미적용(신뢰 필요)」. 누르면 신뢰 액션(다이얼로그). */
+/**
+ * 상태바 항목: 신뢰하지 않은 프로젝트에서만 「런타임 환경 미적용(신뢰 필요)」. 누르면 신뢰 액션(다이얼로그). 레지스트리에 쓸 수
+ * 없으면 누를 수 없는 「신뢰를 저장할 수 없음」.
+ */
 export function TrustStatusItem() {
   const value = useContext(TrustContext);
   const T = useProjectStrings().trust;
   const { registry } = useKeymap();
   if (value?.trusted !== false) return null;
+  if (!value.writable)
+    return (
+      <span
+        data-testid="status-trust"
+        title={T.unsavableHint}
+        className="flex items-center gap-1 px-1"
+      >
+        <ShieldAlert size={11} aria-hidden />
+        {T.unsavable}
+      </span>
+    );
   return (
     <button
       type="button"
@@ -155,6 +179,8 @@ export function TrustProvider({ projectId, children }: { projectId: string; chil
   const notify = useNotify();
   const trust = useRpcQuery("project.trust", { id: projectId });
   const project = useRpcQuery("project.get", { id: projectId });
+  const storage = useRpcQuery("project.storage", null);
+  const writable = storageWritable(storage.data?.kind);
   const trusted = trust.data ? trust.data.state === "trusted" : undefined;
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -170,14 +196,24 @@ export function TrustProvider({ projectId, children }: { projectId: string; chil
   }, [client, projectId]);
 
   // 액션은 메모해 두고 지금 값은 ref 로 읽는다 — 신뢰 · 연결이 바뀔 때마다 다시 등록하지 않게.
-  const latest = useRef<{ trusted: boolean | undefined; save(value: boolean): Promise<void> }>(
-    undefined as never,
-  );
+  const latest = useRef<{
+    trusted: boolean | undefined;
+    writable: boolean;
+    save(value: boolean): Promise<void>;
+  }>(undefined as never);
   latest.current = {
     trusted,
+    writable,
     save: async (value: boolean) => {
       if (!client) throw new Error("not connected to the host");
-      await client.call("project.setTrust", { id: projectId, trusted: value });
+      await client
+        .call("project.setTrust", { id: projectId, trusted: value })
+        .catch((e: unknown) => {
+          // 저장소 상태가 바뀌었다(M0-12 와 같이 `project.storage` 를 다시 읽는다) — 항목 · 액션이 따라 바뀐다.
+          if (e instanceof RpcCallError && e.code === ERROR_CODE.STORAGE_UNAVAILABLE)
+            void storage.refetch();
+          throw e;
+        });
       // 다른 창은 `project.changed`(kind: trust)로 다시 읽는다. 이 창은 기다리지 않고 바로 읽는다.
       await trust.refetch();
     },
@@ -188,6 +224,7 @@ export function TrustProvider({ projectId, children }: { projectId: string; chil
         strings,
         notify,
         trusted: () => latest.current.trusted,
+        writable: () => latest.current.writable,
         openDialog: () => setOpen(true),
         setTrust: (value) => latest.current.save(value),
       }),
@@ -209,7 +246,7 @@ export function TrustProvider({ projectId, children }: { projectId: string; chil
       });
   };
 
-  const value = useMemo(() => ({ projectId, trusted }), [projectId, trusted]);
+  const value = useMemo(() => ({ projectId, trusted, writable }), [projectId, trusted, writable]);
   return (
     <TrustContext value={value}>
       {children}
