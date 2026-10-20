@@ -17,6 +17,7 @@
     "/.mcp.json",
     "/opencode.json",
     "/packages/rpc-client/src/generated/",
-    "/packages/rpc-client/test/fixtures/"
+    "/packages/rpc-client/test/fixtures/",
+    "/crates/pw-lang/linguist/"
   ]
 }

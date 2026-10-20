@@ -43,6 +43,8 @@ fn local_host(
     // 앱이 띄우는 프로세스의 환경. 로그인 셸은 처음 쓸 때 돈다 — 시작을 늦추지 않는다.
     let runtime = Arc::new(Runtime::new(LoginShell::for_this_user()));
     let runtime_methods = Arc::clone(&runtime);
+    let lang = Arc::new(pw_lang::methods::Lang::new(&extensions));
+    let lang_methods = Arc::clone(&lang);
     let open_with = Arc::new(OpenWith::new(Arc::clone(&extensions), Arc::clone(&runtime)));
     let open_with_methods = Arc::clone(&open_with);
     let fs = Arc::new(Fs::new());
@@ -52,6 +54,7 @@ fn local_host(
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
         .methods(move |router| pw_ext::methods::register(router, extensions))
         .methods(move |router| pw_i18n::methods::register(router, methods))
+        .methods(move |router| pw_lang::methods::register(router, lang_methods))
         .methods(move |router| pw_open_with::methods::register(router, open_with_methods))
         .methods(move |router| pw_runtime::methods::register(router, runtime_methods))
         .methods(move |router| pw_fs::methods::register(router, fs_methods))
@@ -70,6 +73,12 @@ fn local_host(
             runtime.attach(RuntimeHost {
                 projects: projects.clone(),
                 bus: host.bus().clone(),
+            });
+            // 언어 판별(`lang.detect`)이 설정 매핑 · 프로젝트 레지스트리를 쓴다.
+            lang.attach(pw_lang::methods::HostParts {
+                paths: config.paths.clone(),
+                global: config.global.clone(),
+                projects: projects.clone(),
             });
         }
     }

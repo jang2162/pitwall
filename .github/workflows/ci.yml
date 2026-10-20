@@ -162,6 +162,28 @@ jobs:
       # cargo-deny licenses·bans·sources + npm 라이선스 + THIRD_PARTY_NOTICES.md 최신 여부. PR 을 막는다.
       - run: mise run licenses
 
+  linguist-samples:
+    name: linguist samples
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # mise run 은 기본으로 mise.toml 의 빠진 도구를 전부 설치한다. 아래 install_args 로 고른 것만 쓰게 끈다.
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          # 스크립트(node) · 빌드(rust) · 시험(nextest)만 쓴다. pnpm 의존성은 설치하지 않는다.
+          install_args: node rust aqua:nextest-rs/nextest/cargo-nextest
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Linguist samples(고정 커밋)를 GitHub 에서 받아 pw-lang 의 일치율이 하한 이상인지 본다. PR 을 막는다.
+      - run: mise run lang-samples
+
   advisories:
     name: advisories
     runs-on: ubuntu-latest

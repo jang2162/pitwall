@@ -61,6 +61,12 @@ run = [
   "cargo run -q --release -p pw-perf -- --app target/release/bundle/macos/Pitwall.app",
 ]
 
+# Linguist `samples/`(36MB, 저장소에 넣지 않는다)를 고정 커밋에서 받아 pw-lang 의 일치율 시험을 돌린다(네트워크 필요).
+# 받은 samples 는 target/linguist-samples/<커밋>/ 에 두고 다시 받지 않는다. 기본 `test` 에서는 빠진다(`#[ignore]`).
+[tasks.lang-samples]
+description = "Linguist samples 일치율 시험(samples 를 GitHub 에서 받는다)"
+run = "node scripts/linguist.mjs samples-test"
+
 [tasks.gen]
 description = "RPC 선언에서 TS 타입 · JSON Schema · 클라이언트 테스트 고정 입력 생성(packages/rpc-client)"
 run = [

@@ -144,15 +144,15 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 | 생성 파일 규칙 (`generated` 판별) | diff에서 생성 파일 접기 (lockfile, 빌드 산출물 등) |
 
 **판별 순서**
-1. 사용자/프로젝트 설정의 명시적 매핑 (`[languages.mapping] "*.conf" = "nginx"`)
-2. `.gitattributes`의 `linguist-language` · `linguist-vendored` · `linguist-generated` · `linguist-documentation` (GitHub와 같은 결과)
-3. 에디터 모드라인 (vim / emacs)
-4. 파일명 → 확장자(heuristics 포함) → shebang
-5. 확장(L1)이 추가한 확장자 매핑
+1. 사용자/프로젝트 설정의 명시적 매핑 (`[languages.mapping] "*.conf" = "nginx"`). 글롭은 `.gitattributes` 패턴과 같은 문법으로 프로젝트 루트 기준 경로에 맞춘다. 여럿이 맞으면 프로젝트 설정이 전역을 이기고, 같은 설정 안에서는 긴 패턴이 이긴다(설정 값은 키 순서를 지키지 않는다). 값은 Linguist 이름 · 별칭이나 확장이 기여한 `linguist` 이름
+2. `.gitattributes`의 `linguist-language` · `linguist-vendored` · `linguist-generated` · `linguist-documentation` (GitHub와 같은 결과). 읽는 것은 저장소 꼭대기부터 그 파일 폴더까지의 `.gitattributes` 와 `$GIT_DIR/info/attributes` 뿐이다 — 사람의 전역 파일(`core.attributesFile`)은 GitHub 서버에 없으므로 읽지 않는다
+3. ~ 4. Linguist 의 판별 단계를 순서까지 그대로: 에디터 모드라인(vim / emacs) → 파일명 → shebang → 확장자(`generic.yml` 의 흔한 확장자 `.1`~`.9` · `.app` 등은 건너뜀) → XML 머리 → manpage → heuristics. 각 단계는 앞 단계 후보와 교집합을 내고, 후보가 하나면 멈춘다(`lib/linguist.rb` 의 `STRATEGIES` — 그래서 `foo.rb` 에 `#!/bin/bash` 는 Shell 이다). Linguist 의 마지막 단계인 베이즈 분류기는 옮기지 않는다. 후보가 여럿 남으면 그 확장자를 대표 확장자(첫 확장자)로 적은 언어 · `popular.yml` 의 언어 순으로 고른다(내용 없는 `.rs` 가 RenderScript 가 아니라 Rust)
+5. 확장(L1)이 추가한 확장자 매핑 — Linguist 단계가 판정하지 못했을 때만
 6. 판별 실패 → 플레인 텍스트
 
 **운영**
-- 빌드 시 Linguist YAML을 압축 테이블로 변환해 코어(`pw-lang`)에 내장. 업데이트는 스크립트로 주기적 갱신(Linguist 버전 고정)
+- 빌드 시 Linguist YAML(`languages.yml` · `heuristics.yml` · `vendor.yml` · `documentation.yml` · `generic.yml` · `popular.yml`)을 정적 테이블로 변환해 코어(`pw-lang`)에 내장. 업데이트는 스크립트로 갱신(Linguist 버전 고정 — 버전 · 순서는 CONTRIBUTING.md 「Linguist 데이터」)
+- 일치율: Linguist `samples/` 전체로 재고 하한은 95% 다(분류기를 옮기지 않으므로 100% 가 아니다). samples 는 저장소에 넣지 않고 시험이 고정 커밋에서 받는다(기본 시험에서 빠지고 CI 의 별도 잡이 돈다)
 - 언어 ID는 Linguist 이름 기준 → 언어 확장은 `linguist = "<이름>"`으로 연결 (tree-sitter 문법 · LSP · DAP)
 - heuristics의 정규식은 Rust `regex`로 컴파일 (Ruby 전용 문법은 변환 스크립트에서 처리, 실패 항목은 건너뜀 + 로그)
 - 생성 파일 규칙은 YAML 이 아니라 Linguist 의 Ruby 코드(`lib/linguist/generated.rb`)라 테이블로 변환할 수 없다 — 경로 · 첫 줄 규칙(lockfile · minified · 「Code generated … DO NOT EDIT」 · 흔한 빌드 산출물 폴더 등)의 일부를 `pw-lang` 에 손으로 옮기고, 옮긴 목록을 거기 적는다([12-m1-plan.md](12-m1-plan.md) M1-D20)

@@ -22,18 +22,19 @@ mise trust && mise install && pnpm install
 
 모두 저장소 루트에서 실행한다. 태스크 목록은 `mise tasks`.
 
-| 하려는 일                                                                                 | 명령                  |
-| ----------------------------------------------------------------------------------------- | --------------------- |
-| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                   | `mise run build`      |
-| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                              | `mise run dev`        |
-| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                      | `mise run test`       |
-| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                | `mise run lint`       |
-| 포맷 적용                                                                                 | `mise run fmt`        |
-| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                  | `mise run gen`        |
-| 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부 | `mise run licenses`   |
-| `THIRD_PARTY_NOTICES.md` 다시 만들기                                                      | `mise run notices`    |
-| Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                            | `mise run advisories` |
-| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)      | `mise run perf`       |
+| 하려는 일                                                                                 | 명령                    |
+| ----------------------------------------------------------------------------------------- | ----------------------- |
+| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                   | `mise run build`        |
+| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                              | `mise run dev`          |
+| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                      | `mise run test`         |
+| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                | `mise run lint`         |
+| 포맷 적용                                                                                 | `mise run fmt`          |
+| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                  | `mise run gen`          |
+| 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부 | `mise run licenses`     |
+| `THIRD_PARTY_NOTICES.md` 다시 만들기                                                      | `mise run notices`      |
+| Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                            | `mise run advisories`   |
+| Linguist `samples/` 일치율 시험(samples 를 GitHub 에서 받는다, 아래 「Linguist 데이터」)  | `mise run lang-samples` |
+| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)      | `mise run perf`         |
 
 하위 단위만 돌릴 때:
 
@@ -104,6 +105,23 @@ RPC 의 TS 타입·메서드 목록·JSON Schema 는 `rpc_method!` 선언과 그
 - `schema.json` 의 입력 스키마가 MCP `inputSchema`(object 필수)로 그대로 쓰이는 것은 struct 입력뿐이다. `()` 는 `{"type": "null"}`, enum 은 `oneOf` 루트다.
 - **선언에 `mcp: true` 를 단 메서드만 MCP 툴이 된다. 새 메서드는 기본으로 노출되지 않는다** — UI 전용 메서드에는 달지 않는다. 툴을 늘리면 데스크톱 크레이트의 `mcp_tools_are_exactly_these`(`apps/desktop/src-tauri/src/main.rs`) 목록도 함께 고친다 — 모든 메서드 크레이트가 링크되는 자리라 어느 크레이트의 선언이든 거기서 잡힌다(pw-mcp 의 시험은 pw-core 선언만 본다). 입력은 struct 나 `()` 여야 하고 스트림 메서드에는 달 수 없다(이름 · 스키마 규칙은 `docs/design/05-mcp.md` 「툴 레지스트리」 절).
 
+## Linguist 데이터
+
+언어 판별(`crates/pw-lang`)은 GitHub Linguist 의 데이터를 쓴다(`docs/design/07-extensibility.md` 「언어 판별 — GitHub Linguist 데이터」). 고정한 버전은 `crates/pw-lang/linguist/VERSION`(태그와 커밋)이고, 그 커밋의 `languages.yml` · `heuristics.yml` · `vendor.yml` · `documentation.yml` · `generic.yml` · `popular.yml` · `LICENSE` 가 같은 폴더에 있다. 빌드 스크립트(`crates/pw-lang/build.rs`)가 YAML 을 정적 표로 바꾼다.
+
+- **데이터 파일을 손으로 고치지 않는다.** `node scripts/linguist.mjs data` 가 `VERSION` 의 커밋에서 받아 덮어쓴다(같은 커밋이면 바이트가 같다). oxfmt 도 그 폴더를 포맷하지 않는다(`.oxfmtrc.json` 의 `ignorePatterns`) — 포맷하면 YAML 이 다시 쓰여 원본과 갈라진다.
+- heuristics · vendor · documentation 의 Ruby 정규식은 빌드 때 Rust `regex` 로 옮긴다(`crates/pw-lang/src/ruby_regex.rs`). 옮기지 못한 것(앞뒤 보기 · 소유 반복 등)은 표에서 빠지고 빌드 로그(`target/<프로필>/build/pw-lang-*/output`)와 `pw_lang::SKIPPED_PATTERNS` 에 남는다. 목록은 시험 `skipped_heuristics_are_exactly_these` 가 고정한다.
+- generated 판정은 Linguist 의 Ruby 코드(`lib/linguist/generated.rb`)를 손으로 옮긴 것이라 데이터 갱신으로 따라오지 않는다(결정 M1-D20). 옮긴 규칙과 옮기지 않은 규칙은 `crates/pw-lang/src/generated.rs` 머리 주석.
+- `samples/`(36MB · 3천여 파일)는 저장소에 넣지 않는다. `mise run lang-samples` 가 고정 커밋의 samples 를 git 부분 클론으로 `target/linguist-samples/<커밋>/` 에 받고(한 번만) 일치율 시험(`crates/pw-lang/tests/samples.rs`, 하한 95%)을 돌린다. 기본 `mise run test` 에서는 `#[ignore]` 로 빠지고, CI 의 `linguist-samples` 잡이 돌린다.
+
+버전을 올리는 순서:
+
+1. `crates/pw-lang/linguist/VERSION` 을 새 태그와 그 커밋(`git ls-remote https://github.com/github-linguist/linguist refs/tags/<태그>`)으로 바꾼다.
+2. `node scripts/linguist.mjs data` 로 받는다. `licenses/vendored.md` 의 버전 · 커밋 줄을 고치고 `mise run notices` 를 돌린다.
+3. `cargo build -p pw-lang` 의 빌드 로그에서 옮기지 못한 정규식을 보고, 바뀌었으면 `skipped_heuristics_are_exactly_these` 의 목록을 고친다.
+4. 새 버전의 `lib/linguist.rb`(`STRATEGIES`) · `lib/linguist/strategy/*.rb` · `shebang.rb` · `generated.rb` 를 옛 태그와 비교해 바뀐 판별 단계 · 규칙을 `crates/pw-lang/src/linguist.rs` · `generated.rs` 에 옮긴다 — 코드는 데이터와 함께 오지 않는다.
+5. `mise run lang-samples` 로 일치율이 하한 이상인지 본다.
+
 ## 의존성과 라이선스
 
 MIT 프로젝트라 의존성은 허용형 라이선스만 쓴다(`docs/design/02-tech-stack.md` 「라이선스 검사」 행).
@@ -120,12 +138,13 @@ MIT 프로젝트라 의존성은 허용형 라이선스만 쓴다(`docs/design/0
 
 `.github/workflows/ci.yml` 이 로컬과 같은 mise 태스크를 부른다. 도구 버전은 `mise.toml` 이 정본이다.
 
-| 잡           | 언제                | 하는 일                                                                      | 실패하면                                         |
-| ------------ | ------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------ |
-| `check`      | PR, main push       | macOS·Linux·Windows 에서 `mise run lint`, `mise run test`, npm 라이선스 검사 | PR 을 막는다                                     |
-| `licenses`   | PR, main push       | Linux 에서 `mise run licenses`                                               | PR 을 막는다                                     |
-| `advisories` | PR, main push, 매일 | `mise run advisories`                                                        | PR 에서는 경고만, main push·매일 실행에서는 실패 |
-| `perf`       | PR, main push       | macOS 에서 `mise run perf`, 결과를 job summary · artifact(`perf-baseline`)로 | 막지 않는다(기록만, 「성능 기준선」)             |
+| 잡                 | 언제                | 하는 일                                                                      | 실패하면                                         |
+| ------------------ | ------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------ |
+| `check`            | PR, main push       | macOS·Linux·Windows 에서 `mise run lint`, `mise run test`, npm 라이선스 검사 | PR 을 막는다                                     |
+| `licenses`         | PR, main push       | Linux 에서 `mise run licenses`                                               | PR 을 막는다                                     |
+| `advisories`       | PR, main push, 매일 | `mise run advisories`                                                        | PR 에서는 경고만, main push·매일 실행에서는 실패 |
+| `linguist-samples` | PR, main push       | Linux 에서 `mise run lang-samples`(Linguist samples 를 GitHub 에서 받는다)   | PR 을 막는다                                     |
+| `perf`             | PR, main push       | macOS 에서 `mise run perf`, 결과를 job summary · artifact(`perf-baseline`)로 | 막지 않는다(기록만, 「성능 기준선」)             |
 
 ## 릴리스
 

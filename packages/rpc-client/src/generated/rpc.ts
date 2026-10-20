@@ -65,6 +65,11 @@ export type UnaryMethods = {
 	 */
 	"keymap.list": { params: null; result: KeymapList };
 	/**
+	 * 파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·
+	 * 그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.
+	 */
+	"lang.detect": { params: LangDetectParams; result: LangDetectResult };
+	/**
 	 * UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.
 	 * 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.
 	 */
@@ -189,6 +194,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"i18n.setLanguage": {"name":"i18n.setLanguage","kind":"unary","tier":"write","roles":["owner"],"params":"SetLanguageParams","output":"()","doc":" UI 언어 설정(전역 `settings.toml` 의 `ui.language`)을 바꾼다. 그 키만 고쳐 쓰고 설정을 다시 읽는다 — 열린 창 ·\n 메뉴는 `config.changed` 로 바뀐다. 모르는 언어면 invalid params, 파일을 고칠 수 없으면(TOML 이 깨졌다 등) 쓰지\n 않고 오류다.\n","mcp":false},
 	"keymap.get": {"name":"keymap.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"KeymapGetParams","output":"KeymapFile","doc":" 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.\n","mcp":false},
 	"keymap.list": {"name":"keymap.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"KeymapList","doc":" 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.\n","mcp":false},
+	"lang.detect": {"name":"lang.detect","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"LangDetectParams","output":"LangDetectResult","doc":" 파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·\n 그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.\n","mcp":false},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n","mcp":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false},
@@ -627,6 +633,62 @@ export type KeymapInfo = {
 export type KeymapList = {
 	keymaps: KeymapInfo[],
 };
+
+export type LangDetectFile = {
+	/**  절대 경로. 파일이 없어도 된다(저장하지 않은 새 파일). */
+	path: string,
+	/**
+	 *  파일 앞부분(앞 50 KiB 까지만 본다 — 넘는 부분은 버린다). 없으면 내용을 보는 단계(모드라인 · shebang · XML 머리 ·
+	 *  heuristics · 생성 파일의 앞 줄 규칙)를 건너뛴다.
+	 */
+	head?: string | null,
+};
+
+export type LangDetectParams = {
+	/**
+	 *  있으면 그 프로젝트의 설정 매핑과 `.gitattributes` 를 본다. 없으면 전역 매핑과 Linguist 규칙만 본다(경로 규칙은 파일
+	 *  이름에만 맞춘다).
+	 */
+	projectId?: string | null,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 프로젝트 루트가 그 워크트리 안의 것이 된다. */
+	worktree?: string | null,
+	/**  최대 [`MAX_FILES`] 개. 결과는 같은 순서다. */
+	files: LangDetectFile[],
+};
+
+export type LangDetectResult = {
+	files: LangDetection[],
+};
+
+export type LangDetection = {
+	/**  Linguist 언어 이름. `null` 이면 플레인 텍스트. */
+	language: string | null,
+	source: LangSource,
+	/**  벤더 파일(vendor.yml 또는 `linguist-vendored`). */
+	vendored: boolean,
+	/**  생성 파일(`pw_lang::generated` 의 규칙 또는 `linguist-generated`). */
+	generated: boolean,
+	/**  문서 파일(documentation.yml 또는 `linguist-documentation`). */
+	documentation: boolean,
+};
+
+/**  언어를 정한 단계. */
+export type LangSource = 
+/**  설정의 `[languages.mapping]`. */
+"mapping" | 
+/**  `.gitattributes` 의 `linguist-language`. */
+"gitattributes" | "modeline" | "filename" | "shebang" | "extension" | 
+/**  앞 두 줄의 `xml version=`. */
+"xml" | "manpage" | "heuristics" | 
+/**
+ *  Linguist 단계가 후보를 여럿 남겼다(Linguist 는 여기서 분류기를 쓴다 — 옮기지 않았다). 대표 확장자 · popular.yml 로
+ *  고른다(`linguist::pick`).
+ */
+"ambiguous" | 
+/**  확장의 `[contributes.languages]` 확장자. */
+"contributed" | 
+/**  정하지 못했다(플레인 텍스트). */
+"none";
 
 export type LanguageInfo = {
 	/**  BCP 47 언어 태그. */

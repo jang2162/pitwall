@@ -1639,6 +1639,167 @@
       ],
       "tier": "read"
     },
+    "lang.detect": {
+      "description": "파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·\n그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "LangDetectFile": {
+            "properties": {
+              "head": {
+                "default": null,
+                "description": "파일 앞부분(앞 50 KiB 까지만 본다 — 넘는 부분은 버린다). 없으면 내용을 보는 단계(모드라인 · shebang · XML 머리 ·\nheuristics · 생성 파일의 앞 줄 규칙)를 건너뛴다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "description": "절대 경로. 파일이 없어도 된다(저장하지 않은 새 파일).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "files": {
+            "description": "최대 [`MAX_FILES`] 개. 결과는 같은 순서다.",
+            "items": {
+              "$ref": "#/$defs/LangDetectFile"
+            },
+            "type": "array"
+          },
+          "projectId": {
+            "default": null,
+            "description": "있으면 그 프로젝트의 설정 매핑과 `.gitattributes` 를 본다. 없으면 전역 매핑과 Linguist 규칙만 본다(경로 규칙은 파일\n이름에만 맞춘다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 프로젝트 루트가 그 워크트리 안의 것이 된다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LangDetection": {
+            "properties": {
+              "documentation": {
+                "description": "문서 파일(documentation.yml 또는 `linguist-documentation`).",
+                "type": "boolean"
+              },
+              "generated": {
+                "description": "생성 파일(`pw_lang::generated` 의 규칙 또는 `linguist-generated`).",
+                "type": "boolean"
+              },
+              "language": {
+                "description": "Linguist 언어 이름. `null` 이면 플레인 텍스트.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source": {
+                "$ref": "#/$defs/LangSource"
+              },
+              "vendored": {
+                "description": "벤더 파일(vendor.yml 또는 `linguist-vendored`).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "language",
+              "source",
+              "vendored",
+              "generated",
+              "documentation"
+            ],
+            "type": "object"
+          },
+          "LangSource": {
+            "description": "언어를 정한 단계.",
+            "oneOf": [
+              {
+                "enum": [
+                  "modeline",
+                  "filename",
+                  "shebang",
+                  "extension",
+                  "manpage",
+                  "heuristics"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "mapping",
+                "description": "설정의 `[languages.mapping]`.",
+                "type": "string"
+              },
+              {
+                "const": "gitattributes",
+                "description": "`.gitattributes` 의 `linguist-language`.",
+                "type": "string"
+              },
+              {
+                "const": "xml",
+                "description": "앞 두 줄의 `xml version=`.",
+                "type": "string"
+              },
+              {
+                "const": "ambiguous",
+                "description": "Linguist 단계가 후보를 여럿 남겼다(Linguist 는 여기서 분류기를 쓴다 — 옮기지 않았다). 대표 확장자 · popular.yml 로\n고른다(`linguist::pick`).",
+                "type": "string"
+              },
+              {
+                "const": "contributed",
+                "description": "확장의 `[contributes.languages]` 확장자.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "정하지 못했다(플레인 텍스트).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/$defs/LangDetection"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "log.write": {
       "description": "UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.",
       "kind": "unary",
