@@ -53,6 +53,7 @@ import {
 } from "../status-bar/status-bar";
 import { TaskProvider, TasksStatusItem, useDemoTaskActions } from "../tasks/tasks";
 import { ThemeSwitcher, useTheme } from "../theme/theme-switcher";
+import { TrustProvider } from "../trust/trust";
 import {
   applyPanelTitles,
   type Dock,
@@ -345,14 +346,20 @@ function ProjectWindowBody({ projectId }: { projectId?: string }) {
 export function ProjectWindow({
   projectId = projectIdFromQuery(window.location.search),
 }: {
-  /** 창 쿼리의 프로젝트 id(`?project=`). 없으면 외부 도구 액션이 없다. */
+  /** 창 쿼리의 프로젝트 id(`?project=`). 없으면 외부 도구 액션 · 신뢰(trust/trust.tsx)가 없다. */
   projectId?: string;
 }) {
   return (
     <NotificationProvider>
       <StatusBarProvider>
         <TaskProvider projectId={projectId}>
-          <ProjectWindowBody projectId={projectId} />
+          {projectId === undefined ? (
+            <ProjectWindowBody />
+          ) : (
+            <TrustProvider projectId={projectId}>
+              <ProjectWindowBody projectId={projectId} />
+            </TrustProvider>
+          )}
         </TaskProvider>
       </StatusBarProvider>
     </NotificationProvider>

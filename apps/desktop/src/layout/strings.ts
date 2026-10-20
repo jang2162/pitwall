@@ -1,4 +1,4 @@
-// 프로젝트 창(툴 윈도우 · 상태바 · 백그라운드 작업 · 런타임 환경 · 알림)이 보여 주는 문자열. 내용은 Fluent 리소스
+// 프로젝트 창(툴 윈도우 · 상태바 · 백그라운드 작업 · 런타임 환경 · 신뢰 · 알림)이 보여 주는 문자열. 내용은 Fluent 리소스
 // (extensions/i18n-default/i18n/*/project.ftl)에 있고, 이 파일은 화면 자리와 메시지 id 를 잇는다. 여기 적은 id 가 ko · en
 // 리소스에 모두 있는지는 src/i18n/resources.test.ts 가 본다 — 툴 윈도우 이름은 PANELS 의 모든 id 를 거기서 부른다.
 
@@ -47,6 +47,17 @@ export function projectStrings(t: Translate) {
     runtime: {
       reload: t("action-runtime-reload"),
       reloadFailed: t("runtime-reload-failed"),
+    },
+    trust: {
+      status: t("status-trust-needed"),
+      statusHint: t("status-trust-needed-hint"),
+      title: (name: string) => t("trust-dialog-title", { name }),
+      body: t("trust-dialog-body"),
+      trust: t("trust-dialog-trust"),
+      distrust: t("trust-dialog-distrust"),
+      trustAction: t("action-project-trust"),
+      untrustAction: t("action-project-untrust"),
+      saveFailed: t("trust-save-failed"),
     },
     notifications: {
       empty: t("notifications-empty"),

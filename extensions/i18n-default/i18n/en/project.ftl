@@ -1,4 +1,4 @@
-### Project window: tool window names and their open actions, status bar, background tasks, notifications, runtime environment.
+### Project window: tool window names and their open actions, status bar, background tasks, notifications, runtime environment, project trust.
 
 ## Tool window names. The id is the tool window id (PANELS in src/layout/project-layout.ts) in kebab-case.
 
@@ -80,3 +80,18 @@ notification-repeated = { $title } (×{ $count })
 
 action-runtime-reload = Reload Runtime Environment
 runtime-reload-failed = Could not reload the runtime environment
+
+## Project trust. Untrusted projects do not run runtime providers (mise and so on) and use only the login shell environment.
+
+status-trust-needed = Runtime environment not applied (trust required)
+status-trust-needed-hint = Until you trust this project, only the login shell environment is used. Click to trust it
+# $name: project name
+trust-dialog-title = Trust the project “{ $name }”?
+trust-dialog-body =
+    Trusting it builds the environment from the project's runtime settings (mise.toml and so on). Those settings can run the project's scripts.
+    If you do not trust it, only the login shell environment is used. You can change this any time from the status bar or an action.
+trust-dialog-trust = Trust
+trust-dialog-distrust = Don't Trust
+action-project-trust = Trust This Project…
+action-project-untrust = Stop Trusting This Project
+trust-save-failed = Could not save the project trust

@@ -122,7 +122,7 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
   - **`readOnly` · `memory` 에서 쓰기(생성 · 수정 · 삭제 · 「열었음」)는 성공처럼 돌려주지 않고 오류로 거절한다** — 쓴 것이 종료 때 사라지지 않게. 오류 코드는 전용 `STORAGE_UNAVAILABLE`(-32003, `data` 에 이유)이라 일반 내부 오류와 구분된다. **M0-12 는 이 코드를 받으면 `project.storage` 를 다시 불러 배너를 갱신한다**
   - 최신 버전 파일을 여는 것은 쓰기 잠금을 잡지 않는다(올릴 단계가 있을 때만 잡는다) — 다른 프로세스가 쓰는 중에도 기다리지 않고 연다
   - **M0-12 웰컴 화면은 `project.storage` 가 `ok` 가 아니면 그 이유(`reason`)를 배너로 보여 준다**(`memory` 의 빈 목록이 「프로젝트가 사라졌다」로 읽히지 않게). 지금은 데스크톱 시작 로그만 남긴다
-  - 레지스트리에서 지워도 프로젝트 폴더 · `.pitwall/` · 개인 전용 설정 폴더는 남는다. 변경은 Host 범위 이벤트 `project.changed`(`kind`: created · updated · deleted · opened)
+  - 레지스트리에서 지워도 프로젝트 폴더 · `.pitwall/` · 개인 전용 설정 폴더는 남는다. 변경은 Host 범위 이벤트 `project.changed`(`kind`: created · updated · deleted · opened · trust)
 - 기존 설정 임포트 (편의): `.idea/runConfigurations/*.xml`, `.idea/dataSources.xml`, `.vscode/launch.json`, `.vscode/tasks.json`
 
 ### 설정 파일 스키마 버전 (D23)
@@ -255,6 +255,10 @@ GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버
 ### 신뢰
 - mise 설정은 hook · env 스크립트를 실행할 수 있음 → **신뢰된 프로젝트(F1-7)에서만** 제공자 실행
 - 신뢰 전: 로그인 셸 환경만 사용, 상태바에 "런타임 환경 미적용(신뢰 필요)" 표시
+- 저장(M1-05, 구현 `pw_core::registry::trust`): `state.db` v2 의 `project_trust`(프로젝트마다 한 행, 프로젝트를 지우면 함께 지워진다). 행이 없으면 **아직 묻지 않음**이고 미신뢰로 다룬다 — v1 의 기존 프로젝트는 행 없이 올라와 다음에 열 때 한 번 묻는다. RPC 는 `project.trust`(read, 모든 role) · `project.setTrust`(write, owner) · `project.claimTrustPrompt`(write, owner). **MCP 툴로 내놓지 않는다**(신뢰는 사람만 바꾼다). `readOnly` · `memory` 에서 쓰기 둘은 `STORAGE_UNAVAILABLE`
+- **워크트리는 메인 저장소 프로젝트의 신뢰를 따른다**: 등록되지 않은 워크트리는 해석이 이미 메인 저장소 프로젝트로 연다. 워크트리를 따로 등록한 프로젝트는 그 루트를 메인 체크아웃 쪽으로 옮겨 그곳을 포함하는 등록 루트(해석 2 단계와 같은 규칙)의 프로젝트가 신뢰를 가진다(`ownerId`). 읽기 · 바꾸기 · 묻기 모두 그 프로젝트의 행이다. 메인 저장소가 등록되지 않았으면 자기 신뢰다
+- 확인 다이얼로그는 **한 번만**: 창은 띄우기 전에 `project.claimTrustPrompt` 를 부르고, 쓰기 트랜잭션 안에서 「묻지 않음」을 「미신뢰」로 바꾼 호출만 `true` 를 받는다 — 같은 프로젝트의 창 여럿(다른 프로세스 포함)이 동시에 열려도 하나만 묻는다. 답하지 않고 닫으면(Esc · 바깥 누르기) 미신뢰로 남고 상태바 항목 · 「이 프로젝트 신뢰…」 액션에서 다시 연다. 저장할 수 없는 레지스트리에서는 묻지 않는다
+- 신뢰를 바꾸면(`project.changed` 의 `trust`) 앱이 그 프로젝트의 「환경 다시 읽기」(`Runtime::reload`)를 불러 캐시를 버리고 `runtime.changed` 를 낸다 — 새 터미널부터 제공자 환경이 붙거나 빠진다. 연결은 `apps/desktop/src-tauri/src/trust.rs`
 - mise 자체 신뢰(`mise trust`)가 안 된 경우 안내 + 버튼으로 실행 (사용자 확인 후)
 
 ### 미설치 버전

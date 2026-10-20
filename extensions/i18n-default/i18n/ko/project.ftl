@@ -1,4 +1,4 @@
-### 프로젝트 창: 툴 윈도우 이름과 열기 액션, 상태바, 백그라운드 작업, 알림, 런타임 환경.
+### 프로젝트 창: 툴 윈도우 이름과 열기 액션, 상태바, 백그라운드 작업, 알림, 런타임 환경, 프로젝트 신뢰.
 
 ## 툴 윈도우 이름. id 는 툴 윈도우 id(src/layout/project-layout.ts 의 PANELS)를 kebab-case 로 쓴 것이다.
 
@@ -79,3 +79,18 @@ notification-repeated = { $title } (×{ $count })
 
 action-runtime-reload = 런타임 환경 다시 읽기
 runtime-reload-failed = 런타임 환경을 다시 읽지 못했다
+
+## 프로젝트 신뢰. 미신뢰 프로젝트에서는 런타임 제공자(mise 등)를 돌리지 않고 로그인 셸 환경만 쓴다.
+
+status-trust-needed = 런타임 환경 미적용(신뢰 필요)
+status-trust-needed-hint = 이 프로젝트를 신뢰하기 전에는 로그인 셸 환경만 쓴다. 눌러서 신뢰한다
+# $name: 프로젝트 이름
+trust-dialog-title = 「{ $name }」 프로젝트를 신뢰할까?
+trust-dialog-body =
+    신뢰하면 이 프로젝트의 런타임 설정(mise.toml 등)으로 환경을 만든다. 그 설정은 프로젝트의 스크립트를 실행할 수 있다.
+    신뢰하지 않으면 로그인 셸 환경만 쓴다. 상태바나 액션에서 언제든 바꿀 수 있다.
+trust-dialog-trust = 신뢰
+trust-dialog-distrust = 신뢰하지 않음
+action-project-trust = 이 프로젝트 신뢰…
+action-project-untrust = 이 프로젝트 신뢰 해제
+trust-save-failed = 프로젝트 신뢰를 저장하지 못했다

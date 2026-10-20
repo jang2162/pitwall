@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use pw_core::config::AppPaths;
 use pw_core::registry::{
-    ChangeKind, ConfigMode, Project, ProjectChanged, Resolution, RootCandidate, StorageStatus,
-    TOPIC_CHANGED,
+    ChangeKind, ConfigMode, Project, ProjectChanged, ProjectTrust, Resolution, RootCandidate,
+    StorageStatus, TOPIC_CHANGED, TrustState,
 };
 use pw_core::{Connection, Filter, Host, LocalHost, Received, Scope};
 use pw_rpc::{Caller, Role, code};
@@ -244,6 +244,92 @@ async fn writes_to_an_unwritable_registry_get_the_storage_code() {
             .is_some_and(|d| d.contains("newer")),
         "{frame}"
     );
+}
+
+/// 신뢰를 RPC 로 읽고 바꾸고, 묻기 차례는 한 번만 잡힌다. 바꾸기 · 묻기는 owner 만이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trust_round_trips_and_only_the_owner_changes_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = real(tmp.path());
+    let root = base.join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    let host = LocalHost::with_config("local", AppPaths::under(&base.join("app")));
+    let mut c = Client::connect(&host, Role::Owner).await;
+    let created: Project = c.ok("project.create", json!({"root": root})).await;
+    let id = created.id;
+
+    let trust: ProjectTrust = c.ok("project.trust", json!({"id": id})).await;
+    assert_eq!(trust.state, TrustState::Unknown);
+    assert!(
+        c.ok::<bool>("project.claimTrustPrompt", json!({"id": id}))
+            .await
+    );
+    assert!(
+        !c.ok::<bool>("project.claimTrustPrompt", json!({"id": id}))
+            .await
+    );
+    let set: ProjectTrust = c
+        .ok("project.setTrust", json!({"id": id, "trusted": true}))
+        .await;
+    assert_eq!(set.state, TrustState::Trusted);
+    let trust: ProjectTrust = c.ok("project.trust", json!({"id": id})).await;
+    assert_eq!(trust.state, TrustState::Trusted);
+
+    let mut mobile = Client::connect(&host, Role::Mobile).await;
+    let read: ProjectTrust = mobile.ok("project.trust", json!({"id": id})).await;
+    assert_eq!(read.state, TrustState::Trusted);
+    for (method, params) in [
+        ("project.setTrust", json!({"id": id, "trusted": false})),
+        ("project.claimTrustPrompt", json!({"id": id})),
+    ] {
+        assert_eq!(
+            mobile.error_code(method, params).await,
+            i64::from(code::PERMISSION_DENIED),
+            "{method}"
+        );
+    }
+    assert_eq!(
+        c.error_code("project.trust", json!({"id": "nope"})).await,
+        i64::from(code::INVALID_PARAMS)
+    );
+}
+
+/// 레지스트리가 잠겨 메모리로 떴으면 신뢰 쓰기는 「없는 프로젝트」 가 아니라 `STORAGE_UNAVAILABLE` 로 거절된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trust_writes_to_a_memory_registry_get_the_storage_code() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = real(tmp.path());
+    let paths = AppPaths::under(&base.join("app"));
+    let root = base.join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    let id = pw_core::registry::Registry::new(paths.clone(), None, pw_core::EventBus::new(16))
+        .create(pw_core::registry::NewProject {
+            root,
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    let holder = rusqlite::Connection::open(paths.data.join("state.db")).unwrap();
+    holder
+        .execute_batch("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE")
+        .unwrap();
+
+    let host = LocalHost::with_config("local", paths);
+    let mut c = Client::connect(&host, Role::Owner).await;
+    let status: StorageStatus = c.ok("project.storage", Value::Null).await;
+    assert!(matches!(status, StorageStatus::Memory { .. }), "{status:?}");
+    for (method, params) in [
+        ("project.setTrust", json!({"id": id, "trusted": true})),
+        ("project.claimTrustPrompt", json!({"id": id})),
+    ] {
+        let frame = c.call(method, params).await;
+        assert_eq!(
+            frame["error"]["code"],
+            json!(code::STORAGE_UNAVAILABLE),
+            "{method}: {frame}"
+        );
+    }
+    drop(holder);
 }
 
 /// 프로젝트 없는 창(웰컴 화면, M0-12)의 길: `projectId` 없는 `events.subscribe` 가 `project.create` 뒤 `project.changed` 를 받는다.
