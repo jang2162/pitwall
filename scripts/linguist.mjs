@@ -54,20 +54,33 @@ async function data() {
   }
 }
 
-/** 고정 커밋의 samples/ 폴더 경로. 없으면 받는다. 받다가 멈추면 다음 실행이 처음부터 다시 받는다. */
+/**
+ * 고정 커밋의 samples/ 폴더 경로. 없으면 받는다. 받다가 멈추면 다음 실행이 처음부터 다시 받는다. 다 받은 뒤에 표식(`COMMIT`,
+ * 커밋 해시)을 쓰고, 다시 쓸 때는 표식이 그 커밋인지 본다 — 표식이 없거나 다르면(캐시가 깨졌다) 다시 받는다.
+ */
 function samples() {
   const { commit } = version();
   const dest = join(root, "target", "linguist-samples", commit);
-  if (existsSync(join(dest, "samples"))) return join(dest, "samples");
+  const marker = join(dest, "COMMIT");
+  const cached = existsSync(marker) && readFileSync(marker, "utf8").trim() === commit;
+  if (cached && existsSync(join(dest, "samples"))) return join(dest, "samples");
   const tmp = `${dest}.partial`;
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   git(["init", "-q"], tmp);
   git(["remote", "add", "origin", REPO], tmp);
-  git(["fetch", "-q", "--depth", "1", "--filter=blob:none", "origin", commit], tmp);
+  // GitHub 가 잠깐 실패해도 PR 이 막히지 않게 한 번 다시 받는다.
+  const fetch = ["fetch", "-q", "--depth", "1", "--filter=blob:none", "origin", commit];
+  try {
+    git(fetch, tmp);
+  } catch {
+    console.warn("git fetch failed; retrying once");
+    git(fetch, tmp);
+  }
   git(["sparse-checkout", "set", "--no-cone", "/samples/"], tmp);
   git(["checkout", "-q", "FETCH_HEAD"], tmp);
   rmSync(join(tmp, ".git"), { recursive: true, force: true });
+  writeFileSync(join(tmp, "COMMIT"), `${commit}\n`);
   rmSync(dest, { recursive: true, force: true });
   renameSync(tmp, dest);
   return join(dest, "samples");

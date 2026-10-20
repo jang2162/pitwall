@@ -144,6 +144,34 @@ fn emacs_modelines() {
     assert_eq!(lang("a.txt", Some(&tail)).as_deref(), Some("Ruby"));
 }
 
+/// 조작된 긴 한 줄(50 KiB)도 한 파일 판별이 시간 안에 끝난다. 모드라인 파서가 줄 길이에 대해 2제곱이면 debug 에서 수십 초다.
+/// 상한은 느린 CI 를 위해 넉넉히 잡았다(이 기기의 debug 실측은 줄마다 10 ms 아래).
+#[test]
+fn long_single_lines_detect_in_time() {
+    for unit in [
+        " ex: ft=a,",
+        " vi: ft=a,",
+        " vim:",
+        "vim:ft=a ",
+        "-*- ",
+        "-*- mode: ",
+    ] {
+        let line = unit.repeat(50 * 1024 / unit.len());
+        let started = std::time::Instant::now();
+        let _ = plain("a.txt", Some(&line));
+        let took = started.elapsed();
+        assert!(
+            took < std::time::Duration::from_millis(500),
+            "{unit:?}: {took:?}"
+        );
+    }
+    // 상한 안의 평범한 모드라인은 그대로 맞는다.
+    assert_eq!(
+        lang("a.txt", Some("x = 1 # vim: set ts=4 sw=4 ft=python:\n")).as_deref(),
+        Some("Python")
+    );
+}
+
 #[test]
 fn filenames_extensions_and_generic_extensions() {
     assert_eq!(plain("Makefile", None).source, LangSource::Filename);
@@ -152,7 +180,7 @@ fn filenames_extensions_and_generic_extensions() {
         lang("app/views/x.html.erb", None).as_deref(),
         Some("HTML+ERB")
     );
-    // 내용이 없으면 heuristics 를 건너뛰고 후보(RenderScript · Rust)에서 popular 인 Rust 를 고른다.
+    // 내용이 없으면 `.rs` heuristics 규칙이 하나도 맞지 않아 후보(RenderScript · Rust)에서 popular 인 Rust 를 고른다.
     assert_eq!(lang("SRC/MAIN.RS", None).as_deref(), Some("Rust"));
     assert_eq!(plain("main.rs", None).source, LangSource::Ambiguous);
     assert_eq!(
@@ -167,6 +195,24 @@ fn filenames_extensions_and_generic_extensions() {
         (d.language.as_deref(), d.source),
         (Some("ALGOL"), LangSource::Heuristics)
     );
+}
+
+/// 앞부분이 없거나 빈 파일(새 파일 · 앞부분 없이 부르는 파일 트리)도 흔한 확장자는 대표 언어다 — heuristics 를 빈 내용으로
+/// 돌려 묶음의 기본 규칙이 고른다.
+#[test]
+fn empty_or_missing_heads_pick_the_usual_language() {
+    for head in [None, Some("")] {
+        for (path, want) in [
+            ("README.md", "Markdown"),
+            ("config/a.yaml", "YAML"),
+            ("pnpm-lock.yaml", "YAML"),
+            ("notes.txt", "Text"),
+            ("include/a.h", "C"),
+            ("src/main.rs", "Rust"),
+        ] {
+            assert_eq!(lang(path, head).as_deref(), Some(want), "{path} {head:?}");
+        }
+    }
 }
 
 #[test]
@@ -234,6 +280,27 @@ fn ruby_regex_translation() {
     ] {
         assert_eq!(translate(bad).unwrap_err(), why, "{bad}");
     }
+    // `\w` · `\s` · `\d` · `\b` 는 Ruby 처럼 ASCII 다 — `é` 는 단어 글자가 아니다.
+    assert_eq!(
+        translate(r"\w+\s\d").unwrap(),
+        r"(?m)[[:word:]]+[[:space:]][[:digit:]]"
+    );
+    assert_eq!(
+        translate(r"[^\s@#\w-]").unwrap(),
+        r"(?m)[^[:space:]@\#[:word:]-]"
+    );
+    assert_eq!(translate(r"\bx\B").unwrap(), r"(?m)(?-u:\b)x(?-u:\B)");
+    let bytes = |p: &str| regex::bytes::Regex::new(&translate(p).unwrap()).unwrap();
+    assert!(!bytes(r"^\w+$").is_match("é".as_bytes()));
+    assert!(bytes(r"^\s*[^\s@#\w-]").is_match("é".as_bytes()));
+    assert!(bytes(r"^\W$").is_match("é".as_bytes()));
+    // 문자 클래스 안의 공백 · `#` 은 x 모드에서도 글자다(Ruby). Rust x 모드는 지우므로 이스케이프한다.
+    assert_eq!(
+        translate("(?x) a [ #] b").unwrap(),
+        r"(?m)(?x) a [\x20\#] b"
+    );
+    assert!(bytes("(?x) a [ #] b").is_match(b"a b"));
+    assert!(bytes("(?x) a [ #] b").is_match(b"a#b"));
     // `Regexp.union` 처럼 묶으면 한쪽의 인라인 플래그가 다른 쪽으로 새지 않는다.
     let joined = crate::ruby_regex::union([
         translate("(?i)abc").unwrap().as_str(),
@@ -392,6 +459,90 @@ fn deeper_gitattributes_and_info_attributes_take_precedence() {
     assert_eq!(
         with_attrs(tmp.path(), "sub/a.y", None).language.as_deref(),
         Some("Perl")
+    );
+}
+
+/// 시간 안에 끝나지 않으면 실패한다(FIFO 에서 영구히 막히는 회귀가 시험 전체를 멈추지 않게 스레드에서 돈다).
+#[cfg(unix)]
+fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(secs))
+        .expect("did not finish in time")
+}
+
+#[cfg(unix)]
+fn mkfifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0, "mkfifo");
+}
+
+/// git 처럼 `.gitattributes` 심링크를 따라가지 않는다 — 루트 밖 파일을 읽지 않는다(결정 M1-D8).
+#[cfg(unix)]
+#[test]
+fn gitattributes_symlinks_are_not_followed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outside = tmp.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(
+        outside.join("attrs"),
+        "*.txt linguist-language=Rust linguist-vendored\n",
+    )
+    .unwrap();
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git/info")).unwrap();
+    std::os::unix::fs::symlink("../outside/attrs", repo.join(".gitattributes")).unwrap();
+    std::os::unix::fs::symlink("../../../outside/attrs", repo.join(".git/info/attributes"))
+        .unwrap();
+    let d = with_attrs(&repo, "a.txt", None);
+    assert_ne!(d.source, LangSource::Gitattributes);
+    assert!(!d.vendored);
+}
+
+/// FIFO · 장치 파일은 읽지 않는다 — 읽으면 영구히 막히거나 끝이 없다. `.git` 이 FIFO 여도 막히지 않는다.
+#[cfg(unix)]
+#[test]
+fn gitattributes_fifos_and_devices_return_in_time() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    fs::create_dir_all(repo.join(".git/info")).unwrap();
+    mkfifo(&repo.join(".gitattributes"));
+    mkfifo(&repo.join(".git/info/attributes"));
+    let attrs = within(10, move || {
+        attributes::RepoAttributes::load(&repo, Some(&repo.join(".git")), [""]).get("a.txt")
+    });
+    assert_eq!(attrs, Attrs::default());
+    // 장치 파일: 일반 파일이 아니라 읽지 않는다.
+    assert!(attributes::read_small(Path::new("/dev/zero"), 1024).is_err());
+    // 비어 보이는 장치(`/dev/null`)도 일반 파일이 아니라 읽지 않는다.
+    assert!(attributes::read_small(Path::new("/dev/null"), 1024).is_err());
+
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    mkfifo(&repo.join(".git"));
+    let found = within(10, move || attributes::find_repo(&repo));
+    assert_eq!(found.map(|r| r.gitdir), Some(None));
+}
+
+#[test]
+fn oversized_gitattributes_are_ignored() {
+    let big = format!(
+        "*.txt linguist-language=Rust\n{}",
+        "# padding\n".repeat((attributes::MAX_ATTRIBUTES_BYTES as usize) / 10 + 1)
+    );
+    let tmp = repo_with(&[(".gitattributes", big.as_str())]);
+    assert_ne!(
+        with_attrs(tmp.path(), "a.txt", None).source,
+        LangSource::Gitattributes
+    );
+    // 상한 안이면 읽는다.
+    let tmp = repo_with(&[(".gitattributes", "*.txt linguist-language=Rust\n")]);
+    assert_eq!(
+        with_attrs(tmp.path(), "a.txt", None).source,
+        LangSource::Gitattributes
     );
 }
 
@@ -575,6 +726,43 @@ fn rpc_detects_a_batch_in_order_with_repo_attributes_and_project_mapping() {
     );
     assert_ne!(out[5].source, LangSource::Gitattributes);
     assert!(!out[5].vendored);
+}
+
+/// 활성 워크트리의 `.gitattributes` 를 본다. 창이 넘긴 워크트리 경로가 정규화되지 않은 꼴(심링크 별칭)이어도 파일 경로와 같은
+/// 함수로 정규화해 비교한다(`pw_fs` 의 워크트리 루트 계산과 같다).
+#[cfg(unix)]
+#[test]
+fn rpc_uses_the_active_worktree_given_through_a_symlinked_path() {
+    let fx = Fixture::new("schema = 1\n");
+    let tmp = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(tmp.path()).unwrap();
+    let main = base.join("main");
+    let wt = base.join("wt");
+    let admin = main.join(".git/worktrees/wt");
+    fs::create_dir_all(&admin).unwrap();
+    fs::create_dir_all(&wt).unwrap();
+    fs::write(admin.join("commondir"), "../..\n").unwrap();
+    fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+    fs::write(
+        admin.join("gitdir"),
+        format!("{}\n", wt.join(".git").display()),
+    )
+    .unwrap();
+    fs::write(wt.join(".gitattributes"), "*.x linguist-language=Ruby\n").unwrap();
+    let id = fx.project(&main, "");
+    std::os::unix::fs::symlink(&base, base.join("alias")).unwrap();
+    let out = fx
+        .lang
+        .detect(&LangDetectParams {
+            project_id: Some(id),
+            worktree: Some(base.join("alias/wt").display().to_string()),
+            files: vec![file(&wt.join("a.x"), None)],
+        })
+        .unwrap();
+    assert_eq!(
+        (out.files[0].language.as_deref(), out.files[0].source),
+        (Some("Ruby"), LangSource::Gitattributes)
+    );
 }
 
 #[test]

@@ -24,6 +24,10 @@ specta = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["rt"] }
 tracing = "0.1.44"
 
+[target."cfg(unix)".dependencies]
+# 속성 파일을 `O_NOFOLLOW | O_NONBLOCK` 로 연다(`attributes::read_small`). 버전은 다른 크레이트와 같게 둔다.
+libc = "0.2.190"
+
 [build-dependencies]
 regex = "1.13.1"
 # Linguist YAML 을 빌드 때 표로 바꾼다. 앱 바이너리에는 들어가지 않는다.

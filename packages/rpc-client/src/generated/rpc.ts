@@ -638,8 +638,8 @@ export type LangDetectFile = {
 	/**  절대 경로. 파일이 없어도 된다(저장하지 않은 새 파일). */
 	path: string,
 	/**
-	 *  파일 앞부분(앞 50 KiB 까지만 본다 — 넘는 부분은 버린다). 없으면 내용을 보는 단계(모드라인 · shebang · XML 머리 ·
-	 *  heuristics · 생성 파일의 앞 줄 규칙)를 건너뛴다.
+	 *  파일 앞부분(앞 50 KiB 까지만 본다 — 넘는 부분은 버린다). 없으면 빈 파일로 본다: 내용을 보는 단계(모드라인 · shebang ·
+	 *  XML 머리 · 생성 파일의 앞 줄 규칙)는 맞지 않고, heuristics 는 확장자마다의 기본 규칙(`.md` → Markdown 등)이 고른다.
 	 */
 	head?: string | null,
 };

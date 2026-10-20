@@ -121,7 +121,7 @@ pub enum Strategy {
 }
 
 /// `path` 는 `/` 로 가른 경로(저장소 기준이거나 파일 이름). `head` 는 파일 앞부분 — 없거나 비었으면 내용을 보는 단계
-/// (모드라인 · shebang · XML · heuristics)를 건너뛴다(Linguist 는 빈 파일을 판별하지 않는다).
+/// (모드라인 · shebang · XML)를 건너뛰고 heuristics 는 빈 내용으로 돌린다(Linguist 는 빈 파일을 판별하지 않는다).
 pub fn detect(path: &str, head: Option<&[u8]>) -> Option<(LangId, Strategy)> {
     let name = path.rsplit('/').next().unwrap_or(path);
     let data = head
@@ -179,9 +179,9 @@ pub fn detect(path: &str, head: Option<&[u8]>) -> Option<(LangId, Strategy)> {
             return run.done();
         }
     }
-    if let Some(d) = data
-        && run.step(heuristics(path, d), Strategy::Heuristics)
-    {
+    // 앞부분이 없거나 비어도 빈 내용으로 돌린다 — 묶음의 기본 규칙(`.md` 의 `\A\z` → Markdown, `.txt` 의 마지막 Text 등)이
+    // 대표 언어를 고른다. Linguist 는 빈 파일을 판별하지 않으므로 이 경로는 Pitwall 이 정한 것이다.
+    if run.step(heuristics(path, data.unwrap_or(&[])), Strategy::Heuristics) {
         return run.done();
     }
     let first = *run.candidates.first()?;
@@ -436,7 +436,12 @@ fn vim_filetype(line: &str) -> Option<String> {
     });
     static FILETYPE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"[ \t:](?:filetype|ft|syntax)[ \t]*=((?-u:\w)+)").unwrap());
-    for opener in OPENER.captures_iter(line) {
+    // 한 줄에서 보는 여는 말 · `ft=` 후보 수의 상한. 원본 정규식은 백트래킹으로 모든 조합을 보는데, 그대로 옮기면 여는 말마다
+    // 줄 끝까지 다시 훑어 줄 길이에 대해 2제곱이다(50 KiB 의 `" ex: ft=a,"` 반복 한 줄이 debug 에서 수십 초). 실제 모드라인은
+    // 한 줄에 여는 말 하나 · `ft=` 하나다.
+    const MAX_OPENERS: usize = 4;
+    const MAX_CANDIDATES: usize = 4;
+    for opener in OPENER.captures_iter(line).take(MAX_OPENERS) {
         let colon = opener.get(1).or_else(|| opener.get(2))?.start();
         let after_colon = &line[colon + 1..];
         if SET_FORM.is_match(after_colon) && !SET_FORM_OK.is_match(after_colon) {
@@ -444,9 +449,13 @@ fn vim_filetype(line: &str) -> Option<String> {
         }
         let body = &line[colon..];
         let mut search = 0;
-        while let Some(c) = FILETYPE.captures_at(body, search) {
+        let mut checked = 0;
+        while checked < MAX_CANDIDATES
+            && let Some(c) = FILETYPE.captures_at(body, search)
+        {
             let whole = c.get(0)?;
             search = whole.start() + 1;
+            checked += 1;
             let value = c.get(1)?;
             let next = body[value.end()..].chars().next();
             if !next.is_none_or(|n| n.is_whitespace() || n == ':') {

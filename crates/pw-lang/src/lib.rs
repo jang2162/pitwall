@@ -75,7 +75,7 @@ pub struct Input<'a> {
     pub repo_path: &'a str,
     /// 설정 매핑이 볼 경로: 프로젝트 루트 기준(`/` 구분). 프로젝트 밖이면 파일 이름.
     pub project_path: &'a str,
-    /// 파일 앞부분. 없으면 내용을 보는 단계를 건너뛴다.
+    /// 파일 앞부분. 없으면 빈 파일로 본다(`linguist::detect`).
     pub head: Option<&'a str>,
 }
 

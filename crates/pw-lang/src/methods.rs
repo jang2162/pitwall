@@ -44,8 +44,8 @@ pub struct LangDetectParams {
 pub struct LangDetectFile {
     /// 절대 경로. 파일이 없어도 된다(저장하지 않은 새 파일).
     pub path: String,
-    /// 파일 앞부분(앞 50 KiB 까지만 본다 — 넘는 부분은 버린다). 없으면 내용을 보는 단계(모드라인 · shebang · XML 머리 ·
-    /// heuristics · 생성 파일의 앞 줄 규칙)를 건너뛴다.
+    /// 파일 앞부분(앞 50 KiB 까지만 본다 — 넘는 부분은 버린다). 없으면 빈 파일로 본다: 내용을 보는 단계(모드라인 · shebang ·
+    /// XML 머리 · 생성 파일의 앞 줄 규칙)는 맞지 않고, heuristics 는 확장자마다의 기본 규칙(`.md` → Markdown 등)이 고른다.
     #[serde(default)]
     pub head: Option<String>,
 }
@@ -283,7 +283,7 @@ fn relative(path: &Path, base: &Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-/// 프로젝트와, 활성 워크트리가 있으면 그 워크트리 안의 프로젝트 루트(`pw_open_with` 의 `project_and_root` 와 같은 계산).
+/// 프로젝트와, 활성 워크트리가 있으면 그 워크트리 안의 프로젝트 루트(`pw_fs` 의 `worktree_root` 와 같은 계산).
 fn project_and_root(
     host: &HostParts,
     id: &str,
@@ -294,19 +294,24 @@ fn project_and_root(
         let root = project.root().to_path_buf();
         return Ok((project, root));
     };
-    if !Path::new(top).is_absolute() {
-        return Err(RpcError::invalid_params(format!(
-            "worktree `{top}` must be an absolute path"
-        )));
-    }
-    let root = worktree_link(Path::new(top)).and_then(|link| {
+    // `pw_fs` 의 워크트리 루트 계산과 같다: 파일 경로와 같은 함수로 정규화한 뒤 링크를 본다(그래야 `strip_prefix` 비교가 맞다).
+    let top = normalize(Path::new(top)).map_err(|_| {
+        RpcError::invalid_params(format!("worktree `{top}` must be an absolute path"))
+    })?;
+    let root = worktree_link(&top).and_then(|link| {
         let rel = project.root().strip_prefix(&link.main_top).ok()?;
-        Some(link.worktree_top.join(rel))
+        // 빈 상대 경로를 `join` 하면 끝에 구분자가 붙는다.
+        Some(if rel.as_os_str().is_empty() {
+            link.worktree_top
+        } else {
+            link.worktree_top.join(rel)
+        })
     });
     match root {
         Some(root) => Ok((project, root)),
         None => Err(RpcError::invalid_params(format!(
-            "`{top}` is not a worktree of project `{id}`"
+            "`{}` is not a worktree of project `{id}`",
+            top.display()
         ))),
     }
 }

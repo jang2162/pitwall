@@ -197,7 +197,7 @@ fn add_pattern(
     let sources = strings(y);
     let mut ok = Vec::new();
     for source in &sources {
-        match translate_checked(source) {
+        match translate_checked(source, false) {
             Ok(t) => ok.push(t),
             Err(reason) => skips.push(Skip {
                 file,
@@ -223,13 +223,19 @@ fn add_pattern(
     })
 }
 
-fn translate_checked(source: &str) -> Result<String, String> {
+/// heuristics 는 내용에 `regex::bytes`, 경로 패턴은 `regex::Regex`(str)로 쓴다 — 쓰는 쪽과 같은 엔진으로 컴파일해 본다.
+fn translate_checked(source: &str, path: bool) -> Result<String, String> {
     let t = ruby_regex::translate(source)?;
-    regex::bytes::Regex::new(&t).map_err(|e| {
+    let short = |e: regex::Error| {
         let msg = e.to_string();
         let last = msg.lines().last().unwrap_or(&msg).trim().to_owned();
         format!("rust regex: {last}")
-    })?;
+    };
+    if path {
+        regex::Regex::new(&t).map_err(short)?;
+    } else {
+        regex::bytes::Regex::new(&t).map_err(short)?;
+    }
     Ok(t)
 }
 
@@ -337,7 +343,7 @@ fn cond(
 fn path_patterns(doc: &Yaml, file: &'static str, skips: &mut Vec<Skip>) -> Vec<String> {
     strings(doc)
         .into_iter()
-        .filter_map(|source| match translate_checked(&source) {
+        .filter_map(|source| match translate_checked(&source, true) {
             Ok(t) => Some(t),
             Err(reason) => {
                 skips.push(Skip {

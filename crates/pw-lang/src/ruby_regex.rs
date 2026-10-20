@@ -8,10 +8,12 @@
 //! - Ruby 의 `m` 플래그는 「`.` 이 줄바꿈과 맞는다」(Rust 의 `s`) → 플래그 묶음 안의 `m` 을 `s` 로 바꾼다.
 //! - `\h` · `\H`(16진 숫자) → 문자 클래스, `\Z` → `\n?\z`, `\e` → `\x1B`, `\<` · `\>` → 글자(Rust 에서는 단어 경계다).
 //! - 짝이 없는 `{` 는 글자다(Ruby). Rust 는 반복 문법으로 읽어 실패하므로 `\{` 로 바꾼다.
+//! - `\w` · `\d` · `\s` 와 그 부정은 Ruby 에서 ASCII 다(Rust 는 유니코드) → ASCII 클래스(`[[:word:]]` · `[[:^word:]]` 등,
+//!   문자 클래스 안에서는 `[:word:]`), `\b` · `\B` → `(?-u:\b)` · `(?-u:\B)`.
+//! - 문자 클래스 안의 공백 · `#` 은 Ruby 에서 x 모드여도 글자다. Rust 의 x 모드는 클래스 안에서도 그것을 지우므로
+//!   `\x20` · `\#` 로 바꾼다(탭 · 줄바꿈도 이스케이프로). x 모드가 아니어도 뜻이 같다.
 //! - 옮기지 않는 것(Rust `regex` 에 없다): 앞뒤 보기(`(?=` `(?!` `(?<=` `(?<!`), 원자 묶음 `(?>`, 소유 반복(`*+` 등),
 //!   역참조(`\1` `\k<..>`), 부분식 호출(`\g<..>`), `\K` `\G` `\R` `\X`, 조건식 `(?(`.
-//!
-//! 바뀌는 뜻: `\w` · `\d` · `\s` · `\b` 는 Rust 에서 유니코드 기준이다(Ruby 는 ASCII). 영문 소스에서는 결과가 같다.
 
 /// 옮긴 패턴. 단일 패턴이면 `(?m)` 이 붙어 있다.
 pub fn translate(ruby: &str) -> Result<String, String> {
@@ -38,6 +40,24 @@ pub fn translate(ruby: &str) -> Result<String, String> {
             i += 2;
             match next {
                 'h' if class > 0 => out.push_str("0-9a-fA-F"),
+                'w' | 'W' | 'd' | 'D' | 's' | 'S' => {
+                    let name = match next.to_ascii_lowercase() {
+                        'w' => "word",
+                        'd' => "digit",
+                        _ => "space",
+                    };
+                    let neg = if next.is_ascii_uppercase() { "^" } else { "" };
+                    if class > 0 {
+                        out.push_str(&format!("[:{neg}{name}:]"));
+                    } else {
+                        out.push_str(&format!("[[:{neg}{name}:]]"));
+                    }
+                }
+                'b' | 'B' if class == 0 => {
+                    out.push_str("(?-u:\\");
+                    out.push(next);
+                    out.push(')');
+                }
                 'h' => out.push_str("[0-9a-fA-F]"),
                 'H' if class > 0 => return Err("`\\H` inside a character class".into()),
                 'H' => out.push_str("[^0-9a-fA-F]"),
@@ -79,6 +99,22 @@ pub fn translate(ruby: &str) -> Result<String, String> {
                 ']' => {
                     class -= 1;
                     out.push(']');
+                    i += 1;
+                }
+                ' ' => {
+                    out.push_str("\\x20");
+                    i += 1;
+                }
+                '#' => {
+                    out.push_str("\\#");
+                    i += 1;
+                }
+                '\t' => {
+                    out.push_str("\\t");
+                    i += 1;
+                }
+                '\n' => {
+                    out.push_str("\\n");
                     i += 1;
                 }
                 _ => {
