@@ -9,6 +9,7 @@ use pw_diag::Diagnostics;
 use pw_ext::{LoadOptions, Registry};
 use pw_i18n::I18n;
 use pw_open_with::{HostParts, OpenWith};
+use pw_runtime::{LoginShell, Runtime, RuntimeHost};
 use tauri::Manager as _;
 
 mod cli;
@@ -38,7 +39,10 @@ fn local_host(
     i18n: Arc<I18n>,
 ) -> LocalHost {
     let methods = Arc::clone(&i18n);
-    let open_with = Arc::new(OpenWith::new(Arc::clone(&extensions)));
+    // 앱이 띄우는 프로세스의 환경. 로그인 셸은 처음 쓸 때 돈다 — 시작을 늦추지 않는다.
+    let runtime = Arc::new(Runtime::new(LoginShell::for_this_user()));
+    let runtime_methods = Arc::clone(&runtime);
+    let open_with = Arc::new(OpenWith::new(Arc::clone(&extensions), Arc::clone(&runtime)));
     let open_with_methods = Arc::clone(&open_with);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
@@ -46,15 +50,20 @@ fn local_host(
         .methods(move |router| pw_ext::methods::register(router, extensions))
         .methods(move |router| pw_i18n::methods::register(router, methods))
         .methods(move |router| pw_open_with::methods::register(router, open_with_methods))
+        .methods(move |router| pw_runtime::methods::register(router, runtime_methods))
         .build();
     if let Some(config) = host.config() {
         i18n.attach_config(config.global.clone());
-        // 외부 도구 실행(⌥F1 · ⌘⌥E)이 전역 설정 · 프로젝트 레지스트리를 쓴다. 로그인 셸 PATH 는 처음 쓸 때 가져온다 — 시작을 늦추지 않는다.
+        // 외부 도구 실행(⌥F1 · ⌘⌥E)이 전역 설정 · 프로젝트 레지스트리를 쓴다.
         if let Some(projects) = host.registry() {
             open_with.attach(HostParts {
                 paths: config.paths.clone(),
                 global: config.global.clone(),
                 projects: projects.clone(),
+            });
+            runtime.attach(RuntimeHost {
+                projects: projects.clone(),
+                bus: host.bus().clone(),
             });
         }
     }

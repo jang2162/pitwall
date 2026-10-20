@@ -20,6 +20,7 @@ pw-ext = { path = "../../../crates/pw-ext" }
 pw-i18n = { path = "../../../crates/pw-i18n" }
 pw-mcp = { path = "../../../crates/pw-mcp" }
 pw-open-with = { path = "../../../crates/pw-open-with" }
+pw-runtime = { path = "../../../crates/pw-runtime" }
 pw-rpc = { path = "../../../crates/pw-rpc" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

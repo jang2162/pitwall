@@ -1,8 +1,9 @@
 //! 치환한 argv 를 셸 없이 띄운다.
 //!
-//! - 실행 파일: 이름이면 로그인 셸 PATH(`pw_runtime`)에서 찾고, 경로면 절대 경로여야 한다. 찾은 절대 경로를 띄운다 — 못 찾은 것과
-//!   띄우다 실패한 것을 갈라 알린다.
-//! - 자식은 PATH 를 그 PATH 로 받는다(`code` 처럼 셸 스크립트인 런처가 `node` 등을 찾게).
+//! - 실행 파일: 이름이면 런타임 환경(`pw_runtime`)의 PATH 에서 찾고, 경로면 절대 경로여야 한다. 찾은 절대 경로를 띄운다 — 못
+//!   찾은 것과 띄우다 실패한 것을 갈라 알린다.
+//! - 자식은 앱 프로세스의 환경이 아니라 런타임 환경 전체를 받는다(로그인 셸에서 정한 `JAVA_HOME` 등). PATH 도 그 PATH 다
+//!   (`code` 처럼 셸 스크립트인 런처가 `node` 등을 찾게).
 //! - Pitwall 과 따로 산다: unix 는 `setsid` 로 새 세션이 되어 Pitwall 의 터미널 · 프로세스 그룹의 신호(Ctrl+C, 탭 닫기)를 받지 않고,
 //!   Pitwall 이 끝나면 launchd · init 이 넘겨받는다. stdio 는 모두 `/dev/null` 이다 — 파이프를 주면 Pitwall 이 끝난 뒤 쓰기에서
 //!   SIGPIPE 로 죽는다. Windows 는 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`.
@@ -15,6 +16,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
+
+use pw_runtime::RuntimeEnv;
 
 /// 띄운 뒤 곧바로 실패하는지 지켜보는 시간.
 pub const EARLY_EXIT: Duration = Duration::from_millis(1500);
@@ -134,19 +137,21 @@ pub enum Spawned {
     Exited { pid: u32, code: Option<i32> },
 }
 
-/// 떼어 띄우고, `early_exit` 동안 곧바로 실패하는지 본다. 띄우지 못하면 그 IO 오류.
+/// 떼어 띄우고, `early_exit` 동안 곧바로 실패하는지 본다. 띄우지 못하면 그 IO 오류. 자식의 환경은 `env` 뿐이다.
 pub fn spawn_detached(
     program: &Path,
     args: &[String],
     cwd: &Path,
-    path: &OsStr,
+    env: &RuntimeEnv,
     early_exit: Duration,
 ) -> std::io::Result<Spawned> {
     let mut command = Command::new(program);
     command
         .args(args)
         .current_dir(cwd)
-        .env("PATH", absolute_path_entries(path))
+        .env_clear()
+        .envs(&env.vars)
+        .env("PATH", absolute_path_entries(&env.path))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -208,6 +213,13 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    fn env() -> RuntimeEnv {
+        RuntimeEnv {
+            path: "/usr/bin:/bin".into(),
+            ..RuntimeEnv::default()
+        }
+    }
 
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
@@ -297,14 +309,7 @@ mod tests {
     fn reports_a_launcher_that_fails_right_away() {
         let dir = tempfile::tempdir().unwrap();
         let tool = script(dir.path(), "fail", "exit 7");
-        let spawned = spawn_detached(
-            &tool,
-            &[],
-            dir.path(),
-            OsStr::new("/usr/bin:/bin"),
-            EARLY_EXIT,
-        )
-        .unwrap();
+        let spawned = spawn_detached(&tool, &[], dir.path(), &env(), EARLY_EXIT).unwrap();
         assert!(
             matches!(spawned, Spawned::Exited { code: Some(7), .. }),
             "{spawned:?}"
@@ -316,14 +321,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tool = script(dir.path(), "slow", "sleep 5");
         let started = Instant::now();
-        let spawned = spawn_detached(
-            &tool,
-            &[],
-            dir.path(),
-            OsStr::new("/usr/bin:/bin"),
-            Duration::from_millis(200),
-        )
-        .unwrap();
+        let spawned =
+            spawn_detached(&tool, &[], dir.path(), &env(), Duration::from_millis(200)).unwrap();
         assert!(started.elapsed() < Duration::from_secs(2));
         let Spawned::Running { pid } = spawned else {
             panic!("{spawned:?}")
@@ -342,14 +341,7 @@ mod tests {
     fn reaps_the_child() {
         let dir = tempfile::tempdir().unwrap();
         let tool = script(dir.path(), "quick", "exit 0");
-        let spawned = spawn_detached(
-            &tool,
-            &[],
-            dir.path(),
-            OsStr::new("/usr/bin:/bin"),
-            EARLY_EXIT,
-        )
-        .unwrap();
+        let spawned = spawn_detached(&tool, &[], dir.path(), &env(), EARLY_EXIT).unwrap();
         let Spawned::Running { pid } = spawned else {
             panic!("{spawned:?}")
         };

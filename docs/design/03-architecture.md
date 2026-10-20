@@ -232,11 +232,14 @@ GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버
 - 자동 선택이 기본, 프로젝트 설정에서 제공자 고정 가능 (`provider = "mise" | "direnv" | "asdf" | "shell" | "none"`)
 - mise는 **필수 의존이 아님** — 없으면 로그인 셸 환경으로 동작
 - 결과는 `RuntimeEnv { path, vars, tools: [{name, version, source_file}] }`로 통일
-- **M0 의 최소판(`crates/pw-runtime`)은 4번의 PATH 만** 가져온다 — 지금은 외부 도구 실행(04 F8)만 쓴다. Finder · Dock · `open` 으로 띄운 GUI 앱의 PATH 는 launchd 의 것(`/usr/bin:/bin:/usr/sbin:/sbin`)이라 `zed` · `code` · `idea` 를 못 찾는다(터미널에서 띄운 앱은 터미널 PATH 를 물려받아 가려진다)
-  - `<셸> -l -i -c "printf 표식; /usr/bin/env -0; printf 표식"` 의 두 표식 사이에서 `PATH=` 를 읽는다 — 시작 파일이 stdout 에 찍는 잡음은 표식 바깥이라 버려진다. 셸은 `$SHELL`, 없으면 계정의 셸(`getpwuid_r`)
+- **지금(`crates/pw-runtime`, M1-03)은 4번 로그인 셸만** 있다 — 외부 도구 실행(04 F8)이 쓰고, 터미널(M1-08)이 이어 쓴다. mise 는 M1-16 이 같은 trait(`RuntimeProvider`)로 더한다. Finder · Dock · `open` 으로 띄운 GUI 앱의 환경은 launchd 의 것(PATH `/usr/bin:/bin:/usr/sbin:/sbin`)이라 `zed` · `code` · `idea` 를 못 찾고 셸에서 정한 `JAVA_HOME` 도 없다(터미널에서 띄운 앱은 터미널 환경을 물려받아 가려진다)
+  - 환경은 층으로 쌓인다: 앱 프로세스의 환경 → 로그인 셸(언제나) → 디렉터리에 맞는 제공자 하나(mise 등). 프로젝트 코드를 돌리는 제공자(`runs_project_code`)는 신뢰한 프로젝트에서만 고른다 — 신뢰 여부는 `Runtime` 의 입력이고 지금은 모두 미신뢰다(M1-05 가 채운다). 아래 층이 실패하면 그 아래 층으로 물러난다
+  - `<셸> -l -i -c "printf 표식; /usr/bin/env -0; printf 표식"` 의 두 표식 사이의 **환경 전체**를 읽는다 — 시작 파일이 stdout 에 찍는 잡음은 표식 바깥이라 버려진다. 셸 고유 변수 `PWD` · `SHLVL` · `_` 와 표식 `PITWALL_RESOLVING_ENVIRONMENT` 는 버린다. 셸은 `$SHELL`, 없으면 계정의 셸(`getpwuid_r`). 셸은 디렉터리와 무관하게 한 번 돈다(시작 파일은 사용자 단위다)
   - 셸은 `setsid` 로 제어 터미널 없이 돈다(대화형 셸이 터미널을 잡으려다 멈추지 않게). 시작 파일이 무거운 일을 건너뛸 수 있게 `PITWALL_RESOLVING_ENVIRONMENT=1` 을 준다
-  - 5초 안에 PATH 를 찍지 않으면 셸의 세션을 통째로 죽이고, 실패 · 시간 초과 · PATH 없음이면 앱 프로세스의 PATH 로 물러난다. 무엇을 썼는지는 로그(`PATH from the login shell` · `using the process PATH`)로 남는다
-  - 앱 시작이 아니라 **처음 쓸 때** 가져오고(「다음에서 열기」 팝업을 열면 미리 시작한다), 앱이 끝날 때까지 캐시한다. 셸 설정을 바꾼 뒤 다시 읽기는 아직 없다(「환경 다시 읽기」 와 함께)
+  - 5초 안에 환경을 찍지 않으면 셸의 세션을 통째로 죽이고, 실패 · 시간 초과 · PATH 없음이면 앱 프로세스의 환경으로 물러난다(`runtime.get` 의 `status` 가 `fallback`). **물러난 결과는 캐시하지 않아 다음 요청이 셸을 다시 돌린다** — 셸 설정을 고치면 앱을 다시 띄우지 않아도 된다. 무엇을 썼는지는 로그(`environment from the login shell` · `using the process environment`)로 남는다
+  - 앱 시작이 아니라 **처음 쓸 때** 가져오고(「다음에서 열기」 팝업을 열면 미리 시작한다), 성공한 결과는 (프로젝트, 디렉터리)마다 「환경 다시 읽기」 전까지 캐시한다. 동시에 여러 곳이 물어도 셸은 한 번 돈다
+  - 자식은 앱 프로세스의 환경을 물려받지 않고 이 환경 전체만 받는다(PATH 는 절대 경로 항목만, `crates/pw-open-with`)
+  - RPC: `runtime.get { projectId, dir? }` → `{ provider, source, status, tools }`(`dir` 이 없으면 주 루트). `runtime.reload { projectId }`(액션 「런타임 환경 다시 읽기」) — 로그인 셸 환경과 모든 디렉터리의 캐시를 잊고, 캐시가 있던 프로젝트와 부른 프로젝트에 `runtime.changed { reason: "reload" }` 를 한 번씩 낸다(프로젝트 범위). 셸은 다음 요청에서 다시 돈다
 
 ### 적용 대상
 모든 프로세스 실행은 `runtime` 모듈을 거친다: **내장 터미널, LSP 서버, DAP 어댑터, 실행 구성, 태스크, MCP를 통한 실행, git 훅 실행 환경**

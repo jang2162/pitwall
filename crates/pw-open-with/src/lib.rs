@@ -2,7 +2,7 @@
 //!
 //! - [`tools`]: 확장의 외부 도구 위에 전역 설정을 덮은 이 OS 의 목록, 기본 도구 고르기(프로젝트 설정은 고르기만 한다).
 //! - [`context`]: 템플릿 변수의 값(활성 워크트리 기준 프로젝트 루트, 파일 · 줄 · 열, 브랜치).
-//! - [`launch`]: 실행 파일 찾기(로그인 셸 PATH, `crates/pw-runtime`)와 셸 없는 떼어 띄우기.
+//! - [`launch`]: 실행 파일 찾기(런타임 환경의 PATH, `crates/pw-runtime`)와 셸 없는 떼어 띄우기(자식은 그 환경 전체를 받는다).
 //! - [`methods`]: `openWith.list` · `openWith.run` RPC.
 //!
 //! 명령 형식(argv 배열, 첫 요소에 변수 금지, `command` · `file_command`)은 `pw_ext::template`.
@@ -12,7 +12,6 @@ pub mod launch;
 pub mod methods;
 pub mod tools;
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -23,7 +22,7 @@ use pw_core::registry::{Project, Registry as Projects, RegistryError};
 use pw_ext::Registry;
 use pw_ext::template::{SubstituteError, substitute};
 use pw_rpc::{RpcError, code};
-use pw_runtime::{LOGIN_PATH, LoginPath, PathSource, ResolvedPath};
+use pw_runtime::Runtime;
 
 use crate::context::OpenContext;
 use crate::launch::{
@@ -44,44 +43,22 @@ pub struct HostParts {
     pub projects: Projects,
 }
 
-/// 실행 파일을 찾을 PATH.
-pub enum PathProvider {
-    /// 로그인 셸에서 한 번 가져온 것(앱).
-    Login(&'static LoginPath),
-    /// 정해진 값(시험).
-    Fixed(ResolvedPath),
-}
-
-impl PathProvider {
-    fn get(&self) -> &ResolvedPath {
-        match self {
-            PathProvider::Login(login) => login.get(),
-            PathProvider::Fixed(path) => path,
-        }
-    }
-}
-
 pub struct OpenWith {
     extensions: Arc<Registry>,
     host: OnceLock<HostParts>,
-    path: PathProvider,
+    /// 도구를 찾을 PATH 와 도구에 줄 환경(프로젝트 루트 기준).
+    runtime: Arc<Runtime>,
     early_exit: Duration,
 }
 
 impl OpenWith {
-    pub fn new(extensions: Arc<Registry>) -> Self {
+    pub fn new(extensions: Arc<Registry>, runtime: Arc<Runtime>) -> Self {
         Self {
             extensions,
             host: OnceLock::new(),
-            path: PathProvider::Login(&LOGIN_PATH),
+            runtime,
             early_exit: EARLY_EXIT,
         }
-    }
-
-    #[must_use]
-    pub fn with_path(mut self, path: PathProvider) -> Self {
-        self.path = path;
-        self
     }
 
     #[must_use]
@@ -95,11 +72,9 @@ impl OpenWith {
         let _ = self.host.set(parts);
     }
 
-    /// 로그인 셸 PATH 가져오기를 백그라운드로 시작한다(이미 했으면 아무것도 하지 않는다).
-    pub fn prefetch_path(&self) {
-        if let PathProvider::Login(login) = self.path {
-            login.prefetch();
-        }
+    /// 로그인 셸 환경 가져오기를 백그라운드로 시작한다(이미 있으면 아무것도 하지 않는다).
+    pub fn prefetch_env(&self) {
+        self.runtime.prefetch();
     }
 
     fn host(&self) -> Result<&HostParts, RpcError> {
@@ -324,10 +299,10 @@ impl OpenWith {
                 },
             );
         }
-        let path = self.path.get();
-        let login_shell_path = matches!(path.source, PathSource::LoginShell { .. });
+        let runtime = self.runtime.env(&project.id, &ctx.project_root);
+        let login_shell_path = runtime.login_shell;
         let program_name = &argv[0];
-        let Some(program) = find_program(program_name, &path.path) else {
+        let Some(program) = find_program(program_name, &runtime.env.path) else {
             return failed(
                 &tool.label,
                 argv.clone(),
@@ -363,7 +338,7 @@ impl OpenWith {
             &program,
             &argv[1..],
             &ctx.project_root,
-            &path.path,
+            &runtime.env,
             self.early_exit,
         ) {
             Ok(Spawned::Running { pid }) => {
@@ -404,16 +379,6 @@ fn registry_error(e: RegistryError) -> RpcError {
         }
         _ => RpcError::invalid_params(e.to_string()),
     }
-}
-
-/// 시험에서 쓰는 고정 PATH.
-pub fn fixed_path(path: impl Into<OsString>) -> PathProvider {
-    PathProvider::Fixed(ResolvedPath {
-        path: path.into(),
-        source: PathSource::LoginShell {
-            shell: PathBuf::from("/bin/sh"),
-        },
-    })
 }
 
 #[cfg(all(test, unix))]

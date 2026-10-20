@@ -1,12 +1,20 @@
 [package]
 name = "pw-runtime"
-description = "Pitwall runtime environment: the login shell PATH for processes the app launches"
+description = "Pitwall runtime environment: the environment for processes the app launches, from the login shell and runtime providers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
+pw-core = { path = "../pw-core" }
+pw-rpc = { path = "../pw-rpc" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+# RPC 핸들러가 셸 기다리기를 블로킹 스레드로 보낸다.
+tokio = { workspace = true, features = ["rt"] }
 tracing = "0.1.44"
 
 [target."cfg(unix)".dependencies]
@@ -15,3 +23,4 @@ libc = "0.2.190"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "macros"] }

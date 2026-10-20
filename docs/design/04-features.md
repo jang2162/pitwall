@@ -204,7 +204,7 @@ file_command = ["code", "{project_root}", "-g", "{file}:{line}:{column}"]
 - 사용자 덮어쓰기 · 기본 도구 · 프로젝트 설정이 고를 수 있는 것: 03 「`[open_with]`」
 
 실행(`crates/pw-open-with`):
-- 실행 파일은 이름이면 **로그인 셸 PATH**(03 §5-1)에서 찾고, 경로면 절대 경로여야 한다. 자식에게도 그 PATH 를 준다. 작업 디렉터리는 `{project_root}`
+- 실행 파일은 이름이면 **런타임 환경의 PATH**(03 §5-1, 지금은 로그인 셸)에서 찾고, 경로면 절대 경로여야 한다. 자식에게는 앱 프로세스의 환경이 아니라 그 런타임 환경 전체(셸에서 정한 `JAVA_HOME` 등)를 준다. 작업 디렉터리는 `{project_root}`
   - PATH 의 상대 · 빈 항목(`.`, `node_modules/.bin`)은 찾기에도 자식의 PATH 에도 쓰지 않는다 — 자식의 cwd(남의 저장소일 수 있는 프로젝트 루트) 기준으로 풀려 저장소 안의 파일이 잡힐 수 있다
   - Windows 는 cmd.exe 의 찾기 규칙을 따른다: 이름이 PATHEXT 확장자로 끝나면 그 이름만, 아니면 PATHEXT 를 붙인 이름만 본다(확장자 없는 이름 그대로는 보지 않는다 — VS Code · Cursor 의 `bin` 에 있는 WSL 용 셸 스크립트 `code` 가 `code.cmd` 보다 먼저 잡히지 않게)
   - Windows 에서 `.cmd` · `.bat` 런처는 Rust std 가 `cmd.exe` 로 감싸 띄운다 — 셸 문자열은 아니지만 std 의 배치 인자 이스케이프에 기댄다. 이스케이프할 수 없는 인자는 실행하지 않는다(`spawnFailed`)

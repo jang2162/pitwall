@@ -1,4 +1,5 @@
-//! 실제로 띄운 가짜 도구(받은 argv · cwd · PATH 를 파일에 적는 스크립트)로 실행 전체를 본다. 사람의 실제 도구는 띄우지 않는다.
+//! 실제로 띄운 가짜 도구(받은 argv · cwd · 환경을 파일에 적는 스크립트)로 실행 전체를 본다. 사람의 실제 도구는 띄우지 않는다.
+//! 환경은 가짜 로그인 셸(PATH · `JAVA_HOME` 을 정하고 `HOME` 을 지운 뒤 받은 스크립트를 돌리는 sh 스크립트)에서 온다.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -8,6 +9,7 @@ use std::time::{Duration, Instant};
 use pw_core::bus::{DEFAULT_CAPACITY, EventBus, Scope};
 use pw_core::config::{AppPaths, ConfigSource, ConfigStore};
 use pw_core::registry::{NewProject, Registry as Projects};
+use pw_runtime::LoginShell;
 use semver::Version;
 
 use super::*;
@@ -16,7 +18,7 @@ struct Fixture {
     tmp: tempfile::TempDir,
     open_with: OpenWith,
     projects: Projects,
-    /// 가짜 도구가 있는 폴더(고정 PATH 의 첫 항목).
+    /// 가짜 도구가 있는 폴더(가짜 셸 PATH 의 첫 절대 경로 항목).
     bin: PathBuf,
 }
 
@@ -37,16 +39,20 @@ impl Fixture {
             &Version::new(0, 0, 0),
             pw_ext::builtin::roots(),
         ));
-        // 상대 항목(`relative-dir`)은 찾기에도 자식의 PATH 에도 쓰이지 않는다.
-        let path = std::env::join_paths([
-            PathBuf::from("relative-dir"),
-            bin.clone(),
-            PathBuf::from("/usr/bin"),
-            PathBuf::from("/bin"),
-        ])
+        // 상대 항목(`relative-dir`)은 찾기에도 자식의 PATH 에도 쓰이지 않는다. `HOME` 을 지워 자식이 앱 프로세스가 아니라 셸의
+        // 환경을 받는지 본다.
+        let shell = tmp.path().join("fake-shell");
+        fs::write(
+            &shell,
+            format!(
+                "#!/bin/sh\nPATH='relative-dir:{}:/usr/bin:/bin'; export PATH\nJAVA_HOME='/opt/jdk 21'; export JAVA_HOME\nunset HOME\neval \"$4\"\n",
+                bin.display()
+            ),
+        )
         .unwrap();
-        let open_with = OpenWith::new(extensions)
-            .with_path(fixed_path(path))
+        fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+        let runtime = Runtime::new(LoginShell::new(Some(shell), Duration::from_secs(5)));
+        let open_with = OpenWith::new(extensions, Arc::new(runtime))
             .with_early_exit(Duration::from_millis(800));
         open_with.attach(HostParts {
             paths,
@@ -61,14 +67,15 @@ impl Fixture {
         }
     }
 
-    /// 받은 인자를 NUL 로 나눠 `<이름>.argv` 에, cwd 와 PATH 를 `<이름>.env` 에 적는 가짜 도구.
+    /// 받은 인자를 NUL 로 나눠 `<이름>.argv` 에, cwd 와 PATH 를 `<이름>.env` 에, `JAVA_HOME` 과 `HOME`(없으면 `unset`)을
+    /// `<이름>.vars` 에 적는 가짜 도구.
     fn fake_tool(&self, name: &str) -> PathBuf {
         let path = self.bin.join(name);
         let out = self.tmp.path().join(name);
         fs::write(
             &path,
             format!(
-                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\0' \"$a\"; done > '{0}.argv.tmp'\nprintf '%s\\0%s' \"$(pwd -P)\" \"$PATH\" > '{0}.env'\nmv '{0}.argv.tmp' '{0}.argv'\n",
+                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\0' \"$a\"; done > '{0}.argv.tmp'\nprintf '%s\\0%s' \"$(pwd -P)\" \"$PATH\" > '{0}.env'\nprintf '%s\\0%s' \"${{JAVA_HOME-unset}}\" \"${{HOME-unset}}\" > '{0}.vars'\nmv '{0}.argv.tmp' '{0}.argv'\n",
                 out.display()
             ),
         )
@@ -96,6 +103,13 @@ impl Fixture {
         let text = fs::read_to_string(self.tmp.path().join(format!("{name}.env"))).unwrap();
         let (cwd, path) = text.split_once('\0').unwrap();
         (cwd.to_owned(), path.to_owned())
+    }
+
+    /// 가짜 도구가 받은 `JAVA_HOME` · `HOME`.
+    fn vars(&self, name: &str) -> (String, String) {
+        let text = fs::read_to_string(self.tmp.path().join(format!("{name}.vars"))).unwrap();
+        let (java_home, home) = text.split_once('\0').unwrap();
+        (java_home.to_owned(), home.to_owned())
     }
 
     fn project(&self, root: &Path) -> Project {
@@ -184,6 +198,33 @@ fn names_with_shell_syntax_reach_the_tool_as_exact_arguments() {
     assert_eq!(
         f.received("fake-tool"),
         [root.display().to_string(), format!("--branch={branch}")]
+    );
+}
+
+/// 도구는 앱 프로세스의 환경이 아니라 로그인 셸의 환경 전체를 받는다 — 셸이 정한 `JAVA_HOME` 은 있고, 셸이 지운 `HOME` 은 없다.
+#[test]
+fn the_tool_gets_the_login_shell_environment() {
+    let f = Fixture::new(&settings_with_tool(
+        "fake",
+        r#"["fake-tool", "{project_root}"]"#,
+        r#"["fake-tool", "{file}"]"#,
+    ));
+    f.fake_tool("fake-tool");
+    let project = f.project(&f.tmp.path().join("p"));
+    let outcome = f.run(OpenWithRunParams {
+        project_id: project.id.clone(),
+        tool: Some("fake".to_owned()),
+        ..OpenWithRunParams::default()
+    });
+    assert!(
+        matches!(outcome, OpenWithOutcome::Launched { .. }),
+        "{outcome:?}"
+    );
+    f.received("fake-tool");
+    assert!(std::env::var_os("HOME").is_some());
+    assert_eq!(
+        f.vars("fake-tool"),
+        ("/opt/jdk 21".to_owned(), "unset".to_owned())
     );
 }
 

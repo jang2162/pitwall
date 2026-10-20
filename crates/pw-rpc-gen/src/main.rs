@@ -13,6 +13,7 @@ use pw_diag as _;
 use pw_ext as _;
 use pw_i18n as _;
 use pw_open_with as _;
+use pw_runtime as _;
 
 use pw_rpc_gen::{Output, emit, json_schema, or_exit, typescript};
 

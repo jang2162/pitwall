@@ -169,7 +169,7 @@ rpc_method! {
     }
 }
 
-/// 핸들러를 붙인다. 레지스트리 · 설정 읽기와 실행(로그인 셸 PATH 를 기다릴 수 있다)은 블로킹 스레드에서 한다.
+/// 핸들러를 붙인다. 레지스트리 · 설정 읽기와 실행(로그인 셸 환경을 기다릴 수 있다)은 블로킹 스레드에서 한다.
 pub fn register(router: &mut Router, open_with: Arc<OpenWith>) {
     async fn blocking<T: Send + 'static>(
         f: impl FnOnce() -> Result<T, RpcError> + Send + 'static,
@@ -184,8 +184,8 @@ pub fn register(router: &mut Router, open_with: Arc<OpenWith>) {
             OpenWithListMethod,
             move |_ctx, params: OpenWithListParams| {
                 let s = Arc::clone(&list);
-                // 팝업을 여는 사람은 곧 실행한다 — 로그인 셸 PATH 를 미리 가져오기 시작한다.
-                s.prefetch_path();
+                // 팝업을 여는 사람은 곧 실행한다 — 로그인 셸 환경을 미리 가져오기 시작한다.
+                s.prefetch_env();
                 blocking(move || s.list(&params))
             },
         )

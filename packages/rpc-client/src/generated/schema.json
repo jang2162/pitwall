@@ -2780,6 +2780,201 @@
       ],
       "tier": "write"
     },
+    "runtime.get": {
+      "description": "그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n없는 프로젝트 · 상대 경로는 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dir": {
+            "default": null,
+            "description": "절대 경로. 없으면 프로젝트의 주 루트.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RuntimeSource": {
+            "description": "환경을 실제로 어디서 얻었는가.",
+            "oneOf": [
+              {
+                "description": "로그인 셸. `shell` 은 셸 실행 파일의 경로.",
+                "properties": {
+                  "kind": {
+                    "const": "loginShell",
+                    "type": "string"
+                  },
+                  "shell": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "shell"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "앱 프로세스의 환경(로그인 셸을 읽지 못했다).",
+                "properties": {
+                  "kind": {
+                    "const": "process",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "디렉터리의 설정 파일로 환경을 만드는 제공자(mise 등). `files` 는 그 파일들의 경로.",
+                "properties": {
+                  "files": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "configFiles",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "files"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RuntimeStatus": {
+            "oneOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "ok",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "제공자가 실패해 그 아래 환경(로그인 셸, 또는 앱 프로세스)으로 물러났다. 남기지 않으므로 다음 요청이 다시 시도한다.",
+                "properties": {
+                  "kind": {
+                    "const": "fallback",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RuntimeToolInfo": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "sourceFile": {
+                "description": "버전을 정한 파일.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "version",
+              "sourceFile"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "provider": {
+            "description": "고른 제공자(`\"shell\"`. mise 제공자가 들어오면 `\"mise\"`).",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/RuntimeSource"
+          },
+          "status": {
+            "$ref": "#/$defs/RuntimeStatus"
+          },
+          "tools": {
+            "description": "제공자가 고정한 도구와 버전. 로그인 셸은 비어 있다.",
+            "items": {
+              "$ref": "#/$defs/RuntimeToolInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "provider",
+          "source",
+          "status",
+          "tools"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "runtime.reload": {
+      "description": "「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n(백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "description": "다시 읽기를 부른 프로젝트. 이 프로젝트에는 언제나 `runtime.changed` 가 나간다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "task.cancel": {
       "description": "작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.",
       "kind": "unary",

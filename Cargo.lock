@@ -3030,6 +3030,7 @@ dependencies = [
  "pw-mcp",
  "pw-open-with",
  "pw-rpc",
+ "pw-runtime",
  "reqwest",
  "rustls",
  "semver",
@@ -3357,6 +3358,7 @@ dependencies = [
  "pw-i18n",
  "pw-open-with",
  "pw-rpc",
+ "pw-runtime",
  "schemars 1.2.3",
  "serde",
  "serde_json",
@@ -3371,7 +3373,14 @@ name = "pw-runtime"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "pw-core",
+ "pw-rpc",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "specta",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 
