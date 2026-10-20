@@ -161,6 +161,7 @@ pitwall/
 │  ├─ pw-open-with/      # 외부 도구로 열기: 도구 목록(확장 + 전역 설정) · 기본 도구 · 셸 없는 실행 (04 F8)
 │  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지 — 지금은 터미널 PTY 세션만(03 「RPC 설계」, M1-08)
 │  ├─ pw-lang/           # 언어 판별 (Linguist 데이터 테이블, .gitattributes, 모드라인)
+│  ├─ pw-syntax/         # 구문 분석 서비스: tree-sitter + WASM 문법(wasmtime), 문서 세션 · 강조 구간 RPC(`syntax.*`)
 │  ├─ pw-tools/          # Mason registry 읽기 · 도구 설치기 (LSP/DAP/포매터)
 │  ├─ pw-index/          # tree-sitter 심볼 인덱스
 │  ├─ pw-link/           # 기기 키 · 페어링 · Noise 세션 · 전송(QUIC/SSH) · Tailscale 검색
@@ -175,7 +176,8 @@ pitwall/
 │  ├─ domain/            # 공용 상태/포맷 로직 (데스크톱 · MCP 등 클라이언트 공용)
 │  ├─ logger/            # 웹뷰 로그를 묶어 코어의 `log.write` 로 보내는 로거
 │  └─ ext-api/           # L3 UI 패널 확장용 TS API
-├─ extensions/           # 내장 확장 (기본 테마, 언어, 외부 도구, 언어팩)
+├─ extensions/           # 내장 확장 (기본 테마, 언어, 외부 도구, 언어팩). 언어는 lang-<문법>/ — 문법 WASM · 쿼리는
+│                        # scripts/grammars.toml 의 고정 커밋에서 `mise run grammars` 로 만들어 커밋한다
 └─ docs/
 ```
 - Rust: cargo workspace / TS: pnpm workspace

@@ -120,7 +120,7 @@ M0 에서 된 것은 다시 계획하지 않는다 — CLI · 단일 인스턴�
 ### 준비물
 
 - Linux 실기 한 대(GPU 가 있는 데스크톱, X11 · Wayland 중 하나 이상) — M1-26. CI 러너에는 GPU 가 없어 WebGL 이 소프트웨어로 떨어지므로 WebKitGTK 의 실제 성능을 재지 못한다
-- tree-sitter 문법 WASM 을 만들 도구(`tree-sitter` CLI + wasi-sdk 또는 emscripten)를 `mise.toml` 에 고정할지, 문법 저장소의 릴리스 WASM 을 받아 넣을지 — M1-10 착수 때 문법별로 정하고 라이선스와 함께 기록
+- tree-sitter 문법 WASM 을 만들 도구(`tree-sitter` CLI + wasi-sdk 또는 emscripten)를 `mise.toml` 에 고정할지, 문법 저장소의 릴리스 WASM 을 받아 넣을지 — M1-10 에서 정했다: 19개 모두 `tree-sitter` CLI(`mise.toml` 고정, wasi-sdk 는 CLI 가 받는다)로 고정 커밋의 소스에서 직접 빌드해 WASM 을 저장소에 커밋한다(릴리스 WASM 이 없는 문법이 있고, 옛 릴리스 WASM 은 올리는 데 10배 넘게 걸렸다). 출처 · 커밋 · 라이선스는 `scripts/grammars.toml` 과 `licenses/vendored.md`, 방법은 CONTRIBUTING.md 「tree-sitter 문법」 절
 - Linguist 데이터 버전(태그) 하나 — M1-02. v9.7.0 으로 정했다(`crates/pw-lang/linguist/VERSION`)
 - 시험용 mise 두 버전(CI 의 mise 로 설치) — M1-16
 
