@@ -588,6 +588,7 @@ mod tests {
             "/Users/me/code/pitwall/target/release/pitwall",
             "/Users/me/Pitwall.app/pitwall",
             "/Users/me/Contents/MacOS/pitwall",
+            "/Users/me/code/pitwall.v2/Contents/MacOS/pitwall",
         ] {
             assert_eq!(
                 check_source(Path::new(dev), true, |_| false),
