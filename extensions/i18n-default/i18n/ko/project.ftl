@@ -1,4 +1,4 @@
-### 프로젝트 창: 툴 윈도우 이름과 열기 액션, 상태바, 백그라운드 작업, 알림.
+### 프로젝트 창: 툴 윈도우 이름과 열기 액션, 상태바, 백그라운드 작업, 알림, 런타임 환경.
 
 ## 툴 윈도우 이름. id 는 툴 윈도우 id(src/layout/project-layout.ts 의 PANELS)를 kebab-case 로 쓴 것이다.
 
@@ -74,3 +74,8 @@ notification-level =
 
 # $title: 알림 제목, $count: 합친 횟수(2 이상)
 notification-repeated = { $title } (×{ $count })
+
+## 런타임 환경
+
+action-runtime-reload = 런타임 환경 다시 읽기
+runtime-reload-failed = 런타임 환경을 다시 읽지 못했다

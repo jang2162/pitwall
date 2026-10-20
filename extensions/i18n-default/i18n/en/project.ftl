@@ -1,4 +1,4 @@
-### Project window: tool window names and their open actions, status bar, background tasks, notifications.
+### Project window: tool window names and their open actions, status bar, background tasks, notifications, runtime environment.
 
 ## Tool window names. The id is the tool window id (PANELS in src/layout/project-layout.ts) in kebab-case.
 
@@ -75,3 +75,8 @@ notification-level =
 
 # $title: notification title, $count: how many were merged (2 or more)
 notification-repeated = { $title } (×{ $count })
+
+## Runtime environment
+
+action-runtime-reload = Reload Runtime Environment
+runtime-reload-failed = Could not reload the runtime environment

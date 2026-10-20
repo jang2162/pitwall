@@ -9,7 +9,6 @@ window-title-settings = Settings
 action-find = Find Action
 action-settings = Settings
 action-cli-install = Install Shell Command
-action-runtime-reload = Reload Runtime Environment
 # $theme: light | dark | system
 action-theme =
     { $theme ->
