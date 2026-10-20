@@ -130,6 +130,15 @@ fn emacs_modelines() {
         lang("a.txt", Some("# -*- ruby--*-\n")).as_deref(),
         Some("Text")
     );
+    // `F*` 는 아는 별칭이라 이 규칙만이 가른다 — 띄우면 맞고, 닫는 표시에 붙이면(`F*-*-`) 무효다.
+    assert_eq!(
+        lang("a.txt", Some("// -*- F* -*-\n")).as_deref(),
+        Some("F*")
+    );
+    assert_eq!(
+        lang("a.txt", Some("// -*- F*-*-\n")).as_deref(),
+        Some("Text")
+    );
     // 끝 5줄도 본다.
     let tail = format!("{}# -*- ruby -*-\n", "x\n".repeat(20));
     assert_eq!(lang("a.txt", Some(&tail)).as_deref(), Some("Ruby"));
@@ -151,8 +160,13 @@ fn filenames_extensions_and_generic_extensions() {
         LangSource::Heuristics
     );
     assert_eq!(lang("README", None), None);
-    // `.1` 은 generic — 확장자만으로 정하지 않고 manpage 단계로 간다.
-    assert_eq!(lang("tool.1", None).as_deref(), Some("Roff Manpage"));
+    // `.alg` 는 generic(흔한 확장자)이다 — 후보가 ALGOL 하나뿐이어도 확장자만으로 정하지 않고, heuristics 가 맞아야 한다.
+    assert_eq!(plain("prog.alg", None).source, LangSource::None);
+    let d = plain("prog.alg", Some("comment hello;\nbegin end\n"));
+    assert_eq!(
+        (d.language.as_deref(), d.source),
+        (Some("ALGOL"), LangSource::Heuristics)
+    );
 }
 
 #[test]
@@ -573,17 +587,31 @@ fn rpc_rejects_relative_paths_too_many_files_and_unknown_projects() {
         }],
         ..Default::default()
     };
-    assert!(fx.lang.detect(&one("src/a.rs")).is_err());
-    let ok = fx
-        .lang
-        .detect(&one(if cfg!(windows) { r"C:\a.rs" } else { "/a.rs" }))
-        .unwrap();
+    let abs = if cfg!(windows) { r"C:\a.rs" } else { "/a.rs" };
+    // invalid params 의 사람용 설명은 `data` 에 있다.
+    let err = |params: &LangDetectParams| {
+        let e = fx.lang.detect(params).unwrap_err();
+        assert_eq!(e.code, pw_rpc::code::INVALID_PARAMS);
+        e.data.and_then(|d| d.as_str().map(str::to_owned)).unwrap()
+    };
+    assert!(err(&one("src/a.rs")).contains("must be absolute"));
+    let ok = fx.lang.detect(&one(abs)).unwrap();
     assert_eq!(ok.files[0].language.as_deref(), Some("Rust"));
-    let many = LangDetectParams {
-        files: vec![LangDetectFile::default(); MAX_FILES + 1],
+    // 상한까지는 받고, 하나 넘으면 거절한다(경로는 모두 절대 경로라 다른 이유로 거절되지 않는다).
+    let file = LangDetectFile {
+        path: abs.into(),
+        head: None,
+    };
+    let at_limit = LangDetectParams {
+        files: vec![file.clone(); MAX_FILES],
         ..Default::default()
     };
-    assert!(fx.lang.detect(&many).is_err());
+    assert_eq!(fx.lang.detect(&at_limit).unwrap().files.len(), MAX_FILES);
+    let many = LangDetectParams {
+        files: vec![file; MAX_FILES + 1],
+        ..Default::default()
+    };
+    assert!(err(&many).contains("too many files"));
     let unknown = LangDetectParams {
         project_id: Some("no-such-project".into()),
         ..Default::default()
