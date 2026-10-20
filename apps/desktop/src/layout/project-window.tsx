@@ -44,6 +44,7 @@ import { activeWorktree } from "../open-with/active-worktree";
 import { type OpenWithTarget, useOpenWith } from "../open-with/open-with";
 import { projectIdFromQuery } from "../project-open";
 import { useRpcQuery } from "../rpc/host";
+import { useRuntimeActions } from "../runtime/runtime-actions";
 import {
   STATUS_SLOTS,
   StatusBar,
@@ -267,6 +268,12 @@ function OpenWithStatusButton() {
   );
 }
 
+/** 이 창의 프로젝트의 런타임 액션(「환경 다시 읽기」). */
+function ProjectRuntimeActions({ projectId }: { projectId: string }) {
+  useRegisterActions(useRuntimeActions(projectId));
+  return null;
+}
+
 /**
  * 이 창의 프로젝트를 외부 도구로 연다(⌥F1 · ⌘⌥E, open-with/open-with.tsx). 실패 문장은 상태바 위 한 줄에 둔다. 상태바의 버튼은
  * 10-ui 툴바의 「외부 도구로 열기」 자리다 — 툴바가 생기면 옮긴다.
@@ -326,6 +333,7 @@ function ProjectWindowBody({ projectId }: { projectId?: string }) {
         <ProjectDock storage={window.localStorage} titles={strings.toolWindows} onApi={setApi} />
         <ToolWindowBar dock="right" api={api} />
       </div>
+      {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
       {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
       <StatusBar label={strings.status.label} />
       {/* 상태바(22px) 위에 띄운다. */}

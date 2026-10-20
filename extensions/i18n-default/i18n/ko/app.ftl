@@ -9,6 +9,7 @@ window-title-settings = 설정
 action-find = 액션 찾기
 action-settings = 설정
 action-cli-install = Shell 명령 설치
+action-runtime-reload = 런타임 환경 다시 읽기
 # $theme: light | dark | system
 action-theme =
     { $theme ->
