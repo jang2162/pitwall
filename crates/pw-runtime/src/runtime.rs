@@ -166,17 +166,24 @@ impl Runtime {
         }
     }
 
-    fn resolve(&self, dir: &Path, trusted: bool) -> Resolved {
-        let (base, mut failures) = match &*self.shell.get() {
-            Ok(layer) => (layer.clone(), Vec::new()),
+    /// 디렉터리의 제공자 없이 로그인 셸의 환경. 셸을 읽지 못했으면 앱 프로세스의 환경과 그 이유. 다른 앱이 로그인 셸 PATH 로
+    /// 무엇을 찾을지 볼 때 쓴다(Orca 의 「Open in」, `crates/pw-open-with` 의 `cli.status`). 처음이면 셸을 기다린다.
+    pub fn login_shell_env(&self) -> (Layer, Option<String>) {
+        match &*self.shell.get() {
+            Ok(layer) => (layer.clone(), None),
             Err(e) => (
                 Layer {
                     env: RuntimeEnv::process(),
                     source: RuntimeSource::Process,
                 },
-                vec![e.reason.clone()],
+                Some(e.reason.clone()),
             ),
-        };
+        }
+    }
+
+    fn resolve(&self, dir: &Path, trusted: bool) -> Resolved {
+        let (base, failure) = self.login_shell_env();
+        let mut failures: Vec<String> = failure.into_iter().collect();
         let login_shell = failures.is_empty();
         let picked = self
             .providers
