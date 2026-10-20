@@ -676,3 +676,38 @@ fn the_file_reaches_the_tool_normalized() {
         ]
     );
 }
+
+/// ⌘⌥E 의 기본 도구가 내장 VS Code 면(extensions/external-tools 의 `vscode`) 활성 탭의 파일 · 줄 · 열이 `code -g <파일>:<줄>:<열>` 로
+/// 간다(12-m1-plan M1-09 완료 기준). 결과의 argv 가 창이 로그에 남기는 실행 명령이다. `code` 는 가짜다.
+#[test]
+fn the_default_vscode_opens_the_active_file_at_its_line_and_column() {
+    let f = Fixture::new("schema = 1\n\n[open_with]\ndefault = \"vscode\"\n");
+    let code = f.fake_tool("code");
+    let project = f.project(&f.tmp.path().join("proj"));
+    let root = PathBuf::from(&project.roots[0]);
+    fs::create_dir_all(root.join("src")).unwrap();
+    let file = root.join("src/lib.rs");
+    fs::write(&file, "").unwrap();
+
+    let outcome = f.run(OpenWithRunParams {
+        project_id: project.id.clone(),
+        file: Some(file.display().to_string()),
+        line: Some(120),
+        column: Some(5),
+        ..OpenWithRunParams::default()
+    });
+    let expected = [
+        root.display().to_string(),
+        "-g".to_owned(),
+        format!("{}:120:5", file.display()),
+    ];
+    match outcome {
+        OpenWithOutcome::Launched { tool, argv, .. } => {
+            assert_eq!(tool, "vscode");
+            assert_eq!(argv[0], code.display().to_string());
+            assert_eq!(argv[1..], expected);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(f.received("code"), expected);
+}
