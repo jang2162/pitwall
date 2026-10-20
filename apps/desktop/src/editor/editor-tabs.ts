@@ -195,17 +195,14 @@ export function trackRecentTabs(api: DockviewApi) {
   };
   touch(api.activePanel);
   const activated = api.onDidActivePanelChange(({ panel }) => touch(panel));
+  // 그룹 사이로 옮기는 것은 지우기가 아니다(dockview 8 은 `onDidMovePanel` 만 낸다).
   const removed = api.onDidRemovePanel((panel) => {
-    // 옮기기(그룹 사이 드래그)는 지웠다 다시 넣는다 — 흐름이 끝난 뒤에도 없을 때만 뺀다.
-    queueMicrotask(() => {
-      if (api.getPanel(panel.id)) return;
-      const i = order.indexOf(panel.id);
-      if (i >= 0) order.splice(i, 1);
-    });
+    const i = order.indexOf(panel.id);
+    if (i >= 0) order.splice(i, 1);
   });
   return {
-    /** 최근 순서의 패널 id. 아직 있는 것만. */
-    order: (): string[] => order.filter((id) => api.getPanel(id)),
+    /** 최근 순서의 패널 id. */
+    order: (): string[] => order.slice(),
     dispose() {
       activated.dispose();
       removed.dispose();

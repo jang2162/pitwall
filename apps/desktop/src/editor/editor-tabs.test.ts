@@ -168,12 +168,14 @@ it("remembers editor tabs in the order they were last used and forgets closed on
   api.getPanel("terminal")!.api.setActive();
   a.api.setActive();
   expect(recent.order()).toEqual([a.id, c.id, b.id]);
-  // 그룹 사이로 옮겨도 잊지 않는다.
-  c.api.moveTo({ group: splitRight(api, a).group });
+  // 그룹 사이로 옮겨도 잊지 않고 자리도 그대로다.
+  const right = splitRight(api, a);
+  a.api.setActive();
+  expect(recent.order()).toEqual([a.id, right.id, c.id, b.id]);
+  c.api.moveTo({ group: right.group, skipSetActive: true });
   await settle();
-  expect(recent.order()).toContain(c.id);
+  expect(recent.order()).toEqual([a.id, right.id, c.id, b.id]);
   b.api.close();
-  await settle();
   expect(recent.order()).not.toContain(b.id);
   expect(editorPanels(api).map((p) => p.id)).not.toContain("terminal");
   recent.dispose();

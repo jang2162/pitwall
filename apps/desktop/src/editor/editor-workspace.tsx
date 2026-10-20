@@ -96,13 +96,10 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       api = next;
       recent = trackRecentTabs(next);
       const tracked = recent;
-      const removed = next.onDidRemovePanel((panel) =>
-        queueMicrotask(() => {
-          if (next.getPanel(panel.id)) return;
-          pending.delete(panel.id);
-          openedAt.delete(panel.id);
-        }),
-      );
+      const removed = next.onDidRemovePanel((panel) => {
+        pending.delete(panel.id);
+        openedAt.delete(panel.id);
+      });
       return () => {
         removed.dispose();
         tracked.dispose();

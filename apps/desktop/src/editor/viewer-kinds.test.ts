@@ -6,8 +6,10 @@ const text = { binary: false };
 const binary = { binary: true };
 
 it("picks images by extension whatever the content, svg included", () => {
-  for (const name of ["a.png", "b.JPG", "c.jpeg", "d.gif", "e.webp", "f.bmp", "g.ico", "h.svg"])
-    expect(viewerKindOf(`/p/${name}`, text)).toBe("image");
+  for (const name of ["a.png", "b.JPG", "c.jpeg", "d.gif", "e.webp", "f.bmp", "g.ico"])
+    expect(viewerKindOf(`/p/${name}`, binary)).toBe("image");
+  // svg 는 텍스트지만 이미지로 보인다(스크립트가 돌지 않게 <img> 로만 그린다 — M1-22).
+  expect(viewerKindOf("/p/h.svg", text)).toBe("image");
   expect(VIEWER_READS.image).toBe("self");
 });
 
