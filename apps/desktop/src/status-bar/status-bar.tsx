@@ -6,6 +6,8 @@
 //      기능의 store). 그릴 것이 없으면 `null` 을 돌려준다 — 그때는 자리도 차지하지 않는다.
 //   2. 자리는 아래 `STATUS_SLOTS` 에 한 줄로 정한다(쪽 · 순서). 한곳에 모아 두어 항목끼리의 순서를 한눈에 본다.
 //   3. 프로젝트 창 안(`StatusBarProvider` 아래)에서 `useStatusBarItem` 을 부른다. 부른 컴포넌트가 마운트돼 있는 동안 보인다.
+//      id 는 한 곳에서만 등록한다 — 같은 id 를 두 곳에서 등록하면 나중 것이 앞의 것을 지우고, 나중 것이 빠질 때 앞의 것도
+//      되살아나지 않는다. 개발 빌드는 그때 경고를 남긴다.
 //
 //      function TrustStatus() { ... return trusted ? null : <span>…</span>; }
 //      useStatusBarItem({ id: "trust", ...STATUS_SLOTS.trust, component: TrustStatus });
@@ -74,9 +76,13 @@ interface StatusBarState {
 export type StatusBarStore = StoreApi<StatusBarState>;
 
 export function createStatusBarStore(): StatusBarStore {
-  return createStore<StatusBarState>()((set) => ({
+  return createStore<StatusBarState>()((set, get) => ({
     items: [],
     register(item) {
+      if (import.meta.env.DEV && get().items.some((i) => i.id === item.id))
+        console.warn(
+          `[status-bar] item "${item.id}" registered twice — register an id in one place`,
+        );
       set((s) => ({ items: [...s.items.filter((i) => i.id !== item.id), item] }));
       return () => set((s) => ({ items: s.items.filter((i) => i !== item) }));
     },

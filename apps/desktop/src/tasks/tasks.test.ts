@@ -3,7 +3,7 @@
 import type { TaskInfo } from "@pitwall/rpc-client";
 import { describe, expect, it } from "vitest";
 
-import { createTaskStore, fraction } from "./tasks";
+import { createTaskStore, ENDED_LIMIT, fraction } from "./tasks";
 
 const info = (taskId: number, title = `t${taskId}`): TaskInfo => ({
   taskId,
@@ -39,6 +39,21 @@ describe("task store", () => {
     store.getState().listed([info(1), info(3)]);
     expect(ids(store)).toEqual([1, 3]);
     expect(store.getState().tasks[0]!.progress.done).toBe(9);
+  });
+
+  it("forgets finished ids once the list answer is merged, and keeps at most ENDED_LIMIT before that", () => {
+    const store = createTaskStore();
+    store.getState().finished(1);
+    store.getState().listed([]);
+    // 응답을 합친 뒤라 기억하지 않는다 — 같은 id 의 새 목록 항목은 받아들인다(다시 붙은 Host 의 새 작업).
+    store.getState().listed([info(1)]);
+    expect(ids(store)).toEqual([1]);
+
+    const fresh = createTaskStore();
+    for (let id = 1; id <= ENDED_LIMIT + 1; id++) fresh.getState().finished(id);
+    // 가장 오래된 1 은 잊었고, 2 는 아직 기억한다.
+    fresh.getState().listed([info(1), info(2)]);
+    expect(ids(fresh)).toEqual([1]);
   });
 
   it("ignores progress that arrives after the task finished", () => {

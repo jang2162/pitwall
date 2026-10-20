@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 // 상태바 항목 슬롯: 쪽 · 순서대로 놓이고, 등록한 컴포넌트가 사라지면 빠지고, 같은 id 는 바뀐다.
 
-import { act, useState } from "react";
+import { act, StrictMode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { StatusBar, type StatusBarItem, StatusBarProvider, useStatusBarItem } from "./status-bar";
 
@@ -18,6 +18,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
@@ -83,9 +84,12 @@ it("drops an item when the component that registered it goes away", async () => 
 });
 
 it("replaces an item registered again with the same id, and keeps the newer one when the older leaves", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const older: StatusBarItem = { id: "x", side: "left", order: 100, component: A };
   const newer: StatusBarItem = { id: "x", side: "right", order: 100, component: B };
   await mount([older, newer]);
+  // 중복 등록은 실수다 — 개발 빌드(시험 포함)에서 경고한다.
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('item "x" registered twice'));
   expect(layout()).toEqual(["|", "x"]);
   expect(document.querySelector('[data-status-item="x"]')!.textContent).toBe("b");
   await act(async () => show([newer]));
@@ -95,4 +99,20 @@ it("replaces an item registered again with the same id, and keeps the newer one 
 it("leaves an item that draws nothing empty", async () => {
   await mount([{ id: "idle", side: "right", order: 100, component: Nothing }]);
   expect(document.querySelector('[data-status-item="idle"]')!.childElementCount).toBe(0);
+});
+
+it("does not warn when StrictMode registers, unregisters and registers again", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const element = document.createElement("div");
+  document.body.append(element);
+  root = createRoot(element);
+  await act(async () =>
+    root!.render(
+      <StrictMode>
+        <Harness initial={[{ id: "host", side: "left", order: 100, component: A }]} />
+      </StrictMode>,
+    ),
+  );
+  expect(layout()).toEqual(["host", "|"]);
+  expect(warn).not.toHaveBeenCalled();
 });

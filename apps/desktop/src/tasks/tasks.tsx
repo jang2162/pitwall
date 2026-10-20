@@ -56,8 +56,13 @@ export type TaskStore = StoreApi<TaskState>;
 
 const byId = (a: TaskInfo, b: TaskInfo) => a.taskId - b.taskId;
 
+/** `task.list` 응답 전에 기억하는 끝난 작업 id 의 최대 수. 넘으면 오래된 것부터 잊는다. */
+export const ENDED_LIMIT = 1000;
+
 export function createTaskStore(): TaskStore {
-  // 끝남을 본 작업 id. `task.list` 응답이 끝남 알림보다 늦게 와도 끝난 작업을 되살리지 않게 한다.
+  // 끝남을 본 작업 id. `task.list` 응답이 끝남 알림보다 늦게 와도 끝난 작업을 되살리지 않게 한다. 응답을 합친 뒤에는 쓸
+  // 일이 없어 비운다 — 그 뒤 같은 작업의 알림은 버스 순서상 끝남보다 먼저 온다. 응답이 오지 않는 동안에도 끝없이 자라지 않게
+  // 상한을 둔다.
   const ended = new Set<number>();
   return createStore<TaskState>()((set) => ({
     tasks: [],
@@ -72,12 +77,14 @@ export function createTaskStore(): TaskStore {
     },
     finished(taskId) {
       ended.add(taskId);
+      if (ended.size > ENDED_LIMIT) ended.delete(ended.values().next().value!);
       set((s) => ({ tasks: s.tasks.filter((t) => t.taskId !== taskId) }));
     },
     listed(tasks) {
       set((s) => {
         const known = new Set(s.tasks.map((t) => t.taskId));
         const fresh = tasks.filter((t) => !known.has(t.taskId) && !ended.has(t.taskId));
+        ended.clear();
         return fresh.length === 0 ? s : { tasks: [...s.tasks, ...fresh].sort(byId) };
       });
     },
@@ -137,6 +144,19 @@ export function useTasks<T>(selector: (state: TaskState) => T): T {
   return useStore(useTaskStore(), selector);
 }
 
+/**
+ * 연결 하나의 작업 표. 연결(`client`)이 바뀌면 새 표다 — 작업 id 는 Host 마다 1부터라, 프로젝트가 다른 Host 로 다시 묶이면
+ * 옛 Host 의 작업이 남아 새 Host 의 id 와 겹친다(03-architecture §3).
+ */
+export function useTaskStoreFor(client: RpcClient | undefined): TaskStore {
+  const [owned, setOwned] = useState(() => ({ client, store: createTaskStore() }));
+  if (owned.client === client) return owned.store;
+  // 렌더 중에 상태를 맞춘다(React 「props 가 바뀔 때 state 조정」). 이번 렌더부터 새 표를 쓴다.
+  const next = { client, store: createTaskStore() };
+  setOwned(next);
+  return next.store;
+}
+
 /** 창 하나의 작업 표. `NotificationProvider` 안에 둔다 — 실패한 작업을 알린다. */
 export function TaskProvider({
   projectId,
@@ -146,8 +166,8 @@ export function TaskProvider({
   projectId?: string;
   children: ReactNode;
 }) {
-  const [store] = useState(createTaskStore);
   const { client } = useHost();
+  const store = useTaskStoreFor(client);
   const notify = useNotify();
   const strings = useProjectStrings().tasks;
   const failed = useRef(strings.failed);

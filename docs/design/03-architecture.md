@@ -48,7 +48,7 @@
 | `secrets` | 키체인 접근 (로컬에서만; 원격 Relay에는 필요 시 전달) | |
 
 - 모든 모듈은 `ProjectContext`(루트 경로, 설정, 이벤트 버스, 취소 토큰)를 받는다
-- 장기 작업은 `Task` 추상(진행률, 취소)으로 통일 → UI 상태바 / MCP 둘 다 표시 가능. 진행 · 종료는 버스 토픽 `task.progress` · `task.finished`(범위는 띄운 곳 — Host 또는 프로젝트)로 나가고, 구독 전에 시작한 작업은 `task.list { projectId? }`(Host 범위 + 그 프로젝트) 로 읽으며, 띄운 쪽이 아니어도 `task.cancel { taskId }`(tier write)로 멈춘다. 프로젝트 창 상태바는 이 셋으로 작업을 보이고 실패는 오류 알림으로 낸다(10-ui.md 「빈 상태 · 오류 상태」)
+- 장기 작업은 `Task` 추상(진행률, 취소)으로 통일 → UI 상태바 / MCP 둘 다 표시 가능. 진행 · 종료는 버스 토픽 `task.progress` · `task.finished`(범위는 띄운 곳 — Host 또는 프로젝트)로 나가고, 구독 전에 시작한 작업은 `task.list { projectId? }`(Host 범위 + 그 프로젝트) 로 읽으며, 띄운 쪽이 아니어도 `task.cancel { taskId }`(tier write — Owner 만)로 멈춘다. 둘의 범위는 연결의 프로젝트가 아니라 params 다: `task.cancel` 은 같은 Host 의 모든 작업을 멈출 수 있고 `task.list` 는 params 의 프로젝트를 읽는다(이벤트 구독과 같은 규칙 — 원격 Relay 에 연결별 프로젝트 제한이 생기면 이 둘도 그 검사에 넣는다). 프로젝트 창 상태바는 이 셋으로 작업을 보이고 실패는 오류 알림으로 낸다(10-ui.md 「빈 상태 · 오류 상태」)
 
 ## 3. 프로세스 · 창 모델
 
