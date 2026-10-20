@@ -89,8 +89,6 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
 - 설정 화면의 "파일로 열기"는 `$CONFIG`의 실제 파일을 연다. "설정 폴더 열기" · "경로 복사" 액션 제공
 
 
-| 범위 | 위치 | 형식 | 내용 |
-|---|---|---|---|
 | 범위 | 위치 (§5-0 XDG) | 형식 | 내용 |
 |---|---|---|---|
 | 전역 설정 | `$CONFIG/` | TOML | `settings.toml`(전역 설정 · 원격 호스트 · 외부 도구), `keymap.toml`, `themes/`, 개인 전용 프로젝트 설정 `projects/<slug>/` |

@@ -11,7 +11,7 @@
 | UI 컴포넌트 | Radix UI primitives + Tailwind v4 (shadcn/ui 방식) | 키보드 접근성, IDE형 밀도 높은 레이아웃 — 전체 UI 스택은 [10-ui.md](10-ui.md) §3 |
 | 레이아웃(도킹) | dockview | 탭/스플릿/도킹 패널 |
 | 에디터 | **CodeMirror 6** | 경량, 뷰어 우선. Monaco 대비 번들 · 메모리 작음 |
-| 구문 강조 | 코어: **tree-sitter** / UI: Lezer(CodeMirror) + tree-sitter 하이라이트 결과 오버레이 | 언어 범위는 tree-sitter 기준 |
+| 구문 강조 | 코어: **tree-sitter** + WASM 문법(wasmtime) / UI: 코어가 준 화면 범위의 캡처 구간을 CodeMirror decoration 으로 그린다. Lezer 문법은 쓰지 않는다 | 언어 범위는 tree-sitter 기준. 되돌림 조건 등 상세는 [12-m1-plan.md](12-m1-plan.md) M1-D2 |
 | Diff 뷰 | @codemirror/merge | side-by-side, inline |
 | 터미널 | xterm.js + `portable-pty` | 실행 콘솔/터미널 공용 |
 | Git 읽기 | **gitoxide (`gix`)** | log/graph/status/blame/diff를 빠르게 |
@@ -21,7 +21,7 @@
 | SQL 편집 | CodeMirror `@codemirror/lang-sql` + 스키마 기반 자동완성 | |
 | 디버깅 | **DAP 클라이언트** (Rust 구현) | js-debug, debugpy, codelldb, delve, java-debug |
 | 코드 인텔리전스 | **LSP 클라이언트** (`async-lsp` / `lsp-types`) | 서버 자동 설치 관리자 포함 |
-| 파일 검색 | `ignore` + `nucleo`(퍼지) | .gitignore 존중 |
+| 파일 검색 | `ignore` + `frizbee`(퍼지, MIT) | .gitignore 존중. `nucleo` 는 MPL-2.0 이라 쓰지 않는다(아래 「라이선스 검사」 행) |
 | 텍스트 검색 | `grep-searcher`/`grep-regex` (ripgrep 라이브러리) | |
 | 심볼 인덱스 | tree-sitter tags → SQLite(FTS5) | LSP 미기동/미지원 언어 폴백 |
 | 파일 감시 | `notify` (+ debounce) | |

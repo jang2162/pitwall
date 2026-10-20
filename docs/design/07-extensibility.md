@@ -155,6 +155,7 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 - 빌드 시 Linguist YAML을 압축 테이블로 변환해 코어(`pw-lang`)에 내장. 업데이트는 스크립트로 주기적 갱신(Linguist 버전 고정)
 - 언어 ID는 Linguist 이름 기준 → 언어 확장은 `linguist = "<이름>"`으로 연결 (tree-sitter 문법 · LSP · DAP)
 - heuristics의 정규식은 Rust `regex`로 컴파일 (Ruby 전용 문법은 변환 스크립트에서 처리, 실패 항목은 건너뜀 + 로그)
+- 생성 파일 규칙은 YAML 이 아니라 Linguist 의 Ruby 코드(`lib/linguist/generated.rb`)라 테이블로 변환할 수 없다 — 경로 · 첫 줄 규칙(lockfile · minified · 「Code generated … DO NOT EDIT」 · 흔한 빌드 산출물 폴더 등)의 일부를 `pw-lang` 에 손으로 옮기고, 옮긴 목록을 거기 적는다([12-m1-plan.md](12-m1-plan.md) M1-D20)
 - `THIRD_PARTY_NOTICES.md`에 Linguist MIT 고지
 
 ### 4.4 LSP · DAP · 포매터 설치 — Mason registry (D29)
