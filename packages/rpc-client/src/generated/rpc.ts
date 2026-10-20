@@ -1109,8 +1109,10 @@ export type SearchLine = {
 	preview: string,
 	/**  `preview` 가 줄의 어디서 시작하는가(UTF-16 코드 단위). 미리보기 안의 범위는 `range.start - previewStart` 다. */
 	previewStart: number,
-	/**  일치 범위(줄 기준, 앞에서부터). 미리보기에 걸친 것만 싣는다 — 첫 일치는 늘 든다. */
+	/**  일치 범위(줄 기준, 앞에서부터). 미리보기에 걸친 것만 싣는다 — 첫 일치는 늘 든다. 그래서 많아야 [`PREVIEW_MAX`] + 1 개다. */
 	ranges: SearchRange[],
+	/**  미리보기 뒤에 이 줄의 일치가 더 있다(`ranges` 에 싣지 않은 「더 있음」). */
+	more: boolean,
 };
 
 /**
@@ -1164,14 +1166,14 @@ export type SearchTextParams = {
 	exclude?: string[],
 	/**
 	 *  `.gitignore` · `.git/info/exclude` · 전역 gitignore · `.ignore` 로 무시되는 파일을 건너뛴다(기본 켬). `.gitignore` 는
-	 *  저장소(`.git`) 안에서만 적용된다(ripgrep 과 같다).
+	 *  저장소(`.git`) 안에서만 적용된다(ripgrep 과 같다). 찾는 경로 위의 파일은 저장소 꼭대기까지만 본다(`pw_fs::search` 머리 주석).
 	 */
 	respectIgnore?: boolean,
 	/**  벤더 파일(`vendor.yml` 의 경로 · `linguist-vendored`)을 건너뛴다. */
 	excludeVendored?: boolean,
 	/**  생성 파일(generated 의 경로 규칙 · `linguist-generated`)을 건너뛴다. */
 	excludeGenerated?: boolean,
-	/**  숨김 파일 · 폴더(`.` 으로 시작)도 찾는다. 켜도 `.git` 은 찾지 않는다. */
+	/**  숨김 파일 · 폴더(`.` 으로 시작)도 찾는다. 켜도 `.git` 안은 찾지 않는다(링크로 들어가도). */
 	hidden?: boolean,
 	/**  결과(일치한 줄) 상한. 기본 [`DEFAULT_MAX_RESULTS`], 1 ~ [`MAX_RESULTS_LIMIT`]. */
 	maxResults?: number | null,

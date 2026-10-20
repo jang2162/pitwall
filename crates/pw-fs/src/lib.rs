@@ -10,6 +10,7 @@
 //! - [`watch`]: 파일 감시(M1-06) — `fs.watch` 스트림과 `fs.changed` 이벤트.
 
 pub mod handle;
+mod ignore_rules;
 pub mod judge;
 pub mod list;
 pub mod methods;

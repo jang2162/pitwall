@@ -4362,6 +4362,10 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "more": {
+                "description": "미리보기 뒤에 이 줄의 일치가 더 있다(`ranges` 에 싣지 않은 「더 있음」).",
+                "type": "boolean"
+              },
               "preview": {
                 "description": "줄의 일부(줄바꿈 제외). 줄이 [`PREVIEW_MAX`] 보다 길면 첫 일치 앞 [`PREVIEW_BEFORE`] 부터 잘라 낸다.",
                 "type": "string"
@@ -4373,7 +4377,7 @@
                 "type": "integer"
               },
               "ranges": {
-                "description": "일치 범위(줄 기준, 앞에서부터). 미리보기에 걸친 것만 싣는다 — 첫 일치는 늘 든다.",
+                "description": "일치 범위(줄 기준, 앞에서부터). 미리보기에 걸친 것만 싣는다 — 첫 일치는 늘 든다. 그래서 많아야 [`PREVIEW_MAX`] + 1 개다.",
                 "items": {
                   "$ref": "#/$defs/SearchRange"
                 },
@@ -4384,7 +4388,8 @@
               "line",
               "preview",
               "previewStart",
-              "ranges"
+              "ranges",
+              "more"
             ],
             "type": "object"
           },
@@ -4511,7 +4516,7 @@
           },
           "hidden": {
             "default": false,
-            "description": "숨김 파일 · 폴더(`.` 으로 시작)도 찾는다. 켜도 `.git` 은 찾지 않는다.",
+            "description": "숨김 파일 · 폴더(`.` 으로 시작)도 찾는다. 켜도 `.git` 안은 찾지 않는다(링크로 들어가도).",
             "type": "boolean"
           },
           "include": {
@@ -4558,7 +4563,7 @@
           },
           "respectIgnore": {
             "default": true,
-            "description": "`.gitignore` · `.git/info/exclude` · 전역 gitignore · `.ignore` 로 무시되는 파일을 건너뛴다(기본 켬). `.gitignore` 는\n저장소(`.git`) 안에서만 적용된다(ripgrep 과 같다).",
+            "description": "`.gitignore` · `.git/info/exclude` · 전역 gitignore · `.ignore` 로 무시되는 파일을 건너뛴다(기본 켬). `.gitignore` 는\n저장소(`.git`) 안에서만 적용된다(ripgrep 과 같다). 찾는 경로 위의 파일은 저장소 꼭대기까지만 본다(`pw_fs::search` 머리 주석).",
             "type": "boolean"
           },
           "wholeWord": {

@@ -31,8 +31,9 @@ serde_json = { workspace = true }
 # `version` 의 내용 해시. 버전은 Tauri 트리의 것과 같게 둔다.
 sha2 = "0.10.9"
 specta = { workspace = true, features = ["derive"] }
-# 디스크 IO 를 블로킹 스레드로 보낸다. `fs.watch` 스트림이 감시 방식의 바뀜을 기다린다(sync).
-tokio = { workspace = true, features = ["rt", "sync"] }
+# 디스크 IO 를 블로킹 스레드로 보낸다. `sync` 는 `fs.watch` 스트림이 감시 방식의 바뀜을 기다리는 것과 동시 검색 수 상한(`search.rs` 의
+# 세마포어), `time` 은 그 대기 시간이다.
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 # 감시 오류 · 한도 초과를 로그에 남긴다. 버전은 pw-runtime 과 같게 둔다.
 tracing = "0.1.44"
 
