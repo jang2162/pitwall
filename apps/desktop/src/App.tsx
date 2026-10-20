@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 
 import { useAppStrings } from "./i18n/app-strings";
 import { I18nProvider, useI18n } from "./i18n/i18n-provider";
-import { selectedLanguage } from "./i18n/localization";
 
 import { appActions } from "./keymap/actions";
 import {
@@ -16,6 +15,8 @@ import {
 import { type KeymapNative, tauriKeymapNative } from "./keymap/native";
 import { ProjectWindow } from "./layout/project-window";
 import { HostProvider } from "./rpc/host";
+import { type SettingsNative, tauriSettingsNative } from "./settings/native";
+import { SettingsWindow } from "./settings/settings-window";
 import { ThemeSwitcher, useTheme } from "./theme/theme-switcher";
 import { tauriWelcomeNative, type WelcomeNative } from "./welcome/native";
 import { type WelcomeLog, WelcomeWindow } from "./welcome/welcome-window";
@@ -34,58 +35,6 @@ function Welcome({ native, log }: { native: WelcomeNative; log?: WelcomeLog }) {
         <ThemeSwitcher />
       </footer>
     </>
-  );
-}
-
-// 설정 화면(10-ui §2.7)이 들어오기 전까지 외관 > 테마 · 언어만 둔다.
-function SettingsWindow() {
-  const T = useAppStrings().settings;
-  return (
-    <main className="flex-1 px-6 py-4">
-      <h2 className="mb-2 text-sm font-semibold">{T.appearance}</h2>
-      <div className="flex items-center gap-3">
-        <span>{T.theme}</span>
-        <ThemeSwitcher />
-      </div>
-      <LanguageSelect />
-    </main>
-  );
-}
-
-/** UI 언어(settings.toml 의 `ui.language`). 고르면 `i18n.setLanguage` 가 그 키만 고쳐 쓰고, 바뀐 언어는 `config.changed` 로 온다. */
-function LanguageSelect() {
-  const T = useAppStrings().settings;
-  const { setting, locales, languages, setLanguage } = useI18n();
-  const [error, setError] = useState<string>();
-  return (
-    <div className="mt-2 flex items-center gap-3">
-      <label className="flex items-center gap-3">
-        <span>{T.language}</span>
-        <select
-          value={selectedLanguage(setting ?? "system", locales)}
-          disabled={setting === undefined}
-          onChange={(e) => {
-            setError(undefined);
-            setLanguage(e.target.value).catch((err: unknown) =>
-              setError(T.languageFailed(err instanceof Error ? err.message : String(err))),
-            );
-          }}
-          className="rounded-sm border border-ui-border bg-ui-background px-1.5 py-0.5"
-        >
-          <option value="system">{T.languageSystem}</option>
-          {languages.map((l) => (
-            <option key={l.locale} value={l.locale}>
-              {l.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      {error && (
-        <span role="alert" className="text-[12px] text-ui-accent">
-          {error}
-        </span>
-      )}
-    </div>
   );
 }
 
@@ -123,11 +72,13 @@ export function App({
   kind,
   native = tauriKeymapNative,
   welcomeNative = tauriWelcomeNative,
+  settingsNative = tauriSettingsNative,
   log,
 }: {
   kind: WindowKind;
   native?: KeymapNative;
   welcomeNative?: WelcomeNative;
+  settingsNative?: SettingsNative;
   log?: Pick<UiLogger, "info" | "warn" | "debug">;
 }) {
   const [queryClient] = useState(() => new QueryClient());
@@ -144,7 +95,7 @@ export function App({
               </header>
               {kind === "welcome" && <Welcome native={welcomeNative} log={log} />}
               {kind === "project" && <ProjectWindow log={log} closeWindow={native.closeWindow} />}
-              {kind === "settings" && <SettingsWindow />}
+              {kind === "settings" && <SettingsWindow native={settingsNative} />}
               <KeymapErrorBar />
             </div>
           </KeymapProvider>

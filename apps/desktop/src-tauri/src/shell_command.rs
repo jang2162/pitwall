@@ -251,7 +251,8 @@ fn elevate_with_osascript(_source: &Path, _target: &Path) -> Result<(), InstallE
     ))
 }
 
-fn target_path() -> Result<PathBuf, InstallError> {
+/// 「Shell 명령 설치」 의 대상. 「Orca 에서 Pitwall 열기」 안내의 검사(`cli.status`)도 이 경로를 본다.
+pub fn target_path() -> Result<PathBuf, InstallError> {
     let Some(value) = std::env::var_os(TARGET_ENV) else {
         return Ok(PathBuf::from(DEFAULT_TARGET));
     };

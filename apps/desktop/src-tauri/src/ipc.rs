@@ -165,6 +165,7 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             crate::launch::path_kind,
             crate::windows::take_pending_project_opens,
             crate::shell_command::install_shell_command,
+            crate::clipboard::write_clipboard,
             crate::perf::perf_first_frame,
             crate::perf::perf_hidden
         ])

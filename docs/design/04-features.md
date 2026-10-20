@@ -248,6 +248,12 @@ Orca는 작업마다 별도 `git worktree` 디렉터리를 만들기 때문에, 
 
 #### F8-6 안내 화면
 - 설정 > 외부 도구 > "Orca에서 Pitwall 열기": 위 등록 값 표시 + 복사 버튼, `pitwall` CLI 설치 여부 · 셸 PATH 포함 여부 검사
+- 검사는 `cli.status` RPC(`crates/pw-open-with/src/cli.rs`). 「이 앱」 은 심링크를 끝까지 푼 실제 경로로 비교한다. 결과를 남기지 않아 설치 뒤 · 창을 다시 열 때 새로 본다
+  - 설치 위치(「Shell 명령 설치」 의 대상, macOS `/usr/local/bin/pitwall`): 없음 · 이 앱 · 다른 곳을 가리키는 심링크(그 대상 경로를 보인다) · 심링크가 아닌 파일
+  - PATH: 로그인 셸 PATH 로 찾은 첫 `pitwall` — 없음 · 이 앱 · 다른 것. 디렉터리의 런타임 제공자(mise 등)는 덮지 않는다(Orca 는 모른다). 로그인 셸을 읽지 못해 앱 프로세스의 PATH 로 찾았으면 그렇다고 보인다
+- 설치 위치가 없거나 다른 곳을 가리키면 「Shell 명령 설치」 버튼(`cli.install` 과 같은 명령, 끝나면 다시 검사). 심링크가 아닌 파일은 설치가 건드리지 않으므로 버튼 없이 직접 치우라고 안내한다
+- 설치 위치는 이 앱인데 PATH 로 이 앱이 잡히지 않으면(PATH 에 없음, 앞 폴더의 다른 `pitwall`) 설치 위치의 절대 경로를 명령으로 등록하라고 안내하고 복사 버튼을 둔다
+- 위 「워크트리와 `.pitwall/` 개인 설정」 의 `.worktreeinclude` 안내
 
 ## F9. 원격 연결 (Relay)
 → 상세는 [08-remote-mobile.md](08-remote-mobile.md)

@@ -44,6 +44,48 @@ settings-language-system = 시스템
 # $error: 설정을 저장하지 못한 이유
 settings-language-failed = 언어를 바꾸지 못했다: { $error }
 
+## 설정 창의 「외부 도구 > Orca 에서 Pitwall 열기」(docs/design/04-features.md F8-6). 키는 apps/desktop/src/settings/strings.ts 가 잇는다.
+
+settings-external-tools = 외부 도구
+settings-orca-title = Orca 에서 Pitwall 열기
+settings-orca-intro = Orca 의 Settings → General → Open in menu 에 앱을 추가하고 아래 값을 적는다. Orca 는 워크트리 폴더나 파일의 절대 경로를 명령 뒤에 붙여 실행한다.
+settings-orca-label = 라벨
+settings-orca-command = 명령
+settings-orca-copy = 복사
+# $value: 복사할 값
+settings-orca-copy-value = { $value } 복사
+settings-orca-copied = 복사했다
+# $error: 클립보드에 쓰지 못한 이유
+settings-orca-copy-failed = 복사하지 못했다: { $error }
+settings-orca-checking = 검사하는 중…
+# $error: 검사가 실패한 이유
+settings-orca-check-failed = 검사하지 못했다: { $error }
+settings-orca-recheck = 다시 검사
+settings-orca-installed = 설치됨
+settings-orca-not-installed = 설치 안 됨
+settings-orca-other-link = 다른 곳을 가리킴
+settings-orca-not-a-link = 설치할 수 없음
+settings-orca-on-path = PATH 에 있음
+settings-orca-not-on-path = PATH 에 없음
+settings-orca-other-on-path = PATH 의 pitwall 이 다른 것
+# $target: 설치 위치(/usr/local/bin/pitwall)
+settings-orca-detail-installed = { $target } 가 이 앱을 가리킨다.
+settings-orca-detail-missing = { $target } 에 Shell 명령이 없다.
+# $points: 링크가 가리키는 경로
+settings-orca-detail-other-link = { $target } 가 다른 곳을 가리킨다: { $points }
+settings-orca-detail-not-a-link = { $target } 에 Pitwall 이 만들지 않은 파일이 있다. 「Shell 명령 설치」 는 이것을 바꾸지 않는다 — 직접 치운 뒤 다시 검사한다.
+# $path: PATH 에서 찾은 pitwall 의 경로
+settings-orca-detail-other-on-path = PATH 에서 먼저 찾는 것은 { $path } 다. Orca 는 이것을 실행한다.
+# $resolved: 그 경로의 심링크를 푼 실제 경로
+settings-orca-detail-resolved = 실제 파일: { $resolved }
+settings-orca-install = Shell 명령 설치
+settings-orca-installing = 설치하는 중…
+# $target: 설치 위치
+settings-orca-absolute = Orca 가 PATH 로 이 앱을 찾지 못한다. 명령 칸에 절대 경로 { $target } 를 적는다.
+# $reason: 로그인 셸 환경을 읽지 못한 이유
+settings-orca-path-fallback = 로그인 셸 환경을 읽지 못해 앱의 PATH 로 찾았다 — Orca 가 보는 PATH 와 다를 수 있다({ $reason }).
+settings-orca-worktree = Orca 가 만든 워크트리에는 커밋하지 않은 .pitwall/*.local.toml 이 없다. Pitwall 은 그때 메인 저장소의 것을 읽는다. 워크트리에도 복사하려면 저장소 루트의 .worktreeinclude 에 .pitwall/project.local.toml 같은 리터럴 경로를 적는다(Orca 는 glob 을 받지 않는다).
+
 ## 다음에서 열기(⌥F1)와 기본 외부 도구로 열기(⌘⌥E).
 
 action-open-with = 다음에서 열기…

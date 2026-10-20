@@ -44,6 +44,48 @@ settings-language-system = System
 # $error: why the setting could not be saved
 settings-language-failed = Could not change the language: { $error }
 
+## Settings window, "External Tools > Open Pitwall from Orca" (docs/design/04-features.md F8-6). The keys are mapped in apps/desktop/src/settings/strings.ts.
+
+settings-external-tools = External Tools
+settings-orca-title = Open Pitwall from Orca
+settings-orca-intro = In Orca, add an app under Settings → General → Open in menu with the values below. Orca runs the command with the absolute path of a worktree folder or a file appended.
+settings-orca-label = Label
+settings-orca-command = Command
+settings-orca-copy = Copy
+# $value: the value to copy
+settings-orca-copy-value = Copy { $value }
+settings-orca-copied = Copied
+# $error: why the clipboard could not be written
+settings-orca-copy-failed = Could not copy: { $error }
+settings-orca-checking = Checking…
+# $error: why the check failed
+settings-orca-check-failed = Could not check: { $error }
+settings-orca-recheck = Check Again
+settings-orca-installed = Installed
+settings-orca-not-installed = Not installed
+settings-orca-other-link = Points elsewhere
+settings-orca-not-a-link = Cannot install
+settings-orca-on-path = On PATH
+settings-orca-not-on-path = Not on PATH
+settings-orca-other-on-path = A different pitwall on PATH
+# $target: the install location (/usr/local/bin/pitwall)
+settings-orca-detail-installed = { $target } points to this app.
+settings-orca-detail-missing = There is no shell command at { $target }.
+# $points: where the link points
+settings-orca-detail-other-link = { $target } points elsewhere: { $points }
+settings-orca-detail-not-a-link = { $target } is a file Pitwall did not create. Install Shell Command does not replace it — remove it yourself, then check again.
+# $path: the pitwall found on PATH
+settings-orca-detail-other-on-path = The first one on PATH is { $path }. Orca runs that one.
+# $resolved: that path with its symlinks resolved
+settings-orca-detail-resolved = Actual file: { $resolved }
+settings-orca-install = Install Shell Command
+settings-orca-installing = Installing…
+# $target: the install location
+settings-orca-absolute = Orca cannot find this app on PATH. Enter the absolute path { $target } as the command.
+# $reason: why the login shell environment could not be read
+settings-orca-path-fallback = Could not read the login shell environment, so this used the app's PATH — it may differ from the PATH Orca sees ({ $reason }).
+settings-orca-worktree = Worktrees Orca creates do not have the uncommitted .pitwall/*.local.toml files; Pitwall then reads the ones in the main repository. To copy them into worktrees as well, list literal paths such as .pitwall/project.local.toml in .worktreeinclude at the repository root (Orca does not accept globs).
+
 ## Open In (⌥F1) and Open in Default External Tool (⌘⌥E).
 
 action-open-with = Open In…

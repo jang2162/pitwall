@@ -14,6 +14,7 @@ use pw_runtime::{LoginShell, Runtime, RuntimeHost};
 use tauri::Manager as _;
 
 mod cli;
+mod clipboard;
 mod config_log;
 mod detach;
 mod diag;
@@ -54,6 +55,12 @@ fn local_host(
     let fs_methods = Arc::clone(&fs);
     let fs_watch = pw_fs::watch::Watch::new(Arc::clone(&fs));
     let fs_watch_methods = fs_watch.clone();
+    // 「Orca 에서 Pitwall 열기」 안내의 검사(`cli.status`): 「Shell 명령 설치」 의 대상과 이 바이너리.
+    let cli_check = Arc::new(pw_open_with::cli::CliCheck::new(
+        Arc::clone(&runtime),
+        shell_command::target_path().map_err(|e| e.to_string()),
+        std::env::current_exe().map_err(|e| e.to_string()),
+    ));
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
@@ -64,6 +71,7 @@ fn local_host(
         .methods(move |router| pw_runtime::methods::register(router, runtime_methods))
         .methods(move |router| pw_fs::methods::register(router, fs_methods))
         .methods(move |router| pw_fs::watch::register(router, fs_watch_methods))
+        .methods(move |router| pw_open_with::cli::register(router, cli_check))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
