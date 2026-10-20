@@ -7,12 +7,14 @@
 //! - [`methods`]: Host 자신이 처리하는 RPC 메서드.
 //! - [`config`]: 설정 계층(파일 위치 · 병합 · 스키마 마이그레이션 · 감시).
 //! - [`registry`]: 프로젝트 레지스트리(`$DATA/state.db`, 경로 → 프로젝트 해석, 루트 후보).
+//! - [`notification`]: Host 가 창에 알림을 내는 버스 토픽(`notification.show`).
 
 pub mod bus;
 pub mod config;
 mod host;
 mod local;
 pub mod methods;
+pub mod notification;
 pub mod registry;
 mod router;
 pub mod task;
