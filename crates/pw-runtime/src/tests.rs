@@ -292,6 +292,12 @@ fn get_accepts_dirs_inside_the_project_or_its_worktrees_only() {
         format!("gitdir: {}\n", repo.join(".git/worktrees/wt").display()),
     )
     .unwrap();
+    // git 이 워크트리마다 적는 되돌림 포인터(`pw_core::config::gitdir` 가 확인한다).
+    std::fs::write(
+        repo.join(".git/worktrees/wt/gitdir"),
+        format!("{}\n", wt.join(".git").display()),
+    )
+    .unwrap();
     let root = repo.join("app");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(f.tmp.path().join("repo/app-other")).unwrap();
