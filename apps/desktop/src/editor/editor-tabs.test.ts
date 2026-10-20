@@ -109,6 +109,24 @@ describe("openTab", () => {
 });
 
 describe("tab operations", () => {
+  it("keeps the worktree, viewer and language of the tab it splits, not preview or pin", () => {
+    const api = dockview();
+    const { panel } = openTab(api, { path: "/w/a.rs", worktree: "/w", preview: true });
+    expect(tabParams(panel)).toEqual({ path: "/w/a.rs", worktree: "/w", preview: true });
+    panel.api.updateParameters({
+      ...tabParams(panel),
+      viewer: "hex",
+      language: null,
+      pinned: true,
+    });
+    expect(tabParams(splitRight(api, panel))).toEqual({
+      path: "/w/a.rs",
+      worktree: "/w",
+      viewer: "hex",
+      language: null,
+    });
+  });
+
   it("closes the other unpinned tabs of the group only", () => {
     const api = dockview();
     const a = openTab(api, { path: "/p/a.rs" }).panel;

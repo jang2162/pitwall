@@ -41,6 +41,20 @@ export function viewerKindByName(path: string): ViewerKind | undefined {
   return ext === undefined ? undefined : BY_EXTENSION[ext];
 }
 
+/**
+ * 탭이 그릴 뷰어. 탭의 덮어쓰기(`EditorTabParams.viewer`)가 있고 이 문서로 그릴 수 있으면 그것, 아니면 문서가 정한 종류. 텍스트를
+ * 받는 뷰어(`VIEWER_READS` 가 `text`)는 텍스트로 읽힌 문서에만 쓸 수 있다 — 바이너리를 텍스트로 여는 읽기는 M1-23 이 문서 모델에
+ * 더한다.
+ */
+export function chooseViewer(
+  doc: { readonly status: "text" | "external"; readonly kind: ViewerKind },
+  override: ViewerKind | undefined,
+): ViewerKind {
+  if (override === undefined) return doc.kind;
+  if (VIEWER_READS[override] === "text" && doc.status !== "text") return doc.kind;
+  return override;
+}
+
 /** 이름과 읽은 판정으로 정한 종류. */
 export function viewerKindOf(path: string, judgment: Pick<Judgment, "binary">): ViewerKind {
   const byName = viewerKindByName(path);
