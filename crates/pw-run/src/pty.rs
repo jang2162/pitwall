@@ -3,6 +3,9 @@
 //! 스레드 셋이 블로킹 IO 를 맡는다 — 읽기(PTY → 버퍼), 쓰기(입력 큐 → PTY), 종료 기다리기(셸을 거둔다). 읽기 스레드는 버퍼가
 //! [`OUTPUT_BUFFER`] 에 닿으면 소비자가 비울 때까지 PTY 를 읽지 않는다. 그동안 커널의 PTY 버퍼가 차서 셸 쪽 쓰기가 멈춘다 —
 //! 백프레셔가 프로세스까지 간다.
+//!
+//! 유닉스에서는 끝내기가 다 끝나지 않은 셸의 세션을 프로세스 전체 목록에 둔다 — 앱이 끝날 때 Drop 없이 [`shutdown_all`] 로
+//! 정리한다.
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
@@ -11,21 +14,61 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-#[cfg(unix)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::{Notify, watch};
 
-/// Host 쪽 출력 버퍼의 상한(12-m1-plan.md M1-08 「credit 상한(권장 1 MiB)」). 소비자에게 보내는 중인 청크도 여기 든다.
-pub const OUTPUT_BUFFER: usize = 1024 * 1024;
+/// 소비자가 읽지 않을 때 터미널 하나가 쌓는 출력의 상한(12-m1-plan.md M1-08 「credit 상한(권장 1 MiB)」): Host 버퍼
+/// [`OUTPUT_BUFFER`] + credit 을 받아 이미 내보낸 청크([`CREDIT_WINDOW`] × [`CHUNK`]).
+pub const OUTPUT_LIMIT: usize = 1024 * 1024;
+
+/// 클라이언트가 한 번에 주는 credit(청크 수). TS 클라이언트의 기본 `window`(`packages/rpc-client/src/client.ts`)와 같다.
+/// credit 은 바이트가 아니라 청크 수라(03-architecture.md 「RPC 설계」) 이 수와 [`CHUNK`] 가 내보낸 바이트를 묶는다.
+pub const CREDIT_WINDOW: usize = 32;
 
 /// 청크 하나의 상한. 소비자가 느리면 버퍼에 쌓인 것을 이만큼씩 묶어 보낸다.
-pub const CHUNK: usize = 64 * 1024;
+pub const CHUNK: usize = 16 * 1024;
+
+/// Host 쪽 출력 버퍼의 상한. 소비자에게 보내는 중인 청크도 여기 든다. 나머지 몫은 내보낸 청크의 것이다([`OUTPUT_LIMIT`]).
+pub const OUTPUT_BUFFER: usize = OUTPUT_LIMIT - CREDIT_WINDOW * CHUNK;
+
+/// 끝낸 뒤에도 PTY 를 읽어 버리는 시간의 상한. 읽히지 않은 출력이 남은 tty 를 닫는 프로세스는 그것이 비워지기를 기다리며
+/// 끝나지 못한다(macOS 에서 SIGKILL 을 받고도 E · U 상태로 남는다). 세션의 프로세스는 SIGKILL(300 ms) 뒤 곧 끝나므로 넉넉하다.
+const DRAIN_AFTER_CLOSE: Duration = Duration::from_secs(2);
 
 /// 끝낼 때 SIGHUP 을 보낸 뒤 SIGKILL 까지 기다리는 시간.
 #[cfg(unix)]
 const HANGUP_GRACE: Duration = Duration::from_millis(300);
+
+/// 이 프로세스가 띄웠고 아직 끝내기가 끝나지 않은 셸(세션 리더)의 pid. 끝내기가 끝나야 빠진다 — 그 전에는 세션 id 가 살아 있어
+/// pid 가 다른 프로세스에 다시 쓰이지 않는다.
+#[cfg(unix)]
+static LEADERS: Mutex<std::collections::BTreeSet<libc::pid_t>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+#[cfg(unix)]
+fn forget_leader(leader: libc::pid_t) {
+    lock(&LEADERS).remove(&leader);
+}
+
+/// 이 프로세스가 띄운 모든 터미널의 세션을 끝낸다(SIGHUP, [`HANGUP_GRACE`] 안에 안 끝난 것은 SIGKILL). 끝날 때까지 블로킹한다 —
+/// 프로세스가 곧 끝나므로(Drop 이 돌지 않는다) 백그라운드 스레드에 맡기지 않는다. Windows 는 아무것도 하지 않는다(프로세스가 끝나면
+/// ConPTY 가 닫혀 붙은 콘솔 프로세스도 끝난다).
+pub fn shutdown_all() {
+    #[cfg(unix)]
+    {
+        let leaders: Vec<libc::pid_t> = lock(&LEADERS).iter().copied().collect();
+        if leaders.is_empty() {
+            return;
+        }
+        tracing::info!(target: "pw_run", ?leaders, "ending terminal sessions before the app exits");
+        crate::tree::terminate_sessions(&leaders, HANGUP_GRACE);
+        for leader in leaders {
+            forget_leader(leader);
+        }
+    }
+}
 
 /// 띄울 것.
 #[derive(Debug, Clone)]
@@ -69,6 +112,7 @@ impl Pty {
         drop(pair.slave);
         let pid = child.process_id();
         let killer = child.clone_killer();
+        let readable = Readable::of(&*pair.master);
         let reader = pair.master.try_clone_reader();
         let writer = pair.master.take_writer();
         let (reader, writer) = match (reader, writer) {
@@ -86,7 +130,7 @@ impl Pty {
         let started = [
             thread("pty-read", {
                 let output = Arc::clone(&output);
-                move || read_loop(reader, &output)
+                move || read_loop(reader, &readable, &output)
             }),
             thread("pty-write", move || write_loop(writer, &queue)),
             thread("pty-wait", move || {
@@ -104,6 +148,10 @@ impl Pty {
                 let _ = exit_tx.send(Some(code));
             }),
         ];
+        #[cfg(unix)]
+        if let Some(leader) = pid.and_then(|p| libc::pid_t::try_from(p).ok()) {
+            lock(&LEADERS).insert(leader);
+        }
         let pty = Self {
             master: Mutex::new(pair.master),
             input: Mutex::new(Some(input)),
@@ -171,9 +219,12 @@ impl Pty {
         lock(&self.input).take();
         self.output.close();
         #[cfg(unix)]
-        if let Some(leader) = self.pid.and_then(|p| libc::pid_t::try_from(p).ok()) {
+        let leader = self.pid.and_then(|p| libc::pid_t::try_from(p).ok());
+        #[cfg(unix)]
+        if let Some(leader) = leader {
             let spawned = thread("pty-terminate", move || {
                 crate::tree::terminate_session(leader, HANGUP_GRACE);
+                forget_leader(leader);
             });
             if spawned.is_ok() {
                 return;
@@ -181,6 +232,10 @@ impl Pty {
         }
         // Windows(ConPTY 를 닫으면 붙은 콘솔 프로세스도 끝난다) · 스레드를 못 띄운 경우: 셸만 죽인다.
         let _ = lock(&self.killer).kill();
+        #[cfg(unix)]
+        if let Some(leader) = leader {
+            forget_leader(leader);
+        }
     }
 }
 
@@ -206,18 +261,86 @@ fn thread(name: &str, f: impl FnOnce() + Send + 'static) -> std::io::Result<()> 
         .map(drop)
 }
 
-fn read_loop(mut reader: Box<dyn Read + Send>, output: &Output) {
+/// 끝낸 뒤([`Output::close`])에는 읽은 것을 버리며 [`DRAIN_AFTER_CLOSE`] 까지만 더 읽는다.
+fn read_loop(mut reader: Box<dyn Read + Send>, readable: &Readable, output: &Output) {
     let mut buf = vec![0u8; CHUNK];
-    while let Some(room) = output.wait_room() {
-        match reader.read(&mut buf[..room.min(CHUNK)]) {
+    let mut drain_until: Option<Instant> = None;
+    loop {
+        let room = output.wait_room();
+        let max = match room {
+            Some(room) => room.min(CHUNK),
+            None => {
+                if drain_until.is_none() {
+                    output.finish();
+                }
+                let until = *drain_until.get_or_insert_with(|| Instant::now() + DRAIN_AFTER_CLOSE);
+                let left = until.saturating_duration_since(Instant::now());
+                if left.is_zero() || !readable.wait(left) {
+                    break;
+                }
+                CHUNK
+            }
+        };
+        match reader.read(&mut buf[..max]) {
             Ok(0) => break,
-            Ok(n) => output.push(&buf[..n]),
+            Ok(n) if room.is_some() => output.push(&buf[..n]),
+            Ok(_) => {}
             Err(e) if e.kind() == ErrorKind::Interrupted => {}
             // Linux 는 slave 가 모두 닫히면 EIO 로 끝난다.
             Err(_) => break,
         }
     }
     output.finish();
+}
+
+/// 읽기 스레드가 끝낸 뒤 PTY 에 읽을 것이 생기기를 시간 제한을 두고 기다리는 데 쓰는 master 의 복제본(유닉스). 기다릴 수 없는
+/// 플랫폼(Windows)은 끝내면 곧바로 그만 읽는다.
+struct Readable {
+    #[cfg(unix)]
+    fd: Option<std::os::fd::OwnedFd>,
+}
+
+impl Readable {
+    #[cfg(unix)]
+    fn of(master: &dyn MasterPty) -> Self {
+        use std::os::fd::FromRawFd as _;
+        let fd = master.as_raw_fd().and_then(|fd| {
+            // SAFETY: dup(2) 은 메모리를 건드리지 않는다. 돌려준 fd 는 여기서만 갖는다.
+            let dup = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+            // SAFETY: 방금 만든, 아무도 갖지 않은 fd 다.
+            (dup >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(dup) })
+        });
+        Self { fd }
+    }
+
+    #[cfg(not(unix))]
+    fn of(_master: &dyn MasterPty) -> Self {
+        Self {}
+    }
+
+    /// 읽을 것(또는 hangup)이 `timeout` 안에 생겼는가.
+    #[cfg(unix)]
+    fn wait(&self, timeout: Duration) -> bool {
+        use std::os::fd::AsRawFd as _;
+        let Some(fd) = &self.fd else {
+            return false;
+        };
+        let mut poll = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ms = libc::c_int::try_from(timeout.as_millis())
+            .unwrap_or(libc::c_int::MAX)
+            .max(1);
+        // SAFETY: pollfd 하나와 그 수를 넘긴다.
+        unsafe { libc::poll(&raw mut poll, 1, ms) > 0 }
+    }
+
+    #[cfg(not(unix))]
+    fn wait(&self, _timeout: Duration) -> bool {
+        false
+    }
 }
 
 fn write_loop(mut writer: Box<dyn Write + Send>, queue: &mpsc::Receiver<Vec<u8>>) {

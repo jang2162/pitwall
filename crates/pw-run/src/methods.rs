@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Terminals;
 
-/// 이 Host 안에서 터미널 하나의 번호(1부터).
+/// 터미널 하나의 번호(1부터). 그 터미널을 연 RPC 세션 안에서만 유효하다 — 다른 세션이 부르면 없는 터미널이다.
 pub type TerminalId = u32;
 
 #[derive(
@@ -85,8 +85,9 @@ pub struct TerminalCloseParams {
 
 rpc_method! {
     /// 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그
-    /// 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림이고,
-    /// Host 는 보내지 못한 출력을 1 MiB 까지만 쥔다(그 뒤로는 셸이 쓰기에서 멈춘다). 없는 프로젝트 · 프로젝트 밖이거나 없는
+    /// 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB
+    /// 이하)이고, 소비자가 읽지 않으면 Host 버퍼(512 KiB)가 찬 뒤 셸이 쓰기에서 멈춘다 — 기본 window(32)면 내보낸 청크와 합쳐
+    /// 1 MiB 를 넘지 않는다. `terminalId` 는 이 세션(연결) 안에서만 유효하다. 없는 프로젝트 · 프로젝트 밖이거나 없는
     /// `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).
     pub TerminalCreate: "terminal.create" {
         params: TerminalCreateParams,
@@ -95,7 +96,7 @@ rpc_method! {
         roles: [Owner],
     }
 
-    /// 셸에 입력을 보낸다. 끝난 터미널이면 invalid params 오류.
+    /// 셸에 입력을 보낸다. 끝난 터미널 · 다른 세션이 연 터미널이면 invalid params 오류.
     pub TerminalInput: "terminal.input" {
         params: TerminalInputParams,
         result: (),
@@ -103,7 +104,8 @@ rpc_method! {
         roles: [Owner],
     }
 
-    /// PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 0 인 크기는 invalid params 오류.
+    /// PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 다른 세션이 연 터미널 · 0 인 크기는
+    /// invalid params 오류.
     pub TerminalResize: "terminal.resize" {
         params: TerminalResizeParams,
         result: (),
@@ -112,7 +114,7 @@ rpc_method! {
     }
 
     /// 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난
-    /// 터미널이면 아무것도 하지 않는다.
+    /// 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다.
     pub TerminalClose: "terminal.close" {
         params: TerminalCloseParams,
         result: (),
@@ -128,19 +130,19 @@ pub fn register(router: &mut Router, terminals: Arc<Terminals>) {
     let input = Arc::clone(&terminals);
     let resize = Arc::clone(&terminals);
     router
-        .stream(TerminalCreate, move |_ctx, params, sink| {
-            Arc::clone(&create).run(params, sink)
+        .stream(TerminalCreate, move |ctx, params, sink| {
+            Arc::clone(&create).run(ctx.session(), params, sink)
         })
-        .unary(TerminalInput, move |_ctx, params: TerminalInputParams| {
-            let result = input.input(params.terminal_id, params.data.into_bytes());
+        .unary(TerminalInput, move |ctx, params: TerminalInputParams| {
+            let result = input.input(ctx.session(), params.terminal_id, params.data.into_bytes());
             async move { result }
         })
-        .unary(TerminalResize, move |_ctx, params: TerminalResizeParams| {
-            let result = resize.resize(params.terminal_id, params.cols, params.rows);
+        .unary(TerminalResize, move |ctx, params: TerminalResizeParams| {
+            let result = resize.resize(ctx.session(), params.terminal_id, params.cols, params.rows);
             async move { result }
         })
-        .unary(TerminalClose, move |_ctx, params: TerminalCloseParams| {
-            terminals.close(params.terminal_id);
+        .unary(TerminalClose, move |ctx, params: TerminalCloseParams| {
+            terminals.close(ctx.session(), params.terminal_id);
             async { Ok::<(), RpcError>(()) }
         });
 }

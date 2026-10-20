@@ -48,9 +48,15 @@ impl Caller {
     }
 }
 
+/// 세션(연결) 하나의 id. 한 프로세스 안에서 세션마다 다르고 다시 쓰이지 않는다. 연결에 묶인 자원(터미널 등)을 다른 연결이
+/// 건드리지 못하게 핸들러가 이것으로 가른다(03-architecture.md 「RPC 설계」 「그 Host 세션 안에서만 유효하다」).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SessionId(pub(crate) u64);
+
 /// 핸들러가 받는 호출 문맥.
 #[derive(Clone)]
 pub struct Ctx {
+    pub(crate) session: SessionId,
     pub(crate) caller: Caller,
     pub(crate) cancel: CancellationToken,
     pub(crate) events: EventHub,
@@ -59,6 +65,11 @@ pub struct Ctx {
 impl Ctx {
     pub fn caller(&self) -> Caller {
         self.caller
+    }
+
+    /// 이 호출이 온 세션.
+    pub fn session(&self) -> SessionId {
+        self.session
     }
 
     /// 이 호출의 취소 토큰.

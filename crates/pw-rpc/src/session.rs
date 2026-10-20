@@ -21,7 +21,9 @@ use crate::protocol::{
     STREAM_CREDIT, STREAM_END, StreamCancelParams, StreamCreditParams, StreamEnd, StreamId,
     StreamOpened, StreamOutcome, SubscribeParams, Subscribed, SubscriptionId, UnsubscribeParams,
 };
-use crate::router::{Caller, Ctx, Handler, RawSink, Router, StreamFn, StreamState, UnaryFn};
+use crate::router::{
+    Caller, Ctx, Handler, RawSink, Router, SessionId, StreamFn, StreamState, UnaryFn,
+};
 
 /// 잠금 중 패닉해도 표는 삽입 · 삭제 단위로만 바뀌어 일관성이 깨지지 않는다. 그래서 오염을 무시한다.
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -40,7 +42,11 @@ pub struct Session {
     inner: Arc<Inner>,
 }
 
+/// 다음 세션의 id.
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
 struct Inner {
+    id: SessionId,
     router: Arc<Router>,
     events: EventHub,
     caller: Caller,
@@ -67,6 +73,7 @@ impl Session {
     ) -> (Self, UnboundedReceiver<Outbound>) {
         let (out, rx) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
+            id: SessionId(NEXT_SESSION.fetch_add(1, Ordering::Relaxed)),
             router,
             events,
             caller,
@@ -134,6 +141,7 @@ impl Inner {
 
     fn ctx(&self, cancel: CancellationToken) -> Ctx {
         Ctx {
+            session: self.id,
             caller: self.caller,
             cancel,
             events: self.events.clone(),

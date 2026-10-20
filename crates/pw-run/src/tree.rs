@@ -11,37 +11,44 @@ use libc::pid_t;
 /// 세션 `leader` 의 프로세스에 SIGHUP(멈춘 것은 SIGCONT 로 깨운다)을 보내고, `grace` 안에 다 끝나지 않으면 남은 것에 SIGKILL 을
 /// 보낸다. 끝날 때까지 블로킹한다.
 pub fn terminate_session(leader: pid_t, grace: Duration) {
-    signal_session(leader, libc::SIGHUP);
-    signal_session(leader, libc::SIGCONT);
+    terminate_sessions(&[leader], grace);
+}
+
+/// [`terminate_session`] 을 여러 세션에 한꺼번에 한다(기다림은 한 번).
+pub fn terminate_sessions(leaders: &[pid_t], grace: Duration) {
+    signal_sessions(leaders, libc::SIGHUP);
+    signal_sessions(leaders, libc::SIGCONT);
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
-        if members(leader).is_empty() {
+        if members(leaders).is_empty() {
             return;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let left = members(leader);
+    let left = members(leaders);
     if !left.is_empty() {
-        tracing::debug!(target: "pw_run", leader, ?left, "killing terminal processes that ignored SIGHUP");
+        tracing::debug!(target: "pw_run", ?leaders, ?left, "killing terminal processes that ignored SIGHUP");
     }
-    signal_session(leader, libc::SIGKILL);
+    signal_sessions(leaders, libc::SIGKILL);
 }
 
-fn signal_session(leader: pid_t, signal: libc::c_int) {
+fn signal_sessions(leaders: &[pid_t], signal: libc::c_int) {
     // 셸의 프로세스 그룹은 목록을 못 읽는 OS 에서도 닿게 따로 보낸다.
-    // SAFETY: kill(2) 은 메모리를 건드리지 않는다. 음수 pid 는 그 프로세스 그룹이다.
-    unsafe { libc::kill(-leader, signal) };
-    for pid in members(leader) {
+    for &leader in leaders {
+        // SAFETY: kill(2) 은 메모리를 건드리지 않는다. 음수 pid 는 그 프로세스 그룹이다.
+        unsafe { libc::kill(-leader, signal) };
+    }
+    for pid in members(leaders) {
         // SAFETY: 위와 같다.
         unsafe { libc::kill(pid, signal) };
     }
 }
 
-/// 세션 `leader` 에 든 프로세스(좀비가 아닌 것, `getsid` 가 읽히는 것).
-fn members(leader: pid_t) -> Vec<pid_t> {
+/// 세션 `leaders` 중 하나에 든 프로세스(좀비가 아닌 것, `getsid` 가 읽히는 것).
+fn members(leaders: &[pid_t]) -> Vec<pid_t> {
     all_pids()
         .into_iter()
-        .filter(|&pid| pid > 0 && session_of(pid) == Some(leader))
+        .filter(|&pid| pid > 0 && session_of(pid).is_some_and(|sid| leaders.contains(&sid)))
         .collect()
 }
 
@@ -93,6 +100,6 @@ mod tests {
         let me = pid_t::try_from(std::process::id()).unwrap();
         assert!(all_pids().contains(&me));
         let sid = session_of(me).unwrap();
-        assert!(members(sid).contains(&me));
+        assert!(members(&[sid]).contains(&me));
     }
 }

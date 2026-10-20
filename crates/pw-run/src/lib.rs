@@ -6,7 +6,11 @@
 //! - [`methods`]: `terminal.*` RPC.
 //!
 //! 터미널은 그것을 연 `terminal.create` 스트림과 수명이 같다. 스트림이 어떻게 끝나든(셸 종료, `terminal.close`, `stream.cancel`,
-//! 연결이 닫혀 세션이 스트림을 버림) 셸의 세션에 든 프로세스를 모두 끝낸다.
+//! 연결이 닫혀 세션이 스트림을 버림) 셸의 세션에 든 프로세스를 모두 끝낸다. 앱이 끝날 때는 Drop 이 돌지 않으므로(Tauri 는
+//! `std::process::exit` 로 끝난다) 앱이 [`shutdown`] 을 부른다.
+//!
+//! `terminalId` 는 그 터미널을 연 RPC 세션(연결) 안에서만 유효하다 — 다른 창 · 다른 연결이 같은 번호로 부르면 없는 터미널이다
+//! (03-architecture.md 「RPC 설계」).
 
 pub mod methods;
 pub mod pty;
@@ -26,11 +30,17 @@ use base64::engine::general_purpose::STANDARD;
 use pw_core::config::ConfigStore;
 use pw_core::registry::path::{normalize, worktree_link};
 use pw_core::registry::{Project, Registry as Projects, RegistryError};
-use pw_rpc::{RpcError, StreamSink, code};
+use pw_rpc::{RpcError, SessionId, StreamSink, code};
 use pw_runtime::Runtime;
 
 use crate::methods::{TerminalCreateParams, TerminalEvent, TerminalId};
 use crate::pty::{CHUNK, Pty, Spec};
+
+/// 이 프로세스가 띄운 모든 터미널의 셸과 그 세션의 프로세스를 끝낸다(SIGHUP · SIGHUP 을 무시하면 300 ms 뒤 SIGKILL). 끝날 때까지
+/// 블로킹한다. 앱이 끝나기 직전(Tauri `RunEvent::Exit`)에 부른다 — 그 뒤 `std::process::exit` 라 Drop 이 돌지 않는다.
+pub fn shutdown() {
+    pty::shutdown_all();
+}
 
 /// 셸이 끝난 뒤 남은 출력을 기다리는 시간. 셸이 띄운 백그라운드 프로세스가 PTY 를 쥐고 있으면 EOF 가 오지 않는다.
 const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(200);
@@ -43,7 +53,8 @@ pub struct HostParts {
     pub projects: Projects,
 }
 
-type Sessions = Mutex<HashMap<TerminalId, Arc<Pty>>>;
+/// 열린 터미널과 그것을 연 RPC 세션.
+type Sessions = Mutex<HashMap<TerminalId, (SessionId, Arc<Pty>)>>;
 
 /// 한 Host 의 터미널들.
 pub struct Terminals {
@@ -74,15 +85,21 @@ impl Terminals {
             .ok_or_else(|| RpcError::internal("terminals are not attached to a host"))
     }
 
-    fn session(&self, id: TerminalId) -> Result<Arc<Pty>, RpcError> {
+    /// `owner` 세션이 연 터미널. 다른 세션의 것은 없는 것으로 본다.
+    fn owned(&self, owner: SessionId, id: TerminalId) -> Option<Arc<Pty>> {
         lock(&self.sessions)
             .get(&id)
-            .cloned()
+            .filter(|(session, _)| *session == owner)
+            .map(|(_, pty)| Arc::clone(pty))
+    }
+
+    fn session(&self, owner: SessionId, id: TerminalId) -> Result<Arc<Pty>, RpcError> {
+        self.owned(owner, id)
             .ok_or_else(|| RpcError::invalid_params(format!("terminal {id} is not running")))
     }
 
-    pub fn input(&self, id: TerminalId, data: Vec<u8>) -> Result<(), RpcError> {
-        if self.session(id)?.write(data) {
+    pub fn input(&self, owner: SessionId, id: TerminalId, data: Vec<u8>) -> Result<(), RpcError> {
+        if self.session(owner, id)?.write(data) {
             Ok(())
         } else {
             Err(RpcError::invalid_params(format!(
@@ -91,16 +108,22 @@ impl Terminals {
         }
     }
 
-    pub fn resize(&self, id: TerminalId, cols: u16, rows: u16) -> Result<(), RpcError> {
+    pub fn resize(
+        &self,
+        owner: SessionId,
+        id: TerminalId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), RpcError> {
         check_size(cols, rows)?;
-        self.session(id)?
+        self.session(owner, id)?
             .resize(cols, rows)
             .map_err(RpcError::internal)
     }
 
-    pub fn close(&self, id: TerminalId) {
-        let pty = lock(&self.sessions).get(&id).cloned();
-        if let Some(pty) = pty {
+    /// 없는 터미널(다른 세션의 것 포함)이면 아무것도 하지 않는다.
+    pub fn close(&self, owner: SessionId, id: TerminalId) {
+        if let Some(pty) = self.owned(owner, id) {
             tracing::info!(target: "pw_run", terminal = id, "closing the terminal");
             pty.terminate();
         }
@@ -109,19 +132,22 @@ impl Terminals {
     /// 열린 터미널의 PTY(시험용).
     #[doc(hidden)]
     pub fn pty(&self, id: TerminalId) -> Option<Arc<Pty>> {
-        lock(&self.sessions).get(&id).cloned()
+        lock(&self.sessions)
+            .get(&id)
+            .map(|(_, pty)| Arc::clone(pty))
     }
 
     /// `terminal.create` 스트림 본체.
     pub async fn run(
         self: Arc<Self>,
+        owner: SessionId,
         params: TerminalCreateParams,
         sink: StreamSink<TerminalEvent>,
     ) -> Result<(), RpcError> {
         check_size(params.cols, params.rows)?;
         // 레지스트리 읽기 · 로그인 셸 기다리기 · 띄우기는 블로킹이다. 스트림이 그사이 버려지면 결과(`Live`)도 버려져 띄운 셸이 끝난다.
         let this = Arc::clone(&self);
-        let (live, started) = tokio::task::spawn_blocking(move || this.start(&params))
+        let (live, started) = tokio::task::spawn_blocking(move || this.start(owner, &params))
             .await
             .map_err(|e| RpcError::internal(e.to_string()))??;
         sink.send(started).await?;
@@ -131,7 +157,11 @@ impl Terminals {
         sink.send(TerminalEvent::Exited { code }).await
     }
 
-    fn start(&self, params: &TerminalCreateParams) -> Result<(Live, TerminalEvent), RpcError> {
+    fn start(
+        &self,
+        owner: SessionId,
+        params: &TerminalCreateParams,
+    ) -> Result<(Live, TerminalEvent), RpcError> {
         let host = self.host()?;
         let project = host
             .projects
@@ -164,7 +194,7 @@ impl Terminals {
             RpcError::internal(reason)
         })?);
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        lock(&self.sessions).insert(id, Arc::clone(&pty));
+        lock(&self.sessions).insert(id, (owner, Arc::clone(&pty)));
         tracing::info!(
             target: "pw_run",
             terminal = id, pid = ?pty.pid(), ?argv, cwd = %cwd.display(),

@@ -176,15 +176,16 @@ export type UnaryMethods = {
 	"task.list": { params: TaskListParams; result: TaskInfo[] };
 	/**
 	 * 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난
-	 * 터미널이면 아무것도 하지 않는다.
+	 * 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다.
 	 */
 	"terminal.close": { params: TerminalCloseParams; result: null };
 	/**
-	 * 셸에 입력을 보낸다. 끝난 터미널이면 invalid params 오류.
+	 * 셸에 입력을 보낸다. 끝난 터미널 · 다른 세션이 연 터미널이면 invalid params 오류.
 	 */
 	"terminal.input": { params: TerminalInputParams; result: null };
 	/**
-	 * PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 0 인 크기는 invalid params 오류.
+	 * PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 다른 세션이 연 터미널 · 0 인 크기는
+	 * invalid params 오류.
 	 */
 	"terminal.resize": { params: TerminalResizeParams; result: null };
 	/**
@@ -211,8 +212,9 @@ export type StreamMethods = {
 	"host.demoTask": { params: DemoTaskParams; item: DemoTaskUpdate };
 	/**
 	 * 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그
-	 * 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림이고,
-	 * Host 는 보내지 못한 출력을 1 MiB 까지만 쥔다(그 뒤로는 셸이 쓰기에서 멈춘다). 없는 프로젝트 · 프로젝트 밖이거나 없는
+	 * 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB
+	 * 이하)이고, 소비자가 읽지 않으면 Host 버퍼(512 KiB)가 찬 뒤 셸이 쓰기에서 멈춘다 — 기본 window(32)면 내보낸 청크와 합쳐
+	 * 1 MiB 를 넘지 않는다. `terminalId` 는 이 세션(연결) 안에서만 유효하다. 없는 프로젝트 · 프로젝트 밖이거나 없는
 	 * `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).
 	 */
 	"terminal.create": { params: TerminalCreateParams; item: TerminalEvent };
@@ -261,10 +263,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":false},
 	"task.cancel": {"name":"task.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"TaskCancelParams","output":"bool","doc":" 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.\n","mcp":false},
 	"task.list": {"name":"task.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"TaskListParams","output":"Vec<TaskInfo>","doc":" 끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.\n","mcp":false},
-	"terminal.close": {"name":"terminal.close","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalCloseParams","output":"()","doc":" 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n 터미널이면 아무것도 하지 않는다.\n","mcp":false},
-	"terminal.create": {"name":"terminal.create","kind":"stream","tier":"exec","roles":["owner"],"params":"TerminalCreateParams","output":"TerminalEvent","doc":" 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그\n 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림이고,\n Host 는 보내지 못한 출력을 1 MiB 까지만 쥔다(그 뒤로는 셸이 쓰기에서 멈춘다). 없는 프로젝트 · 프로젝트 밖이거나 없는\n `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).\n","mcp":false},
-	"terminal.input": {"name":"terminal.input","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalInputParams","output":"()","doc":" 셸에 입력을 보낸다. 끝난 터미널이면 invalid params 오류.\n","mcp":false},
-	"terminal.resize": {"name":"terminal.resize","kind":"unary","tier":"write","roles":["owner"],"params":"TerminalResizeParams","output":"()","doc":" PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 0 인 크기는 invalid params 오류.\n","mcp":false},
+	"terminal.close": {"name":"terminal.close","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalCloseParams","output":"()","doc":" 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다.\n","mcp":false},
+	"terminal.create": {"name":"terminal.create","kind":"stream","tier":"exec","roles":["owner"],"params":"TerminalCreateParams","output":"TerminalEvent","doc":" 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그\n 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB\n 이하)이고, 소비자가 읽지 않으면 Host 버퍼(512 KiB)가 찬 뒤 셸이 쓰기에서 멈춘다 — 기본 window(32)면 내보낸 청크와 합쳐\n 1 MiB 를 넘지 않는다. `terminalId` 는 이 세션(연결) 안에서만 유효하다. 없는 프로젝트 · 프로젝트 밖이거나 없는\n `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).\n","mcp":false},
+	"terminal.input": {"name":"terminal.input","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalInputParams","output":"()","doc":" 셸에 입력을 보낸다. 끝난 터미널 · 다른 세션이 연 터미널이면 invalid params 오류.\n","mcp":false},
+	"terminal.resize": {"name":"terminal.resize","kind":"unary","tier":"write","roles":["owner"],"params":"TerminalResizeParams","output":"()","doc":" PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 다른 세션이 연 터미널 · 0 인 크기는\n invalid params 오류.\n","mcp":false},
 	"theme.get": {"name":"theme.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ThemeGetParams","output":"ThemeFile","doc":" 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.\n","mcp":false},
 	"theme.list": {"name":"theme.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ThemeList","doc":" 등록된 테마 목록.\n","mcp":false},
 };
