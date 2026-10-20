@@ -1,4 +1,5 @@
-// 프로젝트 창(10-ui §2.4 S4)의 틀: 툴 윈도우 바 · 도킹 영역(툴 윈도우 · 에디터 영역) · 상태바. 내용은 자리만 잡는다.
+// 프로젝트 창(10-ui §2.4 S4)의 틀: 툴 윈도우 바 · 도킹 영역(툴 윈도우 · 에디터 영역) · 상태바 · 알림 토스트. 내용이 있는 툴
+// 윈도우는 `TOOL_WINDOWS` 에 한 줄로 등록하고, 나머지는 자리만 잡는다.
 
 import "dockview-react/dist/styles/dockview.css";
 
@@ -28,17 +29,31 @@ import {
   SquareTerminal,
   TriangleAlert,
 } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Toaster } from "sonner";
 
 import { useAppStrings } from "../i18n/app-strings";
 import { toolWindowActions } from "../keymap/actions";
-import { useRegisterActions } from "../keymap/keymap-provider";
+import { useKeymap, useRegisterActions, useRegistryVersion } from "../keymap/keymap-provider";
+import {
+  NotificationProvider,
+  NotificationsStatusItem,
+  NotificationsToolWindow,
+} from "../notifications/notifications";
 import { activeWorktree } from "../open-with/active-worktree";
 import { type OpenWithTarget, useOpenWith } from "../open-with/open-with";
 import { projectIdFromQuery } from "../project-open";
 import { useRpcQuery } from "../rpc/host";
+import {
+  STATUS_SLOTS,
+  StatusBar,
+  StatusBarProvider,
+  useStatusBarItem,
+} from "../status-bar/status-bar";
+import { TaskProvider, TasksStatusItem, useDemoTaskActions } from "../tasks/tasks";
 import { ThemeSwitcher, useTheme } from "../theme/theme-switcher";
 import {
+  applyPanelTitles,
   type Dock,
   EDITOR_TAB,
   keepEditor,
@@ -50,6 +65,7 @@ import {
   showPanel,
   trackHiddenPanels,
 } from "./project-layout";
+import { useProjectStrings } from "./strings";
 
 const ICONS: Record<string, LucideIcon> = {
   project: FolderTree,
@@ -66,30 +82,44 @@ const ICONS: Record<string, LucideIcon> = {
   agent: Bot,
 };
 
-// `data-tool-window` 는 키맵 컨텍스트의 툴 윈도우 층이다(src/keymap/context.ts).
+/**
+ * 내용이 있는 툴 윈도우: 툴 윈도우 id → 그 내용. 여기 없는 툴 윈도우는 자리 표시를 그린다. 내용 컴포넌트는 툴 윈도우의 바깥
+ * 요소에 `data-tool-window={api.id}` 와 `tabIndex={-1}` 을 단다 — 키맵 컨텍스트의 툴 윈도우 층이다(src/keymap/context.ts).
+ */
+const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>> = {
+  notifications: NotificationsToolWindow,
+};
+
 function ToolWindowPlaceholder({ api }: IDockviewPanelProps) {
+  const T = useProjectStrings();
   return (
     <div
       data-tool-window={api.id}
       tabIndex={-1}
       className="flex h-full items-center justify-center bg-ui-panel text-ui-muted-foreground"
     >
-      {api.title} — 툴 윈도우 자리
+      {T.placeholder(T.toolWindows[api.id] ?? api.id)}
     </div>
   );
 }
 
+function ToolWindow(props: IDockviewPanelProps) {
+  const Content = TOOL_WINDOWS[props.api.id] ?? ToolWindowPlaceholder;
+  return <Content {...props} />;
+}
+
 function EditorAreaPlaceholder() {
+  const T = useProjectStrings();
   return (
     <div className="flex h-full items-center justify-center bg-editor-background text-ui-muted-foreground">
-      에디터 영역
+      {T.editorArea}
     </div>
   );
 }
 
 // 저장본의 contentComponent 가 이 키를 가리킨다.
 const COMPONENTS: Record<PanelComponent, (props: IDockviewPanelProps) => ReactNode> = {
-  toolWindow: ToolWindowPlaceholder,
+  toolWindow: ToolWindow,
   editorArea: EditorAreaPlaceholder,
 };
 
@@ -105,19 +135,21 @@ function ToolWindowBar({
   dock: Exclude<Dock, "bottom">;
   api: DockviewApi | undefined;
 }) {
+  const T = useProjectStrings();
   return (
     <nav
-      aria-label={dock === "left" ? "왼쪽 툴 윈도우" : "오른쪽 툴 윈도우"}
+      aria-label={dock === "left" ? T.toolWindowBar.left : T.toolWindowBar.right}
       className={`flex w-8 flex-none flex-col items-center gap-1 border-ui-border bg-ui-toolbar py-1 ${dock === "left" ? "border-r" : "border-l"}`}
     >
       {PANELS.filter((p) => p.home === dock).map((panel) => {
         const Icon = ICONS[panel.id] ?? FolderTree;
+        const name = T.toolWindows[panel.id] ?? panel.id;
         return (
           <button
             key={panel.id}
             type="button"
-            title={panel.title}
-            aria-label={panel.title}
+            title={name}
+            aria-label={name}
             disabled={!api}
             onClick={() => api && showPanel(api, panel.id)}
             className="flex size-6 items-center justify-center rounded-sm text-ui-muted-foreground hover:bg-ui-hover hover:text-ui-foreground"
@@ -130,34 +162,49 @@ function ToolWindowBar({
   );
 }
 
-/** `extra` 는 오른쪽 끝(테마 고르기 앞)에 둔다 — 툴바가 생기기 전의 「외부 도구로 열기」 버튼 자리. */
-function StatusBar({ extra }: { extra?: ReactNode }) {
+function HostStatus() {
+  const T = useProjectStrings().status;
   const info = useRpcQuery("host.info", null);
-  const appearance = useTheme((s) => s.appearance);
   return (
-    <footer className="flex h-[22px] flex-none items-center gap-3 border-t border-ui-border bg-ui-statusbar px-2 text-[11px] text-ui-statusbar-foreground">
-      <span data-testid="status-host" className="flex items-center gap-1">
-        <Server size={11} aria-hidden />
-        {info.data
-          ? `${info.data.hostId} · v${info.data.version}`
-          : info.isError
-            ? "연결 실패"
-            : "…"}
-      </span>
-      <span className="flex-1" />
-      <span data-testid="status-appearance">{appearance}</span>
-      {extra}
-      <ThemeSwitcher />
-    </footer>
+    <span data-testid="status-host" className="flex items-center gap-1">
+      <Server size={11} aria-hidden />
+      {info.data
+        ? `${info.data.hostId} · v${info.data.version}`
+        : info.isError
+          ? T.hostFailed
+          : T.connecting}
+    </span>
   );
+}
+
+function AppearanceStatus() {
+  const T = useProjectStrings().status;
+  const appearance = useTheme((s) => s.appearance);
+  return <span data-testid="status-appearance">{T.appearance(appearance)}</span>;
+}
+
+/** 프로젝트 창이 늘 두는 상태바 항목. 기능 항목(작업 등)은 그 기능의 Provider · 컴포넌트가 등록해도 된다. */
+function useProjectStatusItems() {
+  useStatusBarItem({ id: "host", ...STATUS_SLOTS.host, component: HostStatus });
+  useStatusBarItem({ id: "tasks", ...STATUS_SLOTS.tasks, component: TasksStatusItem });
+  useStatusBarItem({ id: "appearance", ...STATUS_SLOTS.appearance, component: AppearanceStatus });
+  useStatusBarItem({
+    id: "notifications",
+    ...STATUS_SLOTS.notifications,
+    component: NotificationsStatusItem,
+  });
+  useStatusBarItem({ id: "theme", ...STATUS_SLOTS.theme, component: ThemeSwitcher });
 }
 
 /** 저장본으로 열고 바뀔 때마다 저장하는 도킹 영역. 열리면 `onApi` 로 api 를 넘긴다(툴 윈도우 바가 쓴다). */
 export function ProjectDock({
   storage,
+  titles,
   onApi,
 }: {
   storage: LayoutStorage;
+  /** 툴 윈도우 id → 지금 언어의 이름(`ProjectStrings.toolWindows`). 바뀌면 탭 머리를 다시 단다. */
+  titles: Readonly<Record<string, string>>;
   onApi(api: DockviewApi): void;
 }) {
   const [api, setApi] = useState<DockviewApi>();
@@ -182,6 +229,12 @@ export function ProjectDock({
     };
   }, [api, storage]);
 
+  useEffect(() => {
+    if (!api) return;
+    const titled = applyPanelTitles(api, titles);
+    return () => titled.dispose();
+  }, [api, titles]);
+
   return (
     <DockviewReact
       className="min-w-0 flex-1"
@@ -190,6 +243,27 @@ export function ProjectDock({
       tabComponents={TAB_COMPONENTS}
       onReady={onReady}
     />
+  );
+}
+
+/** 상태바의 「외부 도구로 열기」 버튼. 그 액션(`openWith.popup`)을 실행하고, 액션이 꺼져 있으면(프로젝트를 읽기 전) 꺼진다. */
+function OpenWithStatusButton() {
+  const T = useAppStrings().openWith;
+  const { registry } = useKeymap();
+  useRegistryVersion(registry);
+  const enabled =
+    registry.get("openWith.popup") !== undefined && registry.isEnabled("openWith.popup");
+  return (
+    <button
+      type="button"
+      title={T.action}
+      aria-label={T.action}
+      disabled={!enabled}
+      onClick={() => registry.run("openWith.popup")}
+      className="flex items-center rounded-sm px-1 hover:bg-ui-hover"
+    >
+      <ExternalLink size={11} aria-hidden />
+    </button>
   );
 }
 
@@ -205,11 +279,12 @@ function ProjectOpenWith({ projectId }: { projectId: string }) {
   target.current = project.data
     ? { projectId, name: project.data.name, worktree: activeWorktree() }
     : undefined;
-  const { actions, popup, openPopup } = useOpenWith({
+  const { actions, popup } = useOpenWith({
     target: () => target.current,
     onError: setError,
   });
   useRegisterActions(actions);
+  useStatusBarItem({ id: "openWith", ...STATUS_SLOTS.openWith, component: OpenWithStatusButton });
   return (
     <>
       {popup}
@@ -230,21 +305,32 @@ function ProjectOpenWith({ projectId }: { projectId: string }) {
           </button>
         </div>
       )}
-      <StatusBar
-        extra={
-          <button
-            type="button"
-            title={T.action}
-            aria-label={T.action}
-            disabled={!project.data}
-            onClick={() => openPopup()}
-            className="flex items-center rounded-sm px-1 hover:bg-ui-hover"
-          >
-            <ExternalLink size={11} aria-hidden />
-          </button>
-        }
-      />
     </>
+  );
+}
+
+function ProjectWindowBody({ projectId }: { projectId?: string }) {
+  const strings = useProjectStrings();
+  const appearance = useTheme((s) => s.appearance);
+  const [api, setApi] = useState<DockviewApi>();
+  const apiRef = useRef<DockviewApi>(undefined);
+  apiRef.current = api;
+  const actions = useMemo(() => toolWindowActions(() => apiRef.current, strings), [strings]);
+  useRegisterActions(actions);
+  useProjectStatusItems();
+  useDemoTaskActions();
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1">
+        <ToolWindowBar dock="left" api={api} />
+        <ProjectDock storage={window.localStorage} titles={strings.toolWindows} onApi={setApi} />
+        <ToolWindowBar dock="right" api={api} />
+      </div>
+      {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
+      <StatusBar label={strings.status.label} />
+      {/* 상태바(22px) 위에 띄운다. */}
+      <Toaster theme={appearance} position="bottom-right" offset={{ bottom: 30, right: 12 }} />
+    </div>
   );
 }
 
@@ -254,19 +340,13 @@ export function ProjectWindow({
   /** 창 쿼리의 프로젝트 id(`?project=`). 없으면 외부 도구 액션이 없다. */
   projectId?: string;
 }) {
-  const [api, setApi] = useState<DockviewApi>();
-  const apiRef = useRef<DockviewApi>(undefined);
-  apiRef.current = api;
-  const actions = useMemo(() => toolWindowActions(() => apiRef.current), []);
-  useRegisterActions(actions);
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex min-h-0 flex-1">
-        <ToolWindowBar dock="left" api={api} />
-        <ProjectDock storage={window.localStorage} onApi={setApi} />
-        <ToolWindowBar dock="right" api={api} />
-      </div>
-      {projectId !== undefined ? <ProjectOpenWith projectId={projectId} /> : <StatusBar />}
-    </div>
+    <NotificationProvider>
+      <StatusBarProvider>
+        <TaskProvider projectId={projectId}>
+          <ProjectWindowBody projectId={projectId} />
+        </TaskProvider>
+      </StatusBarProvider>
+    </NotificationProvider>
   );
 }

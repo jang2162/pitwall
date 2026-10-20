@@ -6,6 +6,7 @@ import type { DockviewApi } from "dockview-react";
 
 import type { AppStrings } from "../i18n/app-strings";
 import { collapseAllDocks, PANELS, toggleToolWindow } from "../layout/project-layout";
+import type { ProjectStrings } from "../layout/strings";
 import type { ThemePreference } from "../theme/theme-store";
 
 export function appActions(deps: {
@@ -75,12 +76,15 @@ export function appActions(deps: {
 }
 
 /** 프로젝트 창의 툴 윈도우 열기 · 숨기기. 숨긴(닫은) 툴 윈도우를 다시 여는 길이다(project-layout.ts 머리 주석). */
-export function toolWindowActions(getApi: () => DockviewApi | undefined): Action[] {
+export function toolWindowActions(
+  getApi: () => DockviewApi | undefined,
+  strings: ProjectStrings,
+): Action[] {
   const enabled = () => getApi() !== undefined;
   return [
     ...PANELS.filter((p) => p.home !== "editor").map((panel): Action => ({
       id: `toolWindow.${panel.id}`,
-      label: `${panel.title} 툴 윈도우`,
+      label: strings.toolWindowAction(strings.toolWindows[panel.id] ?? panel.id),
       keywords: [`Tool Window ${panel.id}`],
       enabled,
       run: () => {
@@ -90,7 +94,7 @@ export function toolWindowActions(getApi: () => DockviewApi | undefined): Action
     })),
     {
       id: "toolWindow.hideAll",
-      label: "모든 툴 윈도우 숨기기",
+      label: strings.hideAllToolWindows,
       keywords: ["Hide All Tool Windows"],
       enabled,
       run: () => {

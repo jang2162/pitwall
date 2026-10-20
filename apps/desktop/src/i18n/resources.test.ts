@@ -1,5 +1,6 @@
-// 빠진 번역을 잡는다: 내장 언어(ko · en)가 같은 메시지 집합을 갖는지, 화면 코드(strings.ts · app-strings.ts)와 네이티브 메뉴
-// (src-tauri/src/menu.rs)가 쓰는 id 가 두 언어에 모두 있고 오류 없이 만들어지는지. 폴백(en)이 빠진 메시지를 덮어 화면에서는
+// 빠진 번역을 잡는다: 내장 언어(ko · en)가 같은 메시지 집합을 갖는지, 화면 코드(welcome · layout 의 strings.ts ·
+// app-strings.ts)와 네이티브 메뉴 · 대화상자 · OS 창 제목(src-tauri/src/menu.rs · shell_command.rs · windows.rs)이 쓰는 id 가
+// 두 언어에 모두 있고 오류 없이 만들어지는지. 폴백(en)이 빠진 메시지를 덮어 화면에서는
 // 티가 나지 않으므로 여기서 언어마다 따로 본다.
 
 import { readFileSync } from "node:fs";
@@ -8,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { FluentBundle, FluentResource, type FluentVariable } from "@fluent/bundle";
 import { describe, expect, it } from "vitest";
 
+import { PANELS } from "../layout/project-layout";
+import { projectStrings } from "../layout/strings";
 import { welcomeStrings } from "../welcome/strings";
 import { appStrings } from "./app-strings";
 import {
@@ -73,6 +76,13 @@ describe("built-in translations", () => {
     const { t, used, problems } = strictTranslator(locale);
     callAll(welcomeStrings(t));
     callAll(appStrings(t));
+    callAll(projectStrings(t));
+    // 선택식은 갈래를 하나씩 본다 — 아무 문자열로 부르면 기본 갈래만 지난다.
+    for (const appearance of ["light", "dark"] as const)
+      projectStrings(t).status.appearance(appearance);
+    for (const count of [0, 1, 3]) projectStrings(t).status.notifications(count);
+    for (const level of ["info", "warning", "error"] as const)
+      projectStrings(t).notifications.level(level);
     // 플랫폼마다 갈래가 다른 문자열은 갈래를 하나씩 본다.
     for (const platform of ["mac", "win", "linux"] as const) {
       welcomeStrings(t).menu.reveal(platform);
@@ -83,24 +93,42 @@ describe("built-in translations", () => {
     expect(used.size).toBeGreaterThan(50);
   });
 
-  it.each(LOCALES)("have every message the native menu and dialogs use (%s)", (locale) => {
-    const source = ["menu.rs", "shell_command.rs"]
-      .map((file) =>
-        readFileSync(
-          fileURLToPath(new URL(`../../src-tauri/src/${file}`, import.meta.url)),
-          "utf8",
-        ),
-      )
-      .join("\n");
-    const nativeIds = [
-      ...new Set([...source.matchAll(/"((?:menu|shell-command)-[a-z-]+)"/g)].map((m) => m[1]!)),
-    ];
-    expect(nativeIds.filter((id) => id.startsWith("shell-command-")).length).toBe(5);
+  it.each(LOCALES)("name every tool window (%s)", (locale) => {
     const { t, problems } = strictTranslator(locale);
-    const vars = { app: "Pitwall", target: "/t", previous: "/p", error: "e" };
-    for (const id of nativeIds) t(id, vars);
+    const names = projectStrings(t).toolWindows;
+    expect(Object.keys(names)).toEqual(PANELS.map((p) => p.id));
     expect(problems).toEqual([]);
   });
+
+  it.each(LOCALES)(
+    "have every message the native menu, dialogs and window titles use (%s)",
+    (locale) => {
+      const source = ["menu.rs", "shell_command.rs", "windows.rs"]
+        .map((file) =>
+          readFileSync(
+            fileURLToPath(new URL(`../../src-tauri/src/${file}`, import.meta.url)),
+            "utf8",
+          ),
+        )
+        .join("\n");
+      const nativeIds = [
+        ...new Set(
+          [...source.matchAll(/"((?:menu|shell-command|window-title)-[a-z-]+)"/g)].map(
+            (m) => m[1]!,
+          ),
+        ),
+      ];
+      expect(nativeIds.filter((id) => id.startsWith("shell-command-")).length).toBe(5);
+      expect(nativeIds.filter((id) => id.startsWith("window-title-")).sort()).toEqual([
+        "window-title-project",
+        "window-title-settings",
+      ]);
+      const { t, problems } = strictTranslator(locale);
+      const vars = { app: "Pitwall", target: "/t", previous: "/p", error: "e" };
+      for (const id of nativeIds) t(id, vars);
+      expect(problems).toEqual([]);
+    },
+  );
 });
 
 describe("initialLocales", () => {

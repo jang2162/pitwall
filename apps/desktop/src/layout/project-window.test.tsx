@@ -1,11 +1,15 @@
 // @vitest-environment happy-dom
+import { LocalizationProvider } from "@fluent/react";
 import type { DockviewApi } from "dockview-react";
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { bundledLocalization, bundledTranslator, KO_PROJECT } from "../i18n/testing";
+import { NotificationProvider } from "../notifications/notifications";
 import { LAYOUT_STORAGE_KEY } from "./project-layout";
 import { ProjectDock } from "./project-window";
+import { projectStrings } from "./strings";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -34,21 +38,36 @@ function memoryStorage() {
   };
 }
 
-async function mount(storage: ReturnType<typeof memoryStorage>) {
+function render(
+  storage: ReturnType<typeof memoryStorage>,
+  locale: "ko" | "en",
+  onApi: (api: DockviewApi) => void,
+) {
+  const l10n = bundledLocalization(locale);
+  const titles = projectStringsFor(locale).toolWindows;
+  // 앱처럼 StrictMode 로 렌더한다. StrictMode 는 effect 를 한 번 해제했다 다시 붙인다.
+  return root!.render(
+    <StrictMode>
+      <LocalizationProvider l10n={l10n}>
+        <NotificationProvider>
+          <ProjectDock storage={storage} titles={titles} onApi={onApi} />
+        </NotificationProvider>
+      </LocalizationProvider>
+    </StrictMode>,
+  );
+}
+
+const EN_PROJECT = projectStrings(bundledTranslator("en"));
+const projectStringsFor = (locale: "ko" | "en") => (locale === "ko" ? KO_PROJECT : EN_PROJECT);
+
+async function mount(storage: ReturnType<typeof memoryStorage>, locale: "ko" | "en" = "ko") {
   const element = document.createElement("div");
   element.style.width = "1280px";
   element.style.height = "760px";
   document.body.append(element);
   let api: DockviewApi | undefined;
   root = createRoot(element);
-  // 앱처럼 StrictMode 로 렌더한다. StrictMode 는 effect 를 한 번 해제했다 다시 붙인다.
-  await act(async () =>
-    root!.render(
-      <StrictMode>
-        <ProjectDock storage={storage} onApi={(a) => (api = a)} />
-      </StrictMode>,
-    ),
-  );
+  await act(async () => render(storage, locale, (a) => (api = a)));
   return api!;
 }
 
@@ -99,4 +118,32 @@ it("keeps the editor when its focused tab gets Delete", async () => {
   expect(api.groups.find((g) => g.panels.some((p) => p.id === "editor"))?.api.location.type).toBe(
     "grid",
   );
+});
+
+it("names the tabs in the UI language and renames them when the language changes", async () => {
+  const storage = memoryStorage();
+  const api = await mount(storage, "ko");
+  expect(tabOf("에디터")).toBeDefined();
+  expect(tabOf("쿼리 결과")).toBeDefined();
+  expect(api.getPanel("terminal")!.title).toBe("터미널");
+
+  await act(async () => render(storage, "en", () => {}));
+  expect(tabOf("Editor")).toBeDefined();
+  expect(tabOf("Query Results")).toBeDefined();
+  expect(api.getPanel("terminal")!.title).toBe("Terminal");
+});
+
+it("names restored tabs in the current language, not the one they were saved in", async () => {
+  const storage = memoryStorage();
+  const api = await mount(storage, "ko");
+  await act(async () => api.getPanel("structure")!.api.setActive());
+  await vi.waitFor(() => expect(storage.items.get(LAYOUT_STORAGE_KEY)).toContain("구조"), {
+    timeout: 2000,
+  });
+  act(() => root!.unmount());
+  root = undefined;
+
+  const restored = await mount(storage, "en");
+  expect(restored.getPanel("project")!.title).toBe("Project");
+  expect(tabOf("Project")).toBeDefined();
 });

@@ -14,7 +14,7 @@ import { createProjectActions, welcomeActions } from "../welcome/actions";
 import { appActions, toolWindowActions } from "./actions";
 import { DEFAULT_KEYMAP_TOML } from "./default-keymap";
 import { resolveKeymap } from "./resolve";
-import { KO_APP, KO_WELCOME } from "../i18n/testing";
+import { KO_APP, KO_PROJECT, KO_WELCOME } from "../i18n/testing";
 
 const PLATFORMS: Platform[] = ["mac", "win", "linux"];
 const defaults = (platform: Platform) =>
@@ -30,7 +30,7 @@ const ACTION_IDS = new Set(
       openSettings: async () => {},
       setTheme() {},
     }),
-    ...toolWindowActions(() => undefined),
+    ...toolWindowActions(() => undefined, KO_PROJECT),
     ...welcomeActions({
       strings: KO_WELCOME,
       platform: "mac",

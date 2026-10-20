@@ -1,8 +1,10 @@
 // 시험용: 번들 리소스(내장 확장의 .ftl)로 만든 문자열과, 가짜 Host 가 `i18n.get` 에 돌려줄 응답. 시험은 언어를 이것으로
 // 고정한다 — 브라우저 언어(happy-dom 은 en-US)에 따라 화면 문자열이 바뀌지 않게.
 
+import type { ReactLocalization } from "@fluent/react";
 import type { I18nState } from "@pitwall/rpc-client";
 
+import { projectStrings } from "../layout/strings";
 import { welcomeStrings } from "../welcome/strings";
 import { appStrings } from "./app-strings";
 import {
@@ -20,16 +22,20 @@ export function chainFor(locale: string): string[] {
   return locale === FALLBACK ? [FALLBACK] : [locale, FALLBACK];
 }
 
+/** 번들 리소스로 만든 `@fluent/react` 지역화(`LocalizationProvider` 에 넘긴다). 번역 오류는 시험을 실패시킨다. */
+export function bundledLocalization(locale: string): ReactLocalization {
+  return buildLocalization(BUNDLED_RESOURCES, chainFor(locale), (message) => {
+    throw new Error(message);
+  });
+}
+
 export function bundledTranslator(locale: string): Translate {
-  return translator(
-    buildLocalization(BUNDLED_RESOURCES, chainFor(locale), (message) => {
-      throw new Error(message);
-    }),
-  );
+  return translator(bundledLocalization(locale));
 }
 
 export const KO_APP = appStrings(bundledTranslator("ko"));
 export const KO_WELCOME = welcomeStrings(bundledTranslator("ko"));
+export const KO_PROJECT = projectStrings(bundledTranslator("ko"));
 
 /** 가짜 Host 의 `i18n.get` 응답. 실제 Host 처럼 고른 언어 순서의 리소스만 싣는다. */
 export function i18nState(locale: string, setting = locale): I18nState {

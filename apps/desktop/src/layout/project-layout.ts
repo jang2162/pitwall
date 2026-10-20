@@ -14,14 +14,17 @@
 // 모든 툴 윈도우에 열기 액션이 있어(src/keymap/actions.ts) 숨긴 것을 되돌릴 길이 늘 있다 — 하단처럼 툴 윈도우 바가 없는
 // 자리도 액션 찾기(⌘⇧A)로 연다. 복원할 때 저장본에도 `hidden` 에도 없는 툴 윈도우는 제자리(`home`)에 채운다 — 새로 더한
 // 툴 윈도우가 저장본이 있는 사용자에게도 나타나게.
+//
+// 탭 머리의 이름은 UI 언어를 따른다(layout/strings.ts). 패널은 이름 대신 id 를 달고 만들어지고, `applyPanelTitles` 가 지금
+// 언어의 이름을 붙인다 — 저장본에 남은 이름(저장할 때의 언어)도 그것이 덮는다. 언어가 바뀌면 다시 부른다.
 
 import type { DockviewApi, SerializedDockview } from "dockview-react";
 
 export type Dock = "left" | "right" | "bottom";
 
 export interface PanelSpec {
+  /** 이름은 이 id 로 찾는다(layout/strings.ts 의 `toolWindows`). */
   id: string;
-  title: string;
   /** 기본 레이아웃에서 놓이는 곳. 닫았다가 툴 윈도우 바로 다시 열 때도 이리로 돌아온다. */
   home: Dock | "editor";
   component: PanelComponent;
@@ -37,21 +40,21 @@ export type PanelComponent = "toolWindow" | "editorArea";
 
 // 10-ui §2.4 「구역별 구성」 표의 툴 윈도우. 순서가 기본 레이아웃의 탭 순서이고, 각 무리의 첫 패널이 처음에 보인다.
 export const PANELS: readonly PanelSpec[] = [
-  { id: "editor", title: "에디터", home: "editor", component: "editorArea", tab: EDITOR_TAB },
-  { id: "project", title: "프로젝트", home: "left", component: "toolWindow" },
-  { id: "commit", title: "커밋", home: "left", component: "toolWindow" },
-  { id: "database", title: "DB 탐색기", home: "left", component: "toolWindow" },
-  { id: "search", title: "검색", home: "left", component: "toolWindow" },
-  { id: "structure", title: "구조", home: "left", component: "toolWindow" },
-  { id: "run", title: "실행", home: "bottom", component: "toolWindow" },
-  { id: "debug", title: "디버그", home: "bottom", component: "toolWindow" },
-  { id: "problems", title: "문제", home: "bottom", component: "toolWindow" },
-  { id: "terminal", title: "터미널", home: "bottom", component: "toolWindow" },
-  { id: "git", title: "Git", home: "bottom", component: "toolWindow" },
-  { id: "queryResults", title: "쿼리 결과", home: "bottom", component: "toolWindow" },
-  { id: "searchResults", title: "검색 결과", home: "bottom", component: "toolWindow" },
-  { id: "notifications", title: "알림", home: "right", component: "toolWindow" },
-  { id: "agent", title: "에이전트 활동", home: "right", component: "toolWindow" },
+  { id: "editor", home: "editor", component: "editorArea", tab: EDITOR_TAB },
+  { id: "project", home: "left", component: "toolWindow" },
+  { id: "commit", home: "left", component: "toolWindow" },
+  { id: "database", home: "left", component: "toolWindow" },
+  { id: "search", home: "left", component: "toolWindow" },
+  { id: "structure", home: "left", component: "toolWindow" },
+  { id: "run", home: "bottom", component: "toolWindow" },
+  { id: "debug", home: "bottom", component: "toolWindow" },
+  { id: "problems", home: "bottom", component: "toolWindow" },
+  { id: "terminal", home: "bottom", component: "toolWindow" },
+  { id: "git", home: "bottom", component: "toolWindow" },
+  { id: "queryResults", home: "bottom", component: "toolWindow" },
+  { id: "searchResults", home: "bottom", component: "toolWindow" },
+  { id: "notifications", home: "right", component: "toolWindow" },
+  { id: "agent", home: "right", component: "toolWindow" },
 ];
 
 const DOCK_SIZES: Record<Dock, number> = { left: 260, right: 260, bottom: 200 };
@@ -125,7 +128,8 @@ function addPanel(
   const group = place === "centre" ? centreGroup(api) : ensureDock(api, place);
   const added = api.addPanel({
     id: panel.id,
-    title: panel.title,
+    // 이름은 `applyPanelTitles` 가 붙인다.
+    title: panel.id,
     component: panel.component,
     tabComponent: panel.tab,
     position: { referenceGroup: group.id },
@@ -290,6 +294,20 @@ export function persistLayout(
       win.removeEventListener("pagehide", flush);
     },
   };
+}
+
+/** 탭 머리에 `titles`(툴 윈도우 id → 지금 언어의 이름)를 붙인다. 열린 패널과 앞으로 더해질 패널 모두. */
+export function applyPanelTitles(api: DockviewApi, titles: Readonly<Record<string, string>>) {
+  const apply = (panel: {
+    id: string;
+    title: string | undefined;
+    api: { setTitle(t: string): void };
+  }) => {
+    const title = titles[panel.id];
+    if (title !== undefined && panel.title !== title) panel.api.setTitle(title);
+  };
+  api.panels.forEach(apply);
+  return api.onDidAddPanel(apply);
 }
 
 /** 에디터 패널이 어떤 경로로든 지워지면 가운데에 다시 넣는다. */
