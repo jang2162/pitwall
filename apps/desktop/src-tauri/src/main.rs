@@ -25,6 +25,7 @@ mod mcp;
 mod menu;
 mod perf;
 mod shell_command;
+mod trust;
 mod update;
 mod windows;
 
@@ -41,7 +42,9 @@ fn local_host(
 ) -> LocalHost {
     let methods = Arc::clone(&i18n);
     // 앱이 띄우는 프로세스의 환경. 로그인 셸은 처음 쓸 때 돈다 — 시작을 늦추지 않는다.
-    let runtime = Arc::new(Runtime::new(LoginShell::for_this_user()));
+    // 미신뢰 프로젝트에서는 프로젝트 코드를 돌리는 제공자를 고르지 않는다(M1-05). 레지스트리는 Host 를 만든 뒤 붙인다.
+    let trust = trust::TrustGate::default();
+    let runtime = Arc::new(Runtime::new(LoginShell::for_this_user()).with_trust(trust.check()));
     let runtime_methods = Arc::clone(&runtime);
     let lang = Arc::new(pw_lang::methods::Lang::new(&extensions));
     let lang_methods = Arc::clone(&lang);
@@ -80,6 +83,8 @@ fn local_host(
                 global: config.global.clone(),
                 projects: projects.clone(),
             });
+            trust.attach(projects.clone());
+            tauri::async_runtime::spawn(trust::follow(trust::subscribe(host.bus()), runtime));
         }
     }
     host

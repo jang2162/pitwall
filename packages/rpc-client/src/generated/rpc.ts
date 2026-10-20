@@ -89,6 +89,11 @@ export type UnaryMethods = {
 	 */
 	"project.candidates": { params: PathParams; result: RootCandidate[] };
 	/**
+	 * 신뢰 확인 다이얼로그를 띄울 차례인가. 아직 묻지 않은 프로젝트면 미신뢰로 기록하고 `true` — 같은 프로젝트의 창이 여럿이어도
+	 * 처음 부른 하나만 `true` 를 받는다. 이미 물었으면 `false`.
+	 */
+	"project.claimTrustPrompt": { params: ProjectIdParams; result: boolean };
+	/**
 	 * 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.
 	 */
 	"project.create": { params: CreateProjectParams; result: Project };
@@ -130,10 +135,18 @@ export type UnaryMethods = {
 	worktree: ActiveWorktree | null,
 } | null };
 	/**
+	 * 프로젝트를 신뢰하거나 해제한다. 신뢰를 가진 프로젝트(`ownerId`)로 `project.changed`(`kind: trust`)가 나간다.
+	 */
+	"project.setTrust": { params: SetTrustParams; result: ProjectTrust };
+	/**
 	 * 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면
 	 * `reason` 을 배너로 보여 준다.
 	 */
 	"project.storage": { params: null; result: StorageStatus };
+	/**
+	 * 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.
+	 */
+	"project.trust": { params: ProjectIdParams; result: ProjectTrust };
 	/**
 	 * 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.
 	 */
@@ -199,6 +212,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":false},
+	"project.claimTrustPrompt": {"name":"project.claimTrustPrompt","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"bool","doc":" 신뢰 확인 다이얼로그를 띄울 차례인가. 아직 묻지 않은 프로젝트면 미신뢰로 기록하고 `true` — 같은 프로젝트의 창이 여럿이어도\n 처음 부른 하나만 `true` 를 받는다. 이미 물었으면 `false`.\n","mcp":false},
 	"project.create": {"name":"project.create","kind":"unary","tier":"write","roles":["owner"],"params":"CreateProjectParams","output":"Project","doc":" 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.\n","mcp":false},
 	"project.delete": {"name":"project.delete","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"()","doc":" 레지스트리에서 지운다. 프로젝트 폴더와 설정 파일은 그대로 둔다.\n","mcp":false},
 	"project.get": {"name":"project.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트 하나. 없으면 invalid params 오류.\n","mcp":false},
@@ -207,7 +221,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.markOpened": {"name":"project.markOpened","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트를 열었다고 기록한다(최근 목록 순서).\n","mcp":false},
 	"project.recent": {"name":"project.recent","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"RecentParams","output":"Vec<Project>","doc":" 최근에 연 프로젝트, 최근 것부터. 연 적 없는 프로젝트는 빠진다.\n","mcp":false},
 	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n","mcp":false},
+	"project.setTrust": {"name":"project.setTrust","kind":"unary","tier":"write","roles":["owner"],"params":"SetTrustParams","output":"ProjectTrust","doc":" 프로젝트를 신뢰하거나 해제한다. 신뢰를 가진 프로젝트(`ownerId`)로 `project.changed`(`kind: trust`)가 나간다.\n","mcp":false},
 	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n","mcp":false},
+	"project.trust": {"name":"project.trust","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"ProjectTrust","doc":" 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.\n","mcp":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":false},
@@ -862,6 +878,13 @@ export type ProjectScopedParams = {
 	projectId: string,
 };
 
+export type ProjectTrust = {
+	projectId: string,
+	/**  신뢰를 가진 프로젝트. 메인 저장소 프로젝트가 등록된 워크트리 프로젝트면 그 프로젝트, 아니면 `project_id` 와 같다. */
+	ownerId: string,
+	state: TrustState,
+};
+
 export type RecentParams = {
 	/**  없으면 20. */
 	limit?: number | null,
@@ -970,6 +993,11 @@ export type RuntimeToolInfo = {
 export type SetLanguageParams = {
 	/**  `"system"` 또는 등록된 언어 태그. */
 	language: string,
+};
+
+export type SetTrustParams = {
+	id: string,
+	trusted: boolean,
 };
 
 /**  크기 등급(결정 M1-D9). */
@@ -1117,6 +1145,11 @@ export type ThemeList = {
  *  둘 중 어느 쪽을 정책으로 할지는 MCP 툴 레지스트리(M0-17)에서 확정한다.
  */
 export type Tier = "read" | "write" | "exec" | "dangerous";
+
+/**  프로젝트의 신뢰 상태. `trusted` 가 아니면 런타임 제공자를 돌리지 않는다. */
+export type TrustState = 
+/**  아직 묻지 않았다(미신뢰로 다룬다). 창을 열면 확인 다이얼로그가 한 번 뜬다. */
+"unknown" | "untrusted" | "trusted";
 
 export type UiLogBatch = {
 	entries: UiLogEntry[],

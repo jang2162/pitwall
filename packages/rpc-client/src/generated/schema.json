@@ -2377,6 +2377,30 @@
       ],
       "tier": "read"
     },
+    "project.claimTrustPrompt": {
+      "description": "신뢰 확인 다이얼로그를 띄울 차례인가. 아직 묻지 않은 프로젝트면 미신뢰로 기록하고 `true` — 같은 프로젝트의 창이 여럿이어도\n처음 부른 하나만 `true` 를 받는다. 이미 물었으면 `false`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "boolean"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "project.create": {
       "description": "프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.",
       "kind": "unary",
@@ -3325,6 +3349,70 @@
       ],
       "tier": "read"
     },
+    "project.setTrust": {
+      "description": "프로젝트를 신뢰하거나 해제한다. 신뢰를 가진 프로젝트(`ownerId`)로 `project.changed`(`kind: trust`)가 나간다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "trusted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "trusted"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "TrustState": {
+            "description": "프로젝트의 신뢰 상태. `trusted` 가 아니면 런타임 제공자를 돌리지 않는다.",
+            "oneOf": [
+              {
+                "enum": [
+                  "untrusted",
+                  "trusted"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "unknown",
+                "description": "아직 묻지 않았다(미신뢰로 다룬다). 창을 열면 확인 다이얼로그가 한 번 뜬다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "ownerId": {
+            "description": "신뢰를 가진 프로젝트. 메인 저장소 프로젝트가 등록된 워크트리 프로젝트면 그 프로젝트, 아니면 `project_id` 와 같다.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/TrustState"
+          }
+        },
+        "required": [
+          "projectId",
+          "ownerId",
+          "state"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "project.storage": {
       "description": "레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n`reason` 을 배너로 보여 준다.",
       "kind": "unary",
@@ -3421,6 +3509,68 @@
             "type": "object"
           }
         ]
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "project.trust": {
+      "description": "프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "TrustState": {
+            "description": "프로젝트의 신뢰 상태. `trusted` 가 아니면 런타임 제공자를 돌리지 않는다.",
+            "oneOf": [
+              {
+                "enum": [
+                  "untrusted",
+                  "trusted"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "unknown",
+                "description": "아직 묻지 않았다(미신뢰로 다룬다). 창을 열면 확인 다이얼로그가 한 번 뜬다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "ownerId": {
+            "description": "신뢰를 가진 프로젝트. 메인 저장소 프로젝트가 등록된 워크트리 프로젝트면 그 프로젝트, 아니면 `project_id` 와 같다.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/TrustState"
+          }
+        },
+        "required": [
+          "projectId",
+          "ownerId",
+          "state"
+        ],
+        "type": "object"
       },
       "roles": [
         "owner",
