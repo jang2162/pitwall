@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
+use pw_i18n::{I18n, Localizer};
 use serde::Serialize;
 use tauri::{
     AppHandle, Emitter, EventTarget, Manager, Runtime, State, WebviewUrl, WebviewWindow,
@@ -51,11 +52,24 @@ impl WindowKind {
         WebviewUrl::App(url.into())
     }
 
-    fn title(self) -> &'static str {
+    /// OS 창 제목(창 전환기 · Window 메뉴 · Dock 에 보인다). 웰컴 창은 앱 이름이라 번역하지 않는다
+    /// (docs/design/07-extensibility.md 「UI 언어 (i18n)」 표의 「번역하지 않는 것」 행). 웹뷰의 제목 줄과 같은 메시지다
+    /// (`src/i18n/app-strings.ts` 의 `windowTitles`).
+    pub fn title(self, l: &Localizer) -> String {
         match self {
-            WindowKind::Welcome => "Pitwall",
-            WindowKind::Project => "Project",
-            WindowKind::Settings => "Settings",
+            WindowKind::Welcome => "Pitwall".to_owned(),
+            WindowKind::Project => l.text("window-title-project"),
+            WindowKind::Settings => l.text("window-title-settings"),
+        }
+    }
+
+    /// 창 label 의 종류. 이 모듈이 만든 창이 아니면 `None`.
+    pub fn of_label(label: &str) -> Option<Self> {
+        match label {
+            WELCOME_LABEL => Some(WindowKind::Welcome),
+            SETTINGS_LABEL => Some(WindowKind::Settings),
+            _ if label.starts_with(PROJECT_LABEL_PREFIX) => Some(WindowKind::Project),
+            _ => None,
         }
     }
 
@@ -161,9 +175,39 @@ impl ProjectOpen {
     }
 }
 
+const PROJECT_LABEL_PREFIX: &str = "project-";
+
 /// 프로젝트 창의 label. 프로젝트마다 창이 하나라(03-architecture §3) label 이 곧 「그 프로젝트의 창」이다.
 pub fn project_label(project_id: &str) -> String {
-    format!("project-{project_id}")
+    format!("{PROJECT_LABEL_PREFIX}{project_id}")
+}
+
+/// 지금 UI 언어. 언어 상태가 없으면(시험의 mock 앱) 빈 카탈로그라 메시지 id 가 그대로 나온다.
+fn localizer<R: Runtime>(app: &AppHandle<R>) -> Localizer {
+    match app.try_state::<Arc<I18n>>() {
+        Some(i18n) => i18n.localizer(),
+        None => pw_i18n::Catalog::default().localizer(&[]),
+    }
+}
+
+/// 열린 창의 OS 제목을 `l` 의 언어로 바꾼다(언어 전환, `src/i18n.rs`). 한 창이 실패해도 나머지는 바꾼다.
+pub fn retitle<R: Runtime>(app: &AppHandle<R>, l: &Localizer) -> Result<(), String> {
+    let errors: Vec<String> = app
+        .webview_windows()
+        .into_iter()
+        .filter_map(|(label, window)| {
+            let kind = WindowKind::of_label(&label)?;
+            window
+                .set_title(&kind.title(l))
+                .err()
+                .map(|e| format!("{label}: {e}"))
+        })
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 // 아래 open_* 를 Tauri command 에서 부를 때는 async command 로 만든다. Windows 에서 동기 command·이벤트 핸들러
@@ -249,7 +293,7 @@ fn build_at<R: Runtime>(
 ) -> tauri::Result<WebviewWindow<R>> {
     let (width, height) = kind.inner_size();
     let builder = WebviewWindowBuilder::new(app, label, url)
-        .title(kind.title())
+        .title(kind.title(&localizer(app)))
         .inner_size(width, height)
         // 웹뷰 설정으로 끌 수 있는 기본 동작은 여기서 끈다. 설정이 없는 것은 src/webview-guards.ts 가 막는다.
         // - 줌: Windows 는 WebView2 의 IsZoomControlEnabled·IsPinchZoomEnabled 가 꺼진다.
@@ -303,6 +347,48 @@ mod tests {
         .map(WindowKind::query_value)
         .into();
         assert_eq!(values, ["welcome", "project", "settings"]);
+    }
+
+    fn builtin_localizer(locales: &[&str]) -> Localizer {
+        let registry =
+            pw_ext::Registry::from_roots(&semver::Version::new(0, 0, 0), pw_ext::builtin::roots());
+        let locales: Vec<String> = locales.iter().map(|&l| l.to_owned()).collect();
+        pw_i18n::Catalog::from_registry(&registry).localizer(&locales)
+    }
+
+    /// OS 창 제목은 UI 언어의 메시지다. 웰컴 창은 앱 이름 그대로다.
+    #[test]
+    fn window_titles_follow_the_ui_language() {
+        let kinds = [
+            WindowKind::Welcome,
+            WindowKind::Project,
+            WindowKind::Settings,
+        ];
+        let ko = builtin_localizer(&["ko", "en"]);
+        let en = builtin_localizer(&["en"]);
+        assert_eq!(kinds.map(|k| k.title(&ko)), ["Pitwall", "프로젝트", "설정"]);
+        assert_eq!(
+            kinds.map(|k| k.title(&en)),
+            ["Pitwall", "Project", "Settings"]
+        );
+    }
+
+    /// 언어를 바꿀 때 제목을 고칠 창을 label 로 고른다.
+    #[test]
+    fn window_kind_is_read_back_from_its_label() {
+        assert_eq!(
+            WindowKind::of_label(WELCOME_LABEL),
+            Some(WindowKind::Welcome)
+        );
+        assert_eq!(
+            WindowKind::of_label(SETTINGS_LABEL),
+            Some(WindowKind::Settings)
+        );
+        assert_eq!(
+            WindowKind::of_label(&project_label("ab12")),
+            Some(WindowKind::Project)
+        );
+        assert_eq!(WindowKind::of_label("main"), None);
     }
 
     #[test]

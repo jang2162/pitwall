@@ -1,8 +1,8 @@
 //! 앱 쪽 UI 언어 연결. 본체는 `crates/pw-i18n`.
 //!
 //! 언어 설정(`settings.toml` 의 `ui.language`)이 바뀌면 전역 설정이 다시 읽히며 `config.changed` 가 나간다 — 손으로 고쳤든
-//! `i18n.setLanguage` 로 바꿨든 같은 길이다. 웹뷰는 그 이벤트로 `i18n.get` 을 다시 부르고, 네이티브 메뉴는 여기서 받아
-//! 글자를 바꾼다(테마 · 키맵의 재시작 없는 반영과 같은 이벤트 경로).
+//! `i18n.setLanguage` 로 바꿨든 같은 길이다. 웹뷰는 그 이벤트로 `i18n.get` 을 다시 부르고, 네이티브 메뉴와 OS 창 제목은
+//! 여기서 받아 글자를 바꾼다(테마 · 키맵의 재시작 없는 반영과 같은 이벤트 경로).
 
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use pw_ext::Registry;
 use pw_i18n::{Catalog, I18n, Localizer};
 use tauri::{AppHandle, Runtime};
 
-use crate::menu;
+use crate::{menu, windows};
 
 /// 확장 레지스트리의 번역과 OS 언어. 전역 설정은 Host 를 만든 뒤 [`I18n::attach_config`] 로 붙인다.
 pub fn init(registry: &Registry) -> Arc<I18n> {
@@ -51,12 +51,16 @@ pub async fn follow(
     }
 }
 
-/// 언어가 바뀌면 네이티브 메뉴의 글자를 바꾼다.
-pub fn follow_in_menu<R: Runtime>(app: &AppHandle<R>, i18n: Arc<I18n>, events: Subscription) {
+/// 언어가 바뀌면 네이티브 메뉴의 글자와 열린 창의 OS 제목을 바꾼다. 새로 여는 창은 만들 때 그 언어로 제목을 단다
+/// (`windows::build_at`).
+pub fn follow_in_native_ui<R: Runtime>(app: &AppHandle<R>, i18n: Arc<I18n>, events: Subscription) {
     let app = app.clone();
     tauri::async_runtime::spawn(follow(i18n, events, move |l| {
         if let Err(error) = menu::relabel(&app, l) {
             tracing::error!(%error, "menu labels not changed to the new language");
+        }
+        if let Err(error) = windows::retitle(&app, l) {
+            tracing::error!(%error, "window titles not changed to the new language");
         }
     }));
 }

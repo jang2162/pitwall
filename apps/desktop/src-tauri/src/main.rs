@@ -153,7 +153,7 @@ fn start<R: tauri::Runtime>(
 ) {
     tauri::async_runtime::spawn(config_log::run(config_events));
     if let Some(i18n) = app.try_state::<Arc<I18n>>() {
-        i18n::follow_in_menu(app, Arc::clone(&i18n), i18n::subscribe(host.bus()));
+        i18n::follow_in_native_ui(app, Arc::clone(&i18n), i18n::subscribe(host.bus()));
     }
     // 레지스트리를 미리 열어 상태를 로그에 남긴다(정상이 아니면 경고 — 손상 · 잠김 · 읽기 전용). 열기는 잠긴 파일을 최대 2초 기다리고
     // 무결성 검사를 하므로 창을 띄우는 스레드가 아니라 블로킹 스레드에서 한다.
