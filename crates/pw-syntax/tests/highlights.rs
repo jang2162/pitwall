@@ -147,14 +147,14 @@ fn every_builtin_language_highlights_its_fixture() {
     let mut missing = Vec::new();
     for (file, linguist, id, expected) in CASES {
         let text = std::fs::read_to_string(format!("{dir}/{file}")).unwrap();
-        let opened = syntax
+        let grammar = syntax
             .open(SyntaxOpenParams {
                 doc_id: (*file).to_owned(),
                 language: (*linguist).to_owned(),
                 text: text.clone(),
             })
-            .unwrap_or_else(|| panic!("{linguist} has no grammar"));
-        let grammar = syntax.prepare(opened).unwrap().grammar;
+            .unwrap()
+            .grammar;
         assert_eq!(grammar.as_deref(), Some(*id), "{file}");
         let (rendered, tokens) = render(&text, &syntax, file);
         for token in *expected {

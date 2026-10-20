@@ -1,14 +1,19 @@
 //! 언어 확장의 문법 WASM · 강조 쿼리를 읽어 tree-sitter 언어로 올린다.
 //!
-//! WASM 문법은 wasmtime 엔진 위의 저장소(`WasmStore`)에 올리고, 그 저장소를 가진 파서 하나로 모든 문서를 파싱한다. 엔진 · 파서는
-//! 처음 문법이 필요할 때 만든다 — 강조할 문서를 열지 않은 앱의 시작 시간 · 유휴 메모리에 들지 않는다(결정 M1-D2 의 되돌림 조건).
-//! 쿼리 실행은 파서와 저장소 없이 된다(쿼리 · 트리는 호스트 쪽 자료다).
+//! 문법마다 wasmtime 저장소(`WasmStore`)와 그것을 가진 파서 하나를 둔다([`Lane`]). 한 문법의 긴 파싱은 그 문법의 문서만 기다리게
+//! 하고, 마지막 문서가 닫힌 문법은 저장소째 내려 그 메모리(인스턴스 · 선형 메모리)를 돌려준다(`service.rs` 머리 주석). 엔진은
+//! 문법들이 함께 쓰고 처음 문법이 필요할 때 만든다 — 강조할 문서를 열지 않은 앱의 시작 시간 · 유휴 메모리에 들지 않는다(결정
+//! M1-D2 의 되돌림 조건). 쿼리 실행은 파서와 저장소 없이 된다(쿼리 · 트리는 호스트 쪽 자료다).
+//!
+//! 문법 WASM 의 실행 시간에는 상한이 없다: 파싱의 진행 콜백은 WASM 호출(렉서 · 외부 스캐너) 안쪽을 끊지 못하고, wasmtime 의
+//! epoch · fuel 은 tree-sitter 가 저장소(`Store`)를 만들자마자 WASM 을 부르면서 시한 · 연료를 받을 길을 주지 않아 걸 수 없다.
+//! 그래서 문법은 내장 확장의 것만 받는다(`pw-ext` 레지스트리 — `docs/design/07-extensibility.md` 「문법 WASM 의 신뢰 경계」).
 
-use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use pw_ext::{ResolvedFile, ResolvedLanguage};
-use tree_sitter::{Language, Parser, Query, Tree, WasmStore, wasmtime};
+use tree_sitter::{Language, ParseOptions, ParseState, Parser, Query, Tree, WasmStore, wasmtime};
 
 use crate::token::{CaptureKind, classify};
 
@@ -29,70 +34,35 @@ pub struct Grammar {
     pub kinds: Vec<CaptureKind>,
 }
 
-/// 문법이 놓인 자리로 가른다 — 같은 WASM · 쿼리를 쓰는 두 기여(JSON · JSON with Comments)는 한 번만 올린다.
-type Key = (String, String);
-
-/// 엔진 · 파서와 올린 문법. 하나의 잠금 아래에 둔다 — 문법을 올리는 일과 파싱이 같은 저장소를 쓴다.
-pub struct Runtime {
-    /// 저장소를 가진다. `engine` 보다 먼저 버려져야 한다(필드는 적은 순서로 버려진다) — 저장소가 엔진을 가리킨다.
+/// 문법 하나와 그것만 올린 저장소 · 파서. 저장소는 엔진을 복제해 쥐므로 엔진보다 오래 살아도 된다.
+pub struct Lane {
     parser: Parser,
-    #[allow(
-        dead_code,
-        reason = "the wasm store points at it; it must outlive `parser`"
-    )]
-    engine: wasmtime::Engine,
-    loaded: HashMap<Key, Result<Arc<Grammar>, String>>,
+    grammar: Arc<Grammar>,
 }
 
-impl Runtime {
-    pub fn new() -> Result<Self, String> {
-        let engine = wasmtime::Engine::default();
-        let store =
-            WasmStore::new(&engine).map_err(|e| format!("cannot create the wasm store: {e}"))?;
-        let mut parser = Parser::new();
-        parser
-            .set_wasm_store(store)
-            .map_err(|e| format!("cannot attach the wasm store: {e}"))?;
-        Ok(Self {
-            parser,
-            engine,
-            loaded: HashMap::new(),
-        })
-    }
-
-    /// 언어의 문법. 처음이면 올린다. 실패도 기억한다 — 같은 문법을 매번 다시 읽지 않는다.
-    pub fn grammar(&mut self, language: &ResolvedLanguage) -> Result<Arc<Grammar>, String> {
+impl Lane {
+    pub fn load(engine: &wasmtime::Engine, language: &ResolvedLanguage) -> Result<Self, String> {
         let (Some(wasm), Some(queries)) = (&language.grammar, &language.queries) else {
             return Err(format!("language `{}` has no grammar", language.id));
         };
-        let key = (wasm.display(), queries.display());
-        if let Some(result) = self.loaded.get(&key) {
-            return result.clone();
-        }
-        let result = self.load(wasm, queries).map(Arc::new);
-        if let Err(e) = &result {
-            tracing::error!(target: "pw_syntax", language = %language.id, "cannot load the grammar: {e}");
-        }
-        self.loaded.insert(key, result.clone());
-        result
-    }
-
-    fn load(&mut self, wasm: &ResolvedFile, queries: &ResolvedFile) -> Result<Grammar, String> {
         let name = grammar_name(wasm)?;
         let bytes = read_limited(wasm, MAX_GRAMMAR_BYTES)?;
         let highlights = queries.join(HIGHLIGHTS)?;
         let source = String::from_utf8(read_limited(&highlights, MAX_QUERY_BYTES)?)
             .map_err(|_| format!("{} is not UTF-8", highlights.display()))?;
 
-        let mut store = self
-            .parser
-            .take_wasm_store()
-            .ok_or("the parser lost its wasm store")?;
-        let language = store.load_language(&name, &bytes);
-        self.parser
+        let mut store =
+            WasmStore::new(engine).map_err(|e| format!("cannot create the wasm store: {e}"))?;
+        let language = store
+            .load_language(&name, &bytes)
+            .map_err(|e| format!("{}: {e}", wasm.display()))?;
+        let mut parser = Parser::new();
+        parser
             .set_wasm_store(store)
             .map_err(|e| format!("cannot attach the wasm store: {e}"))?;
-        let language = language.map_err(|e| format!("{}: {e}", wasm.display()))?;
+        parser
+            .set_language(&language)
+            .map_err(|e| format!("cannot use the grammar: {e}"))?;
 
         let highlights = Query::new(&language, &source).map_err(|e| {
             format!(
@@ -108,28 +78,39 @@ impl Runtime {
             .iter()
             .map(|n| classify(n))
             .collect();
-        Ok(Grammar {
-            language,
-            highlights,
-            kinds,
+        Ok(Self {
+            parser,
+            grammar: Arc::new(Grammar {
+                language,
+                highlights,
+                kinds,
+            }),
         })
     }
 
-    /// `old` 는 이 텍스트에 맞춰 편집(`Tree::edit`)해 둔 앞 트리 — 바뀐 곳만 다시 파싱한다.
+    pub fn grammar(&self) -> &Arc<Grammar> {
+        &self.grammar
+    }
+
+    /// `old` 는 이 텍스트에 맞춰 편집(`Tree::edit`)해 둔 앞 트리 — 바뀐 곳만 다시 파싱한다. `progress` 는 파싱 중에 자주 불리고,
+    /// `Break` 를 돌려주면 파싱을 그만두고 `None` 이다. 끝까지 가지 못한 파싱의 상태는 버린다(다음 파싱은 처음부터).
     pub fn parse(
         &mut self,
-        grammar: &Grammar,
         text: &str,
         old: Option<&Tree>,
-    ) -> Result<Tree, String> {
-        self.parser
-            .set_language(&grammar.language)
-            .map_err(|e| format!("cannot use the grammar: {e}"))?;
-        let tree = self.parser.parse(text, old);
+        progress: &mut dyn FnMut() -> ControlFlow<()>,
+    ) -> Option<Tree> {
+        let bytes = text.as_bytes();
+        let mut callback = |_: &ParseState| progress();
+        let tree = self.parser.parse_with_options(
+            &mut |offset, _| bytes.get(offset..).unwrap_or_default(),
+            old,
+            Some(ParseOptions::new().progress_callback(&mut callback)),
+        );
         if tree.is_none() {
             self.parser.reset();
         }
-        tree.ok_or_else(|| "the parser stopped before the end".to_owned())
+        tree
     }
 }
 

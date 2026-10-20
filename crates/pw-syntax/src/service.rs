@@ -1,22 +1,35 @@
 //! 문서 세션: 열린 문서마다 텍스트 · 버전 · 구문 트리를 두고, 편집은 바로 적용하고 다시 파싱은 강조 요청 때 바뀐 곳만 한다.
+//!
+//! 한 문서가 서비스 전체를 붙잡지 않게 하는 상한들:
+//! - **크기:** 결정 M1-D9 의 「편집 + 강조」 범위(5 MiB 이하, 1만 자 넘는 줄 없음 — 상수는 `pw_fs::judge`)를 넘는 문서는 열지
+//!   않고, 편집으로 넘어가면 그 문서의 강조를 끈다([`SyntaxOff`]). 클라이언트(M1-17 · M1-23)도 같은 기준으로 끄지만 믿지 않는다 —
+//!   10 MB 한 줄 JSON 하나가 파싱에 1.4 GB 를 썼다.
+//! - **파싱 시간:** 파싱 한 번(과 강조 쿼리 한 번)이 [`parse_budget`] 을 넘으면 그 문서의 강조를 끈다. 새 편집이 오거나 문서가
+//!   닫히면 하던 파싱을 그만둔다(그 요청은 빈 구간으로 끝난다 — [`SyntaxHighlightsResult`] 의 `version`).
+//! - **잠금:** 파싱은 그 문법의 파서 잠금만 쥔다 — 다른 문법의 문서는 기다리지 않는다. 같은 문법의 문서는 그 파싱이 끝나거나 위
+//!   상한에 걸릴 때까지 기다린다(파서 · 저장소를 문서마다 두면 문법의 선형 메모리를 문서마다 다시 만든다).
+//! - **문법 메모리:** 문법은 그 언어의 문서를 처음 열 때 올리고, 그 문법을 쓰는 마지막 문서가 사라진 뒤 [`UNLOAD_AFTER`] 가
+//!   지나면 저장소째 내린다. 올린 문법이 하나도 없으면 엔진도 버린다.
 
 use std::collections::{BTreeMap, HashMap};
 use std::mem;
-use std::ops::Range;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::ops::{ControlFlow, Range};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::time::{Duration, Instant};
 
 use pw_ext::{Registry, ResolvedLanguage};
+use pw_fs::judge::{EDITABLE_MAX, LONG_LINE_CHARS};
 use pw_rpc::{RpcError, code};
-use tree_sitter::{InputEdit, Tree};
+use tree_sitter::{InputEdit, Tree, wasmtime};
 
-use crate::grammar::{Grammar, Runtime};
+use crate::grammar::{Grammar, Lane};
 use crate::highlight::spans;
 use crate::methods::{
-    HighlightSpan, SyntaxEditParams, SyntaxHighlightsParams, SyntaxHighlightsResult,
-    SyntaxOpenParams, SyntaxOpenResult, TextChange,
+    HighlightSpan, SyntaxEditParams, SyntaxEditResult, SyntaxHighlightsParams,
+    SyntaxHighlightsResult, SyntaxOff, SyntaxOpenParams, SyntaxOpenResult, TextChange,
 };
-use crate::text::{LineIndex, apply};
+use crate::text::{Change, LineIndex, apply};
 
 /// 한 Host 가 열어 두는 문서 수의 상한. 넘으면 가장 오래 쓰지 않은 문서를 닫는다 — 웹뷰가 다시 로드되며 `syntax.close` 없이
 /// 사라진 문서가 쌓이지 않게. 닫힌 문서에 온 요청은 not found 로 끝나고 웹뷰는 다시 연다.
@@ -25,27 +38,85 @@ pub const MAX_DOCUMENTS: usize = 256;
 /// 앞당겨 도착해 차례를 기다리는 편집 수의 상한(문서마다). 넘으면 conflict — 빠진 편집이 오지 않는 것으로 본다.
 pub const MAX_EARLY_EDITS: usize = 64;
 
+/// 문법을 쓰는 마지막 문서가 사라진 뒤 그 문법을 내리기까지. 탭을 닫았다 곧 다시 여는 흔한 경우에 문법을 다시 올리지(release 로
+/// 5~135 ms) 않게 둔다.
+pub const UNLOAD_AFTER: Duration = Duration::from_secs(5 * 60);
+
+/// 파싱(또는 강조 쿼리) 한 번의 시간 상한: 1초 + 텍스트 1 MiB 마다 1초(5 MiB 에서 6초).
+///
+/// 정상 문서의 첫 파싱은 대부분 1 MiB 당 0.2초 안이고 느린 문법이 Kotlin 0.93초 · Markdown 0.62초 · Shell 0.5초다(내장 픽스처를
+/// 5 MiB 까지 이어 붙여 release 로 잰 것 — `tests/limits.rs` 의 `measure_5mib_first_parse`). 상한을 넘는 것은 오류 회복이 폭주하는
+/// 입력이다 — 닫히지 않은 괄호 20만 줄(400 KB Rust)이 53초, `[` 50만 줄(1 MB JSON)이 120초 넘게 걸렸다.
+pub fn parse_budget(text_bytes: usize) -> Duration {
+    const MIB: f64 = 1024.0 * 1024.0;
+    Duration::from_secs(1) + Duration::from_secs_f64(text_bytes as f64 / MIB)
+}
+
 /// 구문 분석 서비스. Host 하나에 하나다.
 pub struct Syntax {
     extensions: Arc<Registry>,
-    /// 처음 문법이 필요할 때 만든다(`grammar.rs` 머리 주석).
-    runtime: Mutex<Option<Runtime>>,
+    grammars: Arc<Grammars>,
     documents: Mutex<HashMap<String, Arc<Document>>>,
     clock: AtomicU64,
 }
 
-/// `syntax.open` 이 넣은 문서. 문법을 올리는 일(`Syntax::prepare`)로 넘긴다.
-pub struct Opened {
-    doc_id: String,
-    document: Arc<Document>,
+/// 문법이 놓인 자리로 가른다 — 같은 WASM · 쿼리를 쓰는 두 기여(JSON · JSON with Comments)는 한 번만 올린다.
+type Key = (String, String);
+
+/// 올린 문법들과 그것을 쓰는 문서 수.
+struct Grammars {
+    table: Mutex<Table>,
+    /// 문법 저장소들이 함께 쓰는 엔진. 올린 문법이 없으면 `None` 이다.
+    engine: Mutex<Option<wasmtime::Engine>>,
+    unload_after: Duration,
+}
+
+#[derive(Default)]
+struct Table {
+    slots: HashMap<Key, Entry>,
+    /// 문법을 내리는 스레드가 돌고 있다.
+    unloading: bool,
+}
+
+struct Entry {
+    slot: Arc<Slot>,
+    /// 이 문법을 쓰는 문서 수.
+    documents: usize,
+    /// `documents` 가 0 이 된 때.
+    idle_since: Option<Instant>,
+}
+
+/// 문법 하나. 잠금은 그 문법을 올리는 일과 파싱이 쥔다.
+struct Slot {
+    lane: Mutex<LaneState>,
+}
+
+enum LaneState {
+    Empty,
+    Ready(Lane),
+    /// 올리지 못했다. 같은 문법을 매번 다시 읽지 않는다(내려질 때 잊는다).
+    Failed(String),
+}
+
+/// 문서가 문법 하나를 쓰고 있다는 표. 버려지면 그 수를 줄인다.
+struct Usage {
+    owner: Weak<Grammars>,
+    key: Key,
+    slot: Arc<Slot>,
 }
 
 struct Document {
+    usage: Usage,
     language: ResolvedLanguage,
+    grammar: Arc<Grammar>,
     text: Mutex<TextState>,
     /// 마지막으로 파싱한 결과. 강조 요청이 이 잠금 아래에서 다시 파싱한다.
     parsed: Mutex<Option<Parsed>>,
     used: AtomicU64,
+    /// 텍스트의 지금 버전. 하던 파싱이 낡았는지 진행 콜백이 잠금 없이 본다.
+    version: AtomicU32,
+    /// 닫혔거나 같은 id 로 다시 열려 버려졌다. 하던 파싱을 그만둔다.
+    dropped: AtomicBool,
 }
 
 struct TextState {
@@ -56,6 +127,10 @@ struct TextState {
     pending: Vec<InputEdit>,
     /// 앞당겨 도착한 편집(버전 → 바꾸기).
     early: BTreeMap<u32, Vec<TextChange>>,
+    /// 앞당겨 온 편집을 버렸다 — 웹뷰와 텍스트가 어긋났으니 다음 편집은 conflict 다(웹뷰가 다시 연다).
+    diverged: bool,
+    /// 강조를 끈 까닭. 끈 뒤에는 텍스트를 버리고 편집은 받기만 한다.
+    off: Option<SyntaxOff>,
 }
 
 struct Parsed {
@@ -65,41 +140,100 @@ struct Parsed {
     index: Arc<LineIndex>,
 }
 
+/// 다시 파싱한 결과.
+enum Reparse {
+    /// 트리가 지금 텍스트에 맞다. 이 요청에서 파싱했으면 그 파싱을 시작한 때(강조 쿼리가 같은 시한을 나눠 쓴다).
+    Ready(Option<Instant>),
+    /// 새 편집이 왔거나 문서가 닫혀 그만뒀다.
+    Stopped {
+        version: u32,
+    },
+    Off {
+        version: u32,
+        off: SyntaxOff,
+    },
+}
+
 impl Syntax {
     pub fn new(extensions: Arc<Registry>) -> Self {
+        Self::with_unload_after(extensions, UNLOAD_AFTER)
+    }
+
+    /// 문법을 내리기까지의 시간을 정한다(시험 · 측정용).
+    pub fn with_unload_after(extensions: Arc<Registry>, unload_after: Duration) -> Self {
         Self {
             extensions,
-            runtime: Mutex::new(None),
+            grammars: Arc::new(Grammars {
+                table: Mutex::default(),
+                engine: Mutex::new(None),
+                unload_after,
+            }),
             documents: Mutex::new(HashMap::new()),
             clock: AtomicU64::new(0),
         }
     }
 
-    /// 문서를 넣는다(같은 id 는 바꾼다). 언어의 문법이 없으면 넣지 않고(같은 id 의 앞 문서도 닫는다) `None`.
-    pub fn open(&self, params: SyntaxOpenParams) -> Option<Opened> {
-        let language = self
-            .extensions
-            .language_for_linguist(&params.language)
-            .filter(|l| l.grammar.is_some() && l.queries.is_some());
-        let mut documents = lock(&self.documents);
-        let Some(language) = language else {
-            documents.remove(&params.doc_id);
-            return None;
-        };
-        let index = LineIndex::new(&params.text);
-        let document = Arc::new(Document {
+    /// 문서를 연다(같은 id 는 바꾼다). 블로킹이다(문법을 처음 쓰면 올린다). 언어의 문법이 없거나 크기 상한을 넘으면 열지 않는다
+    /// (같은 id 의 앞 문서도 닫는다). 문법을 올리지 못하면 internal 오류다.
+    pub fn open(&self, params: SyntaxOpenParams) -> Result<SyntaxOpenResult, RpcError> {
+        let SyntaxOpenParams {
+            doc_id,
             language,
+            text,
+        } = params;
+        let not_opened = |off| {
+            self.close(&doc_id);
+            Ok(SyntaxOpenResult { grammar: None, off })
+        };
+        let Some(language) = self
+            .extensions
+            .language_for_linguist(&language)
+            .filter(|l| l.grammar.is_some() && l.queries.is_some())
+        else {
+            return not_opened(None);
+        };
+        if text.len() as u64 > EDITABLE_MAX {
+            return not_opened(Some(SyntaxOff::TooLarge));
+        }
+        let index = LineIndex::new(&text);
+        if index.longest_line() > LONG_LINE_CHARS {
+            return not_opened(Some(SyntaxOff::LongLine));
+        }
+
+        let usage = self.grammars.acquire(key(&language));
+        let grammar = match usage
+            .slot
+            .with_lane(&self.grammars, &language, |lane| Arc::clone(lane.grammar()))
+        {
+            Ok(grammar) => grammar,
+            Err(e) => {
+                self.close(&doc_id);
+                return Err(RpcError::internal(e));
+            }
+        };
+        let document = Arc::new(Document {
+            usage,
+            grammar,
             text: Mutex::new(TextState {
-                text: Arc::new(params.text),
+                text: Arc::new(text),
                 index: Arc::new(index),
                 version: 0,
                 pending: Vec::new(),
                 early: BTreeMap::new(),
+                diverged: false,
+                off: None,
             }),
             parsed: Mutex::new(None),
             used: AtomicU64::new(self.tick()),
+            version: AtomicU32::new(0),
+            dropped: AtomicBool::new(false),
+            language,
         });
-        documents.insert(params.doc_id.clone(), Arc::clone(&document));
+        let grammar = Some(document.language.id.clone());
+        let mut documents = lock(&self.documents);
+        if let Some(old) = documents.insert(doc_id, document) {
+            old.dropped.store(true, Ordering::Relaxed);
+        }
         if documents.len() > MAX_DOCUMENTS
             && let Some(oldest) = documents
                 .iter()
@@ -107,36 +241,26 @@ impl Syntax {
                 .map(|(id, _)| id.clone())
         {
             tracing::info!(target: "pw_syntax", doc = %oldest, "closing the least recently used document");
-            documents.remove(&oldest);
-        }
-        Some(Opened {
-            doc_id: params.doc_id,
-            document,
-        })
-    }
-
-    /// 연 문서의 문법을 (처음이면) 올린다. 블로킹이다. 올리지 못하면 그 문서를 닫는다(그사이 다시 열린 것은 두고).
-    pub fn prepare(&self, opened: Opened) -> Result<SyntaxOpenResult, RpcError> {
-        match self.grammar(&opened.document.language) {
-            Ok(_) => Ok(SyntaxOpenResult {
-                grammar: Some(opened.document.language.id.clone()),
-            }),
-            Err(e) => {
-                let mut documents = lock(&self.documents);
-                if documents
-                    .get(&opened.doc_id)
-                    .is_some_and(|d| Arc::ptr_eq(d, &opened.document))
-                {
-                    documents.remove(&opened.doc_id);
-                }
-                Err(RpcError::internal(e))
+            if let Some(old) = documents.remove(&oldest) {
+                old.dropped.store(true, Ordering::Relaxed);
             }
         }
+        Ok(SyntaxOpenResult { grammar, off: None })
     }
 
-    pub fn edit(&self, params: SyntaxEditParams) -> Result<(), RpcError> {
+    /// 블로킹이다(텍스트를 다시 만든다).
+    pub fn edit(&self, params: SyntaxEditParams) -> Result<SyntaxEditResult, RpcError> {
         let document = self.document(&params.doc_id)?;
         let mut state = lock(&document.text);
+        if let Some(off) = state.off {
+            return Ok(SyntaxEditResult { off: Some(off) });
+        }
+        if state.diverged {
+            return Err(conflict(
+                "an earlier edit was dropped; reopen the document".to_owned(),
+                state.version,
+            ));
+        }
         if params.version <= state.version {
             return Err(conflict(
                 format!(
@@ -158,23 +282,33 @@ impl Syntax {
                 ));
             }
             state.early.insert(params.version, params.changes);
-            return Ok(());
+            return Ok(SyntaxEditResult { off: None });
         }
         state
             .apply(&params.changes)
             .map_err(RpcError::invalid_params)?;
         // 기다리던 편집 중 차례가 온 것.
-        loop {
+        while state.off.is_none() {
             let next = state.version + 1;
             let Some(changes) = state.early.remove(&next) else {
                 break;
             };
             if let Err(e) = state.apply(&changes) {
                 tracing::warn!(target: "pw_syntax", doc = %params.doc_id, version = next, "dropping an early edit: {e}");
+                state.early.clear();
+                state.diverged = true;
                 break;
             }
         }
-        Ok(())
+        document.version.store(state.version, Ordering::Relaxed);
+        let off = state.off;
+        drop(state);
+        if off.is_some()
+            && let Ok(mut parsed) = document.parsed.try_lock()
+        {
+            *parsed = None;
+        }
+        Ok(SyntaxEditResult { off })
     }
 
     /// 블로킹이다(필요하면 다시 파싱한다).
@@ -189,12 +323,12 @@ impl Syntax {
             )));
         }
         let document = self.document(&params.doc_id)?;
-        let grammar = self
-            .grammar(&document.language)
-            .map_err(RpcError::internal)?;
         let mut parsed = lock(&document.parsed);
-        self.reparse(&document, &grammar, &mut parsed)
-            .map_err(RpcError::internal)?;
+        let parse_started = match self.reparse(&document, &mut parsed)? {
+            Reparse::Ready(started) => started,
+            Reparse::Stopped { version } => return Ok(empty(version, None)),
+            Reparse::Off { version, off } => return Ok(empty(version, Some(off))),
+        };
         let Some(parsed) = parsed.as_ref() else {
             unreachable!("reparse leaves a tree");
         };
@@ -207,33 +341,69 @@ impl Syntax {
             })
         };
         let range: Range<usize> = bytes(from)?..bytes(to)?;
-        let spans = spans(
-            &grammar.highlights,
-            &grammar.kinds,
+        // 파싱과 쿼리가 한 시한을 나눠 쓴다 — 상한 바로 아래에서 끝난 파싱 뒤에 쿼리가 상한을 또 쓰지 않게.
+        let started = parse_started.unwrap_or_else(Instant::now);
+        let budget = parse_budget(text.len());
+        let Some(spans) = spans(
+            &document.grammar.highlights,
+            &document.grammar.kinds,
             &parsed.tree,
             text,
             range,
-        )
-        .into_iter()
-        .map(|(r, token)| HighlightSpan {
-            from: utf16_u32(index.utf16_of(text, r.start)),
-            to: utf16_u32(index.utf16_of(text, r.end)),
-            token,
-        })
-        .collect();
+            &mut || {
+                if started.elapsed() > budget {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            },
+        ) else {
+            let version = parsed.version;
+            tracing::warn!(target: "pw_syntax", doc = %params.doc_id, "highlighting took over {budget:?}; turning it off");
+            lock(&document.text).turn_off(SyntaxOff::TimedOut);
+            return Ok(empty(version, Some(SyntaxOff::TimedOut)));
+        };
         Ok(SyntaxHighlightsResult {
             version: parsed.version,
-            spans,
+            spans: spans
+                .into_iter()
+                .map(|(r, token)| HighlightSpan {
+                    from: utf16_u32(index.utf16_of(text, r.start)),
+                    to: utf16_u32(index.utf16_of(text, r.end)),
+                    token,
+                })
+                .collect(),
+            off: None,
         })
     }
 
     pub fn close(&self, doc_id: &str) {
-        lock(&self.documents).remove(doc_id);
+        if let Some(document) = lock(&self.documents).remove(doc_id) {
+            document.dropped.store(true, Ordering::Relaxed);
+        }
     }
 
     /// 열린 문서 수(시험용).
     pub fn document_count(&self) -> usize {
         lock(&self.documents).len()
+    }
+
+    /// 문서의 지금 텍스트(시험용).
+    #[cfg(test)]
+    pub(crate) fn text_of(&self, doc_id: &str) -> String {
+        let document = self.document(doc_id).unwrap();
+        let state = lock(&document.text);
+        String::clone(&state.text)
+    }
+
+    /// 올라가 있는 문법 수(시험 · 측정용).
+    pub fn loaded_grammars(&self) -> usize {
+        let table = lock(&self.grammars.table);
+        table
+            .slots
+            .values()
+            .filter(|e| matches!(*lock(&e.slot.lane), LaneState::Ready(_)))
+            .count()
     }
 
     fn document(&self, doc_id: &str) -> Result<Arc<Document>, RpcError> {
@@ -244,25 +414,23 @@ impl Syntax {
         Ok(document)
     }
 
-    fn grammar(&self, language: &ResolvedLanguage) -> Result<Arc<Grammar>, String> {
-        let mut runtime = lock(&self.runtime);
-        if runtime.is_none() {
-            *runtime = Some(Runtime::new()?);
-        }
-        runtime.as_mut().expect("created above").grammar(language)
-    }
-
     /// `parsed` 를 지금 텍스트에 맞춘다. 앞 트리가 있으면 그 뒤의 편집을 알리고 바뀐 곳만 다시 파싱한다.
     fn reparse(
         &self,
         document: &Document,
-        grammar: &Grammar,
         parsed: &mut Option<Parsed>,
-    ) -> Result<(), String> {
+    ) -> Result<Reparse, RpcError> {
         let (text, index, version, edits) = {
             let mut state = lock(&document.text);
+            if let Some(off) = state.off {
+                *parsed = None;
+                return Ok(Reparse::Off {
+                    version: state.version,
+                    off,
+                });
+            }
             if parsed.as_ref().is_some_and(|p| p.version == state.version) {
-                return Ok(());
+                return Ok(Reparse::Ready(None));
             }
             (
                 Arc::clone(&state.text),
@@ -271,23 +439,73 @@ impl Syntax {
                 mem::take(&mut state.pending),
             )
         };
-        let old = parsed.take().map(|mut p| {
+        // 앞 트리는 그대로 두고 복제본을 편집한다 — 파싱을 그만두면 앞 트리와 편집을 되돌려 놓는다.
+        let old = parsed.as_ref().map(|p| {
+            let mut tree = p.tree.clone();
             for edit in &edits {
-                p.tree.edit(edit);
+                tree.edit(edit);
             }
-            p.tree
+            tree
         });
-        let tree = lock(&self.runtime)
-            .as_mut()
-            .ok_or("the grammar runtime is not ready")?
-            .parse(grammar, &text, old.as_ref())?;
-        *parsed = Some(Parsed {
-            tree,
-            version,
-            text,
-            index,
-        });
-        Ok(())
+        let mut stop = None;
+        let mut started = Instant::now();
+        let tree = document
+            .usage
+            .slot
+            .with_lane(&self.grammars, &document.language, |lane| {
+                // 문법의 잠금을 기다린 시간은 넣지 않는다 — 다른 문서의 파싱 때문에 이 문서를 끄지 않게.
+                started = Instant::now();
+                let budget = parse_budget(text.len());
+                lane.parse(&text, old.as_ref(), &mut || {
+                    if document.dropped.load(Ordering::Relaxed)
+                        || document.version.load(Ordering::Relaxed) != version
+                    {
+                        stop = Some(Stop::Superseded);
+                    } else if started.elapsed() > budget {
+                        stop = Some(Stop::TimedOut(budget));
+                    } else {
+                        return ControlFlow::Continue(());
+                    }
+                    ControlFlow::Break(())
+                })
+            })
+            .map_err(RpcError::internal)?;
+        if let Some(tree) = tree {
+            *parsed = Some(Parsed {
+                tree,
+                version,
+                text,
+                index,
+            });
+            return Ok(Reparse::Ready(Some(started)));
+        }
+        let mut state = lock(&document.text);
+        match stop {
+            Some(Stop::Superseded) => {
+                let mut edits = edits;
+                edits.append(&mut state.pending);
+                state.pending = edits;
+                Ok(Reparse::Stopped { version })
+            }
+            Some(Stop::TimedOut(budget)) => {
+                tracing::warn!(target: "pw_syntax", language = %document.language.id, bytes = text.len(), "parsing took over {budget:?}; turning highlighting off");
+                state.turn_off(SyntaxOff::TimedOut);
+                *parsed = None;
+                Ok(Reparse::Off {
+                    version: state.version,
+                    off: SyntaxOff::TimedOut,
+                })
+            }
+            None => {
+                tracing::error!(target: "pw_syntax", language = %document.language.id, "the parser stopped before the end");
+                state.turn_off(SyntaxOff::Failed);
+                *parsed = None;
+                Ok(Reparse::Off {
+                    version: state.version,
+                    off: SyntaxOff::Failed,
+                })
+            }
+        }
     }
 
     fn tick(&self) -> u64 {
@@ -295,26 +513,186 @@ impl Syntax {
     }
 }
 
-impl TextState {
-    /// 바꾸기들을 차례로 적용하고 버전을 올린다. 하나라도 실패하면 아무것도 바꾸지 않는다.
-    fn apply(&mut self, changes: &[TextChange]) -> Result<(), String> {
-        let mut text = String::clone(&self.text);
-        let mut index = LineIndex::clone(&self.index);
-        let mut edits = Vec::with_capacity(changes.len());
-        for c in changes {
-            edits.push(apply(
-                &mut text,
-                &mut index,
-                c.from as usize,
-                c.to as usize,
-                &c.insert,
-            )?);
+enum Stop {
+    Superseded,
+    TimedOut(Duration),
+}
+
+impl Grammars {
+    fn acquire(self: &Arc<Self>, key: Key) -> Usage {
+        let mut table = lock(&self.table);
+        let entry = table.slots.entry(key.clone()).or_insert_with(|| Entry {
+            slot: Arc::new(Slot {
+                lane: Mutex::new(LaneState::Empty),
+            }),
+            documents: 0,
+            idle_since: None,
+        });
+        entry.documents += 1;
+        entry.idle_since = None;
+        Usage {
+            owner: Arc::downgrade(self),
+            key,
+            slot: Arc::clone(&entry.slot),
         }
-        self.text = Arc::new(text);
-        self.index = Arc::new(index);
-        self.pending.extend(edits);
+    }
+
+    fn release(self: &Arc<Self>, key: &Key) {
+        let mut table = lock(&self.table);
+        let Some(entry) = table.slots.get_mut(key) else {
+            return;
+        };
+        entry.documents -= 1;
+        if entry.documents > 0 {
+            return;
+        }
+        entry.idle_since = Some(Instant::now());
+        if table.unloading {
+            return;
+        }
+        let owner = Arc::downgrade(self);
+        match std::thread::Builder::new()
+            .name("pw-syntax-unload".to_owned())
+            .spawn(move || unload_idle(&owner))
+        {
+            Ok(_) => table.unloading = true,
+            Err(e) => {
+                tracing::warn!(target: "pw_syntax", "cannot start the grammar unloading thread: {e}");
+            }
+        }
+    }
+
+    fn engine(&self) -> wasmtime::Engine {
+        lock(&self.engine)
+            .get_or_insert_with(wasmtime::Engine::default)
+            .clone()
+    }
+}
+
+/// 문서가 없는 채로 `unload_after` 가 지난 문법을 내린다. 기다리는 문법이 없으면 끝난다.
+fn unload_idle(owner: &Weak<Grammars>) {
+    loop {
+        let Some(grammars) = owner.upgrade() else {
+            return;
+        };
+        let now = Instant::now();
+        let mut unloaded = Vec::new();
+        let mut next: Option<Duration> = None;
+        {
+            let mut table = lock(&grammars.table);
+            table.slots.retain(|_, e| {
+                let Some(since) = e.idle_since.filter(|_| e.documents == 0) else {
+                    return true;
+                };
+                let idle = now.saturating_duration_since(since);
+                if idle >= grammars.unload_after {
+                    unloaded.push(Arc::clone(&e.slot));
+                    return false;
+                }
+                let left = grammars.unload_after - idle;
+                next = Some(next.map_or(left, |n| n.min(left)));
+                true
+            });
+            if table.slots.is_empty() {
+                *lock(&grammars.engine) = None;
+            }
+            if next.is_none() {
+                table.unloading = false;
+            }
+        }
+        // 저장소 · 문법은 잠금 밖에서 버린다.
+        if !unloaded.is_empty() {
+            tracing::info!(target: "pw_syntax", count = unloaded.len(), "unloading idle grammars");
+        }
+        drop(unloaded);
+        drop(grammars);
+        match next {
+            Some(wait) => std::thread::sleep(wait),
+            None => return,
+        }
+    }
+}
+
+impl Slot {
+    /// 문법의 파서로 `f` 를 한다. 처음이면 문법을 올린다(그동안 이 문법의 다른 문서는 기다린다).
+    fn with_lane<R>(
+        &self,
+        grammars: &Grammars,
+        language: &ResolvedLanguage,
+        f: impl FnOnce(&mut Lane) -> R,
+    ) -> Result<R, String> {
+        let mut state = lock(&self.lane);
+        if matches!(*state, LaneState::Empty) {
+            *state = match Lane::load(&grammars.engine(), language) {
+                Ok(lane) => LaneState::Ready(lane),
+                Err(e) => {
+                    tracing::error!(target: "pw_syntax", language = %language.id, "cannot load the grammar: {e}");
+                    LaneState::Failed(e)
+                }
+            };
+        }
+        match &mut *state {
+            LaneState::Ready(lane) => Ok(f(lane)),
+            LaneState::Failed(e) => Err(e.clone()),
+            LaneState::Empty => unreachable!("loaded above"),
+        }
+    }
+}
+
+impl Drop for Usage {
+    fn drop(&mut self) {
+        if let Some(grammars) = self.owner.upgrade() {
+            grammars.release(&self.key);
+        }
+    }
+}
+
+impl TextState {
+    /// 바꾸기들을 차례로 적용하고 버전을 올린다. 범위가 틀리면 아무것도 바꾸지 않는다. 결과가 크기 상한을 넘으면 강조를 끈다.
+    fn apply(&mut self, changes: &[TextChange]) -> Result<(), String> {
+        let changes: Vec<Change<'_>> = changes
+            .iter()
+            .map(|c| Change {
+                from: c.from as usize,
+                to: c.to as usize,
+                insert: &c.insert,
+            })
+            .collect();
+        if let Some(applied) = apply(&self.text, &self.index, &changes)? {
+            if applied.text.len() as u64 > EDITABLE_MAX {
+                self.turn_off(SyntaxOff::TooLarge);
+            } else if applied.index.longest_line() > LONG_LINE_CHARS {
+                self.turn_off(SyntaxOff::LongLine);
+            } else {
+                self.text = Arc::new(applied.text);
+                self.index = Arc::new(applied.index);
+                self.pending.extend(applied.edits);
+            }
+        }
         self.version += 1;
         Ok(())
+    }
+
+    fn turn_off(&mut self, off: SyntaxOff) {
+        self.off = Some(off);
+        self.text = Arc::default();
+        self.index = Arc::new(LineIndex::new(""));
+        self.pending = Vec::new();
+        self.early = BTreeMap::new();
+    }
+}
+
+fn key(language: &ResolvedLanguage) -> Key {
+    let display =
+        |f: &Option<pw_ext::ResolvedFile>| f.as_ref().map(|f| f.display()).unwrap_or_default();
+    (display(&language.grammar), display(&language.queries))
+}
+
+fn empty(version: u32, off: Option<SyntaxOff>) -> SyntaxHighlightsResult {
+    SyntaxHighlightsResult {
+        version,
+        spans: Vec::new(),
+        off,
     }
 }
 

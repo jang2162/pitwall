@@ -19,7 +19,7 @@ mod service;
 mod text;
 pub mod token;
 
-pub use service::{MAX_DOCUMENTS, MAX_EARLY_EDITS, Opened, Syntax};
+pub use service::{MAX_DOCUMENTS, MAX_EARLY_EDITS, Syntax, UNLOAD_AFTER, parse_budget};
 pub use token::SyntaxToken;
 
 #[cfg(test)]

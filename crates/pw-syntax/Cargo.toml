@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 pw-ext = { path = "../pw-ext" }
+# 대용량 기준(결정 M1-D9)의 상수를 에디터 · 검색과 함께 쓴다.
+pw-fs = { path = "../pw-fs" }
 pw-rpc = { path = "../pw-rpc" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

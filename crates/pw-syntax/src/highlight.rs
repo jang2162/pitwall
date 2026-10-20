@@ -7,25 +7,40 @@
 //! - 잡힌 노드끼리 겹치면 안쪽(자식)이 이긴다 — 문자열 안의 이스케이프는 `string.escape` 다. `@none` 은 토큰 없이 안쪽을 차지해
 //!   바깥 강조를 덮는다.
 
+use std::cell::Cell;
 use std::collections::HashMap;
-use std::ops::Range;
+use std::ops::{ControlFlow, Range};
 
-use tree_sitter::{Query, QueryCursor, StreamingIterator as _, Tree};
+use tree_sitter::{
+    Query, QueryCursor, QueryCursorOptions, QueryCursorState, StreamingIterator as _, Tree,
+};
 
 use crate::token::{CaptureKind, SyntaxToken};
 
 /// `range`(바이트) 안의 토큰 구간. 겹치지 않고 앞에서부터 차례이며, 같은 토큰이 이어지면 하나로 합친다. `range` 밖으로 나가는
-/// 노드는 `range` 에 맞춰 자른다.
+/// 노드는 `range` 에 맞춰 자른다. `progress` 가 `Break` 를 돌려주면 그만두고 `None`(쿼리 실행에 걸리는 시간의 상한).
 pub fn spans(
     query: &Query,
     kinds: &[CaptureKind],
     tree: &Tree,
     text: &str,
     range: Range<usize>,
-) -> Vec<(Range<usize>, SyntaxToken)> {
+    progress: &mut dyn FnMut() -> ControlFlow<()>,
+) -> Option<Vec<(Range<usize>, SyntaxToken)>> {
     let mut cursor = QueryCursor::new();
     cursor.set_byte_range(range.clone());
-    let mut captures = cursor.captures(query, tree.root_node(), text.as_bytes());
+    let stopped = Cell::new(false);
+    let mut callback = |_: &QueryCursorState| {
+        let flow = progress();
+        stopped.set(flow.is_break());
+        flow
+    };
+    let mut captures = cursor.captures_with_options(
+        query,
+        tree.root_node(),
+        text.as_bytes(),
+        QueryCursorOptions::new().progress_callback(&mut callback),
+    );
     // 노드 id → `nodes` 의 자리. 같은 노드의 캡처는 패턴 순서로 이어서 오므로 덮어쓰면 뒤의 패턴이 이긴다.
     let mut taken: HashMap<usize, usize> = HashMap::new();
     let mut nodes: Vec<(usize, usize, Option<SyntaxToken>)> = Vec::new();
@@ -47,6 +62,10 @@ pub fn spans(
                 nodes.push((node.start_byte(), node.end_byte(), token));
             }
         }
+    }
+    drop(captures);
+    if stopped.get() {
+        return None;
     }
     // 바깥(긴 것)이 먼저. 같은 범위는 잡힌 차례 그대로(안정 정렬).
     nodes.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
@@ -77,7 +96,7 @@ pub fn spans(
         out.push(pos, end, token);
         pos = pos.max(end);
     }
-    out.spans
+    Some(out.spans)
 }
 
 struct Spans {
