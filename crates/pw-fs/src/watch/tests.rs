@@ -422,6 +422,125 @@ fn folder_watches_skip_ignored_folders_and_follow_new_ones() {
     );
 }
 
+/// 새 폴더를 만들고 곧바로 그 안에 쓴 항목도 온다 — 폴더별 감시(Linux)에서는 감시가 그 폴더에 붙기 전에 생긴 것이라 OS 가
+/// 알리지 않는다(에이전트가 새 모듈 폴더를 만들고 쓰기, `cp -r`, 압축 풀기, 브랜치 전환).
+///
+/// 이 플랫폼의 방식과, 한도를 넘어 새 폴더가 폴링으로 붙는 폴더별 감시(폴링은 감시를 걸 때 있던 항목을 알리지 않는다)로 본다.
+/// macOS 에서 OS 감시로 폴더별 감시를 하면 notify 가 감시를 더할 때마다 FSEvents 스트림을 멈췄다 「지금부터」 로 다시 열어
+/// (`fsevent.rs` 의 `watch_inner`) 그 틈의 이벤트를 잃는다 — 루트에 새로 만든 폴더 자체도 오지 않는다. macOS 의 방식은 재귀
+/// 감시라 실제로는 생기지 않아 그 조합은 보지 않는다.
+#[test]
+fn items_written_right_after_a_new_folder_arrive() {
+    let polled = folders(Options {
+        fault_limit: Some(1),
+        poll_interval: Duration::from_millis(100),
+        ..Options::default()
+    });
+    let platform = Options::default();
+    for options in [platform, polled] {
+        let strategy = options.strategy;
+        let mode = if options.fault_limit.is_some() {
+            "polled"
+        } else {
+            "native"
+        };
+        let f = Fixture::new();
+        let root = f.base.join("proj");
+        let id = f.project(&root);
+        let mut changes = f.changes(&id);
+        let watch = f.watch(options);
+        let _lease = watch.acquire(&params(&id)).unwrap();
+        let started = Instant::now();
+
+        let mut expected = std::collections::BTreeSet::new();
+        for t in 0..10 {
+            let inner = root.join(format!("new{t}/inner"));
+            fs::create_dir_all(&inner).unwrap();
+            expected.insert(root.join(format!("new{t}")));
+            expected.insert(inner.clone());
+            for i in 0..20 {
+                let file = inner.join(format!("f{i}.txt"));
+                fs::write(&file, "x").unwrap();
+                expected.insert(file);
+            }
+        }
+        let mut missing = expected.clone();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !missing.is_empty() {
+            let Some((_, changed)) =
+                changes.next(deadline.saturating_duration_since(Instant::now()))
+            else {
+                break;
+            };
+            assert!(!changed.rescan, "{strategy:?}: {changed:?}");
+            for p in &changed.paths {
+                missing.remove(Path::new(p));
+            }
+        }
+        let files = missing.iter().filter(|p| p.extension().is_some()).count();
+        eprintln!(
+            "new folders {strategy:?} {mode}: {} of {} paths in {:?}",
+            expected.len() - missing.len(),
+            expected.len(),
+            started.elapsed()
+        );
+        assert!(
+            missing.is_empty(),
+            "{strategy:?} {mode}: {} of {} paths missing ({files} files), e.g. {:?}",
+            missing.len(),
+            expected.len(),
+            missing.iter().take(3).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// 재귀 감시: ignore 된 폴더 안의 변경은 그 폴더(가장 바깥의 ignore 된 폴더) 하나로 접혀 `modified` 로 온다 — `npm install` ·
+/// `cargo build` 가 창마다 수만 경로를 내지 않는다. ignore 되지 않은 경로는 그대로다.
+#[test]
+fn changes_inside_an_ignored_folder_fold_into_that_folder() {
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    // `.gitignore` 는 저장소 안에서만 적용된다(ripgrep 과 같다, `crate::list`).
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::write(root.join(".gitignore"), "node_modules/\n").unwrap();
+    let lib = root.join("node_modules/pkg/lib");
+    fs::create_dir_all(&lib).unwrap();
+    let mut changes = f.changes(&id);
+    let watch = f.watch(Options {
+        strategy: Strategy::Recursive,
+        ..Options::default()
+    });
+    let _lease = watch.acquire(&params(&id)).unwrap();
+
+    for i in 0..500 {
+        fs::write(lib.join(format!("m{i}.js")), "x").unwrap();
+    }
+    fs::create_dir_all(root.join("node_modules/fresh/deep")).unwrap();
+    fs::write(root.join("node_modules/fresh/deep/a.js"), "x").unwrap();
+    fs::write(root.join("app.js"), "x").unwrap();
+    let got = changes.all(Duration::from_millis(600));
+    let all: Vec<&FsChanged> = got.iter().map(|(_, c)| c).collect();
+    let paths: usize = all.iter().map(|c| c.paths.len()).sum();
+    eprintln!("ignored folder: {} events, {paths} paths", all.len());
+    assert!(all.iter().all(|c| !c.rescan), "{all:?}");
+    let node_modules = root.join("node_modules");
+    for c in &all {
+        for p in &c.paths {
+            assert!(
+                !Path::new(p).starts_with(&node_modules) || Path::new(p) == node_modules,
+                "{p} is inside the ignored folder"
+            );
+        }
+    }
+    let folded = all
+        .iter()
+        .find_map(|c| kind_of(c, &node_modules))
+        .expect("the ignored folder itself");
+    assert_eq!(folded, FsChangeKind::Modified);
+    assert!(all.iter().any(|c| has(c, &root.join("app.js"))), "{all:?}");
+}
+
 /// `.git/` 안의 변경은 거른다(M2 의 몫). 같은 창의 다른 경로는 온다.
 #[test]
 fn git_internals_are_filtered() {

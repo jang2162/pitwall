@@ -52,7 +52,9 @@ pub struct FsChanged {
     pub root: String,
     /// 그 루트를 연 창의 활성 워크트리(`fs.watch` 의 `worktree`).
     pub worktree: Option<String>,
-    /// 바뀐 절대 경로. 이름순, 중복 없음. `.git/` 안은 없다.
+    /// 바뀐 절대 경로. 이름순, 중복 없음. `.git/` 안은 없다. ignore 된 폴더 안의 변경은 재귀 감시(macOS · Windows)에서는 그 폴더
+    /// (가장 바깥의 ignore 된 폴더) 하나의 `modified` 로 접히고 — 받는 쪽은 그 아래 펼친 것을 다시 읽는다 — 폴더별 감시(Linux)에서는
+    /// 오지 않는다.
     pub paths: Vec<String>,
     /// `paths[i]` 의 변경.
     pub kinds: Vec<FsChangeKind>,

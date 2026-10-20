@@ -46,24 +46,34 @@ impl<'a> Batch<'a> {
     }
 
     /// 루트 안 · `.git/` 밖의 경로만 받는다. 읽기(`Access`)는 바뀐 것이 아니라 버린다 — 창이 파일을 읽을 때마다(inotify 의
-    /// `IN_CLOSE_NOWRITE` 등) 다시 읽게 하는 고리가 생긴다.
+    /// `IN_CLOSE_NOWRITE` 등) 다시 읽게 하는 고리가 생긴다. 다시 읽으라는 플래그(FSEvents 의 `MustScanSubDirs` 등)도 경로가
+    /// 루트(자신 포함) 안 · `.git/` 밖일 때만 따르고, 경로가 없으면(큐 넘침) 늘 따른다 — `git gc` 가 `.git/objects` 에 붙인 플래그로
+    /// 루트 전체를 다시 읽지 않게.
     pub fn add(&mut self, event: &notify::Event) {
-        if event.need_rescan() {
+        if event.need_rescan()
+            && (event.paths.is_empty() || event.paths.iter().any(|p| self.covers(p)))
+        {
             self.rescan = true;
         }
         if matches!(event.kind, EventKind::Access(_)) {
             return;
         }
         let born = matches!(event.kind, EventKind::Create(_));
-        for path in &event.paths {
-            if !self.inside(path) {
+        self.insert(event.paths.iter().cloned(), born);
+    }
+
+    /// OS 이벤트 없이 안 경로. `born` 이면 이 창에서 생긴 것으로 본다(새 폴더에 감시가 붙기 전에 생긴 항목), 아니면 바뀐 것이다
+    /// (ignore 된 폴더 안의 변경을 접은 그 폴더).
+    pub fn insert(&mut self, paths: impl IntoIterator<Item = PathBuf>, born: bool) {
+        for path in paths {
+            if !self.inside(&path) {
                 continue;
             }
-            if self.seen.len() >= self.max && !self.seen.contains_key(path) {
+            if self.seen.len() >= self.max && !self.seen.contains_key(&path) {
                 self.rescan = true;
                 continue;
             }
-            self.seen.entry(path.clone()).or_insert(born);
+            self.seen.entry(path).or_insert(born);
         }
     }
 
@@ -75,15 +85,15 @@ impl<'a> Batch<'a> {
     /// `.git/` 안(M2 의 몫)과 루트 밖(루트 밖을 가리키는 링크를 따라간 경로)은 알리지 않는다. 루트 자체도 — 그 안의 항목이 바뀌면
     /// FSEvents 가 루트를 함께 알리는데, 그것은 바뀐 경로가 아니다.
     fn inside(&self, path: &Path) -> bool {
-        match path.strip_prefix(self.root) {
-            Ok(rel) => {
-                rel.components().next().is_some()
-                    && !rel
-                        .components()
-                        .any(|c| c == Component::Normal(".git".as_ref()))
-            }
-            Err(_) => false,
-        }
+        path != self.root && self.covers(path)
+    }
+
+    /// 루트(자신 포함) 아래이고 `.git/` 밖이다.
+    fn covers(&self, path: &Path) -> bool {
+        path.strip_prefix(self.root).is_ok_and(|rel| {
+            !rel.components()
+                .any(|c| c == Component::Normal(".git".as_ref()))
+        })
     }
 
     /// 창을 닫는다. 알릴 것이 없으면 `None`. 디스크를 경로마다 한 번 본다.
@@ -243,5 +253,33 @@ mod tests {
         let mut batch = Batch::new(&root, MAX_PATHS, true);
         batch.lost();
         assert_eq!(batch.finish(), Some((Vec::new(), Vec::new(), true)));
+    }
+
+    /// 다시 읽으라는 플래그는 루트(자신 포함) 안 · `.git/` 밖 경로에 붙었을 때만 따른다 — `git gc` 가 `.git/objects` 에 붙인
+    /// 플래그로 루트 전체를 다시 읽지 않는다.
+    #[test]
+    fn rescan_flags_on_git_internals_and_outside_paths_are_ignored() {
+        let (_tmp, root) = real_tmp();
+        let flagged =
+            |p: &Path| event(EventKind::Other, &[p]).set_flag(notify::event::Flag::Rescan);
+        for ignored in [
+            root.join(".git/objects"),
+            root.join("sub/.git"),
+            root.parent().unwrap().join("elsewhere"),
+        ] {
+            let mut batch = Batch::new(&root, MAX_PATHS, true);
+            batch.add(&flagged(&ignored));
+            assert_eq!(batch.finish(), None, "{}", ignored.display());
+        }
+        for followed in [root.clone(), root.join("src")] {
+            let mut batch = Batch::new(&root, MAX_PATHS, true);
+            batch.add(&flagged(&followed));
+            assert_eq!(
+                batch.finish(),
+                Some((Vec::new(), Vec::new(), true)),
+                "{}",
+                followed.display()
+            );
+        }
     }
 }
