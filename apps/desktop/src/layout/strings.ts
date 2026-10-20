@@ -48,6 +48,8 @@ export function projectStrings(t: Translate) {
       empty: t("notifications-empty"),
       clear: t("notifications-clear"),
       level: (level: "info" | "warning" | "error") => t("notification-level", { level }),
+      /** 같은 제목의 알림이 떠 있는 토스트에 합쳐졌을 때의 토스트 제목. */
+      repeated: (title: string, count: number) => t("notification-repeated", { title, count }),
     },
   };
 }

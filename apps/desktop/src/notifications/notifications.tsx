@@ -3,10 +3,22 @@
 //
 // 알림을 내는 법: 창 안의 컴포넌트에서 `const notify = useNotify();` 를 받아 `notify({ level: "error", title, body })`.
 // 문장은 그 기능의 문자열(Fluent)로 만들어 넘긴다. `body` 에는 오류 원문(RPC 오류 메시지 등)을 그대로 둔다.
+//
+// 토스트는 폭주해도 쌓이지 않는다(`ToastGate`): 같은 등급 · 같은 제목은 떠 있는 토스트 하나를 덮어쓰며 횟수를 붙이고, 동시에
+// 떠 있는 토스트는 `TOAST_LIMIT` 개까지다 — 넘는 알림은 기록에만 남는다. sonner 는 보이는 수(`visibleToasts`)만 줄일 뿐
+// 받은 토스트를 모두 DOM 과 타이머로 들고 있기 때문이다.
 
 import type { IDockviewPanelProps } from "dockview-react";
 import { Bell, CircleAlert, Info, TriangleAlert } from "lucide-react";
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { createStore, type StoreApi, useStore } from "zustand";
 
@@ -61,7 +73,33 @@ export function createNotificationStore(): NotificationStore {
   }));
 }
 
-const NotificationContext = createContext<NotificationStore | undefined>(undefined);
+/** 동시에 떠 있는 토스트의 최대 수. sonner 의 기본 보이는 수(3)와 같다. */
+export const TOAST_LIMIT = 3;
+
+/** 떠 있는 토스트(키 → 합친 횟수). 토스트가 닫히면(자동 · 손) 빠진다. 창 하나에 하나다. */
+export class ToastGate {
+  private readonly open = new Map<string, number>();
+
+  /** 띄울 수 있으면 이 키로 합친 횟수(처음이면 1), 상한에 걸려 띄우지 않으면 `undefined`. */
+  admit(key: string): number | undefined {
+    const count = this.open.get(key);
+    if (count === undefined && this.open.size >= TOAST_LIMIT) return undefined;
+    const next = (count ?? 0) + 1;
+    this.open.set(key, next);
+    return next;
+  }
+
+  release(key: string): void {
+    this.open.delete(key);
+  }
+}
+
+interface NotificationContextValue {
+  store: NotificationStore;
+  gate: ToastGate;
+}
+
+const NotificationContext = createContext<NotificationContextValue | undefined>(undefined);
 
 /** 창 하나의 알림 기록. `store` 는 시험이 넘긴다 — 없으면 새로 만든다. */
 export function NotificationProvider({
@@ -71,14 +109,21 @@ export function NotificationProvider({
   store?: NotificationStore;
   children: ReactNode;
 }) {
-  const [store] = useState(() => given ?? createNotificationStore());
-  return <NotificationContext value={store}>{children}</NotificationContext>;
+  const [value] = useState(() => ({
+    store: given ?? createNotificationStore(),
+    gate: new ToastGate(),
+  }));
+  return <NotificationContext value={value}>{children}</NotificationContext>;
+}
+
+function useNotificationContext(): NotificationContextValue {
+  const value = useContext(NotificationContext);
+  if (!value) throw new Error("NotificationProvider 밖에서 알림을 썼다");
+  return value;
 }
 
 function useNotificationStore(): NotificationStore {
-  const store = useContext(NotificationContext);
-  if (!store) throw new Error("NotificationProvider 밖에서 알림을 썼다");
-  return store;
+  return useNotificationContext().store;
 }
 
 export function useNotifications<T>(selector: (state: NotificationState) => T): T {
@@ -87,15 +132,27 @@ export function useNotifications<T>(selector: (state: NotificationState) => T): 
 
 const TOASTS = { info: toast.info, warning: toast.warning, error: toast.error } as const;
 
-/** 알림을 기록하고 토스트로 띄우는 함수. 함수는 창이 사는 동안 같다. */
+/** 알림을 기록하고 토스트로 띄우는 함수. 함수는 창이 사는 동안 같다. 토스트를 합치고 막는 규칙은 머리 주석. */
 export function useNotify(): (input: NotificationInput) => void {
-  const store = useNotificationStore();
+  const { store, gate } = useNotificationContext();
+  const repeated = useProjectStrings().notifications.repeated;
+  const repeatedRef = useRef(repeated);
+  repeatedRef.current = repeated;
   return useCallback(
     (input: NotificationInput) => {
-      const item = store.getState().push(input);
-      TOASTS[input.level](input.title, { id: item.id, description: input.body });
+      store.getState().push(input);
+      const key = `${input.level}:${input.title}`;
+      const count = gate.admit(key);
+      if (count === undefined) return;
+      const release = () => gate.release(key);
+      TOASTS[input.level](count > 1 ? repeatedRef.current(input.title, count) : input.title, {
+        id: key,
+        description: input.body,
+        onDismiss: release,
+        onAutoClose: release,
+      });
     },
-    [store],
+    [store, gate],
   );
 }
 

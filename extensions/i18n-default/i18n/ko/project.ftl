@@ -71,3 +71,6 @@ notification-level =
         [warning] 경고
        *[info] 정보
     }
+
+# $title: 알림 제목, $count: 합친 횟수(2 이상)
+notification-repeated = { $title } (×{ $count })

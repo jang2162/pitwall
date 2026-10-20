@@ -72,3 +72,6 @@ notification-level =
         [warning] Warning
        *[info] Info
     }
+
+# $title: notification title, $count: how many were merged (2 or more)
+notification-repeated = { $title } (×{ $count })
