@@ -64,6 +64,7 @@
 - JSON-RPC 2.0, 메서드명 `<module>.<action>` (예: `git.log`, `db.query.execute`)
 - Host Router 는 연결 단위로 라우팅한다. 클라이언트는 `projectId`(또는 프로젝트가 없는 창은 `hostId`)로 Host 연결을 열고, 그 연결의 요청 · 스트림 · 구독 id 는 그 Host 세션 안에서만 유효하다. 기능 메서드의 params 에는 여전히 `projectId` 를 넣어 Host 안에서 `ProjectContext` 를 고른다. 여러 Host 의 프로젝트를 한 세션에서 다루는 클라이언트(MCP 서버)는 Host 별 연결을 하나씩 두고 요청마다 `projectId` 로 연결을 고른다. 프로젝트를 다른 Host 로 다시 묶으면 그 프로젝트의 기존 연결은 닫고 새로 연다.
 - 대용량 응답(로그, 쿼리 결과, git log)은 **스트림**: `streamId`를 반환하고 `stream.chunk` 알림으로 전달, 백프레셔는 credit 방식
+- 터미널(`terminal.create`, `crates/pw-run`)은 스트림 하나가 터미널 하나다. 항목은 `started { terminalId, pid, shell, cwd }` → `output { data }`(PTY 바이트의 base64 — 청크 경계가 UTF-8 문자 가운데일 수 있다) … → `exited { code }`(마지막 항목, 출력을 다 보낸 뒤. 신호로 끝났으면 `code` 가 `null`) 순서다. 입력 · 크기 · 닫기는 `terminalId` 로 `terminal.input` · `terminal.resize` · `terminal.close` 를 부른다. **스트림이 끝나면(셸 종료 · `terminal.close` · `stream.cancel` · 연결이 닫혀 세션이 스트림을 버림) 셸의 세션에 든 프로세스를 모두 끝낸다**(SIGHUP, 300 ms 안에 안 끝난 것은 SIGKILL — 대화형 셸은 작업마다 프로세스 그룹을 따로 만들므로 세션 id 로 찾는다). 스트림 없이 사는 터미널이 없으므로 종료를 알리는 버스 이벤트는 따로 없다. Host 는 보내지 못한 출력을 1 MiB 까지만 쥐고, 그 뒤로는 PTY 를 읽지 않아 셸이 쓰기에서 멈춘다
 - 이벤트 구독: `events.subscribe({ projectId, topics })`. `projectId` 를 빼면 Host 범위(프로젝트에 속하지 않는 이벤트 — 전역 설정 변경 등)를 받는다. 프로젝트 없는 창은 이것으로 구독한다
 - 타입 정의 단일 소스: Rust 구조체 → specta(TS) / schemars(JSON Schema, MCP)
 - 프로젝트 전용 오류 코드는 `-32000..=-32099` 에서 고르고 `pw_rpc::code` 한 곳에 둔다(생성기가 TS 상수로 내보낸다): `PERMISSION_DENIED`(-32001, role) · `CANCELLED`(-32002) · `STORAGE_UNAVAILABLE`(-32003, §5-0) · `CONFLICT`(-32004, 기대한 디스크 상태와 달라 쓰지 않음 — `fs.write` 의 기대 `version`, `data` 에 지금 상태) · `NOT_FOUND`(-32005, 대상 파일 · 폴더가 없음)
@@ -217,6 +218,21 @@ platforms = ["macos"]                              # (선택) 다른 플랫폼 �
 - **프로젝트 설정**(`.pitwall/project.toml` · `.local.toml` · 개인 전용 `project.toml`)은 `[open_with] default` 로 **등록된 도구 중에서 고르기만** 한다. 명령을 정의하거나 바꿀 수 없다 — 저장소를 클론해 열기만 했는데 Pitwall 이 그 저장소가 정한 명령을 실행하면 안 된다(MCP 노출의 「공유 설정은 좁히기만」 과 같은 원리, 05 「툴 노출 설정」). 프로젝트 설정의 `[open_with.tools]` 는 경고하고 버린다
   - 프로젝트 설정은 **디스크에 쓰지 않고** 읽는다 — 외부 도구로 열었다고 커밋된 파일이 마이그레이션되거나 `.backup/` 이 생기지 않는다
 - 기본 도구: 프로젝트 설정 → 전역 설정 순. 고른 도구가 이 OS 의 목록에 없으면 다음 것으로 넘어간다. 아무것도 없으면 **`⌘⌥E` 가 「다음에서 열기」 팝업을 열고** 기본 도구가 없다(또는 고른 도구를 쓸 수 없다)고 알린다 — 설치됐는지 모르는 도구(예: Orca)를 내장 기본값으로 두지 않는다
+
+### `[terminal]` — 터미널 설정 (12-m1-plan.md 결정 M1-D14)
+
+구현: `crates/pw-run`
+
+```toml
+# $CONFIG/settings.toml (또는 settings.local.toml)
+[terminal]
+shell = ["/opt/homebrew/bin/fish", "-l"]           # 터미널에 띄울 셸의 argv
+```
+
+- 없으면 `$SHELL -l` 이다. `$SHELL` 은 그 디렉터리의 런타임 환경(§5-1)의 것이고, 없거나 상대 경로면 사용자 계정의 셸, 그것도 없으면 `/bin/sh`. Windows 는 런타임 PATH 의 `pwsh.exe`, 없으면 `powershell.exe`
+- 셸을 정하는 것은 실행할 명령을 정하는 것이라 **전역 설정에만** 있다(「`[open_with]`」 의 프로젝트 설정 규칙과 같은 이유)
+- 형식이 틀리면(문자열 배열이 아니거나 비었으면) 로그에 경고를 남기고 기본 셸을 쓴다
+- 셸의 환경은 런타임 환경 전체에 `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall` 을 덮은 것이다(`TERM_PROGRAM_VERSION` 은 뺀다 — 앱을 띄운 터미널의 것이 남으면 `TERM_PROGRAM` 과 어긋난다). 앱 프로세스의 환경은 물려주지 않는다
 
 ## 5-1. 런타임 환경 (D26)
 

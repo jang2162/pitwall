@@ -159,7 +159,7 @@ pitwall/
 │  ├─ pw-dap/            # DAP 클라이언트
 │  ├─ pw-runtime/        # 런타임 제공자 (mise · direnv · asdf · 로그인 셸), (프로젝트, 디렉터리)별 env 캐시 — 지금은 로그인 셸 환경만(03 §5-1)
 │  ├─ pw-open-with/      # 외부 도구로 열기: 도구 목록(확장 + 전역 설정) · 기본 도구 · 셸 없는 실행 (04 F8)
-│  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지
+│  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지 — 지금은 터미널 PTY 세션만(03 「RPC 설계」, M1-08)
 │  ├─ pw-lang/           # 언어 판별 (Linguist 데이터 테이블, .gitattributes, 모드라인)
 │  ├─ pw-tools/          # Mason registry 읽기 · 도구 설치기 (LSP/DAP/포매터)
 │  ├─ pw-index/          # tree-sitter 심볼 인덱스
