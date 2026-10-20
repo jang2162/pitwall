@@ -239,21 +239,26 @@ function check() {
       problems.push(`${g.id}: licenses/vendored.md does not mention commit ${g.commit}`);
     }
   }
-  const extensions = join(root, "extensions");
-  for (const folder of readdirSync(extensions)) {
-    const dir = join(extensions, folder, "grammars");
-    if (!existsSync(dir)) continue;
-    for (const name of readdirSync(dir)) {
-      if (name.endsWith(".wasm") && !listed.has(join(dir, name))) {
-        problems.push(`${join(dir, name)} is not listed in scripts/grammars.toml`);
-      }
-    }
+  // `grammars/` 밖에 둔 WASM 도 내장 확장에 묶여 매니페스트의 `grammar` 가 가리킬 수 있다 — 확장 폴더 전체를 훑는다.
+  for (const file of wasmFiles(join(root, "extensions"))) {
+    if (!listed.has(file)) problems.push(`${file} is not listed in scripts/grammars.toml`);
   }
   if (problems.length > 0) {
     for (const p of problems) console.error(p);
     process.exit(1);
   }
   console.log(`grammars: ${grammars.length} WASM + highlights match scripts/grammars.toml`);
+}
+
+/** `dir` 아래(하위 폴더 포함)의 `.wasm` 파일들. 내장 확장으로 묶이지 않는 `node_modules` 는 건너뛴다. */
+function wasmFiles(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory() && entry.name !== "node_modules") out.push(...wasmFiles(path));
+    else if (entry.isFile() && entry.name.endsWith(".wasm")) out.push(path);
+  }
+  return out;
 }
 
 const [command, ...args] = process.argv.slice(2);
