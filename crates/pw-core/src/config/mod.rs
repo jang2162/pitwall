@@ -5,6 +5,7 @@
 //! - [`merge`]: 레이어 병합 규칙.
 //! - [`migrate`]: `schema` 버전 · 단계별 마이그레이션 · 원본 보관.
 //! - [`gitdir`]: 연결 워크트리 → 메인 체크아웃(`.local.toml` 폴백).
+//! - [`robust`]: Windows 의 rename 바꿔 끼우기 순간의 일시 오류 다시 시도(파일 쓰기 `pw-fs` 도 쓴다).
 //! - [`ConfigStore`]: 현재 스냅숏 · 다시 읽기 · 파일 감시 · 이벤트.
 //! - [`methods`]: 읽기 전용 RPC(`config.paths`, `config.get`).
 
@@ -13,7 +14,7 @@ pub mod merge;
 pub mod methods;
 pub mod migrate;
 pub mod paths;
-mod robust;
+pub mod robust;
 mod source;
 mod store;
 

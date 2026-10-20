@@ -64,6 +64,7 @@
 - 대용량 응답(로그, 쿼리 결과, git log)은 **스트림**: `streamId`를 반환하고 `stream.chunk` 알림으로 전달, 백프레셔는 credit 방식
 - 이벤트 구독: `events.subscribe({ projectId, topics })`. `projectId` 를 빼면 Host 범위(프로젝트에 속하지 않는 이벤트 — 전역 설정 변경 등)를 받는다. 프로젝트 없는 창은 이것으로 구독한다
 - 타입 정의 단일 소스: Rust 구조체 → specta(TS) / schemars(JSON Schema, MCP)
+- 프로젝트 전용 오류 코드는 `-32000..=-32099` 에서 고르고 `pw_rpc::code` 한 곳에 둔다(생성기가 TS 상수로 내보낸다): `PERMISSION_DENIED`(-32001, role) · `CANCELLED`(-32002) · `STORAGE_UNAVAILABLE`(-32003, §5-0) · `CONFLICT`(-32004, 기대한 디스크 상태와 달라 쓰지 않음 — `fs.write` 의 기대 `version`, `data` 에 지금 상태) · `NOT_FOUND`(-32005, 대상 파일 · 폴더가 없음)
 
 ## 5. 데이터 저장
 
@@ -278,5 +279,6 @@ GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버
 - 위험 작업(파괴적 git, DB 쓰기, 실행 구성의 임의 커맨드 실행)은 MCP 경유 시 UI 승인 필요 (→ 05-mcp.md)
 - Relay ↔ 기기 간 통신은 Noise 인증 · 암호화, Relay는 Tailscale/LAN 인터페이스에만 바인드(기본)
 - RPC 메서드마다 필요 권한(role) 메타데이터 → Relay가 페어링 기기의 role로 검사 (readonly 등 제한 role)
+- 파일 RPC(`fs.*`, `crates/pw-fs`)는 프로젝트 루트(활성 워크트리 안의 루트 포함) 안만 다룬다(12-m1-plan.md 결정 M1-D8). 경로는 절대 경로만 받아 레지스트리와 같은 정규화(`pw_core::registry::path::normalize`)를 지난다. **읽기**는 정규화한 실제 경로가 루트 안이거나, 요청이 `..` 없이 글자 그대로 루트 아래를 가리킬 때(루트 안 심링크를 따라 읽는다 — pnpm 전역 저장소를 가리키는 `node_modules` 등). **쓰기**는 실제 경로가 루트 안일 때만이고, 심링크는 대상 파일을 바꾼다
 - 확장은 WASM 샌드박스 + 설치 시 승인한 capability만 사용
 - 프로젝트 설정의 실행 커맨드는 "신뢰된 프로젝트"에서만 실행 (VS Code Workspace Trust와 유사)

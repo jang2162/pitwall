@@ -176,7 +176,8 @@ rpc_method! {
     }
 }
 
-fn rpc_error(e: RegistryError) -> RpcError {
+/// 레지스트리 오류의 RPC 오류. 프로젝트를 찾아 쓰는 다른 크레이트의 메서드(`pw-fs`)도 같은 코드로 답하게 이것을 쓴다.
+pub fn rpc_error(e: RegistryError) -> RpcError {
     match e {
         RegistryError::Db(_) => RpcError::internal(e.to_string()),
         // 입력이 아니라 Host 쪽 상태라 invalid params 가 아니고, UI 가 배너를 갱신하도록 일반 내부 오류와 코드를 가른다.

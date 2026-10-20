@@ -24,7 +24,7 @@ pub(crate) fn labeled<'a>(op: &'a str, path: &'a Path) -> impl FnOnce(io::Error)
 }
 
 /// `op` 를 하고, Windows 의 일시 오류면 [`PATIENCE`] 동안 다시 한다.
-pub(crate) fn retrying<T>(op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+pub fn retrying<T>(op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     retry_while(op, ephemeral, PATIENCE)
 }
 
@@ -36,7 +36,7 @@ pub(crate) fn retrying<T>(op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
 /// 돌려주므로, 바꿔 끼우는 순간 옛 파일을 열었으면 이 자리를 돌려준다. 그 경로는 곧 사라지고 다시 생기지 않으므로 같은 경로로
 /// 다시 시도해도 소용이 없다 — 원래 경로부터 다시 해석해야 한다(Windows CI 의 `concurrent_loads_migrating_the_same_file_all_succeed`
 /// 가 `read the permissions of \\?\C:\$Extend\$Deleted\…: os error 2` 로 실패했다). 경로 글자로만 보므로 모든 OS 에서 같다.
-pub(crate) fn in_deleted_store(path: &Path) -> bool {
+pub fn in_deleted_store(path: &Path) -> bool {
     path.to_string_lossy()
         .to_ascii_lowercase()
         .contains(r"\$extend\$deleted\")

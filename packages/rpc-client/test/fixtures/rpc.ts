@@ -57,6 +57,8 @@ export const ERROR_CODE = {
 	PERMISSION_DENIED: -32001,
 	CANCELLED: -32002,
 	STORAGE_UNAVAILABLE: -32003,
+	CONFLICT: -32004,
+	NOT_FOUND: -32005,
 } as const;
 
 /** 선언한 메서드가 쓸 수 없는 접두사. */

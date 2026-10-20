@@ -1,0 +1,27 @@
+[package]
+name = "pw-fs"
+description = "Pitwall file system service: listing, stat, ranged reads and atomic writes inside the project roots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 바이너리 내용은 JSON 으로 base64 로 실어 보낸다. 버전은 Tauri 트리의 것과 같게 둔다(크레이트가 늘지 않는다).
+base64 = "0.22.1"
+# .gitignore · .ignore · 전역 gitignore 판정(ripgrep 과 같은 규칙, Unlicense OR MIT). M1-07 · M1-12 도 같은 크레이트를 쓴다.
+ignore = "0.4.33"
+pw-core = { path = "../pw-core" }
+pw-rpc = { path = "../pw-rpc" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# `version` 의 내용 해시. 버전은 Tauri 트리의 것과 같게 둔다.
+sha2 = "0.10.9"
+specta = { workspace = true, features = ["derive"] }
+# 디스크 IO 를 블로킹 스레드로 보낸다.
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "macros"] }

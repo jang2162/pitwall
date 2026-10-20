@@ -33,9 +33,14 @@ pub mod code {
     /// Host 의 저장소(프로젝트 레지스트리 `state.db` 등)에 지금 쓸 수 없어 쓰기를 거절했다. 입력은 문제없다 — 받은 쪽은 저장소 상태
     /// (`project.storage`)를 다시 읽어 이유를 보여 준다.
     pub const STORAGE_UNAVAILABLE: i32 = -32003;
+    /// 쓰기가 기대한 상태와 디스크가 달라 아무것도 바꾸지 않았다(`fs.write` 의 기대 `version` 이 지금 파일과 다르다 등). `data` 에
+    /// 지금 상태가 실린다 — 받은 쪽은 덮지 말고 사람에게 고르게 한다.
+    pub const CONFLICT: i32 = -32004;
+    /// 요청한 대상(파일 · 폴더)이 없다. 입력 형식은 문제없다 — 그 사이 지워졌을 수 있다.
+    pub const NOT_FOUND: i32 = -32005;
 
     /// 위 코드 전부(상수 이름, 값). 생성기가 TS 상수로 내보낸다 — 코드를 더하면 여기에도 더한다.
-    pub const ALL: [(&str, i32); 8] = [
+    pub const ALL: [(&str, i32); 10] = [
         ("PARSE_ERROR", PARSE_ERROR),
         ("INVALID_REQUEST", INVALID_REQUEST),
         ("METHOD_NOT_FOUND", METHOD_NOT_FOUND),
@@ -44,6 +49,8 @@ pub mod code {
         ("PERMISSION_DENIED", PERMISSION_DENIED),
         ("CANCELLED", CANCELLED),
         ("STORAGE_UNAVAILABLE", STORAGE_UNAVAILABLE),
+        ("CONFLICT", CONFLICT),
+        ("NOT_FOUND", NOT_FOUND),
     ];
 }
 

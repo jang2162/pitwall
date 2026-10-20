@@ -17,6 +17,7 @@ tauri-build = { version = "2.7.2", features = [] }
 pw-core = { path = "../../../crates/pw-core" }
 pw-diag = { path = "../../../crates/pw-diag" }
 pw-ext = { path = "../../../crates/pw-ext" }
+pw-fs = { path = "../../../crates/pw-fs" }
 pw-i18n = { path = "../../../crates/pw-i18n" }
 pw-mcp = { path = "../../../crates/pw-mcp" }
 pw-open-with = { path = "../../../crates/pw-open-with" }

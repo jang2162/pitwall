@@ -480,6 +480,656 @@
       ],
       "tier": "read"
     },
+    "fs.list": {
+      "description": "폴더 한 단계의 항목(이름 · 종류 · 크기 · mtime · ignore 여부). 파일 트리가 펼칠 때 부른다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "경로 하나를 받는 요청(`fs.list` · `fs.stat`).",
+        "properties": {
+          "path": {
+            "description": "절대 경로.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리 안의 프로젝트 루트도 접근 범위가 된다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EntryKind": {
+            "oneOf": [
+              {
+                "enum": [
+                  "file",
+                  "dir",
+                  "symlink"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "description": "소켓 · 장치 · FIFO 등.",
+                "type": "string"
+              }
+            ]
+          },
+          "FsEntry": {
+            "description": "폴더의 항목 하나.",
+            "properties": {
+              "ignored": {
+                "description": "`.gitignore` 등으로 무시되는 항목(무시된 폴더 안의 항목 포함).",
+                "type": "boolean"
+              },
+              "kind": {
+                "$ref": "#/$defs/EntryKind"
+              },
+              "mtimeMs": {
+                "description": "수정 시각(유닉스 밀리초). 심링크면 대상의 것. 알 수 없으면 `null`.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "UTF-8 이 아닌 이름은 대체 문자로 바뀌어 온다.",
+                "type": "string"
+              },
+              "size": {
+                "description": "바이트. 심링크면 대상의 크기(깨졌으면 0).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "target": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EntryKind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "심링크면 가리키는 것의 종류. 깨진 링크면 `null`. 심링크가 아니면 `null`."
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "target",
+              "size",
+              "mtimeMs",
+              "ignored"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "entries": {
+            "description": "이름순.",
+            "items": {
+              "$ref": "#/$defs/FsEntry"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "정규화한 실제 경로.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "fs.read": {
+      "description": "파일 전체 또는 범위를 읽고 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급)을 함께 준다. 전체 읽기는 50 MiB 까지,\n그보다 큰 파일은 범위로 읽는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "bytes": {
+            "default": false,
+            "description": "텍스트여도 바이트(base64)로 받는다(hex 뷰어 · 이미지).",
+            "type": "boolean"
+          },
+          "length": {
+            "default": null,
+            "description": "범위 읽기의 최대 바이트(50 MiB 까지). 없으면 끝까지(최대 50 MiB).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "default": null,
+            "description": "범위 읽기의 시작 바이트. `offset` · `length` 가 모두 없으면 파일 전체를 읽는다(50 MiB 까지).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "절대 경로.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Bom": {
+            "enum": [
+              "utf8",
+              "utf16Le",
+              "utf16Be"
+            ],
+            "type": "string"
+          },
+          "FsContent": {
+            "description": "읽거나 쓸 내용.",
+            "oneOf": [
+              {
+                "description": "UTF-8 텍스트. 읽기에서는 파일 앞의 UTF-8 BOM 을 뺀 것이다(`judgment.bom` 이 알린다).",
+                "properties": {
+                  "kind": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "바이트 그대로(BOM 포함), 표준 base64.",
+                "properties": {
+                  "data": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "base64",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Judgment": {
+            "description": "읽은 내용의 판정.",
+            "properties": {
+              "binary": {
+                "description": "파일 앞 8 KiB 에 NUL 이 있다(UTF-16 BOM 이 있으면 텍스트로 본다).",
+                "type": "boolean"
+              },
+              "bom": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Bom"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "파일 앞의 BOM."
+              },
+              "editable": {
+                "description": "에디터로 편집 · 저장할 수 있다: 텍스트, UTF-8(BOM 유무 무관, 결정 M1-D12), 5 MiB 이하.",
+                "type": "boolean"
+              },
+              "encoding": {
+                "description": "읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE`). UTF-8 로 읽히지 않는 텍스트는 `null` 이다 —\n짐작은 M1-23(`encoding_rs` + `chardetng`)이 한다. 바이너리면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "highlight": {
+                "description": "구문 강조 · 줄바꿈을 켠다: 텍스트, 5 MiB 이하, 1만 자 넘는 줄 없음(결정 M1-D9).",
+                "type": "boolean"
+              },
+              "lineEnding": {
+                "$ref": "#/$defs/LineEnding"
+              },
+              "longLines": {
+                "description": "읽은 범위에 1만 자를 넘는 줄이 있다.",
+                "type": "boolean"
+              },
+              "sizeClass": {
+                "$ref": "#/$defs/SizeClass",
+                "description": "파일 전체 크기의 등급."
+              }
+            },
+            "required": [
+              "binary",
+              "encoding",
+              "bom",
+              "lineEnding",
+              "longLines",
+              "sizeClass",
+              "editable",
+              "highlight"
+            ],
+            "type": "object"
+          },
+          "LineEnding": {
+            "description": "읽은 범위의 줄바꿈.",
+            "oneOf": [
+              {
+                "enum": [
+                  "lf",
+                  "crlf",
+                  "cr"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "mixed",
+                "description": "둘 이상이 섞였다.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "줄바꿈이 없다(한 줄).",
+                "type": "string"
+              }
+            ]
+          },
+          "SizeClass": {
+            "description": "크기 등급(결정 M1-D9).",
+            "oneOf": [
+              {
+                "const": "editable",
+                "description": "5 MiB 이하: 편집 + 강조.",
+                "type": "string"
+              },
+              {
+                "const": "readOnly",
+                "description": "5 MiB 초과 50 MiB 이하: 읽기 전용, 강조 · 줄바꿈 끔.",
+                "type": "string"
+              },
+              {
+                "const": "tooLarge",
+                "description": "50 MiB 초과: 열지 않는다(앞부분 · hex 는 범위 읽기로).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "content": {
+            "$ref": "#/$defs/FsContent"
+          },
+          "eof": {
+            "description": "읽은 범위가 파일 끝까지 닿았다.",
+            "type": "boolean"
+          },
+          "judgment": {
+            "$ref": "#/$defs/Judgment",
+            "description": "판정. 텍스트/바이너리 · BOM 은 파일 앞부분으로, 인코딩 · 줄바꿈 · 긴 줄은 읽은 범위로 정한다."
+          },
+          "mtimeMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "읽은 범위의 시작.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "정규화한 실제 경로.",
+            "type": "string"
+          },
+          "size": {
+            "description": "파일 전체 크기.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "파일 전체를 읽었을 때만 있다. `fs.write` 의 `expectedVersion` 으로 그대로 돌려준다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "mtimeMs",
+          "offset",
+          "eof",
+          "version",
+          "content",
+          "judgment"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "fs.stat": {
+      "description": "파일 · 폴더 하나의 상태와 파일의 크기 등급. 내용은 읽지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "경로 하나를 받는 요청(`fs.list` · `fs.stat`).",
+        "properties": {
+          "path": {
+            "description": "절대 경로.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리 안의 프로젝트 루트도 접근 범위가 된다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EntryKind": {
+            "oneOf": [
+              {
+                "enum": [
+                  "file",
+                  "dir",
+                  "symlink"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "description": "소켓 · 장치 · FIFO 등.",
+                "type": "string"
+              }
+            ]
+          },
+          "SizeClass": {
+            "description": "크기 등급(결정 M1-D9).",
+            "oneOf": [
+              {
+                "const": "editable",
+                "description": "5 MiB 이하: 편집 + 강조.",
+                "type": "string"
+              },
+              {
+                "const": "readOnly",
+                "description": "5 MiB 초과 50 MiB 이하: 읽기 전용, 강조 · 줄바꿈 끔.",
+                "type": "string"
+              },
+              {
+                "const": "tooLarge",
+                "description": "50 MiB 초과: 열지 않는다(앞부분 · hex 는 범위 읽기로).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/EntryKind",
+            "description": "요청 경로 자리의 종류(심링크면 `symlink`)."
+          },
+          "mtimeMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "정규화한 실제 경로(심링크를 모두 따라간 것). 문서 모델의 키다.",
+            "type": "string"
+          },
+          "readonly": {
+            "description": "쓰기 권한이 없다(`fs.write` 가 거절한다).",
+            "type": "boolean"
+          },
+          "size": {
+            "description": "바이트(심링크면 대상의 것).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sizeClass": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SizeClass"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "파일이면 크기 등급(결정 M1-D9). 읽지 않고 정하므로 「열지 않음」 판단에 바이트를 읽지 않는다."
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EntryKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "심링크면 가리키는 것의 종류. 깨진 링크 · 심링크가 아니면 `null`."
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "target",
+          "size",
+          "mtimeMs",
+          "readonly",
+          "sizeClass"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "fs.write": {
+      "description": "같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "FsContent": {
+            "description": "읽거나 쓸 내용.",
+            "oneOf": [
+              {
+                "description": "UTF-8 텍스트. 읽기에서는 파일 앞의 UTF-8 BOM 을 뺀 것이다(`judgment.bom` 이 알린다).",
+                "properties": {
+                  "kind": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "바이트 그대로(BOM 포함), 표준 base64.",
+                "properties": {
+                  "data": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "base64",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "bom": {
+            "default": false,
+            "description": "텍스트 앞에 UTF-8 BOM 을 붙인다. 읽을 때 `judgment.bom` 이 `utf8` 이었으면 켠다. `base64` 내용에는 쓸 수 없다.",
+            "type": "boolean"
+          },
+          "content": {
+            "$ref": "#/$defs/FsContent"
+          },
+          "expectedVersion": {
+            "default": null,
+            "description": "읽을 때 받은 `version`. 지금 파일과 다르면 쓰지 않고 `CONFLICT`. 없으면 새 파일을 만든다 — 파일이 이미 있으면 `CONFLICT`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "절대 경로. 심링크면 대상 파일을 바꾼다(정규화한 실제 경로가 루트 안이어야 한다). 폴더는 있어야 한다.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "mtimeMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "쓴 실제 경로.",
+            "type": "string"
+          },
+          "size": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "쓴 뒤의 `version`. 다음 쓰기의 `expectedVersion`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "mtimeMs",
+          "version"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "host.demoTask": {
       "description": "진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\nTask · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.",
       "item": {

@@ -21,6 +21,24 @@ export type UnaryMethods = {
 	 */
 	"ext.list": { params: null; result: ExtensionList };
 	/**
+	 * 폴더 한 단계의 항목(이름 · 종류 · 크기 · mtime · ignore 여부). 파일 트리가 펼칠 때 부른다.
+	 */
+	"fs.list": { params: FsPathParams; result: FsList };
+	/**
+	 * 파일 전체 또는 범위를 읽고 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급)을 함께 준다. 전체 읽기는 50 MiB 까지,
+	 * 그보다 큰 파일은 범위로 읽는다.
+	 */
+	"fs.read": { params: FsReadParams; result: FsRead };
+	/**
+	 * 파일 · 폴더 하나의 상태와 파일의 크기 등급. 내용은 읽지 않는다.
+	 */
+	"fs.stat": { params: FsPathParams; result: FsStat };
+	/**
+	 * 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도
+	 * 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.
+	 */
+	"fs.write": { params: FsWriteParams; result: FsWritten };
+	/**
 	 * Host 의 종류 · 버전 · OS.
 	 */
 	"host.info": { params: null; result: HostInfo };
@@ -160,6 +178,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n","mcp":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":false},
 	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":false},
+	"fs.list": {"name":"fs.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsList","doc":" 폴더 한 단계의 항목(이름 · 종류 · 크기 · mtime · ignore 여부). 파일 트리가 펼칠 때 부른다.\n","mcp":false},
+	"fs.read": {"name":"fs.read","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsReadParams","output":"FsRead","doc":" 파일 전체 또는 범위를 읽고 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급)을 함께 준다. 전체 읽기는 50 MiB 까지,\n 그보다 큰 파일은 범위로 읽는다.\n","mcp":false},
+	"fs.stat": {"name":"fs.stat","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsStat","doc":" 파일 · 폴더 하나의 상태와 파일의 크기 등급. 내용은 읽지 않는다.\n","mcp":false},
+	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n","mcp":false},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n","mcp":false},
@@ -211,6 +233,8 @@ export const ERROR_CODE = {
 	PERMISSION_DENIED: -32001,
 	CANCELLED: -32002,
 	STORAGE_UNAVAILABLE: -32003,
+	CONFLICT: -32004,
+	NOT_FOUND: -32005,
 } as const;
 
 /** 선언한 메서드가 쓸 수 없는 접두사. */
@@ -222,6 +246,8 @@ export type ActiveWorktree = {
 	/**  프로젝트 루트에 대응하는 워크트리 안의 폴더. 파일 트리 · 터미널 · 설정의 기준. */
 	root: string,
 };
+
+export type Bom = "utf8" | "utf16Le" | "utf16Be";
 
 export type CancelRequestParams = {
 	id: Id,
@@ -344,6 +370,10 @@ export type DiagnosticsText = {
 	text: string,
 };
 
+export type EntryKind = "file" | "dir" | "symlink" | 
+/**  소켓 · 장치 · FIFO 등. */
+"other";
+
 export type EventMessage = {
 	subscriptionId: number,
 	/**  Host 범위 이벤트면 `null`. */
@@ -393,6 +423,111 @@ export type ExternalToolInfo = {
 	problem: string | null,
 };
 
+/**  읽거나 쓸 내용. */
+export type FsContent = 
+/**  UTF-8 텍스트. 읽기에서는 파일 앞의 UTF-8 BOM 을 뺀 것이다(`judgment.bom` 이 알린다). */
+{ kind: "text"; text: string } | 
+/**  바이트 그대로(BOM 포함), 표준 base64. */
+{ kind: "base64"; data: string };
+
+/**  폴더의 항목 하나. */
+export type FsEntry = {
+	/**  UTF-8 이 아닌 이름은 대체 문자로 바뀌어 온다. */
+	name: string,
+	kind: EntryKind,
+	/**  심링크면 가리키는 것의 종류. 깨진 링크면 `null`. 심링크가 아니면 `null`. */
+	target: EntryKind | null,
+	/**  바이트. 심링크면 대상의 크기(깨졌으면 0). */
+	size: number,
+	/**  수정 시각(유닉스 밀리초). 심링크면 대상의 것. 알 수 없으면 `null`. */
+	mtimeMs: number | null,
+	/**  `.gitignore` 등으로 무시되는 항목(무시된 폴더 안의 항목 포함). */
+	ignored: boolean,
+};
+
+export type FsList = {
+	/**  정규화한 실제 경로. */
+	path: string,
+	/**  이름순. */
+	entries: FsEntry[],
+};
+
+/**  경로 하나를 받는 요청(`fs.list` · `fs.stat`). */
+export type FsPathParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리 안의 프로젝트 루트도 접근 범위가 된다. */
+	worktree?: string | null,
+	/**  절대 경로. */
+	path: string,
+};
+
+export type FsRead = {
+	/**  정규화한 실제 경로. */
+	path: string,
+	/**  파일 전체 크기. */
+	size: number,
+	mtimeMs: number | null,
+	/**  읽은 범위의 시작. */
+	offset: number,
+	/**  읽은 범위가 파일 끝까지 닿았다. */
+	eof: boolean,
+	/**  파일 전체를 읽었을 때만 있다. `fs.write` 의 `expectedVersion` 으로 그대로 돌려준다. */
+	version: string | null,
+	content: FsContent,
+	/**  판정. 텍스트/바이너리 · BOM 은 파일 앞부분으로, 인코딩 · 줄바꿈 · 긴 줄은 읽은 범위로 정한다. */
+	judgment: Judgment,
+};
+
+export type FsReadParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  절대 경로. */
+	path: string,
+	/**  범위 읽기의 시작 바이트. `offset` · `length` 가 모두 없으면 파일 전체를 읽는다(50 MiB 까지). */
+	offset?: number | null,
+	/**  범위 읽기의 최대 바이트(50 MiB 까지). 없으면 끝까지(최대 50 MiB). */
+	length?: number | null,
+	/**  텍스트여도 바이트(base64)로 받는다(hex 뷰어 · 이미지). */
+	bytes?: boolean,
+};
+
+export type FsStat = {
+	/**  정규화한 실제 경로(심링크를 모두 따라간 것). 문서 모델의 키다. */
+	path: string,
+	/**  요청 경로 자리의 종류(심링크면 `symlink`). */
+	kind: EntryKind,
+	/**  심링크면 가리키는 것의 종류. 깨진 링크 · 심링크가 아니면 `null`. */
+	target: EntryKind | null,
+	/**  바이트(심링크면 대상의 것). */
+	size: number,
+	mtimeMs: number | null,
+	/**  쓰기 권한이 없다(`fs.write` 가 거절한다). */
+	readonly: boolean,
+	/**  파일이면 크기 등급(결정 M1-D9). 읽지 않고 정하므로 「열지 않음」 판단에 바이트를 읽지 않는다. */
+	sizeClass: SizeClass | null,
+};
+
+export type FsWriteParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  절대 경로. 심링크면 대상 파일을 바꾼다(정규화한 실제 경로가 루트 안이어야 한다). 폴더는 있어야 한다. */
+	path: string,
+	content: FsContent,
+	/**  텍스트 앞에 UTF-8 BOM 을 붙인다. 읽을 때 `judgment.bom` 이 `utf8` 이었으면 켠다. `base64` 내용에는 쓸 수 없다. */
+	bom?: boolean,
+	/**  읽을 때 받은 `version`. 지금 파일과 다르면 쓰지 않고 `CONFLICT`. 없으면 새 파일을 만든다 — 파일이 이미 있으면 `CONFLICT`. */
+	expectedVersion?: string | null,
+};
+
+export type FsWritten = {
+	/**  쓴 실제 경로. */
+	path: string,
+	size: number,
+	mtimeMs: number | null,
+	/**  쓴 뒤의 `version`. 다음 쓰기의 `expectedVersion`. */
+	version: string,
+};
+
 export type HostInfo = {
 	hostId: string,
 	/**  `local`(데스크톱 프로세스 안) 또는 `relay`(원격 데몬). */
@@ -439,6 +574,28 @@ export type JsonRpcVersion = "2.0";
  *  specta 의 `Value` 구현은 숫자를 i64/u64 로 표현해 TS 내보내기가 BigInt 금지로 실패한다.
  */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue };
+
+/**  읽은 내용의 판정. */
+export type Judgment = {
+	/**  파일 앞 8 KiB 에 NUL 이 있다(UTF-16 BOM 이 있으면 텍스트로 본다). */
+	binary: boolean,
+	/**
+	 *  읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE`). UTF-8 로 읽히지 않는 텍스트는 `null` 이다 —
+	 *  짐작은 M1-23(`encoding_rs` + `chardetng`)이 한다. 바이너리면 `null`.
+	 */
+	encoding: string | null,
+	/**  파일 앞의 BOM. */
+	bom: Bom | null,
+	lineEnding: LineEnding,
+	/**  읽은 범위에 1만 자를 넘는 줄이 있다. */
+	longLines: boolean,
+	/**  파일 전체 크기의 등급. */
+	sizeClass: SizeClass,
+	/**  에디터로 편집 · 저장할 수 있다: 텍스트, UTF-8(BOM 유무 무관, 결정 M1-D12), 5 MiB 이하. */
+	editable: boolean,
+	/**  구문 강조 · 줄바꿈을 켠다: 텍스트, 5 MiB 이하, 1만 자 넘는 줄 없음(결정 M1-D9). */
+	highlight: boolean,
+};
 
 export type KeymapContributionKind = 
 /**  전체 키맵. 기본 키맵 대신 하나를 고른다. */
@@ -502,6 +659,13 @@ export type LayerOrigin = "builtin" |
 "shared" | 
 /**  `<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다. */
 "local";
+
+/**  읽은 범위의 줄바꿈. */
+export type LineEnding = "lf" | "crlf" | "cr" | 
+/**  둘 이상이 섞였다. */
+"mixed" | 
+/**  줄바꿈이 없다(한 줄). */
+"none";
 
 /**  응답 형태. `unary` 는 결과 하나, `stream` 은 `streamId` 를 돌려주고 청크를 `stream.chunk` 로 보낸다. */
 export type MethodKind = "unary" | "stream";
@@ -743,6 +907,15 @@ export type SetLanguageParams = {
 	/**  `"system"` 또는 등록된 언어 태그. */
 	language: string,
 };
+
+/**  크기 등급(결정 M1-D9). */
+export type SizeClass = 
+/**  5 MiB 이하: 편집 + 강조. */
+"editable" | 
+/**  5 MiB 초과 50 MiB 이하: 읽기 전용, 강조 · 줄바꿈 끔. */
+"readOnly" | 
+/**  50 MiB 초과: 열지 않는다(앞부분 · hex 는 범위 읽기로). */
+"tooLarge";
 
 /**
  *  레지스트리 저장소의 상태. `ok` · `recovered` 만 쓸 수 있다 — 나머지에서 쓰기는 오류로 거절한다(쓴 것이 종료 때 사라지지 않게).

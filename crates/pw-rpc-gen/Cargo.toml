@@ -11,6 +11,7 @@ publish.workspace = true
 pw-core = { path = "../pw-core" }
 pw-diag = { path = "../pw-diag" }
 pw-ext = { path = "../pw-ext" }
+pw-fs = { path = "../pw-fs" }
 pw-i18n = { path = "../pw-i18n" }
 pw-open-with = { path = "../pw-open-with" }
 pw-rpc = { path = "../pw-rpc" }

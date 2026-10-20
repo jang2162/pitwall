@@ -7,6 +7,7 @@ use pw_core::config::AppPaths;
 use pw_core::{HostRouter, LocalHost, Scope};
 use pw_diag::Diagnostics;
 use pw_ext::{LoadOptions, Registry};
+use pw_fs::Fs;
 use pw_i18n::I18n;
 use pw_open_with::{HostParts, OpenWith};
 use pw_runtime::{LoginShell, Runtime, RuntimeHost};
@@ -44,6 +45,8 @@ fn local_host(
     let runtime_methods = Arc::clone(&runtime);
     let open_with = Arc::new(OpenWith::new(Arc::clone(&extensions), Arc::clone(&runtime)));
     let open_with_methods = Arc::clone(&open_with);
+    let fs = Arc::new(Fs::new());
+    let fs_methods = Arc::clone(&fs);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
@@ -51,11 +54,14 @@ fn local_host(
         .methods(move |router| pw_i18n::methods::register(router, methods))
         .methods(move |router| pw_open_with::methods::register(router, open_with_methods))
         .methods(move |router| pw_runtime::methods::register(router, runtime_methods))
+        .methods(move |router| pw_fs::methods::register(router, fs_methods))
         .build();
     if let Some(config) = host.config() {
         i18n.attach_config(config.global.clone());
         // 외부 도구 실행(⌥F1 · ⌘⌥E)이 전역 설정 · 프로젝트 레지스트리를 쓴다.
         if let Some(projects) = host.registry() {
+            // 파일 RPC(`fs.*`)는 요청의 프로젝트 루트를 레지스트리에서 찾는다.
+            fs.attach(projects.clone());
             open_with.attach(HostParts {
                 paths: config.paths.clone(),
                 global: config.global.clone(),
