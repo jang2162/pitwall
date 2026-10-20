@@ -550,7 +550,7 @@ fn an_open_racing_a_finished_migration_waits_for_the_lock_once() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("state.db");
     let mut other = Connection::open(&file).unwrap();
-    let busy = Duration::from_secs(1);
+    let busy = Duration::from_secs(2);
     let tx = other
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
@@ -575,8 +575,9 @@ fn an_open_racing_a_finished_migration_waits_for_the_lock_once() {
         "{:?}",
         opened.status
     );
-    // 한 번이면 약 1초, 단계마다 기다리면 2초 이상이다.
-    assert!(elapsed < Duration::from_millis(1800), "{elapsed:?}");
+    // 한 번이면 약 2초, 단계마다 기다리면 4초 이상이다. 기준 3초는 양쪽에 1초씩 여유를 둔다(Windows 의 `Sleep` 은 타이머
+    // 간격으로 올림해 busy 대기가 늘어난다).
+    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
 }
 
 /// 비정상 종료로 `-wal` · `-shm` 이 남은 파일이 손상이면: 검사 연결이 닫히며 남은 WAL 프레임을 손상된 파일에 옮기고 사이드카를
