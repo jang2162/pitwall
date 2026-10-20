@@ -4,7 +4,7 @@
 //! - 계산이 끝나면 그 시도는 사라진다. `keep` 이 거른 결과(실패 · 시간 초과)는 그 시도를 기다린 쪽만 받고, 다음 호출은 다시
 //!   계산한다 — 셸을 고친 뒤 앱을 다시 띄우지 않아도 된다.
 //! - [`Cache::clear`] 는 남긴 결과와 진행 중인 시도를 함께 잊는다. 지우기 전에 시작한 계산은 끝나도 남기지 않는다(옛 설정으로
-//!   계산했을 수 있다).
+//!   계산했을 수 있다) — 끝난 계산은 자기 시도가 아직 표에 있을 때만 결과를 남긴다.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -19,8 +19,6 @@ type Flight<V> = Arc<OnceLock<Arc<V>>>;
 struct State<K, V> {
     ready: HashMap<K, Arc<V>>,
     flights: HashMap<K, Flight<V>>,
-    /// [`Cache::clear`] 마다 하나씩 는다.
-    generation: u64,
 }
 
 impl<K, V> Default for Cache<K, V> {
@@ -29,7 +27,6 @@ impl<K, V> Default for Cache<K, V> {
             state: Mutex::new(State {
                 ready: HashMap::new(),
                 flights: HashMap::new(),
-                generation: 0,
             }),
         }
     }
@@ -48,13 +45,12 @@ impl<K: Clone + Eq + Hash, V> Cache<K, V> {
         compute: impl FnOnce() -> V,
         keep: impl FnOnce(&V) -> bool,
     ) -> Arc<V> {
-        let (flight, generation) = {
+        let flight = {
             let mut state = self.lock();
             if let Some(value) = state.ready.get(key) {
                 return Arc::clone(value);
             }
-            let flight = Arc::clone(state.flights.entry(key.clone()).or_default());
-            (flight, state.generation)
+            Arc::clone(state.flights.entry(key.clone()).or_default())
         };
         // OnceLock 은 한 쪽만 계산하게 하고 나머지는 그 결과를 기다리게 한다.
         let value = Arc::clone(flight.get_or_init(|| Arc::new(compute())));
@@ -65,7 +61,7 @@ impl<K: Clone + Eq + Hash, V> Cache<K, V> {
             .is_some_and(|f| Arc::ptr_eq(f, &flight))
         {
             state.flights.remove(key);
-            if state.generation == generation && keep(&value) {
+            if keep(&value) {
                 state.ready.insert(key.clone(), Arc::clone(&value));
             }
         }
@@ -80,7 +76,6 @@ impl<K: Clone + Eq + Hash, V> Cache<K, V> {
     /// 모두 잊는다. 남겼던 결과와 진행 중이던 시도의 키를 돌려준다(중복 없이).
     pub fn clear(&self) -> Vec<K> {
         let mut state = self.lock();
-        state.generation += 1;
         let mut keys: Vec<K> = state.ready.drain().map(|(k, _)| k).collect();
         for (k, _) in state.flights.drain() {
             if !keys.contains(&k) {
