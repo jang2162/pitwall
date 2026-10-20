@@ -41,8 +41,9 @@ function Harness({ initial }: { initial: StatusBarItem[] }) {
   show = setItems;
   return (
     <StatusBarProvider>
-      {items.map((item, i) => (
-        <Register key={`${item.id}-${i}`} item={item} />
+      {/* 등록 하나가 컴포넌트 하나다 — 목록에서 빠진 등록만 언마운트되게 key 를 등록마다 다르게 둔다. */}
+      {items.map((item) => (
+        <Register key={`${item.id}:${item.side}:${item.order}`} item={item} />
       ))}
       <StatusBar label="status" />
     </StatusBarProvider>
