@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use pw_core::config::gitdir::linked_worktree;
 use pw_core::config::{AppPaths, ConfigStore};
+use pw_core::registry::path::{PathRejected, normalize};
 use pw_core::registry::{Project, Registry as Projects, RegistryError};
 use pw_ext::Registry;
 use pw_ext::template::{SubstituteError, substitute};
@@ -219,16 +220,17 @@ impl OpenWith {
 
     pub fn run(&self, params: &OpenWithRunParams) -> Result<OpenWithOutcome, RpcError> {
         let host = self.host()?;
+        // `{file}` · `{project_root}` 는 레지스트리 · 파일 RPC(`pw-fs`)와 같은 정규화를 지난다 — `.` · `..` · 심링크가 풀린 실제
+        // 경로가 도구에 간다(없는 파일은 가장 깊은 있는 조상까지).
         let file = match &params.file {
-            Some(f) if !Path::new(f).is_absolute() => {
-                return Err(RpcError::invalid_params(format!(
-                    "file `{f}` must be an absolute path"
-                )));
-            }
-            f => f.as_ref().map(PathBuf::from),
+            Some(f) => Some(normalize(Path::new(f)).map_err(|PathRejected::Relative| {
+                RpcError::invalid_params(format!("file `{f}` must be an absolute path"))
+            })?),
+            None => None,
         };
         let (project, project_root) =
             Self::project_and_root(host, &params.project_id, params.worktree.as_deref())?;
+        let project_root = normalize(&project_root).unwrap_or(project_root);
         let tools = self.tools(host);
         let id = match &params.tool {
             Some(id) => id.clone(),

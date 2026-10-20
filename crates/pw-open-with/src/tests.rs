@@ -629,3 +629,40 @@ fn rejects_a_relative_worktree() {
         .unwrap_err();
     assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
 }
+
+/// `{file}` 은 레지스트리 · 파일 RPC 와 같은 정규화(`pw_core::registry::path::normalize`)를 지나 도구에 간다: `.` · `..` 가 풀리고
+/// 심링크는 실제 경로가 된다. 임시 폴더 경로(macOS 의 `/var/…`)도 실제 경로(`/private/var/…`)로 간다.
+#[test]
+fn the_file_reaches_the_tool_normalized() {
+    let f = Fixture::new(&settings_with_tool(
+        "fake",
+        r#"["fake-tool", "{project_root}"]"#,
+        r#"["fake-tool", "{project_root}", "{file}"]"#,
+    ));
+    f.fake_tool("fake-tool");
+    let project = f.project(&f.tmp.path().join("proj"));
+    let root = PathBuf::from(&project.roots[0]);
+    fs::create_dir_all(root.join("deep/inner")).unwrap();
+    fs::write(root.join("deep/x.rs"), "").unwrap();
+    std::os::unix::fs::symlink(root.join("deep/inner"), root.join("link")).unwrap();
+    // 글자로 풀면 `<root>/x.rs` 지만, 링크를 따라간 뒤의 `..` 는 `deep` 이다.
+    let file = f.tmp.path().join("proj/./link/../x.rs");
+
+    let outcome = f.run(OpenWithRunParams {
+        project_id: project.id.clone(),
+        tool: Some("fake".to_owned()),
+        file: Some(file.display().to_string()),
+        ..OpenWithRunParams::default()
+    });
+    assert!(
+        matches!(outcome, OpenWithOutcome::Launched { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        f.received("fake-tool"),
+        [
+            root.display().to_string(),
+            root.join("deep/x.rs").display().to_string()
+        ]
+    );
+}
