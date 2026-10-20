@@ -4,9 +4,11 @@
 //! - [`context`]: 템플릿 변수의 값(활성 워크트리 기준 프로젝트 루트, 파일 · 줄 · 열, 브랜치).
 //! - [`launch`]: 실행 파일 찾기(런타임 환경의 PATH, `crates/pw-runtime`)와 셸 없는 떼어 띄우기(자식은 그 환경 전체를 받는다).
 //! - [`methods`]: `openWith.list` · `openWith.run` RPC.
+//! - [`cli`]: 「Orca 에서 Pitwall 열기」 안내의 검사(`cli.status` RPC, F8-6) — `pitwall` 명령이 이 앱을 띄우는가.
 //!
 //! 명령 형식(argv 배열, 첫 요소에 변수 금지, `command` · `file_command`)은 `pw_ext::template`.
 
+pub mod cli;
 pub mod context;
 pub mod launch;
 pub mod methods;

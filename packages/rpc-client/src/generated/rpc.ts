@@ -4,6 +4,11 @@
 /** 선언된 unary 메서드: 이름 → 입력 · result 타입. */
 export type UnaryMethods = {
 	/**
+	 * 「Orca 에서 Pitwall 열기」 안내의 검사(04 F8-6): 설치 위치의 심링크가 이 앱을 가리키는가, 로그인 셸 PATH 로 찾은
+	 * `pitwall` 이 이 앱인가. 처음이면 로그인 셸을 기다린다(최대 5초 남짓).
+	 */
+	"cli.status": { params: null; result: CliStatus };
+	/**
 	 * 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).
 	 */
 	"config.get": { params: ConfigGetParams; result: ConfigView };
@@ -197,6 +202,7 @@ export type MethodName = keyof UnaryMethods | keyof StreamMethods;
 
 /** 메서드 메타데이터(권한 등급 · role · 문서). */
 export const METHODS: Record<MethodName, MethodMeta> = {
+	"cli.status": {"name":"cli.status","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"CliStatus","doc":" 「Orca 에서 Pitwall 열기」 안내의 검사(04 F8-6): 설치 위치의 심링크가 이 앱을 가리키는가, 로그인 셸 PATH 로 찾은\n `pitwall` 이 이 앱인가. 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n","mcp":false},
 	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n","mcp":false},
 	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n","mcp":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":false},
@@ -279,6 +285,36 @@ export type Bom = "utf8" | "utf16Le" | "utf16Be";
 
 export type CancelRequestParams = {
 	id: Id,
+};
+
+/**  설치 위치의 상태. */
+export type CliInstall = 
+/**  아무것도 없다. */
+{ kind: "missing" } | 
+/**  이 앱을 가리키는 심링크. */
+{ kind: "thisApp" } | 
+/**  다른 곳을 가리키는 심링크(끊긴 링크 포함). `target` 은 링크가 가리키는 경로 — 상대 경로면 링크의 폴더에 붙인 것. */
+{ kind: "otherLink"; target: string } | 
+/**  심링크가 아닌 파일 · 폴더. 「Shell 명령 설치」 는 이것을 건드리지 않는다. */
+{ kind: "notALink" };
+
+/**  로그인 셸 PATH 로 찾은 `pitwall`. */
+export type CliOnPath = { kind: "notFound" } | 
+/**  찾은 첫 실행 파일이 이 앱이다. */
+{ kind: "thisApp"; path: string } | 
+/**  찾은 첫 실행 파일이 다른 것이다. `resolved` 는 심링크를 푼 실제 경로(풀지 못했으면 없다). */
+{ kind: "other"; path: string; resolved: string | null };
+
+export type CliStatus = {
+	/**  설치 위치(절대 경로). PATH 에 없을 때 Orca 에 이 경로를 그대로 등록한다. */
+	target: string,
+	/**  이 앱 바이너리의 실제 경로. */
+	app: string,
+	install: CliInstall,
+	onPath: CliOnPath,
+	/**  찾아본 PATH 의 출처. 로그인 셸을 읽지 못했으면 앱 프로세스의 것이다(`path_status` 가 그 이유). */
+	pathSource: RuntimeSource,
+	pathStatus: RuntimeStatus,
 };
 
 /**  마지막 읽기의 실패. 성공하면 사라진다. */
