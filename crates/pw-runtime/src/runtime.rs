@@ -3,7 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use pw_core::registry::{Registry as Projects, RegistryError};
+use pw_core::registry::path::{normalize, worktree_link};
+use pw_core::registry::{Project, Registry as Projects, RegistryError};
 use pw_core::{EventBus, Scope};
 use pw_rpc::{RpcError, code};
 use serde::Serialize;
@@ -91,7 +92,8 @@ impl Runtime {
     }
 
     /// `project` 의 `dir`(절대 경로)에서 띄울 프로세스의 환경. 처음이면 지금 만든다(로그인 셸을 기다릴 수 있다). 물러난
-    /// 결과(`RuntimeStatus::Fallback`)는 남기지 않아 다음 호출이 다시 시도한다.
+    /// 결과(`RuntimeStatus::Fallback`)는 남기지 않아 다음 호출이 다시 시도한다(로그인 셸의 시간 초과는 냉각 동안 곧바로
+    /// 물러난다).
     pub fn env(&self, project: &str, dir: &Path) -> Arc<Resolved> {
         self.cache.get_or_compute(
             &(project.to_owned(), dir.to_path_buf()),
@@ -117,7 +119,8 @@ impl Runtime {
     }
 
     /// 「환경 다시 읽기」. 로그인 셸 환경과 모든 디렉터리의 캐시를 잊고, 캐시가 있던 프로젝트와 `project` 마다
-    /// `runtime.changed` 를 한 번씩 낸다(로그인 셸은 모든 프로젝트의 바탕이다). 다시 읽기는 다음 요청에서 한다.
+    /// `runtime.changed` 를 한 번씩 낸다(로그인 셸은 모든 프로젝트의 바탕이다). 시간 초과의 냉각도 푼다. 다시 읽기는 다음
+    /// 요청에서 한다(RPC 핸들러는 곧바로 백그라운드로 시작한다).
     pub fn reload(&self, project: &str) {
         self.shell.invalidate();
         let mut projects: Vec<String> = self.cache.clear().into_iter().map(|(p, _)| p).collect();
@@ -141,12 +144,12 @@ impl Runtime {
     fn resolve(&self, project: &str, dir: &Path) -> Resolved {
         let (base, mut failures) = match &*self.shell.get() {
             Ok(layer) => (layer.clone(), Vec::new()),
-            Err(reason) => (
+            Err(e) => (
                 Layer {
                     env: RuntimeEnv::process(),
                     source: RuntimeSource::Process,
                 },
-                vec![reason.clone()],
+                vec![e.reason.clone()],
             ),
         };
         let login_shell = failures.is_empty();
@@ -205,20 +208,17 @@ impl Runtime {
             .ok_or_else(|| RpcError::internal("runtime is not attached to a host"))
     }
 
-    /// `runtime.get`. `dir` 이 없으면 프로젝트의 주 루트.
+    /// `runtime.get`. `dir` 이 없으면 프로젝트의 주 루트. `dir` 은 레지스트리와 같은 규칙으로 정규화하고(캐시 키가 `/a/../a` 와
+    /// `/a` 로 갈리지 않게), 프로젝트 루트나 그 루트를 담은 연결 워크트리 안이어야 한다 — 제공자가 호출자가 고른 아무 폴더에서
+    /// 돌지 않게.
     pub fn get(&self, params: &RuntimeGetParams) -> Result<RuntimeInfo, RpcError> {
         let project = self
             .projects()?
             .get(&params.project_id)
             .map_err(registry_error)?;
         let dir = match &params.dir {
-            Some(dir) if !Path::new(dir).is_absolute() => {
-                return Err(RpcError::invalid_params(format!(
-                    "dir `{dir}` must be an absolute path"
-                )));
-            }
-            Some(dir) => PathBuf::from(dir),
-            None => project.root().to_path_buf(),
+            Some(dir) => project_dir(&project, Path::new(dir))?,
+            None => normalize(project.root()).unwrap_or_else(|_| project.root().to_path_buf()),
         };
         Ok(self.env(&project.id, &dir).info.clone())
     }
@@ -228,6 +228,33 @@ impl Runtime {
         let project = self.projects()?.get(project_id).map_err(registry_error)?;
         self.reload(&project.id);
         Ok(())
+    }
+}
+
+/// `dir` 을 정규화한 것. 프로젝트의 루트 안이거나, 연결 워크트리 안이면서 메인 체크아웃 쪽 대응 경로가 루트 안이어야 한다.
+fn project_dir(project: &Project, dir: &Path) -> Result<PathBuf, RpcError> {
+    let dir = normalize(dir).map_err(|_| {
+        RpcError::invalid_params(format!("dir `{}` must be an absolute path", dir.display()))
+    })?;
+    let roots: Vec<PathBuf> = project
+        .roots
+        .iter()
+        .filter_map(|r| normalize(Path::new(r)).ok())
+        .collect();
+    let inside = |path: &Path| roots.iter().any(|root| path.starts_with(root));
+    let via_worktree = || {
+        worktree_link(&dir)
+            .and_then(|link| link.map_to_main(&dir))
+            .is_some_and(|main| inside(&main))
+    };
+    if inside(&dir) || via_worktree() {
+        Ok(dir)
+    } else {
+        Err(RpcError::invalid_params(format!(
+            "dir `{}` is not inside project `{}`",
+            dir.display(),
+            project.id
+        )))
     }
 }
 

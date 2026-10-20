@@ -3,7 +3,8 @@
 //!
 //! - [`provider`]: 제공자 trait. 환경은 앱 프로세스 → 로그인 셸 → 디렉터리의 제공자 하나 순으로 쌓인다.
 //! - [`login_shell`]: 4번 제공자 「로그인 셸」 — 셸이 만든 환경 전체. mise 등 다른 제공자는 아직 없다(M1-16).
-//! - [`runtime`]: 캐시, 「환경 다시 읽기」, `runtime.changed`. 실패 · 시간 초과는 남기지 않아 다음 요청이 다시 시도한다.
+//! - [`runtime`]: 캐시, 「환경 다시 읽기」, `runtime.changed`. 실패는 남기지 않아 다음 요청이 다시 시도한다(시간 초과만
+//!   잠시 냉각한다, [`login_shell`]).
 //! - [`methods`]: `runtime.get` · `runtime.reload` RPC.
 //!
 //! 왜: Finder · Dock · `open` 으로 띄운 GUI 앱의 환경은 launchd 의 것(PATH `/usr/bin:/bin:/usr/sbin:/sbin`)이라 `zed` · `code` ·

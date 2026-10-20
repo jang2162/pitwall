@@ -35,7 +35,8 @@ pub enum RuntimeSource {
 )]
 pub enum RuntimeStatus {
     Ok,
-    /// 제공자가 실패해 그 아래 환경(로그인 셸, 또는 앱 프로세스)으로 물러났다. 남기지 않으므로 다음 요청이 다시 시도한다.
+    /// 제공자가 실패해 그 아래 환경(로그인 셸, 또는 앱 프로세스)으로 물러났다. 남기지 않으므로 다음 요청이 다시 시도한다 —
+    /// 로그인 셸의 시간 초과만 냉각 동안(30초) 다시 시도하지 않는다.
     Fallback {
         reason: String,
     },
@@ -71,7 +72,7 @@ pub struct RuntimeInfo {
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeGetParams {
     pub project_id: String,
-    /// 절대 경로. 없으면 프로젝트의 주 루트.
+    /// 절대 경로. 프로젝트 루트나 그 루트를 담은 연결 워크트리 안이어야 한다. 없으면 프로젝트의 주 루트.
     #[serde(default)]
     pub dir: Option<String>,
 }
@@ -87,7 +88,7 @@ pub struct RuntimeReloadParams {
 
 rpc_method! {
     /// 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).
-    /// 없는 프로젝트 · 상대 경로는 invalid params 오류.
+    /// 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.
     pub RuntimeGet: "runtime.get" {
         params: RuntimeGetParams,
         result: RuntimeInfo,

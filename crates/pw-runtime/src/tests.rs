@@ -34,7 +34,11 @@ impl Fixture {
     }
 
     fn runtime(&self, timeout: Duration) -> Runtime {
-        Runtime::new(LoginShell::new(Some(self.shell.clone()), timeout))
+        self.runtime_cooling(timeout, Duration::from_secs(30))
+    }
+
+    fn runtime_cooling(&self, timeout: Duration, cooldown: Duration) -> Runtime {
+        Runtime::new(LoginShell::new(Some(self.shell.clone()), timeout).with_cooldown(cooldown))
     }
 
     fn dir(&self) -> PathBuf {
@@ -42,13 +46,18 @@ impl Fixture {
     }
 }
 
-/// ① 첫 호출이 시간을 넘기면 앱 프로세스의 환경으로 물러나고, 셸을 고친 뒤 다음 호출은 로그인 셸 환경을 준다(실패를 남기지 않는다).
+/// ① 첫 호출이 시간을 넘기면 앱 프로세스의 환경으로 물러난다. 냉각 동안은 셸을 다시 돌리지 않고 곧바로 물러난 결과를 주고,
+/// 셸을 고친 뒤 냉각이 끝나면 다음 호출이 로그인 셸 환경을 준다(실패를 남기지 않는다).
 #[test]
-fn a_timeout_falls_back_to_the_process_and_the_next_call_retries() {
+fn a_timeout_falls_back_to_the_process_and_the_next_call_after_the_cooldown_retries() {
     let f = Fixture::new(HANGING);
-    let runtime = f.runtime(Duration::from_millis(300));
+    let cooldown = Duration::from_millis(1500);
+    let runtime = f.runtime_cooling(Duration::from_millis(300), cooldown);
+    // 냉각은 첫 호출 안에서 시작한다 — 끝나는 때는 `before + cooldown` 과 `after + cooldown` 사이다.
+    let before = Instant::now();
     let started = Instant::now();
     let first = runtime.env("p1", &f.dir());
+    let after = Instant::now();
     assert!(
         started.elapsed() < Duration::from_secs(3),
         "{:?}",
@@ -64,6 +73,23 @@ fn a_timeout_falls_back_to_the_process_and_the_next_call_retries() {
     assert_eq!(first.env, RuntimeEnv::process());
 
     f.rewrite(WORKING);
+    // 냉각 중: 셸을 기다리지 않는다(시간 제한 300 ms 보다 빠르다).
+    let started = Instant::now();
+    let cooling = runtime.env("p1", &f.dir());
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(cooling.info.source, RuntimeSource::Process);
+    assert!(
+        Instant::now() < before + cooldown,
+        "the cooldown ended before the check"
+    );
+
+    std::thread::sleep(
+        (after + cooldown + Duration::from_millis(20)).saturating_duration_since(Instant::now()),
+    );
     let second = runtime.env("p1", &f.dir());
     assert_eq!(second.info.status, RuntimeStatus::Ok);
     assert_eq!(second.info.provider, "shell");
@@ -76,6 +102,44 @@ fn a_timeout_falls_back_to_the_process_and_the_next_call_retries() {
     assert!(second.login_shell);
     assert_eq!(second.env.path, OsString::from("/shell/bin:/usr/bin:/bin"));
     assert_eq!(second.env.get("JAVA_HOME"), Some(OsStr::new("/opt/jdk-21")));
+}
+
+/// 「환경 다시 읽기」 는 시간 초과의 냉각을 풀어, 셸을 고친 뒤 곧바로 로그인 셸 환경을 준다.
+#[test]
+fn reload_ends_the_timeout_cooldown() {
+    let f = Fixture::new(HANGING);
+    let runtime = f.runtime_cooling(Duration::from_millis(300), Duration::from_secs(60));
+    assert_eq!(
+        runtime.env("p1", &f.dir()).info.source,
+        RuntimeSource::Process
+    );
+    f.rewrite(WORKING);
+    assert_eq!(
+        runtime.env("p1", &f.dir()).info.source,
+        RuntimeSource::Process
+    );
+    runtime.reload("p1");
+    let reloaded = runtime.env("p1", &f.dir());
+    assert_eq!(reloaded.info.status, RuntimeStatus::Ok);
+    assert_eq!(
+        reloaded.env.get("JAVA_HOME"),
+        Some(OsStr::new("/opt/jdk-21"))
+    );
+}
+
+/// 셸 실행 자체의 실패(시간 초과가 아닌 것)는 냉각 없이 다음 호출이 다시 시도한다.
+#[test]
+fn a_shell_error_is_retried_without_a_cooldown() {
+    let f = Fixture::new("exit 1");
+    let runtime = f.runtime_cooling(Duration::from_secs(5), Duration::from_secs(60));
+    let first = runtime.env("p1", &f.dir());
+    assert!(
+        matches!(&first.info.status, RuntimeStatus::Fallback { reason } if reason.contains("printed no PATH")),
+        "{:?}",
+        first.info.status
+    );
+    f.rewrite(WORKING);
+    assert_eq!(runtime.env("p1", &f.dir()).info.status, RuntimeStatus::Ok);
 }
 
 /// 성공한 환경은 남는다 — 셸을 바꿔도 다시 읽기 전에는 같은 환경이다. 디렉터리가 달라도 셸은 다시 돌지 않는다.
@@ -208,6 +272,60 @@ fn get_defaults_to_the_project_root_and_rejects_relative_dirs() {
         })
         .unwrap_err();
     assert_eq!(unknown.code, pw_rpc::code::INVALID_PARAMS);
+}
+
+/// `dir` 은 정규화한 뒤 프로젝트 루트 안이나, 루트를 담은 연결 워크트리 안이어야 한다.
+#[test]
+fn get_accepts_dirs_inside_the_project_or_its_worktrees_only() {
+    let f = Fixture::new(WORKING);
+    let bus = EventBus::new(DEFAULT_CAPACITY);
+    let projects = registry(f.tmp.path(), &bus);
+    // 메인 체크아웃 `repo` 안의 하위 폴더 `app` 이 프로젝트 루트다. `wt` 는 `repo` 의 연결 워크트리.
+    let repo = f.tmp.path().join("repo");
+    std::fs::create_dir_all(repo.join(".git/worktrees/wt")).unwrap();
+    std::fs::write(repo.join(".git/worktrees/wt/commondir"), "../..\n").unwrap();
+    let wt = f.tmp.path().join("wt");
+    std::fs::create_dir_all(wt.join("app/src")).unwrap();
+    std::fs::create_dir_all(wt.join("other")).unwrap();
+    std::fs::write(
+        wt.join(".git"),
+        format!("gitdir: {}\n", repo.join(".git/worktrees/wt").display()),
+    )
+    .unwrap();
+    let root = repo.join("app");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(f.tmp.path().join("repo/app-other")).unwrap();
+    let id = project(&projects, &root);
+    let runtime = f.runtime(Duration::from_secs(5));
+    runtime.attach(RuntimeHost { projects, bus });
+    let get = |dir: PathBuf| {
+        runtime.get(&RuntimeGetParams {
+            project_id: id.clone(),
+            dir: Some(dir.display().to_string()),
+        })
+    };
+    assert!(get(root.join("src")).is_ok());
+    assert!(get(root.join("not-yet-created")).is_ok());
+    assert!(get(wt.join("app/src")).is_ok());
+    // 글자로는 루트로 시작하지만 정규화하면 루트 밖이다.
+    for outside in [
+        root.join("../app-other"),
+        f.tmp.path().to_path_buf(),
+        wt.join("other"),
+        PathBuf::from("/"),
+    ] {
+        let err = get(outside.clone()).unwrap_err();
+        assert_eq!(
+            err.code,
+            pw_rpc::code::INVALID_PARAMS,
+            "{}",
+            outside.display()
+        );
+        assert!(
+            format!("{err:?}").contains("is not inside project"),
+            "{err:?}"
+        );
+    }
 }
 
 /// 로그인 셸 위에 덮는 제공자 흉내(mise 자리). `fail` 이면 실패한다.

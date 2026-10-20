@@ -117,7 +117,7 @@ export type UnaryMethods = {
 	"project.update": { params: UpdateProjectParams; result: Project };
 	/**
 	 * 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).
-	 * 없는 프로젝트 · 상대 경로는 invalid params 오류.
+	 * 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.
 	 */
 	"runtime.get": { params: RuntimeGetParams; result: RuntimeInfo };
 	/**
@@ -181,7 +181,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n","mcp":false},
 	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n","mcp":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":false},
-	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로는 invalid params 오류.\n","mcp":false},
+	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":false},
 	"task.cancel": {"name":"task.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"TaskCancelParams","output":"bool","doc":" 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.\n","mcp":false},
 	"task.list": {"name":"task.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"TaskListParams","output":"Vec<TaskInfo>","doc":" 끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.\n","mcp":false},
@@ -698,7 +698,7 @@ export type RpcError = {
 
 export type RuntimeGetParams = {
 	projectId: string,
-	/**  절대 경로. 없으면 프로젝트의 주 루트. */
+	/**  절대 경로. 프로젝트 루트나 그 루트를 담은 연결 워크트리 안이어야 한다. 없으면 프로젝트의 주 루트. */
 	dir?: string | null,
 };
 
@@ -726,7 +726,10 @@ export type RuntimeSource =
 { kind: "configFiles"; files: string[] };
 
 export type RuntimeStatus = { kind: "ok" } | 
-/**  제공자가 실패해 그 아래 환경(로그인 셸, 또는 앱 프로세스)으로 물러났다. 남기지 않으므로 다음 요청이 다시 시도한다. */
+/**
+ *  제공자가 실패해 그 아래 환경(로그인 셸, 또는 앱 프로세스)으로 물러났다. 남기지 않으므로 다음 요청이 다시 시도한다 —
+ *  로그인 셸의 시간 초과만 냉각 동안(30초) 다시 시도하지 않는다.
+ */
 { kind: "fallback"; reason: string };
 
 export type RuntimeToolInfo = {
