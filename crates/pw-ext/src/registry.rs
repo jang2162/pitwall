@@ -346,6 +346,10 @@ impl Registry {
         let themes = self.read_themes(&root, &file, &manifest);
         let translations = self.read_translations(&root, &manifest);
         if self.error_count() == errors_before {
+            let mut manifest = manifest;
+            if !root.is_builtin() {
+                self.drop_grammars(&file, &mut manifest);
+            }
             self.extensions.push(Extension {
                 manifest,
                 root,
@@ -556,6 +560,31 @@ impl Registry {
             });
         }
         out
+    }
+
+    /// 내장이 아닌 확장의 문법 WASM · 쿼리는 등록하지 않는다(언어 이름 · 확장자 · 주석 기호는 받는다). 문법 WASM 의 실행 시간에
+    /// 상한을 걸 수 없어서다 — `docs/design/07-extensibility.md` 「문법 WASM 의 신뢰 경계」.
+    fn drop_grammars(&mut self, file: &str, manifest: &mut Manifest) {
+        for language in &mut manifest.contributes.languages {
+            let grammar = language.grammar.take();
+            let queries = language.queries.take();
+            let Some(pos) = grammar
+                .as_ref()
+                .or(queries.as_ref())
+                .map(|p| p.pos.or(language.pos))
+            else {
+                continue;
+            };
+            self.diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                file: file.to_owned(),
+                pos,
+                message: format!(
+                    "language `{}`: grammars are loaded only from built-in extensions for now; it has no syntax highlighting",
+                    language.id
+                ),
+            });
+        }
     }
 
     fn push_error(&mut self, file: &str, pos: Option<Pos>, message: String) {
@@ -1090,6 +1119,45 @@ mod tests {
             messages[1]
                 .ends_with("5:21: error: theme `dusk` is already provided by `dev.example.a`"),
             "{messages:?}"
+        );
+    }
+
+    /// 사용자 확장의 언어 기여는 받되 문법 WASM · 쿼리는 등록하지 않는다(경고를 남긴다). 내장 확장의 문법은 그대로다.
+    #[test]
+    fn a_user_extension_language_is_registered_without_its_grammar() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "[contributes.languages.ruby]\nlinguist = \"Ruby\"\nextensions = [\".rb\"]\n\
+                    grammar = \"grammars/ruby.wasm\"\nqueries = \"queries/ruby\"\n\n\
+                    [contributes.languages.plain]\nlinguist = \"Plain\"\n";
+        let user = ext(
+            dir.path(),
+            "ruby",
+            &[
+                ("extension.toml", &manifest("dev.example.ruby", "*", body)),
+                ("grammars/ruby.wasm", "\0asm"),
+                ("queries/ruby/highlights.scm", ""),
+            ],
+        );
+        let mut roots = builtin::roots();
+        roots.push(user);
+        let registry = Registry::from_roots(&engine(), roots);
+        let ruby = registry.language_for_linguist("Ruby").unwrap();
+        assert_eq!(ruby.extension, "dev.example.ruby");
+        assert_eq!((ruby.grammar, ruby.queries), (None, None));
+        let messages = messages(&registry);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(
+            messages[0].ends_with(
+                "8:11: warning: language `ruby`: grammars are loaded only from built-in extensions for now; it has no syntax highlighting"
+            ),
+            "{messages:?}"
+        );
+        assert!(
+            registry
+                .language_for_linguist("Rust")
+                .unwrap()
+                .grammar
+                .is_some()
         );
     }
 
