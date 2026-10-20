@@ -3,7 +3,7 @@
 use pw_rpc::{JsNumber, rpc_method};
 use serde::{Deserialize, Serialize};
 
-use crate::task::{TaskId, TaskProgress, TaskStatus};
+use crate::task::{TaskId, TaskInfo, TaskProgress, TaskStatus};
 
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -77,6 +77,25 @@ pub enum DemoTaskUpdate {
     },
 }
 
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskListParams {
+    /// 이 프로젝트의 작업도 함께. 없으면 Host 범위 작업만.
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskCancelParams {
+    #[specta(type = JsNumber)]
+    pub task_id: TaskId,
+}
+
 rpc_method! {
     /// 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.
     pub HostPing: "host.ping" {
@@ -98,6 +117,20 @@ rpc_method! {
         params: DemoTaskParams,
         stream: DemoTaskUpdate,
         tier: Read,
+    }
+
+    /// 끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.
+    pub TaskList: "task.list" {
+        params: TaskListParams,
+        result: Vec<TaskInfo>,
+        tier: Read,
+    }
+
+    /// 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.
+    pub TaskCancel: "task.cancel" {
+        params: TaskCancelParams,
+        result: bool,
+        tier: Write,
     }
 }
 

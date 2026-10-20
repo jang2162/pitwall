@@ -17,6 +17,7 @@ use crate::config::{AppPaths, ConfigSource, ConfigStore, DEFAULT_DEBOUNCE, PathE
 use crate::host::{BoxFuture, Connection, FrameSink, FrameSource, Host, HostError, HostId};
 use crate::methods::{
     DemoTaskParams, DemoTaskUpdate, HostDemoTask, HostInfo, HostInfoMethod, HostPing, Pong,
+    TaskCancel, TaskList,
 };
 use crate::registry::Registry;
 use crate::task::{TOPIC_PROGRESS, TaskCtx, TaskProgress, TaskProgressEvent, TaskSpawner};
@@ -406,6 +407,20 @@ fn build_router(
         .unary(HostInfoMethod, move |_ctx, ()| {
             let info = info.clone();
             async move { Ok(info) }
+        })
+        .unary(TaskList, {
+            let tasks = tasks.clone();
+            move |_ctx, params| {
+                let running = tasks.running(params.project_id.as_deref());
+                async move { Ok(running) }
+            }
+        })
+        .unary(TaskCancel, {
+            let tasks = tasks.clone();
+            move |_ctx, params| {
+                let cancelled = tasks.cancel(params.task_id);
+                async move { Ok(cancelled) }
+            }
         })
         .stream(HostDemoTask, move |_ctx, params, sink| {
             let bus = bus.clone();

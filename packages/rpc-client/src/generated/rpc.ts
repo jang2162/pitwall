@@ -116,6 +116,14 @@ export type UnaryMethods = {
 	 */
 	"project.update": { params: UpdateProjectParams; result: Project };
 	/**
+	 * 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.
+	 */
+	"task.cancel": { params: TaskCancelParams; result: boolean };
+	/**
+	 * 끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.
+	 */
+	"task.list": { params: TaskListParams; result: TaskInfo[] };
+	/**
 	 * 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.
 	 */
 	"theme.get": { params: ThemeGetParams; result: ThemeFile };
@@ -163,6 +171,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n","mcp":false},
 	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n","mcp":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":false},
+	"task.cancel": {"name":"task.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"TaskCancelParams","output":"bool","doc":" 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.\n","mcp":false},
+	"task.list": {"name":"task.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"TaskListParams","output":"Vec<TaskInfo>","doc":" 끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.\n","mcp":false},
 	"theme.get": {"name":"theme.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ThemeGetParams","output":"ThemeFile","doc":" 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.\n","mcp":false},
 	"theme.list": {"name":"theme.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ThemeList","doc":" 등록된 테마 목록.\n","mcp":false},
 };
@@ -743,6 +753,24 @@ export type SubscribeParams = {
 
 export type Subscribed = {
 	subscriptionId: number,
+};
+
+export type TaskCancelParams = {
+	taskId: number,
+};
+
+/**  도는 작업 하나(`task.list` 의 항목). */
+export type TaskInfo = {
+	taskId: number,
+	title: string,
+	/**  프로젝트 범위 작업이면 그 프로젝트, Host 범위면 `None`. */
+	projectId: string | null,
+	progress: TaskProgress,
+};
+
+export type TaskListParams = {
+	/**  이 프로젝트의 작업도 함께. 없으면 Host 범위 작업만. */
+	projectId?: string | null,
 };
 
 /**

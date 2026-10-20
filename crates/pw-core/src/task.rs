@@ -1,11 +1,13 @@
 //! 장기 작업(`Task`): 진행률 보고, 취소, 완료 · 실패 · 취소 상태. 진행과 종료는 이벤트 버스로도 알린다.
 //!
 //! UI 상태바와 MCP 가 같은 작업을 보도록 진행 알림은 버스의 [`TOPIC_PROGRESS`] · [`TOPIC_FINISHED`] 로 나간다
-//! (`docs/design/03-architecture.md` 「코어 모듈」 절).
+//! (`docs/design/03-architecture.md` 「코어 모듈」 절). 알림을 놓친 쪽(나중에 열린 창)은 [`TaskSpawner::running`]
+//! (`task.list`)으로 지금 도는 작업을 읽고, 띄운 쪽이 아니어도 [`TaskSpawner::cancel`](`task.cancel`)로 멈출 수 있다.
 
+use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -62,6 +64,20 @@ pub struct TaskProgressEvent {
     pub progress: TaskProgress,
 }
 
+/// 도는 작업 하나(`task.list` 의 항목).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskInfo {
+    #[specta(type = pw_rpc::JsNumber)]
+    pub task_id: TaskId,
+    pub title: String,
+    /// 프로젝트 범위 작업이면 그 프로젝트, Host 범위면 `None`.
+    pub project_id: Option<String>,
+    pub progress: TaskProgress,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskFinishedEvent {
@@ -79,6 +95,24 @@ pub struct TaskSpawner {
     scope: Scope,
     cancel: CancellationToken,
     next_id: Arc<AtomicU64>,
+    running: Running,
+}
+
+/// 끝나지 않은 작업 표. 같은 Host 의 spawner 끼리 함께 쓴다. 작업은 띄울 때 들어가고 종료 알림과 함께 빠진다.
+#[derive(Clone, Default)]
+struct Running(Arc<Mutex<BTreeMap<TaskId, RunningTask>>>);
+
+struct RunningTask {
+    title: String,
+    scope: Scope,
+    cancel: CancellationToken,
+    progress: watch::Receiver<TaskProgress>,
+}
+
+impl Running {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<TaskId, RunningTask>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 impl TaskSpawner {
@@ -88,6 +122,7 @@ impl TaskSpawner {
             scope,
             cancel,
             next_id: Arc::new(AtomicU64::new(1)),
+            running: Running::default(),
         }
     }
 
@@ -99,11 +134,40 @@ impl TaskSpawner {
             scope,
             cancel,
             next_id: Arc::clone(&self.next_id),
+            running: self.running.clone(),
         }
     }
 
     pub fn scope(&self) -> &Scope {
         &self.scope
+    }
+
+    /// 끝나지 않은 작업(id 순). Host 범위 작업과, `project` 를 주면 그 프로젝트의 작업. 다른 프로젝트의 작업은 넣지 않는다 —
+    /// 이벤트 구독과 같은 범위 규칙이다(`pw_rpc::EventHub`).
+    pub fn running(&self, project: Option<&str>) -> Vec<TaskInfo> {
+        self.running
+            .lock()
+            .iter()
+            .filter_map(|(&task_id, task)| {
+                let project_id = match &task.scope {
+                    Scope::Host => None,
+                    Scope::Project(id) if Some(id.as_str()) == project => Some(id.clone()),
+                    Scope::Project(_) => return None,
+                };
+                Some(TaskInfo {
+                    task_id,
+                    title: task.title.clone(),
+                    project_id,
+                    progress: task.progress.borrow().clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// 도는 작업을 id 로 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 어느 spawner 가 띄웠든 같은 Host 면 멈춘다.
+    pub fn cancel(&self, id: TaskId) -> bool {
+        let token = self.running.lock().get(&id).map(|t| t.cancel.clone());
+        token.inspect(CancellationToken::cancel).is_some()
     }
 
     /// 작업을 tokio 태스크로 띄운다. tokio 런타임 안에서 불러야 한다.
@@ -129,12 +193,23 @@ impl TaskSpawner {
             progress: progress_tx,
         };
         let fut = work(ctx);
+        // `work` 가 패닉하면 표에서 빼 줄 종료 guard 가 아직 없다. 그래서 표에는 `work` 를 부른 뒤에 넣는다.
+        self.running.lock().insert(
+            id,
+            RunningTask {
+                title: title.clone(),
+                scope: self.scope.clone(),
+                cancel: cancel.clone(),
+                progress: progress_rx.clone(),
+            },
+        );
         let mut finish = FinishGuard {
             id,
             title,
             scope: self.scope.clone(),
             bus: self.bus.clone(),
             status: Some(status_tx),
+            running: self.running.clone(),
         };
         let token = cancel.clone();
         tokio::spawn(async move {
@@ -236,6 +311,7 @@ struct FinishGuard {
     scope: Scope,
     bus: EventBus,
     status: Option<watch::Sender<TaskStatus>>,
+    running: Running,
 }
 
 impl FinishGuard {
@@ -243,6 +319,8 @@ impl FinishGuard {
         let Some(sender) = self.status.take() else {
             return;
         };
+        // 종료 알림보다 먼저 뺀다 — 알림을 받고 `task.list` 를 부른 쪽이 끝난 작업을 다시 보지 않게.
+        self.running.lock().remove(&self.id);
         let event = TaskFinishedEvent {
             task_id: self.id,
             title: std::mem::take(&mut self.title),
@@ -387,6 +465,72 @@ mod tests {
             finished += 1;
         }
         assert_eq!(finished, 2);
+    }
+
+    /// 도는 작업은 목록에 있고 끝나면 빠진다. 프로젝트 작업은 그 프로젝트를 물을 때만 나온다.
+    #[tokio::test(start_paused = true)]
+    async fn running_lists_unfinished_tasks_in_scope() {
+        let (_bus, host) = spawner();
+        let p1 = host.scoped(Scope::Project("p1".into()), CancellationToken::new());
+        let p2 = host.scoped(Scope::Project("p2".into()), CancellationToken::new());
+        let mut a = host.spawn("a", |ctx| async move {
+            ctx.report(TaskProgress {
+                done: 1,
+                total: Some(4),
+                message: None,
+            });
+            std::future::pending().await
+        });
+        let b = p1.spawn("b", ticking(Arc::new(AtomicU64::new(0))));
+        let _c = p2.spawn("c", ticking(Arc::new(AtomicU64::new(0))));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        let titles = |tasks: Vec<TaskInfo>| -> Vec<(String, Option<String>)> {
+            tasks.into_iter().map(|t| (t.title, t.project_id)).collect()
+        };
+        assert_eq!(titles(host.running(None)), [("a".to_owned(), None)]);
+        assert_eq!(
+            titles(p2.running(Some("p1"))),
+            [
+                ("a".to_owned(), None),
+                ("b".to_owned(), Some("p1".to_owned()))
+            ],
+            "다른 spawner 가 띄운 작업도 같은 표에 있다"
+        );
+        assert_eq!(host.running(None)[0].progress.done, 1);
+
+        a.cancel();
+        assert_eq!(wait(&mut a).await, TaskStatus::Cancelled);
+        assert_eq!(
+            titles(host.running(Some("p1"))),
+            [("b".to_owned(), Some("p1".to_owned()))]
+        );
+        drop(b);
+    }
+
+    /// 띄운 spawner · 핸들이 아니어도 id 로 취소된다. 끝난 작업 · 모르는 id 는 `false`.
+    #[tokio::test(start_paused = true)]
+    async fn cancel_by_id_stops_a_task_started_elsewhere() {
+        let (_bus, host) = spawner();
+        let project = host.scoped(Scope::Project("p1".into()), CancellationToken::new());
+        let counter = Arc::new(AtomicU64::new(0));
+        let mut handle = project.spawn("tick", ticking(Arc::clone(&counter)));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        assert!(host.cancel(handle.id()));
+        assert_eq!(wait(&mut handle).await, TaskStatus::Cancelled);
+        assert!(!host.cancel(handle.id()), "끝난 작업");
+        assert!(!host.cancel(9999), "모르는 id");
+        assert!(host.running(Some("p1")).is_empty());
+    }
+
+    /// 패닉한 작업도 표에서 빠진다(종료 guard 의 drop).
+    #[tokio::test]
+    async fn a_panicked_task_leaves_the_list() {
+        let (_bus, spawner) = spawner();
+        let mut panicked = spawner.spawn("panic", |_ctx| async { panic!("task panic for test") });
+        wait(&mut panicked).await;
+        assert!(spawner.running(None).is_empty());
     }
 
     #[test]

@@ -2780,6 +2780,128 @@
       ],
       "tier": "write"
     },
+    "task.cancel": {
+      "description": "작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "taskId": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "boolean"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "task.list": {
+      "description": "끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "default": null,
+            "description": "이 프로젝트의 작업도 함께. 없으면 Host 범위 작업만.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "TaskInfo": {
+            "description": "도는 작업 하나(`task.list` 의 항목).",
+            "properties": {
+              "progress": {
+                "$ref": "#/$defs/TaskProgress"
+              },
+              "projectId": {
+                "description": "프로젝트 범위 작업이면 그 프로젝트, Host 범위면 `None`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "taskId": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "taskId",
+              "title",
+              "projectId",
+              "progress"
+            ],
+            "type": "object"
+          },
+          "TaskProgress": {
+            "description": "진행 양은 2^53 안에 머문다고 보고 TS `number` 로 낸다(pw-rpc `JsNumber`).\n없는 값은 키를 빼지 않고 `null` 로 보낸다 — specta 가 `skip_serializing_if` 를 TS 로 표현하지 못한다.",
+            "properties": {
+              "done": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "total": {
+                "default": null,
+                "description": "전체 양을 모르면 `None`(UI 는 불확정 진행 막대).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "done",
+              "total",
+              "message"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/TaskInfo"
+        },
+        "type": "array"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "theme.get": {
       "description": "테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.",
       "kind": "unary",

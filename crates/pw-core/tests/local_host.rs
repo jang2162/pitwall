@@ -183,6 +183,38 @@ async fn cancelling_the_stream_cancels_the_task() {
     assert_eq!(finished_status(&mut finished).await, TaskStatus::Cancelled);
 }
 
+/// 다른 연결(다른 창 · 상태바)이 `task.list` 로 작업을 보고 `task.cancel` 로 멈춘다. 끝난 작업은 목록에서 빠지고 다시
+/// 취소하면 `false` 다. 읽기 전용 기기는 목록은 보지만 취소하지 못한다.
+#[tokio::test(start_paused = true)]
+async fn another_connection_lists_and_cancels_the_task() {
+    let host = LocalHost::new("local");
+    let mut owner = Client::connect(&host, Role::Owner).await;
+    let (_stream_id, mut finished) = start_demo(&host, &mut owner).await;
+
+    let mut other = Client::connect(&host, Role::Owner).await;
+    other.request(1, "task.list", json!({}));
+    let listed = other.result(1).await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+    assert_eq!(listed[0]["title"], json!("demo"));
+    assert_eq!(listed[0]["projectId"], Value::Null);
+    let task_id = listed[0]["taskId"].clone();
+
+    let mut readonly = Client::connect(&host, Role::Readonly).await;
+    readonly.request(1, "task.list", json!({}));
+    assert_eq!(readonly.result(1).await, listed);
+    readonly.request(2, "task.cancel", json!({"taskId": task_id}));
+    let refused = readonly.next().await;
+    assert!(refused.get("error").is_some(), "{refused}");
+
+    other.request(2, "task.cancel", json!({"taskId": task_id}));
+    assert_eq!(other.result(2).await, json!(true));
+    assert_eq!(finished_status(&mut finished).await, TaskStatus::Cancelled);
+    other.request(3, "task.list", json!({}));
+    assert_eq!(other.result(3).await, json!([]));
+    other.request(4, "task.cancel", json!({"taskId": task_id}));
+    assert_eq!(other.result(4).await, json!(false));
+}
+
 #[tokio::test(start_paused = true)]
 async fn closing_the_connection_cancels_the_task() {
     let host = LocalHost::new("local");
