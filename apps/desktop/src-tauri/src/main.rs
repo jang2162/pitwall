@@ -62,6 +62,9 @@ fn local_host(
         std::env::current_exe().map_err(|e| e.to_string()),
         shell_command::source_check(),
     ));
+    // 내장 터미널(M1-08). 창이 닫히면 그 연결의 터미널 스트림이 버려져 셸의 프로세스 트리가 끝난다.
+    let terminals = Arc::new(pw_run::Terminals::new(Arc::clone(&runtime)));
+    let terminal_methods = Arc::clone(&terminals);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
@@ -73,6 +76,7 @@ fn local_host(
         .methods(move |router| pw_fs::methods::register(router, fs_methods))
         .methods(move |router| pw_fs::watch::register(router, fs_watch_methods))
         .methods(move |router| pw_open_with::cli::register(router, cli_check))
+        .methods(move |router| pw_run::methods::register(router, terminal_methods))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
@@ -82,6 +86,11 @@ fn local_host(
         if let Some(projects) = host.registry() {
             // 파일 RPC(`fs.*`)는 요청의 프로젝트 루트를 레지스트리에서 찾는다.
             fs.attach(projects.clone());
+            // 터미널은 전역 설정(`[terminal] shell`)과 레지스트리(프로젝트 · cwd)를 쓴다.
+            terminals.attach(pw_run::HostParts {
+                global: config.global.clone(),
+                projects: projects.clone(),
+            });
             open_with.attach(HostParts {
                 paths: config.paths.clone(),
                 global: config.global.clone(),

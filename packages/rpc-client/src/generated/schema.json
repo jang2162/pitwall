@@ -4450,6 +4450,231 @@
       ],
       "tier": "read"
     },
+    "terminal.close": {
+      "description": "셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n터미널이면 아무것도 하지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "terminalId": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "terminalId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "terminal.create": {
+      "description": "프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그\n디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림이고,\nHost 는 보내지 못한 출력을 1 MiB 까지만 쥔다(그 뒤로는 셸이 쓰기에서 멈춘다). 없는 프로젝트 · 프로젝트 밖이거나 없는\n`cwd` · 0 인 크기면 스트림이 invalid params 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).",
+      "item": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`terminal.create` 스트림의 항목.",
+        "oneOf": [
+          {
+            "description": "첫 항목. `terminalId` 로 `terminal.input` · `resize` · `close` 를 부른다.",
+            "properties": {
+              "cwd": {
+                "description": "셸의 작업 디렉터리(정규화한 절대 경로).",
+                "type": "string"
+              },
+              "kind": {
+                "const": "started",
+                "type": "string"
+              },
+              "pid": {
+                "description": "셸의 pid. OS 가 알려 주지 않으면 `null`.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "shell": {
+                "description": "띄운 셸의 argv.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "terminalId": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "terminalId",
+              "pid",
+              "shell",
+              "cwd"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "PTY 출력. `data` 는 바이트의 base64 — 청크 경계가 UTF-8 문자 가운데일 수 있다.",
+            "properties": {
+              "data": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "output",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "data"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "마지막 항목(12-m1-plan.md M1-08 의 `terminal.exited { code }`). 출력을 모두 보낸 뒤에 온다. 신호로 끝났으면(`terminal.close`\n포함) `code` 가 `null`.",
+            "properties": {
+              "code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "exited",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "code"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cols": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cwd": {
+            "default": null,
+            "description": "셸의 작업 디렉터리(절대 경로). 프로젝트 루트나 그 루트를 담은 연결 워크트리 안이어야 한다 — 창은 활성 워크트리의 프로젝트\n루트를 준다. 없으면 프로젝트의 주 루트.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "rows": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "projectId",
+          "cols",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "terminal.input": {
+      "description": "셸에 입력을 보낸다. 끝난 터미널이면 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "description": "셸에 보낼 글자(키 입력 · 붙여넣기). 받은 순서대로 쓰인다.",
+            "type": "string"
+          },
+          "terminalId": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "terminalId",
+          "data"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "terminal.resize": {
+      "description": "PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 0 인 크기는 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cols": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rows": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "terminalId": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "terminalId",
+          "cols",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "theme.get": {
       "description": "테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.",
       "kind": "unary",

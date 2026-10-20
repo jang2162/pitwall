@@ -175,6 +175,19 @@ export type UnaryMethods = {
 	 */
 	"task.list": { params: TaskListParams; result: TaskInfo[] };
 	/**
+	 * 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난
+	 * 터미널이면 아무것도 하지 않는다.
+	 */
+	"terminal.close": { params: TerminalCloseParams; result: null };
+	/**
+	 * 셸에 입력을 보낸다. 끝난 터미널이면 invalid params 오류.
+	 */
+	"terminal.input": { params: TerminalInputParams; result: null };
+	/**
+	 * PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 0 인 크기는 invalid params 오류.
+	 */
+	"terminal.resize": { params: TerminalResizeParams; result: null };
+	/**
 	 * 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.
 	 */
 	"theme.get": { params: ThemeGetParams; result: ThemeFile };
@@ -196,6 +209,13 @@ export type StreamMethods = {
 	 * Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.
 	 */
 	"host.demoTask": { params: DemoTaskParams; item: DemoTaskUpdate };
+	/**
+	 * 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그
+	 * 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림이고,
+	 * Host 는 보내지 못한 출력을 1 MiB 까지만 쥔다(그 뒤로는 셸이 쓰기에서 멈춘다). 없는 프로젝트 · 프로젝트 밖이거나 없는
+	 * `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).
+	 */
+	"terminal.create": { params: TerminalCreateParams; item: TerminalEvent };
 };
 
 export type MethodName = keyof UnaryMethods | keyof StreamMethods;
@@ -241,6 +261,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":false},
 	"task.cancel": {"name":"task.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"TaskCancelParams","output":"bool","doc":" 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.\n","mcp":false},
 	"task.list": {"name":"task.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"TaskListParams","output":"Vec<TaskInfo>","doc":" 끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.\n","mcp":false},
+	"terminal.close": {"name":"terminal.close","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalCloseParams","output":"()","doc":" 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n 터미널이면 아무것도 하지 않는다.\n","mcp":false},
+	"terminal.create": {"name":"terminal.create","kind":"stream","tier":"exec","roles":["owner"],"params":"TerminalCreateParams","output":"TerminalEvent","doc":" 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그\n 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림이고,\n Host 는 보내지 못한 출력을 1 MiB 까지만 쥔다(그 뒤로는 셸이 쓰기에서 멈춘다). 없는 프로젝트 · 프로젝트 밖이거나 없는\n `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).\n","mcp":false},
+	"terminal.input": {"name":"terminal.input","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalInputParams","output":"()","doc":" 셸에 입력을 보낸다. 끝난 터미널이면 invalid params 오류.\n","mcp":false},
+	"terminal.resize": {"name":"terminal.resize","kind":"unary","tier":"write","roles":["owner"],"params":"TerminalResizeParams","output":"()","doc":" PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 0 인 크기는 invalid params 오류.\n","mcp":false},
 	"theme.get": {"name":"theme.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ThemeGetParams","output":"ThemeFile","doc":" 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.\n","mcp":false},
 	"theme.list": {"name":"theme.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ThemeList","doc":" 등록된 테마 목록.\n","mcp":false},
 };
@@ -1175,6 +1199,51 @@ export type TaskProgress = {
 };
 
 export type TaskStatus = { status: "running" } | { status: "completed" } | { status: "failed"; error: string } | { status: "cancelled" };
+
+export type TerminalCloseParams = {
+	terminalId: number,
+};
+
+export type TerminalCreateParams = {
+	projectId: string,
+	/**
+	 *  셸의 작업 디렉터리(절대 경로). 프로젝트 루트나 그 루트를 담은 연결 워크트리 안이어야 한다 — 창은 활성 워크트리의 프로젝트
+	 *  루트를 준다. 없으면 프로젝트의 주 루트.
+	 */
+	cwd?: string | null,
+	cols: number,
+	rows: number,
+};
+
+/**  `terminal.create` 스트림의 항목. */
+export type TerminalEvent = 
+/**  첫 항목. `terminalId` 로 `terminal.input` · `resize` · `close` 를 부른다. */
+{ kind: "started"; terminalId: number; 
+/**  셸의 pid. OS 가 알려 주지 않으면 `null`. */
+pid: number | null; 
+/**  띄운 셸의 argv. */
+shell: string[]; 
+/**  셸의 작업 디렉터리(정규화한 절대 경로). */
+cwd: string } | 
+/**  PTY 출력. `data` 는 바이트의 base64 — 청크 경계가 UTF-8 문자 가운데일 수 있다. */
+{ kind: "output"; data: string } | 
+/**
+ *  마지막 항목(12-m1-plan.md M1-08 의 `terminal.exited { code }`). 출력을 모두 보낸 뒤에 온다. 신호로 끝났으면(`terminal.close`
+ *  포함) `code` 가 `null`.
+ */
+{ kind: "exited"; code: number | null };
+
+export type TerminalInputParams = {
+	terminalId: number,
+	/**  셸에 보낼 글자(키 입력 · 붙여넣기). 받은 순서대로 쓰인다. */
+	data: string,
+};
+
+export type TerminalResizeParams = {
+	terminalId: number,
+	cols: number,
+	rows: number,
+};
 
 export type ThemeAppearance = "light" | "dark";
 

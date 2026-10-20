@@ -1,0 +1,31 @@
+[package]
+name = "pw-run"
+description = "Pitwall run: PTY terminal sessions (run configurations come later)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 출력 청크(PTY 의 바이트)를 JSON 문자열로 잃지 않고 보낸다.
+base64 = "0.23.1"
+# 결정 M1-D14(docs/design/12-m1-plan.md §4). wezterm 저장소 안의 크레이트라 릴리스가 드물다.
+portable-pty = "0.9.0"
+pw-core = { path = "../pw-core" }
+pw-rpc = { path = "../pw-rpc" }
+pw-runtime = { path = "../pw-runtime" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+# 셸 띄우기 · 레지스트리 읽기를 블로킹 스레드로 보내고, 출력 · 종료를 기다린다.
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tracing = "0.1.44"
+
+[target."cfg(unix)".dependencies]
+# 세션의 프로세스 찾기(getsid · proc_listallpids)와 신호. 버전은 데스크톱 크레이트와 같게 둔다.
+libc = "0.2.190"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }

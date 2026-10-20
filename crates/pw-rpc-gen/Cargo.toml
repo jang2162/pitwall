@@ -16,6 +16,7 @@ pw-i18n = { path = "../pw-i18n" }
 pw-lang = { path = "../pw-lang" }
 pw-open-with = { path = "../pw-open-with" }
 pw-rpc = { path = "../pw-rpc" }
+pw-run = { path = "../pw-run" }
 pw-runtime = { path = "../pw-runtime" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
