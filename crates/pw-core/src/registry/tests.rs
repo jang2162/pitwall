@@ -952,3 +952,245 @@ fn info_summarises_a_registered_project() {
         Err(RegistryError::NotFound(_))
     ));
 }
+
+// --- 신뢰 ---
+
+/// v1 파일(신뢰 표가 없던 빌드)의 기존 프로젝트는 v2 로 올라오며 미신뢰(아직 묻지 않음)다.
+#[test]
+fn projects_from_a_v1_registry_are_untrusted_after_migration() {
+    let f = Fixture::new();
+    let root = f.dir("old");
+    let file = f.paths.data.join(store::FILE_NAME);
+    {
+        let v1 = store::open_with(&file, store::BUSY_TIMEOUT, &store::MIGRATIONS[..1]);
+        assert!(matches!(v1.status, StorageStatus::Ok { .. }));
+        v1.conn
+            .execute_batch(&format!(
+                "INSERT INTO projects (id, name, host, config_mode, slug, created_at)
+                 VALUES ('0123456789abcdef', 'old', 'local', 'repository', 'old', 1);
+                 INSERT INTO project_roots (project_id, position, path)
+                 VALUES ('0123456789abcdef', 0, '{}');",
+                s(&root).replace('\'', "''")
+            ))
+            .unwrap();
+        assert!(
+            v1.conn.prepare(store::SELECT_TRUST).is_err(),
+            "v1 에는 표가 없다"
+        );
+    }
+
+    assert!(matches!(f.registry.status(), StorageStatus::Ok { .. }));
+    let version: u32 = Connection::open(&file)
+        .unwrap()
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    let trust = f.registry.trust("0123456789abcdef").unwrap();
+    assert_eq!(trust.state, TrustState::Unknown);
+    assert!(!f.registry.is_trusted("0123456789abcdef"));
+    // 기존 프로젝트도 처음 열면 한 번 묻는다.
+    assert!(f.registry.claim_trust_prompt("0123456789abcdef").unwrap());
+}
+
+/// 묻기는 한 번: 처음 잡은 호출만 `true`, 그 기록은 미신뢰다. 신뢰는 파일에 남아 다시 열어도 그대로고 묻지 않는다.
+#[test]
+fn the_prompt_is_claimed_once_and_trust_survives_reopening() {
+    let f = Fixture::new();
+    let p = f.add(&f.dir("p"));
+    assert_eq!(f.registry.trust(&p.id).unwrap().state, TrustState::Unknown);
+    assert!(f.registry.claim_trust_prompt(&p.id).unwrap());
+    assert!(!f.registry.claim_trust_prompt(&p.id).unwrap());
+    assert_eq!(
+        f.registry.trust(&p.id).unwrap().state,
+        TrustState::Untrusted
+    );
+    assert!(!f.registry.is_trusted(&p.id));
+
+    let trusted = f.registry.set_trust(&p.id, true).unwrap();
+    assert_eq!(
+        trusted,
+        ProjectTrust {
+            project_id: p.id.clone(),
+            owner_id: p.id.clone(),
+            state: TrustState::Trusted
+        }
+    );
+    let reopened = Registry::new(f.paths.clone(), None, EventBus::new(DEFAULT_CAPACITY));
+    assert!(reopened.is_trusted(&p.id));
+    assert!(!reopened.claim_trust_prompt(&p.id).unwrap());
+
+    assert_eq!(
+        reopened.set_trust(&p.id, false).unwrap().state,
+        TrustState::Untrusted
+    );
+    assert!(!f.registry.is_trusted(&p.id));
+
+    // 지운 프로젝트의 신뢰는 행과 함께 사라진다 — 같은 폴더를 다시 등록하면 새로 묻는다.
+    f.registry.delete(&p.id).unwrap();
+    let again = f.add(&f.dir("p"));
+    assert_eq!(
+        f.registry.trust(&again.id).unwrap().state,
+        TrustState::Unknown
+    );
+    assert!(matches!(
+        f.registry.trust(&p.id),
+        Err(RegistryError::NotFound(_))
+    ));
+    assert!(!f.registry.is_trusted("nope"));
+}
+
+/// 같은 프로젝트의 창 여럿(다른 프로세스 포함 — 연결이 따로인 레지스트리)이 동시에 열려도 다이얼로그는 하나만 뜬다.
+#[test]
+fn concurrent_prompt_claims_let_only_one_window_ask() {
+    const WINDOWS: usize = 4;
+    for round in 0..10 {
+        let f = Fixture::new();
+        let p = f.add(&f.dir("p"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(WINDOWS));
+        let threads: Vec<_> = (0..WINDOWS)
+            .map(|_| {
+                let registry =
+                    Registry::new(f.paths.clone(), None, EventBus::new(DEFAULT_CAPACITY));
+                let barrier = std::sync::Arc::clone(&barrier);
+                let id = p.id.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    registry.claim_trust_prompt(&id)
+                })
+            })
+            .collect();
+        let claims: Vec<bool> = threads
+            .into_iter()
+            .map(|t| t.join().unwrap().unwrap())
+            .collect();
+        assert_eq!(
+            claims.iter().filter(|&&c| c).count(),
+            1,
+            "round {round}: {claims:?}"
+        );
+    }
+}
+
+/// 워크트리를 따로 등록한 프로젝트는 메인 저장소 프로젝트의 신뢰를 읽고 바꾸고 묻는다.
+#[test]
+fn a_worktree_project_follows_the_main_repository_trust() {
+    let f = Fixture::new();
+    let (main, wt) = repo_with_worktree(&f.dir("repo"), &f.base.join("work/wt"));
+    fs::create_dir_all(main.join("app")).unwrap();
+    fs::create_dir_all(wt.join("app")).unwrap();
+    let main_project = f.add(&main);
+    let wt_project = f.add(&wt);
+    let wt_sub = f.add(&wt.join("app"));
+    let other = f.add(&f.dir("other"));
+
+    let trust = f.registry.trust(&wt_project.id).unwrap();
+    assert_eq!(trust.owner_id, main_project.id);
+    assert_eq!(
+        f.registry.trust(&wt_sub.id).unwrap().owner_id,
+        main_project.id
+    );
+    assert_eq!(f.registry.trust(&other.id).unwrap().owner_id, other.id);
+
+    // 워크트리 창이 먼저 물었으면 메인 창은 묻지 않는다.
+    assert!(f.registry.claim_trust_prompt(&wt_project.id).unwrap());
+    assert!(!f.registry.claim_trust_prompt(&main_project.id).unwrap());
+
+    let set = f.registry.set_trust(&wt_project.id, true).unwrap();
+    assert_eq!(set.owner_id, main_project.id);
+    assert!(f.registry.is_trusted(&main_project.id));
+    assert!(f.registry.is_trusted(&wt_sub.id));
+    assert!(!f.registry.is_trusted(&other.id));
+    f.registry.set_trust(&main_project.id, false).unwrap();
+    assert!(!f.registry.is_trusted(&wt_project.id));
+}
+
+/// 메인 저장소가 등록되지 않은 워크트리 프로젝트는 자기 신뢰를 가진다.
+#[test]
+fn a_worktree_project_without_its_main_repository_owns_its_trust() {
+    let f = Fixture::new();
+    let (_main, wt) = repo_with_worktree(&f.dir("repo"), &f.base.join("work/wt"));
+    let wt_project = f.add(&wt);
+    assert_eq!(
+        f.registry.trust(&wt_project.id).unwrap().owner_id,
+        wt_project.id
+    );
+    f.registry.set_trust(&wt_project.id, true).unwrap();
+    assert!(f.registry.is_trusted(&wt_project.id));
+}
+
+/// 바꾸기는 신뢰를 가진 프로젝트로 `trust` 변경을 낸다. 묻기 차례 잡기는 상태 표시가 그대로라 내지 않는다.
+#[test]
+fn trust_changes_are_published_for_the_owner() {
+    let f = Fixture::new();
+    let (main, wt) = repo_with_worktree(&f.dir("repo"), &f.base.join("work/wt"));
+    let main_project = f.add(&main);
+    let wt_project = f.add(&wt);
+    let mut sub = f
+        .bus
+        .subscribe(Filter::all().scope(Scope::Host).topics([TOPIC_CHANGED]));
+    f.registry.claim_trust_prompt(&wt_project.id).unwrap();
+    f.registry.set_trust(&wt_project.id, true).unwrap();
+    let mut changes = Vec::new();
+    while let Some(Received::Event(event)) = sub.try_recv() {
+        changes.push(serde_json::from_value::<ProjectChanged>(event.payload.clone()).unwrap());
+    }
+    assert_eq!(
+        changes,
+        [ProjectChanged {
+            kind: ChangeKind::Trust,
+            project_id: main_project.id
+        }]
+    );
+}
+
+/// `memory` · `readOnly` 에서는 신뢰를 바꾸지도 묻지도 않는다 — 「없는 프로젝트」 가 아니라 저장소 오류로 거절한다.
+#[test]
+fn trust_writes_are_refused_when_the_registry_cannot_be_saved() {
+    let f = Fixture::new();
+    let kept = seed(&f, "kept");
+    let file = f.paths.data.join(store::FILE_NAME);
+
+    let holder = lock_file(&file);
+    let locked = Registry::with_timings(
+        f.paths.clone(),
+        None,
+        EventBus::new(DEFAULT_CAPACITY),
+        Timings {
+            busy: Duration::from_millis(50),
+            retry_interval: Duration::from_secs(60),
+            retry_busy: Duration::from_millis(50),
+        },
+    );
+    assert!(matches!(locked.status(), StorageStatus::Memory { .. }));
+    for refused in [
+        locked.set_trust(&kept.id, true).map(|_| ()),
+        locked.claim_trust_prompt(&kept.id).map(|_| ()),
+    ] {
+        assert!(
+            matches!(refused, Err(RegistryError::Unavailable(_))),
+            "{refused:?}"
+        );
+    }
+    assert!(!locked.is_trusted(&kept.id));
+    drop(holder);
+
+    Connection::open(&file)
+        .unwrap()
+        .pragma_update(None, "user_version", store::supported_version() + 1)
+        .unwrap();
+    let older_app = Registry::new(f.paths.clone(), None, EventBus::new(DEFAULT_CAPACITY));
+    assert!(matches!(older_app.status(), StorageStatus::ReadOnly { .. }));
+    assert_eq!(
+        older_app.trust(&kept.id).unwrap().state,
+        TrustState::Unknown
+    );
+    for refused in [
+        older_app.set_trust(&kept.id, true).map(|_| ()),
+        older_app.claim_trust_prompt(&kept.id).map(|_| ()),
+    ] {
+        assert!(
+            matches!(refused, Err(RegistryError::Unavailable(ref r)) if r.contains("newer")),
+            "{refused:?}"
+        );
+    }
+}

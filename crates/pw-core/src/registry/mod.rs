@@ -6,6 +6,7 @@
 //! - [`candidates`]: 루트 후보 추천과 그 순서.
 //! - [`slug`]: 개인 전용 설정 폴더 이름.
 //! - [`info`]: 프로젝트 요약(빌드 파일 · 언어 · 설정 파일 이름).
+//! - [`trust`]: 프로젝트 신뢰(F1-7 최소판) — 런타임 제공자 게이트가 읽는다.
 //! - [`methods`]: 레지스트리 RPC(`project.*`).
 //!
 //! 레지스트리는 처음 쓰일 때 파일을 연다. Host 를 만들기만 해서는 `$DATA` 에 아무것도 생기지 않는다.
@@ -18,6 +19,7 @@ pub mod path;
 pub mod resolve;
 pub mod slug;
 pub mod store;
+pub mod trust;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -33,6 +35,7 @@ use crate::bus::{EventBus, Scope};
 use crate::config::{AppPaths, ConfigError, ConfigSource};
 use path::{PathRejected, normalize};
 pub use store::StorageStatus;
+pub use trust::{ProjectTrust, TrustState};
 
 /// 레지스트리가 바뀌면 [`Scope::Host`] 로 나가는 이벤트. payload 는 [`ProjectChanged`].
 pub const TOPIC_CHANGED: &str = "project.changed";
@@ -208,6 +211,8 @@ pub enum ChangeKind {
     Updated,
     Deleted,
     Opened,
+    /// 신뢰가 바뀌었다([`trust`]). `project_id` 는 신뢰를 가진 프로젝트다 — 그 신뢰를 따르는 워크트리 프로젝트의 것도 바뀌었다.
+    Trust,
 }
 
 /// [`TOPIC_CHANGED`] 의 payload.
@@ -596,6 +601,19 @@ impl Registry {
     ) -> Result<T, RegistryError> {
         let mut guard = self.lock();
         f(&Self::opened(&mut guard, &self.inner).conn)
+    }
+
+    /// 쓸 수 없는 상태면 [`RegistryError::Unavailable`]. 쓰기 전에 다른 행을 찾는 메서드가 먼저 부른다 — `memory` 의 빈 목록에서
+    /// 「없는 프로젝트」 로 거절되면 UI 가 저장소 배너를 갱신하지 못한다.
+    fn ensure_writable(&self) -> Result<(), RegistryError> {
+        let mut guard = self.lock();
+        match Self::opened(&mut guard, &self.inner)
+            .status
+            .unwritable_reason()
+        {
+            Some(reason) => Err(RegistryError::Unavailable(reason.to_owned())),
+            None => Ok(()),
+        }
     }
 
     fn write<T>(

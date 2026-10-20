@@ -10,6 +10,9 @@
 //! - 생성 · 수정 · 삭제 · 「열었음」 기록은 `write`, owner 만(등급의 기본값). 지우는 것은 레지스트리 행뿐이고 폴더 · 설정 파일은
 //!   건드리지 않아 다시 등록하면 되돌아오므로 `dangerous` 가 아니다. 「열었음」도 최근 목록 순서만 바꾸지만 레지스트리 파일을
 //!   쓰는 조작이라 `write` 로 둔다.
+//! - 신뢰(`project.trust` · `project.setTrust` · `project.claimTrustPrompt`, [`super::trust`]): 읽기는 `read` · 모든 role, 바꾸기와
+//!   「묻기 차례 잡기」 는 `write` · owner 만. **MCP 툴로 내놓지 않는다** — 신뢰는 프로젝트 코드 실행을 여는 결정이라 사람만
+//!   바꾼다(에이전트가 자기가 돌 프로젝트를 스스로 신뢰하지 못하게).
 
 use std::path::PathBuf;
 
@@ -17,6 +20,7 @@ use pw_rpc::{Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use super::info::ProjectInfo;
+use super::trust::ProjectTrust;
 use super::{
     ConfigMode, NewProject, Project, ProjectPatch, Registry, RegistryError, Resolution,
     RootCandidate, StorageStatus,
@@ -90,6 +94,15 @@ pub struct PathParams {
     pub path: String,
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTrustParams {
+    pub id: String,
+    pub trusted: bool,
+}
+
 rpc_method! {
     /// 등록된 프로젝트 전부, 이름순.
     pub ProjectList: "project.list" {
@@ -154,6 +167,28 @@ rpc_method! {
     pub ProjectMarkOpened: "project.markOpened" {
         params: ProjectIdParams,
         result: Project,
+        tier: Write,
+    }
+
+    /// 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.
+    pub ProjectTrustGet: "project.trust" {
+        params: ProjectIdParams,
+        result: ProjectTrust,
+        tier: Read,
+    }
+
+    /// 프로젝트를 신뢰하거나 해제한다. 신뢰를 가진 프로젝트(`ownerId`)로 `project.changed`(`kind: trust`)가 나간다.
+    pub ProjectSetTrust: "project.setTrust" {
+        params: SetTrustParams,
+        result: ProjectTrust,
+        tier: Write,
+    }
+
+    /// 신뢰 확인 다이얼로그를 띄울 차례인가. 아직 묻지 않은 프로젝트면 미신뢰로 기록하고 `true` — 같은 프로젝트의 창이 여럿이어도
+    /// 처음 부른 하나만 `true` 를 받는다. 이미 물었으면 `false`.
+    pub ProjectClaimTrustPrompt: "project.claimTrustPrompt" {
+        params: ProjectIdParams,
+        result: bool,
         tier: Write,
     }
 
@@ -245,6 +280,18 @@ pub fn register(router: &mut Router, registry: &Registry) {
     let r = registry.clone();
     router.unary(ProjectMarkOpened, move |_ctx, params| {
         blocking(r.clone(), move |r| r.mark_opened(&params.id))
+    });
+    let r = registry.clone();
+    router.unary(ProjectTrustGet, move |_ctx, params| {
+        blocking(r.clone(), move |r| r.trust(&params.id))
+    });
+    let r = registry.clone();
+    router.unary(ProjectSetTrust, move |_ctx, params| {
+        blocking(r.clone(), move |r| r.set_trust(&params.id, params.trusted))
+    });
+    let r = registry.clone();
+    router.unary(ProjectClaimTrustPrompt, move |_ctx, params| {
+        blocking(r.clone(), move |r| r.claim_trust_prompt(&params.id))
     });
     let r = registry.clone();
     router.unary(ProjectResolve, move |_ctx, params| {

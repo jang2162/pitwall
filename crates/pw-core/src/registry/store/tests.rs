@@ -20,13 +20,13 @@ fn new_file_is_created_at_the_latest_version() {
 /// 단계는 순서대로 한 번씩 돌고, 이미 지난 단계는 다시 돌지 않는다.
 #[test]
 fn migrations_run_in_order_and_only_once() {
-    fn v1_to_v2(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    fn add_color(tx: &Transaction<'_>) -> rusqlite::Result<()> {
         tx.execute_batch("ALTER TABLE projects ADD COLUMN color TEXT")
     }
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("state.db");
-    drop(open(&file, BUSY_TIMEOUT));
-    let steps: &[Migration] = &[v0_to_v1, v1_to_v2];
+    drop(open_with(&file, BUSY_TIMEOUT, &[v0_to_v1]));
+    let steps: &[Migration] = &[v0_to_v1, add_color];
     let opened = open_with(&file, BUSY_TIMEOUT, steps);
     assert!(matches!(opened.status, StorageStatus::Ok { .. }));
     assert_eq!(version(&opened.conn), 2);
@@ -108,7 +108,7 @@ fn failing_step_rolls_back_and_leaves_the_file_alone() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("state.db");
-    drop(open(&file, BUSY_TIMEOUT));
+    drop(open_with(&file, BUSY_TIMEOUT, &[v0_to_v1]));
     let opened = open_with(&file, BUSY_TIMEOUT, &[v0_to_v1, half_then_fail]);
     assert!(
         matches!(opened.status, StorageStatus::Memory { .. }),
@@ -519,10 +519,14 @@ fn a_migration_finished_by_another_writer_while_waiting_is_not_a_failure() {
         let file = file.clone();
         std::thread::spawn(move || open(&file, busy))
     };
-    // 열기는 버전 0 을 읽고 마이그레이션 단계의 쓰기 잠금을 300ms 까지 기다리는 중이다.
+    // 열기는 버전 0 을 읽고 마이그레이션 단계의 쓰기 잠금을 300ms 까지 기다리는 중이다. 다른 연결은 같은 앱이라 모든 단계를
+    // 올린다 — 열기는 단계마다 쓰기 잠금을 못 잡지만 그때마다 버전을 다시 읽어 넘어간다.
     std::thread::sleep(Duration::from_millis(150));
-    v0_to_v1(&tx).unwrap();
-    tx.pragma_update(None, "user_version", 1).unwrap();
+    for step in MIGRATIONS {
+        step(&tx).unwrap();
+    }
+    tx.pragma_update(None, "user_version", supported_version())
+        .unwrap();
     tx.commit().unwrap();
     other.execute_batch("BEGIN IMMEDIATE").unwrap();
     let opened = writer.join().unwrap();
@@ -532,7 +536,7 @@ fn a_migration_finished_by_another_writer_while_waiting_is_not_a_failure() {
         "{:?}",
         opened.status
     );
-    assert_eq!(version(&opened.conn), 1);
+    assert_eq!(version(&opened.conn), supported_version());
 }
 
 /// 비정상 종료로 `-wal` · `-shm` 이 남은 파일이 손상이면: 검사 연결이 닫히며 남은 WAL 프레임을 손상된 파일에 옮기고 사이드카를

@@ -30,7 +30,7 @@ pub const RETRY_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 type Migration = fn(&Transaction<'_>) -> rusqlite::Result<()>;
 
 /// 버전 `i` → `i + 1`. 길이가 곧 이 앱이 아는 최신 버전이다.
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1];
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2];
 
 /// 레지스트리가 읽는 질의. 읽기 전용으로 연 새 스키마 파일을 이 질의로 읽을 수 있는지 열 때 미리 본다(`prepare` 가 열 이름을 검사한다).
 pub const SELECT_PROJECTS: &str =
@@ -40,6 +40,7 @@ pub const SELECT_ROOTS: &str = "SELECT project_id, path FROM project_roots
      WHERE ?1 IS NULL OR project_id = ?1 ORDER BY project_id, position";
 pub const SELECT_TAGS: &str = "SELECT project_id, tag FROM project_tags
      WHERE ?1 IS NULL OR project_id = ?1 ORDER BY project_id, tag";
+pub const SELECT_TRUST: &str = "SELECT trusted FROM project_trust WHERE project_id = ?1";
 
 pub fn supported_version() -> u32 {
     MIGRATIONS.len() as u32
@@ -71,6 +72,18 @@ fn v0_to_v1(tx: &Transaction<'_>) -> rusqlite::Result<()> {
              PRIMARY KEY (project_id, tag)
          );
          CREATE INDEX projects_opened_at ON projects(opened_at);",
+    )
+}
+
+/// v2: 프로젝트 신뢰(F1-7 최소판, [`super::trust`]). 행이 없으면 아직 묻지 않은 프로젝트다 — v1 의 기존 프로젝트는 행 없이
+/// 올라오므로 미신뢰다.
+fn v1_to_v2(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE project_trust (
+             project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+             trusted    INTEGER NOT NULL CHECK (trusted IN (0, 1)),
+             decided_at INTEGER NOT NULL
+         );",
     )
 }
 
@@ -414,7 +427,7 @@ fn unwritable_folder(file: &Path) -> Option<String> {
 
 fn read_only(conn: Connection, reason: String) -> Result<Ready, Failure> {
     conn.pragma_update(None, "query_only", true)?;
-    for sql in [SELECT_PROJECTS, SELECT_ROOTS, SELECT_TAGS] {
+    for sql in [SELECT_PROJECTS, SELECT_ROOTS, SELECT_TAGS, SELECT_TRUST] {
         if let Err(e) = conn.prepare(sql) {
             return Err(Failure::Other(format!("{reason}; cannot read it: {e}")));
         }
