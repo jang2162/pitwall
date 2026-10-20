@@ -419,9 +419,11 @@ it("applies a registry default keymap that arrives after a malformed keymap.toml
   host.registryDelayMs = 50;
   vi.spyOn(console, "warn").mockImplementation(() => {});
   await mount("settings");
-  await act(async () => new Promise((r) => setTimeout(r, 80)));
-  expect(native.syncMenu).toHaveBeenLastCalledWith(
-    expect.objectContaining({ "settings.open": "Super+KeyJ", "action.find": "Super+Shift+KeyA" }),
+  // 레지스트리 응답(50ms 뒤)이 오면 메뉴가 다시 동기화된다 — 고정 시간이 아니라 그 결과를 기다린다.
+  await vi.waitFor(() =>
+    expect(native.syncMenu).toHaveBeenLastCalledWith(
+      expect.objectContaining({ "settings.open": "Super+KeyJ", "action.find": "Super+Shift+KeyA" }),
+    ),
   );
   expect(document.querySelector("[role=alert]")?.textContent).toContain("cmd+nope");
 });

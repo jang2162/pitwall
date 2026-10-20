@@ -35,10 +35,12 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  // sonner 의 토스트 목록은 모듈 전역이다 — 다음 시험에 남지 않게 닫는다.
+  // sonner 의 토스트 목록은 모듈 전역이다 — 다음 시험에 남지 않게 닫는다. 닫힌 토스트는 sonner 가 200ms 타이머로 DOM 에서
+  // 걷는다. 그 타이머를 남긴 채 끝내면 부하에서 환경이 내려간 뒤에 터지므로(`window is not defined`) 걷힐 때까지 기다린다.
   await act(async () => {
     toast.dismiss();
   });
+  await vi.waitFor(() => expect(toastNodes()).toHaveLength(0), { timeout: 5000 });
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
