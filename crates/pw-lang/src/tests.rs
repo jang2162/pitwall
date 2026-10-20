@@ -525,14 +525,26 @@ fn gitattributes_fifos_and_devices_return_in_time() {
     mkfifo(&repo.join(".git"));
     let found = within(10, move || attributes::find_repo(&repo));
     assert_eq!(found.map(|r| r.gitdir), Some(None));
+
+    // 연결 워크트리의 `.git` 이 가리키는 `commondir` 이 FIFO 여도 막히지 않는다.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    fs::create_dir_all(repo.join("admin")).unwrap();
+    fs::write(repo.join(".git"), "gitdir: admin\n").unwrap();
+    mkfifo(&repo.join("admin/commondir"));
+    let admin = repo.join("admin");
+    let found = within(10, move || attributes::find_repo(&repo));
+    assert_eq!(found.map(|r| r.gitdir), Some(Some(admin)));
 }
 
 #[test]
 fn oversized_gitattributes_are_ignored() {
     let big = format!(
         "*.txt linguist-language=Rust\n{}",
-        "# padding\n".repeat((attributes::MAX_ATTRIBUTES_BYTES as usize) / 10 + 1)
+        // 크기는 글자로 둔다 — 상한 상수로 계산하면 상수를 키워도 파일이 같이 커져 시험이 지키지 못한다.
+        "# padding\n".repeat(110_000)
     );
+    assert!(big.len() as u64 > attributes::MAX_ATTRIBUTES_BYTES);
     let tmp = repo_with(&[(".gitattributes", big.as_str())]);
     assert_ne!(
         with_attrs(tmp.path(), "a.txt", None).source,
