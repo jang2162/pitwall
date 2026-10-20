@@ -4,6 +4,8 @@
 //! 그 크레이트는 무시된 항목을 **건너뛸** 뿐 표시하지 않으므로, 루트에서 이 폴더까지만 내려가는 걷기로 「보이는 항목」을 얻고
 //! `read_dir` 의 전체 항목과 비교한다. 루트부터 걸어야 무시된 폴더 안(`target/debug`)의 항목도 무시된 것으로 나온다 — 그 폴더에서
 //! 걷기 시작하면 걷는 시작점은 판정하지 않는다. 숨김 파일은 ignore 가 아니다(`hidden(false)`).
+//!
+//! 실제 대상이 루트 밖인 심링크는 항목으로 보이되 `outside` 로 표시하고, 대상의 종류 · 크기 · 시각을 알리지 않는다(결정 M1-D8).
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -14,7 +16,9 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
-use crate::scope::Readable;
+use pw_core::registry::path::normalize;
+
+use crate::scope::{Readable, Roots};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -51,12 +55,14 @@ pub struct FsEntry {
     /// UTF-8 이 아닌 이름은 대체 문자로 바뀌어 온다.
     pub name: String,
     pub kind: EntryKind,
-    /// 심링크면 가리키는 것의 종류. 깨진 링크면 `null`. 심링크가 아니면 `null`.
+    /// 심링크면 가리키는 것의 종류. 깨진 링크 · 루트 밖을 가리키는 링크 · 심링크가 아니면 `null`.
     pub target: Option<EntryKind>,
-    /// 바이트. 심링크면 대상의 크기(깨졌으면 0).
+    /// 심링크의 실제 대상이 프로젝트 루트 밖이다. 따라 읽거나 펼칠 수 없다(`fs.*` 가 거절한다).
+    pub outside: bool,
+    /// 바이트. 심링크면 대상의 크기(깨졌거나 루트 밖이면 0).
     #[specta(type = pw_rpc::JsNumber)]
     pub size: u64,
-    /// 수정 시각(유닉스 밀리초). 심링크면 대상의 것. 알 수 없으면 `null`.
+    /// 수정 시각(유닉스 밀리초). 심링크면 대상의 것(루트 밖이면 링크 자신의 것). 알 수 없으면 `null`.
     #[specta(type = Option<pw_rpc::JsNumber>)]
     pub mtime_ms: Option<i64>,
     /// `.gitignore` 등으로 무시되는 항목(무시된 폴더 안의 항목 포함).
@@ -74,15 +80,15 @@ pub fn mtime_ms(meta: &fs::Metadata) -> Option<i64> {
 /// 이보다 항목이 많으면 메타데이터 읽기를 스레드로 나눈다. 항목마다 `lstat` 이 한 번이라 1만 개 폴더에서 가장 큰 비용이다.
 const PARALLEL_FROM: usize = 1024;
 
-/// `dir.inside` 의 항목. 이름순.
+/// `dir.real` 의 항목. 이름순. `roots` 로 심링크 항목의 실제 대상이 루트 안인지 본다.
 ///
 /// ignore 판정(걷기)과 메타데이터 읽기는 서로 기다리지 않으므로 함께 돈다. 1만 항목 폴더의 `fs.list` 100 ms(M1-01 완료 기준 ⑤)를
 /// 맞추려는 것이다 — 따로 재면 `lstat` 1만 번이 걷기보다 길다.
-pub fn list(dir: &Readable) -> io::Result<Vec<FsEntry>> {
-    let raw: Vec<fs::DirEntry> = fs::read_dir(&dir.inside)?.collect::<io::Result<_>>()?;
+pub fn list(dir: &Readable, roots: &Roots) -> io::Result<Vec<FsEntry>> {
+    let raw: Vec<fs::DirEntry> = fs::read_dir(&dir.real)?.collect::<io::Result<_>>()?;
     let (visible, mut entries) = std::thread::scope(|s| {
         let walker = s.spawn(|| visible_names(dir));
-        let entries = entries_of(&raw);
+        let entries = entries_of(&raw, roots);
         // 걷기가 패닉하면 모두 무시되지 않은 것으로 보지 않고, 무시된 것으로 표시한다(숨김 쪽이 안전하다).
         (walker.join().unwrap_or(None), entries)
     });
@@ -97,7 +103,8 @@ pub fn list(dir: &Readable) -> io::Result<Vec<FsEntry>> {
 }
 
 /// 항목과 그 원래 이름. `ignored` 는 아직 정하지 않았다.
-fn entries_of(raw: &[fs::DirEntry]) -> Vec<(FsEntry, OsString)> {
+fn entries_of(raw: &[fs::DirEntry], roots: &Roots) -> Vec<(FsEntry, OsString)> {
+    let entry = |raw: &fs::DirEntry| entry(raw, roots);
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
     if raw.len() < PARALLEL_FROM || threads == 1 {
         return raw.iter().filter_map(entry).collect();
@@ -116,14 +123,17 @@ fn entries_of(raw: &[fs::DirEntry]) -> Vec<(FsEntry, OsString)> {
 }
 
 /// 항목을 읽는 사이 지워졌으면 `None`.
-fn entry(raw: &fs::DirEntry) -> Option<(FsEntry, OsString)> {
+fn entry(raw: &fs::DirEntry, roots: &Roots) -> Option<(FsEntry, OsString)> {
     let name = raw.file_name();
     let lmeta = raw.metadata().ok()?;
     let kind = EntryKind::of(lmeta.file_type());
+    let mut outside = false;
     let (target, meta) = if kind == EntryKind::Symlink {
+        // 풀리지 않는 링크(대상 없음 · 고리)는 링크 경로 그대로 돌아와 루트 안으로 판정되고, 아래 metadata 가 실패한다.
+        outside = normalize(&raw.path()).is_ok_and(|real| !roots.contains(&real));
         match fs::metadata(raw.path()) {
-            Ok(m) => (Some(EntryKind::of(m.file_type())), Some(m)),
-            Err(_) => (None, None),
+            Ok(m) if !outside => (Some(EntryKind::of(m.file_type())), Some(m)),
+            _ => (None, None),
         }
     } else {
         (None, None)
@@ -134,6 +144,7 @@ fn entry(raw: &fs::DirEntry) -> Option<(FsEntry, OsString)> {
             name: name.to_string_lossy().into_owned(),
             kind,
             target,
+            outside,
             size: if kind == EntryKind::Symlink && target.is_none() {
                 0
             } else {
@@ -148,25 +159,19 @@ fn entry(raw: &fs::DirEntry) -> Option<(FsEntry, OsString)> {
 
 /// `dir` 의 항목 중 무시되지 않는 것의 이름. `dir` 자체가 무시되는 곳(또는 그 안)이면 `None`.
 fn visible_names(dir: &Readable) -> Option<HashSet<OsString>> {
-    let depth = dir
-        .inside
-        .strip_prefix(&dir.root)
-        .ok()?
-        .components()
-        .count();
-    let target: PathBuf = dir.inside.clone();
+    let depth = dir.real.strip_prefix(&dir.root).ok()?.components().count();
+    let target: PathBuf = dir.real.clone();
     let walk = ignore::WalkBuilder::new(&dir.root)
         .hidden(false)
-        // 루트 안 심링크 폴더를 지나는 요청(`node_modules/pkg`)이면 그 길로 내려간다. 링크를 따르면 걷기가 항목마다 stat 하므로
-        // 그때만 켠다. 깊이를 막아 두므로 고리가 돌지 않는다.
-        .follow_links(dir.inside != dir.real)
+        // `dir.real` 은 링크를 모두 푼 경로라 링크를 따를 일이 없다(따르면 걷기가 항목마다 stat 한다).
+        .follow_links(false)
         .max_depth(Some(depth + 1))
         .filter_entry(move |e| target.starts_with(e.path()) || e.path().parent() == Some(&target))
         .build();
     let mut reached = false;
     let mut names = HashSet::new();
     for entry in walk.flatten() {
-        if entry.depth() == depth && entry.path() == dir.inside {
+        if entry.depth() == depth && entry.path() == dir.real {
             reached = true;
         } else if entry.depth() == depth + 1 {
             names.insert(entry.file_name().to_os_string());
@@ -184,7 +189,7 @@ mod tests {
     use pw_core::registry::path::simplify;
 
     fn listed(roots: &Roots, dir: &Path) -> Vec<(String, EntryKind, bool)> {
-        list(&roots.readable(dir).unwrap())
+        list(&roots.readable(dir).unwrap(), roots)
             .unwrap()
             .into_iter()
             .map(|e| (e.name, e.kind, e.ignored))
@@ -239,7 +244,7 @@ mod tests {
         let (_tmp, root) = repo();
         fs::write(root.join("a.txt"), "12345").unwrap();
         let roots = Roots::new([root.clone()]);
-        let entries = list(&roots.readable(&root).unwrap()).unwrap();
+        let entries = list(&roots.readable(&root).unwrap(), &roots).unwrap();
         let a = entries.iter().find(|e| e.name == "a.txt").unwrap();
         assert_eq!(a.size, 5);
         assert!(a.mtime_ms.unwrap() > 0);
@@ -253,7 +258,7 @@ mod tests {
         std::os::unix::fs::symlink(root.join("real"), root.join("to-dir")).unwrap();
         std::os::unix::fs::symlink(root.join("missing"), root.join("broken")).unwrap();
         let roots = Roots::new([root.clone()]);
-        let entries = list(&roots.readable(&root).unwrap()).unwrap();
+        let entries = list(&roots.readable(&root).unwrap(), &roots).unwrap();
         let get = |n: &str| entries.iter().find(|e| e.name == n).unwrap().clone();
         assert_eq!(get("to-dir").kind, EntryKind::Symlink);
         assert_eq!(get("to-dir").target, Some(EntryKind::Dir));

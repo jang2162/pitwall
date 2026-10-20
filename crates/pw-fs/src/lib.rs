@@ -15,9 +15,10 @@ pub mod scope;
 pub mod write;
 
 use std::fs;
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -35,15 +36,40 @@ use crate::scope::{Denied, Roots};
 
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
+/// 쓰기 잠금의 갈래 수. 실제 경로의 해시로 고른다 — 다른 파일끼리 가끔 같은 갈래를 기다릴 뿐 맞음에는 영향이 없다.
+const WRITE_LOCKS: usize = 32;
+
 /// 파일 시스템 서비스. Host 를 만든 뒤 프로젝트 레지스트리를 붙인다([`Fs::attach`]).
-#[derive(Default)]
 pub struct Fs {
     projects: OnceLock<Projects>,
+    /// 같은 파일의 「version 확인 → rename」 을 한 번에 하나씩. 핸들러는 블로킹 스레드에서 함께 돌므로, 묶지 않으면 같은
+    /// `expectedVersion` 으로 들어온 두 쓰기가 모두 확인을 통과해 하나가 말없이 사라진다. 이 프로세스 안의 쓰기만 묶는다 —
+    /// 다른 프로세스(에이전트)의 쓰기와의 경합은 잠금 없이 막을 수 없다(그 쓰기는 다음 `fs.write` 에서 `CONFLICT` 로 드러난다).
+    write_locks: [Mutex<()>; WRITE_LOCKS],
+}
+
+impl Default for Fs {
+    fn default() -> Self {
+        Self {
+            projects: OnceLock::new(),
+            write_locks: std::array::from_fn(|_| Mutex::new(())),
+        }
+    }
 }
 
 impl Fs {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn write_lock(&self, real: &Path) -> std::sync::MutexGuard<'_, ()> {
+        let mut hasher = DefaultHasher::new();
+        real.hash(&mut hasher);
+        let slot = usize::try_from(hasher.finish() % WRITE_LOCKS as u64).unwrap_or(0);
+        // 잠금 안에서 패닉한 쓰기가 있어도 지킬 상태가 없다(잠금은 순서만 정한다).
+        self.write_locks[slot]
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// 두 번째부터는 무시한다.
@@ -67,7 +93,7 @@ impl Fs {
     pub fn list(&self, params: &FsPathParams) -> Result<FsList, RpcError> {
         let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
         let dir = roots.readable(Path::new(&params.path)).map_err(denied)?;
-        let entries = list::list(&dir).map_err(|e| io_error(&dir.real, e))?;
+        let entries = list::list(&dir, &roots).map_err(|e| io_error(&dir.real, e))?;
         Ok(FsList {
             path: dir.real.display().to_string(),
             entries,
@@ -94,7 +120,7 @@ impl Fs {
             target: target_kind,
             size: meta.len(),
             mtime_ms: mtime_ms(&meta),
-            readonly: meta.permissions().readonly(),
+            readonly: read_only(&target.real, &meta),
             size_class: meta.is_file().then(|| size_class(meta.len())),
         })
     }
@@ -191,6 +217,7 @@ impl Fs {
                 .decode(data)
                 .map_err(|e| RpcError::invalid_params(format!("content is not base64: {e}")))?,
         };
+        let _guard = self.write_lock(&real);
         let current = match fs::metadata(&real) {
             Ok(meta) if meta.is_dir() => {
                 return Err(RpcError::invalid_params(format!(
@@ -208,10 +235,7 @@ impl Fs {
                 serde_json::json!({ "path": real.display().to_string(), "current": current_version }),
             ));
         }
-        if current
-            .as_ref()
-            .is_some_and(|s| s.meta.permissions().readonly())
-        {
+        if current.as_ref().is_some_and(|s| read_only(&real, &s.meta)) {
             return Err(RpcError::invalid_params(format!(
                 "`{}` is read-only",
                 real.display()
@@ -268,12 +292,44 @@ fn worktree_root(project: &Project, top: &str) -> Result<PathBuf, RpcError> {
     })
 }
 
+/// 이 프로세스가 그 파일에 쓸 수 없다. unix 는 권한 비트가 아니라 실제 판정(`access(W_OK)`)이다 — 남의 소유 0644 파일은 쓰기
+/// 비트가 있어도 쓸 수 없고, 폴더에 쓰기 권한만 있으면 rename 으로 바뀌어 소유자가 바뀐다. Windows 는 읽기 전용 속성.
+fn read_only(path: &Path, meta: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let _ = meta;
+        let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return true;
+        };
+        // SAFETY: `c` 는 NUL 로 끝나는 살아 있는 문자열이고 access 는 그것을 읽기만 한다.
+        unsafe { libc::access(c.as_ptr(), libc::W_OK) != 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        meta.permissions().readonly()
+    }
+}
+
+/// 심링크 고리(ELOOP, Windows 는 `ERROR_CANT_RESOLVE_FILENAME`).
+fn is_link_loop(e: &io::Error) -> bool {
+    #[cfg(unix)]
+    let code = libc::ELOOP;
+    #[cfg(windows)]
+    let code = 1921;
+    e.raw_os_error() == Some(code)
+}
+
 fn denied(d: Denied) -> RpcError {
     RpcError::invalid_params(d.to_string())
 }
 
 fn io_error(path: &Path, e: io::Error) -> RpcError {
     let shown = path.display().to_string();
+    if is_link_loop(&e) {
+        return RpcError::invalid_params(format!("`{shown}` goes through a symlink loop"));
+    }
     match e.kind() {
         io::ErrorKind::NotFound => {
             RpcError::new(code::NOT_FOUND, "not found").with_data(serde_json::Value::String(shown))

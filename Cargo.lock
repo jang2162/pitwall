@@ -3322,6 +3322,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "ignore",
+ "libc",
  "pw-core",
  "pw-rpc",
  "schemars 1.2.3",

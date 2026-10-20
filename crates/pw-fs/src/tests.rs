@@ -130,38 +130,96 @@ fn paths_outside_the_project_roots_are_rejected() {
     assert_eq!(unknown.code, code::INVALID_PARAMS, "{unknown:?}");
 }
 
-/// 완료 기준 ①: 루트 밖을 가리키는 심링크로는 읽을 수 있어도(결정 M1-D8) 쓸 수 없다. 루트 안을 가리키는 링크로 쓰면 링크는
-/// 링크로 남고 대상 파일이 바뀐다.
+/// 완료 기준 ① · 결정 M1-D8: 실제 대상이 루트 밖인 심링크는 따르지 않는다 — 읽기 · 상태 · 목록 · 쓰기 모두 거절하고, 부모
+/// 폴더의 목록에는 `outside` 로 표시만 한다. 리뷰의 재현: 부모를 가리키는 `up -> ..`, 절대 경로 `sys -> /etc`, 루트 밖 폴더.
+/// pnpm 식으로 루트 안을 가리키는 링크는 그대로 읽히고, 그 링크로 쓰면 링크는 링크로 남고 대상 파일이 바뀐다.
 #[cfg(unix)]
 #[test]
-fn symlinks_are_read_through_and_written_only_inside() {
+fn symlinks_are_followed_only_into_the_roots() {
     let f = Fixture::new();
     let root = f.base.join("proj");
     let id = f.project(&root);
+    fs::write(f.base.join("secret.txt"), "secret").unwrap();
     fs::create_dir_all(f.base.join("store")).unwrap();
     fs::write(f.base.join("store/outside.txt"), "outside").unwrap();
     std::os::unix::fs::symlink(f.base.join("store"), root.join("linked")).unwrap();
-    let via_link = root.join("linked/outside.txt");
+    std::os::unix::fs::symlink("..", root.join("up")).unwrap();
+    std::os::unix::fs::symlink("/etc", root.join("sys")).unwrap();
+    std::os::unix::fs::symlink(f.base.join("secret.txt"), root.join("secret-link")).unwrap();
 
-    let read = f.read(&id, &via_link).unwrap();
-    assert_eq!(text(&read), "outside");
+    for path in [
+        root.join("linked/outside.txt"),
+        root.join("up/secret.txt"),
+        root.join("sys/hosts"),
+        root.join("secret-link"),
+        root.join("up/proj/../secret.txt"),
+    ] {
+        let p = Fixture::at(&id, &path);
+        for err in [
+            f.read(&id, &path).unwrap_err(),
+            f.fs.stat(&p).unwrap_err(),
+            f.write(&id, &path, "pwned", None).unwrap_err(),
+        ] {
+            assert_eq!(err.code, code::INVALID_PARAMS, "{path:?}: {err:?}");
+        }
+    }
+    for dir in ["linked", "up", "sys"] {
+        let err = f.fs.list(&Fixture::at(&id, &root.join(dir))).unwrap_err();
+        assert_eq!(err.code, code::INVALID_PARAMS, "{dir}: {err:?}");
+        assert!(
+            err.data
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("symlink"),
+            "{dir}: the reason names the symlink: {err:?}"
+        );
+    }
     assert_eq!(
-        read.path,
-        f.base.join("store/outside.txt").display().to_string()
+        fs::read_to_string(f.base.join("secret.txt")).unwrap(),
+        "secret"
     );
-    let err = f.write(&id, &via_link, "pwned", read.version).unwrap_err();
-    assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
-    assert_eq!(
-        fs::read_to_string(f.base.join("store/outside.txt")).unwrap(),
-        "outside"
-    );
-    // 링크 대상의 부모로 오르는 `..` 는 읽기도 거절한다.
-    fs::write(f.base.join("sibling.txt"), "sibling").unwrap();
-    let err = f
-        .read(&id, &root.join("linked/../sibling.txt"))
-        .unwrap_err();
-    assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
 
+    // pnpm 기본 구성: `node_modules/pkg -> node_modules/.pnpm/…`(루트 안).
+    let pnpm = root.join("node_modules/.pnpm/pkg@1.0.0/node_modules/pkg");
+    fs::create_dir_all(&pnpm).unwrap();
+    fs::write(pnpm.join("index.js"), "module.exports = 1").unwrap();
+    std::os::unix::fs::symlink(&pnpm, root.join("node_modules/pkg")).unwrap();
+    assert_eq!(
+        text(
+            &f.read(&id, &root.join("node_modules/pkg/index.js"))
+                .unwrap()
+        ),
+        "module.exports = 1"
+    );
+    assert_eq!(
+        f.fs.list(&Fixture::at(&id, &root.join("node_modules/pkg")))
+            .unwrap()
+            .entries[0]
+            .name,
+        "index.js"
+    );
+
+    // 루트 목록: 밖을 가리키는 링크는 표시만 하고 대상을 알리지 않는다.
+    let listed = f.fs.list(&Fixture::at(&id, &root)).unwrap();
+    let get = |n: &str| listed.entries.iter().find(|e| e.name == n).unwrap();
+    for name in ["linked", "up", "sys", "secret-link"] {
+        let e = get(name);
+        assert_eq!(
+            (e.kind, e.outside, e.target, e.size),
+            (EntryKind::Symlink, true, None, 0),
+            "{name}"
+        );
+    }
+    assert!(!get("node_modules").outside);
+    let inner =
+        f.fs.list(&Fixture::at(&id, &root.join("node_modules")))
+            .unwrap();
+    let pkg = inner.entries.iter().find(|e| e.name == "pkg").unwrap();
+    assert_eq!((pkg.outside, pkg.target), (false, Some(EntryKind::Dir)));
+
+    // 루트 안을 가리키는 링크로 쓰면 링크는 남고 대상이 바뀐다.
     fs::write(root.join("real.txt"), "before").unwrap();
     std::os::unix::fs::symlink(root.join("real.txt"), root.join("alias.txt")).unwrap();
     let read = f.read(&id, &root.join("alias.txt")).unwrap();
@@ -193,6 +251,11 @@ fn the_active_worktree_is_inside_the_roots() {
     )
     .unwrap();
     fs::write(main.join(".git/worktrees/wt/commondir"), "../..\n").unwrap();
+    fs::write(
+        main.join(".git/worktrees/wt/gitdir"),
+        format!("{}\n", wt.join(".git").display()),
+    )
+    .unwrap();
     fs::write(wt.join("app/a.txt"), "in worktree").unwrap();
     fs::write(wt.join("outside-app.txt"), "x").unwrap();
 
@@ -524,4 +587,129 @@ fn list_of_10000_entries_is_fast_in_release() {
     if !cfg!(debug_assertions) {
         assert!(median < std::time::Duration::from_millis(100), "{times:?}");
     }
+}
+
+/// 같은 기대 version 으로 동시에 들어온 두 쓰기 중 하나만 성공하고, 다른 하나는 `CONFLICT` 다. 첫 쓰기를 임시 파일 단계
+/// (`Stage::Created`)에 세워 두고 그동안 두 번째 쓰기를 보낸다 — 잠금이 없으면 두 번째가 먼저 끝나 둘 다 성공한다.
+#[test]
+fn concurrent_writes_with_the_same_version_do_not_both_succeed() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    // 있는 파일을 같은 version 으로, 없는 파일을 기대 version 없이(새로 만들기) 동시에 쓴다.
+    for (name, initial) in [("existing.txt", Some("base")), ("new.txt", None)] {
+        let path = root.join(name);
+        if let Some(initial) = initial {
+            fs::write(&path, initial).unwrap();
+        }
+        let version = initial.and_then(|_| f.read(&id, &path).unwrap().version);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let (a, b) = std::thread::scope(|s| {
+            let a = s.spawn(|| {
+                f.fs.write_with(
+                    &write_params(&id, &path, "from-A", version.clone()),
+                    move |stage| {
+                        if stage == write::Stage::Created {
+                            entered_tx.send(()).unwrap();
+                            // 두 번째 쓰기가 끝나기를 잠깐 기다린다. 잠금이 있으면 그 쓰기는 이 쓰기를 기다리므로 시간이 다 된다.
+                            let _ = done_rx.recv_timeout(Duration::from_millis(500));
+                        }
+                        Ok(())
+                    },
+                )
+            });
+            entered_rx.recv().unwrap();
+            let b = s.spawn(|| {
+                let r = f.write(&id, &path, "from-B", version.clone());
+                let _ = done_tx.send(());
+                r
+            });
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        let (won, lost) = match (&a, &b) {
+            (Ok(_), Err(e)) => ("from-A", e),
+            (Err(e), Ok(_)) => ("from-B", e),
+            _ => panic!("{name}: exactly one write must win: A={a:?} B={b:?}"),
+        };
+        assert_eq!(lost.code, code::CONFLICT, "{name}: {lost:?}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), won, "{name}");
+    }
+}
+
+/// 대상이 없는 심링크에 쓰면 링크가 일반 파일로 바뀌므로 거절한다(루트 안 · 밖 대상 모두). 링크는 그대로다.
+#[cfg(unix)]
+#[test]
+fn dangling_symlinks_are_not_written() {
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    fs::create_dir_all(f.base.join("outside")).unwrap();
+    for (link, target) in [
+        ("dang-out", f.base.join("outside/new.txt")),
+        ("dang-in", root.join("missing.txt")),
+    ] {
+        let path = root.join(link);
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        let err = f.write(&id, &path, "x", None).unwrap_err();
+        assert_eq!(err.code, code::INVALID_PARAMS, "{link}: {err:?}");
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "{link}"
+        );
+        assert!(!target.exists(), "{link}");
+    }
+}
+
+/// 심링크 고리는 내부 오류가 아니라 invalid params 다.
+#[cfg(unix)]
+#[test]
+fn symlink_loops_are_invalid_params() {
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    std::os::unix::fs::symlink(root.join("self"), root.join("self")).unwrap();
+    std::os::unix::fs::symlink(root.join("b"), root.join("a")).unwrap();
+    std::os::unix::fs::symlink(root.join("a"), root.join("b")).unwrap();
+    for name in ["self", "a"] {
+        let path = root.join(name);
+        for err in [
+            f.read(&id, &path).unwrap_err(),
+            f.write(&id, &path, "x", None).unwrap_err(),
+            f.fs.list(&Fixture::at(&id, &path)).unwrap_err(),
+            f.read(&id, &path.join("inner.txt")).unwrap_err(),
+        ] {
+            assert_eq!(err.code, code::INVALID_PARAMS, "{name}: {err:?}");
+        }
+    }
+}
+
+/// 읽기 전용 판정은 권한 비트가 아니라 실제로 쓸 수 있는가다: 소유자 쓰기 비트만 없는 0466 파일은 쓰기 비트가 남아 있어도
+/// 소유자가 쓸 수 없다.
+#[cfg(unix)]
+#[test]
+fn read_only_means_this_process_cannot_write() {
+    use std::os::unix::fs::PermissionsExt;
+    // root 는 권한 비트와 무관하게 쓸 수 있어 이 시험이 볼 것이 없다.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    let path = root.join("owner-locked.txt");
+    fs::write(&path, "locked").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o466)).unwrap();
+    assert!(!fs::metadata(&path).unwrap().permissions().readonly());
+    assert!(f.fs.stat(&Fixture::at(&id, &path)).unwrap().readonly);
+    let version = f.read(&id, &path).unwrap().version;
+    let err = f.write(&id, &path, "changed", version).unwrap_err();
+    assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
+    assert_eq!(fs::read(&path).unwrap(), b"locked");
 }
