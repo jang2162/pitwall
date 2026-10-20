@@ -190,15 +190,18 @@ fn localizer<R: Runtime>(app: &AppHandle<R>) -> Localizer {
     }
 }
 
-/// 열린 창의 OS 제목을 `l` 의 언어로 바꾼다(언어 전환, `src/i18n.rs`). 한 창이 실패해도 나머지는 바꾼다.
-pub fn retitle<R: Runtime>(app: &AppHandle<R>, l: &Localizer) -> Result<(), String> {
-    let errors: Vec<String> = app
-        .webview_windows()
+/// 열린 창(`labels`)의 OS 제목을 `l` 의 언어로 바꾼다(언어 전환, `src/i18n.rs`). 이 모듈이 만든 창이 아니면 건너뛴다. 제목은
+/// `set_title(label, 제목)` 으로 단다 — 앱은 그 창의 `set_title` 을 넘긴다. 한 창이 실패해도 나머지는 바꾼다.
+pub fn retitle(
+    labels: impl IntoIterator<Item = String>,
+    l: &Localizer,
+    mut set_title: impl FnMut(&str, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    let errors: Vec<String> = labels
         .into_iter()
-        .filter_map(|(label, window)| {
+        .filter_map(|label| {
             let kind = WindowKind::of_label(&label)?;
-            window
-                .set_title(&kind.title(l))
+            set_title(&label, &kind.title(l))
                 .err()
                 .map(|e| format!("{label}: {e}"))
         })

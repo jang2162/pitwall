@@ -10,7 +10,7 @@ use pw_core::config::TOPIC_CHANGED;
 use pw_core::{EventBus, Filter, Scope, Subscription};
 use pw_ext::Registry;
 use pw_i18n::{Catalog, I18n, Localizer};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{menu, windows};
 
@@ -51,18 +51,52 @@ pub async fn follow(
     }
 }
 
-/// 언어가 바뀌면 네이티브 메뉴의 글자와 열린 창의 OS 제목을 바꾼다. 새로 여는 창은 만들 때 그 언어로 제목을 단다
+/// 언어가 바뀌었을 때 고칠 네이티브 UI. 앱은 [`AppUi`] 를 쓰고, 시험은 창 제목 쓰기를 기록하는 구현을 넘긴다(Tauri 의 mock
+/// 런타임은 창 제목을 저장하지 않는다 — `title()` 이 늘 빈 문자열이다).
+pub trait NativeUi {
+    fn relabel_menu(&self, l: &Localizer) -> Result<(), String>;
+    /// 열린 창의 label.
+    fn window_labels(&self) -> Vec<String>;
+    fn set_window_title(&self, label: &str, title: &str) -> Result<(), String>;
+}
+
+pub struct AppUi<R: Runtime>(pub AppHandle<R>);
+
+impl<R: Runtime> NativeUi for AppUi<R> {
+    fn relabel_menu(&self, l: &Localizer) -> Result<(), String> {
+        menu::relabel(&self.0, l)
+    }
+
+    fn window_labels(&self) -> Vec<String> {
+        self.0.webview_windows().into_keys().collect()
+    }
+
+    fn set_window_title(&self, label: &str, title: &str) -> Result<(), String> {
+        let window = self
+            .0
+            .get_webview_window(label)
+            .ok_or_else(|| "window closed".to_owned())?;
+        window.set_title(title).map_err(|e| e.to_string())
+    }
+}
+
+/// 네이티브 메뉴의 글자와 열린 창의 OS 제목을 `l` 의 언어로 바꾼다. 새로 여는 창은 만들 때 그 언어로 제목을 단다
 /// (`windows::build_at`).
+pub fn apply_language(ui: &impl NativeUi, l: &Localizer) {
+    if let Err(error) = ui.relabel_menu(l) {
+        tracing::error!(%error, "menu labels not changed to the new language");
+    }
+    if let Err(error) = windows::retitle(ui.window_labels(), l, |label, title| {
+        ui.set_window_title(label, title)
+    }) {
+        tracing::error!(%error, "window titles not changed to the new language");
+    }
+}
+
+/// 언어가 바뀔 때마다 [`apply_language`] 를 부른다.
 pub fn follow_in_native_ui<R: Runtime>(app: &AppHandle<R>, i18n: Arc<I18n>, events: Subscription) {
-    let app = app.clone();
-    tauri::async_runtime::spawn(follow(i18n, events, move |l| {
-        if let Err(error) = menu::relabel(&app, l) {
-            tracing::error!(%error, "menu labels not changed to the new language");
-        }
-        if let Err(error) = windows::retitle(&app, l) {
-            tracing::error!(%error, "window titles not changed to the new language");
-        }
-    }));
+    let ui = AppUi(app.clone());
+    tauri::async_runtime::spawn(follow(i18n, events, move |l| apply_language(&ui, l)));
 }
 
 #[cfg(test)]
@@ -73,6 +107,69 @@ mod tests {
     use semver::Version;
 
     use super::*;
+
+    /// 메뉴는 그대로 부르고 창 제목 쓰기만 기록한다. 창 목록은 mock 앱의 것이다.
+    struct RecordingUi<R: Runtime> {
+        app: AppUi<R>,
+        menu_calls: Mutex<usize>,
+        titles: Mutex<Vec<(String, String)>>,
+    }
+
+    impl<R: Runtime> NativeUi for RecordingUi<R> {
+        fn relabel_menu(&self, _l: &Localizer) -> Result<(), String> {
+            *self.menu_calls.lock().unwrap() += 1;
+            Ok(())
+        }
+
+        fn window_labels(&self) -> Vec<String> {
+            self.app.window_labels()
+        }
+
+        fn set_window_title(&self, label: &str, title: &str) -> Result<(), String> {
+            self.titles
+                .lock()
+                .unwrap()
+                .push((label.to_owned(), title.to_owned()));
+            Ok(())
+        }
+    }
+
+    /// 언어를 바꾸면 메뉴 글자와 함께 프로젝트 · 설정 창의 OS 제목이 그 언어로 바뀐다. 모르는 창(label `main`)은 건드리지 않는다.
+    #[test]
+    fn a_language_change_retitles_the_open_windows() {
+        let app = tauri::test::mock_app();
+        app.manage(crate::windows::PendingOpens::default());
+        crate::windows::open_project(app.handle(), "ab12", &Default::default()).unwrap();
+        crate::windows::open_settings(app.handle()).unwrap();
+        tauri::WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
+            .build()
+            .unwrap();
+        let ui = RecordingUi {
+            app: AppUi(app.handle().clone()),
+            menu_calls: Mutex::new(0),
+            titles: Mutex::new(Vec::new()),
+        };
+        let registry = Registry::from_roots(&Version::new(0, 0, 0), pw_ext::builtin::roots());
+        let catalog = Catalog::from_registry(&registry);
+
+        let titles = |locales: &[&str]| {
+            ui.titles.lock().unwrap().clear();
+            let locales: Vec<String> = locales.iter().map(|&l| l.to_owned()).collect();
+            apply_language(&ui, &catalog.localizer(&locales));
+            let mut titles = ui.titles.lock().unwrap().clone();
+            titles.sort();
+            titles
+        };
+        let pairs = |p: &str, s: &str| {
+            vec![
+                ("project-ab12".to_owned(), p.to_owned()),
+                ("settings".to_owned(), s.to_owned()),
+            ]
+        };
+        assert_eq!(titles(&["ko", "en"]), pairs("프로젝트", "설정"));
+        assert_eq!(titles(&["en"]), pairs("Project", "Settings"));
+        assert_eq!(*ui.menu_calls.lock().unwrap(), 2);
+    }
 
     /// 언어 설정을 바꾸면(`i18n.setLanguage` 와 같은 함수) `config.changed` 를 받아 새 언어로 한 번 알린다. 언어와 무관한
     /// 설정 변경에는 알리지 않는다.
