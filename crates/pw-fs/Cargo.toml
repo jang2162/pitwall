@@ -9,11 +9,21 @@ publish.workspace = true
 [dependencies]
 # 바이너리 내용은 JSON 으로 base64 로 실어 보낸다. 버전은 Tauri 트리의 것과 같게 둔다(크레이트가 늘지 않는다).
 base64 = "0.22.1"
+# `search.text`(M1-07, 결정 M1-D6): ripgrep 의 검색 라이브러리(모두 Unlicense OR MIT). `grep-matcher` 는 한 줄 안의 일치 범위를 찾는
+# `Matcher` 트레이트다.
+grep-matcher = "0.1.9"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
+# 기능만 켠다: `parallel` 이면 `gix-attributes` 의 속성 이름이 `Rc` 대신 `Arc` 라 `pw_lang::attributes::RepoAttributes` 를 검색 스레드끼리
+# 나눌 수 있다(`search.rs` 의 폴더별 속성 캐시). 버전은 `gix-attributes` 가 쓰는 것과 같게 둔다.
+gix-parallel = { version = "0.50.0", features = ["parallel"] }
 # .gitignore · .ignore · 전역 gitignore 판정(ripgrep 과 같은 규칙, Unlicense OR MIT). M1-07 · M1-12 도 같은 크레이트를 쓴다.
 ignore = "0.4.33"
 # 파일 감시(src/watch). pw-core 의 설정 감시와 같은 버전이다.
 notify = "8.2.0"
 pw-core = { path = "../pw-core" }
+# `search.text` 의 벤더 · 생성 파일 제외(M1-02 의 경로 규칙과 `.gitattributes`).
+pw-lang = { path = "../pw-lang" }
 pw-rpc = { path = "../pw-rpc" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

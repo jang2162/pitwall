@@ -4328,6 +4328,267 @@
       ],
       "tier": "write"
     },
+    "search.text": {
+      "description": "프로젝트 안의 텍스트 검색. 결과를 파일별 묶음 청크로 보내고 마지막에 `done` 청크 하나를 보낸다. 규칙(ignore · 심링크 ·\n바이너리 · 50 MiB · 벤더/생성 제외 · 결과 상한)은 `pw_fs::search` 머리 주석. 루트 밖 경로 · 빈 질의 · 잘못된 정규식 ·\n글롭은 invalid params 로, 없는 경로는 `NOT_FOUND` 로 스트림이 `failed` 로 끝난다(청크 없이).",
+      "item": {
+        "$defs": {
+          "SearchFile": {
+            "description": "파일 하나의 결과.",
+            "properties": {
+              "lines": {
+                "description": "줄 번호순.",
+                "items": {
+                  "$ref": "#/$defs/SearchLine"
+                },
+                "type": "array"
+              },
+              "path": {
+                "description": "걸어 간 경로(절대 경로). 루트 안 심링크를 지났으면 링크 쪽 경로다 — 실제 경로는 `fs.stat` 이 준다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "lines"
+            ],
+            "type": "object"
+          },
+          "SearchLine": {
+            "description": "일치한 줄 하나.",
+            "properties": {
+              "line": {
+                "description": "1 부터.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "preview": {
+                "description": "줄의 일부(줄바꿈 제외). 줄이 [`PREVIEW_MAX`] 보다 길면 첫 일치 앞 [`PREVIEW_BEFORE`] 부터 잘라 낸다.",
+                "type": "string"
+              },
+              "previewStart": {
+                "description": "`preview` 가 줄의 어디서 시작하는가(UTF-16 코드 단위). 미리보기 안의 범위는 `range.start - previewStart` 다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ranges": {
+                "description": "일치 범위(줄 기준, 앞에서부터). 미리보기에 걸친 것만 싣는다 — 첫 일치는 늘 든다.",
+                "items": {
+                  "$ref": "#/$defs/SearchRange"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "line",
+              "preview",
+              "previewStart",
+              "ranges"
+            ],
+            "type": "object"
+          },
+          "SearchRange": {
+            "description": "일치 범위. 줄 안의 UTF-16 코드 단위 위치(JS 문자열 · CodeMirror 의 위치 단위)이고 `end` 는 들지 않는다. UTF-8 이 아닌\n바이트는 대체 문자 하나로 센다.",
+            "properties": {
+              "end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`search.text` 의 청크.",
+        "oneOf": [
+          {
+            "description": "결과가 있는 파일들. 한 파일은 한 청크 안에만 있다.",
+            "properties": {
+              "files": {
+                "items": {
+                  "$ref": "#/$defs/SearchFile"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "files",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "files"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "마지막 청크. 상한 · 취소 없이 끝까지 찾았으면 `truncated` 가 꺼져 있다.",
+            "properties": {
+              "binaryFiles": {
+                "description": "바이너리라 건너뛴 파일 수.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "done",
+                "type": "string"
+              },
+              "largeFiles": {
+                "description": "50 MiB 를 넘어 건너뛴 파일 수.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "lines": {
+                "description": "보낸 결과(일치한 줄) 수.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "matchedFiles": {
+                "description": "결과가 있는 파일 수.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "searchedFiles": {
+                "description": "내용을 찾아본 파일 수.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "truncated": {
+                "description": "상한을 넘는 결과가 더 있다(「더 있음」).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "matchedFiles",
+              "lines",
+              "truncated",
+              "searchedFiles",
+              "binaryFiles",
+              "largeFiles"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "exclude": {
+            "default": [],
+            "description": "이 글롭에 맞는 파일 · 폴더는 찾지 않는다(`rg -g '!글롭'`). `include` 보다 우선한다.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "excludeGenerated": {
+            "default": false,
+            "description": "생성 파일(generated 의 경로 규칙 · `linguist-generated`)을 건너뛴다.",
+            "type": "boolean"
+          },
+          "excludeVendored": {
+            "default": false,
+            "description": "벤더 파일(`vendor.yml` 의 경로 · `linguist-vendored`)을 건너뛴다.",
+            "type": "boolean"
+          },
+          "hidden": {
+            "default": false,
+            "description": "숨김 파일 · 폴더(`.` 으로 시작)도 찾는다. 켜도 `.git` 은 찾지 않는다.",
+            "type": "boolean"
+          },
+          "include": {
+            "default": [],
+            "description": "이 글롭에 맞는 파일만 찾는다(`.gitignore` 문법, `rg -g`). `/` 가 없으면 어느 깊이의 이름에든, 있으면 찾는 폴더 기준 경로에\n맞춘다. 비어 있으면 모든 파일.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matchCase": {
+            "default": false,
+            "description": "대소문자를 가린다. 끄면 가리지 않는다(유니코드 대소문자 접기).",
+            "type": "boolean"
+          },
+          "maxResults": {
+            "default": null,
+            "description": "결과(일치한 줄) 상한. 기본 [`DEFAULT_MAX_RESULTS`], 1 ~ [`MAX_RESULTS_LIMIT`].",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "paths": {
+            "description": "찾을 폴더 · 파일(절대 경로, 하나 이상). 프로젝트 전체는 프로젝트 루트를 넘긴다. 루트 밖이면 invalid params.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "query": {
+            "description": "찾을 것. 비어 있으면 invalid params.",
+            "type": "string"
+          },
+          "regex": {
+            "default": false,
+            "description": "`query` 가 정규식(Rust `regex` 문법)이다. 끄면 글자 그대로 찾는다.",
+            "type": "boolean"
+          },
+          "respectIgnore": {
+            "default": true,
+            "description": "`.gitignore` · `.git/info/exclude` · 전역 gitignore · `.ignore` 로 무시되는 파일을 건너뛴다(기본 켬). `.gitignore` 는\n저장소(`.git`) 안에서만 적용된다(ripgrep 과 같다).",
+            "type": "boolean"
+          },
+          "wholeWord": {
+            "default": false,
+            "description": "단어 단위로만 맞춘다(`rg -w`: 앞뒤가 단어 글자가 아니어야 한다).",
+            "type": "boolean"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "paths",
+          "query"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "task.cancel": {
       "description": "작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.",
       "kind": "unary",

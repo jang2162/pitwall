@@ -211,6 +211,12 @@ export type StreamMethods = {
 	 */
 	"host.demoTask": { params: DemoTaskParams; item: DemoTaskUpdate };
 	/**
+	 * 프로젝트 안의 텍스트 검색. 결과를 파일별 묶음 청크로 보내고 마지막에 `done` 청크 하나를 보낸다. 규칙(ignore · 심링크 ·
+	 * 바이너리 · 50 MiB · 벤더/생성 제외 · 결과 상한)은 `pw_fs::search` 머리 주석. 루트 밖 경로 · 빈 질의 · 잘못된 정규식 ·
+	 * 글롭은 invalid params 로, 없는 경로는 `NOT_FOUND` 로 스트림이 `failed` 로 끝난다(청크 없이).
+	 */
+	"search.text": { params: SearchTextParams; item: SearchTextChunk };
+	/**
 	 * 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그
 	 * 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB
 	 * 이하)이고, 소비자가 읽지 않으면 Host 버퍼(512 KiB)가 찬 뒤 셸이 쓰기에서 멈춘다 — 기본 window(32)면 내보낸 청크와 합쳐
@@ -261,6 +267,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":false},
+	"search.text": {"name":"search.text","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchTextParams","output":"SearchTextChunk","doc":" 프로젝트 안의 텍스트 검색. 결과를 파일별 묶음 청크로 보내고 마지막에 `done` 청크 하나를 보낸다. 규칙(ignore · 심링크 ·\n 바이너리 · 50 MiB · 벤더/생성 제외 · 결과 상한)은 `pw_fs::search` 머리 주석. 루트 밖 경로 · 빈 질의 · 잘못된 정규식 ·\n 글롭은 invalid params 로, 없는 경로는 `NOT_FOUND` 로 스트림이 `failed` 로 끝난다(청크 없이).\n","mcp":false},
 	"task.cancel": {"name":"task.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"TaskCancelParams","output":"bool","doc":" 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.\n","mcp":false},
 	"task.list": {"name":"task.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"TaskListParams","output":"Vec<TaskInfo>","doc":" 끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.\n","mcp":false},
 	"terminal.close": {"name":"terminal.close","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalCloseParams","output":"()","doc":" 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다.\n","mcp":false},
@@ -1084,6 +1091,90 @@ export type RuntimeToolInfo = {
 	version: string,
 	/**  버전을 정한 파일. */
 	sourceFile: string | null,
+};
+
+/**  파일 하나의 결과. */
+export type SearchFile = {
+	/**  걸어 간 경로(절대 경로). 루트 안 심링크를 지났으면 링크 쪽 경로다 — 실제 경로는 `fs.stat` 이 준다. */
+	path: string,
+	/**  줄 번호순. */
+	lines: SearchLine[],
+};
+
+/**  일치한 줄 하나. */
+export type SearchLine = {
+	/**  1 부터. */
+	line: number,
+	/**  줄의 일부(줄바꿈 제외). 줄이 [`PREVIEW_MAX`] 보다 길면 첫 일치 앞 [`PREVIEW_BEFORE`] 부터 잘라 낸다. */
+	preview: string,
+	/**  `preview` 가 줄의 어디서 시작하는가(UTF-16 코드 단위). 미리보기 안의 범위는 `range.start - previewStart` 다. */
+	previewStart: number,
+	/**  일치 범위(줄 기준, 앞에서부터). 미리보기에 걸친 것만 싣는다 — 첫 일치는 늘 든다. */
+	ranges: SearchRange[],
+};
+
+/**
+ *  일치 범위. 줄 안의 UTF-16 코드 단위 위치(JS 문자열 · CodeMirror 의 위치 단위)이고 `end` 는 들지 않는다. UTF-8 이 아닌
+ *  바이트는 대체 문자 하나로 센다.
+ */
+export type SearchRange = {
+	start: number,
+	end: number,
+};
+
+/**  `search.text` 의 청크. */
+export type SearchTextChunk = 
+/**  결과가 있는 파일들. 한 파일은 한 청크 안에만 있다. */
+{ kind: "files"; files: SearchFile[] } | 
+/**  마지막 청크. 상한 · 취소 없이 끝까지 찾았으면 `truncated` 가 꺼져 있다. */
+{ kind: "done"; 
+/**  결과가 있는 파일 수. */
+matchedFiles: number; 
+/**  보낸 결과(일치한 줄) 수. */
+lines: number; 
+/**  상한을 넘는 결과가 더 있다(「더 있음」). */
+truncated: boolean; 
+/**  내용을 찾아본 파일 수. */
+searchedFiles: number; 
+/**  바이너리라 건너뛴 파일 수. */
+binaryFiles: number; 
+/**  50 MiB 를 넘어 건너뛴 파일 수. */
+largeFiles: number };
+
+export type SearchTextParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). */
+	worktree?: string | null,
+	/**  찾을 폴더 · 파일(절대 경로, 하나 이상). 프로젝트 전체는 프로젝트 루트를 넘긴다. 루트 밖이면 invalid params. */
+	paths: string[],
+	/**  찾을 것. 비어 있으면 invalid params. */
+	query: string,
+	/**  `query` 가 정규식(Rust `regex` 문법)이다. 끄면 글자 그대로 찾는다. */
+	regex?: boolean,
+	/**  대소문자를 가린다. 끄면 가리지 않는다(유니코드 대소문자 접기). */
+	matchCase?: boolean,
+	/**  단어 단위로만 맞춘다(`rg -w`: 앞뒤가 단어 글자가 아니어야 한다). */
+	wholeWord?: boolean,
+	/**
+	 *  이 글롭에 맞는 파일만 찾는다(`.gitignore` 문법, `rg -g`). `/` 가 없으면 어느 깊이의 이름에든, 있으면 찾는 폴더 기준 경로에
+	 *  맞춘다. 비어 있으면 모든 파일.
+	 */
+	include?: string[],
+	/**  이 글롭에 맞는 파일 · 폴더는 찾지 않는다(`rg -g '!글롭'`). `include` 보다 우선한다. */
+	exclude?: string[],
+	/**
+	 *  `.gitignore` · `.git/info/exclude` · 전역 gitignore · `.ignore` 로 무시되는 파일을 건너뛴다(기본 켬). `.gitignore` 는
+	 *  저장소(`.git`) 안에서만 적용된다(ripgrep 과 같다).
+	 */
+	respectIgnore?: boolean,
+	/**  벤더 파일(`vendor.yml` 의 경로 · `linguist-vendored`)을 건너뛴다. */
+	excludeVendored?: boolean,
+	/**  생성 파일(generated 의 경로 규칙 · `linguist-generated`)을 건너뛴다. */
+	excludeGenerated?: boolean,
+	/**  숨김 파일 · 폴더(`.` 으로 시작)도 찾는다. 켜도 `.git` 은 찾지 않는다. */
+	hidden?: boolean,
+	/**  결과(일치한 줄) 상한. 기본 [`DEFAULT_MAX_RESULTS`], 1 ~ [`MAX_RESULTS_LIMIT`]. */
+	maxResults?: number | null,
 };
 
 export type SetLanguageParams = {

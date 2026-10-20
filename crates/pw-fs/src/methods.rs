@@ -199,6 +199,7 @@ pub fn register(router: &mut Router, fs: Arc<Fs>) {
             .map_err(|e| RpcError::internal(e.to_string()))?
     }
     let (list, stat, read) = (Arc::clone(&fs), Arc::clone(&fs), Arc::clone(&fs));
+    crate::search::register(router, Arc::clone(&fs));
     router
         .unary(FsListMethod, move |_ctx, params: FsPathParams| {
             let s = Arc::clone(&list);
