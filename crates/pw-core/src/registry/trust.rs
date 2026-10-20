@@ -69,20 +69,32 @@ impl Registry {
     }
 
     /// 신뢰하거나 해제한다. 신뢰를 가진 프로젝트(워크트리면 메인 저장소 프로젝트)의 행을 쓰고 그 프로젝트로
-    /// [`ChangeKind::Trust`] 를 낸다. `readOnly` · `memory` 면 [`RegistryError::Unavailable`].
+    /// [`ChangeKind::Trust`] 를 낸다. 이미 그 값이면 쓰지 않고 이벤트도 내지 않는다 — 확인 창을 「신뢰하지 않음」 으로 닫으면
+    /// 묻기 차례를 잡을 때 쓴 미신뢰와 같은 값이다. `readOnly` · `memory` 면 [`RegistryError::Unavailable`].
     pub fn set_trust(&self, id: &str, trusted: bool) -> Result<ProjectTrust, RegistryError> {
         self.ensure_writable()?;
         let owner_id = self.trust_owner(id)?;
-        self.write(|tx| {
+        let changed = self.write(|tx| {
             load_one(tx, &owner_id)?;
+            let before = read_state(tx, &owner_id)?;
+            let after = if trusted {
+                TrustState::Trusted
+            } else {
+                TrustState::Untrusted
+            };
+            if before == after {
+                return Ok(false);
+            }
             tx.execute(
                 "INSERT INTO project_trust (project_id, trusted, decided_at) VALUES (?1, ?2, ?3)
                  ON CONFLICT (project_id) DO UPDATE SET trusted = ?2, decided_at = ?3",
                 params![owner_id, trusted, now_ms()],
             )?;
-            Ok(())
+            Ok(true)
         })?;
-        self.publish(ChangeKind::Trust, &owner_id);
+        if changed {
+            self.publish(ChangeKind::Trust, &owner_id);
+        }
         Ok(ProjectTrust {
             project_id: id.to_owned(),
             state: if trusted {
@@ -109,6 +121,20 @@ impl Registry {
             )?;
             Ok(inserted == 1)
         })
+    }
+
+    /// `owner_id` 의 신뢰를 쓰는 프로젝트: 그 프로젝트와, 그 신뢰를 따르는 등록된 워크트리 프로젝트. 신뢰가 바뀌면 이 프로젝트들의
+    /// 런타임 환경을 다시 읽는다(`pw_runtime::Runtime::trust_changed`).
+    pub fn trust_followers(&self, owner_id: &str) -> Result<Vec<String>, RegistryError> {
+        let projects = self.read(|conn| load(conn, None))?;
+        Ok(projects
+            .iter()
+            .filter(|p| {
+                p.id == owner_id
+                    || main_repository_project(p, &projects).is_some_and(|m| m.id == owner_id)
+            })
+            .map(|p| p.id.clone())
+            .collect())
     }
 
     /// 신뢰를 가진 프로젝트의 id. 워크트리 판정은 디스크(`.git` 파일)를 읽으므로 DB 잠금 밖에서 한다.

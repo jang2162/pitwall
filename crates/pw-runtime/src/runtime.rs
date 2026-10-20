@@ -32,6 +32,8 @@ pub struct RuntimeChanged {
 pub enum ChangeReason {
     /// 사용자가 「환경 다시 읽기」(`runtime.reload`)를 했다.
     Reload,
+    /// 프로젝트의 신뢰가 바뀌었다([`Runtime::trust_changed`]). 프로젝트 코드를 돌리는 제공자가 붙거나 빠진다.
+    Trust,
 }
 
 /// 한 디렉터리의 환경과 그 설명.
@@ -58,7 +60,9 @@ pub struct Runtime {
     providers: Vec<Arc<dyn RuntimeProvider>>,
     /// 프로젝트를 신뢰하는가(F1-7). 신뢰 전에는 프로젝트 코드를 돌리는 제공자를 고르지 않는다.
     trusted: Box<TrustFn>,
-    cache: Cache<(String, PathBuf), Resolved>,
+    /// 키는 (프로젝트, 디렉터리, 계산할 때 판정한 신뢰). 꺼낼 때마다 지금 신뢰로 키를 만들므로 신뢰가 바뀌면 — 신뢰를 가진
+    /// 프로젝트가 바뀐 경우(메인 저장소 프로젝트를 등록 · 삭제)나 그 이벤트를 놓친 경우도 — 옛 신뢰로 만든 환경을 주지 않는다.
+    cache: Cache<(String, PathBuf, bool), Resolved>,
     host: OnceLock<RuntimeHost>,
 }
 
@@ -95,9 +99,10 @@ impl Runtime {
     /// 결과(`RuntimeStatus::Fallback`)는 남기지 않아 다음 호출이 다시 시도한다(로그인 셸의 시간 초과는 냉각 동안 곧바로
     /// 물러난다).
     pub fn env(&self, project: &str, dir: &Path) -> Arc<Resolved> {
+        let trusted = (self.trusted)(project);
         self.cache.get_or_compute(
-            &(project.to_owned(), dir.to_path_buf()),
-            || self.resolve(project, dir),
+            &(project.to_owned(), dir.to_path_buf(), trusted),
+            || self.resolve(dir, trusted),
             |r| r.info.status == RuntimeStatus::Ok,
         )
     }
@@ -122,18 +127,38 @@ impl Runtime {
     /// `runtime.changed` 를 한 번씩 낸다(로그인 셸은 모든 프로젝트의 바탕이다). 시간 초과의 냉각도 푼다. 다시 읽기는 다음
     /// 요청에서 한다(RPC 핸들러는 곧바로 백그라운드로 시작한다).
     pub fn reload(&self, project: &str) {
+        self.reload_with(Some(project));
+    }
+
+    /// 부른 프로젝트가 없는 「환경 다시 읽기」: 캐시가 있던 프로젝트에만 `runtime.changed` 가 나간다. 무엇이 바뀌었는지 모를 때
+    /// 쓴다(레지스트리 이벤트를 놓쳤을 때 등).
+    pub fn reload_all(&self) {
+        self.reload_with(None);
+    }
+
+    fn reload_with(&self, project: Option<&str>) {
         self.shell.invalidate();
-        let mut projects: Vec<String> = self.cache.clear().into_iter().map(|(p, _)| p).collect();
-        projects.push(project.to_owned());
+        let mut projects: Vec<String> = self.cache.clear().into_iter().map(|(p, ..)| p).collect();
+        projects.extend(project.map(str::to_owned));
         projects.sort();
         projects.dedup();
         tracing::info!(target: "pw_runtime", ?projects, "runtime environment reload");
+        self.announce(projects, ChangeReason::Reload);
+    }
+
+    /// 신뢰가 바뀐 프로젝트들(신뢰를 가진 프로젝트와 그 신뢰를 따르는 워크트리 프로젝트)의 디렉터리 캐시만 잊고 각각
+    /// `runtime.changed`(`trust`)를 낸다. 로그인 셸 환경과 다른 프로젝트의 캐시는 그대로다.
+    pub fn trust_changed(&self, projects: &[String]) {
+        self.cache.forget(|(p, ..)| projects.contains(p));
+        tracing::info!(target: "pw_runtime", ?projects, "project trust changed");
+        self.announce(projects.to_vec(), ChangeReason::Trust);
+    }
+
+    fn announce(&self, projects: Vec<String>, reason: ChangeReason) {
         let Some(host) = self.host.get() else {
             return;
         };
-        let changed = RuntimeChanged {
-            reason: ChangeReason::Reload,
-        };
+        let changed = RuntimeChanged { reason };
         for p in projects {
             if let Err(e) = host.bus.publish(Scope::Project(p), TOPIC_CHANGED, &changed) {
                 tracing::warn!(target: "pw_runtime", %e, "cannot publish runtime.changed");
@@ -141,7 +166,7 @@ impl Runtime {
         }
     }
 
-    fn resolve(&self, project: &str, dir: &Path) -> Resolved {
+    fn resolve(&self, dir: &Path, trusted: bool) -> Resolved {
         let (base, mut failures) = match &*self.shell.get() {
             Ok(layer) => (layer.clone(), Vec::new()),
             Err(e) => (
@@ -153,7 +178,6 @@ impl Runtime {
             ),
         };
         let login_shell = failures.is_empty();
-        let trusted = (self.trusted)(project);
         let picked = self
             .providers
             .iter()

@@ -84,7 +84,11 @@ fn local_host(
                 projects: projects.clone(),
             });
             trust.attach(projects.clone());
-            tauri::async_runtime::spawn(trust::follow(trust::subscribe(host.bus()), runtime));
+            tauri::async_runtime::spawn(trust::follow(
+                trust::subscribe(host.bus()),
+                projects.clone(),
+                runtime,
+            ));
         }
     }
     host

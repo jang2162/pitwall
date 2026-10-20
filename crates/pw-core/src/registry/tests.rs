@@ -1102,6 +1102,20 @@ fn a_worktree_project_follows_the_main_repository_trust() {
     assert!(!f.registry.is_trusted(&other.id));
     f.registry.set_trust(&main_project.id, false).unwrap();
     assert!(!f.registry.is_trusted(&wt_project.id));
+
+    let mut followers = f.registry.trust_followers(&main_project.id).unwrap();
+    followers.sort();
+    let mut expected = vec![
+        main_project.id.clone(),
+        wt_project.id.clone(),
+        wt_sub.id.clone(),
+    ];
+    expected.sort();
+    assert_eq!(followers, expected);
+    assert_eq!(
+        f.registry.trust_followers(&other.id).unwrap(),
+        vec![other.id.clone()]
+    );
 }
 
 /// 메인 저장소가 등록되지 않은 워크트리 프로젝트는 자기 신뢰를 가진다.
@@ -1129,7 +1143,10 @@ fn trust_changes_are_published_for_the_owner() {
         .bus
         .subscribe(Filter::all().scope(Scope::Host).topics([TOPIC_CHANGED]));
     f.registry.claim_trust_prompt(&wt_project.id).unwrap();
+    // 이미 그 값이면 쓰지 않고 내지 않는다(확인 창을 「신뢰하지 않음」 으로 닫은 경우).
+    f.registry.set_trust(&wt_project.id, false).unwrap();
     f.registry.set_trust(&wt_project.id, true).unwrap();
+    f.registry.set_trust(&main_project.id, true).unwrap();
     let mut changes = Vec::new();
     while let Some(Received::Event(event)) = sub.try_recv() {
         changes.push(serde_json::from_value::<ProjectChanged>(event.payload.clone()).unwrap());

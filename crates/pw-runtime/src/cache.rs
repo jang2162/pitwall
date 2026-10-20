@@ -73,6 +73,21 @@ impl<K: Clone + Eq + Hash, V> Cache<K, V> {
         self.lock().ready.contains_key(key)
     }
 
+    /// `forget` 이 참인 키를 잊는다(남긴 결과와 진행 중인 시도 둘 다 — 진행 중인 계산은 끝나도 남기지 않는다). 잊은 키를
+    /// 돌려준다(중복 없이).
+    pub fn forget(&self, forget: impl Fn(&K) -> bool) -> Vec<K> {
+        let mut state = self.lock();
+        let mut keys: Vec<K> = state.ready.keys().filter(|k| forget(k)).cloned().collect();
+        state.ready.retain(|k, _| !forget(k));
+        for k in state.flights.keys().filter(|k| forget(k)) {
+            if !keys.contains(k) {
+                keys.push(k.clone());
+            }
+        }
+        state.flights.retain(|k, _| !forget(k));
+        keys
+    }
+
     /// 모두 잊는다. 남겼던 결과와 진행 중이던 시도의 키를 돌려준다(중복 없이).
     pub fn clear(&self) -> Vec<K> {
         let mut state = self.lock();
