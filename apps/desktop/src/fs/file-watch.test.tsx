@@ -1,20 +1,34 @@
 // @vitest-environment happy-dom
 // 파일 감시 임대: 창이 `fs.watch` 를 열어 두고, 닫히면(언마운트) 스트림을 취소하고, 활성 워크트리가 바뀌면 닫고 새 워크트리로 다시 연다.
+// 폴링으로 보는 동안은 상태바 항목이 보인다.
 
-import { createMemoryTransportPair, type FsWatching, RpcClient } from "@pitwall/rpc-client";
+import { LocalizationProvider } from "@fluent/react";
+import {
+  createMemoryTransportPair,
+  type FsWatching,
+  RpcClient,
+  type WatchMode,
+} from "@pitwall/rpc-client";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { bundledLocalization, KO_PROJECT } from "../i18n/testing";
 import { rememberActiveWorktree } from "../open-with/active-worktree";
-import { useFileWatch, watchFiles } from "./file-watch";
+import {
+  STATUS_SLOTS,
+  StatusBar,
+  StatusBarProvider,
+  useStatusBarItem,
+} from "../status-bar/status-bar";
+import { FileWatchStatus, useFileWatch, watchFiles } from "./file-watch";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
 }
 
 /** `fs.watch` 를 열 때마다 새 스트림 id 를 주고 항목 하나를 보내는 가짜 Host. 취소된 스트림 id 를 모은다. */
-function fakeHost() {
+function fakeHost(mode: WatchMode = "recursive") {
   const [clientSide, serverSide] = createMemoryTransportPair();
   const opened: { streamId: number; params: unknown }[] = [];
   const cancelled: number[] = [];
@@ -26,7 +40,7 @@ function fakeHost() {
       const streamId = nextStream++;
       opened.push({ streamId, params: message.params });
       send({ id: message.id, result: { streamId } });
-      const data: FsWatching = { roots: [{ path: "/repo", mode: "recursive" }] };
+      const data: FsWatching = { roots: [{ path: "/repo", mode }] };
       send({ method: "stream.chunk", params: { streamId, data } });
     } else if (message.method === "stream.cancel") {
       cancelled.push((message.params as { streamId: number }).streamId);
@@ -87,4 +101,46 @@ it("re-attaches to the new worktree when the active worktree changes, and lets g
   act(() => root!.unmount());
   root = undefined;
   await vi.waitFor(() => expect(host.cancelled).toEqual([1, 2]));
+});
+
+function StatusItem() {
+  useStatusBarItem({ id: "fileWatch", ...STATUS_SLOTS.fileWatch, component: FileWatchStatus });
+  return null;
+}
+
+/** 상태바 항목은 늘 두고 감시만 켜고 끈다 — 감시를 닫으면 그 폴링 상태가 남지 않아야 한다. */
+function render(client: RpcClient, watching: boolean) {
+  root!.render(
+    <LocalizationProvider l10n={bundledLocalization("ko")}>
+      <StatusBarProvider>
+        <StatusItem />
+        {watching && <Watcher client={client} projectId="p1" />}
+        <StatusBar label="status" />
+      </StatusBarProvider>
+    </LocalizationProvider>,
+  );
+}
+
+const statusItem = () => document.querySelector<HTMLElement>("[data-testid=status-file-watch]");
+
+it("shows a status bar item while a root is watched by polling, and drops it with the watch", async () => {
+  const element = document.createElement("div");
+  document.body.append(element);
+  root = createRoot(element);
+  const polling = fakeHost("polling");
+  await act(async () => render(polling.client, true));
+  await vi.waitFor(() => expect(statusItem()).not.toBeNull());
+  expect(statusItem()!.textContent).toBe(KO_PROJECT.fileWatch.polling);
+  expect(statusItem()!.title).toContain("/repo");
+
+  await act(async () => render(polling.client, false));
+  expect(statusItem()).toBeNull();
+
+  // 폴링이 아니면 항목이 없다.
+  const folders = fakeHost("folders");
+  await act(async () => render(folders.client, true));
+  await vi.waitFor(() => expect(folders.opened).toHaveLength(1));
+  await act(async () => new Promise((r) => setTimeout(r, 20)));
+  expect(document.querySelector("[data-status-item=fileWatch]")).not.toBeNull();
+  expect(statusItem()).toBeNull();
 });

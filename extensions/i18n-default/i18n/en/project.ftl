@@ -138,7 +138,13 @@ action-project-trust = Trust This Project…
 action-project-untrust = Stop Trusting This Project
 trust-save-failed = Could not save the project trust
 
-## File watching. The Host sends these as notifications (notification.show, crates/pw-fs/src/watch).
+## File watching. The Host sends the limit warning as a notification (notification.show, crates/pw-fs/src/watch). The status bar item is src/fs/file-watch.tsx.
 
 # $root: the watched root, $seconds: polling interval in seconds
 fs-watch-limit = The file watch limit (fs.inotify.max_user_watches) was reached; some folders are checked every { $seconds } seconds
+
+status-file-watch-polling = File watch: polling
+# $roots: the roots watched by polling, one per line
+status-file-watch-polling-hint =
+    The file watch limit (fs.inotify.max_user_watches) was reached, so some folders are checked by polling. Changes in them show up late.
+    { $roots }

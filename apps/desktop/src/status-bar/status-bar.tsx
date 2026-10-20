@@ -41,6 +41,8 @@ export const STATUS_SLOTS = {
   host: { side: "left", order: 100 },
   /** 프로젝트 신뢰 · 「런타임 환경 미적용」(M1-05). */
   trust: { side: "left", order: 200 },
+  /** 파일 감시가 OS 한도를 넘어 폴링으로 봄(M1-06). */
+  fileWatch: { side: "left", order: 250 },
   /** 런타임 제공자 상태 · 경고(M1-16). */
   runtime: { side: "left", order: 300 },
   /** 백그라운드 작업(F11-5). */

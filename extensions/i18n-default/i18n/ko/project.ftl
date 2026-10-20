@@ -137,7 +137,13 @@ action-project-trust = 이 프로젝트 신뢰…
 action-project-untrust = 이 프로젝트 신뢰 해제
 trust-save-failed = 프로젝트 신뢰를 저장하지 못했다
 
-## 파일 감시. Host 가 알림(notification.show)으로 낸다(crates/pw-fs/src/watch).
+## 파일 감시. 한도 경고는 Host 가 알림(notification.show)으로 낸다(crates/pw-fs/src/watch). 상태바 항목은 src/fs/file-watch.tsx.
 
 # $root: 감시하는 루트, $seconds: 폴링 간격(초)
 fs-watch-limit = 파일 감시 한도(fs.inotify.max_user_watches)를 넘어 일부 폴더는 { $seconds }초마다 확인한다
+
+status-file-watch-polling = 파일 감시: 폴링
+# $roots: 폴링으로 보는 루트(줄마다 하나)
+status-file-watch-polling-hint =
+    파일 감시 한도(fs.inotify.max_user_watches)를 넘어 일부 폴더는 폴링으로 확인한다. 그 폴더의 변경은 늦게 보인다.
+    { $roots }
