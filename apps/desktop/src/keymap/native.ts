@@ -13,6 +13,8 @@ export interface KeymapNative {
   /** 네이티브 메뉴에서 고른 액션. 해제 함수를 돌려준다. */
   onMenuAction(listener: (action: string) => void): () => void;
   openSettings(): Promise<void>;
+  /** 이 창을 닫는다(`window.close`). 창의 닫기 버튼과 같은 길(close requested)을 지난다. */
+  closeWindow(): Promise<void>;
   /** 「Shell 명령 설치」(F2-1). macOS 에만 있다. 결과는 네이티브 대화상자가 알린다(src-tauri/src/shell_command.rs). */
   installShellCommand?(): Promise<void>;
 }
@@ -33,6 +35,7 @@ export const tauriKeymapNative: KeymapNative = {
     };
   },
   openSettings: () => invoke("open_settings_window"),
+  closeWindow: () => getCurrentWebviewWindow().close(),
   ...(/Mac/.test(navigator.userAgent) && {
     installShellCommand: () => invoke<void>("install_shell_command"),
   }),

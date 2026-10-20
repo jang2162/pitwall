@@ -16,7 +16,8 @@ menu-show-all = Show All
 menu-quit = Quit { $app }
 
 menu-welcome-window = Welcome Window
-menu-close-window = Close Window
+# ⌘W(키맵 액션 window.close): 에디터 탭이 있으면 탭, 없으면 창을 닫는다.
+menu-close = Close
 
 menu-undo = Undo
 menu-redo = Redo

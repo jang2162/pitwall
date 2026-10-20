@@ -52,6 +52,8 @@ editor-tab-unpin = 탭 고정 해제
 editor-switcher-label = 탭 전환기
 
 action-editor-close-tab = 탭 닫기
+# ⌘W · 메뉴 「닫기」: 에디터 탭이 있으면 탭, 없으면 창(10-ui §5.2).
+action-editor-close-tab-or-window = 탭 또는 창 닫기
 action-editor-close-other-tabs = 다른 탭 모두 닫기
 action-editor-split-right = 오른쪽으로 분할
 action-editor-toggle-pin = 탭 고정 / 고정 해제

@@ -118,6 +118,7 @@ const native: KeymapNative = {
   syncMenu: async () => {},
   onMenuAction: () => () => {},
   openSettings: async () => {},
+  closeWindow: async () => {},
 };
 
 let root: Root | undefined;

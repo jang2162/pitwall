@@ -9,6 +9,7 @@ window-title-settings = Settings
 action-find = Find Action
 action-settings = Settings
 action-cli-install = Install Shell Command
+action-window-close = Close Window
 # $theme: light | dark | system
 action-theme =
     { $theme ->

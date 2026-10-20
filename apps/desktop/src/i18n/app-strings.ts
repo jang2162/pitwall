@@ -18,6 +18,7 @@ export function appStrings(t: Translate) {
       find: t("action-find"),
       settings: t("action-settings"),
       cliInstall: t("action-cli-install"),
+      closeWindow: t("action-window-close"),
       theme: (theme: ThemePreference) => t("action-theme", { theme }),
       /** `name` 은 그 언어로 쓴 그 언어의 이름(`i18n.get` 의 `languages[].name`). */
       language: (name: string) => t("action-language", { name }),

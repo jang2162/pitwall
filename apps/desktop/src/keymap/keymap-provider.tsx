@@ -36,7 +36,8 @@ import { type LastGoodKeymap, type PreviousKeymap, resolveKeymap } from "./resol
 
 /**
  * 창이 띄운 팝업(`useKeymapPopup`)이 열려 있어도 네이티브 메뉴에서 고르면 도는 액션. 다른 창을 열 뿐 팝업 뒤의 창 내용을 바꾸지
- * 않는 것만 둔다. 앱 종료 · 창 닫기 같은 OS 기본 메뉴 항목은 키맵 액션이 아니라 이 규칙과 무관하게 돈다.
+ * 않는 것만 둔다. 앱 종료 같은 OS 기본 메뉴 항목은 키맵 액션이 아니라 이 규칙과 무관하게 돈다. 「닫기」(`window.close`)는 키맵
+ * 액션이라 팝업이 열린 동안에는 메뉴로 와도 돌지 않는다.
  */
 export const MENU_ACTIONS_OVER_POPUPS: ReadonlySet<string> = new Set(["settings.open"]);
 

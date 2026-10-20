@@ -19,8 +19,13 @@ export function appActions(deps: {
   setTheme(preference: ThemePreference): void;
   /** 없으면(macOS 가 아니면) 액션을 등록하지 않는다. */
   installShellCommand?: () => Promise<void>;
+  /**
+   * 있으면 `window.close`(⌘W · 메뉴 「닫기」)로 이 창을 닫는다. 프로젝트 창은 넘기지 않는다 — 그 창의 `window.close` 는 탭을
+   * 먼저 닫는다(src/editor/editor-actions.ts).
+   */
+  closeWindow?: () => Promise<void>;
 }): Action[] {
-  const { installShellCommand } = deps;
+  const { installShellCommand, closeWindow } = deps;
   const T = deps.strings.actions;
   // 실패(설정 파일을 고칠 수 없음 등)는 RPC 오류로 온다. 설정 창은 화면에 보이고, 액션은 로그로 남긴다.
   const setLanguage = (language: string) => () =>
@@ -40,6 +45,16 @@ export function appActions(deps: {
       keywords: ["Settings", "Preferences"],
       run: deps.openSettings,
     },
+    ...(closeWindow
+      ? [
+          {
+            id: "window.close",
+            label: T.closeWindow,
+            keywords: ["Close Window"],
+            run: closeWindow,
+          } satisfies Action,
+        ]
+      : []),
     ...(installShellCommand
       ? [
           {

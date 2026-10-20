@@ -314,8 +314,9 @@ function ProjectRuntimeActions({ projectId }: { projectId: string }) {
 }
 
 /**
- * 이 창의 프로젝트를 외부 도구로 연다(⌥F1 · ⌘⌥E, open-with/open-with.tsx). 문맥은 키를 누른 때의 활성 워크트리와 활성 탭의 파일 ·
- * 커서 줄 · 열이다(에디터 탭이 없으면 프로젝트만). 탭 우클릭의 「Finder 에서 보기」(`editor.reveal`)도 여기서 같은 실행 길로 연다.
+ * 이 창의 프로젝트를 외부 도구로 연다(⌥F1 · ⌘⌥E, open-with/open-with.tsx). 문맥은 활성 탭의 워크트리 · 파일 · 커서 줄 · 열이다
+ * — 탭은 자기를 연 워크트리를 기억하므로 창의 활성 워크트리가 바뀐 뒤에도 그 탭의 루트로 나간다. 에디터 탭이 없으면 키를 누른
+ * 때의 활성 워크트리와 프로젝트만. 탭 우클릭의 「Finder 에서 보기」(`editor.reveal`)도 여기서 같은 실행 길로 연다.
  * 실패 문장은 상태바 위 한 줄에 둔다. 상태바의 버튼은 10-ui 툴바의 「외부 도구로 열기」 자리다 — 툴바가 생기면 옮긴다.
  */
 function ProjectOpenWith({ projectId }: { projectId: string }) {
@@ -333,7 +334,7 @@ function ProjectOpenWith({ projectId }: { projectId: string }) {
     return {
       projectId,
       name: name.current,
-      worktree: activeWorktree(),
+      worktree: context ? context.worktree : activeWorktree(),
       file: context?.file,
       line: context?.cursor?.line,
       column: context?.cursor?.column,
@@ -392,8 +393,8 @@ function errorText(e: unknown): string {
 }
 
 /**
- * 창의 에디터 작업 공간. 파일 읽기는 이 창의 Host 연결로 하고(`fs.stat` · `fs.read`, 활성 워크트리를 접근 범위로), 열지 못한 것은
- * 알림으로 보인다. 창이 사는 동안 하나다.
+ * 창의 에디터 작업 공간. 파일 읽기는 이 창의 Host 연결로 하고(`fs.stat` · `fs.read` · `lang.detect`, 요청 · 탭의 워크트리를 접근
+ * 범위로), 열지 못한 것은 알림으로 보인다. 창이 사는 동안 하나다.
  */
 function useWindowEditor(
   projectId: string | undefined,
@@ -410,12 +411,23 @@ function useWindowEditor(
       if (!c || projectId === undefined) throw new Error("Host is not connected");
       return c;
     };
-    const scope = () => ({ projectId: projectId ?? "", worktree: activeWorktree() ?? null });
-    const stat = (path: string) => host().call("fs.stat", { ...scope(), path });
+    const scope = (worktree: string | undefined) => ({
+      projectId: projectId ?? "",
+      worktree: worktree ?? null,
+    });
+    const stat = (path: string, worktree: string | undefined) =>
+      host().call("fs.stat", { ...scope(worktree), path });
     return createEditorWorkspace({
       documents: createDocumentStore({
         stat,
-        read: (params) => host().call("fs.read", { ...scope(), ...params }),
+        read: (params, worktree) => host().call("fs.read", { ...scope(worktree), ...params }),
+        detect: async (path, head, worktree) => {
+          const { files } = await host().call("lang.detect", {
+            ...scope(worktree),
+            files: [{ path, head }],
+          });
+          return files[0]?.language ?? null;
+        },
       }),
       stat,
       onOpenFailed: (path, message) =>
@@ -432,7 +444,15 @@ function useWindowEditor(
 
 type WindowLog = Pick<UiLogger, "info">;
 
-function ProjectWindowBody({ projectId, log }: { projectId?: string; log?: WindowLog }) {
+function ProjectWindowBody({
+  projectId,
+  log,
+  closeWindow,
+}: {
+  projectId?: string;
+  log?: WindowLog;
+  closeWindow(): Promise<void>;
+}) {
   const strings = useProjectStrings();
   const appearance = useTheme((s) => s.appearance);
   const notify = useNotify();
@@ -452,7 +472,13 @@ function ProjectWindowBody({ projectId, log }: { projectId?: string; log?: Windo
   useEffect(() => {
     if (!ready) return;
     return projectOpenInbox.connect((open) => {
-      if (open.file) void workspace.open({ path: open.file, line: open.line, column: open.col });
+      if (open.file)
+        void workspace.open({
+          path: open.file,
+          worktree: open.worktree,
+          line: open.line,
+          column: open.col,
+        });
     });
   }, [ready, workspace]);
   const switcher = useTabSwitcher(workspace);
@@ -462,11 +488,12 @@ function ProjectWindowBody({ projectId, log }: { projectId?: string; log?: Windo
         workspace,
         strings: strings.editor,
         openSwitcher: switcher.open,
+        closeWindow,
         copyText: (text) => navigator.clipboard.writeText(text),
         onCopyFailed: (e) =>
           notify({ level: "error", title: strings.editor.copyFailed, body: errorText(e) }),
       }),
-    [workspace, strings, switcher.open, notify],
+    [workspace, strings, switcher.open, closeWindow, notify],
   );
   useRegisterActions(editorActionList);
 
@@ -497,21 +524,24 @@ function ProjectWindowBody({ projectId, log }: { projectId?: string; log?: Windo
 export function ProjectWindow({
   projectId = projectIdFromQuery(window.location.search),
   log,
+  closeWindow,
 }: {
   /** 창 쿼리의 프로젝트 id(`?project=`). 없으면 외부 도구 액션 · 신뢰(trust/trust.tsx) · 파일 열기가 없다. */
   projectId?: string;
   /** UI 로그(첫 그림 시간 등 진단). */
   log?: WindowLog;
+  /** 이 창을 닫는다(`window.close` 가 에디터 탭이 없을 때 부른다, editor-actions.ts). */
+  closeWindow(): Promise<void>;
 }) {
   return (
     <NotificationProvider>
       <StatusBarProvider>
         <TaskProvider projectId={projectId}>
           {projectId === undefined ? (
-            <ProjectWindowBody log={log} />
+            <ProjectWindowBody log={log} closeWindow={closeWindow} />
           ) : (
             <TrustProvider projectId={projectId}>
-              <ProjectWindowBody projectId={projectId} log={log} />
+              <ProjectWindowBody projectId={projectId} log={log} closeWindow={closeWindow} />
             </TrustProvider>
           )}
         </TaskProvider>

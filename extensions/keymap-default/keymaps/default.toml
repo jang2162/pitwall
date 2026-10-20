@@ -114,10 +114,15 @@ win = "ctrl+shift+f12"
 linux = "ctrl+shift+f12"
 
 # 에디터 탭(10-ui §4.2 「툴 윈도우 · 창」 · 「검색 · 이동」, src/editor/editor-actions.ts). ⌘⌥W 는 Win/Linux 기본 키가 없다(표의 「—」).
+# macOS 의 ⌘W 는 `window.close` 다 — 에디터 탭이 있으면 탭, 없으면 창을 닫는다(10-ui §5.2). 네이티브 메뉴 「닫기」 가 같은 액션이라
+# 키와 메뉴 accelerator 가 한 액션으로 모인다(src-tauri/src/menu.rs). Win/Linux 의 창 닫기는 OS 의 Alt+F4 다.
+
+[[bindings]]
+action = "window.close"
+mac = "cmd+w"
 
 [[bindings]]
 action = "editor.closeTab"
-mac = "cmd+w"
 win = "ctrl+f4"
 linux = "ctrl+f4"
 

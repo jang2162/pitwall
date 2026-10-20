@@ -5,10 +5,12 @@
 // 있으면 커서를 그 자리에 두고 그 줄을 화면 가운데로 가져온다. 뷰가 아직 없으면(문서를 읽는 중) 뷰가 생길 때 둔다(`pending`).
 // 탭이 남아 있는데 뷰가 사라지면(StrictMode 의 다시 마운트 · 문서를 다시 읽음) 그 뷰의 커서를 `pending` 에 돌려놓아 다음 뷰가
 // 같은 자리에서 시작한다.
-// 창이 받은 열기 요청(`project://open`, src/project-open.ts)은 고정 탭으로, 파일 트리 클릭(M1-14)은 미리보기로 연다.
+// 창이 받은 열기 요청(`project://open`, src/project-open.ts)은 고정 탭으로, 파일 트리 클릭(M1-14)은 미리보기로 연다. 요청은 자기
+// 워크트리를 싣고 오고, 정규화 · 문서 읽기 · 탭이 그 워크트리를 쓴다 — 대기열에 쌓였다가 나중에 열리는 요청도 창의 그때 활성
+// 워크트리가 아니라 요청을 받은 때의 워크트리로 읽힌다.
 //
-// 「활성 탭」: 활성 패널이 에디터 탭이면 그것, 아니면(툴 윈도우를 보는 중) 마지막으로 쓴 에디터 탭. 외부 도구 문맥(파일 · 커서
-// 줄 · 열, openWith.run)과 탭 액션(⌘W 등)이 이것을 쓴다.
+// 「활성 탭」: 활성 패널이 에디터 탭이면 그것, 아니면(툴 윈도우를 보는 중) 마지막으로 쓴 에디터 탭. 외부 도구 문맥(워크트리 ·
+// 파일 · 커서 줄 · 열, openWith.run)과 탭 액션(⌘W 등)이 이것을 쓴다.
 
 import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -28,6 +30,8 @@ export interface Cursor {
 export interface OpenRequest {
   /** 절대 경로. 정규화 전이어도 된다. */
   path: string;
+  /** 요청의 워크트리 꼭대기(`ProjectOpen.worktree`). 없으면 메인 체크아웃. */
+  worktree?: string;
   line?: number;
   column?: number;
   preview?: boolean;
@@ -52,7 +56,7 @@ export function cursorOf(view: EditorView): Cursor {
 
 export interface EditorWorkspaceDeps {
   documents: DocumentStore;
-  stat(path: string): Promise<FsStat>;
+  stat(path: string, worktree: string | undefined): Promise<FsStat>;
   /** 열지 못한 이유(요청 경로, 오류 문장). 창이 알림으로 보인다. */
   onOpenFailed(path: string, message: string): void;
   /** 진단 로그(첫 그림까지 걸린 시간 등). */
@@ -66,6 +70,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
   const pending = new Map<string, Cursor>();
   /** 탭을 열기 시작한 시각(performance.now). 첫 그림을 재는 데 쓴다. */
   const openedAt = new Map<string, number>();
+  const cursorListeners = new Set<(panelId: string, cursor: Cursor) => void>();
 
   const recentOrder = () => recent?.order() ?? [];
 
@@ -132,6 +137,17 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
 
     view: (panelId: string) => views.get(panelId),
 
+    /** 뷰의 커서가 바뀌었다(extensions/cursor-report.ts 가 부른다). */
+    reportCursor(panelId: string, cursor: Cursor) {
+      for (const listener of cursorListeners) listener(panelId, cursor);
+    },
+
+    /** 탭의 커서가 바뀔 때마다 듣는다(상태바의 커서 줄:열, M1-18). 해제 함수를 돌려준다. */
+    onCursor(listener: (panelId: string, cursor: Cursor) => void): () => void {
+      cursorListeners.add(listener);
+      return () => cursorListeners.delete(listener);
+    },
+
     /** 탭을 연 시각을 꺼낸다(한 번만). 텍스트 뷰어가 첫 그림을 잴 때 쓴다. */
     takeOpenedAt(panelId: string): number | undefined {
       const at = openedAt.get(panelId);
@@ -143,7 +159,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       const started = performance.now();
       let stat: FsStat;
       try {
-        stat = await deps.stat(request.path);
+        stat = await deps.stat(request.path, request.worktree);
       } catch (e) {
         deps.onOpenFailed(request.path, e instanceof Error ? e.message : String(e));
         return undefined;
@@ -153,6 +169,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       if (stat.kind === "dir" || stat.target === "dir") return undefined;
       const { panel, created } = openTab(api, {
         path: stat.path,
+        worktree: request.worktree,
         preview: request.preview,
         recent: recentOrder(),
       });
@@ -162,12 +179,16 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       return panel;
     },
 
-    /** 활성 탭의 파일과 커서(외부 도구 문맥). 탭이 없으면 `undefined`. 뷰가 없는 탭(이미지 등)은 커서 없이. */
-    activeContext(): { file: string; cursor?: Cursor } | undefined {
+    /**
+     * 활성 탭의 워크트리 · 파일 · 커서(외부 도구 문맥). 탭이 없으면 `undefined`. 뷰가 없는 탭(이미지 등)은 커서 없이. `worktree`
+     * 가 `undefined` 면 그 탭은 메인 체크아웃의 것이다.
+     */
+    activeContext(): { worktree?: string; file: string; cursor?: Cursor } | undefined {
       const panel = activeTab();
       if (!panel) return undefined;
       const view = views.get(panel.id);
-      return { file: tabParams(panel).path, cursor: view ? cursorOf(view) : undefined };
+      const { path, worktree } = tabParams(panel);
+      return { worktree, file: path, cursor: view ? cursorOf(view) : undefined };
     },
   };
 }

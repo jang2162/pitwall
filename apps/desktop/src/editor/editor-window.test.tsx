@@ -10,6 +10,7 @@ import type {
   FsStat,
   HostInfo,
   KeymapFile,
+  LangDetectResult,
   OpenWithOutcome,
   Project,
   ProjectTrust,
@@ -29,6 +30,7 @@ import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
 import { EDITOR_PANEL } from "./editor-tabs";
 import { cursorOf } from "./editor-workspace";
+import { editorContext } from "./extensions";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -60,7 +62,7 @@ vi.mock("../tauri-transport", async () => {
         const reply = (result: unknown) => send({ id: m.id, result });
         const fail = (message: string) =>
           send({ id: m.id, error: { code: -32004, message, data: null } });
-        if (m.method.startsWith("fs.") || m.method.startsWith("openWith."))
+        if (["fs.", "openWith.", "lang."].some((p) => m.method.startsWith(p)))
           host.calls.push({ method: m.method, params: m.params });
         const path = (m.params as { path?: string } | undefined)?.path ?? "";
         const real = host.links.get(path) ?? path;
@@ -150,6 +152,18 @@ vi.mock("../tauri-transport", async () => {
                 highlight: sizeClass() === "editable",
               },
             } satisfies FsRead);
+          case "lang.detect": {
+            const { files } = m.params as { files: { path: string }[] };
+            return reply({
+              files: files.map((f) => ({
+                language: f.path.endsWith(".rs") ? "Rust" : null,
+                source: "extension",
+                vendored: false,
+                generated: false,
+                documentation: false,
+              })),
+            } satisfies LangDetectResult);
+          }
           case "openWith.run":
             return reply({
               kind: "launched",
@@ -171,11 +185,24 @@ vi.mock("../tauri-transport", async () => {
   };
 });
 
-const native: KeymapNative = {
+/** 네이티브 메뉴에서 고른 액션을 보낸다(메뉴 accelerator 로 온 ⌘W 등). */
+let menuListener: ((action: string) => void) | undefined;
+const native = {
   syncMenu: async () => {},
-  onMenuAction: () => () => {},
+  onMenuAction: (listener: (action: string) => void) => {
+    menuListener = listener;
+    return () => {
+      if (menuListener === listener) menuListener = undefined;
+    };
+  },
   openSettings: async () => {},
-};
+  closeWindow: vi.fn<KeymapNative["closeWindow"]>(async () => {}),
+} satisfies KeymapNative;
+
+async function menuAction(action: string) {
+  await act(async () => menuListener?.(action));
+  await settle();
+}
 
 const LIB = "/work/demo/src/lib.rs";
 const MAIN = "/work/demo/src/main.rs";
@@ -187,6 +214,7 @@ function lines(n: number): string {
 }
 
 let root: Root | undefined;
+let themeStore: ReturnType<typeof createThemeStore> | undefined;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -204,6 +232,7 @@ beforeEach(() => {
   host.sizes = new Map();
   host.calls = [];
   activeWorktreeStore.setState({ top: undefined });
+  native.closeWindow.mockClear();
   localStorage.clear();
 });
 
@@ -221,12 +250,12 @@ async function mount() {
   element.style.width = "1280px";
   element.style.height = "800px";
   document.body.append(element);
-  const store = createThemeStore({
+  const store = (themeStore = createThemeStore({
     system: { current: () => "light", subscribe: () => () => {} },
     storage: { read: () => undefined, write: () => {} },
     theme: parseTheme(defaultTheme),
     apply: () => {},
-  });
+  }));
   root = createRoot(element);
   await act(async () =>
     root!.render(
@@ -241,8 +270,8 @@ async function mount() {
 }
 
 /** 창이 받은 열기 요청(`pitwall <파일>:<줄>:<열>`). */
-async function openRequest(file: string, line?: number, col?: number) {
-  await act(async () => projectOpenInbox.push({ file, line, col }));
+async function openRequest(file: string, line?: number, col?: number, worktree?: string) {
+  await act(async () => projectOpenInbox.push({ file, line, col, worktree }));
   await settle();
 }
 
@@ -294,6 +323,26 @@ it("opens an open request as a tab with the cursor on that line and column", asy
   expect(view!.hasFocus).toBe(true);
 });
 
+it("gives the view the detected language and reconfigures it on a theme change without a new view", async () => {
+  await mount();
+  await openRequest(LIB, 4, 1, "/work/demo-wt");
+  const detect = host.calls.find((c) => c.method === "lang.detect")!.params;
+  expect(detect).toMatchObject({ projectId: "p1", worktree: "/work/demo-wt" });
+  expect((detect.files as { path: string; head: string }[])[0]).toMatchObject({ path: LIB });
+  const [view] = views();
+  expect(view!.state.facet(editorContext)).toMatchObject({ language: "Rust", appearance: "light" });
+
+  await act(async () => themeStore!.getState().setPreference("dark"));
+  await settle();
+  expect(views()).toEqual([view]);
+  expect(view!.state.facet(editorContext)).toMatchObject({ language: "Rust", appearance: "dark" });
+  expect(cursorOf(view!)).toEqual({ line: 4, column: 1 });
+
+  // 탭 params 가 바뀌어도(고정) 뷰를 다시 만들지 않는다.
+  await runAction("탭 고정 / 고정 해제");
+  expect(views()).toEqual([view]);
+});
+
 it("reuses the open tab when the same file comes again, even through a symlink", async () => {
   await mount();
   await openRequest(LIB, 120, 5);
@@ -319,10 +368,9 @@ it("passes the active tab's file and cursor to openWith.run on ⌘⌥E", async (
   ]);
 });
 
-it("passes the active worktree to file reads and to openWith.run", async () => {
+it("passes the request's worktree to file reads and to openWith.run", async () => {
   await mount();
-  await act(async () => activeWorktreeStore.setState({ top: "/work/demo-wt" }));
-  await openRequest(LIB, 2, 1);
+  await openRequest(LIB, 2, 1, "/work/demo-wt");
   expect(host.calls.find((c) => c.method === "fs.stat")!.params).toMatchObject({
     projectId: "p1",
     worktree: "/work/demo-wt",
@@ -330,6 +378,34 @@ it("passes the active worktree to file reads and to openWith.run", async () => {
   });
   await press("KeyE", { metaKey: true, altKey: true }, "´");
   expect(runCalls()[0]).toMatchObject({ worktree: "/work/demo-wt", file: LIB, line: 2 });
+});
+
+it("reads queued open requests in the worktree each one came with, not the last active one", async () => {
+  // 리뷰의 재현: 창이 마운트되기 전에 두 워크트리의 요청이 쌓인다. main.tsx 는 받는 순간 활성 워크트리를 바꾸므로 마운트 때는
+  // 마지막 것(wt2)이 활성이다.
+  const statsOf = (path: string) =>
+    host.calls.filter((c) => c.method !== "openWith.run" && c.params.path === path);
+  projectOpenInbox.push({ worktree: "/work/wt1", file: LIB, line: 3 });
+  projectOpenInbox.push({ worktree: "/work/wt2", file: MAIN });
+  activeWorktreeStore.setState({ top: "/work/wt2" });
+  await mount();
+  expect(editorTabs().map((t) => t.title)).toEqual(["lib.rs", "main.rs"]);
+  // StrictMode 는 개발 중에 문서를 두 번 읽는다 — 몇 번이든 모두 그 요청의 워크트리다.
+  const scopes = (path: string) =>
+    new Set(statsOf(path).map((c) => `${c.method} ${c.params.worktree}`));
+  expect(scopes(LIB)).toEqual(new Set(["fs.stat /work/wt1", "fs.read /work/wt1"]));
+  expect(scopes(MAIN)).toEqual(new Set(["fs.stat /work/wt2", "fs.read /work/wt2"]));
+
+  // wt1 의 탭으로 돌아가 ⌘⌥E · 「Finder 에서 보기」 를 하면 활성 워크트리(wt2)가 아니라 그 탭의 워크트리로 나간다.
+  await keydown({ code: "Tab", key: "Tab", ctrlKey: true });
+  await keyup({ code: "ControlLeft", key: "Control" });
+  expect(activeTabTitle()).toBe("lib.rs");
+  await press("KeyE", { metaKey: true, altKey: true }, "´");
+  await runAction("Finder 에서 보기");
+  expect(runCalls().map((c) => [c.tool, c.worktree, c.file])).toEqual([
+    [null, "/work/wt1", LIB],
+    ["finder", "/work/wt1", LIB],
+  ]);
 });
 
 it("opens the project without a file when no editor tab is open", async () => {
@@ -371,6 +447,53 @@ it("closes the active tab on ⌘W, the other unpinned tabs on ⌘⌥W, and shows
   await press("KeyW", { metaKey: true }, "w");
   expect(editorTabs()).toEqual([]);
   expect(document.querySelector("[data-testid=editor-empty]")).not.toBeNull();
+});
+
+it("closes the window on ⌘W only when no editor tab is left", async () => {
+  await mount();
+  await openRequest(LIB);
+  await press("KeyW", { metaKey: true }, "w");
+  expect(editorTabs()).toEqual([]);
+  expect(native.closeWindow).not.toHaveBeenCalled();
+  await press("KeyW", { metaKey: true }, "w");
+  expect(native.closeWindow).toHaveBeenCalledTimes(1);
+});
+
+it("closes one tab when ⌘W arrives both as a key and as the menu accelerator", async () => {
+  await mount();
+  await openRequest(LIB);
+  await openRequest(MAIN);
+  await keydown({ code: "KeyW", key: "w", metaKey: true });
+  await menuAction("window.close");
+  expect(editorTabs().map((t) => t.title)).toEqual(["lib.rs"]);
+  expect(native.closeWindow).not.toHaveBeenCalled();
+});
+
+it("closes the tab, not the window, when ⌘W during IME composition comes only from the menu", async () => {
+  await mount();
+  await openRequest(LIB);
+  await openRequest(MAIN);
+  // 키맵은 조합 중인 키를 보지 않는다(packages/keymap engine.ts) — 키로는 아무것도 닫히지 않는다.
+  await keydown({ code: "KeyW", key: "w", metaKey: true, isComposing: true });
+  expect(editorTabs()).toHaveLength(2);
+  await menuAction("window.close");
+  expect(editorTabs().map((t) => t.title)).toEqual(["lib.rs"]);
+  expect(native.closeWindow).not.toHaveBeenCalled();
+});
+
+it("closes nothing on ⌘W while a popup of the window is open", async () => {
+  await mount();
+  await openRequest(LIB);
+  const header = document.querySelector<HTMLElement>("[data-editor-tab-header]")!;
+  await act(async () => {
+    header.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  });
+  await settle();
+  expect(document.querySelector("[role=menu]")).not.toBeNull();
+  await keydown({ code: "KeyW", key: "w", metaKey: true });
+  await menuAction("window.close");
+  expect(editorTabs()).toHaveLength(1);
+  expect(native.closeWindow).not.toHaveBeenCalled();
 });
 
 it("switches to the previously used tab with ⌃Tab when Control is released", async () => {

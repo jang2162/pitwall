@@ -45,6 +45,7 @@ export function projectStrings(t: Translate) {
       switcher: t("editor-switcher-label"),
       actions: {
         closeTab: t("action-editor-close-tab"),
+        closeTabOrWindow: t("action-editor-close-tab-or-window"),
         closeOtherTabs: t("action-editor-close-other-tabs"),
         splitRight: t("action-editor-split-right"),
         togglePin: t("action-editor-toggle-pin"),

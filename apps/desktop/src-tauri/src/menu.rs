@@ -11,6 +11,11 @@
 //! 메뉴 문자열은 UI 언어(`crates/pw-i18n`, `extensions/i18n-default/i18n/*/menu.ftl`)로 만든다. 언어가 바뀌면
 //! [`relabel`] 이 항목의 글자만 바꾼다(`src/i18n.rs`) — 메뉴를 다시 만들지 않으므로 동기화한 단축키가 남는다.
 //!
+//! 「닫기」(⌘W)는 OS 기본 항목(`PredefinedMenuItem::close_window`, macOS `performClose:`)이 아니라 키맵 액션 `window.close`
+//! 다. OS 기본 항목은 웹뷰를 거치지 않아 같은 ⌘W 가 웹뷰의 탭 닫기와 창 닫기를 함께 일으킬 수 있었다. 이제 키와 메뉴가 한
+//! 액션으로 모여 가드가 뒤의 것을 버리고, 「탭이 있으면 탭, 없으면 창」은 웹뷰가 정한다(`src/editor/editor-actions.ts`).
+//! 포커스된 창이 없으면 닫을 것이 없다.
+//!
 //! ⚠ 메뉴에 넣는 액션은 두 번 실행돼도 결과가 같아야 한다(열기 · 보이기). 가드는 짧은 시간 창만 본다. 토글 액션을 메뉴에
 //! 넣으려면 그 전에 키 경로와 메뉴 경로가 한 번만 오는지 플랫폼마다 실측하거나 더 단단한 중복 실행 가드를 둔다.
 
@@ -31,6 +36,7 @@ const CHECK_UPDATES: &str = "check-updates";
 /// 키맵 액션 id 를 그대로 메뉴 id 로 쓰는 항목.
 const SETTINGS_ACTION: &str = "settings.open";
 const FIND_ACTION: &str = "action.find";
+const WINDOW_CLOSE_ACTION: &str = "window.close";
 /// 「Shell 명령 설치」(F2-1). macOS 앱 메뉴에만 있다.
 #[cfg(target_os = "macos")]
 const CLI_INSTALL_ACTION: &str = "cli.install";
@@ -43,6 +49,7 @@ fn action_label(action: &str) -> Option<&'static str> {
     Some(match action {
         SETTINGS_ACTION => "menu-settings",
         FIND_ACTION => "menu-find-action",
+        WINDOW_CLOSE_ACTION => "menu-close",
         #[cfg(target_os = "macos")]
         CLI_INSTALL_ACTION => "menu-install-shell-command",
         _ => return None,
@@ -237,11 +244,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         true,
         None::<&str>,
     )?;
+    #[cfg(target_os = "macos")]
+    let close_key = Some("Cmd+KeyW");
+    // Win/Linux 의 창 닫기는 OS 의 Alt+F4 다. 메뉴에 키를 걸면 웹뷰의 Alt+F4 keydown 과 OS 닫기가 겹친다.
+    #[cfg(not(target_os = "macos"))]
+    let close_key = None::<&str>;
+    let close = MenuItem::with_id(app, WINDOW_CLOSE_ACTION, t("menu-close"), true, close_key)?;
     let predefined = |id: &'static str, made: PredefinedMenuItem<R>| (id, made);
-    let close_window = predefined(
-        "menu-close-window",
-        PredefinedMenuItem::close_window(app, Some(&t("menu-close-window")))?,
-    );
     #[cfg(target_os = "macos")]
     let app_items = [
         predefined(
@@ -305,11 +314,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         app,
         t("menu-file"),
         true,
-        &[
-            &welcome,
-            &PredefinedMenuItem::separator(app)?,
-            &close_window.1,
-        ],
+        &[&welcome, &PredefinedMenuItem::separator(app)?, &close],
     )?;
     // macOS 가 아니면 앱 메뉴가 없으므로 설정을 File 에 둔다.
     #[cfg(not(target_os = "macos"))]
@@ -321,7 +326,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &welcome,
             &settings,
             &PredefinedMenuItem::separator(app)?,
-            &close_window.1,
+            &close,
             &quit.1,
         ],
     )?;
@@ -433,7 +438,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     #[cfg(not(target_os = "macos"))]
     item(quit.0, Labeled::Predefined(quit.1));
     item("menu-file", Labeled::Submenu(file_menu.clone()));
-    item(close_window.0, Labeled::Predefined(close_window.1));
     item("menu-edit", Labeled::Submenu(edit_menu.clone()));
     item("menu-window", Labeled::Submenu(window_menu.clone()));
     item("menu-help", Labeled::Submenu(help_menu.clone()));
@@ -450,6 +454,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let mut entries = vec![
         (settings_parent.clone(), settings),
         (help_menu.clone(), find_action),
+        (file_menu.clone(), close),
     ];
     #[cfg(target_os = "macos")]
     entries.push((settings_parent, cli_install));
@@ -485,6 +490,11 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
             Ok(())
         }
         FIND_ACTION => run_in_focused_window(app, FIND_ACTION),
+        // 포커스된 창이 없으면 닫을 창이 없다.
+        WINDOW_CLOSE_ACTION => {
+            let _ = run_in_focused_window(app, WINDOW_CLOSE_ACTION);
+            Ok(())
+        }
         _ => Ok(()),
     };
     if let Err(error) = result {

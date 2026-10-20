@@ -175,6 +175,7 @@ const keymapNative = {
     };
   },
   openSettings: vi.fn<KeymapNative["openSettings"]>(async () => {}),
+  closeWindow: vi.fn<KeymapNative["closeWindow"]>(async () => {}),
 } satisfies KeymapNative;
 
 let pending: FindProjectRequest | null = null;
@@ -337,6 +338,13 @@ it("lists favorites first, then recent, then the rest, and opens the selected ro
   expect(selectedRow()?.textContent).toContain("web-console");
   await press("Enter");
   expect(native.openProjectWindow).toHaveBeenCalledWith({ projectId: "a" });
+});
+
+it("closes the welcome window on ⌘W", async () => {
+  await mount();
+  keymapNative.closeWindow.mockClear();
+  expect(await press("KeyW", { metaKey: true }, "w")).toBe(true);
+  expect(keymapNative.closeWindow).toHaveBeenCalledTimes(1);
 });
 
 it("selects on click and opens on double click", async () => {

@@ -52,6 +52,8 @@ editor-tab-unpin = Unpin Tab
 editor-switcher-label = Switcher
 
 action-editor-close-tab = Close Tab
+# ⌘W · 메뉴 「닫기」: 에디터 탭이 있으면 탭, 없으면 창(10-ui §5.2).
+action-editor-close-tab-or-window = Close Tab or Window
 action-editor-close-other-tabs = Close Other Tabs
 action-editor-split-right = Split Right
 action-editor-toggle-pin = Pin / Unpin Tab

@@ -11,6 +11,8 @@
 
 import type { DockviewApi, DockviewGroupPanel, IDockviewPanel } from "dockview-react";
 
+import type { ViewerKind } from "./viewer-kinds";
+
 /** 에디터 탭의 내용 컴포넌트 이름(project-window.tsx 의 COMPONENTS 키). */
 export const EDITOR_PANEL = "editorTab";
 /** 에디터 탭의 탭 머리 이름(project-window.tsx 의 TAB_COMPONENTS 키). */
@@ -19,6 +21,16 @@ export const EDITOR_TAB_HEADER = "editorTab";
 export interface EditorTabParams {
   /** 정규화한 실제 경로. */
   path: string;
+  /**
+   * 이 탭을 연 워크트리의 꼭대기(`ActiveWorktree.top`). 없으면 메인 체크아웃. 문서 읽기(`fs.*`)의 접근 범위와 외부 도구 문맥
+   * (⌘⌥E · Finder 에서 보기)이 창의 「지금」 활성 워크트리가 아니라 이것을 쓴다 — 다른 워크트리의 탭이 남아 있어도 그 탭의 루트로
+   * 나간다.
+   */
+  worktree?: string;
+  /** 이 탭만의 뷰어(M1-23 「텍스트로 열기」 · 「hex 로 열기」). 없으면 문서가 정한 종류(viewer-kinds.ts). */
+  viewer?: ViewerKind;
+  /** 이 탭만의 언어(M1-18 상태바의 언어 수동 변경, Linguist 이름 · `null` 은 플레인 텍스트). 없으면 문서의 `lang.detect` 결과. */
+  language?: string | null;
   /** 미리보기 탭(이탤릭, 다음 미리보기가 대신한다). */
   preview?: boolean;
   /** 고정(pin). */
@@ -103,9 +115,10 @@ export function openTab(
   api: DockviewApi,
   {
     path,
+    worktree,
     preview = false,
     recent = [],
-  }: { path: string; preview?: boolean; recent?: readonly string[] },
+  }: { path: string; worktree?: string; preview?: boolean; recent?: readonly string[] },
 ): { panel: IDockviewPanel; created: boolean } {
   const group = targetGroup(api, recent);
   const existing = findTab(api, path, { group, recent });
@@ -121,7 +134,7 @@ export function openTab(
   replaced?.api.close();
   // 미리보기 자리를 닫아 그룹이 비면 dockview 가 그룹을 지운다 — 그때는 대상 그룹을 다시 고른다.
   const into = api.getGroup(group.id) ? group : targetGroup(api, recent);
-  const params: EditorTabParams = { path, preview };
+  const params: EditorTabParams = { path, preview, ...(worktree !== undefined && { worktree }) };
   const panel = api.addPanel({
     id: nextPanelId(api),
     component: EDITOR_PANEL,
@@ -142,10 +155,10 @@ export function closeOtherTabs(panel: IDockviewPanel) {
   for (const other of others) other.api.close();
 }
 
-/** 같은 파일을 오른쪽 새 그룹에 연다(⌘\). 새 탭이 활성이 된다. */
+/** 같은 파일을 오른쪽 새 그룹에 연다(⌘\). 워크트리 · 뷰어 · 언어는 따라가고 미리보기 · 고정은 따라가지 않는다. 새 탭이 활성이 된다. */
 export function splitRight(api: DockviewApi, panel: IDockviewPanel): IDockviewPanel {
-  const { path } = tabParams(panel);
-  const params: EditorTabParams = { path };
+  const { preview: _preview, pinned: _pinned, ...params } = tabParams(panel);
+  const path = params.path;
   return api.addPanel({
     id: nextPanelId(api),
     component: EDITOR_PANEL,

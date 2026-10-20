@@ -64,6 +64,7 @@ const ACTION_IDS = new Set(
       }),
       strings: KO_PROJECT.editor,
       openSwitcher() {},
+      closeWindow: async () => {},
       copyText: async () => {},
       onCopyFailed() {},
     }),
@@ -102,7 +103,10 @@ describe("default keymap file", () => {
     expect(label("mac", "openWith.default")).toEqual(["⌥⌘E"]);
     expect(label("linux", "openWith.default")).toEqual(["Ctrl+Alt+E"]);
     // 10-ui 「툴 윈도우 · 창」 · 「검색 · 이동」 — ⌘⌥W 는 Win/Linux 키가 없다(표의 「—」)
-    expect(label("mac", "editor.closeTab")).toEqual(["⌘W"]);
+    // macOS 의 ⌘W 는 탭이 있으면 탭, 없으면 창을 닫는 `window.close` 다(10-ui §5.2).
+    expect(label("mac", "window.close")).toEqual(["⌘W"]);
+    expect(label("win", "window.close")).toEqual([]);
+    expect(label("mac", "editor.closeTab")).toEqual([]);
     expect(label("win", "editor.closeTab")).toEqual(["Ctrl+F4"]);
     expect(label("mac", "editor.closeOtherTabs")).toEqual(["⌥⌘W"]);
     expect(label("win", "editor.closeOtherTabs")).toEqual([]);

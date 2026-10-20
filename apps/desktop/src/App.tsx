@@ -89,8 +89,9 @@ function LanguageSelect() {
   );
 }
 
-// 모든 창에 있는 액션. 프로젝트 창의 툴 윈도우 액션은 ProjectWindow 가 등록한다.
-function AppActions({ native }: { native: KeymapNative }) {
+// 모든 창에 있는 액션. 프로젝트 창의 툴 윈도우 액션은 ProjectWindow 가 등록한다. `window.close` 는 프로젝트 창이면
+// ProjectWindow 가(탭을 먼저 닫는다), 아니면 여기서 등록한다.
+function AppActions({ native, kind }: { native: KeymapNative; kind: WindowKind }) {
   const { openFindAction } = useKeymap();
   const setTheme = useTheme((s) => s.setPreference);
   const strings = useAppStrings();
@@ -105,8 +106,9 @@ function AppActions({ native }: { native: KeymapNative }) {
         openSettings: native.openSettings,
         setTheme,
         installShellCommand: native.installShellCommand,
+        closeWindow: kind === "project" ? undefined : native.closeWindow,
       }),
-    [strings, languages, setLanguage, openFindAction, native, setTheme],
+    [strings, languages, setLanguage, openFindAction, native, setTheme, kind],
   );
   useRegisterActions(actions);
   return null;
@@ -134,14 +136,14 @@ export function App({
       <HostProvider target={LOCAL_HOST}>
         <I18nProvider log={log}>
           <KeymapProvider native={native} log={log}>
-            <AppActions native={native} />
+            <AppActions native={native} kind={kind} />
             <div className="flex h-full flex-col bg-ui-background text-ui-foreground">
               {/* macOS 에서는 웹뷰가 타이틀바 자리까지 덮으므로 이 줄이 창을 옮기는 손잡이가 된다. */}
               <header className="titlebar bg-ui-toolbar" data-tauri-drag-region>
                 <WindowTitle kind={kind} />
               </header>
               {kind === "welcome" && <Welcome native={welcomeNative} log={log} />}
-              {kind === "project" && <ProjectWindow log={log} />}
+              {kind === "project" && <ProjectWindow log={log} closeWindow={native.closeWindow} />}
               {kind === "settings" && <SettingsWindow />}
               <KeymapErrorBar />
             </div>

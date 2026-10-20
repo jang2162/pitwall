@@ -33,8 +33,9 @@ import { parseWindowKind } from "./window-kind";
 const log = installUiLog(window);
 const windowKind = parseWindowKind(window.location.search);
 log.info(`window opened: ${windowKind}`, "main");
-// 프로젝트 창이 받은 열기 요청(src-tauri/src/launch.rs · windows.rs). 활성 워크트리를 먼저 바꾸고(파일 읽기가 그 워크트리를
-// 접근 범위로 쓴다) 우편함에 넣는다 — 에디터가 마운트되면 꺼내 탭을 연다.
+// 프로젝트 창이 받은 열기 요청(src-tauri/src/launch.rs · windows.rs). 창의 활성 워크트리를 바꾸고(파일 트리 · 탭이 없을 때의
+// 외부 도구가 쓴다) 우편함에 넣는다 — 에디터가 마운트되면 꺼내 탭을 연다. 탭의 파일 읽기는 이 값이 아니라 요청에 실린
+// `worktree` 를 쓴다(src/editor/editor-workspace.tsx 머리 주석).
 if (windowKind === "project") {
   log.info(`project window: ${projectIdFromQuery(window.location.search) ?? "(none)"}`, "project");
   watchProjectOpens(tauriProjectOpenSource, (request) => {

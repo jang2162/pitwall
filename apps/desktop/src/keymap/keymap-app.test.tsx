@@ -124,6 +124,7 @@ const native = {
     };
   }),
   openSettings: vi.fn<KeymapNative["openSettings"]>(async () => {}),
+  closeWindow: vi.fn<KeymapNative["closeWindow"]>(async () => {}),
 };
 
 beforeEach(() => {
@@ -141,6 +142,7 @@ beforeEach(() => {
   host.languageSetting = "ko";
   localStorage.clear();
   native.syncMenu.mockClear();
+  native.closeWindow.mockClear();
   native.openSettings.mockClear();
   log.info.mockClear();
   log.warn.mockClear();
@@ -297,6 +299,18 @@ it("runs an action once when the same press also arrives from the menu", async (
   await act(async () => new Promise((r) => setTimeout(r, 320)));
   await fromMenu("settings.open");
   expect(native.openSettings).toHaveBeenCalledTimes(2);
+});
+
+it("closes a settings window on ⌘W and from the menu, and shows ⌘W on the menu item", async () => {
+  await mount("settings");
+  expect(native.syncMenu).toHaveBeenLastCalledWith(
+    expect.objectContaining({ "window.close": "Super+KeyW" }),
+  );
+  expect(await press("KeyW", { metaKey: true }, "w")).toBe(true);
+  expect(native.closeWindow).toHaveBeenCalledTimes(1);
+  await act(async () => new Promise((r) => setTimeout(r, 320)));
+  await fromMenu("window.close");
+  expect(native.closeWindow).toHaveBeenCalledTimes(2);
 });
 
 it("does not run shortcuts behind an open Find Action popup", async () => {
