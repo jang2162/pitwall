@@ -52,6 +52,8 @@ fn local_host(
     let open_with_methods = Arc::clone(&open_with);
     let fs = Arc::new(Fs::new());
     let fs_methods = Arc::clone(&fs);
+    let fs_watch = pw_fs::watch::Watch::new(Arc::clone(&fs));
+    let fs_watch_methods = fs_watch.clone();
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
@@ -61,7 +63,10 @@ fn local_host(
         .methods(move |router| pw_open_with::methods::register(router, open_with_methods))
         .methods(move |router| pw_runtime::methods::register(router, runtime_methods))
         .methods(move |router| pw_fs::methods::register(router, fs_methods))
+        .methods(move |router| pw_fs::watch::register(router, fs_watch_methods))
         .build();
+    // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
+    fs_watch.attach(host.bus().clone());
     if let Some(config) = host.config() {
         i18n.attach_config(config.global.clone());
         // 외부 도구 실행(⌥F1 · ⌘⌥E)이 전역 설정 · 프로젝트 레지스트리를 쓴다.

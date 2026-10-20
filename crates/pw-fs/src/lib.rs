@@ -6,6 +6,7 @@
 //! - [`read`]: 전체 · 범위 읽기와 `version`.
 //! - [`write`]: 임시 파일 → rename 원자 쓰기.
 //! - [`methods`]: `fs.list` · `fs.stat` · `fs.read` · `fs.write` RPC.
+//! - [`watch`]: 파일 감시(M1-06) — `fs.watch` 스트림과 `fs.changed` 이벤트.
 
 pub mod handle;
 pub mod judge;
@@ -13,6 +14,7 @@ pub mod list;
 pub mod methods;
 pub mod read;
 pub mod scope;
+pub mod watch;
 pub mod write;
 
 use std::fs;

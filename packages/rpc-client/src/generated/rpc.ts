@@ -182,6 +182,11 @@ export type UnaryMethods = {
 /** 선언된 stream 메서드: 이름 → 입력 · item 타입. */
 export type StreamMethods = {
 	/**
+	 * 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면
+	 * 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.
+	 */
+	"fs.watch": { params: FsWatchParams; item: FsWatching };
+	/**
 	 * 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.
 	 * Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.
 	 */
@@ -199,6 +204,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.list": {"name":"fs.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsList","doc":" 폴더 한 단계의 항목(이름 · 종류 · 크기 · mtime · ignore 여부). 파일 트리가 펼칠 때 부른다.\n","mcp":false},
 	"fs.read": {"name":"fs.read","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsReadParams","output":"FsRead","doc":" 파일 전체 또는 범위를 읽고 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급)을 함께 준다. 전체 읽기는 50 MiB 까지,\n 그보다 큰 파일은 범위로 읽는다.\n","mcp":false},
 	"fs.stat": {"name":"fs.stat","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsStat","doc":" 파일 · 폴더 하나의 상태와 파일의 크기 등급. 내용은 읽지 않는다.\n","mcp":false},
+	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":false},
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n","mcp":false},
@@ -529,6 +535,22 @@ export type FsStat = {
 	readonly: boolean,
 	/**  파일이면 크기 등급(결정 M1-D9). 읽지 않고 정하므로 「열지 않음」 판단에 바이트를 읽지 않는다. */
 	sizeClass: SizeClass | null,
+};
+
+export type FsWatchParams = {
+	projectId: string,
+	/**  창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 있으면 그 워크트리 안의 프로젝트 루트를, 없으면 프로젝트의 등록 루트를 본다. */
+	worktree?: string | null,
+};
+
+export type FsWatchedRoot = {
+	path: string,
+	mode: WatchMode,
+};
+
+/**  `fs.watch` 의 항목: 지금 보는 루트와 방식. 감시를 다 건 뒤 한 번, 방식이 바뀔 때마다(한도 초과 → 폴링) 한 번. */
+export type FsWatching = {
+	roots: FsWatchedRoot[],
 };
 
 export type FsWriteParams = {
@@ -1174,3 +1196,12 @@ export type UpdateProjectParams = {
 	id: string,
 	patch: ProjectPatch,
 };
+
+/**  루트 하나를 보는 방식. */
+export type WatchMode = 
+/**  OS 의 재귀 감시(macOS FSEvents · Windows ReadDirectoryChangesW). */
+"recursive" | 
+/**  ignore 되지 않은 폴더마다 OS 감시(Linux inotify). ignore 된 폴더 안의 변경은 오지 않는다. */
+"folders" | 
+/**  OS 감시 한도를 넘어, 그 뒤의 폴더는 5초마다 폴링으로 본다(그 폴더의 변경은 그만큼 늦다). */
+"polling";

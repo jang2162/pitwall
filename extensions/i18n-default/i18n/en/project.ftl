@@ -1,4 +1,4 @@
-### Project window: tool window names and their open actions, editor tabs, status bar, background tasks, notifications, runtime environment, project trust.
+### Project window: tool window names and their open actions, editor tabs, status bar, background tasks, notifications, runtime environment, project trust, file watching.
 
 ## Tool window names. The id is the tool window id (PANELS in src/layout/project-layout.ts) in kebab-case.
 
@@ -137,3 +137,8 @@ trust-dialog-distrust = Don't Trust
 action-project-trust = Trust This Project…
 action-project-untrust = Stop Trusting This Project
 trust-save-failed = Could not save the project trust
+
+## File watching. The Host sends these as notifications (notification.show, crates/pw-fs/src/watch).
+
+# $root: the watched root, $seconds: polling interval in seconds
+fs-watch-limit = The file watch limit (fs.inotify.max_user_watches) was reached; some folders are checked every { $seconds } seconds

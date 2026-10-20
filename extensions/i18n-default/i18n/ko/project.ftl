@@ -1,4 +1,4 @@
-### 프로젝트 창: 툴 윈도우 이름과 열기 액션, 에디터 탭, 상태바, 백그라운드 작업, 알림, 런타임 환경, 프로젝트 신뢰.
+### 프로젝트 창: 툴 윈도우 이름과 열기 액션, 에디터 탭, 상태바, 백그라운드 작업, 알림, 런타임 환경, 프로젝트 신뢰, 파일 감시.
 
 ## 툴 윈도우 이름. id 는 툴 윈도우 id(src/layout/project-layout.ts 의 PANELS)를 kebab-case 로 쓴 것이다.
 
@@ -136,3 +136,8 @@ trust-dialog-distrust = 신뢰하지 않음
 action-project-trust = 이 프로젝트 신뢰…
 action-project-untrust = 이 프로젝트 신뢰 해제
 trust-save-failed = 프로젝트 신뢰를 저장하지 못했다
+
+## 파일 감시. Host 가 알림(notification.show)으로 낸다(crates/pw-fs/src/watch).
+
+# $root: 감시하는 루트, $seconds: 폴링 간격(초)
+fs-watch-limit = 파일 감시 한도(fs.inotify.max_user_watches)를 넘어 일부 폴더는 { $seconds }초마다 확인한다

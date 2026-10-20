@@ -1,6 +1,6 @@
 [package]
 name = "pw-fs"
-description = "Pitwall file system service: listing, stat, ranged reads and atomic writes inside the project roots"
+description = "Pitwall file system service: listing, stat, ranged reads, atomic writes and watching inside the project roots"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,8 @@ publish.workspace = true
 base64 = "0.22.1"
 # .gitignore · .ignore · 전역 gitignore 판정(ripgrep 과 같은 규칙, Unlicense OR MIT). M1-07 · M1-12 도 같은 크레이트를 쓴다.
 ignore = "0.4.33"
+# 파일 감시(src/watch). pw-core 의 설정 감시와 같은 버전이다.
+notify = "8.2.0"
 pw-core = { path = "../pw-core" }
 pw-rpc = { path = "../pw-rpc" }
 schemars = { workspace = true }
@@ -19,8 +21,10 @@ serde_json = { workspace = true }
 # `version` 의 내용 해시. 버전은 Tauri 트리의 것과 같게 둔다.
 sha2 = "0.10.9"
 specta = { workspace = true, features = ["derive"] }
-# 디스크 IO 를 블로킹 스레드로 보낸다.
-tokio = { workspace = true, features = ["rt"] }
+# 디스크 IO 를 블로킹 스레드로 보낸다. `fs.watch` 스트림이 감시 방식의 바뀜을 기다린다(sync).
+tokio = { workspace = true, features = ["rt", "sync"] }
+# 감시 오류 · 한도 초과를 로그에 남긴다. 버전은 pw-runtime 과 같게 둔다.
+tracing = "0.1.44"
 
 [target."cfg(unix)".dependencies]
 # access(2) 로 실제 쓰기 가능 여부를 본다. 버전은 pw-open-with · 데스크톱 크레이트와 같게 둔다.
@@ -32,4 +36,4 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
