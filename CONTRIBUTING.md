@@ -44,7 +44,8 @@ cargo nextest run -p pw-core                       # 크레이트 하나(예: pw
 cargo nextest run -p pw-core crate_name            # 이름에 crate_name 이 든 테스트만
 cargo test -p pw-rpc --doc                         # 크레이트 하나의 doctest(nextest 는 doctest 를 돌리지 않는다)
 pnpm --filter @pitwall/domain test                 # 패키지 하나(예: @pitwall/domain)
-cargo test --release -p pw-syntax --test perf -- --ignored --nocapture   # 구문 강조 성능(release, 기본 시험에서 빠진다)
+cargo test --release -p pw-syntax --test perf -- --ignored --nocapture --test-threads 1   # 구문 강조 성능 · 상한 측정(release, 기본 시험에서 빠진다)
+cargo test --release -p pw-syntax --test perf -- --ignored --nocapture --exact measure_memory   # 문법 메모리(RSS) — 다른 측정과 한 프로세스에서 돌면 기준선이 섞이므로 따로
 ```
 
 **테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N test(s) run: N passed`), doctest 는 크레이트마다 `test result: ok. N passed` 줄, Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.
@@ -128,7 +129,7 @@ RPC 의 TS 타입·메서드 목록·JSON Schema 는 `rpc_method!` 선언과 그
 
 구문 분석(`crates/pw-syntax`, `docs/design/07-extensibility.md` §4.2)이 쓰는 내장 언어는 `extensions/lang-<문법>/` 이다. 그 안의 `grammars/<문법>.wasm` · `queries/<문법>/highlights.scm` · `LICENSE*` 는 **생성물**이고 저장소에 커밋한다 — 일반 빌드 · 시험에는 tree-sitter CLI 가 필요 없다. 출처표는 `scripts/grammars.toml`(문법마다 저장소 · 태그 · 커밋 · 라이선스 · 쿼리 파일 순서 · 만든 파일의 SHA-256)이다.
 
-- **생성물을 손으로 고치지 않는다.** 출처표를 고치고 `mise run grammars`(`node scripts/grammars.mjs build [문법…]`)로 다시 만든다. 스크립트는 고정 커밋의 소스를 `target/grammars/src/` 에 받아 `tree-sitter build --wasm` 으로 WASM 을 만들고(CLI 가 wasi-sdk · binaryen 을 자기 캐시에 받는다), 쿼리를 이어 붙이고, 출처표의 해시 줄을 고친다. `mise run lint` 의 `node scripts/grammars.mjs check` 가 커밋된 파일의 해시 · 표에 없는 WASM · `licenses/vendored.md` 의 고지(커밋 해시)를 본다.
+- **생성물을 손으로 고치지 않는다.** 출처표를 고치고 `mise run grammars`(`node scripts/grammars.mjs build [문법…]`)로 다시 만든다. 스크립트는 고정 커밋의 소스를 `target/grammars/src/` 에 받아 `tree-sitter build --wasm` 으로 WASM 을 만들고(CLI 가 wasi-sdk · binaryen 을 자기 캐시에 받는다), 쿼리를 이어 붙이고, 출처표의 해시 줄을 고친다. `mise run lint` 의 `node scripts/grammars.mjs check` 가 커밋된 파일의 해시 · 표에 없는 WASM(`extensions/` 아래 어디에 있든) · `licenses/vendored.md` 의 고지(커밋 해시)를 본다. 보지 않는 것: 매니페스트의 `grammar` · `queries` 가 어느 파일을 가리키는가(표에 있는 다른 문법을 가리켜도 통과한다 — 강조 스냅숏 시험이 잡는다), `highlights.scm` 밖의 쿼리 파일.
 - 재현성: 같은 CLI 버전 · 같은 커밋이면 바이트가 같다(macOS 에서 경로를 바꿔 두 번 만들어 확인). `node scripts/grammars.mjs verify [문법…]` 이 `target/grammars/verify/` 에 다시 만들어 출처표의 해시와 견준다 — 다른 OS 에서 만든 결과가 다르면 이것으로 차이를 본다.
 - 쿼리 순서: 같은 노드를 여러 패턴이 잡으면 뒤 패턴이 이긴다(tree-sitter 강조기와 같다). 그래서 바탕 쿼리를 먼저 둔다 — 원본의 `tree-sitter.json` 이 반대로 둔 TypeScript · TSX 는 거꾸로 이었다(출처표의 주석).
 - 강조 결과는 시험 `crates/pw-syntax/tests/highlights.rs` 가 언어마다 픽스처 하나(`tests/fixtures/`)를 스냅숏(`tests/snapshots/`, insta)과 견준다. 문법이나 토큰 규칙을 바꿔 결과가 달라지면 `cargo insta review`(또는 `INSTA_UPDATE=always` 로 시험을 돌려 쓴 `.snap` 의 diff)로 확인하고 받아들인다. 픽스처는 시험 입력이라 oxfmt 가 포맷하지 않는다.
