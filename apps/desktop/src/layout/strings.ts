@@ -1,10 +1,12 @@
-// 프로젝트 창(툴 윈도우 · 상태바 · 백그라운드 작업 · 런타임 환경 · 신뢰 · 알림)이 보여 주는 문자열. 내용은 Fluent 리소스
+// 프로젝트 창(툴 윈도우 · 에디터 탭 · 상태바 · 백그라운드 작업 · 런타임 환경 · 신뢰 · 알림)이 보여 주는 문자열. 내용은 Fluent 리소스
 // (extensions/i18n-default/i18n/*/project.ftl)에 있고, 이 파일은 화면 자리와 메시지 id 를 잇는다. 여기 적은 id 가 ko · en
 // 리소스에 모두 있는지는 src/i18n/resources.test.ts 가 본다 — 툴 윈도우 이름은 PANELS 의 모든 id 를 거기서 부른다.
 
 import { useLocalization } from "@fluent/react";
+import type { Platform } from "@pitwall/keymap";
 import { useMemo } from "react";
 
+import type { ViewerKind } from "../editor/viewer-kinds";
 import { type Translate, translator } from "../i18n/localization";
 import { PANELS } from "./project-layout";
 
@@ -26,7 +28,32 @@ export function projectStrings(t: Translate) {
       right: t("tool-window-bar-right"),
     },
     placeholder: (name: string) => t("tool-window-placeholder", { name }),
-    editorArea: t("editor-area-placeholder"),
+    editor: {
+      /** 가운데에 탭이 하나도 없을 때(빈 영역 표시). */
+      empty: t("editor-empty"),
+      loading: t("editor-loading"),
+      failed: (message: string) => t("editor-read-failed", { message }),
+      /** `size`: 「12.3 MiB」 처럼 단위까지 붙인 크기. */
+      tooLarge: (size: string) => t("editor-too-large", { size }),
+      notUtf8: t("editor-not-utf8"),
+      readOnlyLarge: t("editor-read-only-large"),
+      noViewer: (kind: ViewerKind) => t("editor-no-viewer", { kind }),
+      openFailed: (path: string) => t("editor-open-failed", { path }),
+      copyFailed: t("editor-copy-path-failed"),
+      pinned: t("editor-tab-pinned"),
+      menu: { pin: t("editor-tab-pin"), unpin: t("editor-tab-unpin") },
+      switcher: t("editor-switcher-label"),
+      actions: {
+        closeTab: t("action-editor-close-tab"),
+        closeOtherTabs: t("action-editor-close-other-tabs"),
+        splitRight: t("action-editor-split-right"),
+        togglePin: t("action-editor-toggle-pin"),
+        toggleMaximized: t("action-editor-toggle-maximized"),
+        copyPath: t("action-editor-copy-path"),
+        reveal: (platform: Platform) => t("action-editor-reveal", { platform }),
+        switcher: t("action-editor-switcher"),
+      },
+    },
     status: {
       label: t("status-bar-label"),
       connecting: t("status-host-connecting"),

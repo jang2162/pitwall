@@ -82,7 +82,7 @@ export function toolWindowActions(
 ): Action[] {
   const enabled = () => getApi() !== undefined;
   return [
-    ...PANELS.filter((p) => p.home !== "editor").map((panel): Action => ({
+    ...PANELS.map((panel): Action => ({
       id: `toolWindow.${panel.id}`,
       label: strings.toolWindowAction(strings.toolWindows[panel.id] ?? panel.id),
       keywords: [`Tool Window ${panel.id}`],

@@ -1,6 +1,7 @@
 // 프로젝트 창이 받는 열기 요청(src-tauri/src/windows.rs 의 ProjectOpen · PendingOpens). 요청은 Rust 의 창별 큐에 쌓이고,
 // 창은 마운트할 때와 `project://open` 알림을 받을 때 `take_pending_project_opens` 로 꺼낸다. 새 창의 첫 요청도 같은 큐로
-// 온다(쿼리에는 프로젝트 id 만 있다). 받을 에디터가 아직 없어 지금은 로그만 남긴다(M0-10).
+// 온다(쿼리에는 프로젝트 id 만 있다). 꺼낸 요청은 `projectOpenInbox` 에 넣고, 창의 에디터가 마운트되면 그것을 받아 탭을
+// 연다(src/editor/editor-workspace.ts) — 꺼내기는 React 보다 먼저(main.tsx) 시작하므로 그사이 온 요청은 inbox 가 들고 있다.
 
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -13,7 +14,9 @@ export interface ProjectOpen {
   worktree?: string;
   /** 열 파일의 절대 경로. 디렉터리는 Rust 가 걸러 오지 않는다. */
   file?: string;
+  /** 1부터. */
   line?: number;
+  /** 1부터(글자 단위). */
   col?: number;
 }
 
@@ -82,3 +85,30 @@ export function watchProjectOpens(
     unlisten?.();
   };
 }
+
+/**
+ * 받을 곳이 생길 때까지 요청을 모아 두는 우편함. 받는 쪽은 `connect` 로 붙고(그때 모인 것을 온 순서대로 받는다), 해제 함수로 뗀다.
+ * 붙은 쪽이 없는 동안 온 요청은 다시 모인다. 받는 쪽은 하나다 — 새로 붙으면 앞의 것을 대신한다.
+ */
+export function createOpenInbox() {
+  const waiting: ProjectOpen[] = [];
+  let receiver: ((open: ProjectOpen) => void) | undefined;
+  return {
+    push(open: ProjectOpen) {
+      if (receiver) receiver(open);
+      else waiting.push(open);
+    },
+    connect(onOpen: (open: ProjectOpen) => void): () => void {
+      receiver = onOpen;
+      for (const open of waiting.splice(0)) onOpen(open);
+      return () => {
+        if (receiver === onOpen) receiver = undefined;
+      };
+    },
+  };
+}
+
+export type OpenInbox = ReturnType<typeof createOpenInbox>;
+
+/** 이 창의 우편함. main.tsx 가 넣고 에디터가 꺼낸다. */
+export const projectOpenInbox: OpenInbox = createOpenInbox();

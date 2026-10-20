@@ -101,34 +101,13 @@ function tabOf(title: string) {
   return tab;
 }
 
-it("draws the editor tab without a close button, unlike tool window tabs", async () => {
-  await mount(memoryStorage());
-  expect(tabOf("에디터").querySelector(".dv-default-tab-action")).toBeNull();
-  expect(tabOf("프로젝트").querySelector(".dv-default-tab-action")).not.toBeNull();
-});
-
-it("keeps the editor when its focused tab gets Delete", async () => {
-  const api = await mount(memoryStorage());
-  const tab = tabOf("에디터");
-  await act(async () => {
-    tab.focus();
-    tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
-  });
-  expect(api.getPanel("editor")).toBeDefined();
-  expect(api.groups.find((g) => g.panels.some((p) => p.id === "editor"))?.api.location.type).toBe(
-    "grid",
-  );
-});
-
 it("names the tabs in the UI language and renames them when the language changes", async () => {
   const storage = memoryStorage();
   const api = await mount(storage, "ko");
-  expect(tabOf("에디터")).toBeDefined();
   expect(tabOf("쿼리 결과")).toBeDefined();
   expect(api.getPanel("terminal")!.title).toBe("터미널");
 
   await act(async () => render(storage, "en", () => {}));
-  expect(tabOf("Editor")).toBeDefined();
   expect(tabOf("Query Results")).toBeDefined();
   expect(api.getPanel("terminal")!.title).toBe("Terminal");
 });

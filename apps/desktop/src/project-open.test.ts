@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createOpenInbox,
   describeOpen,
   type ProjectOpen,
   type ProjectOpenSource,
@@ -104,5 +105,23 @@ describe("describeOpen", () => {
     );
     expect(describeOpen({ file: "/a.rs", line: 7 })).toBe("file /a.rs:7");
     expect(describeOpen({})).toBeUndefined();
+  });
+});
+
+describe("createOpenInbox", () => {
+  it("keeps requests until a receiver connects, then hands them over in order", () => {
+    const inbox = createOpenInbox();
+    inbox.push({ file: "/p/a" });
+    inbox.push({ file: "/p/b" });
+    const got: ProjectOpen[] = [];
+    const off = inbox.connect((o) => got.push(o));
+    inbox.push({ file: "/p/c" });
+    expect(got.map((o) => o.file)).toEqual(["/p/a", "/p/b", "/p/c"]);
+    off();
+    // 떼어 낸 뒤의 요청은 다음에 붙는 쪽이 받는다(StrictMode 의 다시 붙이기).
+    inbox.push({ file: "/p/d" });
+    const later: ProjectOpen[] = [];
+    inbox.connect((o) => later.push(o));
+    expect(later.map((o) => o.file)).toEqual(["/p/d"]);
   });
 });

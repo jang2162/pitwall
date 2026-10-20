@@ -1,10 +1,11 @@
 // 외부 도구로 열기(04 F8-4, 10-ui 「외부 도구 · 프로젝트」 단축키): 「다음에서 열기」 팝업(⌥F1)과 기본 도구로 바로 열기(⌘⌥E).
-// 웹뷰는 도구 id 와 문맥(프로젝트 · 활성 워크트리)만 넘기고, 명령을 만들어 띄우는 것은 Host 다(openWith.run, crates/pw-open-with).
+// 웹뷰는 도구 id 와 문맥(프로젝트 · 활성 워크트리 · 활성 탭의 파일과 커서 줄 · 열)만 넘기고, 명령을 만들어 띄우는 것은 Host 다
+// (openWith.run, crates/pw-open-with — 파일 경로의 정규화 · 범위 검사도 그쪽이 한다).
 //
 // 팝업은 상단 검색 팝업(ui/search-popup.tsx)이라 IME 조합 중 Enter · Esc 규칙이 같다. 열린 동안은 창 단축키가 꺼진다
 // (useKeymapPopup). 실행하지 못한 이유는 조용히 넘기지 않고 `onError` 로 문장을 넘긴다 — 창이 그 자리에 보여 준다.
 
-import type { Action } from "@pitwall/keymap";
+import type { Action, Platform } from "@pitwall/keymap";
 import type { LaunchProblem, OpenWithList, OpenWithOutcome } from "@pitwall/rpc-client";
 import { Command } from "cmdk";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -22,7 +23,22 @@ export interface OpenWithTarget {
   name: string;
   /** 활성 워크트리의 꼭대기(`ActiveWorktree.top`). */
   worktree?: string;
+  /** 활성 탭의 파일(절대 경로). 있으면 도구의 `file_command` 로 연다(04 F8-4 「현재 파일/라인 유지」). */
+  file?: string;
+  /** 1부터. */
+  line?: number;
+  column?: number;
 }
+
+/**
+ * 「Finder 에서 보기」(탭 우클릭 · `editor.reveal`)에 쓰는 내장 도구(extensions/external-tools). 파일을 상위 폴더에서 골라 보이는
+ * `file_command` 가 있다. Linux 의 `file-manager` 는 `file_command` 가 없어 프로젝트 폴더를 연다.
+ */
+export const REVEAL_TOOLS: Readonly<Record<Platform, string>> = {
+  mac: "finder",
+  win: "explorer",
+  linux: "file-manager",
+};
 
 type Strings = AppStrings["openWith"];
 
@@ -95,7 +111,13 @@ export function useOpenWith({
   target(): OpenWithTarget | undefined;
   /** 실패 문장. `undefined` 면 지난 문장을 지운다. */
   onError(message: string | undefined): void;
-}): { actions: Action[]; openPopup(target?: OpenWithTarget): void; popup: ReactNode } {
+}): {
+  actions: Action[];
+  openPopup(target?: OpenWithTarget): void;
+  /** 도구(없으면 기본 도구)로 바로 연다. 실패는 `onError` 로 간다. */
+  run(target: OpenWithTarget, tool?: string): Promise<void>;
+  popup: ReactNode;
+} {
   const T = useAppStrings().openWith;
   const { client } = useHost();
   const [popup, setPopup] = useState<{ target: OpenWithTarget; note?: string }>();
@@ -131,6 +153,11 @@ export function useOpenWith({
           projectId: forTarget.projectId,
           tool: tool ?? null,
           worktree: forTarget.worktree ?? null,
+          ...(forTarget.file && {
+            file: forTarget.file,
+            line: forTarget.line ?? null,
+            column: forTarget.column ?? null,
+          }),
         })
         .catch((e: unknown) => {
           console.warn(LOG, "openWith.run failed", e);
@@ -176,7 +203,7 @@ export function useOpenWith({
     />
   ) : null;
 
-  return { actions, openPopup, popup: element };
+  return { actions, openPopup, run, popup: element };
 }
 
 function OpenWithPopup({

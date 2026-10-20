@@ -141,7 +141,7 @@ export function App({
                 <WindowTitle kind={kind} />
               </header>
               {kind === "welcome" && <Welcome native={welcomeNative} log={log} />}
-              {kind === "project" && <ProjectWindow />}
+              {kind === "project" && <ProjectWindow log={log} />}
               {kind === "settings" && <SettingsWindow />}
               <KeymapErrorBar />
             </div>

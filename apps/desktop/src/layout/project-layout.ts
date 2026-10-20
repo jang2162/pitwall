@@ -1,13 +1,14 @@
 // 프로젝트 창의 도킹 레이아웃(docs/design/10-ui.md §2.4): 왼쪽 · 오른쪽 · 하단 툴 윈도우와 가운데 에디터 영역.
-// 툴 윈도우는 dockview 의 edge group 에, 에디터 영역은 가운데 grid 에 둔다. 지금은 모두 자리만 잡은 빈 패널이다.
+// 툴 윈도우는 dockview 의 edge group 에, 에디터 탭은 가운데 grid 의 그룹(에디터 그룹)에 둔다(결정 M1-D1, src/editor/editor-tabs.ts).
+// 툴 윈도우는 아직 대부분 자리만 잡은 빈 패널이다.
 //
 // 저장본은 `{ version, layout: dockview.toJSON() }` 이다. 읽을 수 없거나(JSON · 버전 · dockview 검사) 이 앱이 모르는
 // 패널이 들어 있으면 버리고 기본 레이아웃으로 연다. 모르는 패널을 그대로 열면 dockview 는 오류 없이 빈 탭을 만든다.
 //
-// 에디터 영역은 닫을 수 없다. 툴 윈도우 바에 에디터 자리가 없어, 닫히면 되돌릴 UI 가 없다. 탭에서 닫기를 빼고
-// (`EDITOR_TAB`), dockview 가 따로 가진 닫기 경로(포커스된 탭의 Delete · Backspace, api 의 close)는 `keepEditor` 가
-// 가운데에 다시 넣는다 — dockview 에는 닫기를 거부하는 이벤트가 없다. 에디터가 없는 저장본(닫기를 막기 전에 저장된 것)도
-// 복원한 뒤 가운데에 다시 넣는다.
+// 에디터 탭은 저장본에서 뺀다(`stripPanels`). 저장소가 프로젝트를 가리지 않는 한 칸이라(`LAYOUT_STORAGE_KEY`) 다른 프로젝트의
+// 파일 탭이 열리게 된다 — 열린 탭의 복원은 프로젝트 · 워크트리별 상태(결정 M1-D19, M1-25)가 한다. 탭을 빼서 빈 grid 그룹은
+// 복원한 뒤 지운다. 에디터 탭이 하나도 없으면 가운데는 빈 영역 표시(dockview watermark, project-window.tsx)다. 예전 저장본의
+// 「에디터 영역」 자리 패널(`editor`)도 같이 빼고 읽는다.
 //
 // 툴 윈도우를 닫는 것은 숨기기다(IntelliJ 와 같다, 10-ui §1 원칙 1). 닫은 툴 윈도우와 닫을 때 있던 자리(`hidden`)를
 // 저장본에 함께 두어, 재시작해도 숨은 채로 남고 다시 열면(툴 윈도우 바 · 열기 액션 `toolWindow.<id>`) 그 자리로 돌아온다.
@@ -20,27 +21,26 @@
 
 import type { DockviewApi, SerializedDockview } from "dockview-react";
 
+import { EDITOR_PANEL } from "../editor/editor-tabs";
+
 export type Dock = "left" | "right" | "bottom";
 
 export interface PanelSpec {
   /** 이름은 이 id 로 찾는다(layout/strings.ts 의 `toolWindows`). */
   id: string;
   /** 기본 레이아웃에서 놓이는 곳. 닫았다가 툴 윈도우 바로 다시 열 때도 이리로 돌아온다. */
-  home: Dock | "editor";
+  home: Dock;
   component: PanelComponent;
-  /** 탭 머리의 종류. project-window.tsx 의 TAB_COMPONENTS 키. 없으면 dockview 기본 탭(닫기 있음). */
-  tab?: typeof EDITOR_TAB;
 }
 
-/** 닫기(× · 가운데 클릭)가 없는 탭. */
-export const EDITOR_TAB = "noClose";
+/** 툴 윈도우 내용의 종류. project-window.tsx 의 COMPONENTS 가 이 이름마다 컴포넌트를 둔다(에디터 탭은 `EDITOR_PANEL`). */
+export type PanelComponent = "toolWindow";
 
-/** 패널 내용의 종류. project-window.tsx 의 COMPONENTS 가 이 이름마다 컴포넌트를 둔다. */
-export type PanelComponent = "toolWindow" | "editorArea";
+/** 예전 저장본의 「에디터 영역」 자리 패널. 읽을 때 뺀다(머리 주석). */
+const LEGACY_EDITOR_AREA = { id: "editor", component: "editorArea" };
 
 // 10-ui §2.4 「구역별 구성」 표의 툴 윈도우. 순서가 기본 레이아웃의 탭 순서이고, 각 무리의 첫 패널이 처음에 보인다.
 export const PANELS: readonly PanelSpec[] = [
-  { id: "editor", home: "editor", component: "editorArea", tab: EDITOR_TAB },
   { id: "project", home: "left", component: "toolWindow" },
   { id: "commit", home: "left", component: "toolWindow" },
   { id: "database", home: "left", component: "toolWindow" },
@@ -123,7 +123,7 @@ function addPanel(
   api: DockviewApi,
   panel: PanelSpec,
   inactive: boolean,
-  place: Place = panel.home === "editor" ? "centre" : panel.home,
+  place: Place = panel.home,
 ) {
   const group = place === "centre" ? centreGroup(api) : ensureDock(api, place);
   const added = api.addPanel({
@@ -131,7 +131,6 @@ function addPanel(
     // 이름은 `applyPanelTitles` 가 붙인다.
     title: panel.id,
     component: panel.component,
-    tabComponent: panel.tab,
     position: { referenceGroup: group.id },
     inactive,
   });
@@ -147,11 +146,9 @@ function expandDock(group: { location: { type: string }; isCollapsed(): boolean;
 export function buildDefaultLayout(api: DockviewApi) {
   api.clear();
   hiddenOf(api).clear();
-  addPanel(api, spec("editor")!, false);
   for (const dock of DOCKS) {
     PANELS.filter((p) => p.home === dock).forEach((panel, i) => addPanel(api, panel, i > 0));
   }
-  api.getPanel("editor")?.api.setActive();
 }
 
 /** 저장본의 `hidden`. 모르는 툴 윈도우 · 자리는 빼고 읽는다 — 이것 때문에 레이아웃 전체를 버리지 않는다. */
@@ -161,10 +158,47 @@ function readHidden(saved: unknown): Map<string, Place> {
   if (typeof hidden !== "object" || hidden === null) return out;
   for (const [id, place] of Object.entries(hidden)) {
     const known = spec(id);
-    if (known && known.home !== "editor" && PLACES.includes(place as Place))
-      out.set(id, place as Place);
+    if (known && PLACES.includes(place as Place)) out.set(id, place as Place);
   }
   return out;
+}
+
+interface SerializedGroupViews {
+  views?: unknown;
+  activeView?: unknown;
+}
+
+function stripViews(group: SerializedGroupViews | undefined, drop: ReadonlySet<string>) {
+  if (!group || !Array.isArray(group.views)) return;
+  group.views = (group.views as unknown[]).filter((v) => !drop.has(v as string));
+  if (!(group.views as unknown[]).includes(group.activeView)) delete group.activeView;
+}
+
+function stripGrid(node: unknown, drop: ReadonlySet<string>) {
+  const n = node as { type?: unknown; data?: unknown } | null;
+  if (n?.type === "leaf") stripViews(n.data as SerializedGroupViews, drop);
+  else if (n?.type === "branch" && Array.isArray(n.data))
+    n.data.forEach((child) => stripGrid(child, drop));
+}
+
+/**
+ * 저장본에서 패널을 뺀다(grid · floating · popout · edge group 의 탭 목록과 `panels`). 비게 된 그룹은 남는다 — 복원한 뒤
+ * `removeEmptyGroups` 가 지운다. `layout` 을 고친다.
+ */
+export function stripPanels(layout: SerializedDockview, drop: ReadonlySet<string>) {
+  if (drop.size === 0) return;
+  for (const id of drop) delete layout.panels[id];
+  stripGrid(layout.grid?.root, drop);
+  for (const f of layout.floatingGroups ?? []) stripViews(f.data as SerializedGroupViews, drop);
+  for (const p of layout.popoutGroups ?? []) stripViews(p.data as SerializedGroupViews, drop);
+  for (const e of Object.values(layout.edgeGroups ?? {}))
+    stripViews((e as { group?: SerializedGroupViews } | undefined)?.group, drop);
+}
+
+/** 탭이 없는 grid · floating 그룹을 지운다. edge group(툴 윈도우 dock)은 비어도 남긴다. */
+function removeEmptyGroups(api: DockviewApi) {
+  const empty = api.groups.filter((g) => g.panels.length === 0 && g.api.location.type !== "edge");
+  for (const group of empty) api.removeGroup(group);
 }
 
 /** 저장본이 이 앱이 열 수 있는 것인지. 형식 검사는 dockview 의 `fromJSON` 이 한다 — 여기서는 버전과 패널만 본다. */
@@ -182,23 +216,30 @@ function readSaved(
   if (version !== LAYOUT_VERSION || typeof layout !== "object" || layout === null) return undefined;
   const panels = (layout as { panels?: unknown }).panels;
   if (typeof panels !== "object" || panels === null) return undefined;
+  const drop = new Set<string>();
   for (const [id, panel] of Object.entries(panels)) {
-    const known = spec(id);
     const component = (panel as { contentComponent?: unknown } | null)?.contentComponent;
+    if (
+      component === EDITOR_PANEL ||
+      (id === LEGACY_EDITOR_AREA.id && component === LEGACY_EDITOR_AREA.component)
+    ) {
+      drop.add(id);
+      continue;
+    }
+    const known = spec(id);
     if (!known || component !== known.component) return undefined;
-    // 탭 종류는 저장본이 아니라 이 앱의 패널 정의를 따른다 — 닫기를 막기 전의 저장본도 에디터 탭에 닫기가 없게.
-    const normalized = panel as { tabComponent?: string };
-    if (known.tab) normalized.tabComponent = known.tab;
-    else delete normalized.tabComponent;
+    // 탭 종류는 저장본이 아니라 이 앱의 패널 정의를 따른다 — 툴 윈도우는 dockview 기본 탭(닫기 있음)이다.
+    delete (panel as { tabComponent?: string }).tabComponent;
   }
+  stripPanels(layout as SerializedDockview, drop);
   return { layout: layout as SerializedDockview, hidden: readHidden(saved) };
 }
 
-// 저장본에 없고 숨기지도 않은 패널을 제자리에 넣는다(머리 주석). 툴 윈도우는 뒤에 넣어 복원된 활성 탭을 바꾸지 않는다.
+// 저장본에 없고 숨기지도 않은 패널을 제자리에 넣는다(머리 주석). 뒤에 넣어 복원된 활성 탭을 바꾸지 않는다.
 function fillMissingPanels(api: DockviewApi) {
   for (const panel of PANELS) {
     if (api.getPanel(panel.id) || hiddenOf(api).has(panel.id)) continue;
-    addPanel(api, panel, panel.home !== "editor");
+    addPanel(api, panel, true);
   }
 }
 
@@ -220,6 +261,7 @@ export function restoreLayout(api: DockviewApi, storage: LayoutStorage): Restore
   if (saved) {
     try {
       api.fromJSON(saved.layout);
+      removeEmptyGroups(api);
       const hidden = hiddenOf(api);
       hidden.clear();
       // 저장본에 있는 패널이 `hidden` 에도 있으면(손으로 고친 저장본 등) 보이는 쪽을 믿는다.
@@ -310,26 +352,15 @@ export function applyPanelTitles(api: DockviewApi, titles: Readonly<Record<strin
   return api.onDidAddPanel(apply);
 }
 
-/** 에디터 패널이 어떤 경로로든 지워지면 가운데에 다시 넣는다. */
-export function keepEditor(api: DockviewApi) {
-  return api.onDidRemovePanel((panel) => {
-    if (panel.id !== "editor") return;
-    // 옮기기 · clear 뒤 기본 레이아웃처럼 같은 흐름 안에서 다시 생기는 경우가 있어, 흐름이 끝난 뒤에 본다.
-    queueMicrotask(() => {
-      if (!api.getPanel("editor")) addPanel(api, spec("editor")!, false);
-    });
-  });
-}
-
 /**
  * 닫힌 툴 윈도우를 숨김으로 기록한다(머리 주석). 닫을 때 있던 곳을 기억해 다시 열 때 그리로 넣는다.
- * dockview 는 옮기기 · `clear` 에서도 패널을 지웠다 다시 넣으므로, 흐름이 끝난 뒤에도 없을 때만 숨김으로 본다(`keepEditor` 와 같다).
+ * dockview 는 옮기기 · `clear` 에서도 패널을 지웠다 다시 넣으므로, 흐름이 끝난 뒤에도 없을 때만 숨김으로 본다.
  */
 export function trackHiddenPanels(api: DockviewApi) {
   const hidden = hiddenOf(api);
   const removed = api.onDidRemovePanel((panel) => {
     const known = spec(panel.id);
-    if (!known || known.home === "editor") return;
+    if (!known) return;
     let place: Place;
     try {
       place = placeOf(api, panel.group.id);

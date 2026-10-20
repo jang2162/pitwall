@@ -2,12 +2,11 @@
 import { createDockview, type DockviewApi } from "dockview-react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { EDITOR_PANEL } from "../editor/editor-tabs";
 import {
   buildDefaultLayout,
   collapseAllDocks,
-  EDITOR_TAB,
   hiddenPanels,
-  keepEditor,
   LAYOUT_STORAGE_KEY,
   LAYOUT_VERSION,
   PANELS,
@@ -46,14 +45,14 @@ function memoryStorage(initial?: string) {
   };
 }
 
-/** 패널 id → 그 패널이 든 곳(edge group 의 위치 또는 "editor"). */
+/** 패널 id → 그 패널이 든 곳(edge group 의 위치 또는 가운데 grid 면 "centre"). */
 function placement(api: DockviewApi): Record<string, string> {
   const where: Record<string, string> = {};
   for (const panel of api.panels) {
     const dock = (["left", "right", "bottom"] as const).find(
       (d) => api.getEdgeGroup(d)?.id === panel.group.id,
     );
-    where[panel.id] = dock ?? "editor";
+    where[panel.id] = dock ?? "centre";
   }
   return where;
 }
@@ -66,6 +65,27 @@ function edge(api: DockviewApi, dock: "left" | "right" | "bottom") {
 
 const defaultPlacement = Object.fromEntries(PANELS.map((p) => [p.id, p.home]));
 
+function gridGroups(api: DockviewApi) {
+  return api.groups.filter((g) => g.api.location.type === "grid");
+}
+
+/** 가운데에 에디터 탭 둘(나눈 두 그룹)을 연다. */
+function openEditorTabs(api: DockviewApi) {
+  const group = api.addGroup();
+  api.addPanel({
+    id: "editor-1",
+    component: EDITOR_PANEL,
+    params: { path: "/p/a.rs" },
+    position: { referenceGroup: group.id },
+  });
+  api.addPanel({
+    id: "editor-2",
+    component: EDITOR_PANEL,
+    params: { path: "/p/a.rs" },
+    position: { referencePanel: "editor-1", direction: "right" },
+  });
+}
+
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -77,14 +97,15 @@ afterEach(() => {
 });
 
 describe("default layout", () => {
-  it("puts every tool window at its home dock and the editor area in the centre", () => {
+  it("puts every tool window at its home dock and leaves the centre empty", () => {
     const api = dockview();
     buildDefaultLayout(api);
     expect(placement(api)).toEqual(defaultPlacement);
     expect(edge(api, "left").activePanel?.id).toBe("project");
     expect(edge(api, "bottom").activePanel?.id).toBe("run");
     expect(edge(api, "right").activePanel?.id).toBe("notifications");
-    expect(api.activePanel?.id).toBe("editor");
+    // 에디터 탭이 없으면 가운데는 빈 영역 표시(watermark)다 — 자리 패널을 두지 않는다.
+    expect(gridGroups(api)).toHaveLength(0);
   });
 });
 
@@ -370,48 +391,53 @@ describe("persistLayout", () => {
   });
 });
 
-describe("editor area", () => {
-  it("puts the editor back in the centre when a save has none", () => {
+describe("editor tabs in a save", () => {
+  it("drops editor tabs from a save and removes the groups they leave empty", () => {
     const first = dockview();
     buildDefaultLayout(first);
-    first.getPanel("editor")!.api.close();
-    expect(first.getPanel("editor")).toBeUndefined();
+    openEditorTabs(first);
+    // 가운데로 옮긴 툴 윈도우는 남는다.
+    first.getPanel("terminal")!.api.moveTo({ group: first.getPanel("editor-2")!.group });
     const storage = memoryStorage();
     saveLayout(first, storage);
 
     const second = dockview();
     expect(restoreLayout(second, storage)).toBe("restored");
+    expect(second.panels.filter((p) => p.api.component === EDITOR_PANEL)).toEqual([]);
+    expect(placement(second)).toEqual({ ...defaultPlacement, terminal: "centre" });
+    expect(gridGroups(second).map((g) => g.panels.map((p) => p.id))).toEqual([["terminal"]]);
+  });
+
+  it("opens a save from before editor tabs without its editor area panel", () => {
+    const first = dockview();
+    buildDefaultLayout(first);
+    // 예전 기본 레이아웃: 가운데에 닫기 없는 「에디터 영역」 자리 패널.
+    first.addPanel({
+      id: "editor",
+      component: "editorArea",
+      tabComponent: "noClose",
+      position: { referenceGroup: first.addGroup().id },
+    });
+    const storage = memoryStorage(
+      JSON.stringify({ version: LAYOUT_VERSION, layout: first.toJSON() }),
+    );
+
+    const second = dockview();
+    expect(restoreLayout(second, storage)).toBe("restored");
+    expect(second.getPanel("editor")).toBeUndefined();
+    expect(gridGroups(second)).toHaveLength(0);
     expect(placement(second)).toEqual(defaultPlacement);
   });
 
-  it("gives the editor its no-close tab even in a save made before the tab existed", () => {
+  it("gives tool windows the default tab even when a save names another", () => {
     const first = dockview();
     buildDefaultLayout(first);
     const layout = first.toJSON();
-    delete layout.panels.editor!.tabComponent;
-    layout.panels.project!.tabComponent = EDITOR_TAB;
+    layout.panels.project!.tabComponent = "noClose";
     const storage = memoryStorage(JSON.stringify({ version: LAYOUT_VERSION, layout }));
 
     const second = dockview();
     restoreLayout(second, storage);
-    const restored = second.toJSON().panels;
-    expect(restored.editor!.tabComponent).toBe(EDITOR_TAB);
-    expect(restored.project!.tabComponent).toBeUndefined();
-  });
-
-  it("puts a removed editor back in the centre, and leaves a moved one alone", async () => {
-    const api = dockview();
-    buildDefaultLayout(api);
-    const guard = keepEditor(api);
-
-    api.getPanel("editor")!.api.close();
-    await Promise.resolve();
-    expect(placement(api).editor).toBe("editor");
-
-    api.getPanel("editor")!.api.moveTo({ group: edge(api, "bottom") });
-    await Promise.resolve();
-    expect(api.panels.filter((p) => p.id === "editor")).toHaveLength(1);
-    expect(placement(api).editor).toBe("bottom");
-    guard.dispose();
+    expect(second.toJSON().panels.project!.tabComponent).toBeUndefined();
   });
 });

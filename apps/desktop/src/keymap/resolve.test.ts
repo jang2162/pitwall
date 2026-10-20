@@ -9,6 +9,9 @@ import {
 import type { ConfigView } from "@pitwall/rpc-client";
 import { describe, expect, it } from "vitest";
 
+import { createDocumentStore } from "../editor/documents";
+import { editorActions } from "../editor/editor-actions";
+import { createEditorWorkspace } from "../editor/editor-workspace";
 import { openWithActions } from "../open-with/open-with";
 import { createProjectActions, welcomeActions } from "../welcome/actions";
 import { appActions, toolWindowActions } from "./actions";
@@ -50,6 +53,20 @@ const ACTION_IDS = new Set(
       openPopup() {},
       openDefault() {},
     }),
+    ...editorActions({
+      workspace: createEditorWorkspace({
+        documents: createDocumentStore({
+          stat: () => Promise.reject(new Error("none")),
+          read: () => Promise.reject(new Error("none")),
+        }),
+        stat: () => Promise.reject(new Error("none")),
+        onOpenFailed() {},
+      }),
+      strings: KO_PROJECT.editor,
+      openSwitcher() {},
+      copyText: async () => {},
+      onCopyFailed() {},
+    }),
   ].map((a) => a.id),
 );
 
@@ -84,6 +101,15 @@ describe("default keymap file", () => {
     expect(label("win", "openWith.popup")).toEqual(["Alt+F1"]);
     expect(label("mac", "openWith.default")).toEqual(["⌥⌘E"]);
     expect(label("linux", "openWith.default")).toEqual(["Ctrl+Alt+E"]);
+    // 10-ui 「툴 윈도우 · 창」 · 「검색 · 이동」 — ⌘⌥W 는 Win/Linux 키가 없다(표의 「—」)
+    expect(label("mac", "editor.closeTab")).toEqual(["⌘W"]);
+    expect(label("win", "editor.closeTab")).toEqual(["Ctrl+F4"]);
+    expect(label("mac", "editor.closeOtherTabs")).toEqual(["⌥⌘W"]);
+    expect(label("win", "editor.closeOtherTabs")).toEqual([]);
+    expect(label("mac", "editor.splitRight")).toEqual(["⌘\\"]);
+    expect(label("linux", "editor.splitRight")).toEqual(["Ctrl+\\"]);
+    expect(label("mac", "editor.switcher")).toEqual(["⌃⇥"]);
+    expect(label("win", "editor.switcher")).toEqual(["Ctrl+Tab"]);
   });
 });
 

@@ -160,7 +160,7 @@ pub struct ProjectOpen {
     /// 활성 워크트리의 꼭대기(`ActiveWorktree::top`). 등록 안 된 워크트리 경로로 왔을 때(F2-5).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
-    /// 열 파일의 절대 경로. 받는 에디터가 아직 없어 창은 로그만 남긴다.
+    /// 열 파일의 절대 경로. 창이 고정 탭으로 열고 `line` · `col`(1부터)에 커서를 둔다(`src/editor/editor-workspace.ts`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

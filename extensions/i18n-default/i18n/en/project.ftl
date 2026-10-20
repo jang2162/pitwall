@@ -1,8 +1,7 @@
-### Project window: tool window names and their open actions, status bar, background tasks, notifications, runtime environment, project trust.
+### Project window: tool window names and their open actions, editor tabs, status bar, background tasks, notifications, runtime environment, project trust.
 
 ## Tool window names. The id is the tool window id (PANELS in src/layout/project-layout.ts) in kebab-case.
 
-tool-window-editor = Editor
 tool-window-project = Project
 tool-window-commit = Commit
 tool-window-database = Database
@@ -26,7 +25,46 @@ tool-window-bar-left = Left tool windows
 tool-window-bar-right = Right tool windows
 # $name: tool window name (tool-window-*)
 tool-window-placeholder = { $name } — tool window placeholder
-editor-area-placeholder = Editor area
+
+## Editor tabs (src/editor). One tab = one file; the centre groups are editor groups.
+
+editor-empty = No open files
+editor-loading = Loading…
+# $message: the error as reported
+editor-read-failed = Could not read the file: { $message }
+# $size: the file size with its unit (e.g. 72.4 MiB)
+editor-too-large = Not opened: the file is larger than 50 MiB ({ $size })
+editor-not-utf8 = This text file is not UTF-8 and cannot be shown yet
+editor-read-only-large = Opened read-only: the file is larger than 5 MiB (highlighting and wrapping off)
+# $kind: image | hex | markdown | text — the viewer kind for the file
+editor-no-viewer =
+    { $kind ->
+        [image] Image preview is not available yet
+        [hex] This is a binary file and cannot be shown yet
+       *[other] There is no viewer for this file yet
+    }
+# $path: the path that was being opened
+editor-open-failed = Could not open { $path }
+editor-copy-path-failed = Could not copy the path
+editor-tab-pinned = Pinned
+editor-tab-pin = Pin Tab
+editor-tab-unpin = Unpin Tab
+editor-switcher-label = Switcher
+
+action-editor-close-tab = Close Tab
+action-editor-close-other-tabs = Close Other Tabs
+action-editor-split-right = Split Right
+action-editor-toggle-pin = Pin / Unpin Tab
+action-editor-toggle-maximized = Maximize / Restore Editor
+action-editor-copy-path = Copy Path
+# $platform: mac | win | linux
+action-editor-reveal =
+    { $platform ->
+        [mac] Reveal in Finder
+        [win] Show in Explorer
+       *[other] Show in File Manager
+    }
+action-editor-switcher = Switcher
 
 ## Status bar
 

@@ -22,6 +22,7 @@ import { parseTheme } from "./theme/tokens";
 import {
   describeOpen,
   projectIdFromQuery,
+  projectOpenInbox,
   tauriProjectOpenSource,
   watchProjectOpens,
 } from "./project-open";
@@ -32,12 +33,14 @@ import { parseWindowKind } from "./window-kind";
 const log = installUiLog(window);
 const windowKind = parseWindowKind(window.location.search);
 log.info(`window opened: ${windowKind}`, "main");
-// 프로젝트 창이 받은 열기 요청(src-tauri/src/launch.rs · windows.rs). 받을 에디터가 생기면 그쪽으로 넘긴다.
+// 프로젝트 창이 받은 열기 요청(src-tauri/src/launch.rs · windows.rs). 활성 워크트리를 먼저 바꾸고(파일 읽기가 그 워크트리를
+// 접근 범위로 쓴다) 우편함에 넣는다 — 에디터가 마운트되면 꺼내 탭을 연다.
 if (windowKind === "project") {
   log.info(`project window: ${projectIdFromQuery(window.location.search) ?? "(none)"}`, "project");
   watchProjectOpens(tauriProjectOpenSource, (request) => {
     log.info(`open request: ${describeOpen(request) ?? "(focus only)"}`, "project");
     rememberActiveWorktree(request);
+    projectOpenInbox.push(request);
   });
 }
 const platform = detectPlatform(navigator.userAgent);

@@ -113,6 +113,30 @@ mac = "cmd+shift+f12"
 win = "ctrl+shift+f12"
 linux = "ctrl+shift+f12"
 
+# 에디터 탭(10-ui §4.2 「툴 윈도우 · 창」 · 「검색 · 이동」, src/editor/editor-actions.ts). ⌘⌥W 는 Win/Linux 기본 키가 없다(표의 「—」).
+
+[[bindings]]
+action = "editor.closeTab"
+mac = "cmd+w"
+win = "ctrl+f4"
+linux = "ctrl+f4"
+
+[[bindings]]
+action = "editor.closeOtherTabs"
+mac = "cmd+alt+w"
+
+[[bindings]]
+action = "editor.splitRight"
+mac = "cmd+backslash"
+win = "ctrl+backslash"
+linux = "ctrl+backslash"
+
+[[bindings]]
+action = "editor.switcher"
+mac = "ctrl+tab"
+win = "ctrl+tab"
+linux = "ctrl+tab"
+
 [[bindings]]
 action = "settings.open"
 mac = "cmd+,"

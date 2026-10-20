@@ -1,8 +1,7 @@
-### 프로젝트 창: 툴 윈도우 이름과 열기 액션, 상태바, 백그라운드 작업, 알림, 런타임 환경, 프로젝트 신뢰.
+### 프로젝트 창: 툴 윈도우 이름과 열기 액션, 에디터 탭, 상태바, 백그라운드 작업, 알림, 런타임 환경, 프로젝트 신뢰.
 
 ## 툴 윈도우 이름. id 는 툴 윈도우 id(src/layout/project-layout.ts 의 PANELS)를 kebab-case 로 쓴 것이다.
 
-tool-window-editor = 에디터
 tool-window-project = 프로젝트
 tool-window-commit = 커밋
 tool-window-database = DB 탐색기
@@ -26,7 +25,46 @@ tool-window-bar-left = 왼쪽 툴 윈도우
 tool-window-bar-right = 오른쪽 툴 윈도우
 # $name: 툴 윈도우 이름(tool-window-*)
 tool-window-placeholder = { $name } — 툴 윈도우 자리
-editor-area-placeholder = 에디터 영역
+
+## 에디터 탭(src/editor). 탭 하나 = 파일 하나, 가운데 그룹이 에디터 그룹이다.
+
+editor-empty = 열린 파일이 없다
+editor-loading = 읽는 중…
+# $message: 오류 원문
+editor-read-failed = 파일을 읽지 못했다: { $message }
+# $size: 파일 크기(단위 포함, 예: 72.4 MiB)
+editor-too-large = 50 MiB 를 넘는 파일이라 열지 않는다({ $size })
+editor-not-utf8 = UTF-8 이 아닌 텍스트 파일이라 아직 보이지 못한다
+editor-read-only-large = 5 MiB 를 넘는 파일이라 읽기 전용으로 연다(구문 강조 · 줄바꿈 끔)
+# $kind: image | hex | markdown | text — 그 파일의 뷰어 종류
+editor-no-viewer =
+    { $kind ->
+        [image] 이미지 미리보기는 아직 없다
+        [hex] 바이너리 파일이라 아직 보이지 못한다
+       *[other] 이 파일의 뷰어는 아직 없다
+    }
+# $path: 열려던 경로
+editor-open-failed = 파일을 열지 못했다: { $path }
+editor-copy-path-failed = 경로를 복사하지 못했다
+editor-tab-pinned = 고정됨
+editor-tab-pin = 탭 고정
+editor-tab-unpin = 탭 고정 해제
+editor-switcher-label = 탭 전환기
+
+action-editor-close-tab = 탭 닫기
+action-editor-close-other-tabs = 다른 탭 모두 닫기
+action-editor-split-right = 오른쪽으로 분할
+action-editor-toggle-pin = 탭 고정 / 고정 해제
+action-editor-toggle-maximized = 에디터 최대화 / 복원
+action-editor-copy-path = 경로 복사
+# $platform: mac | win | linux
+action-editor-reveal =
+    { $platform ->
+        [mac] Finder 에서 보기
+        [win] 탐색기에서 보기
+       *[other] 파일 관리자에서 보기
+    }
+action-editor-switcher = 탭 전환기
 
 ## 상태바
 
