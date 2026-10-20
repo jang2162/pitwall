@@ -3,8 +3,8 @@
 // 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따르고, 미신뢰면 런타임 제공자(mise 등)를 돌리지 않는다.
 //
 // 다이얼로그는 한 번만 뜬다: 창은 띄우기 전에 `project.claimTrustPrompt` 를 부르고, Host 가 「묻지 않음」 을 「미신뢰」 로 바꾼
-// 호출에만 `true` 를 준다 — 같은 프로젝트의 다른 창이 먼저 물었으면 이 창은 묻지 않는다. 한 창 안에서도 한 번만 부른다
-// (StrictMode 의 effect 두 번 · 다시 렌더에도). 답하지 않고 닫으면 미신뢰로 남고 상태바 항목에서 다시 연다.
+// 호출에만 `true` 를 준다 — 같은 프로젝트의 다른 창이 먼저 물었거나 이 창이 다시 불러도(재연결) 두 번 뜨지 않는다. 답하지
+// 않고 닫으면 미신뢰로 남고 상태바 항목에서 다시 연다.
 
 import type { Action } from "@pitwall/keymap";
 import { RpcCallError } from "@pitwall/rpc-client";
@@ -159,11 +159,9 @@ export function TrustProvider({ projectId, children }: { projectId: string; chil
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  // 창마다 한 번. 결과는 effect 정리 뒤에도 받는다 — StrictMode 가 정리한 첫 effect 의 호출이 그 한 번이다.
-  const claimed = useRef<string>(undefined);
+  // 연결마다 부른다. 결과는 effect 가 정리된 뒤에도 받는다 — 버리면 그 호출이 받은 단 한 번의 `true` 를 잃는다.
   useEffect(() => {
-    if (!client || claimed.current === projectId) return;
-    claimed.current = projectId;
+    if (!client) return;
     client.call("project.claimTrustPrompt", { id: projectId }).then(
       (first) => first && setOpen(true),
       // 저장할 수 없는 레지스트리면 묻지 않는다. 상태바 항목은 그대로 남는다.

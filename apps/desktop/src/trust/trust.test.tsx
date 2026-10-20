@@ -160,7 +160,7 @@ function unmount() {
   root = undefined;
 }
 
-/** StrictMode 로 띄운다 — effect 가 두 번 돌아도 묻기 차례는 한 번만 잡는다. */
+/** 앱처럼 StrictMode 로 띄운다(src/main.tsx). */
 async function mount() {
   const element = document.createElement("div");
   document.body.append(element);
