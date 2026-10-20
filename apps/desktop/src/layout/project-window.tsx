@@ -45,10 +45,12 @@ import {
   useEditorWorkspace,
 } from "../editor/editor-workspace";
 import { useTabSwitcher } from "../editor/tab-switcher";
+import { FileWatch } from "../fs/file-watch";
 import { useAppStrings } from "../i18n/app-strings";
 import { toolWindowActions } from "../keymap/actions";
 import { useKeymap, useRegisterActions, useRegistryVersion } from "../keymap/keymap-provider";
 import {
+  HostNotifications,
   NotificationProvider,
   NotificationsStatusItem,
   NotificationsToolWindow,
@@ -510,6 +512,7 @@ function ProjectWindowBody({
           />
           <ToolWindowBar dock="right" api={api} />
         </div>
+        {projectId !== undefined && <FileWatch projectId={projectId} />}
         {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
         {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
         <StatusBar label={strings.status.label} />
@@ -536,6 +539,7 @@ export function ProjectWindow({
   return (
     <NotificationProvider>
       <StatusBarProvider>
+        <HostNotifications projectId={projectId} />
         <TaskProvider projectId={projectId}>
           {projectId === undefined ? (
             <ProjectWindowBody log={log} closeWindow={closeWindow} />

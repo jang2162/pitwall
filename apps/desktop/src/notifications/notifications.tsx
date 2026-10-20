@@ -4,10 +4,16 @@
 // 알림을 내는 법: 창 안의 컴포넌트에서 `const notify = useNotify();` 를 받아 `notify({ level: "error", title, body })`.
 // 문장은 그 기능의 문자열(Fluent)로 만들어 넘긴다. `body` 에는 오류 원문(RPC 오류 메시지 등)을 그대로 둔다.
 //
+// Host 가 내는 알림(감시 한도 초과 등)은 버스 토픽 `notification.show`(crates/pw-core/src/notification.rs)로 온다. 창은
+// `HostNotifications` 가 Host 범위와 자기 프로젝트 범위를 구독해 같은 `notify` 로 띄운다. 제목은 Host 가 보낸 Fluent 메시지 id 를
+// 이 창의 언어로 만든다.
+//
 // 토스트는 폭주해도 쌓이지 않는다(`ToastGate`): 같은 등급 · 같은 제목은 떠 있는 토스트 하나를 덮어쓰며 횟수를 붙이고, 동시에
 // 떠 있는 토스트는 `TOAST_LIMIT` 개까지다 — 넘는 알림은 기록에만 남는다. sonner 는 보이는 수(`visibleToasts`)만 줄일 뿐
 // 받은 토스트를 모두 DOM 과 타이머로 들고 있기 때문이다.
 
+import { useLocalization } from "@fluent/react";
+import type { EventMessage, RpcClient } from "@pitwall/rpc-client";
 import type { IDockviewPanelProps } from "dockview-react";
 import { Bell, CircleAlert, Info, TriangleAlert } from "lucide-react";
 import {
@@ -24,6 +30,7 @@ import { createStore, type StoreApi, useStore } from "zustand";
 
 import { useKeymap } from "../keymap/keymap-provider";
 import { useProjectStrings } from "../layout/strings";
+import { useHost } from "../rpc/host";
 
 export type NotificationLevel = "info" | "warning" | "error";
 
@@ -154,6 +161,79 @@ export function useNotify(): (input: NotificationInput) => void {
     },
     [store, gate],
   );
+}
+
+/** Host 알림의 토픽(crates/pw-core/src/notification.rs 의 `TOPIC_SHOW`). */
+export const HOST_NOTIFICATION_TOPIC = "notification.show";
+
+/** Host 알림의 내용(crates/pw-core/src/notification.rs 의 `Notification`). */
+export interface HostNotification {
+  level: NotificationLevel;
+  /** 제목의 Fluent 메시지 id. */
+  message: string;
+  args?: Record<string, string>;
+  /** 원문 그대로 보이는 본문. */
+  body?: string;
+}
+
+const LEVELS: readonly string[] = ["info", "warning", "error"] satisfies NotificationLevel[];
+
+/**
+ * Host 범위와, `projectId` 가 있으면 그 프로젝트 범위의 Host 알림을 구독해 `show` 로 넘긴다. 구독이 실패하면 경고만 남긴다 — 그
+ * 창에 Host 알림이 오지 않을 뿐이다. 돌려준 함수가 구독을 걷는다.
+ */
+export function connectHostNotifications(
+  client: RpcClient,
+  projectId: string | null,
+  show: (notification: HostNotification) => void,
+): () => void {
+  let disposed = false;
+  const onEvent = (event: EventMessage) => {
+    if (disposed || event.topic !== HOST_NOTIFICATION_TOPIC) return;
+    const payload = event.payload as unknown as HostNotification;
+    if (typeof payload?.message !== "string") return;
+    show({ ...payload, level: LEVELS.includes(payload.level) ? payload.level : "info" });
+  };
+  const topics = [HOST_NOTIFICATION_TOPIC];
+  const subscriptions = [
+    client.subscribe({ topics }, onEvent),
+    ...(projectId === null ? [] : [client.subscribe({ projectId, topics }, onEvent)]),
+  ];
+  for (const opened of subscriptions) {
+    opened.catch((error: unknown) =>
+      console.warn("[notifications] could not follow host notifications", error),
+    );
+  }
+  return () => {
+    disposed = true;
+    for (const opened of subscriptions) {
+      opened.then((s) => s.unsubscribe()).catch(() => {});
+    }
+  };
+}
+
+/** `client` 의 Host 알림을 이 창의 알림으로 띄운다. `NotificationProvider` 안에서 부른다. */
+export function useHostNotifications(client: RpcClient | undefined, projectId?: string): void {
+  const notify = useNotify();
+  const { l10n } = useLocalization();
+  const l10nRef = useRef(l10n);
+  l10nRef.current = l10n;
+  useEffect(() => {
+    if (!client) return;
+    return connectHostNotifications(client, projectId ?? null, ({ level, message, args, body }) =>
+      notify({
+        level,
+        title: l10nRef.current.getString(message, args ?? null),
+        ...(body !== undefined && { body }),
+      }),
+    );
+  }, [client, projectId, notify]);
+}
+
+/** 이 창에 Host 알림을 띄운다. `NotificationProvider` 안에 둔다. 그리는 것은 없다. */
+export function HostNotifications({ projectId }: { projectId?: string }) {
+  useHostNotifications(useHost().client, projectId);
+  return null;
 }
 
 const ICONS = { info: Info, warning: TriangleAlert, error: CircleAlert } as const;
