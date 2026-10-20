@@ -248,6 +248,11 @@ fn the_project_root_follows_the_active_worktree() {
     )
     .unwrap();
     fs::write(main.join(".git/worktrees/wt/commondir"), "../..\n").unwrap();
+    fs::write(
+        main.join(".git/worktrees/wt/gitdir"),
+        format!("{}\n", wt.join(".git").display()),
+    )
+    .unwrap();
     let wt = fs::canonicalize(&wt).unwrap();
 
     let outcome = f.run(OpenWithRunParams {
@@ -604,6 +609,11 @@ fn rejects_a_relative_worktree() {
     )
     .unwrap();
     fs::write(main.join(".git/worktrees/wt/commondir"), "../..\n").unwrap();
+    fs::write(
+        main.join(".git/worktrees/wt/gitdir"),
+        format!("{}\n", wt.join(".git").display()),
+    )
+    .unwrap();
     let wt = fs::canonicalize(&wt).unwrap();
     let cwd = std::env::current_dir().unwrap();
     let up = "../".repeat(cwd.components().count() - 1);

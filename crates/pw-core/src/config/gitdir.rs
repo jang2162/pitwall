@@ -3,6 +3,8 @@
 //! `git` 프로세스를 띄우지 않고 파일만 읽는다. 연결 워크트리의 꼭대기에는 디렉터리가 아니라 **파일** `.git` 이 있고
 //! (`gitdir: <메인>/.git/worktrees/<이름>`), 그 gitdir 안의 `commondir` 이 메인 저장소의 `.git` 을 가리킨다.
 //! 서브모듈도 `.git` 이 파일이지만 gitdir 에 `commondir` 이 없으므로 워크트리로 보지 않는다.
+//! gitdir 의 `gitdir` 파일(git 이 워크트리마다 적는 되돌림 포인터)이 그 `.git` 파일을 가리켜야 한다 — 다른 워크트리의 관리 폴더를
+//! 가리키는 `.git` 파일 하나로 아무 폴더나 워크트리(파일 RPC 의 접근 루트)가 되지 않게.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -36,6 +38,9 @@ pub fn linked_worktree(start: &Path) -> Option<WorktreeLink> {
             return None;
         }
         let gitdir = resolve_from(dir, read_pointer(&dot_git, "gitdir:")?);
+        if !points_back(&gitdir, &dot_git) {
+            return None;
+        }
         let common = fs::read_to_string(gitdir.join("commondir")).ok()?;
         let common = fs::canonicalize(resolve_from(&gitdir, common.trim())).ok()?;
         if common.file_name()? != ".git" {
@@ -48,6 +53,19 @@ pub fn linked_worktree(start: &Path) -> Option<WorktreeLink> {
         });
     }
     None
+}
+
+/// `<gitdir>/gitdir` 이 `dot_git` 을 가리키는가. 내용은 그 워크트리의 `.git` 파일 경로다(`worktree.useRelativePaths` 면 gitdir 기준
+/// 상대 경로). 실제 경로로 비교한다.
+fn points_back(gitdir: &Path, dot_git: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(gitdir.join("gitdir")) else {
+        return false;
+    };
+    let back = resolve_from(gitdir, text.trim());
+    match (fs::canonicalize(back), fs::canonicalize(dot_git)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// `gitdir: <경로>` 형식 파일에서 경로를 읽는다.
@@ -79,6 +97,11 @@ mod tests {
         fs::create_dir_all(wt.join("sub/dir")).unwrap();
         fs::write(admin.join("commondir"), "../..\n").unwrap();
         fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", wt.join(".git").display()),
+        )
+        .unwrap();
         (fs::canonicalize(main).unwrap(), wt)
     }
 
@@ -112,6 +135,37 @@ mod tests {
         let wt = tmp.path().join("wt");
         fs::create_dir_all(&wt).unwrap();
         fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", wt.join(".git").display()),
+        )
+        .unwrap();
+        assert_eq!(linked_worktree(&wt), None);
+    }
+
+    /// 다른 워크트리의 관리 폴더를 가리키는 `.git` 파일은 워크트리가 아니다(되돌림 포인터가 그 파일을 가리키지 않는다).
+    #[test]
+    fn a_dot_git_file_must_be_pointed_back_to() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, wt) = fake_repo(tmp.path());
+        let impostor = tmp.path().join("impostor");
+        fs::create_dir_all(&impostor).unwrap();
+        fs::write(
+            impostor.join(".git"),
+            format!("gitdir: {}\n", main.join(".git/worktrees/wt").display()),
+        )
+        .unwrap();
+        assert_eq!(linked_worktree(&impostor), None);
+        assert!(linked_worktree(&wt).is_some());
+        // 상대 경로 되돌림 포인터(`worktree.useRelativePaths`)도 받는다.
+        fs::write(
+            main.join(".git/worktrees/wt/gitdir"),
+            "../../../../wt/.git\n",
+        )
+        .unwrap();
+        assert!(linked_worktree(&wt).is_some());
+        // 되돌림 포인터가 없으면 워크트리로 보지 않는다.
+        fs::remove_file(main.join(".git/worktrees/wt/gitdir")).unwrap();
         assert_eq!(linked_worktree(&wt), None);
     }
 

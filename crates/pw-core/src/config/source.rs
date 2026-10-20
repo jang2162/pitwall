@@ -681,6 +681,11 @@ mod tests {
         fs::create_dir_all(&wt).unwrap();
         fs::write(admin.join("commondir"), "../..\n").unwrap();
         fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", wt.join(".git").display()),
+        )
+        .unwrap();
         (main, wt)
     }
 
