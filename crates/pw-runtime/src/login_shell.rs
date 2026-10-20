@@ -619,41 +619,52 @@ echo "bye PATH=/late""#,
 
     #[test]
     fn a_shell_that_hangs_fails_within_the_timeout() {
+        // 부하로 셸이 늦게 뜨면 시간 제한이 손주를 띄우기도 전에 끝나 손주를 볼 수 없다 — 그 시도는 판정하지 않고 시간 제한을
+        // 늘려 다시 한다. 시간 안에 끝나는지 · 손주까지 죽는지는 시도마다 그대로 본다.
+        for timeout in [300, 1200, 4800].map(Duration::from_millis) {
+            if let Some(grandchild) = hang_once(timeout) {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                // SAFETY: 신호 0 은 존재만 묻는다.
+                while unsafe { libc::kill(grandchild, 0) } == 0 && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                assert_ne!(
+                    unsafe { libc::kill(grandchild, 0) },
+                    0,
+                    "grandchild {grandchild} survived"
+                );
+                return;
+            }
+        }
+        panic!("the fake shell never started its grandchild before the timeout");
+    }
+
+    /// 손주(`sleep 30`)를 띄우고 멈추는 셸을 `timeout` 으로 읽는다. 시간 안에 시간 초과로 끝났는지 보고, 셸이 죽기 전에 띄운 손주의
+    /// pid 를 준다(띄우기 전에 죽었으면 `None`).
+    fn hang_once(timeout: Duration) -> Option<i32> {
         let dir = tempfile::tempdir().unwrap();
         let pid_file = dir.path().join("pid");
+        // 옆에 쓰고 옮긴다 — 쓰는 도중에 죽어도 반쯤 쓴 pid 를 읽지 않게.
         let shell = fake_shell(
             dir.path(),
-            &format!("sleep 30 & echo $! > '{}'; wait", pid_file.display()),
+            &format!(
+                "sleep 30 & echo $! > '{0}.tmp' && mv '{0}.tmp' '{0}'; wait",
+                pid_file.display()
+            ),
         );
         let started = Instant::now();
-        let read = read_env(&shell, Duration::from_millis(300));
-        assert!(
-            started.elapsed() < Duration::from_secs(3),
-            "{:?}",
-            started.elapsed()
-        );
+        let read = read_env(&shell, timeout);
+        let elapsed = started.elapsed();
+        assert!(elapsed >= timeout, "{elapsed:?}");
+        assert!(elapsed < timeout + Duration::from_secs(3), "{elapsed:?}");
         let Err(e) = read else { panic!("{read:?}") };
         assert!(e.timed_out, "{e:?}");
         assert!(
             e.reason.contains("did not print its environment within"),
             "{e:?}"
         );
-        // 셸이 띄운 손주(sleep)까지 세션째 죽였다.
-        let pid: i32 = std::fs::read_to_string(&pid_file)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        // SAFETY: 신호 0 은 존재만 묻는다.
-        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert_ne!(
-            unsafe { libc::kill(pid, 0) },
-            0,
-            "grandchild {pid} survived"
-        );
+        let pid = std::fs::read_to_string(&pid_file).ok()?;
+        Some(pid.trim().parse().unwrap())
     }
 
     /// 환경을 찍은 뒤에도 stdout 을 쥔 백그라운드 프로세스가 있어도 시간 제한까지 기다리지 않는다.
