@@ -1,7 +1,7 @@
 {
   "version": 2,
   "revisions": {
-    "default": 22
+    "default": 25
   },
   "sources": {
     "default:mcp/codegraph": "01d216780214053bd3728391bbb87db603034af0d566ca43dc52bc228378cc00",
@@ -15,7 +15,7 @@
     "default:rules/base/06-worktree-setup.md": "4fb84f38bbe4bb6b47e6d6a1c57f9df3a358f75d52737c029dac4c4fa653c66b",
     "default:rules/base/07-worktree-cleanup.md": "acfd9442e38a843ac88f0210fb7674ff435c2b4e3e0db65d6f0fd942c79f7a9f",
     "default:rules/base/08-shared-resources.md": "f68b3db0fea9443d254766dc5739596f79c986c20c82f76002e40876b22cf97d",
-    "default:rules/base/09-worker-brief.md": "d0a58241b62c20a37ec594ceedddc247e4a4fe64960b39a16e93a11bef987cc5",
+    "default:rules/base/09-worker-brief.md": "f8bfeacc7060334737380faf6cef4cd1a386f5c510cbc28ad27af13f3e20c23a",
     "default:rules/base/10-package-manager.md": "4393e7b5203dbdf3cae0b02259a3989023c359f751a9c109fe10315283412c22",
     "default:rules/base/11-docs-layout.md": "8def8e3594ee2bad6e268e1bc64b01bb337228cdd0d3d2771abe033c08bb4bd2",
     "default:rules/base/12-handoff-docs.md": "af802bc8c52903064076d2973d2da191bfcc8f6c849917ede35394cab9ac48a2",
@@ -263,7 +263,7 @@
       "items": [
         "default:rules/base/09-worker-brief.md"
       ],
-      "hash": "5a7b994686018909dfd6220f7eaadcd92acbecfccf65f9f21cb8b06efa909124"
+      "hash": "7c08b69056987d19444f2c2c68e915898e57f0cedab1f437d953008ccda61eec"
     },
     {
       "path": "docs/guideline/base/11-docs-layout.md",
