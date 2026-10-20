@@ -5,6 +5,10 @@
 //! 서브모듈도 `.git` 이 파일이지만 gitdir 에 `commondir` 이 없으므로 워크트리로 보지 않는다.
 //! gitdir 의 `gitdir` 파일(git 이 워크트리마다 적는 되돌림 포인터)이 그 `.git` 파일을 가리켜야 한다 — 다른 워크트리의 관리 폴더를
 //! 가리키는 `.git` 파일 하나로 아무 폴더나 워크트리(파일 RPC 의 접근 루트)가 되지 않게.
+//! gitdir 은 실제 경로로 **`<commondir>/worktrees/<이름>` 바로 아래**여야 한다 — git 은 관리 폴더를 언제나 그 자리에 만든다.
+//! 아니면 gitdir · `commondir` · 되돌림 포인터를 모두 제 폴더 안에 둔 위조 `.git` 하나로 아무 폴더나 남의 저장소의 워크트리가
+//! 되어 그 프로젝트의 신뢰(런타임 제공자 실행, `registry::trust`)와 파일 루트를 물려받는다. 이 검사가 있으면 위조하려면 그
+//! 저장소의 `.git` 안에 써야 하고, 그럴 수 있으면 이미 그 저장소를 가진 것이다.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,6 +47,9 @@ pub fn linked_worktree(start: &Path) -> Option<WorktreeLink> {
         }
         let common = fs::read_to_string(gitdir.join("commondir")).ok()?;
         let common = fs::canonicalize(resolve_from(&gitdir, common.trim())).ok()?;
+        if fs::canonicalize(&gitdir).ok()?.parent()? != common.join("worktrees") {
+            return None;
+        }
         if common.file_name()? != ".git" {
             // bare 저장소에 붙은 워크트리 — 메인 체크아웃이 없다.
             return None;
@@ -167,6 +174,40 @@ mod tests {
         // 되돌림 포인터가 없으면 워크트리로 보지 않는다.
         fs::remove_file(main.join(".git/worktrees/wt/gitdir")).unwrap();
         assert_eq!(linked_worktree(&wt), None);
+    }
+
+    /// gitdir · `commondir` · 되돌림 포인터를 모두 제 폴더 안에 둔 위조 `.git` 은 워크트리가 아니다 — 관리 폴더가 메인 저장소의
+    /// `.git/worktrees/` 바로 아래가 아니다. `commondir` 이 절대 경로든 상대 경로든 같다.
+    #[test]
+    fn a_gitdir_outside_the_common_worktrees_folder_is_not_a_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, wt) = fake_repo(tmp.path());
+        let evil = tmp.path().join("downloads/evil");
+        fs::create_dir_all(evil.join(".admin")).unwrap();
+        fs::write(evil.join(".git"), "gitdir: .admin\n").unwrap();
+        fs::write(evil.join(".admin/gitdir"), "../.git\n").unwrap();
+        for common in [
+            main.join(".git").display().to_string(),
+            "../../../main/.git".to_owned(),
+        ] {
+            fs::write(evil.join(".admin/commondir"), format!("{common}\n")).unwrap();
+            assert_eq!(linked_worktree(&evil), None, "commondir {common}");
+        }
+        // `worktrees/` 의 더 깊은 곳 · 다른 이름의 폴더도 git 이 만드는 자리가 아니다.
+        for admin in ["worktrees/a/b", "worktrees-x/wt", "modules/wt"] {
+            let dir = main.join(".git").join(admin);
+            fs::create_dir_all(&dir).unwrap();
+            let back = "../".repeat(admin.matches('/').count() + 3);
+            fs::write(
+                dir.join("commondir"),
+                format!("{}..\n", "../".repeat(admin.matches('/').count())),
+            )
+            .unwrap();
+            fs::write(dir.join("gitdir"), format!("{back}downloads/evil/.git\n")).unwrap();
+            fs::write(evil.join(".git"), format!("gitdir: {}\n", dir.display())).unwrap();
+            assert_eq!(linked_worktree(&evil), None, "{admin}");
+        }
+        assert!(linked_worktree(&wt).is_some());
     }
 
     #[test]

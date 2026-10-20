@@ -426,3 +426,43 @@ fn a_failing_provider_falls_back_to_the_login_shell_without_caching() {
     runtime.env("p", &f.dir());
     assert_eq!(overlay.calls.load(Ordering::SeqCst), 2);
 }
+
+/// 위조 `.git` 파일(관리 폴더 · `commondir` · 되돌림 포인터를 모두 제 폴더 안에 둔 것)로 신뢰된 프로젝트의 워크트리인 척하는
+/// 폴더에서는 `runtime.get` 이 거절되고 제공자가 돌지 않는다(`pw_core::config::gitdir`).
+#[test]
+fn a_forged_worktree_of_a_trusted_project_does_not_run_its_provider() {
+    let f = Fixture::new(WORKING);
+    let bus = EventBus::new(DEFAULT_CAPACITY);
+    let projects = registry(f.tmp.path(), &bus);
+    let trusted = f.tmp.path().join("trusted");
+    std::fs::create_dir_all(trusted.join(".git")).unwrap();
+    let id = project(&projects, &trusted);
+    let evil = f.tmp.path().join("downloads/evil");
+    std::fs::create_dir_all(evil.join(".admin")).unwrap();
+    std::fs::create_dir_all(evil.join("project")).unwrap();
+    std::fs::write(evil.join(".git"), "gitdir: .admin\n").unwrap();
+    std::fs::write(evil.join(".admin/gitdir"), "../.git\n").unwrap();
+    let overlay = Arc::new(Overlay {
+        calls: AtomicUsize::new(0),
+        fail: false,
+    });
+    let runtime = f
+        .runtime(Duration::from_secs(5))
+        .with_provider(overlay.clone())
+        .with_trust(|_| true);
+    runtime.attach(RuntimeHost { projects, bus });
+    for common in [
+        trusted.join(".git").display().to_string(),
+        "../../../trusted/.git".to_owned(),
+    ] {
+        std::fs::write(evil.join(".admin/commondir"), format!("{common}\n")).unwrap();
+        let err = runtime
+            .get(&RuntimeGetParams {
+                project_id: id.clone(),
+                dir: Some(evil.join("project").display().to_string()),
+            })
+            .unwrap_err();
+        assert_eq!(err.code, pw_rpc::code::INVALID_PARAMS, "{common}");
+    }
+    assert_eq!(overlay.calls.load(Ordering::SeqCst), 0);
+}

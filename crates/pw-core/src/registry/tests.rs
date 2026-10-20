@@ -1194,3 +1194,70 @@ fn trust_writes_are_refused_when_the_registry_cannot_be_saved() {
         );
     }
 }
+
+/// 위조 `.git` 파일 하나로 신뢰된 프로젝트의 워크트리인 척하는 폴더는 그 프로젝트로 풀리지 않고 신뢰도 물려받지 않는다.
+#[test]
+fn a_forged_worktree_does_not_inherit_the_trust_of_a_trusted_project() {
+    let f = Fixture::new();
+    let trusted_root = f.dir("trusted");
+    fs::create_dir_all(trusted_root.join(".git")).unwrap();
+    let trusted = f.add(&trusted_root);
+    f.registry.set_trust(&trusted.id, true).unwrap();
+    let evil = f.dir("downloads/evil");
+    fs::create_dir_all(evil.join(".admin")).unwrap();
+    fs::write(evil.join(".git"), "gitdir: .admin\n").unwrap();
+    fs::write(evil.join(".admin/gitdir"), "../.git\n").unwrap();
+    for common in [
+        s(&trusted_root.join(".git")),
+        "../../../trusted/.git".to_owned(),
+    ] {
+        fs::write(evil.join(".admin/commondir"), format!("{common}\n")).unwrap();
+        assert_eq!(f.resolve(&evil.join("mise.toml")), None, "{common}");
+    }
+    let registered = f.add(&evil);
+    let trust = f.registry.trust(&registered.id).unwrap();
+    assert_eq!(trust.owner_id, registered.id);
+    assert_eq!(trust.state, TrustState::Unknown);
+    assert!(!f.registry.is_trusted(&registered.id));
+}
+
+/// 메인 체크아웃 밖에 상대 경로(`--relative-paths`)로 만든 실제 워크트리는 계속 메인 저장소 프로젝트로 풀리고 그 신뢰를 따른다.
+#[test]
+fn a_relative_paths_worktree_still_follows_the_main_repository() {
+    let f = Fixture::new();
+    let main = f.dir("repo");
+    git(&main, &["init", "-q"]);
+    git(
+        &main,
+        &["commit", "-q", "--allow-empty", "--no-verify", "-m", "init"],
+    );
+    let wt_path = f.base.join("elsewhere/wt");
+    fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--relative-paths",
+            "-b",
+            "rel",
+            &s(&wt_path),
+        ],
+    );
+    let gitfile = fs::read_to_string(wt_path.join(".git")).unwrap();
+    assert!(
+        gitfile.contains("gitdir: ../"),
+        "relative gitdir: {gitfile}"
+    );
+    let main = real(&main);
+    let wt = real(&wt_path);
+    let project = f.add(&main);
+    let hit = f.resolve(&wt.join("src/x.rs")).unwrap();
+    assert_eq!(hit.project.id, project.id);
+    assert_eq!(hit.worktree.unwrap().top, s(&wt));
+    let own = f.add(&wt);
+    f.registry.set_trust(&project.id, true).unwrap();
+    assert_eq!(f.registry.trust(&own.id).unwrap().owner_id, project.id);
+    assert!(f.registry.is_trusted(&own.id));
+}
