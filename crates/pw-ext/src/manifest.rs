@@ -107,7 +107,8 @@ pub struct KeymapDecl {
     pub file: PathRef,
 }
 
-/// `[contributes.languages.<id>]`(07 §2 · §4.3). 지금은 저장만 한다.
+/// `[contributes.languages.<id>]`(07 §2 · §4.3). 확장자는 언어 판별(`pw-lang`)이, 문법 · 쿼리는 구문 분석 서비스(`pw-syntax`)가
+/// 처음 쓸 때 읽는다(레지스트리는 있는지만 본다).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LanguageDecl {
     pub id: String,

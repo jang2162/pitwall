@@ -167,6 +167,25 @@ export type UnaryMethods = {
 	 */
 	"runtime.reload": { params: RuntimeReloadParams; result: null };
 	/**
+	 * 문서를 닫는다. 없는 id 도 성공이다.
+	 */
+	"syntax.close": { params: SyntaxCloseParams; result: null };
+	/**
+	 * 문서에 편집을 적용한다(다시 파싱은 다음 `syntax.highlights` 때 바뀐 곳만 한다). 열지 않은 문서는 not found,
+	 * 이미 지난 버전 · 기다리는 편집이 너무 많으면 conflict(`data.version` 에 지금 버전 — 다시 연다), 범위가 텍스트 밖이면
+	 * invalid params(아무것도 바꾸지 않는다).
+	 */
+	"syntax.edit": { params: SyntaxEditParams; result: null };
+	/**
+	 * 범위 안의 강조 구간. 열지 않은 문서는 not found, `from > to` 는 invalid params.
+	 */
+	"syntax.highlights": { params: SyntaxHighlightsParams; result: SyntaxHighlightsResult };
+	/**
+	 * 문서를 연다(이미 있는 id 면 다시 연다). 문법을 처음 쓰면 여기서 올린다. 문법을 올리지 못하면 internal 오류다(그 문서는
+	 * 닫힌다).
+	 */
+	"syntax.open": { params: SyntaxOpenParams; result: SyntaxOpenResult };
+	/**
 	 * 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.
 	 */
 	"task.cancel": { params: TaskCancelParams; result: boolean };
@@ -268,6 +287,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":false},
 	"search.text": {"name":"search.text","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchTextParams","output":"SearchTextChunk","doc":" 프로젝트 안의 텍스트 검색. 결과를 파일별 묶음 청크로 보내고 마지막에 `done` 청크 하나를 보낸다. 규칙(ignore · 심링크 ·\n 바이너리 · 50 MiB · 벤더/생성 제외 · 결과 상한)은 `pw_fs::search` 머리 주석. 루트 밖 경로 · 빈 질의 · 잘못된 정규식 ·\n 글롭은 invalid params 로, 없는 경로는 `NOT_FOUND` 로 스트림이 `failed` 로 끝난다(청크 없이).\n","mcp":false},
+	"syntax.close": {"name":"syntax.close","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SyntaxCloseParams","output":"()","doc":" 문서를 닫는다. 없는 id 도 성공이다.\n","mcp":false},
+	"syntax.edit": {"name":"syntax.edit","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SyntaxEditParams","output":"()","doc":" 문서에 편집을 적용한다(다시 파싱은 다음 `syntax.highlights` 때 바뀐 곳만 한다). 열지 않은 문서는 not found,\n 이미 지난 버전 · 기다리는 편집이 너무 많으면 conflict(`data.version` 에 지금 버전 — 다시 연다), 범위가 텍스트 밖이면\n invalid params(아무것도 바꾸지 않는다).\n","mcp":false},
+	"syntax.highlights": {"name":"syntax.highlights","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SyntaxHighlightsParams","output":"SyntaxHighlightsResult","doc":" 범위 안의 강조 구간. 열지 않은 문서는 not found, `from > to` 는 invalid params.\n","mcp":false},
+	"syntax.open": {"name":"syntax.open","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SyntaxOpenParams","output":"SyntaxOpenResult","doc":" 문서를 연다(이미 있는 id 면 다시 연다). 문법을 처음 쓰면 여기서 올린다. 문법을 올리지 못하면 internal 오류다(그 문서는\n 닫힌다).\n","mcp":false},
 	"task.cancel": {"name":"task.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"TaskCancelParams","output":"bool","doc":" 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.\n","mcp":false},
 	"task.list": {"name":"task.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"TaskListParams","output":"Vec<TaskInfo>","doc":" 끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.\n","mcp":false},
 	"terminal.close": {"name":"terminal.close","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalCloseParams","output":"()","doc":" 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다.\n","mcp":false},
@@ -653,6 +676,13 @@ export type FsWritten = {
 	mtimeMs: number | null,
 	/**  쓴 뒤의 `version`. 다음 쓰기의 `expectedVersion`. */
 	version: string,
+};
+
+export type HighlightSpan = {
+	from: number,
+	to: number,
+	/**  테마 토큰 이름은 `syntax.<token>` 이다(`docs/design/07-extensibility.md` 「3. 테마」). */
+	token: SyntaxToken,
 };
 
 export type HostInfo = {
@@ -1264,6 +1294,53 @@ export type Subscribed = {
 	subscriptionId: number,
 };
 
+export type SyntaxCloseParams = {
+	docId: string,
+};
+
+export type SyntaxEditParams = {
+	docId: string,
+	/**  이 편집을 적용한 뒤의 버전 = 앞 버전 + 1. */
+	version: number,
+	/**
+	 *  차례로 적용한다 — 각 바꾸기의 위치는 앞 바꾸기를 적용한 뒤의 텍스트 기준이다. CodeMirror 의 `iterChanges(fromA, toA,
+	 *  fromB, _, inserted)` 는 `{ from: fromB, to: fromB + (toA - fromA), insert: inserted }` 로 옮긴다.
+	 */
+	changes: TextChange[],
+};
+
+export type SyntaxHighlightsParams = {
+	docId: string,
+	/**  강조할 범위(화면에 보이는 줄들). 문서 끝을 넘으면 끝에서 자른다. */
+	range: TextRange,
+};
+
+export type SyntaxHighlightsResult = {
+	/**  이 구간들을 계산한 텍스트의 버전. 웹뷰의 지금 버전과 다르면 버린다(그 사이 편집이 있었다). */
+	version: number,
+	/**  겹치지 않고 앞에서부터 차례다. 토큰이 없는 곳(평문)은 빠진다. */
+	spans: HighlightSpan[],
+};
+
+export type SyntaxOpenParams = {
+	/**  클라이언트가 정한 문서 id. 같은 id 로 다시 열면 앞 문서를 버리고 새로 연다(어긋났을 때 다시 맞추는 길). */
+	docId: string,
+	/**  Linguist 언어 이름(`lang.detect` 의 결과). 언어 확장의 `linguist` 와 대소문자 없이 맞춘다. */
+	language: string,
+	text: string,
+};
+
+export type SyntaxOpenResult = {
+	/**
+	 *  쓰는 언어 기여의 id(`[contributes.languages.<id>]`). `null` 이면 그 언어의 문법이 없다 — 문서를 열지 않았다(플레인
+	 *  텍스트로 보인다). 열린 문서의 버전은 0 이다.
+	 */
+	grammar: string | null,
+};
+
+/**  구문 토큰. 와이어에는 이름(`"function.method"`)으로 나간다. 테마 토큰은 `syntax.<이름>` 이다. */
+export type SyntaxToken = "attribute" | "boolean" | "comment" | "comment.documentation" | "constant" | "constant.builtin" | "constructor" | "embedded" | "function" | "function.builtin" | "function.macro" | "function.method" | "keyword" | "label" | "markup.bold" | "markup.heading" | "markup.italic" | "markup.link" | "markup.link.url" | "markup.raw" | "module" | "number" | "operator" | "property" | "punctuation" | "punctuation.bracket" | "punctuation.delimiter" | "punctuation.special" | "string" | "string.escape" | "string.regexp" | "string.special" | "string.special.key" | "tag" | "type" | "type.builtin" | "variable" | "variable.builtin" | "variable.parameter";
+
 export type TaskCancelParams = {
 	taskId: number,
 };
@@ -1338,6 +1415,18 @@ export type TerminalResizeParams = {
 	terminalId: number,
 	cols: number,
 	rows: number,
+};
+
+/**  바꾸기 하나: `from..to` 를 `insert` 로. */
+export type TextChange = {
+	from: number,
+	to: number,
+	insert: string,
+};
+
+export type TextRange = {
+	from: number,
+	to: number,
 };
 
 export type ThemeAppearance = "light" | "dark";

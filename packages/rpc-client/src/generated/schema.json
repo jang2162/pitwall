@@ -4594,6 +4594,289 @@
       ],
       "tier": "read"
     },
+    "syntax.close": {
+      "description": "문서를 닫는다. 없는 id 도 성공이다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "docId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "syntax.edit": {
+      "description": "문서에 편집을 적용한다(다시 파싱은 다음 `syntax.highlights` 때 바뀐 곳만 한다). 열지 않은 문서는 not found,\n이미 지난 버전 · 기다리는 편집이 너무 많으면 conflict(`data.version` 에 지금 버전 — 다시 연다), 범위가 텍스트 밖이면\ninvalid params(아무것도 바꾸지 않는다).",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "TextChange": {
+            "description": "바꾸기 하나: `from..to` 를 `insert` 로.",
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "insert": {
+                "type": "string"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "insert"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "changes": {
+            "description": "차례로 적용한다 — 각 바꾸기의 위치는 앞 바꾸기를 적용한 뒤의 텍스트 기준이다. CodeMirror 의 `iterChanges(fromA, toA,\nfromB, _, inserted)` 는 `{ from: fromB, to: fromB + (toA - fromA), insert: inserted }` 로 옮긴다.",
+            "items": {
+              "$ref": "#/$defs/TextChange"
+            },
+            "type": "array"
+          },
+          "docId": {
+            "type": "string"
+          },
+          "version": {
+            "description": "이 편집을 적용한 뒤의 버전 = 앞 버전 + 1.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "docId",
+          "version",
+          "changes"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "syntax.highlights": {
+      "description": "범위 안의 강조 구간. 열지 않은 문서는 not found, `from > to` 는 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "TextRange": {
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "type": "string"
+          },
+          "range": {
+            "$ref": "#/$defs/TextRange",
+            "description": "강조할 범위(화면에 보이는 줄들). 문서 끝을 넘으면 끝에서 자른다."
+          }
+        },
+        "required": [
+          "docId",
+          "range"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HighlightSpan": {
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "token": {
+                "$ref": "#/$defs/SyntaxToken",
+                "description": "테마 토큰 이름은 `syntax.<token>` 이다(`docs/design/07-extensibility.md` 「3. 테마」)."
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "token"
+            ],
+            "type": "object"
+          },
+          "SyntaxToken": {
+            "description": "구문 토큰. 와이어에는 이름(`\"function.method\"`)으로 나간다. 테마 토큰은 `syntax.<이름>` 이다.",
+            "enum": [
+              "attribute",
+              "boolean",
+              "comment",
+              "comment.documentation",
+              "constant",
+              "constant.builtin",
+              "constructor",
+              "embedded",
+              "function",
+              "function.builtin",
+              "function.macro",
+              "function.method",
+              "keyword",
+              "label",
+              "markup.bold",
+              "markup.heading",
+              "markup.italic",
+              "markup.link",
+              "markup.link.url",
+              "markup.raw",
+              "module",
+              "number",
+              "operator",
+              "property",
+              "punctuation",
+              "punctuation.bracket",
+              "punctuation.delimiter",
+              "punctuation.special",
+              "string",
+              "string.escape",
+              "string.regexp",
+              "string.special",
+              "string.special.key",
+              "tag",
+              "type",
+              "type.builtin",
+              "variable",
+              "variable.builtin",
+              "variable.parameter"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "spans": {
+            "description": "겹치지 않고 앞에서부터 차례다. 토큰이 없는 곳(평문)은 빠진다.",
+            "items": {
+              "$ref": "#/$defs/HighlightSpan"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "이 구간들을 계산한 텍스트의 버전. 웹뷰의 지금 버전과 다르면 버린다(그 사이 편집이 있었다).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "spans"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "syntax.open": {
+      "description": "문서를 연다(이미 있는 id 면 다시 연다). 문법을 처음 쓰면 여기서 올린다. 문법을 올리지 못하면 internal 오류다(그 문서는\n닫힌다).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "description": "클라이언트가 정한 문서 id. 같은 id 로 다시 열면 앞 문서를 버리고 새로 연다(어긋났을 때 다시 맞추는 길).",
+            "type": "string"
+          },
+          "language": {
+            "description": "Linguist 언어 이름(`lang.detect` 의 결과). 언어 확장의 `linguist` 와 대소문자 없이 맞춘다.",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "docId",
+          "language",
+          "text"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "grammar": {
+            "description": "쓰는 언어 기여의 id(`[contributes.languages.<id>]`). `null` 이면 그 언어의 문법이 없다 — 문서를 열지 않았다(플레인\n텍스트로 보인다). 열린 문서의 버전은 0 이다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "grammar"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "task.cancel": {
       "description": "작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.",
       "kind": "unary",

@@ -1,0 +1,242 @@
+# 내장 언어 확장(extensions/lang-<id>/)의 tree-sitter 문법 출처표. `node scripts/grammars.mjs` 가 읽고, 해시 줄만 고쳐 쓴다.
+#
+# 문법마다 원본 저장소의 고정 커밋에서 소스를 받아 `tree-sitter build --wasm`(버전은 mise.toml)으로 WASM 을 만들고,
+# 쿼리를 이어 붙여 `extensions/<extension>/queries/<id>/highlights.scm` 에 쓴다. 손으로 고친 WASM · 쿼리가 조용히 들어오지
+# 않도록 `check`(`mise run lint`)가 아래 해시와 커밋된 파일을 견준다. 받는 법 · 다시 만드는 법은 CONTRIBUTING.md 「tree-sitter 문법」 절.
+#
+# 키:
+#   id          WASM 파일 이름(grammars/<id>.wasm) · 쿼리 폴더 이름(queries/<id>/). tree-sitter 의 문법 이름과 같다
+#   extension   extensions/ 아래 확장 폴더
+#   repo · tag · commit   원본 저장소와 고정 태그 · 그 커밋(받을 때는 커밋만 쓴다 — 태그는 사람이 읽는 표시다)
+#   path        저장소 안 문법 폴더(기본 ".")
+#   generate    저장소에 src/parser.c 가 없어 `tree-sitter generate` 를 먼저 돌린다(기본 false)
+#   highlights  이어 붙일 쿼리 파일. 같은 노드를 여러 패턴이 잡으면 뒤의 것이 이기므로(crates/pw-syntax/src/highlight.rs) 바탕
+#               쿼리를 먼저, 그 위에 덮는 쿼리를 뒤에 둔다. 순서는 원본 저장소의 tree-sitter.json 을 따르되, 그 순서가 바탕을 뒤에
+#               두는 곳(typescript · tsx)은 거꾸로 한다. `<다른 id>:<경로>` 는 그 문법 저장소의 파일이다
+#   license     SPDX. 전문은 저장소의 LICENSE 를 확장 폴더에 복사하고 licenses/vendored.md 에 싣는다
+#   wasm_sha256 · highlights_sha256   만든 파일의 SHA-256(스크립트가 쓴다)
+
+[[grammar]]
+id = "rust"
+extension = "lang-rust"
+repo = "https://github.com/tree-sitter/tree-sitter-rust"
+tag = "v0.24.2"
+commit = "77a3747266f4d621d0757825e6b11edcbf991ca5"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "158bd555055271ba754f52574fc12c8d5c6aa7316fefeddd3fa563297f50d5c8"
+highlights_sha256 = "8b86152dab0dbe161aa68a3751495573001a5f0ea5c1021fd4447272f58ae803"
+
+[[grammar]]
+id = "typescript"
+extension = "lang-typescript"
+repo = "https://github.com/tree-sitter/tree-sitter-typescript"
+tag = "v0.23.2"
+commit = "f975a621f4e7f532fe322e13c4f79495e0a7b2e7"
+path = "typescript"
+# tree-sitter.json 은 ["queries/highlights.scm", JS 의 highlights.scm] 이다 — JS 의 `(identifier) @variable` 이 TS 의 규칙을 덮는다.
+highlights = ["javascript:queries/highlights.scm", "queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "d24392183c75c103feafb827c9c086de00c30198e27f362cc971fbca6e91a87f"
+highlights_sha256 = "fa222f7c12814e89b9574e433fc33e50a16036e7f0536ae5d241cd3ecd759378"
+
+[[grammar]]
+id = "tsx"
+extension = "lang-tsx"
+repo = "https://github.com/tree-sitter/tree-sitter-typescript"
+tag = "v0.23.2"
+commit = "f975a621f4e7f532fe322e13c4f79495e0a7b2e7"
+path = "tsx"
+# tree-sitter.json 은 [TS, JS 의 highlights-jsx.scm, JS 의 highlights.scm] 이다 — 바탕(JS)을 먼저 둔다(typescript 와 같은 이유).
+highlights = [
+  "javascript:queries/highlights.scm",
+  "javascript:queries/highlights-jsx.scm",
+  "queries/highlights.scm",
+]
+license = "MIT"
+wasm_sha256 = "3c6cb1c86cecc6d8c99b3a7dfc0aba8b838e2adf036bb23f384d6d8be395ae30"
+highlights_sha256 = "33fdda9523df188aa900d296a44acfa23088c31d98fca1778d59a7b379085fd0"
+
+[[grammar]]
+id = "javascript"
+extension = "lang-javascript"
+repo = "https://github.com/tree-sitter/tree-sitter-javascript"
+tag = "v0.25.0"
+commit = "44c892e0be055ac465d5eeddae6d3e194424e7de"
+highlights = [
+  "queries/highlights.scm",
+  "queries/highlights-jsx.scm",
+  "queries/highlights-params.scm",
+]
+license = "MIT"
+wasm_sha256 = "7ccbce5ba189363aee524c4be7f3a0bdb25b961d4c6d2472a8f3aeb526eecbfe"
+highlights_sha256 = "e05a467dd0e8bf6a3f12235324396cfc3ee9c668eea4f9e8de9eed81a06e70be"
+
+[[grammar]]
+id = "json"
+extension = "lang-json"
+repo = "https://github.com/tree-sitter/tree-sitter-json"
+tag = "v0.24.8"
+commit = "ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "564e489724cbcf9b4563cd758a7fb7f355f896b11127819ae9e8ef71e7c15e60"
+highlights_sha256 = "1a0688ad94103b7c4796b3a727dff038545194b7326cb64955e62a35eac57564"
+
+[[grammar]]
+id = "toml"
+extension = "lang-toml"
+repo = "https://github.com/tree-sitter-grammars/tree-sitter-toml"
+tag = "v0.7.0"
+commit = "64b56832c2cffe41758f28e05c756a3a98d16f41"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "057f48e81072cb0eb5969632a7cf032fc6d33cd4ba3198c3f58227346c012d97"
+highlights_sha256 = "be7af80bde2761e8860c9e6e610c5ce549bd24ea7876e29389fbeca61a676079"
+
+[[grammar]]
+id = "yaml"
+extension = "lang-yaml"
+repo = "https://github.com/tree-sitter-grammars/tree-sitter-yaml"
+tag = "v0.7.2"
+commit = "7708026449bed86239b1cd5bce6e3c34dbca6415"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "f89cf2a8ccd4f29292e502f1c37efb4f1dead281246605e0a890c697d4db88c7"
+highlights_sha256 = "7000ffdd27a356a07af0abb41ec7e47067214c5f8b6291bc49d1d31731504726"
+
+# 블록 문법만 넣는다. 인라인(강조 · 링크)은 별도 문법(markdown_inline)을 주입해야 해서, 언어 주입이 생길 때 함께 넣는다.
+[[grammar]]
+id = "markdown"
+extension = "lang-markdown"
+repo = "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+tag = "v0.5.3"
+commit = "f969cd3ae3f9fbd4e43205431d0ae286014c05b5"
+path = "tree-sitter-markdown"
+highlights = ["tree-sitter-markdown/queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "479b27880bce5dc9501d8cfa7f427eb2f5ffcb143ef5863fa02296da02c830e9"
+highlights_sha256 = "c36a39282fed8bbf328cf22f3aeba7c6f66c3107536f61835a02221bf6788a6d"
+
+[[grammar]]
+id = "python"
+extension = "lang-python"
+repo = "https://github.com/tree-sitter/tree-sitter-python"
+tag = "v0.25.0"
+commit = "293fdc02038ee2bf0e2e206711b69c90ac0d413f"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "3523e4dc3d12894bbb2f7ea4b86b50eec69aed321c3d9b49271d82ed9f5f79b0"
+highlights_sha256 = "6fce08468fca23924e48165a822c72c9ce734837435f57b77043a319f7298975"
+
+[[grammar]]
+id = "go"
+extension = "lang-go"
+repo = "https://github.com/tree-sitter/tree-sitter-go"
+tag = "v0.25.0"
+commit = "1547678a9da59885853f5f5cc8a99cc203fa2e2c"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "058a4f6c7cb7156c599c2ca07af9645f03b3f655b84bced9c72816e755c7030b"
+highlights_sha256 = "fa691e49c36cdd43a71e311a17879b34dfe97daae93eb32b9c6a82ac4ecea4d4"
+
+[[grammar]]
+id = "java"
+extension = "lang-java"
+repo = "https://github.com/tree-sitter/tree-sitter-java"
+tag = "v0.23.5"
+commit = "94703d5a6bed02b98e438d7cad1136c01a60ba2c"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "6476728734128931bd50de2d1e5e9c75c506b51e278f54eaf709836a0de35759"
+highlights_sha256 = "9134f35f4bdefc4e9f654b752592f29718fcb6395880a766a1673f2d44ba7439"
+
+[[grammar]]
+id = "kotlin"
+extension = "lang-kotlin"
+repo = "https://github.com/fwcd/tree-sitter-kotlin"
+tag = "0.3.8"
+commit = "e1a2d5ad1f61f5740677183cd4125bb071cd2f30"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "7f522f2e3ef633735b3e2bdea165071b5ad0a99d6201e84acab49017590f812a"
+highlights_sha256 = "23b865c85dc5a55ff94c57935d34b63b14ce8e2acff5735d3c2a0c252e2d60f6"
+
+[[grammar]]
+id = "bash"
+extension = "lang-bash"
+repo = "https://github.com/tree-sitter/tree-sitter-bash"
+tag = "v0.25.1"
+commit = "a06c2e4415e9bc0346c6b86d401879ffb44058f7"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "f0270796c32f9acfc180e6068d6bef6614b983107b679a247fb63b200c6346e7"
+highlights_sha256 = "1f8006049bf12085eb4ba2d4613bbc84bf9ec4ca4c43b94d4fb9deb52c72b78b"
+
+[[grammar]]
+id = "html"
+extension = "lang-html"
+repo = "https://github.com/tree-sitter/tree-sitter-html"
+tag = "v0.23.2"
+commit = "5a5ca8551a179998360b4a4ca2c0f366a35acc03"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "11960fcc4fe3a01930de6bbae9b2c5c4d0a6c16012a5d20cc2069fa5b78d3bbd"
+highlights_sha256 = "9c1f401eac043dccdda5c1dca360a7f783a24fbe20c87aa8c3623cb1886076a8"
+
+[[grammar]]
+id = "css"
+extension = "lang-css"
+repo = "https://github.com/tree-sitter/tree-sitter-css"
+tag = "v0.25.0"
+commit = "dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "f0fa4c3171f3322560e3a56445989f2da9d77c38bae61e9f07ae0b3e01d88b36"
+highlights_sha256 = "07df9b622b0cc3d521cf8180eaed1cc93de83f9d9d320629506ab6b214339b6e"
+
+# 저장소에 생성된 src/parser.c 를 두지 않는다 — generate 가 grammar.js 를 node 로 돌린다(node 는 mise.toml).
+[[grammar]]
+id = "sql"
+extension = "lang-sql"
+repo = "https://github.com/DerekStride/tree-sitter-sql"
+tag = "v0.3.11"
+commit = "7b51ecda191d36b92f5a90a8d1bc3faef1c7b8b8"
+generate = true
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "836e4d429bbb35a4153535cf101b2bb69f72b9454a6cc7262d3818fbf532d64c"
+highlights_sha256 = "accebcd0eb5ca2d4e1dce74775d5b59388592b837fd45a2809cc071f9ebbba5e"
+
+[[grammar]]
+id = "dockerfile"
+extension = "lang-dockerfile"
+repo = "https://github.com/camdencheek/tree-sitter-dockerfile"
+tag = "v0.2.0"
+commit = "868e44ce378deb68aac902a9db68ff82d2299dd0"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "295dbbe840e80ad2582d07d9266cf6b7210d702cd9c6878a1fb8650e8c1385a0"
+highlights_sha256 = "24d68d79be20cfb3f41bf9f92352fcce5fab191d01cf76eac69d62e3d328b58f"
+
+[[grammar]]
+id = "c"
+extension = "lang-c"
+repo = "https://github.com/tree-sitter/tree-sitter-c"
+tag = "v0.24.2"
+commit = "b780e47fc780ddc8da13afa35a3f4ed5c157823d"
+highlights = ["queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "2030a766fa6c6fe18039524008e52fd4a4995bdd9ed07fc4a73ec892450d2f4a"
+highlights_sha256 = "8423af1dd81e1f74f56c1aa86e3428eecbf8ae6ac87cab4c6f69114865b0baff"
+
+[[grammar]]
+id = "cpp"
+extension = "lang-cpp"
+repo = "https://github.com/tree-sitter/tree-sitter-cpp"
+tag = "v0.23.4"
+commit = "f41e1a044c8a84ea9fa8577fdd2eab92ec96de02"
+highlights = ["c:queries/highlights.scm", "queries/highlights.scm"]
+license = "MIT"
+wasm_sha256 = "f5ff3ba7af054af846f37dfd2525bdfede95530d5747a8fe30df87d070ece607"
+highlights_sha256 = "e78eb14e4c5aa62409fe49579d10728d9271aa3d8ff4a8df6ea3ea252cfb2139"

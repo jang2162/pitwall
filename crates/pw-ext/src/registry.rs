@@ -89,12 +89,36 @@ impl ResolvedFile {
     }
 }
 
+impl ResolvedFile {
+    /// 폴더를 가리키는 것에서 그 바로 아래 파일 하나(`queries/rust` → `queries/rust/highlights.scm`).
+    pub fn join(&self, name: &str) -> Result<ResolvedFile, String> {
+        Ok(ResolvedFile {
+            root: self.root.clone(),
+            path: RelPath::parse(&format!("{}/{name}", self.path))?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedKeymap {
     pub extension: String,
     pub id: String,
     pub kind: KeymapKind,
     pub file: ResolvedFile,
+}
+
+/// 언어 기여와 그 문법 · 쿼리의 위치. 내용은 구문 분석 서비스(`pw-syntax`)가 처음 쓸 때 읽는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedLanguage {
+    pub extension: String,
+    /// 기여 이름(`[contributes.languages.<id>]`).
+    pub id: String,
+    /// Linguist 언어 이름. 언어 판별(`lang.detect`)의 결과와 이 이름으로 잇는다.
+    pub linguist: String,
+    /// tree-sitter 문법 WASM.
+    pub grammar: Option<ResolvedFile>,
+    /// 쿼리 폴더(`highlights.scm` 등). [`ResolvedFile::join`] 으로 그 안의 파일을 가리킨다.
+    pub queries: Option<ResolvedFile>,
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +233,29 @@ impl Registry {
         self.extensions
             .iter()
             .flat_map(|e| e.manifest.contributes.languages.iter().map(move |l| (e, l)))
+    }
+
+    /// 언어 기여를 그 파일 위치와 함께. 등록 순서(내장 → 사용자 확장)다.
+    pub fn resolved_languages(&self) -> impl Iterator<Item = ResolvedLanguage> + '_ {
+        self.languages().map(|(e, l)| {
+            let resolve = |p: &PathRef| ResolvedFile {
+                root: e.root.clone(),
+                path: p.path.clone(),
+            };
+            ResolvedLanguage {
+                extension: e.manifest.id.clone(),
+                id: l.id.clone(),
+                linguist: l.linguist.clone(),
+                grammar: l.grammar.as_ref().map(resolve),
+                queries: l.queries.as_ref().map(resolve),
+            }
+        })
+    }
+
+    /// Linguist 이름(대소문자 무시)으로 언어 기여 하나. 여럿이면 먼저 등록된 것(내장 → 사용자 확장)이다.
+    pub fn language_for_linguist(&self, linguist: &str) -> Option<ResolvedLanguage> {
+        self.resolved_languages()
+            .find(|l| l.linguist.eq_ignore_ascii_case(linguist))
     }
 
     /// 읽어 둔 UI 번역. 등록 순서(내장 → 사용자 확장)다.

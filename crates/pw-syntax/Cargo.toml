@@ -1,0 +1,28 @@
+[package]
+name = "pw-syntax"
+description = "Pitwall syntax service: tree-sitter parsing with WASM grammars from language extensions, highlight spans"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pw-ext = { path = "../pw-ext" }
+pw-rpc = { path = "../pw-rpc" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+# 문법 로드 · 파싱 · 쿼리를 블로킹 스레드로 보낸다.
+tokio = { workspace = true, features = ["rt"] }
+tracing = "0.1.44"
+# 코어 tree-sitter(MIT) + WASM 문법(결정 M1-D2). `wasm` 기능이 wasmtime(Apache-2.0 WITH LLVM-exception)을 끌어온다 — 그
+# C API 크레이트의 빌드 스크립트가 cmake 를 부른다(mise.toml).
+tree-sitter = { version = "0.27.1", features = ["wasm"] }
+
+[dev-dependencies]
+# 언어마다 픽스처 하나의 강조 결과를 스냅숏으로 고정한다(tests/snapshots/).
+insta = "1.49.0"
+# 시험이 내장 확장 레지스트리를 만들 때 앱 버전으로 넘긴다.
+semver = "1.0.28"
+tokio = { workspace = true, features = ["rt", "macros"] }

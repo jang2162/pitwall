@@ -1,0 +1,13 @@
+/* A comment. */
+@media (max-width: 600px) {
+  .card > h1:hover,
+  #main::before {
+    color: #ff0000;
+    margin: 0 auto 1.5em;
+    font-family: "Inter", sans-serif !important;
+  }
+}
+
+:root {
+  --pw-gap: calc(4px * 2);
+}

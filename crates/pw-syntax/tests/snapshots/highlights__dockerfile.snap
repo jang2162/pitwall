@@ -1,0 +1,22 @@
+---
+source: crates/pw-syntax/tests/highlights.rs
+expression: rendered
+---
+1:1 comment "# A comment."
+2:1 keyword "FROM"
+2:10 operator ":"
+2:16 keyword "AS"
+3:1 keyword "ARG"
+4:1 keyword "WORKDIR"
+5:1 keyword "COPY"
+6:1 keyword "RUN"
+8:1 keyword "ENV"
+8:10 string "\"/usr/local/bin:"
+8:26 punctuation.special "${"
+8:28 constant "PATH"
+8:32 punctuation.special "}"
+8:33 string "\""
+9:1 keyword "EXPOSE"
+10:1 keyword "ENTRYPOINT"
+10:13 string "\"/usr/local/bin/pitwall\""
+10:39 string "\"--headless\""

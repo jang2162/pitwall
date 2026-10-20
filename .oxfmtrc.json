@@ -18,6 +18,7 @@
     "/opencode.json",
     "/packages/rpc-client/src/generated/",
     "/packages/rpc-client/test/fixtures/",
-    "/crates/pw-lang/linguist/"
+    "/crates/pw-lang/linguist/",
+    "/crates/pw-syntax/tests/fixtures/"
   ]
 }

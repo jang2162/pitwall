@@ -1,0 +1,13 @@
+# A comment.
+title = "Pitwall"
+version = 1
+ratio = 0.5
+enabled = true
+released = 2026-10-20T10:00:00Z
+
+[server]
+ports = [8000, 8001]
+inline = { key = "value" }
+
+[[workers]]
+name = 'single'

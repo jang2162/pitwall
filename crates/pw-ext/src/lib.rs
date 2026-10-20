@@ -4,7 +4,8 @@
 //! - [`source`]: 확장 폴더 안의 경로와 두 출처(바이너리에 묶인 내장 · 디스크).
 //! - [`builtin`]: 저장소의 `extensions/` 를 묶은 내장 확장.
 //! - [`registry`]: 내장과 `$DATA/extensions/` 를 읽어 테마 · 키맵 · 언어 · 외부 도구 · UI 번역 기여를 모은다. 테마 파일과
-//!   번역 파일(.ftl)은 등록할 때 읽어 검사한다.
+//!   번역 파일(.ftl)은 등록할 때 읽어 검사한다. 언어의 문법 · 쿼리는 위치만 내주고([`ResolvedLanguage`]) 구문 분석
+//!   서비스(`pw-syntax`)가 처음 쓸 때 읽는다.
 //! - [`methods`]: `ext.list` · `theme.list` · `theme.get` · `keymap.list` · `keymap.get` RPC.
 //!
 //! L2 WASM 런타임은 아직 없다 — `[wasm]` 은 읽고 검사만 한다.
@@ -19,7 +20,7 @@ pub mod template;
 pub use manifest::{Diagnostic, KeymapKind, Manifest, Pos, Severity};
 pub use registry::{
     Appearance, Extension, LoadOptions, LoadedTheme, LoadedTranslation, Registry, ResolvedFile,
-    ResolvedKeymap, TranslationFile,
+    ResolvedKeymap, ResolvedLanguage, TranslationFile,
 };
 pub use source::{ExtensionRoot, RelPath};
 
@@ -33,18 +34,96 @@ mod tests {
         Registry::from_roots(&Version::new(0, 0, 0), builtin::roots())
     }
 
+    /// 언어 확장(`lang-*`, 문법 출처는 scripts/grammars.toml)과 그 밖의 내장 확장.
     #[test]
     fn builtin_extensions_are_bundled_by_folder() {
         let folders: Vec<String> = builtin::roots().iter().map(|r| r.display(None)).collect();
+        let languages = [
+            "bash",
+            "c",
+            "cpp",
+            "css",
+            "dockerfile",
+            "go",
+            "html",
+            "java",
+            "javascript",
+            "json",
+            "kotlin",
+            "markdown",
+            "python",
+            "rust",
+            "sql",
+            "toml",
+            "tsx",
+            "typescript",
+            "yaml",
+        ];
+        let mut expected: Vec<String> = ["external-tools", "i18n-default", "keymap-default"]
+            .iter()
+            .map(|f| format!("builtin:{f}"))
+            .collect();
+        expected.extend(languages.iter().map(|l| format!("builtin:lang-{l}")));
+        expected.push("builtin:theme-default".to_owned());
+        assert_eq!(folders, expected);
+    }
+
+    /// 문법 WASM 은 압축해 묶이고(`build.rs`), 읽으면 저장소의 파일과 바이트가 같다. 크기는 원본 크기다.
+    #[test]
+    fn builtin_grammars_are_compressed_and_read_back_whole() {
+        let wasm = builtin::files()
+            .iter()
+            .find(|f| f.path == "lang-rust/grammars/rust.wasm")
+            .unwrap();
+        assert!(wasm.brotli);
+        assert!((wasm.bytes.len() as u64) < wasm.size / 4);
+        let root = ExtensionRoot::Builtin {
+            folder: "lang-rust",
+        };
+        let rel = RelPath::parse("grammars/rust.wasm").unwrap();
+        let on_disk = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../extensions/lang-rust/grammars/rust.wasm"
+        ))
+        .unwrap();
+        assert_eq!(root.read(&rel).unwrap().as_ref(), on_disk.as_slice());
+        assert_eq!(root.size(&rel).unwrap(), on_disk.len() as u64);
+        // 텍스트 파일은 그대로 묶인다.
+        let manifest = builtin::files()
+            .iter()
+            .find(|f| f.path == "lang-rust/extension.toml")
+            .unwrap();
+        assert!(!manifest.brotli);
+    }
+
+    #[test]
+    fn languages_resolve_by_linguist_name_to_their_grammar_and_queries() {
+        let registry = builtin_registry();
+        let rust = registry.language_for_linguist("rust").unwrap();
+        assert_eq!(rust.extension, "dev.pitwall.lang-rust");
+        assert_eq!(rust.id, "rust");
+        assert_eq!(rust.linguist, "Rust");
         assert_eq!(
-            folders,
-            [
-                "builtin:external-tools",
-                "builtin:i18n-default",
-                "builtin:keymap-default",
-                "builtin:theme-default"
-            ]
+            rust.grammar.unwrap().display(),
+            "builtin:lang-rust/grammars/rust.wasm"
         );
+        let highlights = rust.queries.unwrap().join("highlights.scm").unwrap();
+        assert_eq!(
+            highlights.display(),
+            "builtin:lang-rust/queries/rust/highlights.scm"
+        );
+        assert!(highlights.read().is_ok());
+
+        // 같은 문법을 쓰는 두 번째 기여.
+        let jsonc = registry
+            .language_for_linguist("JSON with Comments")
+            .unwrap();
+        assert_eq!(jsonc.id, "jsonc");
+        assert_eq!(
+            jsonc.grammar.unwrap().display(),
+            "builtin:lang-json/grammars/json.wasm"
+        );
+        assert_eq!(registry.language_for_linguist("COBOL"), None);
     }
 
     #[test]
@@ -83,7 +162,7 @@ mod tests {
     fn builtin_extensions_load_without_diagnostics() {
         let registry = builtin_registry();
         assert_eq!(registry.diagnostics(), []);
-        assert_eq!(registry.extensions().len(), 4);
+        assert_eq!(registry.extensions().len(), 23);
     }
 
     #[test]

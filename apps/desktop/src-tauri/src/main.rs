@@ -65,6 +65,8 @@ fn local_host(
     // 내장 터미널(M1-08). 창이 닫히면 그 연결의 터미널 스트림이 버려져 셸의 프로세스 트리가 끝난다.
     let terminals = Arc::new(pw_run::Terminals::new(Arc::clone(&runtime)));
     let terminal_methods = Arc::clone(&terminals);
+    // 구문 강조(`syntax.*`). 문법 엔진은 처음 문서를 열 때 만든다.
+    let syntax = Arc::new(pw_syntax::Syntax::new(Arc::clone(&extensions)));
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
@@ -77,6 +79,7 @@ fn local_host(
         .methods(move |router| pw_fs::watch::register(router, fs_watch_methods))
         .methods(move |router| pw_open_with::cli::register(router, cli_check))
         .methods(move |router| pw_run::methods::register(router, terminal_methods))
+        .methods(move |router| pw_syntax::methods::register(router, syntax))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());

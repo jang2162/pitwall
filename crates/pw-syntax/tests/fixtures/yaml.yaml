@@ -1,0 +1,14 @@
+# A comment.
+name: pitwall
+version: 1.5
+enabled: true
+empty: null
+anchors: &base
+  key: "quoted\n"
+child:
+  <<: *base
+list:
+  - one
+  - 2
+block: |
+  literal text

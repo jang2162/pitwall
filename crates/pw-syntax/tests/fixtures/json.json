@@ -1,0 +1,7 @@
+{
+  "name": "pitwall",
+  "version": 1.5,
+  "private": true,
+  "tags": ["editor", null],
+  "escape": "a\nb"
+}

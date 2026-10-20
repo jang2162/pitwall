@@ -1,0 +1,80 @@
+; 생성물 — scripts/grammars.mjs 가 아래 원본 쿼리를 이어 붙였다. 손으로 고치지 않는다(출처표 scripts/grammars.toml).
+
+; ---- https://github.com/tree-sitter/tree-sitter-css @ dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f — queries/highlights.scm
+
+(comment) @comment
+
+(tag_name) @tag
+(nesting_selector) @tag
+(universal_selector) @tag
+
+"~" @operator
+">" @operator
+"+" @operator
+"-" @operator
+"*" @operator
+"/" @operator
+"=" @operator
+"^=" @operator
+"|=" @operator
+"~=" @operator
+"$=" @operator
+"*=" @operator
+
+"and" @operator
+"or" @operator
+"not" @operator
+"only" @operator
+
+(attribute_selector (plain_value) @string)
+
+((property_name) @variable
+ (#match? @variable "^--"))
+((plain_value) @variable
+ (#match? @variable "^--"))
+
+(class_name) @property
+(id_name) @property
+(namespace_name) @property
+(property_name) @property
+(feature_name) @property
+
+(pseudo_element_selector (tag_name) @attribute)
+(pseudo_class_selector (class_name) @attribute)
+(attribute_name) @attribute
+
+(function_name) @function
+
+"@media" @keyword
+"@import" @keyword
+"@charset" @keyword
+"@namespace" @keyword
+"@supports" @keyword
+"@keyframes" @keyword
+(at_keyword) @keyword
+(to) @keyword
+(from) @keyword
+(important) @keyword
+
+(string_value) @string
+(color_value) @string.special
+
+(integer_value) @number
+(float_value) @number
+(unit) @type
+
+[
+  "#"
+  ","
+  "."
+  ":"
+  "::"
+  ";"
+] @punctuation.delimiter
+
+[
+  "{"
+  ")"
+  "("
+  "}"
+] @punctuation.bracket

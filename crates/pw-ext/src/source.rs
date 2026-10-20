@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 use std::fmt;
-use std::io;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 /// 확장 폴더의 매니페스트 파일 이름.
@@ -116,9 +116,9 @@ impl ExtensionRoot {
                 let key = format!("{folder}/{rel}");
                 let prefix = format!("{key}/");
                 let files = crate::builtin::files();
-                if files.iter().any(|(path, _)| *path == key) {
+                if files.iter().any(|f| f.path == key) {
                     Ok(EntryKind::File)
-                } else if files.iter().any(|(path, _)| path.starts_with(&prefix)) {
+                } else if files.iter().any(|f| f.path.starts_with(&prefix)) {
                     Ok(EntryKind::Dir)
                 } else {
                     Err(SourceError::NotFound)
@@ -139,7 +139,7 @@ impl ExtensionRoot {
     /// 파일 크기(바이트).
     pub fn size(&self, rel: &RelPath) -> Result<u64, SourceError> {
         match self {
-            ExtensionRoot::Builtin { .. } => self.read(rel).map(|bytes| bytes.len() as u64),
+            ExtensionRoot::Builtin { .. } => builtin_file(self, rel).map(|f| f.size),
             ExtensionRoot::Dir(dir) => {
                 let path = resolve_inside(dir, rel)?;
                 Ok(std::fs::metadata(path).map_err(io_error)?.len())
@@ -154,7 +154,7 @@ impl ExtensionRoot {
                 let prefix = format!("{folder}/{rel}/");
                 crate::builtin::files()
                     .iter()
-                    .filter_map(|(path, _)| path.strip_prefix(&prefix))
+                    .filter_map(|f| f.path.strip_prefix(&prefix))
                     .filter(|rest| !rest.contains('/'))
                     .map(str::to_owned)
                     .collect()
@@ -183,15 +183,19 @@ impl ExtensionRoot {
             .collect())
     }
 
+    /// 내장 확장의 압축된 파일(`.wasm`)은 풀어서 준다.
     pub fn read(&self, rel: &RelPath) -> Result<Cow<'static, [u8]>, SourceError> {
         match self {
-            ExtensionRoot::Builtin { folder } => {
-                let key = format!("{folder}/{rel}");
-                crate::builtin::files()
-                    .iter()
-                    .find(|(path, _)| *path == key)
-                    .map(|(_, bytes)| Cow::Borrowed(*bytes))
-                    .ok_or(SourceError::NotFound)
+            ExtensionRoot::Builtin { .. } => {
+                let file = builtin_file(self, rel)?;
+                if !file.brotli {
+                    return Ok(Cow::Borrowed(file.bytes));
+                }
+                let mut out = Vec::with_capacity(usize::try_from(file.size).unwrap_or(0));
+                brotli_decompressor::Decompressor::new(file.bytes, 1 << 16)
+                    .read_to_end(&mut out)
+                    .map_err(SourceError::Io)?;
+                Ok(Cow::Owned(out))
             }
             ExtensionRoot::Dir(dir) => {
                 let path = resolve_inside(dir, rel)?;
@@ -199,6 +203,20 @@ impl ExtensionRoot {
             }
         }
     }
+}
+
+fn builtin_file(
+    root: &ExtensionRoot,
+    rel: &RelPath,
+) -> Result<&'static crate::builtin::BuiltinFile, SourceError> {
+    let ExtensionRoot::Builtin { folder } = root else {
+        unreachable!("only called for built-in roots");
+    };
+    let key = format!("{folder}/{rel}");
+    crate::builtin::files()
+        .iter()
+        .find(|f| f.path == key)
+        .ok_or(SourceError::NotFound)
 }
 
 /// `dir/rel` 을 실제 경로로 풀고, 심볼릭 링크를 따라간 결과가 `dir` 안인지 본다. `rel` 자체는 [`RelPath::parse`] 가

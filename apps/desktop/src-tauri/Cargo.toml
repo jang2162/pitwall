@@ -25,6 +25,7 @@ pw-open-with = { path = "../../../crates/pw-open-with" }
 pw-run = { path = "../../../crates/pw-run" }
 pw-runtime = { path = "../../../crates/pw-runtime" }
 pw-rpc = { path = "../../../crates/pw-rpc" }
+pw-syntax = { path = "../../../crates/pw-syntax" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tauri = { version = "2.12.3", features = [] }

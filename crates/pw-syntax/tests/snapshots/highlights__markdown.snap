@@ -1,0 +1,16 @@
+---
+source: crates/pw-syntax/tests/highlights.rs
+expression: rendered
+---
+1:1 punctuation.special "#"
+1:3 markup.heading "Heading one"
+5:1 punctuation.special "##"
+5:4 markup.heading "Heading two"
+7:1 punctuation.special "- "
+8:1 punctuation.special "- "
+10:1 punctuation.special "> "
+12:1 punctuation.delimiter "```"
+12:4 markup.raw "rust\n"
+14:1 punctuation.delimiter "```"
+14:4 markup.raw "\n"
+16:1 markup.raw "    indented code\n"
