@@ -1,7 +1,8 @@
 //! 앱 전체가 함께 쓰는 런타임 환경: (프로젝트, 디렉터리)별 캐시, 「환경 다시 읽기」, `runtime.changed`(03 §5-1 「캐시 · 무효화」).
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use pw_core::registry::path::{normalize, worktree_link};
 use pw_core::registry::{Project, Registry as Projects, RegistryError};
@@ -34,6 +35,8 @@ pub enum ChangeReason {
     Reload,
     /// 프로젝트의 신뢰가 바뀌었다([`Runtime::trust_changed`]). 프로젝트 코드를 돌리는 제공자가 붙거나 빠진다.
     Trust,
+    /// 시간을 넘겼던 로그인 셸을 백그라운드로 다시 돌려 환경을 얻었다(`login_shell` 머리 주석). 물러난 환경을 받았던 프로젝트에 나간다.
+    LoginShell,
 }
 
 /// 한 디렉터리의 환경과 그 설명.
@@ -63,6 +66,8 @@ pub struct Runtime {
     /// 키는 (프로젝트, 디렉터리, 계산할 때 판정한 신뢰). 꺼낼 때마다 지금 신뢰로 키를 만들므로 신뢰가 바뀌면 — 신뢰를 가진
     /// 프로젝트가 바뀐 경우(메인 저장소 프로젝트를 등록 · 삭제)나 그 이벤트를 놓친 경우도 — 옛 신뢰로 만든 환경을 주지 않는다.
     cache: Cache<(String, PathBuf, bool), Resolved>,
+    /// 로그인 셸 없이 물러난 환경을 받은 프로젝트. 셸이 백그라운드 재시도로 살아나면 이들에 `runtime.changed` 를 낸다.
+    fell_back: Arc<Mutex<BTreeSet<String>>>,
     host: OnceLock<RuntimeHost>,
 }
 
@@ -74,6 +79,7 @@ impl Runtime {
             providers: Vec::new(),
             trusted: Box::new(|_| false),
             cache: Cache::default(),
+            fell_back: Arc::default(),
             host: OnceLock::new(),
         }
     }
@@ -92,19 +98,36 @@ impl Runtime {
 
     /// 두 번째부터는 무시한다.
     pub fn attach(&self, host: RuntimeHost) {
-        let _ = self.host.set(host);
+        let bus = host.bus.clone();
+        if self.host.set(host).is_err() {
+            return;
+        }
+        let fell_back = Arc::clone(&self.fell_back);
+        self.shell.on_recovered(move || {
+            let projects =
+                std::mem::take(&mut *fell_back.lock().unwrap_or_else(PoisonError::into_inner));
+            tracing::info!(target: "pw_runtime", ?projects, "login shell environment recovered");
+            announce(&bus, projects, ChangeReason::LoginShell);
+        });
     }
 
     /// `project` 의 `dir`(절대 경로)에서 띄울 프로세스의 환경. 처음이면 지금 만든다(로그인 셸을 기다릴 수 있다). 물러난
-    /// 결과(`RuntimeStatus::Fallback`)는 남기지 않아 다음 호출이 다시 시도한다(로그인 셸의 시간 초과는 냉각 동안 곧바로
-    /// 물러난다).
+    /// 결과(`RuntimeStatus::Fallback`)는 남기지 않아 다음 호출이 다시 시도한다(로그인 셸이 한 번 시간을 넘긴 뒤로는 기다리지
+    /// 않고 곧바로 물러난다).
     pub fn env(&self, project: &str, dir: &Path) -> Arc<Resolved> {
         let trusted = (self.trusted)(project);
-        self.cache.get_or_compute(
+        let resolved = self.cache.get_or_compute(
             &(project.to_owned(), dir.to_path_buf(), trusted),
             || self.resolve(dir, trusted),
             |r| r.info.status == RuntimeStatus::Ok,
-        )
+        );
+        if !resolved.login_shell {
+            self.fell_back
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(project.to_owned());
+        }
+        resolved
     }
 
     /// 로그인 셸 환경 가져오기를 백그라운드로 시작한다. 이미 있으면 아무것도 하지 않는다.
@@ -155,14 +178,8 @@ impl Runtime {
     }
 
     fn announce(&self, projects: Vec<String>, reason: ChangeReason) {
-        let Some(host) = self.host.get() else {
-            return;
-        };
-        let changed = RuntimeChanged { reason };
-        for p in projects {
-            if let Err(e) = host.bus.publish(Scope::Project(p), TOPIC_CHANGED, &changed) {
-                tracing::warn!(target: "pw_runtime", %e, "cannot publish runtime.changed");
-            }
+        if let Some(host) = self.host.get() {
+            announce(&host.bus, projects, reason);
         }
     }
 
@@ -259,6 +276,15 @@ impl Runtime {
         let project = self.projects()?.get(project_id).map_err(registry_error)?;
         self.reload(&project.id);
         Ok(())
+    }
+}
+
+fn announce(bus: &EventBus, projects: impl IntoIterator<Item = String>, reason: ChangeReason) {
+    let changed = RuntimeChanged { reason };
+    for p in projects {
+        if let Err(e) = bus.publish(Scope::Project(p), TOPIC_CHANGED, &changed) {
+            tracing::warn!(target: "pw_runtime", %e, "cannot publish runtime.changed");
+        }
     }
 }
 

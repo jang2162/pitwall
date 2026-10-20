@@ -46,22 +46,42 @@ impl Fixture {
     }
 }
 
-/// ① 첫 호출이 시간을 넘기면 앱 프로세스의 환경으로 물러난다. 냉각 동안은 셸을 다시 돌리지 않고 곧바로 물러난 결과를 주고,
-/// 셸을 고친 뒤 냉각이 끝나면 다음 호출이 로그인 셸 환경을 준다(실패를 남기지 않는다).
+/// ① 첫 호출이 시간을 넘기면 앱 프로세스의 환경으로 물러난다. 그 뒤로는 셸을 기다리지 않는다 — 냉각 동안은 셸을 다시 돌리지
+/// 않고, 냉각이 끝난 뒤의 호출도 물러난 결과를 곧바로 받고 재시도는 백그라운드로 돈다. 셸을 고쳤으면 재시도가 끝난 뒤의 호출이
+/// 로그인 셸 환경을 받고(실패를 남기지 않는다), 물러난 환경을 받았던 프로젝트에 `runtime.changed`(`loginShell`)가 한 번 나간다.
 #[test]
-fn a_timeout_falls_back_to_the_process_and_the_next_call_after_the_cooldown_retries() {
+fn a_timeout_falls_back_and_later_retries_in_the_background_without_waiting() {
     let f = Fixture::new(HANGING);
+    let bus = EventBus::new(DEFAULT_CAPACITY);
+    let projects = registry(f.tmp.path(), &bus);
+    let p1 = project(&projects, &f.tmp.path().join("one"));
+    let p2 = project(&projects, &f.tmp.path().join("two"));
     let cooldown = Duration::from_millis(1500);
-    let runtime = f.runtime_cooling(Duration::from_millis(300), cooldown);
+    let timeout = Duration::from_millis(300);
+    let runtime = f.runtime_cooling(timeout, cooldown);
+    runtime.attach(RuntimeHost {
+        projects: projects.clone(),
+        bus: bus.clone(),
+    });
+    let mut subs: Vec<_> = [&p1, &p2]
+        .map(|p| {
+            bus.subscribe(
+                Filter::all()
+                    .scope(Scope::Project(p.clone()))
+                    .topics([TOPIC_CHANGED]),
+            )
+        })
+        .into_iter()
+        .collect();
     // 냉각은 첫 호출 안에서 시작한다 — 끝나는 때는 `before + cooldown` 과 `after + cooldown` 사이다.
     let before = Instant::now();
-    let started = Instant::now();
-    let first = runtime.env("p1", &f.dir());
+    let first = runtime.env(&p1, &f.dir());
     let after = Instant::now();
+    assert!(after - before >= timeout, "{:?}", after - before);
     assert!(
-        started.elapsed() < Duration::from_secs(3),
+        after - before < Duration::from_secs(3),
         "{:?}",
-        started.elapsed()
+        after - before
     );
     assert_eq!(first.info.source, RuntimeSource::Process);
     assert!(!first.login_shell);
@@ -72,10 +92,9 @@ fn a_timeout_falls_back_to_the_process_and_the_next_call_after_the_cooldown_retr
     );
     assert_eq!(first.env, RuntimeEnv::process());
 
-    f.rewrite(WORKING);
     // 냉각 중: 셸을 기다리지 않는다(시간 제한 300 ms 보다 빠르다).
     let started = Instant::now();
-    let cooling = runtime.env("p1", &f.dir());
+    let cooling = runtime.env(&p1, &f.dir());
     assert!(
         started.elapsed() < Duration::from_millis(200),
         "{:?}",
@@ -87,11 +106,59 @@ fn a_timeout_falls_back_to_the_process_and_the_next_call_after_the_cooldown_retr
         "the cooldown ended before the check"
     );
 
+    // 냉각이 끝난 뒤에도 셸이 여전히 멈추면: 기다리지 않고, 재시도가 다시 시간을 넘겨 냉각이 다시 걸린다.
     std::thread::sleep(
         (after + cooldown + Duration::from_millis(20)).saturating_duration_since(Instant::now()),
     );
-    let second = runtime.env("p1", &f.dir());
-    assert_eq!(second.info.status, RuntimeStatus::Ok);
+    let started = Instant::now();
+    let retrying = runtime.env(&p1, &f.dir());
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "the call after the cooldown waited {:?}",
+        started.elapsed()
+    );
+    assert_eq!(retrying.info.source, RuntimeSource::Process);
+    std::thread::sleep(timeout + Duration::from_millis(300));
+    let started = Instant::now();
+    assert_eq!(
+        runtime.env(&p1, &f.dir()).info.source,
+        RuntimeSource::Process
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        changed_events(&mut subs[0]),
+        Vec::<serde_json::Value>::new()
+    );
+
+    // 셸을 고치고 냉각이 끝나면: 그 호출은 여전히 곧바로 물러나고, 백그라운드 재시도가 끝난 뒤 로그인 셸 환경이 온다.
+    f.rewrite(WORKING);
+    std::thread::sleep(cooldown + Duration::from_millis(50));
+    let started = Instant::now();
+    assert_eq!(
+        runtime.env(&p1, &f.dir()).info.source,
+        RuntimeSource::Process
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "{:?}",
+        started.elapsed()
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let second = loop {
+        let resolved = runtime.env(&p1, &f.dir());
+        if resolved.info.status == RuntimeStatus::Ok {
+            break resolved;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the background retry did not recover"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
     assert_eq!(second.info.provider, "shell");
     assert_eq!(
         second.info.source,
@@ -102,6 +169,15 @@ fn a_timeout_falls_back_to_the_process_and_the_next_call_after_the_cooldown_retr
     assert!(second.login_shell);
     assert_eq!(second.env.path, OsString::from("/shell/bin:/usr/bin:/bin"));
     assert_eq!(second.env.get("JAVA_HOME"), Some(OsStr::new("/opt/jdk-21")));
+    assert_eq!(
+        changed_events(&mut subs[0]),
+        vec![serde_json::json!({"reason": "loginShell"})]
+    );
+    // p2 는 아무것도 묻지 않았다.
+    assert_eq!(
+        changed_events(&mut subs[1]),
+        Vec::<serde_json::Value>::new()
+    );
 }
 
 /// 「환경 다시 읽기」 는 시간 초과의 냉각을 풀어, 셸을 고친 뒤 곧바로 로그인 셸 환경을 준다.

@@ -12,8 +12,10 @@
 //!
 //! 시간 제한([`DEFAULT_TIMEOUT`])을 넘기면 셸의 세션(프로세스 그룹)을 통째로 죽인다. 넘기거나, 셸을 못 띄우거나, 표식 · PATH 를
 //! 찾지 못하면 실패다 — 부른 쪽([`crate::Runtime`])이 앱 프로세스의 환경으로 물러난다. 실패는 남기지 않아 다음 요청에서 다시
-//! 시도하되, **시간 초과만** [`TIMEOUT_COOLDOWN`] 동안 다시 돌리지 않고 물러난 결과를 곧바로 준다 — 시작 파일이 대화형 셸에서
-//! `exec fish` · `exec tmux` 처럼 멈추면 요청(새 터미널 탭)마다 5초를 기다리게 된다. 「환경 다시 읽기」 는 냉각을 푼다.
+//! 시도하되, **시간 초과만** 다르다 — 한 번 시간을 넘기면 그 뒤로는 셸을 기다리지 않고 물러난 결과를 곧바로 주고,
+//! [`TIMEOUT_COOLDOWN`] 이 지날 때마다 백그라운드로 다시 돌린다(성공하면 다음 요청부터 셸 환경, [`LoginShell::on_recovered`]).
+//! 시작 파일이 대화형 셸에서 `exec fish` · `exec tmux` 처럼 멈추면 기다리는 요청(새 터미널 탭)마다 5초가 걸리기 때문이다.
+//! 「환경 다시 읽기」 는 냉각을 풀고, 그 뒤 첫 요청은 다시 셸을 기다린다.
 //!
 //! 셸: `$SHELL`, 없으면 사용자 계정(`getpwuid_r`)의 셸. Windows 에는 로그인 셸이 없어 언제나 실패(프로세스 환경)다.
 //!
@@ -22,7 +24,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::cache::Cache;
@@ -63,19 +65,26 @@ type ShellResult = Result<Layer, ShellError>;
 
 #[derive(Default)]
 struct Cooling {
-    /// 이때까지는 이 결과(시간 초과)를 곧바로 준다.
-    until: Option<(Instant, Arc<ShellResult>)>,
-    /// [`LoginShell::invalidate`] 마다 하나씩 는다. 무효화 전에 시작한 시도는 냉각을 걸지 않는다.
+    /// 무효화 뒤 마지막 시도가 시간 초과였으면 그 결과와, 셸을 다시 돌려도 되는 때. 있으면 셸을 기다리지 않고 이 결과를 곧바로
+    /// 주고, 그때가 지났으면 백그라운드로 다시 돌린다.
+    timed_out: Option<(Instant, Arc<ShellResult>)>,
+    /// 백그라운드 재시도가 돌고 있다.
+    retrying: bool,
+    /// [`LoginShell::invalidate`] 마다 하나씩 는다. 무효화 전에 시작한 시도는 냉각을 걸거나 풀지 않는다.
     epoch: u64,
 }
+
+type Recovered = OnceLock<Box<dyn Fn() + Send + Sync>>;
 
 /// 로그인 셸 제공자(`"shell"`). 언제나 쓰이고, 앱 프로세스의 환경 대신 셸이 만든 환경 전체를 준다.
 pub struct LoginShell {
     shell: Option<PathBuf>,
     timeout: Duration,
     cooldown: Duration,
-    cache: Cache<(), ShellResult>,
-    cooling: Mutex<Cooling>,
+    // 아래 셋은 백그라운드 재시도 스레드와 함께 쓴다.
+    cache: Arc<Cache<(), ShellResult>>,
+    cooling: Arc<Mutex<Cooling>>,
+    recovered: Arc<Recovered>,
 }
 
 impl LoginShell {
@@ -87,8 +96,9 @@ impl LoginShell {
             shell,
             timeout,
             cooldown: TIMEOUT_COOLDOWN,
-            cache: Cache::default(),
-            cooling: Mutex::default(),
+            cache: Arc::default(),
+            cooling: Arc::default(),
+            recovered: Arc::default(),
         }
     }
 
@@ -104,41 +114,61 @@ impl LoginShell {
         self
     }
 
-    fn cooling(&self) -> MutexGuard<'_, Cooling> {
-        self.cooling.lock().unwrap_or_else(PoisonError::into_inner)
+    /// 시간 초과 뒤 백그라운드 재시도가 성공했을 때 부를 것. 두 번째부터는 무시한다.
+    pub fn on_recovered(&self, f: impl Fn() + Send + Sync + 'static) {
+        let _ = self.recovered.set(Box::new(f));
     }
 
-    /// 셸 환경. 성공한 것이 남아 있으면 그것, 시간 초과의 냉각 중이면 그 실패, 아니면 지금 셸을 돌린다(최대 시간 제한 남짓
-    /// 막힌다).
+    /// 셸 환경. 성공한 것이 남아 있으면 그것, 무효화 뒤 시간 초과가 있었으면 그 실패(냉각이 끝났으면 백그라운드로 다시 돌린다),
+    /// 아니면 지금 셸을 돌린다(최대 시간 제한 남짓 막힌다). 그러므로 막히는 것은 앱 시작 · 「환경 다시 읽기」 뒤의 첫 시도뿐이다.
     pub fn get(&self) -> Arc<ShellResult> {
         let epoch = {
-            let cooling = self.cooling();
-            if let Some((until, result)) = &cooling.until
-                && Instant::now() < *until
-            {
-                return Arc::clone(result);
+            let mut cooling = lock(&self.cooling);
+            if let Some((retry_at, result)) = cooling.timed_out.clone() {
+                if Instant::now() >= retry_at && !cooling.retrying {
+                    cooling.retrying = true;
+                    let epoch = cooling.epoch;
+                    drop(cooling);
+                    self.retry_in_background(epoch);
+                }
+                return result;
             }
             cooling.epoch
         };
-        let result = self
-            .cache
-            .get_or_compute(&(), || self.read_logged(), Result::is_ok);
-        if matches!(&*result, Err(e) if e.timed_out) {
-            let mut cooling = self.cooling();
-            let cooling_now = cooling
-                .until
-                .as_ref()
-                .is_some_and(|(until, _)| Instant::now() < *until);
-            if cooling.epoch == epoch && !cooling_now {
-                cooling.until = Some((Instant::now() + self.cooldown, Arc::clone(&result)));
-                tracing::warn!(
-                    target: "pw_runtime",
-                    cooldown = ?self.cooldown,
-                    "the login shell timed out; using the process environment without retrying for a while"
-                );
-            }
-        }
+        let result = self.cache.get_or_compute(
+            &(),
+            || read_logged(self.shell.as_deref(), self.timeout),
+            Result::is_ok,
+        );
+        settle(&self.cooling, epoch, &result, self.cooldown);
         result
+    }
+
+    /// 냉각이 끝난 뒤의 재시도. 부른 쪽은 물러난 결과를 이미 받았다 — 성공하면 다음 [`Self::get`] 부터 셸 환경이고
+    /// [`Self::on_recovered`] 를 부른다.
+    fn retry_in_background(&self, epoch: u64) {
+        let (shell, timeout, cooldown) = (self.shell.clone(), self.timeout, self.cooldown);
+        let cache = Arc::clone(&self.cache);
+        let cooling = Arc::clone(&self.cooling);
+        let recovered = Arc::clone(&self.recovered);
+        let spawned = std::thread::Builder::new()
+            .name("login-shell-retry".to_owned())
+            .spawn(move || {
+                let result = cache.get_or_compute(
+                    &(),
+                    || read_logged(shell.as_deref(), timeout),
+                    Result::is_ok,
+                );
+                if settle(&cooling, epoch, &result, cooldown)
+                    && let Some(f) = recovered.get()
+                {
+                    f();
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(target: "pw_runtime", %e, "cannot retry the login shell in the background");
+            lock(&self.cooling).retrying = false;
+        }
     }
 
     /// 성공한 셸 환경이 남아 있는가.
@@ -146,45 +176,88 @@ impl LoginShell {
         self.cache.contains(&())
     }
 
-    /// 남긴 환경과 시간 초과의 냉각을 잊는다. 다음 [`Self::get`] 이 셸을 다시 돌린다.
+    /// 남긴 환경과 시간 초과의 냉각을 잊는다. 다음 [`Self::get`] 이 셸을 다시 돌린다(그 결과를 기다린다).
     pub fn invalidate(&self) {
         {
-            let mut cooling = self.cooling();
-            cooling.until = None;
+            let mut cooling = lock(&self.cooling);
+            cooling.timed_out = None;
+            cooling.retrying = false;
             cooling.epoch += 1;
         }
         self.cache.clear();
     }
+}
 
-    fn read_logged(&self) -> ShellResult {
-        let started = Instant::now();
-        let read = match &self.shell {
-            Some(shell) => read_env(shell, self.timeout).map(|env| Layer {
-                env,
-                source: RuntimeSource::LoginShell {
-                    shell: shell.display().to_string(),
-                },
-            }),
-            None => Err(ShellError::other("no login shell")),
-        };
-        let elapsed = started.elapsed();
-        match &read {
-            Ok(layer) => tracing::info!(
-                target: "pw_runtime",
-                shell = %self.shell.as_deref().unwrap_or(Path::new("")).display(),
-                ?elapsed,
-                path = %layer.env.path.to_string_lossy(),
-                vars = layer.env.vars.len(),
-                "environment from the login shell"
-            ),
-            Err(e) => tracing::warn!(
-                target: "pw_runtime",
-                reason = %e.reason, ?elapsed,
-                "using the process environment; the login shell environment is unavailable"
-            ),
-        }
-        read
+/// 시도 하나가 끝났다. 시간 초과면 냉각을 (다시) 걸고, 아니면 푼다. 앞선 시간 초과 뒤에 성공했으면 `true`. 그사이 무효화됐으면
+/// 아무것도 하지 않는다.
+fn settle(
+    cooling: &Mutex<Cooling>,
+    epoch: u64,
+    result: &Arc<ShellResult>,
+    cooldown: Duration,
+) -> bool {
+    let mut cooling = lock(cooling);
+    if cooling.epoch != epoch {
+        return false;
     }
+    let was_cooling = cooling.timed_out.is_some();
+    cooling.retrying = false;
+    match &**result {
+        Err(e) if e.timed_out => {
+            cooling.timed_out = Some((Instant::now() + cooldown, Arc::clone(result)));
+            tracing::warn!(
+                target: "pw_runtime",
+                retry_after = ?cooldown,
+                "the login shell timed out; using the process environment and retrying in the background later"
+            );
+            false
+        }
+        Ok(_) => {
+            cooling.timed_out = None;
+            if was_cooling {
+                tracing::info!(target: "pw_runtime", "the login shell environment is available after a timeout");
+            }
+            was_cooling
+        }
+        Err(_) => {
+            cooling.timed_out = None;
+            false
+        }
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn read_logged(shell: Option<&Path>, timeout: Duration) -> ShellResult {
+    let started = Instant::now();
+    let read = match shell {
+        Some(shell) => read_env(shell, timeout).map(|env| Layer {
+            env,
+            source: RuntimeSource::LoginShell {
+                shell: shell.display().to_string(),
+            },
+        }),
+        None => Err(ShellError::other("no login shell")),
+    };
+    let elapsed = started.elapsed();
+    match &read {
+        Ok(layer) => tracing::info!(
+            target: "pw_runtime",
+            shell = %shell.unwrap_or(Path::new("")).display(),
+            ?elapsed,
+            path = %layer.env.path.to_string_lossy(),
+            vars = layer.env.vars.len(),
+            "environment from the login shell"
+        ),
+        Err(e) => tracing::warn!(
+            target: "pw_runtime",
+            reason = %e.reason, ?elapsed,
+            "using the process environment; the login shell environment is unavailable"
+        ),
+    }
+    read
 }
 
 impl RuntimeProvider for LoginShell {
