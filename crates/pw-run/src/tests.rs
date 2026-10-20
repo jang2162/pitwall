@@ -547,3 +547,25 @@ async fn a_login_shell_timeout_does_not_delay_the_next_terminal() {
         started.elapsed()
     );
 }
+
+/// 응답을 기다리지 않고 연달아 보낸 입력이 보낸 순서대로 셸에 들어간다(입력은 핸들러의 동기 구간에서 큐에 들어간다).
+#[tokio::test(flavor = "multi_thread")]
+async fn inputs_reach_the_shell_in_the_order_they_were_sent() {
+    // raw: 받은 바이트를 cat 이 그대로 돌려준다.
+    let f = Fixture::new(
+        "schema = 1\n[terminal]\nshell = [\"/bin/sh\", \"-c\", \"stty raw -echo && echo READY && exec cat\"]\n",
+    );
+    let mut c = f.client();
+    let t = c.open(f.create_params(80, 24)).await;
+    // raw 가 걸리기 전에 보내면 줄 버퍼(MAX_CANON)가 넘친다.
+    c.read_until(t.stream, "READY\n").await;
+    let sent: String = (0..300).map(|i| format!("{i:04},")).collect();
+    for i in 0..300 {
+        c.request(
+            "terminal.input",
+            json!({"terminalId": t.terminal, "data": format!("{i:04},")}),
+        );
+    }
+    let text = c.read_until(t.stream, "0299,").await;
+    assert_eq!(text, sent);
+}
