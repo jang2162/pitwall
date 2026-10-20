@@ -664,6 +664,17 @@ fn dangling_symlinks_are_not_written() {
             "{link}"
         );
         assert!(!target.exists(), "{link}");
+        // 상태의 크기는 `fs.list` 와 같이 0 이다(링크 자신의 길이가 아니라).
+        if link == "dang-in" {
+            let stat = f.fs.stat(&Fixture::at(&id, &path)).unwrap();
+            assert_eq!(
+                (stat.kind, stat.target, stat.size),
+                (EntryKind::Symlink, None, 0)
+            );
+            let listed = f.fs.list(&Fixture::at(&id, &root)).unwrap();
+            let entry = listed.entries.iter().find(|e| e.name == link).unwrap();
+            assert_eq!(entry.size, stat.size);
+        }
     }
 }
 
@@ -712,4 +723,30 @@ fn read_only_means_this_process_cannot_write() {
     let err = f.write(&id, &path, "changed", version).unwrap_err();
     assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
     assert_eq!(fs::read(&path).unwrap(), b"locked");
+}
+
+/// 판정과 open 사이에 파일이 루트 밖 링크로 바뀌면 `fs.read` 는 그 내용을 돌려주지 않는다(연 핸들의 경로를 다시 판정).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn a_file_swapped_to_an_outside_link_while_reading_is_refused() {
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    let secret = f.base.join("secret.txt");
+    fs::write(&secret, "secret").unwrap();
+    let path = root.join("a.txt");
+    fs::write(&path, "inside").unwrap();
+    let swap_to = secret.clone();
+    *f.fs.before_open.lock().unwrap() = Some(Box::new(move |p: &Path| {
+        if fs::symlink_metadata(p).is_ok_and(|m| !m.file_type().is_symlink()) {
+            fs::remove_file(p).unwrap();
+            std::os::unix::fs::symlink(&swap_to, p).unwrap();
+        }
+    }));
+    let err = f.read(&id, &path).unwrap_err();
+    assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
+    assert!(
+        !format!("{err:?}").contains("\"secret\""),
+        "the outside content must not leak: {err:?}"
+    );
 }

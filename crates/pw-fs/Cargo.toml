@@ -26,6 +26,10 @@ tokio = { workspace = true, features = ["rt"] }
 # access(2) 로 실제 쓰기 가능 여부를 본다. 버전은 pw-open-with · 데스크톱 크레이트와 같게 둔다.
 libc = "0.2.190"
 
+[target."cfg(windows)".dependencies]
+# 연 파일 핸들의 실제 경로(GetFinalPathNameByHandleW, src/handle.rs). 버전은 Tauri 트리의 것과 같게 둔다.
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt", "macros"] }

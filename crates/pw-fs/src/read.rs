@@ -33,12 +33,15 @@ pub fn version(bytes: &[u8], meta: &fs::Metadata) -> String {
     format!("{}-{mtime}-{hex}", bytes.len())
 }
 
+/// 파일을 여는 방법. 제품 코드는 연 핸들의 경로를 다시 판정하는 [`crate::scope::Roots::open_inside`] 를 넘긴다.
+pub type Open<'a> = &'a dyn Fn(&Path) -> io::Result<File>;
+
 /// 파일 전체. 읽는 사이 크기 · mtime 이 바뀌면(다른 프로세스가 쓰는 중) 다시 읽는다 — 내용과 `version` 이 서로 다른 순간의 것이
 /// 되지 않게.
-pub fn read_whole(path: &Path) -> io::Result<Snapshot> {
+pub fn read_whole(path: &Path, open: Open<'_>) -> io::Result<Snapshot> {
     const ATTEMPTS: usize = 5;
     for _ in 0..ATTEMPTS {
-        let mut file = File::open(path)?;
+        let mut file = open(path)?;
         let before = file.metadata()?;
         let mut bytes = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
         file.read_to_end(&mut bytes)?;
@@ -67,8 +70,8 @@ pub struct Range {
 }
 
 /// `offset` 부터 최대 `length` 바이트. 판정에 쓸 파일 앞부분도 함께 읽는다(최대 8 KiB).
-pub fn read_range(path: &Path, offset: u64, length: u64) -> io::Result<Range> {
-    let mut file = File::open(path)?;
+pub fn read_range(path: &Path, offset: u64, length: u64, open: Open<'_>) -> io::Result<Range> {
+    let mut file = open(path)?;
     let meta = file.metadata()?;
     let mut head = Vec::new();
     (&mut file)
@@ -97,7 +100,7 @@ mod tests {
         assert_ne!(version(b"aaaa", &meta), version(b"aaab", &meta));
         assert_eq!(
             version(b"aaaa", &meta),
-            read_whole(&path).unwrap().version()
+            read_whole(&path, &|p| File::open(p)).unwrap().version()
         );
     }
 
@@ -107,15 +110,15 @@ mod tests {
         let path = tmp.path().join("big");
         let data: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
         fs::write(&path, &data).unwrap();
-        let r = read_range(&path, 10_000, 100).unwrap();
+        let r = read_range(&path, 10_000, 100, &|p| File::open(p)).unwrap();
         assert_eq!(r.bytes, &data[10_000..10_100]);
         assert_eq!(r.head, &data[..SNIFF_BYTES]);
-        let r = read_range(&path, 0, 10).unwrap();
+        let r = read_range(&path, 0, 10, &|p| File::open(p)).unwrap();
         assert_eq!(r.bytes, &data[..10]);
         // 끝을 넘는 범위는 있는 만큼.
-        let r = read_range(&path, 19_990, 100).unwrap();
+        let r = read_range(&path, 19_990, 100, &|p| File::open(p)).unwrap();
         assert_eq!(r.bytes, &data[19_990..]);
-        let r = read_range(&path, 30_000, 100).unwrap();
+        let r = read_range(&path, 30_000, 100, &|p| File::open(p)).unwrap();
         assert!(r.bytes.is_empty());
     }
 }

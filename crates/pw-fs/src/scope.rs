@@ -9,11 +9,15 @@
 //!   판정이다. 목록은 그런 링크를 항목으로는 보이되 「루트 밖을 가리킴」 으로 표시하고 대상을 알리지 않는다([`crate::list`]).
 //! - **쓰기**: 정규화한 실제 경로(심링크를 모두 따라간 뒤)가 루트 안일 때만. 루트 밖을 가리키는 심링크로는 쓰지 못한다. 대상이
 //!   없거나 고리인 심링크에도 쓰지 않는다 — 실제 경로로 풀리지 않아 rename 이 링크 자체를 일반 파일로 바꾼다.
+//! - **읽기를 연 뒤 다시 판정**: 판정과 open 사이에 경로의 구성 요소가 루트 밖 링크로 바뀌면(깨진 링크의 대상이 그사이 생기는
+//!   등) 다른 파일이 열린다. 파일 읽기는 연 핸들의 실제 경로([`crate::handle::path_of`])를 다시 판정하고 밖이면 버린다
+//!   ([`Roots::open_inside`]). 핸들 경로를 얻지 못하는 플랫폼은 판정만 한다. 폴더 목록(`read_dir`)은 핸들 경로를 보지 않는다.
 //! - **한계(쓰기)**: 판정은 경로 글자로 하고 쓰기는 그 뒤에 경로로 연다. 판정과 rename 사이에 다른 로컬 프로세스가 경로의 폴더
 //!   하나를 루트 밖 링크로 바꾸면 임시 파일 · rename 이 루트 밖에 떨어진다. 막으려면 폴더 핸들 기준 `openat` · `renameat` 가
 //!   필요하다(M1 에서는 하지 않는다). 루트 안에 동시에 쓸 수 있는 로컬 프로세스가 있어야 생기는 경합이다.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use pw_core::registry::path::{PathRejected, normalize, simplify};
@@ -123,6 +127,39 @@ impl Roots {
     }
 }
 
+/// 판정 뒤에 연 파일이 루트 밖이었다([`Roots::open_inside`]). io 오류 안에 실려 RPC 오류로 바뀐다.
+#[derive(Debug)]
+pub struct Escaped(pub PathBuf);
+
+impl std::fmt::Display for Escaped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "`{}` was opened outside the project roots (a symlink changed while it was read)",
+            self.0.display()
+        )
+    }
+}
+
+impl std::error::Error for Escaped {}
+
+impl Roots {
+    /// `real`(이미 판정한 경로)을 읽기로 열고, 연 핸들의 실제 경로가 루트 안인지 다시 본다.
+    pub fn open_inside(&self, real: &Path) -> io::Result<File> {
+        let file = File::open(real)?;
+        if let Some(opened) = crate::handle::path_of(&file) {
+            let opened = simplify(opened);
+            if !self.contains(&opened) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    Escaped(opened),
+                ));
+            }
+        }
+        Ok(file)
+    }
+}
+
 fn absolute_normalized(path: &Path) -> Result<PathBuf, Denied> {
     normalize(path).map_err(|PathRejected::Relative| Denied::Relative(path.to_path_buf()))
 }
@@ -224,6 +261,35 @@ mod tests {
             roots.writable(&proj.join("link.txt")).unwrap(),
             proj.join("real.txt")
         );
+    }
+
+    /// 판정과 open 사이에 경로가 루트 밖 링크로 바뀌면(읽기 TOCTOU) 연 핸들의 실제 경로로 다시 판정해 버린다. 핸들 경로를
+    /// 얻는 플랫폼(macOS · Linux)에서 본다.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_path_swapped_to_an_outside_link_after_the_check_is_not_read() {
+        let (_tmp, base) = real_tmp();
+        let proj = base.join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        fs::write(base.join("secret.txt"), "secret").unwrap();
+        let path = proj.join("a.txt");
+        fs::write(&path, "inside").unwrap();
+        let roots = Roots::new([proj.clone()]);
+        let checked = roots.readable(&path).unwrap();
+        assert_eq!(
+            crate::handle::path_of(&roots.open_inside(&checked.real).unwrap()),
+            Some(path.clone())
+        );
+
+        // 판정은 끝났다. 그 사이 다른 프로세스가 같은 이름을 루트 밖 링크로 바꾼다.
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(base.join("secret.txt"), &path).unwrap();
+        let err = roots.open_inside(&checked.real).unwrap_err();
+        let escaped = err
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<Escaped>())
+            .expect("escaped");
+        assert_eq!(escaped.0, base.join("secret.txt"));
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //! - [`write`]: 임시 파일 → rename 원자 쓰기.
 //! - [`methods`]: `fs.list` · `fs.stat` · `fs.read` · `fs.write` RPC.
 
+pub mod handle;
 pub mod judge;
 pub mod list;
 pub mod methods;
@@ -36,6 +37,10 @@ use crate::scope::{Denied, Roots};
 
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
+/// 시험이 판정 뒤 · 열기 직전에 끼우는 동작.
+#[cfg(test)]
+type BeforeOpen = Box<dyn Fn(&Path) + Send>;
+
 /// 쓰기 잠금의 갈래 수. 실제 경로의 해시로 고른다 — 다른 파일끼리 가끔 같은 갈래를 기다릴 뿐 맞음에는 영향이 없다.
 const WRITE_LOCKS: usize = 32;
 
@@ -46,6 +51,9 @@ pub struct Fs {
     /// `expectedVersion` 으로 들어온 두 쓰기가 모두 확인을 통과해 하나가 말없이 사라진다. 이 프로세스 안의 쓰기만 묶는다 —
     /// 다른 프로세스(에이전트)의 쓰기와의 경합은 잠금 없이 막을 수 없다(그 쓰기는 다음 `fs.write` 에서 `CONFLICT` 로 드러난다).
     write_locks: [Mutex<()>; WRITE_LOCKS],
+    /// 시험: 판정 뒤 · 파일을 열기 직전에 부른다(그 사이 경로를 바꿔 읽기 경합을 재현한다).
+    #[cfg(test)]
+    before_open: Mutex<Option<BeforeOpen>>,
 }
 
 impl Default for Fs {
@@ -53,6 +61,8 @@ impl Default for Fs {
         Self {
             projects: OnceLock::new(),
             write_locks: std::array::from_fn(|_| Mutex::new(())),
+            #[cfg(test)]
+            before_open: Mutex::new(None),
         }
     }
 }
@@ -60,6 +70,20 @@ impl Default for Fs {
 impl Fs {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 판정한 경로를 읽기로 연다. 연 핸들의 실제 경로를 다시 판정한다([`Roots::open_inside`]).
+    fn open(&self, roots: &Roots, real: &Path) -> io::Result<fs::File> {
+        #[cfg(test)]
+        if let Some(hook) = self
+            .before_open
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            hook(real);
+        }
+        roots.open_inside(real)
     }
 
     fn write_lock(&self, real: &Path) -> std::sync::MutexGuard<'_, ()> {
@@ -118,7 +142,12 @@ impl Fs {
             path: target.real.display().to_string(),
             kind,
             target: target_kind,
-            size: meta.len(),
+            // 깨진 링크는 `fs.list` 처럼 0 이다(링크 자신의 길이가 아니라).
+            size: if kind == EntryKind::Symlink && target_kind.is_none() {
+                0
+            } else {
+                meta.len()
+            },
             mtime_ms: mtime_ms(&meta),
             readonly: read_only(&target.real, &meta),
             size_class: meta.is_file().then(|| size_class(meta.len())),
@@ -148,7 +177,8 @@ impl Fs {
                     real.display()
                 )));
             }
-            let snap = read::read_whole(real).map_err(|e| io_error(real, e))?;
+            let snap =
+                read::read_whole(real, &|p| self.open(&roots, p)).map_err(|e| io_error(real, e))?;
             let head = &snap.bytes[..snap.bytes.len().min(SNIFF_BYTES)];
             let start = Bom::detect(head).map_or(0, Bom::byte_len);
             let judgment = judge(head, &snap.bytes[start..], snap.meta.len(), false);
@@ -164,8 +194,10 @@ impl Fs {
             });
         }
         let offset = params.offset.unwrap_or(0);
-        let range = read::read_range(real, offset, params.length.unwrap_or(READ_ONLY_MAX))
-            .map_err(|e| io_error(real, e))?;
+        let range = read::read_range(real, offset, params.length.unwrap_or(READ_ONLY_MAX), &|p| {
+            self.open(&roots, p)
+        })
+        .map_err(|e| io_error(real, e))?;
         let size = range.meta.len();
         let eof = offset.saturating_add(range.bytes.len() as u64) >= size;
         let start = if offset == 0 {
@@ -225,7 +257,10 @@ impl Fs {
                     real.display()
                 )));
             }
-            Ok(_) => Some(read::read_whole(&real).map_err(|e| io_error(&real, e))?),
+            Ok(_) => Some(
+                read::read_whole(&real, &|p| self.open(&roots, p))
+                    .map_err(|e| io_error(&real, e))?,
+            ),
             Err(e) if e.kind() == io::ErrorKind::NotFound => None,
             Err(e) => return Err(io_error(&real, e)),
         };
@@ -327,6 +362,12 @@ fn denied(d: Denied) -> RpcError {
 
 fn io_error(path: &Path, e: io::Error) -> RpcError {
     let shown = path.display().to_string();
+    if let Some(escaped) = e
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<scope::Escaped>())
+    {
+        return RpcError::invalid_params(escaped.to_string());
+    }
     if is_link_loop(&e) {
         return RpcError::invalid_params(format!("`{shown}` goes through a symlink loop"));
     }
