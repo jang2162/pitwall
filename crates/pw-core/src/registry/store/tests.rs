@@ -539,6 +539,46 @@ fn a_migration_finished_by_another_writer_while_waiting_is_not_a_failure() {
     assert_eq!(version(&opened.conn), supported_version());
 }
 
+/// 다른 연결이 모든 단계를 올리고 쓰기 잠금을 쥐고 있으면 열기는 잠금을 한 번만 기다린다 — 다시 읽은 버전이 최신이면 남은 단계마다
+/// 다시 기다리지 않는다(단계가 늘수록 경합 중 열기가 단계 수만큼 [`BUSY_TIMEOUT`] 을 기다리지 않게).
+#[test]
+fn an_open_racing_a_finished_migration_waits_for_the_lock_once() {
+    assert!(
+        MIGRATIONS.len() >= 2,
+        "단계가 둘 이상이어야 이 시험이 뜻이 있다"
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("state.db");
+    let mut other = Connection::open(&file).unwrap();
+    let busy = Duration::from_secs(1);
+    let tx = other
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+    let started = Instant::now();
+    let opener = {
+        let file = file.clone();
+        std::thread::spawn(move || open(&file, busy))
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    for step in MIGRATIONS {
+        step(&tx).unwrap();
+    }
+    tx.pragma_update(None, "user_version", supported_version())
+        .unwrap();
+    tx.commit().unwrap();
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let opened = opener.join().unwrap();
+    let elapsed = started.elapsed();
+    other.execute_batch("ROLLBACK").unwrap();
+    assert!(
+        matches!(opened.status, StorageStatus::Ok { .. }),
+        "{:?}",
+        opened.status
+    );
+    // 한 번이면 약 1초, 단계마다 기다리면 2초 이상이다.
+    assert!(elapsed < Duration::from_millis(1800), "{elapsed:?}");
+}
+
 /// 비정상 종료로 `-wal` · `-shm` 이 남은 파일이 손상이면: 검사 연결이 닫히며 남은 WAL 프레임을 손상된 파일에 옮기고 사이드카를
 /// [`corrupt_crash_image`] 에서 WAL 프레임에만 있는 행의 id.
 const FRAME_ONLY_ID: &str = "row-only-in-the-wal-frames";

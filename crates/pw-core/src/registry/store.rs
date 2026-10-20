@@ -464,9 +464,13 @@ fn migrate(conn: &mut Connection, migrations: &[Migration]) -> Result<(), Failur
         };
         // 쓰기 잠금을 기다리다 시간을 넘겼다. 같은 새 파일을 동시에 처음 연 다른 연결이 그 사이 이 단계를 올리고 곧바로 쓰기를
         // 이어 가면 쓰기 잠금이 비는 틈은 짧아 기다리는 쪽이 계속 진다(디스크 동기화가 느린 Windows 에서 늘 그랬다). 읽기는 그
-        // 틈에도 되므로 버전을 다시 읽어, 이미 올라갔으면 잠금 없이 넘어간다.
+        // 틈에도 되므로 버전을 다시 읽어, 이미 올라갔으면 잠금 없이 넘어간다. 다른 연결이 모든 단계를 올렸으면 남은 단계마다
+        // 잠금을 다시 기다리지 않고 곧바로 끝낸다.
         if refused.sqlite_error_code() == Some(ErrorCode::DatabaseBusy) {
             let version: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+            if version as usize >= migrations.len() {
+                return Ok(());
+            }
             if version > from {
                 continue;
             }
