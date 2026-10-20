@@ -1,6 +1,6 @@
-// 모든 창이 함께 쓰는 문자열(액션 · 액션 찾기 · 테마와 언어 고르기 · 키맵 파일 오류 · 창 제목 · 다음에서 열기). 내용은 Fluent 리소스
-// (extensions/i18n-default/i18n/*/app.ftl)에 있고, 이 파일은 화면 자리와 메시지 id 를 잇는다. 여기 적은 id 가 ko · en 리소스에
-// 모두 있는지는 resources.test.ts 가 본다.
+// 모든 창이 함께 쓰는 문자열(액션 · 액션 찾기 · 테마와 언어 고르기 · 키맵 파일 오류 · 창 제목 · 다음에서 열기). 설정 창에만 나오는 것은
+// settings/strings.ts 에 있다. 내용은 Fluent 리소스(extensions/i18n-default/i18n/*/app.ftl)에 있고, 이 파일은 화면 자리와 메시지 id
+// 를 잇는다. 여기 적은 id 가 ko · en 리소스에 모두 있는지는 resources.test.ts 가 본다.
 
 import { useLocalization } from "@fluent/react";
 import { useMemo } from "react";
@@ -73,13 +73,6 @@ export function appStrings(t: Translate) {
         /** `code`: 종료 코드, 신호로 끝났으면 `"signal"`. */
         exited: (code: string) => t("open-with-problem-exited", { code }),
       },
-    },
-    settings: {
-      appearance: t("settings-appearance"),
-      theme: t("settings-theme"),
-      language: t("settings-language"),
-      languageSystem: t("settings-language-system"),
-      languageFailed: (error: string) => t("settings-language-failed", { error }),
     },
   };
 }

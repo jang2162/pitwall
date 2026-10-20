@@ -87,10 +87,12 @@ function status(
   install: CliStatus["install"],
   onPath: CliStatus["onPath"],
   pathStatus: CliStatus["pathStatus"] = { kind: "ok" },
+  source: CliStatus["source"] = { kind: "ok" },
 ): CliStatus {
   return {
     target: TARGET,
     app: APP,
+    source,
     install,
     onPath,
     pathSource: { kind: "loginShell", shell: "/bin/zsh" },
@@ -274,6 +276,46 @@ it("has no install button where the shell command cannot be installed", async ()
   await mount();
   expect(headline()).toBe(`${T.install.missing} · ${T.onPath.notFound}`);
   expect(button(T.installButton)).toBeUndefined();
+});
+
+it("does not offer to install when the pitwall on PATH is already this app", async () => {
+  host.status = status(
+    { kind: "missing" },
+    { kind: "thisApp", path: "/Users/me/.local/bin/pitwall" },
+  );
+  await mount();
+  expect(headline()).toBe(T.worksFromPath);
+  expect(section().textContent).toContain(
+    T.detail.worksFromPath("/Users/me/.local/bin/pitwall", TARGET),
+  );
+  expect(section().textContent).not.toContain(T.detail.missing(TARGET));
+  expect(button(T.installButton)).toBeUndefined();
+  expect(section().textContent).not.toContain(T.absolute(TARGET));
+});
+
+it("does not offer to install a development build over the real command, and says why", async () => {
+  const DEV = "/Users/me/code/pitwall/target/debug/pitwall";
+  host.status = {
+    ...status(
+      { kind: "otherLink", target: APP },
+      { kind: "other", path: TARGET, resolved: APP },
+      undefined,
+      {
+        kind: "developmentBuild",
+      },
+    ),
+    app: DEV,
+  };
+  await mount();
+  expect(headline()).toBe(`${T.install.otherLink} · ${T.onPath.other}`);
+  expect(button(T.installButton)).toBeUndefined();
+  expect(section().textContent).toContain(T.source.developmentBuild(DEV, TARGET));
+
+  host.status = status({ kind: "missing" }, { kind: "notFound" }, undefined, { kind: "transient" });
+  await mount();
+  expect(button(T.installButton)).toBeUndefined();
+  expect(section().textContent).toContain(T.source.transient(APP));
+  expect(native.installShellCommand).not.toHaveBeenCalled();
 });
 
 it("notes when PATH came from the app instead of the login shell", async () => {

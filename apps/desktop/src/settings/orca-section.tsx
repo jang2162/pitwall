@@ -74,15 +74,21 @@ function CopyValue({
 
 /** 설치 위치 · PATH 의 판정을 한 줄 머리와 설명으로. */
 export function describeStatus(status: CliStatus, T: SettingsStrings["orca"]) {
-  const { install, onPath, target } = status;
-  const headline = `${T.install[install.kind]} · ${T.onPath[onPath.kind]}`;
+  const { install, onPath, target, app, source } = status;
+  // 설치 위치에는 없지만 PATH 로 이미 이 앱이 잡힌다(`~/.local/bin` 등) — Orca 는 동작하므로 설치를 권하지 않는다.
+  const worksFromPath = install.kind === "missing" && onPath.kind === "thisApp";
+  const headline = worksFromPath
+    ? T.worksFromPath
+    : `${T.install[install.kind]} · ${T.onPath[onPath.kind]}`;
   const details: string[] = [];
   switch (install.kind) {
     case "thisApp":
       details.push(T.detail.installed(target));
       break;
     case "missing":
-      details.push(T.detail.missing(target));
+      details.push(
+        worksFromPath ? T.detail.worksFromPath(onPath.path, target) : T.detail.missing(target),
+      );
       break;
     case "otherLink":
       details.push(T.detail.otherLink(target, install.target));
@@ -95,11 +101,19 @@ export function describeStatus(status: CliStatus, T: SettingsStrings["orca"]) {
     details.push(T.detail.otherOnPath(onPath.path));
     if (onPath.resolved !== null) details.push(T.detail.resolved(onPath.resolved));
   }
+  /** 설치가 고칠 자리인가. 심링크가 아닌 파일은 설치가 건드리지 않는다. */
+  const fixable = (install.kind === "missing" && !worksFromPath) || install.kind === "otherLink";
   return {
     headline,
     details,
-    /** 「Shell 명령 설치」 가 고칠 수 있는가. 심링크가 아닌 파일은 설치가 건드리지 않는다. */
-    canInstall: install.kind === "missing" || install.kind === "otherLink",
+    /** 「Shell 명령 설치」 버튼을 보이는가. 설치가 거절할 출처(개발 빌드 · 디스크 이미지)면 대신 `refused` 를 보인다. */
+    canInstall: fixable && source.kind === "ok",
+    refused:
+      !fixable || source.kind === "ok"
+        ? undefined
+        : source.kind === "developmentBuild"
+          ? T.source.developmentBuild(app, target)
+          : T.source.transient(app),
     /** 이 앱으로 설치됐는데 PATH 로는 이 앱이 잡히지 않는다 — 절대 경로를 등록한다. */
     needsAbsolute: install.kind === "thisApp" && onPath.kind !== "thisApp",
     fallback: status.pathStatus.kind === "fallback" ? status.pathStatus.reason : undefined,
@@ -158,6 +172,7 @@ export function OrcaSection({ native }: { native: SettingsNative }) {
         )}
       </div>
 
+      {view?.refused !== undefined && install && <p className={NOTE}>{view.refused}</p>}
       <div className="flex items-center gap-2">
         {view?.canInstall && install && (
           <button type="button" className={BUTTON} disabled={installing} onClick={runInstall}>

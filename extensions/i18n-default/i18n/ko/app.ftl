@@ -37,14 +37,14 @@ keymap-file-error = 키맵 파일 오류 — 이전 키맵을 쓰는 중: { $err
 # $warnings: 경고들을 "; " 로 이은 것
 keymap-file-warning = 키맵 파일 경고: { $warnings }
 
+## 설정 창의 외관과 「외부 도구 > Orca 에서 Pitwall 열기」(docs/design/04-features.md F8-6). 키는 apps/desktop/src/settings/strings.ts 가 잇는다.
+
 settings-appearance = 외관
 settings-theme = 테마
 settings-language = 언어
 settings-language-system = 시스템
 # $error: 설정을 저장하지 못한 이유
 settings-language-failed = 언어를 바꾸지 못했다: { $error }
-
-## 설정 창의 「외부 도구 > Orca 에서 Pitwall 열기」(docs/design/04-features.md F8-6). 키는 apps/desktop/src/settings/strings.ts 가 잇는다.
 
 settings-external-tools = 외부 도구
 settings-orca-title = Orca 에서 Pitwall 열기
@@ -68,6 +68,8 @@ settings-orca-not-a-link = 설치할 수 없음
 settings-orca-on-path = PATH 에 있음
 settings-orca-not-on-path = PATH 에 없음
 settings-orca-other-on-path = PATH 의 pitwall 이 다른 것
+# 설치 위치에는 없지만 PATH 의 pitwall 이 이미 이 앱이다
+settings-orca-works-from-path = PATH 에 있음 (설치 위치 밖)
 # $target: 설치 위치(/usr/local/bin/pitwall)
 settings-orca-detail-installed = { $target } 가 이 앱을 가리킨다.
 settings-orca-detail-missing = { $target } 에 Shell 명령이 없다.
@@ -75,11 +77,17 @@ settings-orca-detail-missing = { $target } 에 Shell 명령이 없다.
 settings-orca-detail-other-link = { $target } 가 다른 곳을 가리킨다: { $points }
 settings-orca-detail-not-a-link = { $target } 에 Pitwall 이 만들지 않은 파일이 있다. 「Shell 명령 설치」 는 이것을 바꾸지 않는다 — 직접 치운 뒤 다시 검사한다.
 # $path: PATH 에서 찾은 pitwall 의 경로
+settings-orca-detail-works-from-path = { $path } 가 이 앱을 띄우고 Orca 는 이것을 실행한다. { $target } 에 Shell 명령을 설치하지 않아도 된다.
+# $path: PATH 에서 찾은 pitwall 의 경로
 settings-orca-detail-other-on-path = PATH 에서 먼저 찾는 것은 { $path } 다. Orca 는 이것을 실행한다.
 # $resolved: 그 경로의 심링크를 푼 실제 경로
 settings-orca-detail-resolved = 실제 파일: { $resolved }
 settings-orca-install = Shell 명령 설치
 settings-orca-installing = 설치하는 중…
+# $app: 이 앱 바이너리, $target: 설치 위치
+settings-orca-source-development-build = 개발 빌드({ $app })는 { $target } 에 설치하지 않는다 — 이 Mac 의 pitwall 명령이 이 빌드를 가리키게 되고, 빌드를 지우면 끊긴다. 설치를 확인하려면 PITWALL_SHELL_COMMAND_TARGET 에 임시 폴더 안의 절대 경로를 주고 앱을 띄운다.
+# $app: 이 앱 바이너리
+settings-orca-source-transient = Pitwall 이 { $app } 에서 돌고 있다 — 디스크 이미지를 꺼내거나 Mac 을 재시작하면 사라지는 곳이다. Applications 폴더로 옮겨 연 뒤 설치한다.
 # $target: 설치 위치
 settings-orca-absolute = Orca 가 PATH 로 이 앱을 찾지 못한다. 명령 칸에 절대 경로 { $target } 를 적는다.
 # $reason: 로그인 셸 환경을 읽지 못한 이유

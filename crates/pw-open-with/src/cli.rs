@@ -65,6 +65,20 @@ pub enum CliOnPath {
     },
 }
 
+/// 「Shell 명령 설치」 가 이 앱 바이너리를 설치 위치에 걸어도 되는가. 판정은 데스크톱의 설치와 같은 함수다
+/// (`apps/desktop/src-tauri/src/shell_command.rs` 의 `check_source`) — 설치가 거절할 출처면 설정 창은 설치 버튼 대신 이유를 보인다.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CliSource {
+    Ok,
+    /// 꺼내거나 재시작하면 사라지는 곳(읽기 전용 디스크 이미지 · App Translocation)에서 돈다.
+    Transient,
+    /// 앱 번들 밖의 바이너리(개발 빌드)이고 설치 위치가 기본값이다 — 사람의 실제 `pitwall` 을 이 빌드로 바꾸게 된다.
+    DevelopmentBuild,
+}
+
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -74,6 +88,8 @@ pub struct CliStatus {
     pub target: String,
     /// 이 앱 바이너리의 실제 경로.
     pub app: String,
+    /// 이 앱을 설치 위치에 걸 수 있는가.
+    pub source: CliSource,
     pub install: CliInstall,
     pub on_path: CliOnPath,
     /// 찾아본 PATH 의 출처. 로그인 셸을 읽지 못했으면 앱 프로세스의 것이다(`path_status` 가 그 이유).
@@ -97,19 +113,23 @@ pub struct CliCheck {
     runtime: Arc<Runtime>,
     target: Result<PathBuf, String>,
     app: Result<PathBuf, String>,
+    source: CliSource,
 }
 
 impl CliCheck {
-    /// `target`: 「Shell 명령 설치」 의 대상(절대 경로). `app`: 이 앱 바이너리.
+    /// `target`: 「Shell 명령 설치」 의 대상(절대 경로). `app`: 이 앱 바이너리. `source`: 그 바이너리를 대상에 걸 수 있는가
+    /// (프로세스가 도는 동안 바뀌지 않는다).
     pub fn new(
         runtime: Arc<Runtime>,
         target: Result<PathBuf, String>,
         app: Result<PathBuf, String>,
+        source: CliSource,
     ) -> Self {
         Self {
             runtime,
             target,
             app,
+            source,
         }
     }
 
@@ -126,6 +146,7 @@ impl CliCheck {
         Ok(CliStatus {
             target: target.display().to_string(),
             app: app.display().to_string(),
+            source: self.source,
             install: install_state(target, &app),
             on_path: on_path(&layer.env.path, &app),
             path_source: layer.source,
@@ -248,6 +269,7 @@ mod tests {
                 Arc::new(runtime),
                 Ok(self.target.clone()),
                 Ok(self.app.clone()),
+                CliSource::Ok,
             )
         }
 
@@ -389,6 +411,21 @@ mod tests {
         );
     }
 
+    /// 설치가 거절할 출처(개발 빌드 등)는 판정을 그대로 실어 보낸다 — 설정 창이 설치 버튼 대신 이유를 보인다.
+    #[test]
+    fn the_source_check_is_reported() {
+        let f = Fixture::new();
+        let check = CliCheck::new(
+            Arc::new(Runtime::new(LoginShell::new(None, Duration::from_secs(1)))),
+            Ok(f.target.clone()),
+            Ok(f.app.clone()),
+            CliSource::DevelopmentBuild,
+        );
+        let status = check.status().unwrap();
+        assert_eq!(status.source, CliSource::DevelopmentBuild);
+        assert_eq!(status.install, CliInstall::Missing);
+    }
+
     /// 설치 위치를 구하지 못했으면(`PITWALL_SHELL_COMMAND_TARGET` 이 상대 경로 등) 오류다.
     #[test]
     fn an_unknown_target_is_an_error() {
@@ -397,6 +434,7 @@ mod tests {
             Arc::new(Runtime::new(LoginShell::new(None, Duration::from_secs(1)))),
             Err("PITWALL_SHELL_COMMAND_TARGET must be an absolute path: x".to_owned()),
             Ok(f.app.clone()),
+            CliSource::Ok,
         );
         let e = check.status().unwrap_err();
         assert_eq!(e.code, pw_rpc::code::INTERNAL_ERROR);

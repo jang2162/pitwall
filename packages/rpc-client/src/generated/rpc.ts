@@ -305,11 +305,23 @@ export type CliOnPath = { kind: "notFound" } |
 /**  찾은 첫 실행 파일이 다른 것이다. `resolved` 는 심링크를 푼 실제 경로(풀지 못했으면 없다). */
 { kind: "other"; path: string; resolved: string | null };
 
+/**
+ *  「Shell 명령 설치」 가 이 앱 바이너리를 설치 위치에 걸어도 되는가. 판정은 데스크톱의 설치와 같은 함수다
+ *  (`apps/desktop/src-tauri/src/shell_command.rs` 의 `check_source`) — 설치가 거절할 출처면 설정 창은 설치 버튼 대신 이유를 보인다.
+ */
+export type CliSource = { kind: "ok" } | 
+/**  꺼내거나 재시작하면 사라지는 곳(읽기 전용 디스크 이미지 · App Translocation)에서 돈다. */
+{ kind: "transient" } | 
+/**  앱 번들 밖의 바이너리(개발 빌드)이고 설치 위치가 기본값이다 — 사람의 실제 `pitwall` 을 이 빌드로 바꾸게 된다. */
+{ kind: "developmentBuild" };
+
 export type CliStatus = {
 	/**  설치 위치(절대 경로). PATH 에 없을 때 Orca 에 이 경로를 그대로 등록한다. */
 	target: string,
 	/**  이 앱 바이너리의 실제 경로. */
 	app: string,
+	/**  이 앱을 설치 위치에 걸 수 있는가. */
+	source: CliSource,
 	install: CliInstall,
 	onPath: CliOnPath,
 	/**  찾아본 PATH 의 출처. 로그인 셸을 읽지 못했으면 앱 프로세스의 것이다(`path_status` 가 그 이유). */

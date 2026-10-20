@@ -129,6 +129,49 @@
               }
             ]
           },
+          "CliSource": {
+            "description": "「Shell 명령 설치」 가 이 앱 바이너리를 설치 위치에 걸어도 되는가. 판정은 데스크톱의 설치와 같은 함수다\n(`apps/desktop/src-tauri/src/shell_command.rs` 의 `check_source`) — 설치가 거절할 출처면 설정 창은 설치 버튼 대신 이유를 보인다.",
+            "oneOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "ok",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "꺼내거나 재시작하면 사라지는 곳(읽기 전용 디스크 이미지 · App Translocation)에서 돈다.",
+                "properties": {
+                  "kind": {
+                    "const": "transient",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "앱 번들 밖의 바이너리(개발 빌드)이고 설치 위치가 기본값이다 — 사람의 실제 `pitwall` 을 이 빌드로 바꾸게 된다.",
+                "properties": {
+                  "kind": {
+                    "const": "developmentBuild",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
           "RuntimeSource": {
             "description": "환경을 실제로 어디서 얻었는가.",
             "oneOf": [
@@ -237,6 +280,10 @@
           "pathStatus": {
             "$ref": "#/$defs/RuntimeStatus"
           },
+          "source": {
+            "$ref": "#/$defs/CliSource",
+            "description": "이 앱을 설치 위치에 걸 수 있는가."
+          },
           "target": {
             "description": "설치 위치(절대 경로). PATH 에 없을 때 Orca 에 이 경로를 그대로 등록한다.",
             "type": "string"
@@ -245,6 +292,7 @@
         "required": [
           "target",
           "app",
+          "source",
           "install",
           "onPath",
           "pathSource",

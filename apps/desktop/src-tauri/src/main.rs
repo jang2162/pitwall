@@ -60,6 +60,7 @@ fn local_host(
         Arc::clone(&runtime),
         shell_command::target_path().map_err(|e| e.to_string()),
         std::env::current_exe().map_err(|e| e.to_string()),
+        shell_command::source_check(),
     ));
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)

@@ -14,11 +14,15 @@
 //!   한 번의 `symlink` 호출 길이다.
 //! - 출처: 실행 중인 바이너리가 읽기 전용 볼륨(`/Volumes/…`, 배포 DMG)이나 App Translocation 아래면 거절한다 — 꺼내기 ·
 //!   재시작 뒤 링크가 끊긴다. Applications 로 옮긴 뒤 다시 하라고 알린다. 쓰기 가능한 디스크 이미지는 놓친다([`check_source`]).
+//!   앱 번들(`*.app/Contents/MacOS/`) 밖의 바이너리(`mise run dev` 의 `target/debug/pitwall` 등 개발 빌드)는 대상이 기본값일
+//!   때 거절한다 — 사람의 실제 `pitwall` 이 워크트리의 빌드를 가리키게 되고, 워크트리를 지우면 끊긴다.
+//!   `PITWALL_SHELL_COMMAND_TARGET` 을 주면 받는다(고른 대상이다).
 
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use pw_open_with::cli::CliSource;
 use tauri::{AppHandle, Manager, Runtime};
 
 pub const DEFAULT_TARGET: &str = "/usr/local/bin/pitwall";
@@ -44,6 +48,8 @@ pub enum InstallError {
     Cancelled,
     /// 실행 중인 위치가 사라질 곳이다(디스크 이미지 · App Translocation).
     TransientSource(PathBuf),
+    /// 앱 번들 밖의 바이너리(개발 빌드)를 기본 대상에 걸려 했다.
+    DevelopmentBuild(PathBuf),
     Failed(String),
 }
 
@@ -63,6 +69,13 @@ impl std::fmt::Display for InstallError {
                  Move Pitwall to the Applications folder, open it from there, and install the command again.",
                 path.display()
             ),
+            InstallError::DevelopmentBuild(path) => write!(
+                f,
+                "Pitwall is running from {}, outside an app bundle (a development build). \
+                 Installing would point your 'pitwall' command at this build. \
+                 Install from the Pitwall app, or set {TARGET_ENV} to try it elsewhere.",
+                path.display()
+            ),
             InstallError::Failed(reason) => f.write_str(reason),
         }
     }
@@ -77,17 +90,40 @@ fn failed(what: &str, path: &Path, e: std::io::Error) -> InstallError {
 /// - `/Volumes/…` 의 **읽기 전용** 볼륨 — 배포 DMG 처럼 꺼내면 사라진다. 외장 디스크에 영구 설치한 앱(쓰기 가능)은 받는다.
 ///   쓰기 가능한 디스크 이미지(UDRW 등)에서 돌리면 놓친다 — 드물고, 그때는 꺼낸 뒤 링크가 끊긴다.
 ///
-/// `read_only` 는 경로가 있는 볼륨이 읽기 전용인지([`read_only_volume`], 시험은 가짜를 넣는다).
-pub fn check_source(source: &Path, read_only: impl Fn(&Path) -> bool) -> Result<(), InstallError> {
+/// - `default_target` 이면(대상을 [`TARGET_ENV`] 로 고르지 않았다) 앱 번들 밖의 바이너리 — 개발 빌드가 사람의 실제
+///   `pitwall` 을 바꾼다.
+///
+/// `read_only` 는 경로가 있는 볼륨이 읽기 전용인지([`read_only_volume`], 시험은 가짜를 넣는다). 「Orca 에서 Pitwall 열기」 의
+/// 검사(`cli.status`)도 이 판정으로 설치 버튼을 끈다([`source_check`]).
+pub fn check_source(
+    source: &Path,
+    default_target: bool,
+    read_only: impl Fn(&Path) -> bool,
+) -> Result<(), InstallError> {
     let translocated = source
         .components()
         .any(|c| c.as_os_str() == "AppTranslocation");
     let disk_image = source.starts_with("/Volumes") && read_only(source);
     if translocated || disk_image {
         Err(InstallError::TransientSource(source.to_path_buf()))
+    } else if default_target && !in_app_bundle(source) {
+        Err(InstallError::DevelopmentBuild(source.to_path_buf()))
     } else {
         Ok(())
     }
+}
+
+/// `<이름>.app/Contents/MacOS/<바이너리>` 인가.
+fn in_app_bundle(source: &Path) -> bool {
+    let mut dirs = source.ancestors().skip(1);
+    let named =
+        |dir: Option<&Path>, name: &str| dir.and_then(Path::file_name) == Some(name.as_ref());
+    named(dirs.next(), "MacOS")
+        && named(dirs.next(), "Contents")
+        && dirs
+            .next()
+            .and_then(Path::extension)
+            .is_some_and(|ext| ext == "app")
 }
 
 /// `path` 가 있는 볼륨이 읽기 전용으로 마운트됐는가(`statfs` 의 `MNT_RDONLY`). 알 수 없으면 거짓.
@@ -267,13 +303,33 @@ pub fn target_path() -> Result<PathBuf, InstallError> {
     }
 }
 
+/// 대상을 [`TARGET_ENV`] 로 고르지 않았는가 — [`check_source`] 의 `default_target`.
+fn default_target() -> bool {
+    std::env::var_os(TARGET_ENV).is_none()
+}
+
+/// 실행 중인 바이너리(심링크를 푼 실제 경로).
+fn current_source() -> Result<PathBuf, InstallError> {
+    std::env::current_exe()
+        .and_then(fs::canonicalize)
+        .map_err(|e| InstallError::Failed(format!("cannot locate the app binary: {e}")))
+}
+
+/// 「Orca 에서 Pitwall 열기」 의 검사(`cli.status`)에 줄 출처 판정 — 설치가 거절할 출처면 설정 창이 설치 버튼 대신 이유를
+/// 보인다. 앱 위치를 못 찾으면 `Ok` 로 둔다(검사가 그 오류를 따로 알린다).
+pub fn source_check() -> CliSource {
+    match current_source().map(|source| check_source(&source, default_target(), read_only_volume)) {
+        Ok(Err(InstallError::TransientSource(_))) => CliSource::Transient,
+        Ok(Err(InstallError::DevelopmentBuild(_))) => CliSource::DevelopmentBuild,
+        _ => CliSource::Ok,
+    }
+}
+
 /// 실행 중인 바이너리(심링크를 푼 실제 경로)를 대상에 설치한다.
 fn install_current_exe() -> Result<(PathBuf, Installed), InstallError> {
     let target = target_path()?;
-    let source = std::env::current_exe()
-        .and_then(fs::canonicalize)
-        .map_err(|e| InstallError::Failed(format!("cannot locate the app binary: {e}")))?;
-    check_source(&source, read_only_volume)?;
+    let source = current_source()?;
+    check_source(&source, default_target(), read_only_volume)?;
     let installed = install(&source, &target, elevate_with_osascript)?;
     tracing::info!(source = %source.display(), target = %target.display(), ?installed, "shell command installed");
     Ok((target, installed))
@@ -489,13 +545,13 @@ mod tests {
     fn a_read_only_volume_or_translocated_app_is_refused() {
         let dmg = "/Volumes/Pitwall/Pitwall.app/Contents/MacOS/pitwall";
         assert_eq!(
-            check_source(Path::new(dmg), |_| true),
+            check_source(Path::new(dmg), true, |_| true),
             Err(InstallError::TransientSource(dmg.into()))
         );
         let translocated =
             "/private/var/folders/x/T/AppTranslocation/1234/d/Pitwall.app/Contents/MacOS/pitwall";
         assert_eq!(
-            check_source(Path::new(translocated), |_| false),
+            check_source(Path::new(translocated), true, |_| false),
             Err(InstallError::TransientSource(translocated.into())),
             "읽기 전용 여부와 상관없이 거절"
         );
@@ -503,19 +559,46 @@ mod tests {
 
     #[test]
     fn a_writable_external_volume_and_ordinary_places_are_accepted() {
+        for kept in [
+            "/Volumes/External/Applications/Pitwall.app/Contents/MacOS/pitwall",
+            "/Applications/Pitwall.app/Contents/MacOS/pitwall",
+            "/Users/me/Applications/Pitwall Beta.app/Contents/MacOS/pitwall",
+        ] {
+            assert_eq!(
+                check_source(Path::new(kept), true, |_| false),
+                Ok(()),
+                "{kept}"
+            );
+        }
         assert_eq!(
             check_source(
-                Path::new("/Volumes/External/Applications/Pitwall.app/Contents/MacOS/pitwall"),
-                |_| false
+                Path::new("/VolumesX/Pitwall.app/Contents/MacOS/pitwall"),
+                true,
+                |_| true
             ),
             Ok(())
         );
-        for kept in [
-            "/Applications/Pitwall.app/Contents/MacOS/pitwall",
+    }
+
+    /// 앱 번들 밖(개발 빌드)은 사람의 실제 명령인 기본 대상에 걸지 않는다. 대상을 골랐으면(`PITWALL_SHELL_COMMAND_TARGET`) 받는다.
+    #[test]
+    fn a_development_build_is_refused_only_for_the_default_target() {
+        for dev in [
             "/Users/me/code/pitwall/target/debug/pitwall",
-            "/VolumesX/pitwall",
+            "/Users/me/code/pitwall/target/release/pitwall",
+            "/Users/me/Pitwall.app/pitwall",
+            "/Users/me/Contents/MacOS/pitwall",
         ] {
-            assert_eq!(check_source(Path::new(kept), |_| true), Ok(()), "{kept}");
+            assert_eq!(
+                check_source(Path::new(dev), true, |_| false),
+                Err(InstallError::DevelopmentBuild(dev.into())),
+                "{dev}"
+            );
+            assert_eq!(
+                check_source(Path::new(dev), false, |_| false),
+                Ok(()),
+                "{dev}"
+            );
         }
     }
 

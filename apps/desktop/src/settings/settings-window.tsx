@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 
-import { useAppStrings } from "../i18n/app-strings";
 import { useI18n } from "../i18n/i18n-provider";
 import { selectedLanguage } from "../i18n/localization";
 import { ThemeSwitcher } from "../theme/theme-switcher";
@@ -11,11 +10,11 @@ import { OrcaSection } from "./orca-section";
 import { useSettingsStrings } from "./strings";
 
 export function SettingsWindow({ native }: { native: SettingsNative }) {
-  const T = useAppStrings().settings;
   const S = useSettingsStrings();
+  const T = S.appearance;
   return (
     <main className="flex-1 overflow-y-auto px-6 py-4">
-      <h2 className="mb-2 text-sm font-semibold">{T.appearance}</h2>
+      <h2 className="mb-2 text-sm font-semibold">{T.title}</h2>
       <div className="flex items-center gap-3">
         <span>{T.theme}</span>
         <ThemeSwitcher />
@@ -29,7 +28,7 @@ export function SettingsWindow({ native }: { native: SettingsNative }) {
 
 /** UI 언어(settings.toml 의 `ui.language`). 고르면 `i18n.setLanguage` 가 그 키만 고쳐 쓰고, 바뀐 언어는 `config.changed` 로 온다. */
 function LanguageSelect() {
-  const T = useAppStrings().settings;
+  const T = useSettingsStrings().appearance;
   const { setting, locales, languages, setLanguage } = useI18n();
   const [error, setError] = useState<string>();
   return (

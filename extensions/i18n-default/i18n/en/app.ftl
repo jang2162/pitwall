@@ -37,14 +37,14 @@ keymap-file-error = Keymap file error, using the previous keymap: { $error }
 # $warnings: the warnings joined with "; "
 keymap-file-warning = Keymap file warning: { $warnings }
 
+## Settings window: Appearance, and "External Tools > Open Pitwall from Orca" (docs/design/04-features.md F8-6). The keys are mapped in apps/desktop/src/settings/strings.ts.
+
 settings-appearance = Appearance
 settings-theme = Theme
 settings-language = Language
 settings-language-system = System
 # $error: why the setting could not be saved
 settings-language-failed = Could not change the language: { $error }
-
-## Settings window, "External Tools > Open Pitwall from Orca" (docs/design/04-features.md F8-6). The keys are mapped in apps/desktop/src/settings/strings.ts.
 
 settings-external-tools = External Tools
 settings-orca-title = Open Pitwall from Orca
@@ -68,6 +68,8 @@ settings-orca-not-a-link = Cannot install
 settings-orca-on-path = On PATH
 settings-orca-not-on-path = Not on PATH
 settings-orca-other-on-path = A different pitwall on PATH
+# Not installed at the install location, but the pitwall on PATH is already this app
+settings-orca-works-from-path = On PATH (outside the install location)
 # $target: the install location (/usr/local/bin/pitwall)
 settings-orca-detail-installed = { $target } points to this app.
 settings-orca-detail-missing = There is no shell command at { $target }.
@@ -75,11 +77,17 @@ settings-orca-detail-missing = There is no shell command at { $target }.
 settings-orca-detail-other-link = { $target } points elsewhere: { $points }
 settings-orca-detail-not-a-link = { $target } is a file Pitwall did not create. Install Shell Command does not replace it — remove it yourself, then check again.
 # $path: the pitwall found on PATH
+settings-orca-detail-works-from-path = { $path } runs this app, and that is what Orca runs, so the shell command at { $target } is not needed.
+# $path: the pitwall found on PATH
 settings-orca-detail-other-on-path = The first one on PATH is { $path }. Orca runs that one.
 # $resolved: that path with its symlinks resolved
 settings-orca-detail-resolved = Actual file: { $resolved }
 settings-orca-install = Install Shell Command
 settings-orca-installing = Installing…
+# $app: this app's binary, $target: the install location
+settings-orca-source-development-build = This is a development build ({ $app }), so it is not installed at { $target }: your pitwall command would point at this build and break once it is deleted. To try installing, start the app with PITWALL_SHELL_COMMAND_TARGET set to an absolute path in a temporary folder.
+# $app: this app's binary
+settings-orca-source-transient = Pitwall is running from { $app }, which goes away when the disk image is ejected or the Mac restarts. Move Pitwall to the Applications folder, open it from there, and install.
 # $target: the install location
 settings-orca-absolute = Orca cannot find this app on PATH. Enter the absolute path { $target } as the command.
 # $reason: why the login shell environment could not be read
