@@ -121,6 +121,73 @@ action-editor-switcher = 탭 전환기
 action-editor-save = 저장
 action-editor-save-all = 모두 저장
 
+## 에디터 조작(M1-18): 찾기 · 바꾸기 막대(src/editor/find-bar.tsx), 줄로 이동(goto-line.tsx), 편집 키(editor-ops.ts),
+## 상태바의 에디터 항목(editor-status.tsx).
+
+action-editor-find = 찾기
+action-editor-replace = 바꾸기
+action-editor-goto-line = 줄로 이동
+action-editor-duplicate-line = 줄 복제
+action-editor-delete-line = 줄 삭제
+action-editor-move-line-up = 줄 위로 옮기기
+action-editor-move-line-down = 줄 아래로 옮기기
+action-editor-comment-line = 줄 주석 넣기 / 걷기
+
+editor-find-label = 파일 안 찾기
+editor-find-search = 찾을 내용
+editor-find-replace = 바꿀 내용
+editor-find-case = 대소문자 구분
+editor-find-word = 단어 단위
+editor-find-regexp = 정규식
+editor-find-previous = 이전 일치(⇧↩)
+editor-find-next = 다음 일치(↩)
+editor-find-replace-one = 바꾸기
+editor-find-replace-all = 모두 바꾸기
+editor-find-close = 닫기(Esc)
+editor-find-invalid = 틀린 정규식
+editor-find-none = 결과 없음
+# $total: 일치 수(상한에서 멈췄으면 「9999+」 처럼 글자)
+editor-find-count = { $total }개
+# $current: 고른 일치의 차례, $total: 일치 수
+editor-find-count-current = { $current }/{ $total }
+
+editor-goto-title = 줄로 이동
+editor-goto-input = 줄[:열]
+# $cursor: 지금 커서(줄:열), $lines: 문서의 줄 수
+editor-goto-hint = 지금 { $cursor } · 모두 { $lines }줄
+editor-goto-invalid = 「줄」 이나 「줄:열」 로 적는다(예: 120:5)
+editor-goto-go = 이동
+editor-goto-cancel = 취소
+
+# $line · $column: 커서
+status-editor-cursor = { $line }:{ $column }
+# $chars: 고른 글자 수, $breaks: 고른 범위의 줄바꿈 수
+status-editor-selection =
+    { $breaks ->
+        [0] { $chars }자
+       *[other] { $chars }자, 줄바꿈 { $breaks }개
+    }
+status-editor-cursor-hint = 줄로 이동
+# $ending: lf | crlf | cr | mixed
+status-editor-line-ending =
+    { $ending ->
+        [lf] LF
+        [crlf] CRLF
+        [cr] CR
+       *[other] 섞임
+    }
+status-editor-line-ending-hint = 줄 구분 기호(저장할 때 그대로 둔다)
+status-editor-encoding-hint = 파일 인코딩
+status-editor-language-hint = 이 파일의 언어 바꾸기
+language-plain-text = 일반 텍스트
+language-popup-label = 언어 고르기
+language-popup-placeholder = 언어 이름
+language-popup-empty = 맞는 언어가 없다
+# $language: 판별한 언어 이름
+language-popup-detect = 자동 판별로 되돌리기({ $language })
+language-popup-popular = 자주 쓰는 언어
+language-popup-all = 모든 언어
+
 ## 파일 트리(src/file-tree). 프로젝트 툴 윈도우의 내용이다.
 
 file-tree-label = 프로젝트 파일

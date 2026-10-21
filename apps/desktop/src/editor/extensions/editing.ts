@@ -1,4 +1,6 @@
 // 편집 키: undo · redo 와 Tab 들여쓰기. 글자 입력 · 지우기 · Enter 는 `navigation` 의 standardKeymap 이 한다.
+// redo 는 IntelliJ 키맵대로 macOS ⌘⇧Z, Win/Linux Ctrl+Shift+Z 다 — Win/Linux 의 Ctrl+Y 는 줄 삭제(`editor.deleteLine`, 10-ui §4.2
+// 「코드」)라 여기서 잡지 않는다.
 //
 // undo 기록은 뷰가 아니라 문서에 있다(`context.history`, ../live-text.ts) — 같은 파일을 보이는 다른 탭에서 고친 것도, 탭을 옮겨
 // 뷰를 다시 만들기 전에 고친 것도 되돌린다. 네이티브 메뉴의 「실행 취소」(macOS `undo:`)는 웹뷰에 `beforeinput`
@@ -17,8 +19,7 @@ export const editing: EditorFeature = {
     return [
       keymap.of([
         { key: "Mod-z", run: undo, preventDefault: true },
-        { key: "Mod-y", mac: "Mod-Shift-z", run: redo, preventDefault: true },
-        { linux: "Ctrl-Shift-z", run: redo, preventDefault: true },
+        { key: "Mod-Shift-z", run: redo, preventDefault: true },
         indentWithTab,
       ]),
       EditorView.domEventHandlers({

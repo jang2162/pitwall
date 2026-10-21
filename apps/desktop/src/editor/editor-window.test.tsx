@@ -94,7 +94,8 @@ vi.mock("../tauri-transport", async () => {
         const fail = (message: string) =>
           send({ id: m.id, error: { code: -32005, message, data: null } });
         if (["fs.", "openWith.", "lang."].some((p) => m.method.startsWith(p)))
-          host.calls.push({ method: m.method, params: m.params });
+          // 인자 없는 메서드(`lang.list`)는 params 가 null 이다.
+          host.calls.push({ method: m.method, params: m.params ?? {} });
         const path = (m.params as { path?: string } | undefined)?.path ?? "";
         const real = host.links.get(path) ?? path;
         const size = () => host.sizes.get(real) ?? host.files.get(real)!.length;

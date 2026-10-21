@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { createDocumentStore } from "../editor/documents";
 import { editorActions } from "../editor/editor-actions";
+import { editorOpsActions } from "../editor/editor-ops";
 import { createEditorWorkspace } from "../editor/editor-workspace";
 import { fileOpsActions } from "../file-tree/file-ops";
 import { fileTreeStrings } from "../file-tree/strings";
@@ -83,6 +84,21 @@ const ACTION_IDS = new Set(
       ops: { create: async () => undefined, rename: async () => undefined, remove: async () => {} },
       canOpenTerminal: () => true,
       openInTerminal() {},
+    }),
+    ...editorOpsActions({
+      workspace: createEditorWorkspace({
+        documents: createDocumentStore({
+          stat: () => Promise.reject(new Error("none")),
+          read: () => Promise.reject(new Error("none")),
+        }),
+        stat: () => Promise.reject(new Error("none")),
+        onOpenFailed() {},
+        onSaveFailed() {},
+        confirmUnsaved: async () => "cancel",
+      }),
+      strings: KO_PROJECT.editor.actions,
+      openGotoLine() {},
+      lineComment: () => undefined,
     }),
     ...terminalActions({
       strings: KO_PROJECT.terminal,

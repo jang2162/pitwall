@@ -38,6 +38,8 @@ const baseContext: Omit<EditorFeatureContext, "syntax"> = {
   appearance: "light",
   onCursor: () => {},
   history: { undo: () => false, redo: () => false },
+  font: {},
+  createFindPanel: () => ({ dom: document.createElement("div"), top: true }),
 };
 
 /**

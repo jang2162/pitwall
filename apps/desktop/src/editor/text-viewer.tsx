@@ -11,18 +11,24 @@
 // 기억해 두었다가 다시 보일 때 되돌린다.
 //
 // 디스크 쪽이 이 문서와 다르면(documents.ts 의 `disk`) 위에 배너를 띄운다(disk-banner.tsx).
+//
+// 찾기 · 바꾸기(⌘F / ⌘R)는 CodeMirror 의 위쪽 패널 자리에 찾기 막대(find-bar.tsx)를 portal 로 그린다 — 막대가 창의 문자열 · 테마
+// context 를 그대로 쓴다.
 
 import type { StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { useProjectStrings } from "../layout/strings";
 import { useTheme } from "../theme/theme-switcher";
 import { CompareView, DiskBanner } from "./disk-banner";
 import type { TextDocumentState } from "./documents";
+import { useEditorFont } from "./editor-font";
 import type { EditorTabParams } from "./editor-tabs";
 import { type EditorWorkspace, useEditorWorkspace } from "./editor-workspace";
 import { type EditorFeatureContext, editorExtensions, reconfigureEditor } from "./extensions";
+import { FindBar, findPanel } from "./find-bar";
 import { useDocLanguage } from "./language";
 import type { LiveText } from "./live-text";
 import type { ViewerProps } from "./viewers";
@@ -33,8 +39,10 @@ function useFeatureContext(
   panelId: string,
   params: EditorTabParams,
   text: TextDocumentState | undefined,
+  createFindPanel: EditorFeatureContext["createFindPanel"],
 ): EditorFeatureContext | undefined {
   const appearance = useTheme((s) => s.appearance);
+  const font = useEditorFont();
   const language = useDocLanguage(params.path);
   const live = text?.live;
   const judgment = text?.judgment;
@@ -52,9 +60,22 @@ function useFeatureContext(
             onCursor: (cursor) => workspace.reportCursor(panelId, cursor),
             history: live,
             syntax: workspace.syntax,
+            font,
+            createFindPanel,
           }
         : undefined,
-    [workspace, panelId, params.path, live, judgment, readOnly, language, appearance],
+    [
+      workspace,
+      panelId,
+      params.path,
+      live,
+      judgment,
+      readOnly,
+      language,
+      appearance,
+      font,
+      createFindPanel,
+    ],
   );
 }
 
@@ -65,7 +86,13 @@ export function TextViewer({ panel, params, doc }: ViewerProps) {
   const text = doc.status === "text" ? doc : undefined;
   const live: LiveText | undefined = text?.live;
   const { path } = params;
-  const context = useFeatureContext(workspace, panel.id, params, text);
+  const [find, setFind] = useState<{ view: EditorView; dom: HTMLElement }>();
+  const createFindPanel = useCallback(
+    (view: EditorView) =>
+      findPanel(view, setFind, (dom) => setFind((f) => (f?.dom === dom ? undefined : f))),
+    [],
+  );
+  const context = useFeatureContext(workspace, panel.id, params, text, createFindPanel);
   const latest = useRef(context);
   latest.current = context;
   // 지금 뷰와 그 뷰를 마지막으로 구성한 context.
@@ -151,6 +178,7 @@ export function TextViewer({ panel, params, doc }: ViewerProps) {
         />
       )}
       {compare && live && <CompareView mine={live.text} disk={compare} />}
+      {find && createPortal(<FindBar view={find.view} host={find.dom} />, find.dom)}
       {/* 텍스트 선택을 막는 body 의 user-select: none(styles.css)을 에디터 안에서는 푼다. 비교하는 동안은 가린다(뷰는 남는다). */}
       <div
         ref={host}

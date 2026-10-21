@@ -121,6 +121,83 @@ action-editor-switcher = Switcher
 action-editor-save = Save
 action-editor-save-all = Save All
 
+## Editor operations (M1-18): find and replace bar (src/editor/find-bar.tsx), go to line (goto-line.tsx), editing keys
+## (editor-ops.ts), editor items in the status bar (editor-status.tsx).
+
+action-editor-find = Find
+action-editor-replace = Replace
+action-editor-goto-line = Go to Line
+action-editor-duplicate-line = Duplicate Line
+action-editor-delete-line = Delete Line
+action-editor-move-line-up = Move Line Up
+action-editor-move-line-down = Move Line Down
+action-editor-comment-line = Comment with Line Comment
+
+editor-find-label = Find in file
+editor-find-search = Search
+editor-find-replace = Replace with
+editor-find-case = Match Case
+editor-find-word = Words
+editor-find-regexp = Regex
+editor-find-previous = Previous Occurrence (⇧↩)
+editor-find-next = Next Occurrence (↩)
+editor-find-replace-one = Replace
+editor-find-replace-all = Replace All
+editor-find-close = Close (Esc)
+editor-find-invalid = Bad regex
+editor-find-none = 0 results
+# $total: number of matches (text like "9999+" when counting stopped at the cap)
+editor-find-count =
+    { $total ->
+        [one] 1 result
+       *[other] { $total } results
+    }
+# $current: position of the selected match, $total: number of matches
+editor-find-count-current = { $current }/{ $total }
+
+editor-goto-title = Go to Line
+editor-goto-input = Line[:column]
+# $cursor: the cursor now (line:column), $lines: lines in the document
+editor-goto-hint = Now at { $cursor } · { $lines } lines
+editor-goto-invalid = Type a line or line:column (for example 120:5)
+editor-goto-go = Go
+editor-goto-cancel = Cancel
+
+# $line · $column: the cursor
+status-editor-cursor = { $line }:{ $column }
+# $chars: selected characters, $breaks: line breaks in the selection
+status-editor-selection =
+    { $breaks ->
+        [0] { $chars ->
+            [one] 1 char
+           *[other] { $chars } chars
+        }
+       *[other] { $chars } chars, { $breaks ->
+            [one] 1 line break
+           *[other] { $breaks } line breaks
+        }
+    }
+status-editor-cursor-hint = Go to Line
+# $ending: lf | crlf | cr | mixed
+status-editor-line-ending =
+    { $ending ->
+        [lf] LF
+        [crlf] CRLF
+        [cr] CR
+       *[other] Mixed
+    }
+status-editor-line-ending-hint = Line separators (kept as they are on save)
+status-editor-encoding-hint = File encoding
+status-editor-language-hint = Change the language of this file
+language-plain-text = Plain Text
+language-popup-label = Choose a language
+language-popup-placeholder = Language name
+language-popup-empty = No matching language
+# $language: the detected language name
+language-popup-detect = Back to detection ({ $language })
+language-popup-popular = Popular
+language-popup-all = All languages
+
 ## File tree (src/file-tree). The content of the Project tool window.
 
 file-tree-label = Project files

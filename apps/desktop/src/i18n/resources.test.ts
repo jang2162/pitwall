@@ -92,6 +92,15 @@ describe("built-in translations", () => {
     for (const count of [1, 2]) fileTreeStrings(t).ops.delete.body(count, "x");
     for (const level of ["info", "warning", "error"] as const)
       projectStrings(t).notifications.level(level);
+    for (const [chars, breaks] of [
+      [1, 0],
+      [15, 1],
+      [40, 3],
+    ] as const)
+      projectStrings(t).editor.status.selection(chars, breaks);
+    for (const ending of ["lf", "crlf", "cr", "mixed"] as const)
+      projectStrings(t).editor.status.lineEnding(ending);
+    for (const total of [1, 12, "9999+"]) projectStrings(t).editor.find.count(total);
     // 플랫폼마다 갈래가 다른 문자열은 갈래를 하나씩 본다.
     for (const platform of ["mac", "win", "linux"] as const) {
       welcomeStrings(t).menu.reveal(platform);

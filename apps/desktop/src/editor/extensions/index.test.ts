@@ -32,6 +32,8 @@ const context: EditorFeatureContext = {
   appearance: "light",
   onCursor: () => {},
   history: { undo: () => false, redo: () => false },
+  font: {},
+  createFindPanel: () => ({ dom: document.createElement("div"), top: true }),
 };
 
 it("assembles one extension per feature, in list order", () => {
@@ -43,6 +45,7 @@ it("assembles one extension per feature, in list order", () => {
     "readOnly",
     "cursorReport",
     "editing",
+    "operations",
     "navigation",
   ]);
   const seen: string[] = [];
@@ -76,6 +79,7 @@ it("edits a document it can write, and keeps a read-only one read-only with a cu
   locked.destroy();
 });
 
+// Win/Linux(시험 환경은 mac 이 아니다): redo 는 Ctrl+Shift+Z 하나이고 Ctrl+Y 는 줄 삭제(창의 키맵, editor-ops.ts)라 redo 가 아니다.
 it("sends undo and redo, by key and by the native menu, to the document's history", () => {
   const history = { undo: vi.fn(() => true), redo: vi.fn(() => true) };
   const view = new EditorView({
@@ -91,6 +95,8 @@ it("sends undo and redo, by key and by the native menu, to the document's histor
     );
   key({ key: "z", code: "KeyZ", ctrlKey: true });
   key({ key: "y", code: "KeyY", ctrlKey: true });
+  expect(history.redo).not.toHaveBeenCalled();
+  key({ key: "Z", code: "KeyZ", keyCode: 90, ctrlKey: true, shiftKey: true });
   view.contentDOM.dispatchEvent(
     new InputEvent("beforeinput", { inputType: "historyUndo", bubbles: true, cancelable: true }),
   );
@@ -132,6 +138,8 @@ it("reports the cursor through the context, and the reconfigured callback after 
       extensions: editorExtensions({ ...context, onCursor: first }),
     }),
   });
+  // 뷰가 생길 때 한 번(상태바의 첫 값, operations.ts), 선택이 바뀌면 또.
+  expect(first).toHaveBeenLastCalledWith({ line: 1, column: 1 });
   view.dispatch({ selection: { anchor: 6 } });
   expect(first).toHaveBeenLastCalledWith({ line: 2, column: 3 });
 
@@ -139,6 +147,6 @@ it("reports the cursor through the context, and the reconfigured callback after 
   view.dispatch(reconfigureEditor({ ...context, onCursor: second }));
   view.dispatch({ selection: { anchor: 1 } });
   expect(second).toHaveBeenLastCalledWith({ line: 1, column: 2 });
-  expect(first).toHaveBeenCalledTimes(1);
+  expect(first).toHaveBeenCalledTimes(2);
   view.destroy();
 });

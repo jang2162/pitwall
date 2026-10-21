@@ -27,7 +27,7 @@
 // 기능끼리는 서로를 import 하지 않는다. 함께 쓰는 값(테마 색 등)은 CSS 변수(src/theme/tokens.ts)나 `context` 로 받는다.
 
 import { Compartment, type Extension, Facet, type TransactionSpec } from "@codemirror/state";
-import type { EditorView } from "@codemirror/view";
+import type { EditorView, Panel } from "@codemirror/view";
 import type { Judgment } from "@pitwall/rpc-client";
 
 import { base } from "./base";
@@ -36,6 +36,7 @@ import type { SyntaxSessions } from "../syntax-sessions";
 import { editing } from "./editing";
 import { highlight } from "./highlight";
 import { navigation } from "./navigation";
+import { operations } from "./operations";
 import { readOnly } from "./read-only";
 import { theme } from "./theme";
 
@@ -49,6 +50,13 @@ export interface EditorHistory {
 export interface EditorCursor {
   readonly line: number;
   readonly column: number;
+}
+
+/** 코드 글꼴(전역 설정 `[editor] font_family` · `font_size`, 결정 M1-D17). 없는 값은 기본(시스템 고정폭 · 13px)이다. */
+export interface EditorFont {
+  readonly family?: string;
+  /** px. */
+  readonly size?: number;
 }
 
 /** 확장을 만들 때 기능이 보는 문서 · 탭 정보. 바뀌면 다시 구성된다. */
@@ -74,6 +82,10 @@ export interface EditorFeatureContext {
   readonly history: EditorHistory;
   /** 창의 구문 세션(`highlight`, ../syntax-sessions.ts). Host 에 붙지 않은 창 · 시험에는 없다. */
   readonly syntax?: SyntaxSessions;
+  /** 코드 글꼴(`operations`). 설정이 바뀌면(`config.changed`) 새 값으로 다시 구성된다. */
+  readonly font: EditorFont;
+  /** 찾기 · 바꾸기 패널(`operations`, M1-18). 텍스트 뷰어가 그 자리에 찾기 막대(../find-bar.tsx)를 그린다. */
+  readonly createFindPanel: (view: EditorView) => Panel;
 }
 
 export interface EditorFeature {
@@ -97,6 +109,7 @@ export const EDITOR_FEATURES: readonly EditorFeature[] = [
   readOnly,
   cursorReport,
   editing,
+  operations,
   navigation,
 ];
 

@@ -72,6 +72,8 @@ async function measure(text: string, spans: HighlightSpan[], highlight: boolean,
     appearance: "light",
     onCursor: () => {},
     history: { undo: () => false, redo: () => false },
+    font: {},
+    createFindPanel: () => ({ dom: document.createElement("div"), top: true }),
     syntax,
   };
   const view = new EditorView({ parent, doc, extensions: editorExtensions(context) });

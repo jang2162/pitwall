@@ -157,6 +157,66 @@ mac = "ctrl+tab"
 win = "ctrl+tab"
 linux = "ctrl+tab"
 
+# 에디터 조작(10-ui §4.2 「검색 · 이동」 · 「코드」, src/editor/editor-ops.ts). 편집 키 · 줄로 이동은 글자 영역(`editorFocus`)에서만, 찾기 ·
+# 바꾸기는 찾기 막대 안(`editorFind`)에서도 돈다 — 찾기 칸의 ⌘⌫ 는 글자를 지우고, 웰컴 창의 ⌘⌫(목록에서 제거) · 터미널의 같은 키와
+# 겹치지 않는다. Win/Linux 의 Ctrl+Y 는 IntelliJ 대로 줄 삭제다(redo 는 Ctrl+Shift+Z, src/editor/extensions/editing.ts).
+
+[[bindings]]
+action = "editor.find"
+mac = "cmd+f"
+win = "ctrl+f"
+linux = "ctrl+f"
+when = "editorFocus || editorFind"
+
+[[bindings]]
+action = "editor.replace"
+mac = "cmd+r"
+win = "ctrl+r"
+linux = "ctrl+r"
+when = "editorFocus || editorFind"
+
+[[bindings]]
+action = "editor.gotoLine"
+mac = "cmd+l"
+win = "ctrl+g"
+linux = "ctrl+g"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.duplicateLine"
+mac = "cmd+d"
+win = "ctrl+d"
+linux = "ctrl+d"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.deleteLine"
+mac = "cmd+backspace"
+win = "ctrl+y"
+linux = "ctrl+y"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.moveLineUp"
+mac = "alt+shift+up"
+win = "alt+shift+up"
+linux = "alt+shift+up"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.moveLineDown"
+mac = "alt+shift+down"
+win = "alt+shift+down"
+linux = "alt+shift+down"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.commentLine"
+mac = "cmd+slash"
+win = "ctrl+slash"
+linux = "ctrl+slash"
+when = "editorFocus"
+
 [[bindings]]
 action = "settings.open"
 mac = "cmd+,"

@@ -36,6 +36,7 @@ import { Toaster } from "sonner";
 
 import { createDocumentStore, FS_CHANGED_TOPIC, type FsChangedEvent } from "../editor/documents";
 import { editorActions } from "../editor/editor-actions";
+import { useEditorOperations } from "../editor/editor-operations";
 import { EditorPanel } from "../editor/editor-panel";
 import { EditorTabHeader } from "../editor/editor-tab";
 import { EDITOR_PANEL, EDITOR_TAB_HEADER } from "../editor/editor-tabs";
@@ -610,6 +611,7 @@ function ProjectWindowBody({
     [workspace, strings, switcher.open, closeWindow, notify],
   );
   useRegisterActions(editorActionList);
+  const editorOperations = useEditorOperations(workspace, api);
 
   return (
     <EditorWorkspaceProvider workspace={workspace}>
@@ -635,6 +637,7 @@ function ProjectWindowBody({
           {projectId !== undefined && <FindInFiles workspace={workspace} />}
           <StatusBar label={strings.status.label} />
           {switcher.element}
+          {editorOperations}
           {unsaved.element}
           {/* 상태바(22px) 위에 띄운다. */}
           <Toaster theme={appearance} position="bottom-right" offset={{ bottom: 30, right: 12 }} />
