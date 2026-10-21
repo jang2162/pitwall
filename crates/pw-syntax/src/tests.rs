@@ -573,6 +573,7 @@ fn builtin_language(linguist: &str) -> pw_ext::ResolvedLanguage {
 }
 
 /// 문서 하나를 끝까지 파싱해 강조한 구간(바이트).
+#[cfg(feature = "wasm")]
 fn lane_spans(
     mut lane: crate::grammar::Lane,
     text: &str,

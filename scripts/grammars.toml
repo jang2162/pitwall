@@ -221,6 +221,7 @@ highlights = ["queries/highlights.scm"]
 license = "MIT"
 highlights_sha256 = "07df9b622b0cc3d521cf8180eaed1cc93de83f9d9d320629506ab6b214339b6e"
 
+# crate: sequel 0.3.11 의 `cc = "~1.2.1"` 이 워크스페이스의 cc 를 1.2.x 로 묶는다(Cargo.lock 1.2.67, 풀리면 `cargo update -p cc` 로 올린다).
 [[grammar]]
 id = "sql"
 extension = "lang-sql"
