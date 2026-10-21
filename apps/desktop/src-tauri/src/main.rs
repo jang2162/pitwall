@@ -18,6 +18,7 @@ mod clipboard;
 mod config_log;
 mod detach;
 mod diag;
+mod drop_import;
 mod i18n;
 mod instance;
 mod ipc;
@@ -35,11 +36,13 @@ const LOCAL_HOST_ID: &str = "local";
 
 /// 앱이 쓰는 LocalHost. 생성물과 등록된 메서드를 맞춰 보는 테스트도 이것을 쓴다.
 /// UI 언어(`i18n`)는 Host 를 만든 뒤 그 전역 설정을 붙인다.
+/// 파일 서비스(`fs`)는 Finder 드롭 들여오기(drop_import.rs)도 쓰므로 부르는 쪽이 만든다.
 fn local_host(
     paths: AppPaths,
     diagnostics: Arc<Diagnostics>,
     extensions: Arc<Registry>,
     i18n: Arc<I18n>,
+    fs: Arc<Fs>,
 ) -> LocalHost {
     let methods = Arc::clone(&i18n);
     // 앱이 띄우는 프로세스의 환경. 로그인 셸은 처음 쓸 때 돈다 — 시작을 늦추지 않는다.
@@ -56,7 +59,6 @@ fn local_host(
     let lang_methods = Arc::clone(&lang);
     let open_with = Arc::new(OpenWith::new(Arc::clone(&extensions), Arc::clone(&runtime)));
     let open_with_methods = Arc::clone(&open_with);
-    let fs = Arc::new(Fs::new());
     let fs_methods = Arc::clone(&fs);
     let fs_watch = pw_fs::watch::Watch::new(Arc::clone(&fs));
     let fs_watch_methods = fs_watch.clone();
@@ -267,11 +269,13 @@ fn main() {
     let diagnostics = diag::init(&paths);
     let extensions = load_extensions(&paths);
     let i18n = i18n::init(&extensions);
+    let fs = Arc::new(Fs::new());
     let host = Arc::new(local_host(
         paths.clone(),
         Arc::clone(&diagnostics),
         extensions,
         Arc::clone(&i18n),
+        Arc::clone(&fs),
     ));
     // 「활성 기능」은 지금 Host 가 처리하는 메서드의 모듈 이름이다. 확장 · 설정 기능이 들어오면 그것으로 바꾼다.
     diagnostics.set_features(
@@ -318,6 +322,7 @@ fn main() {
         .manage(launch::Launch::new(host.registry().cloned()))
         .manage(windows::PendingOpens::default())
         .manage(windows::WebviewStore(webview_store))
+        .manage(drop_import::DropImport::new(fs, host.tasks().clone()))
         .manage(diagnostics)
         .manage(perf)
         .manage(update_settings)
@@ -378,6 +383,7 @@ mod tests {
             Arc::new(Diagnostics::new(dir.join("logs"), "0.0.0")),
             Arc::new(Registry::default()),
             no_languages(),
+            Arc::new(Fs::new()),
         )
     }
 
@@ -474,6 +480,7 @@ mod tests {
             Arc::new(Diagnostics::new("unused-log-dir", "0.0.0")),
             Arc::new(Registry::default()),
             no_languages(),
+            Arc::new(Fs::new()),
         ));
         let headless = mcp::headless_host(&paths);
         for (label, host) in [("app", &app), ("headless", &headless)] {
@@ -512,6 +519,7 @@ mod tests {
             Arc::new(Diagnostics::new("unused-log-dir", "0.0.0")),
             Arc::new(Registry::default()),
             no_languages(),
+            Arc::new(Fs::new()),
         );
         let routed: BTreeSet<String> = host
             .router()

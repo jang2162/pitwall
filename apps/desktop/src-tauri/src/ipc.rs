@@ -166,6 +166,7 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             crate::windows::take_pending_project_opens,
             crate::shell_command::install_shell_command,
             crate::clipboard::write_clipboard,
+            crate::drop_import::import_drop,
             crate::perf::perf_first_frame,
             crate::perf::perf_hidden,
             crate::update::window_close_cancelled
@@ -185,6 +186,10 @@ pub fn on_page_load<R: Runtime>(webview: &Webview<R>, event: PageLoadEvent) {
 pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
     if matches!(event, WindowEvent::Destroyed) {
         window.state::<IpcState>().close_webview(window.label());
+    }
+    // Finder 드롭 기록(drop_import.rs). 시험 앱에는 없다.
+    if let Some(drops) = window.try_state::<crate::drop_import::DropImport>() {
+        crate::drop_import::on_window_event(window, event, &drops);
     }
 }
 
