@@ -287,6 +287,106 @@ fn the_final_rename_does_not_replace_a_target_created_after_the_check() {
     assert_eq!(read(&dir.join("new.txt")), "from");
 }
 
+/// 파일 시스템이 「없을 때만」 플래그를 받지 않으면(macOS exFAT 의 `ENOTSUP`, Linux 의 `EINVAL`) 대체 경로로 간다 — 그래도
+/// 덮지 않는다. 다른 오류는 대체 경로 없이 그대로 돌려준다.
+#[cfg(unix)]
+#[test]
+fn an_unsupported_no_replace_flag_falls_back_without_overwriting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let refuse = |errno: i32| move |_: &Path, _: &Path| Err(io::Error::from_raw_os_error(errno));
+    let unsupported = refuse(libc::ENOTSUP);
+
+    write(&dir.join("a.txt"), "a");
+    rename_noreplace_with(&dir.join("a.txt"), &dir.join("b.txt"), &unsupported).unwrap();
+    assert!(!dir.join("a.txt").exists());
+    assert_eq!(read(&dir.join("b.txt")), "a");
+
+    write(&dir.join("c.txt"), "c");
+    let e = rename_noreplace_with(
+        &dir.join("b.txt"),
+        &dir.join("c.txt"),
+        &refuse(libc::EINVAL),
+    )
+    .unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::AlreadyExists, "{e}");
+    assert_eq!(read(&dir.join("b.txt")), "a");
+    assert_eq!(read(&dir.join("c.txt")), "c");
+
+    // 폴더: 빈 폴더 위로도 바꿔 끼우지 않는다.
+    write(&dir.join("d/inner.txt"), "inner");
+    fs::create_dir(dir.join("empty")).unwrap();
+    assert!(rename_noreplace_with(&dir.join("d"), &dir.join("empty"), &unsupported).is_err());
+    assert_eq!(read(&dir.join("d/inner.txt")), "inner");
+    assert_eq!(fs::read_dir(dir.join("empty")).unwrap().count(), 0);
+    rename_noreplace_with(&dir.join("d"), &dir.join("moved"), &unsupported).unwrap();
+    assert_eq!(read(&dir.join("moved/inner.txt")), "inner");
+
+    // 대소문자만 다른 이름(대소문자를 무시하는 볼륨에서만 같은 항목이다).
+    if dir.join("B.TXT").exists() {
+        rename_noreplace_with(&dir.join("b.txt"), &dir.join("B.txt"), &unsupported).unwrap();
+        assert!(
+            fs::read_dir(dir)
+                .unwrap()
+                .any(|e| e.unwrap().file_name() == "B.txt")
+        );
+        assert_eq!(read(&dir.join("B.txt")), "a");
+        no_leftovers(dir);
+    }
+
+    // 플래그와 상관없는 오류는 대체 경로로 가지 않는다.
+    let e = rename_noreplace_with(
+        &dir.join("c.txt"),
+        &dir.join("x.txt"),
+        &refuse(libc::EACCES),
+    )
+    .unwrap_err();
+    assert_eq!(e.raw_os_error(), Some(libc::EACCES));
+    assert!(dir.join("c.txt").exists());
+    assert!(!dir.join("x.txt").exists());
+}
+
+/// 하드 링크도 없는 파일 시스템(exFAT · FAT)의 길: 대상 이름을 「없을 때만」 만들어 예약한 뒤 바꿔 끼운다. 있는 이름(파일 · 빈
+/// 폴더)은 건드리지 않고, 바꿔 끼우기가 실패하면 예약본을 치운다.
+#[cfg(unix)]
+#[test]
+fn the_reservation_fallback_never_overwrites_and_cleans_up() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    write(&dir.join("a.txt"), "a");
+    write(&dir.join("taken.txt"), "taken");
+    fs::create_dir(dir.join("empty")).unwrap();
+    write(&dir.join("d/inner.txt"), "inner");
+
+    for target in ["taken.txt", "empty"] {
+        let e = rename_into_reservation(&dir.join("a.txt"), &dir.join(target)).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::AlreadyExists, "{target}: {e}");
+        let e = rename_into_reservation(&dir.join("d"), &dir.join(target)).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::AlreadyExists, "{target}: {e}");
+    }
+    assert_eq!(read(&dir.join("a.txt")), "a");
+    assert_eq!(read(&dir.join("taken.txt")), "taken");
+    assert_eq!(fs::read_dir(dir.join("empty")).unwrap().count(), 0);
+
+    rename_into_reservation(&dir.join("a.txt"), &dir.join("b.txt")).unwrap();
+    assert_eq!(read(&dir.join("b.txt")), "a");
+    assert!(!dir.join("a.txt").exists());
+    rename_into_reservation(&dir.join("d"), &dir.join("e")).unwrap();
+    assert_eq!(read(&dir.join("e/inner.txt")), "inner");
+    symlink("b.txt", dir.join("link")).unwrap();
+    rename_into_reservation(&dir.join("link"), &dir.join("moved-link")).unwrap();
+    assert_eq!(
+        fs::read_link(dir.join("moved-link")).unwrap(),
+        Path::new("b.txt")
+    );
+
+    // 예약은 됐지만 바꿔 끼우기가 실패한다(폴더를 자기 안으로) — 예약본을 남기지 않는다.
+    assert!(rename_into_reservation(&dir.join("e"), &dir.join("e/inside")).is_err());
+    assert!(!dir.join("e/inside").exists());
+    assert_eq!(read(&dir.join("e/inner.txt")), "inner");
+}
+
 /// 규칙 A: 원본이 루트 밖을 가리키는 링크면 거절한다. 루트 안을 가리키는 링크는 링크 자체를 바꾼다(대상은 그대로). 들어갈 폴더가
 /// 루트 밖 링크면 대상도 거절한다.
 #[cfg(unix)]

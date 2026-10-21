@@ -11,9 +11,10 @@
 //! - 이름 바꾸기 · 이동 · 복사의 마지막 자리 잡기: [`rename_noreplace`] — macOS `renamex_np(RENAME_EXCL)`, Linux
 //!   `renameat2(RENAME_NOREPLACE)`, Windows `MoveFileExW`(`MOVEFILE_REPLACE_EXISTING` 없이). 복사는 같은 폴더의 임시 이름에 다
 //!   만든 뒤 그것으로 자리를 잡는다 — 반쯤 만든 복사본이 대상 이름으로 보이지 않는다.
-//! - **한계**: Linux 의 파일 시스템이 `RENAME_NOREPLACE` 를 받지 않으면(`EINVAL`) 파일은 하드 링크 → 원래 이름 지우기로 같은 보장을
-//!   지키지만, 폴더는 확인 뒤 `rename` 이다 — 그 사이에 같은 이름의 **빈** 폴더가 생기면 그것을 바꿔 끼운다(빈 폴더가 아니면
-//!   `rename` 이 실패한다).
+//! - **한계**: 파일 시스템이 「없을 때만」 플래그를 받지 않으면(macOS exFAT 의 `ENOTSUP`, Linux 의 `EINVAL` 등) 대체 경로로 간다.
+//!   파일은 하드 링크 → 원래 이름 지우기로 같은 보장을 지킨다. 하드 링크가 없는 파일 시스템(exFAT · FAT)의 파일과 폴더는 대상
+//!   이름을 「없을 때만」(`O_EXCL` · `mkdir`) 만들어 예약한 뒤 `rename` 으로 그 예약본을 바꿔 끼운다 — 예약과 `rename` 사이에
+//!   다른 프로세스가 **예약본을 지우고 같은 이름을 다시 만들면** 그것을 덮는다(폴더는 빈 폴더일 때만 — 아니면 `rename` 이 실패한다).
 //!
 //! 복사는 심링크를 따르지 않는다 — 링크는 같은 대상 글자의 링크로 만든다(Windows 는 권한이 있어야 해 건너뛴다). FIFO · 소켓 · 장치
 //! 같은 특수 파일은 건너뛰고 결과의 `skipped` 에 싣는다. 권한 비트는 옮기고 소유자 · 시각 · 확장 속성은 옮기지 않는다.
@@ -550,6 +551,51 @@ fn same_entry(a: &Path, b: &Path) -> bool {
 
 /// `to` 가 없을 때만 `from` 을 `to` 로 옮긴다(머리 주석). 있으면 `AlreadyExists`(폴더는 `ENOTEMPTY` 일 수 있다).
 pub(crate) fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        rename_noreplace_with(from, to, &rename_excl)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+        let wide = |p: &Path| -> Vec<u16> { p.as_os_str().encode_wide().chain([0]).collect() };
+        let (f, t) = (wide(from), wide(to));
+        // SAFETY: 두 인자는 NUL 로 끝나는 살아 있는 UTF-16 경로다. 플래그 0 은 대상이 있으면 실패한다.
+        let ok = unsafe { MoveFileExW(f.as_ptr(), t.as_ptr(), 0) };
+        if ok != 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+}
+
+/// OS 의 「없을 때만」 rename 을 부르고, 파일 시스템이 그 플래그를 받지 않으면 대체 경로로 간다. 시험은 `native` 에 실패를 주입한다.
+#[cfg(unix)]
+fn rename_noreplace_with(
+    from: &Path,
+    to: &Path,
+    native: &dyn Fn(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    match native(from, to) {
+        Err(e) if e.raw_os_error().is_some_and(flag_unsupported) => {
+            rename_noreplace_fallback(from, to)
+        }
+        done => done,
+    }
+}
+
+/// 「없을 때만」 플래그를 받지 않는다는 오류: macOS exFAT 은 `ENOTSUP`, Linux 의 오래된 파일 시스템은 `EINVAL`, 커널에 호출이
+/// 없으면 `ENOSYS`. `EINVAL` 은 「폴더를 자기 안으로」 일 수도 있지만 대체 경로의 `rename` 이 같은 오류로 다시 실패한다.
+#[cfg(unix)]
+fn flag_unsupported(errno: i32) -> bool {
+    [libc::ENOTSUP, libc::EOPNOTSUPP, libc::EINVAL, libc::ENOSYS].contains(&errno)
+}
+
+/// macOS `renamex_np(RENAME_EXCL)`, Linux `renameat2(RENAME_NOREPLACE)`. 그 밖의 unix 는 없는 것으로 보고 대체 경로로 보낸다.
+#[cfg(unix)]
+fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         let (f, t) = (c_path(from)?, c_path(to)?);
@@ -575,47 +621,69 @@ pub(crate) fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
             )
         };
         if rc == 0 {
-            return Ok(());
-        }
-        let e = io::Error::last_os_error();
-        match e.raw_os_error() {
-            Some(libc::EINVAL | libc::ENOSYS) => rename_noreplace_fallback(from, to),
-            _ => Err(e),
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt as _;
-        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
-        let wide = |p: &Path| -> Vec<u16> { p.as_os_str().encode_wide().chain([0]).collect() };
-        let (f, t) = (wide(from), wide(to));
-        // SAFETY: 두 인자는 NUL 로 끝나는 살아 있는 UTF-16 경로다. 플래그 0 은 대상이 있으면 실패한다.
-        let ok = unsafe { MoveFileExW(f.as_ptr(), t.as_ptr(), 0) };
-        if ok != 0 {
             Ok(())
         } else {
             Err(io::Error::last_os_error())
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        rename_noreplace_fallback(from, to)
+        let _ = (from, to);
+        Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
 }
 
-/// `RENAME_NOREPLACE` 가 없는 파일 시스템: 파일 · 링크는 하드 링크(대상이 있으면 실패) 뒤 원래 이름을 지운다. 폴더는 확인 뒤
-/// rename(머리 주석의 한계).
+/// 「없을 때만」 플래그가 없는 파일 시스템(머리 주석의 한계). 파일 · 링크는 하드 링크(대상이 있으면 실패) 뒤 원래 이름을 지우고,
+/// 하드 링크가 없으면 예약으로 간다. 대소문자만 다른 이름(같은 항목)은 옆의 임시 이름을 거친다 — 예약하면 원본 자신과 겹치고,
+/// `rename(2)` 는 같은 항목이면 아무것도 하지 않을 수 있다(Linux).
 #[cfg(unix)]
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn rename_noreplace_fallback(from: &Path, to: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(from)?.is_dir() {
-        if fs::symlink_metadata(to).is_ok() {
-            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
-        }
-        return fs::rename(from, to);
+    if same_entry(from, to) {
+        let tmp = temp_beside(to);
+        rename_into_reservation(from, &tmp)?;
+        return rename_noreplace_fallback(&tmp, to).inspect_err(|_| {
+            let _ = rename_into_reservation(&tmp, from);
+        });
     }
-    fs::hard_link(from, to)?;
-    fs::remove_file(from)
+    if !fs::symlink_metadata(from)?.is_dir() {
+        match fs::hard_link(from, to) {
+            Ok(()) => return fs::remove_file(from),
+            // exFAT · FAT: macOS 는 `ENOTSUP`, Linux 는 `EPERM`.
+            Err(e)
+                if e.raw_os_error()
+                    .is_some_and(|n| n == libc::EPERM || flag_unsupported(n)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    rename_into_reservation(from, to)
+}
+
+/// 대상 이름을 「없을 때만」 만들어(파일 `O_EXCL`, 폴더 `mkdir`) 자리를 예약하고, `rename` 으로 그 예약본을 `from` 으로 바꿔
+/// 끼운다(POSIX 는 파일 위로 파일 · 링크를, 빈 폴더 위로 폴더를 옮긴다). `rename` 이 실패하면 예약본이 아직 우리 것일 때만 치운다.
+#[cfg(unix)]
+fn rename_into_reservation(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    let reserved = if fs::symlink_metadata(from)?.is_dir() {
+        fs::create_dir(to)?;
+        fs::symlink_metadata(to)?
+    } else {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(to)?
+            .metadata()?
+    };
+    fs::rename(from, to).inspect_err(|_| {
+        let ours = fs::symlink_metadata(to)
+            .is_ok_and(|m| m.dev() == reserved.dev() && m.ino() == reserved.ino());
+        if ours {
+            let _ = if reserved.is_dir() {
+                fs::remove_dir(to)
+            } else {
+                fs::remove_file(to)
+            };
+        }
+    })
 }
 
 #[cfg(unix)]
@@ -641,22 +709,27 @@ fn place_copy(
     tally: &mut Tally,
     cancelled: &dyn Fn() -> bool,
 ) -> io::Result<()> {
+    let tmp = temp_beside(to);
+    let placed = copy_entry(from, &tmp, tally, cancelled).and_then(|()| rename_noreplace(&tmp, to));
+    if placed.is_err() {
+        let _ = remove_entry(&tmp);
+    }
+    placed
+}
+
+/// `to` 와 같은 폴더의 이 프로세스만 쓰는 임시 이름(숨김, `.pitwall-tmp` 로 끝난다).
+fn temp_beside(to: &Path) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let dir = to.parent().unwrap_or(Path::new("."));
     let name = to
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = dir.join(format!(
+    dir.join(format!(
         ".{name}.{}.{}.pitwall-tmp",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    let placed = copy_entry(from, &tmp, tally, cancelled).and_then(|()| rename_noreplace(&tmp, to));
-    if placed.is_err() {
-        let _ = remove_entry(&tmp);
-    }
-    placed
+    ))
 }
 
 /// 항목 하나(폴더면 그 아래 전부)를 `to`(없는 경로)로 복사한다. 링크는 따르지 않는다.
