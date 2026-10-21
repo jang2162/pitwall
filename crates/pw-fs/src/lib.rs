@@ -35,7 +35,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use pw_core::registry::methods::rpc_error;
 use pw_core::registry::path::{normalize, worktree_link};
 use pw_core::registry::{Project, Registry as Projects};
-use pw_rpc::{RpcError, code};
+use pw_rpc::{FileScope, RpcError, code};
 
 use crate::judge::{Bom, READ_ONLY_MAX, SNIFF_BYTES, judge, size_class};
 use crate::list::{EntryKind, mtime_ms};
@@ -124,6 +124,20 @@ impl Fs {
         Ok(Roots::confirmed(roots))
     }
 
+    /// 요청의 접근 범위. 파일 범위 호출자(단일 파일 창, [`pw_rpc::Caller::file`])면 요청의 프로젝트 · 워크트리를 보지 않고 그
+    /// 파일 하나가 루트다([`Roots::file`]).
+    pub fn roots_in(
+        &self,
+        file: Option<&FileScope>,
+        project_id: &str,
+        worktree: Option<&str>,
+    ) -> Result<Roots, RpcError> {
+        match file {
+            Some(file) => Ok(Roots::file(file.path().to_path_buf())),
+            None => self.roots(project_id, worktree),
+        }
+    }
+
     pub fn list(&self, params: &FsPathParams) -> Result<FsList, RpcError> {
         let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
         let dir = roots.readable(Path::new(&params.path)).map_err(denied)?;
@@ -135,7 +149,16 @@ impl Fs {
     }
 
     pub fn stat(&self, params: &FsPathParams) -> Result<FsStat, RpcError> {
-        let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
+        self.stat_in(None, params)
+    }
+
+    /// [`Self::stat`] 을 `file` 범위로([`Self::roots_in`]).
+    pub fn stat_in(
+        &self,
+        file: Option<&FileScope>,
+        params: &FsPathParams,
+    ) -> Result<FsStat, RpcError> {
+        let roots = self.roots_in(file, &params.project_id, params.worktree.as_deref())?;
         let requested = Path::new(&params.path);
         let target = roots.readable(requested).map_err(denied)?;
         let lmeta = fs::symlink_metadata(requested).map_err(|e| io_error(&target.real, e))?;
@@ -165,7 +188,16 @@ impl Fs {
     }
 
     pub fn read(&self, params: &FsReadParams) -> Result<FsRead, RpcError> {
-        let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
+        self.read_in(None, params)
+    }
+
+    /// [`Self::read`] 를 `file` 범위로([`Self::roots_in`]).
+    pub fn read_in(
+        &self,
+        file: Option<&FileScope>,
+        params: &FsReadParams,
+    ) -> Result<FsRead, RpcError> {
+        let roots = self.roots_in(file, &params.project_id, params.worktree.as_deref())?;
         let target = roots.readable(Path::new(&params.path)).map_err(denied)?;
         let real = &target.real;
         // 일반 파일이 아니면 열지 않는다 — FIFO 는 여는 것부터 막히고 장치는 여는 것만으로 일이 생길 수 있다. 링크를 따라가지
@@ -238,15 +270,25 @@ impl Fs {
     }
 
     pub fn write(&self, params: &FsWriteParams) -> Result<FsWritten, RpcError> {
-        self.write_with(params, |_| Ok(()))
+        self.write_in(None, params)
+    }
+
+    /// [`Self::write`] 를 `file` 범위로([`Self::roots_in`]).
+    pub fn write_in(
+        &self,
+        file: Option<&FileScope>,
+        params: &FsWriteParams,
+    ) -> Result<FsWritten, RpcError> {
+        self.write_with(file, params, |_| Ok(()))
     }
 
     fn write_with(
         &self,
+        file: Option<&FileScope>,
         params: &FsWriteParams,
         fault: impl Fn(write::Stage) -> io::Result<()>,
     ) -> Result<FsWritten, RpcError> {
-        let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
+        let roots = self.roots_in(file, &params.project_id, params.worktree.as_deref())?;
         let real = roots.writable(Path::new(&params.path)).map_err(denied)?;
         let bytes = match (&params.content, params.bom) {
             (FsContent::Text { text }, bom) => {

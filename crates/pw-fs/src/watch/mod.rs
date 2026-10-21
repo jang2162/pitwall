@@ -7,12 +7,15 @@
 //! - 이벤트는 버스로 나간다 — 창은 `events.subscribe({ projectId, topics: ["fs.changed"] })` 로, Host 안의 소비자(파일 목록 인덱스
 //!   M1-12 · 런타임 제공자 M1-16)는 [`pw_core::EventBus`] 로 받는다. 스트림의 항목은 변경이 아니라 감시 방식([`FsWatching`])이다.
 //! - 방식 · 디바운스 · 폴백은 [`engine`], 창 하나 동안의 경로 모으기와 종류 판정은 [`batch`].
+//! - 파일 범위 호출자(단일 파일 창, [`pw_rpc::Caller::file`])의 `fs.watch` 는 요청의 프로젝트를 보지 않고 그 파일 하나를 본다
+//!   ([`file`]) — 이벤트는 그 호출자의 범위([`pw_rpc::FileScope::event_scope`])로 나간다.
 //! - OS 감시 한도를 넘으면 경고 알림(`notification.show`, [`pw_core::notification`])을 낸다.
 //! - 파일 목록 인덱스([`crate::index`])를 붙이면([`Watch::attach_index`]) 루트를 처음 걸 때 그 루트의 목록을 만들기 시작하고, 마지막
 //!   임대가 풀릴 때 버린다.
 
 pub mod batch;
 pub mod engine;
+pub mod file;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future as _;
@@ -77,6 +80,8 @@ pub enum WatchMode {
     Folders,
     /// OS 감시 한도를 넘어, 그 뒤의 폴더는 5초마다 폴링으로 본다(그 폴더의 변경은 그만큼 늦다).
     Polling,
+    /// 파일 하나(단일 파일 창): 그 파일이 든 폴더를 비재귀로 보고 그 파일의 변경만 낸다([`file`]).
+    File,
 }
 
 #[derive(
@@ -115,6 +120,7 @@ rpc_method! {
         params: FsWatchParams,
         stream: FsWatching,
         tier: Read,
+        file_scope: true,
     }
 }
 
@@ -329,9 +335,34 @@ fn watch_error(root: &std::path::Path, e: &notify::Error) -> RpcError {
 /// `fs.watch` 를 붙인다. 감시를 거는 일(폴더별 감시의 걷기)은 블로킹 스레드에서 한다. 스트림이 취소되거나 세션이 닫히면 pw-rpc 가
 /// 이 future 를 버리고, 그와 함께 임대가 풀린다(걸고 있는 중이었으면 다 건 임대가 버려진다).
 pub fn register(router: &mut Router, watch: Watch) {
-    router.stream(FsWatchMethod, move |_ctx, params: FsWatchParams, sink| {
+    router.stream(FsWatchMethod, move |ctx, params: FsWatchParams, sink| {
         let watch = watch.clone();
+        let file = ctx
+            .file_scope()
+            .map(|f| (f.path().to_path_buf(), f.event_scope()));
         async move {
+            if let Some((path, scope)) = file {
+                let options = watch.inner.options.clone();
+                let bus = watch.inner.bus.get().cloned().ok_or_else(|| {
+                    RpcError::internal("the file watch service is not attached to an event bus")
+                })?;
+                let watched = path.clone();
+                // 감시는 놓지 않고 들고 있는다 — 스트림이 닫히면 이 future 와 함께 버려진다.
+                let _watch = tokio::task::spawn_blocking(move || {
+                    file::FileWatch::start(watched, bus, scope, options.debounce)
+                })
+                .await
+                .map_err(|e| RpcError::internal(e.to_string()))?
+                .map_err(|e| watch_error(&path, &e))?;
+                sink.send(FsWatching {
+                    roots: vec![FsWatchedRoot {
+                        path: path.display().to_string(),
+                        mode: WatchMode::File,
+                    }],
+                })
+                .await?;
+                return std::future::pending().await;
+            }
             let mut lease = tokio::task::spawn_blocking(move || watch.acquire(&params))
                 .await
                 .map_err(|e| RpcError::internal(e.to_string()))??;

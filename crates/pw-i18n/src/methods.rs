@@ -64,6 +64,7 @@ rpc_method! {
         params: (),
         result: I18nState,
         tier: Read,
+        file_scope: true,
     }
 
     /// UI 언어 설정(전역 `settings.toml` 의 `ui.language`)을 바꾼다. 그 키만 고쳐 쓰고 설정을 다시 읽는다 — 열린 창 ·
@@ -73,6 +74,8 @@ rpc_method! {
         params: SetLanguageParams,
         result: (),
         tier: Write,
+        // 단일 파일 창도 언어 액션을 쓴다. 정해진 키 하나만 고치고 경로를 받지 않는다.
+        file_scope: true,
     }
 }
 
@@ -214,10 +217,12 @@ mod tests {
             files,
             [
                 "builtin:i18n-default/i18n/ko/app.ftl",
+                "builtin:i18n-default/i18n/ko/file-window.ftl",
                 "builtin:i18n-default/i18n/ko/menu.ftl",
                 "builtin:i18n-default/i18n/ko/project.ftl",
                 "builtin:i18n-default/i18n/ko/welcome.ftl",
                 "builtin:i18n-default/i18n/en/app.ftl",
+                "builtin:i18n-default/i18n/en/file-window.ftl",
                 "builtin:i18n-default/i18n/en/menu.ftl",
                 "builtin:i18n-default/i18n/en/project.ftl",
                 "builtin:i18n-default/i18n/en/welcome.ftl",

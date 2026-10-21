@@ -142,7 +142,7 @@ impl Inner {
     fn ctx(&self, cancel: CancellationToken) -> Ctx {
         Ctx {
             session: self.id,
-            caller: self.caller,
+            caller: self.caller.clone(),
             cancel,
             events: self.events.clone(),
         }
@@ -172,6 +172,12 @@ impl Inner {
             // 알림으로 온 구독은 id 를 돌려줄 곳이 없어 해제할 수도 없다. 받지 않는다.
             EVENTS_SUBSCRIBE if m.id.is_none() => {}
             EVENTS_SUBSCRIBE => self.control(m, |this, p: SubscribeParams| {
+                // 파일 범위 호출자는 Host 범위와 자기 파일의 범위만 듣는다 — 프로젝트 id 를 대어 그 프로젝트의 변경을 받지 못하게.
+                if let (Some(file), Some(scope)) = (this.caller.file_scope(), &p.project_id)
+                    && *scope != file.event_scope()
+                {
+                    return Err(RpcError::outside_file_scope(EVENTS_SUBSCRIBE));
+                }
                 // 확인과 등록을 같은 잠금 안에서 한다. close 는 토큰을 먼저 취소하고 이 잠금으로 걷으므로,
                 // 어느 쪽이 먼저 잠그든 close 뒤에 구독이 남지 않는다.
                 let mut subscriptions = lock(&this.subscriptions);
@@ -232,6 +238,12 @@ impl Inner {
                             "allowed": entry.meta.roles,
                         }));
                 self.reply(id, Err(denied));
+            }
+            return;
+        }
+        if self.caller.file_scope().is_some() && !entry.meta.file_scope {
+            if let Some(id) = m.id {
+                self.reply(id, Err(RpcError::outside_file_scope(entry.meta.name)));
             }
             return;
         }

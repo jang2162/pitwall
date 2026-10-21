@@ -154,6 +154,10 @@ pub struct MethodMeta {
     /// MCP 툴로 내보내는가. 선언에서 `mcp: true` 로 고른 메서드만 툴이 된다 — 새 메서드는 말없이 툴이 되지 않는다.
     /// 툴 이름 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
     pub mcp: bool,
+    /// 파일 범위 호출자([`Caller::file`](crate::Caller::file), 단일 파일 창)도 부를 수 있는가. 선언에서 `file_scope: true` 로
+    /// 고른 메서드만 — 그 핸들러는 [`Ctx::file_scope`](crate::Ctx::file_scope) 를 보고 그 파일 하나 밖에 닿지 않는다. 경로를
+    /// 받지 않는 메서드(앱 정보 · 문자열)도 고른 것만 열린다. 새 메서드는 말없이 열리지 않는다.
+    pub file_scope: bool,
 }
 
 /// 내장 프로토콜 메서드가 쓰는 접두사. 선언한 메서드는 이 이름들을 쓸 수 없다.
@@ -279,6 +283,7 @@ pub trait StreamMethod: Method {
 /// - `tier` 는 [`Tier`] 의 변형 이름, `roles` 는 [`Role`] 의 변형 이름이다.
 ///   `roles` 를 생략하면 [`RoleSet::default_for`] 를 쓴다.
 /// - `mcp: true` 를 단 메서드만 MCP 툴이 된다([`MethodMeta::mcp`]). 생략하면 `false` 다. 스트림 메서드에는 달 수 없다.
+/// - `file_scope: true` 를 단 메서드만 파일 범위 호출자가 부를 수 있다([`MethodMeta::file_scope`]). 생략하면 `false` 다.
 /// - 선언은 [`methods`](crate::methods) 레지스트리에 등록된다 — 핸들러를 붙이지 않아도 타입 생성 대상이다.
 /// - 이름 규칙 · role 규칙은 [`MethodMeta::validate`] 가 컴파일 타임에 검사한다.
 ///   `roles: []` 는 생략과 다르게 빈 집합이라 빌드가 실패한다.
@@ -311,13 +316,14 @@ macro_rules! rpc_method {
             tier: $tier:ident
             $(, roles: [$($role:ident),* $(,)?])?
             $(, mcp: $mcp:literal)?
+            $(, file_scope: $file_scope:literal)?
             $(,)?
         }
         $($rest:tt)*
     ) => {
         $crate::__rpc_method_define! {
             [$($doc)*] $vis $name, $method, $params, Unary, $result, $tier, [$(explicit $($role)*)?],
-            [$($mcp)?]
+            [$($mcp)?], [$($file_scope)?]
         }
         impl $crate::UnaryMethod for $name {
             type Result = $result;
@@ -333,13 +339,14 @@ macro_rules! rpc_method {
             tier: $tier:ident
             $(, roles: [$($role:ident),* $(,)?])?
             $(, mcp: $mcp:literal)?
+            $(, file_scope: $file_scope:literal)?
             $(,)?
         }
         $($rest:tt)*
     ) => {
         $crate::__rpc_method_define! {
             [$($doc)*] $vis $name, $method, $params, Stream, $item, $tier, [$(explicit $($role)*)?],
-            [$($mcp)?]
+            [$($mcp)?], [$($file_scope)?]
         }
         impl $crate::StreamMethod for $name {
             type Item = $item;
@@ -354,7 +361,8 @@ macro_rules! rpc_method {
 macro_rules! __rpc_method_define {
     (
         [$($doc:literal)*] $vis:vis $name:ident, $method:literal, $params:ty,
-        $kind:ident, $output:ty, $tier:ident, [$($roles:tt)*], [$($mcp:literal)?]
+        $kind:ident, $output:ty, $tier:ident, [$($roles:tt)*], [$($mcp:literal)?],
+        [$($file_scope:literal)?]
     ) => {
         $(#[doc = $doc])*
         #[derive(Debug, Clone, Copy, Default)]
@@ -370,7 +378,8 @@ macro_rules! __rpc_method_define {
                 params: stringify!($params),
                 output: stringify!($output),
                 doc: concat!($($doc, "\n"),*),
-                mcp: $crate::__rpc_mcp!($($mcp)?),
+                mcp: $crate::__rpc_flag!($($mcp)?),
+                file_scope: $crate::__rpc_flag!($($file_scope)?),
             };
         }
 
@@ -394,12 +403,13 @@ macro_rules! __rpc_roles {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __rpc_mcp {
+/// 선언의 켜고 끄는 항목(`mcp` · `file_scope`). 생략하면 `false`.
+macro_rules! __rpc_flag {
     () => {
         false
     };
-    ($mcp:literal) => {
-        $mcp
+    ($flag:literal) => {
+        $flag
     };
 }
 
@@ -417,6 +427,7 @@ mod tests {
             output: "()",
             doc: "",
             mcp: false,
+            file_scope: false,
         }
     }
 

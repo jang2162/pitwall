@@ -199,6 +199,7 @@ rpc_method! {
         params: (),
         result: ThemeList,
         tier: Read,
+        file_scope: true,
     }
 
     /// 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.
@@ -206,6 +207,7 @@ rpc_method! {
         params: ThemeGetParams,
         result: ThemeFile,
         tier: Read,
+        file_scope: true,
     }
 
     /// 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.
@@ -213,6 +215,7 @@ rpc_method! {
         params: (),
         result: KeymapList,
         tier: Read,
+        file_scope: true,
     }
 
     /// 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.
@@ -220,6 +223,7 @@ rpc_method! {
         params: KeymapGetParams,
         result: KeymapFile,
         tier: Read,
+        file_scope: true,
     }
 }
 

@@ -102,6 +102,7 @@ rpc_method! {
         params: PingParams,
         result: Pong,
         tier: Read,
+        file_scope: true,
     }
 
     /// Host 의 종류 · 버전 · OS.
@@ -109,6 +110,7 @@ rpc_method! {
         params: (),
         result: HostInfo,
         tier: Read,
+        file_scope: true,
     }
 
     /// 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.

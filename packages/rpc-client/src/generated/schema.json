@@ -1685,6 +1685,11 @@
                 "const": "polling",
                 "description": "OS 감시 한도를 넘어, 그 뒤의 폴더는 5초마다 폴링으로 본다(그 폴더의 변경은 그만큼 늦다).",
                 "type": "string"
+              },
+              {
+                "const": "file",
+                "description": "파일 하나(단일 파일 창): 그 파일이 든 폴더를 비재귀로 보고 그 파일의 변경만 낸다([`file`]).",
+                "type": "string"
               }
             ]
           }

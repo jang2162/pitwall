@@ -15,6 +15,10 @@
 //!   ([`Roots::open_inside`]). 핸들 경로를 얻지 못하는 플랫폼은 판정만 한다. 폴더 목록(`read_dir`)은 핸들 경로를 보지 않는다.
 //! - **일반 파일만 읽는다**: FIFO 는 여는 것부터 쓰는 쪽이 올 때까지 막혀 그 요청과 스레드를 영영 붙잡는다. 읽기는 막히지
 //!   않게(unix `O_NONBLOCK`) 열고, 연 핸들이 일반 파일이 아니면 버린다([`NotAFile`]) — 판정 뒤 FIFO 로 바뀌어도 같다.
+//! - **파일 하나가 루트**(단일 파일 창, M1-24): [`Roots::file`]. 위 규칙 그대로이고 「루트 안」 만 「그 파일 자체」 로 좁힌다 —
+//!   같은 폴더의 다른 파일 · 그 아래 경로(`a.txt/x`) · 다른 파일을 가리키는 링크는 루트 밖이다. 루트는 실제 경로라 그 파일을
+//!   가리키는 링크로 온 요청은 받는다. 쓰기는 그 파일 자체만 받는다(원자 쓰기의 임시 파일은 [`crate::write`] 가 만들고 RPC 로는
+//!   이름을 고를 수 없다).
 //! - **한계(쓰기)**: 판정은 경로 글자로 하고 쓰기는 그 뒤에 경로로 연다. 판정과 rename 사이에 다른 로컬 프로세스가 경로의 폴더
 //!   하나를 루트 밖 링크로 바꾸면 임시 파일 · rename 이 루트 밖에 떨어진다. 막으려면 폴더 핸들 기준 `openat` · `renameat` 가
 //!   필요하다(M1 에서는 하지 않는다). 루트 안에 동시에 쓸 수 있는 로컬 프로세스가 있어야 생기는 경합이다.
@@ -66,7 +70,11 @@ pub struct Readable {
 
 /// 요청이 들어갈 수 있는 루트들. 모두 [`normalize`] 를 지난 경로다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Roots(Vec<PathBuf>);
+pub struct Roots {
+    roots: Vec<PathBuf>,
+    /// 루트가 파일 하나다([`Roots::file`]). 루트 「안」 은 그 경로 자체뿐이다.
+    file: bool,
+}
 
 impl Roots {
     /// `roots` 를 다시 정규화한다(등록된 루트는 이미 정규화돼 있어 그대로 나온다). 상대 경로는 버린다.
@@ -76,7 +84,10 @@ impl Roots {
             .filter_map(|r| normalize(&r).ok())
             .collect();
         out.dedup();
-        Self(out)
+        Self {
+            roots: out,
+            file: false,
+        }
     }
 
     /// 확정해 둔 실제 경로들(등록 · 워크트리 계산 때 [`normalize`] 를 지난 루트). 지금은 다른 실제 경로로 풀리는 것(루트를 지우고
@@ -88,19 +99,37 @@ impl Roots {
             .filter(|root| normalize(root).is_ok_and(|real| &real == root))
             .collect();
         out.dedup();
-        Self(out)
+        Self {
+            roots: out,
+            file: false,
+        }
+    }
+
+    /// 파일 하나가 루트다(단일 파일 창의 연결, 이 모듈 머리 주석). `path` 는 확정해 둔 실제 경로다 — [`Self::confirmed`] 처럼
+    /// 지금 다른 실제 경로로 풀리면(그 파일을 지우고 같은 이름의 링크를 둠) 루트가 없어 모든 요청을 거절한다.
+    pub fn file(path: PathBuf) -> Self {
+        Self {
+            file: true,
+            ..Self::confirmed([path])
+        }
     }
 
     pub fn as_slice(&self) -> &[PathBuf] {
-        &self.0
+        &self.roots
     }
 
     /// `path` 를 담은 가장 깊은 루트. 메인 체크아웃 안의 워크트리(`.worktrees/x`)처럼 루트가 겹치면 안쪽 루트가 그 경로의
     /// ignore 기준이다.
     fn deepest(&self, path: &Path) -> Option<&PathBuf> {
-        self.0
+        self.roots
             .iter()
-            .filter(|root| path.starts_with(root))
+            .filter(|root| {
+                if self.file {
+                    path == root.as_path()
+                } else {
+                    path.starts_with(root)
+                }
+            })
             .max_by_key(|root| root.components().count())
     }
 
@@ -130,7 +159,8 @@ impl Roots {
     /// 쓸 실제 경로. 심링크면 그 대상이다 — 링크를 rename 으로 덮지 않고 대상 파일을 바꾼다.
     pub fn writable(&self, path: &Path) -> Result<PathBuf, Denied> {
         let real = absolute_normalized(path)?;
-        if self.deepest(&real).is_none() || self.0.contains(&real) {
+        // 폴더 루트 자체는 파일로 쓸 수 없다. 파일 루트는 그것만 쓴다.
+        if self.deepest(&real).is_none() || (!self.file && self.roots.contains(&real)) {
             return Err(Denied::Outside(path.to_path_buf()));
         }
         // 정규화는 풀리는 링크를 대상으로 바꾼다 — 그래도 링크로 남았으면 대상이 없거나 고리다.

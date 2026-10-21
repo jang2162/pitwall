@@ -103,6 +103,7 @@ rpc_method! {
         params: LangDetectParams,
         result: LangDetectResult,
         tier: Read,
+        file_scope: true,
     }
 
     /// 고를 수 있는 언어(상태바의 언어 수동 변경, F4-12)와 언어마다의 줄 주석. 앱이 시작할 때 읽은 확장 레지스트리 기준이다.
@@ -110,6 +111,7 @@ rpc_method! {
         params: (),
         result: LangList,
         tier: Read,
+        file_scope: true,
     }
 }
 
@@ -388,9 +390,14 @@ pub fn register(router: &mut Router, lang: Arc<Lang>) {
         let list = list.clone();
         async move { Ok(list) }
     });
-    router.unary(LangDetect, move |_ctx, params: LangDetectParams| {
+    router.unary(LangDetect, move |ctx, params: LangDetectParams| {
         let lang = Arc::clone(&lang);
+        // 파일 범위 호출자(단일 파일 창)는 프로젝트의 설정 · 속성 파일을 읽게 하지 못한다 — 이름 · 앞부분만으로 판별한다.
+        let scoped = ctx.file_scope().is_some() && params.project_id.is_some();
         async move {
+            if scoped {
+                return Err(RpcError::outside_file_scope("lang.detect"));
+            }
             // 속성 파일 · 프로젝트 설정 읽기(디스크 IO)와 정규식 판별을 블로킹 스레드로 보낸다.
             tokio::task::spawn_blocking(move || lang.detect(&params))
                 .await

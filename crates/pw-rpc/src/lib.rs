@@ -28,7 +28,9 @@ pub use method::{
     Method, MethodKind, MethodMeta, RESERVED_PREFIXES, Role, RoleSet, StreamMethod, Tier,
     UnaryMethod,
 };
-pub use router::{Caller, Ctx, Router, SessionId, StreamSink};
+pub use router::{
+    Caller, ConnectionScope, Ctx, FILE_EVENT_SCOPE_PREFIX, FileScope, Router, SessionId, StreamSink,
+};
 pub use session::Session;
 pub use typegen::{JsNumber, JsonValue, MethodInfo, methods};
 

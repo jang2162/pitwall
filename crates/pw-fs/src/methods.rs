@@ -170,6 +170,7 @@ rpc_method! {
         params: FsPathParams,
         result: FsStat,
         tier: Read,
+        file_scope: true,
     }
 
     /// 파일 전체 또는 범위를 읽고 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급)을 함께 준다. 전체 읽기는 50 MiB 까지,
@@ -178,6 +179,7 @@ rpc_method! {
         params: FsReadParams,
         result: FsRead,
         tier: Read,
+        file_scope: true,
     }
 
     /// 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도
@@ -186,6 +188,7 @@ rpc_method! {
         params: FsWriteParams,
         result: FsWritten,
         tier: Write,
+        file_scope: true,
     }
 }
 
@@ -206,16 +209,16 @@ pub fn register(router: &mut Router, fs: Arc<Fs>) {
             let s = Arc::clone(&list);
             blocking(move || s.list(&params))
         })
-        .unary(FsStatMethod, move |_ctx, params: FsPathParams| {
+        .unary(FsStatMethod, move |ctx, params: FsPathParams| {
             let s = Arc::clone(&stat);
-            blocking(move || s.stat(&params))
+            blocking(move || s.stat_in(ctx.file_scope(), &params))
         })
-        .unary(FsReadMethod, move |_ctx, params: FsReadParams| {
+        .unary(FsReadMethod, move |ctx, params: FsReadParams| {
             let s = Arc::clone(&read);
-            blocking(move || s.read(&params))
+            blocking(move || s.read_in(ctx.file_scope(), &params))
         })
-        .unary(FsWriteMethod, move |_ctx, params: FsWriteParams| {
+        .unary(FsWriteMethod, move |ctx, params: FsWriteParams| {
             let s = Arc::clone(&fs);
-            blocking(move || s.write(&params))
+            blocking(move || s.write_in(ctx.file_scope(), &params))
         });
 }

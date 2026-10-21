@@ -71,5 +71,6 @@ rpc_method! {
         params: ConfigGetParams,
         result: ConfigView,
         tier: Read,
+        file_scope: true,
     }
 }

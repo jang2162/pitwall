@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
@@ -37,16 +38,84 @@ pub(crate) struct Entry {
 }
 
 /// 호출자. transport 가 연결을 인증한 뒤 세션을 만들 때 정한다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller {
     pub role: Role,
+    /// 이 연결이 무엇을 위해 열렸는가([`ConnectionScope`]).
+    pub scope: ConnectionScope,
+}
+
+/// 연결의 범위. role 이 「무엇을 할 수 있나」 라면 이것은 「어디에 닿나」 다.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ConnectionScope {
+    /// Host 를 직접 고른 연결(`hostId`). role 이 허용하는 전부.
+    #[default]
+    Host,
+    /// 프로젝트로 고른 연결(`projectId`, Host Router 가 채운다 — `pw_core::HostRouter::connect`). 디스패처는 지금 이것으로 막는
+    /// 것이 없다 — 「그 프로젝트의 연결만」 이 필요한 핸들러가 [`Ctx::scope`] 로 본다.
+    Project(String),
+    /// 파일 하나에만 닿는 연결([`Caller::file`]).
+    File(Arc<FileScope>),
 }
 
 impl Caller {
     pub fn new(role: Role) -> Self {
-        Self { role }
+        Self {
+            role,
+            scope: ConnectionScope::Host,
+        }
+    }
+
+    /// 파일 하나에만 닿는 호출자(단일 파일 창, `docs/design/12-m1-plan.md` M1-24). 디스패처는 `file_scope: true` 로 선언한
+    /// 메서드만 받고([`MethodMeta::file_scope`](crate::MethodMeta::file_scope)), 이벤트는 Host 범위와
+    /// [`FileScope::event_scope`] 만 구독하게 한다. 경로를 받는 핸들러는 [`Ctx::file_scope`] 로 그 파일 밖을 거절한다.
+    /// `path` 는 transport 가 정한 실제 경로다(웹뷰가 보낸 값이 아니다).
+    pub fn file(role: Role, path: PathBuf) -> Self {
+        Self {
+            role,
+            scope: ConnectionScope::File(Arc::new(FileScope { path })),
+        }
+    }
+
+    /// 파일 범위 호출자면 그 파일.
+    pub fn file_scope(&self) -> Option<&FileScope> {
+        match &self.scope {
+            ConnectionScope::File(file) => Some(file),
+            ConnectionScope::Host | ConnectionScope::Project(_) => None,
+        }
     }
 }
+
+/// 파일 범위 호출자가 닿는 파일.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FileScope {
+    path: PathBuf,
+}
+
+impl FileScope {
+    /// 정규화한 실제 경로.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// 이 파일의 이벤트(`fs.changed`)가 나가는 구독 범위 — `events.subscribe` 의 `projectId` 자리. 프로젝트 id 와 겹치지 않게
+    /// `file:` 로 시작한다.
+    pub fn event_scope(&self) -> String {
+        format!("{FILE_EVENT_SCOPE_PREFIX}{}", self.path.display())
+    }
+}
+
+impl RpcError {
+    /// 파일 범위 호출자([`Caller::file`])가 그 범위 밖을 불렀다(`PERMISSION_DENIED`). 디스패처가 쓰고, 입력에 따라 범위를 넘는
+    /// `file_scope` 메서드(프로젝트를 받는 것 등)도 같은 오류로 거절한다.
+    pub fn outside_file_scope(method: &str) -> Self {
+        RpcError::new(crate::error::code::PERMISSION_DENIED, "permission denied")
+            .with_data(serde_json::json!({ "method": method, "scope": "file" }))
+    }
+}
+
+/// [`FileScope::event_scope`] 의 접두사.
+pub const FILE_EVENT_SCOPE_PREFIX: &str = "file:";
 
 /// 세션(연결) 하나의 id. 한 프로세스 안에서 세션마다 다르고 다시 쓰이지 않는다. 연결에 묶인 자원(터미널 등)을 다른 연결이
 /// 건드리지 못하게 핸들러가 이것으로 가른다(03-architecture.md 「RPC 설계」 「그 Host 세션 안에서만 유효하다」).
@@ -63,8 +132,18 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    pub fn caller(&self) -> Caller {
-        self.caller
+    pub fn caller(&self) -> &Caller {
+        &self.caller
+    }
+
+    /// 이 호출이 온 연결의 범위.
+    pub fn scope(&self) -> &ConnectionScope {
+        &self.caller.scope
+    }
+
+    /// 파일 범위 호출자면 그 파일. 경로를 받는 `file_scope` 메서드는 이것이 있으면 그 파일 밖을 거절한다.
+    pub fn file_scope(&self) -> Option<&FileScope> {
+        self.caller.file_scope()
     }
 
     /// 이 호출이 온 세션.

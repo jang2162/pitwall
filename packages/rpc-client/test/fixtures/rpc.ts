@@ -29,10 +29,10 @@ export type MethodName = keyof UnaryMethods | keyof StreamMethods;
 
 /** 메서드 메타데이터(권한 등급 · role · 문서). */
 export const METHODS: Record<MethodName, MethodMeta> = {
-	"fixture.echo": {"name":"fixture.echo","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"EchoParams","output":"EchoResult","doc":" 입력을 `repeatCount` 번 이어 붙여 돌려준다.\n","mcp":false},
-	"fixture.count": {"name":"fixture.count","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"CountParams","output":"u32","doc":" 0 부터 n-1 까지 청크로 보낸다.\n","mcp":false},
-	"fixture.fail": {"name":"fixture.fail","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"()","doc":" 애플리케이션 오류를 돌려준다.\n","mcp":false},
-	"fixture.wait": {"name":"fixture.wait","kind":"unary","tier":"exec","roles":["owner","mobile"],"params":"()","output":"()","doc":" 끝나지 않는다. 취소 시험용.\n","mcp":false},
+	"fixture.echo": {"name":"fixture.echo","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"EchoParams","output":"EchoResult","doc":" 입력을 `repeatCount` 번 이어 붙여 돌려준다.\n","mcp":false,"fileScope":false},
+	"fixture.count": {"name":"fixture.count","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"CountParams","output":"u32","doc":" 0 부터 n-1 까지 청크로 보낸다.\n","mcp":false,"fileScope":false},
+	"fixture.fail": {"name":"fixture.fail","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"()","doc":" 애플리케이션 오류를 돌려준다.\n","mcp":false,"fileScope":false},
+	"fixture.wait": {"name":"fixture.wait","kind":"unary","tier":"exec","roles":["owner","mobile"],"params":"()","output":"()","doc":" 끝나지 않는다. 취소 시험용.\n","mcp":false,"fileScope":false},
 };
 
 /** 내장 프로토콜 메서드 이름. */
@@ -133,6 +133,12 @@ export type MethodMeta = {
 	 *  툴 이름 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
 	 */
 	mcp: boolean,
+	/**
+	 *  파일 범위 호출자([`Caller::file`](crate::Caller::file), 단일 파일 창)도 부를 수 있는가. 선언에서 `file_scope: true` 로
+	 *  고른 메서드만 — 그 핸들러는 [`Ctx::file_scope`](crate::Ctx::file_scope) 를 보고 그 파일 하나 밖에 닿지 않는다. 경로를
+	 *  받지 않는 메서드(앱 정보 · 문자열)도 고른 것만 열린다. 새 메서드는 말없이 열리지 않는다.
+	 */
+	fileScope: boolean,
 };
 
 /**  서버 → 클라이언트 알림의 와이어 형식. [`Notification`] 이 이 형태로 직렬화된다. */

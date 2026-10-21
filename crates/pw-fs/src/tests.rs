@@ -381,13 +381,17 @@ fn an_injected_failure_keeps_the_original_content_and_permissions() {
     let version = f.read(&id, &path).unwrap().version;
     for stage in [write::Stage::Created, write::Stage::Written] {
         let err =
-            f.fs.write_with(&write_params(&id, &path, "new", version.clone()), |s| {
-                if s == stage {
-                    Err(io::Error::other("injected"))
-                } else {
-                    Ok(())
-                }
-            })
+            f.fs.write_with(
+                None,
+                &write_params(&id, &path, "new", version.clone()),
+                |s| {
+                    if s == stage {
+                        Err(io::Error::other("injected"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
             .unwrap_err();
         assert_eq!(err.code, code::INTERNAL_ERROR, "{err:?}");
         assert_eq!(fs::read(&path).unwrap(), b"original", "{stage:?}");
@@ -643,6 +647,7 @@ fn concurrent_writes_with_the_same_version_do_not_both_succeed() {
         let (a, b) = std::thread::scope(|s| {
             let a = s.spawn(|| {
                 f.fs.write_with(
+                    None,
                     &write_params(&id, &path, "from-A", version.clone()),
                     move |stage| {
                         if stage == write::Stage::Created {

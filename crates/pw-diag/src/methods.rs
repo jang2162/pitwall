@@ -63,6 +63,7 @@ rpc_method! {
         params: UiLogBatch,
         result: (),
         tier: Write,
+        file_scope: true,
     }
 
     /// 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.

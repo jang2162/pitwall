@@ -158,6 +158,7 @@ rpc_method! {
         params: SyntaxOpenParams,
         result: SyntaxOpenResult,
         tier: Read,
+        file_scope: true,
     }
 }
 
@@ -170,6 +171,7 @@ rpc_method! {
         params: SyntaxEditParams,
         result: SyntaxEditResult,
         tier: Read,
+        file_scope: true,
     }
 }
 
@@ -179,6 +181,7 @@ rpc_method! {
         params: SyntaxHighlightsParams,
         result: SyntaxHighlightsResult,
         tier: Read,
+        file_scope: true,
     }
 }
 
@@ -188,6 +191,7 @@ rpc_method! {
         params: SyntaxCloseParams,
         result: (),
         tier: Read,
+        file_scope: true,
     }
 }
 

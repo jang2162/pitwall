@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
-use pw_rpc::Caller;
+use pw_rpc::{Caller, ConnectionScope};
 
 use crate::ProjectId;
 use crate::host::{Connection, Host, HostError, HostId, Target};
@@ -84,8 +84,17 @@ impl HostRouter {
         }
     }
 
-    pub async fn connect(&self, target: &Target, caller: Caller) -> Result<Connection, HostError> {
+    /// 프로젝트로 고른 연결은 그 프로젝트를 범위로 싣는다([`ConnectionScope::Project`]). 이미 범위가 좁은 호출자(파일 하나)는
+    /// 그대로다.
+    pub async fn connect(
+        &self,
+        target: &Target,
+        mut caller: Caller,
+    ) -> Result<Connection, HostError> {
         let host = self.resolve(target)?;
+        if let (Target::ProjectId(id), ConnectionScope::Host) = (target, &caller.scope) {
+            caller.scope = ConnectionScope::Project(id.clone());
+        }
         host.connect(caller).await
     }
 }
@@ -164,5 +173,58 @@ mod tests {
             result.err().map(|e| e.to_string()),
             Some("unknown project `p9`".into())
         );
+    }
+
+    /// 연결을 열 때 받은 호출자를 적어 두는 Host.
+    struct Recording {
+        inner: LocalHost,
+        seen: std::sync::Mutex<Vec<Caller>>,
+    }
+
+    impl Host for Recording {
+        fn id(&self) -> &str {
+            self.inner.id()
+        }
+
+        fn connect(
+            &self,
+            caller: Caller,
+        ) -> crate::host::BoxFuture<'_, Result<Connection, HostError>> {
+            self.seen.lock().unwrap().push(caller.clone());
+            self.inner.connect(caller)
+        }
+    }
+
+    /// 프로젝트로 고른 연결은 그 프로젝트를 범위로 싣고(M1-25 가 「그 프로젝트 창의 연결만」 을 가른다), Host 로 고른 연결은
+    /// Host 범위다. 이미 파일 하나로 좁힌 호출자는 프로젝트로 넓히지 않는다.
+    #[tokio::test]
+    async fn connecting_by_project_carries_the_project_as_the_scope() {
+        let router = HostRouter::new();
+        let host = Arc::new(Recording {
+            inner: LocalHost::new("local"),
+            seen: std::sync::Mutex::default(),
+        });
+        router.add_host(host.clone()).unwrap();
+        router.bind_project("p1".into(), "local").unwrap();
+        let by_project = Target::ProjectId("p1".into());
+        let by_host = Target::HostId("local".into());
+        let file = Caller::file(Role::Owner, "/x/a.txt".into());
+        for (target, caller) in [
+            (&by_project, Caller::new(Role::Owner)),
+            (&by_host, Caller::new(Role::Readonly)),
+            (&by_project, file.clone()),
+        ] {
+            assert!(router.connect(target, caller).await.is_ok());
+        }
+        let seen = host.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen.iter().map(|c| c.scope.clone()).collect::<Vec<_>>(),
+            [
+                ConnectionScope::Project("p1".into()),
+                ConnectionScope::Host,
+                file.scope.clone(),
+            ]
+        );
+        assert_eq!(seen[1].role, Role::Readonly);
     }
 }

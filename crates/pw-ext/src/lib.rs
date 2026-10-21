@@ -142,7 +142,13 @@ mod tests {
                 (e.manifest.id.as_str(), t.locale.as_str(), names)
             })
             .collect();
-        let files = vec!["app.ftl", "menu.ftl", "project.ftl", "welcome.ftl"];
+        let files = vec![
+            "app.ftl",
+            "file-window.ftl",
+            "menu.ftl",
+            "project.ftl",
+            "welcome.ftl",
+        ];
         assert_eq!(
             loaded,
             [

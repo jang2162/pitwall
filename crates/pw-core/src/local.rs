@@ -364,9 +364,13 @@ fn build_router(
                 let paths = paths.clone();
                 async move { Ok(paths) }
             })
-            .unary(ConfigGet, move |_ctx, params| {
+            .unary(ConfigGet, move |ctx, params| {
                 let view = match params.project_id {
                     None => Ok(ConfigView::from(&global)),
+                    // 파일 범위 호출자(단일 파일 창)에게 프로젝트의 설정을 보이지 않는다.
+                    Some(_) if ctx.file_scope().is_some() => {
+                        Err(RpcError::outside_file_scope("config.get"))
+                    }
                     Some(id) => {
                         let projects = projects.lock().unwrap_or_else(PoisonError::into_inner);
                         match projects.get(&id) {
