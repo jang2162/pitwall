@@ -146,6 +146,36 @@ it("gives keywords, strings and comments different colors in both variants of th
   expect(theme.variants.light!["syntax.keyword"]).not.toBe(theme.variants.dark!["syntax.keyword"]);
 });
 
+/** WCAG 상대 휘도 대비(`#rrggbb` 두 색). */
+function contrast(a: string, b: string) {
+  const luminance = (hex: string) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * bl!;
+  };
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+
+it("keeps every syntax color but comments at 4.5:1 or more against the editor background", () => {
+  // 주석은 일부러 흐리게 둔다(흔한 선택).
+  const dim = new Set(["syntax.comment", "syntax.comment.documentation"]);
+  const theme = parseTheme(defaultTheme);
+  for (const appearance of ["light", "dark"] as const) {
+    const values = theme.variants[appearance]!;
+    const background = values["editor.background"];
+    for (const token of SYNTAX_TOKENS) {
+      const name = `syntax.${token}` as const;
+      if (dim.has(name)) continue;
+      expect(contrast(values[name], background), `${appearance} ${name}`).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    }
+  }
+});
+
 it("keeps the plugin, its session and its colors through a theme change, without asking again", async () => {
   const { view, server, ctx } = setup("fn a");
   await vi.waitFor(() => expect(painted(view)).toHaveLength(1));
