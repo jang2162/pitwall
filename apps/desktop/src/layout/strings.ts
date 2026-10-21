@@ -109,6 +109,8 @@ export function projectStrings(t: Translate) {
       notifications: (count: number) => t("status-notifications", { count }),
     },
     tasks: {
+      /** 작업 제목. Host 는 `task-title-` 로 시작하는 Fluent id 를 보낸다 — 그 밖의 제목(데모 · 확장)은 그대로 보인다. */
+      title: (title: string) => (title.startsWith("task-title-") ? t(title) : title),
       label: t("task-list-label"),
       cancel: (title: string) => t("task-cancel", { title }),
       more: (count: number) => t("task-more", { count }),

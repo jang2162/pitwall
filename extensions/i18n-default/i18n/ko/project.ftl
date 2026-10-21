@@ -228,6 +228,8 @@ task-more = +{ $count }
 task-failed = 작업 실패: { $title }
 task-start-failed = 작업을 시작하지 못했다
 task-cancel-failed = 작업을 취소하지 못했다
+# Host 가 보내는 작업 제목(`task-title-*` id).
+task-title-indexing-files = 파일 목록 만드는 중
 action-task-demo = 데모 작업 실행
 action-task-demo-invalid = 데모 작업 실행(잘못된 인자 — 오류 알림 확인용)
 

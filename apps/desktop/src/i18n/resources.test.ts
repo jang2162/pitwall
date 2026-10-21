@@ -3,7 +3,8 @@
 // 두 언어에 모두 있고 오류 없이 만들어지는지. 폴백(en)이 빠진 메시지를 덮어 화면에서는
 // 티가 나지 않으므로 여기서 언어마다 따로 본다.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { FluentBundle, FluentResource, type FluentVariable } from "@fluent/bundle";
@@ -137,6 +138,30 @@ describe("built-in translations", () => {
       expect(problems).toEqual([]);
     },
   );
+});
+
+describe("task titles", () => {
+  it.each(LOCALES)("translate every `task-title-*` id the host sends (%s)", (locale) => {
+    const crates = fileURLToPath(new URL("../../../../crates", import.meta.url));
+    const source = readdirSync(crates, { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith(".rs"))
+      .map((file) => readFileSync(join(crates, file), "utf8"))
+      .join("\n");
+    const titleIds = [
+      ...new Set([...source.matchAll(/"(task-title-[a-z-]+)"/g)].map((m) => m[1]!)),
+    ];
+    expect(titleIds).toContain("task-title-indexing-files");
+    const { t, problems } = strictTranslator(locale);
+    const { title } = projectStrings(t).tasks;
+    for (const id of titleIds) expect(title(id)).not.toBe(id);
+    expect(problems).toEqual([]);
+  });
+
+  it("show other titles as they are", () => {
+    const { t, used } = strictTranslator("en");
+    expect(projectStrings(t).tasks.title("demo")).toBe("demo");
+    expect(used.has("demo")).toBe(false);
+  });
 });
 
 describe("initialLocales", () => {

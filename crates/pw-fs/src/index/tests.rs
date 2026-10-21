@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::matching::{LOWERED_DIVISOR, utf16_positions};
 use super::*;
+use crate::scope::Roots;
 use crate::watch::{FsChanged, FsWatchParams, Watch};
 
 /// 완료 기준: 파일을 만들거나 지우면 이 안에 결과에 반영된다.
@@ -30,6 +31,27 @@ pub(super) fn after_walk(root: &Path) {
     if let Some(hook) = hooks.as_ref().and_then(|h| h.get(root)) {
         hook();
     }
+}
+
+/// 루트별 감시하지 않는 걷기 횟수.
+static ADHOC_WALKS: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+
+pub(super) fn adhoc_walked(root: &Path) {
+    *ADHOC_WALKS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_with(HashMap::new)
+        .entry(root.to_path_buf())
+        .or_default() += 1;
+}
+
+fn adhoc_walks(root: &Path) -> usize {
+    ADHOC_WALKS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .and_then(|w| w.get(root).copied())
+        .unwrap_or(0)
 }
 
 fn set_after_walk(root: &Path, hook: impl Fn() + Send + 'static) {
@@ -412,6 +434,54 @@ async fn created_and_removed_files_show_up_within_500ms() {
     );
 }
 
+/// 처음 보는 경로가 `modified` 로 와도 넣는다: 루트 밖에서 옮겨 온 파일, 폴더 사이 이동, 원자 쓰기(임시 파일 → rename).
+#[tokio::test(flavor = "multi_thread")]
+async fn moved_in_and_atomically_written_files_show_up() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/a/moved_between.rs"), "");
+    write(&f.base.join("elsewhere/moved_in.rs"), "");
+    let index = f.index();
+    let watch = f.watch(&index);
+    let _lease = watch
+        .acquire(&FsWatchParams {
+            project_id: id.clone(),
+            worktree: None,
+        })
+        .unwrap();
+    assert!(index.ready(&id, &root).await);
+
+    fs::create_dir_all(root.join("src/b")).unwrap();
+    fs::rename(
+        root.join("src/a/moved_between.rs"),
+        root.join("src/b/moved_between.rs"),
+    )
+    .unwrap();
+    fs::rename(
+        f.base.join("elsewhere/moved_in.rs"),
+        root.join("src/moved_in.rs"),
+    )
+    .unwrap();
+    write(&root.join("src/.atomic.tmp"), "");
+    fs::rename(
+        root.join("src/.atomic.tmp"),
+        root.join("src/atomic_target.rs"),
+    )
+    .unwrap();
+
+    for (query, rel) in [
+        ("moved_between", "src/b/moved_between.rs"),
+        ("moved_in", "src/moved_in.rs"),
+        ("atomic_target", "src/atomic_target.rs"),
+    ] {
+        let took = until(&index, &id, query, rel, true, REFLECTED).await;
+        assert!(took.is_some(), "{rel} 가 {REFLECTED:?} 안에 든다");
+    }
+    let listed = all_files(&index, &id).await;
+    assert!(!listed.contains("src/a/moved_between.rs"), "{listed:?}");
+    assert!(!listed.contains("src/.atomic.tmp"), "{listed:?}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn changing_an_ignore_file_rewalks_its_folder() {
     let f = Fixture::new();
@@ -596,9 +666,10 @@ async fn building_is_a_project_task() {
     assert_eq!(event.status, TaskStatus::Completed);
 }
 
-/// 작업을 취소하면(사람이 `task.cancel`) 그 목록을 버리고, 기다리던 요청은 직접 걸어 답한다.
+/// 작업을 취소하면(사람이 `task.cancel`) 그 목록을 버리고, 그 만들기를 기다리던 요청은 「취소됨」 으로 끝난다. 감시가 살아 있는
+/// 동안 다음 요청이 다시 만든다(감시하지 않는 루트처럼 걷지 않는다).
 #[tokio::test(flavor = "multi_thread")]
-async fn cancelling_the_task_drops_the_list() {
+async fn cancelling_the_task_drops_the_list_until_the_next_request() {
     let f = Fixture::new();
     let (id, root) = f.repo("proj");
     write(&root.join("src/lib.rs"), "");
@@ -614,12 +685,365 @@ async fn cancelling_the_task_drops_the_list() {
         let id = id.clone();
         async move { index.search(params(&id, "lib")).await }
     });
+    tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(tasks.cancel(running[0].task_id));
-    let found = tokio::time::timeout(Duration::from_secs(5), searching)
+    let e = tokio::time::timeout(Duration::from_secs(5), searching)
         .await
         .unwrap()
         .unwrap()
+        .unwrap_err();
+    assert_eq!(e.code, pw_rpc::code::CANCELLED, "{e:?}");
+    let entry = index
+        .inner
+        .get(&id, &root)
+        .expect("감시가 살아 있으면 자리는 남는다");
+    assert!(entry.state().files.is_empty(), "목록을 버린다");
+    assert!(!index.ready(&id, &root).await);
+
+    // 다음 요청이 다시 만든다 — 다시 만들기도 작업이다.
+    set_after_walk(&root, || {});
+    write(&root.join("src/after.rs"), "");
+    let found = tokio::time::timeout(Duration::from_secs(5), index.search(params(&id, "after")))
+        .await
+        .expect("다시 만들기를 기다리다 멈추지 않는다")
         .unwrap();
-    assert_eq!(relatives(&found), ["src/lib.rs"]);
-    assert!(index.inner.get(&id, &root).is_none());
+    assert_eq!(relatives(&found), ["src/after.rs"]);
+    assert!(index.ready(&id, &root).await);
+    assert_eq!(adhoc_walks(&root), 0, "감시하지 않는 루트처럼 걷지 않는다");
+}
+
+/// 취소 뒤 `rescan` 도 다시 만든다(그 전에 온 경로 변경은 버린다).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rescan_after_a_cancel_rebuilds_the_list() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/lib.rs"), "");
+    set_after_walk(&root, || std::thread::sleep(Duration::from_millis(300)));
+    let index = FileIndex::new(Arc::clone(&f.fs));
+    let tasks = TaskSpawner::new(f.bus.clone(), Scope::Host, CancellationToken::new());
+    tokio::spawn(index.attach(&f.bus, tasks.clone()));
+    index.open(&id, &root, None);
+    let running = tasks.running(Some(&id));
+    assert!(tasks.cancel(running[0].task_id));
+    let entry = index.inner.get(&id, &root).unwrap();
+    // 취소는 작업의 future 가 버려질 때 닿는다.
+    let mut phase = entry.phase.subscribe();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        phase.wait_for(|p| *p == Phase::Cancelled),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    // 버린 목록에는 경로 변경을 적용하지 않는다(일부만 든 목록이 되지 않게).
+    entry.changed(vec![root.join("src/lib.rs")]);
+    assert!(entry.state().files.is_empty());
+    set_after_walk(&root, || {});
+
+    let rescan = FsChanged {
+        root: root.display().to_string(),
+        worktree: None,
+        paths: Vec::new(),
+        kinds: Vec::new(),
+        rescan: true,
+    };
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    let rebuilt = tokio::time::timeout(Duration::from_secs(5), async {
+        while !index.ready(&id, &root).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(rebuilt.is_ok(), "rescan 이 다시 만든다");
+    assert!(all_files(&index, &id).await.contains("src/lib.rs"));
+}
+
+/// 결정 M1-D8: 감시가 알린 경로를 다시 볼 때 중간 폴더가 루트 밖 링크로 바뀌었으면 넣지 않는다(리뷰 B1 의 결정적 재현).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_folder_swapped_to_an_outside_link_adds_nothing() {
+    let f = Fixture::new();
+    let (_id, root) = f.repo("proj");
+    write(&root.join("d/x/inner.rs"), "");
+    let outside = f.base.join("outside");
+    write(&outside.join("x/secret_outside.rs"), "");
+    write(&outside.join("top_secret.rs"), "");
+    fs::remove_dir_all(root.join("d")).unwrap();
+    symlink(&outside, &root.join("d"));
+
+    let scope = Roots::new([root.clone()]);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let walk = Walk::new(&root, &scope, &stop);
+    let ops = walk.ops(&[root.join("d/x"), root.join("d/top_secret.rs")]);
+    let inserted: Vec<_> = ops
+        .iter()
+        .filter_map(|op| match op {
+            walk::Op::Insert(rel, _) => Some(rel.to_string()),
+            walk::Op::Remove(_) => None,
+        })
+        .collect();
+    assert_eq!(inserted, Vec::<String>::new(), "{ops:?}");
+}
+
+/// 루트를 범위 안의 다른 루트로 가는 링크로 바꿔치기해도 그 루트의 이름을 이 루트 것으로 걷지 않는다. 대상이 범위 안이라 링크
+/// 판정으로는 거를 수 없고, 루트를 연 때의 실제 경로와 견준다.
+#[cfg(unix)]
+#[test]
+fn a_root_swapped_to_another_root_walks_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = simplify(fs::canonicalize(tmp.path()).unwrap());
+    let (a, b) = (base.join("a"), base.join("b"));
+    write(&a.join("mine.rs"), "");
+    write(&b.join("other_root.rs"), "");
+    let scope = Roots::new([a.clone(), b.clone()]);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let walk = Walk::new(&a, &scope, &stop);
+    assert_eq!(walk.all().len(), 1);
+
+    fs::remove_dir_all(&a).unwrap();
+    symlink(&b, &a);
+    assert_eq!(walk.all(), Vec::new());
+}
+
+/// 같은 것을 실제 OS 감시로: 폴더를 지우고 같은 이름의 루트 밖 링크를 두면 밖의 이름이 목록에 들지 않는다.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn swapping_a_folder_for_an_outside_link_leaks_no_names() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("d/x/inner.rs"), "");
+    let outside = f.base.join("outside");
+    write(&outside.join("x/secret_outside.rs"), "");
+    let index = f.index();
+    let watch = f.watch(&index);
+    let _lease = watch
+        .acquire(&FsWatchParams {
+            project_id: id.clone(),
+            worktree: None,
+        })
+        .unwrap();
+    assert!(index.ready(&id, &root).await);
+    assert!(all_files(&index, &id).await.contains("d/x/inner.rs"));
+
+    fs::remove_dir_all(root.join("d")).unwrap();
+    symlink(&outside, &root.join("d"));
+    let took = until(&index, &id, "inner", "d/x/inner.rs", false, REFLECTED).await;
+    assert!(took.is_some(), "지운 폴더의 항목이 빠진다");
+    // 알림이 몇 번에 나눠 와도 밖의 이름은 들지 않는다.
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(1) {
+        let listed = all_files(&index, &id).await;
+        assert!(
+            listed.iter().all(|p| !p.contains("secret")),
+            "루트 밖 이름: {listed:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// 루트 자체를 지우고 같은 이름의 루트 밖 링크로 바꾸면(리뷰 L7) 다시 만든 목록 · 감시하지 않는 걷기 모두 비어 있다.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_root_swapped_to_an_outside_link_lists_nothing() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/lib.rs"), "");
+    let outside = f.base.join("outside");
+    write(&outside.join("root_swap_secret.rs"), "");
+    let index = f.index();
+    index.open(&id, &root, None);
+    assert!(index.ready(&id, &root).await);
+
+    fs::remove_dir_all(&root).unwrap();
+    symlink(&outside, &root);
+    let entry = index.inner.get(&id, &root).unwrap();
+    // 걷기 자체가 거른다(요청이 루트를 빼는 것과 따로).
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    assert_eq!(Walk::new(&root, &entry.scope, &stop).all(), Vec::new());
+    index.rebuild(&entry);
+    let rebuilt = tokio::time::timeout(Duration::from_secs(5), async {
+        while entry.state().build.is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(rebuilt.is_ok());
+    assert_eq!(
+        all_files(&index, &id).await,
+        BTreeSet::new(),
+        "다시 만든 목록"
+    );
+
+    index.close(&id, &root);
+    assert_eq!(
+        all_files(&index, &id).await,
+        BTreeSet::new(),
+        "감시하지 않는 걷기"
+    );
+}
+
+/// 대소문자만 바꾼 이름 바꾸기(리뷰 M4): 대소문자를 가리지 않는 볼륨에서도 옛 이름이 남지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn renaming_only_the_case_leaves_no_old_name() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/Foo.rs"), "");
+    write(&root.join("Pkg/a.rs"), "");
+    let index = f.index();
+    let watch = f.watch(&index);
+    let _lease = watch
+        .acquire(&FsWatchParams {
+            project_id: id.clone(),
+            worktree: None,
+        })
+        .unwrap();
+    assert!(index.ready(&id, &root).await);
+
+    fs::rename(root.join("src/Foo.rs"), root.join("src/foo.rs")).unwrap();
+    fs::rename(root.join("Pkg"), root.join("pkg")).unwrap();
+    let want: BTreeSet<String> = ["pkg/a.rs", "src/foo.rs"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let started = Instant::now();
+    let mut listed = all_files(&index, &id).await;
+    while listed != want && started.elapsed() < REFLECTED * 2 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        listed = all_files(&index, &id).await;
+    }
+    assert_eq!(listed, want);
+
+    // 결정적으로: 옛 이름 경로를 다시 봐도 넣지 않는다.
+    let scope = Roots::new([root.clone()]);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let walk = Walk::new(&root, &scope, &stop);
+    let ops = walk.ops(&[
+        root.join("Pkg"),
+        root.join("src/Foo.rs"),
+        root.join("Pkg/a.rs"),
+    ]);
+    assert!(
+        ops.iter().all(|op| matches!(op, walk::Op::Remove(_))),
+        "{ops:?}"
+    );
+}
+
+/// 폴더를 만들면 그 폴더 · 그 아래가 한 묶음에 함께 온다(리뷰 L6). 가장 바깥 것만 걸어 같은 항목을 한 번 넣는다.
+#[test]
+fn a_batch_walks_only_the_outermost_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = simplify(fs::canonicalize(tmp.path()).unwrap());
+    write(&root.join("newdir/inner/c.rs"), "");
+    write(&root.join("other/d.rs"), "");
+    let scope = Roots::new([root.clone()]);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let walk = Walk::new(&root, &scope, &stop);
+    let ops = walk.ops(&[
+        root.join("newdir/inner/c.rs"),
+        root.join("newdir"),
+        root.join("newdir/inner"),
+        root.join("other/d.rs"),
+    ]);
+    assert_eq!(
+        ops,
+        [
+            walk::Op::Remove("newdir".into()),
+            walk::Op::Remove("other/d.rs".into()),
+            walk::Op::Insert("other/d.rs".into(), Flags::default()),
+            walk::Op::Insert("newdir/inner/c.rs".into(), Flags::default()),
+        ]
+    );
+}
+
+/// 만드는 동안 모은 경로가 상한을 넘으면 모으지 않고 다시 걷게 한다(리뷰 L6).
+#[tokio::test(flavor = "multi_thread")]
+async fn too_many_changes_during_a_build_fold_into_a_rescan() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/lib.rs"), "");
+    set_after_walk(&root, || std::thread::sleep(Duration::from_millis(300)));
+    let index = f.index();
+    index.open(&id, &root, None);
+    let entry = index.inner.get(&id, &root).unwrap();
+    entry.changed(vec![root.join("src/a.rs"); MAX_PENDING - 1]);
+    assert_eq!(entry.state().pending.len(), MAX_PENDING - 1);
+    entry.changed(vec![root.join("src/b.rs"); 2]);
+    {
+        let state = entry.state();
+        assert!(state.rescan);
+        assert!(state.pending.is_empty(), "넘치면 버린다");
+    }
+    set_after_walk(&root, || {});
+    assert!(index.ready(&id, &root).await);
+}
+
+/// 감시하지 않는 루트(리뷰 H2): 함께 온 요청은 한 번 걸은 목록을 나눠 쓰고, [`ADHOC_KEEP`] 이 지나면 다시 걷는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn unwatched_requests_share_one_walk_for_a_while() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/lib.rs"), "");
+    let index = f.index();
+
+    let searches: Vec<_> = (0..8)
+        .map(|_| {
+            let index = index.clone();
+            let id = id.clone();
+            tokio::spawn(async move { index.search(params(&id, "lib")).await })
+        })
+        .collect();
+    for search in searches {
+        assert_eq!(relatives(&search.await.unwrap().unwrap()), ["src/lib.rs"]);
+    }
+    assert_eq!(adhoc_walks(&root), 1, "동시에 온 요청도 걷기는 한 번");
+
+    write(&root.join("src/later.rs"), "");
+    assert!(!all_files(&index, &id).await.contains("src/later.rs"));
+    assert_eq!(adhoc_walks(&root), 1);
+    tokio::time::sleep(ADHOC_KEEP + Duration::from_millis(100)).await;
+    assert!(index.inner.adhoc().is_empty(), "시간이 지나면 놓는다");
+    assert!(all_files(&index, &id).await.contains("src/later.rs"));
+    assert_eq!(adhoc_walks(&root), 2);
+}
+
+/// 걷기 · 매칭은 Host 전체에서 [`MAX_SEARCHES`] 개까지다(리뷰 H2 · M3). 차례가 [`SEARCH_WAIT`] 안에 오지 않으면 「바쁨」.
+#[tokio::test(flavor = "multi_thread")]
+async fn walks_and_matches_wait_for_a_turn_then_report_busy() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/lib.rs"), "");
+    let (watched_id, watched_root) = f.repo("watched");
+    write(&watched_root.join("src/main.rs"), "");
+    let index = f.index();
+    index.open(&watched_id, &watched_root, None);
+    assert!(index.ready(&watched_id, &watched_root).await);
+
+    let held = index
+        .inner
+        .searches
+        .acquire_many(MAX_SEARCHES as u32)
+        .await
+        .unwrap();
+    // 감시하지 않는 루트의 걷기.
+    let e = index.search(params(&id, "lib")).await.unwrap_err();
+    assert!(format!("{e:?}").contains("busy"), "{e:?}");
+    assert_eq!(adhoc_walks(&root), 0);
+    // 감시하는 루트의 매칭.
+    let started = Instant::now();
+    let e = index.search(params(&watched_id, "main")).await.unwrap_err();
+    assert!(format!("{e:?}").contains("busy"), "{e:?}");
+    assert!(started.elapsed() >= SEARCH_WAIT);
+
+    // 기다리는 사이 차례가 나면 답한다.
+    let waiting = tokio::spawn({
+        let index = index.clone();
+        let id = watched_id.clone();
+        async move { index.search(params(&id, "main")).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(held);
+    let found = waiting.await.unwrap().unwrap();
+    assert_eq!(relatives(&found), ["src/main.rs"]);
 }

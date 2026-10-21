@@ -170,13 +170,15 @@ export function TaskProvider({
   const store = useTaskStoreFor(client);
   const notify = useNotify();
   const strings = useProjectStrings().tasks;
-  const failed = useRef(strings.failed);
-  failed.current = strings.failed;
+  const latest = useRef(strings);
+  latest.current = strings;
   useEffect(() => {
     if (!client) return;
     return connectTasks(client, store, projectId ?? null, (event) => {
-      if (event.status === "failed")
-        notify({ level: "error", title: failed.current(event.title), body: event.error });
+      if (event.status === "failed") {
+        const { failed, title } = latest.current;
+        notify({ level: "error", title: failed(title(event.title)), body: event.error });
+      }
     });
   }, [client, store, projectId, notify]);
   return <TaskContext value={store}>{children}</TaskContext>;
@@ -213,6 +215,7 @@ function TaskRow({ task }: { task: TaskInfo }) {
   const { client } = useHost();
   const notify = useNotify();
   const value = fraction(task.progress);
+  const title = T.title(task.title);
   const cancel = () => {
     client?.call("task.cancel", { taskId: task.taskId }).catch((error: unknown) =>
       notify({
@@ -224,15 +227,15 @@ function TaskRow({ task }: { task: TaskInfo }) {
   };
   return (
     <div data-task-id={task.taskId} className="flex min-w-0 items-center gap-1">
-      <span className="max-w-48 truncate" title={task.progress.message ?? task.title}>
-        {task.title}
+      <span className="max-w-48 truncate" title={task.progress.message ?? title}>
+        {title}
       </span>
-      <ProgressBar progress={task.progress} label={task.title} />
+      <ProgressBar progress={task.progress} label={title} />
       {value !== undefined && <span>{Math.round(value * 100)}%</span>}
       <button
         type="button"
-        title={T.cancel(task.title)}
-        aria-label={T.cancel(task.title)}
+        title={T.cancel(title)}
+        aria-label={T.cancel(title)}
         onClick={cancel}
         className="flex items-center rounded-sm hover:bg-ui-hover"
       >

@@ -228,6 +228,8 @@ task-more = +{ $count }
 task-failed = Task failed: { $title }
 task-start-failed = Could not start the task
 task-cancel-failed = Could not cancel the task
+# Background task titles sent by the host (`task-title-*` ids).
+task-title-indexing-files = Indexing files
 action-task-demo = Run Demo Task
 action-task-demo-invalid = Run Demo Task (invalid arguments — to check error notifications)
 
