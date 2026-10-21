@@ -46,6 +46,8 @@ export function projectStrings(t: Translate) {
       readOnlyLarge: t("editor-read-only-large"),
       /** UTF-8 이 아닌 텍스트(결정 M1-D12). `encoding`: WHATWG 이름(예: EUC-KR). */
       readOnlyEncoding: (encoding: string) => t("editor-read-only-encoding", { encoding }),
+      /** UTF-8 이지만 깨진 바이트가 있다(판정의 `lossy`). */
+      readOnlyLossy: t("editor-read-only-lossy"),
       /** hex 뷰어(M1-23). */
       hex: {
         label: t("editor-hex-label"),
@@ -166,6 +168,8 @@ export function projectStrings(t: Translate) {
           t("status-editor-line-ending", { ending }),
         lineEndingHint: t("status-editor-line-ending-hint"),
         encodingHint: t("status-editor-encoding-hint"),
+        /** 깨진 바이트를 U+FFFD 로 푼 UTF-8(판정의 `lossy`). */
+        encodingLossy: (encoding: string) => t("status-editor-encoding-lossy", { encoding }),
         languageHint: t("status-editor-language-hint"),
       },
       language: {

@@ -160,6 +160,7 @@ vi.mock("../tauri-transport", async () => {
               judgment: {
                 binary: false,
                 encoding: "UTF-8",
+                lossy: false,
                 bom: null,
                 lineEnding: "lf",
                 longLines: false,

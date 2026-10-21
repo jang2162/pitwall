@@ -103,7 +103,11 @@ function EncodingStatus() {
   const bom = judgment.bom !== null;
   return (
     <span data-testid="status-encoding" title={T.encodingHint} className="px-1">
-      {bom ? `${judgment.encoding} BOM` : judgment.encoding}
+      {judgment.lossy
+        ? T.encodingLossy(judgment.encoding)
+        : bom
+          ? `${judgment.encoding} BOM`
+          : judgment.encoding}
     </span>
   );
 }

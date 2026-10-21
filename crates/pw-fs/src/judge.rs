@@ -96,8 +96,12 @@ pub struct Judgment {
     /// 파일 앞 8 KiB 에 NUL 이 있다(UTF-16 BOM 이 있으면 텍스트로 본다).
     pub binary: bool,
     /// 읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE` · 짐작한 것). UTF-16 은 BOM 으로, UTF-8 로 읽히지 않는
-    /// 텍스트는 `chardetng` 로 짐작한다(예: `EUC-KR` · `Shift_JIS` · `windows-1252`, 결정 M1-D12). 바이너리면 `null`.
+    /// 텍스트는 `chardetng` 로 짐작한다(예: `EUC-KR` · `Shift_JIS` · `windows-1252`, 결정 M1-D12). 바이너리면 `null`. 거의 UTF-8
+    /// 이면(`lossy`) `UTF-8` 이다.
     pub encoding: Option<String>,
+    /// 인코딩이 `UTF-8` 이지만 유효하지 않은 바이트가 있어(쓰는 중인 로그 · 끝이 잘린 파일 등) 그 바이트를 U+FFFD 로 바꿔 풀었다.
+    /// 편집하지 않는다 — 저장하면 그 바이트가 U+FFFD 로 바뀐다.
+    pub lossy: bool,
     /// 파일 앞의 BOM.
     pub bom: Option<Bom>,
     pub line_ending: LineEnding,
@@ -105,7 +109,7 @@ pub struct Judgment {
     pub long_lines: bool,
     /// 파일 전체 크기의 등급.
     pub size_class: SizeClass,
-    /// 에디터로 편집 · 저장할 수 있다: 텍스트, UTF-8(BOM 유무 무관, 결정 M1-D12), 5 MiB 이하.
+    /// 에디터로 편집 · 저장할 수 있다: 텍스트, 유효한 UTF-8(BOM 유무 무관, 결정 M1-D12, `lossy` 아님), 5 MiB 이하.
     pub editable: bool,
     /// 구문 강조 · 줄바꿈을 켠다: 텍스트, 5 MiB 이하, 1만 자 넘는 줄 없음(결정 M1-D9).
     pub highlight: bool,
@@ -118,11 +122,14 @@ pub fn judge(head: &[u8], body: &[u8], size: u64, truncated: bool) -> Judgment {
     let utf16 = matches!(bom, Some(Bom::Utf16Le | Bom::Utf16Be));
     let sniff = &head[..head.len().min(SNIFF_BYTES)];
     let binary = !utf16 && sniff.contains(&0);
+    // 편집은 라벨이 아니라 이 검사로 정한다 — `lossy` 도 라벨은 `UTF-8` 이다.
+    let utf8 = !binary && !utf16 && is_utf8(body, truncated);
+    let lossy = !binary && !utf16 && !utf8 && mostly_utf8(body);
     let encoding = if binary {
         None
     } else if let Some(bom) = bom.filter(|_| utf16) {
         Some(bom.encoding().to_owned())
-    } else if is_utf8(body, truncated) {
+    } else if utf8 || lossy {
         Some("UTF-8".to_owned())
     } else {
         Some(guess_encoding(body, truncated).name().to_owned())
@@ -131,15 +138,35 @@ pub fn judge(head: &[u8], body: &[u8], size: u64, truncated: bool) -> Judgment {
     let size_class = size_class(size);
     let text = !binary;
     Judgment {
-        editable: text && encoding.as_deref() == Some("UTF-8") && size_class == SizeClass::Editable,
+        editable: utf8 && size_class == SizeClass::Editable,
         highlight: text && size_class == SizeClass::Editable && !scan.long_lines,
         binary,
         encoding,
+        lossy,
         bom,
         line_ending: scan.line_ending(),
         long_lines: scan.long_lines,
         size_class,
     }
+}
+
+/// [`mostly_utf8`] 의 기준: 유효한 멀티바이트 글자 수가 유효하지 않은 시퀀스 수의 이 배수 이상이다. UTF-8 이 아닌 인코딩의 텍스트를
+/// UTF-8 로 읽으면 우연히 맞는 시퀀스가 생기지만 그 비율은 1 에 못 미친다(한국어 EUC-KR · CP949 약 0.2~0.26, Shift_JIS · GBK 약
+/// 0.2, Big5 약 0.32, windows-1252 · windows-1251 · KOI8-R 0~0.08). 16 은 그 최댓값의 약 50배다.
+const MOSTLY_UTF8_RATIO: usize = 16;
+
+/// UTF-8 로 쓰인 텍스트에 깨진 바이트가 조금 섞였다. 이런 파일을 짐작에 맡기면 깨진 바이트 하나 때문에 파일 전체가 다른 인코딩
+/// (대개 windows-1252)으로 깨져 보인다.
+fn mostly_utf8(bytes: &[u8]) -> bool {
+    let (mut valid, mut invalid) = (0usize, 0usize);
+    for chunk in bytes.utf8_chunks() {
+        // 멀티바이트 글자의 첫 바이트(11xxxxxx)를 센다.
+        valid += chunk.valid().bytes().filter(|&b| b >= 0xC0).count();
+        if !chunk.invalid().is_empty() {
+            invalid += 1;
+        }
+    }
+    invalid > 0 && valid >= MOSTLY_UTF8_RATIO * invalid
 }
 
 /// 짐작에 보는 앞부분. 짐작은 앞부분의 바이트 분포로 충분하고, 50 MiB 를 다 먹이면 열기가 그만큼 늦다.
@@ -338,6 +365,75 @@ mod tests {
             Some("a한")
         );
         assert_eq!(decode(None, b"\0\x01"), None);
+    }
+
+    #[test]
+    fn utf8_with_a_few_broken_bytes_reads_as_utf8_but_is_not_editable() {
+        // 한글 로그 50줄 + 끝에 깨진 바이트 하나(쓰는 중 · 끝이 잘린 파일).
+        let log = "2026-10-21 로그 한 줄입니다\n".repeat(50);
+        let mut bytes = log.clone().into_bytes();
+        bytes.push(0xFF);
+        let j = judge(&bytes, &bytes, bytes.len() as u64, false);
+        assert_eq!(j.encoding.as_deref(), Some("UTF-8"));
+        assert!(j.lossy);
+        assert!(!j.editable, "저장하면 깨진 바이트가 U+FFFD 로 바뀐다");
+        assert!(j.highlight);
+        assert_eq!(
+            decode(j.encoding.as_deref(), &bytes).as_deref(),
+            Some(format!("{log}\u{FFFD}").as_str())
+        );
+
+        // 앞 64 KiB 가 ASCII 이고 한글 · 깨진 바이트가 뒤에 있어도 같다(짐작은 앞부분만 본다).
+        let mut late = vec![b'a'; GUESS_BYTES + 10];
+        late.push(b'\n');
+        late.extend_from_slice(log.as_bytes());
+        late.push(0xC3);
+        let j = judge(&late[..SNIFF_BYTES], &late, late.len() as u64, false);
+        assert_eq!(j.encoding.as_deref(), Some("UTF-8"));
+        assert!(j.lossy && !j.editable);
+
+        // 깨진 것이 많으면 거의 UTF-8 이 아니다 — 짐작으로 간다.
+        let mut noisy = "한글".repeat(8).into_bytes();
+        noisy.extend_from_slice(&[0xFF, 0x20, 0xFF]);
+        assert!(!judge(&noisy, &noisy, noisy.len() as u64, false).lossy);
+        // 유효한 멀티바이트 글자가 하나도 없으면(latin-1 의 「café」) 짐작한다.
+        let latin = b"a README with one caf\xE9\n";
+        let j = judge(latin, latin, latin.len() as u64, false);
+        assert!(!j.lossy);
+        assert_eq!(j.encoding.as_deref(), Some("windows-1252"));
+        // 유효한 UTF-8 은 lossy 가 아니다.
+        let j = judge(log.as_bytes(), log.as_bytes(), log.len() as u64, false);
+        assert!(!j.lossy && j.editable);
+    }
+
+    #[test]
+    fn legacy_encodings_are_not_mistaken_for_mostly_utf8() {
+        let samples: [(&encoding_rs::Encoding, &str); 5] = [
+            (
+                encoding_rs::EUC_KR,
+                "한글 주석입니다. 파일을 읽기 전용으로 엽니다. 가나다라마바사 ",
+            ),
+            (
+                encoding_rs::SHIFT_JIS,
+                "日本語のテキストファイルです。読み取り専用で開きます。",
+            ),
+            (encoding_rs::GBK, "这是一个中文文本文件，以只读方式打开。"),
+            (
+                encoding_rs::BIG5,
+                "這是一個繁體中文文字檔案，以唯讀方式開啟。",
+            ),
+            (
+                encoding_rs::WINDOWS_1252,
+                "Café crème brûlée — naïve façade «quoted» © ® ",
+            ),
+        ];
+        for (encoding, text) in samples {
+            let text = text.repeat(30);
+            let (bytes, _, _) = encoding.encode(&text);
+            let j = judge(&bytes, &bytes, bytes.len() as u64, false);
+            assert!(!j.lossy, "{}", encoding.name());
+            assert_eq!(j.encoding.as_deref(), Some(encoding.name()));
+        }
     }
 
     #[test]

@@ -906,6 +906,22 @@ fn euc_kr_files_read_as_hangul_and_are_not_editable() {
     );
 }
 
+/// M1-23: 깨진 바이트가 조금 섞인 UTF-8 은 UTF-8 로 풀려 오되(깨진 바이트는 U+FFFD) 편집할 수 없다.
+#[test]
+fn utf8_with_a_broken_byte_reads_as_utf8_text_and_is_not_editable() {
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    let log = "로그 한 줄입니다\n".repeat(20);
+    let path = root.join("app.log");
+    fs::write(&path, [log.as_bytes(), b"\xFF"].concat()).unwrap();
+
+    let read = f.read(&id, &path).unwrap();
+    assert_eq!(read.judgment.encoding.as_deref(), Some("UTF-8"));
+    assert!(read.judgment.lossy && !read.judgment.editable);
+    assert_eq!(text(&read), format!("{log}\u{FFFD}"));
+}
+
 /// M1-23(결정 M1-D9): 기준값 경계 ±1 바이트 파일의 판정. 크기 등급은 stat 으로, 편집 · 강조 여부는 전체 읽기로 본다.
 #[test]
 fn size_thresholds_hold_one_byte_either_side() {

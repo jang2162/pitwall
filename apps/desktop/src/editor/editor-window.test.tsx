@@ -177,6 +177,7 @@ vi.mock("../tauri-transport", async () => {
               judgment: {
                 binary: false,
                 encoding: "UTF-8",
+                lossy: false,
                 bom: null,
                 lineEnding: host.files.get(real)!.includes("\r\n") ? "crlf" : "lf",
                 longLines: false,

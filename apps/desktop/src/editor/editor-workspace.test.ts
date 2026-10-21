@@ -33,6 +33,7 @@ const source: DocumentSource = {
     judgment: {
       binary: false,
       encoding: "UTF-8",
+      lossy: false,
       bom: null,
       lineEnding: "none",
       longLines: false,

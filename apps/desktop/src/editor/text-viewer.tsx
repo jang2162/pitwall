@@ -107,8 +107,9 @@ export function TextViewer({ panel, params, doc }: ViewerProps) {
   const compare = comparing && live && diskRead?.content.kind === "text" ? diskRead : undefined;
   // 고칠 수 없는 까닭(결정 M1-D9 · M1-D12). UTF-8 이 아닌 텍스트는 Host 가 짐작한 인코딩으로 푼 것이다.
   const encoding = text?.judgment.binary === false ? text.judgment.encoding : null;
-  const readOnlyNotice =
-    encoding && encoding !== "UTF-8"
+  const readOnlyNotice = text?.judgment.lossy
+    ? T.readOnlyLossy
+    : encoding && encoding !== "UTF-8"
       ? T.readOnlyEncoding(encoding)
       : text?.judgment.sizeClass === "readOnly"
         ? T.readOnlyLarge

@@ -50,6 +50,7 @@ function memoryDisk(files: Record<string, string>) {
         judgment: {
           binary: false,
           encoding: "UTF-8",
+          lossy: false,
           bom: null,
           lineEnding: "lf",
           longLines: false,

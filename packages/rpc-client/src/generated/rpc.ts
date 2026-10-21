@@ -899,9 +899,15 @@ export type Judgment = {
 	binary: boolean,
 	/**
 	 *  읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE` · 짐작한 것). UTF-16 은 BOM 으로, UTF-8 로 읽히지 않는
-	 *  텍스트는 `chardetng` 로 짐작한다(예: `EUC-KR` · `Shift_JIS` · `windows-1252`, 결정 M1-D12). 바이너리면 `null`.
+	 *  텍스트는 `chardetng` 로 짐작한다(예: `EUC-KR` · `Shift_JIS` · `windows-1252`, 결정 M1-D12). 바이너리면 `null`. 거의 UTF-8
+	 *  이면(`lossy`) `UTF-8` 이다.
 	 */
 	encoding: string | null,
+	/**
+	 *  인코딩이 `UTF-8` 이지만 유효하지 않은 바이트가 있어(쓰는 중인 로그 · 끝이 잘린 파일 등) 그 바이트를 U+FFFD 로 바꿔 풀었다.
+	 *  편집하지 않는다 — 저장하면 그 바이트가 U+FFFD 로 바뀐다.
+	 */
+	lossy: boolean,
 	/**  파일 앞의 BOM. */
 	bom: Bom | null,
 	lineEnding: LineEnding,
@@ -909,7 +915,7 @@ export type Judgment = {
 	longLines: boolean,
 	/**  파일 전체 크기의 등급. */
 	sizeClass: SizeClass,
-	/**  에디터로 편집 · 저장할 수 있다: 텍스트, UTF-8(BOM 유무 무관, 결정 M1-D12), 5 MiB 이하. */
+	/**  에디터로 편집 · 저장할 수 있다: 텍스트, 유효한 UTF-8(BOM 유무 무관, 결정 M1-D12, `lossy` 아님), 5 MiB 이하. */
 	editable: boolean,
 	/**  구문 강조 · 줄바꿈을 켠다: 텍스트, 5 MiB 이하, 1만 자 넘는 줄 없음(결정 M1-D9). */
 	highlight: boolean,

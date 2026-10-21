@@ -104,6 +104,7 @@ class Disk {
         judgment: {
           binary: false,
           encoding: "UTF-8",
+          lossy: false,
           bom: bom ? "utf8" : null,
           lineEnding: lineEndingOf(text),
           longLines: false,

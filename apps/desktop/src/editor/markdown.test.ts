@@ -148,6 +148,7 @@ describe("readAllBytes", () => {
         judgment: {
           binary: true,
           encoding: null,
+          lossy: false,
           bom: null,
           lineEnding: "lf",
           longLines: false,
@@ -178,6 +179,7 @@ describe("readAllBytes", () => {
         judgment: {
           binary: true,
           encoding: null,
+          lossy: false,
           bom: null,
           lineEnding: "lf" as const,
           longLines: false,

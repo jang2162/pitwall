@@ -45,6 +45,7 @@ editor-binary-as-text = 바이너리 파일을 텍스트로 보인다(UTF-8 로 
 editor-read-only-large = 5 MiB 를 넘는 파일이라 읽기 전용으로 연다(구문 강조 · 줄바꿈 끔)
 # $encoding: 짐작한 인코딩 이름(예: EUC-KR, UTF-16LE)
 editor-read-only-encoding = { $encoding } 로 읽었다 · UTF-8 이 아니라 읽기 전용으로 연다
+editor-read-only-lossy = UTF-8 로 읽었다 · 깨진 바이트가 있어(�) 읽기 전용으로 연다
 # hex 뷰어(M1-23)
 editor-hex-label = hex · 읽기 전용 · 16바이트/줄
 editor-hex-goto-title = 오프셋으로 이동
@@ -197,6 +198,8 @@ status-editor-line-ending =
     }
 status-editor-line-ending-hint = 줄 구분 기호(저장할 때 그대로 둔다)
 status-editor-encoding-hint = 파일 인코딩
+# $encoding: 인코딩 이름(UTF-8)
+status-editor-encoding-lossy = { $encoding }(깨진 바이트 있음)
 status-editor-language-hint = 이 파일의 언어 바꾸기
 language-plain-text = 일반 텍스트
 language-popup-label = 언어 고르기

@@ -45,6 +45,7 @@ editor-binary-as-text = Showing a binary file as text (bytes that are not UTF-8 
 editor-read-only-large = Opened read-only: the file is larger than 5 MiB (highlighting and wrapping off)
 # $encoding: the guessed encoding name (e.g. EUC-KR, UTF-16LE)
 editor-read-only-encoding = Read as { $encoding } · opened read-only because it is not UTF-8
+editor-read-only-lossy = Read as UTF-8 · opened read-only because some bytes are invalid (�)
 # Hex viewer (M1-23)
 editor-hex-label = Hex · read-only · 16 bytes per row
 editor-hex-goto-title = Go to Offset
@@ -207,6 +208,8 @@ status-editor-line-ending =
     }
 status-editor-line-ending-hint = Line separators (kept as they are on save)
 status-editor-encoding-hint = File encoding
+# $encoding: the encoding name (UTF-8)
+status-editor-encoding-lossy = { $encoding } (invalid bytes)
 status-editor-language-hint = Change the language of this file
 language-plain-text = Plain Text
 language-popup-label = Choose a language

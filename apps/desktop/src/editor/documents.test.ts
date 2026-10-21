@@ -11,6 +11,7 @@ const MIB = 1024 * 1024;
 const TEXT_JUDGMENT: Judgment = {
   binary: false,
   encoding: "UTF-8",
+  lossy: false,
   bom: null,
   lineEnding: "lf",
   longLines: false,
@@ -178,6 +179,36 @@ describe("document store", () => {
     expect(await docs.save("/p/euc-kr.txt")).toEqual({ kind: "unchanged" });
     expect(source.write).not.toHaveBeenCalled();
     view.destroy();
+  });
+
+  // Host 판정과 따로 지키는 둘째 방어: 판정이 잘못 `editable` 이어도 UTF-8 이 아니거나 깨진 바이트를 U+FFFD 로 푼(`lossy`) 텍스트는
+  // 읽기 전용으로 연다.
+  it("keeps text that is not cleanly UTF-8 read-only even when the judgment says editable", async () => {
+    for (const judgment of [
+      { encoding: "EUC-KR", lossy: false },
+      { encoding: "UTF-8", lossy: true },
+    ]) {
+      const base = fakeSource({ "/p/a.txt": { text: "한글" } });
+      const source = {
+        ...base,
+        read: vi.fn(async (params: { path: string }) => {
+          const read = await base.read(params);
+          return { ...read, judgment: { ...read.judgment, ...judgment, editable: true } };
+        }),
+        write: vi.fn(async () => {
+          throw new Error("must not write");
+        }),
+      };
+      const docs = createDocumentStore(source);
+      docs.acquire("/p/a.txt");
+      await flush();
+      expect(docs.get("/p/a.txt"), JSON.stringify(judgment)).toMatchObject({
+        status: "text",
+        readOnly: true,
+      });
+      expect(await docs.save("/p/a.txt")).toEqual({ kind: "unchanged" });
+      expect(source.write).not.toHaveBeenCalled();
+    }
   });
 
   it("does not read a FIFO, a device or a link to one, and marks a failed read", async () => {

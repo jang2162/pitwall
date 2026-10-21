@@ -228,14 +228,19 @@ function isText(read: FsRead): read is FsRead & { content: { kind: "text"; text:
   return !read.judgment.binary && read.content.kind === "text";
 }
 
-/** 읽은 것에서 다시 읽을 때마다 바뀌는 문서 정보(크기 · 시각 · 판정 · 읽기 전용). */
+/**
+ * 읽은 것에서 다시 읽을 때마다 바뀌는 문서 정보(크기 · 시각 · 판정 · 읽기 전용). 읽기 전용은 판정의 `editable` 에 더해 인코딩도
+ * 따로 본다 — UTF-8 이 아니거나 깨진 바이트를 U+FFFD 로 푼(`lossy`) 텍스트를 저장하면 원래 바이트가 바뀐다(결정 M1-D12).
+ */
 function readFacts(read: FsRead, stat: Pick<FsStat, "readonly">) {
+  const { judgment } = read;
   return {
-    judgment: read.judgment,
+    judgment,
     version: read.version,
     size: read.size,
     mtimeMs: read.mtimeMs,
-    readOnly: !read.judgment.editable || stat.readonly,
+    readOnly:
+      !judgment.editable || judgment.encoding !== "UTF-8" || judgment.lossy || stat.readonly,
   };
 }
 

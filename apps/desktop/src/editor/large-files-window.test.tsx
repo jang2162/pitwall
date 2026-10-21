@@ -5,7 +5,8 @@
 // 전용이고 어떤 길로도 디스크에 쓰지 않는다, 기준값 경계 ±1 바이트가 정한 동작으로 열린다, 1만 자 넘는 줄은 강조 · 줄바꿈을 끈다.
 //
 // 가짜 Host 의 판정은 crates/pw-fs 와 같은 규칙이다(앞 8 KiB 의 NUL → 바이너리, UTF-8 이 아니면 `encodings` 의 인코딩으로 풀고 편집 끔,
-// 크기 등급은 limits.ts 의 기준값). 큰 파일은 바이트를 만들지 않는 가상 파일(`virtual`)이다.
+// 그 인코딩이 `UTF-8` 이면 깨진 바이트를 U+FFFD 로 푼 `lossy`, 크기 등급은 limits.ts 의 기준값). 큰 파일은 바이트를 만들지 않는 가상
+// 파일(`virtual`)이다.
 
 import { EditorView } from "@codemirror/view";
 import type {
@@ -172,12 +173,14 @@ vi.mock("../tauri-transport", async () => {
             const binary = bytes(0, limits.SNIFF_BYTES).includes(0);
             let text: string | undefined;
             let encoding: string | null = null;
+            let lossy = false;
             if (!binary) {
               try {
                 text = new TextDecoder("utf-8", { fatal: true }).decode(part);
                 encoding = "UTF-8";
               } catch {
                 encoding = host.encodings.get(path) ?? "windows-1252";
+                lossy = encoding === "UTF-8";
                 text = new TextDecoder(encoding).decode(part);
               }
             }
@@ -197,11 +200,12 @@ vi.mock("../tauri-transport", async () => {
               judgment: {
                 binary,
                 encoding,
+                lossy,
                 bom: null,
                 lineEnding: "lf",
                 longLines: longLines === true,
                 sizeClass: sizeClass(),
-                editable: !binary && encoding === "UTF-8" && editableClass,
+                editable: !binary && encoding === "UTF-8" && !lossy && editableClass,
                 highlight: !binary && editableClass && longLines !== true,
               },
             } satisfies FsRead);
@@ -617,6 +621,34 @@ it("shows EUC-KR text in Hangul, read-only, and no key, save or close writes it 
   // 창을 닫아도 묻지 않고(미저장이 없다) 쓰지 않는다.
   expect(await act(() => closeGuard!())).toBe(true);
   expect(document.querySelector("[role=alertdialog]")).toBeNull();
+  expect(calls("fs.write")).toEqual([]);
+});
+
+it("shows UTF-8 with a broken byte in Hangul as UTF-8, read-only, and no key, save or close writes it back", async () => {
+  // 쓰는 중인 한글 로그: 끝에 깨진 바이트 하나. 파일 전체를 다른 인코딩(windows-1252)으로 깨뜨려 보이지 않는다.
+  const LOSSY = "/work/demo/app.log";
+  host.files.set(LOSSY, Uint8Array.from([...Buffer.from(HANGUL), 0xff]));
+  host.encodings.set(LOSSY, "UTF-8");
+  await mount();
+  await open(LOSSY, 1, 1);
+  const view = views()[0]!;
+  expect(view.state.doc.toString()).toBe(`${HANGUL}\uFFFD`);
+  expect(view.state.readOnly).toBe(true);
+  expect(document.querySelector("[data-read-only-notice]")?.textContent).toBe(
+    "UTF-8 로 읽었다 · 깨진 바이트가 있어(�) 읽기 전용으로 연다",
+  );
+  expect(document.querySelector("[data-testid=status-encoding]")?.textContent).toBe(
+    "UTF-8(깨진 바이트 있음)",
+  );
+  for (const key of [
+    { code: "Backspace", key: "Backspace" },
+    { code: "Enter", key: "Enter" },
+    { code: "KeyD", key: "d", metaKey: true },
+  ])
+    await keydown(key, view.contentDOM);
+  expect(view.state.doc.toString()).toBe(`${HANGUL}\uFFFD`);
+  await keydown({ code: "KeyS", key: "s", metaKey: true }, view.contentDOM);
+  expect(await act(() => closeGuard!())).toBe(true);
   expect(calls("fs.write")).toEqual([]);
 });
 

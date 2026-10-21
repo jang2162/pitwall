@@ -16,6 +16,7 @@ import {
 const judgment: Judgment = {
   binary: false,
   encoding: "UTF-8",
+  lossy: false,
   bom: null,
   lineEnding: "lf",
   longLines: false,
