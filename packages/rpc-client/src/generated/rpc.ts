@@ -44,7 +44,7 @@ export type UnaryMethods = {
 	"fs.read": { params: FsReadParams; result: FsRead };
 	/**
 	 * 항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는
-	 * 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 그대로 바꾼다.
+	 * 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 바꾼다(macOS · Windows).
 	 */
 	"fs.rename": { params: FsFromToParams; result: FsMoved };
 	/**
@@ -276,7 +276,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.create": {"name":"fs.create","kind":"unary","tier":"write","roles":["owner"],"params":"FsCreateParams","output":"FsCreated","doc":" 빈 파일이나 폴더를 만든다. 같은 이름이 있으면 아무것도 바꾸지 않고 `CONFLICT`(`data.path`).\n","mcp":false},
 	"fs.list": {"name":"fs.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsList","doc":" 폴더 한 단계의 항목(이름 · 종류 · 크기 · mtime · ignore 여부). 파일 트리가 펼칠 때 부른다.\n","mcp":false},
 	"fs.read": {"name":"fs.read","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsReadParams","output":"FsRead","doc":" 파일 전체 또는 범위를 읽고 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급)을 함께 준다. 전체 읽기는 50 MiB 까지,\n 그보다 큰 파일은 범위로 읽는다.\n","mcp":false},
-	"fs.rename": {"name":"fs.rename","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsMoved","doc":" 항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는\n 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 그대로 바꾼다.\n","mcp":false},
+	"fs.rename": {"name":"fs.rename","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsMoved","doc":" 항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는\n 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 바꾼다(macOS · Windows).\n","mcp":false},
 	"fs.stat": {"name":"fs.stat","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsStat","doc":" 파일 · 폴더 하나의 상태와 파일의 크기 등급. 내용은 읽지 않는다.\n","mcp":false},
 	"fs.trash": {"name":"fs.trash","kind":"unary","tier":"write","roles":["owner"],"params":"FsTrashParams","output":"FsTrashed","doc":" 항목들을 OS 휴지통에 넣는다(`permanent` 면 영구히 지운다). 넣지 못한 것은 `failed` 에 이유와 함께.\n","mcp":false},
 	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":false},

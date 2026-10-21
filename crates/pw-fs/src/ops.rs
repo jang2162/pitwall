@@ -187,7 +187,7 @@ rpc_method! {
     }
 
     /// 항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는
-    /// 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 그대로 바꾼다.
+    /// 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 바꾼다(macOS · Windows).
     pub FsRenameMethod: "fs.rename" {
         params: FsFromToParams,
         result: FsMoved,
@@ -287,13 +287,9 @@ impl Fs {
                 from.display()
             )));
         }
-        // 대소문자만 다른 이름(같은 항목): 「없을 때만」 은 늘 실패하므로 그대로 바꾼다. 같은 항목이라 덮을 것이 없다.
-        let moved = if same_entry(&from, &to) {
-            fs::rename(&from, &to)
-        } else {
-            rename_noreplace(&from, &to)
-        };
-        moved.map_err(|e| op_error(&to, e))?;
+        // 대소문자만 다른 이름(같은 항목)도 「없을 때만」 으로 바꾼다 — macOS `renamex_np(RENAME_EXCL)` 과 Windows `MoveFileExW` 는
+        // 같은 항목의 새 대소문자를 받는다. 보통 `rename(2)` 는 같은 항목이면 아무것도 하지 않는다(POSIX).
+        rename_noreplace(&from, &to).map_err(|e| op_error(&to, e))?;
         Ok(FsMoved {
             from: from.display().to_string(),
             to: to.display().to_string(),

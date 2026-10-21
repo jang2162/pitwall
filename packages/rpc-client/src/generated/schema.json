@@ -1349,7 +1349,7 @@
       "tier": "read"
     },
     "fs.rename": {
-      "description": "항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는\n이름(대소문자를 무시하는 볼륨에서 같은 항목)은 그대로 바꾼다.",
+      "description": "항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는\n이름(대소문자를 무시하는 볼륨에서 같은 항목)은 바꾼다(macOS · Windows).",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
