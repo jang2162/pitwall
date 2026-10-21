@@ -1,5 +1,5 @@
 //! 강조 성능(`docs/design/12-m1-plan.md` M1-10 완료 기준): 5,000줄 Rust 파일의 첫 파싱 + 화면 범위 강조가 100 ms 안, 한 글자
-//! 편집 뒤 재강조가 16 ms 안. 그리고 상한 · 메모리의 측정(`measure_*` — 단언 없이 수치만 찍는다): 정상 5 MiB 문서의 첫 파싱,
+//! 편집 뒤 재강조가 16 ms 안. 에디터 첫 화면 강조의 서버 몫(M1-17, `measure_editor_first_screen`). 그리고 상한 · 메모리의 측정(`measure_*` — 단언 없이 수치만 찍는다): 정상 5 MiB 문서의 첫 파싱,
 //! 오류 회복이 폭주하는 문서가 끝나는 시간, 큰 편집, 문법을 올리는 시간 · 올리고 내린 메모리. release 로 잰다 — debug 빌드는
 //! tree-sitter · 문법의 C 코드가 최적화되지 않는다. 앱과 같게 `wasm` 기능 없이 잰다. 기본 시험에서는 빠진다(`#[ignore]`):
 //!
@@ -137,6 +137,81 @@ fn a_5000_line_rust_file_highlights_within_budget() {
         "first screen took {cold:?}"
     );
     assert!(max < Duration::from_millis(16), "re-highlight took {max:?}");
+}
+
+/// 에디터 강조(M1-17 완료 기준 「5,000줄 파일을 열고 화면 강조가 release 에서 150 ms 안」)의 서버 몫: 웹뷰가 보내는 JSON 을 읽어
+/// `syntax.open`(문법을 처음 올리는 것 포함) · 첫 화면 `syntax.highlights` 를 하고 결과를 JSON 으로 쓰기까지. IPC 전송과 웹뷰 쪽
+/// (뷰 만들기 · decoration 그리기)은 `apps/desktop/perf/highlight/` 의 브라우저 하네스가 잰다. 첫 화면은 `EDITOR_SCREEN` 줄 —
+/// CodeMirror 의 `viewport` 는 보이는 줄 위아래로 1,000 px 쯤 더 그린다(13 px 글꼴 · 줄 높이 1.5 로 약 50줄씩).
+///
+/// `PW_HIGHLIGHT_BENCH_OUT=<파일>` 이 있으면 브라우저 하네스의 입력(텍스트와 문서 전체의 강조 구간, JSON)을 쓴다.
+#[test]
+#[ignore = "release 로 따로 돈다(머리 주석)"]
+fn measure_editor_first_screen() {
+    const EDITOR_SCREEN: usize = 150;
+    const RUNS: usize = 5;
+    let text = source();
+    let screen = line_start(&text, EDITOR_SCREEN);
+    let mut times = Vec::new();
+    for run in 0..RUNS {
+        // 회마다 새 서비스 — 문법을 올리는 것까지 포함한다.
+        let s = syntax();
+        let started = Instant::now();
+        let open: SyntaxOpenParams = serde_json::from_str(
+            &serde_json::to_string(&SyntaxOpenParams {
+                doc_id: format!("bench-{run}"),
+                language: "Rust".to_owned(),
+                text: text.clone(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let opened = serde_json::to_string(&s.open(open).unwrap()).unwrap();
+        let opened_at = started.elapsed();
+        let ask: SyntaxHighlightsParams = serde_json::from_str(
+            &serde_json::to_string(&SyntaxHighlightsParams {
+                doc_id: format!("bench-{run}"),
+                range: TextRange {
+                    from: 0,
+                    to: screen,
+                },
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let answer = serde_json::to_string(&s.highlights(&ask).unwrap()).unwrap();
+        let total = started.elapsed();
+        assert!(opened.contains("rust") && answer.len() > 100);
+        times.push((total, opened_at));
+    }
+    times.sort();
+    let (median, median_open) = times[RUNS / 2];
+    println!(
+        "editor first screen, server side (5000-line Rust, first {EDITOR_SCREEN} lines, JSON in/out, grammar load included): \
+         median {median:?} (open {median_open:?}), min {:?}, max {:?} over {RUNS} runs",
+        times[0].0,
+        times[RUNS - 1].0
+    );
+    if let Ok(out) = std::env::var("PW_HIGHLIGHT_BENCH_OUT") {
+        let s = syntax();
+        open(&s, "all", &text);
+        let all = s
+            .highlights(&SyntaxHighlightsParams {
+                doc_id: "all".to_owned(),
+                range: TextRange {
+                    from: 0,
+                    to: u32::try_from(text.encode_utf16().count()).unwrap(),
+                },
+            })
+            .unwrap();
+        let input = serde_json::json!({
+            "text": text,
+            "spans": all.spans,
+            "serverMs": median.as_secs_f64() * 1000.0,
+        });
+        std::fs::write(&out, input.to_string()).unwrap();
+        println!("wrote the browser bench input to {out}");
+    }
 }
 
 /// (픽스처, Linguist 이름) — 내장 언어 모두.
