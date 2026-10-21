@@ -25,6 +25,7 @@ export function findStrings(t: Translate) {
     more: t("find-more"),
     cancelled: t("find-cancelled"),
     failed: (message: string) => t("find-failed", { message }),
+    busy: t("find-busy"),
     empty: t("find-empty"),
     stop: t("find-stop"),
     pin: t("find-pin"),

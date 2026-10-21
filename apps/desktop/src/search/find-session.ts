@@ -13,6 +13,8 @@ import type {
   SearchTextParams,
 } from "@pitwall/rpc-client";
 
+import { isWithin, joinPath, separatorOf } from "../file-tree/tree-model";
+
 /** 찾기 칸의 옵션(팝업 · 툴 윈도우가 같이 쓴다). */
 export interface FindOptions {
   query: string;
@@ -27,7 +29,11 @@ export interface FindOptions {
   scope: FindScope;
 }
 
-export type FindScope = { kind: "project" } | { kind: "folder"; path: string };
+/**
+ * `root` 는 `path` 를 고를 때의 트리 루트다. 워크트리가 바뀌어 루트가 달라지면 같은 상대 위치를 새 루트 아래에서 찾는다
+ * (`resolveFolder`) — 옛 절대 경로가 다른 체크아웃을 조용히 찾지 않게.
+ */
+export type FindScope = { kind: "project" } | { kind: "folder"; path: string; root?: string };
 
 export const DEFAULT_OPTIONS: FindOptions = {
   query: "",
@@ -38,6 +44,15 @@ export const DEFAULT_OPTIONS: FindOptions = {
   excludeVendored: false,
   scope: { kind: "project" },
 };
+
+/** 폴더 범위의 경로를 지금 루트 기준으로 푼다. 고른 루트 밖(절대 경로를 직접 친 것)은 그대로다. */
+export function resolveFolder(scope: { path: string; root?: string }, root: string): string {
+  if (scope.root === undefined || scope.root === root || !isWithin(scope.path, scope.root))
+    return scope.path;
+  const sep = separatorOf(scope.root);
+  const rest = scope.path.slice(scope.root.length).replace(/^[/\\]+/, "");
+  return rest === "" ? root : joinPath(root, rest, separatorOf(root) || sep);
+}
 
 /** 파일 마스크 → `include` · `exclude` 글롭. 빈 조각은 버린다. */
 export function parseMask(mask: string): { include: string[]; exclude: string[] } {
@@ -69,7 +84,9 @@ export function searchParams(options: FindOptions, place: SearchPlace): SearchTe
   return {
     projectId: place.projectId,
     worktree: place.worktree ?? null,
-    paths: [options.scope.kind === "folder" ? options.scope.path : place.root],
+    paths: [
+      options.scope.kind === "folder" ? resolveFolder(options.scope, place.root) : place.root,
+    ],
     query: options.query,
     regex: options.regex,
     matchCase: options.matchCase,
@@ -121,6 +138,11 @@ const IDLE: FindSnapshot = {
   error: undefined,
 };
 
+/** Host 의 동시 검색 상한(`search is busy: …`, crates/pw-fs/src/search.rs)에 걸렸다. Host 가 별도 코드를 주지 않아 문구로 가른다. */
+export function isBusyError(message: string | undefined): boolean {
+  return message?.startsWith("search is busy") ?? false;
+}
+
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -128,6 +150,8 @@ function errorText(e: unknown): string {
 export class FindSession {
   private snapshot: FindSnapshot = IDLE;
   private abort: AbortController | undefined;
+  /** `interrupt` 로 닫았고 새 검색이 아직 안 갔다. 그 사이에 고정 · 닫기가 오면 호출한 쪽이 이어 주어야 한다. */
+  private due = false;
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly run: SearchRunner) {}
@@ -147,6 +171,7 @@ export class FindSession {
   /** 이전 검색을 닫고 `params` 로 새로 찾는다. 끝나면(다 받았거나 · 실패 · 취소) 돌아온다. */
   async start(params: SearchTextParams): Promise<void> {
     this.abort?.abort();
+    this.due = false;
     const abort = new AbortController();
     this.abort = abort;
     const files: SearchFile[] = [];
@@ -177,9 +202,10 @@ export class FindSession {
 
   /** 도는 검색을 멈춘다. 받은 결과는 남는다. */
   cancel(): void {
-    if (!this.abort) return;
-    this.abort.abort();
+    this.due = false;
+    this.abort?.abort();
     this.abort = undefined;
+    // 스트림이 없어도(`interrupt` 뒤 새 검색이 가기 전) 「찾는 중」 에 남지 않게 한다.
     if (this.snapshot.status === "searching") this.set({ status: "cancelled" });
   }
 
@@ -187,10 +213,17 @@ export class FindSession {
   interrupt(): void {
     this.abort?.abort();
     this.abort = undefined;
+    this.due = true;
+  }
+
+  /** 닫았지만 새 검색이 아직 가지 않았다(`interrupt` 뒤 · `start`/`cancel`/`clear` 전). */
+  get searchDue(): boolean {
+    return this.due;
   }
 
   /** 검색을 닫고 결과를 비운다(빈 질의). */
   clear(): void {
+    this.due = false;
     this.abort?.abort();
     this.abort = undefined;
     this.set(IDLE);

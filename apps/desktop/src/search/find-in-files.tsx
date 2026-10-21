@@ -22,12 +22,14 @@ import { findActions } from "./find-actions";
 import { FindPopup } from "./find-popup";
 import {
   DEFAULT_OPTIONS,
+  canSearch,
   type FindOptions,
   type FindRow,
   type FindScope,
   FindSession,
   type SearchPlace,
   type SearchRunner,
+  searchParams,
 } from "./find-session";
 import { useFindStrings } from "./strings";
 
@@ -82,7 +84,7 @@ export function openFindInFiles(scope?: FindScope) {
 export function findInFolder(entry: { path: string; dir: boolean }) {
   const sep = separatorOf(entry.path);
   const path = entry.dir ? entry.path : entry.path.slice(0, entry.path.lastIndexOf(sep)) || sep;
-  openFindInFiles({ kind: "folder", path });
+  openFindInFiles({ kind: "folder", path, root: searchPlace()?.root });
 }
 
 export function closeFindInFiles() {
@@ -108,6 +110,12 @@ export function searchPlace(): SearchPlace | undefined {
 export function pinFindResults(api: Parameters<typeof showPanel>[0] | undefined) {
   const { session, options, pinned } = findWindow.getState();
   pinned?.session.cancel();
+  // 칸을 막 고쳐 새 검색이 아직 안 갔으면(팝업의 지연 타이머는 닫히며 지워진다) 여기서 보낸다.
+  if (session.searchDue) {
+    const place = searchPlace();
+    if (place && canSearch(options)) void session.start(searchParams(options, place));
+    else session.cancel();
+  }
   findWindow.setState({
     open: false,
     pinned: { session, options, seq: (pinned?.seq ?? 0) + 1 },

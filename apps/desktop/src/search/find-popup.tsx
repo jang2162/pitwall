@@ -38,8 +38,10 @@ import { FindPreview } from "./find-preview";
 import {
   canSearch,
   type FindOptions,
+  type FindScope,
   type FindSession,
   type FindSnapshot,
+  isBusyError,
   searchParams,
 } from "./find-session";
 import { baseName, MatchText } from "./match-text";
@@ -66,7 +68,7 @@ export function FindStatusText({
   if (snapshot.status === "failed")
     return (
       <span role="alert" className="truncate text-ui-accent" title={snapshot.error}>
-        {strings.failed(snapshot.error ?? "")}
+        {isBusyError(snapshot.error) ? strings.busy : strings.failed(snapshot.error ?? "")}
       </span>
     );
   const parts = [strings.summary(snapshot.rows.length, snapshot.files.length)];
@@ -125,6 +127,11 @@ function folderPath(text: string, root: string | undefined): string {
   const t = text.trim();
   if (root === undefined || /^([/\\]|[A-Za-z]:[/\\])/.test(t)) return t;
   return t === "" ? root : joinPath(root, t);
+}
+
+function folderScope(text: string): FindScope {
+  const root = searchPlace()?.root;
+  return { kind: "folder", path: folderPath(text, root), root };
 }
 
 export function FindPopup({ workspace }: { workspace: EditorWorkspace }) {
@@ -282,10 +289,7 @@ function FindPopupContent({ workspace }: { workspace: EditorWorkspace }) {
               aria-checked={options.scope.kind === kind}
               onClick={() =>
                 update({
-                  scope:
-                    kind === "project"
-                      ? { kind }
-                      : { kind, path: folderPath(folder, searchPlace()?.root) },
+                  scope: kind === "project" ? { kind } : folderScope(folder),
                 })
               }
               className={`rounded-sm px-2 py-0.5 ${
@@ -306,7 +310,7 @@ function FindPopupContent({ workspace }: { workspace: EditorWorkspace }) {
             onChange={(e) => {
               setFolder(e.target.value);
               update({
-                scope: { kind: "folder", path: folderPath(e.target.value, searchPlace()?.root) },
+                scope: folderScope(e.target.value),
               });
             }}
             className={`${INPUT_CLASS} flex-1`}

@@ -307,6 +307,8 @@ find-more = More results not shown
 find-cancelled = Stopped
 # $message: the Host's reason (bad regex, glob, …)
 find-failed = Search failed: { $message }
+# The Host's limit on concurrent searches was hit
+find-busy = Other searches are still running, so this one could not start — try again in a moment
 find-empty = Nothing found
 find-stop = Stop
 find-pin = Open in Tool Window

@@ -299,6 +299,8 @@ find-more = 더 있음
 find-cancelled = 멈춤
 # $message: Host 가 알린 이유(잘못된 정규식 · 글롭 등)
 find-failed = 찾지 못했다: { $message }
+# Host 의 동시 검색 상한에 걸렸다
+find-busy = 다른 검색이 돌고 있어 시작하지 못했다 — 잠시 뒤 다시 찾는다
 find-empty = 맞는 것이 없다
 find-stop = 멈추기
 find-pin = 툴 윈도우에서 열기

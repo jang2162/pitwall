@@ -572,3 +572,86 @@ it("searches the folder picked from the file tree's context menu", async () => {
   const { params } = await search("TODO");
   expect(params.paths).toEqual(["/work/demo/src"]);
 });
+
+/** 값을 바꾸되 설정(SEARCH_DELAY_MS)을 기다리지 않는다. */
+const typeNoWait = (input: HTMLInputElement, value: string) =>
+  act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+it("starts the due search when ⌘Enter pins right after an edit instead of leaving it searching", async () => {
+  await mount();
+  const first = await search("TOD");
+  await chunk(first.streamId, {
+    kind: "files",
+    files: [result("/work/demo/src/util.rs", [[1, "// TOD util", 3]])],
+  });
+  // 지연 타이머가 가기 전에 고정한다.
+  await typeNoWait(queryInput(), "TODO");
+  await press({ code: "Enter", key: "Enter", metaKey: true });
+  expect(popup()).toBeNull();
+  await vi.waitFor(() => expect(host.searches).toHaveLength(2));
+  expect(host.searches[1]!.params.query).toBe("TODO");
+  const panel = () => document.querySelector<HTMLElement>('[data-tool-window="searchResults"]')!;
+  await vi.waitFor(() => expect(panel()).not.toBeNull());
+  // 이전 질의의 줄이 새 질의 제목 아래 남지 않는다.
+  expect(panel().textContent).not.toContain("TOD util");
+  await chunk(host.searches[1]!.streamId, {
+    kind: "files",
+    files: [result("/work/demo/src/lib.rs", [[2, "// TODO: one", 3]])],
+  });
+  await finish(host.searches[1]!.streamId, { matchedFiles: 1, lines: 1 });
+  expect(panel().textContent).toContain("「TODO」");
+  expect(panel().textContent).not.toContain("찾는 중");
+});
+
+it("shows a translated message when the Host's concurrent search limit is hit", async () => {
+  await mount();
+  const { streamId } = await search("TODO");
+  await act(async () =>
+    host.send({
+      method: "stream.end",
+      params: {
+        streamId,
+        status: "failed",
+        error: {
+          code: -32603,
+          message: "search is busy: 2 searches are already running",
+          data: null,
+        },
+      },
+    }),
+  );
+  await settle();
+  const alert = popup()!.querySelector<HTMLElement>("[role=alert]")!;
+  expect(alert.textContent).toBe("다른 검색이 돌고 있어 시작하지 못했다 — 잠시 뒤 다시 찾는다");
+  expect(alert.textContent).not.toContain("busy");
+});
+
+// 한글 조합 중의 Enter · Esc 는 조합에 쓰이고 결과를 열거나 팝업을 닫지 않는다(ui/ime.ts). jsdom 계열은 실제 입력기가 없어
+// 이벤트 꼴(isComposing · WebKit 의 keyCode 229)로 본다 — 실제 입력기는 「사람이 확인할 것」.
+it("does not open a result or close the popup on Enter / Esc during IME composition", async () => {
+  await mount();
+  const { streamId } = await search("한글");
+  await chunk(streamId, {
+    kind: "files",
+    files: [result("/work/demo/src/lib.rs", [[2, "// 한글 one", 3]])],
+  });
+  await finish(streamId, { matchedFiles: 1, lines: 1 });
+  expect(rowTexts()).toEqual(["/work/demo/src/lib.rs:2"]);
+  const input = queryInput();
+  await press({ code: "Enter", key: "Enter", isComposing: true }, input);
+  await press({ code: "Enter", key: "Enter", keyCode: 229 }, input);
+  await press({ code: "Escape", key: "Escape", isComposing: true }, input);
+  await press({ code: "Escape", key: "Escape", keyCode: 229 }, input);
+  expect(popup()).not.toBeNull();
+  expect(document.querySelectorAll("[data-editor-tab-header]")).toHaveLength(0);
+  expect(host.cancelled).toEqual([]);
+  // 조합이 끝난 Enter 는 연다.
+  await press({ code: "Enter", key: "Enter" }, input);
+  expect(popup()).toBeNull();
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-editor-tab-header]")?.textContent).toBe("lib.rs"),
+  );
+});

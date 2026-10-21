@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_OPTIONS,
   FindSession,
+  isBusyError,
   parseMask,
   type SearchRunner,
   searchParams,
@@ -43,6 +44,53 @@ describe("searchParams", () => {
     );
     expect(params.paths).toEqual(["/work/wt/demo/src"]);
     expect(params.worktree).toBe("/work/wt");
+  });
+});
+
+describe("searchParams, regex + case + include + exclude", () => {
+  // 구분력 있는 rg 비교(결과가 있는 조합): `rg -c -s -g '*.rs' -g '!*_test.rs' 'fn \\w+_test'`(ignore 존중, 숨김 뺌)와 Host 의
+  // 이 인자(crates/pw-fs/examples/search_first_chunk.rs)의 파일 · 줄 수를 맞춘다. 수치는 보고에 있다.
+  it("maps regex, case, include and exclude globs together", () => {
+    const params = searchParams(
+      {
+        ...DEFAULT_OPTIONS,
+        query: "fn \\w+_test",
+        regex: true,
+        matchCase: true,
+        mask: "*.rs, !*_test.rs",
+      },
+      place,
+    );
+    expect(params).toMatchObject({
+      query: "fn \\w+_test",
+      regex: true,
+      matchCase: true,
+      include: ["*.rs"],
+      exclude: ["*_test.rs"],
+      respectIgnore: true,
+      hidden: false,
+    });
+  });
+
+  it("re-roots a remembered folder scope when the worktree's root changes", () => {
+    const scope = { kind: "folder", path: "/work/demo/src", root: "/work/demo" } as const;
+    const wt = { ...place, worktree: "/work/wt", root: "/work/wt/demo" };
+    expect(searchParams({ ...DEFAULT_OPTIONS, query: "x", scope }, wt).paths).toEqual([
+      "/work/wt/demo/src",
+    ]);
+    // 루트 그대로면 건드리지 않는다.
+    expect(searchParams({ ...DEFAULT_OPTIONS, query: "x", scope }, place).paths).toEqual([
+      "/work/demo/src",
+    ]);
+    // 루트 자체를 고른 경우.
+    expect(
+      searchParams({ ...DEFAULT_OPTIONS, query: "x", scope: { ...scope, path: "/work/demo" } }, wt)
+        .paths,
+    ).toEqual(["/work/wt/demo"]);
+    // 루트 밖을 직접 친 절대 경로는 그대로 둔다(Host 가 막는다).
+    expect(
+      searchParams({ ...DEFAULT_OPTIONS, query: "x", scope: { ...scope, path: "/etc" } }, wt).paths,
+    ).toEqual(["/etc"]);
   });
 });
 
@@ -170,6 +218,24 @@ describe("FindSession", () => {
     expect(streams[0]!.signal.aborted).toBe(true);
     expect(session.getSnapshot().status).toBe("cancelled");
     expect(session.getSnapshot().rows).toHaveLength(1);
+  });
+
+  it("cancel ends a search whose stream was closed by interrupt but never restarted", () => {
+    const { run } = controlledRunner();
+    const session = new FindSession(run);
+    void session.start(searchParams({ ...DEFAULT_OPTIONS, query: "a" }, place));
+    session.interrupt();
+    expect(session.searchDue).toBe(true);
+    expect(session.getSnapshot().status).toBe("searching");
+    session.cancel();
+    expect(session.searchDue).toBe(false);
+    expect(session.getSnapshot().status).toBe("cancelled");
+  });
+
+  it("recognises the Host's busy error", () => {
+    expect(isBusyError("search is busy: 2 searches are already running (-32603)")).toBe(true);
+    expect(isBusyError("regex parse error")).toBe(false);
+    expect(isBusyError(undefined)).toBe(false);
   });
 
   it("shows the Host's error when the stream fails", async () => {
