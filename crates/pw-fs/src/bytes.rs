@@ -1,7 +1,8 @@
 //! hex 뷰어의 페이지 읽기 `fs.readBytes`(M1-23, 결정 M1-D10). `fs.read` 의 범위 읽기와 달리 판정을 하지 않아 파일 앞부분을 따로
 //! 읽지 않는다 — 1 GB 파일의 끝 페이지를 보면 그 페이지의 바이트만 읽는다. 한 번에 [`HEX_PAGE_BYTES`](64 KiB)까지.
 //!
-//! 일반 파일만 읽는다. FIFO · 장치 · 소켓은 열면 멈추거나 끝이 없으므로 열기 전에 거절한다.
+//! 일반 파일만 읽는다. FIFO · 장치 · 소켓은 열면 멈추거나 끝이 없으므로 열기 전에 거절한다. 파일 범위 연결(단일 파일 창)은
+//! `fs.read` 처럼 그 파일 하나만 읽는다([`Fs::roots_in`]).
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -10,7 +11,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use pw_rpc::{Router, RpcError, rpc_method};
+use pw_rpc::{FileScope, Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::limits::HEX_PAGE_BYTES;
@@ -63,6 +64,7 @@ rpc_method! {
         params: FsReadBytesParams,
         result: FsBytes,
         tier: Read,
+        file_scope: true,
     }
 }
 
@@ -84,12 +86,21 @@ fn not_regular(path: &Path) -> RpcError {
 
 impl Fs {
     pub fn read_bytes(&self, params: &FsReadBytesParams) -> Result<FsBytes, RpcError> {
+        self.read_bytes_in(None, params)
+    }
+
+    /// [`Self::read_bytes`] 를 `file` 범위로([`Self::roots_in`]).
+    pub fn read_bytes_in(
+        &self,
+        file: Option<&FileScope>,
+        params: &FsReadBytesParams,
+    ) -> Result<FsBytes, RpcError> {
         if params.length > HEX_PAGE_BYTES {
             return Err(RpcError::invalid_params(format!(
                 "a byte page is at most {HEX_PAGE_BYTES} bytes"
             )));
         }
-        let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
+        let roots = self.roots_in(file, &params.project_id, params.worktree.as_deref())?;
         let target = roots.readable(Path::new(&params.path)).map_err(denied)?;
         let real = &target.real;
         let meta = fs::metadata(real).map_err(|e| io_error(real, e))?;
@@ -116,10 +127,10 @@ impl Fs {
 }
 
 pub(crate) fn register(router: &mut Router, fs: Arc<Fs>) {
-    router.unary(FsReadBytesMethod, move |_ctx, params: FsReadBytesParams| {
+    router.unary(FsReadBytesMethod, move |ctx, params: FsReadBytesParams| {
         let s = Arc::clone(&fs);
         async move {
-            tokio::task::spawn_blocking(move || s.read_bytes(&params))
+            tokio::task::spawn_blocking(move || s.read_bytes_in(ctx.file_scope(), &params))
                 .await
                 .map_err(|e| RpcError::internal(e.to_string()))?
         }

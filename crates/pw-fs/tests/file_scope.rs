@@ -117,6 +117,11 @@ fn read(path: &Path) -> Value {
     json!({"projectId": "", "path": path.display().to_string()})
 }
 
+/// `fs.readBytes` 의 첫 16바이트.
+fn page(path: &Path) -> Value {
+    json!({"projectId": "", "path": path.display().to_string(), "offset": 0, "length": 16})
+}
+
 fn denied_code(result: Result<Value, RpcError>) -> i32 {
     result.expect_err("expected the request to be refused").code
 }
@@ -151,6 +156,10 @@ async fn only_the_file_itself_is_read() {
     assert_eq!(got["path"], file.display().to_string());
     let stat = conn.call("fs.stat", read(&file)).await.unwrap();
     assert_eq!(stat["kind"], "file");
+    // hex 뷰어의 페이지도 그 파일은 읽는다.
+    let bytes = conn.call("fs.readBytes", page(&file)).await.unwrap();
+    assert_eq!(bytes["data"], "aW5zaWRl");
+    assert_eq!(bytes["path"], file.display().to_string());
 
     let mut refused = vec![
         sibling.clone(),
@@ -174,6 +183,11 @@ async fn only_the_file_itself_is_read() {
                 path.display()
             );
         }
+        assert!(
+            outside(conn.call("fs.readBytes", page(path)).await),
+            "fs.readBytes {}",
+            path.display()
+        );
     }
     // 그 파일을 가리키는 링크로 온 요청은 실제 대상이 그 파일이라 받는다(결정 M1-D8 의 규칙 그대로).
     #[cfg(unix)]
@@ -211,6 +225,9 @@ async fn naming_a_project_does_not_widen_the_scope() {
     let mut conn = f.connect(&file);
     let params = json!({"projectId": project, "path": sibling.display().to_string()});
     assert!(outside(conn.call("fs.read", params.clone()).await));
+    let bytes = json!({"projectId": project, "path": sibling.display().to_string(),
+                       "offset": 0, "length": 16});
+    assert!(outside(conn.call("fs.readBytes", bytes).await));
     let watch = json!({"projectId": project});
     assert_eq!(
         denied_code(conn.call("fs.list", read(&f.base.join("proj"))).await),
