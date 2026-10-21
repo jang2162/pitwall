@@ -100,7 +100,7 @@ export type DocumentState =
       version: string | null;
       size: number;
       mtimeMs: number | null;
-      /** `lang.detect` 가 정한 Linguist 언어 이름. `null` 이면 플레인 텍스트. 탭이 덮어쓸 수 있다(`EditorTabParams.language`). */
+      /** `lang.detect` 가 정한 Linguist 언어 이름. `null` 이면 플레인 텍스트. 사람이 고른 언어는 `language.ts` 가 따로 든다. */
       language: string | null;
       /** 이 앱이 고칠 수 없다: 크기 등급 · 인코딩 · 쓰기 권한. */
       readOnly: boolean;
