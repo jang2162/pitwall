@@ -2,11 +2,13 @@ import {
   type ContextLayers,
   KeymapEngine,
   type KeyEventLike,
+  mergeKeymap,
   parseKeymapToml,
   type Platform,
   readDefaultKeymap,
+  readUserKeymap,
 } from "@pitwall/keymap";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_KEYMAP_TOML } from "../keymap/default-keymap";
 import { TERMINAL_FOCUS, terminalAdmits } from "./terminal-keys";
@@ -19,22 +21,30 @@ const key = (code: string, mods: Partial<KeyEventLike> = {}): KeyEventLike => ({
   ...mods,
 });
 
-/** 기본 키맵 + 모든 액션이 등록된 창. `terminal` 이면 터미널이 포커스를 가졌다. 시계는 `clock.now` 다. */
+/**
+ * 기본 키맵 + 모든 액션이 등록된 창. `terminal` 이면 터미널이 포커스를 가졌다. 시계는 `clock.now` 다. `user` 는 사용자
+ * keymap.toml, `run` 은 액션을 실행하는 자리다.
+ */
 const clock = { now: 0 };
-function engine(platform: Platform, terminal: boolean) {
+function engine(
+  platform: Platform,
+  terminal: boolean,
+  { user, run = () => true }: { user?: string; run?: (action: string) => boolean } = {},
+) {
   const layers: ContextLayers = [
     terminal ? { [TERMINAL_FOCUS]: true, inputFocus: true } : {},
     terminal ? { toolWindowFocus: true, activeToolWindow: "terminal" } : {},
     { isMac: platform === "mac" },
   ];
   const e = new KeymapEngine({
-    run: () => true,
+    run,
     isEnabled: () => true,
     context: () => layers,
     admits: terminalAdmits,
     now: () => clock.now,
   });
-  e.setBindings(readDefaultKeymap(parseKeymapToml(DEFAULT_KEYMAP_TOML), platform));
+  const base = readDefaultKeymap(parseKeymapToml(DEFAULT_KEYMAP_TOML), platform);
+  e.setBindings(user ? mergeKeymap(base, readUserKeymap(parseKeymapToml(user), platform)) : base);
   return e;
 }
 
@@ -91,7 +101,7 @@ describe("Search Everywhere keys while the terminal has focus", () => {
     expect(actionOf(t, key("KeyP", { metaKey: true, shiftKey: true }))).toBe("project.switcher");
   });
 
-  it("take Ctrl+Shift+N · Ctrl+Shift+P but leave Ctrl+N · Ctrl+P · Ctrl+E to the shell (Windows · Linux)", () => {
+  it("take Ctrl+Shift+N · Ctrl+Shift+P but leave Ctrl+E to the shell (Windows · Linux)", () => {
     for (const p of ["win", "linux"] as const) {
       const t = engine(p, true);
       expect(actionOf(t, key("KeyN", { ctrlKey: true, shiftKey: true })), p).toBe(
@@ -100,15 +110,47 @@ describe("Search Everywhere keys while the terminal has focus", () => {
       expect(actionOf(t, key("KeyP", { ctrlKey: true, shiftKey: true })), p).toBe(
         "project.switcher",
       );
-      for (const code of ["KeyN", "KeyP", "KeyE"]) {
+      // Ctrl+E 는 기본 키맵의 최근 파일 키다 — 터미널 밖에서는 최근 파일, 터미널에서는 셸의 줄 끝.
+      expect(actionOf(engine(p, false), key("KeyE", { ctrlKey: true })), p).toBe(
+        "search.recentFiles",
+      );
+      const k = key("KeyE", { ctrlKey: true });
+      expect(t.peek(k), p).toBe(false);
+      expect(actionOf(t, k), p).toBeUndefined();
+    }
+  });
+
+  // 기본 키맵에는 Ctrl+N · Ctrl+P 가 없다 — 사람이 IntelliJ 처럼 창 단위 액션(터미널에서도 받는 액션)에 묶은 경우로 본다.
+  it("leave Ctrl+N · Ctrl+P to the shell even when the user binds them to window-wide actions (Windows · Linux)", () => {
+    const user = `
+[[bindings]]
+action = "search.gotoFile"
+key = "ctrl+n"
+mode = "add"
+
+[[bindings]]
+action = "project.switcher"
+key = "ctrl+p"
+mode = "add"
+`;
+    for (const p of ["win", "linux"] as const) {
+      const outside = engine(p, false, { user });
+      expect(actionOf(outside, key("KeyN", { ctrlKey: true })), p).toBe("search.gotoFile");
+      expect(actionOf(outside, key("KeyP", { ctrlKey: true })), p).toBe("project.switcher");
+
+      const run = vi.fn(() => true);
+      const t = engine(p, true, { user, run });
+      for (const code of ["KeyN", "KeyP"]) {
         const k = key(code, { ctrlKey: true });
         expect(t.peek(k), `${p} ${code}`).toBe(false);
         expect(actionOf(t, k), `${p} ${code}`).toBeUndefined();
       }
-      // 터미널 밖에서는 Ctrl+E 가 최근 파일이다.
-      expect(actionOf(engine(p, false), key("KeyE", { ctrlKey: true })), p).toBe(
-        "search.recentFiles",
+      expect(run).not.toHaveBeenCalled();
+      // 같은 사람의 Ctrl+Shift 키는 그대로 앱이 받는다.
+      expect(actionOf(t, key("KeyN", { ctrlKey: true, shiftKey: true })), p).toBe(
+        "search.gotoFile",
       );
+      expect(run).toHaveBeenCalledWith("search.gotoFile");
     }
   });
 
