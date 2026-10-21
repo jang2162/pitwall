@@ -627,3 +627,22 @@ fn a_wasm_grammar_highlights_like_the_native_one() {
     assert!(from_native.len() > 8, "{from_native:?}");
     assert_eq!(from_wasm, from_native);
 }
+
+/// 진행을 확인하지 않는 일도 시한에 기다림을 끊는다 — 강조 쿼리는 진행 콜백 사이가 몇 초일 수 있다(`by_deadline` 주석).
+#[test]
+fn work_that_never_checks_its_deadline_is_left_at_the_deadline() {
+    let (release, hold) = std::sync::mpsc::channel::<()>();
+    let started = Instant::now();
+    let out = crate::service::by_deadline(started + Duration::from_millis(100), move || {
+        let _ = hold.recv_timeout(Duration::from_secs(30));
+        Some(())
+    })
+    .unwrap();
+    let took = started.elapsed();
+    drop(release);
+    assert_eq!(out, None);
+    assert!(took < Duration::from_secs(10), "waited {took:?}");
+
+    let out = crate::service::by_deadline(Instant::now() + Duration::from_secs(30), || Some(7));
+    assert_eq!(out.unwrap(), Some(7));
+}

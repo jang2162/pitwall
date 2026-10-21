@@ -5,7 +5,8 @@
 //!   않고, 편집으로 넘어가면 그 문서의 강조를 끈다([`SyntaxOff`]). 클라이언트(M1-17 · M1-23)도 같은 기준으로 끄지만 믿지 않는다 —
 //!   10 MB 한 줄 JSON 하나가 파싱에 1.4 GB 를 썼다.
 //! - **파싱 시간:** 파싱 한 번(과 강조 쿼리 한 번)이 [`parse_budget`] 을 넘으면 그 문서의 강조를 끈다. 새 편집이 오거나 문서가
-//!   닫히면 하던 파싱을 그만둔다(그 요청은 빈 구간으로 끝난다 — [`SyntaxHighlightsResult`] 의 `version`).
+//!   닫히면 하던 파싱을 그만둔다(그 요청은 빈 구간으로 끝난다 — [`SyntaxHighlightsResult`] 의 `version`). 쿼리는 진행 확인이
+//!   드물 수 있어 제 스레드에서 돌리고 요청은 시한에 돌려준다([`by_deadline`]).
 //! - **잠금:** 파싱은 그 문법의 파서 잠금만 쥔다 — 다른 문법의 문서는 기다리지 않는다. 같은 문법의 문서는 그 파싱이 끝나거나 위
 //!   상한에 걸릴 때까지 기다린다(WASM 문법은 파서 · 저장소를 문서마다 두면 문법의 선형 메모리를 문서마다 다시 만든다).
 //! - **문법 메모리:** 문법은 그 언어의 문서를 처음 열 때 올리고(파서를 만들고 강조 쿼리를 컴파일한다), 그 문법을 쓰는 마지막
@@ -16,6 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::mem;
 use std::ops::{ControlFlow, Range};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
@@ -326,13 +328,13 @@ impl Syntax {
             )));
         }
         let document = self.document(&params.doc_id)?;
-        let mut parsed = lock(&document.parsed);
-        let parse_started = match self.reparse(&document, &mut parsed)? {
+        let mut slot = lock(&document.parsed);
+        let parse_started = match self.reparse(&document, &mut slot)? {
             Reparse::Ready(started) => started,
             Reparse::Stopped { version } => return Ok(empty(version, None)),
             Reparse::Off { version, off } => return Ok(empty(version, Some(off))),
         };
-        let Some(parsed) = parsed.as_ref() else {
+        let Some(parsed) = slot.as_ref() else {
             unreachable!("reparse leaves a tree");
         };
         let text = parsed.text.as_str();
@@ -345,25 +347,35 @@ impl Syntax {
         };
         let range: Range<usize> = bytes(from)?..bytes(to)?;
         // 파싱과 쿼리가 한 시한을 나눠 쓴다 — 상한 바로 아래에서 끝난 파싱 뒤에 쿼리가 상한을 또 쓰지 않게.
-        let started = parse_started.unwrap_or_else(Instant::now);
         let budget = parse_budget(text.len());
-        let Some(spans) = spans(
-            &document.grammar.highlights,
-            &document.grammar.kinds,
-            &parsed.tree,
-            text,
-            range,
-            &mut || {
-                if started.elapsed() > budget {
-                    ControlFlow::Break(())
-                } else {
-                    ControlFlow::Continue(())
-                }
-            },
-        ) else {
+        let deadline = parse_started.unwrap_or_else(Instant::now) + budget;
+        let query = {
+            let grammar = Arc::clone(&document.grammar);
+            let tree = parsed.tree.clone();
+            let text = Arc::clone(&parsed.text);
+            move || {
+                spans(
+                    &grammar.highlights,
+                    &grammar.kinds,
+                    &tree,
+                    &text,
+                    range,
+                    &mut || {
+                        if Instant::now() > deadline {
+                            ControlFlow::Break(())
+                        } else {
+                            ControlFlow::Continue(())
+                        }
+                    },
+                )
+            }
+        };
+        let Some(spans) = by_deadline(deadline, query)? else {
             let version = parsed.version;
             tracing::warn!(target: "pw_syntax", doc = %params.doc_id, "highlighting took over {budget:?}; turning it off");
             lock(&document.text).turn_off(SyntaxOff::TimedOut);
+            // 쿼리 스레드가 아직 트리를 쥐고 있으면 큰 트리는 그쪽이 끝날 때 푼다 — 이 요청이 풀며 늦어지지 않게.
+            *slot = None;
             return Ok(empty(version, Some(SyntaxOff::TimedOut)));
         };
         Ok(SyntaxHighlightsResult {
@@ -700,6 +712,32 @@ fn key(language: &ResolvedLanguage) -> Key {
         None => display(&language.grammar),
     };
     (grammar, display(&language.queries))
+}
+
+/// `work` 를 제 스레드에서 돌리고 `deadline` 까지만 기다린다. 시한까지 끝나지 않았거나 `work` 가 그만뒀으면(`None`) `None` 이다.
+/// `work` 는 시한을 스스로 보고 그만둬야 한다 — 기다림만 끊고 스레드는 그대로 둔다.
+///
+/// 강조 쿼리가 이렇게 돈다. tree-sitter 는 쿼리의 진행 콜백을 노드 1000개쯤마다 부르는데, 노드마다 뒤 형제를 끝까지 훑는 트리
+/// (오류 회복이 만든, 익명 토큰 수십만 개를 자식으로 둔 ERROR)에서는 콜백 사이가 몇 초다 — 닫히지 않은 `[` 50만 줄(1 MB JSON)에서
+/// release 로 0.9초, debug 로 2.7초를 쟀다. 그동안 요청이 시한을 넘겨 붙잡히지 않게 한다. 남은 쿼리는 다음 콜백에서 그만둔다.
+pub(crate) fn by_deadline<T: Send + 'static>(
+    deadline: Instant,
+    work: impl FnOnce() -> Option<T> + Send + 'static,
+) -> Result<Option<T>, RpcError> {
+    let (done, result) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("pw-syntax-query".to_owned())
+        .spawn(move || {
+            let _ = done.send(work());
+        })
+        .map_err(|e| RpcError::internal(format!("cannot start the highlight query: {e}")))?;
+    match result.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(out) => Ok(out),
+        Err(RecvTimeoutError::Timeout) => Ok(None),
+        Err(RecvTimeoutError::Disconnected) => {
+            Err(RpcError::internal("the highlight query panicked"))
+        }
+    }
 }
 
 fn empty(version: u32, off: Option<SyntaxOff>) -> SyntaxHighlightsResult {

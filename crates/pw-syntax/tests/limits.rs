@@ -30,6 +30,12 @@ fn json_brackets() -> String {
     "[\n".repeat(500_000)
 }
 
+/// 닫히지 않은 `[` 260만 줄(5.2 MB, 5 MiB 안). 네이티브 문법은 파싱을 상한 안에 끝내고 강조 쿼리가 상한에 걸린다 — 쿼리의
+/// 진행 확인 사이가 가장 길다(`src/service.rs` 의 `by_deadline`).
+fn json_brackets_5mib() -> String {
+    "[\n".repeat(2_600_000)
+}
+
 /// 짝이 맞지 않는 괄호 · 따옴표 · 주석 시작이 섞인 줄 40만 개(5.2 MB, 5 MiB 안).
 fn broken_rust() -> String {
     "}{)(][\"'#!/*\n".repeat(400_000)
@@ -55,12 +61,13 @@ fn highlights(s: &Syntax, doc: &str) -> SyntaxHighlightsResult {
     .unwrap()
 }
 
-/// 파싱이 상한에 걸리면 그 문서의 강조를 끄고 상한 안에 끝난다.
+/// 파싱이나 강조 쿼리가 상한에 걸리면 그 문서의 강조를 끄고 상한 안에 돌려준다.
 #[test]
 fn runaway_parses_stop_at_the_time_budget() {
     let cases = [
         ("Rust", rust_parens()),
         ("JSON", json_brackets()),
+        ("JSON", json_brackets_5mib()),
         ("Rust", broken_rust()),
     ];
     let runs: Vec<_> = cases
@@ -82,10 +89,11 @@ fn runaway_parses_stop_at_the_time_budget() {
                     took < budget + Duration::from_secs(2),
                     "{language}: took {took:?}, budget {budget:?}"
                 );
-                // 끈 문서는 다시 파싱하지 않는다.
+                // 끈 문서는 다시 파싱하지 않는다 — 다시 파싱하면 상한까지 또 돈다.
                 let started = Instant::now();
                 assert_eq!(highlights(&s, "d").off, Some(SyntaxOff::TimedOut));
-                assert!(started.elapsed() < Duration::from_millis(100));
+                let again = started.elapsed();
+                assert!(again < budget / 2, "{language}: took {again:?} again");
             })
         })
         .collect();
