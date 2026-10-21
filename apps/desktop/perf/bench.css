@@ -1,0 +1,3 @@
+/* 하네스의 루트(perf/)가 앱 소스 밖이라 Tailwind 가 앱 소스를 찾게 알린다. */
+@import "../src/styles.css";
+@source "../src";

@@ -1,6 +1,7 @@
 // 외부 도구로 열기(04 F8-4, 10-ui 「외부 도구 · 프로젝트」 단축키): 「다음에서 열기」 팝업(⌥F1)과 기본 도구로 바로 열기(⌘⌥E).
 // 웹뷰는 도구 id 와 문맥(프로젝트 · 활성 워크트리 · 활성 탭의 파일과 커서 줄 · 열)만 넘기고, 명령을 만들어 띄우는 것은 Host 다
-// (openWith.run, crates/pw-open-with — 파일 경로의 정규화 · 범위 검사도 그쪽이 한다).
+// (openWith.run, crates/pw-open-with — 파일 경로의 정규화 · 범위 검사도 그쪽이 한다). 팝업 맨 위에는 창이 넘긴 앱 안 대상
+// (`OpenWithPlace` — 프로젝트 창의 「프로젝트 뷰」)이 외부 도구보다 먼저 온다.
 //
 // 팝업은 상단 검색 팝업(ui/search-popup.tsx)이라 IME 조합 중 Enter · Esc 규칙이 같다. 열린 동안은 창 단축키가 꺼진다
 // (useKeymapPopup). 실행하지 못한 이유는 조용히 넘기지 않고 `onError` 로 문장을 넘긴다 — 창이 그 자리에 보여 준다.
@@ -39,6 +40,15 @@ export const REVEAL_TOOLS: Readonly<Record<Platform, string>> = {
   win: "explorer",
   linux: "file-manager",
 };
+
+/** 팝업 맨 위의 앱 안 대상(10-ui 「외부 도구 · 프로젝트」 표의 「프로젝트 뷰」). Host 를 거치지 않고 창이 실행한다. */
+export interface OpenWithPlace {
+  id: string;
+  label: string;
+  /** 고를 수 없는 이유. `undefined` 면 고를 수 있다. 팝업을 열 때의 대상으로 판정한다. */
+  problem(target: OpenWithTarget): string | undefined;
+  run(target: OpenWithTarget): void;
+}
 
 type Strings = AppStrings["openWith"];
 
@@ -107,10 +117,13 @@ function errorText(e: unknown): string {
 export function useOpenWith({
   target,
   onError,
+  places = [],
 }: {
   target(): OpenWithTarget | undefined;
   /** 실패 문장. `undefined` 면 지난 문장을 지운다. */
   onError(message: string | undefined): void;
+  /** 팝업 맨 위의 앱 안 대상. */
+  places?: readonly OpenWithPlace[];
 }): {
   actions: Action[];
   openPopup(target?: OpenWithTarget): void;
@@ -193,7 +206,13 @@ export function useOpenWith({
       key={popup.target.projectId}
       target={popup.target}
       note={popup.note}
+      places={places}
       onClose={() => setPopup(undefined)}
+      onPlace={(place) => {
+        const t = popup.target;
+        setPopup(undefined);
+        setTimeout(() => place.run(t), 0);
+      }}
       onPick={(tool) => {
         const t = popup.target;
         setPopup(undefined);
@@ -209,12 +228,16 @@ export function useOpenWith({
 function OpenWithPopup({
   target,
   note,
+  places,
   onClose,
+  onPlace,
   onPick,
 }: {
   target: OpenWithTarget;
   note?: string;
+  places: readonly OpenWithPlace[];
   onClose(): void;
+  onPlace(place: OpenWithPlace): void;
   onPick(tool: string): void;
 }) {
   const T = useAppStrings().openWith;
@@ -256,6 +279,23 @@ function OpenWithPopup({
       placeholder={T.placeholder}
       empty={list ? T.empty : T.loading}
     >
+      {places.map((place) => {
+        const problem = place.problem(target);
+        return (
+          <Command.Item
+            key={`place:${place.id}`}
+            value={`place:${place.id}`}
+            keywords={[place.label]}
+            disabled={problem !== undefined}
+            onSelect={() => onPlace(place)}
+            className={SEARCH_ITEM_CLASS}
+            title={problem}
+          >
+            <span className="flex-1 truncate">{place.label}</span>
+            {problem && <span className="truncate text-[11px]">{problem}</span>}
+          </Command.Item>
+        );
+      })}
       {list?.tools.map((tool) => (
         <Command.Item
           key={tool.id}

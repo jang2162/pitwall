@@ -1,4 +1,4 @@
-### 프로젝트 창: 툴 윈도우 이름과 열기 액션, 에디터 탭, 상태바, 백그라운드 작업, 알림, 런타임 환경, 프로젝트 신뢰, 파일 감시.
+### 프로젝트 창: 툴 윈도우 이름과 열기 액션, 에디터 탭, 파일 트리, 상태바, 백그라운드 작업, 알림, 런타임 환경, 프로젝트 신뢰, 파일 감시.
 
 ## 툴 윈도우 이름. id 는 툴 윈도우 id(src/layout/project-layout.ts 의 PANELS)를 kebab-case 로 쓴 것이다.
 
@@ -67,6 +67,26 @@ action-editor-reveal =
        *[other] 파일 관리자에서 보기
     }
 action-editor-switcher = 탭 전환기
+
+## 파일 트리(src/file-tree). 프로젝트 툴 윈도우의 내용이다.
+
+file-tree-label = 프로젝트 파일
+file-tree-no-root = 프로젝트 루트를 읽는 중…
+file-tree-loading = 읽는 중…
+# $message: Host 의 오류 문장
+file-tree-read-failed = 읽지 못했다: { $message }
+file-tree-outside = 루트 밖을 가리킴
+file-tree-ignored-hide = 무시된 파일 숨기기
+file-tree-ignored-show = 무시된 파일 보이기
+file-tree-search-label = 트리에서 찾기
+file-tree-search-none = 맞는 항목이 없다
+file-tree-copy-relative-path = 상대 경로 복사
+action-file-tree-select-in = 프로젝트 뷰에서 선택
+action-file-tree-toggle-ignored = 무시된 파일 숨기기 / 보이기
+# 「다음에서 열기」(⌥F1) 팝업의 첫 항목.
+open-with-project-view = 프로젝트 뷰
+open-with-project-view-no-file = 열린 파일이 없다
+open-with-project-view-outside = 이 파일은 프로젝트 트리 밖에 있다
 
 ## 상태바
 

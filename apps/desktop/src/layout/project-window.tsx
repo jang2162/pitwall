@@ -45,6 +45,8 @@ import {
   useEditorWorkspace,
 } from "../editor/editor-workspace";
 import { useTabSwitcher } from "../editor/tab-switcher";
+import { FileTreeToolWindow } from "../file-tree/file-tree";
+import { useProjectView } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
 import { useAppStrings } from "../i18n/app-strings";
 import { toolWindowActions } from "../keymap/actions";
@@ -105,6 +107,7 @@ const ICONS: Record<string, LucideIcon> = {
  */
 const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>> = {
   notifications: NotificationsToolWindow,
+  project: FileTreeToolWindow,
 };
 
 function ToolWindowPlaceholder({ api }: IDockviewPanelProps) {
@@ -317,7 +320,7 @@ function ProjectRuntimeActions({ projectId }: { projectId: string }) {
 }
 
 /**
- * 이 창의 프로젝트를 외부 도구로 연다(⌥F1 · ⌘⌥E, open-with/open-with.tsx). 문맥은 활성 탭의 워크트리 · 파일 · 커서 줄 · 열이다
+ * 이 창의 프로젝트를 외부 도구로 연다(⌥F1 · ⌘⌥E, open-with/open-with.tsx). ⌥F1 팝업 맨 위는 「프로젝트 뷰」(file-tree/project-view.tsx). 문맥은 활성 탭의 워크트리 · 파일 · 커서 줄 · 열이다
  * — 탭은 자기를 연 워크트리를 기억하므로 창의 활성 워크트리가 바뀐 뒤에도 그 탭의 루트로 나간다. 에디터 탭이 없으면 키를 누른
  * 때의 활성 워크트리와 프로젝트만. 탭 우클릭의 「Finder 에서 보기」(`editor.reveal`)도 여기서 같은 실행 길로 연다.
  * 실패 문장은 상태바 위 한 줄에 둔다. 상태바의 버튼은 10-ui 툴바의 「외부 도구로 열기」 자리다 — 툴바가 생기면 옮긴다.
@@ -345,9 +348,12 @@ function ProjectOpenWith({ projectId }: { projectId: string }) {
   };
   const targetRef = useRef(target);
   targetRef.current = target;
+  const projectView = useProjectView({ projectId, workspace });
+  useRegisterActions(projectView.actions);
   const { actions, run, popup } = useOpenWith({
     target: () => targetRef.current(),
     onError: setError,
+    places: projectView.places,
   });
   useRegisterActions(actions);
   const reveal = useMemo(

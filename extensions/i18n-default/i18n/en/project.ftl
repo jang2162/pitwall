@@ -1,4 +1,4 @@
-### Project window: tool window names and their open actions, editor tabs, status bar, background tasks, notifications, runtime environment, project trust, file watching.
+### Project window: tool window names and their open actions, editor tabs, file tree, status bar, background tasks, notifications, runtime environment, project trust, file watching.
 
 ## Tool window names. The id is the tool window id (PANELS in src/layout/project-layout.ts) in kebab-case.
 
@@ -67,6 +67,26 @@ action-editor-reveal =
        *[other] Show in File Manager
     }
 action-editor-switcher = Switcher
+
+## File tree (src/file-tree). The content of the Project tool window.
+
+file-tree-label = Project files
+file-tree-no-root = Reading the project root…
+file-tree-loading = Loading…
+# $message: the Host's error message
+file-tree-read-failed = Could not read: { $message }
+file-tree-outside = Points outside the root
+file-tree-ignored-hide = Hide Ignored Files
+file-tree-ignored-show = Show Ignored Files
+file-tree-search-label = Search in tree
+file-tree-search-none = No matches
+file-tree-copy-relative-path = Copy Relative Path
+action-file-tree-select-in = Select in Project View
+action-file-tree-toggle-ignored = Hide / Show Ignored Files
+# The first item of the "Select In" (⌥F1) popup.
+open-with-project-view = Project View
+open-with-project-view-no-file = No file is open
+open-with-project-view-outside = This file is outside the project tree
 
 ## Status bar
 
