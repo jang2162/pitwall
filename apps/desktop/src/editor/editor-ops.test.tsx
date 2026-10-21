@@ -415,7 +415,9 @@ it("changes the document's language from the status bar, and forgets it when the
 
 it("shows line ending and encoding of the active tab", async () => {
   await mount();
-  await open(RS, 1, 1);
+  // 줄 · 열 없이 연 탭도 처음부터 커서를 보인다(뷰가 생길 때의 알림, extensions/operations.ts).
+  await open(RS);
+  expect(statusText("cursor")).toBe("1:1");
   expect(statusText("lineEnding")).toBe("LF");
   expect(statusText("encoding")).toBe("UTF-8");
   view().dispatch({ selection: { anchor: 0, head: 15 } });
@@ -454,9 +456,15 @@ it("does not run shortcuts while an IME is composing", async () => {
 
 it("deletes the line once with ⌘⌫ on macOS and keeps ⌥⌫ as delete-word", async () => {
   await mount();
-  await open(PY, 2, 6);
+  await open(PY, 2, 4);
+  // 한 번만 고친다 — CodeMirror 의 「줄 앞까지 지우기」 가 먼저 돌아도 끝 텍스트는 같으므로 고친 횟수를 센다.
+  const dispatch = vi.spyOn(view(), "dispatch");
   await keydown({ code: "Backspace", key: "Backspace", metaKey: true });
   expect(view().state.doc.toString()).toBe("x = 1\n");
+  const edits = dispatch.mock.calls.filter((args) =>
+    args.some((a) => (a as { docChanged?: boolean }).docChanged || "changes" in (a as object)),
+  );
+  expect(edits).toHaveLength(1);
   view().dispatch({ selection: { anchor: 5 } });
   await keydown({ code: "Backspace", key: "Backspace", altKey: true });
   expect(view().state.doc.toString()).toBe("x = \n");

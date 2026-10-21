@@ -181,9 +181,8 @@ impl Contributed {
                     extensions.push((ext, decl.linguist.clone()));
                 }
             }
-            if let Some(token) = decl.line_comment.as_deref().filter(|t| !t.is_empty())
-                && !line_comments.iter().any(|(n, _)| *n == decl.linguist)
-            {
+            // 같은 언어를 여럿이 적으면 `line_comment` 가 먼저 찾는 앞의 것(먼저 등록된 것)이 이긴다.
+            if let Some(token) = decl.line_comment.as_deref().filter(|t| !t.is_empty()) {
                 line_comments.push((decl.linguist.clone(), token.to_owned()));
             }
         }
