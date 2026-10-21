@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "project",
+  "description": "프로젝트 창만 쓰는 권한: Markdown 미리보기(M1-22)의 링크를 외부 브라우저 · 메일 앱으로 여는 것(opener open-url, 범위는 allow-default-urls — http · https · mailto · tel 만). 웹뷰 쪽도 http(s) · mailto 밖의 스킴은 넘기지 않는다(src/editor/markdown.ts). 모든 창에 공통인 권한은 default.json 에 있다.",
+  "windows": ["project-*"],
+  "permissions": ["opener:allow-open-url", "opener:allow-default-urls"]
+}

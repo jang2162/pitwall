@@ -39,6 +39,22 @@ export function projectStrings(t: Translate) {
       notUtf8: t("editor-not-utf8"),
       readOnlyLarge: t("editor-read-only-large"),
       noViewer: (kind: ViewerKind) => t("editor-no-viewer", { kind }),
+      /** 이미지 뷰어(M1-22). */
+      image: {
+        fit: t("editor-image-fit"),
+        actual: t("editor-image-actual"),
+        zoom: t("editor-image-zoom"),
+        dimensions: (width: number, height: number) =>
+          t("editor-image-dimensions", { width, height }),
+        failed: (message: string) => t("editor-image-read-failed", { message }),
+      },
+      /** Markdown 뷰어(M1-22). */
+      markdown: {
+        mode: t("editor-markdown-mode"),
+        editor: t("editor-markdown-editor"),
+        preview: t("editor-markdown-preview"),
+        split: t("editor-markdown-split"),
+      },
       openFailed: (path: string) => t("editor-open-failed", { path }),
       copyFailed: t("editor-copy-path-failed"),
       pinned: t("editor-tab-pinned"),

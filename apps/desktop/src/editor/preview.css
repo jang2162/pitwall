@@ -1,0 +1,141 @@
+/* 미리보기 뷰어(M1-22)의 모양. 색은 테마 토큰(`--pw-*`)만 쓴다 — 미리보기 전용 토큰은 없다. */
+
+/* 투명한 이미지의 바탕: 패널 색과 테두리 색의 바둑판. */
+.pw-checkerboard {
+  background-color: var(--pw-editor-background);
+  background-image:
+    linear-gradient(45deg, var(--pw-ui-border) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--pw-ui-border) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--pw-ui-border) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--pw-ui-border) 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}
+
+.pw-markdown {
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+.pw-markdown > :first-child {
+  margin-top: 0;
+}
+
+.pw-markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.2em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.pw-markdown h1 {
+  font-size: 1.8em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--pw-ui-border);
+}
+
+.pw-markdown h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--pw-ui-border);
+}
+
+.pw-markdown h3 {
+  font-size: 1.2em;
+}
+
+.pw-markdown :is(p, ul, ol, table, pre, blockquote) {
+  margin: 0 0 0.9em;
+}
+
+.pw-markdown :is(ul, ol) {
+  padding-left: 2em;
+}
+
+.pw-markdown ul {
+  list-style: disc;
+}
+
+.pw-markdown ol {
+  list-style: decimal;
+}
+
+.pw-markdown li.pw-task-item {
+  list-style: none;
+}
+
+.pw-markdown .pw-task {
+  margin: 0 0.4em 0 -1.4em;
+  vertical-align: middle;
+}
+
+.pw-markdown a {
+  color: var(--pw-ui-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.pw-markdown :is(code, pre) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  background: var(--pw-ui-panelBackground);
+  border-radius: 3px;
+}
+
+.pw-markdown code {
+  padding: 0.1em 0.3em;
+}
+
+.pw-markdown pre {
+  padding: 0.8em 1em;
+  overflow-x: auto;
+}
+
+.pw-markdown pre code {
+  padding: 0;
+  background: none;
+}
+
+.pw-markdown blockquote {
+  padding: 0 1em;
+  color: var(--pw-ui-mutedForeground);
+  border-left: 3px solid var(--pw-ui-border);
+}
+
+.pw-markdown table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+
+.pw-markdown :is(th, td) {
+  padding: 0.3em 0.8em;
+  border: 1px solid var(--pw-ui-border);
+}
+
+.pw-markdown th {
+  font-weight: 600;
+  background: var(--pw-ui-panelBackground);
+}
+
+.pw-markdown hr {
+  margin: 1.5em 0;
+  border: 0;
+  border-top: 1px solid var(--pw-ui-border);
+}
+
+.pw-markdown img {
+  max-width: 100%;
+}
+
+/* 그리지 않은 이미지(루트 밖 · 원격 · 읽지 못함)의 대체 글자. */
+.pw-markdown .pw-image-blocked {
+  padding: 0 0.3em;
+  color: var(--pw-ui-mutedForeground);
+  border: 1px dashed var(--pw-ui-border);
+  border-radius: 3px;
+}

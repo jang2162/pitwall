@@ -43,6 +43,19 @@ editor-no-viewer =
         [hex] This is a binary file and cannot be shown yet
        *[other] There is no viewer for this file yet
     }
+# Image viewer (M1-22)
+editor-image-fit = Fit
+editor-image-actual = Actual Size
+editor-image-zoom = Zoom
+# $width $height: pixels
+editor-image-dimensions = { $width } × { $height } px
+# $message: the error
+editor-image-read-failed = Could not read the image: { $message }
+# Markdown viewer (M1-22)
+editor-markdown-mode = Markdown View
+editor-markdown-editor = Editor
+editor-markdown-preview = Preview
+editor-markdown-split = Editor and Preview
 # $path: the path that was being opened
 editor-open-failed = Could not open { $path }
 editor-copy-path-failed = Could not copy the path

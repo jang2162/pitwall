@@ -6,7 +6,6 @@
 // viewer-kinds.ts 의 `VIEWER_READS` 다 — `text` 뷰어는 `doc.live`(여러 탭이 나누는 편집 중인 한 벌, live-text.ts)를, `self` 뷰어는 `doc.stat` 의 경로를
 // 받아 필요한 범위를 `fs.read` 로 직접 읽는다.
 //
-//   image: ImageViewer,     // M1-22
 //   hex: HexViewer,         // M1-23
 //
 // 내용을 읽지 않은 문서(너무 큼 · UTF-8 아님)도 아래 `UNREAD_VIEWERS` 표가 그린다 — M1-23 이 [앞부분 보기] [hex] 화면 · 인코딩을
@@ -18,6 +17,8 @@ import type { ComponentType } from "react";
 import { useProjectStrings } from "../layout/strings";
 import type { DocumentState } from "./documents";
 import type { EditorTabParams } from "./editor-tabs";
+import { ImageViewer } from "./image-viewer";
+import { MarkdownViewer } from "./markdown-viewer";
 import { EditorNotice } from "./notice";
 import { TextViewer } from "./text-viewer";
 import type { ViewerKind } from "./viewer-kinds";
@@ -44,9 +45,8 @@ function PendingViewer({ doc, params }: ViewerProps) {
 
 export const VIEWERS: Readonly<Record<ViewerKind, ComponentType<ViewerProps>>> = {
   text: TextViewer,
-  // Markdown 미리보기(M1-22)가 생기기 전에는 텍스트로 보인다.
-  markdown: TextViewer,
-  image: PendingViewer,
+  markdown: MarkdownViewer,
+  image: ImageViewer,
   hex: PendingViewer,
 };
 

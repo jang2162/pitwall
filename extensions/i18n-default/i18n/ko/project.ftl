@@ -43,6 +43,19 @@ editor-no-viewer =
         [hex] 바이너리 파일이라 아직 보이지 못한다
        *[other] 이 파일의 뷰어는 아직 없다
     }
+# 이미지 뷰어(M1-22)
+editor-image-fit = 맞춤
+editor-image-actual = 실제 크기
+editor-image-zoom = 배율
+# $width $height: 픽셀
+editor-image-dimensions = { $width } × { $height } px
+# $message: 오류
+editor-image-read-failed = 이미지를 읽지 못했다: { $message }
+# Markdown 뷰어(M1-22)
+editor-markdown-mode = Markdown 보기
+editor-markdown-editor = 에디터
+editor-markdown-preview = 미리보기
+editor-markdown-split = 나란히
 # $path: 열려던 경로
 editor-open-failed = 파일을 열지 못했다: { $path }
 editor-copy-path-failed = 경로를 복사하지 못했다

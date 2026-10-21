@@ -31,6 +31,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { type ComponentType, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Toaster } from "sonner";
 
 import { createDocumentStore, FS_CHANGED_TOPIC, type FsChangedEvent } from "../editor/documents";
@@ -45,6 +46,7 @@ import {
   type UnsavedAnswer,
   useEditorWorkspace,
 } from "../editor/editor-workspace";
+import { type PreviewHost, PreviewHostProvider, readAllBytes } from "../editor/preview-host";
 import { useTabSwitcher } from "../editor/tab-switcher";
 import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { FileTreeToolWindow } from "../file-tree/file-tree";
@@ -471,6 +473,43 @@ function useWindowEditor(
 }
 
 /**
+ * 미리보기 뷰어(이미지 · Markdown)가 쓰는 것: 바이트는 이 창의 Host 연결의 `fs.read` 범위 읽기(탭의 워크트리를 접근 범위로), 루트는
+ * 워크트리면 `project.resolve` 의 그 워크트리 안 프로젝트 루트 · 아니면 등록 루트, 링크는 opener 로 외부 브라우저에.
+ */
+function useWindowPreviewHost(projectId: string | undefined): PreviewHost {
+  const { client } = useHost();
+  const latest = useRef(client);
+  latest.current = client;
+  const [host] = useState<PreviewHost>(() => {
+    const call = () => {
+      const c = latest.current;
+      if (!c || projectId === undefined) throw new Error("Host is not connected");
+      return c;
+    };
+    return {
+      readBytes: (path, worktree) =>
+        readAllBytes(
+          (params) =>
+            call().call("fs.read", {
+              projectId: projectId ?? "",
+              worktree: worktree ?? null,
+              ...params,
+            }),
+          path,
+        ),
+      rootOf: async (worktree) => {
+        if (worktree === undefined)
+          return (await call().call("project.get", { id: projectId ?? "" })).roots[0];
+        const r = await call().call("project.resolve", { path: worktree });
+        return r?.worktree?.root ?? r?.root;
+      },
+      openExternal: (url) => openUrl(url),
+    };
+  });
+  return host;
+}
+
+/**
  * 이 창의 프로젝트의 `fs.changed`(file-watch.tsx 가 연 감시)를 열린 문서에 넘긴다 — 디스크에서 바뀐 문서를 다시 읽거나 배너를
  * 띄운다(documents.ts). 구독이 실패하면 경고만 남긴다 — 외부 변경이 저절로 보이지 않을 뿐이고 저장은 여전히 덮지 않는다.
  */
@@ -526,6 +565,7 @@ function ProjectWindowBody({
 
   const unsaved = useUnsavedPrompt();
   const workspace = useWindowEditor(projectId, log, unsaved.ask);
+  const previewHost = useWindowPreviewHost(projectId);
   useEffect(() => (api ? workspace.attach(api) : undefined), [api, workspace]);
   useDocumentSync(workspace, projectId);
   // 창을 닫기 전(닫기 단추 · ⌘W · 앱 종료) 미저장 편집을 묻는다.
@@ -562,30 +602,32 @@ function ProjectWindowBody({
 
   return (
     <EditorWorkspaceProvider workspace={workspace}>
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex min-h-0 flex-1">
-          <ToolWindowBar dock="left" api={api} />
-          <ProjectDock
-            storage={window.localStorage}
-            titles={strings.toolWindows}
-            onApi={(next) => {
-              setApi(next);
-              onDockApi?.(next);
-            }}
-            emptyArea={EmptyEditorArea}
-          />
-          <ToolWindowBar dock="right" api={api} />
+      <PreviewHostProvider host={previewHost}>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1">
+            <ToolWindowBar dock="left" api={api} />
+            <ProjectDock
+              storage={window.localStorage}
+              titles={strings.toolWindows}
+              onApi={(next) => {
+                setApi(next);
+                onDockApi?.(next);
+              }}
+              emptyArea={EmptyEditorArea}
+            />
+            <ToolWindowBar dock="right" api={api} />
+          </div>
+          {projectId !== undefined && <FileWatch projectId={projectId} />}
+          {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
+          {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
+          {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
+          <StatusBar label={strings.status.label} />
+          {switcher.element}
+          {unsaved.element}
+          {/* 상태바(22px) 위에 띄운다. */}
+          <Toaster theme={appearance} position="bottom-right" offset={{ bottom: 30, right: 12 }} />
         </div>
-        {projectId !== undefined && <FileWatch projectId={projectId} />}
-        {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
-        {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
-        {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
-        <StatusBar label={strings.status.label} />
-        {switcher.element}
-        {unsaved.element}
-        {/* 상태바(22px) 위에 띄운다. */}
-        <Toaster theme={appearance} position="bottom-right" offset={{ bottom: 30, right: 12 }} />
-      </div>
+      </PreviewHostProvider>
     </EditorWorkspaceProvider>
   );
 }
