@@ -8,7 +8,7 @@ import defaultTheme from "../../../../../extensions/theme-default/themes/default
 import { parseTheme, SYNTAX_TOKENS } from "../../theme/tokens";
 import type { DocumentChange } from "../documents";
 import { PLAIN_TEXT } from "../language";
-import { createSyntaxSessions, type SyntaxSessions } from "../syntax-sessions";
+import { createSyntaxSessions, RETRY_BASE_MS, type SyntaxSessions } from "../syntax-sessions";
 import { type FakeSyntaxOptions, fakeSyntaxServer, miniHighlight } from "../syntax-testing";
 import { type EditorFeatureContext, editorExtensions, reconfigureEditor } from ".";
 import { highlight, highlightStyles, tokenClass } from "./highlight";
@@ -180,6 +180,43 @@ it("keeps the old highlight, moved by the edit, until the new answer arrives", a
   view.destroy();
 });
 
+it("keeps the painted highlight when a newer edit stops the service's parse", async () => {
+  vi.useFakeTimers();
+  const { view } = setup("fn a // c", { parse: 40 });
+  await vi.advanceTimersByTimeAsync(40);
+  expect(painted(view)).toEqual(truth(view));
+  // 첫 편집의 강조를 서비스가 계산하는 동안 다음 편집이 도착해 그만두게 한다.
+  view.dispatch({ changes: { from: 9, insert: "x" } });
+  await vi.advanceTimersByTimeAsync(10);
+  view.dispatch({ changes: { from: 10, insert: "y" } });
+  for (let t = 0; t < 200; t++) {
+    await vi.advanceTimersByTimeAsync(1);
+    expect(painted(view), `${t} ms`).toHaveLength(2);
+  }
+  expect(painted(view)).toEqual(truth(view));
+  view.destroy();
+});
+
+it("comes back after a request fails instead of leaving the document plain", async () => {
+  vi.useFakeTimers();
+  const { view, server } = setup("fn a // c");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(painted(view)).toEqual(truth(view));
+  const real = server.source.highlights;
+  let failing = 1;
+  server.source.highlights = (params) =>
+    failing-- > 0 ? Promise.reject(new Error("rpc transport closed")) : real(params);
+  view.dispatch({ changes: { from: 0, insert: "let " } });
+  await vi.advanceTimersByTimeAsync(10);
+  // 물러서 있는 동안 옛 강조가 남는다.
+  expect(painted(view)).toHaveLength(2);
+  view.dispatch({ changes: { from: 0, insert: '"' } });
+  await vi.advanceTimersByTimeAsync(RETRY_BASE_MS);
+  expect(painted(view)).toEqual(truth(view));
+  expect(painted(view)).toEqual([[0, 14, "pw-syntax-string"]]);
+  view.destroy();
+});
+
 it("asks only for the range on screen, and again when scrolling past what it has", async () => {
   const lines = Array.from({ length: 5000 }, (_, i) => `let v${i} = "${i}"; // ${i}`);
   const { view, server } = setup(lines.join("\n"));
@@ -229,6 +266,7 @@ it("stops asking and clears the colors for a language without a grammar", async 
   await new Promise((r) => setTimeout(r, 10));
   expect(asked()).toBe(before);
   view.destroy();
+  await Promise.resolve();
   expect(server.called("close")).toHaveLength(1);
 });
 
@@ -236,7 +274,7 @@ it("releases its session when the view goes away", async () => {
   const { view, server } = setup("fn a");
   await vi.waitFor(() => expect(painted(view)).toHaveLength(1));
   view.destroy();
-  expect(server.called("close")).toHaveLength(1);
+  await vi.waitFor(() => expect(server.called("close")).toHaveLength(1));
 });
 
 /** 시드가 있는 의사 난수(재현되게). */
@@ -262,12 +300,13 @@ function classes(spans: [number, number, string][], from: number, to: number): s
 // 가짜 타이머로 31초를 20 ms 씩 걷는다 — 결과는 시드로 정해지지만 실제로 걸리는 시간은 기기 부하를 탄다(혼자 1~3초).
 const TYPING_TIMEOUT = 30_000;
 
-async function typeForThirtySeconds(maxDelay: number) {
+async function typeForThirtySeconds(maxDelay: number, parse = 0) {
   vi.useFakeTimers();
   const next = random(17);
   const lines = Array.from({ length: 200 }, (_, i) => `let v${i} = "${i}"; // ${i}`);
   const { view, server } = setup(lines.join("\n"), {
     delay: () => Math.floor(next() * (maxDelay + 1)),
+    parse,
   });
   const script = 'fn f() { let s = "a // b"; return s; } // "q"\n';
   let cursor = view.state.doc.line(20).to;
@@ -280,6 +319,9 @@ async function typeForThirtySeconds(maxDelay: number) {
   let longest = 0;
   let screenSince: number | undefined;
   let screenLongest = 0;
+  // 처음 칠한 뒤 화면 범위에 칠한 것이 하나도 없던 표본 수(이 텍스트는 줄마다 강조가 있다).
+  let wiped = 0;
+  let paintedOnce = false;
   let typed = 0;
   const step = 20;
   const end = 31_000;
@@ -293,7 +335,10 @@ async function typeForThirtySeconds(maxDelay: number) {
     }
     await vi.advanceTimersByTimeAsync(step);
     const { from, to } = view.viewport;
-    const got = classes(painted(view, from, to), from, to);
+    const shown = painted(view, from, to);
+    if (shown.length > 0) paintedOnce = true;
+    else if (paintedOnce) wiped += 1;
+    const got = classes(shown, from, to);
     const want = classes(truth(view, from, to), from, to);
     let anyWrong = false;
     for (let i = 0; i < got.length; i++) {
@@ -315,10 +360,10 @@ async function typeForThirtySeconds(maxDelay: number) {
   for (const since of wrongSince.values()) longest = Math.max(longest, end - since);
   if (screenSince !== undefined) screenLongest = Math.max(screenLongest, end - screenSince);
   console.info(
-    `[highlight] delay 0-${maxDelay} ms per leg, typed ${typed} chars: longest wrong character ${longest} ms, longest wrong screen ${screenLongest} ms, ${server.called("highlights").length} requests`,
+    `[highlight] delay 0-${maxDelay} ms per leg, parse ${parse} ms, typed ${typed} chars: longest wrong character ${longest} ms, longest wrong screen ${screenLongest} ms, ${wiped} wiped samples, ${server.called("highlights").length} requests`,
   );
   view.destroy();
-  return { typed, longest, screenLongest, endedWrong: screenSince !== undefined };
+  return { typed, longest, screenLongest, wiped, endedWrong: screenSince !== undefined };
 }
 
 it(
@@ -340,6 +385,18 @@ it(
     expect(local.longest).toBeLessThan(1000);
     expect(local.screenLongest).toBeLessThan(1000);
     expect(local.endedWrong).toBe(false);
+  },
+  TYPING_TIMEOUT,
+);
+
+it(
+  "never wipes the screen's highlight while typing when newer edits keep stopping the service's parses",
+  async () => {
+    // 서비스가 강조 하나에 40 ms 를 쓰고(느린 문법 · 큰 파일), 그사이 도착한 편집이 파싱을 그만두게 한다.
+    const stopped = await typeForThirtySeconds(10, 40);
+    expect(stopped.wiped).toBe(0);
+    expect(stopped.longest).toBeLessThan(1000);
+    expect(stopped.endedWrong).toBe(false);
   },
   TYPING_TIMEOUT,
 );

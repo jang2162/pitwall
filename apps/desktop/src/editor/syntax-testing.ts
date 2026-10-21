@@ -1,12 +1,14 @@
 // 시험용 구문 분석 서비스: crates/pw-syntax 의 문서 세션 규칙(methods.rs 머리 주석)을 흉내 낸다 — 편집마다 버전, 앞당겨 도착한
 // 편집은 차례가 올 때까지 들고 있기, 지난 버전은 conflict, 모르는 문서는 not found, 강조는 도착한 때의 버전으로 계산. 요청과 응답에
-// 따로 지연을 줄 수 있어(가짜 타이머) 프레임이 뒤섞여 도착하는 것을 만든다.
+// 따로 지연을 줄 수 있어(가짜 타이머) 프레임이 뒤섞여 도착하는 것을 만든다. 강조 계산에 시간을 주면 그사이 도착한 편집이 계산을
+// 그만두게 한다(서비스의 `Reparse::Stopped` — 그 계산의 버전으로 빈 구간을 답한다).
 
 import {
   ERROR_CODE,
   type HighlightSpan,
   type SyntaxEditParams,
   type SyntaxHighlightsParams,
+  type SyntaxHighlightsResult,
   type SyntaxOff,
   type SyntaxOpenParams,
   type TextChange,
@@ -55,6 +57,8 @@ export interface FakeSyntaxOptions {
   grammars?: Record<string, (text: string) => HighlightSpan[]>;
   /** 요청이 도착하기까지 · 응답이 돌아오기까지의 지연(ms). 0 이면 마이크로태스크. */
   delay?: (method: string, leg: "request" | "response") => number;
+  /** 강조 하나를 계산하는 시간(ms). 그사이 편집이 도착하면 계산을 그만두고 `{ 시작한 버전, spans: [] }` 로 답한다. 기본 0. */
+  parse?: number;
 }
 
 const rpcError = (code: number, message: string) => Object.assign(new Error(message), { code });
@@ -75,20 +79,28 @@ export function fakeSyntaxServer(options: FakeSyntaxOptions = {}) {
   const after = (ms: number, run: () => void) =>
     ms > 0 ? setTimeout(run, ms) : queueMicrotask(run);
 
-  /** 요청 지연 뒤 `handle` 을 돌리고, 응답 지연 뒤 결과를 돌려준다. */
-  function call<T>(method: string, params: unknown, handle: () => T): Promise<T> {
+  /** 요청 지연 뒤 `handle` 을 돌리고(약속이면 끝나기를 기다려), 응답 지연 뒤 결과를 돌려준다. */
+  function call<T>(method: string, params: unknown, handle: () => T | Promise<T>): Promise<T> {
     calls.push({ method, params });
     return new Promise<T>((resolve, reject) =>
       after(options.delay?.(method, "request") ?? 0, () => {
-        let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+        const respond = (outcome: { ok: true; value: T } | { ok: false; error: unknown }) =>
+          after(options.delay?.(method, "response") ?? 0, () =>
+            outcome.ok ? resolve(outcome.value) : reject(outcome.error),
+          );
+        let value: T | Promise<T>;
         try {
-          outcome = { ok: true, value: handle() };
+          value = handle();
         } catch (error) {
-          outcome = { ok: false, error };
+          respond({ ok: false, error });
+          return;
         }
-        after(options.delay?.(method, "response") ?? 0, () =>
-          outcome.ok ? resolve(outcome.value) : reject(outcome.error),
-        );
+        if (value instanceof Promise)
+          value.then(
+            (v) => respond({ ok: true, value: v }),
+            (error: unknown) => respond({ ok: false, error }),
+          );
+        else respond({ ok: true, value });
       }),
     );
   }
@@ -136,7 +148,19 @@ export function fakeSyntaxServer(options: FakeSyntaxOptions = {}) {
         const spans = grammars[d.language]!(d.text)
           .filter((s) => s.to > from && s.from < to)
           .map((s) => ({ ...s, from: Math.max(s.from, from), to: Math.min(s.to, to) }));
-        return { version: d.version, spans, off: null };
+        const result = { version: d.version, spans, off: null };
+        if (!options.parse) return result;
+        return new Promise<SyntaxHighlightsResult>((resolve) =>
+          setTimeout(
+            () =>
+              resolve(
+                docs.get(params.docId) === d && d.version === result.version
+                  ? result
+                  : { version: result.version, spans: [], off: null },
+              ),
+            options.parse,
+          ),
+        );
       }),
     close: (params) =>
       call("close", params, () => {

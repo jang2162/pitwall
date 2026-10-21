@@ -3,7 +3,15 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import type { DocumentChange } from "./documents";
 import { HIGHLIGHT_MAX_BYTES, LONG_LINE_CHARS } from "./limits";
-import { createSyntaxSessions, MAPPED_VERSIONS, toTextChanges } from "./syntax-sessions";
+import {
+  createSyntaxSessions,
+  type HighlightAnswer,
+  MAPPED_VERSIONS,
+  RETRY_BASE_MS,
+  RETRY_MAX_MS,
+  RETRY_NOTICE_AFTER,
+  toTextChanges,
+} from "./syntax-sessions";
 import { fakeSyntaxServer, miniHighlight } from "./syntax-testing";
 
 afterEach(() => {
@@ -52,10 +60,11 @@ it("opens one service document for every view of a document and closes it with t
   expect(server.called("open")).toHaveLength(1);
   one.release();
   one.release();
+  await Promise.resolve();
   expect(server.called("close")).toHaveLength(0);
   two.release();
   const [opened] = server.called("open") as { docId: string }[];
-  expect(server.called("close")).toEqual([{ docId: opened!.docId }]);
+  await vi.waitFor(() => expect(server.called("close")).toEqual([{ docId: opened!.docId }]));
 });
 
 it("sends edits made while opening after the open answer, in version order", async () => {
@@ -151,6 +160,120 @@ it("reopens when an answer's version disagrees though nothing changed", async ()
   expect(await handle.highlights(all)).toEqual({ kind: "stale" });
   expect(server.called("open")).toHaveLength(2);
   expect(await handle.highlights(all)).toMatchObject({ kind: "spans", version: 0 });
+});
+
+it("asks again instead of taking the empty answer of a parse that a newer edit stopped", async () => {
+  vi.useFakeTimers();
+  const server = fakeSyntaxServer({ parse: 40 });
+  const documents = fakeDocuments("fn a");
+  const handle = createSyntaxSessions(server.source, documents).acquire("/p/a.rs", "Mini");
+  const answer = handle.highlights(all);
+  await vi.advanceTimersByTimeAsync(10);
+  documents.edit({ from: 4, insert: " x" });
+  await vi.advanceTimersByTimeAsync(40);
+  expect(await answer).toEqual({ kind: "stale" });
+  const next = handle.highlights(all);
+  await vi.advanceTimersByTimeAsync(40);
+  expect(await next).toEqual({
+    kind: "spans",
+    version: 1,
+    spans: miniHighlight("fn a x"),
+    exact: true,
+  });
+});
+
+it("backs off and reopens after a failure, doubling the wait up to a cap, and logs once when failures go on", async () => {
+  vi.useFakeTimers();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const server = fakeSyntaxServer();
+  const real = server.source.highlights;
+  let failing = 10;
+  const asked: number[] = [];
+  server.source.highlights = (params) => {
+    asked.push(Date.now());
+    return failing-- > 0 ? Promise.reject(new Error("rpc transport closed")) : real(params);
+  };
+  const documents = fakeDocuments("fn a");
+  const handle = createSyntaxSessions(server.source, documents).acquire("/p/a.rs", "Mini");
+  // 뷰처럼 답을 받자마자 다시 묻는다. 타이머는 다음 것까지만 넘긴다.
+  let answer: HighlightAnswer = { kind: "stale" };
+  for (let i = 0; answer.kind === "stale" && i < 20; i++) {
+    let settled: HighlightAnswer | undefined;
+    void handle.highlights(all).then((a) => (settled = a));
+    // 물러선 동안 고친 것도 다시 열 때 실린다.
+    if (i === 3) documents.edit({ from: 4, insert: ' "s"' });
+    while (!settled) await vi.advanceTimersToNextTimerAsync();
+    answer = settled;
+  }
+  expect(answer).toEqual({
+    kind: "spans",
+    version: 0,
+    spans: miniHighlight('fn a "s"'),
+    exact: true,
+  });
+  const waits = asked.slice(1).map((t, i) => t - asked[i]!);
+  expect(waits).toEqual([1, 2, 4, 8, 16, 32, 64, 120, 120, 120].map((n) => n * RETRY_BASE_MS));
+  expect(Math.max(...waits)).toBe(RETRY_MAX_MS);
+  // 시도마다 앞 문서를 닫고 지금 텍스트로 새로 연다 — 남은 문서는 하나다.
+  expect(server.called("open")).toHaveLength(11);
+  expect(server.docs.size).toBe(1);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(String(warn.mock.calls[0]![0])).toContain(`${RETRY_NOTICE_AFTER} times`);
+
+  // 응답을 받으면 처음으로 돌아간다.
+  failing = 1;
+  documents.edit({ from: 0, insert: "x" });
+  expect(await handle.highlights(all)).toEqual({ kind: "stale" });
+  const retried = handle.highlights(all);
+  await vi.advanceTimersByTimeAsync(RETRY_BASE_MS);
+  expect(await retried).toMatchObject({ kind: "spans", exact: true });
+  expect(warn).toHaveBeenCalledTimes(1);
+  warn.mockRestore();
+});
+
+it("reopens with the current text after an edit fails instead of turning highlighting off", async () => {
+  vi.useFakeTimers();
+  const server = fakeSyntaxServer();
+  const real = server.source.edit;
+  let failing = 1;
+  server.source.edit = (params) =>
+    failing-- > 0 ? Promise.reject(new Error("rpc transport closed")) : real(params);
+  const documents = fakeDocuments("fn a");
+  const handle = createSyntaxSessions(server.source, documents).acquire("/p/a.rs", "Mini");
+  await vi.advanceTimersByTimeAsync(0);
+  documents.edit({ from: 4, insert: " // c" });
+  const answer = handle.highlights(all);
+  await vi.advanceTimersByTimeAsync(RETRY_BASE_MS);
+  expect(await answer).toMatchObject({ kind: "stale" });
+  expect(await handle.highlights(all)).toEqual({
+    kind: "spans",
+    version: 0,
+    spans: miniHighlight("fn a // c"),
+    exact: true,
+  });
+  expect(server.called("open")).toHaveLength(2);
+});
+
+it("keeps the session it opened for the new text when the views are made again after the document is read again", async () => {
+  const server = fakeSyntaxServer();
+  const documents = fakeDocuments("fn a");
+  const sessions = createSyntaxSessions(server.source, documents);
+  const old = sessions.acquire("/p/a.rs", "Mini");
+  await old.highlights(all);
+  documents.reset("// b");
+  // 화면은 다시 읽은 문서의 뷰를 새로 만든다 — 같은 커밋에서 옛 뷰가 놓고 새 뷰가 잡는다.
+  old.release();
+  const fresh = sessions.acquire("/p/a.rs", "Mini");
+  expect(await fresh.highlights(all)).toEqual({
+    kind: "spans",
+    version: 0,
+    spans: [{ from: 0, to: 4, token: "comment" }],
+    exact: true,
+  });
+  expect(server.called("open")).toHaveLength(2);
+  expect(server.docs.size).toBe(1);
+  fresh.release();
+  await vi.waitFor(() => expect(server.docs.size).toBe(0));
 });
 
 it("reopens with the new text when the document is read again", async () => {
