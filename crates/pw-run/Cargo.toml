@@ -27,5 +27,7 @@ tracing = "0.1.44"
 libc = "0.2.190"
 
 [dev-dependencies]
+# mise 제공자의 끝에서 끝 시험: 버전 파일 변경을 실제 파일 감시(`fs.watch`)로 받는다.
+pw-fs = { path = "../pw-fs" }
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }

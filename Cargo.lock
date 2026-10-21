@@ -4051,6 +4051,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "pw-core",
+ "pw-fs",
  "pw-rpc",
  "pw-runtime",
  "schemars 1.2.3",

@@ -29,8 +29,8 @@ use std::time::{Duration, Instant};
 
 use crate::cache::Cache;
 use crate::env::RuntimeEnv;
-use crate::methods::RuntimeSource;
-use crate::provider::{Layer, RuntimeProvider};
+use crate::methods::{RuntimeProblem, RuntimeSource};
+use crate::provider::{Layer, ProviderError, RuntimeProvider};
 
 /// 셸이 환경을 찍기까지 기다리는 시간.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -274,8 +274,10 @@ impl RuntimeProvider for LoginShell {
         true
     }
 
-    fn resolve(&self, _dir: &Path, _base: &RuntimeEnv) -> Result<Layer, String> {
-        (*self.get()).clone().map_err(|e| e.reason)
+    fn resolve(&self, _dir: &Path, _base: &RuntimeEnv) -> Result<Layer, ProviderError> {
+        (*self.get())
+            .clone()
+            .map_err(|e| ProviderError::new(RuntimeProblem::LoginShell, e.reason))
     }
 }
 

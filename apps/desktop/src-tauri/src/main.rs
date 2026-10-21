@@ -45,7 +45,12 @@ fn local_host(
     // 앱이 띄우는 프로세스의 환경. 로그인 셸은 처음 쓸 때 돈다 — 시작을 늦추지 않는다.
     // 미신뢰 프로젝트에서는 프로젝트 코드를 돌리는 제공자를 고르지 않는다(M1-05). 레지스트리는 Host 를 만든 뒤 붙인다.
     let trust = trust::TrustGate::default();
-    let runtime = Arc::new(Runtime::new(LoginShell::for_this_user()).with_trust(trust.check()));
+    // 신뢰한 프로젝트의 mise 설정이 고정한 도구 버전을 로그인 셸 환경 위에 덮는다(M1-16).
+    let runtime = Arc::new(
+        Runtime::new(LoginShell::for_this_user())
+            .with_provider(Arc::new(pw_runtime::Mise::default()))
+            .with_trust(trust.check()),
+    );
     let runtime_methods = Arc::clone(&runtime);
     let lang = Arc::new(pw_lang::methods::Lang::new(&extensions));
     let lang_methods = Arc::clone(&lang);
@@ -102,7 +107,13 @@ fn local_host(
             runtime.attach(RuntimeHost {
                 projects: projects.clone(),
                 bus: host.bus().clone(),
+                paths: config.paths.clone(),
             });
+            // 버전 파일(`mise.toml` 등)이 바뀌면 그 프로젝트의 런타임 환경을 다시 계산한다(파일 감시 `fs.changed`).
+            tauri::async_runtime::spawn(pw_runtime::follow_files(
+                pw_runtime::subscribe_files(host.bus()),
+                Arc::clone(&runtime),
+            ));
             // 언어 판별(`lang.detect`)이 설정 매핑 · 프로젝트 레지스트리를 쓴다.
             lang.attach(pw_lang::methods::HostParts {
                 paths: config.paths.clone(),

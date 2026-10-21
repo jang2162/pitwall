@@ -86,7 +86,7 @@ mod tests {
     use pw_core::config::AppPaths;
     use pw_core::registry::NewProject;
     use pw_runtime::methods::RuntimeSource;
-    use pw_runtime::{Layer, LoginShell, RuntimeEnv, RuntimeHost, RuntimeProvider};
+    use pw_runtime::{Layer, LoginShell, ProviderError, RuntimeEnv, RuntimeHost, RuntimeProvider};
 
     use super::*;
 
@@ -103,7 +103,7 @@ mod tests {
         fn applies_to(&self, _dir: &Path, _base: &RuntimeEnv) -> bool {
             true
         }
-        fn resolve(&self, _dir: &Path, base: &RuntimeEnv) -> Result<Layer, String> {
+        fn resolve(&self, _dir: &Path, base: &RuntimeEnv) -> Result<Layer, ProviderError> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Ok(Layer {
                 env: base.clone(),
@@ -158,6 +158,7 @@ mod tests {
             runtime.attach(RuntimeHost {
                 projects: registry.clone(),
                 bus: bus.clone(),
+                paths: AppPaths::under(&tmp.path().join("app")),
             });
             let follower = tokio::spawn(follow(
                 subscribe(&bus),
@@ -319,6 +320,7 @@ mod tests {
         runtime.attach(RuntimeHost {
             projects: registry.clone(),
             bus: bus.clone(),
+            paths: AppPaths::under(&tmp.path().join("app")),
         });
         let dir = tmp.path().join("p");
         std::fs::create_dir_all(&dir).unwrap();

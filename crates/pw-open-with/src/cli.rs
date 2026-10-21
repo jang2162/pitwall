@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use pw_rpc::{Router, RpcError, rpc_method};
 use pw_runtime::Runtime;
-use pw_runtime::methods::{RuntimeSource, RuntimeStatus};
+use pw_runtime::methods::{RuntimeProblem, RuntimeSource, RuntimeStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::launch::find_program;
@@ -152,6 +152,7 @@ impl CliCheck {
             path_source: layer.source,
             path_status: failure.map_or(RuntimeStatus::Ok, |reason| RuntimeStatus::Fallback {
                 reason,
+                problem: RuntimeProblem::LoginShell,
             }),
         })
     }
@@ -405,7 +406,7 @@ mod tests {
         let status = f.check(&[]).status().unwrap();
         assert_eq!(status.path_source, RuntimeSource::Process);
         assert!(
-            matches!(&status.path_status, RuntimeStatus::Fallback { reason } if !reason.is_empty()),
+            matches!(&status.path_status, RuntimeStatus::Fallback { reason, problem: RuntimeProblem::LoginShell } if !reason.is_empty()),
             "{:?}",
             status.path_status
         );

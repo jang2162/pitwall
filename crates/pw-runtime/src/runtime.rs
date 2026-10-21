@@ -4,9 +4,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use pw_core::bus::{Received, Subscription};
+use pw_core::config::AppPaths;
 use pw_core::registry::path::{normalize, worktree_link};
 use pw_core::registry::{Project, Registry as Projects, RegistryError};
-use pw_core::{EventBus, Scope};
+use pw_core::{EventBus, Filter, Scope};
 use pw_rpc::{RpcError, code};
 use serde::Serialize;
 
@@ -14,8 +16,9 @@ use crate::cache::Cache;
 use crate::env::RuntimeEnv;
 use crate::login_shell::LoginShell;
 use crate::methods::{
-    RuntimeGetParams, RuntimeInfo, RuntimeSource, RuntimeStatus, RuntimeToolInfo,
+    RuntimeGetParams, RuntimeInfo, RuntimeProblem, RuntimeSource, RuntimeStatus, RuntimeToolInfo,
 };
+use crate::mise;
 use crate::provider::{Layer, RuntimeProvider};
 
 /// 런타임 환경이 바뀌었다. 새 터미널 · 새로 띄우는 프로세스부터 새 환경을 쓴다.
@@ -35,9 +38,53 @@ pub enum ChangeReason {
     Reload,
     /// 프로젝트의 신뢰가 바뀌었다([`Runtime::trust_changed`]). 프로젝트 코드를 돌리는 제공자가 붙거나 빠진다.
     Trust,
-    /// 시간을 넘겼던 로그인 셸을 백그라운드로 다시 돌려 환경을 얻었다(`login_shell` 머리 주석). 물러난 환경을 받았던 프로젝트에 나간다.
+    /// 시간을 넘겼던 로그인 셸을 백그라운드로 다시 돌려 환경을 얻었다(`login_shell` 머리 주석). 물러난 환경을 받았던 프로젝트와
+    /// Host 범위에 한 번씩 나간다 — Host 범위는 프로젝트 없는 창(설정 창의 `cli.status`)이 듣는다.
     LoginShell,
+    /// 프로젝트의 버전 파일(`mise.toml` · `.tool-versions` 등)이나 Pitwall 프로젝트 설정(`.pitwall/*.toml`)이 바뀌었다
+    /// ([`Runtime::files_changed`], 파일 감시 `fs.changed` 에서).
+    Files,
 }
+
+/// 프로젝트 설정 `[runtime] provider`(결정 M1-D15). 그 밖의 값 · 읽기 실패는 `Auto` 다(경고를 남긴다).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderSetting {
+    /// 디렉터리에 맞는 제공자(mise 등) 하나, 없으면 로그인 셸.
+    Auto,
+    /// mise 로 고정 — 설정 파일을 찾지 못해도 mise 를 부른다(신뢰 게이트는 그대로다).
+    Mise,
+    /// 로그인 셸만.
+    Shell,
+    /// 런타임 환경을 만들지 않고 앱 프로세스의 환경을 쓴다(로그인 셸도 돌리지 않는다).
+    None,
+}
+
+impl ProviderSetting {
+    /// 프로젝트 설정의 키(`.pitwall/project.toml` 의 `[runtime] provider`).
+    pub const KEY: &'static str = "runtime.provider";
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "mise" => Some(Self::Mise),
+            "shell" => Some(Self::Shell),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+/// 파일 감시 이벤트(`pw_fs::watch::FsChanged`, 토픽 [`FS_CHANGED`])에서 런타임이 보는 것.
+#[derive(Debug, serde::Deserialize)]
+struct FsChanged {
+    #[serde(default)]
+    paths: Vec<String>,
+    #[serde(default)]
+    rescan: bool,
+}
+
+/// 파일 감시(M1-06)가 바뀐 경로를 내는 프로젝트 범위 토픽(`pw_fs::watch::TOPIC_CHANGED` — 이 크레이트는 pw-fs 에 기대지 않는다).
+pub const FS_CHANGED: &str = "fs.changed";
 
 /// 한 디렉터리의 환경과 그 설명.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +100,8 @@ pub struct Resolved {
 pub struct RuntimeHost {
     pub projects: Projects,
     pub bus: EventBus,
+    /// 프로젝트 설정(`[runtime] provider`)을 읽는 자리. 개인 전용 설정이 `$CONFIG/projects/<slug>/` 에 있다.
+    pub paths: AppPaths,
 }
 
 type TrustFn = dyn Fn(&str) -> bool + Send + Sync;
@@ -108,6 +157,8 @@ impl Runtime {
                 std::mem::take(&mut *fell_back.lock().unwrap_or_else(PoisonError::into_inner));
             tracing::info!(target: "pw_runtime", ?projects, "login shell environment recovered");
             announce(&bus, projects, ChangeReason::LoginShell);
+            // 프로젝트 없이 로그인 셸 환경을 보는 창(설정 창의 「Orca 에서 Pitwall 열기」 검사)도 다시 읽게 한다.
+            publish(&bus, Scope::Host, ChangeReason::LoginShell);
         });
     }
 
@@ -118,7 +169,7 @@ impl Runtime {
         let trusted = (self.trusted)(project);
         let resolved = self.cache.get_or_compute(
             &(project.to_owned(), dir.to_path_buf(), trusted),
-            || self.resolve(dir, trusted),
+            || self.resolve(dir, trusted, self.setting(project, dir)),
             |r| r.info.status == RuntimeStatus::Ok,
         );
         if !resolved.login_shell {
@@ -177,9 +228,67 @@ impl Runtime {
         self.announce(projects.to_vec(), ChangeReason::Trust);
     }
 
+    /// 파일 감시가 `project` 에서 `paths` 가 바뀌었다고 알렸다. 런타임 환경을 바꿀 수 있는 파일([`mise::is_runtime_file`] 이나
+    /// `.pitwall/` 의 설정)이 있거나 놓친 변경이 있으면(`rescan`) 그 프로젝트의 디렉터리 캐시를 잊고 `runtime.changed`(`files`)를
+    /// 낸다 — 새 터미널부터 새 버전이다. 로그인 셸 환경과 다른 프로젝트의 캐시는 그대로다. 냈으면 `true`.
+    pub fn files_changed(&self, project: &str, paths: &[PathBuf], rescan: bool) -> bool {
+        let relevant = paths.iter().find(|p| affects_runtime(p));
+        if !rescan && relevant.is_none() {
+            return false;
+        }
+        self.cache.forget(|(p, ..)| p == project);
+        tracing::info!(target: "pw_runtime", project, rescan, path = ?relevant, "runtime files changed");
+        self.announce(vec![project.to_owned()], ChangeReason::Files);
+        true
+    }
+
+    /// 파일 감시 이벤트를 놓쳤다 — 어느 프로젝트의 버전 파일이 바뀌었는지 모르므로 모든 디렉터리 캐시를 잊고 캐시가 있던
+    /// 프로젝트마다 `runtime.changed`(`files`)를 낸다. 로그인 셸 환경은 그대로다.
+    pub fn files_missed(&self) {
+        let mut projects: Vec<String> = self.cache.clear().into_iter().map(|(p, ..)| p).collect();
+        projects.sort();
+        projects.dedup();
+        tracing::info!(target: "pw_runtime", ?projects, "missed file events; forgetting runtime caches");
+        self.announce(projects, ChangeReason::Files);
+    }
+
     fn announce(&self, projects: Vec<String>, reason: ChangeReason) {
         if let Some(host) = self.host.get() {
             announce(&host.bus, projects, reason);
+        }
+    }
+
+    /// `project` 의 `dir` 에 적용할 프로젝트 설정 `[runtime] provider`. 설정은 `dir` 을 담은 루트(워크트리면 그 워크트리 안의
+    /// 대응 루트)의 것이다. 디스크에 쓰지 않고 읽는다 — 열기만 했다고 커밋된 `.pitwall/project.toml` 이 마이그레이션되면 안 된다.
+    fn setting(&self, project_id: &str, dir: &Path) -> ProviderSetting {
+        let Some(host) = self.host.get() else {
+            return ProviderSetting::Auto;
+        };
+        let Ok(project) = host.projects.get(project_id) else {
+            return ProviderSetting::Auto;
+        };
+        let Some(root) = config_root(&project, dir) else {
+            return ProviderSetting::Auto;
+        };
+        let snapshot = match project
+            .config_source(&host.paths, &root)
+            .and_then(|source| source.without_writes().load())
+        {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                tracing::warn!(target: "pw_runtime", %e, project = project_id, "cannot read the project config; choosing the runtime provider automatically");
+                return ProviderSetting::Auto;
+            }
+        };
+        let Some(value) = snapshot.get("project", ProviderSetting::KEY) else {
+            return ProviderSetting::Auto;
+        };
+        match value.as_str().and_then(ProviderSetting::parse) {
+            Some(setting) => setting,
+            None => {
+                tracing::warn!(target: "pw_runtime", %value, project = project_id, "unknown `[runtime] provider` (auto, mise, shell or none); choosing automatically");
+                ProviderSetting::Auto
+            }
         }
     }
 
@@ -198,31 +307,57 @@ impl Runtime {
         }
     }
 
-    fn resolve(&self, dir: &Path, trusted: bool) -> Resolved {
+    fn resolve(&self, dir: &Path, trusted: bool, setting: ProviderSetting) -> Resolved {
+        if setting == ProviderSetting::None {
+            return Resolved {
+                env: RuntimeEnv::process(),
+                info: RuntimeInfo {
+                    provider: NONE.to_owned(),
+                    source: RuntimeSource::Process,
+                    status: RuntimeStatus::Ok,
+                    tools: Vec::new(),
+                },
+                // 로그인 셸을 고르지 않았다 — 셸이 살아나도 알릴 것이 없다.
+                login_shell: true,
+            };
+        }
         let (base, failure) = self.login_shell_env();
+        let login_shell = failure.is_none();
         let mut failures: Vec<String> = failure.into_iter().collect();
-        let login_shell = failures.is_empty();
-        let picked = self
-            .providers
-            .iter()
-            .find(|p| (trusted || !p.runs_project_code()) && p.applies_to(dir, &base.env));
+        let mut problem = (!login_shell).then_some(RuntimeProblem::LoginShell);
+        // 프로젝트 코드를 돌리는 제공자는 신뢰한 프로젝트에서만 고른다 — 감지(`applies_to`)도 그 뒤다.
+        let allowed = |p: &&Arc<dyn RuntimeProvider>| trusted || !p.runs_project_code();
+        let picked = match setting {
+            ProviderSetting::Shell | ProviderSetting::None => None,
+            ProviderSetting::Mise => self
+                .providers
+                .iter()
+                .filter(allowed)
+                .find(|p| p.id() == mise::Mise::ID),
+            ProviderSetting::Auto => self
+                .providers
+                .iter()
+                .filter(allowed)
+                .find(|p| p.applies_to(dir, &base.env)),
+        };
         let (provider, layer) = match picked {
             None => (LoginShell::ID, base),
             Some(p) => match p.resolve(dir, &base.env) {
                 Ok(layer) => (p.id(), layer),
-                Err(reason) => {
-                    tracing::warn!(target: "pw_runtime", provider = p.id(), %reason, dir = %dir.display(), "runtime provider failed");
-                    failures.push(reason);
+                Err(e) => {
+                    tracing::warn!(target: "pw_runtime", provider = p.id(), problem = ?e.problem, reason = %e.reason, dir = %dir.display(), "runtime provider failed");
+                    failures.push(e.reason);
+                    problem = Some(e.problem);
                     (p.id(), base)
                 }
             },
         };
-        let status = if failures.is_empty() {
-            RuntimeStatus::Ok
-        } else {
-            RuntimeStatus::Fallback {
+        let status = match problem {
+            None => RuntimeStatus::Ok,
+            Some(problem) => RuntimeStatus::Fallback {
                 reason: failures.join("; "),
-            }
+                problem,
+            },
         };
         let tools = layer
             .env
@@ -279,13 +414,79 @@ impl Runtime {
     }
 }
 
+/// [`ProviderSetting::None`] 일 때의 `provider`.
+pub const NONE: &str = "none";
+
 fn announce(bus: &EventBus, projects: impl IntoIterator<Item = String>, reason: ChangeReason) {
-    let changed = RuntimeChanged { reason };
     for p in projects {
-        if let Err(e) = bus.publish(Scope::Project(p), TOPIC_CHANGED, &changed) {
-            tracing::warn!(target: "pw_runtime", %e, "cannot publish runtime.changed");
+        publish(bus, Scope::Project(p), reason);
+    }
+}
+
+fn publish(bus: &EventBus, scope: Scope, reason: ChangeReason) {
+    if let Err(e) = bus.publish(scope, TOPIC_CHANGED, &RuntimeChanged { reason }) {
+        tracing::warn!(target: "pw_runtime", %e, "cannot publish runtime.changed");
+    }
+}
+
+/// 바뀌면 런타임 환경이 달라질 수 있는 파일: 제공자의 버전 파일과 Pitwall 저장소 설정(`[runtime] provider`).
+fn affects_runtime(path: &Path) -> bool {
+    let pitwall_config = path.extension().is_some_and(|e| e == "toml")
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|d| d == pw_core::config::PROJECT_DIR);
+    pitwall_config || mise::is_runtime_file(path)
+}
+
+/// 파일 감시 이벤트 구독(모든 프로젝트의 `fs.changed`). Host 를 만든 직후에 연다.
+pub fn subscribe_files(bus: &EventBus) -> Subscription {
+    bus.subscribe(Filter::all().topics([FS_CHANGED]))
+}
+
+/// 구독이 닫힐 때까지 파일 감시 이벤트마다 [`Runtime::files_changed`] 를 부른다. 이벤트를 놓치면 [`Runtime::files_missed`].
+pub async fn follow_files(mut events: Subscription, runtime: Arc<Runtime>) {
+    while let Some(received) = events.recv().await {
+        match received {
+            Received::Event(event) => {
+                let Scope::Project(project) = &event.scope else {
+                    continue;
+                };
+                let changed: FsChanged = match serde_json::from_value(event.payload.clone()) {
+                    Ok(changed) => changed,
+                    Err(e) => {
+                        tracing::warn!(target: "pw_runtime", %e, "cannot read fs.changed");
+                        continue;
+                    }
+                };
+                let paths: Vec<PathBuf> = changed.paths.iter().map(PathBuf::from).collect();
+                runtime.files_changed(project, &paths, changed.rescan);
+            }
+            Received::Lagged(n) => {
+                tracing::warn!(target: "pw_runtime", dropped = n, "missed file watch events");
+                runtime.files_missed();
+            }
         }
     }
+}
+
+/// `dir` 을 담은 프로젝트 루트 — 연결 워크트리 안이면 그 워크트리 안의 대응 루트. 설정(`.pitwall/`)을 읽을 자리다.
+fn config_root(project: &Project, dir: &Path) -> Option<PathBuf> {
+    let roots: Vec<PathBuf> = project
+        .roots
+        .iter()
+        .filter_map(|r| normalize(Path::new(r)).ok())
+        .collect();
+    if let Some(root) = roots.iter().find(|r| dir.starts_with(r)) {
+        return Some(root.clone());
+    }
+    let link = worktree_link(dir)?;
+    let main = link.map_to_main(dir)?;
+    let root = roots.iter().find(|r| main.starts_with(r))?;
+    Some(
+        link.worktree_top
+            .join(root.strip_prefix(&link.main_top).ok()?),
+    )
 }
 
 /// `dir` 을 정규화한 것. 프로젝트의 루트 안이거나, 연결 워크트리 안이면서 메인 체크아웃 쪽 대응 경로가 루트 안이어야 한다.

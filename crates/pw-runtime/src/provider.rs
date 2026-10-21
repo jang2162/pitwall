@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::env::RuntimeEnv;
-use crate::methods::RuntimeSource;
+use crate::methods::{RuntimeProblem, RuntimeSource};
 
 /// 제공자가 만든 환경과 그 출처.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +25,30 @@ pub trait RuntimeProvider: Send + Sync {
     /// `dir` 에 이 제공자를 쓸 것인가(감지). 실행 파일은 `base` 의 PATH 로 찾는다.
     fn applies_to(&self, dir: &Path, base: &RuntimeEnv) -> bool;
 
-    /// `base` 위에 `dir` 의 환경을 만든다. 실패면 그 이유 — 부른 쪽이 `base` 로 물러나고 결과를 캐시하지 않는다.
-    fn resolve(&self, dir: &Path, base: &RuntimeEnv) -> Result<Layer, String>;
+    /// `base` 위에 `dir` 의 환경을 만든다. 실패면 그 갈래와 이유 — 부른 쪽이 `base` 로 물러나고 결과를 캐시하지 않는다.
+    fn resolve(&self, dir: &Path, base: &RuntimeEnv) -> Result<Layer, ProviderError>;
+}
+
+/// 제공자의 실패.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderError {
+    pub problem: RuntimeProblem,
+    /// 사람이 읽는 이유(도구의 오류 원문을 담는다).
+    pub reason: String,
+}
+
+impl ProviderError {
+    pub fn new(problem: RuntimeProblem, reason: impl Into<String>) -> Self {
+        Self {
+            problem,
+            reason: reason.into(),
+        }
+    }
+}
+
+/// 갈래를 모르는 실패는 [`RuntimeProblem::Failed`] 다.
+impl From<String> for ProviderError {
+    fn from(reason: String) -> Self {
+        Self::new(RuntimeProblem::Failed, reason)
+    }
 }

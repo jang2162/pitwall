@@ -172,6 +172,31 @@
               }
             ]
           },
+          "RuntimeProblem": {
+            "description": "물러난 까닭의 갈래(상태바 경고, 06-roadmap.md 「리스크」 표의 외부 런타임 도구 행).",
+            "oneOf": [
+              {
+                "const": "loginShell",
+                "description": "로그인 셸을 읽지 못해 앱 프로세스의 환경을 쓴다.",
+                "type": "string"
+              },
+              {
+                "const": "notInstalled",
+                "description": "프로젝트에 제공자의 설정 파일(`mise.toml` 등)이 있는데 그 도구가 로그인 셸 PATH 에 없다.",
+                "type": "string"
+              },
+              {
+                "const": "notTrusted",
+                "description": "도구가 그 설정 파일을 신뢰하지 않는다(`mise trust` 가 필요하다). Pitwall 의 프로젝트 신뢰와 별개다.",
+                "type": "string"
+              },
+              {
+                "const": "failed",
+                "description": "도구가 실패했다(끝 코드 · 시간 초과 · 알 수 없는 출력).",
+                "type": "string"
+              }
+            ]
+          },
           "RuntimeSource": {
             "description": "환경을 실제로 어디서 얻었는가.",
             "oneOf": [
@@ -248,13 +273,19 @@
                     "const": "fallback",
                     "type": "string"
                   },
+                  "problem": {
+                    "$ref": "#/$defs/RuntimeProblem",
+                    "description": "무엇이 실패했는가. 제공자와 로그인 셸이 함께 실패했으면 제공자의 것이다(상태바 경고가 고르는 글)."
+                  },
                   "reason": {
+                    "description": "실패한 층마다의 이유(사람이 읽는 글, 원문). 여럿이면 `; ` 로 잇는다.",
                     "type": "string"
                   }
                 },
                 "required": [
                   "kind",
-                  "reason"
+                  "reason",
+                  "problem"
                 ],
                 "type": "object"
               }
@@ -4158,6 +4189,31 @@
       },
       "result": {
         "$defs": {
+          "RuntimeProblem": {
+            "description": "물러난 까닭의 갈래(상태바 경고, 06-roadmap.md 「리스크」 표의 외부 런타임 도구 행).",
+            "oneOf": [
+              {
+                "const": "loginShell",
+                "description": "로그인 셸을 읽지 못해 앱 프로세스의 환경을 쓴다.",
+                "type": "string"
+              },
+              {
+                "const": "notInstalled",
+                "description": "프로젝트에 제공자의 설정 파일(`mise.toml` 등)이 있는데 그 도구가 로그인 셸 PATH 에 없다.",
+                "type": "string"
+              },
+              {
+                "const": "notTrusted",
+                "description": "도구가 그 설정 파일을 신뢰하지 않는다(`mise trust` 가 필요하다). Pitwall 의 프로젝트 신뢰와 별개다.",
+                "type": "string"
+              },
+              {
+                "const": "failed",
+                "description": "도구가 실패했다(끝 코드 · 시간 초과 · 알 수 없는 출력).",
+                "type": "string"
+              }
+            ]
+          },
           "RuntimeSource": {
             "description": "환경을 실제로 어디서 얻었는가.",
             "oneOf": [
@@ -4234,13 +4290,19 @@
                     "const": "fallback",
                     "type": "string"
                   },
+                  "problem": {
+                    "$ref": "#/$defs/RuntimeProblem",
+                    "description": "무엇이 실패했는가. 제공자와 로그인 셸이 함께 실패했으면 제공자의 것이다(상태바 경고가 고르는 글)."
+                  },
                   "reason": {
+                    "description": "실패한 층마다의 이유(사람이 읽는 글, 원문). 여럿이면 `; ` 로 잇는다.",
                     "type": "string"
                   }
                 },
                 "required": [
                   "kind",
-                  "reason"
+                  "reason",
+                  "problem"
                 ],
                 "type": "object"
               }
@@ -4273,7 +4335,7 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "provider": {
-            "description": "고른 제공자(`\"shell\"`. mise 제공자가 들어오면 `\"mise\"`).",
+            "description": "고른 제공자: `\"mise\"` · `\"shell\"`(로그인 셸) · `\"none\"`(프로젝트 설정 `[runtime] provider = \"none\"` — 앱 프로세스의 환경).",
             "type": "string"
           },
           "source": {

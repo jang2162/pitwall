@@ -38,8 +38,27 @@ pub enum RuntimeStatus {
     /// 제공자가 실패해 그 아래 환경(로그인 셸, 또는 앱 프로세스)으로 물러났다. 남기지 않으므로 다음 요청이 다시 시도한다 —
     /// 로그인 셸의 시간 초과만 냉각 동안(30초) 다시 시도하지 않는다.
     Fallback {
+        /// 실패한 층마다의 이유(사람이 읽는 글, 원문). 여럿이면 `; ` 로 잇는다.
         reason: String,
+        /// 무엇이 실패했는가. 제공자와 로그인 셸이 함께 실패했으면 제공자의 것이다(상태바 경고가 고르는 글).
+        problem: RuntimeProblem,
     },
+}
+
+/// 물러난 까닭의 갈래(상태바 경고, 06-roadmap.md 「리스크」 표의 외부 런타임 도구 행).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeProblem {
+    /// 로그인 셸을 읽지 못해 앱 프로세스의 환경을 쓴다.
+    LoginShell,
+    /// 프로젝트에 제공자의 설정 파일(`mise.toml` 등)이 있는데 그 도구가 로그인 셸 PATH 에 없다.
+    NotInstalled,
+    /// 도구가 그 설정 파일을 신뢰하지 않는다(`mise trust` 가 필요하다). Pitwall 의 프로젝트 신뢰와 별개다.
+    NotTrusted,
+    /// 도구가 실패했다(끝 코드 · 시간 초과 · 알 수 없는 출력).
+    Failed,
 }
 
 #[derive(
@@ -58,7 +77,7 @@ pub struct RuntimeToolInfo {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeInfo {
-    /// 고른 제공자(`"shell"`. mise 제공자가 들어오면 `"mise"`).
+    /// 고른 제공자: `"mise"` · `"shell"`(로그인 셸) · `"none"`(프로젝트 설정 `[runtime] provider = "none"` — 앱 프로세스의 환경).
     pub provider: String,
     pub source: RuntimeSource,
     pub status: RuntimeStatus,

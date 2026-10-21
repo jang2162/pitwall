@@ -11,8 +11,11 @@ use pw_core::config::AppPaths;
 use pw_core::registry::{NewProject, Registry as Projects};
 
 use crate::login_shell::tests::fake_shell;
-use crate::methods::{RuntimeGetParams, RuntimeSource, RuntimeStatus};
-use crate::{Layer, LoginShell, Runtime, RuntimeEnv, RuntimeHost, RuntimeProvider, TOPIC_CHANGED};
+use crate::methods::{RuntimeGetParams, RuntimeProblem, RuntimeSource, RuntimeStatus};
+use crate::{
+    Layer, LoginShell, ProviderError, Runtime, RuntimeEnv, RuntimeHost, RuntimeProvider,
+    TOPIC_CHANGED,
+};
 
 const WORKING: &str = "JAVA_HOME=/opt/jdk-21; export JAVA_HOME\nPATH=/shell/bin:/usr/bin:/bin; export PATH\neval \"$4\"";
 const HANGING: &str = "sleep 30";
@@ -59,10 +62,7 @@ fn a_timeout_falls_back_and_later_retries_in_the_background_without_waiting() {
     let cooldown = Duration::from_millis(1500);
     let timeout = Duration::from_millis(300);
     let runtime = f.runtime_cooling(timeout, cooldown);
-    runtime.attach(RuntimeHost {
-        projects: projects.clone(),
-        bus: bus.clone(),
-    });
+    runtime.attach(host(&projects, &bus, f.tmp.path()));
     let mut subs: Vec<_> = [&p1, &p2]
         .map(|p| {
             bus.subscribe(
@@ -73,6 +73,7 @@ fn a_timeout_falls_back_and_later_retries_in_the_background_without_waiting() {
         })
         .into_iter()
         .collect();
+    let mut host_sub = bus.subscribe(Filter::all().scope(Scope::Host).topics([TOPIC_CHANGED]));
     // 냉각은 첫 호출 안에서 시작한다 — 끝나는 때는 `before + cooldown` 과 `after + cooldown` 사이다.
     let before = Instant::now();
     let first = runtime.env(&p1, &f.dir());
@@ -86,7 +87,7 @@ fn a_timeout_falls_back_and_later_retries_in_the_background_without_waiting() {
     assert_eq!(first.info.source, RuntimeSource::Process);
     assert!(!first.login_shell);
     assert!(
-        matches!(&first.info.status, RuntimeStatus::Fallback { reason } if reason.contains("did not print its environment")),
+        matches!(&first.info.status, RuntimeStatus::Fallback { reason, problem: RuntimeProblem::LoginShell } if reason.contains("did not print its environment")),
         "{:?}",
         first.info.status
     );
@@ -178,6 +179,11 @@ fn a_timeout_falls_back_and_later_retries_in_the_background_without_waiting() {
         changed_events(&mut subs[1]),
         Vec::<serde_json::Value>::new()
     );
+    // 프로젝트 없는 창(설정 창의 `cli.status`)을 위해 Host 범위에도 한 번 나간다.
+    assert_eq!(
+        changed_events(&mut host_sub),
+        vec![serde_json::json!({"reason": "loginShell"})]
+    );
 }
 
 /// 「환경 다시 읽기」 는 시간 초과의 냉각을 풀어, 셸을 고친 뒤 곧바로 로그인 셸 환경을 준다.
@@ -210,7 +216,7 @@ fn a_shell_error_is_retried_without_a_cooldown() {
     let runtime = f.runtime_cooling(Duration::from_secs(5), Duration::from_secs(60));
     let first = runtime.env("p1", &f.dir());
     assert!(
-        matches!(&first.info.status, RuntimeStatus::Fallback { reason } if reason.contains("printed no PATH")),
+        matches!(&first.info.status, RuntimeStatus::Fallback { reason, problem: RuntimeProblem::LoginShell } if reason.contains("printed no PATH")),
         "{:?}",
         first.info.status
     );
@@ -245,6 +251,15 @@ fn registry(tmp: &Path, bus: &EventBus) -> Projects {
     Projects::new(AppPaths::under(&tmp.join("app")), None, bus.clone())
 }
 
+/// [`registry`] 와 같은 `$CONFIG` 자리를 보는 Host 부품.
+fn host(projects: &Projects, bus: &EventBus, tmp: &Path) -> RuntimeHost {
+    RuntimeHost {
+        projects: projects.clone(),
+        bus: bus.clone(),
+        paths: AppPaths::under(&tmp.join("app")),
+    }
+}
+
 fn project(projects: &Projects, root: &Path) -> String {
     std::fs::create_dir_all(root).unwrap();
     projects
@@ -277,10 +292,7 @@ fn reload_publishes_runtime_changed_once_per_project() {
     let p2 = project(&projects, &f.tmp.path().join("two"));
     let p3 = project(&projects, &f.tmp.path().join("three"));
     let runtime = f.runtime(Duration::from_secs(5));
-    runtime.attach(RuntimeHost {
-        projects: projects.clone(),
-        bus: bus.clone(),
-    });
+    runtime.attach(host(&projects, &bus, f.tmp.path()));
     let mut subs: Vec<_> = [&p1, &p2, &p3]
         .map(|p| {
             bus.subscribe(
@@ -324,7 +336,7 @@ fn get_defaults_to_the_project_root_and_rejects_relative_dirs() {
     let root = f.tmp.path().join("one");
     let id = project(&projects, &root);
     let runtime = f.runtime(Duration::from_secs(5));
-    runtime.attach(RuntimeHost { projects, bus });
+    runtime.attach(host(&projects, &bus, f.tmp.path()));
     let info = runtime
         .get(&RuntimeGetParams {
             project_id: id.clone(),
@@ -379,7 +391,7 @@ fn get_accepts_dirs_inside_the_project_or_its_worktrees_only() {
     std::fs::create_dir_all(f.tmp.path().join("repo/app-other")).unwrap();
     let id = project(&projects, &root);
     let runtime = f.runtime(Duration::from_secs(5));
-    runtime.attach(RuntimeHost { projects, bus });
+    runtime.attach(host(&projects, &bus, f.tmp.path()));
     let get = |dir: PathBuf| {
         runtime.get(&RuntimeGetParams {
             project_id: id.clone(),
@@ -427,10 +439,10 @@ impl RuntimeProvider for Overlay {
         // 감지는 바탕(로그인 셸) 환경을 본다.
         dir.ends_with("project") && base.get("JAVA_HOME").is_some()
     }
-    fn resolve(&self, _dir: &Path, base: &RuntimeEnv) -> Result<Layer, String> {
+    fn resolve(&self, _dir: &Path, base: &RuntimeEnv) -> Result<Layer, ProviderError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.fail {
-            return Err("overlay failed".to_owned());
+            return Err("overlay failed".to_owned().into());
         }
         let mut env = base.clone();
         env.vars.insert("NODE_VERSION".into(), "22".into());
@@ -491,7 +503,8 @@ fn a_failing_provider_falls_back_to_the_login_shell_without_caching() {
     assert_eq!(
         first.info.status,
         RuntimeStatus::Fallback {
-            reason: "overlay failed".to_owned()
+            reason: "overlay failed".to_owned(),
+            problem: RuntimeProblem::Failed,
         }
     );
     assert!(matches!(
@@ -526,7 +539,7 @@ fn a_forged_worktree_of_a_trusted_project_does_not_run_its_provider() {
         .runtime(Duration::from_secs(5))
         .with_provider(overlay.clone())
         .with_trust(|_| true);
-    runtime.attach(RuntimeHost { projects, bus });
+    runtime.attach(host(&projects, &bus, f.tmp.path()));
     for common in [
         trusted.join(".git").display().to_string(),
         "../../../trusted/.git".to_owned(),
@@ -541,4 +554,340 @@ fn a_forged_worktree_of_a_trusted_project_does_not_run_its_provider() {
         assert_eq!(err.code, pw_rpc::code::INVALID_PARAMS, "{common}");
     }
     assert_eq!(overlay.calls.load(Ordering::SeqCst), 0);
+}
+
+/// mise 제공자를 붙인 런타임. 가짜 로그인 셸은 `HOME` 과 PATH(가짜 `mise` 가 있는 `bin` 앞)를 정하고, 가짜 `mise` 는 부를 때마다
+/// `calls.log` 에 `cwd` 를 한 줄 적고 PATH 앞에 `/mise/node/bin` 을 붙인 환경을 JSON 으로 찍는다.
+struct MiseFixture {
+    f: Fixture,
+    bus: EventBus,
+    projects: Projects,
+    trusted: Arc<std::sync::atomic::AtomicBool>,
+    runtime: Arc<Runtime>,
+}
+
+impl MiseFixture {
+    fn new(with_mise: bool) -> Self {
+        let f = Fixture::new("");
+        let tmp = f.tmp.path().canonicalize().unwrap();
+        let bin = tmp.join("bin");
+        let home = tmp.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        f.rewrite(&format!(
+            "HOME='{}'; export HOME\nPATH='{}:/usr/bin:/bin'; export PATH\neval \"$4\"",
+            home.display(),
+            bin.display()
+        ));
+        if with_mise {
+            crate::mise::tests::write_mise(
+                &bin,
+                &format!(
+                    "printf '%s\\n' \"$PWD\" >> '{}'\nprintf '{{\"PATH\": \"/mise/node/bin:%s\", \"FROM_MISE\": \"yes\"}}' \"$PATH\"",
+                    tmp.join("calls.log").display()
+                ),
+            );
+        } else {
+            std::fs::create_dir_all(&bin).unwrap();
+        }
+        let bus = EventBus::new(DEFAULT_CAPACITY);
+        let projects = registry(f.tmp.path(), &bus);
+        let trusted = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let gate = Arc::clone(&trusted);
+        let runtime = Arc::new(
+            f.runtime(Duration::from_secs(5))
+                .with_provider(Arc::new(crate::Mise::default()))
+                .with_trust(move |_| gate.load(Ordering::SeqCst)),
+        );
+        runtime.attach(host(&projects, &bus, f.tmp.path()));
+        Self {
+            f,
+            bus,
+            projects,
+            trusted,
+            runtime,
+        }
+    }
+
+    /// `home/<name>` 에 `files` 를 둔 프로젝트. (id, 실제 루트).
+    fn project(&self, name: &str, files: &[(&str, &str)]) -> (String, PathBuf) {
+        let root = self
+            .f
+            .tmp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("home")
+            .join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        for (file, body) in files {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        (project(&self.projects, &root), root)
+    }
+
+    fn calls(&self) -> usize {
+        std::fs::read_to_string(self.f.tmp.path().join("calls.log"))
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    }
+
+    fn changes(&self, project: &str) -> pw_core::Subscription {
+        self.bus.subscribe(
+            Filter::all()
+                .scope(Scope::Project(project.to_owned()))
+                .topics([TOPIC_CHANGED]),
+        )
+    }
+}
+
+/// 미신뢰 프로젝트에서는 mise 를 실행하지 않는다(실행 기록 시험) — `mise.toml` 이 있어도 감지조차 하지 않고 로그인 셸 환경이다.
+/// 신뢰하면 그 프로젝트의 디렉터리에서 mise 가 돌고 그 환경이 로그인 셸 환경 위에 덮인다.
+#[test]
+fn an_untrusted_project_never_runs_mise() {
+    let m = MiseFixture::new(true);
+    m.trusted.store(false, Ordering::SeqCst);
+    let (id, root) = m.project("app", &[("mise.toml", "[tools]\nnode = \"22\"\n")]);
+    let untrusted = m.runtime.env(&id, &root);
+    assert_eq!(untrusted.info.provider, "shell");
+    assert_eq!(untrusted.info.status, RuntimeStatus::Ok);
+    assert_eq!(untrusted.env.get("FROM_MISE"), None);
+    let info = m
+        .runtime
+        .get(&RuntimeGetParams {
+            project_id: id.clone(),
+            dir: None,
+        })
+        .unwrap();
+    assert_eq!(info.provider, "shell");
+    assert_eq!(m.calls(), 0, "mise ran for an untrusted project");
+
+    m.trusted.store(true, Ordering::SeqCst);
+    m.runtime.trust_changed(std::slice::from_ref(&id));
+    let trusted = m.runtime.env(&id, &root);
+    assert_eq!(trusted.info.provider, "mise");
+    assert_eq!(trusted.info.status, RuntimeStatus::Ok);
+    assert_eq!(
+        trusted.info.source,
+        RuntimeSource::ConfigFiles {
+            files: vec![root.join("mise.toml").display().to_string()]
+        }
+    );
+    assert_eq!(trusted.env.get("FROM_MISE"), Some(OsStr::new("yes")));
+    let path = trusted.env.path.to_str().unwrap();
+    assert!(path.starts_with("/mise/node/bin:"), "{path}");
+    assert_eq!(m.calls(), 1);
+    // 남긴다 — 같은 디렉터리는 다시 돌리지 않는다.
+    m.runtime.env(&id, &root);
+    assert_eq!(m.calls(), 1);
+}
+
+/// 버전 파일 변경: 그 프로젝트의 캐시만 잊고 `runtime.changed`(`files`)를 한 번 낸다. 다른 파일은 무시한다.
+#[test]
+fn a_version_file_change_forgets_only_that_project() {
+    let m = MiseFixture::new(true);
+    let (a, a_root) = m.project("a", &[("mise.toml", "")]);
+    let (b, b_root) = m.project("b", &[("mise.toml", "")]);
+    let mut a_events = m.changes(&a);
+    let mut b_events = m.changes(&b);
+    m.runtime.env(&a, &a_root);
+    m.runtime.env(&b, &b_root);
+    assert_eq!(m.calls(), 2);
+
+    assert!(!m.runtime.files_changed(
+        &a,
+        &[a_root.join("src/main.rs"), a_root.join("Cargo.toml")],
+        false
+    ));
+    m.runtime.env(&a, &a_root);
+    assert_eq!(m.calls(), 2, "an unrelated file forgot the cache");
+    assert_eq!(
+        changed_events(&mut a_events),
+        Vec::<serde_json::Value>::new()
+    );
+
+    assert!(
+        m.runtime
+            .files_changed(&a, &[a_root.join("mise.toml")], false)
+    );
+    assert_eq!(
+        changed_events(&mut a_events),
+        vec![serde_json::json!({"reason": "files"})]
+    );
+    m.runtime.env(&a, &a_root);
+    m.runtime.env(&b, &b_root);
+    assert_eq!(m.calls(), 3, "only project a runs mise again");
+    assert_eq!(
+        changed_events(&mut b_events),
+        Vec::<serde_json::Value>::new()
+    );
+
+    // 놓친 변경(`rescan`)과 Pitwall 프로젝트 설정도 다시 계산한다.
+    assert!(m.runtime.files_changed(&a, &[], true));
+    assert!(
+        m.runtime
+            .files_changed(&a, &[a_root.join(".pitwall/project.toml")], false)
+    );
+    assert_eq!(changed_events(&mut a_events).len(), 2);
+}
+
+/// 신뢰한 프로젝트에 mise 설정이 있는데 로그인 셸 PATH 에 mise 가 없으면: 로그인 셸 환경 + 「설치되지 않음」 경고. 남기지 않는다.
+#[test]
+fn mise_missing_falls_back_with_a_not_installed_problem() {
+    let m = MiseFixture::new(false);
+    let (id, root) = m.project("app", &[("mise.toml", "")]);
+    let resolved = m.runtime.env(&id, &root);
+    assert_eq!(resolved.info.provider, "mise");
+    assert!(matches!(
+        resolved.info.source,
+        RuntimeSource::LoginShell { .. }
+    ));
+    assert!(
+        matches!(
+            &resolved.info.status,
+            RuntimeStatus::Fallback { problem: RuntimeProblem::NotInstalled, reason } if reason.contains("not on the login shell PATH")
+        ),
+        "{:?}",
+        resolved.info.status
+    );
+    assert!(resolved.login_shell);
+    assert_eq!(resolved.env.get("FROM_MISE"), None);
+}
+
+/// 프로젝트 설정 `[runtime] provider`(결정 M1-D15): `shell` 은 mise 를 돌리지 않고, `none` 은 앱 프로세스의 환경, `mise` 는
+/// 설정 파일이 없어도 mise 를 부른다. 모르는 값은 `auto` 다.
+#[test]
+fn the_project_setting_picks_the_provider() {
+    let m = MiseFixture::new(true);
+    let setting = |value: &str| format!("[runtime]\nprovider = \"{value}\"\n");
+
+    let (shell, root) = m.project(
+        "shell",
+        &[
+            ("mise.toml", ""),
+            (".pitwall/project.toml", &setting("shell")),
+        ],
+    );
+    assert_eq!(m.runtime.env(&shell, &root).info.provider, "shell");
+    assert_eq!(m.calls(), 0);
+
+    let (none, root) = m.project(
+        "none",
+        &[
+            ("mise.toml", ""),
+            (".pitwall/project.toml", &setting("none")),
+        ],
+    );
+    let resolved = m.runtime.env(&none, &root);
+    assert_eq!(resolved.info.provider, "none");
+    assert_eq!(resolved.info.source, RuntimeSource::Process);
+    assert_eq!(resolved.env, RuntimeEnv::process());
+    assert_eq!(m.calls(), 0);
+
+    let (forced, root) = m.project("forced", &[(".pitwall/project.toml", &setting("mise"))]);
+    assert_eq!(m.runtime.env(&forced, &root).info.provider, "mise");
+    assert_eq!(m.calls(), 1);
+
+    let (unknown, root) = m.project(
+        "unknown",
+        &[
+            ("mise.toml", ""),
+            (".pitwall/project.toml", &setting("direnv")),
+        ],
+    );
+    assert_eq!(m.runtime.env(&unknown, &root).info.provider, "mise");
+    assert_eq!(m.calls(), 2);
+
+    // 설정을 바꾸면 파일 감시가 다시 계산하게 한다.
+    std::fs::write(
+        m.f.tmp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("home/shell/.pitwall/project.toml"),
+        setting("auto"),
+    )
+    .unwrap();
+    let shell_root = m.f.tmp.path().canonicalize().unwrap().join("home/shell");
+    assert!(
+        m.runtime
+            .files_changed(&shell, &[shell_root.join(".pitwall/project.toml")], false)
+    );
+    assert_eq!(m.runtime.env(&shell, &shell_root).info.provider, "mise");
+}
+
+/// 파일 감시 이벤트(`fs.changed`)를 따라가 `runtime.changed` 를 낸다. 이벤트를 놓치면 캐시가 있던 프로젝트마다 낸다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn follow_files_turns_fs_changed_into_runtime_changed() {
+    let m = MiseFixture::new(true);
+    let (id, root) = m.project("app", &[("mise.toml", "")]);
+    let mut events = m.changes(&id);
+    let follower = tokio::spawn(crate::follow_files(
+        crate::subscribe_files(&m.bus),
+        Arc::clone(&m.runtime),
+    ));
+    let fs_changed = |paths: Vec<String>, rescan: bool| {
+        serde_json::json!({
+            "root": root.display().to_string(),
+            "worktree": null,
+            "kinds": paths.iter().map(|_| "modified").collect::<Vec<_>>(),
+            "paths": paths,
+            "rescan": rescan,
+        })
+    };
+    m.bus
+        .publish(
+            Scope::Project(id.clone()),
+            crate::runtime::FS_CHANGED,
+            &fs_changed(vec![root.join("README.md").display().to_string()], false),
+        )
+        .unwrap();
+    m.bus
+        .publish(
+            Scope::Project(id.clone()),
+            crate::runtime::FS_CHANGED,
+            &fs_changed(vec![root.join("mise.toml").display().to_string()], false),
+        )
+        .unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("runtime.changed within 2 s")
+        .unwrap();
+    let Received::Event(event) = event else {
+        panic!("{event:?}")
+    };
+    assert_eq!(event.payload, serde_json::json!({"reason": "files"}));
+    follower.abort();
+
+    // 놓침: 용량 1 의 버스에서 따라가기 전에 이벤트 둘을 내면 구독자는 `Lagged` 를 먼저 받는다.
+    let small = EventBus::new(1);
+    let runtime = Arc::new(m.f.runtime(Duration::from_secs(5)));
+    runtime.attach(host(&m.projects, &small, m.f.tmp.path()));
+    runtime.env(&id, &root);
+    let mut events = small.subscribe(
+        Filter::all()
+            .scope(Scope::Project(id.clone()))
+            .topics([TOPIC_CHANGED]),
+    );
+    let files = crate::subscribe_files(&small);
+    for _ in 0..2 {
+        small
+            .publish(
+                Scope::Project("other".to_owned()),
+                crate::runtime::FS_CHANGED,
+                &fs_changed(vec![], false),
+            )
+            .unwrap();
+    }
+    let follower = tokio::spawn(crate::follow_files(files, Arc::clone(&runtime)));
+    let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("runtime.changed after missed events")
+        .unwrap();
+    let Received::Event(event) = event else {
+        panic!("{event:?}")
+    };
+    assert_eq!(event.payload, serde_json::json!({"reason": "files"}));
+    follower.abort();
 }

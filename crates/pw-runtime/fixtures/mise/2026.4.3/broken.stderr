@@ -1,0 +1,22 @@
+Error loading settings file: TOML parse error at line 1, column 7
+  |
+1 | [tools
+  |       ^
+unclosed table, expected `]`
+
+Error loading settings file: TOML parse error at line 1, column 7
+  |
+1 | [tools
+  |       ^
+unclosed table, expected `]`
+
+mise::config::parse_error
+
+  × Invalid TOML in config file: /sandbox/broken/mise.toml
+   ╭─[/sandbox/broken/mise.toml:1:7]
+ 1 │ [tools
+   ·       ▲
+   ·       ╰── unclosed table, expected `]`
+ 2 │ node = "22"
+   ╰────
+

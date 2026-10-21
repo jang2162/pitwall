@@ -1,0 +1,16 @@
+Error loading settings file: TOML parse error at line 1, column 7
+  |
+1 | [tools
+  |       ^
+invalid table header
+expected `.`, `]`
+
+mise ERROR error parsing config file: /sandbox/broken/mise.toml
+mise ERROR TOML parse error at line 1, column 7
+  |
+1 | [tools
+  |       ^
+invalid table header
+expected `.`, `]`
+
+mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information

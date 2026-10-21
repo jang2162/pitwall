@@ -816,3 +816,196 @@ async fn inputs_reach_the_shell_in_the_order_they_were_sent() {
     let text = c.read_until(t.stream, "0299,").await;
     assert_eq!(text, sent);
 }
+
+/// mise 제공자가 붙은 런타임 위의 터미널(M1-16 완료 기준). 셸 rc 에 mise 활성화가 없는 시험 HOME 에서: 신뢰한 프로젝트의
+/// `mise.toml` 이 `node = "22"` 면 새 터미널의 `node -v` 가 v22.x, `"20"` 으로 바꾸면 2초 안에 `runtime.changed` 가 나가고(실제 파일
+/// 감시 `fs.watch` → `pw_runtime::follow_files`) 새 터미널은 v20.x. 이미 연 터미널은 그대로다.
+///
+/// `mise` 가 `None` 이면 가짜 mise(`mise.toml` 의 버전으로 가짜 `node` 폴더를 PATH 앞에 붙인다)를, 있으면 그 실제 mise 를 쓴다.
+async fn node_version_follows_mise_toml(mise: Option<PathBuf>) {
+    use pw_runtime::{Mise, RuntimeHost, TOPIC_CHANGED};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let base = normalize(tmp.path()).unwrap();
+    let home = base.join("home");
+    let bin = base.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    let write_script = |path: PathBuf, body: &str| {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let real = mise.is_some();
+    match mise {
+        Some(real) => std::os::unix::fs::symlink(real, bin.join("mise")).unwrap(),
+        None => {
+            for v in ["22.23.3", "20.20.2"] {
+                let major = &v[..2];
+                write_script(
+                    base.join(format!("node{major}/bin/node")),
+                    &format!("echo v{v}"),
+                );
+            }
+            write_script(
+                bin.join("mise"),
+                &format!(
+                    "v=22; grep -q '\"20\"' mise.toml && v=20\nprintf '{{\"PATH\": \"{}/node%s/bin:%s\"}}' \"$v\" \"$PATH\"",
+                    base.display()
+                ),
+            );
+        }
+    }
+    // 로그인 셸: 시험 HOME, PATH 에 mise 만, rc 에 mise 활성화 없음. 실제 mise 면 사람의 mise 데이터 · 신뢰 목록 대신 부른 쪽이
+    // 정한 격리 폴더(MISE_*_DIR)를 넘긴다.
+    let mut login = format!(
+        "HOME='{}'; export HOME\nPATH='{}:/usr/bin:/bin'; export PATH\nSHELL=/bin/sh; export SHELL\n",
+        home.display(),
+        bin.display()
+    );
+    for name in [
+        "MISE_DATA_DIR",
+        "MISE_CONFIG_DIR",
+        "MISE_STATE_DIR",
+        "MISE_CACHE_DIR",
+    ] {
+        if let Some(value) = std::env::var_os(name).filter(|_| real) {
+            login.push_str(&format!(
+                "{name}='{}'; export {name}\n",
+                value.to_string_lossy()
+            ));
+        }
+    }
+    login.push_str("eval \"$4\"");
+    let shell = base.join("fake-login-shell");
+    write_script(shell.clone(), &login);
+
+    let paths = AppPaths::under(&base.join("app"));
+    fs::create_dir_all(&paths.config).unwrap();
+    let bus = EventBus::new(DEFAULT_CAPACITY);
+    let global = ConfigStore::open(ConfigSource::global(&paths), bus.clone(), Scope::Host);
+    let projects = Projects::new(paths.clone(), None, bus.clone());
+    let root = home.join("app");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("mise.toml"), "[tools]\nnode = \"22\"\n").unwrap();
+    if real {
+        let status = std::process::Command::new(bin.join("mise"))
+            .args(["trust", "--quiet"])
+            .arg(&root)
+            .env("HOME", &home)
+            .status()
+            .unwrap();
+        assert!(status.success(), "mise trust failed");
+    }
+    let id = projects
+        .create(NewProject {
+            root: root.clone(),
+            ..NewProject::default()
+        })
+        .unwrap()
+        .id;
+    let runtime = Arc::new(
+        Runtime::new(LoginShell::new(Some(shell), Duration::from_secs(5)))
+            .with_provider(Arc::new(Mise::default()))
+            .with_trust(|_| true),
+    );
+    runtime.attach(RuntimeHost {
+        projects: projects.clone(),
+        bus: bus.clone(),
+        paths,
+    });
+    let files = tokio::spawn(pw_runtime::follow_files(
+        pw_runtime::subscribe_files(&bus),
+        Arc::clone(&runtime),
+    ));
+    let fs_service = Arc::new(pw_fs::Fs::new());
+    fs_service.attach(projects.clone());
+    let watch = pw_fs::watch::Watch::new(fs_service);
+    watch.attach(bus.clone());
+    let _lease = {
+        let watch = watch.clone();
+        let params = pw_fs::watch::FsWatchParams {
+            project_id: id.clone(),
+            worktree: None,
+        };
+        tokio::task::spawn_blocking(move || watch.acquire(&params))
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let terminals = Arc::new(Terminals::new(Arc::clone(&runtime)));
+    terminals.attach(HostParts {
+        global,
+        projects: projects.clone(),
+    });
+    let mut router = Router::new();
+    methods::register(&mut router, Arc::clone(&terminals));
+    let (session, rx) = Session::new(Arc::new(router), EventHub::new(), Caller::new(Role::Owner));
+    let mut c = Client {
+        session,
+        rx,
+        next_id: 1,
+        responses: Vec::new(),
+        events: Vec::new(),
+        ended: Vec::new(),
+    };
+    let params = json!({ "projectId": id, "cols": 80, "rows": 24 });
+
+    let first = c.open(params.clone()).await;
+    c.input(first.terminal, "echo \"N=$(node -v)\"\n").await;
+    c.read_until(first.stream, "N=v22.").await;
+
+    let mut changed = bus.subscribe(
+        pw_core::Filter::all()
+            .scope(Scope::Project(id.clone()))
+            .topics([TOPIC_CHANGED]),
+    );
+    let started = Instant::now();
+    fs::write(root.join("mise.toml"), "[tools]\nnode = \"20\"\n").unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(2), changed.recv())
+        .await
+        .expect("runtime.changed within 2 s of editing mise.toml")
+        .unwrap();
+    let elapsed = started.elapsed();
+    let pw_core::bus::Received::Event(event) = event else {
+        panic!("{event:?}")
+    };
+    assert_eq!(event.payload, json!({"reason": "files"}));
+    println!("runtime.changed {elapsed:?} after editing mise.toml (real mise: {real})");
+
+    let second = c.open(params).await;
+    c.input(second.terminal, "echo \"N=$(node -v)\"\n").await;
+    c.read_until(second.stream, "N=v20.").await;
+    // 이미 연 터미널은 그대로다(새 터미널부터 적용).
+    c.input(first.terminal, "echo \"M=$(node -v)\"\n").await;
+    c.read_until(first.stream, "M=v22.").await;
+    files.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_terminal_gets_the_node_version_mise_toml_pins() {
+    node_version_follows_mise_toml(None).await;
+}
+
+/// 실제 mise 로 같은 것을 본다. 네트워크 · 내려받은 node 가 필요해 기본 시험에서 빠진다. 돌리는 법은 CONTRIBUTING.md 「mise 제공자
+/// 실기 시험」: `PITWALL_TEST_MISE` 에 mise 실행 파일, `MISE_DATA_DIR` · `MISE_CONFIG_DIR` · `MISE_STATE_DIR` · `MISE_CACHE_DIR` 에
+/// 격리 폴더(node 22 · 20 을 미리 설치)를 주고 `cargo nextest run -p pw-run --run-ignored only real_mise`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a real mise and node 22 / 20 installed in isolated MISE_* folders"]
+async fn real_mise_pins_the_node_version_of_a_new_terminal() {
+    let mise = std::env::var_os("PITWALL_TEST_MISE")
+        .map(PathBuf::from)
+        .expect("PITWALL_TEST_MISE: path to a mise executable");
+    for name in [
+        "MISE_DATA_DIR",
+        "MISE_CONFIG_DIR",
+        "MISE_STATE_DIR",
+        "MISE_CACHE_DIR",
+    ] {
+        assert!(
+            std::env::var_os(name).is_some(),
+            "set {name} to an isolated folder — the test must not touch your own mise data or trust list"
+        );
+    }
+    node_version_follows_mise_toml(Some(mise)).await;
+}

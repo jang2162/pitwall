@@ -1,0 +1,2 @@
+mise WARN  Config files in /sandbox/proj/mise.toml are not trusted.
+Trust them with `mise trust`. See https://mise.jdx.dev/cli/trust.html for more information.

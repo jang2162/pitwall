@@ -1,0 +1,6 @@
+{
+  "GREETING": "hello world",
+  "MULTILINE": "first\nsecond",
+  "PATH": "/sandbox/proj/bin:/sandbox/data/installs/node/22.23.3/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  "UNICODE": "한국어 ✓"
+}
