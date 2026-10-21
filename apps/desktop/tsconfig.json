@@ -6,5 +6,6 @@
     "types": ["vite/client"],
     "resolveJsonModule": true
   },
-  "include": ["src", "perf"]
+  "include": ["src", "perf"],
+  "exclude": ["perf/**/vite.config.ts"]
 }
