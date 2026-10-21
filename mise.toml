@@ -11,11 +11,12 @@ rust = "1.99.0"
 # actionlint 가 워크플로의 `run:` 스크립트를 검사할 때 부른다. 고정하지 않으면 PATH 의 아무 shellcheck(다른 프로젝트의
 # 버전 없는 mise shim 이면 actionlint 가 실패한다)를 집는다.
 "aqua:koalaman/shellcheck" = "0.11.0"
-# tree-sitter 의 `wasm` 기능이 끌어오는 wasmtime-c-api-impl 의 빌드 스크립트가 C 헤더를 설치하려고 cmake 를 부른다(pw-syntax).
-# 고정하지 않으면 PATH 의 아무 cmake(버전 없는 mise shim 이면 빌드가 실패한다)를 집는다.
+# tree-sitter 의 `wasm` 기능이 끌어오는 wasmtime-c-api-impl 의 빌드 스크립트가 C 헤더를 설치하려고 cmake 를 부른다(pw-syntax 의
+# `wasm` 기능 — 앱 빌드는 켜지 않고 `mise run test` · `lint` 가 `--all-features` 로 켠다). 고정하지 않으면 PATH 의 아무 cmake(버전
+# 없는 mise shim 이면 빌드가 실패한다)를 집는다.
 "aqua:Kitware/CMake" = "4.1.6"
-# 내장 언어 확장의 문법 WASM 을 만든다(`mise run grammars`, scripts/grammars.mjs). wasi-sdk · binaryen 은 이 CLI 가 자기 버전에
-# 맞춰 받는다. 일반 빌드 · 시험에는 쓰이지 않는다 — 만든 WASM 은 저장소에 있다.
+# WASM 문법 경로의 시험 입력(crates/pw-syntax/tests/wasm/)을 만든다(`mise run grammars`, scripts/grammars.mjs). wasi-sdk ·
+# binaryen 은 이 CLI 가 자기 버전에 맞춰 받는다. 일반 빌드 · 시험에는 쓰이지 않는다 — 만든 WASM 은 저장소에 있다.
 "aqua:tree-sitter/tree-sitter" = "0.27.1"
 
 [tasks.install-deps]
@@ -35,10 +36,11 @@ run = "node apps/desktop/scripts/dev.mjs"
 [tasks.test]
 description = "Rust(nextest · doctest) 와 TS(Vitest) 테스트"
 depends = ["install-deps"]
-# nextest 는 doctest 를 돌리지 않는다. 문서의 사용 예는 cargo test --doc 로 따로 돌린다.
+# nextest 는 doctest 를 돌리지 않는다. 문서의 사용 예는 cargo test --doc 로 따로 돌린다. `--all-features` 는 앱이 켜지 않는 기능의
+# 코드도 시험한다(pw-syntax 의 `wasm` — 외부 확장의 문법 WASM 경로).
 run = [
-  "cargo nextest run --workspace --no-tests=fail",
-  "cargo test --workspace --doc",
+  "cargo nextest run --workspace --all-features --no-tests=fail",
+  "cargo test --workspace --all-features --doc",
   "pnpm -r --if-present run test",
 ]
 
@@ -55,7 +57,8 @@ run = [
   # 생성물(packages/rpc-client)이 RPC 선언과 맞는지. 쓰지 않고 비교만 한다 — 고치려면 `mise run gen`.
   "cargo run -q -p pw-rpc-gen --bin pw-rpc-gen -- --check",
   "cargo run -q -p pw-rpc-gen --bin pw-rpc-gen-fixtures -- --check",
-  # 내장 언어 확장의 문법 WASM · 쿼리가 출처표(scripts/grammars.toml)의 해시와 맞는지. 고치려면 `mise run grammars`.
+  # 내장 언어 확장의 쿼리 · 저장소에 넣은 문법 파일이 출처표(scripts/grammars.toml)의 해시와, 문법 크레이트 판본이 Cargo.lock 과
+  # 맞는지. 고치려면 `mise run grammars`.
   "node scripts/grammars.mjs check",
 ]
 
@@ -75,10 +78,11 @@ run = [
 description = "Linguist samples 일치율 시험(samples 를 GitHub 에서 받는다)"
 run = "node scripts/linguist.mjs samples-test"
 
-# 내장 언어 확장(extensions/lang-*)의 문법 WASM · 강조 쿼리를 출처표 scripts/grammars.toml 의 고정 커밋에서 다시 만든다(네트워크 ·
-# tree-sitter CLI 필요). 인자로 문법 id 를 주면 그것만. 순서와 규칙은 CONTRIBUTING.md 「tree-sitter 문법」 절.
+# 내장 언어 확장(extensions/lang-*)의 강조 쿼리와 저장소에 넣는 문법 파일(C 소스 · 시험용 WASM)을 출처표 scripts/grammars.toml 의
+# 고정 커밋에서 다시 만든다(네트워크 · 시험용 WASM 은 tree-sitter CLI 필요). 인자로 문법 id 를 주면 그것만. 순서와 규칙은
+# CONTRIBUTING.md 「tree-sitter 문법」 절.
 [tasks.grammars]
-description = "내장 언어 확장의 tree-sitter 문법 WASM · 쿼리 다시 만들기(출처표 scripts/grammars.toml)"
+description = "내장 언어 확장의 tree-sitter 쿼리 · 넣은 문법 파일 다시 만들기(출처표 scripts/grammars.toml)"
 run = "node scripts/grammars.mjs build"
 
 [tasks.gen]

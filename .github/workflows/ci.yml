@@ -101,8 +101,8 @@ jobs:
       - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           version: ${{ env.MISE_VERSION }}
-          # 번들 빌드(Tauri CLI 는 node_modules)와 측정에 필요한 것만 받는다. cmake 는 pw-syntax 의 wasmtime C API 빌드 스크립트가 부른다.
-          install_args: node npm:pnpm rust aqua:Kitware/CMake
+          # 번들 빌드(Tauri CLI 는 node_modules)와 측정에 필요한 것만 받는다.
+          install_args: node npm:pnpm rust
 
       - name: pnpm store path
         id: pnpm-store

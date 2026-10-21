@@ -1,4 +1,4 @@
-# SQL 언어. 앱에 묶이는 내장 확장이다(crates/pw-ext 「내장 확장」). grammars/ · queries/ · LICENSE* 는 생성물이다 —
+# SQL 언어. 앱에 묶이는 내장 확장이다(crates/pw-ext 「내장 확장」). queries/ · LICENSE* 는 생성물이다 —
 # 출처표 scripts/grammars.toml 을 고치고 `mise run grammars` 로 다시 만든다.
 id = "dev.pitwall.lang-sql"
 name = "SQL"
@@ -9,6 +9,6 @@ license = "MIT"
 
 [contributes.languages.sql]
 linguist = "SQL"
-grammar = "grammars/sql.wasm"
+builtin_grammar = "sql"
 queries = "queries/sql"
 line_comment = "--"

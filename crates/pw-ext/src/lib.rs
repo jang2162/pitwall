@@ -68,34 +68,6 @@ mod tests {
         assert_eq!(folders, expected);
     }
 
-    /// 문법 WASM 은 압축해 묶이고(`build.rs`), 읽으면 저장소의 파일과 바이트가 같다. 크기는 원본 크기다.
-    #[test]
-    fn builtin_grammars_are_compressed_and_read_back_whole() {
-        let wasm = builtin::files()
-            .iter()
-            .find(|f| f.path == "lang-rust/grammars/rust.wasm")
-            .unwrap();
-        assert!(wasm.brotli);
-        assert!((wasm.bytes.len() as u64) < wasm.size / 4);
-        let root = ExtensionRoot::Builtin {
-            folder: "lang-rust",
-        };
-        let rel = RelPath::parse("grammars/rust.wasm").unwrap();
-        let on_disk = std::fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../extensions/lang-rust/grammars/rust.wasm"
-        ))
-        .unwrap();
-        assert_eq!(root.read(&rel).unwrap().as_ref(), on_disk.as_slice());
-        assert_eq!(root.size(&rel).unwrap(), on_disk.len() as u64);
-        // 텍스트 파일은 그대로 묶인다.
-        let manifest = builtin::files()
-            .iter()
-            .find(|f| f.path == "lang-rust/extension.toml")
-            .unwrap();
-        assert!(!manifest.brotli);
-    }
-
     #[test]
     fn languages_resolve_by_linguist_name_to_their_grammar_and_queries() {
         let registry = builtin_registry();
@@ -103,10 +75,8 @@ mod tests {
         assert_eq!(rust.extension, "dev.pitwall.lang-rust");
         assert_eq!(rust.id, "rust");
         assert_eq!(rust.linguist, "Rust");
-        assert_eq!(
-            rust.grammar.unwrap().display(),
-            "builtin:lang-rust/grammars/rust.wasm"
-        );
+        assert_eq!(rust.builtin_grammar.as_deref(), Some("rust"));
+        assert_eq!(rust.grammar, None);
         let highlights = rust.queries.unwrap().join("highlights.scm").unwrap();
         assert_eq!(
             highlights.display(),
@@ -119,10 +89,7 @@ mod tests {
             .language_for_linguist("JSON with Comments")
             .unwrap();
         assert_eq!(jsonc.id, "jsonc");
-        assert_eq!(
-            jsonc.grammar.unwrap().display(),
-            "builtin:lang-json/grammars/json.wasm"
-        );
+        assert_eq!(jsonc.builtin_grammar.as_deref(), Some("json"));
         assert_eq!(registry.language_for_linguist("COBOL"), None);
     }
 

@@ -1,7 +1,7 @@
 //! 강조 성능(`docs/design/12-m1-plan.md` M1-10 완료 기준): 5,000줄 Rust 파일의 첫 파싱 + 화면 범위 강조가 100 ms 안, 한 글자
 //! 편집 뒤 재강조가 16 ms 안. 그리고 상한 · 메모리의 측정(`measure_*` — 단언 없이 수치만 찍는다): 정상 5 MiB 문서의 첫 파싱,
-//! 오류 회복이 폭주하는 문서가 끝나는 시간, 큰 편집, 문법을 올리고 내린 메모리. release 로 잰다 — debug 빌드는 wasmtime 의
-//! 컴파일 · tree-sitter 의 C 코드가 최적화되지 않는다. 기본 시험에서는 빠진다(`#[ignore]`):
+//! 오류 회복이 폭주하는 문서가 끝나는 시간, 큰 편집, 문법을 올리는 시간 · 올리고 내린 메모리. release 로 잰다 — debug 빌드는
+//! tree-sitter · 문법의 C 코드가 최적화되지 않는다. 앱과 같게 `wasm` 기능 없이 잰다. 기본 시험에서는 빠진다(`#[ignore]`):
 //!
 //! ```sh
 //! cargo test --release -p pw-syntax --test perf -- --ignored --nocapture --test-threads 1
@@ -200,6 +200,18 @@ fn measure_5mib_first_parse() {
             result.off
         );
         s.close(file);
+    }
+}
+
+/// 문법을 처음 올리는 시간(파서를 만들고 강조 쿼리를 컴파일한다) — 한 줄 문서를 처음 열 때. `UNLOAD_AFTER` 의 근거다.
+#[test]
+#[ignore = "release 로 따로 돈다(머리 주석)"]
+fn measure_grammar_loads() {
+    let s = syntax();
+    for (file, language) in LANGUAGES {
+        let started = Instant::now();
+        open_as(&s, file, language, "x\n".to_owned());
+        println!("{language:12} load {:?}", started.elapsed());
     }
 }
 

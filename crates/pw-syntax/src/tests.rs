@@ -565,3 +565,64 @@ fn a_thousand_forward_changes_on_a_5_mb_document_apply_in_one_pass() {
         .collect::<String>();
     assert!(s.text_of("d") == expected);
 }
+
+fn builtin_language(linguist: &str) -> pw_ext::ResolvedLanguage {
+    Registry::from_roots(&Version::new(0, 0, 0), pw_ext::builtin::roots())
+        .language_for_linguist(linguist)
+        .unwrap()
+}
+
+/// 문서 하나를 끝까지 파싱해 강조한 구간(바이트).
+fn lane_spans(
+    mut lane: crate::grammar::Lane,
+    text: &str,
+) -> Vec<(std::ops::Range<usize>, SyntaxToken)> {
+    let go = &mut || std::ops::ControlFlow::Continue(());
+    let tree = lane.parse(text, None, go).unwrap();
+    let grammar = lane.grammar();
+    crate::highlight::spans(
+        &grammar.highlights,
+        &grammar.kinds,
+        &tree,
+        text,
+        0..text.len(),
+        go,
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_unknown_builtin_grammar_name_is_an_error() {
+    let language = pw_ext::ResolvedLanguage {
+        builtin_grammar: Some("cobol".to_owned()),
+        ..builtin_language("JSON")
+    };
+    let Err(e) = crate::grammar::Lane::native(&language) else {
+        panic!("loaded a grammar that is not linked");
+    };
+    assert_eq!(e, "language `json`: no built-in grammar named `cobol`");
+}
+
+/// WASM 문법 경로(외부 확장의 문법, M8 — 앱은 `wasm` 기능을 켜지 않는다)가 같은 문법 · 커밋의 네이티브 경로와 같은 강조를
+/// 낸다. 시험 입력 `tests/wasm/json.wasm` 은 `mise run grammars` 가 만든다(`scripts/grammars.toml` 의 `test_wasm`).
+#[cfg(feature = "wasm")]
+#[test]
+fn a_wasm_grammar_highlights_like_the_native_one() {
+    let native = builtin_language("JSON");
+    let wasm = pw_ext::ResolvedLanguage {
+        builtin_grammar: None,
+        grammar: Some(pw_ext::ResolvedFile {
+            root: pw_ext::ExtensionRoot::Dir(
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/wasm").into(),
+            ),
+            path: pw_ext::RelPath::parse("json.wasm").unwrap(),
+        }),
+        ..native.clone()
+    };
+    let text = "// c\n{\"a\": [1, -2.5e3, true, null, \"s\\n\"], \"b\": {}}\n";
+    let engine = tree_sitter::wasmtime::Engine::default();
+    let from_wasm = lane_spans(crate::grammar::Lane::wasm(&engine, &wasm).unwrap(), text);
+    let from_native = lane_spans(crate::grammar::Lane::native(&native).unwrap(), text);
+    assert!(from_native.len() > 8, "{from_native:?}");
+    assert_eq!(from_wasm, from_native);
+}

@@ -1,4 +1,4 @@
-# JSON 언어. 앱에 묶이는 내장 확장이다(crates/pw-ext 「내장 확장」). grammars/ · queries/ · LICENSE* 는 생성물이다 —
+# JSON 언어. 앱에 묶이는 내장 확장이다(crates/pw-ext 「내장 확장」). queries/ · LICENSE* 는 생성물이다 —
 # 출처표 scripts/grammars.toml 을 고치고 `mise run grammars` 로 다시 만든다.
 id = "dev.pitwall.lang-json"
 name = "JSON"
@@ -9,12 +9,12 @@ license = "MIT"
 
 [contributes.languages.json]
 linguist = "JSON"
-grammar = "grammars/json.wasm"
+builtin_grammar = "json"
 queries = "queries/json"
 
 # tsconfig.json · .jsonc 등(Linguist 「JSON with Comments」). 같은 문법이 주석도 읽는다.
 [contributes.languages.jsonc]
 linguist = "JSON with Comments"
-grammar = "grammars/json.wasm"
+builtin_grammar = "json"
 queries = "queries/json"
 line_comment = "//"

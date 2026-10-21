@@ -1,4 +1,4 @@
-# TSX 언어. 앱에 묶이는 내장 확장이다(crates/pw-ext 「내장 확장」). grammars/ · queries/ · LICENSE* 는 생성물이다 —
+# TSX 언어. 앱에 묶이는 내장 확장이다(crates/pw-ext 「내장 확장」). queries/ · LICENSE* 는 생성물이다 —
 # 출처표 scripts/grammars.toml 을 고치고 `mise run grammars` 로 다시 만든다.
 id = "dev.pitwall.lang-tsx"
 name = "TSX"
@@ -9,6 +9,6 @@ license = "MIT"
 
 [contributes.languages.tsx]
 linguist = "TSX"
-grammar = "grammars/tsx.wasm"
+builtin_grammar = "tsx"
 queries = "queries/tsx"
 line_comment = "//"

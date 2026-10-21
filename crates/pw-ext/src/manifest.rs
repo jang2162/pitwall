@@ -115,10 +115,20 @@ pub struct LanguageDecl {
     pub pos: Option<Pos>,
     pub linguist: String,
     pub extensions: Vec<String>,
+    /// 앱에 링크된 tree-sitter 문법의 이름(`pw-syntax` 의 내장 문법). 내장 확장만 쓴다.
+    pub builtin_grammar: Option<NameRef>,
+    /// tree-sitter 문법 WASM(외부 확장, M8).
     pub grammar: Option<PathRef>,
     /// 폴더.
     pub queries: Option<PathRef>,
     pub line_comment: Option<String>,
+}
+
+/// 이름 하나와 그 값의 위치.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameRef {
+    pub name: String,
+    pub pos: Option<Pos>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -339,6 +349,12 @@ impl Parser<'_> {
                         let mut f = Fields::new(entry, at.clone(), &format!("language `{id}`"));
                         let linguist = f.string(self, "linguist", true);
                         let extensions = f.strings(self, "extensions").unwrap_or_default();
+                        let builtin_grammar =
+                            f.string(self, "builtin_grammar", false)
+                                .map(|(name, span)| NameRef {
+                                    name,
+                                    pos: self.pos(&span),
+                                });
                         let grammar = f.path(self, "grammar", false);
                         let queries = f.path(self, "queries", false);
                         let line_comment = f.string(self, "line_comment", false).map(|(s, _)| s);
@@ -349,6 +365,7 @@ impl Parser<'_> {
                                 id,
                                 linguist,
                                 extensions,
+                                builtin_grammar,
                                 grammar,
                                 queries,
                                 line_comment,

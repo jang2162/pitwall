@@ -24,8 +24,8 @@ specta = "=2.0.0-rc.25"
 specta-serde = "=0.0.12"
 specta-typescript = "=0.0.12"
 
-# 구문 분석(pw-syntax)은 문법 WASM 을 wasmtime 의 cranelift 로 기계어로 컴파일해 올린다. dev 빌드에서 이 크레이트들을 최적화하지
-# 않으면 문법 하나를 올리는 데 1초쯤 걸려 시험이 느려지고(내장 문법 19개를 모두 올린다) 함께 도는 시간 민감 시험을 흔든다.
+# 구문 분석(pw-syntax)의 `wasm` 기능은 문법 WASM 을 wasmtime 의 cranelift 로 기계어로 컴파일해 올린다(시험만 켠다). dev 빌드에서 이
+# 크레이트들을 최적화하지 않으면 큰 문법 하나를 올리는 데 1초쯤 걸려 함께 도는 시간 민감 시험을 흔든다.
 [profile.dev.package.cranelift-codegen]
 opt-level = 3
 

@@ -7,9 +7,6 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# 내장 확장의 `.wasm`(언어 확장의 문법)은 brotli 로 압축해 묶고 읽을 때 푼다(build.rs). 버전은 Tauri(tauri-utils)가 쓰는 것과
-# 같게 두어 새 크레이트를 들이지 않는다.
-brotli-decompressor = "6.0.1"
 # 번역 파일(.ftl)의 문법을 등록할 때 검사한다(docs/design/07-extensibility.md §4.1).
 fluent-syntax = "0.12.0"
 pw-rpc = { path = "../pw-rpc" }
@@ -21,9 +18,6 @@ specta = { workspace = true, features = ["derive"] }
 # 오류 위치(줄 · 열)를 내려고 span 을 남기는 toml_edit 로 읽는다. 버전은 pw-core 와 같게 둔다.
 toml_edit = "0.25.17"
 tracing = "0.1.44"
-
-[build-dependencies]
-brotli = "9.0.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"

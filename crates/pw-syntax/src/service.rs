@@ -7,9 +7,10 @@
 //! - **파싱 시간:** 파싱 한 번(과 강조 쿼리 한 번)이 [`parse_budget`] 을 넘으면 그 문서의 강조를 끈다. 새 편집이 오거나 문서가
 //!   닫히면 하던 파싱을 그만둔다(그 요청은 빈 구간으로 끝난다 — [`SyntaxHighlightsResult`] 의 `version`).
 //! - **잠금:** 파싱은 그 문법의 파서 잠금만 쥔다 — 다른 문법의 문서는 기다리지 않는다. 같은 문법의 문서는 그 파싱이 끝나거나 위
-//!   상한에 걸릴 때까지 기다린다(파서 · 저장소를 문서마다 두면 문법의 선형 메모리를 문서마다 다시 만든다).
-//! - **문법 메모리:** 문법은 그 언어의 문서를 처음 열 때 올리고, 그 문법을 쓰는 마지막 문서가 사라진 뒤 [`UNLOAD_AFTER`] 가
-//!   지나면 저장소째 내린다. 올린 문법이 하나도 없으면 엔진도 버린다.
+//!   상한에 걸릴 때까지 기다린다(WASM 문법은 파서 · 저장소를 문서마다 두면 문법의 선형 메모리를 문서마다 다시 만든다).
+//! - **문법 메모리:** 문법은 그 언어의 문서를 처음 열 때 올리고(파서를 만들고 강조 쿼리를 컴파일한다), 그 문법을 쓰는 마지막
+//!   문서가 사라진 뒤 [`UNLOAD_AFTER`] 가 지나면 파서 · 쿼리째 내린다. 네이티브 문법의 파싱 표는 바이너리에 있다. WASM 문법
+//!   (`wasm` 기능)은 저장소째 내리고, 올린 문법이 하나도 없으면 엔진도 버린다.
 
 use std::collections::{BTreeMap, HashMap};
 use std::mem;
@@ -21,9 +22,9 @@ use std::time::{Duration, Instant};
 use pw_ext::{Registry, ResolvedLanguage};
 use pw_fs::judge::{EDITABLE_MAX, LONG_LINE_CHARS};
 use pw_rpc::{RpcError, code};
-use tree_sitter::{InputEdit, Tree, wasmtime};
+use tree_sitter::{InputEdit, Tree};
 
-use crate::grammar::{Grammar, Lane};
+use crate::grammar::{Grammar, Lane, has_grammar};
 use crate::highlight::spans;
 use crate::methods::{
     HighlightSpan, SyntaxEditParams, SyntaxEditResult, SyntaxHighlightsParams,
@@ -38,15 +39,15 @@ pub const MAX_DOCUMENTS: usize = 256;
 /// 앞당겨 도착해 차례를 기다리는 편집 수의 상한(문서마다). 넘으면 conflict — 빠진 편집이 오지 않는 것으로 본다.
 pub const MAX_EARLY_EDITS: usize = 64;
 
-/// 문법을 쓰는 마지막 문서가 사라진 뒤 그 문법을 내리기까지. 탭을 닫았다 곧 다시 여는 흔한 경우에 문법을 다시 올리지(release 로
-/// 5~135 ms) 않게 둔다.
+/// 문법을 쓰는 마지막 문서가 사라진 뒤 그 문법을 내리기까지. 탭을 닫았다 곧 다시 여는 흔한 경우에 문법을 다시 올리지(강조 쿼리
+/// 컴파일, release 로 0.1~22 ms — `tests/perf.rs` 의 `measure_grammar_loads`) 않게 둔다.
 pub const UNLOAD_AFTER: Duration = Duration::from_secs(5 * 60);
 
 /// 파싱(또는 강조 쿼리) 한 번의 시간 상한: 1초 + 텍스트 1 MiB 마다 1초(5 MiB 에서 6초).
 ///
-/// 정상 문서의 첫 파싱은 대부분 1 MiB 당 0.2초 안이고 느린 문법이 Kotlin 0.93초 · Markdown 0.62초 · Shell 0.5초다(내장 픽스처를
-/// 5 MiB 까지 이어 붙여 release 로 잰 것 — `tests/limits.rs` 의 `measure_5mib_first_parse`). 상한을 넘는 것은 오류 회복이 폭주하는
-/// 입력이다 — 닫히지 않은 괄호 20만 줄(400 KB Rust)이 53초, `[` 50만 줄(1 MB JSON)이 120초 넘게 걸렸다.
+/// 정상 문서의 첫 파싱은 대부분 1 MiB 당 0.12초 안이고 느린 문법이 Kotlin 0.31초 · Markdown 0.13초다(내장 픽스처를 5 MiB 까지
+/// 이어 붙여 release 로 잰 것 — `tests/perf.rs` 의 `measure_5mib_first_parse`). 상한을 넘는 것은 오류 회복이 폭주하는
+/// 입력이다 — 닫히지 않은 괄호 20만 줄(400 KB Rust)이 53초, `[` 50만 줄(1 MB JSON)이 120초 넘게 걸렸다(WASM 문법 때 잰 것).
 pub fn parse_budget(text_bytes: usize) -> Duration {
     const MIB: f64 = 1024.0 * 1024.0;
     Duration::from_secs(1) + Duration::from_secs_f64(text_bytes as f64 / MIB)
@@ -60,14 +61,15 @@ pub struct Syntax {
     clock: AtomicU64,
 }
 
-/// 문법이 놓인 자리로 가른다 — 같은 WASM · 쿼리를 쓰는 두 기여(JSON · JSON with Comments)는 한 번만 올린다.
+/// 문법과 쿼리가 놓인 자리로 가른다 — 같은 문법 · 쿼리를 쓰는 두 기여(JSON · JSON with Comments)는 한 번만 올린다.
 type Key = (String, String);
 
 /// 올린 문법들과 그것을 쓰는 문서 수.
 struct Grammars {
     table: Mutex<Table>,
-    /// 문법 저장소들이 함께 쓰는 엔진. 올린 문법이 없으면 `None` 이다.
-    engine: Mutex<Option<wasmtime::Engine>>,
+    /// WASM 문법의 저장소들이 함께 쓰는 엔진. 올린 문법이 없으면 `None` 이다.
+    #[cfg(feature = "wasm")]
+    engine: Mutex<Option<tree_sitter::wasmtime::Engine>>,
     unload_after: Duration,
 }
 
@@ -165,6 +167,7 @@ impl Syntax {
             extensions,
             grammars: Arc::new(Grammars {
                 table: Mutex::default(),
+                #[cfg(feature = "wasm")]
                 engine: Mutex::new(None),
                 unload_after,
             }),
@@ -188,7 +191,7 @@ impl Syntax {
         let Some(language) = self
             .extensions
             .language_for_linguist(&language)
-            .filter(|l| l.grammar.is_some() && l.queries.is_some())
+            .filter(has_grammar)
         else {
             return not_opened(None);
         };
@@ -562,10 +565,16 @@ impl Grammars {
         }
     }
 
-    fn engine(&self) -> wasmtime::Engine {
-        lock(&self.engine)
-            .get_or_insert_with(wasmtime::Engine::default)
-            .clone()
+    /// 언어의 문법을 올린다: 내장 문법이 있으면 그것을, 없으면(`wasm` 기능) 문법 WASM 을.
+    fn load(&self, language: &ResolvedLanguage) -> Result<Lane, String> {
+        #[cfg(feature = "wasm")]
+        if language.builtin_grammar.is_none() {
+            let engine = lock(&self.engine)
+                .get_or_insert_with(tree_sitter::wasmtime::Engine::default)
+                .clone();
+            return Lane::wasm(&engine, language);
+        }
+        Lane::native(language)
     }
 }
 
@@ -593,6 +602,7 @@ fn unload_idle(owner: &Weak<Grammars>) {
                 next = Some(next.map_or(left, |n| n.min(left)));
                 true
             });
+            #[cfg(feature = "wasm")]
             if table.slots.is_empty() {
                 *lock(&grammars.engine) = None;
             }
@@ -600,7 +610,7 @@ fn unload_idle(owner: &Weak<Grammars>) {
                 table.unloading = false;
             }
         }
-        // 저장소 · 문법은 잠금 밖에서 버린다.
+        // 파서 · 문법은 잠금 밖에서 버린다.
         if !unloaded.is_empty() {
             tracing::info!(target: "pw_syntax", count = unloaded.len(), "unloading idle grammars");
         }
@@ -623,7 +633,7 @@ impl Slot {
     ) -> Result<R, String> {
         let mut state = lock(&self.lane);
         if matches!(*state, LaneState::Empty) {
-            *state = match Lane::load(&grammars.engine(), language) {
+            *state = match grammars.load(language) {
                 Ok(lane) => LaneState::Ready(lane),
                 Err(e) => {
                     tracing::error!(target: "pw_syntax", language = %language.id, "cannot load the grammar: {e}");
@@ -685,7 +695,11 @@ impl TextState {
 fn key(language: &ResolvedLanguage) -> Key {
     let display =
         |f: &Option<pw_ext::ResolvedFile>| f.as_ref().map(|f| f.display()).unwrap_or_default();
-    (display(&language.grammar), display(&language.queries))
+    let grammar = match &language.builtin_grammar {
+        Some(name) => format!("builtin:{name}"),
+        None => display(&language.grammar),
+    };
+    (grammar, display(&language.queries))
 }
 
 fn empty(version: u32, off: Option<SyntaxOff>) -> SyntaxHighlightsResult {

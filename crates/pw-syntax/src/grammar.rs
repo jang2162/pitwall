@@ -1,23 +1,26 @@
-//! 언어 확장의 문법 WASM · 강조 쿼리를 읽어 tree-sitter 언어로 올린다.
+//! 언어 확장의 문법 · 강조 쿼리를 읽어 tree-sitter 언어로 올린다.
 //!
-//! 문법마다 wasmtime 저장소(`WasmStore`)와 그것을 가진 파서 하나를 둔다([`Lane`]). 한 문법의 긴 파싱은 그 문법의 문서만 기다리게
-//! 하고, 마지막 문서가 닫힌 문법은 저장소째 내려 그 메모리(인스턴스 · 선형 메모리)를 돌려준다(`service.rs` 머리 주석). 엔진은
-//! 문법들이 함께 쓰고 처음 문법이 필요할 때 만든다 — 강조할 문서를 열지 않은 앱의 시작 시간 · 유휴 메모리에 들지 않는다(결정
-//! M1-D2 의 되돌림 조건). 쿼리 실행은 파서와 저장소 없이 된다(쿼리 · 트리는 호스트 쪽 자료다).
+//! 내장 언어는 앱에 링크한 네이티브 문법이다(매니페스트의 `builtin_grammar` → [`crate::native`]) — 결정 M1-D2 의 되돌림
+//! (`docs/design/12-m1-plan.md` §4: WASM 문법은 5개 언어를 연 유휴 메모리가 +50 MB 를 넘었다). 문법마다 파서 하나를 둔다
+//! ([`Lane`]). 한 문법의 긴 파싱은 그 문법의 문서만 기다리게 하고, 마지막 문서가 닫힌 문법은 파서째 내린다(`service.rs` 머리
+//! 주석). 쿼리 실행은 파서 없이 된다(쿼리 · 트리는 호스트 쪽 자료다).
 //!
-//! 문법 WASM 의 실행 시간에는 상한이 없다: 파싱의 진행 콜백은 WASM 호출(렉서 · 외부 스캐너) 안쪽을 끊지 못하고, wasmtime 의
-//! epoch · fuel 은 tree-sitter 가 저장소(`Store`)를 만들자마자 WASM 을 부르면서 시한 · 연료를 받을 길을 주지 않아 걸 수 없다.
-//! 그래서 문법은 내장 확장의 것만 받는다(`pw-ext` 레지스트리 — `docs/design/07-extensibility.md` 「문법 WASM 의 신뢰 경계」).
+//! 문법 WASM(외부 확장의 문법, M8)은 `wasm` 기능에서만 올린다 — 앱은 그 기능을 켜지 않고, 레지스트리도 내장이 아닌 확장의
+//! 문법을 받지 않는다. 문법 WASM 의 실행 시간에는 상한이 없다: 파싱의 진행 콜백은 WASM 호출(렉서 · 외부 스캐너) 안쪽을 끊지
+//! 못하고, wasmtime 의 epoch · fuel 은 tree-sitter 가 저장소(`Store`)를 만들자마자 WASM 을 부르면서 시한 · 연료를 받을 길을 주지
+//! 않아 걸 수 없다(`docs/design/07-extensibility.md` 「문법 WASM 의 신뢰 경계」). 문법마다 wasmtime 저장소(`WasmStore`)를 따로
+//! 둔다.
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use pw_ext::{ResolvedFile, ResolvedLanguage};
-use tree_sitter::{Language, ParseOptions, ParseState, Parser, Query, Tree, WasmStore, wasmtime};
+use tree_sitter::{Language, ParseOptions, ParseState, Parser, Query, Tree};
 
 use crate::token::{CaptureKind, classify};
 
-/// 문법 WASM 하나의 크기 상한. 내장 문법 중 가장 큰 것(Kotlin)이 약 4 MB 다.
+/// 문법 WASM 하나의 크기 상한. 빌드해 본 내장 문법 중 가장 큰 것(Kotlin)이 약 4 MB 였다.
+#[cfg(feature = "wasm")]
 pub const MAX_GRAMMAR_BYTES: u64 = 32 * 1024 * 1024;
 
 /// 쿼리 파일의 크기 상한(레지스트리가 통째로 읽는 파일과 같다).
@@ -34,26 +37,55 @@ pub struct Grammar {
     pub kinds: Vec<CaptureKind>,
 }
 
-/// 문법 하나와 그것만 올린 저장소 · 파서. 저장소는 엔진을 복제해 쥐므로 엔진보다 오래 살아도 된다.
+/// 문법 하나와 그것만 쓰는 파서. WASM 문법이면 파서가 그 문법만 올린 저장소를 쥔다(저장소는 엔진을 복제해 쥐므로 엔진보다
+/// 오래 살아도 된다).
 pub struct Lane {
     parser: Parser,
     grammar: Arc<Grammar>,
 }
 
+/// 언어에 문법이 있는가 — 내장 문법 이름이나(`wasm` 기능에서는) 문법 WASM, 그리고 쿼리 폴더.
+pub fn has_grammar(language: &ResolvedLanguage) -> bool {
+    let wasm = cfg!(feature = "wasm") && language.grammar.is_some();
+    (language.builtin_grammar.is_some() || wasm) && language.queries.is_some()
+}
+
 impl Lane {
-    pub fn load(engine: &wasmtime::Engine, language: &ResolvedLanguage) -> Result<Self, String> {
+    /// 내장 문법(`builtin_grammar`)을 올린다.
+    pub fn native(language: &ResolvedLanguage) -> Result<Self, String> {
+        let (Some(name), Some(queries)) = (&language.builtin_grammar, &language.queries) else {
+            return Err(format!(
+                "language `{}` has no built-in grammar",
+                language.id
+            ));
+        };
+        let ts = crate::native::language(name).ok_or_else(|| {
+            format!(
+                "language `{}`: no built-in grammar named `{name}`",
+                language.id
+            )
+        })?;
+        let mut parser = Parser::new();
+        parser
+            .set_language(&ts)
+            .map_err(|e| format!("cannot use the grammar: {e}"))?;
+        Self::with_queries(parser, ts, queries)
+    }
+
+    /// 문법 WASM(`grammar`)을 `engine` 위의 새 저장소에 올린다.
+    #[cfg(feature = "wasm")]
+    pub fn wasm(
+        engine: &tree_sitter::wasmtime::Engine,
+        language: &ResolvedLanguage,
+    ) -> Result<Self, String> {
         let (Some(wasm), Some(queries)) = (&language.grammar, &language.queries) else {
             return Err(format!("language `{}` has no grammar", language.id));
         };
         let name = grammar_name(wasm)?;
         let bytes = read_limited(wasm, MAX_GRAMMAR_BYTES)?;
-        let highlights = queries.join(HIGHLIGHTS)?;
-        let source = String::from_utf8(read_limited(&highlights, MAX_QUERY_BYTES)?)
-            .map_err(|_| format!("{} is not UTF-8", highlights.display()))?;
-
-        let mut store =
-            WasmStore::new(engine).map_err(|e| format!("cannot create the wasm store: {e}"))?;
-        let language = store
+        let mut store = tree_sitter::WasmStore::new(engine)
+            .map_err(|e| format!("cannot create the wasm store: {e}"))?;
+        let ts = store
             .load_language(&name, &bytes)
             .map_err(|e| format!("{}: {e}", wasm.display()))?;
         let mut parser = Parser::new();
@@ -61,10 +93,20 @@ impl Lane {
             .set_wasm_store(store)
             .map_err(|e| format!("cannot attach the wasm store: {e}"))?;
         parser
-            .set_language(&language)
+            .set_language(&ts)
             .map_err(|e| format!("cannot use the grammar: {e}"))?;
+        Self::with_queries(parser, ts, queries)
+    }
 
-        let highlights = Query::new(&language, &source).map_err(|e| {
+    fn with_queries(
+        parser: Parser,
+        language: Language,
+        queries: &ResolvedFile,
+    ) -> Result<Self, String> {
+        let highlights = queries.join(HIGHLIGHTS)?;
+        let source = String::from_utf8(read_limited(&highlights, MAX_QUERY_BYTES)?)
+            .map_err(|_| format!("{} is not UTF-8", highlights.display()))?;
+        let query = Query::new(&language, &source).map_err(|e| {
             format!(
                 "{}:{}:{}: {}",
                 highlights.display(),
@@ -73,16 +115,12 @@ impl Lane {
                 e.message
             )
         })?;
-        let kinds = highlights
-            .capture_names()
-            .iter()
-            .map(|n| classify(n))
-            .collect();
+        let kinds = query.capture_names().iter().map(|n| classify(n)).collect();
         Ok(Self {
             parser,
             grammar: Arc::new(Grammar {
                 language,
-                highlights,
+                highlights: query,
                 kinds,
             }),
         })
@@ -115,6 +153,7 @@ impl Lane {
 }
 
 /// WASM 파일 이름(확장자 뺀 것)이 tree-sitter 문법 이름이다 — 모듈이 `tree_sitter_<이름>` 을 내보낸다.
+#[cfg(feature = "wasm")]
 fn grammar_name(wasm: &ResolvedFile) -> Result<String, String> {
     let file = wasm.path.as_str().rsplit('/').next().unwrap_or_default();
     match file.strip_suffix(".wasm") {

@@ -40,31 +40,31 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 ### tree-sitter grammars (built-in language extensions)
 
-- Files: `extensions/lang-<grammar>/grammars/<grammar>.wasm` (WebAssembly parsers compiled from each repository's `src/` with `tree-sitter build --wasm`, tree-sitter CLI 0.27.1 — for tree-sitter-sql `src/parser.c` is generated first with `tree-sitter generate`) and `extensions/lang-<grammar>/queries/<grammar>/highlights.scm` (the repositories' highlight queries concatenated with a header naming each source; TypeScript and TSX also include tree-sitter-javascript's queries, C++ includes tree-sitter-c's). Each extension folder carries the upstream `LICENSE` (and `LICENSE-<grammar>` for borrowed queries). The source table is `scripts/grammars.toml`; `node scripts/grammars.mjs build` regenerates the files.
-- Changes: TypeScript and TSX concatenate their query files in a different order than the repository's `tree-sitter.json` (the base JavaScript queries first); the query texts themselves are unmodified.
+- Files: `extensions/lang-<grammar>/queries/<grammar>/highlights.scm` (the repositories' highlight queries concatenated with a header naming each source; TypeScript and TSX also include tree-sitter-javascript's queries, C++ includes tree-sitter-c's). Each extension folder carries the upstream `LICENSE` (and `LICENSE-<grammar>` for borrowed queries). The parsers are linked into the app natively: most as their crates.io crates and Kotlin as a git dependency (both listed in `THIRD_PARTY_NOTICES.md`), while Dockerfile's C sources are copied into `crates/pw-syntax/grammars/dockerfile/` (`parser.c`, `scanner.c`, `tree_sitter/{alloc,array,parser}.h` and `LICENSE` from the repository's `src/`, built by `crates/pw-syntax/build.rs`). `crates/pw-syntax/tests/wasm/json.wasm` is a test input compiled from tree-sitter-json with `tree-sitter build --wasm` (tree-sitter CLI 0.27.1) and is not shipped. The source table is `scripts/grammars.toml`; `node scripts/grammars.mjs build` regenerates the files.
+- Changes: TypeScript and TSX concatenate their query files in a different order than the repository's `tree-sitter.json` (the base JavaScript queries first); the query texts and the copied C sources are unmodified.
 - License: MIT for every grammar repository. The highlight queries shipped by tree-sitter-kotlin and tree-sitter-markdown state that they are based on nvim-treesitter (Apache-2.0, notice at the end of this section).
 
-| Grammar    | Source                                                       | Tag       | Commit                                     |
-| ---------- | ------------------------------------------------------------ | --------- | ------------------------------------------ |
-| Rust       | https://github.com/tree-sitter/tree-sitter-rust              | `v0.24.2` | `77a3747266f4d621d0757825e6b11edcbf991ca5` |
-| TypeScript | https://github.com/tree-sitter/tree-sitter-typescript        | `v0.23.2` | `f975a621f4e7f532fe322e13c4f79495e0a7b2e7` |
-| TSX        | https://github.com/tree-sitter/tree-sitter-typescript        | `v0.23.2` | `f975a621f4e7f532fe322e13c4f79495e0a7b2e7` |
-| JavaScript | https://github.com/tree-sitter/tree-sitter-javascript        | `v0.25.0` | `44c892e0be055ac465d5eeddae6d3e194424e7de` |
-| JSON       | https://github.com/tree-sitter/tree-sitter-json              | `v0.24.8` | `ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24` |
-| TOML       | https://github.com/tree-sitter-grammars/tree-sitter-toml     | `v0.7.0`  | `64b56832c2cffe41758f28e05c756a3a98d16f41` |
-| YAML       | https://github.com/tree-sitter-grammars/tree-sitter-yaml     | `v0.7.2`  | `7708026449bed86239b1cd5bce6e3c34dbca6415` |
-| Markdown   | https://github.com/tree-sitter-grammars/tree-sitter-markdown | `v0.5.3`  | `f969cd3ae3f9fbd4e43205431d0ae286014c05b5` |
-| Python     | https://github.com/tree-sitter/tree-sitter-python            | `v0.25.0` | `293fdc02038ee2bf0e2e206711b69c90ac0d413f` |
-| Go         | https://github.com/tree-sitter/tree-sitter-go                | `v0.25.0` | `1547678a9da59885853f5f5cc8a99cc203fa2e2c` |
-| Java       | https://github.com/tree-sitter/tree-sitter-java              | `v0.23.5` | `94703d5a6bed02b98e438d7cad1136c01a60ba2c` |
-| Kotlin     | https://github.com/fwcd/tree-sitter-kotlin                   | `0.3.8`   | `e1a2d5ad1f61f5740677183cd4125bb071cd2f30` |
-| Bash       | https://github.com/tree-sitter/tree-sitter-bash              | `v0.25.1` | `a06c2e4415e9bc0346c6b86d401879ffb44058f7` |
-| HTML       | https://github.com/tree-sitter/tree-sitter-html              | `v0.23.2` | `5a5ca8551a179998360b4a4ca2c0f366a35acc03` |
-| CSS        | https://github.com/tree-sitter/tree-sitter-css               | `v0.25.0` | `dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f` |
-| SQL        | https://github.com/DerekStride/tree-sitter-sql               | `v0.3.11` | `7b51ecda191d36b92f5a90a8d1bc3faef1c7b8b8` |
-| Dockerfile | https://github.com/camdencheek/tree-sitter-dockerfile        | `v0.2.0`  | `868e44ce378deb68aac902a9db68ff82d2299dd0` |
-| C          | https://github.com/tree-sitter/tree-sitter-c                 | `v0.24.2` | `b780e47fc780ddc8da13afa35a3f4ed5c157823d` |
-| C++        | https://github.com/tree-sitter/tree-sitter-cpp               | `v0.23.4` | `f41e1a044c8a84ea9fa8577fdd2eab92ec96de02` |
+| Grammar    | Source                                                       | Tag       | Commit                                     | Linked as                             |
+| ---------- | ------------------------------------------------------------ | --------- | ------------------------------------------ | ------------------------------------- |
+| Rust       | https://github.com/tree-sitter/tree-sitter-rust              | `v0.24.2` | `77a3747266f4d621d0757825e6b11edcbf991ca5` | crate `tree-sitter-rust` 0.24.2       |
+| TypeScript | https://github.com/tree-sitter/tree-sitter-typescript        | `v0.23.2` | `f975a621f4e7f532fe322e13c4f79495e0a7b2e7` | crate `tree-sitter-typescript` 0.23.2 |
+| TSX        | https://github.com/tree-sitter/tree-sitter-typescript        | `v0.23.2` | `f975a621f4e7f532fe322e13c4f79495e0a7b2e7` | crate `tree-sitter-typescript` 0.23.2 |
+| JavaScript | https://github.com/tree-sitter/tree-sitter-javascript        | `v0.25.0` | `44c892e0be055ac465d5eeddae6d3e194424e7de` | crate `tree-sitter-javascript` 0.25.0 |
+| JSON       | https://github.com/tree-sitter/tree-sitter-json              | `v0.24.8` | `ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24` | crate `tree-sitter-json` 0.24.8       |
+| TOML       | https://github.com/tree-sitter-grammars/tree-sitter-toml     | `v0.7.0`  | `64b56832c2cffe41758f28e05c756a3a98d16f41` | crate `tree-sitter-toml-ng` 0.7.0     |
+| YAML       | https://github.com/tree-sitter-grammars/tree-sitter-yaml     | `v0.7.2`  | `7708026449bed86239b1cd5bce6e3c34dbca6415` | crate `tree-sitter-yaml` 0.7.2        |
+| Markdown   | https://github.com/tree-sitter-grammars/tree-sitter-markdown | `v0.5.3`  | `f969cd3ae3f9fbd4e43205431d0ae286014c05b5` | crate `tree-sitter-md` 0.5.3          |
+| Python     | https://github.com/tree-sitter/tree-sitter-python            | `v0.25.0` | `293fdc02038ee2bf0e2e206711b69c90ac0d413f` | crate `tree-sitter-python` 0.25.0     |
+| Go         | https://github.com/tree-sitter/tree-sitter-go                | `v0.25.0` | `1547678a9da59885853f5f5cc8a99cc203fa2e2c` | crate `tree-sitter-go` 0.25.0         |
+| Java       | https://github.com/tree-sitter/tree-sitter-java              | `v0.23.5` | `94703d5a6bed02b98e438d7cad1136c01a60ba2c` | crate `tree-sitter-java` 0.23.5       |
+| Kotlin     | https://github.com/fwcd/tree-sitter-kotlin                   | (none)    | `c10ad83a66c76855e006496db3bdb002afc49203` | git dependency (crate version 0.4.0)  |
+| Bash       | https://github.com/tree-sitter/tree-sitter-bash              | `v0.25.1` | `a06c2e4415e9bc0346c6b86d401879ffb44058f7` | crate `tree-sitter-bash` 0.25.1       |
+| HTML       | https://github.com/tree-sitter/tree-sitter-html              | `v0.23.2` | `5a5ca8551a179998360b4a4ca2c0f366a35acc03` | crate `tree-sitter-html` 0.23.2       |
+| CSS        | https://github.com/tree-sitter/tree-sitter-css               | `v0.25.0` | `dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f` | crate `tree-sitter-css` 0.25.0        |
+| SQL        | https://github.com/DerekStride/tree-sitter-sql               | `v0.3.11` | `7b51ecda191d36b92f5a90a8d1bc3faef1c7b8b8` | crate `tree-sitter-sequel` 0.3.11     |
+| Dockerfile | https://github.com/camdencheek/tree-sitter-dockerfile        | `v0.2.0`  | `868e44ce378deb68aac902a9db68ff82d2299dd0` | copied C sources                      |
+| C          | https://github.com/tree-sitter/tree-sitter-c                 | `v0.24.2` | `b780e47fc780ddc8da13afa35a3f4ed5c157823d` | crate `tree-sitter-c` 0.24.2          |
+| C++        | https://github.com/tree-sitter/tree-sitter-cpp               | `v0.23.4` | `f41e1a044c8a84ea9fa8577fdd2eab92ec96de02` | crate `tree-sitter-cpp` 0.23.4        |
 
 #### tree-sitter-rust — MIT
 

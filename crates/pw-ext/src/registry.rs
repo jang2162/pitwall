@@ -115,7 +115,9 @@ pub struct ResolvedLanguage {
     pub id: String,
     /// Linguist 언어 이름. 언어 판별(`lang.detect`)의 결과와 이 이름으로 잇는다.
     pub linguist: String,
-    /// tree-sitter 문법 WASM.
+    /// 앱에 링크된 tree-sitter 문법의 이름(`pw-syntax` 의 내장 문법). 내장 확장만 있다.
+    pub builtin_grammar: Option<String>,
+    /// tree-sitter 문법 WASM(외부 확장, M8 — 지금은 받지 않으므로 늘 `None`).
     pub grammar: Option<ResolvedFile>,
     /// 쿼리 폴더(`highlights.scm` 등). [`ResolvedFile::join`] 으로 그 안의 파일을 가리킨다.
     pub queries: Option<ResolvedFile>,
@@ -246,6 +248,7 @@ impl Registry {
                 extension: e.manifest.id.clone(),
                 id: l.id.clone(),
                 linguist: l.linguist.clone(),
+                builtin_grammar: l.builtin_grammar.as_ref().map(|g| g.name.clone()),
                 grammar: l.grammar.as_ref().map(resolve),
                 queries: l.queries.as_ref().map(resolve),
             }
@@ -562,16 +565,17 @@ impl Registry {
         out
     }
 
-    /// 내장이 아닌 확장의 문법 WASM · 쿼리는 등록하지 않는다(언어 이름 · 확장자 · 주석 기호는 받는다). 문법 WASM 의 실행 시간에
-    /// 상한을 걸 수 없어서다 — `docs/design/07-extensibility.md` 「문법 WASM 의 신뢰 경계」.
+    /// 내장이 아닌 확장의 문법(WASM · 내장 문법 이름) · 쿼리는 등록하지 않는다(언어 이름 · 확장자 · 주석 기호는 받는다). 문법
+    /// WASM 의 실행 시간에 상한을 걸 수 없어서다 — `docs/design/07-extensibility.md` 「문법 WASM 의 신뢰 경계」.
     fn drop_grammars(&mut self, file: &str, manifest: &mut Manifest) {
         for language in &mut manifest.contributes.languages {
+            let builtin = language.builtin_grammar.take();
             let grammar = language.grammar.take();
             let queries = language.queries.take();
-            let Some(pos) = grammar
-                .as_ref()
-                .or(queries.as_ref())
-                .map(|p| p.pos.or(language.pos))
+            let Some(pos) = builtin
+                .map(|g| g.pos)
+                .or(grammar.or(queries).map(|p| p.pos))
+                .map(|pos| pos.or(language.pos))
             else {
                 continue;
             };
@@ -1122,12 +1126,15 @@ mod tests {
         );
     }
 
-    /// 사용자 확장의 언어 기여는 받되 문법 WASM · 쿼리는 등록하지 않는다(경고를 남긴다). 내장 확장의 문법은 그대로다.
+    /// 사용자 확장의 언어 기여는 받되 문법(WASM · 내장 문법 이름) · 쿼리는 등록하지 않는다(경고를 남긴다). 내장 확장의 문법은
+    /// 그대로다.
     #[test]
     fn a_user_extension_language_is_registered_without_its_grammar() {
         let dir = tempfile::tempdir().unwrap();
         let body = "[contributes.languages.ruby]\nlinguist = \"Ruby\"\nextensions = [\".rb\"]\n\
                     grammar = \"grammars/ruby.wasm\"\nqueries = \"queries/ruby\"\n\n\
+                    [contributes.languages.conf]\nlinguist = \"Conf\"\nbuiltin_grammar = \"toml\"\n\
+                    queries = \"queries/ruby\"\n\n\
                     [contributes.languages.plain]\nlinguist = \"Plain\"\n";
         let user = ext(
             dir.path(),
@@ -1144,19 +1151,28 @@ mod tests {
         let ruby = registry.language_for_linguist("Ruby").unwrap();
         assert_eq!(ruby.extension, "dev.example.ruby");
         assert_eq!((ruby.grammar, ruby.queries), (None, None));
+        let conf = registry.language_for_linguist("Conf").unwrap();
+        assert_eq!((conf.builtin_grammar, conf.queries), (None, None));
         let messages = messages(&registry);
-        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        let warning = |language: &str| {
+            format!(
+                "warning: language `{language}`: grammars are loaded only from built-in extensions for now; it has no syntax highlighting"
+            )
+        };
         assert!(
-            messages[0].ends_with(
-                "8:11: warning: language `ruby`: grammars are loaded only from built-in extensions for now; it has no syntax highlighting"
-            ),
+            messages[0].ends_with(&format!("8:11: {}", warning("ruby"))),
+            "{messages:?}"
+        );
+        assert!(
+            messages[1].ends_with(&format!("13:19: {}", warning("conf"))),
             "{messages:?}"
         );
         assert!(
             registry
                 .language_for_linguist("Rust")
                 .unwrap()
-                .grammar
+                .builtin_grammar
                 .is_some()
         );
     }

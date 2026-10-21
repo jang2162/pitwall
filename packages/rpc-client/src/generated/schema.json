@@ -4698,7 +4698,7 @@
               },
               {
                 "const": "failed",
-                "description": "파서가 끝까지 가지 못했다(문법 WASM 의 오류).",
+                "description": "파서가 끝까지 가지 못했다(문법의 오류 — WASM 문법이면 trap).",
                 "type": "string"
               }
             ]
@@ -4817,7 +4817,7 @@
               },
               {
                 "const": "failed",
-                "description": "파서가 끝까지 가지 못했다(문법 WASM 의 오류).",
+                "description": "파서가 끝까지 가지 못했다(문법의 오류 — WASM 문법이면 trap).",
                 "type": "string"
               }
             ]
@@ -4956,7 +4956,7 @@
               },
               {
                 "const": "failed",
-                "description": "파서가 끝까지 가지 못했다(문법 WASM 의 오류).",
+                "description": "파서가 끝까지 가지 못했다(문법의 오류 — WASM 문법이면 trap).",
                 "type": "string"
               }
             ]

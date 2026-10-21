@@ -1,6 +1,6 @@
 ; 생성물 — scripts/grammars.mjs 가 아래 원본 쿼리를 이어 붙였다. 손으로 고치지 않는다(출처표 scripts/grammars.toml).
 
-; ---- https://github.com/fwcd/tree-sitter-kotlin @ e1a2d5ad1f61f5740677183cd4125bb071cd2f30 — queries/highlights.scm
+; ---- https://github.com/fwcd/tree-sitter-kotlin @ c10ad83a66c76855e006496db3bdb002afc49203 — queries/highlights.scm
 
 ;; Based on the nvim-treesitter highlighting, which is under the Apache license.
 ;; See https://github.com/nvim-treesitter/nvim-treesitter/blob/f8ab59861eed4a1c168505e3433462ed800f2bae/queries/kotlin/highlights.scm
@@ -187,7 +187,6 @@
 		"require"
 		"requireNotNull"
 		"with"
-		"suspend"
 		"synchronized"
 ))
 
@@ -209,7 +208,7 @@
 ] @number
 
 [
-	"null" ; should be highlighted the same as booleans
+	(null_literal) ; should be highlighted the same as booleans
 	(boolean_literal)
 ] @boolean
 
@@ -351,12 +350,11 @@
 	"?:"
 	"!!"
 	"is"
-	"!is"
 	"in"
-	"!in"
 	"as"
 	"as?"
 	".."
+	"..<"
 	"->"
 ] @operator
 

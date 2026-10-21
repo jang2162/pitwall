@@ -1341,7 +1341,7 @@ export type SyntaxOff =
 "longLine" | 
 /**  파싱이나 강조 쿼리가 시간 상한을 넘었다. */
 "timedOut" | 
-/**  파서가 끝까지 가지 못했다(문법 WASM 의 오류). */
+/**  파서가 끝까지 가지 못했다(문법의 오류 — WASM 문법이면 trap). */
 "failed";
 
 export type SyntaxOpenParams = {

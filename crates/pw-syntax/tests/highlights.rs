@@ -1,5 +1,6 @@
 //! 내장 언어마다 픽스처 하나(`tests/fixtures/`)를 실제 내장 확장의 문법 · 쿼리로 강조해 스냅숏(`tests/snapshots/`)과 견준다.
-//! 문법 WASM · 쿼리를 다시 만들었거나(`mise run grammars`) 토큰 규칙을 바꿨으면 `cargo insta review` 로 차이를 보고 받아들인다.
+//! 문법 판본을 올렸거나 쿼리를 다시 만들었거나(`mise run grammars`) 토큰 규칙을 바꿨으면 `cargo insta review` 로 차이를 보고
+//! 받아들인다.
 
 use std::sync::Arc;
 

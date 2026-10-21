@@ -1,10 +1,16 @@
 [package]
 name = "pw-syntax"
-description = "Pitwall syntax service: tree-sitter parsing with WASM grammars from language extensions, highlight spans"
+description = "Pitwall syntax service: tree-sitter parsing with grammars linked into the app, highlight spans"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[features]
+# 문법 WASM 을 wasmtime 으로 올리는 경로(외부 확장 문법, M8). 앱은 켜지 않는다 — 내장 문법은 모두 네이티브다(결정 M1-D2 의
+# 되돌림). 시험 · 린트는 켜고 돈다(`mise run test` · `lint` 의 `--all-features`). wasmtime C API 크레이트의 빌드 스크립트가 cmake 를
+# 부른다(mise.toml).
+wasm = ["tree-sitter/wasm"]
 
 [dependencies]
 pw-ext = { path = "../pw-ext" }
@@ -18,9 +24,36 @@ specta = { workspace = true, features = ["derive"] }
 # 문법 로드 · 파싱 · 쿼리를 블로킹 스레드로 보낸다.
 tokio = { workspace = true, features = ["rt"] }
 tracing = "0.1.44"
-# 코어 tree-sitter(MIT) + WASM 문법(결정 M1-D2). `wasm` 기능이 wasmtime(Apache-2.0 WITH LLVM-exception)을 끌어온다 — 그
-# C API 크레이트의 빌드 스크립트가 cmake 를 부른다(mise.toml).
-tree-sitter = { version = "0.27.1", features = ["wasm"] }
+# 코어 tree-sitter(MIT).
+tree-sitter = "0.27.1"
+# 저장소에 넣은 C 소스로 만든 문법(Dockerfile — build.rs)을 tree-sitter 언어로 쓴다. 문법 크레이트들도 이것으로 언어를 낸다.
+tree-sitter-language = "0.1.9"
+# 내장 문법(결정 M1-D3). 판본은 출처표 scripts/grammars.toml 의 태그 · 커밋과 같다(`mise run lint` 가 Cargo.lock 과 견준다).
+# 모두 MIT, C 소스를 cc 로 정적 링크한다.
+tree-sitter-bash = "=0.25.1"
+tree-sitter-c = "=0.24.2"
+tree-sitter-cpp = "=0.23.4"
+tree-sitter-css = "=0.25.0"
+tree-sitter-go = "=0.25.0"
+tree-sitter-html = "=0.23.2"
+tree-sitter-java = "=0.23.5"
+tree-sitter-javascript = "=0.25.0"
+tree-sitter-json = "=0.24.8"
+# crates.io 판본(0.3.8)이 옛 tree-sitter 크레이트(links = "tree-sitter")에 직접 의존해 0.27 과 한 빌드에 들어가지 못한다 — 그
+# 뒤 tree-sitter-language 로 바꾼 커밋(0.4.0, 태그 · crates.io 없음)을 고정한다. crates.io 에 0.4 이상이 올라오면 그쪽으로
+# 옮기고 deny.toml 의 allow-git 에서 뺀다.
+tree-sitter-kotlin = { git = "https://github.com/fwcd/tree-sitter-kotlin", rev = "c10ad83a66c76855e006496db3bdb002afc49203" }
+tree-sitter-md = { version = "=0.5.3", default-features = false }
+tree-sitter-python = "=0.25.0"
+tree-sitter-rust = "=0.24.2"
+tree-sitter-sequel = "=0.3.11"
+tree-sitter-toml-ng = "=0.7.0"
+tree-sitter-typescript = "=0.23.2"
+tree-sitter-yaml = "=0.7.2"
+
+[build-dependencies]
+# Dockerfile 문법의 C 소스(grammars/dockerfile/)를 빌드한다.
+cc = "1.2"
 
 [dev-dependencies]
 # 언어마다 픽스처 하나의 강조 결과를 스냅숏으로 고정한다(tests/snapshots/).

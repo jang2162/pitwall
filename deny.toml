@@ -114,4 +114,7 @@ allow-wildcard-paths = true
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# Kotlin 문법: crates.io 판본(0.3.8)이 옛 tree-sitter 크레이트(links = "tree-sitter")에 직접 의존해 tree-sitter 0.27 과 한 빌드에
+# 들어가지 못해, tree-sitter-language 로 바꾼 커밋을 rev 로 고정해 받는다(crates/pw-syntax/Cargo.toml · scripts/grammars.toml).
+# crates.io 에 0.4 이상이 올라오면 그쪽으로 옮기고 이 줄을 뺀다.
+allow-git = ["https://github.com/fwcd/tree-sitter-kotlin"]
