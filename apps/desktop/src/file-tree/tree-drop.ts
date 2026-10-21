@@ -1,4 +1,4 @@
-// 파일 트리로 끌어 놓기(M1-21, 10-ui §5.4): 트리 안 드래그(이동 · ⌥ 복사)의 대상 폴더와, Finder(다른 앱)에서의 드롭.
+// 파일 트리로 끌어 놓기(M1-21, 10-ui §5.4): 놓을 폴더와 Finder(다른 앱)에서의 드롭. 트리 안 드래그는 tree-drag.ts.
 //
 // Finder 드롭은 웹뷰의 HTML 드롭이 경로를 주지 않아 데스크톱이 받는다(apps/desktop/src-tauri/src/drop_import.rs): 창이 드롭을 받으면
 // 번호를 붙여 `pitwall://file-drop` 으로 알리고, 여기서 위치로 대상 폴더를 골라 `import_drop` 에 번호를 넘긴다 — 경로 글자를 넘기지
@@ -12,9 +12,6 @@ import { parentOf, type TreeEntry } from "./tree-model";
 
 /** 데스크톱이 드롭을 기록했다(drop_import.rs `DROP_EVENT` · `DropRecorded`). */
 export const FILE_DROP_EVENT = "pitwall://file-drop";
-
-/** 트리 안 드래그의 데이터 종류. 끄는 항목의 경로 목록(JSON). */
-export const TREE_DRAG_TYPE = "application/x-pitwall-tree-paths";
 
 export interface FileDrop {
   id: number;

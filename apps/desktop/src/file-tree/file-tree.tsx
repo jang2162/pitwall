@@ -7,8 +7,8 @@
 //   이름에 그 글자가 든 것으로 간다. ↑↓ 는 앞뒤 일치, Enter 는 그 행을 연다, Esc 는 닫는다.
 // - 우클릭 메뉴: 새 파일 · 새 폴더 · 이름 바꾸기 · 삭제(M1-21, file-ops.ts), 경로 복사 · 상대 경로 복사 · Finder 에서 보기 · 터미널에서
 //   열기 · 외부 도구로 열기 · 이 폴더에서 찾기(src/search). 외부 도구는 Host 의 `openWith.run` 이 띄운다(open-with/open-with.tsx).
-// - 행을 끌어 폴더(또는 파일 — 그 부모)에 놓으면 옮기고, ⌥ 를 누른 채 놓으면 복사한다. Finder 에서의 드롭은 툴 윈도우가
-//   데스크톱의 드롭 알림으로 받는다(tree-drop.ts).
+// - 행을 끌어 폴더(또는 파일 — 그 부모)에 놓으면 옮기고, ⌥ 를 누른 채 놓으면 복사한다 — 포인터 이벤트로 끈다(tree-drag.ts).
+//   Finder 에서의 드롭은 툴 윈도우가 데스크톱의 드롭 알림으로 받는다(tree-drop.ts).
 // - 루트 밖을 가리키는 심링크는 「루트 밖을 가리킴」 을 달고 펼치거나 열지 않는다(결정 M1-D8).
 
 import type { Platform } from "@pitwall/keymap";
@@ -28,8 +28,8 @@ import {
   LocateFixed,
 } from "lucide-react";
 import {
-  type DragEvent,
   type KeyboardEvent,
+  type PointerEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -59,7 +59,8 @@ import { useFileDialogs } from "./file-dialogs";
 import { type FileOps, fileOps, fileOpsActions } from "./file-ops";
 import { revealRequests, treeScope, windowFileTree } from "./project-view";
 import { type FileTreeStrings, useFileTreeStrings } from "./strings";
-import { dropFolderAt, folderOf, tauriDropNative, TREE_DRAG_TYPE } from "./tree-drop";
+import { trackTreeDrag, type TreeDragState } from "./tree-drag";
+import { dropFolderAt, folderOf, tauriDropNative } from "./tree-drop";
 import {
   type FileTreeModel,
   isWithin,
@@ -118,7 +119,7 @@ function TreeRowView({
   strings,
   start,
   dropTarget,
-  draggable,
+  onPointerDown,
   onClick,
   onDoubleClick,
   onToggle,
@@ -132,7 +133,7 @@ function TreeRowView({
   start: number;
   /** 끄는 항목을 놓으면 이 폴더로 들어간다. */
   dropTarget: boolean;
-  draggable: boolean;
+  onPointerDown(row: TreeRow, e: PointerEvent<HTMLElement>): void;
   onClick(row: TreeRow): void;
   onDoubleClick(row: TreeRow): void;
   onToggle(row: TreeRow): void;
@@ -179,12 +180,7 @@ function TreeRowView({
       data-outside={entry.outside ? "" : undefined}
       data-drop-target={dropTarget ? "" : undefined}
       title={entry.outside ? strings.outside : undefined}
-      draggable={draggable}
-      onDragStart={(e) => {
-        e.dataTransfer.setData(TREE_DRAG_TYPE, JSON.stringify([entry.path]));
-        e.dataTransfer.setData("text/plain", entry.path);
-        e.dataTransfer.effectAllowed = "copyMove";
-      }}
+      onPointerDown={(e) => onPointerDown(row, e)}
       onClick={() => onClick(row)}
       onDoubleClick={() => onDoubleClick(row)}
       onContextMenu={() => onContextMenu(row)}
@@ -281,8 +277,10 @@ export function FileTree({
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState<string>();
   const [menuRow, setMenuRow] = useState<TreeRow>();
-  /** 끄는 항목을 놓을 폴더(그 행을 테두리로 보인다). */
-  const [dropTarget, setDropTarget] = useState<string>();
+  /** 끄는 중이면 놓을 폴더(그 행을 테두리로 보인다)와 복사 여부. */
+  const [drag, setDrag] = useState<TreeDragState>();
+  const stopDrag = useRef<() => void>(undefined);
+  useEffect(() => () => stopDrag.current?.(), []);
   /** 고른 행을 다음 그림 뒤에 화면 안으로 굴린다. */
   const [scrollPending, setScrollPending] = useState(0);
 
@@ -455,17 +453,29 @@ export function FileTree({
   const root = model.getRoot();
   const target = menuRow?.entry;
 
-  /** 이 요소(행 또는 빈 자리) 위에 놓으면 들어갈 폴더. */
-  const folderAt = (element: EventTarget | null): string | undefined => {
-    if (root === undefined) return undefined;
-    const path = (element as Element | null)
-      ?.closest?.("[role=treeitem]")
-      ?.getAttribute("data-path");
-    const entry = path ? rows.find((r) => r.entry.path === path)?.entry : undefined;
-    return entry ? folderOf(entry, root) : root;
+  /** 행을 누르면 끌기를 따라가기 시작한다(왼쪽 단추, 루트 행은 끌지 않는다). ⌃클릭은 macOS 의 우클릭이다. */
+  const startDrag = (row: TreeRow, e: PointerEvent<HTMLElement>) => {
+    const tree = scrollRef.current;
+    if (handlers.ops === undefined || row.depth === 0 || e.button !== 0 || e.ctrlKey || !tree)
+      return;
+    stopDrag.current?.();
+    stopDrag.current = trackTreeDrag({
+      tree,
+      paths: [row.entry.path],
+      start: { x: e.clientX, y: e.clientY },
+      pointerId: e.pointerId,
+      // 끄는 동안 트리가 바뀌어도(감시) 지금의 행으로 판정한다.
+      folderAt: (element) => {
+        const top = model.getRoot();
+        if (top === undefined || !element || !tree.contains(element)) return undefined;
+        const path = element.closest("[role=treeitem]")?.getAttribute("data-path");
+        const entry = path ? model.rows().find((r) => r.entry.path === path)?.entry : undefined;
+        return entry ? folderOf(entry, top) : top;
+      },
+      onChange: setDrag,
+      onDrop: (paths, dir, copy) => void handlers.ops?.move(paths, dir, copy),
+    });
   };
-  const dragging = (e: DragEvent<HTMLElement>) =>
-    handlers.ops !== undefined && e.dataTransfer.types.includes(TREE_DRAG_TYPE);
   const menuFolder = (entry: TreeEntry | undefined) =>
     entry && root !== undefined ? folderOf(entry, root) : root;
 
@@ -504,36 +514,8 @@ export function FileTree({
               if (e.target === scrollRef.current || e.target === e.currentTarget.firstChild)
                 setMenuRow(rows[0]);
             }}
-            onDragOver={(e) => {
-              if (!dragging(e)) return;
-              e.preventDefault();
-              e.dataTransfer.dropEffect = e.altKey ? "copy" : "move";
-              setDropTarget(folderAt(e.target));
-            }}
-            onDragLeave={(e) => {
-              if (!e.currentTarget.contains(e.relatedTarget as Node | null))
-                setDropTarget(undefined);
-            }}
-            onDragEnd={() => setDropTarget(undefined)}
-            onDrop={(e) => {
-              if (!dragging(e)) return;
-              e.preventDefault();
-              setDropTarget(undefined);
-              const dir = folderAt(e.target);
-              let paths: unknown;
-              try {
-                paths = JSON.parse(e.dataTransfer.getData(TREE_DRAG_TYPE));
-              } catch {
-                return;
-              }
-              if (dir === undefined || !Array.isArray(paths)) return;
-              void handlers.ops?.move(
-                paths.filter((p): p is string => typeof p === "string"),
-                dir,
-                e.altKey,
-              );
-            }}
-            className="min-h-0 flex-1 overflow-auto text-[13px] outline-none"
+            data-dragging={drag ? (drag.copy ? "copy" : "move") : undefined}
+            className="min-h-0 flex-1 overflow-auto text-[13px] outline-none data-[dragging=copy]:cursor-copy data-[dragging=copy]:[&_*]:cursor-copy data-[dragging=move]:cursor-grabbing data-[dragging=move]:[&_*]:cursor-grabbing"
           >
             {root === undefined ? (
               <p className="p-2 text-ui-muted-foreground">{strings.noRoot}</p>
@@ -551,8 +533,8 @@ export function FileTree({
                       query={query}
                       strings={strings}
                       start={item.start}
-                      dropTarget={row.entry.path === dropTarget}
-                      draggable={handlers.ops !== undefined && row.depth > 0}
+                      dropTarget={drag !== undefined && row.entry.path === drag.dir}
+                      onPointerDown={startDrag}
                       onClick={(r) => {
                         model.select(r.entry.path);
                         if (!r.entry.dir && !r.entry.outside) handlers.open(r.entry.path, true);

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // 프로젝트 창의 파일 조작(12-m1-plan M1-21 완료 기준): 가짜 Host(메모리 디스크 — `fs.create` · `fs.rename` · `fs.copy` · `fs.trash` 가
 // Host 와 같은 규칙: 같은 이름이면 `CONFLICT` 이고 아무것도 바꾸지 않는다)에 붙여, 조작마다 트리 · 디스크 · 열린 탭이 일치하는지
-// 본다. 이름 바꾸기(⇧F6) · 드래그 이동 · ⌥+드래그 복사 · 삭제(⌫, 확인 · 휴지통 없음 → 영구 삭제 확인) · 이름 겹침 · Finder 드롭.
+// 본다. 이름 바꾸기(⇧F6) · 드래그 이동 · ⌥+드래그 복사(포인터 이벤트) · 드래그 취소 · 삭제(⌫, 확인 · 휴지통 없음 → 영구 삭제 확인) · 이름 겹침 · Finder 드롭.
 
 import type {
   ConfigView,
@@ -441,30 +441,28 @@ async function answerConfirm(label: string): Promise<string> {
   return text;
 }
 
+async function pointer(el: Element, type: string, init: PointerEventInit = {}) {
+  await act(async () => {
+    el.dispatchEvent(
+      new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...init }),
+    );
+  });
+}
+
+/** 포인터로 `from` 행을 눌러 `to` 행 위로 끈다(문턱을 넘게). 놓지는 않는다. */
+async function dragOver(from: string, to: string, altKey = false) {
+  await pointer(row(from)!, "pointerdown", { button: 0, clientX: 10, clientY: 10 });
+  await pointer(row(to)!, "pointermove", { clientX: 10, clientY: 40, altKey });
+}
+
 /** 드래그: `from` 행을 끌어 `to` 행에 놓는다. */
 async function drag(from: string, to: string, altKey = false) {
-  const data = new Map<string, string>();
-  const dataTransfer = {
-    get types() {
-      return [...data.keys()];
-    },
-    setData: (type: string, value: string) => data.set(type, value),
-    getData: (type: string) => data.get(type) ?? "",
-    dropEffect: "none",
-    effectAllowed: "all",
-  };
-  const fire = (el: Element, type: string) => {
-    const event = new MouseEvent(type, { bubbles: true, cancelable: true, altKey });
-    Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-    el.dispatchEvent(event);
-  };
-  await act(async () => {
-    fire(row(from)!, "dragstart");
-    fire(row(to)!, "dragover");
-  });
-  // 놓을 폴더의 행에 테두리가 보인다.
+  await dragOver(from, to, altKey);
+  // 놓을 폴더의 행에 테두리가 보이고, 커서가 이동 · 복사를 보인다.
   expect(row(to)!.hasAttribute("data-drop-target")).toBe(true);
-  await act(async () => fire(row(to)!, "drop"));
+  expect(tree().getAttribute("data-dragging")).toBe(altKey ? "copy" : "move");
+  await pointer(row(to)!, "pointerup", { clientX: 10, clientY: 40, altKey });
+  expect(tree().hasAttribute("data-dragging")).toBe(false);
   await settle(40);
 }
 
@@ -532,6 +530,77 @@ it("moves a folder by drag with its open tab, and copies with ⌥+drag", async (
   expect(host.files.get(`${ROOT}/src/Cargo.toml`)).toBe("[package]");
   expect(host.files.has(`${ROOT}/Cargo.toml`)).toBe(true);
   await vi.waitFor(() => expect(rowPaths()).toContain(`${ROOT}/src/Cargo.toml`));
+});
+
+it("cancels a tree drag with Esc or by letting go outside the tree, and a short move is a click", async () => {
+  await mount();
+  const before = host.calls.length;
+
+  await dragOver(`${ROOT}/Cargo.toml`, `${ROOT}/src`);
+  expect(row(`${ROOT}/src`)!.hasAttribute("data-drop-target")).toBe(true);
+  await act(async () => {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  expect(row(`${ROOT}/src`)!.hasAttribute("data-drop-target")).toBe(false);
+  expect(tree().hasAttribute("data-dragging")).toBe(false);
+  await pointer(row(`${ROOT}/src`)!, "pointerup", { clientX: 10, clientY: 40 });
+  await settle(40);
+
+  // 트리 밖으로 끌면 놓을 곳이 없고, 거기서 떼면 아무것도 하지 않는다.
+  await dragOver(`${ROOT}/Cargo.toml`, `${ROOT}/src`);
+  await pointer(document.body, "pointermove", { clientX: 900, clientY: 40 });
+  expect(document.querySelector("[data-drop-target]")).toBeNull();
+  expect(tree().getAttribute("data-dragging")).toBe("move");
+  await pointer(document.body, "pointerup", { clientX: 900, clientY: 40 });
+  await settle(40);
+  expect(tree().hasAttribute("data-dragging")).toBe(false);
+
+  // 문턱 전에 떼면 끌기가 아니다.
+  await pointer(row(`${ROOT}/Cargo.toml`)!, "pointerdown", { button: 0, clientX: 10, clientY: 10 });
+  await pointer(row(`${ROOT}/src`)!, "pointermove", { clientX: 11, clientY: 11 });
+  expect(tree().hasAttribute("data-dragging")).toBe(false);
+  await pointer(row(`${ROOT}/src`)!, "pointerup", { clientX: 11, clientY: 11 });
+  await settle(40);
+
+  expect(host.calls.slice(before).filter((c) => c.method !== "fs.list")).toEqual([]);
+  expect(host.files.has(`${ROOT}/Cargo.toml`)).toBe(true);
+  expect(host.files.has(`${ROOT}/src/Cargo.toml`)).toBe(false);
+});
+
+it("copies with ⌥ pressed during a drag even when the key arrives as IME composition", async () => {
+  await mount();
+  await dragOver(`${ROOT}/Cargo.toml`, `${ROOT}/src`);
+  expect(tree().getAttribute("data-dragging")).toBe("move");
+  // 한글 입력기에서 ⌥ 는 조합 중인 키로 올 수 있다 — 수식키 상태로 판정한다.
+  await act(async () => {
+    const down = new KeyboardEvent("keydown", {
+      key: "Alt",
+      code: "AltLeft",
+      altKey: true,
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(down, "keyCode", { value: 229 });
+    document.body.dispatchEvent(down);
+  });
+  expect(tree().getAttribute("data-dragging")).toBe("copy");
+  await pointer(row(`${ROOT}/src`)!, "pointerup", { clientX: 10, clientY: 40, altKey: true });
+  await settle(40);
+  expect(fsCalls("fs.copy").at(-1)?.params).toMatchObject({
+    from: `${ROOT}/Cargo.toml`,
+    to: `${ROOT}/src/Cargo.toml`,
+  });
+  expect(fsCalls("fs.rename")).toEqual([]);
+  expect(host.files.get(`${ROOT}/src/Cargo.toml`)).toBe("[package]");
+  expect(host.files.has(`${ROOT}/Cargo.toml`)).toBe(true);
 });
 
 it("reports a taken name as an error and changes nothing", async () => {
