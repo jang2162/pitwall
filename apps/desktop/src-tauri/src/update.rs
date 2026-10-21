@@ -13,6 +13,11 @@
 //! `$DATA` 로 떴을 때만 한다([`auto_check`]) — `mise run dev`(debug) · `mise run perf`(회마다 임시 `$DATA`) · 시험은 네트워크에
 //! 나가지 않고 대화상자도 띄우지 않는다. debug 빌드는 메뉴로도 확인하지 않는다 — 설치가 개발 바이너리를 바꿔 끼우지 않게.
 //!
+//! 설치 뒤 다시 시작: 곧바로 `app.restart()` 하지 않고 「종료」(⌘Q)와 같은 길로 모든 창에 닫기를 요청한다(`menu::quit`) —
+//! 창 닫기 요청을 지나야 미저장 편집을 묻는다(docs/design/10-ui.md §5.2). 창이 모두 닫혀 앱이 끝날 때(`RunEvent::Exit`,
+//! main.rs) [`restart_if_installed`] 가 새 버전을 띄운다. 한 창이라도 [취소] 하면 웹뷰가 `window_close_cancelled` 를 부르고
+//! 다시 시작을 거둔다 — 설치는 이미 됐으니 다음 시작 때 새 버전이 뜬다고 알린다.
+//!
 //! 매니페스트 주소는 빌드할 때 `PITWALL_UPDATE_STABLE_MANIFEST` · `PITWALL_UPDATE_RELEASES_API` 로 바꿀 수 있다(로컬 업데이트
 //! 왕복 시험, CONTRIBUTING.md 「릴리스」). 실행 중 환경 변수로는 바꾸지 않는다.
 
@@ -203,6 +208,51 @@ enum Trigger {
     Menu,
 }
 
+/// 설치한 업데이트로 다시 시작하려고 모든 창에 닫기를 요청했다. 앱이 끝나면 다시 시작하고, 창이 닫기를 [취소] 하면 거둔다.
+#[derive(Debug, Default)]
+pub struct PendingRestart(AtomicBool);
+
+impl PendingRestart {
+    pub const fn new() -> Self {
+        Self(AtomicBool::new(false))
+    }
+
+    pub fn request(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    /// 걸려 있던 다시 시작을 거둔다. 걸려 있었으면 `true` 다(한 번만).
+    pub fn take(&self) -> bool {
+        self.0.swap(false, Ordering::SeqCst)
+    }
+}
+
+static RESTART: PendingRestart = PendingRestart::new();
+
+/// main.rs 의 `RunEvent::Exit`(터미널 정리 뒤): 업데이트를 설치하고 창을 모두 닫은 것이면 새 버전으로 다시 시작한다.
+pub fn restart_if_installed<R: Runtime>(app: &AppHandle<R>) {
+    if RESTART.take() {
+        tracing::info!("all windows closed after the update; restarting");
+        // 새 프로세스가 아직 살아 있는 이 앱을 「기존 앱」으로 보고 인자를 넘긴 뒤 끝나지 않게 소켓을 먼저 내려놓는다.
+        tauri_plugin_single_instance::destroy(app);
+        app.restart();
+    }
+}
+
+/// 창이 닫기 요청을 미저장 확인에서 [취소] 했다(`src/keymap/native.ts` 의 `guardClose`). 업데이트 뒤 다시 시작하던 중이면
+/// 거두고 알린다. 아니면(⌘Q · 창 닫기) 할 것이 없다.
+#[tauri::command]
+pub fn window_close_cancelled<R: Runtime>(app: AppHandle<R>) {
+    if !RESTART.take() {
+        return;
+    }
+    tracing::info!("a window kept its unsaved edits; the update starts next time");
+    tauri::async_runtime::spawn(async move {
+        let text = say(&app, "update-restart-cancelled", &[]);
+        notify(&app, MessageDialogKind::Info, text).await;
+    });
+}
+
 /// 확인은 한 번에 하나다 — 시작 확인 중에 메뉴를 고르거나 메뉴를 두 번 골라도 대화상자가 겹치지 않게.
 static CHECKING: AtomicBool = AtomicBool::new(false);
 
@@ -294,10 +344,9 @@ async fn run<R: Runtime>(app: &AppHandle<R>, trigger: Trigger) {
     }
     match update.download_and_install(|_, _| {}, || {}).await {
         Ok(()) => {
-            tracing::info!(version = %update.version, "update installed; restarting");
-            // 새 프로세스가 아직 살아 있는 이 앱을 「기존 앱」으로 보고 인자를 넘긴 뒤 끝나지 않게 소켓을 먼저 내려놓는다.
-            tauri_plugin_single_instance::destroy(app);
-            app.restart();
+            tracing::info!(version = %update.version, "update installed; closing windows to restart");
+            RESTART.request();
+            crate::menu::quit(app);
         }
         Err(e) => {
             tracing::error!(version = %update.version, error = %e, "update not installed");
@@ -393,6 +442,25 @@ mod tests {
     }
 
     /// deb · rpm 설치본(Linux 에서 대상을 못 찾음)은 오류가 아니라 패키지 관리자 안내다. 다른 오류와 다른 OS 는 오류로 둔다.
+    #[test]
+    fn a_cancelled_close_withdraws_the_restart_and_quitting_later_does_not_restart() {
+        let pending = PendingRestart::new();
+        pending.request();
+        // 한 창이 [취소] 했다: 알릴 것이 있고, 나중의 ⌘Q 로 끝날 때는 다시 시작하지 않는다.
+        assert!(pending.take());
+        assert!(!pending.take());
+        assert!(!pending.take());
+    }
+
+    #[test]
+    fn closing_every_window_after_the_update_restarts_once() {
+        let pending = PendingRestart::new();
+        assert!(!pending.take(), "nothing installed, nothing to restart");
+        pending.request();
+        assert!(pending.take());
+        assert!(!pending.take());
+    }
+
     #[test]
     fn missing_linux_targets_mean_a_package_managed_install() {
         use tauri_plugin_updater::Error;

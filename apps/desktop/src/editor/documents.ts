@@ -18,8 +18,17 @@
 //   - 미저장이 없으면 새 텍스트를 바로 넣는다(`LiveText.replace` — 차이만 바꿔 커서 · 스크롤이 남는다).
 //   - 미저장이 있으면 넣지 않고 `disk` 를 `changed` 로 둔다 — 탭이 배너 「디스크에서 바뀜」 을 띄운다([디스크 것 받기]
 //     `takeDisk` · [내 것 유지] `keepMine` · [비교]).
-//   - 지워졌으면 `deleted`, 같은 이벤트에 만들어진 파일 중 내용(`version`)이 같은 것이 있으면 `renamed`.
+//   - 내용이 이 문서가 디스크에 있다고 아는 것과 바이트로 같으면(`touch` · 같은 내용을 다시 쓴 포매터 · `git checkout`) 크기 ·
+//     시각 · `version` 만 바꾼다 — 배너가 없다.
+//   - 지워졌으면 `deleted`, 같은 이벤트에 생기거나 바뀐 다른 파일 중 내용(`version`)이 같은 것이 있으면 `renamed`. 새 경로는
+//     `created` 가 아니라 `modified` 로 올 수도 있다(rename 은 감시 백엔드마다 다르게 보고된다 · 원자 쓰기).
 // 문서 하나의 저장과 맞추기는 차례로 돈다(`queue`) — 저장하는 중에 온 자기 쓰기의 이벤트는 저장이 끝난 뒤의 `version` 으로 본다.
+//
+// 미저장 편집은 사람이 고르지 않으면 버리지 않는다. 줄 구분이 바뀌어 문서를 통째로 다시 읽는(`reload`) 동안 RPC 를 기다리므로
+// 그사이 친 글자는 옛 `LiveText` 에만 있다 — 다 읽은 뒤 그사이 고친 것이 있으면 바꾸지 않고 다시 맞춰 배너로 둔다.
+//
+// 바뀜 구독(`onChange`, M1-17 의 `syntax.edit`): 문서마다 한 번, 바뀐 범위(`ChangeSet`)와 바뀌기 전 텍스트를 준다. 같은 파일을
+// 두 그룹이 보여도 한 번이다. 문서를 통째로 다시 읽으면(처음 읽음 포함) `reset` 으로 새 텍스트 전체를 준다.
 //
 // 접근 범위: 문서는 처음 잡은 탭의 워크트리(`EditorTabParams.worktree`)로 읽는다. 창의 활성 워크트리는 열기 요청마다 바뀌므로
 // 읽는 순간의 값을 쓰면 다른 워크트리의 요청이 뒤섞인다.
@@ -33,6 +42,7 @@ import {
   type FsWritten,
   type Judgment,
 } from "@pitwall/rpc-client";
+import type { ChangeSet, Text } from "@codemirror/state";
 import { useEffect } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
@@ -122,6 +132,13 @@ export interface DocumentSource {
   detect?(path: string, head: string, worktree: string | undefined): Promise<string | null>;
 }
 
+/** `DocumentStore.onChange` 가 주는 바뀜. */
+export type DocumentChange =
+  /** 편집 · undo · 디스크에서 받은 차이. `changes` 의 `fromA` · `toA` 는 `before`, `fromB` · `toB` 는 `after` 의 위치다. */
+  | { kind: "edit"; changes: ChangeSet; before: Text; after: Text }
+  /** 문서를 (다시) 읽었다 — 앞의 것과 이어지지 않는 새 텍스트. */
+  | { kind: "reset"; text: Text };
+
 export type SaveOutcome =
   /** 썼다. */
   | { kind: "saved" }
@@ -151,6 +168,11 @@ export interface DocumentStore {
   keepMine(path: string): void;
   /** 창이 받은 `fs.changed`. 열린 문서에 닿으면 디스크와 맞춘다. 돌려준 약속은 맞추기가 끝나면 풀린다(시험). */
   changed(event: FsChangedEvent): Promise<void>;
+  /**
+   * 텍스트 문서 `path` 의 바뀜을 문서마다 한 번 듣는다(`DocumentChange`). 지금 텍스트 문서면 곧바로 `reset` 을 한 번 부른다.
+   * 문서를 다시 읽어도 · 닫았다 다시 열어도 해제할 때까지 이어 듣는다. 해제 함수를 돌려준다.
+   */
+  onChange(path: string, listener: (change: DocumentChange) => void): () => void;
   readonly store: StoreApi<DocumentsState>;
 }
 
@@ -245,8 +267,12 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
   const worktrees = new Map<string, string | undefined>();
   /** 문서마다 저장 · 맞추기를 차례로 돌리는 줄. */
   const queues = new Map<string, Promise<unknown>>();
-  /** `LiveText` 의 미저장 구독 해제. */
+  /** `LiveText` 의 미저장 · 바뀜 구독 해제. */
   const unwatch = new Map<string, () => void>();
+  const changeListeners = new Map<string, Set<(change: DocumentChange) => void>>();
+  const emit = (path: string, change: DocumentChange) => {
+    for (const listener of changeListeners.get(path) ?? []) listener(change);
+  };
 
   const get = (path: string) => store.getState().docs[path];
   const text = (path: string) => {
@@ -259,16 +285,21 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
       unwatch.get(path)?.();
       unwatch.delete(path);
     }
-    if (state?.status === "text" && !unwatch.has(path)) {
-      const { live } = state;
-      unwatch.set(
-        path,
-        live.onDirtyChange(() => {
-          const now = text(path);
-          if (now?.live === live && now.dirty !== live.dirty)
-            set(path, { ...now, dirty: live.dirty });
-        }),
+    // 새 `LiveText` 다(처음 읽음 · 통째로 다시 읽음).
+    const fresh = state?.status === "text" && !unwatch.has(path) ? state.live : undefined;
+    if (fresh) {
+      const offDirty = fresh.onDirtyChange(() => {
+        const now = text(path);
+        if (now?.live === fresh && now.dirty !== fresh.dirty)
+          set(path, { ...now, dirty: fresh.dirty });
+      });
+      const offChange = fresh.onChange((changes, before) =>
+        emit(path, { kind: "edit", changes, before, after: fresh.text }),
       );
+      unwatch.set(path, () => {
+        offDirty();
+        offChange();
+      });
     }
     store.setState((s) => {
       const docs = { ...s.docs };
@@ -276,6 +307,7 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
       else delete docs[path];
       return { docs };
     });
+    if (fresh) emit(path, { kind: "reset", text: fresh.text });
   };
   /** 지금 텍스트 문서에 바뀐 값을 더한다. 그사이 문서가 바뀌었으면(다시 읽음 · 버림) 하지 않는다. */
   const patch = (path: string, live: LiveText, change: Partial<TextDocumentState>) => {
@@ -292,29 +324,51 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
     return run;
   }
 
-  /** 문서를 디스크에서 통째로 다시 읽는다(종류가 바뀜 · 줄 구분이 바뀜). */
-  async function reload(path: string) {
+  /**
+   * 그사이 사람이 고쳤다: `agreed`(부른 쪽이 버려도 된다고 본 텍스트 — 미저장이 없을 때의 텍스트, 또는 [디스크 것 받기] 를 누를
+   * 때의 텍스트)에서 더 고친 미저장 편집이 있다.
+   */
+  const editedSince = (live: LiveText, agreed: Text) => live.dirty && !live.text.eq(agreed);
+
+  /**
+   * 문서를 디스크에서 통째로 다시 읽는다(종류가 바뀜 · 줄 구분이 바뀜). `guard` 가 있으면 다 읽은 뒤 그 문서에 `agreed` 밖의
+   * 편집이 생겼는지 보고, 있으면 바꾸지 않고 다시 맞춘다(배너, 머리 주석).
+   */
+  async function reload(path: string, guard?: { live: LiveText; agreed: Text }) {
     const state = await loadDocument(source, path, worktrees.get(path)).catch(
       (e: unknown): DocumentState => ({ status: "failed", message: errorText(e) }),
     );
-    if (counts.has(path)) set(path, state);
+    if (!counts.has(path)) return;
+    if (guard && text(path)?.live === guard.live && editedSince(guard.live, guard.agreed))
+      return reconcile(path, []);
+    set(path, state);
   }
 
-  /** 디스크에서 읽은 텍스트를 문서에 넣는다. 미저장 편집은 사라진다(undo 로 되돌릴 수 있다). */
-  async function adopt(path: string, doc: TextDocumentState, read: FsRead, stat: FsStat) {
+  /**
+   * 디스크에서 읽은 텍스트를 문서에 넣는다. `agreed` 까지의 미저장 편집은 사라진다(undo 로 되돌릴 수 있다 — 통째로 다시 읽을
+   * 때는 못 한다). 그 뒤에 고친 것이 있으면 넣지 않고 다시 맞춘다.
+   */
+  async function adopt(
+    path: string,
+    doc: TextDocumentState,
+    read: FsRead,
+    stat: FsStat,
+    agreed: Text,
+  ): Promise<void> {
+    if (editedSince(doc.live, agreed)) return reconcile(path, []);
     if (isText(read) && doc.live.replace(liveInit(read)))
       patch(path, doc.live, { ...readFacts(read, stat), disk: { kind: "same" } });
-    else await reload(path);
+    else await reload(path, { live: doc.live, agreed });
   }
 
-  /** 지워진 문서와 같은 내용(`version`)인 새 파일. */
+  /** 지워진 문서와 같은 내용(`version`)인 새 파일. `candidates` 는 같은 이벤트에서 생기거나 바뀐, 열린 문서가 아닌 경로. */
   async function renamedTo(
     path: string,
     doc: TextDocumentState,
-    created: readonly string[],
+    candidates: readonly string[],
   ): Promise<string | undefined> {
     const worktree = worktrees.get(path);
-    for (const candidate of created.slice(0, RENAME_CANDIDATES)) {
+    for (const candidate of candidates.slice(0, RENAME_CANDIDATES)) {
       try {
         const stat = await source.stat(candidate, worktree);
         if (stat.kind !== "file" || stat.size !== doc.size) continue;
@@ -327,8 +381,8 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
     return undefined;
   }
 
-  /** 열린 문서 하나를 디스크와 맞춘다. `created` 는 같은 이벤트에서 만들어진 경로(이름 바뀜 찾기). */
-  async function reconcile(path: string, created: readonly string[]) {
+  /** 열린 문서 하나를 디스크와 맞춘다. `candidates` 는 이름 바뀜 찾기의 후보(`renamedTo`). */
+  async function reconcile(path: string, candidates: readonly string[]): Promise<void> {
     const doc = get(path);
     if (!doc || doc.status === "loading" || !counts.has(path)) return;
     if (doc.status !== "text") return reload(path);
@@ -342,7 +396,7 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
         return;
       }
       if (doc.disk.kind === "deleted" || doc.disk.kind === "renamed") return;
-      const to = await renamedTo(path, doc, created);
+      const to = await renamedTo(path, doc, candidates);
       patch(path, doc.live, { disk: to ? { kind: "renamed", to } : { kind: "deleted" } });
       return;
     }
@@ -355,7 +409,12 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
       if (now.disk.kind !== "same") patch(path, now.live, { disk: { kind: "same" } });
       return;
     }
-    if (!now.live.dirty) return adopt(path, now, read, stat);
+    // 시각만 바뀌었다 — 아는 `version` 만 바꾼다(다음 저장의 기대 값).
+    if (isText(read) && now.live.holds(liveInit(read))) {
+      patch(path, now.live, { ...readFacts(read, stat), disk: { kind: "same" } });
+      return;
+    }
+    if (!now.live.dirty) return adopt(path, now, read, stat, now.live.text);
     patch(path, now.live, { disk: { kind: "changed", read } });
   }
 
@@ -446,12 +505,14 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
       queue(path, async () => {
         const doc = text(path);
         if (!doc) return;
+        // 누른 때의 텍스트까지만 버린다 — 디스크를 읽는 동안 친 글자는 남긴다.
+        const agreed = doc.live.text;
         const worktree = worktrees.get(path);
         const stat = await source.stat(path, worktree);
         const read =
           doc.disk.kind === "changed" ? doc.disk.read : await source.read({ path }, worktree);
         const now = text(path);
-        if (now) await adopt(path, now, read, stat);
+        if (now) await adopt(path, now, read, stat, now.live === doc.live ? agreed : now.live.text);
       }),
     keepMine(path) {
       const doc = text(path);
@@ -466,14 +527,28 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
         }),
       });
     },
+    onChange(path, listener) {
+      let listeners = changeListeners.get(path);
+      if (!listeners) changeListeners.set(path, (listeners = new Set()));
+      listeners.add(listener);
+      const now = text(path);
+      if (now) listener({ kind: "reset", text: now.live.text });
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0 && changeListeners.get(path) === listeners)
+          changeListeners.delete(path);
+      };
+    },
     async changed(event) {
-      const created = event.paths.filter((_, i) => event.kinds[i] === "created");
+      const candidates = event.paths.filter(
+        (p, i) => event.kinds[i] !== "removed" && !counts.has(p),
+      );
       const open = [...counts.keys()].filter((path) =>
         event.rescan ? covers(event.root, path) : event.paths.some((p) => covers(p, path)),
       );
       await Promise.all(
         open.map((path) =>
-          queue(path, () => reconcile(path, created)).catch((e: unknown) =>
+          queue(path, () => reconcile(path, candidates)).catch((e: unknown) =>
             console.warn("[editor] could not reconcile a changed file", path, e),
           ),
         ),

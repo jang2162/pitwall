@@ -167,7 +167,8 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             crate::shell_command::install_shell_command,
             crate::clipboard::write_clipboard,
             crate::perf::perf_first_frame,
-            crate::perf::perf_hidden
+            crate::perf::perf_hidden,
+            crate::update::window_close_cancelled
         ])
         .on_window_event(on_window_event)
         .on_page_load(|webview, payload| on_page_load(webview, payload.event()))

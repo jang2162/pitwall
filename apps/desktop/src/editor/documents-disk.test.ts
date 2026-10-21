@@ -44,9 +44,17 @@ class Disk {
   /** `fs.write` 가 디스크에 쓴 뒤, 응답하기 전에 부른다(감시의 이벤트가 응답보다 먼저 오는 경우). */
   afterWrite: ((path: string) => Promise<void>) | undefined;
   failWrite: Error | undefined;
+  /** `fs.read` · `fs.stat` 마다 읽기 전에 부른다(읽기를 잡아 두는 시험). */
+  beforeRead: (() => Promise<void>) | undefined;
+  beforeStat: (() => Promise<void>) | undefined;
 
   put(path: string, bytes: string) {
     this.files.set(path, { bytes, mtime: ++this.clock });
+  }
+
+  /** `touch`: 내용은 그대로, 수정 시각만 바뀐다. */
+  touch(path: string) {
+    this.put(path, this.files.get(path)!.bytes);
   }
 
   /** `mv from to`: 수정 시각이 남는다. */
@@ -68,6 +76,7 @@ class Disk {
 
   source = {
     stat: vi.fn(async (path: string): Promise<FsStat> => {
+      await this.beforeStat?.();
       const f = this.file(path);
       return {
         path,
@@ -80,6 +89,7 @@ class Disk {
       };
     }),
     read: vi.fn(async ({ path }: { path: string }): Promise<FsRead> => {
+      await this.beforeRead?.();
       const f = this.file(path);
       const bom = f.bytes.startsWith(BOM);
       const text = bom ? f.bytes.slice(1) : f.bytes;
@@ -129,22 +139,41 @@ afterEach(() => {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-/** `path` 를 열어 텍스트 문서가 될 때까지 기다리고, 탭 하나의 뷰를 붙인다. */
-async function openDoc(disk: Disk, path: string) {
-  const docs = createDocumentStore(disk.source);
-  docs.acquire(path);
-  await flush();
-  const doc = () => docs.get(path) as TextDocumentState;
-  const live: LiveText = doc().live;
-  const made = live.createState("tab", []);
+/** 탭 `panelId` 의 뷰를 `live` 에 붙인다. */
+function attachView(live: LiveText, panelId: string) {
+  const made = live.createState(panelId, []);
   const view = new EditorView({
     parent: document.body,
     state: made.state,
     dispatchTransactions: (trs, v) => live.dispatch(trs, v),
   });
   views.push(view);
-  live.attach("tab", view, () => undefined);
+  live.attach(panelId, view, () => undefined);
+  return view;
+}
+
+/** `path` 를 열어 텍스트 문서가 될 때까지 기다리고, 탭 하나의 뷰를 붙인다. */
+async function openDoc(disk: Disk, path: string) {
+  const docs = createDocumentStore(disk.source);
+  docs.acquire(path);
+  await flush();
+  const doc = () => docs.get(path) as TextDocumentState;
+  const view = attachView(doc().live, "tab");
   return { docs, doc, view };
+}
+
+/** 다음 `fs.read`(또는 `fs.stat`) 하나를 잡아 둔다. `held` 는 그 읽기가 시작되면 풀리고, `release` 로 읽기를 보낸다. */
+function holdNextRead(disk: Disk, hook: "beforeRead" | "beforeStat" = "beforeRead") {
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const held = new Promise<void>((r) => (started = r));
+  disk[hook] = async () => {
+    disk[hook] = undefined;
+    started();
+    await gate;
+  };
+  return { held, release };
 }
 
 function type(view: EditorView, at: number, insert: string) {
@@ -177,6 +206,24 @@ describe("saving", () => {
     // 쓸 것이 없으면 쓰지 않는다.
     expect(await docs.save(A)).toEqual({ kind: "unchanged" });
     expect(disk.source.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("types at the end of a CRLF line of a mixed file before the CR, keeping CRLF whole", async () => {
+    const disk = new Disk();
+    disk.put(A, "a\r\nb\n");
+    const { docs, view } = await openDoc(disk, A);
+    // End 키 자리(`line.to`)는 그 줄의 `\r` 뒤다.
+    const end = view.state.doc.line(1).to;
+    view.dispatch({
+      changes: { from: end, insert: "x" },
+      selection: { anchor: end + 1 },
+      userEvent: "input.type",
+    });
+    // 커서는 친 글자 바로 뒤(`\r` 앞)다.
+    expect(view.state.selection.main.head).toBe(2);
+    view.dispatch(view.state.replaceSelection("y"));
+    await docs.save(A);
+    expect(disk.files.get(A)!.bytes).toBe("axy\r\nb\n");
   });
 
   it("keeps mixed line endings of untouched lines", async () => {
@@ -287,6 +334,89 @@ describe("changes on disk", () => {
     expect(doc().disk).toEqual({ kind: "same" });
   });
 
+  it("does not raise the banner when only the modification time changed (touch)", async () => {
+    const disk = new Disk();
+    disk.put(A, "same\n");
+    const { docs, doc, view } = await openDoc(disk, A);
+    type(view, 0, "mine ");
+    disk.touch(A);
+    await docs.changed(event([A], ["modified"]));
+    expect(doc()).toMatchObject({ dirty: true, disk: { kind: "same" }, version: disk.version(A) });
+    expect(view.state.doc.toString()).toBe("mine same\n");
+    // 아는 version 이 바뀌었으니 저장은 충돌하지 않는다.
+    expect(await docs.save(A)).toEqual({ kind: "saved" });
+    expect(disk.files.get(A)!.bytes).toBe("mine same\n");
+  });
+
+  it("keeps what was typed while the document is read again for a new line separator", async () => {
+    const disk = new Disk();
+    disk.put(A, "one\ntwo\n");
+    const { docs, doc, view } = await openDoc(disk, A);
+    disk.put(A, "one\r\ntwo\n"); // LF → 섞인 줄바꿈: 통째로 다시 읽는다
+    // 맞추기의 읽기는 보내고, 다시 읽기(`reload`)의 읽기를 잡는다.
+    disk.beforeRead = async () => {
+      disk.beforeRead = undefined;
+      hold = holdNextRead(disk);
+    };
+    let hold: ReturnType<typeof holdNextRead> | undefined;
+    const changed = docs.changed(event([A], ["modified"]));
+    await vi.waitFor(() => expect(hold).toBeDefined());
+    await hold!.held;
+    type(view, 0, "MINE ");
+    expect(doc().dirty).toBe(true);
+    hold!.release();
+    await changed;
+
+    expect(view.state.doc.toString()).toBe("MINE one\ntwo\n");
+    expect(doc().live.text.toString()).toBe("MINE one\ntwo\n");
+    expect(doc()).toMatchObject({
+      dirty: true,
+      disk: { kind: "changed", read: { content: { text: "one\r\ntwo\n" } } },
+    });
+  });
+
+  it("keeps what was typed while [take disk] reads the file again, and reads it again otherwise", async () => {
+    const disk = new Disk();
+    disk.put(A, "base\n");
+    const { docs, doc, view } = await openDoc(disk, A);
+    type(view, 0, "mine ");
+    disk.put(A, "theirs\r\nx\n");
+    await docs.changed(event([A], ["modified"]));
+    expect(doc().disk.kind).toBe("changed");
+
+    const hold = holdNextRead(disk);
+    const taking = docs.takeDisk(A);
+    await hold.held;
+    type(view, 0, "more ");
+    hold.release();
+    await taking;
+    expect(doc().live.text.toString()).toBe("more mine base\n");
+    expect(doc()).toMatchObject({ dirty: true, disk: { kind: "changed" } });
+
+    // 그사이 고친 것이 없으면 [디스크 것 받기] 가 디스크 내용으로 다시 연다.
+    await docs.takeDisk(A);
+    expect(doc().live.text.toString()).toBe("theirs\r\nx\n");
+    expect(doc()).toMatchObject({ dirty: false, disk: { kind: "same" } });
+  });
+
+  it("keeps what was typed after [take disk] was pressed, before the disk text goes in", async () => {
+    const disk = new Disk();
+    disk.put(A, "base\n");
+    const { docs, doc, view } = await openDoc(disk, A);
+    type(view, 0, "mine ");
+    disk.put(A, "theirs\n");
+    await docs.changed(event([A], ["modified"]));
+
+    const hold = holdNextRead(disk, "beforeStat");
+    const taking = docs.takeDisk(A);
+    await hold.held;
+    type(view, 0, "more ");
+    hold.release();
+    await taking;
+    expect(view.state.doc.toString()).toBe("more mine base\n");
+    expect(doc()).toMatchObject({ dirty: true, disk: { kind: "changed" } });
+  });
+
   it("recognizes a rename: a file with the same content appears as the old one goes", async () => {
     const disk = new Disk();
     disk.put(A, "content");
@@ -297,6 +427,15 @@ describe("changes on disk", () => {
     expect(doc().disk).toEqual({ kind: "renamed", to: "/p/b.txt" });
   });
 
+  it("recognizes a rename whose new path is reported as modified", async () => {
+    const disk = new Disk();
+    disk.put(A, "content");
+    const { docs, doc } = await openDoc(disk, A);
+    disk.move(A, "/p/b.txt");
+    await docs.changed(event([A, "/p/b.txt"], ["removed", "modified"]));
+    expect(doc().disk).toEqual({ kind: "renamed", to: "/p/b.txt" });
+  });
+
   it("looks again at every open document under the root after a rescan", async () => {
     const disk = new Disk();
     disk.put(A, "old");
@@ -304,5 +443,40 @@ describe("changes on disk", () => {
     disk.put(A, "new");
     await docs.changed({ root: "/p", worktree: null, paths: [], kinds: [], rescan: true });
     expect(view.state.doc.toString()).toBe("new");
+  });
+});
+
+describe("change subscription (M1-17 syntax.edit)", () => {
+  it("reports each edit once per document with its range, and a reset when the text is read anew", async () => {
+    const disk = new Disk();
+    disk.put(A, "fn main() {}\n");
+    const { docs, doc, view } = await openDoc(disk, A);
+    attachView(doc().live, "other group"); // 같은 파일을 보는 두 번째 뷰
+
+    // M1-17 은 이 한 줄로 듣는다: 편집이면 바뀐 범위를 `syntax.edit` 로, `reset` 이면 문서를 다시 연다.
+    const seen: string[] = [];
+    const off = docs.onChange(A, (c) => {
+      if (c.kind === "reset") seen.push(`reset ${c.text.length}`);
+      else
+        c.changes.iterChanges((fromA, toA, fromB, toB) =>
+          seen.push(
+            `edit ${fromA}-${toA} -> ${fromB}-${toB} of ${c.before.length} -> ${c.after.length}`,
+          ),
+        );
+    });
+    expect(seen).toEqual(["reset 13"]);
+
+    type(view, 3, "x");
+    expect(seen).toEqual(["reset 13", "edit 3-3 -> 3-4 of 13 -> 14"]);
+
+    // 줄 구분이 바뀌면 문서를 통째로 다시 읽는다 — 위치가 이어지지 않으므로 reset 이다.
+    await docs.save(A);
+    disk.put(A, "fn\r\nmain\n");
+    await docs.changed(event([A], ["modified"]));
+    expect(seen.at(-1)).toBe("reset 9");
+
+    off();
+    type(attachView(doc().live, "after reload"), 0, "z");
+    expect(seen.at(-1)).toBe("reset 9");
   });
 });

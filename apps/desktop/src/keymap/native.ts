@@ -17,8 +17,9 @@ export interface KeymapNative {
   /** 이 창을 닫는다(`window.close`). 창의 닫기 버튼과 같은 길(close requested)을 지난다. */
   closeWindow(): Promise<void>;
   /**
-   * 창이 닫히려 할 때(닫기 버튼 · `closeWindow` · 앱 종료) `shouldClose` 를 묻고 `false` 면 닫지 않는다(미저장 확인, M1-13). 해제
-   * 함수를 돌려준다. 없으면(시험) 묻지 않는다.
+   * 창이 닫히려 할 때(닫기 버튼 · `closeWindow` · 앱 종료 · 업데이트 뒤 다시 시작) `shouldClose` 를 묻고 `false` 면 닫지 않는다
+   * (미저장 확인, M1-13). 닫지 않으면 네이티브에 알린다 — 업데이트 뒤 다시 시작하던 중이면 거둔다(src-tauri/src/update.rs).
+   * 해제 함수를 돌려준다. 없으면(시험) 묻지 않는다.
    */
   guardClose?(shouldClose: () => Promise<boolean>): () => void;
   /** 「Shell 명령 설치」(F2-1). macOS 에만 있다. 결과는 네이티브 대화상자가 알린다(src-tauri/src/shell_command.rs). */
@@ -48,7 +49,11 @@ export const tauriKeymapNative: KeymapNative = {
     // 듣는 동안 Tauri 는 이 창의 닫기를 웹뷰에 맡긴다. 막지 않으면 핸들러가 끝난 뒤 창을 없앤다(destroy).
     getCurrentWebviewWindow()
       .onCloseRequested(async (event) => {
-        if (!(await shouldClose())) event.preventDefault();
+        if (await shouldClose()) return;
+        event.preventDefault();
+        invoke("window_close_cancelled").catch((e: unknown) =>
+          console.warn("[window] could not report a cancelled close", e),
+        );
       })
       .then((off) => (disposed ? off() : (unlisten = off)))
       .catch((e: unknown) => console.warn("[window] close guard failed", e));

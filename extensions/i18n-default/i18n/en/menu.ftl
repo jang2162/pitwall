@@ -73,4 +73,8 @@ update-install-failed = Could not install the update.
 update-package-manager = { $app } { $current } was installed with a system package (deb or rpm), so it does not update itself.
 
     Update it with your package manager, or download a new package from the release page.
+# After installing an update, a window chose Cancel in its unsaved-edits prompt while every window was closing.
+update-restart-cancelled = The update is installed, but { $app } did not restart because a window kept its unsaved edits.
+
+    The new version starts the next time you open { $app }.
 update-dev-build = Development builds do not check for updates.

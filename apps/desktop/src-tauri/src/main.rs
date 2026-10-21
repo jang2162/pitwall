@@ -352,11 +352,12 @@ fn main() {
         })
         .build(context)
         .expect("Tauri 앱을 시작하지 못했다")
-        .run(|_app, event| {
+        .run(|app, event| {
             // Tauri 는 이 뒤에 `std::process::exit` 로 끝나 Drop 이 돌지 않는다. 터미널의 셸 · 그 자식(SIGHUP 을 무시하는 것 포함)을
-            // 여기서 기다려 끝낸다(M1-08).
+            // 여기서 기다려 끝낸다(M1-08). 업데이트를 설치하고 창을 모두 닫은 것이면 그 뒤 새 버전으로 다시 시작한다.
             if let tauri::RunEvent::Exit = event {
                 pw_run::shutdown();
+                update::restart_if_installed(app);
             }
         });
 }

@@ -12,14 +12,16 @@
 //
 // 줄바꿈: CodeMirror 의 텍스트는 줄 목록이라 줄바꿈 글자를 갖지 않는다. 파일의 줄바꿈(`fs.read` 의 `judgment.lineEnding`)이 하나면
 // 그것을 기억해 저장할 때 줄 사이에 넣는다(`serialize`). 섞였으면(`mixed`) 줄을 `\n` 으로만 나눠 `\r` 을 글자로 남긴다 — 고치지
-// 않은 줄의 바이트가 그대로 돌아간다. BOM 은 `fs.read` 가 떼어 주고 `fs.write` 의 `bom` 으로 다시 붙인다.
+// 않은 줄의 바이트가 그대로 돌아간다. 이때 줄 끝의 `\r` 은 줄바꿈의 일부로 본다 — 그 뒤(End 키 자리)에 넣는 글자는 `\r` 앞으로
+// 옮긴다(`keepLineBreaks`). 안 옮기면 `\r\n` 이 `\r` + 글자 + `\n` 으로 갈라진다. BOM 은 `fs.read` 가 떼어 주고 `fs.write` 의
+// `bom` 으로 다시 붙인다.
 
 import { history, isolateHistory, redo, undo } from "@codemirror/commands";
 import { diff } from "@codemirror/merge";
 import {
   Annotation,
   ChangeSet,
-  type EditorSelection,
+  EditorSelection,
   EditorState,
   type Extension,
   type StateEffect,
@@ -47,6 +49,48 @@ export function lineSeparatorOf(lineEnding: LineEnding): string | undefined {
   return lineEnding === "mixed" ? "\n" : undefined;
 }
 
+/** 줄 끝의 `\r` 바로 뒤다(섞인 줄바꿈에서 `\r\n` · 외톨이 `\r` 의 줄바꿈 안). */
+function afterLineEndCr(doc: Text, pos: number): boolean {
+  if (pos === 0 || doc.sliceString(pos - 1, pos) !== "\r") return false;
+  return pos === doc.lineAt(pos).to;
+}
+
+/**
+ * 섞인 줄바꿈의 뷰: 줄 끝 `\r` 바로 뒤에 넣는 것을 `\r` 앞으로 옮긴다(머리 주석). 지우기만 하는 변경과 허브가 옮긴 트랜잭션은
+ * 그대로 둔다 — 허브의 변경은 이미 옮겨진 것이다.
+ */
+const keepLineBreaks = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged || tr.annotation(synced)) return tr;
+  const doc = tr.startState.doc;
+  let moved = false;
+  const specs: { from: number; to: number; insert: Text }[] = [];
+  tr.changes.iterChanges((from, to, _fromB, _toB, insert) => {
+    if (insert.length > 0 && afterLineEndCr(doc, to)) {
+      moved = true;
+      specs.push({ from: Math.min(from, to - 1), to: to - 1, insert });
+    } else specs.push({ from, to, insert });
+  });
+  if (!moved) return tr;
+  const changes = ChangeSet.of(specs, doc.length, tr.startState.lineBreak);
+  const next = changes.apply(doc);
+  // 원래 선택은 `\r` 뒤에 있다 — 옮긴 글자 바로 뒤(`\r` 앞)로 당긴다.
+  const pull = (pos: number) => (afterLineEndCr(next, pos) ? pos - 1 : pos);
+  const selection = tr.selection ?? tr.startState.selection.map(changes);
+  const userEvent = tr.annotation(Transaction.userEvent);
+  return {
+    changes,
+    selection: EditorSelection.create(
+      selection.ranges.map((r) => EditorSelection.range(pull(r.anchor), pull(r.head))),
+      selection.mainIndex,
+    ),
+    effects: tr.effects,
+    scrollIntoView: tr.scrollIntoView,
+    ...(userEvent !== undefined && { userEvent }),
+    annotations:
+      tr.annotation(Transaction.addToHistory) === false ? [Transaction.addToHistory.of(false)] : [],
+  };
+});
+
 /** 뷰가 사라진 동안 맡긴 탭의 선택 · 스크롤. */
 interface Parked {
   selection: EditorSelection;
@@ -69,6 +113,7 @@ export class LiveText {
   private readonly views = new Set<EditorView>();
   private readonly parked = new Map<string, Parked>();
   private readonly listeners = new Set<() => void>();
+  private readonly changeListeners = new Set<(changes: ChangeSet, before: Text) => void>();
   private eol: string;
   /** 저장할 때 BOM 을 붙인다. */
   bom: boolean;
@@ -104,6 +149,21 @@ export class LiveText {
     return () => this.listeners.delete(listener);
   }
 
+  /**
+   * 텍스트가 바뀔 때마다 **문서마다 한 번** 부른다(이 문서를 보이는 뷰가 몇이든). `before` 는 바뀌기 전 텍스트다 — `changes`
+   * 의 `fromA` · `toA` 가 거기 위치다. 해제 함수를 돌려준다. 문서를 통째로 다시 읽어 `LiveText` 가 바뀌는 것은 여기 오지 않는다
+   * (`DocumentStore.onChange` 의 `reset`).
+   */
+  onChange(listener: (changes: ChangeSet, before: Text) => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  /** 디스크에서 읽은 것이 이 문서가 디스크에 있다고 아는 텍스트와 바이트로 같다(시각만 바뀐 `touch` 등). */
+  holds({ text, bom }: LiveTextInit): boolean {
+    return bom === this.bom && this.serialize(this.clean) === text;
+  }
+
   private changed() {
     const dirty = this.dirty;
     if (dirty === this.wasDirty) return;
@@ -135,7 +195,7 @@ export class LiveText {
     const state = EditorState.create({
       doc: this.hub.doc,
       selection: parked?.selection,
-      extensions: [this.base(), extensions],
+      extensions: [this.base(), this.separator === undefined ? [] : keepLineBreaks, extensions],
     });
     return { state, scroll: parked?.scroll };
   }
@@ -171,6 +231,7 @@ export class LiveText {
       const userEvent = tr.annotation(Transaction.userEvent);
       const addToHistory = tr.annotation(Transaction.addToHistory);
       const isolate = tr.annotation(isolateHistory);
+      const before = hub.doc;
       this.hub = hub.update({
         changes: tr.changes,
         selection: tr.selection,
@@ -181,12 +242,17 @@ export class LiveText {
         ],
       }).state;
       view.update([tr]);
-      this.spread(tr.changes, view, userEvent);
+      this.spread(tr.changes, before, view, userEvent);
     }
   }
 
   /** 허브에서 바뀐 것을 `except` 가 아닌 뷰에 옮기고 맡긴 위치를 옮긴다. */
-  private spread(changes: ChangeSet, except: EditorView | undefined, userEvent?: string) {
+  private spread(
+    changes: ChangeSet,
+    before: Text,
+    except: EditorView | undefined,
+    userEvent?: string,
+  ) {
     for (const [id, parked] of this.parked)
       this.parked.set(id, {
         selection: parked.selection.map(changes),
@@ -199,11 +265,13 @@ export class LiveText {
           annotations: synced.of(true),
           ...(userEvent !== undefined && { userEvent }),
         });
+    for (const listener of this.changeListeners) listener(changes, before);
     this.changed();
   }
 
   /** 허브에서 만든 트랜잭션(undo · redo)을 반영한다. 선택은 명령을 낸 뷰에만. */
   private commit(tr: Transaction, origin: EditorView) {
+    const before = this.hub.doc;
     this.hub = tr.state;
     const userEvent = tr.annotation(Transaction.userEvent);
     if (this.views.has(origin))
@@ -214,7 +282,7 @@ export class LiveText {
         annotations: synced.of(true),
         ...(userEvent !== undefined && { userEvent }),
       });
-    this.spread(tr.changes, origin, userEvent);
+    this.spread(tr.changes, before, origin, userEvent);
   }
 
   /** 이 문서의 undo 를 `view` 에서 했다. 되돌릴 것이 없으면 `false`. */
@@ -248,11 +316,12 @@ export class LiveText {
     this.eol = eolOf(lineEnding);
     this.bom = bom;
     if (!changes.empty) {
+      const before = this.hub.doc;
       this.hub = this.hub.update({
         changes,
         annotations: isolateHistory.of("full"),
       }).state;
-      this.spread(changes, undefined);
+      this.spread(changes, before, undefined);
     }
     this.markClean();
     return true;

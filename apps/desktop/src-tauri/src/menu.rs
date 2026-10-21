@@ -22,8 +22,9 @@
 //! 「종료」(⌘Q)는 OS 기본 항목(`PredefinedMenuItem::quit`, macOS `terminate:`)이 아니라 [`QUIT`] 다. OS 기본 항목은 창의 닫기 요청을
 //! 거치지 않고 앱을 끝내 미저장 편집을 묻지 못한다. [`QUIT`] 은 모든 창에 닫기를 요청하고(`Window::close` — 닫기 단추와 같은 길),
 //! 미저장이 있는 프로젝트 창은 웹뷰가 묻는다(`src/keymap/native.ts` 의 `guardClose`). 마지막 창이 없어지면 Tauri 가 앱을 끝낸다.
-//! 한 창에서 [취소] 하면 그 창이 남아 앱도 남는다 — 그 전에 닫힌 창은 닫힌 채다. Dock 메뉴 · 로그아웃의 종료(macOS `terminate:`)는
-//! 여전히 묻지 않는다.
+//! 한 창에서 [취소] 하면 그 창이 남아 앱도 남는다 — 그 전에 닫힌 창은 닫힌 채다. 업데이트를 설치한 뒤의 다시 시작도 이 길로
+//! 창을 닫는다(`update.rs`). Dock 메뉴 · 로그아웃의 종료(macOS `terminate:`)는 여전히 묻지 않는다 — tao 가
+//! `applicationShouldTerminate:` 를 구현하지 않는다(docs/design/12-m1-plan.md 「M1 에서 하지 않는 것」).
 //!
 //! ⚠ 메뉴에 넣는 액션은 두 번 실행돼도 결과가 같아야 한다(열기 · 보이기). 가드는 짧은 시간 창만 본다. 토글 액션을 메뉴에
 //! 넣으려면 그 전에 키 경로와 메뉴 경로가 한 번만 오는지 플랫폼마다 실측하거나 더 단단한 중복 실행 가드를 둔다.
@@ -528,8 +529,8 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     }
 }
 
-/// 모든 창에 닫기를 요청한다(머리 주석). 창이 없으면 바로 끝낸다.
-fn quit<R: Runtime>(app: &AppHandle<R>) {
+/// 모든 창에 닫기를 요청한다(머리 주석). 창이 없으면 바로 끝낸다. 업데이트 뒤 다시 시작(`update.rs`)도 이 길을 지난다.
+pub(crate) fn quit<R: Runtime>(app: &AppHandle<R>) {
     let windows = app.webview_windows();
     if windows.is_empty() {
         app.exit(0);
