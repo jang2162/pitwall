@@ -3,7 +3,9 @@
 // - 파일: `search.files`(crates/pw-fs/src/index, 결정 M1-D5)를 창의 활성 워크트리로 찾는다(파일 트리의 루트와 같다,
 //   file-tree/project-view.tsx `treeScope`). 요청은 한 번에 하나만 간다(file-search.ts). 이 창에서 최근에 본 파일(recent-files.ts)이
 //   질의에 맞으면 맨 위에 둔다. 빈 질의는 최근 파일만 보인다. `이름:줄[:열]` 이면 그 줄 · 열로 연다(file-query.ts).
-// - 열기는 에디터의 열기 경로(editor-workspace.tsx `open`)로, 찾은 워크트리를 함께 싣는다(M1-09).
+// - 열기는 에디터의 열기 경로(editor-workspace.tsx `open`)로, 그 행의 워크트리를 함께 싣는다(M1-09) — Host 결과는 찾을 때의
+//   워크트리, 최근 파일은 그 탭을 연 워크트리(없으면 메인 체크아웃)다. 고를 때의 트리가 아니다: 트리를 다른 워크트리로 바꾼 뒤
+//   고른 메인 체크아웃 파일이 그 워크트리로 열리지 않게. 그 워크트리가 사라졌으면 Host 가 열기를 거절하고 창이 알린다.
 // - 프로젝트: `project.list` 를 웰컴 창과 같은 순서(즐겨찾기 → 최근에 연 것 → 이름)로. 고르면 네이티브 `open_project_window` 가 그
 //   창을 열거나, 이미 열려 있으면 앞으로 가져온다(src-tauri/src/windows.rs `open_project`). 이 창의 프로젝트는 팝업만 닫는다.
 // SE 팝업은 KeymapProvider 아래(이 컴포넌트 밖)에 그려지므로 결과 컴포넌트는 context 가 아니라 클로저로 이 창의 것을 받는다.
@@ -16,6 +18,7 @@ import {
   memo,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -84,6 +87,7 @@ interface FileRow {
   /** 루트 기준 상대 경로(`/` 로 가른다). 루트 밖이면 경로 그대로. */
   readonly relative: string;
   readonly positions: readonly number[];
+  /** 열 워크트리 꼭대기. 없으면 메인 체크아웃. */
   readonly worktree?: string;
   readonly recent: boolean;
 }
@@ -216,9 +220,12 @@ function scopeOf(projectId: string): Scope {
 
 /** 파일을 연다. 줄을 주면 그 줄 · 열로. 에디터로 포커스를 옮긴다. */
 function openFile(deps: Deps, row: FileRow, line?: number, column?: number) {
-  const worktree = row.worktree ?? treeScope.getState().worktree;
   void deps.workspace
-    .open({ path: row.path, worktree, ...(line !== undefined && { line, column: column ?? 1 }) })
+    .open({
+      path: row.path,
+      ...(row.worktree !== undefined && { worktree: row.worktree }),
+      ...(line !== undefined && { line, column: column ?? 1 }),
+    })
     .then((panel) => {
       if (panel) requestAnimationFrame(() => deps.workspace.focus(panel.id));
     });
@@ -243,11 +250,15 @@ function recentRows(
 
 const NO_FILES: readonly FileMatch[] = [];
 
-/** 최근 파일 중 질의에 맞는 것(일치 위치는 Host 결과에 있으면 그것)을 먼저, 그다음 Host 결과. */
+/**
+ * 최근 파일 중 질의에 맞는 것(일치 위치는 Host 결과에 있으면 그것)을 먼저, 그다음 Host 결과. `worktree` 는 Host 결과를 찾은
+ * 워크트리(없으면 메인 체크아웃).
+ */
 function fileRows(
   deps: Deps,
   recentList: readonly { path: string; worktree?: string }[],
   server: readonly FileMatch[],
+  worktree: string | undefined,
   text: string,
 ): FileRow[] {
   const byPath = new Map(server.map((f) => [f.path, f]));
@@ -260,27 +271,50 @@ function fileRows(
     ...lifted,
     ...server
       .filter((f) => !seen.has(f.path))
-      .map((f) => ({ path: f.path, relative: f.relative, positions: f.positions, recent: false })),
+      .map((f) => ({
+        path: f.path,
+        relative: f.relative,
+        positions: f.positions,
+        ...(worktree !== undefined && { worktree }),
+        recent: false,
+      })),
   ];
 }
 
 function makeFileResults(deps: Deps) {
-  return function FileResults({ query, limit, heading, onMore, choose }: SearchResultsProps) {
+  return function FileResults({
+    query,
+    limit,
+    heading,
+    onMore,
+    choose,
+    onResults,
+  }: SearchResultsProps) {
     const T = useAppStrings().search;
     const { text, line, column } = parseFileQuery(query);
     const trimmed = text.trim();
     useEffect(() => {
+      // 질의가 비면 지난 질의의 「바쁨」 재시도 · 도는 요청을 멈춘다.
       if (trimmed) deps.files.request(text, scopeOf(deps.projectId));
+      else deps.files.stop();
     }, [text, trimmed]);
+    // 팝업이 닫히거나 파일을 보이지 않는 탭으로 가면 멈춘다.
+    useEffect(() => () => deps.files.stop(), []);
     const state = useSyncExternalStore(deps.files.subscribe, deps.files.get);
     const recentList = useStore(deps.recent.store, (s) => s.files);
     const server = trimmed ? state.files : NO_FILES;
+    const worktree = state.scope?.worktree ?? undefined;
     const rows = useMemo(
-      () => fileRows(deps, recentList, server, text),
-      [recentList, server, text],
+      () => fileRows(deps, recentList, server, worktree, text),
+      [recentList, server, worktree, text],
     );
     const max = limit ?? FILE_LIMIT;
     const shown = rows.slice(0, max);
+    // Host 결과는 질의보다 늦게 온다 — 그린 뒤 팝업이 첫 줄을 고른다. 같은 질의의 결과가 다시 오면(바쁨 뒤 등) 고른 줄을 둔다.
+    const resultsFor = trimmed ? state.query : undefined;
+    useLayoutEffect(() => {
+      if (resultsFor !== undefined) onResults();
+    }, [resultsFor, onResults]);
     const items = shown.map((row) => (
       <FileItem key={row.path} row={row} line={line} column={column} deps={deps} choose={choose} />
     ));
@@ -396,10 +430,10 @@ export function ProjectSearch({
   const [recent] = useState(createRecentFiles);
   const [files] = useState(
     () =>
-      new FileSearch((params) => {
+      new FileSearch((params, signal) => {
         const c = clientRef.current;
         if (!c) return Promise.reject(new Error("Host is not connected"));
-        return c.call("search.files", params);
+        return c.call("search.files", params, { signal });
       }),
   );
   useEffect(() => () => files.dispose(), [files]);

@@ -6,6 +6,9 @@
 //   project-search.tsx). 액션밖에 없는 창(웰컴 · 설정)에서는 탭 줄을 두지 않는다 — 예전 액션 찾기와 같다.
 // - 목록의 거르기 · 순서는 cmdk 가 아니라 결과를 그리는 쪽이 정한다(`shouldFilter={false}`) — 파일 결과는 Host 가 이미 걸러
 //   점수순으로 준다. 액션은 액션 찾기와 같은 비교(ui/search-popup.tsx `searchFilter`, 한글 자모 단위)로 거른다.
+// - cmdk 는 질의가 바뀐 순간에만 첫 줄을 고른다. 그때는 옛 결과가 보이므로, 늦게 온 결과(파일)를 그리면 결과 쪽이 `onResults` 로
+//   알리고 팝업이 그 목록의 첫 줄을 고른다 — 그러지 않으면 순서가 바뀐 새 결과에서 옛 첫 줄이 고른 채로 남아 Enter 가 1위가
+//   아닌 파일을 연다.
 // - 전체 탭은 그룹마다 `ALL_TAB_LIMIT` 개까지 보이고, 더 있으면 그 탭으로 가는 「더 보기」 줄을 둔다. Tab · ⇧Tab 이 탭을 돈다.
 // - 조합을 확정하는 Enter 는 cmdk 가 고르지 않고, 조합을 취소하는 Esc 는 팝업을 닫지 않는다(ui/ime.ts). Tab 도 조합 중이면 탭을
 //   돌지 않는다.
@@ -16,6 +19,7 @@ import {
   type ComponentType,
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -49,6 +53,8 @@ export interface SearchResultsProps {
   readonly onMore?: () => void;
   /** 항목을 골랐다: 팝업을 닫고, 닫히며 포커스가 이전 자리로 돌아간 뒤에 `then` 을 부른다. */
   choose(then: () => void): void;
+  /** 질의보다 늦게 온 결과를 그렸다(그린 뒤 layout effect 에서). 팝업이 목록의 첫 줄을 고른다. */
+  onResults(): void;
 }
 
 export interface SearchSource {
@@ -124,12 +130,19 @@ function SearchContent({
 }) {
   const T = useAppStrings();
   const [query, setQuery] = useState("");
-  const source = (id: SearchSourceId) => sources.find((s) => s.id === id);
-  // 고른 항목은 cmdk 가 갖는다(비제어) — 고르기가 바뀔 때마다 목록 전체를 다시 그리지 않게. 처음 값만 준다.
-  const [initial] = useState(() =>
-    mode === "all" || mode === "actions" ? undefined : source(mode)?.initialValue?.(),
+  // 고른 항목. 늦게 온 결과에서 첫 줄을 고르려고 cmdk 밖에 둔다(`selectFirst`). 고르기가 바뀌어도 결과는 다시 그리지 않는다(`body`).
+  const [selected, setSelected] = useState(
+    () =>
+      (mode === "all" || mode === "actions"
+        ? undefined
+        : sources.find((s) => s.id === mode)?.initialValue?.()) ?? "",
   );
-  const tabs = visibleTabs(sources);
+  const list = useRef<HTMLDivElement>(null);
+  const selectFirst = useCallback(() => {
+    const first = list.current?.querySelector('[cmdk-item]:not([aria-disabled="true"])');
+    setSelected(first?.getAttribute("data-value") ?? "");
+  }, []);
+  const tabs = useMemo(() => visibleTabs(sources), [sources]);
   const label = modeLabel(T, mode, tabs);
   const opened = useRef(false);
   if (!opened.current) {
@@ -144,7 +157,6 @@ function SearchContent({
     },
     [onModeChange],
   );
-  const common = { query, choose };
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
     if (e.key !== "Tab" || tabs.length === 0 || isComposingKey(e.nativeEvent)) return;
@@ -153,40 +165,42 @@ function SearchContent({
     onModeChange(tabs[(at + (e.shiftKey ? -1 : 1) + tabs.length) % tabs.length]);
   };
 
-  let body;
-  if (mode === "all" && tabs.length > 0) {
-    const group = (id: SearchSourceId, heading: string) => {
-      const s = source(id);
+  // 같은 요소를 돌려주면 React 가 결과를 다시 그리지 않는다 — 화살표로 고르기만 바뀔 때.
+  const body = useMemo(() => {
+    const common = { query, choose, onResults: selectFirst };
+    const source = (id: SearchSourceId) => sources.find((s) => s.id === id);
+    if (mode === "all" && tabs.length > 0) {
+      const group = (id: SearchSourceId, heading: string) => {
+        const s = source(id);
+        return (
+          s && (
+            <s.Results
+              key={id}
+              {...common}
+              limit={ALL_TAB_LIMIT}
+              heading={heading}
+              onMore={() => onModeChange(id)}
+            />
+          )
+        );
+      };
       return (
-        s && (
-          <s.Results
-            key={id}
+        <>
+          {group("files", T.search.tabs.files)}
+          <ActionResults
             {...common}
             limit={ALL_TAB_LIMIT}
-            heading={heading}
-            onMore={() => onModeChange(id)}
+            heading={T.search.tabs.actions}
+            onMore={() => onModeChange("actions")}
           />
-        )
+          {group("projects", T.search.tabs.projects)}
+        </>
       );
-    };
-    body = (
-      <>
-        {group("files", T.search.tabs.files)}
-        <ActionResults
-          {...common}
-          limit={ALL_TAB_LIMIT}
-          heading={T.search.tabs.actions}
-          onMore={() => onModeChange("actions")}
-        />
-        {group("projects", T.search.tabs.projects)}
-      </>
-    );
-  } else if (mode === "all" || mode === "actions") {
-    body = <ActionResults {...common} />;
-  } else {
+    }
+    if (mode === "all" || mode === "actions") return <ActionResults {...common} />;
     const s = source(mode);
-    body = s && <s.Results {...common} />;
-  }
+    return s && <s.Results {...common} />;
+  }, [T, choose, mode, onModeChange, query, selectFirst, sources, tabs]);
 
   return (
     <Dialog.Content
@@ -199,7 +213,7 @@ function SearchContent({
       className="fixed top-[15%] left-1/2 w-[640px] max-w-[90vw] -translate-x-1/2 overflow-hidden rounded-md border border-ui-border bg-ui-panel text-ui-foreground shadow-lg"
     >
       <Dialog.Title className="sr-only">{label}</Dialog.Title>
-      <Command label={label} shouldFilter={false} loop defaultValue={initial}>
+      <Command label={label} shouldFilter={false} loop value={selected} onValueChange={setSelected}>
         {mode === "recentFiles" && (
           <div className="truncate border-b border-ui-border px-3 py-1 text-center text-[12px] text-ui-muted-foreground">
             {label}
@@ -231,7 +245,7 @@ function SearchContent({
           placeholder={placeholder(T, mode, tabs)}
           className="w-full border-b border-ui-border bg-transparent px-3 py-2 outline-none placeholder:text-ui-muted-foreground"
         />
-        <Command.List className="max-h-[360px] overflow-y-auto py-1">
+        <Command.List ref={list} className="max-h-[360px] overflow-y-auto py-1">
           <Command.Empty className="px-3 py-2 text-ui-muted-foreground">
             {mode === "actions" || tabs.length === 0 ? T.findAction.empty : T.search.empty}
           </Command.Empty>

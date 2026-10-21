@@ -24,7 +24,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { App } from "../App";
-import { resetWindowFileTree } from "../file-tree/project-view";
+import { resetWindowFileTree, treeScope } from "../file-tree/project-view";
+import type { DockviewApi } from "dockview-react";
 import { fakeTreeLayout } from "../file-tree/testing";
 import type { KeymapNative } from "../keymap/native";
 import { activeWorktreeStore } from "../open-with/active-worktree";
@@ -46,6 +47,10 @@ const host = vi.hoisted(() => ({
   fileSearches: [] as SearchFilesParams[],
   /** 있으면 `search.files` 의 답을 이 순서로 앞에 둔다(점수가 높은 것처럼). */
   ranked: [] as string[],
+  /** 켜면 `search.files` 가 Host 의 「바쁨」 을 답한다. */
+  busy: false,
+  /** 사라진 워크트리 꼭대기. 이것을 실은 `fs.*` 는 Host 처럼 거절한다(crates/pw-fs/src/lib.rs `worktree_root`). */
+  goneWorktrees: new Set<string>(),
   send: (_m: object) => {},
 }));
 
@@ -90,6 +95,16 @@ vi.mock("../tauri-transport", async () => {
           send({ id: m.id, error: { code: -32004, message, data: null } });
         if (m.method.startsWith("fs.")) host.calls.push({ method: m.method, params: m.params });
         const path = (m.params as { path?: string } | undefined)?.path ?? "";
+        const worktree = (m.params as { worktree?: string | null } | undefined)?.worktree;
+        if (m.method.startsWith("fs.") && worktree && host.goneWorktrees.has(worktree))
+          return send({
+            id: m.id,
+            error: {
+              code: -32602,
+              message: "invalid params",
+              data: `\`${worktree}\` is not a worktree of project \`p1\``,
+            },
+          });
         switch (m.method) {
           case "i18n.get":
             return reply(i18nState("ko"));
@@ -206,6 +221,16 @@ vi.mock("../tauri-transport", async () => {
             // 가짜 매칭: 상대 경로에 질의 글자가 차례로 들어 있으면 맞는다. `ranked` 의 것을 앞에 둔다.
             const params = m.params as SearchFilesParams;
             host.fileSearches.push(params);
+            // Host 의 바쁨(crates/pw-fs/src/index/mod.rs `turn`): RpcError::internal — 사유는 message 가 아니라 data 에 있다.
+            if (host.busy)
+              return send({
+                id: m.id,
+                error: {
+                  code: -32603,
+                  message: "internal error",
+                  data: "file search is busy: 4 searches are already running",
+                },
+              });
             const { matchRecent } = await import("./file-query");
             const hits = [...host.files.keys()]
               .map((p) => ({ path: p, relative: p.slice("/work/demo/".length) }))
@@ -252,6 +277,7 @@ const native = {
 } satisfies KeymapNative;
 
 let root: Root | undefined;
+let dock: DockviewApi | undefined;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -276,6 +302,8 @@ beforeEach(() => {
   host.calls = [];
   host.fileSearches = [];
   host.ranked = [];
+  host.busy = false;
+  host.goneWorktrees = new Set();
   native.openProjectWindow.mockClear();
   activeWorktreeStore.setState({ top: undefined });
   resetWindowFileTree();
@@ -306,7 +334,7 @@ async function mount() {
   await act(async () =>
     root!.render(
       <ThemeStoreProvider store={store}>
-        <App kind="project" native={native} />
+        <App kind="project" native={native} onDockApi={(a) => (dock = a)} />
       </ThemeStoreProvider>,
     ),
   );
@@ -365,8 +393,8 @@ async function type(value: string) {
   await settle();
 }
 
-async function openTab(path: string) {
-  await act(async () => projectOpenInbox.push({ file: path }));
+async function openTab(path: string, worktree?: string) {
+  await act(async () => projectOpenInbox.push({ file: path, ...(worktree && { worktree }) }));
   await vi.waitFor(() =>
     expect(
       [...document.querySelectorAll("[data-editor-tab-header]")].some(
@@ -521,4 +549,128 @@ it("lists recent files with ⌘E, selects the previous one, and opens it on Ente
   );
   // Host 에 묻지 않는다.
   expect(host.fileSearches).toEqual([]);
+});
+
+/** 그 경로의 탭을 닫는다(최근 파일에는 남는다). */
+async function closeTab(path: string) {
+  const panel = dock!.panels.find((p) => (p.params as { path: string }).path === path)!;
+  await act(async () => panel.api.close());
+  await settle();
+}
+
+const statOf = (path: string) =>
+  host.calls.find((c) => c.method === "fs.stat" && c.params.path === path)?.params;
+
+it("retries a busy file search every 250 ms while the popup is open, and stops when it closes", async () => {
+  await mount();
+  host.busy = true;
+  await gotoFile();
+  await type("main");
+  await settle(600);
+  // 열려 있는 동안은 다시 보내고, 바쁘다고 알린다.
+  expect(host.fileSearches.length).toBeGreaterThanOrEqual(3);
+  expect(popup()!.querySelector("[role=alert]")?.textContent).toBe(
+    "파일 검색이 바쁘다 — 잠시 뒤 다시 찾는다",
+  );
+  await press({ code: "Escape", key: "Escape" });
+  expect(popup()).toBeNull();
+  const atClose = host.fileSearches.length;
+  await settle(800);
+  expect(host.fileSearches.length - atClose).toBe(0);
+});
+
+it("stops the busy retries when the query is emptied or another tab is chosen", async () => {
+  await mount();
+  host.busy = true;
+  await gotoFile();
+  await type("main");
+  await settle(300);
+  const atType = host.fileSearches.length;
+  expect(atType).toBeGreaterThanOrEqual(2);
+  await type("");
+  const atEmpty = host.fileSearches.length;
+  await settle(600);
+  expect(host.fileSearches.length - atEmpty).toBe(0);
+
+  await type("lib");
+  await settle(300);
+  expect(host.fileSearches.length - atEmpty).toBeGreaterThanOrEqual(2);
+  // 파일 → 액션 탭.
+  await press({ code: "Tab", key: "Tab" });
+  expect(popup()?.getAttribute("data-search-everywhere")).toBe("actions");
+  const atTab = host.fileSearches.length;
+  await settle(600);
+  expect(host.fileSearches.length - atTab).toBe(0);
+});
+
+it("opens a recent main-checkout file in the main checkout after the tree moved to a worktree", async () => {
+  await mount();
+  await openTab("/work/demo/src/lib.rs");
+  await openTab("/work/demo/src/main.rs");
+  await closeTab("/work/demo/src/lib.rs");
+  // 워크트리 전환기가 하는 것처럼 창의 트리가 링크된 워크트리를 보인다.
+  act(() => treeScope.setState({ worktree: "/work/demo-wt" }));
+  host.calls = [];
+  await press({ code: "KeyE", key: "E", metaKey: true });
+  await vi.waitFor(() => expect(selected()).toBe("file:/work/demo/src/lib.rs"));
+  await press({ code: "Enter", key: "Enter" });
+  await vi.waitFor(() => expect(statOf("/work/demo/src/lib.rs")).toBeDefined());
+  expect(statOf("/work/demo/src/lib.rs")).toMatchObject({ worktree: null });
+});
+
+it("opens a found file in the worktree it was found in, even if the tree moved before choosing", async () => {
+  await mount();
+  act(() => treeScope.setState({ worktree: "/work/demo-wt" }));
+  await gotoFile();
+  await type("lib");
+  await vi.waitFor(() => expect(values()).toEqual(["file:/work/demo/src/lib.rs"]));
+  expect(host.fileSearches.at(-1)).toMatchObject({ worktree: "/work/demo-wt" });
+  act(() => treeScope.setState({ worktree: undefined }));
+  host.calls = [];
+  await press({ code: "Enter", key: "Enter" });
+  await vi.waitFor(() => expect(statOf("/work/demo/src/lib.rs")).toBeDefined());
+  expect(statOf("/work/demo/src/lib.rs")).toMatchObject({ worktree: "/work/demo-wt" });
+});
+
+it("says so when the worktree a recent file was opened from is gone", async () => {
+  await mount();
+  await openTab("/work/demo/src/lib.rs", "/work/demo-wt");
+  await openTab("/work/demo/src/main.rs");
+  await closeTab("/work/demo/src/lib.rs");
+  host.goneWorktrees.add("/work/demo-wt");
+  await press({ code: "KeyE", key: "E", metaKey: true });
+  await vi.waitFor(() => expect(selected()).toBe("file:/work/demo/src/lib.rs"));
+  await press({ code: "Enter", key: "Enter" });
+  await vi.waitFor(() => {
+    const toasts = [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent);
+    expect(toasts.some((t) => t?.includes("파일을 열지 못했다: /work/demo/src/lib.rs"))).toBe(true);
+  });
+  // 지금 트리(메인 체크아웃)로 바꿔 열지 않는다.
+  expect(statOf("/work/demo/src/lib.rs")).toMatchObject({ worktree: "/work/demo-wt" });
+  expect(
+    [...document.querySelectorAll("[data-editor-tab-header]")].map((t) => t.textContent),
+  ).toEqual(["main.rs"]);
+});
+
+it("selects the top result when the results of a longer query arrive in a new order", async () => {
+  await mount();
+  await gotoFile();
+  await type("main");
+  await vi.waitFor(() =>
+    expect(values()).toEqual(["file:/work/demo/docs/main.md", "file:/work/demo/src/main.rs"]),
+  );
+  expect(selected()).toBe("file:/work/demo/docs/main.md");
+  host.ranked = ["/work/demo/src/main.rs"];
+  await type("main.");
+  await vi.waitFor(() =>
+    expect(values()).toEqual(["file:/work/demo/src/main.rs", "file:/work/demo/docs/main.md"]),
+  );
+  await settle(50);
+  expect(selected()).toBe("file:/work/demo/src/main.rs");
+  await press({ code: "Enter", key: "Enter" });
+  await vi.waitFor(() =>
+    expect(document.querySelector(".dv-active-tab [data-editor-tab-header]")?.textContent).toBe(
+      "main.rs",
+    ),
+  );
 });

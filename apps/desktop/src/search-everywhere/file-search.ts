@@ -1,8 +1,10 @@
 // 파일로 이동의 `search.files` 요청. 키 입력마다 요청하되 **한 번에 하나만** 보낸다 — 응답을 기다리는 동안 친 글자는 마지막 것만
 // 남겨 두었다가 응답이 오면 보낸다. Host 의 동시 상한(crates/pw-fs/src/index/mod.rs `MAX_SEARCHES`, 넘으면 「바쁨」)을 한 창이 다
 // 쓰지 않고, 늦게 온 옛 질의의 응답이 새 결과를 덮지 않는다. 결과는 늘 마지막으로 받은 질의의 것이다.
+// 팝업이 닫히거나 파일 결과를 그리지 않게 되면(`stop`) 「바쁨」 재시도를 멈추고 도는 요청을 취소한다 — 닫힌 팝업이 Host 의 차례를
+// 계속 쓰지 않게.
 
-import type { FileMatch, SearchFilesParams } from "@pitwall/rpc-client";
+import { isBusyError, type FileMatch, type SearchFilesParams } from "@pitwall/rpc-client";
 
 /** 한 번에 받는 결과 수. 목록은 이만큼 보인다. */
 export const FILE_LIMIT = 50;
@@ -12,6 +14,8 @@ export const BUSY_RETRY_MS = 250;
 export interface FileSearchState {
   /** 결과가 가리키는 질의. 아직 받은 것이 없으면 `undefined`. */
   readonly query?: string;
+  /** 결과를 찾은 곳. 결과에서 파일을 열 때 이 워크트리를 싣는다(고를 때의 트리가 아니라). */
+  readonly scope?: Scope;
   readonly files: readonly FileMatch[];
   /** 맞은 수 · 목록의 파일 수(상한을 넘었는지 보인다). */
   readonly matched: number;
@@ -23,7 +27,11 @@ export interface FileSearchState {
   readonly busy: boolean;
 }
 
-export type FileSearchCall = (params: SearchFilesParams) => Promise<{
+/** `signal` 이 중단되면 요청을 취소한다(rpc-client `CallOptions.signal`). */
+export type FileSearchCall = (
+  params: SearchFilesParams,
+  signal: AbortSignal,
+) => Promise<{
   files: FileMatch[];
   matched: number;
   indexed: number;
@@ -31,20 +39,16 @@ export type FileSearchCall = (params: SearchFilesParams) => Promise<{
 
 const EMPTY: FileSearchState = { files: [], matched: 0, indexed: 0, pending: false, busy: false };
 
-function isBusy(e: unknown): boolean {
-  const message = e instanceof Error ? e.message : (e as { message?: string } | null)?.message;
-  return message?.startsWith("file search is busy") ?? false;
-}
-
 export class FileSearch {
   private state: FileSearchState = EMPTY;
   private readonly listeners = new Set<() => void>();
   /** 보낼 질의(마지막으로 받은 것). */
   private wanted?: { query: string; scope: Scope };
-  private inFlight = false;
+  /** 도는 요청. `stop` 이 취소한다. */
+  private inFlight?: AbortController;
   private retry?: ReturnType<typeof setTimeout>;
   private disposed = false;
-  /** `forget` 마다 오른다. 그 전에 보낸 요청의 답은 버린다. */
+  /** `stop` · `forget` 마다 오른다. 그 전에 보낸 요청의 답은 버린다. */
   private generation = 0;
 
   constructor(private readonly call: FileSearchCall) {}
@@ -67,18 +71,31 @@ export class FileSearch {
     this.pump();
   }
 
-  /** 받은 결과와 기다리는 질의를 버린다. 도는 요청의 답도 버리고, 다음 `request` 는 다시 보낸다. */
-  forget() {
+  /**
+   * 기다리는 질의를 버리고 「바쁨」 재시도를 멈추고 도는 요청을 취소한다. 받은 결과는 그대로 두고 실패 문장은 지운다. 다음
+   * `request` 는 다시 보낸다.
+   * 팝업이 닫히거나 · 다른 탭으로 가거나 · 질의가 비면 부른다.
+   */
+  stop() {
     this.generation++;
     clearTimeout(this.retry);
     this.retry = undefined;
+    this.inFlight?.abort();
+    this.inFlight = undefined;
     this.wanted = undefined;
+    if (this.state.pending || this.state.error !== undefined)
+      this.set({ pending: false, busy: false, error: undefined });
+  }
+
+  /** `stop` 하고 받은 결과도 버린다(팝업을 새로 열 때 — 그사이 파일이 바뀌었을 수 있다). */
+  forget() {
+    this.stop();
     this.state = EMPTY;
   }
 
   dispose() {
+    this.stop();
     this.disposed = true;
-    clearTimeout(this.retry);
     this.listeners.clear();
   }
 
@@ -87,16 +104,18 @@ export class FileSearch {
     const { query, scope } = this.wanted;
     const generation = this.generation;
     const stale = () => generation !== this.generation;
-    this.inFlight = true;
+    const abort = new AbortController();
+    this.inFlight = abort;
     clearTimeout(this.retry);
     this.retry = undefined;
-    this.call({ ...scope, query, limit: FILE_LIMIT })
+    this.call({ ...scope, query, limit: FILE_LIMIT }, abort.signal)
       .then(
         (r) => {
           if (stale()) return;
           const latest = this.isWanted(query, scope);
           this.set({
             query,
+            scope,
             files: r.files,
             matched: r.matched,
             indexed: r.indexed,
@@ -107,7 +126,7 @@ export class FileSearch {
         },
         (e: unknown) => {
           if (stale()) return;
-          const busy = isBusy(e);
+          const busy = isBusyError(e);
           // 결과는 그대로 두고 문장만 보인다. 「바쁨」 이면 조금 뒤 마지막 질의를 다시 보낸다.
           this.set({ pending: busy, busy, error: e instanceof Error ? e.message : String(e) });
           if (busy && !this.disposed) {
@@ -122,7 +141,9 @@ export class FileSearch {
         },
       )
       .then((outcome) => {
-        this.inFlight = false;
+        // `stop` 뒤에 끝난 요청은 이미 놓았다 — 그 뒤의 요청을 건드리지 않는다.
+        if (stale()) return;
+        this.inFlight = undefined;
         if (outcome === "retry" || !this.wanted || this.isWanted(query, scope)) return;
         this.pump();
       });
