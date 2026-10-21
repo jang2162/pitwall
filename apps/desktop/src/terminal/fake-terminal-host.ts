@@ -27,7 +27,7 @@ export class FakeTerminalHost {
       this.calls.push({ method, params });
       const result = this.results[method]?.(params) ?? null;
       if (this.hold.has(method)) {
-        return new Promise((resolve) => this.held.push(() => resolve(result)));
+        return new Promise<unknown>((resolve) => this.held.push(() => resolve(result)));
       }
       return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
     }) as RpcClient["call"],
