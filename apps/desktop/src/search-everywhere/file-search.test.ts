@@ -173,7 +173,7 @@ describe("FileSearch.stop", () => {
     expect(host.calls).toHaveLength(1);
   });
 
-  it("sends the same query again right away, without waiting for the cancelled answer", async () => {
+  it("sends the same query again right away, and still one at a time after the cancelled answer", async () => {
     const host = fakeHost();
     const s = new FileSearch(host.call);
     s.request("a", scope);
@@ -181,10 +181,14 @@ describe("FileSearch.stop", () => {
     s.request("a", scope);
     expect(host.calls.map((c) => c.params.query)).toEqual(["a", "a"]);
     host.calls[0]!.resolve([file("old.rs")]);
+    await flush();
+    // 취소된 답이 끝나도 새 요청은 여전히 돌고 있다 — 그사이 친 글자는 기다린다(한 번에 하나).
+    s.request("ab", scope);
+    expect(host.calls).toHaveLength(2);
     host.calls[1]!.resolve([file("a.rs")]);
     await flush();
-    expect(s.get()).toMatchObject({ query: "a", pending: false });
     expect(s.get().files.map((f) => f.relative)).toEqual(["a.rs"]);
+    expect(host.calls.map((c) => c.params.query)).toEqual(["a", "a", "ab"]);
   });
 
   it("remembers where the results were found", async () => {
