@@ -23,6 +23,7 @@ import type { TextDocumentState } from "./documents";
 import type { EditorTabParams } from "./editor-tabs";
 import { type EditorWorkspace, useEditorWorkspace } from "./editor-workspace";
 import { type EditorFeatureContext, editorExtensions, reconfigureEditor } from "./extensions";
+import { useDocLanguage } from "./language";
 import type { LiveText } from "./live-text";
 import type { ViewerProps } from "./viewers";
 
@@ -34,7 +35,7 @@ function useFeatureContext(
   text: TextDocumentState | undefined,
 ): EditorFeatureContext | undefined {
   const appearance = useTheme((s) => s.appearance);
-  const language = params.language !== undefined ? params.language : (text?.language ?? null);
+  const language = useDocLanguage(params.path);
   const live = text?.live;
   const judgment = text?.judgment;
   const readOnly = text?.readOnly;
@@ -50,6 +51,7 @@ function useFeatureContext(
             appearance,
             onCursor: (cursor) => workspace.reportCursor(panelId, cursor),
             history: live,
+            syntax: workspace.syntax,
           }
         : undefined,
     [workspace, panelId, params.path, live, judgment, readOnly, language, appearance],

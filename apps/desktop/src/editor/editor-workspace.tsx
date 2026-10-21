@@ -28,6 +28,8 @@ import type { DockviewApi, IDockviewPanel } from "dockview-react";
 import { createContext, type ReactNode, useContext } from "react";
 
 import type { DocumentStore } from "./documents";
+import { bindDocumentLanguages } from "./language";
+import { createSyntaxSessions, type SyntaxSource } from "./syntax-sessions";
 import {
   editorPanels,
   isEditorPanel,
@@ -87,6 +89,8 @@ export interface EditorWorkspaceDeps {
   onCloseAborted?(): void;
   /** 진단 로그(첫 그림까지 걸린 시간 등). */
   log?(message: string): void;
+  /** 구문 분석 서비스의 문서 세션 RPC(syntax-sessions.ts). 없으면 강조하지 않는다. */
+  syntax?: SyntaxSource;
 }
 
 export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
@@ -165,15 +169,21 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     } else pending.set(panelId, cursor);
   }
 
+  const syntax = deps.syntax && createSyntaxSessions(deps.syntax, deps.documents);
+
   return {
     documents: deps.documents,
     log: deps.log,
+    /** 창의 구문 세션. 강조 기능이 탭의 context 로 받는다. */
+    syntax,
 
     /** 도킹 영역이 준비되면 붙는다. 해제 함수를 돌려준다. */
     attach(next: DockviewApi): () => void {
       api = next;
       recent = trackRecentTabs(next);
       const tracked = recent;
+      // 문서의 판별 언어를 문서 언어 상태로 잇는다 — 문서가 사라지면 사람이 고른 언어도 잊는다.
+      const unbindLanguages = bindDocumentLanguages(deps.documents);
       for (const panel of editorPanels(next)) hold(panel);
       const added = next.onDidAddPanel(hold);
       const removed = next.onDidRemovePanel((panel) => {
@@ -192,6 +202,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
         }
       });
       return () => {
+        unbindLanguages();
         kept();
         added.dispose();
         removed.dispose();

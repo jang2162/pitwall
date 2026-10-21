@@ -32,7 +32,9 @@ import type { Judgment } from "@pitwall/rpc-client";
 
 import { base } from "./base";
 import { cursorReport } from "./cursor-report";
+import type { SyntaxSessions } from "../syntax-sessions";
 import { editing } from "./editing";
+import { highlight } from "./highlight";
 import { navigation } from "./navigation";
 import { readOnly } from "./read-only";
 import { theme } from "./theme";
@@ -60,8 +62,8 @@ export interface EditorFeatureContext {
   /** 이 문서를 고칠 수 없다(크기 등급 · 인코딩 · 쓰기 권한). */
   readonly readOnly: boolean;
   /**
-   * Linguist 언어 이름. 탭의 수동 변경(`EditorTabParams.language`, M1-18)이 있으면 그것, 없으면 문서를 열 때의 `lang.detect`
-   * 결과. `null` 이면 플레인 텍스트.
+   * Linguist 언어 이름. 문서 언어 상태(../language.ts)의 쓰는 언어 — 사람이 고른 것(M1-18) ?? 문서를 열 때의 `lang.detect` 결과
+   * ?? `PLAIN_TEXT`. `PLAIN_TEXT`(또는 `null`)면 플레인 텍스트.
    */
   readonly language: string | null;
   /** 창의 외관(라이트 · 다크). 색 자체는 CSS 변수로 따라가지만 구문 토큰 테마(M1-17)가 고를 때 쓴다. */
@@ -70,6 +72,8 @@ export interface EditorFeatureContext {
   readonly onCursor: (cursor: EditorCursor) => void;
   /** 문서의 undo · redo(`editing`). 고친 내용은 뷰의 트랜잭션으로 문서에 간다 — 기능이 따로 알릴 것은 없다. */
   readonly history: EditorHistory;
+  /** 창의 구문 세션(`highlight`, ../syntax-sessions.ts). Host 에 붙지 않은 창 · 시험에는 없다. */
+  readonly syntax?: SyntaxSessions;
 }
 
 export interface EditorFeature {
@@ -89,6 +93,7 @@ export const EDITOR_FEATURES: readonly EditorFeature[] = [
   contextFeature,
   base,
   theme,
+  highlight,
   readOnly,
   cursorReport,
   editing,

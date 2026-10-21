@@ -413,7 +413,8 @@ function errorText(e: unknown): string {
 
 /**
  * 창의 에디터 작업 공간. 파일 읽기 · 쓰기는 이 창의 Host 연결로 하고(`fs.stat` · `fs.read` · `fs.write` · `lang.detect`, 요청 · 탭의
- * 워크트리를 접근 범위로), 열지 못한 것 · 저장하지 못한 것은 알림으로 보인다. 미저장 확인은 `ask` 가 묻는다. 창이 사는 동안 하나다.
+ * 워크트리를 접근 범위로), 열지 못한 것 · 저장하지 못한 것은 알림으로 보인다. 구문 강조도 같은 연결의 문서 세션(`syntax.*`)이다.
+ * 미저장 확인은 `ask` 가 묻는다. 창이 사는 동안 하나다.
  */
 function useWindowEditor(
   projectId: string | undefined,
@@ -463,6 +464,12 @@ function useWindowEditor(
           title: latest.current.strings.saveFailed(path),
           body: message,
         }),
+      syntax: {
+        open: (params) => host().call("syntax.open", params),
+        edit: (params) => host().call("syntax.edit", params),
+        highlights: (params) => host().call("syntax.highlights", params),
+        close: (params) => host().call("syntax.close", params),
+      },
       confirmUnsaved: (paths) => latest.current.ask(paths),
       onCloseAborted: () =>
         latest.current.notify({

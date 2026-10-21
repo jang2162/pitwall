@@ -29,8 +29,6 @@ export interface EditorTabParams {
   worktree?: string;
   /** 이 탭만의 뷰어(M1-23 「텍스트로 열기」 · 「hex 로 열기」). 없으면 문서가 정한 종류(viewer-kinds.ts). */
   viewer?: ViewerKind;
-  /** 이 탭만의 언어(M1-18 상태바의 언어 수동 변경, Linguist 이름 · `null` 은 플레인 텍스트). 없으면 문서의 `lang.detect` 결과. */
-  language?: string | null;
   /** 미리보기 탭(이탤릭, 다음 미리보기가 대신한다). */
   preview?: boolean;
   /** 고정(pin). */

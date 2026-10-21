@@ -39,6 +39,7 @@ it("assembles one extension per feature, in list order", () => {
     "context",
     "base",
     "theme",
+    "highlight",
     "readOnly",
     "cursorReport",
     "editing",
