@@ -42,16 +42,18 @@ export function viewerKindByName(path: string): ViewerKind | undefined {
 }
 
 /**
- * 탭이 그릴 뷰어. 탭의 덮어쓰기(`EditorTabParams.viewer`)가 있고 이 문서로 그릴 수 있으면 그것, 아니면 문서가 정한 종류. 텍스트를
- * 받는 뷰어(`VIEWER_READS` 가 `text`)는 텍스트로 읽힌 문서에만 쓸 수 있다 — 바이너리를 텍스트로 여는 읽기는 M1-23 이 문서 모델에
- * 더한다.
+ * 탭이 그릴 뷰어. 탭의 덮어쓰기(`EditorTabParams.viewer`)가 있고 이 문서로 그릴 수 있으면 그것, 아니면 문서가 정한 종류.
+ * - `text` 는 어느 문서에나 쓴다: 텍스트로 읽지 않은 문서(바이너리 · 이미지)는 그 탭이 직접 읽은 읽기 전용 텍스트로 보인다
+ *   (viewers.tsx 의 `text` 줄, M1-23 「텍스트로 열기」).
+ * - `hex` · `image` 도 어느 문서에나 쓴다(스스로 읽는다).
+ * - `markdown` 은 텍스트로 읽힌 문서에만 쓴다.
  */
 export function chooseViewer(
   doc: { readonly status: "text" | "external"; readonly kind: ViewerKind },
   override: ViewerKind | undefined,
 ): ViewerKind {
   if (override === undefined) return doc.kind;
-  if (VIEWER_READS[override] === "text" && doc.status !== "text") return doc.kind;
+  if (override === "markdown" && doc.status !== "text") return doc.kind;
   return override;
 }
 

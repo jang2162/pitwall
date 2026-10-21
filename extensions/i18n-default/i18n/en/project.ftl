@@ -34,15 +34,26 @@ editor-loading = Loading…
 editor-read-failed = Could not read the file: { $message }
 # $size: the file size with its unit (e.g. 72.4 MiB)
 editor-too-large = Not opened: the file is larger than 50 MiB ({ $size })
-editor-not-utf8 = This text file is not UTF-8 and cannot be shown yet
+# Not a regular file (FIFO · device · socket): opening it blocks or never ends
+editor-special-file = Not opened: this is not a regular file (FIFO, device or socket)
+# $size: the size to show, with unit (e.g. 1.0 MiB)
+editor-show-head = Show the first { $size }
+editor-show-hex = View as Hex
+# $shown: the size shown, $size: the file size (both with unit)
+editor-head-notice = Showing only the first { $shown } (of { $size }) · read-only
+editor-binary-as-text = Showing a binary file as text (bytes that are not UTF-8 show as �) · read-only
 editor-read-only-large = Opened read-only: the file is larger than 5 MiB (highlighting and wrapping off)
-# $kind: image | hex | markdown | text — the viewer kind for the file
-editor-no-viewer =
-    { $kind ->
-        [image] Image preview is not available yet
-        [hex] This is a binary file and cannot be shown yet
-       *[other] There is no viewer for this file yet
-    }
+# $encoding: the guessed encoding name (e.g. EUC-KR, UTF-16LE)
+editor-read-only-encoding = Read as { $encoding } · opened read-only because it is not UTF-8
+# Hex viewer (M1-23)
+editor-hex-label = Hex · read-only · 16 bytes per row
+editor-hex-goto-title = Go to Offset
+editor-hex-goto-input = Offset (4096 or 0x1000)
+# $current: the current offset, $last: the offset of the last byte (both 0x hex)
+editor-hex-goto-hint = Now { $current } · last { $last }
+editor-hex-goto-invalid = Use decimal (4096) or hex (0x1000 or 1000h)
+# $message: the original error
+editor-hex-read-failed = Could not read the bytes: { $message }
 # Image viewer (M1-22)
 editor-image-fit = Fit
 editor-image-actual = Actual Size
@@ -134,6 +145,10 @@ action-editor-delete-line = Delete Line
 action-editor-move-line-up = Move Line Up
 action-editor-move-line-down = Move Line Down
 action-editor-comment-line = Comment with Line Comment
+action-editor-open-as-text = Open as Text
+action-editor-open-as-hex = Open as Hex
+action-editor-open-as-default = Open with Default Viewer
+action-hex-goto-offset = Go to Offset
 
 editor-find-label = Find in file
 editor-find-search = Search

@@ -11,6 +11,8 @@
 //
 // 탭을 닫는 액션은 모두 작업 공간의 `closeTabs` 를 지난다 — 그 문서를 보는 마지막 탭에 미저장 편집이 있으면 먼저 묻는다(M1-13).
 // 탭이 없을 때의 `window.close` 는 창을 닫고, 창의 닫기 요청이 미저장을 묻는다(project-window.tsx).
+// 「텍스트로 열기」 · 「hex 로 열기」 · 「기본 뷰어로 열기」(M1-23)는 활성 탭의 뷰어만 바꾼다(탭 params `viewer`) — 같은 파일의 다른
+// 탭은 그대로다. `hex.gotoOffset`(⌘L, hex 뷰어에 포커스가 있을 때)은 활성 탭의 hex 뷰어에 오프셋 칸을 연다.
 // `editor.save`(⌘S)는 활성 탭의 문서를 저장한다(자동 저장 없음, 결정 M1-D13). 네이티브 메뉴 「저장」 이 같은 액션이라 키와 메뉴
 // accelerator 가 한 액션으로 모인다(`window.close` 와 같다) — 두 번 와도 둘째는 저장할 것이 없거나 첫 저장 뒤에 줄을 선다.
 
@@ -19,12 +21,14 @@ import type { Action } from "@pitwall/keymap";
 import type { ProjectStrings } from "../layout/strings";
 import {
   otherTabs,
+  setTabViewer,
   splitRight,
   tabParams,
   toggleEditorMaximized,
   togglePinned,
 } from "./editor-tabs";
 import type { EditorWorkspace } from "./editor-workspace";
+import { hexControls } from "./hex-controls";
 
 export function editorActions(deps: {
   workspace: EditorWorkspace;
@@ -117,6 +121,40 @@ export function editorActions(deps: {
       run: withTab((panel) => {
         deps.copyText(tabParams(panel).path).catch(deps.onCopyFailed);
       }),
+    },
+    {
+      id: "editor.openAsText",
+      label: T.openAsText,
+      keywords: ["Open as Text", "Open as Plain Text"],
+      enabled: hasTab,
+      run: withTab((panel) => setTabViewer(panel.api, tabParams(panel), "text")),
+    },
+    {
+      id: "editor.openAsHex",
+      label: T.openAsHex,
+      keywords: ["Open as Hex", "Hex Viewer", "Binary"],
+      enabled: hasTab,
+      run: withTab((panel) => setTabViewer(panel.api, tabParams(panel), "hex")),
+    },
+    {
+      id: "editor.openAsDefault",
+      label: T.openAsDefault,
+      keywords: ["Open with Default Viewer"],
+      enabled: () => {
+        const panel = workspace.activeTab();
+        return panel !== undefined && tabParams(panel).viewer !== undefined;
+      },
+      run: withTab((panel) => setTabViewer(panel.api, tabParams(panel), undefined)),
+    },
+    {
+      id: "hex.gotoOffset",
+      label: T.gotoOffset,
+      keywords: ["Go to Offset", "Hex"],
+      enabled: () => {
+        const panel = workspace.activeTab();
+        return panel !== undefined && hexControls.has(panel.id);
+      },
+      run: withTab((panel) => hexControls.get(panel.id)?.gotoOffset()),
     },
     {
       id: "editor.switcher",

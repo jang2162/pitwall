@@ -2,7 +2,7 @@ import { ChangeSet, type ChangeSpec, Text } from "@codemirror/state";
 import { afterEach, expect, it, vi } from "vitest";
 
 import type { DocumentChange } from "./documents";
-import { HIGHLIGHT_MAX_BYTES, LONG_LINE_CHARS } from "./limits";
+import { EDITABLE_MAX, LONG_LINE_CHARS } from "./limits";
 import {
   createSyntaxSessions,
   type HighlightAnswer,
@@ -299,15 +299,12 @@ it("answers plain for a language without a grammar, and for text over the size l
   );
   expect(await plainLanguage.highlights(all)).toEqual({ kind: "plain" });
 
-  const big = createSyntaxSessions(
-    server.source,
-    fakeDocuments("a".repeat(HIGHLIGHT_MAX_BYTES + 1)),
-  );
+  const big = createSyntaxSessions(server.source, fakeDocuments("a".repeat(EDITABLE_MAX + 1)));
   expect(await big.acquire("/p/big", "Mini").highlights(all)).toEqual({ kind: "plain" });
   // 바이트로 넘는다: 한글 한 자는 3바이트.
   const wide = createSyntaxSessions(
     server.source,
-    fakeDocuments(`${"가\n".repeat(Math.floor(HIGHLIGHT_MAX_BYTES / 4) + 1)}`),
+    fakeDocuments(`${"가\n".repeat(Math.floor(EDITABLE_MAX / 4) + 1)}`),
   );
   expect(await wide.acquire("/p/wide", "Mini").highlights(all)).toEqual({ kind: "plain" });
   const long = createSyntaxSessions(

@@ -176,6 +176,18 @@ export function togglePinned(panel: IDockviewPanel) {
   setParams(panel, pinned ? { pinned, preview: false } : { pinned });
 }
 
+/**
+ * 탭의 뷰어를 바꾼다(M1-23 「텍스트로 열기」 · 「hex 로 열기」). `undefined` 면 문서가 정한 뷰어로 돌아간다 — dockview 는 값이
+ * `undefined` 인 키를 params 에서 지운다. 문서는 그대로다.
+ */
+export function setTabViewer(
+  api: Pick<IDockviewPanel["api"], "updateParameters">,
+  params: EditorTabParams,
+  viewer: ViewerKind | undefined,
+) {
+  api.updateParameters({ ...params, viewer });
+}
+
 const DOCKS = ["left", "bottom", "right"] as const;
 // 최대화로 접은 dock. api 마다 하나. 비어 있으면 최대화 상태가 아니다.
 const maximizedByApi = new WeakMap<DockviewApi, (typeof DOCKS)[number][]>();

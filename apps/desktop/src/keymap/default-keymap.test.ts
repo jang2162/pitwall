@@ -67,14 +67,18 @@ describe("default keymap overlaps", () => {
         ["⌘⌫", ["project.removeFromList []", "editor.deleteLine [editorFocus]"]],
         // 터미널의 ⌘W 는 탭 닫기(IntelliJ 와 같다), 나머지는 탭 또는 창 닫기.
         ["⌘W", ["window.close []", "terminal.closeTab [terminalFocus]"]],
+        // 텍스트 에디터의 줄로 이동과 hex 뷰어의 오프셋으로 이동 — hex 뷰어는 `editorFocus` 를 가린다(src/keymap/context.ts).
+        ["⌘L", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
       ],
       win: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
         ["Delete", ["project.removeFromList []", "fileTree.delete [fileTree]"]],
+        ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
       ],
       linux: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
         ["Delete", ["project.removeFromList []", "fileTree.delete [fileTree]"]],
+        ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
       ],
     });
   });

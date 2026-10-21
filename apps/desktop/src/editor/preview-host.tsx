@@ -1,17 +1,19 @@
-// 미리보기 뷰어(이미지 · Markdown, 12-m1-plan M1-22)가 창에서 받는 것: 파일 바이트, 탭의 루트, 외부 브라우저. 창(project-window.tsx)이
-// Host 연결과 opener 로 채우고, 시험은 가짜를 넘긴다.
+// 스스로 읽는 뷰어(이미지 · Markdown, 12-m1-plan M1-22 · hex · 앞부분 텍스트, M1-23)가 창에서 받는 것: 파일 바이트 · hex 페이지 ·
+// 앞부분 텍스트, 탭의 루트, 외부 브라우저. 창(project-window.tsx)이 Host 연결과 opener 로 채우고, 시험은 가짜를 넘긴다.
 //
 // 바이트는 `fs.read` 범위 읽기를 이어 붙인 Blob 이다(결정 M1-D11). Tauri 의 asset 프로토콜은 로컬 디스크만 읽어 원격 Host 에서
 // 깨지므로 쓰지 않는다. 범위 읽기는 Host 의 접근 범위(crates/pw-fs/src/scope.rs)를 지나므로 루트 밖을 가리키는 심링크는 거절된다.
 
-import type { FsRead, FsReadParams } from "@pitwall/rpc-client";
+import type { FsBytes, FsRead, FsReadParams } from "@pitwall/rpc-client";
 import { createContext, type ReactNode, useContext } from "react";
+
+import { READ_ONLY_MAX } from "./limits";
 
 /** 범위 읽기 한 번의 크기. */
 export const BYTES_CHUNK = 8 * 1024 * 1024;
 
 /** 미리보기가 한 파일에서 읽는 바이트의 상한(결정 M1-D9 — 텍스트 · 이미지 탭과 같은 50 MiB). */
-export const MAX_PREVIEW_BYTES = 50 * 1024 * 1024;
+export const MAX_PREVIEW_BYTES = READ_ONLY_MAX;
 
 /** 파일이 읽기 상한을 넘는다. `size` 는 Host 가 알려 준 파일 전체 크기다. */
 export class PreviewTooLarge extends Error {
@@ -29,13 +31,25 @@ export interface PreviewHost {
    * 첫 조각의 크기를 보고 더 읽지 않고 `PreviewTooLarge` 로 거절한다.
    */
   readBytes(path: string, worktree: string | undefined, limit?: number): Promise<Blob>;
+  /** 바이트 한 페이지(`fs.readBytes`, 64 KiB 까지 · 판정 없이 그 범위만 읽는다). hex 뷰어가 쓴다. */
+  readPage(
+    path: string,
+    worktree: string | undefined,
+    offset: number,
+    length: number,
+  ): Promise<{ bytes: Uint8Array; size: number; eof: boolean }>;
+  /**
+   * 파일 앞에서 `length` 바이트까지를 판정과 함께 읽는다(`fs.read` 범위 읽기). 열지 않은 파일의 [앞부분 보기] · 바이너리를
+   * 텍스트로 보기가 쓴다.
+   */
+  readHead(path: string, worktree: string | undefined, length: number): Promise<FsRead>;
   /** 탭의 루트(워크트리 안의 프로젝트 루트, 워크트리가 없으면 등록 루트). 모르면 `undefined` — 상대 경로를 풀지 않는다. */
   rootOf(worktree: string | undefined): Promise<string | undefined>;
   /** 외부 브라우저(메일 앱)로 연다. 앱 창은 그대로다. */
   openExternal(url: string): Promise<void>;
 }
 
-function decodeBase64(data: string): Uint8Array<ArrayBuffer> {
+export function decodeBase64(data: string): Uint8Array<ArrayBuffer> {
   const binary = atob(data);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -63,6 +77,11 @@ export async function readAllBytes(
     if (offset > limit) throw new PreviewTooLarge(Math.max(chunk.size, offset), limit);
     if (chunk.eof || bytes.length === 0) return new Blob(parts);
   }
+}
+
+/** `fs.readBytes` 의 응답을 뷰어가 쓰는 꼴로. */
+export function pageOf(read: FsBytes): { bytes: Uint8Array; size: number; eof: boolean } {
+  return { bytes: decodeBase64(read.data), size: read.size, eof: read.eof };
 }
 
 const PreviewHostContext = createContext<PreviewHost | undefined>(undefined);

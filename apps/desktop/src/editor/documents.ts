@@ -3,10 +3,11 @@
 // 잡고, 마지막 탭이 놓으면 문서를 버린다 — 다음에 열면 디스크에서 다시 읽는다.
 //
 // 읽기 순서: `fs.stat` 으로 크기 등급(결정 M1-D9)을 먼저 본다. 뷰어 종류(viewer-kinds.ts)가 바이트를 스스로 읽는 뷰어(이미지)면
-// 고르면 여기서 내용을 읽지 않는다. 50 MiB 를 넘으면 열지 않는다(`tooLarge`). 나머지는 앞부분으로 바이너리인지 보고(큰 파일을
-// 통째로 base64 로 받지 않게), 텍스트면 전체를 읽는다. UTF-8 로 읽히지 않는 텍스트는 `notUtf8` 이다 — 인코딩 짐작 · 읽기 전용
-// 표시는 M1-23 몫이다(결정 M1-D12). 텍스트로 읽은 문서는 앞부분으로 언어를 정한다(`lang.detect`, M1-02) — 못 정하면
-// 플레인 텍스트(`null`)로 열고 오류로 보지 않는다.
+// 고르면 여기서 내용을 읽지 않는다. 일반 파일이 아니거나(FIFO · 장치 · 소켓 — 열면 멈추거나 끝이 없다) 50 MiB 를 넘으면 열지
+// 않는다(`tooLarge`, 내용을 한 바이트도 읽지 않는다). 나머지는 앞부분으로 바이너리인지 보고(큰 파일을 통째로 base64 로 받지 않게),
+// 텍스트면 전체를 읽는다. UTF-8 이 아닌 텍스트는 Host 가 짐작한 인코딩으로 풀어 주고 판정이 편집을 막는다(`readOnly`, 결정
+// M1-D12). 텍스트로 읽은 문서는 앞부분으로 언어를 정한다(`lang.detect`, M1-02) — 못 정하면 플레인 텍스트(`null`)로 열고 오류로
+// 보지 않는다.
 //
 // 편집(M1-13): 텍스트 문서의 편집 중인 텍스트 · undo 기록 · 미저장 여부는 `LiveText`(live-text.ts)가 갖는다 — 탭을 옮기거나 뷰를
 // 다시 만들어도 문서가 사는 동안 남는다. 저장은 `⌘S` 로만 한다(결정 M1-D13, 자동 저장 없음). 저장은 늘 읽을 때(또는 마지막
@@ -51,13 +52,12 @@ import { useEffect } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
+import { SNIFF_BYTES } from "./limits";
 import { LiveText } from "./live-text";
 import { VIEWER_READS, type ViewerKind, viewerKindByName, viewerKindOf } from "./viewer-kinds";
 
 /** 바이너리 판정에 앞부분만 먼저 읽는 크기 경계. 이보다 작은 파일은 한 번에 읽는다. */
 export const SNIFF_ABOVE = 64 * 1024;
-/** 앞부분 읽기의 길이(crates/pw-fs judge.rs 의 `SNIFF_BYTES`). */
-const SNIFF_BYTES = 8 * 1024;
 /** 이름 바뀜을 찾을 때 열어 보는 새 파일의 수 상한(한 이벤트에서). */
 const RENAME_CANDIDATES = 8;
 
@@ -88,10 +88,8 @@ export type DiskState =
 export type DocumentState =
   | { status: "loading" }
   | { status: "failed"; message: string }
-  /** 50 MiB 초과(결정 M1-D9). 내용을 읽지 않았다. */
-  | { status: "tooLarge"; size: number }
-  /** UTF-8 로 읽히지 않는 텍스트(결정 M1-D12). */
-  | { status: "notUtf8"; size: number }
+  /** 열지 않는다: 50 MiB 초과(`size`, 결정 M1-D9) 또는 일반 파일이 아니다(`special`). 내용을 읽지 않았다. */
+  | { status: "tooLarge"; reason: "size" | "special"; size: number }
   /** 내용 없이 뷰어가 직접 읽는 문서(이미지 · hex). */
   | { status: "external"; kind: ViewerKind; stat: FsStat }
   | {
@@ -247,9 +245,11 @@ async function loadDocument(
   worktree: string | undefined,
 ): Promise<DocumentState> {
   const stat = await source.stat(path, worktree);
+  if ((stat.target ?? stat.kind) !== "file")
+    return { status: "tooLarge", reason: "special", size: stat.size };
   const byName = viewerKindByName(stat.path);
   if (byName && VIEWER_READS[byName] === "self") return { status: "external", kind: byName, stat };
-  if (stat.sizeClass === "tooLarge") return { status: "tooLarge", size: stat.size };
+  if (stat.sizeClass === "tooLarge") return { status: "tooLarge", reason: "size", size: stat.size };
   if (stat.size > SNIFF_ABOVE) {
     const head = await source.read({ path: stat.path, offset: 0, length: SNIFF_BYTES }, worktree);
     if (head.judgment.binary) return { status: "external", kind: "hex", stat };
@@ -257,7 +257,8 @@ async function loadDocument(
   const read = await source.read({ path: stat.path }, worktree);
   const kind = viewerKindOf(read.path, read.judgment);
   if (read.judgment.binary) return { status: "external", kind, stat };
-  if (!isText(read)) return { status: "notUtf8", size: read.size };
+  // 텍스트인데 텍스트로 오지 않았다(Host 가 풀지 못한 인코딩) — 바이트로 보인다.
+  if (!isText(read)) return { status: "external", kind: "hex", stat };
   return {
     status: "text",
     kind,

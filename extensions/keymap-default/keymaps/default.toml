@@ -222,6 +222,15 @@ win = "ctrl+g"
 linux = "ctrl+g"
 when = "editorFocus"
 
+# hex 뷰어의 오프셋으로 이동(M1-23, src/editor/hex-viewer.tsx). 줄로 이동과 같은 키지만 hex 뷰어의 키맵 컨텍스트는 `hexFocus` 하나라
+# (포커스에서 가장 가까운 `data-keymap-context` 만 본다, src/keymap/context.ts) 두 `when` 이 함께 참이 되는 일이 없다.
+[[bindings]]
+action = "hex.gotoOffset"
+mac = "cmd+l"
+win = "ctrl+g"
+linux = "ctrl+g"
+when = "hexFocus"
+
 [[bindings]]
 action = "editor.duplicateLine"
 mac = "cmd+d"

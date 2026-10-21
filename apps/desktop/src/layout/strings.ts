@@ -7,7 +7,6 @@ import type { Platform } from "@pitwall/keymap";
 import type { RuntimeProblem } from "@pitwall/rpc-client";
 import { useMemo } from "react";
 
-import type { ViewerKind } from "../editor/viewer-kinds";
 import { type Translate, translator } from "../i18n/localization";
 import { PANELS } from "./project-layout";
 
@@ -36,9 +35,26 @@ export function projectStrings(t: Translate) {
       failed: (message: string) => t("editor-read-failed", { message }),
       /** `size`: 「12.3 MiB」 처럼 단위까지 붙인 크기. */
       tooLarge: (size: string) => t("editor-too-large", { size }),
-      notUtf8: t("editor-not-utf8"),
+      /** 일반 파일이 아니어서(FIFO · 장치 · 소켓) 열지 않았다. */
+      special: t("editor-special-file"),
+      /** 열지 않은 큰 파일의 [앞부분 보기]. `size`: 단위까지 붙인 크기. */
+      showHead: (size: string) => t("editor-show-head", { size }),
+      showHex: t("editor-show-hex"),
+      /** [앞부분 보기] 의 위 막대. `shown` · `size`: 단위까지 붙인 보인 크기 · 파일 크기. */
+      headNotice: (shown: string, size: string) => t("editor-head-notice", { shown, size }),
+      binaryAsText: t("editor-binary-as-text"),
       readOnlyLarge: t("editor-read-only-large"),
-      noViewer: (kind: ViewerKind) => t("editor-no-viewer", { kind }),
+      /** UTF-8 이 아닌 텍스트(결정 M1-D12). `encoding`: WHATWG 이름(예: EUC-KR). */
+      readOnlyEncoding: (encoding: string) => t("editor-read-only-encoding", { encoding }),
+      /** hex 뷰어(M1-23). */
+      hex: {
+        label: t("editor-hex-label"),
+        gotoTitle: t("editor-hex-goto-title"),
+        gotoInput: t("editor-hex-goto-input"),
+        gotoHint: (current: string, last: string) => t("editor-hex-goto-hint", { current, last }),
+        gotoInvalid: t("editor-hex-goto-invalid"),
+        failed: (message: string) => t("editor-hex-read-failed", { message }),
+      },
       /** 이미지 뷰어(M1-22). */
       image: {
         fit: t("editor-image-fit"),
@@ -109,6 +125,10 @@ export function projectStrings(t: Translate) {
         moveLineUp: t("action-editor-move-line-up"),
         moveLineDown: t("action-editor-move-line-down"),
         commentLine: t("action-editor-comment-line"),
+        openAsText: t("action-editor-open-as-text"),
+        openAsHex: t("action-editor-open-as-hex"),
+        openAsDefault: t("action-editor-open-as-default"),
+        gotoOffset: t("action-hex-goto-offset"),
       },
       find: {
         label: t("editor-find-label"),

@@ -47,7 +47,12 @@ import {
   type UnsavedAnswer,
   useEditorWorkspace,
 } from "../editor/editor-workspace";
-import { type PreviewHost, PreviewHostProvider, readAllBytes } from "../editor/preview-host";
+import {
+  pageOf,
+  type PreviewHost,
+  PreviewHostProvider,
+  readAllBytes,
+} from "../editor/preview-host";
 import { useTabSwitcher } from "../editor/tab-switcher";
 import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { FileTreeToolWindow } from "../file-tree/file-tree";
@@ -485,8 +490,9 @@ function useWindowEditor(
 }
 
 /**
- * 미리보기 뷰어(이미지 · Markdown)가 쓰는 것: 바이트는 이 창의 Host 연결의 `fs.read` 범위 읽기(탭의 워크트리를 접근 범위로), 루트는
- * 워크트리면 `project.resolve` 의 그 워크트리 안 프로젝트 루트 · 아니면 등록 루트, 링크는 opener 로 외부 브라우저에.
+ * 스스로 읽는 뷰어(이미지 · Markdown · hex · 앞부분 텍스트)가 쓰는 것: 바이트는 이 창의 Host 연결의 `fs.read` 범위 읽기, hex 페이지는
+ * `fs.readBytes`(둘 다 탭의 워크트리를 접근 범위로), 루트는 워크트리면 `project.resolve` 의 그 워크트리 안 프로젝트 루트 · 아니면
+ * 등록 루트, 링크는 opener 로 외부 브라우저에.
  */
 function useWindowPreviewHost(projectId: string | undefined): PreviewHost {
   const { client } = useHost();
@@ -510,6 +516,24 @@ function useWindowPreviewHost(projectId: string | undefined): PreviewHost {
           path,
           limit,
         ),
+      readPage: async (path, worktree, offset, length) =>
+        pageOf(
+          await call().call("fs.readBytes", {
+            projectId: projectId ?? "",
+            worktree: worktree ?? null,
+            path,
+            offset,
+            length,
+          }),
+        ),
+      readHead: (path, worktree, length) =>
+        call().call("fs.read", {
+          projectId: projectId ?? "",
+          worktree: worktree ?? null,
+          path,
+          offset: 0,
+          length,
+        }),
       rootOf: async (worktree) => {
         if (worktree === undefined)
           return (await call().call("project.get", { id: projectId ?? "" })).roots[0];

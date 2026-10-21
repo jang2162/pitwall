@@ -10,7 +10,8 @@
 // dockview 는 가려진 탭의 내용 요소를 DOM 에서 떼어 두므로 다시 보일 때 스크롤 위치가 0 으로 돌아간다. 보이는 동안의 스크롤을
 // 기억해 두었다가 다시 보일 때 되돌린다.
 //
-// 디스크 쪽이 이 문서와 다르면(documents.ts 의 `disk`) 위에 배너를 띄운다(disk-banner.tsx).
+// 디스크 쪽이 이 문서와 다르면(documents.ts 의 `disk`) 위에 배너를 띄운다(disk-banner.tsx). 고칠 수 없는 문서(5 MiB 초과 · UTF-8 이
+// 아닌 인코딩)는 그 까닭을 위 막대에 적는다.
 //
 // 찾기 · 바꾸기(⌘F / ⌘R)는 CodeMirror 의 위쪽 패널 자리에 찾기 막대(find-bar.tsx)를 portal 로 그린다 — 막대가 창의 문자열 · 테마
 // context 를 그대로 쓴다.
@@ -104,6 +105,14 @@ export function TextViewer({ panel, params, doc }: ViewerProps) {
     if (!diskRead) setComparing(false);
   }, [diskRead]);
   const compare = comparing && live && diskRead?.content.kind === "text" ? diskRead : undefined;
+  // 고칠 수 없는 까닭(결정 M1-D9 · M1-D12). UTF-8 이 아닌 텍스트는 Host 가 짐작한 인코딩으로 푼 것이다.
+  const encoding = text?.judgment.binary === false ? text.judgment.encoding : null;
+  const readOnlyNotice =
+    encoding && encoding !== "UTF-8"
+      ? T.readOnlyEncoding(encoding)
+      : text?.judgment.sizeClass === "readOnly"
+        ? T.readOnlyLarge
+        : undefined;
 
   useEffect(() => {
     const parent = host.current;
@@ -160,12 +169,13 @@ export function TextViewer({ panel, params, doc }: ViewerProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-editor-background">
-      {text?.judgment.sizeClass === "readOnly" && (
+      {readOnlyNotice && (
         <div
           role="status"
+          data-read-only-notice=""
           className="flex-none border-b border-ui-border bg-ui-panel px-2 py-0.5 text-[12px] text-ui-muted-foreground"
         >
-          {T.readOnlyLarge}
+          {readOnlyNotice}
         </div>
       )}
       {text && text.disk.kind !== "same" && (

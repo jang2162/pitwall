@@ -34,15 +34,26 @@ editor-loading = 읽는 중…
 editor-read-failed = 파일을 읽지 못했다: { $message }
 # $size: 파일 크기(단위 포함, 예: 72.4 MiB)
 editor-too-large = 50 MiB 를 넘는 파일이라 열지 않는다({ $size })
-editor-not-utf8 = UTF-8 이 아닌 텍스트 파일이라 아직 보이지 못한다
+# 일반 파일이 아닌 것(FIFO · 장치 · 소켓)은 열면 멈추거나 끝이 없다
+editor-special-file = 일반 파일이 아니어서(FIFO · 장치 · 소켓) 열지 않는다
+# $size: 보일 크기(단위 포함, 예: 1.0 MiB)
+editor-show-head = 앞부분 { $size } 보기
+editor-show-hex = hex 로 보기
+# $shown: 보인 크기, $size: 파일 크기(둘 다 단위 포함)
+editor-head-notice = 앞부분 { $shown } 만 보인다(전체 { $size }) · 읽기 전용
+editor-binary-as-text = 바이너리 파일을 텍스트로 보인다(UTF-8 로 읽을 수 없는 바이트는 �) · 읽기 전용
 editor-read-only-large = 5 MiB 를 넘는 파일이라 읽기 전용으로 연다(구문 강조 · 줄바꿈 끔)
-# $kind: image | hex | markdown | text — 그 파일의 뷰어 종류
-editor-no-viewer =
-    { $kind ->
-        [image] 이미지 미리보기는 아직 없다
-        [hex] 바이너리 파일이라 아직 보이지 못한다
-       *[other] 이 파일의 뷰어는 아직 없다
-    }
+# $encoding: 짐작한 인코딩 이름(예: EUC-KR, UTF-16LE)
+editor-read-only-encoding = { $encoding } 로 읽었다 · UTF-8 이 아니라 읽기 전용으로 연다
+# hex 뷰어(M1-23)
+editor-hex-label = hex · 읽기 전용 · 16바이트/줄
+editor-hex-goto-title = 오프셋으로 이동
+editor-hex-goto-input = 오프셋(4096 · 0x1000)
+# $current: 지금 오프셋, $last: 마지막 바이트의 오프셋(둘 다 0x 16진수)
+editor-hex-goto-hint = 지금 { $current } · 마지막 { $last }
+editor-hex-goto-invalid = 10진수(4096)나 16진수(0x1000 · 1000h)로 적는다
+# $message: 오류 원문
+editor-hex-read-failed = 바이트를 읽지 못했다: { $message }
 # 이미지 뷰어(M1-22)
 editor-image-fit = 맞춤
 editor-image-actual = 실제 크기
@@ -134,6 +145,10 @@ action-editor-delete-line = 줄 삭제
 action-editor-move-line-up = 줄 위로 옮기기
 action-editor-move-line-down = 줄 아래로 옮기기
 action-editor-comment-line = 줄 주석 넣기 / 걷기
+action-editor-open-as-text = 텍스트로 열기
+action-editor-open-as-hex = hex 로 열기
+action-editor-open-as-default = 기본 뷰어로 열기
+action-hex-goto-offset = 오프셋으로 이동
 
 editor-find-label = 파일 안 찾기
 editor-find-search = 찾을 내용

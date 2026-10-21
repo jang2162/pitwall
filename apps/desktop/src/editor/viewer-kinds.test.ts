@@ -24,11 +24,18 @@ it("picks Markdown by extension, hex for binary content, and text otherwise", ()
   expect(viewerKindByName("C:\\p\\logo.PNG")).toBe("image");
 });
 
-it("lets a tab override the viewer unless the override needs text the document does not have", () => {
+it("lets a tab open any document as text or hex, and Markdown only from text", () => {
   const textDoc = { status: "text", kind: "text" } as const;
   const binaryDoc = { status: "external", kind: "hex" } as const;
+  const imageDoc = { status: "external", kind: "image" } as const;
   expect(chooseViewer(textDoc, undefined)).toBe("text");
   expect(chooseViewer(textDoc, "hex")).toBe("hex");
-  expect(chooseViewer(binaryDoc, "text")).toBe("hex");
+  // 「텍스트로 열기」(M1-23): 텍스트로 읽지 않은 문서도 텍스트로 — 그 탭이 직접 읽는다.
+  expect(chooseViewer(binaryDoc, "text")).toBe("text");
+  expect(chooseViewer(imageDoc, "text")).toBe("text");
+  expect(chooseViewer(imageDoc, "hex")).toBe("hex");
+  // Markdown 미리보기는 텍스트로 읽은 문서만.
+  expect(chooseViewer(binaryDoc, "markdown")).toBe("hex");
+  expect(chooseViewer(textDoc, "markdown")).toBe("markdown");
   expect(chooseViewer(binaryDoc, "image")).toBe("image");
 });

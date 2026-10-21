@@ -27,8 +27,7 @@ export function EditorPanel({ api, params }: IDockviewPanelProps<EditorTabParams
             return <EditorNotice text={T.loading} openWith={false} />;
           case "failed":
             return <EditorNotice text={T.failed(doc.message)} />;
-          case "tooLarge":
-          case "notUtf8": {
+          case "tooLarge": {
             const Viewer = UNREAD_VIEWERS[doc.status];
             return <Viewer panel={api} params={params} doc={doc} />;
           }
