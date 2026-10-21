@@ -251,17 +251,23 @@ GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버
 | 5 | 수동 지정 | `.pitwall/project.toml`의 `[runtime]` | 설정값을 위 결과에 덮어씀 |
 
 - 자동 선택이 기본, 프로젝트 설정에서 제공자 고정 가능 (`provider = "auto" | "mise" | "shell" | "none"` — M1 이 읽는 값, 결정 M1-D15(12-m1-plan.md §4). `"direnv"` · `"asdf"` 는 그 제공자가 들어올 때 더한다)
+  - 뜻(M1-16, `pw_runtime::ProviderSetting`): `auto` 는 디렉터리에 맞는 제공자 하나(없으면 로그인 셸), `mise` 는 설정 파일을 찾지 못해도 mise 를 부른다, `shell` 은 로그인 셸만, `none` 은 런타임 환경을 만들지 않고 앱 프로세스의 환경(로그인 셸도 돌리지 않는다 — `provider` 가 `"none"`). 모르는 값 · 읽기 실패는 `auto`(경고 로그). 신뢰 게이트는 어느 값이든 그대로다
+  - 설정은 그 디렉터리를 담은 루트(워크트리면 그 워크트리 안의 대응 루트)의 저장소 설정 · 개인 전용 설정에서 읽는다. 디스크에 쓰지 않고 읽는다(열기만 했다고 커밋된 `.pitwall/project.toml` 이 마이그레이션되지 않게)
 - mise는 **필수 의존이 아님** — 없으면 로그인 셸 환경으로 동작
 - 결과는 `RuntimeEnv { path, vars, tools: [{name, version, source_file}] }`로 통일
-- **지금(`crates/pw-runtime`, M1-03)은 4번 로그인 셸만** 있다 — 외부 도구 실행(04 F8)이 쓰고, 터미널(M1-08)이 이어 쓴다. mise 는 M1-16 이 같은 trait(`RuntimeProvider`)로 더한다. Finder · Dock · `open` 으로 띄운 GUI 앱의 환경은 launchd 의 것(PATH `/usr/bin:/bin:/usr/sbin:/sbin`)이라 `zed` · `code` · `idea` 를 못 찾고 셸에서 정한 `JAVA_HOME` 도 없다(터미널에서 띄운 앱은 터미널 환경을 물려받아 가려진다)
+- **지금(`crates/pw-runtime`)은 1번 mise(M1-16)와 4번 로그인 셸(M1-03)** 이 있다 — 외부 도구 실행(04 F8)과 터미널(M1-08)이 쓴다. direnv · asdf 는 같은 trait(`RuntimeProvider`)로 더한다. Finder · Dock · `open` 으로 띄운 GUI 앱의 환경은 launchd 의 것(PATH `/usr/bin:/bin:/usr/sbin:/sbin`)이라 `zed` · `code` · `idea` 를 못 찾고 셸에서 정한 `JAVA_HOME` 도 없다(터미널에서 띄운 앱은 터미널 환경을 물려받아 가려진다)
   - 환경은 층으로 쌓인다: 앱 프로세스의 환경 → 로그인 셸(언제나) → 디렉터리에 맞는 제공자 하나(mise 등). 프로젝트 코드를 돌리는 제공자(`runs_project_code`)는 신뢰한 프로젝트에서만 고른다 — 신뢰 여부는 `Runtime` 의 입력이고 지금은 모두 미신뢰다(M1-05 가 채운다). 아래 층이 실패하면 그 아래 층으로 물러난다
   - `<셸> -l -i -c "printf 표식; /usr/bin/env -0; printf 표식"` 의 두 표식 사이의 **환경 전체**를 읽는다 — 시작 파일이 stdout 에 찍는 잡음은 표식 바깥이라 버려진다. 셸 고유 변수 `PWD` · `SHLVL` · `_` 와 표식 `PITWALL_RESOLVING_ENVIRONMENT` 는 버린다. 셸은 `$SHELL`, 없으면 계정의 셸(`getpwuid_r`). 셸은 디렉터리와 무관하게 한 번 돈다(시작 파일은 사용자 단위다)
   - 셸은 `setsid` 로 제어 터미널 없이 돈다(대화형 셸이 터미널을 잡으려다 멈추지 않게). 시작 파일이 무거운 일을 건너뛸 수 있게 `PITWALL_RESOLVING_ENVIRONMENT=1` 을 준다
   - 5초 안에 환경을 찍지 않으면 셸의 세션을 통째로 죽이고, 실패 · 시간 초과 · PATH 없음 · 출력 64 MiB 초과면 앱 프로세스의 환경으로 물러난다(`runtime.get` 의 `status` 가 `fallback`). **물러난 결과는 캐시하지 않아 다음 요청이 셸을 다시 돌린다** — 셸 설정을 고치면 앱을 다시 띄우지 않아도 된다. 무엇을 썼는지는 로그(`environment from the login shell` · `using the process environment`)로 남는다
-  - **단, 시간 초과는 다르다 — 한 번 시간을 넘기면 그 뒤로는 셸을 기다리지 않는다**: 물러난 결과를 곧바로 주고, 30초(냉각)가 지날 때마다 그다음 요청이 셸을 **백그라운드로** 다시 돌린다(그 요청도 물러난 결과를 곧바로 받는다). 재시도가 성공하면 다음 요청부터 셸 환경이고, 물러난 환경을 받았던 프로젝트마다 `runtime.changed { reason: "loginShell" }` 를 한 번 낸다. 그러므로 셸을 기다리는 요청은 앱 시작 뒤 첫 시도와 「환경 다시 읽기」 뒤 첫 시도뿐이다. 「환경 다시 읽기」 는 냉각을 푼다. 왜: 시작 파일이 대화형 셸에서 `exec fish` · `exec tmux` 처럼 멈추면 매번 시간 초과라, 냉각 뒤 재시도를 기다리면 냉각이 끝날 때마다(터미널이면 그 뒤 첫 새 탭마다) 5초를 기다린다. 셸을 못 띄우는 것 · PATH 없음처럼 곧바로 끝나는 실패는 냉각하지 않는다
+  - **단, 시간 초과는 다르다 — 한 번 시간을 넘기면 그 뒤로는 셸을 기다리지 않는다**: 물러난 결과를 곧바로 주고, 30초(냉각)가 지날 때마다 그다음 요청이 셸을 **백그라운드로** 다시 돌린다(그 요청도 물러난 결과를 곧바로 받는다). 재시도가 성공하면 다음 요청부터 셸 환경이고, 물러난 환경을 받았던 프로젝트마다와 Host 범위에 `runtime.changed { reason: "loginShell" }` 를 한 번씩 낸다 — Host 범위는 프로젝트 없는 창(설정 창의 「Orca 에서 Pitwall 열기」 검사 `cli.status`)이 듣고 「다시 검사」 없이 다시 본다. 그러므로 셸을 기다리는 요청은 앱 시작 뒤 첫 시도와 「환경 다시 읽기」 뒤 첫 시도뿐이다. 「환경 다시 읽기」 는 냉각을 푼다. 왜: 시작 파일이 대화형 셸에서 `exec fish` · `exec tmux` 처럼 멈추면 매번 시간 초과라, 냉각 뒤 재시도를 기다리면 냉각이 끝날 때마다(터미널이면 그 뒤 첫 새 탭마다) 5초를 기다린다. 셸을 못 띄우는 것 · PATH 없음처럼 곧바로 끝나는 실패는 냉각하지 않는다
   - 셸 출력은 부른 스레드가 `poll(2)` 로 시간 제한까지만 읽고, 둘째 표식이 보이면 곧바로 파이프를 닫는다 — 시작 파일이 띄운 다른 세션의 프로세스가 stdout 을 쥐고 있어도 기다리거나 읽기 스레드를 남기지 않는다. 표식은 새로 읽은 구간만 찾는다(잡음이 길어도 출력 길이에 선형)
   - 앱 시작이 아니라 **처음 쓸 때** 가져오고(「다음에서 열기」 팝업을 열면 미리 시작한다), 성공한 결과는 (프로젝트, 디렉터리)마다 「환경 다시 읽기」 전까지 캐시한다. 동시에 여러 곳이 물어도 셸은 한 번 돈다
   - 자식은 앱 프로세스의 환경을 물려받지 않고 이 환경 전체만 받는다(PATH 는 절대 경로 항목만, `crates/pw-open-with`)
+  - **mise(M1-16, `crates/pw-runtime/src/mise.rs`)**: 감지는 디렉터리와 그 위 폴더(사용자 홈 폴더 바로 아래까지 — 홈의 `~/.config/mise` 는 mise 의 전역 설정이다)의 mise 설정 파일(`mise.toml` · `.mise.toml` · `mise.local.toml` · `.config/mise/config.toml` · `.config/mise/conf.d/*.toml` · `.mise/config.toml` 등, `pw_runtime::mise::CONFIG_FILES`)이다. `.tool-versions` 만 있으면 asdf 의 파일이기도 하므로 로그인 셸 PATH 에 `mise` 가 있을 때만 쓴다. 감지는 파일만 보고 mise 를 실행하지 않는다
+    - 환경: 로그인 셸 PATH(절대 경로 항목)의 `mise` 로 `mise env --json` 을 그 디렉터리에서 5초 제한으로 돌린다(자식 환경은 로그인 셸 환경 전체 + `NO_COLOR=1`, `setsid` · stdin `/dev/null`, 시간을 넘기면 세션째 죽인다). 나온 변수를 로그인 셸 환경 위에 덮는다 — `PATH` 는 mise 가 도구 폴더를 앞에 붙인 전체 값이다. `runtime.get` 의 `source` 는 찾은 설정 파일(`configFiles`), `tools` 는 아직 비어 있다(도구 · 버전 표시는 F14-4)
+    - 실패의 갈래(`status.fallback.problem`): `notInstalled`(설정 파일이 있는데 PATH 에 mise 가 없음), `notTrusted`(mise 가 설정 파일을 신뢰하지 않음 — mise 2026 은 오류로 끝나고 2025 는 경고만 찍고 프로젝트 설정을 뺀 채 성공하므로 끝 코드가 아니라 stderr 의 `are not trusted` 로 가른다), `failed`(끝 코드 · 시간 초과 · JSON 이 아닌 출력). 로그인 셸 자체를 못 읽었으면 `loginShell`. 어느 것이든 로그인 셸 환경(또는 앱 프로세스 환경)으로 물러나고 남기지 않는다. 상태바의 런타임 항목(`apps/desktop/src/runtime/runtime-status.tsx`)이 경고와 원문 이유를 보이고, 누르면 「환경 다시 읽기」다. mise 가 환경을 만들었으면 「mise」, 로그인 셸만이면 그리지 않는다
+    - 출력 형식은 고정한 mise 두 버전의 실제 출력 픽스처(`crates/pw-runtime/fixtures/mise/`)로 시험한다
   - RPC: `runtime.get { projectId, dir? }` → `{ provider, source, status, tools }`(`dir` 이 없으면 주 루트). `runtime.reload { projectId }`(액션 「런타임 환경 다시 읽기」) — 로그인 셸 환경과 모든 디렉터리의 캐시를 잊고, 캐시가 있던 프로젝트와 부른 프로젝트에 `runtime.changed { reason: "reload" }` 를 한 번씩 낸다(프로젝트 범위). 셸은 백그라운드로 곧 다시 돌고, 다음 요청은 그 결과를 기다린다. `runtime.get` 의 `dir` 은 레지스트리와 같은 규칙으로 정규화하고, 프로젝트 루트나 그 루트를 담은 연결 워크트리 안만 받는다(밖이면 invalid params) — 제공자가 호출자가 고른 아무 폴더에서 돌지 않게
 
 ### 적용 대상
@@ -270,6 +276,8 @@ GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버
 ### 캐시 · 무효화
 - 키: (프로젝트, 디렉터리). 모노레포 하위 폴더별로 다른 버전 가능
 - 무효화: `mise.toml` · `.tool-versions` · `.envrc` · `.nvmrc` 등 버전 파일 변경(파일 감시), 사용자 "환경 다시 읽기" 액션
+  - 버전 파일(M1-16): Host 가 파일 감시(M1-06)의 `fs.changed` 를 따라가(`pw_runtime::follow_files`) 바뀐 경로에 버전 파일(`pw_runtime::mise::is_runtime_file` — mise 설정 · 조각 · `mise.<env>.toml` · `.tool-versions` · `.nvmrc` 등 언어별 버전 파일)이나 저장소 설정(`.pitwall/*.toml`, `[runtime] provider`)이 있거나 놓친 변경(`rescan`)이면 그 프로젝트의 디렉터리 캐시만 잊고 `runtime.changed { reason: "files" }` 를 한 번 낸다. 로그인 셸 환경과 다른 프로젝트의 캐시는 그대로다. 버스 이벤트를 놓치면(`Lagged`) 모든 디렉터리 캐시를 잊고 캐시가 있던 프로젝트마다 낸다. 실측: 실제 mise 2025.1.0 · 2026.4.3 에서 `mise.toml` 을 고치고 `runtime.changed` 까지 80 ms 안팎(디바운스 75 ms 포함)
+  - 보지 않는 것: 창이 감시하지 않는 동안의 변경(감시는 창이 `fs.watch` 를 여는 동안만 산다), 감시 루트 밖의 설정(프로젝트 위 폴더의 `mise.toml`, mise 전역 설정), 개인 전용 설정(`$CONFIG/projects/<slug>/`)의 `[runtime] provider` — 이것들은 「환경 다시 읽기」 로 반영한다
 - 런타임 변경 시 `runtime.changed` 이벤트 → 영향받는 LSP 재시작 제안, 새 터미널부터 적용
 
 ### 신뢰

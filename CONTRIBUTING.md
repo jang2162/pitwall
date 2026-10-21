@@ -142,6 +142,21 @@ RPC 의 TS 타입·메서드 목록·JSON Schema 는 `rpc_method!` 선언과 그
 3. `licenses/vendored.md` 「tree-sitter grammars」 절의 표 · 라이선스 전문을 고치고 `mise run notices` 를 돌린다.
 4. `crates/pw-syntax` 시험(스냅숏 · `crates/pw-ext` 의 내장 확장 목록)을 고치고, 성능 시험(위 「명령」 의 하위 단위)과 release 번들 크기 · 유휴 메모리 증가(결정 M1-D2)를 다시 본다.
 
+## mise 제공자
+
+런타임 환경의 mise 제공자(`crates/pw-runtime/src/mise.rs`, `docs/design/03-architecture.md` §5-1)는 사람의 mise 를 부르지 않고 시험한다.
+
+- 기본 시험(`mise run test`)은 가짜 `mise`(sh 스크립트)를 쓴다. 출력 형식은 고정한 mise 두 버전(2025.1.0 · 2026.4.3)의 실제 출력 픽스처 `crates/pw-runtime/fixtures/mise/` 로 본다 — 출처와 만든 방법은 그 폴더의 `README.md`. mise 를 새 판으로 올려 형식을 다시 볼 때는 같은 방법으로 폴더 하나를 더하고 `crates/pw-runtime/src/mise/tests.rs` 의 `VERSIONS` 에 넣는다.
+- 실제 mise 로 터미널의 `node -v` 가 `mise.toml` 을 따르는지 보는 시험(`crates/pw-run` 의 `real_mise_pins_the_node_version_of_a_new_terminal`)은 `#[ignore]` 다(네트워크 · 내려받은 node 가 필요). **격리한 폴더에서만 돌린다** — `MISE_*_DIR` 을 주지 않으면 시험이 멈춘다(사람의 mise 데이터 · 신뢰 목록에 쓰지 않게):
+
+  ```sh
+  export MISE_DATA_DIR=$SANDBOX/data MISE_CONFIG_DIR=$SANDBOX/config \
+    MISE_STATE_DIR=$SANDBOX/state MISE_CACHE_DIR=$SANDBOX/cache
+  HOME=$SANDBOX/home mise install node@22 node@20          # 격리 폴더 안으로 받는다
+  PITWALL_TEST_MISE=$(command -v mise) cargo nextest run -p pw-run --run-ignored only real_mise --no-capture
+  rm -rf "$SANDBOX"                                        # 끝나면 지운다
+  ```
+
 ## 의존성과 라이선스
 
 MIT 프로젝트라 의존성은 허용형 라이선스만 쓴다(`docs/design/02-tech-stack.md` 「라이선스 검사」 행).
