@@ -127,6 +127,11 @@ describe("dropped paths", () => {
     for (const path of TRICKY) expect(posixWord(quoteForShell(path, "posix")!), path).toBe(path);
     expect(quoteForShell("/a/b.txt", "posix")).toBe("/a/b.txt");
     expect(quoteForShell("/a/it's", "posix")).toBe(`'/a/it'\\''s'`);
+    expect(quoteForShell(String.raw`/a/b\c`, "posix")).toBe(String.raw`'/a/b'\\'c'`);
+  });
+
+  it("read the POSIX quoting the same in fish, which can run inside bash or zsh", () => {
+    for (const path of TRICKY) expect(fishWord(quoteForShell(path, "posix")!), path).toBe(path);
   });
 
   it("quote every tricky name so fish reads back one word, as is", () => {
@@ -134,11 +139,6 @@ describe("dropped paths", () => {
     expect(quoteForShell(String.raw`/a/x\';echo pwned;#`, "fish")).toBe(
       String.raw`'/a/x\\\';echo pwned;#'`,
     );
-  });
-
-  it("do not use the POSIX quoting for fish — a name escapes it there", () => {
-    const name = String.raw`/a/x\';echo pwned;#`;
-    expect(() => fishWord(quoteForShell(name, "posix")!)).toThrow();
   });
 
   it("quote every tricky name so PowerShell reads back one word, as is", () => {
