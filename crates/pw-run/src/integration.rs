@@ -8,23 +8,28 @@
 //! 항목을 PATH 맨 앞으로 옮긴다. 사용자의 시작 파일은 고치지 않고, 그 파일들이 PATH 에 넣은 것(앞에 둔 `~/bin` 등)은 제공자
 //! 항목 바로 뒤에 그 순서대로 남는다. 제공자 항목이 없으면(로그인 셸 환경뿐) 아무것도 바꾸지 않는다.
 //!
-//! - zsh: `ZDOTDIR` 을 이 터미널의 임시 폴더로 바꿔 띄운다. 그 폴더의 `.zshenv` · `.zprofile` · `.zshrc` · `.zlogin` 은 사용자의
-//!   같은 파일(사용자의 `ZDOTDIR`, 없으면 홈)을 읽고 다음 파일도 이 폴더를 거치게 한다. 마지막 파일(로그인 셸이면 `.zlogin`)이
-//!   PATH 를 고치고 `ZDOTDIR` 을 사용자의 값으로 되돌린다 — 그 셸에서 띄운 zsh 는 사용자의 파일을 읽는다.
+//! - zsh: `ZDOTDIR` 을 이 터미널의 임시 폴더로 바꿔 띄운다. 그 폴더의 `.zshenv` 는 사용자의 `.zshenv`(사용자의 `ZDOTDIR`, 없으면
+//!   홈)를 읽은 뒤 `ZDOTDIR` 을 사용자의 값으로 두고, 첫 프롬프트 직전(`precmd`)에 한 번 PATH 를 고치는 훅을 건다. 그 뒤의 시작
+//!   파일(`/etc/zprofile` · `/etc/zshrc` · 사용자의 `.zprofile` · `.zshrc` · `.zlogin`)은 감싸지 않은 셸과 같은 `ZDOTDIR` 을 본다 —
+//!   macOS `/etc/zshrc` 가 `${ZDOTDIR:-$HOME}` 으로 정하는 `HISTFILE` 이 임시 폴더로 가면 명령 기록이 터미널마다 지워진다. 훅은
+//!   `emulate -L zsh` 아래에서 돈다(사용자가 켠 `KSH_ARRAYS` · `SH_WORD_SPLIT` 등에 PATH 가 망가지지 않게). 사용자 rc 가
+//!   `precmd_functions` 를 통째로 바꾸면 훅이 빠져 PATH 를 고치지 않는다.
 //! - bash: 로그인 셸의 시작 파일은 `--rcfile` 을 받지 않으므로, 대화형 셸에 `--rcfile` 로 우리 파일을 주고 그 파일이 로그인 셸의
 //!   순서(`/etc/profile`, 그다음 `~/.bash_profile` · `~/.bash_login` · `~/.profile` 중 처음 있는 것)대로 읽은 뒤 PATH 를 고친다.
 //!   차이: 셸이 로그인 셸로 표시되지 않는다(`shopt login_shell` 이 꺼짐, `~/.bash_logout` 을 읽지 않음).
 //! - fish: `--init-command`(설정 파일을 다 읽은 뒤 돈다)로 고친다.
 //! - 그 밖의 셸, 설정 `[terminal] shell` 로 직접 고른 셸: 바꾸지 않는다.
+//!
+//! 임시 폴더는 0700 으로 만들고, 만든 뒤 이 사용자의 것 · 링크 아님 · 0700 인지 확인한다(아니면 통합하지 않는다) — 남이 그 폴더의
+//! 시작 파일을 바꾸면 이 사용자의 셸에서 코드가 돈다.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// 제공자가 앞에 둔 PATH 항목을 셸에 넘기는 변수. 시작이 끝나면 셸이 지운다.
 pub const FRONT_VAR: &str = "PITWALL_PATH_FRONT";
-/// zsh: 이 터미널의 래퍼 폴더.
-pub const ZDOTDIR_VAR: &str = "PITWALL_ZDOTDIR";
 /// zsh: 사용자의 `ZDOTDIR`(없으면 변수도 없다).
 pub const USER_ZDOTDIR_VAR: &str = "PITWALL_USER_ZDOTDIR";
 
@@ -90,13 +95,9 @@ pub fn integrate(
     let mut env = vec![(OsString::from(FRONT_VAR), joined)];
     let integration = match shell {
         Shell::Zsh => {
-            let dir = tempfile::Builder::new().prefix("pitwall-zsh-").tempdir()?;
-            for (name, body) in ZSH_FILES {
-                std::fs::write(dir.path().join(name), body)?;
-            }
-            std::fs::write(dir.path().join(ZSH_FINISH_FILE), ZSH_FINISH)?;
+            let dir = private_dir("pitwall-zsh-")?;
+            std::fs::write(dir.path().join(".zshenv"), ZSH_ENV)?;
             env.push(("ZDOTDIR".into(), dir.path().into()));
-            env.push((ZDOTDIR_VAR.into(), dir.path().into()));
             if let Some(user) = user_zdotdir {
                 env.push((USER_ZDOTDIR_VAR.into(), user.to_owned()));
             }
@@ -107,7 +108,7 @@ pub fn integrate(
             }
         }
         Shell::Bash => {
-            let dir = tempfile::Builder::new().prefix("pitwall-bash-").tempdir()?;
+            let dir = private_dir("pitwall-bash-")?;
             let rcfile = dir.path().join("bashrc");
             std::fs::write(&rcfile, BASH_RC)?;
             // 로그인 셸의 `-l` 은 빼고 대화형으로 띄운다(머리 주석). 긴 옵션은 짧은 옵션보다 앞이어야 한다.
@@ -144,60 +145,54 @@ pub fn integrate(
     Ok(Some(integration))
 }
 
-/// zsh 래퍼 파일의 앞부분: 사용자의 `ZDOTDIR` 로 돌려 같은 이름의 파일을 읽고, 그 파일이 바꾼 `ZDOTDIR` 을 기억한 뒤 래퍼 폴더로
-/// 돌아온다.
-macro_rules! zsh_wrapper {
-    ($file:literal) => {
-        concat!(
-            "# Pitwall 터미널(crates/pw-run/src/integration.rs). 사용자의 ",
-            $file,
-            " 을 읽는다.\n",
-            "if [[ -n ${PITWALL_USER_ZDOTDIR+x} ]]; then ZDOTDIR=$PITWALL_USER_ZDOTDIR; else unset ZDOTDIR; fi\n",
-            "[[ -r ${ZDOTDIR:-$HOME}/",
-            $file,
-            " ]] && builtin source -- \"${ZDOTDIR:-$HOME}/",
-            $file,
-            "\"\n",
-            "if [[ -n ${ZDOTDIR+x} ]]; then PITWALL_USER_ZDOTDIR=$ZDOTDIR; else unset PITWALL_USER_ZDOTDIR; fi\n",
-            "ZDOTDIR=$PITWALL_ZDOTDIR\n",
-        )
-    };
+/// 이 사용자만 들어갈 수 있는 임시 폴더(0700). 만든 뒤 다시 확인한다 — umask · 파일 시스템이 권한을 바꿨거나 그 자리가 이미 남의
+/// 것이면 쓰지 않는다.
+fn private_dir(prefix: &str) -> io::Result<tempfile::TempDir> {
+    let dir = tempfile::Builder::new()
+        .prefix(prefix)
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()?;
+    check_private(dir.path())?;
+    Ok(dir)
 }
 
-/// 시작이 끝났을 때: `ZDOTDIR` 을 사용자의 값으로 되돌리고 제공자 항목을 PATH 맨 앞으로 옮긴다.
-const ZSH_FINISH: &str = r#"if [[ -n ${PITWALL_USER_ZDOTDIR+x} ]]; then ZDOTDIR=$PITWALL_USER_ZDOTDIR; else unset ZDOTDIR; fi
+fn check_private(path: &Path) -> io::Result<()> {
+    let meta = std::fs::symlink_metadata(path)?;
+    // SAFETY: geteuid 는 인자가 없고 실패하지 않는다.
+    let uid = unsafe { libc::geteuid() };
+    let mode = meta.mode() & 0o7777;
+    if !meta.file_type().is_dir() || meta.uid() != uid || mode != 0o700 {
+        return Err(io::Error::other(format!(
+            "`{}` is not a private directory (mode {mode:o}, owner {})",
+            path.display(),
+            meta.uid()
+        )));
+    }
+    Ok(())
+}
+
+/// zsh 의 래퍼 `.zshenv`. 사용자의 `.zshenv` 는 바깥(함수 밖)에서 읽는다 — 함수 안에서 읽으면 그 파일의 `typeset` 이 지역 변수가
+/// 된다. 뒤의 코드는 사용자의 옵션과 떨어지게 `emulate -L zsh` 아래에서 돈다.
+const ZSH_ENV: &str = r#"# Pitwall 터미널(crates/pw-run/src/integration.rs). 사용자의 .zshenv 를 읽고, 첫 프롬프트 직전에 PATH 를 고친다.
+if [[ -n ${PITWALL_USER_ZDOTDIR+x} ]]; then ZDOTDIR=$PITWALL_USER_ZDOTDIR; else unset ZDOTDIR; fi
+__pitwall_front=$PITWALL_PATH_FRONT
+unset PITWALL_USER_ZDOTDIR PITWALL_PATH_FRONT
+[[ -r ${ZDOTDIR:-$HOME}/.zshenv ]] && builtin source -- "${ZDOTDIR:-$HOME}/.zshenv"
 () {
-  local -a front
-  front=(${(s.:.)PITWALL_PATH_FRONT})
-  path=($front ${path:|front})
+  emulate -L zsh
+  __pitwall_finish() {
+    emulate -L zsh
+    precmd_functions=(${precmd_functions:#__pitwall_finish})
+    local -a front
+    front=(${(s.:.)__pitwall_front})
+    path=($front ${path:|front})
+    unset __pitwall_front
+    unfunction __pitwall_finish
+  }
+  typeset -ga precmd_functions
+  precmd_functions=(__pitwall_finish $precmd_functions)
 }
-unset PITWALL_PATH_FRONT PITWALL_USER_ZDOTDIR PITWALL_ZDOTDIR
 "#;
-
-const ZSH_FILES: [(&str, &str); 4] = [
-    (".zshenv", zsh_wrapper!(".zshenv")),
-    (".zprofile", zsh_wrapper!(".zprofile")),
-    (
-        ".zshrc",
-        concat!(
-            zsh_wrapper!(".zshrc"),
-            "# 로그인 셸이 아니면 .zlogin 이 없다 — 여기서 끝낸다.\n",
-            "if [[ ! -o login ]]; then\n",
-            "  builtin source -- \"$PITWALL_ZDOTDIR/.pitwall-finish\"\n",
-            "fi\n",
-        ),
-    ),
-    (
-        ".zlogin",
-        concat!(
-            zsh_wrapper!(".zlogin"),
-            "builtin source -- \"$PITWALL_ZDOTDIR/.pitwall-finish\"\n",
-        ),
-    ),
-];
-
-/// zsh 의 끝내기 파일 이름. `ZSH_FILES` 와 함께 쓴다.
-const ZSH_FINISH_FILE: &str = ".pitwall-finish";
 
 /// bash: 로그인 셸의 순서로 읽고 PATH 를 고친다. macOS 의 bash 3.2 에서도 돈다.
 const BASH_RC: &str = r#"# Pitwall 터미널(crates/pw-run/src/integration.rs). 로그인 셸처럼 시작 파일을 읽는다.
@@ -276,9 +271,43 @@ mod tests {
             .unwrap()
             .unwrap();
         let dir = zsh.dir.as_ref().unwrap().path();
-        assert!(dir.join(".zlogin").is_file());
+        assert!(dir.join(".zshenv").is_file());
         assert!(zsh.env.contains(&("ZDOTDIR".into(), dir.into())));
         assert!(zsh.env.contains(&(USER_ZDOTDIR_VAR.into(), "/cfg".into())));
         assert!(zsh.env.contains(&(FRONT_VAR.into(), "/mise/bin".into())));
+    }
+
+    #[test]
+    fn the_startup_files_are_in_a_directory_only_this_user_can_enter() {
+        let front = [PathBuf::from("/mise/bin")];
+        for shell in ["/bin/zsh", "/bin/bash"] {
+            let found = integrate(&[shell.to_owned(), "-l".to_owned()], &front, None)
+                .unwrap()
+                .unwrap();
+            let meta = std::fs::symlink_metadata(found.dir.as_ref().unwrap().path()).unwrap();
+            assert_eq!(meta.mode() & 0o7777, 0o700, "{shell}");
+            // SAFETY: geteuid 는 인자가 없고 실패하지 않는다.
+            assert_eq!(meta.uid(), unsafe { libc::geteuid() }, "{shell}");
+        }
+    }
+
+    #[test]
+    fn a_directory_others_can_enter_or_a_link_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let private = tmp.path().join("private");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        check_private(&private).unwrap();
+        let open = tmp.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(check_private(&open).is_err());
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&private, &link).unwrap();
+        assert!(check_private(&link).is_err());
+        let file = tmp.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(check_private(&file).is_err());
     }
 }

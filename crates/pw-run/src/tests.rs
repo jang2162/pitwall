@@ -513,6 +513,113 @@ async fn the_providers_path_stays_in_front_after_the_shells_startup_files() {
     }
 }
 
+/// 시험 HOME 의 zsh 에 `report` 를 펼친 결과를 찍게 하고 그 글자를 돌려준다(시험 HOME 경로는 `HOME`). 친 명령의 메아리와
+/// 구별되게 앞뒤 표시를 셸이 계산한다.
+async fn zsh_report(h: &PathHome, report: &str) -> String {
+    let mut c = h.f.client();
+    let t = c.open(h.f.create_params(250, 24)).await;
+    c.input(
+        t.terminal,
+        &format!("print -r -- \"R$((1+1))[{report}]END$((6*7))\"\n"),
+    )
+    .await;
+    let text = c.read_until(t.stream, "]END42").await;
+    let at = text.rfind("R2[").unwrap();
+    let report = &text[at + 3..text.rfind("]END42").unwrap()];
+    report.replace(&h.f.tmp.path().join("home").display().to_string(), "HOME")
+}
+
+/// zsh: 통합은 사용자가 보는 시작을 바꾸지 않는다 — 읽는 시작 파일과 순서, 각 파일에서 본 `ZDOTDIR`, `HISTFILE` 이 제공자 없음과
+/// 같다. 사용자의 `TRAPDEBUG` 는 시작 중 도는 모든 명령(사용자 파일 밖의 `/etc/zshrc` 자리 포함)에서 macOS `/etc/zshrc` 의 계산
+/// `${ZDOTDIR:-$HOME}/.zsh_history` 를 모은다 — 래퍼 폴더가 한 번이라도 보이면 그 자리의 `/etc/zshrc` 가 명령 기록을 그 폴더(터미널이
+/// 끝나면 지워진다)로 보낸다. 사용자가 `~/.zshenv` 에서 `ZDOTDIR` 을 옮긴 경우도 본다.
+#[tokio::test(flavor = "multi_thread")]
+async fn zsh_startup_sees_the_users_zdotdir_and_histfile_as_without_the_integration() {
+    if !Path::new("/bin/zsh").is_file() {
+        return;
+    }
+    const RC: &str = "STARTUP+=(\"NAME:${ZDOTDIR-unset}\")\n";
+    const REPORT: &str = "H=$HISTFILE Z=${ZDOTDIR-unset} S=${(j:,:)STARTUP} SEEN=${(j:,:)__seen}";
+    for moved in [false, true] {
+        let mut reports = Vec::new();
+        for provider in [false, true] {
+            let h = path_home("/bin/zsh", provider);
+            let home = h.f.tmp.path().join("home");
+            let mut zshenv = String::from(
+                "typeset -gaU __seen\nTRAPDEBUG() { __seen+=(${ZDOTDIR:-$HOME}/.zsh_history) }\n",
+            );
+            zshenv.push_str(&RC.replace("NAME", "zshenv"));
+            let dot = if moved {
+                zshenv.push_str("ZDOTDIR=$HOME/cfg\n");
+                home.join("cfg")
+            } else {
+                home.clone()
+            };
+            fs::create_dir_all(&dot).unwrap();
+            fs::write(home.join(".zshenv"), zshenv).unwrap();
+            for name in ["zprofile", "zshrc", "zlogin"] {
+                let file = dot.join(format!(".{name}"));
+                let before = fs::read_to_string(&file).unwrap_or_default();
+                fs::write(&file, format!("{before}{}", RC.replace("NAME", name))).unwrap();
+            }
+            reports.push(zsh_report(&h, REPORT).await);
+        }
+        let (without, with) = (&reports[0], &reports[1]);
+        let expected = if moved {
+            "Z=HOME/cfg S=zshenv:unset,zprofile:HOME/cfg,zshrc:HOME/cfg,zlogin:HOME/cfg SEEN=HOME/.zsh_history,HOME/cfg/.zsh_history"
+        } else {
+            "Z=unset S=zshenv:unset,zprofile:unset,zshrc:unset,zlogin:unset SEEN=HOME/.zsh_history"
+        };
+        assert!(without.contains(expected), "moved: {moved}: {without}");
+        // macOS 의 `/etc/zshrc` 가 정하는 값(다른 시스템은 정하지 않을 수 있다).
+        if cfg!(target_os = "macos") {
+            let dot = if moved { "HOME/cfg" } else { "HOME" };
+            assert!(
+                without.starts_with(&format!("H={dot}/.zsh_history ")),
+                "{without}"
+            );
+        }
+        assert_eq!(with, without, "moved: {moved}");
+    }
+}
+
+/// 제공자 항목을 앞에 두는 코드는 사용자의 zsh 옵션과 떨어져 돈다: `rc` 를 덧붙인 `.zshrc` 에서도 PATH 는 「제공자 항목 + 제공자
+/// 없음일 때의 PATH」 다.
+async fn assert_the_providers_path_survives(rc: &str) {
+    if !Path::new("/bin/zsh").is_file() {
+        return;
+    }
+    let mut paths = Vec::new();
+    for provider in [false, true] {
+        let h = path_home("/bin/zsh", provider);
+        let zshrc = h.f.tmp.path().join("home/.zshrc");
+        let before = fs::read_to_string(&zshrc).unwrap();
+        fs::write(&zshrc, format!("{before}{rc}")).unwrap();
+        // 실행마다 다른 시험 폴더(제공자 · Homebrew · 사용자 폴더의 바탕)는 `BASE` 로.
+        let base = h.mise.parent().unwrap().parent().unwrap();
+        let path = zsh_report(&h, "$PATH").await;
+        paths.push(path.replace(&base.display().to_string(), "BASE"));
+    }
+    let (without, with) = (&paths[0], &paths[1]);
+    assert!(
+        without.contains("BASE/user/bin:BASE/brew/bin:"),
+        "{without}"
+    );
+    assert_eq!(*with, format!("BASE/mise/bin:{without}"));
+}
+
+/// `KSH_ARRAYS`: 배열 첨자가 0부터다.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_providers_path_survives_ksh_arrays() {
+    assert_the_providers_path_survives("setopt KSH_ARRAYS\n").await;
+}
+
+/// `SH_WORD_SPLIT`: 따옴표 없는 펼침이 공백에서 쪼개진다 — PATH 에 공백 든 폴더가 있다.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_providers_path_survives_sh_word_split() {
+    assert_the_providers_path_survives("setopt SH_WORD_SPLIT\nPATH=\"$HOME/my bin:$PATH\"\n").await;
+}
+
 /// 제공자가 없으면(로그인 셸 환경뿐) 셸 argv · 환경을 바꾸지 않는다 — 시작 파일이 정한 PATH 그대로다.
 #[tokio::test(flavor = "multi_thread")]
 async fn without_a_provider_the_shell_is_left_alone() {
