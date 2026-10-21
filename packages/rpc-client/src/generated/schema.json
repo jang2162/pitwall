@@ -4691,6 +4691,133 @@
       ],
       "tier": "write"
     },
+    "search.files": {
+      "description": "프로젝트의 파일을 이름 · 경로로 퍼지 매칭한다(`⌘⇧O` · Search Everywhere). 목록은 창이 `fs.watch` 로 보는 루트마다 메모리에\n있고 변경을 따라간다(`pw_fs::index` 머리 주석). 처음 만드는 중이면 다 만들 때까지 기다린다. 빈 질의는 경로순 앞에서부터다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "limit": {
+            "default": null,
+            "description": "결과 수. 기본 [`DEFAULT_LIMIT`], 1 ~ [`MAX_LIMIT`].",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "query": {
+            "description": "찾을 것. 공백으로 가른 낱말이 모두 맞아야 한다(낱말마다 퍼지, 대소문자는 대문자가 있을 때만 가린다). 비어 있으면 경로순\n앞에서부터. 글자 수 상한 [`MAX_QUERY_CHARS`].",
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 있으면 그 워크트리 안의 프로젝트 루트를, 없으면 프로젝트의 등록 루트를\n찾는다(`fs.watch` 와 같다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "query"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "FileMatch": {
+            "description": "맞는 파일 하나.",
+            "properties": {
+              "generated": {
+                "description": "생성 파일(generated 의 경로 규칙 · `linguist-generated`). 점수를 낮춘 것이다.",
+                "type": "boolean"
+              },
+              "path": {
+                "description": "절대 경로. 루트 안 심링크를 지났으면 링크 쪽 경로다 — 실제 경로는 `fs.stat` 이 준다.",
+                "type": "string"
+              },
+              "positions": {
+                "description": "`relative` 안의 일치 글자 위치(UTF-16 코드 단위, 오름차순, 중복 없음). 파일 이름에서 맞았으면 파일 이름 쪽이다.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "relative": {
+                "description": "루트 기준 상대 경로(`/` 로 가른다). 매칭은 이 문자열에 한다.",
+                "type": "string"
+              },
+              "root": {
+                "description": "그 루트(정규화한 실제 경로).",
+                "type": "string"
+              },
+              "score": {
+                "description": "높을수록 위다. 같은 질의 안에서만 비교한다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "vendored": {
+                "description": "벤더 파일(`vendor.yml` 의 경로 · `linguist-vendored`). 점수를 낮춘 것이다.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "root",
+              "relative",
+              "positions",
+              "score",
+              "vendored",
+              "generated"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "files": {
+            "description": "점수순(같으면 짧은 경로 · 경로순).",
+            "items": {
+              "$ref": "#/$defs/FileMatch"
+            },
+            "type": "array"
+          },
+          "indexed": {
+            "description": "찾아본 파일 수(목록의 크기).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "matched": {
+            "description": "맞은 파일 수(`files` 는 그 앞부분).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "files",
+          "matched",
+          "indexed"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "search.text": {
       "description": "프로젝트 안의 텍스트 검색. 결과를 파일별 묶음 청크로 보내고 마지막에 `done` 청크 하나를 보낸다. 규칙(ignore · 심링크 ·\n바이너리 · 50 MiB · 벤더/생성 제외 · 결과 상한)은 `pw_fs::search` 머리 주석. 루트 밖 경로 · 빈 질의 · 잘못된 정규식 ·\n글롭은 invalid params 로, 없는 경로는 `NOT_FOUND` 로 스트림이 `failed` 로 끝난다(청크 없이).",
       "item": {

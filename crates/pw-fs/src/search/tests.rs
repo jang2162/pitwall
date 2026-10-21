@@ -834,11 +834,6 @@ fn label_cost() {
         .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
         .map(ignore::DirEntry::into_path)
         .collect();
-    let target = Target {
-        path: root.clone(),
-        root: root.clone(),
-        overrides: Override::empty(),
-    };
     let both = Exclude {
         vendored: true,
         generated: true,
@@ -848,7 +843,7 @@ fn label_cost() {
         let started = Instant::now();
         let excluded = files
             .iter()
-            .filter(|f| labels.excluded(f, &target, both))
+            .filter(|f| labels.excluded(f, &root, both))
             .count();
         let took = started.elapsed();
         println!(

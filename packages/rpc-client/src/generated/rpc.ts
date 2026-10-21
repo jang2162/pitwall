@@ -184,6 +184,11 @@ export type UnaryMethods = {
 	 */
 	"runtime.reload": { params: RuntimeReloadParams; result: null };
 	/**
+	 * 프로젝트의 파일을 이름 · 경로로 퍼지 매칭한다(`⌘⇧O` · Search Everywhere). 목록은 창이 `fs.watch` 로 보는 루트마다 메모리에
+	 * 있고 변경을 따라간다(`pw_fs::index` 머리 주석). 처음 만드는 중이면 다 만들 때까지 기다린다. 빈 질의는 경로순 앞에서부터다.
+	 */
+	"search.files": { params: SearchFilesParams; result: SearchFiles };
+	/**
 	 * 문서를 닫는다. 없는 id 도 성공이다.
 	 */
 	"syntax.close": { params: SyntaxCloseParams; result: null };
@@ -308,6 +313,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":false},
+	"search.files": {"name":"search.files","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchFilesParams","output":"SearchFiles","doc":" 프로젝트의 파일을 이름 · 경로로 퍼지 매칭한다(`⌘⇧O` · Search Everywhere). 목록은 창이 `fs.watch` 로 보는 루트마다 메모리에\n 있고 변경을 따라간다(`pw_fs::index` 머리 주석). 처음 만드는 중이면 다 만들 때까지 기다린다. 빈 질의는 경로순 앞에서부터다.\n","mcp":false},
 	"search.text": {"name":"search.text","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchTextParams","output":"SearchTextChunk","doc":" 프로젝트 안의 텍스트 검색. 결과를 파일별 묶음 청크로 보내고 마지막에 `done` 청크 하나를 보낸다. 규칙(ignore · 심링크 ·\n 바이너리 · 50 MiB · 벤더/생성 제외 · 결과 상한)은 `pw_fs::search` 머리 주석. 루트 밖 경로 · 빈 질의 · 잘못된 정규식 ·\n 글롭은 invalid params 로, 없는 경로는 `NOT_FOUND` 로 스트림이 `failed` 로 끝난다(청크 없이).\n","mcp":false},
 	"syntax.close": {"name":"syntax.close","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SyntaxCloseParams","output":"()","doc":" 문서를 닫는다. 없는 id 도 성공이다.\n","mcp":false},
 	"syntax.edit": {"name":"syntax.edit","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SyntaxEditParams","output":"SyntaxEditResult","doc":" 문서에 편집을 적용한다(다시 파싱은 다음 `syntax.highlights` 때 바뀐 곳만 한다). 열지 않은 문서는 not found,\n 이미 지난 버전 · 기다리는 편집이 너무 많음 · 앞당겨 온 편집을 버렸음이면 conflict(`data.version` 에 지금 버전 — 다시\n 연다), 범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다). 편집으로 크기 상한을 넘으면 그 문서의 강조를 끄고\n `off` 로 알린다.\n","mcp":false},
@@ -575,6 +581,24 @@ export type ExternalToolInfo = {
 	opensFiles: boolean,
 	/**  설정 형식 오류. 있으면 실행하지 않는다(실행하면 `invalidTool` 로 끝난다). */
 	problem: string | null,
+};
+
+/**  맞는 파일 하나. */
+export type FileMatch = {
+	/**  절대 경로. 루트 안 심링크를 지났으면 링크 쪽 경로다 — 실제 경로는 `fs.stat` 이 준다. */
+	path: string,
+	/**  그 루트(정규화한 실제 경로). */
+	root: string,
+	/**  루트 기준 상대 경로(`/` 로 가른다). 매칭은 이 문자열에 한다. */
+	relative: string,
+	/**  `relative` 안의 일치 글자 위치(UTF-16 코드 단위, 오름차순, 중복 없음). 파일 이름에서 맞았으면 파일 이름 쪽이다. */
+	positions: number[],
+	/**  높을수록 위다. 같은 질의 안에서만 비교한다. */
+	score: number,
+	/**  벤더 파일(`vendor.yml` 의 경로 · `linguist-vendored`). 점수를 낮춘 것이다. */
+	vendored: boolean,
+	/**  생성 파일(generated 의 경로 규칙 · `linguist-generated`). 점수를 낮춘 것이다. */
+	generated: boolean,
 };
 
 /**  읽거나 쓸 내용. */
@@ -1241,6 +1265,31 @@ export type SearchFile = {
 	path: string,
 	/**  줄 번호순. */
 	lines: SearchLine[],
+};
+
+export type SearchFiles = {
+	/**  점수순(같으면 짧은 경로 · 경로순). */
+	files: FileMatch[],
+	/**  맞은 파일 수(`files` 는 그 앞부분). */
+	matched: number,
+	/**  찾아본 파일 수(목록의 크기). */
+	indexed: number,
+};
+
+export type SearchFilesParams = {
+	projectId: string,
+	/**
+	 *  창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 있으면 그 워크트리 안의 프로젝트 루트를, 없으면 프로젝트의 등록 루트를
+	 *  찾는다(`fs.watch` 와 같다).
+	 */
+	worktree?: string | null,
+	/**
+	 *  찾을 것. 공백으로 가른 낱말이 모두 맞아야 한다(낱말마다 퍼지, 대소문자는 대문자가 있을 때만 가린다). 비어 있으면 경로순
+	 *  앞에서부터. 글자 수 상한 [`MAX_QUERY_CHARS`].
+	 */
+	query: string,
+	/**  결과 수. 기본 [`DEFAULT_LIMIT`], 1 ~ [`MAX_LIMIT`]. */
+	limit?: number | null,
 };
 
 /**  일치한 줄 하나. */

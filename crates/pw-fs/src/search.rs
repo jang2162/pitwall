@@ -436,18 +436,25 @@ struct Target {
     overrides: Override,
 }
 
+/// 심링크 `link` 를 따라가도 되는가: 루트 안을 가리키는 링크만 따라간다. `.git` 안을 가리키는 링크도 따라가지 않는다. 풀리지
+/// 않는 링크는 링크 경로 그대로 돌아와 이 판정을 지나지만, 걷기가 대상을 읽지 못해 오류 항목이 된다.
+pub(crate) fn link_inside(roots: &Roots, link: &Path) -> bool {
+    normalize(link).is_ok_and(|real| roots.contains(&real) && !in_dot_git(roots, &real))
+}
+
 /// 실제 경로 `real` 이 그것을 담은 루트 기준으로 `.git` 안(`.git` 자체 포함)이다.
-fn in_dot_git(roots: &Roots, real: &Path) -> bool {
+pub(crate) fn in_dot_git(roots: &Roots, real: &Path) -> bool {
     roots.as_slice().iter().any(|root| {
         real.strip_prefix(root)
             .is_ok_and(|rel| rel.components().any(|c| c.as_os_str() == ".git"))
     })
 }
 
-#[derive(Clone, Copy)]
-struct Exclude {
-    vendored: bool,
-    generated: bool,
+/// 벤더 · 생성 두 판정. 검색에서는 건너뛸 것, 파일 목록 인덱스에서는 그 파일의 판정이다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Exclude {
+    pub(crate) vendored: bool,
+    pub(crate) generated: bool,
 }
 
 impl Exclude {
@@ -545,7 +552,9 @@ impl Plan {
                         return WalkState::Continue;
                     }
                     if self.exclude.any()
-                        && shared.labels.excluded(entry.path(), target, self.exclude)
+                        && shared
+                            .labels
+                            .excluded(entry.path(), &target.root, self.exclude)
                     {
                         return WalkState::Continue;
                     }
@@ -595,12 +604,7 @@ impl Plan {
             if entry.file_name() == ".git" {
                 return false;
             }
-            // 루트 안을 가리키는 링크만 따라간다. `.git` 안을 가리키는 링크도 따라가지 않는다. 풀리지 않는 링크는 링크 경로
-            // 그대로 돌아와 아래 판정을 지나지만, 걷기가 대상을 읽지 못해 오류 항목이 된다.
-            if entry.path_is_symlink()
-                && !normalize(entry.path())
-                    .is_ok_and(|real| roots.contains(&real) && !in_dot_git(&roots, &real))
-            {
+            if entry.path_is_symlink() && !link_inside(&roots, entry.path()) {
                 return false;
             }
             let Some(rules) = &rules else {
@@ -984,9 +988,9 @@ impl Utf16Cursor {
     }
 }
 
-/// 폴더마다 한 번 읽는 벤더 · 생성 판정 재료.
+/// 폴더마다 한 번 읽는 벤더 · 생성 판정 재료. 파일 목록 인덱스(M1-12)도 쓴다.
 #[derive(Default)]
-struct Labels {
+pub(crate) struct Labels {
     dirs: Mutex<HashMap<PathBuf, Arc<DirLabels>>>,
 }
 
@@ -1007,28 +1011,40 @@ impl DirLabels {
 }
 
 impl Labels {
-    /// 건너뛸 파일인가.
-    fn excluded(&self, path: &Path, target: &Target, exclude: Exclude) -> bool {
+    /// 건너뛸 파일인가. `root` 는 그 파일을 담은 루트(저장소 밖 파일의 판정 기준)다.
+    fn excluded(&self, path: &Path, root: &Path, exclude: Exclude) -> bool {
+        let found = self.classify(path, root, exclude);
+        found.vendored || found.generated
+    }
+
+    /// `want` 에서 켠 판정만 해서 맞는 것을 켜 돌려준다. 파일 내용은 보지 않는다(이 모듈 머리 주석).
+    pub(crate) fn classify(&self, path: &Path, root: &Path, want: Exclude) -> Exclude {
+        let none = Exclude {
+            vendored: false,
+            generated: false,
+        };
         let Some(dir) = path.parent() else {
-            return false;
+            return none;
         };
         let labels = self.dir(dir);
         let (base, attrs) = match &labels.repo {
             Some((top, attrs)) => (top.as_path(), Some(attrs)),
-            None => (target.root.as_path(), None),
+            None => (root, None),
         };
         let Some(rel) = relative(path, base) else {
-            return false;
+            return none;
         };
         let attrs = attrs.map(|a| a.get(&rel)).unwrap_or_default();
-        (exclude.vendored
-            && attrs
-                .vendored
-                .unwrap_or_else(|| pw_lang::linguist::vendored_path(&rel)))
-            || (exclude.generated
+        Exclude {
+            vendored: want.vendored
+                && attrs
+                    .vendored
+                    .unwrap_or_else(|| pw_lang::linguist::vendored_path(&rel)),
+            generated: want.generated
                 && attrs
                     .generated
-                    .unwrap_or_else(|| pw_lang::generated::generated(&rel, None).is_some()))
+                    .unwrap_or_else(|| pw_lang::generated::generated(&rel, None).is_some()),
+        }
     }
 
     /// 그 폴더의 판정 재료. 속성 파일이 없는 폴더는 부모의 것을 그대로 쓴다 — 읽는 파일(꼭대기부터 그 폴더까지의
@@ -1064,7 +1080,7 @@ impl Labels {
 }
 
 /// `path` 가 `base` 안이면 `/` 로 가른 상대 경로(같으면 빈 문자열).
-fn relative(path: &Path, base: &Path) -> Option<String> {
+pub(crate) fn relative(path: &Path, base: &Path) -> Option<String> {
     let rel = path.strip_prefix(base).ok()?;
     let parts: Vec<String> = rel
         .components()

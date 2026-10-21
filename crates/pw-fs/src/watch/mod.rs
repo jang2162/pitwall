@@ -8,6 +8,8 @@
 //!   M1-12 · 런타임 제공자 M1-16)는 [`pw_core::EventBus`] 로 받는다. 스트림의 항목은 변경이 아니라 감시 방식([`FsWatching`])이다.
 //! - 방식 · 디바운스 · 폴백은 [`engine`], 창 하나 동안의 경로 모으기와 종류 판정은 [`batch`].
 //! - OS 감시 한도를 넘으면 경고 알림(`notification.show`, [`pw_core::notification`])을 낸다.
+//! - 파일 목록 인덱스([`crate::index`])를 붙이면([`Watch::attach_index`]) 루트를 처음 걸 때 그 루트의 목록을 만들기 시작하고, 마지막
+//!   임대가 풀릴 때 버린다.
 
 pub mod batch;
 pub mod engine;
@@ -25,6 +27,7 @@ use pw_rpc::{Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::Fs;
+use crate::index::FileIndex;
 use crate::scope::Roots;
 use engine::{Engine, Options, Sink};
 
@@ -129,6 +132,7 @@ struct Inner {
     options: Options,
     slots: Mutex<HashMap<Key, Slot>>,
     warned: Arc<Mutex<HashSet<PathBuf>>>,
+    index: OnceLock<FileIndex>,
 }
 
 impl Inner {
@@ -158,6 +162,7 @@ impl Watch {
                 options,
                 slots: Mutex::default(),
                 warned: Arc::default(),
+                index: OnceLock::new(),
             }),
         }
     }
@@ -165,6 +170,11 @@ impl Watch {
     /// 두 번째부터는 무시한다.
     pub fn attach(&self, bus: EventBus) {
         let _ = self.inner.bus.set(bus);
+    }
+
+    /// 루트를 처음 걸 때 그 루트의 파일 목록을 만들고, 놓을 때 버리게 한다. 두 번째부터는 무시한다.
+    pub fn attach_index(&self, index: FileIndex) {
+        let _ = self.inner.index.set(index);
     }
 
     /// 지금 OS 감시를 건 루트 수.
@@ -202,6 +212,13 @@ impl Watch {
                 // 그 사이 다른 창이 같은 루트를 걸었으면 그것을 쓰고 만든 것은 버린다.
                 let slot = slots.entry(key.clone()).or_insert(Slot { refs: 0, engine });
                 slot.refs += 1;
+                // 감시를 건 뒤에 목록을 만든다 — 걷는 사이의 변경은 `fs.changed` 로 온다. 표를 잡은 채 연다(걷기는 다른
+                // 스레드에서 한다): 같은 루트를 놓는 임대의 닫기와 순서가 뒤바뀌지 않게.
+                if slot.refs == 1
+                    && let Some(index) = self.inner.index.get()
+                {
+                    index.open(&params.project_id, &root, params.worktree.as_deref());
+                }
                 slot.engine.status()
             };
             lease.held.push((key, status));
@@ -271,6 +288,9 @@ impl Drop for Lease {
                     slot.refs -= 1;
                     if slot.refs == 0 {
                         stopped.extend(slots.remove(key));
+                        if let Some(index) = self.inner.index.get() {
+                            index.close(&key.0, &key.1);
+                        }
                     }
                 }
             }
@@ -279,8 +299,8 @@ impl Drop for Lease {
     }
 }
 
-/// 감시할 루트: 활성 워크트리가 있으면 그 안의 프로젝트 루트, 없으면 프로젝트의 등록 루트.
-fn watch_roots(fs: &Fs, params: &FsWatchParams) -> Result<Vec<PathBuf>, RpcError> {
+/// 감시할 루트: 활성 워크트리가 있으면 그 안의 프로젝트 루트, 없으면 프로젝트의 등록 루트. 파일 목록 인덱스도 이 루트마다 둔다.
+pub(crate) fn watch_roots(fs: &Fs, params: &FsWatchParams) -> Result<Vec<PathBuf>, RpcError> {
     let projects = fs.projects.get().ok_or_else(|| {
         RpcError::internal("the file system service is not attached to a project registry")
     })?;

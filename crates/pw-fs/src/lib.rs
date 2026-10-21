@@ -9,9 +9,11 @@
 //! - [`search`]: 텍스트 검색 `search.text`(M1-07) 스트림.
 //! - [`methods`]: `fs.list` · `fs.stat` · `fs.read` · `fs.write` RPC.
 //! - [`watch`]: 파일 감시(M1-06) — `fs.watch` 스트림과 `fs.changed` 이벤트.
+//! - [`index`]: 파일 목록 인덱스와 퍼지 매칭 `search.files`(M1-12).
 
 pub mod handle;
 mod ignore_rules;
+pub mod index;
 pub mod judge;
 pub mod list;
 pub mod methods;

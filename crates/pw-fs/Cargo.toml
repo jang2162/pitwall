@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 # 바이너리 내용은 JSON 으로 base64 로 실어 보낸다. 버전은 Tauri 트리의 것과 같게 둔다(크레이트가 늘지 않는다).
 base64 = "0.22.1"
+# 파일 목록 인덱스의 퍼지 매칭 `search.files`(M1-12, 결정 M1-D4 — MIT, SIMD Smith-Waterman). 의존성이 없다(`serde` 는 기능을 켤 때만).
+frizbee = "0.13.0"
 # `search.text`(M1-07, 결정 M1-D6): ripgrep 의 검색 라이브러리(모두 Unlicense OR MIT). `grep-matcher` 는 한 줄 안의 일치 범위를 찾는
 # `Matcher` 트레이트다.
 grep-matcher = "0.1.9"
@@ -34,6 +36,8 @@ specta = { workspace = true, features = ["derive"] }
 # 디스크 IO 를 블로킹 스레드로 보낸다. `sync` 는 `fs.watch` 스트림이 감시 방식의 바뀜을 기다리는 것과 동시 검색 수 상한(`search.rs` 의
 # 세마포어), `time` 은 그 대기 시간이다.
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
+# 파일 목록 인덱스의 빌드 작업(`pw_core::TaskSpawner::scoped`)에 넘기는 취소 토큰. 버전은 워크스페이스의 것이다.
+tokio-util = { workspace = true }
 # 감시 오류 · 한도 초과를 로그에 남긴다. 버전은 pw-runtime 과 같게 둔다.
 tracing = "0.1.44"
 # 삭제 → OS 휴지통(`fs.trash`, M1-21, MIT). 기본 기능 그대로: Windows 의 COM 초기화(`coinit_apartmentthreaded`)와 Linux 휴지통의
