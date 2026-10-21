@@ -13,6 +13,7 @@ import { createDocumentStore } from "../editor/documents";
 import { editorActions } from "../editor/editor-actions";
 import { createEditorWorkspace } from "../editor/editor-workspace";
 import { openWithActions } from "../open-with/open-with";
+import { findActions } from "../search/find-actions";
 import { terminalActions } from "../terminal/terminal-actions";
 import { TerminalTabs } from "../terminal/terminal-tabs";
 import { createProjectActions, welcomeActions } from "../welcome/actions";
@@ -83,6 +84,7 @@ const ACTION_IDS = new Set(
       readClipboard: async () => "",
       onClipboardFailed() {},
     }),
+    ...findActions({ strings: { action: "find" }, open() {} }),
   ].map((a) => a.id),
 );
 
@@ -127,6 +129,9 @@ describe("default keymap file", () => {
     expect(label("win", "editor.closeOtherTabs")).toEqual([]);
     expect(label("mac", "editor.splitRight")).toEqual(["⌘\\"]);
     expect(label("linux", "editor.splitRight")).toEqual(["Ctrl+\\"]);
+    expect(label("mac", "search.findInFiles")).toEqual(["⇧⌘F"]);
+    expect(label("win", "search.findInFiles")).toEqual(["Ctrl+Shift+F"]);
+    expect(label("linux", "search.findInFiles")).toEqual(["Ctrl+Shift+F"]);
     expect(label("mac", "editor.switcher")).toEqual(["⌃⇥"]);
     expect(label("win", "editor.switcher")).toEqual(["Ctrl+Tab"]);
   });

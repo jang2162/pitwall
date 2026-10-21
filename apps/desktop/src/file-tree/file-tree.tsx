@@ -5,7 +5,7 @@
 //   키보드는 IntelliJ 와 같다: ↑↓ 이동, → 펼침/첫 자식, ← 접음/부모, Home/End, PageUp/PageDown.
 // - 글자를 치면 speed search: 위에 뜨는 입력 칸에 이어 치고(두 번째 글자부터는 입력 칸이 받아 IME 조합도 된다), 보이는 행 중
 //   이름에 그 글자가 든 것으로 간다. ↑↓ 는 앞뒤 일치, Enter 는 그 행을 연다, Esc 는 닫는다.
-// - 우클릭 메뉴는 읽기 항목만이다(경로 복사 · 상대 경로 복사 · Finder 에서 보기 · 외부 도구로 열기). 만들기 · 이름 바꾸기 · 삭제는
+// - 우클릭 메뉴는 읽기 항목만이다(경로 복사 · 상대 경로 복사 · Finder 에서 보기 · 외부 도구로 열기 · 이 폴더에서 찾기 — src/search). 만들기 · 이름 바꾸기 · 삭제는
 //   M1-21 이 더한다. 외부 도구는 Host 의 `openWith.run` 이 띄운다(open-with/open-with.tsx).
 // - 루트 밖을 가리키는 심링크는 「루트 밖을 가리킴」 을 달고 펼치거나 열지 않는다(결정 M1-D8).
 
@@ -44,6 +44,8 @@ import { useKeymap, useRegistryVersion } from "../keymap/keymap-provider";
 import { useProjectStrings } from "../layout/strings";
 import { useNotify } from "../notifications/notifications";
 import { REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
+import { findInFolder } from "../search/find-in-files";
+import { useFindStrings } from "../search/strings";
 import { isComposingKey } from "../ui/ime";
 import { revealRequests, treeScope, windowFileTree } from "./project-view";
 import { type FileTreeStrings, useFileTreeStrings } from "./strings";
@@ -83,6 +85,8 @@ export interface FileTreeHandlers {
   /** 없으면 메뉴에서 뺀다. */
   reveal?(path: string): void;
   openWith?(path: string): void;
+  /** 「이 폴더에서 찾기」(src/search). 파일이면 그 폴더에서 찾는다. 없으면 메뉴에서 뺀다. */
+  findInFolder?(entry: { path: string; dir: boolean }): void;
 }
 
 function TreeRowView({
@@ -230,6 +234,7 @@ export function FileTree({
   const strings = useFileTreeStrings();
   const project = useProjectStrings().editor;
   const openWith = useAppStrings().openWith;
+  const findStrings = useFindStrings();
   useModelVersion(model);
   const rows = model.rows();
   const selected = model.selected();
@@ -517,6 +522,14 @@ export function FileTree({
               {openWith.action}
             </MenuItem>
           )}
+          {handlers.findInFolder && (
+            <MenuItem
+              disabled={!target || target.outside}
+              onSelect={() => target && handlers.findInFolder?.(target)}
+            >
+              {findStrings.inFolder}
+            </MenuItem>
+          )}
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
@@ -624,6 +637,7 @@ export function FileTreeToolWindow({ api }: IDockviewPanelProps) {
         const t = target(path);
         if (t) openPopup(t);
       },
+      findInFolder,
     };
   }, [model, workspace, run, openPopup, platform]);
 

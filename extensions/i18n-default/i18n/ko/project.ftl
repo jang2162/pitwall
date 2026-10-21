@@ -277,3 +277,36 @@ action-terminal-close-tab = 터미널: 탭 닫기
 action-terminal-rename-tab = 터미널: 탭 이름 바꾸기
 action-terminal-copy = 터미널: 복사
 action-terminal-paste = 터미널: 붙여넣기
+
+## 전체에서 찾기(src/search). ⌘⇧F 팝업과 「검색 결과」 툴 윈도우.
+
+action-find-in-files = 전체에서 찾기
+find-placeholder = 찾을 글자
+find-match-case = 대소문자 구분
+find-whole-word = 단어 단위
+find-regex = 정규식
+find-exclude-vendored = 벤더 · 생성 파일 빼기
+find-scope-project = 프로젝트
+find-scope-folder = 폴더
+find-folder-label = 찾을 폴더(프로젝트 루트 기준)
+find-mask-label = 파일 마스크
+find-mask-placeholder = 예: *.rs, !*_test.rs
+find-searching = 찾는 중…
+# $lines: 일치한 줄 수, $files: 파일 수
+find-summary = { $lines } 줄 · { $files } 파일
+# 결과 상한(1만 줄)을 넘었을 때
+find-more = 더 있음
+find-cancelled = 멈춤
+# $message: Host 가 알린 이유(잘못된 정규식 · 글롭 등)
+find-failed = 찾지 못했다: { $message }
+find-empty = 맞는 것이 없다
+find-stop = 멈추기
+find-pin = 툴 윈도우에서 열기
+find-preview-label = 미리보기
+find-preview-loading = 읽는 중…
+# $message: Host 가 알린 이유
+find-preview-failed = 미리보기를 읽지 못했다: { $message }
+find-results-empty = 고정한 검색 결과가 없다 — 전체에서 찾기 팝업의 「툴 윈도우에서 열기」 가 결과를 여기에 둔다
+# $query: 찾은 글자
+find-results-title = 「{ $query }」
+find-in-folder = 이 폴더에서 찾기

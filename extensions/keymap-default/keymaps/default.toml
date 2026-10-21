@@ -11,6 +11,13 @@ mac = "cmd+shift+a"
 win = "ctrl+shift+a"
 linux = "ctrl+shift+a"
 
+# 전체에서 찾기(10-ui §4.2, src/search/find-in-files.tsx). 프로젝트 창에만 등록된다.
+[[bindings]]
+action = "search.findInFiles"
+mac = "cmd+shift+f"
+win = "ctrl+shift+f"
+linux = "ctrl+shift+f"
+
 # 프로젝트 · 웰컴 창(10-ui §2.1 · §2.3). 웰컴 창에만 등록되는 액션이라 다른 창의 같은 키와 부딪히지 않는다(registry.ts 머리 주석).
 
 [[bindings]]

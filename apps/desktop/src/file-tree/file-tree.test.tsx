@@ -46,7 +46,13 @@ let handlers: { [K in keyof Required<FileTreeHandlers>]: ReturnType<typeof vi.fn
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-  handlers = { open: vi.fn(), copy: vi.fn(), reveal: vi.fn(), openWith: vi.fn() };
+  handlers = {
+    open: vi.fn(),
+    copy: vi.fn(),
+    reveal: vi.fn(),
+    openWith: vi.fn(),
+    findInFolder: vi.fn(),
+  };
   fakeTreeLayout(400);
 });
 
@@ -260,7 +266,7 @@ it("marks ignored and vendored rows", async () => {
   expect(row("/r/a.rs")!.hasAttribute("data-ignored")).toBe(false);
 });
 
-it("copies the absolute and the relative path from the context menu", async () => {
+it("copies the absolute and the relative path and finds in the folder from the context menu", async () => {
   const model = modelOf({ "/r": [dir("src")], "/r/src": [file("lib.rs")] });
   await model.setRoot("/r");
   await model.expand("/r/src");
@@ -282,6 +288,10 @@ it("copies the absolute and the relative path from the context menu", async () =
   expect(handlers.reveal).toHaveBeenLastCalledWith("/r/src/lib.rs");
   await pick("다음에서 열기…");
   expect(handlers.openWith).toHaveBeenLastCalledWith("/r/src/lib.rs");
+  await pick("이 폴더에서 찾기");
+  expect(handlers.findInFolder).toHaveBeenLastCalledWith(
+    expect.objectContaining({ path: "/r/src/lib.rs", dir: false }),
+  );
 });
 
 it("scrolls a revealed row into view and focuses the tree", async () => {

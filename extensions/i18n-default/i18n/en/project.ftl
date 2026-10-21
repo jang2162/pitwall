@@ -278,3 +278,43 @@ action-terminal-close-tab = Terminal: Close Tab
 action-terminal-rename-tab = Terminal: Rename Tab
 action-terminal-copy = Terminal: Copy
 action-terminal-paste = Terminal: Paste
+
+## Find in files (src/search). The ⌘⇧F popup and the Search Results tool window.
+
+action-find-in-files = Find in Files
+find-placeholder = Text to find
+find-match-case = Match Case
+find-whole-word = Words
+find-regex = Regex
+find-exclude-vendored = Exclude Vendored and Generated Files
+find-scope-project = In Project
+find-scope-folder = Directory
+find-folder-label = Folder to search (relative to the project root)
+find-mask-label = File mask
+find-mask-placeholder = e.g. *.rs, !*_test.rs
+find-searching = Searching…
+# $lines: matched lines, $files: files
+find-summary =
+    { $lines ->
+        [one] 1 line
+       *[other] { $lines } lines
+    } in { $files ->
+        [one] 1 file
+       *[other] { $files } files
+    }
+# Past the result limit (10,000 lines)
+find-more = More results not shown
+find-cancelled = Stopped
+# $message: the Host's reason (bad regex, glob, …)
+find-failed = Search failed: { $message }
+find-empty = Nothing found
+find-stop = Stop
+find-pin = Open in Tool Window
+find-preview-label = Preview
+find-preview-loading = Loading…
+# $message: the Host's reason
+find-preview-failed = Could not read the preview: { $message }
+find-results-empty = No pinned search results. Open in Tool Window in the Find in Files popup puts them here.
+# $query: the text searched for
+find-results-title = "{ $query }"
+find-in-folder = Find in Folder

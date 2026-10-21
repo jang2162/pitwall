@@ -68,6 +68,8 @@ import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/ope
 import { projectIdFromQuery, projectOpenInbox } from "../project-open";
 import { useHost, useRpcQuery } from "../rpc/host";
 import { useRuntimeActions } from "../runtime/runtime-actions";
+import { FindInFiles } from "../search/find-in-files";
+import { SearchResultsToolWindow } from "../search/search-results";
 import { RuntimeStatus } from "../runtime/runtime-status";
 import {
   STATUS_SLOTS,
@@ -114,6 +116,7 @@ const ICONS: Record<string, LucideIcon> = {
 const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>> = {
   notifications: NotificationsToolWindow,
   project: FileTreeToolWindow,
+  searchResults: SearchResultsToolWindow,
   terminal: TerminalToolWindow,
 };
 
@@ -622,6 +625,7 @@ function ProjectWindowBody({
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
           {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
+          {projectId !== undefined && <FindInFiles workspace={workspace} />}
           <StatusBar label={strings.status.label} />
           {switcher.element}
           {unsaved.element}
