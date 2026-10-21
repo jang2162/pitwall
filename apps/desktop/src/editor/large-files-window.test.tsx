@@ -49,6 +49,8 @@ const host = vi.hoisted(() => ({
   encodings: new Map<string, string>(),
   /** 경로 → stat 의 종류(FIFO 는 `other`). */
   kinds: new Map<string, EntryKind>(),
+  /** `fs.readBytes` 응답을 이만큼 늦춘다(ms, 느린 Host · 원격). */
+  readBytesDelayMs: 0,
   calls: [] as { method: string; params: Record<string, unknown> }[],
 }));
 
@@ -209,14 +211,17 @@ vi.mock("../tauri-transport", async () => {
             if (p.length > limits.HEX_PAGE_BYTES) return fail("a byte page is at most 64 KiB");
             if (host.kinds.has(path)) return fail(`\`${path}\` is not a regular file`);
             const part = bytes(p.offset, p.length);
-            return reply({
-              path,
-              size: realSize(),
-              mtimeMs: 1,
-              offset: p.offset,
-              data: base64(part),
-              eof: p.offset + part.length >= realSize(),
-            } satisfies FsBytes);
+            const answer = () =>
+              reply({
+                path,
+                size: realSize(),
+                mtimeMs: 1,
+                offset: p.offset,
+                data: base64(part),
+                eof: p.offset + part.length >= realSize(),
+              } satisfies FsBytes);
+            if (host.readBytesDelayMs > 0) return void setTimeout(answer, host.readBytesDelayMs);
+            return answer();
           }
           case "fs.write":
             return fail("this test never writes");
@@ -304,6 +309,7 @@ beforeEach(() => {
   host.sizes = new Map();
   host.encodings = new Map([[EUC_KR, "EUC-KR"]]);
   host.kinds = new Map([[FIFO, "other"]]);
+  host.readBytesDelayMs = 0;
   host.calls = [];
   closeGuard = undefined;
   activeWorktreeStore.setState({ top: undefined });
@@ -476,6 +482,27 @@ it("shows a 1 GB file as not opened within a second without reading a byte, and 
     [...document.querySelectorAll("[data-hex-row] [data-selected]")].map((e) => e.textContent),
   ).toEqual(["0A", "."]);
   expect(document.activeElement).toBe(scroller);
+});
+
+it("asks a slow Host for a hex page once, however often the view scrolls within that page", async () => {
+  // 응답이 오기 전에 같은 페이지 안에서 스크롤해도 그 페이지를 다시 요청하지 않고, 도착한 응답을 버리지 않는다.
+  host.readBytesDelayMs = 100;
+  await mount();
+  await open(HUGE);
+  await click(document.querySelector("[data-notice-action=hex]")!);
+  const scroller = document.querySelector<HTMLElement>("[data-hex-scroll]")!;
+  for (let i = 1; i <= 12; i++) {
+    await act(async () => {
+      scroller.scrollTop = i * 4;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await act(async () => new Promise((r) => setTimeout(r, 40)));
+  }
+  // 1 GB 의 스크롤 축척에서 48px 은 수백 줄이다 — 아직 첫 페이지(4096줄) 안이다.
+  expect(hexRows()[0]!.offset).toBeGreaterThan(0);
+  expect(hexRows()[0]!.offset).toBeLessThan(HEX_PAGE_BYTES);
+  await vi.waitFor(() => expect(hexRows()[0]!.text).toContain("00 00 00 00"));
+  expect(calls("fs.readBytes").map((c) => c.offset)).toEqual([0]);
 });
 
 it("shows the first 1 MiB of a file over 50 MiB as read-only text", async () => {

@@ -8,6 +8,8 @@
 // - 고른 오프셋의 바이트는 hex · ASCII 두 칸 모두 강조한다.
 // - 읽은 페이지는 `KEEP_PAGES` 장까지 두고 지금 화면에서 먼 것부터 버린다. 스크롤하는 동안의 중간 위치는 읽지 않도록 위치가
 //   `READ_DELAY_MS` 동안 멈춘 뒤에 읽는다.
+// - 요청 중인 페이지는 다시 요청하지 않고, 그 응답은 화면이 옮겨 갔어도 받아 둔다 — 느린 Host 에서 같은 페이지 안을 스크롤할
+//   때마다 요청이 쌓이지 않게. 응답을 버리는 것은 파일(경로 · 워크트리 · 크기)이 바뀌었을 때뿐이다.
 
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -153,6 +155,10 @@ export function HexViewer({ panel, params, doc }: SelfReadProps) {
   const [goto, setGoto] = useState(false);
   const [failed, setFailed] = useState<string>();
   const pages = useRef(new Map<number, Uint8Array>());
+  /** 요청 중인 페이지. */
+  const pending = useRef(new Set<number>());
+  /** 읽는 파일이 바뀔 때마다 새 값 — 그 전의 응답을 알아보고 버린다. */
+  const generation = useRef({});
   const [, setLoadedPages] = useState(0);
   /** 이 값으로 스크롤을 옮겼다 — 그 스크롤 이벤트로 첫 줄을 다시 셈하지 않는다(축척 반올림으로 한 줄씩 어긋난다). */
   const programmatic = useRef<number>(undefined);
@@ -162,9 +168,11 @@ export function HexViewer({ panel, params, doc }: SelfReadProps) {
   const max = lastFirstRow(size, Math.floor(viewport / ROW_PX));
   const digits = offsetDigits(size);
 
-  // 파일이 바뀌면 읽은 것을 버린다.
+  // 파일이 바뀌면 읽은 것 · 요청 중인 것을 버린다.
   useEffect(() => {
     pages.current = new Map();
+    pending.current = new Set();
+    generation.current = {};
     setFirst(0);
     setSelected(undefined);
     setFailed(undefined);
@@ -181,34 +189,41 @@ export function HexViewer({ panel, params, doc }: SelfReadProps) {
     return () => observer.disconnect();
   }, []);
 
-  // 화면의 줄이 걸친 페이지 중 없는 것을 읽는다.
+  // 응답이 도착했을 때 남길 페이지를 고르는 기준(그때의 첫 줄).
+  const firstNow = useRef(first);
+  firstNow.current = first;
+
+  // 화면의 줄이 걸친 페이지 중 없고 요청 중도 아닌 것을 읽는다.
   useEffect(() => {
-    const need = pagesFor(first, visible, size).filter((p) => !pages.current.has(p));
-    if (need.length === 0) return;
-    let current = true;
+    const missing = (p: number) => !pages.current.has(p) && !pending.current.has(p);
+    if (!pagesFor(first, visible, size).some(missing)) return;
     const timer = setTimeout(() => {
-      for (const page of need) {
+      const mine = generation.current;
+      const asked = pending.current;
+      for (const page of pagesFor(first, visible, size).filter(missing)) {
         const offset = page * HEX_PAGE_BYTES;
+        asked.add(page);
         host.readPage(path, worktree, offset, Math.min(HEX_PAGE_BYTES, size - offset)).then(
           ({ bytes }) => {
-            if (!current) return;
+            asked.delete(page);
+            if (generation.current !== mine) return;
             const kept = pages.current;
             kept.set(page, bytes);
-            const here = Math.floor((first * BYTES_PER_ROW) / HEX_PAGE_BYTES);
+            const here = Math.floor((firstNow.current * BYTES_PER_ROW) / HEX_PAGE_BYTES);
             for (const p of [...kept.keys()].sort(
               (a, b) => Math.abs(b - here) - Math.abs(a - here),
             ))
               if (kept.size > KEEP_PAGES) kept.delete(p);
             setLoadedPages((n) => n + 1);
           },
-          (e: unknown) => current && setFailed(e instanceof Error ? e.message : String(e)),
+          (e: unknown) => {
+            asked.delete(page);
+            if (generation.current === mine) setFailed(e instanceof Error ? e.message : String(e));
+          },
         );
       }
     }, READ_DELAY_MS);
-    return () => {
-      current = false;
-      clearTimeout(timer);
-    };
+    return () => clearTimeout(timer);
   }, [host, path, worktree, size, first, visible]);
 
   const moveTo = useCallback(
