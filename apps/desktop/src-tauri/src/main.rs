@@ -328,6 +328,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(launch::Launch::new(host.registry().cloned()))
         .manage(windows::PendingOpens::default())
+        .manage(windows::FileWindows::default())
         .manage(windows::WebviewStore(webview_store))
         .manage(drop_import::DropImport::new(fs, host.tasks().clone()))
         .manage(diagnostics)
@@ -445,6 +446,7 @@ mod tests {
         let app = tauri::test::mock_app();
         app.manage(launch::Launch::new(Some(registry)));
         app.manage(windows::PendingOpens::default());
+        app.manage(windows::FileWindows::default());
         let events = config_log::subscribe(host.bus());
         start(
             app.handle(),

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use pw_i18n::{I18n, Localizer};
@@ -25,6 +26,8 @@ pub enum WindowKind {
     Welcome,
     Project,
     Settings,
+    /// 단일 파일 뷰어 창(M1-24). 프로젝트 없이 파일 하나를 열고, 그 창의 Host 연결은 그 파일에만 닿는다([`FileWindows`]).
+    File,
 }
 
 impl WindowKind {
@@ -33,6 +36,7 @@ impl WindowKind {
             WindowKind::Welcome => "welcome",
             WindowKind::Project => "project",
             WindowKind::Settings => "settings",
+            WindowKind::File => "file",
         }
     }
 
@@ -55,11 +59,14 @@ impl WindowKind {
     /// OS 창 제목(창 전환기 · Window 메뉴 · Dock 에 보인다). 웰컴 창은 앱 이름이라 번역하지 않는다
     /// (docs/design/07-extensibility.md 「UI 언어 (i18n)」 표의 「번역하지 않는 것」 행). 웹뷰의 제목 줄과 같은 메시지다
     /// (`src/i18n/app-strings.ts` 의 `windowTitles`).
-    pub fn title(self, l: &Localizer) -> String {
+    ///
+    /// 단일 파일 창은 그 파일의 이름이라(번역하지 않는다) 이 값이 없다 — [`open_file`] 이 단다.
+    pub fn title(self, l: &Localizer) -> Option<String> {
         match self {
-            WindowKind::Welcome => "Pitwall".to_owned(),
-            WindowKind::Project => l.text("window-title-project"),
-            WindowKind::Settings => l.text("window-title-settings"),
+            WindowKind::Welcome => Some("Pitwall".to_owned()),
+            WindowKind::Project => Some(l.text("window-title-project")),
+            WindowKind::Settings => Some(l.text("window-title-settings")),
+            WindowKind::File => None,
         }
     }
 
@@ -69,6 +76,7 @@ impl WindowKind {
             WELCOME_LABEL => Some(WindowKind::Welcome),
             SETTINGS_LABEL => Some(WindowKind::Settings),
             _ if label.starts_with(PROJECT_LABEL_PREFIX) => Some(WindowKind::Project),
+            _ if label.starts_with(FILE_LABEL_PREFIX) => Some(WindowKind::File),
             _ => None,
         }
     }
@@ -78,6 +86,7 @@ impl WindowKind {
             WindowKind::Welcome => (800.0, 520.0),
             WindowKind::Project => (1280.0, 800.0),
             WindowKind::Settings => (900.0, 640.0),
+            WindowKind::File => (960.0, 720.0),
         }
     }
 }
@@ -200,8 +209,8 @@ pub fn retitle(
     let errors: Vec<String> = labels
         .into_iter()
         .filter_map(|label| {
-            let kind = WindowKind::of_label(&label)?;
-            set_title(&label, &kind.title(l))
+            let title = WindowKind::of_label(&label)?.title(l)?;
+            set_title(&label, &title)
                 .err()
                 .map(|e| format!("{label}: {e}"))
         })
@@ -266,6 +275,109 @@ pub fn open_project<R: Runtime>(
     )
 }
 
+const FILE_LABEL_PREFIX: &str = "file-";
+
+/// 열린 단일 파일 창: label → 그 창의 파일(정규화한 실제 경로). 같은 파일의 창은 하나다 — 같은 실제 경로로 다시 열면 그 창을
+/// 앞으로 가져온다. 창의 Host 연결(ipc.rs `rpc_connect`)은 여기 적힌 파일 하나로 범위를 정한다 — 웹뷰가 보낸 경로가 아니다.
+/// 창이 사라지면 지운다([`FileWindows::forget`]).
+#[derive(Default)]
+pub struct FileWindows {
+    state: Mutex<FileWindowsState>,
+    /// [`open_file`] 한 번을 통째로 직렬화한다([`PendingOpens::opening`] 과 같은 이유 — 같은 파일로 동시에 온 두 요청이 창을
+    /// 둘 만들지 않게).
+    opening: Mutex<()>,
+}
+
+#[derive(Default)]
+struct FileWindowsState {
+    files: HashMap<String, PathBuf>,
+    next: u64,
+}
+
+impl FileWindows {
+    fn state(&self) -> std::sync::MutexGuard<'_, FileWindowsState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// 그 창의 파일. 단일 파일 창이 아니거나 이미 닫혔으면 `None`.
+    pub fn file_of(&self, label: &str) -> Option<PathBuf> {
+        self.state().files.get(label).cloned()
+    }
+
+    /// 그 파일의 창 label.
+    pub fn label_of(&self, file: &Path) -> Option<String> {
+        self.state()
+            .files
+            .iter()
+            .find(|(_, f)| f.as_path() == file)
+            .map(|(label, _)| label.clone())
+    }
+
+    /// 새 창의 label 을 정해 그 파일을 적는다. label 은 다시 쓰이지 않는다 — 닫힌 창의 label 로 늦게 온 연결이 새 창의 파일을
+    /// 얻지 못하게.
+    fn assign(&self, file: PathBuf) -> String {
+        let mut state = self.state();
+        state.next += 1;
+        let label = format!("{FILE_LABEL_PREFIX}{}", state.next);
+        state.files.insert(label.clone(), file);
+        label
+    }
+
+    /// 창이 사라졌다(ipc.rs 의 `on_window_event`).
+    pub fn forget(&self, label: &str) {
+        self.state().files.remove(label);
+    }
+}
+
+/// 단일 파일 창을 연다(M1-24). `file` 은 정규화한 실제 경로다(링크면 그 대상 — 같은 파일 = 같은 실제 경로). 그 파일의 창이 이미
+/// 있으면 앞으로 가져오고 `open`(줄 · 열)을 그 창의 [`PendingOpens`] 큐로 보낸다. 없으면 `?window=file&path=<file>` 창을 만든다.
+/// 창은 마운트할 때 그 파일을 탭으로 열고 큐를 꺼낸다(프로젝트 창과 같은 `project://open` 길).
+pub fn open_file<R: Runtime>(
+    app: &AppHandle<R>,
+    file: &Path,
+    open: &ProjectOpen,
+) -> tauri::Result<WebviewWindow<R>> {
+    let windows = app.state::<FileWindows>();
+    let _opening = windows
+        .opening
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let pending = app.state::<PendingOpens>();
+    if let Some(label) = windows.label_of(file) {
+        if let Some(window) = focus(app, &label)? {
+            if !open.is_empty() {
+                pending.push(&label, open.clone());
+                app.emit_to(EventTarget::webview_window(&label), PROJECT_OPEN_EVENT, ())?;
+            }
+            return Ok(window);
+        }
+        // 창은 사라졌는데 아직 지우지 않았다(닫히는 중).
+        windows.forget(&label);
+    }
+    let label = windows.assign(file.to_path_buf());
+    pending.reset(&label, (!open.is_empty()).then(|| open.clone()));
+    let path = file.display().to_string();
+    let built = build_titled(
+        app,
+        WindowKind::File,
+        &label,
+        WindowKind::File.url_with(&[("path", &path)]),
+        &file_window_title(file),
+    );
+    if built.is_err() {
+        windows.forget(&label);
+    }
+    built
+}
+
+/// 단일 파일 창의 OS 제목: 파일 이름(웹뷰의 제목 줄과 같다, `src/file-window/file-window.tsx`).
+fn file_window_title(file: &Path) -> String {
+    file.file_name().map_or_else(
+        || file.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
 /// 그 label 의 창이 있으면 앞으로 가져와 돌려준다.
 fn focus<R: Runtime>(app: &AppHandle<R>, label: &str) -> tauri::Result<Option<WebviewWindow<R>>> {
     let Some(window) = app.get_webview_window(label) else {
@@ -296,9 +408,20 @@ fn build_at<R: Runtime>(
     label: &str,
     url: WebviewUrl,
 ) -> tauri::Result<WebviewWindow<R>> {
+    let title = kind.title(&localizer(app)).unwrap_or_default();
+    build_titled(app, kind, label, url, &title)
+}
+
+fn build_titled<R: Runtime>(
+    app: &AppHandle<R>,
+    kind: WindowKind,
+    label: &str,
+    url: WebviewUrl,
+    title: &str,
+) -> tauri::Result<WebviewWindow<R>> {
     let (width, height) = kind.inner_size();
     let builder = WebviewWindowBuilder::new(app, label, url)
-        .title(kind.title(&localizer(app)))
+        .title(title)
         .inner_size(width, height)
         // 웹뷰 설정으로 끌 수 있는 기본 동작은 여기서 끈다. 설정이 없는 것은 src/webview-guards.ts 가 막는다.
         // - 줌: Windows 는 WebView2 의 IsZoomControlEnabled·IsPinchZoomEnabled 가 꺼진다.
@@ -361,10 +484,11 @@ mod tests {
             WindowKind::Welcome,
             WindowKind::Project,
             WindowKind::Settings,
+            WindowKind::File,
         ]
         .map(WindowKind::query_value)
         .into();
-        assert_eq!(values, ["welcome", "project", "settings"]);
+        assert_eq!(values, ["welcome", "project", "settings", "file"]);
     }
 
     fn builtin_localizer(locales: &[&str]) -> Localizer {
@@ -384,11 +508,16 @@ mod tests {
         ];
         let ko = builtin_localizer(&["ko", "en"]);
         let en = builtin_localizer(&["en"]);
-        assert_eq!(kinds.map(|k| k.title(&ko)), ["Pitwall", "프로젝트", "설정"]);
         assert_eq!(
-            kinds.map(|k| k.title(&en)),
+            kinds.map(|k| k.title(&ko).unwrap()),
+            ["Pitwall", "프로젝트", "설정"]
+        );
+        assert_eq!(
+            kinds.map(|k| k.title(&en).unwrap()),
             ["Pitwall", "Project", "Settings"]
         );
+        // 단일 파일 창의 제목은 파일 이름이라 언어를 따르지 않는다.
+        assert_eq!(WindowKind::File.title(&ko), None);
     }
 
     /// 언어를 바꿀 때 제목을 고칠 창을 label 로 고른다.
@@ -406,6 +535,7 @@ mod tests {
             WindowKind::of_label(&project_label("ab12")),
             Some(WindowKind::Project)
         );
+        assert_eq!(WindowKind::of_label("file-3"), Some(WindowKind::File));
         assert_eq!(WindowKind::of_label("main"), None);
     }
 
@@ -459,6 +589,7 @@ mod tests {
     fn app() -> tauri::App<tauri::test::MockRuntime> {
         let app = tauri::test::mock_app();
         app.manage(PendingOpens::default());
+        app.manage(FileWindows::default());
         app
     }
 
@@ -630,5 +761,47 @@ mod tests {
         assert_eq!(*received.lock().unwrap(), ["null"]);
         assert_eq!(take(app.handle(), &window), [file("/r/a.rs", Some(7))]);
         assert_eq!(labels(app.handle()), ["project-aaaa"]);
+    }
+
+    /// 같은 실제 경로는 한 창이다 — 다시 열면 그 창을 앞으로 가져오고 줄 · 열만 큐로 보낸다. 다른 파일은 새 창이다. 창의
+    /// 파일은 label 로 찾는다(연결의 범위, ipc.rs).
+    #[test]
+    fn a_file_window_is_opened_once_per_real_path() {
+        let app = app();
+        let a = Path::new("/x/a.txt");
+        let first = open_file(app.handle(), a, &ProjectOpen::default()).unwrap();
+        let again = open_file(app.handle(), a, &file("/x/a.txt", Some(9))).unwrap();
+        let other =
+            open_file(app.handle(), Path::new("/x/b.txt"), &ProjectOpen::default()).unwrap();
+        assert_eq!(first.label(), again.label());
+        assert_ne!(first.label(), other.label());
+        assert_eq!(WindowKind::of_label(first.label()), Some(WindowKind::File));
+        let mut labels = labels(app.handle());
+        labels.sort();
+        assert_eq!(labels.len(), 2);
+        let files = app.state::<FileWindows>();
+        assert_eq!(files.file_of(first.label()).as_deref(), Some(a));
+        assert_eq!(take(app.handle(), &first), [file("/x/a.txt", Some(9))]);
+        let query: Vec<(String, String)> =
+            first.url().unwrap().query_pairs().into_owned().collect();
+        assert_eq!(
+            query,
+            [("window", "file"), ("path", "/x/a.txt")].map(|(k, v)| (k.to_owned(), v.to_owned()))
+        );
+        assert_eq!(file_window_title(a), "a.txt");
+    }
+
+    /// 닫힌 창의 파일은 잊는다 — 같은 파일을 다시 열면 새 label 의 새 창이고, 옛 label 은 어떤 파일도 가리키지 않는다.
+    #[test]
+    fn a_closed_file_window_is_forgotten_and_its_label_is_not_reused() {
+        let app = app();
+        let a = Path::new("/x/a.txt");
+        let first = open_file(app.handle(), a, &ProjectOpen::default()).unwrap();
+        let old = first.label().to_owned();
+        first.destroy().unwrap();
+        app.state::<FileWindows>().forget(&old);
+        let reopened = open_file(app.handle(), a, &ProjectOpen::default()).unwrap();
+        assert_ne!(reopened.label(), old);
+        assert_eq!(app.state::<FileWindows>().file_of(&old), None);
     }
 }

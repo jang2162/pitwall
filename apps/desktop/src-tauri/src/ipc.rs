@@ -11,7 +11,9 @@
 //! 그 웹뷰의 연결을 모두 닫는다 — 연결을 버리면 Host 가 진행 중 요청 · 스트림을 취소하고 구독을 걷는다
 //! ([`pw_core::FrameSink`] 계약).
 //!
-//! 로컬 창은 데스크톱 사용자 본인이므로 호출자 role 은 owner 다.
+//! 로컬 창은 데스크톱 사용자 본인이므로 호출자 role 은 owner 다. 단일 파일 창(M1-24, label `file-*`)의 연결은 그 창의 파일
+//! 하나로 범위를 좁힌다([`caller_for`]) — 그 파일은 창을 만들 때 Rust 가 적어 둔 것이고 웹뷰가 보낸 값이 아니다. 그 창은 Host 로만
+//! 연결한다(프로젝트를 대상으로 하는 연결은 거절).
 //!
 //! 리로드와의 경합은 페이지 세대로 막는다. 웹뷰마다 세대를 두고 `PageLoadEvent::Started` 마다 새 값으로 바꾼다.
 //! Started 는 새 문서가 **커밋된** 시점이다(wry 가 세 백엔드 모두 커밋에 건다 — WKWebView `didCommitNavigation`,
@@ -26,6 +28,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pw_core::{FrameSink, HostError, HostRouter, Target};
+
+use crate::windows::{FileWindows, WindowKind};
 use pw_rpc::{Caller, Role};
 use serde::Serialize;
 use serde_json::Value;
@@ -146,6 +150,8 @@ pub enum IpcError {
     UnknownConnection { conn: ConnId },
     /// 연결을 여는 사이 웹뷰가 다시 로드되거나 닫혔다. 연결은 닫았다.
     PageGone,
+    /// 단일 파일 창이 Host 가 아닌 것(프로젝트)에 연결하려 했거나, 그 창의 파일이 적혀 있지 않다(이미 닫힌 창).
+    FileScope,
 }
 
 /// transport 를 앱에 붙인다: 상태, command, 웹뷰가 닫히거나 다시 로드될 때의 정리.
@@ -161,6 +167,8 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             crate::menu::keymap_sync_menu,
             crate::windows::open_settings_window,
             crate::launch::open_project_window,
+            crate::launch::open_file_window,
+            crate::launch::open_file_as_project,
             crate::launch::take_pending_find_project,
             crate::launch::path_kind,
             crate::windows::take_pending_project_opens,
@@ -186,6 +194,9 @@ pub fn on_page_load<R: Runtime>(webview: &Webview<R>, event: PageLoadEvent) {
 pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
     if matches!(event, WindowEvent::Destroyed) {
         window.state::<IpcState>().close_webview(window.label());
+        if let Some(files) = window.try_state::<FileWindows>() {
+            files.forget(window.label());
+        }
     }
     // Finder 드롭 기록(drop_import.rs). 시험 앱에는 없다.
     if let Some(drops) = window.try_state::<crate::drop_import::DropImport>() {
@@ -210,9 +221,10 @@ async fn rpc_connect<R: Runtime>(
     page: u64,
 ) -> Result<ConnId, IpcError> {
     let label = webview.label().to_owned();
+    let caller = caller_for(&webview, &target)?;
     let conn = state
         .router
-        .connect(&target, Caller::new(Role::Owner))
+        .connect(&target, caller)
         .await
         .map_err(|error| IpcError::Host { error })?;
     let id = state.next_conn.fetch_add(1, Ordering::Relaxed);
@@ -234,6 +246,22 @@ async fn rpc_connect<R: Runtime>(
         let _ = channel.send(closed);
     });
     Ok(id)
+}
+
+/// 이 웹뷰가 여는 연결의 호출자(이 모듈 머리 주석). 단일 파일 창이 아니면 owner 전체다.
+fn caller_for<R: Runtime>(webview: &Webview<R>, target: &Target) -> Result<Caller, IpcError> {
+    let label = webview.label();
+    if WindowKind::of_label(label) != Some(WindowKind::File) {
+        return Ok(Caller::new(Role::Owner));
+    }
+    if !matches!(target, Target::HostId(_)) {
+        return Err(IpcError::FileScope);
+    }
+    let file = webview
+        .try_state::<FileWindows>()
+        .and_then(|files| files.file_of(label))
+        .ok_or(IpcError::FileScope)?;
+    Ok(Caller::file(Role::Owner, file))
 }
 
 #[tauri::command]
@@ -309,6 +337,8 @@ mod tests {
                 true
             });
         let app = install(builder, router)
+            .manage(crate::windows::PendingOpens::default())
+            .manage(FileWindows::default())
             .build(mock_context(noop_assets()))
             .unwrap();
         Fixture { app, host, frames }
@@ -636,5 +666,74 @@ mod tests {
         // 새 문서는 새 세대로 연결할 수 있다.
         connect(&w, 3, json!({"hostId": "local"}));
         assert_eq!(f.app.state::<IpcState>().connection_count("welcome"), 1);
+    }
+
+    /// 단일 파일 창의 연결은 그 창의 파일 하나로 범위가 좁다: 파일 범위로 선언하지 않은 메서드(`host.demoTask`)는 owner 메서드여도
+    /// 거절되고, 프로젝트를 대상으로 하는 연결은 열리지 않는다. 다른 창의 연결은 그대로다.
+    #[test]
+    fn a_file_windows_connection_reaches_only_its_file() {
+        let f = fixture();
+        let file_window = crate::windows::open_file(
+            f.app.handle(),
+            std::path::Path::new("/x/a.txt"),
+            &crate::windows::ProjectOpen::default(),
+        )
+        .unwrap();
+        let conn = connect(&file_window, 1, json!({"hostId": "local"}));
+        send(
+            &file_window,
+            conn,
+            json!({"jsonrpc": "2.0", "id": 1, "method": "host.ping", "params": {"nonce": "n"}}),
+        )
+        .unwrap();
+        assert_eq!(next_frame(&f, 1)["result"]["nonce"], "n");
+        send(
+            &file_window,
+            conn,
+            json!({"jsonrpc": "2.0", "id": 2, "method": "host.demoTask",
+                   "params": {"steps": 1, "intervalMs": 1}}),
+        )
+        .unwrap();
+        let denied = next_frame(&f, 1);
+        assert_eq!(denied["id"], 2);
+        assert_eq!(denied["error"]["code"], pw_rpc::code::PERMISSION_DENIED);
+        assert_eq!(denied["error"]["data"]["scope"], "file");
+
+        let page = invoke(&file_window, "rpc_page", json!({})).unwrap();
+        let err = invoke(
+            &file_window,
+            "rpc_connect",
+            json!({"target": {"projectId": "p1"}, "channel": "__CHANNEL__:2", "page": page}),
+        )
+        .unwrap_err();
+        assert_eq!(err, json!({"kind": "fileScope"}));
+
+        // 같은 Host 에 연 다른 창의 연결은 owner 전체다.
+        let welcome = window(&f.app, "welcome");
+        let other = connect(&welcome, 3, json!({"hostId": "local"}));
+        send(
+            &welcome,
+            other,
+            json!({"jsonrpc": "2.0", "id": 1, "method": "host.demoTask",
+                   "params": {"steps": 1, "intervalMs": 1}}),
+        )
+        .unwrap();
+        assert!(next_frame(&f, 3).get("error").is_none());
+    }
+
+    /// 파일이 적혀 있지 않은 `file-*` 창(닫힌 창의 label 로 늦게 온 연결 등)은 연결하지 못한다.
+    #[test]
+    fn a_file_window_without_its_file_cannot_connect() {
+        let f = fixture();
+        let stray = window(&f.app, "file-99");
+        let page = invoke(&stray, "rpc_page", json!({})).unwrap();
+        let err = invoke(
+            &stray,
+            "rpc_connect",
+            json!({"target": {"hostId": "local"}, "channel": "__CHANNEL__:1", "page": page}),
+        )
+        .unwrap_err();
+        assert_eq!(err, json!({"kind": "fileScope"}));
+        assert_eq!(f.app.state::<IpcState>().connection_count("file-99"), 0);
     }
 }

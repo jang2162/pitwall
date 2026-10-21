@@ -1,5 +1,5 @@
 // S2 프로젝트 찾기 팝업(10-ui §2.2, F2). `pitwall <path>` 가 등록된 프로젝트를 찾지 못했을 때 루트 후보(`project.candidates`)를
-// 상단 검색 팝업으로 보여 준다. 후보 · 직접 고른 폴더는 S3 으로 간다. 단일 파일 뷰어 창은 아직 없어 「파일만 열기」는 끈다.
+// 상단 검색 팝업으로 보여 준다. 후보 · 직접 고른 폴더는 S3 으로 간다. 「파일만 열기」는 단일 파일 뷰어 창(M1-24)을 연다.
 
 import { Command } from "cmdk";
 
@@ -17,11 +17,14 @@ export function FindProjectPopup({
   request,
   onPick,
   onPickFolder,
+  onFileOnly,
   onCancel,
 }: {
   request: FindProjectRequest;
   onPick(root: string): void;
   onPickFolder(): void;
+  /** 프로젝트 없이 그 파일만 연다(단일 파일 창). */
+  onFileOnly(): void;
   onCancel(): void;
 }) {
   useKeymapPopup(true);
@@ -73,12 +76,10 @@ export function FindProjectPopup({
       <Command.Item
         value={FILE_ONLY}
         forceMount
-        disabled
-        title={T.fileOnlyNotYet}
+        onSelect={onFileOnly}
         className={SEARCH_ITEM_CLASS}
       >
-        <span className="flex-1">{T.fileOnly}</span>
-        <span className="text-[11px]">{T.fileOnlyNotYet}</span>
+        {T.fileOnly}
       </Command.Item>
     </SearchPopup>
   );

@@ -485,6 +485,14 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
                 setFlow({ kind: "find", request });
               });
           }}
+          onFileOnly={() => {
+            const request = flow.request;
+            setFlow({ kind: "idle" });
+            native.openFileWindow(request).catch((e: unknown) => {
+              fail(S.errors.openFile)(e);
+              setFlow({ kind: "find", request });
+            });
+          }}
           onCancel={() => setFlow({ kind: "idle" })}
         />
       )}

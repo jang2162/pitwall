@@ -57,7 +57,6 @@ welcome-find-recommended = recommended
 welcome-find-worktree-main = main repository of the worktree
 welcome-find-pick-folder = Choose Folder…
 welcome-find-file-only = Open the file without a project
-welcome-find-file-only-not-yet = The single-file viewer window is not available yet
 
 # $name: the project name being created
 welcome-create-title = New Project: { $name }
@@ -91,4 +90,5 @@ welcome-error-reveal =
     }
 welcome-error-create = Create project
 welcome-error-find-project = Read the find-project request
+welcome-error-open-file = Open the file
 welcome-error-candidates = Find root candidates

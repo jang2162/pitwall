@@ -18,6 +18,7 @@ export function welcomeStrings(t: Translate) {
     create: t("welcome-error-create"),
     findProject: t("welcome-error-find-project"),
     candidates: t("welcome-error-candidates"),
+    openFile: t("welcome-error-open-file"),
   };
   return {
     nav: {
@@ -70,7 +71,6 @@ export function welcomeStrings(t: Translate) {
       worktreeMain: t("welcome-find-worktree-main"),
       pickFolder: t("welcome-find-pick-folder"),
       fileOnly: t("welcome-find-file-only"),
-      fileOnlyNotYet: t("welcome-find-file-only-not-yet"),
     },
     create: {
       title: (name: string) => t("welcome-create-title", { name }),

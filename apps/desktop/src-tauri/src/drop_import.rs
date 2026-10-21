@@ -185,6 +185,12 @@ pub async fn import_drop<R: Runtime>(
     dir: String,
     title: String,
 ) -> Result<Imported, RpcError> {
+    // 단일 파일 창(M1-24)은 그 파일 하나에만 닿는다 — 그 창의 드롭으로 프로젝트에 들여오지 않는다.
+    if crate::windows::WindowKind::of_label(window.label())
+        == Some(crate::windows::WindowKind::File)
+    {
+        return Err(RpcError::outside_file_scope("import_drop"));
+    }
     let sources = state
         .drops
         .take(window.label(), drop_id, indices.as_deref(), Instant::now())

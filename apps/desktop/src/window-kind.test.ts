@@ -7,6 +7,7 @@ describe("parseWindowKind", () => {
     expect(parseWindowKind("?window=welcome")).toBe("welcome");
     expect(parseWindowKind("?window=project")).toBe("project");
     expect(parseWindowKind("?window=settings")).toBe("settings");
+    expect(parseWindowKind("?window=file&path=%2Fx%2Fa.txt")).toBe("file");
   });
 
   it("falls back to welcome for a missing or unknown kind", () => {

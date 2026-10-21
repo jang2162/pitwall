@@ -14,6 +14,12 @@ import {
   useRegisterActions,
 } from "./keymap/keymap-provider";
 import { type KeymapNative, tauriKeymapNative } from "./keymap/native";
+import {
+  FileWindow,
+  type FileWindowNative,
+  filePathFromQuery,
+  fileWindowTitle,
+} from "./file-window/file-window";
 import { ProjectWindow } from "./layout/project-window";
 import { HostProvider } from "./rpc/host";
 import { type SettingsNative, tauriSettingsNative } from "./settings/native";
@@ -39,8 +45,8 @@ function Welcome({ native, log }: { native: WelcomeNative; log?: WelcomeLog }) {
   );
 }
 
-// 모든 창에 있는 액션. 프로젝트 창의 툴 윈도우 액션은 ProjectWindow 가 등록한다. `window.close` 는 프로젝트 창이면
-// ProjectWindow 가(탭을 먼저 닫는다), 아니면 여기서 등록한다.
+// 모든 창에 있는 액션. 프로젝트 창의 툴 윈도우 액션은 ProjectWindow 가 등록한다. `window.close` 는 에디터가 있는 창(프로젝트 창 ·
+// 단일 파일 창)이면 그 창이(탭을 먼저 닫는다), 아니면 여기서 등록한다.
 function AppActions({ native, kind }: { native: KeymapNative; kind: WindowKind }) {
   const { openFindAction, openSearch } = useKeymap();
   const setTheme = useTheme((s) => s.setPreference);
@@ -57,7 +63,7 @@ function AppActions({ native, kind }: { native: KeymapNative; kind: WindowKind }
         openSettings: native.openSettings,
         setTheme,
         installShellCommand: native.installShellCommand,
-        closeWindow: kind === "project" ? undefined : native.closeWindow,
+        closeWindow: kind === "project" || kind === "file" ? undefined : native.closeWindow,
       }),
     [strings, languages, setLanguage, openFindAction, openSearch, native, setTheme, kind],
   );
@@ -67,7 +73,13 @@ function AppActions({ native, kind }: { native: KeymapNative; kind: WindowKind }
 
 function WindowTitle({ kind }: { kind: WindowKind }) {
   const titles = useAppStrings().windowTitles;
-  return <span data-tauri-drag-region>{kind === "welcome" ? WELCOME_TITLE : titles[kind]}</span>;
+  const title =
+    kind === "welcome"
+      ? WELCOME_TITLE
+      : kind === "file"
+        ? fileWindowTitle(filePathFromQuery(window.location.search) ?? "")
+        : titles[kind];
+  return <span data-tauri-drag-region>{title}</span>;
 }
 
 export function App({
@@ -75,6 +87,7 @@ export function App({
   native = tauriKeymapNative,
   welcomeNative = tauriWelcomeNative,
   settingsNative = tauriSettingsNative,
+  fileNative,
   log,
   onDockApi,
 }: {
@@ -82,8 +95,10 @@ export function App({
   native?: KeymapNative;
   welcomeNative?: WelcomeNative;
   settingsNative?: SettingsNative;
+  /** 단일 파일 창의 「프로젝트로 열기」(시험은 가짜를 넘긴다). */
+  fileNative?: FileWindowNative;
   log?: Pick<UiLogger, "info" | "warn" | "debug">;
-  /** 프로젝트 창의 도킹 영역 api(시험). */
+  /** 프로젝트 창 · 단일 파일 창의 도킹 영역 api(시험). */
   onDockApi?(api: DockviewApi): void;
 }) {
   const [queryClient] = useState(() => new QueryClient());
@@ -109,6 +124,15 @@ export function App({
                 />
               )}
               {kind === "settings" && <SettingsWindow native={settingsNative} />}
+              {kind === "file" && (
+                <FileWindow
+                  native={fileNative}
+                  log={log}
+                  closeWindow={native.closeWindow}
+                  guardClose={native.guardClose}
+                  onDockApi={onDockApi}
+                />
+              )}
               <KeymapErrorBar />
             </div>
           </KeymapProvider>

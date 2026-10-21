@@ -5,6 +5,7 @@
 //!
 //! - 레지스트리(`project.resolve`, 워크트리 → 메인 저장소 포함)가 찾으면: 그 프로젝트 창을 열거나 앞으로 가져오고
 //!   워크트리 · 파일 · 줄 · 열을 넘긴다([`windows::open_project`]).
+//! - 못 찾았는데 그 파일(실제 경로)의 단일 파일 창(M1-24)이 열려 있으면: 그 창을 앞으로 가져오고 줄 · 열을 넘긴다.
 //! - 못 찾으면: 「프로젝트 찾기」(S2) 요청을 보류해 두고 웰컴 창을 열어 [`FIND_PROJECT_EVENT`] 를 보낸다. 웰컴 창은
 //!   마운트할 때와 그 이벤트를 받을 때 [`take_pending_find_project`] 로 꺼낸다 — 갓 만든 창이 이벤트를 놓쳐도 잃지 않는다.
 //! - 경로가 없으면 웰컴 창을 열거나 앞으로 가져온다.
@@ -15,7 +16,7 @@ use std::sync::{Mutex, PoisonError};
 use pw_core::registry::Registry;
 use pw_core::registry::path::normalize;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime, State, WebviewWindow};
 
 use crate::cli::{self, Command, OpenTarget, Skipped};
 use crate::windows::{self, ProjectOpen};
@@ -114,6 +115,20 @@ fn open_target<R: Runtime>(app: &AppHandle<R>, target: OpenTarget) {
     };
     let Some(resolution) = resolved else {
         let path = normalize(&target.path).unwrap_or(target.path);
+        let files = app.state::<windows::FileWindows>();
+        if files.label_of(&path).is_some() {
+            let open = ProjectOpen {
+                file: Some(path.display().to_string()),
+                line: target.line,
+                col: target.col,
+                ..ProjectOpen::default()
+            };
+            log_err(
+                "focus the file window",
+                windows::open_file(app, &path, &open).map(drop),
+            );
+            return;
+        }
         request_find_project(
             app,
             FindProjectRequest {
@@ -220,6 +235,75 @@ pub async fn open_project_window<R: Runtime>(
         .map_err(|e| e.to_string())?
 }
 
+/// S2 의 「프로젝트 없이 파일만 열기」(웰컴 창, M1-24). `path` 는 S2 요청의 절대 경로다. 정규화한 실제 경로의 단일 파일 창을
+/// 열거나 앞으로 가져온다 — 파일이 아니면(폴더 · 없음) 거절한다. 창을 만들므로 async command 다(windows.rs 의 open_* 주석).
+#[tauri::command]
+pub async fn open_file_window<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+    line: Option<u32>,
+    col: Option<u32>,
+) -> Result<(), String> {
+    let real =
+        normalize(Path::new(&path)).map_err(|_| format!("`{path}` is not an absolute path"))?;
+    if path_kind_of(&real) != PathKind::File {
+        return Err(format!("`{}` is not a file", real.display()));
+    }
+    let open = ProjectOpen {
+        file: Some(real.display().to_string()),
+        line,
+        col,
+        ..ProjectOpen::default()
+    };
+    windows::open_file(&app, &real, &open).map_err(|e| e.to_string())?;
+    tracing::info!(file = %real.display(), "file window opened");
+    Ok(())
+}
+
+/// 단일 파일 창의 「프로젝트로 열기」(M1-24). 부른 창의 파일(창을 만들 때 적은 것 — 웹뷰가 보낸 값이 아니다)을 `pitwall <파일>` 처럼
+/// 다시 해석하되 단일 파일 창으로 돌아가지 않는다: 그새 그 파일을 담는 프로젝트가 생겼으면 그 창을, 아니면 S2 를 연다. 단일 파일
+/// 창은 그대로 둔다(미저장 편집이 있을 수 있다).
+#[tauri::command]
+pub async fn open_file_as_project<R: Runtime>(window: WebviewWindow<R>) -> Result<(), String> {
+    let app = window.app_handle().clone();
+    let file = app
+        .state::<windows::FileWindows>()
+        .file_of(window.label())
+        .ok_or_else(|| "this window has no file".to_owned())?;
+    tauri::async_runtime::spawn_blocking(move || open_as_project(&app, &file))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn open_as_project<R: Runtime>(app: &AppHandle<R>, file: &Path) {
+    let launch = app.state::<Launch>();
+    let resolved = launch
+        .registry
+        .as_ref()
+        .and_then(|registry| registry.resolve(file).ok().flatten());
+    match resolved {
+        Some(resolution) => {
+            let open = ProjectOpen {
+                worktree: resolution.worktree.map(|w| w.top),
+                file: Some(resolution.path),
+                ..ProjectOpen::default()
+            };
+            log_err(
+                "open project window",
+                open_project(app, &resolution.project.id, &open),
+            );
+        }
+        None => request_find_project(
+            app,
+            FindProjectRequest {
+                path: file.display().to_string(),
+                line: None,
+                col: None,
+            },
+        ),
+    }
+}
+
 /// 경로가 가리키는 것. 웰컴 창이 끌어다 놓은 경로를 폴더(새 프로젝트) · 파일(F2 갈래)로 가른다 — 드롭 payload 에는
 /// 경로만 온다(src/welcome/native.ts 의 `pathKind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -313,6 +397,7 @@ mod tests {
             let app = mock_app();
             app.manage(Launch::new(Some(registry.clone())));
             app.manage(windows::PendingOpens::default());
+            app.manage(windows::FileWindows::default());
             Self {
                 _tmp: tmp,
                 base,
@@ -366,6 +451,97 @@ mod tests {
         fn take(&self) -> Option<FindProjectRequest> {
             take_pending_find_project(self.app.state::<Launch>())
         }
+    }
+
+    impl Fixture {
+        /// S2 의 「파일만 열기」(웰컴 창이 부르는 명령 그대로).
+        fn open_file_only(&self, path: &Path) -> Result<(), String> {
+            tauri::async_runtime::block_on(open_file_window(
+                self.app.handle().clone(),
+                path.display().to_string(),
+                None,
+                None,
+            ))
+        }
+
+        /// 그 파일의 단일 파일 창 label.
+        fn file_window(&self, file: &Path) -> Option<String> {
+            self.app.state::<windows::FileWindows>().label_of(file)
+        }
+
+        fn file_opens(&self, label: &str) -> Vec<ProjectOpen> {
+            let window = self.app.get_webview_window(label).expect("단일 파일 창");
+            windows::take_pending_project_opens(window, self.app.state())
+        }
+    }
+
+    /// 등록 안 된 폴더의 파일: S2 → 「파일만 열기」 가 단일 파일 창을 연다. 같은 명령을 다시 하면(링크로 와도 실제 경로가 같으면)
+    /// 새 창도 S2 도 없이 그 창이 앞으로 오고 줄 · 열이 그 창으로 간다.
+    #[test]
+    fn running_the_same_file_again_brings_its_file_window_forward() {
+        let f = Fixture::new();
+        let dir = f.dir("x");
+        let file = dir.join("a.txt");
+        fs::write(&file, "a").unwrap();
+        f.run(&[file.to_str().unwrap()], &f.base);
+        let request = f.take().expect("S2");
+        f.open_file_only(Path::new(&request.path)).unwrap();
+        let label = f.file_window(&file).expect("file window");
+        assert_eq!(
+            f.query(&label),
+            pairs(&[("window", "file"), ("path", file.to_str().unwrap())])
+        );
+        assert_eq!(f.file_opens(&label), [open_file(&file, None, None)]);
+
+        f.run(&["a.txt:5:2"], &dir);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&file, dir.join("link.txt")).unwrap();
+            f.run(&["link.txt"], &dir);
+        }
+        assert_eq!(f.take(), None, "S2 를 다시 띄우지 않는다");
+        assert_eq!(
+            f.labels(),
+            [label.clone(), windows::WELCOME_LABEL.to_owned()]
+        );
+        let mut expected = vec![open_file(&file, Some(5), Some(2))];
+        #[cfg(unix)]
+        expected.push(open_file(&file, None, None));
+        assert_eq!(f.file_opens(&label), expected);
+    }
+
+    /// 「파일만 열기」 는 파일만 — 폴더 · 없는 경로 · 상대 경로는 창을 만들지 않는다.
+    #[test]
+    fn only_a_file_opens_a_file_window() {
+        let f = Fixture::new();
+        let dir = f.dir("x");
+        for path in [dir.clone(), dir.join("missing.txt"), PathBuf::from("a.txt")] {
+            assert!(f.open_file_only(&path).is_err(), "{}", path.display());
+        }
+        assert_eq!(f.labels(), Vec::<String>::new());
+    }
+
+    /// 「프로젝트로 열기」: 그 파일을 담는 프로젝트가 없으면 S2 를, 그사이 생겼으면 그 프로젝트 창을 연다. 단일 파일 창으로 돌아가지
+    /// 않는다.
+    #[test]
+    fn open_as_project_asks_for_a_project_or_opens_the_one_that_now_holds_the_file() {
+        let f = Fixture::new();
+        let dir = f.dir("x");
+        let file = dir.join("a.txt");
+        fs::write(&file, "a").unwrap();
+        f.open_file_only(&file).unwrap();
+        open_as_project(f.app.handle(), &file);
+        assert_eq!(
+            f.take(),
+            Some(FindProjectRequest {
+                path: file.display().to_string(),
+                line: None,
+                col: None,
+            })
+        );
+        let id = f.add(&dir);
+        open_as_project(f.app.handle(), &file);
+        assert_eq!(f.opens(&id), [open_file(&file, None, None)]);
     }
 
     fn open_file(path: &Path, line: Option<u32>, col: Option<u32>) -> ProjectOpen {

@@ -5,6 +5,8 @@
 //   `project.markOpened` 를 갱신한다. `worktree` 는 활성 워크트리의 꼭대기(`ActiveWorktree.top`), `file` 은 절대 경로.
 // - 이벤트 `find-project-requested` + 명령 `take_pending_find_project` → { path, line?, col? } | null. 꺼내면 비워진다.
 // - 명령 `path_kind` { path } → "file" | "dir" | "missing" — 끌어다 놓은 경로를 가른다.
+// - 명령 `open_file_window` { path, line?, col? } — S2 「파일만 열기」. 그 파일(실제 경로)의 단일 파일 창을 열거나 앞으로
+//   가져온다(M1-24). 파일이 아니면 거절한다.
 //   웰컴 창은 뜰 때와 이벤트를 받을 때 꺼내 본다 — 창이 뜨기 전에 온 요청도 놓치지 않게.
 
 import { invoke } from "@tauri-apps/api/core";
@@ -42,6 +44,8 @@ export type DragDropEvent =
 
 export interface WelcomeNative {
   openProjectWindow(args: OpenProjectWindowArgs): Promise<void>;
+  /** 프로젝트 없이 파일 하나를 단일 파일 창으로 연다(S2 「파일만 열기」). */
+  openFileWindow(request: FindProjectRequest): Promise<void>;
   takePendingFindProject(): Promise<FindProjectRequest | null>;
   /** 보류 요청이 생겼다는 알림. 해제 함수를 돌려준다. */
   onFindProjectRequested(listener: () => void): () => void;
@@ -70,6 +74,8 @@ function lazyUnlisten(start: () => Promise<() => void>, what: string): () => voi
 
 export const tauriWelcomeNative: WelcomeNative = {
   openProjectWindow: (args) => invoke("open_project_window", { ...args }),
+  openFileWindow: ({ path, line, col }) =>
+    invoke("open_file_window", { path, line: line ?? null, col: col ?? null }),
   takePendingFindProject: () => invoke<FindProjectRequest | null>("take_pending_find_project"),
   onFindProjectRequested: (listener) =>
     lazyUnlisten(

@@ -57,7 +57,6 @@ welcome-find-recommended = 추천
 welcome-find-worktree-main = 워크트리의 메인 저장소
 welcome-find-pick-folder = 폴더 직접 선택…
 welcome-find-file-only = 프로젝트 없이 파일만 열기
-welcome-find-file-only-not-yet = 단일 파일 뷰어 창은 아직 없다
 
 # $name: 만들 프로젝트 이름
 welcome-create-title = 새 프로젝트: { $name }
@@ -91,4 +90,5 @@ welcome-error-reveal =
     }
 welcome-error-create = 프로젝트 만들기
 welcome-error-find-project = 프로젝트 찾기 요청 읽기
+welcome-error-open-file = 파일 열기
 welcome-error-candidates = 루트 후보 찾기

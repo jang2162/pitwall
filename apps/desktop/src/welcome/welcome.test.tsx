@@ -185,6 +185,7 @@ let pickedFolder: string | null = null;
 let pathKinds: Record<string, "file" | "dir" | "missing"> = {};
 const native = {
   openProjectWindow: vi.fn<WelcomeNative["openProjectWindow"]>(async () => {}),
+  openFileWindow: vi.fn<WelcomeNative["openFileWindow"]>(async () => {}),
   takePendingFindProject: vi.fn<WelcomeNative["takePendingFindProject"]>(async () => {
     const taken = pending;
     pending = null;
@@ -418,9 +419,9 @@ it("takes a pending find request on mount and walks S2 → S3 → the project wi
     "/w/app워크트리의 메인 저장소 (추천)",
     "/w/app/wt/srcbuild.gradle.kts",
     "폴더 직접 선택…",
-    "프로젝트 없이 파일만 열기단일 파일 뷰어 창은 아직 없다",
+    "프로젝트 없이 파일만 열기",
   ]);
-  expect(items[3]!.getAttribute("aria-disabled")).toBe("true");
+  expect(items[3]!.getAttribute("aria-disabled")).toBe("false");
 
   await press("Enter");
   expect(document.querySelector("[cmdk-dialog]")).toBeNull();
@@ -442,6 +443,30 @@ it("takes a pending find request on mount and walks S2 → S3 → the project wi
     line: 12,
     col: 3,
   });
+});
+
+/** S2 「파일만 열기」(M1-24): 프로젝트를 만들지 않고 그 파일 · 줄 · 열로 단일 파일 창을 연다. 실패하면 S2 로 돌아가 이유를 보인다. */
+it("opens the file alone from S2 and comes back to S2 when that fails", async () => {
+  pending = { path: "/tmp/x/a.txt", line: 4, col: 2 };
+  await mount();
+  const fileOnly = () =>
+    [...document.querySelectorAll<HTMLElement>("[cmdk-dialog] [cmdk-item]")].find(
+      (i) => i.textContent === "프로젝트 없이 파일만 열기",
+    )!;
+  await act(async () => fileOnly().click());
+  await settle();
+  expect(native.openFileWindow).toHaveBeenCalledWith({ path: "/tmp/x/a.txt", line: 4, col: 2 });
+  expect(document.querySelector("[cmdk-dialog]")).toBeNull();
+  expect(calls("project.create")).toEqual([]);
+
+  native.openFileWindow.mockRejectedValueOnce(new Error("`/tmp/x/a.txt` is not a file"));
+  pending = { path: "/tmp/x/a.txt" };
+  await act(async () => findListener!());
+  await settle();
+  await act(async () => fileOnly().click());
+  await settle();
+  expect(document.querySelector("[cmdk-dialog]")).not.toBeNull();
+  expect(document.body.textContent).toContain("파일 열기 실패: `/tmp/x/a.txt` is not a file");
 });
 
 it("opens S2 when a find request arrives later, and goes back to it when the folder dialog is cancelled", async () => {
