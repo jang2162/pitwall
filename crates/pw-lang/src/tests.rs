@@ -881,3 +881,34 @@ fn lang_list_appends_contributed_languages_and_keeps_the_first_line_comment() {
     assert_eq!(last.line_comment.as_deref(), Some(";;"));
     assert_eq!(list.languages.len(), linguist::languages().len() + 1);
 }
+
+/// 단일 파일 창의 연결(파일 범위, M1-24)은 이름 · 앞부분으로만 판별한다 — 프로젝트를 대어 그 설정 · 속성 파일을 읽게 하지 못한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_scoped_connection_cannot_name_a_project() {
+    use std::sync::Arc;
+
+    use pw_rpc::{Caller, EventHub, Role, Router, Session};
+
+    let fx = Fixture::new("schema = 1\n");
+    let repo = repo_with(&[(".gitattributes", "*.inc linguist-language=PHP\n")]);
+    let id = fx.project(repo.path(), "");
+    let mut router = Router::new();
+    crate::methods::register(&mut router, Arc::new(fx.lang));
+    let (session, mut rx) = Session::new(
+        Arc::new(router),
+        EventHub::new(),
+        Caller::file(Role::Owner, repo.path().join("a.inc")),
+    );
+    let path = repo.path().join("a.inc").display().to_string();
+    let mut ask = async |id: i64, params: serde_json::Value| {
+        session.handle_value(
+            json!({"jsonrpc": "2.0", "id": id, "method": "lang.detect", "params": params}),
+        );
+        rx.recv().await.unwrap().into_response().unwrap().outcome
+    };
+    let denied = ask(1, json!({"projectId": id, "files": [{"path": path}]})).await;
+    assert_eq!(denied.unwrap_err().code, pw_rpc::code::PERMISSION_DENIED);
+    let plain = ask(2, json!({"files": [{"path": path}]})).await.unwrap();
+    // 속성 파일(`*.inc` → PHP)을 보지 않았다.
+    assert_ne!(plain["files"][0]["language"], "PHP");
+}

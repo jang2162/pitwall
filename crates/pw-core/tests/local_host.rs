@@ -350,6 +350,38 @@ async fn error_code(c: &mut Client, id: i64) -> i32 {
     from(frame["error"]["code"].clone())
 }
 
+/// 단일 파일 창의 연결(파일 범위, M1-24)은 전역 설정만 읽는다 — 프로젝트의 설정은 그 프로젝트가 열려 있어도 거절한다. 파일
+/// 범위로 열지 않은 메서드(`config.paths`)는 부를 수 없다.
+#[tokio::test]
+async fn a_file_scoped_connection_reads_only_the_global_config() {
+    use pw_core::config::{AppPaths, ConfigSource};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(&tmp.path().join("app"));
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join(".pitwall")).unwrap();
+    std::fs::write(
+        root.join(".pitwall/project.toml"),
+        "schema = 1\nname = \"repo\"\n",
+    )
+    .unwrap();
+    let host = LocalHost::with_config("local", paths);
+    host.open_project_with_config("p1".into(), root.clone(), ConfigSource::project(&root))
+        .unwrap();
+    let mut c = Client {
+        conn: host
+            .connect(Caller::file(Role::Owner, root.join("a.txt")))
+            .await
+            .unwrap(),
+    };
+    c.request(1, "config.get", json!({}));
+    c.result(1).await;
+    c.request(2, "config.get", json!({"projectId": "p1"}));
+    assert_eq!(error_code(&mut c, 2).await, code::PERMISSION_DENIED);
+    c.request(3, "config.paths", Value::Null);
+    assert_eq!(error_code(&mut c, 3).await, code::PERMISSION_DENIED);
+}
+
 #[tokio::test]
 async fn config_methods_read_paths_and_snapshots() {
     use pw_core::config::methods::{ConfigPathsInfo, ConfigView};

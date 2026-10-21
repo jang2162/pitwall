@@ -736,4 +736,21 @@ mod tests {
         assert_eq!(err, json!({"kind": "fileScope"}));
         assert_eq!(f.app.state::<IpcState>().connection_count("file-99"), 0);
     }
+
+    /// 단일 파일 창이 사라지면 그 파일을 잊는다 — 그 label 로 늦게 온 연결이 파일 범위를 얻지 못한다.
+    #[test]
+    fn a_destroyed_file_window_forgets_its_file() {
+        let f = fixture();
+        let file_window = crate::windows::open_file(
+            f.app.handle(),
+            std::path::Path::new("/x/a.txt"),
+            &crate::windows::ProjectOpen::default(),
+        )
+        .unwrap();
+        let label = file_window.label().to_owned();
+        assert!(f.app.state::<FileWindows>().file_of(&label).is_some());
+        // mock 런타임은 창을 없애도 Destroyed 를 내지 않는다. 앱에 건 것과 같은 훅을 직접 부른다.
+        on_window_event(&file_window.as_ref().window(), &WindowEvent::Destroyed);
+        assert_eq!(f.app.state::<FileWindows>().file_of(&label), None);
+    }
 }

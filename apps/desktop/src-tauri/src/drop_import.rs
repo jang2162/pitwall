@@ -298,4 +298,31 @@ mod tests {
         drops.forget("w");
         assert_eq!(drops.take("w", id, None, then), Err(Refused::Unknown));
     }
+
+    /// 단일 파일 창(M1-24)의 드롭은 프로젝트로 들여오지 않는다 — 그 창은 그 파일 하나에만 닿는다. 드롭 기록도 쓰지 않는다.
+    #[test]
+    fn a_file_window_cannot_import_a_drop() {
+        use tauri::Manager as _;
+
+        let app = tauri::test::mock_app();
+        let host = pw_core::LocalHost::new("local");
+        app.manage(DropImport::new(Arc::new(Fs::new()), host.tasks().clone()));
+        let window = tauri::WebviewWindowBuilder::new(&app, "file-1", Default::default())
+            .build()
+            .unwrap();
+        let state = app.state::<DropImport>();
+        let id = state.drops.record("file-1", paths(), Instant::now());
+        let result = tauri::async_runtime::block_on(import_drop(
+            window.as_ref().window(),
+            app.state::<DropImport>(),
+            id,
+            None,
+            "p1".into(),
+            None,
+            "/work/p1".into(),
+            "import".into(),
+        ));
+        assert_eq!(result.unwrap_err().code, pw_rpc::code::PERMISSION_DENIED);
+        assert!(state.drops.take("file-1", id, None, Instant::now()).is_ok());
+    }
 }
