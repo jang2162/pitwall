@@ -13,6 +13,7 @@ use pw_open_with::{HostParts, OpenWith};
 use pw_runtime::{LoginShell, Runtime, RuntimeHost};
 use tauri::Manager as _;
 
+mod app_commands;
 mod cli;
 mod clipboard;
 mod config_log;

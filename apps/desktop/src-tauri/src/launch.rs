@@ -50,7 +50,7 @@ impl Launch {
         }
     }
 
-    fn pending(&self) -> std::sync::MutexGuard<'_, Option<FindProjectRequest>> {
+    pub(crate) fn pending(&self) -> std::sync::MutexGuard<'_, Option<FindProjectRequest>> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }

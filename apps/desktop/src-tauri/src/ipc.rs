@@ -33,7 +33,7 @@ use crate::windows::{FileWindows, WindowKind};
 use pw_rpc::{Caller, Role};
 use serde::Serialize;
 use serde_json::Value;
-use tauri::ipc::Channel;
+use tauri::ipc::{Channel, Invoke};
 use tauri::webview::PageLoadEvent;
 use tauri::{Builder, Manager, Runtime, State, Webview, Window, WindowEvent};
 
@@ -158,8 +158,8 @@ pub enum IpcError {
 pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Builder<R> {
     builder
         .manage(IpcState::new(router))
-        // Tauri 는 invoke handler 를 하나만 받으므로 앱의 다른 command 도 여기에 둔다.
-        .invoke_handler(tauri::generate_handler![
+        // Tauri 는 invoke handler 를 하나만 받으므로 앱의 다른 command 도 여기에 둔다. 창 종류별 허용 목록은 app_commands.rs.
+        .invoke_handler(allow_listed(tauri::generate_handler![
             rpc_page,
             rpc_connect,
             rpc_send,
@@ -178,9 +178,29 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             crate::perf::perf_first_frame,
             crate::perf::perf_hidden,
             crate::update::window_close_cancelled
-        ])
+        ]))
         .on_window_event(on_window_event)
         .on_page_load(|webview, payload| on_page_load(webview, payload.event()))
+}
+
+/// 부른 창의 종류에 열리지 않은 명령은 `handler` 에 넘기지 않고 거절한다([`crate::app_commands`]).
+fn allow_listed<R: Runtime>(
+    handler: impl Fn(Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        let command = invoke.message.command();
+        if crate::app_commands::allowed(invoke.message.webview_ref().label(), command) {
+            return handler(invoke);
+        }
+        let refusal = crate::app_commands::refusal(command);
+        tracing::warn!(
+            window = invoke.message.webview_ref().label(),
+            command,
+            "app command refused for this window kind"
+        );
+        invoke.resolver.reject(refusal);
+        true
+    }
 }
 
 /// 새로고침하면 프론트엔드는 연결 id 와 채널을 잃는다. 남은 연결은 아무도 닫지 못하므로 새 페이지가 시작될 때 닫는다.
