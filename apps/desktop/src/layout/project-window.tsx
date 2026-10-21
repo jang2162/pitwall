@@ -70,6 +70,7 @@ import { projectIdFromQuery, projectOpenInbox } from "../project-open";
 import { useHost, useRpcQuery } from "../rpc/host";
 import { useRuntimeActions } from "../runtime/runtime-actions";
 import { FindInFiles } from "../search/find-in-files";
+import { ProjectSearch } from "../search-everywhere/project-search";
 import { SearchResultsToolWindow } from "../search/search-results";
 import { RuntimeStatus } from "../runtime/runtime-status";
 import {
@@ -555,12 +556,14 @@ function ProjectWindowBody({
   log,
   closeWindow,
   guardClose,
+  openProjectWindow,
   onDockApi,
 }: {
   projectId?: string;
   log?: WindowLog;
   closeWindow(): Promise<void>;
   guardClose?: KeymapNative["guardClose"];
+  openProjectWindow?: KeymapNative["openProjectWindow"];
   onDockApi?(api: DockviewApi): void;
 }) {
   const strings = useProjectStrings();
@@ -635,6 +638,14 @@ function ProjectWindowBody({
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
           {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
           {projectId !== undefined && <FindInFiles workspace={workspace} />}
+          {projectId !== undefined && (
+            <ProjectSearch
+              projectId={projectId}
+              workspace={workspace}
+              api={api}
+              openProjectWindow={openProjectWindow}
+            />
+          )}
           <StatusBar label={strings.status.label} />
           {switcher.element}
           {editorOperations}
@@ -652,6 +663,7 @@ export function ProjectWindow({
   log,
   closeWindow,
   guardClose,
+  openProjectWindow,
   onDockApi,
 }: {
   /** 창 쿼리의 프로젝트 id(`?project=`). 없으면 외부 도구 액션 · 신뢰(trust/trust.tsx) · 파일 열기가 없다. */
@@ -662,6 +674,8 @@ export function ProjectWindow({
   closeWindow(): Promise<void>;
   /** 창이 닫히려 할 때 묻는다(미저장 확인). 없으면 묻지 않는다. */
   guardClose?: KeymapNative["guardClose"];
+  /** 다른 프로젝트 창을 열거나 앞으로 가져온다(프로젝트 스위처). 없으면 프로젝트 탭이 없다. */
+  openProjectWindow?: KeymapNative["openProjectWindow"];
   /** 도킹 영역이 준비되면 그 api 를 받는다(시험이 탭을 그룹 사이로 옮긴다). */
   onDockApi?(api: DockviewApi): void;
 }) {
@@ -675,6 +689,7 @@ export function ProjectWindow({
               log={log}
               closeWindow={closeWindow}
               guardClose={guardClose}
+              openProjectWindow={openProjectWindow}
               onDockApi={onDockApi}
             />
           ) : (
@@ -684,6 +699,7 @@ export function ProjectWindow({
                 log={log}
                 closeWindow={closeWindow}
                 guardClose={guardClose}
+                openProjectWindow={openProjectWindow}
                 onDockApi={onDockApi}
               />
             </TrustProvider>

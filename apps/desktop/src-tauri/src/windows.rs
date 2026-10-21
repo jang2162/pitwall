@@ -274,6 +274,8 @@ fn focus<R: Runtime>(app: &AppHandle<R>, label: &str) -> tauri::Result<Option<We
     window.unminimize()?;
     window.show()?;
     window.set_focus()?;
+    #[cfg(test)]
+    tests::focused(label);
     Ok(Some(window))
 }
 
@@ -337,6 +339,19 @@ mod tests {
         if let Some(hook) = hook {
             hook();
         }
+    }
+
+    thread_local! {
+        /// 이 스레드에서 [`focus`] 가 앞으로 가져온 창의 label. mock 런타임은 포커스를 기억하지 않아 여기 적는다.
+        static FOCUSED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn focused(label: &str) {
+        FOCUSED.with(|f| f.borrow_mut().push(label.to_owned()));
+    }
+
+    fn take_focused() -> Vec<String> {
+        FOCUSED.with(|f| std::mem::take(&mut *f.borrow_mut()))
     }
 
     #[test]
@@ -471,6 +486,31 @@ mod tests {
         let mut labels = labels(app.handle());
         labels.sort();
         assert_eq!(labels, ["project-aaaa", "project-bbbb"]);
+    }
+
+    /// 프로젝트 스위처(⌘⇧P, src/search-everywhere/project-search.tsx)가 다른 프로젝트를 고르면 그 창이 이미 있을 때 새로 만들지
+    /// 않고 그 창을 앞으로 가져온다 — 열기 요청(파일)이 없어도.
+    #[test]
+    fn opening_an_already_open_project_brings_that_window_forward() {
+        let app = app();
+        open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        open_project(app.handle(), "bbbb", &ProjectOpen::default()).unwrap();
+        assert_eq!(
+            take_focused(),
+            Vec::<String>::new(),
+            "새 창은 앞으로 가져온 것이 아니다"
+        );
+        let window = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        assert_eq!(window.label(), "project-aaaa");
+        assert_eq!(take_focused(), ["project-aaaa"]);
+        let mut labels = labels(app.handle());
+        labels.sort();
+        assert_eq!(labels, ["project-aaaa", "project-bbbb"]);
+        assert_eq!(
+            take(app.handle(), &window),
+            [],
+            "빈 요청은 큐에 넣지 않는다"
+        );
     }
 
     #[test]

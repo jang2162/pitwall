@@ -22,6 +22,11 @@ export interface KeymapNative {
    * 해제 함수를 돌려준다. 없으면(시험) 묻지 않는다.
    */
   guardClose?(shouldClose: () => Promise<boolean>): () => void;
+  /**
+   * 그 프로젝트의 창을 열거나, 이미 열려 있으면 앞으로 가져온다(프로젝트 스위처 ⌘⇧P). 웰컴 창과 같은 명령
+   * `open_project_window`(src/welcome/native.ts 머리 주석)다. 없으면(시험) 프로젝트 탭이 없다.
+   */
+  openProjectWindow?(projectId: string): Promise<void>;
   /** 「Shell 명령 설치」(F2-1). macOS 에만 있다. 결과는 네이티브 대화상자가 알린다(src-tauri/src/shell_command.rs). */
   installShellCommand?(): Promise<void>;
 }
@@ -42,6 +47,7 @@ export const tauriKeymapNative: KeymapNative = {
     };
   },
   openSettings: () => invoke("open_settings_window"),
+  openProjectWindow: (projectId) => invoke("open_project_window", { projectId }),
   closeWindow: () => getCurrentWebviewWindow().close(),
   guardClose(shouldClose) {
     let disposed = false;

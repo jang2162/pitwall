@@ -1,4 +1,4 @@
-// 모든 창이 함께 쓰는 문자열(액션 · 액션 찾기 · 테마와 언어 고르기 · 키맵 파일 오류 · 창 제목 · 다음에서 열기). 설정 창에만 나오는 것은
+// 모든 창이 함께 쓰는 문자열(액션 · 액션 찾기 · Search Everywhere · 테마와 언어 고르기 · 키맵 파일 오류 · 창 제목 · 다음에서 열기). 설정 창에만 나오는 것은
 // settings/strings.ts 에 있다. 내용은 Fluent 리소스(extensions/i18n-default/i18n/*/app.ftl)에 있고, 이 파일은 화면 자리와 메시지 id
 // 를 잇는다. 여기 적은 id 가 ko · en 리소스에 모두 있는지는 resources.test.ts 가 본다.
 
@@ -16,6 +16,10 @@ export function appStrings(t: Translate) {
     },
     actions: {
       find: t("action-find"),
+      searchEverywhere: t("action-search-everywhere"),
+      gotoFile: t("action-goto-file"),
+      recentFiles: t("action-recent-files"),
+      projectSwitcher: t("action-project-switcher"),
       settings: t("action-settings"),
       cliInstall: t("action-cli-install"),
       closeWindow: t("action-window-close"),
@@ -29,6 +33,35 @@ export function appStrings(t: Translate) {
       placeholder: t("find-action-placeholder"),
       empty: t("find-action-empty"),
       reserved: (reason: string) => t("find-action-reserved", { reason }),
+    },
+    search: {
+      label: t("search-everywhere-label"),
+      recentFiles: t("search-recent-files-label"),
+      tabs: {
+        all: t("search-tab-all"),
+        files: t("search-tab-files"),
+        actions: t("search-tab-actions"),
+        projects: t("search-tab-projects"),
+      },
+      placeholder: {
+        all: t("search-placeholder-all"),
+        files: t("search-placeholder-files"),
+        projects: t("search-placeholder-projects"),
+        recentFiles: t("search-placeholder-recent-files"),
+      },
+      empty: t("search-empty"),
+      more: t("search-more"),
+      noRecentFiles: t("search-no-recent-files"),
+      searching: t("search-files-searching"),
+      busy: t("search-files-busy"),
+      failed: (message: string) => t("search-failed", { message }),
+      /** 상한을 넘어 일부만 보일 때. */
+      truncated: (shown: number, matched: number) =>
+        t("search-files-truncated", { shown, matched }),
+      /** `파일:줄` 로 칠 때 결과 옆의 「줄 N」. */
+      atLine: (line: number) => t("search-files-at-line", { line }),
+      recentBadge: t("search-recent-badge"),
+      currentProject: t("search-current-project"),
     },
     theme: {
       label: t("theme-switcher-label"),

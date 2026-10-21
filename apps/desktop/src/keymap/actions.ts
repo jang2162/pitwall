@@ -15,6 +15,8 @@ export function appActions(deps: {
   languages: readonly { locale: string; name: string }[];
   setLanguage(language: string): Promise<void>;
   openFindAction(): void;
+  /** Search Everywhere 를 전체 탭으로 연다(⇧⇧). */
+  openSearchEverywhere(): void;
   openSettings(): Promise<void>;
   setTheme(preference: ThemePreference): void;
   /** 없으면(macOS 가 아니면) 액션을 등록하지 않는다. */
@@ -38,6 +40,12 @@ export function appActions(deps: {
       label: T.find,
       keywords: ["Find Action", "command palette"],
       run: deps.openFindAction,
+    },
+    {
+      id: "search.everywhere",
+      label: T.searchEverywhere,
+      keywords: ["Search Everywhere"],
+      run: deps.openSearchEverywhere,
     },
     {
       id: "settings.open",

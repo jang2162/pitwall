@@ -1,4 +1,5 @@
-// 창 하나의 키맵: 액션 레지스트리, 병합된 바인딩, 키 이벤트 → 엔진, 네이티브 메뉴 동기화, 액션 찾기 팝업.
+// 창 하나의 키맵: 액션 레지스트리, 병합된 바인딩, 키 이벤트 → 엔진, 네이티브 메뉴 동기화, Search Everywhere 팝업(액션 찾기는 그
+// 액션 탭이다, src/search-everywhere/search-everywhere.tsx).
 
 import {
   type Action,
@@ -30,7 +31,12 @@ import { useRpcQuery } from "../rpc/host";
 import { terminalAdmits } from "../terminal/terminal-keys";
 import { contextLayers } from "./context";
 import { chooseDefaultKeymap, DEFAULT_KEYMAP_ID, registryKeymapProblem } from "./default-keymap";
-import { FindActionDialog } from "./find-action";
+import {
+  availableMode,
+  SearchEverywhere,
+  type SearchMode,
+  type SearchSource,
+} from "../search-everywhere/search-everywhere";
 import type { KeymapNative } from "./native";
 import { keymapPlatform } from "./platform";
 import { type LastGoodKeymap, type PreviousKeymap, resolveKeymap } from "./resolve";
@@ -89,6 +95,10 @@ export interface KeymapContextValue {
    */
   takesKey(e: KeyboardEvent): boolean;
   openFindAction(): void;
+  /** Search Everywhere 를 그 탭(모드)으로 연다. 그 창에 없는 탭이면 전체 탭이다. */
+  openSearch(mode: SearchMode): void;
+  /** Search Everywhere 에 결과 묶음(파일 · 프로젝트 · 최근 파일)을 더한다. 해제 함수를 돌려준다. */
+  registerSearchSource(source: SearchSource): () => void;
   /** 팝업이 열렸다고 알린다(`useKeymapPopup`). 닫는 함수를 돌려준다. */
   enterPopup(): () => void;
 }
@@ -117,6 +127,15 @@ export function useRegisterActions(actions: readonly Action[]) {
 export function useKeymapPopup(open: boolean) {
   const { enterPopup } = useKeymap();
   useEffect(() => (open ? enterPopup() : undefined), [open, enterPopup]);
+}
+
+/** Search Everywhere 에 결과 묶음을 더한다. `source` 는 메모해서 넘긴다. */
+export function useSearchSource(source: SearchSource | undefined) {
+  const { registerSearchSource } = useKeymap();
+  useEffect(
+    () => (source ? registerSearchSource(source) : undefined),
+    [registerSearchSource, source],
+  );
 }
 
 /** 레지스트리가 바뀌면 다시 그린다. */
@@ -200,12 +219,23 @@ export function KeymapProvider({
     log?.warn(`keymap.toml: ${warnings}`, "keymap");
   }, [warnings, log]);
 
-  const [findOpen, setFindOpen] = useState(false);
-  // 액션 찾기 말고 창이 띄운 팝업의 수(`useKeymapPopup`). 렌더가 아니라 키 처리에서만 읽으므로 ref 다.
+  const [search, setSearch] = useState<SearchMode>();
+  const [sources, setSources] = useState<readonly SearchSource[]>([]);
+  const registerSearchSource = useCallback((source: SearchSource) => {
+    setSources((list) => [...list.filter((s) => s.id !== source.id), source]);
+    return () => setSources((list) => list.filter((s) => s !== source));
+  }, []);
+  const sourcesRef = useRef(sources);
+  sourcesRef.current = sources;
+  const openSearch = useCallback(
+    (mode: SearchMode) => setSearch(availableMode(mode, sourcesRef.current)),
+    [],
+  );
+  // Search Everywhere 말고 창이 띄운 팝업의 수(`useKeymapPopup`). 렌더가 아니라 키 처리에서만 읽으므로 ref 다.
   const otherPopups = useRef(0);
-  const findOpenRef = useRef(false);
-  findOpenRef.current = findOpen;
-  const isPopupOpen = useCallback(() => findOpenRef.current || otherPopups.current > 0, []);
+  const searchOpenRef = useRef(false);
+  searchOpenRef.current = search !== undefined;
+  const isPopupOpen = useCallback(() => searchOpenRef.current || otherPopups.current > 0, []);
   // 창이 띄운 팝업이 열려 있으면 팝업 액션만, 아니면 팝업 아닌 액션만 돈다. 키 · 메뉴 · 액션 찾기 목록이 같은 기준을 쓴다.
   const windowGate = useCallback(
     (action: string) => otherPopups.current > 0 === registry.isPopup(action),
@@ -295,7 +325,7 @@ export function KeymapProvider({
           );
           return;
         }
-        // 액션 찾기가 열린 채 메뉴에서 고르면 팝업을 닫고 실행한다. 메뉴 이벤트로는 마우스로 고른 것인지 키인지 알 수 없는데,
+        // Search Everywhere(액션 찾기)가 열린 채 메뉴에서 고르면 팝업을 닫고 실행한다. 메뉴 이벤트로는 마우스로 고른 것인지 키인지 알 수 없는데,
         // 마우스로 메뉴를 고른 것을 조용히 무시하면 고장으로 보인다. 창이 띄운 팝업(`useKeymapPopup`)은 그 팝업이 닫는다.
         if (!windowGate(action) && !MENU_ACTIONS_OVER_POPUPS.has(action)) {
           log?.debug(`dropped ${action} from the menu: a popup is open`, "keymap");
@@ -305,8 +335,8 @@ export function KeymapProvider({
           if (registry.run(action)) log?.debug(`ran ${action} from the menu`, "keymap");
           else console.warn("[keymap] menu action not available here", action);
         };
-        if (findOpenRef.current) {
-          setFindOpen(false);
+        if (searchOpenRef.current) {
+          setSearch(undefined);
           setTimeout(run, 0);
         } else run();
       }),
@@ -328,18 +358,30 @@ export function KeymapProvider({
             text: formatSequence(b.sequence, platform, layout),
             reserved: reservedReason(b.sequence, platform),
           })),
-      openFindAction: () => setFindOpen(true),
+      openFindAction: () => openSearch("actions"),
+      openSearch,
+      registerSearchSource,
       enterPopup,
       runnable: (action) => windowGate(action) && registry.isEnabled(action),
       takesKey: (e) => engine.peek(e),
     }),
-    [registry, resolved, platform, layout, enterPopup, windowGate, engine],
+    [
+      registry,
+      resolved,
+      platform,
+      layout,
+      enterPopup,
+      windowGate,
+      engine,
+      openSearch,
+      registerSearchSource,
+    ],
   );
 
   return (
     <KeymapContext value={value}>
       {children}
-      <FindActionDialog open={findOpen} onOpenChange={setFindOpen} />
+      <SearchEverywhere mode={search} onModeChange={setSearch} sources={sources} />
     </KeymapContext>
   );
 }

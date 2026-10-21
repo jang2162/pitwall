@@ -8,6 +8,7 @@ const base = {
   languages: [],
   setLanguage: async () => {},
   openFindAction() {},
+  openSearchEverywhere() {},
   openSettings: async () => {},
   setTheme() {},
 };

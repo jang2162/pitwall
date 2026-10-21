@@ -11,6 +11,30 @@ mac = "cmd+shift+a"
 win = "ctrl+shift+a"
 linux = "ctrl+shift+a"
 
+# Search Everywhere 와 그 탭(src/search-everywhere, 결정 M1-D18). 액션 찾기(⌘⇧A)도 같은 팝업의 액션 탭이다. 파일로 이동 · 최근 파일 ·
+# 프로젝트 스위처는 프로젝트 창에만 등록된다.
+[[bindings]]
+action = "search.everywhere"
+key = "shift shift"
+
+[[bindings]]
+action = "search.gotoFile"
+mac = "cmd+shift+o"
+win = "ctrl+shift+n"
+linux = "ctrl+shift+n"
+
+[[bindings]]
+action = "search.recentFiles"
+mac = "cmd+e"
+win = "ctrl+e"
+linux = "ctrl+e"
+
+[[bindings]]
+action = "project.switcher"
+mac = "cmd+shift+p"
+win = "ctrl+shift+p"
+linux = "ctrl+shift+p"
+
 # 전체에서 찾기(10-ui §4.2, src/search/find-in-files.tsx). 프로젝트 창에만 등록된다.
 [[bindings]]
 action = "search.findInFiles"

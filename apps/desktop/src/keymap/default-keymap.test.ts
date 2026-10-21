@@ -1,6 +1,14 @@
-import { formatSequence, type Platform } from "@pitwall/keymap";
+import {
+  type Binding,
+  type ContextLayers,
+  evaluateWhen,
+  formatSequence,
+  type Platform,
+  whenDepth,
+} from "@pitwall/keymap";
 import { describe, expect, it } from "vitest";
 
+import { terminalAdmits } from "../terminal/terminal-keys";
 import { chooseDefaultKeymap, DEFAULT_KEYMAP_TOML, registryKeymapProblem } from "./default-keymap";
 
 describe("registryKeymapProblem", () => {
@@ -70,4 +78,45 @@ describe("default keymap overlaps", () => {
       ],
     });
   });
+});
+
+// 키맵 겹침 검사: 기본 키맵에서 같은 키에 다른 액션이 같은 깊이로 함께 살아 있으면(엔진은 병합 순서의 뒤를 고른다 — 앞의 것이
+// 말없이 죽는다) 실패한다. 포커스 범위는 파일에 나오는 `when` 키마다 그 키를 포커스 층에 둔 것과 아무 포커스도 없는 것이다.
+// 터미널 포커스 범위는 창 규칙(`terminalAdmits`)을 거친 뒤 본다. 창마다 다른 액션을 등록하는 것(웰컴 창의 `project.*` 등)은
+// 보지 않는다 — 한 파일 안의 같은 범위만 본다.
+describe("default keymap conflicts", () => {
+  function conflicts(platform: Platform): string[] {
+    const bindings = chooseDefaultKeymap(undefined, platform).bindings;
+    const keys = new Set(bindings.flatMap((b) => (b.when ? b.when.match(/[A-Za-z_]\w*/g)! : [])));
+    const scopes: [string, ContextLayers][] = [
+      ["(none)", [{}, {}, {}]],
+      ...[...keys].map((k): [string, ContextLayers] => [k, [{ [k]: true }, {}, {}]]),
+    ];
+    const out: string[] = [];
+    for (const [scope, layers] of scopes) {
+      const live = bindings.filter(
+        (b) => (!b.whenExpr || evaluateWhen(b.whenExpr, layers)) && terminalAdmits(b, layers),
+      );
+      const byKey = new Map<string, Binding[]>();
+      for (const b of live) {
+        const k = JSON.stringify(b.sequence);
+        byKey.set(k, [...(byKey.get(k) ?? []), b]);
+      }
+      for (const [k, list] of byKey) {
+        const top = Math.max(...list.map((b) => whenDepth(b.whenExpr, layers)));
+        const winners = new Set(
+          list.filter((b) => whenDepth(b.whenExpr, layers) === top).map((b) => b.action),
+        );
+        if (winners.size > 1) out.push(`${platform} ${scope} ${k}: ${[...winners].join(", ")}`);
+      }
+    }
+    return out;
+  }
+
+  it.each(["mac", "win", "linux"] as const)(
+    "has no two actions on one key in one scope (%s)",
+    (p) => {
+      expect(conflicts(p)).toEqual([]);
+    },
+  );
 });

@@ -1,4 +1,4 @@
-### 모든 창이 함께 쓰는 문자열: 액션, 액션 찾기, 테마 · 언어 고르기, 키맵 파일 오류, 다음에서 열기.
+### 모든 창이 함께 쓰는 문자열: 액션, 액션 찾기 · Search Everywhere, 테마 · 언어 고르기, 키맵 파일 오류, 다음에서 열기.
 
 # 그 언어로 쓴 그 언어의 이름. 언어 고르기는 언어마다 그 언어의 이 메시지로 이름을 보여 준다.
 language-name = 한국어
@@ -36,6 +36,37 @@ theme-dark = 다크 테마
 keymap-file-error = 키맵 파일 오류 — 이전 키맵을 쓰는 중: { $error }
 # $warnings: 경고들을 "; " 로 이은 것
 keymap-file-warning = 키맵 파일 경고: { $warnings }
+
+
+## Search Everywhere(⇧⇧)와 그 탭 — 파일로 이동(⌘⇧O) · 최근 파일(⌘E) · 프로젝트 스위처(⌘⇧P). src/search-everywhere.
+
+action-search-everywhere = 모든 곳에서 찾기
+action-goto-file = 파일로 이동
+action-recent-files = 최근 파일
+action-project-switcher = 프로젝트 전환
+search-everywhere-label = 모든 곳에서 찾기
+search-recent-files-label = 최근 파일
+search-tab-all = 전체
+search-tab-files = 파일
+search-tab-actions = 액션
+search-tab-projects = 프로젝트
+search-placeholder-all = 파일 · 액션 · 프로젝트
+search-placeholder-files = 파일 이름 — 「이름:줄」 이면 그 줄로
+search-placeholder-projects = 프로젝트 이름
+search-placeholder-recent-files = 파일 이름
+search-empty = 맞는 것이 없다
+search-more = 더 보기
+search-no-recent-files = 이 창에서 연 파일이 아직 없다
+search-files-searching = 찾는 중…
+search-files-busy = 파일 검색이 바쁘다 — 잠시 뒤 다시 찾는다
+# $message: 실패 이유
+search-failed = 찾지 못했다: { $message }
+# $shown: 보이는 수, $matched: 맞은 수
+search-files-truncated = { $matched }개 중 { $shown }개
+# $line: 갈 줄(1부터)
+search-files-at-line = { $line }줄
+search-recent-badge = 최근
+search-current-project = 이 창
 
 ## 설정 창의 외관과 「외부 도구 > Orca 에서 Pitwall 열기」(docs/design/04-features.md F8-6). 키는 apps/desktop/src/settings/strings.ts 가 잇는다.
 

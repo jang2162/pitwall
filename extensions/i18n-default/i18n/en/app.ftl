@@ -1,4 +1,4 @@
-### Strings shared by every window: actions, Find Action, theme and language switchers, keymap file errors, Open In.
+### Strings shared by every window: actions, Find Action and Search Everywhere, theme and language switchers, keymap file errors, Open In.
 
 # The language's own name. The language switcher lists every language by this message of that language.
 language-name = English
@@ -36,6 +36,37 @@ theme-dark = Dark Theme
 keymap-file-error = Keymap file error, using the previous keymap: { $error }
 # $warnings: the warnings joined with "; "
 keymap-file-warning = Keymap file warning: { $warnings }
+
+
+## Search Everywhere (Shift Shift) and its tabs: Go to File, Recent Files, Project Switcher. src/search-everywhere.
+
+action-search-everywhere = Search Everywhere
+action-goto-file = Go to File
+action-recent-files = Recent Files
+action-project-switcher = Switch Project
+search-everywhere-label = Search Everywhere
+search-recent-files-label = Recent Files
+search-tab-all = All
+search-tab-files = Files
+search-tab-actions = Actions
+search-tab-projects = Projects
+search-placeholder-all = Files, actions, projects
+search-placeholder-files = File name, or name:line to go to the line
+search-placeholder-projects = Project name
+search-placeholder-recent-files = File name
+search-empty = Nothing found
+search-more = More
+search-no-recent-files = No files opened in this window yet
+search-files-searching = Searching…
+search-files-busy = File search is busy, searching again shortly
+# $message: why it failed
+search-failed = Search failed: { $message }
+# $shown: how many are shown, $matched: how many matched
+search-files-truncated = { $shown } of { $matched }
+# $line: the line to go to (from 1)
+search-files-at-line = line { $line }
+search-recent-badge = recent
+search-current-project = this window
 
 ## Settings window: Appearance, and "External Tools > Open Pitwall from Orca" (docs/design/04-features.md F8-6). The keys are mapped in apps/desktop/src/settings/strings.ts.
 

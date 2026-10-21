@@ -19,7 +19,8 @@ const key = (code: string, mods: Partial<KeyEventLike> = {}): KeyEventLike => ({
   ...mods,
 });
 
-/** 기본 키맵 + 모든 액션이 등록된 창. `terminal` 이면 터미널이 포커스를 가졌다. */
+/** 기본 키맵 + 모든 액션이 등록된 창. `terminal` 이면 터미널이 포커스를 가졌다. 시계는 `clock.now` 다. */
+const clock = { now: 0 };
 function engine(platform: Platform, terminal: boolean) {
   const layers: ContextLayers = [
     terminal ? { [TERMINAL_FOCUS]: true, inputFocus: true } : {},
@@ -31,6 +32,7 @@ function engine(platform: Platform, terminal: boolean) {
     isEnabled: () => true,
     context: () => layers,
     admits: terminalAdmits,
+    now: () => clock.now,
   });
   e.setBindings(readDefaultKeymap(parseKeymapToml(DEFAULT_KEYMAP_TOML), platform));
   return e;
@@ -78,5 +80,78 @@ describe("keys while the terminal has focus", () => {
     expect(actionOf(t, key("KeyW", { metaKey: true }))).toBe("window.close");
     expect(actionOf(t, key("Backslash", { metaKey: true }))).toBe("editor.splitRight");
     expect(actionOf(t, key("KeyT", { metaKey: true }))).toBeUndefined();
+  });
+});
+
+describe("Search Everywhere keys while the terminal has focus", () => {
+  it("open Search Everywhere and its tabs (macOS)", () => {
+    const t = engine("mac", true);
+    expect(actionOf(t, key("KeyO", { metaKey: true, shiftKey: true }))).toBe("search.gotoFile");
+    expect(actionOf(t, key("KeyE", { metaKey: true }))).toBe("search.recentFiles");
+    expect(actionOf(t, key("KeyP", { metaKey: true, shiftKey: true }))).toBe("project.switcher");
+  });
+
+  it("take Ctrl+Shift+N · Ctrl+Shift+P but leave Ctrl+N · Ctrl+P · Ctrl+E to the shell (Windows · Linux)", () => {
+    for (const p of ["win", "linux"] as const) {
+      const t = engine(p, true);
+      expect(actionOf(t, key("KeyN", { ctrlKey: true, shiftKey: true })), p).toBe(
+        "search.gotoFile",
+      );
+      expect(actionOf(t, key("KeyP", { ctrlKey: true, shiftKey: true })), p).toBe(
+        "project.switcher",
+      );
+      for (const code of ["KeyN", "KeyP", "KeyE"]) {
+        const k = key(code, { ctrlKey: true });
+        expect(t.peek(k), `${p} ${code}`).toBe(false);
+        expect(actionOf(t, k), `${p} ${code}`).toBeUndefined();
+      }
+      // 터미널 밖에서는 Ctrl+E 가 최근 파일이다.
+      expect(actionOf(engine(p, false), key("KeyE", { ctrlKey: true })), p).toBe(
+        "search.recentFiles",
+      );
+    }
+  });
+
+  /** 수정 키를 누르고 뗀다(`ms` 뒤에 뗀다). 뗄 때의 결과를 돌려준다. */
+  function tap(t: KeymapEngine, code: string, ms = 50, mods: Partial<KeyEventLike> = {}) {
+    t.keydown(key(code, { shiftKey: true, ...mods }));
+    clock.now += ms;
+    const up = t.keyup(key(code, mods));
+    clock.now += ms;
+    return up.action;
+  }
+
+  it("open on Shift Shift, but not when a key comes between the two Shifts", () => {
+    const t = engine("mac", true);
+    expect(tap(t, "ShiftLeft")).toBeUndefined();
+    expect(tap(t, "ShiftLeft")).toBe("search.everywhere");
+
+    // 대문자 두 글자(A B): Shift 를 누른 채 A, 떼고, 다시 Shift 를 누른 채 B.
+    t.keydown(key("ShiftLeft", { shiftKey: true }));
+    t.keydown(key("KeyA", { shiftKey: true }));
+    clock.now += 30;
+    expect(t.keyup(key("ShiftLeft")).action).toBeUndefined();
+    t.keydown(key("ShiftLeft", { shiftKey: true }));
+    t.keydown(key("KeyB", { shiftKey: true }));
+    clock.now += 30;
+    expect(t.keyup(key("ShiftLeft")).action).toBeUndefined();
+    // Shift 한 번 뒤 글자, 그다음 Shift 한 번도 아니다.
+    expect(tap(t, "ShiftLeft")).toBeUndefined();
+    t.keydown(key("KeyA"));
+    expect(tap(t, "ShiftLeft")).toBeUndefined();
+  });
+
+  it("do nothing while the IME is composing", () => {
+    const t = engine("mac", true);
+    expect(tap(t, "ShiftLeft", 50, { isComposing: true })).toBeUndefined();
+    expect(tap(t, "ShiftLeft", 50, { isComposing: true })).toBeUndefined();
+    for (const k of [
+      key("KeyO", { metaKey: true, shiftKey: true, isComposing: true }),
+      key("KeyE", { metaKey: true, isComposing: true }),
+      key("KeyP", { metaKey: true, shiftKey: true, isComposing: true }),
+    ]) {
+      expect(t.peek(k), k.code).toBe(false);
+      expect(actionOf(t, k), k.code).toBeUndefined();
+    }
   });
 });

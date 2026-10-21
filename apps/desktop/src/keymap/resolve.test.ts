@@ -18,6 +18,7 @@ import { fileTreeStrings } from "../file-tree/strings";
 import { FileTreeModel } from "../file-tree/tree-model";
 import { openWithActions } from "../open-with/open-with";
 import { findActions } from "../search/find-actions";
+import { projectSearchActions } from "../search-everywhere/project-search";
 import { terminalActions } from "../terminal/terminal-actions";
 import { TerminalTabs } from "../terminal/terminal-tabs";
 import { createProjectActions, welcomeActions } from "../welcome/actions";
@@ -38,6 +39,7 @@ const ACTION_IDS = new Set(
       languages: [],
       setLanguage: async () => {},
       openFindAction() {},
+      openSearchEverywhere() {},
       openSettings: async () => {},
       setTheme() {},
     }),
@@ -111,6 +113,11 @@ const ACTION_IDS = new Set(
       onClipboardFailed() {},
     }),
     ...findActions({ strings: { action: "find" }, open() {} }),
+    ...projectSearchActions({
+      strings: KO_APP.actions,
+      openSearch() {},
+      canSwitchProjects: true,
+    }),
   ].map((a) => a.id),
 );
 
@@ -139,6 +146,15 @@ describe("default keymap file", () => {
     expect(label("linux", "toolWindow.project")).toEqual(["Alt+1"]);
     expect(label("mac", "toolWindow.terminal")).toEqual(["⌥F12"]);
     expect(label("mac", "settings.open")).toEqual(["⌘,"]);
+    // 검색 · 이동(M1-19)
+    expect(label("mac", "search.everywhere")).toEqual(["⇧⇧"]);
+    expect(label("win", "search.everywhere")).toEqual(["Shift Shift"]);
+    expect(label("mac", "search.gotoFile")).toEqual(["⇧⌘O"]);
+    expect(label("win", "search.gotoFile")).toEqual(["Ctrl+Shift+N"]);
+    expect(label("mac", "search.recentFiles")).toEqual(["⌘E"]);
+    expect(label("linux", "search.recentFiles")).toEqual(["Ctrl+E"]);
+    expect(label("mac", "project.switcher")).toEqual(["⇧⌘P"]);
+    expect(label("win", "project.switcher")).toEqual(["Ctrl+Shift+P"]);
     expect(label("win", "settings.open")).toEqual(["Ctrl+Alt+S"]);
     // 10-ui 「외부 도구 · 프로젝트」
     expect(label("mac", "openWith.popup")).toEqual(["⌥F1"]);

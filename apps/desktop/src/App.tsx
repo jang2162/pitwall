@@ -42,7 +42,7 @@ function Welcome({ native, log }: { native: WelcomeNative; log?: WelcomeLog }) {
 // 모든 창에 있는 액션. 프로젝트 창의 툴 윈도우 액션은 ProjectWindow 가 등록한다. `window.close` 는 프로젝트 창이면
 // ProjectWindow 가(탭을 먼저 닫는다), 아니면 여기서 등록한다.
 function AppActions({ native, kind }: { native: KeymapNative; kind: WindowKind }) {
-  const { openFindAction } = useKeymap();
+  const { openFindAction, openSearch } = useKeymap();
   const setTheme = useTheme((s) => s.setPreference);
   const strings = useAppStrings();
   const { languages, setLanguage } = useI18n();
@@ -53,12 +53,13 @@ function AppActions({ native, kind }: { native: KeymapNative; kind: WindowKind }
         languages,
         setLanguage,
         openFindAction,
+        openSearchEverywhere: () => openSearch("all"),
         openSettings: native.openSettings,
         setTheme,
         installShellCommand: native.installShellCommand,
         closeWindow: kind === "project" ? undefined : native.closeWindow,
       }),
-    [strings, languages, setLanguage, openFindAction, native, setTheme, kind],
+    [strings, languages, setLanguage, openFindAction, openSearch, native, setTheme, kind],
   );
   useRegisterActions(actions);
   return null;
@@ -103,6 +104,7 @@ export function App({
                   log={log}
                   closeWindow={native.closeWindow}
                   guardClose={native.guardClose}
+                  openProjectWindow={native.openProjectWindow}
                   onDockApi={onDockApi}
                 />
               )}
