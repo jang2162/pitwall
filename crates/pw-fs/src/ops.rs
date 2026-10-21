@@ -282,7 +282,7 @@ impl Fs {
                 from.display()
             )));
         }
-        if to.starts_with(&from) {
+        if under(&from, &to) {
             return Err(RpcError::invalid_params(format!(
                 "cannot move `{}` into itself",
                 from.display()
@@ -301,7 +301,7 @@ impl Fs {
         let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
         let from = entry(&roots, Path::new(&params.from))?;
         let to = destination(&roots, Path::new(&params.to), None)?;
-        if to.starts_with(&from) {
+        if under(&from, &to) {
             return Err(RpcError::invalid_params(format!(
                 "cannot copy `{}` into itself",
                 from.display()
@@ -547,6 +547,12 @@ fn same_entry(a: &Path, b: &Path) -> bool {
             && a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
             && fs::symlink_metadata(b).is_ok()
     }
+}
+
+/// `to` 가 `from` 아래에 있다. 이름 글자가 아니라 디스크 항목으로 본다 — 대소문자를 무시하는 볼륨에서 `from` 의 대소문자가
+/// 디스크와 달라도(`dir` 과 실제 `Dir`) 잡는다. `to` 의 위 폴더들은 실제 경로이므로 링크인 `from` 은 그 대상 폴더와 같지 않다.
+fn under(from: &Path, to: &Path) -> bool {
+    to.starts_with(from) || to.ancestors().skip(1).any(|dir| same_entry(from, dir))
 }
 
 /// `to` 가 없을 때만 `from` 을 `to` 로 옮긴다(머리 주석). 있으면 `AlreadyExists`(폴더는 `ENOTEMPTY` 일 수 있다).

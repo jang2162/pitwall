@@ -432,6 +432,30 @@ fn symlinks_are_judged_by_their_real_target_and_moved_as_links() {
     assert_eq!(read(&root.join("real.txt")), "real");
 }
 
+/// 대소문자를 무시하는 볼륨에서 원본 이름의 대소문자가 디스크와 달라도(`dir` 과 실제 `Dir`) 자기 안으로 옮기기 · 복사를 거절한다 —
+/// 글자로만 비교하면 복사가 이름 길이 한계까지 자기 안으로 들어가다 internal error 로 끝났다.
+#[test]
+fn moving_or_copying_into_itself_is_refused_whatever_the_case() {
+    let fx = Fixture::new();
+    let (id, root) = fx.project();
+    write(&root.join("Dir/a.txt"), "a");
+    if !root.join("dir").exists() {
+        return; // 대소문자를 구분하는 볼륨: `dir` 은 없는 다른 이름이다.
+    }
+    let (from, into) = (root.join("dir"), root.join("dir/sub"));
+    assert_code(fx.copy(&id, &from, &into), code::INVALID_PARAMS);
+    assert_code(fx.rename(&id, &from, &into), code::INVALID_PARAMS);
+    let names: Vec<_> = fs::read_dir(root.join("Dir"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["a.txt"]);
+
+    // 대소문자만 바꾸는 이름은 자기 안이 아니다.
+    fx.rename(&id, &from, &root.join("DIR")).unwrap();
+    assert_eq!(read(&root.join("DIR/a.txt")), "a");
+}
+
 #[cfg(unix)]
 #[test]
 fn copy_copies_trees_without_following_links_and_skips_special_files() {
