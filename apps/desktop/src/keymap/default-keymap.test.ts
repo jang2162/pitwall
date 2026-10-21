@@ -3,7 +3,9 @@ import {
   type ContextLayers,
   evaluateWhen,
   formatSequence,
+  parseKeySequence,
   type Platform,
+  sameSequence,
   whenDepth,
 } from "@pitwall/keymap";
 import { describe, expect, it } from "vitest";
@@ -121,6 +123,69 @@ describe("default keymap conflicts", () => {
     "has no two actions on one key in one scope (%s)",
     (p) => {
       expect(conflicts(p)).toEqual([]);
+    },
+  );
+});
+
+// 키맵 가림 검사: 툴 윈도우 같은 컨테이너 컨텍스트로만 범위를 정한 바인딩은 그 안의 입력 칸(파일 트리의 빠른 검색 · 터미널 탭 이름 ·
+// 터미널 본문인 xterm 의 입력 칸)에서도 살아 있다. 위의 겹침 검사는 「한 키 두 액션」 만 보므로, 앱 액션이 입력 칸의 텍스트 편집
+// 키(단어 이동 · 선택, 줄 끝 선택, 단어 지우기)를 가리는 것은 여기서 본다.
+describe("default keymap text editing keys in tool window inputs", () => {
+  const TEXT_EDITING: Record<Platform, string[]> = {
+    mac: ["alt+", "alt+shift+", "cmd+shift+"].flatMap((m) =>
+      ["left", "right", "up", "down"].map((k) => m + k),
+    ),
+    win: [],
+    linux: [],
+  };
+  TEXT_EDITING.win = [
+    ...["ctrl+", "ctrl+shift+", "shift+"].flatMap((m) =>
+      ["left", "right", "up", "down", "home", "end"].map((k) => m + k),
+    ),
+    "ctrl+backspace",
+    "ctrl+delete",
+  ];
+  TEXT_EDITING.linux = TEXT_EDITING.win;
+
+  const scopes: [string, ContextLayers][] = [
+    ["input in a tool window", [{ inputFocus: true }, { toolWindowFocus: true }, {}]],
+    ["terminal body", [{ inputFocus: true, terminalFocus: true }, { toolWindowFocus: true }, {}]],
+  ];
+
+  function live(platform: Platform, layers: ContextLayers): Binding[] {
+    return chooseDefaultKeymap(undefined, platform).bindings.filter(
+      (b) => (!b.whenExpr || evaluateWhen(b.whenExpr, layers)) && terminalAdmits(b, layers),
+    );
+  }
+
+  it.each(["mac", "win", "linux"] as const)(
+    "leaves the text editing keys of an input inside a tool window to the input (%s)",
+    (platform) => {
+      const keys = TEXT_EDITING[platform].map(parseKeySequence);
+      for (const [scope, layers] of scopes) {
+        const taken = live(platform, layers)
+          .filter((b) => keys.some((k) => sameSequence(k, b.sequence)))
+          .map((b) => `${scope} ${formatSequence(b.sequence, platform)}: ${b.action}`);
+        expect(taken).toEqual([]);
+      }
+    },
+  );
+
+  it.each(["mac", "win", "linux"] as const)(
+    "does not resize tool windows from an input or the terminal body (%s)",
+    (platform) => {
+      for (const [scope, layers] of scopes)
+        expect(
+          live(platform, layers)
+            .filter((b) => b.action.startsWith("toolWindow.stretch"))
+            .map((b) => `${scope} ${formatSequence(b.sequence, platform)}`),
+        ).toEqual([]);
+      // 입력 칸이 아닌 툴 윈도우(트리 · 알림)에서는 돈다.
+      expect(
+        live(platform, [{}, { toolWindowFocus: true }, {}]).filter((b) =>
+          b.action.startsWith("toolWindow.stretch"),
+        ),
+      ).toHaveLength(4);
     },
   );
 });

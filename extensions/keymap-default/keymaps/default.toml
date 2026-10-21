@@ -156,34 +156,36 @@ action = "editor.focus"
 key = "escape"
 when = "toolWindowFocus && !inputFocus"
 
-# 툴 윈도우 크기 조절(10-ui 「툴 윈도우 · 창」). 툴 윈도우에 포커스가 있을 때만 — Win/Linux 의 Ctrl+Shift+←→ 는 에디터의 단어 선택이다.
+# 툴 윈도우 크기 조절(10-ui 「툴 윈도우 · 창」). 툴 윈도우에 포커스가 있고 입력 칸이 아닐 때만 — Win/Linux 의 Ctrl+Shift+←→ 는
+# 에디터와 입력 칸(파일 트리의 빠른 검색 · 터미널 탭 이름 등)의 단어 선택이다. 터미널 본문(xterm 의 입력 칸)에서도 셸로 간다 — TUI
+# 편집기의 단어 선택 · 셸 바인딩이 받는다. macOS 의 ⌃⌥⇧ 도 같은 규칙이다.
 [[bindings]]
 action = "toolWindow.stretchLeft"
 mac = "ctrl+alt+shift+left"
 win = "ctrl+shift+left"
 linux = "ctrl+shift+left"
-when = "toolWindowFocus"
+when = "toolWindowFocus && !inputFocus"
 
 [[bindings]]
 action = "toolWindow.stretchRight"
 mac = "ctrl+alt+shift+right"
 win = "ctrl+shift+right"
 linux = "ctrl+shift+right"
-when = "toolWindowFocus"
+when = "toolWindowFocus && !inputFocus"
 
 [[bindings]]
 action = "toolWindow.stretchUp"
 mac = "ctrl+alt+shift+up"
 win = "ctrl+shift+up"
 linux = "ctrl+shift+up"
-when = "toolWindowFocus"
+when = "toolWindowFocus && !inputFocus"
 
 [[bindings]]
 action = "toolWindow.stretchDown"
 mac = "ctrl+alt+shift+down"
 win = "ctrl+shift+down"
 linux = "ctrl+shift+down"
-when = "toolWindowFocus"
+when = "toolWindowFocus && !inputFocus"
 
 # 에디터 탭(10-ui §4.2 「툴 윈도우 · 창」 · 「검색 · 이동」, src/editor/editor-actions.ts). ⌘⌥W 는 Win/Linux 기본 키가 없다(표의 「—」).
 # macOS 의 ⌘W 는 `window.close` 다 — 에디터 탭이 있으면 탭, 없으면 창을 닫는다(10-ui §5.2). 네이티브 메뉴 「닫기」 가 같은 액션이라
