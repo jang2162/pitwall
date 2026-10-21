@@ -259,6 +259,9 @@ function classes(spans: [number, number, string][], from: number, to: number): s
 // 통째로 바뀐다. 20 ms 마다 화면 범위의 글자마다 칠한 토큰을 정답과 견주고, 글자 하나가 틀린 채 남은 가장 긴 시간을 잰다(글자는
 // 편집을 따라 옮겨 가며 같은 글자로 센다). 화면 어딘가가 틀린 상태가 이어진 가장 긴 시간도 함께 적는다 — 주석 · 문자열 끝에서
 // 계속 치는 동안에는 방금 친 글자가 늘 한 왕복만큼 늦게 칠해지므로 이 값은 그 구간을 치는 시간만큼 길다.
+// 가짜 타이머로 31초를 20 ms 씩 걷는다 — 결과는 시드로 정해지지만 실제로 걸리는 시간은 기기 부하를 탄다(혼자 1~3초).
+const TYPING_TIMEOUT = 30_000;
+
 async function typeForThirtySeconds(maxDelay: number) {
   vi.useFakeTimers();
   const next = random(17);
@@ -318,17 +321,25 @@ async function typeForThirtySeconds(maxDelay: number) {
   return { typed, longest, screenLongest, endedWrong: screenSince !== undefined };
 }
 
-it("never leaves a wrong highlight for more than a second while typing ten characters a second for thirty seconds", async () => {
-  const slow = await typeForThirtySeconds(150);
-  expect(slow.typed).toBe(300);
-  expect(slow.longest).toBeLessThan(1000);
-  // 다 친 뒤에는 화면이 정답이다.
-  expect(slow.endedWrong).toBe(false);
-});
+it(
+  "never leaves a wrong highlight for more than a second while typing ten characters a second for thirty seconds",
+  async () => {
+    const slow = await typeForThirtySeconds(150);
+    expect(slow.typed).toBe(300);
+    expect(slow.longest).toBeLessThan(1000);
+    // 다 친 뒤에는 화면이 정답이다.
+    expect(slow.endedWrong).toBe(false);
+  },
+  TYPING_TIMEOUT,
+);
 
-it("keeps the whole screen right within a second while typing over a local connection", async () => {
-  const local = await typeForThirtySeconds(10);
-  expect(local.longest).toBeLessThan(1000);
-  expect(local.screenLongest).toBeLessThan(1000);
-  expect(local.endedWrong).toBe(false);
-});
+it(
+  "keeps the whole screen right within a second while typing over a local connection",
+  async () => {
+    const local = await typeForThirtySeconds(10);
+    expect(local.longest).toBeLessThan(1000);
+    expect(local.screenLongest).toBeLessThan(1000);
+    expect(local.endedWrong).toBe(false);
+  },
+  TYPING_TIMEOUT,
+);
