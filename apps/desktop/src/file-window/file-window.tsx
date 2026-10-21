@@ -38,7 +38,12 @@ import {
   EditorWorkspaceProvider,
   type UnsavedAnswer,
 } from "../editor/editor-workspace";
-import { type PreviewHost, PreviewHostProvider, readAllBytes } from "../editor/preview-host";
+import {
+  pageOf,
+  type PreviewHost,
+  PreviewHostProvider,
+  readAllBytes,
+} from "../editor/preview-host";
 import { useTabSwitcher } from "../editor/tab-switcher";
 import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { watchFiles } from "../fs/file-watch";
@@ -140,6 +145,12 @@ function useFileEditor(
           title: latest.current.strings.saveFailed(path),
           body: message,
         }),
+      onSaveBlocked: (path) =>
+        latest.current.notify({
+          level: "error",
+          title: latest.current.strings.saveFailed(path),
+          body: latest.current.strings.saveReadOnly,
+        }),
       syntax: {
         open: (params) => host().call("syntax.open", params),
         edit: (params) => host().call("syntax.edit", params),
@@ -158,25 +169,32 @@ function useFileEditor(
   return workspace;
 }
 
-/** 미리보기 뷰어(이미지 · Markdown)의 바이트는 이 연결의 `fs.read` 로. 루트는 그 파일의 폴더다. */
+/**
+ * 스스로 읽는 뷰어(이미지 · Markdown · hex · 앞부분 텍스트)의 바이트는 이 연결의 `fs.read` · `fs.readBytes` 로(Host 가 그 파일 밖을
+ * 거절한다). 루트는 그 파일의 폴더다.
+ */
 function useFilePreviewHost(path: string): PreviewHost {
   const { client } = useHost();
   const latest = useRef(client);
   latest.current = client;
-  const [host] = useState<PreviewHost>(() => ({
-    readBytes: (file, _worktree, limit) =>
-      readAllBytes(
-        (params) => {
-          const c = latest.current;
-          if (!c) throw new Error("Host is not connected");
-          return c.call("fs.read", { projectId: "", worktree: null, ...params });
-        },
-        file,
-        limit,
-      ),
-    rootOf: async () => parentOf(path),
-    openExternal: (url) => openUrl(url),
-  }));
+  const [host] = useState<PreviewHost>(() => {
+    const call = () => {
+      const c = latest.current;
+      if (!c) throw new Error("Host is not connected");
+      return c;
+    };
+    const scope = { projectId: "", worktree: null };
+    return {
+      readBytes: (file, _worktree, limit) =>
+        readAllBytes((params) => call().call("fs.read", { ...scope, ...params }), file, limit),
+      readPage: async (file, _worktree, offset, length) =>
+        pageOf(await call().call("fs.readBytes", { ...scope, path: file, offset, length })),
+      readHead: (file, _worktree, length) =>
+        call().call("fs.read", { ...scope, path: file, offset: 0, length }),
+      rootOf: async () => parentOf(path),
+      openExternal: (url) => openUrl(url),
+    };
+  });
   return host;
 }
 

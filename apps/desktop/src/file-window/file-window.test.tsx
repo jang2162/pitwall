@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 // 단일 파일 창(App kind="file", `?window=file&path=…`, 12-m1-plan M1-24)을 가짜 Host 에 붙여 본다: 그 파일이 탭으로 열리고 편집 ·
 // 저장 · 외부 변경 · 미저장 닫기 확인이 프로젝트 창의 에디터와 같이 돌고, 요청에는 프로젝트가 실리지 않고, 파일 트리 · 검색 ·
-// 터미널 액션이 없고, 「프로젝트로 열기」 가 네이티브를 부른다. 접근 범위 자체(다른 경로 거절)는 Host 가 지킨다 —
+// 터미널 액션이 없고, 「프로젝트로 열기」 가 네이티브를 부른다. 50 MiB 를 넘는 파일은 이 연결로 hex · 앞부분을 읽고, 외부 도구
+// 버튼은 없다(이 창에는 외부 도구가 없다). 접근 범위 자체(다른 경로 거절)는 Host 가 지킨다 —
 // crates/pw-fs/tests/file_scope.rs · src-tauri/src/ipc.rs 시험.
 
 import { EditorView } from "@codemirror/view";
 import type {
   ConfigView,
+  FsBytes,
   FsRead,
   FsStat,
   FsWriteParams,
@@ -23,6 +25,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { App } from "../App";
 import { cursorOf } from "../editor/editor-workspace";
+import { HEAD_PREVIEW_BYTES, HEX_PAGE_BYTES } from "../editor/limits";
 import type { KeymapNative } from "../keymap/native";
 import { projectOpenInbox } from "../project-open";
 import { createThemeStore } from "../theme/theme-store";
@@ -39,6 +42,8 @@ const FILE = "/tmp/x/a.txt";
 const host = vi.hoisted(() => ({
   text: "",
   mtime: 1,
+  /** 있으면 그 파일은 이 크기의 「열지 않음」(50 MiB 초과)이다 — 바이트는 `text` 뒤를 0 으로 채운 것이다. */
+  hugeSize: undefined as number | undefined,
   calls: [] as { method: string; params: Record<string, unknown> }[],
   subscribers: [] as {
     send(m: object): void;
@@ -96,13 +101,52 @@ vi.mock("../tauri-transport", async () => {
               path: FILE,
               kind: "file",
               target: null,
-              size: host.text.length,
+              size: host.hugeSize ?? host.text.length,
               mtimeMs: host.mtime,
               readonly: false,
-              sizeClass: "editable",
+              sizeClass: host.hugeSize === undefined ? "editable" : "tooLarge",
             } satisfies FsStat);
+          case "fs.readBytes": {
+            if (path !== FILE) return outside();
+            const p = m.params as { offset: number; length: number };
+            const size = host.hugeSize ?? host.text.length;
+            const page = new Uint8Array(Math.max(0, Math.min(p.length, size - p.offset)));
+            page.set(new TextEncoder().encode(host.text).slice(p.offset, p.offset + page.length));
+            return reply({
+              path: FILE,
+              size,
+              mtimeMs: host.mtime,
+              offset: p.offset,
+              data: Buffer.from(page).toString("base64"),
+              eof: p.offset + page.length >= size,
+            } satisfies FsBytes);
+          }
           case "fs.read":
             if (path !== FILE) return outside();
+            if (host.hugeSize !== undefined) {
+              const p = m.params as { offset?: number; length?: number };
+              if (p.offset === undefined || p.length === undefined) return outside();
+              return reply({
+                path: FILE,
+                size: host.hugeSize,
+                mtimeMs: host.mtime,
+                offset: p.offset,
+                eof: false,
+                version: null,
+                content: { kind: "text", text: host.text },
+                judgment: {
+                  binary: false,
+                  encoding: "UTF-8",
+                  lossy: false,
+                  bom: null,
+                  lineEnding: "lf",
+                  longLines: false,
+                  sizeClass: "tooLarge",
+                  editable: false,
+                  highlight: false,
+                },
+              } satisfies FsRead);
+            }
             return reply({
               path: FILE,
               size: host.text.length,
@@ -114,6 +158,7 @@ vi.mock("../tauri-transport", async () => {
               judgment: {
                 binary: false,
                 encoding: "UTF-8",
+                lossy: false,
                 bom: null,
                 lineEnding: "lf",
                 longLines: false,
@@ -201,6 +246,7 @@ beforeEach(() => {
   window.history.replaceState(null, "", `/?window=file&path=${encodeURIComponent(FILE)}`);
   host.text = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
   host.mtime = 1;
+  host.hugeSize = undefined;
   host.calls = [];
   host.subscribers = [];
   native.closeWindow.mockClear();
@@ -408,4 +454,63 @@ it("asks before closing with unsaved edits and closes the window after the last 
   expect(tabs()).toEqual([]);
   expect(calls("fs.write")).toEqual([]);
   expect(native.closeWindow).toHaveBeenCalledTimes(1);
+});
+
+const notice = () => document.querySelector<HTMLElement>("[data-editor-tab] [role=status]");
+
+/** 50 MiB 를 넘는 그 파일을 열어 「열지 않음」 화면을 기다린다. */
+async function mountHuge() {
+  host.hugeSize = 60 * 1024 * 1024;
+  host.text = "head of a big log\n";
+  // happy-dom 은 배치를 하지 않는다 — hex 뷰어의 스크롤 영역만 높이를 준다.
+  const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.dataset.hexScroll !== undefined ? 400 : (clientHeight?.get?.call(this) ?? 0);
+  });
+  await mount();
+  await vi.waitFor(() => expect(notice()?.textContent).toContain("50 MiB 를 넘는 파일"));
+  expect(calls("fs.read")).toEqual([]);
+}
+
+it("offers the head and hex of a file too large to open, but no external tool", async () => {
+  await mountHuge();
+  expect([...notice()!.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+    "앞부분 1.0 MiB 보기",
+    "hex 로 보기",
+  ]);
+});
+
+it("reads a hex page of a file too large to open through this connection", async () => {
+  await mountHuge();
+  await clickButton(notice()!, "hex 로 보기");
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-hex-row]")?.textContent).toContain(
+      "68 65 61 64 20 6F 66 20",
+    ),
+  );
+  expect(calls("fs.readBytes")).toEqual([
+    { projectId: "", worktree: null, path: FILE, offset: 0, length: HEX_PAGE_BYTES },
+  ]);
+});
+
+it("shows the head of a file too large to open through this connection", async () => {
+  await mountHuge();
+  await clickButton(notice()!, "앞부분 1.0 MiB 보기");
+  await vi.waitFor(() => expect(views()).toHaveLength(1));
+  expect(views()[0]!.state.doc.line(1).text).toBe("head of a big log");
+  expect(views()[0]!.state.readOnly).toBe(true);
+  // StrictMode 의 개발 모드는 효과를 두 번 돌려 같은 읽기가 두 번일 수 있다.
+  expect(new Set(calls("fs.read").map((c) => JSON.stringify(c)))).toEqual(
+    new Set([
+      JSON.stringify({
+        projectId: "",
+        worktree: null,
+        path: FILE,
+        offset: 0,
+        length: HEAD_PREVIEW_BYTES,
+      }),
+    ]),
+  );
 });
