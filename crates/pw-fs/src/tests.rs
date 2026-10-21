@@ -782,3 +782,87 @@ fn a_file_swapped_to_an_outside_link_while_reading_is_refused() {
         "the outside content must not leak: {err:?}"
     );
 }
+
+#[cfg(unix)]
+fn mkfifo(path: &Path) {
+    let c = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: `c` 는 NUL 로 끝나는 살아 있는 경로 문자열이다.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+}
+
+/// FIFO 는 열지도 않는다 — 열면 쓰는 쪽이 올 때까지 막혀 그 요청과 스레드를 영영 붙잡는다. 전체 읽기 · 범위 읽기(Markdown 의
+/// 이미지도 범위 읽기다) · 쓰기 전에 지금 내용을 읽는 것 모두. 고장 나면 막히므로 시한을 두고 다른 스레드에서 돌린다.
+#[cfg(unix)]
+#[test]
+fn fifos_are_refused_without_opening() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::search::tests::{MIB, bounded};
+
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    let fifo = root.join("pipe");
+    mkfifo(&fifo);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&opened);
+    *f.fs.before_open.lock().unwrap() = Some(Box::new(move |_: &Path| {
+        count.fetch_add(1, Ordering::Relaxed);
+    }));
+    let path = fifo.clone();
+    let errors = bounded(64 * MIB, std::time::Duration::from_secs(10), move || {
+        let range = FsReadParams {
+            project_id: id.clone(),
+            path: path.display().to_string(),
+            offset: Some(0),
+            length: Some(4096),
+            bytes: true,
+            ..FsReadParams::default()
+        };
+        let errors = [
+            f.read(&id, &path).unwrap_err(),
+            f.fs.read(&range).unwrap_err(),
+            f.write(&id, &path, "x", None).unwrap_err(),
+        ];
+        (errors, f)
+    });
+    for err in errors.0 {
+        assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
+        assert!(
+            format!("{:?}", err.data).contains("is not a regular file"),
+            "{err:?}"
+        );
+    }
+    assert_eq!(opened.load(Ordering::Relaxed), 0);
+    use std::os::unix::fs::FileTypeExt as _;
+    assert!(fs::symlink_metadata(&fifo).unwrap().file_type().is_fifo());
+}
+
+/// 판정 뒤 open 전에 파일이 FIFO 로 바뀌어도 막히지 않고 거절한다(막히지 않게 열고 연 핸들의 종류를 본다).
+#[cfg(unix)]
+#[test]
+fn a_file_swapped_to_a_fifo_before_opening_is_refused() {
+    use crate::search::tests::{MIB, bounded};
+
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    let path = root.join("a.txt");
+    fs::write(&path, "inside").unwrap();
+    *f.fs.before_open.lock().unwrap() = Some(Box::new(|p: &Path| {
+        if fs::symlink_metadata(p).is_ok_and(|m| m.is_file()) {
+            fs::remove_file(p).unwrap();
+            mkfifo(p);
+        }
+    }));
+    let path2 = path.clone();
+    let err = bounded(64 * MIB, std::time::Duration::from_secs(10), move || {
+        f.read(&id, &path2).unwrap_err()
+    });
+    assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
+    assert!(
+        format!("{:?}", err.data).contains("is not a regular file"),
+        "{err:?}"
+    );
+}

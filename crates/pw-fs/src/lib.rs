@@ -168,12 +168,19 @@ impl Fs {
         let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
         let target = roots.readable(Path::new(&params.path)).map_err(denied)?;
         let real = &target.real;
-        let meta = fs::metadata(real).map_err(|e| io_error(real, e))?;
+        // 일반 파일이 아니면 열지 않는다 — FIFO 는 여는 것부터 막히고 장치는 여는 것만으로 일이 생길 수 있다. 링크를 따라가지
+        // 않고 본다(`real` 은 링크를 다 푼 경로라 그사이 링크로 바뀐 것도 거절한다). 그 뒤에 바뀌는 것은 open 이 다시 본다.
+        let meta = fs::symlink_metadata(real).map_err(|e| io_error(real, e))?;
         if meta.is_dir() {
             return Err(RpcError::invalid_params(format!(
                 "`{}` is a folder",
                 real.display()
             )));
+        }
+        if !meta.is_file() {
+            return Err(RpcError::invalid_params(
+                scope::NotAFile(real.clone()).to_string(),
+            ));
         }
         if params.length.is_some_and(|l| l > READ_ONLY_MAX) {
             return Err(RpcError::invalid_params(format!(
@@ -266,6 +273,11 @@ impl Fs {
                     "`{}` is a folder",
                     real.display()
                 )));
+            }
+            Ok(meta) if !meta.is_file() => {
+                return Err(RpcError::invalid_params(
+                    scope::NotAFile(real.clone()).to_string(),
+                ));
             }
             Ok(_) => Some(
                 read::read_whole(&real, &|p| self.open(&roots, p))
@@ -377,6 +389,12 @@ fn io_error(path: &Path, e: io::Error) -> RpcError {
         .and_then(|inner| inner.downcast_ref::<scope::Escaped>())
     {
         return RpcError::invalid_params(escaped.to_string());
+    }
+    if let Some(not_a_file) = e
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<scope::NotAFile>())
+    {
+        return RpcError::invalid_params(not_a_file.to_string());
     }
     if is_link_loop(&e) {
         return RpcError::invalid_params(format!("`{shown}` goes through a symlink loop"));

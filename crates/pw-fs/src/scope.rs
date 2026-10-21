@@ -13,6 +13,8 @@
 //! - **읽기를 연 뒤 다시 판정**: 판정과 open 사이에 경로의 구성 요소가 루트 밖 링크로 바뀌면(깨진 링크의 대상이 그사이 생기는
 //!   등) 다른 파일이 열린다. 파일 읽기는 연 핸들의 실제 경로([`crate::handle::path_of`])를 다시 판정하고 밖이면 버린다
 //!   ([`Roots::open_inside`]). 핸들 경로를 얻지 못하는 플랫폼은 판정만 한다. 폴더 목록(`read_dir`)은 핸들 경로를 보지 않는다.
+//! - **일반 파일만 읽는다**: FIFO 는 여는 것부터 쓰는 쪽이 올 때까지 막혀 그 요청과 스레드를 영영 붙잡는다. 읽기는 막히지
+//!   않게(unix `O_NONBLOCK`) 열고, 연 핸들이 일반 파일이 아니면 버린다([`NotAFile`]) — 판정 뒤 FIFO 로 바뀌어도 같다.
 //! - **한계(쓰기)**: 판정은 경로 글자로 하고 쓰기는 그 뒤에 경로로 연다. 판정과 rename 사이에 다른 로컬 프로세스가 경로의 폴더
 //!   하나를 루트 밖 링크로 바꾸면 임시 파일 · rename 이 루트 밖에 떨어진다. 막으려면 폴더 핸들 기준 `openat` · `renameat` 가
 //!   필요하다(M1 에서는 하지 않는다). 루트 안에 동시에 쓸 수 있는 로컬 프로세스가 있어야 생기는 경합이다.
@@ -156,10 +158,38 @@ impl std::fmt::Display for Escaped {
 
 impl std::error::Error for Escaped {}
 
+/// 연 것이 일반 파일이 아니다(FIFO · 장치 · 소켓 — [`Roots::open_inside`]). io 오류 안에 실려 RPC 오류로 바뀐다.
+#[derive(Debug)]
+pub struct NotAFile(pub PathBuf);
+
+impl std::fmt::Display for NotAFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "`{}` is not a regular file", self.0.display())
+    }
+}
+
+impl std::error::Error for NotAFile {}
+
 impl Roots {
-    /// `real`(이미 판정한 경로)을 읽기로 열고, 연 핸들의 실제 경로가 루트 안인지 다시 본다.
+    /// `real`(이미 판정한 경로)을 읽기로 열고, 연 핸들이 일반 파일인지와 그 실제 경로가 루트 안인지 다시 본다. FIFO 에서 막히지
+    /// 않게 연다(unix) — 일반 파일의 읽기에는 `O_NONBLOCK` 이 아무 일도 하지 않는다.
     pub fn open_inside(&self, real: &Path) -> io::Result<File> {
+        #[cfg(unix)]
+        let file = {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(real)?
+        };
+        #[cfg(not(unix))]
         let file = File::open(real)?;
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                NotAFile(real.to_path_buf()),
+            ));
+        }
         if let Some(opened) = crate::handle::path_of(&file) {
             let opened = simplify(opened);
             if !self.contains(&opened) {
