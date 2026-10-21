@@ -16,6 +16,12 @@ use serde_json::json;
 
 use super::*;
 
+/// 벽시계로 「100 ms 안」 을 판정하는가(M1-07 완료 기준 「취소하면 100 ms 안에 스트림이 끝난다」). release 빌드에서만 한다 —
+/// debug 빌드는 기계 부하만큼 스레드가 밀려 흔들린다(부하 40~180 에서 번갈아 실패했다). debug 빌드는 멈춘 뒤에 한 일(결과 수 ·
+/// 찾은 파일 수 · 읽은 데까지)로 판정한다. 시간을 잴 때는 혼자 돌린다:
+/// `cargo nextest run -p pw-fs --release -j 1 -E 'test(/^search::tests::stopping_/) | test(=search::tests::the_stream_sends_files_then_done_and_ends_soon_after_cancel)'`
+const RELEASE_TIMING: bool = !cfg!(debug_assertions);
+
 struct Fixture {
     _tmp: tempfile::TempDir,
     /// 임시 폴더의 실제 경로.
@@ -644,7 +650,8 @@ fn invalid_requests_are_invalid_params() {
     assert_eq!(e.code, pw_rpc::code::NOT_FOUND);
 }
 
-/// 오래 걸리는 검색(읽기마다 쉰다)을 멈추면 100 ms 안에 검색 스레드가 끝난다.
+/// 오래 걸리는 검색(읽기마다 쉰다)을 멈추면 남은 파일을 찾지 않는다 — 멈춘 뒤에 오는 결과는 그때 찾던 파일(스레드마다
+/// 하나)뿐이다. 100 ms 안에 끝나는지는 release 빌드에서만 판정한다([`RELEASE_TIMING`]).
 #[test]
 fn stopping_ends_the_search_within_100_ms() {
     let fx = Fixture::new();
@@ -656,11 +663,15 @@ fn stopping_ends_the_search_within_100_ms() {
     // 앞부분 뒤의 읽기가 파일마다 한 번(끝)이라 멈추지 않으면 256 × 20 ms / 스레드 수(12 이하) ≈ 430 ms 넘게 걸린다.
     plan.read_delay = Some(Duration::from_millis(20));
     let stop = Arc::new(AtomicBool::new(false));
+    let after_stop = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = {
-        let stop = Arc::clone(&stop);
+        let (stop, after_stop) = (Arc::clone(&stop), Arc::clone(&after_stop));
         std::thread::spawn(move || {
-            plan.run(&stop, &mut |_| {
+            plan.run(&Arc::clone(&stop), &mut |_| {
+                if stop.load(Ordering::Relaxed) {
+                    after_stop.fetch_add(1, Ordering::Relaxed);
+                }
                 let _ = tx.send(());
                 true
             })
@@ -672,11 +683,19 @@ fn stopping_ends_the_search_within_100_ms() {
     stop.store(true, Ordering::Relaxed);
     let summary = worker.join().unwrap();
     let took = stopped.elapsed();
-    assert!(took < Duration::from_millis(100), "took {took:?}");
+    let after_stop = after_stop.load(Ordering::Relaxed);
+    assert!(
+        after_stop <= SEARCH_THREADS,
+        "{after_stop} files after the stop"
+    );
     assert!(summary.searched_files < 256, "{summary:?}");
+    if RELEASE_TIMING {
+        assert!(took < Duration::from_millis(100), "took {took:?}");
+    }
 }
 
-/// 큰 파일 하나를 읽는 도중에 멈춰도 그 파일을 끝까지 읽지 않는다(읽기 한 번 안에 끝난다).
+/// 큰 파일 하나를 읽는 도중에 멈춰도 그 파일을 끝까지 읽지 않는다 — 멈춘 뒤의 읽기는 그때 하던 한 번뿐이다. 100 ms 는 release
+/// 빌드에서만 판정한다([`RELEASE_TIMING`]).
 #[test]
 fn stopping_ends_a_long_file_read_too() {
     let fx = Fixture::new();
@@ -685,22 +704,33 @@ fn stopping_ends_a_long_file_read_too() {
     write(&root.join("big.txt"), "filler line\n".repeat(700_000));
     let mut plan = fx.fs.search_plan(&params(&id, &root, "needle")).unwrap();
     plan.read_delay = Some(Duration::from_millis(5));
+    let reads = Arc::clone(&plan.reads);
     let stop = Arc::new(AtomicBool::new(false));
     let worker = {
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || plan.run(&stop, &mut |_| true))
     };
-    std::thread::sleep(Duration::from_millis(50));
-    assert!(!worker.is_finished(), "the read must still be running");
+    // 읽기가 시작된 뒤에 멈춘다.
+    let started = Instant::now();
+    while reads.load(Ordering::Relaxed) < 3 {
+        assert!(started.elapsed() < Duration::from_secs(20), "no reads");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let stopped = Instant::now();
     stop.store(true, Ordering::Relaxed);
+    let at_stop = reads.load(Ordering::Relaxed);
     let summary = worker.join().unwrap();
     let took = stopped.elapsed();
-    assert!(took < Duration::from_millis(100), "took {took:?}");
+    let after_stop = reads.load(Ordering::Relaxed) - at_stop;
+    assert!(after_stop <= 1, "{after_stop} reads after the stop");
     assert_eq!(summary.searched_files, 1);
+    if RELEASE_TIMING {
+        assert!(took < Duration::from_millis(100), "took {took:?}");
+    }
 }
 
-/// RPC 로: 청크 형식, 마지막 `done`, 취소하면 100 ms 안에 `stream.end` 가 오고 검색 스레드도 멈춘다.
+/// RPC 로: 청크 형식, 마지막 `done`, 취소하면 `stream.end` 가 오고 검색 스레드도 남은 파일을 찾지 않고 멈춘다. 100 ms 는 release
+/// 빌드에서만 판정한다([`RELEASE_TIMING`]).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_stream_sends_files_then_done_and_ends_soon_after_cancel() {
     let fx = Fixture::new();
@@ -761,19 +791,22 @@ async fn the_stream_sends_files_then_done_and_ends_soon_after_cancel() {
 
     // 오래 걸리는 검색을 취소한다. 일치가 없어 검색 스레드가 보낼 것이 없다 — 받는 쪽이 사라진 것을 보내다 알 수 없으니,
     // 스트림이 끝날 때 멈추라고 알려야 멈춘다. 일치하는 `a.txt` 가 없는 폴더만 찾는다 — 취소 뒤 그것을 보내다 실패해도 멈추므로.
+    // 끝까지 찾으면 256 × 100 ms / 스레드 8개 = 3.2초 넘게 걸린다.
     let slow = root.join("slow");
     for i in 0..256 {
         write(&slow.join(format!("f{i}.txt")), "nothing\n");
     }
-    let finished = Arc::new(AtomicBool::new(false));
+    let finished = Arc::new(Mutex::new(None::<Summary>));
     let mut router = Router::new();
     let (fs, flag) = (Arc::clone(&fx.fs), Arc::clone(&finished));
     router.stream(SearchTextMethod, move |_ctx, params, sink| {
         let (fs, flag) = (Arc::clone(&fs), Arc::clone(&flag));
         async move {
             stream(fs, params, &sink, |plan| {
-                plan.read_delay = Some(Duration::from_millis(20));
-                plan.on_finish = Some(Box::new(move || flag.store(true, Ordering::Relaxed)));
+                plan.read_delay = Some(Duration::from_millis(100));
+                plan.on_finish = Some(Box::new(move |summary: &Summary| {
+                    *flag.lock().unwrap() = Some(*summary);
+                }));
             })
             .await
         }
@@ -790,7 +823,7 @@ async fn the_stream_sends_files_then_done_and_ends_soon_after_cancel() {
     session.handle_value(json!({"jsonrpc": "2.0", "method": "stream.credit", "params": {"streamId": opened.stream_id, "credit": 100}}));
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(
-        !finished.load(Ordering::Relaxed),
+        finished.lock().unwrap().is_none(),
         "the search must still be running"
     );
     let cancelled = Instant::now();
@@ -804,16 +837,30 @@ async fn the_stream_sends_files_then_done_and_ends_soon_after_cancel() {
         }
     }
     let ended = cancelled.elapsed();
-    assert!(
-        ended < Duration::from_millis(100),
-        "stream.end took {ended:?}"
-    );
-    while !finished.load(Ordering::Relaxed) {
+    let summary = loop {
+        if let Some(summary) = *finished.lock().unwrap() {
+            break summary;
+        }
         assert!(
-            cancelled.elapsed() < Duration::from_millis(100),
-            "the search kept running after the cancel"
+            cancelled.elapsed() < Duration::from_secs(20),
+            "the search thread did not end"
         );
         tokio::time::sleep(Duration::from_millis(1)).await;
+    };
+    let stopped = cancelled.elapsed();
+    assert!(
+        summary.searched_files < 256,
+        "the search kept running after the cancel: {summary:?}"
+    );
+    if RELEASE_TIMING {
+        assert!(
+            ended < Duration::from_millis(100),
+            "stream.end took {ended:?}"
+        );
+        assert!(
+            stopped < Duration::from_millis(100),
+            "the search thread took {stopped:?}"
+        );
     }
 }
 
@@ -1058,7 +1105,8 @@ fn searching_a_50_mib_one_line_file_stays_within_memory() {
 
 /// 긴 한 줄 파일들을 찾는 도중에 멈춰도 100 ms 안에 끝난다 — 줄 하나의 결과를 만드는 데 오래 걸리지 않는다. 일치가 2백만 개인
 /// 2 MiB 줄이면 일치를 모두 모으던 구현은 (시험 빌드에서) 1초 가까이 걸린다. 멈춘 뒤 남는 일(검색기가 버퍼에서 줄 끝을 찾는 것)은
-/// 줄 길이에 비례해 짧다 — 줄이 길수록 부하가 큰 기계에서 흔들린다.
+/// 줄 길이에 비례해 짧다. 시간은 release 빌드에서만 판정한다([`RELEASE_TIMING`]) — debug 빌드에서는 끝나는지만 본다(줄 하나의
+/// 결과가 미리보기 크기에 비례하는 것은 `a_50_mib_line_costs_memory_in_proportion_to_the_preview`).
 #[test]
 fn stopping_ends_long_line_files_within_100_ms() {
     let fx = Fixture::new();
@@ -1087,7 +1135,9 @@ fn stopping_ends_long_line_files_within_100_ms() {
     stop.store(true, Ordering::Relaxed);
     worker.join().unwrap();
     let took = stopped.elapsed();
-    assert!(took < Duration::from_millis(100), "took {took:?}");
+    if RELEASE_TIMING {
+        assert!(took < Duration::from_millis(100), "took {took:?}");
+    }
 }
 
 /// 상태가 폭발하는 정규식(lazy DFA 캐시가 한도까지 자란다)으로 찾아도 힙이 한도 안이다.

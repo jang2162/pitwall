@@ -16,6 +16,10 @@ use super::*;
 
 /// 완료 기준의 지연 상한.
 const LATENCY: Duration = Duration::from_millis(300);
+/// 이벤트가 「온다」 만 볼 때 기다리는 시간. 지연을 재는 시험(완료 기준 ①)이 아니면 이것을 쓴다 — 부하가 큰 기계에서는 OS 가
+/// 이벤트를 늦게 넘긴다(macOS 부하 160 에서 새 폴더 이벤트가 0.13~0.67초, 다른 시험이 함께 돌면 0.9초를 넘었다). 오면 곧바로
+/// 돌아오므로 통과하는 시험은 늦어지지 않는다.
+const ARRIVES: Duration = Duration::from_secs(10);
 
 struct Fixture {
     _tmp: tempfile::TempDir,
@@ -405,11 +409,11 @@ fn folder_watches_skip_ignored_folders_and_follow_new_ones() {
     let watch = f.watch(options);
     let _lease = watch.acquire(&params(&id)).unwrap();
     fs::create_dir_all(root.join("src/fresh")).unwrap();
-    let (got, _) = changes.until(&root.join("src/fresh"), LATENCY * 3);
+    let (got, _) = changes.until(&root.join("src/fresh"), ARRIVES);
     assert!(got.is_some());
     // 폴더가 알려진 뒤에 그 안에 쓴 파일이 온다(새 폴더에 감시가 붙었다).
     fs::write(root.join("src/fresh/a.rs"), "a").unwrap();
-    let (got, before) = changes.until(&root.join("src/fresh/a.rs"), LATENCY * 3);
+    let (got, before) = changes.until(&root.join("src/fresh/a.rs"), ARRIVES);
     assert!(got.is_some(), "{before:?}");
     // ignore 된 폴더 안에 새로 만든 폴더에는 걸지 않는다.
     fs::create_dir_all(root.join("target/debug/build")).unwrap();
@@ -557,7 +561,7 @@ fn git_internals_are_filtered() {
         let _lease = watch.acquire(&params(&id)).unwrap();
         fs::write(root.join(".git/index"), "i").unwrap();
         fs::write(root.join("a.txt"), "a").unwrap();
-        let (got, before) = changes.until(&root.join("a.txt"), LATENCY * 3);
+        let (got, before) = changes.until(&root.join("a.txt"), ARRIVES);
         let (_, changed) = got.expect("a.txt");
         for c in before.iter().chain([&changed]) {
             assert!(
@@ -589,7 +593,7 @@ fn changes_behind_a_link_to_outside_are_not_reported() {
         fs::write(outside.join("secret.txt"), "s").unwrap();
         fs::write(outside.join("sub/deeper.txt"), "d").unwrap();
         std::os::unix::fs::symlink(&outside, root.join("link2")).unwrap();
-        let (got, before) = changes.until(&root.join("link2"), LATENCY * 3);
+        let (got, before) = changes.until(&root.join("link2"), ARRIVES);
         assert!(
             got.is_some(),
             "{strategy:?}: the new link itself is a change inside the root"
@@ -618,7 +622,8 @@ fn changes_behind_a_link_to_outside_are_not_reported() {
 fn linked_ignore_files_are_not_read(link: fn(&Path, &Path)) {
     use crate::search::tests::{MIB, bounded};
 
-    bounded(64 * MIB, Duration::from_secs(20), move || {
+    // 시한은 영영 막히는 고장에서 시험을 끝내려는 것이다 — 막히면 첫 대기(`ARRIVES`)에서 실패한다.
+    bounded(64 * MIB, Duration::from_secs(60), move || {
         for strategy in strategies() {
             let f = Fixture::new();
             let root = f.base.join("proj");
@@ -640,10 +645,10 @@ fn linked_ignore_files_are_not_read(link: fn(&Path, &Path)) {
             let watch = f.watch(options);
             let _lease = watch.acquire(&params(&id)).unwrap();
             fs::create_dir_all(root.join("src/fresh")).unwrap();
-            let (got, before) = changes.until(&root.join("src/fresh"), LATENCY * 3);
+            let (got, before) = changes.until(&root.join("src/fresh"), ARRIVES);
             assert!(got.is_some(), "{strategy:?}: {before:?}");
             fs::write(root.join("src/fresh/a.rs"), "a").unwrap();
-            let (got, before) = changes.until(&root.join("src/fresh/a.rs"), LATENCY * 3);
+            let (got, before) = changes.until(&root.join("src/fresh/a.rs"), ARRIVES);
             assert!(got.is_some(), "{strategy:?}: {before:?}");
         }
     });
@@ -687,7 +692,7 @@ fn the_watch_is_shared_and_released_with_the_last_lease() {
     drop(first);
     assert_eq!(watch.watched_roots(), 1);
     fs::write(root.join("a.txt"), "a").unwrap();
-    let (got, _) = changes.until(&root.join("a.txt"), LATENCY * 3);
+    let (got, _) = changes.until(&root.join("a.txt"), ARRIVES);
     let (_, changed) = got.expect("still watched by the second lease");
     // 한 번 쓴 것은 이벤트 하나다(엔진이 둘이면 둘이 온다).
     let dup = changes.all(Duration::from_millis(200));
@@ -740,7 +745,7 @@ fn a_worktree_lease_watches_the_worktree_root() {
 
     fs::write(main.join("app/main.txt"), "m").unwrap();
     fs::write(wt.join("app/wt.txt"), "w").unwrap();
-    let (got, before) = changes.until(&wt.join("app/wt.txt"), LATENCY * 3);
+    let (got, before) = changes.until(&wt.join("app/wt.txt"), ARRIVES);
     let (_, changed) = got.expect("worktree change");
     assert_eq!(changed.worktree.as_deref(), Some(worktree.as_str()));
     let late = changes.all(Duration::from_millis(200));
@@ -798,7 +803,7 @@ async fn the_stream_holds_the_watch_until_the_session_closes() {
     let path = root.join("a.txt");
     let found = tokio::task::spawn_blocking(move || {
         fs::write(&path, "a").unwrap();
-        changes.until(&path, LATENCY * 3).0.is_some()
+        changes.until(&path, ARRIVES).0.is_some()
     })
     .await
     .unwrap();

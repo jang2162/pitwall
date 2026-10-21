@@ -319,7 +319,7 @@ async fn stream(
             let summary = plan.run(&stop, &mut |file| tx.blocking_send(file).is_ok());
             #[cfg(test)]
             if let Some(finish) = plan.on_finish {
-                finish();
+                finish(&summary);
             }
             Ok::<_, RpcError>(summary)
         })
@@ -406,6 +406,8 @@ impl Fs {
             #[cfg(test)]
             read_delay: None,
             #[cfg(test)]
+            reads: Arc::default(),
+            #[cfg(test)]
             on_finish: None,
         })
     }
@@ -476,9 +478,12 @@ struct Plan {
     /// 시험: 읽기마다 이만큼 쉰다(오래 걸리는 검색을 재현해 취소를 본다).
     #[cfg(test)]
     read_delay: Option<std::time::Duration>,
-    /// 시험: 검색 스레드가 [`Plan::run`] 을 마칠 때 부른다.
+    /// 시험: 멈춤 확인을 지나 파일에서 읽은 횟수(멈춘 뒤에 더 읽지 않는지 본다).
     #[cfg(test)]
-    on_finish: Option<Box<dyn FnOnce() + Send + Sync>>,
+    reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// 시험: 검색 스레드가 [`Plan::run`] 을 마칠 때 그 수치로 부른다.
+    #[cfg(test)]
+    on_finish: Option<OnFinish>,
 }
 
 /// 검색 전체에서 나누는 상태.
@@ -493,6 +498,10 @@ struct Shared<'a> {
     large_files: AtomicU64,
     labels: Labels,
 }
+
+/// 시험: [`Plan`] 의 `on_finish`.
+#[cfg(test)]
+type OnFinish = Box<dyn FnOnce(&Summary) + Send + Sync>;
 
 /// 끝난 검색의 수치.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -668,6 +677,8 @@ impl Shared<'_> {
             stop: self.stop,
             #[cfg(test)]
             delay: self.plan.read_delay,
+            #[cfg(test)]
+            reads: &self.plan.reads,
         });
         let mut sink = Lines {
             shared: self,
@@ -774,6 +785,8 @@ struct Stoppable<'a> {
     stop: &'a AtomicBool,
     #[cfg(test)]
     delay: Option<std::time::Duration>,
+    #[cfg(test)]
+    reads: &'a std::sync::atomic::AtomicUsize,
 }
 
 impl Read for Stoppable<'_> {
@@ -785,6 +798,8 @@ impl Read for Stoppable<'_> {
         if self.stop.load(Ordering::Relaxed) {
             return Ok(0);
         }
+        #[cfg(test)]
+        self.reads.fetch_add(1, Ordering::Relaxed);
         self.inner.read(buf)
     }
 }

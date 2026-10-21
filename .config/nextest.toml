@@ -3,8 +3,3 @@
 # 한 OS 에서 처음 도는 시험이 여럿 실패해도 한 번의 실행으로 전부 드러낸다.
 fail-fast = false
 
-# 취소가 100 ms 안에 끝나는지 벽시계로 재는 검색 시험은 혼자 돈다. 다른 시험 프로세스가 큰 파일을 쓰고 읽는 동안에는 부하가 큰
-# 기계에서 스레드가 그만큼 밀려 흔들린다(시험 하나는 1초 안에 끝난다).
-[[profile.default.overrides]]
-filter = 'package(pw-fs) & (test(/^search::tests::stopping_/) | test(=search::tests::the_stream_sends_files_then_done_and_ends_soon_after_cancel))'
-threads-required = "num-test-threads"
