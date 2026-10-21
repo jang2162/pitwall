@@ -3,7 +3,8 @@
 //! `ignore` 크레이트의 걷기도 같은 파일을 읽지만 그냥 열어(`File::open`) 줄 단위로 끝까지 읽는다. 클론한 저장소의
 //! `.gitignore -> /dev/zero` 링크 하나로 메모리가 끝없이 늘고, FIFO 를 가리키면 영구히 막히고, 루트 밖을 가리키면 루트 밖
 //! 파일을 읽는다. 여기서는 ignore 파일을 모두 [`read_small`](pw_lang::attributes::read_small)(심링크 · 일반 파일 아님 · 1 MiB
-//! 초과는 없는 것으로 본다)로 읽는다. 걷기에서는 `ignore` 의 ignore 기능을 끄고 이것을 `filter_entry` 에서 부른다.
+//! 초과는 없는 것으로 본다)로 읽는다. 걷기에서는 `ignore` 의 ignore 기능을 끄고([`skip_ignore_files`]) 이것을 `filter_entry` 에서
+//! 부른다. 검색(`search.text`) · 목록(`fs.list`) · 감시(`fs.watch`)가 모두 이 판정을 쓴다.
 //!
 //! 규칙은 `ignore`(ripgrep)와 같다.
 //! - 우선순위: `.ignore` > `.gitignore` > `info/exclude` > 전역 gitignore. 같은 종류 안에서는 깊은 폴더의 것이 먼저이고, `!패턴`
@@ -25,8 +26,8 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use ignore::{Match, WalkBuilder};
 use pw_lang::attributes::{MAX_ATTRIBUTES_BYTES, find_repo, read_small};
 
 use crate::scope::Roots;
@@ -133,6 +134,16 @@ impl IgnoreRules {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<PathBuf, Arc<Dir>>> {
         self.dirs.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// `walk` 가 ignore 파일을 읽지 않게 한다(숨김 파일 · 글롭 판정은 그대로). 판정은 `filter_entry` 에서 [`IgnoreRules::ignored`] 로
+/// 한다.
+pub(crate) fn skip_ignore_files(walk: &mut WalkBuilder) -> &mut WalkBuilder {
+    walk.ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .parents(false)
 }
 
 /// 사람 자신의 설정 파일(전역 gitignore)을 읽는다. dotfiles 도구가 흔히 링크로 두므로 링크는 따라가되, 일반 파일만 · 상한까지만

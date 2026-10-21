@@ -29,6 +29,8 @@ use pw_core::notification::{Level, Notification};
 
 use super::batch::{Batch, MAX_PATHS};
 use super::{FsChanged, TOPIC_CHANGED, WatchMode};
+use crate::ignore_rules::{IgnoreRules, skip_ignore_files};
+use crate::scope::Roots;
 
 /// 디바운스 창(결정 M1-D7).
 pub const DEBOUNCE: Duration = Duration::from_millis(75);
@@ -364,7 +366,7 @@ impl Backend {
     /// `start` 와 그 아래의 ignore 되지 않은 폴더(`start` 는 ignore 판정을 이미 지났다)에 감시를 건다. 걸은 폴더를 돌려준다(부모가
     /// 먼저다).
     fn add_tree(&mut self, start: &Path) -> Vec<PathBuf> {
-        let dirs = visible_dirs(start);
+        let dirs = visible_dirs(&self.root, start);
         for dir in &dirs {
             self.add_dir(dir.clone());
         }
@@ -529,19 +531,31 @@ fn sender(tx: &mpsc::Sender<Msg>) -> impl Fn(notify::Result<notify::Event>) + Se
     }
 }
 
-/// ignore 걷기의 공통 설정. `fs.list` 의 판정(`crate::list`)과 같다: 숨김 파일은 ignore 가 아니고, 링크를 따르지 않는다. `.git/`
-/// 은 감시하지 않는다(M2 의 몫).
-fn walker(start: &Path) -> ignore::WalkBuilder {
+/// ignore 걷기의 공통 설정. `fs.list` 의 판정(`crate::list`)과 같다: 숨김 파일은 ignore 가 아니고, 링크를 따르지 않는다. ignore
+/// 파일은 [`IgnoreRules`] 가 안전하게 읽는다(`.gitignore -> /dev/zero` · FIFO 링크). 시작점은 판정하지 않는다. `.git/` 은 감시하지
+/// 않는다(M2 의 몫). `keep` 은 그 밖에 더 거를 항목이다.
+fn walker(
+    root: &Path,
+    start: &Path,
+    keep: impl Fn(&ignore::DirEntry) -> bool + Send + Sync + 'static,
+) -> ignore::WalkBuilder {
+    let rules = IgnoreRules::new(Roots::new([root.to_path_buf()]));
     let mut walk = ignore::WalkBuilder::new(start);
-    walk.hidden(false)
+    skip_ignore_files(&mut walk)
+        .hidden(false)
         .follow_links(false)
-        .filter_entry(|e| e.file_name() != ".git");
+        .filter_entry(move |e| {
+            e.file_name() != ".git"
+                && keep(e)
+                && (e.depth() == 0
+                    || !rules.ignored(e.path(), e.file_type().is_some_and(|t| t.is_dir())))
+        });
     walk
 }
 
-/// `start` 와 그 아래의 ignore 되지 않은 폴더. 시작점은 판정하지 않는다. 부모 폴더의 ignore 파일도 읽는다(`parents`).
-fn visible_dirs(start: &Path) -> Vec<PathBuf> {
-    walker(start)
+/// `start`(루트 `root` 안)와 그 아래의 ignore 되지 않은 폴더. 시작점은 판정하지 않는다. 부모 폴더의 ignore 파일도 읽는다.
+fn visible_dirs(root: &Path, start: &Path) -> Vec<PathBuf> {
+    walker(root, start, |_| true)
         .build()
         .flatten()
         .filter(|e| e.file_type().is_some_and(|t| t.is_dir()))
@@ -556,9 +570,8 @@ fn visible(root: &Path, dir: &Path) -> bool {
     };
     let depth = rel.components().count();
     let target = dir.to_path_buf();
-    let mut walk = walker(root);
-    walk.max_depth(Some(depth))
-        .filter_entry(move |e| e.file_name() != ".git" && target.starts_with(e.path()));
+    let mut walk = walker(root, root, move |e| target.starts_with(e.path()));
+    walk.max_depth(Some(depth));
     walk.build().flatten().any(|e| e.path() == dir)
 }
 

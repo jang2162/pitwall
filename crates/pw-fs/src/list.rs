@@ -1,7 +1,8 @@
 //! 폴더 한 단계 목록과 각 항목의 ignore 여부.
 //!
-//! ignore 판정은 `ignore` 크레이트(ripgrep 의 규칙: `.gitignore` · `.git/info/exclude` · 전역 gitignore · `.ignore`)에 맡긴다.
-//! 그 크레이트는 무시된 항목을 **건너뛸** 뿐 표시하지 않으므로, 루트에서 이 폴더까지만 내려가는 걷기로 「보이는 항목」을 얻고
+//! ignore 판정은 ripgrep 의 규칙(`.gitignore` · `.git/info/exclude` · 전역 gitignore · `.ignore`)이다. ignore 파일은
+//! [`crate::ignore_rules`] 가 안전하게 읽는다 — `ignore` 크레이트의 걷기는 링크를 따라 끝까지 읽어 `.gitignore -> /dev/zero` 하나로
+//! 메모리가 끝없이 는다. 걷기는 무시된 항목을 **건너뛸** 뿐 표시하지 않으므로, 루트에서 이 폴더까지만 내려가는 걷기로 「보이는 항목」을 얻고
 //! `read_dir` 의 전체 항목과 비교한다. 루트부터 걸어야 무시된 폴더 안(`target/debug`)의 항목도 무시된 것으로 나온다 — 그 폴더에서
 //! 걷기 시작하면 걷는 시작점은 판정하지 않는다. 숨김 파일은 ignore 가 아니다(`hidden(false)`).
 //!
@@ -18,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use pw_core::registry::path::normalize;
 
+use crate::ignore_rules::{IgnoreRules, skip_ignore_files};
 use crate::scope::{Readable, Roots};
 
 #[derive(
@@ -87,7 +89,7 @@ const PARALLEL_FROM: usize = 1024;
 pub fn list(dir: &Readable, roots: &Roots) -> io::Result<Vec<FsEntry>> {
     let raw: Vec<fs::DirEntry> = fs::read_dir(&dir.real)?.collect::<io::Result<_>>()?;
     let (visible, mut entries) = std::thread::scope(|s| {
-        let walker = s.spawn(|| visible_names(dir));
+        let walker = s.spawn(|| visible_names(dir, roots));
         let entries = entries_of(&raw, roots);
         // 걷기가 패닉하면 모두 무시되지 않은 것으로 보지 않고, 무시된 것으로 표시한다(숨김 쪽이 안전하다).
         (walker.join().unwrap_or(None), entries)
@@ -158,16 +160,24 @@ fn entry(raw: &fs::DirEntry, roots: &Roots) -> Option<(FsEntry, OsString)> {
 }
 
 /// `dir` 의 항목 중 무시되지 않는 것의 이름. `dir` 자체가 무시되는 곳(또는 그 안)이면 `None`.
-fn visible_names(dir: &Readable) -> Option<HashSet<OsString>> {
+fn visible_names(dir: &Readable, roots: &Roots) -> Option<HashSet<OsString>> {
     let depth = dir.real.strip_prefix(&dir.root).ok()?.components().count();
     let target: PathBuf = dir.real.clone();
-    let walk = ignore::WalkBuilder::new(&dir.root)
+    let rules = IgnoreRules::new(roots.clone());
+    let mut walk = ignore::WalkBuilder::new(&dir.root);
+    skip_ignore_files(&mut walk)
         .hidden(false)
         // `dir.real` 은 링크를 모두 푼 경로라 링크를 따를 일이 없다(따르면 걷기가 항목마다 stat 한다).
         .follow_links(false)
         .max_depth(Some(depth + 1))
-        .filter_entry(move |e| target.starts_with(e.path()) || e.path().parent() == Some(&target))
-        .build();
+        .filter_entry(move |e| {
+            if !(target.starts_with(e.path()) || e.path().parent() == Some(&target)) {
+                return false;
+            }
+            // 시작점은 판정하지 않는다(`ignore` 의 걷기와 같다).
+            e.depth() == 0 || !rules.ignored(e.path(), e.file_type().is_some_and(|t| t.is_dir()))
+        });
+    let walk = walk.build();
     let mut reached = false;
     let mut names = HashSet::new();
     for entry in walk.flatten() {
@@ -282,6 +292,68 @@ mod tests {
             [
                 ("a.rs".to_owned(), EntryKind::File, false),
                 ("b.tmp".to_owned(), EntryKind::File, true),
+            ]
+        );
+    }
+
+    /// `.gitignore -> /dev/zero` 링크는 읽지 않는다(없는 것으로 본다) — 끝까지 읽으면 메모리가 끝없이 는다. 같은 폴더의 `.ignore`
+    /// 는 그대로 적용된다.
+    #[cfg(unix)]
+    #[test]
+    fn an_ignore_file_linked_to_dev_zero_is_not_read() {
+        use crate::search::tests::{MIB, bounded};
+
+        let (_tmp, root) = repo();
+        std::os::unix::fs::symlink("/dev/zero", root.join(".gitignore")).unwrap();
+        fs::write(root.join(".ignore"), "*.log\n").unwrap();
+        fs::write(root.join("a.log"), "x").unwrap();
+        fs::write(root.join("a.rs"), "x").unwrap();
+        let roots = Roots::new([root.clone()]);
+        let dir = root.clone();
+        let got = bounded(64 * MIB, std::time::Duration::from_secs(10), move || {
+            listed(&roots, &dir)
+        });
+        assert_eq!(
+            got,
+            [
+                (".git".to_owned(), EntryKind::Dir, false),
+                (".gitignore".to_owned(), EntryKind::Symlink, false),
+                (".ignore".to_owned(), EntryKind::File, false),
+                ("a.log".to_owned(), EntryKind::File, true),
+                ("a.rs".to_owned(), EntryKind::File, false),
+            ]
+        );
+    }
+
+    /// FIFO 를 가리키는 `.gitignore` · `.ignore` 링크는 열지 않는다 — 열면 쓰는 쪽이 없어 영영 막힌다. 위 폴더의 규칙은 그대로다.
+    #[cfg(unix)]
+    #[test]
+    fn ignore_files_linked_to_a_fifo_do_not_block_the_list() {
+        use crate::search::tests::{MIB, bounded};
+
+        let (tmp, root) = repo();
+        let fifo = simplify(fs::canonicalize(tmp.path()).unwrap()).join("fifo");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: `c` 는 NUL 로 끝나는 살아 있는 경로 문자열이다.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+        fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        let sub = root.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        std::os::unix::fs::symlink(&fifo, sub.join(".gitignore")).unwrap();
+        std::os::unix::fs::symlink(&fifo, sub.join(".ignore")).unwrap();
+        fs::write(sub.join("a.log"), "x").unwrap();
+        fs::write(sub.join("a.rs"), "x").unwrap();
+        let roots = Roots::new([root.clone()]);
+        let got = bounded(64 * MIB, std::time::Duration::from_secs(10), move || {
+            listed(&roots, &sub)
+        });
+        assert_eq!(
+            got,
+            [
+                (".gitignore".to_owned(), EntryKind::Symlink, false),
+                (".ignore".to_owned(), EntryKind::Symlink, false),
+                ("a.log".to_owned(), EntryKind::File, true),
+                ("a.rs".to_owned(), EntryKind::File, false),
             ]
         );
     }

@@ -43,7 +43,7 @@ use pw_lang::attributes::{RepoAttributes, find_repo};
 use pw_rpc::{Router, RpcError, StreamSink, rpc_method};
 use serde::{Deserialize, Serialize};
 
-use crate::ignore_rules::IgnoreRules;
+use crate::ignore_rules::{IgnoreRules, skip_ignore_files};
 use crate::judge::{Bom, EDITABLE_MAX, READ_ONLY_MAX, SNIFF_BYTES};
 use crate::scope::Roots;
 use crate::{Fs, denied, io_error};
@@ -581,13 +581,9 @@ impl Plan {
             std::thread::available_parallelism().map_or(1, |n| n.get().min(SEARCH_THREADS));
         let mut walk = WalkBuilder::new(&target.path);
         // ignore 파일은 `IgnoreRules` 가 안전하게 읽는다(그 모듈 머리 주석). `ignore` 의 걷기는 숨김 파일 · 글롭만 본다.
-        walk.threads(threads)
+        skip_ignore_files(&mut walk)
+            .threads(threads)
             .hidden(!self.hidden)
-            .ignore(false)
-            .git_ignore(false)
-            .git_global(false)
-            .git_exclude(false)
-            .parents(false)
             .follow_links(true)
             .overrides(target.overrides.clone());
         let rules = self.ignore.clone();
@@ -1081,4 +1077,4 @@ fn relative(path: &Path, base: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

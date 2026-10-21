@@ -612,6 +612,66 @@ fn changes_behind_a_link_to_outside_are_not_reported() {
     }
 }
 
+/// 감시가 ignore 파일을 읽는 두 자리 — 폴더별 감시를 걸 폴더 고르기와, 새 폴더 · 바뀐 경로가 ignore 된 폴더 안인지 보기 — 가
+/// 링크된 ignore 파일(`link` 가 만든다)을 읽지 않고 제때 끝난다. `ignored` 는 `.ignore` 로 숨긴 폴더라 그 규칙은 그대로 적용된다.
+#[cfg(unix)]
+fn linked_ignore_files_are_not_read(link: fn(&Path, &Path)) {
+    use crate::search::tests::{MIB, bounded};
+
+    bounded(64 * MIB, Duration::from_secs(20), move || {
+        for strategy in strategies() {
+            let f = Fixture::new();
+            let root = f.base.join("proj");
+            let id = f.project(&root);
+            for dir in [".git", "src", "ignored"] {
+                fs::create_dir_all(root.join(dir)).unwrap();
+            }
+            fs::write(root.join(".ignore"), "ignored/\n").unwrap();
+            link(&f.base, &root);
+            let options = Options {
+                strategy,
+                ..Options::default()
+            };
+            if strategy == Strategy::Folders {
+                let dirs: Vec<PathBuf> = watched_dirs_of(&options, &root).into_keys().collect();
+                assert_eq!(dirs, vec![root.clone(), root.join("src")]);
+            }
+            let mut changes = f.changes(&id);
+            let watch = f.watch(options);
+            let _lease = watch.acquire(&params(&id)).unwrap();
+            fs::create_dir_all(root.join("src/fresh")).unwrap();
+            let (got, before) = changes.until(&root.join("src/fresh"), LATENCY * 3);
+            assert!(got.is_some(), "{strategy:?}: {before:?}");
+            fs::write(root.join("src/fresh/a.rs"), "a").unwrap();
+            let (got, before) = changes.until(&root.join("src/fresh/a.rs"), LATENCY * 3);
+            assert!(got.is_some(), "{strategy:?}: {before:?}");
+        }
+    });
+}
+
+/// `.gitignore -> /dev/zero` 링크를 끝까지 읽으면 메모리가 끝없이 는다.
+#[cfg(unix)]
+#[test]
+fn an_ignore_file_linked_to_dev_zero_is_not_read() {
+    linked_ignore_files_are_not_read(|_, root| {
+        std::os::unix::fs::symlink("/dev/zero", root.join(".gitignore")).unwrap();
+    });
+}
+
+/// FIFO 를 가리키는 `.gitignore` · `.ignore` 링크를 열면 쓰는 쪽이 없어 감시 스레드가 영영 막힌다.
+#[cfg(unix)]
+#[test]
+fn ignore_files_linked_to_a_fifo_do_not_block_the_watch() {
+    linked_ignore_files_are_not_read(|base, root| {
+        let fifo = base.join("fifo");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: `c` 는 NUL 로 끝나는 살아 있는 경로 문자열이다.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+        std::os::unix::fs::symlink(&fifo, root.join("src/.gitignore")).unwrap();
+        std::os::unix::fs::symlink(&fifo, root.join("src/.ignore")).unwrap();
+    });
+}
+
 /// 임대를 모두 놓으면 OS 감시를 풀고 더 내지 않는다. 같은 루트를 두 창이 보면 감시는 하나다.
 #[test]
 fn the_watch_is_shared_and_released_with_the_last_lease() {

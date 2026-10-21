@@ -913,7 +913,7 @@ async fn a_rejected_request_ends_the_stream_as_failed() {
 
 // ── 긴 줄 · 메모리 · 동시 검색 ──────────────────────────────────
 
-const MIB: usize = 1 << 20;
+pub(crate) const MIB: usize = 1 << 20;
 
 /// 힙 할당 계수. 한 시험 안에서 쓴 힙의 최고치를 잰다. nextest 는 시험마다 프로세스가 따로라 다른 시험의 할당이 섞이지 않는다
 /// (`cargo test` 처럼 한 프로세스에서 나란히 돌리면 섞여 크게 나올 수 있다).
@@ -972,6 +972,33 @@ fn heap_peak<R>(f: impl FnOnce() -> R) -> (R, usize) {
     PEAK.store(base, Ordering::Relaxed);
     let r = f();
     (r, PEAK.load(Ordering::Relaxed).saturating_sub(base))
+}
+
+/// `f` 를 다른 스레드에서 돌려, `within` 안에 끝나고 그동안 이 프로세스의 힙이 시작보다 `limit` 넘게 늘지 않는지 본다. 넘거나 늦으면
+/// 그 자리에서 실패한다 — 고장 난 코드가 `/dev/zero` 를 끝없이 읽어도 기계의 메모리를 먹기 전에 멈추고, FIFO 에서 영영 막혀도 시험이
+/// 끝난다(nextest 는 시험이 끝나면 프로세스를 끝내 남은 스레드도 함께 끝난다). 힙은 다른 스레드(감시 스레드 등)의 것도 센다.
+pub(crate) fn bounded<R: Send + 'static>(
+    limit: usize,
+    within: Duration,
+    f: impl FnOnce() -> R + Send + 'static,
+) -> R {
+    let base = LIVE.load(Ordering::Relaxed);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    let deadline = Instant::now() + within;
+    loop {
+        let grown = LIVE.load(Ordering::Relaxed).saturating_sub(base);
+        assert!(grown < limit, "heap grew by {} MiB", grown / MIB);
+        match rx.recv_timeout(Duration::from_millis(5)) {
+            Ok(r) => return r,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                assert!(Instant::now() < deadline, "not done within {within:?}");
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the work panicked"),
+        }
+    }
 }
 
 fn literal(query: &str) -> RegexMatcher {
