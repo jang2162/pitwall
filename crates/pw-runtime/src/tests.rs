@@ -13,7 +13,7 @@ use pw_core::registry::{NewProject, Registry as Projects};
 use crate::login_shell::tests::fake_shell;
 use crate::methods::{RuntimeGetParams, RuntimeProblem, RuntimeSource, RuntimeStatus};
 use crate::{
-    Layer, LoginShell, ProviderError, Runtime, RuntimeEnv, RuntimeHost, RuntimeProvider,
+    Layer, LoginShell, ProviderError, Resolved, Runtime, RuntimeEnv, RuntimeHost, RuntimeProvider,
     TOPIC_CHANGED,
 };
 
@@ -439,7 +439,12 @@ impl RuntimeProvider for Overlay {
         // 감지는 바탕(로그인 셸) 환경을 본다.
         dir.ends_with("project") && base.get("JAVA_HOME").is_some()
     }
-    fn resolve(&self, _dir: &Path, base: &RuntimeEnv) -> Result<Layer, ProviderError> {
+    fn resolve(
+        &self,
+        _dir: &Path,
+        base: &RuntimeEnv,
+        _cancel: &crate::Cancel,
+    ) -> Result<Layer, ProviderError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.fail {
             return Err("overlay failed".to_owned().into());
@@ -512,6 +517,10 @@ fn a_failing_provider_falls_back_to_the_login_shell_without_caching() {
         RuntimeSource::LoginShell { .. }
     ));
     assert_eq!(first.env.get("JAVA_HOME"), Some(OsStr::new("/opt/jdk-21")));
+    // 실패 직후에는 제공자를 다시 부르지 않는다(냉각). 「환경 다시 읽기」가 냉각을 풀면 다시 부른다.
+    runtime.env("p", &f.dir());
+    assert_eq!(overlay.calls.load(Ordering::SeqCst), 1);
+    runtime.reload("p");
     runtime.env("p", &f.dir());
     assert_eq!(overlay.calls.load(Ordering::SeqCst), 2);
 }
@@ -568,6 +577,24 @@ struct MiseFixture {
 
 impl MiseFixture {
     fn new(with_mise: bool) -> Self {
+        Self::with_script(
+            with_mise.then_some(|tmp: &Path| {
+                format!(
+                    "printf '%s\\n' \"$PWD\" >> '{}'\nprintf '{{\"PATH\": \"/mise/node/bin:%s\", \"FROM_MISE\": \"yes\"}}' \"$PATH\"",
+                    tmp.join("calls.log").display()
+                )
+            }),
+            crate::Mise::default(),
+            crate::runtime::FAILURE_COOLDOWN,
+        )
+    }
+
+    /// 가짜 mise 의 본문을 시험이 정한다(`script` 는 임시 폴더를 받는다). 없으면 mise 가 PATH 에 없다.
+    fn with_script(
+        script: Option<impl FnOnce(&Path) -> String>,
+        mise: crate::Mise,
+        cooldown: Duration,
+    ) -> Self {
         let f = Fixture::new("");
         let tmp = f.tmp.path().canonicalize().unwrap();
         let bin = tmp.join("bin");
@@ -578,14 +605,8 @@ impl MiseFixture {
             home.display(),
             bin.display()
         ));
-        if with_mise {
-            crate::mise::tests::write_mise(
-                &bin,
-                &format!(
-                    "printf '%s\\n' \"$PWD\" >> '{}'\nprintf '{{\"PATH\": \"/mise/node/bin:%s\", \"FROM_MISE\": \"yes\"}}' \"$PATH\"",
-                    tmp.join("calls.log").display()
-                ),
-            );
+        if let Some(script) = script {
+            crate::mise::tests::write_mise(&bin, &script(&tmp));
         } else {
             std::fs::create_dir_all(&bin).unwrap();
         }
@@ -595,7 +616,8 @@ impl MiseFixture {
         let gate = Arc::clone(&trusted);
         let runtime = Arc::new(
             f.runtime(Duration::from_secs(5))
-                .with_provider(Arc::new(crate::Mise::default()))
+                .with_provider(Arc::new(mise))
+                .with_failure_cooldown(cooldown)
                 .with_trust(move |_| gate.load(Ordering::SeqCst)),
         );
         runtime.attach(host(&projects, &bus, f.tmp.path()));
@@ -890,4 +912,210 @@ async fn follow_files_turns_fs_changed_into_runtime_changed() {
     };
     assert_eq!(event.payload, serde_json::json!({"reason": "files"}));
     follower.abort();
+}
+
+/// 멈추는 mise(부를 때마다 `calls.log` 에 한 줄 적고 오래 잔다).
+fn hanging_mise(tmp: &Path) -> String {
+    format!(
+        "printf '%s\\n' \"$PWD\" >> '{}'\nexec sleep 30",
+        tmp.join("calls.log").display()
+    )
+}
+
+fn is_failed(resolved: &Resolved) -> bool {
+    matches!(
+        resolved.info.status,
+        RuntimeStatus::Fallback {
+            problem: RuntimeProblem::Failed,
+            ..
+        }
+    )
+}
+
+/// 실패 냉각: mise 가 멈춰 시간 초과가 나면 한 번은 기다리지만, 그 뒤 30 s 동안은 mise 를 다시 부르지 않고 곧바로 물러난 환경
+/// (로그인 셸)을 준다. 「환경 다시 읽기」 · 버전 파일 변경 · 신뢰 변경은 냉각을 풀어 바로 다시 시도한다. 실패 갈래는 그대로다.
+#[test]
+fn a_hanging_mise_is_not_waited_for_again_during_the_cooldown() {
+    let m = MiseFixture::with_script(
+        Some(hanging_mise),
+        crate::Mise::new(Duration::from_millis(300)),
+        crate::runtime::FAILURE_COOLDOWN,
+    );
+    let (id, root) = m.project("app", &[("mise.toml", "[tools]\nnode = \"22\"\n")]);
+    let started = Instant::now();
+    let first = m.runtime.env(&id, &root);
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert!(is_failed(&first), "{:?}", first.info.status);
+    assert_eq!(first.env.get("FROM_MISE"), None);
+    assert_eq!(m.calls(), 1);
+
+    for _ in 0..3 {
+        let started = Instant::now();
+        let again = m.runtime.env(&id, &root);
+        assert!(
+            started.elapsed() < Duration::from_millis(150),
+            "waited {:?}",
+            started.elapsed()
+        );
+        assert_eq!(again.info.status, first.info.status);
+        assert_eq!(again.info.provider, "mise");
+    }
+    // 상태바의 `runtime.get` 도 같다.
+    let info = m
+        .runtime
+        .get(&RuntimeGetParams {
+            project_id: id.clone(),
+            dir: None,
+        })
+        .unwrap();
+    assert!(matches!(info.status, RuntimeStatus::Fallback { .. }));
+    assert_eq!(m.calls(), 1, "mise ran again during the cooldown");
+
+    // 「환경 다시 읽기」는 냉각을 푼다.
+    m.runtime.reload(&id);
+    m.runtime.env(&id, &root);
+    assert_eq!(m.calls(), 2);
+    m.runtime.env(&id, &root);
+    assert_eq!(m.calls(), 2);
+
+    // 버전 파일 변경.
+    assert!(
+        m.runtime
+            .files_changed(&id, &[root.join("mise.toml")], false)
+    );
+    m.runtime.env(&id, &root);
+    assert_eq!(m.calls(), 3);
+
+    // 신뢰 변경.
+    m.runtime.trust_changed(std::slice::from_ref(&id));
+    m.runtime.env(&id, &root);
+    assert_eq!(m.calls(), 4);
+
+    // 파일 감시를 놓쳤을 때.
+    m.runtime.files_missed();
+    m.runtime.env(&id, &root);
+    assert_eq!(m.calls(), 5);
+}
+
+/// 냉각은 프로젝트별이다: 한 프로젝트의 버전 파일 변경이 다른 프로젝트의 냉각을 풀지 않는다. 냉각이 지나면 다시 부른다.
+#[test]
+fn the_cooldown_is_per_project_and_expires() {
+    let m = MiseFixture::with_script(
+        Some(|tmp: &Path| {
+            format!(
+                "printf '%s\\n' \"$PWD\" >> '{}'\necho broken >&2\nexit 1",
+                tmp.join("calls.log").display()
+            )
+        }),
+        crate::Mise::default(),
+        Duration::from_millis(400),
+    );
+    let (a, a_root) = m.project("a", &[("mise.toml", "")]);
+    let (b, b_root) = m.project("b", &[("mise.toml", "")]);
+    assert!(is_failed(&m.runtime.env(&a, &a_root)));
+    assert!(is_failed(&m.runtime.env(&b, &b_root)));
+    assert_eq!(m.calls(), 2);
+    m.runtime
+        .files_changed(&a, &[a_root.join("mise.toml")], false);
+    m.runtime.env(&a, &a_root);
+    m.runtime.env(&b, &b_root);
+    assert_eq!(m.calls(), 3, "only a's cooldown ends");
+    std::thread::sleep(Duration::from_millis(450));
+    m.runtime.env(&b, &b_root);
+    assert_eq!(m.calls(), 4, "the cooldown expired");
+}
+
+/// 미신뢰 · 미설치는 빠른 실패라 냉각하지 않는다(`mise trust` · 설치를 마치고 곧바로 다시 읽을 수 있어야 한다).
+#[test]
+fn quick_known_failures_are_not_cooled() {
+    let m = MiseFixture::with_script(
+        Some(|tmp: &Path| {
+            format!(
+                "printf '%s\\n' \"$PWD\" >> '{}'\necho 'Config files in x are not trusted' >&2\nexit 1",
+                tmp.join("calls.log").display()
+            )
+        }),
+        crate::Mise::default(),
+        crate::runtime::FAILURE_COOLDOWN,
+    );
+    let (id, root) = m.project("app", &[("mise.toml", "")]);
+    for expected in 1..=2 {
+        let resolved = m.runtime.env(&id, &root);
+        assert!(matches!(
+            resolved.info.status,
+            RuntimeStatus::Fallback {
+                problem: RuntimeProblem::NotTrusted,
+                ..
+            }
+        ));
+        assert_eq!(m.calls(), expected);
+    }
+}
+
+/// 연속 편집: 앞선 `mise env` 가 아직 도는 중에 같은 디렉터리의 새 시도가 시작되면 앞선 것을 세션째 끝낸다. 앞선 시도의 호출자는
+/// 물러난 환경을 곧바로 받고, 마지막 시도의 결과만 남는다.
+#[test]
+fn a_new_attempt_ends_the_mise_still_running_for_the_same_directory() {
+    let m = MiseFixture::with_script(
+        Some(|tmp: &Path| {
+            // 첫 호출은 오래 자고(pid 를 남긴다), 그다음부터는 바로 끝난다.
+            format!(
+                "n=$(cat '{pids}' 2>/dev/null | wc -l)\necho $$ >> '{pids}'\nprintf '%s\\n' \"$PWD\" >> '{calls}'\nif [ $n -ge 1 ]; then printf '{{\"PATH\": \"/mise/node/bin:%s\", \"FROM_MISE\": \"yes\"}}' \"$PATH\"; else exec sleep 30; fi",
+                pids = tmp.join("pids").display(),
+                calls = tmp.join("calls.log").display()
+            )
+        }),
+        crate::Mise::new(Duration::from_secs(20)),
+        crate::runtime::FAILURE_COOLDOWN,
+    );
+    let (id, root) = m.project("app", &[("mise.toml", "")]);
+    let pids = m.f.tmp.path().canonicalize().unwrap().join("pids");
+    let read_pids = || -> Vec<i32> {
+        std::fs::read_to_string(&pids)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.trim().parse().ok())
+            .collect()
+    };
+
+    let old = {
+        let (runtime, id, root) = (Arc::clone(&m.runtime), id.clone(), root.clone());
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            (runtime.env(&id, &root), started.elapsed())
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_pids().is_empty() {
+        assert!(Instant::now() < deadline, "the first mise never started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let first_pid = read_pids()[0];
+
+    // mise.toml 을 또 바꿨다: 캐시를 잊고 새 시도를 시작한다.
+    m.runtime
+        .files_changed(&id, &[root.join("mise.toml")], false);
+    let latest = m.runtime.env(&id, &root);
+    assert_eq!(latest.info.status, RuntimeStatus::Ok);
+    assert_eq!(latest.env.get("FROM_MISE"), Some(OsStr::new("yes")));
+
+    let (old_result, waited) = old.join().unwrap();
+    assert!(waited < Duration::from_secs(10), "waited {waited:?}");
+    assert!(is_failed(&old_result), "{:?}", old_result.info.status);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    // SAFETY: 신호 0 은 프로세스가 있는지만 본다.
+    while unsafe { libc::kill(first_pid, 0) } == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the first mise {first_pid} survived"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(m.calls(), 2);
+    // 마지막 결과만 남았다.
+    assert_eq!(
+        m.runtime.env(&id, &root).env.get("FROM_MISE"),
+        Some(OsStr::new("yes"))
+    );
+    assert_eq!(m.calls(), 2);
 }

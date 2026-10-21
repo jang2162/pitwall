@@ -6,7 +6,7 @@
 //! - [`mise`]: 1번 제공자 「mise」 — 디렉터리의 mise 설정이 고정한 도구 버전(`mise env --json`). 신뢰한 프로젝트에서만.
 //!   direnv · asdf 는 아직 없다(12-m1-plan.md §3 이월).
 //! - [`runtime`]: 캐시, 「환경 다시 읽기」, 버전 파일 변경(파일 감시), `runtime.changed`, 프로젝트 설정 `[runtime] provider`.
-//!   실패는 남기지 않아 다음 요청이 다시 시도한다(시간 초과만 잠시 냉각한다, [`login_shell`]).
+//!   실패는 남기지 않아 다음 요청이 다시 시도한다(로그인 셸의 시간 초과와 mise 의 `failed` 만 30초 냉각한다, [`login_shell`] · [`runtime::FAILURE_COOLDOWN`]).
 //! - [`methods`]: `runtime.get` · `runtime.reload` RPC.
 //!
 //! 왜: Finder · Dock · `open` 으로 띄운 GUI 앱의 환경은 launchd 의 것(PATH `/usr/bin:/bin:/usr/sbin:/sbin`)이라 `zed` · `code` ·
@@ -25,9 +25,10 @@ pub mod runtime;
 pub use env::{RuntimeEnv, RuntimeTool};
 pub use login_shell::LoginShell;
 pub use mise::Mise;
-pub use provider::{Layer, ProviderError, RuntimeProvider};
+pub use provider::{Cancel, Layer, ProviderError, RuntimeProvider};
 pub use runtime::{
-    ProviderSetting, Resolved, Runtime, RuntimeHost, TOPIC_CHANGED, follow_files, subscribe_files,
+    FAILURE_COOLDOWN, ProviderSetting, Resolved, Runtime, RuntimeHost, TOPIC_CHANGED, follow_files,
+    subscribe_files,
 };
 
 #[cfg(all(test, unix))]

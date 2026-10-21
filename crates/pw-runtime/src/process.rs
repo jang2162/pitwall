@@ -8,6 +8,8 @@
 use std::process::{Command, ExitStatus};
 use std::time::Duration;
 
+use crate::provider::Cancel;
+
 /// 자식이 끝난 뒤 파이프의 나머지를 기다리는 시간.
 pub const EXIT_GRACE: Duration = Duration::from_millis(200);
 
@@ -27,11 +29,18 @@ pub enum RunError {
     TimedOut,
     /// stdout · stderr 를 합쳐 상한을 넘겼다(세션째 죽였다).
     TooLarge,
+    /// 부른 쪽이 [`Cancel`] 을 보냈다(세션째 죽였다).
+    Cancelled,
 }
 
-/// `command` 를 띄워 끝날 때까지(최대 `timeout`) 기다린다. stdin · stdout · stderr 와 세션은 여기서 정한다.
+/// `command` 를 띄워 끝날 때까지(최대 `timeout`, 그 전에 `cancel` 이 오면 그만) 기다린다. stdin · stdout · stderr 와 세션은 여기서 정한다.
 #[cfg(unix)]
-pub fn run(mut command: Command, timeout: Duration, limit: usize) -> Result<Output, RunError> {
+pub fn run(
+    mut command: Command,
+    timeout: Duration,
+    limit: usize,
+    cancel: &Cancel,
+) -> Result<Output, RunError> {
     use std::fs::File;
     use std::io::Read as _;
     use std::os::fd::{AsRawFd, OwnedFd};
@@ -75,6 +84,9 @@ pub fn run(mut command: Command, timeout: Duration, limit: usize) -> Result<Outp
             && (open.is_empty() || at.elapsed() >= EXIT_GRACE)
         {
             break Ok(());
+        }
+        if cancel.is_cancelled() {
+            break Err(RunError::Cancelled);
         }
         let now = Instant::now();
         if now >= deadline {
@@ -152,7 +164,12 @@ pub fn run(mut command: Command, timeout: Duration, limit: usize) -> Result<Outp
 
 /// Windows: 읽기 스레드 둘과 끝 확인으로 같은 일을 한다(세션 대신 자식만 죽인다).
 #[cfg(not(unix))]
-pub fn run(mut command: Command, timeout: Duration, limit: usize) -> Result<Output, RunError> {
+pub fn run(
+    mut command: Command,
+    timeout: Duration,
+    limit: usize,
+    cancel: &Cancel,
+) -> Result<Output, RunError> {
     use std::io::Read;
     use std::process::Stdio;
     use std::sync::mpsc;
@@ -183,6 +200,11 @@ pub fn run(mut command: Command, timeout: Duration, limit: usize) -> Result<Outp
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
+            Ok(None) if cancel.is_cancelled() => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(RunError::Cancelled);
+            }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
             _ => {
                 let _ = child.kill();
@@ -224,6 +246,7 @@ mod tests {
             sh("printf out; printf err >&2; exit 3"),
             Duration::from_secs(5),
             1024,
+            &Cancel::default(),
         )
         .unwrap();
         assert_eq!(out.stdout, b"out");
@@ -244,6 +267,7 @@ mod tests {
             )),
             Duration::from_millis(300),
             1024,
+            &Cancel::default(),
         )
         .unwrap_err();
         assert_eq!(err, RunError::TimedOut);
@@ -269,6 +293,7 @@ mod tests {
             sh("(sleep 5; echo late) & printf done"),
             Duration::from_secs(4),
             1024,
+            &Cancel::default(),
         )
         .unwrap();
         assert_eq!(out.stdout, b"done");
@@ -281,7 +306,13 @@ mod tests {
 
     #[test]
     fn output_over_the_limit_fails() {
-        let err = run(sh("head -c 100000 /dev/zero"), Duration::from_secs(5), 1000).unwrap_err();
+        let err = run(
+            sh("head -c 100000 /dev/zero"),
+            Duration::from_secs(5),
+            1000,
+            &Cancel::default(),
+        )
+        .unwrap_err();
         assert_eq!(err, RunError::TooLarge);
     }
 
@@ -291,6 +322,7 @@ mod tests {
             Command::new("/nonexistent/mise"),
             Duration::from_secs(1),
             1000,
+            &Cancel::default(),
         )
         .unwrap_err();
         assert!(matches!(err, RunError::Spawn(_)), "{err:?}");

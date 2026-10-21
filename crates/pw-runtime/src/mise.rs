@@ -21,7 +21,7 @@ use std::time::Duration;
 use crate::env::{EXCLUDED, RuntimeEnv};
 use crate::methods::{RuntimeProblem, RuntimeSource};
 use crate::process::{self, RunError};
-use crate::provider::{Layer, ProviderError, RuntimeProvider};
+use crate::provider::{Cancel, Layer, ProviderError, RuntimeProvider};
 
 /// `mise env` 를 기다리는 시간(12-m1-plan.md M1-16 「시간 초과 권장 5초」).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -182,7 +182,12 @@ impl RuntimeProvider for Mise {
         mise_specific || (!files.is_empty() && find_mise(base).is_some())
     }
 
-    fn resolve(&self, dir: &Path, base: &RuntimeEnv) -> Result<Layer, ProviderError> {
+    fn resolve(
+        &self,
+        dir: &Path,
+        base: &RuntimeEnv,
+        cancel: &Cancel,
+    ) -> Result<Layer, ProviderError> {
         let program = find_mise(base).ok_or_else(|| {
             ProviderError::new(
                 RuntimeProblem::NotInstalled,
@@ -199,7 +204,7 @@ impl RuntimeProvider for Mise {
             .env("PATH", &base.path)
             // 오류 문장에 색 코드가 섞이지 않게(상태바 · 로그에 원문이 간다).
             .env("NO_COLOR", "1");
-        let output = process::run(command, self.timeout, MAX_OUTPUT).map_err(|e| {
+        let output = process::run(command, self.timeout, MAX_OUTPUT, cancel).map_err(|e| {
             let reason = match e {
                 RunError::Spawn(e) => format!("cannot start {}: {e}", program.display()),
                 RunError::TimedOut => format!(
@@ -207,6 +212,7 @@ impl RuntimeProvider for Mise {
                     program.display(),
                     self.timeout
                 ),
+                RunError::Cancelled => format!("{} env was superseded", program.display()),
                 RunError::TooLarge => format!(
                     "{} env printed more than {MAX_OUTPUT} bytes",
                     program.display()

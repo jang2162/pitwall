@@ -103,7 +103,12 @@ mod tests {
         fn applies_to(&self, _dir: &Path, _base: &RuntimeEnv) -> bool {
             true
         }
-        fn resolve(&self, _dir: &Path, base: &RuntimeEnv) -> Result<Layer, ProviderError> {
+        fn resolve(
+            &self,
+            _dir: &Path,
+            base: &RuntimeEnv,
+            _cancel: &pw_runtime::Cancel,
+        ) -> Result<Layer, ProviderError> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Ok(Layer {
                 env: base.clone(),

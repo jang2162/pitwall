@@ -99,7 +99,9 @@ fn trusted_output_of_both_versions_overlays_the_login_shell_environment() {
         replaying(&f.path("bin"), version, "trusted", &f.path("calls.log"));
         let base = f.base();
         assert!(Mise::default().applies_to(&dir, &base), "{version}");
-        let layer = Mise::default().resolve(&dir, &base).unwrap();
+        let layer = Mise::default()
+            .resolve(&dir, &base, &Cancel::default())
+            .unwrap();
         assert_eq!(
             layer.env.path,
             OsString::from(
@@ -137,7 +139,9 @@ fn untrusted_config_is_not_trusted_in_both_versions() {
         let f = Fixture::new();
         let dir = f.project(&[("mise.toml", "[tools]\nnode = \"22\"\n")]);
         replaying(&f.path("bin"), version, "untrusted", &f.path("calls.log"));
-        let err = Mise::default().resolve(&dir, &f.base()).unwrap_err();
+        let err = Mise::default()
+            .resolve(&dir, &f.base(), &Cancel::default())
+            .unwrap_err();
         assert_eq!(
             err.problem,
             RuntimeProblem::NotTrusted,
@@ -157,7 +161,9 @@ fn a_broken_config_fails_in_both_versions() {
         let f = Fixture::new();
         let dir = f.project(&[("mise.toml", "[tools\n")]);
         replaying(&f.path("bin"), version, "broken", &f.path("calls.log"));
-        let err = Mise::default().resolve(&dir, &f.base()).unwrap_err();
+        let err = Mise::default()
+            .resolve(&dir, &f.base(), &Cancel::default())
+            .unwrap_err();
         assert_eq!(err.problem, RuntimeProblem::Failed, "{version}: {err:?}");
         assert!(
             err.reason.contains("TOML parse error"),
@@ -174,7 +180,9 @@ fn a_config_without_mise_on_the_path_is_not_installed() {
     let dir = f.project(&[(".mise.toml", "")]);
     let base = f.base();
     assert!(Mise::default().applies_to(&dir, &base));
-    let err = Mise::default().resolve(&dir, &base).unwrap_err();
+    let err = Mise::default()
+        .resolve(&dir, &base, &Cancel::default())
+        .unwrap_err();
     assert_eq!(err.problem, RuntimeProblem::NotInstalled);
 }
 
@@ -230,7 +238,7 @@ fn a_hanging_mise_fails_within_its_timeout() {
     write_mise(&f.path("bin"), "sleep 30");
     let started = Instant::now();
     let err = Mise::new(Duration::from_millis(300))
-        .resolve(&dir, &f.base())
+        .resolve(&dir, &f.base(), &Cancel::default())
         .unwrap_err();
     assert_eq!(err.problem, RuntimeProblem::Failed);
     assert!(err.reason.contains("did not finish"), "{}", err.reason);
@@ -247,7 +255,9 @@ fn output_that_is_not_an_env_object_fails() {
         let f = Fixture::new();
         let dir = f.project(&[("mise.toml", "")]);
         write_mise(&f.path("bin"), body);
-        let err = Mise::default().resolve(&dir, &f.base()).unwrap_err();
+        let err = Mise::default()
+            .resolve(&dir, &f.base(), &Cancel::default())
+            .unwrap_err();
         assert_eq!(err.problem, RuntimeProblem::Failed);
         assert!(err.reason.contains(wanted), "{body}: {}", err.reason);
     }

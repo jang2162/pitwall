@@ -1,8 +1,9 @@
 //! 앱 전체가 함께 쓰는 런타임 환경: (프로젝트, 디렉터리)별 캐시, 「환경 다시 읽기」, `runtime.changed`(03 §5-1 「캐시 · 무효화」).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use pw_core::bus::{Received, Subscription};
 use pw_core::config::AppPaths;
@@ -19,7 +20,7 @@ use crate::methods::{
     RuntimeGetParams, RuntimeInfo, RuntimeProblem, RuntimeSource, RuntimeStatus, RuntimeToolInfo,
 };
 use crate::mise;
-use crate::provider::{Layer, RuntimeProvider};
+use crate::provider::{Cancel, Layer, ProviderError, RuntimeProvider};
 
 /// 런타임 환경이 바뀌었다. 새 터미널 · 새로 띄우는 프로세스부터 새 환경을 쓴다.
 pub const TOPIC_CHANGED: &str = "runtime.changed";
@@ -106,6 +107,22 @@ pub struct RuntimeHost {
 
 type TrustFn = dyn Fn(&str) -> bool + Send + Sync;
 
+/// 제공자가 실패(멈춤 · 시간 초과 포함)한 뒤 이만큼은 그 (프로젝트, 디렉터리)에서 제공자를 다시 부르지 않고 곧바로 물러난
+/// 환경을 준다 — 로그인 셸의 시간 초과 냉각([`crate::login_shell::TIMEOUT_COOLDOWN`])과 같은 값이다. 「환경 다시 읽기」 · 버전
+/// 파일 변경 · 신뢰 변경은 냉각을 푼다.
+pub const FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
+
+/// (프로젝트, 디렉터리).
+type DirKey = (String, PathBuf);
+
+/// 제공자 실패의 냉각 표. `epoch` 는 냉각을 푼 횟수다 — 푸는 사이에 시작한 시도는 끝나도 실패를 남기지 않는다(옛 설정으로 낸
+/// 실패일 수 있다).
+#[derive(Default)]
+struct Cooling {
+    epoch: u64,
+    failed: HashMap<DirKey, (Instant, ProviderError)>,
+}
+
 pub struct Runtime {
     shell: Arc<LoginShell>,
     /// 로그인 셸 위에 덮는 제공자. 앞의 것부터 감지해 처음 맞는 하나를 쓴다.
@@ -117,6 +134,11 @@ pub struct Runtime {
     cache: Cache<(String, PathBuf, bool), Resolved>,
     /// 로그인 셸 없이 물러난 환경을 받은 프로젝트. 셸이 백그라운드 재시도로 살아나면 이들에 `runtime.changed` 를 낸다.
     fell_back: Arc<Mutex<BTreeSet<String>>>,
+    /// 제공자가 실패한 디렉터리와 그 시각. 냉각 중이면 제공자를 부르지 않는다.
+    cooling: Mutex<Cooling>,
+    failure_cooldown: Duration,
+    /// (프로젝트, 디렉터리)마다 돌고 있는 제공자 시도. 같은 자리에서 새 시도가 시작되면 앞선 시도에 취소를 보낸다.
+    running: Mutex<HashMap<DirKey, Cancel>>,
     host: OnceLock<RuntimeHost>,
 }
 
@@ -129,6 +151,9 @@ impl Runtime {
             trusted: Box::new(|_| false),
             cache: Cache::default(),
             fell_back: Arc::default(),
+            cooling: Mutex::default(),
+            failure_cooldown: FAILURE_COOLDOWN,
+            running: Mutex::default(),
             host: OnceLock::new(),
         }
     }
@@ -142,6 +167,13 @@ impl Runtime {
     #[must_use]
     pub fn with_trust(mut self, trusted: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
         self.trusted = Box::new(trusted);
+        self
+    }
+
+    /// 제공자 실패의 냉각 시간을 바꾼다(기본 [`FAILURE_COOLDOWN`]).
+    #[must_use]
+    pub fn with_failure_cooldown(mut self, cooldown: Duration) -> Self {
+        self.failure_cooldown = cooldown;
         self
     }
 
@@ -169,7 +201,7 @@ impl Runtime {
         let trusted = (self.trusted)(project);
         let resolved = self.cache.get_or_compute(
             &(project.to_owned(), dir.to_path_buf(), trusted),
-            || self.resolve(dir, trusted, self.setting(project, dir)),
+            || self.resolve(project, dir, trusted, self.setting(project, dir)),
             |r| r.info.status == RuntimeStatus::Ok,
         );
         if !resolved.login_shell {
@@ -212,6 +244,7 @@ impl Runtime {
 
     fn reload_with(&self, project: Option<&str>) {
         self.shell.invalidate();
+        self.end_cooldown(None);
         let mut projects: Vec<String> = self.cache.clear().into_iter().map(|(p, ..)| p).collect();
         projects.extend(project.map(str::to_owned));
         projects.sort();
@@ -224,6 +257,10 @@ impl Runtime {
     /// `runtime.changed`(`trust`)를 낸다. 로그인 셸 환경과 다른 프로젝트의 캐시는 그대로다.
     pub fn trust_changed(&self, projects: &[String]) {
         self.cache.forget(|(p, ..)| projects.contains(p));
+        self.cooling()
+            .failed
+            .retain(|(p, _), _| !projects.contains(p));
+        self.cooling().epoch += 1;
         tracing::info!(target: "pw_runtime", ?projects, "project trust changed");
         self.announce(projects.to_vec(), ChangeReason::Trust);
     }
@@ -237,6 +274,7 @@ impl Runtime {
             return false;
         }
         self.cache.forget(|(p, ..)| p == project);
+        self.end_cooldown(Some(project));
         tracing::info!(target: "pw_runtime", project, rescan, path = ?relevant, "runtime files changed");
         self.announce(vec![project.to_owned()], ChangeReason::Files);
         true
@@ -245,11 +283,78 @@ impl Runtime {
     /// 파일 감시 이벤트를 놓쳤다 — 어느 프로젝트의 버전 파일이 바뀌었는지 모르므로 모든 디렉터리 캐시를 잊고 캐시가 있던
     /// 프로젝트마다 `runtime.changed`(`files`)를 낸다. 로그인 셸 환경은 그대로다.
     pub fn files_missed(&self) {
+        self.end_cooldown(None);
         let mut projects: Vec<String> = self.cache.clear().into_iter().map(|(p, ..)| p).collect();
         projects.sort();
         projects.dedup();
         tracing::info!(target: "pw_runtime", ?projects, "missed file events; forgetting runtime caches");
         self.announce(projects, ChangeReason::Files);
+    }
+
+    fn cooling(&self) -> std::sync::MutexGuard<'_, Cooling> {
+        self.cooling.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// 제공자 실패의 냉각을 푼다 — `project` 만, 없으면 모두.
+    fn end_cooldown(&self, project: Option<&str>) {
+        let mut cooling = self.cooling();
+        cooling.epoch += 1;
+        cooling
+            .failed
+            .retain(|(p, _), _| project.is_some_and(|project| p != project));
+    }
+
+    /// 제공자 `p` 로 `dir` 의 환경을 만든다. 냉각 중이면 부르지 않고 지난 실패를 그대로 돌려준다. 같은 (프로젝트, 디렉터리)에서
+    /// 아직 도는 앞선 시도는 먼저 취소한다 — 마지막 시도의 결과만 쓰인다.
+    fn run_provider(
+        &self,
+        p: &Arc<dyn RuntimeProvider>,
+        project: &str,
+        dir: &Path,
+        base: &RuntimeEnv,
+    ) -> Result<Layer, ProviderError> {
+        let key: DirKey = (project.to_owned(), dir.to_path_buf());
+        let epoch = {
+            let cooling = self.cooling();
+            if let Some((at, error)) = cooling.failed.get(&key)
+                && at.elapsed() < self.failure_cooldown
+            {
+                return Err(error.clone());
+            }
+            cooling.epoch
+        };
+        let cancel = Cancel::default();
+        let previous = self
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key.clone(), cancel.clone());
+        if let Some(previous) = previous {
+            previous.cancel();
+        }
+        let result = p.resolve(dir, base, &cancel);
+        {
+            let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+            if running.get(&key).is_some_and(|c| c.same(&cancel)) {
+                running.remove(&key);
+            }
+        }
+        let mut cooling = self.cooling();
+        match &result {
+            Ok(_) => {
+                cooling.failed.remove(&key);
+            }
+            // 취소된 시도의 실패는 제공자의 잘못이 아니다. 냉각을 푼 사이에 낸 실패도 남기지 않는다.
+            Err(e)
+                if e.problem == RuntimeProblem::Failed
+                    && !cancel.is_cancelled()
+                    && cooling.epoch == epoch =>
+            {
+                cooling.failed.insert(key, (Instant::now(), e.clone()));
+            }
+            Err(_) => {}
+        }
+        result
     }
 
     fn announce(&self, projects: Vec<String>, reason: ChangeReason) {
@@ -307,7 +412,13 @@ impl Runtime {
         }
     }
 
-    fn resolve(&self, dir: &Path, trusted: bool, setting: ProviderSetting) -> Resolved {
+    fn resolve(
+        &self,
+        project: &str,
+        dir: &Path,
+        trusted: bool,
+        setting: ProviderSetting,
+    ) -> Resolved {
         if setting == ProviderSetting::None {
             return Resolved {
                 env: RuntimeEnv::process(),
@@ -342,7 +453,7 @@ impl Runtime {
         };
         let (provider, layer) = match picked {
             None => (LoginShell::ID, base),
-            Some(p) => match p.resolve(dir, &base.env) {
+            Some(p) => match self.run_provider(p, project, dir, &base.env) {
                 Ok(layer) => (p.id(), layer),
                 Err(e) => {
                     tracing::warn!(target: "pw_runtime", provider = p.id(), problem = ?e.problem, reason = %e.reason, dir = %dir.display(), "runtime provider failed");
