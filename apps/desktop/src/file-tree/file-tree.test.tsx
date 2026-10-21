@@ -42,7 +42,9 @@ function modelOf(folders: Record<string, FsEntry[]>, dimmed?: (paths: string[]) 
 }
 
 let root: Root | undefined;
-let handlers: { [K in keyof Required<FileTreeHandlers>]: ReturnType<typeof vi.fn> };
+let handlers: {
+  [K in Exclude<keyof Required<FileTreeHandlers>, "ops">]: ReturnType<typeof vi.fn>;
+} & Pick<FileTreeHandlers, "ops">;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -52,6 +54,7 @@ beforeEach(() => {
     reveal: vi.fn(),
     openWith: vi.fn(),
     findInFolder: vi.fn(),
+    openInTerminal: vi.fn(),
   };
   fakeTreeLayout(400);
 });

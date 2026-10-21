@@ -88,6 +88,7 @@ describe("built-in translations", () => {
       projectStrings(t).status.appearance(appearance);
     for (const count of [0, 1, 3]) projectStrings(t).status.notifications(count);
     for (const count of [1, 3]) findStrings(t).summary(count, count);
+    for (const count of [1, 2]) fileTreeStrings(t).ops.delete.body(count, "x");
     for (const level of ["info", "warning", "error"] as const)
       projectStrings(t).notifications.level(level);
     // 플랫폼마다 갈래가 다른 문자열은 갈래를 하나씩 본다.

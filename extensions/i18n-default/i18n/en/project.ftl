@@ -136,10 +136,74 @@ file-tree-search-none = No matches
 file-tree-copy-relative-path = Copy Relative Path
 action-file-tree-select-in = Select in Project View
 action-file-tree-toggle-ignored = Hide / Show Ignored Files
+action-file-tree-new-file = New File
+action-file-tree-new-folder = New Folder
+action-file-tree-rename = Rename (Project View)
+action-file-tree-delete = Delete (Project View)
+action-file-tree-open-in-terminal = Open in Terminal
 # The first item of the "Select In" (⌥F1) popup.
 open-with-project-view = Project View
 open-with-project-view-no-file = No file is open
 open-with-project-view-outside = This file is outside the project tree
+
+## File operations (src/file-tree/file-ops.ts · file-dialogs.tsx, M1-21). The tree's context menu · ⇧F6 · ⌫ · drag · Finder drop.
+
+file-ops-menu-new-file = New File…
+file-ops-menu-new-folder = New Folder…
+file-ops-menu-rename = Rename…
+file-ops-menu-delete = Delete…
+file-ops-menu-open-in-terminal = Open in Terminal
+file-ops-name-new-file = New File
+file-ops-name-new-folder = New Folder
+file-ops-name-rename = Rename
+# $folder: the name of the folder it goes into
+file-ops-name-in = In “{ $folder }”
+file-ops-name-label = Name
+file-ops-name-empty = Enter a name
+file-ops-name-separator = A name cannot contain / or \
+file-ops-name-dots = This name cannot be used
+file-ops-ok = OK
+file-ops-cancel = Cancel
+file-ops-delete-title = Delete
+# $count: number of items, $name: the item's name when there is one
+file-ops-delete-body =
+    { $count ->
+        [1] Move “{ $name }” to the Trash.
+       *[other] Move { $count } items to the Trash.
+    }
+# $files: file names (one per line). Those tabs stay open with the “deleted” banner — saving creates the file again.
+file-ops-delete-unsaved =
+    Some files have unsaved changes. Their tabs stay open:
+    { $files }
+file-ops-delete-confirm = Move to Trash
+file-ops-permanent-title = Trash Not Available
+# $files: item names (one per line), $reason: the trash's error message
+file-ops-permanent-body =
+    These items could not be moved to the Trash ({ $reason }). Deleting them permanently cannot be undone:
+    { $files }
+file-ops-permanent-confirm = Delete Permanently
+# $name: the name that is taken
+file-ops-exists = “{ $name }” already exists — nothing was changed
+# $message: the original error
+file-ops-create-failed = Could not create: { $message }
+file-ops-rename-failed = Could not rename: { $message }
+file-ops-move-failed = Could not move: { $message }
+file-ops-copy-failed = Could not copy: { $message }
+file-ops-delete-failed = Could not delete: { $message }
+# $files: item names (one per line)
+file-ops-delete-permission =
+    No permission to delete:
+    { $files }
+file-ops-drop-task = Copying dropped items
+# $files: source names (one per line)
+file-ops-drop-conflicts =
+    Not copied because the name is taken:
+    { $files }
+file-ops-drop-skipped =
+    Skipped special files (FIFO · socket · device):
+    { $files }
+file-ops-drop-cancelled = Stopped copying the dropped items — finished ones stay
+file-ops-drop-failed = Could not copy the dropped items: { $message }
 
 ## Status bar
 

@@ -35,6 +35,8 @@ export interface SessionOptions {
   projectId: string;
   /** 창의 활성 워크트리 꼭대기. Host 가 그 안의 프로젝트 루트에서 셸을 띄운다. */
   worktree?: string;
+  /** 셸의 작업 디렉터리(절대 경로, 파일 트리의 「터미널에서 열기」). 없으면 Host 가 정한다(워크트리 안의 프로젝트 루트). */
+  cwd?: string;
   cols: number;
   rows: number;
   screen: TerminalScreen;
@@ -100,11 +102,11 @@ export class TerminalSession {
   }
 
   private async run(): Promise<void> {
-    const { client, projectId, worktree, cols, rows } = this.options;
+    const { client, projectId, worktree, cwd, cols, rows } = this.options;
     try {
       const stream = client.stream(
         "terminal.create",
-        { projectId, worktree: worktree ?? null, cols, rows },
+        { projectId, worktree: worktree ?? null, ...(cwd !== undefined && { cwd }), cols, rows },
         { signal: this.controller.signal },
       );
       for await (const event of stream) {

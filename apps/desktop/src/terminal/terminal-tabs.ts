@@ -48,9 +48,18 @@ export interface TerminalDeps {
 const LINK_CACHE_MS = 3000;
 
 /** 탭 하나의 화면과 셸. 처음 화면에 붙을 때(`attach`) xterm 을 열고, 크기를 잰 뒤 셸을 띄운다. */
+/** 새 탭을 어디서 열지. 없으면 창의 활성 워크트리 루트. */
+export interface TerminalPlace {
+  /** 셸의 작업 디렉터리(파일 트리의 「터미널에서 열기」). */
+  cwd?: string;
+  /** 그 폴더가 든 워크트리의 꼭대기(트리의 범위). 없으면 창의 활성 워크트리. */
+  worktree?: string;
+}
+
 export class TerminalInstance {
   readonly term: Terminal;
   readonly worktree: string | undefined;
+  private readonly cwd: string | undefined;
   private readonly fit = new FitAddon();
   private opened = false;
   private session: TerminalSession | undefined;
@@ -60,8 +69,10 @@ export class TerminalInstance {
     private readonly deps: () => TerminalDeps | undefined,
     theme: ITheme,
     private readonly onState: (state: SessionState) => void,
+    place: TerminalPlace = {},
   ) {
-    this.worktree = deps()?.worktree();
+    this.worktree = place.cwd !== undefined ? place.worktree : deps()?.worktree();
+    this.cwd = place.cwd;
     this.term = new Terminal({
       fontFamily: CODE_FONT,
       fontSize: 13,
@@ -133,6 +144,7 @@ export class TerminalInstance {
       client: deps.client,
       projectId: deps.projectId,
       worktree: this.worktree,
+      cwd: this.cwd,
       cols: this.term.cols,
       rows: this.term.rows,
       screen: this.term,
@@ -207,14 +219,15 @@ export class TerminalTabs {
     for (const instance of this.instances.values()) instance.setTheme(theme);
   }
 
-  /** 새 탭을 열고 활성으로 둔다. 셸은 그 탭이 화면에 붙을 때 뜬다. */
-  open(): number {
+  /** 새 탭을 열고 활성으로 둔다. 셸은 그 탭이 화면에 붙을 때 뜬다. `place` 를 주면 그 폴더에서 연다. */
+  open(place?: TerminalPlace): number {
     const id = this.nextId++;
     const index = this.nextIndex++;
     const instance = new TerminalInstance(
       () => this.deps,
       this.theme,
       (state) => this.update(id, { state }),
+      place,
     );
     this.instances.set(id, instance);
     const { tabs } = this.store.getState();

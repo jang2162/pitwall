@@ -163,6 +163,26 @@ mac = "cmd+,"
 win = "ctrl+alt+s"
 linux = "ctrl+alt+s"
 
+# 파일 트리(src/file-tree, 10-ui §5.4 · §4.2 「이름 바꾸기」). 트리에 포커스가 있을 때만(`fileTree`) — 에디터의 ⇧F6(M4 LSP 이름 바꾸기)
+# · ⌘⌫(줄 삭제)와 범위가 겹치지 않는다. 삭제는 IntelliJ 처럼 macOS 에서 ⌫ 와 ⌦(fn+⌫) 둘 다다.
+
+[[bindings]]
+action = "fileTree.rename"
+key = "shift+f6"
+when = "fileTree"
+
+[[bindings]]
+action = "fileTree.delete"
+mac = "backspace"
+win = "delete"
+linux = "delete"
+when = "fileTree"
+
+[[bindings]]
+action = "fileTree.delete"
+mac = "delete"
+when = "fileTree"
+
 # 터미널(src/terminal/terminal-keys.ts, 10-ui §4.4 「터미널」). 터미널이 포커스를 가지면 키는 대부분 셸로 가고, `when` 이 `terminalFocus` 를
 # 읽는 바인딩과 창 단위 액션만 앱이 받는다. macOS 의 복사 · 붙여넣기는 네이티브 Edit 메뉴의 ⌘C · ⌘V 가 한다. 터미널의 ⌘W 는 탭을 닫는다
 # (IntelliJ 와 같다) — 메뉴 「닫기」(`window.close`)가 같은 키라 메뉴로 또 오는 것은 keymap-provider.tsx 의 중복 가드가 버린다.

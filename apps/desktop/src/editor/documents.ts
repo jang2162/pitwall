@@ -30,6 +30,10 @@
 // 바뀜 구독(`onChange`, M1-17 의 `syntax.edit`): 문서마다 한 번, 바뀐 범위(`ChangeSet`)와 바뀌기 전 텍스트를 준다. 같은 파일을
 // 두 그룹이 보여도 한 번이다. 문서를 통째로 다시 읽으면(처음 읽음 포함) `reset` 으로 새 텍스트 전체를 준다.
 //
+// 파일 조작(M1-21): 이 앱이 이름을 바꾸거나 옮긴 파일 · 폴더는 `move` 로 문서를 새 경로로 옮긴다 — 같은 `LiveText` 가 새 키로
+// 가므로 미저장 편집 · undo 기록이 남는다. 감시 이벤트를 기다리지 않는다(기다리면 그사이 「이름 바뀜」 배너가 뜬다). 잡은 쪽이
+// 받은 놓기 함수도 새 경로를 따라간다. 이 앱이 지운 것은 `markDeleted` 로 곧바로 「지워짐」 이다.
+//
 // 접근 범위: 문서는 처음 잡은 탭의 워크트리(`EditorTabParams.worktree`)로 읽는다. 창의 활성 워크트리는 열기 요청마다 바뀌므로
 // 읽는 순간의 값을 쓰면 다른 워크트리의 요청이 뒤섞인다.
 
@@ -152,9 +156,12 @@ interface DocumentsState {
   docs: Readonly<Record<string, DocumentState>>;
 }
 
+/** `DocumentStore.acquire` 가 돌려주는 놓기 함수. `path` 는 지금 잡고 있는 문서의 경로다 — `move` 로 옮기면 따라 바뀐다. */
+export type DocumentHold = (() => void) & { readonly path: string };
+
 export interface DocumentStore {
   /** 문서를 쓰기 시작한다. 처음 잡는 것이면 `worktree` 를 접근 범위로 읽기 시작한다. 돌려준 함수로 놓는다. */
-  acquire(path: string, worktree?: string): () => void;
+  acquire(path: string, worktree?: string): DocumentHold;
   get(path: string): DocumentState | undefined;
   /** 잡고 있는 탭 수(시험 · 진단). */
   holders(path: string): number;
@@ -173,6 +180,13 @@ export interface DocumentStore {
    * 문서를 다시 읽어도 · 닫았다 다시 열어도 해제할 때까지 이어 듣는다. 해제 함수를 돌려준다.
    */
   onChange(path: string, listener: (change: DocumentChange) => void): () => void;
+  /**
+   * 이 앱이 `from`(파일 또는 폴더)을 `to` 로 옮겼다(`fs.rename`). `from` 이거나 그 아래인 문서를 `to` 아래 같은 자리로 옮긴다 —
+   * 읽은 텍스트 · 미저장 편집 · undo 기록이 그대로 간다. 옮긴 문서의 `[옛 경로, 새 경로]` 를 돌려준다.
+   */
+  move(from: string, to: string): [string, string][];
+  /** 이 앱이 `path`(파일 또는 폴더)를 지웠다(`fs.trash`). 그 아래의 텍스트 문서를 곧바로 「지워짐」 으로 둔다. */
+  markDeleted(path: string): void;
   readonly store: StoreApi<DocumentsState>;
 }
 
@@ -256,14 +270,18 @@ async function loadDocument(
   };
 }
 
-/** `ancestor` 가 `path` 이거나 그 위 폴더다. */
+/** `ancestor` 가 `path` 이거나 그 위 폴더다(Host 경로 — Windows 는 `\\`). */
 function covers(ancestor: string, path: string): boolean {
-  return path === ancestor || path.startsWith(ancestor.endsWith("/") ? ancestor : `${ancestor}/`);
+  if (path === ancestor) return true;
+  const sep = ancestor.includes("\\") && !ancestor.includes("/") ? "\\" : "/";
+  return path.startsWith(ancestor.endsWith(sep) ? ancestor : ancestor + sep);
 }
 
 export function createDocumentStore(source: DocumentSource): DocumentStore {
   const store = createStore<DocumentsState>()(() => ({ docs: {} }));
   const counts = new Map<string, number>();
+  /** 놓지 않은 잡기들의 지금 경로. `move` 가 바꾼다. */
+  const held = new Set<{ path: string }>();
   const worktrees = new Map<string, string | undefined>();
   /** 문서마다 저장 · 맞추기를 차례로 돌리는 줄. */
   const queues = new Map<string, Promise<unknown>>();
@@ -418,6 +436,18 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
     patch(path, now.live, { disk: { kind: "changed", read } });
   }
 
+  /** 문서를 처음부터 읽는다(잡을 때 · 읽기 전에 옮겼을 때). */
+  function load(path: string) {
+    set(path, { status: "loading" });
+    const worktree = worktrees.get(path);
+    loadDocument(source, path, worktree)
+      .catch((e: unknown): DocumentState => ({ status: "failed", message: errorText(e) }))
+      // 다 읽기 전에 모두 놓았거나 옮겼으면 버린다. 그사이 다시 잡았으면 그 읽기가 이것이다(같은 경로 · 같은 디스크).
+      .then((state) => {
+        if (counts.has(path) && get(path)?.status === "loading") set(path, state);
+      });
+  }
+
   async function save(path: string): Promise<SaveOutcome> {
     const doc = text(path);
     if (!doc || doc.readOnly || !source.write) return { kind: "unchanged" };
@@ -480,25 +510,70 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
       counts.set(path, count + 1);
       if (count === 0) {
         worktrees.set(path, worktree);
-        set(path, { status: "loading" });
-        loadDocument(source, path, worktree)
-          .catch((e: unknown): DocumentState => ({ status: "failed", message: errorText(e) }))
-          // 다 읽기 전에 모두 놓았으면 버린다. 그사이 다시 잡았으면 그 읽기가 이것이다(같은 경로 · 같은 디스크).
-          .then((state) => counts.has(path) && set(path, state));
+        load(path);
       }
+      const ref = { path };
+      held.add(ref);
       let released = false;
-      return () => {
+      const release = () => {
         if (released) return;
         released = true;
-        const left = (counts.get(path) ?? 1) - 1;
+        held.delete(ref);
+        const at = ref.path;
+        const left = (counts.get(at) ?? 1) - 1;
         if (left > 0) {
-          counts.set(path, left);
+          counts.set(at, left);
           return;
         }
-        counts.delete(path);
-        worktrees.delete(path);
-        set(path, undefined);
+        counts.delete(at);
+        worktrees.delete(at);
+        set(at, undefined);
       };
+      return Object.defineProperty(release, "path", { get: () => ref.path }) as DocumentHold;
+    },
+    move(from, to) {
+      const moved: [string, string][] = [];
+      for (const path of Object.keys(store.getState().docs)) {
+        if (!covers(from, path)) continue;
+        const next = to + path.slice(from.length);
+        // 새 경로에 이미 문서가 있으면(그사이 다른 탭이 열었다) 옛 문서는 감시가 「지워짐」 으로 맞춘다.
+        if (next === path || counts.has(next) || !counts.has(path)) continue;
+        moved.push([path, next]);
+      }
+      for (const [path, next] of moved) {
+        const state = get(path)!;
+        unwatch.get(path)?.();
+        unwatch.delete(path);
+        store.setState((s) => {
+          const docs = { ...s.docs };
+          delete docs[path];
+          return { docs };
+        });
+        counts.set(next, counts.get(path)!);
+        counts.delete(path);
+        worktrees.set(next, worktrees.get(path));
+        worktrees.delete(path);
+        for (const ref of held) if (ref.path === path) ref.path = next;
+        if (state.status === "text")
+          // 이 앱이 옮긴 것이다 — 그사이 감시가 단 「지워짐 · 이름 바뀜」 은 걷는다.
+          set(next, {
+            ...state,
+            disk:
+              state.disk.kind === "deleted" || state.disk.kind === "renamed"
+                ? { kind: "same" }
+                : state.disk,
+          });
+        else if (state.status === "external")
+          set(next, { ...state, stat: { ...state.stat, path: next } });
+        // 읽는 중 · 읽지 못함 · 열지 않음은 새 경로로 다시 읽는다(옛 경로로 돌던 읽기는 버려진다).
+        else load(next);
+      }
+      return moved;
+    },
+    markDeleted(path) {
+      for (const [doc, state] of Object.entries(store.getState().docs))
+        if (covers(path, doc) && state.status === "text" && state.disk.kind !== "deleted")
+          patch(doc, state.live, { disk: { kind: "deleted" } });
     },
     save: (path) => queue(path, () => save(path)),
     takeDisk: (path) =>

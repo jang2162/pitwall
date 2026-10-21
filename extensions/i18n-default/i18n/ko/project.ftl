@@ -136,10 +136,74 @@ file-tree-search-none = 맞는 항목이 없다
 file-tree-copy-relative-path = 상대 경로 복사
 action-file-tree-select-in = 프로젝트 뷰에서 선택
 action-file-tree-toggle-ignored = 무시된 파일 숨기기 / 보이기
+action-file-tree-new-file = 새 파일
+action-file-tree-new-folder = 새 폴더
+action-file-tree-rename = 이름 바꾸기(프로젝트 뷰)
+action-file-tree-delete = 삭제(프로젝트 뷰)
+action-file-tree-open-in-terminal = 터미널에서 열기
 # 「다음에서 열기」(⌥F1) 팝업의 첫 항목.
 open-with-project-view = 프로젝트 뷰
 open-with-project-view-no-file = 열린 파일이 없다
 open-with-project-view-outside = 이 파일은 프로젝트 트리 밖에 있다
+
+## 파일 조작(src/file-tree/file-ops.ts · file-dialogs.tsx, M1-21). 트리의 우클릭 메뉴 · ⇧F6 · ⌫ · 드래그 · Finder 드롭.
+
+file-ops-menu-new-file = 새 파일…
+file-ops-menu-new-folder = 새 폴더…
+file-ops-menu-rename = 이름 바꾸기…
+file-ops-menu-delete = 삭제…
+file-ops-menu-open-in-terminal = 터미널에서 열기
+file-ops-name-new-file = 새 파일
+file-ops-name-new-folder = 새 폴더
+file-ops-name-rename = 이름 바꾸기
+# $folder: 만들 자리의 폴더 이름
+file-ops-name-in = 「{ $folder }」 안에
+file-ops-name-label = 이름
+file-ops-name-empty = 이름을 입력한다
+file-ops-name-separator = 이름에 / 나 \ 를 쓸 수 없다
+file-ops-name-dots = 이 이름은 쓸 수 없다
+file-ops-ok = 확인
+file-ops-cancel = 취소
+file-ops-delete-title = 삭제
+# $count: 항목 수, $name: 항목이 하나일 때 그 이름
+file-ops-delete-body =
+    { $count ->
+        [1] 「{ $name }」 을(를) 휴지통으로 옮긴다.
+       *[other] 항목 { $count }개를 휴지통으로 옮긴다.
+    }
+# $files: 파일 이름(줄마다 하나). 그 탭은 닫지 않고 「지워짐」 배너로 남는다 — 저장하면 다시 만든다.
+file-ops-delete-unsaved =
+    저장하지 않은 편집이 있는 파일이 있다. 그 탭은 열린 채로 남는다:
+    { $files }
+file-ops-delete-confirm = 휴지통으로 옮기기
+file-ops-permanent-title = 휴지통을 쓸 수 없음
+# $files: 항목 이름(줄마다 하나), $reason: 휴지통의 오류 문장
+file-ops-permanent-body =
+    이 항목을 휴지통에 넣지 못했다({ $reason }). 영구히 지우면 되돌릴 수 없다:
+    { $files }
+file-ops-permanent-confirm = 영구 삭제
+# $name: 겹치는 이름
+file-ops-exists = 「{ $name }」 이(가) 이미 있다 — 아무것도 바꾸지 않았다
+# $message: 오류 원문
+file-ops-create-failed = 만들지 못했다: { $message }
+file-ops-rename-failed = 이름을 바꾸지 못했다: { $message }
+file-ops-move-failed = 옮기지 못했다: { $message }
+file-ops-copy-failed = 복사하지 못했다: { $message }
+file-ops-delete-failed = 지우지 못했다: { $message }
+# $files: 항목 이름(줄마다 하나)
+file-ops-delete-permission =
+    권한이 없어 지우지 못했다:
+    { $files }
+file-ops-drop-task = 드롭한 항목 복사
+# $files: 원본 이름(줄마다 하나)
+file-ops-drop-conflicts =
+    같은 이름이 있어 복사하지 않았다:
+    { $files }
+file-ops-drop-skipped =
+    특수 파일(FIFO · 소켓 · 장치)이라 건너뛰었다:
+    { $files }
+file-ops-drop-cancelled = 드롭한 항목 복사를 멈췄다 — 끝낸 것은 남는다
+file-ops-drop-failed = 드롭한 항목을 복사하지 못했다: { $message }
 
 ## 상태바
 

@@ -77,7 +77,7 @@ export function isWithin(path: string, dir: string, sep = separatorOf(dir)): boo
   return path.startsWith(dir.endsWith(sep) ? dir : dir + sep);
 }
 
-function parentOf(path: string, sep: string): string | undefined {
+export function parentOf(path: string, sep = separatorOf(path)): string | undefined {
   const at = path.lastIndexOf(sep);
   if (at <= 0) return at === 0 && path.length > 1 ? sep : undefined;
   return path.slice(0, at);
@@ -411,6 +411,34 @@ export class FileTreeModel {
     if (parent === undefined || reloaded.has(parent) || !this.listings.has(parent)) return;
     if (!this.visible(parent)) return;
     return this.loading.get(parent) ?? this.load(parent);
+  }
+
+  /**
+   * 이 앱이 `from` 을 `to` 로 옮겼다(M1-21 이름 바꾸기 · 이동). 그 아래의 펼침과 선택을 새 경로로 옮기고 두 부모를 다시 읽는다 —
+   * 옮긴 폴더가 펼친 채로 새 자리에 나온다. 읽기가 끝나면 풀린다.
+   */
+  moved(from: string, to: string): Promise<void> {
+    const rebase = (path: string) => to + path.slice(from.length);
+    for (const path of Array.from(this.expanded))
+      if (isWithin(path, from, this.sep)) {
+        this.expanded.delete(path);
+        this.expanded.add(rebase(path));
+      }
+    if (this.selectedPath && isWithin(this.selectedPath, from, this.sep))
+      this.selectedPath = rebase(this.selectedPath);
+    return this.touched([from, to], ["removed", "created"]);
+  }
+
+  /** 이 앱이 만들거나(`created`) 지운(`removed`) 경로의 부모를 감시 이벤트를 기다리지 않고 다시 읽는다. */
+  touched(paths: readonly string[], kinds: readonly FsChanged["kinds"][number][]): Promise<void> {
+    if (this.root === undefined) return Promise.resolve();
+    return this.applyChange({
+      root: this.root,
+      worktree: null,
+      paths: [...paths],
+      kinds: [...kinds],
+      rescan: false,
+    });
   }
 
   /** 기억하는 목록을 모두 다시 읽는다(펼친 것은 곧바로, 접힌 것은 다음에 펼칠 때). */

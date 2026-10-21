@@ -34,12 +34,13 @@ function screen({ manual = false } = {}) {
   return s;
 }
 
-function start(host: FakeTerminalHost, view = screen(), worktree?: string) {
+function start(host: FakeTerminalHost, view = screen(), worktree?: string, cwd?: string) {
   const states: SessionState[] = [];
   const session = new TerminalSession({
     client: host.client,
     projectId: "p1",
     worktree,
+    cwd,
     cols: 80,
     rows: 24,
     screen: view,
@@ -65,6 +66,14 @@ describe("TerminalSession", () => {
     expect(view.text()).toContain("EXIT 3");
     expect(states.map((s) => s.kind)).toEqual(["running", "exited"]);
     expect(states[0]).toMatchObject({ terminalId: 7, cwd: "/wt/project" });
+  });
+
+  it("opens the shell in the folder the file tree asked for (Open in Terminal)", async () => {
+    const host = new FakeTerminalHost();
+    start(host, screen(), "/wt", "/wt/project/src");
+    expect(host.creates).toEqual([
+      { projectId: "p1", worktree: "/wt", cwd: "/wt/project/src", cols: 80, rows: 24 },
+    ]);
   });
 
   it("keeps keys typed before the shell starts and sends them once it does", async () => {

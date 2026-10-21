@@ -12,6 +12,9 @@ import { describe, expect, it } from "vitest";
 import { createDocumentStore } from "../editor/documents";
 import { editorActions } from "../editor/editor-actions";
 import { createEditorWorkspace } from "../editor/editor-workspace";
+import { fileOpsActions } from "../file-tree/file-ops";
+import { fileTreeStrings } from "../file-tree/strings";
+import { FileTreeModel } from "../file-tree/tree-model";
 import { openWithActions } from "../open-with/open-with";
 import { findActions } from "../search/find-actions";
 import { terminalActions } from "../terminal/terminal-actions";
@@ -73,6 +76,13 @@ const ACTION_IDS = new Set(
       closeWindow: async () => {},
       copyText: async () => {},
       onCopyFailed() {},
+    }),
+    ...fileOpsActions({
+      strings: fileTreeStrings((id) => id).actions,
+      model: new FileTreeModel({ list: () => Promise.reject(new Error("none")) }),
+      ops: { create: async () => undefined, rename: async () => undefined, remove: async () => {} },
+      canOpenTerminal: () => true,
+      openInTerminal() {},
     }),
     ...terminalActions({
       strings: KO_PROJECT.terminal,

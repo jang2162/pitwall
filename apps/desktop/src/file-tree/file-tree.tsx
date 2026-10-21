@@ -5,8 +5,10 @@
 //   키보드는 IntelliJ 와 같다: ↑↓ 이동, → 펼침/첫 자식, ← 접음/부모, Home/End, PageUp/PageDown.
 // - 글자를 치면 speed search: 위에 뜨는 입력 칸에 이어 치고(두 번째 글자부터는 입력 칸이 받아 IME 조합도 된다), 보이는 행 중
 //   이름에 그 글자가 든 것으로 간다. ↑↓ 는 앞뒤 일치, Enter 는 그 행을 연다, Esc 는 닫는다.
-// - 우클릭 메뉴는 읽기 항목만이다(경로 복사 · 상대 경로 복사 · Finder 에서 보기 · 외부 도구로 열기 · 이 폴더에서 찾기 — src/search). 만들기 · 이름 바꾸기 · 삭제는
-//   M1-21 이 더한다. 외부 도구는 Host 의 `openWith.run` 이 띄운다(open-with/open-with.tsx).
+// - 우클릭 메뉴: 새 파일 · 새 폴더 · 이름 바꾸기 · 삭제(M1-21, file-ops.ts), 경로 복사 · 상대 경로 복사 · Finder 에서 보기 · 터미널에서
+//   열기 · 외부 도구로 열기 · 이 폴더에서 찾기(src/search). 외부 도구는 Host 의 `openWith.run` 이 띄운다(open-with/open-with.tsx).
+// - 행을 끌어 폴더(또는 파일 — 그 부모)에 놓으면 옮기고, ⌥ 를 누른 채 놓으면 복사한다. Finder 에서의 드롭은 툴 윈도우가
+//   데스크톱의 드롭 알림으로 받는다(tree-drop.ts).
 // - 루트 밖을 가리키는 심링크는 「루트 밖을 가리킴」 을 달고 펼치거나 열지 않는다(결정 M1-D8).
 
 import type { Platform } from "@pitwall/keymap";
@@ -26,6 +28,7 @@ import {
   LocateFixed,
 } from "lucide-react";
 import {
+  type DragEvent,
   type KeyboardEvent,
   type ReactNode,
   useCallback,
@@ -38,18 +41,32 @@ import {
 } from "react";
 import { useStore } from "zustand";
 
+import type { FsCopied, FsCreated, FsMoved, FsTrashed } from "@pitwall/rpc-client";
+
 import { useEditorWorkspace } from "../editor/editor-workspace";
 import { useAppStrings } from "../i18n/app-strings";
-import { useKeymap, useRegistryVersion } from "../keymap/keymap-provider";
+import { useKeymap, useRegisterActions, useRegistryVersion } from "../keymap/keymap-provider";
+import { showPanel } from "../layout/project-layout";
 import { useProjectStrings } from "../layout/strings";
 import { useNotify } from "../notifications/notifications";
 import { REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
 import { findInFolder } from "../search/find-in-files";
 import { useFindStrings } from "../search/strings";
+import { useHost } from "../rpc/host";
+import { windowTerminals } from "../terminal/terminal-tabs";
 import { isComposingKey } from "../ui/ime";
+import { useFileDialogs } from "./file-dialogs";
+import { type FileOps, fileOps, fileOpsActions } from "./file-ops";
 import { revealRequests, treeScope, windowFileTree } from "./project-view";
 import { type FileTreeStrings, useFileTreeStrings } from "./strings";
-import { type FileTreeModel, isWithin, separatorOf, type TreeRow } from "./tree-model";
+import { dropFolderAt, folderOf, tauriDropNative, TREE_DRAG_TYPE } from "./tree-drop";
+import {
+  type FileTreeModel,
+  isWithin,
+  separatorOf,
+  type TreeEntry,
+  type TreeRow,
+} from "./tree-model";
 
 /** 행 높이(px). 가상화가 이 값으로 위치를 셈한다 — 행의 CSS 높이와 같아야 한다. */
 export const ROW_HEIGHT = 22;
@@ -87,6 +104,10 @@ export interface FileTreeHandlers {
   openWith?(path: string): void;
   /** 「이 폴더에서 찾기」(src/search). 파일이면 그 폴더에서 찾는다. 없으면 메뉴에서 뺀다. */
   findInFolder?(entry: { path: string; dir: boolean }): void;
+  /** 파일 조작(M1-21). 없으면 메뉴에서 빼고 드래그를 받지 않는다. */
+  ops?: Pick<FileOps, "create" | "rename" | "remove" | "move">;
+  /** 「터미널에서 열기」. 폴더 경로를 받는다. */
+  openInTerminal?(dir: string): void;
 }
 
 function TreeRowView({
@@ -96,6 +117,8 @@ function TreeRowView({
   query,
   strings,
   start,
+  dropTarget,
+  draggable,
   onClick,
   onDoubleClick,
   onToggle,
@@ -107,6 +130,9 @@ function TreeRowView({
   query: string | undefined;
   strings: FileTreeStrings;
   start: number;
+  /** 끄는 항목을 놓으면 이 폴더로 들어간다. */
+  dropTarget: boolean;
+  draggable: boolean;
   onClick(row: TreeRow): void;
   onDoubleClick(row: TreeRow): void;
   onToggle(row: TreeRow): void;
@@ -151,7 +177,14 @@ function TreeRowView({
       data-ignored={entry.ignored ? "" : undefined}
       data-dim={entry.dim ? "" : undefined}
       data-outside={entry.outside ? "" : undefined}
+      data-drop-target={dropTarget ? "" : undefined}
       title={entry.outside ? strings.outside : undefined}
+      draggable={draggable}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(TREE_DRAG_TYPE, JSON.stringify([entry.path]));
+        e.dataTransfer.setData("text/plain", entry.path);
+        e.dataTransfer.effectAllowed = "copyMove";
+      }}
       onClick={() => onClick(row)}
       onDoubleClick={() => onDoubleClick(row)}
       onContextMenu={() => onContextMenu(row)}
@@ -162,7 +195,9 @@ function TreeRowView({
       }}
       className={`absolute top-0 left-0 flex w-full cursor-default items-center gap-1 pr-2 whitespace-nowrap select-none ${
         selected ? "bg-ui-active" : "hover:bg-ui-hover"
-      } ${muted ? "text-ui-muted-foreground" : ""}`}
+      } ${muted ? "text-ui-muted-foreground" : ""} ${
+        dropTarget ? "outline outline-1 -outline-offset-1 outline-ui-accent" : ""
+      }`}
     >
       <span
         className="flex w-4 flex-none items-center justify-center"
@@ -246,6 +281,8 @@ export function FileTree({
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState<string>();
   const [menuRow, setMenuRow] = useState<TreeRow>();
+  /** 끄는 항목을 놓을 폴더(그 행을 테두리로 보인다). */
+  const [dropTarget, setDropTarget] = useState<string>();
   /** 고른 행을 다음 그림 뒤에 화면 안으로 굴린다. */
   const [scrollPending, setScrollPending] = useState(0);
 
@@ -418,6 +455,20 @@ export function FileTree({
   const root = model.getRoot();
   const target = menuRow?.entry;
 
+  /** 이 요소(행 또는 빈 자리) 위에 놓으면 들어갈 폴더. */
+  const folderAt = (element: EventTarget | null): string | undefined => {
+    if (root === undefined) return undefined;
+    const path = (element as Element | null)
+      ?.closest?.("[role=treeitem]")
+      ?.getAttribute("data-path");
+    const entry = path ? rows.find((r) => r.entry.path === path)?.entry : undefined;
+    return entry ? folderOf(entry, root) : root;
+  };
+  const dragging = (e: DragEvent<HTMLElement>) =>
+    handlers.ops !== undefined && e.dataTransfer.types.includes(TREE_DRAG_TYPE);
+  const menuFolder = (entry: TreeEntry | undefined) =>
+    entry && root !== undefined ? folderOf(entry, root) : root;
+
   return (
     <ContextMenu.Root>
       <div className={`relative flex min-h-0 flex-1 flex-col ${className}`}>
@@ -453,6 +504,35 @@ export function FileTree({
               if (e.target === scrollRef.current || e.target === e.currentTarget.firstChild)
                 setMenuRow(rows[0]);
             }}
+            onDragOver={(e) => {
+              if (!dragging(e)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = e.altKey ? "copy" : "move";
+              setDropTarget(folderAt(e.target));
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+                setDropTarget(undefined);
+            }}
+            onDragEnd={() => setDropTarget(undefined)}
+            onDrop={(e) => {
+              if (!dragging(e)) return;
+              e.preventDefault();
+              setDropTarget(undefined);
+              const dir = folderAt(e.target);
+              let paths: unknown;
+              try {
+                paths = JSON.parse(e.dataTransfer.getData(TREE_DRAG_TYPE));
+              } catch {
+                return;
+              }
+              if (dir === undefined || !Array.isArray(paths)) return;
+              void handlers.ops?.move(
+                paths.filter((p): p is string => typeof p === "string"),
+                dir,
+                e.altKey,
+              );
+            }}
             className="min-h-0 flex-1 overflow-auto text-[13px] outline-none"
           >
             {root === undefined ? (
@@ -471,6 +551,8 @@ export function FileTree({
                       query={query}
                       strings={strings}
                       start={item.start}
+                      dropTarget={row.entry.path === dropTarget}
+                      draggable={handlers.ops !== undefined && row.depth > 0}
                       onClick={(r) => {
                         model.select(r.entry.path);
                         if (!r.entry.dir && !r.entry.outside) handlers.open(r.entry.path, true);
@@ -497,6 +579,41 @@ export function FileTree({
           }}
           className="min-w-[200px] rounded-md border border-ui-border bg-ui-panel py-1 text-ui-foreground shadow-lg"
         >
+          {handlers.ops && (
+            <>
+              <MenuItem
+                disabled={menuFolder(target) === undefined}
+                onSelect={() => {
+                  const dir = menuFolder(target);
+                  if (dir !== undefined) void handlers.ops?.create(dir, "file");
+                }}
+              >
+                {strings.ops.menu.newFile}
+              </MenuItem>
+              <MenuItem
+                disabled={menuFolder(target) === undefined}
+                onSelect={() => {
+                  const dir = menuFolder(target);
+                  if (dir !== undefined) void handlers.ops?.create(dir, "dir");
+                }}
+              >
+                {strings.ops.menu.newFolder}
+              </MenuItem>
+              <MenuItem
+                disabled={!target || target.path === root}
+                onSelect={() => target && void handlers.ops?.rename(target.path)}
+              >
+                {strings.ops.menu.rename}
+              </MenuItem>
+              <MenuItem
+                disabled={!target || target.path === root}
+                onSelect={() => target && void handlers.ops?.remove([target.path])}
+              >
+                {strings.ops.menu.delete}
+              </MenuItem>
+              <ContextMenu.Separator className="my-1 h-px bg-ui-border" />
+            </>
+          )}
           <MenuItem disabled={!target} onSelect={() => target && handlers.copy(target.path)}>
             {project.actions.copyPath}
           </MenuItem>
@@ -512,6 +629,17 @@ export function FileTree({
               onSelect={() => target && handlers.reveal?.(target.path)}
             >
               {project.actions.reveal(platform)}
+            </MenuItem>
+          )}
+          {handlers.openInTerminal && (
+            <MenuItem
+              disabled={!target || target.outside || menuFolder(target) === undefined}
+              onSelect={() => {
+                const dir = menuFolder(target);
+                if (dir !== undefined) handlers.openInTerminal?.(dir);
+              }}
+            >
+              {strings.ops.menu.openInTerminal}
             </MenuItem>
           )}
           {handlers.openWith && (
@@ -576,18 +704,49 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** 트리 범위로 Host 의 파일 조작을 부른다(file-ops.ts 의 `rpc`). */
+function hostOps() {
+  const scope = () => {
+    const { client, projectId, worktree } = treeScope.getState();
+    if (!client || projectId === undefined) throw new Error("Host is not connected");
+    return { client, base: { projectId, worktree: worktree ?? null } };
+  };
+  return {
+    create: (path: string, kind: "file" | "dir"): Promise<FsCreated> => {
+      const { client, base } = scope();
+      return client.call("fs.create", { ...base, path, kind });
+    },
+    rename: (from: string, to: string): Promise<FsMoved> => {
+      const { client, base } = scope();
+      return client.call("fs.rename", { ...base, from, to });
+    },
+    copy: (from: string, to: string): Promise<FsCopied> => {
+      const { client, base } = scope();
+      return client.call("fs.copy", { ...base, from, to });
+    },
+    trash: (paths: string[], permanent: boolean): Promise<FsTrashed> => {
+      const { client, base } = scope();
+      return client.call("fs.trash", { ...base, paths, permanent });
+    },
+  };
+}
+
 /**
  * 프로젝트 툴 윈도우(project-window.tsx 의 `TOOL_WINDOWS`). 창의 트리 모델(project-view.tsx)을 그리고, 파일은 창의 에디터
- * 작업 공간으로 열고(탭이 그 워크트리를 기억한다), 「프로젝트 뷰에서 선택」 요청을 받는다.
+ * 작업 공간으로 열고(탭이 그 워크트리를 기억한다), 「프로젝트 뷰에서 선택」 요청을 받는다. 파일 조작(M1-21)의 액션 · 대화상자 ·
+ * Finder 드롭도 여기서 잇는다.
  */
 export function FileTreeToolWindow({ api }: IDockviewPanelProps) {
   const model = windowFileTree();
   const workspace = useEditorWorkspace();
   const notify = useNotify();
   const editorStrings = useProjectStrings().editor;
+  const strings = useFileTreeStrings();
   const { platform } = useKeymap();
-  const latest = useRef({ notify, editorStrings });
-  latest.current = { notify, editorStrings };
+  const { client } = useHost();
+  const dialogs = useFileDialogs();
+  const latest = useRef({ notify, editorStrings, strings, dialogs });
+  latest.current = { notify, editorStrings, strings, dialogs };
 
   const { run, openPopup, popup } = useOpenWith({
     target: () => undefined,
@@ -606,6 +765,93 @@ export function FileTreeToolWindow({ api }: IDockviewPanelProps) {
       if (found) setFocusRequest((n) => n + 1);
     });
   }, [reveal, model]);
+
+  const ops = useMemo(
+    () =>
+      fileOps({
+        rpc: hostOps(),
+        importDrop: (dropId, dir) => {
+          const { projectId, worktree } = treeScope.getState();
+          if (projectId === undefined) return Promise.reject(new Error("no project"));
+          return tauriDropNative.importDrop({
+            dropId,
+            projectId,
+            worktree,
+            dir,
+            title: latest.current.strings.ops.drop.task,
+          });
+        },
+        workspace,
+        model,
+        strings: strings.ops,
+        notify: (input) => latest.current.notify(input),
+        askName: (q) => latest.current.dialogs.askName(q),
+        confirm: (q) => latest.current.dialogs.confirm(q),
+        open: (path) => {
+          const { worktree } = treeScope.getState();
+          void workspace.open({ path, worktree }).then((panel) => {
+            if (panel) requestAnimationFrame(() => workspace.view(panel.id)?.focus());
+          });
+        },
+      }),
+    [workspace, model, strings],
+  );
+
+  const openInTerminal = useCallback(
+    (dir: string) => {
+      const dock = workspace.api();
+      if (dock) showPanel(dock, "terminal");
+      const tabs = windowTerminals();
+      tabs.open({ cwd: dir, worktree: treeScope.getState().worktree });
+      requestAnimationFrame(() => tabs.active()?.focus());
+    },
+    [workspace],
+  );
+
+  const actions = useMemo(
+    () =>
+      fileOpsActions({
+        strings: strings.actions,
+        model,
+        ops,
+        canOpenTerminal: () => client !== undefined,
+        openInTerminal,
+      }),
+    [strings, model, ops, client, openInTerminal],
+  );
+  useRegisterActions(actions);
+
+  // Finder 에서 트리 위로 드롭하면 그 폴더(빈 자리면 루트)로 복사한다. 트리 밖 드롭(터미널 등)은 다른 곳이 받는다.
+  const containerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    tauriDropNative
+      .listen((drop) => {
+        const tree = containerRef.current?.querySelector<HTMLElement>("[role=tree]");
+        const root = model.getRoot();
+        if (!tree || root === undefined) return;
+        const scale = window.devicePixelRatio || 1;
+        const dir = dropFolderAt(
+          tree,
+          { x: drop.x / scale, y: drop.y / scale },
+          root,
+          (path) => model.rows().find((r) => r.entry.path === path)?.entry,
+        );
+        if (dir !== undefined) void ops.importDrop(drop.id, dir);
+      })
+      .then((off) => {
+        if (disposed) off();
+        else unlisten = off;
+      })
+      .catch(() => {
+        // Tauri 밖(시험 · 웹): 드롭을 받지 않는다.
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [model, ops]);
 
   const handlers = useMemo((): FileTreeHandlers => {
     const target = (file: string) => {
@@ -638,11 +884,14 @@ export function FileTreeToolWindow({ api }: IDockviewPanelProps) {
         if (t) openPopup(t);
       },
       findInFolder,
+      ops,
+      openInTerminal,
     };
-  }, [model, workspace, run, openPopup, platform]);
+  }, [model, workspace, run, openPopup, platform, ops, openInTerminal]);
 
   return (
     <div
+      ref={containerRef}
       data-tool-window={api.id}
       tabIndex={-1}
       className="flex h-full flex-col bg-ui-panel text-ui-foreground outline-none"
@@ -650,6 +899,7 @@ export function FileTreeToolWindow({ api }: IDockviewPanelProps) {
       <TreeToolbar model={model} />
       <FileTree model={model} handlers={handlers} platform={platform} focusRequest={focusRequest} />
       {popup}
+      {dialogs.element}
     </div>
   );
 }

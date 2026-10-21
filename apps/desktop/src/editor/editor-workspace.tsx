@@ -20,6 +20,11 @@
 // 마지막 탭을 닫는데 미저장 편집이 있으면 [저장] [저장 안 함] [취소] 를 묻는다. 창 닫기 · 앱 종료는 `confirmWindowClose` 다.
 // 미리보기 탭의 문서에 미저장 편집이 생기면 그 탭을 보통 탭으로 바꾼다 — 다음 미리보기가 편집을 조용히 닫지 않게(10-ui §5.4
 // 「편집 시작 → 고정 탭」).
+//
+// 파일 조작(M1-21): 파일 트리가 이름을 바꾸거나 옮기면 `moved` 가 그 아래 문서를 새 경로로 옮기고(documents.ts `move`) 탭의
+// 경로 · 이름을 바꾼다 — 탭 · 뷰 · 미저장 편집이 그대로 따라간다. 지우면 `deleted`: 미저장이 없는 탭은 닫고, 미저장이 있는 탭은
+// 남겨 「지워짐」 배너를 띄운다(M1-13 의 배너 규칙 — [저장] 하면 다시 만든다). 지우기 전의 경고는 트리의 확인 대화상자가 한다
+// (`unsavedUnder`).
 
 import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -31,6 +36,7 @@ import type { DocumentStore } from "./documents";
 import { bindDocumentLanguages } from "./language";
 import { createSyntaxSessions, type SyntaxSource } from "./syntax-sessions";
 import {
+  baseName,
   editorPanels,
   isEditorPanel,
   keepTab,
@@ -39,6 +45,13 @@ import {
   tabParams,
   trackRecentTabs,
 } from "./editor-tabs";
+
+/** `ancestor` 가 `path` 이거나 그 위 폴더다(Host 경로 — Windows 는 `\`). */
+function covers(ancestor: string, path: string): boolean {
+  if (path === ancestor) return true;
+  const sep = ancestor.includes("\\") && !ancestor.includes("/") ? "\\" : "/";
+  return path.startsWith(ancestor.endsWith(sep) ? ancestor : ancestor + sep);
+}
 
 /** 1부터 센 줄 · 열(열은 글자 단위). */
 export interface Cursor {
@@ -260,6 +273,40 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       if (!(await settleUnsaved(lost))) return false;
       for (const panel of panels) if (api?.getPanel(panel.id)) panel.api.close();
       return true;
+    },
+
+    /** `path`(파일 또는 폴더)이거나 그 아래인, 미저장 편집이 있는 문서의 경로(지우기 전의 경고). */
+    unsavedUnder: (path: string): string[] =>
+      deps.documents.unsaved().filter((doc) => covers(path, doc)),
+
+    /** `from` 을 `to` 로 옮겼다(이름 바꾸기 · 이동). 그 아래 문서와 탭이 새 경로를 따라간다. */
+    moved(from: string, to: string) {
+      const moved = new Map(deps.documents.move(from, to));
+      for (const [id, held] of holds) {
+        const next = moved.get(held.path);
+        if (next !== undefined) holds.set(id, { ...held, path: next });
+      }
+      if (!api) return;
+      for (const panel of editorPanels(api)) {
+        const params = tabParams(panel);
+        if (!covers(from, params.path)) continue;
+        const path = moved.get(params.path) ?? to + params.path.slice(from.length);
+        panel.api.updateParameters({ ...params, path });
+        panel.api.setTitle(baseName(path));
+      }
+    },
+
+    /** `path` 를 지웠다. 그 아래의 탭 중 미저장이 없는 것은 닫고, 있는 것은 「지워짐」 배너로 남긴다. */
+    deleted(path: string) {
+      deps.documents.markDeleted(path);
+      if (!api) return;
+      for (const panel of editorPanels(api)) {
+        const params = tabParams(panel);
+        if (!covers(path, params.path)) continue;
+        const doc = deps.documents.get(params.path);
+        if (doc?.status === "text" && doc.live.dirty) continue;
+        panel.api.close();
+      }
     },
 
     /** 창을 닫기 전(창의 닫기 단추 · ⌘W · 앱 종료). 미저장 편집이 있으면 묻는다. 닫아도 되면 `true`. */
