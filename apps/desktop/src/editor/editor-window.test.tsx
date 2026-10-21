@@ -743,7 +743,6 @@ it("writes the tab set and layout at once when the window is about to close (qui
   await mount();
   await openRequest(LIB, 40, 2);
   // 모아 쓰기(0.2초 · 0.3초)를 기다리지 않는다 — 닫기 확인이 마저 쓴다.
-  expect(savedState()).toBeUndefined();
   let closed: boolean | undefined;
   await act(async () => {
     closed = await closeGuard!();
@@ -753,6 +752,29 @@ it("writes the tab set and layout at once when the window is about to close (qui
     expect.objectContaining({ path: LIB, cursor: { line: 40, column: 2 } }),
   ]);
   expect(savedState()?.layout).toBeDefined();
+});
+
+it("keeps the recent files (⌘E) over a restart, closed tabs and other worktrees included", async () => {
+  await mount();
+  await openRequest(LIB);
+  await openRequest(README, undefined, undefined, "/work/wt1");
+  await openRequest(MAIN);
+  // 메인 체크아웃으로 돌아오면 그 묶음의 LIB 탭이 되살아나고 MAIN 이 더해진다.
+  expect(editorTabs().map((t) => t.path)).toEqual([LIB, MAIN]);
+  await act(async () => (await closeGuard!()) || undefined);
+  // 메인 체크아웃으로 돌아오면 그 묶음의 LIB 탭이 다시 열려 README 보다 앞이다.
+  expect((savedState() as { recentFiles?: unknown }).recentFiles).toEqual([
+    { path: MAIN },
+    { path: LIB },
+    { path: README, worktree: "/work/wt1" },
+  ]);
+
+  await restart();
+  await press("KeyE", { metaKey: true }, "e");
+  const recent = [
+    ...document.querySelectorAll<HTMLElement>("[data-search-everywhere] [cmdk-item]"),
+  ].map((i) => i.getAttribute("data-value"));
+  expect(recent).toEqual([`file:${MAIN}`, `file:${LIB}`, `file:${README}`]);
 });
 
 it("skips a saved tab whose file is gone without an open error", async () => {

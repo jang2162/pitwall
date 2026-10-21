@@ -636,8 +636,11 @@ it("opens a found file in the worktree it was found in, even if the tree moved b
 it("says so when the worktree a recent file was opened from is gone", async () => {
   await mount();
   await openTab("/work/demo/src/lib.rs", "/work/demo-wt");
+  // 메인 체크아웃의 파일을 열면 창이 메인 체크아웃으로 돌아오며 워크트리의 탭을 닫는다(워크트리별 탭 묶음, M1-25).
   await openTab("/work/demo/src/main.rs");
-  await closeTab("/work/demo/src/lib.rs");
+  expect(
+    [...document.querySelectorAll("[data-editor-tab-header]")].map((t) => t.textContent),
+  ).toEqual(["main.rs"]);
   host.goneWorktrees.add("/work/demo-wt");
   await press({ code: "KeyE", key: "E", metaKey: true });
   await vi.waitFor(() => expect(selected()).toBe("file:/work/demo/src/lib.rs"));

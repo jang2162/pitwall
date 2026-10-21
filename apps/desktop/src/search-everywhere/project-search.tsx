@@ -414,6 +414,7 @@ export function ProjectSearch({
   workspace,
   api,
   openProjectWindow,
+  recent: given,
 }: {
   projectId: string;
   workspace: EditorWorkspace;
@@ -421,13 +422,16 @@ export function ProjectSearch({
   api: DockviewApi | undefined;
   /** 다른 프로젝트 창을 열거나 앞으로 가져온다. 없으면 프로젝트 탭이 없다. */
   openProjectWindow?: (projectId: string) => Promise<void>;
+  /** 창의 최근 파일. 창이 저장 · 복원한다(layout/project-window.tsx). 없으면 여기서 만든다. */
+  recent?: RecentFiles;
 }) {
   const { openSearch } = useKeymap();
   const strings = useAppStrings().actions;
   const { client } = useHost();
   const clientRef = useRef(client);
   clientRef.current = client;
-  const [recent] = useState(createRecentFiles);
+  const [own] = useState(createRecentFiles);
+  const recent = given ?? own;
   const [files] = useState(
     () =>
       new FileSearch((params, signal) => {

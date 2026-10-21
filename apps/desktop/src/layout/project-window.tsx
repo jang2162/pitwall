@@ -76,6 +76,7 @@ import { useHost, useRpcQuery } from "../rpc/host";
 import { useRuntimeActions } from "../runtime/runtime-actions";
 import { FindInFiles } from "../search/find-in-files";
 import { ProjectSearch } from "../search-everywhere/project-search";
+import { createRecentFiles } from "../search-everywhere/recent-files";
 import { SearchResultsToolWindow } from "../search/search-results";
 import { RuntimeStatus } from "../runtime/runtime-status";
 import {
@@ -682,6 +683,13 @@ function ProjectWindowBody({
   const projectState = useWindowProjectState(projectId);
   useEffect(() => (api ? workspace.attach(api) : undefined), [api, workspace]);
   useDocumentSync(workspace, projectId);
+  // 최근 파일(⌘E)도 프로젝트 상태에 둔다 — 창이 열리면 저장해 둔 목록을 잇고, 바뀔 때마다 저장한다.
+  const [recentFiles] = useState(createRecentFiles);
+  useEffect(() => {
+    if (!projectState.ready) return;
+    recentFiles.restore(projectState.store.recentFiles());
+    return recentFiles.store.subscribe(({ files }) => projectState.store.setRecentFiles(files));
+  }, [projectState.ready, projectState.store, recentFiles]);
   const session = useRef<WorktreeSession>(undefined);
   // 마지막으로 만든 세션. 해제돼도 남긴다 — 다음 세션이 그 처리 끝을 기다린다(worktree-session.ts 의 `after`).
   const lastSession = useRef<WorktreeSession>(undefined);
@@ -784,6 +792,7 @@ function ProjectWindowBody({
               workspace={workspace}
               api={api}
               openProjectWindow={openProjectWindow}
+              recent={recentFiles}
             />
           )}
           <StatusBar label={strings.status.label} />
