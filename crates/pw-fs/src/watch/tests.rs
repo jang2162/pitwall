@@ -233,11 +233,19 @@ fn external_changes_arrive_within_300ms() {
             eprintln!("latency {strategy:?} {name}: {elapsed:?}");
             assert!(elapsed < LATENCY, "{strategy:?} {name}: {elapsed:?}");
             if let Some(kind) = kind {
-                assert_eq!(
-                    kind_of(&changed, &path),
-                    Some(kind),
-                    "{strategy:?} {name}: {changed:?}"
-                );
+                let got = kind_of(&changed, &path);
+                // created · modified 는 설계(03-architecture.md 파일 감시)가 힌트로 정했고 받는 쪽은 둘을 같게 다룬다. macOS
+                // FSEvents 는 같은 경로의 최근 기록을 플래그로 합쳐 주어(새 파일에도 modified 가 함께 붙는다) 어느 쪽이 올지
+                // 가를 수 없다. 그래서 macOS 에서는 둘 중 하나면 되고, removed 는 확실하므로 어디서나 그대로 본다.
+                let hint_only = matches!(kind, FsChangeKind::Created | FsChangeKind::Modified);
+                if cfg!(target_os = "macos") && hint_only {
+                    assert!(
+                        matches!(got, Some(FsChangeKind::Created | FsChangeKind::Modified)),
+                        "{strategy:?} {name}: {changed:?}"
+                    );
+                } else {
+                    assert_eq!(got, Some(kind), "{strategy:?} {name}: {changed:?}");
+                }
             }
             assert_eq!(changed.root, root.display().to_string());
             assert!(!changed.rescan, "{strategy:?} {name}");

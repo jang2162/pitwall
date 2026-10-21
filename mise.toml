@@ -44,6 +44,14 @@ run = [
   "pnpm -r --if-present run test",
 ]
 
+# 「release 빌드에서만 판정」하는 시험을 모아 돈다 — 기본 `test` 는 debug 라 시간 상한(검색 취소 100 ms · `fs.list` 1만 개 100 ms ·
+# 구문 강조 16 ms)을 판정하지 않는다. `--run-ignored all` 은 release 전용 `#[ignore]` 시험도 포함한다. 벽시계를 재므로 `-j 1`,
+# 문법 WASM 경로(`wasm` 기능)는 앱과 같게 켜지 않는다. 시험 목록을 바꾸면 CONTRIBUTING.md 「명령」 도 맞춘다.
+[tasks.test-release]
+description = "release 에서만 판정하는 시간 상한 시험(검색 취소 · fs.list · 구문 강조)"
+depends = ["install-deps"]
+run = "cargo nextest run --release -p pw-fs -p pw-syntax --no-tests=fail -j 1 --run-ignored all -E 'test(/^search::tests::stopping_/) | test(=search::tests::the_stream_sends_files_then_done_and_ends_soon_after_cancel) | test(=tests::list_of_10000_entries_is_fast_in_release) | test(=a_5000_line_rust_file_highlights_within_budget)'"
+
 [tasks.lint]
 description = "fmt 검사 + clippy + oxlint + tsc + actionlint + 생성물 최신 여부"
 depends = ["install-deps"]
