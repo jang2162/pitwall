@@ -144,6 +144,47 @@ mac = "cmd+shift+f12"
 win = "ctrl+shift+f12"
 linux = "ctrl+shift+f12"
 
+[[bindings]]
+action = "toolWindow.last"
+key = "f12"
+
+# 「에디터로 포커스」(src/keymap/actions.ts)는 툴 윈도우에 포커스가 있고 입력 칸이 아닐 때만 — 에디터의 찾기 막대 · 팝업 · 파일 트리의
+# 빠른 검색 칸이 Esc 로 닫히는 것과 겹치지 않는다. 터미널의 Esc 는 셸로 간다(터미널이 창으로 넘기는 액션이 아니다,
+# src/terminal/terminal-keys.ts). 한글 조합 중의 Esc 는 키맵이 보지 않는다(조합 취소만, 10-ui §4.4).
+[[bindings]]
+action = "editor.focus"
+key = "escape"
+when = "toolWindowFocus && !inputFocus"
+
+# 툴 윈도우 크기 조절(10-ui 「툴 윈도우 · 창」). 툴 윈도우에 포커스가 있을 때만 — Win/Linux 의 Ctrl+Shift+←→ 는 에디터의 단어 선택이다.
+[[bindings]]
+action = "toolWindow.stretchLeft"
+mac = "ctrl+alt+shift+left"
+win = "ctrl+shift+left"
+linux = "ctrl+shift+left"
+when = "toolWindowFocus"
+
+[[bindings]]
+action = "toolWindow.stretchRight"
+mac = "ctrl+alt+shift+right"
+win = "ctrl+shift+right"
+linux = "ctrl+shift+right"
+when = "toolWindowFocus"
+
+[[bindings]]
+action = "toolWindow.stretchUp"
+mac = "ctrl+alt+shift+up"
+win = "ctrl+shift+up"
+linux = "ctrl+shift+up"
+when = "toolWindowFocus"
+
+[[bindings]]
+action = "toolWindow.stretchDown"
+mac = "ctrl+alt+shift+down"
+win = "ctrl+shift+down"
+linux = "ctrl+shift+down"
+when = "toolWindowFocus"
+
 # 에디터 탭(10-ui §4.2 「툴 윈도우 · 창」 · 「검색 · 이동」, src/editor/editor-actions.ts). ⌘⌥W 는 Win/Linux 기본 키가 없다(표의 「—」).
 # macOS 의 ⌘W 는 `window.close` 다 — 에디터 탭이 있으면 탭, 없으면 창을 닫는다(10-ui §5.2). 네이티브 메뉴 「닫기」 가 같은 액션이라
 # 키와 메뉴 accelerator 가 한 액션으로 모인다(src-tauri/src/menu.rs). Win/Linux 의 창 닫기는 OS 의 Alt+F4 다.

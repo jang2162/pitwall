@@ -5,7 +5,15 @@ import type { Action } from "@pitwall/keymap";
 import type { DockviewApi } from "dockview-react";
 
 import type { AppStrings } from "../i18n/app-strings";
-import { collapseAllDocks, PANELS, toggleToolWindow } from "../layout/project-layout";
+import {
+  type Arrow,
+  collapseAllDocks,
+  lastToolWindow,
+  PANELS,
+  resizeToolWindow,
+  showPanel,
+  toggleToolWindow,
+} from "../layout/project-layout";
 import type { ProjectStrings } from "../layout/strings";
 import type { ThemePreference } from "../theme/theme-store";
 
@@ -98,12 +106,39 @@ export function appActions(deps: {
   ];
 }
 
-/** 프로젝트 창의 툴 윈도우 열기 · 숨기기. 숨긴(닫은) 툴 윈도우를 다시 여는 길이다(project-layout.ts 머리 주석). */
+/** 포커스가 든 툴 윈도우의 id(`data-tool-window`, src/keymap/context.ts 의 툴 윈도우 층). */
+function focusedToolWindow(): string | undefined {
+  return (
+    document.activeElement?.closest("[data-tool-window]")?.getAttribute("data-tool-window") ??
+    undefined
+  );
+}
+
+/** 툴 윈도우의 내용에 포커스를 둔다. 막 다시 연 툴 윈도우는 다음 프레임에 그려진다. */
+function focusToolWindow(id: string) {
+  requestAnimationFrame(() =>
+    document.querySelector<HTMLElement>(`[data-tool-window="${CSS.escape(id)}"]`)?.focus(),
+  );
+}
+
+const ARROWS: readonly { arrow: Arrow; name: "Left" | "Right" | "Up" | "Down" }[] = [
+  { arrow: "left", name: "Left" },
+  { arrow: "right", name: "Right" },
+  { arrow: "up", name: "Up" },
+  { arrow: "down", name: "Down" },
+];
+
+/**
+ * 프로젝트 창의 툴 윈도우 열기 · 숨기기 · 레이아웃 액션(10-ui 「툴 윈도우 · 창」). 숨긴(닫은) 툴 윈도우를 다시 여는 길이다
+ * (project-layout.ts 머리 주석). `focusEditor` 는 「에디터로 포커스」(Esc) — 활성 에디터 탭에 포커스를 두고, 탭이 없으면 `false`.
+ */
 export function toolWindowActions(
   getApi: () => DockviewApi | undefined,
   strings: ProjectStrings,
+  { focusEditor }: { focusEditor?: { enabled(): boolean; run(): void } } = {},
 ): Action[] {
   const enabled = () => getApi() !== undefined;
+  const T = strings.layoutActions;
   return [
     ...PANELS.map((panel): Action => ({
       id: `toolWindow.${panel.id}`,
@@ -125,5 +160,41 @@ export function toolWindowActions(
         if (api) collapseAllDocks(api);
       },
     },
+    {
+      id: "toolWindow.last",
+      label: T.lastToolWindow,
+      keywords: ["Jump to Last Tool Window"],
+      enabled,
+      run: () => {
+        const api = getApi();
+        if (!api) return;
+        const id = lastToolWindow(api);
+        showPanel(api, id);
+        focusToolWindow(id);
+      },
+    },
+    ...ARROWS.map(({ arrow, name }): Action => ({
+      id: `toolWindow.stretch${name}`,
+      label: T.stretch[arrow],
+      keywords: [`Stretch to ${name}`, `Resize Tool Window ${name}`],
+      // 포커스가 툴 윈도우에 있을 때만(키맵의 `when` 도 그렇다).
+      enabled: () => enabled() && focusedToolWindow() !== undefined,
+      run: () => {
+        const api = getApi();
+        const id = focusedToolWindow();
+        if (api && id) resizeToolWindow(api, id, arrow);
+      },
+    })),
+    ...(focusEditor
+      ? [
+          {
+            id: "editor.focus",
+            label: T.focusEditor,
+            keywords: ["Focus Editor", "Jump to Editor"],
+            enabled: focusEditor.enabled,
+            run: focusEditor.run,
+          } satisfies Action,
+        ]
+      : []),
   ];
 }

@@ -43,7 +43,9 @@ const ACTION_IDS = new Set(
       openSettings: async () => {},
       setTheme() {},
     }),
-    ...toolWindowActions(() => undefined, KO_PROJECT),
+    ...toolWindowActions(() => undefined, KO_PROJECT, {
+      focusEditor: { enabled: () => true, run() {} },
+    }),
     ...welcomeActions({
       strings: KO_WELCOME,
       platform: "mac",
@@ -178,6 +180,17 @@ describe("default keymap file", () => {
     expect(label("linux", "search.findInFiles")).toEqual(["Ctrl+Shift+F"]);
     expect(label("mac", "editor.switcher")).toEqual(["⌃⇥"]);
     expect(label("win", "editor.switcher")).toEqual(["Ctrl+Tab"]);
+    // 10-ui 「툴 윈도우 · 창」 의 레이아웃 액션(M1-25)
+    expect(label("mac", "toolWindow.hideAll")).toEqual(["⇧⌘F12"]);
+    expect(label("win", "toolWindow.hideAll")).toEqual(["Ctrl+Shift+F12"]);
+    expect(label("mac", "toolWindow.last")).toEqual(["F12"]);
+    expect(label("linux", "toolWindow.last")).toEqual(["F12"]);
+    expect(label("mac", "editor.focus")).toEqual(["⎋"]);
+    expect(label("win", "editor.focus")).toEqual(["Esc"]);
+    expect(label("mac", "toolWindow.stretchLeft")).toEqual(["⌃⌥⇧←"]);
+    expect(label("mac", "toolWindow.stretchDown")).toEqual(["⌃⌥⇧↓"]);
+    expect(label("win", "toolWindow.stretchRight")).toEqual(["Ctrl+Shift+→"]);
+    expect(label("linux", "toolWindow.stretchUp")).toEqual(["Ctrl+Shift+↑"]);
   });
 });
 

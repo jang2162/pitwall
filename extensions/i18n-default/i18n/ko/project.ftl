@@ -20,6 +20,12 @@ tool-window-agent = 에이전트 활동
 # $name: 툴 윈도우 이름(tool-window-*)
 action-tool-window = { $name } 툴 윈도우
 action-tool-window-hide-all = 모든 툴 윈도우 숨기기
+action-tool-window-last = 마지막 툴 윈도우로
+action-focus-editor = 에디터로 포커스
+action-tool-window-stretch-left = 툴 윈도우 경계를 왼쪽으로
+action-tool-window-stretch-right = 툴 윈도우 경계를 오른쪽으로
+action-tool-window-stretch-up = 툴 윈도우 경계를 위로
+action-tool-window-stretch-down = 툴 윈도우 경계를 아래로
 
 tool-window-bar-left = 왼쪽 툴 윈도우
 tool-window-bar-right = 오른쪽 툴 윈도우

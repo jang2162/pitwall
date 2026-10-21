@@ -56,7 +56,7 @@ import {
 import { useTabSwitcher } from "../editor/tab-switcher";
 import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { FileTreeToolWindow } from "../file-tree/file-tree";
-import { useProjectView } from "../file-tree/project-view";
+import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
 import { useAppStrings } from "../i18n/app-strings";
 import { toolWindowActions } from "../keymap/actions";
@@ -69,7 +69,7 @@ import {
   useNotify,
 } from "../notifications/notifications";
 import type { KeymapNative } from "../keymap/native";
-import { activeWorktree } from "../open-with/active-worktree";
+import { activeWorktree, activeWorktreeStore } from "../open-with/active-worktree";
 import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
 import { projectIdFromQuery, projectOpenInbox } from "../project-open";
 import { useHost, useRpcQuery } from "../rpc/host";
@@ -98,8 +98,11 @@ import {
   restoreLayout,
   showPanel,
   trackHiddenPanels,
+  trackLastToolWindow,
 } from "./project-layout";
+import { createProjectState, hostStateBackend, type ProjectState } from "./project-state";
 import { useProjectStrings } from "./strings";
+import { createWorktreeSession, type WorktreeSession } from "./worktree-session";
 
 const ICONS: Record<string, LucideIcon> = {
   project: FolderTree,
@@ -285,7 +288,9 @@ export function ProjectDock({
     if (!api) return;
     const persisted = persistLayout(api, storage);
     const hidden = trackHiddenPanels(api);
+    const last = trackLastToolWindow(api);
     return () => {
+      last.dispose();
       hidden.dispose();
       persisted.dispose();
     };
@@ -581,6 +586,55 @@ function useDocumentSync(workspace: EditorWorkspace, projectId: string | undefin
 
 type WindowLog = Pick<UiLogger, "info">;
 
+function webviewStorage(): LayoutStorage | undefined {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 이 창의 프로젝트 상태(project-state.ts): 레이아웃 · 워크트리별 탭 묶음을 이 창의 Host 연결의 `project.state.*` 로 읽고 쓴다.
+ * 프로젝트가 없는 창(시험)은 메모리에만 둔다. 읽기가 끝나면(실패해도) `ready` — 도킹 영역은 그때 연다.
+ */
+function useWindowProjectState(projectId: string | undefined): {
+  store: ProjectState;
+  ready: boolean;
+} {
+  const { client } = useHost();
+  const latest = useRef(client);
+  latest.current = client;
+  const [store] = useState(() =>
+    createProjectState(
+      projectId === undefined
+        ? {}
+        : {
+            backend: hostStateBackend(() => {
+              const c = latest.current;
+              if (!c) throw new Error("Host is not connected");
+              return c;
+            }, projectId),
+            legacy: webviewStorage(),
+          },
+    ),
+  );
+  const [ready, setReady] = useState(false);
+  const canLoad = projectId === undefined || client !== undefined;
+  useEffect(() => {
+    if (!canLoad) return;
+    let current = true;
+    void store.load().then((result) => {
+      console.info("[state]", result);
+      if (current) setReady(true);
+    });
+    return () => {
+      current = false;
+    };
+  }, [canLoad, store]);
+  return { store, ready };
+}
+
 function ProjectWindowBody({
   projectId,
   log,
@@ -603,32 +657,84 @@ function ProjectWindowBody({
   const [api, setApi] = useState<DockviewApi>();
   const apiRef = useRef<DockviewApi>(undefined);
   apiRef.current = api;
-  const actions = useMemo(() => toolWindowActions(() => apiRef.current, strings), [strings]);
+  const unsaved = useUnsavedPrompt();
+  const workspace = useWindowEditor(projectId, log, unsaved.ask);
+  const actions = useMemo(
+    () =>
+      toolWindowActions(() => apiRef.current, strings, {
+        focusEditor: {
+          enabled: () => workspace.activeTab() !== undefined,
+          run: () => {
+            const tab = workspace.activeTab();
+            if (!tab) return;
+            tab.api.setActive();
+            workspace.focus(tab.id);
+          },
+        },
+      }),
+    [strings, workspace],
+  );
   useRegisterActions(actions);
   useProjectStatusItems();
   useDemoTaskActions();
 
-  const unsaved = useUnsavedPrompt();
-  const workspace = useWindowEditor(projectId, log, unsaved.ask);
   const previewHost = useWindowPreviewHost(projectId);
+  const projectState = useWindowProjectState(projectId);
   useEffect(() => (api ? workspace.attach(api) : undefined), [api, workspace]);
   useDocumentSync(workspace, projectId);
-  // 창을 닫기 전(닫기 단추 · ⌘W · 앱 종료) 미저장 편집을 묻는다.
-  useEffect(() => guardClose?.(() => workspace.confirmWindowClose()), [guardClose, workspace]);
-  // 창이 받은 열기 요청을 탭으로 연다. 도킹 영역과 Host 연결이 모두 준비된 뒤에 받는다 — 그 전의 요청은 우편함이 들고 있다.
-  const ready = api !== undefined && client !== undefined && projectId !== undefined;
+  const session = useRef<WorktreeSession>(undefined);
+  // 마지막으로 만든 세션. 해제돼도 남긴다 — 다음 세션이 그 처리 끝을 기다린다(worktree-session.ts 의 `after`).
+  const lastSession = useRef<WorktreeSession>(undefined);
+  // 창을 닫기 전(닫기 단추 · ⌘W · 앱 종료) 미저장 편집을 묻고, 닫을 것이면 탭 묶음 · 레이아웃을 마저 쓴다.
+  useEffect(
+    () =>
+      guardClose?.(async () => {
+        if (!(await workspace.confirmWindowClose())) return false;
+        session.current?.flush();
+        await projectState.store.flush();
+        return true;
+      }),
+    [guardClose, workspace, projectState.store],
+  );
   useEffect(() => {
-    if (!ready) return;
-    return projectOpenInbox.connect((open) => {
-      if (open.file)
-        void workspace.open({
-          path: open.file,
-          worktree: open.worktree,
-          line: open.line,
-          column: open.col,
-        });
+    const flush = () => {
+      session.current?.flush();
+      void projectState.store.flush();
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [projectState.store]);
+  // 창이 받은 열기 요청은 워크트리 세션이 받는다(워크트리 전환 · 탭 묶음, worktree-session.ts). 도킹 영역 · Host 연결 · 프로젝트
+  // 상태가 모두 준비된 뒤에 받는다 — 그 전의 요청은 우편함이 들고 있다.
+  const ready =
+    api !== undefined && client !== undefined && projectId !== undefined && projectState.ready;
+  useEffect(() => {
+    if (!ready || !api || !client || projectId === undefined) return;
+    const started = createWorktreeSession({
+      api,
+      workspace,
+      state: projectState.store,
+      tree: windowFileTree(),
+      treeWorktree: () => treeScope.getState().worktree,
+      activeWorktree,
+      setActiveWorktree: (top) => activeWorktreeStore.setState({ top }),
+      exists: (path, worktree) =>
+        client.call("fs.stat", { projectId, worktree: worktree ?? null, path }).then(
+          () => true,
+          () => false,
+        ),
+      log: (message) => log?.info(message, "session"),
+      after: lastSession.current?.idle(),
     });
-  }, [ready, workspace]);
+    session.current = started;
+    lastSession.current = started;
+    const stop = started.start((onOpen) => projectOpenInbox.connect(onOpen));
+    return () => {
+      stop();
+      started.dispose();
+      if (session.current === started) session.current = undefined;
+    };
+  }, [ready, api, client, projectId, workspace, projectState.store, log]);
   const switcher = useTabSwitcher(workspace);
   const editorActionList = useMemo(
     () =>
@@ -652,15 +758,19 @@ function ProjectWindowBody({
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1">
             <ToolWindowBar dock="left" api={api} />
-            <ProjectDock
-              storage={window.localStorage}
-              titles={strings.toolWindows}
-              onApi={(next) => {
-                setApi(next);
-                onDockApi?.(next);
-              }}
-              emptyArea={EmptyEditorArea}
-            />
+            {projectState.ready ? (
+              <ProjectDock
+                storage={projectState.store.layout}
+                titles={strings.toolWindows}
+                onApi={(next) => {
+                  setApi(next);
+                  onDockApi?.(next);
+                }}
+                emptyArea={EmptyEditorArea}
+              />
+            ) : (
+              <div className="min-w-0 flex-1 bg-editor-background" />
+            )}
             <ToolWindowBar dock="right" api={api} />
           </div>
           {projectId !== undefined && <FileWatch projectId={projectId} />}

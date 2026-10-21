@@ -23,6 +23,16 @@ export function projectStrings(t: Translate) {
     ) as Record<string, string>,
     toolWindowAction: (name: string) => t("action-tool-window", { name }),
     hideAllToolWindows: t("action-tool-window-hide-all"),
+    layoutActions: {
+      lastToolWindow: t("action-tool-window-last"),
+      focusEditor: t("action-focus-editor"),
+      stretch: {
+        left: t("action-tool-window-stretch-left"),
+        right: t("action-tool-window-stretch-right"),
+        up: t("action-tool-window-stretch-up"),
+        down: t("action-tool-window-stretch-down"),
+      },
+    },
     toolWindowBar: {
       left: t("tool-window-bar-left"),
       right: t("tool-window-bar-right"),

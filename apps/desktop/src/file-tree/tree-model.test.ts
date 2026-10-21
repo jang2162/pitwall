@@ -402,4 +402,32 @@ describe("FileTreeModel", () => {
     await model.setRoot("/r");
     expect(model.rows()[0]).toMatchObject({ loading: false, error: "permission denied" });
   });
+
+  it("reports and restores expanded folders, waiting for the root they belong to", async () => {
+    const disk = fakeDisk({
+      w1: { a: { b: { "f.rs": "" } }, gone: {} },
+      w2: { a: { b: { "f.rs": "" } }, c: {} },
+    });
+    const model = new FileTreeModel({ list: disk.list });
+    await model.setRoot("/w1");
+    await model.expand("/w1/a");
+    await model.expand("/w1/a/b");
+    expect(model.expandedPaths()).toEqual(["/w1/a", "/w1/a/b"]);
+
+    // 다른 루트의 펼침은 그 루트가 될 때까지 기다린다 — 사이에 다른 루트를 거쳐도 그 루트에는 펴지 않고 기다린다. 깊은 것이
+    // 먼저 와도 얕은 것부터 편다. 없는 폴더는 건너뛴다.
+    await model.restoreExpanded("/w2", ["/w2/a/b", "/w2/a", "/w2/missing", "/w1/a"]);
+    expect(names(model)[0]).toBe("w1/");
+    await model.setRoot("/w1/a");
+    expect(model.expandedPaths()).toEqual([]);
+    await model.setRoot("/w2");
+    expect(names(model)).toEqual(["w2/", "  a/", "    b/", "      f.rs", "  c"]);
+    expect(model.expandedPaths()).toEqual(["/w2/a", "/w2/a/b"]);
+
+    // 지금 루트의 펼침은 곧바로 편다.
+    model.collapse("/w2/a");
+    model.collapse("/w2/a/b");
+    await model.restoreExpanded("/w2", ["/w2/c"]);
+    expect(model.expandedPaths()).toEqual(["/w2/c"]);
+  });
 });

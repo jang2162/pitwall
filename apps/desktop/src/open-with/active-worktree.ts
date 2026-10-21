@@ -4,6 +4,9 @@
 //
 // 워크트리 없이 파일을 연 요청은 메인 체크아웃으로 돌아온 것으로 본다. 폴더만 다시 연 요청은 창을 앞으로 가져오기만 해서(빈 요청)
 // 여기에 오지 않는다 — 그 경우 워크트리는 바뀌지 않는다.
+//
+// 프로젝트 창에서 활성 워크트리를 바꾸는 것은 워크트리 세션(layout/worktree-session.ts)이다 — 바꾸기 전에 지금 워크트리의 탭 묶음을
+// 저장하고 탭을 닫는다(미저장 확인을 취소하면 바꾸지 않는다).
 
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
@@ -17,9 +20,18 @@ interface ActiveWorktreeState {
 
 export const activeWorktreeStore = createStore<ActiveWorktreeState>()(() => ({ top: undefined }));
 
+/** 요청이 가리키는 활성 워크트리(머리 주석의 규칙). 바꾸지 않는 요청(폴더만 다시 열기)이면 `{ change: false }`. */
+export function requestedWorktree(
+  open: ProjectOpen,
+): { change: true; top: string | undefined } | { change: false } {
+  if (open.worktree) return { change: true, top: open.worktree };
+  if (open.file) return { change: true, top: undefined };
+  return { change: false };
+}
+
 export function rememberActiveWorktree(open: ProjectOpen): void {
-  if (open.worktree) activeWorktreeStore.setState({ top: open.worktree });
-  else if (open.file) activeWorktreeStore.setState({ top: undefined });
+  const next = requestedWorktree(open);
+  if (next.change) activeWorktreeStore.setState({ top: next.top });
 }
 
 /** 지금 값. 키를 누른 때의 값을 읽는 쪽(액션 · RPC 인자)이 쓴다. */

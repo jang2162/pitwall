@@ -20,6 +20,12 @@ tool-window-agent = Agent Activity
 # $name: tool window name (tool-window-*)
 action-tool-window = { $name } Tool Window
 action-tool-window-hide-all = Hide All Tool Windows
+action-tool-window-last = Jump to Last Tool Window
+action-focus-editor = Focus Editor
+action-tool-window-stretch-left = Move Tool Window Edge Left
+action-tool-window-stretch-right = Move Tool Window Edge Right
+action-tool-window-stretch-up = Move Tool Window Edge Up
+action-tool-window-stretch-down = Move Tool Window Edge Down
 
 tool-window-bar-left = Left tool windows
 tool-window-bar-right = Right tool windows

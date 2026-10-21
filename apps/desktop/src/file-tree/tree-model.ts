@@ -112,6 +112,8 @@ export class FileTreeModel {
   /** 루트를 바꿀 때마다 오른다. 옛 루트의 응답을 버린다. */
   private generation = 0;
   private selectedPath: string | undefined;
+  /** 되살릴 펼침(`restoreExpanded`). 루트가 `root` 가 되면 편다. */
+  private wanted: { root: string; paths: string[] } | undefined;
   private mode: IgnoredMode = "dim";
   private version = 0;
   private cachedRows: { version: number; rows: TreeRow[] } | undefined;
@@ -180,7 +182,40 @@ export class FileTreeModel {
     };
     this.expanded.add(root);
     this.changed();
-    return this.load(root);
+    return this.load(root).then(() => this.applyWanted());
+  }
+
+  /** 펼친 폴더(루트는 빼고, 펼친 순서). 프로젝트 상태(layout/project-state.ts)가 워크트리마다 남긴다. */
+  expandedPaths(): string[] {
+    return [...this.expanded].filter((path) => path !== this.root);
+  }
+
+  /**
+   * 저장해 둔 펼침을 되살린다. 루트가 `root` 일 때만 편다 — 아직 다른 루트면(활성 워크트리를 바꾸는 중이라 새 루트가 나중에 온다)
+   * 그 루트로 바뀐 뒤 편다. 얕은 폴더부터 펴고, 사라졌거나 펼 수 없는 폴더는 건너뛴다. 다 펴면 풀린다.
+   */
+  restoreExpanded(root: string, paths: readonly string[]): Promise<void> {
+    this.wanted = { root, paths: [...paths] };
+    return this.root === root ? this.applyWanted() : Promise.resolve();
+  }
+
+  private async applyWanted(): Promise<void> {
+    const wanted = this.wanted;
+    const root = this.root;
+    if (!wanted || root === undefined || wanted.root !== root) return;
+    this.wanted = undefined;
+    const generation = this.generation;
+    await this.loading.get(root);
+    const depth = (path: string) => path.split(this.sep).length;
+    const levels = new Map<number, string[]>();
+    for (const path of wanted.paths) {
+      if (path === root || !isWithin(path, root, this.sep)) continue;
+      levels.set(depth(path), [...(levels.get(depth(path)) ?? []), path]);
+    }
+    for (const level of [...levels.keys()].sort((a, b) => a - b)) {
+      if (generation !== this.generation) return;
+      await Promise.all(levels.get(level)!.map((path) => this.expand(path)));
+    }
   }
 
   setIgnoredMode(mode: IgnoredMode) {
