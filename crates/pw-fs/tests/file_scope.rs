@@ -120,12 +120,23 @@ fn denied_code(result: Result<Value, RpcError>) -> i32 {
     result.expect_err("expected the request to be refused").code
 }
 
+/// 범위 밖이라 거절했다(`scope::Denied` · `Escaped`) — 판정을 지난 뒤 디스크에서 실패한 것(「폴더가 아님」 등)과 가른다.
+fn outside(result: Result<Value, RpcError>) -> bool {
+    let error = result.expect_err("expected the request to be refused");
+    error.code == code::INVALID_PARAMS
+        && error
+            .data
+            .as_ref()
+            .and_then(Value::as_str)
+            .is_some_and(|detail| detail.contains("outside"))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_the_file_itself_is_read() {
     let f = Fixture::new();
     let file = f.file("x/a.txt", "inside");
     let sibling = f.file("x/b.txt", "sibling");
-    let outside = f.file("secret.txt", "secret");
+    let secret = f.file("secret.txt", "secret");
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(&sibling, f.base.join("x/to-b")).unwrap();
@@ -142,7 +153,7 @@ async fn only_the_file_itself_is_read() {
 
     let mut refused = vec![
         sibling.clone(),
-        outside.clone(),
+        secret.clone(),
         f.base.join("x"),
         f.base.clone(),
         f.base.join("x/a.txt/../b.txt"),
@@ -156,9 +167,8 @@ async fn only_the_file_itself_is_read() {
     refused.extend([f.base.join("x/to-b"), f.base.join("x/up/secret.txt")]);
     for path in &refused {
         for method in ["fs.read", "fs.stat"] {
-            assert_eq!(
-                denied_code(conn.call(method, read(path)).await),
-                code::INVALID_PARAMS,
+            assert!(
+                outside(conn.call(method, read(path)).await),
                 "{method} {}",
                 path.display()
             );
@@ -199,10 +209,7 @@ async fn naming_a_project_does_not_widen_the_scope() {
         .id;
     let mut conn = f.connect(&file);
     let params = json!({"projectId": project, "path": sibling.display().to_string()});
-    assert_eq!(
-        denied_code(conn.call("fs.read", params.clone()).await),
-        code::INVALID_PARAMS
-    );
+    assert!(outside(conn.call("fs.read", params.clone()).await));
     let watch = json!({"projectId": project});
     assert_eq!(
         denied_code(conn.call("fs.list", read(&f.base.join("proj"))).await),
@@ -253,6 +260,7 @@ async fn only_the_file_itself_is_written_and_no_other_name_appears() {
         (f.base.join("x/c.txt"), Value::Null),
         (f.base.join("x/b.txt"), Value::Null),
         (f.base.join("x/a.txt/../c.txt"), Value::Null),
+        (f.base.join("x/a.txt/c.txt"), Value::Null),
         (f.base.join("y.txt"), Value::Null),
     ] {
         let result = conn
@@ -262,12 +270,7 @@ async fn only_the_file_itself_is_written_and_no_other_name_appears() {
                        "content": {"kind": "text", "text": "nope"}, "expectedVersion": expected}),
             )
             .await;
-        assert_eq!(
-            denied_code(result),
-            code::INVALID_PARAMS,
-            "{}",
-            path.display()
-        );
+        assert!(outside(result), "{}", path.display());
     }
     // 원자 쓰기의 임시 파일도 남지 않았다 — 폴더에는 원래 두 파일뿐이다.
     let mut names: Vec<String> = fs::read_dir(f.base.join("x"))
@@ -293,14 +296,11 @@ async fn only_the_file_itself_is_written_and_no_other_name_appears() {
 async fn a_file_replaced_by_an_outside_link_is_not_followed() {
     let f = Fixture::new();
     let file = f.file("x/a.txt", "inside");
-    let outside = f.file("secret.txt", "secret");
+    let secret = f.file("secret.txt", "secret");
     let mut conn = f.connect(&file);
     fs::remove_file(&file).unwrap();
-    std::os::unix::fs::symlink(&outside, &file).unwrap();
-    assert_eq!(
-        denied_code(conn.call("fs.read", read(&file)).await),
-        code::INVALID_PARAMS
-    );
+    std::os::unix::fs::symlink(&secret, &file).unwrap();
+    assert!(outside(conn.call("fs.read", read(&file)).await));
     let written = conn
         .call(
             "fs.write",
@@ -308,8 +308,8 @@ async fn a_file_replaced_by_an_outside_link_is_not_followed() {
                    "content": {"kind": "text", "text": "x"}, "expectedVersion": null}),
         )
         .await;
-    assert_eq!(denied_code(written), code::INVALID_PARAMS);
-    assert_eq!(fs::read_to_string(&outside).unwrap(), "secret");
+    assert!(outside(written));
+    assert_eq!(fs::read_to_string(&secret).unwrap(), "secret");
 }
 
 /// 감시: 그 파일이 바뀌면 그 연결의 범위(`file:<경로>`)로 `fs.changed` 가 온다. 같은 폴더의 다른 파일은 오지 않는다.
@@ -337,7 +337,16 @@ async fn the_watch_reports_the_file_and_nothing_else() {
 
     // 다른 파일의 변경은 내지 않는다 — 그 뒤 그 파일의 변경 하나만 온다.
     fs::write(&sibling, "changed").unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // 디바운스(75 ms)의 몇 배를 기다려도 아무 이벤트가 오지 않는다.
+    let early = tokio::time::timeout(
+        Duration::from_millis(500),
+        conn.notification("events.event"),
+    )
+    .await;
+    assert!(
+        early.is_err(),
+        "the sibling's change was reported: {early:?}"
+    );
     // 원자 저장(같은 폴더의 임시 파일 → rename)도 그 파일의 변경이다.
     let temp = f.base.join("x/.a.txt.tmp");
     fs::write(&temp, "new").unwrap();
