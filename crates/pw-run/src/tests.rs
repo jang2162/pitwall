@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use pw_core::bus::{DEFAULT_CAPACITY, EventBus, Scope};
@@ -382,6 +382,78 @@ async fn the_shell_setting_and_cwd_are_used() {
     let (code, end) = c.exit(t.stream).await;
     assert_eq!(code, Some(0));
     assert_eq!(end.outcome, StreamOutcome::Completed);
+}
+
+/// `git worktree add` 가 만드는 모양을 손으로 만든다: `main` 의 연결 워크트리 `wt`. 돌려주는 것은 워크트리 꼭대기.
+fn fake_worktree(main: &Path, wt: &Path) -> PathBuf {
+    let admin = main.join(".git/worktrees/wt");
+    fs::create_dir_all(&admin).unwrap();
+    fs::write(admin.join("commondir"), "../..\n").unwrap();
+    fs::create_dir_all(wt).unwrap();
+    fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+    fs::write(
+        admin.join("gitdir"),
+        format!("{}\n", wt.join(".git").display()),
+    )
+    .unwrap();
+    normalize(wt).unwrap()
+}
+
+/// 창은 활성 워크트리의 꼭대기만 준다. 프로젝트가 저장소의 하위 폴더(모노레포의 한 패키지)여도 셸은 그 워크트리 안의 프로젝트
+/// 루트에서 돈다 — 워크트리 꼭대기가 아니라.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_terminal_in_a_worktree_starts_at_the_project_root_inside_it() {
+    let f = Fixture::new("schema = 1\n");
+    // 프로젝트 루트(`f.root` = <tmp>/project)를 메인 체크아웃 <tmp>/project/.. 가 아니라 하위 폴더로 두려고, 저장소를 <tmp> 에 만든다.
+    let main = normalize(f.tmp.path()).unwrap();
+    fs::create_dir_all(main.join(".git")).unwrap();
+    let wt = fake_worktree(&main, &f.tmp.path().join("wt"));
+    let inside = wt.join("project");
+    fs::create_dir_all(&inside).unwrap();
+    let mut c = f.client();
+    let mut params = f.create_params(80, 24);
+    params["worktree"] = json!(wt);
+    let t = c.open(params).await;
+    assert_eq!(PathBuf::from(&t.cwd), inside);
+    c.input(t.terminal, "echo \"D=$(pwd -P)\"\n").await;
+    c.read_until(t.stream, &format!("D={}", inside.display()))
+        .await;
+}
+
+/// 프로젝트의 워크트리가 아닌 `worktree` 는 `cwd` 를 함께 줘도 거절한다 — 메인 저장소를 가리키는 `.git` 파일만 만든 폴더(위조)도.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_worktree_that_is_not_the_projects_is_rejected() {
+    let f = Fixture::new("schema = 1\n");
+    let main = normalize(f.tmp.path()).unwrap();
+    fs::create_dir_all(main.join(".git/worktrees/wt")).unwrap();
+    fs::write(main.join(".git/worktrees/wt/commondir"), "../..\n").unwrap();
+    let forged = f.tmp.path().join("forged");
+    fs::create_dir_all(forged.join("project")).unwrap();
+    fs::write(
+        forged.join(".git"),
+        format!("gitdir: {}\n", main.join(".git/worktrees/wt").display()),
+    )
+    .unwrap();
+    let plain = f.tmp.path().join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    let mut c = f.client();
+    for params in [
+        json!({"projectId": f.project, "worktree": forged, "cols": 80, "rows": 24}),
+        json!({"projectId": f.project, "worktree": plain, "cols": 80, "rows": 24}),
+        json!({"projectId": f.project, "worktree": "relative", "cols": 80, "rows": 24}),
+        json!({"projectId": f.project, "worktree": forged, "cwd": f.root, "cols": 80, "rows": 24}),
+    ] {
+        let response = c.call("terminal.create", params.clone()).await;
+        let stream = response.result_as::<StreamOpened>().unwrap().stream_id;
+        let (events, end) = c.end(stream).await;
+        assert_eq!(events, [], "{params}");
+        match end.outcome {
+            StreamOutcome::Failed { error } => {
+                assert_eq!(error.code, code::INVALID_PARAMS, "{params}")
+            }
+            other => panic!("{params}: {other:?}"),
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -54,6 +54,33 @@ pub fn worktree_link(path: &Path) -> Option<WorktreeLink> {
     })
 }
 
+/// [`worktree_root`] 가 거절한 이유.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorktreeRootError {
+    /// `top` 이 상대 경로다.
+    Relative,
+    /// `top` 이 연결 워크트리가 아니거나(위조한 `.git` 파일 포함 — [`linked_worktree`] 의 판정), 그 메인 체크아웃 안에 프로젝트
+    /// 루트가 없다.
+    NotOurs,
+}
+
+/// 활성 워크트리(`ActiveWorktree::top`) 안에서 프로젝트 루트에 대응하는 폴더 — `ActiveWorktree::root` 와 같은 계산이다. 창은 워크트리의
+/// 꼭대기만 알므로, 그 워크트리를 인자로 받는 RPC(터미널 · 외부 도구 · 언어 판별)가 Host 에서 이것으로 루트를 정한다. `top` 은
+/// 정규화한 뒤 [`worktree_link`] 로 본다(그래야 `project_root` 와의 접두 비교가 맞다). git 은 실행하지 않는다.
+pub fn worktree_root(project_root: &Path, top: &Path) -> Result<PathBuf, WorktreeRootError> {
+    let top = normalize(top).map_err(|PathRejected::Relative| WorktreeRootError::Relative)?;
+    let link = worktree_link(&top).ok_or(WorktreeRootError::NotOurs)?;
+    let rel = project_root
+        .strip_prefix(&link.main_top)
+        .map_err(|_| WorktreeRootError::NotOurs)?;
+    // 빈 상대 경로를 `join` 하면 끝에 구분자가 붙는다.
+    Ok(if rel.as_os_str().is_empty() {
+        link.worktree_top
+    } else {
+        link.worktree_top.join(rel)
+    })
+}
+
 /// Windows verbatim 경로를 보통 경로로 바꾼다. 다른 OS 에서는 그대로 돌려준다.
 pub fn simplify(path: PathBuf) -> PathBuf {
     #[cfg(windows)]
@@ -110,6 +137,54 @@ fn lexical(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worktree_root_maps_the_project_root_into_the_worktree() {
+        use crate::config::gitdir::tests::fake_repo;
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, wt) = fake_repo(tmp.path());
+        let wt = normalize(&wt).unwrap();
+        // 저장소 꼭대기가 프로젝트 루트면 워크트리 꼭대기, 하위 폴더(모노레포의 한 패키지)면 워크트리 안의 같은 폴더다.
+        assert_eq!(worktree_root(&main, &wt), Ok(wt.clone()));
+        assert_eq!(worktree_root(&main.join("sub"), &wt), Ok(wt.join("sub")));
+        // 워크트리 안의 하위 폴더를 `top` 으로 줘도 꼭대기에서 계산한다.
+        assert_eq!(
+            worktree_root(&main.join("sub"), &wt.join("sub/dir")),
+            Ok(wt.join("sub"))
+        );
+        // 메인 체크아웃 밖의 프로젝트, 상대 경로, 워크트리가 아닌 폴더.
+        let other = tmp.path().join("other");
+        fs::create_dir_all(&other).unwrap();
+        assert_eq!(worktree_root(&other, &wt), Err(WorktreeRootError::NotOurs));
+        assert_eq!(
+            worktree_root(&main, Path::new("wt")),
+            Err(WorktreeRootError::Relative)
+        );
+        assert_eq!(
+            worktree_root(&main, &other),
+            Err(WorktreeRootError::NotOurs)
+        );
+    }
+
+    /// 아무 폴더에 메인 저장소를 가리키는 `.git` 파일을 만들어도 워크트리로 받지 않는다 — 그 저장소의 `worktrees/<이름>/gitdir` 이
+    /// 그 `.git` 파일을 되가리켜야 한다.
+    #[test]
+    fn a_forged_git_file_is_not_a_worktree_of_the_project() {
+        use crate::config::gitdir::tests::fake_repo;
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, _wt) = fake_repo(tmp.path());
+        let forged = tmp.path().join("forged");
+        fs::create_dir_all(&forged).unwrap();
+        fs::write(
+            forged.join(".git"),
+            format!("gitdir: {}\n", main.join(".git/worktrees/wt").display()),
+        )
+        .unwrap();
+        assert_eq!(
+            worktree_root(&main, &forged),
+            Err(WorktreeRootError::NotOurs)
+        );
+    }
 
     #[test]
     fn verbatim_prefixes_are_stripped_only_when_the_meaning_stays() {

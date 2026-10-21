@@ -5305,7 +5305,7 @@
           },
           "cwd": {
             "default": null,
-            "description": "셸의 작업 디렉터리(절대 경로). 프로젝트 루트나 그 루트를 담은 연결 워크트리 안이어야 한다 — 창은 활성 워크트리의 프로젝트\n루트를 준다. 없으면 프로젝트의 주 루트.",
+            "description": "셸의 작업 디렉터리(절대 경로). 프로젝트 루트나 그 루트를 담은 연결 워크트리 안이어야 한다. 없으면 `worktree` 안의 프로젝트\n루트, 그것도 없으면 프로젝트의 주 루트.",
             "type": [
               "string",
               "null"
@@ -5319,6 +5319,14 @@
             "maximum": 65535,
             "minimum": 0,
             "type": "integer"
+          },
+          "worktree": {
+            "default": null,
+            "description": "창의 활성 워크트리 꼭대기(`ActiveWorktree.top`, `fs.*` · `openWith.run` 의 `worktree` 와 같다). 그 프로젝트의 연결 워크트리가\n아니면(위조한 `.git` 파일 포함) `cwd` 가 있어도 invalid params 오류다. 창은 이것만 주고 `cwd` 는 비운다 — 창은 워크트리 안의\n프로젝트 루트(모노레포의 하위 폴더일 수 있다)를 모른다.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

@@ -28,7 +28,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use pw_core::config::ConfigStore;
-use pw_core::registry::path::{normalize, worktree_link};
+use pw_core::registry::path::{WorktreeRootError, normalize, worktree_link, worktree_root};
 use pw_core::registry::{Project, Registry as Projects, RegistryError};
 use pw_rpc::{RpcError, SessionId, StreamSink, code};
 use pw_runtime::Runtime;
@@ -167,9 +167,20 @@ impl Terminals {
             .projects
             .get(&params.project_id)
             .map_err(registry_error)?;
-        let cwd = match &params.cwd {
-            Some(dir) => project_dir(&project, Path::new(dir))?,
-            None => normalize(project.root()).unwrap_or_else(|_| project.root().to_path_buf()),
+        // 워크트리는 `cwd` 를 줬어도 검사한다 — 위조한 워크트리 인자를 조용히 무시하지 않는다.
+        let in_worktree = match &params.worktree {
+            Some(top) => Some(
+                worktree_root(project.root(), Path::new(top))
+                    .map_err(|e| worktree_error(e, top, &project.id))?,
+            ),
+            None => None,
+        };
+        let cwd = match (&params.cwd, in_worktree) {
+            (Some(dir), _) => project_dir(&project, Path::new(dir))?,
+            (None, Some(root)) => root,
+            (None, None) => {
+                normalize(project.root()).unwrap_or_else(|_| project.root().to_path_buf())
+            }
         };
         if !cwd.is_dir() {
             return Err(RpcError::invalid_params(format!(
@@ -295,6 +306,13 @@ fn project_dir(project: &Project, dir: &Path) -> Result<PathBuf, RpcError> {
             project.id
         )))
     }
+}
+
+fn worktree_error(e: WorktreeRootError, top: &str, project: &str) -> RpcError {
+    RpcError::invalid_params(match e {
+        WorktreeRootError::Relative => format!("worktree `{top}` must be an absolute path"),
+        WorktreeRootError::NotOurs => format!("`{top}` is not a worktree of project `{project}`"),
+    })
 }
 
 fn registry_error(e: RegistryError) -> RpcError {

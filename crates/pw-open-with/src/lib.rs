@@ -18,9 +18,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use pw_core::config::gitdir::linked_worktree;
 use pw_core::config::{AppPaths, ConfigStore};
-use pw_core::registry::path::{PathRejected, normalize};
+use pw_core::registry::path::{PathRejected, WorktreeRootError, normalize, worktree_root};
 use pw_core::registry::{Project, Registry as Projects, RegistryError};
 use pw_ext::Registry;
 use pw_ext::template::{SubstituteError, substitute};
@@ -167,18 +166,12 @@ impl OpenWith {
             return Ok((project, root));
         };
         // 상대 경로면 Pitwall 의 cwd 기준으로 풀려 `{project_root}` 가 상대 경로가 된다(04 F8 「절대 경로」).
-        if !Path::new(top).is_absolute() {
-            return Err(RpcError::invalid_params(format!(
+        match worktree_root(project.root(), Path::new(top)) {
+            Ok(root) => Ok((project, root)),
+            Err(WorktreeRootError::Relative) => Err(RpcError::invalid_params(format!(
                 "worktree `{top}` must be an absolute path"
-            )));
-        }
-        let root = linked_worktree(Path::new(top)).and_then(|link| {
-            let rel = project.root().strip_prefix(&link.main_top).ok()?;
-            Some(link.worktree_top.join(rel))
-        });
-        match root {
-            Some(root) => Ok((project, root)),
-            None => Err(RpcError::invalid_params(format!(
+            ))),
+            Err(WorktreeRootError::NotOurs) => Err(RpcError::invalid_params(format!(
                 "`{top}` is not a worktree of project `{id}`"
             ))),
         }

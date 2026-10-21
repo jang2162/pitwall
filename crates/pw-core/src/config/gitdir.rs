@@ -92,11 +92,11 @@ fn resolve_from(base: &Path, path: impl AsRef<Path>) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// `git worktree add` 가 만드는 것과 같은 모양을 손으로 만든다(테스트가 git 실행 파일에 의존하지 않게).
-    fn fake_repo(root: &Path) -> (PathBuf, PathBuf) {
+    pub(crate) fn fake_repo(root: &Path) -> (PathBuf, PathBuf) {
         let main = root.join("main");
         let wt = root.join("wt");
         let admin = main.join(".git/worktrees/wt");

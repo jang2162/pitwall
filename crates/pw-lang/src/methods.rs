@@ -8,7 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use pw_core::config::{AppPaths, ConfigStore};
-use pw_core::registry::path::{normalize, worktree_link};
+use pw_core::registry::path::{WorktreeRootError, normalize, worktree_root};
 use pw_core::registry::{Project, Registry as Projects, RegistryError};
 use pw_rpc::{Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
@@ -283,7 +283,7 @@ fn relative(path: &Path, base: &Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-/// 프로젝트와, 활성 워크트리가 있으면 그 워크트리 안의 프로젝트 루트(`pw_fs` 의 `worktree_root` 와 같은 계산).
+/// 프로젝트와, 활성 워크트리가 있으면 그 워크트리 안의 프로젝트 루트(`pw_core::registry::path::worktree_root`).
 fn project_and_root(
     host: &HostParts,
     id: &str,
@@ -294,24 +294,13 @@ fn project_and_root(
         let root = project.root().to_path_buf();
         return Ok((project, root));
     };
-    // `pw_fs` 의 워크트리 루트 계산과 같다: 파일 경로와 같은 함수로 정규화한 뒤 링크를 본다(그래야 `strip_prefix` 비교가 맞다).
-    let top = normalize(Path::new(top)).map_err(|_| {
-        RpcError::invalid_params(format!("worktree `{top}` must be an absolute path"))
-    })?;
-    let root = worktree_link(&top).and_then(|link| {
-        let rel = project.root().strip_prefix(&link.main_top).ok()?;
-        // 빈 상대 경로를 `join` 하면 끝에 구분자가 붙는다.
-        Some(if rel.as_os_str().is_empty() {
-            link.worktree_top
-        } else {
-            link.worktree_top.join(rel)
-        })
-    });
-    match root {
-        Some(root) => Ok((project, root)),
-        None => Err(RpcError::invalid_params(format!(
-            "`{}` is not a worktree of project `{id}`",
-            top.display()
+    match worktree_root(project.root(), Path::new(top)) {
+        Ok(root) => Ok((project, root)),
+        Err(WorktreeRootError::Relative) => Err(RpcError::invalid_params(format!(
+            "worktree `{top}` must be an absolute path"
+        ))),
+        Err(WorktreeRootError::NotOurs) => Err(RpcError::invalid_params(format!(
+            "`{top}` is not a worktree of project `{id}`"
         ))),
     }
 }
