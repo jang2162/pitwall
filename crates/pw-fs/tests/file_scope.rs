@@ -97,9 +97,10 @@ impl Conn {
         }
     }
 
+    /// 다음 `method` 알림. 지연을 재지 않는다 — 시험을 함께 돌리는 부하 아래에서는 OS 감시를 거는 데만 10초 넘게 걸리기도 한다.
     async fn notification(&mut self, method: &str) -> Value {
         loop {
-            let msg = tokio::time::timeout(Duration::from_secs(5), self.rx.recv())
+            let msg = tokio::time::timeout(Duration::from_secs(30), self.rx.recv())
                 .await
                 .unwrap_or_else(|_| panic!("no {method}"))
                 .expect("closed");
