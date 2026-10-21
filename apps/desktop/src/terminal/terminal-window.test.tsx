@@ -124,7 +124,8 @@ const native: KeymapNative = {
     };
   },
   openSettings: async () => {},
-  closeWindow: async () => {},
+  // 창은 렌더할 때 이 함수를 잡아 둔다(App.tsx) — 마운트 뒤에 spy 를 걸면 보지 못하므로 처음부터 기록한다.
+  closeWindow: vi.fn(async () => {}),
 };
 
 let root: Root | undefined;
@@ -137,6 +138,7 @@ beforeEach(() => {
   );
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.mocked(native.closeWindow).mockClear();
   host.creates = [];
   host.inputs = [];
   host.cancelled = [];
@@ -232,11 +234,10 @@ it("sends Ctrl+C to the shell but takes ⌘W to close the terminal tab, not the 
   textarea().focus();
   await keydown(textarea(), "KeyC", { key: "c", keyCode: 67, ctrlKey: true });
   await vi.waitFor(() => expect(host.inputs).toEqual(["\x03"]));
-  const closeWindow = vi.spyOn(native, "closeWindow");
   await keydown(textarea(), "KeyW", { key: "w", keyCode: 87, metaKey: true });
   expect(tabs()).toHaveLength(0);
   expect(host.cancelled).toEqual([streamId]);
-  expect(closeWindow).not.toHaveBeenCalled();
+  expect(native.closeWindow).not.toHaveBeenCalled();
 });
 
 it("hides the terminal on ⌥F12 from inside it instead of sending the key to the shell", async () => {
@@ -257,7 +258,6 @@ it("drops the menu's Close that the same ⌘W press brings after closing the ter
   await mount();
   await openTerminal();
   textarea().focus();
-  const closeWindow = vi.spyOn(native, "closeWindow");
   await act(async () => {
     textarea().dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -274,7 +274,7 @@ it("drops the menu's Close that the same ⌘W press brings after closing the ter
   });
   await settle();
   expect(tabs()).toHaveLength(0);
-  expect(closeWindow).not.toHaveBeenCalled();
+  expect(native.closeWindow).not.toHaveBeenCalled();
 });
 
 it("sends a Korean composition to the shell once, as composed", async () => {
