@@ -24,6 +24,8 @@ import defaultTheme from "../../../../extensions/theme-default/themes/default.js
 import { App } from "../App";
 import type { KeymapNative } from "../keymap/native";
 import { activeWorktreeStore } from "../open-with/active-worktree";
+import { getDocLanguage, PLAIN_TEXT } from "../editor/language";
+import { fakeSyntaxServer, miniHighlight } from "../editor/syntax-testing";
 import { createThemeStore } from "../theme/theme-store";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
@@ -49,6 +51,8 @@ const host = vi.hoisted(() => ({
   drop: undefined as ((drop: FileDrop) => void) | undefined,
   imports: [] as Record<string, unknown>[],
   importResult: undefined as DropImported | undefined,
+  /** 구문 분석 서비스(`syntax.*`). `Rust` 만 문법이 있다. */
+  syntax: undefined as ReturnType<typeof fakeSyntaxServer> | undefined,
 }));
 
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
@@ -99,6 +103,19 @@ vi.mock("../tauri-transport", async () => {
           send({ id: m.id, error: { code, message, data } });
         const conflict = (path: string) => error(-32004, `\`${path}\` already exists`, { path });
         if (m.method.startsWith("fs.")) host.calls.push({ method: m.method, params });
+        if (m.method.startsWith("syntax.")) {
+          const source = host.syntax!.source;
+          const run = {
+            "syntax.open": source.open,
+            "syntax.edit": source.edit,
+            "syntax.highlights": source.highlights,
+            "syntax.close": source.close,
+          }[m.method] as ((p: unknown) => Promise<unknown>) | undefined;
+          if (!run) return error(-32601, `no ${m.method}`);
+          return void run(params).then(reply, (e: { code?: number; message: string }) =>
+            error(e.code ?? -32603, e.message),
+          );
+        }
         const path = typeof params.path === "string" ? params.path : "";
         switch (m.method) {
           case "i18n.get":
@@ -231,11 +248,12 @@ vi.mock("../tauri-transport", async () => {
             return reply({ removed: paths, failed: [] });
           }
           case "lang.detect": {
+            // 확장자 `.rs` 만 언어가 있다(구문 강조가 이름 바꾸기를 따라가는지 본다).
             const { files } = params as { files: { path: string }[] };
             return reply({
-              files: files.map(() => ({
-                language: null,
-                source: "none",
+              files: files.map((f) => ({
+                language: f.path.endsWith(".rs") ? "Rust" : null,
+                source: f.path.endsWith(".rs") ? "extension" : "none",
                 vendored: false,
                 generated: false,
                 documentation: false,
@@ -295,6 +313,7 @@ beforeEach(() => {
   host.drop = undefined;
   host.imports = [];
   host.importResult = undefined;
+  host.syntax = fakeSyntaxServer({ grammars: { Rust: miniHighlight } });
   activeWorktreeStore.setState({ top: undefined });
   resetWindowFileTree();
   localStorage.clear();
@@ -494,6 +513,49 @@ it("renames an open file with ⇧F6: the disk, the tree and the tab follow and t
   expect(editorView().state.doc.toString()).toBe("// edited\npub fn lib() {}");
   expect(fsCalls("fs.read").length).toBe(reads);
   expect(document.querySelector("[data-testid=disk-banner]")).toBeNull();
+});
+
+it("moves the highlight session and the document language with a renamed file", async () => {
+  const before = `${ROOT}/src/lib.rs`;
+  const after = `${ROOT}/src/core.rs`;
+  const syntax = host.syntax!;
+  await mount();
+  await mouse(row(`${ROOT}/src`)!, "dblclick");
+  await openPinned(before);
+  await vi.waitFor(() => expect(document.querySelector(".pw-syntax-keyword")).not.toBeNull());
+  expect(getDocLanguage(before)).toBe("Rust");
+  expect(syntax.docs.size).toBe(1);
+  const [first] = [...syntax.docs.keys()];
+
+  await selectRow(before);
+  await pressInTree({ key: "F6", code: "F6", shiftKey: true });
+  await answerName("core.rs");
+  await vi.waitFor(() => expect(tabTitles().some((t) => t?.includes("core.rs"))).toBe(true));
+
+  // 옛 경로에는 언어도 세션도 남지 않는다 — 옛 세션의 서비스 문서는 닫혔고 새 경로의 것 하나만 열려 있다.
+  expect(getDocLanguage(before)).toBe(PLAIN_TEXT);
+  await vi.waitFor(() => expect(getDocLanguage(after)).toBe("Rust"));
+  await vi.waitFor(() => expect(syntax.called("close")).toContainEqual({ docId: first }));
+  expect(syntax.docs.size).toBe(1);
+  expect(syntax.docs.has(first!)).toBe(false);
+
+  // 편집이 새 세션으로 가고 강조가 따라온다.
+  await typeInEditor("// edited\n");
+  await vi.waitFor(() =>
+    expect([...syntax.docs.values()].map((d) => d.text)).toEqual(["// edited\npub fn lib() {}"]),
+  );
+  await vi.waitFor(() =>
+    expect(document.querySelector(".pw-syntax-comment")?.textContent).toBe("// edited"),
+  );
+
+  // 언어가 없는 이름으로 바꾸면 강조를 멈추고 세션을 닫는다.
+  await selectRow(after);
+  await pressInTree({ key: "F6", code: "F6", shiftKey: true });
+  await answerName("core.txt");
+  await vi.waitFor(() => expect(getDocLanguage(`${ROOT}/src/core.txt`)).toBe(PLAIN_TEXT));
+  await vi.waitFor(() => expect(syntax.docs.size).toBe(0));
+  await vi.waitFor(() => expect(document.querySelector("[class*=pw-syntax-]")).toBeNull());
+  expect(editorView().state.doc.toString()).toBe("// edited\npub fn lib() {}");
 });
 
 it("moves a folder by drag with its open tab, and copies with ⌥+drag", async () => {
