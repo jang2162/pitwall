@@ -238,6 +238,21 @@ shell = ["/opt/homebrew/bin/fish", "-l"]           # 터미널에 띄울 셸의 
 - **런타임 제공자의 PATH 는 셸의 시작 파일 뒤에도 맨 앞이다(셸 통합)**: macOS 로그인 셸은 시작 파일(`/etc/zprofile` · `/etc/profile`)의 `path_helper` 로 `/etc/paths` · `/etc/paths.d`(`/opt/homebrew/bin` 등)를 PATH 앞에 올려, 제공자(mise 등)가 앞에 둔 폴더를 뒤로 민다. 기본 셸이 zsh · bash · fish 이고 제공자가 로그인 셸의 PATH 에 더한 항목이 있으면, 셸이 사용자의 시작 파일을 모두 읽은 뒤 그 항목만 PATH 맨 앞으로 옮긴다 — zsh 는 `ZDOTDIR` 을 터미널마다의 임시 폴더로 두어 그 폴더의 `.zshenv` 가 사용자의 `.zshenv` 를 읽은 직후 `ZDOTDIR` 을 사용자의 값으로 되돌리고 첫 프롬프트 직전(`precmd` 훅 한 번)에 PATH 를 고치게 한다 — 그 뒤의 시작 파일(`/etc/zshrc` 포함)이 감싸지 않은 셸과 같은 `ZDOTDIR` 을 봐야 macOS `/etc/zshrc` 의 `HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history` 가 임시 폴더로 가 명령 기록이 지워지지 않는다. 훅은 `emulate -L zsh` 로 사용자의 옵션(`KSH_ARRAYS` · `SH_WORD_SPLIT` 등)과 떨어져 돌고, 사용자 rc 가 `precmd_functions` 를 통째로 바꾸면 PATH 를 고치지 않는다; bash 는 로그인 셸 순서(`/etc/profile` → `~/.bash_profile` · `~/.bash_login` · `~/.profile` 중 처음 것)를 흉내 내는 `--rcfile` 대화형 셸로(로그인 셸로 표시되지 않는다), fish 는 `--init-command` 로. 사용자의 rc 가 앞에 넣은 폴더는 제공자 항목 바로 뒤에 그대로 남고, 사용자의 셸 rc 는 고치지 않는다. 제공자 항목이 없거나(로그인 셸 환경뿐) 그 밖의 셸 · 설정 `[terminal] shell` 로 고른 셸은 바꾸지 않는다. 래퍼 파일의 임시 폴더는 0700 으로 만들고 만든 뒤 이 사용자 소유 · 심링크 아님 · 0700 인지 확인해, 아니면 통합하지 않는다. 시험은 감싼 셸과 감싸지 않은 셸이 같은 `HISTFILE` · 시작 파일 순서 · 각 파일에서 본 `ZDOTDIR` 을 갖는지 본다(`crates/pw-run/src/integration.rs`, M1-15)
 - **앱이 끝날 때**(⌘Q 등, Tauri `RunEvent::Exit`) 앱은 열린 터미널의 셸 세션을 모두 끝낸다(SIGHUP, 300 ms 안에 안 끝난 것은 SIGKILL — 끝날 때까지 기다린다, `pw_run::shutdown`). Tauri 는 그 뒤 `std::process::exit` 로 끝나 Drop 이 돌지 않으므로, 이것이 없으면 커널의 hangup 만 가서 SIGHUP 을 무시하는 자식 · `nohup` 이 남는다
 
+### `[editor]` — 에디터 설정 (12-m1-plan.md 결정 M1-D17)
+
+구현: `apps/desktop/src/editor/editor-font.ts`
+
+```toml
+# $CONFIG/settings.toml (또는 settings.local.toml)
+[editor]
+font_family = '"JetBrains Mono", monospace'   # CSS font-family 값 그대로. 없으면 시스템 고정폭(SF Mono → Menlo → Consolas → DejaVu Sans Mono)
+font_size = 14                                # px. 없으면 13
+```
+
+- **전역 설정에만** 있다 — 글꼴은 사람의 화면 취향이라 저장소가 정하지 않는다
+- 설정이 다시 읽히면(`config.changed`) 열린 에디터가 재시작 없이 바뀐다 — 뷰를 다시 만들지 않고 같은 뷰를 다시 구성해 커서 · 스크롤 · undo 가 남는다
+- 틀린 값(문자열이 아니거나 빈 `font_family`, 수가 아니거나 6 ~ 72 밖의 `font_size`)은 없는 것으로 보고 기본값을 쓴다 — 설정 하나가 틀렸다고 에디터가 그려지지 않으면 안 된다
+
 ## 5-1. 런타임 환경 (D26)
 
 GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버전(Node/Java/Python 등)을 모른다. Pitwall은 **런타임 버전을 직접 설치 · 관리하지 않고**, 외부 도구가 계산한 환경을 받아 프로세스를 띄울 때 적용한다.

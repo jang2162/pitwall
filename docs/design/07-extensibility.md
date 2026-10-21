@@ -30,7 +30,7 @@ linguist = "Kotlin"                         # GitHub Linguist 언어 이름 (§4
 extensions = ["kt", "kts"]                  # (선택) Linguist에 추가로 매핑할 확장자
 grammar = "grammars/kotlin.wasm"          # tree-sitter WASM(외부 확장 — M8). 내장 확장은 대신 앱에 링크한 문법의 이름을 쓴다: builtin_grammar = "kotlin"
 queries = "queries/kotlin/"                # highlights.scm, outline.scm, tags.scm, injections.scm
-line_comment = "//"
+line_comment = "//"                         # (선택) 줄 주석 기호 — 에디터의 ⌘/(12-m1-plan.md M1-18). 없으면 그 언어의 ⌘/ 는 아무것도 하지 않는다
 
 [contributes.language_servers.kotlin-lsp]
 languages = ["kotlin"]
@@ -163,6 +163,8 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 3. ~ 4. Linguist 의 판별 단계를 순서까지 그대로: 에디터 모드라인(vim / emacs) → 파일명 → shebang → 확장자(`generic.yml` 의 흔한 확장자 `.1`~`.9` · `.app` 등은 건너뜀) → XML 머리 → manpage → heuristics. 각 단계는 앞 단계 후보와 교집합을 내고, 후보가 하나면 멈춘다(`lib/linguist.rb` 의 `STRATEGIES` — 그래서 `foo.rb` 에 `#!/bin/bash` 는 Shell 이다). Linguist 의 마지막 단계인 베이즈 분류기는 옮기지 않는다. 후보가 여럿 남으면 그 확장자를 대표 확장자(첫 확장자)로 적은 언어 · `popular.yml` 의 언어 순으로 고른다(내용 없는 `.rs` 가 RenderScript 가 아니라 Rust)
 5. 확장(L1)이 추가한 확장자 매핑 — Linguist 단계가 판정하지 못했을 때만
 6. 판별 실패 → 플레인 텍스트
+
+**사람이 고르기**(F4-12, [12-m1-plan.md](12-m1-plan.md) M1-18): 상태바의 언어 항목을 누르면 언어 고르기 팝업이 뜬다. 목록은 RPC `lang.list`(Linguist 언어 전부 + Linguist 에 없는 확장 기여 언어, 언어마다 `popular` · 확장의 `line_comment`)이고, 맨 위의 「자동 판별로 되돌리기」 가 사람이 고른 값을 지운다. 고른 값은 **문서 단위**다 — 그 파일을 보이는 모든 탭에 같고, 마지막 탭을 닫아 문서가 사라지면 잊는다(다시 열면 판별값). 디스크 · 설정에 남기지 않는다(파일마다 남기려면 1번의 설정 매핑을 쓴다). 플레인 텍스트는 Linguist 의 `Text` 다
 
 **운영**
 - 빌드 시 Linguist YAML(`languages.yml` · `heuristics.yml` · `vendor.yml` · `documentation.yml` · `generic.yml` · `popular.yml`)을 정적 테이블로 변환해 코어(`pw-lang`)에 내장. 업데이트는 스크립트로 갱신(Linguist 버전 고정 — 버전 · 순서는 CONTRIBUTING.md 「Linguist 데이터」)
