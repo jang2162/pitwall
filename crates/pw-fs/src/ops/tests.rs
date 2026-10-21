@@ -432,6 +432,50 @@ fn symlinks_are_judged_by_their_real_target_and_moved_as_links() {
     assert_eq!(read(&root.join("real.txt")), "real");
 }
 
+/// 등록한 루트 폴더를 지우고 같은 이름의 루트 밖 링크를 두면(리뷰 L7) 파일 조작도 그 링크 너머를 루트로 쓰지 않는다.
+#[cfg(unix)]
+#[test]
+fn a_root_swapped_to_an_outside_link_refuses_file_operations() {
+    use std::os::unix::fs::symlink;
+    let fx = Fixture::new();
+    let (id, root) = fx.project();
+    let outside = fx.base.join("outside");
+    write(&outside.join("s.txt"), "s");
+    write(&fx.base.join("drop/d.txt"), "d");
+    fs::remove_dir_all(&root).unwrap();
+    symlink(&outside, &root).unwrap();
+
+    for result in [
+        fx.create(&id, &root.join("new.txt"), FsCreateKind::File)
+            .map(drop),
+        fx.rename(&id, &root.join("s.txt"), &root.join("moved.txt"))
+            .map(drop),
+        fx.copy(&id, &root.join("s.txt"), &root.join("copy.txt"))
+            .map(drop),
+        fx.fs
+            .import(
+                &id,
+                None,
+                &root,
+                &[fx.base.join("drop/d.txt")],
+                &|| false,
+                &mut |_| {},
+            )
+            .map(drop),
+    ] {
+        assert_code(result, code::INVALID_PARAMS);
+    }
+    let log = RefCell::new(Vec::new());
+    let trashed = fx.trash(&id, &[&root.join("s.txt")], false, &recording_trash(&log));
+    assert_code(trashed, code::INVALID_PARAMS);
+    assert!(log.borrow().is_empty());
+    let names: Vec<_> = fs::read_dir(&outside)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["s.txt"]);
+}
+
 /// 대소문자를 무시하는 볼륨에서 원본 이름의 대소문자가 디스크와 달라도(`dir` 과 실제 `Dir`) 자기 안으로 옮기기 · 복사를 거절한다 —
 /// 글자로만 비교하면 복사가 이름 길이 한계까지 자기 안으로 들어가다 internal error 로 끝났다.
 #[test]
