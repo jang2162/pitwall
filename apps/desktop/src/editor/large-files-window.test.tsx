@@ -637,3 +637,18 @@ it("turns highlighting and wrapping off for a line over 10,000 characters", asyn
   expect(calls("syntax.open")).toHaveLength(1);
   expect(view.contentDOM.classList.contains("cm-lineWrapping")).toBe(false);
 });
+
+it("turns highlighting off when the judgment says so, even for a short text", async () => {
+  // 판정이 크기 등급으로 강조를 끄는 경우(5 MiB + 1 로 알려진 파일). 내용은 짧아 에디터 쪽 길이 검사(limits.ts 의
+  // `overHighlightLimit`)는 걸리지 않는다 — 판정의 `highlight` 만 보고 꺼야 한다.
+  host.files.set("/work/demo/big.js", new TextEncoder().encode("var a = 1;\n"));
+  host.sizes.set("/work/demo/big.js", EDITABLE_MAX + 1);
+  host.files.set("/work/demo/ok.js", new TextEncoder().encode("var a = 1;\n"));
+  await mount();
+  await open("/work/demo/ok.js");
+  await vi.waitFor(() => expect(calls("syntax.open")).toHaveLength(1));
+  await open("/work/demo/big.js");
+  expect(views().at(-1)!.state.readOnly).toBe(true);
+  await settle();
+  expect(calls("syntax.open")).toHaveLength(1);
+});
