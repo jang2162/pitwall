@@ -883,7 +883,7 @@ fn lang_list_appends_contributed_languages_and_keeps_the_first_line_comment() {
 }
 
 /// 단일 파일 창의 연결(파일 범위, M1-24)은 이름 · 앞부분으로만 판별한다 — 프로젝트를 대어 그 설정 · 속성 파일을 읽게 하지 못한다.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn a_file_scoped_connection_cannot_name_a_project() {
     use std::sync::Arc;
 
