@@ -119,6 +119,30 @@ notification-repeated = { $title } (×{ $count })
 
 action-runtime-reload = 런타임 환경 다시 읽기
 runtime-reload-failed = 런타임 환경을 다시 읽지 못했다
+# 상태바 항목(src/runtime/runtime-status.tsx): 어느 제공자가 환경을 만들었는지, 물러났으면 경고.
+status-runtime-mise = mise
+# $files: mise 설정 파일(줄마다 하나)
+status-runtime-mise-hint =
+    런타임 환경을 mise 로 만들었다. 누르면 다시 읽는다.
+    { $files }
+# $problem: loginShell | notInstalled | notTrusted | failed
+status-runtime-fallback =
+    { $problem ->
+        [notInstalled] mise 없음
+        [notTrusted] mise 신뢰 필요
+        [failed] mise 실패
+       *[loginShell] 로그인 셸 못 읽음
+    }
+# $problem: 위와 같음, $reason: 오류 원문
+status-runtime-fallback-hint =
+    { $problem ->
+        [notInstalled] 프로젝트에 mise 설정이 있지만 로그인 셸 PATH 에 mise 가 없다. 로그인 셸 환경을 쓴다.
+        [notTrusted] mise 가 이 프로젝트의 설정을 신뢰하지 않는다. 프로젝트에서 `mise trust` 를 실행한 뒤 다시 읽는다. 로그인 셸 환경을 쓴다.
+        [failed] mise 가 실패해 로그인 셸 환경을 쓴다.
+       *[loginShell] 로그인 셸 환경을 읽지 못해 앱 자신의 환경을 쓴다.
+    }
+    { $reason }
+    누르면 런타임 환경을 다시 읽는다.
 
 ## 프로젝트 신뢰. 미신뢰 프로젝트에서는 런타임 제공자(mise 등)를 돌리지 않고 로그인 셸 환경만 쓴다.
 

@@ -31,10 +31,14 @@ export function hostInvalidations(host: string): readonly InvalidationRule[] {
     rpcQueryKey(host, "project.resolve"),
     rpcQueryKey(host, "project.trust"),
   ];
+  // 시간을 넘겼던 로그인 셸이 백그라운드 재시도로 살아나면 Host 범위에도 `runtime.changed`(loginShell)가 온다 — 설정 창의
+  // 「Orca 에서 Pitwall 열기」 검사(`cli.status`)가 로그인 셸 PATH 를 다시 본다(crates/pw-runtime/src/runtime.rs).
+  const runtime = [rpcQueryKey(host, "cli.status"), rpcQueryKey(host, "runtime.get")];
   return [
     { topic: "config.changed", keys: config },
     { topic: "config.error", keys: config },
     { topic: "project.changed", keys: projects },
+    { topic: "runtime.changed", keys: runtime },
   ];
 }
 

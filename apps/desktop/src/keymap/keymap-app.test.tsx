@@ -255,6 +255,7 @@ it("applies a keymap.toml change without a restart and syncs the menu", async ()
     "config.changed",
     "config.error",
     "project.changed",
+    "runtime.changed",
   ]);
   expect(native.syncMenu).toHaveBeenLastCalledWith(
     expect.objectContaining({ "action.find": "Super+Shift+KeyA", "settings.open": "Super+Comma" }),

@@ -120,6 +120,30 @@ notification-repeated = { $title } (×{ $count })
 
 action-runtime-reload = Reload Runtime Environment
 runtime-reload-failed = Could not reload the runtime environment
+# Status bar item (src/runtime/runtime-status.tsx): which provider built the environment, and a warning when it fell back.
+status-runtime-mise = mise
+# $files: the mise config files, one per line
+status-runtime-mise-hint =
+    The runtime environment comes from mise. Click to reload it.
+    { $files }
+# $problem: loginShell | notInstalled | notTrusted | failed
+status-runtime-fallback =
+    { $problem ->
+        [notInstalled] mise not found
+        [notTrusted] mise trust required
+        [failed] mise failed
+       *[loginShell] Login shell not read
+    }
+# $problem: as above, $reason: the original error
+status-runtime-fallback-hint =
+    { $problem ->
+        [notInstalled] The project has mise settings, but mise is not on the login shell PATH. The login shell environment is used.
+        [notTrusted] mise does not trust this project's settings. Run `mise trust` in the project, then reload. The login shell environment is used.
+        [failed] mise failed, so the login shell environment is used.
+       *[loginShell] The login shell environment could not be read, so the app's own environment is used.
+    }
+    { $reason }
+    Click to reload the runtime environment.
 
 ## Project trust. Untrusted projects do not run runtime providers (mise and so on) and use only the login shell environment.
 

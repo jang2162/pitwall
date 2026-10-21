@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // 설정 창(App kind="settings")을 가짜 Host 에 붙여 「Orca 에서 Pitwall 열기」 를 본다: 등록 값의 복사 버튼, `cli.status` 의 판정별
-// 표시와 「Shell 명령 설치」 · 절대 경로 안내, 설치 뒤 다시 검사하면 바뀐 판정이 보이는 것.
+// 표시와 「Shell 명령 설치」 · 절대 경로 안내, 설치 뒤 다시 검사하면 바뀐 판정이 보이는 것, 로그인 셸이 백그라운드로 살아나면
+// (Host 범위 `runtime.changed`) 누르지 않아도 다시 검사하는 것.
 
 import type { CliStatus, HostInfo } from "@pitwall/rpc-client";
 import { act } from "react";
@@ -28,6 +29,8 @@ const host = vi.hoisted(() => ({
   /** `cli.status` 의 응답. `null` 이면 오류로 답한다. */
   status: null as unknown,
   statusCalls: 0,
+  /** Host 범위로 구독한 창에 이벤트를 보낸다. 연결마다 바뀐다. */
+  emit: (_topic: string, _payload: unknown) => {},
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -38,8 +41,19 @@ vi.mock("../tauri-transport", async () => {
     connectHost: async () => {
       const [client, server] = pair();
       const send = (m: object) => server.send(JSON.stringify({ jsonrpc: "2.0", ...m }));
+      const subs = new Map<number, { projectId?: string; topics: string[] }>();
+      let next = 1;
+      host.emit = (topic, payload) => {
+        for (const [subscriptionId, s] of subs) {
+          if (s.projectId !== undefined || !s.topics.includes(topic)) continue;
+          send({
+            method: "events.event",
+            params: { subscriptionId, projectId: null, topic, payload },
+          });
+        }
+      };
       server.onMessage((text) => {
-        const m = JSON.parse(text) as { id?: number; method: string };
+        const m = JSON.parse(text) as { id?: number; method: string; params?: unknown };
         const reply = (result: unknown) => send({ id: m.id, result });
         switch (m.method) {
           case "i18n.get":
@@ -70,8 +84,11 @@ vi.mock("../tauri-transport", async () => {
               });
             }
             return reply(host.status);
-          case "events.subscribe":
-            return reply({ subscriptionId: 1 });
+          case "events.subscribe": {
+            const id = next++;
+            subs.set(id, m.params as { projectId?: string; topics: string[] });
+            return reply({ subscriptionId: id });
+          }
           case "events.unsubscribe":
             return reply(null);
         }
@@ -325,6 +342,7 @@ it("notes when PATH came from the app instead of the login shell", async () => {
     {
       kind: "fallback",
       reason: "the shell exited with 7",
+      problem: "loginShell",
     },
   );
   await mount();
@@ -337,4 +355,24 @@ it("shows a failed check and the .worktreeinclude guide", async () => {
   expect(section().textContent).toContain(T.checkFailed("internal error (-32603): cannot locate"));
   expect(section().textContent).toContain(T.worktree);
   expect(T.worktree).toContain(".worktreeinclude");
+});
+
+it("checks again by itself when the login shell recovers in the background", async () => {
+  // 시간을 넘긴 로그인 셸: 앱 프로세스의 PATH 로 물러나 이 앱을 찾지 못한다.
+  host.status = status(
+    { kind: "thisApp" },
+    { kind: "notFound" },
+    { kind: "fallback", reason: "timed out", problem: "loginShell" },
+  );
+  await mount();
+  expect(section().textContent).toContain(T.pathFallback("timed out"));
+  const calls = host.statusCalls;
+
+  // 백그라운드 재시도가 셸 환경을 얻으면 Host 가 Host 범위에 `runtime.changed`(loginShell)를 낸다 — 「다시 검사」 없이 바뀐다.
+  host.status = INSTALLED;
+  await act(async () => host.emit("runtime.changed", { reason: "loginShell" }));
+  await settle();
+  expect(host.statusCalls).toBe(calls + 1);
+  expect(headline()).toBe(`${T.install.thisApp} · ${T.onPath.thisApp}`);
+  expect(section().textContent).not.toContain(T.pathFallback("timed out"));
 });

@@ -4,6 +4,7 @@
 
 import { useLocalization } from "@fluent/react";
 import type { Platform } from "@pitwall/keymap";
+import type { RuntimeProblem } from "@pitwall/rpc-client";
 import { useMemo } from "react";
 
 import type { ViewerKind } from "../editor/viewer-kinds";
@@ -75,6 +76,11 @@ export function projectStrings(t: Translate) {
     runtime: {
       reload: t("action-runtime-reload"),
       reloadFailed: t("runtime-reload-failed"),
+      mise: t("status-runtime-mise"),
+      miseHint: (files: string) => t("status-runtime-mise-hint", { files }),
+      fallback: (problem: RuntimeProblem) => t("status-runtime-fallback", { problem }),
+      fallbackHint: (problem: RuntimeProblem, reason: string) =>
+        t("status-runtime-fallback-hint", { problem, reason }),
     },
     trust: {
       status: t("status-trust-needed"),

@@ -61,6 +61,7 @@ import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/ope
 import { projectIdFromQuery, projectOpenInbox } from "../project-open";
 import { useHost, useRpcQuery } from "../rpc/host";
 import { useRuntimeActions } from "../runtime/runtime-actions";
+import { RuntimeStatus } from "../runtime/runtime-status";
 import {
   STATUS_SLOTS,
   StatusBar,
@@ -514,6 +515,7 @@ function ProjectWindowBody({
         </div>
         {projectId !== undefined && <FileWatch projectId={projectId} />}
         {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
+        {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
         {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
         <StatusBar label={strings.status.label} />
         {switcher.element}
