@@ -554,18 +554,29 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
         worktrees.set(next, worktrees.get(path));
         worktrees.delete(path);
         for (const ref of held) if (ref.path === path) ref.path = next;
-        if (state.status === "text")
-          // 이 앱이 옮긴 것이다 — 그사이 감시가 단 「지워짐 · 이름 바뀜」 은 걷는다.
+        if (state.status === "text") {
+          // 이 앱이 옮긴 것이다 — 그사이 감시가 단 「지워짐 · 이름 바뀜」 은 걷는다. 뷰어 종류와 언어는 새 이름으로 다시 정한다
+          // (`a.txt` → `a.md`). 이름으로는 텍스트로 읽지 않을 종류(이미지)가 되어도 미저장 편집이 있을 수 있어 텍스트로 둔다.
+          const kind = viewerKindOf(next, state.judgment);
           set(next, {
             ...state,
+            kind: VIEWER_READS[kind] === "text" ? kind : state.kind,
             disk:
               state.disk.kind === "deleted" || state.disk.kind === "renamed"
                 ? { kind: "same" }
                 : state.disk,
           });
-        else if (state.status === "external")
+          const head = state.live.text.sliceString(0, DETECT_HEAD_CHARS);
+          void detectLanguage(source, next, head, worktrees.get(next)).then((language) =>
+            patch(next, state.live, { language }),
+          );
+        } else if (
+          state.status === "external" &&
+          viewerKindOf(next, { binary: state.kind === "hex" }) === state.kind
+        )
           set(next, { ...state, stat: { ...state.stat, path: next } });
-        // 읽는 중 · 읽지 못함 · 열지 않음은 새 경로로 다시 읽는다(옛 경로로 돌던 읽기는 버려진다).
+        // 읽는 중 · 읽지 못함 · 열지 않음 · 이름으로 종류가 바뀐 외부 뷰어 문서는 새 경로로 다시 읽는다(옛 경로로 돌던 읽기는
+        // 버려진다).
         else load(next);
       }
       return moved;

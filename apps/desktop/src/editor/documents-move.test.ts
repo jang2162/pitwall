@@ -59,6 +59,8 @@ function memoryDisk(files: Record<string, string>) {
         },
       };
     }),
+    /** 확장자로만 정하는 가짜 `lang.detect`. */
+    detect: vi.fn(async (path: string) => (path.endsWith(".rs") ? "Rust" : null)),
   } satisfies DocumentSource;
   return {
     disk,
@@ -173,6 +175,44 @@ describe("move", () => {
     expect((docs.get("/p/a.txt") as TextDocumentState).disk.kind).toBe("renamed");
     docs.move("/p/a.txt", "/p/b.txt");
     expect((docs.get("/p/b.txt") as TextDocumentState).disk).toEqual({ kind: "same" });
+  });
+
+  it("judges the language and viewer again by the new name and keeps the unsaved edits", async () => {
+    const fake = memoryDisk({ "/p/a.txt": "fn main() {}", "/p/notes.txt": "# notes" });
+    const docs = createDocumentStore(fake.source);
+    docs.acquire("/p/a.txt");
+    docs.acquire("/p/notes.txt");
+    await flush();
+    const before = docs.get("/p/a.txt") as TextDocumentState;
+    expect([before.language, before.kind]).toEqual([null, "text"]);
+    const view = attachView(before.live, "tab");
+    view.dispatch({ changes: { from: 0, insert: "// x\n" }, userEvent: "input.type" });
+
+    fake.rename("/p/a.txt", "/p/a.rs");
+    docs.move("/p/a.txt", "/p/a.rs");
+    await flush();
+    const after = docs.get("/p/a.rs") as TextDocumentState;
+    expect(after.language).toBe("Rust");
+    expect(after.live).toBe(before.live);
+    expect(after.dirty).toBe(true);
+    expect(fake.source.detect).toHaveBeenLastCalledWith("/p/a.rs", "// x\nfn main() {}", undefined);
+
+    fake.rename("/p/notes.txt", "/p/notes.md");
+    docs.move("/p/notes.txt", "/p/notes.md");
+    expect((docs.get("/p/notes.md") as TextDocumentState).kind).toBe("markdown");
+    // 이름으로 이미지가 되어도 텍스트 문서로 남는다(미저장 편집을 잃지 않게).
+    fake.rename("/p/notes.md", "/p/notes.png");
+    docs.move("/p/notes.md", "/p/notes.png");
+    expect(docs.get("/p/notes.png")).toMatchObject({ status: "text", kind: "markdown" });
+    // 내용을 뷰어가 직접 읽는 문서(이미지)는 종류가 바뀌면 새 경로로 다시 읽는다.
+    fake.disk.set("/p/pic.png", "x");
+    docs.acquire("/p/pic.png");
+    await flush();
+    expect(docs.get("/p/pic.png")).toMatchObject({ status: "external", kind: "image" });
+    fake.rename("/p/pic.png", "/p/pic.txt");
+    docs.move("/p/pic.png", "/p/pic.txt");
+    await flush();
+    expect(docs.get("/p/pic.txt")).toMatchObject({ status: "text", kind: "text" });
   });
 
   it("reads again at the new path when the document was still loading", async () => {
