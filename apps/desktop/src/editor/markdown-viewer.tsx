@@ -14,15 +14,30 @@ import { type MouseEvent, useEffect, useRef, useState } from "react";
 
 import { useProjectStrings } from "../layout/strings";
 import { useEditorWorkspace } from "./editor-workspace";
-import { ToolbarToggle } from "./image-viewer";
+import { formatBytes, ToolbarToggle } from "./image-viewer";
 import { classifyLink, IMAGE_SOURCE_ATTR, renderMarkdown, resolveLocal } from "./markdown";
-import { imageMime, usePreviewHost } from "./preview-host";
+import { imageMime, MAX_PREVIEW_BYTES, PreviewTooLarge, usePreviewHost } from "./preview-host";
 import { TextViewer } from "./text-viewer";
 import "./preview.css";
 import type { ViewerProps } from "./viewers";
 
 /** 편집이 멈춘 뒤 미리보기를 다시 그리기까지. */
 export const PREVIEW_DEBOUNCE_MS = 150;
+
+/**
+ * 한 문서가 읽는 이미지의 한도. 한 장은 이미지 탭과 같은 `MAX_PREVIEW_BYTES`(50 MiB, 결정 M1-D9)다. 문서 전체는 그 두 배(100 MiB) ·
+ * 50 장 — 큰 이미지 한 장은 되지만 README 하나가 여러 장으로 웹뷰 메모리(base64 · Uint8Array · Blob 이 겹친다)를 채우지는 못하게
+ * 한다. 이미지는 한 장씩 차례로 읽어, 읽는 도중의 최대치가 남은 몫 하나로 묶인다.
+ */
+export const MAX_MARKDOWN_IMAGES_BYTES = 2 * MAX_PREVIEW_BYTES;
+export const MAX_MARKDOWN_IMAGES = 50;
+
+/** 이미지 하나를 그린 결과: Blob URL, 한도 때문에 그리지 않음, 못 읽음. */
+type ImageResult =
+  | { kind: "url"; url: string }
+  | { kind: "tooLarge"; size: number }
+  | { kind: "limit" }
+  | { kind: "failed" };
 
 export type MarkdownMode = "editor" | "preview" | "split";
 
@@ -47,13 +62,16 @@ function MarkdownPreview({
   worktree: string | undefined;
   initial: string;
 }) {
+  const T = useProjectStrings().editor.markdown;
   const workspace = useEditorWorkspace();
   const host = usePreviewHost();
   const container = useRef<HTMLDivElement>(null);
   const [html, setHtml] = useState(() => renderMarkdown(initial));
   const [root, setRoot] = useState<string>();
-  /** 풀어 쓴 경로 → Blob URL(못 읽으면 `undefined`). 뷰어가 사는 동안 같은 이미지를 다시 읽지 않는다. */
-  const images = useRef(new Map<string, Promise<string | undefined>>());
+  /** 풀어 쓴 경로 → 결과. 뷰어가 사는 동안 같은 이미지를 다시 읽지 않는다. */
+  const images = useRef(new Map<string, Promise<ImageResult>>());
+  /** 이미지를 한 장씩 읽게 이어 붙이는 줄, 그리고 지금까지 읽은 바이트 · 장수(문서 한도). */
+  const budget = useRef({ queue: Promise.resolve(), used: 0, count: 0 });
 
   useEffect(() => {
     let current = true;
@@ -85,8 +103,10 @@ function MarkdownPreview({
   useEffect(() => {
     const cache = images.current;
     return () => {
-      for (const url of cache.values()) void url.then((u) => u && URL.revokeObjectURL(u));
+      for (const result of cache.values())
+        void result.then((r) => r.kind === "url" && URL.revokeObjectURL(r.url));
       cache.clear();
+      budget.current = { queue: Promise.resolve(), used: 0, count: 0 };
     };
   }, []);
 
@@ -99,35 +119,51 @@ function MarkdownPreview({
       const src = img.getAttribute(IMAGE_SOURCE_ATTR) ?? "";
       const target = resolveLocal(src, path, root);
       const type = target === undefined ? undefined : imageMime(target);
-      const blocked = () => {
+      const blocked = (why?: string) => {
         const alt = document.createElement("span");
         alt.className = "pw-image-blocked";
-        alt.title = src;
-        alt.textContent = img.alt || src;
+        alt.title = why ? `${src} — ${why}` : src;
+        alt.textContent = why ? `${img.alt || src} (${why})` : img.alt || src;
         img.replaceWith(alt);
       };
       if (target === undefined || type === undefined) {
         blocked();
         continue;
       }
-      let url = images.current.get(target);
-      if (!url) {
-        url = host.readBytes(target, worktree).then(
-          (blob) => URL.createObjectURL(new Blob([blob], { type })),
-          () => undefined,
-        );
-        images.current.set(target, url);
+      let result = images.current.get(target);
+      if (!result) {
+        const b = budget.current;
+        result = b.queue.then(async (): Promise<ImageResult> => {
+          const left = MAX_MARKDOWN_IMAGES_BYTES - b.used;
+          if (b.count >= MAX_MARKDOWN_IMAGES || left <= 0) return { kind: "limit" };
+          b.count++;
+          try {
+            const blob = await host.readBytes(target, worktree, Math.min(MAX_PREVIEW_BYTES, left));
+            b.used += blob.size;
+            return { kind: "url", url: URL.createObjectURL(new Blob([blob], { type })) };
+          } catch (e) {
+            if (!(e instanceof PreviewTooLarge)) return { kind: "failed" };
+            // 한 장 한도를 넘은 것과 문서 몫이 모자란 것을 가른다.
+            return e.size > MAX_PREVIEW_BYTES
+              ? { kind: "tooLarge", size: e.size }
+              : { kind: "limit" };
+          }
+        });
+        b.queue = result.then(() => {});
+        images.current.set(target, result);
       }
-      void url.then((u) => {
+      void result.then((r) => {
         if (!current || !img.isConnected) return;
-        if (u) img.src = u;
+        if (r.kind === "url") img.src = r.url;
+        else if (r.kind === "tooLarge") blocked(T.imageTooLarge(formatBytes(r.size)));
+        else if (r.kind === "limit") blocked(T.imageLimit);
         else blocked();
       });
     }
     return () => {
       current = false;
     };
-  }, [html, root, path, worktree, host]);
+  }, [html, root, path, worktree, host, T]);
 
   const follow = (event: MouseEvent) => {
     const anchor = (event.target as Element).closest?.("a[href]");

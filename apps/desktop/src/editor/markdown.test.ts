@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import { classifyLink, IMAGE_SOURCE_ATTR, renderMarkdown, resolveLocal } from "./markdown";
-import { readAllBytes } from "./preview-host";
+import { PreviewTooLarge, readAllBytes } from "./preview-host";
 
 const ROOT = "/work/demo";
 const README = "/work/demo/README.md";
@@ -160,5 +160,49 @@ describe("readAllBytes", () => {
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(file);
     expect(calls.map((c) => c.offset)).toEqual([0, 4, 8]);
     expect(calls.every((c) => c.bytes === true && typeof c.length === "number")).toBe(true);
+  });
+
+  const fake =
+    (size: number, calls: { offset?: number | null }[]) =>
+    async (params: { path: string; offset?: number | null }) => {
+      calls.push({ offset: params.offset });
+      const start = params.offset ?? 0;
+      return {
+        path: params.path,
+        size,
+        mtimeMs: 1,
+        offset: start,
+        eof: false,
+        version: null,
+        content: { kind: "base64" as const, data: btoa("abcd") },
+        judgment: {
+          binary: true,
+          encoding: null,
+          bom: null,
+          lineEnding: "lf" as const,
+          longLines: false,
+          sizeClass: "editable" as const,
+          editable: false,
+          highlight: false,
+        },
+      };
+    };
+
+  it("refuses a file whose size is over the limit after the first chunk", async () => {
+    const calls: { offset?: number | null }[] = [];
+    await expect(
+      readAllBytes(fake(10 * 1024 ** 3, calls), "/work/demo/big.png"),
+    ).rejects.toMatchObject({ size: 10 * 1024 ** 3, limit: 50 * 1024 * 1024 });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("stops when the bytes read pass the limit although the reported size did not", async () => {
+    const calls: { offset?: number | null }[] = [];
+    // 크기는 작다고 하면서 끝(eof)을 영영 안 주는 Host.
+    const error = await readAllBytes(fake(4, calls), "/work/demo/liar.png", 10).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(PreviewTooLarge);
+    expect(calls).toHaveLength(3);
   });
 });

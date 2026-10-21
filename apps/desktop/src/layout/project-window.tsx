@@ -487,7 +487,7 @@ function useWindowPreviewHost(projectId: string | undefined): PreviewHost {
       return c;
     };
     return {
-      readBytes: (path, worktree) =>
+      readBytes: (path, worktree, limit) =>
         readAllBytes(
           (params) =>
             call().call("fs.read", {
@@ -496,6 +496,7 @@ function useWindowPreviewHost(projectId: string | undefined): PreviewHost {
               ...params,
             }),
           path,
+          limit,
         ),
       rootOf: async (worktree) => {
         if (worktree === undefined)

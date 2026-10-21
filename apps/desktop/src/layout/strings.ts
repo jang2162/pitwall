@@ -54,6 +54,9 @@ export function projectStrings(t: Translate) {
         editor: t("editor-markdown-editor"),
         preview: t("editor-markdown-preview"),
         split: t("editor-markdown-split"),
+        /** `size`: 「120.0 MiB」 처럼 단위까지 붙인 이미지 크기. */
+        imageTooLarge: (size: string) => t("editor-markdown-image-too-large", { size }),
+        imageLimit: t("editor-markdown-image-limit"),
       },
       openFailed: (path: string) => t("editor-open-failed", { path }),
       copyFailed: t("editor-copy-path-failed"),

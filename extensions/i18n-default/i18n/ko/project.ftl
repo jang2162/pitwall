@@ -56,6 +56,8 @@ editor-markdown-mode = Markdown 보기
 editor-markdown-editor = 에디터
 editor-markdown-preview = 미리보기
 editor-markdown-split = 나란히
+editor-markdown-image-too-large = 이미지가 50 MiB 를 넘어 그리지 않는다: { $size }
+editor-markdown-image-limit = 이 문서의 이미지가 100 MiB · 50 장 한도를 넘어 그리지 않는다
 # $path: 열려던 경로
 editor-open-failed = 파일을 열지 못했다: { $path }
 editor-copy-path-failed = 경로를 복사하지 못했다

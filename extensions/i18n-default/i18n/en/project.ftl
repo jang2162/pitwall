@@ -56,6 +56,8 @@ editor-markdown-mode = Markdown View
 editor-markdown-editor = Editor
 editor-markdown-preview = Preview
 editor-markdown-split = Editor and Preview
+editor-markdown-image-too-large = Image not shown, larger than 50 MiB: { $size }
+editor-markdown-image-limit = Image not shown, this document is over its 100 MiB / 50 image limit
 # $path: the path that was being opened
 editor-open-failed = Could not open { $path }
 editor-copy-path-failed = Could not copy the path
