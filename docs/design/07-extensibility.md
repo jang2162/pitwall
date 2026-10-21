@@ -93,7 +93,7 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 | 기본 테마 | 내장 확장 `extensions/theme-default`(§2 「레지스트리」). 화면은 첫 그림을 번들에 묶은 같은 파일로 칠하고, 확장 레지스트리에서 `theme.get` 으로 받은 테마로 바꾼다(기본 키맵도 같은 방식 — 번들 파일로 첫 입력을 받고 `keymap.get` 응답으로 바꾼다, `apps/desktop/src/keymap/default-keymap.ts`) — RPC 왕복을 기다려 칠하면 첫 그림이 토큰 없이 나가 깜빡인다. 받지 못하면 번들 것을 쓰고 경고를 남긴다. 번들보다 먼저 도는 `theme-boot.js` 는 저장된 선택으로 `color-scheme` 만 정한다. 테마를 고르는 설정이 생기면 boot 도 고른 테마에 있는 변형을 알아야 한다(한쪽 변형 테마에서 반대 외관이 한 번 비친다) |
 | 가져오기 | **VS Code 테마 import** (TextMate scope → tree-sitter capture 매핑 테이블), JetBrains `.icls`는 P2 |
 | 기타 | OS 다크모드 자동 전환, 아이콘 팩(파일 아이콘), 폰트/밀도(compact/comfortable), 고대비 |
-| 일관성 | 커밋 그래프 · DB 그리드 · 터미널(ANSI 16색)까지 같은 토큰을 사용 — canvas 렌더러도 토큰을 구독 |
+| 일관성 | 커밋 그래프 · DB 그리드 · 터미널(ANSI 16색)까지 같은 토큰을 사용 — canvas 렌더러도 토큰을 구독. 터미널은 `terminal.background` · `terminal.foreground` · `terminal.cursor` · `terminal.selectionBackground` · `terminal.ansi.<색>`(`black` · `red` · `green` · `yellow` · `blue` · `magenta` · `cyan` · `white` 와 각각의 `bright…`, 16개)이고, CSS 변수가 아니라 xterm.js 의 테마 객체로 칠하며 외관이 바뀌면 열린 터미널도 다시 칠한다(`apps/desktop/src/terminal/terminal-theme.ts`, M1-15) |
 
 ## 4. 언어
 

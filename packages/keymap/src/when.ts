@@ -185,6 +185,11 @@ function keysOf(expr: WhenExpr): string[] {
   }
 }
 
+/** 조건이 컨텍스트 키 `key` 를 읽는가(부정 · 비교 안에서도). 조건이 없으면 거짓. */
+export function whenReads(expr: WhenExpr | undefined, key: string): boolean {
+  return expr !== undefined && keysOf(expr).includes(key);
+}
+
 /**
  * 같은 키에 참인 바인딩이 여럿일 때 고르는 기준: 조건이 얼마나 안쪽 층을 보는가. 조건이 읽는 키 가운데 가장 안쪽 층에
  * 있는 것의 깊이다 — 맨 바깥(전역) 층이 1, 한 층 안쪽마다 1 씩 크다. 조건이 없거나 어느 층에도 없는 키만 읽으면 0.

@@ -132,6 +132,27 @@ export function projectStrings(t: Translate) {
       polling: t("status-file-watch-polling"),
       pollingHint: (roots: string) => t("status-file-watch-polling-hint", { roots }),
     },
+    terminal: {
+      tabs: t("terminal-tabs-label"),
+      tabName: (index: number) => t("terminal-tab-name", { index }),
+      exited: t("terminal-tab-exited"),
+      newTab: t("terminal-new-tab"),
+      closeTab: (name: string) => t("terminal-close-tab", { name }),
+      renameInput: t("terminal-rename-input"),
+      /** 화면에 덧붙이는 끝 줄. `code` 가 `null` 이면 신호로 끝났다. */
+      exitedLine: (code: number | null) => t("terminal-exited", { code: code ?? "none" }),
+      failedLine: (message: string) => t("terminal-start-failed", { message }),
+      noHost: t("terminal-no-host"),
+      copyFailed: t("terminal-copy-failed"),
+      pasteFailed: t("terminal-paste-failed"),
+      actions: {
+        newTab: t("action-terminal-new-tab"),
+        closeTab: t("action-terminal-close-tab"),
+        renameTab: t("action-terminal-rename-tab"),
+        copy: t("action-terminal-copy"),
+        paste: t("action-terminal-paste"),
+      },
+    },
   };
 }
 

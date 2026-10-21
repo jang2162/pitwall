@@ -243,7 +243,8 @@ function time(at: number) {
 }
 
 /** 패널이 화면에 보이는가. 탭이 뒤에 있거나 dock 이 접혀 있으면 아니다. 패널이 다른 그룹으로 옮겨지면 그 그룹을 본다. */
-function usePanelVisible(api: IDockviewPanelProps["api"]): boolean {
+/** 툴 윈도우 패널이 지금 보이는가(그 그룹이 활성 탭으로 보이고 dock 이 펼쳐짐). */
+export function usePanelVisible(api: IDockviewPanelProps["api"]): boolean {
   const read = useCallback(() => api.isVisible && !api.group.api.isCollapsed(), [api]);
   const [visible, setVisible] = useState(read);
   useEffect(() => {

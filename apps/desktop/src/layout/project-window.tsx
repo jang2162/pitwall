@@ -74,6 +74,7 @@ import {
   useStatusBarItem,
 } from "../status-bar/status-bar";
 import { TaskProvider, TasksStatusItem, useDemoTaskActions } from "../tasks/tasks";
+import { TerminalToolWindow } from "../terminal/terminal-tool-window";
 import { ThemeSwitcher, useTheme } from "../theme/theme-switcher";
 import { TrustProvider } from "../trust/trust";
 import {
@@ -111,6 +112,7 @@ const ICONS: Record<string, LucideIcon> = {
 const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>> = {
   notifications: NotificationsToolWindow,
   project: FileTreeToolWindow,
+  terminal: TerminalToolWindow,
 };
 
 function ToolWindowPlaceholder({ api }: IDockviewPanelProps) {

@@ -230,3 +230,34 @@ status-file-watch-polling = File watch: polling
 status-file-watch-polling-hint =
     The file watch limit (fs.inotify.max_user_watches) was reached, so some folders are checked by polling. Changes in them show up late.
     { $roots }
+
+## Terminal tool window
+
+terminal-tabs-label = Terminal tabs
+# $index: tab number among tabs of the same name (from 1). No number when 1.
+terminal-tab-name =
+    { $index ->
+        [1] Local
+       *[other] Local ({ $index })
+    }
+terminal-tab-exited = exited
+terminal-new-tab = New Terminal Tab
+# $name: tab name
+terminal-close-tab = Close “{ $name }”
+terminal-rename-input = Tab name
+# $code: exit code, or none when ended by a signal.
+terminal-exited =
+    { $code ->
+        [none] [Process exited]
+       *[other] [Process exited with code { $code }]
+    }
+# $message: the reason the Host reported
+terminal-start-failed = [Could not open the terminal: { $message }]
+terminal-no-host = Cannot open a terminal: not connected to the Host
+terminal-copy-failed = Could not copy the terminal selection
+terminal-paste-failed = Could not paste the clipboard into the terminal
+action-terminal-new-tab = Terminal: New Tab
+action-terminal-close-tab = Terminal: Close Tab
+action-terminal-rename-tab = Terminal: Rename Tab
+action-terminal-copy = Terminal: Copy
+action-terminal-paste = Terminal: Paste

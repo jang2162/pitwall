@@ -27,6 +27,7 @@ import {
 
 import { useAppStrings } from "../i18n/app-strings";
 import { useRpcQuery } from "../rpc/host";
+import { terminalAdmits } from "../terminal/terminal-keys";
 import { contextLayers } from "./context";
 import { chooseDefaultKeymap, DEFAULT_KEYMAP_ID, registryKeymapProblem } from "./default-keymap";
 import { FindActionDialog } from "./find-action";
@@ -82,6 +83,11 @@ export interface KeymapContextValue {
   shortcuts(action: string): ShortcutLabel[];
   /** 창이 띄운 팝업 상태로 보아 지금 실행할 수 있는가 — 키와 같은 기준(액션 찾기 목록이 쓴다). */
   runnable(action: string): boolean;
+  /**
+   * 이 keydown 을 창의 키맵이 가져가는가(실행하지 않고 본다). 키를 먼저 받는 요소(터미널)가 창 단축키에 양보할지 정한다 —
+   * 참이면 그 요소는 키를 처리하지 않고 창으로 흘려보낸다(src/terminal/terminal-keys.ts).
+   */
+  takesKey(e: KeyboardEvent): boolean;
   openFindAction(): void;
   /** 팝업이 열렸다고 알린다(`useKeymapPopup`). 닫는 함수를 돌려준다. */
   enterPopup(): () => void;
@@ -234,9 +240,12 @@ export function KeymapProvider({
           isPopupOpen() === registry.isPopup(action) && registry.isEnabled(action),
         context: () =>
           contextLayers(document.activeElement, { popupOpen: isPopupOpen(), platform }),
+        admits: terminalAdmits,
       }),
   );
   useEffect(() => engine.setBindings(resolved.bindings), [engine, resolved.bindings]);
+  const bindingsRef = useRef(resolved.bindings);
+  bindingsRef.current = resolved.bindings;
 
   useEffect(() => {
     const onDown = (e: KeyboardEvent) => {
@@ -267,15 +276,23 @@ export function KeymapProvider({
 
   // ⚠ 한 번의 키 눌림이 웹뷰 keydown 과 메뉴 accelerator 둘 다로 올 수 있다. macOS(WKWebView)는 웹이 처리(preventDefault)한
   // key equivalent 를 메뉴로 보내지 않는다고 보지만 실측하지 않았고, Windows · Linux 는 순서 · 배타성을 모른다. 그래서
-  // 키로 실행한 직후(`MENU_DUPLICATE_MS` 안) 같은 액션이 메뉴로 오면 버린다. 이 가드가 있어도 **메뉴에 넣는 액션은 두 번
+  // 키로 실행한 직후(`MENU_DUPLICATE_MS` 안) 같은 액션이 메뉴로 오면 버린다. 다른 액션이어도 그 키를 함께 쓰면(`sharesKey` —
+  // 터미널 포커스의 ⌘W 는 `terminal.closeTab`, 메뉴 「닫기」 는 `window.close`) 같은 눌림으로 보고 버린다. 이 가드가 있어도 **메뉴에 넣는 액션은 두 번
   // 실행돼도 결과가 같아야 한다**(열기 · 보이기) — 가드의 시간 창 밖에서 늦게 온 메뉴 이벤트는 걸러지지 않는다. 토글
   // 액션을 메뉴에 넣으려면 먼저 그 경로가 정말 한 번만 오는지 실측하거나 더 단단한 중복 제거를 둔다(src-tauri/src/menu.rs).
   useEffect(
     () =>
       native.onMenuAction((action) => {
         const last = lastKeyRun.current;
-        if (last?.action === action && performance.now() - last.at < MENU_DUPLICATE_MS) {
-          log?.debug(`dropped ${action} from the menu: the key already ran it`, "keymap");
+        if (
+          last &&
+          performance.now() - last.at < MENU_DUPLICATE_MS &&
+          (last.action === action || sharesKey(bindingsRef.current, last.action, action))
+        ) {
+          log?.debug(
+            `dropped ${action} from the menu: the key already ran ${last.action}`,
+            "keymap",
+          );
           return;
         }
         // 액션 찾기가 열린 채 메뉴에서 고르면 팝업을 닫고 실행한다. 메뉴 이벤트로는 마우스로 고른 것인지 키인지 알 수 없는데,
@@ -314,8 +331,9 @@ export function KeymapProvider({
       openFindAction: () => setFindOpen(true),
       enterPopup,
       runnable: (action) => windowGate(action) && registry.isEnabled(action),
+      takesKey: (e) => engine.peek(e),
     }),
-    [registry, resolved, platform, layout, enterPopup, windowGate],
+    [registry, resolved, platform, layout, enterPopup, windowGate, engine],
   );
 
   return (
@@ -324,6 +342,14 @@ export function KeymapProvider({
       <FindActionDialog open={findOpen} onOpenChange={setFindOpen} />
     </KeymapContext>
   );
+}
+
+/** 두 액션이 같은 키를 하나라도 함께 쓰는가(`when` 은 보지 않는다). */
+export function sharesKey(bindings: readonly Binding[], a: string, b: string): boolean {
+  const keysOf = (action: string) =>
+    new Set(bindings.filter((x) => x.action === action).map((x) => JSON.stringify(x.sequence)));
+  const ofA = keysOf(a);
+  return [...keysOf(b)].some((k) => ofA.has(k));
 }
 
 /** 키맵 파일 오류 · 경고를 창 아래에 띄운다(10-ui §4.5 「오류는 알림으로」 — 알림 기능이 생기기 전의 최소 표시). */

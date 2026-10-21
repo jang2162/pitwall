@@ -12,6 +12,9 @@
 // - 연속 키: 첫 누름이 어떤 연속 키의 앞부분이면 그 키를 가져가고(`pending`) 다음 누름을 `chordTimeoutMs` 동안 기다린다.
 //   같은 첫 누름이 한 번 누르기 바인딩이기도 하면 연속 키가 이긴다(VS Code 와 같다). 다음 누름이 이어지지 않으면 기다림을
 //   버리고 그 누름을 새로 본다.
+// - 창 규칙(`admits`): `when` 과 별개로, 창이 지금 컨텍스트에서 볼 바인딩을 거른다. 터미널이 포커스를 가지면 대부분의 키를
+//   셸에 보내는 규칙(10-ui §4.4 「터미널」)이 이것이다. 키를 먼저 받는 요소(터미널)는 `peek` 으로 창이 가져갈 키인지 물어
+//   양보한다 — 둘이 같은 거르기를 거치므로 「터미널이 양보했는데 창도 안 받는」 키가 없다.
 // - 더블 탭: 수정 키만 눌렀다 떼기를 두 번. 첫 뗌부터 두 번째 누름까지, 그리고 각 누름의 길이가 `doubleTapMs` 이내여야
 //   한다. 두 번째 뗌에서 실행한다 — 두 번째 누름 채로 다른 키를 치면(Shift 로 대문자) 탭이 아니다.
 
@@ -47,6 +50,8 @@ export interface EngineOptions {
   allowsRepeat?(action: string): boolean;
   /** 지금의 컨텍스트 층(안쪽부터). */
   context(): ContextLayers;
+  /** 이 컨텍스트에서 바인딩을 볼 수 있는가(머리 주석 「창 규칙」). 없으면 늘 참. */
+  admits?(binding: Binding, layers: ContextLayers): boolean;
   now?(): number;
   /** 연속 키의 다음 누름을 기다리는 시간. */
   chordTimeoutMs?: number;
@@ -125,6 +130,23 @@ export class KeymapEngine {
     return this.match([stroke], now, repeat);
   }
 
+  /**
+   * 지금 `keydown` 하면 이 이벤트를 가져갈지(액션을 실행하거나 연속 키를 기다리거나) 상태를 바꾸지 않고 본다. 기다리던 연속
+   * 키 · 더블 탭 상태도 건드리지 않는다.
+   */
+  peek(e: KeyEventLike): boolean {
+    if (isComposingEvent(e) || MODIFIER_CODES[e.code]) return false;
+    const stroke = strokeFromEvent(e);
+    if (!stroke) return false;
+    const layers = this.options.context();
+    if (this.pending && this.now() - this.pending.at <= this.chordTimeoutMs) {
+      const found = this.find([...this.pending.strokes, stroke], layers);
+      if (found.pending || found.binding) return true;
+    }
+    const found = this.find([stroke], layers);
+    return found.pending || found.binding !== undefined;
+  }
+
   keyup(e: KeyEventLike): KeyOutcome {
     const modifier = MODIFIER_CODES[e.code];
     const tap = this.tap;
@@ -170,40 +192,46 @@ export class KeymapEngine {
   }
 
   private match(strokes: Stroke[], now: number, repeat = false): KeyOutcome {
-    const keys = strokes.map(strokeKey);
-    const startsWith = (seq: KeySequence) =>
-      seq.kind === "strokes" &&
-      seq.strokes.length >= keys.length &&
-      keys.every((k, i) => strokeKey(seq.strokes[i]!) === k);
-    const layers = this.options.context();
-    const live = this.bindings.filter(
-      (b) =>
-        startsWith(b.sequence) &&
-        this.options.isEnabled(b.action) &&
-        (!b.whenExpr || evaluateWhen(b.whenExpr, layers)),
-    );
-    if (
-      live.some((b) => b.sequence.kind === "strokes" && b.sequence.strokes.length > keys.length)
-    ) {
+    const found = this.find(strokes, this.options.context());
+    if (found.pending) {
       this.pending = { strokes, at: now };
       return { handled: true, pending: true };
     }
     this.pending = undefined;
-    const binding = this.best(live, layers);
+    const binding = found.binding;
     if (!binding) return NOT_HANDLED;
     if (repeat && !this.options.allowsRepeat?.(binding.action)) return { handled: true };
     return this.run(binding);
   }
 
+  /** `strokes` 로 시작하는 살아 있는 바인딩: 더 긴 연속 키가 있으면 `pending`, 아니면 고른 바인딩. */
+  private find(strokes: Stroke[], layers: ContextLayers): { pending: boolean; binding?: Binding } {
+    const keys = strokes.map(strokeKey);
+    const startsWith = (seq: KeySequence) =>
+      seq.kind === "strokes" &&
+      seq.strokes.length >= keys.length &&
+      keys.every((k, i) => strokeKey(seq.strokes[i]!) === k);
+    const live = this.bindings.filter((b) => startsWith(b.sequence) && this.live(b, layers));
+    if (
+      live.some((b) => b.sequence.kind === "strokes" && b.sequence.strokes.length > keys.length)
+    ) {
+      return { pending: true };
+    }
+    return { pending: false, binding: this.best(live, layers) };
+  }
+
+  private live(b: Binding, layers: ContextLayers): boolean {
+    return (
+      this.options.isEnabled(b.action) &&
+      (!b.whenExpr || evaluateWhen(b.whenExpr, layers)) &&
+      (this.options.admits?.(b, layers) ?? true)
+    );
+  }
+
   private pick(test: (b: Binding) => boolean): Binding | undefined {
     const layers = this.options.context();
     return this.best(
-      this.bindings.filter(
-        (b) =>
-          test(b) &&
-          this.options.isEnabled(b.action) &&
-          (!b.whenExpr || evaluateWhen(b.whenExpr, layers)),
-      ),
+      this.bindings.filter((b) => test(b) && this.live(b, layers)),
       layers,
     );
   }

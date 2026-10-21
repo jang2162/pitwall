@@ -279,3 +279,77 @@ when = "terminalFocus"
     expect(engine.keydown(key("KeyA", cmdShift)).action).toBe("settings.open");
   });
 });
+
+describe("창 규칙(admits)과 미리 보기(peek)", () => {
+  const bindings = keymap(`
+schema = 1
+[[bindings]]
+action = "a.find"
+mac = "cmd+shift+a"
+[[bindings]]
+action = "a.close"
+mac = "cmd+w"
+[[bindings]]
+action = "t.close"
+mac = "cmd+w"
+when = "terminalFocus"
+[[bindings]]
+action = "a.chord"
+mac = "cmd+k cmd+s"
+`);
+  function withRule(admits: (b: Binding, layers: ContextLayers) => boolean) {
+    const ran: string[] = [];
+    let layers: ContextLayers = [{ terminalFocus: true }, {}, {}];
+    const engine = new KeymapEngine({
+      run: (action) => {
+        ran.push(action);
+        return true;
+      },
+      isEnabled: () => true,
+      context: () => layers,
+      admits,
+      now: () => 0,
+    });
+    engine.setBindings(bindings);
+    return {
+      engine,
+      ran,
+      setContext(next: ContextLayers) {
+        layers = next;
+      },
+    };
+  }
+
+  it("거른 바인딩은 실행하지 않고 키도 가져가지 않는다 — peek 도 같은 답이다", () => {
+    const { engine, ran } = withRule((b) => b.action !== "a.find");
+    expect(engine.peek(key("KeyA", cmdShift))).toBe(false);
+    expect(engine.keydown(key("KeyA", cmdShift)).handled).toBe(false);
+    expect(ran).toEqual([]);
+  });
+
+  it("peek 은 실행하지 않고, 실행할 바인딩이 있으면 참이다", () => {
+    const { engine, ran } = withRule(() => true);
+    expect(engine.peek(key("KeyW", { metaKey: true }))).toBe(true);
+    expect(ran).toEqual([]);
+    // 컨텍스트를 읽은 바인딩(`terminalFocus`)이 이긴다.
+    expect(engine.keydown(key("KeyW", { metaKey: true })).action).toBe("t.close");
+  });
+
+  it("peek 은 연속 키를 기다리는 상태를 만들지도 지우지도 않는다", () => {
+    const { engine, ran } = withRule(() => true);
+    expect(engine.peek(key("KeyK", { metaKey: true }))).toBe(true);
+    // peek 뒤의 ⌘S 는 연속 키의 둘째 누름이 아니다.
+    expect(engine.keydown(key("KeyS", { metaKey: true })).handled).toBe(false);
+    expect(engine.keydown(key("KeyK", { metaKey: true })).pending).toBe(true);
+    // 기다리는 중에 peek 해도 기다림은 남는다.
+    expect(engine.peek(key("KeyS", { metaKey: true }))).toBe(true);
+    expect(engine.keydown(key("KeyS", { metaKey: true })).action).toBe("a.chord");
+    expect(ran).toEqual(["a.chord"]);
+  });
+
+  it("IME 조합 중인 키와 수정 키만 누른 것은 peek 이 거짓이다", () => {
+    const { engine } = withRule(() => true);
+    expect(engine.peek(key("KeyW", { metaKey: true }, { isComposing: true }))).toBe(false);
+    expect(engine.peek(key("MetaLeft", { metaKey: true }))).toBe(false);
+  });
+});

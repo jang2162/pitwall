@@ -229,3 +229,34 @@ status-file-watch-polling = 파일 감시: 폴링
 status-file-watch-polling-hint =
     파일 감시 한도(fs.inotify.max_user_watches)를 넘어 일부 폴더는 폴링으로 확인한다. 그 폴더의 변경은 늦게 보인다.
     { $roots }
+
+## 터미널 툴 윈도우
+
+terminal-tabs-label = 터미널 탭
+# $index: 같은 이름의 탭 번호(1부터). 1 이면 번호를 붙이지 않는다.
+terminal-tab-name =
+    { $index ->
+        [1] 로컬
+       *[other] 로컬 ({ $index })
+    }
+terminal-tab-exited = 끝남
+terminal-new-tab = 새 터미널 탭
+# $name: 탭 이름
+terminal-close-tab = 「{ $name }」 닫기
+terminal-rename-input = 탭 이름
+# $code: 종료 코드. 신호로 끝났으면 none.
+terminal-exited =
+    { $code ->
+        [none] [프로세스가 끝났다]
+       *[other] [프로세스가 끝났다: 코드 { $code }]
+    }
+# $message: Host 가 알린 이유
+terminal-start-failed = [터미널을 열지 못했다: { $message }]
+terminal-no-host = Host 에 연결되지 않아 터미널을 열 수 없다
+terminal-copy-failed = 터미널 선택을 복사하지 못했다
+terminal-paste-failed = 클립보드를 터미널에 붙여 넣지 못했다
+action-terminal-new-tab = 터미널: 새 탭
+action-terminal-close-tab = 터미널: 탭 닫기
+action-terminal-rename-tab = 터미널: 탭 이름 바꾸기
+action-terminal-copy = 터미널: 복사
+action-terminal-paste = 터미널: 붙여넣기

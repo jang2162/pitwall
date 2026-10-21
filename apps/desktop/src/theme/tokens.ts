@@ -23,6 +23,27 @@ export const TOKENS = [
   "tab.inactiveForeground",
   "editor.background",
   "editor.foreground",
+  // 터미널(xterm.js) 색. xterm 은 CSS 변수가 아니라 테마 객체로 칠한다(src/terminal/terminal-theme.ts).
+  "terminal.background",
+  "terminal.foreground",
+  "terminal.cursor",
+  "terminal.selectionBackground",
+  "terminal.ansi.black",
+  "terminal.ansi.red",
+  "terminal.ansi.green",
+  "terminal.ansi.yellow",
+  "terminal.ansi.blue",
+  "terminal.ansi.magenta",
+  "terminal.ansi.cyan",
+  "terminal.ansi.white",
+  "terminal.ansi.brightBlack",
+  "terminal.ansi.brightRed",
+  "terminal.ansi.brightGreen",
+  "terminal.ansi.brightYellow",
+  "terminal.ansi.brightBlue",
+  "terminal.ansi.brightMagenta",
+  "terminal.ansi.brightCyan",
+  "terminal.ansi.brightWhite",
 ] as const;
 
 export type TokenName = (typeof TOKENS)[number];

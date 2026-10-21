@@ -155,3 +155,33 @@ action = "settings.open"
 mac = "cmd+,"
 win = "ctrl+alt+s"
 linux = "ctrl+alt+s"
+
+# 터미널(src/terminal/terminal-keys.ts, 10-ui §4.4 「터미널」). 터미널이 포커스를 가지면 키는 대부분 셸로 가고, `when` 이 `terminalFocus` 를
+# 읽는 바인딩과 창 단위 액션만 앱이 받는다. macOS 의 복사 · 붙여넣기는 네이티브 Edit 메뉴의 ⌘C · ⌘V 가 한다. 터미널의 ⌘W 는 탭을 닫는다
+# (IntelliJ 와 같다) — 메뉴 「닫기」(`window.close`)가 같은 키라 메뉴로 또 오는 것은 keymap-provider.tsx 의 중복 가드가 버린다.
+
+[[bindings]]
+action = "terminal.newTab"
+mac = "cmd+t"
+win = "ctrl+shift+t"
+linux = "ctrl+shift+t"
+when = "terminalFocus"
+
+[[bindings]]
+action = "terminal.closeTab"
+mac = "cmd+w"
+win = "ctrl+shift+w"
+linux = "ctrl+shift+w"
+when = "terminalFocus"
+
+[[bindings]]
+action = "terminal.copy"
+win = "ctrl+shift+c"
+linux = "ctrl+shift+c"
+when = "terminalFocus"
+
+[[bindings]]
+action = "terminal.paste"
+win = "ctrl+shift+v"
+linux = "ctrl+shift+v"
+when = "terminalFocus"

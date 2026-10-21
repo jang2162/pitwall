@@ -13,9 +13,12 @@ import { createDocumentStore } from "../editor/documents";
 import { editorActions } from "../editor/editor-actions";
 import { createEditorWorkspace } from "../editor/editor-workspace";
 import { openWithActions } from "../open-with/open-with";
+import { terminalActions } from "../terminal/terminal-actions";
+import { TerminalTabs } from "../terminal/terminal-tabs";
 import { createProjectActions, welcomeActions } from "../welcome/actions";
 import { appActions, toolWindowActions } from "./actions";
 import { DEFAULT_KEYMAP_TOML } from "./default-keymap";
+import { sharesKey } from "./keymap-provider";
 import { resolveKeymap } from "./resolve";
 import { KO_APP, KO_PROJECT, KO_WELCOME } from "../i18n/testing";
 
@@ -69,6 +72,16 @@ const ACTION_IDS = new Set(
       closeWindow: async () => {},
       copyText: async () => {},
       onCopyFailed() {},
+    }),
+    ...terminalActions({
+      strings: KO_PROJECT.terminal,
+      tabs: new TerminalTabs(),
+      canOpen: () => true,
+      focusActive() {},
+      startRename() {},
+      writeClipboard: async () => {},
+      readClipboard: async () => "",
+      onClipboardFailed() {},
     }),
   ].map((a) => a.id),
 );
@@ -264,5 +277,14 @@ describe("resolveKeymap", () => {
       "mac",
     );
     expect(resolved.error).toBeUndefined();
+  });
+});
+
+describe("sharesKey", () => {
+  it("finds actions bound to the same key in any context", () => {
+    const bindings = defaults("mac");
+    // 터미널의 ⌘W(`terminal.closeTab`, when terminalFocus)와 메뉴 「닫기」(`window.close`).
+    expect(sharesKey(bindings, "terminal.closeTab", "window.close")).toBe(true);
+    expect(sharesKey(bindings, "terminal.newTab", "window.close")).toBe(false);
   });
 });
