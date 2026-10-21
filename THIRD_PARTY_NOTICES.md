@@ -1683,7 +1683,7 @@ For these and/or other purposes and motivations, and without any expectation of 
 
 ### Community Data License Agreement Permissive 2.0 (CDLA-Permissive-2.0)
 
-Used by: webpki-root-certs 1.0.9
+Used by: webpki-root-certs 1.0.10
 
 ```text
 # Community Data License Agreement - Permissive - Version 2.0
@@ -2315,7 +2315,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ### ISC License (ISC)
 
-Used by: rustls-webpki 0.103.15
+Used by: rustls-webpki 0.103.16
 
 ```text
 Except as otherwise noted, this project is licensed under the following
