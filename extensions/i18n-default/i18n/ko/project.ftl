@@ -255,6 +255,8 @@ terminal-start-failed = [터미널을 열지 못했다: { $message }]
 terminal-no-host = Host 에 연결되지 않아 터미널을 열 수 없다
 terminal-copy-failed = 터미널 선택을 복사하지 못했다
 terminal-paste-failed = 클립보드를 터미널에 붙여 넣지 못했다
+# 경로에 제어 문자가 있거나 셸을 모를 때(따옴표 규칙을 모른다)
+terminal-drop-refused = 드롭한 경로를 붙이지 않았다: 그중 이 터미널의 셸에 안전하게 넣을 수 없는 경로가 있다
 action-terminal-new-tab = 터미널: 새 탭
 action-terminal-close-tab = 터미널: 탭 닫기
 action-terminal-rename-tab = 터미널: 탭 이름 바꾸기

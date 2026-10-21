@@ -256,6 +256,8 @@ terminal-start-failed = [Could not open the terminal: { $message }]
 terminal-no-host = Cannot open a terminal: not connected to the Host
 terminal-copy-failed = Could not copy the terminal selection
 terminal-paste-failed = Could not paste the clipboard into the terminal
+# A path has a control character, or the shell is unknown (its quoting rules are unknown)
+terminal-drop-refused = Did not paste the dropped paths: the terminal’s shell cannot take one of them safely
 action-terminal-new-tab = Terminal: New Tab
 action-terminal-close-tab = Terminal: Close Tab
 action-terminal-rename-tab = Terminal: Rename Tab

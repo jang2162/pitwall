@@ -145,6 +145,7 @@ export function projectStrings(t: Translate) {
       noHost: t("terminal-no-host"),
       copyFailed: t("terminal-copy-failed"),
       pasteFailed: t("terminal-paste-failed"),
+      dropRefused: t("terminal-drop-refused"),
       actions: {
         newTab: t("action-terminal-new-tab"),
         closeTab: t("action-terminal-close-tab"),

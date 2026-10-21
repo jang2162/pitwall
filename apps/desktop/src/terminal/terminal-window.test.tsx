@@ -198,8 +198,8 @@ const b64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().enco
 const textarea = () => document.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")!;
 const tabs = () => [...document.querySelectorAll<HTMLElement>("[data-testid=terminal-tab]")];
 
-/** ⌥F12 로 터미널을 열고 셸이 떴다고 알린다. 돌려주는 것은 그 스트림 id. */
-async function openTerminal(): Promise<number> {
+/** ⌥F12 로 터미널을 열고 셸(`shell`)이 떴다고 알린다. 돌려주는 것은 그 스트림 id. */
+async function openTerminal(shell = ["/bin/zsh", "-l"]): Promise<number> {
   await keydown(document.body, "F12", { altKey: true });
   await vi.waitFor(() => expect(host.creates).toHaveLength(1));
   const { streamId } = host.creates[0]!;
@@ -208,7 +208,7 @@ async function openTerminal(): Promise<number> {
       kind: "started",
       terminalId: 1,
       pid: 10,
-      shell: ["/bin/zsh", "-l"],
+      shell,
       cwd: "/wt/project",
     }),
   );
@@ -277,12 +277,9 @@ it("drops the menu's Close that the same ⌘W press brings after closing the ter
   expect(native.closeWindow).not.toHaveBeenCalled();
 });
 
-it("sends a Korean composition to the shell once, as composed", async () => {
-  await mount();
-  await openTerminal();
-  const ta = textarea();
+/** WebKit 이 두벌식으로 「가나다」 를 칠 때처럼: 키마다 keyCode 229 의 keydown, 조합 이벤트, 조합 중 input. */
+async function composeGanada(ta: HTMLTextAreaElement) {
   ta.focus();
-  // WebKit 이 두벌식으로 「가나다」 를 칠 때처럼: 키마다 keyCode 229 의 keydown, 조합 이벤트, 조합 중 input.
   const steps = ["ㄱ", "가", "간", "가나", "가낟", "가나다"];
   await act(async () => ta.dispatchEvent(new CompositionEvent("compositionstart", { data: "" })));
   for (const text of steps) {
@@ -301,7 +298,35 @@ it("sends a Korean composition to the shell once, as composed", async () => {
     ta.dispatchEvent(new CompositionEvent("compositionend", { data: "가나다" })),
   );
   await settle();
+}
+
+it("sends a Korean composition to the shell once, as composed", async () => {
+  await mount();
+  await openTerminal();
+  await composeGanada(textarea());
   expect(host.inputs.join("")).toBe("가나다");
+  expect(host.inputs).toEqual(["가나다"]);
+});
+
+it("still sends a composition once after the terminal is attached again", async () => {
+  await mount();
+  await openTerminal();
+  const terminals = windowTerminals();
+  const first = terminals.store.getState().activeId!;
+  const instance = terminals.active()!;
+  const attach = vi.spyOn(instance, "attach");
+  // 다른 탭으로 갔다가 돌아온다 — 첫 탭의 xterm 이 다시 붙는다.
+  await act(async () => void terminals.open());
+  await settle();
+  await act(async () => terminals.activate(first));
+  await settle();
+  // 툴 윈도우를 숨겼다(터미널 안에서 ⌥F12) 다시 연다.
+  await keydown(instance.term.textarea!, "F12", { key: "F12", keyCode: 123, altKey: true });
+  await keydown(document.body, "F12", { altKey: true });
+  // 처음 붙은 뒤에 건 스파이다 — 한 번이라도 불렸으면 다시 붙은 것이다.
+  expect(attach).toHaveBeenCalled();
+  expect(terminals.active()).toBe(instance);
+  await composeGanada(instance.term.textarea!);
   expect(host.inputs).toEqual(["가나다"]);
 });
 
@@ -350,4 +375,25 @@ it("pastes the quoted paths of files dropped on the terminal", async () => {
   );
   await settle();
   expect(host.inputs.join("")).toBe("/a/b.txt '/a/my file.txt' ");
+});
+
+it("quotes dropped paths for the terminal's shell and pastes none it cannot take safely", async () => {
+  await mount();
+  await openTerminal(["/opt/homebrew/bin/fish", "-l"]);
+  await vi.waitFor(() => expect(host.drop).toBeDefined());
+  const view = document.querySelector<HTMLElement>("[data-testid=terminal-view]")!.parentElement!;
+  vi.spyOn(view, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 800, 600));
+  const drop = (paths: string[]) =>
+    act(async () => host.drop!({ payload: { type: "drop", paths, position: { x: 10, y: 10 } } }));
+  // POSIX 식 따옴표면 fish 에서 `echo pwned` 가 따옴표 밖으로 나오는 이름.
+  await drop([String.raw`/a/x\';echo pwned;#`]);
+  await settle();
+  expect(host.inputs.join("")).toBe(String.raw`'/a/x\\\';echo pwned;#' `);
+  // 개행이 든 경로가 하나라도 있으면 아무것도 붙이지 않고 알린다.
+  await drop(["/a/ok", "/a/new\nline"]);
+  await settle();
+  expect(host.inputs.join("")).toBe(String.raw`'/a/x\\\';echo pwned;#' `);
+  await vi.waitFor(() =>
+    expect(document.body.textContent).toContain("드롭한 경로를 붙이지 않았다"),
+  );
 });

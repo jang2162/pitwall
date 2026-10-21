@@ -22,7 +22,7 @@ import { projectIdFromQuery } from "../project-open";
 import { useHost } from "../rpc/host";
 import { useTheme } from "../theme/theme-switcher";
 import { terminalActions } from "./terminal-actions";
-import { dropHits, dropText } from "./terminal-drop";
+import { dropHits, dropText, shellQuoting } from "./terminal-drop";
 import { TERMINAL_FOCUS } from "./terminal-keys";
 import {
   type TerminalInstance,
@@ -111,8 +111,10 @@ function TerminalPanel({
     return () => sub.dispose();
   }, [api, tabs, ready]);
 
-  // 파일을 보이는 터미널 위로 드롭하면 그 경로를 붙여 넣는다.
+  // 파일을 보이는 터미널 위로 드롭하면 그 경로를 붙여 넣는다. 그 셸에 안전하게 붙일 수 없는 경로면 알린다(terminal-drop.ts).
   const viewRef = useRef<HTMLDivElement>(null);
+  const dropRefusedRef = useRef(() => {});
+  dropRefusedRef.current = () => notify({ level: "warning", title: T.dropRefused });
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
@@ -131,7 +133,16 @@ function TerminalPanel({
         // 숨은 툴 윈도우(접힌 dock · 다른 탭)는 사각형이 비어 맞지 않는다.
         if (!dropHits(view.getBoundingClientRect(), payload.position, window.devicePixelRatio))
           return;
-        instance.paste(dropText(payload.paths, platform));
+        const { state } = instance;
+        const text = dropText(
+          payload.paths,
+          shellQuoting(state.kind === "running" ? state.shell[0] : undefined),
+        );
+        if (text === undefined) {
+          dropRefusedRef.current();
+          return;
+        }
+        instance.paste(text);
         instance.focus();
       })
       .then((off) => {
@@ -143,7 +154,7 @@ function TerminalPanel({
       disposed = true;
       unlisten?.();
     };
-  }, [tabs, platform]);
+  }, [tabs]);
 
   const focusActive = useCallback(
     () => requestAnimationFrame(() => tabs.active()?.focus()),

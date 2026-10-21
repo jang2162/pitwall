@@ -19,7 +19,14 @@ export interface TerminalScreen {
 
 export type SessionState =
   | { kind: "starting" }
-  | { kind: "running"; terminalId: number; pid: number | null; cwd: string }
+  | {
+      kind: "running";
+      terminalId: number;
+      pid: number | null;
+      cwd: string;
+      /** Host 가 띄운 셸의 argv(드롭한 경로의 따옴표 규칙을 고른다). */
+      shell: readonly string[];
+    }
   | { kind: "exited"; code: number | null }
   | { kind: "failed"; message: string };
 
@@ -123,6 +130,7 @@ export class TerminalSession {
           terminalId: event.terminalId,
           pid: event.pid,
           cwd: event.cwd,
+          shell: event.shell,
         });
         this.flushInput();
         this.flushSize();
