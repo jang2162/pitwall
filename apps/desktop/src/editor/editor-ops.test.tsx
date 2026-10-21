@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // 에디터 조작(12-m1-plan M1-18 완료 기준)을 프로젝트 창(App kind="project")과 가짜 Host 로 본다 — 키는 창의 키맵 엔진(기본 키맵)을
 // 지나고, 에디터는 실제 CodeMirror 다: ⌘L `120:5` → 커서, ⌘F 정규식의 일치 수, ⌘/ 의 언어별 줄 주석, 상태바 언어 바꾸기와 탭을
-// 닫았다 열면 판별값, `font_size` 를 바꾸면 같은 뷰가 바뀜, 한글 조합 중에는 단축키가 돌지 않음, macOS ⌘⌫ · Win Ctrl+Y 줄 삭제,
+// 닫았다 열면 판별값(구문 강조가 꺼졌다 돌아옴), `font_size` 를 바꾸면 같은 뷰가 바뀜, 한글 조합 중에는 단축키가 돌지 않음, macOS ⌘⌫ · Win Ctrl+Y 줄 삭제,
 // undo · redo 가 키와 Win/Linux Edit 메뉴(키맵 액션 항목)에서 한 번씩 돌고 찾기 칸의 키는 칸에 둠.
 //
 // CodeMirror 는 불러올 때 macOS 인지 정한다(navigator.platform) — 그래서 불러오기 전에 Mac 으로 둔다. ⌘⌫ 가 CodeMirror 의 「줄 앞까지
@@ -37,6 +37,7 @@ import { parseTheme } from "../theme/tokens";
 import { cursorOf } from "./editor-workspace";
 import { editorContext } from "./extensions";
 import { getDocLanguage, PLAIN_TEXT } from "./language";
+import { fakeSyntaxServer, miniHighlight } from "./syntax-testing";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -56,6 +57,8 @@ const host = vi.hoisted(() => ({
     topics: string[];
     projectId?: string;
   }[],
+  /** 구문 분석 서비스(`syntax.*`). 없으면 그 메서드가 없는 Host 다(강조하지 않는다). */
+  syntax: undefined as ReturnType<typeof fakeSyntaxServer> | undefined,
 }));
 
 const LANGUAGES: LangList = {
@@ -80,6 +83,18 @@ vi.mock("../tauri-transport", async () => {
         const m = JSON.parse(text) as { id?: number; method: string; params: never };
         const reply = (result: unknown) => send({ id: m.id, result });
         const path = (m.params as { path?: string } | undefined)?.path ?? "";
+        if (m.method.startsWith("syntax.") && host.syntax) {
+          const { source } = host.syntax;
+          const run = {
+            "syntax.open": source.open,
+            "syntax.edit": source.edit,
+            "syntax.highlights": source.highlights,
+            "syntax.close": source.close,
+          }[m.method] as (p: unknown) => Promise<unknown>;
+          return void run(m.params).then(reply, (e: { code?: number; message: string }) =>
+            send({ id: m.id, error: { code: e.code ?? -32603, message: e.message } }),
+          );
+        }
         switch (m.method) {
           case "i18n.get":
             return reply(i18nState("ko"));
@@ -247,6 +262,7 @@ beforeEach(() => {
   ]);
   host.settings = {};
   host.subscribers = [];
+  host.syntax = undefined;
   activeWorktreeStore.setState({ top: undefined });
   localStorage.clear();
   // happy-dom 은 DOM 선택을 바꾸는 그 자리에서 `selectionchange` 를 동기로 보낸다(브라우저는 나중에 보낸다). 줄 수가 바뀌는 편집이면
@@ -456,6 +472,35 @@ it("changes the document's language from the status bar, and forgets it when the
   await open(PY, 1, 1);
   expect(getDocLanguage(PY)).toBe("Python");
   expect(statusText("language")).toBe("Python");
+});
+
+it("turns highlighting off when the status bar picks Plain Text, and back on with the detected language after the tab reopens", async () => {
+  host.syntax = fakeSyntaxServer({ grammars: { Rust: miniHighlight } });
+  const syntax = host.syntax;
+  const highlighted = () => document.querySelector(".dv-active-group [class*=pw-syntax-]");
+  await mount();
+  await open(RS, 1, 1);
+  await vi.waitFor(() => expect(highlighted()).not.toBeNull());
+  expect(syntax.docs.size).toBe(1);
+
+  await click(document.querySelector("[data-testid=status-language]")!);
+  const plain = [...document.querySelectorAll("[cmdk-item]")].find(
+    (i) => i.textContent === "일반 텍스트",
+  )!;
+  await act(async () => plain.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await settle();
+  expect(statusText("language")).toBe("일반 텍스트");
+  expect(view().state.facet(editorContext)?.language).toBe(PLAIN_TEXT);
+  await vi.waitFor(() => expect(highlighted()).toBeNull());
+  await vi.waitFor(() => expect(syntax.docs.size).toBe(0));
+
+  await act(async () => dock!.activePanel!.api.close());
+  await settle();
+  await open(RS, 1, 1);
+  expect(statusText("language")).toBe("Rust");
+  expect(view().state.facet(editorContext)?.language).toBe("Rust");
+  await vi.waitFor(() => expect(highlighted()).not.toBeNull());
+  expect(syntax.docs.size).toBe(1);
 });
 
 it("shows line ending and encoding of the active tab", async () => {
