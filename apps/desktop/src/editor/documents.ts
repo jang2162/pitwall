@@ -146,6 +146,11 @@ export type SaveOutcome =
   | { kind: "saved" }
   /** 쓸 것이 없다(미저장 없음 · 읽기 전용 · 텍스트가 아님). */
   | { kind: "unchanged" }
+  /**
+   * 미저장 편집이 있지만 문서가 읽기 전용이라 쓰지 않았다 — 편집하는 사이 디스크의 파일이 UTF-8 이 아니게 됐거나 쓰기 권한이 없어졌다.
+   * 편집은 문서에 남는다.
+   */
+  | { kind: "readOnly" }
   /** 디스크가 그사이 바뀌어 쓰지 않았다. 문서의 `disk` 가 배너 상태가 됐다. */
   | { kind: "conflict" }
   | { kind: "failed"; message: string };
@@ -456,7 +461,9 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
 
   async function save(path: string): Promise<SaveOutcome> {
     const doc = text(path);
-    if (!doc || doc.readOnly || !source.write) return { kind: "unchanged" };
+    if (!doc) return { kind: "unchanged" };
+    if (doc.readOnly) return doc.live.dirty ? { kind: "readOnly" } : { kind: "unchanged" };
+    if (!source.write) return { kind: "unchanged" };
     if (!doc.live.dirty && doc.disk.kind === "same") return { kind: "unchanged" };
     const { live } = doc;
     const snapshot = live.text;

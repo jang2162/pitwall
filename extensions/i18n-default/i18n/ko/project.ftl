@@ -81,6 +81,8 @@ editor-switcher-label = 탭 전환기
 editor-tab-unsaved = 저장하지 않은 편집
 # $path: 저장하려던 파일
 editor-save-failed = 저장하지 못했다: { $path }
+# 저장하지 못한 알림의 본문: 편집하는 사이 디스크의 파일이 UTF-8 이 아니게 됐거나 쓰기 권한이 없어졌다.
+editor-save-read-only = 이 파일은 이제 읽기 전용이라 쓰지 않았다. 편집은 탭에 남아 있다.
 
 ## 외부 변경 배너(src/editor/disk-banner.tsx). 디스크의 파일이 이 탭의 내용과 달라졌을 때.
 

@@ -52,8 +52,34 @@ const host = vi.hoisted(() => ({
   kinds: new Map<string, EntryKind>(),
   /** `fs.readBytes` 응답을 이만큼 늦춘다(ms, 느린 Host · 원격). */
   readBytesDelayMs: 0,
+  /** 경로 → mtime(바꾸면 `version` 도 바뀐다). 없으면 1. */
+  mtimes: new Map<string, number>(),
   calls: [] as { method: string; params: Record<string, unknown> }[],
+  subscribers: [] as { send(m: object): void; id: number; topics: string[] }[],
 }));
+
+/** 감시 이벤트 `fs.changed` 를 구독한 연결에 보낸다. */
+async function changed(paths: string[]) {
+  await act(async () => {
+    for (const sub of host.subscribers)
+      if (sub.topics.includes("fs.changed"))
+        sub.send({
+          method: "events.event",
+          params: {
+            subscriptionId: sub.id,
+            projectId: "p1",
+            topic: "fs.changed",
+            payload: {
+              root: "/work/demo",
+              worktree: null,
+              paths,
+              kinds: paths.map(() => "modified"),
+              rescan: false,
+            },
+          },
+        });
+  });
+}
 
 vi.mock("../tauri-transport", async () => {
   const { createMemoryTransportPair: pair } = await import("@pitwall/rpc-client");
@@ -63,6 +89,7 @@ vi.mock("../tauri-transport", async () => {
   return {
     connectHost: async () => {
       const [client, server] = pair();
+      let next = 1;
       const send = (m: object) => server.send(JSON.stringify({ jsonrpc: "2.0", ...m }));
       server.onMessage((text) => {
         const m = JSON.parse(text) as { id?: number; method: string; params: never };
@@ -81,6 +108,7 @@ vi.mock("../tauri-transport", async () => {
         const exists = () => host.files.has(path) || host.virtual.has(path) || host.kinds.has(path);
         const realSize = () => host.virtual.get(path)?.size ?? host.files.get(path)?.length ?? 0;
         const size = () => host.sizes.get(path) ?? realSize();
+        const mtime = () => host.mtimes.get(path) ?? 1;
         /** `[offset, offset + length)` 의 바이트(파일 끝까지). */
         const bytes = (offset: number, length: number): Uint8Array => {
           const end = Math.min(realSize(), offset + length);
@@ -158,7 +186,7 @@ vi.mock("../tauri-transport", async () => {
               kind,
               target: null,
               size: kind === "file" ? size() : 0,
-              mtimeMs: 1,
+              mtimeMs: mtime(),
               readonly: false,
               sizeClass: kind === "file" ? sizeClass() : null,
             } satisfies FsStat);
@@ -189,10 +217,10 @@ vi.mock("../tauri-transport", async () => {
             return reply({
               path,
               size: size(),
-              mtimeMs: 1,
+              mtimeMs: mtime(),
               offset,
               eof: offset + part.length >= realSize(),
-              version: whole ? `1:${path}` : null,
+              version: whole ? `${mtime()}:${path}` : null,
               content:
                 text !== undefined && !params.bytes
                   ? { kind: "text", text }
@@ -241,8 +269,11 @@ vi.mock("../tauri-transport", async () => {
               })),
             } satisfies LangDetectResult);
           }
-          case "events.subscribe":
-            return reply({ subscriptionId: 1 });
+          case "events.subscribe": {
+            const id = next++;
+            host.subscribers.push({ send, id, topics: (m.params as { topics: string[] }).topics });
+            return reply({ subscriptionId: id });
+          }
           case "events.unsubscribe":
             return reply(null);
           default:
@@ -314,7 +345,9 @@ beforeEach(() => {
   host.encodings = new Map([[EUC_KR, "EUC-KR"]]);
   host.kinds = new Map([[FIFO, "other"]]);
   host.readBytesDelayMs = 0;
+  host.mtimes = new Map();
   host.calls = [];
+  host.subscribers = [];
   closeGuard = undefined;
   activeWorktreeStore.setState({ top: undefined });
   localStorage.clear();
@@ -394,6 +427,8 @@ async function typeInto(input: HTMLInputElement, value: string) {
   });
 }
 
+const toasts = () =>
+  [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent ?? "");
 const notice = () => document.querySelector<HTMLElement>("[data-editor-tab] [role=status]");
 const hexRows = () =>
   [...document.querySelectorAll<HTMLElement>("[data-hex-row]")].map((r) => ({
@@ -649,6 +684,51 @@ it("shows UTF-8 with a broken byte in Hangul as UTF-8, read-only, and no key, sa
   expect(view.state.doc.toString()).toBe(`${HANGUL}\uFFFD`);
   await keydown({ code: "KeyS", key: "s", metaKey: true }, view.contentDOM);
   expect(await act(() => closeGuard!())).toBe(true);
+  expect(calls("fs.write")).toEqual([]);
+});
+
+it("says the save was blocked when the file turns read-only under unsaved edits, and the close dialog's Save keeps the window", async () => {
+  // 편집하는 사이 디스크의 파일이 같은 글자의 EUC-KR 로 다시 저장됐다(외부 도구). 글자가 같아 배너 없이 판정만 바뀌어 읽기 전용이
+  // 된다 — 그때 ⌘S · 닫기의 「저장」 이 말없이 성공한 것처럼 끝나면 편집이 사라진다.
+  const NOTE = "/work/demo/note.txt";
+  host.files.set(NOTE, new TextEncoder().encode(HANGUL));
+  await mount();
+  await open(NOTE);
+  const view = views()[0]!;
+  expect(view.state.readOnly).toBe(false);
+  await act(async () =>
+    view.dispatch({
+      changes: { from: view.state.doc.length, insert: "// 내 편집\n" },
+      userEvent: "input.type",
+    }),
+  );
+  host.files.set(NOTE, Uint8Array.from(EUC_KR_BYTES));
+  host.encodings.set(NOTE, "EUC-KR");
+  host.mtimes.set(NOTE, 2);
+  await changed([NOTE]);
+  await vi.waitFor(() => expect(view.state.readOnly).toBe(true));
+  expect(view.state.doc.toString()).toBe(`${HANGUL}// 내 편집\n`);
+
+  await keydown({ code: "KeyS", key: "s", metaKey: true }, view.contentDOM);
+  await vi.waitFor(() =>
+    expect(toasts()).toContainEqual(
+      expect.stringContaining("이 파일은 이제 읽기 전용이라 쓰지 않았다. 편집은 탭에 남아 있다."),
+    ),
+  );
+  expect(toasts()).toContainEqual(expect.stringContaining(`저장하지 못했다: ${NOTE}`));
+
+  let answer: Promise<boolean> | undefined;
+  await act(async () => {
+    answer = closeGuard!();
+  });
+  await settle();
+  const dialog = document.querySelector<HTMLElement>("[data-testid=unsaved-dialog]")!;
+  expect(dialog.textContent).toContain("note.txt");
+  const save = [...dialog.querySelectorAll("button")].find((b) => b.textContent === "저장")!;
+  await click(save);
+  expect(await answer).toBe(false);
+  expect(toasts()).toContainEqual(expect.stringContaining("저장하지 못한 파일이 있어 닫지 않았다"));
+  expect(view.state.doc.toString()).toBe(`${HANGUL}// 내 편집\n`);
   expect(calls("fs.write")).toEqual([]);
 });
 

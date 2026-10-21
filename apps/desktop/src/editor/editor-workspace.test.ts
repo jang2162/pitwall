@@ -91,6 +91,7 @@ it("keeps a tab's document while the tab exists, even when its content unmounts 
     stat: source.stat,
     onOpenFailed() {},
     onSaveFailed() {},
+    onSaveBlocked() {},
     confirmUnsaved: async () => "cancel",
   });
   const dock = fakeDock();

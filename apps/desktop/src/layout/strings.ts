@@ -83,6 +83,8 @@ export function projectStrings(t: Translate) {
       switcher: t("editor-switcher-label"),
       unsaved: t("editor-tab-unsaved"),
       saveFailed: (path: string) => t("editor-save-failed", { path }),
+      /** 미저장 편집이 있는 문서가 읽기 전용이 됐다(`saveFailed` 알림의 본문). */
+      saveReadOnly: t("editor-save-read-only"),
       disk: {
         changed: t("editor-disk-changed"),
         take: t("editor-disk-take"),

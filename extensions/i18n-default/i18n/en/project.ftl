@@ -81,6 +81,8 @@ editor-switcher-label = Switcher
 editor-tab-unsaved = Unsaved changes
 # $path: the file being saved
 editor-save-failed = Could not save { $path }
+# Body of the save failure notice: while you edited, the file on disk stopped being UTF-8 or lost its write permission.
+editor-save-read-only = The file is now read-only, so it was not written. Your changes are still in the tab.
 
 ## External change banner (src/editor/disk-banner.tsx). The file on disk no longer matches this tab.
 

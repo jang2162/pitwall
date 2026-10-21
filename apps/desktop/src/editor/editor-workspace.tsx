@@ -96,6 +96,8 @@ export interface EditorWorkspaceDeps {
   onOpenFailed(path: string, message: string): void;
   /** 저장하지 못한 이유(경로, 오류 문장). 충돌은 여기 오지 않는다 — 탭의 배너가 보인다. */
   onSaveFailed(path: string, message: string): void;
+  /** 미저장 편집이 있는 문서가 읽기 전용이 되어 저장하지 않았다(경로). 편집은 탭에 남아 있다. */
+  onSaveBlocked(path: string): void;
   /** 닫으면 잃는 미저장 편집이 있다(경로). 창이 대화상자로 묻는다. */
   confirmUnsaved(paths: readonly string[]): Promise<UnsavedAnswer>;
   /** 「저장」 을 골랐는데 다 저장하지 못해 닫지 않았다. */
@@ -167,10 +169,14 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     return false;
   }
 
-  /** 문서를 저장한다. 저장했거나 쓸 것이 없으면 `true`. 실패는 알리고, 충돌은 탭의 배너가 보인다. */
+  /**
+   * 문서를 저장한다. 저장했거나 쓸 것이 없으면 `true`. 실패 · 읽기 전용이라 못 쓴 편집은 알리고, 충돌은 탭의 배너가 보인다. 못 쓴
+   * 편집이 있으면 `false` 라 닫기 확인의 「저장」 이 창을 닫지 않는다.
+   */
   async function save(path: string): Promise<boolean> {
     const outcome = await deps.documents.save(path);
     if (outcome.kind === "failed") deps.onSaveFailed(path, outcome.message);
+    if (outcome.kind === "readOnly") deps.onSaveBlocked(path);
     return outcome.kind === "saved" || outcome.kind === "unchanged";
   }
 

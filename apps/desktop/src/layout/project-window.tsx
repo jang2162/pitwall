@@ -471,6 +471,12 @@ function useWindowEditor(
           title: latest.current.strings.saveFailed(path),
           body: message,
         }),
+      onSaveBlocked: (path) =>
+        latest.current.notify({
+          level: "error",
+          title: latest.current.strings.saveFailed(path),
+          body: latest.current.strings.saveReadOnly,
+        }),
       syntax: {
         open: (params) => host().call("syntax.open", params),
         edit: (params) => host().call("syntax.edit", params),

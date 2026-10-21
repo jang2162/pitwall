@@ -176,7 +176,7 @@ describe("document store", () => {
     doc.live.attach("tab", view, () => undefined);
     view.dispatch({ changes: { from: 0, insert: "x" }, userEvent: "input.type" });
     expect(doc.live.dirty).toBe(true);
-    expect(await docs.save("/p/euc-kr.txt")).toEqual({ kind: "unchanged" });
+    expect(await docs.save("/p/euc-kr.txt")).toEqual({ kind: "readOnly" });
     expect(source.write).not.toHaveBeenCalled();
     view.destroy();
   });
