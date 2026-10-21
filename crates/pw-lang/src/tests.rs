@@ -7,7 +7,7 @@ use pw_core::registry::{NewProject, Registry as Projects};
 use serde_json::json;
 
 use super::*;
-use crate::methods::{HostParts, Lang, LangDetectFile, LangDetectParams, MAX_FILES};
+use crate::methods::{HostParts, Lang, LangDetectFile, LangDetectParams, LangInfo, MAX_FILES};
 
 fn plain(path: &str, head: Option<&str>) -> Detection {
     detect(
@@ -817,4 +817,67 @@ fn rpc_rejects_relative_paths_too_many_files_and_unknown_projects() {
         ..Default::default()
     };
     assert!(fx.lang.detect(&unknown).is_err());
+}
+
+/// 상태바의 언어 고르기(M1-18)가 쓰는 목록: Linguist 언어 전부(플레인 텍스트 `Text` 포함)와, 내장 확장이 적은 줄 주석.
+#[test]
+fn lang_list_has_every_linguist_language_and_builtin_line_comments() {
+    let registry =
+        pw_ext::Registry::from_roots(&semver::Version::new(0, 0, 0), pw_ext::builtin::roots());
+    let list = Lang::new(&registry).list();
+    let get = |name: &str| -> &LangInfo {
+        list.languages
+            .iter()
+            .find(|l| l.name == name)
+            .unwrap_or_else(|| panic!("{name} not listed"))
+    };
+    assert_eq!(get("Rust").line_comment.as_deref(), Some("//"));
+    assert_eq!(get("Python").line_comment.as_deref(), Some("#"));
+    assert_eq!(get("SQL").line_comment.as_deref(), Some("--"));
+    assert!(get("Rust").popular);
+    // 확장이 줄 주석을 적지 않은 언어 · 플레인 텍스트는 없다.
+    assert_eq!(get("Text").line_comment, None);
+    assert_eq!(get("COBOL").line_comment, None);
+    assert_eq!(list.languages.len(), linguist::languages().len());
+    let mut names: Vec<&str> = list.languages.iter().map(|l| l.name.as_str()).collect();
+    names.dedup();
+    assert_eq!(names.len(), list.languages.len());
+}
+
+/// Linguist 에 없는 언어를 기여한 확장은 목록 뒤에 붙고, 같은 언어의 줄 주석은 먼저 등록된 것이 이긴다.
+#[test]
+fn lang_list_appends_contributed_languages_and_keeps_the_first_line_comment() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (dir, body) in [
+        (
+            "a",
+            "[contributes.languages.zz]\nlinguist = \"Zzlang\"\nextensions = [\".zz\"]\nline_comment = \";;\"\n",
+        ),
+        (
+            "b",
+            "[contributes.languages.zz2]\nlinguist = \"Zzlang\"\nextensions = [\".zz2\"]\nline_comment = \"%\"\n",
+        ),
+    ] {
+        let root = tmp.path().join(dir);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("extension.toml"),
+            format!("id = \"test.{dir}\"\nname = \"{dir}\"\nversion = \"0.1.0\"\nengines = {{ pitwall = \"*\" }}\n{body}"),
+        )
+        .unwrap();
+    }
+    let registry = pw_ext::Registry::from_roots(
+        &semver::Version::new(0, 0, 0),
+        ["a", "b"].map(|d| pw_ext::ExtensionRoot::Dir(tmp.path().join(d))),
+    );
+    assert!(
+        registry.diagnostics().is_empty(),
+        "{:?}",
+        registry.diagnostics()
+    );
+    let list = Lang::new(&registry).list();
+    let last = list.languages.last().unwrap();
+    assert_eq!(last.name, "Zzlang");
+    assert_eq!(last.line_comment.as_deref(), Some(";;"));
+    assert_eq!(list.languages.len(), linguist::languages().len() + 1);
 }

@@ -1,4 +1,4 @@
-//! `lang.detect` RPC. UI 전용이라 MCP 툴이 아니다.
+//! `lang.detect` · `lang.list` RPC. UI 전용이라 MCP 툴이 아니다.
 //!
 //! 웹뷰는 경로와(있으면) 앞부분만 넘긴다. 설정 매핑 · `.gitattributes` 는 이 Host 가 읽는다. 여러 파일을 한 번에 받는다 —
 //! 파일 트리가 폴더를 펼칠 때 한 번에 부르고, 한 호출 안에서는 저장소마다 속성 파일을 한 번만 읽는다.
@@ -74,12 +74,41 @@ pub struct LangDetectResult {
     pub files: Vec<LangDetection>,
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct LangInfo {
+    /// Linguist 언어 이름(확장만 기여한 언어는 그 `linguist` 이름). `lang.detect` 의 `language` 와 같은 값이다.
+    pub name: String,
+    /// Linguist popular.yml 에 있다(고르기 팝업이 앞에 둔다).
+    pub popular: bool,
+    /// 줄 주석 기호(확장의 `[contributes.languages.<id>] line_comment`). 기여한 확장이 없거나 적지 않았으면 없다.
+    pub line_comment: Option<String>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct LangList {
+    /// Linguist 표의 순서(이름순), 그 뒤에 Linguist 에 없는 확장 기여 언어가 등록 순서로.
+    pub languages: Vec<LangInfo>,
+}
+
 rpc_method! {
     /// 파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·
     /// 그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.
     pub LangDetect: "lang.detect" {
         params: LangDetectParams,
         result: LangDetectResult,
+        tier: Read,
+    }
+
+    /// 고를 수 있는 언어(상태바의 언어 수동 변경, F4-12)와 언어마다의 줄 주석. 앱이 시작할 때 읽은 확장 레지스트리 기준이다.
+    pub LangListMethod: "lang.list" {
+        params: (),
+        result: LangList,
         tier: Read,
     }
 }
@@ -109,6 +138,24 @@ impl Lang {
     /// 두 번째부터는 무시한다. 붙이지 않았으면 설정 매핑 · 프로젝트 없이 판별한다.
     pub fn attach(&self, parts: HostParts) {
         let _ = self.host.set(parts);
+    }
+
+    pub fn list(&self) -> LangList {
+        let info = |name: &str, popular: bool| LangInfo {
+            name: name.to_owned(),
+            popular,
+            line_comment: self.contributed.line_comment(name).map(str::to_owned),
+        };
+        let mut languages: Vec<LangInfo> = crate::linguist::languages()
+            .iter()
+            .map(|l| info(l.name, l.popular))
+            .collect();
+        for name in self.contributed.names() {
+            if !languages.iter().any(|l| l.name == name) {
+                languages.push(info(name, false));
+            }
+        }
+        LangList { languages }
     }
 
     pub fn detect(&self, params: &LangDetectParams) -> Result<LangDetectResult, RpcError> {
@@ -336,6 +383,11 @@ fn registry_error(e: RegistryError) -> RpcError {
 }
 
 pub fn register(router: &mut Router, lang: Arc<Lang>) {
+    let list = lang.list();
+    router.unary(LangListMethod, move |_ctx, ()| {
+        let list = list.clone();
+        async move { Ok(list) }
+    });
     router.unary(LangDetect, move |_ctx, params: LangDetectParams| {
         let lang = Arc::clone(&lang);
         async move {

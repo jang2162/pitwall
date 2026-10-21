@@ -2519,6 +2519,63 @@
       ],
       "tier": "read"
     },
+    "lang.list": {
+      "description": "고를 수 있는 언어(상태바의 언어 수동 변경, F4-12)와 언어마다의 줄 주석. 앱이 시작할 때 읽은 확장 레지스트리 기준이다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "LangInfo": {
+            "properties": {
+              "lineComment": {
+                "description": "줄 주석 기호(확장의 `[contributes.languages.<id>] line_comment`). 기여한 확장이 없거나 적지 않았으면 없다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Linguist 언어 이름(확장만 기여한 언어는 그 `linguist` 이름). `lang.detect` 의 `language` 와 같은 값이다.",
+                "type": "string"
+              },
+              "popular": {
+                "description": "Linguist popular.yml 에 있다(고르기 팝업이 앞에 둔다).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "popular",
+              "lineComment"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "languages": {
+            "description": "Linguist 표의 순서(이름순), 그 뒤에 Linguist 에 없는 확장 기여 언어가 등록 순서로.",
+            "items": {
+              "$ref": "#/$defs/LangInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "languages"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "log.write": {
       "description": "UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.",
       "kind": "unary",

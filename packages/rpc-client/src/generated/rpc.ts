@@ -92,6 +92,10 @@ export type UnaryMethods = {
 	 */
 	"lang.detect": { params: LangDetectParams; result: LangDetectResult };
 	/**
+	 * 고를 수 있는 언어(상태바의 언어 수동 변경, F4-12)와 언어마다의 줄 주석. 앱이 시작할 때 읽은 확장 레지스트리 기준이다.
+	 */
+	"lang.list": { params: null; result: LangList };
+	/**
 	 * UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.
 	 * 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.
 	 */
@@ -294,6 +298,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"keymap.get": {"name":"keymap.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"KeymapGetParams","output":"KeymapFile","doc":" 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.\n","mcp":false},
 	"keymap.list": {"name":"keymap.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"KeymapList","doc":" 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.\n","mcp":false},
 	"lang.detect": {"name":"lang.detect","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"LangDetectParams","output":"LangDetectResult","doc":" 파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·\n 그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.\n","mcp":false},
+	"lang.list": {"name":"lang.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"LangList","doc":" 고를 수 있는 언어(상태바의 언어 수동 변경, F4-12)와 언어마다의 줄 주석. 앱이 시작할 때 읽은 확장 레지스트리 기준이다.\n","mcp":false},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n","mcp":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false},
@@ -940,6 +945,20 @@ export type LangDetection = {
 	generated: boolean,
 	/**  문서 파일(documentation.yml 또는 `linguist-documentation`). */
 	documentation: boolean,
+};
+
+export type LangInfo = {
+	/**  Linguist 언어 이름(확장만 기여한 언어는 그 `linguist` 이름). `lang.detect` 의 `language` 와 같은 값이다. */
+	name: string,
+	/**  Linguist popular.yml 에 있다(고르기 팝업이 앞에 둔다). */
+	popular: boolean,
+	/**  줄 주석 기호(확장의 `[contributes.languages.<id>] line_comment`). 기여한 확장이 없거나 적지 않았으면 없다. */
+	lineComment: string | null,
+};
+
+export type LangList = {
+	/**  Linguist 표의 순서(이름순), 그 뒤에 Linguist 에 없는 확장 기여 언어가 등록 순서로. */
+	languages: LangInfo[],
 };
 
 /**  언어를 정한 단계. */

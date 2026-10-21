@@ -160,17 +160,20 @@ fn resolve_language(name: &str, contributed: &Contributed) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// 확장의 `[contributes.languages]` 가 더한 확장자 → `linguist` 이름. 같은 확장자를 둘이 기여하면 먼저 등록된 것(내장 → 사용자
-/// 확장 순)이 이긴다.
+/// 확장의 `[contributes.languages]` 가 더한 확장자 → `linguist` 이름과, 언어마다의 줄 주석(`line_comment`). 같은 확장자 · 같은
+/// 언어의 줄 주석을 둘이 기여하면 먼저 등록된 것(내장 → 사용자 확장 순)이 이긴다.
 #[derive(Debug, Default, Clone)]
 pub struct Contributed {
     /// 소문자 확장자(점 없이) → 이름.
     extensions: Vec<(String, String)>,
+    /// 이름 → 줄 주석 기호.
+    line_comments: Vec<(String, String)>,
 }
 
 impl Contributed {
     pub fn from_registry(registry: &pw_ext::Registry) -> Self {
         let mut extensions: Vec<(String, String)> = Vec::new();
+        let mut line_comments: Vec<(String, String)> = Vec::new();
         for (_, decl) in registry.languages() {
             for ext in &decl.extensions {
                 let ext = ext.trim_start_matches('.').to_lowercase();
@@ -178,8 +181,16 @@ impl Contributed {
                     extensions.push((ext, decl.linguist.clone()));
                 }
             }
+            if let Some(token) = decl.line_comment.as_deref().filter(|t| !t.is_empty())
+                && !line_comments.iter().any(|(n, _)| *n == decl.linguist)
+            {
+                line_comments.push((decl.linguist.clone(), token.to_owned()));
+            }
         }
-        Self { extensions }
+        Self {
+            extensions,
+            line_comments,
+        }
     }
 
     #[cfg(test)]
@@ -189,11 +200,32 @@ impl Contributed {
                 .iter()
                 .map(|(e, n)| ((*e).to_owned(), (*n).to_owned()))
                 .collect(),
+            line_comments: Vec::new(),
         }
     }
 
-    fn names(&self) -> impl Iterator<Item = &str> {
-        self.extensions.iter().map(|(_, n)| n.as_str())
+    /// 확장이 기여한 언어 이름(확장자 · 줄 주석 어느 쪽으로든). 처음 나온 순서이고 겹치지 않는다.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        let mut seen: Vec<&str> = Vec::new();
+        self.extensions
+            .iter()
+            .map(|(_, n)| n.as_str())
+            .chain(self.line_comments.iter().map(|(n, _)| n.as_str()))
+            .filter(move |n| {
+                let new = !seen.contains(n);
+                if new {
+                    seen.push(n);
+                }
+                new
+            })
+    }
+
+    /// 언어(`linguist` 이름)의 줄 주석 기호. 기여한 확장이 없거나 적지 않았으면 `None`.
+    pub fn line_comment(&self, language: &str) -> Option<&str> {
+        self.line_comments
+            .iter()
+            .find(|(n, _)| n == language)
+            .map(|(_, t)| t.as_str())
     }
 
     /// 가장 긴 확장자부터(`a.d.ts` 는 `d.ts`, 그다음 `ts`).
