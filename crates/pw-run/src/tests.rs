@@ -15,7 +15,7 @@ use pw_rpc::protocol::{
 };
 use pw_rpc::{Caller, EventHub, Id, Outbound, Response, Role, Router, Session, code};
 use pw_runtime::methods::RuntimeSource;
-use pw_runtime::{Layer, LoginShell, RuntimeEnv, RuntimeProvider};
+use pw_runtime::{Cancel, Layer, LoginShell, ProviderError, RuntimeEnv, RuntimeProvider};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -413,7 +413,12 @@ impl RuntimeProvider for PrependProvider {
     fn applies_to(&self, _dir: &Path, _base: &RuntimeEnv) -> bool {
         true
     }
-    fn resolve(&self, _dir: &Path, base: &RuntimeEnv) -> Result<Layer, String> {
+    fn resolve(
+        &self,
+        _dir: &Path,
+        base: &RuntimeEnv,
+        _cancel: &Cancel,
+    ) -> Result<Layer, ProviderError> {
         let mut env = base.clone();
         let mut path = self.0.clone().into_os_string();
         path.push(":");
