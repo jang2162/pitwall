@@ -58,7 +58,21 @@ function setup(
       return () => listeners.delete(listener);
     },
   });
-  const ctx: EditorFeatureContext = { ...baseContext, syntax: sessions, ...context };
+  // 뷰가 세션에 묻는 횟수(세션이 서버를 부르지 않고 답하는 것까지 센다).
+  let asked = 0;
+  const counted: SyntaxSessions = {
+    acquire(path, language) {
+      const handle = sessions.acquire(path, language);
+      return {
+        get version() {
+          return handle.version;
+        },
+        highlights: (range) => (asked++, handle.highlights(range)),
+        release: () => handle.release(),
+      };
+    },
+  };
+  const ctx: EditorFeatureContext = { ...baseContext, syntax: counted, ...context };
   const view = new EditorView({
     parent: document.body,
     state: EditorState.create({ doc, extensions: editorExtensions(ctx) }),
@@ -73,7 +87,7 @@ function setup(
       }
     },
   });
-  return { server, view, sessions, ctx };
+  return { server, view, ctx, asked: () => asked };
 }
 
 /** 뷰에 칠한 강조: `[from, to, 토큰 클래스]`. */
@@ -202,7 +216,7 @@ it("stays plain text without a language, without a session, or when the judgment
 });
 
 it("stops asking and clears the colors for a language without a grammar", async () => {
-  const { view, server, ctx } = setup("fn a");
+  const { view, server, ctx, asked } = setup("fn a");
   await vi.waitFor(() => expect(painted(view)).toHaveLength(1));
   view.dispatch(reconfigureEditor({ ...ctx, language: "Nope" }));
   await vi.waitFor(() => expect(server.called("open")).toHaveLength(2));
@@ -210,10 +224,10 @@ it("stops asking and clears the colors for a language without a grammar", async 
   expect(painted(view)).toEqual([]);
   // 앞 언어의 문서는 닫았다.
   expect(server.called("close")).toHaveLength(1);
-  const asked = server.called("highlights").length;
+  const before = asked();
   view.dispatch({ changes: { from: 0, insert: "x" } });
   await new Promise((r) => setTimeout(r, 10));
-  expect(server.called("highlights")).toHaveLength(asked);
+  expect(asked()).toBe(before);
   view.destroy();
   expect(server.called("close")).toHaveLength(1);
 });
