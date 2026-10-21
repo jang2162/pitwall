@@ -2,7 +2,8 @@
 //! 않게 한다.
 //!
 //! - 경로는 절대 경로만 받고, 프로젝트 레지스트리와 **같은 함수**([`pw_core::registry::path::normalize`])로 정규화한다. 루트도
-//!   등록할 때 같은 함수를 지났으므로 구성 요소 단위 접두사로 비교한다.
+//!   등록할 때 같은 함수를 지났으므로 구성 요소 단위 접두사로 비교한다. 요청마다 루트가 지금도 그 실제 경로로 풀리는지 본다
+//!   ([`Roots::confirmed`]) — 루트 폴더를 지우고 같은 이름의 루트 밖 링크를 두면 그 루트는 쓰지 않는다.
 //! - **읽기**(목록 · 상태 · 읽기): 심링크를 끝까지 푼 실제 경로가 루트 안일 때만. 루트 안 링크(pnpm 의 `node_modules` →
 //!   `node_modules/.pnpm/…`)는 따라 읽고, 실제 대상이 루트 밖인 링크는 따르지 않는다 — 클론한 저장소에 든 링크 하나
 //!   (`docs -> ../../..`, `sys -> /etc`)로 디스크를 열지 않게. 중간 구성 요소가 링크여도(`root/up/secret`, `up -> ..`) 같은
@@ -71,6 +72,18 @@ impl Roots {
         let mut out: Vec<PathBuf> = roots
             .into_iter()
             .filter_map(|r| normalize(&r).ok())
+            .collect();
+        out.dedup();
+        Self(out)
+    }
+
+    /// 확정해 둔 실제 경로들(등록 · 워크트리 계산 때 [`normalize`] 를 지난 루트). 지금은 다른 실제 경로로 풀리는 것(루트를 지우고
+    /// 같은 이름의 링크를 둠)은 버린다 — 그 루트 아래 요청은 루트 밖으로 거절된다. 다시 정규화해 받으면 링크 너머가 루트가 된다.
+    /// 상대 경로도 버린다.
+    pub fn confirmed(roots: impl IntoIterator<Item = PathBuf>) -> Self {
+        let mut out: Vec<PathBuf> = roots
+            .into_iter()
+            .filter(|root| normalize(root).is_ok_and(|real| &real == root))
             .collect();
         out.dedup();
         Self(out)

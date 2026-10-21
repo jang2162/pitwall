@@ -236,6 +236,38 @@ fn symlinks_are_followed_only_into_the_roots() {
     assert_eq!(fs::read_to_string(root.join("real.txt")).unwrap(), "after");
 }
 
+/// 등록한 루트 폴더를 지우고 같은 이름의 루트 밖 링크를 두면(리뷰 L7) 그 루트는 더 쓰지 않는다 — 링크 너머가 루트가 되지 않는다.
+#[cfg(unix)]
+#[test]
+fn a_root_swapped_to_an_outside_link_is_not_a_root() {
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    fs::write(root.join("a.txt"), "inside").unwrap();
+    assert!(f.fs.list(&Fixture::at(&id, &root)).is_ok());
+
+    let outside = f.base.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("root_swap_secret.rs"), "secret").unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(&outside, &root).unwrap();
+
+    let secret = root.join("root_swap_secret.rs");
+    let p = Fixture::at(&id, &secret);
+    for err in [
+        f.fs.list(&Fixture::at(&id, &root)).unwrap_err(),
+        f.read(&id, &secret).unwrap_err(),
+        f.fs.stat(&p).unwrap_err(),
+        f.write(&id, &secret, "pwned", None).unwrap_err(),
+    ] {
+        assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
+    }
+    assert_eq!(
+        fs::read_to_string(outside.join("root_swap_secret.rs")).unwrap(),
+        "secret"
+    );
+}
+
 /// 활성 워크트리 안의 프로젝트 루트도 접근 범위다. 그 워크트리를 넘기지 않으면 밖이다.
 #[test]
 fn the_active_worktree_is_inside_the_roots() {

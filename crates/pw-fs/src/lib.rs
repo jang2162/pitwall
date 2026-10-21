@@ -110,7 +110,8 @@ impl Fs {
         let _ = self.projects.set(projects);
     }
 
-    /// 프로젝트의 등록 루트와, `worktree` 가 있으면 그 워크트리 안의 프로젝트 루트.
+    /// 프로젝트의 등록 루트와, `worktree` 가 있으면 그 워크트리 안의 프로젝트 루트. 지금 다른 실제 경로로 풀리는 루트는 뺀다
+    /// ([`Roots::confirmed`]).
     pub fn roots(&self, project_id: &str, worktree: Option<&str>) -> Result<Roots, RpcError> {
         let projects = self.projects.get().ok_or_else(|| {
             RpcError::internal("the file system service is not attached to a project registry")
@@ -120,7 +121,7 @@ impl Fs {
         if let Some(top) = worktree {
             roots.push(worktree_root(&project, top)?);
         }
-        Ok(Roots::new(roots))
+        Ok(Roots::confirmed(roots))
     }
 
     pub fn list(&self, params: &FsPathParams) -> Result<FsList, RpcError> {
