@@ -1,9 +1,11 @@
 //! 파일 시스템 서비스(`docs/design/12-m1-plan.md` M1-01): 프로젝트 루트 안의 목록 · 상태 · 읽기 · 원자 쓰기.
 //!
 //! - [`scope`]: 접근 범위(결정 M1-D8) — 프로젝트 루트(활성 워크트리 포함) 밖 경로를 거절한다.
-//! - [`judge`]: 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM)과 크기 등급(결정 M1-D9)의 기준값.
+//! - [`limits`]: 대용량 · 특수 파일 기준값(결정 M1-D9 · M1-D10). 검색 · 구문 강조 · 에디터가 함께 쓴다.
+//! - [`judge`]: 판정(텍스트/바이너리 · 인코딩 짐작 · 줄바꿈 · BOM)과 크기 등급.
 //! - [`list`]: 폴더 한 단계 목록과 ignore 여부.
 //! - [`read`]: 전체 · 범위 읽기와 `version`.
+//! - [`bytes`]: hex 뷰어의 페이지 읽기 `fs.readBytes`(M1-23) — 판정 없이 요청한 범위만.
 //! - [`write`]: 임시 파일 → rename 원자 쓰기.
 //! - [`ops`]: 파일 조작(M1-21) — `fs.create` · `fs.rename` · `fs.copy` · `fs.trash`, Finder 드롭 들여오기.
 //! - [`search`]: 텍스트 검색 `search.text`(M1-07) 스트림.
@@ -11,10 +13,12 @@
 //! - [`watch`]: 파일 감시(M1-06) — `fs.watch` 스트림과 `fs.changed` 이벤트.
 //! - [`index`]: 파일 목록 인덱스와 퍼지 매칭 `search.files`(M1-12).
 
+pub mod bytes;
 pub mod handle;
 mod ignore_rules;
 pub mod index;
 pub mod judge;
+pub mod limits;
 pub mod list;
 pub mod methods;
 pub mod ops;
@@ -37,7 +41,8 @@ use pw_core::registry::path::{normalize, worktree_link};
 use pw_core::registry::{Project, Registry as Projects};
 use pw_rpc::{FileScope, RpcError, code};
 
-use crate::judge::{Bom, READ_ONLY_MAX, SNIFF_BYTES, judge, size_class};
+use crate::judge::{Bom, Judgment, judge, size_class};
+use crate::limits::{READ_ONLY_MAX, SNIFF_BYTES};
 use crate::list::{EntryKind, mtime_ms};
 use crate::methods::{
     FsContent, FsList, FsPathParams, FsRead, FsReadParams, FsStat, FsWriteParams, FsWritten,
@@ -238,7 +243,7 @@ impl Fs {
                 offset: 0,
                 eof: true,
                 version: Some(snap.version()),
-                content: content(params.bytes, judgment.binary, &snap.bytes, start),
+                content: content(params.bytes, &judgment, &snap.bytes, start),
                 judgment,
             });
         }
@@ -264,7 +269,7 @@ impl Fs {
             offset,
             eof,
             version: None,
-            content: content(params.bytes, judgment.binary, &range.bytes, start),
+            content: content(params.bytes, &judgment, &range.bytes, start),
             judgment,
         })
     }
@@ -351,16 +356,21 @@ impl Fs {
     }
 }
 
-/// 텍스트(UTF-8, 앞의 BOM 을 뺀 것)로 보낼 수 있으면 텍스트, 아니면 바이트 그대로 base64.
-fn content(force_bytes: bool, binary: bool, raw: &[u8], start: usize) -> FsContent {
-    if !force_bytes
-        && !binary
-        && let Ok(text) = std::str::from_utf8(&raw[start..])
-        && (start == 0 || raw.starts_with(UTF8_BOM))
-    {
-        return FsContent::Text {
-            text: text.to_owned(),
-        };
+/// 텍스트면 텍스트(앞의 BOM 을 뺀 것), 바이너리 · `bytes` 요청이면 바이트 그대로 base64. UTF-8 이 아닌 텍스트(UTF-16 · 짐작한
+/// 인코딩)는 판정의 인코딩으로 풀어 보낸다 — 판정이 `editable` 이 아니므로 받는 쪽이 그 텍스트를 UTF-8 로 다시 쓰지 않는다(결정
+/// M1-D12). 글자 중간에서 끊긴 UTF-8 범위도 풀어 보내고 끝의 미완성 글자는 U+FFFD 가 된다.
+fn content(force_bytes: bool, judgment: &Judgment, raw: &[u8], start: usize) -> FsContent {
+    if !force_bytes && !judgment.binary {
+        if let Ok(text) = std::str::from_utf8(&raw[start..])
+            && (start == 0 || raw.starts_with(UTF8_BOM))
+        {
+            return FsContent::Text {
+                text: text.to_owned(),
+            };
+        }
+        if let Some(text) = judge::decode(judgment.encoding.as_deref(), &raw[start..]) {
+            return FsContent::Text { text };
+        }
     }
     FsContent::Base64 {
         data: BASE64.encode(raw),

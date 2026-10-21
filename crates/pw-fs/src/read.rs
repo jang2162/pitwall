@@ -8,7 +8,7 @@ use std::time::UNIX_EPOCH;
 
 use sha2::{Digest as _, Sha256};
 
-use crate::judge::SNIFF_BYTES;
+use crate::limits::SNIFF_BYTES;
 
 /// 한 번에 읽은 파일 내용과 그 순간의 메타데이터.
 pub struct Snapshot {

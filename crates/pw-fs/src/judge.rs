@@ -1,18 +1,10 @@
-//! 읽은 바이트의 판정과 크기 등급. 기준값은 `docs/design/12-m1-plan.md` 결정 M1-D9(대용량) · M1-D12(인코딩)이고, 에디터 ·
-//! 검색 · 인덱스(M1-07 · M1-12 · M1-17 · M1-23)가 이 상수를 함께 쓴다.
+//! 읽은 바이트의 판정과 크기 등급. 기준값은 [`crate::limits`](결정 M1-D9)이고, UTF-8 이 아닌 텍스트는 인코딩을 짐작한다(결정
+//! M1-D12, `chardetng`).
 
+use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use serde::{Deserialize, Serialize};
 
-const MIB: u64 = 1024 * 1024;
-
-/// 바이너리 판정에 보는 파일 앞부분.
-pub const SNIFF_BYTES: usize = 8 * 1024;
-/// 이 크기까지는 편집 + 강조.
-pub const EDITABLE_MAX: u64 = 5 * MIB;
-/// 이 크기까지는 읽기 전용(강조 · 줄바꿈 끔). 넘으면 열지 않는다. 범위 읽기 한 번의 상한이기도 하다.
-pub const READ_ONLY_MAX: u64 = 50 * MIB;
-/// 한 줄이 이 글자 수를 넘으면 강조 · 줄바꿈을 끈다.
-pub const LONG_LINE_CHARS: usize = 10_000;
+use crate::limits::{EDITABLE_MAX, LONG_LINE_CHARS, READ_ONLY_MAX, SNIFF_BYTES};
 
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
@@ -103,8 +95,8 @@ pub enum LineEnding {
 pub struct Judgment {
     /// 파일 앞 8 KiB 에 NUL 이 있다(UTF-16 BOM 이 있으면 텍스트로 본다).
     pub binary: bool,
-    /// 읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE`). UTF-8 로 읽히지 않는 텍스트는 `null` 이다 —
-    /// 짐작은 M1-23(`encoding_rs` + `chardetng`)이 한다. 바이너리면 `null`.
+    /// 읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE` · 짐작한 것). UTF-16 은 BOM 으로, UTF-8 로 읽히지 않는
+    /// 텍스트는 `chardetng` 로 짐작한다(예: `EUC-KR` · `Shift_JIS` · `windows-1252`, 결정 M1-D12). 바이너리면 `null`.
     pub encoding: Option<String>,
     /// 파일 앞의 BOM.
     pub bom: Option<Bom>,
@@ -133,7 +125,7 @@ pub fn judge(head: &[u8], body: &[u8], size: u64, truncated: bool) -> Judgment {
     } else if is_utf8(body, truncated) {
         Some("UTF-8".to_owned())
     } else {
-        None
+        Some(guess_encoding(body, truncated).name().to_owned())
     };
     let scan = Scan::of(body);
     let size_class = size_class(size);
@@ -148,6 +140,25 @@ pub fn judge(head: &[u8], body: &[u8], size: u64, truncated: bool) -> Judgment {
         long_lines: scan.long_lines,
         size_class,
     }
+}
+
+/// 짐작에 보는 앞부분. 짐작은 앞부분의 바이트 분포로 충분하고, 50 MiB 를 다 먹이면 열기가 그만큼 늦다.
+const GUESS_BYTES: usize = 64 * 1024;
+
+/// UTF-8 로 읽히지 않는 텍스트의 인코딩. UTF-8 은 답으로 받지 않는다(이미 아니다). ISO-2022-JP 는 7비트라 UTF-8 로 읽히므로 여기
+/// 오지 않는다.
+fn guess_encoding(body: &[u8], truncated: bool) -> &'static encoding_rs::Encoding {
+    let fed = &body[..body.len().min(GUESS_BYTES)];
+    let mut detector = EncodingDetector::new(Iso2022JpDetection::Deny);
+    detector.feed(fed, !truncated && fed.len() == body.len());
+    detector.guess(None, Utf8Detection::Deny)
+}
+
+/// 판정한 인코딩으로 텍스트를 푼다. `bytes` 는 BOM 을 뗀 것이다. 모르는 이름 · 바이너리(`None`)면 `None`. 풀 수 없는 바이트는
+/// U+FFFD 가 된다(끊긴 범위의 끝 글자 포함).
+pub fn decode(encoding: Option<&str>, bytes: &[u8]) -> Option<String> {
+    let encoding = encoding_rs::Encoding::for_label(encoding?.as_bytes())?;
+    Some(encoding.decode_without_bom_handling(bytes).0.into_owned())
 }
 
 /// 끊긴 범위면 끝의 미완성 글자는 받는다.
@@ -272,12 +283,12 @@ mod tests {
     }
 
     #[test]
-    fn invalid_utf8_has_no_encoding_and_is_not_editable() {
+    fn invalid_utf8_is_not_utf8_and_is_not_editable() {
         // EUC-KR 「한글」.
         let file = b"\xC7\xD1\xB1\xDB\n";
         let j = judge(file, file, 5, false);
         assert!(!j.binary);
-        assert_eq!(j.encoding, None);
+        assert_ne!(j.encoding.as_deref(), Some("UTF-8"));
         assert!(!j.editable);
         assert!(j.highlight);
         // 범위 읽기가 글자 중간에서 끊겼으면 끝의 미완성 글자는 받는다.
@@ -286,7 +297,47 @@ mod tests {
             judge(cut, &cut[..4], 100, true).encoding.as_deref(),
             Some("UTF-8")
         );
-        assert_eq!(judge(cut, &cut[..4], 4, false).encoding, None);
+        assert_ne!(
+            judge(cut, &cut[..4], 4, false).encoding.as_deref(),
+            Some("UTF-8")
+        );
+    }
+
+    #[test]
+    fn euc_kr_text_is_guessed_and_decodes_to_hangul() {
+        let hangul =
+            "// 한글 주석입니다. 파일을 읽기 전용으로 엽니다.\nlet 이름 = \"가나다라마바사\";\n";
+        let (bytes, _, lossy) = encoding_rs::EUC_KR.encode(hangul);
+        assert!(!lossy);
+        let j = judge(&bytes, &bytes, bytes.len() as u64, false);
+        assert!(!j.binary);
+        assert_eq!(j.encoding.as_deref(), Some("EUC-KR"));
+        assert!(!j.editable, "UTF-8 만 편집한다(결정 M1-D12)");
+        assert_eq!(
+            decode(j.encoding.as_deref(), &bytes).as_deref(),
+            Some(hangul)
+        );
+
+        // Shift_JIS 도 같은 길이다.
+        let japanese = "日本語のテキストファイルです。読み取り専用で開きます。\n";
+        let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(japanese);
+        let j = judge(&bytes, &bytes, bytes.len() as u64, false);
+        assert_eq!(j.encoding.as_deref(), Some("Shift_JIS"));
+        assert_eq!(
+            decode(j.encoding.as_deref(), &bytes).as_deref(),
+            Some(japanese)
+        );
+    }
+
+    #[test]
+    fn utf16_with_a_bom_decodes_and_binary_does_not() {
+        let file = b"\xFF\xFEa\0\x5C\xD5";
+        let j = judge(file, &file[2..], 6, false);
+        assert_eq!(
+            decode(j.encoding.as_deref(), &file[2..]).as_deref(),
+            Some("a한")
+        );
+        assert_eq!(decode(None, b"\0\x01"), None);
     }
 
     #[test]

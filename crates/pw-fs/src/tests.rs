@@ -509,8 +509,8 @@ fn ranges_have_no_version_and_large_files_need_a_range() {
     let huge = root.join("huge.bin");
     let file = fs::File::create(&huge).unwrap();
     for (size, class) in [
-        (judge::EDITABLE_MAX, SizeClass::Editable),
-        (judge::EDITABLE_MAX + 1, SizeClass::ReadOnly),
+        (crate::limits::EDITABLE_MAX, SizeClass::Editable),
+        (crate::limits::EDITABLE_MAX + 1, SizeClass::ReadOnly),
         (READ_ONLY_MAX, SizeClass::ReadOnly),
         (READ_ONLY_MAX + 1, SizeClass::TooLarge),
     ] {
@@ -870,4 +870,179 @@ fn a_file_swapped_to_a_fifo_before_opening_is_refused() {
         format!("{:?}", err.data).contains("is not a regular file"),
         "{err:?}"
     );
+}
+
+/// M1-23(결정 M1-D12): UTF-8 이 아닌 텍스트는 짐작한 인코딩으로 풀려 오고 편집할 수 없다.
+#[test]
+fn euc_kr_files_read_as_hangul_and_are_not_editable() {
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    let hangul =
+        "// 한글 주석입니다. 이 파일은 EUC-KR 로 저장되어 있습니다.\nlet 이름 = \"가나다\";\n";
+    let (bytes, _, lossy) = encoding_rs::EUC_KR.encode(hangul);
+    assert!(!lossy);
+    let path = root.join("euc-kr.txt");
+    fs::write(&path, &bytes).unwrap();
+
+    let read = f.read(&id, &path).unwrap();
+    assert_eq!(read.judgment.encoding.as_deref(), Some("EUC-KR"));
+    assert!(!read.judgment.binary && !read.judgment.editable);
+    assert_eq!(text(&read), hangul);
+    // 바이트로 달라고 하면 원래 바이트다.
+    let raw =
+        f.fs.read(&FsReadParams {
+            project_id: id.clone(),
+            path: path.display().to_string(),
+            bytes: true,
+            ..FsReadParams::default()
+        })
+        .unwrap();
+    assert_eq!(
+        raw.content,
+        FsContent::Base64 {
+            data: BASE64.encode(&bytes)
+        }
+    );
+}
+
+/// M1-23(결정 M1-D9): 기준값 경계 ±1 바이트 파일의 판정. 크기 등급은 stat 으로, 편집 · 강조 여부는 전체 읽기로 본다.
+#[test]
+fn size_thresholds_hold_one_byte_either_side() {
+    use crate::limits::{EDITABLE_MAX, LONG_LINE_CHARS};
+
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    // 100자마다 줄바꿈인 텍스트.
+    let text_of = |size: u64| -> Vec<u8> {
+        (0..size)
+            .map(|i| if i % 101 == 100 { b'\n' } else { b'a' })
+            .collect()
+    };
+    for (size, class, editable) in [
+        (EDITABLE_MAX - 1, SizeClass::Editable, true),
+        (EDITABLE_MAX, SizeClass::Editable, true),
+        (EDITABLE_MAX + 1, SizeClass::ReadOnly, false),
+        (READ_ONLY_MAX - 1, SizeClass::ReadOnly, false),
+        (READ_ONLY_MAX, SizeClass::ReadOnly, false),
+    ] {
+        let path = root.join(format!("{size}.txt"));
+        fs::write(&path, text_of(size)).unwrap();
+        let stat = f.fs.stat(&Fixture::at(&id, &path)).unwrap();
+        assert_eq!(stat.size_class, Some(class), "{size}");
+        let read = f.read(&id, &path).unwrap();
+        let j = &read.judgment;
+        assert_eq!(
+            (j.size_class, j.editable, j.highlight),
+            (class, editable, editable),
+            "{size}"
+        );
+        fs::remove_file(&path).unwrap();
+    }
+    // 50 MiB + 1 은 stat 만으로 「열지 않음」 이고 전체 읽기는 거절한다.
+    let path = root.join("over.txt");
+    fs::write(&path, text_of(READ_ONLY_MAX + 1)).unwrap();
+    let stat = f.fs.stat(&Fixture::at(&id, &path)).unwrap();
+    assert_eq!(stat.size_class, Some(SizeClass::TooLarge));
+    assert_eq!(f.read(&id, &path).unwrap_err().code, code::INVALID_PARAMS);
+
+    // 1만 자 줄은 강조, 1만 1자 줄은 강조 · 줄바꿈 끔(편집은 된다).
+    for (chars, highlight) in [(LONG_LINE_CHARS, true), (LONG_LINE_CHARS + 1, false)] {
+        let path = root.join(format!("line-{chars}.js"));
+        fs::write(&path, format!("a\n{}\nb\n", "x".repeat(chars))).unwrap();
+        let j = f.read(&id, &path).unwrap().judgment;
+        assert_eq!(
+            (j.highlight, j.long_lines, j.editable),
+            (highlight, !highlight, true)
+        );
+    }
+}
+
+/// M1-23: 1 GB 파일은 stat 만으로 「열지 않음」 이고(내용을 읽지 않는다), hex 의 끝 페이지는 그 페이지만 읽는다(`bytes.rs` 의
+/// `a_page_reads_only_its_own_bytes` 가 읽은 바이트를 센다).
+#[test]
+fn a_1_gib_file_is_judged_by_stat_and_its_last_page_is_read_alone() {
+    use std::io::{Seek as _, SeekFrom, Write as _};
+
+    use crate::bytes::FsReadBytesParams;
+    use crate::limits::HEX_PAGE_BYTES;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    let path = root.join("huge.bin");
+    // 희소 파일: 끝 4바이트만 디스크에 있다.
+    let mut file = fs::File::create(&path).unwrap();
+    file.set_len(GIB).unwrap();
+    file.seek(SeekFrom::Start(GIB - 4)).unwrap();
+    file.write_all(b"END\n").unwrap();
+    drop(file);
+
+    let started = std::time::Instant::now();
+    let stat = f.fs.stat(&Fixture::at(&id, &path)).unwrap();
+    assert_eq!(
+        (stat.size, stat.size_class),
+        (GIB, Some(SizeClass::TooLarge))
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+
+    let page = |offset: u64, length: u64| {
+        f.fs.read_bytes(&FsReadBytesParams {
+            project_id: id.clone(),
+            worktree: None,
+            path: path.display().to_string(),
+            offset,
+            length,
+        })
+    };
+    let last = page(GIB - HEX_PAGE_BYTES, HEX_PAGE_BYTES).unwrap();
+    let data = BASE64.decode(&last.data).unwrap();
+    assert_eq!(data.len() as u64, HEX_PAGE_BYTES);
+    assert!(data.ends_with(b"END\n"));
+    assert_eq!(
+        (last.offset, last.size, last.eof),
+        (GIB - HEX_PAGE_BYTES, GIB, true)
+    );
+    let middle = page(GIB / 2, 16).unwrap();
+    assert!(!middle.eof);
+    assert_eq!(BASE64.decode(&middle.data).unwrap(), vec![0; 16]);
+    // 끝을 넘는 범위는 빈 페이지다.
+    let past = page(GIB + 10, 16).unwrap();
+    assert!(past.data.is_empty() && past.eof);
+    // 한 번에 64 KiB 까지.
+    assert_eq!(
+        page(0, HEX_PAGE_BYTES + 1).unwrap_err().code,
+        code::INVALID_PARAMS
+    );
+}
+
+/// M1-23: FIFO 는 바이트 페이지로 열지 않는다 — 열면 쓰는 쪽이 올 때까지 멈춘다.
+#[cfg(unix)]
+#[test]
+fn fifos_are_not_read_as_byte_pages() {
+    use crate::bytes::FsReadBytesParams;
+
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    let fifo = root.join("pipe");
+    mkfifo(&fifo);
+
+    let stat = f.fs.stat(&Fixture::at(&id, &fifo)).unwrap();
+    assert_eq!((stat.kind, stat.size_class), (EntryKind::Other, None));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let params = FsReadBytesParams {
+        project_id: id,
+        worktree: None,
+        path: fifo.display().to_string(),
+        offset: 0,
+        length: 16,
+    };
+    std::thread::spawn(move || tx.send(f.fs.read_bytes(&params)).unwrap());
+    let got = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("fs.readBytes on a FIFO must not block");
+    assert_eq!(got.unwrap_err().code, code::INVALID_PARAMS);
 }

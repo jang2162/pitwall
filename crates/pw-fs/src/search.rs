@@ -44,7 +44,8 @@ use pw_rpc::{Router, RpcError, StreamSink, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::ignore_rules::{IgnoreRules, skip_ignore_files};
-use crate::judge::{Bom, EDITABLE_MAX, READ_ONLY_MAX, SNIFF_BYTES};
+use crate::judge::Bom;
+use crate::limits::{EDITABLE_MAX, READ_ONLY_MAX, SNIFF_BYTES};
 use crate::scope::Roots;
 use crate::{Fs, denied, io_error};
 

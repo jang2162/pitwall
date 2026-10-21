@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use pw_ext::{Registry, ResolvedLanguage};
-use pw_fs::judge::{EDITABLE_MAX, LONG_LINE_CHARS};
+use pw_fs::limits::{EDITABLE_MAX, LONG_LINE_CHARS};
 use pw_rpc::{RpcError, code};
 use tree_sitter::{InputEdit, Tree};
 

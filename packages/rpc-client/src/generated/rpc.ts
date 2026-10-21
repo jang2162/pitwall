@@ -43,6 +43,10 @@ export type UnaryMethods = {
 	 */
 	"fs.read": { params: FsReadParams; result: FsRead };
 	/**
+	 * 파일의 바이트 범위(64 KiB 까지)를 판정 없이 읽는다(hex 뷰어의 페이지). 일반 파일만.
+	 */
+	"fs.readBytes": { params: FsReadBytesParams; result: FsBytes };
+	/**
 	 * 항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는
 	 * 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 바꾼다(macOS · Windows).
 	 */
@@ -285,6 +289,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.create": {"name":"fs.create","kind":"unary","tier":"write","roles":["owner"],"params":"FsCreateParams","output":"FsCreated","doc":" 빈 파일이나 폴더를 만든다. 같은 이름이 있으면 아무것도 바꾸지 않고 `CONFLICT`(`data.path`).\n","mcp":false,"fileScope":false},
 	"fs.list": {"name":"fs.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsList","doc":" 폴더 한 단계의 항목(이름 · 종류 · 크기 · mtime · ignore 여부). 파일 트리가 펼칠 때 부른다.\n","mcp":false,"fileScope":false},
 	"fs.read": {"name":"fs.read","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsReadParams","output":"FsRead","doc":" 파일 전체 또는 범위를 읽고 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급)을 함께 준다. 전체 읽기는 50 MiB 까지,\n 그보다 큰 파일은 범위로 읽는다.\n","mcp":false,"fileScope":true},
+	"fs.readBytes": {"name":"fs.readBytes","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsReadBytesParams","output":"FsBytes","doc":" 파일의 바이트 범위(64 KiB 까지)를 판정 없이 읽는다(hex 뷰어의 페이지). 일반 파일만.\n","mcp":false,"fileScope":false},
 	"fs.rename": {"name":"fs.rename","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsMoved","doc":" 항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는\n 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 바꾼다(macOS · Windows).\n","mcp":false,"fileScope":false},
 	"fs.stat": {"name":"fs.stat","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsStat","doc":" 파일 · 폴더 하나의 상태와 파일의 크기 등급. 내용은 읽지 않는다.\n","mcp":false,"fileScope":true},
 	"fs.trash": {"name":"fs.trash","kind":"unary","tier":"write","roles":["owner"],"params":"FsTrashParams","output":"FsTrashed","doc":" 항목들을 OS 휴지통에 넣는다(`permanent` 면 영구히 지운다). 넣지 못한 것은 `failed` 에 이유와 함께.\n","mcp":false,"fileScope":false},
@@ -606,9 +611,27 @@ export type FileMatch = {
 	generated: boolean,
 };
 
+export type FsBytes = {
+	/**  정규화한 실제 경로. */
+	path: string,
+	/**  파일 전체 크기. */
+	size: number,
+	mtimeMs: number | null,
+	/**  읽은 범위의 시작(요청한 `offset`). */
+	offset: number,
+	/**  읽은 바이트, 표준 base64. 파일 끝을 넘는 부분은 없다. */
+	data: string,
+	/**  읽은 범위가 파일 끝까지 닿았다. */
+	eof: boolean,
+};
+
 /**  읽거나 쓸 내용. */
 export type FsContent = 
-/**  UTF-8 텍스트. 읽기에서는 파일 앞의 UTF-8 BOM 을 뺀 것이다(`judgment.bom` 이 알린다). */
+/**
+ *  UTF-8 텍스트. 읽기에서는 파일 앞의 BOM 을 뺀 것이다(`judgment.bom` 이 알린다). 판정의 인코딩이 UTF-8 이 아니면(UTF-16 ·
+ *  짐작한 인코딩) 그 인코딩에서 풀어 낸 것이고 `judgment.editable` 이 거짓이다 — 그 텍스트를 `fs.write` 로 되돌려 쓰면 원래 바이트가
+ *  바뀐다(결정 M1-D12).
+ */
 { kind: "text"; text: string } | 
 /**  바이트 그대로(BOM 포함), 표준 base64. */
 { kind: "base64"; data: string };
@@ -704,6 +727,18 @@ export type FsRead = {
 	content: FsContent,
 	/**  판정. 텍스트/바이너리 · BOM 은 파일 앞부분으로, 인코딩 · 줄바꿈 · 긴 줄은 읽은 범위로 정한다. */
 	judgment: Judgment,
+};
+
+export type FsReadBytesParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`fs.read` 와 같다). */
+	worktree?: string | null,
+	/**  절대 경로. */
+	path: string,
+	/**  시작 바이트. */
+	offset: number,
+	/**  최대 바이트. 64 KiB 까지. */
+	length: number,
 };
 
 export type FsReadParams = {
@@ -863,8 +898,8 @@ export type Judgment = {
 	/**  파일 앞 8 KiB 에 NUL 이 있다(UTF-16 BOM 이 있으면 텍스트로 본다). */
 	binary: boolean,
 	/**
-	 *  읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE`). UTF-8 로 읽히지 않는 텍스트는 `null` 이다 —
-	 *  짐작은 M1-23(`encoding_rs` + `chardetng`)이 한다. 바이너리면 `null`.
+	 *  읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE` · 짐작한 것). UTF-16 은 BOM 으로, UTF-8 로 읽히지 않는
+	 *  텍스트는 `chardetng` 로 짐작한다(예: `EUC-KR` · `Shift_JIS` · `windows-1252`, 결정 M1-D12). 바이너리면 `null`.
 	 */
 	encoding: string | null,
 	/**  파일 앞의 BOM. */

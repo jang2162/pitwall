@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pw_ext::Registry;
-use pw_fs::judge::{EDITABLE_MAX, LONG_LINE_CHARS};
+use pw_fs::limits::{EDITABLE_MAX, LONG_LINE_CHARS};
 use pw_rpc::{Caller, EventHub, Role, Router, Session, code};
 use semver::Version;
 

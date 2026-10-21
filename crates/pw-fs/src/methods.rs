@@ -93,7 +93,9 @@ pub struct FsReadParams {
     rename_all_fields = "camelCase"
 )]
 pub enum FsContent {
-    /// UTF-8 텍스트. 읽기에서는 파일 앞의 UTF-8 BOM 을 뺀 것이다(`judgment.bom` 이 알린다).
+    /// UTF-8 텍스트. 읽기에서는 파일 앞의 BOM 을 뺀 것이다(`judgment.bom` 이 알린다). 판정의 인코딩이 UTF-8 이 아니면(UTF-16 ·
+    /// 짐작한 인코딩) 그 인코딩에서 풀어 낸 것이고 `judgment.editable` 이 거짓이다 — 그 텍스트를 `fs.write` 로 되돌려 쓰면 원래 바이트가
+    /// 바뀐다(결정 M1-D12).
     Text { text: String },
     /// 바이트 그대로(BOM 포함), 표준 base64.
     Base64 { data: String },
@@ -204,6 +206,7 @@ pub fn register(router: &mut Router, fs: Arc<Fs>) {
     let (list, stat, read) = (Arc::clone(&fs), Arc::clone(&fs), Arc::clone(&fs));
     crate::search::register(router, Arc::clone(&fs));
     crate::ops::register(router, Arc::clone(&fs));
+    crate::bytes::register(router, Arc::clone(&fs));
     router
         .unary(FsListMethod, move |_ctx, params: FsPathParams| {
             let s = Arc::clone(&list);

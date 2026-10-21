@@ -1149,7 +1149,7 @@
             "description": "읽거나 쓸 내용.",
             "oneOf": [
               {
-                "description": "UTF-8 텍스트. 읽기에서는 파일 앞의 UTF-8 BOM 을 뺀 것이다(`judgment.bom` 이 알린다).",
+                "description": "UTF-8 텍스트. 읽기에서는 파일 앞의 BOM 을 뺀 것이다(`judgment.bom` 이 알린다). 판정의 인코딩이 UTF-8 이 아니면(UTF-16 ·\n짐작한 인코딩) 그 인코딩에서 풀어 낸 것이고 `judgment.editable` 이 거짓이다 — 그 텍스트를 `fs.write` 로 되돌려 쓰면 원래 바이트가\n바뀐다(결정 M1-D12).",
                 "properties": {
                   "kind": {
                     "const": "text",
@@ -1207,7 +1207,7 @@
                 "type": "boolean"
               },
               "encoding": {
-                "description": "읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE`). UTF-8 로 읽히지 않는 텍스트는 `null` 이다 —\n짐작은 M1-23(`encoding_rs` + `chardetng`)이 한다. 바이너리면 `null`.",
+                "description": "읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE` · 짐작한 것). UTF-16 은 BOM 으로, UTF-8 로 읽히지 않는\n텍스트는 `chardetng` 로 짐작한다(예: `EUC-KR` · `Shift_JIS` · `windows-1252`, 결정 M1-D12). 바이너리면 `null`.",
                 "type": [
                   "string",
                   "null"
@@ -1338,6 +1338,100 @@
           "version",
           "content",
           "judgment"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "fs.readBytes": {
+      "description": "파일의 바이트 범위(64 KiB 까지)를 판정 없이 읽는다(hex 뷰어의 페이지). 일반 파일만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "length": {
+            "description": "최대 바이트. 64 KiB 까지.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "시작 바이트.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "절대 경로.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`fs.read` 와 같다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "offset",
+          "length"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "description": "읽은 바이트, 표준 base64. 파일 끝을 넘는 부분은 없다.",
+            "type": "string"
+          },
+          "eof": {
+            "description": "읽은 범위가 파일 끝까지 닿았다.",
+            "type": "boolean"
+          },
+          "mtimeMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "읽은 범위의 시작(요청한 `offset`).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "정규화한 실제 경로.",
+            "type": "string"
+          },
+          "size": {
+            "description": "파일 전체 크기.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "mtimeMs",
+          "offset",
+          "data",
+          "eof"
         ],
         "type": "object"
       },
@@ -1746,7 +1840,7 @@
             "description": "읽거나 쓸 내용.",
             "oneOf": [
               {
-                "description": "UTF-8 텍스트. 읽기에서는 파일 앞의 UTF-8 BOM 을 뺀 것이다(`judgment.bom` 이 알린다).",
+                "description": "UTF-8 텍스트. 읽기에서는 파일 앞의 BOM 을 뺀 것이다(`judgment.bom` 이 알린다). 판정의 인코딩이 UTF-8 이 아니면(UTF-16 ·\n짐작한 인코딩) 그 인코딩에서 풀어 낸 것이고 `judgment.editable` 이 거짓이다 — 그 텍스트를 `fs.write` 로 되돌려 쓰면 원래 바이트가\n바뀐다(결정 M1-D12).",
                 "properties": {
                   "kind": {
                     "const": "text",

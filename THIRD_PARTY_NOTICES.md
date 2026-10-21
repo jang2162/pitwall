@@ -5899,7 +5899,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License (MIT)
 
-Used by: encoding_rs 0.8.35, utf8_iter 1.0.4
+Used by: chardetng 1.0.0, encoding_rs 0.8.35, utf8_iter 1.0.4
 
 ```text
 Copyright Mozilla Foundation
