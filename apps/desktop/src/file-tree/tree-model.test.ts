@@ -150,6 +150,72 @@ describe("FileTreeModel", () => {
     expect(names(model)).toEqual(["r/", "  a/", "    new.rs"]);
   });
 
+  it("re-reads the folder of a path that arrives as modified but is not in its listing (rename, atomic write)", async () => {
+    const disk = fakeDisk({ r: { a: { "x.rs": "" } } });
+    const model = new FileTreeModel({ list: disk.list });
+    await model.setRoot("/r");
+    await model.expand("/r/a");
+    disk.calls.length = 0;
+    // 루트 밖에서 옮겨 온 파일 · Linux 의 원자 쓰기로 새로 만든 파일은 대상 경로의 `modified` 하나로만 온다.
+    (disk.tree.r as Node).a = { "moved.rs": "", "x.rs": "" };
+    await model.applyChange(change([["/r/a/moved.rs", "modified"]]));
+    expect(disk.calls).toEqual(["/r/a"]);
+    expect(names(model)).toEqual(["r/", "  a/", "    moved.rs", "    x.rs"]);
+
+    // 이미 있는 파일의 내용이 바뀐 것은 부모를 다시 읽지 않는다.
+    disk.calls.length = 0;
+    await model.applyChange(change([["/r/a/x.rs", "modified"]]));
+    expect(disk.calls).toEqual([]);
+  });
+
+  it("moves a file between expanded folders (removed in one, modified in the other)", async () => {
+    const disk = fakeDisk({ r: { a: { "x.rs": "" }, b: { "y.rs": "" } } });
+    const model = new FileTreeModel({ list: disk.list });
+    await model.setRoot("/r");
+    await model.expand("/r/a");
+    await model.expand("/r/b");
+    disk.tree.r = { a: {}, b: { "x.rs": "", "y.rs": "" } };
+    await model.applyChange(
+      change([
+        ["/r/a/x.rs", "removed"],
+        ["/r/b/x.rs", "modified"],
+      ]),
+    );
+    expect(names(model)).toEqual(["r/", "  a/", "  b/", "    x.rs", "    y.rs"]);
+  });
+
+  it("re-reads the parent when a folder it has read turns into a file", async () => {
+    const disk = fakeDisk({ r: { a: { "x.rs": "" } } });
+    const model = new FileTreeModel({ list: disk.list });
+    await model.setRoot("/r");
+    await model.expand("/r/a");
+    // 한 디바운스 창 안의 `rm -r a; touch a` 는 `a` 의 `modified` 하나로 온다.
+    disk.tree.r = { a: "" };
+    await model.applyChange(change([["/r/a", "modified"]]));
+    expect(names(model)).toEqual(["r/", "  a"]);
+    expect(model.isExpanded("/r/a")).toBe(false);
+  });
+
+  it("reads the parent only once when a changed folder is still a folder but cannot be read", async () => {
+    const disk = fakeDisk({ r: { a: { "x.rs": "" } } });
+    let denied = false;
+    const list = vi.fn(async (path: string) => {
+      if (denied && path === "/r/a") {
+        disk.calls.push(path);
+        throw new Error("permission denied");
+      }
+      return disk.list(path);
+    });
+    const model = new FileTreeModel({ list });
+    await model.setRoot("/r");
+    await model.expand("/r/a");
+    denied = true;
+    disk.calls.length = 0;
+    await model.applyChange(change([["/r/a", "modified"]]));
+    expect(disk.calls).toEqual(["/r/a", "/r"]);
+    expect(model.rows().find((r) => r.entry.path === "/r/a")?.error).toBe("permission denied");
+  });
+
   it("only re-reads expanded folders; a collapsed folder is re-read when it is expanded again", async () => {
     const disk = fakeDisk({ r: { a: { "x.rs": "" }, b: {} } });
     const model = new FileTreeModel({ list: disk.list });
@@ -167,6 +233,57 @@ describe("FileTreeModel", () => {
     disk.calls.length = 0;
     await model.applyChange(change([["/r/b/q/z.rs", "created"]]));
     expect(disk.calls).toEqual([]);
+  });
+
+  it("re-reads folders left expanded inside a collapsed parent when the parent is expanded again", async () => {
+    const disk = fakeDisk({ r: { a: { b: { c: { "x.rs": "" } } } } });
+    const model = new FileTreeModel({ list: disk.list });
+    await model.setRoot("/r");
+    await model.expand("/r/a");
+    await model.expand("/r/a/b");
+    await model.expand("/r/a/b/c");
+    model.collapse("/r/a");
+    disk.calls.length = 0;
+    // 보이지 않는 b · c 는 낡았다고만 표시되고, 부모 a 의 목록은 낡지 않았다.
+    (((disk.tree.r as Node).a as Node).b as Node) = { c: { "x.rs": "" }, "new.rs": "" };
+    ((((disk.tree.r as Node).a as Node).b as Node).c as Node)["y.rs"] = "";
+    await model.applyChange(
+      change([
+        ["/r/a/b/new.rs", "created"],
+        ["/r/a/b/c/y.rs", "created"],
+      ]),
+    );
+    expect(disk.calls).toEqual([]);
+    await model.expand("/r/a");
+    expect(disk.calls.sort()).toEqual(["/r/a/b", "/r/a/b/c"]);
+    expect(names(model)).toEqual([
+      "r/",
+      "  a/",
+      "    b/",
+      "      c/",
+      "        x.rs",
+      "        y.rs",
+      "      new.rs",
+    ]);
+
+    // 낡은 것이 두 단계 아래에만 있어도(사이의 b 는 낡지 않았다) 읽는다.
+    const c = (((disk.tree.r as Node).a as Node).b as Node).c as Node;
+    model.collapse("/r/a");
+    c["w.rs"] = "";
+    await model.applyChange(change([["/r/a/b/c/w.rs", "created"]]));
+    disk.calls.length = 0;
+    await model.expand("/r/a");
+    expect(disk.calls).toEqual(["/r/a/b/c"]);
+    expect(names(model)).toContain("        w.rs");
+
+    // rescan 도 같은 길이다.
+    model.collapse("/r/a");
+    await model.applyChange(change([], true));
+    c["z.rs"] = "";
+    disk.calls.length = 0;
+    await model.expand("/r/a");
+    expect(disk.calls.sort()).toEqual(["/r/a", "/r/a/b", "/r/a/b/c"]);
+    expect(names(model)).toContain("        z.rs");
   });
 
   it("re-reads everything below a folder that changed as a whole (modified folder)", async () => {

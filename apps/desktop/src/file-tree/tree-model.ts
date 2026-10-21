@@ -5,6 +5,8 @@
 //   것은 낡았다고 표시해 다음에 펼칠 때 읽는다.
 // - `fs.changed` 의 규칙은 crates/pw-fs/src/watch/mod.rs 의 `FsChanged`: 만들어지거나 지워진 경로는 그 부모를, 폴더 경로의 `modified`
 //   는 「그 아래를 다시 읽어라」(ignore 된 폴더 안의 변경이 그 폴더 하나로 접혀 온다)다. `rescan` 이면 펼친 폴더를 모두 다시 읽는다.
+//   `modified` 도 처음 보는 새 경로일 수 있다 — rename 으로 들어온 경로(다른 폴더 · 루트 밖에서 옮겨 온 항목, 원자 쓰기로 새로 만든
+//   파일)는 `modified` 로 온다(crates/pw-fs/src/watch/batch.rs). 그래서 부모 목록에 없는 경로의 `modified` 는 생성으로 다룬다.
 // - 경로는 화면에 보이는 논리 경로(루트 + 이름들)다. 루트 안 심링크 폴더(pnpm 의 `node_modules/x` 등)를 펼치면 `fs.list` 가 실제
 //   경로를 돌려주는데, 감시는 실제 경로로 알리므로 그 짝(`aliases`)을 기억해 같은 변경을 논리 경로에도 맞춘다.
 // - 루트 밖을 가리키는 심링크(`outside`, 결정 M1-D8)는 펼치지 않는다 — Host 가 그 아래 읽기를 거절한다.
@@ -211,8 +213,24 @@ export class FileTreeModel {
       this.changed();
     }
     const listing = this.listings.get(path);
-    if (listing && !listing.stale) return Promise.resolve();
+    if (listing && !listing.stale) return this.loadStaleBelow(listing);
     return this.loading.get(path) ?? this.load(path);
+  }
+
+  /**
+   * 펼쳐 둔 채 목록이 없거나 낡은 하위 폴더를 읽는다. 접힌 부모 안에서 펼쳐 둔 폴더는 보이지 않는 동안 낡았다고만 표시되므로, 부모가
+   * 다시 보일 때(읽었을 때 · 낡지 않은 목록으로 펼쳤을 때) 여기서 따라 읽는다. 낡지 않은 하위 폴더는 그 아래로 내려간다.
+   */
+  private loadStaleBelow(listing: Listing): Promise<void> {
+    return Promise.all(
+      listing.entries
+        .filter((e) => e.dir && this.expanded.has(e.path))
+        .map((e) => {
+          const child = this.listings.get(e.path);
+          if (child && !child.stale) return this.loadStaleBelow(child);
+          return this.loading.get(e.path) ?? this.load(e.path);
+        }),
+    ).then(() => undefined);
   }
 
   collapse(path: string) {
@@ -267,13 +285,7 @@ export class FileTreeModel {
           this.listings.set(path, { entries, stale: false });
           this.changed();
           this.markDimmed(path, entries, generation);
-          // 펼쳐 둔 채 목록이 없는(낡아 버린) 하위 폴더도 이어서 읽는다.
-          return Promise.all(
-            entries
-              .filter((e) => e.dir && this.expanded.has(e.path))
-              .filter((e) => this.listings.get(e.path)?.stale !== false)
-              .map((e) => this.loading.get(e.path) ?? this.load(e.path)),
-          ).then(() => undefined);
+          return this.loadStaleBelow(this.listings.get(path)!);
         },
         (e: unknown) => {
           if (!current()) return;
@@ -364,10 +376,12 @@ export class FileTreeModel {
       change.paths.forEach((changed, i) => {
         const kind = change.kinds[i];
         for (const path of this.logicalPaths(changed)) {
-          if (kind !== "modified") {
-            const parent = parentOf(path, this.sep);
-            if (parent !== undefined && this.listings.has(parent)) dirs.add(parent);
-          }
+          const parent = parentOf(path, this.sep);
+          const siblings = parent === undefined ? undefined : this.listings.get(parent);
+          // `modified` 는 부모 목록에 없는 경로(rename 으로 들어온 새 경로)일 때만 부모를 다시 읽는다. 파일 내용이 바뀌거나 빌드가
+          // ignore 된 폴더를 쓸 때마다 부모를 읽지 않게.
+          if (siblings && (kind !== "modified" || !siblings.entries.some((e) => e.path === path)))
+            dirs.add(parent!);
           // 폴더의 `modified` 는 그 아래를 다시 읽으라는 뜻이다. 그 아래에서 기억하는 목록을 모두 고른다.
           if (kind !== "removed" && this.listings.has(path))
             for (const dir of this.listings.keys())
@@ -379,10 +393,24 @@ export class FileTreeModel {
     for (const dir of dirs) {
       const listing = this.listings.get(dir);
       if (!listing) continue;
-      if (this.expanded.has(dir) && this.visible(dir)) reloads.push(this.load(dir));
+      if (this.expanded.has(dir) && this.visible(dir))
+        reloads.push(this.load(dir).then(() => this.reloadParentIfUnreadable(dir, dirs)));
       else listing.stale = true;
     }
     return Promise.all(reloads).then(() => undefined);
+  }
+
+  /**
+   * 바뀌었다는 폴더를 다시 읽지 못했으면 파일로 바뀌었을 수 있다(한 디바운스 창 안의 `rm -r a; touch a` 는 `a` 의 `modified` 하나로
+   * 온다). 부모를 한 번 다시 읽어 종류를 맞춘다. 부모가 그 폴더를 여전히 폴더로 보이면(권한 등) 남은 목록이 낡지 않아 다시 읽지
+   * 않으므로 되풀이되지 않는다.
+   */
+  private reloadParentIfUnreadable(dir: string, reloaded: Set<string>): Promise<void> | undefined {
+    if (!this.errors.has(dir) || dir === this.root) return;
+    const parent = parentOf(dir, this.sep);
+    if (parent === undefined || reloaded.has(parent) || !this.listings.has(parent)) return;
+    if (!this.visible(parent)) return;
+    return this.loading.get(parent) ?? this.load(parent);
   }
 
   /** 기억하는 목록을 모두 다시 읽는다(펼친 것은 곧바로, 접힌 것은 다음에 펼칠 때). */

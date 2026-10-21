@@ -337,33 +337,39 @@ it("lists the project root and opens files in a preview tab on click, a pinned t
   await vi.waitFor(() => expect(editorTabs()).toEqual([{ text: "Cargo.toml", preview: false }]));
 });
 
-it("shows a file made outside the app in an expanded folder within 500 ms", async () => {
-  await mount();
-  await vi.waitFor(() => expect(row("/work/demo/src")).not.toBeNull());
-  await click(row("/work/demo/src")!, "dblclick");
-  await vi.waitFor(() => expect(row("/work/demo/src/lib.rs")).not.toBeNull());
+// 완료 기준은 「외부에서 만든 파일이 500 ms 안에 펼친 폴더에 나타난다」. Host 의 감시가 이벤트를 내기까지 300 ms 안(M1-06
+// 시험)이므로 창 쪽(이벤트 → 행)은 나머지 200 ms 안이어야 한다. rename 으로 들어온 경로(원자 쓰기로 새로 만든 파일 · 옮겨 온
+// 파일)는 `modified` 로 온다.
+it.each(["created", "modified"] as const)(
+  "shows a file made outside the app (%s) in an expanded folder within 200 ms of the event",
+  async (kind) => {
+    await mount();
+    await vi.waitFor(() => expect(row("/work/demo/src")).not.toBeNull());
+    await click(row("/work/demo/src")!, "dblclick");
+    await vi.waitFor(() => expect(row("/work/demo/src/lib.rs")).not.toBeNull());
 
-  disk(["/work/demo/src/made-by-agent.rs"]);
-  const started = performance.now();
-  await act(async () =>
-    host.emit("fs.changed", {
-      root: "/work/demo",
-      worktree: null,
-      paths: ["/work/demo/src/made-by-agent.rs"],
-      kinds: ["created"],
-      rescan: false,
-    } satisfies FsChanged),
-  );
-  await vi.waitFor(() => expect(row("/work/demo/src/made-by-agent.rs")).not.toBeNull(), {
-    timeout: 500,
-    interval: 5,
-  });
-  expect(performance.now() - started).toBeLessThan(500);
-  // 접힌 폴더는 다시 읽지 않는다.
-  expect(host.calls.filter((c) => c.method === "fs.list").map((c) => c.params.path)).not.toContain(
-    "/work/demo/target",
-  );
-});
+    disk(["/work/demo/src/made-by-agent.rs"]);
+    const started = performance.now();
+    await act(async () =>
+      host.emit("fs.changed", {
+        root: "/work/demo",
+        worktree: null,
+        paths: ["/work/demo/src/made-by-agent.rs"],
+        kinds: [kind],
+        rescan: false,
+      } satisfies FsChanged),
+    );
+    await vi.waitFor(() => expect(row("/work/demo/src/made-by-agent.rs")).not.toBeNull(), {
+      timeout: 200,
+      interval: 5,
+    });
+    expect(performance.now() - started).toBeLessThan(200);
+    // 접힌 폴더는 다시 읽지 않는다.
+    expect(
+      host.calls.filter((c) => c.method === "fs.list").map((c) => c.params.path),
+    ).not.toContain("/work/demo/target");
+  },
+);
 
 it("hides and shows ignored target/ with the toolbar toggle", async () => {
   await mount();
