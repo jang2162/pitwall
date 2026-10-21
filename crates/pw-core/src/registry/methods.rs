@@ -13,13 +13,16 @@
 //! - 신뢰(`project.trust` · `project.setTrust` · `project.claimTrustPrompt`, [`super::trust`]): 읽기는 `read` · 모든 role, 바꾸기와
 //!   「묻기 차례 잡기」 는 `write` · owner 만. **MCP 툴로 내놓지 않는다** — 신뢰는 프로젝트 코드 실행을 여는 결정이라 사람만
 //!   바꾼다(에이전트가 자기가 돌 프로젝트를 스스로 신뢰하지 못하게).
+//! - 상태(`project.state.get` · `project.state.set`, [`super::state`]): 프로젝트 창의 레이아웃 · 탭 묶음. 둘 다 owner 만이고(읽기
+//!   `read`, 쓰기 `write`) **MCP 툴로 내놓지 않는다** — 창이 저장하고 다시 여는 UI 상태라 에이전트가 볼 일이 없다.
 
 use std::path::PathBuf;
 
-use pw_rpc::{Router, RpcError, code, rpc_method};
+use pw_rpc::{JsonValue, Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use super::info::ProjectInfo;
+use super::state::{ProjectState, connection_may_write};
 use super::trust::ProjectTrust;
 use super::{
     ConfigMode, NewProject, Project, ProjectPatch, Registry, RegistryError, Resolution,
@@ -92,6 +95,15 @@ pub struct UpdateProjectParams {
 pub struct PathParams {
     /// 절대 경로. 파일이든 폴더든, 없는 경로든 된다.
     pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SetProjectStateParams {
+    pub project_id: String,
+    /// 상태 전체(JSON 객체). 저장된 것을 통째로 바꾼다.
+    #[specta(type = JsonValue)]
+    pub state: serde_json::Value,
 }
 
 #[derive(
@@ -189,6 +201,22 @@ rpc_method! {
     pub ProjectClaimTrustPrompt: "project.claimTrustPrompt" {
         params: ProjectIdParams,
         result: bool,
+        tier: Write,
+    }
+
+    /// 프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).
+    /// 레지스트리에 없는 id 면 invalid params 오류.
+    pub ProjectStateGet: "project.state.get" {
+        params: ProjectScopedParams,
+        result: ProjectState,
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.
+    pub ProjectStateSet: "project.state.set" {
+        params: SetProjectStateParams,
+        result: (),
         tier: Write,
     }
 
@@ -292,6 +320,26 @@ pub fn register(router: &mut Router, registry: &Registry) {
     let r = registry.clone();
     router.unary(ProjectClaimTrustPrompt, move |_ctx, params| {
         blocking(r.clone(), move |r| r.claim_trust_prompt(&params.id))
+    });
+    let r = registry.clone();
+    router.unary(ProjectStateGet, move |_ctx, params| {
+        blocking(r.clone(), move |r| r.project_state(&params.project_id))
+    });
+    let r = registry.clone();
+    router.unary(ProjectStateSet, move |ctx, params| {
+        let r = r.clone();
+        async move {
+            if !connection_may_write(&ctx, &params.project_id) {
+                return Err(RpcError::new(
+                    code::PERMISSION_DENIED,
+                    "only the project's own window may save its state",
+                ));
+            }
+            blocking(r, move |r| {
+                r.set_project_state(&params.project_id, &params.state)
+            })
+            .await
+        }
     });
     let r = registry.clone();
     router.unary(ProjectResolve, move |_ctx, params| {

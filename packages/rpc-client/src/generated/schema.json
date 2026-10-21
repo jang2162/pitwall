@@ -4293,6 +4293,76 @@
       ],
       "tier": "write"
     },
+    "project.state.get": {
+      "description": "프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).\n레지스트리에 없는 id 면 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "기능 메서드의 프로젝트 지정(`docs/design/03-architecture.md` §4). MCP 서버는 세션의 프로젝트가 있으면 이 키를 채워 준다.",
+        "properties": {
+          "projectId": {
+            "description": "프로젝트 id(`project_list` 의 `id`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "problem": {
+            "description": "파일이 있는데 읽지 못한 이유. 창은 로그에 남기고 기본 레이아웃으로 연다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "저장된 상태. 없거나 읽지 못했으면 `null`."
+          }
+        },
+        "required": [
+          "state",
+          "problem"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "project.state.set": {
+      "description": "프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "state": {
+            "description": "상태 전체(JSON 객체). 저장된 것을 통째로 바꾼다."
+          }
+        },
+        "required": [
+          "projectId",
+          "state"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "project.storage": {
       "description": "레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n`reason` 을 배너로 보여 준다.",
       "kind": "unary",

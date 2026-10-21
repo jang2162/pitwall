@@ -6,6 +6,7 @@
 //! - [`candidates`]: 루트 후보 추천과 그 순서.
 //! - [`slug`]: 개인 전용 설정 폴더 이름.
 //! - [`info`]: 프로젝트 요약(빌드 파일 · 언어 · 설정 파일 이름).
+//! - [`state`]: 프로젝트 창의 상태 파일(`$DATA/projects/<id>/state.json`).
 //! - [`trust`]: 프로젝트 신뢰(F1-7 최소판) — 런타임 제공자 게이트가 읽는다.
 //! - [`methods`]: 레지스트리 RPC(`project.*`).
 //!
@@ -18,6 +19,7 @@ pub mod methods;
 pub mod path;
 pub mod resolve;
 pub mod slug;
+pub mod state;
 pub mod store;
 pub mod trust;
 

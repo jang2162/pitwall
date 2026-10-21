@@ -169,6 +169,15 @@ export type UnaryMethods = {
 	 */
 	"project.setTrust": { params: SetTrustParams; result: ProjectTrust };
 	/**
+	 * 프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).
+	 * 레지스트리에 없는 id 면 invalid params 오류.
+	 */
+	"project.state.get": { params: ProjectScopedParams; result: ProjectState };
+	/**
+	 * 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.
+	 */
+	"project.state.set": { params: SetProjectStateParams; result: null };
+	/**
 	 * 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면
 	 * `reason` 을 배너로 보여 준다.
 	 */
@@ -318,6 +327,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.recent": {"name":"project.recent","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"RecentParams","output":"Vec<Project>","doc":" 최근에 연 프로젝트, 최근 것부터. 연 적 없는 프로젝트는 빠진다.\n","mcp":false,"fileScope":false},
 	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n","mcp":false,"fileScope":false},
 	"project.setTrust": {"name":"project.setTrust","kind":"unary","tier":"write","roles":["owner"],"params":"SetTrustParams","output":"ProjectTrust","doc":" 프로젝트를 신뢰하거나 해제한다. 신뢰를 가진 프로젝트(`ownerId`)로 `project.changed`(`kind: trust`)가 나간다.\n","mcp":false,"fileScope":false},
+	"project.state.get": {"name":"project.state.get","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectScopedParams","output":"ProjectState","doc":" 프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).\n 레지스트리에 없는 id 면 invalid params 오류.\n","mcp":false,"fileScope":false},
+	"project.state.set": {"name":"project.state.set","kind":"unary","tier":"write","roles":["owner"],"params":"SetProjectStateParams","output":"()","doc":" 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.\n","mcp":false,"fileScope":false},
 	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n","mcp":false,"fileScope":false},
 	"project.trust": {"name":"project.trust","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"ProjectTrust","doc":" 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.\n","mcp":false,"fileScope":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":false,"fileScope":false},
@@ -1198,6 +1209,13 @@ export type ProjectScopedParams = {
 	projectId: string,
 };
 
+export type ProjectState = {
+	/**  저장된 상태. 없거나 읽지 못했으면 `null`. */
+	state: JsonValue | null,
+	/**  파일이 있는데 읽지 못한 이유. 창은 로그에 남기고 기본 레이아웃으로 연다. */
+	problem: string | null,
+};
+
 export type ProjectTrust = {
 	projectId: string,
 	/**  신뢰를 가진 프로젝트. 메인 저장소 프로젝트가 등록된 워크트리 프로젝트면 그 프로젝트, 아니면 `project_id` 와 같다. */
@@ -1439,6 +1457,12 @@ export type SearchTextParams = {
 export type SetLanguageParams = {
 	/**  `"system"` 또는 등록된 언어 태그. */
 	language: string,
+};
+
+export type SetProjectStateParams = {
+	projectId: string,
+	/**  상태 전체(JSON 객체). 저장된 것을 통째로 바꾼다. */
+	state: JsonValue,
 };
 
 export type SetTrustParams = {
