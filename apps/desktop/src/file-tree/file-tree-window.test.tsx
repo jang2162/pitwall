@@ -16,6 +16,7 @@ import type {
   ProjectTrust,
   Resolution,
 } from "@pitwall/rpc-client";
+import { EditorView } from "@codemirror/view";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -335,6 +336,47 @@ it("lists the project root and opens files in a preview tab on click, a pinned t
   await vi.waitFor(() => expect(editorTabs()).toEqual([{ text: "Cargo.toml", preview: true }]));
   await click(row("/work/demo/Cargo.toml")!, "dblclick");
   await vi.waitFor(() => expect(editorTabs()).toEqual([{ text: "Cargo.toml", preview: false }]));
+});
+
+// 10-ui §5.2 「미리보기 탭의 문서에 미저장 편집이 생기면 보통 탭이 된다」 · §5.4 「편집 시작 → 고정 탭」(M1-13 의 문서 모델과 맞물림).
+// 보통 탭이 되지 않으면 다음 미리보기가 그 자리를 닫아(`openTab`) 문서를 놓고, 미저장 편집이 묻지도 않고 사라진다.
+it("keeps a preview tab that got an unsaved edit when the next file opens in preview", async () => {
+  disk(["/work/demo/README.md"]);
+  await mount();
+  await vi.waitFor(() => expect(row("/work/demo/src")).not.toBeNull());
+  await click(row("/work/demo/src")!, "dblclick");
+  await vi.waitFor(() => expect(row("/work/demo/src/lib.rs")).not.toBeNull());
+  const editor = () => EditorView.findFromDOM(document.querySelector<HTMLElement>(".cm-editor")!)!;
+
+  await click(row("/work/demo/Cargo.toml")!);
+  await vi.waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+  await act(async () =>
+    editor().dispatch({ changes: { from: 0, insert: "x" }, userEvent: "input.type" }),
+  );
+  await settle();
+  expect(editorTabs()).toEqual([{ text: "●Cargo.toml", preview: false }]);
+
+  await click(row("/work/demo/src/lib.rs")!);
+  await vi.waitFor(() =>
+    expect(editorTabs()).toEqual([
+      { text: "●Cargo.toml", preview: false },
+      { text: "lib.rs", preview: true },
+    ]),
+  );
+  // 편집하지 않은 미리보기는 다음 미리보기가 대신한다.
+  await click(row("/work/demo/README.md")!);
+  await vi.waitFor(() =>
+    expect(editorTabs()).toEqual([
+      { text: "●Cargo.toml", preview: false },
+      { text: "README.md", preview: true },
+    ]),
+  );
+  await click(row("/work/demo/Cargo.toml")!);
+  await vi.waitFor(() => expect(editor().state.doc.toString()).toBe("x/work/demo/Cargo.toml"));
+  expect(editorTabs()).toEqual([
+    { text: "●Cargo.toml", preview: false },
+    { text: "README.md", preview: true },
+  ]);
 });
 
 // 완료 기준은 「외부에서 만든 파일이 500 ms 안에 펼친 폴더에 나타난다」. Host 의 감시가 이벤트를 내기까지 300 ms 안(M1-06
