@@ -1062,3 +1062,38 @@ fn fifos_are_not_read_as_byte_pages() {
         .expect("fs.readBytes on a FIFO must not block");
     assert_eq!(got.unwrap_err().code, code::INVALID_PARAMS);
 }
+
+/// M1-23: `fs.readBytes` 도 판정 뒤 open 전에 FIFO 로 바뀐 파일에 막히지 않고 거절한다(`fs.read` 와 같은 `Roots::open_inside`).
+#[cfg(unix)]
+#[test]
+fn a_file_swapped_to_a_fifo_before_a_byte_page_is_refused() {
+    use crate::bytes::FsReadBytesParams;
+    use crate::search::tests::{MIB, bounded};
+
+    let f = Fixture::new();
+    let root = f.base.join("proj");
+    let id = f.project(&root);
+    let path = root.join("a.bin");
+    fs::write(&path, [0u8, 1, 2, 3]).unwrap();
+    *f.fs.before_open.lock().unwrap() = Some(Box::new(|p: &Path| {
+        if fs::symlink_metadata(p).is_ok_and(|m| m.is_file()) {
+            fs::remove_file(p).unwrap();
+            mkfifo(p);
+        }
+    }));
+    let params = FsReadBytesParams {
+        project_id: id,
+        worktree: None,
+        path: path.display().to_string(),
+        offset: 0,
+        length: 4,
+    };
+    let err = bounded(64 * MIB, std::time::Duration::from_secs(10), move || {
+        f.fs.read_bytes(&params).unwrap_err()
+    });
+    assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
+    assert!(
+        format!("{:?}", err.data).contains("is not a regular file"),
+        "{err:?}"
+    );
+}
