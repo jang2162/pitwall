@@ -3,6 +3,62 @@
 // 토큰 이름(`ui.background`)은 테마 파일의 키이고, 화면은 CSS 변수(`--pw-ui-background`)로만 읽는다. 기본 테마는 내장
 // 확장의 파일(extensions/theme-default/themes/default.json)이다.
 
+import type { SyntaxToken } from "@pitwall/rpc-client";
+
+/**
+ * 구문 토큰(구문 분석 서비스가 캡처 이름을 바꿔 내보내는 이름, crates/pw-syntax token.rs). 테마 토큰은 `syntax.<토큰>` 이다.
+ * 서비스에 토큰이 생기면 아래 검사가 타입 오류를 낸다 — 여기와 기본 테마에 함께 더한다.
+ */
+export const SYNTAX_TOKENS = [
+  "attribute",
+  "boolean",
+  "comment",
+  "comment.documentation",
+  "constant",
+  "constant.builtin",
+  "constructor",
+  "embedded",
+  "function",
+  "function.builtin",
+  "function.macro",
+  "function.method",
+  "keyword",
+  "label",
+  "markup.bold",
+  "markup.heading",
+  "markup.italic",
+  "markup.link",
+  "markup.link.url",
+  "markup.raw",
+  "module",
+  "number",
+  "operator",
+  "property",
+  "punctuation",
+  "punctuation.bracket",
+  "punctuation.delimiter",
+  "punctuation.special",
+  "string",
+  "string.escape",
+  "string.regexp",
+  "string.special",
+  "string.special.key",
+  "tag",
+  "type",
+  "type.builtin",
+  "variable",
+  "variable.builtin",
+  "variable.parameter",
+] as const satisfies readonly SyntaxToken[];
+
+type MissingSyntaxToken = Exclude<SyntaxToken, (typeof SYNTAX_TOKENS)[number]>;
+// 빠진 토큰이 있으면 `true` 를 `never` 에 넣지 못해 타입 오류다.
+const syntaxTokensComplete: [MissingSyntaxToken] extends [never] ? true : never = true;
+void syntaxTokensComplete;
+
+/** 구문 토큰의 테마 토큰 이름. */
+export const syntaxTokenName = (token: SyntaxToken): `syntax.${SyntaxToken}` => `syntax.${token}`;
+
 /** 화면이 읽는 토큰. 테마 파일의 변형(light·dark)은 있으면 이것을 전부 정의해야 한다. */
 export const TOKENS = [
   "ui.background",
@@ -44,6 +100,8 @@ export const TOKENS = [
   "terminal.ansi.brightMagenta",
   "terminal.ansi.brightCyan",
   "terminal.ansi.brightWhite",
+  // 구문 색(M1-17). 에디터의 강조가 CSS 변수로 읽는다(src/editor/extensions/highlight.ts).
+  ...SYNTAX_TOKENS.map(syntaxTokenName),
 ] as const;
 
 export type TokenName = (typeof TOKENS)[number];
