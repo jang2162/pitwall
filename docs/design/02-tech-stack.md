@@ -11,7 +11,7 @@
 | UI 컴포넌트 | Radix UI primitives + Tailwind v4 (shadcn/ui 방식) | 키보드 접근성, IDE형 밀도 높은 레이아웃 — 전체 UI 스택은 [10-ui.md](10-ui.md) §3 |
 | 레이아웃(도킹) | dockview | 탭/스플릿/도킹 패널 |
 | 에디터 | **CodeMirror 6** | 경량, 뷰어 우선. Monaco 대비 번들 · 메모리 작음 |
-| 구문 강조 | 코어: **tree-sitter** + WASM 문법(wasmtime) / UI: 코어가 준 화면 범위의 캡처 구간을 CodeMirror decoration 으로 그린다. Lezer 문법은 쓰지 않는다 | 언어 범위는 tree-sitter 기준. 되돌림 조건 등 상세는 [12-m1-plan.md](12-m1-plan.md) M1-D2 |
+| 구문 강조 | 코어: **tree-sitter** + 내장 언어는 네이티브 문법 크레이트를 정적 링크(외부 확장의 문법은 WASM — M8) / UI: 코어가 준 화면 범위의 캡처 구간을 CodeMirror decoration 으로 그린다. Lezer 문법은 쓰지 않는다 | 언어 범위는 tree-sitter 기준. 처음 정한 WASM 문법에서 되돌린 까닭과 잰 값은 [12-m1-plan.md](12-m1-plan.md) M1-D2 |
 | Diff 뷰 | @codemirror/merge | side-by-side, inline |
 | 터미널 | xterm.js + `portable-pty` | 실행 콘솔/터미널 공용 |
 | Git 읽기 | **gitoxide (`gix`)** | log/graph/status/blame/diff를 빠르게 |
@@ -38,7 +38,7 @@
 | 확장 런타임 | `wasmtime` (WASM Component Model, WIT) | 권한 기반 샌드박스 (07 참고) |
 | 테마 | 디자인 토큰 → CSS 변수, VS Code 테마 import | |
 | UI 언어(i18n) | **Fluent** (`fluent-rs` / `@fluent/bundle`) | 코어 · 데스크톱 공용 리소스 |
-| 문법 | tree-sitter 문법을 **WASM으로 동적 로드** | 언어 추가를 확장으로 |
+| 문법 | 내장 언어는 tree-sitter 문법을 **앱에 네이티브로 링크**, 외부 확장의 언어는 **WASM으로 동적 로드**(M8) | 언어 추가를 확장으로. 내장을 WASM 으로 올리면 유휴 메모리가 결정 M1-D2 의 상한을 넘었다 |
 | RPC | 자체 JSON-RPC 2.0 (serde) over Tauri IPC / stdio / WebSocket | 타입은 `ts-rs`/`specta`로 TS 생성 |
 | MCP | **`rmcp`** (공식 Rust MCP SDK) | stdio + Streamable HTTP |
 | 패키징 | Tauri bundler (dmg/msi/AppImage/deb), 자동 업데이트 plugin-updater | |
@@ -161,7 +161,7 @@ pitwall/
 │  ├─ pw-open-with/      # 외부 도구로 열기: 도구 목록(확장 + 전역 설정) · 기본 도구 · 셸 없는 실행 (04 F8)
 │  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지 — 지금은 터미널 PTY 세션만(03 「RPC 설계」, M1-08)
 │  ├─ pw-lang/           # 언어 판별 (Linguist 데이터 테이블, .gitattributes, 모드라인)
-│  ├─ pw-syntax/         # 구문 분석 서비스: tree-sitter + WASM 문법(wasmtime), 문서 세션 · 강조 구간 RPC(`syntax.*`)
+│  ├─ pw-syntax/         # 구문 분석 서비스: tree-sitter + 네이티브 내장 문법(WASM 문법은 `wasm` 기능), 문서 세션 · 강조 구간 RPC(`syntax.*`)
 │  ├─ pw-tools/          # Mason registry 읽기 · 도구 설치기 (LSP/DAP/포매터)
 │  ├─ pw-index/          # tree-sitter 심볼 인덱스
 │  ├─ pw-link/           # 기기 키 · 페어링 · Noise 세션 · 전송(QUIC/SSH) · Tailscale 검색
@@ -176,8 +176,8 @@ pitwall/
 │  ├─ domain/            # 공용 상태/포맷 로직 (데스크톱 · MCP 등 클라이언트 공용)
 │  ├─ logger/            # 웹뷰 로그를 묶어 코어의 `log.write` 로 보내는 로거
 │  └─ ext-api/           # L3 UI 패널 확장용 TS API
-├─ extensions/           # 내장 확장 (기본 테마, 언어, 외부 도구, 언어팩). 언어는 lang-<문법>/ — 문법 WASM · 쿼리는
-│                        # scripts/grammars.toml 의 고정 커밋에서 `mise run grammars` 로 만들어 커밋한다
+├─ extensions/           # 내장 확장 (기본 테마, 언어, 외부 도구, 언어팩). 언어는 lang-<문법>/ — 강조 쿼리는
+│                        # scripts/grammars.toml 의 고정 커밋에서 `mise run grammars` 로 만들어 커밋한다(문법은 pw-syntax 가 링크)
 └─ docs/
 ```
 - Rust: cargo workspace / TS: pnpm workspace

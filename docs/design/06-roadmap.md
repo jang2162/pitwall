@@ -82,7 +82,7 @@
 | D27 | 파일 위치 | **XDG 규칙** (macOS 포함): `$CONFIG`(사람이 편집하는 TOML만, dotfiles 동기화 가능) · `$DATA` · `$STATE` · `$CACHE`, Windows는 표준 폴더 대응, `PITWALL_*_DIR` 덮어쓰기 | 03 §5-0 |
 | D28 | 언어 판별 | **GitHub Linguist** 데이터 내장 + `.gitattributes` linguist 속성 + 모드라인. 벤더/생성 파일 판별로 트리 · 검색 · diff 처리 | 07 §4.3 |
 | D29 | LSP/DAP 설치 | **Mason registry**를 데이터로 사용, 설치기는 자체 구현(github · generic · npm · pypi · openvsx 우선). 툴체인은 런타임 제공자에서, 라이선스 표시 후 설치 | 07 §4.4 |
-| D30 | 구문 강조 | **코어 tree-sitter + WASM 문법(wasmtime)**, UI 는 화면 범위의 캡처 구간을 CodeMirror decoration 으로 그린다(Lezer 문법 안 씀). release 번들 +25 MB 또는 유휴 메모리 +50 MB 를 넘으면 내장 언어를 네이티브 문법 링크로 되돌린다 | 02 §1, 12 §4 M1-D2 |
+| D30 | 구문 강조 | **코어 tree-sitter + 내장 언어는 네이티브 문법 링크**, UI 는 화면 범위의 캡처 구간을 CodeMirror decoration 으로 그린다(Lezer 문법 안 씀). 처음에는 WASM 문법(wasmtime)으로 정하고 release 번들 +25 MB 또는 유휴 메모리 +50 MB 를 넘으면 네이티브로 되돌리기로 했는데, M1-10 에서 WASM 문법의 유휴 메모리가 5개 언어를 연 상태로 +63.5 MB 라 되돌렸다(2026-10-21). 문법 WASM 은 외부 확장(M8)용으로 남는다 | 02 §1, 12 §4 M1-D2 |
 | D31 | 퍼지 매처 | **`frizbee`(MIT)**. `nucleo` 는 MPL-2.0 이라 쓰지 않는다 | 02 §1, 12 §4 M1-D4 |
 | D32 | 텍스트 검색 | **인덱스 없음** — 질의마다 ripgrep 라이브러리로 병렬 검색, 결과 스트림 · 취소 | 12 §4 M1-D6 |
 | D33 | 대용량 · 특수 파일 | 텍스트 ≤ 5 MiB 편집 + 강조 / ≤ 50 MiB 읽기 전용 · 강조 끔 / 초과는 열지 않음(앞부분 · hex · 외부 도구), 1만 자 넘는 줄이 있으면 강조 끔. 바이너리는 읽기 전용 hex, 이미지 · Markdown 은 미리보기(바이트는 RPC 범위 읽기) | 12 §4 M1-D9 · D10 · D11 |

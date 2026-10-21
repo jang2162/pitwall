@@ -4,7 +4,7 @@
 
 ## 준비물
 
-- [mise](https://mise.jdx.dev) — Node·pnpm·Rust·cargo-nextest·cargo-deny·cargo-about·actionlint·shellcheck(actionlint 가 워크플로 스크립트 검사에 부른다)·cmake·tree-sitter CLI 버전을 `mise.toml` 로 고정해 설치한다. cargo-about 은 소스에서 빌드하므로 처음 `mise install` 이 1분 남짓 더 걸린다. cmake 는 구문 분석(`crates/pw-syntax`)이 끌어오는 wasmtime C API 크레이트의 빌드 스크립트가 부르고, tree-sitter CLI 는 문법 WASM 을 다시 만들 때만 쓴다(아래 「tree-sitter 문법」).
+- [mise](https://mise.jdx.dev) — Node·pnpm·Rust·cargo-nextest·cargo-deny·cargo-about·actionlint·shellcheck(actionlint 가 워크플로 스크립트 검사에 부른다)·cmake·tree-sitter CLI 버전을 `mise.toml` 로 고정해 설치한다. cargo-about 은 소스에서 빌드하므로 처음 `mise install` 이 1분 남짓 더 걸린다. cmake 는 구문 분석(`crates/pw-syntax`)의 `wasm` 기능(시험 · 린트만 켠다)이 끌어오는 wasmtime C API 크레이트의 빌드 스크립트가 부르고, tree-sitter CLI 는 WASM 경로의 시험 입력을 다시 만들 때만 쓴다(아래 「tree-sitter 문법」). 내장 문법은 C 소스를 컴파일하므로 C 컴파일러(macOS 는 Xcode Command Line Tools, Windows 는 MSVC)가 필요하다 — Rust 가 링크에 쓰는 도구 모음에 이미 들어 있다.
 - mise 가 셸에 활성화돼 있어야 `pnpm`·`cargo` 가 PATH 에 잡힌다. `mise doctor` 에서 `activated: yes` 인지 본다. 활성화 대신 shim 만 PATH 에 두면 `cargo build` 가 `wasmtime-c-api-impl` 빌드 스크립트에서 「No version is set for shim: cmake」 로 실패한다 — shim 은 부른 프로세스의 작업 폴더로 버전을 찾는데 빌드 스크립트는 cargo 레지스트리 안에서 돈다. `mise run <태스크>` 나 `mise exec -- cargo …` 로 부르면 된다.
 - Linux 는 Tauri 2 가 컴파일에 쓰는 시스템 라이브러리(WebKitGTK 4.1 등)를 따로 설치한다. 목록은 [Tauri 2 Prerequisites](https://v2.tauri.app/start/prerequisites/#linux) 이고, CI 의 `Tauri system dependencies` 단계가 같은 목록을 쓴다.
 - `git` 이 PATH 에 있어야 한다. 프로젝트 레지스트리 시험(`crates/pw-core/src/registry/tests.rs`)이 실제 `git init`·`git worktree add` 로 워크트리를 만든다(제품 코드는 git 을 띄우지 않는다).
@@ -22,20 +22,20 @@ mise trust && mise install && pnpm install
 
 모두 저장소 루트에서 실행한다. 태스크 목록은 `mise tasks`.
 
-| 하려는 일                                                                                           | 명령                    |
-| --------------------------------------------------------------------------------------------------- | ----------------------- |
-| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                             | `mise run build`        |
-| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                                        | `mise run dev`          |
-| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                                | `mise run test`         |
-| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                          | `mise run lint`         |
-| 포맷 적용                                                                                           | `mise run fmt`          |
-| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                            | `mise run gen`          |
-| 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부           | `mise run licenses`     |
-| `THIRD_PARTY_NOTICES.md` 다시 만들기                                                                | `mise run notices`      |
-| Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                                      | `mise run advisories`   |
-| Linguist `samples/` 일치율 시험(samples 를 GitHub 에서 받는다, 아래 「Linguist 데이터」)            | `mise run lang-samples` |
-| 내장 언어 확장의 문법 WASM · 쿼리 다시 만들기(소스를 GitHub 에서 받는다, 아래 「tree-sitter 문법」) | `mise run grammars`     |
-| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)                | `mise run perf`         |
+| 하려는 일                                                                                                     | 명령                    |
+| ------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                                       | `mise run build`        |
+| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                                                  | `mise run dev`          |
+| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                                          | `mise run test`         |
+| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                                    | `mise run lint`         |
+| 포맷 적용                                                                                                     | `mise run fmt`          |
+| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                                      | `mise run gen`          |
+| 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부                     | `mise run licenses`     |
+| `THIRD_PARTY_NOTICES.md` 다시 만들기                                                                          | `mise run notices`      |
+| Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                                                | `mise run advisories`   |
+| Linguist `samples/` 일치율 시험(samples 를 GitHub 에서 받는다, 아래 「Linguist 데이터」)                      | `mise run lang-samples` |
+| 내장 언어 확장의 강조 쿼리 · 넣은 문법 파일 다시 만들기(소스를 GitHub 에서 받는다, 아래 「tree-sitter 문법」) | `mise run grammars`     |
+| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)                          | `mise run perf`         |
 
 하위 단위만 돌릴 때:
 
@@ -127,19 +127,20 @@ RPC 의 TS 타입·메서드 목록·JSON Schema 는 `rpc_method!` 선언과 그
 
 ## tree-sitter 문법
 
-구문 분석(`crates/pw-syntax`, `docs/design/07-extensibility.md` §4.2)이 쓰는 내장 언어는 `extensions/lang-<문법>/` 이다. 그 안의 `grammars/<문법>.wasm` · `queries/<문법>/highlights.scm` · `LICENSE*` 는 **생성물**이고 저장소에 커밋한다 — 일반 빌드 · 시험에는 tree-sitter CLI 가 필요 없다. 출처표는 `scripts/grammars.toml`(문법마다 저장소 · 태그 · 커밋 · 라이선스 · 쿼리 파일 순서 · 만든 파일의 SHA-256)이다.
+구문 분석(`crates/pw-syntax`, `docs/design/07-extensibility.md` §4.2)이 쓰는 내장 언어는 `extensions/lang-<문법>/` 이다. 문법은 앱에 네이티브로 링크한다(결정 M1-D2 의 되돌림 — `docs/design/12-m1-plan.md` §4): 매니페스트의 `builtin_grammar` 가 `crates/pw-syntax/src/native.rs` 의 표에서 이름으로 문법을 고르고, 문법 코드는 `crates/pw-syntax/Cargo.toml` 의 문법 크레이트(crates.io — crates.io 판본이 옛 `tree-sitter` 크레이트에 직접 의존하는 Kotlin 은 고정 커밋의 git 의존성)와 저장소에 넣은 C 소스(Dockerfile, `crates/pw-syntax/grammars/dockerfile/` — `build.rs` 가 빌드)다. 출처표는 `scripts/grammars.toml`(문법마다 저장소 · 태그 · 커밋 · 크레이트 판본 · 라이선스 · 쿼리 파일 순서 · 만든 파일의 SHA-256)이다.
 
-- **생성물을 손으로 고치지 않는다.** 출처표를 고치고 `mise run grammars`(`node scripts/grammars.mjs build [문법…]`)로 다시 만든다. 스크립트는 고정 커밋의 소스를 `target/grammars/src/` 에 받아 `tree-sitter build --wasm` 으로 WASM 을 만들고(CLI 가 wasi-sdk · binaryen 을 자기 캐시에 받는다), 쿼리를 이어 붙이고, 출처표의 해시 줄을 고친다. `mise run lint` 의 `node scripts/grammars.mjs check` 가 커밋된 파일의 해시 · 표에 없는 WASM(`extensions/` 아래 어디에 있든) · `licenses/vendored.md` 의 고지(커밋 해시)를 본다. 보지 않는 것: 매니페스트의 `grammar` · `queries` 가 어느 파일을 가리키는가(표에 있는 다른 문법을 가리켜도 통과한다 — 강조 스냅숏 시험이 잡는다), `highlights.scm` 밖의 쿼리 파일.
-- 재현성: 같은 CLI 버전 · 같은 커밋이면 바이트가 같다(macOS 에서 경로를 바꿔 두 번 만들어 확인). `node scripts/grammars.mjs verify [문법…]` 이 `target/grammars/verify/` 에 다시 만들어 출처표의 해시와 견준다 — 다른 OS 에서 만든 결과가 다르면 이것으로 차이를 본다.
+- **생성물을 손으로 고치지 않는다.** 확장 폴더의 `queries/<문법>/highlights.scm` · `LICENSE*`, 넣은 C 소스, WASM 경로의 시험 입력 `crates/pw-syntax/tests/wasm/json.wasm` 이 생성물이고 저장소에 커밋한다 — 일반 빌드 · 시험에는 네트워크 · tree-sitter CLI 가 필요 없다. 출처표를 고치고 `mise run grammars`(`node scripts/grammars.mjs build [문법…]`)로 다시 만든다. 스크립트는 고정 커밋의 소스를 `target/grammars/src/` 에 받아 쿼리를 이어 붙이고, `vendor` 문법은 `src/` 의 C 소스를 복사하고, `test_wasm` 문법은 `tree-sitter build --wasm` 으로 WASM 을 만든 뒤(CLI 가 wasi-sdk · binaryen 을 자기 캐시에 받는다) 출처표의 해시 줄을 고친다. `mise run lint` 의 `node scripts/grammars.mjs check` 가 커밋된 파일의 해시, 크레이트 판본(`crate` · `version` — git 의존성은 `commit`)과 `Cargo.lock`, `extensions/` 아래와 시험 입력 폴더의 표에 없는 WASM, `licenses/vendored.md` 의 고지(커밋 해시)를 본다. 보지 않는 것: 매니페스트의 `builtin_grammar` · `queries` 가 어느 문법을 가리키는가(강조 스냅숏 시험이 잡는다), crates.io 크레이트의 C 소스가 그 태그의 커밋과 같은가(크레이트는 `Cargo.lock` 의 체크섬으로 고정된다), `highlights.scm` 밖의 쿼리 파일.
+- 재현성: 같은 CLI 버전 · 같은 커밋이면 WASM 바이트가 같다(macOS 에서 경로를 바꿔 두 번 만들어 확인). `node scripts/grammars.mjs verify [문법…]` 이 `target/grammars/verify/` 에 다시 만들어 출처표의 해시와 견준다 — 다른 OS 에서 만든 결과가 다르면 이것으로 차이를 본다.
 - 쿼리 순서: 같은 노드를 여러 패턴이 잡으면 뒤 패턴이 이긴다(tree-sitter 강조기와 같다). 그래서 바탕 쿼리를 먼저 둔다 — 원본의 `tree-sitter.json` 이 반대로 둔 TypeScript · TSX 는 거꾸로 이었다(출처표의 주석).
 - 강조 결과는 시험 `crates/pw-syntax/tests/highlights.rs` 가 언어마다 픽스처 하나(`tests/fixtures/`)를 스냅숏(`tests/snapshots/`, insta)과 견준다. 문법이나 토큰 규칙을 바꿔 결과가 달라지면 `cargo insta review`(또는 `INSTA_UPDATE=always` 로 시험을 돌려 쓴 `.snap` 의 diff)로 확인하고 받아들인다. 픽스처는 시험 입력이라 oxfmt 가 포맷하지 않는다.
+- 문법 WASM 경로(외부 확장의 문법, M8)는 `pw-syntax` 의 `wasm` 기능이다. 앱 빌드는 켜지 않고 `mise run test` · `lint` 가 `--all-features` 로 켠다 — 그 빌드에서 wasmtime C API 크레이트가 cmake(`mise.toml` 고정)를 부른다.
 
 문법을 올리거나 더하는 순서:
 
-1. `scripts/grammars.toml` 의 `tag` · `commit`(`git ls-remote <저장소> refs/tags/<태그>`, 주석 태그는 `^{}` 줄)을 고치거나 `[[grammar]]` 를 더한다. 새 언어면 `extensions/lang-<문법>/extension.toml`(`[contributes.languages.<id>]` 의 `linguist` · `grammar` · `queries`)도 쓴다. 저장소에 `src/parser.c` 가 없으면 `generate = true`(node 로 `grammar.js` 를 돌린다).
+1. `scripts/grammars.toml` 의 `tag` · `commit`(`git ls-remote <저장소> refs/tags/<태그>`, 주석 태그는 `^{}` 줄) · `version` 을 고치거나 `[[grammar]]` 를 더하고, `crates/pw-syntax/Cargo.toml` 의 문법 크레이트 판본(`=` 고정)을 같게 맞춘다. 새 언어면 `extensions/lang-<문법>/extension.toml`(`[contributes.languages.<id>]` 의 `linguist` · `builtin_grammar` · `queries`)과 `crates/pw-syntax/src/native.rs` 의 표도 쓴다. crates.io 판본이 이 저장소의 `tree-sitter` 와 함께 빌드되지 않으면(옛 `tree-sitter` 크레이트에 직접 의존하면 `links` 가 겹친다) 고정 커밋의 git 의존성(`deny.toml` 의 `allow-git` 에 이유와 함께)이나 `vendor`(C 소스를 넣고 `build.rs` 에 더한다) 중에서 고른다.
 2. `mise run grammars -- <문법>` 으로 만든다. 원본 쿼리에 다른 프로젝트(nvim-treesitter 등)에서 왔다는 표시가 있으면 그 라이선스도 본다.
 3. `licenses/vendored.md` 「tree-sitter grammars」 절의 표 · 라이선스 전문을 고치고 `mise run notices` 를 돌린다.
-4. `crates/pw-syntax` 시험(스냅숏 · `crates/pw-ext` 의 내장 확장 목록)을 고치고, 성능 시험(위 「명령」 의 하위 단위)과 release 번들 크기 증가(결정 M1-D2 의 되돌림 조건)를 다시 본다.
+4. `crates/pw-syntax` 시험(스냅숏 · `crates/pw-ext` 의 내장 확장 목록)을 고치고, 성능 시험(위 「명령」 의 하위 단위)과 release 번들 크기 · 유휴 메모리 증가(결정 M1-D2)를 다시 본다.
 
 ## 의존성과 라이선스
 

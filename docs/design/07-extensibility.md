@@ -28,7 +28,7 @@ authors = ["..."]
 [contributes.languages.kotlin]
 linguist = "Kotlin"                         # GitHub Linguist 언어 이름 (§4.3) — 확장자 · 파일명은 Linguist 데이터 사용
 extensions = ["kt", "kts"]                  # (선택) Linguist에 추가로 매핑할 확장자
-grammar = "grammars/kotlin.wasm"          # tree-sitter WASM
+grammar = "grammars/kotlin.wasm"          # tree-sitter WASM(외부 확장 — M8). 내장 확장은 대신 앱에 링크한 문법의 이름을 쓴다: builtin_grammar = "kotlin"
 queries = "queries/kotlin/"                # highlights.scm, outline.scm, tags.scm, injections.scm
 line_comment = "//"
 
@@ -78,8 +78,8 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 | 오류 처리 | 진단에 파일 · 줄 · 열을 붙인다. 오류가 하나라도 있는 확장은 **통째로 등록하지 않는다**(경고만 있으면 등록). 진단은 로그와 `ext.list` 로 나간다 |
 | 엔진 버전 | `engines.pitwall` 범위가 앱 버전을 포함하지 않으면 등록하지 않는다. 내장 확장은 앱과 함께 빌드되므로 `"*"` |
 | 겹침 | 내장 → 사용자 확장(폴더 이름순) 순서로 읽고, 확장 id · 테마 id · 키맵 id · 외부 도구 id · 언어 id · UI 번역 언어 태그(대소문자 무시, 한 매니페스트 안에서도)가 먼저 등록된 것과 겹치면 나중 것(그 확장 전체)을 거절한다. 사용자 확장이 내장 기본값을 말없이 가리지 못한다. UI 번역도 같은 언어 태그를 둘 받지 않는다 — i18n(M0-14)이 확장끼리 번역을 병합해야 하면 그때 이 규칙을 다시 정한다 |
-| 내용 | 레지스트리는 기여의 메타데이터와 파일 위치만 검사 · 보관한다. 내용은 지금 소비자가 있는 것만 읽는다: 테마는 시작할 때 읽어 겉모양(`id` · `label` · 변형 하나 이상)을 보고(토큰 검사는 화면의 `parseTheme`), 키맵은 `keymap.get` 이 텍스트로 내준다(형식 검사는 키맵 엔진). UI 번역은 시작할 때 언어 폴더의 `.ftl` 을 읽어 Fluent 문법을 검사한다(규칙은 §4.1 「리소스」). 통째로 읽는 이 파일들은 **1 MiB 를 넘으면 오류**다. 언어의 `grammar`(WASM) · `queries`(폴더)는 있는지만 보고, 구문 분석 서비스(`crates/pw-syntax`)가 그 언어의 문서를 처음 열 때 읽는다 — WASM 파일 이름(확장자 뺀 것)이 tree-sitter 문법 이름이고(모듈이 `tree_sitter_<이름>` 을 내보낸다) 강조 쿼리는 그 폴더의 `highlights.scm` 이다(WASM 32 MiB · 쿼리 1 MiB 상한). **내장이 아닌 확장의 `grammar` · `queries` 는 등록하지 않는다** — 그 언어 기여(Linguist 이름 · 확장자 · 주석 기호)는 받고 경고 진단을 남긴다(이유는 §4.2 「문법 WASM 의 신뢰 경계」). Linguist 이름이 같은 기여가 여럿이면 먼저 등록된 것을 쓴다. `[wasm]` 은 읽고 검사만 한다 |
-| 내장 확장 | 저장소 `extensions/<폴더>/` 를 **빌드할 때 바이너리에 묶는다**(`crates/pw-ext/build.rs`). Tauri 리소스 폴더처럼 실행 중에 디스크에서 읽지 않는다 — 개발 실행 · 빌드본 · 시험에서 경로가 갈리지 않고, 설치본이 망가져도 기본 테마 · 키맵이 남고, Tauri 가 없는 relay 데몬도 같은 내장 확장을 쓴다. 묶지 않는 것: `.` 으로 시작하는 항목, `~` 로 끝나는 백업, `node_modules`, 심볼릭 링크. 이름이 UTF-8 이 아니면 빌드가 멈춘다. `.wasm`(언어 확장의 문법, 원본 합계 약 18 MB)은 brotli 로 압축해 묶고 읽을 때 푼다 — 그대로 묶으면 release 번들이 결정 M1-D2 의 되돌림 조건(+25 MB)에 닿는다 |
+| 내용 | 레지스트리는 기여의 메타데이터와 파일 위치만 검사 · 보관한다. 내용은 지금 소비자가 있는 것만 읽는다: 테마는 시작할 때 읽어 겉모양(`id` · `label` · 변형 하나 이상)을 보고(토큰 검사는 화면의 `parseTheme`), 키맵은 `keymap.get` 이 텍스트로 내준다(형식 검사는 키맵 엔진). UI 번역은 시작할 때 언어 폴더의 `.ftl` 을 읽어 Fluent 문법을 검사한다(규칙은 §4.1 「리소스」). 통째로 읽는 이 파일들은 **1 MiB 를 넘으면 오류**다. 언어의 문법은 둘 중 하나다: `builtin_grammar`(앱에 링크한 tree-sitter 문법의 이름 — `crates/pw-syntax/src/native.rs` 의 표, 내장 확장이 쓴다) 또는 `grammar`(WASM 파일 — 외부 확장, M8). `grammar` · `queries`(폴더)는 있는지만 보고, 구문 분석 서비스(`crates/pw-syntax`)가 그 언어의 문서를 처음 열 때 읽는다 — 강조 쿼리는 그 폴더의 `highlights.scm` 이다(쿼리 1 MiB 상한). WASM 은 `pw-syntax` 의 `wasm` 기능에서만 올리고(앱은 켜지 않는다) 파일 이름(확장자 뺀 것)이 tree-sitter 문법 이름이다(모듈이 `tree_sitter_<이름>` 을 내보낸다, 32 MiB 상한). 없는 내장 문법 이름은 그 언어를 처음 열 때 오류다. **내장이 아닌 확장의 `builtin_grammar` · `grammar` · `queries` 는 등록하지 않는다** — 그 언어 기여(Linguist 이름 · 확장자 · 주석 기호)는 받고 경고 진단을 남긴다(이유는 §4.2 「문법 WASM 의 신뢰 경계」). Linguist 이름이 같은 기여가 여럿이면 먼저 등록된 것을 쓴다. `[wasm]` 은 읽고 검사만 한다 |
+| 내장 확장 | 저장소 `extensions/<폴더>/` 를 **빌드할 때 바이너리에 묶는다**(`crates/pw-ext/build.rs`). Tauri 리소스 폴더처럼 실행 중에 디스크에서 읽지 않는다 — 개발 실행 · 빌드본 · 시험에서 경로가 갈리지 않고, 설치본이 망가져도 기본 테마 · 키맵이 남고, Tauri 가 없는 relay 데몬도 같은 내장 확장을 쓴다. 묶지 않는 것: `.` 으로 시작하는 항목, `~` 로 끝나는 백업, `node_modules`, 심볼릭 링크. 이름이 UTF-8 이 아니면 빌드가 멈춘다. 내장 확장에는 문법 WASM 이 없다(내장 문법은 네이티브 — `mise run lint` 가 `extensions/` 아래의 `.wasm` 을 막는다) |
 | 사용자 확장 | `$DATA/extensions/<폴더>/extension.toml`(03 §5-0). 앱 시작 때 한 번 읽는다. `extension.toml` 이 없는 폴더는 경고하고 건너뛴다. 설치 흐름(§6)은 아직 없다 |
 | RPC | `ext.list`(확장 · 진단), `theme.list`, `theme.get { id }`(테마 파일 내용), `keymap.list`, `keymap.get { id }`(키맵 파일 텍스트). UI 번역은 `crates/pw-i18n` 의 `i18n.get` 이 내준다(§4.1) |
 
@@ -124,25 +124,26 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 
 | 조각 | 역할 | 없을 때 |
 |---|---|---|
-| tree-sitter 문법(WASM) + queries | 하이라이트, 아웃라인, 심볼 인덱스, 폴딩 | 플레인 텍스트 |
+| tree-sitter 문법(내장은 앱에 링크, 외부는 WASM) + queries | 하이라이트, 아웃라인, 심볼 인덱스, 폴딩 | 플레인 텍스트 |
 | LSP 서버 정의 | 진단, 이동, 참조, 자동완성 | tree-sitter 심볼 인덱스로 폴백 |
 | DAP 어댑터 정의 | 디버깅 | 실행만 가능 |
 | 태스크 감지 규칙 | 실행 태스크 자동 등록 | 수동 실행 구성 |
 | 언어 주입 규칙 | 코드 안 SQL/정규식/HTML 하이라이트 | 없음 |
 
 - 기본 언어도 모두 이 구조의 "내장 확장"으로 제공 → 언어 추가 시 코어 수정 불필요
-- 내장 언어(결정 M1-D3 의 19개)는 `extensions/lang-<문법>/` 이다. 문법 WASM · 강조 쿼리는 원본 저장소의 고정 커밋에서 `tree-sitter` CLI(`mise.toml` 고정)로 만든 생성물이라 저장소에 커밋하고, 출처표 `scripts/grammars.toml`(저장소 · 태그 · 커밋 · 라이선스 · 해시)을 고쳐 `mise run grammars` 로 다시 만든다 — `mise run lint` 가 커밋된 파일과 출처표의 해시를 견준다(CONTRIBUTING.md 「tree-sitter 문법」). JSON 확장은 같은 문법으로 Linguist 「JSON with Comments」 도 기여한다
+- 내장 언어(결정 M1-D3 의 19개)는 `extensions/lang-<문법>/` 이다. 문법은 앱에 네이티브로 링크한다(결정 M1-D2 의 되돌림 — 12-m1-plan.md §4): 문법 크레이트(crates.io, Kotlin 은 고정 커밋의 git 의존성)와 저장소에 넣은 C 소스(Dockerfile, `crates/pw-syntax/grammars/`)다. 강조 쿼리는 원본 저장소의 고정 커밋에서 이어 붙인 생성물이라 저장소에 커밋하고, 출처표 `scripts/grammars.toml`(저장소 · 태그 · 커밋 · 크레이트 판본 · 라이선스 · 해시)을 고쳐 `mise run grammars` 로 다시 만든다 — `mise run lint` 가 커밋된 파일과 출처표의 해시, 크레이트 판본과 `Cargo.lock` 을 견준다(CONTRIBUTING.md 「tree-sitter 문법」). JSON 확장은 같은 문법으로 Linguist 「JSON with Comments」 도 기여한다
 - 구문 분석은 Host 의 `pw-syntax` 가 한다: 문서 세션 RPC(`syntax.open` · `syntax.edit` · `syntax.highlights` · `syntax.close`, 위치는 UTF-16)로 텍스트와 편집을 받아 증분 파싱하고, 요청한 범위의 구문 토큰 구간만 돌려준다. 언어 주입(`injections.scm`)은 아직 없다 — 주입될 자리(HTML 의 `<script>`, Markdown 의 코드 블록 · 인라인)는 바깥 문법의 강조만 받는다
 - 한 문서가 서비스를 붙잡지 않게 하는 상한(`crates/pw-syntax/src/service.rs` 머리 주석이 정본):
   - **크기:** 결정 M1-D9 의 「편집 + 강조」 범위(5 MiB 이하, 1만 자 넘는 줄 없음)를 서버가 지킨다. 넘는 문서는 열지 않고, 편집으로 넘어가면 그 문서의 강조를 끈다. 끈 까닭은 결과의 `off`(`tooLarge` · `longLine` · `timedOut` · `failed`)로 알리고, 끈 문서는 다시 열기 전까지 강조하지 않는다
   - **시간:** 파싱과 강조 쿼리가 요청 하나에 1초 + 텍스트 1 MiB 마다 1초를 나눠 쓴다. 넘으면 그 문서의 강조를 끈다(`timedOut`). 새 편집이 오거나 문서가 닫히면 하던 파싱을 그만둔다 — 그 요청은 파싱하던 버전 · 빈 구간으로 끝나고 웹뷰는 버전이 달라 버린다
-  - **잠금:** 문법마다 wasmtime 저장소 · 파서 · 잠금을 따로 둔다. 다른 언어의 문서는 기다리지 않고, 같은 문법의 문서는 위 시간 상한까지 기다릴 수 있다
-  - **메모리:** 문법은 그 언어의 문서를 처음 열 때 올리고, 그 문법을 쓰는 마지막 문서가 사라진 뒤 5분이 지나면 저장소째 내린다. 올린 문법이 없으면 엔진도 버린다
+  - **잠금:** 문법마다 파서 · 잠금(WASM 문법은 wasmtime 저장소도)을 따로 둔다. 다른 언어의 문서는 기다리지 않고, 같은 문법의 문서는 위 시간 상한까지 기다릴 수 있다
+  - **메모리:** 문법은 그 언어의 문서를 처음 열 때 올리고(파서 · 강조 쿼리 — release 로 0.1~22 ms), 그 문법을 쓰는 마지막 문서가 사라진 뒤 5분이 지나면 내린다. 네이티브 문법의 파싱 표는 바이너리에 있어 흔한 5개 언어(Rust · TypeScript · JSON · Markdown · TOML)를 열어도 +9.5 MB 다(WASM 문법은 +63.5 MB — 결정 M1-D2). WASM 문법은 저장소째 내리고 올린 문법이 없으면 엔진도 버린다
 
 #### 문법 WASM 의 신뢰 경계
 
+- 지금 앱은 문법 WASM 을 올리지 않는다 — 내장 문법은 네이티브이고, WASM 경로는 `pw-syntax` 의 `wasm` 기능(시험만 켠다)에 남겨 둔 외부 확장(M8)용이다. 아래는 그 경로를 켤 때의 경계다
 - **문법 WASM 의 실행 시간에는 상한이 없다.** 파싱의 진행 콜백은 WASM 호출(렉서 · 외부 스캐너) 안쪽을 끊지 못한다. wasmtime 의 epoch · fuel 은 tree-sitter(0.27)가 막는다 — `ts_wasm_store_new` 가 wasmtime `Store` 를 안에서 만들고 곧바로 stdlib 초기화 WASM 을 부르는데, 새 `Store` 의 epoch 시한 · fuel 은 0 이라 엔진에 켜는 순간 저장소 생성이 trap 으로 실패하고, `Store` 를 밖으로 내주는 API 도 없다. 무한 루프 문법 하나가 그 문법의 파서 잠금을 영영 쥐고 CPU 코어 하나를 계속 먹는다
-- 그래서 **문법은 내장 확장의 것만 받는다**(§2 「레지스트리」 「내용」 행). 내장 문법 19개는 출처 · 커밋 · 해시가 고정돼 있다(`scripts/grammars.toml`). 외부 확장이 문법을 기여하기 전(설치 흐름 §6 · M8)에 upstream API 나 tree-sitter 패치로 저장소에 epoch 시한을 걸 수 있게 해 이 제한을 푼다
+- 그래서 **문법은 내장 확장의 것만 받는다**(§2 「레지스트리」 「내용」 행). 내장 문법 19개는 앱에 링크한 네이티브 문법이고 출처 · 커밋 · 판본이 고정돼 있다(`scripts/grammars.toml`). 외부 확장이 문법을 기여하기 전(설치 흐름 §6 · M8)에 upstream API 나 tree-sitter 패치로 저장소에 epoch 시한을 걸 수 있게 해 이 제한을 푼다
 - 그 밖의 경계: 문법 WASM 의 import 는 tree-sitter 가 주는 `env.*`(메모리 · 문자열 함수 · 렉서 콜백)뿐이라 파일 · 네트워크 · WASI 가 없다. WASM trap 은 그 파싱의 실패(`failed`)로 끝나고 프로세스를 죽이지 않는다. 저장소 하나의 선형 메모리 상한은 128 MiB 다(tree-sitter `wasm_store.c`) — 문법마다 저장소가 따로라 한 문법이 다른 문법의 메모리를 건드리지 못한다
 
 ### 4.3 언어 판별 — GitHub Linguist 데이터 (D28)
