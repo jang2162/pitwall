@@ -1,4 +1,5 @@
-// 키맵이 네이티브(Tauri)와 주고받는 것: 메뉴 accelerator 동기화, 메뉴에서 고른 액션, 설정 창 열기, Shell 명령 설치.
+// 키맵이 네이티브(Tauri)와 주고받는 것: 메뉴 accelerator 동기화, 메뉴에서 고른 액션, 설정 창 열기, Shell 명령 설치, 창 닫기와
+// 그 확인.
 // 시험 · 브라우저에서는 Tauri 가 없으므로 이 인터페이스로 갈아 끼운다.
 
 import { invoke } from "@tauri-apps/api/core";
@@ -15,6 +16,11 @@ export interface KeymapNative {
   openSettings(): Promise<void>;
   /** 이 창을 닫는다(`window.close`). 창의 닫기 버튼과 같은 길(close requested)을 지난다. */
   closeWindow(): Promise<void>;
+  /**
+   * 창이 닫히려 할 때(닫기 버튼 · `closeWindow` · 앱 종료) `shouldClose` 를 묻고 `false` 면 닫지 않는다(미저장 확인, M1-13). 해제
+   * 함수를 돌려준다. 없으면(시험) 묻지 않는다.
+   */
+  guardClose?(shouldClose: () => Promise<boolean>): () => void;
   /** 「Shell 명령 설치」(F2-1). macOS 에만 있다. 결과는 네이티브 대화상자가 알린다(src-tauri/src/shell_command.rs). */
   installShellCommand?(): Promise<void>;
 }
@@ -36,6 +42,21 @@ export const tauriKeymapNative: KeymapNative = {
   },
   openSettings: () => invoke("open_settings_window"),
   closeWindow: () => getCurrentWebviewWindow().close(),
+  guardClose(shouldClose) {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    // 듣는 동안 Tauri 는 이 창의 닫기를 웹뷰에 맡긴다. 막지 않으면 핸들러가 끝난 뒤 창을 없앤다(destroy).
+    getCurrentWebviewWindow()
+      .onCloseRequested(async (event) => {
+        if (!(await shouldClose())) event.preventDefault();
+      })
+      .then((off) => (disposed ? off() : (unlisten = off)))
+      .catch((e: unknown) => console.warn("[window] close guard failed", e));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  },
   ...(/Mac/.test(navigator.userAgent) && {
     installShellCommand: () => invoke<void>("install_shell_command"),
   }),

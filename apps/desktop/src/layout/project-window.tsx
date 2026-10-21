@@ -33,7 +33,7 @@ import {
 import { type ComponentType, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster } from "sonner";
 
-import { createDocumentStore } from "../editor/documents";
+import { createDocumentStore, FS_CHANGED_TOPIC, type FsChangedEvent } from "../editor/documents";
 import { editorActions } from "../editor/editor-actions";
 import { EditorPanel } from "../editor/editor-panel";
 import { EditorTabHeader } from "../editor/editor-tab";
@@ -42,9 +42,11 @@ import {
   createEditorWorkspace,
   type EditorWorkspace,
   EditorWorkspaceProvider,
+  type UnsavedAnswer,
   useEditorWorkspace,
 } from "../editor/editor-workspace";
 import { useTabSwitcher } from "../editor/tab-switcher";
+import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { FileTreeToolWindow } from "../file-tree/file-tree";
 import { useProjectView } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
@@ -58,6 +60,7 @@ import {
   NotificationsToolWindow,
   useNotify,
 } from "../notifications/notifications";
+import type { KeymapNative } from "../keymap/native";
 import { activeWorktree } from "../open-with/active-worktree";
 import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
 import { projectIdFromQuery, projectOpenInbox } from "../project-open";
@@ -402,18 +405,19 @@ function errorText(e: unknown): string {
 }
 
 /**
- * 창의 에디터 작업 공간. 파일 읽기는 이 창의 Host 연결로 하고(`fs.stat` · `fs.read` · `lang.detect`, 요청 · 탭의 워크트리를 접근
- * 범위로), 열지 못한 것은 알림으로 보인다. 창이 사는 동안 하나다.
+ * 창의 에디터 작업 공간. 파일 읽기 · 쓰기는 이 창의 Host 연결로 하고(`fs.stat` · `fs.read` · `fs.write` · `lang.detect`, 요청 · 탭의
+ * 워크트리를 접근 범위로), 열지 못한 것 · 저장하지 못한 것은 알림으로 보인다. 미저장 확인은 `ask` 가 묻는다. 창이 사는 동안 하나다.
  */
 function useWindowEditor(
   projectId: string | undefined,
   log: WindowLog | undefined,
+  ask: (paths: readonly string[]) => Promise<UnsavedAnswer>,
 ): EditorWorkspace {
   const { client } = useHost();
   const notify = useNotify();
   const strings = useProjectStrings().editor;
-  const latest = useRef({ client, notify, strings, log });
-  latest.current = { client, notify, strings, log };
+  const latest = useRef({ client, notify, strings, log, ask });
+  latest.current = { client, notify, strings, log, ask };
   const [workspace] = useState(() => {
     const host = () => {
       const c = latest.current.client;
@@ -430,6 +434,7 @@ function useWindowEditor(
       documents: createDocumentStore({
         stat,
         read: (params, worktree) => host().call("fs.read", { ...scope(worktree), ...params }),
+        write: (params, worktree) => host().call("fs.write", { ...scope(worktree), ...params }),
         detect: async (path, head, worktree) => {
           const { files } = await host().call("lang.detect", {
             ...scope(worktree),
@@ -445,10 +450,49 @@ function useWindowEditor(
           title: latest.current.strings.openFailed(path),
           body: message,
         }),
+      onSaveFailed: (path, message) =>
+        latest.current.notify({
+          level: "error",
+          title: latest.current.strings.saveFailed(path),
+          body: message,
+        }),
+      confirmUnsaved: (paths) => latest.current.ask(paths),
+      onCloseAborted: () =>
+        latest.current.notify({
+          level: "warning",
+          title: latest.current.strings.unsavedDialog.incomplete,
+        }),
       log: (message) => latest.current.log?.info(message, "editor"),
     });
   });
   return workspace;
+}
+
+/**
+ * 이 창의 프로젝트의 `fs.changed`(file-watch.tsx 가 연 감시)를 열린 문서에 넘긴다 — 디스크에서 바뀐 문서를 다시 읽거나 배너를
+ * 띄운다(documents.ts). 구독이 실패하면 경고만 남긴다 — 외부 변경이 저절로 보이지 않을 뿐이고 저장은 여전히 덮지 않는다.
+ */
+function useDocumentSync(workspace: EditorWorkspace, projectId: string | undefined) {
+  const { client } = useHost();
+  useEffect(() => {
+    if (!client || projectId === undefined) return;
+    let disposed = false;
+    let unsubscribe: (() => Promise<void>) | undefined;
+    client
+      .subscribe({ projectId, topics: [FS_CHANGED_TOPIC] }, (event) => {
+        if (!disposed && event.topic === FS_CHANGED_TOPIC)
+          void workspace.documents.changed(event.payload as unknown as FsChangedEvent);
+      })
+      .then((subscription) => {
+        unsubscribe = () => subscription.unsubscribe();
+        if (disposed) void unsubscribe().catch(() => {});
+      })
+      .catch((e: unknown) => console.warn("[editor] fs.changed subscription failed", e));
+    return () => {
+      disposed = true;
+      void unsubscribe?.().catch(() => {});
+    };
+  }, [client, projectId, workspace]);
 }
 
 type WindowLog = Pick<UiLogger, "info">;
@@ -457,10 +501,14 @@ function ProjectWindowBody({
   projectId,
   log,
   closeWindow,
+  guardClose,
+  onDockApi,
 }: {
   projectId?: string;
   log?: WindowLog;
   closeWindow(): Promise<void>;
+  guardClose?: KeymapNative["guardClose"];
+  onDockApi?(api: DockviewApi): void;
 }) {
   const strings = useProjectStrings();
   const appearance = useTheme((s) => s.appearance);
@@ -474,8 +522,12 @@ function ProjectWindowBody({
   useProjectStatusItems();
   useDemoTaskActions();
 
-  const workspace = useWindowEditor(projectId, log);
+  const unsaved = useUnsavedPrompt();
+  const workspace = useWindowEditor(projectId, log, unsaved.ask);
   useEffect(() => (api ? workspace.attach(api) : undefined), [api, workspace]);
+  useDocumentSync(workspace, projectId);
+  // 창을 닫기 전(닫기 단추 · ⌘W · 앱 종료) 미저장 편집을 묻는다.
+  useEffect(() => guardClose?.(() => workspace.confirmWindowClose()), [guardClose, workspace]);
   // 창이 받은 열기 요청을 탭으로 연다. 도킹 영역과 Host 연결이 모두 준비된 뒤에 받는다 — 그 전의 요청은 우편함이 들고 있다.
   const ready = api !== undefined && client !== undefined && projectId !== undefined;
   useEffect(() => {
@@ -514,7 +566,10 @@ function ProjectWindowBody({
           <ProjectDock
             storage={window.localStorage}
             titles={strings.toolWindows}
-            onApi={setApi}
+            onApi={(next) => {
+              setApi(next);
+              onDockApi?.(next);
+            }}
             emptyArea={EmptyEditorArea}
           />
           <ToolWindowBar dock="right" api={api} />
@@ -525,6 +580,7 @@ function ProjectWindowBody({
         {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
         <StatusBar label={strings.status.label} />
         {switcher.element}
+        {unsaved.element}
         {/* 상태바(22px) 위에 띄운다. */}
         <Toaster theme={appearance} position="bottom-right" offset={{ bottom: 30, right: 12 }} />
       </div>
@@ -536,6 +592,8 @@ export function ProjectWindow({
   projectId = projectIdFromQuery(window.location.search),
   log,
   closeWindow,
+  guardClose,
+  onDockApi,
 }: {
   /** 창 쿼리의 프로젝트 id(`?project=`). 없으면 외부 도구 액션 · 신뢰(trust/trust.tsx) · 파일 열기가 없다. */
   projectId?: string;
@@ -543,6 +601,10 @@ export function ProjectWindow({
   log?: WindowLog;
   /** 이 창을 닫는다(`window.close` 가 에디터 탭이 없을 때 부른다, editor-actions.ts). */
   closeWindow(): Promise<void>;
+  /** 창이 닫히려 할 때 묻는다(미저장 확인). 없으면 묻지 않는다. */
+  guardClose?: KeymapNative["guardClose"];
+  /** 도킹 영역이 준비되면 그 api 를 받는다(시험이 탭을 그룹 사이로 옮긴다). */
+  onDockApi?(api: DockviewApi): void;
 }) {
   return (
     <NotificationProvider>
@@ -550,10 +612,21 @@ export function ProjectWindow({
         <HostNotifications projectId={projectId} />
         <TaskProvider projectId={projectId}>
           {projectId === undefined ? (
-            <ProjectWindowBody log={log} closeWindow={closeWindow} />
+            <ProjectWindowBody
+              log={log}
+              closeWindow={closeWindow}
+              guardClose={guardClose}
+              onDockApi={onDockApi}
+            />
           ) : (
             <TrustProvider projectId={projectId}>
-              <ProjectWindowBody projectId={projectId} log={log} closeWindow={closeWindow} />
+              <ProjectWindowBody
+                projectId={projectId}
+                log={log}
+                closeWindow={closeWindow}
+                guardClose={guardClose}
+                onDockApi={onDockApi}
+              />
             </TrustProvider>
           )}
         </TaskProvider>

@@ -31,6 +31,7 @@ const context: EditorFeatureContext = {
   language: "Rust",
   appearance: "light",
   onCursor: () => {},
+  history: { undo: () => false, redo: () => false },
 };
 
 it("assembles one extension per feature, in list order", () => {
@@ -40,6 +41,7 @@ it("assembles one extension per feature, in list order", () => {
     "theme",
     "readOnly",
     "cursorReport",
+    "editing",
     "navigation",
   ]);
   const seen: string[] = [];
@@ -54,14 +56,45 @@ it("assembles one extension per feature, in list order", () => {
   expect(seen).toEqual(["a:/p/a.rs", "b:/p/a.rs"]);
 });
 
-it("makes a read-only viewer that still shows a cursor", () => {
+it("edits a document it can write, and keeps a read-only one read-only with a cursor", () => {
+  const make = (readOnly: boolean) =>
+    new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc: "abc",
+        extensions: editorExtensions({ ...context, readOnly }),
+      }),
+    });
+  const editable = make(false);
+  expect(editable.state.readOnly).toBe(false);
+  const locked = make(true);
+  expect(locked.state.readOnly).toBe(true);
+  expect(locked.contentDOM.getAttribute("contenteditable")).toBe("true");
+  expect(locked.dom.querySelector(".cm-lineNumbers")).not.toBeNull();
+  editable.destroy();
+  locked.destroy();
+});
+
+it("sends undo and redo, by key and by the native menu, to the document's history", () => {
+  const history = { undo: vi.fn(() => true), redo: vi.fn(() => true) };
   const view = new EditorView({
     parent: document.body,
-    state: EditorState.create({ doc: "abc", extensions: editorExtensions(context) }),
+    state: EditorState.create({
+      doc: "abc",
+      extensions: editorExtensions({ ...context, history }),
+    }),
   });
-  expect(view.state.readOnly).toBe(true);
-  expect(view.contentDOM.getAttribute("contenteditable")).toBe("true");
-  expect(view.dom.querySelector(".cm-lineNumbers")).not.toBeNull();
+  const key = (init: KeyboardEventInit) =>
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
+    );
+  key({ key: "z", code: "KeyZ", ctrlKey: true });
+  key({ key: "y", code: "KeyY", ctrlKey: true });
+  view.contentDOM.dispatchEvent(
+    new InputEvent("beforeinput", { inputType: "historyUndo", bubbles: true, cancelable: true }),
+  );
+  expect(history.undo).toHaveBeenCalledTimes(2);
+  expect(history.redo).toHaveBeenCalledTimes(1);
   view.destroy();
 });
 

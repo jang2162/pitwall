@@ -50,6 +50,41 @@ editor-tab-pinned = 고정됨
 editor-tab-pin = 탭 고정
 editor-tab-unpin = 탭 고정 해제
 editor-switcher-label = 탭 전환기
+# 탭 머리의 미저장 표시(●)의 이름.
+editor-tab-unsaved = 저장하지 않은 편집
+# $path: 저장하려던 파일
+editor-save-failed = 저장하지 못했다: { $path }
+
+## 외부 변경 배너(src/editor/disk-banner.tsx). 디스크의 파일이 이 탭의 내용과 달라졌을 때.
+
+editor-disk-changed = 디스크에서 바뀌었다. 저장하지 않은 편집이 있어 받지 않았다.
+editor-disk-take = 디스크 것 받기
+editor-disk-keep = 내 것 유지
+editor-disk-compare = 비교
+editor-disk-compare-close = 비교 닫기
+editor-disk-compare-mine = 내 것(편집 중)
+editor-disk-compare-disk = 디스크
+editor-disk-deleted = 디스크에서 지워졌다. 저장하면 다시 만든다.
+# $path: 같은 내용으로 새로 생긴 파일
+editor-disk-renamed = 다른 이름으로 옮겨진 것 같다: { $path }
+editor-disk-open-renamed = 새 이름으로 열기
+editor-disk-dismiss = 닫기
+
+## 미저장 확인(src/editor/unsaved-dialog.tsx). 탭 · 창을 닫거나 앱을 끝낼 때.
+
+editor-unsaved-title = 저장하지 않은 편집
+# $count: 파일 수, $files: 파일 이름(줄마다 하나)
+editor-unsaved-body =
+    { $count ->
+        [1] 이 파일의 편집을 저장하지 않았다:
+       *[other] 이 파일 { $count }개의 편집을 저장하지 않았다:
+    }
+    { $files }
+editor-unsaved-save = 저장
+editor-unsaved-discard = 저장 안 함
+editor-unsaved-cancel = 취소
+# 「저장」 이 끝나지 않았다(충돌 · 실패). 그 탭의 배너 · 알림을 본다.
+editor-unsaved-save-incomplete = 저장하지 못한 파일이 있어 닫지 않았다
 
 action-editor-close-tab = 탭 닫기
 # ⌘W · 메뉴 「닫기」: 에디터 탭이 있으면 탭, 없으면 창(10-ui §5.2).
@@ -67,6 +102,9 @@ action-editor-reveal =
        *[other] 파일 관리자에서 보기
     }
 action-editor-switcher = 탭 전환기
+# ⌘S: 활성 탭의 문서를 저장한다(자동 저장 없음, 결정 M1-D13).
+action-editor-save = 저장
+action-editor-save-all = 모두 저장
 
 ## 파일 트리(src/file-tree). 프로젝트 툴 윈도우의 내용이다.
 

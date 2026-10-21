@@ -18,6 +18,8 @@ menu-quit = Quit { $app }
 menu-welcome-window = Welcome Window
 # ⌘W(키맵 액션 window.close): 에디터 탭이 있으면 탭, 없으면 창을 닫는다.
 menu-close = Close
+# ⌘S(키맵 액션 editor.save): 활성 탭의 문서를 저장한다.
+menu-save = Save
 
 menu-undo = Undo
 menu-redo = Redo

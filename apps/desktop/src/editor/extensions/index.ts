@@ -27,13 +27,21 @@
 // 기능끼리는 서로를 import 하지 않는다. 함께 쓰는 값(테마 색 등)은 CSS 변수(src/theme/tokens.ts)나 `context` 로 받는다.
 
 import { Compartment, type Extension, Facet, type TransactionSpec } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
 import type { Judgment } from "@pitwall/rpc-client";
 
 import { base } from "./base";
 import { cursorReport } from "./cursor-report";
+import { editing } from "./editing";
 import { navigation } from "./navigation";
 import { readOnly } from "./read-only";
 import { theme } from "./theme";
+
+/** 문서의 undo 기록(../live-text.ts). 뷰가 아니라 문서에 있어 탭 사이 · 뷰를 다시 만든 뒤에도 이어진다. */
+export interface EditorHistory {
+  undo(view: EditorView): boolean;
+  redo(view: EditorView): boolean;
+}
 
 /** 1부터 센 줄 · 열(열은 글자 단위). */
 export interface EditorCursor {
@@ -60,6 +68,8 @@ export interface EditorFeatureContext {
   readonly appearance: "light" | "dark";
   /** 이 뷰의 커서가 바뀌었다(상태바의 줄:열, M1-18). 그 탭이 활성인지는 받는 쪽이 본다. */
   readonly onCursor: (cursor: EditorCursor) => void;
+  /** 문서의 undo · redo(`editing`). 고친 내용은 뷰의 트랜잭션으로 문서에 간다 — 기능이 따로 알릴 것은 없다. */
+  readonly history: EditorHistory;
 }
 
 export interface EditorFeature {
@@ -81,6 +91,7 @@ export const EDITOR_FEATURES: readonly EditorFeature[] = [
   theme,
   readOnly,
   cursorReport,
+  editing,
   navigation,
 ];
 

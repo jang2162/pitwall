@@ -8,12 +8,17 @@
 // 보지 않는 경우(IME 조합 중)에 메뉴로만 와도 같은 규칙이라 탭이 있는 창이 통째로 닫히지 않는다. 팝업이 열린 동안에는 키도
 // 메뉴도 이 액션을 돌리지 않는다(keymap-provider.tsx 의 창 팝업 규칙). 다른 창(웰컴 · 설정)의 `window.close` 는 창을 닫기만
 // 한다(src/keymap/actions.ts).
+//
+// 탭을 닫는 액션은 모두 작업 공간의 `closeTabs` 를 지난다 — 그 문서를 보는 마지막 탭에 미저장 편집이 있으면 먼저 묻는다(M1-13).
+// 탭이 없을 때의 `window.close` 는 창을 닫고, 창의 닫기 요청이 미저장을 묻는다(project-window.tsx).
+// `editor.save`(⌘S)는 활성 탭의 문서를 저장한다(자동 저장 없음, 결정 M1-D13). 네이티브 메뉴 「저장」 이 같은 액션이라 키와 메뉴
+// accelerator 가 한 액션으로 모인다(`window.close` 와 같다) — 두 번 와도 둘째는 저장할 것이 없거나 첫 저장 뒤에 줄을 선다.
 
 import type { Action } from "@pitwall/keymap";
 
 import type { ProjectStrings } from "../layout/strings";
 import {
-  closeOtherTabs,
+  otherTabs,
   splitRight,
   tabParams,
   toggleEditorMaximized,
@@ -44,10 +49,10 @@ export function editorActions(deps: {
       id: "window.close",
       label: T.closeTabOrWindow,
       keywords: ["Close", "Close Editor", "Close Window"],
-      run: () => {
+      run: async () => {
         const panel = workspace.activeTab();
-        if (panel) panel.api.close();
-        else return deps.closeWindow();
+        if (panel) await workspace.closeTabs([panel]);
+        else await deps.closeWindow();
       },
     },
     {
@@ -55,14 +60,27 @@ export function editorActions(deps: {
       label: T.closeTab,
       keywords: ["Close Tab", "Close Editor"],
       enabled: hasTab,
-      run: withTab((panel) => panel.api.close()),
+      run: withTab((panel) => void workspace.closeTabs([panel])),
     },
     {
       id: "editor.closeOtherTabs",
       label: T.closeOtherTabs,
       keywords: ["Close Other Tabs", "Close Others"],
       enabled: hasTab,
-      run: withTab(closeOtherTabs),
+      run: withTab((panel) => void workspace.closeTabs(otherTabs(panel))),
+    },
+    {
+      id: "editor.save",
+      label: T.save,
+      keywords: ["Save", "Save File"],
+      enabled: hasTab,
+      run: withTab((panel) => void workspace.save(panel)),
+    },
+    {
+      id: "editor.saveAll",
+      label: T.saveAll,
+      keywords: ["Save All"],
+      run: () => void workspace.saveAll(),
     },
     {
       id: "editor.splitRight",
@@ -71,7 +89,7 @@ export function editorActions(deps: {
       enabled: hasTab,
       run: withTab((panel) => {
         const api = workspace.api();
-        if (api) splitRight(api, panel);
+        if (api) workspace.focus(splitRight(api, panel).id);
       }),
     },
     {

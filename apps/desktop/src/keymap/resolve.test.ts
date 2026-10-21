@@ -61,6 +61,8 @@ const ACTION_IDS = new Set(
         }),
         stat: () => Promise.reject(new Error("none")),
         onOpenFailed() {},
+        onSaveFailed() {},
+        confirmUnsaved: async () => "cancel",
       }),
       strings: KO_PROJECT.editor,
       openSwitcher() {},

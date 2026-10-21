@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
+    "@codemirror/merge": "^6.12.3",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
     "@fluent/bundle": "^0.19.1",

@@ -50,6 +50,41 @@ editor-tab-pinned = Pinned
 editor-tab-pin = Pin Tab
 editor-tab-unpin = Unpin Tab
 editor-switcher-label = Switcher
+# Name of the unsaved mark (●) on a tab header.
+editor-tab-unsaved = Unsaved changes
+# $path: the file being saved
+editor-save-failed = Could not save { $path }
+
+## External change banner (src/editor/disk-banner.tsx). The file on disk no longer matches this tab.
+
+editor-disk-changed = The file changed on disk. It was not loaded because you have unsaved changes.
+editor-disk-take = Load Disk Version
+editor-disk-keep = Keep Mine
+editor-disk-compare = Compare
+editor-disk-compare-close = Close Comparison
+editor-disk-compare-mine = Mine (unsaved)
+editor-disk-compare-disk = Disk
+editor-disk-deleted = The file was deleted on disk. Saving creates it again.
+# $path: the new file with the same content
+editor-disk-renamed = The file seems to have moved to { $path }
+editor-disk-open-renamed = Open New Name
+editor-disk-dismiss = Dismiss
+
+## Unsaved changes prompt (src/editor/unsaved-dialog.tsx). Closing a tab or window, or quitting.
+
+editor-unsaved-title = Unsaved changes
+# $count: number of files, $files: file names, one per line
+editor-unsaved-body =
+    { $count ->
+        [one] This file has unsaved changes:
+       *[other] These { $count } files have unsaved changes:
+    }
+    { $files }
+editor-unsaved-save = Save
+editor-unsaved-discard = Don't Save
+editor-unsaved-cancel = Cancel
+# "Save" did not finish (conflict or failure). See the tab's banner or the notification.
+editor-unsaved-save-incomplete = Not closed: some files could not be saved
 
 action-editor-close-tab = Close Tab
 # ⌘W · 메뉴 「닫기」: 에디터 탭이 있으면 탭, 없으면 창(10-ui §5.2).
@@ -67,6 +102,9 @@ action-editor-reveal =
        *[other] Show in File Manager
     }
 action-editor-switcher = Switcher
+# ⌘S: 활성 탭의 문서를 저장한다(자동 저장 없음, 결정 M1-D13).
+action-editor-save = Save
+action-editor-save-all = Save All
 
 ## File tree (src/file-tree). The content of the Project tool window.
 

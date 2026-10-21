@@ -3,7 +3,7 @@
 // 종류를 쓴다. 읽는 중 · 실패는 탭이 그리고, 뷰어는 읽힌 문서만 받는다.
 //
 // 뷰어를 더하거나 바꾸는 법: 컴포넌트를 `ViewerProps` 로 만들고 아래 표의 그 종류 한 줄을 바꾼다. 내용을 어디서 받는지는
-// viewer-kinds.ts 의 `VIEWER_READS` 다 — `text` 뷰어는 `doc.text`(여러 탭이 나누는 한 벌)를, `self` 뷰어는 `doc.stat` 의 경로를
+// viewer-kinds.ts 의 `VIEWER_READS` 다 — `text` 뷰어는 `doc.live`(여러 탭이 나누는 편집 중인 한 벌, live-text.ts)를, `self` 뷰어는 `doc.stat` 의 경로를
 // 받아 필요한 범위를 `fs.read` 로 직접 읽는다.
 //
 //   image: ImageViewer,     // M1-22

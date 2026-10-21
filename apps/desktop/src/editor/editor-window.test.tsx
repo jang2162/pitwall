@@ -1,13 +1,15 @@
 // @vitest-environment happy-dom
 // 프로젝트 창(App kind="project", `?project=p1`)을 가짜 Host 에 붙여 에디터 탭을 본다(12-m1-plan M1-09 완료 기준): 열기 요청이 탭과
 // 커서 자리가 되고, 같은 파일은 그 탭을 다시 쓰고, ⌘⌥E 가 활성 탭의 파일 · 줄 · 열을 openWith.run 에 넘기고, ⌘\ 로 나눈 두 그룹이
-// 스크롤을 따로 갖고, 탭 단축키(⌘W · ⌘⌥W · ⌃Tab)가 돈다.
+// 스크롤을 따로 갖고, 탭 단축키(⌘W · ⌘⌥W · ⌃Tab)가 돈다. 편집 · 저장 · 외부 변경(M1-13 완료 기준 ①~⑤)도 여기서 본다.
 
 import { EditorView } from "@codemirror/view";
 import type {
   ConfigView,
   FsRead,
   FsStat,
+  FsWriteParams,
+  FsWritten,
   HostInfo,
   KeymapFile,
   LangDetectResult,
@@ -15,6 +17,7 @@ import type {
   Project,
   ProjectTrust,
 } from "@pitwall/rpc-client";
+import type { DockviewApi } from "dockview-react";
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -45,8 +48,36 @@ const host = vi.hoisted(() => ({
   links: new Map<string, string>(),
   /** 정규화한 경로 → 크기(내용 길이 대신). */
   sizes: new Map<string, number>(),
+  /** 정규화한 경로 → 수정 시각. `version` 은 수정 시각과 내용으로 정한다(pw-fs 와 같은 뜻). */
+  mtimes: new Map<string, number>(),
   calls: [] as { method: string; params: Record<string, unknown> }[],
+  /** 열린 연결의 이벤트 구독: 이벤트를 보내는 함수와 구독 id · 토픽. */
+  subscribers: [] as { send(m: object): void; id: number; topics: string[] }[],
 }));
+
+/** 디스크의 파일을 바꾼다(외부 도구 · 에이전트). 감시 이벤트는 따로 `emit` 한다. */
+function putFile(path: string, content: string) {
+  host.files.set(path, content);
+  host.mtimes.set(path, (host.mtimes.get(path) ?? 1) + 1);
+}
+
+const versionOf = (path: string) =>
+  host.files.has(path) ? `${host.mtimes.get(path) ?? 1}:${host.files.get(path)}` : null;
+
+/** 프로젝트 범위 이벤트를 구독한 연결에 보낸다. */
+async function emit(topic: string, payload: unknown) {
+  await act(async () => {
+    for (const sub of host.subscribers)
+      if (sub.topics.includes(topic))
+        sub.send({
+          method: "events.event",
+          params: { subscriptionId: sub.id, projectId: "p1", topic, payload },
+        });
+  });
+}
+
+const changed = (paths: string[], kinds: string[] = paths.map(() => "modified")) =>
+  emit("fs.changed", { root: "/work/demo", worktree: null, paths, kinds, rescan: false });
 
 vi.mock("../tauri-transport", async () => {
   const { createMemoryTransportPair: pair } = await import("@pitwall/rpc-client");
@@ -61,7 +92,7 @@ vi.mock("../tauri-transport", async () => {
         const m = JSON.parse(text) as { id?: number; method: string; params: never };
         const reply = (result: unknown) => send({ id: m.id, result });
         const fail = (message: string) =>
-          send({ id: m.id, error: { code: -32004, message, data: null } });
+          send({ id: m.id, error: { code: -32005, message, data: null } });
         if (["fs.", "openWith.", "lang."].some((p) => m.method.startsWith(p)))
           host.calls.push({ method: m.method, params: m.params });
         const path = (m.params as { path?: string } | undefined)?.path ?? "";
@@ -128,24 +159,25 @@ vi.mock("../tauri-transport", async () => {
               kind: host.links.has(path) ? "symlink" : "file",
               target: host.links.has(path) ? "file" : null,
               size: size(),
-              mtimeMs: 1,
+              mtimeMs: host.mtimes.get(real) ?? 1,
               readonly: false,
               sizeClass: sizeClass(),
             } satisfies FsStat);
           case "fs.read":
+            if (!host.files.has(real)) return fail(`not found: ${path}`);
             return reply({
               path: real,
               size: size(),
-              mtimeMs: 1,
+              mtimeMs: host.mtimes.get(real) ?? 1,
               offset: 0,
               eof: true,
-              version: "v1",
+              version: versionOf(real),
               content: { kind: "text", text: host.files.get(real)! },
               judgment: {
                 binary: false,
                 encoding: "UTF-8",
                 bom: null,
-                lineEnding: "lf",
+                lineEnding: host.files.get(real)!.includes("\r\n") ? "crlf" : "lf",
                 longLines: false,
                 sizeClass: sizeClass(),
                 editable: sizeClass() === "editable",
@@ -172,8 +204,25 @@ vi.mock("../tauri-transport", async () => {
               argv: ["/usr/local/bin/code"],
               pid: 1,
             } satisfies OpenWithOutcome);
-          case "events.subscribe":
-            return reply({ subscriptionId: next++ });
+          case "fs.write": {
+            const p = m.params as FsWriteParams;
+            if (versionOf(p.path) !== (p.expectedVersion ?? null))
+              return send({ id: m.id, error: { code: -32004, message: "conflict", data: null } });
+            if (p.content.kind !== "text") return fail("text only");
+            host.files.set(p.path, p.content.text);
+            host.mtimes.set(p.path, (host.mtimes.get(p.path) ?? 1) + 1);
+            return reply({
+              path: p.path,
+              size: p.content.text.length,
+              mtimeMs: host.mtimes.get(p.path)!,
+              version: versionOf(p.path)!,
+            } satisfies FsWritten);
+          }
+          case "events.subscribe": {
+            const id = next++;
+            host.subscribers.push({ send, id, topics: (m.params as { topics: string[] }).topics });
+            return reply({ subscriptionId: id });
+          }
           case "events.unsubscribe":
             return reply(null);
           default:
@@ -197,7 +246,16 @@ const native = {
   },
   openSettings: async () => {},
   closeWindow: vi.fn<KeymapNative["closeWindow"]>(async () => {}),
+  guardClose: (shouldClose: () => Promise<boolean>) => {
+    closeGuard = shouldClose;
+    return () => {
+      if (closeGuard === shouldClose) closeGuard = undefined;
+    };
+  },
 } satisfies KeymapNative;
+
+/** 창의 닫기 요청을 받으면 묻는 함수(`guardClose`). */
+let closeGuard: (() => Promise<boolean>) | undefined;
 
 async function menuAction(action: string) {
   await act(async () => menuListener?.(action));
@@ -215,6 +273,7 @@ function lines(n: number): string {
 
 let root: Root | undefined;
 let themeStore: ReturnType<typeof createThemeStore> | undefined;
+let dock: DockviewApi | undefined;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -230,7 +289,9 @@ beforeEach(() => {
   ]);
   host.links = new Map([["/work/demo/link.rs", LIB]]);
   host.sizes = new Map();
+  host.mtimes = new Map();
   host.calls = [];
+  host.subscribers = [];
   activeWorktreeStore.setState({ top: undefined });
   native.closeWindow.mockClear();
   localStorage.clear();
@@ -261,7 +322,7 @@ async function mount() {
     root!.render(
       <StrictMode>
         <ThemeStoreProvider store={store}>
-          <App kind="project" native={native} />
+          <App kind="project" native={native} onDockApi={(api) => (dock = api)} />
         </ThemeStoreProvider>
       </StrictMode>,
     ),
@@ -569,3 +630,278 @@ async function runAction(label: string) {
   await act(async () => item.click());
   await settle();
 }
+
+// ── 편집 · 저장 · 외부 변경(12-m1-plan M1-13) ──
+
+/**
+ * 사용자가 친 것처럼 뷰에 넣는다(happy-dom 은 contenteditable 입력을 흉내 내지 않는다). 포커스를 먼저 뺀다 — happy-dom 은
+ * `selectionchange` 를 브라우저와 달리 선택을 쓰는 자리에서 바로 내서, 포커스된 뷰가 자기 갱신 중에 다시 갱신하려다 던진다.
+ */
+async function typeInto(view: EditorView, at: number, insert: string) {
+  (document.activeElement as HTMLElement | null)?.blur();
+  await act(async () =>
+    view.dispatch({
+      changes: { from: at, insert },
+      selection: { anchor: at + insert.length },
+      userEvent: "input.type",
+    }),
+  );
+  await settle();
+}
+
+const writes = () => host.calls.filter((c) => c.method === "fs.write").map((c) => c.params);
+const dirtyTabs = () =>
+  [...document.querySelectorAll<HTMLElement>("[data-editor-tab-header][data-dirty]")].map(
+    (e) => e.title,
+  );
+const banner = () => document.querySelector<HTMLElement>("[data-testid=disk-banner]");
+const dialog = () => document.querySelector<HTMLElement>("[data-testid=unsaved-dialog]");
+
+async function clickButton(scope: ParentNode, text: string) {
+  const button = [...scope.querySelectorAll<HTMLButtonElement>("button")].find(
+    (b) => b.textContent === text,
+  );
+  if (!button) throw new Error(`단추 ${text} 가 없다`);
+  await act(async () => button.click());
+  await settle();
+}
+
+it("edits, marks the tab unsaved and saves on ⌘S with the version it read, once for key and menu", async () => {
+  await mount();
+  await openRequest(MAIN, 2, 1);
+  const [view] = views();
+  expect(view!.state.readOnly).toBe(false);
+  const read = versionOf(MAIN);
+  await typeInto(view!, view!.state.doc.line(2).from, "// ");
+  expect(dirtyTabs()).toEqual([MAIN]);
+
+  await keydown({ code: "KeyS", key: "s", metaKey: true });
+  await menuAction("editor.save");
+  expect(writes()).toHaveLength(1);
+  expect(writes()[0]).toMatchObject({
+    projectId: "p1",
+    path: MAIN,
+    expectedVersion: read,
+    content: { kind: "text" },
+  });
+  expect(host.files.get(MAIN)!.split("\n")[1]).toBe("// line 2 — some text");
+  expect(dirtyTabs()).toEqual([]);
+});
+
+it("keeps undo history, the selection and unsaved text when a tab moves to another group", async () => {
+  await mount();
+  await openRequest(LIB, 10, 1);
+  const before = views()[0]!;
+  await typeInto(before, before.state.doc.line(10).from, "edited ");
+  await act(async () =>
+    before.dispatch({
+      selection: { anchor: before.state.doc.line(12).from, head: before.state.doc.line(12).to },
+    }),
+  );
+  const panel = dock!.panels.find((p) => p.api.component === EDITOR_PANEL)!;
+  await act(async () => {
+    const group = dock!.addGroup({ referenceGroup: panel.group.id, direction: "right" });
+    panel.api.moveTo({ group, position: "center" });
+  });
+  await settle();
+  expect(dock!.groups.filter((g) => g.panels.includes(panel))).toHaveLength(1);
+
+  const [after] = views();
+  expect(views()).toHaveLength(1);
+  expect(after!.state.doc.line(10).text).toBe("edited line 10 — some text");
+  expect(after!.state.selection.main).toMatchObject({
+    from: after!.state.doc.line(12).from,
+    to: after!.state.doc.line(12).to,
+  });
+  expect(dirtyTabs()).toEqual([LIB]);
+
+  // undo 기록이 옮긴 뒤에도 이어진다. CodeMirror 는 시험 환경을 macOS 로 보지 않아 Mod 가 Ctrl 이다(포커스는 typeInto 의 이유로 뺀
+  // 채 키를 보낸다).
+  after!.contentDOM.blur();
+  await act(async () => {
+    after!.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "z",
+        code: "KeyZ",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  await settle();
+  expect(after!.state.doc.line(10).text).toBe("line 10 — some text");
+  expect(dirtyTabs()).toEqual([]);
+});
+
+it("shows an edit in the other group's view of the same file at once", async () => {
+  await mount();
+  await openRequest(LIB, 1, 1);
+  await press("Backslash", { metaKey: true }, "\\");
+  const [a, b] = views();
+  await typeInto(a!, 0, "x");
+  expect(b!.state.doc.line(1).text).toBe("xline 1 — some text");
+  expect(dirtyTabs()).toEqual([LIB, LIB]);
+});
+
+it("asks before closing the last tab of an unsaved file: Cancel keeps it, Don't Save closes", async () => {
+  await mount();
+  await openRequest(MAIN);
+  await openRequest(README);
+  const view = views().find((v) => v.state.doc.toString() === "hello")!;
+  await typeInto(view, 5, "!");
+
+  await press("KeyW", { metaKey: true }, "w");
+  expect(dialog()?.textContent).toContain("README.txt");
+  await clickButton(dialog()!, "취소");
+  expect(dialog()).toBeNull();
+  expect(editorTabs().map((t) => t.path)).toEqual([MAIN, README]);
+
+  await press("KeyW", { metaKey: true }, "w");
+  await clickButton(dialog()!, "저장 안 함");
+  expect(editorTabs().map((t) => t.path)).toEqual([MAIN]);
+  expect(writes()).toEqual([]);
+  expect(host.files.get(README)).toBe("hello");
+});
+
+it("saves and then closes when Save is chosen, and asks also for the tab's close button", async () => {
+  await mount();
+  await openRequest(README);
+  await typeInto(views()[0]!, 5, "!");
+  const close = document.querySelector<HTMLElement>(
+    "[data-editor-tab-header] .dv-default-tab-action",
+  )!;
+  await act(async () => close.click());
+  await settle();
+  expect(dialog()).not.toBeNull();
+  await clickButton(dialog()!, "저장");
+  expect(host.files.get(README)).toBe("hello!");
+  expect(editorTabs()).toEqual([]);
+});
+
+it("does not ask when another tab still shows the unsaved file", async () => {
+  await mount();
+  await openRequest(README);
+  await press("Backslash", { metaKey: true }, "\\");
+  await typeInto(views()[0]!, 0, "> ");
+  await press("KeyW", { metaKey: true }, "w");
+  expect(dialog()).toBeNull();
+  expect(editorTabs()).toHaveLength(1);
+  expect(dirtyTabs()).toEqual([README]);
+});
+
+it("asks before the window closes with an unsaved tab (⑤)", async () => {
+  await mount();
+  await openRequest(README);
+  expect(await act(() => closeGuard!())).toBe(true);
+
+  await typeInto(views()[0]!, 0, "> ");
+  let answer: Promise<boolean> | undefined;
+  await act(async () => {
+    answer = closeGuard!();
+  });
+  await settle();
+  expect(dialog()?.textContent).toContain("README.txt");
+  await clickButton(dialog()!, "취소");
+  expect(await answer).toBe(false);
+
+  await act(async () => {
+    answer = closeGuard!();
+  });
+  await settle();
+  await clickButton(dialog()!, "저장 안 함");
+  expect(await answer).toBe(true);
+});
+
+it("shows an external change within 500 ms and keeps the cursor line when nothing is unsaved (①)", async () => {
+  await mount();
+  await openRequest(LIB, 150, 4);
+  const [view] = views();
+  const next = host.files.get(LIB)!.split("\n");
+  next[9] = "line 10 — changed by an agent";
+  next[279] = "line 280 — changed by an agent";
+  putFile(LIB, next.join("\n"));
+
+  const started = performance.now();
+  await changed([LIB]);
+  await vi.waitFor(() => expect(view!.state.doc.line(10).text).toBe(next[9]), { timeout: 500 });
+  const took = performance.now() - started;
+  expect(took).toBeLessThan(500);
+  expect(cursorOf(view!)).toEqual({ line: 150, column: 4 });
+  expect(views()).toEqual([view]);
+  expect(banner()).toBeNull();
+});
+
+it("shows the banner for an external change over unsaved edits, and Compare shows both side by side (②)", async () => {
+  await mount();
+  await openRequest(MAIN);
+  const [view] = views();
+  await typeInto(view!, 0, "mine ");
+  putFile(MAIN, "theirs\n");
+  await changed([MAIN]);
+  await vi.waitFor(() => expect(banner()?.dataset.disk).toBe("changed"));
+  expect(view!.state.doc.line(1).text).toBe("mine line 1 — some text");
+
+  await clickButton(banner()!, "비교");
+  const compare = document.querySelector<HTMLElement>("[data-testid=disk-compare]")!;
+  const sides = [...compare.querySelectorAll<HTMLElement>(".cm-editor")].map((e) =>
+    EditorView.findFromDOM(e)!.state.doc.toString(),
+  );
+  expect(sides).toEqual([view!.state.doc.toString(), "theirs\n"]);
+
+  await clickButton(banner()!, "디스크 것 받기");
+  expect(banner()).toBeNull();
+  expect(document.querySelector("[data-testid=disk-compare]")).toBeNull();
+  expect(view!.state.doc.toString()).toBe("theirs\n");
+  expect(dirtyTabs()).toEqual([]);
+});
+
+it("stops ⌘S with a conflict and the banner after a change the watch missed (③)", async () => {
+  await mount();
+  await openRequest(MAIN);
+  await typeInto(views()[0]!, 0, "mine ");
+  putFile(MAIN, "theirs\n"); // fs.changed 없이
+
+  await press("KeyS", { metaKey: true }, "s");
+  await vi.waitFor(() => expect(banner()?.dataset.disk).toBe("changed"));
+  expect(host.files.get(MAIN)).toBe("theirs\n");
+  expect(dirtyTabs()).toEqual([MAIN]);
+
+  await clickButton(banner()!, "내 것 유지");
+  await press("KeyS", { metaKey: true }, "s");
+  expect(host.files.get(MAIN)!.startsWith("mine line 1")).toBe(true);
+  expect(dirtyTabs()).toEqual([]);
+});
+
+it("keeps CRLF line endings when a CRLF file is edited and saved (④)", async () => {
+  host.files.set(README, "one\r\ntwo\r\n");
+  await mount();
+  await openRequest(README);
+  const [view] = views();
+  await typeInto(view!, view!.state.doc.line(2).to, "!");
+  await press("KeyS", { metaKey: true }, "s");
+  expect(host.files.get(README)).toBe("one\r\ntwo!\r\n");
+});
+
+it("does not raise the banner for its own save coming back as fs.changed", async () => {
+  await mount();
+  await openRequest(MAIN);
+  await typeInto(views()[0]!, 0, "x");
+  await press("KeyS", { metaKey: true }, "s");
+  await changed([MAIN]);
+  await settle();
+  expect(banner()).toBeNull();
+  expect(dirtyTabs()).toEqual([]);
+});
+
+it("turns a preview tab into a normal tab when its file gets an unsaved edit", async () => {
+  await mount();
+  await openRequest(README);
+  // 파일 트리(M1-14)의 미리보기 열기 대신 탭 params 를 미리보기로 둔다.
+  const panel = dock!.panels.find((p) => p.api.component === EDITOR_PANEL)!;
+  await act(async () => panel.api.updateParameters({ ...panel.params, preview: true }));
+  await settle();
+  expect(editorTabs()[0]).toMatchObject({ preview: true });
+  await typeInto(views()[0]!, 0, "x");
+  expect(editorTabs()[0]).toMatchObject({ preview: false });
+});

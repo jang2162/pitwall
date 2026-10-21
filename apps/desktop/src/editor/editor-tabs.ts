@@ -146,13 +146,17 @@ export function openTab(
   return { panel, created: true };
 }
 
-/** 같은 그룹의 다른 탭을 닫는다(⌘⌥W). 고정한 탭은 남긴다. */
-export function closeOtherTabs(panel: IDockviewPanel) {
-  // 닫는 동안 그룹의 탭 목록이 바뀌므로 먼저 고른다.
-  const others = panel.group.panels.filter(
+/** 「다른 탭 닫기」(⌘⌥W)가 닫는 탭: 같은 그룹의 다른 에디터 탭 중 고정하지 않은 것. */
+export function otherTabs(panel: IDockviewPanel): IDockviewPanel[] {
+  return panel.group.panels.filter(
     (other) => other.id !== panel.id && isEditorPanel(other) && !tabParams(other).pinned,
   );
-  for (const other of others) other.api.close();
+}
+
+/** 같은 그룹의 다른 탭을 닫는다(⌘⌥W). 고정한 탭은 남긴다. 미저장 확인 없이 닫는다 — 액션은 작업 공간의 `closeTabs` 를 쓴다. */
+export function closeOtherTabs(panel: IDockviewPanel) {
+  // 닫는 동안 그룹의 탭 목록이 바뀌므로 먼저 고른다.
+  for (const other of otherTabs(panel)) other.api.close();
 }
 
 /** 같은 파일을 오른쪽 새 그룹에 연다(⌘\). 워크트리 · 뷰어 · 언어는 따라가고 미리보기 · 고정은 따라가지 않는다. 새 탭이 활성이 된다. */

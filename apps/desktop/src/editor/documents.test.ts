@@ -1,7 +1,7 @@
 import type { FsRead, FsStat, Judgment, SizeClass } from "@pitwall/rpc-client";
 import { describe, expect, it, vi } from "vitest";
 
-import { createDocumentStore, type DocumentSource, SNIFF_ABOVE, toText } from "./documents";
+import { createDocumentStore, type DocumentSource, SNIFF_ABOVE } from "./documents";
 
 const MIB = 1024 * 1024;
 
@@ -76,7 +76,7 @@ describe("document store", () => {
     expect(source.read).toHaveBeenCalledTimes(1);
     const doc = docs.get("/p/a.rs");
     expect(doc).toMatchObject({ status: "text", kind: "text", version: "v1", readOnly: false });
-    expect(doc?.status === "text" && doc.text.toString()).toBe("a\nb");
+    expect(doc?.status === "text" && doc.live.text.toString()).toBe("a\nb");
     expect(docs.holders("/p/a.rs")).toBe(2);
 
     release1();
@@ -147,9 +147,4 @@ describe("document store", () => {
     await flush();
     expect(docs.get("/p/README.md")).toMatchObject({ status: "text", kind: "markdown" });
   });
-});
-
-it("splits text on the same line breaks as CodeMirror", () => {
-  expect(toText("a\r\nb\rc\nd").lines).toBe(4);
-  expect(toText("").lines).toBe(1);
 });

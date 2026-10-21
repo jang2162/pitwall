@@ -1,4 +1,5 @@
 import type { UiLogger } from "@pitwall/logger";
+import type { DockviewApi } from "dockview-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
@@ -74,12 +75,15 @@ export function App({
   welcomeNative = tauriWelcomeNative,
   settingsNative = tauriSettingsNative,
   log,
+  onDockApi,
 }: {
   kind: WindowKind;
   native?: KeymapNative;
   welcomeNative?: WelcomeNative;
   settingsNative?: SettingsNative;
   log?: Pick<UiLogger, "info" | "warn" | "debug">;
+  /** 프로젝트 창의 도킹 영역 api(시험). */
+  onDockApi?(api: DockviewApi): void;
 }) {
   const [queryClient] = useState(() => new QueryClient());
   return (
@@ -94,7 +98,14 @@ export function App({
                 <WindowTitle kind={kind} />
               </header>
               {kind === "welcome" && <Welcome native={welcomeNative} log={log} />}
-              {kind === "project" && <ProjectWindow log={log} closeWindow={native.closeWindow} />}
+              {kind === "project" && (
+                <ProjectWindow
+                  log={log}
+                  closeWindow={native.closeWindow}
+                  guardClose={native.guardClose}
+                  onDockApi={onDockApi}
+                />
+              )}
               {kind === "settings" && <SettingsWindow native={settingsNative} />}
               <KeymapErrorBar />
             </div>

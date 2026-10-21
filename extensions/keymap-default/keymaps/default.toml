@@ -121,6 +121,14 @@ linux = "ctrl+shift+f12"
 action = "window.close"
 mac = "cmd+w"
 
+# ⌘S 는 활성 탭의 문서를 저장한다(자동 저장 없음, 결정 M1-D13). 네이티브 메뉴 「저장」 이 같은 액션이라 키와 메뉴 accelerator 가
+# 한 액션으로 모인다(src-tauri/src/menu.rs). 「모두 저장」(editor.saveAll)은 기본 키가 없다.
+[[bindings]]
+action = "editor.save"
+mac = "cmd+s"
+win = "ctrl+s"
+linux = "ctrl+s"
+
 [[bindings]]
 action = "editor.closeTab"
 win = "ctrl+f4"

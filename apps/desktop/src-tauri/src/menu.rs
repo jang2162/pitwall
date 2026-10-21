@@ -16,6 +16,15 @@
 //! 액션으로 모여 가드가 뒤의 것을 버리고, 「탭이 있으면 탭, 없으면 창」은 웹뷰가 정한다(`src/editor/editor-actions.ts`).
 //! 포커스된 창이 없으면 닫을 것이 없다.
 //!
+//! 「저장」(⌘S)도 같은 식으로 키맵 액션 `editor.save` 다(`src/editor/editor-actions.ts`). 두 번 와도 둘째는 저장할 것이 없거나
+//! 첫 저장 뒤에 줄을 선다.
+//!
+//! 「종료」(⌘Q)는 OS 기본 항목(`PredefinedMenuItem::quit`, macOS `terminate:`)이 아니라 [`QUIT`] 다. OS 기본 항목은 창의 닫기 요청을
+//! 거치지 않고 앱을 끝내 미저장 편집을 묻지 못한다. [`QUIT`] 은 모든 창에 닫기를 요청하고(`Window::close` — 닫기 단추와 같은 길),
+//! 미저장이 있는 프로젝트 창은 웹뷰가 묻는다(`src/keymap/native.ts` 의 `guardClose`). 마지막 창이 없어지면 Tauri 가 앱을 끝낸다.
+//! 한 창에서 [취소] 하면 그 창이 남아 앱도 남는다 — 그 전에 닫힌 창은 닫힌 채다. Dock 메뉴 · 로그아웃의 종료(macOS `terminate:`)는
+//! 여전히 묻지 않는다.
+//!
 //! ⚠ 메뉴에 넣는 액션은 두 번 실행돼도 결과가 같아야 한다(열기 · 보이기). 가드는 짧은 시간 창만 본다. 토글 액션을 메뉴에
 //! 넣으려면 그 전에 키 경로와 메뉴 경로가 한 번만 오는지 플랫폼마다 실측하거나 더 단단한 중복 실행 가드를 둔다.
 
@@ -33,10 +42,13 @@ const WELCOME_WINDOW: &str = "welcome-window";
 const COPY_DIAGNOSTICS: &str = "copy-diagnostics";
 /// 「업데이트 확인…」(src/update.rs). 웹뷰 액션이 아니라 여기서 직접 한다 — 창이 없어도 동작한다.
 const CHECK_UPDATES: &str = "check-updates";
+/// 「종료」. 웹뷰 액션이 아니라 여기서 모든 창에 닫기를 요청한다(머리 주석).
+const QUIT: &str = "app-quit";
 /// 키맵 액션 id 를 그대로 메뉴 id 로 쓰는 항목.
 const SETTINGS_ACTION: &str = "settings.open";
 const FIND_ACTION: &str = "action.find";
 const WINDOW_CLOSE_ACTION: &str = "window.close";
+const SAVE_ACTION: &str = "editor.save";
 /// 「Shell 명령 설치」(F2-1). macOS 앱 메뉴에만 있다.
 #[cfg(target_os = "macos")]
 const CLI_INSTALL_ACTION: &str = "cli.install";
@@ -50,6 +62,7 @@ fn action_label(action: &str) -> Option<&'static str> {
         SETTINGS_ACTION => "menu-settings",
         FIND_ACTION => "menu-find-action",
         WINDOW_CLOSE_ACTION => "menu-close",
+        SAVE_ACTION => "menu-save",
         #[cfg(target_os = "macos")]
         CLI_INSTALL_ACTION => "menu-install-shell-command",
         _ => return None,
@@ -250,6 +263,19 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     #[cfg(not(target_os = "macos"))]
     let close_key = None::<&str>;
     let close = MenuItem::with_id(app, WINDOW_CLOSE_ACTION, t("menu-close"), true, close_key)?;
+    let save = MenuItem::with_id(
+        app,
+        SAVE_ACTION,
+        t("menu-save"),
+        true,
+        Some("CmdOrCtrl+KeyS"),
+    )?;
+    #[cfg(target_os = "macos")]
+    let quit_key = Some("Cmd+KeyQ");
+    #[cfg(not(target_os = "macos"))]
+    let quit_key = None::<&str>;
+    let quit_item = MenuItem::with_id(app, QUIT, t("menu-quit"), true, quit_key)?;
+    item("menu-quit", Labeled::Item(quit_item.clone()));
     let predefined = |id: &'static str, made: PredefinedMenuItem<R>| (id, made);
     #[cfg(target_os = "macos")]
     let app_items = [
@@ -273,20 +299,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             "menu-show-all",
             PredefinedMenuItem::show_all(app, Some(&t("menu-show-all")))?,
         ),
-        predefined(
-            "menu-quit",
-            PredefinedMenuItem::quit(app, Some(&t("menu-quit")))?,
-        ),
     ];
-    #[cfg(not(target_os = "macos"))]
-    let quit = predefined(
-        "menu-quit",
-        PredefinedMenuItem::quit(app, Some(&t("menu-quit")))?,
-    );
 
     #[cfg(target_os = "macos")]
     let app_menu = {
-        let [about, services, hide, hide_others, show_all, quit] = &app_items;
+        let [about, services, hide, hide_others, show_all] = &app_items;
         Submenu::with_items(
             app,
             t("menu-app"),
@@ -304,7 +321,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 &hide_others.1,
                 &show_all.1,
                 &PredefinedMenuItem::separator(app)?,
-                &quit.1,
+                &quit_item,
             ],
         )?
     };
@@ -314,7 +331,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         app,
         t("menu-file"),
         true,
-        &[&welcome, &PredefinedMenuItem::separator(app)?, &close],
+        &[
+            &welcome,
+            &PredefinedMenuItem::separator(app)?,
+            &save,
+            &close,
+        ],
     )?;
     // macOS 가 아니면 앱 메뉴가 없으므로 설정을 File 에 둔다.
     #[cfg(not(target_os = "macos"))]
@@ -326,8 +348,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &welcome,
             &settings,
             &PredefinedMenuItem::separator(app)?,
+            &save,
             &close,
-            &quit.1,
+            &quit_item,
         ],
     )?;
 
@@ -435,8 +458,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             item(id, Labeled::Predefined(made));
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    item(quit.0, Labeled::Predefined(quit.1));
     item("menu-file", Labeled::Submenu(file_menu.clone()));
     item("menu-edit", Labeled::Submenu(edit_menu.clone()));
     item("menu-window", Labeled::Submenu(window_menu.clone()));
@@ -455,6 +476,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         (settings_parent.clone(), settings),
         (help_menu.clone(), find_action),
         (file_menu.clone(), close),
+        (file_menu.clone(), save),
     ];
     #[cfg(target_os = "macos")]
     entries.push((settings_parent, cli_install));
@@ -490,15 +512,33 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
             Ok(())
         }
         FIND_ACTION => run_in_focused_window(app, FIND_ACTION),
-        // 포커스된 창이 없으면 닫을 창이 없다.
-        WINDOW_CLOSE_ACTION => {
-            let _ = run_in_focused_window(app, WINDOW_CLOSE_ACTION);
+        // 포커스된 창이 없으면 닫을 창 · 저장할 탭이 없다.
+        WINDOW_CLOSE_ACTION | SAVE_ACTION => {
+            let _ = run_in_focused_window(app, event.id().as_ref());
+            Ok(())
+        }
+        QUIT => {
+            quit(app);
             Ok(())
         }
         _ => Ok(()),
     };
     if let Err(error) = result {
         tracing::error!(menu = ?event.id(), %error, "menu action failed");
+    }
+}
+
+/// 모든 창에 닫기를 요청한다(머리 주석). 창이 없으면 바로 끝낸다.
+fn quit<R: Runtime>(app: &AppHandle<R>) {
+    let windows = app.webview_windows();
+    if windows.is_empty() {
+        app.exit(0);
+        return;
+    }
+    for window in windows.values() {
+        if let Err(error) = window.close() {
+            tracing::error!(window = window.label(), %error, "cannot ask a window to close");
+        }
     }
 }
 
