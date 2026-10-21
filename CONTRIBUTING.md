@@ -46,6 +46,7 @@ cargo test -p pw-rpc --doc                         # 크레이트 하나의 doct
 pnpm --filter @pitwall/domain test                 # 패키지 하나(예: @pitwall/domain)
 cargo test --release -p pw-syntax --test perf -- --ignored --nocapture --test-threads 1   # 구문 강조 성능 · 상한 측정(release, 기본 시험에서 빠진다)
 cargo test --release -p pw-syntax --test perf -- --ignored --nocapture --exact measure_memory   # 문법 메모리(RSS) — 다른 측정과 한 프로세스에서 돌면 기준선이 섞이므로 따로
+cargo nextest run -p pw-fs --run-ignored only -E 'test(=ops::tests::the_os_trash_takes_a_test_file_on_macos)'   # 진짜 macOS 휴지통에 pitwall-test-trash-*.txt 하나를 넣는다(기본 시험 · CI 에서 빠진다). 확인한 뒤 휴지통에서 지운다
 ```
 
 **테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N test(s) run: N passed`), doctest 는 크레이트마다 `test result: ok. N passed` 줄, Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.

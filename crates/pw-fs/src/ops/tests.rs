@@ -1,6 +1,6 @@
 //! 파일 조작(`fs.create` · `fs.rename` · `fs.copy` · `fs.trash`, Finder 드롭 들여오기). 휴지통은 가짜를 넘긴다 — 사람의 휴지통에
-//! 시험 파일이 쌓이지 않게. 진짜 휴지통은 macOS 시험 하나만 쓰고, 그 파일 이름에 `pitwall-test` 를 단다(휴지통을 비울 방법이 없어
-//! 사람이 알아보게).
+//! 시험 파일이 쌓이지 않게. 진짜 휴지통은 macOS 시험 하나만 쓰고, 기본 실행에서 빠진다(`#[ignore]`, 손으로 돌리는 명령은
+//! `CONTRIBUTING.md` 「명령」). 그 파일 이름에 `pitwall-test` 를 단다(휴지통을 비울 방법이 없어 사람이 알아보게).
 
 use std::cell::RefCell;
 use std::fs;
@@ -560,6 +560,7 @@ fn permanent_delete_does_not_follow_links() {
 /// Finder 로 확인한다 — 12-m1-plan M1-21 의 「macOS 수동 확인」).
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "puts a pitwall-test file in the real Trash — run by hand (CONTRIBUTING.md 「명령」)"]
 fn the_os_trash_takes_a_test_file_on_macos() {
     let fx = Fixture::new();
     let (id, root) = fx.project();
