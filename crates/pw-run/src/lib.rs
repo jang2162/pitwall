@@ -2,6 +2,7 @@
 //! 태스크 감지는 M6 이 같은 PTY 위에 더한다.
 //!
 //! - [`shell`]: 띄울 셸의 argv 와 환경(결정 M1-D14).
+//! - `integration`(유닉스): 셸의 시작 파일 뒤에 런타임 제공자의 PATH 를 다시 앞에 둔다.
 //! - [`pty`]: PTY 하나 — 상한 있는 출력 버퍼, 순서 지키는 입력, 크기, 끝내기.
 //! - [`methods`]: `terminal.*` RPC.
 //!
@@ -12,6 +13,8 @@
 //! `terminalId` 는 그 터미널을 연 RPC 세션(연결) 안에서만 유효하다 — 다른 창 · 다른 연결이 같은 번호로 부르면 없는 터미널이다
 //! (03-architecture.md 「RPC 설계」).
 
+#[cfg(unix)]
+pub mod integration;
 pub mod methods;
 pub mod pty;
 pub mod shell;
@@ -189,14 +192,37 @@ impl Terminals {
             )));
         }
         let runtime = self.runtime.env(&project.id, &cwd);
-        let argv = shell::argv(
-            host.global.snapshot().get("settings", shell::SETTINGS_KEY),
-            &runtime.env,
-        );
+        let snapshot = host.global.snapshot();
+        let setting = snapshot.get("settings", shell::SETTINGS_KEY);
+        let mut argv = shell::argv(setting, &runtime.env);
+        let mut env = shell::child_env(&runtime.env);
+        // 기본 셸이면 시작 파일 뒤에 제공자의 PATH 를 다시 앞에 둔다(integration.rs). 설정으로 고른 셸은 손대지 않는다.
+        #[cfg(unix)]
+        let shell_files = if matches!(shell::configured(setting), Ok(None)) {
+            let base = self.runtime.login_shell_env().0.env.path;
+            let front = integration::provider_front(&runtime.env.path, &base);
+            match integration::integrate(&argv, &front, runtime.env.get("ZDOTDIR")) {
+                Ok(Some(found)) => {
+                    argv = found.argv;
+                    for (name, value) in found.env {
+                        env.retain(|(n, _)| *n != name);
+                        env.push((name, value));
+                    }
+                    found.dir
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::warn!(target: "pw_run", error = %e, "cannot set up the shell integration; the provider's PATH may come after the shell's own");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let spec = Spec {
             argv: argv.iter().map(OsString::from).collect(),
             cwd: cwd.clone(),
-            env: shell::child_env(&runtime.env),
+            env,
             cols: params.cols,
             rows: params.rows,
         };
@@ -222,6 +248,8 @@ impl Terminals {
             id,
             pty,
             sessions: Arc::clone(&self.sessions),
+            #[cfg(unix)]
+            _shell_files: shell_files,
         };
         Ok((live, started))
     }
@@ -262,6 +290,9 @@ struct Live {
     id: TerminalId,
     pty: Arc<Pty>,
     sessions: Arc<Sessions>,
+    /// 셸이 시작 파일을 읽는 동안 있어야 하는 임시 폴더(integration.rs). 터미널이 끝나면 지운다.
+    #[cfg(unix)]
+    _shell_files: Option<tempfile::TempDir>,
 }
 
 impl Drop for Live {

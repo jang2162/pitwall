@@ -25,6 +25,8 @@ tracing = "0.1.44"
 [target."cfg(unix)".dependencies]
 # 세션의 프로세스 찾기(getsid · proc_listallpids)와 신호. 버전은 데스크톱 크레이트와 같게 둔다.
 libc = "0.2.190"
+# 셸 통합(integration.rs)의 시작 파일을 이 터미널만 읽는 임시 폴더(0700, 이름 무작위)에 둔다.
+tempfile = "3.27.0"
 
 [dev-dependencies]
 # mise 제공자의 끝에서 끝 시험: 버전 파일 변경을 실제 파일 감시(`fs.watch`)로 받는다.

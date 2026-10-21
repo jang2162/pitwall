@@ -14,7 +14,8 @@ use pw_rpc::protocol::{
     STREAM_CHUNK, STREAM_CREDIT, STREAM_END, StreamChunk, StreamEnd, StreamOpened, StreamOutcome,
 };
 use pw_rpc::{Caller, EventHub, Id, Outbound, Response, Role, Router, Session, code};
-use pw_runtime::LoginShell;
+use pw_runtime::methods::RuntimeSource;
+use pw_runtime::{Layer, LoginShell, RuntimeEnv, RuntimeProvider};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -48,6 +49,17 @@ impl Fixture {
         timeout: Duration,
         cooldown: Duration,
     ) -> Self {
+        Self::with_runtime(settings, login_shell, timeout, cooldown, None)
+    }
+
+    /// 디렉터리의 런타임 제공자(mise 등의 자리)를 붙인다.
+    fn with_runtime(
+        settings: &str,
+        login_shell: &str,
+        timeout: Duration,
+        cooldown: Duration,
+        provider: Option<Arc<dyn RuntimeProvider>>,
+    ) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let paths = AppPaths::under(&tmp.path().join("app"));
         fs::create_dir_all(&paths.config).unwrap();
@@ -68,7 +80,11 @@ impl Fixture {
         )
         .unwrap();
         fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
-        let runtime = Runtime::new(LoginShell::new(Some(shell), timeout).with_cooldown(cooldown));
+        let mut runtime =
+            Runtime::new(LoginShell::new(Some(shell), timeout).with_cooldown(cooldown));
+        if let Some(provider) = provider {
+            runtime = runtime.with_provider(provider);
+        }
         let terminals = Arc::new(Terminals::new(Arc::new(runtime)));
         terminals.attach(HostParts {
             global,
@@ -384,6 +400,130 @@ async fn the_shell_setting_and_cwd_are_used() {
     assert_eq!(end.outcome, StreamOutcome::Completed);
 }
 
+/// mise 의 자리: 로그인 셸의 PATH 앞에 폴더 하나를 더한다(프로젝트 코드를 돌리지 않아 신뢰가 필요 없다).
+struct PrependProvider(PathBuf);
+
+impl RuntimeProvider for PrependProvider {
+    fn id(&self) -> &'static str {
+        "fake-mise"
+    }
+    fn runs_project_code(&self) -> bool {
+        false
+    }
+    fn applies_to(&self, _dir: &Path, _base: &RuntimeEnv) -> bool {
+        true
+    }
+    fn resolve(&self, _dir: &Path, base: &RuntimeEnv) -> Result<Layer, String> {
+        let mut env = base.clone();
+        let mut path = self.0.clone().into_os_string();
+        path.push(":");
+        path.push(&base.path);
+        env.path = path;
+        Ok(Layer {
+            env,
+            source: RuntimeSource::ConfigFiles { files: Vec::new() },
+        })
+    }
+}
+
+/// macOS 로그인 셸의 `path_helper` 처럼 시작 파일이 Homebrew 폴더를 PATH 앞에 두는 시험 HOME. `node` 는 Homebrew 판과 mise 판이 따로
+/// 있고, 사용자의 rc 는 자기 폴더를 PATH 앞에 넣는다. 셸은 `shell`(`/bin/zsh` · `/bin/bash`), 제공자는 `provider` 가 참일 때만.
+struct PathHome {
+    _tmp: tempfile::TempDir,
+    f: Fixture,
+    mise: PathBuf,
+    brew: PathBuf,
+    user: PathBuf,
+}
+
+fn path_home(shell: &str, provider: bool) -> PathHome {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = normalize(tmp.path()).unwrap();
+    let (mise, brew, user) = (
+        base.join("mise/bin"),
+        base.join("brew/bin"),
+        base.join("user/bin"),
+    );
+    for (dir, name) in [(&mise, "mise-node"), (&brew, "brew-node")] {
+        fs::create_dir_all(dir).unwrap();
+        let node = dir.join("node");
+        fs::write(&node, format!("#!/bin/sh\necho {name}\n")).unwrap();
+        fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::create_dir_all(&user).unwrap();
+    let login_shell = LOGIN_SHELL.replace("SHELL=/bin/sh", &format!("SHELL={shell}"));
+    let f = Fixture::with_runtime(
+        "schema = 1\n",
+        &login_shell,
+        Duration::from_secs(5),
+        pw_runtime::login_shell::TIMEOUT_COOLDOWN,
+        provider.then(|| Arc::new(PrependProvider(mise.clone())) as Arc<dyn RuntimeProvider>),
+    );
+    let home = f.tmp.path().join("home");
+    let brew_first = format!("export PATH=\"{}:$PATH\"\n", brew.display());
+    let user_first = format!("export PATH=\"{}:$PATH\"\n", user.display());
+    // zsh: .zprofile(로그인) 다음 .zshrc. bash: 로그인 셸은 .bash_profile 하나만 읽는다.
+    fs::write(home.join(".zprofile"), &brew_first).unwrap();
+    fs::write(home.join(".zshrc"), &user_first).unwrap();
+    fs::write(
+        home.join(".bash_profile"),
+        format!("{brew_first}{user_first}"),
+    )
+    .unwrap();
+    PathHome {
+        _tmp: tmp,
+        f,
+        mise,
+        brew,
+        user,
+    }
+}
+
+const PROBE: &str = "echo \"N=$(node) Z=[${ZDOTDIR-unset}] F=[${PITWALL_PATH_FRONT-unset}]\"; echo \"P=$PATH\"; echo DONE_$((6*7))\n";
+
+/// 신뢰한 프로젝트의 제공자(mise)가 앞에 둔 폴더가 셸의 시작 파일(`path_helper` 흉내) 뒤에도 맨 앞에 있다 — zsh · bash. 사용자의
+/// rc 가 앞에 둔 폴더는 제공자 폴더 바로 뒤에 남고, 그 셸에서 띄운 zsh 는 사용자의 `ZDOTDIR`(없음)을 본다.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_providers_path_stays_in_front_after_the_shells_startup_files() {
+    for shell in ["/bin/zsh", "/bin/bash"] {
+        if !Path::new(shell).is_file() {
+            continue;
+        }
+        let h = path_home(shell, true);
+        let mut c = h.f.client();
+        let t = c.open(h.f.create_params(80, 24)).await;
+        c.input(t.terminal, PROBE).await;
+        let text = c.read_until(t.stream, "DONE_42").await;
+        assert!(
+            text.contains("N=mise-node Z=[unset] F=[unset]"),
+            "{shell}: {text:?}"
+        );
+        let front = format!(
+            "P={}:{}:{}:",
+            h.mise.display(),
+            h.user.display(),
+            h.brew.display()
+        );
+        assert!(text.contains(&front), "{shell}: {text:?}");
+    }
+}
+
+/// 제공자가 없으면(로그인 셸 환경뿐) 셸 argv · 환경을 바꾸지 않는다 — 시작 파일이 정한 PATH 그대로다.
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_provider_the_shell_is_left_alone() {
+    let h = path_home("/bin/zsh", false);
+    let mut c = h.f.client();
+    let t = c.open(h.f.create_params(80, 24)).await;
+    assert_eq!(t.shell, ["/bin/zsh", "-l"]);
+    c.input(t.terminal, PROBE).await;
+    let text = c.read_until(t.stream, "DONE_42").await;
+    assert!(text.contains("N=brew-node Z=[unset] F=[unset]"), "{text:?}");
+    assert!(
+        text.contains(&format!("P={}:{}:", h.user.display(), h.brew.display())),
+        "{text:?}"
+    );
+}
+
 /// `git worktree add` 가 만드는 모양을 손으로 만든다: `main` 의 연결 워크트리 `wt`. 돌려주는 것은 워크트리 꼭대기.
 fn fake_worktree(main: &Path, wt: &Path) -> PathBuf {
     let admin = main.join(".git/worktrees/wt");
@@ -594,6 +734,33 @@ async fn terminal_close_ends_the_tree_and_the_stream_reports_a_signal_exit() {
     assert_eq!(code, None);
     assert_eq!(end.outcome, StreamOutcome::Completed);
     assert_gone_within_a_second(&pids, closed).await;
+}
+
+/// 닫을 때 셸에 EOF 가 SIGHUP 보다 먼저 가지 않는다. portable-pty 의 writer 는 버려질 때 셸에 `\n` + ^D 를 쓰는데, 그것이 먼저
+/// 가면 셸이 읽고 스스로 `exit 0` 으로 끝나 신호 종료가 정상 종료(`code: 0`)로 보인다 — 부하에서 이 시험의 이웃
+/// (`terminal_close_ends_the_tree_and_the_stream_reports_a_signal_exit`)이 `Some(0)` 으로 실패했다. SIGHUP 을 무시하고 한 줄을 기다리는
+/// 셸로 경합 없이 본다: 닫은 뒤 그 셸이 줄을 받으면(EOF 가 먼저 갔으면) 표시 파일이 생긴다.
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_does_not_feed_the_shell_an_eof_before_ending_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let marker = tmp.path().join("read-a-line");
+    let f = Fixture::new(&format!(
+        "schema = 1\n[terminal]\nshell = [\"/bin/sh\", \"-c\", \"trap \\\"\\\" HUP; echo READY; read line; echo got > {}; sleep 5\"]\n",
+        marker.display()
+    ));
+    let mut c = f.client();
+    let t = c.open(f.create_params(80, 24)).await;
+    c.read_until(t.stream, "READY").await;
+    c.call("terminal.close", json!({"terminalId": t.terminal}))
+        .await
+        .outcome
+        .unwrap();
+    let (code, _) = c.exit(t.stream).await;
+    assert_eq!(code, None);
+    assert!(
+        !marker.exists(),
+        "the shell read a line after terminal.close"
+    );
 }
 
 /// 소비자가 출력을 읽지 않아 tty 가 꽉 찬 채로 닫아도 셸의 프로세스가 1초 안에 끝난다. 끝낸 뒤 PTY 를 더 읽지 않으면 tty 를

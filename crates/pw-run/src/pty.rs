@@ -216,22 +216,32 @@ impl Pty {
         if self.terminated.swap(true, Ordering::SeqCst) {
             return;
         }
-        lock(&self.input).take();
+        // 입력은 바로 막되(`write` 가 거짓) 큐는 셸을 끝낸 뒤 버린다. 큐가 닫히면 쓰기 스레드가 portable-pty 의 writer 를 버리고,
+        // 그 writer 는 버려질 때 셸에 `\n` + ^D(EOF)를 쓴다 — 신호보다 먼저 가면 셸이 그것을 읽고 `exit 0` 으로 끝나 신호 종료가
+        // 정상 종료로 보인다(시험 `closing_does_not_feed_the_shell_an_eof_before_ending_it`).
+        let input = lock(&self.input).take();
         self.output.close();
         #[cfg(unix)]
         let leader = self.pid.and_then(|p| libc::pid_t::try_from(p).ok());
         #[cfg(unix)]
-        if let Some(leader) = leader {
+        let input = if let Some(leader) = leader {
+            let input = Arc::new(Mutex::new(input));
+            let held = Arc::clone(&input);
             let spawned = thread("pty-terminate", move || {
                 crate::tree::terminate_session(leader, HANGUP_GRACE);
+                drop(lock(&held).take());
                 forget_leader(leader);
             });
             if spawned.is_ok() {
                 return;
             }
-        }
+            lock(&input).take()
+        } else {
+            input
+        };
         // Windows(ConPTY 를 닫으면 붙은 콘솔 프로세스도 끝난다) · 스레드를 못 띄운 경우: 셸만 죽인다.
         let _ = lock(&self.killer).kill();
+        drop(input);
         #[cfg(unix)]
         if let Some(leader) = leader {
             forget_leader(leader);
