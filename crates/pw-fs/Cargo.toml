@@ -36,9 +36,12 @@ specta = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 # 감시 오류 · 한도 초과를 로그에 남긴다. 버전은 pw-runtime 과 같게 둔다.
 tracing = "0.1.44"
+# 삭제 → OS 휴지통(`fs.trash`, M1-21, MIT). 기본 기능 그대로: Windows 의 COM 초기화(`coinit_apartmentthreaded`)와 Linux 휴지통의
+# 지운 시각(`chrono`). macOS 는 Finder 를 부르지 않는 `NsFileManager` 방식으로 고른다(src/ops.rs).
+trash = "5.2.9"
 
 [target."cfg(unix)".dependencies]
-# access(2) 로 실제 쓰기 가능 여부를 본다. 버전은 pw-open-with · 데스크톱 크레이트와 같게 둔다.
+# access(2) 로 실제 쓰기 가능 여부를 보고, 덮지 않는 rename(macOS `renamex_np` · Linux `renameat2`, src/ops.rs)을 부른다. 버전은 pw-open-with · 데스크톱 크레이트와 같게 둔다.
 libc = "0.2.190"
 
 [target."cfg(windows)".dependencies]

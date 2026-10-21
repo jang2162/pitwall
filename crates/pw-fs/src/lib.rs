@@ -5,6 +5,7 @@
 //! - [`list`]: 폴더 한 단계 목록과 ignore 여부.
 //! - [`read`]: 전체 · 범위 읽기와 `version`.
 //! - [`write`]: 임시 파일 → rename 원자 쓰기.
+//! - [`ops`]: 파일 조작(M1-21) — `fs.create` · `fs.rename` · `fs.copy` · `fs.trash`, Finder 드롭 들여오기.
 //! - [`search`]: 텍스트 검색 `search.text`(M1-07) 스트림.
 //! - [`methods`]: `fs.list` · `fs.stat` · `fs.read` · `fs.write` RPC.
 //! - [`watch`]: 파일 감시(M1-06) — `fs.watch` 스트림과 `fs.changed` 이벤트.
@@ -14,6 +15,7 @@ mod ignore_rules;
 pub mod judge;
 pub mod list;
 pub mod methods;
+pub mod ops;
 pub mod read;
 pub mod scope;
 pub mod search;

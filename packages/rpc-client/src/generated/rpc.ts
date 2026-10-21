@@ -26,6 +26,14 @@ export type UnaryMethods = {
 	 */
 	"ext.list": { params: null; result: ExtensionList };
 	/**
+	 * 파일이나 폴더(그 아래 전부)를 복사한다. 심링크는 따르지 않고 링크로 복사한다. 대상 이름이 있으면 덮지 않고 `CONFLICT`.
+	 */
+	"fs.copy": { params: FsFromToParams; result: FsCopied };
+	/**
+	 * 빈 파일이나 폴더를 만든다. 같은 이름이 있으면 아무것도 바꾸지 않고 `CONFLICT`(`data.path`).
+	 */
+	"fs.create": { params: FsCreateParams; result: FsCreated };
+	/**
 	 * 폴더 한 단계의 항목(이름 · 종류 · 크기 · mtime · ignore 여부). 파일 트리가 펼칠 때 부른다.
 	 */
 	"fs.list": { params: FsPathParams; result: FsList };
@@ -35,9 +43,18 @@ export type UnaryMethods = {
 	 */
 	"fs.read": { params: FsReadParams; result: FsRead };
 	/**
+	 * 항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는
+	 * 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 그대로 바꾼다.
+	 */
+	"fs.rename": { params: FsFromToParams; result: FsMoved };
+	/**
 	 * 파일 · 폴더 하나의 상태와 파일의 크기 등급. 내용은 읽지 않는다.
 	 */
 	"fs.stat": { params: FsPathParams; result: FsStat };
+	/**
+	 * 항목들을 OS 휴지통에 넣는다(`permanent` 면 영구히 지운다). 넣지 못한 것은 `failed` 에 이유와 함께.
+	 */
+	"fs.trash": { params: FsTrashParams; result: FsTrashed };
 	/**
 	 * 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도
 	 * 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.
@@ -255,9 +272,13 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n","mcp":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":false},
 	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":false},
+	"fs.copy": {"name":"fs.copy","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsCopied","doc":" 파일이나 폴더(그 아래 전부)를 복사한다. 심링크는 따르지 않고 링크로 복사한다. 대상 이름이 있으면 덮지 않고 `CONFLICT`.\n","mcp":false},
+	"fs.create": {"name":"fs.create","kind":"unary","tier":"write","roles":["owner"],"params":"FsCreateParams","output":"FsCreated","doc":" 빈 파일이나 폴더를 만든다. 같은 이름이 있으면 아무것도 바꾸지 않고 `CONFLICT`(`data.path`).\n","mcp":false},
 	"fs.list": {"name":"fs.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsList","doc":" 폴더 한 단계의 항목(이름 · 종류 · 크기 · mtime · ignore 여부). 파일 트리가 펼칠 때 부른다.\n","mcp":false},
 	"fs.read": {"name":"fs.read","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsReadParams","output":"FsRead","doc":" 파일 전체 또는 범위를 읽고 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급)을 함께 준다. 전체 읽기는 50 MiB 까지,\n 그보다 큰 파일은 범위로 읽는다.\n","mcp":false},
+	"fs.rename": {"name":"fs.rename","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsMoved","doc":" 항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는\n 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 그대로 바꾼다.\n","mcp":false},
 	"fs.stat": {"name":"fs.stat","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsStat","doc":" 파일 · 폴더 하나의 상태와 파일의 크기 등급. 내용은 읽지 않는다.\n","mcp":false},
+	"fs.trash": {"name":"fs.trash","kind":"unary","tier":"write","roles":["owner"],"params":"FsTrashParams","output":"FsTrashed","doc":" 항목들을 OS 휴지통에 넣는다(`permanent` 면 영구히 지운다). 넣지 못한 것은 `failed` 에 이유와 함께.\n","mcp":false},
 	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":false},
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false},
@@ -563,6 +584,33 @@ export type FsContent =
 /**  바이트 그대로(BOM 포함), 표준 base64. */
 { kind: "base64"; data: string };
 
+export type FsCopied = {
+	/**  만든 복사본의 경로. */
+	to: string,
+	/**  복사한 파일 · 폴더 · 심링크 수(맨 위 항목 포함). */
+	files: number,
+	dirs: number,
+	links: number,
+	/**  건너뛴 항목(특수 파일, Windows 의 심링크)의 원본 경로. */
+	skipped: string[],
+};
+
+/**  만들 것. */
+export type FsCreateKind = "file" | "dir";
+
+export type FsCreateParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  만들 절대 경로. 들어갈 폴더는 있어야 한다. */
+	path: string,
+	kind: FsCreateKind,
+};
+
+export type FsCreated = {
+	/**  만든 경로(들어간 폴더를 실제 경로로 푼 것). */
+	path: string,
+};
+
 /**  폴더의 항목 하나. */
 export type FsEntry = {
 	/**  UTF-8 이 아닌 이름은 대체 문자로 바뀌어 온다. */
@@ -580,11 +628,27 @@ export type FsEntry = {
 	ignored: boolean,
 };
 
+/**  원본 · 대상을 받는 요청(`fs.rename` · `fs.copy`). */
+export type FsFromToParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  옮기거나 복사할 항목의 절대 경로. 심링크면 링크 자체다. */
+	from: string,
+	/**  새 절대 경로(폴더 안의 이름까지). 들어갈 폴더는 있어야 하고 이 이름은 없어야 한다. */
+	to: string,
+};
+
 export type FsList = {
 	/**  정규화한 실제 경로. */
 	path: string,
 	/**  이름순. */
 	entries: FsEntry[],
+};
+
+export type FsMoved = {
+	/**  옮긴 항목의 원래 경로(들어 있던 폴더를 실제 경로로 푼 것). 열린 문서 · 탭의 키를 이것 아래에서 `to` 아래로 바꾼다. */
+	from: string,
+	to: string,
 };
 
 /**  경로 하나를 받는 요청(`fs.list` · `fs.stat`). */
@@ -640,6 +704,38 @@ export type FsStat = {
 	readonly: boolean,
 	/**  파일이면 크기 등급(결정 M1-D9). 읽지 않고 정하므로 「열지 않음」 판단에 바이트를 읽지 않는다. */
 	sizeClass: SizeClass | null,
+};
+
+export type FsTrashFailure = {
+	path: string,
+	reason: FsTrashReason,
+	message: string,
+};
+
+export type FsTrashParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  지울 항목의 절대 경로들. 하나라도 루트 밖이면 아무것도 지우지 않고 오류다. 다른 항목 아래의 항목은 그 위 항목과 함께 간다. */
+	paths: string[],
+	/**  휴지통을 거치지 않고 영구히 지운다. UI 는 휴지통에 넣지 못한 항목(`failed` 의 `unavailable`)을 사람에게 확인한 뒤에만 켠다. */
+	permanent?: boolean,
+};
+
+/**  지우지 못한 이유. */
+export type FsTrashReason = 
+/**  이 항목을 넣을 휴지통이 없거나 쓰지 못한다(휴지통이 없는 볼륨 · 환경). 확인 뒤 `permanent` 로 지울 수 있다. */
+"unavailable" | 
+/**  이 프로세스가 그 항목을 들어 낼 권한이 없다(들어 있는 폴더에 쓰기 권한이 없다). 영구 삭제도 실패한다. */
+"permission" | 
+/**  그사이 없어졌다. */
+"missing" | 
+/**  그 밖의 실패(영구 삭제의 IO 오류 등). */
+"failed";
+
+export type FsTrashed = {
+	/**  휴지통에 넣었거나(`permanent` 면 지웠거나) 한 항목. */
+	removed: string[],
+	failed: FsTrashFailure[],
 };
 
 export type FsWatchParams = {

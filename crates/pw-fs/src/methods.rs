@@ -200,6 +200,7 @@ pub fn register(router: &mut Router, fs: Arc<Fs>) {
     }
     let (list, stat, read) = (Arc::clone(&fs), Arc::clone(&fs), Arc::clone(&fs));
     crate::search::register(router, Arc::clone(&fs));
+    crate::ops::register(router, Arc::clone(&fs));
     router
         .unary(FsListMethod, move |_ctx, params: FsPathParams| {
             let s = Arc::clone(&list);
