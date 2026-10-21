@@ -1,10 +1,15 @@
-import type { SearchFile, SearchTextChunk, SearchTextParams } from "@pitwall/rpc-client";
+import {
+  ERROR_CODE,
+  RpcCallError,
+  type SearchFile,
+  type SearchTextChunk,
+  type SearchTextParams,
+} from "@pitwall/rpc-client";
 import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_OPTIONS,
   FindSession,
-  isBusyError,
   parseMask,
   type SearchRunner,
   searchParams,
@@ -232,10 +237,20 @@ describe("FindSession", () => {
     expect(session.getSnapshot().status).toBe("cancelled");
   });
 
-  it("recognises the Host's busy error", () => {
-    expect(isBusyError("search is busy: 2 searches are already running (-32603)")).toBe(true);
-    expect(isBusyError("regex parse error")).toBe(false);
-    expect(isBusyError(undefined)).toBe(false);
+  it("marks a failure as busy when the Host's concurrent search limit ended the stream", async () => {
+    const { run, streams } = controlledRunner();
+    const session = new FindSession(run);
+    const done = session.start(searchParams({ ...DEFAULT_OPTIONS, query: "a" }, place));
+    // Host 의 바쁨은 RpcError::internal(사유) — message 는 「internal error」, 사유는 data 에 있다.
+    streams[0]!.end(
+      new RpcCallError({
+        code: ERROR_CODE.INTERNAL_ERROR,
+        message: "internal error",
+        data: "search is busy: 2 searches are already running",
+      }),
+    );
+    await done;
+    expect(session.getSnapshot()).toMatchObject({ status: "failed", busy: true });
   });
 
   it("shows the Host's error when the stream fails", async () => {
@@ -244,6 +259,10 @@ describe("FindSession", () => {
     const done = session.start(searchParams({ ...DEFAULT_OPTIONS, query: "(" }, place));
     streams[0]!.end(new Error("regex parse error"));
     await done;
-    expect(session.getSnapshot()).toMatchObject({ status: "failed", error: "regex parse error" });
+    expect(session.getSnapshot()).toMatchObject({
+      status: "failed",
+      error: "regex parse error",
+      busy: false,
+    });
   });
 });

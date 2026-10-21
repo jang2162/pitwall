@@ -41,7 +41,6 @@ import {
   type FindScope,
   type FindSession,
   type FindSnapshot,
-  isBusyError,
   searchParams,
 } from "./find-session";
 import { baseName, MatchText } from "./match-text";
@@ -68,7 +67,7 @@ export function FindStatusText({
   if (snapshot.status === "failed")
     return (
       <span role="alert" className="truncate text-ui-accent" title={snapshot.error}>
-        {isBusyError(snapshot.error) ? strings.busy : strings.failed(snapshot.error ?? "")}
+        {snapshot.busy ? strings.busy : strings.failed(snapshot.error ?? "")}
       </span>
     );
   const parts = [strings.summary(snapshot.rows.length, snapshot.files.length)];

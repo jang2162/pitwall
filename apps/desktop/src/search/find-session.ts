@@ -6,11 +6,12 @@
 //   읽기를 멈춘다). 닫힌 스트림의 늦은 청크는 쌓지 않는다.
 // - 결과 상한(Host 기본 1만 줄, `DEFAULT_MAX_RESULTS`)을 넘으면 마지막 청크의 `truncated` 가 켜진다 — 화면의 「더 있음」.
 
-import type {
-  SearchFile,
-  SearchLine,
-  SearchTextChunk,
-  SearchTextParams,
+import {
+  isBusyError,
+  type SearchFile,
+  type SearchLine,
+  type SearchTextChunk,
+  type SearchTextParams,
 } from "@pitwall/rpc-client";
 
 import { isWithin, joinPath, separatorOf } from "../file-tree/tree-model";
@@ -122,6 +123,8 @@ export interface FindSnapshot {
   /** 상한을 넘는 결과가 더 있다. */
   readonly truncated: boolean;
   readonly error: string | undefined;
+  /** 실패가 Host 의 동시 검색 상한(「바쁨」, crates/pw-fs/src/search.rs)이다. 판정은 오류 객체로 한다(rpc-client `isBusyError`). */
+  readonly busy: boolean;
 }
 
 export type SearchRunner = (
@@ -136,12 +139,8 @@ const IDLE: FindSnapshot = {
   rows: [],
   truncated: false,
   error: undefined,
+  busy: false,
 };
-
-/** Host 의 동시 검색 상한(`search is busy: …`, crates/pw-fs/src/search.rs)에 걸렸다. Host 가 별도 코드를 주지 않아 문구로 가른다. */
-export function isBusyError(message: string | undefined): boolean {
-  return message?.startsWith("search is busy") ?? false;
-}
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -176,7 +175,15 @@ export class FindSession {
     this.abort = abort;
     const files: SearchFile[] = [];
     const rows: FindRow[] = [];
-    this.set({ status: "searching", params, files, rows, truncated: false, error: undefined });
+    this.set({
+      status: "searching",
+      params,
+      files,
+      rows,
+      truncated: false,
+      error: undefined,
+      busy: false,
+    });
     try {
       for await (const chunk of this.run(params, abort.signal)) {
         if (abort.signal.aborted) return;
@@ -194,7 +201,8 @@ export class FindSession {
       if (abort.signal.aborted) return;
       if (this.snapshot.status === "searching") this.set({ status: "done" });
     } catch (e) {
-      if (!abort.signal.aborted) this.set({ status: "failed", error: errorText(e) });
+      if (!abort.signal.aborted)
+        this.set({ status: "failed", error: errorText(e), busy: isBusyError(e) });
     } finally {
       if (this.abort === abort) this.abort = undefined;
     }

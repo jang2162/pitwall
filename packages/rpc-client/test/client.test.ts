@@ -2,7 +2,13 @@
 // 와이어 형식이 Rust 와 같은지는 golden.test.ts 가 본다.
 import { describe, expect, it, vi } from "vitest";
 
-import { createMemoryTransportPair, RpcCallError, RpcClient, type Transport } from "../src";
+import {
+  createMemoryTransportPair,
+  isBusyError,
+  RpcCallError,
+  RpcClient,
+  type Transport,
+} from "../src";
 import { ERROR_CODE } from "../src/generated/rpc";
 import type { StreamMethods, UnaryMethods } from "./fixtures/rpc";
 
@@ -22,8 +28,8 @@ class FakeServer {
     this.transport.send(JSON.stringify({ jsonrpc: "2.0", id, result }));
   }
 
-  fail(id: number, code: number, message: string): void {
-    this.transport.send(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }));
+  fail(id: number, code: number, message: string, data?: unknown): void {
+    this.transport.send(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message, data } }));
   }
 
   notify(method: string, params: unknown): void {
@@ -296,5 +302,69 @@ describe("RpcClient abort signals", () => {
     server.notify("stream.end", { streamId: 1, status: "completed" });
     for await (const _ of stream) void _;
     expect(remove).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Host 의 「바쁨」 은 `RpcError::internal(사유)` 로 온다: message 「internal error」, 사유는 data(crates/pw-rpc/src/error.rs).
+describe("isBusyError", () => {
+  it("tells a call the Host refused as busy by its code and data, not its message", async () => {
+    const { client, server } = setup();
+    const call = client.call("fixture.fail");
+    await settle();
+    server.fail(
+      1,
+      ERROR_CODE.INTERNAL_ERROR,
+      "internal error",
+      "file search is busy: 4 searches are already running",
+    );
+    const error = await call.catch((e: unknown) => e);
+    expect(error).toMatchObject({ message: "internal error (-32603)" });
+    expect(isBusyError(error)).toBe(true);
+  });
+
+  it("tells a stream the Host ended as busy", async () => {
+    const { client, server } = setup();
+    const stream = client.stream("fixture.count", { n: 1 });
+    await settle();
+    server.reply(1, { streamId: 1 });
+    server.notify("stream.end", {
+      streamId: 1,
+      status: "failed",
+      error: {
+        code: ERROR_CODE.INTERNAL_ERROR,
+        message: "internal error",
+        data: "search is busy: 2 searches are already running",
+      },
+    });
+    const consume = async () => {
+      for await (const _ of stream) void _;
+    };
+    expect(isBusyError(await consume().catch((e: unknown) => e))).toBe(true);
+  });
+
+  it("is false for other errors", () => {
+    const internal = (data: unknown) =>
+      new RpcCallError({
+        code: ERROR_CODE.INTERNAL_ERROR,
+        message: "internal error",
+        data: data as never,
+      });
+    expect(isBusyError(internal("index build failed"))).toBe(false);
+    expect(isBusyError(internal(null))).toBe(false);
+    // 사유가 같아도 다른 코드면 바쁨이 아니다.
+    expect(
+      isBusyError(
+        new RpcCallError({
+          code: ERROR_CODE.INVALID_PARAMS,
+          message: "invalid params",
+          data: "search is busy: 2 searches are already running",
+        }),
+      ),
+    ).toBe(false);
+    // 문구를 message 에 넣은 오류(예전 가짜 Host 의 모양)는 Host 가 보내지 않는다.
+    expect(isBusyError(new Error("file search is busy: 4 searches are already running"))).toBe(
+      false,
+    );
+    expect(isBusyError(undefined)).toBe(false);
   });
 });
