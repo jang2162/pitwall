@@ -631,6 +631,19 @@ it("cancels a tree drag with Esc or by letting go outside the tree, and a short 
   await pointer(row(`${ROOT}/src`)!, "pointerup", { clientX: 11, clientY: 11 });
   await settle(40);
 
+  // 오른쪽 단추 · ⌃클릭(macOS 의 우클릭) · 루트 행은 끌지 않는다.
+  for (const [from, init] of [
+    [`${ROOT}/Cargo.toml`, { button: 2 }],
+    [`${ROOT}/Cargo.toml`, { button: 0, ctrlKey: true }],
+    [ROOT, { button: 0 }],
+  ] as const) {
+    await pointer(row(from)!, "pointerdown", { ...init, clientX: 10, clientY: 10 });
+    await pointer(row(`${ROOT}/src`)!, "pointermove", { clientX: 10, clientY: 40 });
+    expect(tree().hasAttribute("data-dragging")).toBe(false);
+    await pointer(row(`${ROOT}/src`)!, "pointerup", { clientX: 10, clientY: 40 });
+  }
+  await settle(40);
+
   expect(host.calls.slice(before).filter((c) => c.method !== "fs.list")).toEqual([]);
   expect(host.files.has(`${ROOT}/Cargo.toml`)).toBe(true);
   expect(host.files.has(`${ROOT}/src/Cargo.toml`)).toBe(false);
