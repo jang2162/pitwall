@@ -6,6 +6,7 @@ import {
   countMatches,
   duplicateLine,
   MATCH_COUNT_CAP,
+  MatchScan,
   moveLineDown,
   parseLineColumn,
   toggleLineComment,
@@ -103,6 +104,7 @@ describe("countMatches", () => {
     expect(countMatches(EditorState.create({ doc: text }), query)).toEqual({
       total: 2,
       capped: false,
+      counting: false,
       current: undefined,
     });
     const second = text.indexOf("fn  bee");
@@ -120,9 +122,10 @@ describe("countMatches", () => {
       2,
     );
     expect(countMatches(state, new SearchQuery({ search: "fn", wholeWord: true })).total).toBe(3);
-    expect(countMatches(state, new SearchQuery({ search: "(", regexp: true }))).toEqual({
+    expect(countMatches(state, new SearchQuery({ search: "(", regexp: true }))).toMatchObject({
       total: 0,
       capped: false,
+      counting: false,
     });
   });
 
@@ -132,5 +135,53 @@ describe("countMatches", () => {
       total: MATCH_COUNT_CAP,
       capped: true,
     });
+  });
+
+  // 조각으로 나눠 센 것(조각 1글자 = 줄마다 따로)이 문서 전체를 한 커서로 센 것과 같다 — 빈 일치 · 줄 처음 · 줄 끝 · 단어 ·
+  // 대소문자 · 줄을 넘는 쿼리(나누지 않음)를 섞어.
+  it("counts the same matches in line-aligned chunks as in one pass over the document", () => {
+    const doc = "abc\ndef\n\nxyz Abc\nfn  bee(x) abcabc\n\u0130i ı\n";
+    const queries = [
+      new SearchQuery({ search: "x*", regexp: true }),
+      new SearchQuery({ search: "^", regexp: true }),
+      new SearchQuery({ search: "$", regexp: true }),
+      new SearchQuery({ search: String.raw`\b\w`, regexp: true }),
+      new SearchQuery({ search: "abc" }),
+      new SearchQuery({ search: "abc", caseSensitive: true }),
+      new SearchQuery({ search: "abc", wholeWord: true }),
+      new SearchQuery({ search: "i" }),
+      new SearchQuery({ search: String.raw`c\nd` }),
+      new SearchQuery({ search: String.raw`c\nd`, regexp: true }),
+      new SearchQuery({ search: String.raw`\s+`, regexp: true }),
+    ];
+    const state = EditorState.create({ doc });
+    for (const query of queries) {
+      const expected: { from: number; to: number }[] = [];
+      const cursor = query.getCursor(state);
+      for (let next = cursor.next(); !next.done; next = cursor.next()) expected.push(next.value);
+      const scan = new MatchScan(state, query, MATCH_COUNT_CAP, 1);
+      while (!scan.step(0));
+      expect(scan.count({ from: -1, to: -1 }).total, query.search).toBe(expected.length);
+      expected.forEach((m, i) => expect(scan.count(m).current, query.search).toBe(i + 1));
+    }
+  });
+
+  it("stops after the time budget and goes on where it stopped, finding the current match as it goes", () => {
+    const line = "no match here\n";
+    const doc = line.repeat(2000) + "needle\n" + line.repeat(2000) + "needle\n";
+    const state = EditorState.create({ doc });
+    const scan = new MatchScan(state, new SearchQuery({ search: "needle" }), MATCH_COUNT_CAP, 1024);
+    const second = { from: doc.lastIndexOf("needle"), to: doc.lastIndexOf("needle") + 6 };
+    expect(scan.step(0)).toBe(false);
+    expect(scan.count(second)).toEqual({
+      total: 0,
+      capped: false,
+      counting: true,
+      current: undefined,
+    });
+    let steps = 1;
+    while (!scan.step(0)) steps++;
+    expect(steps).toBeGreaterThan(50);
+    expect(scan.count(second)).toEqual({ total: 2, capped: false, counting: false, current: 2 });
   });
 });

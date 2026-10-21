@@ -102,6 +102,8 @@ export function projectStrings(t: Translate) {
         find: t("action-editor-find"),
         replace: t("action-editor-replace"),
         gotoLine: t("action-editor-goto-line"),
+        undo: t("action-editor-undo"),
+        redo: t("action-editor-redo"),
         duplicateLine: t("action-editor-duplicate-line"),
         deleteLine: t("action-editor-delete-line"),
         moveLineUp: t("action-editor-move-line-up"),
@@ -122,6 +124,7 @@ export function projectStrings(t: Translate) {
         close: t("editor-find-close"),
         invalid: t("editor-find-invalid"),
         none: t("editor-find-none"),
+        counting: t("editor-find-counting"),
         count: (total: number | string) => t("editor-find-count", { total }),
         countCurrent: (current: number, total: number | string) =>
           t("editor-find-count-current", { current, total }),

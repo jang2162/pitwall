@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 // 에디터 조작(12-m1-plan M1-18 완료 기준)을 프로젝트 창(App kind="project")과 가짜 Host 로 본다 — 키는 창의 키맵 엔진(기본 키맵)을
 // 지나고, 에디터는 실제 CodeMirror 다: ⌘L `120:5` → 커서, ⌘F 정규식의 일치 수, ⌘/ 의 언어별 줄 주석, 상태바 언어 바꾸기와 탭을
-// 닫았다 열면 판별값, `font_size` 를 바꾸면 같은 뷰가 바뀜, 한글 조합 중에는 단축키가 돌지 않음, macOS ⌘⌫ · Win Ctrl+Y 줄 삭제.
+// 닫았다 열면 판별값, `font_size` 를 바꾸면 같은 뷰가 바뀜, 한글 조합 중에는 단축키가 돌지 않음, macOS ⌘⌫ · Win Ctrl+Y 줄 삭제,
+// undo · redo 가 키와 Win/Linux Edit 메뉴(키맵 액션 항목)에서 한 번씩 돌고 찾기 칸의 키는 칸에 둠.
 //
 // CodeMirror 는 불러올 때 macOS 인지 정한다(navigator.platform) — 그래서 불러오기 전에 Mac 으로 둔다. ⌘⌫ 가 CodeMirror 의 「줄 앞까지
 // 지우기」 와 창의 줄 삭제로 두 번 돌지 않는지가 그때만 보인다(extensions/navigation.ts).
 
+import { SearchQuery } from "@codemirror/search";
 import { EditorView } from "@codemirror/view";
 import type {
   ConfigView,
@@ -194,13 +196,31 @@ vi.mock("../tauri-transport", async () => {
   };
 });
 
+/** 네이티브 메뉴(src-tauri/src/menu.rs): 마지막으로 받은 accelerator 와 메뉴에서 고른 액션을 보내는 자리. */
+const menu = {
+  accelerators: {} as Record<string, string | null>,
+  choose: undefined as ((action: string) => void) | undefined,
+};
+
 const native = {
-  syncMenu: async () => {},
-  onMenuAction: () => () => {},
+  syncMenu: async (accelerators) => {
+    menu.accelerators = accelerators;
+  },
+  onMenuAction: (listener) => {
+    menu.choose = listener;
+    return () => {
+      if (menu.choose === listener) menu.choose = undefined;
+    };
+  },
   openSettings: async () => {},
   closeWindow: async () => {},
   guardClose: () => () => {},
 } satisfies KeymapNative;
+
+async function chooseMenu(action: string) {
+  await act(async () => menu.choose!(action));
+  await settle();
+}
 
 const RS = "/work/demo/src/lib.rs";
 const PY = "/work/demo/tool.py";
@@ -378,6 +398,31 @@ it("shows the number of regex matches for ⌘F, and ⌘⌫ in the find field edi
   ]);
 });
 
+// 막대는 트랜잭션마다 다시 그려진다. 커서만 움직인 것으로 문서 전체를 다시 세면 5 MiB 문서에서 커서 한 칸에 수백 ms 다 — 센 목록에서
+// 현재 일치를 찾아야 한다. 문서가 바뀌면 다시 센다.
+it("does not count the document again when only the selection moves", async () => {
+  await mount();
+  await open(RS, 1, 1);
+  await keydown({ code: "KeyF", key: "f", metaKey: true });
+  const field = document.querySelector<HTMLInputElement>("[main-field]")!;
+  await typeInto(field, "fn");
+  const count = () => document.querySelector("[data-testid=find-count]")!.textContent;
+  expect(count()).toBe("3개");
+  const getCursor = vi.spyOn(SearchQuery.prototype, "getCursor");
+  const second = view().state.doc.line(2).from;
+  await act(async () => view().dispatch({ selection: { anchor: second, head: second + 2 } }));
+  await settle();
+  expect(count()).toBe("2/3");
+  await act(async () => view().dispatch({ selection: { anchor: 0 } }));
+  await settle();
+  expect(count()).toBe("3개");
+  expect(getCursor).not.toHaveBeenCalled();
+  await act(async () => view().dispatch({ changes: { from: 0, insert: "fn " } }));
+  await settle();
+  expect(getCursor).toHaveBeenCalled();
+  expect(count()).toBe("4개");
+});
+
 it("toggles a line comment with the language's token: // for Rust, # for Python", async () => {
   await mount();
   await open(RS, 1, 1);
@@ -487,4 +532,53 @@ it("on Windows, Ctrl+Y deletes the line instead of redoing", async () => {
   await open(PY, 1, 1);
   await keydown({ code: "KeyY", key: "y", ctrlKey: true });
   expect(view().state.doc.toString()).toBe("y = 2\n");
+});
+
+// Win/Linux 의 Edit 메뉴 「실행 복귀」 는 키맵 액션 `editor.redo` 다(src-tauri/src/menu.rs). muda 의 기본 항목은 Ctrl+Y 로 고정이고
+// Windows 에서 고르면 그 키를 다시 보내 줄 삭제(Ctrl+Y)가 됐다.
+it("on Windows, the Edit menu undoes and redoes through the keymap, showing Ctrl+Z and Ctrl+Shift+Z", async () => {
+  useUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+  await mount();
+  await open(PY, 1, 1);
+  expect(menu.accelerators["editor.undo"]).toBe("Control+KeyZ");
+  expect(menu.accelerators["editor.redo"]).toBe("Control+Shift+KeyZ");
+  await keydown({ code: "ArrowDown", key: "ArrowDown", altKey: true, shiftKey: true });
+  expect(view().state.doc.toString()).toBe("y = 2\nx = 1\n");
+  await chooseMenu("editor.undo");
+  expect(view().state.doc.toString()).toBe("x = 1\ny = 2\n");
+  await chooseMenu("editor.redo");
+  expect(view().state.doc.toString()).toBe("y = 2\nx = 1\n");
+});
+
+it("undoes and redoes one step per key press, by ⌘Z and ⌘⇧Z", async () => {
+  await mount();
+  await open(PY, 1, 1);
+  await keydown({ code: "KeyD", key: "d", metaKey: true });
+  await keydown({ code: "KeyD", key: "d", metaKey: true });
+  expect(view().state.doc.toString()).toBe("x = 1\nx = 1\nx = 1\ny = 2\n");
+  await keydown({ code: "KeyZ", key: "z", metaKey: true });
+  expect(view().state.doc.toString()).toBe("x = 1\nx = 1\ny = 2\n");
+  await keydown({ code: "KeyZ", key: "z", metaKey: true, shiftKey: true });
+  expect(view().state.doc.toString()).toBe("x = 1\nx = 1\nx = 1\ny = 2\n");
+});
+
+it("leaves Ctrl+Z in the find field to the field, and the menu's Undo does not undo the editor behind it", async () => {
+  useUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+  await mount();
+  await open(PY, 1, 1);
+  await keydown({ code: "ArrowDown", key: "ArrowDown", altKey: true, shiftKey: true });
+  await keydown({ code: "KeyF", key: "f", ctrlKey: true });
+  const input = document.querySelector<HTMLInputElement>(".cm-panels input")!;
+  expect(document.activeElement).toBe(input);
+  const event = new KeyboardEvent("keydown", {
+    code: "KeyZ",
+    key: "z",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => input.dispatchEvent(event));
+  expect(event.defaultPrevented).toBe(false);
+  await chooseMenu("editor.undo");
+  expect(view().state.doc.toString()).toBe("y = 2\nx = 1\n");
 });

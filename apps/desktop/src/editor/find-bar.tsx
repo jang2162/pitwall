@@ -7,6 +7,9 @@
 // 안에서도 돌고(찾기 칸을 다시 고른다 · 바꾸기 줄을 연다), 편집 키(⌘⌫ 등)는 돌지 않아 칸의 글자를 지운다.
 //
 // 칸의 키: ↩ 다음 · ⇧↩ 이전(바꿀 칸의 ↩ 는 바꾸기), Esc 닫고 에디터로. 한글을 조합하는 중의 ↩ · Esc 는 조합에 둔다(ui/ime.ts).
+//
+// 일치 수는 문서나 쿼리가 바뀔 때만 센다 — 커서만 움직이면 센 목록에서 현재 일치를 찾는다(`MatchScan`). 큰 문서는 조각마다
+// `SCAN_BUDGET_MS` 만 세고 나머지는 다음 틱에 이어 세며, 그동안 「N+」 로 보인다.
 
 import {
   closeSearchPanel,
@@ -19,6 +22,7 @@ import {
   SearchQuery,
   setSearchQuery,
 } from "@codemirror/search";
+import type { EditorState } from "@codemirror/state";
 import type { EditorView, Panel, ViewUpdate } from "@codemirror/view";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -31,8 +35,11 @@ import {
 
 import { useProjectStrings } from "../layout/strings";
 import { isComposingKey } from "../ui/ime";
-import { countMatches } from "./edit-commands";
+import { type MatchCount, MatchScan } from "./edit-commands";
 import { EDITOR_FIND, type FindMode, findMode, setFindMode } from "./extensions/operations";
+
+/** 일치를 한 번에 세는 시간. 넘으면 나머지는 다음 틱에 센다 — 큰 문서에서 50 ms 넘는 멈춤을 만들지 않게. */
+const SCAN_BUDGET_MS = 8;
 
 /** 패널이 뷰의 바뀜을 막대에 알리는 DOM 이벤트. */
 export const FIND_UPDATE = "pitwall-find-update";
@@ -105,6 +112,34 @@ function Toggle({
   );
 }
 
+/** 일치 수. 쿼리가 비었으면 `undefined`. 문서 · 쿼리가 바뀌면 새로 세고, 다 셀 때까지 다음 틱마다 이어 센다. */
+function useMatchCount(state: EditorState, query: SearchQuery): MatchCount | undefined {
+  const { doc } = state;
+  // 선택만 바뀐 상태로는 다시 세지 않는다 — 센 목록은 문서와 쿼리로만 정해진다. 상태는 세기에 문서와 함께 넘길 뿐이라 의존에
+  // 넣지 않고 ref 로 읽는다.
+  const latest = useRef(state);
+  latest.current = state;
+  const scan = useMemo(() => {
+    if (query.search === "") return undefined;
+    const s = new MatchScan(latest.current, query);
+    s.step(SCAN_BUDGET_MS);
+    return s;
+  }, [doc, query]);
+  const [, progressed] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (!scan || scan.done) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const next = () => {
+      const done = scan.step(SCAN_BUDGET_MS);
+      progressed();
+      if (!done) timer = setTimeout(next, 0);
+    };
+    timer = setTimeout(next, 0);
+    return () => clearTimeout(timer);
+  }, [scan]);
+  return scan?.count(state.selection.main);
+}
+
 const FIELD_CLASS =
   "h-[22px] w-[260px] min-w-0 rounded border border-ui-border bg-editor-background px-1.5 text-[12px] text-ui-foreground outline-none focus:border-ui-accent";
 const BUTTON_CLASS =
@@ -126,19 +161,17 @@ export function FindBar({ view, host }: { view: EditorView; host: HTMLElement })
   const { state } = view;
   const query = getSearchQuery(state);
   const mode = state.field(findMode, false) ?? "find";
-  // 상태(트랜잭션마다 새 객체)나 쿼리가 바뀔 때만 다시 센다.
-  const count = useMemo(
-    () => (query.search === "" ? undefined : countMatches(state, query)),
-    [state, query],
-  );
-  const total = count && (count.capped ? `${count.total}+` : count.total);
+  const count = useMatchCount(state, query);
+  const total = count && (count.capped || count.counting ? `${count.total}+` : count.total);
   const status =
     count === undefined
       ? ""
       : !query.valid
         ? T.invalid
         : count.total === 0
-          ? T.none
+          ? count.counting
+            ? T.counting
+            : T.none
           : count.current !== undefined
             ? T.countCurrent(count.current, total ?? 0)
             : T.count(total ?? 0);

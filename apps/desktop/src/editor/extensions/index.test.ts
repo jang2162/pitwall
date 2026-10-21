@@ -79,8 +79,9 @@ it("edits a document it can write, and keeps a read-only one read-only with a cu
   locked.destroy();
 });
 
-// Win/Linux(시험 환경은 mac 이 아니다): redo 는 Ctrl+Shift+Z 하나이고 Ctrl+Y 는 줄 삭제(창의 키맵, editor-ops.ts)라 redo 가 아니다.
-it("sends undo and redo, by key and by the native menu, to the document's history", () => {
+// undo · redo 의 키는 창의 키맵 액션(`editor.undo` · `editor.redo`, ../editor-ops.ts)이다. 에디터도 잡으면 이벤트가 창까지 올라가
+// 두 번 돈다(navigation.ts 머리 주석) — 그래서 에디터는 키를 잡지 않고 macOS 네이티브 메뉴의 `beforeinput` 만 받는다.
+it("sends the native menu's undo and redo to the document's history and leaves the keys to the window", () => {
   const history = { undo: vi.fn(() => true), redo: vi.fn(() => true) };
   const view = new EditorView({
     parent: document.body,
@@ -94,13 +95,17 @@ it("sends undo and redo, by key and by the native menu, to the document's histor
       new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
     );
   key({ key: "z", code: "KeyZ", ctrlKey: true });
-  key({ key: "y", code: "KeyY", ctrlKey: true });
-  expect(history.redo).not.toHaveBeenCalled();
   key({ key: "Z", code: "KeyZ", keyCode: 90, ctrlKey: true, shiftKey: true });
-  view.contentDOM.dispatchEvent(
-    new InputEvent("beforeinput", { inputType: "historyUndo", bubbles: true, cancelable: true }),
-  );
-  expect(history.undo).toHaveBeenCalledTimes(2);
+  key({ key: "y", code: "KeyY", ctrlKey: true });
+  expect(history.undo).not.toHaveBeenCalled();
+  expect(history.redo).not.toHaveBeenCalled();
+  const input = (inputType: string) =>
+    view.contentDOM.dispatchEvent(
+      new InputEvent("beforeinput", { inputType, bubbles: true, cancelable: true }),
+    );
+  input("historyUndo");
+  input("historyRedo");
+  expect(history.undo).toHaveBeenCalledTimes(1);
   expect(history.redo).toHaveBeenCalledTimes(1);
   view.destroy();
 });

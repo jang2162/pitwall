@@ -127,6 +127,8 @@ action-editor-save-all = 모두 저장
 action-editor-find = 찾기
 action-editor-replace = 바꾸기
 action-editor-goto-line = 줄로 이동
+action-editor-undo = 실행 취소
+action-editor-redo = 실행 복귀
 action-editor-duplicate-line = 줄 복제
 action-editor-delete-line = 줄 삭제
 action-editor-move-line-up = 줄 위로 옮기기
@@ -146,6 +148,8 @@ editor-find-replace-all = 모두 바꾸기
 editor-find-close = 닫기(Esc)
 editor-find-invalid = 틀린 정규식
 editor-find-none = 결과 없음
+# 큰 문서에서 아직 일치를 하나도 못 찾은 채 세는 중
+editor-find-counting = 세는 중…
 # $total: 일치 수(상한에서 멈췄으면 「9999+」 처럼 글자)
 editor-find-count = { $total }개
 # $current: 고른 일치의 차례, $total: 일치 수

@@ -159,7 +159,23 @@ linux = "ctrl+tab"
 
 # 에디터 조작(10-ui §4.2 「검색 · 이동」 · 「코드」, src/editor/editor-ops.ts). 편집 키 · 줄로 이동은 글자 영역(`editorFocus`)에서만, 찾기 ·
 # 바꾸기는 찾기 막대 안(`editorFind`)에서도 돈다 — 찾기 칸의 ⌘⌫ 는 글자를 지우고, 웰컴 창의 ⌘⌫(목록에서 제거) · 터미널의 같은 키와
-# 겹치지 않는다. Win/Linux 의 Ctrl+Y 는 IntelliJ 대로 줄 삭제다(redo 는 Ctrl+Shift+Z, src/editor/extensions/editing.ts).
+# 겹치지 않는다. Win/Linux 의 Ctrl+Y 는 IntelliJ 대로 줄 삭제다(redo 는 Ctrl+Shift+Z).
+#
+# undo · redo 는 `when` 이 없다 — 조건 있는 키는 네이티브 메뉴에 accelerator 로 가지 않는데(packages/keymap `menuAccelerators`),
+# Win/Linux 의 Edit 메뉴 「실행 취소」 · 「실행 복귀」 가 이 액션이라 메뉴에 키가 보여야 한다(src-tauri/src/menu.rs). 대신 액션이 포커스가
+# 에디터 밖의 입력 칸(찾기 막대 · 대화상자 · 터미널)에 있으면 꺼져 키를 그 칸에 둔다(src/editor/editor-ops.ts).
+
+[[bindings]]
+action = "editor.undo"
+mac = "cmd+z"
+win = "ctrl+z"
+linux = "ctrl+z"
+
+[[bindings]]
+action = "editor.redo"
+mac = "cmd+shift+z"
+win = "ctrl+shift+z"
+linux = "ctrl+shift+z"
 
 [[bindings]]
 action = "editor.find"

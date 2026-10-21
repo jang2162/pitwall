@@ -26,8 +26,16 @@
 //! 창을 닫는다(`update.rs`). Dock 메뉴 · 로그아웃의 종료(macOS `terminate:`)는 여전히 묻지 않는다 — tao 가
 //! `applicationShouldTerminate:` 를 구현하지 않는다(docs/design/12-m1-plan.md 「M1 에서 하지 않는 것」).
 //!
+//! Win/Linux 의 Edit 메뉴 「실행 취소」 · 「실행 복귀」 도 OS 기본 항목이 아니라 키맵 액션 `editor.undo` · `editor.redo` 다. muda 의 기본
+//! 항목은 키맵이 단축키를 바꿀 수 없고(redo 는 Ctrl+Y 로 고정), Windows 에서 고르면 그 키를 `SendInput` 으로 다시 보낸다 — 기본
+//! 키맵의 Ctrl+Y 는 줄 삭제(`editor.deleteLine`)라 「실행 복귀」 를 고르면 줄이 지워졌다. 키맵 액션 항목은 키를 흉내 내지 않고 액션을
+//! 부르고, 단축키 표시는 키맵에서 온다(Ctrl+Z · Ctrl+Shift+Z). macOS 는 OS 기본 항목(`undo:` · `redo:`)을 둔다 — 웰컴 · 설정 창의 입력
+//! 칸이 응답자 체인으로 받고, 에디터는 그것을 `beforeinput` 으로 받는다(`src/editor/extensions/editing.ts`).
+//!
 //! ⚠ 메뉴에 넣는 액션은 두 번 실행돼도 결과가 같아야 한다(열기 · 보이기). 가드는 짧은 시간 창만 본다. 토글 액션을 메뉴에
-//! 넣으려면 그 전에 키 경로와 메뉴 경로가 한 번만 오는지 플랫폼마다 실측하거나 더 단단한 중복 실행 가드를 둔다.
+//! 넣으려면 그 전에 키 경로와 메뉴 경로가 한 번만 오는지 플랫폼마다 실측하거나 더 단단한 중복 실행 가드를 둔다. Win/Linux 의
+//! undo · redo 가 이 규칙의 예외다 — 키와 메뉴가 같은 액션이라 가드가 같은 눌림의 둘째를 버리지만, 한 번만 도는지 실기 확인이 남았다
+//! (docs/design/10-ui.md §4.4 「네이티브 메뉴 동기화」).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -50,6 +58,11 @@ const SETTINGS_ACTION: &str = "settings.open";
 const FIND_ACTION: &str = "action.find";
 const WINDOW_CLOSE_ACTION: &str = "window.close";
 const SAVE_ACTION: &str = "editor.save";
+/// Win/Linux Edit 메뉴의 「실행 취소」 · 「실행 복귀」(머리 주석).
+#[cfg(not(target_os = "macos"))]
+const UNDO_ACTION: &str = "editor.undo";
+#[cfg(not(target_os = "macos"))]
+const REDO_ACTION: &str = "editor.redo";
 /// 「Shell 명령 설치」(F2-1). macOS 앱 메뉴에만 있다.
 #[cfg(target_os = "macos")]
 const CLI_INSTALL_ACTION: &str = "cli.install";
@@ -64,6 +77,10 @@ fn action_label(action: &str) -> Option<&'static str> {
         FIND_ACTION => "menu-find-action",
         WINDOW_CLOSE_ACTION => "menu-close",
         SAVE_ACTION => "menu-save",
+        #[cfg(not(target_os = "macos"))]
+        UNDO_ACTION => "menu-undo",
+        #[cfg(not(target_os = "macos"))]
+        REDO_ACTION => "menu-redo",
         #[cfg(target_os = "macos")]
         CLI_INSTALL_ACTION => "menu-install-shell-command",
         _ => return None,
@@ -356,7 +373,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     )?;
 
     // macOS 에서 복사·붙여넣기 단축키는 Edit 메뉴 항목이 있어야 웹뷰에 전달된다.
-    let edit_items = [
+    #[cfg(target_os = "macos")]
+    let history_items = [
         predefined(
             "menu-undo",
             PredefinedMenuItem::undo(app, Some(&t("menu-undo")))?,
@@ -365,6 +383,19 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             "menu-redo",
             PredefinedMenuItem::redo(app, Some(&t("menu-redo")))?,
         ),
+    ];
+    // Win/Linux 는 키맵 액션 항목이다(머리 주석).
+    #[cfg(not(target_os = "macos"))]
+    let undo = MenuItem::with_id(app, UNDO_ACTION, t("menu-undo"), true, Some("Ctrl+KeyZ"))?;
+    #[cfg(not(target_os = "macos"))]
+    let redo = MenuItem::with_id(
+        app,
+        REDO_ACTION,
+        t("menu-redo"),
+        true,
+        Some("Ctrl+Shift+KeyZ"),
+    )?;
+    let edit_items = [
         predefined(
             "menu-cut",
             PredefinedMenuItem::cut(app, Some(&t("menu-cut")))?,
@@ -383,14 +414,18 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ),
     ];
     let edit_menu = {
-        let [undo, redo, cut, copy, paste, select_all] = &edit_items;
+        #[cfg(target_os = "macos")]
+        let [(_, undo), (_, redo)] = &history_items;
+        #[cfg(not(target_os = "macos"))]
+        let (undo, redo) = (&undo, &redo);
+        let [cut, copy, paste, select_all] = &edit_items;
         Submenu::with_items(
             app,
             t("menu-edit"),
             true,
             &[
-                &undo.1,
-                &redo.1,
+                undo,
+                redo,
                 &PredefinedMenuItem::separator(app)?,
                 &cut.1,
                 &copy.1,
@@ -455,7 +490,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     #[cfg(target_os = "macos")]
     {
         item("menu-app", Labeled::Submenu(app_menu.clone()));
-        for (id, made) in app_items {
+        for (id, made) in app_items.into_iter().chain(history_items) {
             item(id, Labeled::Predefined(made));
         }
     }
@@ -481,6 +516,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     ];
     #[cfg(target_os = "macos")]
     entries.push((settings_parent, cli_install));
+    #[cfg(not(target_os = "macos"))]
+    entries.extend([(edit_menu.clone(), undo), (edit_menu.clone(), redo)]);
     app.manage(KeymapMenuItems {
         entries: Mutex::new(entries),
     });
@@ -515,6 +552,12 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         FIND_ACTION => run_in_focused_window(app, FIND_ACTION),
         // 포커스된 창이 없으면 닫을 창 · 저장할 탭이 없다.
         WINDOW_CLOSE_ACTION | SAVE_ACTION => {
+            let _ = run_in_focused_window(app, event.id().as_ref());
+            Ok(())
+        }
+        // 포커스된 창이 없으면 되돌릴 에디터가 없다.
+        #[cfg(not(target_os = "macos"))]
+        UNDO_ACTION | REDO_ACTION => {
             let _ = run_in_focused_window(app, event.id().as_ref());
             Ok(())
         }

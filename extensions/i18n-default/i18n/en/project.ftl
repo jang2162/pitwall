@@ -127,6 +127,8 @@ action-editor-save-all = Save All
 action-editor-find = Find
 action-editor-replace = Replace
 action-editor-goto-line = Go to Line
+action-editor-undo = Undo
+action-editor-redo = Redo
 action-editor-duplicate-line = Duplicate Line
 action-editor-delete-line = Delete Line
 action-editor-move-line-up = Move Line Up
@@ -146,6 +148,8 @@ editor-find-replace-all = Replace All
 editor-find-close = Close (Esc)
 editor-find-invalid = Bad regex
 editor-find-none = 0 results
+# Still counting a large document and no match found yet
+editor-find-counting = Counting…
 # $total: number of matches (text like "9999+" when counting stopped at the cap)
 editor-find-count =
     { $total ->

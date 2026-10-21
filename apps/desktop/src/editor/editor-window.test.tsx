@@ -716,15 +716,15 @@ it("keeps undo history, the selection and unsaved text when a tab moves to anoth
   });
   expect(dirtyTabs()).toEqual([LIB]);
 
-  // undo 기록이 옮긴 뒤에도 이어진다. CodeMirror 는 시험 환경을 macOS 로 보지 않아 Mod 가 Ctrl 이다(포커스는 typeInto 의 이유로 뺀
-  // 채 키를 보낸다).
+  // undo 기록이 옮긴 뒤에도 이어진다. undo 는 창의 키맵 액션(`editor.undo`)이고 키맵은 userAgent 로 macOS 다 — ⌘Z(포커스는
+  // typeInto 의 이유로 뺀 채 키를 보내므로 활성 탭이 대상이다).
   after!.contentDOM.blur();
   await act(async () => {
     after!.contentDOM.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "z",
         code: "KeyZ",
-        ctrlKey: true,
+        metaKey: true,
         bubbles: true,
         cancelable: true,
       }),
