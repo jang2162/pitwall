@@ -61,6 +61,11 @@ pub struct Syntax {
     grammars: Arc<Grammars>,
     documents: Mutex<HashMap<String, Arc<Document>>>,
     clock: AtomicU64,
+    /// 텍스트 바이트 수 → 파싱 · 쿼리의 시간 상한. 보통 [`parse_budget`] 이다.
+    budget: fn(usize) -> Duration,
+    /// 시험: 강조 쿼리 스레드가 쿼리 전에 이만큼 쉰다(진행 확인 없이 오래 도는 쿼리를 재현한다).
+    #[cfg(test)]
+    pub(crate) query_delay: Option<Duration>,
 }
 
 /// 문법과 쿼리가 놓인 자리로 가른다 — 같은 문법 · 쿼리를 쓰는 두 기여(JSON · JSON with Comments)는 한 번만 올린다.
@@ -175,7 +180,16 @@ impl Syntax {
             }),
             documents: Mutex::new(HashMap::new()),
             clock: AtomicU64::new(0),
+            budget: parse_budget,
+            #[cfg(test)]
+            query_delay: None,
         }
+    }
+
+    /// 파싱 · 쿼리의 시간 상한을 바꾼다(시험용 — 0 이면 첫 진행 확인에서 멈춰, 기계 부하와 상관없이 상한에 걸린 문서를 만든다).
+    pub fn with_budget(mut self, budget: fn(usize) -> Duration) -> Self {
+        self.budget = budget;
+        self
     }
 
     /// 문서를 연다(같은 id 는 바꾼다). 블로킹이다(문법을 처음 쓰면 올린다). 언어의 문법이 없거나 크기 상한을 넘으면 열지 않는다
@@ -347,13 +361,19 @@ impl Syntax {
         };
         let range: Range<usize> = bytes(from)?..bytes(to)?;
         // 파싱과 쿼리가 한 시한을 나눠 쓴다 — 상한 바로 아래에서 끝난 파싱 뒤에 쿼리가 상한을 또 쓰지 않게.
-        let budget = parse_budget(text.len());
+        let budget = (self.budget)(text.len());
         let deadline = parse_started.unwrap_or_else(Instant::now) + budget;
         let query = {
             let grammar = Arc::clone(&document.grammar);
             let tree = parsed.tree.clone();
             let text = Arc::clone(&parsed.text);
+            #[cfg(test)]
+            let delay = self.query_delay;
             move || {
+                #[cfg(test)]
+                if let Some(delay) = delay {
+                    std::thread::sleep(delay);
+                }
                 spans(
                     &grammar.highlights,
                     &grammar.kinds,
@@ -470,7 +490,7 @@ impl Syntax {
             .with_lane(&self.grammars, &document.language, |lane| {
                 // 문법의 잠금을 기다린 시간은 넣지 않는다 — 다른 문서의 파싱 때문에 이 문서를 끄지 않게.
                 started = Instant::now();
-                let budget = parse_budget(text.len());
+                let budget = (self.budget)(text.len());
                 lane.parse(&text, old.as_ref(), &mut || {
                     if document.dropped.load(Ordering::Relaxed)
                         || document.version.load(Ordering::Relaxed) != version

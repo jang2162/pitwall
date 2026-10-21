@@ -628,21 +628,25 @@ fn a_wasm_grammar_highlights_like_the_native_one() {
     assert_eq!(from_wasm, from_native);
 }
 
-/// 진행을 확인하지 않는 일도 시한에 기다림을 끊는다 — 강조 쿼리는 진행 콜백 사이가 몇 초일 수 있다(`by_deadline` 주석).
+/// 강조 쿼리가 진행 확인 없이 오래 돌아도 요청은 시한에 돌아오고 그 문서의 강조를 끈다 — 오류 회복이 만든 큰 ERROR 노드에서는
+/// 쿼리의 진행 콜백 사이가 몇 초다(`by_deadline` 주석). 쿼리 스레드를 쉬게 해 재현한다.
 #[test]
-fn work_that_never_checks_its_deadline_is_left_at_the_deadline() {
-    let (release, hold) = std::sync::mpsc::channel::<()>();
+fn a_query_that_never_checks_in_is_left_at_the_budget() {
+    let mut s = syntax().with_budget(|_| Duration::from_secs(1));
+    s.query_delay = Some(Duration::from_secs(30));
+    open(&s, "d", "Rust", "fn a() {}");
     let started = Instant::now();
-    let out = crate::service::by_deadline(started + Duration::from_millis(100), move || {
-        let _ = hold.recv_timeout(Duration::from_secs(30));
-        Some(())
-    })
-    .unwrap();
+    let result = s
+        .highlights(&SyntaxHighlightsParams {
+            doc_id: "d".to_owned(),
+            range: TextRange { from: 0, to: 9 },
+        })
+        .unwrap();
     let took = started.elapsed();
-    drop(release);
-    assert_eq!(out, None);
-    assert!(took < Duration::from_secs(10), "waited {took:?}");
-
-    let out = crate::service::by_deadline(Instant::now() + Duration::from_secs(30), || Some(7));
-    assert_eq!(out.unwrap(), Some(7));
+    assert_eq!(
+        (result.spans.len(), result.off),
+        (0, Some(SyntaxOff::TimedOut))
+    );
+    // 쿼리를 기다리면 30초다.
+    assert!(took < Duration::from_secs(15), "waited {took:?}");
 }

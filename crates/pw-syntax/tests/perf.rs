@@ -306,6 +306,9 @@ fn measure_runaway_parses() {
             "Rust",
             "}{)(][\"'#!/*\n".repeat(400_000),
         ),
+        // 파싱은 상한 안에 끝나고 강조 쿼리가 상한에 걸린다 — 쿼리의 진행 확인 사이가 가장 길고(`src/service.rs` 의
+        // `by_deadline`), 파싱을 마친 뒤 콜백 없는 구간도 가장 길다.
+        ("5.2 MB unclosed [", "JSON", "[\n".repeat(2_600_000)),
     ];
     for (name, language, text) in cases {
         let s = syntax();
