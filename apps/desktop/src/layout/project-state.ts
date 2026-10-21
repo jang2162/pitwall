@@ -3,12 +3,15 @@
 // 않는다 — 형식은 여기서 정한다.
 //
 // - 창이 열릴 때 한 번 읽고(`load`), 그 뒤로는 메모리의 값을 고치고 모아 쓴다(`WRITE_DELAY_MS`). 창을 닫기 전(창의 닫기 확인,
-//   project-window.tsx)에 `flush` 로 기다리던 쓰기를 끝낸다.
-// - 읽지 못했으면(Host 오류 · 메서드 없음) 기본값으로 열고 **이 창은 쓰지 않는다** — 일시적인 오류로 저장본을 기본값으로 덮지 않게.
+//   project-window.tsx)에 `flush` 로 기다리던 쓰기를 끝낸다 — 닫기는 `CLOSE_FLUSH_LIMIT_MS` 까지만 기다린다(Host 가 답하지 않아도
+//   창 닫기 · 종료 · 업데이트 재시작이 멈추지 않게).
+// - 읽지 못했으면(Host 오류 · 메서드 없음 · `LOAD_LIMIT_MS` 안에 답이 없음 · Host 에 닿지 못함 `giveUp`) 기본값으로 열고 **이 창은
+//   쓰지 않는다** — 일시적인 오류로 저장본을 기본값으로 덮지 않게. 늦게 온 답은 버린다.
 //   파일이 깨졌으면(Host 가 `state: null` 과 `problem` 을 준다) 기본값으로 열고 다음 쓰기가 덮는다.
 // - 레이아웃은 `LayoutStorage`(project-layout.ts 의 동기 저장소 꼴)로 내놓는다 — 레이아웃 코드는 저장소가 무엇인지 모른다.
 // - 옛 저장본: 예전에는 웹뷰 localStorage 한 키(`LAYOUT_STORAGE_KEY`)를 모든 프로젝트 창이 함께 썼다. 이 프로젝트에 저장된 레이아웃이
-//   없으면 처음 연 창이 그것을 옮기고, 쓰기가 끝나면 지운다 — 한 번만 옮겨진다(다음 프로젝트는 기본 레이아웃).
+//   없으면 처음 연 창이 그것을 옮기고, 쓰기가 끝나면 지운다 — 대개 한 번만 옮겨진다(다음 프로젝트는 기본 레이아웃). 두 창이
+//   동시에 처음 열리면(첫 쓰기 전에 둘 다 읽으면) 둘 다 옮긴다 — 서로 덮지는 않는다.
 // - 워크트리 묶음은 최근에 쓴 `MAX_WORKTREES` 개만 남긴다(메인 체크아웃은 늘 남는다) — 지운 워크트리의 묶음이 쌓이지 않게.
 
 import type { JsonValue, RpcClient } from "@pitwall/rpc-client";
@@ -20,10 +23,19 @@ import { LAYOUT_STORAGE_KEY, type LayoutStorage } from "./project-layout";
 export const STATE_VERSION = 1;
 export const WRITE_DELAY_MS = 300;
 export const MAX_WORKTREES = 20;
+/** 저장본 읽기를 기다리는 시간. 넘으면 기본값으로 연다(머리 주석). */
+export const LOAD_LIMIT_MS = 2000;
+/** 창을 닫을 때 마지막 쓰기를 기다리는 시간. */
+export const CLOSE_FLUSH_LIMIT_MS = 1500;
 
 /** 탭 하나. 경로는 정규화한 실제 경로(탭의 키, editor-tabs.ts). */
 export interface TabState {
   path: string;
+  /**
+   * 탭을 연 워크트리가 묶음의 워크트리와 다를 때만(⌘E · Search Everywhere 로 다른 워크트리의 파일을 연 탭): 그 워크트리 꼭대기,
+   * 메인 체크아웃이면 `null`. 없으면 묶음의 워크트리다(옛 저장본도 그렇게 읽는다).
+   */
+  worktree?: string | null;
   preview?: boolean;
   pinned?: boolean;
   cursor?: Cursor;
@@ -78,6 +90,9 @@ function readWorktree(value: unknown): WorktreeState | undefined {
     const cursor = tab.cursor;
     tabs.push({
       path: tab.path,
+      ...((typeof tab.worktree === "string" || tab.worktree === null) && {
+        worktree: tab.worktree,
+      }),
       ...(tab.preview === true && { preview: true }),
       ...(tab.pinned === true && { pinned: true }),
       ...(isObject(cursor) &&
@@ -155,6 +170,7 @@ export function createProjectState({
   backend,
   legacy,
   delayMs = WRITE_DELAY_MS,
+  loadLimitMs = LOAD_LIMIT_MS,
   now = Date.now,
   log = (message) => console.warn("[state]", message),
 }: {
@@ -162,6 +178,7 @@ export function createProjectState({
   backend?: StateBackend;
   legacy?: LayoutStorage;
   delayMs?: number;
+  loadLimitMs?: number;
   now?: () => number;
   log?: (message: string) => void;
 }) {
@@ -217,11 +234,21 @@ export function createProjectState({
 
   async function load(): Promise<StateLoad> {
     if (!backend) return "empty";
-    let got: { state: unknown; problem: string | null };
+    let got: { state: unknown; problem: string | null } | "late";
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      got = await backend.get();
+      got = await Promise.race([
+        backend.get(),
+        new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), loadLimitMs))),
+      ]);
     } catch (e) {
       log(`could not read the project state, not saving it from this window: ${String(e)}`);
+      return "unavailable";
+    } finally {
+      clearTimeout(timer);
+    }
+    if (got === "late") {
+      log(`the project state did not arrive in ${loadLimitMs} ms, not saving it from this window`);
       return "unavailable";
     }
     writable = true;
@@ -266,6 +293,12 @@ export function createProjectState({
       return loading;
     },
 
+    /** Host 에 닿지 못해 읽기를 포기한다(머리 주석). 이미 읽기를 시작했으면 그 결과를 돌려준다. */
+    giveUp(): Promise<StateLoad> {
+      loading ??= Promise.resolve("unavailable");
+      return loading;
+    },
+
     /** 레이아웃 저장소(project-layout.ts 의 `restoreLayout` · `persistLayout`). */
     layout: {
       getItem: (key: string) =>
@@ -307,8 +340,21 @@ export function createProjectState({
       schedule();
     },
 
-    /** 기다리던 쓰기를 지금 하고 끝날 때까지 기다린다. */
-    flush: (): Promise<void> => write(),
+    /** 기다리던 쓰기를 지금 하고 끝날 때까지 기다린다. `limitMs` 를 주면 그만큼만 기다린다(쓰기는 뒤에서 마저 돈다). */
+    flush(limitMs?: number): Promise<void> {
+      const done = write();
+      if (limitMs === undefined) return done;
+      return new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          log(`the project state did not finish saving in ${limitMs} ms, going on`);
+          resolve();
+        }, limitMs);
+        void done.then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    },
 
     /** 지금 메모리의 상태(시험 · 진단). */
     snapshot: (): ProjectStateFile => structuredClone(state),

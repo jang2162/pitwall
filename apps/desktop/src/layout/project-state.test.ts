@@ -161,6 +161,50 @@ describe("createProjectState", () => {
     ).toEqual([{ path: "/k" }]);
   });
 
+  it("gives up on a read that does not answer in time and never writes, even when it answers later", async () => {
+    const backend = memoryBackend({ version: STATE_VERSION, layout: { saved: true } });
+    let answer: (v: { state: unknown; problem: null }) => void = () => {};
+    backend.get = vi.fn(
+      () => new Promise<{ state: unknown; problem: null }>((resolve) => (answer = resolve)),
+    );
+    const state = createProjectState({ backend, delayMs: 10, loadLimitMs: 50, log: quiet });
+    const loaded = state.load();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await loaded).toBe("unavailable");
+    answer({ state: { version: STATE_VERSION, layout: { saved: true } }, problem: null });
+    state.setBundle(undefined, { tabs: [{ path: "/a" }] });
+    await vi.advanceTimersByTimeAsync(10);
+    await state.flush();
+    expect(backend.set).not.toHaveBeenCalled();
+    expect(state.snapshot().layout).toBeUndefined();
+  });
+
+  it("opens with defaults and never writes when it gives up before reaching the Host", async () => {
+    const backend = memoryBackend();
+    const state = createProjectState({ backend, delayMs: 10, log: quiet });
+    expect(await state.giveUp()).toBe("unavailable");
+    expect(await state.load()).toBe("unavailable");
+    expect(backend.get).not.toHaveBeenCalled();
+    state.setBundle(undefined, { tabs: [{ path: "/a" }] });
+    await state.flush();
+    expect(backend.set).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting for a write that does not answer when a limit is given (closing the window)", async () => {
+    const backend = memoryBackend();
+    backend.set = vi.fn(() => new Promise<void>(() => {}));
+    const state = createProjectState({ backend, log: quiet });
+    await state.load();
+    state.setBundle(undefined, { tabs: [{ path: "/a" }] });
+    let done = false;
+    void state.flush(100).then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(99);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(done).toBe(true);
+    expect(backend.set).toHaveBeenCalledTimes(1);
+  });
+
   it("loads once even when asked twice (StrictMode)", async () => {
     const backend = memoryBackend();
     const state = createProjectState({ backend, log: quiet });
@@ -180,6 +224,9 @@ describe("readStateFile", () => {
             { path: "" },
             { nope: 1 },
             { path: "/b", cursor: { line: "x" }, preview: true },
+            { path: "/c", worktree: "/w1" },
+            { path: "/d", worktree: null },
+            { path: "/e", worktree: 5 },
           ],
           active: 1,
           tree: { root: "/r", expanded: ["/r/x", 5] },
@@ -193,6 +240,9 @@ describe("readStateFile", () => {
         tabs: [
           { path: "/a", cursor: { line: 3, column: 2 }, top: 10, pinned: true },
           { path: "/b", preview: true },
+          { path: "/c", worktree: "/w1" },
+          { path: "/d", worktree: null },
+          { path: "/e" },
         ],
         active: 1,
         tree: { root: "/r", expanded: ["/r/x"] },

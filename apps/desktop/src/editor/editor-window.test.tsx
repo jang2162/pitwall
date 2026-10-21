@@ -56,6 +56,10 @@ const host = vi.hoisted(() => ({
   subscribers: [] as { send(m: object): void; id: number; topics: string[] }[],
   /** 프로젝트 id → 저장된 프로젝트 상태(`project.state.*`, `$DATA/projects/<id>/state.json`). */
   states: new Map<string, unknown>(),
+  /** 지워진 워크트리. 그 워크트리로 묻는 `fs.*` 는 Host 처럼 invalid params 로 거절한다. */
+  goneWorktrees: new Set<string>(),
+  /** `project.state.set` 에 답하지 않는다(막힌 Host). */
+  stateSetHangs: false,
 }));
 
 /** 디스크의 파일을 바꾼다(외부 도구 · 에이전트). 감시 이벤트는 따로 `emit` 한다. */
@@ -100,6 +104,16 @@ vi.mock("../tauri-transport", async () => {
           // 인자 없는 메서드(`lang.list`)는 params 가 null 이다.
           host.calls.push({ method: m.method, params: m.params ?? {} });
         const path = (m.params as { path?: string } | undefined)?.path ?? "";
+        const worktree = (m.params as { worktree?: string | null } | undefined)?.worktree;
+        if (m.method.startsWith("fs.") && worktree && host.goneWorktrees.has(worktree))
+          return send({
+            id: m.id,
+            error: {
+              code: -32602,
+              message: "invalid params",
+              data: `\`${worktree}\` is not a worktree of project \`p1\``,
+            },
+          });
         const real = host.links.get(path) ?? path;
         const size = () => host.sizes.get(real) ?? host.files.get(real)!.length;
         const sizeClass = () =>
@@ -159,6 +173,7 @@ vi.mock("../tauri-transport", async () => {
             return reply({ state: host.states.get(projectId) ?? null, problem: null });
           }
           case "project.state.set": {
+            if (host.stateSetHangs) return;
             const { projectId, state } = m.params as { projectId: string; state: unknown };
             host.states.set(projectId, structuredClone(state));
             return reply(null);
@@ -307,6 +322,8 @@ beforeEach(() => {
   host.calls = [];
   host.subscribers = [];
   host.states = new Map();
+  host.goneWorktrees = new Set();
+  host.stateSetHangs = false;
   activeWorktreeStore.setState({ top: undefined });
   native.closeWindow.mockClear();
   localStorage.clear();
@@ -621,7 +638,10 @@ const savedState = (project = "p1") =>
   host.states.get(project) as
     | {
         layout?: unknown;
-        main?: { tabs: { path: string; cursor?: { line: number } }[]; active?: number };
+        main?: {
+          tabs: { path: string; worktree?: string | null; cursor?: { line: number } }[];
+          active?: number;
+        };
         worktrees?: Record<string, { tabs: { path: string }[] }>;
       }
     | undefined;
@@ -754,6 +774,19 @@ it("writes the tab set and layout at once when the window is about to close (qui
   expect(savedState()?.layout).toBeDefined();
 });
 
+it("closes the window when the Host does not answer the last write, after a short wait", async () => {
+  await mount();
+  await openRequest(LIB);
+  host.stateSetHangs = true;
+  const started = Date.now();
+  let closed: boolean | undefined;
+  await act(async () => {
+    closed = await closeGuard!();
+  });
+  expect(closed).toBe(true);
+  expect(Date.now() - started).toBeLessThan(3000);
+});
+
 it("keeps the recent files (⌘E) over a restart, closed tabs and other worktrees included", async () => {
   await mount();
   await openRequest(LIB);
@@ -775,6 +808,89 @@ it("keeps the recent files (⌘E) over a restart, closed tabs and other worktree
     ...document.querySelectorAll<HTMLElement>("[data-search-everywhere] [cmdk-item]"),
   ].map((i) => i.getAttribute("data-value"));
   expect(recent).toEqual([`file:${MAIN}`, `file:${LIB}`, `file:${README}`]);
+});
+
+/** ⌘E(최근 파일)에서 `path` 를 골라 연다. */
+async function pickRecent(path: string) {
+  await press("KeyE", { metaKey: true }, "e");
+  const selected = () =>
+    document
+      .querySelector("[data-search-everywhere] [cmdk-item][aria-selected=true]")
+      ?.getAttribute("data-value");
+  for (let i = 0; i < 5 && selected() !== `file:${path}`; i++) await press("ArrowDown");
+  expect(selected()).toBe(`file:${path}`);
+  await press("Enter");
+}
+
+/** `path` 를 읽은(`fs.read`) 워크트리들. */
+const readScopes = (path: string) =>
+  new Set(
+    host.calls
+      .filter((c) => c.method === "fs.read" && c.params.path === path)
+      .map((c) => c.params.worktree ?? null),
+  );
+
+/** 리뷰의 재현: 메인 LIB → wt1 README → 메인 MAIN → ⌘E 로 wt1 의 README. 메인 묶음에 다른 워크트리의 탭이 든다. */
+async function openOtherWorktreeTabFromRecent() {
+  await mount();
+  await openRequest(LIB);
+  await openRequest(README, undefined, undefined, "/work/wt1");
+  await openRequest(MAIN);
+  // ⌘E 는 활성 워크트리를 바꾸지 않고 그 탭을 연 워크트리로 연다(M1-19).
+  await pickRecent(README);
+  expect(editorTabs().map((t) => t.path)).toEqual([LIB, MAIN, README]);
+  expect(activeWorktreeStore.getState().top).toBeUndefined();
+  expect(readScopes(README)).toEqual(new Set(["/work/wt1"]));
+  await act(async () => (await closeGuard!()) || undefined);
+  expect(savedState()?.main?.tabs.map((t) => [t.path, t.worktree])).toEqual([
+    [LIB, undefined],
+    [MAIN, undefined],
+    [README, "/work/wt1"],
+  ]);
+}
+
+it("reopens a tab from another worktree in that worktree after a restart and a switch", async () => {
+  await openOtherWorktreeTabFromRecent();
+  host.calls = [];
+  await restart();
+  expect(editorTabs().map((t) => t.path)).toEqual([LIB, MAIN, README]);
+  expect(readScopes(README)).toEqual(new Set(["/work/wt1"]));
+  expect(readScopes(LIB)).toEqual(new Set([null]));
+
+  await act(async () => projectOpenInbox.push({ worktree: "/work/wt2", file: MAIN }));
+  await settle();
+  expect(editorTabs().map((t) => t.path)).toEqual([MAIN]);
+  host.calls = [];
+  await openRequest(LIB);
+  expect(editorTabs().map((t) => t.path)).toEqual([LIB, MAIN, README]);
+  expect(readScopes(README)).toEqual(new Set(["/work/wt1"]));
+});
+
+it("says so when a saved tab's worktree is gone, instead of dropping it or opening it in the main checkout", async () => {
+  await openOtherWorktreeTabFromRecent();
+  host.goneWorktrees.add("/work/wt1");
+  host.calls = [];
+  await restart();
+  expect(editorTabs().map((t) => t.path)).toEqual([LIB, MAIN]);
+  await vi.waitFor(() => {
+    const toasts = [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent);
+    expect(toasts.some((t) => t?.includes(`파일을 열지 못했다: ${README}`))).toBe(true);
+  });
+  expect(readScopes(README)).not.toContain(null);
+});
+
+it("reads a saved tab without a worktree as a tab of its bundle's worktree", async () => {
+  host.states.set("p1", {
+    version: 1,
+    worktrees: { "/work/wt1": { tabs: [{ path: README }], usedAt: 1 } },
+  });
+  activeWorktreeStore.setState({ top: "/work/wt1" });
+  window.history.replaceState(null, "", "/?window=project&project=p1");
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: "/work/wt1" }));
+  await settle();
+  expect(editorTabs().map((t) => t.path)).toEqual([README]);
+  expect(readScopes(README)).toEqual(new Set(["/work/wt1"]));
 });
 
 it("skips a saved tab whose file is gone without an open error", async () => {
@@ -928,6 +1044,13 @@ it("moves the edge of the focused tool window's dock with ⌃⌥⇧ arrows, only
   await focusToolWindow("project");
   await press("ArrowRight", mods, "ArrowRight");
   expect(leftSizes.mock.calls).toEqual([[{ width: Math.max(60, left.width + 20) }]]);
+  // 툴 윈도우 안의 입력 칸(트리의 빠른 검색 등)에서는 그 칸의 키다(Win/Linux 의 Ctrl+Shift+←→ 는 단어 선택).
+  const input = document.createElement("input");
+  document.querySelector("[data-tool-window=project]")!.append(input);
+  await act(async () => input.focus());
+  await press("ArrowRight", mods, "ArrowRight");
+  input.remove();
+  expect(leftSizes).toHaveBeenCalledTimes(1);
 
   // 에디터에서는 이 키를 가져가지 않는다(Win/Linux 의 Ctrl+Shift+←→ 는 단어 선택이다).
   await act(async () => views()[0]!.focus());

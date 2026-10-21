@@ -7,6 +7,9 @@
 // - 창이 처음 열리면 활성 워크트리의 묶음을 연다. 첫 요청이 다른 워크트리를 가리키면 그 묶음만 연다(쓸데없이 열었다 닫지 않게).
 // - 탭은 에디터의 공개 열기 길(`workspace.open`)로 다시 연다. 열기 전에 파일이 아직 있는지 보고(`exists`), 사라진 파일의 탭은 조용히
 //   건너뛴다 — 열기 실패 알림을 띄우지 않는다. 분할(에디터 그룹 여럿)은 되살리지 않고 한 그룹에 차례로 연다.
+// - 탭은 그 탭을 연 워크트리로 다시 연다(`TabState.worktree`) — ⌘E · Search Everywhere 는 활성 워크트리를 바꾸지 않고 다른
+//   워크트리의 파일을 연다(M1-19). 그 워크트리가 사라졌으면 열기 실패 알림이 뜬다(M1-19 의 「열 수 없음」). 묶음의 워크트리로 바꿔
+//   열지 않는다.
 // - 저장은 바뀔 때마다(탭 열기 · 닫기 · 활성 · 이동, 커서, 트리 펼침) 잠깐 모아(`SAVE_DELAY_MS`) 묶음을 다시 만든다. 스크롤은
 //   이벤트가 없어 그때 · 창을 닫을 때(`flush`) 읽는다. 바꾸는 · 여는 동안에는 만들지 않는다 — 닫히는 탭이 저장본을 비우지 않게.
 // - 탭의 커서 · 맨 위 줄은 뷰가 있으면 뷰에서, 없으면(아직 읽는 중) 마지막으로 알던 값이다.
@@ -45,7 +48,10 @@ export interface WorktreeSessionDeps {
   treeWorktree(): WorktreeKey;
   activeWorktree(): WorktreeKey;
   setActiveWorktree(top: WorktreeKey): void;
-  /** 그 워크트리에 파일이 아직 있는가. */
+  /**
+   * 그 워크트리에 파일이 아직 있는가. Host 가 「없다」 고 답했을 때만 `false` 다 — 워크트리가 사라진 것 같은 그 밖의 실패는 `true`
+   * 로 두어 열기 길이 알리게 한다(머리 주석).
+   */
   exists(path: string, worktree: WorktreeKey): Promise<boolean>;
   log?(message: string): void;
   delayMs?: number;
@@ -82,13 +88,14 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
       .filter(isEditorPanel);
     const active = workspace.activeTab();
     const tabs = panels.map((panel): TabState => {
-      const { path, preview, pinned } = tabParams(panel);
+      const { path, worktree, preview, pinned } = tabParams(panel);
       const view = workspace.view(panel.id);
       const last = known.get(panel.id);
       const cursor = view ? cursorOf(view) : last?.cursor;
       const top = view ? topLine(view) : last?.top;
       return {
         path,
+        ...(worktree !== key && { worktree: worktree ?? null }),
         ...(preview && { preview: true }),
         ...(pinned && { pinned: true }),
         ...(cursor && { cursor }),
@@ -140,14 +147,15 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
       const opened: (IDockviewPanel | undefined)[] = [];
       // 해제된 뒤에도 끝까지 연다 — 받은 요청은 이 세션이 마저 처리한다(`after`).
       for (const tab of bundle?.tabs ?? []) {
-        if (!(await deps.exists(tab.path, key))) {
+        const worktree = tab.worktree === undefined ? key : (tab.worktree ?? undefined);
+        if (!(await deps.exists(tab.path, worktree))) {
           deps.log?.(`skipped a saved tab, the file is gone: ${tab.path}`);
           opened.push(undefined);
           continue;
         }
         const panel = await workspace.open({
           path: tab.path,
-          worktree: key,
+          worktree,
           preview: tab.preview,
           line: tab.cursor?.line,
           column: tab.cursor?.column,

@@ -2,6 +2,7 @@
 // 윈도우는 `TOOL_WINDOWS` 에 한 줄로 등록하고, 나머지는 자리만 잡는다. 에디터(src/editor)는 창마다 하나의 작업 공간
 // (`createEditorWorkspace`)을 두고, 창이 받은 열기 요청(src/project-open.ts 의 우편함)을 그것으로 연다.
 
+import { ERROR_CODE, RpcCallError } from "@pitwall/rpc-client";
 import "dockview-react/dist/styles/dockview.css";
 
 import type { UiLogger } from "@pitwall/logger";
@@ -101,7 +102,13 @@ import {
   trackHiddenPanels,
   trackLastToolWindow,
 } from "./project-layout";
-import { createProjectState, hostStateBackend, type ProjectState } from "./project-state";
+import {
+  CLOSE_FLUSH_LIMIT_MS,
+  createProjectState,
+  hostStateBackend,
+  LOAD_LIMIT_MS,
+  type ProjectState,
+} from "./project-state";
 import { useProjectStrings } from "./strings";
 import { createWorktreeSession, type WorktreeSession } from "./worktree-session";
 
@@ -597,7 +604,8 @@ function webviewStorage(): LayoutStorage | undefined {
 
 /**
  * 이 창의 프로젝트 상태(project-state.ts): 레이아웃 · 워크트리별 탭 묶음을 이 창의 Host 연결의 `project.state.*` 로 읽고 쓴다.
- * 프로젝트가 없는 창(시험)은 메모리에만 둔다. 읽기가 끝나면(실패해도) `ready` — 도킹 영역은 그때 연다.
+ * 프로젝트가 없는 창(시험)은 메모리에만 둔다. 읽기가 끝나면(실패 · 시한 초과 · `LOAD_LIMIT_MS` 안에 Host 연결이 없음도) `ready` —
+ * 도킹 영역은 그때 연다.
  */
 function useWindowProjectState(projectId: string | undefined): {
   store: ProjectState;
@@ -623,14 +631,22 @@ function useWindowProjectState(projectId: string | undefined): {
   const [ready, setReady] = useState(false);
   const canLoad = projectId === undefined || client !== undefined;
   useEffect(() => {
-    if (!canLoad) return;
     let current = true;
-    void store.load().then((result) => {
+    const loaded = (result: string) => {
       console.info("[state]", result);
       if (current) setReady(true);
-    });
+    };
+    if (canLoad) {
+      void store.load().then(loaded);
+      return () => {
+        current = false;
+      };
+    }
+    // Host 에 닿지 못하면 오래 기다리지 않는다 — 기본 레이아웃으로 열고 이 창은 상태를 쓰지 않는다.
+    const timer = setTimeout(() => void store.giveUp().then(loaded), LOAD_LIMIT_MS);
     return () => {
       current = false;
+      clearTimeout(timer);
     };
   }, [canLoad, store]);
   return { store, ready };
@@ -699,7 +715,7 @@ function ProjectWindowBody({
       guardClose?.(async () => {
         if (!(await workspace.confirmWindowClose())) return false;
         session.current?.flush();
-        await projectState.store.flush();
+        await projectState.store.flush(CLOSE_FLUSH_LIMIT_MS);
         return true;
       }),
     [guardClose, workspace, projectState.store],
@@ -726,10 +742,11 @@ function ProjectWindowBody({
       treeWorktree: () => treeScope.getState().worktree,
       activeWorktree,
       setActiveWorktree: (top) => activeWorktreeStore.setState({ top }),
+      // 「없다」(NOT_FOUND)만 건너뛴다. 사라진 워크트리(invalid params) 등은 여는 길이 알린다.
       exists: (path, worktree) =>
         client.call("fs.stat", { projectId, worktree: worktree ?? null, path }).then(
           () => true,
-          () => false,
+          (e: unknown) => !(e instanceof RpcCallError && e.code === ERROR_CODE.NOT_FOUND),
         ),
       log: (message) => log?.info(message, "session"),
       after: lastSession.current?.idle(),
