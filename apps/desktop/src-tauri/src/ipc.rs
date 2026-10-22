@@ -13,7 +13,10 @@
 //!
 //! 로컬 창은 데스크톱 사용자 본인이므로 호출자 role 은 owner 다. 단일 파일 창(M1-24, label `file-*`)의 연결은 그 창의 파일
 //! 하나로 범위를 좁힌다([`caller_for`]) — 그 파일은 창을 만들 때 Rust 가 적어 둔 것이고 웹뷰가 보낸 값이 아니다. 그 창은 Host 로만
-//! 연결한다(프로젝트를 대상으로 하는 연결은 거절).
+//! 연결한다(프로젝트를 대상으로 하는 연결은 거절). 프로젝트를 대상으로 하는 연결(범위 [`pw_rpc::ConnectionScope::Project`],
+//! M1-25 의 `project.state.set` 이 본다)은 그 프로젝트의 창(label `project-<id>`, Rust 가 레지스트리를 확인하고 만든다)만 연다 —
+//! 프로젝트 창도 다른 프로젝트로는 연결하지 못하고, 웰컴 · 설정 창은 Host 로만 연결한다. 프로젝트 창의 Host 연결(UI 로그 등)은 그대로
+//! 연다.
 //!
 //! 리로드와의 경합은 페이지 세대로 막는다. 웹뷰마다 세대를 두고 `PageLoadEvent::Started` 마다 새 값으로 바꾼다.
 //! Started 는 새 문서가 **커밋된** 시점이다(wry 가 세 백엔드 모두 커밋에 건다 — WKWebView `didCommitNavigation`,
@@ -29,7 +32,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pw_core::{FrameSink, HostError, HostRouter, Target};
 
-use crate::windows::{FileWindows, WindowKind};
+use crate::windows::{self, FileWindows, WindowKind};
 use pw_rpc::{Caller, Role};
 use serde::Serialize;
 use serde_json::Value;
@@ -67,6 +70,17 @@ impl IpcState {
             next_conn: AtomicU64::new(1),
             next_page: AtomicU64::new(1),
             conns: Mutex::default(),
+        }
+    }
+
+    /// 프로젝트를 이 기기의 Host 에 묶는다 — 프로젝트 창은 그 프로젝트로 연결한다([`caller_for`]). 지금 프로젝트는 모두 로컬
+    /// Host 에 있다. 이미 묶여 있으면 다시 묶어도 같다.
+    pub fn bind_local_project(&self, project_id: &str) {
+        if let Err(e) = self
+            .router
+            .bind_project(project_id.into(), crate::LOCAL_HOST_ID)
+        {
+            tracing::warn!(project_id, %e, "cannot route the project to the local host");
         }
     }
 
@@ -152,6 +166,8 @@ pub enum IpcError {
     PageGone,
     /// 단일 파일 창이 Host 가 아닌 것(프로젝트)에 연결하려 했거나, 그 창의 파일이 적혀 있지 않다(이미 닫힌 창).
     FileScope,
+    /// 그 프로젝트의 창이 아닌 창이 프로젝트로 연결하려 했다.
+    ProjectScope,
 }
 
 /// transport 를 앱에 붙인다: 상태, command, 웹뷰가 닫히거나 다시 로드될 때의 정리.
@@ -268,10 +284,17 @@ async fn rpc_connect<R: Runtime>(
     Ok(id)
 }
 
-/// 이 웹뷰가 여는 연결의 호출자(이 모듈 머리 주석). 단일 파일 창이 아니면 owner 전체다.
+/// 이 웹뷰가 여는 연결의 호출자(이 모듈 머리 주석). 단일 파일 창이 아니면 owner 전체이고, 프로젝트로 고른 연결의 범위는 Host
+/// Router 가 그 프로젝트로 채운다(`HostRouter::connect`).
 fn caller_for<R: Runtime>(webview: &Webview<R>, target: &Target) -> Result<Caller, IpcError> {
     let label = webview.label();
-    if WindowKind::of_label(label) != Some(WindowKind::File) {
+    let kind = WindowKind::of_label(label);
+    if kind != Some(WindowKind::File) {
+        if let Target::ProjectId(id) = target
+            && windows::project_of_label(label) != Some(id.as_str())
+        {
+            return Err(IpcError::ProjectScope);
+        }
         return Ok(Caller::new(Role::Owner));
     }
     if !matches!(target, Target::HostId(_)) {
@@ -343,10 +366,15 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        let host = Arc::new(LocalHost::new("local"));
+        let f = fixture_with(LocalHost::new("local"));
+        f.app.state::<IpcState>().bind_local_project("p1");
+        f
+    }
+
+    fn fixture_with(host: LocalHost) -> Fixture {
+        let host = Arc::new(host);
         let router = Arc::new(HostRouter::new());
         router.add_host(host.clone()).unwrap();
-        router.bind_project("p1".into(), "local").unwrap();
         let (tx, frames) = mpsc::channel();
         // mock 웹뷰에는 JS 가 없다. 채널로 나가는 메시지를 가로채 테스트로 돌린다.
         let builder =
@@ -504,22 +532,124 @@ mod tests {
         assert_eq!(pong.host_id, "local");
     }
 
+    /// 프로젝트 창은 자기 프로젝트로 연결한다(Host Router 가 고른다). 다른 프로젝트로는 연결하지 못하고, Host Router 가 모르는
+    /// 프로젝트는 라우팅 오류다.
     #[test]
     fn connecting_by_project_routes_and_unknown_project_is_an_error() {
         let f = fixture();
-        let w = window(&f.app, "project-1");
+        let w = window(&f.app, "project-p1");
         connect(&w, 1, json!({"projectId": "p1"}));
+        let page = invoke(&w, "rpc_page", json!({})).unwrap();
         let err = invoke(
             &w,
             "rpc_connect",
-            json!({"target": {"projectId": "nope"}, "channel": "__CHANNEL__:2", "page": 1}),
+            json!({"target": {"projectId": "nope"}, "channel": "__CHANNEL__:2", "page": page}),
+        )
+        .unwrap_err();
+        assert_eq!(err, json!({"kind": "projectScope"}));
+        assert_eq!(f.app.state::<IpcState>().connection_count("project-p1"), 1);
+
+        let unknown = window(&f.app, "project-nope");
+        let page = invoke(&unknown, "rpc_page", json!({})).unwrap();
+        let err = invoke(
+            &unknown,
+            "rpc_connect",
+            json!({"target": {"projectId": "nope"}, "channel": "__CHANNEL__:3", "page": page}),
         )
         .unwrap_err();
         assert_eq!(
             err,
             json!({"kind": "host", "error": {"kind": "unknownProject", "id": "nope"}})
         );
-        assert_eq!(f.app.state::<IpcState>().connection_count("project-1"), 1);
+    }
+
+    /// `project.state.set` 은 그 프로젝트 창이 자기 프로젝트로 연 연결만 한다(M1-25). 같은 창의 Host 연결(UI 로그 등), 다른
+    /// 프로젝트 창, 웰컴 · 설정 · 단일 파일 창은 쓰지 못하고, 웰컴 · 설정 창과 다른 프로젝트 창은 그 프로젝트로 연결하지도 못한다.
+    #[test]
+    fn only_a_project_windows_own_connection_saves_its_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(tmp.path()).unwrap();
+        let host =
+            LocalHost::with_config("local", pw_core::config::AppPaths::under(&base.join("app")));
+        let registry = host.registry().unwrap().clone();
+        let project = |name: &str| {
+            let root = base.join(name);
+            std::fs::create_dir_all(&root).unwrap();
+            registry
+                .create(pw_core::registry::NewProject {
+                    root,
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+        };
+        let (a, b) = (project("a"), project("b"));
+        let f = fixture_with(host);
+        // 프로젝트 창을 열 때(launch::open_project) 묶는 것과 같다.
+        for id in [&a, &b] {
+            f.app.state::<IpcState>().bind_local_project(id);
+        }
+        let mut channel = 0;
+        let mut set = |w: &WebviewWindow<MockRuntime>, target: Value, id: &str| {
+            channel += 1;
+            let conn = connect(w, channel, target);
+            send(
+                w,
+                conn,
+                json!({"jsonrpc": "2.0", "id": 1, "method": "project.state.set",
+                       "params": {"projectId": id, "state": {"by": w.label()}}}),
+            )
+            .unwrap();
+            next_frame(&f, channel)
+        };
+        let denied = json!(pw_rpc::code::PERMISSION_DENIED);
+
+        let wa = window(&f.app, &crate::windows::project_label(&a));
+        let wb = window(&f.app, &crate::windows::project_label(&b));
+        let saved = set(&wa, json!({"projectId": a}), &a);
+        assert!(saved.get("error").is_none(), "{saved}");
+        assert_eq!(
+            set(&wa, json!({"hostId": "local"}), &a)["error"]["code"],
+            denied
+        );
+        assert_eq!(
+            set(&wb, json!({"projectId": b}), &a)["error"]["code"],
+            denied
+        );
+        assert!(set(&wb, json!({"projectId": b}), &b).get("error").is_none());
+        let welcome = window(&f.app, "welcome");
+        let settings = window(&f.app, "settings");
+        for w in [&welcome, &settings] {
+            assert_eq!(
+                set(w, json!({"hostId": "local"}), &a)["error"]["code"],
+                denied,
+                "{}",
+                w.label()
+            );
+        }
+        let file_window = crate::windows::open_file(
+            f.app.handle(),
+            &base.join("a").join("x.txt"),
+            &crate::windows::ProjectOpen::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            set(&file_window, json!({"hostId": "local"}), &a)["error"]["code"],
+            denied
+        );
+
+        for w in [&welcome, &settings, &wb] {
+            let page = invoke(w, "rpc_page", json!({})).unwrap();
+            let err = invoke(
+                w,
+                "rpc_connect",
+                json!({"target": {"projectId": a}, "channel": "__CHANNEL__:99", "page": page}),
+            )
+            .unwrap_err();
+            assert_eq!(err, json!({"kind": "projectScope"}), "{}", w.label());
+        }
+        let state = registry.project_state(&a).unwrap().state;
+        assert_eq!(state, Some(json!({"by": wa.label()})));
     }
 
     #[test]

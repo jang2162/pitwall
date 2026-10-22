@@ -38,7 +38,10 @@ log.info(`window opened: ${windowKind}`, "main");
 // 파일의 줄 · 열을 받는다.
 if (windowKind === "project" || windowKind === "file") {
   if (windowKind === "project")
-    log.info(`project window: ${projectIdFromQuery(window.location.search) ?? "(none)"}`, "project");
+    log.info(
+      `project window: ${projectIdFromQuery(window.location.search) ?? "(none)"}`,
+      "project",
+    );
   watchProjectOpens(tauriProjectOpenSource, (request) => {
     log.info(`open request: ${describeOpen(request) ?? "(focus only)"}`, "project");
     projectOpenInbox.push(request);

@@ -1,4 +1,5 @@
-//! `project.state.get` · `project.state.set`(결정 M1-D19)을 LocalHost 연결의 JSON 메시지로 왕복한다.
+//! `project.state.get` · `project.state.set`(결정 M1-D19)을 LocalHost 연결의 JSON 메시지로 왕복한다. 쓰기는 그 프로젝트로 연
+//! 연결(범위 [`ConnectionScope::Project`] — 프로젝트 창)만 한다.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -7,7 +8,7 @@ use pw_core::config::AppPaths;
 use pw_core::registry::state::{ProjectState, STATE_LIMIT};
 use pw_core::registry::{NewProject, Project};
 use pw_core::{Connection, Host, LocalHost};
-use pw_rpc::{Caller, Role, code};
+use pw_rpc::{Caller, ConnectionScope, Role, code};
 use serde_json::{Value, json};
 
 struct Client {
@@ -17,8 +18,24 @@ struct Client {
 
 impl Client {
     async fn connect(host: &LocalHost, role: Role) -> Self {
+        Self::with(host, Caller::new(role)).await
+    }
+
+    /// 프로젝트 창처럼 그 프로젝트로 연 연결(Host Router 가 채우는 범위, `pw_core::HostRouter::connect`).
+    async fn of_project(host: &LocalHost, role: Role, id: &str) -> Self {
+        Self::with(
+            host,
+            Caller {
+                role,
+                scope: ConnectionScope::Project(id.to_owned()),
+            },
+        )
+        .await
+    }
+
+    async fn with(host: &LocalHost, caller: Caller) -> Self {
         Self {
-            conn: host.connect(Caller::new(role)).await.unwrap(),
+            conn: host.connect(caller).await.unwrap(),
             next_id: 0,
         }
     }
@@ -109,6 +126,8 @@ async fn state_round_trips_per_project() {
     let a = f.project("a").id;
     let b = f.project("b").id;
     let mut c = Client::connect(&f.host, Role::Owner).await;
+    let mut wa = Client::of_project(&f.host, Role::Owner, &a).await;
+    let mut wb = Client::of_project(&f.host, Role::Owner, &b).await;
 
     assert_eq!(
         c.state(&a).await,
@@ -118,10 +137,10 @@ async fn state_round_trips_per_project() {
         }
     );
     let first = json!({"version": 1, "layout": {"x": 1}, "worktrees": {"/w1": {"tabs": []}}});
-    let _: () = c
+    let _: () = wa
         .ok("project.state.set", json!({"projectId": a, "state": first}))
         .await;
-    let _: () = c
+    let _: () = wb
         .ok(
             "project.state.set",
             json!({"projectId": b, "state": {"version": 1, "layout": {"x": 2}}}),
@@ -135,7 +154,7 @@ async fn state_round_trips_per_project() {
 
     // 통째로 바꾼다.
     let second = json!({"version": 1});
-    let _: () = c
+    let _: () = wa
         .ok(
             "project.state.set",
             json!({"projectId": a, "state": second}),
@@ -170,7 +189,8 @@ async fn a_broken_state_file_reads_as_none_with_the_reason() {
     assert_eq!(got.state, None);
     assert!(got.problem.unwrap().contains("limit"));
 
-    let _: () = c
+    let mut w = Client::of_project(&f.host, Role::Owner, &id).await;
+    let _: () = w
         .ok(
             "project.state.set",
             json!({"projectId": id, "state": {"ok": true}}),
@@ -184,7 +204,7 @@ async fn a_broken_state_file_reads_as_none_with_the_reason() {
 async fn invalid_writes_are_refused_and_keep_the_saved_state() {
     let f = Fixture::new();
     let id = f.project("a").id;
-    let mut c = Client::connect(&f.host, Role::Owner).await;
+    let mut c = Client::of_project(&f.host, Role::Owner, &id).await;
     let _: () = c
         .ok(
             "project.state.set",
@@ -232,8 +252,10 @@ async fn ids_cannot_escape_the_projects_folder_and_must_be_registered() {
             invalid,
             "get {id:?}"
         );
+        // 그 id 로 연 연결이라도(쓰기 권한 검사를 지나도) 경로를 만들기 전에 거절한다.
+        let mut w = Client::of_project(&f.host, Role::Owner, id).await;
         assert_eq!(
-            c.error_code(
+            w.error_code(
                 "project.state.set",
                 json!({"projectId": id, "state": {"x": 1}})
             )
@@ -256,7 +278,8 @@ async fn only_the_owner_reads_and_writes_and_mcp_does_not_see_it() {
     let id = f.project("a").id;
     let denied = i64::from(code::PERMISSION_DENIED);
     for role in [Role::Readonly, Role::Mobile] {
-        let mut c = Client::connect(&f.host, role).await;
+        // 그 프로젝트로 연 연결이라도 role 로 막힌다.
+        let mut c = Client::of_project(&f.host, role, &id).await;
         assert_eq!(
             c.error_code("project.state.get", json!({"projectId": id}))
                 .await,
@@ -279,22 +302,61 @@ async fn only_the_owner_reads_and_writes_and_mcp_does_not_see_it() {
     }
 }
 
-/// 다른 프로젝트 창(또는 웰컴 창)의 연결은 이 프로젝트의 상태를 쓰지 못한다(M1-25 브리프).
+/// 그 프로젝트로 연 연결만 그 프로젝트의 상태를 쓴다(M1-25 브리프). 다른 프로젝트로 연 연결(다른 프로젝트 창), Host 로 고른
+/// 연결(웰컴 · 설정 창, 창의 UI 로그), 파일 범위 연결(단일 파일 창)은 거절되고 저장본은 그대로다. 읽기는 owner 면 범위와 무관하다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "연결이 자기 프로젝트를 아직 모른다 — M1-24 의 Host 연결 범위가 들어오면 state::connection_may_write 를 채우고 켠다"]
 async fn another_projects_connection_cannot_write() {
     let f = Fixture::new();
     let a = f.project("a").id;
     let b = f.project("b").id;
-    // M1-24 뒤: 프로젝트 B 의 범위로 연 연결이어야 한다(지금은 범위를 실을 길이 없다).
-    let mut c = Client::connect(&f.host, Role::Owner).await;
-    let _ = b;
-    assert_eq!(
-        c.error_code(
+    let file = f.base.join("work").join("a").join("x.txt");
+    std::fs::write(&file, "x").unwrap();
+    let mut own = Client::of_project(&f.host, Role::Owner, &a).await;
+    let _: () = own
+        .ok(
             "project.state.set",
-            json!({"projectId": a, "state": {"x": 1}})
+            json!({"projectId": a, "state": {"own": 1}}),
         )
-        .await,
-        i64::from(code::PERMISSION_DENIED)
+        .await;
+
+    let denied = i64::from(code::PERMISSION_DENIED);
+    let others = [
+        (
+            "another project",
+            Client::of_project(&f.host, Role::Owner, &b).await,
+        ),
+        ("host", Client::connect(&f.host, Role::Owner).await),
+        (
+            "file",
+            Client::with(&f.host, Caller::file(Role::Owner, file)).await,
+        ),
+    ];
+    for (label, mut c) in others {
+        assert_eq!(
+            c.error_code(
+                "project.state.set",
+                json!({"projectId": a, "state": {"x": 1}})
+            )
+            .await,
+            denied,
+            "{label}"
+        );
+    }
+    assert_eq!(own.state(&a).await.state, Some(json!({"own": 1})));
+    // 다른 프로젝트 창은 자기 프로젝트를 쓴다.
+    let mut wb = Client::of_project(&f.host, Role::Owner, &b).await;
+    let _: () = wb
+        .ok(
+            "project.state.set",
+            json!({"projectId": b, "state": {"b": 1}}),
+        )
+        .await;
+    assert_eq!(
+        Client::connect(&f.host, Role::Owner)
+            .await
+            .state(&b)
+            .await
+            .state,
+        Some(json!({"b": 1}))
     );
 }

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pw_rpc::JsonValue;
+use pw_rpc::{ConnectionScope, JsonValue};
 use serde::{Deserialize, Serialize};
 
 use super::{Registry, RegistryError};
@@ -183,11 +183,11 @@ fn remove_stale_temps(dir: &Path) {
     }
 }
 
-/// 이 연결이 그 프로젝트의 상태를 써도 되는가: 그 프로젝트 창의 연결만(M1-25 브리프). ⚠ 아직 연결이 자기 프로젝트를 알지
-/// 못해(Host 연결 범위, M1-24) 언제나 통과한다 — 지금 막는 것은 owner role(메서드 등급)과 MCP 미노출뿐이다. M1-24 의 연결
-/// 범위가 들어오면 여기서 연결의 프로젝트와 `project_id` 를 비교한다(시험 `methods::tests::another_projects_connection_cannot_write`).
-pub fn connection_may_write(_ctx: &pw_rpc::Ctx, _project_id: &str) -> bool {
-    true
+/// 이 연결이 그 프로젝트의 상태를 써도 되는가: 그 프로젝트 창의 연결만(M1-25 브리프) — 연결 범위가 그 프로젝트일 때다
+/// ([`ConnectionScope::Project`]). 프로젝트 창은 자기 프로젝트로 연결하고(데스크톱 ipc.rs `caller_for`), Host 로 고른 연결(웰컴 ·
+/// 설정 창, 창의 UI 로그) · 파일 범위 연결 · 다른 프로젝트로 연 연결은 쓰지 못한다.
+pub fn connection_may_write(ctx: &pw_rpc::Ctx, project_id: &str) -> bool {
+    matches!(ctx.scope(), ConnectionScope::Project(id) if id == project_id)
 }
 
 impl Registry {

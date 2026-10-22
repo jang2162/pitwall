@@ -379,6 +379,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::time::Duration;
 
     use super::*;
 
@@ -542,5 +543,175 @@ mod tests {
             generated, routed,
             "`mise run gen` 을 돌리고, 메서드를 선언한 크레이트를 pw-rpc-gen 에 링크했는지 본다"
         );
+    }
+
+    /// JSON-RPC 연결 하나. 응답만 받고 그 사이의 알림(스트림 청크 · 이벤트)은 건너뛴다.
+    struct Client(pw_core::Connection, i64);
+
+    impl Client {
+        async fn call(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+            self.1 += 1;
+            let id = self.1;
+            self.0.sink.send(serde_json::json!(
+                {"jsonrpc": "2.0", "id": id, "method": method, "params": params}
+            ));
+            loop {
+                let frame = tokio::time::timeout(Duration::from_secs(10), self.0.source.recv())
+                    .await
+                    .unwrap_or_else(|_| panic!("{method}: no reply"))
+                    .expect("connection closed");
+                if frame["id"] == serde_json::json!(id) {
+                    return frame;
+                }
+            }
+        }
+    }
+
+    /// 응답의 결과: 성공이면 `None`, 오류면 그 코드.
+    fn outcome(frame: &serde_json::Value) -> Option<i64> {
+        frame
+            .get("error")
+            .map(|e| e["code"].as_i64().expect("error code"))
+    }
+
+    /// 프로젝트 창의 연결(프로젝트로 고른 연결 — 범위 `Project`)은 Host 로 고른 연결이 닿는 것에 모두 닿는다(M1-25). 앱의 Host
+    /// 그대로(모든 메서드 크레이트) 두 범위로 연결해
+    /// - 모든 메서드에 어느 params 타입으로도 읽히지 않는 params(`[[[]]]` — 구조체는 배열을 칸 순서로 읽으므로 첫 칸에서 실패한다.
+    ///   객체 · 배열이 아닌 params 는 관문 앞에서 invalid request 다)를 보낸다: 디스패처의 관문(role · 범위)을 지나면 params 를 읽다가
+    ///   invalid params 로 끝나므로, 두 범위의 답이 모두 invalid params 면 관문이 범위로 막는 메서드가 없다. 핸들러는 돌지 않는다
+    ///   (셸 · 외부 도구 · 휴지통 같은 부작용 없음).
+    /// - 핸들러까지 가는 대표 호출(fs · search · terminal · project · config · task · openWith)이 두 범위에서 같은 결과다. 셸을 띄우는
+    ///   `terminal.create` · 로그인 셸을 읽는 `runtime.*` 는 위의 관문 확인으로 갈음한다 — 핸들러에서 범위를 보는 것은
+    ///   `project.state.set` 뿐이다(`Ctx::scope` 를 읽는 곳).
+    #[test]
+    fn a_project_scoped_connection_reaches_everything_a_host_connection_does() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(tmp.path()).unwrap();
+        let root = base.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "alpha\n").unwrap();
+        let host = host_under(&base.join("app"));
+        let methods: Vec<String> = host
+            .router()
+            .methods()
+            .into_iter()
+            .map(|m| m.name.to_owned())
+            .collect();
+        let id = host
+            .registry()
+            .unwrap()
+            .create(pw_core::registry::NewProject {
+                root: root.clone(),
+                ..Default::default()
+            })
+            .unwrap()
+            .id;
+        let router = HostRouter::new();
+        router.add_host(Arc::new(host)).unwrap();
+        router.bind_project(id.clone(), LOCAL_HOST_ID).unwrap();
+        let owner = || pw_rpc::Caller::new(pw_rpc::Role::Owner);
+        tauri::async_runtime::block_on(async {
+            let by_host = pw_core::Target::HostId(LOCAL_HOST_ID.into());
+            let by_project = pw_core::Target::ProjectId(id.clone());
+            let mut by_host = Client(router.connect(&by_host, owner()).await.unwrap(), 0);
+            let mut by_project = Client(router.connect(&by_project, owner()).await.unwrap(), 0);
+            let invalid = Some(i64::from(pw_rpc::code::INVALID_PARAMS));
+            assert!(methods.len() > 50, "{methods:?}");
+            for method in &methods {
+                let params = serde_json::json!([[[]]]);
+                assert_eq!(
+                    outcome(&by_host.call(method, params.clone()).await),
+                    invalid,
+                    "host {method}"
+                );
+                assert_eq!(
+                    outcome(&by_project.call(method, params).await),
+                    invalid,
+                    "project {method}"
+                );
+            }
+
+            let file = root.join("a.txt").display().to_string();
+            let dir = root.display().to_string();
+            let calls = [
+                (
+                    "fs.list",
+                    serde_json::json!({"projectId": id, "path": dir}),
+                    true,
+                ),
+                (
+                    "fs.stat",
+                    serde_json::json!({"projectId": id, "path": file}),
+                    true,
+                ),
+                (
+                    "fs.read",
+                    serde_json::json!({"projectId": id, "path": file}),
+                    true,
+                ),
+                (
+                    "fs.readBytes",
+                    serde_json::json!({"projectId": id, "path": file, "offset": 0, "length": 4}),
+                    true,
+                ),
+                (
+                    "search.text",
+                    serde_json::json!({"projectId": id, "paths": [dir], "query": "alpha"}),
+                    true,
+                ),
+                (
+                    "search.files",
+                    serde_json::json!({"projectId": id, "query": "a"}),
+                    false,
+                ),
+                (
+                    "terminal.input",
+                    serde_json::json!({"terminalId": 4_000_000_000_u32, "data": "x"}),
+                    false,
+                ),
+                (
+                    "terminal.resize",
+                    serde_json::json!({"terminalId": 4_000_000_000_u32, "cols": 80, "rows": 24}),
+                    false,
+                ),
+                (
+                    "terminal.close",
+                    serde_json::json!({"terminalId": 4_000_000_000_u32}),
+                    false,
+                ),
+                ("project.get", serde_json::json!({"id": id}), true),
+                ("project.info", serde_json::json!({"projectId": id}), true),
+                ("project.trust", serde_json::json!({"id": id}), true),
+                ("project.list", serde_json::Value::Null, true),
+                (
+                    "project.state.get",
+                    serde_json::json!({"projectId": id}),
+                    true,
+                ),
+                ("config.get", serde_json::json!({"projectId": id}), false),
+                ("task.list", serde_json::json!({"projectId": id}), true),
+                ("openWith.list", serde_json::json!({"projectId": id}), true),
+            ];
+            let denied = Some(i64::from(pw_rpc::code::PERMISSION_DENIED));
+            for (method, params, ok) in calls {
+                let host = by_host.call(method, params.clone()).await;
+                let project = by_project.call(method, params).await;
+                assert_eq!(outcome(&project), outcome(&host), "{method}: {project}");
+                assert_ne!(outcome(&project), denied, "{method}: {project}");
+                if ok {
+                    assert_eq!(outcome(&project), None, "{method}: {project}");
+                }
+            }
+            // 범위를 보는 단 하나: 상태 쓰기는 프로젝트로 연 연결만.
+            let set = serde_json::json!({"projectId": id, "state": {"x": 1}});
+            assert_eq!(
+                outcome(&by_project.call("project.state.set", set.clone()).await),
+                None
+            );
+            assert_eq!(
+                outcome(&by_host.call("project.state.set", set).await),
+                denied
+            );
+        });
     }
 }

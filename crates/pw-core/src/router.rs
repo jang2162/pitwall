@@ -195,7 +195,7 @@ mod tests {
         }
     }
 
-    /// 프로젝트로 고른 연결은 그 프로젝트를 범위로 싣고(프로젝트로 연결하는 창이 생기면 핸들러가 `Ctx::scope` 로 가를 수 있다),
+    /// 프로젝트로 고른 연결은 그 프로젝트를 범위로 싣고(프로젝트 창의 연결 — `project.state.set` 이 `Ctx::scope` 로 가른다),
     /// Host 로 고른 연결은 Host 범위다. 이미 파일 하나로 좁힌 호출자는 프로젝트로 넓히지 않는다.
     #[tokio::test]
     async fn connecting_by_project_carries_the_project_as_the_scope() {

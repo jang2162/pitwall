@@ -178,6 +178,10 @@ pub fn open_project<R: Runtime>(
     // 없는 id 로 창을 만들지 않는다. label 에 들어가므로 웹뷰가 넘긴 아무 문자열이 창이 되지 않게 하는 검사이기도 하다.
     registry.get(project_id).map_err(|e| e.to_string())?;
     let open = without_directory_file(open.clone());
+    // 창은 그 프로젝트로 연결한다(ipc.rs `caller_for`) — 창을 만들기 전에 Host Router 가 그 프로젝트를 알게 한다.
+    if let Some(ipc) = app.try_state::<crate::ipc::IpcState>() {
+        ipc.bind_local_project(project_id);
+    }
     windows::open_project(app, project_id, &open).map_err(|e| e.to_string())?;
     // 읽기 전용 레지스트리 등으로 기록하지 못해도 창은 열렸다.
     if let Err(e) = registry.mark_opened(project_id) {
@@ -638,6 +642,21 @@ mod tests {
                 ..ProjectOpen::default()
             }]
         );
+    }
+
+    /// 프로젝트 창을 열면 Host Router 가 그 프로젝트를 로컬 Host 로 보낸다 — 창은 그 프로젝트로 연결한다(ipc.rs `caller_for`).
+    #[test]
+    fn opening_a_project_window_routes_its_project_to_the_local_host() {
+        let f = Fixture::new();
+        let id = f.add(&f.dir("repo"));
+        let router = Arc::new(pw_core::HostRouter::new());
+        router
+            .add_host(Arc::new(pw_core::LocalHost::new(crate::LOCAL_HOST_ID)))
+            .unwrap();
+        f.app.manage(crate::ipc::IpcState::new(router.clone()));
+        assert!(router.route(&id).is_err());
+        open_project(f.app.handle(), &id, &ProjectOpen::default()).unwrap();
+        assert_eq!(router.route(&id).unwrap().id(), crate::LOCAL_HOST_ID);
     }
 
     /// 웰컴 창(`open_project_window`)이 워크트리 디렉터리를 `file` 로 넘겨도 파일로 보내지 않는다(받는 쪽 방어).

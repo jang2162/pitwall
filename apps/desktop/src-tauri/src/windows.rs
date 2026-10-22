@@ -191,6 +191,11 @@ pub fn project_label(project_id: &str) -> String {
     format!("{PROJECT_LABEL_PREFIX}{project_id}")
 }
 
+/// 프로젝트 창 label 의 프로젝트 id([`project_label`] 의 반대). 프로젝트 창이 아니면 `None`.
+pub fn project_of_label(label: &str) -> Option<&str> {
+    label.strip_prefix(PROJECT_LABEL_PREFIX)
+}
+
 /// 지금 UI 언어. 언어 상태가 없으면(시험의 mock 앱) 빈 카탈로그라 메시지 id 가 그대로 나온다.
 fn localizer<R: Runtime>(app: &AppHandle<R>) -> Localizer {
     match app.try_state::<Arc<I18n>>() {

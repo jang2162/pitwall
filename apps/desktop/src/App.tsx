@@ -21,16 +21,28 @@ import {
   fileWindowTitle,
 } from "./file-window/file-window";
 import { ProjectWindow } from "./layout/project-window";
+import { projectIdFromQuery } from "./project-open";
 import { HostProvider } from "./rpc/host";
 import { type SettingsNative, tauriSettingsNative } from "./settings/native";
 import { SettingsWindow } from "./settings/settings-window";
+import type { HostTarget } from "./tauri-transport";
 import { ThemeSwitcher, useTheme } from "./theme/theme-switcher";
 import { tauriWelcomeNative, type WelcomeNative } from "./welcome/native";
 import { type WelcomeLog, WelcomeWindow } from "./welcome/welcome-window";
 import { WELCOME_TITLE, type WindowKind } from "./window-kind";
 
-// src-tauri/src/main.rs 의 LOCAL_HOST_ID. 프로젝트 모델이 생기기 전이라(M0-09 · M0-12) 모든 창이 Host 를 직접 고른다.
+// src-tauri/src/main.rs 의 LOCAL_HOST_ID.
 const LOCAL_HOST = { hostId: "local" };
+
+/**
+ * 창의 연결 대상. 프로젝트 창은 자기 프로젝트로 연결한다 — 연결 범위가 그 프로젝트가 되고, 그 연결만 그 프로젝트의 상태를 쓴다
+ * (`project.state.set`, crates/pw-core/src/registry/state.rs 의 `connection_may_write`). 다른 창(웰컴 · 설정 · 단일 파일)은 Host 를
+ * 직접 고른다 — Rust 는 그 창들의 프로젝트 연결을 거절한다(src-tauri/src/ipc.rs `caller_for`).
+ */
+export function windowHostTarget(kind: WindowKind, search: string): HostTarget {
+  const projectId = kind === "project" ? projectIdFromQuery(search) : undefined;
+  return projectId === undefined ? LOCAL_HOST : { projectId };
+}
 
 function Welcome({ native, log }: { native: WelcomeNative; log?: WelcomeLog }) {
   return (
@@ -102,9 +114,11 @@ export function App({
   onDockApi?(api: DockviewApi): void;
 }) {
   const [queryClient] = useState(() => new QueryClient());
+  // HostProvider 는 대상 객체가 바뀌면 다시 연결하므로 창마다 한 번 정한다.
+  const [target] = useState(() => windowHostTarget(kind, window.location.search));
   return (
     <QueryClientProvider client={queryClient}>
-      <HostProvider target={LOCAL_HOST}>
+      <HostProvider target={target}>
         <I18nProvider log={log}>
           <KeymapProvider native={native} log={log}>
             <AppActions native={native} kind={kind} />

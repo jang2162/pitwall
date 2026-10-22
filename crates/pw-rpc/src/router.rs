@@ -51,8 +51,9 @@ pub enum ConnectionScope {
     /// Host 를 직접 고른 연결(`hostId`). role 이 허용하는 전부.
     #[default]
     Host,
-    /// 프로젝트로 고른 연결(`projectId`, Host Router 가 채운다 — `pw_core::HostRouter::connect`). 디스패처는 지금 이것으로 막는
-    /// 것이 없다 — 「그 프로젝트의 연결만」 이 필요한 핸들러가 [`Ctx::scope`] 로 본다.
+    /// 프로젝트로 고른 연결(`projectId`, Host Router 가 채운다 — `pw_core::HostRouter::connect`). 데스크톱의 프로젝트 창이 자기
+    /// 프로젝트로 연결한다. 디스패처는 이것으로 막는 것이 없다(role 이 허용하는 전부 — Host 범위와 같다) — 「그 프로젝트의 연결만」
+    /// 이 필요한 핸들러가 [`Ctx::scope`] 로 본다(`project.state.set`).
     Project(String),
     /// 파일 하나에만 닿는 연결([`Caller::file`]).
     File(Arc<FileScope>),
