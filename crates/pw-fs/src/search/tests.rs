@@ -1019,6 +1019,7 @@ fn heap_peak<R>(f: impl FnOnce() -> R) -> (R, usize) {
 /// `f` 를 다른 스레드에서 돌려, `within` 안에 끝나고 그동안 이 프로세스의 힙이 시작보다 `limit` 넘게 늘지 않는지 본다. 넘거나 늦으면
 /// 그 자리에서 실패한다 — 고장 난 코드가 `/dev/zero` 를 끝없이 읽어도 기계의 메모리를 먹기 전에 멈추고, FIFO 에서 영영 막혀도 시험이
 /// 끝난다(nextest 는 시험이 끝나면 프로세스를 끝내 남은 스레드도 함께 끝난다). 힙은 다른 스레드(감시 스레드 등)의 것도 센다.
+#[cfg(unix)]
 pub(crate) fn bounded<R: Send + 'static>(
     limit: usize,
     within: Duration,
@@ -1495,6 +1496,7 @@ fn a_dot_git_link_does_not_bring_in_another_repos_rules() {
 }
 
 /// 걷기가 내놓는 항목(찾는 경로 첫째).
+#[cfg(unix)]
 fn walked(plan: &Plan) -> Vec<PathBuf> {
     let found = Mutex::new(Vec::new());
     plan.walker(&plan.targets[0]).run(|| {

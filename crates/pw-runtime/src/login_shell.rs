@@ -22,7 +22,6 @@
 //! 언제: 처음 쓰일 때 — 앱 시작 경로를 막지 않는다(셸 시작은 수백 ms 가 걸리기도 한다). 성공하면 「환경 다시 읽기」
 //! ([`LoginShell::invalidate`]) 전까지 남긴다. 셸은 디렉터리와 무관하게 한 번 돈다(시작 파일은 사용자 단위다).
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
@@ -402,6 +401,7 @@ fn read_env_limited(
     timeout: Duration,
     limit: usize,
 ) -> Result<RuntimeEnv, ShellError> {
+    use std::ffi::OsString;
     use std::io::Read as _;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStringExt;
@@ -576,6 +576,7 @@ fn account_shell() -> Option<PathBuf> {
 
 #[cfg(all(test, unix))]
 pub(crate) mod tests {
+    use std::ffi::OsString;
     use std::os::unix::fs::PermissionsExt;
     use std::time::Instant;
 

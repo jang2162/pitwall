@@ -194,9 +194,11 @@ impl Terminals {
         let runtime = self.runtime.env(&project.id, &cwd);
         let snapshot = host.global.snapshot();
         let setting = snapshot.get("settings", shell::SETTINGS_KEY);
-        let mut argv = shell::argv(setting, &runtime.env);
-        let mut env = shell::child_env(&runtime.env);
+        let argv = shell::argv(setting, &runtime.env);
+        let env = shell::child_env(&runtime.env);
         // 기본 셸이면 시작 파일 뒤에 제공자의 PATH 를 다시 앞에 둔다(integration.rs). 설정으로 고른 셸은 손대지 않는다.
+        #[cfg(unix)]
+        let (mut argv, mut env) = (argv, env);
         #[cfg(unix)]
         let shell_files = if matches!(shell::configured(setting), Ok(None)) {
             let base = self.runtime.login_shell_env().0.env.path;

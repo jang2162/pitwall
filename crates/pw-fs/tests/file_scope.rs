@@ -161,7 +161,7 @@ async fn only_the_file_itself_is_read() {
     assert_eq!(bytes["data"], "aW5zaWRl");
     assert_eq!(bytes["path"], file.display().to_string());
 
-    let mut refused = vec![
+    let refused = vec![
         sibling.clone(),
         secret.clone(),
         f.base.join("x"),
@@ -172,9 +172,11 @@ async fn only_the_file_itself_is_read() {
         f.base.join("x/a.txt/child"),
         // 이름이 그 파일로 시작할 뿐인 형제.
         f.base.join("x/a.txt.bak"),
+        #[cfg(unix)]
+        f.base.join("x/to-b"),
+        #[cfg(unix)]
+        f.base.join("x/up/secret.txt"),
     ];
-    #[cfg(unix)]
-    refused.extend([f.base.join("x/to-b"), f.base.join("x/up/secret.txt")]);
     for path in &refused {
         for method in ["fs.read", "fs.stat"] {
             assert!(

@@ -508,9 +508,11 @@ mod tests {
             f.labels(),
             [label.clone(), windows::WELCOME_LABEL.to_owned()]
         );
-        let mut expected = vec![open_file(&file, Some(5), Some(2))];
-        #[cfg(unix)]
-        expected.push(open_file(&file, None, None));
+        let expected = vec![
+            open_file(&file, Some(5), Some(2)),
+            #[cfg(unix)]
+            open_file(&file, None, None),
+        ];
         assert_eq!(f.file_opens(&label), expected);
     }
 
