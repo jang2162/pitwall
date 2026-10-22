@@ -43,6 +43,11 @@ pub const CREATIONS_ARE_EXACT: bool = !cfg!(target_os = "macos");
 /// 한도 초과 경고의 Fluent 메시지 id(`project.ftl`).
 pub const LIMIT_MESSAGE: &str = "fs-watch-limit";
 
+/// 시험: 루트마다 `fs.changed` 를 낸 시각. 받는 쪽이 아니라 내는 쪽에서 잰다 — 부하가 큰 러너에서는 전달이 늦어 받은 시각의
+/// 간격이 디바운스 창보다 줄어든다(macOS CI 에서 60 ms).
+#[cfg(test)]
+pub(crate) static PUBLISHED: Mutex<Vec<(PathBuf, Instant)>> = Mutex::new(Vec::new());
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
     Recursive,
@@ -172,6 +177,11 @@ impl Worker {
             if let Some(parts) = batch.finish() {
                 let changed = FsChanged::from_parts(&root, self.sink.worktree.as_deref(), parts);
                 let scope = Scope::Project(self.sink.project_id.clone());
+                #[cfg(test)]
+                PUBLISHED
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push((root.clone(), Instant::now()));
                 if let Err(e) = self.sink.bus.publish(scope, TOPIC_CHANGED, &changed) {
                     tracing::warn!(target: "pw_fs", %e, "cannot publish fs.changed");
                 }

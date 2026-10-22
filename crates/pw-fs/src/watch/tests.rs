@@ -278,6 +278,7 @@ fn external_changes_arrive_within_300ms() {
 }
 
 /// 완료 기준 ②: 같은 파일을 10 ms 간격으로 20번 쓰면 이벤트가 디바운스 창마다 하나다 — 이어지는 두 이벤트는 75 ms 이상 떨어진다.
+/// 간격은 엔진이 낸 시각([`engine::PUBLISHED`])으로 잰다 — 받은 시각은 전달 지연이 흔들어 부하 아래에서 줄어든다.
 #[test]
 fn twenty_writes_10ms_apart_are_one_event_per_debounce_window() {
     for strategy in strategies() {
@@ -318,11 +319,18 @@ fn twenty_writes_10ms_apart_are_one_event_per_debounce_window() {
             "{strategy:?}: {} events over {writing:?} (at most {windows})",
             got.len()
         );
-        for pair in got.windows(2) {
-            let gap = pair[1].0 - pair[0].0;
-            // 받는 쪽은 1 ms 간격으로 꺼낸다 — 그만큼 여유를 둔다.
+        let published: Vec<Instant> = engine::PUBLISHED
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(r, _)| *r == root)
+            .map(|(_, at)| *at)
+            .collect();
+        assert!(published.len() >= got.len(), "{strategy:?}: {published:?}");
+        for pair in published.windows(2) {
+            let gap = pair[1] - pair[0];
             assert!(
-                gap + Duration::from_millis(5) >= engine::DEBOUNCE,
+                gap >= engine::DEBOUNCE,
                 "{strategy:?}: two events {gap:?} apart"
             );
         }
