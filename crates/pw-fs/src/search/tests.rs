@@ -793,7 +793,8 @@ async fn the_stream_sends_files_then_done_and_ends_soon_after_cancel() {
 
     // 오래 걸리는 검색을 취소한다. 일치가 없어 검색 스레드가 보낼 것이 없다 — 받는 쪽이 사라진 것을 보내다 알 수 없으니,
     // 스트림이 끝날 때 멈추라고 알려야 멈춘다. 일치하는 `a.txt` 가 없는 폴더만 찾는다 — 취소 뒤 그것을 보내다 실패해도 멈추므로.
-    // 끝까지 찾으면 256 × 100 ms / 스레드 8개 = 3.2초 넘게 걸린다.
+    // 끝까지 찾으면 256 × 20 ms / 스레드 8개 = 0.64초 넘게 걸린다. 쉬는 읽기는 도중에 멈추지 않으므로 스레드는 그때 쉬던 읽기를
+    // 마친 뒤에 멈춘다 — 쉬는 시간이 100 ms 기준에 가까우면 그것만으로 기준을 넘는다(100 ms 로 쉬게 했을 때 macOS CI 에서 134 ms).
     let slow = root.join("slow");
     for i in 0..256 {
         write(&slow.join(format!("f{i}.txt")), "nothing\n");
@@ -805,7 +806,7 @@ async fn the_stream_sends_files_then_done_and_ends_soon_after_cancel() {
         let (fs, flag) = (Arc::clone(&fs), Arc::clone(&flag));
         async move {
             stream(fs, params, &sink, |plan| {
-                plan.read_delay = Some(Duration::from_millis(100));
+                plan.read_delay = Some(Duration::from_millis(20));
                 plan.on_finish = Some(Box::new(move |summary: &Summary| {
                     *flag.lock().unwrap() = Some(*summary);
                 }));
