@@ -540,13 +540,28 @@ fn a_migration_finished_by_another_writer_while_waiting_is_not_a_failure() {
 }
 
 /// 다른 연결이 모든 단계를 올리고 쓰기 잠금을 쥐고 있으면 열기는 잠금을 한 번만 기다린다 — 다시 읽은 버전이 최신이면 남은 단계마다
-/// 다시 기다리지 않는다(단계가 늘수록 경합 중 열기가 단계 수만큼 [`BUSY_TIMEOUT`] 을 기다리지 않게).
+/// 다시 기다리지 않는다(단계가 늘수록 경합 중 열기가 단계 수만큼 [`BUSY_TIMEOUT`] 을 기다리지 않게). 판정은 걸린 시간이 아니라
+/// 기다리다 시간을 넘긴 횟수다 — 시간은 느린 러너에서 늘어난다(macOS CI 에서 한 번 기다린 열기가 3.2초 걸렸다). 다른 연결이
+/// 커밋하고 다시 잠그는 틈에 열기가 잠금을 잡으면 한 번도 기다리지 않아 이 성질을 보지 못하므로, 그때는 다시 한다.
 #[test]
 fn an_open_racing_a_finished_migration_waits_for_the_lock_once() {
     assert!(
         MIGRATIONS.len() >= 2,
         "단계가 둘 이상이어야 이 시험이 뜻이 있다"
     );
+    for _ in 0..3 {
+        let timeouts = race_a_finished_migration();
+        assert!(timeouts <= 1, "waited for the lock {timeouts} times");
+        if timeouts == 1 {
+            return;
+        }
+    }
+    panic!("the open never had to wait for the lock");
+}
+
+/// 열기가 버전 0 을 읽고 쓰기 잠금을 기다리는 동안 다른 연결이 모든 단계를 올리고, 놓자마자 다시 쓰기 잠금을 쥔다. 열기가 쓰기
+/// 잠금을 기다리다 시간을 넘긴 횟수를 준다.
+fn race_a_finished_migration() -> u32 {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("state.db");
     let mut other = Connection::open(&file).unwrap();
@@ -554,10 +569,9 @@ fn an_open_racing_a_finished_migration_waits_for_the_lock_once() {
     let tx = other
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
-    let started = Instant::now();
     let opener = {
         let file = file.clone();
-        std::thread::spawn(move || open(&file, busy))
+        std::thread::spawn(move || (open(&file, busy), LOCK_TIMEOUTS.get()))
     };
     std::thread::sleep(Duration::from_millis(300));
     for step in MIGRATIONS {
@@ -567,17 +581,14 @@ fn an_open_racing_a_finished_migration_waits_for_the_lock_once() {
         .unwrap();
     tx.commit().unwrap();
     other.execute_batch("BEGIN IMMEDIATE").unwrap();
-    let opened = opener.join().unwrap();
-    let elapsed = started.elapsed();
+    let (opened, timeouts) = opener.join().unwrap();
     other.execute_batch("ROLLBACK").unwrap();
     assert!(
         matches!(opened.status, StorageStatus::Ok { .. }),
         "{:?}",
         opened.status
     );
-    // 한 번이면 약 2초, 단계마다 기다리면 4초 이상이다. 기준 3초는 양쪽에 1초씩 여유를 둔다(Windows 의 `Sleep` 은 타이머
-    // 간격으로 올림해 busy 대기가 늘어난다).
-    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    timeouts
 }
 
 /// 비정상 종료로 `-wal` · `-shm` 이 남은 파일이 손상이면: 검사 연결이 닫히며 남은 WAL 프레임을 손상된 파일에 옮기고 사이드카를

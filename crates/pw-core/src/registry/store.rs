@@ -29,6 +29,12 @@ pub const RETRY_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
 type Migration = fn(&Transaction<'_>) -> rusqlite::Result<()>;
 
+#[cfg(test)]
+thread_local! {
+    /// 시험: 이 스레드의 마이그레이션이 쓰기 잠금을 기다리다 시간을 넘긴 횟수(벽시계 대신 기다림을 센다).
+    static LOCK_TIMEOUTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// 버전 `i` → `i + 1`. 길이가 곧 이 앱이 아는 최신 버전이다.
 pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2];
 
@@ -467,6 +473,8 @@ fn migrate(conn: &mut Connection, migrations: &[Migration]) -> Result<(), Failur
         // 틈에도 되므로 버전을 다시 읽어, 이미 올라갔으면 잠금 없이 넘어간다. 다른 연결이 모든 단계를 올렸으면 남은 단계마다
         // 잠금을 다시 기다리지 않고 곧바로 끝낸다.
         if refused.sqlite_error_code() == Some(ErrorCode::DatabaseBusy) {
+            #[cfg(test)]
+            LOCK_TIMEOUTS.set(LOCK_TIMEOUTS.get() + 1);
             let version: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
             if version as usize >= migrations.len() {
                 return Ok(());
