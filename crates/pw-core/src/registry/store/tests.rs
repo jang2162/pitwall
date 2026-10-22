@@ -75,9 +75,9 @@ fn concurrent_first_opens_all_succeed() {
 }
 
 /// 새 파일을 동시에 처음 연 연결은 모두 WAL + `NORMAL` 로 쓴다. 한 연결이 WAL 로 바꾸는 동안 다른 연결의 바꾸기는 곧바로
-/// `database is locked` 로 거절되는데, 그 연결이 다시 해 보지 않으면 다른 연결이 바꾼 WAL 로 따라가면서 `FULL` 로 남는다 — 커밋마다
-/// 동기화해 Windows 에서 동시 쓰기를 굶긴다(레지스트리의 `concurrent_writers_on_one_file_wait_instead_of_failing`). 다시 해 보지
-/// 않는 코드에서 넷 중 하나 이상이 `FULL` 로 남는 라운드가 절반쯤이라 라운드를 되풀이한다.
+/// `database is locked` 로 거절되고, 그 연결은 다른 연결이 바꾼 WAL 로 따라간다. 열기를 마칠 때 모드를 다시 보지 않으면 `FULL` 로
+/// 남는다 — 커밋마다 동기화해 Windows 에서 동시 쓰기를 굶긴다(레지스트리의 `concurrent_writers_on_one_file_wait_instead_of_failing`).
+/// 다시 보지 않는 코드에서 넷 중 하나 이상이 `FULL` 로 남는 라운드가 절반쯤이라 라운드를 되풀이한다.
 #[test]
 fn concurrent_first_opens_all_commit_in_wal_without_a_sync_each() {
     const OPENERS: usize = 4;
