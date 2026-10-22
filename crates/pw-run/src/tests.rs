@@ -200,6 +200,10 @@ impl Client {
             if let Some(i) = self.events.iter().position(|(s, _)| *s == stream) {
                 return self.events.remove(i).1;
             }
+            // 끝난 스트림(셸을 띄우지 못함 등)에는 더 올 항목이 없다 — 시간을 넘길 때까지 기다리지 않고 그 종료를 보인다.
+            if let Some(end) = self.ended.iter().find(|e| e.stream_id == stream) {
+                panic!("stream {stream} ended: {end:?}");
+            }
             // 기다리는 시간은 부른 쪽이 정한다(read_until 은 받은 글자와 함께 실패한다).
             self.receive(Duration::from_secs(30)).await;
         }
@@ -513,6 +517,15 @@ async fn the_providers_path_stays_in_front_after_the_shells_startup_files() {
     }
 }
 
+/// `/bin/zsh` 가 없는 기기(GitHub 의 Ubuntu 러너 등)면 참이고, 건너뛴다고 찍는다.
+fn no_zsh() -> bool {
+    let missing = !Path::new("/bin/zsh").is_file();
+    if missing {
+        eprintln!("skipped: /bin/zsh is not installed");
+    }
+    missing
+}
+
 /// 시험 HOME 의 zsh 에 `report` 를 펼친 결과를 찍게 하고 그 글자를 돌려준다(시험 HOME 경로는 `HOME`). 친 명령의 메아리와
 /// 구별되게 앞뒤 표시를 셸이 계산한다.
 async fn zsh_report(h: &PathHome, report: &str) -> String {
@@ -535,7 +548,7 @@ async fn zsh_report(h: &PathHome, report: &str) -> String {
 /// 끝나면 지워진다)로 보낸다. 사용자가 `~/.zshenv` 에서 `ZDOTDIR` 을 옮긴 경우도 본다.
 #[tokio::test(flavor = "multi_thread")]
 async fn zsh_startup_sees_the_users_zdotdir_and_histfile_as_without_the_integration() {
-    if !Path::new("/bin/zsh").is_file() {
+    if no_zsh() {
         return;
     }
     const RC: &str = "STARTUP+=(\"NAME:${ZDOTDIR-unset}\")\n";
@@ -586,7 +599,7 @@ async fn zsh_startup_sees_the_users_zdotdir_and_histfile_as_without_the_integrat
 /// 제공자 항목을 앞에 두는 코드는 사용자의 zsh 옵션과 떨어져 돈다: `rc` 를 덧붙인 `.zshrc` 에서도 PATH 는 「제공자 항목 + 제공자
 /// 없음일 때의 PATH」 다.
 async fn assert_the_providers_path_survives(rc: &str) {
-    if !Path::new("/bin/zsh").is_file() {
+    if no_zsh() {
         return;
     }
     let mut paths = Vec::new();
@@ -623,6 +636,9 @@ async fn the_providers_path_survives_sh_word_split() {
 /// 제공자가 없으면(로그인 셸 환경뿐) 셸 argv · 환경을 바꾸지 않는다 — 시작 파일이 정한 PATH 그대로다.
 #[tokio::test(flavor = "multi_thread")]
 async fn without_a_provider_the_shell_is_left_alone() {
+    if no_zsh() {
+        return;
+    }
     let h = path_home("/bin/zsh", false);
     let mut c = h.f.client();
     let t = c.open(h.f.create_params(80, 24)).await;
@@ -1168,14 +1184,22 @@ async fn inputs_reach_the_shell_in_the_order_they_were_sent() {
     assert_eq!(text, sent);
 }
 
-/// mise 제공자가 붙은 런타임 위의 터미널(M1-16 완료 기준). 셸 rc 에 mise 활성화가 없는 시험 HOME 에서: 신뢰한 프로젝트의
+/// mise 제공자가 붙은 런타임 위의 터미널(M1-16 완료 기준). 셸 rc 에 mise 활성화가 없고 시작 파일(`~/.bash_profile`)이 다른 node
+/// (v24 — macOS 러너의 `/etc/profile` `path_helper` 가 PATH 앞에 올리는 node 의 자리)를 PATH 앞에 두는 시험 HOME 에서: 신뢰한 프로젝트의
 /// `mise.toml` 이 `node = "22"` 면 새 터미널의 `node -v` 가 v22.x, `"20"` 으로 바꾸면 2초 안에 `runtime.changed` 가 나가고(실제 파일
 /// 감시 `fs.watch` → `pw_runtime::follow_files`) 새 터미널은 v20.x. 이미 연 터미널은 그대로다.
+///
+/// 기본 셸은 bash 다 — 셸 통합(integration.rs)이 붙는 셸이라야 시작 파일 뒤에도 제공자의 PATH 가 앞에 있다(통합이 없는 `/bin/sh`
+/// 로는 기기의 `/etc/paths` 에 node 가 있으면 그 node 가 이긴다). `/bin/bash` 가 없는 기기면 건너뛴다.
 ///
 /// `mise` 가 `None` 이면 가짜 mise(`mise.toml` 의 버전으로 가짜 `node` 폴더를 PATH 앞에 붙인다)를, 있으면 그 실제 mise 를 쓴다.
 async fn node_version_follows_mise_toml(mise: Option<PathBuf>) {
     use pw_runtime::{Mise, RuntimeHost, TOPIC_CHANGED};
 
+    if !Path::new("/bin/bash").is_file() {
+        eprintln!("skipped: /bin/bash is not installed");
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let base = normalize(tmp.path()).unwrap();
     let home = base.join("home");
@@ -1187,6 +1211,15 @@ async fn node_version_follows_mise_toml(mise: Option<PathBuf>) {
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     };
+    write_script(base.join("brew/bin/node"), "echo v24.21.0");
+    fs::write(
+        home.join(".bash_profile"),
+        format!(
+            "export PATH=\"{}:$PATH\"\n",
+            base.join("brew/bin").display()
+        ),
+    )
+    .unwrap();
     let real = mise.is_some();
     match mise {
         Some(real) => std::os::unix::fs::symlink(real, bin.join("mise")).unwrap(),
@@ -1207,10 +1240,10 @@ async fn node_version_follows_mise_toml(mise: Option<PathBuf>) {
             );
         }
     }
-    // 로그인 셸: 시험 HOME, PATH 에 mise 만, rc 에 mise 활성화 없음. 실제 mise 면 사람의 mise 데이터 · 신뢰 목록 대신 부른 쪽이
+    // 로그인 셸: 시험 HOME, PATH 에 mise 만, rc 에 mise 활성화 없음, 기본 셸 bash. 실제 mise 면 사람의 mise 데이터 · 신뢰 목록 대신 부른 쪽이
     // 정한 격리 폴더(MISE_*_DIR)를 넘긴다.
     let mut login = format!(
-        "HOME='{}'; export HOME\nPATH='{}:/usr/bin:/bin'; export PATH\nSHELL=/bin/sh; export SHELL\n",
+        "HOME='{}'; export HOME\nPATH='{}:/usr/bin:/bin'; export PATH\nSHELL=/bin/bash; export SHELL\n",
         home.display(),
         bin.display()
     );
