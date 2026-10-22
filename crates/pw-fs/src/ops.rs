@@ -543,9 +543,8 @@ fn same_entry(a: &Path, b: &Path) -> bool {
     #[cfg(not(unix))]
     {
         // 파일 id 를 얻는 안정 API 가 없다. 이름이 대소문자만 다르면 같은 항목으로 본다(NTFS 는 기본으로 대소문자를 무시한다).
-        a != b
-            && a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
-            && fs::symlink_metadata(b).is_ok()
+        // 같은 이름도 같은 항목이다(unix 와 같다) — 아니면 `rename` 이 「이미 그 이름」 대신 「대상이 있다」 로 거절한다.
+        a.as_os_str().eq_ignore_ascii_case(b.as_os_str()) && fs::symlink_metadata(b).is_ok()
     }
 }
 
