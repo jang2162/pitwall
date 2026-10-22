@@ -20,6 +20,8 @@ const LATENCY: Duration = Duration::from_millis(300);
 /// 이벤트를 늦게 넘긴다(macOS 부하 160 에서 새 폴더 이벤트가 0.13~0.67초, 다른 시험이 함께 돌면 0.9초를 넘었다). 오면 곧바로
 /// 돌아오므로 통과하는 시험은 늦어지지 않는다.
 const ARRIVES: Duration = Duration::from_secs(10);
+/// 이만큼 이벤트가 없으면 감시가 조용해졌다고 본다([`Changes::settle`]).
+const QUIET: Duration = Duration::from_millis(500);
 
 struct Fixture {
     _tmp: tempfile::TempDir,
@@ -141,6 +143,33 @@ impl Changes {
         }
         out
     }
+
+    /// 조용해질 때까지 비우고 비운 것을 돌려준다. macOS FSEvents 는 감시를 걸기 직전에 만든 항목의 기록을, 그리고 앞선 변경의
+    /// 기록을 다음 창에 늦게 준다. 「그 뒤 아무것도 없다」 · 「몇 번 온다」 · 종류를 단언하기 전에 비운다 — 비우지 않으면 늦은 기록과
+    /// 시험이 일으킨 변경을 가를 수 없다.
+    fn settle(&mut self) -> Vec<FsChanged> {
+        let deadline = Instant::now() + ARRIVES;
+        let mut out = Vec::new();
+        while let Some((_, changed)) = self.next(QUIET) {
+            out.push(changed);
+            assert!(
+                Instant::now() < deadline,
+                "the watch did not settle: {out:?}"
+            );
+        }
+        out
+    }
+}
+
+/// 엔진이 `root` 의 `fs.changed` 를 낸 시각([`engine::PUBLISHED`]).
+fn published(root: &Path) -> Vec<Instant> {
+    engine::PUBLISHED
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(r, _)| r == root)
+        .map(|(_, at)| *at)
+        .collect()
 }
 
 fn has(changed: &FsChanged, path: &Path) -> bool {
@@ -178,6 +207,8 @@ fn external_changes_arrive_within_300ms() {
             ..Options::default()
         });
         let _lease = watch.acquire(&params(&id)).unwrap();
+        // 위에서 만든 `src/doc.md` 의 늦은 기록이 아래 「대상 경로는 한 번」 에 섞이지 않게.
+        changes.settle();
 
         let target = root.join("src/doc.md");
         let temp = root.join("src/.doc.md.tmp-1");
@@ -293,6 +324,8 @@ fn twenty_writes_10ms_apart_are_one_event_per_debounce_window() {
             ..Options::default()
         });
         let _lease = watch.acquire(&params(&id)).unwrap();
+        // 위에서 만든 `busy.txt` 의 늦은 기록이 창 하나를 더 열어 세는 수에 섞이지 않게.
+        changes.settle();
 
         // 받은 시각을 재려면 쓰는 동안에도 꺼내야 한다 — 쓰고 나서 꺼내면 쌓인 것이 한꺼번에 나와 붙어 보인다.
         let collector = std::thread::spawn(move || changes.all(Duration::from_millis(700)));
@@ -319,13 +352,7 @@ fn twenty_writes_10ms_apart_are_one_event_per_debounce_window() {
             "{strategy:?}: {} events over {writing:?} (at most {windows})",
             got.len()
         );
-        let published: Vec<Instant> = engine::PUBLISHED
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(r, _)| *r == root)
-            .map(|(_, at)| *at)
-            .collect();
+        let published = published(&root);
         assert!(published.len() >= got.len(), "{strategy:?}: {published:?}");
         for pair in published.windows(2) {
             let gap = pair[1] - pair[0];
@@ -532,6 +559,9 @@ fn changes_inside_an_ignored_folder_fold_into_that_folder() {
         ..Options::default()
     });
     let _lease = watch.acquire(&params(&id)).unwrap();
+    // 위에서 만든 `node_modules` 자체의 늦은 기록(macOS FSEvents)은 접히지 않고 그 폴더의 `created` 로 온다 — 비우지 않으면 접기가
+    // 고장 나도 그 기록이 아래 「그 폴더가 온다」 를 채운다.
+    let settled = changes.settle();
 
     for i in 0..500 {
         fs::write(lib.join(format!("m{i}.js")), "x").unwrap();
@@ -545,7 +575,7 @@ fn changes_inside_an_ignored_folder_fold_into_that_folder() {
     eprintln!("ignored folder: {} events, {paths} paths", all.len());
     assert!(all.iter().all(|c| !c.rescan), "{all:?}");
     let node_modules = root.join("node_modules");
-    for c in &all {
+    for c in settled.iter().chain(all.iter().copied()) {
         for p in &c.paths {
             assert!(
                 !Path::new(p).starts_with(&node_modules) || Path::new(p) == node_modules,
@@ -557,7 +587,16 @@ fn changes_inside_an_ignored_folder_fold_into_that_folder() {
         .iter()
         .find_map(|c| kind_of(c, &node_modules))
         .expect("the ignored folder itself");
-    assert_eq!(folded, FsChangeKind::Modified);
+    // 접은 폴더는 `modified` 로 넣지만 종류는 힌트다(설계 03 파일 감시) — macOS FSEvents 는 같은 경로의 최근 기록을 플래그로 합쳐
+    // 주어 그 폴더 자체의 기록이 `created` 로 먼저 들 수 있다. 확실한 것은 「있다」 라 macOS 에서는 `removed` 만 아니면 된다.
+    if cfg!(target_os = "macos") {
+        assert!(
+            matches!(folded, FsChangeKind::Created | FsChangeKind::Modified),
+            "{all:?}"
+        );
+    } else {
+        assert_eq!(folded, FsChangeKind::Modified);
+    }
     assert!(all.iter().any(|c| has(c, &root.join("app.js"))), "{all:?}");
 }
 
@@ -709,13 +748,20 @@ fn the_watch_is_shared_and_released_with_the_last_lease() {
     assert_eq!(watch.watched_roots(), 1);
     fs::write(root.join("a.txt"), "a").unwrap();
     let (got, _) = changes.until(&root.join("a.txt"), ARRIVES);
-    let (_, changed) = got.expect("still watched by the second lease");
-    // 한 번 쓴 것은 이벤트 하나다(엔진이 둘이면 둘이 온다).
-    let dup = changes.all(Duration::from_millis(200));
-    assert!(
-        dup.iter().all(|(_, c)| !has(c, &root.join("a.txt"))),
-        "{changed:?} then {dup:?}"
-    );
+    got.expect("still watched by the second lease");
+    // 엔진이 하나면 낸 시각이 디바운스 창 이상 떨어진다(창이 닫혀야 다음 창이 열린다). 엔진이 둘이면 같은 기록을 둘이 거의 동시에
+    // 낸다. 받은 `a.txt` 이벤트 수로 세지 않는다 — macOS FSEvents 는 같은 쓰기의 기록을 다음 창에 늦게 주기도 해 엔진 하나도
+    // 두 번 낼 수 있다. 놓기 전에 그런 늦은 기록을 비운다(아래 「놓은 뒤에는 아무것도 없다」).
+    let late = changes.settle();
+    let published = published(&root);
+    assert!(!published.is_empty());
+    for pair in published.windows(2) {
+        let gap = pair[1] - pair[0];
+        assert!(
+            gap >= engine::DEBOUNCE,
+            "two publishes {gap:?} apart: {late:?}"
+        );
+    }
 
     drop(second);
     assert_eq!(watch.watched_roots(), 0);

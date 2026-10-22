@@ -112,6 +112,26 @@ impl Conn {
             }
         }
     }
+
+    /// 감시가 조용해질 때까지(500 ms 동안 없을 때까지) `events.event` 를 비운다. 비운 것은 모두 `file` 하나의 이벤트다.
+    async fn settle(&mut self, file: &Path) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while let Ok(event) = tokio::time::timeout(
+            Duration::from_millis(500),
+            self.notification("events.event"),
+        )
+        .await
+        {
+            assert_eq!(
+                event["payload"]["paths"],
+                json!([file.display().to_string()])
+            );
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the watch did not settle"
+            );
+        }
+    }
 }
 
 fn read(path: &Path) -> Value {
@@ -355,24 +375,9 @@ async fn the_watch_reports_the_file_and_nothing_else() {
         .handle_value(json!({"jsonrpc": "2.0", "method": "stream.credit",
         "params": {"streamId": opened["streamId"], "credit": 1}}));
     conn.notification("stream.chunk").await;
-    // 감시를 걸기 직전에 만든 그 파일의 기록이 감시가 걸린 뒤에 올 수 있다(macOS FSEvents). 형제를 바꾸기 전에 조용해질 때까지
-    // 비운다 — 이 감시는 늘 그 파일의 경로만 내므로, 비우지 않으면 늦은 기록과 형제의 누출을 가를 수 없다.
-    let settle = tokio::time::Instant::now() + Duration::from_secs(10);
-    while let Ok(event) = tokio::time::timeout(
-        Duration::from_millis(500),
-        conn.notification("events.event"),
-    )
-    .await
-    {
-        assert_eq!(
-            event["payload"]["paths"],
-            json!([file.display().to_string()])
-        );
-        assert!(
-            tokio::time::Instant::now() < settle,
-            "the watch did not settle"
-        );
-    }
+    // 감시를 걸기 직전에 만든 그 파일의 기록이 감시가 걸린 뒤에 올 수 있다(macOS FSEvents). 형제를 바꾸기 전에 비운다 — 이 감시는
+    // 늘 그 파일의 경로만 내므로, 비우지 않으면 늦은 기록과 형제의 누출을 가를 수 없다.
+    conn.settle(&file).await;
 
     // 다른 파일의 변경은 내지 않는다 — 그 뒤 그 파일의 변경 하나만 온다.
     fs::write(&sibling, "changed").unwrap();
@@ -398,6 +403,8 @@ async fn the_watch_reports_the_file_and_nothing_else() {
     );
     assert_eq!(event["payload"]["kinds"], json!(["modified"]));
 
+    // 원자 저장의 늦은 기록이 연 창이 지우기 전에 닫히면 그 창이 `modified` 로 먼저 온다 — 비운 뒤에 지운다.
+    conn.settle(&file).await;
     fs::remove_file(&file).unwrap();
     let event = conn.notification("events.event").await;
     assert_eq!(event["payload"]["kinds"], json!(["removed"]));
