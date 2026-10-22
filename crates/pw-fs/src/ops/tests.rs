@@ -642,7 +642,7 @@ fn trash_judges_everything_first_and_reports_what_it_could_not_remove() {
         [
             root.join("a.txt").display().to_string(),
             root.join("dir").display().to_string(),
-            root.join("dir/b.txt").display().to_string(),
+            root.join("dir").join("b.txt").display().to_string(),
         ]
     );
     assert_eq!(done.failed.len(), 1);

@@ -47,8 +47,9 @@ impl Fixture {
         }
     }
 
+    /// `rel` 은 `/` 로 가르고, 돌려주는 경로는 OS 구분자다 — 응답의 `path` 는 정규화한 경로라 Windows 에서 `\` 로 가른다.
     fn file(&self, rel: &str, text: &str) -> PathBuf {
-        let path = self.base.join(rel);
+        let path = self.base.join(rel.split('/').collect::<PathBuf>());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, text).unwrap();
         path

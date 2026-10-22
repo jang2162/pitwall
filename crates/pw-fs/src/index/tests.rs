@@ -236,7 +236,11 @@ async fn a_file_name_match_ranks_above_a_folder_match() {
     assert_eq!(found.files[1].positions, [0, 1, 2]);
     assert_eq!(
         found.files[0].path,
-        root.join("src/pw-lib/lib.rs").display().to_string()
+        root.join("src")
+            .join("pw-lib")
+            .join("lib.rs")
+            .display()
+            .to_string()
     );
     assert_eq!(found.files[0].root, root.display().to_string());
     assert_eq!((found.matched, found.indexed), (2, 2));

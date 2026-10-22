@@ -92,7 +92,7 @@ fn search(fx: &Fixture, params: &SearchTextParams) -> (Vec<SearchFile>, Summary)
     (files, summary)
 }
 
-/// 결과가 있는 파일의 `root` 기준 경로와 줄 번호들.
+/// 결과가 있는 파일의 `root` 기준 경로(`/` 로 가른다 — 결과의 절대 경로는 OS 구분자다)와 줄 번호들.
 fn hits(fx: &Fixture, root: &Path, params: &SearchTextParams) -> Vec<(String, Vec<u64>)> {
     search(fx, params)
         .0
@@ -101,8 +101,10 @@ fn hits(fx: &Fixture, root: &Path, params: &SearchTextParams) -> Vec<(String, Ve
             let rel = Path::new(&f.path)
                 .strip_prefix(root)
                 .unwrap()
-                .display()
-                .to_string();
+                .iter()
+                .map(|c| c.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
             (rel, f.lines.iter().map(|l| l.line).collect())
         })
         .collect()

@@ -143,6 +143,8 @@ mod tests {
         use crate::config::gitdir::tests::fake_repo;
         let tmp = tempfile::tempdir().unwrap();
         let (main, wt) = fake_repo(tmp.path());
+        // 프로젝트 루트는 레지스트리에 정규화해 들어간다 — `fake_repo` 의 `canonicalize` 는 Windows 에서 verbatim 접두를 붙인다.
+        let main = normalize(&main).unwrap();
         let wt = normalize(&wt).unwrap();
         // 저장소 꼭대기가 프로젝트 루트면 워크트리 꼭대기, 하위 폴더(모노레포의 한 패키지)면 워크트리 안의 같은 폴더다.
         assert_eq!(worktree_root(&main, &wt), Ok(wt.clone()));

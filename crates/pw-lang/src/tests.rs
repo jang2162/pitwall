@@ -700,6 +700,8 @@ fn rpc_detects_a_batch_in_order_with_repo_attributes_and_project_mapping() {
     let repo_top = fs::canonicalize(repo.path()).unwrap();
     let id = fx.project(&repo_top, "web");
     let web = repo_top.join("web");
+    // 어느 OS 에서나 절대 경로인 프로젝트 밖(`/elsewhere` 는 Windows 에서 드라이브가 없어 상대 경로다).
+    let elsewhere = tempfile::tempdir().unwrap();
     let out = fx
         .lang
         .detect(&LangDetectParams {
@@ -712,7 +714,7 @@ fn rpc_detects_a_batch_in_order_with_repo_attributes_and_project_mapping() {
                 file(&web.join("vendor/lib.js"), None),
                 file(&web.join("tool"), Some("#!/usr/bin/env python3\n")),
                 // 프로젝트 밖: `.gitattributes`(PHP)를 보지 않고, 경로 규칙은 파일 이름에만 맞춘다.
-                file(Path::new("/elsewhere/vendor/a.inc"), None),
+                file(&elsewhere.path().join("vendor").join("a.inc"), None),
             ],
         })
         .unwrap()
