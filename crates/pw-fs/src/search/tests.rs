@@ -696,8 +696,10 @@ fn stopping_ends_the_search_within_100_ms() {
     }
 }
 
-/// 큰 파일 하나를 읽는 도중에 멈춰도 그 파일을 끝까지 읽지 않는다 — 멈춘 뒤의 읽기는 그때 하던 한 번뿐이다. 100 ms 는 release
-/// 빌드에서만 판정한다([`RELEASE_TIMING`]).
+/// 큰 파일 하나를 읽는 도중에 멈춰도 그 파일을 끝까지 읽지 않는다 — 멈춘 뒤의 읽기는 그때 하던 한 번뿐이다. 벽시계로는 판정하지
+/// 않는다: 멈춘 뒤 걸리는 시간은 그때 쉬던 가짜 읽기 하나의 잠이고, macOS 는 스로틀된 프로세스의 잠을 늦게 깨운다(`taskpolicy -b`
+/// 로 돌리면 5 ms 잠에도 157~223 ms). 사람이 보는 취소(`stream.end` 100 ms)는
+/// [`the_stream_sends_files_then_done_and_ends_soon_after_cancel`] 이 잰다.
 #[test]
 fn stopping_ends_a_long_file_read_too() {
     let fx = Fixture::new();
@@ -718,21 +720,17 @@ fn stopping_ends_a_long_file_read_too() {
         assert!(started.elapsed() < Duration::from_secs(20), "no reads");
         std::thread::sleep(Duration::from_millis(1));
     }
-    let stopped = Instant::now();
     stop.store(true, Ordering::Relaxed);
     let at_stop = reads.load(Ordering::Relaxed);
     let summary = worker.join().unwrap();
-    let took = stopped.elapsed();
     let after_stop = reads.load(Ordering::Relaxed) - at_stop;
     assert!(after_stop <= 1, "{after_stop} reads after the stop");
     assert_eq!(summary.searched_files, 1);
-    if RELEASE_TIMING {
-        assert!(took < Duration::from_millis(100), "took {took:?}");
-    }
 }
 
-/// RPC 로: 청크 형식, 마지막 `done`, 취소하면 `stream.end` 가 오고 검색 스레드도 남은 파일을 찾지 않고 멈춘다. 100 ms 는 release
-/// 빌드에서만 판정한다([`RELEASE_TIMING`]).
+/// RPC 로: 청크 형식, 마지막 `done`, 취소하면 `stream.end` 가 오고 검색 스레드도 남은 파일을 찾지 않고 멈춘다. `stream.end` 의
+/// 100 ms(M1-07 완료 기준)는 release 빌드에서만 판정한다([`RELEASE_TIMING`]). 검색 스레드가 끝나는 시각은 남지 않는지만 넉넉하게
+/// 본다 — 까닭은 취소하는 자리의 주석.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_stream_sends_files_then_done_and_ends_soon_after_cancel() {
     let fx = Fixture::new();
@@ -793,8 +791,13 @@ async fn the_stream_sends_files_then_done_and_ends_soon_after_cancel() {
 
     // 오래 걸리는 검색을 취소한다. 일치가 없어 검색 스레드가 보낼 것이 없다 — 받는 쪽이 사라진 것을 보내다 알 수 없으니,
     // 스트림이 끝날 때 멈추라고 알려야 멈춘다. 일치하는 `a.txt` 가 없는 폴더만 찾는다 — 취소 뒤 그것을 보내다 실패해도 멈추므로.
-    // 끝까지 찾으면 256 × 20 ms / 스레드 8개 = 0.64초 넘게 걸린다. 쉬는 읽기는 도중에 멈추지 않으므로 스레드는 그때 쉬던 읽기를
-    // 마친 뒤에 멈춘다 — 쉬는 시간이 100 ms 기준에 가까우면 그것만으로 기준을 넘는다(100 ms 로 쉬게 했을 때 macOS CI 에서 134 ms).
+    // 끝까지 찾으면 256 × 20 ms / 스레드 8개 = 0.64초 넘게 걸린다.
+    //
+    // 두 시각을 따로 잰다. 사람이 보는 것은 `stream.end` 다 — 세션이 핸들러를 버리며 곧바로 보내고 검색 스레드를 기다리지 않는다.
+    // 이것을 100 ms 로 판정한다. 검색 스레드는 그때 쉬던 읽기를 마친 뒤에 멈춘다. 쉬는 읽기는 시험이 넣은 것이고 도중에 깨지 않으므로
+    // 스레드가 끝나는 시각은 제품이 아니라 그 잠의 길이를 잰다 — macOS 는 스로틀된 프로세스의 잠을 늦게 깨운다(`taskpolicy -b` 로
+    // 돌리면 20 ms 잠이 100~118 ms 가 되고 스레드는 취소 뒤 125~130 ms 에 끝난다. macOS CI 에서 156 ms, 그때도 `stream.end` 는
+    // 100 ms 안). 그래서 스레드는 남지 않는지만 [`THREAD_ENDS_WITHIN`] 으로 본다. 멈춘 뒤에 남은 파일을 찾지 않는지는 찾은 파일 수로 본다.
     let slow = root.join("slow");
     for i in 0..256 {
         write(&slow.join(format!("f{i}.txt")), "nothing\n");
@@ -840,32 +843,40 @@ async fn the_stream_sends_files_then_done_and_ends_soon_after_cancel() {
         }
     }
     let ended = cancelled.elapsed();
-    let summary = loop {
+    let thread = loop {
         if let Some(summary) = *finished.lock().unwrap() {
-            break summary;
+            break Some((summary, cancelled.elapsed()));
         }
-        assert!(
-            cancelled.elapsed() < Duration::from_secs(20),
-            "the search thread did not end"
-        );
+        if cancelled.elapsed() >= THREAD_ENDS_WITHIN {
+            break None;
+        }
         tokio::time::sleep(Duration::from_millis(1)).await;
     };
-    let stopped = cancelled.elapsed();
+    // 실패 메시지마다 두 시각을 함께 적는다 — 어느 쪽이 늦었는지 로그만으로 가린다. 통과해도 찍는다(nextest `--success-output immediate` 로
+    // 분포를 본다).
+    let times = match thread {
+        Some((_, stopped)) => {
+            format!("stream.end {ended:?}, the search thread ended {stopped:?} after the cancel")
+        }
+        None => format!(
+            "stream.end {ended:?}, the search thread still running {THREAD_ENDS_WITHIN:?} after the cancel"
+        ),
+    };
+    println!("{times}");
+    if RELEASE_TIMING {
+        assert!(ended < Duration::from_millis(100), "{times}");
+    }
+    let Some((summary, _)) = thread else {
+        panic!("{times}");
+    };
     assert!(
         summary.searched_files < 256,
-        "the search kept running after the cancel: {summary:?}"
+        "the search kept running after the cancel: {summary:?} ({times})"
     );
-    if RELEASE_TIMING {
-        assert!(
-            ended < Duration::from_millis(100),
-            "stream.end took {ended:?}"
-        );
-        assert!(
-            stopped < Duration::from_millis(100),
-            "the search thread took {stopped:?}"
-        );
-    }
 }
+
+/// 취소 뒤 검색 스레드가 끝나야 하는 상한(누수 검사). 시험의 쉬는 읽기 하나가 늦게 깨는 만큼(위 시험의 주석)을 넉넉히 넘는다.
+const THREAD_ENDS_WITHIN: Duration = Duration::from_secs(2);
 
 /// 벤더 · 생성 판정의 비용(측정용, 기본으로 돌지 않는다). 이 저장소의 모든 파일(ignore 무시)을 한 스레드에서 판정한다 —
 /// 처음은 폴더마다 속성 파일을 읽고, 두 번째는 폴더 캐시를 쓴다.
