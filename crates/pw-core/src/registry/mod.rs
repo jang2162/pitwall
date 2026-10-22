@@ -633,6 +633,8 @@ impl Registry {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let out = f(&tx)?;
         tx.commit()?;
+        // 열린 뒤 다른 연결이 파일을 WAL 로 바꿨으면 이 쓰기가 그것을 알아챘다. 다음 쓰기부터 커밋마다 동기화하지 않는다.
+        store::match_sync_to_journal(&opened.conn);
         Ok(out)
     }
 

@@ -431,6 +431,51 @@ fn concurrent_writers_on_one_file_wait_instead_of_failing() {
     }
 }
 
+/// 열 때 WAL 로 바꾸지 못해 rollback 저널(`FULL`)로 연 레지스트리는, 그 뒤 다른 연결이 파일을 WAL 로 바꾸면 따라가면서 다음
+/// 쓰기부터 `NORMAL` 로 커밋한다 — `FULL` 로 남으면 커밋마다 동기화해 다른 프로세스의 쓰기를 굶긴다(Windows CI).
+#[test]
+fn a_registry_that_follows_another_connection_into_wal_stops_syncing_each_commit() {
+    let f = Fixture::new();
+    let file = f.paths.data.join(store::FILE_NAME);
+    drop(store::open(&file, store::BUSY_TIMEOUT));
+    let old = Connection::open(&file).unwrap();
+    old.pragma_update_and_check(None, "journal_mode", "delete", |row| {
+        row.get::<_, String>(0)
+    })
+    .unwrap();
+    // 옛 빌드가 읽는 중이라 레지스트리는 WAL 로 바꾸지 못하고 연다.
+    old.execute_batch("BEGIN; SELECT count(*) FROM projects;")
+        .unwrap();
+    let registry = Registry::with_timings(
+        f.paths.clone(),
+        None,
+        EventBus::new(DEFAULT_CAPACITY),
+        Timings {
+            busy: Duration::from_millis(50),
+            ..Timings::default()
+        },
+    );
+    let modes = |r: &Registry| {
+        r.read(|conn| {
+            let journal: String =
+                conn.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+            let sync: u32 = conn.pragma_query_value(None, "synchronous", |row| row.get(0))?;
+            Ok((journal, sync))
+        })
+        .unwrap()
+    };
+    assert_eq!(modes(&registry), ("delete".to_owned(), 2));
+    old.execute_batch("COMMIT").unwrap();
+    drop(store::open(&file, store::BUSY_TIMEOUT));
+    registry
+        .create(NewProject {
+            root: f.dir("p"),
+            ..NewProject::default()
+        })
+        .unwrap();
+    assert_eq!(modes(&registry), ("wal".to_owned(), 1));
+}
+
 /// 다른 프로세스가 파일을 통째로 잠근 상태. WAL 에서는 쓰기 트랜잭션이 읽기를 막지 않으므로 `locking_mode = EXCLUSIVE` 로 파일
 /// 잠금을 쥔다. 잠금은 연결을 닫아야 풀린다.
 fn lock_file(file: &Path) -> Connection {
