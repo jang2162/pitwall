@@ -501,25 +501,27 @@ mod tests {
             rows: 24,
         })
         .unwrap();
-        let code = tokio::time::timeout(Duration::from_secs(30), pty.exited())
+        // 끝나기를 기다리기 전에 출력을 읽는다. ConPTY 는 portable-pty 가 `PSEUDOCONSOLE_INHERIT_CURSOR` 로 열어 시작할 때 커서
+        // 위치를 묻고(`ESC[6n`) 답이 올 때까지 명령을 돌리지 않는다 — 터미널(xterm.js)이 하듯 답한다. ConPTY 는 셸이 끝나도 PTY 를
+        // 닫기 전에는 EOF 가 오지 않으므로 그 글자가 보일 때까지만 읽는다.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let mut text = Vec::new();
+        let mut answered = false;
+        while !String::from_utf8_lossy(&text).contains("pitwall-smoke") {
+            let read = tokio::time::timeout_at(deadline, pty.peek(CHUNK)).await;
+            let Ok(Some(bytes)) = read else {
+                panic!("no smoke output: {:?}", String::from_utf8_lossy(&text));
+            };
+            pty.consume(bytes.len());
+            text.extend(bytes);
+            if !answered && text.windows(4).any(|w| w == b"\x1b[6n") {
+                assert!(pty.write(b"\x1b[1;1R".to_vec()));
+                answered = true;
+            }
+        }
+        let code = tokio::time::timeout_at(deadline, pty.exited())
             .await
             .unwrap();
         assert_eq!(code, Some(0));
-        // ConPTY 는 셸이 끝나도 PTY 를 닫기 전에는 EOF 가 오지 않는다 — 출력이 멎을 때까지만 읽는다.
-        let mut text = Vec::new();
-        while let Ok(Some(bytes)) =
-            tokio::time::timeout(Duration::from_secs(2), pty.peek(CHUNK)).await
-        {
-            pty.consume(bytes.len());
-            text.extend(bytes);
-            if String::from_utf8_lossy(&text).contains("pitwall-smoke") {
-                break;
-            }
-        }
-        assert!(
-            String::from_utf8_lossy(&text).contains("pitwall-smoke"),
-            "{:?}",
-            String::from_utf8_lossy(&text)
-        );
     }
 }
