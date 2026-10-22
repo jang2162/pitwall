@@ -315,7 +315,7 @@ fn try_open(file: &Path, busy: Duration, migrations: &[Migration]) -> Result<Rea
         }
         return read_only(conn, reason);
     }
-    use_wal(&conn);
+    use_wal(&conn, busy);
     migrate(&mut conn, migrations)?;
     Ok(Ready::Writable(conn))
 }
@@ -331,12 +331,30 @@ fn try_open(file: &Path, busy: Duration, migrations: &[Migration]) -> Result<Rea
 /// 로컬).
 ///
 /// 모드는 파일 머리에 남아 한 번 바꾸면 다음부터는 그대로다 — 이 앱의 옛 빌드가 연 연결도 다음 접근에서 WAL 로 따라온다. 다른
-/// 연결이 쓰는 중이라 이번에 못 바꾸면 rollback 저널(`FULL`)로 쓰고 다음 열기에서 다시 해 본다. 열기를 실패시키지 않는다.
-fn use_wal(conn: &Connection) {
-    let mode =
-        conn.pragma_update_and_check(None, "journal_mode", "wal", |row| row.get::<_, String>(0));
-    if mode.is_ok_and(|mode| mode.eq_ignore_ascii_case("wal")) {
-        let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+/// 연결이 쓰는 중이라 `busy` 안에 못 바꾸면 rollback 저널(`FULL`)로 쓰고 다음 열기에서 다시 해 본다. 열기를 실패시키지 않는다.
+///
+/// 바꾸기가 `database is locked` 면 `busy` 안에서 다시 해 본다. 같은 새 파일을 여러 연결이 동시에 처음 열면 한 연결이 바꾸려고
+/// 배타 잠금을 기다리는 동안 다른 연결의 바꾸기는 busy handler 없이 곧바로 거절된다(읽던 연결이 잠금을 올리려다 교착을 피하는
+/// 경우). 그대로 두면 그 연결은 다른 연결이 바꾼 WAL 로 따라가면서 `synchronous` 는 `FULL` 로 남아 커밋마다 동기화하고, 동시
+/// 쓰기에서 다른 프로세스를 굶긴다. 다시 해 보면 파일은 이미 WAL 이라 곧바로 `wal` 이 돌아온다.
+fn use_wal(conn: &Connection, busy: Duration) {
+    let deadline = Instant::now() + busy;
+    loop {
+        let mode = conn
+            .pragma_update_and_check(None, "journal_mode", "wal", |row| row.get::<_, String>(0));
+        match mode {
+            Ok(mode) if mode.eq_ignore_ascii_case("wal") => {
+                let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+                return;
+            }
+            Err(e)
+                if e.sqlite_error_code() == Some(ErrorCode::DatabaseBusy)
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            _ => return,
+        }
     }
 }
 
