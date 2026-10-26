@@ -116,7 +116,7 @@ pitwall <path>[:line[:col]]
 | F5-10 | 체크아웃(로컬/원격 추적 생성), 브랜치 생성/삭제/이름변경 | P0 |
 | F5-11 | fetch / pull(merge·rebase 선택) / push (force-with-lease 확인) | P0 |
 | F5-12 | merge, rebase, cherry-pick, revert, reset(soft/mixed/hard 경고) | P0 (merge/cherry-pick) / P1 (나머지) |
-| F5-13 | **3-way 머지 충돌 해결 도구** (ours/base/theirs + 결과) | P0 |
+| F5-13 | **3-way 머지 충돌 해결 도구** (ours · 결과 · theirs 세 칸, base 는 토글로 비교 — 13-m2-plan M2-D4) | P0 |
 | F5-14 | 인터랙티브 리베이스 UI (reorder/squash/fixup/drop/reword) | P1 |
 | F5-15 | worktree 목록/생성/전환 (일반 git 기능, Orca 전용 연계는 하지 않음) | P1 |
 
@@ -238,7 +238,7 @@ file_command = ["code", "{project_root}", "-g", "{file}:{line}:{column}"]
 #### 워크트리 경로 처리 (F2-5)
 Orca는 작업마다 별도 `git worktree` 디렉터리를 만들기 때문에, 그대로 두면 Orca에서 열 때마다 "프로젝트 찾기"가 뜬다.
 - `pitwall <path>` 처리 시 경로가 등록되지 않은 git worktree면 **메인 저장소를 찾아 그 프로젝트에 연결**. 판정은 워크트리의 `.git` 파일 → gitdir 의 `commondir` 을 읽어서 하고 git 을 실행하지 않는다(`pw_core::config::gitdir`, 설정의 워크트리 폴백과 같은 파서)
-- 프로젝트 창에서 해당 워크트리를 **활성 워크트리로 전환**해 연다 (파일 트리 · git · 터미널 루트가 워크트리 기준). 상단 브랜치 팝업에 워크트리 목록 표시 (F5-15)
+- 프로젝트 창에서 해당 워크트리를 **활성 워크트리로 전환**해 연다 (파일 트리 · git · 터미널 루트가 워크트리 기준). 상단 브랜치 팝업에 워크트리 목록 표시 (F5-15 — 목록 · 전환은 M2(13-m2-plan M2-D5), 생성 · 삭제는 P1)
 - 워크트리별 상태(열린 탭 · 활성 탭 · 커서 · 스크롤 · 트리 펼침)는 프로젝트 상태(`$DATA/projects/<id>/state.json`)에 워크트리 경로 단위로 저장. 같은 프로젝트 창에 다른 워크트리의 열기 요청이 오면 탭 묶음을 그 워크트리 것으로 바꾼다(미저장이 있으면 확인, 10-ui.md §5.2 「상태 복원」)
 - 메인 저장소도 미등록이면 F2 흐름(루트 후보에 메인 저장소 추천)
 
