@@ -2,9 +2,9 @@
 //!
 //! - `git.merge` · `git.cherryPick` · `git.revert` · `git.rebase`: 결과는 [`GitHistoryResult`] — 충돌이면 `stopped` 와 진행 중 작업.
 //! - `git.reset`: soft · mixed · hard · keep. hard · keep 은 작업 트리를 바꿔 미저장 확인을 묻는다. `expected` · `expectedRef` 로
-//!   [되돌리기] 가 그사이 움직인 HEAD 나 옮겨 간 브랜치를 덮지 않게 하고, hard 는 미리보기의 `fingerprint` 로 확인한 뒤 바뀐 작업
-//!   트리를 지우지 않게 한다.
-//! - `git.resetPreview`: reset hard 가 잃을 변경(읽기 — 쓰기 잠금을 기다리지 않는다).
+//!   [되돌리기] 가 그사이 움직인 HEAD 나 옮겨 간 브랜치를 덮지 않게 하고, hard(늘) · keep(잃을 것이 있을 때)은 미리보기의
+//!   `fingerprint` 로 확인한 뒤 바뀐 작업 트리를 지우지 않게 한다.
+//! - `git.resetPreview`: reset hard · keep 이 잃을 변경(읽기 — 쓰기 잠금을 기다리지 않는다).
 
 use std::ffi::OsString;
 use std::sync::Arc;
@@ -81,8 +81,10 @@ pub struct GitResetParams {
     /// 을 넣는다(같은 커밋의 다른 브랜치로 옮겨 갔으면 그 브랜치를 되돌리지 않는다).
     #[serde(default)]
     pub expected_ref: Option<String>,
-    /// hard 에는 꼭 있어야 한다: 확인 다이얼로그에 보인 `git.resetPreview` 의 `fingerprint`. 잠금 안에서 다시 읽은 잃을 변경(HEAD
-    /// 포함)의 지문이 다르면 아무것도 하지 않고 conflict — `data` 에 새 `head` · `lost` · `fingerprint`(다시 물을 때 쓴다).
+    /// 확인 다이얼로그에 보인 `git.resetPreview`(같은 `mode`)의 `fingerprint`. hard 에는 꼭 있어야 하고, keep 은 잃을 것이 있으면
+    /// 있어야 한다(없이 부르면 conflict 로 그 목록을 받는다 — [되돌리기] 가 그때 묻는다). 잠금 안에서 다시 읽은 잃을 변경(HEAD
+    /// 포함)의 지문이 다르면 아무것도 하지 않고 conflict — `data` 에 새 `head` · `lost` · `fingerprint`(다시 물을 때 쓴다,
+    /// `fingerprint` 가 `null` 이면 확인할 수 없다).
     #[serde(default)]
     pub fingerprint: Option<String>,
 }
@@ -96,6 +98,13 @@ pub struct GitResetPreviewParams {
     #[serde(default)]
     pub worktree: Option<String>,
     pub commit: String,
+    /// `hard`(기본) 또는 `keep`(되돌리기). 그 밖이면 invalid params.
+    #[serde(default = "hard")]
+    pub mode: ResetMode,
+}
+
+fn hard() -> ResetMode {
+    ResetMode::Hard
 }
 
 #[derive(
@@ -109,8 +118,9 @@ pub struct GitResetPreview {
     /// `commit` 이 가리키는 커밋(전체 해시).
     pub target: String,
     pub lost: GitLostChanges,
-    /// 이 미리보기의 지문 — 확인한 뒤 `git.reset` hard 의 `fingerprint` 로 넘긴다.
-    pub fingerprint: String,
+    /// 이 미리보기의 지문 — 확인한 뒤 `git.reset`(같은 `mode`)의 `fingerprint` 로 넘긴다. `null` 이면 잃을 폴더(`dir/`) 아래가
+    /// 너무 많아(`lost::FINGERPRINT_ENTRIES` 개 초과) 확인할 수 없다 — 그 reset 은 할 수 없다(덜 보고 셈하지 않는다).
+    pub fingerprint: Option<String>,
 }
 
 rpc_method! {
@@ -157,8 +167,8 @@ rpc_method! {
 }
 
 rpc_method! {
-    /// HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 는 확인 뒤에 미리보기의
-    /// 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].
+    /// HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 와 잃을 것이 있는 keep 은
+    /// 확인 뒤에 미리보기의 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].
     pub GitResetMethod: "git.reset" {
         params: GitResetParams,
         result: GitResetResult,
@@ -168,7 +178,8 @@ rpc_method! {
 }
 
 rpc_method! {
-    /// reset hard 가 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 untracked 파일. gix 로 읽는다(git 을 띄우지 않는다).
+    /// reset hard · keep 이 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 추적하지 않는 것. gix 로 읽는다(git 을 띄우지
+    /// 않는다).
     pub GitResetPreviewMethod: "git.resetPreview" {
         params: GitResetPreviewParams,
         result: GitResetPreview,
@@ -344,6 +355,11 @@ pub async fn reset_preview(
     params: GitResetPreviewParams,
 ) -> Result<GitResetPreview, RpcError> {
     check_rev("commit", &params.commit)?;
+    if !matches!(params.mode, ResetMode::Hard | ResetMode::Keep) {
+        return Err(RpcError::invalid_params(
+            "a reset preview is for `hard` or `keep`",
+        ));
+    }
     let git = Arc::clone(write.git());
     let interrupt = Arc::new(AtomicBool::new(false));
     let _stop = StopOnDrop(Arc::clone(&interrupt));
@@ -351,7 +367,7 @@ pub async fn reset_preview(
         let opened = git
             .open(&params.project_id, params.worktree.as_deref())?
             .ok_or_else(|| RpcError::from(WriteError::NoRepository))?;
-        let read = lost::lost(&opened, &params.commit, Some(&interrupt))?;
+        let read = lost::lost(&opened, &params.commit, params.mode, Some(&interrupt))?;
         Ok(GitResetPreview {
             work_tree: display(&opened.target.work_tree),
             head: read.head,

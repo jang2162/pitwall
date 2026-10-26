@@ -1,6 +1,7 @@
 //! reset hard 의 잃을 변경 목록이 git 이 실제로 덮어쓰는 것을 빠뜨리지 않는다: 추적하다 ignore 로 뺀 파일, 대상에서 파일이 되는
-//! 폴더 · 폴더가 되는 파일, 중첩 저장소, macOS 의 대소문자, `submodule.recurse` 의 서브모듈 편집. 확인한 뒤 그사이 바뀌면 지문이
-//! 거절한다.
+//! 폴더 · 폴더가 되는 파일, 중첩 저장소, macOS 의 대소문자, `submodule.recurse` 의 서브모듈 편집(더 많은 사례와 퍼즈는
+//! `probes` · `fuzz`). 확인한 뒤 그사이 바뀌면(폴더째 잃는 항목의 안도) 지문이 거절한다. [되돌리기] 의 keep 도 덮을 것이 있으면
+//! 묻는다.
 
 use pw_rpc::code as rpc_code;
 
@@ -201,14 +202,17 @@ async fn changes_made_after_the_confirmation_are_not_reset_away() {
 
     // 같은 목록, 다른 내용.
     r.write("README.md", "edited much more\n");
-    let e = reset(f.write.clone(), hard(&f, &first, &preview.fingerprint))
-        .await
-        .unwrap_err();
+    let e = reset(
+        f.write.clone(),
+        hard(&f, &first, preview.fingerprint.as_deref().unwrap()),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(e.code, rpc_code::CONFLICT);
     let data = e.data.unwrap();
     assert_eq!(data["lost"]["changes"][0]["path"], "README.md");
     let fresh = data["fingerprint"].as_str().unwrap().to_owned();
-    assert_ne!(fresh, preview.fingerprint);
+    assert_ne!(Some(fresh), preview.fingerprint);
     assert_eq!(r.head(), second);
     assert_eq!(read(&f, "README.md").as_deref(), Some("edited much more\n"));
 
@@ -219,10 +223,161 @@ async fn changes_made_after_the_confirmation_are_not_reset_away() {
         .await
         .unwrap();
     r.write("a.txt", "new work\n");
-    let e = reset(f.write.clone(), hard(&f, &second, &preview.fingerprint))
-        .await
-        .unwrap_err();
+    let e = reset(
+        f.write.clone(),
+        hard(&f, &second, preview.fingerprint.as_deref().unwrap()),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(e.code, rpc_code::CONFLICT);
     assert_eq!(e.data.unwrap()["lost"]["overwritten"][0], "a.txt");
     assert_eq!(read(&f, "a.txt").as_deref(), Some("new work\n"));
+}
+
+/// [되돌리기] 의 keep: `previous` 로, HEAD 가 `current` · `refName` 일 때만.
+fn undo(f: &WriteFixture, previous: &str, fingerprint: Option<String>) -> GitResetParams {
+    GitResetParams {
+        project_id: f.project.clone(),
+        worktree: None,
+        commit: previous.to_owned(),
+        mode: ResetMode::Keep,
+        expected: Some(f.repo.head()),
+        expected_ref: Some("refs/heads/main".into()),
+        fingerprint,
+    }
+}
+
+/// 되돌릴 곳이 추적하던 파일을 지금은 ignore 로 뺐다 — keep 도 그 로컬 파일을 묻지 않고 덮으므로, 지문 없이 부르면 아무것도 하지 않고
+/// 목록과 지문을 conflict 로 돌려준다. 그 미리보기(`mode: keep`)를 확인한 지문으로 부르면 한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_undo_that_overwrites_an_ignored_file_asks_first() {
+    let f = WriteFixture::new(true);
+    let _window = window(&f);
+    let r = &f.repo;
+    r.write("secret.txt", "v1\n");
+    let previous = r.commit_all("track the secret");
+    r.git(&["rm", "-q", "--cached", "secret.txt"]);
+    r.write(".gitignore", "secret.txt\n");
+    let current = r.commit_all("ignore the secret");
+    r.write("secret.txt", "MY SECRET\n");
+
+    let e = reset(f.write.clone(), undo(&f, &previous, None))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, rpc_code::CONFLICT);
+    let data = e.data.unwrap();
+    assert_eq!(
+        data["lost"]["overwritten"],
+        serde_json::json!(["secret.txt"])
+    );
+    assert_eq!(r.head(), current);
+    assert_eq!(read(&f, "secret.txt").as_deref(), Some("MY SECRET\n"));
+
+    let mut p = preview_params(&f, &previous);
+    p.mode = ResetMode::Keep;
+    let preview = reset_preview(f.write.clone(), p).await.unwrap();
+    assert_eq!(preview.lost.overwritten, ["secret.txt"]);
+    assert_eq!(
+        preview.fingerprint.as_deref(),
+        data["fingerprint"].as_str(),
+        "the conflict carries the preview's fingerprint"
+    );
+    let done = reset(f.write.clone(), undo(&f, &previous, preview.fingerprint))
+        .await
+        .unwrap();
+    assert_eq!(r.head(), previous);
+    assert_eq!(done.lost.unwrap().overwritten, ["secret.txt"]);
+    assert_eq!(read(&f, "secret.txt").as_deref(), Some("v1\n"), "confirmed");
+}
+
+/// keep 은 index 를 되돌린다 — 디스크와 다른 스테이징 내용은 사라지므로 묻는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_undo_that_drops_staged_content_asks_first() {
+    let f = WriteFixture::new(true);
+    let _window = window(&f);
+    let r = &f.repo;
+    let previous = r.head();
+    r.commit_file("a.txt", "a\n", "a");
+    r.write("README.md", "STAGED\n");
+    r.git(&["add", "README.md"]);
+    r.write("README.md", "DISK\n");
+
+    let e = reset(f.write.clone(), undo(&f, &previous, None))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, rpc_code::CONFLICT);
+    assert_eq!(e.data.unwrap()["lost"]["changes"][0]["path"], "README.md");
+    assert_eq!(r.git(&["show", ":README.md"]), "STAGED\n", "untouched");
+}
+
+/// 폴더째 잃는 항목(`a/`)을 확인한 뒤 그 안의 파일을 고치거나 새 파일을 만들면 지문이 달라져 아무것도 하지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_inside_a_lost_folder_after_the_confirmation_is_not_reset_away() {
+    let f = WriteFixture::new(true);
+    let _window = window(&f);
+    let r = &f.repo;
+    r.write("a", "a file\n");
+    let target = r.commit_all("a is a file");
+    r.git(&["rm", "-q", "a"]);
+    r.commit_all("drop a");
+    r.write("a/sub/b.txt", "notes\n");
+
+    let preview = reset_preview(f.write.clone(), preview_params(&f, &target))
+        .await
+        .unwrap();
+    assert_eq!(preview.lost.overwritten, ["a/"]);
+    r.write("a/sub/b.txt", "notes, edited after the confirmation\n");
+    let e = reset(
+        f.write.clone(),
+        hard(&f, &target, preview.fingerprint.as_deref().unwrap()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, rpc_code::CONFLICT);
+
+    let preview = reset_preview(f.write.clone(), preview_params(&f, &target))
+        .await
+        .unwrap();
+    r.write("a/sub/new.txt", "new work\n");
+    let e = reset(
+        f.write.clone(),
+        hard(&f, &target, preview.fingerprint.as_deref().unwrap()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, rpc_code::CONFLICT);
+    assert_eq!(
+        read(&f, "a/sub/b.txt").as_deref(),
+        Some("notes, edited after the confirmation\n")
+    );
+    assert_eq!(read(&f, "a/sub/new.txt").as_deref(), Some("new work\n"));
+}
+
+/// 폴더째 잃는 항목 아래가 상한을 넘으면 지문이 없다(덜 보고 셈하지 않는다) — 그 reset hard 는 어떤 지문으로도 하지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lost_folder_too_large_to_fingerprint_cannot_be_confirmed() {
+    let f = WriteFixture::new(true);
+    let _window = window(&f);
+    let r = &f.repo;
+    r.write("a", "a file\n");
+    let target = r.commit_all("a is a file");
+    r.git(&["rm", "-q", "a"]);
+    r.commit_all("drop a");
+    let dir = r.root().join("a");
+    std::fs::create_dir_all(&dir).unwrap();
+    for n in 0..=super::super::lost::FINGERPRINT_ENTRIES {
+        std::fs::write(dir.join(n.to_string()), "").unwrap();
+    }
+
+    let preview = reset_preview(f.write.clone(), preview_params(&f, &target))
+        .await
+        .unwrap();
+    assert_eq!(preview.lost.overwritten, ["a/"]);
+    assert_eq!(preview.fingerprint, None, "too many to fingerprint");
+    let e = reset(f.write.clone(), hard(&f, &target, "anything"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, rpc_code::CONFLICT);
+    assert_eq!(e.data.unwrap()["fingerprint"], serde_json::Value::Null);
+    assert!(dir.join("0").exists());
 }

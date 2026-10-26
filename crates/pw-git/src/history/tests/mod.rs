@@ -4,11 +4,17 @@
 mod input;
 
 #[cfg(unix)]
+mod differ;
+#[cfg(unix)]
+mod fuzz;
+#[cfg(unix)]
 mod lost;
 #[cfg(unix)]
 mod merge;
 #[cfg(unix)]
 mod pick;
+#[cfg(unix)]
+mod probes;
 #[cfg(unix)]
 mod rebase;
 #[cfg(unix)]

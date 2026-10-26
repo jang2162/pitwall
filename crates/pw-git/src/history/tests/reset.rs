@@ -44,7 +44,7 @@ pub(super) async fn confirmed_hard(
         .await
         .unwrap();
     let mut p = params(f, commit, ResetMode::Hard, preview.head.as_deref());
-    p.fingerprint = Some(preview.fingerprint.clone());
+    p.fingerprint.clone_from(&preview.fingerprint);
     let done = reset(f.write.clone(), p).await;
     (preview, done)
 }
@@ -54,6 +54,7 @@ pub(super) fn preview_params(f: &WriteFixture, commit: &str) -> GitResetPreviewP
         project_id: f.project.clone(),
         worktree: None,
         commit: commit.to_owned(),
+        mode: ResetMode::Hard,
     }
 }
 
@@ -146,7 +147,7 @@ async fn undoing_a_hard_reset_with_its_previous_hash_brings_head_back() {
     assert_eq!(f.repo.head(), second);
     assert_eq!(read(&f, "a.txt").as_deref(), Some("a\n"));
     assert_eq!(undone.moved.unwrap().previous, Some(first));
-    assert_eq!(undone.lost, None, "keep loses nothing");
+    assert!(undone.lost.unwrap().is_empty(), "keep loses nothing");
 }
 
 /// 지문 없는 hard 는 확인을 건너뛴 것이다 — 아무것도 하지 않고 invalid params.
@@ -217,7 +218,7 @@ async fn the_preview_lists_what_a_hard_reset_actually_loses() {
     assert_eq!(preview.lost.overwritten, ["old.txt"]);
 
     let mut confirmed = params(&f, &c1, ResetMode::Hard, preview.head.as_deref());
-    confirmed.fingerprint = Some(preview.fingerprint.clone());
+    confirmed.fingerprint.clone_from(&preview.fingerprint);
     let done = reset(f.write.clone(), confirmed).await.unwrap();
     assert_eq!(done.lost, Some(preview.lost));
     assert_eq!(read(&f, "old.txt").as_deref(), Some("old\n"), "overwritten");
@@ -242,7 +243,7 @@ async fn a_head_that_moved_since_the_confirmation_is_not_reset() {
         .unwrap();
     let moved_on = f.repo.commit_file("b.txt", "b\n", "b");
     let mut confirmed = params(&f, &first, ResetMode::Hard, Some(&seen));
-    confirmed.fingerprint = Some(preview.fingerprint);
+    confirmed.fingerprint = preview.fingerprint;
     let e = reset(f.write.clone(), confirmed).await.unwrap_err();
     assert_eq!(e.code, rpc_code::CONFLICT);
     assert_eq!(e.data.unwrap()["head"], moved_on.as_str());

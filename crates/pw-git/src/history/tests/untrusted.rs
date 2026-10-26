@@ -6,7 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use super::super::methods::{GitMergeParams, GitResetPreviewParams, merge, reset_preview};
-use super::super::{FastForward, HistoryOutcome};
+use super::super::{FastForward, HistoryOutcome, ResetMode};
 use super::window;
 use crate::testing::TestRepo;
 use crate::testing::write::WriteFixture;
@@ -75,6 +75,7 @@ async fn the_reset_preview_of_an_untrusted_repository_runs_none_of_its_programs(
             project_id: f.project.clone(),
             worktree: None,
             commit: "HEAD".into(),
+            mode: ResetMode::Hard,
         },
     )
     .await
@@ -173,6 +174,7 @@ fn a_global_filter_driver_runs_in_the_reset_preview_only_when_trusted() {
                     project_id: f.project.clone(),
                     worktree: None,
                     commit: "HEAD".into(),
+                    mode: ResetMode::Hard,
                 },
             )
         };

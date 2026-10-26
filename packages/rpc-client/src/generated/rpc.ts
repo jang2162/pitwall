@@ -140,12 +140,13 @@ export type UnaryMethods = {
 	 */
 	"git.repo": { params: GitRepoParams; result: GitRepo };
 	/**
-	 * HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 는 확인 뒤에 미리보기의
-	 * 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].
+	 * HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 와 잃을 것이 있는 keep 은
+	 * 확인 뒤에 미리보기의 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].
 	 */
 	"git.reset": { params: GitResetParams; result: GitResetResult };
 	/**
-	 * reset hard 가 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 untracked 파일. gix 로 읽는다(git 을 띄우지 않는다).
+	 * reset hard · keep 이 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 추적하지 않는 것. gix 로 읽는다(git 을 띄우지
+	 * 않는다).
 	 */
 	"git.resetPreview": { params: GitResetPreviewParams; result: GitResetPreview };
 	/**
@@ -431,8 +432,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.rebase": {"name":"git.rebase","kind":"unary","tier":"write","roles":["owner"],"params":"GitRebaseParams","output":"GitHistoryResult","doc":" 비대화형 rebase(`git rebase <upstream> [<branch>]`). 충돌이면 `outcome: stopped` 와 진행 중 작업, 끝나면 `moved` 가 그 브랜치의\n 이전 끝.\n","mcp":false,"fileScope":false},
 	"git.refs": {"name":"git.refs","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRefs","doc":" 로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.\n","mcp":false,"fileScope":false},
 	"git.repo": {"name":"git.repo","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRepo","doc":" 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false,"fileScope":false},
-	"git.reset": {"name":"git.reset","kind":"unary","tier":"write","roles":["owner"],"params":"GitResetParams","output":"GitResetResult","doc":" HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 는 확인 뒤에 미리보기의\n 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].\n","mcp":false,"fileScope":false},
-	"git.resetPreview": {"name":"git.resetPreview","kind":"unary","tier":"read","roles":["owner"],"params":"GitResetPreviewParams","output":"GitResetPreview","doc":" reset hard 가 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 untracked 파일. gix 로 읽는다(git 을 띄우지 않는다).\n","mcp":false,"fileScope":false},
+	"git.reset": {"name":"git.reset","kind":"unary","tier":"write","roles":["owner"],"params":"GitResetParams","output":"GitResetResult","doc":" HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 와 잃을 것이 있는 keep 은\n 확인 뒤에 미리보기의 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].\n","mcp":false,"fileScope":false},
+	"git.resetPreview": {"name":"git.resetPreview","kind":"unary","tier":"read","roles":["owner"],"params":"GitResetPreviewParams","output":"GitResetPreview","doc":" reset hard · keep 이 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 추적하지 않는 것. gix 로 읽는다(git 을 띄우지\n 않는다).\n","mcp":false,"fileScope":false},
 	"git.revert": {"name":"git.revert","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 되돌리는 역 커밋을 만든다(`git revert --no-edit`). 충돌이면 `outcome: stopped`.\n","mcp":false,"fileScope":false},
 	"git.show": {"name":"git.show","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitShow","doc":" 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).\n","mcp":false,"fileScope":false},
 	"git.status": {"name":"git.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusParams","output":"GitStatus","doc":" 작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업\n 트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로\n 돌고, 작업을 취소하면 cancelled 오류다.\n","mcp":false,"fileScope":false},
@@ -1370,7 +1371,7 @@ export type GitHistoryResult = {
 };
 
 export type GitLostChanges = {
-	/**  사라지는 변경(`git.status` 의 항목 그대로 — untracked 는 빠진다). 경로순. */
+	/**  사라지는 변경(`git.status` 의 항목 꼴 — untracked 는 빠진다). 경로순. */
 	changes: GitStatusEntry[],
 	/**
 	 *  덮어써지거나 지워지는 추적하지 않는 것(작업 트리 기준 상대 경로, `/`, 디스크의 실제 이름). 추적하지 않는 것이 든 폴더가 통째로
@@ -1538,8 +1539,10 @@ export type GitResetParams = {
 	 */
 	expectedRef?: string | null,
 	/**
-	 *  hard 에는 꼭 있어야 한다: 확인 다이얼로그에 보인 `git.resetPreview` 의 `fingerprint`. 잠금 안에서 다시 읽은 잃을 변경(HEAD
-	 *  포함)의 지문이 다르면 아무것도 하지 않고 conflict — `data` 에 새 `head` · `lost` · `fingerprint`(다시 물을 때 쓴다).
+	 *  확인 다이얼로그에 보인 `git.resetPreview`(같은 `mode`)의 `fingerprint`. hard 에는 꼭 있어야 하고, keep 은 잃을 것이 있으면
+	 *  있어야 한다(없이 부르면 conflict 로 그 목록을 받는다 — [되돌리기] 가 그때 묻는다). 잠금 안에서 다시 읽은 잃을 변경(HEAD
+	 *  포함)의 지문이 다르면 아무것도 하지 않고 conflict — `data` 에 새 `head` · `lost` · `fingerprint`(다시 물을 때 쓴다,
+	 *  `fingerprint` 가 `null` 이면 확인할 수 없다).
 	 */
 	fingerprint?: string | null,
 };
@@ -1551,14 +1554,19 @@ export type GitResetPreview = {
 	/**  `commit` 이 가리키는 커밋(전체 해시). */
 	target: string,
 	lost: GitLostChanges,
-	/**  이 미리보기의 지문 — 확인한 뒤 `git.reset` hard 의 `fingerprint` 로 넘긴다. */
-	fingerprint: string,
+	/**
+	 *  이 미리보기의 지문 — 확인한 뒤 `git.reset`(같은 `mode`)의 `fingerprint` 로 넘긴다. `null` 이면 잃을 폴더(`dir/`) 아래가
+	 *  너무 많아(`lost::FINGERPRINT_ENTRIES` 개 초과) 확인할 수 없다 — 그 reset 은 할 수 없다(덜 보고 셈하지 않는다).
+	 */
+	fingerprint: string | null,
 };
 
 export type GitResetPreviewParams = {
 	projectId: string,
 	worktree?: string | null,
 	commit: string,
+	/**  `hard`(기본) 또는 `keep`(되돌리기). 그 밖이면 invalid params. */
+	mode?: ResetMode,
 };
 
 /**  `git.reset` 의 결과. */
@@ -1568,7 +1576,7 @@ export type GitResetResult = {
 	head: string | null,
 	/**  움직인 ref. 그대로였거나 전이 없었으면(태어나지 않은 브랜치) `null`. */
 	moved: GitRefMove | null,
-	/**  hard 일 때 잃은 변경(잠금 안에서 reset 바로 전에 읽은 것). soft · mixed 면 `null`. */
+	/**  hard · keep 일 때 잃은 변경(잠금 안에서 reset 바로 전에 읽은 것). soft · mixed 면 `null`. */
 	lost: GitLostChanges | null,
 };
 
@@ -2171,7 +2179,7 @@ export type ResetMode =
 "hard" | 
 /**
  *  ref · index · 작업 트리를 옮기되 로컬 변경은 지킨다(`--keep`) — 옮길 파일에 로컬 변경이 있으면 git 이 거절한다. [되돌리기] 가
- *  쓴다.
+ *  쓴다. git 이 묻지 않고 덮는 것(ignore 된 파일, 디스크와 다른 스테이징 내용)이 있으면 hard 처럼 `fingerprint` 가 있어야 한다.
  */
 "keep";
 
