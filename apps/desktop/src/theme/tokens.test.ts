@@ -23,6 +23,30 @@ import {
 
 const defaultTheme = parseTheme(defaultThemeFile);
 
+/** WCAG 2 의 대비(1 ~ 21). 불투명 `#rrggbb` 만 받는다 — 다른 꼴이면 조용히 통과하지 않게 던진다. */
+function contrast(a: string, b: string): number {
+  const luminance = (hex: string) => {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+    if (!m) throw new Error(`not an opaque #rrggbb color: ${hex}`);
+    const [r, g, b] = m.slice(1).map((c) => {
+      const v = parseInt(c, 16) / 255;
+      return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+    }) as [number, number, number];
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** 트리 · 탭의 git 글자(이름과 표지)가 놓이는 배경: 트리의 보통 · 호버 · 선택 행, 활성 · 비활성 탭. */
+const GIT_TEXT_BACKGROUNDS = [
+  "ui.panelBackground",
+  "ui.hoverBackground",
+  "ui.activeBackground",
+  "tab.activeBackground",
+  "tab.inactiveBackground",
+] as const;
+
 describe("tokenCssVar", () => {
   it("turns a dotted token name into a --pw- custom property", () => {
     expect(tokenCssVar("ui.background")).toBe("--pw-ui-background");
@@ -99,6 +123,28 @@ describe("git · graph · diff tokens (M2-12)", () => {
       const lanes = GRAPH_TOKENS.filter((t) => t !== "graph.node").map((t) => values[t]);
       expect(new Set(lanes).size).toBe(GRAPH_LANES);
     }
+  });
+
+  it("keep every git status at body-text contrast (4.5:1) on the tree and tab backgrounds, ignored no lower than the muted color it replaced", () => {
+    expect(contrast("#000000", "#ffffff")).toBeCloseTo(21);
+    expect(contrast("#777777", "#777777")).toBe(1);
+    const short: string[] = [];
+    for (const appearance of ["light", "dark"] as const) {
+      const values = defaultTheme.variants[appearance]!;
+      for (const background of GIT_TEXT_BACKGROUNDS)
+        for (const token of GIT_STATUS_TOKENS) {
+          const floor =
+            token === "git.ignored"
+              ? Math.max(4.5, contrast(values["ui.mutedForeground"], values[background]))
+              : 4.5;
+          const ratio = contrast(values[token], values[background]);
+          if (ratio < floor)
+            short.push(
+              `${appearance} ${token} on ${background}: ${ratio.toFixed(2)} < ${floor.toFixed(2)}`,
+            );
+        }
+    }
+    expect(short).toEqual([]);
   });
 
   it("cycle graph lanes through graph.lane.1..GRAPH_LANES", () => {
