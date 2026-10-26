@@ -59,6 +59,49 @@ void syntaxTokensComplete;
 /** 구문 토큰의 테마 토큰 이름. */
 export const syntaxTokenName = (token: SyntaxToken): `syntax.${SyntaxToken}` => `syntax.${token}`;
 
+/** git 상태 색(M2-12). 파일 트리 · 에디터 탭의 글자 색이고, 클래스는 `text-git-<상태>`(styles.css). */
+export const GIT_STATUS_TOKENS = [
+  "git.added",
+  "git.modified",
+  "git.deleted",
+  "git.renamed",
+  "git.untracked",
+  "git.ignored",
+  "git.conflicted",
+] as const;
+
+/** 커밋 그래프의 레인 색 수. 레인 번호가 이보다 크면 돌아 쓴다(`graphLaneToken`). 레인 수의 상한은 M2-03 이 따로 둔다. */
+export const GRAPH_LANES = 8;
+
+/** 레인(0부터)의 색 토큰. `graph.lane.1` ~ `graph.lane.<GRAPH_LANES>` 를 돈다. */
+export const graphLaneToken = (lane: number): GraphLaneToken =>
+  `graph.lane.${(((lane % GRAPH_LANES) + GRAPH_LANES) % GRAPH_LANES) + 1}` as GraphLaneToken;
+
+export type GraphLaneToken = Exclude<(typeof GRAPH_TOKENS)[number], "graph.node">;
+
+/** 커밋 그래프(M2-14 의 canvas 렌더러가 구독한다). `graph.node` 는 커밋 점의 테두리 — 점을 지나는 레인 선과 떼어 보이게 한다. */
+export const GRAPH_TOKENS = [
+  "graph.lane.1",
+  "graph.lane.2",
+  "graph.lane.3",
+  "graph.lane.4",
+  "graph.lane.5",
+  "graph.lane.6",
+  "graph.lane.7",
+  "graph.lane.8",
+  "graph.node",
+] as const;
+
+/** diff 의 배경(M2-15 · M2-17 · M2-19). `line` 은 줄 전체, `char` 는 그 줄 안에서 바뀐 글자. */
+export const DIFF_TOKENS = [
+  "diff.line.added",
+  "diff.line.deleted",
+  "diff.line.changed",
+  "diff.char.added",
+  "diff.char.deleted",
+  "diff.char.changed",
+] as const;
+
 /** 화면이 읽는 토큰. 테마 파일의 변형(light·dark)은 있으면 이것을 전부 정의해야 한다. */
 export const TOKENS = [
   "ui.background",
@@ -102,6 +145,9 @@ export const TOKENS = [
   "terminal.ansi.brightWhite",
   // 구문 색(M1-17). 에디터의 강조가 CSS 변수로 읽는다(src/editor/extensions/highlight.ts).
   ...SYNTAX_TOKENS.map(syntaxTokenName),
+  ...GIT_STATUS_TOKENS,
+  ...GRAPH_TOKENS,
+  ...DIFF_TOKENS,
 ] as const;
 
 export type TokenName = (typeof TOKENS)[number];

@@ -8,7 +8,18 @@ import { describe, expect, it } from "vitest";
 
 import { documentThemeApplier } from "./adapters";
 import defaultThemeFile from "../../../../extensions/theme-default/themes/default.json";
-import { parseTheme, resolveAppearance, themeAppearances, tokenCssVar, TOKENS } from "./tokens";
+import {
+  DIFF_TOKENS,
+  GIT_STATUS_TOKENS,
+  GRAPH_LANES,
+  GRAPH_TOKENS,
+  graphLaneToken,
+  parseTheme,
+  resolveAppearance,
+  themeAppearances,
+  tokenCssVar,
+  TOKENS,
+} from "./tokens";
 
 const defaultTheme = parseTheme(defaultThemeFile);
 
@@ -69,6 +80,42 @@ describe("parseTheme", () => {
   });
 });
 
+describe("git · graph · diff tokens (M2-12)", () => {
+  const added = [...GIT_STATUS_TOKENS, ...GRAPH_TOKENS, ...DIFF_TOKENS];
+
+  it("are tokens the app knows, and the default theme defines each in both variants", () => {
+    expect(added.filter((token) => !(TOKENS as readonly string[]).includes(token))).toEqual([]);
+    for (const appearance of ["light", "dark"] as const) {
+      const file: Record<string, unknown> = defaultThemeFile.variants[appearance];
+      expect(added.filter((token) => typeof file[token] !== "string")).toEqual([]);
+    }
+  });
+
+  it("give every git status and every graph lane its own color in each variant", () => {
+    for (const appearance of ["light", "dark"] as const) {
+      const values = defaultTheme.variants[appearance]!;
+      const git = GIT_STATUS_TOKENS.map((t) => values[t].toLowerCase());
+      expect(new Set(git).size).toBe(GIT_STATUS_TOKENS.length);
+      const lanes = GRAPH_TOKENS.filter((t) => t !== "graph.node").map((t) => values[t]);
+      expect(new Set(lanes).size).toBe(GRAPH_LANES);
+    }
+  });
+
+  it("cycle graph lanes through graph.lane.1..GRAPH_LANES", () => {
+    expect(GRAPH_TOKENS.filter((t) => t.startsWith("graph.lane."))).toHaveLength(GRAPH_LANES);
+    expect(graphLaneToken(0)).toBe("graph.lane.1");
+    expect(graphLaneToken(GRAPH_LANES - 1)).toBe(`graph.lane.${GRAPH_LANES}`);
+    expect(graphLaneToken(GRAPH_LANES)).toBe("graph.lane.1");
+    expect(graphLaneToken(63)).toBe(`graph.lane.${(63 % GRAPH_LANES) + 1}`);
+  });
+
+  it("turn into CSS variables the screens read", () => {
+    expect(tokenCssVar("git.conflicted")).toBe("--pw-git-conflicted");
+    expect(tokenCssVar("graph.lane.8")).toBe("--pw-graph-lane-8");
+    expect(tokenCssVar("diff.char.added")).toBe("--pw-diff-char-added");
+  });
+});
+
 describe("resolveAppearance", () => {
   it("keeps the wanted appearance when the theme has it, otherwise uses the theme's only variant", () => {
     const darkOnly = parseTheme({
@@ -124,5 +171,12 @@ describe("styles.css", () => {
     const defined = new Set(TOKENS.map(tokenCssVar));
     expect(used.size).toBeGreaterThan(0);
     expect([...used].filter((name) => !defined.has(name!))).toEqual([]);
+  });
+
+  it("maps every git status token to a Tailwind color (`text-git-<status>`)", () => {
+    for (const token of GIT_STATUS_TOKENS) {
+      const status = token.slice("git.".length);
+      expect(styles).toContain(`--color-git-${status}: var(${tokenCssVar(token)});`);
+    }
   });
 });

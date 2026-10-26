@@ -24,6 +24,13 @@
   --color-ui-accent-foreground: var(--pw-ui-accentForeground);
   --color-editor-background: var(--pw-editor-background);
   --color-editor-foreground: var(--pw-editor-foreground);
+  --color-git-added: var(--pw-git-added);
+  --color-git-modified: var(--pw-git-modified);
+  --color-git-deleted: var(--pw-git-deleted);
+  --color-git-renamed: var(--pw-git-renamed);
+  --color-git-untracked: var(--pw-git-untracked);
+  --color-git-ignored: var(--pw-git-ignored);
+  --color-git-conflicted: var(--pw-git-conflicted);
 }
 
 html,
