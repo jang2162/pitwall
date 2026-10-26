@@ -40,7 +40,7 @@ async fn a_fast_forward_moves_the_branch_without_a_new_commit() {
         done.moved,
         Some(GitRefMove {
             ref_name: "refs/heads/main".into(),
-            previous: main,
+            previous: Some(main),
             current: Some(feature),
         })
     );
@@ -62,7 +62,7 @@ async fn a_diverged_merge_makes_a_merge_commit_with_both_parents() {
     let head = f.repo.head();
     assert_eq!(done.head.as_deref(), Some(head.as_str()));
     assert_eq!(parents(&f, "HEAD"), [main.clone(), feature]);
-    assert_eq!(done.moved.unwrap().previous, main);
+    assert_eq!(done.moved.unwrap().previous, Some(main));
     assert_eq!(f.write.operation(&f.project, None).await, Ok(None));
 }
 

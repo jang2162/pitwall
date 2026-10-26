@@ -45,6 +45,9 @@ pub struct GitOperationResult {
     pub operation: Option<OperationInfo>,
     /// git 이 다음 단계에서 다시 멈췄다(충돌) — 실패가 아니라 다음 충돌을 풀 차례다.
     pub stopped: bool,
+    /// 계속 · 건너뛰기로 merge · rebase · cherry-pick · revert 가 끝나 ref 가 움직였으면, 작업이 시작한 곳부터의 기록(M2-10 의
+    /// [되돌리기], [`crate::history::start`]). 아직 진행 중이거나 중단했거나 바뀐 것이 없으면 `null`.
+    pub moved: Option<crate::history::GitRefMove>,
 }
 
 #[derive(

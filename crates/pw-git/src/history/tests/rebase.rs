@@ -43,7 +43,7 @@ async fn a_rebase_rewrites_the_branch_onto_upstream_and_reports_its_old_tip() {
         done.moved,
         Some(GitRefMove {
             ref_name: "refs/heads/other".into(),
-            previous: other,
+            previous: Some(other),
             current: Some(head),
         })
     );
@@ -66,7 +66,7 @@ async fn a_named_branch_is_checked_out_and_rebased() {
     assert_eq!(parents(&f, "other"), [main]);
     let moved = done.moved.unwrap();
     assert_eq!(moved.ref_name, "refs/heads/other");
-    assert_eq!(moved.previous, other);
+    assert_eq!(moved.previous, Some(other));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -91,6 +91,7 @@ async fn a_conflict_stops_with_the_rebase_in_progress_and_abort_restores_the_bra
         .await
         .unwrap();
     assert_eq!(aborted.operation, None);
+    assert_eq!(aborted.moved, None, "abort is the undo");
     assert_eq!(f.repo.head(), tip);
     assert_eq!(
         f.repo.git(&["symbolic-ref", "--short", "HEAD"]).trim(),

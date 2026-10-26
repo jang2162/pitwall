@@ -44,7 +44,7 @@ async fn when_the_second_of_two_picks_conflicts_the_first_is_committed_and_conti
     assert_eq!(operation.heads, std::slice::from_ref(&c2));
     assert_eq!(operation.remaining, Some(0), "c2 is the last");
     assert_eq!(subject(&f, "HEAD"), "c1", "the first pick is committed");
-    assert_eq!(parents(&f, "HEAD"), [before]);
+    assert_eq!(parents(&f, "HEAD"), std::slice::from_ref(&before));
     assert_eq!(
         fs::read_to_string(f.repo.root().join("g.txt")).unwrap(),
         "g\n"
@@ -60,6 +60,15 @@ async fn when_the_second_of_two_picks_conflicts_the_first_is_committed_and_conti
     assert_eq!(done.operation, None);
     assert_eq!(subject(&f, "HEAD"), "c2");
     assert_eq!(subject(&f, "HEAD~1"), "c1");
+    // 시작점은 `sequencer/head` — 첫 pick 전의 HEAD(cherry-pick 은 `ORIG_HEAD` 를 남기지 않는다).
+    assert_eq!(
+        done.moved,
+        Some(GitRefMove {
+            ref_name: "refs/heads/main".into(),
+            previous: Some(before.clone()),
+            current: Some(f.repo.head()),
+        })
+    );
     assert_eq!(
         fs::read_to_string(f.repo.root().join("f.txt")).unwrap(),
         "resolved\n"
@@ -88,7 +97,7 @@ async fn picks_without_conflicts_commit_in_the_given_order() {
         done.moved,
         Some(GitRefMove {
             ref_name: "refs/heads/main".into(),
-            previous: before,
+            previous: Some(before),
             current: Some(head),
         })
     );
@@ -115,7 +124,7 @@ async fn revert_makes_the_inverse_commit() {
         "the tree is the one before the reverted commit"
     );
     assert!(subject(&f, "HEAD").starts_with("Revert \"two\""));
-    assert_eq!(done.moved.unwrap().previous, two);
+    assert_eq!(done.moved.unwrap().previous, Some(two));
     assert!(
         f.repo.git(&["status", "--porcelain"]).is_empty(),
         "committed, nothing left in the work tree"

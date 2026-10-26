@@ -5,10 +5,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use super::super::methods::{
-    GitMergeParams, GitResetParams, GitResetPreviewParams, merge, reset, reset_preview,
-};
-use super::super::{FastForward, HistoryOutcome, ResetMode};
+use super::super::methods::{GitMergeParams, GitResetPreviewParams, merge, reset_preview};
+use super::super::{FastForward, HistoryOutcome};
 use super::window;
 use crate::testing::TestRepo;
 use crate::testing::write::WriteFixture;
@@ -107,18 +105,9 @@ async fn the_reset_preview_of_an_untrusted_repository_runs_none_of_its_programs(
     .await;
     // README.md 를 고친 채라도 feature 는 그 파일을 건드리지 않아 git 이 merge 한다.
     assert_eq!(merged.unwrap().outcome, HistoryOutcome::FastForward);
-    let done = reset(
-        f.write.clone(),
-        GitResetParams {
-            project_id: f.project.clone(),
-            worktree: None,
-            commit: first.clone(),
-            mode: ResetMode::Hard,
-            expected: None,
-        },
-    )
-    .await
-    .unwrap();
+    let (preview, done) = super::reset::confirmed_hard(&f, &first).await;
+    let done = done.unwrap();
+    assert_eq!(done.lost.as_ref(), Some(&preview.lost));
     assert_eq!(f.repo.head(), first);
     assert_eq!(done.lost.unwrap().changes.len(), 1);
 }

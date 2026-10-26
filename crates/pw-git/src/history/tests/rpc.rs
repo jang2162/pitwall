@@ -62,6 +62,18 @@ async fn the_history_methods_speak_camel_case_over_rpc() {
         preview["result"]["lost"],
         json!({"changes": [], "overwritten": []})
     );
+    assert!(preview["result"]["fingerprint"].is_string(), "{preview}");
+    let unconfirmed = window
+        .call(
+            "git.reset",
+            json!({"projectId": f.project, "commit": first, "mode": "hard"}),
+        )
+        .await;
+    assert_eq!(
+        unconfirmed["error"]["code"],
+        rpc_code::INVALID_PARAMS,
+        "{unconfirmed}"
+    );
 
     let refused = window
         .call(

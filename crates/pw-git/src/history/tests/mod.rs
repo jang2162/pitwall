@@ -4,6 +4,8 @@
 mod input;
 
 #[cfg(unix)]
+mod lost;
+#[cfg(unix)]
 mod merge;
 #[cfg(unix)]
 mod pick;
@@ -13,6 +15,8 @@ mod rebase;
 mod reset;
 #[cfg(unix)]
 mod rpc;
+#[cfg(unix)]
+mod undo;
 #[cfg(unix)]
 mod untrusted;
 

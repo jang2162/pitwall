@@ -140,8 +140,8 @@ export type UnaryMethods = {
 	 */
 	"git.repo": { params: GitRepoParams; result: GitRepo };
 	/**
-	 * HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard`). hard 는 확인 뒤에 부른다(결정 M2-D6 ① — 잃을 변경은
-	 * `git.resetPreview`). 결과의 `moved` 로 [되돌리기].
+	 * HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 는 확인 뒤에 미리보기의
+	 * 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].
 	 */
 	"git.reset": { params: GitResetParams; result: GitResetResult };
 	/**
@@ -431,7 +431,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.rebase": {"name":"git.rebase","kind":"unary","tier":"write","roles":["owner"],"params":"GitRebaseParams","output":"GitHistoryResult","doc":" 비대화형 rebase(`git rebase <upstream> [<branch>]`). 충돌이면 `outcome: stopped` 와 진행 중 작업, 끝나면 `moved` 가 그 브랜치의\n 이전 끝.\n","mcp":false,"fileScope":false},
 	"git.refs": {"name":"git.refs","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRefs","doc":" 로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.\n","mcp":false,"fileScope":false},
 	"git.repo": {"name":"git.repo","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRepo","doc":" 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false,"fileScope":false},
-	"git.reset": {"name":"git.reset","kind":"unary","tier":"write","roles":["owner"],"params":"GitResetParams","output":"GitResetResult","doc":" HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard`). hard 는 확인 뒤에 부른다(결정 M2-D6 ① — 잃을 변경은\n `git.resetPreview`). 결과의 `moved` 로 [되돌리기].\n","mcp":false,"fileScope":false},
+	"git.reset": {"name":"git.reset","kind":"unary","tier":"write","roles":["owner"],"params":"GitResetParams","output":"GitResetResult","doc":" HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 는 확인 뒤에 미리보기의\n 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].\n","mcp":false,"fileScope":false},
 	"git.resetPreview": {"name":"git.resetPreview","kind":"unary","tier":"read","roles":["owner"],"params":"GitResetPreviewParams","output":"GitResetPreview","doc":" reset hard 가 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 untracked 파일. gix 로 읽는다(git 을 띄우지 않는다).\n","mcp":false,"fileScope":false},
 	"git.revert": {"name":"git.revert","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 되돌리는 역 커밋을 만든다(`git revert --no-edit`). 충돌이면 `outcome: stopped`.\n","mcp":false,"fileScope":false},
 	"git.show": {"name":"git.show","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitShow","doc":" 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).\n","mcp":false,"fileScope":false},
@@ -1372,7 +1372,10 @@ export type GitHistoryResult = {
 export type GitLostChanges = {
 	/**  사라지는 변경(`git.status` 의 항목 그대로 — untracked 는 빠진다). 경로순. */
 	changes: GitStatusEntry[],
-	/**  덮어써지는 untracked 파일(작업 트리 기준 상대 경로, `/`). 경로순. */
+	/**
+	 *  덮어써지거나 지워지는 추적하지 않는 것(작업 트리 기준 상대 경로, `/`, 디스크의 실제 이름). 추적하지 않는 것이 든 폴더가 통째로
+	 *  파일로 바뀌면 `dir/`. 경로순.
+	 */
 	overwritten: string[],
 };
 
@@ -1401,6 +1404,11 @@ export type GitOperationResult = {
 	operation: OperationInfo | null,
 	/**  git 이 다음 단계에서 다시 멈췄다(충돌) — 실패가 아니라 다음 충돌을 풀 차례다. */
 	stopped: boolean,
+	/**
+	 *  계속 · 건너뛰기로 merge · rebase · cherry-pick · revert 가 끝나 ref 가 움직였으면, 작업이 시작한 곳부터의 기록(M2-10 의
+	 *  [되돌리기], [`crate::history::start`]). 아직 진행 중이거나 중단했거나 바뀐 것이 없으면 `null`.
+	 */
+	moved: GitRefMove | null,
 };
 
 export type GitPrompt = {
@@ -1460,13 +1468,16 @@ export type GitRebaseParams = {
 
 /**
  *  ref 하나를 움직인 기록(결정 M2-D6 ③). 창은 이것으로 알림에 이전 해시와 [되돌리기] 를 단다. reset · rebase · merge ·
- *  cherry-pick · revert(이 모듈)와 브랜치 삭제(M2-09)가 같은 꼴로 싣는다.
+ *  cherry-pick · revert(이 모듈), 브랜치 만들기 · 지우기(M2-09), amend(M2-08)가 같은 꼴로 싣는다. `null` 은 「그때 없었다」 다.
  */
 export type GitRefMove = {
 	/**  움직인 ref 의 전체 이름(`refs/heads/main`). 분리된 HEAD 를 움직였으면 `HEAD`. */
 	refName: string,
-	/**  움직이기 전 커밋(전체 해시) — [되돌리기] 가 돌아갈 곳. */
-	previous: string,
+	/**
+	 *  움직이기 전 커밋(전체 해시) — [되돌리기] 가 돌아갈 곳. ref 를 새로 만들었으면(브랜치 만들기, 태어나지 않은 브랜치에 처음
+	 *  커밋을 둔 reset · merge) `null`.
+	 */
+	previous: string | null,
 	/**  움직인 뒤 커밋. ref 를 지웠으면(브랜치 삭제) `null`. */
 	current: string | null,
 };
@@ -1517,10 +1528,20 @@ export type GitResetParams = {
 	commit: string,
 	mode: ResetMode,
 	/**
-	 *  HEAD 가 이 커밋(전체 해시)일 때만 한다 — 아니면 아무것도 하지 않고 conflict(`-32004`, `data.head` 가 지금 HEAD). 확인
-	 *  다이얼로그를 띄운 때의 HEAD(`git.resetPreview` 의 `head`)나 [되돌리기] 의 `moved.current` 를 넣는다.
+	 *  HEAD 가 이 커밋(전체 해시)일 때만 한다 — 아니면 아무것도 하지 않고 conflict(`-32004`, `data.head` 가 지금 HEAD ·
+	 *  `data.refName` 이 HEAD 의 ref). [되돌리기] 의 `moved.current` 를 넣는다.
 	 */
 	expected?: string | null,
+	/**
+	 *  HEAD 가 가리키는 ref(전체 이름, 분리돼 있으면 `HEAD`)가 이것일 때만 한다 — 아니면 conflict. [되돌리기] 의 `moved.refName`
+	 *  을 넣는다(같은 커밋의 다른 브랜치로 옮겨 갔으면 그 브랜치를 되돌리지 않는다).
+	 */
+	expectedRef?: string | null,
+	/**
+	 *  hard 에는 꼭 있어야 한다: 확인 다이얼로그에 보인 `git.resetPreview` 의 `fingerprint`. 잠금 안에서 다시 읽은 잃을 변경(HEAD
+	 *  포함)의 지문이 다르면 아무것도 하지 않고 conflict — `data` 에 새 `head` · `lost` · `fingerprint`(다시 물을 때 쓴다).
+	 */
+	fingerprint?: string | null,
 };
 
 export type GitResetPreview = {
@@ -1530,6 +1551,8 @@ export type GitResetPreview = {
 	/**  `commit` 이 가리키는 커밋(전체 해시). */
 	target: string,
 	lost: GitLostChanges,
+	/**  이 미리보기의 지문 — 확인한 뒤 `git.reset` hard 의 `fingerprint` 로 넘긴다. */
+	fingerprint: string,
 };
 
 export type GitResetPreviewParams = {
@@ -2144,8 +2167,13 @@ export type ResetMode =
 "soft" | 
 /**  ref 와 index — 작업 트리는 그대로(git 기본). */
 "mixed" | 
-/**  ref · index · 작업 트리 — 저장하지 않은 변경을 잃는다(결정 M2-D6 ① 의 확인 대상). */
-"hard";
+/**  ref · index · 작업 트리 — 저장하지 않은 변경을 잃는다(결정 M2-D6 ① 의 확인 대상). `fingerprint` 가 있어야 한다. */
+"hard" | 
+/**
+ *  ref · index · 작업 트리를 옮기되 로컬 변경은 지킨다(`--keep`) — 옮길 파일에 로컬 변경이 있으면 git 이 거절한다. [되돌리기] 가
+ *  쓴다.
+ */
+"keep";
 
 /**  경로를 포함하는 프로젝트. */
 export type Resolution = {

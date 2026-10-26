@@ -1,8 +1,9 @@
 //! 이력 쓰기 RPC. UI 전용이라 MCP 툴이 아니다(결정 M2-D7 — git 쓰기는 M5 에서도 툴이 아니다).
 //!
 //! - `git.merge` · `git.cherryPick` · `git.revert` · `git.rebase`: 결과는 [`GitHistoryResult`] — 충돌이면 `stopped` 와 진행 중 작업.
-//! - `git.reset`: soft · mixed · hard. hard 만 작업 트리를 바꿔 미저장 확인을 묻는다. `expected` 로 [되돌리기] 가 그사이 움직인
-//!   HEAD 를 덮지 않게 한다.
+//! - `git.reset`: soft · mixed · hard · keep. hard · keep 은 작업 트리를 바꿔 미저장 확인을 묻는다. `expected` · `expectedRef` 로
+//!   [되돌리기] 가 그사이 움직인 HEAD 나 옮겨 간 브랜치를 덮지 않게 하고, hard 는 미리보기의 `fingerprint` 로 확인한 뒤 바뀐 작업
+//!   트리를 지우지 않게 한다.
 //! - `git.resetPreview`: reset hard 가 잃을 변경(읽기 — 쓰기 잠금을 기다리지 않는다).
 
 use std::ffi::OsString;
@@ -14,7 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use super::lost::{self, GitLostChanges};
 use super::{
-    FastForward, GitHistoryResult, GitResetResult, Job, ResetMode, Watched, check_rev, display,
+    FastForward, GitHistoryResult, GitResetResult, Job, ResetGuard, ResetMode, Watched, check_rev,
+    display,
 };
 use crate::write::{Changes, GitWrite, WriteError};
 
@@ -71,10 +73,18 @@ pub struct GitResetParams {
     /// HEAD 를 옮길 커밋.
     pub commit: String,
     pub mode: ResetMode,
-    /// HEAD 가 이 커밋(전체 해시)일 때만 한다 — 아니면 아무것도 하지 않고 conflict(`-32004`, `data.head` 가 지금 HEAD). 확인
-    /// 다이얼로그를 띄운 때의 HEAD(`git.resetPreview` 의 `head`)나 [되돌리기] 의 `moved.current` 를 넣는다.
+    /// HEAD 가 이 커밋(전체 해시)일 때만 한다 — 아니면 아무것도 하지 않고 conflict(`-32004`, `data.head` 가 지금 HEAD ·
+    /// `data.refName` 이 HEAD 의 ref). [되돌리기] 의 `moved.current` 를 넣는다.
     #[serde(default)]
     pub expected: Option<String>,
+    /// HEAD 가 가리키는 ref(전체 이름, 분리돼 있으면 `HEAD`)가 이것일 때만 한다 — 아니면 conflict. [되돌리기] 의 `moved.refName`
+    /// 을 넣는다(같은 커밋의 다른 브랜치로 옮겨 갔으면 그 브랜치를 되돌리지 않는다).
+    #[serde(default)]
+    pub expected_ref: Option<String>,
+    /// hard 에는 꼭 있어야 한다: 확인 다이얼로그에 보인 `git.resetPreview` 의 `fingerprint`. 잠금 안에서 다시 읽은 잃을 변경(HEAD
+    /// 포함)의 지문이 다르면 아무것도 하지 않고 conflict — `data` 에 새 `head` · `lost` · `fingerprint`(다시 물을 때 쓴다).
+    #[serde(default)]
+    pub fingerprint: Option<String>,
 }
 
 #[derive(
@@ -99,6 +109,8 @@ pub struct GitResetPreview {
     /// `commit` 이 가리키는 커밋(전체 해시).
     pub target: String,
     pub lost: GitLostChanges,
+    /// 이 미리보기의 지문 — 확인한 뒤 `git.reset` hard 의 `fingerprint` 로 넘긴다.
+    pub fingerprint: String,
 }
 
 rpc_method! {
@@ -145,8 +157,8 @@ rpc_method! {
 }
 
 rpc_method! {
-    /// HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard`). hard 는 확인 뒤에 부른다(결정 M2-D6 ① — 잃을 변경은
-    /// `git.resetPreview`). 결과의 `moved` 로 [되돌리기].
+    /// HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 는 확인 뒤에 미리보기의
+    /// 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].
     pub GitResetMethod: "git.reset" {
         params: GitResetParams,
         result: GitResetResult,
@@ -303,8 +315,13 @@ pub async fn reset(
     params: GitResetParams,
 ) -> Result<GitResetResult, RpcError> {
     check_rev("commit", &params.commit)?;
+    if params.mode == ResetMode::Hard && params.fingerprint.is_none() {
+        return Err(RpcError::invalid_params(
+            "a hard reset needs the `fingerprint` of the confirmed `git.resetPreview`",
+        ));
+    }
     let changes = match params.mode {
-        ResetMode::Hard => Changes::WorkTree,
+        ResetMode::Hard | ResetMode::Keep => Changes::WorkTree,
         ResetMode::Soft | ResetMode::Mixed => Changes::None,
     };
     let request = super::request(
@@ -313,7 +330,12 @@ pub async fn reset(
         TITLE_RESET,
         changes,
     );
-    Ok(super::reset(&write, request, params.commit, params.mode, params.expected).await?)
+    let guard = ResetGuard {
+        expected: params.expected,
+        expected_ref: params.expected_ref,
+        fingerprint: params.fingerprint,
+    };
+    Ok(super::reset(&write, request, params.commit, params.mode, guard).await?)
 }
 
 /// `git.resetPreview`. 요청이 취소되면(이 future 가 버려지면) status 계산도 멈춘다.
@@ -329,13 +351,13 @@ pub async fn reset_preview(
         let opened = git
             .open(&params.project_id, params.worktree.as_deref())?
             .ok_or_else(|| RpcError::from(WriteError::NoRepository))?;
-        let head = opened.repo.head_id().ok().map(|id| id.to_string());
-        let (target, lost) = lost::lost(&opened, &params.commit, Some(&interrupt))?;
+        let read = lost::lost(&opened, &params.commit, Some(&interrupt))?;
         Ok(GitResetPreview {
             work_tree: display(&opened.target.work_tree),
-            head,
-            target,
-            lost,
+            head: read.head,
+            target: read.target,
+            lost: read.lost,
+            fingerprint: read.fingerprint,
         })
     })
     .await

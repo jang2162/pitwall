@@ -5,8 +5,11 @@
 //! - 충돌로 멈추면 실패가 아니라 `stopped` 다 — 결과의 `operation` 이 M2-06 의 진행 중 작업이고, 계속 · 중단 · 건너뛰기는
 //!   `git.operation.*`, 충돌 해결은 M2-11 · M2-19 다. 시작 전부터 진행 중 작업이 있었으면 git 이 거절한 원문 그대로 실패다.
 //! - ref 를 움직였으면 결과의 `moved`([`GitRefMove`])에 그 ref 와 이전 · 지금 해시를 싣는다(결정 M2-D6 ③ — 창의 [되돌리기]).
-//!   HEAD 의 ref 를 되돌리는 것은 `git.reset { commit: previous, expected: current }` 다.
-//! - reset hard 가 잃을 변경은 `git.resetPreview` 로 미리 읽는다(확인 다이얼로그는 M2-20). 읽기라 gix 로만 한다([`lost`]).
+//!   HEAD 의 ref 를 되돌리는 것은 `git.reset { commit: previous, mode, expected: current, expectedRef: refName }` 다 — mode 는
+//!   soft reset 을 되돌리면 soft, mixed 면 mixed, 그 밖(hard · merge · rebase · cherry-pick · revert)은 keep(그사이 편집이 덮이면
+//!   git 이 거절한다). 충돌로 멈췄다가 `git.operation.continue` · `skip` 으로 끝나면 그 결과의 `moved` 가 시작점([`start`])부터다.
+//! - reset hard 가 잃을 변경은 `git.resetPreview` 로 미리 읽는다(확인 다이얼로그는 M2-20). 읽기라 gix 로만 한다([`lost`]). reset hard
+//!   는 미리보기의 지문을 받아 잠금 안에서 다시 읽은 것과 다르면 아무것도 하지 않는다.
 //! - 리비전 입력은 git 의 인자로 그대로 넘긴다(브랜치 이름이면 merge 메시지가 그 이름을 쓴다). `-` 로 시작하면 옵션으로 읽히므로
 //!   invalid params 로 거절한다.
 //! - git 이 스스로 거절하는 것(로컬 변경이 덮어써지는 merge · rebase 등)은 덮지 않고 원문을 보인다(결정 M2-D6 ④).
@@ -31,7 +34,7 @@ use crate::write::{
 };
 
 /// ref 하나를 움직인 기록(결정 M2-D6 ③). 창은 이것으로 알림에 이전 해시와 [되돌리기] 를 단다. reset · rebase · merge ·
-/// cherry-pick · revert(이 모듈)와 브랜치 삭제(M2-09)가 같은 꼴로 싣는다.
+/// cherry-pick · revert(이 모듈), 브랜치 만들기 · 지우기(M2-09), amend(M2-08)가 같은 꼴로 싣는다. `null` 은 「그때 없었다」 다.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -39,8 +42,9 @@ use crate::write::{
 pub struct GitRefMove {
     /// 움직인 ref 의 전체 이름(`refs/heads/main`). 분리된 HEAD 를 움직였으면 `HEAD`.
     pub ref_name: String,
-    /// 움직이기 전 커밋(전체 해시) — [되돌리기] 가 돌아갈 곳.
-    pub previous: String,
+    /// 움직이기 전 커밋(전체 해시) — [되돌리기] 가 돌아갈 곳. ref 를 새로 만들었으면(브랜치 만들기, 태어나지 않은 브랜치에 처음
+    /// 커밋을 둔 reset · merge) `null`.
+    pub previous: Option<String>,
     /// 움직인 뒤 커밋. ref 를 지웠으면(브랜치 삭제) `null`.
     pub current: Option<String>,
 }
@@ -206,14 +210,53 @@ async fn read_snapshot(ctx: &WriteCtx, name: &str) -> Result<Snapshot, WriteErro
     ctx.read(move |o| snapshot(o, &name)).await
 }
 
-/// 지켜본 ref 가 움직였으면 그 기록. 전이 없었으면(태어나지 않은 브랜치) 되돌릴 곳이 없어 `None`.
+/// 지켜본 ref 가 움직였으면 그 기록.
 pub(crate) fn moved(name: &str, before: &Snapshot, after: &Snapshot) -> Option<GitRefMove> {
-    let previous = before.commit.clone()?;
-    (after.commit.as_deref() != Some(previous.as_str())).then(|| GitRefMove {
+    (after.commit != before.commit).then(|| GitRefMove {
         ref_name: name.to_owned(),
-        previous,
+        previous: before.commit.clone(),
         current: after.commit.clone(),
     })
+}
+
+/// 충돌로 멈춘 작업이 시작한 곳: 움직이는 ref 의 전체 이름과 시작 전 커밋. 계속 · 건너뛰기로 작업이 끝나면 이 ref 의 기록을
+/// 만든다(`git.operation.*` 결과의 `moved`). 진행 중 작업이 없거나 am · bisect 면 `None`.
+///
+/// - rebase: `rebase-merge/` · `rebase-apply/` 의 `orig-head` 와 `head-name`(분리된 HEAD 면 `HEAD`).
+/// - 여러 커밋의 cherry-pick · revert: `sequencer/head`(첫 커밋을 적용하기 전 HEAD). cherry-pick 은 `ORIG_HEAD` 를 남기지 않는다.
+/// - merge · 커밋 하나의 cherry-pick · revert: 아직 커밋하지 않았으니 지금 HEAD.
+pub(crate) fn start(repo: &gix::Repository) -> Option<(String, Option<String>)> {
+    use crate::methods::RepoOperation;
+    let info = operation::read(repo)?;
+    let dir = repo.git_dir();
+    match info.kind {
+        RepoOperation::Rebase => {
+            let state = ["rebase-merge", "rebase-apply"]
+                .into_iter()
+                .map(|d| dir.join(d))
+                .find(|d| d.is_dir())?;
+            let name = operation::read_text(&state.join("head-name"))?;
+            let name = name.trim();
+            let name = if name.starts_with("refs/") {
+                name.to_owned()
+            } else {
+                "HEAD".to_owned()
+            };
+            let previous = operation::hashes(&state.join("orig-head"))
+                .into_iter()
+                .next()?;
+            Some((name, Some(previous)))
+        }
+        RepoOperation::Merge | RepoOperation::CherryPick | RepoOperation::Revert => {
+            let name = head_ref_name(repo).ok()?;
+            let previous = operation::hashes(&dir.join("sequencer").join("head"))
+                .into_iter()
+                .next()
+                .or_else(|| ref_commit(repo, &name));
+            Some((name, previous))
+        }
+        RepoOperation::Am | RepoOperation::Bisect => None,
+    }
 }
 
 /// merge: 그대로면 up to date, HEAD 가 전 HEAD 를 첫 부모로 둔 merge 커밋이면 done, 그 밖에 옮겨졌으면 fast-forward.
@@ -270,8 +313,11 @@ pub enum ResetMode {
     Soft,
     /// ref 와 index — 작업 트리는 그대로(git 기본).
     Mixed,
-    /// ref · index · 작업 트리 — 저장하지 않은 변경을 잃는다(결정 M2-D6 ① 의 확인 대상).
+    /// ref · index · 작업 트리 — 저장하지 않은 변경을 잃는다(결정 M2-D6 ① 의 확인 대상). `fingerprint` 가 있어야 한다.
     Hard,
+    /// ref · index · 작업 트리를 옮기되 로컬 변경은 지킨다(`--keep`) — 옮길 파일에 로컬 변경이 있으면 git 이 거절한다. [되돌리기] 가
+    /// 쓴다.
+    Keep,
 }
 
 impl ResetMode {
@@ -280,6 +326,7 @@ impl ResetMode {
             Self::Soft => "--soft",
             Self::Mixed => "--mixed",
             Self::Hard => "--hard",
+            Self::Keep => "--keep",
         }
     }
 }
@@ -299,41 +346,78 @@ pub struct GitResetResult {
     pub lost: Option<lost::GitLostChanges>,
 }
 
-/// reset 하나. `expected` 가 있으면 잠금 안에서 HEAD 가 그 커밋인지 보고, 아니면 아무것도 하지 않고 conflict(`data.head`)다.
+/// reset 이 잠금 안에서 확인할 것. 하나라도 어긋나면 아무것도 하지 않고 conflict(`-32004`)다.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResetGuard {
+    /// HEAD 가 이 커밋이어야 한다.
+    pub expected: Option<String>,
+    /// HEAD 가 가리키는 ref(분리돼 있으면 `HEAD`)가 이 이름이어야 한다.
+    pub expected_ref: Option<String>,
+    /// hard: 잃을 변경의 지문(`git.resetPreview`)이 이것이어야 한다.
+    pub fingerprint: Option<String>,
+}
+
+fn conflict(message: &str, data: serde_json::Value) -> WriteError {
+    WriteError::Rpc(RpcError::new(rpc_code::CONFLICT, message).with_data(data))
+}
+
+/// reset 하나. 잠금 안에서 [`ResetGuard`] 를 본다. 서브모듈 작업 트리는 건드리지 않는다(`submodule.recurse` 설정이어도 — 잃을
+/// 변경 목록이 서브모듈 안을 세지 않는다).
 pub(crate) async fn reset(
     write: &GitWrite,
     request: WriteRequest,
     commit: String,
     mode: ResetMode,
-    expected: Option<String>,
+    guard: ResetGuard,
 ) -> Result<GitResetResult, WriteError> {
     write
         .run(request, move |ctx| async move {
             let name = watched_name(&ctx, &Watched::Head).await?;
             let before = read_snapshot(&ctx, &name).await?;
-            if let Some(expected) = expected
+            if let Some(expected) = &guard.expected
                 && before.head.as_deref() != Some(expected.as_str())
             {
-                return Err(WriteError::Rpc(
-                    RpcError::new(
-                        rpc_code::CONFLICT,
-                        "HEAD is no longer at the expected commit; nothing was reset",
-                    )
-                    .with_data(serde_json::json!({ "head": before.head })),
+                return Err(conflict(
+                    "HEAD is no longer at the expected commit; nothing was reset",
+                    serde_json::json!({ "head": before.head, "refName": name }),
+                ));
+            }
+            if let Some(expected) = &guard.expected_ref
+                && *expected != name
+            {
+                return Err(conflict(
+                    "HEAD no longer points at the expected ref; nothing was reset",
+                    serde_json::json!({ "head": before.head, "refName": name }),
                 ));
             }
             let lost = if mode == ResetMode::Hard {
                 let rev = commit.clone();
-                let read = ctx.read(move |o| lost::lost(o, &rev, None)).await?;
-                Some(read.map_err(WriteError::Rpc)?.1)
+                let read = ctx
+                    .read(move |o| lost::lost(o, &rev, None))
+                    .await?
+                    .map_err(WriteError::Rpc)?;
+                if guard.fingerprint.as_deref() != Some(read.fingerprint.as_str()) {
+                    return Err(conflict(
+                        "the changes a hard reset loses differ from the confirmed ones; nothing was reset",
+                        serde_json::json!({
+                            "head": read.head,
+                            "lost": read.lost,
+                            "fingerprint": read.fingerprint,
+                        }),
+                    ));
+                }
+                Some(read.lost)
             } else {
                 None
             };
             // `--` 뒤가 비어 있으면 앞의 인자는 늘 리비전이다(같은 이름의 파일이 있어도).
-            ctx.run(
-                ctx.git()
-                    .args(["reset", mode.flag(), commit.as_str(), "--"]),
-            )
+            ctx.run(ctx.git().args([
+                "reset",
+                mode.flag(),
+                "--no-recurse-submodules",
+                commit.as_str(),
+                "--",
+            ]))
             .await?;
             let after = read_snapshot(&ctx, &name).await?;
             Ok(GitResetResult {

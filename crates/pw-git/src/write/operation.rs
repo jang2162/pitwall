@@ -155,7 +155,7 @@ pub(crate) fn changes(kind: RepoOperation, action: OperationAction) -> Changes {
 }
 
 /// 일반 파일이고 [`MAX_STATE_FILE`] 이하면 그 내용(UTF-8 이 아니면 `None`).
-fn read_text(path: &Path) -> Option<String> {
+pub(crate) fn read_text(path: &Path) -> Option<String> {
     let meta = std::fs::symlink_metadata(path).ok()?;
     if !meta.file_type().is_file() || meta.len() > MAX_STATE_FILE {
         return None;
@@ -164,7 +164,7 @@ fn read_text(path: &Path) -> Option<String> {
 }
 
 /// 줄마다 해시 하나인 파일(`MERGE_HEAD` 등)의 해시들. 해시가 아닌 줄은 건너뛴다.
-fn hashes(path: &Path) -> Vec<String> {
+pub(crate) fn hashes(path: &Path) -> Vec<String> {
     read_text(path)
         .map(|text| {
             text.lines()

@@ -498,12 +498,31 @@ impl GitWrite {
                 kind: before.kind,
                 action,
             })?;
+            let start = ctx.read(|o| crate::history::start(&o.repo)).await?;
             let output = ctx.output(ctx.git().args(args)).await?;
             let after = ctx.read(|o| operation::read(&o.repo)).await?;
             if output.status.success() {
+                let moved = match start {
+                    Some((name, previous))
+                        if after.is_none() && action != OperationAction::Abort =>
+                    {
+                        let current = {
+                            let name = name.clone();
+                            ctx.read(move |o| crate::history::ref_commit(&o.repo, &name))
+                                .await?
+                        };
+                        (current != previous).then_some(crate::history::GitRefMove {
+                            ref_name: name,
+                            previous,
+                            current,
+                        })
+                    }
+                    _ => None,
+                };
                 return Ok(methods::GitOperationResult {
                     operation: after,
                     stopped: false,
+                    moved,
                 });
             }
             let moved = after.as_ref().is_some_and(|after| {
@@ -514,6 +533,7 @@ impl GitWrite {
                 return Ok(methods::GitOperationResult {
                     operation: after,
                     stopped: true,
+                    moved: None,
                 });
             }
             Err(WriteError::failed(args[0], &output))
