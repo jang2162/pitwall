@@ -623,7 +623,10 @@ export type DiagnosticsText = {
 
 export type DiffFile = {
 	status: FileStatus,
-	/**  새 경로(지워졌으면 옛 경로). 저장소 꼭대기 기준, `/` 구분. */
+	/**
+	 *  새 경로(지워졌으면 옛 경로). 작업 트리 꼭대기([`GitDiff::work_tree`]) 기준 상대 경로, `/` 구분(git porcelain 과 같다 —
+	 *  Windows 에서도).
+	 */
 	path: string,
 	/**  이름이 바뀌었으면 옛 경로. */
 	oldPath: string | null,
@@ -1030,6 +1033,8 @@ export type GitContainedIn = {
 };
 
 export type GitDiff = {
+	/**  저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴). 파일 경로는 이 아래의 상대 경로다. */
+	workTree: string,
 	/**  옛 쪽이 커밋이면 그 해시(머지 커밋의 첫 부모처럼 고른 것 포함). 빈 트리 · index 면 `null`. */
 	oldCommit: string | null,
 	/**  새 쪽이 커밋이면 그 해시. */

@@ -183,6 +183,10 @@ pub fn diff(opened: &Opened, params: &GitDiffParams, stats: &Stats) -> Result<Gi
         files.push(file);
     }
     Ok(GitDiff {
+        work_tree: pw_core::registry::path::normalize(work_tree)
+            .unwrap_or_else(|_| work_tree.clone())
+            .display()
+            .to_string(),
         old_commit: old_commit.map(|c| c.to_string()),
         new_commit: new_commit.map(|c| c.to_string()),
         files,

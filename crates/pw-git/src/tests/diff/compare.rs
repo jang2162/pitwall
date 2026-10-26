@@ -490,3 +490,31 @@ fn a_project_without_a_repository_is_invalid_params() {
         .unwrap_err();
     assert_eq!(err.code, pw_rpc::code::INVALID_PARAMS);
 }
+
+/// git RPC 의 경로 꼴(공통 규칙): 작업 트리 꼭대기 기준 상대 경로, 구분자 `/` — Windows 에서도. 응답의 `workTree` 는
+/// `git.repo` 의 것과 같다. 입력 경로도 같은 꼴이라 역슬래시 구분은 받지 않는다.
+#[test]
+fn paths_are_relative_to_the_work_tree_and_separated_by_slashes() {
+    let r = TestRepo::with_commit();
+    r.write("dir/sub/deep.txt", "a\n");
+    r.commit_all("base");
+    r.write("dir/sub/deep.txt", "b\n");
+    r.commit_all("edit");
+    let repo = Repo::new(r);
+    let diff = repo.diff(None, commit("HEAD"));
+    assert_eq!(diff.files[0].path, "dir/sub/deep.txt");
+    let info = repo.f.repo(&repo.id, None).unwrap().repo.unwrap();
+    assert_eq!(diff.work_tree, info.work_tree);
+    assert_eq!(repo.blob(Some("HEAD"), "dir/sub/deep.txt").size, 2);
+    let mut params = repo.params(None, commit("HEAD"));
+    params.paths = Some(vec![r"dir\sub".into()]);
+    assert_eq!(
+        repo.f.git.diff(&params).unwrap_err().code,
+        pw_rpc::code::INVALID_PARAMS
+    );
+    let backslashed = repo.blob_params(Some("HEAD"), r"dir\sub\deep.txt");
+    assert_eq!(
+        repo.f.git.blob(&backslashed).unwrap_err().code,
+        pw_rpc::code::INVALID_PARAMS
+    );
+}
