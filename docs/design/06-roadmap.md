@@ -38,7 +38,7 @@
 
 | 리스크 | 영향 | 대응 |
 |---|---|---|
-| Linux WebKitGTK 렌더링 성능/버그 | UI 끊김 | canvas 렌더링 + 가상화, 조기 벤치마크(M1). 최악엔 UI만 Electron 교체(코어 헤드리스라 가능) |
+| Linux WebKitGTK 렌더링 성능/버그 | UI 끊김 | canvas 렌더링 + 가상화, Linux 실기 벤치마크(Linux 출시 준비 때 — D38. 원래는 M1 이었다). 최악엔 UI만 Electron 교체(코어 헤드리스라 가능) |
 | DAP 어댑터별 편차 (특히 Java) | 디버깅 품질 | JVM은 우선 attach 모드(JDWP)만 보장 |
 | LSP 서버 메모리 (jdtls, kotlin) | "가벼움" 훼손 | 언어 서버 지연 기동, 유휴 종료, 프로젝트별 on/off |
 | Relay 배포 복잡도 (OS/arch/glibc) | 원격 실패 | musl 정적 빌드, Desktop과 버전 정확히 일치(Zed 방식) · 해시 검증, 업로드 설치 옵션 |
@@ -90,6 +90,7 @@
 | D35 | 신뢰 (M1) | F1-7 중 **런타임 제공자 게이트만 M1** 에: 프로젝트별 신뢰 플래그 + 처음 열 때 확인, 미신뢰면 제공자를 실행하지 않는다. 나머지는 P1 | 04 F1-7, 12 §4 M1-D16 |
 | D36 | 프로젝트 창 상태 | `$DATA/projects/<id>/` 에 Host RPC 로 저장(웹뷰 localStorage 아님), 열린 탭은 워크트리 경로 단위 | 03 §5, 12 §4 M1-D19 |
 | D37 | M1 진행 | 작업 분할 문서화 (12-m1-plan) | 12 |
+| D38 | 플랫폼 우선순위 | **macOS 앱 기능을 먼저 만든다.** Linux WebKitGTK 실기 벤치마크와 Linux 전용 대응(canvas · 렌더러 · 기능 끄기)은 Linux 출시 준비 — v1.0 의 「Linux/Windows 순차」 앞 — 로 미룬다(2026-10-26, 사용자). CI 의 Linux · Windows 빌드 · 시험은 그대로 유지한다(02 §1 「플랫폼」 줄). 대안: ① M1 에서 Linux 실기를 잰다(원래 계획, M1-26) — 기능이 덜 찬 화면을 재고 Linux 실기 한 대가 먼저 필요해 1차 목표(macOS 기능)를 늦춘다 ② Linux 를 CI 로만 보고 실측 없이 출시 — WebKitGTK 가 느려도 출시 직전까지 모른다. 그래서 미루되 Linux 출시 준비의 첫 일로 잰다 | 02 §1, 12 §3 · M1-26 |
 
 ## 5. 남은 미결정 사항
 
