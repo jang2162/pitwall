@@ -139,3 +139,81 @@ fn contained_in_over_ten_thousand_commits_in_release() {
     });
     println!("git.containedIn, root of 10,000 commits, 41 refs: best {best:?}, median {median:?}");
 }
+
+/// 이 프로세스의 최대 RSS(MiB).
+#[cfg(unix)]
+fn max_rss_mib() -> f64 {
+    // SAFETY: getrusage 는 넘긴 구조체만 채운다.
+    let usage = unsafe {
+        let mut usage: libc::rusage = std::mem::zeroed();
+        libc::getrusage(libc::RUSAGE_SELF, &mut usage);
+        usage
+    };
+    // macOS 는 바이트, Linux 는 KiB 다.
+    let bytes = if cfg!(target_os = "macos") {
+        usage.ru_maxrss as f64
+    } else {
+        usage.ru_maxrss as f64 * 1024.0
+    };
+    bytes / 1024.0 / 1024.0
+}
+
+/// 38 MiB 파일의 줄 200만 개가 모두 바뀐다(M2-04 리뷰의 재현): hunk 가 파일 하나의 상한을 넘어 `tooLarge` 이고, 줄을 만들지 않으므로
+/// 응답 · 메모리가 작다.
+#[cfg(unix)]
+#[test]
+#[ignore = "release 수치(머리 주석의 명령)"]
+fn diff_of_a_38_mib_file_with_every_line_changed_in_release() {
+    let r = TestRepo::with_commit();
+    let n = 2_000_000;
+    r.commit_file(
+        "big.txt",
+        &(0..n).map(|i| format!("a{i:018}\n")).collect::<String>(),
+        "a",
+    );
+    r.commit_file(
+        "big.txt",
+        &(0..n).map(|i| format!("b{i:018}\n")).collect::<String>(),
+        "b",
+    );
+    let repo = Repo::new(r);
+    let before = max_rss_mib();
+    let start = Instant::now();
+    let diff = repo.diff(None, commit("HEAD"));
+    let took = start.elapsed();
+    let json = serde_json::to_vec(&diff).unwrap().len();
+    let after = max_rss_mib();
+    let f = &diff.files[0];
+    assert!(f.too_large && f.hunks.is_empty() && f.added == n && f.removed == n);
+    println!(
+        "git.diff, 38 MiB file with 2,000,000 lines changed: {took:?}, JSON {json} bytes, max RSS {before:.0} -> {after:.0} MiB"
+    );
+    assert!(json < 4096, "{json}");
+}
+
+/// 40 MiB 한 줄 파일 두 쪽의 diff 를 8개 동시에(M2-04 리뷰의 재현): `git.blob` 과 같은 동시 상한(2개)을 거친다.
+#[cfg(unix)]
+#[test]
+#[ignore = "release 수치(머리 주석의 명령)"]
+fn eight_concurrent_diffs_of_forty_mib_files_in_release() {
+    let r = TestRepo::with_commit();
+    r.commit_file("big.txt", &("x".repeat(40 * 1024 * 1024) + "\n"), "a");
+    r.commit_file("big.txt", &("y".repeat(40 * 1024 * 1024) + "\n"), "b");
+    let repo = std::sync::Arc::new(Repo::new(r));
+    let before = max_rss_mib();
+    let start = Instant::now();
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let repo = std::sync::Arc::clone(&repo);
+            std::thread::spawn(move || repo.diff(None, commit("HEAD")).files.remove(0))
+        })
+        .collect();
+    let files: Vec<DiffFile> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    let took = start.elapsed();
+    let after = max_rss_mib();
+    let busy = files.iter().filter(|f| f.error.is_some()).count();
+    println!(
+        "git.diff x8 at once, 2 x 40 MiB each: {took:?}, {busy} busy, max RSS {before:.0} -> {after:.0} MiB"
+    );
+    assert!(files.iter().all(|f| f.too_large || f.error.is_some()));
+}

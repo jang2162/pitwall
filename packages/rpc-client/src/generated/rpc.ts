@@ -638,8 +638,17 @@ export type DiffFile = {
 	newId: string | null,
 	/**  한쪽이라도 바이너리다(앞 8000바이트에 NUL, 또는 속성 `-diff` · `binary`). hunk 가 없다. */
 	binary: boolean,
-	/**  한쪽이라도 대용량 기준(결정 M1-D9 의 50 MiB)을 넘는다. 내용을 읽지 않으므로 hunk 가 없고 `binary` 는 거짓이다. */
+	/**
+	 *  너무 커서 hunk 를 싣지 않는다 — `paths` 로 그 파일만 다시 불러도 같다. 둘 중 하나다:
+	 *  - 한쪽이라도 대용량 기준(결정 M1-D9 의 50 MiB)을 넘는다. 내용을 읽지 않으므로 `binary` 는 거짓이고 `added` · `removed` 는 0 이다.
+	 *  - hunk 의 응답 크기가 파일 하나의 상한([`super::changes::FILE_HUNKS_MAX`], 5 MiB)을 넘는다. `added` · `removed` 는 맞다.
+	 */
 	tooLarge: boolean,
+	/**
+	 *  응답 전체의 hunk 크기 상한([`super::changes::DIFF_HUNKS_MAX`], 50 MiB)에 닿아 이 파일의 hunk 를 싣지 않았다. 파일 자체는
+	 *  크지 않다 — `paths` 로 그 파일만 다시 부르면 받는다. `added` · `removed` 는 맞다.
+	 */
+	hunksOmitted: boolean,
 	/**
 	 *  생성 파일이다 — `.gitattributes` 의 `linguist-generated`, 없으면 Linguist 규칙(M1-02, 내용 규칙은 새 쪽(지워졌으면 옛 쪽)
 	 *  앞부분으로 본다 — 결정 M1-D20 대안 ①). 속성은 지금 작업 트리의 것(`pw_lang::attributes`)이다 — 커밋 diff 도 그 커밋의
@@ -652,6 +661,11 @@ export type DiffFile = {
 	added: number,
 	removed: number,
 	hunks: DiffHunk[],
+	/**
+	 *  이 파일의 내용을 읽지 못했다(객체가 없음 · 필터 실패 · 작업 트리 파일이 루트 밖을 가리킴 · 큰 파일 차례를 못 얻음). 목록의
+	 *  다른 파일은 그대로 나온다. 있으면 hunk 가 없다.
+	 */
+	error: string | null,
 };
 
 /**  `git diff -U3` 의 hunk 하나. */
@@ -1156,8 +1170,13 @@ export type GitRevParams = {
 export type GitShow = {
 	commit: string,
 	tree: string,
-	/**  부모 해시. 머지 커밋은 둘 이상이고 첫째가 첫 부모다. 루트 커밋은 비어 있다. */
+	/**  부모 해시. 머지 커밋은 둘 이상이고 첫째가 첫 부모다. 루트 커밋과 얕은 클론의 경계 커밋([`Self::shallow`])은 비어 있다. */
 	parents: string[],
+	/**
+	 *  얕은 클론(`git clone --depth`)의 경계 커밋이다 — 부모가 저장소에 없다. git 처럼 부모가 없는 것으로 다룬다(`parents` 가
+	 *  비고, `git.diff` 는 빈 트리와 견준다).
+	 */
+	shallow: boolean,
 	author: Signature,
 	committer: Signature,
 	/**  메시지 전체(제목 줄 · 본문 · 트레일러). UTF-8 이 아닌 바이트는 U+FFFD 다. */
@@ -1921,7 +1940,7 @@ export type StreamOutcome =
 export type SubmodulePointer = {
 	/**  옛 커밋. 그쪽에 서브모듈이 없으면 `null`. */
 	old: string | null,
-	/**  새 커밋. 작업 트리 쪽이면 체크아웃된 서브모듈의 HEAD(읽지 못하면 `null`). */
+	/**  새 커밋. 작업 트리 쪽이면 체크아웃된 서브모듈의 HEAD. 그쪽에 서브모듈이 없으면(지워짐 · 파일이나 링크로 바뀜) `null`. */
 	new: string | null,
 };
 

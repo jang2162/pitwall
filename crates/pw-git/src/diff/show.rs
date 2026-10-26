@@ -29,7 +29,11 @@ pub fn show(repo: &gix::Repository, rev: &str) -> Result<GitShow, RpcError> {
     Ok(GitShow {
         commit: commit.id.to_string(),
         tree: commit.tree_id().map_err(internal)?.to_string(),
-        parents: commit.parent_ids().map(|id| id.to_string()).collect(),
+        parents: super::parent_ids(repo, &commit)?
+            .iter()
+            .map(ObjectId::to_string)
+            .collect(),
+        shallow: super::shallow(repo)?.contains(&commit.id),
         author: signature(commit.author().map_err(internal)?)?,
         committer: signature(commit.committer().map_err(internal)?)?,
         message: commit
@@ -43,9 +47,11 @@ pub fn show(repo: &gix::Repository, rev: &str) -> Result<GitShow, RpcError> {
 }
 
 /// 모든 브랜치 · 원격 브랜치 · 태그 끝에서 이력을 거슬러 그 커밋에 닿는지 본다. 걸은 커밋마다 답을 기억하므로 ref 가 많아도 이력을
-/// 한 번 걷는다. 커밋 시각으로 자르지 않는다 — 시계가 틀린 커밋이 있어도 답이 맞다.
+/// 한 번 걷는다. 커밋 시각으로 자르지 않는다 — 시계가 틀린 커밋이 있어도 답이 맞다. 얕은 클론의 경계 커밋에서 멈춘다(git 처럼
+/// 부모가 없다).
 pub fn contained_in(repo: &gix::Repository, rev: &str) -> Result<GitContainedIn, RpcError> {
     let target = super::commit(repo, rev)?.id;
+    let shallow = super::shallow(repo)?;
     let mut memo: HashMap<ObjectId, bool> = HashMap::new();
     let mut parents: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
     let mut buf = Vec::new();
@@ -70,7 +76,11 @@ pub fn contained_in(repo: &gix::Repository, rev: &str) -> Result<GitContainedIn,
                 .objects
                 .find_commit_iter(&id, &mut buf)
                 .map_err(internal)?;
-            let of: Vec<ObjectId> = commit.parent_ids().collect();
+            let of: Vec<ObjectId> = if shallow.contains(&id) {
+                Vec::new()
+            } else {
+                commit.parent_ids().collect()
+            };
             stack.push((id, true));
             stack.extend(
                 of.iter()

@@ -17,6 +17,9 @@ pub mod show;
 
 pub use methods::register;
 
+use std::collections::HashSet;
+
+use gix::ObjectId;
 use gix::bstr::ByteSlice;
 use pw_rpc::RpcError;
 
@@ -38,9 +41,12 @@ impl Git {
         show::contained_in(&opened.repo, &params.rev)
     }
 
-    /// `git.diff`.
+    /// `git.diff`. 미신뢰 프로젝트는 필터 드라이버를 모두 떼고 읽는다([`changes::without_filter_drivers`]).
     pub fn diff(&self, params: &GitDiffParams) -> Result<GitDiff, RpcError> {
-        let opened = self.opened(&params.project_id, params.worktree.as_deref())?;
+        let mut opened = self.opened(&params.project_id, params.worktree.as_deref())?;
+        if !opened.trusted {
+            changes::without_filter_drivers(&mut opened.repo)?;
+        }
         changes::diff(&opened, params, &changes::Stats::default())
     }
 
@@ -67,4 +73,22 @@ fn commit<'r>(repo: &'r gix::Repository, rev: &str) -> Result<gix::Commit<'r>, R
         .map_err(|e| RpcError::internal(e.to_string()))?
         .peel_to_commit()
         .map_err(|e| RpcError::invalid_params(format!("`{rev}` is not a commit: {e}")))
+}
+
+/// 얕은 클론(`git clone --depth`)의 경계 커밋(`.git/shallow`). git 은 이 커밋들을 부모가 없는 것으로 본다 — 부모 객체가 저장소에
+/// 없다.
+fn shallow(repo: &gix::Repository) -> Result<HashSet<ObjectId>, RpcError> {
+    Ok(repo
+        .shallow_commits()
+        .map_err(|e| RpcError::internal(e.to_string()))?
+        .map(|commits| commits.iter().copied().collect())
+        .unwrap_or_default())
+}
+
+/// 커밋의 부모(첫째가 첫 부모). 얕은 클론의 경계 커밋은 git 처럼 비어 있다.
+fn parent_ids(repo: &gix::Repository, commit: &gix::Commit<'_>) -> Result<Vec<ObjectId>, RpcError> {
+    if shallow(repo)?.contains(&commit.id) {
+        return Ok(Vec::new());
+    }
+    Ok(commit.parent_ids().map(|id| id.detach()).collect())
 }

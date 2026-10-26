@@ -186,3 +186,102 @@ fn an_unknown_revision_is_invalid_params() {
         assert_eq!(err.code, pw_rpc::code::INVALID_PARAMS);
     }
 }
+
+/// 세 커밋 저장소를 `depth` 로 얕게 클론한다(`file://` 원격). 클론의 꼭대기와 그 프로젝트를 등록한 [`Repo`] 를 돌려준다.
+fn shallow_clone(depth: &str) -> (Repo, std::path::PathBuf, String) {
+    let r = TestRepo::with_commit();
+    r.commit_file("README.md", "two\n", "two");
+    r.commit_file("README.md", "three\n", "three");
+    let dst = r.base().join("shallow");
+    let url = format!("file://{}", r.root().display());
+    r.git_in(
+        r.base(),
+        &[
+            "clone",
+            "--quiet",
+            "--depth",
+            depth,
+            &url,
+            dst.to_str().unwrap(),
+        ],
+    );
+    let repo = Repo::new(r);
+    let id = repo.f.project(&dst);
+    (repo, dst, id)
+}
+
+/// 얕은 클론의 경계 커밋은 git 처럼 부모가 없는 커밋이다: `git.show` 는 부모가 비고 `shallow`, `git.diff` 는 빈 트리와 견준다.
+#[test]
+fn a_shallow_boundary_commit_has_no_parents_like_git() {
+    let (repo, dst, id) = shallow_clone("1");
+    let rev = GitRevParams {
+        project_id: id.clone(),
+        worktree: None,
+        rev: "HEAD".to_owned(),
+    };
+    let show = repo.f.git.show(&rev).unwrap();
+    assert_eq!(
+        repo.r.git_in(&dst, &["log", "-1", "--format=%P"]).trim(),
+        ""
+    );
+    assert!(show.shallow && show.parents.is_empty(), "{show:?}");
+
+    let mut params = repo.params(None, commit("HEAD"));
+    params.project_id = id;
+    let ours = our_patches(&repo.f.git.diff(&params).unwrap());
+    let theirs = git_patches_in(&repo.r, &dst, &[EMPTY_TREE, "HEAD"]);
+    assert_patches_eq(&ours, &theirs, &["(shallow)", EMPTY_TREE, "HEAD"]);
+    assert_eq!(ours.len(), 1);
+}
+
+/// 경계 커밋 아래로 걷지 않는다 — git `for-each-ref --contains` 와 같은 ref 를 낸다. 경계가 아닌 커밋은 부모가 그대로다.
+#[test]
+fn contained_in_stops_at_the_shallow_boundary_like_git() {
+    let (repo, dst, id) = shallow_clone("2");
+    repo.r.git_in(&dst, &["branch", "old", "HEAD~1"]);
+    for rev in ["HEAD", "HEAD~1"] {
+        let params = GitRevParams {
+            project_id: id.clone(),
+            worktree: None,
+            rev: rev.to_owned(),
+        };
+        let ours: Vec<String> = repo
+            .f
+            .git
+            .contained_in(&params)
+            .unwrap()
+            .refs
+            .into_iter()
+            .map(|r| r.full_name)
+            .collect();
+        let theirs: BTreeSet<String> = repo
+            .r
+            .git_in(
+                &dst,
+                &["for-each-ref", "--contains", rev, "--format=%(refname)"],
+            )
+            .lines()
+            .filter(|l| *l != "refs/remotes/origin/HEAD")
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            ours.iter().cloned().collect::<BTreeSet<_>>(),
+            theirs,
+            "{rev}"
+        );
+        assert!(!ours.is_empty());
+    }
+    let show = |rev: &str| {
+        repo.f
+            .git
+            .show(&GitRevParams {
+                project_id: id.clone(),
+                worktree: None,
+                rev: rev.to_owned(),
+            })
+            .unwrap()
+    };
+    let (head, boundary) = (show("HEAD"), show("HEAD~1"));
+    assert!(!head.shallow && head.parents == [boundary.commit.clone()]);
+    assert!(boundary.shallow && boundary.parents.is_empty());
+}

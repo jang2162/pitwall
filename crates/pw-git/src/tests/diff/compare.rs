@@ -518,3 +518,30 @@ fn paths_are_relative_to_the_work_tree_and_separated_by_slashes() {
         pw_rpc::code::INVALID_PARAMS
     );
 }
+
+/// 시험의 gix 는 사람의 전역 설정을 읽지 않는다(`isolate_global_config`): 사람의 HOME 에 모든 파일을 `-diff` 로 만드는
+/// `core.attributesFile` 이 있어도 diff 가 빈 전역 설정의 git 과 같다.
+#[test]
+fn tests_do_not_read_the_persons_global_git_config() {
+    let r = TestRepo::with_commit();
+    r.commit_file("README.md", "hello\nagain\n", "second");
+    let person = r.base().join("person");
+    fs::create_dir_all(&person).unwrap();
+    fs::write(person.join("attributes"), "* -diff\n").unwrap();
+    fs::write(
+        person.join(".gitconfig"),
+        format!(
+            "[core]\n\tattributesFile = {}\n",
+            person.join("attributes").display()
+        ),
+    )
+    .unwrap();
+    // SAFETY: nextest 는 시험마다 프로세스가 따로이고, 이 시험은 아직 다른 스레드를 띄우지 않았다.
+    unsafe {
+        std::env::set_var("HOME", &person);
+        std::env::remove_var("GIT_CONFIG_GLOBAL");
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+    let repo = Repo::new(r);
+    assert_same_as_git(&repo, None, commit("HEAD"), &["HEAD~1", "HEAD"]);
+}

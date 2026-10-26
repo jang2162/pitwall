@@ -4,10 +4,13 @@
 mod blob;
 mod compare;
 mod flags;
+mod limits;
 mod release;
 mod show;
 #[cfg(unix)]
 mod untrusted;
+#[cfg(unix)]
+mod worktree;
 
 use super::*;
 use crate::diff::methods::{
@@ -28,6 +31,7 @@ struct Repo {
 
 impl Repo {
     fn new(r: TestRepo) -> Self {
+        isolate_global_config(r.base());
         let f = Fixture::new("", None);
         let id = f.project(r.root());
         Self { r, f, id }
@@ -70,6 +74,26 @@ impl Repo {
     }
 }
 
+/// gix 가 사람의 전역 · 시스템 git 설정(`~/.gitconfig` 의 `diff.algorithm` · `filter.lfs.*`, `~/.config/git/attributes`)을 읽지
+/// 않게 HOME · XDG · `GIT_CONFIG_GLOBAL` 을 `<base>/home` 으로 돌리고 시스템 설정을 끈다. 견줄 git 은 이미 빈 전역 설정으로 돈다
+/// (`testing::repo::git_command`). 전역 설정 파일(`<base>/home/.gitconfig`)을 돌려준다 — 시험이 거기 써서 사람의 설정을 흉내 낸다.
+fn isolate_global_config(base: &Path) -> std::path::PathBuf {
+    let home = base.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let config = home.join(".gitconfig");
+    if !config.exists() {
+        fs::write(&config, "").unwrap();
+    }
+    // SAFETY: nextest 는 시험마다 프로세스가 따로이고, 시험은 저장소를 열기 전(다른 스레드를 띄우기 전)에 이것을 부른다.
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_CONFIG_HOME", home.join(".config"));
+        std::env::set_var("GIT_CONFIG_GLOBAL", &config);
+        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
+    }
+    config
+}
+
 fn commit(rev: &str) -> DiffSide {
     DiffSide::Commit {
         rev: rev.to_owned(),
@@ -92,6 +116,11 @@ struct Patch {
 
 /// 진짜 git 의 diff. `args` 는 `git diff` 뒤에 붙는 것(리비전 · `--cached` · `-w`).
 fn git_patches(r: &TestRepo, args: &[&str]) -> Vec<Patch> {
+    git_patches_in(r, r.root(), args)
+}
+
+/// `dir`(클론 등 다른 저장소)에서 [`git_patches`].
+fn git_patches_in(r: &TestRepo, dir: &Path, args: &[&str]) -> Vec<Patch> {
     let base = [
         "-c",
         "core.quotePath=false",
@@ -102,7 +131,7 @@ fn git_patches(r: &TestRepo, args: &[&str]) -> Vec<Patch> {
         "--no-textconv",
         "--no-abbrev",
     ];
-    let raw = r.git(&[&base[..], &["--raw", "-z"], args].concat());
+    let raw = r.git_in(dir, &[&base[..], &["--raw", "-z"], args].concat());
     let mut files = Vec::new();
     let mut fields = raw.split('\0').filter(|s| !s.is_empty());
     while let Some(meta) = fields.next() {
@@ -136,7 +165,7 @@ fn git_patches(r: &TestRepo, args: &[&str]) -> Vec<Patch> {
             hunks: Vec::new(),
         });
     }
-    let patch = r.git(&[&base[..], &["-U3"], args].concat());
+    let patch = r.git_in(dir, &[&base[..], &["-U3"], args].concat());
     let mut current: Option<String> = None;
     let mut in_header = false;
     for line in patch.split_inclusive('\n') {

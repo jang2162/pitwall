@@ -3,7 +3,7 @@
 //! gix 에는 객체를 스트림으로 읽는 길이 없어 blob 은 통째로 푼 뒤 범위를 자른다. 그래서 대용량 기준(50 MiB,
 //! `pw_fs::limits::READ_ONLY_MAX`)을 넘는 blob 은 객체 헤더로 크기만 알리고 풀지 않는다(`tooLarge` — 범위 읽기도 하지 않는다,
 //! 13-m2-plan M2-04 메모). 편집 상한(5 MiB)을 넘는 blob 은 Host 전체에서 [`BIG_BLOBS_AT_ONCE`] 개씩만 함께 푼다 — 메모리가
-//! 50 MiB × 요청 수로 늘지 않게(`pw-fs` 검색의 큰 파일 상한과 같은 방식).
+//! 50 MiB × 요청 수로 늘지 않게(`pw-fs` 검색의 큰 파일 상한과 같은 방식). `git.diff` 의 큰 파일도 같은 차례를 쓴다.
 
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::Duration;
@@ -21,9 +21,9 @@ pub const BIG_BLOBS_AT_ONCE: usize = 2;
 
 /// 차례를 기다리는 최대 시간. 넘으면 「바쁨」 오류.
 #[cfg(not(test))]
-const BIG_BLOB_WAIT: Duration = Duration::from_secs(5);
+pub(crate) const BIG_BLOB_WAIT: Duration = Duration::from_secs(5);
 #[cfg(test)]
-const BIG_BLOB_WAIT: Duration = Duration::from_secs(1);
+pub(crate) const BIG_BLOB_WAIT: Duration = Duration::from_secs(1);
 
 pub(crate) static BIG_BLOBS: Gate = Gate::new(BIG_BLOBS_AT_ONCE);
 

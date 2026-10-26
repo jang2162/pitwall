@@ -10,6 +10,12 @@
 //!   인 줄을 80바이트에서 자르고 끝 공백을 뗀 것. 앞 hunk 와의 사이에서 못 찾으면 앞 hunk 의 것을 그대로 쓴다. diff 드라이버의
 //!   `xfuncname` 은 보지 않는다.
 //! - 공백 무시(`-w`): 공백(` ` · `\t` · `\n` · `\r`)을 모두 빼고 비교한다.
+//!
+//! git 과 갈리는 것: 사람이 `diff.algorithm` 을 `histogram` · `patience` 로 두면 그것을 따르지만 `imara-diff` 의 구현이 xdiff 와
+//! 달라 hunk 가 git 과 다를 수 있다(git 과 같은 것은 Myers · minimal — 13-m2-plan 「M2 에서 하지 않는 것」).
+//!
+//! hunk 는 응답(JSON)으로 나가므로 크기를 먼저 센다([`size`]) — 상한을 넘으면 줄을 만들지 않는다(줄 수백만 개를 문자열로 만든 뒤
+//! 버리지 않게).
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -25,6 +31,13 @@ pub const CONTEXT: u32 = 3;
 /// 함수 줄의 최대 바이트(xdiff 의 `func_line.buf`).
 const FUNC_LINE_MAX: usize = 80;
 
+/// 줄 하나가 응답에서 글 말고 차지하는 몫의 위 한계. `{"kind":"removed","text":"","oldLine":4294967295,"newLine":4294967295,
+/// "noNewline":false},` 가 89바이트다.
+pub const LINE_COST: u64 = 96;
+
+/// hunk 하나가 줄 말고 차지하는 몫의 위 한계(네 수 · 함수 줄 80바이트 · 필드 이름).
+const HUNK_COST: u64 = 256;
+
 /// git 의 `isspace`(`sane_ctype` — 로캘을 보지 않는다).
 fn is_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r')
@@ -35,16 +48,37 @@ pub fn lines(data: &[u8]) -> Vec<&[u8]> {
     data.split_inclusive(|&b| b == b'\n').collect()
 }
 
-/// `old` → `new` 의 hunk. 같으면 비어 있다.
+/// 줄 diff 의 결과.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lines {
+    /// 더한 줄 · 뺀 줄 수.
+    pub added: u32,
+    pub removed: u32,
+    /// hunk 가 응답에서 차지하는 크기의 위 한계([`size`]).
+    pub size: u64,
+    /// hunk. `size` 가 상한을 넘으면 `None` 이다. 같으면 빈 목록.
+    pub hunks: Option<Vec<DiffHunk>>,
+}
+
+/// `old` → `new` 의 hunk. 크기가 `limit` 를 넘으면 hunk 를 만들지 않는다.
 pub fn hunks(
     old: &[u8],
     new: &[u8],
     algorithm: Algorithm,
     ignore_whitespace: bool,
-) -> Vec<DiffHunk> {
+    limit: u64,
+) -> Lines {
     let (old, new) = (lines(old), lines(new));
     let changes = changes(&old, &new, algorithm, ignore_whitespace);
-    emit(&old, &new, &changes)
+    let added = changes.iter().map(|c| c.after.len() as u32).sum();
+    let removed = changes.iter().map(|c| c.before.len() as u32).sum();
+    let size = size(&old, &new, &changes);
+    Lines {
+        added,
+        removed,
+        size,
+        hunks: (size <= limit).then(|| emit(&old, &new, &changes)),
+    }
 }
 
 /// 변경 구간(옛 줄 범위 → 새 줄 범위). 순서대로이고 겹치지 않는다.
@@ -81,11 +115,16 @@ pub fn changes<'a>(
     let mut diff = Diff::compute(algorithm, &input);
     // 들여쓰기 휴리스틱은 그 자리의 실제 줄을 본다 — 공백 무시면 `}` 와 `    }` 가 한 토큰이라 토큰으로는 들여쓰기를 알 수 없다.
     // 휴리스틱이 받는 토큰 열은 들여쓰기를 찾는 데만 쓰이므로(같음 비교는 하지 않는다) 줄 번호를 토큰 삼은 열로 바꿔 넘긴다.
-    let lines: Vec<&[u8]> = old.iter().chain(new).copied().collect();
-    let before_at: Vec<Token> = (0..old.len() as u32).map(Token).collect();
-    let after_at: Vec<Token> = (old.len() as u32..lines.len() as u32).map(Token).collect();
+    let n1 = old.len() as u32;
+    let before_at: Vec<Token> = (0..n1).map(Token).collect();
+    let after_at: Vec<Token> = (n1..n1 + new.len() as u32).map(Token).collect();
     let mut indent = IndentHeuristic::new(|t: Token| {
-        IndentLevel::for_ascii_line(lines[t.0 as usize].iter().copied(), 8)
+        let line = if t.0 < n1 {
+            old[t.0 as usize]
+        } else {
+            new[(t.0 - n1) as usize]
+        };
+        IndentLevel::for_ascii_line(line.iter().copied(), 8)
     });
     let before_ptr = input.before.as_ptr();
     diff.postprocess_with(
@@ -108,13 +147,19 @@ pub fn changes<'a>(
         .collect()
 }
 
-/// 변경 구간을 `-U3` hunk 로 묶어 줄을 채운다.
-pub fn emit(old: &[&[u8]], new: &[&[u8]], changes: &[Change]) -> Vec<DiffHunk> {
-    let (n1, n2) = (old.len() as u32, new.len() as u32);
+/// 한 hunk 로 묶이는 변경 구간 `changes[i..=j]` 과 문맥까지 넓힌 옛 줄 `s1..e1` · 새 줄 `s2..e2`(0 기준).
+struct Span {
+    i: usize,
+    j: usize,
+    s1: u32,
+    e1: u32,
+    s2: u32,
+    e2: u32,
+}
+
+/// 변경 구간을 `-U3` hunk 자리로 묶는다.
+fn spans(n1: u32, n2: u32, changes: &[Change]) -> Vec<Span> {
     let mut out = Vec::new();
-    let mut func: &[u8] = &[];
-    // 함수 줄을 찾은 아래 끝(이 줄 위로는 앞 hunk 가 이미 봤다). xdiff 의 `funclineprev`.
-    let mut searched_to: i64 = -1;
     let mut i = 0;
     while i < changes.len() {
         // xdiff `xdl_get_hunk`: 다음 변경과의 사이가 문맥 두 배 이하면 같은 hunk.
@@ -125,11 +170,76 @@ pub fn emit(old: &[&[u8]], new: &[&[u8]], changes: &[Change]) -> Vec<DiffHunk> {
             j += 1;
         }
         let (first, last) = (&changes[i], &changes[j]);
-        let s1 = first.before.start.saturating_sub(CONTEXT);
-        let s2 = first.after.start.saturating_sub(CONTEXT);
-        let e1 = (last.before.end + CONTEXT).min(n1);
-        let e2 = (last.after.end + CONTEXT).min(n2);
+        out.push(Span {
+            i,
+            j,
+            s1: first.before.start.saturating_sub(CONTEXT),
+            s2: first.after.start.saturating_sub(CONTEXT),
+            e1: (last.before.end + CONTEXT).min(n1),
+            e2: (last.after.end + CONTEXT).min(n2),
+        });
+        i = j + 1;
+    }
+    out
+}
 
+/// [`emit`] 이 만들 hunk 가 응답(JSON)에서 차지하는 크기의 위 한계: 줄마다 글의 JSON 바이트 + [`LINE_COST`], hunk 마다
+/// [`HUNK_COST`]. hunk 의 줄은 새 쪽 `s2..e2`(문맥 · 더한 줄)와 뺀 줄이다.
+pub fn size(old: &[&[u8]], new: &[&[u8]], changes: &[Change]) -> u64 {
+    let mut total = 0;
+    for span in spans(old.len() as u32, new.len() as u32, changes) {
+        total += HUNK_COST;
+        for k in span.s2..span.e2 {
+            total += LINE_COST + json_len(new[k as usize]);
+        }
+        for change in &changes[span.i..=span.j] {
+            for k in change.before.clone() {
+                total += LINE_COST + json_len(old[k as usize]);
+            }
+        }
+    }
+    total
+}
+
+/// 줄 글(줄바꿈 제외)이 JSON 문자열 안에서 차지하는 바이트: UTF-8 이 아닌 바이트는 U+FFFD(3바이트), `"` · `\` · 제어 문자는
+/// 이스케이프.
+fn json_len(raw: &[u8]) -> u64 {
+    let text = raw.strip_suffix(b"\n").unwrap_or(raw);
+    if text.is_ascii() {
+        return text
+            .iter()
+            .map(|&b| match b {
+                b'"' | b'\\' | b'\r' | b'\t' | 0x08 | 0x0c => 2,
+                b if b < 0x20 => 6,
+                _ => 1,
+            })
+            .sum();
+    }
+    String::from_utf8_lossy(text)
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            c if (c as u32) < 0x20 => 6,
+            c => c.len_utf8() as u64,
+        })
+        .sum()
+}
+
+/// 변경 구간을 `-U3` hunk 로 묶어 줄을 채운다.
+pub fn emit(old: &[&[u8]], new: &[&[u8]], changes: &[Change]) -> Vec<DiffHunk> {
+    let mut out = Vec::new();
+    let mut func: &[u8] = &[];
+    // 함수 줄을 찾은 아래 끝(이 줄 위로는 앞 hunk 가 이미 봤다). xdiff 의 `funclineprev`.
+    let mut searched_to: i64 = -1;
+    for Span {
+        i,
+        j,
+        s1,
+        e1,
+        s2,
+        e2,
+    } in spans(old.len() as u32, new.len() as u32, changes)
+    {
         let start = i64::from(s1) - 1;
         let mut l = start;
         while l > searched_to && l >= 0 {
@@ -176,7 +286,6 @@ pub fn emit(old: &[&[u8]], new: &[&[u8]], changes: &[Change]) -> Vec<DiffHunk> {
             header: String::from_utf8_lossy(func).into_owned(),
             lines,
         });
-        i = j + 1;
     }
     out
 }

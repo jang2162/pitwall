@@ -110,3 +110,97 @@ fn an_untrusted_repository_runs_none_of_its_programs_on_diff_show_and_blob_reads
     read_everything(&repo);
     assert_eq!(marks(&dir), ["clean"]);
 }
+
+/// 사람의 전역 설정(`~/.gitconfig`)에 표식 프로그램을 심는다 — `git lfs install` 이 쓰는 꼴(`filter.lfs.*`, `required`)과
+/// textconv · fsmonitor. 커밋된 `.gitattributes` 가 모든 파일에 그 드라이버를 고르고, 작업 트리의 README.md 가 바뀌어 있다.
+fn global_drivers(process: bool) -> (Repo, PathBuf) {
+    let r = TestRepo::with_commit();
+    let config = isolate_global_config(r.base());
+    let marks = r.base().join("marks");
+    let bin = r.base().join("global");
+    fs::create_dir_all(&marks).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    let script = |name: &str, body: &str| {
+        let path = bin.join(name);
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\n{body}\n",
+                marks.join(name).display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.display().to_string()
+    };
+    let mut global = format!(
+        "[filter \"lfs\"]\n\tclean = {}\n\tsmudge = {}\n\trequired = true\n[diff \"lfs\"]\n\ttextconv = {}\n[core]\n\tfsmonitor = {}\n",
+        script("clean", "cat"),
+        script("smudge", "cat"),
+        script("textconv", "cat \"$1\""),
+        script("fsmonitor", "exit 1"),
+    );
+    if process {
+        global.push_str(&format!(
+            "[filter \"lfs\"]\n\tprocess = {}\n",
+            script("process", "exit 1")
+        ));
+    }
+    fs::write(&config, global).unwrap();
+    r.write(".gitattributes", "* filter=lfs diff=lfs\n");
+    r.commit_all("attributes");
+    r.write("README.md", "hello\nchanged\n");
+    let later = std::time::SystemTime::now() + Duration::from_secs(5);
+    fs::File::options()
+        .write(true)
+        .open(r.root().join("README.md"))
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    (Repo::new(r), marks)
+}
+
+/// 미신뢰 저장소의 `.gitattributes` 가 사람의 전역 드라이버를 골라도 돌지 않는다(어느 설정의 필터 드라이버도 돌리지 않는다).
+/// 신뢰하면 git 처럼 clean 필터가 돈다.
+#[test]
+fn a_global_filter_driver_runs_only_when_the_project_is_trusted() {
+    let (repo, dir) = global_drivers(false);
+    assert!(!repo.f.projects.is_trusted(&repo.id));
+    for (from, to) in [
+        (None, commit("HEAD")),
+        (None, DiffSide::Index),
+        (None, DiffSide::WorkTree),
+    ] {
+        repo.diff(from, to);
+    }
+    repo.blob(Some("HEAD"), "README.md");
+    let worktree = repo.diff(None, DiffSide::WorkTree);
+    assert!(
+        worktree
+            .files
+            .iter()
+            .any(|f| f.path == "README.md" && !f.hunks.is_empty() && f.error.is_none()),
+        "{worktree:#?}"
+    );
+    assert_eq!(marks(&dir), Vec::<String>::new());
+
+    repo.f.trust(&repo.id, true);
+    let worktree = repo.diff(None, DiffSide::WorkTree);
+    assert!(worktree.files.iter().any(|f| f.path == "README.md"));
+    assert_eq!(marks(&dir), ["clean"]);
+}
+
+/// 전역 `process` 드라이버(실패하는 것)도 미신뢰에서는 띄우지 않는다 — 작업 트리 diff 가 그대로 나온다.
+#[test]
+fn a_global_process_filter_is_not_started_for_an_untrusted_project() {
+    let (repo, dir) = global_drivers(true);
+    let worktree = repo.diff(None, DiffSide::WorkTree);
+    assert!(
+        worktree
+            .files
+            .iter()
+            .any(|f| f.path == "README.md" && !f.hunks.is_empty()),
+        "{worktree:#?}"
+    );
+    assert_eq!(marks(&dir), Vec::<String>::new());
+}

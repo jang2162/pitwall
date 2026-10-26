@@ -6,11 +6,21 @@
 //! - index ↔ 작업 트리는 gix status 의 index ↔ 작업 트리 판정(stat · 내용 해시)으로 바뀐 항목을 찾는다. untracked 와 이름 바뀜은
 //!   보지 않는다(`git diff` 와 같다). 서브모듈은 gix status 에 맡기지 않고(그 저장소를 저장소 설정째 연다) 이 크레이트의 열기
 //!   경로(신뢰 그대로)로 서브모듈의 HEAD 만 읽는다 — 서브모듈 안의 변경(`-dirty`)은 보이지 않는다.
-//! - 내용은 저장소에 담긴 꼴(`ToGit` — 작업 트리 파일은 git 처럼 clean 필터 · 줄바꿈 변환을 거친다)로 견준다. textconv 는 쓰지
-//!   않는다. 미신뢰 프로젝트의 저장소는 저장소 설정의 드라이버를 고르지 않게 열려 있으므로(`crate::repo::open_options`) 필터 ·
-//!   textconv · 외부 diff 프로그램이 돌지 않는다. git CLI 는 쓰지 않는다.
-//! - 대용량 기준(`pw_fs::limits::READ_ONLY_MAX`)을 넘는 쪽은 객체 헤더 · 파일 크기만 보고 내용을 풀지 않는다(`tooLarge`).
+//! - 내용은 저장소에 담긴 꼴(`ToGit` — 작업 트리 파일은 git 처럼 clean · process 필터 · 줄바꿈 변환을 거친다)로 견준다. textconv ·
+//!   외부 diff 는 신뢰해도 쓰지 않는다. 미신뢰 프로젝트는 필터 드라이버를 모두 떼고 읽는다 — 저장소 설정의 것은 열 때부터 고르지
+//!   않고(`crate::repo::open_options`), 사람의 전역 · 시스템 설정의 것(`filter.lfs.*` 등)은 [`without_filter_drivers`] 가 뗀다.
+//!   git CLI 는 쓰지 않는다.
+//! - 작업 트리 쪽 파일은 읽기 전에 M1-01 의 규칙 A(실제 경로가 작업 트리 안 — `pw_fs::scope`)를 거친다. 없는 쪽(지워진 파일의
+//!   새 쪽)은 디스크를 읽지 않는 빈 쪽이다. 한계: 판정과 gix 의 읽기 사이에 다른 로컬 프로세스가 경로의 폴더를 루트 밖 링크로
+//!   바꾸면 그 파일을 읽는다(`pw_fs::scope` 「쓰기」 한계와 같은 경합).
+//! - 대용량 기준(`pw_fs::limits::READ_ONLY_MAX`)을 넘는 쪽은 객체 헤더 · 파일 크기만 보고 내용을 풀지 않는다(`tooLarge`). 편집
+//!   상한(`EDITABLE_MAX`)을 넘는 쪽이 있는 파일은 `git.blob` 과 같은 차례([`super::blob::BIG_BLOBS`])를 얻어 diff 하고, 끝나면 그
+//!   메모리를 놓는다. 한계: 이름 바뀜 추적이 견주는 더한 · 지운 파일의 내용은 이 차례 없이 푼다(gix 의 추적기 안).
+//! - hunk 는 응답 크기의 상한을 둔다: 파일 하나 [`FILE_HUNKS_MAX`](넘으면 `tooLarge`), 응답 전체 [`DIFF_HUNKS_MAX`](닿은 뒤의
+//!   파일은 `hunksOmitted` — `paths` 로 그 파일만 다시 부르면 받는다). 크기는 [`super::hunks::size`] 로 센다.
+//! - 파일 하나의 내용을 읽지 못하면 그 파일에 `error` 를 달고 나머지는 낸다.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gix::ObjectId;
@@ -22,14 +32,22 @@ use gix::index::entry::Mode as IndexMode;
 use gix::objs::tree::EntryKind;
 use gix::status::index_worktree::Item;
 use gix::status::plumbing::index_as_worktree::{Change as WorktreeChange, EntryStatus};
-use pw_fs::limits::READ_ONLY_MAX;
+use pw_fs::limits::{EDITABLE_MAX, READ_ONLY_MAX};
+use pw_fs::scope::Roots;
 use pw_lang::attributes::RepoAttributes;
 use pw_lang::{HEAD_BYTES, generated};
 use pw_rpc::RpcError;
 
+use super::blob::{BIG_BLOB_WAIT, BIG_BLOBS, BIG_BLOBS_AT_ONCE};
 use super::hunks;
 use super::methods::{DiffFile, DiffSide, FileStatus, GitDiff, GitDiffParams, SubmodulePointer};
 use crate::Opened;
+
+/// 파일 하나의 hunk 가 응답에서 차지할 수 있는 크기([`super::hunks::size`]). 편집 상한(결정 M1-D9)과 같다 — 넘으면 `tooLarge`.
+pub const FILE_HUNKS_MAX: u64 = EDITABLE_MAX;
+
+/// 응답 하나의 hunk 크기 합의 상한. 대용량 기준(결정 M1-D9)과 같다 — 닿은 뒤의 파일은 `hunksOmitted`.
+pub const DIFF_HUNKS_MAX: u64 = READ_ONLY_MAX;
 
 /// diff 를 만드는 동안 객체 저장소에서 풀어 낸 바이트(헤더만 본 것은 세지 않는다). 시험이 대용량 파일을 풀지 않았는지 본다.
 #[derive(Debug, Default)]
@@ -133,6 +151,7 @@ pub fn diff(opened: &Opened, params: &GitDiffParams, stats: &Stats) -> Result<Gi
         },
         _ => WorktreeRoots::default(),
     };
+    let worktree = matches!(pair, Pair::IndexWorkTree).then(|| WorkTree::new(work_tree));
     let mut cache = repo
         .diff_resource_cache(Mode::ToGit, roots)
         .map_err(internal)?;
@@ -149,7 +168,7 @@ pub fn diff(opened: &Opened, params: &GitDiffParams, stats: &Stats) -> Result<Gi
             let rhs = gix::index::State::clone(&index);
             index_changes(repo, lhs, rhs, &filter, &mut cache, &objects)?
         }
-        Pair::IndexWorkTree => worktree_changes(opened, &filter)?,
+        Pair::IndexWorkTree => worktree_changes(opened, &filter, worktree.as_ref())?,
     };
     cache.clear_resource_cache_keep_allocation();
     entries.sort_by(|a, b| a.path().cmp(b.path()));
@@ -160,20 +179,25 @@ pub fn diff(opened: &Opened, params: &GitDiffParams, stats: &Stats) -> Result<Gi
         entries.iter().map(|e| parent_dir(e.path())),
     );
     let mut files = Vec::with_capacity(entries.len());
+    let mut budget = DIFF_HUNKS_MAX;
     for entry in entries {
         let file = file(
             &mut cache,
             &objects,
             &attributes,
+            worktree.as_ref(),
             entry,
             params.ignore_whitespace,
-        )?;
+            &mut budget,
+        );
         cache.clear_resource_cache_keep_allocation();
         // `git diff -w` 는 공백만 바뀐 파일을 목록에서도 뺀다(이름 · 모드가 바뀐 것은 남긴다).
         if params.ignore_whitespace
             && file.status == FileStatus::Modified
             && file.old_mode == file.new_mode
-            && file.hunks.is_empty()
+            && file.added == 0
+            && file.removed == 0
+            && file.error.is_none()
             && !file.binary
             && !file.too_large
             && file.submodule.is_none()
@@ -193,6 +217,27 @@ pub fn diff(opened: &Opened, params: &GitDiffParams, stats: &Stats) -> Result<Gi
     })
 }
 
+/// 미신뢰 프로젝트의 저장소에서 필터 드라이버(`filter.<x>.clean` · `smudge` · `process`)를 모두 뗀다 — 저장소 설정의 것뿐 아니라
+/// 사람의 전역 · 시스템 설정의 것도(git lfs 가 `~/.gitconfig` 에 쓰는 `filter.lfs.*` 등). 어느 드라이버를 돌릴지는 저장소의
+/// `.gitattributes` 가 고르므로, 미신뢰 저장소가 프로세스를 띄우지 못하려면 드라이버 자체가 없어야 한다(결정 M2-D8,
+/// 03-architecture.md 「보안」). 요청마다 새로 연 핸들의 메모리 안 설정만 바꾼다(파일은 그대로다). 드라이버가 없는 `filter`
+/// 속성은 git 처럼 무시된다 — LFS 파일은 포인터 그대로 견준다. diff 파이프라인과 작업 트리 판정(gix status) 둘 다 이 설정에서
+/// 드라이버를 고른다.
+pub fn without_filter_drivers(repo: &mut gix::Repository) -> Result<(), RpcError> {
+    let mut config = repo.config_snapshot_mut();
+    let ids: Vec<_> = config
+        .sections_and_ids_by_name("filter")
+        .into_iter()
+        .flatten()
+        .map(|(_, id)| id)
+        .collect();
+    for id in ids {
+        config.remove_section_by_id(id);
+    }
+    config.commit().map_err(internal)?;
+    Ok(())
+}
+
 /// 요청의 두 쪽을 고른다. 커밋은 `(커밋, 트리)` 다.
 fn pair(repo: &gix::Repository, params: &GitDiffParams) -> Result<Pair, RpcError> {
     let invalid = || {
@@ -204,9 +249,9 @@ fn pair(repo: &gix::Repository, params: &GitDiffParams) -> Result<Pair, RpcError
         (None, DiffSide::Commit { rev }) => {
             let commit = super::commit(repo, rev)?;
             let tree = tree_of(&commit)?;
-            let parent = match commit.parent_ids().next() {
+            let parent = match super::parent_ids(repo, &commit)?.into_iter().next() {
                 Some(parent) => {
-                    let parent = parent.object().map_err(internal)?.into_commit();
+                    let parent = repo.find_commit(parent).map_err(internal)?;
                     Some((parent.id, tree_of(&parent)?))
                 }
                 None => None,
@@ -355,7 +400,11 @@ fn index_changes(
 }
 
 /// index ↔ 작업 트리의 바뀐 항목.
-fn worktree_changes(opened: &Opened, filter: &PathFilter) -> Result<Vec<Entry>, RpcError> {
+fn worktree_changes(
+    opened: &Opened,
+    filter: &PathFilter,
+    worktree: Option<&WorkTree>,
+) -> Result<Vec<Entry>, RpcError> {
     use gix::status::{Submodule, UntrackedFiles};
     let repo = &opened.repo;
     let index = repo.index_or_empty().map_err(internal)?;
@@ -452,53 +501,128 @@ fn worktree_changes(opened: &Opened, filter: &PathFilter) -> Result<Vec<Entry>, 
         };
         out.push(change);
     }
+    let Some(worktree) = worktree else {
+        return Ok(out);
+    };
     for (path, id) in submodules {
-        let head = submodule_head(opened, path.as_ref());
-        if head != Some(id) {
-            out.push(Entry {
-                status: FileStatus::Modified,
-                old: Some(Side {
-                    path: path.clone(),
-                    mode: IndexMode::COMMIT,
-                    id: Some(id),
-                }),
+        let old = Some(Side {
+            path: path.clone(),
+            mode: IndexMode::COMMIT,
+            id: Some(id),
+        });
+        // git 처럼: 그 자리가 없거나 든 폴더가 링크면 지움, 파일 · 링크면 종류 바뀜, 폴더면 체크아웃된 서브모듈의 HEAD 를 견준다
+        // (체크아웃되지 않은 빈 폴더 · 저장소가 아닌 폴더는 바뀌지 않은 것).
+        let place = worktree.check(path.as_ref(), IndexMode::SYMLINK).ok();
+        let at = place
+            .as_ref()
+            .and_then(|p| std::fs::symlink_metadata(p).ok())
+            .zip(place);
+        let entry = match at {
+            None => Entry {
+                status: FileStatus::Deleted,
+                old,
+                new: None,
+                mode_only: false,
+            },
+            Some((meta, _)) if !meta.is_dir() => Entry {
+                status: FileStatus::TypeChanged,
+                old,
                 new: Some(Side {
                     path,
-                    mode: IndexMode::COMMIT,
-                    id: head,
+                    mode: file_mode(&meta),
+                    id: None,
                 }),
                 mode_only: false,
-            });
-        }
+            },
+            Some((_, place)) => match submodule_head(opened, &place) {
+                Some(head) if head != id => Entry {
+                    status: FileStatus::Modified,
+                    old,
+                    new: Some(Side {
+                        path,
+                        mode: IndexMode::COMMIT,
+                        id: Some(head),
+                    }),
+                    mode_only: false,
+                },
+                _ => continue,
+            },
+        };
+        out.push(entry);
     }
     Ok(out)
 }
 
-/// 체크아웃된 서브모듈의 HEAD. 체크아웃되지 않았거나(빈 폴더) 그 자리가 서브모듈 저장소가 아니면 `None` — 그때는 git 처럼 바뀐
-/// 것으로 보지 않는다(index 의 커밋과 같다고 본다).
-fn submodule_head(opened: &Opened, path: &BStr) -> Option<ObjectId> {
-    let dir = opened
-        .target
-        .work_tree
-        .join(gix::path::from_bstr(path).ok()?);
-    let repo = crate::repo::discover(&dir, opened.trusted).ok()?.ok()?;
+/// 작업 트리 항목의 git 모드(심링크 · 실행 파일 · 파일).
+fn file_mode(meta: &std::fs::Metadata) -> IndexMode {
+    if meta.file_type().is_symlink() {
+        return IndexMode::SYMLINK;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 != 0 {
+            return IndexMode::FILE_EXECUTABLE;
+        }
+    }
+    IndexMode::FILE
+}
+
+/// 체크아웃된 서브모듈의 HEAD. `dir` 은 작업 트리 안의 폴더다(링크가 아니고 든 폴더가 규칙 A 를 지났다). 체크아웃되지
+/// 않았거나(빈 폴더) 그 자리가 서브모듈 저장소가 아니면 `None` — 그때는 git 처럼 바뀐 것으로 보지 않는다(index 의 커밋과 같다고
+/// 본다).
+fn submodule_head(opened: &Opened, dir: &Path) -> Option<ObjectId> {
+    let repo = crate::repo::discover(dir, opened.trusted).ok()?.ok()?;
     let found = repo.workdir()?;
-    if std::fs::canonicalize(found).ok()? != std::fs::canonicalize(&dir).ok()? {
+    if std::fs::canonicalize(found).ok()? != std::fs::canonicalize(dir).ok()? {
         return None;
     }
     repo.head_id().ok().map(|id| id.detach())
 }
 
-/// 항목 하나의 내용 diff 와 표시.
+/// 작업 트리 쪽 파일을 읽기 전의 판정(M1-01 의 규칙 A — `pw_fs::scope` 의 읽기 판정).
+pub(crate) struct WorkTree {
+    dir: PathBuf,
+    roots: Roots,
+}
+
+impl WorkTree {
+    pub(crate) fn new(dir: &Path) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            roots: Roots::new([dir.to_path_buf()]),
+        }
+    }
+
+    /// `rel` 의 실제 경로가 작업 트리 안이면 그 경로. 심링크는 링크 자체(대상 글자)를 읽으므로 든 폴더만 본다 — 중간 폴더가 밖을
+    /// 가리키는 링크면 거절한다.
+    pub(crate) fn check(&self, rel: &BStr, mode: IndexMode) -> Result<PathBuf, String> {
+        let path = self.dir.join(
+            gix::path::from_bstr(rel).map_err(|e| format!("cannot use the path `{rel}`: {e}"))?,
+        );
+        let judged = if mode == IndexMode::SYMLINK {
+            path.parent().unwrap_or(&self.dir)
+        } else {
+            &path
+        };
+        self.roots.readable(judged).map_err(|_| {
+            format!("`{rel}` goes through a symlink that points outside the work tree")
+        })?;
+        Ok(path)
+    }
+}
+
+/// 항목 하나의 내용 diff 와 표시. 내용을 읽지 못하면 `error` 를 단다. `budget` 은 응답에 남은 hunk 크기다.
 fn file(
     cache: &mut Platform,
     objects: &Counted<'_, gix::OdbHandle>,
     attributes: &RepoAttributes,
+    worktree: Option<&WorkTree>,
     entry: Entry,
     ignore_whitespace: bool,
-) -> Result<DiffFile, RpcError> {
+    budget: &mut u64,
+) -> DiffFile {
     let path = entry.path().to_owned();
-    let hash = objects.hash;
     let mut out = DiffFile {
         status: entry.status,
         path: path.to_str_lossy().into_owned(),
@@ -523,11 +647,13 @@ fn file(
             .map(|id| id.to_string()),
         binary: false,
         too_large: false,
+        hunks_omitted: false,
         generated: false,
         submodule: None,
         added: 0,
         removed: 0,
         hunks: Vec::new(),
+        error: None,
     };
     let is_commit = |s: &Option<Side>| s.as_ref().is_some_and(|s| s.mode == IndexMode::COMMIT);
     if is_commit(&entry.old) || is_commit(&entry.new) {
@@ -546,14 +672,91 @@ fn file(
                 .map(|id| id.to_string()),
         });
         out.generated = generated_flag(attributes, path.as_ref(), None);
-        return Ok(out);
+        return out;
     }
     let blob_like = |s: &Option<Side>| s.as_ref().is_none_or(|s| kind(s.mode).is_some());
     if entry.mode_only || !blob_like(&entry.old) || !blob_like(&entry.new) {
         out.generated = generated_flag(attributes, path.as_ref(), None);
-        return Ok(out);
+        return out;
     }
-    // 없는 쪽은 있는 쪽의 종류로 둔다(null id · 없는 작업 트리 파일 = 빈 쪽).
+    let seat = match big(objects, worktree, &entry) {
+        Ok(false) => None,
+        Ok(true) => match BIG_BLOBS.enter(BIG_BLOB_WAIT) {
+            Some(seat) => Some(seat),
+            None => {
+                out.error = Some(format!(
+                    "git.diff is busy: {BIG_BLOBS_AT_ONCE} large files are already being read"
+                ));
+                out.generated = generated_flag(attributes, path.as_ref(), None);
+                return out;
+            }
+        },
+        Err(e) => {
+            out.error = Some(e);
+            out.generated = generated_flag(attributes, path.as_ref(), None);
+            return out;
+        }
+    };
+    if let Err(e) = contents(
+        cache,
+        objects,
+        attributes,
+        worktree,
+        &entry,
+        ignore_whitespace,
+        budget,
+        &mut out,
+    ) {
+        out.error = Some(e);
+        out.generated = generated_flag(attributes, path.as_ref(), None);
+    }
+    if seat.is_some() {
+        // 큰 내용을 다음 파일 · 요청까지 들고 있지 않는다 — 차례를 놓기 전에 버퍼째 놓는다.
+        cache.clear_resource_cache();
+    }
+    out
+}
+
+/// 한쪽이라도 편집 상한을 넘고 대용량 기준 이하다(내용을 풀어 diff 한다). 작업 트리 쪽은 규칙 A 를 먼저 거친다.
+fn big(
+    objects: &Counted<'_, gix::OdbHandle>,
+    worktree: Option<&WorkTree>,
+    entry: &Entry,
+) -> Result<bool, String> {
+    use gix::objs::FindHeader;
+    let mut big = false;
+    for side in [&entry.old, &entry.new].into_iter().flatten() {
+        let size = match (side.id, worktree) {
+            (Some(id), _) => objects
+                .try_header(&id)
+                .map_err(|e| format!("cannot read `{}`: {e}", side.path))?
+                .map_or(0, |h| h.size),
+            (None, Some(worktree)) => {
+                let path = worktree.check(side.path.as_ref(), side.mode)?;
+                std::fs::symlink_metadata(&path).map_or(0, |m| m.len())
+            }
+            (None, None) => 0,
+        };
+        big |= size > EDITABLE_MAX && size <= READ_ONLY_MAX;
+    }
+    Ok(big)
+}
+
+/// 두 쪽의 내용을 읽어 `out` 의 바이너리 · 대용량 · hunk · 줄 수 · 생성 표시를 채운다.
+#[allow(clippy::too_many_arguments)] // 한 파일의 diff 에 드는 것을 그대로 받는다 — 묶어도 이 함수 하나만 쓴다.
+fn contents(
+    cache: &mut Platform,
+    objects: &Counted<'_, gix::OdbHandle>,
+    attributes: &RepoAttributes,
+    worktree: Option<&WorkTree>,
+    entry: &Entry,
+    ignore_whitespace: bool,
+    budget: &mut u64,
+    out: &mut DiffFile,
+) -> Result<(), String> {
+    let path = entry.path();
+    let hash = objects.hash;
+    // 없는 쪽은 있는 쪽의 종류로 둔다.
     let fallback = entry
         .old
         .as_ref()
@@ -561,30 +764,45 @@ fn file(
         .and_then(|s| kind(s.mode))
         .unwrap_or(EntryKind::Blob);
     let set = |cache: &mut Platform, side: &Option<Side>, which: ResourceKind| {
-        let (id, kind, path) = match side {
-            Some(s) => (
-                s.id.unwrap_or_else(|| ObjectId::null(hash)),
-                kind(s.mode).unwrap_or(fallback),
-                s.path.as_ref(),
-            ),
-            None => (ObjectId::null(hash), fallback, path.as_ref()),
+        let result = match side {
+            Some(s) => {
+                if s.id.is_none()
+                    && let Some(worktree) = worktree
+                {
+                    worktree.check(s.path.as_ref(), s.mode)?;
+                }
+                cache.set_resource(
+                    s.id.unwrap_or_else(|| ObjectId::null(hash)),
+                    kind(s.mode).unwrap_or(fallback),
+                    s.path.as_ref(),
+                    which,
+                    objects,
+                )
+            }
+            // 없는 쪽은 빈 쪽이다. null id 는 작업 트리 루트가 있으면 「디스크의 그 경로를 읽어라」 라서(지운 파일의 자리에 다른 것 —
+            // 루트 밖을 가리키는 폴더 링크 — 이 있을 수 있다) 루트를 떼고 넣는다.
+            None => {
+                let roots = std::mem::take(&mut cache.filter.roots);
+                let result =
+                    cache.set_resource(ObjectId::null(hash), fallback, path, which, objects);
+                cache.filter.roots = roots;
+                result
+            }
         };
-        cache
-            .set_resource(id, kind, path, which, objects)
-            .map_err(|e| RpcError::internal(format!("cannot read `{path}`: {e}")))
+        result.map_err(|e| format!("cannot read `{path}`: {e}"))
     };
     set(cache, &entry.old, ResourceKind::OldOrSource)?;
     set(cache, &entry.new, ResourceKind::NewOrDestination)?;
     let prepared = cache
         .prepare_diff()
-        .map_err(|e| RpcError::internal(format!("cannot diff `{path}`: {e}")))?;
+        .map_err(|e| format!("cannot diff `{path}`: {e}"))?;
     let algorithm = match prepared.operation {
         Operation::SourceOrDestinationIsBinary => {
             let large = |d: gix::diff::blob::platform::resource::Data<'_>| matches!(d, gix::diff::blob::platform::resource::Data::Binary { size } if size > READ_ONLY_MAX);
             out.too_large = large(prepared.old.data) || large(prepared.new.data);
             out.binary = !out.too_large;
-            out.generated = generated_flag(attributes, path.as_ref(), None);
-            return Ok(out);
+            out.generated = generated_flag(attributes, path, None);
+            return Ok(());
         }
         Operation::InternalDiff { algorithm } => algorithm,
         // 외부 diff 는 고르지 않는다(`skip_internal_diff_if_external_is_configured` 가 꺼져 있다).
@@ -592,17 +810,26 @@ fn file(
     };
     let old = prepared.old.data.as_slice().unwrap_or_default();
     let new = prepared.new.data.as_slice().unwrap_or_default();
-    out.hunks = hunks::hunks(old, new, algorithm, ignore_whitespace);
-    for line in out.hunks.iter().flat_map(|h| &h.lines) {
-        match line.kind {
-            super::methods::LineKind::Added => out.added += 1,
-            super::methods::LineKind::Removed => out.removed += 1,
-            super::methods::LineKind::Context => {}
+    let lines = hunks::hunks(
+        old,
+        new,
+        algorithm,
+        ignore_whitespace,
+        FILE_HUNKS_MAX.min(*budget),
+    );
+    out.added = lines.added;
+    out.removed = lines.removed;
+    match lines.hunks {
+        Some(hunks) => {
+            *budget -= lines.size;
+            out.hunks = hunks;
         }
+        None if lines.size > FILE_HUNKS_MAX => out.too_large = true,
+        None => out.hunks_omitted = true,
     }
     let head = if entry.new.is_some() { new } else { old };
-    out.generated = generated_flag(attributes, path.as_ref(), Some(head));
-    Ok(out)
+    out.generated = generated_flag(attributes, path, Some(head));
+    Ok(())
 }
 
 /// `linguist-generated` 속성, 없으면 Linguist 규칙(경로 · 앞부분). `head` 가 없으면(바이너리 · 대용량) 경로 규칙만.
