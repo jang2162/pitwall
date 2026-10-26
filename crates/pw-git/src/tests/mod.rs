@@ -3,11 +3,14 @@
 
 mod diff;
 mod repo;
+mod status;
 
 #[cfg(unix)]
 mod cli;
 #[cfg(unix)]
 mod untrusted;
+#[cfg(unix)]
+mod watch;
 
 use std::fs;
 use std::path::Path;

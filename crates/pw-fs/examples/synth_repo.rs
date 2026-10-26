@@ -1,8 +1,11 @@
 //! 파일 목록 인덱스의 성능 픽스처(M1-12): 목록에 드는 파일이 정확히 `<개수>` 개인 합성 저장소를 만든다.
 //!
 //! ```bash
-//! cargo run --release -p pw-fs --example synth_repo -- <빈 폴더> [개수, 기본 100000] [시드, 기본 1]
+//! cargo run --release -p pw-fs --example synth_repo -- <빈 폴더> [개수, 기본 100000] [시드, 기본 1] [--git]
 //! ```
+//!
+//! `--git` 이면 빈 `.git/` 대신 진짜 저장소를 만들고(`git init`) 목록에 드는 파일을 모두 커밋한다 — git status 측정(M2-02,
+//! `crates/pw-git/examples/status_bench.rs`)의 픽스처다. 사람의 git 설정을 읽지 않고(시스템 · 전역 설정 끔) 작성자 · 시각을 고정한다.
 //!
 //! 같은 개수 · 시드면 같은 트리다. 모양은 모노레포를 흉내 낸다: `crates/` · `packages/` · `apps/` · `docs/` · `vendor/` 아래 2~6 단계
 //! 폴더에 폴더당 10~40 개 파일, 여러 확장자. `.git/`(빈 폴더 — 저장소로 보이게)과 `.gitignore`(`target/` · `node_modules/` ·
@@ -49,7 +52,9 @@ fn touch(path: &Path) {
 }
 
 fn main() {
-    let mut args = std::env::args().skip(1);
+    let all: Vec<String> = std::env::args().skip(1).collect();
+    let git = all.iter().any(|a| a == "--git");
+    let mut args = all.into_iter().filter(|a| a != "--git");
     let root = PathBuf::from(args.next().expect("an empty folder"));
     let count: usize = args.next().map_or(100_000, |n| n.parse().expect("count"));
     let seed: u64 = args.next().map_or(1, |n| n.parse().expect("seed"));
@@ -120,8 +125,47 @@ fn main() {
         };
         touch(&dir.join(name));
     }
+    if git {
+        commit_all(&root);
+    }
     println!(
-        "{}: {made} listed files in {dirs} leaf folders, {ignored} ignored files",
-        root.display()
+        "{}: {made} listed files in {dirs} leaf folders, {ignored} ignored files{}",
+        root.display(),
+        if git { ", committed" } else { "" }
     );
+}
+
+/// `root` 를 저장소로 만들고 모두 커밋한다. 사람의 설정 · 훅을 쓰지 않는다.
+fn commit_all(root: &Path) {
+    fs::remove_dir(root.join(".git")).unwrap();
+    let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .current_dir(root)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", null)
+            .env("GIT_AUTHOR_NAME", "Pitwall Synth")
+            .env("GIT_AUTHOR_EMAIL", "synth@pitwall.invalid")
+            .env("GIT_COMMITTER_NAME", "Pitwall Synth")
+            .env("GIT_COMMITTER_EMAIL", "synth@pitwall.invalid")
+            .env("GIT_AUTHOR_DATE", "@1700000000 +0000")
+            .env("GIT_COMMITTER_DATE", "@1700000000 +0000")
+            .args([
+                "-c",
+                "init.defaultBranch=main",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "--quiet"]);
+    git(&["add", "--all"]);
+    git(&["commit", "--quiet", "--no-verify", "-m", "synth"]);
 }

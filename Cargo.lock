@@ -2328,6 +2328,7 @@ checksum = "e2ef461798b1e6cb652192c69dfc9658dfc1bab457ef812dd1ab85d75104cbef"
 dependencies = [
  "clru",
  "crc32fast",
+ "crossbeam-deque",
  "gix-chunk",
  "gix-error",
  "gix-hash",
@@ -4744,6 +4745,7 @@ version = "0.0.0"
 dependencies = [
  "gix",
  "libc",
+ "notify",
  "pw-core",
  "pw-fs",
  "pw-lang",

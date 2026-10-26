@@ -6,6 +6,8 @@
 //! - [`repo`]: 저장소 해석 — 프로젝트(활성 워크트리)의 저장소 하나, HEAD, 진행 중 작업.
 //! - [`cli`]: git CLI 실행기 — 실행 파일 · 자식 환경 · 기계 형식 출력 · 프로세스 그룹째 취소.
 //! - [`methods`]: `git.repo` RPC.
+//! - [`status`]: 작업 트리 상태 · ref — `git.status` · `git.refs`(M2-02).
+//! - [`watch`]: 저장소 감시 — `git.watch`, 이벤트 `git.statusChanged` · `git.refsChanged`(M2-02).
 //! - [`write`]: 쓰기 실행기 · 진행 중 작업 · askpass(M2-06).
 //! - `testing`(시험 · `test-support` 기능): 시험 저장소 도우미.
 //!
@@ -16,8 +18,10 @@ pub mod cli;
 pub mod diff;
 pub mod methods;
 pub mod repo;
+pub mod status;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod watch;
 pub mod write;
 
 use std::collections::{HashMap, HashSet};

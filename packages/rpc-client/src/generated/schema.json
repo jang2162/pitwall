@@ -3635,6 +3635,288 @@
       ],
       "tier": "read"
     },
+    "git.refs": {
+      "description": "로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 있으면 그 워크트리 안의 프로젝트 루트를 담은 저장소를 본다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitBranch": {
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "head": {
+                "description": "이 작업 트리의 HEAD 가 이 브랜치에 있다.",
+                "type": "boolean"
+              },
+              "name": {
+                "description": "짧은 이름(`main`, `feat/x`).",
+                "type": "string"
+              },
+              "refName": {
+                "description": "`refs/heads/…`.",
+                "type": "string"
+              },
+              "upstream": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitUpstream"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "refName",
+              "commit",
+              "head",
+              "upstream"
+            ],
+            "type": "object"
+          },
+          "GitRemoteBranch": {
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "name": {
+                "description": "짧은 이름(`origin/main`).",
+                "type": "string"
+              },
+              "refName": {
+                "description": "`refs/remotes/…`.",
+                "type": "string"
+              },
+              "remote": {
+                "description": "원격 이름(`origin`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "remote",
+              "name",
+              "refName",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "GitTag": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "peeled": {
+                "description": "주석 태그면 태그를 벗긴 객체(보통 커밋). 가벼운 태그면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "refName": {
+                "description": "`refs/tags/…`.",
+                "type": "string"
+              },
+              "target": {
+                "description": "ref 가 가리키는 객체(주석 태그면 태그 객체).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "refName",
+              "target",
+              "peeled"
+            ],
+            "type": "object"
+          },
+          "GitTrack": {
+            "description": "ahead/behind.",
+            "properties": {
+              "ahead": {
+                "description": "브랜치에만 있는 커밋 수(`↑`).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "behind": {
+                "description": "upstream 에만 있는 커밋 수(`↓`).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "ahead",
+              "behind"
+            ],
+            "type": "object"
+          },
+          "GitUpstream": {
+            "properties": {
+              "name": {
+                "description": "짧은 이름(`origin/main`, 원격이 `.` 이면 로컬 브랜치 이름).",
+                "type": "string"
+              },
+              "refName": {
+                "description": "전체 이름(`refs/remotes/origin/main`).",
+                "type": "string"
+              },
+              "track": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitTrack"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "`null` 이면 설정은 있는데 그 ref 가 없다(git 의 `[gone]`)."
+              }
+            },
+            "required": [
+              "name",
+              "refName",
+              "track"
+            ],
+            "type": "object"
+          },
+          "RepoHead": {
+            "oneOf": [
+              {
+                "description": "브랜치에 있다. `name` 은 짧은 이름(`main`, `feat/x`), `commit` 은 그 끝 커밋의 해시.",
+                "properties": {
+                  "commit": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "branch",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "commit"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "아직 커밋이 없는 브랜치(새 저장소, `git checkout --orphan`).",
+                "properties": {
+                  "kind": {
+                    "const": "unborn",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "분리된 HEAD 가 가리키는 커밋(태그를 체크아웃해도 git 은 HEAD 에 커밋을 적는다).",
+                "properties": {
+                  "commit": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "detached",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "commit"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "branches": {
+            "description": "로컬 브랜치(ref 이름순). 심볼릭 ref 는 넣지 않는다.",
+            "items": {
+              "$ref": "#/$defs/GitBranch"
+            },
+            "type": "array"
+          },
+          "head": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RepoHead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "remoteBranches": {
+            "description": "원격 추적 브랜치(ref 이름순). `origin/HEAD` 같은 심볼릭 ref 는 넣지 않는다.",
+            "items": {
+              "$ref": "#/$defs/GitRemoteBranch"
+            },
+            "type": "array"
+          },
+          "tags": {
+            "items": {
+              "$ref": "#/$defs/GitTag"
+            },
+            "type": "array"
+          },
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기. `null` 이면 「저장소 없음」 이고 나머지는 빈다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "workTree",
+          "head",
+          "branches",
+          "remoteBranches",
+          "tags"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "git.repo": {
       "description": "프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.",
       "kind": "unary",
@@ -3946,6 +4228,252 @@
           "message",
           "head",
           "refs"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.status": {
+      "description": "작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업\n트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로\n돌고, 작업을 취소하면 cancelled 오류다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "paths": {
+            "default": null,
+            "description": "이 경로(저장소 작업 트리 기준, `/` 구분 — 폴더면 그 아래 전체)의 항목만 다시 본다(`git.statusChanged` 의 `paths`). 없으면\n전체. `/` 로 시작하거나 `..` 이 든 경로는 invalid params.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitChange": {
+            "description": "경로 하나의 변경 종류(porcelain v2 의 `XY` 글자 하나).",
+            "oneOf": [
+              {
+                "const": "added",
+                "description": "`A`. 작업 트리 쪽(`unstaged`)이면 `git add --intent-to-add` 한 파일.",
+                "type": "string"
+              },
+              {
+                "const": "modified",
+                "description": "`M`(서브모듈이면 가리키는 커밋이 바뀌었다).",
+                "type": "string"
+              },
+              {
+                "const": "deleted",
+                "description": "`D`.",
+                "type": "string"
+              },
+              {
+                "const": "renamed",
+                "description": "`R` — 스테이징한 쪽만, `origPath` 에서 옮겼다.",
+                "type": "string"
+              },
+              {
+                "const": "copied",
+                "description": "`C` — 스테이징한 쪽만, `origPath` 에서 복사했다.",
+                "type": "string"
+              },
+              {
+                "const": "typeChanged",
+                "description": "`T`(파일 ↔ 심링크 등).",
+                "type": "string"
+              },
+              {
+                "const": "untracked",
+                "description": "`?` — 작업 트리 쪽만.",
+                "type": "string"
+              }
+            ]
+          },
+          "GitConflict": {
+            "description": "병합 충돌(porcelain v2 의 `u` 줄 `XY`).",
+            "oneOf": [
+              {
+                "const": "bothDeleted",
+                "description": "`DD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByUs",
+                "description": "`AU`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByThem",
+                "description": "`UD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByThem",
+                "description": "`UA`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByUs",
+                "description": "`DU`.",
+                "type": "string"
+              },
+              {
+                "const": "bothAdded",
+                "description": "`AA`.",
+                "type": "string"
+              },
+              {
+                "const": "bothModified",
+                "description": "`UU`.",
+                "type": "string"
+              }
+            ]
+          },
+          "GitStatusEntry": {
+            "description": "경로 하나의 상태. 충돌이면 `conflict` 만 있다.",
+            "properties": {
+              "conflict": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitConflict"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "origPath": {
+                "description": "스테이징한 이름 바뀜 · 복사의 원래 경로.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "description": "저장소 작업 트리 기준 경로(`/` 구분). untracked 중첩 저장소처럼 폴더 하나로 보이는 것은 `/` 로 끝난다.",
+                "type": "string"
+              },
+              "staged": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitChange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "HEAD↔index(스테이징한 변경)."
+              },
+              "unstaged": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitChange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "index↔작업 트리(스테이징하지 않은 변경). untracked 면 `untracked`."
+              }
+            },
+            "required": [
+              "path",
+              "origPath",
+              "staged",
+              "unstaged",
+              "conflict"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "entries": {
+            "description": "바뀐 경로(경로순). `paths` 로 불렀으면 그 경로 안의 것만 — 받는 쪽은 그 경로 안의 옛 항목을 이것으로 바꾼다.",
+            "items": {
+              "$ref": "#/$defs/GitStatusEntry"
+            },
+            "type": "array"
+          },
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기(절대 경로) — 경로들의 기준. `null` 이면 「저장소 없음」 이고 `entries` 는 빈다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "workTree",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.watch": {
+      "description": "프로젝트(활성 워크트리)의 저장소를 감시한다. 스트림이 열려 있는 동안 바뀜이 프로젝트 범위 이벤트 `git.statusChanged` ·\n`git.refsChanged` 로 나가고, 닫으면 놓는다. 첫 항목이 오면 그 뒤의 바뀜은 놓치지 않는다. 작업 트리의 바뀜은 같은 창의\n`fs.watch` 가 열려 있어야 온다.",
+      "item": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`git.watch` 의 항목: 감시를 다 건 뒤 한 번.",
+        "properties": {
+          "workTree": {
+            "description": "감시하는 저장소의 작업 트리 꼭대기. `null` 이면 저장소가 없어 아무것도 보지 않는다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "workTree"
+        ],
+        "type": "object"
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 있으면 그 워크트리 안의 프로젝트 루트를 담은 저장소를 본다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
         ],
         "type": "object"
       },

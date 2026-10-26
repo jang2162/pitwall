@@ -87,6 +87,10 @@ fn local_host(
     // git 쓰기 실행기 · 진행 중 작업 · 창 질의(`git.operation*` · `git.prompts`, M2-06). 쓰기는 Host 의 Task 로 돈다.
     let git_write = Arc::new(pw_git::write::GitWrite::new(Arc::clone(&git), askpass));
     let git_write_methods = Arc::clone(&git_write);
+    // 작업 트리 상태 · ref(`git.status` · `git.refs`)와 저장소 감시(`git.watch`, M2-02).
+    let git_status = Arc::new(pw_git::status::Status::new(Arc::clone(&git)));
+    let git_status_methods = Arc::clone(&git_status);
+    let git_watch = pw_git::watch::GitWatch::new(Arc::clone(&git));
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
@@ -103,12 +107,16 @@ fn local_host(
         .methods(move |router| pw_syntax::methods::register(router, syntax))
         .methods(move |router| pw_git::methods::register(router, git_methods))
         .methods(move |router| pw_git::write::register(router, git_write_methods))
+        .methods(move |router| pw_git::status::register(router, git_status_methods))
+        .methods(move |router| pw_git::watch::register(router, git_watch))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
     git_write.attach(host.tasks().clone());
     // 인덱스는 버스의 `fs.changed` 로 목록을 갱신하고, 목록을 만드는 동안을 작업으로 보인다.
     tauri::async_runtime::spawn(fs_index.attach(host.bus(), host.tasks().clone()));
+    // 큰 저장소의 전체 status 는 작업으로 보인다.
+    git_status.attach(host.tasks().clone());
     if let Some(config) = host.config() {
         i18n.attach_config(config.global.clone());
         // 외부 도구 실행(⌥F1 · ⌘⌥E)이 전역 설정 · 프로젝트 레지스트리를 쓴다.

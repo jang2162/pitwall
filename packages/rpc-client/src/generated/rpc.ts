@@ -100,6 +100,10 @@ export type UnaryMethods = {
 	 */
 	"git.prompt.answer": { params: GitPromptAnswerParams; result: null };
 	/**
+	 * 로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.
+	 */
+	"git.refs": { params: GitRepoParams; result: GitRefs };
+	/**
 	 * 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.
 	 * 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
 	 */
@@ -108,6 +112,12 @@ export type UnaryMethods = {
 	 * 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).
 	 */
 	"git.show": { params: GitRevParams; result: GitShow };
+	/**
+	 * 작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업
+	 * 트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로
+	 * 돌고, 작업을 취소하면 cancelled 오류다.
+	 */
+	"git.status": { params: GitStatusParams; result: GitStatus };
 	/**
 	 * Host 의 종류 · 버전 · OS.
 	 */
@@ -315,6 +325,12 @@ export type StreamMethods = {
 	 */
 	"git.prompts": { params: GitPromptsParams; item: GitPromptEvent };
 	/**
+	 * 프로젝트(활성 워크트리)의 저장소를 감시한다. 스트림이 열려 있는 동안 바뀜이 프로젝트 범위 이벤트 `git.statusChanged` ·
+	 * `git.refsChanged` 로 나가고, 닫으면 놓는다. 첫 항목이 오면 그 뒤의 바뀜은 놓치지 않는다. 작업 트리의 바뀜은 같은 창의
+	 * `fs.watch` 가 열려 있어야 온다.
+	 */
+	"git.watch": { params: GitRepoParams; item: GitWatching };
+	/**
 	 * 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.
 	 * Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.
 	 */
@@ -363,8 +379,11 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.operation.skip": {"name":"git.operation.skip","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업의 지금 단계를 건너뛴다(`git <작업> --skip`, merge 는 없다).\n","mcp":false,"fileScope":false},
 	"git.prompt.answer": {"name":"git.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"GitPromptAnswerParams","output":"()","doc":" 질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는\n 답이면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.prompts": {"name":"git.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"GitPromptsParams","output":"GitPromptEvent","doc":" 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다\n (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.\n","mcp":false,"fileScope":false},
+	"git.refs": {"name":"git.refs","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRefs","doc":" 로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.\n","mcp":false,"fileScope":false},
 	"git.repo": {"name":"git.repo","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRepo","doc":" 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false,"fileScope":false},
 	"git.show": {"name":"git.show","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitShow","doc":" 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).\n","mcp":false,"fileScope":false},
+	"git.status": {"name":"git.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusParams","output":"GitStatus","doc":" 작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업\n 트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로\n 돌고, 작업을 취소하면 cancelled 오류다.\n","mcp":false,"fileScope":false},
+	"git.watch": {"name":"git.watch","kind":"stream","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitWatching","doc":" 프로젝트(활성 워크트리)의 저장소를 감시한다. 스트림이 열려 있는 동안 바뀜이 프로젝트 범위 이벤트 `git.statusChanged` ·\n `git.refsChanged` 로 나가고, 닫으면 놓는다. 첫 항목이 오면 그 뒤의 바뀜은 놓치지 않는다. 작업 트리의 바뀜은 같은 창의\n `fs.watch` 가 열려 있어야 온다.\n","mcp":false,"fileScope":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false,"fileScope":false},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n","mcp":false,"fileScope":true},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n","mcp":false,"fileScope":true},
@@ -1041,6 +1060,51 @@ export type GitBlobParams = {
 	bytes?: boolean,
 };
 
+export type GitBranch = {
+	/**  짧은 이름(`main`, `feat/x`). */
+	name: string,
+	/**  `refs/heads/…`. */
+	refName: string,
+	commit: string,
+	/**  이 작업 트리의 HEAD 가 이 브랜치에 있다. */
+	head: boolean,
+	upstream: GitUpstream | null,
+};
+
+/**  경로 하나의 변경 종류(porcelain v2 의 `XY` 글자 하나). */
+export type GitChange = 
+/**  `A`. 작업 트리 쪽(`unstaged`)이면 `git add --intent-to-add` 한 파일. */
+"added" | 
+/**  `M`(서브모듈이면 가리키는 커밋이 바뀌었다). */
+"modified" | 
+/**  `D`. */
+"deleted" | 
+/**  `R` — 스테이징한 쪽만, `origPath` 에서 옮겼다. */
+"renamed" | 
+/**  `C` — 스테이징한 쪽만, `origPath` 에서 복사했다. */
+"copied" | 
+/**  `T`(파일 ↔ 심링크 등). */
+"typeChanged" | 
+/**  `?` — 작업 트리 쪽만. */
+"untracked";
+
+/**  병합 충돌(porcelain v2 의 `u` 줄 `XY`). */
+export type GitConflict = 
+/**  `DD`. */
+"bothDeleted" | 
+/**  `AU`. */
+"addedByUs" | 
+/**  `UD`. */
+"deletedByThem" | 
+/**  `UA`. */
+"addedByThem" | 
+/**  `DU`. */
+"deletedByUs" | 
+/**  `AA`. */
+"bothAdded" | 
+/**  `UU`. */
+"bothModified";
+
 export type GitContainedIn = {
 	/**  그 커밋을 조상(자신 포함)으로 가진 브랜치 · 원격 브랜치 · 태그. 순서는 [`GitShow::refs`] 와 같다. */
 	refs: RefLabel[],
@@ -1144,6 +1208,27 @@ export type GitPromptsParams = {
 	projectId: string,
 };
 
+export type GitRefs = {
+	/**  저장소의 작업 트리 꼭대기. `null` 이면 「저장소 없음」 이고 나머지는 빈다. */
+	workTree: string | null,
+	head: RepoHead | null,
+	/**  로컬 브랜치(ref 이름순). 심볼릭 ref 는 넣지 않는다. */
+	branches: GitBranch[],
+	/**  원격 추적 브랜치(ref 이름순). `origin/HEAD` 같은 심볼릭 ref 는 넣지 않는다. */
+	remoteBranches: GitRemoteBranch[],
+	tags: GitTag[],
+};
+
+export type GitRemoteBranch = {
+	/**  원격 이름(`origin`). */
+	remote: string,
+	/**  짧은 이름(`origin/main`). */
+	name: string,
+	/**  `refs/remotes/…`. */
+	refName: string,
+	commit: string,
+};
+
 export type GitRepo = {
 	/**
 	 *  `null` 이면 「저장소 없음」 — 저장소 밖, bare 저장소, 위조된 `.git` 파일, `core.worktree` 가 다른 폴더를 가리키는 저장소.
@@ -1185,6 +1270,70 @@ export type GitShow = {
 	head: boolean,
 	/**  이 커밋을 가리키는 브랜치 · 원격 브랜치 · 태그(주석 태그는 벗긴 대상). 종류 순(로컬 · 원격 · 태그), 같은 종류는 이름순. */
 	refs: RefLabel[],
+};
+
+export type GitStatus = {
+	/**  저장소의 작업 트리 꼭대기(절대 경로) — 경로들의 기준. `null` 이면 「저장소 없음」 이고 `entries` 는 빈다. */
+	workTree: string | null,
+	/**  바뀐 경로(경로순). `paths` 로 불렀으면 그 경로 안의 것만 — 받는 쪽은 그 경로 안의 옛 항목을 이것으로 바꾼다. */
+	entries: GitStatusEntry[],
+};
+
+/**  경로 하나의 상태. 충돌이면 `conflict` 만 있다. */
+export type GitStatusEntry = {
+	/**  저장소 작업 트리 기준 경로(`/` 구분). untracked 중첩 저장소처럼 폴더 하나로 보이는 것은 `/` 로 끝난다. */
+	path: string,
+	/**  스테이징한 이름 바뀜 · 복사의 원래 경로. */
+	origPath: string | null,
+	/**  HEAD↔index(스테이징한 변경). */
+	staged: GitChange | null,
+	/**  index↔작업 트리(스테이징하지 않은 변경). untracked 면 `untracked`. */
+	unstaged: GitChange | null,
+	conflict: GitConflict | null,
+};
+
+export type GitStatusParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). */
+	worktree?: string | null,
+	/**
+	 *  이 경로(저장소 작업 트리 기준, `/` 구분 — 폴더면 그 아래 전체)의 항목만 다시 본다(`git.statusChanged` 의 `paths`). 없으면
+	 *  전체. `/` 로 시작하거나 `..` 이 든 경로는 invalid params.
+	 */
+	paths?: string[] | null,
+};
+
+export type GitTag = {
+	name: string,
+	/**  `refs/tags/…`. */
+	refName: string,
+	/**  ref 가 가리키는 객체(주석 태그면 태그 객체). */
+	target: string,
+	/**  주석 태그면 태그를 벗긴 객체(보통 커밋). 가벼운 태그면 `null`. */
+	peeled: string | null,
+};
+
+/**  ahead/behind. */
+export type GitTrack = {
+	/**  브랜치에만 있는 커밋 수(`↑`). */
+	ahead: number,
+	/**  upstream 에만 있는 커밋 수(`↓`). */
+	behind: number,
+};
+
+export type GitUpstream = {
+	/**  짧은 이름(`origin/main`, 원격이 `.` 이면 로컬 브랜치 이름). */
+	name: string,
+	/**  전체 이름(`refs/remotes/origin/main`). */
+	refName: string,
+	/**  `null` 이면 설정은 있는데 그 ref 가 없다(git 의 `[gone]`). */
+	track: GitTrack | null,
+};
+
+/**  `git.watch` 의 항목: 감시를 다 건 뒤 한 번. */
+export type GitWatching = {
+	/**  감시하는 저장소의 작업 트리 꼭대기. `null` 이면 저장소가 없어 아무것도 보지 않는다. */
+	workTree: string | null,
 };
 
 export type HighlightSpan = {
