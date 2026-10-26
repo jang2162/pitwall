@@ -55,6 +55,8 @@ mise run test-release   # 위 release 판정 시험(검색 취소 100 ms · `fs.
 
 Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오류 없이 빈 문자열이 온다. 시험에서 CSS 내용을 보려면 `node:fs` 로 읽는다(`apps/desktop/src/theme/tokens.test.ts`).
 
+**Windows · Linux 교차 clippy(macOS 에서).** `mise run lint` 는 이 기기의 타깃만 본다. `cfg(windows)` · `cfg(unix)` 로 갈린 코드를 고쳤으면 다른 타깃도 clippy 로 본다. 이 기기에는 그 타깃의 C 컴파일러가 없어 C 를 빌드하는 크레이트의 빌드 스크립트가 실패하므로, 출력 파일 자리만 만드는 가짜 C 도구 둘을 준다. 컴파일러는 인자의 `-o <파일>` · `-Fo<파일>` · `-out:<파일>` 을 `touch` 하고 0 으로 끝나고, 아카이버는 `-out:<파일>` 또는 둘째 인자를 `touch` 한다. 이 둘을 `CC_<타깃>` · `CXX_<타깃>` · `AR_<타깃>`(타깃의 `-` 는 `_`)으로 주고 `cargo clippy --workspace --exclude pitwall-desktop --target <x86_64-pc-windows-msvc | x86_64-unknown-linux-gnu> --all-targets --all-features -- -D warnings` 를 돌린다. clippy 는 링크하지 않으므로 빈 오브젝트로 충분하다. **데스크톱 크레이트는 보지 않는다** — Tauri(Windows) · GTK(Linux) 빌드 스크립트가 이 방법으로 돌지 않으므로 CI 가 본다.
+
 데스크톱 앱(`mise run dev`)을 손으로 확인할 때:
 
 - WKWebView 의 HTML5 드래그 앤 드롭(dockview 탭 이동 등)은 합성 입력(`orca computer drag`·CGEvent)으로 시작되지 않는다. 앱 안에서 확인하려면 debug 빌드의 Web Inspector(⌥⌘I) 콘솔에서 dockview api 로 같은 이동(`panel.api.moveTo`)을 부른다 — api 는 `.dv-dockview` 의 가장 가까운 React 요소에서 fiber 를 올라가 `onApi` prop 을 가진 컴포넌트의 첫 state(없으면 `alternate`)에 있다. 드래그 입력 자체는 Chromium(Playwright 로 개발 서버를 연다) 또는 사람이 확인한다.
