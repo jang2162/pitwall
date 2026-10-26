@@ -27,9 +27,9 @@ use pw_core::config::ConfigStore;
 use pw_core::notification::{Level, Notification};
 use pw_core::registry::path::{WorktreeRootError, worktree_root};
 use pw_core::registry::{Registry as Projects, RegistryError};
-use pw_open_with::launch::find_program;
 use pw_rpc::{RpcError, code};
 use pw_runtime::Runtime;
+use pw_runtime::program::find_program;
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{
@@ -69,6 +69,9 @@ pub struct Opened {
 /// git CLI 를 쓸 수 없는 이유.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliError {
+    /// 미신뢰 프로젝트의 읽기다 — 신뢰가 필요하다(git 은 읽는 명령에서도 저장소 설정의 프로그램을 돌린다, [`cli`] 머리 주석).
+    /// 미신뢰 프로젝트의 읽기는 gix 로만 한다.
+    Untrusted { project_id: String },
     /// 실행 파일을 찾지 못했다. `login_shell_path` 는 찾아본 PATH 가 로그인 셸의 것인가(아니면 앱 프로세스의 것).
     NotFound {
         program: String,
@@ -154,7 +157,7 @@ impl Git {
                 }
             },
         };
-        let repo = match repo::discover(&project_root) {
+        let repo = match repo::discover(&project_root, host.projects.is_trusted(project_id)) {
             Ok(Ok(repo)) => repo,
             Ok(Err(reason)) => {
                 tracing::debug!(target: "pw_git", project = project_id, root = %project_root.display(), ?reason, "no repository");
@@ -181,9 +184,15 @@ impl Git {
         }))
     }
 
-    /// `target` 의 작업 트리에서 돌릴 git 명령. 런타임 환경을 기다릴 수 있다(로그인 셸). 쓰기면 버전을 보고, [`MIN_VERSION`]
-    /// 미만이면 거절한다 — 그 실행 파일에 대해 알림을 한 번 낸다(Host 범위).
+    /// `target` 의 작업 트리에서 돌릴 git 명령. 런타임 환경을 기다릴 수 있다(로그인 셸). 읽기는 신뢰한 프로젝트에서만 만든다
+    /// ([`CliError::Untrusted`]). 쓰기면 버전을 보고, [`MIN_VERSION`] 미만이면 거절한다 — 그 실행 파일에 대해 알림을 한 번
+    /// 낸다(Host 범위).
     pub async fn command(&self, target: &Target, access: Access) -> Result<GitCommand, CliError> {
+        if access == Access::Read && !self.trusted(&target.project_id) {
+            return Err(CliError::Untrusted {
+                project_id: target.project_id.clone(),
+            });
+        }
         let runtime = Arc::clone(&self.runtime);
         let (id, root) = (target.project_id.clone(), target.project_root.clone());
         let resolved = tokio::task::spawn_blocking(move || runtime.env(&id, &root))
@@ -205,6 +214,13 @@ impl Git {
             }
         }
         Ok(command)
+    }
+
+    /// 프로젝트를 신뢰했는가(M1-05, 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰). Host 에 붙기 전 · 읽기 실패는 미신뢰다.
+    fn trusted(&self, project_id: &str) -> bool {
+        self.host
+            .get()
+            .is_some_and(|host| host.projects.is_trusted(project_id))
     }
 
     /// 전역 설정 `[git] path`. 없거나 문자열이 아니면(경고) `git`.

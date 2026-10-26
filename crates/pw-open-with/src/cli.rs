@@ -18,7 +18,7 @@ use pw_runtime::Runtime;
 use pw_runtime::methods::{RuntimeProblem, RuntimeSource, RuntimeStatus};
 use serde::{Deserialize, Serialize};
 
-use crate::launch::find_program;
+use pw_runtime::program::find_program;
 
 /// Orca 에 등록할 명령이자 PATH 에서 찾는 이름.
 pub const COMMAND: &str = "pitwall";

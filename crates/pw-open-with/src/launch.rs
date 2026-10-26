@@ -1,6 +1,6 @@
 //! 치환한 argv 를 셸 없이 띄운다.
 //!
-//! - 실행 파일: 이름이면 런타임 환경(`pw_runtime`)의 PATH 에서 찾고, 경로면 절대 경로여야 한다. 찾은 절대 경로를 띄운다 — 못
+//! - 실행 파일: 이름이면 런타임 환경(`pw_runtime`)의 PATH 에서 찾고(`pw_runtime::program::find_program`), 경로면 절대 경로여야 한다. 찾은 절대 경로를 띄운다 — 못
 //!   찾은 것과 띄우다 실패한 것을 갈라 알린다.
 //! - 자식은 앱 프로세스의 환경이 아니라 런타임 환경 전체를 받는다(로그인 셸에서 정한 `JAVA_HOME` 등). PATH 도 그 PATH 다
 //!   (`code` 처럼 셸 스크립트인 런처가 `node` 등을 찾게).
@@ -12,7 +12,7 @@
 //!   알린다. 그 시간이 지나도 도는 프로세스는 띄운 것으로 본다. Windows 는 보지 않는다 — `explorer.exe` 는 성공해도 1 로 끝난다.
 
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -21,36 +21,6 @@ use pw_runtime::RuntimeEnv;
 
 /// 띄운 뒤 곧바로 실패하는지 지켜보는 시간.
 pub const EARLY_EXIT: Duration = Duration::from_millis(1500);
-
-/// `program` 을 실행할 절대 경로. 이름이면 `path`(PATH 형식)에서 찾는다. 상대 경로(`./x`, `bin/x`)는 받지 않는다 — 무엇의
-/// 상대인지 사람이 정할 수 없다.
-pub fn find_program(program: &str, path: &OsStr) -> Option<PathBuf> {
-    let as_path = Path::new(program);
-    if as_path.is_absolute() {
-        return is_executable(as_path).then(|| as_path.to_path_buf());
-    }
-    if program.contains('/') || (cfg!(windows) && program.contains('\\')) {
-        return None;
-    }
-    std::env::split_paths(path)
-        .filter(|dir| dir.is_absolute())
-        .flat_map(|dir| candidates(&dir, program))
-        .find(|p| is_executable(p))
-}
-
-#[cfg(windows)]
-fn candidates(dir: &Path, program: &str) -> Vec<PathBuf> {
-    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| DEFAULT_PATHEXT.to_owned());
-    windows_names(program, &exts)
-        .into_iter()
-        .map(|name| dir.join(name))
-        .collect()
-}
-
-#[cfg(not(windows))]
-fn candidates(dir: &Path, program: &str) -> Vec<PathBuf> {
-    vec![dir.join(program)]
-}
 
 /// 실행 파일이 macOS 의 `open` 인가. `open` 은 받은 경로를 LaunchServices 로 다시 해석해, 번들 폴더([`is_bundle`])는 열지 않고
 /// **실행한다**(`open Tool.app`). `-R`(골라 보여 주기) · `-a <앱>`(그 앱에 문서로 넘기기)은 번들을 실행하지 않는 것을 실측했지만
@@ -91,41 +61,11 @@ pub fn is_bundle(path: &Path) -> bool {
 
 /// PATHEXT 가 없을 때.
 #[cfg_attr(not(windows), allow(dead_code))]
-const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
-
-/// Windows 에서 `program` 이름으로 찾아볼 파일 이름(cmd.exe 의 찾기 규칙). 이름이 PATHEXT 확장자로 끝나면 그 이름만, 아니면
-/// PATHEXT 를 붙인 이름만 본다 — 확장자 없는 이름 그대로는 보지 않는다. VS Code · Cursor 의 `bin` 에는 WSL · Git Bash 용
-/// 확장자 없는 셸 스크립트 `code` 와 `code.cmd` 가 함께 있어, 그대로 보면 셸 스크립트가 잡혀 띄우기에 실패한다.
-/// 플랫폼 무관한 순수 함수라 macOS 에서도 시험한다.
-#[cfg_attr(not(windows), allow(dead_code))]
-pub fn windows_names(program: &str, pathext: &str) -> Vec<String> {
-    let exts: Vec<&str> = pathext.split(';').filter(|e| !e.is_empty()).collect();
-    let lower = program.to_ascii_lowercase();
-    if exts
-        .iter()
-        .any(|e| lower.ends_with(&e.to_ascii_lowercase()))
-    {
-        return vec![program.to_owned()];
-    }
-    exts.iter().map(|e| format!("{program}{e}")).collect()
-}
-
 /// 자식에게 줄 PATH: 절대 경로 항목만 남긴다. 상대 · 빈 항목(`.`, `node_modules/.bin`)은 자식의 cwd(남의 저장소일 수 있는
 /// 프로젝트 루트) 기준으로 풀려, 셸 스크립트 런처가 찾는 보조 명령으로 저장소 안의 파일이 잡힐 수 있다.
 pub fn absolute_path_entries(path: &OsStr) -> std::ffi::OsString {
     std::env::join_paths(std::env::split_paths(path).filter(|p| p.is_absolute()))
         .unwrap_or_default()
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|m| m.is_file())
 }
 
 /// 띄운 결과.
@@ -210,6 +150,7 @@ fn detach(_command: &mut Command) {}
 #[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use std::time::Instant;
 
     use super::*;
@@ -226,39 +167,6 @@ mod tests {
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
-    }
-
-    #[test]
-    fn finds_programs_on_the_given_path_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("my bin");
-        std::fs::create_dir(&bin).unwrap();
-        let tool = script(&bin, "tool", "true");
-        std::fs::write(bin.join("not-exec"), "x").unwrap();
-        let path = std::env::join_paths(["relative/dir".into(), bin.clone()]).unwrap();
-        assert_eq!(find_program("tool", &path), Some(tool.clone()));
-        assert_eq!(find_program("not-exec", &path), None);
-        assert_eq!(find_program("tool", OsStr::new("/usr/bin:/bin")), None);
-        assert_eq!(
-            find_program(tool.to_str().unwrap(), OsStr::new("")),
-            Some(tool)
-        );
-        assert_eq!(find_program("my bin/tool", &path), None);
-        // PATH 의 상대 폴더는 보지 않는다 — 무엇의 상대인지(앱의 cwd)에 따라 다른 실행 파일이 잡힌다. 이 상대 경로는 지금 cwd 에서
-        // 보면 `bin` 을 가리킨다.
-        let cwd = std::env::current_dir().unwrap();
-        let up = "../".repeat(cwd.components().count() - 1);
-        let relative = PathBuf::from(format!(
-            "{up}{}",
-            bin.display().to_string().trim_start_matches('/')
-        ));
-        assert!(
-            relative.is_relative() && relative.join("tool").is_file(),
-            "{}",
-            relative.display()
-        );
-        assert_eq!(find_program("tool", relative.as_os_str()), None);
-        assert_eq!(find_program("./tool", &path), None);
     }
 
     #[test]
@@ -283,19 +191,6 @@ mod tests {
             cfg!(target_os = "macos")
         );
         assert!(!is_launch_services_open(Path::new("/usr/bin/xdg-open")));
-    }
-
-    #[test]
-    fn windows_tries_only_pathext_names() {
-        let ext = ".COM;.EXE;.BAT;.CMD";
-        assert_eq!(
-            windows_names("code", ext),
-            ["code.COM", "code.EXE", "code.BAT", "code.CMD"]
-        );
-        assert_eq!(windows_names("code.cmd", ext), ["code.cmd"]);
-        assert_eq!(windows_names("Explorer.EXE", ext), ["Explorer.EXE"]);
-        // PATHEXT 에 없는 확장자는 확장자가 아니다.
-        assert_eq!(windows_names("my.tool", ".EXE"), ["my.tool.EXE"]);
     }
 
     #[test]

@@ -8,17 +8,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const EPOCH: u64 = 1_700_000_000;
 
 /// 사람의 git 설정 · 저장소와 떨어진 git 명령. 시스템 · 전역 설정을 읽지 않고(`GIT_CONFIG_NOSYSTEM`, 빈 `GIT_CONFIG_GLOBAL`),
-/// 위로 찾기를 `ceiling` 에서 멈춘다(임시 폴더가 어느 저장소 안이어도 그 저장소를 건드리지 않는다). 저장소 위치를 바꾸는
-/// 변수(`GIT_DIR` 등 — 시험이 git 훅 안에서 돌 때 남아 있다)는 지운다.
+/// 위로 찾기를 `ceiling` 에서 멈춘다(임시 폴더가 어느 저장소 안이어도 그 저장소를 건드리지 않는다). 실행기가 자식 환경에서 빼는
+/// 변수(`crate::cli::is_dropped` — `GIT_DIR` 처럼 시험이 git 훅 안에서 돌 때 남아 있는 것, 부른 쪽이 `-c` 로 넣은 설정)는 지운다.
 pub fn git_command(dir: &Path, ceiling: &Path) -> Command {
     let mut c = Command::new("git");
     c.current_dir(dir);
-    for var in crate::cli::REPO_LOCATION_VARS {
-        c.env_remove(var);
+    for (name, _) in std::env::vars_os() {
+        if crate::cli::is_dropped(&name) {
+            c.env_remove(name);
+        }
     }
-    // 부른 쪽(에이전트 · CI)이 `-c` 로 넣은 설정도 받지 않는다.
-    c.env_remove("GIT_CONFIG_PARAMETERS")
-        .env_remove("GIT_CONFIG_COUNT");
     let empty = ceiling.join(".gitconfig-empty");
     if !empty.exists() {
         std::fs::write(&empty, "").expect("write the empty git config");

@@ -311,3 +311,81 @@ fn a_bad_worktree_argument_or_project_is_invalid_params() {
     let err = f.repo("no-such-project", None).unwrap_err();
     assert_eq!(err.code, pw_rpc::code::INVALID_PARAMS, "{err:?}");
 }
+
+/// `.git` 파일이 다른 저장소의 `.git`(관리 폴더가 아니라 본체)을 직접 가리켜도 저장소가 아니다 — 서브모듈이면 그 관리 폴더의
+/// `core.worktree` 가 이 폴더를 되가리켜야 한다(M1-05 와 같은 되돌림 판정, `pw_core::config::gitdir::git_file`).
+#[test]
+fn a_git_file_pointing_straight_at_another_repository_is_not_a_repository() {
+    let victim = TestRepo::with_commit();
+    let r = TestRepo::with_commit();
+    let evil = r.base().join("downloads/evil");
+    fs::create_dir_all(&evil).unwrap();
+    fs::write(
+        evil.join(".git"),
+        format!("gitdir: {}\n", victim.root().join(".git").display()),
+    )
+    .unwrap();
+    // gix 는 이것을 victim 의 저장소로 연다 — 판정이 없으면 이 시험이 실패한다.
+    assert!(gix::open(&evil).is_ok());
+    let f = Fixture::new("", None);
+    let id = f.project(&evil);
+    assert_eq!(f.repo(&id, None).unwrap(), GitRepo { repo: None });
+}
+
+/// git 이 만든 진짜 서브모듈 폴더는 그 서브모듈의 저장소다(관리 폴더 `.git/modules/<이름>` 의 `core.worktree` 가 되가리킨다).
+#[test]
+fn a_submodule_is_its_own_repository() {
+    let sub = TestRepo::with_commit();
+    let r = TestRepo::with_commit();
+    r.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "--quiet",
+        sub.root().to_str().unwrap(),
+        "m",
+    ]);
+    let module = r.root().join("m");
+    assert!(module.join(".git").is_file());
+    let f = Fixture::new("", None);
+    let id = f.project(&module);
+    let got = info(&f, &id, None);
+    assert_eq!(got.work_tree, s(&module));
+    assert_eq!(got.git_dir, s(&r.root().join(".git/modules/m")));
+    assert_eq!(
+        got.head,
+        RepoHead::Branch {
+            name: "main".into(),
+            commit: sub.head()
+        }
+    );
+}
+
+/// `core.worktree` 가 `.git` 이 있는 폴더가 아닌 곳을 가리키면 「저장소 없음」 이다 — git CLI 는 작업 트리에서 다시 찾아 다른
+/// 저장소(또는 없음)를 보므로, 읽기(gix)와 쓰기(CLI)가 다른 저장소를 다루게 된다.
+#[test]
+fn a_work_tree_moved_elsewhere_by_core_worktree_is_none() {
+    let r = TestRepo::with_commit();
+    let f = Fixture::new("", None);
+    let id = f.project(r.root());
+    assert!(f.repo(&id, None).unwrap().repo.is_some());
+    let other = r.base().join("other");
+    fs::create_dir_all(&other).unwrap();
+    r.git(&["config", "core.worktree", other.to_str().unwrap()]);
+    // 미신뢰(gix 가 저장소 설정의 `core.worktree` 를 쓰지 않는다) · 신뢰(쓴다) 모두.
+    for trusted in [false, true] {
+        f.trust(&id, trusted);
+        assert_eq!(
+            f.repo(&id, None).unwrap(),
+            GitRepo { repo: None },
+            "trusted: {trusted}"
+        );
+    }
+    // 같은 폴더를 가리키는 값(상대 경로 포함)은 그대로 저장소다.
+    r.git(&["config", "core.worktree", ".."]);
+    for trusted in [false, true] {
+        f.trust(&id, trusted);
+        assert_eq!(info(&f, &id, None).work_tree, s(r.root()));
+    }
+}

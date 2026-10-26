@@ -8,6 +8,7 @@
 //! - [`runtime`]: 캐시, 「환경 다시 읽기」, 버전 파일 변경(파일 감시), `runtime.changed`, 프로젝트 설정 `[runtime] provider`.
 //!   실패는 남기지 않아 다음 요청이 다시 시도한다(로그인 셸의 시간 초과와 mise 의 `failed` 만 30초 냉각한다, [`login_shell`] · [`runtime::FAILURE_COOLDOWN`]).
 //! - [`methods`]: `runtime.get` · `runtime.reload` RPC.
+//! - [`program`]: 런타임 환경의 PATH 에서 실행 파일 찾기.
 //!
 //! 왜: Finder · Dock · `open` 으로 띄운 GUI 앱의 환경은 launchd 의 것(PATH `/usr/bin:/bin:/usr/sbin:/sbin`)이라 `zed` · `code` ·
 //! `idea` 처럼 `/usr/local/bin` · `~/.local/bin` · Toolbox 스크립트 폴더에 있는 명령을 찾지 못하고, 셸에서 정한 `JAVA_HOME` 같은
@@ -19,6 +20,7 @@ pub mod login_shell;
 pub mod methods;
 pub mod mise;
 mod process;
+pub mod program;
 pub mod provider;
 pub mod runtime;
 

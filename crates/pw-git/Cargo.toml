@@ -15,8 +15,6 @@ test-support = ["dep:tempfile"]
 # 이미 들어와 있는 `gix-attributes`(pw-lang) · `gix-parallel`(pw-fs)과 같은 gitoxide 릴리스다. 올릴 때 셋을 함께 올린다.
 gix = { version = "0.90.0", default-features = false, features = ["sha1"] }
 pw-core = { path = "../pw-core" }
-# 실행 파일 찾기(런타임 환경의 PATH, `pw_open_with::launch::find_program`).
-pw-open-with = { path = "../pw-open-with" }
 pw-rpc = { path = "../pw-rpc" }
 pw-runtime = { path = "../pw-runtime" }
 schemars = { workspace = true }
@@ -32,6 +30,15 @@ tracing = "0.1.44"
 [target."cfg(unix)".dependencies]
 # setsid(2) · killpg(2). 버전은 데스크톱 크레이트와 같게 둔다.
 libc = "0.2.190"
+
+[target."cfg(windows)".dependencies]
+# git 을 Job Object 에 넣어 취소 때 프로세스 트리째 끝내고, 콘솔 창 없이 띄운다(`CREATE_NO_WINDOW`). 버전은 pw-fs 와 같게 둔다.
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

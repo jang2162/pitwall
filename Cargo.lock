@@ -4538,7 +4538,6 @@ dependencies = [
  "gix",
  "libc",
  "pw-core",
- "pw-open-with",
  "pw-rpc",
  "pw-runtime",
  "schemars 1.2.3",
@@ -4549,6 +4548,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

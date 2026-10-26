@@ -2,6 +2,7 @@
 //!
 //! - `git --version` → `git version <버전>`.
 //! - `git sleep` → 자기 pid 를 `git.pid` 에, 30초 자는 자식의 pid 를 `child.pid` 에 적고 그 자식을 기다린다.
+//! - `git stubborn` → `sleep` 과 같되 자식이 SIGTERM 을 무시한다(훅이 띄운 고집 센 프로세스).
 //! - 그 밖의 인자 → 받은 인자(NUL 구분)를 `argv` 에, 환경(`env` 출력)을 `env` 에, 실제 cwd 를 `cwd` 에 적는다.
 
 use std::fs;
@@ -22,7 +23,7 @@ impl FakeGit {
         fs::write(
             &path,
             format!(
-                "#!/bin/sh\nout='{out}'\ncase \"$1\" in\n  --version) printf 'git version %s\\n' '{version}'; exit 0 ;;\n  sleep) echo $$ > \"$out/git.pid.tmp\"; sleep 30 & echo $! > \"$out/child.pid.tmp\"; mv \"$out/child.pid.tmp\" \"$out/child.pid\"; mv \"$out/git.pid.tmp\" \"$out/git.pid\"; wait; exit 0 ;;\nesac\nfor a in \"$@\"; do printf '%s\\0' \"$a\"; done > \"$out/argv\"\nenv > \"$out/env\"\npwd -P > \"$out/cwd\"\n",
+                "#!/bin/sh\nout='{out}'\ncase \"$1\" in\n  --version) printf 'git version %s\\n' '{version}'; exit 0 ;;\n  sleep) echo $$ > \"$out/git.pid.tmp\"; sleep 30 & echo $! > \"$out/child.pid.tmp\"; mv \"$out/child.pid.tmp\" \"$out/child.pid\"; mv \"$out/git.pid.tmp\" \"$out/git.pid\"; wait; exit 0 ;;\n  stubborn) echo $$ > \"$out/git.pid.tmp\"; (trap '' TERM; exec sleep 30) & echo $! > \"$out/child.pid.tmp\"; mv \"$out/child.pid.tmp\" \"$out/child.pid\"; mv \"$out/git.pid.tmp\" \"$out/git.pid\"; wait; exit 0 ;;\nesac\nfor a in \"$@\"; do printf '%s\\0' \"$a\"; done > \"$out/argv\"\nenv > \"$out/env\"\npwd -P > \"$out/cwd\"\n",
                 out = out.display(),
             ),
         )

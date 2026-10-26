@@ -26,7 +26,8 @@ pub struct GitRepoParams {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitRepo {
-    /// `null` 이면 「저장소 없음」 — 저장소 밖, bare 저장소, 위조된 `.git` 파일. git 기능 전체가 빈 상태다.
+    /// `null` 이면 「저장소 없음」 — 저장소 밖, bare 저장소, 위조된 `.git` 파일, `core.worktree` 가 다른 폴더를 가리키는 저장소.
+    /// git 기능 전체가 빈 상태다.
     pub repo: Option<RepoInfo>,
 }
 

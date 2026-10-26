@@ -25,11 +25,10 @@ use pw_ext::Registry;
 use pw_ext::template::{SubstituteError, substitute};
 use pw_rpc::{RpcError, code};
 use pw_runtime::Runtime;
+use pw_runtime::program::find_program;
 
 use crate::context::OpenContext;
-use crate::launch::{
-    EARLY_EXIT, Spawned, find_program, is_bundle, is_launch_services_open, spawn_detached,
-};
+use crate::launch::{EARLY_EXIT, Spawned, is_bundle, is_launch_services_open, spawn_detached};
 use crate::methods::{
     DefaultToolInfo, ExternalToolInfo, LaunchProblem, OpenWithList, OpenWithListParams,
     OpenWithOutcome, OpenWithRunParams,
