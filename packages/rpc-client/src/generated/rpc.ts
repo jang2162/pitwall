@@ -69,6 +69,11 @@ export type UnaryMethods = {
 	 */
 	"git.blob": { params: GitBlobParams; result: GitBlob };
 	/**
+	 * 커밋들을 차례로 cherry-pick 한다. 하나가 충돌하면 앞의 것은 커밋된 채 `outcome: stopped` — 나머지는
+	 * `git.operation.continue` 가 잇는다.
+	 */
+	"git.cherryPick": { params: GitCommitsParams; result: GitHistoryResult };
+	/**
 	 * 충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.
 	 */
 	"git.conflict.get": { params: GitConflictParams; result: GitConflictDetail };
@@ -94,6 +99,11 @@ export type UnaryMethods = {
 	 */
 	"git.diff": { params: GitDiffParams; result: GitDiff };
 	/**
+	 * 리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.
+	 * git 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.
+	 */
+	"git.merge": { params: GitMergeParams; result: GitHistoryResult };
+	/**
 	 * 진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면
 	 * `operation: null`.
 	 */
@@ -116,6 +126,11 @@ export type UnaryMethods = {
 	 */
 	"git.prompt.answer": { params: GitPromptAnswerParams; result: null };
 	/**
+	 * 비대화형 rebase(`git rebase <upstream> [<branch>]`). 충돌이면 `outcome: stopped` 와 진행 중 작업, 끝나면 `moved` 가 그 브랜치의
+	 * 이전 끝.
+	 */
+	"git.rebase": { params: GitRebaseParams; result: GitHistoryResult };
+	/**
 	 * 로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.
 	 */
 	"git.refs": { params: GitRepoParams; result: GitRefs };
@@ -124,6 +139,19 @@ export type UnaryMethods = {
 	 * 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
 	 */
 	"git.repo": { params: GitRepoParams; result: GitRepo };
+	/**
+	 * HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard`). hard 는 확인 뒤에 부른다(결정 M2-D6 ① — 잃을 변경은
+	 * `git.resetPreview`). 결과의 `moved` 로 [되돌리기].
+	 */
+	"git.reset": { params: GitResetParams; result: GitResetResult };
+	/**
+	 * reset hard 가 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 untracked 파일. gix 로 읽는다(git 을 띄우지 않는다).
+	 */
+	"git.resetPreview": { params: GitResetPreviewParams; result: GitResetPreview };
+	/**
+	 * 커밋들을 차례로 되돌리는 역 커밋을 만든다(`git revert --no-edit`). 충돌이면 `outcome: stopped`.
+	 */
+	"git.revert": { params: GitCommitsParams; result: GitHistoryResult };
 	/**
 	 * 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).
 	 */
@@ -387,19 +415,25 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":false,"fileScope":true},
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false,"fileScope":true},
 	"git.blob": {"name":"git.blob","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlobParams","output":"GitBlob","doc":" 리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).\n","mcp":false,"fileScope":false},
+	"git.cherryPick": {"name":"git.cherryPick","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 cherry-pick 한다. 하나가 충돌하면 앞의 것은 커밋된 채 `outcome: stopped` — 나머지는\n `git.operation.continue` 가 잇는다.\n","mcp":false,"fileScope":false},
 	"git.conflict.get": {"name":"git.conflict.get","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictParams","output":"GitConflictDetail","doc":" 충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.\n","mcp":false,"fileScope":false},
 	"git.conflict.resolve": {"name":"git.conflict.resolve","kind":"unary","tier":"write","roles":["owner"],"params":"GitConflictResolveParams","output":"GitConflicts","doc":" 충돌 경로 하나를 해결한다. 작업 트리 파일이 `expectedVersion` 그대로일 때만(아니면 `CONFLICT`): `content` 면 파일에 쓰고\n (원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙 — 앞 폴더가 심링크면 거절) `git add`, `side` 면 그쪽을\n `git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n 뒤의 충돌 목록을 돌려준다.\n","mcp":false,"fileScope":false},
 	"git.conflicts": {"name":"git.conflicts","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictsParams","output":"GitConflicts","doc":" 충돌 중인 경로 목록: index 단계로 가른 종류(양쪽 수정 · 우리/그쪽 삭제 · 양쪽 추가 …)와 바이너리 · 서브모듈 · 심링크 표시.\n 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.containedIn": {"name":"git.containedIn","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitContainedIn","doc":" 그 커밋을 담은(조상으로 가진) 브랜치 · 원격 브랜치 · 태그. 모든 ref 에서 이력을 걷는다 — 커밋 상세를 연 뒤 따로 부른다.\n","mcp":false,"fileScope":false},
 	"git.diff": {"name":"git.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffParams","output":"GitDiff","doc":" 두 쪽(커밋 · index · 작업 트리)의 diff: 바뀐 파일 목록(상태 · 이름 바뀜 · 모드 · 바이너리 · 서브모듈 포인터 · 생성 파일 ·\n 대용량)과 파일별 hunk(`git diff --find-renames -U3` 과 같다). 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
+	"git.merge": {"name":"git.merge","kind":"unary","tier":"write","roles":["owner"],"params":"GitMergeParams","output":"GitHistoryResult","doc":" 리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.\n git 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.\n","mcp":false,"fileScope":false},
 	"git.operation": {"name":"git.operation","kind":"unary","tier":"read","roles":["owner"],"params":"GitOperationParams","output":"GitOperation","doc":" 진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면\n `operation: null`.\n","mcp":false,"fileScope":false},
 	"git.operation.abort": {"name":"git.operation.abort","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 그만두고 시작 전으로 돌린다(`git <작업> --abort`). 확인은 창이 먼저 한다(결정 M2-D6 ①).\n","mcp":false,"fileScope":false},
 	"git.operation.continue": {"name":"git.operation.continue","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 계속한다(`git <작업> --continue`). 충돌을 다 풀지 않았으면 git 의 원문으로 실패한다.\n","mcp":false,"fileScope":false},
 	"git.operation.skip": {"name":"git.operation.skip","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업의 지금 단계를 건너뛴다(`git <작업> --skip`, merge 는 없다).\n","mcp":false,"fileScope":false},
 	"git.prompt.answer": {"name":"git.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"GitPromptAnswerParams","output":"()","doc":" 질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는\n 답이면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.prompts": {"name":"git.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"GitPromptsParams","output":"GitPromptEvent","doc":" 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다\n (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.\n","mcp":false,"fileScope":false},
+	"git.rebase": {"name":"git.rebase","kind":"unary","tier":"write","roles":["owner"],"params":"GitRebaseParams","output":"GitHistoryResult","doc":" 비대화형 rebase(`git rebase <upstream> [<branch>]`). 충돌이면 `outcome: stopped` 와 진행 중 작업, 끝나면 `moved` 가 그 브랜치의\n 이전 끝.\n","mcp":false,"fileScope":false},
 	"git.refs": {"name":"git.refs","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRefs","doc":" 로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.\n","mcp":false,"fileScope":false},
 	"git.repo": {"name":"git.repo","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRepo","doc":" 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false,"fileScope":false},
+	"git.reset": {"name":"git.reset","kind":"unary","tier":"write","roles":["owner"],"params":"GitResetParams","output":"GitResetResult","doc":" HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard`). hard 는 확인 뒤에 부른다(결정 M2-D6 ① — 잃을 변경은\n `git.resetPreview`). 결과의 `moved` 로 [되돌리기].\n","mcp":false,"fileScope":false},
+	"git.resetPreview": {"name":"git.resetPreview","kind":"unary","tier":"read","roles":["owner"],"params":"GitResetPreviewParams","output":"GitResetPreview","doc":" reset hard 가 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 untracked 파일. gix 로 읽는다(git 을 띄우지 않는다).\n","mcp":false,"fileScope":false},
+	"git.revert": {"name":"git.revert","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 되돌리는 역 커밋을 만든다(`git revert --no-edit`). 충돌이면 `outcome: stopped`.\n","mcp":false,"fileScope":false},
 	"git.show": {"name":"git.show","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitShow","doc":" 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).\n","mcp":false,"fileScope":false},
 	"git.status": {"name":"git.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusParams","output":"GitStatus","doc":" 작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업\n 트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로\n 돌고, 작업을 취소하면 cancelled 오류다.\n","mcp":false,"fileScope":false},
 	"git.watch": {"name":"git.watch","kind":"stream","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitWatching","doc":" 프로젝트(활성 워크트리)의 저장소를 감시한다. 스트림이 열려 있는 동안 바뀜이 프로젝트 범위 이벤트 `git.statusChanged` ·\n `git.refsChanged` 로 나가고, 닫으면 놓는다. 첫 항목이 오면 그 뒤의 바뀜은 놓치지 않는다. 작업 트리의 바뀜은 같은 창의\n `fs.watch` 가 열려 있어야 온다.\n","mcp":false,"fileScope":false},
@@ -867,6 +901,15 @@ export type ExternalToolInfo = {
 	problem: string | null,
 };
 
+/**  `git.merge` 의 fast-forward 선택. */
+export type FastForward = 
+/**  할 수 있으면 fast-forward, 아니면 merge 커밋(git 기본, `merge.ff` 설정을 따른다). */
+"allow" | 
+/**  fast-forward 만(`--ff-only`). 못 하면 git 의 원문으로 실패한다. */
+"only" | 
+/**  늘 merge 커밋(`--no-ff`). */
+"never";
+
 /**  맞는 파일 하나. */
 export type FileMatch = {
 	/**  절대 경로. 루트 안 심링크를 지났으면 링크 쪽 경로다 — 실제 경로는 `fs.stat` 이 준다. */
@@ -1191,6 +1234,13 @@ export type GitChange =
 /**  `?` — 작업 트리 쪽만. */
 "untracked";
 
+export type GitCommitsParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  적용할 커밋들, 적용할 차례대로(로그에서 고른 것이면 오래된 것부터). 비면 invalid params. */
+	commits: string[],
+};
+
 /**  병합 충돌(porcelain v2 의 `u` 줄 `XY`). */
 export type GitConflict = 
 /**  `DD`. */
@@ -1306,6 +1356,35 @@ export type GitDiffParams = {
 	ignoreWhitespace?: boolean,
 };
 
+/**  merge · cherry-pick · revert · rebase 의 결과. */
+export type GitHistoryResult = {
+	/**  저장소 작업 트리 꼭대기(절대 경로). */
+	workTree: string,
+	outcome: HistoryOutcome,
+	/**  끝난 뒤 HEAD 의 커밋(전체 해시). 태어나지 않은 브랜치면 `null`. */
+	head: string | null,
+	/**  움직인 ref. 멈췄거나(`stopped` — 되돌리기는 중단이다) 바뀐 것이 없으면 `null`. */
+	moved: GitRefMove | null,
+	/**  `stopped` 일 때 진행 중 작업(M2-06 `git.operation` 과 같다). */
+	operation: OperationInfo | null,
+};
+
+export type GitLostChanges = {
+	/**  사라지는 변경(`git.status` 의 항목 그대로 — untracked 는 빠진다). 경로순. */
+	changes: GitStatusEntry[],
+	/**  덮어써지는 untracked 파일(작업 트리 기준 상대 경로, `/`). 경로순. */
+	overwritten: string[],
+};
+
+export type GitMergeParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`git.repo` 와 같다). */
+	worktree?: string | null,
+	/**  들여올 리비전(브랜치 이름이면 merge 메시지가 그 이름을 쓴다). */
+	rev: string,
+	fastForward?: FastForward,
+};
+
 export type GitOperation = {
 	/**  `null` 이면 진행 중 작업이 없다(저장소가 없을 때도). */
 	operation: OperationInfo | null,
@@ -1370,6 +1449,28 @@ export type GitPromptsParams = {
 	projectId: string,
 };
 
+export type GitRebaseParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  이 위로 옮긴다(`git rebase <upstream>`). */
+	upstream: string,
+	/**  rebase 할 로컬 브랜치의 짧은 이름. 있으면 git 이 그 브랜치로 체크아웃한 뒤 rebase 한다. 없으면 지금 HEAD. */
+	branch?: string | null,
+};
+
+/**
+ *  ref 하나를 움직인 기록(결정 M2-D6 ③). 창은 이것으로 알림에 이전 해시와 [되돌리기] 를 단다. reset · rebase · merge ·
+ *  cherry-pick · revert(이 모듈)와 브랜치 삭제(M2-09)가 같은 꼴로 싣는다.
+ */
+export type GitRefMove = {
+	/**  움직인 ref 의 전체 이름(`refs/heads/main`). 분리된 HEAD 를 움직였으면 `HEAD`. */
+	refName: string,
+	/**  움직이기 전 커밋(전체 해시) — [되돌리기] 가 돌아갈 곳. */
+	previous: string,
+	/**  움직인 뒤 커밋. ref 를 지웠으면(브랜치 삭제) `null`. */
+	current: string | null,
+};
+
 export type GitRefs = {
 	/**  저장소의 작업 트리 꼭대기. `null` 이면 「저장소 없음」 이고 나머지는 빈다. */
 	workTree: string | null,
@@ -1407,6 +1508,45 @@ export type GitRepoParams = {
 	projectId: string,
 	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 있으면 그 워크트리 안의 프로젝트 루트를 담은 저장소를 본다. */
 	worktree?: string | null,
+};
+
+export type GitResetParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  HEAD 를 옮길 커밋. */
+	commit: string,
+	mode: ResetMode,
+	/**
+	 *  HEAD 가 이 커밋(전체 해시)일 때만 한다 — 아니면 아무것도 하지 않고 conflict(`-32004`, `data.head` 가 지금 HEAD). 확인
+	 *  다이얼로그를 띄운 때의 HEAD(`git.resetPreview` 의 `head`)나 [되돌리기] 의 `moved.current` 를 넣는다.
+	 */
+	expected?: string | null,
+};
+
+export type GitResetPreview = {
+	workTree: string,
+	/**  지금 HEAD 의 커밋(`git.reset` 의 `expected` 로 넘긴다). 태어나지 않은 브랜치면 `null`. */
+	head: string | null,
+	/**  `commit` 이 가리키는 커밋(전체 해시). */
+	target: string,
+	lost: GitLostChanges,
+};
+
+export type GitResetPreviewParams = {
+	projectId: string,
+	worktree?: string | null,
+	commit: string,
+};
+
+/**  `git.reset` 의 결과. */
+export type GitResetResult = {
+	workTree: string,
+	/**  끝난 뒤 HEAD 의 커밋. */
+	head: string | null,
+	/**  움직인 ref. 그대로였거나 전이 없었으면(태어나지 않은 브랜치) `null`. */
+	moved: GitRefMove | null,
+	/**  hard 일 때 잃은 변경(잠금 안에서 reset 바로 전에 읽은 것). soft · mixed 면 `null`. */
+	lost: GitLostChanges | null,
 };
 
 /**  커밋 하나를 고르는 요청(`git.show` · `git.containedIn`). */
@@ -1515,6 +1655,17 @@ export type HighlightSpan = {
 	/**  테마 토큰 이름은 `syntax.<token>` 이다(`docs/design/07-extensibility.md` 「3. 테마」). */
 	token: SyntaxToken,
 };
+
+/**  쓰기가 어떻게 끝났는가. */
+export type HistoryOutcome = 
+/**  바뀐 것이 없다(이미 들어 있는 브랜치의 merge, 이미 위에 있는 rebase). */
+"upToDate" | 
+/**  merge 가 fast-forward 로 끝났다(새 커밋 없이 ref 만 옮겼다). */
+"fastForward" | 
+/**  새 커밋을 만들었다(merge 커밋 · cherry-pick · revert · rebase 로 다시 쓴 커밋). */
+"done" | 
+/**  충돌로 멈췄다 — `operation` 이 진행 중 작업이다. */
+"stopped";
 
 export type HostInfo = {
 	hostId: string,
@@ -1986,6 +2137,15 @@ export type RequestMessage = {
 	method: string,
 	params?: JsonValue,
 };
+
+/**  `git.reset` 의 방식. */
+export type ResetMode = 
+/**  ref 만 옮긴다 — index · 작업 트리는 그대로. */
+"soft" | 
+/**  ref 와 index — 작업 트리는 그대로(git 기본). */
+"mixed" | 
+/**  ref · index · 작업 트리 — 저장하지 않은 변경을 잃는다(결정 M2-D6 ① 의 확인 대상). */
+"hard";
 
 /**  경로를 포함하는 프로젝트. */
 export type Resolution = {

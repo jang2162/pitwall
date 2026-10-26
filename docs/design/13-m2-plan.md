@@ -91,6 +91,7 @@ M1 에서 된 것은 다시 계획하지 않는다 — 파일 감시 · `fs.chan
 |---|---|---|
 | `crates/pw-git` 의 모듈 배치 · `lib.rs` 의 메서드 등록 · 시험 저장소 도우미 | M2-01 | 묶음 2 의 넷은 모듈을 나눠(`status` · `log` · `diff` · `write`) 함께 돈다 — 겹치는 곳은 메서드 등록 줄. 도우미에 픽스처 함수를 더할 때는 파일을 나눈다 |
 | 쓰기 실행기 · 잠금 · 진행 중 작업 · askpass(`pw-git` 의 `write` 모듈) | M2-06 | M2-07 ~ M2-11 은 실행기를 부르는 메서드만 더한다. 실행기의 형태를 바꿔야 하면 M2-06 의 시험과 함께 고친다 |
+| ref 를 움직인 기록 `GitRefMove { refName, previous, current }`(`pw-git` 의 `history` 모듈) | M2-10 | 결정 M2-D6 ③. ref 를 움직인 쓰기는 결과의 `moved` 에 이것을 싣는다 — 움직인 ref 의 전체 이름(분리된 HEAD 면 `HEAD`) · 이전 해시 · 지금 해시(지웠으면 `null`). M2-09 의 브랜치 삭제도 같은 꼴을 쓴다. 창의 [되돌리기](M2-20)는 HEAD 의 ref 면 `git.reset { commit: previous, expected: current }`(그사이 HEAD 가 움직였으면 conflict 로 아무것도 하지 않는다), 지운 브랜치면 `previous` 에 그 브랜치를 다시 만든다 |
 | 테마 토큰(`apps/desktop/src/theme/tokens.ts` · 기본 테마) | M2-12 | git · graph · diff 토큰을 한 번에 다 만든다. M2-14 · M2-15 · M2-17 · M2-19 는 읽기만 한다 |
 | diff 뷰 컴포넌트(hunk 를 `@codemirror/merge` 에 넘기는 곳) | M2-15 | M2-16(부분 스테이징 칸) · M2-18 · M2-19 가 재사용한다 |
 | 상태바 `STATUS_SLOTS` | M2-13 | `branch` 자리를 더한다. 다른 행은 상태바 자리를 더하지 않는다 |

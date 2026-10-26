@@ -342,6 +342,11 @@ task-title-git-abort = Aborting the git operation
 task-title-git-skip = Skipping a step of the git operation
 task-title-git-status = Reading git status
 task-title-git-resolve = Resolving a git conflict
+task-title-git-merge = Merging
+task-title-git-cherry-pick = Cherry-picking
+task-title-git-revert = Reverting
+task-title-git-rebase = Rebasing
+task-title-git-reset = Resetting
 action-task-demo = Run Demo Task
 action-task-demo-invalid = Run Demo Task (invalid arguments — to check error notifications)
 

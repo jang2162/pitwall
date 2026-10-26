@@ -2243,6 +2243,257 @@
       ],
       "tier": "read"
     },
+    "git.cherryPick": {
+      "description": "커밋들을 차례로 cherry-pick 한다. 하나가 충돌하면 앞의 것은 커밋된 채 `outcome: stopped` — 나머지는\n`git.operation.continue` 가 잇는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "commits": {
+            "description": "적용할 커밋들, 적용할 차례대로(로그에서 고른 것이면 오래된 것부터). 비면 invalid params.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "commits"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitRefMove": {
+            "description": "ref 하나를 움직인 기록(결정 M2-D6 ③). 창은 이것으로 알림에 이전 해시와 [되돌리기] 를 단다. reset · rebase · merge ·\ncherry-pick · revert(이 모듈)와 브랜치 삭제(M2-09)가 같은 꼴로 싣는다.",
+            "properties": {
+              "current": {
+                "description": "움직인 뒤 커밋. ref 를 지웠으면(브랜치 삭제) `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "previous": {
+                "description": "움직이기 전 커밋(전체 해시) — [되돌리기] 가 돌아갈 곳.",
+                "type": "string"
+              },
+              "refName": {
+                "description": "움직인 ref 의 전체 이름(`refs/heads/main`). 분리된 HEAD 를 움직였으면 `HEAD`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "refName",
+              "previous",
+              "current"
+            ],
+            "type": "object"
+          },
+          "HistoryOutcome": {
+            "description": "쓰기가 어떻게 끝났는가.",
+            "oneOf": [
+              {
+                "const": "upToDate",
+                "description": "바뀐 것이 없다(이미 들어 있는 브랜치의 merge, 이미 위에 있는 rebase).",
+                "type": "string"
+              },
+              {
+                "const": "fastForward",
+                "description": "merge 가 fast-forward 로 끝났다(새 커밋 없이 ref 만 옮겼다).",
+                "type": "string"
+              },
+              {
+                "const": "done",
+                "description": "새 커밋을 만들었다(merge 커밋 · cherry-pick · revert · rebase 로 다시 쓴 커밋).",
+                "type": "string"
+              },
+              {
+                "const": "stopped",
+                "description": "충돌로 멈췄다 — `operation` 이 진행 중 작업이다.",
+                "type": "string"
+              }
+            ]
+          },
+          "OperationAction": {
+            "enum": [
+              "continue",
+              "abort",
+              "skip"
+            ],
+            "type": "string"
+          },
+          "OperationInfo": {
+            "properties": {
+              "actions": {
+                "description": "할 수 있는 동작(`git.operation.continue` · `abort` · `skip`).",
+                "items": {
+                  "$ref": "#/$defs/OperationAction"
+                },
+                "type": "array"
+              },
+              "branch": {
+                "description": "rebase 하는 브랜치의 짧은 이름. 분리된 HEAD 를 rebase 하거나 rebase 가 아니면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "heads": {
+                "description": "들여오는 쪽 커밋(전체 해시): merge 의 `MERGE_HEAD`, cherry-pick · revert 의 그 커밋, rebase 가 멈춘 커밋. 모르면 빈 목록.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "$ref": "#/$defs/RepoOperation"
+              },
+              "onto": {
+                "description": "rebase 의 대상 커밋.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "remaining": {
+                "description": "지금 단계 뒤에 남은 단계 수. 모르면 `null`.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "step": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/OperationStep"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "지금 단계와 전체 단계(rebase · am). 모르면 `null`."
+              }
+            },
+            "required": [
+              "kind",
+              "heads",
+              "branch",
+              "onto",
+              "step",
+              "remaining",
+              "actions"
+            ],
+            "type": "object"
+          },
+          "OperationStep": {
+            "properties": {
+              "current": {
+                "description": "지금 단계(1부터).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "current",
+              "total"
+            ],
+            "type": "object"
+          },
+          "RepoOperation": {
+            "description": "진행 중인 작업(git 의 `wt_status_get_state` 와 같은 판정). 순차 cherry-pick · revert 와 대화형 rebase 도 각각 같은 값이다.",
+            "oneOf": [
+              {
+                "enum": [
+                  "merge",
+                  "rebase",
+                  "cherryPick",
+                  "revert",
+                  "bisect"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "am",
+                "description": "`git am`(메일 패치 적용).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "merge · cherry-pick · revert · rebase 의 결과.",
+        "properties": {
+          "head": {
+            "description": "끝난 뒤 HEAD 의 커밋(전체 해시). 태어나지 않은 브랜치면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "moved": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GitRefMove"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "움직인 ref. 멈췄거나(`stopped` — 되돌리기는 중단이다) 바뀐 것이 없으면 `null`."
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OperationInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`stopped` 일 때 진행 중 작업(M2-06 `git.operation` 과 같다)."
+          },
+          "outcome": {
+            "$ref": "#/$defs/HistoryOutcome"
+          },
+          "workTree": {
+            "description": "저장소 작업 트리 꼭대기(절대 경로).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "outcome",
+          "head",
+          "moved",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "git.conflict.get": {
       "description": "충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.",
       "kind": "unary",
@@ -3706,6 +3957,281 @@
       ],
       "tier": "read"
     },
+    "git.merge": {
+      "description": "리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.\ngit 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "FastForward": {
+            "description": "`git.merge` 의 fast-forward 선택.",
+            "oneOf": [
+              {
+                "const": "allow",
+                "description": "할 수 있으면 fast-forward, 아니면 merge 커밋(git 기본, `merge.ff` 설정을 따른다).",
+                "type": "string"
+              },
+              {
+                "const": "only",
+                "description": "fast-forward 만(`--ff-only`). 못 하면 git 의 원문으로 실패한다.",
+                "type": "string"
+              },
+              {
+                "const": "never",
+                "description": "늘 merge 커밋(`--no-ff`).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "fastForward": {
+            "$ref": "#/$defs/FastForward",
+            "default": "allow"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "rev": {
+            "description": "들여올 리비전(브랜치 이름이면 merge 메시지가 그 이름을 쓴다).",
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`git.repo` 와 같다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitRefMove": {
+            "description": "ref 하나를 움직인 기록(결정 M2-D6 ③). 창은 이것으로 알림에 이전 해시와 [되돌리기] 를 단다. reset · rebase · merge ·\ncherry-pick · revert(이 모듈)와 브랜치 삭제(M2-09)가 같은 꼴로 싣는다.",
+            "properties": {
+              "current": {
+                "description": "움직인 뒤 커밋. ref 를 지웠으면(브랜치 삭제) `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "previous": {
+                "description": "움직이기 전 커밋(전체 해시) — [되돌리기] 가 돌아갈 곳.",
+                "type": "string"
+              },
+              "refName": {
+                "description": "움직인 ref 의 전체 이름(`refs/heads/main`). 분리된 HEAD 를 움직였으면 `HEAD`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "refName",
+              "previous",
+              "current"
+            ],
+            "type": "object"
+          },
+          "HistoryOutcome": {
+            "description": "쓰기가 어떻게 끝났는가.",
+            "oneOf": [
+              {
+                "const": "upToDate",
+                "description": "바뀐 것이 없다(이미 들어 있는 브랜치의 merge, 이미 위에 있는 rebase).",
+                "type": "string"
+              },
+              {
+                "const": "fastForward",
+                "description": "merge 가 fast-forward 로 끝났다(새 커밋 없이 ref 만 옮겼다).",
+                "type": "string"
+              },
+              {
+                "const": "done",
+                "description": "새 커밋을 만들었다(merge 커밋 · cherry-pick · revert · rebase 로 다시 쓴 커밋).",
+                "type": "string"
+              },
+              {
+                "const": "stopped",
+                "description": "충돌로 멈췄다 — `operation` 이 진행 중 작업이다.",
+                "type": "string"
+              }
+            ]
+          },
+          "OperationAction": {
+            "enum": [
+              "continue",
+              "abort",
+              "skip"
+            ],
+            "type": "string"
+          },
+          "OperationInfo": {
+            "properties": {
+              "actions": {
+                "description": "할 수 있는 동작(`git.operation.continue` · `abort` · `skip`).",
+                "items": {
+                  "$ref": "#/$defs/OperationAction"
+                },
+                "type": "array"
+              },
+              "branch": {
+                "description": "rebase 하는 브랜치의 짧은 이름. 분리된 HEAD 를 rebase 하거나 rebase 가 아니면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "heads": {
+                "description": "들여오는 쪽 커밋(전체 해시): merge 의 `MERGE_HEAD`, cherry-pick · revert 의 그 커밋, rebase 가 멈춘 커밋. 모르면 빈 목록.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "$ref": "#/$defs/RepoOperation"
+              },
+              "onto": {
+                "description": "rebase 의 대상 커밋.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "remaining": {
+                "description": "지금 단계 뒤에 남은 단계 수. 모르면 `null`.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "step": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/OperationStep"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "지금 단계와 전체 단계(rebase · am). 모르면 `null`."
+              }
+            },
+            "required": [
+              "kind",
+              "heads",
+              "branch",
+              "onto",
+              "step",
+              "remaining",
+              "actions"
+            ],
+            "type": "object"
+          },
+          "OperationStep": {
+            "properties": {
+              "current": {
+                "description": "지금 단계(1부터).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "current",
+              "total"
+            ],
+            "type": "object"
+          },
+          "RepoOperation": {
+            "description": "진행 중인 작업(git 의 `wt_status_get_state` 와 같은 판정). 순차 cherry-pick · revert 와 대화형 rebase 도 각각 같은 값이다.",
+            "oneOf": [
+              {
+                "enum": [
+                  "merge",
+                  "rebase",
+                  "cherryPick",
+                  "revert",
+                  "bisect"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "am",
+                "description": "`git am`(메일 패치 적용).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "merge · cherry-pick · revert · rebase 의 결과.",
+        "properties": {
+          "head": {
+            "description": "끝난 뒤 HEAD 의 커밋(전체 해시). 태어나지 않은 브랜치면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "moved": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GitRefMove"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "움직인 ref. 멈췄거나(`stopped` — 되돌리기는 중단이다) 바뀐 것이 없으면 `null`."
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OperationInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`stopped` 일 때 진행 중 작업(M2-06 `git.operation` 과 같다)."
+          },
+          "outcome": {
+            "$ref": "#/$defs/HistoryOutcome"
+          },
+          "workTree": {
+            "description": "저장소 작업 트리 꼭대기(절대 경로).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "outcome",
+          "head",
+          "moved",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "git.operation": {
       "description": "진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면\n`operation: null`.",
       "kind": "unary",
@@ -4612,6 +5138,262 @@
       ],
       "tier": "read"
     },
+    "git.rebase": {
+      "description": "비대화형 rebase(`git rebase <upstream> [<branch>]`). 충돌이면 `outcome: stopped` 와 진행 중 작업, 끝나면 `moved` 가 그 브랜치의\n이전 끝.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "branch": {
+            "default": null,
+            "description": "rebase 할 로컬 브랜치의 짧은 이름. 있으면 git 이 그 브랜치로 체크아웃한 뒤 rebase 한다. 없으면 지금 HEAD.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "upstream": {
+            "description": "이 위로 옮긴다(`git rebase <upstream>`).",
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "upstream"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitRefMove": {
+            "description": "ref 하나를 움직인 기록(결정 M2-D6 ③). 창은 이것으로 알림에 이전 해시와 [되돌리기] 를 단다. reset · rebase · merge ·\ncherry-pick · revert(이 모듈)와 브랜치 삭제(M2-09)가 같은 꼴로 싣는다.",
+            "properties": {
+              "current": {
+                "description": "움직인 뒤 커밋. ref 를 지웠으면(브랜치 삭제) `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "previous": {
+                "description": "움직이기 전 커밋(전체 해시) — [되돌리기] 가 돌아갈 곳.",
+                "type": "string"
+              },
+              "refName": {
+                "description": "움직인 ref 의 전체 이름(`refs/heads/main`). 분리된 HEAD 를 움직였으면 `HEAD`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "refName",
+              "previous",
+              "current"
+            ],
+            "type": "object"
+          },
+          "HistoryOutcome": {
+            "description": "쓰기가 어떻게 끝났는가.",
+            "oneOf": [
+              {
+                "const": "upToDate",
+                "description": "바뀐 것이 없다(이미 들어 있는 브랜치의 merge, 이미 위에 있는 rebase).",
+                "type": "string"
+              },
+              {
+                "const": "fastForward",
+                "description": "merge 가 fast-forward 로 끝났다(새 커밋 없이 ref 만 옮겼다).",
+                "type": "string"
+              },
+              {
+                "const": "done",
+                "description": "새 커밋을 만들었다(merge 커밋 · cherry-pick · revert · rebase 로 다시 쓴 커밋).",
+                "type": "string"
+              },
+              {
+                "const": "stopped",
+                "description": "충돌로 멈췄다 — `operation` 이 진행 중 작업이다.",
+                "type": "string"
+              }
+            ]
+          },
+          "OperationAction": {
+            "enum": [
+              "continue",
+              "abort",
+              "skip"
+            ],
+            "type": "string"
+          },
+          "OperationInfo": {
+            "properties": {
+              "actions": {
+                "description": "할 수 있는 동작(`git.operation.continue` · `abort` · `skip`).",
+                "items": {
+                  "$ref": "#/$defs/OperationAction"
+                },
+                "type": "array"
+              },
+              "branch": {
+                "description": "rebase 하는 브랜치의 짧은 이름. 분리된 HEAD 를 rebase 하거나 rebase 가 아니면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "heads": {
+                "description": "들여오는 쪽 커밋(전체 해시): merge 의 `MERGE_HEAD`, cherry-pick · revert 의 그 커밋, rebase 가 멈춘 커밋. 모르면 빈 목록.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "$ref": "#/$defs/RepoOperation"
+              },
+              "onto": {
+                "description": "rebase 의 대상 커밋.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "remaining": {
+                "description": "지금 단계 뒤에 남은 단계 수. 모르면 `null`.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "step": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/OperationStep"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "지금 단계와 전체 단계(rebase · am). 모르면 `null`."
+              }
+            },
+            "required": [
+              "kind",
+              "heads",
+              "branch",
+              "onto",
+              "step",
+              "remaining",
+              "actions"
+            ],
+            "type": "object"
+          },
+          "OperationStep": {
+            "properties": {
+              "current": {
+                "description": "지금 단계(1부터).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "current",
+              "total"
+            ],
+            "type": "object"
+          },
+          "RepoOperation": {
+            "description": "진행 중인 작업(git 의 `wt_status_get_state` 와 같은 판정). 순차 cherry-pick · revert 와 대화형 rebase 도 각각 같은 값이다.",
+            "oneOf": [
+              {
+                "enum": [
+                  "merge",
+                  "rebase",
+                  "cherryPick",
+                  "revert",
+                  "bisect"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "am",
+                "description": "`git am`(메일 패치 적용).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "merge · cherry-pick · revert · rebase 의 결과.",
+        "properties": {
+          "head": {
+            "description": "끝난 뒤 HEAD 의 커밋(전체 해시). 태어나지 않은 브랜치면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "moved": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GitRefMove"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "움직인 ref. 멈췄거나(`stopped` — 되돌리기는 중단이다) 바뀐 것이 없으면 `null`."
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OperationInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`stopped` 일 때 진행 중 작업(M2-06 `git.operation` 과 같다)."
+          },
+          "outcome": {
+            "$ref": "#/$defs/HistoryOutcome"
+          },
+          "workTree": {
+            "description": "저장소 작업 트리 꼭대기(절대 경로).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "outcome",
+          "head",
+          "moved",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "git.refs": {
       "description": "로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.",
       "kind": "unary",
@@ -5116,6 +5898,776 @@
         "owner"
       ],
       "tier": "read"
+    },
+    "git.reset": {
+      "description": "HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard`). hard 는 확인 뒤에 부른다(결정 M2-D6 ① — 잃을 변경은\n`git.resetPreview`). 결과의 `moved` 로 [되돌리기].",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ResetMode": {
+            "description": "`git.reset` 의 방식.",
+            "oneOf": [
+              {
+                "const": "soft",
+                "description": "ref 만 옮긴다 — index · 작업 트리는 그대로.",
+                "type": "string"
+              },
+              {
+                "const": "mixed",
+                "description": "ref 와 index — 작업 트리는 그대로(git 기본).",
+                "type": "string"
+              },
+              {
+                "const": "hard",
+                "description": "ref · index · 작업 트리 — 저장하지 않은 변경을 잃는다(결정 M2-D6 ① 의 확인 대상).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "commit": {
+            "description": "HEAD 를 옮길 커밋.",
+            "type": "string"
+          },
+          "expected": {
+            "default": null,
+            "description": "HEAD 가 이 커밋(전체 해시)일 때만 한다 — 아니면 아무것도 하지 않고 conflict(`-32004`, `data.head` 가 지금 HEAD). 확인\n다이얼로그를 띄운 때의 HEAD(`git.resetPreview` 의 `head`)나 [되돌리기] 의 `moved.current` 를 넣는다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/$defs/ResetMode"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "commit",
+          "mode"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitChange": {
+            "description": "경로 하나의 변경 종류(porcelain v2 의 `XY` 글자 하나).",
+            "oneOf": [
+              {
+                "const": "added",
+                "description": "`A`. 작업 트리 쪽(`unstaged`)이면 `git add --intent-to-add` 한 파일.",
+                "type": "string"
+              },
+              {
+                "const": "modified",
+                "description": "`M`(서브모듈이면 가리키는 커밋이 바뀌었다).",
+                "type": "string"
+              },
+              {
+                "const": "deleted",
+                "description": "`D`.",
+                "type": "string"
+              },
+              {
+                "const": "renamed",
+                "description": "`R` — 스테이징한 쪽만, `origPath` 에서 옮겼다.",
+                "type": "string"
+              },
+              {
+                "const": "copied",
+                "description": "`C` — 스테이징한 쪽만, `origPath` 에서 복사했다.",
+                "type": "string"
+              },
+              {
+                "const": "typeChanged",
+                "description": "`T`(파일 ↔ 심링크 등).",
+                "type": "string"
+              },
+              {
+                "const": "untracked",
+                "description": "`?` — 작업 트리 쪽만.",
+                "type": "string"
+              }
+            ]
+          },
+          "GitConflict": {
+            "description": "병합 충돌(porcelain v2 의 `u` 줄 `XY`).",
+            "oneOf": [
+              {
+                "const": "bothDeleted",
+                "description": "`DD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByUs",
+                "description": "`AU`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByThem",
+                "description": "`UD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByThem",
+                "description": "`UA`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByUs",
+                "description": "`DU`.",
+                "type": "string"
+              },
+              {
+                "const": "bothAdded",
+                "description": "`AA`.",
+                "type": "string"
+              },
+              {
+                "const": "bothModified",
+                "description": "`UU`.",
+                "type": "string"
+              }
+            ]
+          },
+          "GitLostChanges": {
+            "properties": {
+              "changes": {
+                "description": "사라지는 변경(`git.status` 의 항목 그대로 — untracked 는 빠진다). 경로순.",
+                "items": {
+                  "$ref": "#/$defs/GitStatusEntry"
+                },
+                "type": "array"
+              },
+              "overwritten": {
+                "description": "덮어써지는 untracked 파일(작업 트리 기준 상대 경로, `/`). 경로순.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "changes",
+              "overwritten"
+            ],
+            "type": "object"
+          },
+          "GitRefMove": {
+            "description": "ref 하나를 움직인 기록(결정 M2-D6 ③). 창은 이것으로 알림에 이전 해시와 [되돌리기] 를 단다. reset · rebase · merge ·\ncherry-pick · revert(이 모듈)와 브랜치 삭제(M2-09)가 같은 꼴로 싣는다.",
+            "properties": {
+              "current": {
+                "description": "움직인 뒤 커밋. ref 를 지웠으면(브랜치 삭제) `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "previous": {
+                "description": "움직이기 전 커밋(전체 해시) — [되돌리기] 가 돌아갈 곳.",
+                "type": "string"
+              },
+              "refName": {
+                "description": "움직인 ref 의 전체 이름(`refs/heads/main`). 분리된 HEAD 를 움직였으면 `HEAD`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "refName",
+              "previous",
+              "current"
+            ],
+            "type": "object"
+          },
+          "GitStatusEntry": {
+            "description": "경로 하나의 상태. 충돌이면 `conflict` 만 있다.",
+            "properties": {
+              "conflict": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitConflict"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "origPath": {
+                "description": "스테이징한 이름 바뀜 · 복사의 원래 경로.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "description": "저장소 작업 트리 기준 경로(`/` 구분). untracked 중첩 저장소처럼 폴더 하나로 보이는 것은 `/` 로 끝난다.",
+                "type": "string"
+              },
+              "staged": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitChange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "HEAD↔index(스테이징한 변경)."
+              },
+              "unstaged": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitChange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "index↔작업 트리(스테이징하지 않은 변경). untracked 면 `untracked`."
+              }
+            },
+            "required": [
+              "path",
+              "origPath",
+              "staged",
+              "unstaged",
+              "conflict"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`git.reset` 의 결과.",
+        "properties": {
+          "head": {
+            "description": "끝난 뒤 HEAD 의 커밋.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lost": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GitLostChanges"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "hard 일 때 잃은 변경(잠금 안에서 reset 바로 전에 읽은 것). soft · mixed 면 `null`."
+          },
+          "moved": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GitRefMove"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "움직인 ref. 그대로였거나 전이 없었으면(태어나지 않은 브랜치) `null`."
+          },
+          "workTree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "head",
+          "moved",
+          "lost"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.resetPreview": {
+      "description": "reset hard 가 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 untracked 파일. gix 로 읽는다(git 을 띄우지 않는다).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitChange": {
+            "description": "경로 하나의 변경 종류(porcelain v2 의 `XY` 글자 하나).",
+            "oneOf": [
+              {
+                "const": "added",
+                "description": "`A`. 작업 트리 쪽(`unstaged`)이면 `git add --intent-to-add` 한 파일.",
+                "type": "string"
+              },
+              {
+                "const": "modified",
+                "description": "`M`(서브모듈이면 가리키는 커밋이 바뀌었다).",
+                "type": "string"
+              },
+              {
+                "const": "deleted",
+                "description": "`D`.",
+                "type": "string"
+              },
+              {
+                "const": "renamed",
+                "description": "`R` — 스테이징한 쪽만, `origPath` 에서 옮겼다.",
+                "type": "string"
+              },
+              {
+                "const": "copied",
+                "description": "`C` — 스테이징한 쪽만, `origPath` 에서 복사했다.",
+                "type": "string"
+              },
+              {
+                "const": "typeChanged",
+                "description": "`T`(파일 ↔ 심링크 등).",
+                "type": "string"
+              },
+              {
+                "const": "untracked",
+                "description": "`?` — 작업 트리 쪽만.",
+                "type": "string"
+              }
+            ]
+          },
+          "GitConflict": {
+            "description": "병합 충돌(porcelain v2 의 `u` 줄 `XY`).",
+            "oneOf": [
+              {
+                "const": "bothDeleted",
+                "description": "`DD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByUs",
+                "description": "`AU`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByThem",
+                "description": "`UD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByThem",
+                "description": "`UA`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByUs",
+                "description": "`DU`.",
+                "type": "string"
+              },
+              {
+                "const": "bothAdded",
+                "description": "`AA`.",
+                "type": "string"
+              },
+              {
+                "const": "bothModified",
+                "description": "`UU`.",
+                "type": "string"
+              }
+            ]
+          },
+          "GitLostChanges": {
+            "properties": {
+              "changes": {
+                "description": "사라지는 변경(`git.status` 의 항목 그대로 — untracked 는 빠진다). 경로순.",
+                "items": {
+                  "$ref": "#/$defs/GitStatusEntry"
+                },
+                "type": "array"
+              },
+              "overwritten": {
+                "description": "덮어써지는 untracked 파일(작업 트리 기준 상대 경로, `/`). 경로순.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "changes",
+              "overwritten"
+            ],
+            "type": "object"
+          },
+          "GitStatusEntry": {
+            "description": "경로 하나의 상태. 충돌이면 `conflict` 만 있다.",
+            "properties": {
+              "conflict": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitConflict"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "origPath": {
+                "description": "스테이징한 이름 바뀜 · 복사의 원래 경로.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "description": "저장소 작업 트리 기준 경로(`/` 구분). untracked 중첩 저장소처럼 폴더 하나로 보이는 것은 `/` 로 끝난다.",
+                "type": "string"
+              },
+              "staged": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitChange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "HEAD↔index(스테이징한 변경)."
+              },
+              "unstaged": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitChange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "index↔작업 트리(스테이징하지 않은 변경). untracked 면 `untracked`."
+              }
+            },
+            "required": [
+              "path",
+              "origPath",
+              "staged",
+              "unstaged",
+              "conflict"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "head": {
+            "description": "지금 HEAD 의 커밋(`git.reset` 의 `expected` 로 넘긴다). 태어나지 않은 브랜치면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lost": {
+            "$ref": "#/$defs/GitLostChanges"
+          },
+          "target": {
+            "description": "`commit` 이 가리키는 커밋(전체 해시).",
+            "type": "string"
+          },
+          "workTree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "head",
+          "target",
+          "lost"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.revert": {
+      "description": "커밋들을 차례로 되돌리는 역 커밋을 만든다(`git revert --no-edit`). 충돌이면 `outcome: stopped`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "commits": {
+            "description": "적용할 커밋들, 적용할 차례대로(로그에서 고른 것이면 오래된 것부터). 비면 invalid params.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "commits"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitRefMove": {
+            "description": "ref 하나를 움직인 기록(결정 M2-D6 ③). 창은 이것으로 알림에 이전 해시와 [되돌리기] 를 단다. reset · rebase · merge ·\ncherry-pick · revert(이 모듈)와 브랜치 삭제(M2-09)가 같은 꼴로 싣는다.",
+            "properties": {
+              "current": {
+                "description": "움직인 뒤 커밋. ref 를 지웠으면(브랜치 삭제) `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "previous": {
+                "description": "움직이기 전 커밋(전체 해시) — [되돌리기] 가 돌아갈 곳.",
+                "type": "string"
+              },
+              "refName": {
+                "description": "움직인 ref 의 전체 이름(`refs/heads/main`). 분리된 HEAD 를 움직였으면 `HEAD`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "refName",
+              "previous",
+              "current"
+            ],
+            "type": "object"
+          },
+          "HistoryOutcome": {
+            "description": "쓰기가 어떻게 끝났는가.",
+            "oneOf": [
+              {
+                "const": "upToDate",
+                "description": "바뀐 것이 없다(이미 들어 있는 브랜치의 merge, 이미 위에 있는 rebase).",
+                "type": "string"
+              },
+              {
+                "const": "fastForward",
+                "description": "merge 가 fast-forward 로 끝났다(새 커밋 없이 ref 만 옮겼다).",
+                "type": "string"
+              },
+              {
+                "const": "done",
+                "description": "새 커밋을 만들었다(merge 커밋 · cherry-pick · revert · rebase 로 다시 쓴 커밋).",
+                "type": "string"
+              },
+              {
+                "const": "stopped",
+                "description": "충돌로 멈췄다 — `operation` 이 진행 중 작업이다.",
+                "type": "string"
+              }
+            ]
+          },
+          "OperationAction": {
+            "enum": [
+              "continue",
+              "abort",
+              "skip"
+            ],
+            "type": "string"
+          },
+          "OperationInfo": {
+            "properties": {
+              "actions": {
+                "description": "할 수 있는 동작(`git.operation.continue` · `abort` · `skip`).",
+                "items": {
+                  "$ref": "#/$defs/OperationAction"
+                },
+                "type": "array"
+              },
+              "branch": {
+                "description": "rebase 하는 브랜치의 짧은 이름. 분리된 HEAD 를 rebase 하거나 rebase 가 아니면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "heads": {
+                "description": "들여오는 쪽 커밋(전체 해시): merge 의 `MERGE_HEAD`, cherry-pick · revert 의 그 커밋, rebase 가 멈춘 커밋. 모르면 빈 목록.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "$ref": "#/$defs/RepoOperation"
+              },
+              "onto": {
+                "description": "rebase 의 대상 커밋.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "remaining": {
+                "description": "지금 단계 뒤에 남은 단계 수. 모르면 `null`.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "step": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/OperationStep"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "지금 단계와 전체 단계(rebase · am). 모르면 `null`."
+              }
+            },
+            "required": [
+              "kind",
+              "heads",
+              "branch",
+              "onto",
+              "step",
+              "remaining",
+              "actions"
+            ],
+            "type": "object"
+          },
+          "OperationStep": {
+            "properties": {
+              "current": {
+                "description": "지금 단계(1부터).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "current",
+              "total"
+            ],
+            "type": "object"
+          },
+          "RepoOperation": {
+            "description": "진행 중인 작업(git 의 `wt_status_get_state` 와 같은 판정). 순차 cherry-pick · revert 와 대화형 rebase 도 각각 같은 값이다.",
+            "oneOf": [
+              {
+                "enum": [
+                  "merge",
+                  "rebase",
+                  "cherryPick",
+                  "revert",
+                  "bisect"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "am",
+                "description": "`git am`(메일 패치 적용).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "merge · cherry-pick · revert · rebase 의 결과.",
+        "properties": {
+          "head": {
+            "description": "끝난 뒤 HEAD 의 커밋(전체 해시). 태어나지 않은 브랜치면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "moved": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GitRefMove"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "움직인 ref. 멈췄거나(`stopped` — 되돌리기는 중단이다) 바뀐 것이 없으면 `null`."
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OperationInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`stopped` 일 때 진행 중 작업(M2-06 `git.operation` 과 같다)."
+          },
+          "outcome": {
+            "$ref": "#/$defs/HistoryOutcome"
+          },
+          "workTree": {
+            "description": "저장소 작업 트리 꼭대기(절대 경로).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "outcome",
+          "head",
+          "moved",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
     },
     "git.show": {
       "description": "커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).",
