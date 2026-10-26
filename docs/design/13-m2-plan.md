@@ -114,7 +114,7 @@ M1 에서 된 것은 다시 계획하지 않는다 — 파일 감시 · `fs.chan
 | 「최근 변경 파일」 뷰(F3-7) | v1.0 전 | P1. M2-02 의 status 위에 얹으면 된다 |
 | 원격 Host 지연에서의 그래프 · 거터 성능 | M7 | M1-17 과 같은 이유 — M2 의 Host 는 데스크톱 프로세스 안이다(03-architecture.md 「전체 구조」 절) |
 | Linux 에서 git 디렉터리 감시의 inotify 한도 · 실기 성능 | Linux 출시 준비 | D38. CI 의 Linux 시험은 그대로 돈다. M2-02 는 공유 git 디렉터리 전체를 재귀로 건다(`objects/` · `modules/*/objects` 포함 — inotify 는 폴더마다 감시 하나다). `HEAD` · `index` · `refs/` · `packed-refs` · 진행 중 작업 표지 · `modules/*/` 의 HEAD · ref 만 걸도록 좁히는 것(나중에 생기는 `info/` · `modules/` 를 따라 더하는 것 포함)도 이때 한다(M2-02 리뷰) |
-| reftable 저장소(`git init --ref-format=reftable`) 읽기 | gix 가 reftable 을 읽게 되면 | gix 0.90 이 reftable ref 를 읽지 못한다. `git.status` · `git.refs` 는 내부 오류 대신 `unsupported: "reftable"` 로 답한다(M2-02 리뷰). `git.repo`(M2-01)와 다른 읽기 행은 아직 같은 꼴로 답하지 않고, 화면의 「지원하지 않는 저장소」 상태는 10-ui.md 「빈 상태 · 오류 상태」 에 문장이 없다 — 받는 행(M2-12 · M2-13)이 정한다 |
+| reftable 저장소(`git init --ref-format=reftable`) 읽기 | gix 가 reftable 을 읽게 되면 | gix 0.90 이 reftable ref 를 읽지 못한다. `git.status` · `git.refs` 는 내부 오류 대신 `unsupported: "reftable"` 로 답한다(M2-02 리뷰). `git.repo`(M2-01)와 다른 읽기 행은 아직 같은 꼴로 답하지 않고, 화면의 「지원하지 않는 저장소」 상태는 10-ui.md 「빈 상태 · 오류 상태」 에 문장이 없다 — 받는 행(M2-12 · M2-13)이 정한다. M2-12(2026-10-26, 메인 판정): 트리 · 탭은 칠하지 않고 문장도 달지 않는다(10-ui.md 「마우스 · 트랙패드」 의 「Git」 절), 그 문장은 상태바를 가진 M2-13 이 단다 |
 | DB 레이아웃 프리셋 `⌃⌥3` | M3 | DB 화면이 생긴 뒤 |
 | commit-graph 파일 쓰기 등 Pitwall 이 저장소를 유지 · 관리하는 일 | 이후 | 결정 M2-D10 의 대안. 사람의 저장소를 사람이 시키지 않은 쓰기로 바꾸지 않는다 |
 | 50 MiB(결정 M1-D9 의 읽기 전용 상한)를 넘는 리비전 · index 파일의 내용 읽기(`git.blob` 의 범위 · hex · 앞부분 보기) | gix 에 객체를 스트림으로 읽는 길이 생길 때 | M2-04(2026-10-26, 메인 판정). gix 0.90 의 객체 읽기는 blob 을 통째로 풀어서, `git.blob` 은 그 크기를 넘으면 객체 헤더로 크기만 알린다(`tooLarge`). pack 을 직접 읽는 갈래(델타 · alternates 예외 포함)는 시험 · 유지 비용이 크다 |
