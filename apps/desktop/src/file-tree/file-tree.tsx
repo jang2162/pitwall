@@ -10,6 +10,8 @@
 // - 행을 끌어 폴더(또는 파일 — 그 부모)에 놓으면 옮기고, ⌥ 를 누른 채 놓으면 복사한다 — 포인터 이벤트로 끈다(tree-drag.ts).
 //   Finder 에서의 드롭은 툴 윈도우가 데스크톱의 드롭 알림으로 받는다(tree-drop.ts).
 // - 루트 밖을 가리키는 심링크는 「루트 밖을 가리킴」 을 달고 펼치거나 열지 않는다(결정 M1-D8).
+// - git 상태(M2-12, src/git/git-status.ts): 파일은 색 + 글자(오른쪽 끝), 바뀐 것을 담은 폴더는 색. 행마다 자기 경로의 상태만
+//   구독해 그 상태가 바뀐 행만 다시 그린다. 툴팁이 두 쪽(스테이징됨 · 작업 트리)을 적는다.
 
 import type { Platform } from "@pitwall/keymap";
 import * as ContextMenu from "@radix-ui/react-context-menu";
@@ -44,6 +46,13 @@ import { useStore } from "zustand";
 import type { FsCopied, FsCreated, FsMoved, FsTrashed } from "@pitwall/rpc-client";
 
 import { useEditorWorkspace } from "../editor/editor-workspace";
+import { useGitDecoration } from "../git/git-status";
+import {
+  GitStatusMark,
+  type GitStatusStrings,
+  gitStatusTitle,
+  gitToneClass,
+} from "../git/git-status-mark";
 import { useAppStrings } from "../i18n/app-strings";
 import { useKeymap, useRegisterActions, useRegistryVersion } from "../keymap/keymap-provider";
 import { showPanel } from "../layout/project-layout";
@@ -117,6 +126,7 @@ function TreeRowView({
   selected,
   query,
   strings,
+  gitStrings,
   start,
   dropTarget,
   onPointerDown,
@@ -130,6 +140,7 @@ function TreeRowView({
   selected: boolean;
   query: string | undefined;
   strings: FileTreeStrings;
+  gitStrings: GitStatusStrings;
   start: number;
   /** 끄는 항목을 놓으면 이 폴더로 들어간다. */
   dropTarget: boolean;
@@ -166,7 +177,15 @@ function TreeRowView({
         {entry.name.slice(at + query!.length)}
       </>
     );
-  const muted = entry.ignored || entry.dim || entry.outside;
+  const git = useGitDecoration(entry.path);
+  // git 상태 색이 흐림보다 앞선다 — 벤더 파일도 바뀌었으면 바뀐 색이다. ignore 된 항목은 git.ignored 색에 기울임(색이 아닌 표지)이다.
+  const tone = git
+    ? gitToneClass(git)
+    : entry.ignored
+      ? "text-git-ignored"
+      : entry.dim || entry.outside
+        ? "text-ui-muted-foreground"
+        : "";
   return (
     <div
       id={rowDomId(index)}
@@ -179,7 +198,8 @@ function TreeRowView({
       data-dim={entry.dim ? "" : undefined}
       data-outside={entry.outside ? "" : undefined}
       data-drop-target={dropTarget ? "" : undefined}
-      title={entry.outside ? strings.outside : undefined}
+      data-git={git?.tone}
+      title={entry.outside ? strings.outside : git ? gitStatusTitle(git, gitStrings) : undefined}
       onPointerDown={(e) => onPointerDown(row, e)}
       onClick={() => onClick(row)}
       onDoubleClick={() => onDoubleClick(row)}
@@ -191,9 +211,7 @@ function TreeRowView({
       }}
       className={`absolute top-0 left-0 flex w-full cursor-default items-center gap-1 pr-2 whitespace-nowrap select-none ${
         selected ? "bg-ui-active" : "hover:bg-ui-hover"
-      } ${muted ? "text-ui-muted-foreground" : ""} ${
-        dropTarget ? "outline outline-1 -outline-offset-1 outline-ui-accent" : ""
-      }`}
+      } ${tone} ${dropTarget ? "outline outline-1 -outline-offset-1 outline-ui-accent" : ""}`}
     >
       <span
         className="flex w-4 flex-none items-center justify-center"
@@ -213,6 +231,7 @@ function TreeRowView({
       <Icon size={14} aria-hidden className="flex-none" />
       <span className={`min-w-0 truncate ${entry.ignored ? "italic" : ""}`}>{name}</span>
       {entry.outside && <span className="truncate text-[11px]">{strings.outside}</span>}
+      <GitStatusMark decoration={git} strings={gitStrings} className="ml-auto pl-1" />
       {row.loading && <span className="truncate text-[11px]">{strings.loading}</span>}
       {row.error && (
         <span role="alert" className="truncate text-[11px] text-ui-accent">
@@ -263,7 +282,9 @@ export function FileTree({
   className?: string;
 }) {
   const strings = useFileTreeStrings();
-  const project = useProjectStrings().editor;
+  const projectStrings = useProjectStrings();
+  const project = projectStrings.editor;
+  const gitStrings = projectStrings.git.status;
   const openWith = useAppStrings().openWith;
   const findStrings = useFindStrings();
   useModelVersion(model);
@@ -532,6 +553,7 @@ export function FileTree({
                       selected={item.index === selectedIndex}
                       query={query}
                       strings={strings}
+                      gitStrings={gitStrings}
                       start={item.start}
                       dropTarget={drag !== undefined && row.entry.path === drag.dir}
                       onPointerDown={startDrag}

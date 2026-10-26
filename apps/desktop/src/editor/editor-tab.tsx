@@ -4,6 +4,8 @@
 // 실행하므로 키로 실행한 것과 같은 길을 지난다. ×(가운데 클릭 포함)도 탭 닫기 액션이라 미저장 확인을 지난다(M1-13).
 // 문서에 미저장 편집이 있으면 이름 앞에 ● 를 둔다. 「텍스트로 열기」 · 「hex 로 열기」(M1-23)는 지금 그 뷰어가 아닐 때만, 「기본 뷰어로
 // 열기」 는 탭이 뷰어를 덮어쓰고 있을 때만 보인다. 일반 파일이 아니어서 열지 않은 문서(FIFO · 장치)에는 셋 다 없다.
+// 파일의 git 상태(M2-12, src/git/git-status.ts)가 있으면 제목을 그 색으로 칠하고 이름 앞에 글자(M · A …)를 둔다 — 색만으로 가르지
+// 않는다. 툴팁은 경로 다음 줄에 상태를 적는다.
 
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { DockviewDefaultTab, type IDockviewPanelHeaderProps } from "dockview-react";
@@ -11,6 +13,8 @@ import { Pin } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { useStore } from "zustand";
 
+import { useGitDecoration } from "../git/git-status";
+import { GitStatusMark, gitStatusTitle, gitToneClass } from "../git/git-status-mark";
 import { useAppStrings } from "../i18n/app-strings";
 import { useKeymap, useKeymapPopup } from "../keymap/keymap-provider";
 import { useProjectStrings } from "../layout/strings";
@@ -43,7 +47,8 @@ function MenuItem({ children, onSelect }: { children: ReactNode; onSelect(): voi
 }
 
 export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams>) {
-  const T = useProjectStrings().editor;
+  const project = useProjectStrings();
+  const T = project.editor;
   const openWith = useAppStrings().openWith;
   const { registry, platform } = useKeymap();
   const params = useTabParams(props.api, props.params);
@@ -60,6 +65,8 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
     if (doc?.status === "tooLarge" && doc.reason === "size") return params.viewer ?? "notice";
     return null;
   });
+  const git = useGitDecoration(params.path);
+  const gitStrings = project.git.status;
   const [menuOpen, setMenuOpen] = useState(false);
   useKeymapPopup(menuOpen);
 
@@ -75,9 +82,10 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
           data-editor-tab-header={props.api.id}
           data-preview={params.preview ? "" : undefined}
           data-dirty={dirty ? "" : undefined}
-          title={params.path}
+          data-git={git?.tone}
+          title={git ? `${params.path}\n${gitStatusTitle(git, gitStrings)}` : params.path}
           onDoubleClick={() => run("editor.toggleMaximized")}
-          className={`flex h-full items-center ${params.preview ? "italic" : ""}`}
+          className={`flex h-full items-center ${params.preview ? "italic" : ""} ${gitToneClass(git)}`}
         >
           {params.pinned && <Pin size={11} aria-label={T.pinned} className="ml-1.5 flex-none" />}
           {dirty && (
@@ -85,6 +93,7 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
               ●
             </span>
           )}
+          <GitStatusMark decoration={git} strings={gitStrings} className="ml-1.5 not-italic" />
           <DockviewDefaultTab {...props} closeActionOverride={() => run("editor.closeTab")} />
         </div>
       </ContextMenu.Trigger>

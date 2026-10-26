@@ -497,3 +497,27 @@ git-askpass-cancel = 취소
 git-askpass-yes = 예
 git-askpass-no = 아니오
 git-askpass-dismiss = 닫기
+
+## git 상태(src/git/git-status-mark.tsx). 파일 트리 행 · 에디터 탭의 글자(M · A · D …)가 읽히는 이름과 툴팁.
+
+git-status-added = 추가됨
+git-status-modified = 수정됨
+git-status-deleted = 삭제됨
+git-status-renamed = 이름 바뀜
+git-status-copied = 복사됨
+git-status-type-changed = 종류 바뀜
+git-status-untracked = 추적 안 됨
+git-status-conflicted = 충돌
+git-status-conflict-both-modified = 충돌: 양쪽에서 고침
+git-status-conflict-both-added = 충돌: 양쪽에서 만듦
+git-status-conflict-both-deleted = 충돌: 양쪽에서 지움
+git-status-conflict-added-by-us = 충돌: 이쪽에서 만듦
+git-status-conflict-added-by-them = 충돌: 그쪽에서 만듦
+git-status-conflict-deleted-by-us = 충돌: 이쪽에서 지움
+git-status-conflict-deleted-by-them = 충돌: 그쪽에서 지움
+# $change: 변경 이름(git-status-*)
+git-status-staged = 스테이징됨: { $change }
+# $change: 변경 이름(git-status-*)
+git-status-unstaged = 작업 트리: { $change }
+# 폴더의 색: 그 아래에 바뀐 파일이 있다
+git-status-folder = 아래에 바뀐 파일이 있다

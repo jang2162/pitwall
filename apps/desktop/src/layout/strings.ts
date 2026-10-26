@@ -4,7 +4,7 @@
 
 import { useLocalization } from "@fluent/react";
 import type { Platform } from "@pitwall/keymap";
-import type { RuntimeProblem } from "@pitwall/rpc-client";
+import type { GitChange, GitConflict, RuntimeProblem } from "@pitwall/rpc-client";
 import { useMemo } from "react";
 
 import { type Translate, translator } from "../i18n/localization";
@@ -233,6 +233,31 @@ export function projectStrings(t: Translate) {
         yes: t("git-askpass-yes"),
         no: t("git-askpass-no"),
         dismiss: t("git-askpass-dismiss"),
+      },
+      /** 트리 · 탭의 git 상태(src/git/git-status-mark.tsx). */
+      status: {
+        change: {
+          added: t("git-status-added"),
+          modified: t("git-status-modified"),
+          deleted: t("git-status-deleted"),
+          renamed: t("git-status-renamed"),
+          copied: t("git-status-copied"),
+          typeChanged: t("git-status-type-changed"),
+          untracked: t("git-status-untracked"),
+        } satisfies Record<GitChange, string>,
+        conflict: {
+          bothModified: t("git-status-conflict-both-modified"),
+          bothAdded: t("git-status-conflict-both-added"),
+          bothDeleted: t("git-status-conflict-both-deleted"),
+          addedByUs: t("git-status-conflict-added-by-us"),
+          addedByThem: t("git-status-conflict-added-by-them"),
+          deletedByUs: t("git-status-conflict-deleted-by-us"),
+          deletedByThem: t("git-status-conflict-deleted-by-them"),
+        } satisfies Record<GitConflict, string>,
+        conflicted: t("git-status-conflicted"),
+        staged: (change: string) => t("git-status-staged", { change }),
+        unstaged: (change: string) => t("git-status-unstaged", { change }),
+        folder: t("git-status-folder"),
       },
     },
     trust: {

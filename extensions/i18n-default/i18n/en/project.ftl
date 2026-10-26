@@ -515,3 +515,27 @@ git-askpass-cancel = Cancel
 git-askpass-yes = Yes
 git-askpass-no = No
 git-askpass-dismiss = Close
+
+## Git status (src/git/git-status-mark.tsx). The name a screen reader reads for the letter (M · A · D …) on file tree rows and editor tabs, and the tooltip.
+
+git-status-added = Added
+git-status-modified = Modified
+git-status-deleted = Deleted
+git-status-renamed = Renamed
+git-status-copied = Copied
+git-status-type-changed = Type changed
+git-status-untracked = Untracked
+git-status-conflicted = Conflict
+git-status-conflict-both-modified = Conflict: both modified
+git-status-conflict-both-added = Conflict: both added
+git-status-conflict-both-deleted = Conflict: both deleted
+git-status-conflict-added-by-us = Conflict: added by us
+git-status-conflict-added-by-them = Conflict: added by them
+git-status-conflict-deleted-by-us = Conflict: deleted by us
+git-status-conflict-deleted-by-them = Conflict: deleted by them
+# $change: the change name (git-status-*)
+git-status-staged = Staged: { $change }
+# $change: the change name (git-status-*)
+git-status-unstaged = Working tree: { $change }
+# A folder's color: something below it changed
+git-status-folder = Contains changed files
