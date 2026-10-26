@@ -100,7 +100,7 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
 |---|---|---|---|
 | 전역 설정 | `$CONFIG/` | TOML | `settings.toml`(전역 설정 · 원격 호스트 · 외부 도구), `keymap.toml`, `themes/`, 개인 전용 프로젝트 설정 `projects/<slug>/` |
 | 앱 데이터 | `$DATA/` | SQLite · 바이너리 | `state.db`(프로젝트 레지스트리 · 최근 목록), `projects/<id>/`(열린 탭 · 레이아웃 · 브레이크포인트 · 쿼리 히스토리 — 창 상태는 `state.json`, `project.state.*`, 10-ui.md §5.2 「상태 복원」), `extensions/`, `tools/`(LSP · DAP 설치본, §07 4.4), `relay/` |
-| 상태 · 로그 | `$STATE/` | 텍스트 · SQLite | `logs/`, `backup/`(마이그레이션 원본), MCP 감사 로그 `mcp/audit.db`, 실행 중 앱의 MCP 소켓 `run/`([05-mcp.md](05-mcp.md) 「로컬 소켓과 헤드리스」) |
+| 상태 · 로그 | `$STATE/` | 텍스트 · SQLite | `logs/`, `backup/`(마이그레이션 원본), MCP 감사 로그 `mcp/audit.db`, 실행 중 앱의 MCP 소켓 `run/`([05-mcp.md](05-mcp.md) 「로컬 소켓과 헤드리스」)와 git askpass 소켓 · 도우미 스크립트(같은 `run/`, 13-m2-plan.md M2-06) |
 | 캐시 | `$CACHE/` | 다양 | 심볼 인덱스, registry 캐시, 원격 파일 캐시 — 지워도 재생성 |
 | 프로젝트 공유 설정 | `<project>/.pitwall/project.toml`, `run/*.toml`, `db/*.toml` | TOML | 커밋 가능. 실행 구성, DB 연결(비밀 제외), 기본 외부 도구 고르기(명령은 정의하지 못한다 — 「`[open_with]`」) |
 | 비밀 | OS 키체인 | | DB 비밀번호, SSH 패스프레이즈, 토큰. 설정 파일에는 `secret_ref`만 |
@@ -338,3 +338,4 @@ GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버
 - 확장은 WASM 샌드박스 + 설치 시 승인한 capability만 사용
 - 프로젝트 설정의 실행 커맨드는 "신뢰된 프로젝트"에서만 실행 (VS Code Workspace Trust와 유사)
 - git(`crates/pw-git`, 13-m2-plan.md 결정 M2-D8): 미신뢰 프로젝트에서는 git CLI 로 읽지 않는다 — 읽는 명령도 저장소 설정의 프로그램을 돌린다(`core.fsmonitor` 는 `git status` 만으로, `filter.<x>.clean` · `process`, `diff.external` · `diff.<x>.textconv`). 그 프로젝트의 읽기는 gix 로만 하고, gix 는 저장소 안의 설정(`.git/config` · `config.worktree` 와 그것이 include 한 파일)에서 프로그램 · 경로를 고르지 않게 연다(사람의 `safe.directory` 와 상관없이). 사람이 누른 쓰기는 신뢰와 상관없이 git CLI 로 돈다 — 터미널에서 `git commit` 을 친 것과 같다(훅 · 필터 포함). 열린 저장소 핸들(`pw_git::Opened`)은 열 때의 신뢰를 들고 있으므로, 핸들을 들고 있는 쪽(감시 · 캐시)은 신뢰가 바뀌면(`ChangeKind::Trust`, `Git::is_current`) 다시 연다
+- git 인증(askpass, `crates/pw-git` 의 `write::askpass`, 13-m2-plan.md M2-06): 쓰기 명령의 git · ssh 가 묻는 암호는 `pitwall askpass` 도우미가 앱의 로컬 소켓으로 넘겨 그 프로젝트 창의 입력 다이얼로그로 묻는다. 소켓은 MCP 소켓과 같은 규칙이다 — 주 인스턴스만 열고, 경로는 단일 인스턴스 키와 `$STATE` 로 정하며, 그 사용자 전용 폴더(0700) · 소켓 0600 · 연결마다 상대 uid 검사. 도우미는 소켓 경로를 다시 계산하지 않고 git 의 환경으로 받고, 질문에는 쓰기 한 번마다 만든 토큰을 붙인다 — 앱은 지금 도는 쓰기의 토큰만 받는다(다른 인스턴스 · 끝난 쓰기의 토큰은 거절). 그 프로젝트를 듣는 창이 없으면 기다리지 않고 실패한다. 답(비밀)은 로그 · Task 진행 · 알림 · 저장 상태 어디에도 남기지 않는다
