@@ -4602,6 +4602,244 @@
       ],
       "tier": "read"
     },
+    "git.discard": {
+      "description": "작업 트리의 변경을 버린다(`git restore --worktree` — index 의 것으로). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\nuntracked 경로는 지우지 않고 `untracked` 로 돌려준다. 작업 트리가 바뀌므로 미저장 문서를 먼저 확인한다(M2-06).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "confirmed": {
+            "description": "사람이 확인했다(결정 M2-D6 ① — 작업 트리 변경 버리기는 되돌릴 기록이 없다). 거짓이면 아무것도 하지 않는다(invalid params).",
+            "type": "boolean"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "paths",
+          "confirmed"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "untracked": {
+            "description": "추적하지 않는 경로라 버리지 않은 것(요청 순서). 버리기는 작업 트리를 index 로 돌리는 것이라 index 에 없는 파일은 대상이\n아니다 — 지우지 않는다. 나머지 경로는 버렸다.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workTree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "untracked"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.discardLines": {
+      "description": "작업 트리 diff 의 hunk · 줄을 골라 버린다(작업 트리에 `git apply -R`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n작업 트리에서 지운 파일은 파일 단위(`git.discard`)로 되살린다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DiffHunk": {
+            "description": "`git diff -U3` 의 hunk 하나.",
+            "properties": {
+              "header": {
+                "description": "`@@` 뒤의 함수 줄(git 의 기본 규칙). 없으면 빈 문자열.",
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "$ref": "#/$defs/DiffLine"
+                },
+                "type": "array"
+              },
+              "newLines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "newStart": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "oldLines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "oldStart": {
+                "description": "`@@ -oldStart,oldLines +newStart,newLines @@` 의 수 그대로. 줄이 없는 쪽(`oldLines == 0`)의 시작은 그 앞 줄 번호다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "oldStart",
+              "oldLines",
+              "newStart",
+              "newLines",
+              "header",
+              "lines"
+            ],
+            "type": "object"
+          },
+          "DiffLine": {
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/LineKind"
+              },
+              "newLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "noNewline": {
+                "description": "파일 끝 개행이 없는 마지막 줄(git 의 `\\ No newline at end of file`).",
+                "type": "boolean"
+              },
+              "oldLine": {
+                "description": "1 기준 줄 번호. 문맥 줄은 둘 다, 뺀 줄은 옛 쪽만, 더한 줄은 새 쪽만 있다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "text": {
+                "description": "줄바꿈(`\\n`)을 뺀 줄. CRLF 파일이면 `\\r` 로 끝난다. UTF-8 이 아닌 바이트는 U+FFFD 다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text",
+              "noNewline"
+            ],
+            "type": "object"
+          },
+          "HunkSelection": {
+            "description": "`git.diff` 의 hunk 하나와 그 안에서 고른 줄.",
+            "properties": {
+              "hunk": {
+                "$ref": "#/$defs/DiffHunk",
+                "description": "`git.diff` 가 준 hunk 그대로. Host 가 그 파일의 diff 를 다시 만들어 머리(범위 · 함수 줄)와 줄이 모두 같은 hunk 를 찾는다 —\n없으면 그 사이 파일이 바뀐 것이라 아무것도 쓰지 않는다(conflict)."
+              },
+              "lines": {
+                "default": null,
+                "description": "고른 줄(`hunk.lines` 의 인덱스, 더한 줄 · 뺀 줄만). `null` 이면 hunk 의 모든 변경. 빈 목록 · 문맥 줄 · 범위 밖은 invalid\nparams.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "hunk"
+            ],
+            "type": "object"
+          },
+          "LineKind": {
+            "enum": [
+              "context",
+              "added",
+              "removed"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "confirmed": {
+            "description": "[`GitDiscardParams::confirmed`] 와 같다.",
+            "type": "boolean"
+          },
+          "hunks": {
+            "items": {
+              "$ref": "#/$defs/HunkSelection"
+            },
+            "type": "array"
+          },
+          "ignoreWhitespace": {
+            "default": false,
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "hunks",
+          "confirmed"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "git.fetch": {
       "description": "fetch: 원격 하나 또는 전부, prune 선택. 인증은 askpass 로 창에 묻는다.",
       "kind": "unary",
@@ -8493,6 +8731,590 @@
       ],
       "tier": "read"
     },
+    "git.stage": {
+      "description": "경로를 스테이징한다(`git add --all`): 바뀐 파일 · untracked(무시된 파일은 git 이 거절) · 지운 파일(지움을 담는다) · 충돌\n파일(해결로 표시).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "paths": {
+            "description": "파일 · 폴더(그 아래 전부). 글롭 · pathspec 문법은 쓰지 않는다(글자 그대로). 비면 invalid params.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`git.repo` 와 같다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "paths"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.stageLines": {
+      "description": "작업 트리 diff(index ↔ 작업 트리)의 hunk · 줄을 골라 스테이징한다(고른 줄로 만든 패치를 `git apply --cached`). 바이너리 ·\n심링크 · 충돌 중 · index 에 없는 파일은 줄 단위로 할 수 없다(invalid params — 파일 단위로). 고른 hunk 가 지금 diff 에 없으면\nconflict.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DiffHunk": {
+            "description": "`git diff -U3` 의 hunk 하나.",
+            "properties": {
+              "header": {
+                "description": "`@@` 뒤의 함수 줄(git 의 기본 규칙). 없으면 빈 문자열.",
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "$ref": "#/$defs/DiffLine"
+                },
+                "type": "array"
+              },
+              "newLines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "newStart": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "oldLines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "oldStart": {
+                "description": "`@@ -oldStart,oldLines +newStart,newLines @@` 의 수 그대로. 줄이 없는 쪽(`oldLines == 0`)의 시작은 그 앞 줄 번호다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "oldStart",
+              "oldLines",
+              "newStart",
+              "newLines",
+              "header",
+              "lines"
+            ],
+            "type": "object"
+          },
+          "DiffLine": {
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/LineKind"
+              },
+              "newLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "noNewline": {
+                "description": "파일 끝 개행이 없는 마지막 줄(git 의 `\\ No newline at end of file`).",
+                "type": "boolean"
+              },
+              "oldLine": {
+                "description": "1 기준 줄 번호. 문맥 줄은 둘 다, 뺀 줄은 옛 쪽만, 더한 줄은 새 쪽만 있다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "text": {
+                "description": "줄바꿈(`\\n`)을 뺀 줄. CRLF 파일이면 `\\r` 로 끝난다. UTF-8 이 아닌 바이트는 U+FFFD 다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text",
+              "noNewline"
+            ],
+            "type": "object"
+          },
+          "HunkSelection": {
+            "description": "`git.diff` 의 hunk 하나와 그 안에서 고른 줄.",
+            "properties": {
+              "hunk": {
+                "$ref": "#/$defs/DiffHunk",
+                "description": "`git.diff` 가 준 hunk 그대로. Host 가 그 파일의 diff 를 다시 만들어 머리(범위 · 함수 줄)와 줄이 모두 같은 hunk 를 찾는다 —\n없으면 그 사이 파일이 바뀐 것이라 아무것도 쓰지 않는다(conflict)."
+              },
+              "lines": {
+                "default": null,
+                "description": "고른 줄(`hunk.lines` 의 인덱스, 더한 줄 · 뺀 줄만). `null` 이면 hunk 의 모든 변경. 빈 목록 · 문맥 줄 · 범위 밖은 invalid\nparams.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "hunk"
+            ],
+            "type": "object"
+          },
+          "LineKind": {
+            "enum": [
+              "context",
+              "added",
+              "removed"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "hunks": {
+            "description": "고른 hunk. 비면 invalid params.",
+            "items": {
+              "$ref": "#/$defs/HunkSelection"
+            },
+            "type": "array"
+          },
+          "ignoreWhitespace": {
+            "default": false,
+            "description": "hunk 를 공백 무시(`ignoreWhitespace`)로 받았다. 그 hunk 는 실제 바이트와 줄이 맞지 않으므로 줄 단위로 쓰지 않는다(invalid\nparams) — 공백을 보는 diff 에서 고른다.",
+            "type": "boolean"
+          },
+          "oldPath": {
+            "default": null,
+            "description": "이름이 바뀐 파일의 옛 경로(`git.diff` 의 `oldPath`) — `git.unstageLines` 만 받는다(HEAD 쪽이 그 경로다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "파일 하나(`git.diff` 의 `path`).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "hunks"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.stash.apply": {
+      "description": "stash 를 적용한다(`git stash apply`, 항목은 남는다). 충돌로 끝나면 `conflicted`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "stash 항목 하나를 고르는 요청. `index` 와 `commit` 이 지금 목록과 맞지 않으면(그 사이 목록이 바뀜) 아무것도 하지 않는다(conflict).",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "index": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "reinstateIndex": {
+            "default": false,
+            "description": "index 의 상태까지 되살린다(`--index`). index 쪽이 충돌하면 git 이 원문으로 거절한다.",
+            "type": "boolean"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "index",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "conflicted": {
+            "description": "충돌로 끝났다 — 실패가 아니라 충돌 파일을 풀 차례다(충돌 목록은 `git.status`). pop 이면 git 이 항목을 지우지 않고 남겼다.",
+            "type": "boolean"
+          },
+          "workTree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "conflicted"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.stash.drop": {
+      "description": "stash 항목을 버린다(`git stash drop`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "confirmed": {
+            "description": "사람이 확인했다(결정 M2-D6 ① 의 stash 버리기). 거짓이면 아무것도 하지 않는다(invalid params).",
+            "type": "boolean"
+          },
+          "index": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "index",
+          "commit",
+          "confirmed"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.stash.list": {
+      "description": "stash 목록(`refs/stash` 의 reflog, 최근 것부터). 저장소가 없으면 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "StashEntry": {
+            "properties": {
+              "commit": {
+                "description": "stash 커밋 해시.",
+                "type": "string"
+              },
+              "index": {
+                "description": "`stash@{index}` 의 수. 0 이 가장 최근이다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "description": "reflog 의 메시지(`On main: 메시지` · `WIP on main: <해시> <제목>` — git 이 만든 그대로).",
+                "type": "string"
+              },
+              "time": {
+                "description": "만든 시각(유닉스 초).",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "index",
+              "commit",
+              "message",
+              "time"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "stashes": {
+            "description": "최근 것부터(`git stash list` 의 순서).",
+            "items": {
+              "$ref": "#/$defs/StashEntry"
+            },
+            "type": "array"
+          },
+          "workTree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "stashes"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.stash.pop": {
+      "description": "stash 를 적용하고 지운다(`git stash pop`). 충돌로 끝나면 `conflicted` 이고 항목은 남는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "stash 항목 하나를 고르는 요청. `index` 와 `commit` 이 지금 목록과 맞지 않으면(그 사이 목록이 바뀜) 아무것도 하지 않는다(conflict).",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "index": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "reinstateIndex": {
+            "default": false,
+            "description": "index 의 상태까지 되살린다(`--index`). index 쪽이 충돌하면 git 이 원문으로 거절한다.",
+            "type": "boolean"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "index",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "conflicted": {
+            "description": "충돌로 끝났다 — 실패가 아니라 충돌 파일을 풀 차례다(충돌 목록은 `git.status`). pop 이면 git 이 항목을 지우지 않고 남겼다.",
+            "type": "boolean"
+          },
+          "workTree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "conflicted"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.stash.push": {
+      "description": "stash 를 만든다(`git stash push`) — 메시지 · untracked 포함을 고른다. 작업 트리 전체가 바뀌므로 미저장 문서를 먼저 확인한다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "includeUntracked": {
+            "default": false,
+            "description": "untracked 파일도 담는다(`--include-untracked`). 무시된 파일은 담지 않는다.",
+            "type": "boolean"
+          },
+          "message": {
+            "default": null,
+            "description": "비었거나 없으면 git 의 기본 메시지(`WIP on <브랜치>: …`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "StashEntry": {
+            "properties": {
+              "commit": {
+                "description": "stash 커밋 해시.",
+                "type": "string"
+              },
+              "index": {
+                "description": "`stash@{index}` 의 수. 0 이 가장 최근이다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "description": "reflog 의 메시지(`On main: 메시지` · `WIP on main: <해시> <제목>` — git 이 만든 그대로).",
+                "type": "string"
+              },
+              "time": {
+                "description": "만든 시각(유닉스 초).",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "index",
+              "commit",
+              "message",
+              "time"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "stash": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StashEntry"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "만든 항목(`stash@{0}`). 담을 변경이 없었으면 `null`(git 은 성공으로 끝난다)."
+          },
+          "workTree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "stash"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "git.status": {
       "description": "작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업\n트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로\n돌고, 작업을 취소하면 cancelled 오류다.",
       "kind": "unary",
@@ -8780,6 +9602,240 @@
           "workTree",
           "refName",
           "commit"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.unstage": {
+      "description": "경로의 스테이징을 푼다(`git reset`): index 를 HEAD 의 것으로(HEAD 에 없으면 index 에서 뺀다 — 커밋이 없는 저장소도 된다).\n충돌 파일은 HEAD 의 것이 담긴다. 이름 바뀜은 옛 경로와 새 경로를 둘 다 넘긴다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "paths": {
+            "description": "파일 · 폴더(그 아래 전부). 글롭 · pathspec 문법은 쓰지 않는다(글자 그대로). 비면 invalid params.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`git.repo` 와 같다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "paths"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.unstageLines": {
+      "description": "스테이징된 diff(HEAD ↔ index)의 hunk · 줄을 골라 스테이징을 푼다(`git apply --cached -R`). 이름이 바뀐 파일은 `oldPath` 를\n함께 넘긴다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DiffHunk": {
+            "description": "`git diff -U3` 의 hunk 하나.",
+            "properties": {
+              "header": {
+                "description": "`@@` 뒤의 함수 줄(git 의 기본 규칙). 없으면 빈 문자열.",
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "$ref": "#/$defs/DiffLine"
+                },
+                "type": "array"
+              },
+              "newLines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "newStart": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "oldLines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "oldStart": {
+                "description": "`@@ -oldStart,oldLines +newStart,newLines @@` 의 수 그대로. 줄이 없는 쪽(`oldLines == 0`)의 시작은 그 앞 줄 번호다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "oldStart",
+              "oldLines",
+              "newStart",
+              "newLines",
+              "header",
+              "lines"
+            ],
+            "type": "object"
+          },
+          "DiffLine": {
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/LineKind"
+              },
+              "newLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "noNewline": {
+                "description": "파일 끝 개행이 없는 마지막 줄(git 의 `\\ No newline at end of file`).",
+                "type": "boolean"
+              },
+              "oldLine": {
+                "description": "1 기준 줄 번호. 문맥 줄은 둘 다, 뺀 줄은 옛 쪽만, 더한 줄은 새 쪽만 있다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "text": {
+                "description": "줄바꿈(`\\n`)을 뺀 줄. CRLF 파일이면 `\\r` 로 끝난다. UTF-8 이 아닌 바이트는 U+FFFD 다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text",
+              "noNewline"
+            ],
+            "type": "object"
+          },
+          "HunkSelection": {
+            "description": "`git.diff` 의 hunk 하나와 그 안에서 고른 줄.",
+            "properties": {
+              "hunk": {
+                "$ref": "#/$defs/DiffHunk",
+                "description": "`git.diff` 가 준 hunk 그대로. Host 가 그 파일의 diff 를 다시 만들어 머리(범위 · 함수 줄)와 줄이 모두 같은 hunk 를 찾는다 —\n없으면 그 사이 파일이 바뀐 것이라 아무것도 쓰지 않는다(conflict)."
+              },
+              "lines": {
+                "default": null,
+                "description": "고른 줄(`hunk.lines` 의 인덱스, 더한 줄 · 뺀 줄만). `null` 이면 hunk 의 모든 변경. 빈 목록 · 문맥 줄 · 범위 밖은 invalid\nparams.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "hunk"
+            ],
+            "type": "object"
+          },
+          "LineKind": {
+            "enum": [
+              "context",
+              "added",
+              "removed"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "hunks": {
+            "description": "고른 hunk. 비면 invalid params.",
+            "items": {
+              "$ref": "#/$defs/HunkSelection"
+            },
+            "type": "array"
+          },
+          "ignoreWhitespace": {
+            "default": false,
+            "description": "hunk 를 공백 무시(`ignoreWhitespace`)로 받았다. 그 hunk 는 실제 바이트와 줄이 맞지 않으므로 줄 단위로 쓰지 않는다(invalid\nparams) — 공백을 보는 diff 에서 고른다.",
+            "type": "boolean"
+          },
+          "oldPath": {
+            "default": null,
+            "description": "이름이 바뀐 파일의 옛 경로(`git.diff` 의 `oldPath`) — `git.unstageLines` 만 받는다(HEAD 쪽이 그 경로다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "파일 하나(`git.diff` 의 `path`).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "hunks"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree"
         ],
         "type": "object"
       },
