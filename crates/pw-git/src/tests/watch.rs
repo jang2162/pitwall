@@ -464,6 +464,34 @@ fn no_repository_watches_nothing() {
     assert_eq!(bus.subscriber_count(), baseline);
 }
 
+/// 「저장소 없음」 은 창끼리 나눠 갖지 않는다. 같은 프로젝트를 두 창이 열어 둘 다 `workTree: null` 을 받은 뒤 `git init` 하면, 다른
+/// 창이 옛 스트림을 든 채로도 다시 연 창은 저장소를 받는다(창이 다시 여는 때는 apps/desktop/src/git/git-status.ts).
+#[test]
+fn a_window_reopening_after_git_init_gets_the_repository_while_another_still_has_none() {
+    let r = TestRepo::new();
+    let outside = r.base().join("outside");
+    let w = Watched::new();
+    let id = w.fx.project(&outside);
+    let a = w.git(&id, None);
+    let b = w.git(&id, None);
+    assert_eq!(a.watching().work_tree, None);
+    assert_eq!(b.watching().work_tree, None);
+
+    r.git_in(&outside, &["init", "--quiet"]);
+    drop(a);
+    let again = w.git(&id, None);
+    assert_eq!(
+        again.watching().work_tree,
+        Some(crate::status::display(&outside))
+    );
+    assert_eq!(w.git_watch.watched(), 1);
+    // 옛 「없음」 임대를 놓아도 새 감시는 그대로다.
+    drop(b);
+    assert_eq!(w.git_watch.watched(), 1);
+    drop(again);
+    assert_eq!(w.git_watch.watched(), 0);
+}
+
 /// 미신뢰 저장소에 심은 프로그램(`core.fsmonitor` · `filter.<x>.clean` · `diff.external` · `diff.<x>.textconv`, include 한 파일의
 /// 필터)이 `git.status` · `git.refs` · `git.watch` 어느 경로에서도 돌지 않는다. 신뢰하면 `git.status` 가 clean 필터를 부른다 —
 /// 위의 「안 돈다」 가 신뢰로 갈린다(gix 가 그 파일의 내용을 필터에 넣어 비교한다).

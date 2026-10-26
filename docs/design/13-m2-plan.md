@@ -123,6 +123,9 @@ M1 에서 된 것은 다시 계획하지 않는다 — 파일 감시 · `fs.chan
 | 커밋 diff 의 생성 표시를 그 커밋의 `.gitattributes` 로 판정 | 이후 | M2-04 리뷰. 지금은 작업 트리의 `.gitattributes` 기준이다 — `git diff` 도 `--attr-source` 가 없으면 작업 트리의 것을 본다 |
 | `diff.algorithm` 이 `histogram` · `patience` 일 때 git 과 같은 hunk | 이후 | M2-04 리뷰. 사람의 설정을 따르지만 `imara-diff` 의 구현이 xdiff 와 달라 무작위 파일의 약 6% 에서 hunk 가 다르다(Myers · minimal 은 같다). 맞추려면 xdiff 의 histogram 을 옮겨야 한다 |
 | 상위 폴더 저장소를 잡는 것의 구별(예: 홈 폴더의 dotfiles 저장소 아래, 그 저장소가 ignore 하는 폴더의 프로젝트) | 이후 | M2-01 리뷰. 결정 M2-D3 문언대로 루트를 담은 가장 가까운 저장소를 잡는데, 모노레포의 하위 프로젝트와 구별할 근거가 없어 지금은 그대로 둔다. 어느 저장소를 잡았는지(작업 트리 꼭대기)를 화면에 보이는 것은 M2-13(상태바 브랜치 · 브랜치 팝업) 몫이다 |
+| 「터미널에서 고치면 500 ms 안에 트리 · 탭 색」 의 끝에서 끝 실측(파일 감시 디바운스 75 ms → `git.statusChanged` → `git.status` → 그리기) | M2 사람 확인 · release 창 시험이 생길 때 | M2-12 리뷰. Host 쪽(바뀜 → `git.statusChanged`)은 crates/pw-git 의 release 시험이 재고, 창 쪽 시험은 시간이 아니라 일(바뀐 경로만 한 번 읽음)로 본다(공통 계약 「시간 기준은 진행 신호로」) — 둘을 합친 실제 시간은 아직 아무도 재지 않았다 |
+| 대소문자만 다른 이름의 git 색(APFS 등에서 index 는 `README.md`, 디스크는 `readme.md`) | 이후 | M2-12 리뷰. `GitStatusStore.decoration` 은 경로를 글자 그대로 찾아 그 행은 칠하지 않는다. 드물다. 고치면 `core.ignorecase` 일 때 접은 키로 찾는다 |
+| git status 저장소의 남은 손질 — 바뀐 경로마다 전 항목을 도는 부분 갱신(5만 항목이면 이벤트마다 수 ms, 커지면 폴더별 색인), 스트림이 오류 없이 끝나거나 연결이 닫힐 때 옛 색을 든 채 남는 것(지금 클라이언트에 재연결이 없어 창이 닫히는 경우뿐), 아무도 안 쓰는 `watchGitStatus` 의 `onWatching` 인자(시험만 쓴다 — M2-13 이 쓰지 않으면 뺀다) | M2-13 · 재연결이 생길 때 | M2-12 리뷰 P3. 지금 해가 없고 고치는 길이 정해져 있다(`apps/desktop/src/git/git-status.ts`) |
 
 ## 4. 착수 전 준비물 · 결정
 

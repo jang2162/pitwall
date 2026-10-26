@@ -413,9 +413,10 @@ it("colors an editor tab's title and puts the letter before its name", async () 
 });
 
 // 완료 기준은 「터미널에서 파일을 고치면 500 ms 안에 트리와 탭 색이 바뀐다」. Host 의 감시가 `git.statusChanged` 를 내기까지 500 ms
-// 안이다(crates/pw-git/src/tests/watch.rs, release 에서 단언 — 잰 값은 보고서). 창 쪽(이벤트 → `git.status` 왕복 → 행 · 탭)은 그 뒤의
-// 몫이라 여기서 200 ms 안을 본다.
-it("recolors the tree and the tab within 200 ms of git.statusChanged, re-reading only the changed path", async () => {
+// 안이다(crates/pw-git/src/tests/watch.rs, release 에서 단언 — 잰 값은 보고서). 창 쪽은 시간이 아니라 일로 본다 — 이벤트 하나에
+// 바뀐 경로만 담은 `git.status` 한 번, 그 응답으로 행 · 탭이 바뀐다. 끝에서 끝까지의 실제 시간은 13-m2-plan.md 「M2 에서 하지 않는
+// 것」 의 M2-12 후속 행.
+it("recolors the tree and the tab from one git.status of the changed paths after git.statusChanged", async () => {
   await mount();
   await expandAll();
   await act(async () => projectOpenInbox.push({ file: `${REPO}/docs/readme.md` }));
@@ -446,22 +447,19 @@ it("recolors the tree and the tab within 200 ms of git.statusChanged, re-reading
       },
     ],
   });
-  const started = performance.now();
+  const reads = host.calls.filter((c) => c.method === "git.status").length;
   await act(async () =>
     host.emit("git.statusChanged", {
       worktree: null,
       paths: ["docs/readme.md", "src/conflict.rs"],
     } satisfies GitStatusChanged),
   );
-  await vi.waitFor(
-    () => {
-      expect(toneOf(tab("readme.md")!)).toBe("modified");
-      expect(letterOf(row(`${REPO}/docs/readme.md`))).toBe("M");
-      expect(letterOf(row(`${REPO}/src/conflict.rs`))).toBe("M");
-    },
-    { timeout: 200, interval: 5 },
-  );
-  expect(performance.now() - started).toBeLessThan(200);
+  await vi.waitFor(() => {
+    expect(toneOf(tab("readme.md")!)).toBe("modified");
+    expect(letterOf(row(`${REPO}/docs/readme.md`))).toBe("M");
+    expect(letterOf(row(`${REPO}/src/conflict.rs`))).toBe("M");
+  });
+  expect(host.calls.filter((c) => c.method === "git.status")).toHaveLength(reads + 1);
   expect(toneOf(row(`${REPO}/docs`))).toBe("modified");
   expect(toneOf(row(`${REPO}/src`))).toBe("modified");
   expect(host.calls.filter((c) => c.method === "git.status").at(-1)!.params.paths).toEqual([

@@ -41,6 +41,35 @@ export const EXPECTED_LETTERS: Record<string, string> = {
   "untracked.txt": "?",
 };
 
+/**
+ * 같은 방법으로 뽑은 merge 도중의 출력(git 2.54): 충돌 7종(양쪽이 같은 파일을 다른 이름으로 옮기면 `DD` · `AU` · `UA`), 스테이징한
+ * rename 뒤에 고친 `RM`, 서브모듈 안을 고친 ` M`. 충돌은 종류와 상관없이 `U` 다(10-ui.md 「Git」 절) — `DD` · `AA` 처럼 `XY` 에
+ * `U` 가 없어도.
+ */
+export const MERGE_PORCELAIN = `A  src/added-by-them.rs
+AA src/both-added.rs
+UU src/both-modified.rs
+UD src/deleted-by-them.rs
+DU src/deleted-by-us.rs
+DD src/renamed-both.rs
+UA src/renamed-by-them.rs
+AU src/renamed-by-us.rs
+RM src/renamed-modified.rs -> src/renamed-then-modified.rs
+ M sub`;
+
+export const MERGE_LETTERS: Record<string, string> = {
+  "src/added-by-them.rs": "A",
+  "src/both-added.rs": "U",
+  "src/both-modified.rs": "U",
+  "src/deleted-by-them.rs": "U",
+  "src/deleted-by-us.rs": "U",
+  "src/renamed-both.rs": "U",
+  "src/renamed-by-them.rs": "U",
+  "src/renamed-by-us.rs": "U",
+  "src/renamed-then-modified.rs": "R",
+  sub: "M",
+};
+
 const CHANGE: Record<string, GitChange> = {
   A: "added",
   M: "modified",

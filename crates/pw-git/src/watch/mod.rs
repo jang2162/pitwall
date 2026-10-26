@@ -14,7 +14,9 @@
 //!   닫히거나 활성 워크트리를 바꿔 다시 열면) 놓는다.
 //! - 감시는 연 저장소(신뢰를 든 [`crate::Opened`])를 들고 있다. 그 프로젝트의 신뢰가 바뀌면(`project.changed` 의 `trust`) 다시
 //!   열고 두 이벤트를 전체로 낸다 — 신뢰하면 저장소의 필터 드라이버가 돌아 status 결과가 달라질 수 있다.
-//! - 저장소가 없으면(`workTree: null`) 아무것도 보지 않는다. 나중에 `git init` 해도 따라가지 않는다 — 창이 스트림을 다시 연다.
+//! - 저장소가 없으면(`workTree: null`) 아무것도 보지 않는다. 나중에 `git init` 해도 따라가지 않는다 — 창이 스트림을 다시 연다
+//!   (apps/desktop/src/git/git-status.ts). 그래서 「없음」 은 표에 넣지 않고 열 때마다 다시 찾는다 — 넣어 두면 같은 프로젝트를 보는
+//!   다른 창이 스트림을 든 동안 다시 열어도 옛 「없음」 을 받는다.
 
 pub mod classify;
 
@@ -92,9 +94,9 @@ type Key = (String, Option<String>);
 
 struct Slot {
     refs: usize,
-    work_tree: Option<String>,
-    /// 버리면 감시가 멈춘다. 저장소가 없으면 `None`.
-    _engine: Option<Engine>,
+    work_tree: String,
+    /// 버리면 감시가 멈춘다.
+    _engine: Engine,
 }
 
 struct Inner {
@@ -139,27 +141,25 @@ impl GitWatch {
     pub fn acquire(&self, params: &GitRepoParams) -> Result<WatchLease, RpcError> {
         let key = (params.project_id.clone(), params.worktree.clone());
         if let Some(work_tree) = self.retain(&key) {
-            return Ok(self.lease(key, work_tree));
+            return Ok(self.lease(Some(key), Some(work_tree)));
         }
         let host = self.inner.git.host()?;
         let opened = self
             .inner
             .git
             .open(&params.project_id, params.worktree.as_deref())?;
-        let (work_tree, engine) = match opened {
-            None => (None, None),
-            Some(opened) => {
-                let work_tree = display(&opened.target.work_tree);
-                let engine = Engine::start(
-                    Arc::clone(&self.inner.git),
-                    host.bus.clone(),
-                    opened,
-                    params.worktree.clone(),
-                    self.inner.debounce,
-                )?;
-                (Some(work_tree), Some(engine))
-            }
+        // 저장소가 없으면 표에 넣지 않는다(머리 주석).
+        let Some(opened) = opened else {
+            return Ok(self.lease(None, None));
         };
+        let work_tree = display(&opened.target.work_tree);
+        let engine = Engine::start(
+            Arc::clone(&self.inner.git),
+            host.bus.clone(),
+            opened,
+            params.worktree.clone(),
+            self.inner.debounce,
+        )?;
         let work_tree = {
             let mut slots = self.inner.slots();
             // 그 사이 다른 창이 같은 것을 걸었으면 그것을 쓰고 만든 것은 버린다.
@@ -171,17 +171,17 @@ impl GitWatch {
             slot.refs += 1;
             slot.work_tree.clone()
         };
-        Ok(self.lease(key, work_tree))
+        Ok(self.lease(Some(key), Some(work_tree)))
     }
 
-    fn retain(&self, key: &Key) -> Option<Option<String>> {
+    fn retain(&self, key: &Key) -> Option<String> {
         let mut slots = self.inner.slots();
         let slot = slots.get_mut(key)?;
         slot.refs += 1;
         Some(slot.work_tree.clone())
     }
 
-    fn lease(&self, key: Key, work_tree: Option<String>) -> WatchLease {
+    fn lease(&self, key: Option<Key>, work_tree: Option<String>) -> WatchLease {
         WatchLease {
             inner: Arc::clone(&self.inner),
             key,
@@ -193,7 +193,8 @@ impl GitWatch {
 /// 감시 하나의 임대. 버리면 그 감시를 쓰는 마지막 임대일 때 놓는다.
 pub struct WatchLease {
     inner: Arc<Inner>,
-    key: Key,
+    /// 표의 키. 저장소가 없으면 표에 없어 `None`.
+    key: Option<Key>,
     work_tree: Option<String>,
 }
 
@@ -207,15 +208,16 @@ impl WatchLease {
 
 impl Drop for WatchLease {
     fn drop(&mut self) {
+        let Some(key) = &self.key else { return };
         // 엔진은 잠금 밖에서 버린다.
         let stopped = {
             let mut slots = self.inner.slots();
-            match slots.get_mut(&self.key) {
+            match slots.get_mut(key) {
                 Some(slot) if slot.refs > 1 => {
                     slot.refs -= 1;
                     None
                 }
-                Some(_) => slots.remove(&self.key),
+                Some(_) => slots.remove(key),
                 None => None,
             }
         };

@@ -1,5 +1,6 @@
 // 창의 git status 저장소(M2-12): porcelain 의 `XY` 에서 고른 글자 · 색, 바뀐 경로만 바꾸는 갱신, 폴더 색, 그리고 `git.watch` ·
-// `git.statusChanged` 구독의 수명(닫으면 스트림 취소 · 구독 해제 · 비움, 읽는 동안 온 이벤트는 모아 한 번 더 읽기).
+// `git.statusChanged` 구독의 수명(닫으면 스트림 취소 · 구독 해제 · 비움, 읽는 동안 온 이벤트는 모아 한 번 더 읽기, 닫을 때 닿은 응답은
+// 버리기), 저장소가 없는 동안의 다시 열기.
 
 import {
   createMemoryTransportPair,
@@ -7,16 +8,25 @@ import {
   type GitStatusEntry,
   RpcClient,
 } from "@pitwall/rpc-client";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { FsChanged } from "../file-tree/tree-model";
 
 import {
   entryDecoration,
   entryLetter,
   type GitStatusChanged,
   GitStatusStore,
+  RETRY_MS,
   watchGitStatus,
 } from "./git-status";
-import { EXPECTED_LETTERS, PORCELAIN, porcelainEntries } from "./testing";
+import {
+  EXPECTED_LETTERS,
+  MERGE_LETTERS,
+  MERGE_PORCELAIN,
+  PORCELAIN,
+  porcelainEntries,
+} from "./testing";
 
 const status = (entries: GitStatusEntry[], workTree: string | null = "/repo"): GitStatus => ({
   workTree,
@@ -34,16 +44,18 @@ const entry = (path: string, change: Partial<GitStatusEntry> = {}): GitStatusEnt
 });
 
 describe("entryLetter", () => {
-  it("picks the porcelain letter git shows for every XY of a real repository", () => {
-    const letters = Object.fromEntries(
-      porcelainEntries(PORCELAIN).map((e) => [e.path, entryLetter(e)]),
-    );
-    expect(letters).toEqual(EXPECTED_LETTERS);
-    for (const line of PORCELAIN.split("\n")) {
-      const path = line.slice(3).split(" -> ").at(-1)!;
-      const letter = EXPECTED_LETTERS[path]!;
-      // 고른 글자는 그 줄의 X · Y 중 하나다(충돌은 `UU` 처럼 `U`, untracked 는 `??`).
-      expect(line.slice(0, 2)).toContain(letter);
+  it.each([
+    ["a real repository", PORCELAIN, EXPECTED_LETTERS],
+    ["a merge in progress (every conflict kind, RM, a submodule)", MERGE_PORCELAIN, MERGE_LETTERS],
+  ])("picks the porcelain letter git shows for every XY of %s", (_, porcelain, expected) => {
+    const entries = porcelainEntries(porcelain);
+    const letters = Object.fromEntries(entries.map((e) => [e.path, entryLetter(e)]));
+    expect(letters).toEqual(expected);
+    for (const [i, line] of porcelain.split("\n").entries()) {
+      const letter = expected[entries[i]!.path]!;
+      // 고른 글자는 그 줄의 X · Y 중 하나다(untracked 는 `??`). 충돌은 어느 종류든 `U` 다.
+      if (entries[i]!.conflict) expect(letter).toBe("U");
+      else expect(line.slice(0, 2)).toContain(letter);
     }
   });
 
@@ -170,12 +182,17 @@ describe("GitStatusStore", () => {
   });
 });
 
-/** `git.watch` · `git.status` · 구독을 흉내 내는 Host. `git.status` 는 `answer` 를 부를 때까지 답하지 않는다. */
+/**
+ * `git.watch` · `git.status` · 구독을 흉내 내는 Host. `git.status` 는 `answer` 를 부를 때까지 답하지 않는다. `git.watch` 는 열 때의
+ * `repo` 를 첫 항목으로 낸다(바꾸면 `git init` 처럼 다음에 연 스트림부터 보인다).
+ */
 function fakeHost(workTree: string | null = "/repo") {
   const [clientSide, serverSide] = createMemoryTransportPair();
   const send = (message: object) => serverSide.send(JSON.stringify({ jsonrpc: "2.0", ...message }));
   const host = {
     client: new RpcClient(clientSide),
+    clientSide,
+    repo: workTree,
     watches: [] as { streamId: number; params: unknown }[],
     cancelled: [] as number[],
     subscriptions: [] as { id: number; topics: string[] }[],
@@ -183,12 +200,24 @@ function fakeHost(workTree: string | null = "/repo") {
     /** 답을 기다리는 `git.status` 의 `paths`. */
     reads: [] as { paths: string[] | null; answer(status: GitStatus): void }[],
     emit(payload: GitStatusChanged) {
+      host.publish("git.statusChanged", payload);
+    },
+    emitFs(payload: Pick<FsChanged, "worktree" | "paths">) {
+      host.publish("fs.changed", { root: "/repo", kinds: [], rescan: false, ...payload });
+    },
+    publish(topic: string, payload: object) {
       for (const s of host.subscriptions)
-        if (!host.unsubscribed.includes(s.id) && s.topics.includes("git.statusChanged"))
+        if (!host.unsubscribed.includes(s.id) && s.topics.includes(topic))
           send({
             method: "events.event",
-            params: { subscriptionId: s.id, projectId: "p1", topic: "git.statusChanged", payload },
+            params: { subscriptionId: s.id, projectId: "p1", topic, payload },
           });
+    },
+    /** 지금 살아 있는 `topic` 구독 수. */
+    following(topic: string) {
+      return host.subscriptions.filter(
+        (s) => s.topics.includes(topic) && !host.unsubscribed.includes(s.id),
+      ).length;
     },
   };
   let next = 1;
@@ -207,7 +236,10 @@ function fakeHost(workTree: string | null = "/repo") {
         const streamId = next++;
         host.watches.push({ streamId, params: m.params });
         send({ id: m.id, result: { streamId } });
-        return send({ method: "stream.chunk", params: { streamId, data: { workTree } } });
+        return send({
+          method: "stream.chunk",
+          params: { streamId, data: { workTree: host.repo } },
+        });
       }
       case "stream.cancel":
         return host.cancelled.push(m.params.streamId as number);
@@ -301,6 +333,31 @@ describe("watchGitStatus", () => {
     expect(host.reads).toHaveLength(1);
   });
 
+  it("drops a git.status answer that lands as the watch stops, so the next worktree's watch never shows the old repository", async () => {
+    const host = fakeHost();
+    const store = new GitStatusStore();
+    let stop = watchGitStatus(host.client, "p1", undefined, store);
+    await vi.waitFor(() => expect(host.reads).toHaveLength(1));
+    // 응답이 클라이언트에 닿은 바로 그때 — `git.status` 의 await 가 이어지기 전 — 활성 워크트리를 바꾼다(클라이언트의 리스너
+    // 다음에 도는 리스너).
+    const detach = host.clientSide.onMessage(() => {
+      detach();
+      stop();
+      stop = watchGitStatus(host.client, "p1", "/wt", store);
+    });
+    host.reads[0]!.answer(status([entry("old")]));
+    // 새 워크트리의 첫 읽기가 Host 에 닿았으면 옛 응답의 이어짐은 이미 돌았다.
+    await vi.waitFor(() => expect(host.reads).toHaveLength(2));
+    expect(store.workTree()).toBeNull();
+    expect(store.decoration("/repo/old")).toBeUndefined();
+
+    host.reads[1]!.answer(status([entry("new")], "/wt"));
+    await vi.waitFor(() => expect(store.workTree()).toBe("/wt"));
+    expect(store.decoration("/wt/new")).toMatchObject({ letter: "M" });
+    expect(store.decoration("/repo/old")).toBeUndefined();
+    stop();
+  });
+
   it("does not read when the project has no repository", async () => {
     const host = fakeHost(null);
     const store = new GitStatusStore();
@@ -310,5 +367,100 @@ describe("watchGitStatus", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(host.reads).toEqual([]);
     stop();
+  });
+});
+
+/** 마이크로태스크(메모리 전송)가 다 돌 때까지 진짜 타이머로 기다리며 `check` 를 다시 본다 — 가짜 타이머를 쓰는 시험에서
+ * `vi.waitFor` 는 가짜 시계를 함께 돌려(재시도 주기가 흐른다) 쓰지 않는다. 판정은 `check` 의 진행 신호다. */
+async function until(check: () => void) {
+  for (let tries = 0; ; tries++) {
+    try {
+      return check();
+    } catch (e) {
+      if (tries > 500) throw e;
+      await new Promise((r) => setTimeout(r, 1));
+    }
+  }
+}
+
+describe("watchGitStatus without a repository", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("reopens git.watch on the worktree's fs.changed and every RETRY_MS while visible, and stops once a repository shows up", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const visibility = { visibilityState: "visible" };
+    vi.stubGlobal("document", visibility);
+    const host = fakeHost(null);
+    const store = new GitStatusStore();
+    const stop = watchGitStatus(host.client, "p1", undefined, store);
+    await until(() => expect(host.following("fs.changed")).toBe(1));
+    expect(host.watches).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    // 다른 워크트리 창의 fs.changed 는 무시하고, 이 창의 것은 닫고 다시 연다(`git init && touch a`).
+    host.emitFs({ worktree: "/elsewhere", paths: ["/elsewhere/a"] });
+    host.emitFs({ worktree: null, paths: ["/repo/a"] });
+    await until(() => expect(host.watches).toHaveLength(2));
+    expect(host.cancelled).toEqual([host.watches[0]!.streamId]);
+
+    // 주기: 보이는 동안만 연다. 숨은 동안의 주기는 건너뛴다(뒤의 수가 하나만 늘어난 것으로 본다).
+    vi.advanceTimersByTime(RETRY_MS);
+    await until(() => expect(host.watches).toHaveLength(3));
+    visibility.visibilityState = "hidden";
+    vi.advanceTimersByTime(RETRY_MS);
+    visibility.visibilityState = "visible";
+    vi.advanceTimersByTime(RETRY_MS);
+    await until(() => expect(host.watches).toHaveLength(4));
+    expect(host.cancelled).toHaveLength(3);
+    expect(host.reads).toEqual([]);
+
+    // `git init` 만 했다(fs.changed 없음) — 다음 주기에 저장소를 받아 읽고, 재시도 · fs.changed 구독을 놓는다.
+    host.repo = "/repo";
+    vi.advanceTimersByTime(RETRY_MS);
+    await until(() => expect(host.reads).toHaveLength(1));
+    expect(host.reads[0]!.paths).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    await until(() => expect(host.following("fs.changed")).toBe(0));
+    host.reads[0]!.answer(status([entry("a", { unstaged: "untracked" })]));
+    await until(() => expect(store.decoration("/repo/a")).toMatchObject({ letter: "?" }));
+
+    // 저장소가 생긴 뒤에는 다시 열지 않는다.
+    vi.advanceTimersByTime(RETRY_MS * 3);
+    host.emit({ worktree: null, paths: ["a"] });
+    await until(() => expect(host.reads).toHaveLength(2));
+    expect(host.watches).toHaveLength(5);
+    stop();
+  });
+
+  it("leaves no retry timer or fs.changed subscription behind when the window closes or the worktree changes", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const host = fakeHost(null);
+    const store = new GitStatusStore();
+    let stop = watchGitStatus(host.client, "p1", undefined, store);
+    await until(() => expect(host.following("fs.changed")).toBe(1));
+    expect(vi.getTimerCount()).toBe(1);
+
+    // 워크트리 전환: 닫고 새 워크트리로 다시 연다 — 타이머 · 구독은 늘 하나다.
+    stop();
+    expect(vi.getTimerCount()).toBe(0);
+    stop = watchGitStatus(host.client, "p1", "/wt", store);
+    await until(() => expect(host.watches).toHaveLength(2));
+    await until(() => expect(vi.getTimerCount()).toBe(1));
+    await until(() => expect(host.following("fs.changed")).toBe(1));
+
+    // 창 닫기.
+    stop();
+    expect(vi.getTimerCount()).toBe(0);
+    await until(() => expect(host.following("fs.changed")).toBe(0));
+    await until(() => expect(host.following("git.statusChanged")).toBe(0));
+    expect(host.cancelled).toEqual(host.watches.map((w) => w.streamId));
+    vi.advanceTimersByTime(RETRY_MS * 3);
+    host.emitFs({ worktree: "/wt", paths: ["/wt/a"] });
+    // 닫은 뒤의 이벤트가 열었다면 Host 에 닿았을 만큼(구독 · 스트림 왕복) 기다린다.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(host.watches).toHaveLength(2);
   });
 });

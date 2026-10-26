@@ -12,6 +12,11 @@
 //   경로 · 탭의 경로가 작업 트리 아래면 맞는다. 다른 워크트리를 연 탭 · 루트 밖 심링크로 보이는 경로는 칠하지 않는다.
 // - 저장소가 없거나(`workTree: null`) gix 로 읽지 못하는 형식(`unsupported`, reftable)이면 아무것도 칠하지 않는다. 「지원하지 않는
 //   저장소」 를 알리는 문장은 상태바의 브랜치 항목(M2-13)이 단다.
+// - 저장소가 없으면 Host 는 나중의 `git init` 을 따라가지 않는다(crates/pw-git/src/watch/mod.rs). 그동안 같은 워크트리의
+//   `fs.changed` 가 오거나 `RETRY_MS` 마다(창이 보일 때만) `git.watch` 를 닫고 다시 연다 — 저장소가 보이면 멈춘다. 주기 재시도가
+//   있는 것은 `fs.changed` 가 `.git/` 을 걸러 `git init` 만으로는 아무것도 오지 않기 때문이다. 다시 열 때 Host 는 저장소를 찾기만
+//   한다(stat 몇 번).
+// - 다른 행(M2-13 · M2-16)은 `windowGitStatus()` 를 읽기만 한다. 같은 저장소로 `watchGitStatus` 를 또 부르면 서로 비운다.
 //
 // 글자를 고르는 우선순위 · 색 · 폴더 색 · 툴팁의 규칙은 docs/design/10-ui.md 「마우스 · 트랙패드」 의 「Git」 절이 정본이다
 // (`entryLetter` · `folderDecoration` · git-status-mark.tsx 가 그것을 옮긴다).
@@ -24,10 +29,11 @@ import type {
   GitUnsupported,
   GitWatching,
   RpcClient,
+  Subscription,
 } from "@pitwall/rpc-client";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
-import { separatorOf } from "../file-tree/tree-model";
+import { type FsChanged, separatorOf } from "../file-tree/tree-model";
 import { useActiveWorktree } from "../open-with/active-worktree";
 import { useHost } from "../rpc/host";
 
@@ -306,13 +312,16 @@ export function useGitDecoration(
   );
 }
 
+/** 저장소가 없는 동안 `git.watch` 를 다시 여는 주기. */
+export const RETRY_MS = 5000;
+
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
 /**
  * `projectId` · `worktree`(활성 워크트리의 꼭대기, 메인 체크아웃이면 없음)의 저장소를 감시해 `store` 를 채운다. 돌려준 함수가
- * 스트림 · 구독을 닫고 `store` 를 비운다. 스트림이 실패하면 경고만 남긴다 — 그 창은 칠하지 않을 뿐이다.
+ * 스트림 · 구독 · 재시도 타이머를 닫고 `store` 를 비운다. 스트림이 실패하면 경고만 남긴다 — 그 창은 칠하지 않을 뿐이다.
  */
 export function watchGitStatus(
   client: RpcClient,
@@ -324,6 +333,11 @@ export function watchGitStatus(
   const abort = new AbortController();
   const stopped = () => abort.signal.aborted;
   let unsubscribe: (() => Promise<void>) | undefined;
+  /** 지금 연 `git.watch` 를 닫는다(다시 열 때 · 멈출 때). */
+  let watch: AbortController | undefined;
+  /** 저장소가 없는 동안의 재시도 타이머와 `fs.changed` 구독. */
+  let retry: ReturnType<typeof setInterval> | undefined;
+  let following: Promise<Subscription | undefined> | undefined;
   /** 다음 읽기에 보낼 경로. `null` 이면 전체, `undefined` 면 읽을 것이 없다. */
   let pending: Set<string> | null | undefined;
   let reading = false;
@@ -359,6 +373,58 @@ export function watchGitStatus(
     if (!stopped()) void read();
   };
 
+  const stopRetry = () => {
+    clearInterval(retry);
+    retry = undefined;
+    const subscription = following;
+    following = undefined;
+    void subscription?.then((s) => s?.unsubscribe()).catch(() => {});
+  };
+
+  /** 저장소가 없다고 들었다. 재시도를 건다. */
+  const missing = () => {
+    store.clear();
+    retry ??= setInterval(() => {
+      if (typeof document === "undefined" || document.visibilityState !== "hidden") open();
+    }, RETRY_MS);
+    following ??= client
+      .subscribe({ projectId, topics: ["fs.changed"] }, (event) => {
+        // 저장소가 없는 동안 작업 트리가 바뀌었다 — `git init` 뒤에 파일을 만들었을 수 있다.
+        const change = event.payload as unknown as FsChanged;
+        if (retry !== undefined && (change.worktree ?? undefined) === worktree) open();
+      })
+      .catch((e: unknown) => {
+        if (!stopped()) console.warn("[git] cannot follow fs.changed", errorText(e));
+        return undefined;
+      });
+  };
+
+  const open = () => {
+    watch?.abort();
+    const current = (watch = new AbortController());
+    void (async () => {
+      try {
+        for await (const watching of client.stream(
+          "git.watch",
+          { projectId, worktree: worktree ?? null },
+          { signal: current.signal },
+        )) {
+          if (current.signal.aborted) break;
+          onWatching?.(watching);
+          if (watching.workTree === null) {
+            missing();
+            continue;
+          }
+          stopRetry();
+          ready = true;
+          request(null);
+        }
+      } catch (e) {
+        if (!current.signal.aborted) console.warn("[git] the git watch stopped", errorText(e));
+      }
+    })();
+  };
+
   void (async () => {
     try {
       const subscription = await client.subscribe(
@@ -375,20 +441,7 @@ export function watchGitStatus(
         void unsubscribe().catch(() => {});
         return;
       }
-      for await (const watching of client.stream(
-        "git.watch",
-        { projectId, worktree: worktree ?? null },
-        { signal: abort.signal },
-      )) {
-        if (stopped()) break;
-        onWatching?.(watching);
-        if (watching.workTree === null) {
-          store.clear();
-          continue;
-        }
-        ready = true;
-        request(null);
-      }
+      open();
     } catch (e) {
       if (!stopped()) console.warn("[git] the git watch stopped", errorText(e));
     }
@@ -396,6 +449,8 @@ export function watchGitStatus(
 
   return () => {
     abort.abort();
+    watch?.abort();
+    stopRetry();
     void unsubscribe?.().catch(() => {});
     store.clear();
   };
