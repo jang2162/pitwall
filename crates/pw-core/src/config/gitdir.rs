@@ -34,22 +34,15 @@ impl WorktreeLink {
 /// 일반 체크아웃(`.git` 이 디렉터리), 서브모듈, bare 저장소의 워크트리, 저장소 밖이면 `None`.
 pub fn linked_worktree(start: &Path) -> Option<WorktreeLink> {
     for dir in start.ancestors() {
-        let dot_git = dir.join(".git");
-        let Ok(meta) = fs::metadata(&dot_git) else {
+        let Ok(meta) = fs::metadata(dir.join(".git")) else {
             continue;
         };
         if !meta.is_file() {
             return None;
         }
-        let gitdir = resolve_from(dir, read_pointer(&dot_git, "gitdir:")?);
-        if !points_back(&gitdir, &dot_git) {
+        let GitFile::Worktree { common, .. } = git_file(dir) else {
             return None;
-        }
-        let common = fs::read_to_string(gitdir.join("commondir")).ok()?;
-        let common = fs::canonicalize(resolve_from(&gitdir, common.trim())).ok()?;
-        if fs::canonicalize(&gitdir).ok()?.parent()? != common.join("worktrees") {
-            return None;
-        }
+        };
         if common.file_name()? != ".git" {
             // bare 저장소에 붙은 워크트리 — 메인 체크아웃이 없다.
             return None;
@@ -60,6 +53,44 @@ pub fn linked_worktree(start: &Path) -> Option<WorktreeLink> {
         });
     }
     None
+}
+
+/// 파일 `.git` 이 가리키는 관리 폴더의 판정([`git_file`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitFile {
+    /// 연결 워크트리. 관리 폴더가 실제 경로로 `<common>/worktrees/<이름>` 바로 아래이고, 그 되돌림 포인터가 이 `.git` 을
+    /// 가리킨다. bare 저장소의 워크트리도 여기다(`common` 이 `.git` 이라는 이름이 아니다). 두 경로는 실제 경로다.
+    Worktree { gitdir: PathBuf, common: PathBuf },
+    /// 관리 폴더에 `commondir` 이 없다 — 워크트리가 아니다(서브모듈 등). git 은 이것을 그대로 따라간다.
+    NotWorktree,
+    /// `.git` 을 읽지 못했거나, `commondir` 이 있는데 위 조건을 어긴다(위조 — 모듈 설명).
+    Invalid,
+}
+
+/// `dir/.git`(파일)이 가리키는 관리 폴더를 판정한다. [`linked_worktree`] 와 같은 검사지만 메인 체크아웃이 없는 bare 저장소의
+/// 워크트리도 [`GitFile::Worktree`] 로 받는다 — 메인 체크아웃이 아니라 저장소를 찾는 쪽(`pw-git` 의 저장소 해석)이 쓴다.
+pub fn git_file(dir: &Path) -> GitFile {
+    let dot_git = dir.join(".git");
+    let Some(pointer) = read_pointer(&dot_git, "gitdir:") else {
+        return GitFile::Invalid;
+    };
+    let gitdir = resolve_from(dir, pointer);
+    let Ok(common) = fs::read_to_string(gitdir.join("commondir")) else {
+        return GitFile::NotWorktree;
+    };
+    if !points_back(&gitdir, &dot_git) {
+        return GitFile::Invalid;
+    }
+    let (Ok(common), Ok(gitdir)) = (
+        fs::canonicalize(resolve_from(&gitdir, common.trim())),
+        fs::canonicalize(&gitdir),
+    ) else {
+        return GitFile::Invalid;
+    };
+    if gitdir.parent() != Some(common.join("worktrees").as_path()) {
+        return GitFile::Invalid;
+    }
+    GitFile::Worktree { gitdir, common }
 }
 
 /// `<gitdir>/gitdir` 이 `dot_git` 을 가리키는가. 내용은 그 워크트리의 `.git` 파일 경로다(`worktree.useRelativePaths` 면 gitdir 기준
@@ -148,6 +179,48 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(linked_worktree(&wt), None);
+        // 저장소를 찾는 쪽에는 워크트리다.
+        assert!(
+            matches!(git_file(&wt), GitFile::Worktree { common, .. } if common.ends_with("repo.git")),
+            "{:?}",
+            git_file(&wt)
+        );
+    }
+
+    /// [`git_file`] 은 서브모듈을 워크트리가 아닌 것으로, 위조 · 읽을 수 없는 `.git` 을 잘못된 것으로 가른다.
+    #[test]
+    fn git_file_tells_worktrees_submodules_and_forgeries_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, wt) = fake_repo(tmp.path());
+        assert_eq!(
+            git_file(&wt),
+            GitFile::Worktree {
+                gitdir: main.join(".git/worktrees/wt"),
+                common: main.join(".git"),
+            }
+        );
+        let sub_admin = main.join(".git/modules/m");
+        fs::create_dir_all(&sub_admin).unwrap();
+        let module = main.join("m");
+        fs::create_dir_all(&module).unwrap();
+        fs::write(
+            module.join(".git"),
+            format!("gitdir: {}\n", sub_admin.display()),
+        )
+        .unwrap();
+        assert_eq!(git_file(&module), GitFile::NotWorktree);
+        let evil = tmp.path().join("evil");
+        fs::create_dir_all(evil.join(".admin")).unwrap();
+        fs::write(evil.join(".git"), "gitdir: .admin\n").unwrap();
+        fs::write(evil.join(".admin/gitdir"), "../.git\n").unwrap();
+        fs::write(
+            evil.join(".admin/commondir"),
+            format!("{}\n", main.join(".git").display()),
+        )
+        .unwrap();
+        assert_eq!(git_file(&evil), GitFile::Invalid);
+        fs::write(evil.join(".git"), "not a pointer\n").unwrap();
+        assert_eq!(git_file(&evil), GitFile::Invalid);
     }
 
     /// 다른 워크트리의 관리 폴더를 가리키는 `.git` 파일은 워크트리가 아니다(되돌림 포인터가 그 파일을 가리키지 않는다).
