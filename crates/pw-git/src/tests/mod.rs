@@ -26,7 +26,7 @@ use pw_runtime::{Cancel, Layer, LoginShell, ProviderError, Runtime, RuntimeEnv, 
 use super::*;
 
 /// 신뢰한 프로젝트에서만 고르는 제공자(mise 자리). 환경에 `PW_FAKE_MISE=1` 을 더한다.
-struct FakeMise;
+pub(crate) struct FakeMise;
 
 impl RuntimeProvider for FakeMise {
     fn id(&self) -> &'static str {

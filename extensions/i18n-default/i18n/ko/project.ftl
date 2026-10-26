@@ -330,6 +330,7 @@ task-title-indexing-files = 파일 목록 만드는 중
 task-title-git-continue = git 작업 계속하는 중
 task-title-git-abort = git 작업 중단하는 중
 task-title-git-skip = git 작업의 단계 건너뛰는 중
+task-title-git-commit = git 커밋하는 중
 task-title-git-status = git 상태 읽는 중
 task-title-git-resolve = git 충돌 해결하는 중
 task-title-git-merge = git merge 하는 중

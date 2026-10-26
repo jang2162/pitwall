@@ -5,10 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LAYOUT_STORAGE_KEY, type LayoutStorage } from "./project-layout";
 import {
   createProjectState,
+  MAX_COMMIT_MESSAGE_BYTES,
+  MAX_COMMIT_MESSAGES,
   MAX_WORKTREES,
   readStateFile,
   type StateBackend,
   STATE_VERSION,
+  withCommitMessage,
 } from "./project-state";
 
 function memoryBackend(initial: unknown = null, problem: string | null = null) {
@@ -159,6 +162,61 @@ describe("createProjectState", () => {
       readStateFile({ ...(saved as object), recentFiles: [{ path: 3 }, "x", { path: "/k" }] })
         ?.recentFiles,
     ).toEqual([{ path: "/k" }]);
+  });
+
+  it("keeps the commit message history newest first, moving a repeated message to the front", async () => {
+    const backend = memoryBackend();
+    const state = createProjectState({ backend, log: quiet });
+    await state.load();
+    state.addCommitMessage("fix: one");
+    state.addCommitMessage("feat: two\n\nbody");
+    state.addCommitMessage("fix: one");
+    expect(state.commitMessages()).toEqual(["fix: one", "feat: two\n\nbody"]);
+    await state.flush();
+    expect(backend.sets).toHaveLength(1);
+    expect(readStateFile(backend.sets[0])?.commitMessages).toEqual(state.commitMessages());
+    // 맨 앞의 메시지를 다시 더하면 바뀐 것이 없다 — 쓰지 않는다.
+    state.addCommitMessage("fix: one");
+    await state.flush();
+    expect(backend.sets).toHaveLength(1);
+  });
+
+  it("keeps only the newest commit messages and skips blank or oversized ones without cutting them", async () => {
+    const backend = memoryBackend();
+    const state = createProjectState({ backend, log: quiet });
+    await state.load();
+    for (let i = 0; i < MAX_COMMIT_MESSAGES + 5; i++) state.addCommitMessage(`m${i}`);
+    expect(state.commitMessages()).toHaveLength(MAX_COMMIT_MESSAGES);
+    expect(state.commitMessages()[0]).toBe(`m${MAX_COMMIT_MESSAGES + 4}`);
+    expect(state.commitMessages()).not.toContain("m4");
+    await state.flush();
+    const writes = backend.sets.length;
+    // 4 KiB 를 넘는 메시지(여러 바이트 글자로 센다)와 공백뿐인 메시지는 담지 않는다.
+    const big = "가".repeat(Math.floor(MAX_COMMIT_MESSAGE_BYTES / 3) + 1);
+    expect(new TextEncoder().encode(big).length).toBeGreaterThan(MAX_COMMIT_MESSAGE_BYTES);
+    expect(big.length).toBeLessThan(MAX_COMMIT_MESSAGE_BYTES);
+    state.addCommitMessage(big);
+    state.addCommitMessage("  \n");
+    expect(state.commitMessages()[0]).toBe(`m${MAX_COMMIT_MESSAGES + 4}`);
+    await state.flush();
+    expect(backend.sets).toHaveLength(writes);
+    const edge = "a".repeat(MAX_COMMIT_MESSAGE_BYTES);
+    expect(withCommitMessage([], edge)).toEqual([edge]);
+  });
+
+  it("reads a saved commit message history defensively", () => {
+    const big = "x".repeat(MAX_COMMIT_MESSAGE_BYTES + 1);
+    const many = Array.from({ length: MAX_COMMIT_MESSAGES + 3 }, (_, i) => `n${i}`);
+    expect(
+      readStateFile({ version: STATE_VERSION, commitMessages: ["a", 3, "", big, "b", "a", null] })
+        ?.commitMessages,
+    ).toEqual(["a", "b"]);
+    expect(readStateFile({ version: STATE_VERSION, commitMessages: many })?.commitMessages).toEqual(
+      many.slice(0, MAX_COMMIT_MESSAGES),
+    );
+    expect(readStateFile({ version: STATE_VERSION, commitMessages: "a" })?.commitMessages).toBe(
+      undefined,
+    );
   });
 
   it("gives up on a read that does not answer in time and never writes, even when it answers later", async () => {

@@ -11,6 +11,7 @@
 //! - [`write`]: 쓰기 실행기 · 진행 중 작업 · askpass(M2-06).
 //! - [`conflict`]: 충돌 데이터 · 해결 — `git.conflicts` · `git.conflict.get` · `git.conflict.resolve`(M2-11).
 //! - [`history`]: merge · cherry-pick · revert · rebase · reset — `git.merge` 등(M2-10).
+//! - [`commit`]: 커밋 — `git.commit`(M2-08).
 //! - `testing`(시험 · `test-support` 기능): 시험 저장소 도우미.
 //!
 //! 이 크레이트의 모듈 배치 · 메서드 등록([`methods::register`])의 주인은 M2-01 이다. 이후 행은 모듈을 나눠(`status` · `log` ·
@@ -18,6 +19,7 @@
 
 pub mod cli;
 pub mod conflict;
+pub mod commit;
 pub mod diff;
 pub mod history;
 pub mod methods;

@@ -14,7 +14,7 @@ use pw_core::bus::{DEFAULT_CAPACITY, EventBus, Scope};
 use pw_core::config::{AppPaths, ConfigSource, ConfigStore};
 use pw_core::registry::{NewProject, Registry};
 use pw_core::task::TaskSpawner;
-use pw_runtime::{LoginShell, Runtime};
+use pw_runtime::{LoginShell, Runtime, RuntimeProvider};
 use tokio_util::sync::CancellationToken;
 
 use super::TestRepo;
@@ -82,6 +82,25 @@ impl WriteFixture {
         askpass: Askpass,
         timeouts: Option<(Duration, Duration)>,
     ) -> Self {
+        Self::build(repo, trusted, askpass, timeouts, None)
+    }
+
+    /// [`Self::with_repo`] 의 런타임에 제공자(mise 자리)를 더한 것.
+    pub fn with_provider(
+        repo: TestRepo,
+        trusted: bool,
+        provider: Arc<dyn RuntimeProvider>,
+    ) -> Self {
+        Self::build(repo, trusted, Askpass::default(), None, Some(provider))
+    }
+
+    fn build(
+        repo: TestRepo,
+        trusted: bool,
+        askpass: Askpass,
+        timeouts: Option<(Duration, Duration)>,
+        provider: Option<Arc<dyn RuntimeProvider>>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         fs::create_dir_all(&bin).unwrap();
@@ -93,8 +112,11 @@ impl WriteFixture {
         let global = ConfigStore::open(ConfigSource::global(&paths), bus.clone(), Scope::Host);
         let projects = Registry::new(paths, None, bus.clone());
         let gate = projects.clone();
-        let runtime = Runtime::new(LoginShell::new(Some(shell), Duration::from_secs(10)))
+        let mut runtime = Runtime::new(LoginShell::new(Some(shell), Duration::from_secs(10)))
             .with_trust(move |id| gate.is_trusted(id));
+        if let Some(provider) = provider {
+            runtime = runtime.with_provider(provider);
+        }
         let git = Arc::new(Git::new(Arc::new(runtime)));
         git.attach(HostParts {
             global,

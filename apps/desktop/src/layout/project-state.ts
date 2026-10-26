@@ -13,6 +13,8 @@
 //   없으면 처음 연 창이 그것을 옮기고, 쓰기가 끝나면 지운다 — 대개 한 번만 옮겨진다(다음 프로젝트는 기본 레이아웃). 두 창이
 //   동시에 처음 열리면(첫 쓰기 전에 둘 다 읽으면) 둘 다 옮긴다 — 서로 덮지는 않는다.
 // - 워크트리 묶음은 최근에 쓴 `MAX_WORKTREES` 개만 남긴다(메인 체크아웃은 늘 남는다) — 지운 워크트리의 묶음이 쌓이지 않게.
+// - 커밋 메시지 히스토리(13-m2-plan.md M2-08)는 최근 `MAX_COMMIT_MESSAGES` 개다. `MAX_COMMIT_MESSAGE_BYTES` 를 넘는 메시지는
+//   자르지 않고 담지 않는다 — 히스토리가 `state.json` 의 상한(1 MiB, crates/pw-core/src/registry/state.rs)을 차지하지 않게.
 
 import type { JsonValue, RpcClient } from "@pitwall/rpc-client";
 
@@ -23,6 +25,10 @@ import { LAYOUT_STORAGE_KEY, type LayoutStorage } from "./project-layout";
 export const STATE_VERSION = 1;
 export const WRITE_DELAY_MS = 300;
 export const MAX_WORKTREES = 20;
+/** 커밋 메시지 히스토리의 개수(머리 주석). */
+export const MAX_COMMIT_MESSAGES = 20;
+/** 히스토리에 담는 메시지 하나의 상한(UTF-8 바이트). 넘으면 담지 않는다. */
+export const MAX_COMMIT_MESSAGE_BYTES = 4096;
 /** 저장본 읽기를 기다리는 시간. 넘으면 기본값으로 연다(머리 주석). */
 export const LOAD_LIMIT_MS = 2000;
 /** 창을 닫을 때 마지막 쓰기를 기다리는 시간. */
@@ -64,12 +70,32 @@ export interface ProjectStateFile {
   worktrees?: Record<string, WorktreeState>;
   /** 이 창에서 최근에 본 파일(⌘E, search-everywhere/recent-files.ts), 앞이 최근. 워크트리를 가리지 않는 창 하나의 목록이다. */
   recentFiles?: RecentFileState[];
+  /** 이 창에서 커밋한 메시지(커밋 툴 윈도우의 히스토리), 앞이 최근. 워크트리를 가리지 않는다. */
+  commitMessages?: string[];
 }
 
 /** 최근 파일 하나(search-everywhere/recent-files.ts 의 `RecentFile` 과 같은 꼴). */
 export interface RecentFileState {
   path: string;
   worktree?: string;
+}
+
+/** 히스토리에 담을 수 있는 메시지인가: 공백만이 아니고 `MAX_COMMIT_MESSAGE_BYTES` 이하. */
+function keepsCommitMessage(message: unknown): message is string {
+  return (
+    typeof message === "string" &&
+    message.trim() !== "" &&
+    new TextEncoder().encode(message).length <= MAX_COMMIT_MESSAGE_BYTES
+  );
+}
+
+/**
+ * 히스토리 `messages` 의 맨 앞에 `message` 를 더한 새 목록. 같은 메시지가 있으면 앞으로 옮기고, `MAX_COMMIT_MESSAGES` 개만 남긴다.
+ * 담을 수 없는 메시지(`keepsCommitMessage`)면 `messages` 를 그대로 돌려준다.
+ */
+export function withCommitMessage(messages: readonly string[], message: string): readonly string[] {
+  if (!keepsCommitMessage(message)) return messages;
+  return [message, ...messages.filter((m) => m !== message)].slice(0, MAX_COMMIT_MESSAGES);
 }
 
 /** 묶음의 열쇠: 워크트리 꼭대기, 메인 체크아웃이면 `undefined`. */
@@ -136,12 +162,18 @@ export function readStateFile(value: unknown): ProjectStateFile | undefined {
           : [],
       )
     : undefined;
+  const commitMessages = Array.isArray(value.commitMessages)
+    ? (value.commitMessages as unknown[])
+        .filter(keepsCommitMessage)
+        .reduceRight<readonly string[]>(withCommitMessage, [])
+    : undefined;
   return {
     version: STATE_VERSION,
     ...(value.layout !== undefined && { layout: value.layout }),
     ...(main && { main }),
     worktrees,
     ...(recentFiles && { recentFiles }),
+    ...(commitMessages && { commitMessages: [...commitMessages] }),
   };
 }
 
@@ -337,6 +369,21 @@ export function createProjectState({
         path: f.path,
         ...(f.worktree !== undefined && { worktree: f.worktree }),
       }));
+      schedule();
+    },
+
+    /** 커밋 메시지 히스토리(앞이 최근). */
+    commitMessages: (): readonly string[] => state.commitMessages ?? [],
+    /** 커밋한 메시지를 히스토리 맨 앞에 더한다(`withCommitMessage`). 바뀐 것이 없으면 쓰지 않는다. */
+    addCommitMessage(message: string) {
+      const before = state.commitMessages ?? [];
+      const next = withCommitMessage(before, message);
+      if (
+        next === before ||
+        (next.length === before.length && next.every((m, i) => m === before[i]))
+      )
+        return;
+      state.commitMessages = [...next];
       schedule();
     },
 

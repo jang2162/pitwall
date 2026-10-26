@@ -74,6 +74,11 @@ export type UnaryMethods = {
 	 */
 	"git.cherryPick": { params: GitCommitsParams; result: GitHistoryResult };
 	/**
+	 * index 를 커밋한다(`git commit -F -`, 메시지는 stdin). 훅 · 서명 · 정리는 사람의 git 설정대로 돌고, 훅이 실패하면 커밋하지
+	 * 않고 git 오류(`2004`, `data.stderr` 에 훅의 출력)로 끝난다. 성공해도 훅의 출력은 `output` 에 있다.
+	 */
+	"git.commit": { params: GitCommitParams; result: GitCommitResult };
+	/**
 	 * 충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.
 	 */
 	"git.conflict.get": { params: GitConflictParams; result: GitConflictDetail };
@@ -417,6 +422,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false,"fileScope":true},
 	"git.blob": {"name":"git.blob","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlobParams","output":"GitBlob","doc":" 리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).\n","mcp":false,"fileScope":false},
 	"git.cherryPick": {"name":"git.cherryPick","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 cherry-pick 한다. 하나가 충돌하면 앞의 것은 커밋된 채 `outcome: stopped` — 나머지는\n `git.operation.continue` 가 잇는다.\n","mcp":false,"fileScope":false},
+	"git.commit": {"name":"git.commit","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitParams","output":"GitCommitResult","doc":" index 를 커밋한다(`git commit -F -`, 메시지는 stdin). 훅 · 서명 · 정리는 사람의 git 설정대로 돌고, 훅이 실패하면 커밋하지\n 않고 git 오류(`2004`, `data.stderr` 에 훅의 출력)로 끝난다. 성공해도 훅의 출력은 `output` 에 있다.\n","mcp":false,"fileScope":false},
 	"git.conflict.get": {"name":"git.conflict.get","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictParams","output":"GitConflictDetail","doc":" 충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.\n","mcp":false,"fileScope":false},
 	"git.conflict.resolve": {"name":"git.conflict.resolve","kind":"unary","tier":"write","roles":["owner"],"params":"GitConflictResolveParams","output":"GitConflicts","doc":" 충돌 경로 하나를 해결한다. 작업 트리 파일이 `expectedVersion` 그대로일 때만(아니면 `CONFLICT`): `content` 면 파일에 쓰고\n (원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙 — 앞 폴더가 심링크면 거절) `git add`, `side` 면 그쪽을\n `git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n 뒤의 충돌 목록을 돌려준다.\n","mcp":false,"fileScope":false},
 	"git.conflicts": {"name":"git.conflicts","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictsParams","output":"GitConflicts","doc":" 충돌 중인 경로 목록: index 단계로 가른 종류(양쪽 수정 · 우리/그쪽 삭제 · 양쪽 추가 …)와 바이너리 · 서브모듈 · 심링크 표시.\n 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
@@ -1234,6 +1240,29 @@ export type GitChange =
 "typeChanged" | 
 /**  `?` — 작업 트리 쪽만. */
 "untracked";
+
+export type GitCommitParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`git.repo` 와 같다). */
+	worktree?: string | null,
+	/**  커밋 메시지 그대로. 정리(주석 줄 · 빈 줄)는 git 의 `commit.cleanup` 을 따른다. 비었으면 git 이 「빈 메시지」 로 거절한다. */
+	message: string,
+	/**  HEAD 커밋을 이 메시지 · 지금 index 로 바꾼다(`--amend`). 부모는 그대로다. */
+	amend?: boolean,
+	/**  `Signed-off-by:` 트레일러를 붙인다(`--signoff`, 신원은 git 설정). */
+	signoff?: boolean,
+};
+
+export type GitCommitResult = {
+	/**  만든 커밋(새 HEAD)의 해시. */
+	commit: string,
+	/**  커밋 전 HEAD 의 해시. 아직 커밋이 없던 브랜치면 `null`. amend 뒤 [되돌리기] 는 이 해시로 돌아간다. */
+	previous: string | null,
+	/**  저장소의 작업 트리 꼭대기(절대 경로). */
+	workTree: string,
+	/**  git 과 훅이 stderr 에 낸 원문(훅의 stdout 도 git 이 stderr 로 돌린다). 없으면 빈 문자열. */
+	output: string,
+};
 
 export type GitCommitsParams = {
 	projectId: string,
