@@ -10,8 +10,8 @@ use pw_rpc::code;
 
 use super::*;
 use crate::conflict::methods::{
-    ConflictContent, ConflictPick, GitConflictParams, GitConflictResolveParams, GitConflicts,
-    GitConflictsParams,
+    ConflictChoice, ConflictContent, ConflictPick, GitConflictParams, GitConflictResolveParams,
+    GitConflicts, GitConflictsParams,
 };
 use crate::testing::conflict::{BOTH_OURS, BOTH_THEIRS, SUB_OURS, SUB_THEIRS};
 use crate::testing::write::{Window, WriteFixture};
@@ -34,14 +34,28 @@ fn params(f: &WriteFixture, path: &str) -> GitConflictResolveParams {
     }
 }
 
+/// get 이 준 `version` 으로 한쪽 고르기(창이 하는 대로).
 async fn pick(
     f: &WriteFixture,
     path: &str,
     side: ConflictPick,
 ) -> Result<GitConflicts, WriteError> {
+    let expected_version = version(f, path);
+    pick_at(f, path, side, expected_version).await
+}
+
+async fn pick_at(
+    f: &WriteFixture,
+    path: &str,
+    pick: ConflictPick,
+    expected_version: Option<String>,
+) -> Result<GitConflicts, WriteError> {
     f.write
         .resolve(GitConflictResolveParams {
-            side: Some(side),
+            side: Some(ConflictChoice {
+                pick,
+                expected_version,
+            }),
             ..params(f, path)
         })
         .await
@@ -297,7 +311,10 @@ fn requests_that_do_not_fit_are_refused_before_asking_the_window() {
                 bom: false,
                 expected_version: version(&f, "both.txt"),
             }),
-            side: Some(ConflictPick::Ours),
+            side: Some(ConflictChoice {
+                pick: ConflictPick::Ours,
+                expected_version: version(&f, "both.txt"),
+            }),
             ..params(&f, "both.txt")
         };
         assert_eq!(invalid(f.write.resolve(both).await), code::INVALID_PARAMS);
@@ -453,6 +470,24 @@ fn the_expected_version_cannot_be_left_out() {
     assert_eq!(none.content.unwrap().expected_version, None);
     let some = parse(serde_json::json!({ "text": "x", "expectedVersion": "v" })).unwrap();
     assert_eq!(some.content.unwrap().expected_version.as_deref(), Some("v"));
+
+    let side = |side: serde_json::Value| {
+        serde_json::from_value::<GitConflictResolveParams>(serde_json::json!({
+            "projectId": "p",
+            "path": "a.txt",
+            "side": side,
+        }))
+    };
+    let err = side(serde_json::json!({ "pick": "ours" })).unwrap_err();
+    assert!(err.to_string().contains("expectedVersion"), "{err}");
+    let none = side(serde_json::json!({ "pick": "theirs", "expectedVersion": null })).unwrap();
+    assert_eq!(
+        none.side,
+        Some(ConflictChoice {
+            pick: ConflictPick::Theirs,
+            expected_version: None,
+        })
+    );
 }
 
 /// get 뒤에 작업 트리 파일이 바뀌었으면(터미널에서 고침) 내용 해결은 `CONFLICT` 이고 그 편집과 충돌이 그대로다. 없던 파일을
@@ -645,5 +680,159 @@ fn content_over_a_file_changed_while_asking_is_a_conflict() {
         assert_eq!(rpc_code(&refused), code::CONFLICT, "{refused:?}");
         assert_eq!(fs::read_to_string(&file).unwrap(), "saved while asking\n");
         assert_eq!(index(&f, "x.txt").len(), 3, "still three stages");
+    });
+}
+
+/// 한쪽 고르기도 get 뒤에 바뀐 작업 트리 파일을 덮지 않는다: `git checkout` 이 덮을 파일도, `git rm` 이 지울 파일도 `CONFLICT` 이고
+/// 편집과 충돌이 그대로다. 지금 `version` 으로 다시 보내면 풀린다.
+#[test]
+fn a_side_over_a_file_changed_since_get_is_a_conflict() {
+    let repo = TestRepo::with_commit();
+    repo.stage_conflict("x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
+    repo.stage_conflict("d.txt", Some(b"a\n"), Some(b"o\n"), None);
+    isolate(repo.base());
+    block_on(async {
+        let f = fixture(repo);
+        let window = proceed(&f);
+        let (x, d) = (f.repo.root().join("x.txt"), f.repo.root().join("d.txt"));
+        let (seen_x, seen_d) = (version(&f, "x.txt"), version(&f, "d.txt"));
+        assert!(seen_x.is_some() && seen_d.is_some());
+        fs::write(&x, "edited by hand\n").unwrap();
+        fs::write(&d, "kept by hand\n").unwrap();
+
+        for expected in [seen_x, None] {
+            let refused = pick_at(&f, "x.txt", ConflictPick::Theirs, expected.clone()).await;
+            assert_eq!(rpc_code(&refused), code::CONFLICT, "{expected:?}");
+        }
+        // 그쪽은 지웠다 — 고르면 `git rm`.
+        let refused = pick_at(&f, "d.txt", ConflictPick::Theirs, seen_d).await;
+        assert_eq!(rpc_code(&refused), code::CONFLICT);
+        assert_eq!(fs::read_to_string(&x).unwrap(), "edited by hand\n");
+        assert_eq!(fs::read_to_string(&d).unwrap(), "kept by hand\n");
+        assert_eq!(index(&f, "x.txt").len(), 3, "still three stages");
+        assert_eq!(index(&f, "d.txt").len(), 2, "still two stages");
+        assert_eq!(window.seen(), [], "refused before asking the window");
+
+        pick(&f, "x.txt", ConflictPick::Theirs).await.unwrap();
+        assert_eq!(fs::read_to_string(&x).unwrap(), "t\n");
+        pick(&f, "d.txt", ConflictPick::Theirs).await.unwrap();
+        assert!(!d.exists());
+    });
+}
+
+/// 미저장 확인을 기다리는 사이 바뀐 파일도 한쪽 고르기가 잠금 안에서 다시 견주어 `CONFLICT` 다.
+#[test]
+fn a_side_over_a_file_changed_while_asking_is_a_conflict() {
+    let repo = TestRepo::with_commit();
+    repo.stage_conflict("x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
+    let file = repo.root().join("x.txt");
+    isolate(repo.base());
+    block_on(async {
+        let f = fixture(repo);
+        let edited = file.clone();
+        let _window = Window::open(&f.write, &f.project, move |_| {
+            fs::write(&edited, "saved while asking\n").unwrap();
+            Some(GitPromptAnswer::Proceed)
+        });
+        let refused = pick(&f, "x.txt", ConflictPick::Ours).await;
+        assert_eq!(rpc_code(&refused), code::CONFLICT, "{refused:?}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "saved while asking\n");
+        assert_eq!(index(&f, "x.txt").len(), 3, "still three stages");
+    });
+}
+
+/// 50 MiB 를 넘는 작업 트리 파일: get 은 내용을 읽지 않은 `large-` version 을 주고, 그것으로 한쪽 고르기는 되지만 내용 쓰기는
+/// invalid params 다. 같은 크기 · mtime 의 다른 파일로 바꿔 끼워도(원자 쓰기) inode 로 `CONFLICT` 다.
+#[test]
+fn a_large_work_tree_file_is_compared_by_its_stat_for_a_side() {
+    let repo = TestRepo::with_commit();
+    repo.stage_conflict("big.bin", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
+    let file = repo.root().join("big.bin");
+    let size = usize::try_from(pw_fs::limits::READ_ONLY_MAX).unwrap() + 1;
+    fs::write(&file, vec![b'x'; size]).unwrap();
+    isolate(repo.base());
+    block_on(async {
+        let f = fixture(repo);
+        let _window = proceed(&f);
+        let seen = version(&f, "big.bin").expect("a large file has a version");
+        assert!(seen.starts_with("large-"), "{seen}");
+        let refused = content_at(&f, "big.bin", "small\n", Some(seen.clone())).await;
+        assert_eq!(rpc_code(&refused), code::INVALID_PARAMS, "{refused:?}");
+
+        #[cfg(unix)]
+        {
+            let mtime = fs::metadata(&file).unwrap().modified().unwrap();
+            let swap = f.repo.root().join("big.swap");
+            fs::write(&swap, vec![b'y'; size]).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&swap)
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+            fs::rename(&swap, &file).unwrap();
+            let refused = pick_at(&f, "big.bin", ConflictPick::Theirs, Some(seen)).await;
+            assert_eq!(rpc_code(&refused), code::CONFLICT, "{refused:?}");
+            assert_eq!(fs::metadata(&file).unwrap().len(), size as u64);
+        }
+
+        pick(&f, "big.bin", ConflictPick::Theirs).await.unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"t\n");
+    });
+}
+
+/// 내용 해결은 `fs.write` 와 같은 경로별 쓰기 잠금 안에서 확인하고 쓴다: 해결이 확인을 지난 뒤 같은 `version` 으로 온 저장은
+/// 해결이 쓴 뒤에야 확인해 `CONFLICT` 다(둘 다 확인을 지나 하나가 말없이 사라지지 않는다).
+#[test]
+fn content_and_an_fs_write_of_the_same_file_take_turns() {
+    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use pw_fs::methods::{FsContent, FsWriteParams, FsWritten};
+    use pw_rpc::RpcError;
+
+    let repo = TestRepo::with_commit();
+    repo.stage_conflict("x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
+    let file = repo.root().join("x.txt");
+    isolate(repo.base());
+    block_on(async {
+        let f = fixture(repo);
+        let _window = proceed(&f);
+        let seen = version(&f, "x.txt");
+        let save = FsWriteParams {
+            project_id: f.project.clone(),
+            worktree: None,
+            path: file.display().to_string(),
+            content: FsContent::Text {
+                text: "saved\n".into(),
+            },
+            bom: false,
+            expected_version: seen,
+        };
+        let (tx, rx) = mpsc::channel::<Result<FsWritten, RpcError>>();
+        let (tx, rx) = (Mutex::new(Some(tx)), Arc::new(Mutex::new(rx)));
+        let (fs_service, waiting) = (Arc::clone(f.write.fs()), Arc::clone(&rx));
+        let saved = Arc::new(Mutex::new(None));
+        let slot = Arc::clone(&saved);
+        // 해결이 확인을 지나 쓰기 직전: 같은 파일의 저장을 띄우고 끝나기를 잠시 기다린다. 잠금을 나누면 저장은 해결이 쓸 때까지
+        // 기다리므로 여기서는 끝나지 않는다.
+        *f.write.before_conflict_write.lock().unwrap() = Some(Arc::new(move || {
+            let (fs_service, save) = (Arc::clone(&fs_service), save.clone());
+            let tx = tx.lock().unwrap().take().expect("one write");
+            std::thread::spawn(move || tx.send(fs_service.write_in(None, &save)).unwrap());
+            if let Ok(done) = waiting.lock().unwrap().recv_timeout(Duration::from_secs(1)) {
+                *slot.lock().unwrap() = Some(done);
+            }
+        }));
+        content(&f, "x.txt", "resolved\n").await.unwrap();
+        let saved = saved
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap_or_else(|| rx.lock().unwrap().recv().unwrap());
+        let code = saved.as_ref().map_err(|e| e.code).err();
+        assert_eq!(code, Some(code::CONFLICT), "{saved:?}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "resolved\n");
     });
 }

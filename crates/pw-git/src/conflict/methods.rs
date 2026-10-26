@@ -96,8 +96,9 @@ pub struct GitConflictDetail {
     pub work_tree: String,
     /// 목록(`git.conflicts`)의 그 항목.
     pub file: ConflictFile,
-    /// 작업 트리 파일의 지금 `version`(`fs.read` 와 같은 값) — `content` 로 풀 때 `expectedVersion` 으로 돌려준다. 일반 파일이
-    /// 없으면(지워짐 · 폴더 · 링크인 앞 폴더 · 루트 밖 링크), 50 MiB 를 넘거나 읽을 수 없으면 `null`.
+    /// 작업 트리 파일의 지금 `version`(`fs.read` 와 같은 값) — `content` · `side` 로 풀 때 `expectedVersion` 으로 돌려준다. 일반
+    /// 파일이 없으면(지워짐 · 폴더 · 링크인 앞 폴더 · 루트 밖 링크) 또는 읽을 수 없으면 `null`. 50 MiB 를 넘으면 내용을 읽지 않은
+    /// `large-` 로 시작하는 값(크기 · mtime · 유닉스면 inode — 그것들이 그대로인 제자리 편집은 못 잡는다)이고, 그 값으로는 `side` 만 풀린다.
     pub version: Option<String>,
     pub base: Option<ConflictSide>,
     pub ours: Option<ConflictSide>,
@@ -188,6 +189,21 @@ pub struct ConflictContent {
     pub expected_version: Option<String>,
 }
 
+/// 한쪽으로 풀기.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictChoice {
+    pub pick: ConflictPick,
+    /// `git.conflict.get` 이 준 `version` — `content` 의 `expectedVersion` 과 같다. 한쪽 고르기도 작업 트리 파일을 덮거나
+    /// 지운다(서브모듈은 index 만 바꾸지만 같은 필드로 견준다 — 폴더라 `null`).
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[specta(type = Option<String>)]
+    #[schemars(required, extend("type" = ["string", "null"]))]
+    pub expected_version: Option<String>,
+}
+
 /// 해결에서 고르는 쪽.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -212,7 +228,7 @@ pub struct GitConflictResolveParams {
     pub content: Option<ConflictContent>,
     /// 한쪽을 고른다. 그쪽이 있으면 그 내용으로(`git checkout --ours|--theirs` 뒤 `git add`), 지운 쪽이면 `git rm` 이다.
     #[serde(default)]
-    pub side: Option<ConflictPick>,
+    pub side: Option<ConflictChoice>,
 }
 
 rpc_method! {
@@ -237,8 +253,8 @@ rpc_method! {
 }
 
 rpc_method! {
-    /// 충돌 경로 하나를 해결한다: `content` 면 작업 트리 파일이 `expectedVersion` 그대로일 때(아니면 `CONFLICT`) 파일에 쓰고(원자
-    /// 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙 — 앞 폴더가 심링크면 거절) `git add`, `side` 면 그쪽을
+    /// 충돌 경로 하나를 해결한다. 작업 트리 파일이 `expectedVersion` 그대로일 때만(아니면 `CONFLICT`): `content` 면 파일에 쓰고
+    /// (원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙 — 앞 폴더가 심링크면 거절) `git add`, `side` 면 그쪽을
     /// `git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결
     /// 뒤의 충돌 목록을 돌려준다.
     pub GitConflictResolveMethod: "git.conflict.resolve" {

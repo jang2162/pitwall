@@ -2735,7 +2735,7 @@
             ]
           },
           "version": {
-            "description": "작업 트리 파일의 지금 `version`(`fs.read` 와 같은 값) — `content` 로 풀 때 `expectedVersion` 으로 돌려준다. 일반 파일이\n없으면(지워짐 · 폴더 · 링크인 앞 폴더 · 루트 밖 링크), 50 MiB 를 넘거나 읽을 수 없으면 `null`.",
+            "description": "작업 트리 파일의 지금 `version`(`fs.read` 와 같은 값) — `content` · `side` 로 풀 때 `expectedVersion` 으로 돌려준다. 일반\n파일이 없으면(지워짐 · 폴더 · 링크인 앞 폴더 · 루트 밖 링크) 또는 읽을 수 없으면 `null`. 50 MiB 를 넘으면 내용을 읽지 않은\n`large-` 로 시작하는 값(크기 · mtime · 유닉스면 inode — 그것들이 그대로인 제자리 편집은 못 잡는다)이고, 그 값으로는 `side` 만 풀린다.",
             "type": [
               "string",
               "null"
@@ -2764,10 +2764,30 @@
       "tier": "read"
     },
     "git.conflict.resolve": {
-      "description": "충돌 경로 하나를 해결한다: `content` 면 작업 트리 파일이 `expectedVersion` 그대로일 때(아니면 `CONFLICT`) 파일에 쓰고(원자\n쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙 — 앞 폴더가 심링크면 거절) `git add`, `side` 면 그쪽을\n`git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n뒤의 충돌 목록을 돌려준다.",
+      "description": "충돌 경로 하나를 해결한다. 작업 트리 파일이 `expectedVersion` 그대로일 때만(아니면 `CONFLICT`): `content` 면 파일에 쓰고\n(원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙 — 앞 폴더가 심링크면 거절) `git add`, `side` 면 그쪽을\n`git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n뒤의 충돌 목록을 돌려준다.",
       "kind": "unary",
       "params": {
         "$defs": {
+          "ConflictChoice": {
+            "description": "한쪽으로 풀기.",
+            "properties": {
+              "expectedVersion": {
+                "description": "`git.conflict.get` 이 준 `version` — `content` 의 `expectedVersion` 과 같다. 한쪽 고르기도 작업 트리 파일을 덮거나\n지운다(서브모듈은 index 만 바꾸지만 같은 필드로 견준다 — 폴더라 `null`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "pick": {
+                "$ref": "#/$defs/ConflictPick"
+              }
+            },
+            "required": [
+              "pick",
+              "expectedVersion"
+            ],
+            "type": "object"
+          },
           "ConflictContent": {
             "description": "내용으로 풀기.",
             "properties": {
@@ -2826,7 +2846,7 @@
           "side": {
             "anyOf": [
               {
-                "$ref": "#/$defs/ConflictPick"
+                "$ref": "#/$defs/ConflictChoice"
               },
               {
                 "type": "null"

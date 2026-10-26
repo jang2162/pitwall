@@ -274,23 +274,32 @@ impl RepoDirs {
 pub struct GitWrite {
     git: Arc<Git>,
     askpass: Askpass,
+    /// 파일 서비스 — 충돌 해결의 내용 쓰기가 `fs.write` 와 같은 경로별 쓰기 잠금을 쥔다([`pw_fs::Fs::write_lock`]).
+    fs: Arc<pw_fs::Fs>,
     prompts: Prompts,
     locks: lock::RepoLocks,
     tasks: OnceLock<TaskSpawner>,
     askpass_timeout: Duration,
     confirm_timeout: Duration,
+    /// 시험: 충돌 해결의 내용 쓰기가 잠금 안 version 확인을 지나 파일을 쓰기 직전에 부른다.
+    #[cfg(test)]
+    pub(crate) before_conflict_write: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl GitWrite {
-    pub fn new(git: Arc<Git>, askpass: Askpass) -> Self {
+    /// `fs` 는 `fs.*` RPC 와 같은 것을 넘긴다.
+    pub fn new(git: Arc<Git>, askpass: Askpass, fs: Arc<pw_fs::Fs>) -> Self {
         Self {
             git,
             askpass,
+            fs,
             prompts: Prompts::default(),
             locks: lock::RepoLocks::default(),
             tasks: OnceLock::new(),
             askpass_timeout: prompt::ASKPASS_TIMEOUT,
             confirm_timeout: prompt::CONFIRM_TIMEOUT,
+            #[cfg(test)]
+            before_conflict_write: std::sync::Mutex::new(None),
         }
     }
 
@@ -309,6 +318,10 @@ impl GitWrite {
 
     pub fn git(&self) -> &Arc<Git> {
         &self.git
+    }
+
+    pub fn fs(&self) -> &Arc<pw_fs::Fs> {
+        &self.fs
     }
 
     pub fn askpass(&self) -> &Askpass {

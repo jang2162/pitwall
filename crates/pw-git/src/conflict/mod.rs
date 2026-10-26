@@ -7,17 +7,20 @@
 //!   차례(`crate::diff::blob::BIG_BLOBS`)를 받아 푼다 — 목록은 그 쪽을 풀지 않는다(내용이 필요 없다).
 //! - 경로는 index 의 바이트로 맞춘다. UTF-8 이 아닌 경로는 목록에 U+FFFD 로 보이지만 get · resolve 로 지목할 수 없다(invalid
 //!   params) — 같은 글자로 보이는 다른 이름을 만들지 않게.
-//! - 해결(`git.conflict.resolve`): 쓰기 실행기([`crate::write`])로 돈다 — 미저장 문서 확인은 그 경로 하나다. 저장소 잠금 안에서 그
-//!   경로가 아직 충돌 중인지 다시 읽은 뒤:
-//!   - `content`: 작업 트리 파일이 `git.conflict.get` 이 준 `version` 그대로일 때만(아니면 `CONFLICT` — `fs.write` 의
-//!     `expectedVersion` 과 같다) 원자 쓰기(`pw_fs::write::write_atomic`)를 하고 `git add`. 경로 판정은 파일 조작(M1-21)의 규칙 A
+//! - 해결(`git.conflict.resolve`): 쓰기 실행기([`crate::write`])로 돈다 — 미저장 문서 확인은 그 경로 하나다. 두 갈래 모두 작업
+//!   트리 파일이 `git.conflict.get` 이 준 `version` 그대로일 때만 한다(아니면 `CONFLICT` — `fs.write` 의 `expectedVersion` 과
+//!   같다). 묻기 전에 한 번, 저장소 잠금 안에서 그 경로가 아직 충돌 중인지 다시 읽으며 한 번 더 견준 뒤:
+//!   - `content`: `fs.write` 와 같은 경로별 쓰기 잠금([`pw_fs::Fs::write_lock`]) 안에서 다시 견주고 원자
+//!     쓰기(`pw_fs::write::write_atomic`)를 한 뒤 `git add`. 50 MiB 를 넘는 작업 트리 파일은 덮지 않는다. 경로 판정은 파일 조작(M1-21)의 규칙 A
 //!     에 git 의 판정 하나를 더한 것이다 — 앞 폴더 중 하나라도 심링크면 거절하고(git 의 「beyond a symbolic link」: 작업 트리 안을
 //!     가리키는 링크여도 따라가면 다른 git 경로에 쓴다), 들어 있는 폴더를 실제 경로로 풀어 작업 트리 안이어야 하고, 그 항목이
 //!     심링크면 대상도 작업 트리 안이어야 한다. 쓰기는 항목 자체를 바꾼다(심링크면 링크가 일반 파일이 된다 — `git add` 가 링크를
 //!     담지 않게).
 //!   - `side`: 그쪽이 있으면 `git checkout --ours|--theirs` 뒤 `git add` — git 이 smudge 필터 · 줄바꿈 변환을 하고(LFS · autocrlf
 //!     에서도 맞는 파일), 앞 폴더의 심링크를 따라 쓰지 않는다. 서브모듈이면 `git update-index --cacheinfo` 로 index 만 바꾼다(서브모듈
-//!     체크아웃은 그대로 — merge 가 서브모듈을 옮기지 않는 것과 같다). 그쪽이 지운 쪽이면 `git rm`.
+//!     체크아웃은 그대로 — merge 가 서브모듈을 옮기지 않는 것과 같다). 그쪽이 지운 쪽이면 `git rm`. git 이 파일을 쓰므로 쓰기
+//!     잠금은 쥐지 않는다 — 잠금 안 확인과 git 의 쓰기 사이에 같은 프로세스의 `fs.write` 가 끼면 그 저장은 덮인다(다른 프로세스의
+//!     쓰기와 같은 수준).
 //!
 //!   경로는 글자 그대로 넘긴다(`--literal-pathspecs`). 해결 뒤의 충돌 목록을 돌려준다.
 
@@ -45,9 +48,9 @@ use crate::status::GitConflict;
 use crate::write::{Changes, GitWrite, WriteError, WriteRequest};
 use crate::{Git, Opened};
 use methods::{
-    ConflictContent, ConflictFile, ConflictPick, ConflictSide, ConflictStage, GitConflictDetail,
-    GitConflictParams, GitConflictResolveParams, GitConflicts, GitConflictsParams, MergeLines,
-    MergeRegion, MergeRegionKind,
+    ConflictChoice, ConflictContent, ConflictFile, ConflictPick, ConflictSide, ConflictStage,
+    GitConflictDetail, GitConflictParams, GitConflictResolveParams, GitConflicts,
+    GitConflictsParams, MergeLines, MergeRegion, MergeRegionKind,
 };
 
 /// 해결 Task 의 제목(`extensions/i18n-default/i18n/*/project.ftl`).
@@ -127,7 +130,16 @@ impl GitWrite {
                     expected: expected_version,
                 }
             }
-            (None, Some(side)) => Resolution::Side(side),
+            (
+                None,
+                Some(ConflictChoice {
+                    pick,
+                    expected_version,
+                }),
+            ) => Resolution::Side {
+                pick,
+                expected: expected_version,
+            },
             _ => {
                 return Err(WriteError::Rpc(RpcError::invalid_params(
                     "give exactly one of `content` or `side`",
@@ -154,14 +166,11 @@ impl GitWrite {
                 };
                 let entry = find(&opened.repo, &path).map_err(WriteError::Rpc)?;
                 fits(&entry, &resolution).map_err(WriteError::Rpc)?;
-                match &resolution {
-                    Resolution::Content { expected, .. } => {
-                        let work_tree = &opened.target.work_tree;
-                        place(work_tree, &path).map_err(WriteError::Rpc)?;
-                        unchanged(work_tree, &path, expected.as_ref())
-                    }
-                    Resolution::Side(_) => Ok(()),
+                let work_tree = &opened.target.work_tree;
+                if matches!(resolution, Resolution::Content { .. }) {
+                    place(work_tree, &path).map_err(WriteError::Rpc)?;
                 }
+                unchanged(work_tree, &path, &resolution)
             })
             .await
             .map_err(|e| WriteError::Internal(e.to_string()))?
@@ -174,6 +183,13 @@ impl GitWrite {
             changes: Changes::Paths(vec![path.clone()]),
             askpass: false,
         };
+        let fs = Arc::clone(self.fs());
+        #[cfg(test)]
+        let before_write = self
+            .before_conflict_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         self.run(request, move |ctx| async move {
             // 잠금을 받은 뒤 다시 읽는다 — 기다리는 사이 터미널에서 풀었을 수 있다.
             let entry = {
@@ -188,35 +204,56 @@ impl GitWrite {
                     .args(args.iter().copied())
             };
             fits(&entry, &resolution).map_err(WriteError::Rpc)?;
+            let work_tree = ctx.work_tree().to_path_buf();
             match resolution {
-                Resolution::Content { bytes, expected } => {
-                    let (work_tree, rel) = (ctx.work_tree().to_path_buf(), path.clone());
+                Resolution::Content { .. } => {
+                    let rel = path.clone();
                     tokio::task::spawn_blocking(move || {
-                        unchanged(&work_tree, &rel, expected.as_ref())?;
-                        write_content(&work_tree, &rel, &bytes)
+                        // `fs.write` 와 같은 쓰기 잠금 안에서 확인하고 쓴다 — 같은 파일의 저장과 둘 다 확인을 지나 하나가 사라지지
+                        // 않게.
+                        let Place { item, .. } =
+                            place(&work_tree, &rel).map_err(WriteError::Rpc)?;
+                        let real = normalize(&item).unwrap_or(item);
+                        let _guard = fs.write_lock(&real);
+                        unchanged(&work_tree, &rel, &resolution)?;
+                        #[cfg(test)]
+                        if let Some(hook) = before_write {
+                            hook();
+                        }
+                        let Resolution::Content { bytes, .. } = &resolution else {
+                            unreachable!()
+                        };
+                        write_content(&work_tree, &rel, bytes)
                     })
                     .await
                     .map_err(|e| WriteError::Internal(e.to_string()))??;
                     ctx.run(literal(&["add", "--", &path])).await?;
                 }
-                Resolution::Side(pick) => match entry.side(pick) {
-                    None => {
-                        ctx.run(literal(&["rm", "--quiet", "--", &path])).await?;
+                Resolution::Side { pick, .. } => {
+                    // git 이 작업 트리 파일을 덮거나 지우기 전에 잠금 안에서 다시 본다.
+                    let rel = path.clone();
+                    tokio::task::spawn_blocking(move || unchanged(&work_tree, &rel, &resolution))
+                        .await
+                        .map_err(|e| WriteError::Internal(e.to_string()))??;
+                    match entry.side(pick) {
+                        None => {
+                            ctx.run(literal(&["rm", "--quiet", "--", &path])).await?;
+                        }
+                        Some(stage) if stage.mode == Mode::COMMIT => {
+                            let info = format!("160000,{},{path}", stage.id);
+                            ctx.run(ctx.git().args(["update-index", "--cacheinfo", &info]))
+                                .await?;
+                        }
+                        Some(_) => {
+                            let flag = match pick {
+                                ConflictPick::Ours => "--ours",
+                                ConflictPick::Theirs => "--theirs",
+                            };
+                            ctx.run(literal(&["checkout", flag, "--", &path])).await?;
+                            ctx.run(literal(&["add", "--", &path])).await?;
+                        }
                     }
-                    Some(stage) if stage.mode == Mode::COMMIT => {
-                        let info = format!("160000,{},{path}", stage.id);
-                        ctx.run(ctx.git().args(["update-index", "--cacheinfo", &info]))
-                            .await?;
-                    }
-                    Some(_) => {
-                        let flag = match pick {
-                            ConflictPick::Ours => "--ours",
-                            ConflictPick::Theirs => "--theirs",
-                        };
-                        ctx.run(literal(&["checkout", flag, "--", &path])).await?;
-                        ctx.run(literal(&["add", "--", &path])).await?;
-                    }
-                },
+                }
             }
             ctx.read(list).await?.map_err(WriteError::Rpc)
         })
@@ -231,7 +268,19 @@ enum Resolution {
         /// `git.conflict.get` 이 준 작업 트리 파일의 `version`(없던 파일이면 `None`).
         expected: Option<String>,
     },
-    Side(ConflictPick),
+    Side {
+        pick: ConflictPick,
+        /// `Content` 의 `expected` 와 같다.
+        expected: Option<String>,
+    },
+}
+
+impl Resolution {
+    fn expected(&self) -> Option<&String> {
+        match self {
+            Self::Content { expected, .. } | Self::Side { expected, .. } => expected.as_ref(),
+        }
+    }
 }
 
 /// 내용으로는 서브모듈 · 심링크 충돌을 풀 수 없다 — 한쪽을 고른다.
@@ -612,14 +661,14 @@ fn place(work_tree: &Path, rel: &str) -> Result<Place, RpcError> {
     Ok(Place { parent, item })
 }
 
-/// 작업 트리의 그 파일의 `version`(`fs.read` 와 같은 값). 일반 파일이 없거나(없음 · 폴더 · 루트 밖 링크 · 링크 앞 폴더) 50 MiB 를
-/// 넘으면 `None` — 넘는 파일은 [`unchanged`] 가 거절한다.
+/// 작업 트리의 그 파일의 `version`(`fs.read` 와 같은 값 — 50 MiB 를 넘으면 [`large_version`]). 일반 파일이 없으면(없음 · 폴더 ·
+/// 루트 밖 링크 · 링크 앞 폴더) `None`.
 fn work_version(work_tree: &Path, rel: &str) -> std::io::Result<Option<String>> {
-    Ok(work_file(work_tree, rel)?.and_then(|(_, version)| version))
+    Ok(work_file(work_tree, rel)?.map(|(_, version)| version))
 }
 
-/// (크기, 50 MiB 이하면 `version`). 일반 파일이 없으면 `None`.
-fn work_file(work_tree: &Path, rel: &str) -> std::io::Result<Option<(u64, Option<String>)>> {
+/// (크기, `version`). 일반 파일이 없으면 `None`.
+fn work_file(work_tree: &Path, rel: &str) -> std::io::Result<Option<(u64, String)>> {
     let Ok(Place { item, .. }) = place(work_tree, rel) else {
         return Ok(None);
     };
@@ -634,30 +683,45 @@ fn work_file(work_tree: &Path, rel: &str) -> std::io::Result<Option<(u64, Option
         Err(e) => return Err(e),
     };
     if meta.len() > READ_ONLY_MAX {
-        return Ok(Some((meta.len(), None)));
+        return Ok(Some((meta.len(), large_version(&meta))));
     }
     let snapshot = read_whole(&readable.real, &|p| roots.open_inside(p))?;
-    Ok(Some((
-        snapshot.bytes.len() as u64,
-        Some(snapshot.version()),
-    )))
+    Ok(Some((snapshot.bytes.len() as u64, snapshot.version())))
 }
 
-/// `content` 해결: 작업 트리 파일이 기대한 `version` 그대로인가. 다르면 `CONFLICT`(`fs.write` 와 같은 꼴 — `data.current` 가 지금의
-/// `version`).
-fn unchanged(work_tree: &Path, rel: &str, expected: Option<&String>) -> Result<(), WriteError> {
+/// 50 MiB 를 넘는 파일의 `version`: 내용을 읽지 않고 크기 · mtime · inode(유닉스)로 만든다. 원자 쓰기(rename)는 inode 가, 보통의
+/// 덮어쓰기는 mtime 이 바꾼다 — 크기 · mtime 이 같은 제자리 편집은 못 잡는다. 내용 해시의 `version` 과 섞이지 않게 `large-` 로
+/// 시작한다.
+fn large_version(meta: &std::fs::Metadata) -> String {
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    #[cfg(unix)]
+    let inode = {
+        use std::os::unix::fs::MetadataExt as _;
+        format!("-{}-{}", meta.dev(), meta.ino())
+    };
+    #[cfg(not(unix))]
+    let inode = String::new();
+    format!("large-{}-{mtime}{inode}", meta.len())
+}
+
+/// 해결 전: 작업 트리 파일이 `git.conflict.get` 이 준 `version` 그대로인가. 다르면 `CONFLICT`(`fs.write` 와 같은 꼴 —
+/// `data.current` 가 지금의 `version`). 내용 쓰기는 50 MiB 를 넘는 파일을 덮지 않는다(내용으로 견줄 수 없다).
+fn unchanged(work_tree: &Path, rel: &str, resolution: &Resolution) -> Result<(), WriteError> {
     let current = work_file(work_tree, rel)
         .map_err(|e| WriteError::Internal(format!("read `{rel}`: {e}")))?;
-    let current = match current {
-        Some((size, None)) => {
-            return Err(WriteError::Rpc(RpcError::invalid_params(format!(
-                "`{rel}` is {size} bytes in the work tree — too large to compare before writing"
-            ))));
-        }
-        Some((_, version)) => version,
-        None => None,
-    };
-    if current.as_ref() != expected {
+    if let (Some((size, _)), Resolution::Content { .. }) = (&current, resolution)
+        && *size > READ_ONLY_MAX
+    {
+        return Err(WriteError::Rpc(RpcError::invalid_params(format!(
+            "`{rel}` is {size} bytes in the work tree — too large to compare before writing"
+        ))));
+    }
+    let current = current.map(|(_, version)| version);
+    if current.as_ref() != resolution.expected() {
         return Err(WriteError::Rpc(
             RpcError::new(code::CONFLICT, "conflict")
                 .with_data(serde_json::json!({ "path": rel, "current": current })),

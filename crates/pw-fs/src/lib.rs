@@ -100,7 +100,10 @@ impl Fs {
         roots.open_inside(real)
     }
 
-    fn write_lock(&self, real: &Path) -> std::sync::MutexGuard<'_, ()> {
+    /// `real`(정규화한 실제 경로 — [`Roots::writable`] 이 주는 것) 의 쓰기 잠금. `fs.write` 의 「version 확인 → rename」 이 이것을
+    /// 쥔다 — 같은 프로세스에서 같은 파일을 다른 길로 쓰는 쪽(git 충돌 해결)도 쥐면 둘이 차례로 돈다. 쥔 채 다른 쓰기 잠금을 받지
+    /// 않는다(갈래가 같으면 스스로를 기다린다).
+    pub fn write_lock(&self, real: &Path) -> std::sync::MutexGuard<'_, ()> {
         let mut hasher = DefaultHasher::new();
         real.hash(&mut hasher);
         let slot = usize::try_from(hasher.finish() % WRITE_LOCKS as u64).unwrap_or(0);

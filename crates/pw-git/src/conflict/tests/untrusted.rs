@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::conflict::methods::{
-    ConflictPick, GitConflictParams, GitConflictResolveParams, GitConflictsParams,
+    ConflictChoice, ConflictPick, GitConflictParams, GitConflictResolveParams, GitConflictsParams,
 };
 use crate::testing::write::{Window, WriteFixture};
 use crate::write::{Askpass, GitPromptAnswer};
@@ -89,11 +89,22 @@ fn reading_conflicts_of_an_untrusted_repository_runs_none_of_its_programs() {
 
         // 같은 설정이 살아 있다: 사람이 누른 해결은 터미널의 git 과 같이 저장소의 필터를 돌린다(D43).
         let _window = Window::open(&f.write, &f.project, |_| Some(GitPromptAnswer::Proceed));
+        let expected_version = git
+            .conflict(&GitConflictParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                path: "both.txt".to_owned(),
+            })
+            .unwrap()
+            .version;
         f.write
             .resolve(GitConflictResolveParams {
                 project_id: f.project.clone(),
                 path: "both.txt".to_owned(),
-                side: Some(ConflictPick::Theirs),
+                side: Some(ConflictChoice {
+                    pick: ConflictPick::Theirs,
+                    expected_version,
+                }),
                 ..GitConflictResolveParams::default()
             })
             .await

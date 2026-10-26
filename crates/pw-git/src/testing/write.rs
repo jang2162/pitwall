@@ -101,7 +101,10 @@ impl WriteFixture {
             projects: projects.clone(),
             bus: bus.clone(),
         });
-        let mut write = GitWrite::new(git, askpass);
+        // 파일 서비스는 데스크톱처럼 같은 레지스트리를 붙인다(충돌 해결이 `fs.write` 와 쓰기 잠금을 나눈다).
+        let fs = Arc::new(pw_fs::Fs::new());
+        fs.attach(projects.clone());
+        let mut write = GitWrite::new(git, askpass, fs);
         if let Some((askpass, confirm)) = timeouts {
             write = write.with_timeouts(askpass, confirm);
         }

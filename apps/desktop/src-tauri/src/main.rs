@@ -85,7 +85,11 @@ fn local_host(
     let git = Arc::new(pw_git::Git::new(Arc::clone(&runtime)));
     let git_methods = Arc::clone(&git);
     // git 쓰기 실행기 · 진행 중 작업 · 창 질의(`git.operation*` · `git.prompts`, M2-06). 쓰기는 Host 의 Task 로 돈다.
-    let git_write = Arc::new(pw_git::write::GitWrite::new(Arc::clone(&git), askpass));
+    let git_write = Arc::new(pw_git::write::GitWrite::new(
+        Arc::clone(&git),
+        askpass,
+        Arc::clone(&fs),
+    ));
     let git_write_methods = Arc::clone(&git_write);
     // 충돌 데이터 · 해결(`git.conflicts` · `git.conflict.*`, M2-11). 해결은 쓰기 실행기로 돈다.
     let git_conflict_methods = Arc::clone(&git_write);
