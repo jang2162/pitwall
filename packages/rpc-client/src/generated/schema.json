@@ -2294,12 +2294,16 @@
                 "description": "공통 조상(index 단계 1). 그 쪽이 없으면 `null`."
               },
               "binary": {
-                "description": "어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). `.gitattributes` 의 `merge` 속성은 보지 않는다.",
+                "description": "어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). 5 MiB 이하인 쪽만 본다(`large` 인 쪽은 목록이 풀지 않는다 —\n그쪽의 판정은 `git.conflict.get` 의 각 쪽 `judgment`). `.gitattributes` 의 `merge` 속성은 보지 않는다.",
                 "type": "boolean"
               },
               "kind": {
                 "$ref": "#/$defs/GitConflict",
                 "description": "index 단계가 있는 쪽들로 가른 갈래(`git status --porcelain` 의 두 글자 — `git.status` 와 같은 값)."
+              },
+              "large": {
+                "description": "어느 쪽이든 편집 기준(결정 M1-D9 의 5 MiB)을 넘는다 — 자동 병합 결과가 없으므로 창은 한쪽 고르기만 한다.",
+                "type": "boolean"
               },
               "ours": {
                 "anyOf": [
@@ -2313,7 +2317,7 @@
                 "description": "우리 쪽(단계 2) — HEAD 쪽이다. rebase 중이면 옮겨 가는 대상(upstream) 쪽이다(git 의 `--ours` 와 같다)."
               },
               "path": {
-                "description": "작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다.",
+                "description": "작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다 — 그런 경로는 `git.conflict.get` ·\n`git.conflict.resolve` 로 지목할 수 없다(invalid params).",
                 "type": "string"
               },
               "submodule": {
@@ -2349,6 +2353,7 @@
               "binary",
               "submodule",
               "symlink",
+              "large",
               "tooLarge"
             ],
             "type": "object"
@@ -2687,6 +2692,10 @@
               }
             ]
           },
+          "clean": {
+            "description": "`merged` 가 있고 충돌 구간이 하나도 없다. git 은 이 경로를 충돌로 남겼다 — git 의 merge 는 histogram diff 로 병합하고 이\n계산은 Myers(`git merge-file` 의 기본)라 드물게 갈린다. 창은 고를 충돌 없이 세 쪽의 diff 로 보이고, 저장하면 그래도\n`git.conflict.resolve` 로 푼다(index 는 아직 충돌이다).",
+            "type": "boolean"
+          },
           "file": {
             "$ref": "#/$defs/ConflictFile",
             "description": "목록(`git.conflicts`)의 그 항목."
@@ -2725,6 +2734,13 @@
               }
             ]
           },
+          "version": {
+            "description": "작업 트리 파일의 지금 `version`(`fs.read` 와 같은 값) — `content` 로 풀 때 `expectedVersion` 으로 돌려준다. 일반 파일이\n없으면(지워짐 · 폴더 · 링크인 앞 폴더 · 루트 밖 링크), 50 MiB 를 넘거나 읽을 수 없으면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "workTree": {
             "type": "string"
           }
@@ -2732,10 +2748,12 @@
         "required": [
           "workTree",
           "file",
+          "version",
           "base",
           "ours",
           "theirs",
           "merged",
+          "clean",
           "regions"
         ],
         "type": "object"
@@ -2746,10 +2764,36 @@
       "tier": "read"
     },
     "git.conflict.resolve": {
-      "description": "충돌 경로 하나를 해결한다: `content` 면 파일에 쓰고(원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙) `git add`, `side` 면 그쪽을\n`git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n뒤의 충돌 목록을 돌려준다.",
+      "description": "충돌 경로 하나를 해결한다: `content` 면 작업 트리 파일이 `expectedVersion` 그대로일 때(아니면 `CONFLICT`) 파일에 쓰고(원자\n쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙 — 앞 폴더가 심링크면 거절) `git add`, `side` 면 그쪽을\n`git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n뒤의 충돌 목록을 돌려준다.",
       "kind": "unary",
       "params": {
         "$defs": {
+          "ConflictContent": {
+            "description": "내용으로 풀기.",
+            "properties": {
+              "bom": {
+                "default": false,
+                "description": "앞에 UTF-8 BOM 을 붙인다(`fs.write` 와 같다).",
+                "type": "boolean"
+              },
+              "expectedVersion": {
+                "description": "`git.conflict.get` 이 준 `version`(`null` 이었으면 `null`). 지금 작업 트리 파일과 다르면 쓰지 않고 `CONFLICT` — `fs.write`\n의 `expectedVersion` 과 같다. 빠뜨릴 수 없다(그사이 터미널 · 다른 창에서 고친 것을 말없이 덮지 않게).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "description": "결과(UTF-8 글).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "expectedVersion"
+            ],
+            "type": "object"
+          },
           "ConflictPick": {
             "description": "해결에서 고르는 쪽.",
             "enum": [
@@ -2761,18 +2805,17 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
-          "bom": {
-            "default": false,
-            "description": "`content` 앞에 UTF-8 BOM 을 붙인다(`fs.write` 와 같다).",
-            "type": "boolean"
-          },
           "content": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConflictContent"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "default": null,
-            "description": "결과 내용(UTF-8 글). 파일에 쓰고 `git add` 한다. `side` 와 둘 중 하나만.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "결과 내용. 파일에 쓰고 `git add` 한다. `side` 와 둘 중 하나만."
           },
           "path": {
             "type": "string"
@@ -2822,12 +2865,16 @@
                 "description": "공통 조상(index 단계 1). 그 쪽이 없으면 `null`."
               },
               "binary": {
-                "description": "어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). `.gitattributes` 의 `merge` 속성은 보지 않는다.",
+                "description": "어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). 5 MiB 이하인 쪽만 본다(`large` 인 쪽은 목록이 풀지 않는다 —\n그쪽의 판정은 `git.conflict.get` 의 각 쪽 `judgment`). `.gitattributes` 의 `merge` 속성은 보지 않는다.",
                 "type": "boolean"
               },
               "kind": {
                 "$ref": "#/$defs/GitConflict",
                 "description": "index 단계가 있는 쪽들로 가른 갈래(`git status --porcelain` 의 두 글자 — `git.status` 와 같은 값)."
+              },
+              "large": {
+                "description": "어느 쪽이든 편집 기준(결정 M1-D9 의 5 MiB)을 넘는다 — 자동 병합 결과가 없으므로 창은 한쪽 고르기만 한다.",
+                "type": "boolean"
               },
               "ours": {
                 "anyOf": [
@@ -2841,7 +2888,7 @@
                 "description": "우리 쪽(단계 2) — HEAD 쪽이다. rebase 중이면 옮겨 가는 대상(upstream) 쪽이다(git 의 `--ours` 와 같다)."
               },
               "path": {
-                "description": "작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다.",
+                "description": "작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다 — 그런 경로는 `git.conflict.get` ·\n`git.conflict.resolve` 로 지목할 수 없다(invalid params).",
                 "type": "string"
               },
               "submodule": {
@@ -2877,6 +2924,7 @@
               "binary",
               "submodule",
               "symlink",
+              "large",
               "tooLarge"
             ],
             "type": "object"
@@ -3004,12 +3052,16 @@
                 "description": "공통 조상(index 단계 1). 그 쪽이 없으면 `null`."
               },
               "binary": {
-                "description": "어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). `.gitattributes` 의 `merge` 속성은 보지 않는다.",
+                "description": "어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). 5 MiB 이하인 쪽만 본다(`large` 인 쪽은 목록이 풀지 않는다 —\n그쪽의 판정은 `git.conflict.get` 의 각 쪽 `judgment`). `.gitattributes` 의 `merge` 속성은 보지 않는다.",
                 "type": "boolean"
               },
               "kind": {
                 "$ref": "#/$defs/GitConflict",
                 "description": "index 단계가 있는 쪽들로 가른 갈래(`git status --porcelain` 의 두 글자 — `git.status` 와 같은 값)."
+              },
+              "large": {
+                "description": "어느 쪽이든 편집 기준(결정 M1-D9 의 5 MiB)을 넘는다 — 자동 병합 결과가 없으므로 창은 한쪽 고르기만 한다.",
+                "type": "boolean"
               },
               "ours": {
                 "anyOf": [
@@ -3023,7 +3075,7 @@
                 "description": "우리 쪽(단계 2) — HEAD 쪽이다. rebase 중이면 옮겨 가는 대상(upstream) 쪽이다(git 의 `--ours` 와 같다)."
               },
               "path": {
-                "description": "작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다.",
+                "description": "작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다 — 그런 경로는 `git.conflict.get` ·\n`git.conflict.resolve` 로 지목할 수 없다(invalid params).",
                 "type": "string"
               },
               "submodule": {
@@ -3059,6 +3111,7 @@
               "binary",
               "submodule",
               "symlink",
+              "large",
               "tooLarge"
             ],
             "type": "object"

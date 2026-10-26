@@ -1,14 +1,20 @@
 //! 충돌 데이터 · 해결(`docs/design/13-m2-plan.md` M2-11 — F5-13 의 코어, 결정 M2-D4).
 //!
 //! - 읽기(`git.conflicts` · `git.conflict.get`): index 의 단계 1(base) · 2(ours) · 3(theirs)과 그 blob 을 gix 로 읽는다. 미신뢰
-//!   프로젝트도 같은 길이다 — git CLI 를 띄우지 않고, 작업 트리를 읽지 않으므로 필터 드라이버가 돌 일도 없다. 자동 병합 결과와
-//!   구간은 [`merge`](diff3)가 계산한다. 각 쪽의 내용은 대용량 기준(결정 M1-D9)을 따른다: 50 MiB 를 넘으면 풀지 않고, 5 MiB 를
-//!   넘으면 `git.blob` 과 같은 차례(`crate::diff::blob::BIG_BLOBS`)를 받아 푼다.
+//!   프로젝트도 같은 길이다 — git CLI 를 띄우지 않는다. 작업 트리는 `git.conflict.get` 이 그 파일의 `version` 을 만들려고 바이트만
+//!   읽으므로(git 을 거치지 않는다) 필터 드라이버가 돌 일도 없다. 자동 병합 결과와 구간은 [`merge`](diff3)가 계산한다. 각 쪽의
+//!   내용은 대용량 기준(결정 M1-D9)을 따른다: 50 MiB 를 넘으면 풀지 않고, 5 MiB 를 넘으면 `git.conflict.get` 만 `git.blob` 과 같은
+//!   차례(`crate::diff::blob::BIG_BLOBS`)를 받아 푼다 — 목록은 그 쪽을 풀지 않는다(내용이 필요 없다).
+//! - 경로는 index 의 바이트로 맞춘다. UTF-8 이 아닌 경로는 목록에 U+FFFD 로 보이지만 get · resolve 로 지목할 수 없다(invalid
+//!   params) — 같은 글자로 보이는 다른 이름을 만들지 않게.
 //! - 해결(`git.conflict.resolve`): 쓰기 실행기([`crate::write`])로 돈다 — 미저장 문서 확인은 그 경로 하나다. 저장소 잠금 안에서 그
 //!   경로가 아직 충돌 중인지 다시 읽은 뒤:
-//!   - `content`: 작업 트리에 원자 쓰기(`pw_fs::write::write_atomic`)를 하고 `git add`. 경로 판정은 파일 조작(M1-21)의 규칙 A 다 —
-//!     들어 있는 폴더를 실제 경로로 풀어 작업 트리 안이어야 하고, 그 항목이 심링크면 대상도 작업 트리 안이어야 한다. 쓰기는 항목
-//!     자체를 바꾼다(심링크면 링크가 일반 파일이 된다 — `git add` 가 링크를 담지 않게).
+//!   - `content`: 작업 트리 파일이 `git.conflict.get` 이 준 `version` 그대로일 때만(아니면 `CONFLICT` — `fs.write` 의
+//!     `expectedVersion` 과 같다) 원자 쓰기(`pw_fs::write::write_atomic`)를 하고 `git add`. 경로 판정은 파일 조작(M1-21)의 규칙 A
+//!     에 git 의 판정 하나를 더한 것이다 — 앞 폴더 중 하나라도 심링크면 거절하고(git 의 「beyond a symbolic link」: 작업 트리 안을
+//!     가리키는 링크여도 따라가면 다른 git 경로에 쓴다), 들어 있는 폴더를 실제 경로로 풀어 작업 트리 안이어야 하고, 그 항목이
+//!     심링크면 대상도 작업 트리 안이어야 한다. 쓰기는 항목 자체를 바꾼다(심링크면 링크가 일반 파일이 된다 — `git add` 가 링크를
+//!     담지 않게).
 //!   - `side`: 그쪽이 있으면 `git checkout --ours|--theirs` 뒤 `git add` — git 이 smudge 필터 · 줄바꿈 변환을 하고(LFS · autocrlf
 //!     에서도 맞는 파일), 앞 폴더의 심링크를 따라 쓰지 않는다. 서브모듈이면 `git update-index --cacheinfo` 로 index 만 바꾼다(서브모듈
 //!     체크아웃은 그대로 — merge 가 서브모듈을 옮기지 않는 것과 같다). 그쪽이 지운 쪽이면 `git rm`.
@@ -21,14 +27,16 @@ pub mod methods;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
 use gix::index::entry::Mode;
+use pw_core::registry::path::normalize;
 use pw_fs::judge::{Bom, Judgment, judge};
 use pw_fs::limits::{EDITABLE_MAX, READ_ONLY_MAX, SNIFF_BYTES};
+use pw_fs::read::read_whole;
 use pw_fs::scope::{Denied, Roots};
 use pw_rpc::{RpcError, code};
 
@@ -37,9 +45,9 @@ use crate::status::GitConflict;
 use crate::write::{Changes, GitWrite, WriteError, WriteRequest};
 use crate::{Git, Opened};
 use methods::{
-    ConflictFile, ConflictPick, ConflictSide, ConflictStage, GitConflictDetail, GitConflictParams,
-    GitConflictResolveParams, GitConflicts, GitConflictsParams, MergeLines, MergeRegion,
-    MergeRegionKind,
+    ConflictContent, ConflictFile, ConflictPick, ConflictSide, ConflictStage, GitConflictDetail,
+    GitConflictParams, GitConflictResolveParams, GitConflicts, GitConflictsParams, MergeLines,
+    MergeRegion, MergeRegionKind,
 };
 
 /// 해결 Task 의 제목(`extensions/i18n-default/i18n/*/project.ftl`).
@@ -67,19 +75,27 @@ impl Git {
             .map(|stage| stage.map(|s| Side::load(&opened.repo, s)).transpose());
         let [base, ours, theirs] = sides;
         let sides = [base?, ours?, theirs?];
-        let file = entry.file(&sides);
+        let file = entry.file(sides.iter().flatten().map(Side::seen));
         let (merged, regions) = match merged(&sides) {
             Some((text, regions)) => (Some(text), regions),
             None => (None, Vec::new()),
         };
+        let clean =
+            merged.is_some() && !regions.iter().any(|r| r.kind == MergeRegionKind::Conflict);
+        // 못 읽는 파일(권한 등)이어도 세 쪽은 보인다 — 그 파일에 쓰는 해결이 그 오류를 낸다.
+        let version = work_version(&opened.target.work_tree, &params.path)
+            .ok()
+            .flatten();
         let [base, ours, theirs] = sides.map(|s| s.map(Side::into_rpc));
         Ok(GitConflictDetail {
             work_tree: crate::status::display(&opened.target.work_tree),
             file,
+            version,
             base,
             ours,
             theirs,
             merged,
+            clean,
             regions,
         })
     }
@@ -93,20 +109,25 @@ impl GitWrite {
     ) -> Result<GitConflicts, WriteError> {
         check_path(&params.path).map_err(WriteError::Rpc)?;
         let resolution = match (params.content, params.side) {
-            (Some(text), None) => {
+            (
+                Some(ConflictContent {
+                    text,
+                    bom,
+                    expected_version,
+                }),
+                None,
+            ) => {
                 let mut bytes = Vec::with_capacity(text.len() + UTF8_BOM.len());
-                if params.bom {
+                if bom {
                     bytes.extend_from_slice(UTF8_BOM);
                 }
                 bytes.extend_from_slice(text.as_bytes());
-                Resolution::Content(bytes)
+                Resolution::Content {
+                    bytes: bytes.into(),
+                    expected: expected_version,
+                }
             }
-            (None, Some(side)) if !params.bom => Resolution::Side(side),
-            (None, Some(_)) => {
-                return Err(WriteError::Rpc(RpcError::invalid_params(
-                    "`bom` applies only to `content`",
-                )));
-            }
+            (None, Some(side)) => Resolution::Side(side),
             _ => {
                 return Err(WriteError::Rpc(RpcError::invalid_params(
                     "give exactly one of `content` or `side`",
@@ -114,26 +135,38 @@ impl GitWrite {
             }
         };
         let path = params.path;
-        // 미저장 확인을 묻기 전에 거절할 것은 거절한다(충돌 중이 아님 · 내용으로 풀 수 없는 갈래). 잠금 안에서 다시 본다.
+        // 미저장 확인을 묻기 전에 거절할 것은 거절한다(충돌 중이 아님 · 내용으로 풀 수 없는 갈래 · 쓸 수 없는 자리 · 그사이 바뀐
+        // 파일). 잠금 안에서 다시 본다.
         let precheck = {
-            let (git, project, worktree, path) = (
+            let (git, project, worktree, path, resolution) = (
                 Arc::clone(self.git()),
                 params.project_id.clone(),
                 params.worktree.clone(),
                 path.clone(),
+                resolution.clone(),
             );
-            tokio::task::spawn_blocking(move || match git.open(&project, worktree.as_deref())? {
-                Some(opened) => find(&opened.repo, &path).map(Some),
-                None => Ok(None),
+            tokio::task::spawn_blocking(move || {
+                let Some(opened) = git
+                    .open(&project, worktree.as_deref())
+                    .map_err(WriteError::Rpc)?
+                else {
+                    return Err(WriteError::NoRepository);
+                };
+                let entry = find(&opened.repo, &path).map_err(WriteError::Rpc)?;
+                fits(&entry, &resolution).map_err(WriteError::Rpc)?;
+                match &resolution {
+                    Resolution::Content { expected, .. } => {
+                        let work_tree = &opened.target.work_tree;
+                        place(work_tree, &path).map_err(WriteError::Rpc)?;
+                        unchanged(work_tree, &path, expected.as_ref())
+                    }
+                    Resolution::Side(_) => Ok(()),
+                }
             })
             .await
             .map_err(|e| WriteError::Internal(e.to_string()))?
         };
-        match precheck {
-            Ok(Some(entry)) => fits(&entry, &resolution).map_err(WriteError::Rpc)?,
-            Ok(None) => return Err(WriteError::NoRepository),
-            Err(e) => return Err(WriteError::Rpc(e)),
-        }
+        precheck?;
         let request = WriteRequest {
             project_id: params.project_id,
             worktree: params.worktree,
@@ -156,11 +189,14 @@ impl GitWrite {
             };
             fits(&entry, &resolution).map_err(WriteError::Rpc)?;
             match resolution {
-                Resolution::Content(bytes) => {
+                Resolution::Content { bytes, expected } => {
                     let (work_tree, rel) = (ctx.work_tree().to_path_buf(), path.clone());
-                    tokio::task::spawn_blocking(move || write_content(&work_tree, &rel, &bytes))
-                        .await
-                        .map_err(|e| WriteError::Internal(e.to_string()))??;
+                    tokio::task::spawn_blocking(move || {
+                        unchanged(&work_tree, &rel, expected.as_ref())?;
+                        write_content(&work_tree, &rel, &bytes)
+                    })
+                    .await
+                    .map_err(|e| WriteError::Internal(e.to_string()))??;
                     ctx.run(literal(&["add", "--", &path])).await?;
                 }
                 Resolution::Side(pick) => match entry.side(pick) {
@@ -188,14 +224,19 @@ impl GitWrite {
     }
 }
 
+#[derive(Clone)]
 enum Resolution {
-    Content(Vec<u8>),
+    Content {
+        bytes: Arc<[u8]>,
+        /// `git.conflict.get` 이 준 작업 트리 파일의 `version`(없던 파일이면 `None`).
+        expected: Option<String>,
+    },
     Side(ConflictPick),
 }
 
 /// 내용으로는 서브모듈 · 심링크 충돌을 풀 수 없다 — 한쪽을 고른다.
 fn fits(entry: &Entry, resolution: &Resolution) -> Result<(), RpcError> {
-    if matches!(resolution, Resolution::Content(_))
+    if matches!(resolution, Resolution::Content { .. })
         && (entry.has(Mode::COMMIT) || entry.has(Mode::SYMLINK))
     {
         return Err(RpcError::invalid_params(format!(
@@ -258,6 +299,9 @@ impl Stage {
 /// 충돌 경로 하나: base · ours · theirs 단계.
 #[derive(Debug, Clone)]
 struct Entry {
+    /// index 의 경로 바이트.
+    raw: Vec<u8>,
+    /// 보이는 이름(UTF-8 이 아닌 바이트는 U+FFFD).
     path: String,
     stages: [Option<Stage>; 3],
 }
@@ -286,20 +330,59 @@ impl Entry {
         }
     }
 
-    fn file(&self, sides: &[Option<Side>; 3]) -> ConflictFile {
-        let sides = || sides.iter().flatten();
+    /// `seen`: 있는 쪽마다 하나.
+    fn file(&self, seen: impl Iterator<Item = Seen>) -> ConflictFile {
         let [base, ours, theirs] = self.stages.map(|s| s.as_ref().map(Stage::rpc));
-        ConflictFile {
+        let mut file = ConflictFile {
             path: self.path.clone(),
             kind: self.kind(),
             base,
             ours,
             theirs,
-            binary: sides().any(|s| s.judgment.as_ref().is_some_and(|j| j.binary)),
+            binary: false,
             submodule: self.has(Mode::COMMIT),
             symlink: self.has(Mode::SYMLINK),
-            too_large: sides().any(|s| s.too_large),
+            large: false,
+            too_large: false,
+        };
+        for side in seen {
+            file.binary |= side.binary;
+            file.large |= side.large;
+            file.too_large |= side.too_large;
         }
+        file
+    }
+}
+
+/// 목록에 싣는 한 쪽의 표시. 바이너리 판정은 5 MiB 이하인 쪽만 한다 — 목록은 그보다 큰 쪽을 풀지 않고, get 도 같은 값을 낸다.
+#[derive(Debug, Clone, Copy, Default)]
+struct Seen {
+    binary: bool,
+    large: bool,
+    too_large: bool,
+}
+
+impl Seen {
+    /// 목록의 한 쪽: 크기는 header 로 보고, 5 MiB 이하만 풀어 앞 8 KiB 로 판정한다(풀어 둔 내용은 바로 버린다).
+    fn of(repo: &gix::Repository, stage: Stage) -> Result<Self, RpcError> {
+        if stage.mode == Mode::COMMIT {
+            return Ok(Self::default());
+        }
+        let size = repo.find_header(stage.id).map_err(internal)?.size();
+        if size > EDITABLE_MAX {
+            return Ok(Self {
+                binary: false,
+                large: true,
+                too_large: size > READ_ONLY_MAX,
+            });
+        }
+        let data = repo.find_object(stage.id).map_err(internal)?.detach().data;
+        let head = &data[..data.len().min(SNIFF_BYTES)];
+        let bom = bom_len(head);
+        Ok(Self {
+            binary: judge(head, &data[bom..], size, false).binary,
+            ..Self::default()
+        })
     }
 }
 
@@ -319,6 +402,7 @@ fn entries(repo: &gix::Repository) -> Result<Vec<Entry>, RpcError> {
                 out.push((
                     path.to_vec(),
                     Entry {
+                        raw: path.to_vec(),
                         path: path.to_str_lossy().into_owned(),
                         stages: [None; 3],
                     },
@@ -334,26 +418,36 @@ fn entries(repo: &gix::Repository) -> Result<Vec<Entry>, RpcError> {
     Ok(out.into_iter().map(|(_, e)| e).collect())
 }
 
-/// 충돌 중인 `path`. 아니면 not found.
+/// 충돌 중인 `path`(index 의 바이트가 같은 것). 아니면 not found. UTF-8 이 아닌 경로가 U+FFFD 로 그 글자가 되면 invalid params —
+/// 그 이름으로 쓰면 다른 파일을 만든다.
 fn find(repo: &gix::Repository, path: &str) -> Result<Entry, RpcError> {
-    entries(repo)?
-        .into_iter()
-        .find(|e| e.path == path)
-        .ok_or_else(|| RpcError::new(code::NOT_FOUND, format!("`{path}` is not in conflict")))
+    let entries = entries(repo)?;
+    if let Some(at) = entries.iter().position(|e| e.raw == path.as_bytes()) {
+        return Ok(entries.into_iter().nth(at).expect("found above"));
+    }
+    if entries.iter().any(|e| e.path == path) {
+        return Err(RpcError::invalid_params(format!(
+            "`{path}` is not UTF-8 in the index and cannot be named here; resolve it with git"
+        )));
+    }
+    Err(RpcError::new(
+        code::NOT_FOUND,
+        format!("`{path}` is not in conflict"),
+    ))
 }
 
-/// 충돌 목록. 바이너리 판정에 각 쪽의 blob 을 읽는다.
+/// 충돌 목록. 바이너리 판정에 5 MiB 이하인 쪽의 blob 을 읽는다([`Seen::of`]).
 fn list(opened: &Opened) -> Result<GitConflicts, RpcError> {
     let repo = &opened.repo;
     let mut files = Vec::new();
     for entry in entries(repo)? {
-        let mut sides: [Option<Side>; 3] = [None, None, None];
-        for (slot, stage) in sides.iter_mut().zip(entry.stages) {
-            if let Some(stage) = stage {
-                *slot = Some(Side::load(repo, stage)?);
-            }
-        }
-        files.push(entry.file(&sides));
+        let seen = entry
+            .stages
+            .iter()
+            .flatten()
+            .map(|&stage| Seen::of(repo, stage))
+            .collect::<Result<Vec<_>, _>>()?;
+        files.push(entry.file(seen.into_iter()));
     }
     Ok(GitConflicts {
         work_tree: crate::status::display(&opened.target.work_tree),
@@ -403,6 +497,16 @@ impl Side {
         side.judgment = Some(judge(head, &data[bom..], side.size, false));
         side.data = Some(data);
         Ok(side)
+    }
+
+    /// 목록과 같은 표시([`Seen`]).
+    fn seen(&self) -> Seen {
+        let large = self.size > EDITABLE_MAX;
+        Seen {
+            binary: !large && self.judgment.as_ref().is_some_and(|j| j.binary),
+            large,
+            too_large: self.too_large,
+        }
     }
 
     /// 병합할 수 있는 쪽이면 BOM 을 뗀 내용.
@@ -470,11 +574,31 @@ fn merged(sides: &[Option<Side>; 3]) -> Option<(String, Vec<MergeRegion>)> {
     Some((text, regions))
 }
 
-/// `content` 해결의 파일 쓰기(모듈 머리 주석의 규칙 A).
-fn write_content(work_tree: &Path, rel: &str, bytes: &[u8]) -> Result<(), WriteError> {
-    use pw_core::registry::path::normalize;
+/// `content` 해결의 쓸 자리(모듈 머리 주석의 규칙 A): 들어 있는 폴더(실제 경로)와 그 아래의 항목. `version` 도 이 판정을
+/// 거친 자리만 읽는다.
+struct Place {
+    parent: PathBuf,
+    item: PathBuf,
+}
 
-    let refuse = |d: Denied| WriteError::Rpc(RpcError::invalid_params(d.to_string()));
+fn place(work_tree: &Path, rel: &str) -> Result<Place, RpcError> {
+    let refuse = |d: Denied| RpcError::invalid_params(d.to_string());
+    // git 과 같이 앞 폴더의 링크는 대상이 어디든 따라가지 않는다(`git add` 의 「beyond a symbolic link」). 없는 폴더부터는 만든다.
+    let mut at = work_tree.to_path_buf();
+    let leading = rel.rsplit_once('/').map_or("", |(dir, _)| dir);
+    for part in leading.split('/').filter(|p| !p.is_empty()) {
+        at.push(part);
+        match std::fs::symlink_metadata(&at) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(RpcError::invalid_params(format!(
+                    "`{rel}` is beyond a symbolic link"
+                )));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => return Err(internal(format!("`{rel}`: {e}"))),
+        }
+    }
     let roots = Roots::new([work_tree.to_path_buf()]);
     let requested = work_tree.join(rel);
     let (Some(parent), Some(name)) = (requested.parent(), requested.file_name()) else {
@@ -485,6 +609,69 @@ fn write_content(work_tree: &Path, rel: &str, bytes: &[u8]) -> Result<(), WriteE
     if !roots.contains(&item) || roots.as_slice().contains(&item) {
         return Err(refuse(Denied::Outside(requested)));
     }
+    Ok(Place { parent, item })
+}
+
+/// 작업 트리의 그 파일의 `version`(`fs.read` 와 같은 값). 일반 파일이 없거나(없음 · 폴더 · 루트 밖 링크 · 링크 앞 폴더) 50 MiB 를
+/// 넘으면 `None` — 넘는 파일은 [`unchanged`] 가 거절한다.
+fn work_version(work_tree: &Path, rel: &str) -> std::io::Result<Option<String>> {
+    Ok(work_file(work_tree, rel)?.and_then(|(_, version)| version))
+}
+
+/// (크기, 50 MiB 이하면 `version`). 일반 파일이 없으면 `None`.
+fn work_file(work_tree: &Path, rel: &str) -> std::io::Result<Option<(u64, Option<String>)>> {
+    let Ok(Place { item, .. }) = place(work_tree, rel) else {
+        return Ok(None);
+    };
+    let roots = Roots::new([work_tree.to_path_buf()]);
+    let Ok(readable) = roots.readable(&item) else {
+        return Ok(None);
+    };
+    let meta = match std::fs::metadata(&readable.real) {
+        Ok(meta) if meta.is_file() => meta,
+        Ok(_) => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if meta.len() > READ_ONLY_MAX {
+        return Ok(Some((meta.len(), None)));
+    }
+    let snapshot = read_whole(&readable.real, &|p| roots.open_inside(p))?;
+    Ok(Some((
+        snapshot.bytes.len() as u64,
+        Some(snapshot.version()),
+    )))
+}
+
+/// `content` 해결: 작업 트리 파일이 기대한 `version` 그대로인가. 다르면 `CONFLICT`(`fs.write` 와 같은 꼴 — `data.current` 가 지금의
+/// `version`).
+fn unchanged(work_tree: &Path, rel: &str, expected: Option<&String>) -> Result<(), WriteError> {
+    let current = work_file(work_tree, rel)
+        .map_err(|e| WriteError::Internal(format!("read `{rel}`: {e}")))?;
+    let current = match current {
+        Some((size, None)) => {
+            return Err(WriteError::Rpc(RpcError::invalid_params(format!(
+                "`{rel}` is {size} bytes in the work tree — too large to compare before writing"
+            ))));
+        }
+        Some((_, version)) => version,
+        None => None,
+    };
+    if current.as_ref() != expected {
+        return Err(WriteError::Rpc(
+            RpcError::new(code::CONFLICT, "conflict")
+                .with_data(serde_json::json!({ "path": rel, "current": current })),
+        ));
+    }
+    Ok(())
+}
+
+/// `content` 해결의 파일 쓰기([`place`] 의 판정).
+fn write_content(work_tree: &Path, rel: &str, bytes: &[u8]) -> Result<(), WriteError> {
+    let refuse = |d: Denied| WriteError::Rpc(RpcError::invalid_params(d.to_string()));
+    let roots = Roots::new([work_tree.to_path_buf()]);
+    let Place { parent, item } = place(work_tree, rel).map_err(WriteError::Rpc)?;
+    let requested = work_tree.join(rel);
     match std::fs::symlink_metadata(&item) {
         Ok(meta) if meta.is_dir() => {
             return Err(WriteError::Rpc(RpcError::invalid_params(format!(

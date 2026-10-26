@@ -133,6 +133,7 @@ fn every_kind_is_listed_like_git_status_with_the_index_stages() {
     #[cfg(unix)]
     assert_eq!(flagged(|f| f.symlink), ["link"]);
     assert_eq!(flagged(|f| f.too_large), Vec::<&str>::new());
+    assert_eq!(flagged(|f| f.large), Vec::<&str>::new());
 }
 
 /// 병합할 수 있는 충돌마다 구간이 그 세 단계를 `git merge-file -p --diff3` 한 것과 같다.
@@ -365,20 +366,62 @@ fn side_contents_follow_the_large_file_limits() {
     );
     assert!(huge.file.too_large);
     assert_eq!(huge.merged, None);
-    let flags: Vec<(String, bool)> = h
-        .conflicts()
+    // 목록은 5 MiB 를 넘는 쪽을 풀지 않는다 — 큰 blob 차례가 다 차 있어도 목록은 된다. get 의 `file` 은 목록의 그 항목과 같다.
+    let seats: Vec<_> = (0..crate::diff::blob::BIG_BLOBS_AT_ONCE)
+        .map(|_| {
+            crate::diff::blob::BIG_BLOBS
+                .enter(std::time::Duration::ZERO)
+                .unwrap()
+        })
+        .collect();
+    let list = h.conflicts();
+    drop(seats);
+    let flags: Vec<(&str, bool, bool)> = list
         .files
-        .into_iter()
-        .map(|f| (f.path, f.too_large))
+        .iter()
+        .map(|f| (f.path.as_str(), f.large, f.too_large))
         .collect();
     assert_eq!(
         flags,
         [
-            ("edit.txt".to_owned(), false),
-            ("huge.txt".to_owned(), true),
-            ("read-only.txt".to_owned(), false)
+            ("edit.txt", false, false),
+            ("huge.txt", true, true),
+            ("read-only.txt", true, false)
         ]
     );
+    for file in &list.files {
+        assert_eq!(&h.get(&file.path).unwrap().file, file, "{}", file.path);
+    }
+}
+
+/// git 이 충돌로 남겼어도 이 계산에 충돌 구간이 없으면 `clean` 이다(git merge 는 histogram, 이 계산은 Myers — 드물게 갈린다).
+/// 여기서는 merge 없이 깨끗이 병합되는 세 쪽을 단계로 심어 그 경우를 만든다.
+#[test]
+fn a_merge_without_conflict_regions_is_clean() {
+    let r = TestRepo::with_commit();
+    r.stage_conflict(
+        "apart.txt",
+        Some(b"1\n2\n3\n4\n5\n"),
+        Some(b"1 ours\n2\n3\n4\n5\n"),
+        Some(b"1\n2\n3\n4\n5 theirs\n"),
+    );
+    r.stage_conflict(
+        "both.txt",
+        Some(BOTH_BASE.as_bytes()),
+        Some(BOTH_OURS.as_bytes()),
+        Some(BOTH_THEIRS.as_bytes()),
+    );
+    r.stage_conflict("binary.bin", Some(b"\0a"), Some(b"\0o"), Some(b"\0t"));
+    let h = Host::new(r);
+    let apart = h.get("apart.txt").unwrap();
+    assert_eq!(apart.merged.as_deref(), Some("1 ours\n2\n3\n4\n5 theirs\n"));
+    assert_eq!(apart.regions.len(), 2);
+    assert!(apart.clean);
+    assert!(
+        !h.get("both.txt").unwrap().clean,
+        "it has a conflict region"
+    );
+    assert!(!h.get("binary.bin").unwrap().clean, "no merge result");
 }
 
 #[test]

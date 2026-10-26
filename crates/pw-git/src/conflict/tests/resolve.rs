@@ -1,6 +1,7 @@
 //! `git.conflict.resolve`: 해결한 경로는 목록에서 빠지고 index 에 단계 0 으로만 있다(지운 쪽이면 없다). 갈래마다 한쪽 고르기가
 //! 되고(삭제/수정 충돌의 양쪽 방향 포함), 모든 충돌을 풀면 `git.operation.continue` 가 머지 커밋을 만든다. 내용 쓰기는 경로 규칙
-//! A 를 지키고, 한쪽 고르기는 루트 밖으로 링크된 앞 폴더를 따라 쓰지 않는다. 미저장 확인은 그 경로 하나를 묻는다.
+//! A 를 지키고(앞 폴더가 링크면 안을 가리켜도 거절), 한쪽 고르기는 루트 밖으로 링크된 앞 폴더를 따라 쓰지 않는다. 내용 쓰기는
+//! `git.conflict.get` 이 준 `version` 이 지금 파일과 같을 때만 한다. 미저장 확인은 그 경로 하나를 묻는다.
 
 use std::fs;
 use std::path::Path;
@@ -8,7 +9,10 @@ use std::path::Path;
 use pw_rpc::code;
 
 use super::*;
-use crate::conflict::methods::{ConflictPick, GitConflictResolveParams, GitConflicts};
+use crate::conflict::methods::{
+    ConflictContent, ConflictPick, GitConflictParams, GitConflictResolveParams, GitConflicts,
+    GitConflictsParams,
+};
 use crate::testing::conflict::{BOTH_OURS, BOTH_THEIRS, SUB_OURS, SUB_THEIRS};
 use crate::testing::write::{Window, WriteFixture};
 use crate::write::{Askpass, GitPromptAnswer, GitPromptRequest, OperationAction, WriteError};
@@ -43,13 +47,58 @@ async fn pick(
         .await
 }
 
+/// `git.conflict.get` 의 `version`(창이 하는 대로). get 이 실패하는 경로면 `None`.
+fn version(f: &WriteFixture, path: &str) -> Option<String> {
+    f.write
+        .git()
+        .conflict(&GitConflictParams {
+            project_id: f.project.clone(),
+            worktree: None,
+            path: path.to_owned(),
+        })
+        .ok()
+        .and_then(|d| d.version)
+}
+
+/// get 이 준 `version` 으로 내용 해결(창이 하는 대로).
 async fn content(f: &WriteFixture, path: &str, text: &str) -> Result<GitConflicts, WriteError> {
+    let expected_version = version(f, path);
+    content_at(f, path, text, expected_version).await
+}
+
+async fn content_at(
+    f: &WriteFixture,
+    path: &str,
+    text: &str,
+    expected_version: Option<String>,
+) -> Result<GitConflicts, WriteError> {
     f.write
         .resolve(GitConflictResolveParams {
-            content: Some(text.to_owned()),
+            content: Some(ConflictContent {
+                text: text.to_owned(),
+                bom: false,
+                expected_version,
+            }),
             ..params(f, path)
         })
         .await
+}
+
+fn conflicts(f: &WriteFixture) -> GitConflicts {
+    f.write
+        .git()
+        .conflicts(&GitConflictsParams {
+            project_id: f.project.clone(),
+            worktree: None,
+        })
+        .unwrap()
+}
+
+fn rpc_code(r: &Result<GitConflicts, WriteError>) -> i32 {
+    match r {
+        Err(WriteError::Rpc(e)) => e.code,
+        other => panic!("expected an RPC error, got {other:?}"),
+    }
 }
 
 /// index 의 그 경로 항목(단계, 모드, 해시).
@@ -110,8 +159,11 @@ fn content_is_written_staged_and_leaves_the_list() {
         // BOM 은 `bom` 으로 붙인다.
         f.write
             .resolve(GitConflictResolveParams {
-                content: Some("with bom\n".to_owned()),
-                bom: true,
+                content: Some(ConflictContent {
+                    text: "with bom\n".to_owned(),
+                    bom: true,
+                    expected_version: version(&f, "added.txt"),
+                }),
                 ..params(&f, "added.txt")
             })
             .await
@@ -203,17 +255,7 @@ fn picking_a_side_resolves_every_kind_and_continue_commits_the_merge() {
                     }
                 }
             }
-            assert!(
-                f.write
-                    .git()
-                    .conflicts(&crate::conflict::methods::GitConflictsParams {
-                        project_id: f.project.clone(),
-                        worktree: None,
-                    })
-                    .unwrap()
-                    .files
-                    .is_empty()
-            );
+            assert!(conflicts(&f).files.is_empty());
 
             let done = f
                 .write
@@ -250,7 +292,11 @@ fn requests_that_do_not_fit_are_refused_before_asking_the_window() {
             other => panic!("expected an RPC error, got {other:?}"),
         };
         let both = GitConflictResolveParams {
-            content: Some("x".into()),
+            content: Some(ConflictContent {
+                text: "x".into(),
+                bom: false,
+                expected_version: version(&f, "both.txt"),
+            }),
             side: Some(ConflictPick::Ours),
             ..params(&f, "both.txt")
         };
@@ -259,15 +305,6 @@ fn requests_that_do_not_fit_are_refused_before_asking_the_window() {
             invalid(f.write.resolve(params(&f, "both.txt")).await),
             code::INVALID_PARAMS,
             "neither content nor side"
-        );
-        let bom_side = GitConflictResolveParams {
-            bom: true,
-            side: Some(ConflictPick::Ours),
-            ..params(&f, "both.txt")
-        };
-        assert_eq!(
-            invalid(f.write.resolve(bom_side).await),
-            code::INVALID_PARAMS
         );
         assert_eq!(
             invalid(content(&f, "../x", "x").await),
@@ -397,5 +434,216 @@ fn paths_with_pathspec_characters_resolve_only_themselves() {
             .await
             .unwrap();
         assert!(left.files.is_empty());
+    });
+}
+
+/// `expectedVersion` 은 빠뜨릴 수 없다 — 없던 파일이면 `null` 을 적어 보낸다.
+#[test]
+fn the_expected_version_cannot_be_left_out() {
+    let parse = |content: serde_json::Value| {
+        serde_json::from_value::<GitConflictResolveParams>(serde_json::json!({
+            "projectId": "p",
+            "path": "a.txt",
+            "content": content,
+        }))
+    };
+    let err = parse(serde_json::json!({ "text": "x" })).unwrap_err();
+    assert!(err.to_string().contains("expectedVersion"), "{err}");
+    let none = parse(serde_json::json!({ "text": "x", "expectedVersion": null })).unwrap();
+    assert_eq!(none.content.unwrap().expected_version, None);
+    let some = parse(serde_json::json!({ "text": "x", "expectedVersion": "v" })).unwrap();
+    assert_eq!(some.content.unwrap().expected_version.as_deref(), Some("v"));
+}
+
+/// get 뒤에 작업 트리 파일이 바뀌었으면(터미널에서 고침) 내용 해결은 `CONFLICT` 이고 그 편집과 충돌이 그대로다. 없던 파일을
+/// 기대(`null`)했는데 있어도 같다. 지금 `version` 으로 다시 보내면 풀린다.
+#[test]
+fn content_over_a_file_changed_since_get_is_a_conflict() {
+    let repo = TestRepo::with_commit();
+    repo.stage_conflict("x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
+    isolate(repo.base());
+    block_on(async {
+        let f = fixture(repo);
+        let window = proceed(&f);
+        let file = f.repo.root().join("x.txt");
+        let seen = version(&f, "x.txt");
+        assert!(seen.is_some(), "the work tree file has a version");
+        fs::write(&file, "edited by hand\n").unwrap();
+
+        for expected in [seen, None] {
+            let refused = content_at(&f, "x.txt", "resolved\n", expected.clone()).await;
+            assert_eq!(rpc_code(&refused), code::CONFLICT, "{expected:?}");
+            let Err(WriteError::Rpc(e)) = &refused else {
+                unreachable!()
+            };
+            let current = e.data.as_ref().unwrap()["current"]
+                .as_str()
+                .map(str::to_owned);
+            assert_eq!(
+                current,
+                version(&f, "x.txt"),
+                "the error carries the current version"
+            );
+        }
+        assert_eq!(fs::read_to_string(&file).unwrap(), "edited by hand\n");
+        assert_eq!(index(&f, "x.txt").len(), 3, "still three stages");
+        assert_eq!(window.seen(), [], "refused before asking the window");
+
+        content(&f, "x.txt", "resolved\n").await.unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "resolved\n");
+
+        // 지워진 파일: get 은 `null` 을 주고, 그것으로 풀면 파일을 만든다.
+        f.repo
+            .stage_conflict("gone.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
+        fs::remove_file(f.repo.root().join("gone.txt")).unwrap();
+        assert_eq!(version(&f, "gone.txt"), None);
+        content(&f, "gone.txt", "made\n").await.unwrap();
+        assert_eq!(
+            fs::read_to_string(f.repo.root().join("gone.txt")).unwrap(),
+            "made\n"
+        );
+    });
+}
+
+/// 앞 폴더가 작업 트리 **안** 의 다른 폴더를 가리키는 링크여도 내용 쓰기는 거절한다 — 따라가면 다른 추적 파일을 덮는다(git 의
+/// 「beyond a symbolic link」). 거절은 창에 묻기 전이다.
+#[test]
+fn a_leading_folder_linked_inside_is_not_written_through() {
+    let repo = TestRepo::with_commit();
+    repo.write("other/f.txt", "OTHER ORIGINAL\n");
+    repo.git(&["add", "--", "other/f.txt"]);
+    repo.git(&["commit", "--quiet", "-m", "other"]);
+    repo.stage_conflict("sub/f.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
+    fs::remove_dir_all(repo.root().join("sub")).unwrap();
+    std::os::unix::fs::symlink("other", repo.root().join("sub")).unwrap();
+    // 덮이면 사라질, 커밋하지 않은 편집.
+    repo.write("other/f.txt", "OTHER EDITED\n");
+    isolate(repo.base());
+    block_on(async {
+        let f = fixture(repo);
+        let window = proceed(&f);
+        assert_eq!(version(&f, "sub/f.txt"), None, "no version through a link");
+        let refused = content_at(&f, "sub/f.txt", "RESOLVED\n", None).await;
+        assert_eq!(rpc_code(&refused), code::INVALID_PARAMS, "{refused:?}");
+        assert_eq!(
+            fs::read_to_string(f.repo.root().join("other/f.txt")).unwrap(),
+            "OTHER EDITED\n"
+        );
+        assert_eq!(index(&f, "sub/f.txt").len(), 3, "still three stages");
+        assert_eq!(window.seen(), [], "refused before asking the window");
+    });
+}
+
+/// index 의 UTF-8 이 아닌 경로(Linux 에서 만든 저장소)는 목록에 U+FFFD 로 보이지만 그 이름으로 get · resolve 하면 invalid params
+/// 다 — 그 이름의 새 파일을 만들거나 stage 하지 않는다. 그 글자 그대로의 이름(UTF-8)이 따로 충돌 중이면 그것을 고른다.
+#[test]
+fn a_path_that_is_not_utf8_cannot_be_named() {
+    let repo = TestRepo::with_commit();
+    let blob = repo.base().join("blob");
+    fs::write(&blob, "x\n").unwrap();
+    let id = repo.git(&["hash-object", "-w", "--", blob.to_str().unwrap()]);
+    let mut info = Vec::new();
+    for stage in 1..=3 {
+        info.extend_from_slice(format!("100644 {} {stage}\t", id.trim()).as_bytes());
+        info.extend_from_slice(b"caf\xe9.txt\n");
+    }
+    let list = repo.base().join("index-info");
+    fs::write(&list, info).unwrap();
+    let out = repo
+        .command_in(repo.root())
+        .args(["update-index", "--index-info"])
+        .stdin(fs::File::open(&list).unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ls = |r: &TestRepo| {
+        r.command_in(r.root())
+            .args(["ls-files", "-s", "-z"])
+            .output()
+            .unwrap()
+            .stdout
+    };
+    let names = |r: &TestRepo| {
+        let mut n: Vec<_> = fs::read_dir(r.root())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        n.sort();
+        n
+    };
+    let (index_before, files_before) = (ls(&repo), names(&repo));
+    isolate(repo.base());
+    block_on(async {
+        let f = fixture(repo);
+        let window = proceed(&f);
+        let shown = "caf\u{FFFD}.txt";
+        assert_eq!(paths(&conflicts(&f)), [shown]);
+        let err = f
+            .write
+            .git()
+            .conflict(&GitConflictParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                path: shown.to_owned(),
+            })
+            .unwrap_err();
+        assert_eq!(err.code, code::INVALID_PARAMS, "{err:?}");
+        let by_content = content_at(&f, shown, "resolved\n", None).await;
+        assert_eq!(
+            rpc_code(&by_content),
+            code::INVALID_PARAMS,
+            "{by_content:?}"
+        );
+        let by_side = pick(&f, shown, ConflictPick::Theirs).await;
+        assert_eq!(rpc_code(&by_side), code::INVALID_PARAMS, "{by_side:?}");
+        assert_eq!(names(&f.repo), files_before, "no file was made");
+        assert_eq!(ls(&f.repo), index_before, "the index is as it was");
+        assert_eq!(window.seen(), []);
+
+        // 같은 글자로 보이는 진짜 이름: 바이트가 같은 그것을 고르고, UTF-8 이 아닌 쪽은 그대로다.
+        f.repo
+            .stage_conflict(shown, Some(b"a\n"), Some(b"real ours\n"), Some(b"t\n"));
+        let real = f
+            .write
+            .git()
+            .conflict(&GitConflictParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                path: shown.to_owned(),
+            })
+            .unwrap();
+        assert_eq!(real.ours.unwrap().size, b"real ours\n".len() as u64);
+        let left = content(&f, shown, "resolved\n").await.unwrap();
+        assert_eq!(paths(&left), [shown], "the one that is not UTF-8 stays");
+        assert_eq!(index(&f, shown).len(), 1, "the real name is resolved");
+        assert_eq!(
+            fs::read_to_string(f.repo.root().join(shown)).unwrap(),
+            "resolved\n"
+        );
+    });
+}
+
+/// 미저장 확인을 기다리는 사이 파일이 바뀌어도(창이 저장했거나 터미널에서 고침) 잠금 안에서 다시 견주어 `CONFLICT` 다.
+#[test]
+fn content_over_a_file_changed_while_asking_is_a_conflict() {
+    let repo = TestRepo::with_commit();
+    repo.stage_conflict("x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
+    let file = repo.root().join("x.txt");
+    isolate(repo.base());
+    block_on(async {
+        let f = fixture(repo);
+        let edited = file.clone();
+        let _window = Window::open(&f.write, &f.project, move |_| {
+            fs::write(&edited, "saved while asking\n").unwrap();
+            Some(GitPromptAnswer::Proceed)
+        });
+        let refused = content(&f, "x.txt", "resolved\n").await;
+        assert_eq!(rpc_code(&refused), code::CONFLICT, "{refused:?}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "saved while asking\n");
+        assert_eq!(index(&f, "x.txt").len(), 3, "still three stages");
     });
 }

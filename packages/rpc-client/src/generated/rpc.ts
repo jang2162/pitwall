@@ -73,7 +73,8 @@ export type UnaryMethods = {
 	 */
 	"git.conflict.get": { params: GitConflictParams; result: GitConflictDetail };
 	/**
-	 * 충돌 경로 하나를 해결한다: `content` 면 파일에 쓰고(원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙) `git add`, `side` 면 그쪽을
+	 * 충돌 경로 하나를 해결한다: `content` 면 작업 트리 파일이 `expectedVersion` 그대로일 때(아니면 `CONFLICT`) 파일에 쓰고(원자
+	 * 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙 — 앞 폴더가 심링크면 거절) `git add`, `side` 면 그쪽을
 	 * `git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결
 	 * 뒤의 충돌 목록을 돌려준다.
 	 */
@@ -387,7 +388,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false,"fileScope":true},
 	"git.blob": {"name":"git.blob","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlobParams","output":"GitBlob","doc":" 리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).\n","mcp":false,"fileScope":false},
 	"git.conflict.get": {"name":"git.conflict.get","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictParams","output":"GitConflictDetail","doc":" 충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.\n","mcp":false,"fileScope":false},
-	"git.conflict.resolve": {"name":"git.conflict.resolve","kind":"unary","tier":"write","roles":["owner"],"params":"GitConflictResolveParams","output":"GitConflicts","doc":" 충돌 경로 하나를 해결한다: `content` 면 파일에 쓰고(원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙) `git add`, `side` 면 그쪽을\n `git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n 뒤의 충돌 목록을 돌려준다.\n","mcp":false,"fileScope":false},
+	"git.conflict.resolve": {"name":"git.conflict.resolve","kind":"unary","tier":"write","roles":["owner"],"params":"GitConflictResolveParams","output":"GitConflicts","doc":" 충돌 경로 하나를 해결한다: `content` 면 작업 트리 파일이 `expectedVersion` 그대로일 때(아니면 `CONFLICT`) 파일에 쓰고(원자\n 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙 — 앞 폴더가 심링크면 거절) `git add`, `side` 면 그쪽을\n `git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n 뒤의 충돌 목록을 돌려준다.\n","mcp":false,"fileScope":false},
 	"git.conflicts": {"name":"git.conflicts","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictsParams","output":"GitConflicts","doc":" 충돌 중인 경로 목록: index 단계로 가른 종류(양쪽 수정 · 우리/그쪽 삭제 · 양쪽 추가 …)와 바이너리 · 서브모듈 · 심링크 표시.\n 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.containedIn": {"name":"git.containedIn","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitContainedIn","doc":" 그 커밋을 담은(조상으로 가진) 브랜치 · 원격 브랜치 · 태그. 모든 ref 에서 이력을 걷는다 — 커밋 상세를 연 뒤 따로 부른다.\n","mcp":false,"fileScope":false},
 	"git.diff": {"name":"git.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffParams","output":"GitDiff","doc":" 두 쪽(커밋 · index · 작업 트리)의 diff: 바뀐 파일 목록(상태 · 이름 바뀜 · 모드 · 바이너리 · 서브모듈 포인터 · 생성 파일 ·\n 대용량)과 파일별 hunk(`git diff --find-renames -U3` 과 같다). 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
@@ -616,8 +617,24 @@ export type ConfigView = {
 	error: ConfigFault | null,
 };
 
+/**  내용으로 풀기. */
+export type ConflictContent = {
+	/**  결과(UTF-8 글). */
+	text: string,
+	/**  앞에 UTF-8 BOM 을 붙인다(`fs.write` 와 같다). */
+	bom?: boolean,
+	/**
+	 *  `git.conflict.get` 이 준 `version`(`null` 이었으면 `null`). 지금 작업 트리 파일과 다르면 쓰지 않고 `CONFLICT` — `fs.write`
+	 *  의 `expectedVersion` 과 같다. 빠뜨릴 수 없다(그사이 터미널 · 다른 창에서 고친 것을 말없이 덮지 않게).
+	 */
+	expectedVersion: string | null,
+};
+
 export type ConflictFile = {
-	/**  작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다. */
+	/**
+	 *  작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다 — 그런 경로는 `git.conflict.get` ·
+	 *  `git.conflict.resolve` 로 지목할 수 없다(invalid params).
+	 */
 	path: string,
 	/**  index 단계가 있는 쪽들로 가른 갈래(`git status --porcelain` 의 두 글자 — `git.status` 와 같은 값). */
 	kind: GitConflict,
@@ -627,12 +644,17 @@ export type ConflictFile = {
 	ours: ConflictStage | null,
 	/**  그쪽(단계 3) — 들여오는 커밋 쪽. rebase 중이면 다시 적용하는 커밋 쪽이다. */
 	theirs: ConflictStage | null,
-	/**  어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). `.gitattributes` 의 `merge` 속성은 보지 않는다. */
+	/**
+	 *  어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). 5 MiB 이하인 쪽만 본다(`large` 인 쪽은 목록이 풀지 않는다 —
+	 *  그쪽의 판정은 `git.conflict.get` 의 각 쪽 `judgment`). `.gitattributes` 의 `merge` 속성은 보지 않는다.
+	 */
 	binary: boolean,
 	/**  어느 쪽이든 서브모듈(`160000`)이다. */
 	submodule: boolean,
 	/**  어느 쪽이든 심링크(`120000`)다. */
 	symlink: boolean,
+	/**  어느 쪽이든 편집 기준(결정 M1-D9 의 5 MiB)을 넘는다 — 자동 병합 결과가 없으므로 창은 한쪽 고르기만 한다. */
+	large: boolean,
 	/**  어느 쪽이든 대용량 기준(결정 M1-D9 의 50 MiB)을 넘어 내용을 읽지 않았다 — 그쪽의 바이너리 여부는 모른다. */
 	tooLarge: boolean,
 };
@@ -1180,6 +1202,11 @@ export type GitConflictDetail = {
 	workTree: string,
 	/**  목록(`git.conflicts`)의 그 항목. */
 	file: ConflictFile,
+	/**
+	 *  작업 트리 파일의 지금 `version`(`fs.read` 와 같은 값) — `content` 로 풀 때 `expectedVersion` 으로 돌려준다. 일반 파일이
+	 *  없으면(지워짐 · 폴더 · 링크인 앞 폴더 · 루트 밖 링크), 50 MiB 를 넘거나 읽을 수 없으면 `null`.
+	 */
+	version: string | null,
 	base: ConflictSide | null,
 	ours: ConflictSide | null,
 	theirs: ConflictSide | null,
@@ -1189,6 +1216,12 @@ export type GitConflictDetail = {
 	 *  본다. 세 쪽 모두 앞의 UTF-8 BOM 을 떼고 병합한다 — 판정의 `bom` 이 그쪽에 BOM 이 있었는지다.
 	 */
 	merged: string | null,
+	/**
+	 *  `merged` 가 있고 충돌 구간이 하나도 없다. git 은 이 경로를 충돌로 남겼다 — git 의 merge 는 histogram diff 로 병합하고 이
+	 *  계산은 Myers(`git merge-file` 의 기본)라 드물게 갈린다. 창은 고를 충돌 없이 세 쪽의 diff 로 보이고, 저장하면 그래도
+	 *  `git.conflict.resolve` 로 푼다(index 는 아직 충돌이다).
+	 */
+	clean: boolean,
 	/**  병합 결과의 구간(앞에서부터): 한쪽만 바꾼 곳과 충돌. `merged` 가 없으면 비어 있다. `git merge-file -p --diff3` 의 구간과 같다. */
 	regions: MergeRegion[],
 };
@@ -1204,10 +1237,8 @@ export type GitConflictResolveParams = {
 	projectId: string,
 	worktree?: string | null,
 	path: string,
-	/**  결과 내용(UTF-8 글). 파일에 쓰고 `git add` 한다. `side` 와 둘 중 하나만. */
-	content?: string | null,
-	/**  `content` 앞에 UTF-8 BOM 을 붙인다(`fs.write` 와 같다). */
-	bom?: boolean,
+	/**  결과 내용. 파일에 쓰고 `git add` 한다. `side` 와 둘 중 하나만. */
+	content?: ConflictContent | null,
 	/**  한쪽을 고른다. 그쪽이 있으면 그 내용으로(`git checkout --ours|--theirs` 뒤 `git add`), 지운 쪽이면 `git rm` 이다. */
 	side?: ConflictPick | null,
 };
