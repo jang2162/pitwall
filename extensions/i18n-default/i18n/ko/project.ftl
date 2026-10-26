@@ -488,6 +488,11 @@ git-too-old = git { $version } 은(는) { $required } 보다 낮아 커밋 · �
 ## 다이얼로그의 질문은 git · ssh 가 준 문장 그대로이고 번역하지 않는다.
 
 git-askpass-title = git 이 인증 정보를 묻는다
+git-askpass-confirm-title = git 이 확인을 묻는다
+git-askpass-notice-title = git 이 보안 키를 기다린다
 git-askpass-input = 답
 git-askpass-submit = 확인
 git-askpass-cancel = 취소
+git-askpass-yes = 예
+git-askpass-no = 아니오
+git-askpass-dismiss = 닫기

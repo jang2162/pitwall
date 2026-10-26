@@ -2626,12 +2626,12 @@
       "tier": "write"
     },
     "git.prompt.answer": {
-      "description": "질문의 답. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는 답이면 invalid params.",
+      "description": "질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는\n답이면 invalid params.",
       "kind": "unary",
       "params": {
         "$defs": {
           "GitPromptAnswer": {
-            "description": "창의 답. `askpass` 질문에는 `askpass` 나 `cancel`, `unsaved` 질문에는 `proceed` 나 `cancel` 만 받는다.",
+            "description": "창의 답. `askpass` 질문에는 그 `hint` 에 맞는 답([`AskpassHint`]), `unsaved` 질문에는 `proceed` 나 `cancel` 만 받는다.",
             "oneOf": [
               {
                 "description": "넣은 값. 비밀이다 — `Debug` 는 가린다.",
@@ -2651,7 +2651,7 @@
                 "type": "object"
               },
               {
-                "description": "미저장 문서를 확인했다(저장했거나 저장하지 않기로 했다) — 쓰기를 한다.",
+                "description": "미저장 문서를 확인했다(저장했거나 저장하지 않기로 했다) — 쓰기를 한다. askpass 의 `confirm` 이면 「예」 다.",
                 "properties": {
                   "kind": {
                     "const": "proceed",
@@ -2710,9 +2710,29 @@
       "tier": "write"
     },
     "git.prompts": {
-      "description": "프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n듣는 창이 없으면 askpass 는 바로 실패하고 미저장 확인은 묻지 않고 진행한다.",
+      "description": "프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다\n(`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.",
       "item": {
         "$defs": {
+          "AskpassHint": {
+            "description": "askpass 질문의 종류. ssh 가 `SSH_ASKPASS_PROMPT` 로 알려 준다(git 은 늘 `secret`).",
+            "oneOf": [
+              {
+                "const": "secret",
+                "description": "값을 넣는다(암호 · 토큰 · 키 암호 · 호스트 키 확인의 `yes`). 답은 `askpass` 나 `cancel`.",
+                "type": "string"
+              },
+              {
+                "const": "confirm",
+                "description": "예 · 아니오(ssh 의 `confirm` — 에이전트 키를 쓸지 등). 답은 `proceed`(예) 나 `cancel`(아니오).",
+                "type": "string"
+              },
+              {
+                "const": "notice",
+                "description": "알림만(ssh 의 `none` — 보안 키를 만지라는 안내). ssh 가 일을 마치면 도우미를 끝내고 질문이 닫힌다. 답은 `cancel`(내리기)만.",
+                "type": "string"
+              }
+            ]
+          },
           "GitPrompt": {
             "properties": {
               "promptId": {
@@ -2735,8 +2755,11 @@
             "description": "창에 묻는 것.",
             "oneOf": [
               {
-                "description": "git · ssh 가 묻는 것(암호 · 토큰 · 키 암호 · 호스트 키 확인). `text` 는 그 프로그램이 준 문장 그대로다 — 번역하지 않는다.\n답은 비밀번호 칸으로 받는다.",
+                "description": "git · ssh 가 묻는 것(암호 · 토큰 · 키 암호 · 호스트 키 확인). `text` 는 그 프로그램이 준 문장을 [`askpass_text`] 로 다듬은\n것이다 — 번역하지 않는다. `hint` 가 `secret` 이면 답은 비밀번호 칸으로 받는다.",
                 "properties": {
+                  "hint": {
+                    "$ref": "#/$defs/AskpassHint"
+                  },
                   "kind": {
                     "const": "askpass",
                     "type": "string"
@@ -2747,7 +2770,8 @@
                 },
                 "required": [
                   "kind",
-                  "text"
+                  "text",
+                  "hint"
                 ],
                 "type": "object"
               },

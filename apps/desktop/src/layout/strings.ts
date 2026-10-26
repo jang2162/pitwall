@@ -225,9 +225,14 @@ export function projectStrings(t: Translate) {
     git: {
       askpass: {
         title: t("git-askpass-title"),
+        confirmTitle: t("git-askpass-confirm-title"),
+        noticeTitle: t("git-askpass-notice-title"),
         input: t("git-askpass-input"),
         submit: t("git-askpass-submit"),
         cancel: t("git-askpass-cancel"),
+        yes: t("git-askpass-yes"),
+        no: t("git-askpass-no"),
+        dismiss: t("git-askpass-dismiss"),
       },
     },
     trust: {

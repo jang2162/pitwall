@@ -5,7 +5,10 @@
 //!   (`crate::cli::set_askpass`). 스크립트는 `pitwall askpass "<질문>"` 을 부르고, 그 서브커맨드([`client_main`])가 앱의 askpass
 //!   소켓에 붙어 질문을 넘긴다. 앱은 그 쓰기의 프로젝트를 듣는 창에 묻고([`super::prompt`]) 답을 돌려준다. 도우미는 답을 stdout
 //!   에 한 줄로 쓰고 0 으로 끝난다 — git · ssh 가 읽는 꼴이다. 답이 없거나(시간 초과 · 취소 · 듣는 창 없음) 소켓에 닿지 못하면 아무것도
-//!   쓰지 않고 1 로 끝난다 — git 은 인증 실패로 끝난다(`GIT_TERMINAL_PROMPT=0` 이라 터미널로 묻지 않는다).
+//!   쓰지 않고 1 로 끝난다 — git 은 인증 실패로 끝난다(`GIT_TERMINAL_PROMPT=0` 이라 터미널로 묻지 않는다). ssh 가
+//!   `SSH_ASKPASS_PROMPT` 로 알려 주는 질문의 종류(`confirm` 예 · 아니오, `none` 알림만)는 [`AskpassHint`] 로 함께 넘긴다. 도우미가
+//!   답을 받기 전에 끝나면(ssh 가 알림 도우미를 끝냄 등) 앱은 연결이 끊긴 것을 보고 그 질문을 닫는다.
+//! - **어느 쓰기에**: 인증을 물을 수 있는 쓰기([`super::WriteRequest::askpass`])에만 준다.
 //! - **섞이지 않게**: 소켓은 앱(주 인스턴스)이 하나 열고, 경로는 데스크톱이 단일 인스턴스 키와 `$STATE` 로 정한다(MCP 소켓과 같은
 //!   규칙, `apps/desktop/src-tauri/src/main.rs` 의 `askpass_socket`). 도우미는 경로를 다시 계산하지 않고 환경 변수([`SOCKET_ENV`])로
 //!   받는다 — 그 git 을 띄운 앱의 소켓이다. 질문에는 쓰기 한 번마다 새로 만든 토큰([`TOKEN_ENV`])을 붙이고, 앱은 지금 도는 쓰기의
@@ -24,12 +27,14 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use super::prompt::Prompts;
+use super::prompt::{AskpassHint, Prompts};
 
 /// 도우미가 붙을 소켓의 경로.
 pub const SOCKET_ENV: &str = "PITWALL_ASKPASS_SOCKET";
 /// 그 쓰기의 토큰.
 pub const TOKEN_ENV: &str = "PITWALL_ASKPASS_TOKEN";
+/// ssh 가 도우미에게 주는 질문의 종류(`confirm` · `none`, 없으면 값을 묻는다).
+pub const SSH_PROMPT_ENV: &str = "SSH_ASKPASS_PROMPT";
 /// 도우미와 앱이 주고받는 첫 줄의 `protocol`.
 pub const PROTOCOL: &str = "pitwall-askpass/1";
 /// 한 줄(요청 · 답)의 최대 크기.
@@ -46,6 +51,8 @@ struct Request {
     protocol: String,
     token: String,
     prompt: String,
+    #[serde(default)]
+    hint: AskpassHint,
 }
 
 /// 앱 → 도우미. 둘 중 하나만 있다. 값이 비밀이라 `Debug` 를 두지 않는다.
@@ -161,7 +168,8 @@ impl Askpass {
         let asked = entry.prompts.ask(
             &entry.project,
             super::GitPromptRequest::Askpass {
-                text: request.prompt,
+                text: super::askpass_text(&request.prompt),
+                hint: request.hint,
             },
             entry.timeout,
         );
@@ -180,13 +188,22 @@ impl Askpass {
                     error: None,
                 }
             }
-            Ok(_) => {
+            // ssh 의 confirm 은 빈 답이나 `yes` 를 「예」 로 본다.
+            Ok(super::GitPromptAnswer::Proceed) => Reply {
+                value: Some("yes".to_owned()),
+                error: None,
+            },
+            Ok(super::GitPromptAnswer::Cancel) => {
                 tracing::debug!(target: "pw_git", project = entry.project, "askpass cancelled in the window");
                 refuse("cancelled")
             }
             Err(super::PromptError::NoWindow) => {
                 tracing::info!(target: "pw_git", project = entry.project, "askpass: no window of the project is open; failing at once");
                 refuse("no Pitwall window of this project is open to answer")
+            }
+            Err(super::PromptError::WindowLeft) => {
+                tracing::info!(target: "pw_git", project = entry.project, "askpass: the project window closed while asking");
+                refuse("the Pitwall window of this project closed before answering")
             }
             Err(super::PromptError::TimedOut) => {
                 tracing::info!(target: "pw_git", project = entry.project, "askpass: no answer in time");
@@ -238,8 +255,8 @@ fn new_token() -> String {
         .collect()
 }
 
-/// `pitwall askpass <질문>` 의 본체. 종료 코드: 0 답을 stdout 에 썼다, 1 답이 없다(취소 · 시간 초과 · 앱에 닿지 못함), 2 git 이 띄운
-/// 것이 아니다(환경 변수가 없다). 로그를 켜지 않고 파일을 쓰지 않는다.
+/// `pitwall askpass <질문>` 의 본체. 종료 코드: 0 답을 stdout 에 썼다, 1 답이 없다(취소 · 아니오 · 시간 초과 · 앱에 닿지 못함), 2
+/// git 이 띄운 것이 아니다(환경 변수가 없다). 로그를 켜지 않고 파일을 쓰지 않는다.
 pub fn client_main(args: &[OsString]) -> i32 {
     use std::io::Write;
 
@@ -256,7 +273,8 @@ pub fn client_main(args: &[OsString]) -> i32 {
         );
         return 2;
     };
-    match request(Path::new(&socket), &token, &prompt) {
+    let hint = hint_of(std::env::var_os(SSH_PROMPT_ENV).as_deref());
+    match request(Path::new(&socket), &token, &prompt, hint) {
         Ok(value) => {
             let mut out = std::io::stdout().lock();
             let written = out
@@ -272,9 +290,23 @@ pub fn client_main(args: &[OsString]) -> i32 {
     }
 }
 
+/// `SSH_ASKPASS_PROMPT` 의 값으로 질문의 종류를 정한다(모르는 값 · 없음은 값을 묻는 것).
+pub(crate) fn hint_of(value: Option<&std::ffi::OsStr>) -> AskpassHint {
+    match value.and_then(std::ffi::OsStr::to_str) {
+        Some("confirm") => AskpassHint::Confirm,
+        Some("none") => AskpassHint::Notice,
+        _ => AskpassHint::Secret,
+    }
+}
+
 /// 앱의 소켓 `socket` 에 질문 하나를 보내고 답을 받는다(도우미 쪽, 블로킹).
 #[cfg(unix)]
-pub fn request(socket: &Path, token: &str, prompt: &str) -> std::io::Result<String> {
+pub fn request(
+    socket: &Path,
+    token: &str,
+    prompt: &str,
+    hint: AskpassHint,
+) -> std::io::Result<String> {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::unix::net::UnixStream;
 
@@ -285,6 +317,7 @@ pub fn request(socket: &Path, token: &str, prompt: &str) -> std::io::Result<Stri
         protocol: PROTOCOL.to_owned(),
         token: token.to_owned(),
         prompt: prompt.to_owned(),
+        hint,
     })
     .map_err(std::io::Error::other)?;
     line.push(b'\n');
@@ -308,7 +341,12 @@ pub fn request(socket: &Path, token: &str, prompt: &str) -> std::io::Result<Stri
 }
 
 #[cfg(not(unix))]
-pub fn request(_socket: &Path, _token: &str, _prompt: &str) -> std::io::Result<String> {
+pub fn request(
+    _socket: &Path,
+    _token: &str,
+    _prompt: &str,
+    _hint: AskpassHint,
+) -> std::io::Result<String> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "askpass is not available on this platform yet",
@@ -367,8 +405,18 @@ impl Askpass {
                 Ok(Ok(_)) => serde_json::from_slice::<Request>(&line).ok(),
                 Ok(Err(_)) | Err(_) => None,
             };
+        // 도우미는 요청 한 줄 뒤에 아무것도 보내지 않고 답을 기다린다 — 읽기 쪽이 끝나면(EOF) 도우미가 끝난 것이다. 그때는 묻던
+        // 질문을 버려(창의 다이얼로그를 닫고) 답하지 않는다.
+        let mut read = read.into_inner();
+        let helper_gone = async {
+            let mut byte = [0u8; 1];
+            while matches!(read.read(&mut byte).await, Ok(n) if n > 0) {}
+        };
         let reply = match request {
-            Some(request) => self.reply(request).await,
+            Some(request) => tokio::select! {
+                reply = self.reply(request) => reply,
+                () = helper_gone => return,
+            },
             None => Reply {
                 value: None,
                 error: Some("malformed askpass request".to_owned()),

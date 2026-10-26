@@ -13,19 +13,10 @@ use pw_rpc::RpcError;
 use tokio::sync::oneshot;
 
 use super::super::*;
-use super::{last, subscribe_all, until_finished};
+use super::{last, subscribe_all, until, until_finished};
 use crate::testing::write::WriteFixture;
 
 const TITLE: &str = "test git write";
-
-/// 조건이 맞을 때까지 기다린다(시간이 아니라 상태로 판정한다 — 10초는 멈춤을 잡는 상한일 뿐이다).
-async fn until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !ready() {
-        assert!(tokio::time::Instant::now() < deadline, "timed out: {what}");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_writes_to_one_repository_run_one_after_the_other_and_both_finish() {
@@ -300,6 +291,65 @@ async fn cancelling_the_task_ends_git_and_its_hook_before_the_lock_is_released()
         f.repo.git(&["log", "--format=%s", "-1"]),
         "initial\n",
         "the cancelled commit did not happen"
+    );
+}
+
+/// 잠금을 기다리는 쓰기의 Task 를 취소하면 그 쓰기는 앞 쓰기가 잠금을 쥔 채로 곧 끝나고, 본문은 돌지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_a_write_that_waits_for_the_lock_never_runs_it() {
+    let f = WriteFixture::new(true);
+    let (holding_tx, holding_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel::<()>();
+    let first = tokio::spawn({
+        let write = Arc::clone(&f.write);
+        let request = f.request("test git first");
+        async move {
+            write
+                .run(request, move |_ctx| async move {
+                    let _ = holding_tx.send(());
+                    let _ = release_rx.await;
+                    Ok(())
+                })
+                .await
+        }
+    });
+    holding_rx.await.unwrap();
+    let second_ran = Arc::new(AtomicBool::new(false));
+    let second = tokio::spawn({
+        let write = Arc::clone(&f.write);
+        let request = f.request("test git second");
+        let ran = Arc::clone(&second_ran);
+        async move {
+            write
+                .run(request, move |_ctx| async move {
+                    ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                })
+                .await
+        }
+    });
+    until("the second task waits", || {
+        f.tasks.running(Some(&f.project)).len() == 2
+    })
+    .await;
+    let waiting = f
+        .tasks
+        .running(Some(&f.project))
+        .into_iter()
+        .find(|task| task.title == "test git second")
+        .unwrap();
+    assert!(f.tasks.cancel(waiting.task_id));
+    // 앞 쓰기가 잠금을 쥔 채로 끝나야 한다 — 잠금이 풀리기를 기다렸다가 끝나는 것이 아니다(10초는 멈춤을 잡는 상한).
+    let cancelled = tokio::time::timeout(Duration::from_secs(10), second)
+        .await
+        .expect("the cancelled write kept waiting for the lock")
+        .unwrap();
+    assert_eq!(cancelled, Err(WriteError::Cancelled));
+    release_tx.send(()).unwrap();
+    assert_eq!(first.await.unwrap(), Ok(()));
+    assert!(
+        !second_ran.load(Ordering::SeqCst),
+        "the cancelled write ran its body"
     );
 }
 

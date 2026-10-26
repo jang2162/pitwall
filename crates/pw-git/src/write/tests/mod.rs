@@ -70,3 +70,13 @@ fn last(events: &[(String, serde_json::Value)], topic: &str) -> Option<serde_jso
         .find(|(t, _)| t == topic)
         .map(|(_, payload)| payload.clone())
 }
+
+/// 조건이 맞을 때까지 기다린다(시간이 아니라 상태로 판정한다 — 10초는 멈춤을 잡는 상한일 뿐이다).
+#[cfg(unix)]
+async fn until(what: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !ready() {
+        assert!(tokio::time::Instant::now() < deadline, "timed out: {what}");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}

@@ -2,11 +2,14 @@
 //!
 //! - `git.operation`: 진행 중 작업(읽기, gix · 상태 파일 — 미신뢰 프로젝트도 프로세스를 띄우지 않는다).
 //! - `git.operation.continue` · `abort` · `skip`: 쓰기 실행기로 git CLI.
-//! - `git.prompts`: 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림(askpass · 미저장 확인), `git.prompt.answer`: 그 답.
+//! - `git.prompts`: 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림(askpass · 미저장 확인), `git.prompt.answer`: 그 답. 둘 다 그
+//!   프로젝트 창의 연결(연결 범위가 그 프로젝트 — `pw_core::registry::state::connection_may_write`)만 받는다. 다른 프로젝트 창 ·
+//!   웰컴 · 설정 창은 질문(문장에 원격 주소 · 사용자 이름이 있다)을 듣지도, 남의 쓰기에 답하지도 못한다.
 
 use std::sync::Arc;
 
-use pw_rpc::{Router, RpcError, code as rpc_code, rpc_method};
+use pw_core::registry::state::connection_may_write;
+use pw_rpc::{Ctx, Router, RpcError, code as rpc_code, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -104,7 +107,8 @@ rpc_method! {
 
 rpc_method! {
     /// 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.
-    /// 듣는 창이 없으면 askpass 는 바로 실패하고 미저장 확인은 묻지 않고 진행한다.
+    /// 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다
+    /// (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.
     pub GitPromptsMethod: "git.prompts" {
         params: GitPromptsParams,
         stream: GitPromptEvent,
@@ -114,7 +118,8 @@ rpc_method! {
 }
 
 rpc_method! {
-    /// 질문의 답. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는 답이면 invalid params.
+    /// 질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는
+    /// 답이면 invalid params.
     pub GitPromptAnswerMethod: "git.prompt.answer" {
         params: GitPromptAnswerParams,
         result: (),
@@ -153,9 +158,10 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
     let w = Arc::clone(&write);
     router.stream(
         GitPromptsMethod,
-        move |_ctx, params: GitPromptsParams, sink| {
+        move |ctx, params: GitPromptsParams, sink| {
             let w = Arc::clone(&w);
             async move {
+                own_window(&ctx, &params.project_id)?;
                 let git = Arc::clone(w.git());
                 let project = params.project_id.clone();
                 tokio::task::spawn_blocking(move || {
@@ -178,9 +184,10 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
     let w = Arc::clone(&write);
     router.unary(
         GitPromptAnswerMethod,
-        move |_ctx, params: GitPromptAnswerParams| {
+        move |ctx, params: GitPromptAnswerParams| {
             let w = Arc::clone(&w);
             async move {
+                own_window(&ctx, &params.project_id)?;
                 w.prompts()
                     .answer(&params.project_id, params.prompt_id, params.answer)
                     .map_err(|e| match e {
@@ -195,6 +202,18 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
             }
         },
     );
+}
+
+/// 그 프로젝트 창의 연결인가(질문 듣기 · 답하기).
+fn own_window(ctx: &Ctx, project_id: &str) -> Result<(), RpcError> {
+    if connection_may_write(ctx, project_id) {
+        Ok(())
+    } else {
+        Err(RpcError::new(
+            rpc_code::PERMISSION_DENIED,
+            "only the project's own window may hear or answer its git prompts",
+        ))
+    }
 }
 
 async fn act(

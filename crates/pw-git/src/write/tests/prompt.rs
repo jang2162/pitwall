@@ -1,5 +1,6 @@
 //! 질문 표: 듣는 창이 없으면 기다리지 않는다, 첫 답만 받는다, 종류에 맞는 답만 받는다, 끝나면 듣는 창 전부에 닫힘, 늦게 연 창도
-//! 열린 질문을 받는다, 시간이 지나면 끝난다, 비밀은 `Debug` 에 나오지 않는다.
+//! 열린 질문을 받는다, 시간이 지나면 끝난다, 묻는 도중 창이 떠나면 「창이 떠남」 이다, askpass 의 종류마다 받는 답이 다르다, 문장은
+//! 다듬어진다, 비밀은 `Debug` 에 나오지 않는다.
 
 use std::time::Duration;
 
@@ -10,6 +11,7 @@ const LONG: Duration = Duration::from_secs(600);
 fn askpass() -> GitPromptRequest {
     GitPromptRequest::Askpass {
         text: "Password for 'https://host': ".into(),
+        hint: AskpassHint::Secret,
     }
 }
 
@@ -146,7 +148,7 @@ async fn dropping_the_asker_closes_the_prompt() {
 }
 
 #[tokio::test]
-async fn when_the_last_window_stops_listening_the_open_prompt_ends_as_no_window() {
+async fn when_the_last_window_stops_listening_the_open_prompt_ends_as_window_left() {
     let prompts = Prompts::default();
     let mut a = prompts.listen("p");
     let b = prompts.listen("p");
@@ -163,8 +165,82 @@ async fn when_the_last_window_stops_listening_the_open_prompt_ends_as_no_window(
         .await
         .expect("the prompt did not wait for the 10-minute timeout")
         .unwrap();
-    assert_eq!(ended, Err(PromptError::NoWindow));
+    assert_eq!(ended, Err(PromptError::WindowLeft));
     assert_eq!(prompts.pending(), 0);
+}
+
+#[tokio::test]
+async fn each_askpass_hint_takes_only_its_answers() {
+    let prompts = Prompts::default();
+    let mut window = prompts.listen("p");
+    let value = || GitPromptAnswer::Askpass { value: "v".into() };
+    let cases = [
+        (AskpassHint::Secret, vec![GitPromptAnswer::Proceed], value()),
+        (
+            AskpassHint::Confirm,
+            vec![value()],
+            GitPromptAnswer::Proceed,
+        ),
+        (
+            AskpassHint::Notice,
+            vec![value(), GitPromptAnswer::Proceed],
+            GitPromptAnswer::Cancel,
+        ),
+    ];
+    for (hint, wrong, right) in cases {
+        let asking = tokio::spawn({
+            let prompts = prompts.clone();
+            let request = GitPromptRequest::Askpass {
+                text: "q".into(),
+                hint,
+            };
+            async move { prompts.ask("p", request, LONG).await }
+        });
+        let id = open_id(window.recv().await);
+        for answer in wrong {
+            assert_eq!(
+                prompts.answer("p", id, answer.clone()),
+                Err(AnswerError::Mismatch),
+                "{hint:?} takes no {answer:?}"
+            );
+        }
+        prompts.answer("p", id, right.clone()).unwrap();
+        assert_eq!(asking.await.unwrap(), Ok(right));
+        assert_eq!(
+            window.recv().await,
+            Some(GitPromptEvent::Closed { prompt_id: id })
+        );
+    }
+}
+
+#[test]
+fn askpass_text_keeps_new_lines_and_drops_controls_bidi_and_the_overlong_tail() {
+    assert_eq!(
+        askpass_text("Enter passphrase for key '/k':\n\tnext"),
+        "Enter passphrase for key '/k':\n next"
+    );
+    assert_eq!(
+        askpass_text("\u{1b}[2J\u{1b}[31mPassword\r\u{7}\u{7f}\u{85}: "),
+        "[2J[31mPassword: ",
+        "C0 · DEL · C1 are gone"
+    );
+    assert_eq!(
+        askpass_text(
+            "for 'evil\u{202E}moc.buhtig\u{202C}' \u{2066}x\u{2069}\u{200E}\u{200F}\u{061C}"
+        ),
+        "for 'evilmoc.buhtig' x",
+        "bidi controls are gone"
+    );
+    let long = "a".repeat(MAX_PROMPT_CHARS + 10);
+    let cut = askpass_text(&long);
+    assert_eq!(cut.chars().count(), MAX_PROMPT_CHARS + 1);
+    assert!(cut.ends_with("a…"), "{cut}");
+    let exact = "가".repeat(MAX_PROMPT_CHARS);
+    assert_eq!(
+        askpass_text(&exact),
+        exact,
+        "the limit counts characters, not bytes"
+    );
 }
 
 #[test]
@@ -179,6 +255,14 @@ fn the_secret_is_hidden_from_debug_output() {
 
 #[test]
 fn prompts_and_answers_have_the_documented_wire_format() {
+    assert_eq!(
+        serde_json::to_value(GitPromptRequest::Askpass {
+            text: "q".into(),
+            hint: AskpassHint::Confirm,
+        })
+        .unwrap(),
+        serde_json::json!({ "kind": "askpass", "text": "q", "hint": "confirm" })
+    );
     let event = GitPromptEvent::Open {
         prompt: GitPrompt {
             prompt_id: 7,

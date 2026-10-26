@@ -15,7 +15,9 @@ use std::time::Duration;
 use pw_core::bus::{Filter, Received};
 use pw_git::testing::TestRepo;
 use pw_git::testing::write::{Window, WriteFixture, credential_remote};
-use pw_git::write::{Askpass, GitPromptAnswer, GitPromptRequest, WriteError};
+use pw_git::write::{
+    Askpass, AskpassHint, GitPromptAnswer, GitPromptRequest, WriteError, WriteRequest,
+};
 
 const SECRET: &str = "pw-e2e-secret-81d4c2";
 const QUESTION: &str = "Password for 'https://someone@example.invalid': ";
@@ -82,11 +84,17 @@ async fn the_window_answer_reaches_git_through_pitwall_askpass_and_not_the_log()
 
     let result = f
         .write
-        .run(f.request("test git write"), |ctx| async move {
-            ctx.run(ctx.git().args(["fetch", "testauth::example"]))
-                .await
-                .map(drop)
-        })
+        .run(
+            WriteRequest {
+                askpass: true,
+                ..f.request("test git fetch")
+            },
+            |ctx| async move {
+                ctx.run(ctx.git().args(["fetch", "testauth::example"]))
+                    .await
+                    .map(drop)
+            },
+        )
         .await;
     // 시험 원격 도우미는 답을 받은 뒤 실패로 끝난다 — 그 원문이 Task 의 실패(알림 body)가 된다.
     assert!(
@@ -97,7 +105,8 @@ async fn the_window_answer_reaches_git_through_pitwall_askpass_and_not_the_log()
     assert_eq!(
         window.seen(),
         [GitPromptRequest::Askpass {
-            text: QUESTION.into()
+            text: QUESTION.into(),
+            hint: AskpassHint::Secret,
         }],
         "the question went to the project window"
     );

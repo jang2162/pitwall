@@ -82,7 +82,8 @@ export type UnaryMethods = {
 	 */
 	"git.operation.skip": { params: GitOperationParams; result: GitOperationResult };
 	/**
-	 * 질문의 답. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는 답이면 invalid params.
+	 * 질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는
+	 * 답이면 invalid params.
 	 */
 	"git.prompt.answer": { params: GitPromptAnswerParams; result: null };
 	/**
@@ -292,7 +293,8 @@ export type StreamMethods = {
 	"fs.watch": { params: FsWatchParams; item: FsWatching };
 	/**
 	 * 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.
-	 * 듣는 창이 없으면 askpass 는 바로 실패하고 미저장 확인은 묻지 않고 진행한다.
+	 * 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다
+	 * (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.
 	 */
 	"git.prompts": { params: GitPromptsParams; item: GitPromptEvent };
 	/**
@@ -339,8 +341,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.operation.abort": {"name":"git.operation.abort","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 그만두고 시작 전으로 돌린다(`git <작업> --abort`). 확인은 창이 먼저 한다(결정 M2-D6 ①).\n","mcp":false,"fileScope":false},
 	"git.operation.continue": {"name":"git.operation.continue","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 계속한다(`git <작업> --continue`). 충돌을 다 풀지 않았으면 git 의 원문으로 실패한다.\n","mcp":false,"fileScope":false},
 	"git.operation.skip": {"name":"git.operation.skip","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업의 지금 단계를 건너뛴다(`git <작업> --skip`, merge 는 없다).\n","mcp":false,"fileScope":false},
-	"git.prompt.answer": {"name":"git.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"GitPromptAnswerParams","output":"()","doc":" 질문의 답. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는 답이면 invalid params.\n","mcp":false,"fileScope":false},
-	"git.prompts": {"name":"git.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"GitPromptsParams","output":"GitPromptEvent","doc":" 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n 듣는 창이 없으면 askpass 는 바로 실패하고 미저장 확인은 묻지 않고 진행한다.\n","mcp":false,"fileScope":false},
+	"git.prompt.answer": {"name":"git.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"GitPromptAnswerParams","output":"()","doc":" 질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는\n 답이면 invalid params.\n","mcp":false,"fileScope":false},
+	"git.prompts": {"name":"git.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"GitPromptsParams","output":"GitPromptEvent","doc":" 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다\n (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.\n","mcp":false,"fileScope":false},
 	"git.repo": {"name":"git.repo","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRepo","doc":" 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false,"fileScope":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false,"fileScope":false},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n","mcp":false,"fileScope":true},
@@ -423,6 +425,15 @@ export type ActiveWorktree = {
 	/**  프로젝트 루트에 대응하는 워크트리 안의 폴더. 파일 트리 · 터미널 · 설정의 기준. */
 	root: string,
 };
+
+/**  askpass 질문의 종류. ssh 가 `SSH_ASKPASS_PROMPT` 로 알려 준다(git 은 늘 `secret`). */
+export type AskpassHint = 
+/**  값을 넣는다(암호 · 토큰 · 키 암호 · 호스트 키 확인의 `yes`). 답은 `askpass` 나 `cancel`. */
+"secret" | 
+/**  예 · 아니오(ssh 의 `confirm` — 에이전트 키를 쓸지 등). 답은 `proceed`(예) 나 `cancel`(아니오). */
+"confirm" | 
+/**  알림만(ssh 의 `none` — 보안 키를 만지라는 안내). ssh 가 일을 마치면 도우미를 끝내고 질문이 닫힌다. 답은 `cancel`(내리기)만. */
+"notice";
 
 export type Bom = "utf8" | "utf16Le" | "utf16Be";
 
@@ -912,11 +923,11 @@ export type GitPrompt = {
 	request: GitPromptRequest,
 };
 
-/**  창의 답. `askpass` 질문에는 `askpass` 나 `cancel`, `unsaved` 질문에는 `proceed` 나 `cancel` 만 받는다. */
+/**  창의 답. `askpass` 질문에는 그 `hint` 에 맞는 답([`AskpassHint`]), `unsaved` 질문에는 `proceed` 나 `cancel` 만 받는다. */
 export type GitPromptAnswer = 
 /**  넣은 값. 비밀이다 — `Debug` 는 가린다. */
 { kind: "askpass"; value: string } | 
-/**  미저장 문서를 확인했다(저장했거나 저장하지 않기로 했다) — 쓰기를 한다. */
+/**  미저장 문서를 확인했다(저장했거나 저장하지 않기로 했다) — 쓰기를 한다. askpass 의 `confirm` 이면 「예」 다. */
 { kind: "proceed" } | 
 /**  취소. askpass 면 git 이 인증 실패로 끝나고, 미저장 확인이면 쓰기를 하지 않는다. */
 { kind: "cancel" };
@@ -937,10 +948,10 @@ export type GitPromptEvent =
 /**  창에 묻는 것. */
 export type GitPromptRequest = 
 /**
- *  git · ssh 가 묻는 것(암호 · 토큰 · 키 암호 · 호스트 키 확인). `text` 는 그 프로그램이 준 문장 그대로다 — 번역하지 않는다.
- *  답은 비밀번호 칸으로 받는다.
+ *  git · ssh 가 묻는 것(암호 · 토큰 · 키 암호 · 호스트 키 확인). `text` 는 그 프로그램이 준 문장을 [`askpass_text`] 로 다듬은
+ *  것이다 — 번역하지 않는다. `hint` 가 `secret` 이면 답은 비밀번호 칸으로 받는다.
  */
-{ kind: "askpass"; text: string } | 
+{ kind: "askpass"; text: string; hint: AskpassHint } | 
 /**
  *  작업 트리를 바꾸는 쓰기를 하기 전이다. 창은 이 경로와 겹치는 미저장 문서가 있으면 확인하고(M1-13 의 확인 — 저장 · 저장 안
  *  함 · 취소), 없으면 바로 `proceed` 로 답한다. `paths` 는 `workTree` 기준 상대 경로(`/` 구분)이고, `null` 이면 작업 트리

@@ -506,6 +506,11 @@ git-too-old = Git { $version } is older than { $required }, so commits, branches
 ## The question shown in the dialog is git's or ssh's own text and is not translated.
 
 git-askpass-title = Git asks for your credentials
+git-askpass-confirm-title = Git asks for your confirmation
+git-askpass-notice-title = Git is waiting for your security key
 git-askpass-input = Answer
 git-askpass-submit = OK
 git-askpass-cancel = Cancel
+git-askpass-yes = Yes
+git-askpass-no = No
+git-askpass-dismiss = Close

@@ -2,7 +2,7 @@
 // 창의 git 질의(docs/design/13-m2-plan.md M2-06 완료 기준 ⑤ 의 창 쪽): 창의 작업 공간(문서 저장소 그대로)에 미저장 편집이 든 문서를
 // 두고, Host 가 그 파일을 바꾸는 체크아웃의 미저장 확인을 `git.prompts` 로 보내면 M1-13 의 확인을 묻고 답하기 전에는 Host 에 답하지
 // 않는다 — 취소면 `cancel`(체크아웃은 돌지 않는다), 저장이면 저장한 뒤 `proceed`. 겹치지 않는 쓰기는 묻지 않고 `proceed`. askpass
-// 질문은 다이얼로그 자리로, 닫힘은 그 자리를 내린다. Host 쪽(답이 오기 전에 git 이 돌지 않는다)은 crates/pw-git/src/write/tests/unsaved.rs.
+// 질문은 종류(`hint`)와 함께 다이얼로그 자리로, 닫힘은 그 자리를 내린다. Host 쪽(답이 오기 전에 git 이 돌지 않는다)은 crates/pw-git/src/write/tests/unsaved.rs.
 
 import { EditorView } from "@codemirror/view";
 import type {
@@ -212,11 +212,25 @@ it("hands askpass questions to the dialog and takes them down when they close", 
   });
   host.push({
     kind: "open",
-    prompt: { promptId: 4, request: { kind: "askpass", text: "Password for 'https://h': " } },
+    prompt: {
+      promptId: 4,
+      request: { kind: "askpass", text: "Password for 'https://h': ", hint: "secret" },
+    },
+  });
+  host.push({
+    kind: "open",
+    prompt: {
+      promptId: 5,
+      request: { kind: "askpass", text: "Confirm user presence", hint: "notice" },
+    },
   });
   host.push({ kind: "closed", promptId: 4 });
-  await vi.waitFor(() => expect(closed).toEqual([4]));
-  expect(opened).toEqual([{ promptId: 4, text: "Password for 'https://h': " }]);
+  host.push({ kind: "closed", promptId: 5 });
+  await vi.waitFor(() => expect(closed).toEqual([4, 5]));
+  expect(opened).toEqual([
+    { promptId: 4, text: "Password for 'https://h': ", hint: "secret" },
+    { promptId: 5, text: "Confirm user presence", hint: "notice" },
+  ]);
   // 창은 askpass 를 다이얼로그에서만 답한다.
   expect(host.answers).toEqual([]);
   stop();

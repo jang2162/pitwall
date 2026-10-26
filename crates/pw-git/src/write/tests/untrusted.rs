@@ -86,6 +86,7 @@ async fn the_automatic_paths_of_an_untrusted_repository_run_none_of_its_programs
     assert_eq!(window.seen().len(), 1);
     drop(window);
 
+    let _window = Window::open(&f.write, &f.project, |_| Some(GitPromptAnswer::Proceed));
     let lock = f.repo.root().join(".git/index.lock");
     fs::write(&lock, "").unwrap();
     assert!(matches!(

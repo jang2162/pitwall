@@ -1,6 +1,7 @@
 //! askpass(④ 의 Host 쪽): 소켓 폴더 0700 · 소켓 0600 · 도우미 0700, 창의 답이 도우미에 닿는다, git 이 도우미를 질문과 함께 부른다,
-//! 다른 인스턴스(다른 데이터 폴더)의 토큰과 끝난 쓰기의 토큰은 거절한다, 듣는 창이 없으면 기다리지 않는다, 비밀은 Task · 알림에
-//! 없다. 진짜 `pitwall askpass` 를 거치는 것과 로그 파일은 데스크톱 시험(`apps/desktop/src-tauri/tests/askpass.rs`).
+//! 다른 인스턴스(다른 데이터 폴더)의 토큰과 끝난 쓰기의 토큰은 거절한다, 듣는 창이 없거나 묻는 도중 떠나면 기다리지 않는다, 비밀은
+//! Task · 알림에 없다, 인증을 묻는 쓰기만 도우미를 받는다, 문장은 다듬어 보낸다, ssh 의 질문 종류가 창에 닿고 confirm 의 「예」 는
+//! `yes` 다, 도우미가 먼저 끝나면 질문이 닫힌다. 진짜 `pitwall askpass` 를 거치는 것과 로그 파일은 데스크톱 시험(`apps/desktop/src-tauri/tests/askpass.rs`).
 
 use std::ffi::OsString;
 use std::fs;
@@ -8,9 +9,9 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::super::askpass::{SOCKET_ENV, TOKEN_ENV, request, unix};
+use super::super::askpass::{PROTOCOL, SOCKET_ENV, TOKEN_ENV, hint_of, request, unix};
 use super::super::*;
-use super::{subscribe_all, until_finished};
+use super::{subscribe_all, until, until_finished};
 use crate::testing::TestRepo;
 use crate::testing::write::{Window, WriteFixture, credential_remote};
 
@@ -39,16 +40,33 @@ fn env_value(env: &[(OsString, OsString)], name: &str) -> String {
         .unwrap_or_else(|| panic!("{name} is not in the git environment"))
 }
 
+/// 인증을 물을 수 있는 쓰기(fetch 등)의 요청.
+fn auth_request(f: &WriteFixture) -> WriteRequest {
+    WriteRequest {
+        askpass: true,
+        ..f.request("test git fetch")
+    }
+}
+
 /// 쓰기 하나 안에서 그 쓰기의 소켓 · 토큰으로 도우미처럼 묻는다.
 async fn ask_inside_a_write(f: &WriteFixture) -> (Result<String, String>, PathBuf, String) {
+    ask_inside_a_write_with(f, QUESTION, AskpassHint::Secret).await
+}
+
+async fn ask_inside_a_write_with(
+    f: &WriteFixture,
+    question: &str,
+    hint: AskpassHint,
+) -> (Result<String, String>, PathBuf, String) {
+    let question = question.to_owned();
     f.write
-        .run(f.request("test git write"), |ctx| async move {
+        .run(auth_request(f), move |ctx| async move {
             let env = ctx.git().env().to_vec();
             let (socket, token) = (env_value(&env, SOCKET_ENV), env_value(&env, TOKEN_ENV));
             let asked = {
                 let (socket, token) = (socket.clone(), token.clone());
                 tokio::task::spawn_blocking(move || {
-                    request(Path::new(&socket), &token, QUESTION).map_err(|e| e.to_string())
+                    request(Path::new(&socket), &token, &question, hint).map_err(|e| e.to_string())
                 })
                 .await
                 .unwrap()
@@ -104,7 +122,8 @@ async fn the_window_answer_reaches_the_helper_and_stays_out_of_tasks_and_notific
     assert_eq!(
         window.seen(),
         [GitPromptRequest::Askpass {
-            text: QUESTION.into()
+            text: QUESTION.into(),
+            hint: AskpassHint::Secret,
         }]
     );
     let events = until_finished(&mut events).await;
@@ -130,7 +149,7 @@ async fn git_runs_the_helper_with_the_question_for_a_remote_that_asks() {
     credential_remote(&f.bin, &out, QUESTION);
     let result = f
         .write
-        .run(f.request("test git write"), |ctx| async move {
+        .run(auth_request(&f), |ctx| async move {
             ctx.output(ctx.git().args(["fetch", "testauth::example"]))
                 .await
                 .map(drop)
@@ -164,10 +183,11 @@ async fn tokens_of_another_instance_or_of_a_finished_write_are_refused() {
     let other_socket = other.socket().unwrap();
     let crossed = f
         .write
-        .run(f.request("test git write"), move |ctx| async move {
+        .run(auth_request(&f), move |ctx| async move {
             let token = env_value(ctx.git().env(), TOKEN_ENV);
             Ok(tokio::task::spawn_blocking(move || {
-                request(&other_socket, &token, QUESTION).map_err(|e| e.to_string())
+                request(&other_socket, &token, QUESTION, AskpassHint::Secret)
+                    .map_err(|e| e.to_string())
             })
             .await
             .unwrap())
@@ -184,9 +204,11 @@ async fn tokens_of_another_instance_or_of_a_finished_write_are_refused() {
         0,
         "the finished write dropped its token"
     );
-    let late = tokio::task::spawn_blocking(move || request(&socket, &token, QUESTION))
-        .await
-        .unwrap();
+    let late = tokio::task::spawn_blocking(move || {
+        request(&socket, &token, QUESTION, AskpassHint::Secret)
+    })
+    .await
+    .unwrap();
     assert!(late.is_err(), "a token of a finished write is refused");
 }
 
@@ -244,11 +266,173 @@ async fn the_helper_refuses_a_socket_folder_open_to_others() {
     let socket = dir.path().join("run").join("x.sock");
     let _listener = unix::bind(&socket, unix::current_uid()).unwrap();
     fs::set_permissions(socket.parent().unwrap(), fs::Permissions::from_mode(0o755)).unwrap();
-    let refused = tokio::task::spawn_blocking(move || request(&socket, "t", "q"))
-        .await
-        .unwrap();
+    let refused =
+        tokio::task::spawn_blocking(move || request(&socket, "t", "q", AskpassHint::Secret))
+            .await
+            .unwrap();
     assert_eq!(
         refused.err().map(|e| e.kind()),
         Some(std::io::ErrorKind::PermissionDenied)
     );
+}
+
+/// 계속 · 중단 · 커밋 같은 쓰기는 도우미를 받지 않는다 — 그 훅이 `$GIT_ASKPASS` 로 진짜와 같은 암호 다이얼로그를 띄우지 못한다.
+/// 인증을 묻는 쓰기(`askpass: true`)의 훅은 받는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_writes_that_may_authenticate_hand_the_helper_to_hooks() {
+    let (f, askpass) = fixture(None);
+    let _server = serve(&askpass, &f.app, Path::new("/unused/pitwall")).await;
+    let seen = f.repo.base().join("hook-env");
+    let hook = f.repo.root().join(".git/hooks/pre-commit");
+    fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nprintf '%s|%s|%s|%s' \"$GIT_ASKPASS\" \"$SSH_ASKPASS\" \"$PITWALL_ASKPASS_SOCKET\" \"$PITWALL_ASKPASS_TOKEN\" > '{}'\n",
+            seen.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    let commit = |request: WriteRequest| {
+        f.write.run(request, |ctx| async move {
+            ctx.run(ctx.git().args(["commit", "--allow-empty", "-q", "-m", "x"]))
+                .await
+                .map(drop)
+        })
+    };
+
+    commit(f.request("test git commit")).await.unwrap();
+    assert_eq!(
+        fs::read_to_string(&seen).unwrap(),
+        "|||",
+        "no helper for the hook"
+    );
+
+    commit(auth_request(&f)).await.unwrap();
+    let helper = askpass.helper().unwrap().display().to_string();
+    let socket = askpass.socket().unwrap().display().to_string();
+    let env = fs::read_to_string(&seen).unwrap();
+    let parts: Vec<_> = env.split('|').collect();
+    assert_eq!(parts[..3], [&helper, &helper, &socket], "{env}");
+    assert_eq!(parts[3].len(), 32, "{env}");
+}
+
+/// 문장은 창에 보내기 전에 다듬는다(제어 문자 · 양방향 제어 문자 · 길이).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_window_gets_the_question_cleaned() {
+    let (f, askpass) = fixture(None);
+    let _server = serve(&askpass, &f.app, Path::new("/unused/pitwall")).await;
+    let window = Window::open(&f.write, &f.project, |_| Some(GitPromptAnswer::Cancel));
+    let raw = format!(
+        "\u{1b}[2JPassword for 'https://\u{202E}moc.elpmaxe@x':\r {}",
+        "z".repeat(600)
+    );
+    let (asked, _, _) = ask_inside_a_write_with(&f, &raw, AskpassHint::Secret).await;
+    assert_eq!(asked.unwrap_err(), "cancelled");
+    let [GitPromptRequest::Askpass { text, .. }] = &window.seen()[..] else {
+        panic!("{:?}", window.seen());
+    };
+    assert_eq!(text, &askpass_text(&raw));
+    assert!(
+        text.starts_with("[2JPassword for 'https://moc.elpmaxe@x': zzz"),
+        "{text}"
+    );
+    assert_eq!(text.chars().count(), prompt::MAX_PROMPT_CHARS + 1);
+}
+
+/// ssh 의 `SSH_ASKPASS_PROMPT` 가 창에 질문의 종류로 닿는다. confirm 에 「예」(`proceed`)면 도우미는 `yes` 를 쓰고, 「아니오」 면
+/// 실패한다(ssh 는 거절로 본다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_prompt_kinds_reach_the_window_and_confirm_answers_yes() {
+    assert_eq!(hint_of(None), AskpassHint::Secret);
+    assert_eq!(hint_of(Some("confirm".as_ref())), AskpassHint::Confirm);
+    assert_eq!(hint_of(Some("none".as_ref())), AskpassHint::Notice);
+    assert_eq!(hint_of(Some("other".as_ref())), AskpassHint::Secret);
+
+    let (f, askpass) = fixture(None);
+    let _server = serve(&askpass, &f.app, Path::new("/unused/pitwall")).await;
+    let window = Window::open(&f.write, &f.project, |request| match request {
+        GitPromptRequest::Askpass {
+            hint: AskpassHint::Confirm,
+            text,
+        } if text.contains("yes") => Some(GitPromptAnswer::Proceed),
+        _ => Some(GitPromptAnswer::Cancel),
+    });
+    let (asked, _, _) =
+        ask_inside_a_write_with(&f, "Allow use of key? say yes", AskpassHint::Confirm).await;
+    assert_eq!(asked.as_deref(), Ok("yes"));
+    let (asked, _, _) = ask_inside_a_write_with(&f, "Allow? no", AskpassHint::Confirm).await;
+    assert_eq!(asked.unwrap_err(), "cancelled");
+    let (asked, _, _) =
+        ask_inside_a_write_with(&f, "Confirm user presence for key", AskpassHint::Notice).await;
+    assert_eq!(asked.unwrap_err(), "cancelled");
+    let hints: Vec<_> = window
+        .seen()
+        .into_iter()
+        .map(|request| match request {
+            GitPromptRequest::Askpass { hint, .. } => hint,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        hints,
+        [
+            AskpassHint::Confirm,
+            AskpassHint::Confirm,
+            AskpassHint::Notice
+        ]
+    );
+}
+
+/// 도우미가 답을 받기 전에 끝나면(ssh 가 알림 도우미를 끝냄 등) 앱은 연결이 끊긴 것을 보고 그 질문을 닫는다 — 쓰기가 끝나기를
+/// 기다리지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn when_the_helper_goes_away_its_question_closes() {
+    use std::io::Write as _;
+
+    let (f, askpass) = fixture(None);
+    let _server = serve(&askpass, &f.app, Path::new("/unused/pitwall")).await;
+    let window = Window::open(&f.write, &f.project, |_| None);
+    let prompts = f.write.prompts().clone();
+    f.write
+        .run(auth_request(&f), move |ctx| async move {
+            let env = ctx.git().env().to_vec();
+            let (socket, token) = (env_value(&env, SOCKET_ENV), env_value(&env, TOKEN_ENV));
+            let mut helper = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+            let line = serde_json::json!({
+                "protocol": PROTOCOL,
+                "token": token,
+                "prompt": "Confirm user presence for key",
+                "hint": "notice",
+            });
+            helper.write_all(format!("{line}\n").as_bytes()).unwrap();
+            until("the window is asked", || prompts.pending() == 1).await;
+            drop(helper);
+            until("the question closes", || prompts.pending() == 0).await;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(window.seen().len(), 1);
+}
+
+/// 묻는 도중 창이 닫히면 도우미는 곧 실패한다(시간 제한을 기다리지 않는다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn when_the_window_leaves_while_asked_the_helper_fails() {
+    let (f, askpass) = fixture(Some((Duration::from_secs(3600), Duration::from_secs(3600))));
+    let _server = serve(&askpass, &f.app, Path::new("/unused/pitwall")).await;
+    let window = Window::open(&f.write, &f.project, |_| None);
+    let f = std::sync::Arc::new(f);
+    let asking = tokio::spawn({
+        let f = std::sync::Arc::clone(&f);
+        async move { ask_inside_a_write(&f).await.0 }
+    });
+    until("the window is asked", || window.seen().len() == 1).await;
+    drop(window);
+    let error = tokio::time::timeout(Duration::from_secs(10), asking)
+        .await
+        .expect("the helper waited for the hour-long timeout")
+        .unwrap()
+        .unwrap_err();
+    assert!(error.contains("closed"), "{error}");
 }

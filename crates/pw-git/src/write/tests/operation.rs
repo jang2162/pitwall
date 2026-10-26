@@ -4,7 +4,12 @@
 use std::fs;
 
 use super::super::*;
-use crate::testing::write::WriteFixture;
+use crate::testing::write::{Window, WriteFixture};
+
+/// 미저장 확인에 바로 「진행」 으로 답하는 프로젝트 창(계속 · 중단 · 건너뛰기는 작업 트리를 바꾼다).
+fn window(f: &WriteFixture) -> Window {
+    Window::open(&f.write, &f.project, |_| Some(GitPromptAnswer::Proceed))
+}
 
 /// 작업 트리 상태(`git status --porcelain` 과 추적 파일 내용).
 fn snapshot(f: &WriteFixture) -> (String, String, Vec<(String, String)>) {
@@ -30,6 +35,7 @@ fn snapshot(f: &WriteFixture) -> (String, String, Vec<(String, String)>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_merge_conflict_is_a_merge_and_abort_restores_head_and_work_tree() {
     let f = WriteFixture::new(true);
+    let _window = window(&f);
     let d = f.repo.diverge();
     let before = snapshot(&f);
     let out = f.repo.try_git_in(f.repo.root(), &["merge", &d.theirs]);
@@ -67,6 +73,7 @@ async fn a_merge_conflict_is_a_merge_and_abort_restores_head_and_work_tree() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn continue_fails_with_gits_message_until_the_conflict_is_resolved_then_commits() {
     let f = WriteFixture::new(true);
+    let _window = window(&f);
     let d = f.repo.start_conflicting_merge();
     let result = f
         .write
@@ -117,6 +124,7 @@ fn start_rebase(f: &WriteFixture) -> (String, String, [String; 3]) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_rebase_reports_branch_onto_and_step_and_skip_stops_again_on_the_next_conflict() {
     let f = WriteFixture::new(true);
+    let _window = window(&f);
     let (main, tip, [o1, o2, _]) = start_rebase(&f);
     let info = f.write.operation(&f.project, None).await.unwrap().unwrap();
     assert_eq!(info.kind, RepoOperation::Rebase);

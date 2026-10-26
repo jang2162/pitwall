@@ -129,13 +129,14 @@ impl WriteFixture {
         }
     }
 
-    /// 이 프로젝트의 쓰기 요청(작업 트리를 바꾸지 않는 쓰기).
+    /// 이 프로젝트의 쓰기 요청(작업 트리를 바꾸지 않고 인증을 묻지 않는 쓰기).
     pub fn request(&self, title: &str) -> crate::write::WriteRequest {
         crate::write::WriteRequest {
             project_id: self.project.clone(),
             worktree: None,
             title: title.to_owned(),
             changes: crate::write::Changes::None,
+            askpass: false,
         }
     }
 }

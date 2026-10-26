@@ -4,16 +4,20 @@
 //! 쓰기 하나([`GitWrite::run`])의 차례:
 //! 1. 저장소를 연다(`crate::Git::open` — 없으면 [`WriteError::NoRepository`]). 쓰기 명령을 만든다(`crate::Git::command` 의 쓰기 —
 //!    실행 파일 · 버전 · 런타임 환경. 못 쓰면 [`WriteError::WritesOff`]). 미신뢰 프로젝트도 쓰기는 된다(사람이 누른 작업, D43).
-//! 2. 작업 트리를 바꾸는 쓰기([`Changes`])면 미저장 문서 확인: 그 프로젝트를 듣는 창에 바뀔 경로를 보내고 답을 기다린다
-//!    ([`prompt`]). 듣는 창이 없으면 그대로 하고, 취소하면 [`WriteError::Cancelled`] 로 아무것도 하지 않는다.
-//! 3. 프로젝트 범위 `Task` 를 띄운다(제목은 `task-title-git-*` Fluent id). 그 안에서 저장소 잠금([`lock`])을 기다려 받는다 — 같은
-//!    저장소(연결 워크트리 포함)의 쓰기는 한 줄로 돌고, 읽기는 막지 않는다. 잠금을 받은 뒤 `index.lock` 이 있으면 다른 git 이 작업
+//! 2. 프로젝트 범위 `Task` 를 띄운다(제목은 `task-title-git-*` Fluent id). 그 안에서 저장소 잠금([`lock`])을 기다려 받는다 — 같은
+//!    저장소(연결 워크트리 포함)의 쓰기는 한 줄로 돌고, 읽기는 막지 않는다.
+//! 3. 잠금을 받은 뒤, 작업 트리를 바꾸는 쓰기([`Changes`])면 미저장 문서 확인: 그 프로젝트를 듣는 창에 바뀔 경로를 보내고 답을
+//!    기다린다([`prompt`]). 잠금 안에서 묻는다 — 앞 쓰기를 기다리는 사이 생긴 미저장 편집도 확인에 든다. 묻기 시작할 때 듣는 창이
+//!    없으면 [`WriteError::NoWindow`], 취소 · 시간 초과면 [`WriteError::Cancelled`] 로 아무것도 하지 않는다. 묻는 도중 창이 닫혔으면
+//!    진행한다(창 닫기가 M1-13 의 확인으로 그 창의 미저장 문서를 이미 처리했다). 그 뒤 `index.lock` 이 있으면 다른 git 이 작업
 //!    중이라 [`WriteError::IndexLocked`] 로 끝낸다(그 파일은 지우지 않는다). 그 뒤 본문(`job`)이 [`WriteCtx`] 로 git 을 돌린다.
 //! 4. 진행은 명령마다 `git <하위 명령>` 이다(git 의 사람용 출력은 해석하지 않는다). 실패면 git 의 stderr 원문이 Task 의 오류가 되어
 //!    창의 실패 알림 body 로 나간다 — RPC 의 오류([`code::GIT_FAILED`])를 받은 창은 다시 알리지 않는다. 취소(`task.cancel`)는
 //!    git 의 프로세스 그룹에 SIGTERM 을 보내 git 이 잠금 파일을 지우고 끝난 뒤에 저장소 잠금을 놓는다. RPC 를 부른 쪽이 사라져도
 //!    쓰기는 끝까지 간다 — 멈추는 길은 Task 취소다.
-//! 5. 인증: 소켓을 연 앱이면 쓰기마다 askpass 토큰을 만들어 git 의 환경에 넣는다([`askpass`]). 쓰기가 끝나면 토큰을 버린다.
+//! 5. 인증: 인증을 물을 수 있는 쓰기([`WriteRequest::askpass`] — 원격에 닿는 fetch · pull · push 등)만, 소켓을 연 앱이면 쓰기마다
+//!    askpass 토큰을 만들어 git 의 환경에 넣는다([`askpass`]). 그 밖의 쓰기(계속 · 중단 · 커밋 등)의 훅은 도우미를 받지 못한다 —
+//!    저장소의 훅이 진짜와 같은 암호 다이얼로그를 띄우지 못하게. 쓰기가 끝나면 토큰을 버린다.
 //!
 //! 진행 중 작업(`git.operation` 과 계속 · 중단 · 건너뛰기)은 [`operation`], RPC 는 [`methods`].
 
@@ -42,8 +46,8 @@ pub use askpass::Askpass;
 pub use methods::register;
 pub use operation::{OperationAction, OperationInfo, OperationStep};
 pub use prompt::{
-    AnswerError, GitPrompt, GitPromptAnswer, GitPromptEvent, GitPromptRequest, Listener,
-    PromptError, Prompts,
+    AnswerError, AskpassHint, GitPrompt, GitPromptAnswer, GitPromptEvent, GitPromptRequest,
+    Listener, PromptError, Prompts, askpass_text,
 };
 
 use crate::cli::{Access, GitCommand, Output, RunError};
@@ -62,6 +66,8 @@ pub mod code {
     pub const GIT_FAILED: i32 = 2004;
     /// 진행 중 작업이 없거나 지금 작업에서 할 수 없는 동작이다.
     pub const NO_OPERATION: i32 = 2005;
+    /// 작업 트리를 바꾸는 쓰기인데 미저장 문서를 확인할 그 프로젝트의 창이 듣고 있지 않다 — 쓰기를 하지 않았다.
+    pub const NO_WINDOW: i32 = 2006;
 }
 
 /// 쓰기가 작업 트리를 어떻게 바꾸는가 — 미저장 문서 확인의 범위.
@@ -112,6 +118,8 @@ pub enum WriteError {
     },
     /// 미저장 확인에서 취소했거나, Task 를 취소했다.
     Cancelled,
+    /// 미저장 확인을 묻기 시작할 때 그 프로젝트를 듣는 창이 없었다.
+    NoWindow,
     NoOperation,
     Unsupported {
         kind: RepoOperation,
@@ -183,6 +191,9 @@ impl fmt::Display for WriteError {
             ),
             Self::Failed { .. } => f.write_str(&self.task_message()),
             Self::Cancelled => f.write_str("cancelled"),
+            Self::NoWindow => f.write_str(
+                "no window of this project is listening to confirm unsaved documents; the write did not run",
+            ),
             Self::NoOperation => {
                 f.write_str("no merge, rebase, cherry-pick, revert or am is in progress")
             }
@@ -214,6 +225,7 @@ impl From<WriteError> for RpcError {
                 serde_json::json!({ "command": command, "exitCode": exit_code, "stderr": stderr, "stdout": stdout }),
             ),
             WriteError::Cancelled => RpcError::cancelled(),
+            WriteError::NoWindow => RpcError::new(code::NO_WINDOW, message),
             WriteError::NoOperation | WriteError::Unsupported { .. } => {
                 RpcError::new(code::NO_OPERATION, message)
             }
@@ -232,6 +244,9 @@ pub struct WriteRequest {
     /// Task 제목 — `task-title-git-*` Fluent id(`extensions/i18n-default/i18n/*/project.ftl`).
     pub title: String,
     pub changes: Changes,
+    /// git · ssh 가 인증을 물을 수 있는 쓰기인가(원격에 닿는 fetch · pull · push 등). 참일 때만 askpass 도우미를 git 의 환경에
+    /// 넣는다 — 거짓이면 훅 · 필터도 도우미를 받지 못한다(모듈 머리 주석 5).
+    pub askpass: bool,
 }
 
 /// 쓰기의 저장소: 대상과 git 디렉터리.
@@ -325,10 +340,12 @@ impl GitWrite {
             .command(&repo.target, Access::Write)
             .await
             .map_err(WriteError::WritesOff)?;
-        self.confirm_unsaved(&repo, request.changes).await?;
-        let askpass =
+        let askpass = if request.askpass {
             self.askpass
-                .session(&repo.target.project_id, &self.prompts, self.askpass_timeout);
+                .session(&repo.target.project_id, &self.prompts, self.askpass_timeout)
+        } else {
+            None
+        };
         let base = match &askpass {
             Some(session) => {
                 let mut env = base.env().to_vec();
@@ -339,6 +356,8 @@ impl GitWrite {
         };
         let lock = self.locks.get(&repo.common_dir);
         let git = Arc::clone(&self.git);
+        let (prompts, confirm_timeout, changes) =
+            (self.prompts.clone(), self.confirm_timeout, request.changes);
         let worktree = request.worktree;
         let spawner = tasks.scoped(
             Scope::Project(repo.target.project_id.clone()),
@@ -356,6 +375,11 @@ impl GitWrite {
                         () = cancel.cancelled() => return Err(WriteError::Cancelled),
                         held = lock.lock_owned() => held,
                     };
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => return Err(WriteError::Cancelled),
+                        confirmed = confirm_unsaved(&prompts, &repo, changes, confirm_timeout) => confirmed?,
+                    }
                     let index_lock = repo.git_dir.join("index.lock");
                     if std::fs::symlink_metadata(&index_lock).is_ok() {
                         return Err(WriteError::IndexLocked { path: index_lock });
@@ -409,28 +433,6 @@ impl GitWrite {
         .map_err(WriteError::Rpc)
     }
 
-    /// 미저장 문서 확인(모듈 머리 주석 2).
-    async fn confirm_unsaved(&self, repo: &RepoDirs, changes: Changes) -> Result<(), WriteError> {
-        let paths = match changes {
-            Changes::None => return Ok(()),
-            Changes::Paths(paths) if paths.is_empty() => return Ok(()),
-            Changes::Paths(paths) => Some(paths),
-            Changes::WorkTree => None,
-        };
-        let request = GitPromptRequest::Unsaved {
-            work_tree: display(&repo.target.work_tree),
-            paths,
-        };
-        match self
-            .prompts
-            .ask(&repo.target.project_id, request, self.confirm_timeout)
-            .await
-        {
-            Ok(GitPromptAnswer::Proceed) | Err(PromptError::NoWindow) => Ok(()),
-            Ok(_) | Err(PromptError::TimedOut) => Err(WriteError::Cancelled),
-        }
-    }
-
     /// `git.operation`: 진행 중 작업. 저장소가 없거나 진행 중 작업이 없으면 `None`.
     pub async fn operation(
         &self,
@@ -471,6 +473,7 @@ impl GitWrite {
             worktree: worktree.map(str::to_owned),
             title: action_title(action).to_owned(),
             changes: operation::changes(before.kind, action),
+            askpass: false,
         };
         self.run(request, move |ctx| async move {
             // 잠금을 받은 뒤 다시 읽는다 — 기다리는 사이 터미널에서 끝냈을 수 있다.
@@ -503,6 +506,30 @@ impl GitWrite {
             Err(WriteError::failed(args[0], &output))
         })
         .await
+    }
+}
+
+/// 미저장 문서 확인(모듈 머리 주석 3). 저장소 잠금을 쥔 채 부른다.
+async fn confirm_unsaved(
+    prompts: &Prompts,
+    repo: &RepoDirs,
+    changes: Changes,
+    timeout: Duration,
+) -> Result<(), WriteError> {
+    let paths = match changes {
+        Changes::None => return Ok(()),
+        Changes::Paths(paths) if paths.is_empty() => return Ok(()),
+        Changes::Paths(paths) => Some(paths),
+        Changes::WorkTree => None,
+    };
+    let request = GitPromptRequest::Unsaved {
+        work_tree: display(&repo.target.work_tree),
+        paths,
+    };
+    match prompts.ask(&repo.target.project_id, request, timeout).await {
+        Ok(GitPromptAnswer::Proceed) | Err(PromptError::WindowLeft) => Ok(()),
+        Err(PromptError::NoWindow) => Err(WriteError::NoWindow),
+        Ok(_) | Err(PromptError::TimedOut) => Err(WriteError::Cancelled),
     }
 }
 
