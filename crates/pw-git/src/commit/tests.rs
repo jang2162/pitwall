@@ -249,6 +249,64 @@ async fn hooks_get_the_mise_env_only_in_a_trusted_project() {
     }
 }
 
+/// 커밋의 훅은 askpass 도우미를 받지 않는다 — 저장소의 훅이 진짜와 같은 암호 다이얼로그를 띄우지 못한다(`askpass: false`).
+/// 소켓을 연 앱에서도 그렇다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_hook_gets_no_askpass_helper_even_when_the_app_serves_one() {
+    let askpass = crate::write::Askpass::default();
+    let f = WriteFixture::with_repo(TestRepo::with_commit(), true, askpass.clone());
+    let socket = f.app.join("run").join("x.sock");
+    let server = tokio::spawn(askpass.clone().serve(socket, "/unused/pitwall".into()));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while askpass.helper().is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the askpass socket did not open"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let seen = f.repo.base().join("hook-env");
+    hook(
+        &f.repo,
+        "pre-commit",
+        &format!(
+            "printf '%s|%s|%s|%s' \"$GIT_ASKPASS\" \"$SSH_ASKPASS\" \"$PITWALL_ASKPASS_SOCKET\" \"$PITWALL_ASKPASS_TOKEN\" > '{}'",
+            seen.display()
+        ),
+    );
+    f.repo.write("a.txt", "a\n");
+    f.repo.git(&["add", "a.txt"]);
+    commit(&f.write, params(&f, "no helper\n")).await.unwrap();
+    assert_eq!(fs::read_to_string(&seen).unwrap(), "|||");
+    server.abort();
+}
+
+/// 훅이 stderr 로 출력하고 git 이 이유를 stdout 으로만 낼 때(`nothing to commit`) Task 의 실패 알림 body 에 둘 다 있다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_failure_notification_has_the_hook_output_and_gits_stdout_reason() {
+    let f = WriteFixture::new(true);
+    hook(&f.repo, "pre-commit", "echo 'hook ran' >&2");
+    let before = f.repo.head();
+    let mut sub = f.bus.subscribe(Filter::all());
+
+    let result = commit(&f.write, params(&f, "nothing\n")).await;
+    assert!(
+        matches!(result, Err(WriteError::Failed { .. })),
+        "{result:?}"
+    );
+    assert_eq!(f.repo.head(), before);
+
+    let events = until_finished(&mut sub).await;
+    let finished = events
+        .iter()
+        .find(|(t, _)| t == TOPIC_FINISHED)
+        .map(|(_, p)| p)
+        .unwrap();
+    let error = finished["error"].as_str().unwrap();
+    assert!(error.contains("hook ran"), "{finished}");
+    assert!(error.contains("nothing to commit"), "{finished}");
+}
+
 /// git 이 거절하는 것(빈 메시지)은 덮지 않고 원문으로 실패한다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_empty_message_is_refused_by_git() {

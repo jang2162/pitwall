@@ -143,7 +143,8 @@ impl WriteError {
         }
     }
 
-    /// Task 의 실패 문구(창의 실패 알림 body). git 이 실패했으면 stderr 원문(비었으면 stdout)이다.
+    /// Task 의 실패 문구(창의 실패 알림 body). git 이 실패했으면 stderr 와 stdout 의 원문이다(둘 다 있으면 stderr 뒤에 stdout) —
+    /// 훅이 stderr 로 출력하고 git 이 이유(`nothing to commit` 등)를 stdout 으로만 낼 때 이유가 빠지지 않게 한다.
     pub fn task_message(&self) -> String {
         match self {
             Self::Failed {
@@ -151,16 +152,21 @@ impl WriteError {
                 exit_code,
                 stderr,
                 stdout,
-            } => [stderr.trim_end(), stdout.trim_end()]
-                .into_iter()
-                .find(|text| !text.is_empty())
-                .map_or_else(
-                    || match exit_code {
+            } => {
+                let text = [stderr.trim_end(), stdout.trim_end()]
+                    .into_iter()
+                    .filter(|text| !text.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    text
+                } else {
+                    match exit_code {
                         Some(code) => format!("git {command} exited with code {code}"),
                         None => format!("git {command} was killed by a signal"),
-                    },
-                    str::to_owned,
-                ),
+                    }
+                }
+            }
             other => other.to_string(),
         }
     }

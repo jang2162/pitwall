@@ -6,10 +6,12 @@
 //!   미신뢰 프로젝트는 로그인 셸만). git 은 훅의 stdout 을 stderr 로 돌리므로, `--quiet` 로 git 자신의 요약을 끄면 stderr 가 훅과
 //!   git 경고의 원문이다. 성공이면 결과의 `output`, 실패면 Task 의 오류(창의 실패 알림 body)와 RPC 오류의 `data.stderr` 다
 //!   (`crate::write` 머리 주석 4).
-//! - `commit.gpgsign` · `commit.template` · `commit.cleanup` 은 git 설정을 따른다 — 인자로 덮지 않는다.
+//! - `commit.gpgsign` · `commit.cleanup` 은 git 설정을 따른다 — 인자로 덮지 않는다. `commit.template` 은 git 이 편집기를 띄울 때만
+//!   쓰므로 `-F` 로 메시지를 주는 이 길에서는 쓰이지 않는다 — 템플릿을 메시지 칸에 미리 채우는 일은 M2-16 이 한다.
 //! - index 를 커밋할 뿐 작업 트리를 바꾸지 않으므로 미저장 확인을 묻지 않는다([`Changes::None`]). 원격에 닿지 않으므로 askpass 도
 //!   넣지 않는다 — 저장소의 훅이 암호 다이얼로그를 띄우지 못한다.
-//! - 결과의 `previous` 는 커밋 전 HEAD 다. amend 는 ref 를 옮기므로 창이 그 해시로 [되돌리기] 를 단다(결정 M2-D6 ③).
+//! - 결과의 `previous` 는 커밋 전 HEAD 다. amend 는 ref 를 옮기므로 창이 그 해시로 [되돌리기] 를 단다(결정 M2-D6 ③). 꼴은 M2-10 의
+//!   `GitRefMove { refName, previous, current }` 로 맞춘다 — 그 타입의 주인은 M2-10 이라, 병합된 뒤 `previous` 를 그것으로 바꾼다.
 //!
 //! 메시지 히스토리는 창의 프로젝트 상태(`apps/desktop/src/layout/project-state.ts` → `state.json`)에 있고, amend 가 미리 채우는 직전
 //! 메시지는 `git.show { rev: "HEAD" }` 의 `message` 다 — 이 모듈은 둘 다 다루지 않는다.
