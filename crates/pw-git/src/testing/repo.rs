@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Once;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 첫 커밋의 시각(초). 커밋마다 1분씩 늘린다 — 해시와 시각 순서가 실행마다 같다.
@@ -47,6 +48,25 @@ pub fn git_command(dir: &Path, ceiling: &Path) -> Command {
     c
 }
 
+/// 시험 프로세스 안의 gix(저장소 열기 · diff · status)가 사람의 전역 · 시스템 git 설정(`~/.gitconfig` 의 `core.autocrlf` ·
+/// `diff.algorithm` · `filter.lfs.*`, `~/.config/git/attributes`)을 읽지 않게 한다: HOME · XDG · `GIT_CONFIG_GLOBAL` 을 없는 폴더로
+/// 돌리고 시스템 설정을 끈다. 사람의 기기 설정에 따라 시험 결과가 바뀌지 않게 [`TestRepo::new`] 가 부른다(프로세스마다 한 번). git
+/// CLI 는 [`git_command`] 과 가짜 로그인 셸이 따로 빈 설정으로 돌린다. 사람의 전역 설정을 흉내 내는 시험은 이 뒤에 그 변수를 제
+/// 폴더로 다시 돌린다(`crate::tests::diff` 의 `isolate_global_config`).
+pub fn isolate_git_config() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let home = std::env::temp_dir().join("pitwall-test-no-git-home");
+        // SAFETY: 시험은 nextest 로 시험마다 프로세스가 따로 돈다. 저장소를 만들기 전(gix 가 환경을 읽기 전)에 한 번만 바꾼다.
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::set_var("XDG_CONFIG_HOME", home.join(".config"));
+            std::env::set_var("GIT_CONFIG_GLOBAL", home.join(".gitconfig"));
+            std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
+        }
+    });
+}
+
 /// 임시 폴더 안의 저장소. 버리면 폴더째 지운다.
 pub struct TestRepo {
     dir: tempfile::TempDir,
@@ -64,6 +84,7 @@ impl Default for TestRepo {
 impl TestRepo {
     /// `git init`(기본 브랜치 `main`) 한 빈 저장소. 커밋이 없으니 HEAD 는 태어나지 않은 `main` 이다.
     pub fn new() -> Self {
+        isolate_git_config();
         let dir = tempfile::tempdir().expect("create a temp dir");
         // 레지스트리 · 저장소 해석이 돌려주는 경로(실제 경로)와 비교할 수 있게 한다(macOS 의 `/var` → `/private/var`).
         let base = pw_core::registry::path::normalize(&std::fs::canonicalize(dir.path()).unwrap())

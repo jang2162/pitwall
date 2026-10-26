@@ -545,3 +545,38 @@ fn tests_do_not_read_the_persons_global_git_config() {
     let repo = Repo::new(r);
     assert_same_as_git(&repo, None, commit("HEAD"), &["HEAD~1", "HEAD"]);
 }
+
+/// 사람의 설정이 `core.autocrlf` 를 켜도(`input` · `true`) CRLF 로 커밋된 파일의 작업 트리 diff 는 git 과 같다 — git 은 index 의
+/// 그 파일에 CRLF 가 있으면 작업 트리 쪽의 줄바꿈을 바꾸지 않는다. 그 판정에는 작업 트리 쪽의 index 항목 id 가 든다(`changes` 의
+/// `contents`). 견줄 git 에도 같은 값을 준다(시험의 git 은 `core.autocrlf=false` 로 돈다 — 뒤의 `-c` 가 이긴다).
+#[test]
+fn autocrlf_leaves_files_committed_with_crlf_alone_like_git() {
+    for autocrlf in ["input", "true"] {
+        let r = TestRepo::with_commit();
+        r.write("crlf.txt", "a\r\nb\r\nc\r\n");
+        r.commit_all("crlf");
+        r.write("crlf.txt", "a\r\nB\r\nc\r\nD\r\n");
+        let repo = Repo::new(r);
+        fs::write(
+            repo.r.base().join("home/.gitconfig"),
+            format!("[core]\n\tautocrlf = {autocrlf}\n"),
+        )
+        .unwrap();
+        let diff = repo.diff(None, DiffSide::WorkTree);
+        let ours: String = diff.files[0].hunks.iter().map(hunk_text).collect();
+        let setting = format!("core.autocrlf={autocrlf}");
+        let git = repo.r.git(&[
+            "-c",
+            &setting,
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--",
+            "crlf.txt",
+        ]);
+        let theirs = &git[git.find("@@").expect("git shows a hunk")..];
+        assert_eq!(ours, theirs, "core.autocrlf={autocrlf}");
+        assert!(ours.contains("-b\r\n+B\r\n"), "{ours:?}");
+    }
+}

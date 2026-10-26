@@ -763,6 +763,10 @@ fn contents(
         .or(entry.new.as_ref())
         .and_then(|s| kind(s.mode))
         .unwrap_or(EntryKind::Blob);
+    // 작업 트리 쪽에는 같은 경로의 index 항목 id 를 준다. 내용은 여전히 디스크에서 읽고(작업 트리 쪽은 캐시를 경로로 찾는다), gix 는
+    // 그 id 로 index 의 내용을 보아 git 처럼 「index 의 그 파일에 CRLF 가 있으면 줄바꿈을 바꾸지 않는다」(`core.autocrlf` 의 안전
+    // 규칙)를 판정한다 — null id 면 그 판정 없이 CRLF 로 커밋된 파일의 모든 줄을 LF 로 바꿔 견준다.
+    let index_id = worktree.and(entry.old.as_ref().and_then(|s| s.id));
     let set = |cache: &mut Platform, side: &Option<Side>, which: ResourceKind| {
         let result = match side {
             Some(s) => {
@@ -772,7 +776,7 @@ fn contents(
                     worktree.check(s.path.as_ref(), s.mode)?;
                 }
                 cache.set_resource(
-                    s.id.unwrap_or_else(|| ObjectId::null(hash)),
+                    s.id.or(index_id).unwrap_or_else(|| ObjectId::null(hash)),
                     kind(s.mode).unwrap_or(fallback),
                     s.path.as_ref(),
                     which,
