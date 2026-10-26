@@ -60,10 +60,13 @@ pub struct Target {
     pub work_tree: PathBuf,
 }
 
-/// 연 저장소.
+/// 연 저장소. 열 때의 신뢰로 열린다([`repo::open_options`] — 미신뢰면 저장소 설정에서 프로그램을 고르지 않는다). 들고 있는 쪽은
+/// 신뢰가 바뀌면(`pw_core::registry::ChangeKind::Trust`) 다시 연다 — [`Git::is_current`] 가 그 판정이다.
 pub struct Opened {
     pub target: Target,
     pub repo: gix::Repository,
+    /// 열 때 프로젝트를 신뢰했는가.
+    pub trusted: bool,
 }
 
 /// git CLI 를 쓸 수 없는 이유.
@@ -157,7 +160,8 @@ impl Git {
                 }
             },
         };
-        let repo = match repo::discover(&project_root, host.projects.is_trusted(project_id)) {
+        let trusted = host.projects.is_trusted(project_id);
+        let repo = match repo::discover(&project_root, trusted) {
             Ok(Ok(repo)) => repo,
             Ok(Err(reason)) => {
                 tracing::debug!(target: "pw_git", project = project_id, root = %project_root.display(), ?reason, "no repository");
@@ -181,7 +185,13 @@ impl Git {
                 work_tree,
             },
             repo,
+            trusted,
         }))
+    }
+
+    /// `opened` 를 연 뒤로 그 프로젝트의 신뢰가 그대로인가. 아니면 그 핸들은 옛 신뢰의 설정을 들고 있다 — 다시 연다.
+    pub fn is_current(&self, opened: &Opened) -> bool {
+        self.trusted(&opened.target.project_id) == opened.trusted
     }
 
     /// `target` 의 작업 트리에서 돌릴 git 명령. 런타임 환경을 기다릴 수 있다(로그인 셸). 읽기는 신뢰한 프로젝트에서만 만든다

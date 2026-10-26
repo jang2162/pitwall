@@ -190,3 +190,136 @@ fn trusting_the_project_lets_its_repository_programs_run_again() {
     run(&["diff"]);
     assert_eq!(p.marks(), ["clean", "external", "fsmonitor"]);
 }
+
+/// `--separate-git-dir` 로 만든 저장소 하나(`<base>/<name>` 작업 트리, `<base>/store/<name>.git` 저장소 폴더).
+fn separate_git_dir(r: &TestRepo, name: &str) -> (PathBuf, PathBuf) {
+    let store = r.base().join(format!("store/{name}.git"));
+    let proj = r.base().join(name);
+    fs::create_dir_all(r.base().join("store")).unwrap();
+    r.git_in(
+        r.base(),
+        &[
+            "init",
+            "-q",
+            &format!("--separate-git-dir={}", store.display()),
+            proj.to_str().unwrap(),
+        ],
+    );
+    r.git_in(&proj, &["commit", "-q", "--allow-empty", "-m", "x"]);
+    (proj, store)
+}
+
+fn target_of(id: &str, root: &Path) -> Target {
+    Target {
+        project_id: id.to_owned(),
+        project_root: root.to_path_buf(),
+        work_tree: root.to_path_buf(),
+    }
+}
+
+/// `--separate-git-dir` 저장소도 신뢰로 갈린다: 미신뢰면 CLI 읽기를 거절하고, 신뢰하면 만든다.
+#[test]
+fn a_separate_git_dir_repository_reads_with_the_cli_only_when_trusted() {
+    let r = TestRepo::new();
+    let (proj, _store) = separate_git_dir(&r, "proj");
+    let git = which_git();
+    let c = Cli::with_path("", &git.parent().unwrap().display().to_string());
+    let id = c.f.project(&proj);
+    let opened = c.f.git.open(&id, None).unwrap().expect("a repository");
+    assert_eq!(opened.target.work_tree, proj);
+    let rt = tokio_rt();
+    let refused = rt.block_on(c.f.git.command(&opened.target, Access::Read));
+    assert_eq!(
+        refused.unwrap_err(),
+        CliError::Untrusted {
+            project_id: id.clone()
+        }
+    );
+    c.f.trust(&id, true);
+    let opened = c.f.git.open(&id, None).unwrap().expect("a repository");
+    rt.block_on(async {
+        let out =
+            c.f.git
+                .command(&opened.target, Access::Read)
+                .await
+                .unwrap()
+                .args(["rev-parse", "--show-toplevel"])
+                .output(&CancellationToken::new())
+                .await
+                .unwrap();
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            proj.display().to_string()
+        );
+    });
+}
+
+/// 남의 `--separate-git-dir` 저장소 폴더를 가리키는 `.git` 파일은 git 이 되돌림을 남기지 않아 가를 수 없다 — 그 폴더의 저장소로
+/// 받지만 신뢰는 그 폴더(프로젝트 경로)의 것이다. 저장소 주인 프로젝트를 신뢰해도 이 폴더는 미신뢰로 남아, CLI 로 읽지 않고 gix 도
+/// 그 저장소 설정의 프로그램을 고르지 않는다.
+#[test]
+fn a_git_file_borrowing_a_separate_git_dir_does_not_borrow_its_trust() {
+    let r = TestRepo::new();
+    let (owner, store) = separate_git_dir(&r, "owner");
+    r.git_in(&owner, &["config", "filter.mark.clean", "planted-clean"]);
+    let evil = r.base().join("downloads/evil");
+    fs::create_dir_all(&evil).unwrap();
+    fs::write(evil.join(".git"), format!("gitdir: {}\n", store.display())).unwrap();
+    let git = which_git();
+    let c = Cli::with_path("", &git.parent().unwrap().display().to_string());
+    let owner_id = c.f.project(&owner);
+    c.f.trust(&owner_id, true);
+    let id = c.f.project(&evil);
+    assert!(!c.f.projects.is_trusted(&id));
+
+    let opened = c.f.git.open(&id, None).unwrap().expect("a repository");
+    assert_eq!(opened.target.work_tree, evil);
+    let chosen = opened
+        .repo
+        .config_snapshot()
+        .trusted_program("filter.mark.clean")
+        .unwrap()
+        .map(|p| p.to_string_lossy().into_owned());
+    assert_eq!(chosen, None);
+    let refused = tokio_rt().block_on(c.f.git.command(&target_of(&id, &evil), Access::Read));
+    assert_eq!(
+        refused.unwrap_err(),
+        CliError::Untrusted {
+            project_id: id.clone()
+        }
+    );
+    // 주인 프로젝트에서는 같은 설정이 프로그램을 고른다(위의 `None` 이 신뢰로 갈린다).
+    let owned =
+        c.f.git
+            .open(&owner_id, None)
+            .unwrap()
+            .expect("a repository");
+    assert!(
+        owned
+            .repo
+            .config_snapshot()
+            .trusted_program("filter.mark.clean")
+            .unwrap()
+            .is_some()
+    );
+}
+
+/// 받아 둔 핸들은 열 때의 신뢰를 들고 있다 — 신뢰를 바꾸면 [`Git::is_current`] 가 다시 열 때라고 알린다(신뢰 · 해제 둘 다).
+#[test]
+fn an_opened_repository_is_stale_once_the_trust_changes() {
+    let (_p, c, target) = setup();
+    let id = &target.project_id;
+    let opened = c.f.git.open(id, None).unwrap().expect("a repository");
+    assert!(!opened.trusted);
+    assert!(c.f.git.is_current(&opened));
+    c.f.trust(id, true);
+    assert!(!c.f.git.is_current(&opened));
+    // 옛 핸들은 여전히 미신뢰의 설정이다 — 다시 열어야 사람의 설정이 먹는다.
+    assert_eq!(programs(&opened.repo), [None, None, None]);
+    let reopened = c.f.git.open(id, None).unwrap().expect("a repository");
+    assert!(c.f.git.is_current(&reopened));
+    assert!(programs(&reopened.repo).iter().all(Option::is_some));
+    c.f.trust(id, false);
+    assert!(!c.f.git.is_current(&reopened));
+}

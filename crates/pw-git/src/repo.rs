@@ -3,8 +3,9 @@
 //! - 대상은 활성 워크트리 안의 프로젝트 루트(없으면 주 루트)를 담은 저장소다. 프로젝트 루트가 저장소의 하위 폴더(모노레포의
 //!   일부)여도 저장소 전체다. 찾기는 git 과 같이 루트에서 위로 가장 가까운 `.git` 이다.
 //! - 찾은 작업 트리의 `.git` 이 파일이면 M1-05 의 위조 판정(`pw_core::config::gitdir::git_file`)을 거친다 — 관리 폴더가 그
-//!   저장소의 `worktrees/<이름>` 바로 아래가 아니거나 되돌림 포인터가 맞지 않는 연결 워크트리, 관리 폴더의 `core.worktree` 가 이
-//!   폴더를 되가리키지 않는 서브모듈(다른 저장소의 `.git` 을 직접 가리키는 `.git` 파일 포함)은 저장소로 보지 않는다.
+//!   저장소의 `worktrees/<이름>` 바로 아래가 아니거나 되돌림 포인터가 맞지 않는 연결 워크트리, `commondir` 이 없는 관리 폴더 중
+//!   다른 작업 트리의 내장 `.git` 이거나 `core.worktree` 가 이 폴더가 아닌 곳을 가리키는 것은 저장소로 보지 않는다. 서브모듈과
+//!   `--separate-git-dir` 저장소는 그 작업 트리의 저장소다.
 //! - 저장소 밖, bare 저장소(작업 트리가 없다), 위조 `.git`, `core.worktree` 가 `.git` 이 있는 폴더가 아닌 곳을 가리키는 저장소는
 //!   모두 「저장소 없음」 이다 — git 기능 전체가 빈 상태가 된다(10-ui.md 「빈 상태 · 오류 상태」). 마지막 것은 git CLI 가 작업 트리에서
 //!   다시 찾으면 다른 저장소(또는 없음)를 보기 때문이다 — 읽기(gix)와 쓰기(CLI)가 언제나 같은 `.git` 을 보게 한다.
@@ -13,8 +14,12 @@
 //!   (`filter.<x>.clean` · `process`) · `diff.<x>.textconv` 가 돌지 않는다(결정 M2-D8, 03-architecture.md 「보안」). 신뢰하면 gix 의
 //!   기본(소유자 · `safe.directory` 판정)대로 연다. 사람의 전역 설정은 어느 쪽이든 쓴다.
 //!
-//! git 프로세스를 띄우지 않는다(결정 M2-D8 「읽기는 gix」). 이 크레이트가 켠 gix 기능에는 프로그램을 띄우는 경로(`gix-command` ·
-//! `gix-filter`)가 아예 없다 — 위 열기 옵션은 그 기능을 켜는 행을 위한 것이다.
+//! 저장소의 프로그램을 띄우지 않는다(결정 M2-D8 「읽기는 gix」). 이 크레이트가 켠 gix 기능으로는 프로그램을 띄우는 호출 경로가
+//! 없다 — `gix-command` 는 `gix-transport` 를 거쳐 의존 트리에 있지만 그것을 부르는 `blocking-client` 가 꺼져 있고, `gix-filter` 는
+//! 트리에 없다. 위 열기 옵션은 그 기능을 켜는 행을 위한 것이다. 띄우는 것은 하나뿐이다: `gix-path` 가 git 설치의 설정 파일 위치를
+//! 찾으려고 앱 프로세스의 PATH 에서 찾은 `git` 으로 `git config -lz --show-origin --no-includes --name-only` 를 프로세스마다 한 번
+//! 돌린다(작업 디렉터리 `/`, `GIT_DIR` · `GIT_CONFIG_GLOBAL` 은 null 장치) — 설치 · 시스템 설정 파일의 경로와 키 이름만 읽고 어느
+//! 저장소의 설정도 읽지 않는다.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -42,6 +47,10 @@ pub enum NoRepo {
 ///
 /// gix 의 기본 판정은 섹션의 신뢰(소유자)로 가르는데, 사람이 전역 설정에 `safe.directory = *` 를 두면 남의 압축에서 풀린 저장소도
 /// 믿는다. 미신뢰 프로젝트는 소유자 · `safe.directory` 와 상관없이 저장소 안의 설정을 버린다.
+///
+/// 이 필터는 gix 의 「믿을 만한 설정에서만」 접근(`trusted_program` · `trusted_path`, 드라이버 · 원격 고르기)에만 걸린다 —
+/// `config_snapshot().string(..)` 같은 일반 접근은 저장소 값을 그대로 돌려준다. 프로그램 · 경로는 그 접근이나 gix 의 드라이버
+/// API 로만 정한다.
 pub fn open_options(trusted: bool) -> gix::open::Options {
     let options = gix::open::Options::default();
     if trusted {

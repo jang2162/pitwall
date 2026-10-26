@@ -2,9 +2,12 @@
 //!
 //! `git` 프로세스를 띄우지 않고 파일만 읽는다. 연결 워크트리의 꼭대기에는 디렉터리가 아니라 **파일** `.git` 이 있고
 //! (`gitdir: <메인>/.git/worktrees/<이름>`), 그 gitdir 안의 `commondir` 이 메인 저장소의 `.git` 을 가리킨다.
-//! 서브모듈도 `.git` 이 파일이지만 gitdir 에 `commondir` 이 없으므로 워크트리로 보지 않는다. 대신 git 이 그 관리 폴더의 `config` 에
-//! 적는 `core.worktree` 가 그 `.git` 파일의 폴더를 되가리켜야 한다 — 아니면 남의 저장소의 `.git` 을 직접 가리키는 `.git` 파일 하나로
-//! 그 저장소가 아무 폴더의 저장소가 된다.
+//! 서브모듈 · `git init/clone --separate-git-dir` 저장소도 `.git` 이 파일이지만 gitdir 에 `commondir` 이 없으므로 워크트리로 보지
+//! 않는다. 그런 gitdir 은 두 경우만 받지 않는다 — 다른 작업 트리의 내장 `.git`(이름이 `.git` 이고 부모가 이 폴더가 아니다)이거나, 그
+//! `config` 의 `core.worktree` 가 이 폴더가 아닌 곳을 가리킨다(서브모듈이면 git 이 이 폴더를 되가리키게 적는다). 아니면 남의
+//! 저장소의 `.git` 을 직접 가리키는 `.git` 파일 하나로 그 저장소가 아무 폴더의 저장소가 된다. 그 밖의 gitdir(separate-git-dir 의
+//! 저장소 폴더)은 git 이 되돌림을 남기지 않아 남의 것인지 가를 수 없다 — 받되 이 폴더 자신을 메인 루트로 하는 저장소다(워크트리가
+//! 아니라 다른 프로젝트의 신뢰를 물려받지 않는다).
 //! gitdir 의 `gitdir` 파일(git 이 워크트리마다 적는 되돌림 포인터)이 그 `.git` 파일을 가리켜야 한다 — 다른 워크트리의 관리 폴더를
 //! 가리키는 `.git` 파일 하나로 아무 폴더나 워크트리(파일 RPC 의 접근 루트)가 되지 않게.
 //! gitdir 은 실제 경로로 **`<commondir>/worktrees/<이름>` 바로 아래**여야 한다 — git 은 관리 폴더를 언제나 그 자리에 만든다.
@@ -63,11 +66,11 @@ pub enum GitFile {
     /// 연결 워크트리. 관리 폴더가 실제 경로로 `<common>/worktrees/<이름>` 바로 아래이고, 그 되돌림 포인터가 이 `.git` 을
     /// 가리킨다. bare 저장소의 워크트리도 여기다(`common` 이 `.git` 이라는 이름이 아니다). 두 경로는 실제 경로다.
     Worktree { gitdir: PathBuf, common: PathBuf },
-    /// 서브모듈: 관리 폴더에 `commondir` 이 없고, 그 `config` 의 `core.worktree` 가 이 폴더를 가리킨다(git 이 서브모듈 관리 폴더에
-    /// 적는 되돌림). 워크트리가 아니다.
+    /// 관리 폴더에 `commondir` 이 없는 저장소: 서브모듈(그 `config` 의 `core.worktree` 가 이 폴더를 가리킨다 — git 이 서브모듈
+    /// 관리 폴더에 적는 되돌림)이나 `--separate-git-dir` 저장소(`core.worktree` 가 없다). 워크트리가 아니다.
     NotWorktree,
-    /// `.git` 을 읽지 못했거나, 위 두 경우의 조건을 어긴다(위조 — 모듈 설명). 다른 저장소의 `.git` 을 직접 가리키는 `.git` 파일도
-    /// 여기다(그 저장소의 `config` 에 이 폴더를 가리키는 `core.worktree` 가 없다).
+    /// `.git` 을 읽지 못했거나, 위 두 경우의 조건을 어긴다(위조 — 모듈 설명). 다른 작업 트리의 내장 `.git` 을 직접 가리키는 `.git`
+    /// 파일, `core.worktree` 가 다른 폴더를 가리키는 관리 폴더를 가리키는 `.git` 파일도 여기다.
     Invalid,
 }
 
@@ -80,7 +83,7 @@ pub fn git_file(dir: &Path) -> GitFile {
     };
     let gitdir = resolve_from(dir, pointer);
     let Ok(common) = fs::read_to_string(gitdir.join("commondir")) else {
-        return submodule(&gitdir, dir);
+        return own_repository(&gitdir, dir);
     };
     if !points_back(&gitdir, &dot_git) {
         return GitFile::Invalid;
@@ -97,35 +100,48 @@ pub fn git_file(dir: &Path) -> GitFile {
     GitFile::Worktree { gitdir, common }
 }
 
-/// `commondir` 이 없는 관리 폴더 `gitdir` 이 `dir` 의 서브모듈 관리 폴더인가: 그 `config` 의 `core.worktree` 가 실제 경로로 `dir` 이다.
-fn submodule(gitdir: &Path, dir: &Path) -> GitFile {
-    let Some(worktree) = fs::read_to_string(gitdir.join("config"))
-        .ok()
-        .and_then(|config| core_worktree(&config))
-    else {
+/// `commondir` 이 없는 관리 폴더 `gitdir` 을 `dir` 의 저장소로 받는가(모듈 설명): 다른 작업 트리의 내장 `.git` 이 아니고, 그 `config`
+/// 의 `core.worktree` 가 없거나 실제 경로로 `dir` 이다.
+fn own_repository(gitdir: &Path, dir: &Path) -> GitFile {
+    let (Ok(gitdir), Ok(dir)) = (fs::canonicalize(gitdir), fs::canonicalize(dir)) else {
         return GitFile::Invalid;
     };
-    match (
-        fs::canonicalize(resolve_from(gitdir, worktree)),
-        fs::canonicalize(dir),
-    ) {
-        (Ok(a), Ok(b)) if a == b => GitFile::NotWorktree,
-        _ => GitFile::Invalid,
+    // 이름은 대소문자를 가리지 않고 본다 — 대소문자를 가리지 않는 파일 시스템의 `.GIT` 도 git 의 내장 `.git` 이다.
+    let embedded = gitdir
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(".git"));
+    if embedded && gitdir.parent() != Some(dir.as_path()) {
+        return GitFile::Invalid;
+    }
+    let Ok(config) = fs::read_to_string(gitdir.join("config")) else {
+        return GitFile::Invalid;
+    };
+    match core_worktree(&config) {
+        Ok(None) => GitFile::NotWorktree,
+        Ok(Some(worktree)) => match fs::canonicalize(resolve_from(&gitdir, worktree)) {
+            Ok(worktree) if worktree == dir => GitFile::NotWorktree,
+            _ => GitFile::Invalid,
+        },
+        Err(Unreadable) => GitFile::Invalid,
     }
 }
 
-/// git config 텍스트에서 `[core]` 의 `worktree` 마지막 값. git 이 서브모듈 관리 폴더에 쓰는 모양(`\tworktree = ../../../m`)과 따옴표 ·
-/// 줄 끝 주석까지만 읽는다. 그 밖의 문법(이스케이프, 줄 이음, 같은 줄의 섹션과 값)이 보이면 값이 없는 것으로 본다 — 받지 않는 쪽으로
-/// 틀린다.
-fn core_worktree(config: &str) -> Option<String> {
+/// [`core_worktree`] 가 읽지 않는 문법을 만났다.
+#[derive(Debug, PartialEq, Eq)]
+struct Unreadable;
+
+/// git config 텍스트에서 `[core]` 의 `worktree` 마지막 값(없으면 `None`). git 이 서브모듈 관리 폴더에 쓰는 모양
+/// (`\tworktree = ../../../m`)과 따옴표 · 줄 끝 주석까지만 읽는다. 그 밖의 문법(이스케이프, 줄 이음, 같은 줄의 섹션과 값)이 보이면
+/// [`Unreadable`] — 값이 있는지 모르므로 받지 않는 쪽으로 틀린다.
+fn core_worktree(config: &str) -> Result<Option<String>, Unreadable> {
     let mut in_core = false;
     let mut found = None;
     for line in config.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix('[') {
-            let (name, after) = rest.split_once(']')?;
+            let (name, after) = rest.split_once(']').ok_or(Unreadable)?;
             if !after.trim().is_empty() && !after.trim().starts_with(['#', ';']) {
-                return None;
+                return Err(Unreadable);
             }
             in_core = name.trim().eq_ignore_ascii_case("core");
             continue;
@@ -134,13 +150,17 @@ fn core_worktree(config: &str) -> Option<String> {
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
+            // 값 없는 키(`worktree` 만)는 git 이 오류로 본다.
+            if line.eq_ignore_ascii_case("worktree") {
+                return Err(Unreadable);
+            }
             continue;
         };
         if key.trim().eq_ignore_ascii_case("worktree") {
-            found = Some(config_value(value.trim())?);
+            found = Some(config_value(value.trim()).ok_or(Unreadable)?);
         }
     }
-    found
+    Ok(found)
 }
 
 /// 값 하나: `"..."` 전체를 따옴표로 감싼 것이거나, 따옴표 없이 줄 끝 주석(`#` · `;`) 앞까지.
@@ -275,7 +295,7 @@ pub(crate) mod tests {
             format!("gitdir: {}\n", sub_admin.display()),
         )
         .unwrap();
-        // git 이 서브모듈 관리 폴더에 적는 되돌림(`core.worktree`)이 없으면 서브모듈로도 받지 않는다.
+        // 관리 폴더에 `config` 가 없으면(저장소가 아니다) 받지 않는다.
         assert_eq!(git_file(&module), GitFile::Invalid);
         fs::write(
             sub_admin.join("config"),
@@ -297,8 +317,8 @@ pub(crate) mod tests {
         assert_eq!(git_file(&evil), GitFile::Invalid);
     }
 
-    /// 다른 저장소의 `.git`(관리 폴더가 아니라 본체)을 직접 가리키는 `.git` 파일은 서브모듈도 아니다 — 그 저장소의 `core.worktree`
-    /// 가 이 폴더를 가리키지 않는다. 서브모듈의 `core.worktree` 가 다른 폴더를 가리켜도 같다.
+    /// 다른 작업 트리의 내장 `.git`(관리 폴더가 아니라 본체)을 직접 가리키는 `.git` 파일은 받지 않는다 — 그 `core.worktree` 가 이
+    /// 폴더를 가리켜도 같다(git 은 서브모듈 관리 폴더를 `.git/modules/<이름>` 에 만든다).
     #[test]
     fn a_dot_git_file_pointing_straight_at_another_repository_is_invalid() {
         let tmp = tempfile::tempdir().unwrap();
@@ -319,18 +339,69 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(git_file(&evil), GitFile::Invalid);
-        // 같은 내용을 이 폴더로 바꾸면 git 의 서브모듈과 같은 모양이다(되돌림이 판정을 가른다).
         fs::write(
             main.join(".git/config"),
             format!("[core]\n\tworktree = \"{}\" # moved\n", evil.display()),
         )
         .unwrap();
-        assert_eq!(git_file(&evil), GitFile::NotWorktree);
+        assert_eq!(git_file(&evil), GitFile::Invalid);
+        // 이름만 다른 대소문자(대소문자를 가리지 않는 파일 시스템)도 내장 `.git` 이다.
+        let upper = tmp.path().join("upper");
+        fs::create_dir_all(upper.join(".GIT")).unwrap();
+        fs::write(upper.join(".GIT/config"), "[core]\n\tbare = false\n").unwrap();
+        fs::write(
+            evil.join(".git"),
+            format!("gitdir: {}\n", upper.join(".GIT").display()),
+        )
+        .unwrap();
+        assert_eq!(git_file(&evil), GitFile::Invalid);
+    }
+
+    /// `git init/clone --separate-git-dir` 저장소: 저장소 폴더에 `commondir` 도 `core.worktree` 도 없다. 이 폴더의 저장소로 받는다
+    /// (워크트리가 아니다). 그 `core.worktree` 가 다른 폴더를 가리키거나 읽지 않는 문법이면 받지 않는다.
+    #[test]
+    fn a_separate_git_dir_is_the_repository_of_its_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store/proj.git");
+        let proj = tmp.path().join("proj");
+        fs::create_dir_all(&store).unwrap();
+        fs::create_dir_all(proj.join("sub")).unwrap();
+        fs::write(store.join("config"), "[core]\n\tbare = false\n").unwrap();
+        fs::write(proj.join(".git"), format!("gitdir: {}\n", store.display())).unwrap();
+        assert_eq!(git_file(&proj), GitFile::NotWorktree);
+        assert_eq!(linked_worktree(&proj.join("sub")), None);
+        // git 은 Windows 에서도 `/` 로 적는다(이 판정은 `\` 가 든 값을 읽지 않는다).
+        let slashed = |p: &Path| p.display().to_string().replace('\\', "/");
+        for (config, want) in [
+            (
+                format!("[core]\n\tworktree = {}\n", slashed(&proj)),
+                GitFile::NotWorktree,
+            ),
+            (
+                "[core]\n\tworktree = ../../proj\n".to_owned(),
+                GitFile::NotWorktree,
+            ),
+            (
+                format!(
+                    "[core]\n\tworktree = {}\n",
+                    slashed(&tmp.path().join("store"))
+                ),
+                GitFile::Invalid,
+            ),
+            ("[core]\n\tworktree = a\\\nb\n".to_owned(), GitFile::Invalid),
+            ("[core]\n\tworktree\n".to_owned(), GitFile::Invalid),
+        ] {
+            fs::write(store.join("config"), &config).unwrap();
+            assert_eq!(git_file(&proj), want, "{config:?}");
+        }
+        // 관리 폴더에 `config` 가 없으면 저장소가 아니다.
+        fs::remove_file(store.join("config")).unwrap();
+        assert_eq!(git_file(&proj), GitFile::Invalid);
     }
 
     #[test]
     fn core_worktree_is_read_from_the_core_section_only() {
-        let w = |s: &str| core_worktree(s);
+        let w = |s: &str| core_worktree(s).unwrap();
         assert_eq!(
             w("[core]\n\tworktree = ../../../m\n").as_deref(),
             Some("../../../m")
@@ -346,14 +417,16 @@ pub(crate) mod tests {
         assert_eq!(w("[remote \"core\"]\nworktree = a\n"), None);
         assert_eq!(w("[other]\nworktree = a\n"), None);
         assert_eq!(w(""), None);
-        // 읽지 않는 문법은 값이 없는 것으로 본다.
+        // 읽지 않는 문법은 값이 있는지 모르는 것이다.
         for bad in [
             "[core] worktree = a\n",
             "[core]\nworktree = a\\\nb\n",
             "[core]\nworktree = a\"b\n",
             "[core]\nworktree = \"a\" b\n",
+            "[core]\nworktree =\n",
+            "[core]\nworktree\n",
         ] {
-            assert_eq!(w(bad), None, "{bad:?}");
+            assert_eq!(core_worktree(bad), Err(Unreadable), "{bad:?}");
         }
     }
 

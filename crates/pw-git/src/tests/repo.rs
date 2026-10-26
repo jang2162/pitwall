@@ -389,3 +389,41 @@ fn a_work_tree_moved_elsewhere_by_core_worktree_is_none() {
         assert_eq!(info(&f, &id, None).work_tree, s(r.root()));
     }
 }
+
+/// `git init --separate-git-dir` 저장소(저장소 폴더에 `commondir` 도 `core.worktree` 도 없다)는 그 작업 트리의 저장소다 — 신뢰와
+/// 상관없이.
+#[test]
+fn a_separate_git_dir_repository_is_a_repository() {
+    let r = TestRepo::new();
+    let store = r.base().join("store/proj.git");
+    let proj = r.base().join("proj");
+    fs::create_dir_all(r.base().join("store")).unwrap();
+    r.git_in(
+        r.base(),
+        &[
+            "init",
+            "-q",
+            &format!("--separate-git-dir={}", store.display()),
+            proj.to_str().unwrap(),
+        ],
+    );
+    r.git_in(&proj, &["commit", "-q", "--allow-empty", "-m", "x"]);
+    assert!(proj.join(".git").is_file());
+    let f = Fixture::new("", None);
+    let id = f.project(&proj);
+    for trusted in [false, true] {
+        f.trust(&id, trusted);
+        let got = info(&f, &id, None);
+        assert_eq!(got.work_tree, s(&proj), "trusted: {trusted}");
+        assert_eq!(got.git_dir, s(&store));
+        assert_eq!(got.common_dir, s(&store));
+        assert!(!got.linked_worktree);
+        assert_eq!(
+            got.head,
+            RepoHead::Branch {
+                name: "main".into(),
+                commit: r.rev_parse_in(&proj, "HEAD"),
+            }
+        );
+    }
+}
