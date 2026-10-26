@@ -65,6 +65,27 @@ export type UnaryMethods = {
 	 */
 	"fs.write": { params: FsWriteParams; result: FsWritten };
 	/**
+	 * 진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면
+	 * `operation: null`.
+	 */
+	"git.operation": { params: GitOperationParams; result: GitOperation };
+	/**
+	 * 진행 중 작업을 그만두고 시작 전으로 돌린다(`git <작업> --abort`). 확인은 창이 먼저 한다(결정 M2-D6 ①).
+	 */
+	"git.operation.abort": { params: GitOperationParams; result: GitOperationResult };
+	/**
+	 * 진행 중 작업을 계속한다(`git <작업> --continue`). 충돌을 다 풀지 않았으면 git 의 원문으로 실패한다.
+	 */
+	"git.operation.continue": { params: GitOperationParams; result: GitOperationResult };
+	/**
+	 * 진행 중 작업의 지금 단계를 건너뛴다(`git <작업> --skip`, merge 는 없다).
+	 */
+	"git.operation.skip": { params: GitOperationParams; result: GitOperationResult };
+	/**
+	 * 질문의 답. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는 답이면 invalid params.
+	 */
+	"git.prompt.answer": { params: GitPromptAnswerParams; result: null };
+	/**
 	 * 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.
 	 * 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
 	 */
@@ -270,6 +291,11 @@ export type StreamMethods = {
 	 */
 	"fs.watch": { params: FsWatchParams; item: FsWatching };
 	/**
+	 * 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.
+	 * 듣는 창이 없으면 askpass 는 바로 실패하고 미저장 확인은 묻지 않고 진행한다.
+	 */
+	"git.prompts": { params: GitPromptsParams; item: GitPromptEvent };
+	/**
 	 * 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.
 	 * Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.
 	 */
@@ -309,6 +335,12 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.trash": {"name":"fs.trash","kind":"unary","tier":"write","roles":["owner"],"params":"FsTrashParams","output":"FsTrashed","doc":" 항목들을 OS 휴지통에 넣는다(`permanent` 면 영구히 지운다). 넣지 못한 것은 `failed` 에 이유와 함께.\n","mcp":false,"fileScope":false},
 	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":false,"fileScope":true},
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false,"fileScope":true},
+	"git.operation": {"name":"git.operation","kind":"unary","tier":"read","roles":["owner"],"params":"GitOperationParams","output":"GitOperation","doc":" 진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면\n `operation: null`.\n","mcp":false,"fileScope":false},
+	"git.operation.abort": {"name":"git.operation.abort","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 그만두고 시작 전으로 돌린다(`git <작업> --abort`). 확인은 창이 먼저 한다(결정 M2-D6 ①).\n","mcp":false,"fileScope":false},
+	"git.operation.continue": {"name":"git.operation.continue","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 계속한다(`git <작업> --continue`). 충돌을 다 풀지 않았으면 git 의 원문으로 실패한다.\n","mcp":false,"fileScope":false},
+	"git.operation.skip": {"name":"git.operation.skip","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업의 지금 단계를 건너뛴다(`git <작업> --skip`, merge 는 없다).\n","mcp":false,"fileScope":false},
+	"git.prompt.answer": {"name":"git.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"GitPromptAnswerParams","output":"()","doc":" 질문의 답. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는 답이면 invalid params.\n","mcp":false,"fileScope":false},
+	"git.prompts": {"name":"git.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"GitPromptsParams","output":"GitPromptEvent","doc":" 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n 듣는 창이 없으면 askpass 는 바로 실패하고 미저장 확인은 묻지 않고 진행한다.\n","mcp":false,"fileScope":false},
 	"git.repo": {"name":"git.repo","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRepo","doc":" 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false,"fileScope":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false,"fileScope":false},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n","mcp":false,"fileScope":true},
@@ -856,6 +888,70 @@ export type FsWritten = {
 	version: string,
 };
 
+export type GitOperation = {
+	/**  `null` 이면 진행 중 작업이 없다(저장소가 없을 때도). */
+	operation: OperationInfo | null,
+};
+
+export type GitOperationParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`git.repo` 와 같다). */
+	worktree?: string | null,
+};
+
+export type GitOperationResult = {
+	/**  끝난 뒤의 진행 중 작업. `null` 이면 작업이 끝났다. */
+	operation: OperationInfo | null,
+	/**  git 이 다음 단계에서 다시 멈췄다(충돌) — 실패가 아니라 다음 충돌을 풀 차례다. */
+	stopped: boolean,
+};
+
+export type GitPrompt = {
+	/**  이 Host 안에서 질문마다 다르다. 답할 때 쓴다. */
+	promptId: number,
+	request: GitPromptRequest,
+};
+
+/**  창의 답. `askpass` 질문에는 `askpass` 나 `cancel`, `unsaved` 질문에는 `proceed` 나 `cancel` 만 받는다. */
+export type GitPromptAnswer = 
+/**  넣은 값. 비밀이다 — `Debug` 는 가린다. */
+{ kind: "askpass"; value: string } | 
+/**  미저장 문서를 확인했다(저장했거나 저장하지 않기로 했다) — 쓰기를 한다. */
+{ kind: "proceed" } | 
+/**  취소. askpass 면 git 이 인증 실패로 끝나고, 미저장 확인이면 쓰기를 하지 않는다. */
+{ kind: "cancel" };
+
+export type GitPromptAnswerParams = {
+	projectId: string,
+	promptId: number,
+	answer: GitPromptAnswer,
+};
+
+/**  `git.prompts` 스트림의 항목. */
+export type GitPromptEvent = 
+/**  새 질문(또는 듣기 시작할 때 아직 열린 질문). */
+{ kind: "open"; prompt: GitPrompt } | 
+/**  그 질문이 끝났다(답을 받음 · 시간 초과 · 묻던 쓰기가 끝남). 떠 있는 다이얼로그를 내린다. */
+{ kind: "closed"; promptId: number };
+
+/**  창에 묻는 것. */
+export type GitPromptRequest = 
+/**
+ *  git · ssh 가 묻는 것(암호 · 토큰 · 키 암호 · 호스트 키 확인). `text` 는 그 프로그램이 준 문장 그대로다 — 번역하지 않는다.
+ *  답은 비밀번호 칸으로 받는다.
+ */
+{ kind: "askpass"; text: string } | 
+/**
+ *  작업 트리를 바꾸는 쓰기를 하기 전이다. 창은 이 경로와 겹치는 미저장 문서가 있으면 확인하고(M1-13 의 확인 — 저장 · 저장 안
+ *  함 · 취소), 없으면 바로 `proceed` 로 답한다. `paths` 는 `workTree` 기준 상대 경로(`/` 구분)이고, `null` 이면 작업 트리
+ *  전체다(바뀔 경로를 미리 모르는 쓰기 — 진행 중 작업의 계속 · 중단 등).
+ */
+{ kind: "unsaved"; workTree: string; paths: string[] | null };
+
+export type GitPromptsParams = {
+	projectId: string,
+};
+
 export type GitRepo = {
 	/**
 	 *  `null` 이면 「저장소 없음」 — 저장소 밖, bare 저장소, 위조된 `.git` 파일, `core.worktree` 가 다른 폴더를 가리키는 저장소.
@@ -1161,6 +1257,30 @@ export type OpenWithRunParams = {
 	file?: string | null,
 	line?: number | null,
 	column?: number | null,
+};
+
+export type OperationAction = "continue" | "abort" | "skip";
+
+export type OperationInfo = {
+	kind: RepoOperation,
+	/**  들여오는 쪽 커밋(전체 해시): merge 의 `MERGE_HEAD`, cherry-pick · revert 의 그 커밋, rebase 가 멈춘 커밋. 모르면 빈 목록. */
+	heads: string[],
+	/**  rebase 하는 브랜치의 짧은 이름. 분리된 HEAD 를 rebase 하거나 rebase 가 아니면 `null`. */
+	branch: string | null,
+	/**  rebase 의 대상 커밋. */
+	onto: string | null,
+	/**  지금 단계와 전체 단계(rebase · am). 모르면 `null`. */
+	step: OperationStep | null,
+	/**  지금 단계 뒤에 남은 단계 수. 모르면 `null`. */
+	remaining: number | null,
+	/**  할 수 있는 동작(`git.operation.continue` · `abort` · `skip`). */
+	actions: OperationAction[],
+};
+
+export type OperationStep = {
+	/**  지금 단계(1부터). */
+	current: number,
+	total: number,
 };
 
 export type PathParams = {

@@ -170,7 +170,7 @@ pub fn info(repo: &gix::Repository) -> Result<RepoInfo, String> {
 }
 
 /// git 의 `wt_status_get_state` 와 같은 판정(gix `Repository::state`)을 화면이 보일 종류로 묶는다.
-fn operation(state: InProgress) -> RepoOperation {
+pub(crate) fn operation(state: InProgress) -> RepoOperation {
     match state {
         InProgress::Merge => RepoOperation::Merge,
         InProgress::Rebase | InProgress::RebaseInteractive | InProgress::ApplyMailboxRebase => {

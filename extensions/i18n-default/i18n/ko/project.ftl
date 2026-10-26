@@ -327,6 +327,9 @@ task-start-failed = 작업을 시작하지 못했다
 task-cancel-failed = 작업을 취소하지 못했다
 # Host 가 보내는 작업 제목(`task-title-*` id).
 task-title-indexing-files = 파일 목록 만드는 중
+task-title-git-continue = git 작업 계속하는 중
+task-title-git-abort = git 작업 중단하는 중
+task-title-git-skip = git 작업의 단계 건너뛰는 중
 action-task-demo = 데모 작업 실행
 action-task-demo-invalid = 데모 작업 실행(잘못된 인자 — 오류 알림 확인용)
 
@@ -480,3 +483,11 @@ find-in-folder = 이 폴더에서 찾기
 
 # $version: 그 git 의 버전(읽지 못했으면 그 이유), $required: 쓰기에 필요한 가장 낮은 버전
 git-too-old = git { $version } 은(는) { $required } 보다 낮아 커밋 · 브랜치 같은 변경 작업을 끈다. 보기는 그대로 된다
+
+## git 인증(src/git/git-prompts.tsx). git 이나 ssh 가 암호 · 토큰 · 키 암호 · 호스트 키 확인을 묻는다.
+## 다이얼로그의 질문은 git · ssh 가 준 문장 그대로이고 번역하지 않는다.
+
+git-askpass-title = git 이 인증 정보를 묻는다
+git-askpass-input = 답
+git-askpass-submit = 확인
+git-askpass-cancel = 취소

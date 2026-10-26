@@ -337,6 +337,9 @@ task-start-failed = Could not start the task
 task-cancel-failed = Could not cancel the task
 # Background task titles sent by the host (`task-title-*` ids).
 task-title-indexing-files = Indexing files
+task-title-git-continue = Continuing the git operation
+task-title-git-abort = Aborting the git operation
+task-title-git-skip = Skipping a step of the git operation
 action-task-demo = Run Demo Task
 action-task-demo-invalid = Run Demo Task (invalid arguments — to check error notifications)
 
@@ -498,3 +501,11 @@ find-in-folder = Find in Folder
 
 # $version: the version of that git (or why it could not be read), $required: the lowest version that can write
 git-too-old = Git { $version } is older than { $required }, so commits, branches and other changes are turned off. Viewing still works
+
+## Git authentication (src/git/git-prompts.tsx). git or ssh asks for a password, token, key passphrase or host key confirmation.
+## The question shown in the dialog is git's or ssh's own text and is not translated.
+
+git-askpass-title = Git asks for your credentials
+git-askpass-input = Answer
+git-askpass-submit = OK
+git-askpass-cancel = Cancel

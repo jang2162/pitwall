@@ -285,6 +285,12 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     unsavedUnder: (path: string): string[] =>
       deps.documents.unsaved().filter((doc) => covers(path, doc)),
 
+    /**
+     * `paths` 의 미저장 편집을 묻고(저장 · 저장 안 함 · 취소) 답대로 한다. 계속해도 되면 `true` — 저장했거나 저장하지 않기로 했다.
+     * 취소했거나 저장하지 못한 편집이 있으면 `false`. git 쓰기 전의 확인(git/git-prompts.tsx)도 이것이다.
+     */
+    settleUnsaved,
+
     /** `from` 을 `to` 로 옮겼다(이름 바꾸기 · 이동). 그 아래 문서와 탭이 새 경로를 따라간다. */
     moved(from: string, to: string) {
       const moved = new Map(deps.documents.move(from, to));

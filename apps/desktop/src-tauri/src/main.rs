@@ -38,12 +38,14 @@ const LOCAL_HOST_ID: &str = "local";
 /// 앱이 쓰는 LocalHost. 생성물과 등록된 메서드를 맞춰 보는 테스트도 이것을 쓴다.
 /// UI 언어(`i18n`)는 Host 를 만든 뒤 그 전역 설정을 붙인다.
 /// 파일 서비스(`fs`)는 Finder 드롭 들여오기(drop_import.rs)도 쓰므로 부르는 쪽이 만든다.
+/// git askpass(`askpass`)도 부르는 쪽이 만든다 — 주 인스턴스가 된 뒤(setup)에 그 소켓을 연다.
 fn local_host(
     paths: AppPaths,
     diagnostics: Arc<Diagnostics>,
     extensions: Arc<Registry>,
     i18n: Arc<I18n>,
     fs: Arc<Fs>,
+    askpass: pw_git::write::Askpass,
 ) -> LocalHost {
     let methods = Arc::clone(&i18n);
     // 앱이 띄우는 프로세스의 환경. 로그인 셸은 처음 쓸 때 돈다 — 시작을 늦추지 않는다.
@@ -82,6 +84,9 @@ fn local_host(
     // git(`git.*`, M2). 읽기는 gix, 쓰기는 런타임 환경으로 띄우는 git CLI 다.
     let git = Arc::new(pw_git::Git::new(Arc::clone(&runtime)));
     let git_methods = Arc::clone(&git);
+    // git 쓰기 실행기 · 진행 중 작업 · 창 질의(`git.operation*` · `git.prompts`, M2-06). 쓰기는 Host 의 Task 로 돈다.
+    let git_write = Arc::new(pw_git::write::GitWrite::new(Arc::clone(&git), askpass));
+    let git_write_methods = Arc::clone(&git_write);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
@@ -97,9 +102,11 @@ fn local_host(
         .methods(move |router| pw_run::methods::register(router, terminal_methods))
         .methods(move |router| pw_syntax::methods::register(router, syntax))
         .methods(move |router| pw_git::methods::register(router, git_methods))
+        .methods(move |router| pw_git::write::register(router, git_write_methods))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
+    git_write.attach(host.tasks().clone());
     // 인덱스는 버스의 `fs.changed` 로 목록을 갱신하고, 목록을 만드는 동안을 작업으로 보인다.
     tauri::async_runtime::spawn(fs_index.attach(host.bus(), host.tasks().clone()));
     if let Some(config) = host.config() {
@@ -217,6 +224,32 @@ fn instance_identifier(
     )
 }
 
+/// git askpass 소켓의 경로: MCP 소켓과 같은 규칙(단일 인스턴스 키 + `$STATE`, `pw_mcp::socket::endpoint`)에 `/askpass` 를 붙인
+/// 키로 정한다 — MCP 소켓과 다른 파일이고, 다른 데이터 폴더 · 다른 워크트리의 앱과 섞이지 않는다. 도우미는 이 경로를 git 의 환경
+/// 변수로 받으므로 다시 계산하지 않는다.
+#[cfg(unix)]
+fn askpass_socket(identifier: &str, paths: &AppPaths) -> std::io::Result<std::path::PathBuf> {
+    pw_mcp::socket::endpoint(
+        &format!("{identifier}/askpass"),
+        &paths.state,
+        &std::env::temp_dir(),
+        pw_mcp::socket::current_uid(),
+    )
+}
+
+/// askpass 소켓을 연다(앱이 끝날 때까지). 열지 못하면 경고만 — git 은 askpass 없이 돌고 인증이 필요하면 실패 원문을 보인다.
+#[cfg(unix)]
+fn serve_askpass(askpass: &pw_git::write::Askpass, paths: &AppPaths, identifier: &str) {
+    let (socket, exe) = match (askpass_socket(identifier, paths), std::env::current_exe()) {
+        (Ok(socket), Ok(exe)) => (socket, exe),
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::warn!(%e, "git askpass disabled");
+            return;
+        }
+    };
+    tauri::async_runtime::spawn(askpass.clone().serve(socket, exe));
+}
+
 /// 앱을 떼어 띄우고 이 프로세스는 끝낸다(detach.rs). 단일 인스턴스 소켓을 먼저 내려놓는다 — 자식이 아직 살아 있는 이
 /// 프로세스를 「기존 앱」으로 보고 인자를 넘긴 뒤 끝나 버리지 않게. 띄우지 못하면 오류를 내고 0 이 아닌 코드로 끝난다
 /// (소켓을 이미 내려놓았으므로 이 프로세스가 앱이 되면 안 된다).
@@ -269,6 +302,11 @@ fn main() {
     if std::env::args_os().nth(1).is_some_and(|a| a == "mcp") {
         run_mcp();
     }
+    // `pitwall askpass <질문>`: 앱이 띄운 git 이 부르는 도우미(pw_git::write::askpass). 로그 · 경로 · 앱 무엇도 만들지 않는다.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "askpass") {
+        let args: Vec<_> = std::env::args_os().skip(2).collect();
+        std::process::exit(pw_git::write::askpass::client_main(&args));
+    }
     let perf = perf::PerfMarks::from_env();
     perf.record("main", None, None);
     // 떼어 띄운 자식이면 표식을 지운다 — 앱이 띄우는 프로세스(터미널 등)가 물려받지 않게(detach.rs 머리 주석).
@@ -288,12 +326,14 @@ fn main() {
     let extensions = load_extensions(&paths);
     let i18n = i18n::init(&extensions);
     let fs = Arc::new(Fs::new());
+    let askpass = pw_git::write::Askpass::default();
     let host = Arc::new(local_host(
         paths.clone(),
         Arc::clone(&diagnostics),
         extensions,
         Arc::clone(&i18n),
         Arc::clone(&fs),
+        askpass.clone(),
     ));
     // 「활성 기능」은 지금 Host 가 처리하는 메서드의 모듈 이름이다. 확장 · 설정 기능이 들어오면 그것으로 바꾼다.
     diagnostics.set_features(
@@ -372,6 +412,9 @@ fn main() {
             // 주 인스턴스만 MCP 소켓을 연다(떼어 띄우기 전의 프로세스 · 두 번째 실행은 여기 오지 않는다).
             #[cfg(unix)]
             mcp::serve_socket(host.clone(), paths.clone(), identifier.clone());
+            // askpass 소켓도 주 인스턴스만 연다.
+            #[cfg(unix)]
+            serve_askpass(&askpass, &paths, &identifier);
             Ok(())
         })
         .build(context)
@@ -404,6 +447,7 @@ mod tests {
             Arc::new(Registry::default()),
             no_languages(),
             Arc::new(Fs::new()),
+            pw_git::write::Askpass::default(),
         )
     }
 
@@ -433,6 +477,45 @@ mod tests {
         assert_ne!(
             key,
             instance_identifier("dev.pitwall.desktop", &b, None, RELEASE)
+        );
+    }
+
+    /// askpass 소켓은 MCP 소켓과 다른 파일이고, 단일 인스턴스 키(다른 데이터 폴더 · 다른 빌드)나 `$STATE` 가 다르면 다른 경로다.
+    #[cfg(unix)]
+    #[test]
+    fn askpass_sockets_are_per_instance_and_apart_from_the_mcp_socket() {
+        let a = AppPaths::under(std::path::Path::new("/data-a"));
+        let b = AppPaths::under(std::path::Path::new("/data-b"));
+        let key_a = instance_identifier("dev.pitwall.desktop", &a, None, RELEASE);
+        let key_b = instance_identifier("dev.pitwall.desktop", &b, None, RELEASE);
+        let socket = askpass_socket(&key_a, &a).unwrap();
+        assert_eq!(
+            socket,
+            askpass_socket(&key_a, &a).unwrap(),
+            "같은 인스턴스는 같은 경로"
+        );
+        assert_ne!(
+            socket,
+            askpass_socket(&key_b, &b).unwrap(),
+            "다른 데이터 폴더의 앱"
+        );
+        assert_ne!(
+            socket,
+            askpass_socket(&key_b, &a).unwrap(),
+            "같은 `$STATE` 의 다른 키"
+        );
+        let mcp = pw_mcp::socket::endpoint(
+            &key_a,
+            &a.state,
+            &std::env::temp_dir(),
+            pw_mcp::socket::current_uid(),
+        )
+        .unwrap();
+        assert_ne!(socket, mcp);
+        assert_eq!(
+            socket.parent(),
+            mcp.parent(),
+            "같은 사용자 전용 폴더(`$STATE/run`)"
         );
     }
 
@@ -502,6 +585,7 @@ mod tests {
             Arc::new(Registry::default()),
             no_languages(),
             Arc::new(Fs::new()),
+            pw_git::write::Askpass::default(),
         ));
         let headless = mcp::headless_host(&paths);
         for (label, host) in [("app", &app), ("headless", &headless)] {
@@ -541,6 +625,7 @@ mod tests {
             Arc::new(Registry::default()),
             no_languages(),
             Arc::new(Fs::new()),
+            pw_git::write::Askpass::default(),
         );
         let routed: BTreeSet<String> = host
             .router()

@@ -63,6 +63,8 @@ tauri = { version = "2.12.3", features = ["test"] }
 tokio = { workspace = true, features = ["time", "rt", "macros"] }
 # 설정 스토어를 임시 폴더에 열어 크래시 설정 · 설정 오류 로그를 시험한다.
 tempfile = "3.27.0"
+# 진짜 `pitwall askpass` 를 거치는 git 인증 시험(tests/askpass.rs)이 시험 저장소 · 쓰기 실행기 픽스처를 쓴다.
+pw-git = { path = "../../../crates/pw-git", features = ["test-support"] }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"

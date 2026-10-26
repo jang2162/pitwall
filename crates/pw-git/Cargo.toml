@@ -22,8 +22,16 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 specta = { workspace = true, features = ["derive"] }
 tempfile = { version = "3.27.0", optional = true }
-# git CLI 실행(취소 · 출력 수집)과 RPC 핸들러의 블로킹 스레드.
-tokio = { workspace = true, features = ["rt", "process", "io-util", "time", "macros"] }
+# git CLI 실행(취소 · 출력 수집 · stdin), RPC 핸들러의 블로킹 스레드, 쓰기 잠금 · 창 질의(sync), askpass 소켓(net).
+tokio = { workspace = true, features = [
+  "rt",
+  "process",
+  "io-util",
+  "time",
+  "macros",
+  "sync",
+  "net",
+] }
 tokio-util = { workspace = true }
 tracing = "0.1.44"
 
@@ -42,4 +50,5 @@ windows-sys = { version = "0.61.2", features = [
 
 [dev-dependencies]
 tempfile = "3.27.0"
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
+# test-util: 질문 시간 제한을 멈춘 시계로 본다(`start_paused`).
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "test-util"] }

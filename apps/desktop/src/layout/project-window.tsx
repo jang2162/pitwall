@@ -59,6 +59,7 @@ import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { FileTreeToolWindow } from "../file-tree/file-tree";
 import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
+import { GitPrompts } from "../git/git-prompts";
 import { useAppStrings } from "../i18n/app-strings";
 import { toolWindowActions } from "../keymap/actions";
 import { useKeymap, useRegisterActions, useRegistryVersion } from "../keymap/keymap-provider";
@@ -799,6 +800,7 @@ function ProjectWindowBody({
             <ToolWindowBar dock="right" api={api} />
           </div>
           {projectId !== undefined && <FileWatch projectId={projectId} />}
+          {projectId !== undefined && <GitPrompts projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
           {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}

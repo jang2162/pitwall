@@ -19,7 +19,9 @@
 //!   떼어 낸 스레드가 보낸다). Windows 는 자식을 콘솔 창 없이(`CREATE_NO_WINDOW`) 띄우고 Job Object 에 넣어, 취소 · 버림에서 그
 //!   Job 의 프로세스 전체를 끝낸다(SIGTERM 에 해당하는 단계는 없다). 정상으로 끝나면 그룹 · Job 에 남은 것(git 이 떼어 띄운 `gc
 //!   --auto` 등)은 건드리지 않는다.
-//! - 인증: askpass 도우미는 M2-06 이 만든다. 여기는 그 경로를 받는 자리([`child_env`] 의 `askpass`)만 있다.
+//! - 입력: stdin 은 기본으로 비어 있다(null). [`GitCommand::stdin`] 으로 준 바이트만 넘기고 닫는다(`git apply --cached` 의 패치,
+//!   `git commit -F -` 의 메시지).
+//! - 인증: askpass 도우미는 쓰기 실행기(`crate::write::askpass`)가 만들어 쓰기 명령의 환경에 넣는다([`set_askpass`]).
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -29,7 +31,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use pw_runtime::RuntimeEnv;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
 /// 쓰기를 허락하는 가장 낮은 git 버전(02-tech-stack.md 「Git: gitoxide + git CLI 하이브리드」).
@@ -185,16 +187,22 @@ pub fn child_env(
         env.push((name.into(), value.into()));
     }
     if let Some(askpass) = askpass {
-        env.retain(|(n, _)| {
-            !["GIT_ASKPASS", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE"]
-                .iter()
-                .any(|v| same_name(n, v))
-        });
-        env.push(("GIT_ASKPASS".into(), askpass.into()));
-        env.push(("SSH_ASKPASS".into(), askpass.into()));
-        env.push(("SSH_ASKPASS_REQUIRE".into(), "force".into()));
+        set_askpass(&mut env, askpass);
     }
     env
+}
+
+/// 환경의 askpass 를 `askpass` 로 바꾼다: git(`GIT_ASKPASS`)과 ssh(`SSH_ASKPASS`, 터미널이 있어도 쓰게 `SSH_ASKPASS_REQUIRE=force`)가
+/// 암호 · 확인을 그 프로그램에 묻는다.
+pub fn set_askpass(env: &mut Vec<(OsString, OsString)>, askpass: &Path) {
+    env.retain(|(n, _)| {
+        !["GIT_ASKPASS", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE"]
+            .iter()
+            .any(|v| same_name(n, v))
+    });
+    env.push(("GIT_ASKPASS".into(), askpass.into()));
+    env.push(("SSH_ASKPASS".into(), askpass.into()));
+    env.push(("SSH_ASKPASS_REQUIRE".into(), "force".into()));
 }
 
 /// Windows 의 환경 변수 이름은 대소문자를 가리지 않는다.
@@ -214,6 +222,7 @@ pub struct GitCommand {
     env: Vec<(OsString, OsString)>,
     access: Access,
     args: Vec<OsString>,
+    stdin: Option<Vec<u8>>,
 }
 
 /// 끝난 git 의 출력.
@@ -262,7 +271,14 @@ impl GitCommand {
             env,
             access,
             args: Vec::new(),
+            stdin: None,
         }
+    }
+
+    /// 자식 환경 전체를 바꾼다(쓰기 실행기가 askpass 를 넣는다).
+    pub(crate) fn with_env(mut self, env: Vec<(OsString, OsString)>) -> Self {
+        self.env = env;
+        self
     }
 
     pub fn program(&self) -> &Path {
@@ -298,6 +314,19 @@ impl GitCommand {
         self
     }
 
+    /// 받은 인자.
+    pub fn arguments(&self) -> &[OsString] {
+        &self.args
+    }
+
+    /// git 의 stdin 으로 `input` 을 쓰고 닫는다. 주지 않으면 stdin 은 비어 있다(null). git 이 다 읽지 않고 끝나도(파이프가 닫혀도)
+    /// 실패로 보지 않는다 — 결과는 git 의 종료 코드 · 출력으로 판정한다.
+    #[must_use]
+    pub fn stdin(mut self, input: impl Into<Vec<u8>>) -> Self {
+        self.stdin = Some(input.into());
+        self
+    }
+
     /// 띄워 끝날 때까지 기다린다. `cancel` 이 오면 프로세스 그룹을 끝내고 [`RunError::Cancelled`]. 이 future 를 끝나기 전에
     /// 버려도 그룹에 SIGTERM 을 보낸다.
     pub async fn output(self, cancel: &CancellationToken) -> Result<Output, RunError> {
@@ -307,7 +336,11 @@ impl GitCommand {
             .current_dir(&self.cwd)
             .env_clear()
             .envs(self.env.iter().map(|(n, v)| (n, v)))
-            .stdin(Stdio::null())
+            .stdin(if self.stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(unix)]
@@ -326,6 +359,12 @@ impl GitCommand {
             .spawn()
             .map_err(|e| RunError::Spawn(e.to_string()))?;
         let mut guard = GroupGuard(Tree::of(&child));
+        if let (Some(input), Some(mut pipe)) = (self.stdin, child.stdin.take()) {
+            // 다 쓰면 닫는다(버려 EOF). 쓰기 오류(git 이 먼저 끝나 파이프가 닫힘)는 무시한다.
+            tokio::spawn(async move {
+                let _ = pipe.write_all(&input).await;
+            });
+        }
         let stdout = collect(child.stdout.take());
         let stderr = collect(child.stderr.take());
         let status = tokio::select! {
@@ -462,6 +501,10 @@ mod job {
 
     // SAFETY: Job 핸들은 어느 스레드에서 써도 되는 커널 객체 핸들이다.
     unsafe impl Send for Job {}
+    // SAFETY: `&self` 메서드는 커널 호출(`TerminateJobObject` · `SetInformationJobObject`) 하나씩이고, 커널이 같은 핸들의 동시 호출을
+    // 직렬화한다. 취소가 `&Tree` 를 await 너머로 쥐므로 `GitCommand::output` 의 future 가 `Send` 이려면 필요하다(쓰기 실행기가 그
+    // future 를 다른 태스크로 보낸다).
+    unsafe impl Sync for Job {}
 
     impl Job {
         pub fn assign(process: RawHandle) -> std::io::Result<Self> {

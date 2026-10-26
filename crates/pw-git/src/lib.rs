@@ -6,6 +6,7 @@
 //! - [`repo`]: 저장소 해석 — 프로젝트(활성 워크트리)의 저장소 하나, HEAD, 진행 중 작업.
 //! - [`cli`]: git CLI 실행기 — 실행 파일 · 자식 환경 · 기계 형식 출력 · 프로세스 그룹째 취소.
 //! - [`methods`]: `git.repo` RPC.
+//! - [`write`]: 쓰기 실행기 · 진행 중 작업 · askpass(M2-06).
 //! - `testing`(시험 · `test-support` 기능): 시험 저장소 도우미.
 //!
 //! 이 크레이트의 모듈 배치 · 메서드 등록([`methods::register`])의 주인은 M2-01 이다. 이후 행은 모듈을 나눠(`status` · `log` ·
@@ -16,6 +17,7 @@ pub mod methods;
 pub mod repo;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod write;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

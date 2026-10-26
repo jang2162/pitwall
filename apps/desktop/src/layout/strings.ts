@@ -222,6 +222,14 @@ export function projectStrings(t: Translate) {
       fallbackHint: (problem: RuntimeProblem, reason: string) =>
         t("status-runtime-fallback-hint", { problem, reason }),
     },
+    git: {
+      askpass: {
+        title: t("git-askpass-title"),
+        input: t("git-askpass-input"),
+        submit: t("git-askpass-submit"),
+        cancel: t("git-askpass-cancel"),
+      },
+    },
     trust: {
       status: t("status-trust-needed"),
       statusHint: t("status-trust-needed-hint"),
