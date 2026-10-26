@@ -556,3 +556,143 @@ fn planted_programs_do_not_run_on_status_refs_or_watch_while_untrusted() {
     w.fx.status(&id, None);
     assert!(names().contains(&"clean".to_owned()), "{:?}", names());
 }
+
+/// 미신뢰면 사람의 전역 설정(`~/.gitconfig`)에 정의된 필터 드라이버도 돌지 않는다 — 어느 파일에 어느 드라이버를 돌릴지는 저장소의
+/// `.gitattributes` 가 고르기 때문이다(`filter.lfs.*` 처럼 흔히 전역에 있다). 신뢰하면 git 처럼 돈다.
+///
+/// 시험 프로세스의 `HOME` 을 임시 폴더로 바꾼다 — nextest 는 시험마다 프로세스가 따로라 다른 시험에 새지 않는다.
+#[test]
+fn global_filter_drivers_do_not_run_on_status_while_untrusted() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = TestRepo::with_commit();
+    let home = r.base().join("home");
+    let marks = r.base().join("marks");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&marks).unwrap();
+    let script = |name: &str, body: &str| {
+        let path = r.base().join(name);
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\n{body}\n",
+                marks.join(name).display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.display().to_string()
+    };
+    let clean = script("clean", "cat");
+    // 긴 수명 필터(`process`)는 핸드셰이크 없이 끝난다 — 띄워지기만 해도 표식이 남는다.
+    let process = script("process", "exit 1");
+    fs::write(
+        home.join(".gitconfig"),
+        format!("[filter \"x\"]\n\tclean = {clean}\n[filter \"y\"]\n\tprocess = {process}\n"),
+    )
+    .unwrap();
+    // SAFETY: 아직 이 프로세스에 다른 스레드가 없다(Fixture · 런타임을 만들기 전이다).
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_CONFIG_HOME", home.join(".config"));
+        std::env::remove_var("GIT_CONFIG_GLOBAL");
+    }
+    r.write("x.txt", "x\n");
+    r.write("y.txt", "y\n");
+    r.write(".gitattributes", "x.txt filter=x\ny.txt filter=y\n");
+    r.commit_all("attributes");
+    let names = || -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(&marks)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    // 크기는 같고 내용 · 시각이 다르다 — status 가 내용을 (필터를 거쳐) 다시 읽어야 가른다.
+    let dirty = |rel: &str, body: &str| {
+        let path = r.root().join(rel);
+        fs::write(&path, body).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + Duration::from_secs(5))
+            .unwrap();
+    };
+    dirty("x.txt", "X\n");
+    dirty("y.txt", "Y\n");
+    let fx = Fx::new();
+    let id = fx.project(r.root());
+    assert!(!fx.projects.is_trusted(&id));
+    let opened = fx.git.open(&id, None).unwrap().unwrap();
+    // 사람의 전역 설정은 읽혔다(드라이버가 정의돼 있다) — 아래 「안 돈다」 가 설정을 못 읽어서가 아니다.
+    assert!(
+        opened
+            .repo
+            .config_snapshot()
+            .trusted_program("filter.x.clean")
+            .unwrap()
+            .is_some()
+    );
+    let got = fx.status(&id, None);
+    assert_eq!(got.entries.len(), 2, "{got:?}");
+    fx.status(&id, Some(&["x.txt", "y.txt"]));
+    assert_eq!(names(), Vec::<String>::new());
+
+    fx.projects.set_trust(&id, true).unwrap();
+    dirty("x.txt", "Z\n");
+    let _ = fx.try_status(&id, None, Some(&["x.txt"]));
+    let _ = fx.try_status(&id, None, Some(&["y.txt"]));
+    assert_eq!(names(), ["clean", "process"]);
+}
+
+/// 서브모듈 안에서 커밋하면(서브모듈이 가리키는 커밋이 바뀜, `.M sub`) 상태 이벤트가 온다 — 서브모듈의 git 디렉터리는 공유 git
+/// 디렉터리의 `modules/sub` 다.
+#[test]
+fn a_commit_inside_a_submodule_reports_the_status() {
+    let library = TestRepo::with_commit();
+    let r = TestRepo::with_commit();
+    r.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "--quiet",
+        library.root().to_str().unwrap(),
+        "sub",
+    ]);
+    r.commit_all("add the submodule");
+    let sub = r.root().join("sub");
+    assert!(r.root().join(".git/modules/sub/HEAD").is_file());
+    let w = Watched::new();
+    let id = w.fx.project(r.root());
+    let _fs = w.fs(&id, None);
+    let _git = w.git(&id, None);
+    let mut events = Events::new(&w.fx.bus(), &id);
+    events.settle();
+    assert_same_status(&w.fx, &r, &id, None);
+
+    let started = Instant::now();
+    r.git_in(
+        &sub,
+        &["commit", "--quiet", "--allow-empty", "-m", "inside"],
+    );
+    let at = events.until("commit inside the submodule", &[&status_for("sub")]);
+    latency("commit inside the submodule", started, &at);
+    events.settle();
+    assert_same_status(&w.fx, &r, &id, None);
+    assert!(
+        w.fx.status(&id, None)
+            .entries
+            .iter()
+            .any(|e| e.path == "sub" && e.unstaged == Some(GitChange::Modified))
+    );
+
+    // 분리된 HEAD 로 옮겨도(브랜치는 그대로) 온다.
+    let started = Instant::now();
+    r.git_in(&sub, &["checkout", "--quiet", "--detach", "HEAD~1"]);
+    let at = events.until("checkout inside the submodule", &[&status_for("sub")]);
+    latency("checkout inside the submodule", started, &at);
+    events.settle();
+    assert_same_status(&w.fx, &r, &id, None);
+}

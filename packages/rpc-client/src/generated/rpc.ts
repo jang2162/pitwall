@@ -1071,6 +1071,14 @@ export type GitBranch = {
 	upstream: GitUpstream | null,
 };
 
+/**  읽지 못한 ref 하나. */
+export type GitBrokenRef = {
+	/**  전체 이름. 이름조차 읽지 못했으면(ref 파일을 열지 못함) `null`. */
+	refName: string | null,
+	/**  사람이 읽을 이유(gix 의 오류 문장, 영어). */
+	error: string,
+};
+
 /**  경로 하나의 변경 종류(porcelain v2 의 `XY` 글자 하나). */
 export type GitChange = 
 /**  `A`. 작업 트리 쪽(`unstaged`)이면 `git add --intent-to-add` 한 파일. */
@@ -1217,6 +1225,10 @@ export type GitRefs = {
 	/**  원격 추적 브랜치(ref 이름순). `origin/HEAD` 같은 심볼릭 ref 는 넣지 않는다. */
 	remoteBranches: GitRemoteBranch[],
 	tags: GitTag[],
+	/**  저장소는 있는데 읽지 못하는 형식이면 그 까닭(나머지는 빈다). 보통 `null`. */
+	unsupported: GitUnsupported | null,
+	/**  읽지 못해 건너뛴 ref(git 의 `warning: ignoring broken ref`). 보통 빈다. */
+	broken: GitBrokenRef[],
 };
 
 export type GitRemoteBranch = {
@@ -1277,6 +1289,8 @@ export type GitStatus = {
 	workTree: string | null,
 	/**  바뀐 경로(경로순). `paths` 로 불렀으면 그 경로 안의 것만 — 받는 쪽은 그 경로 안의 옛 항목을 이것으로 바꾼다. */
 	entries: GitStatusEntry[],
+	/**  저장소는 있는데 읽지 못하는 형식이면 그 까닭(`entries` 는 빈다). 보통 `null`. */
+	unsupported: GitUnsupported | null,
 };
 
 /**  경로 하나의 상태. 충돌이면 `conflict` 만 있다. */
@@ -1320,6 +1334,11 @@ export type GitTrack = {
 	/**  upstream 에만 있는 커밋 수(`↓`). */
 	behind: number,
 };
+
+/**  gix 로 읽지 못하는 저장소 형식. 화면은 git 기능을 「지원하지 않는 저장소」 로 보인다(오류가 아니다). */
+export type GitUnsupported = 
+/**  ref 를 reftable 로 둔 저장소(`extensions.refStorage = reftable`, `git init --ref-format=reftable`). */
+"reftable";
 
 export type GitUpstream = {
 	/**  짧은 이름(`origin/main`, 원격이 `.` 이면 로컬 브랜치 이름). */

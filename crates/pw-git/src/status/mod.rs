@@ -111,6 +111,27 @@ pub struct GitStatus {
     pub work_tree: Option<String>,
     /// 바뀐 경로(경로순). `paths` 로 불렀으면 그 경로 안의 것만 — 받는 쪽은 그 경로 안의 옛 항목을 이것으로 바꾼다.
     pub entries: Vec<GitStatusEntry>,
+    /// 저장소는 있는데 읽지 못하는 형식이면 그 까닭(`entries` 는 빈다). 보통 `null`.
+    pub unsupported: Option<GitUnsupported>,
+}
+
+/// gix 로 읽지 못하는 저장소 형식. 화면은 git 기능을 「지원하지 않는 저장소」 로 보인다(오류가 아니다).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum GitUnsupported {
+    /// ref 를 reftable 로 둔 저장소(`extensions.refStorage = reftable`, `git init --ref-format=reftable`).
+    Reftable,
+}
+
+/// `repo` 가 gix 로 읽지 못하는 형식이면 그 까닭.
+fn unsupported(repo: &gix::Repository) -> Option<GitUnsupported> {
+    use gix::bstr::ByteSlice;
+    repo.config_snapshot()
+        .string("extensions.refStorage")
+        .filter(|v| v.as_bytes().eq_ignore_ascii_case(b"reftable"))
+        .map(|_| GitUnsupported::Reftable)
 }
 
 /// ahead/behind.
@@ -194,6 +215,36 @@ pub struct GitRefs {
     /// 원격 추적 브랜치(ref 이름순). `origin/HEAD` 같은 심볼릭 ref 는 넣지 않는다.
     pub remote_branches: Vec<GitRemoteBranch>,
     pub tags: Vec<GitTag>,
+    /// 저장소는 있는데 읽지 못하는 형식이면 그 까닭(나머지는 빈다). 보통 `null`.
+    pub unsupported: Option<GitUnsupported>,
+    /// 읽지 못해 건너뛴 ref(git 의 `warning: ignoring broken ref`). 보통 빈다.
+    pub broken: Vec<GitBrokenRef>,
+}
+
+impl GitRefs {
+    fn empty(work_tree: Option<String>, unsupported: Option<GitUnsupported>) -> Self {
+        Self {
+            work_tree,
+            head: None,
+            branches: Vec::new(),
+            remote_branches: Vec::new(),
+            tags: Vec::new(),
+            unsupported,
+            broken: Vec::new(),
+        }
+    }
+}
+
+/// 읽지 못한 ref 하나.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBrokenRef {
+    /// 전체 이름. 이름조차 읽지 못했으면(ref 파일을 열지 못함) `null`.
+    pub ref_name: Option<String>,
+    /// 사람이 읽을 이유(gix 의 오류 문장, 영어).
+    pub error: String,
 }
 
 rpc_method! {
@@ -224,6 +275,7 @@ pub struct Status {
     git: Arc<Git>,
     tasks: OnceLock<TaskSpawner>,
     staged: Arc<compute::StagedCache>,
+    generations: refs::Generations,
 }
 
 impl Status {
@@ -232,6 +284,7 @@ impl Status {
             git,
             tasks: OnceLock::new(),
             staged: Arc::default(),
+            generations: refs::Generations::default(),
         }
     }
 
@@ -255,18 +308,29 @@ impl Status {
             let opened = this
                 .git
                 .open(&params.project_id, params.worktree.as_deref())?;
-            let Some(opened) = opened else {
-                return Ok(None);
+            let Some(mut opened) = opened else {
+                return Ok(Err(None));
             };
+            if !opened.trusted {
+                crate::diff::changes::without_filter_drivers(&mut opened.repo)?;
+            }
+            if let Some(why) = unsupported(&opened.repo) {
+                return Ok(Err(Some((display(&opened.target.work_tree), why))));
+            }
             let entries = compute::index_entries(&opened.repo).map_err(RpcError::internal)?;
-            Ok(Some((opened, entries, params.paths)))
+            Ok(Ok((opened, entries, params.paths)))
         })
         .await?;
-        let Some((opened, entries, limit)) = opened else {
-            return Ok(GitStatus {
-                work_tree: None,
-                entries: Vec::new(),
-            });
+        let (opened, entries, limit) = match opened {
+            Ok(opened) => opened,
+            Err(unreadable) => {
+                let (work_tree, unsupported) = unreadable.unzip();
+                return Ok(GitStatus {
+                    work_tree,
+                    entries: Vec::new(),
+                    unsupported,
+                });
+            }
         };
         let work_tree = display(&opened.target.work_tree);
         let interrupt = Arc::new(AtomicBool::new(false));
@@ -323,6 +387,7 @@ impl Status {
             Ok(entries) => Ok(GitStatus {
                 work_tree: Some(work_tree),
                 entries,
+                unsupported: None,
             }),
             Err(compute::Stopped::Interrupted) => Err(RpcError::new(
                 code::CANCELLED,
@@ -340,16 +405,13 @@ impl Status {
             .git
             .open(&params.project_id, params.worktree.as_deref())?
         else {
-            return Ok(GitRefs {
-                work_tree: None,
-                head: None,
-                branches: Vec::new(),
-                remote_branches: Vec::new(),
-                tags: Vec::new(),
-            });
+            return Ok(GitRefs::empty(None, None));
         };
         let work_tree = display(&opened.target.work_tree);
-        let mut refs = refs::refs(&opened.repo)
+        if let Some(why) = unsupported(&opened.repo) {
+            return Ok(GitRefs::empty(Some(work_tree), Some(why)));
+        }
+        let mut refs = refs::refs(&opened.repo, Some(&self.generations))
             .map_err(|e| RpcError::internal(format!("cannot read the refs of {work_tree}: {e}")))?;
         refs.work_tree = Some(work_tree);
         Ok(refs)

@@ -3697,6 +3697,27 @@
             ],
             "type": "object"
           },
+          "GitBrokenRef": {
+            "description": "읽지 못한 ref 하나.",
+            "properties": {
+              "error": {
+                "description": "사람이 읽을 이유(gix 의 오류 문장, 영어).",
+                "type": "string"
+              },
+              "refName": {
+                "description": "전체 이름. 이름조차 읽지 못했으면(ref 파일을 열지 못함) `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "refName",
+              "error"
+            ],
+            "type": "object"
+          },
           "GitRemoteBranch": {
             "properties": {
               "commit": {
@@ -3773,6 +3794,16 @@
               "behind"
             ],
             "type": "object"
+          },
+          "GitUnsupported": {
+            "description": "gix 로 읽지 못하는 저장소 형식. 화면은 git 기능을 「지원하지 않는 저장소」 로 보인다(오류가 아니다).",
+            "oneOf": [
+              {
+                "const": "reftable",
+                "description": "ref 를 reftable 로 둔 저장소(`extensions.refStorage = reftable`, `git init --ref-format=reftable`).",
+                "type": "string"
+              }
+            ]
           },
           "GitUpstream": {
             "properties": {
@@ -3872,6 +3903,13 @@
             },
             "type": "array"
           },
+          "broken": {
+            "description": "읽지 못해 건너뛴 ref(git 의 `warning: ignoring broken ref`). 보통 빈다.",
+            "items": {
+              "$ref": "#/$defs/GitBrokenRef"
+            },
+            "type": "array"
+          },
           "head": {
             "anyOf": [
               {
@@ -3895,6 +3933,17 @@
             },
             "type": "array"
           },
+          "unsupported": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GitUnsupported"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "저장소는 있는데 읽지 못하는 형식이면 그 까닭(나머지는 빈다). 보통 `null`."
+          },
           "workTree": {
             "description": "저장소의 작업 트리 꼭대기. `null` 이면 「저장소 없음」 이고 나머지는 빈다.",
             "type": [
@@ -3908,7 +3957,9 @@
           "head",
           "branches",
           "remoteBranches",
-          "tags"
+          "tags",
+          "unsupported",
+          "broken"
         ],
         "type": "object"
       },
@@ -4407,6 +4458,16 @@
               "conflict"
             ],
             "type": "object"
+          },
+          "GitUnsupported": {
+            "description": "gix 로 읽지 못하는 저장소 형식. 화면은 git 기능을 「지원하지 않는 저장소」 로 보인다(오류가 아니다).",
+            "oneOf": [
+              {
+                "const": "reftable",
+                "description": "ref 를 reftable 로 둔 저장소(`extensions.refStorage = reftable`, `git init --ref-format=reftable`).",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4418,6 +4479,17 @@
             },
             "type": "array"
           },
+          "unsupported": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GitUnsupported"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "저장소는 있는데 읽지 못하는 형식이면 그 까닭(`entries` 는 빈다). 보통 `null`."
+          },
           "workTree": {
             "description": "저장소의 작업 트리 꼭대기(절대 경로) — 경로들의 기준. `null` 이면 「저장소 없음」 이고 `entries` 는 빈다.",
             "type": [
@@ -4428,7 +4500,8 @@
         },
         "required": [
           "workTree",
-          "entries"
+          "entries",
+          "unsupported"
         ],
         "type": "object"
       },

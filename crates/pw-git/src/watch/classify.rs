@@ -93,7 +93,22 @@ fn shared(rel: &str) -> Effect {
         "info/exclude" | "info/attributes" => Effect::Status,
         "refs" => Effect::PackedRefs,
         _ if rel.starts_with("refs/") => Effect::Ref(rel.to_owned()),
+        _ if rel.starts_with("modules/") => submodule(rel),
         _ => Effect::None,
+    }
+}
+
+/// 서브모듈의 git 디렉터리(`modules/<이름>/…`, 이름에 `/` 가 들 수 있다) 안. 서브모듈 안의 `git commit` · `checkout` 은 그 HEAD 나
+/// HEAD 가 가리키는 브랜치를 옮기고, 그러면 이 작업 트리의 상태(서브모듈이 가리키는 커밋, `.M sub`)가 바뀐다 — 어느 서브모듈인지
+/// 가르지 않고 상태 전체로 낸다. 서브모듈 안의 index · 객체 · reflog 는 상관없다(서브모듈 안의 변경은 보지 않는다, 결정 M2-D3).
+fn submodule(rel: &str) -> Effect {
+    if rel.contains("/objects/") || rel.contains("/logs/") {
+        return Effect::None;
+    }
+    if rel.ends_with("/HEAD") || rel.ends_with("/packed-refs") || rel.contains("/refs/") {
+        Effect::Status
+    } else {
+        Effect::None
     }
 }
 
@@ -154,6 +169,33 @@ mod tests {
             "worktrees/wt/index",
         ] {
             assert_eq!(of(&d, ignored), Effect::None, "{ignored}");
+        }
+    }
+
+    #[test]
+    fn a_commit_inside_a_submodule_changes_the_status() {
+        for d in [main_checkout(), linked()] {
+            for moved in [
+                "modules/sub/HEAD",
+                "modules/sub/refs/heads/main",
+                "modules/sub/packed-refs",
+                "modules/libs/a/HEAD",
+                "modules/outer/modules/inner/refs/heads/x",
+            ] {
+                assert_eq!(of(&d, moved), Effect::Status, "{moved}");
+            }
+            for ignored in [
+                "modules/sub/index",
+                "modules/sub/objects/ab/cdef",
+                "modules/sub/logs/refs/heads/main",
+                "modules/sub/logs/HEAD",
+                "modules/sub/HEAD.lock",
+                "modules/sub/refs/heads/main.lock",
+                "modules/sub/config",
+                "modules/sub/FETCH_HEAD",
+            ] {
+                assert_eq!(of(&d, ignored), Effect::None, "{ignored}");
+            }
         }
     }
 

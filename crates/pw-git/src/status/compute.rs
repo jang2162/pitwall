@@ -10,8 +10,8 @@
 //! - index 를 다시 쓰지 않는다(git 의 `GIT_OPTIONAL_LOCKS=0` 과 같다) — 사람의 저장소를 바꾸지 않는다. 시각만 바뀐 파일은 매번 내용을
 //!   비교한다.
 //!
-//! 저장소의 필터 드라이버(`filter.<x>.clean`)는 내용 비교에서 돈다 — 미신뢰 프로젝트의 저장소는 그 설정을 버리고 연다
-//! (`crate::repo::open_options`, 결정 M2-D8).
+//! 필터 드라이버(`filter.<x>.clean` · `process`)는 내용 비교에서 돈다 — 미신뢰 프로젝트에서는 어디에 정의된 것이든 돌리지 않는다
+//! (`git.status` 가 연 저장소에서 `crate::diff::changes::without_filter_drivers` 로 뗀다, 결정 M2-D8).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -59,7 +59,7 @@ pub struct Staged {
 
 /// 저장소마다 마지막 HEAD↔index 결과. 작업 트리만 바뀌는 동안(편집 → `git.statusChanged { paths }` → 경로 한정 status)은 HEAD 트리와
 /// index 가 그대로라 다시 계산하지 않는다 — 10만 항목에서 트리를 index 로 펼치는 데 50 ms 쯤 든다. 키는 (git 디렉터리, 연 때의 신뢰,
-/// HEAD 트리, index 체크섬)이다. 체크섬을 쓰지 않는 index(`index.skipHash`)는 담지 않는다.
+/// HEAD 트리, index 체크섬, 이름 바뀜 설정)이다. 체크섬을 쓰지 않는 index(`index.skipHash`)는 담지 않는다.
 #[derive(Default)]
 pub struct StagedCache {
     entries: Mutex<HashMap<RepoKey, Cached>>,
@@ -70,8 +70,8 @@ type Cached = (StagedKey, Arc<Vec<Staged>>);
 
 /// (git 디렉터리, 연 때의 신뢰).
 type RepoKey = (PathBuf, bool);
-/// (HEAD 트리, index 체크섬).
-type StagedKey = (gix::ObjectId, gix::ObjectId);
+/// (HEAD 트리, index 체크섬, 이름 바뀜 설정([`rename_config`])).
+type StagedKey = (gix::ObjectId, gix::ObjectId, Vec<Option<BString>>);
 
 /// 담아 두는 저장소 수. 넘으면 비운다.
 const CACHED_REPOSITORIES: usize = 16;
@@ -144,7 +144,9 @@ pub fn status(
 
     // HEAD↔index. 충돌한 경로(단계 1~3 만 있다)는 gix 가 내지 않는다 — git 처럼 충돌만 보인다.
     let tree = repo.head_tree_id_or_empty()?.detach();
-    let key = index.checksum().map(|checksum| (tree, checksum));
+    let key = index
+        .checksum()
+        .map(|checksum| (tree, checksum, rename_config(repo)));
     let slot = cache.map(|(cache, trusted)| (cache, (repo.git_dir().to_path_buf(), trusted)));
     let cached = match (&slot, &key) {
         (Some((cache, repo_key)), Some(key)) => cache.get(repo_key, key),
@@ -180,12 +182,13 @@ fn staged(
     index: &gix::index::State,
     interrupt: &Arc<AtomicBool>,
 ) -> Result<Vec<Staged>, Stopped> {
+    let expanded = expanded(repo, index)?;
     let mut out = Vec::new();
     repo.tree_index_status(
         &tree,
-        index,
+        expanded.as_ref().unwrap_or(index),
         None,
-        gix::status::tree_index::TrackRenames::AsConfigured,
+        track_renames(repo),
         |change, _, _| {
             if interrupt.load(Ordering::Relaxed) {
                 return Ok(std::ops::ControlFlow::Break(()));
@@ -199,6 +202,92 @@ fn staged(
         return Err(Stopped::Interrupted);
     }
     Ok(out)
+}
+
+/// HEAD↔index 의 이름 바뀜 찾기를 정하는 설정 값([`track_renames`] 가 읽는 것). 설정만 바꿔도 앞 결과를 쓰지 않게 캐시 키에 넣는다.
+fn rename_config(repo: &gix::Repository) -> Vec<Option<BString>> {
+    let config = repo.config_snapshot();
+    [
+        "status.renames",
+        "status.renameLimit",
+        "diff.renames",
+        "diff.renameLimit",
+    ]
+    .iter()
+    .map(|key| config.string(*key))
+    .collect()
+}
+
+/// git 처럼 이름 바뀜 찾기를 정한다: `status.renames`(없으면 `diff.renames`, 그것도 없으면 켬 — `copies` 면 복사도),
+/// `status.renameLimit`(없으면 `diff.renameLimit`). gix 0.90 의 `TrackRenames::AsConfigured` 는 `status.renames` 대신
+/// `merge.renames` 를 읽어 쓰지 않는다(`gix::config::tree::Status::RENAMES` 가 `merge` 절에 묶여 있다).
+fn track_renames(repo: &gix::Repository) -> gix::status::tree_index::TrackRenames {
+    use gix::bstr::ByteSlice;
+    use gix::status::tree_index::TrackRenames;
+    let config = repo.config_snapshot();
+    // `Some(true)` 이름 바뀜, `Some(false)` 끔, `None` 복사까지.
+    let mode =
+        ["status.renames", "diff.renames"]
+            .iter()
+            .find_map(|key| match config.boolean(*key) {
+                Some(on) => Some(Some(on)),
+                None => config
+                    .string(*key)
+                    .filter(|v| v.as_bytes() == b"copies" || v.as_bytes() == b"copy")
+                    .map(|_| None),
+            });
+    let limit = ["status.renameLimit", "diff.renameLimit"]
+        .iter()
+        .find_map(|key| config.integer(*key))
+        .and_then(|n| usize::try_from(n).ok());
+    let default = gix::diff::Rewrites::default();
+    match mode.unwrap_or(Some(true)) {
+        Some(false) => TrackRenames::Disabled,
+        mode => TrackRenames::Given(gix::diff::Rewrites {
+            copies: mode.is_none().then(gix::diff::rewrites::Copies::default),
+            limit: limit.unwrap_or(default.limit),
+            ..default
+        }),
+    }
+}
+
+/// sparse index(`git sparse-checkout --sparse-index`)의 접힌 폴더 항목을 그 트리의 파일들로 펼친 사본 — gix 의 HEAD↔index 비교는
+/// 접힌 항목을 받지 않는다. 펼친 파일은 git 이 펼칠 때처럼 skip-worktree 다. 접힌 항목이 없으면 `None`. index 파일은 그대로다.
+fn expanded(
+    repo: &gix::Repository,
+    index: &gix::index::State,
+) -> Result<Option<gix::index::State>, Stopped> {
+    if !index.is_sparse() {
+        return Ok(None);
+    }
+    let mut out = gix::index::State::new(repo.object_hash());
+    for entry in index.entries() {
+        let path = entry.path(index);
+        if !entry.mode.is_sparse() {
+            out.dangerously_push_entry(entry.stat, entry.id, entry.flags, entry.mode, path);
+            continue;
+        }
+        let tree = gix::index::State::from_tree(&entry.id, &repo.objects, Default::default())?;
+        // 접힌 항목의 경로는 `/` 로 끝난다(`folded/`).
+        let mut full = BString::from(path.to_vec());
+        if !full.ends_with(b"/") {
+            full.push(b'/');
+        }
+        let prefix = full.len();
+        for file in tree.entries() {
+            full.truncate(prefix);
+            full.extend_from_slice(file.path(&tree));
+            out.dangerously_push_entry(
+                gix::index::entry::Stat::default(),
+                file.id,
+                file.flags | gix::index::entry::Flags::SKIP_WORKTREE,
+                file.mode,
+                full.as_ref(),
+            );
+        }
+    }
+    out.sort_entries();
+    Ok(Some(out))
 }
 
 fn blank(path: String) -> GitStatusEntry {

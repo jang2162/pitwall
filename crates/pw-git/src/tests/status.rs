@@ -430,7 +430,8 @@ fn outside_a_repository_and_on_an_unborn_branch() {
         fx.status(&out_id, None),
         GitStatus {
             work_tree: None,
-            entries: Vec::new()
+            entries: Vec::new(),
+            unsupported: None,
         }
     );
     let refs = fx.refs(&out_id, None);
@@ -650,6 +651,232 @@ fn refs_match_for_each_ref_and_rev_list() {
     assert_same_refs(&fx, &r, &id);
 }
 
+/// 깨진 ref 하나는 그것만 `broken` 에 적히고 나머지는 git 과 같다(git 은 `warning: ignoring broken ref` 를 내고 건너뛴다):
+/// 내용이 해시가 아닌 loose ref, 없는 객체를 가리키는 태그, upstream 이 없는 객체를 가리켜 셀 수 없는 브랜치.
+#[test]
+fn a_broken_ref_does_not_hide_the_others() {
+    let r = TestRepo::with_commit();
+    r.branch("good");
+    r.git(&["tag", "fine"]);
+    let fx = Fx::new();
+    let id = fx.project(r.root());
+    let clean = fx.refs(&id, None);
+    assert!(clean.broken.is_empty());
+
+    let missing = "0123456789abcdef0123456789abcdef01234567";
+    fs::write(r.root().join(".git/refs/heads/garbage"), "not a hash\n").unwrap();
+    fs::write(
+        r.root().join(".git/refs/tags/dangling"),
+        format!("{missing}\n"),
+    )
+    .unwrap();
+    fs::write(
+        r.root().join(".git/refs/heads/lost"),
+        format!("{missing}\n"),
+    )
+    .unwrap();
+    r.git(&["branch", "--quiet", "counts", "good"]);
+    r.git(&["config", "branch.counts.remote", "."]);
+    r.git(&["config", "branch.counts.merge", "refs/heads/lost"]);
+
+    let refs = fx.refs(&id, None);
+    let mut broken: Vec<Option<String>> = refs.broken.iter().map(|b| b.ref_name.clone()).collect();
+    broken.sort();
+    assert_eq!(
+        broken,
+        [
+            Some("refs/heads/counts".to_owned()),
+            Some("refs/heads/garbage".to_owned()),
+            Some("refs/tags/dangling".to_owned()),
+        ],
+        "{:?}",
+        refs.broken
+    );
+    assert!(refs.broken.iter().all(|b| !b.error.is_empty()));
+    let names: Vec<&str> = refs.branches.iter().map(|b| b.name.as_str()).collect();
+    // 없는 커밋을 가리키는 브랜치 자체는 git 처럼 보인다(for-each-ref 도 낸다) — 그것을 upstream 으로 둔 브랜치만 셀 수 없다.
+    assert_eq!(names, ["good", "lost", "main"]);
+    assert_eq!(
+        refs.tags
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
+        ["fine"]
+    );
+}
+
+/// `parents` 를 부모로, 커미터 시각 `at`(초)으로 커밋을 만든다(트리는 HEAD 의 것). 그 해시.
+fn commit_at(r: &TestRepo, parents: &[&str], at: u64, message: &str) -> String {
+    let tree = r.rev_parse("HEAD^{tree}");
+    let mut c = r.command_in(r.root());
+    let at = format!("@{at} +0000");
+    c.env("GIT_AUTHOR_DATE", &at)
+        .env("GIT_COMMITTER_DATE", &at)
+        .args(["commit-tree", &tree, "-m", message]);
+    for parent in parents {
+        c.args(["-p", parent]);
+    }
+    let out = c.output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+/// 무작위 이력(시드 고정): 커밋마다 앞선 커밋 1~3개를 부모로, 시각은 뒤죽박죽(같은 시각 포함)이다. 여러 쌍의 ahead/behind 가
+/// `git rev-list --left-right --count` 와 같다 — commit-graph 없이, 그리고 절반만 덮는 commit-graph 와 함께.
+#[test]
+fn ahead_and_behind_match_rev_list_on_shuffled_dates() {
+    let r = TestRepo::with_commit();
+    let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = move |n: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed % n
+    };
+    let t = 1_700_200_000;
+    let mut commits: Vec<String> = Vec::new();
+    let commit = |commits: &mut Vec<String>, next: &mut dyn FnMut(u64) -> u64| {
+        let mut parents: Vec<String> = Vec::new();
+        if !commits.is_empty() {
+            for _ in 0..=next(3) {
+                // 가까운 커밋을 자주 고른다 — 갈래가 길어진다.
+                let back = (next(6) + 1).min(commits.len() as u64) as usize;
+                let parent = commits[commits.len() - back].clone();
+                if !parents.contains(&parent) {
+                    parents.push(parent);
+                }
+            }
+        }
+        let parents: Vec<&str> = parents.iter().map(String::as_str).collect();
+        let at = t + next(5) * 1_000;
+        let id = commit_at(&r, &parents, at, &format!("c{}", commits.len()));
+        commits.push(id);
+    };
+    for _ in 0..30 {
+        commit(&mut commits, &mut next);
+    }
+    r.git(&["branch", "--quiet", "graphed", commits.last().unwrap()]);
+    r.git(&["commit-graph", "write", "--reachable"]);
+    for _ in 0..30 {
+        commit(&mut commits, &mut next);
+    }
+    let check = |label: &str| {
+        let fx = Fx::new();
+        let id = fx.project(r.root());
+        let opened = fx.git.open(&id, None).unwrap().unwrap();
+        let mut mismatches = Vec::new();
+        for i in (0..commits.len()).step_by(4) {
+            for j in (1..commits.len()).step_by(7) {
+                let (a, b) = (&commits[i], &commits[j]);
+                let range = format!("{a}...{b}");
+                let text = String::from_utf8(git_read(
+                    &r,
+                    r.root(),
+                    &["rev-list", "--left-right", "--count", &range],
+                ))
+                .unwrap();
+                let (ahead, behind) = text.trim().split_once('\t').unwrap();
+                let want: (u32, u32) = (ahead.parse().unwrap(), behind.parse().unwrap());
+                let got = count(&opened.repo, a, b);
+                if got != want {
+                    mismatches.push(format!("c{i}...c{j}: got {got:?}, git {want:?}"));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{label}: {mismatches:#?}");
+    };
+    check("with a partial commit-graph");
+    fs::remove_file(r.root().join(".git/objects/info/commit-graph")).unwrap();
+    check("without a commit-graph");
+}
+
+fn count(repo: &gix::Repository, a: &str, b: &str) -> (u32, u32) {
+    let id = |s: &str| gix::ObjectId::from_hex(s.as_bytes()).unwrap();
+    let cache = repo.commit_graph_if_enabled().unwrap();
+    let mut counter = crate::status::refs::Counter::new(repo, cache.as_ref());
+    let t = counter.ahead_behind(id(a), id(b)).unwrap();
+    (t.ahead, t.behind)
+}
+
+/// ahead/behind 는 커밋 시각과 상관없이 센다 — 조상이 자손보다 늦은 시각(시계가 틀린 기계, 고친 커밋)이어도 rev-list 와 같다.
+/// commit-graph 가 없을 때(세대를 직접 센다)와 있을 때(그 세대 번호를 쓴다) 둘 다.
+#[test]
+fn ahead_and_behind_do_not_trust_commit_dates() {
+    let r = TestRepo::with_commit();
+    let t = 1_700_100_000;
+    // y ← x ← s ← theirs, 그리고 ours = 병합(x, s, z), z ← y. x · z · y 는 미래 시각이라 s 보다 먼저 걷힌다 — 시각 순으로
+    // 칠하면 y 가 theirs 쪽이라는 것이 s → x → y 로 닿기 전에 걷기가 끝난다.
+    let y = commit_at(&r, &[], t + 7_000, "y");
+    let x = commit_at(&r, &[&y], t + 9_000, "x");
+    let z = commit_at(&r, &[&y], t + 8_500, "z");
+    let s = commit_at(&r, &[&x], t + 2_000, "s");
+    let theirs = commit_at(&r, &[&s], t + 2_500, "theirs");
+    let ours = commit_at(&r, &[&x, &s, &z], t + 3_000, "ours");
+    // 병합 커밋이 부모보다 이른 모양: 양쪽에 미래 시각 커밋이 줄지어 있고 병합이 과거다.
+    let base = commit_at(&r, &[], t, "base");
+    let mut left = base.clone();
+    for i in 0..4 {
+        left = commit_at(&r, &[&left], t + 10_000 + i, "left");
+    }
+    let mut right = base.clone();
+    for i in 0..5 {
+        right = commit_at(&r, &[&right], t + 20_000 + i, "right");
+    }
+    let merged = commit_at(&r, &[&left, &right], t + 1, "merge in the past");
+    let mut after = merged.clone();
+    for i in 0..3 {
+        after = commit_at(&r, &[&after], t + 30_000 + i, "after");
+    }
+    let mut other = right.clone();
+    for i in 0..2 {
+        other = commit_at(&r, &[&other], t + 2 + i, "other");
+    }
+    for (name, tip) in [
+        ("ours", &ours),
+        ("theirs", &theirs),
+        ("after", &after),
+        ("other", &other),
+    ] {
+        r.git(&["branch", "--quiet", name, tip]);
+    }
+    for (branch, upstream) in [("ours", "theirs"), ("after", "other"), ("other", "after")] {
+        r.git(&["config", &format!("branch.{branch}.remote"), "."]);
+        r.git(&[
+            "config",
+            &format!("branch.{branch}.merge"),
+            &format!("refs/heads/{upstream}"),
+        ]);
+    }
+    let fx = Fx::new();
+    let id = fx.project(r.root());
+    let track = |branch: &str| {
+        fx.refs(&id, None)
+            .branches
+            .into_iter()
+            .find(|b| b.name == branch)
+            .and_then(|b| b.upstream?.track)
+            .map(|t| (t.ahead, t.behind))
+    };
+    // 손으로 센 값: ours 에만 ours · z, theirs 에만 theirs. after 에만 after 3 · merged · left 4, other 에만 other 2.
+    assert_eq!(track("ours"), Some((2, 1)));
+    assert_eq!(track("after"), Some((8, 2)));
+    assert_eq!(track("other"), Some((2, 8)));
+    assert_same_refs(&fx, &r, &id);
+    r.git(&["commit-graph", "write", "--reachable"]);
+    assert!(r.root().join(".git/objects/info/commit-graph").exists());
+    assert_same_refs(&fx, &r, &id);
+    assert_eq!(track("after"), Some((8, 2)));
+    // commit-graph 뒤의 커밋(세대가 없는 것)이 섞여도 같다.
+    let newer = commit_at(&r, &[&ours], t - 5_000, "older than everything");
+    r.git(&["branch", "--quiet", "--force", "ours", &newer]);
+    assert_eq!(track("ours"), Some((3, 1)));
+    assert_same_refs(&fx, &r, &id);
+}
+
 /// 큰 저장소(index 항목이 문턱 이상)의 전체 status 는 작업으로 돈다 — 작업이 시작되고 끝나며(`task.progress` 없이도
 /// `task.finished` 가 한 번), 결과는 작업 없이 돈 것과 같다. 경로 한정은 작업이 아니다.
 #[test]
@@ -734,4 +961,199 @@ fn cancelling_the_status_task_ends_the_call_as_cancelled() {
     assert!(spawner.cancel(task.task_id));
     let result = rt.block_on(call).unwrap();
     assert_eq!(result.unwrap_err().code, code::CANCELLED);
+}
+
+/// reftable 저장소(`git init --ref-format=reftable`)는 gix 가 ref 를 읽지 못한다 — 내부 오류 대신 「지원 안 함」 이다. 그 형식을 모르는
+/// git(2.45 전)이면 건너뛴다.
+#[test]
+fn a_reftable_repository_is_unsupported() {
+    let r = TestRepo::new();
+    let dir = r.base().join("reftable");
+    let made = r.try_git_in(
+        r.base(),
+        &[
+            "init",
+            "--quiet",
+            "--ref-format=reftable",
+            dir.to_str().unwrap(),
+        ],
+    );
+    if !made.status.success() {
+        eprintln!("skipped: this git cannot make a reftable repository");
+        return;
+    }
+    fs::write(dir.join("a.txt"), "a\n").unwrap();
+    r.git_in(&dir, &["add", "a.txt"]);
+    r.git_in(&dir, &["commit", "--quiet", "-m", "x"]);
+    let fx = Fx::new();
+    let id = fx.project(&dir);
+    let status = fx.try_status(&id, None, None).unwrap();
+    assert_eq!(status.work_tree.as_deref(), Some(dir.to_str().unwrap()));
+    assert_eq!(
+        status.unsupported,
+        Some(crate::status::GitUnsupported::Reftable)
+    );
+    assert!(status.entries.is_empty());
+    let refs = fx.refs(&id, None);
+    assert_eq!(
+        refs.unsupported,
+        Some(crate::status::GitUnsupported::Reftable)
+    );
+    assert!(refs.branches.is_empty());
+}
+
+/// sparse index(`git sparse-checkout set --cone --sparse-index`)도 읽는다 — index 에 폴더 하나로 접힌 항목이 있어도 git 과 같다.
+/// 접힌 폴더 안의 스테이징한 변경(`reset --soft` 로 HEAD 만 옮긴 것)과 펼쳐진 쪽의 스테이징 · 수정 · untracked 를 함께 본다.
+#[test]
+fn a_sparse_index_matches_git() {
+    let r = TestRepo::new();
+    r.write("kept/a.txt", "a\n");
+    r.write("folded/b.txt", "b\n");
+    r.write("folded/deep/c.txt", "c\n");
+    r.commit_all("tree");
+    r.write("folded/b.txt", "b2\n");
+    r.commit_all("change inside the folded directory");
+    r.git(&["sparse-checkout", "set", "--cone", "--sparse-index", "kept"]);
+    let index = fs::read(r.root().join(".git/index")).unwrap();
+    assert!(
+        index.windows(4).any(|w| w == b"sdir"),
+        "the index is not sparse"
+    );
+    let fx = Fx::new();
+    let id = fx.project(r.root());
+    assert_same_status(&fx, &r, &id, None);
+    assert!(fx.status(&id, None).entries.is_empty());
+
+    r.write("kept/new.txt", "new\n");
+    r.git(&["add", "kept/new.txt"]);
+    r.write("kept/a.txt", "a2\n");
+    r.write("kept/untracked.txt", "u\n");
+    assert_same_status(&fx, &r, &id, None);
+    assert_same_status(&fx, &r, &id, Some(&["kept/a.txt"]));
+    // HEAD 만 앞 커밋으로 — 접힌 폴더 안의 `folded/b.txt` 가 스테이징한 수정이 된다.
+    r.git(&["reset", "--quiet", "--soft", "HEAD~"]);
+    let index = fs::read(r.root().join(".git/index")).unwrap();
+    assert!(index.windows(4).any(|w| w == b"sdir"));
+    assert_same_status(&fx, &r, &id, None);
+    let got = fx.status(&id, None);
+    assert!(
+        got.entries
+            .iter()
+            .any(|e| e.path == "folded/b.txt" && e.staged == Some(GitChange::Modified))
+    );
+    fx.projects.set_trust(&id, true).unwrap();
+    assert_same_status(&fx, &r, &id, None);
+}
+
+/// 이름 바뀜 찾기는 저장소 설정을 따른다(git 과 같이 `status.renames`, 없으면 `diff.renames`): 끄면 스테이징한 이름 바뀜이 지움 ·
+/// 더함 두 줄이다. 설정만 바꾸고 HEAD · index 가 그대로여도 앞 결과(캐시)를 쓰지 않는다.
+#[test]
+fn rename_detection_follows_the_repository_config() {
+    let r = TestRepo::new();
+    r.write("old.txt", "the same content on both sides\n");
+    r.commit_all("one");
+    r.git(&["mv", "old.txt", "new.txt"]);
+    let fx = Fx::new();
+    let id = fx.project(r.root());
+    let renamed = |fx: &Fx| {
+        fx.status(&id, None)
+            .entries
+            .iter()
+            .any(|e| e.staged == Some(GitChange::Renamed))
+    };
+    assert_same_status(&fx, &r, &id, None);
+    assert!(renamed(&fx));
+    for (key, value, want) in [
+        ("status.renames", "false", false),
+        ("status.renames", "true", true),
+        ("diff.renames", "false", true),
+    ] {
+        r.git(&["config", key, value]);
+        assert_same_status(&fx, &r, &id, None);
+        assert_eq!(renamed(&fx), want, "{key}={value}");
+    }
+    r.git(&["config", "--unset", "status.renames"]);
+    assert_same_status(&fx, &r, &id, None);
+    assert!(!renamed(&fx), "diff.renames=false without status.renames");
+    // 경로 한정도 같은 설정을 따른다.
+    assert_same_status(&fx, &r, &id, Some(&["new.txt"]));
+    fx.projects.set_trust(&id, true).unwrap();
+    assert_same_status(&fx, &r, &id, None);
+}
+
+/// `.git` 폴더 안의 `commondir` 로 다른 저장소의 git 디렉터리를 빌려 오는 폴더(받은 압축 등)는 저장소가 아니다 — git 은 그쪽을 공유
+/// git 디렉터리로 읽지만(`rev-parse --git-common-dir`), 연결 워크트리의 git 디렉터리는 언제나 공유 git 디렉터리의
+/// `worktrees/<이름>` 바로 아래다. 받으면 그쪽 ref 를 읽고 그 폴더를 감시하게 된다. 진짜 연결 워크트리는 그대로 받는다.
+#[test]
+fn a_dot_git_folder_borrowing_another_common_dir_is_no_repository() {
+    let victim = TestRepo::with_commit();
+    victim.branch("secret-branch");
+    let r = TestRepo::new();
+    let evil = r.root();
+    fs::write(
+        evil.join(".git/commondir"),
+        format!("{}\n", victim.root().join(".git").display()),
+    )
+    .unwrap();
+    let common = git_read(&r, evil, &["rev-parse", "--git-common-dir"]);
+    assert_eq!(
+        Path::new(String::from_utf8(common).unwrap().trim()),
+        victim.root().join(".git"),
+        "git reads the borrowed common dir"
+    );
+    let fx = Fx::new();
+    let id = fx.project(evil);
+    assert!(fx.git.open(&id, None).unwrap().is_none());
+    let refs = fx.refs(&id, None);
+    assert_eq!(refs.work_tree, None);
+    assert!(refs.branches.is_empty());
+    assert_eq!(fx.status(&id, None).work_tree, None);
+    // 상대 경로 `commondir` 도 같다(두 임시 폴더는 같은 폴더 안에 있다).
+    let sibling = victim.base().file_name().unwrap().to_str().unwrap();
+    fs::write(
+        evil.join(".git/commondir"),
+        format!("../../../{sibling}/repo/.git\n"),
+    )
+    .unwrap();
+    assert!(fx.git.open(&id, None).unwrap().is_none());
+
+    let wt = victim.add_worktree("wt", "feature");
+    let wt_id = fx.project(&wt);
+    let opened = fx
+        .git
+        .open(&wt_id, None)
+        .unwrap()
+        .expect("a linked worktree");
+    assert_ne!(opened.repo.git_dir(), opened.repo.common_dir());
+}
+
+/// 센 세대 번호는 다음 `git.refs` 에 넘긴다(`Generations`) — 객체 바꿔치기(`git replace --graft`)로 부모가 바뀌면 넘긴 것이 틀리므로,
+/// 바꿔치기가 있는 저장소는 넘기지 않고 매번 센다. 바꾼 뒤에도 rev-list 와 같다.
+#[test]
+fn replaced_parents_do_not_reuse_kept_generations() {
+    let r = TestRepo::with_commit();
+    let t = 1_700_300_000;
+    let a = commit_at(&r, &[], t, "a");
+    let b = commit_at(&r, &[&a], t + 1, "b");
+    let c = commit_at(&r, &[&b], t + 2, "c");
+    let x = commit_at(&r, &[], t + 3, "x");
+    let y = commit_at(&r, &[&x], t + 4, "y");
+    r.git(&["branch", "--quiet", "side", &c]);
+    r.git(&["branch", "--quiet", "up", &y]);
+    r.git(&["config", "branch.side.remote", "."]);
+    r.git(&["config", "branch.side.merge", "refs/heads/up"]);
+    let fx = Fx::new();
+    let id = fx.project(r.root());
+    assert_same_refs(&fx, &r, &id);
+    // a 의 부모를 y 로: 넘긴 세대(a 1, y 2)로는 자손이 조상보다 작아진다.
+    r.git(&["replace", "--graft", &a, &y]);
+    assert_same_refs(&fx, &r, &id);
+    let track = fx
+        .refs(&id, None)
+        .branches
+        .into_iter()
+        .find(|b| b.name == "side")
+        .and_then(|b| b.upstream?.track)
+        .map(|t| (t.ahead, t.behind));
+    assert_eq!(track, Some((3, 0)));
 }

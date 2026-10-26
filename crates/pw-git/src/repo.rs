@@ -5,21 +5,23 @@
 //! - 찾은 작업 트리의 `.git` 이 파일이면 M1-05 의 위조 판정(`pw_core::config::gitdir::git_file`)을 거친다 — 관리 폴더가 그
 //!   저장소의 `worktrees/<이름>` 바로 아래가 아니거나 되돌림 포인터가 맞지 않는 연결 워크트리, `commondir` 이 없는 관리 폴더 중
 //!   다른 작업 트리의 내장 `.git` 이거나 `core.worktree` 가 이 폴더가 아닌 곳을 가리키는 것은 저장소로 보지 않는다. 서브모듈과
-//!   `--separate-git-dir` 저장소는 그 작업 트리의 저장소다.
+//!   `--separate-git-dir` 저장소는 그 작업 트리의 저장소다. `.git` 이 폴더인데 그 안에 `commondir` 이 있는 것(다른 저장소의 git
+//!   디렉터리를 공유 git 디렉터리로 빌려 온다 — git 은 메인 체크아웃에 그 파일을 만들지 않는다)도 위조다.
 //! - 저장소 밖, bare 저장소(작업 트리가 없다), 위조 `.git`, `core.worktree` 가 `.git` 이 있는 폴더가 아닌 곳을 가리키는 저장소는
 //!   모두 「저장소 없음」 이다 — git 기능 전체가 빈 상태가 된다(10-ui.md 「빈 상태 · 오류 상태」). 마지막 것은 git CLI 가 작업 트리에서
 //!   다시 찾으면 다른 저장소(또는 없음)를 보기 때문이다 — 읽기(gix)와 쓰기(CLI)가 언제나 같은 `.git` 을 보게 한다.
 //! - 미신뢰 프로젝트의 저장소는 저장소 안의 설정(`.git/config` · `config.worktree` 와 그것이 include 한 파일)을 프로그램 · 경로를
 //!   정하는 데 쓰지 않고 연다([`open_options`]) — 이후 행이 gix 로 status · diff 를 읽을 때 저장소가 정한 필터 드라이버
 //!   (`filter.<x>.clean` · `process`) · `diff.<x>.textconv` 가 돌지 않는다(결정 M2-D8, 03-architecture.md 「보안」). 신뢰하면 gix 의
-//!   기본(소유자 · `safe.directory` 판정)대로 연다. 사람의 전역 설정은 어느 쪽이든 쓴다.
+//!   기본(소유자 · `safe.directory` 판정)대로 연다. 사람의 전역 설정은 어느 쪽이든 쓴다(필터 드라이버만 예외 — 아래).
 //!
 //! 미신뢰 프로젝트에서는 저장소의 프로그램을 띄우지 않는다(결정 M2-D8 「읽기는 gix」). gix 가 프로그램을 띄우는 길은 diff 파이프라인
 //! (`blob-diff` · `status` 기능 — M2-04 의 `crate::diff`)의 필터 드라이버(`gix-filter` 의 clean · smudge · process)와 textconv ·
 //! 외부 diff 뿐이고, 모두 위 열기 옵션이 거르는 「믿을 만한 설정에서만」 읽는 값으로 고른다(`crate::diff` 는 textconv · 외부 diff 를
-//! 신뢰해도 쓰지 않는다). `gix-command` 의 다른 호출자인 `gix-transport` 는 그것을 부르는 `blocking-client` 가 꺼져 있다. 그 밖에
-//! 띄우는 것은 하나뿐이다: `gix-path` 가 git 설치의 설정 파일 위치를
-//! 찾으려고 앱 프로세스의 PATH 에서 찾은 `git` 으로 `git config -lz --show-origin --no-includes --name-only` 를 프로세스마다 한 번
+//! 신뢰해도 쓰지 않는다). 사람의 전역 · 시스템 설정의 필터 드라이버는 `git.diff` · `git.status` 가 연 저장소에서 뗀다
+//! (`crate::diff::changes::without_filter_drivers`). `gix-command` 의 다른 호출자인 `gix-transport` 는 그것을 부르는
+//! `blocking-client` 가 꺼져 있다. 그 밖에 띄우는 것은 하나뿐이다: `gix-path` 가 git 설치의 설정 파일 위치를 찾으려고 앱 프로세스의
+//! PATH 에서 찾은 `git` 으로 `git config -lz --show-origin --no-includes --name-only` 를 프로세스마다 한 번
 //! 돌린다(작업 디렉터리 `/`, `GIT_DIR` · `GIT_CONFIG_GLOBAL` 은 null 장치) — 설치 · 시스템 설정 파일의 경로와 키 이름만 읽고 어느
 //! 저장소의 설정도 읽지 않는다.
 
@@ -38,7 +40,8 @@ pub enum NoRepo {
     Outside,
     /// 작업 트리가 없는 저장소(bare).
     Bare(PathBuf),
-    /// 작업 트리의 `.git` 파일이 위조됐거나 읽을 수 없다.
+    /// 작업 트리의 `.git` 파일이 위조됐거나 읽을 수 없다. `.git` 폴더 안의 `commondir` 로 다른 저장소의 git 디렉터리를 빌려 온
+    /// 것도 여기다.
     InvalidGitFile(PathBuf),
     /// `.git` 은 `found` 에 있는데 `core.worktree` 가 작업 트리를 다른 폴더 `work_tree` 로 정했다.
     WorkTreeElsewhere { found: PathBuf, work_tree: PathBuf },
@@ -87,7 +90,14 @@ pub fn discover(root: &Path, trusted: bool) -> Result<Result<gix::Repository, No
         Found::WorkTree(work_dir) | Found::LinkedWorkTree { work_dir, .. } => work_dir,
         Found::Repository(git_dir) => return Ok(Err(NoRepo::Bare(git_dir))),
     };
-    if work_dir.join(".git").is_file() && git_file(&work_dir) == GitFile::Invalid {
+    let dot_git = work_dir.join(".git");
+    if dot_git.is_file() && git_file(&work_dir) == GitFile::Invalid {
+        return Ok(Err(NoRepo::InvalidGitFile(work_dir)));
+    }
+    // git 은 메인 체크아웃의 `.git` 폴더에 `commondir` 을 만들지 않는다 — 있으면 다른 저장소의 git 디렉터리를 공유 git 디렉터리로
+    // 빌려 오는 위조다(그쪽 ref 를 읽고 그 폴더를 감시하게 된다). `.git` 파일이 가리키는 관리 폴더의 `commondir` 은 위
+    // `git_file` 이 본다(관리 폴더가 그 공유 git 디렉터리의 `worktrees/<이름>` 바로 아래인가).
+    if dot_git.is_dir() && dot_git.join("commondir").exists() {
         return Ok(Err(NoRepo::InvalidGitFile(work_dir)));
     }
     let repo = gix::open_opts(&work_dir, open_options(trusted)).map_err(|e| e.to_string())?;
