@@ -13,8 +13,17 @@ test-support = ["dep:tempfile"]
 [dependencies]
 # 읽기(결정 M2-D1). 기본 기능을 끄고 쓰는 것만 켠다 — 네트워크 · credentials 는 켜지 않는다(fetch · push 는 CLI).
 # 이미 들어와 있는 `gix-attributes`(pw-lang) · `gix-parallel`(pw-fs)과 같은 gitoxide 릴리스다. 올릴 때 셋을 함께 올린다.
-gix = { version = "0.90.0", default-features = false, features = ["sha1"] }
+gix = { version = "0.90.0", default-features = false, features = [
+  "sha1",
+  "blob-diff",
+  "revision",
+  "status",
+] }
 pw-core = { path = "../pw-core" }
+# `git.blob` 의 판정 · 내용(`fs.read` 와 같은 꼴)과 대용량 기준값(결정 M1-D9).
+pw-fs = { path = "../pw-fs" }
+# 생성 파일 판정(M1-02, 결정 M1-D20 대안 ①).
+pw-lang = { path = "../pw-lang" }
 pw-rpc = { path = "../pw-rpc" }
 pw-runtime = { path = "../pw-runtime" }
 schemars = { workspace = true }

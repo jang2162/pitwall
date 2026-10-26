@@ -1,6 +1,7 @@
 //! 저장소는 진짜 git 으로 임시 폴더에 만든다(`crate::testing`). 실행기 시험은 가짜 `git`(`testing::fake`)과 가짜 로그인 셸로
 //! 환경을 정해 본다(unix). 미신뢰 저장소의 설정이 코드를 돌리지 않는지는 진짜 git 과 표식을 남기는 sh 스크립트로 본다(unix).
 
+mod diff;
 mod repo;
 
 #[cfg(unix)]

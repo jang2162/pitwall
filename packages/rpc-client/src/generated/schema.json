@@ -1958,6 +1958,759 @@
       ],
       "tier": "write"
     },
+    "git.blob": {
+      "description": "리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "bytes": {
+            "default": false,
+            "description": "텍스트여도 바이트(base64)로 받는다.",
+            "type": "boolean"
+          },
+          "length": {
+            "default": null,
+            "description": "범위 읽기의 최대 바이트(50 MiB 까지). 없으면 끝까지.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "default": null,
+            "description": "범위 읽기의 시작 바이트(`fs.read` 와 같다). 둘 다 없으면 전체.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "저장소 꼭대기 기준 경로(`/` 구분).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "rev": {
+            "default": null,
+            "description": "리비전(커밋). `null` 이면 index(단계 0 — 스테이징된 내용).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Bom": {
+            "enum": [
+              "utf8",
+              "utf16Le",
+              "utf16Be"
+            ],
+            "type": "string"
+          },
+          "FsContent": {
+            "description": "읽거나 쓸 내용.",
+            "oneOf": [
+              {
+                "description": "UTF-8 텍스트. 읽기에서는 파일 앞의 BOM 을 뺀 것이다(`judgment.bom` 이 알린다). 판정의 인코딩이 UTF-8 이 아니면(UTF-16 ·\n짐작한 인코딩) 그 인코딩에서 풀어 낸 것이고 `judgment.editable` 이 거짓이다 — 그 텍스트를 `fs.write` 로 되돌려 쓰면 원래 바이트가\n바뀐다(결정 M1-D12).",
+                "properties": {
+                  "kind": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "바이트 그대로(BOM 포함), 표준 base64.",
+                "properties": {
+                  "data": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "base64",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Judgment": {
+            "description": "읽은 내용의 판정.",
+            "properties": {
+              "binary": {
+                "description": "파일 앞 8 KiB 에 NUL 이 있다(UTF-16 BOM 이 있으면 텍스트로 본다).",
+                "type": "boolean"
+              },
+              "bom": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Bom"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "파일 앞의 BOM."
+              },
+              "editable": {
+                "description": "에디터로 편집 · 저장할 수 있다: 텍스트, 유효한 UTF-8(BOM 유무 무관, 결정 M1-D12, `lossy` 아님), 5 MiB 이하.",
+                "type": "boolean"
+              },
+              "encoding": {
+                "description": "읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE` · 짐작한 것). UTF-16 은 BOM 으로, UTF-8 로 읽히지 않는\n텍스트는 `chardetng` 로 짐작한다(예: `EUC-KR` · `Shift_JIS` · `windows-1252`, 결정 M1-D12). 바이너리면 `null`. 거의 UTF-8\n이면(`lossy`) `UTF-8` 이다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "highlight": {
+                "description": "구문 강조 · 줄바꿈을 켠다: 텍스트, 5 MiB 이하, 1만 자 넘는 줄 없음(결정 M1-D9).",
+                "type": "boolean"
+              },
+              "lineEnding": {
+                "$ref": "#/$defs/LineEnding"
+              },
+              "longLines": {
+                "description": "읽은 범위에 1만 자를 넘는 줄이 있다.",
+                "type": "boolean"
+              },
+              "lossy": {
+                "description": "인코딩이 `UTF-8` 이지만 유효하지 않은 바이트가 있어(쓰는 중인 로그 · 끝이 잘린 파일 등) 그 바이트를 U+FFFD 로 바꿔 풀었다.\n편집하지 않는다 — 저장하면 그 바이트가 U+FFFD 로 바뀐다.",
+                "type": "boolean"
+              },
+              "sizeClass": {
+                "$ref": "#/$defs/SizeClass",
+                "description": "파일 전체 크기의 등급."
+              }
+            },
+            "required": [
+              "binary",
+              "encoding",
+              "lossy",
+              "bom",
+              "lineEnding",
+              "longLines",
+              "sizeClass",
+              "editable",
+              "highlight"
+            ],
+            "type": "object"
+          },
+          "LineEnding": {
+            "description": "읽은 범위의 줄바꿈.",
+            "oneOf": [
+              {
+                "enum": [
+                  "lf",
+                  "crlf",
+                  "cr"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "mixed",
+                "description": "둘 이상이 섞였다.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "줄바꿈이 없다(한 줄).",
+                "type": "string"
+              }
+            ]
+          },
+          "SizeClass": {
+            "description": "크기 등급(결정 M1-D9).",
+            "oneOf": [
+              {
+                "const": "editable",
+                "description": "5 MiB 이하: 편집 + 강조.",
+                "type": "string"
+              },
+              {
+                "const": "readOnly",
+                "description": "5 MiB 초과 50 MiB 이하: 읽기 전용, 강조 · 줄바꿈 끔.",
+                "type": "string"
+              },
+              {
+                "const": "tooLarge",
+                "description": "50 MiB 초과: 열지 않는다(앞부분 · hex 는 범위 읽기로).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/FsContent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "eof": {
+            "description": "읽은 범위가 끝까지 닿았다.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "blob 해시.",
+            "type": "string"
+          },
+          "judgment": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Judgment"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`fs.read` 와 같은 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급)."
+          },
+          "mode": {
+            "description": "8진 모드(`100644` · `100755` · `120000` — 심링크의 내용은 대상 경로).",
+            "type": "string"
+          },
+          "offset": {
+            "description": "읽은 범위의 시작.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "size": {
+            "description": "blob 전체 크기.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tooLarge": {
+            "description": "대용량 기준(50 MiB)을 넘는다. 내용을 풀지 않으므로 `content` · `judgment` 가 `null` 이다(범위 읽기도 하지 않는다).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "size",
+          "tooLarge",
+          "offset",
+          "eof",
+          "content",
+          "judgment"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.containedIn": {
+      "description": "그 커밋을 담은(조상으로 가진) 브랜치 · 원격 브랜치 · 태그. 모든 ref 에서 이력을 걷는다 — 커밋 상세를 연 뒤 따로 부른다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "커밋 하나를 고르는 요청(`git.show` · `git.containedIn`).",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "rev": {
+            "description": "리비전(해시 · 브랜치 · 태그 · `HEAD~1` 처럼 git 의 리비전 문법). 커밋이 아니면(트리 · blob) invalid params.",
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RefKind": {
+            "enum": [
+              "localBranch",
+              "remoteBranch",
+              "tag"
+            ],
+            "type": "string"
+          },
+          "RefLabel": {
+            "properties": {
+              "fullName": {
+                "description": "전체 이름(`refs/heads/main`).",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/RefKind"
+              },
+              "name": {
+                "description": "짧은 이름(`main` · `origin/main` · `v1.0`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "fullName",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "refs": {
+            "description": "그 커밋을 조상(자신 포함)으로 가진 브랜치 · 원격 브랜치 · 태그. 순서는 [`GitShow::refs`] 와 같다.",
+            "items": {
+              "$ref": "#/$defs/RefLabel"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "refs"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.diff": {
+      "description": "두 쪽(커밋 · index · 작업 트리)의 diff: 바뀐 파일 목록(상태 · 이름 바뀜 · 모드 · 바이너리 · 서브모듈 포인터 · 생성 파일 ·\n대용량)과 파일별 hunk(`git diff --find-renames -U3` 과 같다). 저장소가 없으면 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DiffSide": {
+            "description": "diff 의 한쪽.",
+            "oneOf": [
+              {
+                "description": "커밋의 트리. `rev` 는 [`GitRevParams::rev`] 와 같은 리비전 문법이다.",
+                "properties": {
+                  "kind": {
+                    "const": "commit",
+                    "type": "string"
+                  },
+                  "rev": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "rev"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "index(스테이징 영역). 충돌 중인 경로(단계 1~3)는 빠진다.",
+                "properties": {
+                  "kind": {
+                    "const": "index",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "작업 트리. 추적하는 파일만 본다(`git diff` 와 같이 untracked 는 빠진다).",
+                "properties": {
+                  "kind": {
+                    "const": "workTree",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "from": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DiffSide"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "옛 쪽. 고를 수 있는 짝은 넷이다(결정 M2-D5):\n- `to` 가 커밋: `from` 이 없으면 그 커밋의 첫 부모(머지 커밋도 첫 부모, 루트 커밋은 빈 트리), 있으면 그 커밋(두 커밋 비교).\n- `to` 가 index: `from` 은 커밋(없으면 `HEAD`, 커밋이 없는 저장소면 빈 트리) — `git diff --cached`.\n- `to` 가 작업 트리: `from` 은 index(없어도 index) — `git diff`.\n\n그 밖의 짝은 invalid params."
+          },
+          "ignoreWhitespace": {
+            "default": false,
+            "description": "공백을 모두 무시한다(`git diff -w`). 공백만 바뀐 파일(이름 · 모드는 그대로)은 목록에서 빠진다.",
+            "type": "boolean"
+          },
+          "paths": {
+            "default": null,
+            "description": "이 경로(저장소 꼭대기 기준, `/` 구분)와 그 아래만 본다. 글롭 · pathspec 문법은 쓰지 않는다(글자 그대로). 이름 바뀜은 거른\n경로들 사이에서만 찾는다(`git diff -- <경로>` 와 같다).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "to": {
+            "$ref": "#/$defs/DiffSide"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "to"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DiffFile": {
+            "properties": {
+              "added": {
+                "description": "더한 줄 · 뺀 줄 수(`git diff --numstat`).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "binary": {
+                "description": "한쪽이라도 바이너리다(앞 8000바이트에 NUL, 또는 속성 `-diff` · `binary`). hunk 가 없다.",
+                "type": "boolean"
+              },
+              "generated": {
+                "description": "생성 파일이다 — `.gitattributes` 의 `linguist-generated`, 없으면 Linguist 규칙(M1-02, 내용 규칙은 새 쪽(지워졌으면 옛 쪽)\n앞부분으로 본다 — 결정 M1-D20 대안 ①). 속성은 지금 작업 트리의 것(`pw_lang::attributes`)이다 — 커밋 diff 도 그 커밋의\n`.gitattributes` 가 아니다. UI 는 기본으로 접는다(F5-3).",
+                "type": "boolean"
+              },
+              "hunks": {
+                "items": {
+                  "$ref": "#/$defs/DiffHunk"
+                },
+                "type": "array"
+              },
+              "newId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "newMode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "oldId": {
+                "description": "그쪽 blob(서브모듈이면 커밋) 해시. 작업 트리 쪽은 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "oldMode": {
+                "description": "git 의 8진 모드(`100644` · `100755` · `120000` 심링크 · `160000` 서브모듈). 그쪽에 없으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "oldPath": {
+                "description": "이름이 바뀌었으면 옛 경로.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "description": "새 경로(지워졌으면 옛 경로). 저장소 꼭대기 기준, `/` 구분.",
+                "type": "string"
+              },
+              "removed": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "$ref": "#/$defs/FileStatus"
+              },
+              "submodule": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SubmodulePointer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "서브모듈 포인터가 바뀌었다(한쪽이라도 `160000`). hunk 가 없다."
+              },
+              "tooLarge": {
+                "description": "한쪽이라도 대용량 기준(결정 M1-D9 의 50 MiB)을 넘는다. 내용을 읽지 않으므로 hunk 가 없고 `binary` 는 거짓이다.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "status",
+              "path",
+              "oldPath",
+              "oldMode",
+              "newMode",
+              "oldId",
+              "newId",
+              "binary",
+              "tooLarge",
+              "generated",
+              "submodule",
+              "added",
+              "removed",
+              "hunks"
+            ],
+            "type": "object"
+          },
+          "DiffHunk": {
+            "description": "`git diff -U3` 의 hunk 하나.",
+            "properties": {
+              "header": {
+                "description": "`@@` 뒤의 함수 줄(git 의 기본 규칙). 없으면 빈 문자열.",
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "$ref": "#/$defs/DiffLine"
+                },
+                "type": "array"
+              },
+              "newLines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "newStart": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "oldLines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "oldStart": {
+                "description": "`@@ -oldStart,oldLines +newStart,newLines @@` 의 수 그대로. 줄이 없는 쪽(`oldLines == 0`)의 시작은 그 앞 줄 번호다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "oldStart",
+              "oldLines",
+              "newStart",
+              "newLines",
+              "header",
+              "lines"
+            ],
+            "type": "object"
+          },
+          "DiffLine": {
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/LineKind"
+              },
+              "newLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "noNewline": {
+                "description": "파일 끝 개행이 없는 마지막 줄(git 의 `\\ No newline at end of file`).",
+                "type": "boolean"
+              },
+              "oldLine": {
+                "description": "1 기준 줄 번호. 문맥 줄은 둘 다, 뺀 줄은 옛 쪽만, 더한 줄은 새 쪽만 있다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "text": {
+                "description": "줄바꿈(`\\n`)을 뺀 줄. CRLF 파일이면 `\\r` 로 끝난다. UTF-8 이 아닌 바이트는 U+FFFD 다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text",
+              "oldLine",
+              "newLine",
+              "noNewline"
+            ],
+            "type": "object"
+          },
+          "FileStatus": {
+            "oneOf": [
+              {
+                "enum": [
+                  "added",
+                  "deleted"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "modified",
+                "description": "내용이나 모드(실행 비트)가 바뀌었다.",
+                "type": "string"
+              },
+              {
+                "const": "renamed",
+                "description": "이름이 바뀌었다(내용 50% 이상이 같다 — `git diff --find-renames`). 내용도 바뀌었을 수 있다.",
+                "type": "string"
+              },
+              {
+                "const": "typeChanged",
+                "description": "종류가 바뀌었다(파일 ↔ 심링크 ↔ 서브모듈). git 의 patch 는 지우기 + 더하기 둘로 보인다.",
+                "type": "string"
+              }
+            ]
+          },
+          "LineKind": {
+            "enum": [
+              "context",
+              "added",
+              "removed"
+            ],
+            "type": "string"
+          },
+          "SubmodulePointer": {
+            "properties": {
+              "new": {
+                "description": "새 커밋. 작업 트리 쪽이면 체크아웃된 서브모듈의 HEAD(읽지 못하면 `null`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "old": {
+                "description": "옛 커밋. 그쪽에 서브모듈이 없으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "old",
+              "new"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "files": {
+            "description": "경로순(이름이 바뀐 것은 새 경로 자리).",
+            "items": {
+              "$ref": "#/$defs/DiffFile"
+            },
+            "type": "array"
+          },
+          "newCommit": {
+            "description": "새 쪽이 커밋이면 그 해시.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "oldCommit": {
+            "description": "옛 쪽이 커밋이면 그 해시(머지 커밋의 첫 부모처럼 고른 것 포함). 빈 트리 · index 면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "oldCommit",
+          "newCommit",
+          "files"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "git.operation": {
       "description": "진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면\n`operation: null`.",
       "kind": "unary",
@@ -3028,6 +3781,148 @@
         },
         "required": [
           "repo"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.show": {
+      "description": "커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "커밋 하나를 고르는 요청(`git.show` · `git.containedIn`).",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "rev": {
+            "description": "리비전(해시 · 브랜치 · 태그 · `HEAD~1` 처럼 git 의 리비전 문법). 커밋이 아니면(트리 · blob) invalid params.",
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RefKind": {
+            "enum": [
+              "localBranch",
+              "remoteBranch",
+              "tag"
+            ],
+            "type": "string"
+          },
+          "RefLabel": {
+            "properties": {
+              "fullName": {
+                "description": "전체 이름(`refs/heads/main`).",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/RefKind"
+              },
+              "name": {
+                "description": "짧은 이름(`main` · `origin/main` · `v1.0`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "fullName",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "Signature": {
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "offset": {
+                "description": "그 시각의 UTC 차이(초, 동쪽이 양수). `+0900` 이면 32400.",
+                "format": "int32",
+                "type": "integer"
+              },
+              "time": {
+                "description": "유닉스 시각(초).",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "email",
+              "time",
+              "offset"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "author": {
+            "$ref": "#/$defs/Signature"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "committer": {
+            "$ref": "#/$defs/Signature"
+          },
+          "head": {
+            "description": "HEAD 가 이 커밋이다(브랜치를 거쳐서든 분리된 HEAD 든).",
+            "type": "boolean"
+          },
+          "message": {
+            "description": "메시지 전체(제목 줄 · 본문 · 트레일러). UTF-8 이 아닌 바이트는 U+FFFD 다.",
+            "type": "string"
+          },
+          "parents": {
+            "description": "부모 해시. 머지 커밋은 둘 이상이고 첫째가 첫 부모다. 루트 커밋은 비어 있다.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "refs": {
+            "description": "이 커밋을 가리키는 브랜치 · 원격 브랜치 · 태그(주석 태그는 벗긴 대상). 종류 순(로컬 · 원격 · 태그), 같은 종류는 이름순.",
+            "items": {
+              "$ref": "#/$defs/RefLabel"
+            },
+            "type": "array"
+          },
+          "tree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "tree",
+          "parents",
+          "author",
+          "committer",
+          "message",
+          "head",
+          "refs"
         ],
         "type": "object"
       },

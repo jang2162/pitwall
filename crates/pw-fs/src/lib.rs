@@ -359,7 +359,8 @@ impl Fs {
 /// 텍스트면 텍스트(앞의 BOM 을 뺀 것), 바이너리 · `bytes` 요청이면 바이트 그대로 base64. UTF-8 이 아닌 텍스트(UTF-16 · 짐작한
 /// 인코딩)는 판정의 인코딩으로 풀어 보낸다 — 판정이 `editable` 이 아니므로 받는 쪽이 그 텍스트를 UTF-8 로 다시 쓰지 않는다(결정
 /// M1-D12). 글자 중간에서 끊긴 UTF-8 범위도 풀어 보내고 끝의 미완성 글자는 U+FFFD 가 된다.
-fn content(force_bytes: bool, judgment: &Judgment, raw: &[u8], start: usize) -> FsContent {
+/// `start` 는 앞에서 뗄 BOM 길이. `git.blob`(pw-git)도 이 규칙으로 싣는다.
+pub fn content(force_bytes: bool, judgment: &Judgment, raw: &[u8], start: usize) -> FsContent {
     if !force_bytes && !judgment.binary {
         if let Ok(text) = std::str::from_utf8(&raw[start..])
             && (start == 0 || raw.starts_with(UTF8_BOM))

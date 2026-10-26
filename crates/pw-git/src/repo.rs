@@ -14,9 +14,11 @@
 //!   (`filter.<x>.clean` · `process`) · `diff.<x>.textconv` 가 돌지 않는다(결정 M2-D8, 03-architecture.md 「보안」). 신뢰하면 gix 의
 //!   기본(소유자 · `safe.directory` 판정)대로 연다. 사람의 전역 설정은 어느 쪽이든 쓴다.
 //!
-//! 저장소의 프로그램을 띄우지 않는다(결정 M2-D8 「읽기는 gix」). 이 크레이트가 켠 gix 기능으로는 프로그램을 띄우는 호출 경로가
-//! 없다 — `gix-command` 는 `gix-transport` 를 거쳐 의존 트리에 있지만 그것을 부르는 `blocking-client` 가 꺼져 있고, `gix-filter` 는
-//! 트리에 없다. 위 열기 옵션은 그 기능을 켜는 행을 위한 것이다. 띄우는 것은 하나뿐이다: `gix-path` 가 git 설치의 설정 파일 위치를
+//! 미신뢰 프로젝트에서는 저장소의 프로그램을 띄우지 않는다(결정 M2-D8 「읽기는 gix」). gix 가 프로그램을 띄우는 길은 diff 파이프라인
+//! (`blob-diff` · `status` 기능 — M2-04 의 `crate::diff`)의 필터 드라이버(`gix-filter` 의 clean · smudge · process)와 textconv ·
+//! 외부 diff 뿐이고, 모두 위 열기 옵션이 거르는 「믿을 만한 설정에서만」 읽는 값으로 고른다(`crate::diff` 는 textconv · 외부 diff 를
+//! 신뢰해도 쓰지 않는다). `gix-command` 의 다른 호출자인 `gix-transport` 는 그것을 부르는 `blocking-client` 가 꺼져 있다. 그 밖에
+//! 띄우는 것은 하나뿐이다: `gix-path` 가 git 설치의 설정 파일 위치를
 //! 찾으려고 앱 프로세스의 PATH 에서 찾은 `git` 으로 `git config -lz --show-origin --no-includes --name-only` 를 프로세스마다 한 번
 //! 돌린다(작업 디렉터리 `/`, `GIT_DIR` · `GIT_CONFIG_GLOBAL` 은 null 장치) — 설치 · 시스템 설정 파일의 경로와 키 이름만 읽고 어느
 //! 저장소의 설정도 읽지 않는다.

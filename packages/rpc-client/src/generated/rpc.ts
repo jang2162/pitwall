@@ -65,6 +65,19 @@ export type UnaryMethods = {
 	 */
 	"fs.write": { params: FsWriteParams; result: FsWritten };
 	/**
+	 * 리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).
+	 */
+	"git.blob": { params: GitBlobParams; result: GitBlob };
+	/**
+	 * 그 커밋을 담은(조상으로 가진) 브랜치 · 원격 브랜치 · 태그. 모든 ref 에서 이력을 걷는다 — 커밋 상세를 연 뒤 따로 부른다.
+	 */
+	"git.containedIn": { params: GitRevParams; result: GitContainedIn };
+	/**
+	 * 두 쪽(커밋 · index · 작업 트리)의 diff: 바뀐 파일 목록(상태 · 이름 바뀜 · 모드 · 바이너리 · 서브모듈 포인터 · 생성 파일 ·
+	 * 대용량)과 파일별 hunk(`git diff --find-renames -U3` 과 같다). 저장소가 없으면 invalid params.
+	 */
+	"git.diff": { params: GitDiffParams; result: GitDiff };
+	/**
 	 * 진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면
 	 * `operation: null`.
 	 */
@@ -91,6 +104,10 @@ export type UnaryMethods = {
 	 * 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
 	 */
 	"git.repo": { params: GitRepoParams; result: GitRepo };
+	/**
+	 * 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).
+	 */
+	"git.show": { params: GitRevParams; result: GitShow };
 	/**
 	 * Host 의 종류 · 버전 · OS.
 	 */
@@ -337,6 +354,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.trash": {"name":"fs.trash","kind":"unary","tier":"write","roles":["owner"],"params":"FsTrashParams","output":"FsTrashed","doc":" 항목들을 OS 휴지통에 넣는다(`permanent` 면 영구히 지운다). 넣지 못한 것은 `failed` 에 이유와 함께.\n","mcp":false,"fileScope":false},
 	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":false,"fileScope":true},
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false,"fileScope":true},
+	"git.blob": {"name":"git.blob","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlobParams","output":"GitBlob","doc":" 리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).\n","mcp":false,"fileScope":false},
+	"git.containedIn": {"name":"git.containedIn","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitContainedIn","doc":" 그 커밋을 담은(조상으로 가진) 브랜치 · 원격 브랜치 · 태그. 모든 ref 에서 이력을 걷는다 — 커밋 상세를 연 뒤 따로 부른다.\n","mcp":false,"fileScope":false},
+	"git.diff": {"name":"git.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffParams","output":"GitDiff","doc":" 두 쪽(커밋 · index · 작업 트리)의 diff: 바뀐 파일 목록(상태 · 이름 바뀜 · 모드 · 바이너리 · 서브모듈 포인터 · 생성 파일 ·\n 대용량)과 파일별 hunk(`git diff --find-renames -U3` 과 같다). 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.operation": {"name":"git.operation","kind":"unary","tier":"read","roles":["owner"],"params":"GitOperationParams","output":"GitOperation","doc":" 진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면\n `operation: null`.\n","mcp":false,"fileScope":false},
 	"git.operation.abort": {"name":"git.operation.abort","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 그만두고 시작 전으로 돌린다(`git <작업> --abort`). 확인은 창이 먼저 한다(결정 M2-D6 ①).\n","mcp":false,"fileScope":false},
 	"git.operation.continue": {"name":"git.operation.continue","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 계속한다(`git <작업> --continue`). 충돌을 다 풀지 않았으면 git 의 원문으로 실패한다.\n","mcp":false,"fileScope":false},
@@ -344,6 +364,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.prompt.answer": {"name":"git.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"GitPromptAnswerParams","output":"()","doc":" 질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는\n 답이면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.prompts": {"name":"git.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"GitPromptsParams","output":"GitPromptEvent","doc":" 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다\n (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.\n","mcp":false,"fileScope":false},
 	"git.repo": {"name":"git.repo","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRepo","doc":" 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false,"fileScope":false},
+	"git.show": {"name":"git.show","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitShow","doc":" 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).\n","mcp":false,"fileScope":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false,"fileScope":false},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n","mcp":false,"fileScope":true},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n","mcp":false,"fileScope":true},
@@ -600,6 +621,68 @@ export type DiagnosticsText = {
 	text: string,
 };
 
+export type DiffFile = {
+	status: FileStatus,
+	/**  새 경로(지워졌으면 옛 경로). 저장소 꼭대기 기준, `/` 구분. */
+	path: string,
+	/**  이름이 바뀌었으면 옛 경로. */
+	oldPath: string | null,
+	/**  git 의 8진 모드(`100644` · `100755` · `120000` 심링크 · `160000` 서브모듈). 그쪽에 없으면 `null`. */
+	oldMode: string | null,
+	newMode: string | null,
+	/**  그쪽 blob(서브모듈이면 커밋) 해시. 작업 트리 쪽은 `null`. */
+	oldId: string | null,
+	newId: string | null,
+	/**  한쪽이라도 바이너리다(앞 8000바이트에 NUL, 또는 속성 `-diff` · `binary`). hunk 가 없다. */
+	binary: boolean,
+	/**  한쪽이라도 대용량 기준(결정 M1-D9 의 50 MiB)을 넘는다. 내용을 읽지 않으므로 hunk 가 없고 `binary` 는 거짓이다. */
+	tooLarge: boolean,
+	/**
+	 *  생성 파일이다 — `.gitattributes` 의 `linguist-generated`, 없으면 Linguist 규칙(M1-02, 내용 규칙은 새 쪽(지워졌으면 옛 쪽)
+	 *  앞부분으로 본다 — 결정 M1-D20 대안 ①). 속성은 지금 작업 트리의 것(`pw_lang::attributes`)이다 — 커밋 diff 도 그 커밋의
+	 *  `.gitattributes` 가 아니다. UI 는 기본으로 접는다(F5-3).
+	 */
+	generated: boolean,
+	/**  서브모듈 포인터가 바뀌었다(한쪽이라도 `160000`). hunk 가 없다. */
+	submodule: SubmodulePointer | null,
+	/**  더한 줄 · 뺀 줄 수(`git diff --numstat`). */
+	added: number,
+	removed: number,
+	hunks: DiffHunk[],
+};
+
+/**  `git diff -U3` 의 hunk 하나. */
+export type DiffHunk = {
+	/**  `@@ -oldStart,oldLines +newStart,newLines @@` 의 수 그대로. 줄이 없는 쪽(`oldLines == 0`)의 시작은 그 앞 줄 번호다. */
+	oldStart: number,
+	oldLines: number,
+	newStart: number,
+	newLines: number,
+	/**  `@@` 뒤의 함수 줄(git 의 기본 규칙). 없으면 빈 문자열. */
+	header: string,
+	lines: DiffLine[],
+};
+
+export type DiffLine = {
+	kind: LineKind,
+	/**  줄바꿈(`\n`)을 뺀 줄. CRLF 파일이면 `\r` 로 끝난다. UTF-8 이 아닌 바이트는 U+FFFD 다. */
+	text: string,
+	/**  1 기준 줄 번호. 문맥 줄은 둘 다, 뺀 줄은 옛 쪽만, 더한 줄은 새 쪽만 있다. */
+	oldLine: number | null,
+	newLine: number | null,
+	/**  파일 끝 개행이 없는 마지막 줄(git 의 `\ No newline at end of file`). */
+	noNewline: boolean,
+};
+
+/**  diff 의 한쪽. */
+export type DiffSide = 
+/**  커밋의 트리. `rev` 는 [`GitRevParams::rev`] 와 같은 리비전 문법이다. */
+{ kind: "commit"; rev: string } | 
+/**  index(스테이징 영역). 충돌 중인 경로(단계 1~3)는 빠진다. */
+{ kind: "index" } | 
+/**  작업 트리. 추적하는 파일만 본다(`git diff` 와 같이 untracked 는 빠진다). */
+{ kind: "workTree" };
+
 export type EntryKind = "file" | "dir" | "symlink" | 
 /**  소켓 · 장치 · FIFO 등. */
 "other";
@@ -670,6 +753,14 @@ export type FileMatch = {
 	/**  생성 파일(generated 의 경로 규칙 · `linguist-generated`). 점수를 낮춘 것이다. */
 	generated: boolean,
 };
+
+export type FileStatus = "added" | "deleted" | 
+/**  내용이나 모드(실행 비트)가 바뀌었다. */
+"modified" | 
+/**  이름이 바뀌었다(내용 50% 이상이 같다 — `git diff --find-renames`). 내용도 바뀌었을 수 있다. */
+"renamed" | 
+/**  종류가 바뀌었다(파일 ↔ 심링크 ↔ 서브모듈). git 의 patch 는 지우기 + 더하기 둘로 보인다. */
+"typeChanged";
 
 export type FsBytes = {
 	/**  정규화한 실제 경로. */
@@ -899,6 +990,77 @@ export type FsWritten = {
 	version: string,
 };
 
+export type GitBlob = {
+	/**  blob 해시. */
+	id: string,
+	/**  8진 모드(`100644` · `100755` · `120000` — 심링크의 내용은 대상 경로). */
+	mode: string,
+	/**  blob 전체 크기. */
+	size: number,
+	/**  대용량 기준(50 MiB)을 넘는다. 내용을 풀지 않으므로 `content` · `judgment` 가 `null` 이다(범위 읽기도 하지 않는다). */
+	tooLarge: boolean,
+	/**  읽은 범위의 시작. */
+	offset: number,
+	/**  읽은 범위가 끝까지 닿았다. */
+	eof: boolean,
+	content: FsContent | null,
+	/**  `fs.read` 와 같은 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급). */
+	judgment: Judgment | null,
+};
+
+export type GitBlobParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). */
+	worktree?: string | null,
+	/**  리비전(커밋). `null` 이면 index(단계 0 — 스테이징된 내용). */
+	rev?: string | null,
+	/**  저장소 꼭대기 기준 경로(`/` 구분). */
+	path: string,
+	/**  범위 읽기의 시작 바이트(`fs.read` 와 같다). 둘 다 없으면 전체. */
+	offset?: number | null,
+	/**  범위 읽기의 최대 바이트(50 MiB 까지). 없으면 끝까지. */
+	length?: number | null,
+	/**  텍스트여도 바이트(base64)로 받는다. */
+	bytes?: boolean,
+};
+
+export type GitContainedIn = {
+	/**  그 커밋을 조상(자신 포함)으로 가진 브랜치 · 원격 브랜치 · 태그. 순서는 [`GitShow::refs`] 와 같다. */
+	refs: RefLabel[],
+};
+
+export type GitDiff = {
+	/**  옛 쪽이 커밋이면 그 해시(머지 커밋의 첫 부모처럼 고른 것 포함). 빈 트리 · index 면 `null`. */
+	oldCommit: string | null,
+	/**  새 쪽이 커밋이면 그 해시. */
+	newCommit: string | null,
+	/**  경로순(이름이 바뀐 것은 새 경로 자리). */
+	files: DiffFile[],
+};
+
+export type GitDiffParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). */
+	worktree?: string | null,
+	/**
+	 *  옛 쪽. 고를 수 있는 짝은 넷이다(결정 M2-D5):
+	 *  - `to` 가 커밋: `from` 이 없으면 그 커밋의 첫 부모(머지 커밋도 첫 부모, 루트 커밋은 빈 트리), 있으면 그 커밋(두 커밋 비교).
+	 *  - `to` 가 index: `from` 은 커밋(없으면 `HEAD`, 커밋이 없는 저장소면 빈 트리) — `git diff --cached`.
+	 *  - `to` 가 작업 트리: `from` 은 index(없어도 index) — `git diff`.
+	 * 
+	 *  그 밖의 짝은 invalid params.
+	 */
+	from?: DiffSide | null,
+	to: DiffSide,
+	/**
+	 *  이 경로(저장소 꼭대기 기준, `/` 구분)와 그 아래만 본다. 글롭 · pathspec 문법은 쓰지 않는다(글자 그대로). 이름 바뀜은 거른
+	 *  경로들 사이에서만 찾는다(`git diff -- <경로>` 와 같다).
+	 */
+	paths?: string[] | null,
+	/**  공백을 모두 무시한다(`git diff -w`). 공백만 바뀐 파일(이름 · 모드는 그대로)은 목록에서 빠진다. */
+	ignoreWhitespace?: boolean,
+};
+
 export type GitOperation = {
 	/**  `null` 이면 진행 중 작업이 없다(저장소가 없을 때도). */
 	operation: OperationInfo | null,
@@ -975,6 +1137,30 @@ export type GitRepoParams = {
 	projectId: string,
 	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 있으면 그 워크트리 안의 프로젝트 루트를 담은 저장소를 본다. */
 	worktree?: string | null,
+};
+
+/**  커밋 하나를 고르는 요청(`git.show` · `git.containedIn`). */
+export type GitRevParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). */
+	worktree?: string | null,
+	/**  리비전(해시 · 브랜치 · 태그 · `HEAD~1` 처럼 git 의 리비전 문법). 커밋이 아니면(트리 · blob) invalid params. */
+	rev: string,
+};
+
+export type GitShow = {
+	commit: string,
+	tree: string,
+	/**  부모 해시. 머지 커밋은 둘 이상이고 첫째가 첫 부모다. 루트 커밋은 비어 있다. */
+	parents: string[],
+	author: Signature,
+	committer: Signature,
+	/**  메시지 전체(제목 줄 · 본문 · 트레일러). UTF-8 이 아닌 바이트는 U+FFFD 다. */
+	message: string,
+	/**  HEAD 가 이 커밋이다(브랜치를 거쳐서든 분리된 HEAD 든). */
+	head: boolean,
+	/**  이 커밋을 가리키는 브랜치 · 원격 브랜치 · 태그(주석 태그는 벗긴 대상). 종류 순(로컬 · 원격 · 태그), 같은 종류는 이름순. */
+	refs: RefLabel[],
 };
 
 export type HighlightSpan = {
@@ -1199,6 +1385,8 @@ export type LineEnding = "lf" | "crlf" | "cr" |
 /**  줄바꿈이 없다(한 줄). */
 "none";
 
+export type LineKind = "context" | "added" | "removed";
+
 /**  응답 형태. `unary` 는 결과 하나, `stream` 은 `streamId` 를 돌려주고 청크를 `stream.chunk` 로 보낸다. */
 export type MethodKind = "unary" | "stream";
 
@@ -1377,6 +1565,16 @@ export type ProjectTrust = {
 export type RecentParams = {
 	/**  없으면 20. */
 	limit?: number | null,
+};
+
+export type RefKind = "localBranch" | "remoteBranch" | "tag";
+
+export type RefLabel = {
+	/**  짧은 이름(`main` · `origin/main` · `v1.0`). */
+	name: string,
+	/**  전체 이름(`refs/heads/main`). */
+	fullName: string,
+	kind: RefKind,
 };
 
 export type RepoHead = 
@@ -1648,6 +1846,15 @@ export type SetTrustParams = {
 	trusted: boolean,
 };
 
+export type Signature = {
+	name: string,
+	email: string,
+	/**  유닉스 시각(초). */
+	time: number,
+	/**  그 시각의 UTC 차이(초, 동쪽이 양수). `+0900` 이면 32400. */
+	offset: number,
+};
+
 /**  크기 등급(결정 M1-D9). */
 export type SizeClass = 
 /**  5 MiB 이하: 편집 + 강조. */
@@ -1705,6 +1912,13 @@ export type StreamOutcome =
 { status: "failed"; error: RpcError } | 
 /**  클라이언트가 `stream.cancel` 을 보냈거나 세션이 닫혔다. */
 { status: "cancelled" };
+
+export type SubmodulePointer = {
+	/**  옛 커밋. 그쪽에 서브모듈이 없으면 `null`. */
+	old: string | null,
+	/**  새 커밋. 작업 트리 쪽이면 체크아웃된 서브모듈의 HEAD(읽지 못하면 `null`). */
+	new: string | null,
+};
 
 /**
  *  `docs/design/03-architecture.md` §4 의 `events.subscribe({ projectId, topics })`.

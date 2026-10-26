@@ -13,6 +13,7 @@
 //! `diff` · `write`) 더하고 등록 줄을 하나씩 더한다(13-m2-plan.md 「공유 부품의 주인」).
 
 pub mod cli;
+pub mod diff;
 pub mod methods;
 pub mod repo;
 #[cfg(any(test, feature = "test-support"))]
