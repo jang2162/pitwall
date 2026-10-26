@@ -69,6 +69,25 @@ export type UnaryMethods = {
 	 */
 	"git.blob": { params: GitBlobParams; result: GitBlob };
 	/**
+	 * 브랜치를 만든다(`git branch`, `checkout` 이면 `git switch --create`).
+	 */
+	"git.branch.create": { params: GitBranchCreateParams; result: GitBranchResult };
+	/**
+	 * 브랜치를 지운다(`git branch --delete`). 병합 안 된 브랜치는 `force` 없이 지우지 않는다 — `2101`(git 의 원문을 실어서).
+	 * 결과의 이전 해시로 창이 [되돌리기] 를 단다.
+	 */
+	"git.branch.delete": { params: GitBranchDeleteParams; result: GitBranchDeleteResult };
+	/**
+	 * 브랜치 이름을 바꾼다(`git branch --move`). 새 이름이 이미 있으면 git 의 원문으로 실패한다.
+	 */
+	"git.branch.rename": { params: GitBranchRenameParams; result: GitBranchResult };
+	/**
+	 * 체크아웃: 로컬 브랜치, 원격 브랜치(추적 브랜치를 만든다), 커밋(분리된 HEAD). 바뀔 경로가 미저장 문서와 겹치면 창이 먼저
+	 * 확인한다. 로컬 변경 때문에 못 하는 등 git 이 거절하면 그 원문으로 실패한다(`2004`). 잠금을 기다리는 사이 HEAD · 대상이
+	 * 움직였으면 아무것도 하지 않고 conflict.
+	 */
+	"git.checkout": { params: GitCheckoutParams; result: GitCheckoutResult };
+	/**
 	 * 커밋들을 차례로 cherry-pick 한다. 하나가 충돌하면 앞의 것은 커밋된 채 `outcome: stopped` — 나머지는
 	 * `git.operation.continue` 가 잇는다.
 	 */
@@ -104,6 +123,10 @@ export type UnaryMethods = {
 	 */
 	"git.diff": { params: GitDiffParams; result: GitDiff };
 	/**
+	 * fetch: 원격 하나 또는 전부, prune 선택. 인증은 askpass 로 창에 묻는다.
+	 */
+	"git.fetch": { params: GitFetchParams; result: GitFetchResult };
+	/**
 	 * 리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.
 	 * git 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.
 	 */
@@ -130,6 +153,15 @@ export type UnaryMethods = {
 	 * 답이면 invalid params.
 	 */
 	"git.prompt.answer": { params: GitPromptAnswerParams; result: null };
+	/**
+	 * pull(merge 또는 rebase). 작업 트리 전체가 미저장 확인 대상이다. 충돌로 멈추면 `stopped: true` 와 그 진행 중 작업.
+	 */
+	"git.pull": { params: GitPullParams; result: GitPullResult };
+	/**
+	 * push: 로컬 브랜치 하나를 그 원격 브랜치로. upstream 설정 선택. force 는 `forceWithLease` 뿐이다. 원격이 앞서 있으면 git 의
+	 * 거절 원문으로 실패한다(`2004`).
+	 */
+	"git.push": { params: GitPushParams; result: GitPushResult };
 	/**
 	 * 비대화형 rebase(`git rebase <upstream> [<branch>]`). 충돌이면 `outcome: stopped` 와 진행 중 작업, 끝나면 `moved` 가 그 브랜치의
 	 * 이전 끝.
@@ -168,6 +200,10 @@ export type UnaryMethods = {
 	 * 돌고, 작업을 취소하면 cancelled 오류다.
 	 */
 	"git.status": { params: GitStatusParams; result: GitStatus };
+	/**
+	 * 태그를 만든다(`git tag`, 메시지가 있으면 주석 태그).
+	 */
+	"git.tag.create": { params: GitTagCreateParams; result: GitTagResult };
 	/**
 	 * Host 의 종류 · 버전 · OS.
 	 */
@@ -421,6 +457,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":false,"fileScope":true},
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false,"fileScope":true},
 	"git.blob": {"name":"git.blob","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlobParams","output":"GitBlob","doc":" 리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).\n","mcp":false,"fileScope":false},
+	"git.branch.create": {"name":"git.branch.create","kind":"unary","tier":"write","roles":["owner"],"params":"GitBranchCreateParams","output":"GitBranchResult","doc":" 브랜치를 만든다(`git branch`, `checkout` 이면 `git switch --create`).\n","mcp":false,"fileScope":false},
+	"git.branch.delete": {"name":"git.branch.delete","kind":"unary","tier":"write","roles":["owner"],"params":"GitBranchDeleteParams","output":"GitBranchDeleteResult","doc":" 브랜치를 지운다(`git branch --delete`). 병합 안 된 브랜치는 `force` 없이 지우지 않는다 — `2101`(git 의 원문을 실어서).\n 결과의 이전 해시로 창이 [되돌리기] 를 단다.\n","mcp":false,"fileScope":false},
+	"git.branch.rename": {"name":"git.branch.rename","kind":"unary","tier":"write","roles":["owner"],"params":"GitBranchRenameParams","output":"GitBranchResult","doc":" 브랜치 이름을 바꾼다(`git branch --move`). 새 이름이 이미 있으면 git 의 원문으로 실패한다.\n","mcp":false,"fileScope":false},
+	"git.checkout": {"name":"git.checkout","kind":"unary","tier":"write","roles":["owner"],"params":"GitCheckoutParams","output":"GitCheckoutResult","doc":" 체크아웃: 로컬 브랜치, 원격 브랜치(추적 브랜치를 만든다), 커밋(분리된 HEAD). 바뀔 경로가 미저장 문서와 겹치면 창이 먼저\n 확인한다. 로컬 변경 때문에 못 하는 등 git 이 거절하면 그 원문으로 실패한다(`2004`). 잠금을 기다리는 사이 HEAD · 대상이\n 움직였으면 아무것도 하지 않고 conflict.\n","mcp":false,"fileScope":false},
 	"git.cherryPick": {"name":"git.cherryPick","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 cherry-pick 한다. 하나가 충돌하면 앞의 것은 커밋된 채 `outcome: stopped` — 나머지는\n `git.operation.continue` 가 잇는다.\n","mcp":false,"fileScope":false},
 	"git.commit": {"name":"git.commit","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitParams","output":"GitCommitResult","doc":" index 를 커밋한다(`git commit -F -`, 메시지는 stdin). 훅 · 서명 · 정리는 사람의 git 설정대로 돌고, 훅이 실패하면 커밋하지\n 않고 git 오류(`2004`, `data.stderr` 에 훅의 출력)로 끝난다. 성공해도 훅의 출력은 `output` 에 있다.\n","mcp":false,"fileScope":false},
 	"git.conflict.get": {"name":"git.conflict.get","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictParams","output":"GitConflictDetail","doc":" 충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.\n","mcp":false,"fileScope":false},
@@ -428,6 +468,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.conflicts": {"name":"git.conflicts","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictsParams","output":"GitConflicts","doc":" 충돌 중인 경로 목록: index 단계로 가른 종류(양쪽 수정 · 우리/그쪽 삭제 · 양쪽 추가 …)와 바이너리 · 서브모듈 · 심링크 표시.\n 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.containedIn": {"name":"git.containedIn","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitContainedIn","doc":" 그 커밋을 담은(조상으로 가진) 브랜치 · 원격 브랜치 · 태그. 모든 ref 에서 이력을 걷는다 — 커밋 상세를 연 뒤 따로 부른다.\n","mcp":false,"fileScope":false},
 	"git.diff": {"name":"git.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffParams","output":"GitDiff","doc":" 두 쪽(커밋 · index · 작업 트리)의 diff: 바뀐 파일 목록(상태 · 이름 바뀜 · 모드 · 바이너리 · 서브모듈 포인터 · 생성 파일 ·\n 대용량)과 파일별 hunk(`git diff --find-renames -U3` 과 같다). 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
+	"git.fetch": {"name":"git.fetch","kind":"unary","tier":"write","roles":["owner"],"params":"GitFetchParams","output":"GitFetchResult","doc":" fetch: 원격 하나 또는 전부, prune 선택. 인증은 askpass 로 창에 묻는다.\n","mcp":false,"fileScope":false},
 	"git.merge": {"name":"git.merge","kind":"unary","tier":"write","roles":["owner"],"params":"GitMergeParams","output":"GitHistoryResult","doc":" 리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.\n git 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.\n","mcp":false,"fileScope":false},
 	"git.operation": {"name":"git.operation","kind":"unary","tier":"read","roles":["owner"],"params":"GitOperationParams","output":"GitOperation","doc":" 진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면\n `operation: null`.\n","mcp":false,"fileScope":false},
 	"git.operation.abort": {"name":"git.operation.abort","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 그만두고 시작 전으로 돌린다(`git <작업> --abort`). 확인은 창이 먼저 한다(결정 M2-D6 ①).\n","mcp":false,"fileScope":false},
@@ -435,6 +476,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.operation.skip": {"name":"git.operation.skip","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업의 지금 단계를 건너뛴다(`git <작업> --skip`, merge 는 없다).\n","mcp":false,"fileScope":false},
 	"git.prompt.answer": {"name":"git.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"GitPromptAnswerParams","output":"()","doc":" 질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는\n 답이면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.prompts": {"name":"git.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"GitPromptsParams","output":"GitPromptEvent","doc":" 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다\n (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.\n","mcp":false,"fileScope":false},
+	"git.pull": {"name":"git.pull","kind":"unary","tier":"write","roles":["owner"],"params":"GitPullParams","output":"GitPullResult","doc":" pull(merge 또는 rebase). 작업 트리 전체가 미저장 확인 대상이다. 충돌로 멈추면 `stopped: true` 와 그 진행 중 작업.\n","mcp":false,"fileScope":false},
+	"git.push": {"name":"git.push","kind":"unary","tier":"write","roles":["owner"],"params":"GitPushParams","output":"GitPushResult","doc":" push: 로컬 브랜치 하나를 그 원격 브랜치로. upstream 설정 선택. force 는 `forceWithLease` 뿐이다. 원격이 앞서 있으면 git 의\n 거절 원문으로 실패한다(`2004`).\n","mcp":false,"fileScope":false},
 	"git.rebase": {"name":"git.rebase","kind":"unary","tier":"write","roles":["owner"],"params":"GitRebaseParams","output":"GitHistoryResult","doc":" 비대화형 rebase(`git rebase <upstream> [<branch>]`). 충돌이면 `outcome: stopped` 와 진행 중 작업, 끝나면 `moved` 가 그 브랜치의\n 이전 끝.\n","mcp":false,"fileScope":false},
 	"git.refs": {"name":"git.refs","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRefs","doc":" 로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.\n","mcp":false,"fileScope":false},
 	"git.repo": {"name":"git.repo","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRepo","doc":" 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false,"fileScope":false},
@@ -443,6 +486,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.revert": {"name":"git.revert","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 되돌리는 역 커밋을 만든다(`git revert --no-edit`). 충돌이면 `outcome: stopped`.\n","mcp":false,"fileScope":false},
 	"git.show": {"name":"git.show","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitShow","doc":" 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).\n","mcp":false,"fileScope":false},
 	"git.status": {"name":"git.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusParams","output":"GitStatus","doc":" 작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업\n 트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로\n 돌고, 작업을 취소하면 cancelled 오류다.\n","mcp":false,"fileScope":false},
+	"git.tag.create": {"name":"git.tag.create","kind":"unary","tier":"write","roles":["owner"],"params":"GitTagCreateParams","output":"GitTagResult","doc":" 태그를 만든다(`git tag`, 메시지가 있으면 주석 태그).\n","mcp":false,"fileScope":false},
 	"git.watch": {"name":"git.watch","kind":"stream","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitWatching","doc":" 프로젝트(활성 워크트리)의 저장소를 감시한다. 스트림이 열려 있는 동안 바뀜이 프로젝트 범위 이벤트 `git.statusChanged` ·\n `git.refsChanged` 로 나가고, 닫으면 놓는다. 첫 항목이 오면 그 뒤의 바뀜은 놓치지 않는다. 작업 트리의 바뀜은 같은 창의\n `fs.watch` 가 열려 있어야 온다.\n","mcp":false,"fileScope":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false,"fileScope":false},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n","mcp":false,"fileScope":true},
@@ -1216,6 +1260,48 @@ export type GitBranch = {
 	upstream: GitUpstream | null,
 };
 
+export type GitBranchCreateParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  새 브랜치의 짧은 이름. */
+	name: string,
+	/**  시작 리비전(해시 · 브랜치 · 태그). 없으면 HEAD. */
+	start?: string | null,
+	/**  만든 뒤 그 브랜치로 간다(`git switch --create`). */
+	checkout?: boolean,
+};
+
+export type GitBranchDeleteParams = {
+	projectId: string,
+	worktree?: string | null,
+	name: string,
+	/**  병합 안 된 브랜치도 지운다(`--force`). 창이 확인한 뒤에만 준다(결정 M2-D6 ①). */
+	force?: boolean,
+};
+
+export type GitBranchDeleteResult = {
+	workTree: string,
+	/**  지운 브랜치와 그 이전 해시(`current: null`). */
+	deleted: GitRefMove,
+};
+
+export type GitBranchRenameParams = {
+	projectId: string,
+	worktree?: string | null,
+	name: string,
+	newName: string,
+};
+
+export type GitBranchResult = {
+	workTree: string,
+	/**  전체 이름(`refs/heads/…`). */
+	refName: string,
+	/**  그 브랜치의 끝 커밋. 태어나지 않은 브랜치면 `null`. */
+	commit: string | null,
+	/**  `checkout` 으로 옮겨 간 뒤의 HEAD. 옮기지 않았으면 `null`. */
+	head: RepoHead | null,
+};
+
 /**  읽지 못한 ref 하나. */
 export type GitBrokenRef = {
 	/**  전체 이름. 이름조차 읽지 못했으면(ref 파일을 열지 못함) `null`. */
@@ -1240,6 +1326,32 @@ export type GitChange =
 "typeChanged" | 
 /**  `?` — 작업 트리 쪽만. */
 "untracked";
+
+export type GitCheckoutParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`git.repo` 와 같다). */
+	worktree?: string | null,
+	target: GitCheckoutTarget,
+};
+
+export type GitCheckoutResult = {
+	/**  저장소의 작업 트리 꼭대기(절대 경로). */
+	workTree: string,
+	/**  체크아웃한 뒤의 HEAD. */
+	head: RepoHead,
+};
+
+/**  체크아웃할 것. */
+export type GitCheckoutTarget = 
+/**  로컬 브랜치(짧은 이름). 없으면 git 의 원문으로 실패한다 — 같은 이름의 원격 브랜치로 추적 브랜치를 몰래 만들지 않는다. */
+{ kind: "branch"; name: string } | 
+/**
+ *  원격 브랜치 `refs/remotes/<remote>/<branch>` 를 upstream 으로 하는 로컬 브랜치 `local`(없으면 `branch`)을 만들고 그리로
+ *  간다. 그 이름의 로컬 브랜치가 이미 있으면 git 의 원문으로 실패한다.
+ */
+{ kind: "remote"; remote: string; branch: string; local?: string | null } | 
+/**  커밋(해시 · 태그 등 리비전)으로 간다 — 분리된 HEAD. */
+{ kind: "commit"; rev: string };
 
 export type GitCommitParams = {
 	projectId: string,
@@ -1389,6 +1501,21 @@ export type GitDiffParams = {
 	ignoreWhitespace?: boolean,
 };
 
+export type GitFetchParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`git.repo` 와 같다). */
+	worktree?: string | null,
+	/**  원격 이름. 없으면 원격 전부(`--all`). */
+	remote?: string | null,
+	/**  원격에서 사라진 원격 추적 브랜치를 지운다(`--prune`). */
+	prune?: boolean,
+};
+
+export type GitFetchResult = {
+	/**  저장소의 작업 트리 꼭대기(절대 경로). */
+	workTree: string,
+};
+
 /**  merge · cherry-pick · revert · rebase 의 결과. */
 export type GitHistoryResult = {
 	/**  저장소 작업 트리 꼭대기(절대 경로). */
@@ -1488,6 +1615,79 @@ export type GitPromptRequest =
 
 export type GitPromptsParams = {
 	projectId: string,
+};
+
+/**  pull 이 upstream 을 들이는 방법. */
+export type GitPullMode = 
+/**  `git pull --no-rebase`. */
+"merge" | 
+/**  `git pull --rebase`. */
+"rebase";
+
+export type GitPullParams = {
+	projectId: string,
+	worktree?: string | null,
+	mode: GitPullMode,
+	/**  원격 이름. 없으면 지금 브랜치의 upstream. */
+	remote?: string | null,
+	/**  원격의 브랜치 이름(`remote` 와 함께만). */
+	branch?: string | null,
+};
+
+export type GitPullResult = {
+	workTree: string,
+	/**  끝난 뒤의 진행 중 작업. `null` 이면 없다. */
+	operation: OperationInfo | null,
+	/**  충돌로 멈췄다 — 실패가 아니라 충돌을 풀고 `git.operation.continue`(또는 `abort`)할 차례다. */
+	stopped: boolean,
+};
+
+/**
+ *  설정의 push refspec(`remote.<원격>.push`)이 이 push 와 다른 곳을 가리킨다 — 사람이 터미널에서 인자 없이 `git push` 하면 갈
+ *  곳과 이 push 가 간 곳이 다르다. 푸시 다이얼로그(M2-20)가 경고로 보인다.
+ */
+export type GitPushConfigured = {
+	/**  설정에 적힌 push refspec 원문(차례대로). */
+	refspecs: string[],
+	/**  그 refspec 들이 이 브랜치를 보낼 원격 ref. `null` 이면 이 브랜치를 보내지 않는다. */
+	destination: string | null,
+};
+
+/**  push 입력. force 는 `forceWithLease` 하나뿐이다 — 모르는 필드(`force` 등)는 받지 않고 invalid params 로 거절한다(결정 M2-D6 ②). */
+export type GitPushParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  보낼 로컬 브랜치. 없으면 HEAD 의 브랜치. */
+	branch?: string | null,
+	/**  원격 이름. 없으면 그 브랜치의 push 원격(`branch.<b>.pushRemote` → `remote.pushDefault` → upstream 원격 → `origin`). */
+	remote?: string | null,
+	/**  보낸 뒤 그 원격 브랜치를 upstream 으로 정한다(`--set-upstream`). */
+	setUpstream?: boolean,
+	/**
+	 *  force push: 창이 마지막으로 본 그 원격 브랜치의 해시(`git.refs` 의 원격 추적 브랜치 — 전체 16진 해시). 원격이 그 사이
+	 *  움직였으면 git 이 거절하고 원격은 그대로다(`--force-with-lease=<ref>:<해시>` + `--force-if-includes`). 창이 경고한 뒤에만
+	 *  준다.
+	 */
+	forceWithLease?: string | null,
+};
+
+export type GitPushResult = {
+	workTree: string,
+	/**  보낸 로컬 브랜치의 짧은 이름. */
+	branch: string,
+	remote: string,
+	/**  원격에서 바뀐 ref(`refs/heads/…`). */
+	remoteRef: string,
+	/**
+	 *  실제로 보낸 refspec(`refs/heads/<branch>:<remoteRef>`). 설정의 push refspec · `push.default` 를 쓰지 않고 이 값을 명시해
+	 *  보냈다(13-m2-plan.md M2-09 「push 대상 결정 규칙」).
+	 */
+	refspec: string,
+	/**
+	 *  설정의 push refspec(`remote.<remote>.push`)이 이 push 와 다른 곳을 가리키면 그 내용 — 푸시 다이얼로그가 경고로 보인다.
+	 *  보통 `null`.
+	 */
+	configured: GitPushConfigured | null,
 };
 
 export type GitRebaseParams = {
@@ -1682,6 +1882,24 @@ export type GitTag = {
 	target: string,
 	/**  주석 태그면 태그를 벗긴 객체(보통 커밋). 가벼운 태그면 `null`. */
 	peeled: string | null,
+};
+
+export type GitTagCreateParams = {
+	projectId: string,
+	worktree?: string | null,
+	name: string,
+	/**  태그를 달 리비전. 없으면 HEAD. */
+	rev?: string | null,
+	/**  있으면 주석 태그의 메시지. 없으면 가벼운 태그. */
+	message?: string | null,
+};
+
+export type GitTagResult = {
+	workTree: string,
+	/**  전체 이름(`refs/tags/…`). */
+	refName: string,
+	/**  태그가 가리키는 커밋(주석 태그면 벗긴 것). */
+	commit: string | null,
 };
 
 /**  ahead/behind. */

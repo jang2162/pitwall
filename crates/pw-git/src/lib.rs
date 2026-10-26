@@ -12,17 +12,21 @@
 //! - [`conflict`]: 충돌 데이터 · 해결 — `git.conflicts` · `git.conflict.get` · `git.conflict.resolve`(M2-11).
 //! - [`history`]: merge · cherry-pick · revert · rebase · reset — `git.merge` 등(M2-10).
 //! - [`commit`]: 커밋 — `git.commit`(M2-08).
+//! - [`branch`]: 체크아웃 · 브랜치 · 태그 — `git.checkout` · `git.branch.*` · `git.tag.create`(M2-09).
+//! - [`remote`]: fetch · pull · push — `git.fetch` · `git.pull` · `git.push`(M2-09).
 //! - `testing`(시험 · `test-support` 기능): 시험 저장소 도우미.
 //!
 //! 이 크레이트의 모듈 배치 · 메서드 등록([`methods::register`])의 주인은 M2-01 이다. 이후 행은 모듈을 나눠(`status` · `log` ·
 //! `diff` · `write`) 더하고 등록 줄을 하나씩 더한다(13-m2-plan.md 「공유 부품의 주인」).
 
+pub mod branch;
 pub mod cli;
 pub mod commit;
 pub mod conflict;
 pub mod diff;
 pub mod history;
 pub mod methods;
+pub mod remote;
 pub mod repo;
 pub mod status;
 #[cfg(any(test, feature = "test-support"))]

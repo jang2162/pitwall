@@ -191,7 +191,10 @@ fn upstream(
 
 /// git 의 `branch_get_upstream`: `branch.<b>.merge` 를 `branch.<b>.remote` 의 fetch refspec 으로 옮긴 원격 추적 ref. 원격이 `.` 이면
 /// 그 로컬 ref 그대로다.
-fn tracking_ref(repo: &gix::Repository, branch: &FullNameRef) -> Option<gix::bstr::BString> {
+pub(crate) fn tracking_ref(
+    repo: &gix::Repository,
+    branch: &FullNameRef,
+) -> Option<gix::bstr::BString> {
     let config = repo.config_snapshot();
     let plumbing = config.plumbing();
     let short = branch.shorten();

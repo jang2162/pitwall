@@ -338,6 +338,14 @@ task-title-git-cherry-pick = git cherry-pick 하는 중
 task-title-git-revert = git revert 하는 중
 task-title-git-rebase = git rebase 하는 중
 task-title-git-reset = git reset 하는 중
+task-title-git-checkout = 체크아웃하는 중
+task-title-git-branch-create = 브랜치 만드는 중
+task-title-git-branch-rename = 브랜치 이름 바꾸는 중
+task-title-git-branch-delete = 브랜치 지우는 중
+task-title-git-tag-create = 태그 만드는 중
+task-title-git-fetch = fetch 하는 중
+task-title-git-pull = pull 하는 중
+task-title-git-push = push 하는 중
 action-task-demo = 데모 작업 실행
 action-task-demo-invalid = 데모 작업 실행(잘못된 인자 — 오류 알림 확인용)
 

@@ -97,6 +97,10 @@ fn local_host(
     let git_history_methods = Arc::clone(&git_write);
     // 커밋(`git.commit`, M2-08). 쓰기 실행기로 돈다.
     let git_commit_methods = Arc::clone(&git_write);
+    // 체크아웃 · 브랜치 · 태그 · fetch · pull · push(`git.checkout` · `git.branch.*` · `git.tag.create` · `git.fetch` · `git.pull` ·
+    // `git.push`, M2-09). 쓰기 실행기로 돈다.
+    let git_branch_methods = Arc::clone(&git_write);
+    let git_remote_methods = Arc::clone(&git_write);
     // 작업 트리 상태 · ref(`git.status` · `git.refs`)와 저장소 감시(`git.watch`, M2-02).
     let git_status = Arc::new(pw_git::status::Status::new(Arc::clone(&git)));
     let git_status_methods = Arc::clone(&git_status);
@@ -120,6 +124,8 @@ fn local_host(
         .methods(move |router| pw_git::conflict::methods::register(router, git_conflict_methods))
         .methods(move |router| pw_git::history::register(router, git_history_methods))
         .methods(move |router| pw_git::commit::register(router, git_commit_methods))
+        .methods(move |router| pw_git::branch::register(router, git_branch_methods))
+        .methods(move |router| pw_git::remote::register(router, git_remote_methods))
         .methods(move |router| pw_git::status::register(router, git_status_methods))
         .methods(move |router| pw_git::watch::register(router, git_watch))
         .build();

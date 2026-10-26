@@ -348,6 +348,14 @@ task-title-git-cherry-pick = Cherry-picking
 task-title-git-revert = Reverting
 task-title-git-rebase = Rebasing
 task-title-git-reset = Resetting
+task-title-git-checkout = Checking out
+task-title-git-branch-create = Creating a branch
+task-title-git-branch-rename = Renaming a branch
+task-title-git-branch-delete = Deleting a branch
+task-title-git-tag-create = Creating a tag
+task-title-git-fetch = Fetching
+task-title-git-pull = Pulling
+task-title-git-push = Pushing
 action-task-demo = Run Demo Task
 action-task-demo-invalid = Run Demo Task (invalid arguments — to check error notifications)
 
