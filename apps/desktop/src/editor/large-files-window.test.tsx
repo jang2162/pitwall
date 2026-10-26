@@ -269,6 +269,9 @@ vi.mock("../tauri-transport", async () => {
               })),
             } satisfies LangDetectResult);
           }
+          case "syntax.open":
+            // 문법이 없는 것으로 답한다 — 오류로 답하면 제품이 250 ms 백오프로 다시 열어 호출 수가 시간에 따라 늘어난다.
+            return reply({ grammar: null, off: null });
           case "events.subscribe": {
             const id = next++;
             host.subscribers.push({ send, id, topics: (m.params as { topics: string[] }).topics });
@@ -394,6 +397,8 @@ async function open(file: string, line?: number, col?: number) {
 
 const calls = (method: string) =>
   host.calls.filter((c) => c.method === method).map((c) => c.params);
+/** `syntax.open` 으로 보낸 문서 본문, 연 순서대로. */
+const openedTexts = () => calls("syntax.open").map((p) => p.text);
 /** `fs.read` · `fs.readBytes` 로 읽은 바이트 수(요청한 길이, 파일 끝에서 자름). */
 const bytesRead = (path: string) =>
   host.calls
@@ -771,9 +776,12 @@ it("turns highlighting and wrapping off for a line over 10,000 characters", asyn
   await open("/work/demo/min.js");
   const view = views().at(-1)!;
   expect(view.state.doc.line(1).length).toBeGreaterThan(10_000);
-  await settle();
-  // 강조 세션을 열지 않는다(ok.js 의 것 하나뿐), 줄바꿈도 없다.
-  expect(calls("syntax.open")).toHaveLength(1);
+  // 시간을 재지 않는다 — 뒤에 연 ok2.js 의 세션이 열린 것을 신호로, 그보다 앞서 min.js 가 열었어야 할 세션이 없었음을 본다.
+  host.files.set("/work/demo/ok2.js", new TextEncoder().encode("var b = 2;\n"));
+  await open("/work/demo/ok2.js");
+  await vi.waitFor(() => expect(calls("syntax.open")).toHaveLength(2));
+  // 강조 세션을 열지 않는다(ok.js · ok2.js 의 것뿐), 줄바꿈도 없다.
+  expect(openedTexts()).toEqual(["var a = 1;\n", "var b = 2;\n"]);
   expect(view.contentDOM.classList.contains("cm-lineWrapping")).toBe(false);
 });
 
@@ -788,6 +796,9 @@ it("turns highlighting off when the judgment says so, even for a short text", as
   await vi.waitFor(() => expect(calls("syntax.open")).toHaveLength(1));
   await open("/work/demo/big.js");
   expect(views().at(-1)!.state.readOnly).toBe(true);
-  await settle();
-  expect(calls("syntax.open")).toHaveLength(1);
+  // 시간을 재지 않는다 — 뒤에 연 ok2.js 의 세션이 열린 것을 신호로, 그보다 앞서 big.js 가 열었어야 할 세션이 없었음을 본다.
+  host.files.set("/work/demo/ok2.js", new TextEncoder().encode("var b = 2;\n"));
+  await open("/work/demo/ok2.js");
+  await vi.waitFor(() => expect(calls("syntax.open")).toHaveLength(2));
+  expect(openedTexts()).toEqual(["var a = 1;\n", "var b = 2;\n"]);
 });
