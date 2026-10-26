@@ -2,6 +2,7 @@
 //! `crate::testing::remote`)이고, 원격을 몰래 움직이는 것은 다른 클론이다. 진짜 git 을 PATH 에 둔 가짜 로그인 셸로 돈다(unix).
 
 mod fetch;
+mod plan;
 mod pull;
 mod push;
 

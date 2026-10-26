@@ -6,26 +6,51 @@
 //! - pull: 지금 브랜치의 upstream(또는 준 원격 · 브랜치)을 merge(`--no-rebase`)나 rebase(`--rebase`)로. 작업 트리 전체를 미저장
 //!   확인에 싣는다. 충돌로 멈추면 실패가 아니라 진행 중 작업이 남은 `stopped` 다 — 계속 · 중단 · 건너뛰기는 M2-06 의
 //!   `git.operation.*`(결정 M2-D5).
-//! - push: 로컬 브랜치 하나를 `refs/heads/<브랜치>:<대상>` 으로 보낸다 — 설정의 push refspec · `push.default` 를 쓰지 않고 무엇이
-//!   어디로 가는지를 여기서 정한다([`push_plan`]). 그래야 lease 의 ref 가 실제로 바뀌는 ref 와 같다. upstream 설정은 선택이다.
-//!   **force 는 `--force-with-lease=<대상>:<마지막으로 본 원격 해시>` + `--force-if-includes` 한 꼴뿐이다**(결정 M2-D6 ②, [`push_args`])
+//! - push: 로컬 브랜치 하나를 `refs/heads/<브랜치>:<대상>` 으로 보낸다. 대상은 터미널의 `git push` 가 보낼 곳을 git 의 규칙대로 셈한
+//!   것이고(설정의 push refspec · `push.default`), git 이 거절할 상황이면 아무것도 보내지 않고 [`code::PUSH_REFUSED`] 로 거절한다
+//!   ([`target`]). 그 대상을 명시해 보내므로 lease 의 ref 가 실제로 바뀌는 ref 와 같다. 창은 `git.push.plan` 으로 같은 계산을 먼저
+//!   본다. upstream 설정은 선택이다. **force 는 `--force-with-lease=<대상>:<마지막으로 본 원격 해시>` + `--force-if-includes` 한 꼴뿐이다**(결정 M2-D6 ②, [`push_args`])
 //!   — 입력에 `force` 가 없고(모르는 필드는 거절한다), refspec 은 언제나 `refs/heads/` 로 시작해 `+` 가 붙을 자리가 없으며, 기대
 //!   해시는 전체 16진 해시만 받는다(빈 기대값 = 「원격에 없어야 한다」 도 받지 않는다).
 
 pub mod methods;
+pub mod target;
 #[cfg(all(test, unix))]
 mod tests;
 
 use std::sync::Arc;
 
-use gix::bstr::ByteSlice;
 use pw_rpc::RpcError;
 use serde::{Deserialize, Serialize};
 
 pub use methods::register;
+pub use target::{
+    GitPushLease, GitPushRefusal, GitPushRefusalReason, GitPushTargetSource, GitPushTerminal,
+    Planned,
+};
 
-use crate::branch::{plain, work_tree};
+use crate::branch::{branch_name, plain, work_tree};
 use crate::write::{Changes, GitWrite, OperationInfo, WriteError, WriteRequest};
+use crate::{Git, Opened};
+
+/// 이 모듈의 애플리케이션 오류 코드(`crate::write::code` · `crate::branch::code` 와 겹치지 않는 범위). `data` 는 객체다.
+pub mod code {
+    /// git 이 거절할 push 라 아무것도 보내지 않았다(`data` 는 [`super::GitPushRefusal`] — 까닭 · 설명 · 고를 만한 대상). 창은 대상을
+    /// 골라 `remoteRef` 로 명시해 다시 부른다.
+    pub const PUSH_REFUSED: i32 = 2102;
+}
+
+/// 응답 · 알림에 싣는 원격: 주소(`<scheme>://`)면 사용자 정보(`user:token@`)를 지운다. 이름 · scp 꼴(`git@host:path`)은 그대로다.
+pub fn redact(remote: &str) -> String {
+    let Some((scheme, rest)) = remote.split_once("://") else {
+        return remote.to_owned();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{scheme}://{}", &rest[at + 1..]),
+        None => remote.to_owned(),
+    }
+}
 
 /// pull 이 upstream 을 들이는 방법.
 #[derive(
@@ -101,7 +126,7 @@ pub async fn pull(
                 "a pull branch needs its remote",
             )));
         }
-        plain("branch", branch)?;
+        branch_name("branch", branch)?;
     }
     let request = WriteRequest {
         project_id,
@@ -146,72 +171,22 @@ pub async fn pull(
         .await
 }
 
-/// push 할 것: 로컬 브랜치, 원격, 원격에서 바뀔 ref.
+/// 보낼 것: 로컬 브랜치, 원격, 원격에서 바뀔 ref([`Planned::ready`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushPlan {
     /// 로컬 브랜치의 짧은 이름.
     pub branch: String,
+    /// 원격 이름(또는 주소 원문 — git 에 그대로 넘긴다).
     pub remote: String,
-    /// 원격의 전체 ref 이름(`refs/heads/…`).
+    /// 원격의 전체 ref 이름.
     pub remote_ref: String,
 }
 
-/// 보낼 곳을 정한다. 브랜치는 `branch`(없으면 HEAD 의 브랜치 — 분리된 HEAD 면 오류). 원격은 `remote`, 없으면 git 의 push 원격
-/// 차례(`branch.<b>.pushRemote` → `remote.pushDefault` → `branch.<b>.remote` → `origin`). 대상은 그 원격이 그 브랜치의 upstream
-/// 원격이고 `branch.<b>.merge` 가 브랜치면 그것, 아니면 같은 이름이다. 설정 값은 이름일 뿐 아무것도 띄우지 않으므로 신뢰와 상관없이
-/// 저장소 설정에서 읽는다(`crate::status::refs` 와 같다).
-pub fn push_plan(
-    repo: &gix::Repository,
-    branch: Option<&str>,
-    remote: Option<&str>,
-) -> Result<PushPlan, String> {
-    let branch = match branch {
-        Some(branch) => branch.to_owned(),
-        None => {
-            let head = repo
-                .head_name()
-                .map_err(|e| e.to_string())?
-                .ok_or("HEAD is detached; choose a branch to push")?;
-            head.as_bstr()
-                .strip_prefix(b"refs/heads/")
-                .ok_or("HEAD is not on a local branch; choose a branch to push")?
-                .to_str_lossy()
-                .into_owned()
-        }
-    };
-    let config = repo.config_snapshot();
-    let plumbing = config.plumbing();
-    let value = |section: &str, subsection: Option<&str>, key: &str| {
-        plumbing
-            .string_by(section, subsection.map(|s| s.as_bytes().as_bstr()), key)
-            .map(|v| v.to_str_lossy().into_owned())
-            .filter(|v| !v.is_empty())
-    };
-    let upstream_remote = value("branch", Some(&branch), "remote");
-    let remote = remote
-        .map(str::to_owned)
-        .or_else(|| value("branch", Some(&branch), "pushRemote"))
-        .or_else(|| value("remote", None, "pushDefault"))
-        .or_else(|| upstream_remote.clone())
-        .unwrap_or_else(|| "origin".to_owned());
-    let merge = value("branch", Some(&branch), "merge")
-        .map(|merge| {
-            if merge.starts_with("refs/") {
-                merge
-            } else {
-                format!("refs/heads/{merge}")
-            }
-        })
-        .filter(|merge| merge.starts_with("refs/heads/"));
-    let remote_ref = match merge {
-        Some(merge) if upstream_remote.as_deref() == Some(remote.as_str()) => merge,
-        _ => format!("refs/heads/{branch}"),
-    };
-    Ok(PushPlan {
-        branch,
-        remote,
-        remote_ref,
-    })
+impl PushPlan {
+    /// 보내는 refspec(`refs/heads/<브랜치>:<대상>`, [`push_args`] 의 마지막 인자).
+    pub fn refspec(&self) -> String {
+        format!("refs/heads/{}:{}", self.branch, self.remote_ref)
+    }
 }
 
 /// 기대 해시: 전체 16진 해시(SHA-1 40자 · SHA-256 64자)만.
@@ -238,71 +213,60 @@ pub fn push_args(plan: &PushPlan, set_upstream: bool, lease: Option<&str>) -> Ve
     args
 }
 
-/// 설정의 push refspec(`remote.<원격>.push`)이 이 push 와 다른 곳을 가리킨다 — 사람이 터미널에서 인자 없이 `git push` 하면 갈
-/// 곳과 이 push 가 간 곳이 다르다. 푸시 다이얼로그(M2-20)가 경고로 보인다.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
-)]
-#[serde(rename_all = "camelCase")]
-pub struct GitPushConfigured {
-    /// 설정에 적힌 push refspec 원문(차례대로).
-    pub refspecs: Vec<String>,
-    /// 그 refspec 들이 이 브랜치를 보낼 원격 ref. `null` 이면 이 브랜치를 보내지 않는다.
-    pub destination: Option<String>,
+/// [`code::PUSH_REFUSED`] 오류.
+pub fn refused(refusal: &GitPushRefusal) -> RpcError {
+    RpcError::new(code::PUSH_REFUSED, refusal.message.clone())
+        .with_data(serde_json::to_value(refusal).unwrap_or_default())
 }
 
-/// `plan` 의 원격에 push refspec 이 설정돼 있고 그것이 이 브랜치를 `plan.remote_ref` 가 아닌 곳으로 보내거나 보내지 않으면 그
-/// 내용. 설정이 없거나 같은 곳이면 `None`. `:`(matching) 처럼 원본이 없는 refspec 은 같은 이름으로 본다.
-pub fn configured_push(repo: &gix::Repository, plan: &PushPlan) -> Option<GitPushConfigured> {
-    let config = repo.config_snapshot();
-    let refspecs: Vec<String> = config
-        .plumbing()
-        .strings_by("remote", Some(plan.remote.as_bytes().as_bstr()), "push")?
-        .iter()
-        .map(|spec| spec.to_str_lossy().into_owned())
-        .collect();
-    if refspecs.is_empty() {
-        return None;
+/// push 의 입력(`git.push` · `git.push.plan` 이 같다): 이름 꼴을 git 을 띄우기 전에 거절한다.
+fn check_push_input(
+    branch: Option<&str>,
+    remote: Option<&str>,
+    remote_ref: Option<&str>,
+) -> Result<(), RpcError> {
+    if let Some(branch) = branch {
+        branch_name("branch", branch).map_err(RpcError::from)?;
     }
-    let local = format!("refs/heads/{}", plan.branch);
-    let parsed: Vec<gix::refspec::RefSpec> = refspecs
-        .iter()
-        .filter_map(|spec| {
-            gix::refspec::parse(
-                spec.as_bytes().as_bstr(),
-                gix::refspec::parse::Operation::Push,
-            )
-            .ok()
-            .map(|s| s.to_owned())
-        })
-        .collect();
-    let matching = parsed.iter().any(|spec| spec.to_ref().source().is_none());
-    let group = gix::refspec::MatchGroup {
-        specs: parsed
-            .iter()
-            .map(gix::refspec::RefSpec::to_ref)
-            .filter(|spec| spec.source().is_some())
-            .collect(),
-    };
-    let null = repo.object_hash().null();
-    let out = group.match_lhs(std::iter::once(gix::refspec::match_group::Item {
-        full_ref_name: local.as_bytes().as_bstr(),
-        target: &null,
-        object: None,
-    }));
-    let destination = out
-        .mappings
-        .into_iter()
-        .next()
-        .map(|m| match m.rhs {
-            Some(rhs) => rhs.to_str_lossy().into_owned(),
-            None => m.lhs.to_string(),
-        })
-        .or_else(|| matching.then(|| local.clone()));
-    (destination.as_deref() != Some(plan.remote_ref.as_str())).then_some(GitPushConfigured {
-        refspecs,
-        destination,
+    if let Some(remote) = remote {
+        plain("remote", remote).map_err(RpcError::from)?;
+    }
+    if let Some(remote_ref) = remote_ref {
+        target::remote_ref_input(remote_ref).map_err(RpcError::invalid_params)?;
+    }
+    Ok(())
+}
+
+/// `git.push.plan`: 보낼 곳을 셈한다(gix 만 — 미신뢰 프로젝트에서도 프로세스를 띄우지 않는다). 작업 트리와 계획.
+pub async fn plan(
+    git: &Arc<Git>,
+    project_id: String,
+    worktree: Option<String>,
+    branch: Option<String>,
+    remote: Option<String>,
+    remote_ref: Option<String>,
+) -> Result<(String, Planned), RpcError> {
+    check_push_input(branch.as_deref(), remote.as_deref(), remote_ref.as_deref())?;
+    let git = Arc::clone(git);
+    tokio::task::spawn_blocking(move || {
+        let opened: Opened = git
+            .open(&project_id, worktree.as_deref())?
+            .ok_or_else(|| RpcError::from(WriteError::NoRepository))?;
+        let planned = target::plan(
+            &opened.repo,
+            branch.as_deref(),
+            remote.as_deref(),
+            remote_ref.as_deref(),
+        )
+        .map_err(RpcError::invalid_params)?;
+        let work_tree = pw_core::registry::path::normalize(&opened.target.work_tree)
+            .unwrap_or_else(|_| opened.target.work_tree.clone())
+            .display()
+            .to_string();
+        Ok((work_tree, planned))
     })
+    .await
+    .map_err(|e| RpcError::internal(e.to_string()))?
 }
 
 /// push 의 결과.
@@ -310,33 +274,25 @@ pub fn configured_push(repo: &gix::Repository, plan: &PushPlan) -> Option<GitPus
 pub struct Pushed {
     pub work_tree: String,
     pub plan: PushPlan,
-    /// 설정의 push refspec 이 다른 곳을 가리키면 그 내용([`configured_push`]).
-    pub configured: Option<GitPushConfigured>,
+    /// 터미널의 `git push` 와 다르면 그 내용([`Planned::terminal_difference`]).
+    pub terminal: Option<GitPushTerminal>,
 }
 
-impl PushPlan {
-    /// 보낸 refspec(`refs/heads/<브랜치>:<대상>`, [`push_args`] 의 마지막 인자).
-    pub fn refspec(&self) -> String {
-        format!("refs/heads/{}:{}", self.branch, self.remote_ref)
-    }
-}
-
-/// `git.push`. `lease` 가 있으면 force push 다(창이 경고한 뒤에만, 결정 M2-D6 ①).
+/// `git.push`. 대상은 [`target::plan`] 이 셈한다 — `remote_ref` 가 있으면 그것. `lease` 가 있으면 force push 다(창이 경고한
+/// 뒤에만, 결정 M2-D6 ①).
+#[allow(clippy::too_many_arguments)] // RPC 입력의 칸을 그대로 받는다.
 pub async fn push(
     write: &Arc<GitWrite>,
     project_id: String,
     worktree: Option<String>,
     branch: Option<String>,
     remote: Option<String>,
+    remote_ref: Option<String>,
     set_upstream: bool,
     lease: Option<String>,
 ) -> Result<Pushed, WriteError> {
-    if let Some(branch) = &branch {
-        plain("branch", branch)?;
-    }
-    if let Some(remote) = &remote {
-        plain("remote", remote)?;
-    }
+    check_push_input(branch.as_deref(), remote.as_deref(), remote_ref.as_deref())
+        .map_err(WriteError::Rpc)?;
     if let Some(expected) = &lease
         && !full_hash(expected)
     {
@@ -353,14 +309,21 @@ pub async fn push(
     };
     write
         .run(request, move |ctx| async move {
-            let plan = ctx
+            // 잠금 안에서 셈한다 — 셈한 뒤 다른 쓰기가 설정 · ref 를 바꾸지 못한다.
+            let planned = ctx
                 .read(move |o| {
-                    push_plan(&o.repo, branch.as_deref(), remote.as_deref())
-                        .map(|plan| (configured_push(&o.repo, &plan), plan))
+                    target::plan(
+                        &o.repo,
+                        branch.as_deref(),
+                        remote.as_deref(),
+                        remote_ref.as_deref(),
+                    )
                 })
                 .await?
                 .map_err(|e| WriteError::Rpc(RpcError::invalid_params(e)))?;
-            let (configured, plan) = plan;
+            let plan = planned
+                .ready()
+                .map_err(|refusal| WriteError::Rpc(refused(&refusal)))?;
             ctx.run(
                 ctx.git()
                     .args(push_args(&plan, set_upstream, lease.as_deref())),
@@ -368,8 +331,8 @@ pub async fn push(
             .await?;
             Ok(Pushed {
                 work_tree: work_tree(&ctx),
+                terminal: planned.terminal_difference(),
                 plan,
-                configured,
             })
         })
         .await

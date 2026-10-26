@@ -7,8 +7,8 @@
 //!   잠금을 기다리는 사이 HEAD 나 대상이 움직였으면 확인한 경로가 맞지 않는다 — 그때는 아무것도 하지 않고
 //!   [`pw_rpc::code::CONFLICT`] 로 끝낸다.
 //! - 브랜치 생성 · 이름 바꾸기 · 삭제(`git branch`). 삭제는 병합 안 된 브랜치를 `force` 없이 지우지 않는다 — `git branch -d` 가
-//!   거절했고 그 까닭이 git 의 「병합 안 됨」 판정([`merged`])이면 [`code::NOT_MERGED`] 로 알린다(git 의 원문을 실어서). 창은 확인한
-//!   뒤 `force` 로 다시 부른다(결정 M2-D6 ①). 지운 결과는 이전 해시다([`GitRefMove`] — 창의 [되돌리기], 결정 M2-D6 ③).
+//!   거절했고 그 까닭이 git 의 「병합 안 됨」 판정([`merged`])이며 어느 워크트리도 그 브랜치를 쓰지 않으면([`checked_out`] — 쓰면
+//!   `-D` 도 거절된다) [`code::NOT_MERGED`] 로 알린다(git 의 원문을 실어서). 창은 확인한 뒤 `force` 로 다시 부른다(결정 M2-D6 ①). 지운 결과는 이전 해시다([`GitRefMove`] — 창의 [되돌리기], 결정 M2-D6 ③).
 //! - 태그 생성(`git tag`, 메시지가 있으면 주석 태그).
 //!
 //! 사람이 준 이름 · 리비전은 `--end-of-options` 뒤에 둔다 — `-` 로 시작하는 값이 옵션으로 읽히지 않게. 옵션의 값으로 넘기는
@@ -68,6 +68,19 @@ pub(crate) fn plain(what: &str, value: &str) -> Result<(), WriteError> {
     if value.is_empty() || value.starts_with('-') || value.contains('\0') {
         return Err(WriteError::Rpc(RpcError::invalid_params(format!(
             "{what} `{value}` must be non-empty and must not start with `-`"
+        ))));
+    }
+    Ok(())
+}
+
+/// 사람이 준 브랜치 이름: `git check-ref-format --branch` 의 규칙(`refs/heads/<이름>` 이 ref 이름이고, `-` 로 시작하지 않고,
+/// `HEAD` 가 아니다 — glob(`*`) · `:` · `^` · `~` · `..` · `@{` · 공백 등을 거절한다). `@{-1}` 같은 이전 브랜치 표기는 받지 않는다.
+pub(crate) fn branch_name(what: &str, value: &str) -> Result<(), WriteError> {
+    plain(what, value)?;
+    let full = format!("refs/heads/{value}");
+    if gix::validate::reference::branch_name(full.as_bytes().as_bstr()).is_err() {
+        return Err(WriteError::Rpc(RpcError::invalid_params(format!(
+            "{what} `{value}` is not a valid branch name"
         ))));
     }
     Ok(())
@@ -179,6 +192,30 @@ pub(crate) fn merged(repo: &gix::Repository, name: &str) -> Option<bool> {
     Some(base.map(gix::Id::detach) == Some(tip))
 }
 
+/// 브랜치 `name` 을 어느 워크트리가 쓰는가(git 의 `branch_checked_out` — 그 워크트리의 HEAD 이거나 그 브랜치를 rebase 하는 중).
+/// 그러면 git 은 `-D` 로도 지우지 않는다. bare 저장소의 HEAD 는 세지 않는다. 파일을 읽지 못하면 쓰지 않는 것으로 본다.
+pub(crate) fn checked_out(repo: &gix::Repository, name: &str) -> bool {
+    let full = format!("refs/heads/{name}");
+    let mut dirs: Vec<std::path::PathBuf> = repo
+        .worktrees()
+        .unwrap_or_default()
+        .iter()
+        .map(|proxy| proxy.git_dir().to_path_buf())
+        .collect();
+    if repo.main_repo().is_ok_and(|main| !main.is_bare()) {
+        dirs.push(repo.common_dir().to_path_buf());
+    }
+    dirs.iter().any(|dir| {
+        ["HEAD", "rebase-merge/head-name", "rebase-apply/head-name"]
+            .iter()
+            .filter_map(|file| std::fs::read_to_string(dir.join(file)).ok())
+            .any(|text| {
+                let text = text.trim();
+                text.strip_prefix("ref:").map_or(text, str::trim) == full
+            })
+    })
+}
+
 /// 체크아웃이나 체크아웃하는 브랜치 생성: 계획(바뀔 경로)을 세워 쓰기를 돌리고, 끝난 HEAD 를 돌려준다.
 async fn switch(
     write: &Arc<GitWrite>,
@@ -246,7 +283,7 @@ pub async fn checkout(
 ) -> Result<(String, RepoHead), WriteError> {
     let (rev, args) = match target {
         GitCheckoutTarget::Branch { name } => {
-            plain("branch", &name)?;
+            branch_name("branch", &name)?;
             (
                 format!("refs/heads/{name}"),
                 vec![
@@ -263,9 +300,9 @@ pub async fn checkout(
             local,
         } => {
             plain("remote", &remote)?;
-            plain("branch", &branch)?;
+            branch_name("branch", &branch)?;
             let local = local.unwrap_or_else(|| branch.clone());
-            plain("local branch", &local)?;
+            branch_name("local branch", &local)?;
             let tracked = format!("refs/remotes/{remote}/{branch}");
             (
                 tracked.clone(),
@@ -333,7 +370,7 @@ pub async fn create(
     start: Option<String>,
     checkout: bool,
 ) -> Result<(Branch, Option<RepoHead>), WriteError> {
-    plain("branch", &name)?;
+    branch_name("branch", &name)?;
     if let Some(start) = &start {
         plain("start point", start)?;
     }
@@ -396,8 +433,8 @@ pub async fn rename(
     name: String,
     new_name: String,
 ) -> Result<Branch, WriteError> {
-    plain("branch", &name)?;
-    plain("new branch name", &new_name)?;
+    branch_name("branch", &name)?;
+    branch_name("new branch name", &new_name)?;
     let request = WriteRequest {
         project_id,
         worktree,
@@ -454,7 +491,7 @@ pub async fn delete(
     name: String,
     force: bool,
 ) -> Result<Deleted, WriteError> {
-    plain("branch", &name)?;
+    branch_name("branch", &name)?;
     let request = WriteRequest {
         project_id,
         worktree,
@@ -482,10 +519,13 @@ pub async fn delete(
                     },
                 });
             }
-            // git 의 거절이 「병합 안 됨」 인지는 git 과 같은 판정으로 가린다(사람용 출력을 해석하지 않는다).
+            // git 의 거절이 「병합 안 됨」 인지는 git 과 같은 판정으로 가린다(사람용 출력을 해석하지 않는다). 어느 워크트리가 쓰는
+            // 브랜치면 `-D` 로도 지우지 않으므로 강제 삭제를 권하지 않는다 — git 의 원문(`2004`)이다.
             let lookup = name.clone();
-            let merged = ctx.read(move |o| merged(&o.repo, &lookup)).await?;
-            if !force && merged == Some(false) {
+            let (merged, checked_out) = ctx
+                .read(move |o| (merged(&o.repo, &lookup), checked_out(&o.repo, &lookup)))
+                .await?;
+            if !force && merged == Some(false) && !checked_out {
                 return Ok(Deleted::NotMerged {
                     stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
                     commit: previous,

@@ -208,8 +208,20 @@ pub(crate) fn tracking_ref(
     if remote.as_bytes() == b"." {
         return Some(merge);
     }
+    remote_tracking(repo, remote.as_ref(), merge.as_ref())
+}
+
+/// 원격 `remote` 의 ref `remote_ref`(전체 이름)를 그 원격의 fetch refspec 으로 옮긴 원격 추적 ref(`refs/remotes/…`). fetch refspec
+/// 이 없거나(주소로만 쓴 원격 등) 맞는 것이 없으면 `None`.
+pub(crate) fn remote_tracking(
+    repo: &gix::Repository,
+    remote: &gix::bstr::BStr,
+    remote_ref: &gix::bstr::BStr,
+) -> Option<gix::bstr::BString> {
+    let config = repo.config_snapshot();
+    let plumbing = config.plumbing();
     let specs: Vec<gix::refspec::RefSpec> = plumbing
-        .strings_by("remote", Some(remote.as_ref()), "fetch")?
+        .strings_by("remote", Some(remote), "fetch")?
         .iter()
         .filter_map(|spec| {
             gix::refspec::parse(spec.as_ref(), gix::refspec::parse::Operation::Fetch)
@@ -226,7 +238,7 @@ pub(crate) fn tracking_ref(
     };
     let null = repo.object_hash().null();
     let out = group.match_lhs(std::iter::once(gix::refspec::match_group::Item {
-        full_ref_name: merge.as_ref(),
+        full_ref_name: remote_ref,
         target: &null,
         object: None,
     }));

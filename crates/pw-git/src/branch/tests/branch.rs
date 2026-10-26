@@ -1,5 +1,6 @@
-//! 브랜치 생성(옮기지 않음 · 체크아웃) · 이름 바꾸기 · 삭제(병합 안 된 브랜치는 `force` 없이 거절, 이전 해시로 되살리기) · 태그 ·
-//! `-` 로 시작하는 이름 거절.
+//! 브랜치 생성(옮기지 않음 · 체크아웃) · 이름 바꾸기 · 삭제(병합 안 된 브랜치는 `force` 없이 거절, 이전 해시로 되살리기 — 어느
+//! 워크트리가 쓰는 브랜치면 `-D` 도 안 되니 git 의 원문) · 태그 · `-` 로 시작하는 이름과 `git check-ref-format --branch` 가 받지
+//! 않는 이름 거절.
 
 use super::super::*;
 use super::{proceed, stderr_of};
@@ -183,6 +184,93 @@ async fn a_merged_branch_is_deleted_and_other_refusals_stay_git_failures() {
         .await
         .unwrap_err();
     assert!(stderr_of(&e).contains("missing"), "{e:?}");
+}
+
+/// 지우기가 git 의 원문(`2004`)으로 끝났다 — 「병합 안 됨」(`2101`)이 아니다.
+async fn refused_by_git(f: &WriteFixture, name: &str) -> String {
+    let e = delete(&f.write, f.project.clone(), None, name.into(), false)
+        .await
+        .map(|d| format!("{d:?}"))
+        .unwrap_err();
+    let text = stderr_of(&e);
+    assert_eq!(RpcError::from(e).code, crate::write::code::GIT_FAILED);
+    assert!(exists(f, name), "{name} is still there");
+    text
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unmerged_branch_a_worktree_uses_is_not_offered_a_force_delete() {
+    let f = WriteFixture::new(true);
+    f.repo.add_bare_remote("origin");
+    // 다른 워크트리가 체크아웃한 병합 안 된 브랜치.
+    let side = f.repo.add_worktree("side", "side");
+    std::fs::write(side.join("side.txt"), "side\n").unwrap();
+    f.repo.commit_all_in(&side, "side");
+    let opened = crate::repo::discover(f.repo.root(), true).unwrap().unwrap();
+    assert_eq!(merged(&opened, "side"), Some(false));
+    let text = refused_by_git(&f, "side").await;
+    assert!(text.contains("worktree"), "{text}");
+
+    // 지금 브랜치가 upstream 보다 앞서 있다(upstream 기준 병합 안 됨).
+    f.repo.commit_file("ahead.txt", "ahead\n", "ahead");
+    let text = refused_by_git(&f, "main").await;
+    assert!(text.contains("main"), "{text}");
+
+    // 다른 워크트리가 rebase 하는 중인 브랜치(HEAD 는 분리돼 있다).
+    let rebasing = f.repo.add_worktree("rebasing", "rebasing");
+    f.repo.commit_file("c.txt", "main\n", "main side of c");
+    std::fs::write(rebasing.join("c.txt"), "rebasing\n").unwrap();
+    f.repo.commit_all_in(&rebasing, "rebasing side of c");
+    let out = f.repo.try_git_in(&rebasing, &["rebase", "main"]);
+    assert!(!out.status.success(), "the rebase stops on the conflict");
+    let text = refused_by_git(&f, "rebasing").await;
+    assert!(text.contains("rebasing"), "{text}");
+}
+
+#[test]
+fn branch_names_follow_git_check_ref_format() {
+    let repo = crate::testing::TestRepo::with_commit();
+    for name in [
+        "feat",
+        "a/b",
+        "+x",
+        "@",
+        "x@",
+        "a@b",
+        "ü",
+        "a-b",
+        "a.b",
+        "*",
+        "f*",
+        "a:b",
+        "a^b",
+        "a~b",
+        "a?b",
+        "a[b",
+        "a\\b",
+        "a b",
+        "a\tb",
+        "a..b",
+        ".a",
+        "a.",
+        "a/.b",
+        "a.lock",
+        "a/b.lock/c",
+        "a/",
+        "/a",
+        "a//b",
+        "a@{b",
+        "HEAD",
+        "refs/heads/x",
+    ] {
+        let git = repo
+            .try_git_in(repo.root(), &["check-ref-format", "--branch", name])
+            .status
+            .success();
+        assert_eq!(branch_name("branch", name).is_ok(), git, "{name:?}");
+    }
+    // 이전 브랜치 표기는 git 이 펼치지만 여기서는 이름이 아니다.
+    assert!(branch_name("branch", "@{-1}").is_err());
 }
 
 #[test]

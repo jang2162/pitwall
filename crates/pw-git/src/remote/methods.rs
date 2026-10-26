@@ -1,12 +1,14 @@
-//! 원격 RPC(fetch · pull · push). UI 전용이라 MCP 툴이 아니다(결정 M2-D7 — git 쓰기는 M5 에서도 툴이 아니다). 모두 쓰기
-//! 실행기로 돌고 askpass 를 켠다 — 오류 코드는 `crate::write::code`(git 의 원문은 `2004` 의 `data.stderr`).
+//! 원격 RPC(fetch · pull · push, push 계획). UI 전용이라 MCP 툴이 아니다(결정 M2-D7 — git 쓰기는 M5 에서도 툴이 아니다). 계획 말고는
+//! 모두 쓰기 실행기로 돌고 askpass 를 켠다 — 오류 코드는 `crate::write::code`(git 의 원문은 `2004` 의 `data.stderr`).
 
 use std::sync::Arc;
 
 use pw_rpc::{Router, rpc_method};
 use serde::{Deserialize, Serialize};
 
-use super::{GitPullMode, GitPushConfigured};
+use super::{
+    GitPullMode, GitPushLease, GitPushRefusal, GitPushTargetSource, GitPushTerminal, redact,
+};
 use crate::write::{GitWrite, OperationInfo};
 
 #[derive(
@@ -76,9 +78,14 @@ pub struct GitPushParams {
     /// 보낼 로컬 브랜치. 없으면 HEAD 의 브랜치.
     #[serde(default)]
     pub branch: Option<String>,
-    /// 원격 이름. 없으면 그 브랜치의 push 원격(`branch.<b>.pushRemote` → `remote.pushDefault` → upstream 원격 → `origin`).
+    /// 원격 이름. 없으면 그 브랜치의 push 원격(`branch.<b>.pushRemote` → `remote.pushDefault` → upstream 원격 → 원격이 하나뿐이면
+    /// 그것 → `origin`).
     #[serde(default)]
     pub remote: Option<String>,
+    /// 원격에서 바꿀 ref(`refs/…` 전체 이름, 아니면 브랜치 이름 → `refs/heads/<이름>`). 없으면 터미널의 `git push` 가 보낼 곳을
+    /// git 의 규칙대로 셈한다 — git 이 거절할 상황이면 보내지 않고 `2102`(`git.push.plan` 의 `refusal`)로 거절한다.
+    #[serde(default)]
+    pub remote_ref: Option<String>,
     /// 보낸 뒤 그 원격 브랜치를 upstream 으로 정한다(`--set-upstream`).
     #[serde(default)]
     pub set_upstream: bool,
@@ -97,15 +104,55 @@ pub struct GitPushResult {
     pub work_tree: String,
     /// 보낸 로컬 브랜치의 짧은 이름.
     pub branch: String,
+    /// 원격 이름(주소면 사용자 정보를 지운 것).
     pub remote: String,
-    /// 원격에서 바뀐 ref(`refs/heads/…`).
+    /// 원격에서 바뀐 ref(`refs/…`).
     pub remote_ref: String,
-    /// 실제로 보낸 refspec(`refs/heads/<branch>:<remoteRef>`). 설정의 push refspec · `push.default` 를 쓰지 않고 이 값을 명시해
-    /// 보냈다(13-m2-plan.md M2-09 「push 대상 결정 규칙」).
+    /// 실제로 보낸 refspec(`refs/heads/<branch>:<remoteRef>`) — 대상을 명시해 보냈다(13-m2-plan.md M2-09 「push 대상 결정 규칙」).
     pub refspec: String,
-    /// 설정의 push refspec(`remote.<remote>.push`)이 이 push 와 다른 곳을 가리키면 그 내용 — 푸시 다이얼로그가 경고로 보인다.
-    /// 보통 `null`.
-    pub configured: Option<GitPushConfigured>,
+    /// 터미널의 `git push` 가 이 push 와 다르게 할 일. 보통 `null`.
+    pub terminal: Option<GitPushTerminal>,
+}
+
+/// push 계획 입력: `git.push` 와 같은 칸(force · upstream 설정을 뺀 것).
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitPushPlanParams {
+    pub project_id: String,
+    #[serde(default)]
+    pub worktree: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub remote: Option<String>,
+    #[serde(default)]
+    pub remote_ref: Option<String>,
+}
+
+/// 같은 입력으로 `git.push` 를 부르면 할 일. `refusal` 이 있으면 `git.push` 는 아무것도 보내지 않고 `2102` 로 거절한다.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPushPlanResult {
+    pub work_tree: String,
+    /// 보낼 로컬 브랜치의 짧은 이름.
+    pub branch: String,
+    /// 원격 이름(주소면 사용자 정보를 지운 것).
+    pub remote: String,
+    /// 원격에서 바꿀 ref. 거절이면 `null`.
+    pub remote_ref: Option<String>,
+    /// 보낼 refspec(`refs/heads/<branch>:<remoteRef>`). 거절이면 `null`.
+    pub refspec: Option<String>,
+    /// 대상을 정한 것. 거절이면 `null`.
+    pub target: Option<GitPushTargetSource>,
+    /// 터미널의 `git push` 가 이 push 와 다르게 할 일. 보통 `null`.
+    pub terminal: Option<GitPushTerminal>,
+    /// force 의 기대값을 읽을 곳(대상의 원격 추적 ref 와 그 커밋). 원격 추적 ref 가 정해지지 않으면 `null`.
+    pub lease: Option<GitPushLease>,
+    pub refusal: Option<GitPushRefusal>,
 }
 
 rpc_method! {
@@ -129,8 +176,19 @@ rpc_method! {
 }
 
 rpc_method! {
-    /// push: 로컬 브랜치 하나를 그 원격 브랜치로. upstream 설정 선택. force 는 `forceWithLease` 뿐이다. 원격이 앞서 있으면 git 의
-    /// 거절 원문으로 실패한다(`2004`).
+    /// push 계획: `git.push` 가 같은 입력으로 보낼 곳 · 터미널과의 차이 · force 의 기대값 · 거절 이유. gix 로만 읽는다(미신뢰
+    /// 프로젝트에서도 프로세스 0). 푸시 다이얼로그(M2-20)가 보내기 전에 보인다.
+    pub GitPushPlanMethod: "git.push.plan" {
+        params: GitPushPlanParams,
+        result: GitPushPlanResult,
+        tier: Read,
+        roles: [Owner],
+    }
+}
+
+rpc_method! {
+    /// push: 로컬 브랜치 하나를 그 원격 ref 로(대상은 `git.push.plan` 과 같은 계산). upstream 설정 선택. force 는
+    /// `forceWithLease` 뿐이다. git 이 거절할 대상이면 `2102`, 원격이 앞서 있으면 git 의 거절 원문으로 실패한다(`2004`).
     pub GitPushMethod: "git.push" {
         params: GitPushParams,
         result: GitPushResult,
@@ -172,6 +230,7 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
                 p.worktree,
                 p.branch,
                 p.remote,
+                p.remote_ref,
                 p.set_upstream,
                 p.force_with_lease,
             )
@@ -180,10 +239,42 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
                 work_tree: pushed.work_tree,
                 refspec: pushed.plan.refspec(),
                 branch: pushed.plan.branch,
-                remote: pushed.plan.remote,
+                remote: redact(&pushed.plan.remote),
                 remote_ref: pushed.plan.remote_ref,
-                configured: pushed.configured,
+                terminal: pushed.terminal,
             })
         }
     });
+    let w = Arc::clone(&write);
+    router.unary(GitPushPlanMethod, move |_ctx, p: GitPushPlanParams| {
+        let w = Arc::clone(&w);
+        async move {
+            let (work_tree, planned) = super::plan(
+                w.git(),
+                p.project_id,
+                p.worktree,
+                p.branch,
+                p.remote,
+                p.remote_ref,
+            )
+            .await?;
+            Ok(plan_result(work_tree, &planned))
+        }
+    });
+}
+
+/// 계획의 응답 꼴.
+pub fn plan_result(work_tree: String, planned: &super::Planned) -> GitPushPlanResult {
+    let ready = planned.ready();
+    GitPushPlanResult {
+        work_tree,
+        branch: planned.branch.clone(),
+        remote: redact(&planned.remote),
+        remote_ref: ready.as_ref().ok().map(|p| p.remote_ref.clone()),
+        refspec: ready.as_ref().ok().map(super::PushPlan::refspec),
+        target: planned.target.as_ref().ok().map(|(_, source)| *source),
+        terminal: planned.terminal_difference(),
+        lease: planned.lease.clone(),
+        refusal: ready.err(),
+    }
 }
