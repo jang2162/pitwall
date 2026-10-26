@@ -331,6 +331,7 @@ task-title-git-continue = git 작업 계속하는 중
 task-title-git-abort = git 작업 중단하는 중
 task-title-git-skip = git 작업의 단계 건너뛰는 중
 task-title-git-status = git 상태 읽는 중
+task-title-git-resolve = git 충돌 해결하는 중
 action-task-demo = 데모 작업 실행
 action-task-demo-invalid = 데모 작업 실행(잘못된 인자 — 오류 알림 확인용)
 

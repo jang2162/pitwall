@@ -9,12 +9,14 @@
 //! - [`status`]: 작업 트리 상태 · ref — `git.status` · `git.refs`(M2-02).
 //! - [`watch`]: 저장소 감시 — `git.watch`, 이벤트 `git.statusChanged` · `git.refsChanged`(M2-02).
 //! - [`write`]: 쓰기 실행기 · 진행 중 작업 · askpass(M2-06).
+//! - [`conflict`]: 충돌 데이터 · 해결 — `git.conflicts` · `git.conflict.get` · `git.conflict.resolve`(M2-11).
 //! - `testing`(시험 · `test-support` 기능): 시험 저장소 도우미.
 //!
 //! 이 크레이트의 모듈 배치 · 메서드 등록([`methods::register`])의 주인은 M2-01 이다. 이후 행은 모듈을 나눠(`status` · `log` ·
 //! `diff` · `write`) 더하고 등록 줄을 하나씩 더한다(13-m2-plan.md 「공유 부품의 주인」).
 
 pub mod cli;
+pub mod conflict;
 pub mod diff;
 pub mod methods;
 pub mod repo;

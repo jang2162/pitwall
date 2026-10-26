@@ -2243,6 +2243,910 @@
       ],
       "tier": "read"
     },
+    "git.conflict.get": {
+      "description": "충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "path": {
+            "description": "작업 트리 꼭대기 기준 상대 경로(`/` 구분, 글자 그대로).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Bom": {
+            "enum": [
+              "utf8",
+              "utf16Le",
+              "utf16Be"
+            ],
+            "type": "string"
+          },
+          "ConflictFile": {
+            "properties": {
+              "base": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ConflictStage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "공통 조상(index 단계 1). 그 쪽이 없으면 `null`."
+              },
+              "binary": {
+                "description": "어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). `.gitattributes` 의 `merge` 속성은 보지 않는다.",
+                "type": "boolean"
+              },
+              "kind": {
+                "$ref": "#/$defs/GitConflict",
+                "description": "index 단계가 있는 쪽들로 가른 갈래(`git status --porcelain` 의 두 글자 — `git.status` 와 같은 값)."
+              },
+              "ours": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ConflictStage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "우리 쪽(단계 2) — HEAD 쪽이다. rebase 중이면 옮겨 가는 대상(upstream) 쪽이다(git 의 `--ours` 와 같다)."
+              },
+              "path": {
+                "description": "작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다.",
+                "type": "string"
+              },
+              "submodule": {
+                "description": "어느 쪽이든 서브모듈(`160000`)이다.",
+                "type": "boolean"
+              },
+              "symlink": {
+                "description": "어느 쪽이든 심링크(`120000`)다.",
+                "type": "boolean"
+              },
+              "theirs": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ConflictStage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "그쪽(단계 3) — 들여오는 커밋 쪽. rebase 중이면 다시 적용하는 커밋 쪽이다."
+              },
+              "tooLarge": {
+                "description": "어느 쪽이든 대용량 기준(결정 M1-D9 의 50 MiB)을 넘어 내용을 읽지 않았다 — 그쪽의 바이너리 여부는 모른다.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "kind",
+              "base",
+              "ours",
+              "theirs",
+              "binary",
+              "submodule",
+              "symlink",
+              "tooLarge"
+            ],
+            "type": "object"
+          },
+          "ConflictSide": {
+            "description": "한 쪽의 내용. `git.blob` 과 같은 꼴이다.",
+            "properties": {
+              "content": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/FsContent"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "텍스트면 그 글(앞의 BOM 을 뺀 것 — `fs.read` 와 같은 규칙). 바이너리 · 서브모듈 · 대용량이면 `null`. 심링크면 대상 경로다."
+              },
+              "id": {
+                "type": "string"
+              },
+              "judgment": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Judgment"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "mode": {
+                "type": "string"
+              },
+              "size": {
+                "description": "blob 크기(서브모듈이면 0).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tooLarge": {
+                "description": "대용량 기준(50 MiB)을 넘는다. 풀지 않으므로 `content` · `judgment` 가 `null` 이다.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "mode",
+              "size",
+              "tooLarge",
+              "content",
+              "judgment"
+            ],
+            "type": "object"
+          },
+          "ConflictStage": {
+            "description": "index 단계 하나.",
+            "properties": {
+              "id": {
+                "description": "blob 해시(서브모듈이면 커밋).",
+                "type": "string"
+              },
+              "mode": {
+                "description": "git 의 8진 모드(`100644` · `100755` · `120000` · `160000`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "mode"
+            ],
+            "type": "object"
+          },
+          "FsContent": {
+            "description": "읽거나 쓸 내용.",
+            "oneOf": [
+              {
+                "description": "UTF-8 텍스트. 읽기에서는 파일 앞의 BOM 을 뺀 것이다(`judgment.bom` 이 알린다). 판정의 인코딩이 UTF-8 이 아니면(UTF-16 ·\n짐작한 인코딩) 그 인코딩에서 풀어 낸 것이고 `judgment.editable` 이 거짓이다 — 그 텍스트를 `fs.write` 로 되돌려 쓰면 원래 바이트가\n바뀐다(결정 M1-D12).",
+                "properties": {
+                  "kind": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "바이트 그대로(BOM 포함), 표준 base64.",
+                "properties": {
+                  "data": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "base64",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "GitConflict": {
+            "description": "병합 충돌(porcelain v2 의 `u` 줄 `XY`).",
+            "oneOf": [
+              {
+                "const": "bothDeleted",
+                "description": "`DD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByUs",
+                "description": "`AU`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByThem",
+                "description": "`UD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByThem",
+                "description": "`UA`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByUs",
+                "description": "`DU`.",
+                "type": "string"
+              },
+              {
+                "const": "bothAdded",
+                "description": "`AA`.",
+                "type": "string"
+              },
+              {
+                "const": "bothModified",
+                "description": "`UU`.",
+                "type": "string"
+              }
+            ]
+          },
+          "Judgment": {
+            "description": "읽은 내용의 판정.",
+            "properties": {
+              "binary": {
+                "description": "파일 앞 8 KiB 에 NUL 이 있다(UTF-16 BOM 이 있으면 텍스트로 본다).",
+                "type": "boolean"
+              },
+              "bom": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Bom"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "파일 앞의 BOM."
+              },
+              "editable": {
+                "description": "에디터로 편집 · 저장할 수 있다: 텍스트, 유효한 UTF-8(BOM 유무 무관, 결정 M1-D12, `lossy` 아님), 5 MiB 이하.",
+                "type": "boolean"
+              },
+              "encoding": {
+                "description": "읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE` · 짐작한 것). UTF-16 은 BOM 으로, UTF-8 로 읽히지 않는\n텍스트는 `chardetng` 로 짐작한다(예: `EUC-KR` · `Shift_JIS` · `windows-1252`, 결정 M1-D12). 바이너리면 `null`. 거의 UTF-8\n이면(`lossy`) `UTF-8` 이다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "highlight": {
+                "description": "구문 강조 · 줄바꿈을 켠다: 텍스트, 5 MiB 이하, 1만 자 넘는 줄 없음(결정 M1-D9).",
+                "type": "boolean"
+              },
+              "lineEnding": {
+                "$ref": "#/$defs/LineEnding"
+              },
+              "longLines": {
+                "description": "읽은 범위에 1만 자를 넘는 줄이 있다.",
+                "type": "boolean"
+              },
+              "lossy": {
+                "description": "인코딩이 `UTF-8` 이지만 유효하지 않은 바이트가 있어(쓰는 중인 로그 · 끝이 잘린 파일 등) 그 바이트를 U+FFFD 로 바꿔 풀었다.\n편집하지 않는다 — 저장하면 그 바이트가 U+FFFD 로 바뀐다.",
+                "type": "boolean"
+              },
+              "sizeClass": {
+                "$ref": "#/$defs/SizeClass",
+                "description": "파일 전체 크기의 등급."
+              }
+            },
+            "required": [
+              "binary",
+              "encoding",
+              "lossy",
+              "bom",
+              "lineEnding",
+              "longLines",
+              "sizeClass",
+              "editable",
+              "highlight"
+            ],
+            "type": "object"
+          },
+          "LineEnding": {
+            "description": "읽은 범위의 줄바꿈.",
+            "oneOf": [
+              {
+                "enum": [
+                  "lf",
+                  "crlf",
+                  "cr"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "mixed",
+                "description": "둘 이상이 섞였다.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "줄바꿈이 없다(한 줄).",
+                "type": "string"
+              }
+            ]
+          },
+          "MergeLines": {
+            "properties": {
+              "count": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "count"
+            ],
+            "type": "object"
+          },
+          "MergeRegion": {
+            "description": "병합 결과의 구간 하나. 줄은 `\\n` 으로 나눈다(CRLF 의 `\\r` 은 줄 내용이다). 번호는 0 기준, `count` 줄.",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MergeLines"
+              },
+              "kind": {
+                "$ref": "#/$defs/MergeRegionKind"
+              },
+              "merged": {
+                "$ref": "#/$defs/MergeLines",
+                "description": "병합 결과(`merged`)에서 차지하는 줄. 충돌이면 비어 있다 — `start` 가 고른 줄이 들어갈 자리다."
+              },
+              "ours": {
+                "$ref": "#/$defs/MergeLines"
+              },
+              "theirs": {
+                "$ref": "#/$defs/MergeLines"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "ours",
+              "theirs",
+              "merged"
+            ],
+            "type": "object"
+          },
+          "MergeRegionKind": {
+            "oneOf": [
+              {
+                "enum": [
+                  "conflict"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "ours",
+                "description": "우리 쪽만 바꿨다 — 결과에 우리 쪽 줄이 들어 있다.",
+                "type": "string"
+              },
+              {
+                "const": "theirs",
+                "description": "그쪽만 바꿨다 — 결과에 그쪽 줄이 들어 있다.",
+                "type": "string"
+              }
+            ]
+          },
+          "SizeClass": {
+            "description": "크기 등급(결정 M1-D9).",
+            "oneOf": [
+              {
+                "const": "editable",
+                "description": "5 MiB 이하: 편집 + 강조.",
+                "type": "string"
+              },
+              {
+                "const": "readOnly",
+                "description": "5 MiB 초과 50 MiB 이하: 읽기 전용, 강조 · 줄바꿈 끔.",
+                "type": "string"
+              },
+              {
+                "const": "tooLarge",
+                "description": "50 MiB 초과: 열지 않는다(앞부분 · hex 는 범위 읽기로).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConflictSide"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "file": {
+            "$ref": "#/$defs/ConflictFile",
+            "description": "목록(`git.conflicts`)의 그 항목."
+          },
+          "merged": {
+            "description": "자동 병합 결과 — 충돌 구간은 비어 있다(결정 M2-D4 의 결과 칸 처음 내용). ours · theirs 가 다 있고, 있는 쪽이 모두 편집할 수\n있는 텍스트(일반 파일 · UTF-8 · 5 MiB 이하 — 판정의 `editable`)일 때만 있다. 공통 조상이 없으면(`bothAdded`) 빈 파일을 조상으로\n본다. 세 쪽 모두 앞의 UTF-8 BOM 을 떼고 병합한다 — 판정의 `bom` 이 그쪽에 BOM 이 있었는지다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ours": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConflictSide"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "regions": {
+            "description": "병합 결과의 구간(앞에서부터): 한쪽만 바꾼 곳과 충돌. `merged` 가 없으면 비어 있다. `git merge-file -p --diff3` 의 구간과 같다.",
+            "items": {
+              "$ref": "#/$defs/MergeRegion"
+            },
+            "type": "array"
+          },
+          "theirs": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConflictSide"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workTree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "file",
+          "base",
+          "ours",
+          "theirs",
+          "merged",
+          "regions"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.conflict.resolve": {
+      "description": "충돌 경로 하나를 해결한다: `content` 면 파일에 쓰고(원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙) `git add`, `side` 면 그쪽을\n`git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n뒤의 충돌 목록을 돌려준다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ConflictPick": {
+            "description": "해결에서 고르는 쪽.",
+            "enum": [
+              "ours",
+              "theirs"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "bom": {
+            "default": false,
+            "description": "`content` 앞에 UTF-8 BOM 을 붙인다(`fs.write` 와 같다).",
+            "type": "boolean"
+          },
+          "content": {
+            "default": null,
+            "description": "결과 내용(UTF-8 글). 파일에 쓰고 `git add` 한다. `side` 와 둘 중 하나만.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "side": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConflictPick"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "한쪽을 고른다. 그쪽이 있으면 그 내용으로(`git checkout --ours|--theirs` 뒤 `git add`), 지운 쪽이면 `git rm` 이다."
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ConflictFile": {
+            "properties": {
+              "base": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ConflictStage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "공통 조상(index 단계 1). 그 쪽이 없으면 `null`."
+              },
+              "binary": {
+                "description": "어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). `.gitattributes` 의 `merge` 속성은 보지 않는다.",
+                "type": "boolean"
+              },
+              "kind": {
+                "$ref": "#/$defs/GitConflict",
+                "description": "index 단계가 있는 쪽들로 가른 갈래(`git status --porcelain` 의 두 글자 — `git.status` 와 같은 값)."
+              },
+              "ours": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ConflictStage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "우리 쪽(단계 2) — HEAD 쪽이다. rebase 중이면 옮겨 가는 대상(upstream) 쪽이다(git 의 `--ours` 와 같다)."
+              },
+              "path": {
+                "description": "작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다.",
+                "type": "string"
+              },
+              "submodule": {
+                "description": "어느 쪽이든 서브모듈(`160000`)이다.",
+                "type": "boolean"
+              },
+              "symlink": {
+                "description": "어느 쪽이든 심링크(`120000`)다.",
+                "type": "boolean"
+              },
+              "theirs": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ConflictStage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "그쪽(단계 3) — 들여오는 커밋 쪽. rebase 중이면 다시 적용하는 커밋 쪽이다."
+              },
+              "tooLarge": {
+                "description": "어느 쪽이든 대용량 기준(결정 M1-D9 의 50 MiB)을 넘어 내용을 읽지 않았다 — 그쪽의 바이너리 여부는 모른다.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "kind",
+              "base",
+              "ours",
+              "theirs",
+              "binary",
+              "submodule",
+              "symlink",
+              "tooLarge"
+            ],
+            "type": "object"
+          },
+          "ConflictStage": {
+            "description": "index 단계 하나.",
+            "properties": {
+              "id": {
+                "description": "blob 해시(서브모듈이면 커밋).",
+                "type": "string"
+              },
+              "mode": {
+                "description": "git 의 8진 모드(`100644` · `100755` · `120000` · `160000`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "mode"
+            ],
+            "type": "object"
+          },
+          "GitConflict": {
+            "description": "병합 충돌(porcelain v2 의 `u` 줄 `XY`).",
+            "oneOf": [
+              {
+                "const": "bothDeleted",
+                "description": "`DD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByUs",
+                "description": "`AU`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByThem",
+                "description": "`UD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByThem",
+                "description": "`UA`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByUs",
+                "description": "`DU`.",
+                "type": "string"
+              },
+              {
+                "const": "bothAdded",
+                "description": "`AA`.",
+                "type": "string"
+              },
+              {
+                "const": "bothModified",
+                "description": "`UU`.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "files": {
+            "description": "충돌 중인 경로(index 에 단계 1~3 이 있는 것). 경로순.",
+            "items": {
+              "$ref": "#/$defs/ConflictFile"
+            },
+            "type": "array"
+          },
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴). 파일 경로는 이 아래의 상대 경로다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "files"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.conflicts": {
+      "description": "충돌 중인 경로 목록: index 단계로 가른 종류(양쪽 수정 · 우리/그쪽 삭제 · 양쪽 추가 …)와 바이너리 · 서브모듈 · 심링크 표시.\n저장소가 없으면 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ConflictFile": {
+            "properties": {
+              "base": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ConflictStage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "공통 조상(index 단계 1). 그 쪽이 없으면 `null`."
+              },
+              "binary": {
+                "description": "어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). `.gitattributes` 의 `merge` 속성은 보지 않는다.",
+                "type": "boolean"
+              },
+              "kind": {
+                "$ref": "#/$defs/GitConflict",
+                "description": "index 단계가 있는 쪽들로 가른 갈래(`git status --porcelain` 의 두 글자 — `git.status` 와 같은 값)."
+              },
+              "ours": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ConflictStage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "우리 쪽(단계 2) — HEAD 쪽이다. rebase 중이면 옮겨 가는 대상(upstream) 쪽이다(git 의 `--ours` 와 같다)."
+              },
+              "path": {
+                "description": "작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다.",
+                "type": "string"
+              },
+              "submodule": {
+                "description": "어느 쪽이든 서브모듈(`160000`)이다.",
+                "type": "boolean"
+              },
+              "symlink": {
+                "description": "어느 쪽이든 심링크(`120000`)다.",
+                "type": "boolean"
+              },
+              "theirs": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ConflictStage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "그쪽(단계 3) — 들여오는 커밋 쪽. rebase 중이면 다시 적용하는 커밋 쪽이다."
+              },
+              "tooLarge": {
+                "description": "어느 쪽이든 대용량 기준(결정 M1-D9 의 50 MiB)을 넘어 내용을 읽지 않았다 — 그쪽의 바이너리 여부는 모른다.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "kind",
+              "base",
+              "ours",
+              "theirs",
+              "binary",
+              "submodule",
+              "symlink",
+              "tooLarge"
+            ],
+            "type": "object"
+          },
+          "ConflictStage": {
+            "description": "index 단계 하나.",
+            "properties": {
+              "id": {
+                "description": "blob 해시(서브모듈이면 커밋).",
+                "type": "string"
+              },
+              "mode": {
+                "description": "git 의 8진 모드(`100644` · `100755` · `120000` · `160000`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "mode"
+            ],
+            "type": "object"
+          },
+          "GitConflict": {
+            "description": "병합 충돌(porcelain v2 의 `u` 줄 `XY`).",
+            "oneOf": [
+              {
+                "const": "bothDeleted",
+                "description": "`DD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByUs",
+                "description": "`AU`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByThem",
+                "description": "`UD`.",
+                "type": "string"
+              },
+              {
+                "const": "addedByThem",
+                "description": "`UA`.",
+                "type": "string"
+              },
+              {
+                "const": "deletedByUs",
+                "description": "`DU`.",
+                "type": "string"
+              },
+              {
+                "const": "bothAdded",
+                "description": "`AA`.",
+                "type": "string"
+              },
+              {
+                "const": "bothModified",
+                "description": "`UU`.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "files": {
+            "description": "충돌 중인 경로(index 에 단계 1~3 이 있는 것). 경로순.",
+            "items": {
+              "$ref": "#/$defs/ConflictFile"
+            },
+            "type": "array"
+          },
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴). 파일 경로는 이 아래의 상대 경로다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "files"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "git.containedIn": {
       "description": "그 커밋을 담은(조상으로 가진) 브랜치 · 원격 브랜치 · 태그. 모든 ref 에서 이력을 걷는다 — 커밋 상세를 연 뒤 따로 부른다.",
       "kind": "unary",

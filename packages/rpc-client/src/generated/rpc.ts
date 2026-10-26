@@ -69,6 +69,21 @@ export type UnaryMethods = {
 	 */
 	"git.blob": { params: GitBlobParams; result: GitBlob };
 	/**
+	 * 충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.
+	 */
+	"git.conflict.get": { params: GitConflictParams; result: GitConflictDetail };
+	/**
+	 * 충돌 경로 하나를 해결한다: `content` 면 파일에 쓰고(원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙) `git add`, `side` 면 그쪽을
+	 * `git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결
+	 * 뒤의 충돌 목록을 돌려준다.
+	 */
+	"git.conflict.resolve": { params: GitConflictResolveParams; result: GitConflicts };
+	/**
+	 * 충돌 중인 경로 목록: index 단계로 가른 종류(양쪽 수정 · 우리/그쪽 삭제 · 양쪽 추가 …)와 바이너리 · 서브모듈 · 심링크 표시.
+	 * 저장소가 없으면 invalid params.
+	 */
+	"git.conflicts": { params: GitConflictsParams; result: GitConflicts };
+	/**
 	 * 그 커밋을 담은(조상으로 가진) 브랜치 · 원격 브랜치 · 태그. 모든 ref 에서 이력을 걷는다 — 커밋 상세를 연 뒤 따로 부른다.
 	 */
 	"git.containedIn": { params: GitRevParams; result: GitContainedIn };
@@ -371,6 +386,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":false,"fileScope":true},
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false,"fileScope":true},
 	"git.blob": {"name":"git.blob","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlobParams","output":"GitBlob","doc":" 리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).\n","mcp":false,"fileScope":false},
+	"git.conflict.get": {"name":"git.conflict.get","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictParams","output":"GitConflictDetail","doc":" 충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.\n","mcp":false,"fileScope":false},
+	"git.conflict.resolve": {"name":"git.conflict.resolve","kind":"unary","tier":"write","roles":["owner"],"params":"GitConflictResolveParams","output":"GitConflicts","doc":" 충돌 경로 하나를 해결한다: `content` 면 파일에 쓰고(원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙) `git add`, `side` 면 그쪽을\n `git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n 뒤의 충돌 목록을 돌려준다.\n","mcp":false,"fileScope":false},
+	"git.conflicts": {"name":"git.conflicts","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictsParams","output":"GitConflicts","doc":" 충돌 중인 경로 목록: index 단계로 가른 종류(양쪽 수정 · 우리/그쪽 삭제 · 양쪽 추가 …)와 바이너리 · 서브모듈 · 심링크 표시.\n 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.containedIn": {"name":"git.containedIn","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitContainedIn","doc":" 그 커밋을 담은(조상으로 가진) 브랜치 · 원격 브랜치 · 태그. 모든 ref 에서 이력을 걷는다 — 커밋 상세를 연 뒤 따로 부른다.\n","mcp":false,"fileScope":false},
 	"git.diff": {"name":"git.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffParams","output":"GitDiff","doc":" 두 쪽(커밋 · index · 작업 트리)의 diff: 바뀐 파일 목록(상태 · 이름 바뀜 · 모드 · 바이너리 · 서브모듈 포인터 · 생성 파일 ·\n 대용량)과 파일별 hunk(`git diff --find-renames -U3` 과 같다). 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.operation": {"name":"git.operation","kind":"unary","tier":"read","roles":["owner"],"params":"GitOperationParams","output":"GitOperation","doc":" 진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면\n `operation: null`.\n","mcp":false,"fileScope":false},
@@ -596,6 +614,51 @@ export type ConfigSummary = {
 export type ConfigView = {
 	snapshot: ConfigSnapshot,
 	error: ConfigFault | null,
+};
+
+export type ConflictFile = {
+	/**  작업 트리 꼭대기 기준 상대 경로, `/` 구분. UTF-8 이 아닌 바이트는 U+FFFD 다. */
+	path: string,
+	/**  index 단계가 있는 쪽들로 가른 갈래(`git status --porcelain` 의 두 글자 — `git.status` 와 같은 값). */
+	kind: GitConflict,
+	/**  공통 조상(index 단계 1). 그 쪽이 없으면 `null`. */
+	base: ConflictStage | null,
+	/**  우리 쪽(단계 2) — HEAD 쪽이다. rebase 중이면 옮겨 가는 대상(upstream) 쪽이다(git 의 `--ours` 와 같다). */
+	ours: ConflictStage | null,
+	/**  그쪽(단계 3) — 들여오는 커밋 쪽. rebase 중이면 다시 적용하는 커밋 쪽이다. */
+	theirs: ConflictStage | null,
+	/**  어느 쪽이든 바이너리다(앞 8 KiB 에 NUL — `fs.read` 의 판정). `.gitattributes` 의 `merge` 속성은 보지 않는다. */
+	binary: boolean,
+	/**  어느 쪽이든 서브모듈(`160000`)이다. */
+	submodule: boolean,
+	/**  어느 쪽이든 심링크(`120000`)다. */
+	symlink: boolean,
+	/**  어느 쪽이든 대용량 기준(결정 M1-D9 의 50 MiB)을 넘어 내용을 읽지 않았다 — 그쪽의 바이너리 여부는 모른다. */
+	tooLarge: boolean,
+};
+
+/**  해결에서 고르는 쪽. */
+export type ConflictPick = "ours" | "theirs";
+
+/**  한 쪽의 내용. `git.blob` 과 같은 꼴이다. */
+export type ConflictSide = {
+	id: string,
+	mode: string,
+	/**  blob 크기(서브모듈이면 0). */
+	size: number,
+	/**  대용량 기준(50 MiB)을 넘는다. 풀지 않으므로 `content` · `judgment` 가 `null` 이다. */
+	tooLarge: boolean,
+	/**  텍스트면 그 글(앞의 BOM 을 뺀 것 — `fs.read` 와 같은 규칙). 바이너리 · 서브모듈 · 대용량이면 `null`. 심링크면 대상 경로다. */
+	content: FsContent | null,
+	judgment: Judgment | null,
+};
+
+/**  index 단계 하나. */
+export type ConflictStage = {
+	/**  blob 해시(서브모듈이면 커밋). */
+	id: string,
+	/**  git 의 8진 모드(`100644` · `100755` · `120000` · `160000`). */
+	mode: string,
 };
 
 export type ContributionIds = {
@@ -1113,6 +1176,55 @@ export type GitConflict =
 /**  `UU`. */
 "bothModified";
 
+export type GitConflictDetail = {
+	workTree: string,
+	/**  목록(`git.conflicts`)의 그 항목. */
+	file: ConflictFile,
+	base: ConflictSide | null,
+	ours: ConflictSide | null,
+	theirs: ConflictSide | null,
+	/**
+	 *  자동 병합 결과 — 충돌 구간은 비어 있다(결정 M2-D4 의 결과 칸 처음 내용). ours · theirs 가 다 있고, 있는 쪽이 모두 편집할 수
+	 *  있는 텍스트(일반 파일 · UTF-8 · 5 MiB 이하 — 판정의 `editable`)일 때만 있다. 공통 조상이 없으면(`bothAdded`) 빈 파일을 조상으로
+	 *  본다. 세 쪽 모두 앞의 UTF-8 BOM 을 떼고 병합한다 — 판정의 `bom` 이 그쪽에 BOM 이 있었는지다.
+	 */
+	merged: string | null,
+	/**  병합 결과의 구간(앞에서부터): 한쪽만 바꾼 곳과 충돌. `merged` 가 없으면 비어 있다. `git merge-file -p --diff3` 의 구간과 같다. */
+	regions: MergeRegion[],
+};
+
+export type GitConflictParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  작업 트리 꼭대기 기준 상대 경로(`/` 구분, 글자 그대로). */
+	path: string,
+};
+
+export type GitConflictResolveParams = {
+	projectId: string,
+	worktree?: string | null,
+	path: string,
+	/**  결과 내용(UTF-8 글). 파일에 쓰고 `git add` 한다. `side` 와 둘 중 하나만. */
+	content?: string | null,
+	/**  `content` 앞에 UTF-8 BOM 을 붙인다(`fs.write` 와 같다). */
+	bom?: boolean,
+	/**  한쪽을 고른다. 그쪽이 있으면 그 내용으로(`git checkout --ours|--theirs` 뒤 `git add`), 지운 쪽이면 `git rm` 이다. */
+	side?: ConflictPick | null,
+};
+
+export type GitConflicts = {
+	/**  저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴). 파일 경로는 이 아래의 상대 경로다. */
+	workTree: string,
+	/**  충돌 중인 경로(index 에 단계 1~3 이 있는 것). 경로순. */
+	files: ConflictFile[],
+};
+
+export type GitConflictsParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). */
+	worktree?: string | null,
+};
+
 export type GitContainedIn = {
 	/**  그 커밋을 조상(자신 포함)으로 가진 브랜치 · 원격 브랜치 · 태그. 순서는 [`GitShow::refs`] 와 같다. */
 	refs: RefLabel[],
@@ -1578,6 +1690,27 @@ export type LineEnding = "lf" | "crlf" | "cr" |
 "none";
 
 export type LineKind = "context" | "added" | "removed";
+
+export type MergeLines = {
+	start: number,
+	count: number,
+};
+
+/**  병합 결과의 구간 하나. 줄은 `\n` 으로 나눈다(CRLF 의 `\r` 은 줄 내용이다). 번호는 0 기준, `count` 줄. */
+export type MergeRegion = {
+	kind: MergeRegionKind,
+	base: MergeLines,
+	ours: MergeLines,
+	theirs: MergeLines,
+	/**  병합 결과(`merged`)에서 차지하는 줄. 충돌이면 비어 있다 — `start` 가 고른 줄이 들어갈 자리다. */
+	merged: MergeLines,
+};
+
+export type MergeRegionKind = 
+/**  우리 쪽만 바꿨다 — 결과에 우리 쪽 줄이 들어 있다. */
+"ours" | 
+/**  그쪽만 바꿨다 — 결과에 그쪽 줄이 들어 있다. */
+"theirs" | "conflict";
 
 /**  응답 형태. `unary` 는 결과 하나, `stream` 은 `streamId` 를 돌려주고 청크를 `stream.chunk` 로 보낸다. */
 export type MethodKind = "unary" | "stream";

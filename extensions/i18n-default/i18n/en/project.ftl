@@ -341,6 +341,7 @@ task-title-git-continue = Continuing the git operation
 task-title-git-abort = Aborting the git operation
 task-title-git-skip = Skipping a step of the git operation
 task-title-git-status = Reading git status
+task-title-git-resolve = Resolving a git conflict
 action-task-demo = Run Demo Task
 action-task-demo-invalid = Run Demo Task (invalid arguments — to check error notifications)
 
