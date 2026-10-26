@@ -10,7 +10,8 @@ publish.workspace = true
 # gix-attributes 가 경로를 이 타입으로 받는다. gix-attributes 가 쓰는 버전과 같게 둔다.
 bstr = "1.13.1"
 # `.gitattributes` 의 linguist 속성(결정 M1-D20). 매크로 · 우선순위 규칙을 git 과 같게 푼다.
-gix-attributes = "0.37.0"
+# pw-git 의 `gix` 와 같은 gitoxide 릴리스다(`gix` 가 요구하는 버전). 셋(여기 · pw-fs 의 `gix-parallel` · pw-git)을 함께 올린다.
+gix-attributes = "0.37.1"
 pw-core = { path = "../pw-core" }
 pw-ext = { path = "../pw-ext" }
 pw-rpc = { path = "../pw-rpc" }

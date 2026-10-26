@@ -1,0 +1,38 @@
+[package]
+name = "pw-git"
+description = "Pitwall git backend: repository resolution and reads with gitoxide, writes through the git CLI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# 시험 저장소 도우미(`testing`)를 다른 크레이트의 시험에도 연다. 이 크레이트의 시험은 기능 없이도 쓴다.
+test-support = ["dep:tempfile"]
+
+[dependencies]
+# 읽기(결정 M2-D1). 기본 기능을 끄고 쓰는 것만 켠다 — 네트워크 · credentials 는 켜지 않는다(fetch · push 는 CLI).
+# 이미 들어와 있는 `gix-attributes`(pw-lang) · `gix-parallel`(pw-fs)과 같은 gitoxide 릴리스다. 올릴 때 셋을 함께 올린다.
+gix = { version = "0.90.0", default-features = false, features = ["sha1"] }
+pw-core = { path = "../pw-core" }
+# 실행 파일 찾기(런타임 환경의 PATH, `pw_open_with::launch::find_program`).
+pw-open-with = { path = "../pw-open-with" }
+pw-rpc = { path = "../pw-rpc" }
+pw-runtime = { path = "../pw-runtime" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+tempfile = { version = "3.27.0", optional = true }
+# git CLI 실행(취소 · 출력 수집)과 RPC 핸들러의 블로킹 스레드.
+tokio = { workspace = true, features = ["rt", "process", "io-util", "time", "macros"] }
+tokio-util = { workspace = true }
+tracing = "0.1.44"
+
+[target."cfg(unix)".dependencies]
+# setsid(2) · killpg(2). 버전은 데스크톱 크레이트와 같게 둔다.
+libc = "0.2.190"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }

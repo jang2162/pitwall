@@ -12,6 +12,7 @@ use pw_core as _;
 use pw_diag as _;
 use pw_ext as _;
 use pw_fs as _;
+use pw_git as _;
 use pw_i18n as _;
 use pw_lang as _;
 use pw_open_with as _;

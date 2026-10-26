@@ -21,7 +21,7 @@ grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
 # 기능만 켠다: `parallel` 이면 `gix-attributes` 의 속성 이름이 `Rc` 대신 `Arc` 라 `pw_lang::attributes::RepoAttributes` 를 검색 스레드끼리
-# 나눌 수 있다(`search.rs` 의 폴더별 속성 캐시). 버전은 `gix-attributes` 가 쓰는 것과 같게 둔다.
+# 나눌 수 있다(`search.rs` 의 폴더별 속성 캐시). 버전은 `gix-attributes`(pw-lang) · `gix`(pw-git)가 쓰는 것과 같게 둔다 — 함께 올린다.
 gix-parallel = { version = "0.50.0", features = ["parallel"] }
 # .gitignore · .ignore · 전역 gitignore 판정(ripgrep 과 같은 규칙, Unlicense OR MIT). M1-07 · M1-12 도 같은 크레이트를 쓴다.
 ignore = "0.4.33"

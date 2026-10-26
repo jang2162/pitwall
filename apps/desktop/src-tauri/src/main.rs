@@ -79,6 +79,9 @@ fn local_host(
     let terminal_methods = Arc::clone(&terminals);
     // 구문 강조(`syntax.*`). 문법 엔진은 처음 문서를 열 때 만든다.
     let syntax = Arc::new(pw_syntax::Syntax::new(Arc::clone(&extensions)));
+    // git(`git.*`, M2). 읽기는 gix, 쓰기는 런타임 환경으로 띄우는 git CLI 다.
+    let git = Arc::new(pw_git::Git::new(Arc::clone(&runtime)));
+    let git_methods = Arc::clone(&git);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
@@ -93,6 +96,7 @@ fn local_host(
         .methods(move |router| pw_open_with::cli::register(router, cli_check))
         .methods(move |router| pw_run::methods::register(router, terminal_methods))
         .methods(move |router| pw_syntax::methods::register(router, syntax))
+        .methods(move |router| pw_git::methods::register(router, git_methods))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
@@ -108,6 +112,12 @@ fn local_host(
             terminals.attach(pw_run::HostParts {
                 global: config.global.clone(),
                 projects: projects.clone(),
+            });
+            // git 은 전역 설정(`[git] path`) · 레지스트리를 쓰고, 쓰기를 끈 알림을 버스로 낸다.
+            git.attach(pw_git::HostParts {
+                global: config.global.clone(),
+                projects: projects.clone(),
+                bus: host.bus().clone(),
             });
             open_with.attach(HostParts {
                 paths: config.paths.clone(),

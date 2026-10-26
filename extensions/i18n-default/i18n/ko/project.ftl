@@ -475,3 +475,8 @@ find-results-empty = 고정한 검색 결과가 없다 — 전체에서 찾기 �
 # $query: 찾은 글자
 find-results-title = 「{ $query }」
 find-in-folder = 이 폴더에서 찾기
+
+## Git. 쓰기를 끈 경고는 Host 가 알림(notification.show)으로 한 번 낸다(crates/pw-git). 본문은 그 git 실행 파일의 경로다.
+
+# $version: 그 git 의 버전(읽지 못했으면 그 이유), $required: 쓰기에 필요한 가장 낮은 버전
+git-too-old = git { $version } 은(는) { $required } 보다 낮아 커밋 · 브랜치 같은 변경 작업을 끈다. 보기는 그대로 된다

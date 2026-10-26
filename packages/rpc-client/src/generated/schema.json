@@ -1958,6 +1958,178 @@
       ],
       "tier": "write"
     },
+    "git.repo": {
+      "description": "프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 있으면 그 워크트리 안의 프로젝트 루트를 담은 저장소를 본다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RepoHead": {
+            "oneOf": [
+              {
+                "description": "브랜치에 있다. `name` 은 짧은 이름(`main`, `feat/x`), `commit` 은 그 끝 커밋의 해시.",
+                "properties": {
+                  "commit": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "branch",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "commit"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "아직 커밋이 없는 브랜치(새 저장소, `git checkout --orphan`).",
+                "properties": {
+                  "kind": {
+                    "const": "unborn",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "분리된 HEAD 가 가리키는 커밋(태그를 체크아웃해도 git 은 HEAD 에 커밋을 적는다).",
+                "properties": {
+                  "commit": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "detached",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "commit"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RepoInfo": {
+            "properties": {
+              "commonDir": {
+                "description": "공유 git 디렉터리(refs · objects). 연결 워크트리가 아니면 `gitDir` 과 같다.",
+                "type": "string"
+              },
+              "gitDir": {
+                "description": "이 작업 트리의 git 디렉터리. 연결 워크트리면 `<commonDir>/worktrees/<이름>` 이다.",
+                "type": "string"
+              },
+              "head": {
+                "$ref": "#/$defs/RepoHead"
+              },
+              "linkedWorktree": {
+                "description": "`git worktree add` 로 만든 연결 워크트리인가.",
+                "type": "boolean"
+              },
+              "operation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RepoOperation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "진행 중인 작업. 없으면 `null`."
+              },
+              "workTree": {
+                "description": "작업 트리 꼭대기(절대 경로). 프로젝트 루트가 저장소의 하위 폴더면 그 위다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "workTree",
+              "gitDir",
+              "commonDir",
+              "linkedWorktree",
+              "head",
+              "operation"
+            ],
+            "type": "object"
+          },
+          "RepoOperation": {
+            "description": "진행 중인 작업(git 의 `wt_status_get_state` 와 같은 판정). 순차 cherry-pick · revert 와 대화형 rebase 도 각각 같은 값이다.",
+            "oneOf": [
+              {
+                "enum": [
+                  "merge",
+                  "rebase",
+                  "cherryPick",
+                  "revert",
+                  "bisect"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "am",
+                "description": "`git am`(메일 패치 적용).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "repo": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RepoInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`null` 이면 「저장소 없음」 — 저장소 밖, bare 저장소, 위조된 `.git` 파일. git 기능 전체가 빈 상태다."
+          }
+        },
+        "required": [
+          "repo"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "host.demoTask": {
       "description": "진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\nTask · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.",
       "item": {

@@ -65,6 +65,11 @@ export type UnaryMethods = {
 	 */
 	"fs.write": { params: FsWriteParams; result: FsWritten };
 	/**
+	 * 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.
+	 * 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
+	 */
+	"git.repo": { params: GitRepoParams; result: GitRepo };
+	/**
 	 * Host 의 종류 · 버전 · OS.
 	 */
 	"host.info": { params: null; result: HostInfo };
@@ -304,6 +309,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.trash": {"name":"fs.trash","kind":"unary","tier":"write","roles":["owner"],"params":"FsTrashParams","output":"FsTrashed","doc":" 항목들을 OS 휴지통에 넣는다(`permanent` 면 영구히 지운다). 넣지 못한 것은 `failed` 에 이유와 함께.\n","mcp":false,"fileScope":false},
 	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":false,"fileScope":true},
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false,"fileScope":true},
+	"git.repo": {"name":"git.repo","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRepo","doc":" 프로젝트의 git 저장소(결정 M2-D3): 작업 트리 · git 디렉터리 · HEAD · 진행 중 작업. 저장소가 없으면 `repo: null`.\n 없는 프로젝트, 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false,"fileScope":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false,"fileScope":false},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n","mcp":false,"fileScope":true},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n","mcp":false,"fileScope":true},
@@ -850,6 +856,17 @@ export type FsWritten = {
 	version: string,
 };
 
+export type GitRepo = {
+	/**  `null` 이면 「저장소 없음」 — 저장소 밖, bare 저장소, 위조된 `.git` 파일. git 기능 전체가 빈 상태다. */
+	repo: RepoInfo | null,
+};
+
+export type GitRepoParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 있으면 그 워크트리 안의 프로젝트 루트를 담은 저장소를 본다. */
+	worktree?: string | null,
+};
+
 export type HighlightSpan = {
 	from: number,
 	to: number,
@@ -1227,6 +1244,33 @@ export type RecentParams = {
 	/**  없으면 20. */
 	limit?: number | null,
 };
+
+export type RepoHead = 
+/**  브랜치에 있다. `name` 은 짧은 이름(`main`, `feat/x`), `commit` 은 그 끝 커밋의 해시. */
+{ kind: "branch"; name: string; commit: string } | 
+/**  아직 커밋이 없는 브랜치(새 저장소, `git checkout --orphan`). */
+{ kind: "unborn"; name: string } | 
+/**  분리된 HEAD 가 가리키는 커밋(태그를 체크아웃해도 git 은 HEAD 에 커밋을 적는다). */
+{ kind: "detached"; commit: string };
+
+export type RepoInfo = {
+	/**  작업 트리 꼭대기(절대 경로). 프로젝트 루트가 저장소의 하위 폴더면 그 위다. */
+	workTree: string,
+	/**  이 작업 트리의 git 디렉터리. 연결 워크트리면 `<commonDir>/worktrees/<이름>` 이다. */
+	gitDir: string,
+	/**  공유 git 디렉터리(refs · objects). 연결 워크트리가 아니면 `gitDir` 과 같다. */
+	commonDir: string,
+	/**  `git worktree add` 로 만든 연결 워크트리인가. */
+	linkedWorktree: boolean,
+	head: RepoHead,
+	/**  진행 중인 작업. 없으면 `null`. */
+	operation: RepoOperation | null,
+};
+
+/**  진행 중인 작업(git 의 `wt_status_get_state` 와 같은 판정). 순차 cherry-pick · revert 와 대화형 rebase 도 각각 같은 값이다. */
+export type RepoOperation = "merge" | "rebase" | "cherryPick" | "revert" | "bisect" | 
+/**  `git am`(메일 패치 적용). */
+"am";
 
 /**
  *  클라이언트 → 서버 요청 · 알림의 와이어 형식. `id` 가 없으면 알림이다.

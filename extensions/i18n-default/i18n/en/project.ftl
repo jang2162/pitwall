@@ -493,3 +493,8 @@ find-results-empty = No pinned search results. Open in Tool Window in the Find i
 # $query: the text searched for
 find-results-title = "{ $query }"
 find-in-folder = Find in Folder
+
+## Git. The Host sends the writes-off warning once as a notification (notification.show, crates/pw-git). The body is the path of that git executable.
+
+# $version: the version of that git (or why it could not be read), $required: the lowest version that can write
+git-too-old = Git { $version } is older than { $required }, so commits, branches and other changes are turned off. Viewing still works
