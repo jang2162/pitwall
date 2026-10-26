@@ -137,6 +137,10 @@ export type UnaryMethods = {
 	 */
 	"git.fetch": { params: GitFetchParams; result: GitFetchResult };
 	/**
+	 * `git.log` 의 쪽 단위(결정 M2-D7). 같은 행을 `cursor` 부터 많아야 `limit`(1~500)행. 저장소가 없으면 빈 쪽.
+	 */
+	"git.logPage": { params: GitLogPageParams; result: GitLogPage };
+	/**
 	 * 리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.
 	 * git 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.
 	 */
@@ -468,6 +472,12 @@ export type StreamMethods = {
 	 */
 	"fs.watch": { params: FsWatchParams; item: FsWatching };
 	/**
+	 * 커밋 로그(F5-1 · F5-2). 행마다 해시 · 부모 · 제목 · 작성자 · 시각 · ref 장식 · 레인 배치. 첫 청크는 200행을 배치하자마자
+	 * 보내고(`total` 이 실린다) 나머지는 500행씩. 브랜치 밖의 필터가 켜지면 행의 `graph` 가 `null` 이고 맞는 커밋만 온다.
+	 * 저장소가 없으면 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 모르는 ref, 잘못된 정규식 · 경로 · 해시는 invalid params.
+	 */
+	"git.log": { params: GitLogParams; item: LogChunk };
+	/**
 	 * 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.
 	 * 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다
 	 * (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.
@@ -535,6 +545,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.discard": {"name":"git.discard","kind":"unary","tier":"write","roles":["owner"],"params":"GitDiscardParams","output":"GitDiscardResult","doc":" 작업 트리의 변경을 버린다(`git restore --worktree` — index 의 것으로). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n untracked · intent-to-add 경로는 지우지도 비우지도 않고 `untracked` 로 돌려준다. 작업 트리가 바뀌므로 미저장 문서를 먼저 확인한다(M2-06).\n","mcp":false,"fileScope":false},
 	"git.discardLines": {"name":"git.discardLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitDiscardLinesParams","output":"GitWorkTree","doc":" 작업 트리 diff 의 hunk · 줄을 골라 버린다(작업 트리에 `git apply -R`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n 작업 트리에서 지운 파일은 파일 단위(`git.discard`)로 되살린다.\n","mcp":false,"fileScope":false},
 	"git.fetch": {"name":"git.fetch","kind":"unary","tier":"write","roles":["owner"],"params":"GitFetchParams","output":"GitFetchResult","doc":" fetch: 원격 하나 또는 전부, prune 선택. 인증은 askpass 로 창에 묻는다.\n","mcp":false,"fileScope":false},
+	"git.log": {"name":"git.log","kind":"stream","tier":"read","roles":["owner"],"params":"GitLogParams","output":"LogChunk","doc":" 커밋 로그(F5-1 · F5-2). 행마다 해시 · 부모 · 제목 · 작성자 · 시각 · ref 장식 · 레인 배치. 첫 청크는 200행을 배치하자마자\n 보내고(`total` 이 실린다) 나머지는 500행씩. 브랜치 밖의 필터가 켜지면 행의 `graph` 가 `null` 이고 맞는 커밋만 온다.\n 저장소가 없으면 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 모르는 ref, 잘못된 정규식 · 경로 · 해시는 invalid params.\n","mcp":false,"fileScope":false},
+	"git.logPage": {"name":"git.logPage","kind":"unary","tier":"read","roles":["owner"],"params":"GitLogPageParams","output":"GitLogPage","doc":" `git.log` 의 쪽 단위(결정 M2-D7). 같은 행을 `cursor` 부터 많아야 `limit`(1~500)행. 저장소가 없으면 빈 쪽.\n","mcp":false,"fileScope":false},
 	"git.merge": {"name":"git.merge","kind":"unary","tier":"write","roles":["owner"],"params":"GitMergeParams","output":"GitHistoryResult","doc":" 리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.\n git 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.\n","mcp":false,"fileScope":false},
 	"git.operation": {"name":"git.operation","kind":"unary","tier":"read","roles":["owner"],"params":"GitOperationParams","output":"GitOperation","doc":" 진행 중 작업(merge · rebase · cherry-pick · revert · am · bisect): 종류 · 대상 · 남은 단계 · 할 수 있는 동작. 없으면\n `operation: null`.\n","mcp":false,"fileScope":false},
 	"git.operation.abort": {"name":"git.operation.abort","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 그만두고 시작 전으로 돌린다(`git <작업> --abort`). 확인은 창이 먼저 한다(결정 M2-D6 ①).\n","mcp":false,"fileScope":false},
@@ -1649,6 +1661,39 @@ export type GitLinesParams = {
 	ignoreWhitespace?: boolean,
 };
 
+export type GitLogPage = {
+	rows: LogRow[],
+	/**  다음 쪽을 부를 커서. 더 없으면 `null`. 쪽 사이에 이력이 바뀌면 행이 밀리거나 겹칠 수 있다. */
+	nextCursor: string | null,
+	/**  전체 행 수(그래프 목록만, 걸러진 목록은 `null`). */
+	total: number | null,
+};
+
+export type GitLogPageParams = {
+	projectId: string,
+	worktree?: string | null,
+	refs?: string[] | null,
+	filter?: LogFilter,
+	order?: LogOrder,
+	/**  앞 쪽의 `nextCursor`. 없으면 처음부터. */
+	cursor?: string | null,
+	/**  1 ~ 500. */
+	limit: number,
+};
+
+export type GitLogParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`git.repo` 와 같다). */
+	worktree?: string | null,
+	/**
+	 *  브랜치 필터: 시작할 ref(`main`, `origin/main`, `refs/tags/v1`, `HEAD` — git 처럼 짧은 이름을 찾는다). 그래프는 유지된다.
+	 *  없으면 모든 브랜치 · 원격 · 태그 · HEAD(`git log --branches --remotes --tags HEAD`).
+	 */
+	refs?: string[] | null,
+	filter?: LogFilter,
+	order?: LogOrder,
+};
+
 export type GitLostChanges = {
 	/**  사라지는 변경(`git.status` 의 항목 꼴 — untracked 는 빠진다). 경로순. */
 	changes: GitStatusEntry[],
@@ -2222,6 +2267,23 @@ export type GitWorkTree = {
 	workTree: string,
 };
 
+/**
+ *  한 행의 그래프. 행의 높이를 위 · 가운데(노드) · 아래로 나누어, 간선은 각각 「윗변 → 노드」, 「노드 → 아랫변」, 「윗변 → 아랫변」 이다.
+ *  간선 하나는 `[레인, 색]` 이다.
+ */
+export type GraphRow = {
+	/**  노드가 놓인 레인(0 = 가장 왼쪽). */
+	lane: number,
+	/**  노드의 색 번호. */
+	color: number,
+	/**  윗변의 그 레인에서 노드로 모이는 간선. 노드의 레인이 들어 있으면 위에서 이어 온 줄이고, 비어 있으면 이 커밋이 줄의 시작이다. */
+	up: ([number, number])[],
+	/**  노드에서 아랫변의 그 레인으로 가는 간선(부모 순서). 비어 있으면 뿌리 커밋이다. */
+	down: ([number, number])[],
+	/**  윗변에서 아랫변으로 같은 레인을 곧게 지나가는 간선. */
+	pass: ([number, number])[],
+};
+
 export type HighlightSpan = {
 	from: number,
 	to: number,
@@ -2470,6 +2532,73 @@ export type LineEnding = "lf" | "crlf" | "cr" |
 "none";
 
 export type LineKind = "context" | "added" | "removed";
+
+/**  `git.log` 스트림의 항목 하나. */
+export type LogChunk = {
+	rows: LogRow[],
+	/**  전체 행 수. 그래프 목록의 첫 청크에만 있다(걸러진 목록은 끝까지 걸러 봐야 알므로 `null`). */
+	total: number | null,
+};
+
+/**  브랜치 밖의 필터(F5-2). 하나라도 있으면 그래프 없이 맞는 커밋만 온다(결정 M2-D2). 판정은 [`filter`] 머리 주석의 git 옵션과 같다. */
+export type LogFilter = {
+	/**  작성자 「이름 <메일>」 에 맞출 패턴(`--author`). */
+	author?: string | null,
+	/**  메시지의 한 줄에 맞출 패턴(`--grep`). */
+	message?: string | null,
+	/**  `author` · `message` 가 정규식인가(`-E`). 아니면 글자 그대로(`-F`). */
+	regex?: boolean,
+	/**  대소문자를 가리지 않는다(`-i`). */
+	ignoreCase?: boolean,
+	/**  커미터 시각(유닉스 초)이 이 값 이상(`--since`). */
+	since?: number | null,
+	/**  커미터 시각(유닉스 초)이 이 값 이하(`--until`). */
+	until?: number | null,
+	/**
+	 *  저장소 작업 트리 기준 상대 경로(구분자 `/` — Windows 는 `\` 도 받는다), 파일이나 폴더. 하나라도 바꾼 커밋만(`-- <경로>…`,
+	 *  git 의 기본 이력 단순화).
+	 */
+	paths?: string[],
+	/**  해시 접두(16진). */
+	hash?: string | null,
+};
+
+export type LogOrder = 
+/**  `git log --topo-order`: 자식이 모두 나온 뒤 부모, 한 줄의 이력을 섞지 않는다(머지 다음에는 머지된 쪽 줄이 먼저). */
+"topo" | 
+/**  `git log --date-order`: 자식이 모두 나온 뒤 부모, 그 안에서 커미터 시각이 늦은 것부터. */
+"date";
+
+/**  커밋에 붙은 ref 장식. */
+export type LogRef = {
+	/**  짧은 이름(`main`, `origin/main`, `v1.0`, 분리된 HEAD 는 `HEAD`). */
+	name: string,
+	kind: LogRefKind,
+	/**  HEAD 가 가리키는 브랜치인가. */
+	current: boolean,
+};
+
+export type LogRefKind = 
+/**  분리된 HEAD(브랜치에 있으면 그 브랜치의 `current` 가 켜진다). */
+"head" | "branch" | "remote" | "tag";
+
+/**  로그의 한 행. */
+export type LogRow = {
+	/**  전체 해시(16진). */
+	hash: string,
+	/**  부모 해시(커밋에 적힌 순서). */
+	parents: string[],
+	/**  제목(메시지의 첫 문단을 한 줄로 — git 의 `%s`). */
+	subject: string,
+	authorName: string,
+	authorEmail: string,
+	/**  작성 시각(유닉스 초). */
+	authorTime: number,
+	/**  이 커밋을 가리키는 ref(분리된 HEAD · 지금 브랜치가 앞, 다음은 브랜치 · 원격 · 태그의 이름순). */
+	refs: LogRef[],
+	/**  레인 배치. 필터가 켜진 목록이면 `null`(결정 M2-D2). */
+	graph: GraphRow | null,
+};
 
 export type MergeLines = {
 	start: number,

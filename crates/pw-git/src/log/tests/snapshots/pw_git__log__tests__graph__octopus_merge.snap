@@ -1,0 +1,10 @@
+---
+source: crates/pw-git/src/log/tests/graph.rs
+expression: render(&rows)
+---
+*     octopus          up [] node 0:0 down [0:0,1:1,2:2,3:3]
+|||*  c 1              up [3:3] node 3:3 down [3:3]
+||*|  b 1              up [2:2] node 2:2 down [2:2]
+|*||  a 1              up [1:1] node 1:1 down [1:1]
+*|||  main 1           up [0:0] node 0:0 down [0:0]
+*     initial          up [0:0,1:1,2:2,3:3] node 0:0 down []

@@ -4,7 +4,7 @@
 //! 픽스처 함수를 더할 때는 파일을 나눈다(`docs/design/13-m2-plan.md` 「공유 부품의 주인」): 저장소 만들기 · 커밋 · 브랜치 ·
 //! 워크트리는 [`repo`], 진행 중 작업(충돌 상태)은 [`state`], 충돌 갈래(M2-11)는 [`conflict`], 가짜 `git` 실행 파일은 [`fake`],
 //! 쓰기 실행기 픽스처(가짜 로그인 셸 · 창 흉내 · askpass 를 부르는 원격 도우미)는 [`write`], 로컬 bare 원격(`file://`)과 그것을
-//! 움직이는 다른 클론은 [`remote`].
+//! 움직이는 다른 클론은 [`remote`], 합성 이력(로그 · 그래프)은 [`synth`].
 
 pub mod conflict;
 #[cfg(unix)]
@@ -12,6 +12,7 @@ pub mod fake;
 pub mod remote;
 pub mod repo;
 pub mod state;
+pub mod synth;
 #[cfg(unix)]
 pub mod write;
 

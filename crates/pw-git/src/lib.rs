@@ -26,6 +26,7 @@ pub mod commit;
 pub mod conflict;
 pub mod diff;
 pub mod history;
+pub mod log;
 pub mod methods;
 pub mod remote;
 pub mod repo;

@@ -1,0 +1,12 @@
+---
+source: crates/pw-git/src/log/tests/graph.rs
+expression: render(&graph_of(&r))
+---
+*     merge fix        up [] node 0:0 down [0:0,1:1]
+|*    fix 1            up [1:1] node 1:1 down [1:1]
+*|    main 2           up [0:0] node 0:0 down [0:0]
+*|    merge feature    up [0:0] node 0:0 down [0:0,2:2]
+||*   feature 2        up [2:2] node 2:2 down [2:2]
+||*   feature 1        up [2:2] node 2:2 down [2:2]
+* |   main 1           up [0:0,1:1] node 0:0 down [0:0]
+*     initial          up [0:0,2:2] node 0:0 down []

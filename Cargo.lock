@@ -4744,6 +4744,7 @@ name = "pw-git"
 version = "0.0.0"
 dependencies = [
  "gix",
+ "insta",
  "libc",
  "notify",
  "pw-core",
@@ -4751,6 +4752,7 @@ dependencies = [
  "pw-lang",
  "pw-rpc",
  "pw-runtime",
+ "regex",
  "schemars 1.2.3",
  "serde",
  "serde_json",

@@ -1,0 +1,11 @@
+---
+source: crates/pw-git/src/log/tests/graph.rs
+expression: render(&graph_of(&r))
+---
+*     main 3           up [] node 0:0 down [0:0]
+*     adopt pages      up [0:0] node 0:0 down [0:0,1:1]
+|*    pages 2          up [1:1] node 1:1 down [1:1]
+|*    pages 1          up [1:1] node 1:1 down []
+*     main 2           up [0:0] node 0:0 down [0:0]
+*     main 1           up [0:0] node 0:0 down [0:0]
+*     initial          up [0:0] node 0:0 down []

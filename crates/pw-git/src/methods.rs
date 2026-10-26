@@ -95,6 +95,7 @@ rpc_method! {
 /// 핸들러를 붙인다. 저장소 읽기(디스크 IO)는 블로킹 스레드에서 한다.
 pub fn register(router: &mut Router, git: Arc<Git>) {
     crate::diff::register(router, Arc::clone(&git));
+    crate::log::methods::register(router, Arc::clone(&git));
     router.unary(GitRepoMethod, move |_ctx, params: GitRepoParams| {
         let git = Arc::clone(&git);
         async move {

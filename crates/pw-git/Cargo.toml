@@ -32,6 +32,8 @@ pw-fs = { path = "../pw-fs" }
 pw-lang = { path = "../pw-lang" }
 pw-rpc = { path = "../pw-rpc" }
 pw-runtime = { path = "../pw-runtime" }
+# 로그 필터의 작성자 · 메시지 패턴(`log::filter`). 버전은 pw-lang · pw-diag 와 같게 둔다.
+regex = "1.13.1"
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -65,6 +67,17 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+# 레인 배치 스냅숏(`log::tests::graph`). 버전은 pw-syntax 와 같게 둔다.
+insta = "1.49.0"
 tempfile = "3.27.0"
 # test-util: 질문 시간 제한을 멈춘 시계로 본다(`start_paused`).
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "test-util"] }
+
+[[example]]
+# 10만 커밋 합성 저장소(`docs/design/13-m2-plan.md` M2-03). 생성기는 `testing::synth` 에 있다.
+name = "synth_history"
+required-features = ["test-support"]
+
+[[example]]
+# 합성 저장소에서 `git.log` 첫 청크 · 전체 배치 시간을 잰다(release).
+name = "log_timing"

@@ -4894,6 +4894,732 @@
       ],
       "tier": "write"
     },
+    "git.log": {
+      "description": "커밋 로그(F5-1 · F5-2). 행마다 해시 · 부모 · 제목 · 작성자 · 시각 · ref 장식 · 레인 배치. 첫 청크는 200행을 배치하자마자\n보내고(`total` 이 실린다) 나머지는 500행씩. 브랜치 밖의 필터가 켜지면 행의 `graph` 가 `null` 이고 맞는 커밋만 온다.\n저장소가 없으면 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 모르는 ref, 잘못된 정규식 · 경로 · 해시는 invalid params.",
+      "item": {
+        "$defs": {
+          "GraphRow": {
+            "description": "한 행의 그래프. 행의 높이를 위 · 가운데(노드) · 아래로 나누어, 간선은 각각 「윗변 → 노드」, 「노드 → 아랫변」, 「윗변 → 아랫변」 이다.\n간선 하나는 `[레인, 색]` 이다.",
+            "properties": {
+              "color": {
+                "description": "노드의 색 번호.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "down": {
+                "description": "노드에서 아랫변의 그 레인으로 가는 간선(부모 순서). 비어 있으면 뿌리 커밋이다.",
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "lane": {
+                "description": "노드가 놓인 레인(0 = 가장 왼쪽).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pass": {
+                "description": "윗변에서 아랫변으로 같은 레인을 곧게 지나가는 간선.",
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "up": {
+                "description": "윗변의 그 레인에서 노드로 모이는 간선. 노드의 레인이 들어 있으면 위에서 이어 온 줄이고, 비어 있으면 이 커밋이 줄의 시작이다.",
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "lane",
+              "color",
+              "up",
+              "down",
+              "pass"
+            ],
+            "type": "object"
+          },
+          "LogRef": {
+            "description": "커밋에 붙은 ref 장식.",
+            "properties": {
+              "current": {
+                "description": "HEAD 가 가리키는 브랜치인가.",
+                "type": "boolean"
+              },
+              "kind": {
+                "$ref": "#/$defs/LogRefKind"
+              },
+              "name": {
+                "description": "짧은 이름(`main`, `origin/main`, `v1.0`, 분리된 HEAD 는 `HEAD`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "current"
+            ],
+            "type": "object"
+          },
+          "LogRefKind": {
+            "oneOf": [
+              {
+                "enum": [
+                  "branch",
+                  "remote",
+                  "tag"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "head",
+                "description": "분리된 HEAD(브랜치에 있으면 그 브랜치의 `current` 가 켜진다).",
+                "type": "string"
+              }
+            ]
+          },
+          "LogRow": {
+            "description": "로그의 한 행.",
+            "properties": {
+              "authorEmail": {
+                "type": "string"
+              },
+              "authorName": {
+                "type": "string"
+              },
+              "authorTime": {
+                "description": "작성 시각(유닉스 초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "graph": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GraphRow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "레인 배치. 필터가 켜진 목록이면 `null`(결정 M2-D2)."
+              },
+              "hash": {
+                "description": "전체 해시(16진).",
+                "type": "string"
+              },
+              "parents": {
+                "description": "부모 해시(커밋에 적힌 순서).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "refs": {
+                "description": "이 커밋을 가리키는 ref(분리된 HEAD · 지금 브랜치가 앞, 다음은 브랜치 · 원격 · 태그의 이름순).",
+                "items": {
+                  "$ref": "#/$defs/LogRef"
+                },
+                "type": "array"
+              },
+              "subject": {
+                "description": "제목(메시지의 첫 문단을 한 줄로 — git 의 `%s`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "hash",
+              "parents",
+              "subject",
+              "authorName",
+              "authorEmail",
+              "authorTime",
+              "refs",
+              "graph"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`git.log` 스트림의 항목 하나.",
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/$defs/LogRow"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "전체 행 수. 그래프 목록의 첫 청크에만 있다(걸러진 목록은 끝까지 걸러 봐야 알므로 `null`).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "rows",
+          "total"
+        ],
+        "type": "object"
+      },
+      "kind": "stream",
+      "params": {
+        "$defs": {
+          "LogFilter": {
+            "description": "브랜치 밖의 필터(F5-2). 하나라도 있으면 그래프 없이 맞는 커밋만 온다(결정 M2-D2). 판정은 [`filter`] 머리 주석의 git 옵션과 같다.",
+            "properties": {
+              "author": {
+                "default": null,
+                "description": "작성자 「이름 <메일>」 에 맞출 패턴(`--author`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hash": {
+                "default": null,
+                "description": "해시 접두(16진).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ignoreCase": {
+                "default": false,
+                "description": "대소문자를 가리지 않는다(`-i`).",
+                "type": "boolean"
+              },
+              "message": {
+                "default": null,
+                "description": "메시지의 한 줄에 맞출 패턴(`--grep`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "paths": {
+                "default": [],
+                "description": "저장소 작업 트리 기준 상대 경로(구분자 `/` — Windows 는 `\\` 도 받는다), 파일이나 폴더. 하나라도 바꾼 커밋만(`-- <경로>…`,\ngit 의 기본 이력 단순화).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "regex": {
+                "default": false,
+                "description": "`author` · `message` 가 정규식인가(`-E`). 아니면 글자 그대로(`-F`).",
+                "type": "boolean"
+              },
+              "since": {
+                "default": null,
+                "description": "커미터 시각(유닉스 초)이 이 값 이상(`--since`).",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "until": {
+                "default": null,
+                "description": "커미터 시각(유닉스 초)이 이 값 이하(`--until`).",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "LogOrder": {
+            "oneOf": [
+              {
+                "const": "topo",
+                "description": "`git log --topo-order`: 자식이 모두 나온 뒤 부모, 한 줄의 이력을 섞지 않는다(머지 다음에는 머지된 쪽 줄이 먼저).",
+                "type": "string"
+              },
+              {
+                "const": "date",
+                "description": "`git log --date-order`: 자식이 모두 나온 뒤 부모, 그 안에서 커미터 시각이 늦은 것부터.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "filter": {
+            "$ref": "#/$defs/LogFilter",
+            "default": {
+              "author": null,
+              "hash": null,
+              "ignoreCase": false,
+              "message": null,
+              "paths": [],
+              "regex": false,
+              "since": null,
+              "until": null
+            }
+          },
+          "order": {
+            "$ref": "#/$defs/LogOrder",
+            "default": "topo"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "refs": {
+            "default": null,
+            "description": "브랜치 필터: 시작할 ref(`main`, `origin/main`, `refs/tags/v1`, `HEAD` — git 처럼 짧은 이름을 찾는다). 그래프는 유지된다.\n없으면 모든 브랜치 · 원격 · 태그 · HEAD(`git log --branches --remotes --tags HEAD`).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`git.repo` 와 같다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.logPage": {
+      "description": "`git.log` 의 쪽 단위(결정 M2-D7). 같은 행을 `cursor` 부터 많아야 `limit`(1~500)행. 저장소가 없으면 빈 쪽.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "LogFilter": {
+            "description": "브랜치 밖의 필터(F5-2). 하나라도 있으면 그래프 없이 맞는 커밋만 온다(결정 M2-D2). 판정은 [`filter`] 머리 주석의 git 옵션과 같다.",
+            "properties": {
+              "author": {
+                "default": null,
+                "description": "작성자 「이름 <메일>」 에 맞출 패턴(`--author`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hash": {
+                "default": null,
+                "description": "해시 접두(16진).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ignoreCase": {
+                "default": false,
+                "description": "대소문자를 가리지 않는다(`-i`).",
+                "type": "boolean"
+              },
+              "message": {
+                "default": null,
+                "description": "메시지의 한 줄에 맞출 패턴(`--grep`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "paths": {
+                "default": [],
+                "description": "저장소 작업 트리 기준 상대 경로(구분자 `/` — Windows 는 `\\` 도 받는다), 파일이나 폴더. 하나라도 바꾼 커밋만(`-- <경로>…`,\ngit 의 기본 이력 단순화).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "regex": {
+                "default": false,
+                "description": "`author` · `message` 가 정규식인가(`-E`). 아니면 글자 그대로(`-F`).",
+                "type": "boolean"
+              },
+              "since": {
+                "default": null,
+                "description": "커미터 시각(유닉스 초)이 이 값 이상(`--since`).",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "until": {
+                "default": null,
+                "description": "커미터 시각(유닉스 초)이 이 값 이하(`--until`).",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "LogOrder": {
+            "oneOf": [
+              {
+                "const": "topo",
+                "description": "`git log --topo-order`: 자식이 모두 나온 뒤 부모, 한 줄의 이력을 섞지 않는다(머지 다음에는 머지된 쪽 줄이 먼저).",
+                "type": "string"
+              },
+              {
+                "const": "date",
+                "description": "`git log --date-order`: 자식이 모두 나온 뒤 부모, 그 안에서 커미터 시각이 늦은 것부터.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cursor": {
+            "default": null,
+            "description": "앞 쪽의 `nextCursor`. 없으면 처음부터.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filter": {
+            "$ref": "#/$defs/LogFilter",
+            "default": {
+              "author": null,
+              "hash": null,
+              "ignoreCase": false,
+              "message": null,
+              "paths": [],
+              "regex": false,
+              "since": null,
+              "until": null
+            }
+          },
+          "limit": {
+            "description": "1 ~ 500.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "order": {
+            "$ref": "#/$defs/LogOrder",
+            "default": "topo"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "refs": {
+            "default": null,
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GraphRow": {
+            "description": "한 행의 그래프. 행의 높이를 위 · 가운데(노드) · 아래로 나누어, 간선은 각각 「윗변 → 노드」, 「노드 → 아랫변」, 「윗변 → 아랫변」 이다.\n간선 하나는 `[레인, 색]` 이다.",
+            "properties": {
+              "color": {
+                "description": "노드의 색 번호.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "down": {
+                "description": "노드에서 아랫변의 그 레인으로 가는 간선(부모 순서). 비어 있으면 뿌리 커밋이다.",
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "lane": {
+                "description": "노드가 놓인 레인(0 = 가장 왼쪽).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pass": {
+                "description": "윗변에서 아랫변으로 같은 레인을 곧게 지나가는 간선.",
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "up": {
+                "description": "윗변의 그 레인에서 노드로 모이는 간선. 노드의 레인이 들어 있으면 위에서 이어 온 줄이고, 비어 있으면 이 커밋이 줄의 시작이다.",
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "lane",
+              "color",
+              "up",
+              "down",
+              "pass"
+            ],
+            "type": "object"
+          },
+          "LogRef": {
+            "description": "커밋에 붙은 ref 장식.",
+            "properties": {
+              "current": {
+                "description": "HEAD 가 가리키는 브랜치인가.",
+                "type": "boolean"
+              },
+              "kind": {
+                "$ref": "#/$defs/LogRefKind"
+              },
+              "name": {
+                "description": "짧은 이름(`main`, `origin/main`, `v1.0`, 분리된 HEAD 는 `HEAD`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "current"
+            ],
+            "type": "object"
+          },
+          "LogRefKind": {
+            "oneOf": [
+              {
+                "enum": [
+                  "branch",
+                  "remote",
+                  "tag"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "head",
+                "description": "분리된 HEAD(브랜치에 있으면 그 브랜치의 `current` 가 켜진다).",
+                "type": "string"
+              }
+            ]
+          },
+          "LogRow": {
+            "description": "로그의 한 행.",
+            "properties": {
+              "authorEmail": {
+                "type": "string"
+              },
+              "authorName": {
+                "type": "string"
+              },
+              "authorTime": {
+                "description": "작성 시각(유닉스 초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "graph": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GraphRow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "레인 배치. 필터가 켜진 목록이면 `null`(결정 M2-D2)."
+              },
+              "hash": {
+                "description": "전체 해시(16진).",
+                "type": "string"
+              },
+              "parents": {
+                "description": "부모 해시(커밋에 적힌 순서).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "refs": {
+                "description": "이 커밋을 가리키는 ref(분리된 HEAD · 지금 브랜치가 앞, 다음은 브랜치 · 원격 · 태그의 이름순).",
+                "items": {
+                  "$ref": "#/$defs/LogRef"
+                },
+                "type": "array"
+              },
+              "subject": {
+                "description": "제목(메시지의 첫 문단을 한 줄로 — git 의 `%s`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "hash",
+              "parents",
+              "subject",
+              "authorName",
+              "authorEmail",
+              "authorTime",
+              "refs",
+              "graph"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "nextCursor": {
+            "description": "다음 쪽을 부를 커서. 더 없으면 `null`. 쪽 사이에 이력이 바뀌면 행이 밀리거나 겹칠 수 있다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/$defs/LogRow"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "전체 행 수(그래프 목록만, 걸러진 목록은 `null`).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "rows",
+          "nextCursor",
+          "total"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "git.merge": {
       "description": "리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.\ngit 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.",
       "kind": "unary",
