@@ -561,3 +561,79 @@ git-status-staged = Staged: { $change }
 git-status-unstaged = Working tree: { $change }
 # A folder's color: something below it changed
 git-status-folder = Contains changed files
+
+## Branches (src/git/branch-*.tsx, M2-13): the status bar branch item, the branch popup (⌃⇧B) and the VCS operations popup (⌃V).
+action-git-branches = Branches…
+action-git-vcs-operations = VCS Operations…
+# Tooltip of the status bar item: the repository it found (work tree top)
+branch-status-repository = Repository: { $path }
+# Screen reader name. $name: "main ↑1↓2 MERGING"
+branch-status-label = Branch { $name }
+branch-status-unsupported = Unsupported repository
+branch-status-unsupported-detail = Pitwall cannot read this repository's ref format (reftable) yet, so git features are off. git in the terminal still works
+branch-status-detached = Detached HEAD
+# Marker of an operation in progress (same words as git's prompt). $kind: merge · rebase · cherryPick · revert · bisect · am
+branch-status-operation = { $kind ->
+        [merge] MERGING
+        [rebase] REBASING
+        [cherryPick] CHERRY-PICKING
+        [revert] REVERTING
+        [bisect] BISECTING
+       *[other] AM
+    }
+branch-popup-label = Branches
+branch-popup-placeholder = Find a branch, tag or worktree
+branch-popup-empty = Nothing matches
+branch-popup-loading = Reading branches…
+branch-popup-no-repository = This project is not a git repository
+branch-popup-failed = Could not read the branches: { $message }
+branch-group-favorites = Favorites
+branch-group-local = Local
+branch-group-remote = Remote
+branch-group-tags = Tags
+branch-group-worktrees = Worktrees
+branch-new = New Branch…
+branch-current = current
+branch-favorite = Add to Favorites
+branch-unfavorite = Remove from Favorites
+branch-worktree-main = main
+branch-worktree-current = this window
+branch-worktree-missing = folder missing
+branch-worktree-locked = locked
+branch-worktree-other = cannot open here
+branch-back = back
+branch-checkout = Checkout
+# Asks for the local branch that tracks a remote branch (when that name is taken). $local: the remote branch (origin/x)
+branch-checkout-tracking = Local branch tracking { $local }
+branch-new-from = New Branch from { $name }…
+branch-merge = Merge { $name } into { $current }
+branch-rebase = Rebase { $current } onto { $name }
+branch-compare = Compare with { $current }
+branch-rename = Rename…
+branch-delete = Delete
+branch-new-title = New Branch
+branch-new-hint = Created from { $start } and checked out
+branch-rename-title = Rename { $name }
+branch-name-empty = Enter a name
+branch-name-bad = Not a valid name, or the branch exists
+branch-force-delete-title = { $name } is not fully merged
+branch-force-delete-body = It has commits no other branch has. After deleting, only the reflog finds them
+branch-force-delete-confirm = Force Delete
+branch-merge-title = Merge { $name } into { $current }
+branch-rebase-title = Rebase { $current } onto { $name }
+branch-history-body = On a conflict it stops and stays in progress (the status bar shows a marker)
+branch-proceed = Proceed
+branch-result-checked-out = Checked out { $name }
+branch-result-created = Created branch { $name }
+branch-result-renamed = Renamed the branch to { $name }
+# $commit: short hash the deleted branch pointed at — a branch can be made there again
+branch-result-deleted = Deleted branch { $name } ({ $commit })
+branch-result-merged = Merged { $name }
+branch-result-rebased = Rebased { $name }
+branch-result-up-to-date = Already up to date
+branch-result-stopped = Stopped on a conflict — resolve it and continue
+branch-result-failed = { $what } failed
+branch-compare-missing = This window has no compare view yet
+vcs-popup-label = VCS Operations
+vcs-popup-placeholder = Find an operation
+vcs-popup-empty = No git operations in this window

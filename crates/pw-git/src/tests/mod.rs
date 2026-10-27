@@ -4,6 +4,7 @@
 mod diff;
 mod repo;
 mod status;
+mod worktree;
 
 #[cfg(unix)]
 mod cli;

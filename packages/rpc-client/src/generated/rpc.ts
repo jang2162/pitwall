@@ -163,6 +163,10 @@ export type UnaryMethods = {
 	 */
 	"git.operation.skip": { params: GitOperationParams; result: GitOperationResult };
 	/**
+	 * 프로젝트마다 주 루트를 담은 체크아웃의 브랜치(웰컴 창). git 을 실행하지 않고 `HEAD` 파일을 읽는다 — 분리된 HEAD 면 `null`.
+	 */
+	"git.projectBranches": { params: GitProjectBranchesParams; result: GitProjectBranches };
+	/**
 	 * 질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는
 	 * 답이면 invalid params.
 	 */
@@ -269,6 +273,11 @@ export type UnaryMethods = {
 	 * 함께 넘긴다.
 	 */
 	"git.unstageLines": { params: GitLinesParams; result: GitWorkTree };
+	/**
+	 * 저장소의 작업 트리 — 메인 체크아웃과 연결 워크트리 — 와 각 HEAD(gix). 저장소가 없으면 `workTree: null` 과 빈 목록. 각 항목의
+	 * `switchTo` 가 프로젝트 창이 그 작업 트리로 바꿀 때 보낼 활성 워크트리다.
+	 */
+	"git.worktrees": { params: GitRepoParams; result: GitWorktrees };
 	/**
 	 * Host 의 종류 · 버전 · OS.
 	 */
@@ -552,6 +561,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.operation.abort": {"name":"git.operation.abort","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 그만두고 시작 전으로 돌린다(`git <작업> --abort`). 확인은 창이 먼저 한다(결정 M2-D6 ①).\n","mcp":false,"fileScope":false},
 	"git.operation.continue": {"name":"git.operation.continue","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업을 계속한다(`git <작업> --continue`). 충돌을 다 풀지 않았으면 git 의 원문으로 실패한다.\n","mcp":false,"fileScope":false},
 	"git.operation.skip": {"name":"git.operation.skip","kind":"unary","tier":"write","roles":["owner"],"params":"GitOperationParams","output":"GitOperationResult","doc":" 진행 중 작업의 지금 단계를 건너뛴다(`git <작업> --skip`, merge 는 없다).\n","mcp":false,"fileScope":false},
+	"git.projectBranches": {"name":"git.projectBranches","kind":"unary","tier":"read","roles":["owner"],"params":"GitProjectBranchesParams","output":"GitProjectBranches","doc":" 프로젝트마다 주 루트를 담은 체크아웃의 브랜치(웰컴 창). git 을 실행하지 않고 `HEAD` 파일을 읽는다 — 분리된 HEAD 면 `null`.\n","mcp":false,"fileScope":false},
 	"git.prompt.answer": {"name":"git.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"GitPromptAnswerParams","output":"()","doc":" 질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는\n 답이면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.prompts": {"name":"git.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"GitPromptsParams","output":"GitPromptEvent","doc":" 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다\n (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.\n","mcp":false,"fileScope":false},
 	"git.pull": {"name":"git.pull","kind":"unary","tier":"write","roles":["owner"],"params":"GitPullParams","output":"GitPullResult","doc":" pull(merge 또는 rebase). 작업 트리 전체가 미저장 확인 대상이다. 충돌로 멈추면 `stopped: true` 와 그 진행 중 작업.\n","mcp":false,"fileScope":false},
@@ -576,6 +586,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.unstage": {"name":"git.unstage","kind":"unary","tier":"write","roles":["owner"],"params":"GitPathsParams","output":"GitWorkTree","doc":" 경로의 스테이징을 푼다(`git reset`): index 를 HEAD 의 것으로(HEAD 에 없으면 index 에서 뺀다 — 커밋이 없는 저장소도 된다).\n 충돌 중인 경로는 `git.stage` 처럼 거절한다(HEAD 쪽을 담아 충돌을 조용히 풀지 않는다). 이름 바뀜은 옛 경로와 새 경로를 둘\n 다 넘긴다.\n","mcp":false,"fileScope":false},
 	"git.unstageLines": {"name":"git.unstageLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitLinesParams","output":"GitWorkTree","doc":" 스테이징된 diff(HEAD ↔ index)의 hunk · 줄을 골라 스테이징을 푼다(`git apply --cached -R`). 이름이 바뀐 파일은 `oldPath` 를\n 함께 넘긴다.\n","mcp":false,"fileScope":false},
 	"git.watch": {"name":"git.watch","kind":"stream","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitWatching","doc":" 프로젝트(활성 워크트리)의 저장소를 감시한다. 스트림이 열려 있는 동안 바뀜이 프로젝트 범위 이벤트 `git.statusChanged` ·\n `git.refsChanged` 로 나가고, 닫으면 놓는다. 첫 항목이 오면 그 뒤의 바뀜은 놓치지 않는다. 작업 트리의 바뀜은 같은 창의\n `fs.watch` 가 열려 있어야 온다.\n","mcp":false,"fileScope":false},
+	"git.worktrees": {"name":"git.worktrees","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitWorktrees","doc":" 저장소의 작업 트리 — 메인 체크아웃과 연결 워크트리 — 와 각 HEAD(gix). 저장소가 없으면 `workTree: null` 과 빈 목록. 각 항목의\n `switchTo` 가 프로젝트 창이 그 작업 트리로 바꿀 때 보낼 활성 워크트리다.\n","mcp":false,"fileScope":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false,"fileScope":false},
 	"host.info": {"name":"host.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"HostInfo","doc":" Host 의 종류 · 버전 · OS.\n","mcp":false,"fileScope":true},
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n","mcp":false,"fileScope":true},
@@ -1750,6 +1761,19 @@ export type GitPathsParams = {
 	paths: string[],
 };
 
+export type GitProjectBranch = {
+	projectId: string,
+	/**  주 루트를 담은 체크아웃의 브랜치. 분리된 HEAD · 저장소 밖 · 읽지 못함이면 `null`. */
+	branch: string | null,
+};
+
+export type GitProjectBranches = {
+	/**  이 Host 의 프로젝트(레지스트리 차례). */
+	projects: GitProjectBranch[],
+};
+
+export type GitProjectBranchesParams = Record<string, never>;
+
 export type GitPrompt = {
 	/**  이 Host 안에서 질문마다 다르다. 답할 때 쓴다. */
 	promptId: number,
@@ -2271,6 +2295,38 @@ export type GitWatching = {
 export type GitWorkTree = {
 	/**  저장소의 작업 트리 꼭대기(절대 경로, `git.repo` 의 `workTree` 와 같은 꼴). */
 	workTree: string,
+};
+
+export type GitWorktree = {
+	/**  작업 트리 꼭대기(절대 경로). */
+	path: string,
+	/**  그 작업 트리의 HEAD. 폴더가 사라졌거나 읽지 못하면 `null`. */
+	head: RepoHead | null,
+	/**  저장소의 메인 체크아웃. */
+	main: boolean,
+	/**  요청한 창이 보고 있는 작업 트리. */
+	current: boolean,
+	/**  `git worktree lock` 으로 잠겼다. */
+	locked: boolean,
+	/**  폴더가 없다(`git worktree prune` 이 치울 것). */
+	missing: boolean,
+	/**
+	 *  이 프로젝트 창이 이 작업 트리로 바꿀 때 보낼 값. 이 프로젝트의 루트를 그 작업 트리 안에 둘 수 없으면(위조 판정 ·
+	 *  다른 저장소 체크아웃에 등록된 프로젝트) `null` — 목록에만 보인다.
+	 */
+	switchTo: GitWorktreeSwitch | null,
+};
+
+export type GitWorktreeSwitch = {
+	/**  활성 워크트리(`ActiveWorktree.top`). `null` 이면 프로젝트의 메인 체크아웃(주 루트의 작업 트리)으로 돌아간다. */
+	worktree: string | null,
+};
+
+export type GitWorktrees = {
+	/**  저장소의 작업 트리 꼭대기(요청이 본 것). `null` 이면 「저장소 없음」 이고 목록은 빈다. */
+	workTree: string | null,
+	/**  메인 체크아웃(bare 저장소면 없다), 그다음 연결 워크트리(관리 폴더 이름순). */
+	worktrees: GitWorktree[],
 };
 
 /**

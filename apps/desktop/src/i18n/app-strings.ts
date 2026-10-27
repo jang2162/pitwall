@@ -42,11 +42,13 @@ export function appStrings(t: Translate) {
         files: t("search-tab-files"),
         actions: t("search-tab-actions"),
         projects: t("search-tab-projects"),
+        branches: t("search-tab-branches"),
       },
       placeholder: {
         all: t("search-placeholder-all"),
         files: t("search-placeholder-files"),
         projects: t("search-placeholder-projects"),
+        branches: t("search-placeholder-branches"),
         recentFiles: t("search-placeholder-recent-files"),
       },
       empty: t("search-empty"),

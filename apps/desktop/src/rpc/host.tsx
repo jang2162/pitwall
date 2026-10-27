@@ -30,6 +30,8 @@ export function hostInvalidations(host: string): readonly InvalidationRule[] {
     rpcQueryKey(host, "project.get"),
     rpcQueryKey(host, "project.resolve"),
     rpcQueryKey(host, "project.trust"),
+    // 웰컴 창 행의 브랜치(M2-13) — 새 프로젝트의 브랜치도 보이게. 브랜치만 바뀐 것은 창이 앞으로 올 때 다시 읽는다(쿼리 기본값).
+    rpcQueryKey(host, "git.projectBranches"),
   ];
   // 시간을 넘겼던 로그인 셸이 백그라운드 재시도로 살아나면 Host 범위에도 `runtime.changed`(loginShell)가 온다 — 설정 창의
   // 「Orca 에서 Pitwall 열기」 검사(`cli.status`)가 로그인 셸 PATH 를 다시 본다(crates/pw-runtime/src/runtime.rs).

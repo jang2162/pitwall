@@ -15,6 +15,7 @@
 //! - [`branch`]: 체크아웃 · 브랜치 · 태그 — `git.checkout` · `git.branch.*` · `git.tag.create`(M2-09).
 //! - [`remote`]: fetch · pull · push — `git.fetch` · `git.pull` · `git.push`(M2-09).
 //! - [`stage`]: 스테이징 · 되돌리기 · stash — `git.stage*` · `git.unstage*` · `git.discard*` · `git.stash.*`(M2-07).
+//! - [`worktree`]: 워크트리 목록 · 체크아웃의 브랜치 — `git.worktrees` · `git.projectBranches`(M2-13).
 //! - `testing`(시험 · `test-support` 기능): 시험 저장소 도우미.
 //!
 //! 이 크레이트의 모듈 배치 · 메서드 등록([`methods::register`])의 주인은 M2-01 이다. 이후 행은 모듈을 나눠(`status` · `log` ·
@@ -35,6 +36,7 @@ pub mod status;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod watch;
+pub mod worktree;
 pub mod write;
 
 use std::collections::{HashMap, HashSet};

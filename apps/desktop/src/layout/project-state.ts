@@ -72,6 +72,8 @@ export interface ProjectStateFile {
   recentFiles?: RecentFileState[];
   /** 이 창에서 커밋한 메시지(커밋 툴 윈도우의 히스토리), 앞이 최근. 워크트리를 가리지 않는다. */
   commitMessages?: string[];
+  /** 브랜치 팝업의 즐겨찾기(F5-5) — ref 전체 이름(`refs/heads/…` · `refs/remotes/…`). 지운 브랜치의 이름이 남아도 팝업이 건너뛴다. */
+  favoriteBranches?: string[];
 }
 
 /** 최근 파일 하나(search-everywhere/recent-files.ts 의 `RecentFile` 과 같은 꼴). */
@@ -167,6 +169,15 @@ export function readStateFile(value: unknown): ProjectStateFile | undefined {
         .filter(keepsCommitMessage)
         .reduceRight<readonly string[]>(withCommitMessage, [])
     : undefined;
+  const favoriteBranches = Array.isArray(value.favoriteBranches)
+    ? [
+        ...new Set(
+          (value.favoriteBranches as unknown[]).filter(
+            (r): r is string => typeof r === "string" && r !== "",
+          ),
+        ),
+      ]
+    : undefined;
   return {
     version: STATE_VERSION,
     ...(value.layout !== undefined && { layout: value.layout }),
@@ -174,6 +185,7 @@ export function readStateFile(value: unknown): ProjectStateFile | undefined {
     worktrees,
     ...(recentFiles && { recentFiles }),
     ...(commitMessages && { commitMessages: [...commitMessages] }),
+    ...(favoriteBranches && { favoriteBranches }),
   };
 }
 
@@ -384,6 +396,13 @@ export function createProjectState({
       )
         return;
       state.commitMessages = [...next];
+      schedule();
+    },
+
+    /** 브랜치 즐겨찾기(ref 전체 이름). */
+    favoriteBranches: (): readonly string[] => state.favoriteBranches ?? [],
+    setFavoriteBranches(refs: readonly string[]) {
+      state.favoriteBranches = [...new Set(refs)];
       schedule();
     },
 

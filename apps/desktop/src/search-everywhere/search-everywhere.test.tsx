@@ -470,7 +470,8 @@ it("shows actions and files together in the All tab of ⇧⇧", async () => {
   await shiftShift();
   expect(popup()?.getAttribute("data-search-everywhere")).toBe("all");
   const tabs = [...popup()!.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
-  expect(tabs).toEqual(["전체", "파일", "액션", "프로젝트"]);
+  // 브랜치 탭은 프로젝트 창의 git 기능이 더한다(M2-13). 이 가짜 Host 는 저장소가 없어 결과가 빈다.
+  expect(tabs).toEqual(["전체", "파일", "액션", "프로젝트", "브랜치"]);
   await type("settings");
   await vi.waitFor(() => expect(values()).toContain("file:/work/demo/src/settings.rs"));
   expect(values()).toContain("action:settings.open");

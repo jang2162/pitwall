@@ -34,6 +34,8 @@ declare global {
 
 const host = vi.hoisted(() => ({
   projects: [] as Project[],
+  /** `git.projectBranches` 의 답(프로젝트 id → 브랜치, 분리된 HEAD 면 null). */
+  branches: {} as Record<string, string | null>,
   storage: { kind: "ok", path: "/d/state.db" } as StorageStatus,
   candidates: [] as RootCandidate[],
   resolve: (_path: string): Resolution | null => null,
@@ -108,6 +110,13 @@ vi.mock("../tauri-transport", async () => {
             return reply(null);
           case "project.list":
             return reply([...host.projects].sort((a, b) => a.name.localeCompare(b.name)));
+          case "git.projectBranches":
+            return reply({
+              projects: host.projects.map((p) => ({
+                projectId: p.id,
+                branch: host.branches[p.id] ?? null,
+              })),
+            });
           case "project.storage":
             return reply(host.storage);
           case "openWith.list":
@@ -217,6 +226,7 @@ beforeEach(() => {
     project("b", "billing-api", "/w/billing-api", { favorite: true, openedAt: 10, tags: ["work"] }),
     project("c", "infra", "/w/infra"),
   ];
+  host.branches = {};
   host.storage = { kind: "ok", path: "/d/state.db" };
   host.candidates = [];
   host.resolve = () => null;
@@ -339,6 +349,31 @@ it("lists favorites first, then recent, then the rest, and opens the selected ro
   expect(selectedRow()?.textContent).toContain("web-console");
   await press("Enter");
   expect(native.openProjectWindow).toHaveBeenCalledWith({ projectId: "a" });
+});
+
+it("shows each project's branch and nothing for a detached HEAD, read again when the registry changes", async () => {
+  host.branches = { a: "feat/console", b: "main", c: null };
+  await mount();
+  const branchOf = (name: string) =>
+    rows()
+      .find((r) => r.textContent?.includes(name))
+      ?.querySelector("[data-testid=welcome-branch]");
+  await vi.waitFor(() => expect(branchOf("web-console")?.textContent).toBe("feat/console"));
+  expect(branchOf("billing-api")?.textContent).toBe("main");
+  expect(branchOf("billing-api")?.getAttribute("aria-label")).toBe("브랜치 main");
+  // 분리된 HEAD(c)는 비어 있다.
+  expect(branchOf("infra")).toBeNull();
+  // 웰컴 창은 읽기만 한다 — git 쓰기를 부르지 않는다.
+  expect(host.calls.filter((c) => c.method.startsWith("git.")).map((c) => c.method)).toEqual(
+    expect.arrayContaining(["git.projectBranches"]),
+  );
+  expect(
+    host.calls.filter((c) => c.method.startsWith("git.") && c.method !== "git.projectBranches"),
+  ).toEqual([]);
+
+  host.branches = { ...host.branches, c: "release" };
+  await act(async () => host.emitHostEvent("project.changed"));
+  await vi.waitFor(() => expect(branchOf("infra")?.textContent).toBe("release"));
 });
 
 it("closes the welcome window on ⌘W", async () => {

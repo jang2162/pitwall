@@ -15,6 +15,7 @@ import { editorOpsActions } from "../editor/editor-ops";
 import { createEditorWorkspace } from "../editor/editor-workspace";
 import { fileOpsActions } from "../file-tree/file-ops";
 import { fileTreeStrings } from "../file-tree/strings";
+import { branchActions } from "../git/git-branch-feature";
 import { FileTreeModel } from "../file-tree/tree-model";
 import { openWithActions } from "../open-with/open-with";
 import { findActions } from "../search/find-actions";
@@ -121,6 +122,11 @@ const ACTION_IDS = new Set(
       strings: KO_APP.actions,
       openSearch() {},
       canSwitchProjects: true,
+    }),
+    ...branchActions({
+      strings: { branches: "branches", vcsOperations: "vcs" },
+      openBranches() {},
+      openVcs() {},
     }),
   ].map((a) => a.id),
 );

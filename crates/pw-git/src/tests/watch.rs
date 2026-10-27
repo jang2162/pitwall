@@ -724,3 +724,61 @@ fn a_commit_inside_a_submodule_reports_the_status() {
     events.settle();
     assert_same_status(&w.fx, &r, &id, None);
 }
+
+/// 상태바 브랜치(M2-13)의 경로: 창은 `git.watch` 를 하나만 열고(파일 트리 · 탭 색과 함께 쓰는 감시) 상태바는 `git.refsChanged` 를
+/// 구독해 `git.refs` 를 다시 읽는다. 같은 워크트리를 보는 창이 셋이고 저마다 구독해도 감시는 하나다. 터미널의 `git checkout` 이
+/// 끝난 때부터 그 구독이 받은 이벤트 뒤의 `git.refs` 가 새 브랜치 · ahead/behind 를 돌려줄 때까지를 잰다(release 에서 500 ms 를
+/// 단언한다 — [`RELEASE_TIMING`]).
+#[test]
+fn the_status_bar_follows_a_terminal_checkout_on_one_shared_watch() {
+    let r = TestRepo::with_commit();
+    let remote = r.add_bare_remote("origin");
+    let other_clone = r.clone_remote(&remote, "other-clone");
+    r.git(&["branch", "--quiet", "other"]);
+    r.commit_file("ahead.txt", "1\n", "ahead");
+    r.push_from(&other_clone, "main", "behind.txt", "1\n");
+    r.git(&["fetch", "--quiet", "origin"]);
+    let w = Watched::new();
+    let id = w.fx.project(r.root());
+    let bus = w.fx.bus();
+    let windows: Vec<_> = (0..3)
+        .map(|_| (w.fs(&id, None), w.git(&id, None)))
+        .collect();
+    assert_eq!(w.git_watch.watched(), 1);
+    let baseline = bus.subscriber_count();
+    let mut bars: Vec<_> = (0..3).map(|_| Events::new(&bus, &id)).collect();
+    // 상태바의 구독은 버스 구독일 뿐 감시가 아니다.
+    assert_eq!(w.git_watch.watched(), 1);
+    assert_eq!(bus.subscriber_count(), baseline + 3);
+    for bar in &mut bars {
+        bar.settle();
+    }
+    let head_branch = |refs: &crate::status::GitRefs| {
+        refs.branches
+            .iter()
+            .find(|b| b.head)
+            .map(|b| (b.name.clone(), b.upstream.as_ref().and_then(|u| u.track)))
+    };
+    let before = w.fx.refs(&id, None);
+    let (name, track) = head_branch(&before).unwrap();
+    assert_eq!(name, "main");
+    let counts = r.git(&["rev-list", "--left-right", "--count", "main...origin/main"]);
+    let track = track.unwrap();
+    assert_eq!((track.ahead, track.behind), (1, 1));
+    assert_eq!(format!("{}\t{}", track.ahead, track.behind), counts.trim());
+
+    r.git(&["checkout", "--quiet", "other"]);
+    let started = Instant::now();
+    for bar in &mut bars {
+        bar.until("git checkout", &[&any_refs]);
+    }
+    let after = w.fx.refs(&id, None);
+    latency("git checkout → git.refs", started, &[Instant::now()]);
+    assert_eq!(
+        head_branch(&after).map(|(n, _)| n).as_deref(),
+        Some("other")
+    );
+    assert_eq!(w.git_watch.watched(), 1);
+    drop(windows);
+    assert_eq!(w.git_watch.watched(), 0);
+}

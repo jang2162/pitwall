@@ -543,3 +543,79 @@ git-status-staged = 스테이징됨: { $change }
 git-status-unstaged = 작업 트리: { $change }
 # 폴더의 색: 그 아래에 바뀐 파일이 있다
 git-status-folder = 아래에 바뀐 파일이 있다
+
+## 브랜치(src/git/branch-*.tsx, M2-13). 상태바의 브랜치 항목 · 브랜치 팝업(⌃⇧B) · VCS 작업 팝업(⌃V).
+action-git-branches = 브랜치…
+action-git-vcs-operations = VCS 작업…
+# 상태바 항목의 툴팁: 잡은 저장소(작업 트리 꼭대기)
+branch-status-repository = 저장소: { $path }
+# 스크린 리더 이름. $name: 「main ↑1↓2 MERGING」
+branch-status-label = 브랜치 { $name }
+branch-status-unsupported = 지원하지 않는 저장소
+branch-status-unsupported-detail = 이 저장소의 ref 형식(reftable)은 아직 읽지 못해 git 기능을 끈다. 터미널의 git 은 그대로 쓸 수 있다
+branch-status-detached = 분리된 HEAD
+# 진행 중 작업의 표지(git 의 프롬프트와 같은 글). $kind: merge · rebase · cherryPick · revert · bisect · am
+branch-status-operation = { $kind ->
+        [merge] MERGING
+        [rebase] REBASING
+        [cherryPick] CHERRY-PICKING
+        [revert] REVERTING
+        [bisect] BISECTING
+       *[other] AM
+    }
+branch-popup-label = 브랜치
+branch-popup-placeholder = 브랜치 · 태그 · 워크트리 찾기
+branch-popup-empty = 맞는 것이 없다
+branch-popup-loading = 브랜치를 읽는 중…
+branch-popup-no-repository = 이 프로젝트는 git 저장소가 아니다
+branch-popup-failed = 브랜치를 읽지 못했다: { $message }
+branch-group-favorites = 즐겨찾기
+branch-group-local = 로컬
+branch-group-remote = 원격
+branch-group-tags = 태그
+branch-group-worktrees = 워크트리
+branch-new = 새 브랜치…
+branch-current = 지금
+branch-favorite = 즐겨찾기에 더하기
+branch-unfavorite = 즐겨찾기에서 빼기
+branch-worktree-main = 메인
+branch-worktree-current = 이 창
+branch-worktree-missing = 폴더 없음
+branch-worktree-locked = 잠김
+branch-worktree-other = 이 창에서 열 수 없음
+branch-back = 뒤로
+branch-checkout = 체크아웃
+# 원격 브랜치를 따를 로컬 브랜치 이름을 묻는다(같은 이름이 이미 있을 때). $local: 원격 브랜치(origin/x)
+branch-checkout-tracking = { $local } 를 따르는 로컬 브랜치 이름
+branch-new-from = { $name } 에서 새 브랜치…
+branch-merge = { $name } 를 { $current } 에 merge
+branch-rebase = { $current } 를 { $name } 위로 rebase
+branch-compare = { $current } 와 비교
+branch-rename = 이름 바꾸기…
+branch-delete = 삭제
+branch-new-title = 새 브랜치
+branch-new-hint = { $start } 에서 만들고 그리로 체크아웃한다
+branch-rename-title = { $name } 의 이름 바꾸기
+branch-name-empty = 이름을 적는다
+branch-name-bad = 쓸 수 없는 이름이거나 이미 있는 브랜치다
+branch-force-delete-title = { $name } 는 병합되지 않았다
+branch-force-delete-body = 이 브랜치에만 있는 커밋이 있다. 지우면 그 커밋은 reflog 로만 찾을 수 있다
+branch-force-delete-confirm = 강제 삭제
+branch-merge-title = { $name } 를 { $current } 에 merge 한다
+branch-rebase-title = { $current } 를 { $name } 위로 rebase 한다
+branch-history-body = 충돌이 나면 멈추고 진행 중 작업으로 남는다(상태바에 표지가 붙는다)
+branch-proceed = 진행
+branch-result-checked-out = { $name } 로 체크아웃했다
+branch-result-created = 브랜치 { $name } 를 만들었다
+branch-result-renamed = 브랜치 이름을 { $name } 로 바꿨다
+# $commit: 지운 브랜치가 가리키던 짧은 해시 — 같은 이름으로 다시 만들 수 있다
+branch-result-deleted = 브랜치 { $name } 를 지웠다({ $commit })
+branch-result-merged = { $name } 를 merge 했다
+branch-result-rebased = { $name } 를 rebase 했다
+branch-result-up-to-date = 이미 최신이다
+branch-result-stopped = 충돌로 멈췄다 — 충돌을 풀고 계속한다
+branch-result-failed = { $what } 실패
+branch-compare-missing = 이 창에는 아직 비교 화면이 없다
+vcs-popup-label = VCS 작업
+vcs-popup-placeholder = 작업 찾기
+vcs-popup-empty = 이 창에서 할 수 있는 git 작업이 없다

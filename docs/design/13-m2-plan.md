@@ -116,7 +116,7 @@ M1 에서 된 것은 다시 계획하지 않는다 — 파일 감시 · `fs.chan
 | 「최근 변경 파일」 뷰(F3-7) | v1.0 전 | P1. M2-02 의 status 위에 얹으면 된다 |
 | 원격 Host 지연에서의 그래프 · 거터 성능 | M7 | M1-17 과 같은 이유 — M2 의 Host 는 데스크톱 프로세스 안이다(03-architecture.md 「전체 구조」 절) |
 | Linux 에서 git 디렉터리 감시의 inotify 한도 · 실기 성능 | Linux 출시 준비 | D38. CI 의 Linux 시험은 그대로 돈다. M2-02 는 공유 git 디렉터리 전체를 재귀로 건다(`objects/` · `modules/*/objects` 포함 — inotify 는 폴더마다 감시 하나다). `HEAD` · `index` · `refs/` · `packed-refs` · 진행 중 작업 표지 · `modules/*/` 의 HEAD · ref 만 걸도록 좁히는 것(나중에 생기는 `info/` · `modules/` 를 따라 더하는 것 포함)도 이때 한다(M2-02 리뷰) |
-| reftable 저장소(`git init --ref-format=reftable`) 읽기 | gix 가 reftable 을 읽게 되면 | gix 0.90 이 reftable ref 를 읽지 못한다. `git.status` · `git.refs` 는 내부 오류 대신 `unsupported: "reftable"` 로 답한다(M2-02 리뷰). `git.repo`(M2-01)와 다른 읽기 행은 아직 같은 꼴로 답하지 않고, 화면의 「지원하지 않는 저장소」 상태는 10-ui.md 「빈 상태 · 오류 상태」 에 문장이 없다 — 받는 행(M2-12 · M2-13)이 정한다. M2-12(2026-10-26, 메인 판정): 트리 · 탭은 칠하지 않고 문장도 달지 않는다(10-ui.md 「마우스 · 트랙패드」 의 「Git」 절), 그 문장은 상태바를 가진 M2-13 이 단다 |
+| reftable 저장소(`git init --ref-format=reftable`) 읽기 | gix 가 reftable 을 읽게 되면 | gix 0.90 이 reftable ref 를 읽지 못한다. `git.status` · `git.refs` 는 내부 오류 대신 `unsupported: "reftable"` 로 답한다(M2-02 리뷰). `git.repo`(M2-01)와 다른 읽기 행은 아직 같은 꼴로 답하지 않고, 화면의 「지원하지 않는 저장소」 상태는 10-ui.md 「빈 상태 · 오류 상태」 에 문장이 없다 — 받는 행(M2-12 · M2-13)이 정한다. M2-12(2026-10-26, 메인 판정): 트리 · 탭은 칠하지 않고 문장도 달지 않는다(10-ui.md 「마우스 · 트랙패드」 의 「Git」 절), 그 문장은 상태바를 가진 M2-13 이 단다. M2-13: 상태바의 브랜치 항목이 「지원하지 않는 저장소」 와 툴팁(까닭 · 저장소 경로)을 달고, 브랜치 팝업 · SE 브랜치 탭은 비어 있다 |
 | 훅 출력 상한(`git.commit` · 그 밖의 쓰기) | M2-06 실행기를 고칠 때 | M2-08 리뷰. 쓰기 실행기는 git 의 stdout · stderr 를 상한 없이 모은다 — 훅이 50 MB 를 내면 그대로 결과(`output`)와 Task 오류에 담긴다(실측). 상한은 모든 쓰기가 같이 받아야 해서 M2-06 의 공용 몫이다 |
 | DB 레이아웃 프리셋 `⌃⌥3` | M3 | DB 화면이 생긴 뒤 |
 | assume-unchanged · skip-worktree 항목이 든 추적 폴더 자리가 파일일 때의 `git.status` | M2-02 후속 | M2-10 재리뷰(2026-10-26, 메인 판정). gix 의 status 가 그 상태에서 「Failed to read the directory」 로 실패해 `git.status` · `git.resetPreview`(hard · keep) · reset hard · keep 이 내부 오류로 끝난다 — reset 하지 않는 안전 쪽이다. 재현: `PW_RESET_FUZZ_SEED=98 PW_RESET_FUZZ_CASES=1`(`pw-git` 의 `history::tests::fuzz`) |
@@ -134,10 +134,10 @@ M1 에서 된 것은 다시 계획하지 않는다 — 파일 감시 · `fs.chan
 | 빈 줄로 시작하는 메시지의 제목 | 이후 | M2-03 재리뷰. 메시지가 빈 줄로 시작하면(`\n\n  leading…`) git `%s` 는 빈 줄을 건너뛰어 `  leading blank lines` 를 보이지만 우리는 빈 제목이다. `git commit` 은 이런 메시지를 만들지 않는다(fast-import · commit-tree 로만 생긴다) |
 | 신뢰한 저장소의 상대 경로 `mailmap.file` | 이후 | M2-03 재리뷰. `mailmap.file = ../outside.mailmap`(상대)을 git 은 작업 트리 기준으로 따르는데 우리는 신뢰해도 따르지 않는다 |
 | 신뢰한 저장소에서 FIFO 인 `.mailmap` | 이후 | M2-03 재리뷰. 신뢰 프로젝트에서 `.mailmap` 이 FIFO 면 gix `open_mailmap` 이 막혀 요청 스레드가 끝나지 않는다. 멈춤 신호로도 풀리지 않는다(첫 커밋을 읽을 때 열기 때문). git 도 같이 막힌다. 클론으로는 FIFO 가 생기지 않으므로 하 |
-| 상위 폴더 저장소를 잡는 것의 구별(예: 홈 폴더의 dotfiles 저장소 아래, 그 저장소가 ignore 하는 폴더의 프로젝트) | 이후 | M2-01 리뷰. 결정 M2-D3 문언대로 루트를 담은 가장 가까운 저장소를 잡는데, 모노레포의 하위 프로젝트와 구별할 근거가 없어 지금은 그대로 둔다. 어느 저장소를 잡았는지(작업 트리 꼭대기)를 화면에 보이는 것은 M2-13(상태바 브랜치 · 브랜치 팝업) 몫이다 |
+| 상위 폴더 저장소를 잡는 것의 구별(예: 홈 폴더의 dotfiles 저장소 아래, 그 저장소가 ignore 하는 폴더의 프로젝트) | 이후 | M2-01 리뷰. 결정 M2-D3 문언대로 루트를 담은 가장 가까운 저장소를 잡는데, 모노레포의 하위 프로젝트와 구별할 근거가 없어 지금은 그대로 둔다. 어느 저장소를 잡았는지(작업 트리 꼭대기)를 화면에 보이는 것은 M2-13(상태바 브랜치 · 브랜치 팝업) 몫이다 — M2-13 은 상태바 브랜치 항목의 툴팁에 「저장소: <꼭대기>」 를 단다 |
 | 「터미널에서 고치면 500 ms 안에 트리 · 탭 색」 의 끝에서 끝 실측(파일 감시 디바운스 75 ms → `git.statusChanged` → `git.status` → 그리기) | M2 사람 확인 · release 창 시험이 생길 때 | M2-12 리뷰. Host 쪽(바뀜 → `git.statusChanged`)은 crates/pw-git 의 release 시험이 재고, 창 쪽 시험은 시간이 아니라 일(바뀐 경로만 한 번 읽음)로 본다(공통 계약 「시간 기준은 진행 신호로」) — 둘을 합친 실제 시간은 아직 아무도 재지 않았다 |
 | 대소문자만 다른 이름의 git 색(APFS 등에서 index 는 `README.md`, 디스크는 `readme.md`) | 이후 | M2-12 리뷰. `GitStatusStore.decoration` 은 경로를 글자 그대로 찾아 그 행은 칠하지 않는다. 드물다. 고치면 `core.ignorecase` 일 때 접은 키로 찾는다 |
-| git status 저장소의 남은 손질 — 바뀐 경로마다 전 항목을 도는 부분 갱신(5만 항목이면 이벤트마다 수 ms, 커지면 폴더별 색인), 스트림이 오류 없이 끝나거나 연결이 닫힐 때 옛 색을 든 채 남는 것(지금 클라이언트에 재연결이 없어 창이 닫히는 경우뿐), 아무도 안 쓰는 `watchGitStatus` 의 `onWatching` 인자(시험만 쓴다 — M2-13 이 쓰지 않으면 뺀다) | M2-13 · 재연결이 생길 때 | M2-12 리뷰 P3. 지금 해가 없고 고치는 길이 정해져 있다(`apps/desktop/src/git/git-status.ts`) |
+| git status 저장소의 남은 손질 — 바뀐 경로마다 전 항목을 도는 부분 갱신(5만 항목이면 이벤트마다 수 ms, 커지면 폴더별 색인), 스트림이 오류 없이 끝나거나 연결이 닫힐 때 옛 색을 든 채 남는 것(지금 클라이언트에 재연결이 없어 창이 닫히는 경우뿐) | 재연결이 생길 때 | M2-12 리뷰 P3. 지금 해가 없고 고치는 길이 정해져 있다(`apps/desktop/src/git/git-status.ts`). 함께 적혀 있던 쓰지 않는 `onWatching` 인자는 M2-13 이 뺐다 |
 
 ## 4. 착수 전 준비물 · 결정
 

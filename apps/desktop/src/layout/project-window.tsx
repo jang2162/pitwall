@@ -59,6 +59,7 @@ import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { FileTreeToolWindow } from "../file-tree/file-tree";
 import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
+import { GitBranchFeature } from "../git/git-branch-feature";
 import { GitPrompts } from "../git/git-prompts";
 import { GitStatusWatch } from "../git/git-status";
 import { useAppStrings } from "../i18n/app-strings";
@@ -802,6 +803,9 @@ function ProjectWindowBody({
           </div>
           {projectId !== undefined && <FileWatch projectId={projectId} />}
           {projectId !== undefined && <GitStatusWatch projectId={projectId} />}
+          {projectId !== undefined && (
+            <GitBranchFeature projectId={projectId} state={projectState.store} />
+          )}
           {projectId !== undefined && <GitPrompts projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}

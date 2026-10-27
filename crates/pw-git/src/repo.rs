@@ -154,8 +154,20 @@ pub fn info(repo: &gix::Repository) -> Result<RepoInfo, String> {
         .workdir()
         .ok_or("the repository has no work tree")?
         .to_path_buf();
+    Ok(RepoInfo {
+        work_tree: display(&work_tree),
+        git_dir: display(repo.git_dir()),
+        common_dir: display(repo.common_dir()),
+        linked_worktree: repo.git_dir() != repo.common_dir(),
+        head: head(repo)?,
+        operation: repo.state().map(operation),
+    })
+}
+
+/// 열린 저장소(작업 트리 하나)의 HEAD.
+pub(crate) fn head(repo: &gix::Repository) -> Result<RepoHead, String> {
     let head = repo.head().map_err(|e| e.to_string())?;
-    let head = match head.kind {
+    Ok(match head.kind {
         gix::head::Kind::Symbolic(reference) => RepoHead::Branch {
             name: reference.name.shorten().to_string(),
             commit: reference
@@ -170,14 +182,6 @@ pub fn info(repo: &gix::Repository) -> Result<RepoInfo, String> {
         gix::head::Kind::Detached { target, .. } => RepoHead::Detached {
             commit: target.to_string(),
         },
-    };
-    Ok(RepoInfo {
-        work_tree: display(&work_tree),
-        git_dir: display(repo.git_dir()),
-        common_dir: display(repo.common_dir()),
-        linked_worktree: repo.git_dir() != repo.common_dir(),
-        head,
-        operation: repo.state().map(operation),
     })
 }
 
@@ -196,7 +200,7 @@ pub(crate) fn operation(state: InProgress) -> RepoOperation {
 }
 
 /// 레지스트리 · 파일 RPC 와 같은 정규화(실제 경로, Windows verbatim 접두 없음)를 거친 경로.
-fn display(path: &Path) -> String {
+pub(crate) fn display(path: &Path) -> String {
     pw_core::registry::path::normalize(path)
         .unwrap_or_else(|_| path.to_path_buf())
         .display()

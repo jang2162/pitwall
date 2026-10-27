@@ -11,7 +11,7 @@ import type { Project } from "@pitwall/rpc-client";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { useQueryClient } from "@tanstack/react-query";
 import { Command } from "cmdk";
-import { FolderOpen, Plus, Star } from "lucide-react";
+import { FolderOpen, GitBranch, Plus, Star } from "lucide-react";
 import {
   type MouseEvent,
   type ReactNode,
@@ -61,12 +61,34 @@ function Kbd({ text }: { text: string | undefined }) {
 /** 웰컴 창이 UI 로그(`$STATE/logs/ui.*.log`)에 남기는 것: 네이티브 동작과 실패. */
 export type WelcomeLog = Pick<UiLogger, "info" | "warn">;
 
+/** 행의 현재 브랜치. 없으면(저장소 밖 · 분리된 HEAD) 그리지 않는다. */
+function BranchTag({ name, label }: { name: string | undefined; label(name: string): string }) {
+  if (!name) return null;
+  return (
+    <span
+      data-testid="welcome-branch"
+      aria-label={label(name)}
+      title={label(name)}
+      className="flex max-w-[160px] flex-none items-center gap-1 text-[11px] text-ui-muted-foreground"
+    >
+      <GitBranch size={11} aria-hidden className="flex-none" />
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
+
 export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: WelcomeLog }) {
   const { client, key } = useHost();
   const queryClient = useQueryClient();
   const { platform, shortcuts } = useKeymap();
   const S = useWelcomeStrings();
   const projects = useRpcQuery("project.list", null);
+  // 행의 현재 브랜치(10-ui.md S1). Host 가 HEAD 파일만 읽는다 — git 을 실행하지 않는다. 분리된 HEAD 면 비어 있다.
+  const branches = useRpcQuery("git.projectBranches", {});
+  const branchOf = useMemo(
+    () => new Map((branches.data?.projects ?? []).map((p) => [p.projectId, p.branch])),
+    [branches.data],
+  );
   const storage = useRpcQuery("project.storage", null);
   const banner = storageBanner(storage.data, S);
   const readOnly = banner?.readOnly === true;
@@ -372,6 +394,10 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
                       >
                         {`\u200e${isRemote(project) ? `${project.host}:` : ""}${project.roots[0]}\u200e`}
                       </span>
+                      <BranchTag
+                        name={branchOf.get(project.id) ?? undefined}
+                        label={T.list.branch}
+                      />
                       {project.tags.map((tag) => (
                         <span
                           key={tag}

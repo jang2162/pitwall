@@ -1,6 +1,7 @@
 // 창 하나의 git 작업 트리 상태(docs/design/13-m2-plan.md M2-12): `git.watch` 를 열어 두고 `git.statusChanged` 가 오면 `git.status` 를
 // 바뀐 경로만 다시 읽어, 파일 트리 · 에디터 탭이 칠할 상태(글자 + 색 토큰)를 경로마다 내준다. 창마다 웹뷰가 따로라 모듈 상태로 둔다.
 // 커밋 툴 윈도우(M2-16) · 상태바(M2-13)도 같은 저장소를 읽는다 — `windowGitStatus()` 의 `entries()` · `workTree()` · `unsupported()`.
+// 상태바의 브랜치(git/branch-state.ts)는 같은 감시가 내는 `git.refsChanged` 를 구독하고, 작업 트리가 바뀌는 것을 여기서 듣는다.
 //
 // - 수명: `watchGitStatus` 가 연 `git.watch` 스트림과 `git.statusChanged` 구독은 돌려준 함수로 닫는다. 프로젝트 창의 `GitStatusWatch`
 //   가 활성 워크트리마다 열고, 활성 워크트리가 바뀌면 닫고 상태를 비운 뒤 새 워크트리로 다시 연다(`stream.cancel`). 창이 닫히면
@@ -27,7 +28,6 @@ import type {
   GitStatus,
   GitStatusEntry,
   GitUnsupported,
-  GitWatching,
   RpcClient,
   Subscription,
 } from "@pitwall/rpc-client";
@@ -328,7 +328,6 @@ export function watchGitStatus(
   projectId: string,
   worktree: string | undefined,
   store: GitStatusStore,
-  onWatching?: (watching: GitWatching) => void,
 ): () => void {
   const abort = new AbortController();
   const stopped = () => abort.signal.aborted;
@@ -410,7 +409,6 @@ export function watchGitStatus(
           { signal: current.signal },
         )) {
           if (current.signal.aborted) break;
-          onWatching?.(watching);
           if (watching.workTree === null) {
             missing();
             continue;

@@ -6708,6 +6708,55 @@
       ],
       "tier": "write"
     },
+    "git.projectBranches": {
+      "description": "프로젝트마다 주 루트를 담은 체크아웃의 브랜치(웰컴 창). git 을 실행하지 않고 `HEAD` 파일을 읽는다 — 분리된 HEAD 면 `null`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitProjectBranch": {
+            "properties": {
+              "branch": {
+                "description": "주 루트를 담은 체크아웃의 브랜치. 분리된 HEAD · 저장소 밖 · 읽지 못함이면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "projectId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "projectId",
+              "branch"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projects": {
+            "description": "이 Host 의 프로젝트(레지스트리 차례).",
+            "items": {
+              "$ref": "#/$defs/GitProjectBranch"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "projects"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "git.prompt.answer": {
       "description": "질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는\n답이면 invalid params.",
       "kind": "unary",
@@ -10627,6 +10676,190 @@
         },
         "required": [
           "projectId"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.worktrees": {
+      "description": "저장소의 작업 트리 — 메인 체크아웃과 연결 워크트리 — 와 각 HEAD(gix). 저장소가 없으면 `workTree: null` 과 빈 목록. 각 항목의\n`switchTo` 가 프로젝트 창이 그 작업 트리로 바꿀 때 보낼 활성 워크트리다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 있으면 그 워크트리 안의 프로젝트 루트를 담은 저장소를 본다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitWorktree": {
+            "properties": {
+              "current": {
+                "description": "요청한 창이 보고 있는 작업 트리.",
+                "type": "boolean"
+              },
+              "head": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RepoHead"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "그 작업 트리의 HEAD. 폴더가 사라졌거나 읽지 못하면 `null`."
+              },
+              "locked": {
+                "description": "`git worktree lock` 으로 잠겼다.",
+                "type": "boolean"
+              },
+              "main": {
+                "description": "저장소의 메인 체크아웃.",
+                "type": "boolean"
+              },
+              "missing": {
+                "description": "폴더가 없다(`git worktree prune` 이 치울 것).",
+                "type": "boolean"
+              },
+              "path": {
+                "description": "작업 트리 꼭대기(절대 경로).",
+                "type": "string"
+              },
+              "switchTo": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitWorktreeSwitch"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "이 프로젝트 창이 이 작업 트리로 바꿀 때 보낼 값. 이 프로젝트의 루트를 그 작업 트리 안에 둘 수 없으면(위조 판정 ·\n다른 저장소 체크아웃에 등록된 프로젝트) `null` — 목록에만 보인다."
+              }
+            },
+            "required": [
+              "path",
+              "head",
+              "main",
+              "current",
+              "locked",
+              "missing",
+              "switchTo"
+            ],
+            "type": "object"
+          },
+          "GitWorktreeSwitch": {
+            "properties": {
+              "worktree": {
+                "description": "활성 워크트리(`ActiveWorktree.top`). `null` 이면 프로젝트의 메인 체크아웃(주 루트의 작업 트리)으로 돌아간다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "worktree"
+            ],
+            "type": "object"
+          },
+          "RepoHead": {
+            "oneOf": [
+              {
+                "description": "브랜치에 있다. `name` 은 짧은 이름(`main`, `feat/x`), `commit` 은 그 끝 커밋의 해시.",
+                "properties": {
+                  "commit": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "branch",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "commit"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "아직 커밋이 없는 브랜치(새 저장소, `git checkout --orphan`).",
+                "properties": {
+                  "kind": {
+                    "const": "unborn",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "분리된 HEAD 가 가리키는 커밋(태그를 체크아웃해도 git 은 HEAD 에 커밋을 적는다).",
+                "properties": {
+                  "commit": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "detached",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "commit"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기(요청이 본 것). `null` 이면 「저장소 없음」 이고 목록은 빈다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktrees": {
+            "description": "메인 체크아웃(bare 저장소면 없다), 그다음 연결 워크트리(관리 폴더 이름순).",
+            "items": {
+              "$ref": "#/$defs/GitWorktree"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "workTree",
+          "worktrees"
         ],
         "type": "object"
       },

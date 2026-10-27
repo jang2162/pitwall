@@ -4846,6 +4846,7 @@ dependencies = [
  "libc",
  "pw-core",
  "pw-ext",
+ "pw-git",
  "pw-rpc",
  "pw-runtime",
  "schemars 1.2.3",

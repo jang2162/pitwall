@@ -361,9 +361,9 @@ describe("watchGitStatus", () => {
   it("does not read when the project has no repository", async () => {
     const host = fakeHost(null);
     const store = new GitStatusStore();
-    const watching = vi.fn();
-    const stop = watchGitStatus(host.client, "p1", undefined, store, watching);
-    await vi.waitFor(() => expect(watching).toHaveBeenCalledWith({ workTree: null }));
+    const stop = watchGitStatus(host.client, "p1", undefined, store);
+    // 「저장소 없음」 을 들었다는 진행 신호: 저장소를 기다리며 `fs.changed` 를 따른다.
+    await vi.waitFor(() => expect(host.following("fs.changed")).toBe(1));
     await new Promise((r) => setTimeout(r, 20));
     expect(host.reads).toEqual([]);
     stop();

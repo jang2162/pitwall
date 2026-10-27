@@ -12,6 +12,11 @@ export const PROJECT_OPEN_EVENT = "project://open";
 export interface ProjectOpen {
   /** 활성 워크트리의 꼭대기(`ActiveWorktree.top`). */
   worktree?: string;
+  /**
+   * 메인 체크아웃으로 돌아간다(파일 없이). 창 안의 브랜치 팝업이 워크트리를 바꿀 때만 넣는다(git/git-branch-feature.tsx) — Rust 의 요청에는
+   * 없다(메인 체크아웃 쪽은 파일과 함께 오거나 빈 요청이다).
+   */
+  mainCheckout?: boolean;
   /** 열 파일의 절대 경로. 디렉터리는 Rust 가 걸러 오지 않는다. */
   file?: string;
   /** 1부터. */
@@ -29,6 +34,7 @@ export function projectIdFromQuery(search: string): string | undefined {
 export function describeOpen(open: ProjectOpen): string | undefined {
   const parts: string[] = [];
   if (open.worktree) parts.push(`worktree ${open.worktree}`);
+  if (open.mainCheckout) parts.push("main checkout");
   if (open.file) {
     const at = [open.line, open.col].filter((n) => n !== undefined).join(":");
     parts.push(`file ${open.file}${at ? `:${at}` : ""}`);

@@ -1,9 +1,9 @@
-// Search Everywhere(⇧⇧, 10-ui §4.2, 결정 M1-D18): 화면 상단의 검색 팝업 하나에 탭 넷(전체 · 파일 · 액션 · 프로젝트)을 둔다. 액션 찾기
+// Search Everywhere(⇧⇧, 10-ui §4.2, 결정 M1-D18): 화면 상단의 검색 팝업 하나에 탭(전체 · 파일 · 액션 · 프로젝트 · 브랜치)을 둔다. 액션 찾기
 // (⌘⇧A) · 파일로 이동(⌘⇧O) · 프로젝트 스위처(⌘⇧P)는 이 팝업을 그 탭으로 연 것이고, 최근 파일(⌘E)은 탭 없이 최근 파일만 보이는 모드다.
 // 창에 cmdk 팝업이 하나뿐이라 둘이 서로 포커스를 뺏지 않는다(KeymapProvider 가 연다).
 //
 // - 액션 탭은 모든 창에 있다. 파일 · 최근 파일 · 프로젝트는 그 창이 `SearchSource` 로 등록한다(프로젝트 창, src/search-everywhere/
-//   project-search.tsx). 액션밖에 없는 창(웰컴 · 설정)에서는 탭 줄을 두지 않는다 — 예전 액션 찾기와 같다.
+//   project-search.tsx). 브랜치는 프로젝트 창의 git 기능이 등록한다(src/git/branch-search.tsx, M2-13). 액션밖에 없는 창(웰컴 · 설정)에서는 탭 줄을 두지 않는다 — 예전 액션 찾기와 같다.
 // - 목록의 거르기 · 순서는 cmdk 가 아니라 결과를 그리는 쪽이 정한다(`shouldFilter={false}`) — 파일 결과는 Host 가 이미 걸러
 //   점수순으로 준다. 액션은 액션 찾기와 같은 비교(ui/search-popup.tsx `searchFilter`, 한글 자모 단위)로 거른다.
 // - cmdk 는 질의가 바뀐 순간에만 첫 줄을 고른다. 그때는 옛 결과가 보이므로, 늦게 온 결과(파일)를 그리면 결과 쪽이 `onResults` 로
@@ -31,13 +31,13 @@ import { isComposingKey, keepOpenWhileComposing } from "../ui/ime";
 import { SEARCH_ITEM_CLASS, searchFilter } from "../ui/search-popup";
 
 /** 팝업의 탭. `recentFiles` 는 탭 줄 없이 최근 파일만 보인다(⌘E). */
-export type SearchMode = "all" | "files" | "actions" | "projects" | "recentFiles";
+export type SearchMode = "all" | "files" | "actions" | "projects" | "branches" | "recentFiles";
 
 /** 창이 등록하는 결과 묶음. 액션은 팝업이 직접 그린다. */
-export type SearchSourceId = "files" | "projects" | "recentFiles";
+export type SearchSourceId = "files" | "projects" | "branches" | "recentFiles";
 
 /** 탭 줄의 차례. */
-export const SEARCH_TABS = ["all", "files", "actions", "projects"] as const;
+export const SEARCH_TABS = ["all", "files", "actions", "projects", "branches"] as const;
 
 /** 전체 탭에서 그룹마다 보이는 수. */
 export const ALL_TAB_LIMIT = 6;
@@ -194,6 +194,7 @@ function SearchContent({
             onMore={() => onModeChange("actions")}
           />
           {group("projects", T.search.tabs.projects)}
+          {group("branches", T.search.tabs.branches)}
         </>
       );
     }

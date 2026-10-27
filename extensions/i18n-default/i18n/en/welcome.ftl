@@ -13,6 +13,8 @@ welcome-list-empty = No projects yet. Create a new project or open a folder.
 welcome-list-no-match = No matching projects
 welcome-list-favorite = Favorite
 welcome-list-remote = remote
+# 행의 현재 브랜치(스크린 리더 이름 · 툴팁). git 을 실행하지 않고 HEAD 를 읽는다(git.projectBranches)
+welcome-list-branch = Branch { $name }
 
 welcome-button-new-project = New Project…
 welcome-button-open-folder = Open Folder…

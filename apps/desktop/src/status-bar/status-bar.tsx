@@ -38,6 +38,8 @@ export interface StatusBarSlot {
  * 값 사이를 띄워 두어 새 항목이 기존 값을 바꾸지 않고 끼어든다. 아직 없는 항목의 자리도 미리 둔다(M1 계획의 행).
  */
 export const STATUS_SLOTS = {
+  /** 브랜치 · ahead/behind · 진행 중 작업(M2-13, src/git/branch-status.tsx). 왼쪽 맨 앞. */
+  branch: { side: "left", order: 0 },
   /** 단일 파일 창의 「단일 파일」 · 「프로젝트로 열기」(M1-24). 그 창에는 Host 항목이 없다. */
   fileWindow: { side: "left", order: 50 },
   host: { side: "left", order: 100 },

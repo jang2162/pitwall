@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 pw-core = { path = "../pw-core" }
 pw-ext = { path = "../pw-ext" }
+# `{branch}` 는 pw-git 의 `HEAD` 읽기(`pw_git::worktree::read_branch`)를 웰컴 창과 함께 쓴다.
+pw-git = { path = "../pw-git" }
 pw-rpc = { path = "../pw-rpc" }
 pw-runtime = { path = "../pw-runtime" }
 schemars = { workspace = true }

@@ -364,3 +364,18 @@ action = "terminal.paste"
 win = "ctrl+shift+v"
 linux = "ctrl+shift+v"
 when = "terminalFocus"
+
+# Git(10-ui §4.2 「Git (VCS)」, 13-m2-plan 「공유 부품의 주인」 — 행마다 이 묶음 아래에 더한다). 프로젝트 창에만 등록된다.
+# 브랜치 팝업 · VCS 작업 팝업(M2-13, src/git/git-branch-feature.tsx). 매칭은 물리 키 자리라 한글 입력 상태에서도 같다.
+
+[[bindings]]
+action = "git.branches"
+mac = "ctrl+shift+b"
+win = "ctrl+shift+`"
+linux = "ctrl+shift+`"
+
+[[bindings]]
+action = "git.vcsOperations"
+mac = "ctrl+v"
+win = "alt+`"
+linux = "alt+`"
