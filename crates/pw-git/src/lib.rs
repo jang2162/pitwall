@@ -18,6 +18,8 @@
 //! - [`file_history`]: 이름 바뀜을 따라가는 파일 히스토리 — `git.fileHistory`(M2-05).
 //! - [`stage`]: 스테이징 · 되돌리기 · stash — `git.stage*` · `git.unstage*` · `git.discard*` · `git.stash.*`(M2-07).
 //! - [`worktree`]: 워크트리 목록 · 체크아웃의 브랜치 — `git.worktrees` · `git.projectBranches`(M2-13).
+//! - [`executable`]: 설정 창 「Git」 의 실행 파일 · 버전 · 쓰기 꺼짐 이유 — `git.executable`(M2-20).
+//! - [`outgoing`]: 푸시 다이얼로그의 보낼 커밋 — `git.push.commits`(M2-20).
 //! - `testing`(시험 · `test-support` 기능): 시험 저장소 도우미.
 //!
 //! 이 크레이트의 모듈 배치 · 메서드 등록([`methods::register`])의 주인은 M2-01 이다. 이후 행은 모듈을 나눠(`status` · `log` ·
@@ -29,10 +31,12 @@ pub mod cli;
 pub mod commit;
 pub mod conflict;
 pub mod diff;
+pub mod executable;
 pub mod file_history;
 pub mod history;
 pub mod log;
 pub mod methods;
+pub mod outgoing;
 pub mod remote;
 pub mod repo;
 pub mod stage;

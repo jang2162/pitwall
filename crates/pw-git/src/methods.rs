@@ -99,6 +99,8 @@ pub fn register(router: &mut Router, git: Arc<Git>) {
     crate::worktree::register(router, Arc::clone(&git));
     crate::blame::methods::register(router, Arc::clone(&git));
     crate::file_history::methods::register(router, Arc::clone(&git));
+    crate::executable::register(router, Arc::clone(&git));
+    crate::outgoing::register(router, Arc::clone(&git));
     router.unary(GitRepoMethod, move |_ctx, params: GitRepoParams| {
         let git = Arc::clone(&git);
         async move {

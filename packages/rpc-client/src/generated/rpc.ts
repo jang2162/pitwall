@@ -133,6 +133,11 @@ export type UnaryMethods = {
 	 */
 	"git.discardLines": { params: GitDiscardLinesParams; result: GitWorkTree };
 	/**
+	 * 설정 창 「Git」: git 실행 파일 경로 · 찾은 버전 · 쓰기를 끈 이유. 로그인 셸의 PATH 로 찾고 고정 argv `git --version` 만
+	 * 띄운다(작업 디렉터리는 어느 프로젝트 안도 아닌 곳). 처음이면 로그인 셸을 기다린다.
+	 */
+	"git.executable": { params: null; result: GitExecutable };
+	/**
 	 * fetch: 원격 하나 또는 전부, prune 선택. 인증은 askpass 로 창에 묻는다.
 	 */
 	"git.fetch": { params: GitFetchParams; result: GitFetchResult };
@@ -181,6 +186,11 @@ export type UnaryMethods = {
 	 * git 의 거절 원문으로 실패한다(`2004`).
 	 */
 	"git.push": { params: GitPushParams; result: GitPushResult };
+	/**
+	 * 푸시 다이얼로그의 보낼 커밋: `base..refs/heads/<branch>`(`base` 가 없으면 그 원격의 원격 추적 ref 전부를 뺀다). gix 로만
+	 * 읽는다(미신뢰 프로젝트에서도 프로세스 0). 없는 브랜치 · 커밋이면 invalid params.
+	 */
+	"git.push.commits": { params: GitPushCommitsParams; result: GitPushCommits };
 	/**
 	 * push 계획: `git.push` 가 같은 입력으로 보낼 곳 · 터미널과의 차이 · force 의 기대값 · 거절 이유. gix 로만 읽는다(미신뢰
 	 * 프로젝트에서도 프로세스 0). 푸시 다이얼로그(M2-20)가 보내기 전에 보인다.
@@ -570,6 +580,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.diff": {"name":"git.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffParams","output":"GitDiff","doc":" 두 쪽(커밋 · index · 작업 트리)의 diff: 바뀐 파일 목록(상태 · 이름 바뀜 · 모드 · 바이너리 · 서브모듈 포인터 · 생성 파일 ·\n 대용량)과 파일별 hunk(`git diff --find-renames -U3` 과 같다). 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.discard": {"name":"git.discard","kind":"unary","tier":"write","roles":["owner"],"params":"GitDiscardParams","output":"GitDiscardResult","doc":" 작업 트리의 변경을 버린다(`git restore --worktree` — index 의 것으로). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n untracked · intent-to-add 경로는 지우지도 비우지도 않고 `untracked` 로 돌려준다. 작업 트리가 바뀌므로 미저장 문서를 먼저 확인한다(M2-06).\n","mcp":false,"fileScope":false},
 	"git.discardLines": {"name":"git.discardLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitDiscardLinesParams","output":"GitWorkTree","doc":" 작업 트리 diff 의 hunk · 줄을 골라 버린다(작업 트리에 `git apply -R`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n 작업 트리에서 지운 파일은 파일 단위(`git.discard`)로 되살린다.\n","mcp":false,"fileScope":false},
+	"git.executable": {"name":"git.executable","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"GitExecutable","doc":" 설정 창 「Git」: git 실행 파일 경로 · 찾은 버전 · 쓰기를 끈 이유. 로그인 셸의 PATH 로 찾고 고정 argv `git --version` 만\n 띄운다(작업 디렉터리는 어느 프로젝트 안도 아닌 곳). 처음이면 로그인 셸을 기다린다.\n","mcp":false,"fileScope":false},
 	"git.fetch": {"name":"git.fetch","kind":"unary","tier":"write","roles":["owner"],"params":"GitFetchParams","output":"GitFetchResult","doc":" fetch: 원격 하나 또는 전부, prune 선택. 인증은 askpass 로 창에 묻는다.\n","mcp":false,"fileScope":false},
 	"git.fileHistory": {"name":"git.fileHistory","kind":"stream","tier":"read","roles":["owner"],"params":"GitFileHistoryParams","output":"FileHistoryChunk","doc":" 이름 바뀜을 따라가는 파일 히스토리(F5-16 — `git log --follow --name-status` 와 같은 커밋 · 순서 · 상태). 행마다 해시 ·\n 부모 · 제목 · 작성자 · 시각 · 그 커밋에서의 경로 · 바뀜(A · M · D · R · C · T)과 이름 바뀜의 원래 경로. 첫 청크는 200행\n 이하, 그 뒤는 500행 이하이고 모인 행은 100 ms 안에 보낸다. 저장소가 없거나 HEAD 가 태어나지 않았으면 청크 없이 끝난다.\n 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 시작 리비전에서 폴더인 경로는 invalid params. 걷다가 UTF-8 이 아닌 경로가\n 나오면 그때까지의 행을 보낸 뒤 invalid params 로 끝난다(경로를 U+FFFD 로 바꿔 싣지 않는다).\n","mcp":false,"fileScope":false},
 	"git.log": {"name":"git.log","kind":"stream","tier":"read","roles":["owner"],"params":"GitLogParams","output":"LogChunk","doc":" 커밋 로그(F5-1 · F5-2). 행마다 해시 · 부모 · 제목 · 작성자 · 시각 · ref 장식 · 레인 배치. 첫 청크는 200행을 배치하자마자\n 보내고(`total` 이 실린다) 나머지는 500행씩. 브랜치 밖의 필터가 켜지면 행의 `graph` 가 `null` 이고 맞는 커밋만 온다.\n 저장소가 없으면 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 모르는 ref, 잘못된 정규식 · 경로 · 해시는 invalid params.\n","mcp":false,"fileScope":false},
@@ -584,6 +595,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.prompts": {"name":"git.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"GitPromptsParams","output":"GitPromptEvent","doc":" 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다\n (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.\n","mcp":false,"fileScope":false},
 	"git.pull": {"name":"git.pull","kind":"unary","tier":"write","roles":["owner"],"params":"GitPullParams","output":"GitPullResult","doc":" pull(merge 또는 rebase). 작업 트리 전체가 미저장 확인 대상이다. 충돌로 멈추면 `stopped: true` 와 그 진행 중 작업.\n","mcp":false,"fileScope":false},
 	"git.push": {"name":"git.push","kind":"unary","tier":"write","roles":["owner"],"params":"GitPushParams","output":"GitPushResult","doc":" push: 로컬 브랜치 하나를 그 원격 ref 로(대상은 `git.push.plan` 과 같은 계산). upstream 설정 선택. force 는\n `forceWithLease` 뿐이다. git 이 거절할 대상이면 `2102`, `expectedTarget` 와 대상이 다르면 `-32004`, 원격이 앞서 있으면\n git 의 거절 원문으로 실패한다(`2004`).\n","mcp":false,"fileScope":false},
+	"git.push.commits": {"name":"git.push.commits","kind":"unary","tier":"read","roles":["owner"],"params":"GitPushCommitsParams","output":"GitPushCommits","doc":" 푸시 다이얼로그의 보낼 커밋: `base..refs/heads/<branch>`(`base` 가 없으면 그 원격의 원격 추적 ref 전부를 뺀다). gix 로만\n 읽는다(미신뢰 프로젝트에서도 프로세스 0). 없는 브랜치 · 커밋이면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.push.plan": {"name":"git.push.plan","kind":"unary","tier":"read","roles":["owner"],"params":"GitPushPlanParams","output":"GitPushPlanResult","doc":" push 계획: `git.push` 가 같은 입력으로 보낼 곳 · 터미널과의 차이 · force 의 기대값 · 거절 이유. gix 로만 읽는다(미신뢰\n 프로젝트에서도 프로세스 0). 푸시 다이얼로그(M2-20)가 보내기 전에 보인다.\n","mcp":false,"fileScope":false},
 	"git.rebase": {"name":"git.rebase","kind":"unary","tier":"write","roles":["owner"],"params":"GitRebaseParams","output":"GitHistoryResult","doc":" 비대화형 rebase(`git rebase <upstream> [<branch>]`). 충돌이면 `outcome: stopped` 와 진행 중 작업, 끝나면 `moved` 가 그 브랜치의\n 이전 끝.\n","mcp":false,"fileScope":false},
 	"git.refs": {"name":"git.refs","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRefs","doc":" 로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.\n","mcp":false,"fileScope":false},
@@ -1766,6 +1778,23 @@ export type GitDiscardResult = {
 	untracked: string[],
 };
 
+export type GitExecutable = {
+	/**  전역 설정 `[git] path` 의 값. 없으면 `null`(그때 `git` 을 찾는다). */
+	configured: string | null,
+	/**  찾은 실행 파일(절대 경로). 찾지 못했으면 `null`. */
+	program: string | null,
+	/**  `git --version` 에서 읽은 버전(`2.54.0`). 찾지 못했거나 읽지 못했으면 `null`. */
+	version: string | null,
+	/**  쓰기를 허락하는 가장 낮은 버전(`2.40`). */
+	minimum: string,
+	/**  쓰기를 끈 이유. 쓸 수 있으면 `null`. */
+	writesOff: GitWritesOff | null,
+	/**  찾아본 PATH 를 읽은 곳(로그인 셸, 읽지 못했으면 앱 프로세스). */
+	pathSource: RuntimeSource,
+	/**  로그인 셸을 읽지 못했으면 그 이유(그때 앱 프로세스의 PATH 로 찾았다). */
+	shellFailure: string | null,
+};
+
 export type GitFetchParams = {
 	projectId: string,
 	/**  활성 워크트리의 꼭대기(`git.repo` 와 같다). */
@@ -1997,6 +2026,28 @@ export type GitPullResult = {
 	operation: OperationInfo | null,
 	/**  충돌로 멈췄다 — 실패가 아니라 충돌을 풀고 `git.operation.continue`(또는 `abort`)할 차례다. */
 	stopped: boolean,
+};
+
+export type GitPushCommits = {
+	/**  저장소의 작업 트리 꼭대기. 저장소가 없으면 `null` 이고 목록은 비었다. */
+	workTree: string | null,
+	/**  보낼 커밋, 커밋 시각이 새것부터(`git log` 의 기본 차례). */
+	commits: OutgoingCommit[],
+	/**  `limit` 개에서 잘랐다. */
+	truncated: boolean,
+};
+
+export type GitPushCommitsParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  보낼 로컬 브랜치의 짧은 이름(`git.push.plan` 의 `branch`). */
+	branch: string,
+	/**  원격 이름(`git.push.plan` 의 `remote`). `base` 가 없을 때 뺄 원격 추적 ref 의 원격이다. */
+	remote: string,
+	/**  원격에 있다고 아는 커밋(전체 해시 — `git.push.plan` 의 `lease.commit`). 없으면 그 원격의 원격 추적 ref 전부를 뺀다. */
+	base?: string | null,
+	/**  1 ~ [`MAX_COMMITS`]. */
+	limit: number,
 };
 
 /**  창이 기대하는 push 대상: `git.push.plan` 의 `remote`(주소면 사용자 정보를 지운 것) · `remoteRef` 그대로. */
@@ -2483,6 +2534,14 @@ export type GitWorktrees = {
 	worktrees: GitWorktree[],
 };
 
+export type GitWritesOff = 
+/**  실행 파일을 찾지 못했다. `program` 은 찾은 이름(설정값 또는 `git`). */
+{ kind: "notFound"; program: string } | 
+/**  버전이 `minimum` 미만이다. */
+{ kind: "tooOld"; version: string } | 
+/**  `git --version` 을 읽지 못했다 — 그 까닭(영어 원문). */
+{ kind: "unreadable"; reason: string };
+
 /**
  *  한 행의 그래프. 행의 높이를 위 · 가운데(노드) · 아래로 나누어, 간선은 각각 「윗변 → 노드」, 「노드 → 아랫변」 이다. 곧게
  *  지나가는 간선은 싣지 않는다 — 앞 행에서 이어 계산한다(머리 주석).
@@ -2935,6 +2994,17 @@ export type OperationStep = {
 	/**  지금 단계(1부터). */
 	current: number,
 	total: number,
+};
+
+export type OutgoingCommit = {
+	/**  전체 해시. */
+	hash: string,
+	/**  메시지 첫 줄(git `%s`). */
+	subject: string,
+	/**  작성자 이름(mailmap 적용). */
+	author: string,
+	/**  작성 시각(유닉스 초). */
+	authorTime: number,
 };
 
 export type PathParams = {

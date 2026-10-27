@@ -5069,6 +5069,192 @@
       ],
       "tier": "write"
     },
+    "git.executable": {
+      "description": "설정 창 「Git」: git 실행 파일 경로 · 찾은 버전 · 쓰기를 끈 이유. 로그인 셸의 PATH 로 찾고 고정 argv `git --version` 만\n띄운다(작업 디렉터리는 어느 프로젝트 안도 아닌 곳). 처음이면 로그인 셸을 기다린다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "GitWritesOff": {
+            "oneOf": [
+              {
+                "description": "실행 파일을 찾지 못했다. `program` 은 찾은 이름(설정값 또는 `git`).",
+                "properties": {
+                  "kind": {
+                    "const": "notFound",
+                    "type": "string"
+                  },
+                  "program": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "program"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "버전이 `minimum` 미만이다.",
+                "properties": {
+                  "kind": {
+                    "const": "tooOld",
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "version"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`git --version` 을 읽지 못했다 — 그 까닭(영어 원문).",
+                "properties": {
+                  "kind": {
+                    "const": "unreadable",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RuntimeSource": {
+            "description": "환경을 실제로 어디서 얻었는가.",
+            "oneOf": [
+              {
+                "description": "로그인 셸. `shell` 은 셸 실행 파일의 경로.",
+                "properties": {
+                  "kind": {
+                    "const": "loginShell",
+                    "type": "string"
+                  },
+                  "shell": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "shell"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "앱 프로세스의 환경(로그인 셸을 읽지 못했다).",
+                "properties": {
+                  "kind": {
+                    "const": "process",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "디렉터리의 설정 파일로 환경을 만드는 제공자(mise 등). `files` 는 그 파일들의 경로.",
+                "properties": {
+                  "files": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "configFiles",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "files"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configured": {
+            "description": "전역 설정 `[git] path` 의 값. 없으면 `null`(그때 `git` 을 찾는다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "minimum": {
+            "description": "쓰기를 허락하는 가장 낮은 버전(`2.40`).",
+            "type": "string"
+          },
+          "pathSource": {
+            "$ref": "#/$defs/RuntimeSource",
+            "description": "찾아본 PATH 를 읽은 곳(로그인 셸, 읽지 못했으면 앱 프로세스)."
+          },
+          "program": {
+            "description": "찾은 실행 파일(절대 경로). 찾지 못했으면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shellFailure": {
+            "description": "로그인 셸을 읽지 못했으면 그 이유(그때 앱 프로세스의 PATH 로 찾았다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "`git --version` 에서 읽은 버전(`2.54.0`). 찾지 못했거나 읽지 못했으면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "writesOff": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GitWritesOff"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "쓰기를 끈 이유. 쓸 수 있으면 `null`."
+          }
+        },
+        "required": [
+          "configured",
+          "program",
+          "version",
+          "minimum",
+          "writesOff",
+          "pathSource",
+          "shellFailure"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "git.fetch": {
       "description": "fetch: 원격 하나 또는 전부, prune 선택. 인증은 askpass 로 창에 묻는다.",
       "kind": "unary",
@@ -7874,6 +8060,117 @@
         "owner"
       ],
       "tier": "write"
+    },
+    "git.push.commits": {
+      "description": "푸시 다이얼로그의 보낼 커밋: `base..refs/heads/<branch>`(`base` 가 없으면 그 원격의 원격 추적 ref 전부를 뺀다). gix 로만\n읽는다(미신뢰 프로젝트에서도 프로세스 0). 없는 브랜치 · 커밋이면 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "base": {
+            "default": null,
+            "description": "원격에 있다고 아는 커밋(전체 해시 — `git.push.plan` 의 `lease.commit`). 없으면 그 원격의 원격 추적 ref 전부를 뺀다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch": {
+            "description": "보낼 로컬 브랜치의 짧은 이름(`git.push.plan` 의 `branch`).",
+            "type": "string"
+          },
+          "limit": {
+            "description": "1 ~ [`MAX_COMMITS`].",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "remote": {
+            "description": "원격 이름(`git.push.plan` 의 `remote`). `base` 가 없을 때 뺄 원격 추적 ref 의 원격이다.",
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "branch",
+          "remote",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "OutgoingCommit": {
+            "properties": {
+              "author": {
+                "description": "작성자 이름(mailmap 적용).",
+                "type": "string"
+              },
+              "authorTime": {
+                "description": "작성 시각(유닉스 초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "hash": {
+                "description": "전체 해시.",
+                "type": "string"
+              },
+              "subject": {
+                "description": "메시지 첫 줄(git `%s`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "hash",
+              "subject",
+              "author",
+              "authorTime"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "commits": {
+            "description": "보낼 커밋, 커밋 시각이 새것부터(`git log` 의 기본 차례).",
+            "items": {
+              "$ref": "#/$defs/OutgoingCommit"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "`limit` 개에서 잘랐다.",
+            "type": "boolean"
+          },
+          "workTree": {
+            "description": "저장소의 작업 트리 꼭대기. 저장소가 없으면 `null` 이고 목록은 비었다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "workTree",
+          "commits",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
     },
     "git.push.plan": {
       "description": "push 계획: `git.push` 가 같은 입력으로 보낼 곳 · 터미널과의 차이 · force 의 기대값 · 거절 이유. gix 로만 읽는다(미신뢰\n프로젝트에서도 프로세스 0). 푸시 다이얼로그(M2-20)가 보내기 전에 보인다.",
