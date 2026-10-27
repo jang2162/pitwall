@@ -98,6 +98,11 @@ export type UnaryMethods = {
 	 */
 	"git.commit": { params: GitCommitParams; result: GitCommitResult };
 	/**
+	 * `commit.template` 파일의 내용(머리 주석) — 창이 비어 있는 메시지 칸에 미리 채운다. 미신뢰 프로젝트는 저장소 안의 설정이
+	 * 정한 경로를 읽지 않는다.
+	 */
+	"git.commit.template": { params: GitCommitTemplateParams; result: GitCommitTemplate };
+	/**
 	 * 충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.
 	 */
 	"git.conflict.get": { params: GitConflictParams; result: GitConflictDetail };
@@ -573,6 +578,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.checkout": {"name":"git.checkout","kind":"unary","tier":"write","roles":["owner"],"params":"GitCheckoutParams","output":"GitCheckoutResult","doc":" 체크아웃: 로컬 브랜치, 원격 브랜치(추적 브랜치를 만든다), 커밋(분리된 HEAD). 바뀔 경로가 미저장 문서와 겹치면 창이 먼저\n 확인한다. 로컬 변경 때문에 못 하는 등 git 이 거절하면 그 원문으로 실패한다(`2004`). 잠금을 기다리는 사이 HEAD · 대상이\n 움직였으면 아무것도 하지 않고 conflict.\n","mcp":false,"fileScope":false},
 	"git.cherryPick": {"name":"git.cherryPick","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 cherry-pick 한다. 하나가 충돌하면 앞의 것은 커밋된 채 `outcome: stopped` — 나머지는\n `git.operation.continue` 가 잇는다.\n","mcp":false,"fileScope":false},
 	"git.commit": {"name":"git.commit","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitParams","output":"GitCommitResult","doc":" index 를 커밋한다(`git commit -F -`, 메시지는 stdin). 훅 · 서명 · 정리는 사람의 git 설정대로 돌고, 훅이 실패하면 커밋하지\n 않고 git 오류(`2004`, `data.stderr` 에 훅의 출력)로 끝난다. 성공해도 훅의 출력은 `output` 에 있다.\n","mcp":false,"fileScope":false},
+	"git.commit.template": {"name":"git.commit.template","kind":"unary","tier":"read","roles":["owner"],"params":"GitCommitTemplateParams","output":"GitCommitTemplate","doc":" `commit.template` 파일의 내용(머리 주석) — 창이 비어 있는 메시지 칸에 미리 채운다. 미신뢰 프로젝트는 저장소 안의 설정이\n 정한 경로를 읽지 않는다.\n","mcp":false,"fileScope":false},
 	"git.conflict.get": {"name":"git.conflict.get","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictParams","output":"GitConflictDetail","doc":" 충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.\n","mcp":false,"fileScope":false},
 	"git.conflict.resolve": {"name":"git.conflict.resolve","kind":"unary","tier":"write","roles":["owner"],"params":"GitConflictResolveParams","output":"GitConflicts","doc":" 충돌 경로 하나를 해결한다. 작업 트리 파일이 `expectedVersion` 그대로일 때만(아니면 `CONFLICT`): `content` 면 파일에 쓰고\n (원자 쓰기, 프로젝트 파일 쓰기와 같은 경로 규칙 — 앞 폴더가 심링크면 거절) `git add`, `side` 면 그쪽을\n `git checkout --ours|--theirs` 로 꺼내 `git add`(지운 쪽이면 `git rm`, 서브모듈이면 index 만). 미저장 문서 확인을 거친다. 해결\n 뒤의 충돌 목록을 돌려준다.\n","mcp":false,"fileScope":false},
 	"git.conflicts": {"name":"git.conflicts","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictsParams","output":"GitConflicts","doc":" 충돌 중인 경로 목록: index 단계로 가른 종류(양쪽 수정 · 우리/그쪽 삭제 · 양쪽 추가 …)와 바이너리 · 서브모듈 · 심링크 표시.\n 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
@@ -1626,6 +1632,20 @@ export type GitCommitResult = {
 	workTree: string,
 	/**  git 과 훅이 stderr 에 낸 원문(훅의 stdout 도 git 이 stderr 로 돌린다). 없으면 빈 문자열. */
 	output: string,
+};
+
+export type GitCommitTemplate = {
+	/**
+	 *  템플릿 파일의 내용(UTF-8 이 아닌 바이트는 U+FFFD). 설정이 없거나 · 저장소가 없거나 · 파일을 읽지 못하거나 ·
+	 *  [`TEMPLATE_MAX`] 를 넘으면 `null` 이다.
+	 */
+	template: string | null,
+};
+
+export type GitCommitTemplateParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`git.repo` 와 같다). */
+	worktree?: string | null,
 };
 
 export type GitCommitsParams = {
@@ -3471,6 +3491,12 @@ export type SubmodulePointer = {
 	old: string | null,
 	/**  새 커밋. 작업 트리 쪽이면 체크아웃된 서브모듈의 HEAD. 그쪽에 서브모듈이 없으면(지워짐 · 파일이나 링크로 바뀜) `null`. */
 	new: string | null,
+	/**
+	 *  새 쪽이 작업 트리이고 체크아웃된 서브모듈 안에 커밋하지 않은 변경이 있다(HEAD ↔ index · index ↔ 작업 트리 — `git diff` 의
+	 *  `Subproject commit <해시>-dirty`. untracked 파일만 있으면 git 처럼 달지 않는다). 포인터가 그대로여도 이것만으로 목록에 든다(`old == new`). 서브모듈은 바깥
+	 *  프로젝트의 신뢰로 열고 안의 서브모듈은 보지 않는다. 커밋 쪽은 늘 거짓이다.
+	 */
+	dirty: boolean,
 };
 
 /**

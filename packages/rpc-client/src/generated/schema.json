@@ -3368,6 +3368,50 @@
       ],
       "tier": "write"
     },
+    "git.commit.template": {
+      "description": "`commit.template` 파일의 내용(머리 주석) — 창이 비어 있는 메시지 칸에 미리 채운다. 미신뢰 프로젝트는 저장소 안의 설정이\n정한 경로를 읽지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`git.repo` 와 같다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "template": {
+            "description": "템플릿 파일의 내용(UTF-8 이 아닌 바이트는 U+FFFD). 설정이 없거나 · 저장소가 없거나 · 파일을 읽지 못하거나 ·\n[`TEMPLATE_MAX`] 를 넘으면 `null` 이다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "template"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "git.conflict.get": {
       "description": "충돌 경로 하나: base · ours · theirs 내용과 자동 병합 결과 · 구간(diff3). 충돌 중이 아닌 경로면 not found.",
       "kind": "unary",
@@ -4768,6 +4812,10 @@
           },
           "SubmodulePointer": {
             "properties": {
+              "dirty": {
+                "description": "새 쪽이 작업 트리이고 체크아웃된 서브모듈 안에 커밋하지 않은 변경이 있다(HEAD ↔ index · index ↔ 작업 트리 — `git diff` 의\n`Subproject commit <해시>-dirty`. untracked 파일만 있으면 git 처럼 달지 않는다). 포인터가 그대로여도 이것만으로 목록에 든다(`old == new`). 서브모듈은 바깥\n프로젝트의 신뢰로 열고 안의 서브모듈은 보지 않는다. 커밋 쪽은 늘 거짓이다.",
+                "type": "boolean"
+              },
               "new": {
                 "description": "새 커밋. 작업 트리 쪽이면 체크아웃된 서브모듈의 HEAD. 그쪽에 서브모듈이 없으면(지워짐 · 파일이나 링크로 바뀜) `null`.",
                 "type": [
@@ -4785,7 +4833,8 @@
             },
             "required": [
               "old",
-              "new"
+              "new",
+              "dirty"
             ],
             "type": "object"
           }

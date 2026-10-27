@@ -492,3 +492,53 @@ async fn call(connection: &mut pw_core::Connection, id: i64, params: Value) -> V
         }
     }
 }
+
+/// gix(이 프로세스)가 사람의 전역 설정 대신 `<base>/home/.gitconfig` 를 읽게 한다. 그 파일을 돌려준다.
+fn isolate_global_config(base: &std::path::Path) -> std::path::PathBuf {
+    let home = base.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let config = home.join(".gitconfig");
+    fs::write(&config, "").unwrap();
+    // SAFETY: nextest 는 시험마다 프로세스가 따로이고, 이 시험은 저장소를 열기 전에 부른다.
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_CONFIG_HOME", home.join(".config"));
+        std::env::set_var("GIT_CONFIG_GLOBAL", &config);
+        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
+    }
+    config
+}
+
+/// `git.commit.template`(M2-16): 미신뢰 프로젝트는 저장소 설정이 정한 템플릿을 읽지 않고 사람의 전역 설정의 것(`~` 는 홈)을 읽는다.
+/// 신뢰하면 저장소 설정의 것(상대 경로는 작업 트리 꼭대기 기준)이 앞선다. 너무 크거나 없는 파일 · 설정 없음은 `null`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_commit_template_comes_from_trusted_config_only() {
+    let f = WriteFixture::new(false);
+    let global = isolate_global_config(f.repo.base());
+    let p = GitCommitTemplateParams {
+        project_id: f.project.clone(),
+        worktree: None,
+    };
+    let read = || template(f.write.git(), &p).unwrap().template;
+    assert_eq!(read(), None);
+
+    let home = global.parent().unwrap();
+    fs::write(home.join("tpl.txt"), "global subject\n\n# global\n").unwrap();
+    fs::write(&global, "[commit]\n\ttemplate = ~/tpl.txt\n").unwrap();
+    f.repo.write("local.txt", "local subject\n");
+    f.repo.git(&["config", "commit.template", "local.txt"]);
+    // 저장소 설정이 저장소 밖 비밀 파일을 가리켜도 미신뢰면 읽지 않는다.
+    assert_eq!(read().as_deref(), Some("global subject\n\n# global\n"));
+
+    f.projects.set_trust(&f.project, true).unwrap();
+    assert_eq!(read().as_deref(), Some("local subject\n"));
+
+    f.repo
+        .write("local.txt", &"x".repeat(TEMPLATE_MAX as usize + 1));
+    assert_eq!(read(), None);
+    f.repo
+        .write("local.txt", &"y".repeat(TEMPLATE_MAX as usize));
+    assert_eq!(read().map(|t| t.len()), Some(TEMPLATE_MAX as usize));
+    fs::remove_file(f.repo.root().join("local.txt")).unwrap();
+    assert_eq!(read(), None);
+}

@@ -101,6 +101,8 @@ struct Entry {
     new: Option<Side>,
     /// 작업 트리 쪽이 실행 비트만 바뀌었다 — 내용을 다시 읽지 않는다.
     mode_only: bool,
+    /// 작업 트리 쪽 서브모듈 안에 커밋하지 않은 변경이 있다(`git diff` 의 `-dirty`).
+    dirty: bool,
 }
 
 impl Entry {
@@ -352,6 +354,7 @@ fn index_changes(
                     old: None,
                     new: Some(side(&location, entry_mode, &id)),
                     mode_only: false,
+                    dirty: false,
                 },
                 ChangeRef::Deletion {
                     location,
@@ -363,6 +366,7 @@ fn index_changes(
                     old: Some(side(&location, entry_mode, &id)),
                     new: None,
                     mode_only: false,
+                    dirty: false,
                 },
                 ChangeRef::Modification {
                     location,
@@ -380,6 +384,7 @@ fn index_changes(
                     old: Some(side(&location, previous_entry_mode, &previous_id)),
                     new: Some(side(&location, entry_mode, &id)),
                     mode_only: false,
+                    dirty: false,
                 },
                 ChangeRef::Rewrite {
                     source_location,
@@ -394,6 +399,7 @@ fn index_changes(
                     old: Some(side(&source_location, source_entry_mode, &source_id)),
                     new: Some(side(&location, entry_mode, &id)),
                     mode_only: false,
+                    dirty: false,
                 },
             };
             out.push(entry);
@@ -474,12 +480,14 @@ fn worktree_changes(
                 old: Some(old),
                 new: None,
                 mode_only: false,
+                dirty: false,
             },
             EntryStatus::Change(WorktreeChange::Type { worktree_mode }) => Entry {
                 status: FileStatus::TypeChanged,
                 old: Some(old),
                 new: Some(worktree(worktree_mode)),
                 mode_only: false,
+                dirty: false,
             },
             EntryStatus::Change(WorktreeChange::Modification {
                 executable_bit_changed,
@@ -498,6 +506,7 @@ fn worktree_changes(
                     old: Some(old),
                     new: Some(worktree(mode)),
                     mode_only: content_change.is_none(),
+                    dirty: false,
                 }
             }
             // `git add --intent-to-add`: index 에는 빈 자리만 있다 — 새 파일로 보인다(`git diff` 와 같다).
@@ -506,6 +515,7 @@ fn worktree_changes(
                 old: None,
                 new: Some(worktree(entry.mode)),
                 mode_only: false,
+                dirty: false,
             },
             EntryStatus::Change(WorktreeChange::SubmoduleModification(_))
             | EntryStatus::NeedsUpdate(_)
@@ -535,6 +545,7 @@ fn worktree_changes(
                 old,
                 new: None,
                 mode_only: false,
+                dirty: false,
             },
             Some((meta, _)) if !meta.is_dir() => Entry {
                 status: FileStatus::TypeChanged,
@@ -545,9 +556,10 @@ fn worktree_changes(
                     id: None,
                 }),
                 mode_only: false,
+                dirty: false,
             },
-            Some((_, place)) => match submodule_head(opened, &place) {
-                Some(head) if head != id => Entry {
+            Some((_, place)) => match submodule_state(opened, &place) {
+                Some((head, dirty)) if head != id || dirty => Entry {
                     status: FileStatus::Modified,
                     old,
                     new: Some(Side {
@@ -556,6 +568,7 @@ fn worktree_changes(
                         id: Some(head),
                     }),
                     mode_only: false,
+                    dirty,
                 },
                 _ => continue,
             },
@@ -580,16 +593,76 @@ fn file_mode(meta: &std::fs::Metadata) -> IndexMode {
     IndexMode::FILE
 }
 
-/// 체크아웃된 서브모듈의 HEAD. `dir` 은 작업 트리 안의 폴더다(링크가 아니고 든 폴더가 규칙 A 를 지났다). 체크아웃되지
-/// 않았거나(빈 폴더) 그 자리가 서브모듈 저장소가 아니면 `None` — 그때는 git 처럼 바뀐 것으로 보지 않는다(index 의 커밋과 같다고
-/// 본다).
-fn submodule_head(opened: &Opened, dir: &Path) -> Option<ObjectId> {
-    let repo = crate::repo::discover(dir, opened.trusted).ok()?.ok()?;
+/// 체크아웃된 서브모듈의 HEAD 와 그 안에 커밋하지 않은 변경이 있는지(`git diff` 의 `-dirty`). `dir` 은 작업 트리 안의 폴더다(링크가
+/// 아니고 든 폴더가 규칙 A 를 지났다). 체크아웃되지 않았거나(빈 폴더) 그 자리가 서브모듈 저장소가 아니면 `None` — 그때는 git 처럼
+/// 바뀐 것으로 보지 않는다(index 의 커밋과 같다고 본다).
+///
+/// 서브모듈은 바깥 프로젝트의 신뢰로 연다(13-m2-plan 넘김 표 「서브모듈 안의 변경」 — M2-16): 미신뢰면 그 저장소 안의 설정을 프로그램 ·
+/// 경로에 쓰지 않고([`crate::repo::open_options`]) 전역 설정의 필터 드라이버도 뗀다([`without_filter_drivers`]) — 안을 견주는
+/// 동안 어느 필터도 돌지 않는다.
+fn submodule_state(opened: &Opened, dir: &Path) -> Option<(ObjectId, bool)> {
+    let mut repo = crate::repo::discover(dir, opened.trusted).ok()?.ok()?;
     let found = repo.workdir()?;
     if std::fs::canonicalize(found).ok()? != std::fs::canonicalize(dir).ok()? {
         return None;
     }
-    repo.head_id().ok().map(|id| id.detach())
+    let head = repo.head_id().ok()?.detach();
+    if !opened.trusted {
+        without_filter_drivers(&mut repo).ok()?;
+    }
+    without_safecrlf(&mut repo).ok()?;
+    // 안을 읽지 못하면(깨진 index 등) 포인터만 본다 — 로그에 남긴다.
+    let dirty = submodule_dirty(&repo).unwrap_or_else(|e| {
+        tracing::warn!(target: "pw_git", dir = %dir.display(), error = %e.message, "cannot read the submodule's status");
+        false
+    });
+    Some((head, dirty))
+}
+
+/// 서브모듈 안에 커밋하지 않은 변경이 있다: HEAD ↔ index, index ↔ 작업 트리(`git diff` 와 같다 — untracked 파일만 있으면 `git diff`
+/// 는 `-dirty` 를 달지 않는다). 그 안의 서브모듈(중첩)은 보지 않는다 — 열지 않는다.
+fn submodule_dirty(repo: &gix::Repository) -> Result<bool, RpcError> {
+    use gix::status::{Submodule, UntrackedFiles};
+    let tree = repo.head_tree_id_or_empty().map_err(internal)?;
+    let index = repo.index_or_empty().map_err(internal)?;
+    let mut staged = false;
+    repo.tree_index_status(
+        &tree,
+        &index,
+        None,
+        gix::status::tree_index::TrackRenames::Disabled,
+        |_, _, _| {
+            staged = true;
+            Ok(std::ops::ControlFlow::Break(()))
+        },
+    )
+    .map_err(internal)?;
+    if staged {
+        return Ok(true);
+    }
+    let mut items = repo
+        .status(gix::progress::Discard)
+        .map_err(internal)?
+        .untracked_files(UntrackedFiles::None)
+        .index_worktree_rewrites(None)
+        .index_worktree_submodules(Submodule::Given {
+            ignore: gix::submodule::config::Ignore::All,
+            check_dirty: false,
+        })
+        .index(gix::worktree::IndexPersistedOrInMemory::Persisted(index))
+        .into_index_worktree_iter(Vec::<BString>::new())
+        .map_err(internal)?;
+    for item in items.by_ref() {
+        match item.map_err(internal)? {
+            Item::Modification {
+                status: EntryStatus::NeedsUpdate(_),
+                ..
+            } => {}
+            Item::Modification { entry, .. } if entry.mode == IndexMode::COMMIT => {}
+            _ => return Ok(true),
+        }
+    }
+    Ok(false)
 }
 
 /// 작업 트리 쪽 파일을 읽기 전의 판정(M1-01 의 규칙 A — `pw_fs::scope` 의 읽기 판정).
@@ -682,6 +755,7 @@ fn file(
                 .filter(|s| s.mode == IndexMode::COMMIT)
                 .and_then(|s| s.id)
                 .map(|id| id.to_string()),
+            dirty: entry.dirty,
         });
         out.generated = generated_flag(attributes, path.as_ref(), None);
         return out;

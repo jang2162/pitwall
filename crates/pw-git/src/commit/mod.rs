@@ -15,6 +15,12 @@
 //!
 //! 메시지 히스토리는 창의 프로젝트 상태(`apps/desktop/src/layout/project-state.ts` → `state.json`)에 있고, amend 가 미리 채우는 직전
 //! 메시지는 `git.show { rev: "HEAD" }` 의 `message` 다 — 이 모듈은 둘 다 다루지 않는다.
+//!
+//! `git.commit.template`(M2-16 — 13-m2-plan 넘김 표 「커밋 템플릿」): 창이 메시지 칸에 미리 채울 `commit.template` 파일의 내용. 읽기라
+//! git CLI 를 띄우지 않고 gix 로 설정을 읽는다. 경로는 gix 의 「믿을 만한 설정에서만」 접근(`trusted_path`)으로 읽는다 — 미신뢰
+//! 프로젝트는 저장소 안의 설정(`.git/config` 와 그것이 include 한 파일)이 정한 경로를 쓰지 않는다(`crate::repo::open_options`).
+//! 사람의 전역 설정의 템플릿은 어느 쪽이든 쓴다. `~` 는 git 처럼 홈으로, 상대 경로는 작업 트리 꼭대기 기준으로 푼다(Host 는 git 을
+//! 작업 트리 꼭대기에서 띄운다).
 
 #[cfg(all(test, unix))]
 mod tests;
@@ -75,6 +81,79 @@ rpc_method! {
         tier: Write,
         roles: [Owner],
     }
+}
+
+/// 메시지 칸에 미리 채울 템플릿의 최대 크기. 넘으면 채우지 않는다.
+pub const TEMPLATE_MAX: u64 = 64 * 1024;
+
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitTemplateParams {
+    pub project_id: String,
+    /// 활성 워크트리의 꼭대기(`git.repo` 와 같다).
+    #[serde(default)]
+    pub worktree: Option<String>,
+}
+
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitTemplate {
+    /// 템플릿 파일의 내용(UTF-8 이 아닌 바이트는 U+FFFD). 설정이 없거나 · 저장소가 없거나 · 파일을 읽지 못하거나 ·
+    /// [`TEMPLATE_MAX`] 를 넘으면 `null` 이다.
+    pub template: Option<String>,
+}
+
+rpc_method! {
+    /// `commit.template` 파일의 내용(머리 주석) — 창이 비어 있는 메시지 칸에 미리 채운다. 미신뢰 프로젝트는 저장소 안의 설정이
+    /// 정한 경로를 읽지 않는다.
+    pub GitCommitTemplateMethod: "git.commit.template" {
+        params: GitCommitTemplateParams,
+        result: GitCommitTemplate,
+        tier: Read,
+        roles: [Owner],
+    }
+}
+
+/// `git.commit.template`(머리 주석).
+pub fn template(
+    git: &crate::Git,
+    params: &GitCommitTemplateParams,
+) -> Result<GitCommitTemplate, RpcError> {
+    let Some(opened) = git.open(&params.project_id, params.worktree.as_deref())? else {
+        return Ok(GitCommitTemplate::default());
+    };
+    let path = match opened
+        .repo
+        .config_snapshot()
+        .trusted_path("commit.template")
+    {
+        Ok(Some(path)) => path,
+        Ok(None) => return Ok(GitCommitTemplate::default()),
+        Err(e) => {
+            tracing::warn!(target: "pw_git", error = %e, "cannot read commit.template");
+            return Ok(GitCommitTemplate::default());
+        }
+    };
+    let path = opened.target.work_tree.join(path);
+    let read = || -> std::io::Result<Option<Vec<u8>>> {
+        use std::io::Read;
+        let file = std::fs::File::open(&path)?;
+        let mut bytes = Vec::new();
+        file.take(TEMPLATE_MAX + 1).read_to_end(&mut bytes)?;
+        Ok((bytes.len() as u64 <= TEMPLATE_MAX).then_some(bytes))
+    };
+    let template = match read() {
+        Ok(bytes) => bytes.map(|b| String::from_utf8_lossy(&b).into_owned()),
+        Err(e) => {
+            tracing::warn!(target: "pw_git", path = %path.display(), error = %e, "cannot read the commit template");
+            None
+        }
+    };
+    Ok(GitCommitTemplate { template })
 }
 
 /// `git.commit`(머리 주석).
@@ -139,6 +218,18 @@ fn head(opened: &Opened) -> Option<String> {
 
 /// 핸들러를 붙인다.
 pub fn register(router: &mut Router, write: Arc<GitWrite>) {
+    let git = Arc::clone(write.git());
+    router.unary(
+        GitCommitTemplateMethod,
+        move |_ctx, params: GitCommitTemplateParams| {
+            let git = Arc::clone(&git);
+            async move {
+                tokio::task::spawn_blocking(move || template(&git, &params))
+                    .await
+                    .map_err(|e| RpcError::internal(e.to_string()))?
+            }
+        },
+    );
     router.unary(GitCommitMethod, move |ctx, params: GitCommitParams| {
         let (write, caller) = (Arc::clone(&write), ctx.scope().clone());
         async move { commit(&write, caller, params).await.map_err(RpcError::from) }

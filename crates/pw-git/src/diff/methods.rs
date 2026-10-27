@@ -226,6 +226,10 @@ pub struct SubmodulePointer {
     pub old: Option<String>,
     /// 새 커밋. 작업 트리 쪽이면 체크아웃된 서브모듈의 HEAD. 그쪽에 서브모듈이 없으면(지워짐 · 파일이나 링크로 바뀜) `null`.
     pub new: Option<String>,
+    /// 새 쪽이 작업 트리이고 체크아웃된 서브모듈 안에 커밋하지 않은 변경이 있다(HEAD ↔ index · index ↔ 작업 트리 — `git diff` 의
+    /// `Subproject commit <해시>-dirty`. untracked 파일만 있으면 git 처럼 달지 않는다). 포인터가 그대로여도 이것만으로 목록에 든다(`old == new`). 서브모듈은 바깥
+    /// 프로젝트의 신뢰로 열고 안의 서브모듈은 보지 않는다. 커밋 쪽은 늘 거짓이다.
+    pub dirty: bool,
 }
 
 /// `git diff -U3` 의 hunk 하나.

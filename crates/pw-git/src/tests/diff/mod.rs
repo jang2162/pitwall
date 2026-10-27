@@ -8,6 +8,8 @@ mod limits;
 mod release;
 mod show;
 #[cfg(unix)]
+mod submodule_dirty;
+#[cfg(unix)]
 mod untrusted;
 mod view_fixture;
 #[cfg(unix)]
@@ -212,7 +214,8 @@ fn patch_of(f: &DiffFile) -> Patch {
             h.push_str(&format!("-Subproject commit {old}\n"));
         }
         if let Some(new) = new {
-            h.push_str(&format!("+Subproject commit {new}\n"));
+            let dirty = if sub.dirty { "-dirty" } else { "" };
+            h.push_str(&format!("+Subproject commit {new}{dirty}\n"));
         }
         hunks.push(h);
     }
