@@ -127,7 +127,15 @@ async fn a_passing_hook_output_is_in_the_result_and_the_message_goes_through_std
     let result = commit(&f.write, params(&f, message)).await.unwrap();
     assert_eq!(result.commit, f.repo.head());
     assert_ne!(result.commit, before);
-    assert_eq!(result.previous.as_deref(), Some(before.as_str()));
+    assert_eq!(
+        result.moved.ref_name,
+        f.repo.git(&["symbolic-ref", "HEAD"]).trim()
+    );
+    assert_eq!(result.moved.previous.as_deref(), Some(before.as_str()));
+    assert_eq!(
+        result.moved.current.as_deref(),
+        Some(result.commit.as_str())
+    );
     assert_eq!(result.work_tree, f.repo.root().display().to_string());
     assert!(
         result.output.contains("pre-commit ok"),
@@ -156,7 +164,7 @@ async fn a_passing_hook_output_is_in_the_result_and_the_message_goes_through_std
     }
 }
 
-/// ③ amend 뒤 HEAD 의 트리는 index 의 트리이고 부모는 그대로다. `previous` 는 amend 전 HEAD 다([되돌리기] 의 해시).
+/// ③ amend 뒤 HEAD 의 트리는 index 의 트리이고 부모는 그대로다. `moved.previous` 는 amend 전 HEAD 다([되돌리기] 의 해시).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn amend_replaces_head_with_the_index_tree_and_keeps_the_parent() {
     let f = WriteFixture::new(true);
@@ -178,7 +186,11 @@ async fn amend_replaces_head_with_the_index_tree_and_keeps_the_parent() {
     )
     .await
     .unwrap();
-    assert_eq!(result.previous.as_deref(), Some(amended.as_str()));
+    assert_eq!(result.moved.previous.as_deref(), Some(amended.as_str()));
+    assert_eq!(
+        result.moved.current.as_deref(),
+        Some(result.commit.as_str())
+    );
     assert_eq!(result.commit, f.repo.head());
     assert_ne!(result.commit, amended);
     assert_eq!(f.repo.rev_parse("HEAD^{tree}"), index_tree);
@@ -323,14 +335,18 @@ async fn an_empty_message_is_refused_by_git() {
     assert_eq!(f.repo.head(), before);
 }
 
-/// 아직 커밋이 없는 브랜치의 첫 커밋은 `previous` 가 없다.
+/// 아직 커밋이 없는 브랜치의 첫 커밋은 `moved.previous` 가 없다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_first_commit_has_no_previous() {
     let f = WriteFixture::with_repo(TestRepo::new(), true, crate::write::Askpass::default());
     f.repo.write("a.txt", "a\n");
     f.repo.git(&["add", "a.txt"]);
     let result = commit(&f.write, params(&f, "root\n")).await.unwrap();
-    assert_eq!(result.previous, None);
+    assert_eq!(result.moved.previous, None);
+    assert_eq!(
+        result.moved.current.as_deref(),
+        Some(result.commit.as_str())
+    );
     assert_eq!(result.commit, f.repo.head());
 }
 
@@ -361,7 +377,15 @@ async fn over_rpc_the_result_and_the_hook_failure_carry_the_output() {
     .await;
     let result = &reply["result"];
     assert_eq!(result["commit"], f.repo.head(), "{reply}");
-    assert!(result["previous"].is_string(), "{reply}");
+    assert!(result["moved"]["previous"].is_string(), "{reply}");
+    assert_eq!(result["moved"]["current"], result["commit"], "{reply}");
+    assert!(
+        result["moved"]["refName"]
+            .as_str()
+            .unwrap()
+            .starts_with("refs/heads/"),
+        "{reply}"
+    );
     assert_eq!(result["workTree"], f.repo.root().display().to_string());
     assert!(
         result["output"].as_str().unwrap().contains("hook says hi"),

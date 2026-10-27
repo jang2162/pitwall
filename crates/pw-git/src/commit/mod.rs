@@ -10,8 +10,8 @@
 //!   쓰므로 `-F` 로 메시지를 주는 이 길에서는 쓰이지 않는다 — 템플릿을 메시지 칸에 미리 채우는 일은 M2-16 이 한다.
 //! - index 를 커밋할 뿐 작업 트리를 바꾸지 않으므로 미저장 확인을 묻지 않는다([`Changes::None`]). 원격에 닿지 않으므로 askpass 도
 //!   넣지 않는다 — 저장소의 훅이 암호 다이얼로그를 띄우지 못한다.
-//! - 결과의 `previous` 는 커밋 전 HEAD 다. amend 는 ref 를 옮기므로 창이 그 해시로 [되돌리기] 를 단다(결정 M2-D6 ③). 꼴은 M2-10 의
-//!   `GitRefMove { refName, previous, current }` 로 맞춘다 — 그 타입의 주인은 M2-10 이라, 병합된 뒤 `previous` 를 그것으로 바꾼다.
+//! - 결과의 `moved` 는 HEAD 의 ref 를 커밋 전 → 뒤로 옮긴 기록이다([`GitRefMove`], M2-10 과 같은 꼴). amend 는 ref 를 옮기므로
+//!   창이 그것으로 [되돌리기] 를 단다(결정 M2-D6 ③, 되돌리는 법은 `crate::history` 머리 주석).
 //!
 //! 메시지 히스토리는 창의 프로젝트 상태(`apps/desktop/src/layout/project-state.ts` → `state.json`)에 있고, amend 가 미리 채우는 직전
 //! 메시지는 `git.show { rev: "HEAD" }` 의 `message` 다 — 이 모듈은 둘 다 다루지 않는다.
@@ -25,6 +25,7 @@ use pw_rpc::{Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::Opened;
+use crate::history::{GitRefMove, head_ref_name};
 use crate::write::{Changes, GitWrite, WriteError, WriteRequest};
 
 /// Task 제목(`extensions/i18n-default/i18n/*/project.ftl`).
@@ -56,8 +57,9 @@ pub struct GitCommitParams {
 pub struct GitCommitResult {
     /// 만든 커밋(새 HEAD)의 해시.
     pub commit: String,
-    /// 커밋 전 HEAD 의 해시. 아직 커밋이 없던 브랜치면 `null`. amend 뒤 [되돌리기] 는 이 해시로 돌아간다.
-    pub previous: Option<String>,
+    /// HEAD 의 ref(브랜치, 분리돼 있으면 `HEAD`)를 커밋 전 → 뒤로 옮긴 기록. 아직 커밋이 없던 브랜치면 `previous` 가 `null`.
+    /// amend 뒤 [되돌리기] 는 `previous` 로 돌아간다.
+    pub moved: GitRefMove,
     /// 저장소의 작업 트리 꼭대기(절대 경로).
     pub work_tree: String,
     /// git 과 훅이 stderr 에 낸 원문(훅의 stdout 도 git 이 stderr 로 돌린다). 없으면 빈 문자열.
@@ -97,7 +99,10 @@ pub async fn commit(
     write
         .run(request, move |ctx| async move {
             // 잠금 안에서 읽는다 — 앞 쓰기를 기다리는 사이 HEAD 가 움직였을 수 있다.
-            let previous = ctx.read(head).await?;
+            let (ref_name, previous) = ctx
+                .read(|opened| head_ref_name(&opened.repo).map(|name| (name, head(opened))))
+                .await?
+                .map_err(WriteError::Internal)?;
             let mut command = ctx.git().args(["commit", "--quiet"]);
             if amend {
                 command = command.arg("--amend");
@@ -112,8 +117,12 @@ pub async fn commit(
                 WriteError::Internal("HEAD has no commit after `git commit` succeeded".into())
             })?;
             Ok(GitCommitResult {
-                commit,
-                previous,
+                commit: commit.clone(),
+                moved: GitRefMove {
+                    ref_name,
+                    previous,
+                    current: Some(commit),
+                },
                 work_tree: crate::status::display(ctx.work_tree()),
                 output: String::from_utf8_lossy(&output.stderr).into_owned(),
             })

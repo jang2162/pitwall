@@ -1256,8 +1256,11 @@ export type GitCommitParams = {
 export type GitCommitResult = {
 	/**  만든 커밋(새 HEAD)의 해시. */
 	commit: string,
-	/**  커밋 전 HEAD 의 해시. 아직 커밋이 없던 브랜치면 `null`. amend 뒤 [되돌리기] 는 이 해시로 돌아간다. */
-	previous: string | null,
+	/**
+	 *  HEAD 의 ref(브랜치, 분리돼 있으면 `HEAD`)를 커밋 전 → 뒤로 옮긴 기록. 아직 커밋이 없던 브랜치면 `previous` 가 `null`.
+	 *  amend 뒤 [되돌리기] 는 `previous` 로 돌아간다.
+	 */
+	moved: GitRefMove,
 	/**  저장소의 작업 트리 꼭대기(절대 경로). */
 	workTree: string,
 	/**  git 과 훅이 stderr 에 낸 원문(훅의 stdout 도 git 이 stderr 로 돌린다). 없으면 빈 문자열. */
