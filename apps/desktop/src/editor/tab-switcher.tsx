@@ -9,6 +9,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 
 import { useKeymapPopup } from "../keymap/keymap-provider";
 import { useProjectStrings } from "../layout/strings";
+import { gitDocumentDetail } from "../git/documents/spec";
 import { baseName, isEditorPanel, tabParams } from "./editor-tabs";
 import type { EditorWorkspace } from "./editor-workspace";
 
@@ -110,7 +111,10 @@ export function useTabSwitcher(workspace: EditorWorkspace): {
         {state.ids.map((id, i) => {
           const panel = api?.getPanel(id);
           if (!panel) return null;
-          const { path, preview } = tabParams(panel);
+          const { path, preview, git } = tabParams(panel);
+          // git 문서 탭은 문서 키(`git:…`) 대신 탭 이름과 사람이 읽는 설명을 보인다.
+          const name = git ? (panel.title ?? baseName(path)) : baseName(path);
+          const detail = git ? gitDocumentDetail(git) : parentOf(path);
           return (
             <div
               key={id}
@@ -120,9 +124,9 @@ export function useTabSwitcher(workspace: EditorWorkspace): {
               onClick={() => choose({ ...state, index: i })}
               className={`flex h-[24px] items-center gap-2 px-3 ${i === state.index ? "bg-ui-active" : ""}`}
             >
-              <span className={`flex-none ${preview ? "italic" : ""}`}>{baseName(path)}</span>
+              <span className={`flex-none ${preview ? "italic" : ""}`}>{name}</span>
               <span className="min-w-0 flex-1 truncate text-[11px] text-ui-muted-foreground">
-                {parentOf(path)}
+                {detail}
               </span>
             </div>
           );

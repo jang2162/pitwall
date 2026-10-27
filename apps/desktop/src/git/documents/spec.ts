@@ -41,6 +41,22 @@ export function gitDocumentKey(spec: GitDocumentSpec): string {
   }
 }
 
+/**
+ * 사람이 읽는 문서 설명(탭 전환기의 둘째 칸 · 탭 툴팁 — 문서 키 `git:…` 를 보이지 않는다). 해시는 전체, 경로는 저장소 꼭대기 기준.
+ */
+export function gitDocumentDetail(spec: GitDocumentSpec): string {
+  switch (spec.kind) {
+    case "commit":
+      return spec.rev;
+    case "compare":
+      return `${spec.a}..${spec.b}`;
+    case "revision":
+      return `${spec.path} @ ${spec.rev}`;
+    case "diff":
+      return spec.oldPath ? `${spec.oldPath} → ${spec.path}` : spec.path;
+  }
+}
+
 /** 탭 params 의 `git` 칸이 문서의 꼴인가(옛 · 깨진 params 를 거른다). */
 export function isGitDocumentSpec(value: unknown): value is GitDocumentSpec {
   if (typeof value !== "object" || value === null) return false;

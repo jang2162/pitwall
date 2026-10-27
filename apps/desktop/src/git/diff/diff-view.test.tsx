@@ -114,6 +114,36 @@ describe("DiffView", () => {
     },
   );
 
+  it.each(["split", "unified"] as const)(
+    "%s: 칠한 줄의 계산된 배경이 그 줄의 토큰 색이고, 칠하지 않는 줄은 배경이 없다(merge 덩어리 규칙에 덮이지 않는다)",
+    (mode) => {
+      // happy-dom 도 규칙의 명시도로 계산한다 — 실브라우저 검사는 perf/diff-check(라이트 · 다크, 헤드리스 WebKit).
+      const root = document.documentElement.style;
+      const colors = { added: "rgb(1, 2, 3)", deleted: "rgb(4, 5, 6)", changed: "rgb(7, 8, 9)" };
+      for (const [k, v] of Object.entries(colors)) root.setProperty(`--pw-diff-line-${k}`, v);
+      const { host } = mount(CONTENT, mode);
+      const lines = [...host.querySelectorAll<HTMLElement>(".cm-line")];
+      const painted = lines.filter((el) => el.dataset.diff);
+      expect(painted.length).toBeGreaterThan(0);
+      for (const el of painted) {
+        const kind = el.classList.contains("pw-diff-changed")
+          ? "changed"
+          : el.dataset.diff === "added"
+            ? "added"
+            : "deleted";
+        expect([el.textContent, getComputedStyle(el).backgroundColor]).toEqual([
+          el.textContent,
+          colors[kind],
+        ]);
+      }
+      for (const el of lines.filter((el) => !el.dataset.diff))
+        expect(["", "transparent", "rgba(0, 0, 0, 0)"]).toContain(
+          getComputedStyle(el).backgroundColor,
+        );
+      for (const k of Object.keys(colors)) root.removeProperty(`--pw-diff-line-${k}`);
+    },
+  );
+
   it("나란히 보기의 바뀐 낱말에 글자 표시를 단다", () => {
     const { state } = mount(CONTENT, "split");
     const [a, b] = state.controller!.views();

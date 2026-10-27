@@ -422,6 +422,25 @@ it("부모 해시를 누르면 그 커밋 상세가 새 탭으로 열리고, 같
   expect(document.querySelectorAll("[data-editor-tab-header]")).toHaveLength(2);
 });
 
+it("탭 툴팁 · 탭 전환기(⌃Tab)는 문서 키(git:…) 대신 탭 이름과 해시 · 경로를 보인다", async () => {
+  await openCommit();
+  await act(
+    async () =>
+      void windowRegistry()!.run("git.openRevisionFile", { rev: "HEAD", path: "src/lib.rs" }),
+  );
+  await vi.waitFor(() => expect(tabHeader("lib.rs")).toBeDefined());
+  const commitTab = tabHeader(short)!;
+  expect(commitTab.title).not.toContain("git:");
+  expect(commitTab.title).toContain(FIXTURE.commit);
+  expect(tabHeader("lib.rs")!.title).toContain(`src/lib.rs @ ${FIXTURE.commit}`);
+  await act(async () => void windowRegistry()!.run("editor.switcher"));
+  await vi.waitFor(() => expect(document.querySelector('[role="listbox"]')).not.toBeNull());
+  const switcher = document.querySelector('[role="listbox"]')!.textContent!;
+  expect(switcher).not.toContain("git:");
+  expect(switcher).toContain(FIXTURE.commit);
+  expect(switcher).toContain(`src/lib.rs @ ${FIXTURE.commit}`);
+});
+
 it("인자가 없거나 틀린 git 문서 액션은 아무것도 열지 않는다 — 키 · 액션 찾기에서 부를 수 없다", async () => {
   await mount();
   for (const id of ["git.showCommit", "git.compareCommits", "git.openRevisionFile"]) {

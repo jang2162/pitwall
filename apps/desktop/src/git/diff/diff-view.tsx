@@ -266,6 +266,44 @@ export function buildDiffView({
   };
 }
 
+/** 맨 위 줄을 다시 맞추는 프레임 수의 상한. */
+export const RESTORE_FRAMES = 8;
+
+/**
+ * 새 쪽 줄 `line` 을 화면 맨 위에 둔다(보기를 바꾼 뒤). 처음 그린 높이는 짐작값이고, 나란히 보기는 merge 가 줄 맞춤 칸(spacer)을
+ * 다음 프레임들에서 재며 스크롤이 몇 px 당겨진다(리뷰 F3 — 앞 줄이 맨 위에 걸렸다). 그래서 높이가 자리 잡을 때까지 프레임마다
+ * 맨 위 줄을 보고 다르면 다시 맞춘다 — 두 프레임 이어 같으면 멈춘다. 사람이 굴리거나 누르면 곧바로 멈춘다(그 사람의 스크롤을
+ * 되돌리지 않는다). 멈추는 함수를 돌려준다.
+ */
+export function restoreTopLine(
+  controller: DiffController,
+  parent: HTMLElement,
+  line: number,
+): () => void {
+  let frames = 0;
+  let steady = 0;
+  let raf = 0;
+  const stop = () => {
+    cancelAnimationFrame(raf);
+    for (const type of ["wheel", "pointerdown", "keydown", "touchstart"])
+      parent.removeEventListener(type, stop, true);
+  };
+  for (const type of ["wheel", "pointerdown", "keydown", "touchstart"])
+    parent.addEventListener(type, stop, true);
+  controller.scrollToLine(line);
+  const tick = () => {
+    if (controller.topLine() === line) steady++;
+    else {
+      steady = 0;
+      controller.scrollToLine(line);
+    }
+    if (steady >= 2 || ++frames >= RESTORE_FRAMES) stop();
+    else raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+  return stop;
+}
+
 export interface DiffViewProps {
   content: DiffContent;
   mode: DiffMode;
@@ -293,17 +331,12 @@ export function DiffView({ content, mode, syntax, slots, phrases, onController }
     if (!parent) return;
     const built = buildDiffView({ content, mode, parent, syntax, slots, phrases });
     const keep = carried.current;
-    if (keep?.content === content) {
-      built.controller.scrollToLine(keep.line);
-      // 높이를 잰 뒤에 한 번 더 — 처음 그린 높이는 짐작값이라 맞지 않을 수 있다.
-      built.controller.views()[0]!.requestMeasure({
-        read: () => null,
-        write: () => built.controller.scrollToLine(keep.line),
-      });
-    }
+    const stop =
+      keep?.content === content ? restoreTopLine(built.controller, parent, keep.line) : undefined;
     carried.current = undefined;
     onControllerRef.current?.(built.controller);
     return () => {
+      stop?.();
       carried.current = { content, line: built.controller.topLine() };
       onControllerRef.current?.(undefined);
       built.destroy();

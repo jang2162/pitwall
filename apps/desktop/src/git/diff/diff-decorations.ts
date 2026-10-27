@@ -327,9 +327,11 @@ export function oldLineNumbers(model: DiffModel): Extension {
 
 /** diff 색 · merge 덩어리 표시 지우기. */
 export const diffTheme = EditorView.theme({
-  ".pw-diff-added": { backgroundColor: cssVar("diff.line.added") },
-  ".pw-diff-deleted": { backgroundColor: cssVar("diff.line.deleted") },
-  ".pw-diff-changed": { backgroundColor: cssVar("diff.line.changed") },
+  // `.cm-line` 을 함께 써 명시도를 올린다 — merge 의 덩어리 줄(`cm-changedLine`) · 에디터 테마의 현재 줄(`cm-activeLine`)과 같은
+  // 명시도면 스타일 순서에 따라 diff 색이 덮인다(리뷰 F1). 실제 계산된 색은 perf/diff/diff-colors.tsx(헤드리스 WebKit)와 diff-view 시험이 본다.
+  ".cm-line.pw-diff-added": { backgroundColor: cssVar("diff.line.added") },
+  ".cm-line.pw-diff-deleted": { backgroundColor: cssVar("diff.line.deleted") },
+  ".cm-line.pw-diff-changed": { backgroundColor: cssVar("diff.line.changed") },
   ".pw-diff-char-added": { backgroundColor: cssVar("diff.char.added") },
   ".pw-diff-char-deleted": { backgroundColor: cssVar("diff.char.deleted") },
   ".pw-diff-char-changed": { backgroundColor: cssVar("diff.char.changed") },
@@ -340,7 +342,11 @@ export const diffTheme = EditorView.theme({
     textAlign: "right",
   },
   // merge 의 덩어리 표시(줄 배경 · 글자 · 통합 보기의 뺀 덩어리)는 칠하지 않는다 — 위의 모델 표시가 칠한다.
-  "&.cm-merge-a .cm-changedLine, &.cm-merge-b .cm-changedLine": { backgroundColor: "transparent" },
+  // 모델 표시가 없는 줄만 지운다(덩어리가 넓어 함께 들어온 문맥 줄) — 모델의 줄까지 지우면 바뀐 줄이 투명해진다.
+  "&.cm-merge-a .cm-changedLine:not(.pw-diff-line), &.cm-merge-b .cm-changedLine:not(.pw-diff-line)":
+    {
+      backgroundColor: "transparent",
+    },
   "& .cm-changedText, &.cm-merge-b .cm-deletedText": { background: "none" },
   ".cm-deletedChunk": { display: "none" },
   ".cm-collapsedLines": {

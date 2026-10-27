@@ -6,7 +6,7 @@
 import type { DockviewApi } from "dockview-react";
 import { createStore } from "zustand/vanilla";
 
-import { editorPanels, isEditorPanel, tabParams } from "../editor/editor-tabs";
+import { editorPanels, isEditorPanel, isGitTab, tabParams } from "../editor/editor-tabs";
 
 /** 기억하는 파일 수. */
 export const RECENT_FILES_LIMIT = 50;
@@ -41,7 +41,8 @@ export function createRecentFiles() {
     /** 도킹 영역의 에디터 탭 활성화를 듣는다. 이미 열린 탭은 활성 탭이 맨 앞이 되게 넣는다. 해제 함수를 돌려준다. */
     track(api: DockviewApi): () => void {
       const add = (panel: Parameters<typeof isEditorPanel>[0]) => {
-        if (!isEditorPanel(panel)) return;
+        // git 문서 탭(`git:…` 문서 키)은 파일이 아니다 — 최근 파일 · 프로젝트 상태에 넣지 않는다(src/git/documents/spec.ts).
+        if (!isEditorPanel(panel) || isGitTab(panel)) return;
         const { path, worktree } = tabParams(panel);
         if (path) remember({ path, ...(worktree !== undefined && { worktree }) });
       };

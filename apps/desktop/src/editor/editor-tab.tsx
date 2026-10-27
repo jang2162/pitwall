@@ -13,6 +13,7 @@ import { Pin } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { useStore } from "zustand";
 
+import { gitDocumentDetail } from "../git/documents/spec";
 import { useGitDecoration } from "../git/git-status";
 import { GitStatusMark, gitStatusTitle, gitToneClass } from "../git/git-status-mark";
 import { useAppStrings } from "../i18n/app-strings";
@@ -83,7 +84,13 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
           data-preview={params.preview ? "" : undefined}
           data-dirty={dirty ? "" : undefined}
           data-git={git?.tone}
-          title={git ? `${params.path}\n${gitStatusTitle(git, gitStrings)}` : params.path}
+          title={
+            params.git
+              ? `${props.api.title ?? ""}\n${gitDocumentDetail(params.git)}`
+              : git
+                ? `${params.path}\n${gitStatusTitle(git, gitStrings)}`
+                : params.path
+          }
           onDoubleClick={() => run("editor.toggleMaximized")}
           className={`flex h-full items-center ${params.preview ? "italic" : ""} ${gitToneClass(git)}`}
         >
