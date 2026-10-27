@@ -1,6 +1,6 @@
 // Git 로그의 가운데 목록(docs/design/13-m2-plan.md M2-14 · 결정 M2-D2): 고정 행 높이 가상 스크롤 위의 canvas 하나. 스크롤 칸 안에
 // 전체 높이(행 수 × 행 높이)의 빈 칸을 두고, 그 위에 화면 크기의 canvas 를 붙여 화면에 든 행만 그린다(graph-render.ts). 스크롤 ·
-// 크기 · 행 · 선택 · 테마가 바뀌면 다음 프레임에 한 번 그린다(여러 번 바뀌어도 한 번).
+// 크기 · 행 · 선택 · 테마 · 화면 배율(창을 다른 배율의 모니터로 옮길 때)이 바뀌면 다음 프레임에 한 번 그린다(여러 번 바뀌어도 한 번).
 //
 // 마우스(10-ui.md 「Git」 마우스 표): 클릭 = 고르기, `⌘`(Win/Linux `Ctrl`) = 더하고 빼기, `⇧` = 범위, 더블클릭 = 커밋 상세 탭, 레인
 // 호버 = 그 줄 강조, ref 라벨을 4 px 넘게 끌어 다른 행 · 라벨에 놓기 = 머지 · 리베이스 · 비교 메뉴(부르는 쪽이 띄운다). 우클릭은 부르는
@@ -67,6 +67,19 @@ export interface LogListProps {
   formatDate(seconds: number): string;
 }
 
+/** 화면 배율(`devicePixelRatio`). 바뀌면 새 값으로 다시 그린다 — 지금 배율의 `resolution` 미디어 질의가 풀리는 때가 바뀐 때다. */
+function useDevicePixelRatio(): number {
+  const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia(`(resolution: ${dpr}dppx)`);
+    const changed = () => setDpr(window.devicePixelRatio || 1);
+    query.addEventListener("change", changed);
+    return () => query.removeEventListener("change", changed);
+  }, [dpr]);
+  return dpr;
+}
+
 interface Drag {
   ref: LogRef;
   from: LogRow;
@@ -83,6 +96,7 @@ export function LogList(props: LogListProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [hoverColor, setHoverColor] = useState<number>();
+  const dpr = useDevicePixelRatio();
   const [ghost, setGhost] = useState<{ text: string; x: number; y: number }>();
   const frame = useRef<number | undefined>(undefined);
   // 마지막으로 그린 것(누르기 판정).
@@ -171,7 +185,7 @@ export function LogList(props: LogListProps) {
   }, [font]);
 
   // 그릴 것이 바뀌면 다음 프레임에 그린다.
-  useEffect(schedule, [schedule, version, size, palette, font, selected, hoverColor]);
+  useEffect(schedule, [schedule, version, size, palette, font, selected, hoverColor, dpr]);
 
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
@@ -231,7 +245,12 @@ export function LogList(props: LogListProps) {
     if (!d?.active) return;
     e.currentTarget.releasePointerCapture?.(e.pointerId);
     const { row, label } = pointAt(e.clientX, e.clientY);
-    if (!row || (row.hash === d.from.hash && (!label || label.ref.name === d.ref.name))) return;
+    if (
+      !row ||
+      (row.hash === d.from.hash &&
+        (!label || (label.ref.name === d.ref.name && label.ref.kind === d.ref.kind)))
+    )
+      return;
     props.onDropLabel(d.ref, d.from, { row, ref: label?.ref }, { x: e.clientX, y: e.clientY });
   };
 

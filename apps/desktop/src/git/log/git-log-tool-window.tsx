@@ -4,13 +4,15 @@
 //
 // - 로그는 이 창의 활성 워크트리 · 필터로 `git.log` 를 받고(log-model.ts), 터미널 · 에이전트가 ref 를 바꾸면(`git.refsChanged`, 이
 //   창의 `git.watch` 가 낸다) 같은 필터로 다시 받는다 — 고른 커밋은 해시로 남는다.
+// - 브랜치 패널 · 필터 바 · 라벨 메뉴의 ref 는 따로 읽지 않고 창의 브랜치 상태(branch-state.ts — 상태바 · 브랜치 팝업과 같은
+//   `git.refs` 읽기 하나)를 쓴다.
 // - 쓰기(우클릭 · 라벨 끌어 놓기)는 log-ops.ts. ref 를 옮긴 결과가 오면 목록 위에 [되돌리기] 줄을 단다.
 // - 커밋 상세 탭 · 두 커밋 비교 탭 · 리비전 파일 열기는 M2-15 의 액션을 id 로 부른다(git-actions.ts).
 
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import type { GitRefMove, GitRefs, LogRef, LogRow, ResetMode } from "@pitwall/rpc-client";
 import type { IDockviewPanelProps } from "dockview-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import { useFileDialogs } from "../../file-tree/file-dialogs";
 import { useKeymap } from "../../keymap/keymap-provider";
@@ -18,6 +20,7 @@ import { useNotify } from "../../notifications/notifications";
 import { useActiveWorktree } from "../../open-with/active-worktree";
 import { useHost } from "../../rpc/host";
 import { useTheme } from "../../theme/theme-switcher";
+import { useBranch } from "../branch-state";
 import { BranchPanel } from "./branch-panel";
 import { CommitDetail } from "./commit-detail";
 import { FilterBar } from "./filter-bar";
@@ -25,7 +28,7 @@ import { runGitAction } from "./git-actions";
 import { paletteOf } from "./graph-render";
 import { type DropTarget, LogList } from "./log-list";
 import { EMPTY_QUERY, LogModel, type LogQuery, type LogSource } from "./log-model";
-import { LogOps, short } from "./log-ops";
+import { LogOps, refFullName, short } from "./log-ops";
 import { useGitLogStrings } from "./strings";
 
 const RESET_MODES: readonly ResetMode[] = ["soft", "mixed", "keep", "hard"];
@@ -120,7 +123,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
   const font = useMemo(listFont, []);
   const [model] = useState(() => new LogModel());
   const [query, setQuery] = useState<LogQuery>(EMPTY_QUERY);
-  const [refs, setRefs] = useState<GitRefs>();
+  const { refs } = useBranch();
   const [selection, setSelection] = useState<{ selected: string[]; anchor: number }>({
     selected: [],
     anchor: -1,
@@ -140,18 +143,10 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
   useEffect(() => () => model.dispose(), [model]);
   useEffect(() => model.subscribe(() => setTick((t) => t + 1)), [model]);
 
-  const loadRefs = useCallback(() => {
-    if (!source) return;
-    source.client
-      .call("git.refs", { projectId: source.projectId, worktree: source.worktree ?? null })
-      .then(setRefs, (e: unknown) => console.warn("[git] could not read refs", e));
-  }, [source]);
-
   useEffect(() => {
     if (!source) return;
     void model.load(source, query);
-    loadRefs();
-  }, [model, source, query, loadRefs]);
+  }, [model, source, query]);
 
   // ref 가 바뀌면 같은 필터로 다시 받는다.
   const queryRef = useRef(query);
@@ -165,7 +160,6 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
         const changed = event.payload as { worktree?: string | null } | null;
         if (stopped || (changed?.worktree ?? undefined) !== source.worktree) return;
         void model.load(source, queryRef.current);
-        loadRefs();
       })
       .then(
         (s) => {
@@ -178,7 +172,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
       stopped = true;
       void unsubscribe?.().catch(() => {});
     };
-  }, [model, source, loadRefs]);
+  }, [model, source]);
 
   const ops = useMemo(
     () =>
@@ -256,7 +250,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
         : model.status.kind === "done" && model.rows.length === 0
           ? T.status.empty
           : model.filtered
-            ? T.status.matched(model.rows.length)
+            ? (model.textAsHash ? T.status.matchedHash : T.status.matched)(model.rows.length)
             : T.status.count(model.total ?? model.rows.length);
 
   if (!projectId)
@@ -518,15 +512,18 @@ function DropMenu({
   strings: ReturnType<typeof useGitLogStrings>;
   onCompare(a: string, b: string): void;
 }) {
+  // 메뉴에 보이는 것은 짧은 이름, git 에 넘기는 것은 ref 전체 이름(log-ops.ts 머리 주석).
   const source = target.source.name;
+  const sourceRev = refFullName(target.source);
   // 놓은 자리의 이름: 라벨이면 그 이름, 행이면 그 커밋.
-  const dest = target.target.ref?.name ?? short(target.target.row.hash);
-  const destRev = target.target.ref?.name ?? target.target.row.hash;
+  const destRef = target.target.ref;
+  const dest = destRef?.name ?? short(target.target.row.hash);
+  const destRev = destRef ? refFullName(destRef) : target.target.row.hash;
   const current = refs?.head?.kind === "branch" ? refs.head.name : undefined;
   // merge 는 지금 브랜치로만 들여온다(`git.merge` — HEAD 에). 놓은 자리가 지금 브랜치(또는 HEAD 커밋)일 때만.
   const intoCurrent =
     current !== undefined &&
-    (target.target.ref?.name === current ||
+    ((destRef?.kind === "branch" && destRef.name === current) ||
       (target.target.ref === undefined &&
         refs?.head?.kind === "branch" &&
         refs.head.commit === target.target.row.hash));
@@ -535,7 +532,7 @@ function DropMenu({
     <>
       <MenuItem
         disabled={!intoCurrent}
-        onSelect={() => void ops.merge(source, T.menu.merge(source, dest))}
+        onSelect={() => void ops.merge(sourceRev, T.menu.merge(source, dest))}
       >
         {intoCurrent ? T.menu.merge(source, dest) : T.menu.mergeNeedsCheckout(dest)}
       </MenuItem>
@@ -545,7 +542,7 @@ function DropMenu({
       >
         {T.menu.rebase(source, dest)}
       </MenuItem>
-      <MenuItem onSelect={() => onCompare(destRev, source)}>
+      <MenuItem onSelect={() => onCompare(destRev, sourceRev)}>
         {T.menu.compareRefs(dest, source)}
       </MenuItem>
     </>

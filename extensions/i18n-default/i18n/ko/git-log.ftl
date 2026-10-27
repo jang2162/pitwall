@@ -11,10 +11,9 @@ git-log-branches-remote = 원격
 git-log-branches-tags = 태그
 git-log-branches-all = 모든 브랜치
 
-## 필터 바. 텍스트 칸은 16진 4 ~ 40 글자면 해시 접두로, 아니면 메시지로 찾는다.
+## 필터 바. 텍스트 칸은 16진 7글자 이상이고 그 접두로 시작하는 커밋이 있으면 해시 접두로, 아니면 메시지로 찾는다.
 
 git-log-filter-text = 텍스트/해시
-git-log-filter-hash-hint = 해시 접두로 찾는다
 git-log-filter-regex = 정규식
 git-log-filter-match-case = 대소문자 구분
 git-log-filter-branch = 브랜치
@@ -36,6 +35,8 @@ git-log-loading = 불러오는 중…
 git-log-count = 커밋 { $count }개
 # $count: 필터에 맞는 커밋 수
 git-log-matched = 맞는 커밋 { $count }개
+# $count: 해시 접두로 찾은 커밋 수
+git-log-matched-hash = 해시 접두로 찾은 커밋 { $count }개
 # $message: Host 의 오류 원문
 git-log-failed = 로그를 읽지 못했다: { $message }
 git-log-empty = 커밋이 없다

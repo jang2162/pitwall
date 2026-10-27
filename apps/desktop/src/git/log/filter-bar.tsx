@@ -8,7 +8,7 @@ import { ChevronDown, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { pickRef } from "./branch-panel";
-import { EMPTY_QUERY, isHashText, type LogQuery } from "./log-model";
+import { EMPTY_QUERY, type LogQuery } from "./log-model";
 import type { GitLogStrings } from "./strings";
 
 export const DEBOUNCE_MS = 250;
@@ -102,10 +102,8 @@ export function FilterBar({ query, onChange, refs, strings }: FilterBarProps) {
   const [text, setText] = useDebounced(query.text, (v) => set({ text: v }));
   const [author, setAuthor] = useDebounced(query.author, (v) => set({ author: v }));
   const [paths, setPaths] = useDebounced(query.paths, (v) => set({ paths: v }));
-  const names = [
-    ...(refs?.branches.map((b) => b.name) ?? []),
-    ...(refs?.remoteBranches.map((b) => b.name) ?? []),
-  ];
+  // 값은 ref 전체 이름(브랜치 패널과 같다), 보이는 것은 짧은 이름.
+  const names = [...(refs?.branches ?? []), ...(refs?.remoteBranches ?? [])];
   const dirty =
     JSON.stringify({ ...query, refs: [...query.refs] }) !==
     JSON.stringify({ ...EMPTY_QUERY, refs: [] });
@@ -124,7 +122,6 @@ export function FilterBar({ query, onChange, refs, strings }: FilterBarProps) {
           spellCheck={false}
           onChange={(e) => setText(e.target.value)}
           className={`${INPUT} w-full`}
-          title={isHashText(text) ? strings.hashHint : undefined}
         />
       </label>
       <button
@@ -151,12 +148,12 @@ export function FilterBar({ query, onChange, refs, strings }: FilterBarProps) {
         label={query.refs.length > 0 ? strings.branchCount(query.refs.length) : strings.branch}
         active={query.refs.length > 0}
       >
-        {names.map((name) => (
-          <label key={name} className="flex items-center gap-1 text-[12px] whitespace-nowrap">
+        {names.map(({ name, refName }) => (
+          <label key={refName} className="flex items-center gap-1 text-[12px] whitespace-nowrap">
             <input
               type="checkbox"
-              checked={query.refs.includes(name)}
-              onChange={() => set({ refs: pickRef(latest.current.refs, name, true) })}
+              checked={query.refs.includes(refName)}
+              onChange={() => set({ refs: pickRef(latest.current.refs, refName, true) })}
             />
             {name}
           </label>

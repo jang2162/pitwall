@@ -21,14 +21,14 @@ import { selectRows } from "./git-log-tool-window";
 import { graphWidth, laneAt, laneColor, paletteOf, visibleRange } from "./graph-render";
 import { FOLDED_COLOR } from "./lanes";
 import { dayToUnix, EMPTY_QUERY, isHashText, listFiltered, LogModel, logParams } from "./log-model";
-import { LogOps, lostLines, refNameProblem } from "./log-ops";
+import { LogOps, lostLines, refFullName, refNameProblem } from "./log-ops";
 import { gitLogStrings } from "./strings";
 import { fixtureRows } from "./testing";
 
 const T = gitLogStrings(bundledTranslator("ko"));
 
 describe("logParams", () => {
-  it("passes every filter field through as LogFilter, and a hex text as a hash prefix", () => {
+  it("passes every filter field through as LogFilter, and a hex text as a hash prefix only when told it resolves", () => {
     expect(logParams(EMPTY_QUERY)).toEqual({
       refs: null,
       filter: {
@@ -65,13 +65,33 @@ describe("logParams", () => {
         hash: null,
       },
     });
+    // 모양이 해시여도 풀린다고 알기 전에는 메시지다.
     expect(logParams({ ...EMPTY_QUERY, text: "DEADbeef" }).filter).toMatchObject({
+      message: "DEADbeef",
+      hash: null,
+    });
+    expect(logParams({ ...EMPTY_QUERY, text: "DEADbeef" }, true).filter).toMatchObject({
       message: null,
       hash: "deadbeef",
     });
-    expect(isHashText("abc")).toBe(false);
-    expect(isHashText("abcd")).toBe(true);
-    expect(isHashText("a".repeat(41))).toBe(false);
+    // 해시 모양이 아니면 풀린다고 해도 메시지다.
+    expect(logParams({ ...EMPTY_QUERY, text: "added" }, true).filter).toMatchObject({
+      message: "added",
+      hash: null,
+    });
+    for (const word of [
+      "abc",
+      "added",
+      "2024",
+      "cafe",
+      "decade",
+      "abcdef",
+      "a".repeat(65),
+      "deadbeeg",
+    ])
+      expect(isHashText(word)).toBe(false);
+    for (const hex of ["deadbee", "1234567", "a".repeat(40), "a".repeat(64), " ABCDEF0 "])
+      expect(isHashText(hex)).toBe(true);
     expect(dayToUnix("nope", false)).toBeNull();
   });
 
@@ -148,6 +168,15 @@ describe("selection and panels", () => {
     expect(pickRef(["main", "x"], "main", true)).toEqual(["x"]);
   });
 
+  it("names a log label by its full ref name, so a tag of the same name never stands in for the branch", () => {
+    expect(refFullName({ name: "v1", kind: "branch", current: false })).toBe("refs/heads/v1");
+    expect(refFullName({ name: "v1", kind: "tag", current: false })).toBe("refs/tags/v1");
+    expect(refFullName({ name: "origin/v1", kind: "remote", current: false })).toBe(
+      "refs/remotes/origin/v1",
+    );
+    expect(refFullName({ name: "HEAD", kind: "head", current: false })).toBe("HEAD");
+  });
+
   it("lists HEAD, local, remote and tags, without the items of a closed group", () => {
     const refs: GitRefs = {
       workTree: "/r",
@@ -164,7 +193,7 @@ describe("selection and panels", () => {
       { kind: "all" },
       { kind: "head", name: "HEAD" },
       { kind: "section", section: "local", count: 1, open: true },
-      { kind: "ref", section: "local", name: "main", current: false },
+      { kind: "ref", section: "local", name: "main", refName: "refs/heads/main", current: false },
       { kind: "section", section: "tags", count: 1, open: false },
     ]);
     expect(panelRows({ ...refs, workTree: null }, new Set())).toEqual([]);

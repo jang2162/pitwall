@@ -28,6 +28,7 @@ import { documentThemeApplier } from "../../theme/adapters";
 import { createThemeStore, type ThemeStore } from "../../theme/theme-store";
 import { ThemeStoreProvider } from "../../theme/theme-switcher";
 import { parseTheme } from "../../theme/tokens";
+import { resetWindowBranch } from "../branch-state";
 import { resetWindowGitStatus } from "../git-status";
 import { DEBOUNCE_MS } from "./filter-bar";
 import { ROW_HEIGHT } from "./graph-render";
@@ -148,6 +149,18 @@ vi.mock("../../tauri-transport", async () => {
             for (const data of chunks) send({ method: "stream.chunk", params: { streamId, data } });
             return send({ method: "stream.end", params: { streamId, status: "completed" } });
           }
+          case "git.logPage": {
+            // 해시 접두가 커밋으로 풀리는지만 묻는다(log-model.ts `resolvesAsHash`).
+            const filter = (params.filter ?? {}) as { hash?: string | null };
+            const rows = (host.rows as LogRow[]).filter(
+              (r) => !filter.hash || r.hash.startsWith(filter.hash),
+            );
+            return reply({
+              rows: rows.slice(0, params.limit as number),
+              nextCursor: null,
+              total: null,
+            });
+          }
           case "stream.cancel":
             return;
           case "events.subscribe": {
@@ -262,6 +275,8 @@ beforeEach(() => {
   host.rows = fixtureRows("synth");
   host.answers = new Map<string, unknown>([
     ["git.refs", REFS],
+    // 창의 브랜치 상태(branch-state.ts)가 ref 와 함께 읽는다.
+    ["git.operation", { operation: null }],
     [
       "git.show",
       (p: { rev: string }) => ({
@@ -297,6 +312,7 @@ beforeEach(() => {
   activeWorktreeStore.setState({ top: undefined });
   resetWindowFileTree();
   resetWindowGitStatus();
+  resetWindowBranch();
   localStorage.clear();
 });
 
@@ -570,9 +586,35 @@ it("sends the filter bar and the branch panel as git.log refs and filter", async
       "그래프 없이",
     );
 
-    // 16진이면 해시 접두.
-    await type(text, "A1B2C3D");
-    expect(logCalls().at(-1)!.params.filter).toMatchObject({ message: null, hash: "a1b2c3d" });
+    // 16진 낱말 · 이슈 번호는 메시지다(해시로 묻지도 않는다 — 7자 아래).
+    for (const word of ["added", "2024"]) {
+      await type(text, word);
+      expect(logCalls().at(-1)!.params.filter).toMatchObject({ message: word, hash: null });
+    }
+    expect(host.calls.filter((c) => c.method === "git.logPage")).toEqual([]);
+    // 7자 이상 16진이어도 그런 커밋이 없으면 메시지다.
+    await type(text, "deadbeef");
+    expect(host.calls.filter((c) => c.method === "git.logPage").at(-1)!.params).toMatchObject({
+      refs: null,
+      filter: { hash: "deadbeef", message: null },
+      limit: 1,
+    });
+    expect(logCalls().at(-1)!.params.filter).toMatchObject({ message: "deadbeef", hash: null });
+    expect(document.querySelector("[data-testid=git-log-status]")!.textContent).not.toContain(
+      "해시",
+    );
+    // 커밋으로 풀리면 해시 접두이고, 상태 줄이 그렇게 알린다.
+    const prefix = hashOf(3).toUpperCase();
+    await type(text, prefix);
+    expect(logCalls().at(-1)!.params.filter).toMatchObject({
+      message: null,
+      hash: hashOf(3),
+    });
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-testid=git-log-status]")!.textContent).toContain(
+        "해시 접두로 찾은 커밋",
+      ),
+    );
 
     // 작성자 · 날짜 · 경로.
     await mouse(
@@ -602,26 +644,28 @@ it("sends the filter bar and the branch panel as git.log refs and filter", async
       since: Math.floor(new Date(2026, 9, 1).getTime() / 1000),
       until: null,
       paths: ["src/main", "docs"],
-      hash: "a1b2c3d",
+      hash: hashOf(3),
     });
 
     // 필터 지우기 → 처음 요청과 같다.
     await mouse(document.querySelector('button[aria-label="필터 지우기"]')!, "click");
     expect(logCalls().at(-1)!.params.filter).toEqual(logCalls()[0]!.params.filter);
 
-    // 브랜치 패널: 클릭 = 그것 하나, ⌘+클릭 = 더하기, 다시 클릭 = 풀기.
+    // 브랜치 패널: 클릭 = 그것 하나, ⌘+클릭 = 더하기, 다시 클릭 = 풀기. 넘기는 것은 ref 전체 이름.
     const branch = (name: string) => document.querySelector<HTMLElement>(`[data-ref="${name}"]`)!;
-    await vi.waitFor(() => expect(branch("main")).not.toBeNull());
-    await mouse(branch("main"), "click");
-    expect(logCalls().at(-1)!.params.refs).toEqual(["main"]);
+    await vi.waitFor(() => expect(branch("refs/heads/main")).not.toBeNull());
+    await mouse(branch("refs/heads/main"), "click");
+    expect(logCalls().at(-1)!.params.refs).toEqual(["refs/heads/main"]);
     await act(async () => {
-      branch("feat/x").dispatchEvent(new MouseEvent("click", { bubbles: true, metaKey: true }));
+      branch("refs/heads/feat/x").dispatchEvent(
+        new MouseEvent("click", { bubbles: true, metaKey: true }),
+      );
     });
     await settle();
-    expect(logCalls().at(-1)!.params.refs).toEqual(["main", "feat/x"]);
-    await mouse(branch("feat/x"), "click");
-    expect(logCalls().at(-1)!.params.refs).toEqual(["feat/x"]);
-    await mouse(branch("feat/x"), "click");
+    expect(logCalls().at(-1)!.params.refs).toEqual(["refs/heads/main", "refs/heads/feat/x"]);
+    await mouse(branch("refs/heads/feat/x"), "click");
+    expect(logCalls().at(-1)!.params.refs).toEqual(["refs/heads/feat/x"]);
+    await mouse(branch("refs/heads/feat/x"), "click");
     expect(logCalls().at(-1)!.params.refs).toBeNull();
   } finally {
     vi.useRealTimers();
@@ -869,10 +913,109 @@ it("rebases a dragged branch label onto the label it is dropped on", async () =>
     expect(host.calls.find((c) => c.method === "git.rebase")!.params).toEqual({
       projectId: "p1",
       worktree: null,
-      upstream: "main",
+      upstream: "refs/heads/main",
       branch: "feat/x",
     }),
   );
+});
+
+it("passes the full ref name when a branch and a tag share a short name", async () => {
+  // 브랜치 `v1`(셋째 행)과 태그 `v1`(다섯째 행). 짧은 이름이면 git 은 태그를 먼저 푼다.
+  host.rows = fixtureRows("synth").map((r, i) =>
+    i === 2 ? { ...r, refs: [{ name: "v1", kind: "branch", current: false }] } : r,
+  );
+  host.answers.set("git.refs", {
+    ...REFS,
+    branches: [
+      ...REFS.branches,
+      { name: "v1", refName: "refs/heads/v1", commit: hashOf(2), head: false, upstream: null },
+    ],
+  });
+  host.answers.set("git.merge", {
+    workTree: "/work/demo",
+    outcome: "done",
+    head: hashOf(0),
+    moved: null,
+    operation: null,
+  });
+  await openLog();
+  // 라벨 끌기: 브랜치 `v1` 을 지금 브랜치 `main` 에 놓고 merge · 비교.
+  const dragV1ToMain = async () => {
+    const label = ctx.texts.find((t) => t.y === rowY(2) && t.text === "v1")!;
+    const to = ctx.texts.find((t) => t.y === rowY(0) && t.text === "● main")!.x + 2;
+    await pointer("pointerdown", label.x + 2, rowY(2));
+    await pointer("pointermove", label.x + 12, rowY(1));
+    await pointer("pointermove", to, rowY(0));
+    await pointer("pointerup", to, rowY(0));
+    await vi.waitFor(() => expect(menuItem("v1 를 main 에 merge")).toBeDefined());
+  };
+  await dragV1ToMain();
+  await mouse(menuItem("v1 를 main 에 merge")!, "click");
+  await vi.waitFor(() =>
+    expect(host.calls.find((c) => c.method === "git.merge")!.params).toEqual({
+      projectId: "p1",
+      worktree: null,
+      rev: "refs/heads/v1",
+    }),
+  );
+  await dragV1ToMain();
+  await mouse(
+    [...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find((e) =>
+      e.textContent?.includes("비교"),
+    )!,
+    "click",
+  );
+  expect(ran.at(-1)).toEqual({
+    id: "git.compareCommits",
+    args: { a: "refs/heads/main", b: "refs/heads/v1" },
+  });
+  // 브랜치 패널: 로컬 `v1` 과 태그 `v1` 은 다른 값으로 거른다.
+  const panelRef = (value: string) => document.querySelector<HTMLElement>(`[data-ref="${value}"]`);
+  await mouse(panelRef("refs/heads/v1")!, "click");
+  expect(logCalls().at(-1)!.params.refs).toEqual(["refs/heads/v1"]);
+  await mouse(
+    [...document.querySelectorAll<HTMLElement>("[role=treeitem]")].find((e) =>
+      e.textContent?.startsWith("태그"),
+    )!,
+    "click",
+  );
+  await vi.waitFor(() => expect(panelRef("refs/tags/v1")).not.toBeNull());
+  await mouse(panelRef("refs/tags/v1")!, "click");
+  expect(logCalls().at(-1)!.params.refs).toEqual(["refs/tags/v1"]);
+  // 필터 바의 브랜치 ▾ 도 같은 값(전체 이름)을 더한다.
+  await mouse(
+    [...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("브랜치"))!,
+    "click",
+  );
+  const v1Box = [...document.querySelectorAll("label")]
+    .find((l) => l.textContent === "v1")!
+    .querySelector("input")!;
+  await mouse(v1Box, "click");
+  expect(logCalls().at(-1)!.params.refs).toEqual(["refs/tags/v1", "refs/heads/v1"]);
+});
+
+it("repaints at the new pixel ratio when the window moves to another display", async () => {
+  const changes: (() => void)[] = [];
+  const realMatchMedia = window.matchMedia.bind(window);
+  vi.spyOn(window, "matchMedia").mockImplementation((query: string) => {
+    if (!query.includes("dppx")) return realMatchMedia(query);
+    return {
+      matches: true,
+      media: query,
+      addEventListener: (_: string, fn: () => void) => changes.push(fn),
+      removeEventListener: () => {},
+    } as unknown as MediaQueryList;
+  });
+  const ratio = vi.spyOn(window, "devicePixelRatio", "get").mockReturnValue(1);
+  await openLog();
+  const canvas = list()!.querySelector("canvas")!;
+  expect(canvas.width).toBe(VIEW.width);
+  ratio.mockReturnValue(2);
+  await act(async () => {
+    for (const fn of changes.splice(0)) fn();
+  });
+  await vi.waitFor(() => expect(canvas.width).toBe(VIEW.width * 2));
+  expect(canvas.height).toBe(VIEW.height * 2);
 });
 
 it("reloads the log with the same filter when refs change", async () => {

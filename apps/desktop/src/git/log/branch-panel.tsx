@@ -1,5 +1,6 @@
 // Git 로그의 왼쪽 브랜치 패널(docs/design/13-m2-plan.md M2-14, 10-ui.md 「Git」 마우스 표의 「브랜치 패널」 행): HEAD · 로컬 · 원격 ·
-// 태그(`git.refs`). 클릭 = 그 브랜치로 거르기(다시 누르면 풀기), `⌘+클릭`(Win/Linux `Ctrl`) = 여럿, 더블클릭 = 체크아웃(로컬은 그
+// 태그(`git.refs`). 고른 값은 ref 전체 이름(`refs/heads/…`, HEAD 는 `HEAD`)이다 — 짧은 이름이면 같은 이름의 태그가 브랜치보다 먼저
+// 풀린다. 클릭 = 그 브랜치로 거르기(다시 누르면 풀기), `⌘+클릭`(Win/Linux `Ctrl`) = 여럿, 더블클릭 = 체크아웃(로컬은 그
 // 브랜치, 원격은 추적 브랜치를 만들어). 원격 브랜치가 수천 개일 수 있어 행은 TanStack Virtual 로 보이는 것만 그린다.
 
 import type { GitRefs } from "@pitwall/rpc-client";
@@ -18,17 +19,20 @@ export type PanelRow =
   | { kind: "all" }
   | { kind: "head"; name: string }
   | { kind: "section"; section: Section; count: number; open: boolean }
-  | { kind: "ref"; section: Section; name: string; current: boolean };
+  | { kind: "ref"; section: Section; name: string; refName: string; current: boolean };
 
 /** 패널의 행(접힌 무리의 항목은 빠진다). */
 export function panelRows(refs: GitRefs | undefined, closed: ReadonlySet<Section>): PanelRow[] {
   if (!refs?.workTree) return [];
   const rows: PanelRow[] = [{ kind: "all" }];
   if (refs.head && refs.head.kind !== "unborn") rows.push({ kind: "head", name: "HEAD" });
-  const groups: [Section, { name: string; current: boolean }[]][] = [
-    ["local", refs.branches.map((b) => ({ name: b.name, current: b.head }))],
-    ["remote", refs.remoteBranches.map((b) => ({ name: b.name, current: false }))],
-    ["tags", refs.tags.map((t) => ({ name: t.name, current: false }))],
+  const groups: [Section, { name: string; refName: string; current: boolean }[]][] = [
+    ["local", refs.branches.map((b) => ({ name: b.name, refName: b.refName, current: b.head }))],
+    [
+      "remote",
+      refs.remoteBranches.map((b) => ({ name: b.name, refName: b.refName, current: false })),
+    ],
+    ["tags", refs.tags.map((t) => ({ name: t.name, refName: t.refName, current: false }))],
   ];
   for (const [section, items] of groups) {
     if (items.length === 0) continue;
@@ -37,6 +41,11 @@ export function panelRows(refs: GitRefs | undefined, closed: ReadonlySet<Section
     if (open) for (const item of items) rows.push({ kind: "ref", section, ...item });
   }
   return rows;
+}
+
+/** 행이 고르는 값(ref 전체 이름, HEAD 는 `HEAD`). */
+function refValue(row: Extract<PanelRow, { kind: "head" | "ref" }>): string {
+  return row.kind === "head" ? "HEAD" : row.refName;
 }
 
 /** 고른 브랜치에 `name` 을 넣거나 뺀다. `toggle` 이 아니면 그것 하나만(이미 그것 하나면 풀기). */
@@ -78,7 +87,7 @@ export function BranchPanel({ refs, chosen, onChoose, onCheckout, strings }: Bra
       else next.add(row.section);
       return setClosed(next);
     }
-    onChoose(pickRef(chosen, row.name, mac ? e.metaKey : e.ctrlKey));
+    onChoose(pickRef(chosen, refValue(row), mac ? e.metaKey : e.ctrlKey));
   };
   return (
     <div className="flex h-full min-w-0 flex-col">
@@ -98,7 +107,7 @@ export function BranchPanel({ refs, chosen, onChoose, onCheckout, strings }: Bra
             const selected =
               row.kind === "all"
                 ? chosen.length === 0
-                : row.kind !== "section" && chosen.includes(row.name);
+                : row.kind !== "section" && chosen.includes(refValue(row));
             const label =
               row.kind === "all"
                 ? strings.all
@@ -113,7 +122,7 @@ export function BranchPanel({ refs, chosen, onChoose, onCheckout, strings }: Bra
                 role="treeitem"
                 aria-selected={row.kind === "section" ? undefined : selected}
                 aria-expanded={row.kind === "section" ? row.open : undefined}
-                data-ref={row.kind === "ref" || row.kind === "head" ? row.name : undefined}
+                data-ref={row.kind === "ref" || row.kind === "head" ? refValue(row) : undefined}
                 title={row.kind === "ref" ? row.name : undefined}
                 className={`absolute left-0 flex w-full cursor-default items-center gap-1 truncate pr-2 text-[12px] hover:bg-ui-hover ${selected ? "bg-ui-active" : ""}`}
                 style={{

@@ -8,6 +8,9 @@
 // - ref 를 옮긴 결과(`GitRefMove`)가 오면 [되돌리기] 를 단다: `previous` 로 `git.reset --keep`(`expected` = `current`,
 //   `expectedRef` = `refName` — 그사이 다른 것이 HEAD 를 옮겼으면 Host 가 거절한다). keep 이 잃을 것이 있으면 conflict 의 목록으로
 //   묻고 그 지문으로 다시 부른다.
+// - git 에 리비전으로 넘기는 ref(merge · rebase 의 위 · 비교)는 언제나 전체 이름(`refFullName`)이다 — 짧은 이름이면 같은 이름의
+//   태그가 브랜치보다 먼저 풀린다. merge · rebase 는 Host 가 실행 직전에 모호하지 않으면 짧은 이름으로 바꿔 메시지를 터미널과
+//   맞춘다(pw-git `history` 의 `unambiguous_short`). rebase 할 브랜치(`branch`)와 체크아웃은 Host 가 브랜치로만 다뤄 짧은 이름이다.
 // - cherry-pick 은 고른 커밋을 오래된 것부터, revert 는 새것부터 넘긴다(새것부터 되돌려야 뒤 커밋이 앞 커밋의 변경 위에서 풀린다).
 // - 충돌로 멈추면(`outcome: stopped`) 경고 알림만 — 계속 · 중단은 커밋 툴 윈도우(M2-11 · M2-16)의 몫이다. git 이 거절하면 그
 //   원문을 오류 알림의 본문에 둔다.
@@ -15,6 +18,7 @@
 import {
   ERROR_CODE,
   type GitLostChanges,
+  type LogRef,
   type GitRefMove,
   type GitStatusEntry,
   type ResetMode,
@@ -43,6 +47,20 @@ export interface LogOpsDeps {
 
 export function short(hash: string): string {
   return hash.slice(0, 8);
+}
+
+/** 로그 라벨의 ref 전체 이름(분리된 HEAD 는 `HEAD`). */
+export function refFullName(ref: LogRef): string {
+  switch (ref.kind) {
+    case "head":
+      return "HEAD";
+    case "branch":
+      return `refs/heads/${ref.name}`;
+    case "remote":
+      return `refs/remotes/${ref.name}`;
+    case "tag":
+      return `refs/tags/${ref.name}`;
+  }
 }
 
 /**

@@ -5,6 +5,8 @@
 //   앞 스트림의 늦은 청크는 버린다.
 // - 필터 바의 값을 RPC 의 `refs` · `filter` 로 옮기는 것은 `logParams` 하나다 — 필터 결과가 M2-03 과 같다는 것은 이 변환이 값을
 //   그대로 넘긴다는 것이다(브랜치 밖의 필터가 켜지면 Host 가 그래프 없이 맞는 커밋만 보낸다, 결정 M2-D2).
+// - 텍스트 칸이 해시 접두인지는 글자 모양만으로 정하지 않는다 — `added` · `2024` 같은 낱말도 16진이다. 16진 7자 이상이고 같은
+//   브랜치 범위에 그 접두로 시작하는 커밋이 있을 때만(`git.logPage` 한 행으로 묻는다) 해시로, 아니면 메시지로 찾는다.
 
 import type { GitLogParams, LogFilter, LogRow, RpcClient } from "@pitwall/rpc-client";
 
@@ -14,7 +16,7 @@ import { LaneIndex } from "./lanes";
 export interface LogQuery {
   /** 브랜치 필터(브랜치 패널 · 브랜치 ▾). 비면 모든 브랜치 · 원격 · 태그 · HEAD. */
   refs: readonly string[];
-  /** 텍스트 칸. 16진 4 ~ 40 글자면 해시 접두, 아니면 메시지(`--grep`). */
+  /** 텍스트 칸. 해시 접두로 풀리면 해시(`isHashText` · `LogModel.load`), 아니면 메시지(`--grep`). */
   text: string;
   regex: boolean;
   ignoreCase: boolean;
@@ -38,9 +40,10 @@ export const EMPTY_QUERY: LogQuery = {
   paths: "",
 };
 
-const HASH = /^[0-9a-f]{4,40}$/i;
+// 7자는 git 의 짧은 해시 기본 길이다. 64 는 SHA-256 저장소의 전체 해시.
+const HASH = /^[0-9a-f]{7,64}$/i;
 
-/** 텍스트 칸이 해시 접두로 읽히는가. */
+/** 텍스트 칸이 해시 접두일 수 있는가(모양만). 실제로 해시로 찾을지는 커밋이 있는지 물어 정한다(`LogModel.load`). */
 export function isHashText(text: string): boolean {
   return HASH.test(text.trim());
 }
@@ -55,12 +58,13 @@ export function dayToUnix(day: string, end: boolean): number | null {
   return Number.isNaN(date.getTime()) ? null : Math.floor(date.getTime() / 1000);
 }
 
-/** 필터 바의 값 → `git.log` 의 `refs` · `filter`. */
+/** 필터 바의 값 → `git.log` 의 `refs` · `filter`. `textAsHash` 면 텍스트 칸을 해시 접두로(모양이 해시일 때만). */
 export function logParams(
   query: LogQuery,
+  textAsHash = false,
 ): Pick<GitLogParams, "refs" | "filter"> & { filter: LogFilter } {
   const text = query.text.trim();
-  const hash = isHashText(text);
+  const hash = textAsHash && isHashText(text);
   const paths = query.paths
     .split(/[,\n]/)
     .map((p) => p.trim())
@@ -115,6 +119,8 @@ export class LogModel {
   status: LogStatus = { kind: "idle" };
   /** 그래프 없이 맞는 커밋만 받는 목록인가(브랜치 밖의 필터). */
   filtered = false;
+  /** 텍스트 칸을 해시 접두로 찾는 중인가(상태 줄이 알린다). */
+  textAsHash = false;
   private byHash = new Map<string, number>();
   private abort: AbortController | undefined;
   private listeners = new Set<() => void>();
@@ -139,21 +145,25 @@ export class LogModel {
     this.abort?.abort();
     const abort = new AbortController();
     this.abort = abort;
-    const { refs, filter } = logParams(query);
     this.reset();
-    this.filtered = listFiltered(filter);
+    this.filtered = listFiltered(logParams(query).filter);
     this.status = { kind: "loading" };
     this.changed();
-    const params: GitLogParams = {
-      projectId: source.projectId,
-      worktree: source.worktree ?? null,
-      refs,
-      filter,
-      order: "topo",
-    };
     return (async () => {
       let first = true;
       try {
+        const textAsHash = await resolvesAsHash(source, query, abort.signal);
+        if (abort.signal.aborted) return;
+        const { refs, filter } = logParams(query, textAsHash);
+        this.textAsHash = textAsHash;
+        this.filtered = listFiltered(filter);
+        const params: GitLogParams = {
+          projectId: source.projectId,
+          worktree: source.worktree ?? null,
+          refs,
+          filter,
+          order: "topo",
+        };
         for await (const chunk of source.client.stream("git.log", params, {
           signal: abort.signal,
         })) {
@@ -188,6 +198,7 @@ export class LogModel {
     this.byHash = new Map();
     this.total = null;
     this.filtered = false;
+    this.textAsHash = false;
   }
 
   private append(rows: readonly LogRow[]) {
@@ -201,5 +212,34 @@ export class LogModel {
   private changed() {
     this.version++;
     for (const l of this.listeners) l();
+  }
+}
+
+/** 텍스트 칸이 해시 모양이고 `query.refs` 범위에 그 접두로 시작하는 커밋이 있는가. 묻지 못하면 거짓(메시지로 찾는다). */
+async function resolvesAsHash(
+  source: LogSource,
+  query: LogQuery,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (!isHashText(query.text)) return false;
+  // 다른 필터는 빼고 브랜치 범위와 해시만 — 「그 커밋이 있는가」 만 묻는다.
+  const { refs, filter } = logParams({ ...EMPTY_QUERY, refs: query.refs, text: query.text }, true);
+  try {
+    const page = await source.client.call(
+      "git.logPage",
+      {
+        projectId: source.projectId,
+        worktree: source.worktree ?? null,
+        refs,
+        filter,
+        order: "topo",
+        limit: 1,
+      },
+      { signal },
+    );
+    return page.rows.length > 0;
+  } catch (e) {
+    if (!signal.aborted) console.warn("[git] could not check the hash prefix", e);
+    return false;
   }
 }

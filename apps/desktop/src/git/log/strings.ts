@@ -19,7 +19,6 @@ export function gitLogStrings(t: Translate) {
     },
     filter: {
       text: t("git-log-filter-text"),
-      hashHint: t("git-log-filter-hash-hint"),
       regex: t("git-log-filter-regex"),
       matchCase: t("git-log-filter-match-case"),
       branch: t("git-log-filter-branch"),
@@ -37,6 +36,7 @@ export function gitLogStrings(t: Translate) {
       loading: t("git-log-loading"),
       count: (count: number) => t("git-log-count", { count }),
       matched: (count: number) => t("git-log-matched", { count }),
+      matchedHash: (count: number) => t("git-log-matched-hash", { count }),
       failed: (message: string) => t("git-log-failed", { message }),
       empty: t("git-log-empty"),
       noProject: t("git-log-no-project"),

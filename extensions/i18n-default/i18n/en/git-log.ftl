@@ -11,10 +11,9 @@ git-log-branches-remote = Remote
 git-log-branches-tags = Tags
 git-log-branches-all = All branches
 
-## Filter bar. The text field searches a hash prefix when it is 4 to 40 hex digits, otherwise the message.
+## Filter bar. The text field searches a hash prefix when it is 7 or more hex digits and a commit starts with them, otherwise the message.
 
 git-log-filter-text = Text or hash
-git-log-filter-hash-hint = Searching a hash prefix
 git-log-filter-regex = Regex
 git-log-filter-match-case = Match case
 git-log-filter-branch = Branch
@@ -44,6 +43,11 @@ git-log-count = { $count ->
 git-log-matched = { $count ->
         [one] 1 matching commit
        *[other] { $count } matching commits
+    }
+# $count: number of commits found by hash prefix
+git-log-matched-hash = { $count ->
+        [one] 1 commit by hash prefix
+       *[other] { $count } commits by hash prefix
     }
 # $message: the Host's error text
 git-log-failed = Could not read the log: { $message }

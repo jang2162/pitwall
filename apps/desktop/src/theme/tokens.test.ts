@@ -127,7 +127,7 @@ describe("git · graph · diff tokens (M2-12)", () => {
     }
   });
 
-  it("keep the folded lane apart from the cycled lanes and visible (3:1) on the panel background", () => {
+  it("keep the folded lane apart from the cycled lanes and visible with room (3.5:1) on the panel background", () => {
     for (const appearance of ["light", "dark"] as const) {
       const values = defaultTheme.variants[appearance]!;
       const folded = values["graph.lane.folded"].toLowerCase();
@@ -135,7 +135,7 @@ describe("git · graph · diff tokens (M2-12)", () => {
         values[graphLaneToken(i)].toLowerCase(),
       );
       expect(lanes).not.toContain(folded);
-      expect(contrast(folded, values["ui.panelBackground"])).toBeGreaterThanOrEqual(3);
+      expect(contrast(folded, values["ui.panelBackground"])).toBeGreaterThanOrEqual(3.5);
     }
   });
 
