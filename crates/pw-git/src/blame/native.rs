@@ -169,7 +169,7 @@ pub fn run(
             line: entry.start_in_blamed_file + 1,
             count: entry.len.get(),
             commit: hash,
-            source_path: path_text(key.1.as_bstr()),
+            source_path: path_text(key.1.as_bstr())?,
             source_line: entry.start_in_source_file + 1,
             previous: before,
         });
@@ -219,7 +219,7 @@ fn previous_of(
         if let Some(origin) = origin {
             return Ok(Some(BlamePrevious {
                 commit: parent.to_string(),
-                path: path_text(origin.as_bstr()),
+                path: path_text(origin.as_bstr())?,
             }));
         }
     }

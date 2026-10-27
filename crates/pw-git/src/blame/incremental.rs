@@ -121,7 +121,7 @@ impl Parser {
                     .ok_or_else(|| bad("`previous` without a path"))?;
                 pending.previous = Some(BlamePrevious {
                     commit: hash_text(hash)?,
-                    path: path_text(unquote(path).as_bstr()),
+                    path: path_text(unquote(path).as_bstr())?,
                 });
             }
             b"filename" => {
@@ -135,7 +135,7 @@ impl Parser {
                     line: pending.line,
                     count: pending.count,
                     commit: pending.hash,
-                    source_path: path_text(unquote(value).as_bstr()),
+                    source_path: path_text(unquote(value).as_bstr())?,
                     source_line: pending.source_line,
                     previous: pending.previous,
                 }));

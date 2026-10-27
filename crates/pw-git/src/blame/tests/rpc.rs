@@ -351,3 +351,95 @@ async fn trusted_blame_reads_the_stored_content_not_the_textconv_output() {
     );
     assert!(!marks.exists(), "textconv ran");
 }
+
+/// UTF-8 이 아닌 경로(`caf\xe9.txt` → `cafe.txt` 이름 바뀜)는 U+FFFD 로 바꿔 싣지 않고 invalid params 로 끝난다 — 바꾼 이름으로는
+/// 다시 지목할 수 없어 「이 커밋 이전으로」 가 조용히 빈 결과가 된다(`super::super::path_text`). 두 엔진 · 파일 히스토리 모두.
+/// macOS 는 그런 파일 이름을 만들 수 없어 index 로 커밋한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn paths_that_are_not_utf8_fail_instead_of_turning_into_replacement_characters() {
+    use crate::file_history::FileHistoryChunk;
+    use crate::file_history::methods::GitFileHistoryParams;
+
+    let repo = TestRepo::with_commit();
+    let index_info = |line: Vec<u8>| {
+        let list = repo.base().join("index-info");
+        std::fs::write(&list, line).unwrap();
+        let out = repo
+            .command_in(repo.root())
+            .args(["update-index", "--index-info"])
+            .stdin(std::fs::File::open(&list).unwrap())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let blob = |text: &str| {
+        let file = repo.base().join("blob");
+        std::fs::write(&file, text).unwrap();
+        repo.git(&["hash-object", "-w", "--", file.to_str().unwrap()])
+            .trim()
+            .to_owned()
+    };
+    let mut add = format!("100644 {} 0\t", blob("a\nb\nc\nd\ne\nf\ng\nh\n")).into_bytes();
+    add.extend_from_slice(b"caf\xe9.txt\n");
+    index_info(add);
+    repo.git(&["commit", "-q", "-m", "add"]);
+    let mut rename = format!("0 {} 0\t", "0".repeat(40)).into_bytes();
+    rename.extend_from_slice(b"caf\xe9.txt\n");
+    rename.extend_from_slice(
+        format!("100644 {} 0\tcafe.txt\n", blob("a\nb\nc\nd\ne\nf\ng\nH\n")).as_bytes(),
+    );
+    index_info(rename);
+    repo.git(&["commit", "-q", "-m", "rename"]);
+    // git 도 이름 바뀜으로 본다(대조의 전제).
+    assert!(
+        repo.git(&[
+            "log",
+            "--follow",
+            "--name-status",
+            "--format=",
+            "--",
+            "cafe.txt"
+        ])
+        .starts_with('R'),
+    );
+
+    let fx = Fx::new("");
+    let id = fx.project(repo.root());
+    let invalid = |outcome: &StreamOutcome| {
+        matches!(outcome, StreamOutcome::Failed { error } if error.code == pw_rpc::code::INVALID_PARAMS
+            && error.data.as_ref().and_then(|d| d.as_str()).is_some_and(|d| d.contains("not UTF-8")))
+    };
+    for (trusted, engine) in [(false, BlameEngine::Gix), (true, BlameEngine::Git)] {
+        fx.trust(&id, trusted);
+        let (chunks, outcome) = fx
+            .stream::<_, BlameChunk>("git.blame", &params(&id, "cafe.txt", None))
+            .await;
+        assert!(invalid(&outcome), "{engine:?}: {outcome:?}");
+        // 실린 경로에 U+FFFD 가 없다.
+        for chunk in &chunks {
+            assert_eq!(chunk.file.as_ref().map(|f| f.engine), Some(engine));
+            assert!(
+                chunk
+                    .ranges
+                    .iter()
+                    .all(|r| !r.source_path.contains('\u{fffd}'))
+            );
+        }
+        let (_, outcome) = fx
+            .stream::<_, FileHistoryChunk>(
+                "git.fileHistory",
+                &GitFileHistoryParams {
+                    project_id: id.clone(),
+                    worktree: None,
+                    path: "cafe.txt".into(),
+                    rev: None,
+                },
+            )
+            .await;
+        assert!(invalid(&outcome), "fileHistory: {outcome:?}");
+    }
+}

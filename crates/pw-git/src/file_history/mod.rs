@@ -233,9 +233,12 @@ pub fn run(
             author_name: clip(&text.author_name, MAX_IDENT),
             author_email: clip(&text.author_email, MAX_IDENT),
             author_time: text.author_time,
-            path: path.to_str_lossy().into_owned(),
+            path: crate::blame::path_text(path.as_bstr())?,
             change: kind,
-            old_path: old_path.as_ref().map(|p| p.to_str_lossy().into_owned()),
+            old_path: old_path
+                .as_ref()
+                .map(|p| crate::blame::path_text(p.as_bstr()))
+                .transpose()?,
         };
         // 그 뒤로 걷는 커밋은 모두 원래 경로를 따라간다(머리 주석).
         if let Some(source) = old_path {

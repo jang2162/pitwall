@@ -13,7 +13,7 @@
 //! 시작하는 글자가 옵션이 되지 않는다). 작업 트리 · index 는 읽지 않는다 — 커밋하지 않은 변경 · 저장하지 않은 편집은 blame 하지
 //! 않는다. 창이 그 리비전의 줄을 지금 글에 맞춰 옮기고(거터의 HEAD 비교 — 결정 M2-D9, M2-17), 맞는 줄이 없는 줄이 「아직 커밋 안
 //! 됨」 이다. 「이 커밋 이전으로」 는 범위의 [`BlameRange::previous`](그 커밋의 부모와 그 부모에서의 경로 — git 의 `previous`)로
-//! 다시 부른다(`rev` = 그 부모 = `<커밋>^`).
+//! 다시 부른다. 보통 `<커밋>^` 이지만 머지 커밋이 넣은 줄이고 첫 부모에 그 파일이 없으면 그 파일이 있는 부모(`<커밋>^2` 등)다.
 
 pub mod incremental;
 pub mod methods;
@@ -211,8 +211,14 @@ fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::internal(e.to_string())
 }
 
-fn path_text(path: &BStr) -> String {
-    path.to_str_lossy().into_owned()
+/// 경로를 글로. UTF-8 이 아니면 invalid params — 손실 변환(U+FFFD)한 경로로는 그 파일을 다시 지목할 수 없어(「이 커밋 이전으로」 ·
+/// 리비전의 파일 열기) 조용히 빈 결과가 된다. RPC 의 경로는 모두 글이라 바이트로 싣지 않는다(conflict 모듈과 같은 판정).
+pub(crate) fn path_text(path: &BStr) -> Result<String, RpcError> {
+    path.to_str().map(str::to_owned).map_err(|_| {
+        RpcError::invalid_params(format!(
+            "the path `{path}` is not UTF-8; it cannot be shown or named"
+        ))
+    })
 }
 
 /// 범위를 청크로 묶는다. 첫 청크는 [`BlameFile`] 을 싣고, 커밋 정보는 처음 나올 때 한 번만 싣는다.
