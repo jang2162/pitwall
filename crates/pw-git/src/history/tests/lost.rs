@@ -1,7 +1,7 @@
 //! reset hard 의 잃을 변경 목록이 git 이 실제로 덮어쓰는 것을 빠뜨리지 않는다: 추적하다 ignore 로 뺀 파일, 대상에서 파일이 되는
 //! 폴더 · 폴더가 되는 파일, 중첩 저장소, macOS 의 대소문자, `submodule.recurse` 의 서브모듈 편집(더 많은 사례와 퍼즈는
-//! `probes` · `fuzz`). 확인한 뒤 그사이 바뀌면(폴더째 잃는 항목의 안도) 지문이 거절한다. [되돌리기] 의 keep 도 덮을 것이 있으면
-//! 묻는다.
+//! `probes` · `fuzz`). 확인한 뒤 그사이 바뀌면(폴더째 잃는 항목의 안도) 지문이 거절한다. [되돌리기] 의 keep 과 mixed 도 잃을
+//! 것이 있으면 묻는다.
 
 use pw_rpc::code as rpc_code;
 
@@ -380,4 +380,85 @@ async fn a_lost_folder_too_large_to_fingerprint_cannot_be_confirmed() {
     assert_eq!(e.code, rpc_code::CONFLICT);
     assert_eq!(e.data.unwrap()["fingerprint"], serde_json::Value::Null);
     assert!(dir.join("0").exists());
+}
+
+fn mixed(f: &WriteFixture, commit: &str, fingerprint: Option<String>) -> GitResetParams {
+    GitResetParams {
+        project_id: f.project.clone(),
+        worktree: None,
+        commit: commit.to_owned(),
+        mode: ResetMode::Mixed,
+        expected: None,
+        expected_ref: None,
+        fingerprint,
+    }
+}
+
+/// mixed 는 작업 트리를 두고 index 만 되돌린다 — 작업 트리와도 대상과도 다른 스테이징 내용은 사라지므로, 지문 없이 부르면 아무것도
+/// 하지 않고 목록과 지문을 conflict 로 돌려준다. 확인한 뒤 다시 스테이징했으면 지문이 달라 거절하고, 그 미리보기의 지문으로 하면 한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_mixed_reset_that_drops_staged_content_asks_first() {
+    let f = WriteFixture::new(true);
+    let _window = window(&f);
+    let r = &f.repo;
+    let first = r.head();
+    r.commit_file("a.txt", "a\n", "a");
+    r.write("README.md", "STAGED\n");
+    r.git(&["add", "README.md"]);
+    r.write("README.md", "DISK\n");
+
+    let e = reset(f.write.clone(), mixed(&f, &first, None))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, rpc_code::CONFLICT);
+    let data = e.data.unwrap();
+    assert_eq!(data["lost"]["changes"][0]["path"], "README.md");
+    assert_eq!(data["lost"]["changes"][0]["staged"], "modified");
+    assert_eq!(data["lost"]["overwritten"], serde_json::json!([]));
+    assert_ne!(r.head(), first);
+    assert_eq!(r.git(&["show", ":README.md"]), "STAGED\n", "untouched");
+
+    let mut p = preview_params(&f, &first);
+    p.mode = ResetMode::Mixed;
+    let preview = reset_preview(f.write.clone(), p.clone()).await.unwrap();
+    assert_eq!(preview.lost.changes.len(), 1);
+    assert_eq!(preview.lost.changes[0].path, "README.md");
+    assert_eq!(preview.fingerprint.as_deref(), data["fingerprint"].as_str());
+
+    r.write("README.md", "STAGED AGAIN\n");
+    r.git(&["add", "README.md"]);
+    r.write("README.md", "DISK\n");
+    let e = reset(f.write.clone(), mixed(&f, &first, preview.fingerprint))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.code,
+        rpc_code::CONFLICT,
+        "restaged after the confirmation"
+    );
+    assert_eq!(r.git(&["show", ":README.md"]), "STAGED AGAIN\n");
+
+    let preview = reset_preview(f.write.clone(), p).await.unwrap();
+    let done = reset(f.write.clone(), mixed(&f, &first, preview.fingerprint))
+        .await
+        .unwrap();
+    assert_eq!(r.head(), first);
+    assert_eq!(done.lost.unwrap().changes[0].path, "README.md");
+    assert_eq!(r.git(&["diff", "--cached", "--name-only"]), "");
+    assert_eq!(
+        read(&f, "README.md").as_deref(),
+        Some("DISK\n"),
+        "the disk stays"
+    );
+}
+
+/// soft 는 아무것도 잃지 않는다 — 미리보기가 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_soft_reset_has_no_preview() {
+    let f = WriteFixture::new(true);
+    let _window = window(&f);
+    let mut p = preview_params(&f, &f.repo.head());
+    p.mode = ResetMode::Soft;
+    let e = reset_preview(f.write.clone(), p).await.unwrap_err();
+    assert_eq!(e.code, rpc_code::INVALID_PARAMS);
 }

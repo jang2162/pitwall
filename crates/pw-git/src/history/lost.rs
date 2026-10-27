@@ -1,4 +1,4 @@
-//! reset hard · keep 이 잃을 변경(결정 M2-D6 ① — 확인 다이얼로그는 M2-20). 읽기라 gix 와 파일 시스템으로만 한다 — 미신뢰 프로젝트면
+//! reset hard · keep · mixed 가 잃을 변경(결정 M2-D6 ① — 확인 다이얼로그는 M2-20). 읽기라 gix 와 파일 시스템으로만 한다 — 미신뢰 프로젝트면
 //! 어느 설정의 필터 드라이버도 떼고 연다(결정 M2-D8).
 //!
 //! 계산은 「대상 트리의 경로마다 그 경로 · 앞(조상) · 아래(폴더면 그 안)의 디스크」 를 직접 본다 — 추적 중인 경로도 건너뛰지 않고,
@@ -11,6 +11,9 @@
 //!     (index 를 대상으로 되돌린다) · 충돌이다.
 //!   - 둘 다: skip-worktree · assume-unchanged 항목인데 디스크에 index 와 다른 것이 있으면(내용 · 종류 · 실행 비트 — 필터 없이
 //!     바이트로 비교한다) 그 경로. keep 은 두 커밋에서 다른 경로만.
+//!   - mixed: 작업 트리는 그대로라 index 에만 있는 내용만 잃는다 — 단계 0 항목의 blob 이 HEAD 와도, 대상 커밋의 같은 경로와도,
+//!     디스크(필터 없이 바이트, 종류 · 실행 비트는 보지 않는다)와도 다른 경로. 빈 blob(`git add -N` 포함) · 서브모듈은 뺀다.
+//!     충돌의 단계 1~3 은 커밋에 있는 내용이라 세지 않는다. `overwritten` 은 늘 비어 있다.
 //! - `overwritten`: 추적하지 않는 것(untracked · ignore 된 파일, 중첩 저장소) 중 git 이 묻지 않고 덮어쓰거나 지우는 것. 대상 트리의
 //!   파일 · 링크 경로마다(keep 은 HEAD 와 다른 경로만):
 //!   - 그 경로에 index 에 없는 파일 · 링크가 있으면 그것. ignore 된 파일도 센다 — 추적하다 `.gitignore` 로 뺀 `.env` 를 그 전 커밋으로
@@ -83,7 +86,7 @@ pub struct Lost {
 /// 경로의 (mode, 객체) — 트리 · index 를 같은 꼴로 비교한다.
 type Blob = (gix::objs::tree::EntryMode, gix::ObjectId);
 
-/// `rev` 로 `mode`(hard · keep — 그 밖은 keep 처럼 센다) reset 하면 잃을 변경. `interrupt` 가 서면 취소 오류다.
+/// `rev` 로 `mode`(hard · keep · mixed — soft 는 keep 처럼 센다) reset 하면 잃을 변경. `interrupt` 가 서면 취소 오류다.
 pub fn lost(
     opened: &Opened,
     rev: &str,
@@ -105,7 +108,66 @@ pub fn lost(
         .map_err(|e| RpcError::invalid_params(format!("`{rev}` is not a commit: {e}")))?;
     let head = repo.head_id().ok().map(|id| id.to_string());
     let interrupt = interrupt.map_or_else(|| Arc::new(AtomicBool::new(false)), Arc::clone);
-    let entries = compute::status(&repo, None, &interrupt, None).map_err(|e| match e {
+    let index = repo.index_or_empty().map_err(|e| internal(&e))?;
+    let work_tree = opened.target.work_tree.as_path();
+    let target_files = files(&target.tree().map_err(|e| internal(&e))?)?;
+    let head_files = match repo.head_tree_id_or_empty() {
+        Ok(id) if !id.is_empty_tree() => files(&repo.find_tree(id).map_err(|e| internal(&e))?)?,
+        Ok(_) => HashMap::new(),
+        Err(e) => return Err(internal(&e)),
+    };
+    let lost = if mode == ResetMode::Mixed {
+        GitLostChanges {
+            changes: index_only(
+                &repo,
+                &index,
+                work_tree,
+                &head_files,
+                &target_files,
+                &interrupt,
+            )?,
+            overwritten: Vec::new(),
+        }
+    } else {
+        on_disk(
+            &repo,
+            &index,
+            work_tree,
+            &head_files,
+            &target_files,
+            hard,
+            &interrupt,
+        )?
+    };
+
+    let fingerprint = fingerprint(
+        &repo,
+        &index,
+        work_tree,
+        mode,
+        head.as_deref(),
+        &target.id.to_string(),
+        &lost,
+    );
+    Ok(Lost {
+        head,
+        target: target.id.to_string(),
+        lost,
+        fingerprint,
+    })
+}
+
+/// hard · keep 이 잃을 변경(모듈 머리 주석의 `changes` · `overwritten`).
+fn on_disk(
+    repo: &gix::Repository,
+    index: &gix::index::State,
+    work_tree: &Path,
+    head_files: &HashMap<String, Blob>,
+    target_files: &HashMap<String, Blob>,
+    hard: bool,
+    interrupt: &Arc<AtomicBool>,
+) -> Result<GitLostChanges, RpcError> {
+    let entries = compute::status(repo, None, interrupt, None).map_err(|e| match e {
         Stopped::Interrupted => RpcError::cancelled(),
         Stopped::Failed(e) => RpcError::internal(format!("cannot read the status: {e}")),
     })?;
@@ -124,14 +186,6 @@ pub fn lost(
         }
     }
 
-    let index = repo.index_or_empty().map_err(|e| internal(&e))?;
-    let work_tree = opened.target.work_tree.as_path();
-    let target_files = files(&target.tree().map_err(|e| internal(&e))?)?;
-    let head_files = match repo.head_tree_id_or_empty() {
-        Ok(id) if !id.is_empty_tree() => files(&repo.find_tree(id).map_err(|e| internal(&e))?)?,
-        Ok(_) => HashMap::new(),
-        Err(e) => return Err(internal(&e)),
-    };
     // keep 은 두 커밋에서 같은 경로를 건드리지 않는다.
     let touched = |path: &str| hard || head_files.get(path) != target_files.get(path);
 
@@ -153,14 +207,13 @@ pub fn lost(
         {
             continue;
         }
-        let Ok(path) = e.path(&index).to_str() else {
+        let Ok(path) = e.path(index).to_str() else {
             continue;
         };
         if !touched(path) {
             continue;
         }
-        let Some(change) = differs_on_disk(&repo, work_tree, path, e, file_mode, &interrupt)?
-        else {
+        let Some(change) = differs_on_disk(repo, work_tree, path, e, file_mode, interrupt)? else {
             continue;
         };
         changes
@@ -236,22 +289,63 @@ pub fn lost(
     overwritten.sort();
     overwritten.dedup();
     lost.overwritten = overwritten;
+    Ok(lost)
+}
 
-    let fingerprint = fingerprint(
-        &repo,
-        &index,
-        work_tree,
-        mode,
-        head.as_deref(),
-        &target.id.to_string(),
-        &lost,
-    );
-    Ok(Lost {
-        head,
-        target: target.id.to_string(),
-        lost,
-        fingerprint,
-    })
+/// mixed 가 잃을 변경(모듈 머리 주석의 mixed). 경로순.
+fn index_only(
+    repo: &gix::Repository,
+    index: &gix::index::State,
+    work_tree: &Path,
+    head_files: &HashMap<String, Blob>,
+    target_files: &HashMap<String, Blob>,
+    interrupt: &AtomicBool,
+) -> Result<Vec<GitStatusEntry>, RpcError> {
+    let empty = gix::ObjectId::empty_blob(repo.object_hash());
+    let mut changes = Vec::new();
+    for e in index.entries() {
+        if interrupt.load(Ordering::Relaxed) {
+            return Err(RpcError::cancelled());
+        }
+        if e.stage_raw() != 0 || e.mode.is_submodule() || e.mode.is_sparse() || e.id == empty {
+            continue;
+        }
+        let Ok(path) = e.path(index).to_str() else {
+            continue;
+        };
+        let head = head_files.get(path);
+        if head.is_some_and(|(_, id)| *id == e.id)
+            || target_files.get(path).is_some_and(|(_, id)| *id == e.id)
+        {
+            continue;
+        }
+        let link = e.mode == Mode::SYMLINK;
+        let full = work_tree.join(path);
+        let unstaged = match std::fs::symlink_metadata(&full) {
+            Ok(meta) if !meta.is_dir() => {
+                if disk_blob(repo, &full, &meta, interrupt)? == Some(e.id) {
+                    continue;
+                }
+                if link == meta.file_type().is_symlink() {
+                    GitChange::Modified
+                } else {
+                    GitChange::TypeChanged
+                }
+            }
+            _ => GitChange::Deleted,
+        };
+        let staged = match head {
+            None => GitChange::Added,
+            Some((mode, _)) if mode.is_link() != link => GitChange::TypeChanged,
+            Some(_) => GitChange::Modified,
+        };
+        changes.push(GitStatusEntry {
+            staged: Some(staged),
+            unstaged: Some(unstaged),
+            ..blank(path)
+        });
+    }
+    Ok(changes)
 }
 
 /// 트리의 파일 · 링크 · 서브모듈 경로(폴더는 빠진다).
@@ -299,10 +393,33 @@ fn differs_on_disk(
     if link != meta.file_type().is_symlink() {
         return Ok(Some(GitChange::TypeChanged));
     }
-    let hash = repo.object_hash();
-    let id = if link {
-        let Ok(to) = std::fs::read_link(&full) else {
+    #[cfg(unix)]
+    if !link && file_mode {
+        use std::os::unix::fs::PermissionsExt;
+        let exec = meta.permissions().mode() & 0o111 != 0;
+        if exec != (e.mode == Mode::FILE_EXECUTABLE) {
             return Ok(Some(GitChange::Modified));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = file_mode;
+    Ok(match disk_blob(repo, &full, &meta, interrupt)? {
+        Some(id) if id == e.id => None,
+        _ => Some(GitChange::Modified),
+    })
+}
+
+/// 디스크의 파일 · 링크(`meta` 는 `full` 의 것)를 필터 없이 blob 으로 해시한다 — 링크는 가리키는 곳. 읽을 수 없으면 `None`.
+fn disk_blob(
+    repo: &gix::Repository,
+    full: &Path,
+    meta: &Metadata,
+    interrupt: &AtomicBool,
+) -> Result<Option<gix::ObjectId>, RpcError> {
+    let hash = repo.object_hash();
+    let id = if meta.file_type().is_symlink() {
+        let Ok(to) = std::fs::read_link(full) else {
+            return Ok(None);
         };
         gix::objs::compute_hash(
             hash,
@@ -310,18 +427,8 @@ fn differs_on_disk(
             to.as_os_str().as_encoded_bytes(),
         )
     } else {
-        #[cfg(unix)]
-        if file_mode {
-            use std::os::unix::fs::PermissionsExt;
-            let exec = meta.permissions().mode() & 0o111 != 0;
-            if exec != (e.mode == Mode::FILE_EXECUTABLE) {
-                return Ok(Some(GitChange::Modified));
-            }
-        }
-        #[cfg(not(unix))]
-        let _ = file_mode;
-        let Ok(mut file) = std::fs::File::open(&full) else {
-            return Ok(Some(GitChange::Modified));
+        let Ok(mut file) = std::fs::File::open(full) else {
+            return Ok(None);
         };
         gix::objs::compute_stream_hash(
             hash,
@@ -335,10 +442,7 @@ fn differs_on_disk(
     if interrupt.load(Ordering::Relaxed) {
         return Err(RpcError::cancelled());
     }
-    Ok(match id {
-        Ok(id) if id == e.id => None,
-        _ => Some(GitChange::Modified),
-    })
+    Ok(id.ok())
 }
 
 /// 작업 트리 기준 상대 경로를 디스크의 실제 이름으로(성분마다 같은 파일인 디렉터리 항목을 찾는다). 못 찾으면 받은 성분 그대로.

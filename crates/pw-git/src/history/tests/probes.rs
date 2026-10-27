@@ -1,4 +1,4 @@
-//! 재리뷰가 진짜 `git reset` 과 대조한 사례들을 고정 시험으로([`super::differ::check`] — hard · keep 둘 다 대조한다). 사례마다
+//! 재리뷰가 진짜 `git reset` 과 대조한 사례들을 고정 시험으로([`super::differ::check`] — hard · keep · mixed 를 대조한다). 사례마다
 //! git 이 실제로 무엇을 잃는지도 적어, 사례가 아무것도 잃지 않는 꼴로 무너지면 알게 한다.
 
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -435,4 +435,64 @@ fn keep_replaces_an_ignored_file_where_the_target_has_a_folder() {
     r.write("a", "MINE\n");
     let v = probe(&r, &target);
     assert_eq!(v.keep.lost, ["a"]);
+}
+
+#[test]
+fn mixed_drops_staged_content_that_differs_from_the_disk() {
+    let r = TestRepo::with_commit();
+    let (first, _) = undo_case(&r);
+    r.write("README.md", "STAGED\n");
+    r.git(&["add", "README.md"]);
+    r.write("README.md", "DISK\n");
+    let v = probe(&r, &first);
+    assert!(v.mixed.succeeded);
+    assert_eq!(v.mixed.lost, ["README.md"]);
+}
+
+#[test]
+fn mixed_drops_a_staged_file_deleted_from_the_disk() {
+    let r = TestRepo::with_commit();
+    let (first, _) = undo_case(&r);
+    r.write("n.txt", "STAGED\n");
+    r.git(&["add", "n.txt"]);
+    std::fs::remove_file(r.root().join("n.txt")).unwrap();
+    let v = probe(&r, &first);
+    assert_eq!(v.mixed.lost, ["n.txt"]);
+}
+
+#[test]
+fn mixed_keeps_staged_content_that_is_on_the_disk() {
+    let r = TestRepo::with_commit();
+    let (first, _) = undo_case(&r);
+    r.write("README.md", "STAGED\n");
+    r.git(&["add", "README.md"]);
+    let v = probe(&r, &first);
+    assert!(v.mixed.lost.is_empty(), "{:?}", v.mixed.lost);
+    assert!(v.mixed.preview.is_empty(), "{:?}", v.mixed.preview);
+}
+
+#[test]
+fn mixed_keeps_staged_content_that_the_target_has() {
+    let r = TestRepo::with_commit();
+    let target = r.commit_file("README.md", "TARGET\n", "target");
+    r.commit_file("README.md", "HEAD\n", "head");
+    r.write("README.md", "TARGET\n");
+    r.git(&["add", "README.md"]);
+    r.write("README.md", "DISK\n");
+    let v = probe(&r, &target);
+    assert!(v.mixed.lost.is_empty(), "{:?}", v.mixed.lost);
+    assert!(v.mixed.preview.is_empty(), "{:?}", v.mixed.preview);
+    assert_eq!(v.hard.lost, ["README.md"], "hard loses the disk edit");
+}
+
+#[test]
+fn mixed_drops_staged_content_under_assume_unchanged() {
+    let r = TestRepo::with_commit();
+    let (first, _) = undo_case(&r);
+    r.write("README.md", "STAGED\n");
+    r.git(&["add", "README.md"]);
+    r.git(&["update-index", "--assume-unchanged", "README.md"]);
+    r.write("README.md", "DISK\n");
+    let v = probe(&r, &first);
+    assert_eq!(v.mixed.lost, ["README.md"]);
 }

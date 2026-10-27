@@ -39,7 +39,8 @@ fn run_shard(shard: u64) {
         None => (1 + shard * SHARD, cases()),
     };
     let mut extra = 0;
-    let mut lost = 0;
+    // 방식별(hard · keep · mixed) 잃은 경로 수.
+    let mut lost = [0; 3];
     let mut refused = 0;
     for seed in start..start + count {
         // 잡힌 출력이라 실패한 시험에서만 보인다(만들다 패닉해도 시드를 안다).
@@ -53,9 +54,9 @@ fn run_shard(shard: u64) {
                 case.repo.git(&["ls-files", "-v", "-s"]),
             );
         }
-        for side in [&verdict.hard, &verdict.keep] {
+        for (i, side) in verdict.sides().into_iter().enumerate() {
             extra += side.extra();
-            lost += side.lost.len();
+            lost[i] += side.lost.len();
             if let Some(why) = &side.refused {
                 refused += 1;
                 eprintln!(
@@ -67,7 +68,8 @@ fn run_shard(shard: u64) {
         }
     }
     eprintln!(
-        "shard {shard}: {count} cases from seed {start}, {lost} lost paths all listed, {extra} listed entries not lost, {refused} previews refused"
+        "shard {shard}: {count} cases from seed {start}, lost paths all listed (hard {}, keep {}, mixed {}), {extra} listed entries not lost, {refused} previews refused",
+        lost[0], lost[1], lost[2]
     );
 }
 

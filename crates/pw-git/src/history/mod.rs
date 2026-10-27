@@ -8,9 +8,10 @@
 //!   HEAD 의 ref 를 되돌리는 것은 `git.reset { commit: previous, mode, expected: current, expectedRef: refName }` 다 — mode 는
 //!   soft reset 을 되돌리면 soft, mixed 면 mixed, 그 밖(hard · merge · rebase · cherry-pick · revert)은 keep(그사이 편집이 덮이면
 //!   git 이 거절한다). 충돌로 멈췄다가 `git.operation.continue` · `skip` 으로 끝나면 그 결과의 `moved` 가 시작점([`start`])부터다.
-//! - reset hard · keep 이 잃을 변경은 `git.resetPreview` 로 미리 읽는다(확인 다이얼로그는 M2-20). 읽기라 gix 로만 한다([`lost`]).
-//!   hard 는 늘, keep(되돌리기)은 잃을 것(ignore 된 파일 · 디스크와 다른 스테이징 내용 등 git 이 묻지 않고 덮는 것)이 있을 때
-//!   미리보기의 지문을 받아 잠금 안에서 다시 읽은 것과 다르면 아무것도 하지 않는다. 잃을 것이 없는 keep 은 지문 없이 한다.
+//! - reset hard · keep · mixed 가 잃을 변경은 `git.resetPreview` 로 미리 읽는다(확인 다이얼로그는 M2-20). 읽기라 gix 로만 한다
+//!   ([`lost`]). hard 는 늘, keep(되돌리기)은 잃을 것(ignore 된 파일 · 디스크와 다른 스테이징 내용 등 git 이 묻지 않고 덮는 것)이,
+//!   mixed 는 index 에만 있는 스테이징 내용이 있을 때 미리보기의 지문을 받아 잠금 안에서 다시 읽은 것과 다르면 아무것도 하지
+//!   않는다. 잃을 것이 없는 keep · mixed 는 지문 없이 한다. soft 는 아무것도 잃지 않는다.
 //! - 리비전 입력은 git 의 인자로 그대로 넘긴다(브랜치 이름이면 merge 메시지가 그 이름을 쓴다). `-` 로 시작하면 옵션으로 읽히므로
 //!   invalid params 로 거절한다.
 //! - git 이 스스로 거절하는 것(로컬 변경이 덮어써지는 merge · rebase 등)은 덮지 않고 원문을 보인다(결정 M2-D6 ④).
@@ -312,7 +313,8 @@ pub enum FastForward {
 pub enum ResetMode {
     /// ref 만 옮긴다 — index · 작업 트리는 그대로.
     Soft,
-    /// ref 와 index — 작업 트리는 그대로(git 기본).
+    /// ref 와 index — 작업 트리는 그대로(git 기본). index 에만 있는 내용(작업 트리와도 대상과도 다른 스테이징)이 있으면 그것을
+    /// 잃으므로 hard 처럼 `fingerprint` 가 있어야 한다.
     Mixed,
     /// ref · index · 작업 트리 — 저장하지 않은 변경을 잃는다(결정 M2-D6 ① 의 확인 대상). `fingerprint` 가 있어야 한다.
     Hard,
@@ -343,7 +345,7 @@ pub struct GitResetResult {
     pub head: Option<String>,
     /// 움직인 ref. 그대로였거나 전이 없었으면(태어나지 않은 브랜치) `null`.
     pub moved: Option<GitRefMove>,
-    /// hard · keep 일 때 잃은 변경(잠금 안에서 reset 바로 전에 읽은 것). soft · mixed 면 `null`.
+    /// hard · keep · mixed 일 때 잃은 변경(잠금 안에서 reset 바로 전에 읽은 것). soft 면 `null`.
     pub lost: Option<lost::GitLostChanges>,
 }
 
@@ -354,7 +356,7 @@ pub(crate) struct ResetGuard {
     pub expected: Option<String>,
     /// HEAD 가 가리키는 ref(분리돼 있으면 `HEAD`)가 이 이름이어야 한다.
     pub expected_ref: Option<String>,
-    /// 잃을 변경의 지문(`git.resetPreview`)이 이것이어야 한다. hard 는 늘, keep 은 잃을 것이 있으면 있어야 한다.
+    /// 잃을 변경의 지문(`git.resetPreview`)이 이것이어야 한다. hard 는 늘, keep · mixed 는 잃을 것이 있으면 있어야 한다.
     pub fingerprint: Option<String>,
 }
 
@@ -391,7 +393,7 @@ pub(crate) async fn reset(
                     serde_json::json!({ "head": before.head, "refName": name }),
                 ));
             }
-            let lost = if matches!(mode, ResetMode::Hard | ResetMode::Keep) {
+            let lost = if mode != ResetMode::Soft {
                 let rev = commit.clone();
                 let read = ctx
                     .read(move |o| lost::lost(o, &rev, mode, None))
@@ -403,10 +405,14 @@ pub(crate) async fn reset(
                 if needed
                     && (read.fingerprint.is_none() || guard.fingerprint != read.fingerprint)
                 {
-                    let message = if mode == ResetMode::Hard {
-                        "the changes a hard reset loses differ from the confirmed ones; nothing was reset"
-                    } else {
-                        "the reset would overwrite changes that were not confirmed; nothing was reset"
+                    let message = match mode {
+                        ResetMode::Hard => {
+                            "the changes a hard reset loses differ from the confirmed ones; nothing was reset"
+                        }
+                        ResetMode::Mixed => {
+                            "the reset would drop staged content that was not confirmed; nothing was reset"
+                        }
+                        _ => "the reset would overwrite changes that were not confirmed; nothing was reset",
                     };
                     return Err(conflict(
                         message,

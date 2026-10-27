@@ -1,9 +1,10 @@
-//! 차등 판정: 저장소 상태 하나에서 미리보기(hard · keep)를 읽고, 저장소의 복사본에서 진짜 `git reset` 을 돌려 사람의 내용 중 무엇이
+//! 차등 판정: 저장소 상태 하나에서 미리보기(hard · keep · mixed)를 읽고, 저장소의 복사본에서 진짜 `git reset` 을 돌려 사람의 내용 중 무엇이
 //! 사라지거나 바뀌었는지 미리보기 목록과 대조한다. 하나라도 목록에 없으면 놓친 것이다.
 //!
 //! 「사람의 내용」 은 작업 트리(꼭대기 `.git` 밖 — 중첩 저장소 · 서브모듈 안도)의 파일 · 링크와 index 에만 있는(디스크와 다른)
 //! 스테이징 내용이다. 리셋 전 HEAD 의 같은 경로에 같은 내용으로 있는 것은 되찾을 수 있어(되돌리기의 `previous`) 빼고, 빈 blob 의
-//! 스테이징(`git add -N`)도 뺀다. 실행 비트는 내용으로 보지 않는다. 대소문자를 무시하는 파일 시스템이면 경로를 ASCII 소문자로 견준다.
+//! 스테이징(`git add -N`)도 뺀다. 실행 비트는 내용으로 보지 않는다. mixed 는 작업 트리를 건드리지 않으므로 index 에만 있던 내용
+//! 중 reset 뒤 index(대상의 같은 경로)에도 디스크에도 없는 것이 잃은 것이다. 대소문자를 무시하는 파일 시스템이면 경로를 ASCII 소문자로 견준다.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -71,13 +72,14 @@ impl Side {
 pub(super) struct Verdict {
     pub hard: Side,
     pub keep: Side,
+    pub mixed: Side,
 }
 
 impl Verdict {
     /// 놓친 것이 없으면 `Ok`, 있으면 사람이 읽을 설명.
     pub fn complete(&self) -> Result<(), String> {
         let mut out = String::new();
-        for side in [&self.hard, &self.keep] {
+        for side in self.sides() {
             if !side.missed.is_empty() {
                 out.push_str(&format!(
                     "{:?} reset (git {}) lost {:?} but the preview misses {:?}; preview = {:?}\n",
@@ -92,6 +94,10 @@ impl Verdict {
         if out.is_empty() { Ok(()) } else { Err(out) }
     }
 
+    pub fn sides(&self) -> [&Side; 3] {
+        [&self.hard, &self.keep, &self.mixed]
+    }
+
     /// [`Self::complete`] 가 아니면 패닉.
     pub fn assert_complete(&self) {
         if let Err(e) = self.complete() {
@@ -100,7 +106,7 @@ impl Verdict {
     }
 }
 
-/// `repo` 의 지금 상태에서 `target` 으로 reset hard · keep 하면 잃는 것과 미리보기를 대조한다. `repo` 는 그대로다(복사본에서 돈다).
+/// `repo` 의 지금 상태에서 `target` 으로 reset hard · keep · mixed 하면 잃는 것과 미리보기를 대조한다. `repo` 는 그대로다(복사본에서 돈다).
 pub(super) fn check(repo: &TestRepo, target: &str) -> Verdict {
     let opened = open(repo.root());
     let side = |mode: ResetMode, name: &str| {
@@ -119,6 +125,7 @@ pub(super) fn check(repo: &TestRepo, target: &str) -> Verdict {
         };
         let flag = match mode {
             ResetMode::Hard => "--hard",
+            ResetMode::Mixed => "--mixed",
             _ => "--keep",
         };
         let mut lost = Vec::new();
@@ -166,6 +173,7 @@ pub(super) fn check(repo: &TestRepo, target: &str) -> Verdict {
     Verdict {
         hard: side(ResetMode::Hard, "copy-hard"),
         keep: side(ResetMode::Keep, "copy-keep"),
+        mixed: side(ResetMode::Mixed, "copy-mixed"),
     }
 }
 

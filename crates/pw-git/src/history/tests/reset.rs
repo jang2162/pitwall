@@ -278,11 +278,20 @@ async fn an_unknown_revision_fails_with_gits_message_and_the_preview_is_invalid_
     let head = f.repo.head();
     let e = reset(
         f.write.clone(),
-        params(&f, "no-such-branch", ResetMode::Mixed, None),
+        params(&f, "no-such-branch", ResetMode::Soft, None),
     )
     .await
     .unwrap_err();
     assert_eq!(e.code, crate::write::code::GIT_FAILED);
+    assert_eq!(f.repo.head(), head);
+    // mixed 는 git 을 띄우기 전에 잃을 변경을 읽는다.
+    let e = reset(
+        f.write.clone(),
+        params(&f, "no-such-branch", ResetMode::Mixed, None),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, rpc_code::INVALID_PARAMS);
     assert_eq!(f.repo.head(), head);
     let e = reset_preview(f.write.clone(), preview_params(&f, "no-such-branch"))
         .await
