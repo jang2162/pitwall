@@ -60,6 +60,7 @@ import { FileTreeToolWindow } from "../file-tree/file-tree";
 import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
 import { GitBranchFeature } from "../git/git-branch-feature";
+import { GitDocuments } from "../git/documents/git-documents";
 import { GitPrompts } from "../git/git-prompts";
 import { GitStatusWatch } from "../git/git-status";
 import { useAppStrings } from "../i18n/app-strings";
@@ -807,6 +808,7 @@ function ProjectWindowBody({
             <GitBranchFeature projectId={projectId} state={projectState.store} />
           )}
           {projectId !== undefined && <GitPrompts projectId={projectId} workspace={workspace} />}
+          {projectId !== undefined && <GitDocuments projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
           {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}

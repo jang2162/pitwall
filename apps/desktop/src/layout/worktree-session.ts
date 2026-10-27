@@ -17,7 +17,13 @@
 import { EditorView } from "@codemirror/view";
 import type { DockviewApi, IDockviewPanel } from "dockview-react";
 
-import { editorPanels, isEditorPanel, tabParams, togglePinned } from "../editor/editor-tabs";
+import {
+  editorPanels,
+  isEditorPanel,
+  isGitTab,
+  tabParams,
+  togglePinned,
+} from "../editor/editor-tabs";
 import { type Cursor, cursorOf, type EditorWorkspace } from "../editor/editor-workspace";
 import type { FileTreeModel } from "../file-tree/tree-model";
 import { requestedWorktree } from "../open-with/active-worktree";
@@ -85,7 +91,8 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
     const panels = api.groups
       .filter((g) => g.api.location.type === "grid")
       .flatMap((g) => g.panels)
-      .filter(isEditorPanel);
+      // git 문서 탭은 묶음에 담지 않는다(src/git/documents/spec.ts) — 다시 시작해도 되살리지 않는다.
+      .filter((p) => isEditorPanel(p) && !isGitTab(p));
     const active = workspace.activeTab();
     const tabs = panels.map((panel): TabState => {
       const { path, worktree, preview, pinned } = tabParams(panel);

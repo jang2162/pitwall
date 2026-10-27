@@ -9,6 +9,7 @@ mod release;
 mod show;
 #[cfg(unix)]
 mod untrusted;
+mod view_fixture;
 #[cfg(unix)]
 mod worktree;
 

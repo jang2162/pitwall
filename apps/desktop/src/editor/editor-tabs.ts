@@ -11,6 +11,7 @@
 
 import type { DockviewApi, DockviewGroupPanel, IDockviewPanel } from "dockview-react";
 
+import type { GitDocumentSpec } from "../git/documents/spec";
 import type { ViewerKind } from "./viewer-kinds";
 
 /** 에디터 탭의 내용 컴포넌트 이름(project-window.tsx 의 COMPONENTS 키). */
@@ -19,7 +20,7 @@ export const EDITOR_PANEL = "editorTab";
 export const EDITOR_TAB_HEADER = "editorTab";
 
 export interface EditorTabParams {
-  /** 정규화한 실제 경로. */
+  /** 정규화한 실제 경로. git 문서(`git`)면 문서 키(`git:…`, src/git/documents/spec.ts). */
   path: string;
   /**
    * 이 탭을 연 워크트리의 꼭대기(`ActiveWorktree.top`). 없으면 메인 체크아웃. 문서 읽기(`fs.*`)의 접근 범위와 외부 도구 문맥
@@ -33,6 +34,8 @@ export interface EditorTabParams {
   preview?: boolean;
   /** 고정(pin). */
   pinned?: boolean;
+  /** git 문서(커밋 상세 · 비교 · 리비전 파일 · diff). 있으면 파일 문서가 아니다(src/git/documents/spec.ts 머리 주석). */
+  git?: GitDocumentSpec;
 }
 
 export function isEditorPanel(panel: IDockviewPanel | undefined): panel is IDockviewPanel {
@@ -41,6 +44,11 @@ export function isEditorPanel(panel: IDockviewPanel | undefined): panel is IDock
 
 export function tabParams(panel: IDockviewPanel): EditorTabParams {
   return (panel.params ?? { path: "" }) as unknown as EditorTabParams;
+}
+
+/** git 문서 탭인가(파일 문서가 아니다). */
+export function isGitTab(panel: IDockviewPanel): boolean {
+  return tabParams(panel).git !== undefined;
 }
 
 export function editorPanels(api: DockviewApi): IDockviewPanel[] {
@@ -116,7 +124,18 @@ export function openTab(
     worktree,
     preview = false,
     recent = [],
-  }: { path: string; worktree?: string; preview?: boolean; recent?: readonly string[] },
+    git,
+    title,
+  }: {
+    path: string;
+    worktree?: string;
+    preview?: boolean;
+    recent?: readonly string[];
+    /** git 문서로 연다(`path` 는 그 문서 키). */
+    git?: GitDocumentSpec;
+    /** 탭 이름. 없으면 경로의 마지막 조각. */
+    title?: string;
+  },
 ): { panel: IDockviewPanel; created: boolean } {
   const group = targetGroup(api, recent);
   const existing = findTab(api, path, { group, recent });
@@ -132,12 +151,17 @@ export function openTab(
   replaced?.api.close();
   // 미리보기 자리를 닫아 그룹이 비면 dockview 가 그룹을 지운다 — 그때는 대상 그룹을 다시 고른다.
   const into = api.getGroup(group.id) ? group : targetGroup(api, recent);
-  const params: EditorTabParams = { path, preview, ...(worktree !== undefined && { worktree }) };
+  const params: EditorTabParams = {
+    path,
+    preview,
+    ...(worktree !== undefined && { worktree }),
+    ...(git !== undefined && { git }),
+  };
   const panel = api.addPanel({
     id: nextPanelId(api),
     component: EDITOR_PANEL,
     tabComponent: EDITOR_TAB_HEADER,
-    title: baseName(path),
+    title: title ?? baseName(path),
     params: params as unknown as Record<string, unknown>,
     position: { referenceGroup: into.id, index },
   });

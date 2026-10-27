@@ -1,0 +1,834 @@
+{
+  "blobs": {
+    "25aec4bc044f6cb03ce3cb4e90daa489310fb1c7:Cargo.lock": {
+      "content": {
+        "kind": "text",
+        "text": "version = 3\n\n[[package]]\nname = \"a\"\nversion = \"0.2.0\"\n"
+      },
+      "eof": true,
+      "id": "a1318a38c9d4981d7a72c503026cf11f7b6cb7f6",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 54,
+      "tooLarge": false
+    },
+    "25aec4bc044f6cb03ce3cb4e90daa489310fb1c7:crlf.txt": {
+      "content": {
+        "kind": "text",
+        "text": "one\r\n2\r\nthree\r\n"
+      },
+      "eof": true,
+      "id": "d48bcb7cd4755649a054ef67ffc423cc57dc684a",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "crlf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 15,
+      "tooLarge": false
+    },
+    "25aec4bc044f6cb03ce3cb4e90daa489310fb1c7:noeol.txt": {
+      "content": {
+        "kind": "text",
+        "text": "first\nlast changed"
+      },
+      "eof": true,
+      "id": "3519440f1a792e62213bd3444d822912cd57b064",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 18,
+      "tooLarge": false
+    },
+    "25aec4bc044f6cb03ce3cb4e90daa489310fb1c7:script.sh": {
+      "content": {
+        "kind": "text",
+        "text": "#!/bin/sh\necho hi\n"
+      },
+      "eof": true,
+      "id": "4163036efa65bd4a469e752267498f01ea36a55c",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100755",
+      "offset": 0,
+      "size": 18,
+      "tooLarge": false
+    },
+    "25aec4bc044f6cb03ce3cb4e90daa489310fb1c7:src/added.rs": {
+      "content": {
+        "kind": "text",
+        "text": "pub fn new() {}\n"
+      },
+      "eof": true,
+      "id": "f5f44b7a4e1ed9826d88baf40a56977f07093690",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 16,
+      "tooLarge": false
+    },
+    "25aec4bc044f6cb03ce3cb4e90daa489310fb1c7:src/lib.rs": {
+      "content": {
+        "kind": "text",
+        "text": "fn uno() {\n\n    2\n}\nconst C0: u32 = 0;\nconst C1: u32 = 1;\nconst C2: u32 = 2;\nconst C3: u32 = 3;\nconst C4: u32 = 4;\nconst C5: u32 = 5;\nconst C6: u32 = 6;\nconst C7: u32 = 7;\nconst C8: u32 = 8;\nconst C9: u32 = 9;\nconst C10: u32 = 10;\nconst C11: u32 = 11;\nconst C12: u32 = 12;\nconst C13: u32 = 13;\nconst C14: u32 = 14;\nconst C15: u32 = 15;\nconst C16: u32 = 16;\nconst C17: u32 = 17;\nconst C18: u32 = 18;\nconst C19: u32 = 19;\nconst C20: u32 = 20;\nconst C21: u32 = 21;\nconst C22: u32 = 22;\nconst C23: u32 = 23;\nconst C24: u32 = 24;\nconst C25: u32 = 25;\nconst C26: u32 = 26;\nconst C27: u32 = 27;\nconst C28: u32 = 28;\nconst C29: u32 = 29;\nconst C30: u32 = 30;\nconst C31: u32 = 31;\nconst C32: u32 = 32;\nconst C33: u32 = 33;\nconst C34: u32 = 34;\nconst C35: u32 = 35;\nconst C36: u32 = 36;\nconst C37: u32 = 37;\nconst C38: u32 = 38;\nconst C39: u32 = 39;\nfn tail() { changed() }\nfn added() {}\n"
+      },
+      "eof": true,
+      "id": "4cc5d1f6d46731b59873f1d781ca3c767b4d69e7",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 878,
+      "tooLarge": false
+    },
+    "25aec4bc044f6cb03ce3cb4e90daa489310fb1c7:src/new_name.rs": {
+      "content": {
+        "kind": "text",
+        "text": "pub fn a() {}\npub fn b() {}\npub fn c() {}\npub fn d() {}\npub fn e2() {}\n"
+      },
+      "eof": true,
+      "id": "d6f72ea5ccfb34aefb2b8fe7970b598bff8c9730",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 71,
+      "tooLarge": false
+    },
+    "6295f1e9869bd43a9d3655b59cdc18a35cd7cfe6:Cargo.lock": {
+      "content": {
+        "kind": "text",
+        "text": "version = 3\n\n[[package]]\nname = \"a\"\nversion = \"0.1.0\"\n"
+      },
+      "eof": true,
+      "id": "161e4a8822e2c2534ed9a87e4d91e436edec3775",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 54,
+      "tooLarge": false
+    },
+    "6295f1e9869bd43a9d3655b59cdc18a35cd7cfe6:crlf.txt": {
+      "content": {
+        "kind": "text",
+        "text": "one\r\ntwo\r\nthree\r\n"
+      },
+      "eof": true,
+      "id": "e1587ff9ea6ced3af32e07e4b6b68d21374907ec",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "crlf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 17,
+      "tooLarge": false
+    },
+    "6295f1e9869bd43a9d3655b59cdc18a35cd7cfe6:noeol.txt": {
+      "content": {
+        "kind": "text",
+        "text": "first\nlast"
+      },
+      "eof": true,
+      "id": "3db2affb966d98160734abe907f15e88127554d2",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 10,
+      "tooLarge": false
+    },
+    "6295f1e9869bd43a9d3655b59cdc18a35cd7cfe6:script.sh": {
+      "content": {
+        "kind": "text",
+        "text": "#!/bin/sh\necho hi\n"
+      },
+      "eof": true,
+      "id": "4163036efa65bd4a469e752267498f01ea36a55c",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 18,
+      "tooLarge": false
+    },
+    "6295f1e9869bd43a9d3655b59cdc18a35cd7cfe6:src/lib.rs": {
+      "content": {
+        "kind": "text",
+        "text": "fn one() {\n\n    1\n}\nconst C0: u32 = 0;\nconst C1: u32 = 1;\nconst C2: u32 = 2;\nconst C3: u32 = 3;\nconst C4: u32 = 4;\nconst C5: u32 = 5;\nconst C6: u32 = 6;\nconst C7: u32 = 7;\nconst C8: u32 = 8;\nconst C9: u32 = 9;\nconst C10: u32 = 10;\nconst C11: u32 = 11;\nconst C12: u32 = 12;\nconst C13: u32 = 13;\nconst C14: u32 = 14;\nconst C15: u32 = 15;\nconst C16: u32 = 16;\nconst C17: u32 = 17;\nconst C18: u32 = 18;\nconst C19: u32 = 19;\nconst C20: u32 = 20;\nconst C21: u32 = 21;\nconst C22: u32 = 22;\nconst C23: u32 = 23;\nconst C24: u32 = 24;\nconst C25: u32 = 25;\nconst C26: u32 = 26;\nconst C27: u32 = 27;\nconst C28: u32 = 28;\nconst C29: u32 = 29;\nconst C30: u32 = 30;\nconst C31: u32 = 31;\nconst C32: u32 = 32;\nconst C33: u32 = 33;\nconst C34: u32 = 34;\nconst C35: u32 = 35;\nconst C36: u32 = 36;\nconst C37: u32 = 37;\nconst C38: u32 = 38;\nconst C39: u32 = 39;\nfn tail() {}\n"
+      },
+      "eof": true,
+      "id": "6d768b3bec21d84079c8d3fe9786227955aa9735",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 853,
+      "tooLarge": false
+    },
+    "6295f1e9869bd43a9d3655b59cdc18a35cd7cfe6:src/old_name.rs": {
+      "content": {
+        "kind": "text",
+        "text": "pub fn a() {}\npub fn b() {}\npub fn c() {}\npub fn d() {}\npub fn e() {}\n"
+      },
+      "eof": true,
+      "id": "e15f81aae38d659f8088e85eacd78587e6199dff",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 70,
+      "tooLarge": false
+    },
+    "6295f1e9869bd43a9d3655b59cdc18a35cd7cfe6:src/removed.rs": {
+      "content": {
+        "kind": "text",
+        "text": "pub fn gone() {}\n"
+      },
+      "eof": true,
+      "id": "722f14273365ae3f9e37432bdf356c9af2c0951c",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 17,
+      "tooLarge": false
+    }
+  },
+  "commit": "25aec4bc044f6cb03ce3cb4e90daa489310fb1c7",
+  "diff": {
+    "files": [
+      {
+        "added": 1,
+        "binary": false,
+        "error": null,
+        "generated": true,
+        "hunks": [
+          {
+            "header": "version = 3",
+            "lines": [
+              {
+                "kind": "context",
+                "newLine": 2,
+                "noNewline": false,
+                "oldLine": 2,
+                "text": ""
+              },
+              {
+                "kind": "context",
+                "newLine": 3,
+                "noNewline": false,
+                "oldLine": 3,
+                "text": "[[package]]"
+              },
+              {
+                "kind": "context",
+                "newLine": 4,
+                "noNewline": false,
+                "oldLine": 4,
+                "text": "name = \"a\""
+              },
+              {
+                "kind": "removed",
+                "newLine": null,
+                "noNewline": false,
+                "oldLine": 5,
+                "text": "version = \"0.1.0\""
+              },
+              {
+                "kind": "added",
+                "newLine": 5,
+                "noNewline": false,
+                "oldLine": null,
+                "text": "version = \"0.2.0\""
+              }
+            ],
+            "newLines": 4,
+            "newStart": 2,
+            "oldLines": 4,
+            "oldStart": 2
+          }
+        ],
+        "hunksOmitted": false,
+        "newId": "a1318a38c9d4981d7a72c503026cf11f7b6cb7f6",
+        "newMode": "100644",
+        "oldId": "161e4a8822e2c2534ed9a87e4d91e436edec3775",
+        "oldMode": "100644",
+        "oldPath": null,
+        "path": "Cargo.lock",
+        "removed": 1,
+        "status": "modified",
+        "submodule": null,
+        "tooLarge": false
+      },
+      {
+        "added": 0,
+        "binary": true,
+        "error": null,
+        "generated": false,
+        "hunks": [],
+        "hunksOmitted": false,
+        "newId": "8d0cd2ad57642d7d820fcd1eb42b7f7e04042d0e",
+        "newMode": "100644",
+        "oldId": "677273046bce3115f56c248238f3b83f77cfc239",
+        "oldMode": "100644",
+        "oldPath": null,
+        "path": "bin.dat",
+        "removed": 0,
+        "status": "modified",
+        "submodule": null,
+        "tooLarge": false
+      },
+      {
+        "added": 1,
+        "binary": false,
+        "error": null,
+        "generated": false,
+        "hunks": [
+          {
+            "header": "",
+            "lines": [
+              {
+                "kind": "context",
+                "newLine": 1,
+                "noNewline": false,
+                "oldLine": 1,
+                "text": "one\r"
+              },
+              {
+                "kind": "removed",
+                "newLine": null,
+                "noNewline": false,
+                "oldLine": 2,
+                "text": "two\r"
+              },
+              {
+                "kind": "added",
+                "newLine": 2,
+                "noNewline": false,
+                "oldLine": null,
+                "text": "2\r"
+              },
+              {
+                "kind": "context",
+                "newLine": 3,
+                "noNewline": false,
+                "oldLine": 3,
+                "text": "three\r"
+              }
+            ],
+            "newLines": 3,
+            "newStart": 1,
+            "oldLines": 3,
+            "oldStart": 1
+          }
+        ],
+        "hunksOmitted": false,
+        "newId": "d48bcb7cd4755649a054ef67ffc423cc57dc684a",
+        "newMode": "100644",
+        "oldId": "e1587ff9ea6ced3af32e07e4b6b68d21374907ec",
+        "oldMode": "100644",
+        "oldPath": null,
+        "path": "crlf.txt",
+        "removed": 1,
+        "status": "modified",
+        "submodule": null,
+        "tooLarge": false
+      },
+      {
+        "added": 1,
+        "binary": false,
+        "error": null,
+        "generated": false,
+        "hunks": [
+          {
+            "header": "",
+            "lines": [
+              {
+                "kind": "context",
+                "newLine": 1,
+                "noNewline": false,
+                "oldLine": 1,
+                "text": "first"
+              },
+              {
+                "kind": "removed",
+                "newLine": null,
+                "noNewline": true,
+                "oldLine": 2,
+                "text": "last"
+              },
+              {
+                "kind": "added",
+                "newLine": 2,
+                "noNewline": true,
+                "oldLine": null,
+                "text": "last changed"
+              }
+            ],
+            "newLines": 2,
+            "newStart": 1,
+            "oldLines": 2,
+            "oldStart": 1
+          }
+        ],
+        "hunksOmitted": false,
+        "newId": "3519440f1a792e62213bd3444d822912cd57b064",
+        "newMode": "100644",
+        "oldId": "3db2affb966d98160734abe907f15e88127554d2",
+        "oldMode": "100644",
+        "oldPath": null,
+        "path": "noeol.txt",
+        "removed": 1,
+        "status": "modified",
+        "submodule": null,
+        "tooLarge": false
+      },
+      {
+        "added": 0,
+        "binary": false,
+        "error": null,
+        "generated": false,
+        "hunks": [],
+        "hunksOmitted": false,
+        "newId": "4163036efa65bd4a469e752267498f01ea36a55c",
+        "newMode": "100755",
+        "oldId": "4163036efa65bd4a469e752267498f01ea36a55c",
+        "oldMode": "100644",
+        "oldPath": null,
+        "path": "script.sh",
+        "removed": 0,
+        "status": "modified",
+        "submodule": null,
+        "tooLarge": false
+      },
+      {
+        "added": 1,
+        "binary": false,
+        "error": null,
+        "generated": false,
+        "hunks": [
+          {
+            "header": "",
+            "lines": [
+              {
+                "kind": "added",
+                "newLine": 1,
+                "noNewline": false,
+                "oldLine": null,
+                "text": "pub fn new() {}"
+              }
+            ],
+            "newLines": 1,
+            "newStart": 1,
+            "oldLines": 0,
+            "oldStart": 0
+          }
+        ],
+        "hunksOmitted": false,
+        "newId": "f5f44b7a4e1ed9826d88baf40a56977f07093690",
+        "newMode": "100644",
+        "oldId": null,
+        "oldMode": null,
+        "oldPath": null,
+        "path": "src/added.rs",
+        "removed": 0,
+        "status": "added",
+        "submodule": null,
+        "tooLarge": false
+      },
+      {
+        "added": 4,
+        "binary": false,
+        "error": null,
+        "generated": false,
+        "hunks": [
+          {
+            "header": "",
+            "lines": [
+              {
+                "kind": "removed",
+                "newLine": null,
+                "noNewline": false,
+                "oldLine": 1,
+                "text": "fn one() {"
+              },
+              {
+                "kind": "added",
+                "newLine": 1,
+                "noNewline": false,
+                "oldLine": null,
+                "text": "fn uno() {"
+              },
+              {
+                "kind": "context",
+                "newLine": 2,
+                "noNewline": false,
+                "oldLine": 2,
+                "text": ""
+              },
+              {
+                "kind": "removed",
+                "newLine": null,
+                "noNewline": false,
+                "oldLine": 3,
+                "text": "    1"
+              },
+              {
+                "kind": "added",
+                "newLine": 3,
+                "noNewline": false,
+                "oldLine": null,
+                "text": "    2"
+              },
+              {
+                "kind": "context",
+                "newLine": 4,
+                "noNewline": false,
+                "oldLine": 4,
+                "text": "}"
+              },
+              {
+                "kind": "context",
+                "newLine": 5,
+                "noNewline": false,
+                "oldLine": 5,
+                "text": "const C0: u32 = 0;"
+              },
+              {
+                "kind": "context",
+                "newLine": 6,
+                "noNewline": false,
+                "oldLine": 6,
+                "text": "const C1: u32 = 1;"
+              }
+            ],
+            "newLines": 6,
+            "newStart": 1,
+            "oldLines": 6,
+            "oldStart": 1
+          },
+          {
+            "header": "const C36: u32 = 36;",
+            "lines": [
+              {
+                "kind": "context",
+                "newLine": 42,
+                "noNewline": false,
+                "oldLine": 42,
+                "text": "const C37: u32 = 37;"
+              },
+              {
+                "kind": "context",
+                "newLine": 43,
+                "noNewline": false,
+                "oldLine": 43,
+                "text": "const C38: u32 = 38;"
+              },
+              {
+                "kind": "context",
+                "newLine": 44,
+                "noNewline": false,
+                "oldLine": 44,
+                "text": "const C39: u32 = 39;"
+              },
+              {
+                "kind": "removed",
+                "newLine": null,
+                "noNewline": false,
+                "oldLine": 45,
+                "text": "fn tail() {}"
+              },
+              {
+                "kind": "added",
+                "newLine": 45,
+                "noNewline": false,
+                "oldLine": null,
+                "text": "fn tail() { changed() }"
+              },
+              {
+                "kind": "added",
+                "newLine": 46,
+                "noNewline": false,
+                "oldLine": null,
+                "text": "fn added() {}"
+              }
+            ],
+            "newLines": 5,
+            "newStart": 42,
+            "oldLines": 4,
+            "oldStart": 42
+          }
+        ],
+        "hunksOmitted": false,
+        "newId": "4cc5d1f6d46731b59873f1d781ca3c767b4d69e7",
+        "newMode": "100644",
+        "oldId": "6d768b3bec21d84079c8d3fe9786227955aa9735",
+        "oldMode": "100644",
+        "oldPath": null,
+        "path": "src/lib.rs",
+        "removed": 3,
+        "status": "modified",
+        "submodule": null,
+        "tooLarge": false
+      },
+      {
+        "added": 1,
+        "binary": false,
+        "error": null,
+        "generated": false,
+        "hunks": [
+          {
+            "header": "pub fn a() {}",
+            "lines": [
+              {
+                "kind": "context",
+                "newLine": 2,
+                "noNewline": false,
+                "oldLine": 2,
+                "text": "pub fn b() {}"
+              },
+              {
+                "kind": "context",
+                "newLine": 3,
+                "noNewline": false,
+                "oldLine": 3,
+                "text": "pub fn c() {}"
+              },
+              {
+                "kind": "context",
+                "newLine": 4,
+                "noNewline": false,
+                "oldLine": 4,
+                "text": "pub fn d() {}"
+              },
+              {
+                "kind": "removed",
+                "newLine": null,
+                "noNewline": false,
+                "oldLine": 5,
+                "text": "pub fn e() {}"
+              },
+              {
+                "kind": "added",
+                "newLine": 5,
+                "noNewline": false,
+                "oldLine": null,
+                "text": "pub fn e2() {}"
+              }
+            ],
+            "newLines": 4,
+            "newStart": 2,
+            "oldLines": 4,
+            "oldStart": 2
+          }
+        ],
+        "hunksOmitted": false,
+        "newId": "d6f72ea5ccfb34aefb2b8fe7970b598bff8c9730",
+        "newMode": "100644",
+        "oldId": "e15f81aae38d659f8088e85eacd78587e6199dff",
+        "oldMode": "100644",
+        "oldPath": "src/old_name.rs",
+        "path": "src/new_name.rs",
+        "removed": 1,
+        "status": "renamed",
+        "submodule": null,
+        "tooLarge": false
+      },
+      {
+        "added": 0,
+        "binary": false,
+        "error": null,
+        "generated": false,
+        "hunks": [
+          {
+            "header": "",
+            "lines": [
+              {
+                "kind": "removed",
+                "newLine": null,
+                "noNewline": false,
+                "oldLine": 1,
+                "text": "pub fn gone() {}"
+              }
+            ],
+            "newLines": 0,
+            "newStart": 0,
+            "oldLines": 1,
+            "oldStart": 1
+          }
+        ],
+        "hunksOmitted": false,
+        "newId": null,
+        "newMode": null,
+        "oldId": "722f14273365ae3f9e37432bdf356c9af2c0951c",
+        "oldMode": "100644",
+        "oldPath": null,
+        "path": "src/removed.rs",
+        "removed": 1,
+        "status": "deleted",
+        "submodule": null,
+        "tooLarge": false
+      }
+    ],
+    "newCommit": "25aec4bc044f6cb03ce3cb4e90daa489310fb1c7",
+    "oldCommit": "6295f1e9869bd43a9d3655b59cdc18a35cd7cfe6",
+    "workTree": "/repo"
+  },
+  "patch": "diff --git a/Cargo.lock b/Cargo.lock\nindex 161e4a8..a1318a3 100644\n--- a/Cargo.lock\n+++ b/Cargo.lock\n@@ -2,4 +2,4 @@ version = 3\n \n [[package]]\n name = \"a\"\n-version = \"0.1.0\"\n+version = \"0.2.0\"\ndiff --git a/bin.dat b/bin.dat\nindex 6772730..8d0cd2a 100644\nBinary files a/bin.dat and b/bin.dat differ\ndiff --git a/crlf.txt b/crlf.txt\nindex e1587ff..d48bcb7 100644\n--- a/crlf.txt\n+++ b/crlf.txt\n@@ -1,3 +1,3 @@\n one\r\n-two\r\n+2\r\n three\r\ndiff --git a/noeol.txt b/noeol.txt\nindex 3db2aff..3519440 100644\n--- a/noeol.txt\n+++ b/noeol.txt\n@@ -1,2 +1,2 @@\n first\n-last\n\\ No newline at end of file\n+last changed\n\\ No newline at end of file\ndiff --git a/script.sh b/script.sh\nold mode 100644\nnew mode 100755\ndiff --git a/src/added.rs b/src/added.rs\nnew file mode 100644\nindex 0000000..f5f44b7\n--- /dev/null\n+++ b/src/added.rs\n@@ -0,0 +1 @@\n+pub fn new() {}\ndiff --git a/src/lib.rs b/src/lib.rs\nindex 6d768b3..4cc5d1f 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,6 +1,6 @@\n-fn one() {\n+fn uno() {\n \n-    1\n+    2\n }\n const C0: u32 = 0;\n const C1: u32 = 1;\n@@ -42,4 +42,5 @@ const C36: u32 = 36;\n const C37: u32 = 37;\n const C38: u32 = 38;\n const C39: u32 = 39;\n-fn tail() {}\n+fn tail() { changed() }\n+fn added() {}\ndiff --git a/src/old_name.rs b/src/new_name.rs\nsimilarity index 78%\nrename from src/old_name.rs\nrename to src/new_name.rs\nindex e15f81a..d6f72ea 100644\n--- a/src/old_name.rs\n+++ b/src/new_name.rs\n@@ -2,4 +2,4 @@ pub fn a() {}\n pub fn b() {}\n pub fn c() {}\n pub fn d() {}\n-pub fn e() {}\n+pub fn e2() {}\ndiff --git a/src/removed.rs b/src/removed.rs\ndeleted file mode 100644\nindex 722f142..0000000\n--- a/src/removed.rs\n+++ /dev/null\n@@ -1 +0,0 @@\n-pub fn gone() {}\n",
+  "show": {
+    "author": {
+      "email": "test@pitwall.invalid",
+      "name": "Pitwall Test",
+      "offset": 0,
+      "time": 1700000360
+    },
+    "commit": "25aec4bc044f6cb03ce3cb4e90daa489310fb1c7",
+    "committer": {
+      "email": "test@pitwall.invalid",
+      "name": "Pitwall Test",
+      "offset": 0,
+      "time": 1700000360
+    },
+    "head": true,
+    "message": "change things\n\nBody of the commit.\n",
+    "parents": ["6295f1e9869bd43a9d3655b59cdc18a35cd7cfe6"],
+    "refs": [
+      {
+        "fullName": "refs/heads/main",
+        "kind": "localBranch",
+        "name": "main"
+      }
+    ],
+    "shallow": false,
+    "tree": "9dae235ea4e9abf319e418776a2a0eedae2d2e0e"
+  }
+}

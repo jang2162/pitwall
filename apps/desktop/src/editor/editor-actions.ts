@@ -20,6 +20,7 @@ import type { Action } from "@pitwall/keymap";
 
 import type { ProjectStrings } from "../layout/strings";
 import {
+  isGitTab,
   otherTabs,
   setTabViewer,
   splitRight,
@@ -43,6 +44,11 @@ export function editorActions(deps: {
   const { workspace } = deps;
   const T = deps.strings.actions;
   const hasTab = () => workspace.activeTab() !== undefined;
+  // 파일 문서 탭(git 문서 탭이 아님) — 경로 복사 · 저장 · 뷰어 바꾸기는 파일에만 뜻이 있다.
+  const hasFileTab = () => {
+    const panel = workspace.activeTab();
+    return panel !== undefined && !isGitTab(panel);
+  };
   const withTab =
     (run: (panel: NonNullable<ReturnType<EditorWorkspace["activeTab"]>>) => void) => () => {
       const panel = workspace.activeTab();
@@ -77,7 +83,7 @@ export function editorActions(deps: {
       id: "editor.save",
       label: T.save,
       keywords: ["Save", "Save File"],
-      enabled: hasTab,
+      enabled: hasFileTab,
       run: withTab((panel) => void workspace.save(panel)),
     },
     {
@@ -117,7 +123,7 @@ export function editorActions(deps: {
       id: "editor.copyPath",
       label: T.copyPath,
       keywords: ["Copy Path", "Copy Absolute Path"],
-      enabled: hasTab,
+      enabled: hasFileTab,
       run: withTab((panel) => {
         deps.copyText(tabParams(panel).path).catch(deps.onCopyFailed);
       }),
@@ -126,14 +132,14 @@ export function editorActions(deps: {
       id: "editor.openAsText",
       label: T.openAsText,
       keywords: ["Open as Text", "Open as Plain Text"],
-      enabled: hasTab,
+      enabled: hasFileTab,
       run: withTab((panel) => setTabViewer(panel.api, tabParams(panel), "text")),
     },
     {
       id: "editor.openAsHex",
       label: T.openAsHex,
       keywords: ["Open as Hex", "Hex Viewer", "Binary"],
-      enabled: hasTab,
+      enabled: hasFileTab,
       run: withTab((panel) => setTabViewer(panel.api, tabParams(panel), "hex")),
     },
     {

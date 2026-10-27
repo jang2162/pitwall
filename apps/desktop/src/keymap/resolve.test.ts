@@ -16,6 +16,7 @@ import { createEditorWorkspace } from "../editor/editor-workspace";
 import { fileOpsActions } from "../file-tree/file-ops";
 import { fileTreeStrings } from "../file-tree/strings";
 import { branchActions } from "../git/git-branch-feature";
+import { gitDocumentActions } from "../git/documents/git-documents";
 import { FileTreeModel } from "../file-tree/tree-model";
 import { openWithActions } from "../open-with/open-with";
 import { findActions } from "../search/find-actions";
@@ -128,6 +129,12 @@ const ACTION_IDS = new Set(
       openBranches() {},
       openVcs() {},
     }),
+    ...gitDocumentActions({
+      source: () => undefined,
+      open() {},
+      strings: KO_PROJECT.git.documents,
+      fail() {},
+    }),
   ].map((a) => a.id),
 );
 
@@ -168,6 +175,9 @@ describe("default keymap file", () => {
     expect(label("win", "settings.open")).toEqual(["Ctrl+Alt+S"]);
     // 10-ui 「외부 도구 · 프로젝트」
     expect(label("mac", "openWith.popup")).toEqual(["⌥F1"]);
+    // 10-ui 「Git (VCS)」 의 diff 에서 다음/이전 차이(M2-15)
+    expect(label("mac", "diff.nextChange")).toEqual(["F7"]);
+    expect(label("win", "diff.previousChange")).toEqual(["Shift+F7"]);
     expect(label("win", "openWith.popup")).toEqual(["Alt+F1"]);
     expect(label("mac", "openWith.default")).toEqual(["⌥⌘E"]);
     expect(label("linux", "openWith.default")).toEqual(["Ctrl+Alt+E"]);

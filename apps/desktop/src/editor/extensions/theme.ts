@@ -7,7 +7,7 @@ import type { EditorFeature } from ".";
 
 export const CODE_FONT = '"SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 
-const editorTheme = EditorView.theme({
+export const editorTheme = EditorView.theme({
   "&": {
     height: "100%",
     backgroundColor: "var(--pw-editor-background)",

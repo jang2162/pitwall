@@ -379,3 +379,20 @@ action = "git.vcsOperations"
 mac = "ctrl+v"
 win = "alt+`"
 linux = "alt+`"
+
+# diff 뷰의 다음 · 이전 차이(M2-15, src/git/documents/git-documents.tsx)는 diff 뷰에 포커스가 있을 때만
+# (`diffFocus`) — 같은 F7 을 쓰는 디버그 스텝 인투(M6)와 범위가 갈린다.
+
+[[bindings]]
+action = "diff.nextChange"
+mac = "f7"
+win = "f7"
+linux = "f7"
+when = "diffFocus"
+
+[[bindings]]
+action = "diff.previousChange"
+mac = "shift+f7"
+win = "shift+f7"
+linux = "shift+f7"
+when = "diffFocus"
