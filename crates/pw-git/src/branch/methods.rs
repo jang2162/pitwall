@@ -186,22 +186,30 @@ rpc_method! {
 /// 핸들러를 붙인다.
 pub fn register(router: &mut Router, write: Arc<GitWrite>) {
     let w = Arc::clone(&write);
-    router.unary(GitCheckoutMethod, move |_ctx, p: GitCheckoutParams| {
-        let w = Arc::clone(&w);
+    router.unary(GitCheckoutMethod, move |ctx, p: GitCheckoutParams| {
+        let (w, caller) = (Arc::clone(&w), ctx.scope().clone());
         async move {
-            let (work_tree, head) = super::checkout(&w, p.project_id, p.worktree, p.target).await?;
+            let (work_tree, head) =
+                super::checkout(&w, caller, p.project_id, p.worktree, p.target).await?;
             Ok(GitCheckoutResult { work_tree, head })
         }
     });
     let w = Arc::clone(&write);
     router.unary(
         GitBranchCreateMethod,
-        move |_ctx, p: GitBranchCreateParams| {
-            let w = Arc::clone(&w);
+        move |ctx, p: GitBranchCreateParams| {
+            let (w, caller) = (Arc::clone(&w), ctx.scope().clone());
             async move {
-                let (branch, head) =
-                    super::create(&w, p.project_id, p.worktree, p.name, p.start, p.checkout)
-                        .await?;
+                let (branch, head) = super::create(
+                    &w,
+                    caller,
+                    p.project_id,
+                    p.worktree,
+                    p.name,
+                    p.start,
+                    p.checkout,
+                )
+                .await?;
                 Ok(GitBranchResult {
                     work_tree: branch.work_tree,
                     ref_name: branch.ref_name,
@@ -214,11 +222,11 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
     let w = Arc::clone(&write);
     router.unary(
         GitBranchRenameMethod,
-        move |_ctx, p: GitBranchRenameParams| {
-            let w = Arc::clone(&w);
+        move |ctx, p: GitBranchRenameParams| {
+            let (w, caller) = (Arc::clone(&w), ctx.scope().clone());
             async move {
                 let branch =
-                    super::rename(&w, p.project_id, p.worktree, p.name, p.new_name).await?;
+                    super::rename(&w, caller, p.project_id, p.worktree, p.name, p.new_name).await?;
                 Ok(GitBranchResult {
                     work_tree: branch.work_tree,
                     ref_name: branch.ref_name,
@@ -231,10 +239,10 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
     let w = Arc::clone(&write);
     router.unary(
         GitBranchDeleteMethod,
-        move |_ctx, p: GitBranchDeleteParams| {
-            let w = Arc::clone(&w);
+        move |ctx, p: GitBranchDeleteParams| {
+            let (w, caller) = (Arc::clone(&w), ctx.scope().clone());
             async move {
-                match super::delete(&w, p.project_id, p.worktree, p.name, p.force).await? {
+                match super::delete(&w, caller, p.project_id, p.worktree, p.name, p.force).await? {
                     Deleted::Deleted { work_tree, moved } => Ok(GitBranchDeleteResult {
                         work_tree,
                         deleted: moved,
@@ -247,10 +255,19 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
         },
     );
     let w = Arc::clone(&write);
-    router.unary(GitTagCreateMethod, move |_ctx, p: GitTagCreateParams| {
-        let w = Arc::clone(&w);
+    router.unary(GitTagCreateMethod, move |ctx, p: GitTagCreateParams| {
+        let (w, caller) = (Arc::clone(&w), ctx.scope().clone());
         async move {
-            let tag = super::tag(&w, p.project_id, p.worktree, p.name, p.rev, p.message).await?;
+            let tag = super::tag(
+                &w,
+                caller,
+                p.project_id,
+                p.worktree,
+                p.name,
+                p.rev,
+                p.message,
+            )
+            .await?;
             Ok(GitTagResult {
                 work_tree: tag.work_tree,
                 ref_name: tag.ref_name,

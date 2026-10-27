@@ -185,9 +185,14 @@ fn remove_stale_temps(dir: &Path) {
 
 /// 이 연결이 그 프로젝트의 상태를 써도 되는가: 그 프로젝트 창의 연결만(M1-25 브리프) — 연결 범위가 그 프로젝트일 때다
 /// ([`ConnectionScope::Project`]). 프로젝트 창은 자기 프로젝트로 연결하고(데스크톱 ipc.rs `caller_for`), Host 로 고른 연결(웰컴 ·
-/// 설정 창, 창의 UI 로그) · 파일 범위 연결 · 다른 프로젝트로 연 연결은 쓰지 못한다.
+/// 설정 창, 창의 UI 로그) · 파일 범위 연결 · 다른 프로젝트로 연 연결은 쓰지 못한다. git 쓰기(`pw_git::write`)도 같은 판정이다.
 pub fn connection_may_write(ctx: &pw_rpc::Ctx, project_id: &str) -> bool {
-    matches!(ctx.scope(), ConnectionScope::Project(id) if id == project_id)
+    scope_may_write(ctx.scope(), project_id)
+}
+
+/// [`connection_may_write`] 의 판정을 연결의 범위만으로 — 핸들러 밖(쓰기 실행기)에서 범위를 들고 다닐 때.
+pub fn scope_may_write(scope: &ConnectionScope, project_id: &str) -> bool {
+    matches!(scope, ConnectionScope::Project(id) if id == project_id)
 }
 
 impl Registry {

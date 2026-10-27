@@ -65,7 +65,6 @@ fn reading_conflicts_of_an_untrusted_repository_runs_none_of_its_programs() {
     let repo = TestRepo::with_commit();
     repo.start_conflict_kinds();
     let marks_dir = planted(&repo);
-    isolate(repo.base());
     block_on(async {
         let f = WriteFixture::with_repo(repo, false, Askpass::default());
         assert!(!f.projects.is_trusted(&f.project));
@@ -98,15 +97,18 @@ fn reading_conflicts_of_an_untrusted_repository_runs_none_of_its_programs() {
             .unwrap()
             .version;
         f.write
-            .resolve(GitConflictResolveParams {
-                project_id: f.project.clone(),
-                path: "both.txt".to_owned(),
-                side: Some(ConflictChoice {
-                    pick: ConflictPick::Theirs,
-                    expected_version,
-                }),
-                ..GitConflictResolveParams::default()
-            })
+            .resolve(
+                f.caller(),
+                GitConflictResolveParams {
+                    project_id: f.project.clone(),
+                    path: "both.txt".to_owned(),
+                    side: Some(ConflictChoice {
+                        pick: ConflictPick::Theirs,
+                        expected_version,
+                    }),
+                    ..GitConflictResolveParams::default()
+                },
+            )
             .await
             .unwrap();
         let seen = marks(&marks_dir);

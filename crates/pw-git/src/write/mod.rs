@@ -2,6 +2,9 @@
 //! 돌고, 그 행들은 [`GitWrite::run`] 을 부르는 메서드만 더한다.
 //!
 //! 쓰기 하나([`GitWrite::run`])의 차례:
+//! 0. 부른 연결이 그 프로젝트 창의 것인지 본다([`WriteRequest::caller`] — `project.state.set` 과 같은 판정,
+//!    `pw_core::registry::state::scope_may_write`). 다른 프로젝트 창 · 웰컴 · 설정 창(Host 범위) · 파일 창이면 아무것도 하지 않고
+//!    permission denied. 쓰기 RPC 는 모두 이것을 거치므로 메서드마다 따로 막지 않는다. 읽기 RPC 는 막지 않는다.
 //! 1. 저장소를 연다(`crate::Git::open` — 없으면 [`WriteError::NoRepository`]). 쓰기 명령을 만든다(`crate::Git::command` 의 쓰기 —
 //!    실행 파일 · 버전 · 런타임 환경. 못 쓰면 [`WriteError::WritesOff`]). 미신뢰 프로젝트도 쓰기는 된다(사람이 누른 작업, D43).
 //! 2. 프로젝트 범위 `Task` 를 띄운다(제목은 `task-title-git-*` Fluent id). 그 안에서 저장소 잠금([`lock`])을 기다려 받는다 — 같은
@@ -37,8 +40,9 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use pw_core::bus::Scope;
+use pw_core::registry::state::scope_may_write;
 use pw_core::task::{TaskCtx, TaskProgress, TaskSpawner};
-use pw_rpc::RpcError;
+use pw_rpc::{ConnectionScope, RpcError, code as rpc_code};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -244,6 +248,9 @@ impl From<WriteError> for RpcError {
 /// 쓰기 하나.
 #[derive(Debug, Clone)]
 pub struct WriteRequest {
+    /// 이 쓰기를 부른 연결의 범위(`pw_rpc::Ctx::scope`). `project_id` 의 창(`ConnectionScope::Project`)이 아니면 쓰지 않는다
+    /// (모듈 머리 주석 0).
+    pub caller: ConnectionScope,
     pub project_id: String,
     /// 창의 활성 워크트리 꼭대기(`git.repo` 와 같다).
     pub worktree: Option<String>,
@@ -346,6 +353,12 @@ impl GitWrite {
         F: FnOnce(WriteCtx) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, WriteError>> + Send + 'static,
     {
+        if !scope_may_write(&request.caller, &request.project_id) {
+            return Err(WriteError::Rpc(RpcError::new(
+                rpc_code::PERMISSION_DENIED,
+                "only the project's own window may write to its git repository",
+            )));
+        }
         let tasks =
             self.tasks.get().cloned().ok_or_else(|| {
                 WriteError::Internal("git writes are not attached to a host".into())
@@ -473,6 +486,7 @@ impl GitWrite {
     /// 실패가 아니라 `stopped` 다 — 대상이나 단계가 바뀐 채 같은 작업이 남아 있으면 그렇게 본다.
     pub async fn act(
         &self,
+        caller: ConnectionScope,
         project_id: &str,
         worktree: Option<&str>,
         action: OperationAction,
@@ -488,6 +502,7 @@ impl GitWrite {
             });
         }
         let request = WriteRequest {
+            caller,
             project_id: project_id.to_owned(),
             worktree: worktree.map(str::to_owned),
             title: action_title(action).to_owned(),

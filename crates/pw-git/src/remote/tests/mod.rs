@@ -5,6 +5,7 @@ mod fetch;
 mod plan;
 mod pull;
 mod push;
+mod scope;
 
 use crate::testing::remote::Remote;
 use crate::testing::write::{Window, WriteFixture};

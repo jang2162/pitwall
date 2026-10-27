@@ -65,7 +65,14 @@ async fn an_untrusted_checkout_plans_with_gix_and_runs_no_planted_program() {
         name: "feat".into(),
     };
     assert_eq!(
-        checkout(&f.write, f.project.clone(), None, target.clone()).await,
+        checkout(
+            &f.write,
+            f.caller(),
+            f.project.clone(),
+            None,
+            target.clone()
+        )
+        .await,
         Err(crate::write::WriteError::Cancelled),
         "the window cancelled — git did not run"
     );
@@ -75,7 +82,7 @@ async fn an_untrusted_checkout_plans_with_gix_and_runs_no_planted_program() {
 
     // 사람이 누른 체크아웃은 돈다 — 터미널의 git 과 같이 저장소의 smudge 필터가 돈다(D43).
     let _window = Window::open(&f.write, &f.project, |_| Some(GitPromptAnswer::Proceed));
-    let (_, head) = checkout(&f.write, f.project.clone(), None, target)
+    let (_, head) = checkout(&f.write, f.caller(), f.project.clone(), None, target)
         .await
         .unwrap();
     assert!(matches!(head, RepoHead::Branch { name, .. } if name == "feat"));

@@ -1,6 +1,6 @@
 //! 실행기: 같은 저장소의 쓰기는 차례로 돌고 둘 다 끝난다(①), 그동안 읽기는 막히지 않는다, `index.lock` 이 있으면 그 오류로 끝나고
 //! 파일은 남는다(②), git 의 실패는 stderr 원문이 Task 의 오류다, stdin 이 git 에 닿는다, Task 취소는 git 이 잠금 파일을 지우고 끝난
-//! 뒤에 잠금을 놓는다, 진행에는 하위 명령만 보인다.
+//! 뒤에 잠금을 놓는다, 진행에는 하위 명령만 보인다, 그 프로젝트 창이 아닌 연결의 쓰기는 Task 도 띄우지 않고 거절된다.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -13,7 +13,7 @@ use pw_rpc::RpcError;
 use tokio::sync::oneshot;
 
 use super::super::*;
-use super::{last, subscribe_all, until, until_finished};
+use super::{drain, last, subscribe_all, until, until_finished};
 use crate::testing::write::WriteFixture;
 
 const TITLE: &str = "test git write";
@@ -368,6 +368,7 @@ async fn a_project_outside_any_repository_has_nothing_to_write() {
         .id;
     let mut request = f.request(TITLE);
     request.project_id = project.clone();
+    request.caller = pw_rpc::ConnectionScope::Project(project.clone());
     let result = f.write.run(request, |_ctx| async { Ok(()) }).await;
     assert_eq!(result, Err(WriteError::NoRepository));
     assert_eq!(
@@ -398,4 +399,47 @@ fn the_subcommand_skips_options_and_config_values() {
         "push"
     );
     assert_eq!(subcommand(&base), "");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_from_a_connection_that_is_not_the_project_s_window_does_nothing() {
+    let f = WriteFixture::new(true);
+    let mut events = subscribe_all(&f.bus);
+    let ran = Arc::new(AtomicBool::new(false));
+    let callers = [
+        pw_rpc::ConnectionScope::Host,
+        pw_rpc::ConnectionScope::Project("someone-else".into()),
+        pw_rpc::Caller::file(pw_rpc::Role::Owner, f.repo.root().join("README.md")).scope,
+    ];
+    for caller in callers {
+        let request = WriteRequest {
+            caller: caller.clone(),
+            ..f.request(TITLE)
+        };
+        let ran = Arc::clone(&ran);
+        let result = f
+            .write
+            .run(request, move |_ctx| async move {
+                ran.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+        let Err(WriteError::Rpc(e)) = &result else {
+            panic!("{caller:?}: {result:?}");
+        };
+        assert_eq!(e.code, pw_rpc::code::PERMISSION_DENIED, "{caller:?}");
+    }
+    assert!(!ran.load(Ordering::SeqCst), "no job ran");
+    assert_eq!(drain(&mut events), Vec::new(), "no task was started");
+
+    // 그 프로젝트 창의 연결이면 돈다.
+    let ran2 = Arc::clone(&ran);
+    f.write
+        .run(f.request(TITLE), move |_ctx| async move {
+            ran2.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(ran.load(Ordering::SeqCst));
 }

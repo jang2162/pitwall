@@ -119,3 +119,87 @@ async fn the_history_methods_speak_camel_case_over_rpc() {
     assert_eq!(bad["error"]["code"], rpc_code::INVALID_PARAMS, "{bad}");
     assert_eq!(f.repo.head(), first);
 }
+
+/// 쓰기는 그 프로젝트 창의 연결만 한다(쓰기 실행기의 범위 판정, M2-06): 다른 프로젝트 창 · Host 범위(웰컴 · 설정 창)는 owner 라도
+/// reset · merge · cherry-pick 이 거절되고 ref 가 그대로다. 읽기(`git.resetPreview`)는 막지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_project_s_own_window_may_move_history() {
+    let f = WriteFixture::new(true);
+    let first = f.repo.head();
+    let second = f.repo.commit_file("a.txt", "a\n", "a");
+    let other_root = f.repo.base().join("other");
+    std::fs::create_dir_all(&other_root).unwrap();
+    let other = f
+        .projects
+        .create(pw_core::registry::NewProject {
+            root: other_root,
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    let write = Arc::clone(&f.write);
+    let host = LocalHost::builder("local")
+        .methods(move |router| register(router, write))
+        .build();
+    let writes = [
+        (
+            "git.reset",
+            json!({"projectId": f.project, "commit": first, "mode": "soft", "expected": second}),
+        ),
+        (
+            "git.merge",
+            json!({"projectId": f.project, "rev": first, "fastForward": "allow"}),
+        ),
+        (
+            "git.cherryPick",
+            json!({"projectId": f.project, "commits": [first]}),
+        ),
+    ];
+    for (who, scope) in [
+        ("other project window", ConnectionScope::Project(other)),
+        ("host", ConnectionScope::Host),
+    ] {
+        let mut client = Client(
+            host.connect(Caller {
+                role: Role::Owner,
+                scope,
+            })
+            .await
+            .unwrap(),
+            0,
+        );
+        for (method, params) in &writes {
+            let reply = client.call(method, params.clone()).await;
+            assert_eq!(
+                reply["error"]["code"],
+                rpc_code::PERMISSION_DENIED,
+                "{who} {method}: {reply}"
+            );
+        }
+        let preview = client
+            .call(
+                "git.resetPreview",
+                json!({"projectId": f.project, "commit": first}),
+            )
+            .await;
+        assert_eq!(
+            preview["result"]["head"],
+            second.as_str(),
+            "{who}: {preview}"
+        );
+        assert_eq!(f.repo.head(), second, "{who}");
+    }
+
+    let mut own = Client(
+        host.connect(Caller {
+            role: Role::Owner,
+            scope: ConnectionScope::Project(f.project.clone()),
+        })
+        .await
+        .unwrap(),
+        0,
+    );
+    let done = own.call(writes[0].0, writes[0].1.clone()).await;
+    assert!(done["error"].is_null(), "{done}");
+    assert_eq!(f.repo.head(), first);
+}

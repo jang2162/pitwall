@@ -285,9 +285,9 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
     );
     router.unary(
         GitConflictResolveMethod,
-        move |_ctx, params: GitConflictResolveParams| {
-            let write = Arc::clone(&write);
-            async move { Ok(write.resolve(params).await?) }
+        move |ctx, params: GitConflictResolveParams| {
+            let (write, caller) = (Arc::clone(&write), ctx.scope().clone());
+            async move { Ok(write.resolve(caller, params).await?) }
         },
     );
 }

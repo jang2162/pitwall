@@ -206,19 +206,28 @@ rpc_method! {
 /// 핸들러를 붙인다.
 pub fn register(router: &mut Router, write: Arc<GitWrite>) {
     let w = Arc::clone(&write);
-    router.unary(GitFetchMethod, move |_ctx, p: GitFetchParams| {
-        let w = Arc::clone(&w);
+    router.unary(GitFetchMethod, move |ctx, p: GitFetchParams| {
+        let (w, caller) = (Arc::clone(&w), ctx.scope().clone());
         async move {
-            let work_tree = super::fetch(&w, p.project_id, p.worktree, p.remote, p.prune).await?;
+            let work_tree =
+                super::fetch(&w, caller, p.project_id, p.worktree, p.remote, p.prune).await?;
             Ok(GitFetchResult { work_tree })
         }
     });
     let w = Arc::clone(&write);
-    router.unary(GitPullMethod, move |_ctx, p: GitPullParams| {
-        let w = Arc::clone(&w);
+    router.unary(GitPullMethod, move |ctx, p: GitPullParams| {
+        let (w, caller) = (Arc::clone(&w), ctx.scope().clone());
         async move {
-            let pulled =
-                super::pull(&w, p.project_id, p.worktree, p.mode, p.remote, p.branch).await?;
+            let pulled = super::pull(
+                &w,
+                caller,
+                p.project_id,
+                p.worktree,
+                p.mode,
+                p.remote,
+                p.branch,
+            )
+            .await?;
             Ok(GitPullResult {
                 work_tree: pulled.work_tree,
                 operation: pulled.operation,
@@ -227,11 +236,12 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
         }
     });
     let w = Arc::clone(&write);
-    router.unary(GitPushMethod, move |_ctx, p: GitPushParams| {
-        let w = Arc::clone(&w);
+    router.unary(GitPushMethod, move |ctx, p: GitPushParams| {
+        let (w, caller) = (Arc::clone(&w), ctx.scope().clone());
         async move {
             let pushed = super::push(
                 &w,
+                caller,
                 p.project_id,
                 p.worktree,
                 p.branch,

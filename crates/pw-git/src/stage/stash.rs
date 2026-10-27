@@ -2,8 +2,9 @@
 //! 버리기는 실행기로 git CLI 를 돈다.
 //!
 //! 적용 · pop · 버리기는 `{ index, commit }` 으로 항목을 고른다 — 잠금 안에서 `stash@{index}` 가 그 커밋인지 보고 아니면(그 사이
-//! 목록이 바뀜) 아무것도 하지 않는다. 적용은 커밋 해시로, pop · 버리기는 `stash@{n}` 으로 부른다(git 이 그 꼴만 받는다) — 확인과
-//! 실행 사이에 터미널이 stash 를 만들면 다른 항목이 고를 수 있다(Pitwall 의 쓰기끼리는 잠금으로 한 줄이다).
+//! 목록이 바뀜) 아무것도 하지 않는다(conflict). Pitwall 의 쓰기끼리는 잠금으로 한 줄이지만 `refs/stash` 는 모든 워크트리 · 터미널이
+//! 함께 쓴다 — 확인과 실행 사이에 다른 프로세스가 stash 를 만들 수 있다. 그래서 적용(pop 도)은 커밋 해시로 하고(`git stash apply
+//! <해시>`), 버리기는 `stash@{n}` 으로만 부를 수 있으므로 git 이 지웠다고 알린 커밋([`dropped`])을 보고 다르면 되돌려 넣는다.
 
 use std::collections::BTreeMap;
 
@@ -106,6 +107,33 @@ pub fn paths(repo: &gix::Repository, commit: &str) -> Result<Vec<String>, RpcErr
     out.sort();
     out.dedup();
     Ok(out)
+}
+
+/// `git stash drop` 의 stdout(`Dropped refs/stash@{0} (<해시>)` — 앞말은 번역되므로 보지 않는다)에서 지운 커밋 해시.
+pub fn dropped(stdout: &[u8]) -> Option<String> {
+    let text = stdout.to_str_lossy();
+    let line = text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())?
+        .trim_end();
+    let inner = line.strip_suffix(')')?;
+    let hash = &inner[inner.rfind('(')? + 1..];
+    let ok = matches!(hash.len(), 40 | 64) && hash.bytes().all(|b| b.is_ascii_hexdigit());
+    ok.then(|| hash.to_ascii_lowercase())
+}
+
+/// stash 커밋의 메시지 첫 줄 — git 이 stash 를 만들 때 reflog 에도 같은 것을 적는다(되돌려 넣을 때 `git stash store -m`).
+pub fn message(repo: &gix::Repository, commit: &str) -> Result<String, RpcError> {
+    let id = ObjectId::from_hex(commit.as_bytes()).map_err(internal)?;
+    let commit = repo.find_commit(id).map_err(internal)?;
+    let message = commit.message_raw_sloppy();
+    Ok(message
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_str_lossy()
+        .into_owned())
 }
 
 /// index 에 충돌(단계 1~3)이 있는가.

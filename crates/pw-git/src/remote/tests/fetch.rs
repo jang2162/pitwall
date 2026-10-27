@@ -15,7 +15,7 @@ async fn fetch_updates_remote_branches_and_prunes_only_when_asked() {
     let head = f.repo.head();
 
     // 듣는 창이 없다 — fetch 는 작업 트리를 바꾸지 않으므로 묻지 않는다.
-    let work_tree = fetch(&f.write, f.project.clone(), None, None, false)
+    let work_tree = fetch(&f.write, f.caller(), f.project.clone(), None, None, false)
         .await
         .unwrap();
     assert_eq!(work_tree, f.repo.root().display().to_string());
@@ -27,6 +27,7 @@ async fn fetch_updates_remote_branches_and_prunes_only_when_asked() {
         .git_in(&other, &["push", "--quiet", "origin", "--delete", "gone"]);
     fetch(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         Some("origin".into()),
@@ -41,6 +42,7 @@ async fn fetch_updates_remote_branches_and_prunes_only_when_asked() {
     );
     fetch(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         Some("origin".into()),
@@ -67,6 +69,7 @@ async fn fetch_updates_remote_branches_and_prunes_only_when_asked() {
     // 없는 원격은 git 의 원문이다.
     let e = fetch(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         Some("nowhere".into()),

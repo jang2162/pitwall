@@ -35,9 +35,14 @@ async fn when_the_second_of_two_picks_conflicts_the_first_is_committed_and_conti
     let _window = window(&f);
     let (c1, c2) = two_commits_the_second_conflicting(&f);
     let before = f.repo.head();
-    let stopped = pick(f.write.clone(), params(&f, &[&c1, &c2]), Pick::CherryPick)
-        .await
-        .unwrap();
+    let stopped = pick(
+        f.write.clone(),
+        f.caller(),
+        params(&f, &[&c1, &c2]),
+        Pick::CherryPick,
+    )
+    .await
+    .unwrap();
     assert_eq!(stopped.outcome, HistoryOutcome::Stopped);
     let operation = stopped.operation.unwrap();
     assert_eq!(operation.kind, RepoOperation::CherryPick);
@@ -54,7 +59,7 @@ async fn when_the_second_of_two_picks_conflicts_the_first_is_committed_and_conti
     f.repo.git(&["add", "f.txt"]);
     let done = f
         .write
-        .act(&f.project, None, OperationAction::Continue)
+        .act(f.caller(), &f.project, None, OperationAction::Continue)
         .await
         .unwrap();
     assert_eq!(done.operation, None);
@@ -85,9 +90,14 @@ async fn picks_without_conflicts_commit_in_the_given_order() {
     let b = r.commit_file("b.txt", "b\n", "b");
     r.checkout("main");
     let before = r.head();
-    let done = pick(f.write.clone(), params(&f, &[&b, &a]), Pick::CherryPick)
-        .await
-        .unwrap();
+    let done = pick(
+        f.write.clone(),
+        f.caller(),
+        params(&f, &[&b, &a]),
+        Pick::CherryPick,
+    )
+    .await
+    .unwrap();
     assert_eq!(done.outcome, HistoryOutcome::Done);
     assert_eq!(done.operation, None);
     assert_eq!(subject(&f, "HEAD"), "a");
@@ -109,9 +119,14 @@ async fn revert_makes_the_inverse_commit() {
     let _window = window(&f);
     f.repo.commit_file("f.txt", "one\n", "one");
     let two = f.repo.commit_file("f.txt", "two\n", "two");
-    let done = pick(f.write.clone(), params(&f, &[&two]), Pick::Revert)
-        .await
-        .unwrap();
+    let done = pick(
+        f.write.clone(),
+        f.caller(),
+        params(&f, &[&two]),
+        Pick::Revert,
+    )
+    .await
+    .unwrap();
     assert_eq!(done.outcome, HistoryOutcome::Done);
     assert_eq!(parents(&f, "HEAD"), std::slice::from_ref(&two));
     assert_eq!(
@@ -138,9 +153,14 @@ async fn a_conflicting_revert_stops_as_a_revert() {
     f.repo.commit_file("f.txt", "one\n", "one");
     let two = f.repo.commit_file("f.txt", "two\n", "two");
     f.repo.commit_file("f.txt", "three\n", "three");
-    let stopped = pick(f.write.clone(), params(&f, &[&two]), Pick::Revert)
-        .await
-        .unwrap();
+    let stopped = pick(
+        f.write.clone(),
+        f.caller(),
+        params(&f, &[&two]),
+        Pick::Revert,
+    )
+    .await
+    .unwrap();
     assert_eq!(stopped.outcome, HistoryOutcome::Stopped);
     let operation = stopped.operation.unwrap();
     assert_eq!(operation.kind, RepoOperation::Revert);
@@ -150,8 +170,13 @@ async fn a_conflicting_revert_stops_as_a_revert() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_commits_is_invalid() {
     let f = WriteFixture::new(true);
-    let e = pick(f.write.clone(), params(&f, &[]), Pick::CherryPick)
-        .await
-        .unwrap_err();
+    let e = pick(
+        f.write.clone(),
+        f.caller(),
+        params(&f, &[]),
+        Pick::CherryPick,
+    )
+    .await
+    .unwrap_err();
     assert_eq!(e.code, pw_rpc::code::INVALID_PARAMS);
 }

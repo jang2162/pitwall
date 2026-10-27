@@ -204,6 +204,7 @@ async fn changes_made_after_the_confirmation_are_not_reset_away() {
     r.write("README.md", "edited much more\n");
     let e = reset(
         f.write.clone(),
+        f.caller(),
         hard(&f, &first, preview.fingerprint.as_deref().unwrap()),
     )
     .await
@@ -225,6 +226,7 @@ async fn changes_made_after_the_confirmation_are_not_reset_away() {
     r.write("a.txt", "new work\n");
     let e = reset(
         f.write.clone(),
+        f.caller(),
         hard(&f, &second, preview.fingerprint.as_deref().unwrap()),
     )
     .await
@@ -261,7 +263,7 @@ async fn an_undo_that_overwrites_an_ignored_file_asks_first() {
     let current = r.commit_all("ignore the secret");
     r.write("secret.txt", "MY SECRET\n");
 
-    let e = reset(f.write.clone(), undo(&f, &previous, None))
+    let e = reset(f.write.clone(), f.caller(), undo(&f, &previous, None))
         .await
         .unwrap_err();
     assert_eq!(e.code, rpc_code::CONFLICT);
@@ -282,9 +284,13 @@ async fn an_undo_that_overwrites_an_ignored_file_asks_first() {
         data["fingerprint"].as_str(),
         "the conflict carries the preview's fingerprint"
     );
-    let done = reset(f.write.clone(), undo(&f, &previous, preview.fingerprint))
-        .await
-        .unwrap();
+    let done = reset(
+        f.write.clone(),
+        f.caller(),
+        undo(&f, &previous, preview.fingerprint),
+    )
+    .await
+    .unwrap();
     assert_eq!(r.head(), previous);
     assert_eq!(done.lost.unwrap().overwritten, ["secret.txt"]);
     assert_eq!(read(&f, "secret.txt").as_deref(), Some("v1\n"), "confirmed");
@@ -302,7 +308,7 @@ async fn an_undo_that_drops_staged_content_asks_first() {
     r.git(&["add", "README.md"]);
     r.write("README.md", "DISK\n");
 
-    let e = reset(f.write.clone(), undo(&f, &previous, None))
+    let e = reset(f.write.clone(), f.caller(), undo(&f, &previous, None))
         .await
         .unwrap_err();
     assert_eq!(e.code, rpc_code::CONFLICT);
@@ -329,6 +335,7 @@ async fn work_inside_a_lost_folder_after_the_confirmation_is_not_reset_away() {
     r.write("a/sub/b.txt", "notes, edited after the confirmation\n");
     let e = reset(
         f.write.clone(),
+        f.caller(),
         hard(&f, &target, preview.fingerprint.as_deref().unwrap()),
     )
     .await
@@ -341,6 +348,7 @@ async fn work_inside_a_lost_folder_after_the_confirmation_is_not_reset_away() {
     r.write("a/sub/new.txt", "new work\n");
     let e = reset(
         f.write.clone(),
+        f.caller(),
         hard(&f, &target, preview.fingerprint.as_deref().unwrap()),
     )
     .await
@@ -374,7 +382,7 @@ async fn a_lost_folder_too_large_to_fingerprint_cannot_be_confirmed() {
         .unwrap();
     assert_eq!(preview.lost.overwritten, ["a/"]);
     assert_eq!(preview.fingerprint, None, "too many to fingerprint");
-    let e = reset(f.write.clone(), hard(&f, &target, "anything"))
+    let e = reset(f.write.clone(), f.caller(), hard(&f, &target, "anything"))
         .await
         .unwrap_err();
     assert_eq!(e.code, rpc_code::CONFLICT);
@@ -407,7 +415,7 @@ async fn a_mixed_reset_that_drops_staged_content_asks_first() {
     r.git(&["add", "README.md"]);
     r.write("README.md", "DISK\n");
 
-    let e = reset(f.write.clone(), mixed(&f, &first, None))
+    let e = reset(f.write.clone(), f.caller(), mixed(&f, &first, None))
         .await
         .unwrap_err();
     assert_eq!(e.code, rpc_code::CONFLICT);
@@ -428,9 +436,13 @@ async fn a_mixed_reset_that_drops_staged_content_asks_first() {
     r.write("README.md", "STAGED AGAIN\n");
     r.git(&["add", "README.md"]);
     r.write("README.md", "DISK\n");
-    let e = reset(f.write.clone(), mixed(&f, &first, preview.fingerprint))
-        .await
-        .unwrap_err();
+    let e = reset(
+        f.write.clone(),
+        f.caller(),
+        mixed(&f, &first, preview.fingerprint),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(
         e.code,
         rpc_code::CONFLICT,
@@ -439,9 +451,13 @@ async fn a_mixed_reset_that_drops_staged_content_asks_first() {
     assert_eq!(r.git(&["show", ":README.md"]), "STAGED AGAIN\n");
 
     let preview = reset_preview(f.write.clone(), p).await.unwrap();
-    let done = reset(f.write.clone(), mixed(&f, &first, preview.fingerprint))
-        .await
-        .unwrap();
+    let done = reset(
+        f.write.clone(),
+        f.caller(),
+        mixed(&f, &first, preview.fingerprint),
+    )
+    .await
+    .unwrap();
     assert_eq!(r.head(), first);
     assert_eq!(done.lost.unwrap().changes[0].path, "README.md");
     assert_eq!(r.git(&["diff", "--cached", "--name-only"]), "");

@@ -2,8 +2,8 @@
 //! 만든다(`crate::testing`). 읽기([`read`])는 모든 OS 에서, 해결([`resolve`])과 미신뢰 저장소([`untrusted`])는 쓰기 실행기의
 //! 시험 도우미(가짜 로그인 셸)로 unix 에서 돈다.
 //!
-//! gix 가 사람의 전역 · 시스템 git 설정을 읽지 않게 시험마다 런타임을 띄우기 전에 [`isolate`] 한다(`#[tokio::test]` 대신
-//! [`block_on`] — 환경을 바꾼 뒤에 스레드를 띄운다).
+//! gix 가 사람의 전역 · 시스템 git 설정을 읽지 않게 하는 것은 [`TestRepo::new`] 가 한다(`crate::testing::repo::isolate_git_config`).
+//! 해결 시험은 그 뒤에 런타임을 띄운다(`#[tokio::test]` 대신 [`block_on`] — 환경을 바꾼 뒤에 스레드를 띄운다).
 
 mod merge;
 mod read;
@@ -29,23 +29,6 @@ use crate::testing::TestRepo;
 use crate::testing::repo::git_command;
 use crate::{Git, HostParts};
 
-/// HOME · XDG · `GIT_CONFIG_GLOBAL` 을 `<base>/home` 으로 돌리고 시스템 설정을 끈다.
-fn isolate(base: &Path) {
-    let home = base.join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let config = home.join(".gitconfig");
-    if !config.exists() {
-        std::fs::write(&config, "").unwrap();
-    }
-    // SAFETY: nextest 는 시험마다 프로세스가 따로이고, 이것은 다른 스레드(런타임)를 띄우기 전에 부른다.
-    unsafe {
-        std::env::set_var("HOME", &home);
-        std::env::set_var("XDG_CONFIG_HOME", home.join(".config"));
-        std::env::set_var("GIT_CONFIG_GLOBAL", &config);
-        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
-    }
-}
-
 /// 다중 스레드 런타임에서 `f` 를 끝까지 돌린다(해결 시험 — unix).
 #[cfg(unix)]
 fn block_on<F: Future>(f: F) -> F::Output {
@@ -67,7 +50,6 @@ struct Host {
 
 impl Host {
     fn new(repo: TestRepo) -> Self {
-        isolate(repo.base());
         let app = tempfile::tempdir().unwrap();
         let paths = AppPaths::under(&app.path().join("app"));
         std::fs::create_dir_all(&paths.config).unwrap();

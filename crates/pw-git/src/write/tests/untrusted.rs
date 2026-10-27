@@ -79,7 +79,9 @@ async fn the_automatic_paths_of_an_untrusted_repository_run_none_of_its_programs
 
     let window = Window::open(&f.write, &f.project, |_| Some(GitPromptAnswer::Cancel));
     assert_eq!(
-        f.write.act(&f.project, None, OperationAction::Abort).await,
+        f.write
+            .act(f.caller(), &f.project, None, OperationAction::Abort)
+            .await,
         Err(WriteError::Cancelled),
         "the window cancelled the unsaved check — git did not run"
     );
@@ -90,7 +92,9 @@ async fn the_automatic_paths_of_an_untrusted_repository_run_none_of_its_programs
     let lock = f.repo.root().join(".git/index.lock");
     fs::write(&lock, "").unwrap();
     assert!(matches!(
-        f.write.act(&f.project, None, OperationAction::Abort).await,
+        f.write
+            .act(f.caller(), &f.project, None, OperationAction::Abort)
+            .await,
         Err(WriteError::IndexLocked { .. })
     ));
     fs::remove_file(&lock).unwrap();

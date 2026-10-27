@@ -30,6 +30,7 @@ async fn create_makes_a_branch_and_checks_it_out_only_when_asked() {
 
     let (branch, head) = create(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         "plain".into(),
@@ -50,6 +51,7 @@ async fn create_makes_a_branch_and_checks_it_out_only_when_asked() {
     let _window = proceed(&f);
     let (branch, head) = create(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         "from-first".into(),
@@ -71,6 +73,7 @@ async fn create_makes_a_branch_and_checks_it_out_only_when_asked() {
     // 이미 있는 이름은 git 의 원문으로 실패한다.
     let e = create(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         "plain".into(),
@@ -89,6 +92,7 @@ async fn rename_moves_the_branch_and_refuses_an_existing_name() {
     f.repo.branch("taken");
     let branch = rename(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         "old".into(),
@@ -102,6 +106,7 @@ async fn rename_moves_the_branch_and_refuses_an_existing_name() {
 
     let e = rename(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         "new".into(),
@@ -120,9 +125,16 @@ async fn an_unmerged_branch_is_not_deleted_without_force() {
     let tip = f.repo.commit_file("wip.txt", "wip\n", "wip");
     f.repo.checkout("main");
 
-    let refused = delete(&f.write, f.project.clone(), None, "wip".into(), false)
-        .await
-        .unwrap();
+    let refused = delete(
+        &f.write,
+        f.caller(),
+        f.project.clone(),
+        None,
+        "wip".into(),
+        false,
+    )
+    .await
+    .unwrap();
     let Deleted::NotMerged { stderr, commit } = refused else {
         panic!("expected a not-merged refusal, got {refused:?}");
     };
@@ -134,9 +146,16 @@ async fn an_unmerged_branch_is_not_deleted_without_force() {
     assert_eq!(e.data.as_ref().unwrap()["commit"], tip);
 
     // 창이 확인한 뒤 `force` 로.
-    let deleted = delete(&f.write, f.project.clone(), None, "wip".into(), true)
-        .await
-        .unwrap();
+    let deleted = delete(
+        &f.write,
+        f.caller(),
+        f.project.clone(),
+        None,
+        "wip".into(),
+        true,
+    )
+    .await
+    .unwrap();
     let Deleted::Deleted { work_tree, moved } = deleted else {
         panic!("expected a deletion, got {deleted:?}");
     };
@@ -154,6 +173,7 @@ async fn an_unmerged_branch_is_not_deleted_without_force() {
     // [되돌리기]: 이전 해시에서 같은 이름으로 다시 만든다.
     let (branch, _) = create(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         "wip".into(),
@@ -169,29 +189,57 @@ async fn an_unmerged_branch_is_not_deleted_without_force() {
 async fn a_merged_branch_is_deleted_and_other_refusals_stay_git_failures() {
     let f = WriteFixture::new(true);
     f.repo.branch("done");
-    let deleted = delete(&f.write, f.project.clone(), None, "done".into(), false)
-        .await
-        .unwrap();
+    let deleted = delete(
+        &f.write,
+        f.caller(),
+        f.project.clone(),
+        None,
+        "done".into(),
+        false,
+    )
+    .await
+    .unwrap();
     assert!(matches!(deleted, Deleted::Deleted { .. }), "{deleted:?}");
 
     // 지금 브랜치는 git 이 지우지 않는다 — 병합 여부와 상관없는 거절이라 「병합 안 됨」 이 아니라 git 의 원문이다.
-    let e = delete(&f.write, f.project.clone(), None, "main".into(), true)
-        .await
-        .unwrap_err();
+    let e = delete(
+        &f.write,
+        f.caller(),
+        f.project.clone(),
+        None,
+        "main".into(),
+        true,
+    )
+    .await
+    .unwrap_err();
     assert!(stderr_of(&e).contains("main"), "{e:?}");
     // 없는 브랜치도.
-    let e = delete(&f.write, f.project.clone(), None, "missing".into(), false)
-        .await
-        .unwrap_err();
+    let e = delete(
+        &f.write,
+        f.caller(),
+        f.project.clone(),
+        None,
+        "missing".into(),
+        false,
+    )
+    .await
+    .unwrap_err();
     assert!(stderr_of(&e).contains("missing"), "{e:?}");
 }
 
 /// 지우기가 git 의 원문(`2004`)으로 끝났다 — 「병합 안 됨」(`2101`)이 아니다.
 async fn refused_by_git(f: &WriteFixture, name: &str) -> String {
-    let e = delete(&f.write, f.project.clone(), None, name.into(), false)
-        .await
-        .map(|d| format!("{d:?}"))
-        .unwrap_err();
+    let e = delete(
+        &f.write,
+        f.caller(),
+        f.project.clone(),
+        None,
+        name.into(),
+        false,
+    )
+    .await
+    .map(|d| format!("{d:?}"))
+    .unwrap_err();
     let text = stderr_of(&e);
     assert_eq!(RpcError::from(e).code, crate::write::code::GIT_FAILED);
     assert!(exists(f, name), "{name} is still there");
@@ -316,6 +364,7 @@ async fn tags_are_lightweight_or_annotated_with_the_message() {
 
     let light = tag(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         "v1".into(),
@@ -334,6 +383,7 @@ async fn tags_are_lightweight_or_annotated_with_the_message() {
     let message = "-starts with a dash\n\n두 번째 줄\n";
     let annotated = tag(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         "v2".into(),
@@ -358,11 +408,20 @@ async fn names_that_look_like_options_are_refused_before_git_runs() {
     let f = WriteFixture::new(true);
     let before = f.repo.git(&["for-each-ref"]);
     for e in [
-        create(&f.write, f.project.clone(), None, "-D".into(), None, true)
-            .await
-            .unwrap_err(),
         create(
             &f.write,
+            f.caller(),
+            f.project.clone(),
+            None,
+            "-D".into(),
+            None,
+            true,
+        )
+        .await
+        .unwrap_err(),
+        create(
+            &f.write,
+            f.caller(),
             f.project.clone(),
             None,
             "x".into(),
@@ -373,6 +432,7 @@ async fn names_that_look_like_options_are_refused_before_git_runs() {
         .unwrap_err(),
         rename(
             &f.write,
+            f.caller(),
             f.project.clone(),
             None,
             "main".into(),
@@ -380,15 +440,31 @@ async fn names_that_look_like_options_are_refused_before_git_runs() {
         )
         .await
         .unwrap_err(),
-        delete(&f.write, f.project.clone(), None, "--all".into(), true)
-            .await
-            .map(drop)
-            .unwrap_err(),
-        tag(&f.write, f.project.clone(), None, "-d".into(), None, None)
-            .await
-            .unwrap_err(),
+        delete(
+            &f.write,
+            f.caller(),
+            f.project.clone(),
+            None,
+            "--all".into(),
+            true,
+        )
+        .await
+        .map(drop)
+        .unwrap_err(),
+        tag(
+            &f.write,
+            f.caller(),
+            f.project.clone(),
+            None,
+            "-d".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap_err(),
         checkout(
             &f.write,
+            f.caller(),
             f.project.clone(),
             None,
             GitCheckoutTarget::Remote {

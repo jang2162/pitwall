@@ -63,7 +63,7 @@ async fn one_line_of_a_mixed_hunk_stages_to_the_expected_patch_and_unstages_back
     let new_line = select(hunk, |l| l.kind == LineKind::Added && l.text == "new");
 
     f.write
-        .stage_lines(params(&f, "mixed.txt", vec![new_line]))
+        .stage_lines(f.caller(), params(&f, "mixed.txt", vec![new_line]))
         .await
         .unwrap();
     let staged = b"1\n2\n3\n4\n5\n6\n7\nnew\n8\n9\n10\n";
@@ -88,7 +88,7 @@ async fn one_line_of_a_mixed_hunk_stages_to_the_expected_patch_and_unstages_back
         l.kind == LineKind::Added && l.text == "new"
     });
     f.write
-        .unstage_lines(params(&f, "mixed.txt", vec![same_line]))
+        .unstage_lines(f.caller(), params(&f, "mixed.txt", vec![same_line]))
         .await
         .unwrap();
     assert_eq!(index(&f), original, "the index is back");
@@ -106,7 +106,7 @@ async fn crlf_lines_stay_crlf_when_staged_and_when_one_is_discarded() {
     // `-b` · `+B` 만 스테이징한다(`+D` 는 두고).
     let swap = select(hunk, |l| l.text == "b\r" || l.text == "B\r");
     f.write
-        .stage_lines(params(&f, "crlf.txt", vec![swap]))
+        .stage_lines(f.caller(), params(&f, "crlf.txt", vec![swap]))
         .await
         .unwrap();
     assert_eq!(bytes(&f, &["show", ":crlf.txt"]), b"a\r\nB\r\nc\r\n");
@@ -118,7 +118,7 @@ async fn crlf_lines_stay_crlf_when_staged_and_when_one_is_discarded() {
     });
     let _window = proceed(&f);
     f.write
-        .discard_lines(discard(&f, "crlf.txt", vec![d]))
+        .discard_lines(f.caller(), discard(&f, "crlf.txt", vec![d]))
         .await
         .unwrap();
     assert_eq!(
@@ -137,7 +137,7 @@ async fn one_line_is_discarded_from_the_work_tree_and_the_rest_stays() {
     let b = select(&file.hunks[0], |l| l.kind == LineKind::Removed);
     let _window = proceed(&f);
     f.write
-        .discard_lines(discard(&f, "crlf.txt", vec![b]))
+        .discard_lines(f.caller(), discard(&f, "crlf.txt", vec![b]))
         .await
         .unwrap();
     assert_eq!(
@@ -161,7 +161,7 @@ async fn a_missing_final_newline_is_kept_in_the_patch() {
     // 줄바꿈만 더하는 쪽(`-two` · `+two`)을 스테이징하고 `+three` 는 둔다.
     let newline = select(&file.hunks[0], |l| l.text == "two");
     f.write
-        .stage_lines(params(&f, "noeol.txt", vec![newline]))
+        .stage_lines(f.caller(), params(&f, "noeol.txt", vec![newline]))
         .await
         .unwrap();
     assert_eq!(bytes(&f, &["show", ":noeol.txt"]), b"one\ntwo\n");
@@ -178,14 +178,17 @@ async fn a_missing_final_newline_is_kept_in_the_patch() {
     // 스테이징된 diff 의 hunk 전체를 언스테이징하면 index 가 원래대로다.
     let staged = diff(&f, DiffSide::Index, "noeol.txt");
     f.write
-        .unstage_lines(params(
-            &f,
-            "noeol.txt",
-            vec![HunkSelection {
-                hunk: staged.hunks[0].clone(),
-                lines: None,
-            }],
-        ))
+        .unstage_lines(
+            f.caller(),
+            params(
+                &f,
+                "noeol.txt",
+                vec![HunkSelection {
+                    hunk: staged.hunks[0].clone(),
+                    lines: None,
+                }],
+            ),
+        )
         .await
         .unwrap();
     assert_eq!(index(&f), original);
@@ -226,7 +229,7 @@ async fn a_renamed_file_unstages_lines_against_its_old_path() {
         }],
     );
     request.old_path = Some("old.txt".into());
-    f.write.unstage_lines(request).await.unwrap();
+    f.write.unstage_lines(f.caller(), request).await.unwrap();
     assert_eq!(bytes(&f, &["show", ":new.txt"]), original_text.as_bytes());
     // 이름 바뀜은 그대로 스테이징돼 있고 내용 변경만 풀렸다.
     assert_eq!(
@@ -263,14 +266,17 @@ async fn a_binary_file_is_refused_line_by_line_and_staged_whole_byte_for_byte() 
     };
     let refused = f
         .write
-        .stage_lines(params(
-            &f,
-            "bin.dat",
-            vec![HunkSelection {
-                hunk: made_up,
-                lines: None,
-            }],
-        ))
+        .stage_lines(
+            f.caller(),
+            params(
+                &f,
+                "bin.dat",
+                vec![HunkSelection {
+                    hunk: made_up,
+                    lines: None,
+                }],
+            ),
+        )
         .await
         .unwrap_err();
     assert_eq!(code(refused), rpc_code::INVALID_PARAMS);
@@ -281,9 +287,9 @@ async fn a_binary_file_is_refused_line_by_line_and_staged_whole_byte_for_byte() 
         worktree: None,
         paths: vec!["bin.dat".into()],
     };
-    f.write.stage(paths.clone()).await.unwrap();
+    f.write.stage(f.caller(), paths.clone()).await.unwrap();
     assert_eq!(bytes(&f, &["show", ":bin.dat"]), changed);
-    f.write.unstage(paths).await.unwrap();
+    f.write.unstage(f.caller(), paths).await.unwrap();
     assert_eq!(index(&f), original);
     assert_eq!(std::fs::read(&path).unwrap(), changed);
 }
@@ -304,7 +310,7 @@ async fn a_stale_or_whitespace_blind_selection_writes_nothing() {
     f.repo.write("f.txt", "1\nTWO\n3\n");
     let stale = f
         .write
-        .stage_lines(params(&f, "f.txt", vec![all()]))
+        .stage_lines(f.caller(), params(&f, "f.txt", vec![all()]))
         .await
         .unwrap_err();
     assert_eq!(code(stale), rpc_code::CONFLICT);
@@ -314,7 +320,7 @@ async fn a_stale_or_whitespace_blind_selection_writes_nothing() {
     let mut blind = params(&f, "f.txt", vec![all()]);
     blind.ignore_whitespace = true;
     assert_eq!(
-        code(f.write.stage_lines(blind).await.unwrap_err()),
+        code(f.write.stage_lines(f.caller(), blind).await.unwrap_err()),
         rpc_code::INVALID_PARAMS
     );
     let empty = HunkSelection {
@@ -333,7 +339,7 @@ async fn a_stale_or_whitespace_blind_selection_writes_nothing() {
         assert_eq!(
             code(
                 f.write
-                    .stage_lines(params(&f, "f.txt", vec![bad.clone()]))
+                    .stage_lines(f.caller(), params(&f, "f.txt", vec![bad.clone()]))
                     .await
                     .unwrap_err()
             ),
@@ -344,7 +350,12 @@ async fn a_stale_or_whitespace_blind_selection_writes_nothing() {
     let mut unconfirmed = discard(&f, "f.txt", vec![all()]);
     unconfirmed.confirmed = false;
     assert_eq!(
-        code(f.write.discard_lines(unconfirmed).await.unwrap_err()),
+        code(
+            f.write
+                .discard_lines(f.caller(), unconfirmed)
+                .await
+                .unwrap_err()
+        ),
         rpc_code::INVALID_PARAMS
     );
     assert_eq!(index(&f), original);
@@ -355,7 +366,7 @@ async fn a_stale_or_whitespace_blind_selection_writes_nothing() {
 
     // 같은 hunk 가 그대로면 된다.
     f.write
-        .stage_lines(params(&f, "f.txt", vec![all()]))
+        .stage_lines(f.caller(), params(&f, "f.txt", vec![all()]))
         .await
         .unwrap();
     assert_eq!(bytes(&f, &["show", ":f.txt"]), b"1\ntwo\n3\n");
@@ -378,7 +389,7 @@ async fn autocrlf_does_not_turn_staged_or_discarded_crlf_lines_into_lf() {
         );
         let swap = select(&file.hunks[0], |l| l.text == "b\r" || l.text == "B\r");
         f.write
-            .stage_lines(params(&f, "crlf.txt", vec![swap]))
+            .stage_lines(f.caller(), params(&f, "crlf.txt", vec![swap]))
             .await
             .unwrap();
         assert_eq!(
@@ -391,7 +402,7 @@ async fn autocrlf_does_not_turn_staged_or_discarded_crlf_lines_into_lf() {
         let d = select(&file.hunks[0], |l| l.kind == LineKind::Added);
         let _window = proceed(&f);
         f.write
-            .discard_lines(discard(&f, "crlf.txt", vec![d]))
+            .discard_lines(f.caller(), discard(&f, "crlf.txt", vec![d]))
             .await
             .unwrap();
         assert_eq!(
@@ -416,13 +427,13 @@ async fn a_file_deleted_in_the_work_tree_stages_removed_lines_and_refuses_line_d
     let _window = proceed(&f);
     let refused = f
         .write
-        .discard_lines(discard(&f, "gone.txt", vec![two.clone()]))
+        .discard_lines(f.caller(), discard(&f, "gone.txt", vec![two.clone()]))
         .await
         .unwrap_err();
     assert_eq!(code(refused), rpc_code::INVALID_PARAMS);
 
     f.write
-        .stage_lines(params(&f, "gone.txt", vec![two]))
+        .stage_lines(f.caller(), params(&f, "gone.txt", vec![two]))
         .await
         .unwrap();
     assert_eq!(bytes(&f, &["show", ":gone.txt"]), b"1\n3\n");
@@ -440,7 +451,7 @@ async fn trailing_whitespace_is_staged_as_is_whatever_apply_whitespace_says() {
         let file = diff(&f, DiffSide::WorkTree, "ws.txt");
         let tail = select(&file.hunks[0], |l| l.kind == LineKind::Added);
         f.write
-            .stage_lines(params(&f, "ws.txt", vec![tail]))
+            .stage_lines(f.caller(), params(&f, "ws.txt", vec![tail]))
             .await
             .unwrap();
         assert_eq!(
@@ -449,4 +460,27 @@ async fn trailing_whitespace_is_staged_as_is_whatever_apply_whitespace_says() {
             "{setting}"
         );
     }
+}
+
+/// `autocrlf=true` · `safecrlf=true` 에 LF 작업 트리 파일: `git add -p` 처럼 줄을 고를 수 있다(diff 읽기는 `core.safecrlf` 를 보지
+/// 않는다). 고른 줄만 index 에 간다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lines_stage_under_safecrlf_like_git_add_patch() {
+    let f = WriteFixture::new(true);
+    f.repo
+        .commit_file("lf.txt", "1\n2\n3\n4\n5\n6\n7\n8\n9\n", "lf");
+    f.repo.write("lf.txt", "one\n2\n3\n4\n5\n6\n7\n8\nnine\n");
+    f.repo.git(&["config", "core.autocrlf", "true"]);
+    f.repo.git(&["config", "core.safecrlf", "true"]);
+    let file = diff(&f, DiffSide::WorkTree, "lf.txt");
+    assert_eq!(file.hunks.len(), 2, "{file:?}");
+    let first = select(&file.hunks[0], |l| l.kind != LineKind::Context);
+    f.write
+        .stage_lines(f.caller(), params(&f, "lf.txt", vec![first]))
+        .await
+        .unwrap();
+    assert_eq!(
+        bytes(&f, &["show", ":lf.txt"]),
+        b"one\n2\n3\n4\n5\n6\n7\n8\n9\n"
+    );
 }

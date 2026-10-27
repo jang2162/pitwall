@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use pw_core::registry::state::connection_may_write;
-use pw_rpc::{Ctx, Router, RpcError, code as rpc_code, rpc_method};
+use pw_rpc::{ConnectionScope, Ctx, Router, RpcError, code as rpc_code, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -147,16 +147,31 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
         },
     );
     let w = Arc::clone(&write);
-    router.unary(GitOperationContinueMethod, move |_ctx, params| {
-        act(Arc::clone(&w), params, OperationAction::Continue)
+    router.unary(GitOperationContinueMethod, move |ctx, params| {
+        act(
+            Arc::clone(&w),
+            ctx.scope().clone(),
+            params,
+            OperationAction::Continue,
+        )
     });
     let w = Arc::clone(&write);
-    router.unary(GitOperationAbortMethod, move |_ctx, params| {
-        act(Arc::clone(&w), params, OperationAction::Abort)
+    router.unary(GitOperationAbortMethod, move |ctx, params| {
+        act(
+            Arc::clone(&w),
+            ctx.scope().clone(),
+            params,
+            OperationAction::Abort,
+        )
     });
     let w = Arc::clone(&write);
-    router.unary(GitOperationSkipMethod, move |_ctx, params| {
-        act(Arc::clone(&w), params, OperationAction::Skip)
+    router.unary(GitOperationSkipMethod, move |ctx, params| {
+        act(
+            Arc::clone(&w),
+            ctx.scope().clone(),
+            params,
+            OperationAction::Skip,
+        )
     });
     let w = Arc::clone(&write);
     router.stream(
@@ -221,10 +236,16 @@ fn own_window(ctx: &Ctx, project_id: &str) -> Result<(), RpcError> {
 
 async fn act(
     write: Arc<GitWrite>,
+    caller: ConnectionScope,
     params: GitOperationParams,
     action: OperationAction,
 ) -> Result<GitOperationResult, RpcError> {
     Ok(write
-        .act(&params.project_id, params.worktree.as_deref(), action)
+        .act(
+            caller,
+            &params.project_id,
+            params.worktree.as_deref(),
+            action,
+        )
         .await?)
 }

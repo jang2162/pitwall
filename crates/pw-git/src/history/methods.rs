@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pw_rpc::{Router, RpcError, rpc_method};
+use pw_rpc::{ConnectionScope, Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use super::lost::{self, GitLostChanges};
@@ -198,24 +198,29 @@ pub const TITLE_RESET: &str = "task-title-git-reset";
 /// 핸들러를 붙인다.
 pub fn register(router: &mut Router, write: Arc<GitWrite>) {
     let w = Arc::clone(&write);
-    router.unary(GitMergeMethod, move |_ctx, params| {
-        merge(Arc::clone(&w), params)
+    router.unary(GitMergeMethod, move |ctx, params| {
+        merge(Arc::clone(&w), ctx.scope().clone(), params)
     });
     let w = Arc::clone(&write);
-    router.unary(GitCherryPickMethod, move |_ctx, params| {
-        pick(Arc::clone(&w), params, Pick::CherryPick)
+    router.unary(GitCherryPickMethod, move |ctx, params| {
+        pick(
+            Arc::clone(&w),
+            ctx.scope().clone(),
+            params,
+            Pick::CherryPick,
+        )
     });
     let w = Arc::clone(&write);
-    router.unary(GitRevertMethod, move |_ctx, params| {
-        pick(Arc::clone(&w), params, Pick::Revert)
+    router.unary(GitRevertMethod, move |ctx, params| {
+        pick(Arc::clone(&w), ctx.scope().clone(), params, Pick::Revert)
     });
     let w = Arc::clone(&write);
-    router.unary(GitRebaseMethod, move |_ctx, params| {
-        rebase(Arc::clone(&w), params)
+    router.unary(GitRebaseMethod, move |ctx, params| {
+        rebase(Arc::clone(&w), ctx.scope().clone(), params)
     });
     let w = Arc::clone(&write);
-    router.unary(GitResetMethod, move |_ctx, params| {
-        reset(Arc::clone(&w), params)
+    router.unary(GitResetMethod, move |ctx, params| {
+        reset(Arc::clone(&w), ctx.scope().clone(), params)
     });
     let w = Arc::clone(&write);
     router.unary(GitResetPreviewMethod, move |_ctx, params| {
@@ -226,6 +231,7 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
 /// `git.merge`.
 pub async fn merge(
     write: Arc<GitWrite>,
+    caller: ConnectionScope,
     params: GitMergeParams,
 ) -> Result<GitHistoryResult, RpcError> {
     check_rev("rev", &params.rev)?;
@@ -238,6 +244,7 @@ pub async fn merge(
     args.push(params.rev.into());
     let job = Job {
         request: super::request(
+            caller,
             &params.project_id,
             params.worktree.as_deref(),
             TITLE_MERGE,
@@ -259,6 +266,7 @@ pub enum Pick {
 /// `git.cherryPick` · `git.revert`.
 pub async fn pick(
     write: Arc<GitWrite>,
+    caller: ConnectionScope,
     params: GitCommitsParams,
     kind: Pick,
 ) -> Result<GitHistoryResult, RpcError> {
@@ -278,6 +286,7 @@ pub async fn pick(
         .collect();
     let job = Job {
         request: super::request(
+            caller,
             &params.project_id,
             params.worktree.as_deref(),
             title,
@@ -293,6 +302,7 @@ pub async fn pick(
 /// `git.rebase`.
 pub async fn rebase(
     write: Arc<GitWrite>,
+    caller: ConnectionScope,
     params: GitRebaseParams,
 ) -> Result<GitHistoryResult, RpcError> {
     check_rev("upstream", &params.upstream)?;
@@ -308,6 +318,7 @@ pub async fn rebase(
     };
     let job = Job {
         request: super::request(
+            caller,
             &params.project_id,
             params.worktree.as_deref(),
             TITLE_REBASE,
@@ -323,6 +334,7 @@ pub async fn rebase(
 /// `git.reset`.
 pub async fn reset(
     write: Arc<GitWrite>,
+    caller: ConnectionScope,
     params: GitResetParams,
 ) -> Result<GitResetResult, RpcError> {
     check_rev("commit", &params.commit)?;
@@ -336,6 +348,7 @@ pub async fn reset(
         ResetMode::Soft | ResetMode::Mixed => Changes::None,
     };
     let request = super::request(
+        caller,
         &params.project_id,
         params.worktree.as_deref(),
         TITLE_RESET,

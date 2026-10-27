@@ -1,5 +1,5 @@
 //! 스테이징 · 되돌리기 · stash RPC(`docs/design/13-m2-plan.md` M2-07). UI 전용이라 MCP 툴이 아니다(결정 M2-D7 — git 쓰기는 M5
-//! 에서도 툴이 아니다). 쓰기는 모두 owner 만 부른다. 경로는 저장소 작업 트리 기준 상대 경로, 구분자 `/` 다(`git.diff` 와 같다).
+//! 에서도 툴이 아니다). 쓰기는 모두 owner 만, 그 프로젝트 창의 연결로만 부른다(실행기가 본다 — `crate::write` 머리 주석 0). 경로는 저장소 작업 트리 기준 상대 경로, 구분자 `/` 다(`git.diff` 와 같다).
 
 use std::sync::Arc;
 
@@ -103,7 +103,8 @@ pub struct GitWorkTree {
 pub struct GitDiscardResult {
     pub work_tree: String,
     /// 추적하지 않는 경로라 버리지 않은 것(요청 순서). 버리기는 작업 트리를 index 로 돌리는 것이라 index 에 없는 파일은 대상이
-    /// 아니다 — 지우지 않는다. 나머지 경로는 버렸다.
+    /// 아니다 — 지우지 않는다. intent-to-add(`git add -N`) 파일도 여기에 든다(비우지 않는다 — 넘긴 폴더 아래의 것이면 그 파일
+    /// 경로로). 나머지 경로는 버렸다.
     pub untracked: Vec<String>,
 }
 
@@ -210,8 +211,8 @@ pub struct GitStashDropParams {
 }
 
 rpc_method! {
-    /// 경로를 스테이징한다(`git add --all`): 바뀐 파일 · untracked(무시된 파일은 git 이 거절) · 지운 파일(지움을 담는다) · 충돌
-    /// 파일(해결로 표시).
+    /// 경로를 스테이징한다(`git add --all`): 바뀐 파일 · untracked(무시된 파일은 git 이 거절) · 지운 파일(지움을 담는다). 충돌
+    /// 중인 경로(폴더면 그 아래)가 있으면 아무것도 하지 않는다(invalid params, `data.conflicted` — 해결은 `git.conflict.resolve`).
     pub GitStageMethod: "git.stage" {
         params: GitPathsParams,
         result: GitWorkTree,
@@ -222,7 +223,8 @@ rpc_method! {
 
 rpc_method! {
     /// 경로의 스테이징을 푼다(`git reset`): index 를 HEAD 의 것으로(HEAD 에 없으면 index 에서 뺀다 — 커밋이 없는 저장소도 된다).
-    /// 충돌 파일은 HEAD 의 것이 담긴다. 이름 바뀜은 옛 경로와 새 경로를 둘 다 넘긴다.
+    /// 충돌 중인 경로는 `git.stage` 처럼 거절한다(HEAD 쪽을 담아 충돌을 조용히 풀지 않는다). 이름 바뀜은 옛 경로와 새 경로를 둘
+    /// 다 넘긴다.
     pub GitUnstageMethod: "git.unstage" {
         params: GitPathsParams,
         result: GitWorkTree,
@@ -233,7 +235,7 @@ rpc_method! {
 
 rpc_method! {
     /// 작업 트리의 변경을 버린다(`git restore --worktree` — index 의 것으로). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).
-    /// untracked 경로는 지우지 않고 `untracked` 로 돌려준다. 작업 트리가 바뀌므로 미저장 문서를 먼저 확인한다(M2-06).
+    /// untracked · intent-to-add 경로는 지우지도 비우지도 않고 `untracked` 로 돌려준다. 작업 트리가 바뀌므로 미저장 문서를 먼저 확인한다(M2-06).
     pub GitDiscardMethod: "git.discard" {
         params: GitDiscardParams,
         result: GitDiscardResult,
@@ -307,7 +309,9 @@ rpc_method! {
 }
 
 rpc_method! {
-    /// stash 를 적용하고 지운다(`git stash pop`). 충돌로 끝나면 `conflicted` 이고 항목은 남는다.
+    /// stash 를 적용하고 지운다(`git stash apply <커밋>` 뒤 `git stash drop` — 지운 것이 그 커밋인지 본다). 충돌로 끝나면
+    /// `conflicted` 이고 항목은 남는다. 이미 충돌 중이라 git 이 적용을 거절하면 git 의 원문으로 실패한다(apply 도). 버리는 사이
+    /// 목록이 밀렸으면 적용은 된 채 항목을 남기고 conflict.
     pub GitStashPopMethod: "git.stash.pop" {
         params: GitStashApplyParams,
         result: GitStashApplyResult,
@@ -317,7 +321,8 @@ rpc_method! {
 }
 
 rpc_method! {
-    /// stash 항목을 버린다(`git stash drop`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).
+    /// stash 항목을 버린다(`git stash drop`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①). git 이 지운 것이 고른 커밋이
+    /// 아니면(확인과 실행 사이에 목록이 밀림) 그 항목을 `git stash store` 로 되돌려 넣고 conflict.
     pub GitStashDropMethod: "git.stash.drop" {
         params: GitStashDropParams,
         result: GitWorkTree,
@@ -326,13 +331,13 @@ rpc_method! {
     }
 }
 
-/// `$method` 를 [`GitWrite`] 의 `$call` 로 잇는다.
+/// `$method` 를 [`GitWrite`] 의 `$call` 로 잇는다. 부른 연결의 범위를 넘긴다 — 실행기가 그 프로젝트 창의 연결인지 본다.
 macro_rules! write_method {
     ($router:ident, $write:ident, $method:ident, $call:ident) => {{
         let w = Arc::clone(&$write);
-        $router.unary($method, move |_ctx, params| {
-            let w = Arc::clone(&w);
-            async move { Ok(w.$call(params).await?) }
+        $router.unary($method, move |ctx, params| {
+            let (w, caller) = (Arc::clone(&w), ctx.scope().clone());
+            async move { Ok(w.$call(caller, params).await?) }
         });
     }};
 }
@@ -345,9 +350,13 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
     write_method!(router, write, GitStageLinesMethod, stage_lines);
     write_method!(router, write, GitUnstageLinesMethod, unstage_lines);
     write_method!(router, write, GitDiscardLinesMethod, discard_lines);
-    write_method!(router, write, GitStashListMethod, stash_list);
     write_method!(router, write, GitStashPushMethod, stash_push);
     write_method!(router, write, GitStashApplyMethod, stash_apply);
     write_method!(router, write, GitStashPopMethod, stash_pop);
     write_method!(router, write, GitStashDropMethod, stash_drop);
+    let w = Arc::clone(&write);
+    router.unary(GitStashListMethod, move |_ctx, params| {
+        let w = Arc::clone(&w);
+        async move { Ok(w.stash_list(params).await?) }
+    });
 }

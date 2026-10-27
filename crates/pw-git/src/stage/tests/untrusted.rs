@@ -132,7 +132,11 @@ async fn the_reads_of_an_untrusted_repository_run_none_of_its_programs() {
         hunks: vec![select(hunk, |l| l.kind != LineKind::Context)],
         ignore_whitespace: false,
     };
-    let stale = f.write.stage_lines(request(&hunk)).await.unwrap_err();
+    let stale = f
+        .write
+        .stage_lines(f.caller(), request(&hunk))
+        .await
+        .unwrap_err();
     assert!(
         matches!(&stale, WriteError::Rpc(e) if e.code == rpc_code::CONFLICT),
         "{stale:?}"
@@ -141,11 +145,14 @@ async fn the_reads_of_an_untrusted_repository_run_none_of_its_programs() {
 
     // 같은 설정이 살아 있다: 사람이 누른 쓰기는 저장소의 필터를 돌린다(D43).
     f.write
-        .stage(GitPathsParams {
-            project_id: f.project.clone(),
-            worktree: None,
-            paths: vec!["f.txt".into()],
-        })
+        .stage(
+            f.caller(),
+            GitPathsParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                paths: vec!["f.txt".into()],
+            },
+        )
         .await
         .unwrap();
     assert!(

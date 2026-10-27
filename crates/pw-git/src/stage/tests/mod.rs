@@ -76,7 +76,7 @@ fn select(hunk: &DiffHunk, pick: impl Fn(&DiffLine) -> bool) -> HunkSelection {
 
 /// 미저장 확인에 늘 진행으로 답하는 창.
 #[cfg(unix)]
-fn proceed(f: &WriteFixture) -> Window {
+pub(super) fn proceed(f: &WriteFixture) -> Window {
     Window::open(&f.write, &f.project, |_| Some(GitPromptAnswer::Proceed))
 }
 

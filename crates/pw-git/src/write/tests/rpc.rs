@@ -151,8 +151,12 @@ async fn a_window_hears_the_question_over_rpc_and_its_answer_decides_the_write()
 
     let abort = tokio::spawn({
         let write = Arc::clone(&f.write);
-        let project = f.project.clone();
-        async move { write.act(&project, None, OperationAction::Abort).await }
+        let (project, caller) = (f.project.clone(), f.caller());
+        async move {
+            write
+                .act(caller, &project, None, OperationAction::Abort)
+                .await
+        }
     });
     let open = window.chunk().await;
     assert_eq!(open["kind"], "open", "{open}");
@@ -280,7 +284,9 @@ async fn only_the_projects_own_window_hears_and_answers_its_prompts() {
     }
     assert_eq!(f.write.prompts().listeners(&f.project), 0);
     assert_eq!(
-        f.write.act(&f.project, None, OperationAction::Abort).await,
+        f.write
+            .act(f.caller(), &f.project, None, OperationAction::Abort)
+            .await,
         Err(WriteError::NoWindow),
         "no window of the project heard the confirmation"
     );
@@ -289,8 +295,12 @@ async fn only_the_projects_own_window_hears_and_answers_its_prompts() {
     window.listen(&f.write, &f.project).await;
     let abort = tokio::spawn({
         let write = Arc::clone(&f.write);
-        let project = f.project.clone();
-        async move { write.act(&project, None, OperationAction::Abort).await }
+        let (project, caller) = (f.project.clone(), f.caller());
+        async move {
+            write
+                .act(caller, &project, None, OperationAction::Abort)
+                .await
+        }
     });
     let open = window.chunk().await;
     let prompt_id = open["prompt"]["promptId"].clone();

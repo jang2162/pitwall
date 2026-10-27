@@ -45,7 +45,7 @@ pub(super) async fn confirmed_hard(
         .unwrap();
     let mut p = params(f, commit, ResetMode::Hard, preview.head.as_deref());
     p.fingerprint.clone_from(&preview.fingerprint);
-    let done = reset(f.write.clone(), p).await;
+    let done = reset(f.write.clone(), f.caller(), p).await;
     (preview, done)
 }
 
@@ -68,9 +68,13 @@ async fn soft_moves_only_the_ref_and_asks_nothing() {
     let window = window(&f);
     let first = f.repo.head();
     let second = f.repo.commit_file("a.txt", "a\n", "a");
-    let done = reset(f.write.clone(), params(&f, &first, ResetMode::Soft, None))
-        .await
-        .unwrap();
+    let done = reset(
+        f.write.clone(),
+        f.caller(),
+        params(&f, &first, ResetMode::Soft, None),
+    )
+    .await
+    .unwrap();
     assert_eq!(f.repo.head(), first);
     assert_eq!(f.repo.git(&["diff", "--cached", "--name-only"]), "a.txt\n");
     assert_eq!(read(&f, "a.txt").as_deref(), Some("a\n"));
@@ -95,9 +99,13 @@ async fn mixed_resets_the_index_and_keeps_the_work_tree() {
     let window = window(&f);
     let first = f.repo.head();
     f.repo.commit_file("a.txt", "a\n", "a");
-    reset(f.write.clone(), params(&f, &first, ResetMode::Mixed, None))
-        .await
-        .unwrap();
+    reset(
+        f.write.clone(),
+        f.caller(),
+        params(&f, &first, ResetMode::Mixed, None),
+    )
+    .await
+    .unwrap();
     assert_eq!(f.repo.head(), first);
     assert_eq!(f.repo.git(&["diff", "--cached", "--name-only"]), "");
     assert_eq!(f.repo.git(&["status", "--porcelain"]), "?? a.txt\n");
@@ -143,7 +151,7 @@ async fn undoing_a_hard_reset_with_its_previous_hash_brings_head_back() {
         moved.current.as_deref(),
     );
     undo.expected_ref = Some(moved.ref_name.clone());
-    let undone = reset(f.write.clone(), undo).await.unwrap();
+    let undone = reset(f.write.clone(), f.caller(), undo).await.unwrap();
     assert_eq!(f.repo.head(), second);
     assert_eq!(read(&f, "a.txt").as_deref(), Some("a\n"));
     assert_eq!(undone.moved.unwrap().previous, Some(first));
@@ -160,6 +168,7 @@ async fn a_hard_reset_without_the_fingerprint_is_refused() {
     f.repo.write("README.md", "edited\n");
     let e = reset(
         f.write.clone(),
+        f.caller(),
         params(&f, &first, ResetMode::Hard, Some(&second)),
     )
     .await
@@ -219,7 +228,7 @@ async fn the_preview_lists_what_a_hard_reset_actually_loses() {
 
     let mut confirmed = params(&f, &c1, ResetMode::Hard, preview.head.as_deref());
     confirmed.fingerprint.clone_from(&preview.fingerprint);
-    let done = reset(f.write.clone(), confirmed).await.unwrap();
+    let done = reset(f.write.clone(), f.caller(), confirmed).await.unwrap();
     assert_eq!(done.lost, Some(preview.lost));
     assert_eq!(read(&f, "old.txt").as_deref(), Some("old\n"), "overwritten");
     assert_eq!(read(&f, "keep.txt").as_deref(), Some("keep\n"));
@@ -244,7 +253,9 @@ async fn a_head_that_moved_since_the_confirmation_is_not_reset() {
     let moved_on = f.repo.commit_file("b.txt", "b\n", "b");
     let mut confirmed = params(&f, &first, ResetMode::Hard, Some(&seen));
     confirmed.fingerprint = preview.fingerprint;
-    let e = reset(f.write.clone(), confirmed).await.unwrap_err();
+    let e = reset(f.write.clone(), f.caller(), confirmed)
+        .await
+        .unwrap_err();
     assert_eq!(e.code, rpc_code::CONFLICT);
     assert_eq!(e.data.unwrap()["head"], moved_on.as_str());
     assert_eq!(f.repo.head(), moved_on);
@@ -265,9 +276,13 @@ async fn a_branch_named_like_a_file_is_still_a_revision() {
     f.repo.branch("other");
     f.repo
         .commit_file("other", "a file named like the branch\n", "file");
-    reset(f.write.clone(), params(&f, "other", ResetMode::Soft, None))
-        .await
-        .unwrap();
+    reset(
+        f.write.clone(),
+        f.caller(),
+        params(&f, "other", ResetMode::Soft, None),
+    )
+    .await
+    .unwrap();
     assert_eq!(f.repo.head(), first);
 }
 
@@ -278,6 +293,7 @@ async fn an_unknown_revision_fails_with_gits_message_and_the_preview_is_invalid_
     let head = f.repo.head();
     let e = reset(
         f.write.clone(),
+        f.caller(),
         params(&f, "no-such-branch", ResetMode::Soft, None),
     )
     .await
@@ -287,6 +303,7 @@ async fn an_unknown_revision_fails_with_gits_message_and_the_preview_is_invalid_
     // mixed 는 git 을 띄우기 전에 잃을 변경을 읽는다.
     let e = reset(
         f.write.clone(),
+        f.caller(),
         params(&f, "no-such-branch", ResetMode::Mixed, None),
     )
     .await

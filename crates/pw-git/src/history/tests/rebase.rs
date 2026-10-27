@@ -33,7 +33,7 @@ async fn a_rebase_rewrites_the_branch_onto_upstream_and_reports_its_old_tip() {
     let _window = window(&f);
     let (main, other) = diverged(&f);
     f.repo.checkout("other");
-    let done = rebase(f.write.clone(), params(&f, "main", None))
+    let done = rebase(f.write.clone(), f.caller(), params(&f, "main", None))
         .await
         .unwrap();
     assert_eq!(done.outcome, HistoryOutcome::Done);
@@ -55,9 +55,13 @@ async fn a_named_branch_is_checked_out_and_rebased() {
     let f = WriteFixture::new(true);
     let _window = window(&f);
     let (main, other) = diverged(&f);
-    let done = rebase(f.write.clone(), params(&f, "main", Some("other")))
-        .await
-        .unwrap();
+    let done = rebase(
+        f.write.clone(),
+        f.caller(),
+        params(&f, "main", Some("other")),
+    )
+    .await
+    .unwrap();
     assert_eq!(done.outcome, HistoryOutcome::Done);
     assert_eq!(
         f.repo.git(&["symbolic-ref", "--short", "HEAD"]).trim(),
@@ -75,7 +79,7 @@ async fn a_conflict_stops_with_the_rebase_in_progress_and_abort_restores_the_bra
     let _window = window(&f);
     let d = f.repo.diverge();
     let tip = f.repo.head();
-    let stopped = rebase(f.write.clone(), params(&f, &d.theirs, None))
+    let stopped = rebase(f.write.clone(), f.caller(), params(&f, &d.theirs, None))
         .await
         .unwrap();
     assert_eq!(stopped.outcome, HistoryOutcome::Stopped);
@@ -87,7 +91,7 @@ async fn a_conflict_stops_with_the_rebase_in_progress_and_abort_restores_the_bra
 
     let aborted = f
         .write
-        .act(&f.project, None, OperationAction::Abort)
+        .act(f.caller(), &f.project, None, OperationAction::Abort)
         .await
         .unwrap();
     assert_eq!(aborted.operation, None);
@@ -105,7 +109,7 @@ async fn rebasing_onto_an_ancestor_is_up_to_date() {
     let _window = window(&f);
     let first = f.repo.head();
     let tip = f.repo.commit_file("a.txt", "a\n", "a");
-    let done = rebase(f.write.clone(), params(&f, &first, None))
+    let done = rebase(f.write.clone(), f.caller(), params(&f, &first, None))
         .await
         .unwrap();
     assert_eq!(done.outcome, HistoryOutcome::UpToDate);

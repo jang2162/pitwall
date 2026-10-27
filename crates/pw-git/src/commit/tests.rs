@@ -74,7 +74,7 @@ async fn a_failing_pre_commit_hook_stops_the_commit_and_its_output_is_in_the_res
     let before = f.repo.head();
     let mut sub = f.bus.subscribe(Filter::all());
 
-    let result = commit(&f.write, params(&f, "add bad.rs")).await;
+    let result = commit(&f.write, f.caller(), params(&f, "add bad.rs")).await;
     let Err(WriteError::Failed {
         command,
         exit_code,
@@ -124,7 +124,9 @@ async fn a_passing_hook_output_is_in_the_result_and_the_message_goes_through_std
     let message = "-n \"quoted\" $HOME `x`\n\nbody line\n";
     let mut sub = f.bus.subscribe(Filter::all());
 
-    let result = commit(&f.write, params(&f, message)).await.unwrap();
+    let result = commit(&f.write, f.caller(), params(&f, message))
+        .await
+        .unwrap();
     assert_eq!(result.commit, f.repo.head());
     assert_ne!(result.commit, before);
     assert_eq!(
@@ -179,6 +181,7 @@ async fn amend_replaces_head_with_the_index_tree_and_keeps_the_parent() {
 
     let result = commit(
         &f.write,
+        f.caller(),
         GitCommitParams {
             amend: true,
             ..params(&f, "second try\n")
@@ -209,6 +212,7 @@ async fn signoff_adds_the_trailer() {
     f.repo.git(&["add", "a.txt"]);
     commit(
         &f.write,
+        f.caller(),
         GitCommitParams {
             signoff: true,
             ..params(&f, "signed\n")
@@ -222,6 +226,7 @@ async fn signoff_adds_the_trailer() {
     );
     commit(
         &f.write,
+        f.caller(),
         GitCommitParams {
             amend: true,
             ..params(&f, "unsigned\n")
@@ -251,7 +256,9 @@ async fn hooks_get_the_mise_env_only_in_a_trusted_project() {
         assert_eq!(f.projects.is_trusted(&f.project), trusted);
         f.repo.write("a.txt", "a\n");
         f.repo.git(&["add", "a.txt"]);
-        commit(&f.write, params(&f, "hook env\n")).await.unwrap();
+        commit(&f.write, f.caller(), params(&f, "hook env\n"))
+            .await
+            .unwrap();
         let seen = fs::read_to_string(&marker).expect("the hook ran");
         assert_eq!(
             seen,
@@ -288,7 +295,9 @@ async fn the_hook_gets_no_askpass_helper_even_when_the_app_serves_one() {
     );
     f.repo.write("a.txt", "a\n");
     f.repo.git(&["add", "a.txt"]);
-    commit(&f.write, params(&f, "no helper\n")).await.unwrap();
+    commit(&f.write, f.caller(), params(&f, "no helper\n"))
+        .await
+        .unwrap();
     assert_eq!(fs::read_to_string(&seen).unwrap(), "|||");
     server.abort();
 }
@@ -301,7 +310,7 @@ async fn the_failure_notification_has_the_hook_output_and_gits_stdout_reason() {
     let before = f.repo.head();
     let mut sub = f.bus.subscribe(Filter::all());
 
-    let result = commit(&f.write, params(&f, "nothing\n")).await;
+    let result = commit(&f.write, f.caller(), params(&f, "nothing\n")).await;
     assert!(
         matches!(result, Err(WriteError::Failed { .. })),
         "{result:?}"
@@ -326,7 +335,7 @@ async fn an_empty_message_is_refused_by_git() {
     f.repo.write("a.txt", "a\n");
     f.repo.git(&["add", "a.txt"]);
     let before = f.repo.head();
-    match commit(&f.write, params(&f, "")).await {
+    match commit(&f.write, f.caller(), params(&f, "")).await {
         Err(WriteError::Failed { stderr, .. }) => {
             assert!(stderr.contains("empty commit message"), "{stderr:?}");
         }
@@ -341,7 +350,9 @@ async fn the_first_commit_has_no_previous() {
     let f = WriteFixture::with_repo(TestRepo::new(), true, crate::write::Askpass::default());
     f.repo.write("a.txt", "a\n");
     f.repo.git(&["add", "a.txt"]);
-    let result = commit(&f.write, params(&f, "root\n")).await.unwrap();
+    let result = commit(&f.write, f.caller(), params(&f, "root\n"))
+        .await
+        .unwrap();
     assert_eq!(result.moved.previous, None);
     assert_eq!(
         result.moved.current.as_deref(),
@@ -409,6 +420,61 @@ async fn over_rpc_the_result_and_the_hook_failure_carry_the_output() {
             .contains("hook says no"),
         "{reply}"
     );
+}
+
+/// 커밋은 그 프로젝트 창의 연결만 한다(쓰기 실행기의 범위 판정, M2-06): 다른 프로젝트 창 · Host 범위(웰컴 · 설정 창)는 owner
+/// 라도 거절되고 HEAD 가 그대로다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_project_s_own_window_may_commit() {
+    let f = WriteFixture::new(true);
+    f.repo.write("a.txt", "a\n");
+    f.repo.git(&["add", "a.txt"]);
+    let before = f.repo.head();
+    let other_root = f.repo.base().join("other");
+    std::fs::create_dir_all(&other_root).unwrap();
+    let other = f
+        .projects
+        .create(pw_core::registry::NewProject {
+            root: other_root,
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    let write = Arc::clone(&f.write);
+    let host = LocalHost::builder("local")
+        .methods(move |router| register(router, write))
+        .build();
+    let params = json!({"projectId": f.project, "message": "from elsewhere\n"});
+    for (who, scope) in [
+        ("other project window", ConnectionScope::Project(other)),
+        ("host", ConnectionScope::Host),
+    ] {
+        let mut connection = host
+            .connect(Caller {
+                role: Role::Owner,
+                scope,
+            })
+            .await
+            .unwrap();
+        let reply = call(&mut connection, 1, params.clone()).await;
+        assert_eq!(
+            reply["error"]["code"],
+            pw_rpc::code::PERMISSION_DENIED,
+            "{who}: {reply}"
+        );
+        assert_eq!(f.repo.head(), before, "{who}");
+    }
+
+    let mut own = host
+        .connect(Caller {
+            role: Role::Owner,
+            scope: ConnectionScope::Project(f.project.clone()),
+        })
+        .await
+        .unwrap();
+    let reply = call(&mut own, 1, params).await;
+    assert_eq!(reply["result"]["commit"], f.repo.head(), "{reply}");
+    assert_ne!(f.repo.head(), before);
 }
 
 /// `git.commit` 을 부르고 그 응답을 기다린다.

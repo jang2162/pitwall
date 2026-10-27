@@ -96,6 +96,7 @@ async fn the_reset_preview_of_an_untrusted_repository_runs_none_of_its_programs(
     let first = f.repo.head();
     let merged = merge(
         f.write.clone(),
+        f.caller(),
         GitMergeParams {
             project_id: f.project.clone(),
             worktree: None,

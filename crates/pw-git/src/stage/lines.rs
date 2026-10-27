@@ -29,7 +29,7 @@ use pw_rpc::{RpcError, code as rpc_code};
 
 use super::methods::HunkSelection;
 use crate::Opened;
-use crate::diff::changes::{FILE_HUNKS_MAX, WorkTree, without_filter_drivers};
+use crate::diff::changes::{FILE_HUNKS_MAX, WorkTree, without_filter_drivers, without_safecrlf};
 use crate::diff::hunks::{self, CONTEXT, Change};
 use crate::diff::methods::{DiffHunk, LineKind};
 
@@ -83,6 +83,8 @@ pub fn prepare(
     if !opened.trusted {
         without_filter_drivers(&mut repo)?;
     }
+    // `git add -p` 처럼 diff 를 읽을 때 `core.safecrlf` 를 보지 않는다(패치는 `git apply` 가 쓴다).
+    without_safecrlf(&mut repo)?;
     let (old, new, algorithm) = sides(&repo, &opened.target.work_tree, op, path, old_path)?;
     let (old_lines, new_lines) = (hunks::lines(&old), hunks::lines(&new));
     let changes = hunks::changes(&old_lines, &new_lines, algorithm, false);

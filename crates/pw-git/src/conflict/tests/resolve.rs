@@ -51,13 +51,16 @@ async fn pick_at(
     expected_version: Option<String>,
 ) -> Result<GitConflicts, WriteError> {
     f.write
-        .resolve(GitConflictResolveParams {
-            side: Some(ConflictChoice {
-                pick,
-                expected_version,
-            }),
-            ..params(f, path)
-        })
+        .resolve(
+            f.caller(),
+            GitConflictResolveParams {
+                side: Some(ConflictChoice {
+                    pick,
+                    expected_version,
+                }),
+                ..params(f, path)
+            },
+        )
         .await
 }
 
@@ -87,14 +90,17 @@ async fn content_at(
     expected_version: Option<String>,
 ) -> Result<GitConflicts, WriteError> {
     f.write
-        .resolve(GitConflictResolveParams {
-            content: Some(ConflictContent {
-                text: text.to_owned(),
-                bom: false,
-                expected_version,
-            }),
-            ..params(f, path)
-        })
+        .resolve(
+            f.caller(),
+            GitConflictResolveParams {
+                content: Some(ConflictContent {
+                    text: text.to_owned(),
+                    bom: false,
+                    expected_version,
+                }),
+                ..params(f, path)
+            },
+        )
         .await
 }
 
@@ -146,7 +152,6 @@ fn paths(list: &GitConflicts) -> Vec<&str> {
 fn content_is_written_staged_and_leaves_the_list() {
     let repo = TestRepo::with_commit();
     repo.start_conflict_kinds();
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let window = proceed(&f);
@@ -172,14 +177,17 @@ fn content_is_written_staged_and_leaves_the_list() {
 
         // BOM 은 `bom` 으로 붙인다.
         f.write
-            .resolve(GitConflictResolveParams {
-                content: Some(ConflictContent {
-                    text: "with bom\n".to_owned(),
-                    bom: true,
-                    expected_version: version(&f, "added.txt"),
-                }),
-                ..params(&f, "added.txt")
-            })
+            .resolve(
+                f.caller(),
+                GitConflictResolveParams {
+                    content: Some(ConflictContent {
+                        text: "with bom\n".to_owned(),
+                        bom: true,
+                        expected_version: version(&f, "added.txt"),
+                    }),
+                    ..params(&f, "added.txt")
+                },
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -236,7 +244,6 @@ fn picking_a_side_resolves_every_kind_and_continue_commits_the_merge() {
     for set in sets {
         let repo = TestRepo::with_commit();
         repo.start_conflict_kinds();
-        isolate(repo.base());
         block_on(async {
             let f = fixture(repo);
             let _window = proceed(&f);
@@ -273,7 +280,7 @@ fn picking_a_side_resolves_every_kind_and_continue_commits_the_merge() {
 
             let done = f
                 .write
-                .act(&f.project, None, OperationAction::Continue)
+                .act(f.caller(), &f.project, None, OperationAction::Continue)
                 .await
                 .unwrap();
             assert_eq!((done.operation, done.stopped), (None, false));
@@ -297,7 +304,6 @@ fn picking_a_side_resolves_every_kind_and_continue_commits_the_merge() {
 fn requests_that_do_not_fit_are_refused_before_asking_the_window() {
     let repo = TestRepo::with_commit();
     repo.start_conflict_kinds();
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let window = proceed(&f);
@@ -317,9 +323,12 @@ fn requests_that_do_not_fit_are_refused_before_asking_the_window() {
             }),
             ..params(&f, "both.txt")
         };
-        assert_eq!(invalid(f.write.resolve(both).await), code::INVALID_PARAMS);
         assert_eq!(
-            invalid(f.write.resolve(params(&f, "both.txt")).await),
+            invalid(f.write.resolve(f.caller(), both).await),
+            code::INVALID_PARAMS
+        );
+        assert_eq!(
+            invalid(f.write.resolve(f.caller(), params(&f, "both.txt")).await),
             code::INVALID_PARAMS,
             "neither content nor side"
         );
@@ -348,7 +357,6 @@ fn requests_that_do_not_fit_are_refused_before_asking_the_window() {
 fn a_cancelled_unsaved_check_leaves_the_conflict() {
     let repo = TestRepo::with_commit();
     repo.start_conflict_kinds();
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let before = fs::read(f.repo.root().join("both.txt")).unwrap();
@@ -371,7 +379,6 @@ fn a_leading_folder_linked_outside_is_not_written_through() {
     fs::create_dir_all(&outside).unwrap();
     fs::remove_dir_all(repo.root().join("dir")).unwrap();
     std::os::unix::fs::symlink(&outside, repo.root().join("dir")).unwrap();
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let _window = proceed(&f);
@@ -400,7 +407,6 @@ fn a_symlinked_item_is_judged_by_its_target_and_replaced_itself() {
     let item = repo.root().join("x.txt");
     fs::remove_file(&item).unwrap();
     std::os::unix::fs::symlink(&secret, &item).unwrap();
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let _window = proceed(&f);
@@ -435,7 +441,6 @@ fn paths_with_pathspec_characters_resolve_only_themselves() {
     let repo = TestRepo::with_commit();
     repo.stage_conflict("dir/한글 [x].txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
     repo.stage_conflict("dir/한글 x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let _window = proceed(&f);
@@ -496,7 +501,6 @@ fn the_expected_version_cannot_be_left_out() {
 fn content_over_a_file_changed_since_get_is_a_conflict() {
     let repo = TestRepo::with_commit();
     repo.stage_conflict("x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let window = proceed(&f);
@@ -553,7 +557,6 @@ fn a_leading_folder_linked_inside_is_not_written_through() {
     std::os::unix::fs::symlink("other", repo.root().join("sub")).unwrap();
     // 덮이면 사라질, 커밋하지 않은 편집.
     repo.write("other/f.txt", "OTHER EDITED\n");
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let window = proceed(&f);
@@ -611,7 +614,6 @@ fn a_path_that_is_not_utf8_cannot_be_named() {
         n
     };
     let (index_before, files_before) = (ls(&repo), names(&repo));
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let window = proceed(&f);
@@ -668,7 +670,6 @@ fn content_over_a_file_changed_while_asking_is_a_conflict() {
     let repo = TestRepo::with_commit();
     repo.stage_conflict("x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
     let file = repo.root().join("x.txt");
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let edited = file.clone();
@@ -690,7 +691,6 @@ fn a_side_over_a_file_changed_since_get_is_a_conflict() {
     let repo = TestRepo::with_commit();
     repo.stage_conflict("x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
     repo.stage_conflict("d.txt", Some(b"a\n"), Some(b"o\n"), None);
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let window = proceed(&f);
@@ -726,7 +726,6 @@ fn a_side_over_a_file_changed_while_asking_is_a_conflict() {
     let repo = TestRepo::with_commit();
     repo.stage_conflict("x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
     let file = repo.root().join("x.txt");
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let edited = file.clone();
@@ -750,7 +749,6 @@ fn a_large_work_tree_file_is_compared_by_its_stat_for_a_side() {
     let file = repo.root().join("big.bin");
     let size = usize::try_from(pw_fs::limits::READ_ONLY_MAX).unwrap() + 1;
     fs::write(&file, vec![b'x'; size]).unwrap();
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let _window = proceed(&f);
@@ -795,7 +793,6 @@ fn content_and_an_fs_write_of_the_same_file_take_turns() {
     let repo = TestRepo::with_commit();
     repo.stage_conflict("x.txt", Some(b"a\n"), Some(b"o\n"), Some(b"t\n"));
     let file = repo.root().join("x.txt");
-    isolate(repo.base());
     block_on(async {
         let f = fixture(repo);
         let _window = proceed(&f);

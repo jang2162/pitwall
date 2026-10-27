@@ -34,14 +34,17 @@ async fn untracked_deleted_and_modified_files_stage_and_unstage() {
     assert_eq!(before, " M README.md\n D gone.txt\n?? dir/new.txt\n");
 
     f.write
-        .stage(paths(&f, &["README.md", "gone.txt", "dir"]))
+        .stage(f.caller(), paths(&f, &["README.md", "gone.txt", "dir"]))
         .await
         .unwrap();
     assert_eq!(status(&f), "M  README.md\nA  dir/new.txt\nD  gone.txt\n");
 
     let done = f
         .write
-        .unstage(paths(&f, &["README.md", "gone.txt", "dir/new.txt"]))
+        .unstage(
+            f.caller(),
+            paths(&f, &["README.md", "gone.txt", "dir/new.txt"]),
+        )
         .await
         .unwrap();
     assert_eq!(status(&f), before);
@@ -49,9 +52,16 @@ async fn untracked_deleted_and_modified_files_stage_and_unstage() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_conflicted_file_is_marked_resolved_and_unstaging_puts_head_back() {
+async fn conflicted_paths_are_refused_whole_and_stay_in_conflict() {
     let f = WriteFixture::new(true);
-    let d = f.repo.start_conflicting_merge();
+    // 폴더 아래 파일의 충돌: 폴더를 넘겨도(`git add --all dir`) 그 아래 충돌 파일을 본다.
+    f.repo.commit_file("dir/c.txt", "base\n", "base");
+    f.repo.git(&["checkout", "--quiet", "-b", "theirs"]);
+    f.repo.commit_file("dir/c.txt", "theirs\n", "theirs");
+    f.repo.checkout("main");
+    f.repo.commit_file("dir/c.txt", "ours\n", "ours");
+    let merge = f.repo.try_git_in(f.repo.root(), &["merge", "theirs"]);
+    assert!(!merge.status.success(), "the merge stops on a conflict");
     // 충돌 중인 파일은 줄 단위로 스테이징하지 않는다(파일 단위로 해결한다).
     let any_hunk = crate::diff::methods::DiffHunk {
         old_start: 1,
@@ -63,40 +73,73 @@ async fn a_conflicted_file_is_marked_resolved_and_unstaging_puts_head_back() {
     };
     let refused = f
         .write
-        .stage_lines(crate::stage::methods::GitLinesParams {
-            project_id: f.project.clone(),
-            worktree: None,
-            path: d.path.clone(),
-            old_path: None,
-            hunks: vec![crate::stage::methods::HunkSelection {
-                hunk: any_hunk,
-                lines: None,
-            }],
-            ignore_whitespace: false,
-        })
+        .stage_lines(
+            f.caller(),
+            crate::stage::methods::GitLinesParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                path: "dir/c.txt".into(),
+                old_path: None,
+                hunks: vec![crate::stage::methods::HunkSelection {
+                    hunk: any_hunk,
+                    lines: None,
+                }],
+                ignore_whitespace: false,
+            },
+        )
         .await
         .unwrap_err();
     assert!(
         matches!(&refused, WriteError::Rpc(e) if e.code == rpc_code::INVALID_PARAMS),
         "{refused:?}"
     );
-    f.repo.write(&d.path, "resolved\n");
-    f.write.stage(paths(&f, &[&d.path])).await.unwrap();
-    assert_eq!(
-        f.repo
-            .git(&["ls-files", "-s", "--", &d.path])
-            .split('\t')
-            .next()
-            .unwrap()
-            .split(' ')
-            .nth(2),
-        Some("0"),
-        "one stage-0 entry after staging"
-    );
-    assert_eq!(bytes(&f, &["show", &format!(":{}", d.path)]), b"resolved\n");
 
-    f.write.unstage(paths(&f, &[&d.path])).await.unwrap();
-    assert_eq!(bytes(&f, &["show", &format!(":{}", d.path)]), b"ours\n");
+    f.repo.write("dir/c.txt", "resolved\n");
+    f.repo.write("dir/new.txt", "new\n");
+    f.repo.write("README.md", "changed\n");
+    let unmerged = f.repo.git(&["ls-files", "-u"]);
+    assert_eq!(unmerged.lines().count(), 3, "{unmerged}");
+    let before = status(&f);
+    for (stage, request) in [
+        (true, vec!["dir"]),
+        (true, vec!["README.md", "dir/c.txt"]),
+        (false, vec!["dir/c.txt"]),
+        (false, vec!["README.md", "dir"]),
+    ] {
+        let params = paths(&f, &request);
+        let refused = if stage {
+            f.write.stage(f.caller(), params).await
+        } else {
+            f.write.unstage(f.caller(), params).await
+        }
+        .unwrap_err();
+        let WriteError::Rpc(e) = &refused else {
+            panic!("{request:?}: {refused:?}");
+        };
+        assert_eq!(e.code, rpc_code::INVALID_PARAMS, "{request:?}: {e:?}");
+        assert_eq!(
+            e.data,
+            Some(serde_json::json!({ "conflicted": ["dir/c.txt"] })),
+            "{request:?}"
+        );
+        assert!(e.message.contains("git.conflict.resolve"), "{}", e.message);
+        // 요청 전체를 하지 않았다: 충돌은 그대로, 다른 경로도 스테이징되지 않았다.
+        assert_eq!(f.repo.git(&["ls-files", "-u"]), unmerged, "{request:?}");
+        assert_eq!(status(&f), before, "{request:?}");
+    }
+
+    // 충돌이 없는 경로는 병합 중에도 된다.
+    f.write
+        .stage(f.caller(), paths(&f, &["README.md"]))
+        .await
+        .unwrap();
+    assert_eq!(bytes(&f, &["show", ":README.md"]), b"changed\n");
+    f.write
+        .unstage(f.caller(), paths(&f, &["README.md"]))
+        .await
+        .unwrap();
+    assert_eq!(bytes(&f, &["show", ":README.md"]), b"hello\n");
+    assert_eq!(f.repo.git(&["ls-files", "-u"]), unmerged);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -106,7 +149,7 @@ async fn paths_are_literal_and_unstaging_works_before_the_first_commit() {
     f.repo.write("xy.txt", "plain\n");
     f.repo.write("line\nbreak.txt", "newline in the name\n");
     f.write
-        .stage(paths(&f, &["x*.txt", "line\nbreak.txt"]))
+        .stage(f.caller(), paths(&f, &["x*.txt", "line\nbreak.txt"]))
         .await
         .unwrap();
     assert_eq!(
@@ -116,7 +159,10 @@ async fn paths_are_literal_and_unstaging_works_before_the_first_commit() {
     );
 
     // HEAD 가 아직 없다 — 언스테이징은 index 에서 뺀다.
-    f.write.unstage(paths(&f, &["x*.txt"])).await.unwrap();
+    f.write
+        .unstage(f.caller(), paths(&f, &["x*.txt"]))
+        .await
+        .unwrap();
     assert_eq!(
         f.repo.git(&["ls-files", "-z", "--cached"]),
         "line\nbreak.txt\0"
@@ -137,7 +183,11 @@ async fn discarding_needs_confirmation_restores_tracked_files_and_leaves_untrack
         confirmed,
     };
 
-    let refused = f.write.discard(request(false)).await.unwrap_err();
+    let refused = f
+        .write
+        .discard(f.caller(), request(false))
+        .await
+        .unwrap_err();
     assert!(
         matches!(&refused, WriteError::Rpc(e) if e.code == rpc_code::INVALID_PARAMS),
         "{refused:?}"
@@ -148,7 +198,7 @@ async fn discarding_needs_confirmation_restores_tracked_files_and_leaves_untrack
     );
 
     let window = proceed(&f);
-    let done = f.write.discard(request(true)).await.unwrap();
+    let done = f.write.discard(f.caller(), request(true)).await.unwrap();
     assert_eq!(done.untracked, ["loose.txt"]);
     assert_eq!(
         std::fs::read_to_string(f.repo.root().join("README.md")).unwrap(),
@@ -179,12 +229,15 @@ async fn discarding_needs_confirmation_restores_tracked_files_and_leaves_untrack
     // 모두 untracked 면 git 을 돌리지 않고 그대로 돌려준다.
     let only = f
         .write
-        .discard(GitDiscardParams {
-            project_id: f.project.clone(),
-            worktree: None,
-            paths: vec!["loose.txt".into()],
-            confirmed: true,
-        })
+        .discard(
+            f.caller(),
+            GitDiscardParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                paths: vec!["loose.txt".into()],
+                confirmed: true,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(only.untracked, ["loose.txt"]);
@@ -192,15 +245,65 @@ async fn discarding_needs_confirmation_restores_tracked_files_and_leaves_untrack
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discarding_leaves_intent_to_add_files_whole() {
+    let f = WriteFixture::new(true);
+    let _window = proceed(&f);
+    f.repo.commit_file("dir/kept.txt", "kept\n", "kept");
+    f.repo.write("n.txt", "precious\nwork\n");
+    f.repo.write("dir/n.txt", "also precious\n");
+    f.repo.write("dir/kept.txt", "changed\n");
+    f.repo.git(&["add", "-N", "n.txt", "dir/n.txt"]);
+    let discard = |paths: &[&str]| GitDiscardParams {
+        project_id: f.project.clone(),
+        worktree: None,
+        paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+        confirmed: true,
+    };
+
+    let done = f
+        .write
+        .discard(f.caller(), discard(&["n.txt"]))
+        .await
+        .unwrap();
+    assert_eq!(done.untracked, ["n.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(f.repo.root().join("n.txt")).unwrap(),
+        "precious\nwork\n"
+    );
+
+    // 폴더를 넘기면 그 아래 다른 파일은 버리고 intent-to-add 파일은 그 경로로 돌려준다.
+    let done = f
+        .write
+        .discard(f.caller(), discard(&["dir"]))
+        .await
+        .unwrap();
+    assert_eq!(done.untracked, ["dir/n.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(f.repo.root().join("dir/n.txt")).unwrap(),
+        "also precious\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.repo.root().join("dir/kept.txt")).unwrap(),
+        "kept\n"
+    );
+    // index 의 intent-to-add 항목은 그대로다.
+    assert_eq!(status(&f), " A dir/n.txt\n A n.txt\n",);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bad_paths_are_refused_before_git_runs() {
     let f = WriteFixture::new(true);
     for bad in ["", "/abs", "../up", "a//b", "a/./b", "a\\b", "dir/"] {
-        let refused = f.write.stage(paths(&f, &[bad])).await.unwrap_err();
+        let refused = f
+            .write
+            .stage(f.caller(), paths(&f, &[bad]))
+            .await
+            .unwrap_err();
         assert!(
             matches!(&refused, WriteError::Rpc(e) if e.code == rpc_code::INVALID_PARAMS),
             "{bad:?}: {refused:?}"
         );
     }
-    let refused = f.write.stage(paths(&f, &[])).await.unwrap_err();
+    let refused = f.write.stage(f.caller(), paths(&f, &[])).await.unwrap_err();
     assert!(matches!(&refused, WriteError::Rpc(e) if e.code == rpc_code::INVALID_PARAMS));
 }

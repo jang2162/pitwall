@@ -124,7 +124,7 @@ export type UnaryMethods = {
 	"git.diff": { params: GitDiffParams; result: GitDiff };
 	/**
 	 * 작업 트리의 변경을 버린다(`git restore --worktree` — index 의 것으로). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).
-	 * untracked 경로는 지우지 않고 `untracked` 로 돌려준다. 작업 트리가 바뀌므로 미저장 문서를 먼저 확인한다(M2-06).
+	 * untracked · intent-to-add 경로는 지우지도 비우지도 않고 `untracked` 로 돌려준다. 작업 트리가 바뀌므로 미저장 문서를 먼저 확인한다(M2-06).
 	 */
 	"git.discard": { params: GitDiscardParams; result: GitDiscardResult };
 	/**
@@ -211,8 +211,8 @@ export type UnaryMethods = {
 	 */
 	"git.show": { params: GitRevParams; result: GitShow };
 	/**
-	 * 경로를 스테이징한다(`git add --all`): 바뀐 파일 · untracked(무시된 파일은 git 이 거절) · 지운 파일(지움을 담는다) · 충돌
-	 * 파일(해결로 표시).
+	 * 경로를 스테이징한다(`git add --all`): 바뀐 파일 · untracked(무시된 파일은 git 이 거절) · 지운 파일(지움을 담는다). 충돌
+	 * 중인 경로(폴더면 그 아래)가 있으면 아무것도 하지 않는다(invalid params, `data.conflicted` — 해결은 `git.conflict.resolve`).
 	 */
 	"git.stage": { params: GitPathsParams; result: GitWorkTree };
 	/**
@@ -226,7 +226,8 @@ export type UnaryMethods = {
 	 */
 	"git.stash.apply": { params: GitStashApplyParams; result: GitStashApplyResult };
 	/**
-	 * stash 항목을 버린다(`git stash drop`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).
+	 * stash 항목을 버린다(`git stash drop`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①). git 이 지운 것이 고른 커밋이
+	 * 아니면(확인과 실행 사이에 목록이 밀림) 그 항목을 `git stash store` 로 되돌려 넣고 conflict.
 	 */
 	"git.stash.drop": { params: GitStashDropParams; result: GitWorkTree };
 	/**
@@ -234,7 +235,9 @@ export type UnaryMethods = {
 	 */
 	"git.stash.list": { params: GitStashListParams; result: GitStashList };
 	/**
-	 * stash 를 적용하고 지운다(`git stash pop`). 충돌로 끝나면 `conflicted` 이고 항목은 남는다.
+	 * stash 를 적용하고 지운다(`git stash apply <커밋>` 뒤 `git stash drop` — 지운 것이 그 커밋인지 본다). 충돌로 끝나면
+	 * `conflicted` 이고 항목은 남는다. 이미 충돌 중이라 git 이 적용을 거절하면 git 의 원문으로 실패한다(apply 도). 버리는 사이
+	 * 목록이 밀렸으면 적용은 된 채 항목을 남기고 conflict.
 	 */
 	"git.stash.pop": { params: GitStashApplyParams; result: GitStashApplyResult };
 	/**
@@ -253,7 +256,8 @@ export type UnaryMethods = {
 	"git.tag.create": { params: GitTagCreateParams; result: GitTagResult };
 	/**
 	 * 경로의 스테이징을 푼다(`git reset`): index 를 HEAD 의 것으로(HEAD 에 없으면 index 에서 뺀다 — 커밋이 없는 저장소도 된다).
-	 * 충돌 파일은 HEAD 의 것이 담긴다. 이름 바뀜은 옛 경로와 새 경로를 둘 다 넘긴다.
+	 * 충돌 중인 경로는 `git.stage` 처럼 거절한다(HEAD 쪽을 담아 충돌을 조용히 풀지 않는다). 이름 바뀜은 옛 경로와 새 경로를 둘
+	 * 다 넘긴다.
 	 */
 	"git.unstage": { params: GitPathsParams; result: GitWorkTree };
 	/**
@@ -525,7 +529,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.conflicts": {"name":"git.conflicts","kind":"unary","tier":"read","roles":["owner"],"params":"GitConflictsParams","output":"GitConflicts","doc":" 충돌 중인 경로 목록: index 단계로 가른 종류(양쪽 수정 · 우리/그쪽 삭제 · 양쪽 추가 …)와 바이너리 · 서브모듈 · 심링크 표시.\n 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.containedIn": {"name":"git.containedIn","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitContainedIn","doc":" 그 커밋을 담은(조상으로 가진) 브랜치 · 원격 브랜치 · 태그. 모든 ref 에서 이력을 걷는다 — 커밋 상세를 연 뒤 따로 부른다.\n","mcp":false,"fileScope":false},
 	"git.diff": {"name":"git.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffParams","output":"GitDiff","doc":" 두 쪽(커밋 · index · 작업 트리)의 diff: 바뀐 파일 목록(상태 · 이름 바뀜 · 모드 · 바이너리 · 서브모듈 포인터 · 생성 파일 ·\n 대용량)과 파일별 hunk(`git diff --find-renames -U3` 과 같다). 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
-	"git.discard": {"name":"git.discard","kind":"unary","tier":"write","roles":["owner"],"params":"GitDiscardParams","output":"GitDiscardResult","doc":" 작업 트리의 변경을 버린다(`git restore --worktree` — index 의 것으로). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n untracked 경로는 지우지 않고 `untracked` 로 돌려준다. 작업 트리가 바뀌므로 미저장 문서를 먼저 확인한다(M2-06).\n","mcp":false,"fileScope":false},
+	"git.discard": {"name":"git.discard","kind":"unary","tier":"write","roles":["owner"],"params":"GitDiscardParams","output":"GitDiscardResult","doc":" 작업 트리의 변경을 버린다(`git restore --worktree` — index 의 것으로). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n untracked · intent-to-add 경로는 지우지도 비우지도 않고 `untracked` 로 돌려준다. 작업 트리가 바뀌므로 미저장 문서를 먼저 확인한다(M2-06).\n","mcp":false,"fileScope":false},
 	"git.discardLines": {"name":"git.discardLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitDiscardLinesParams","output":"GitWorkTree","doc":" 작업 트리 diff 의 hunk · 줄을 골라 버린다(작업 트리에 `git apply -R`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n 작업 트리에서 지운 파일은 파일 단위(`git.discard`)로 되살린다.\n","mcp":false,"fileScope":false},
 	"git.fetch": {"name":"git.fetch","kind":"unary","tier":"write","roles":["owner"],"params":"GitFetchParams","output":"GitFetchResult","doc":" fetch: 원격 하나 또는 전부, prune 선택. 인증은 askpass 로 창에 묻는다.\n","mcp":false,"fileScope":false},
 	"git.merge": {"name":"git.merge","kind":"unary","tier":"write","roles":["owner"],"params":"GitMergeParams","output":"GitHistoryResult","doc":" 리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.\n git 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.\n","mcp":false,"fileScope":false},
@@ -545,16 +549,16 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.resetPreview": {"name":"git.resetPreview","kind":"unary","tier":"read","roles":["owner"],"params":"GitResetPreviewParams","output":"GitResetPreview","doc":" reset hard · keep · mixed 가 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 추적하지 않는 것(mixed 는 index 에만 있는\n 스테이징 내용). gix 로 읽는다(git 을 띄우지 않는다).\n","mcp":false,"fileScope":false},
 	"git.revert": {"name":"git.revert","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 되돌리는 역 커밋을 만든다(`git revert --no-edit`). 충돌이면 `outcome: stopped`.\n","mcp":false,"fileScope":false},
 	"git.show": {"name":"git.show","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitShow","doc":" 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).\n","mcp":false,"fileScope":false},
-	"git.stage": {"name":"git.stage","kind":"unary","tier":"write","roles":["owner"],"params":"GitPathsParams","output":"GitWorkTree","doc":" 경로를 스테이징한다(`git add --all`): 바뀐 파일 · untracked(무시된 파일은 git 이 거절) · 지운 파일(지움을 담는다) · 충돌\n 파일(해결로 표시).\n","mcp":false,"fileScope":false},
+	"git.stage": {"name":"git.stage","kind":"unary","tier":"write","roles":["owner"],"params":"GitPathsParams","output":"GitWorkTree","doc":" 경로를 스테이징한다(`git add --all`): 바뀐 파일 · untracked(무시된 파일은 git 이 거절) · 지운 파일(지움을 담는다). 충돌\n 중인 경로(폴더면 그 아래)가 있으면 아무것도 하지 않는다(invalid params, `data.conflicted` — 해결은 `git.conflict.resolve`).\n","mcp":false,"fileScope":false},
 	"git.stageLines": {"name":"git.stageLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitLinesParams","output":"GitWorkTree","doc":" 작업 트리 diff(index ↔ 작업 트리)의 hunk · 줄을 골라 스테이징한다(고른 줄로 만든 패치를 `git apply --cached`). 바이너리 ·\n 심링크 · 충돌 중 · index 에 없는 파일은 줄 단위로 할 수 없다(invalid params — 파일 단위로). 고른 hunk 가 지금 diff 에 없으면\n conflict.\n","mcp":false,"fileScope":false},
 	"git.stash.apply": {"name":"git.stash.apply","kind":"unary","tier":"write","roles":["owner"],"params":"GitStashApplyParams","output":"GitStashApplyResult","doc":" stash 를 적용한다(`git stash apply`, 항목은 남는다). 충돌로 끝나면 `conflicted`.\n","mcp":false,"fileScope":false},
-	"git.stash.drop": {"name":"git.stash.drop","kind":"unary","tier":"write","roles":["owner"],"params":"GitStashDropParams","output":"GitWorkTree","doc":" stash 항목을 버린다(`git stash drop`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n","mcp":false,"fileScope":false},
+	"git.stash.drop": {"name":"git.stash.drop","kind":"unary","tier":"write","roles":["owner"],"params":"GitStashDropParams","output":"GitWorkTree","doc":" stash 항목을 버린다(`git stash drop`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①). git 이 지운 것이 고른 커밋이\n 아니면(확인과 실행 사이에 목록이 밀림) 그 항목을 `git stash store` 로 되돌려 넣고 conflict.\n","mcp":false,"fileScope":false},
 	"git.stash.list": {"name":"git.stash.list","kind":"unary","tier":"read","roles":["owner"],"params":"GitStashListParams","output":"GitStashList","doc":" stash 목록(`refs/stash` 의 reflog, 최근 것부터). 저장소가 없으면 invalid params.\n","mcp":false,"fileScope":false},
-	"git.stash.pop": {"name":"git.stash.pop","kind":"unary","tier":"write","roles":["owner"],"params":"GitStashApplyParams","output":"GitStashApplyResult","doc":" stash 를 적용하고 지운다(`git stash pop`). 충돌로 끝나면 `conflicted` 이고 항목은 남는다.\n","mcp":false,"fileScope":false},
+	"git.stash.pop": {"name":"git.stash.pop","kind":"unary","tier":"write","roles":["owner"],"params":"GitStashApplyParams","output":"GitStashApplyResult","doc":" stash 를 적용하고 지운다(`git stash apply <커밋>` 뒤 `git stash drop` — 지운 것이 그 커밋인지 본다). 충돌로 끝나면\n `conflicted` 이고 항목은 남는다. 이미 충돌 중이라 git 이 적용을 거절하면 git 의 원문으로 실패한다(apply 도). 버리는 사이\n 목록이 밀렸으면 적용은 된 채 항목을 남기고 conflict.\n","mcp":false,"fileScope":false},
 	"git.stash.push": {"name":"git.stash.push","kind":"unary","tier":"write","roles":["owner"],"params":"GitStashPushParams","output":"GitStashPushResult","doc":" stash 를 만든다(`git stash push`) — 메시지 · untracked 포함을 고른다. 작업 트리 전체가 바뀌므로 미저장 문서를 먼저 확인한다.\n","mcp":false,"fileScope":false},
 	"git.status": {"name":"git.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusParams","output":"GitStatus","doc":" 작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업\n 트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로\n 돌고, 작업을 취소하면 cancelled 오류다.\n","mcp":false,"fileScope":false},
 	"git.tag.create": {"name":"git.tag.create","kind":"unary","tier":"write","roles":["owner"],"params":"GitTagCreateParams","output":"GitTagResult","doc":" 태그를 만든다(`git tag`, 메시지가 있으면 주석 태그).\n","mcp":false,"fileScope":false},
-	"git.unstage": {"name":"git.unstage","kind":"unary","tier":"write","roles":["owner"],"params":"GitPathsParams","output":"GitWorkTree","doc":" 경로의 스테이징을 푼다(`git reset`): index 를 HEAD 의 것으로(HEAD 에 없으면 index 에서 뺀다 — 커밋이 없는 저장소도 된다).\n 충돌 파일은 HEAD 의 것이 담긴다. 이름 바뀜은 옛 경로와 새 경로를 둘 다 넘긴다.\n","mcp":false,"fileScope":false},
+	"git.unstage": {"name":"git.unstage","kind":"unary","tier":"write","roles":["owner"],"params":"GitPathsParams","output":"GitWorkTree","doc":" 경로의 스테이징을 푼다(`git reset`): index 를 HEAD 의 것으로(HEAD 에 없으면 index 에서 뺀다 — 커밋이 없는 저장소도 된다).\n 충돌 중인 경로는 `git.stage` 처럼 거절한다(HEAD 쪽을 담아 충돌을 조용히 풀지 않는다). 이름 바뀜은 옛 경로와 새 경로를 둘\n 다 넘긴다.\n","mcp":false,"fileScope":false},
 	"git.unstageLines": {"name":"git.unstageLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitLinesParams","output":"GitWorkTree","doc":" 스테이징된 diff(HEAD ↔ index)의 hunk · 줄을 골라 스테이징을 푼다(`git apply --cached -R`). 이름이 바뀐 파일은 `oldPath` 를\n 함께 넘긴다.\n","mcp":false,"fileScope":false},
 	"git.watch": {"name":"git.watch","kind":"stream","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitWatching","doc":" 프로젝트(활성 워크트리)의 저장소를 감시한다. 스트림이 열려 있는 동안 바뀜이 프로젝트 범위 이벤트 `git.statusChanged` ·\n `git.refsChanged` 로 나가고, 닫으면 놓는다. 첫 항목이 오면 그 뒤의 바뀜은 놓치지 않는다. 작업 트리의 바뀜은 같은 창의\n `fs.watch` 가 열려 있어야 온다.\n","mcp":false,"fileScope":false},
 	"host.demoTask": {"name":"host.demoTask","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"DemoTaskParams","output":"DemoTaskUpdate","doc":" 진행률을 내는 데모 작업을 띄우고 그 진행을 스트림으로 보낸다. 스트림을 취소하면 작업도 취소된다.\n Task · 이벤트 버스 · 스트림 취소가 transport 끝까지 이어지는지 확인하는 용도다.\n","mcp":false,"fileScope":false},
@@ -1592,7 +1596,8 @@ export type GitDiscardResult = {
 	workTree: string,
 	/**
 	 *  추적하지 않는 경로라 버리지 않은 것(요청 순서). 버리기는 작업 트리를 index 로 돌리는 것이라 index 에 없는 파일은 대상이
-	 *  아니다 — 지우지 않는다. 나머지 경로는 버렸다.
+	 *  아니다 — 지우지 않는다. intent-to-add(`git add -N`) 파일도 여기에 든다(비우지 않는다 — 넘긴 폴더 아래의 것이면 그 파일
+	 *  경로로). 나머지 경로는 버렸다.
 	 */
 	untracked: string[],
 };

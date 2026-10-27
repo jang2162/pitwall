@@ -22,6 +22,10 @@ impl Client {
         Self(host.connect(caller).await.unwrap(), 0)
     }
 
+    async fn with(host: &LocalHost, caller: Caller) -> Self {
+        Self(host.connect(caller).await.unwrap(), 0)
+    }
+
     async fn call(&mut self, method: &str, params: Value) -> Value {
         self.1 += 1;
         let id = self.1;
@@ -160,4 +164,98 @@ async fn no_method_is_an_mcp_tool_and_every_method_is_owner_only() {
         let read = meta.name == "git.stash.list";
         assert_eq!(matches!(meta.tier, Tier::Read), read, "{}", meta.name);
     }
+}
+
+/// 쓰기는 그 프로젝트 창의 연결만 한다(실행기의 범위 판정): 다른 프로젝트 창 · Host 범위(웰컴 · 설정 창) · 파일 창은 owner 라도
+/// 거절되고 아무것도 바뀌지 않는다. 읽기(`git.stash.list`)는 막지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_project_s_own_window_may_write() {
+    let f = WriteFixture::new(true);
+    let _window = crate::stage::tests::proceed(&f);
+    f.repo.write("README.md", "changed\n");
+    f.repo.git(&["stash", "push", "--quiet"]);
+    let stash = f.repo.rev_parse("stash@{0}");
+    f.repo.write("README.md", "changed again\n");
+    f.repo.write("new.txt", "new\n");
+    let other_root = f.repo.base().join("other");
+    std::fs::create_dir_all(&other_root).unwrap();
+    let other = f
+        .projects
+        .create(pw_core::registry::NewProject {
+            root: other_root,
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    let host = host(&f);
+    let writes = [
+        (
+            "git.stage",
+            json!({"projectId": f.project, "paths": ["new.txt"]}),
+        ),
+        (
+            "git.discard",
+            json!({"projectId": f.project, "paths": ["README.md"], "confirmed": true}),
+        ),
+        (
+            "git.stash.drop",
+            json!({"projectId": f.project, "index": 0, "commit": stash, "confirmed": true}),
+        ),
+    ];
+    let strangers = [
+        (
+            "other project window",
+            Caller {
+                role: Role::Owner,
+                scope: ConnectionScope::Project(other),
+            },
+        ),
+        ("host", Caller::new(Role::Owner)),
+        (
+            "file window",
+            Caller::file(Role::Owner, f.repo.root().join("README.md")),
+        ),
+    ];
+    for (who, caller) in strangers {
+        let mut client = Client::with(&host, caller).await;
+        for (method, params) in &writes {
+            let reply = client.call(method, params.clone()).await;
+            assert_eq!(
+                reply["error"]["code"],
+                rpc_code::PERMISSION_DENIED,
+                "{who} {method}: {reply}"
+            );
+        }
+        if who != "file window" {
+            let list = client
+                .call("git.stash.list", json!({"projectId": f.project}))
+                .await;
+            assert_eq!(
+                list["result"]["stashes"][0]["commit"], stash,
+                "{who}: {list}"
+            );
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(f.repo.root().join("README.md")).unwrap(),
+        "changed again\n"
+    );
+    assert_eq!(f.repo.git(&["diff", "--cached", "--name-only"]), "");
+    assert_eq!(f.repo.rev_parse("stash@{0}"), stash);
+
+    let mut own = Client::window(&host, Role::Owner, &f.project).await;
+    for (method, params) in &writes {
+        let reply = own.call(method, params.clone()).await;
+        assert!(reply["error"].is_null(), "{method}: {reply}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(f.repo.root().join("README.md")).unwrap(),
+        "hello\n",
+        "discarded"
+    );
+    assert_eq!(
+        f.repo.git(&["diff", "--cached", "--name-only"]),
+        "new.txt\n"
+    );
+    assert_eq!(f.repo.git(&["stash", "list"]), "");
 }

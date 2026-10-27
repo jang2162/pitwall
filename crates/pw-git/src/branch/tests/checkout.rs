@@ -26,6 +26,7 @@ async fn a_local_branch_checkout_asks_about_exactly_the_paths_it_changes() {
     let window = proceed(&f);
     let (work_tree, head) = checkout(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitCheckoutTarget::Branch {
@@ -60,6 +61,7 @@ async fn a_checkout_that_changes_no_path_needs_no_window() {
     // 듣는 창이 없다 — 바뀔 경로가 없으니 묻지 않고 간다.
     let (_, head) = checkout(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitCheckoutTarget::Branch {
@@ -87,6 +89,7 @@ async fn a_remote_branch_checkout_creates_a_tracking_branch() {
     let window = proceed(&f);
     let (_, head) = checkout(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitCheckoutTarget::Remote {
@@ -113,6 +116,7 @@ async fn a_remote_branch_checkout_creates_a_tracking_branch() {
     // 다른 이름으로도: 같은 원격 브랜치를 upstream 으로 하는 `mine`.
     checkout(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitCheckoutTarget::Remote {
@@ -137,6 +141,7 @@ async fn a_commit_checkout_detaches_head() {
     let _window = proceed(&f);
     let (_, head) = checkout(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitCheckoutTarget::Commit { rev: first.clone() },
@@ -157,6 +162,7 @@ async fn a_checkout_git_refuses_shows_the_git_text_and_changes_nothing() {
     let _window = proceed(&f);
     let e = checkout(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitCheckoutTarget::Branch {
@@ -183,6 +189,7 @@ async fn a_checkout_git_refuses_shows_the_git_text_and_changes_nothing() {
     f.repo.git(&["fetch", "--quiet", "origin"]);
     let e = checkout(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitCheckoutTarget::Branch {
@@ -221,10 +228,11 @@ async fn a_checkout_does_nothing_when_head_moved_while_it_waited() {
     });
     held_rx.await.unwrap();
     let write = Arc::clone(&f.write);
-    let project = f.project.clone();
+    let (project, caller) = (f.project.clone(), f.caller());
     let second = tokio::spawn(async move {
         checkout(
             &write,
+            caller,
             project,
             None,
             GitCheckoutTarget::Branch {

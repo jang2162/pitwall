@@ -25,7 +25,7 @@ mod tests;
 
 use std::ffi::OsString;
 
-use pw_rpc::{RpcError, code as rpc_code};
+use pw_rpc::{ConnectionScope, RpcError, code as rpc_code};
 use serde::{Deserialize, Serialize};
 
 pub use methods::register;
@@ -447,14 +447,16 @@ pub(crate) async fn reset(
         .await
 }
 
-/// 쓰기 요청의 공통 부분.
+/// 쓰기 요청의 공통 부분. `caller` 는 부른 연결의 범위다 — 실행기가 그 프로젝트 창의 연결인지 본다.
 pub(crate) fn request(
+    caller: ConnectionScope,
     project_id: &str,
     worktree: Option<&str>,
     title: &str,
     changes: Changes,
 ) -> WriteRequest {
     WriteRequest {
+        caller,
         project_id: project_id.to_owned(),
         worktree: worktree.map(str::to_owned),
         title: title.to_owned(),

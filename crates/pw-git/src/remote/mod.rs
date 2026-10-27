@@ -21,7 +21,7 @@ mod tests;
 
 use std::sync::Arc;
 
-use pw_rpc::RpcError;
+use pw_rpc::{ConnectionScope, RpcError};
 use serde::{Deserialize, Serialize};
 
 pub use methods::register;
@@ -68,6 +68,7 @@ pub enum GitPullMode {
 /// `git.fetch`: `remote` 가 없으면 원격 전부(`--all`).
 pub async fn fetch(
     write: &Arc<GitWrite>,
+    caller: ConnectionScope,
     project_id: String,
     worktree: Option<String>,
     remote: Option<String>,
@@ -77,6 +78,7 @@ pub async fn fetch(
         plain("remote", remote)?;
     }
     let request = WriteRequest {
+        caller,
         project_id,
         worktree,
         title: "task-title-git-fetch".to_owned(),
@@ -112,6 +114,7 @@ pub struct Pulled {
 /// `git.pull`. `branch` 는 `remote` 와 함께만 준다.
 pub async fn pull(
     write: &Arc<GitWrite>,
+    caller: ConnectionScope,
     project_id: String,
     worktree: Option<String>,
     mode: GitPullMode,
@@ -130,6 +133,7 @@ pub async fn pull(
         branch_name("branch", branch)?;
     }
     let request = WriteRequest {
+        caller,
         project_id,
         worktree,
         title: "task-title-git-pull".to_owned(),
@@ -308,6 +312,7 @@ pub struct Pushed {
 #[allow(clippy::too_many_arguments)] // RPC 입력의 칸을 그대로 받는다.
 pub async fn push(
     write: &Arc<GitWrite>,
+    caller: ConnectionScope,
     project_id: String,
     worktree: Option<String>,
     branch: Option<String>,
@@ -327,6 +332,7 @@ pub async fn push(
         ))));
     }
     let request = WriteRequest {
+        caller,
         project_id,
         worktree,
         title: "task-title-git-push".to_owned(),

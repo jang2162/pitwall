@@ -57,7 +57,7 @@ async fn a_merge_conflict_is_a_merge_and_abort_restores_head_and_work_tree() {
 
     let done = f
         .write
-        .act(&f.project, None, OperationAction::Abort)
+        .act(f.caller(), &f.project, None, OperationAction::Abort)
         .await
         .unwrap();
     assert_eq!(done.operation, None);
@@ -77,7 +77,7 @@ async fn continue_fails_with_gits_message_until_the_conflict_is_resolved_then_co
     let d = f.repo.start_conflicting_merge();
     let result = f
         .write
-        .act(&f.project, None, OperationAction::Continue)
+        .act(f.caller(), &f.project, None, OperationAction::Continue)
         .await;
     let Err(WriteError::Failed { stderr, stdout, .. }) = &result else {
         panic!("expected Failed, got {result:?}");
@@ -97,7 +97,7 @@ async fn continue_fails_with_gits_message_until_the_conflict_is_resolved_then_co
     f.repo.git(&["add", &d.path]);
     let done = f
         .write
-        .act(&f.project, None, OperationAction::Continue)
+        .act(f.caller(), &f.project, None, OperationAction::Continue)
         .await
         .unwrap();
     assert_eq!(done.operation, None);
@@ -150,7 +150,7 @@ async fn a_rebase_reports_branch_onto_and_step_and_skip_stops_again_on_the_next_
 
     let skipped = f
         .write
-        .act(&f.project, None, OperationAction::Skip)
+        .act(f.caller(), &f.project, None, OperationAction::Skip)
         .await
         .unwrap();
     assert!(skipped.stopped, "o2 conflicts too — stopped, not failed");
@@ -166,7 +166,7 @@ async fn a_rebase_reports_branch_onto_and_step_and_skip_stops_again_on_the_next_
 
     let aborted = f
         .write
-        .act(&f.project, None, OperationAction::Abort)
+        .act(f.caller(), &f.project, None, OperationAction::Abort)
         .await
         .unwrap();
     assert_eq!(aborted.operation, None);
@@ -203,12 +203,15 @@ async fn actions_the_operation_does_not_have_are_refused() {
     let f = WriteFixture::new(true);
     assert_eq!(
         f.write
-            .act(&f.project, None, OperationAction::Continue)
+            .act(f.caller(), &f.project, None, OperationAction::Continue)
             .await,
         Err(WriteError::NoOperation)
     );
     f.repo.start_conflicting_merge();
-    let skip = f.write.act(&f.project, None, OperationAction::Skip).await;
+    let skip = f
+        .write
+        .act(f.caller(), &f.project, None, OperationAction::Skip)
+        .await;
     assert_eq!(
         skip,
         Err(WriteError::Unsupported {
@@ -226,7 +229,9 @@ async fn actions_the_operation_does_not_have_are_refused() {
     assert_eq!(info.kind, RepoOperation::Bisect);
     assert!(info.actions.is_empty());
     assert!(matches!(
-        f.write.act(&f.project, None, OperationAction::Abort).await,
+        f.write
+            .act(f.caller(), &f.project, None, OperationAction::Abort)
+            .await,
         Err(WriteError::Unsupported { .. })
     ));
 }

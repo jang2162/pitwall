@@ -25,6 +25,7 @@ async fn a_pull_fast_forwards_to_the_upstream() {
     let window = proceed(&f);
     let pulled = pull(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitPullMode::Merge,
@@ -53,6 +54,7 @@ async fn a_conflicting_pull_rebase_stops_in_a_rebase_that_continues() {
     let _window = proceed(&f);
     let pulled = pull(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitPullMode::Rebase,
@@ -79,7 +81,7 @@ async fn a_conflicting_pull_rebase_stops_in_a_rebase_that_continues() {
     f.repo.git(&["add", "same.txt"]);
     let done = f
         .write
-        .act(&f.project, None, OperationAction::Continue)
+        .act(f.caller(), &f.project, None, OperationAction::Continue)
         .await
         .unwrap();
     assert_eq!((done.operation, done.stopped), (None, false));
@@ -97,6 +99,7 @@ async fn a_conflicting_pull_rebase_aborts_back_to_where_it_was() {
     let _window = proceed(&f);
     let pulled = pull(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitPullMode::Rebase,
@@ -111,7 +114,7 @@ async fn a_conflicting_pull_rebase_aborts_back_to_where_it_was() {
     );
     let done = f
         .write
-        .act(&f.project, None, OperationAction::Abort)
+        .act(f.caller(), &f.project, None, OperationAction::Abort)
         .await
         .unwrap();
     assert_eq!(done.operation, None);
@@ -133,6 +136,7 @@ async fn a_conflicting_pull_merge_stops_in_a_merge() {
     let _window = proceed(&f);
     let pulled = pull(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitPullMode::Merge,
@@ -154,6 +158,7 @@ async fn a_pull_without_an_upstream_shows_the_git_text() {
     let _window = proceed(&f);
     let e = pull(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitPullMode::Merge,
@@ -170,6 +175,7 @@ async fn a_pull_without_an_upstream_shows_the_git_text() {
     // 원격 없이 브랜치만 주면 git 을 띄우기 전에 거절한다.
     let e = pull(
         &f.write,
+        f.caller(),
         f.project.clone(),
         None,
         GitPullMode::Merge,

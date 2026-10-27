@@ -154,9 +154,15 @@ impl WriteFixture {
         }
     }
 
+    /// 이 프로젝트 창의 연결 범위(쓰기를 부를 수 있는 연결).
+    pub fn caller(&self) -> pw_rpc::ConnectionScope {
+        pw_rpc::ConnectionScope::Project(self.project.clone())
+    }
+
     /// 이 프로젝트의 쓰기 요청(작업 트리를 바꾸지 않고 인증을 묻지 않는 쓰기).
     pub fn request(&self, title: &str) -> crate::write::WriteRequest {
         crate::write::WriteRequest {
+            caller: self.caller(),
             project_id: self.project.clone(),
             worktree: None,
             title: title.to_owned(),

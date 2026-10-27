@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
-use pw_rpc::{RpcError, code as rpc_code};
+use pw_rpc::{ConnectionScope, RpcError, code as rpc_code};
 use serde::{Deserialize, Serialize};
 
 pub use methods::register;
@@ -219,6 +219,7 @@ pub(crate) fn checked_out(repo: &gix::Repository, name: &str) -> bool {
 /// 체크아웃이나 체크아웃하는 브랜치 생성: 계획(바뀔 경로)을 세워 쓰기를 돌리고, 끝난 HEAD 를 돌려준다.
 async fn switch(
     write: &Arc<GitWrite>,
+    caller: ConnectionScope,
     project_id: String,
     worktree: Option<String>,
     title: &str,
@@ -236,6 +237,7 @@ async fn switch(
     .map_err(WriteError::Rpc)?
     .ok_or(WriteError::NoRepository)?;
     let request = WriteRequest {
+        caller,
         project_id,
         worktree,
         title: title.to_owned(),
@@ -277,6 +279,7 @@ fn moved(head: Option<ObjectId>) -> WriteError {
 /// `git.checkout`.
 pub async fn checkout(
     write: &Arc<GitWrite>,
+    caller: ConnectionScope,
     project_id: String,
     worktree: Option<String>,
     target: GitCheckoutTarget,
@@ -331,6 +334,7 @@ pub async fn checkout(
     };
     switch(
         write,
+        caller,
         project_id,
         worktree,
         "task-title-git-checkout",
@@ -364,6 +368,7 @@ pub struct Branch {
 /// `git.branch.create`: `start`(없으면 HEAD)에서 브랜치를 만든다. `checkout` 이면 그리로 간다(`git switch --create`).
 pub async fn create(
     write: &Arc<GitWrite>,
+    caller: ConnectionScope,
     project_id: String,
     worktree: Option<String>,
     name: String,
@@ -383,6 +388,7 @@ pub async fn create(
         let rev = start.unwrap_or_else(|| "HEAD".to_owned());
         let (work_tree, head) = switch(
             write,
+            caller,
             project_id,
             worktree,
             "task-title-git-branch-create",
@@ -404,6 +410,7 @@ pub async fn create(
         ));
     }
     let request = WriteRequest {
+        caller,
         project_id,
         worktree,
         title: "task-title-git-branch-create".to_owned(),
@@ -428,6 +435,7 @@ pub async fn create(
 /// `git.branch.rename`: `git branch --move <name> <newName>`(이미 있는 이름이면 git 이 거절한다 — 덮어쓰는 `-M` 은 없다).
 pub async fn rename(
     write: &Arc<GitWrite>,
+    caller: ConnectionScope,
     project_id: String,
     worktree: Option<String>,
     name: String,
@@ -436,6 +444,7 @@ pub async fn rename(
     branch_name("branch", &name)?;
     branch_name("new branch name", &new_name)?;
     let request = WriteRequest {
+        caller,
         project_id,
         worktree,
         title: "task-title-git-branch-rename".to_owned(),
@@ -486,6 +495,7 @@ impl Deleted {
 /// `git.branch.delete`: `git branch --delete`(`force` 면 `--force` 를 더한다 — 창이 확인한 뒤에만).
 pub async fn delete(
     write: &Arc<GitWrite>,
+    caller: ConnectionScope,
     project_id: String,
     worktree: Option<String>,
     name: String,
@@ -493,6 +503,7 @@ pub async fn delete(
 ) -> Result<Deleted, WriteError> {
     branch_name("branch", &name)?;
     let request = WriteRequest {
+        caller,
         project_id,
         worktree,
         title: "task-title-git-branch-delete".to_owned(),
@@ -539,6 +550,7 @@ pub async fn delete(
 /// `git.tag.create`: `rev`(없으면 HEAD)에 태그. `message` 가 있으면 주석 태그(`--annotate`, 메시지는 stdin 으로)다.
 pub async fn tag(
     write: &Arc<GitWrite>,
+    caller: ConnectionScope,
     project_id: String,
     worktree: Option<String>,
     name: String,
@@ -550,6 +562,7 @@ pub async fn tag(
         plain("revision", rev)?;
     }
     let request = WriteRequest {
+        caller,
         project_id,
         worktree,
         title: "task-title-git-tag-create".to_owned(),

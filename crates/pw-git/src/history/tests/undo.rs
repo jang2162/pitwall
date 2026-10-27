@@ -34,6 +34,7 @@ async fn merged(f: &WriteFixture) -> (String, GitRefMove) {
     let before = r.commit_file("m.txt", "m\n", "m");
     let done = merge(
         f.write.clone(),
+        f.caller(),
         GitMergeParams {
             project_id: f.project.clone(),
             worktree: None,
@@ -52,7 +53,9 @@ async fn undoing_a_merge_with_keep_brings_the_branch_back() {
     let f = WriteFixture::new(true);
     let _window = window(&f);
     let (before, moved) = merged(&f).await;
-    let done = reset(f.write.clone(), undo(&f, &moved)).await.unwrap();
+    let done = reset(f.write.clone(), f.caller(), undo(&f, &moved))
+        .await
+        .unwrap();
     assert_eq!(f.repo.head(), before);
     assert_eq!(read(&f, "g.txt"), None);
     assert_eq!(done.moved.unwrap().current, Some(before));
@@ -66,7 +69,9 @@ async fn another_branch_on_the_same_commit_is_not_undone() {
     let (_, moved) = merged(&f).await;
     let merge_commit = f.repo.head();
     f.repo.git(&["switch", "-q", "-c", "another"]);
-    let e = reset(f.write.clone(), undo(&f, &moved)).await.unwrap_err();
+    let e = reset(f.write.clone(), f.caller(), undo(&f, &moved))
+        .await
+        .unwrap_err();
     assert_eq!(e.code, rpc_code::CONFLICT);
     assert_eq!(e.data.unwrap()["refName"], "refs/heads/another");
     assert_eq!(f.repo.rev_parse("another"), merge_commit);
@@ -81,7 +86,9 @@ async fn keep_refuses_to_undo_over_an_edit_made_since() {
     let (_, moved) = merged(&f).await;
     let merge_commit = f.repo.head();
     f.repo.write("g.txt", "edited since\n");
-    let e = reset(f.write.clone(), undo(&f, &moved)).await.unwrap_err();
+    let e = reset(f.write.clone(), f.caller(), undo(&f, &moved))
+        .await
+        .unwrap_err();
     assert_eq!(e.code, crate::write::code::GIT_FAILED);
     assert_eq!(f.repo.head(), merge_commit);
     assert_eq!(read(&f, "g.txt").as_deref(), Some("edited since\n"));
@@ -96,6 +103,7 @@ async fn a_rebase_finished_by_continue_can_be_undone() {
     let tip = f.repo.head();
     let stopped = rebase(
         f.write.clone(),
+        f.caller(),
         GitRebaseParams {
             project_id: f.project.clone(),
             worktree: None,
@@ -110,7 +118,7 @@ async fn a_rebase_finished_by_continue_can_be_undone() {
     f.repo.git(&["add", &d.path]);
     let done = f
         .write
-        .act(&f.project, None, OperationAction::Continue)
+        .act(f.caller(), &f.project, None, OperationAction::Continue)
         .await
         .unwrap();
     assert_eq!(done.operation, None);
@@ -123,7 +131,9 @@ async fn a_rebase_finished_by_continue_can_be_undone() {
             current: Some(f.repo.head()),
         }
     );
-    reset(f.write.clone(), undo(&f, &moved)).await.unwrap();
+    reset(f.write.clone(), f.caller(), undo(&f, &moved))
+        .await
+        .unwrap();
     assert_eq!(f.repo.head(), tip);
     assert_eq!(read(&f, &d.path).as_deref(), Some("ours\n"));
 }
@@ -139,7 +149,7 @@ async fn a_merge_finished_by_continue_records_the_move() {
     f.repo.git(&["add", &d.path]);
     let done = f
         .write
-        .act(&f.project, None, OperationAction::Continue)
+        .act(f.caller(), &f.project, None, OperationAction::Continue)
         .await
         .unwrap();
     assert_eq!(done.operation, None);

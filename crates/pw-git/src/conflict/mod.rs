@@ -41,7 +41,7 @@ use pw_fs::judge::{Bom, Judgment, judge};
 use pw_fs::limits::{EDITABLE_MAX, READ_ONLY_MAX, SNIFF_BYTES};
 use pw_fs::read::read_whole;
 use pw_fs::scope::{Denied, Roots};
-use pw_rpc::{RpcError, code};
+use pw_rpc::{ConnectionScope, RpcError, code};
 
 use crate::diff::blob::{BIG_BLOB_WAIT, BIG_BLOBS, BIG_BLOBS_AT_ONCE};
 use crate::status::GitConflict;
@@ -108,6 +108,7 @@ impl GitWrite {
     /// `git.conflict.resolve`(모듈 머리 주석).
     pub async fn resolve(
         &self,
+        caller: ConnectionScope,
         params: GitConflictResolveParams,
     ) -> Result<GitConflicts, WriteError> {
         check_path(&params.path).map_err(WriteError::Rpc)?;
@@ -177,6 +178,7 @@ impl GitWrite {
         };
         precheck?;
         let request = WriteRequest {
+            caller,
             project_id: params.project_id,
             worktree: params.worktree,
             title: RESOLVE_TITLE.to_owned(),

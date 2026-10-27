@@ -21,7 +21,7 @@ mod tests;
 
 use std::sync::Arc;
 
-use pw_rpc::{Router, RpcError, rpc_method};
+use pw_rpc::{ConnectionScope, Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::Opened;
@@ -80,6 +80,7 @@ rpc_method! {
 /// `git.commit`(머리 주석).
 pub async fn commit(
     write: &GitWrite,
+    caller: ConnectionScope,
     params: GitCommitParams,
 ) -> Result<GitCommitResult, WriteError> {
     let GitCommitParams {
@@ -90,6 +91,7 @@ pub async fn commit(
         signoff,
     } = params;
     let request = WriteRequest {
+        caller,
         project_id,
         worktree,
         title: TITLE.to_owned(),
@@ -137,8 +139,8 @@ fn head(opened: &Opened) -> Option<String> {
 
 /// 핸들러를 붙인다.
 pub fn register(router: &mut Router, write: Arc<GitWrite>) {
-    router.unary(GitCommitMethod, move |_ctx, params: GitCommitParams| {
-        let write = Arc::clone(&write);
-        async move { commit(&write, params).await.map_err(RpcError::from) }
+    router.unary(GitCommitMethod, move |ctx, params: GitCommitParams| {
+        let (write, caller) = (Arc::clone(&write), ctx.scope().clone());
+        async move { commit(&write, caller, params).await.map_err(RpcError::from) }
     });
 }
