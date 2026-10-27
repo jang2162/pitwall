@@ -29,7 +29,9 @@ pub struct GitMergeParams {
     /// 활성 워크트리의 꼭대기(`git.repo` 와 같다).
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 들여올 리비전(브랜치 이름이면 merge 메시지가 그 이름을 쓴다).
+    /// 들여올 리비전(브랜치 이름이면 merge 메시지가 그 이름을 쓴다). ref 전체 이름(`refs/heads/…` · `refs/remotes/…` ·
+    /// `refs/tags/…`)이면 잠금 안에서 그 짧은 이름이 같은 ref 하나로만 풀릴 때 짧은 이름으로 git 에 넘긴다 — merge 메시지가
+    /// 터미널의 `git merge <짧은 이름>` 과 같고, 같은 이름의 태그 · 다른 ref 가 있으면 전체 이름 그대로라 고른 ref 를 합친다.
     pub rev: String,
     #[serde(default)]
     pub fast_forward: FastForward,
@@ -55,7 +57,7 @@ pub struct GitRebaseParams {
     pub project_id: String,
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 이 위로 옮긴다(`git rebase <upstream>`).
+    /// 이 위로 옮긴다(`git rebase <upstream>`). ref 전체 이름은 `GitMergeParams::rev` 와 같이 모호하지 않으면 짧은 이름으로 넘긴다.
     pub upstream: String,
     /// rebase 할 로컬 브랜치의 짧은 이름. 있으면 git 이 그 브랜치로 체크아웃한 뒤 rebase 한다. 없으면 지금 HEAD.
     #[serde(default)]
@@ -241,6 +243,7 @@ pub async fn merge(
         FastForward::Only => args.push("--ff-only".into()),
         FastForward::Never => args.push("--no-ff".into()),
     }
+    let rev_at = args.len();
     args.push(params.rev.into());
     let job = Job {
         request: super::request(
@@ -252,6 +255,7 @@ pub async fn merge(
         ),
         watched: Watched::Head,
         args,
+        full_ref: Some(rev_at),
         classify: super::merge_outcome,
     };
     Ok(super::run(&write, job).await?)
@@ -294,6 +298,7 @@ pub async fn pick(
         ),
         watched: Watched::Head,
         args,
+        full_ref: None,
         classify: super::rewrite_outcome,
     };
     Ok(super::run(&write, job).await?)
@@ -326,6 +331,7 @@ pub async fn rebase(
         ),
         watched,
         args,
+        full_ref: Some(1),
         classify: super::rewrite_outcome,
     };
     Ok(super::run(&write, job).await?)

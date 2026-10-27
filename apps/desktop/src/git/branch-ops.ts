@@ -7,7 +7,8 @@
 // - 삭제: 먼저 `force` 없이 부른다. 병합 안 된 브랜치면 Host 가 `2101` 로 거절하고, 그때만 「강제 삭제」 를 묻는다(결정 M2-D6 ①).
 //   지운 결과의 이전 해시를 알림에 적는다 — [되돌리기] 단추는 M2-20 이 단다.
 // - git 에 넘기는 리비전(merge · rebase · 태그 체크아웃 · 새 브랜치의 시작 · 비교)은 ref 전체 이름(`refs/heads/` · `refs/remotes/` ·
-//   `refs/tags/`)이다 — 같은 이름의 브랜치와 태그가 있어도 고른 것으로 풀린다. 로컬 브랜치의 체크아웃 · 이름 바꾸기 · 삭제는 RPC 가
+//   `refs/tags/`)이다 — 같은 이름의 브랜치와 태그가 있어도 고른 것으로 풀린다. merge · rebase 는 Host 가 실행 직전에 모호하지
+//   않은 짧은 이름으로 바꿔 git 을 부른다(메시지 · reflog 가 터미널과 같다). 로컬 브랜치의 체크아웃 · 이름 바꾸기 · 삭제는 RPC 가
 //   짧은 이름을 받아 Host 가 `refs/heads/<이름>` 으로만 다룬다(crates/pw-git/src/branch/mod.rs — `git switch` · `git branch` 는
 //   브랜치만 본다). 원격 체크아웃도 Host 가 `refs/remotes/<원격>/<브랜치>` 를 만든다.
 // - merge · rebase 는 확인 한 번을 묻는다(위험 작업 다이얼로그의 주인은 M2-20 — 여기는 M1 의 확인 대화상자로 최소한만).
@@ -283,7 +284,8 @@ export function createBranchOps(deps: BranchOpsDeps) {
     if (!ok) return;
     try {
       // 전체 이름으로 보낸다 — 짧은 이름은 같은 이름의 태그 · 다른 종류의 ref 로 풀릴 수 있다(git 은 경고만 하고 태그를 merge
-      // 한다). 대신 merge 메시지가 `Merge branch 'refs/heads/x'` 가 된다.
+      // 한다). Host 가 잠금 안에서 짧은 이름이 모호하지 않으면 짧은 이름으로 git 을 불러 merge 메시지가 터미널의 `git merge x` 와
+      // 같다(crates/pw-git/src/history/mod.rs `unambiguous_short`).
       const result = await host().call("git.merge", { ...scope(), rev: refName(ref) });
       info(
         result.outcome === "upToDate"

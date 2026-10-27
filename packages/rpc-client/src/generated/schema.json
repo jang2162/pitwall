@@ -5676,7 +5676,7 @@
             "type": "string"
           },
           "rev": {
-            "description": "들여올 리비전(브랜치 이름이면 merge 메시지가 그 이름을 쓴다).",
+            "description": "들여올 리비전(브랜치 이름이면 merge 메시지가 그 이름을 쓴다). ref 전체 이름(`refs/heads/…` · `refs/remotes/…` ·\n`refs/tags/…`)이면 잠금 안에서 그 짧은 이름이 같은 ref 하나로만 풀릴 때 짧은 이름으로 git 에 넘긴다 — merge 메시지가\n터미널의 `git merge <짧은 이름>` 과 같고, 같은 이름의 태그 · 다른 ref 가 있으면 전체 이름 그대로라 고른 ref 를 합친다.",
             "type": "string"
           },
           "worktree": {
@@ -7818,7 +7818,7 @@
             "type": "string"
           },
           "upstream": {
-            "description": "이 위로 옮긴다(`git rebase <upstream>`).",
+            "description": "이 위로 옮긴다(`git rebase <upstream>`). ref 전체 이름은 `GitMergeParams::rev` 와 같이 모호하지 않으면 짧은 이름으로 넘긴다.",
             "type": "string"
           },
           "worktree": {

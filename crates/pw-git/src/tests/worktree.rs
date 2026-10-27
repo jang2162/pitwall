@@ -420,7 +420,8 @@ fn a_fifo_head_or_git_file_does_not_block() {
 }
 
 /// 브랜치 팝업의 merge 는 ref 전체 이름을 보낸다(apps/desktop/src/git/branch-ops.ts). 같은 이름의 브랜치와 태그가 다른 커밋을
-/// 가리키면 짧은 이름은 태그로 풀린다 — git 은 「ambiguous」 경고와 함께 태그를 merge 한다. 전체 이름이면 브랜치다. 체크아웃
+/// 가리키면 짧은 이름은 태그로 풀린다 — git 은 「ambiguous」 경고와 함께 태그를 merge 한다. 전체 이름이면 브랜치다(모호하니
+/// Host 가 짧게 바꾸지 않는다, `history::unambiguous_short`). 체크아웃
 /// (`kind: "branch"`) · 삭제는 짧은 이름을 받아 Host 가 `refs/heads/` 로만 다루므로 태그와 겹치지 않는다.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -500,4 +501,129 @@ async fn a_branch_and_a_tag_with_the_same_name_resolve_to_the_branch_by_full_nam
             .stdout
             .is_empty()
     );
+}
+
+/// 팝업은 ref 전체 이름을 보내지만, 보통 경우(짧은 이름이 그 ref 하나로만 풀린다) Host 가 잠금 안에서 짧은 이름으로 git 을 부른다 —
+/// merge 메시지가 터미널의 `git merge <짧은 이름>` 과 같다. 로컬 브랜치 · 원격 브랜치 · 태그 각각을 같은 저장소에서 RPC 로 한 번,
+/// 되돌린 뒤 터미널로 한 번 합쳐 커밋 제목을 견준다. rebase 도 같은 규칙이라 HEAD 의 reflog 가 터미널과 같다.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unambiguous_full_ref_merges_and_rebases_with_the_same_messages_as_the_terminal() {
+    use crate::history::FastForward;
+    use crate::history::methods::{GitMergeParams, GitRebaseParams, merge, rebase};
+    use crate::testing::write::{Window, WriteFixture};
+    use crate::write::GitPromptAnswer;
+
+    let f = WriteFixture::new(true);
+    let _window = Window::open(&f.write, &f.project, |_| Some(GitPromptAnswer::Proceed));
+    let remote = f.repo.add_bare_remote("origin");
+    let other = f.repo.clone_remote(&remote, "other");
+    f.repo.push_from(&other, "topic", "topic.txt", "topic\n");
+    f.repo.git(&["fetch", "--quiet", "origin"]);
+    f.repo.git(&["checkout", "-q", "-b", "feature"]);
+    f.repo.commit_file("feature.txt", "feature\n", "feature");
+    f.repo.git(&["tag", "release"]);
+    f.repo.checkout("main");
+    f.repo.commit_file("main.txt", "main\n", "main");
+    let start = f.repo.head();
+
+    let subject = || f.repo.git(&["log", "-1", "--format=%s"]).trim().to_owned();
+    for (full, short, expected) in [
+        ("refs/heads/feature", "feature", "Merge branch 'feature'"),
+        (
+            "refs/remotes/origin/topic",
+            "origin/topic",
+            "Merge remote-tracking branch 'origin/topic'",
+        ),
+        ("refs/tags/release", "release", "Merge tag 'release'"),
+    ] {
+        f.repo.git(&["reset", "-q", "--hard", &start]);
+        let done = merge(
+            f.write.clone(),
+            f.caller(),
+            GitMergeParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                rev: full.to_owned(),
+                fast_forward: FastForward::Never,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.outcome, crate::history::HistoryOutcome::Done, "{full}");
+        let ours = subject();
+        f.repo.git(&["reset", "-q", "--hard", &start]);
+        f.repo
+            .git(&["merge", "--quiet", "--no-edit", "--no-ff", short]);
+        assert_eq!(ours, subject(), "{full}: the terminal's message");
+        assert_eq!(ours, expected);
+    }
+
+    // rebase: HEAD 의 reflog 제목이 터미널의 `git rebase feature` 와 같다.
+    let reflog = |n: &str| f.repo.git(&["reflog", "-n", n, "--format=%gs", "HEAD"]);
+    f.repo.git(&["reset", "-q", "--hard", &start]);
+    rebase(
+        f.write.clone(),
+        f.caller(),
+        GitRebaseParams {
+            project_id: f.project.clone(),
+            worktree: None,
+            upstream: "refs/heads/feature".into(),
+            branch: None,
+        },
+    )
+    .await
+    .unwrap();
+    let ours = reflog("3");
+    f.repo.git(&["reset", "-q", "--hard", &start]);
+    f.repo.git(&["rebase", "--quiet", "feature"]);
+    assert_eq!(ours, reflog("3"));
+    assert!(ours.contains("checkout feature"), "{ours}");
+}
+
+/// 짧은 이름 판정: 그 ref 하나로만 풀릴 때만 짧은 이름이다. 같은 이름의 태그 · 다른 종류의 브랜치 · 원격의 HEAD · 의사 ref 꼴 ·
+/// 해시 길이의 16진수 · 전체 이름이 아닌 것 · 없는 ref 는 `None`(전체 이름 그대로).
+#[test]
+fn a_short_name_is_used_only_when_it_resolves_to_that_ref_alone() {
+    use crate::history::unambiguous_short;
+
+    let r = TestRepo::with_commit();
+    let head = r.head();
+    r.git(&["branch", "plain"]);
+    r.git(&["branch", "both"]);
+    r.git(&["tag", "both"]);
+    r.git(&["tag", "only-tag"]);
+    r.git(&["update-ref", "refs/remotes/origin/main", &head]);
+    r.git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+    ]);
+    r.git(&["branch", "origin"]);
+    r.git(&["update-ref", "refs/remotes/up/feat", &head]);
+    r.git(&["branch", "up/feat"]);
+    let hex = "a".repeat(40);
+    r.git(&["branch", &hex]);
+    r.git(&["branch", "ORIG"]);
+    let repo = gix::open(r.root()).unwrap();
+    let short = |full: &str| unambiguous_short(&repo, full);
+    assert_eq!(short("refs/heads/plain").as_deref(), Some("plain"));
+    assert_eq!(short("refs/tags/only-tag").as_deref(), Some("only-tag"));
+    assert_eq!(
+        short("refs/remotes/origin/main").as_deref(),
+        Some("origin/main")
+    );
+    // 같은 이름의 태그와 브랜치 — 어느 쪽도 짧게 하지 않는다.
+    assert_eq!(short("refs/heads/both"), None);
+    assert_eq!(short("refs/tags/both"), None);
+    // 브랜치 `origin` 과 `refs/remotes/origin/HEAD`.
+    assert_eq!(short("refs/heads/origin"), None);
+    // 로컬 `up/feat` 와 원격 `up/feat`.
+    assert_eq!(short("refs/heads/up/feat"), None);
+    assert_eq!(short("refs/remotes/up/feat"), None);
+    assert_eq!(short(&format!("refs/heads/{hex}")), None);
+    assert_eq!(short("refs/heads/ORIG"), None);
+    assert_eq!(short("refs/heads/missing"), None);
+    assert_eq!(short("plain"), None);
+    assert_eq!(short("refs/notes/commits"), None);
 }

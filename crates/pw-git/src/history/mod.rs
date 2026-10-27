@@ -150,6 +150,8 @@ pub(crate) struct Job {
     pub watched: Watched,
     /// git 인자(하위 명령부터).
     pub args: Vec<OsString>,
+    /// `args` 의 이 자리가 ref 전체 이름이면 잠금 안에서 모호하지 않은 짧은 이름으로 바꾼다([`unambiguous_short`]).
+    pub full_ref: Option<usize>,
     /// 성공했을 때 결과의 종류를 가른다(전, 후).
     pub classify: fn(&Snapshot, &Snapshot) -> HistoryOutcome,
 }
@@ -159,12 +161,19 @@ pub(crate) async fn run(write: &GitWrite, job: Job) -> Result<GitHistoryResult, 
     let Job {
         request,
         watched,
-        args,
+        mut args,
+        full_ref,
         classify,
     } = job;
     write
         .run(request, move |ctx| async move {
             let name = watched_name(&ctx, &watched).await?;
+            if let Some(at) = full_ref
+                && let Some(full) = args.get(at).and_then(|a| a.to_str()).map(str::to_owned)
+                && let Some(short) = ctx.read(move |o| unambiguous_short(&o.repo, &full)).await?
+            {
+                args[at] = short.into();
+            }
             let before = read_snapshot(&ctx, &name).await?;
             let output = ctx.output(ctx.git().args(&args)).await?;
             let after = read_snapshot(&ctx, &name).await?;
@@ -194,6 +203,48 @@ pub(crate) async fn run(write: &GitWrite, job: Job) -> Result<GitHistoryResult, 
             })
         })
         .await
+}
+
+/// git 이 짧은 이름을 풀 때 보는 자리(`refs.c` 의 `ref_rev_parse_rules` 에서 맨 앞 `%s` 를 뺀 것 — 그것은 [`is_pseudo_ref`] 가 맡는다).
+const SHORT_NAME_RULES: [&str; 5] = [
+    "refs/{}",
+    "refs/tags/{}",
+    "refs/heads/{}",
+    "refs/remotes/{}",
+    "refs/remotes/{}/HEAD",
+];
+
+/// 맨 위 이름처럼 보이는 것(`HEAD` · `MERGE_HEAD` 같은 의사 ref 꼴). git 은 이런 짧은 이름을 `.git/<이름>` 으로 먼저 푼다.
+fn is_pseudo_ref(short: &str) -> bool {
+    short.bytes().all(|b| b.is_ascii_uppercase() || b == b'_')
+}
+
+/// ref 전체 이름(`refs/heads/x` · `refs/remotes/o/x` · `refs/tags/x`)의 짧은 이름이 git 의 풀이 규칙으로 그 ref 하나로만 풀리면 그
+/// 짧은 이름. 같은 짧은 이름의 다른 ref(태그 · 다른 종류의 브랜치 · 원격의 HEAD)가 있거나, 의사 ref 꼴이거나, 해시 전체 길이의
+/// 16진수라 git 이 객체 이름으로 읽을 수 있으면 `None` — 그때는 전체 이름 그대로 넘긴다. 짧은 이름을 넘기는 까닭은 merge 메시지
+/// (`Merge branch 'x'`)가 터미널의 `git merge x` 와 같게 하려는 것이다. 잠금 안에서 부른다 — 실행 직전의 ref 로 판정한다.
+pub(crate) fn unambiguous_short(repo: &gix::Repository, full: &str) -> Option<String> {
+    let short = ["refs/heads/", "refs/remotes/", "refs/tags/"]
+        .iter()
+        .find_map(|prefix| full.strip_prefix(prefix))?;
+    let full_hex = matches!(short.len(), 40 | 64) && short.bytes().all(|b| b.is_ascii_hexdigit());
+    if short.is_empty() || is_pseudo_ref(short) || full_hex {
+        return None;
+    }
+    let exists = |name: &str| {
+        repo.try_find_reference(name)
+            .ok()
+            .flatten()
+            .is_some_and(|r| r.name().as_bstr() == name.as_bytes())
+    };
+    let mut found = SHORT_NAME_RULES
+        .iter()
+        .map(|rule| rule.replace("{}", short))
+        .filter(|candidate| exists(candidate));
+    match (found.next(), found.next()) {
+        (Some(only), None) if only == full => Some(short.to_owned()),
+        _ => None,
+    }
 }
 
 /// 지켜볼 ref 의 전체 이름(잠금 안에서 읽는다).
