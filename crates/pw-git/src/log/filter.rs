@@ -140,7 +140,7 @@ impl Filter {
 /// 저장소 작업 트리 기준 상대 경로(git RPC 의 경로 꼴 — 구분자 `/`)를 구성 요소로 다듬는다. Windows 에서는 `\` 도 구분자로
 /// 받아 `/` 로 바꾼다(그곳 파일 이름에는 `\` 가 올 수 없다). 다른 OS 에서 `\` 는 이름의 일부다. 절대 경로 · 빈 경로 · `.` ·
 /// `..` 는 거절한다.
-pub(super) fn relative_path(p: &str) -> Result<gix::bstr::BString, RpcError> {
+pub(crate) fn relative_path(p: &str) -> Result<gix::bstr::BString, RpcError> {
     let bad = |why: &str| RpcError::invalid_params(format!("path `{p}` {why}"));
     if p.len() > MAX_PATTERN {
         return Err(bad("is too long"));

@@ -29,6 +29,11 @@ impl Mailmap {
         if repo.config_snapshot().boolean("log.mailmap") == Some(false) {
             return Self(None);
         }
+        Self::always(repo, trusted)
+    }
+
+    /// `log.mailmap` 과 상관없이 읽는다 — `git blame` 은 그 설정을 보지 않고 늘 mailmap 을 쓴다(`crate::blame`).
+    pub fn always(repo: &gix::Repository, trusted: bool) -> Self {
         let snapshot = if trusted {
             repo.open_mailmap()
         } else {

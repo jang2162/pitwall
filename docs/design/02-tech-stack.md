@@ -14,7 +14,7 @@
 | 구문 강조 | 코어: **tree-sitter** + 내장 언어는 네이티브 문법 크레이트를 정적 링크(외부 확장의 문법은 WASM — M8) / UI: 코어가 준 화면 범위의 캡처 구간을 CodeMirror decoration 으로 그린다. Lezer 문법은 쓰지 않는다 | 언어 범위는 tree-sitter 기준. 처음 정한 WASM 문법에서 되돌린 까닭과 잰 값은 [12-m1-plan.md](12-m1-plan.md) M1-D2 |
 | Diff 뷰 | @codemirror/merge | side-by-side, inline |
 | 터미널 | xterm.js + `portable-pty` | 실행 콘솔/터미널 공용 |
-| Git 읽기 | **gitoxide (`gix`)** | log/graph/status/blame/diff를 빠르게 |
+| Git 읽기 | **gitoxide (`gix`)** | log/graph/status/blame/diff를 빠르게 (blame 은 신뢰한 프로젝트에서 git CLI — 13-m2-plan.md 결정 M2-D1 판정) |
 | Git 쓰기 | **git CLI** | commit/merge/rebase/checkout/push — 훅, 서명, credential helper 존중 |
 | DB | **sqlx** (Postgres/MySQL/SQLite) + **`redis-rs`** (Redis) | 드라이버 추상화 계층 위에 얹음. MSSQL(`tiberius`)은 이후, Oracle 등은 JDBC 브리지 확장 검토 |
 | DB 그리드 | Glide Data Grid (canvas) | 수십만 행 가상 스크롤 |
@@ -67,7 +67,7 @@
 - LSP 기능(hover, go-to-def, diagnostics, completion)은 코어의 LSP 클라이언트 결과를 CodeMirror 확장으로 연결
 
 ### 2.3 Git: gitoxide + git CLI 하이브리드
-- 그래프 · 로그 필터 · blame · diff는 대량 데이터 → in-process `gix`로 빠르게, 스트리밍
+- 그래프 · 로그 필터 · blame · diff는 대량 데이터 → in-process `gix`로 빠르게, 스트리밍. 예외로 blame 은 gix 가 파일 안에서 옮긴 줄을 찾지 못해 신뢰한 프로젝트에서 `git blame --incremental` 의 출력을 받는 대로 스트림한다(13-m2-plan.md 결정 M2-D1 판정 — 미신뢰 프로젝트는 gix)
 - 쓰기 작업은 사용자 환경 그대로 동작해야 함 (pre-commit 훅, GPG/SSH 서명, credential helper, LFS)
   → `git` CLI 호출이 가장 안전. `libgit2`는 훅/서명 미지원 문제가 있어 제외
 - 필요 시스템 요구사항: git ≥ 2.40

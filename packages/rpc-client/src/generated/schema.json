@@ -1958,6 +1958,230 @@
       ],
       "tier": "write"
     },
+    "git.blame": {
+      "description": "파일의 줄마다 마지막으로 바꾼 커밋(F4-7 · F5-17). 범위마다 커밋 · 그 커밋에서의 경로(이름 바뀜 추적) · 「이 커밋\n이전으로」 의 부모와 경로, 커밋마다 작성자 · 시각 · 제목(처음 나올 때 한 번). 첫 청크에 그 리비전의 해시 · 줄 수 · 엔진.\n작업 트리 · 저장하지 않은 편집은 blame 하지 않는다. 저장소가 없거나 HEAD 가 태어나지 않았거나 그 리비전에 파일이 없으면\n청크 없이 끝난다. 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 폴더 · 50 MiB 넘는 파일은 invalid params.",
+      "item": {
+        "$defs": {
+          "BlameCommit": {
+            "description": "범위가 가리키는 커밋. 스트림에서 처음 나올 때 한 번만 실린다.",
+            "properties": {
+              "authorEmail": {
+                "type": "string"
+              },
+              "authorName": {
+                "description": "작성자(mailmap 적용).",
+                "type": "string"
+              },
+              "authorTime": {
+                "description": "작성 시각(유닉스 초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "boundary": {
+                "description": "경계 커밋(git 의 `boundary`): 첫 커밋(`blame.showRoot` 를 켜지 않았으면 — git 의 기본)이거나 얕은 클론의 끝이라 그 앞을 볼\n수 없는 커밋. 얕은 클론의 끝이면 이 커밋의 줄이 정말 이 커밋에서 생겼는지는 모른다.",
+                "type": "boolean"
+              },
+              "hash": {
+                "description": "전체 해시(16진).",
+                "type": "string"
+              },
+              "subject": {
+                "description": "제목(메시지 첫 문단을 한 줄로).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "hash",
+              "authorName",
+              "authorEmail",
+              "authorTime",
+              "subject",
+              "boundary"
+            ],
+            "type": "object"
+          },
+          "BlameEngine": {
+            "oneOf": [
+              {
+                "const": "git",
+                "description": "`git blame --incremental -M` — 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다.",
+                "type": "string"
+              },
+              {
+                "const": "gix",
+                "description": "gix blame — `git blame`(`-M` 없이)과 같다. 옮긴 줄은 옮긴 커밋의 것이다.",
+                "type": "string"
+              }
+            ]
+          },
+          "BlameFile": {
+            "description": "blame 한 파일. 첫 청크에만 실린다.",
+            "properties": {
+              "commit": {
+                "description": "blame 한 커밋(받은 `rev` 를 푼 해시).",
+                "type": "string"
+              },
+              "engine": {
+                "$ref": "#/$defs/BlameEngine"
+              },
+              "lines": {
+                "description": "그 커밋에서의 파일 줄 수. 모든 청크의 범위를 합치면 1 ~ `lines` 를 겹치지 않고 한 번씩 덮는다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "commit",
+              "lines",
+              "engine"
+            ],
+            "type": "object"
+          },
+          "BlamePrevious": {
+            "description": "「이 커밋 이전으로」 의 대상: 부모 커밋과 그 부모에서의 파일 경로.",
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "path": {
+                "description": "저장소 꼭대기 기준 경로(`/` 구분). 이름이 바뀐 커밋이면 바뀌기 전 이름이다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "commit",
+              "path"
+            ],
+            "type": "object"
+          },
+          "BlameRange": {
+            "description": "연속한 줄 범위 하나와 그 줄을 마지막으로 바꾼 커밋.",
+            "properties": {
+              "commit": {
+                "description": "커밋 해시([`BlameChunk::commits`] 에 앞서 실렸다).",
+                "type": "string"
+              },
+              "count": {
+                "description": "줄 수(1 이상).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "description": "첫 줄(1부터, blame 한 리비전의 파일 기준).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "previous": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BlamePrevious"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "「이 커밋 이전으로」. 그 커밋이 첫 커밋이거나 부모에 그 파일이 없으면 `null`."
+              },
+              "sourceLine": {
+                "description": "그 커밋의 파일에서의 첫 줄(1부터).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sourcePath": {
+                "description": "그 커밋에서의 경로(이름 바뀜을 따라간 것).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "line",
+              "count",
+              "commit",
+              "sourcePath",
+              "sourceLine",
+              "previous"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`git.blame` 스트림의 항목 하나.",
+        "properties": {
+          "commits": {
+            "description": "이 청크의 범위가 처음 가리키는 커밋(앞 청크에 실린 커밋은 다시 싣지 않는다).",
+            "items": {
+              "$ref": "#/$defs/BlameCommit"
+            },
+            "type": "array"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BlameFile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "첫 청크에만 있다."
+          },
+          "ranges": {
+            "description": "범위(순서는 정해져 있지 않다 — `git` 엔진은 찾는 대로 보낸다).",
+            "items": {
+              "$ref": "#/$defs/BlameRange"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "file",
+          "commits",
+          "ranges"
+        ],
+        "type": "object"
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "path": {
+            "description": "저장소 꼭대기 기준 파일 경로(`/` 구분 — Windows 는 `\\` 도 받는다).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "rev": {
+            "default": null,
+            "description": "리비전(git 의 리비전 문법 — 「이 커밋 이전으로」 는 범위의 `previous` 커밋). 없으면 HEAD.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`git.repo` 와 같다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "git.blob": {
       "description": "리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).",
       "kind": "unary",
@@ -4893,6 +5117,157 @@
         "owner"
       ],
       "tier": "write"
+    },
+    "git.fileHistory": {
+      "description": "이름 바뀜을 따라가는 파일 히스토리(F5-16 — `git log --follow --name-status` 와 같은 커밋 · 순서 · 상태). 행마다 해시 ·\n부모 · 제목 · 작성자 · 시각 · 그 커밋에서의 경로 · 바뀜(A · M · D · R · C · T)과 이름 바뀜의 원래 경로. 첫 청크는 200행\n이하, 그 뒤는 500행 이하이고 모인 행은 100 ms 안에 보낸다. 저장소가 없거나 HEAD 가 태어나지 않았으면 청크 없이 끝난다.\n없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 시작 리비전에서 폴더인 경로는 invalid params.",
+      "item": {
+        "$defs": {
+          "FileChangeKind": {
+            "oneOf": [
+              {
+                "const": "added",
+                "description": "`A`.",
+                "type": "string"
+              },
+              {
+                "const": "modified",
+                "description": "`M`(내용이나 실행 비트).",
+                "type": "string"
+              },
+              {
+                "const": "deleted",
+                "description": "`D`.",
+                "type": "string"
+              },
+              {
+                "const": "renamed",
+                "description": "`R` — `oldPath` 에서 이름이 바뀌었다.",
+                "type": "string"
+              },
+              {
+                "const": "copied",
+                "description": "`C` — `oldPath` 를 복사했다(원본은 남았다).",
+                "type": "string"
+              },
+              {
+                "const": "typeChanged",
+                "description": "`T` — 파일 · 심볼릭 링크 · 서브모듈 사이에서 종류가 바뀌었다.",
+                "type": "string"
+              }
+            ]
+          },
+          "FileHistoryRow": {
+            "description": "파일 히스토리의 한 행.",
+            "properties": {
+              "authorEmail": {
+                "type": "string"
+              },
+              "authorName": {
+                "description": "작성자(mailmap 적용).",
+                "type": "string"
+              },
+              "authorTime": {
+                "description": "작성 시각(유닉스 초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "change": {
+                "$ref": "#/$defs/FileChangeKind"
+              },
+              "hash": {
+                "description": "전체 해시(16진).",
+                "type": "string"
+              },
+              "oldPath": {
+                "description": "이름 바뀜 · 복사의 원래 경로(부모에서의 경로).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "parents": {
+                "description": "부모 해시(커밋에 적힌 순서. 얕은 클론의 경계 커밋은 비어 있다).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "path": {
+                "description": "이 커밋에서의 경로(저장소 꼭대기 기준, `/` 구분). 지운 커밋이면 지운 경로.",
+                "type": "string"
+              },
+              "subject": {
+                "description": "제목(메시지의 첫 문단을 한 줄로).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "hash",
+              "parents",
+              "subject",
+              "authorName",
+              "authorEmail",
+              "authorTime",
+              "path",
+              "change",
+              "oldPath"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`git.fileHistory` 스트림의 항목 하나.",
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/$defs/FileHistoryRow"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "type": "object"
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "path": {
+            "description": "저장소 꼭대기 기준 파일 경로(`/` 구분 — Windows 는 `\\` 도 받는다). 그 리비전에 없는 경로(지운 파일)도 따라간다.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "rev": {
+            "default": null,
+            "description": "시작 리비전(git 의 리비전 문법). 없으면 HEAD.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`git.repo` 와 같다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
     },
     "git.log": {
       "description": "커밋 로그(F5-1 · F5-2). 행마다 해시 · 부모 · 제목 · 작성자 · 시각 · ref 장식 · 레인 배치. 첫 청크는 200행을 배치하자마자\n보내고(`total` 이 실린다) 나머지는 500행씩. 브랜치 밖의 필터가 켜지면 행의 `graph` 가 `null` 이고 맞는 커밋만 온다.\n저장소가 없으면 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 모르는 ref, 잘못된 정규식 · 경로 · 해시는 invalid params.",

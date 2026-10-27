@@ -52,6 +52,8 @@ PW_RESET_FUZZ_CASES=200 cargo nextest run -p pw-git -E 'test(/history::tests::fu
 cargo nextest run --release -p pw-git -j 1 --run-ignored only -E 'test(=log::tests::perf::the_first_chunk_of_100k_commits_is_within_300ms)' --no-capture   # git 로그 첫 청크 300 ms(M2-03 완료 기준, 합성 10만 커밋 · commit-graph 있음 · 없음). 저장소 생성까지 10~55초가 걸려 `test-release`(CI)에는 넣지 않는다 — 같은 기기에서 손으로 돌린다(M2-22)
 node apps/desktop/perf/run-headless.cjs webkit http://127.0.0.1:<포트>/index.html __diffCheck <playwright-core 경로> [webkit 실행 파일]   # diff 뷰의 계산된 색 · 보기 전환 스크롤을 헤드리스 WebKit 에서 본다(창을 띄우지 않는다). 먼저 `pnpm --filter @pitwall/desktop exec vite build perf/diff-check --config vite.config.ts --outDir <폴더> --emptyOutDir --base ./` 한 폴더를 127.0.0.1 정적 서버로 연다. 저장소는 playwright 에 의존하지 않아 `mise run test` 에 들지 않는다 — diff 색 · 줄 맞춤을 고쳤으면 돌린다(`apps/desktop/perf/diff-check/diff-check.tsx` 머리 주석)
 node apps/desktop/perf/git-log/run.mjs <폴더> 5   # Git 로그 툴 윈도우의 첫 그림 · 10만 행 스크롤(M2-14, 헤드리스 WebKit — 앱 창을 띄우지 않는다). 폴더 만들기와 `PLAYWRIGHT` 는 그 파일 머리 주석
+cargo run --release -p pw-git --features test-support --example blame_timing -- <빈 폴더> 5   # blame 첫 청크 · 전체 시간을 gix · git CLI 로(5,000줄 · 커밋 1천 개 합성 파일, 결정 M2-D1 판정 · M2-22). 저장소는 처음에 그 폴더에 만든다
+PW_BLAME_SEEDS=200 cargo nextest run -p pw-git -E 'test(/random_histories/)'   # blame 두 엔진 · 파일 히스토리를 무작위 이력 200개에서 git 과 대조하는 긴 판(기본 시험은 8개, `crates/pw-git/src/testing/blame.rs`)
 mise run test-release   # 위 release 판정 시험(검색 취소 100 ms · `fs.list` 1만 개 · 구문 강조 16 ms · git 감시 이벤트 500 ms · 터미널 체크아웃 → 상태바 브랜치의 `git.refs` 500 ms)을 한 번에 — CI 의 「release timing tests」 단계와 같은 명령이다. 9개를 돌린다(0개면 실패)
 ```
 

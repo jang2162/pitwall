@@ -330,6 +330,15 @@ impl GitCommand {
     /// 띄워 끝날 때까지 기다린다. `cancel` 이 오면 프로세스 그룹을 끝내고 [`RunError::Cancelled`]. 이 future 를 끝나기 전에
     /// 버려도 그룹에 SIGTERM 을 보낸다.
     pub async fn output(self, cancel: &CancellationToken) -> Result<Output, RunError> {
+        let mut running = self.spawn()?;
+        let stdout = collect(running.stdout.take());
+        running.finish(cancel, Some(stdout)).await
+    }
+
+    /// 띄우고 곧바로 돌려준다 — stdout 은 부른 쪽이 [`Running::stdout`] 으로 읽는다(출력이 끝나기 전에 처리하는 스트림 읽기,
+    /// `git blame --incremental`). 부른 쪽이 읽지 않으면 파이프가 차서 git 이 멈춘다 — 받는 쪽이 느린 만큼 git 도 느려진다.
+    /// stderr 는 모은다. [`Running`] 을 끝나기 전에 버리면 [`GitCommand::output`] 처럼 프로세스 그룹에 SIGTERM 을 보낸다.
+    pub fn spawn(self) -> Result<Running, RunError> {
         let mut command = tokio::process::Command::new(&self.program);
         command
             .args(&self.args)
@@ -358,26 +367,65 @@ impl GitCommand {
         let mut child = command
             .spawn()
             .map_err(|e| RunError::Spawn(e.to_string()))?;
-        let mut guard = GroupGuard(Tree::of(&child));
+        let guard = GroupGuard(Tree::of(&child));
         if let (Some(input), Some(mut pipe)) = (self.stdin, child.stdin.take()) {
             // 다 쓰면 닫는다(버려 EOF). 쓰기 오류(git 이 먼저 끝나 파이프가 닫힘)는 무시한다.
             tokio::spawn(async move {
                 let _ = pipe.write_all(&input).await;
             });
         }
-        let stdout = collect(child.stdout.take());
+        let stdout = child.stdout.take();
         let stderr = collect(child.stderr.take());
+        Ok(Running {
+            child,
+            guard,
+            stdout,
+            stderr,
+        })
+    }
+}
+
+/// 띄운 git([`GitCommand::spawn`]).
+pub struct Running {
+    child: tokio::process::Child,
+    guard: GroupGuard,
+    stdout: Option<tokio::process::ChildStdout>,
+    stderr: Collector,
+}
+
+impl Running {
+    /// git 의 stdout. 한 번만 꺼낼 수 있다.
+    pub fn stdout(&mut self) -> Option<tokio::process::ChildStdout> {
+        self.stdout.take()
+    }
+
+    /// 끝날 때까지 기다린다. 결과의 `stdout` 은 비어 있다(부른 쪽이 읽었다). 취소는 [`GitCommand::output`] 과 같다.
+    pub async fn wait(self, cancel: &CancellationToken) -> Result<Output, RunError> {
+        self.finish(cancel, None).await
+    }
+
+    async fn finish(
+        mut self,
+        cancel: &CancellationToken,
+        stdout: Option<Collector>,
+    ) -> Result<Output, RunError> {
         let status = tokio::select! {
-            status = child.wait() => status.map_err(|e| RunError::Spawn(e.to_string()))?,
+            status = self.child.wait() => status.map_err(|e| RunError::Spawn(e.to_string()))?,
             () = cancel.cancelled() => {
-                terminate(&mut child, guard.0.take()).await;
+                terminate(&mut self.child, self.guard.0.take()).await;
                 return Err(RunError::Cancelled);
             }
         };
-        if let Some(tree) = guard.0.take() {
+        if let Some(tree) = self.guard.0.take() {
             tree.release();
         }
-        let (stdout, stderr) = tokio::join!(stdout.finish(), stderr.finish());
+        let stdout = async {
+            match stdout {
+                Some(stdout) => stdout.finish().await,
+                None => Vec::new(),
+            }
+        };
+        let (stdout, stderr) = tokio::join!(stdout, self.stderr.finish());
         Ok(Output {
             status,
             stdout,

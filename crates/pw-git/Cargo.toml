@@ -17,6 +17,7 @@ encoding_rs = "0.8.35"
 # 이미 들어와 있는 `gix-attributes`(pw-lang) · `gix-parallel`(pw-fs)과 같은 gitoxide 릴리스다. 올릴 때 셋을 함께 올린다.
 # `status`: 작업 트리 상태(M2-02, `src/status`). `parallel`: status 의 index↔작업 트리 비교 · 디렉터리 걷기를 스레드로 나누고 중간에
 # 멈출 수 있게 한다(없으면 결과를 다 모은 뒤에야 돌려주고 멈추지 못한다). `mailmap`: 로그의 작성자(`log::commit`).
+# `blame`: 미신뢰 프로젝트 · git 이 없을 때의 blame 엔진(M2-05, `src/blame/native.rs` — 신뢰한 프로젝트는 git CLI 다).
 gix = { version = "0.90.0", default-features = false, features = [
   "sha1",
   "blob-diff",
@@ -24,6 +25,7 @@ gix = { version = "0.90.0", default-features = false, features = [
   "status",
   "parallel",
   "mailmap",
+  "blame",
 ] }
 # git 디렉터리 감시(M2-02, `src/watch`). 버전은 pw-fs · pw-core 와 같다.
 notify = "8.2.0"
@@ -84,3 +86,8 @@ required-features = ["test-support"]
 [[example]]
 # 합성 저장소에서 `git.log` 첫 청크 · 전체 배치 시간을 잰다(release).
 name = "log_timing"
+
+[[example]]
+# 결정 M2-D1 의 되돌림 판정: blame 첫 청크 · 전체 시간을 gix · git CLI 로 잰다(release, `docs/design/13-m2-plan.md` M2-05).
+name = "blame_timing"
+required-features = ["test-support"]

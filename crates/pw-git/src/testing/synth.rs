@@ -43,10 +43,10 @@ const KINDS: [&str; 4] = ["feat", "fix", "refactor", "docs"];
 const MAX_BRANCHES: usize = 24;
 
 /// SplitMix64 — 의존성 없이 시드로 정해지는 수열.
-struct Rng(u64);
+pub(super) struct Rng(pub(super) u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -55,7 +55,7 @@ impl Rng {
     }
 
     /// `0..n`.
-    fn below(&mut self, n: usize) -> usize {
+    pub(super) fn below(&mut self, n: usize) -> usize {
         (self.next() % n as u64) as usize
     }
 }
@@ -363,7 +363,7 @@ pub fn fanout(
 }
 
 /// `git init` 하고 fast-import 입력 `stream` 을 들인다.
-fn import(dir: &Path, ceiling: &Path, stream: &[u8]) -> std::io::Result<()> {
+pub(super) fn import(dir: &Path, ceiling: &Path, stream: &[u8]) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     run(git_command(dir, ceiling).args(["init", "--quiet"]))?;
     let mut child = git_command(dir, ceiling)
@@ -376,7 +376,7 @@ fn import(dir: &Path, ceiling: &Path, stream: &[u8]) -> std::io::Result<()> {
 }
 
 /// 팩을 하나로 묶고 작업 트리를 `main` 에 맞춘다.
-fn finish(dir: &Path, ceiling: &Path) -> std::io::Result<()> {
+pub(super) fn finish(dir: &Path, ceiling: &Path) -> std::io::Result<()> {
     run(git_command(dir, ceiling).args(["-c", "repack.writeBitmaps=false", "repack", "-adq"]))?;
     // fast-import 는 HEAD 가 가리키는 `main` 을 체크아웃하지 않는다 — 작업 트리를 맞춘다(status 가 깨끗하게).
     run(git_command(dir, ceiling).args(["reset", "--quiet", "--hard", "main"])).map(drop)

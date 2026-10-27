@@ -481,6 +481,20 @@ export type StreamMethods = {
 	 */
 	"fs.watch": { params: FsWatchParams; item: FsWatching };
 	/**
+	 * 파일의 줄마다 마지막으로 바꾼 커밋(F4-7 · F5-17). 범위마다 커밋 · 그 커밋에서의 경로(이름 바뀜 추적) · 「이 커밋
+	 * 이전으로」 의 부모와 경로, 커밋마다 작성자 · 시각 · 제목(처음 나올 때 한 번). 첫 청크에 그 리비전의 해시 · 줄 수 · 엔진.
+	 * 작업 트리 · 저장하지 않은 편집은 blame 하지 않는다. 저장소가 없거나 HEAD 가 태어나지 않았거나 그 리비전에 파일이 없으면
+	 * 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 폴더 · 50 MiB 넘는 파일은 invalid params.
+	 */
+	"git.blame": { params: GitBlameParams; item: BlameChunk };
+	/**
+	 * 이름 바뀜을 따라가는 파일 히스토리(F5-16 — `git log --follow --name-status` 와 같은 커밋 · 순서 · 상태). 행마다 해시 ·
+	 * 부모 · 제목 · 작성자 · 시각 · 그 커밋에서의 경로 · 바뀜(A · M · D · R · C · T)과 이름 바뀜의 원래 경로. 첫 청크는 200행
+	 * 이하, 그 뒤는 500행 이하이고 모인 행은 100 ms 안에 보낸다. 저장소가 없거나 HEAD 가 태어나지 않았으면 청크 없이 끝난다.
+	 * 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 시작 리비전에서 폴더인 경로는 invalid params.
+	 */
+	"git.fileHistory": { params: GitFileHistoryParams; item: FileHistoryChunk };
+	/**
 	 * 커밋 로그(F5-1 · F5-2). 행마다 해시 · 부모 · 제목 · 작성자 · 시각 · ref 장식 · 레인 배치. 첫 청크는 200행을 배치하자마자
 	 * 보내고(`total` 이 실린다) 나머지는 500행씩. 브랜치 밖의 필터가 켜지면 행의 `graph` 가 `null` 이고 맞는 커밋만 온다.
 	 * 저장소가 없으면 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 모르는 ref, 잘못된 정규식 · 경로 · 해시는 invalid params.
@@ -539,6 +553,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.trash": {"name":"fs.trash","kind":"unary","tier":"write","roles":["owner"],"params":"FsTrashParams","output":"FsTrashed","doc":" 항목들을 OS 휴지통에 넣는다(`permanent` 면 영구히 지운다). 넣지 못한 것은 `failed` 에 이유와 함께.\n","mcp":false,"fileScope":false},
 	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":false,"fileScope":true},
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":false,"fileScope":true},
+	"git.blame": {"name":"git.blame","kind":"stream","tier":"read","roles":["owner"],"params":"GitBlameParams","output":"BlameChunk","doc":" 파일의 줄마다 마지막으로 바꾼 커밋(F4-7 · F5-17). 범위마다 커밋 · 그 커밋에서의 경로(이름 바뀜 추적) · 「이 커밋\n 이전으로」 의 부모와 경로, 커밋마다 작성자 · 시각 · 제목(처음 나올 때 한 번). 첫 청크에 그 리비전의 해시 · 줄 수 · 엔진.\n 작업 트리 · 저장하지 않은 편집은 blame 하지 않는다. 저장소가 없거나 HEAD 가 태어나지 않았거나 그 리비전에 파일이 없으면\n 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 폴더 · 50 MiB 넘는 파일은 invalid params.\n","mcp":false,"fileScope":false},
 	"git.blob": {"name":"git.blob","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlobParams","output":"GitBlob","doc":" 리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).\n","mcp":false,"fileScope":false},
 	"git.branch.create": {"name":"git.branch.create","kind":"unary","tier":"write","roles":["owner"],"params":"GitBranchCreateParams","output":"GitBranchResult","doc":" 브랜치를 만든다(`git branch`, `checkout` 이면 `git switch --create`).\n","mcp":false,"fileScope":false},
 	"git.branch.delete": {"name":"git.branch.delete","kind":"unary","tier":"write","roles":["owner"],"params":"GitBranchDeleteParams","output":"GitBranchDeleteResult","doc":" 브랜치를 지운다(`git branch --delete`). 병합 안 된 브랜치는 `force` 없이 지우지 않는다 — `2101`(git 의 원문을 실어서).\n 결과의 이전 해시로 창이 [되돌리기] 를 단다.\n","mcp":false,"fileScope":false},
@@ -554,6 +569,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.discard": {"name":"git.discard","kind":"unary","tier":"write","roles":["owner"],"params":"GitDiscardParams","output":"GitDiscardResult","doc":" 작업 트리의 변경을 버린다(`git restore --worktree` — index 의 것으로). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n untracked · intent-to-add 경로는 지우지도 비우지도 않고 `untracked` 로 돌려준다. 작업 트리가 바뀌므로 미저장 문서를 먼저 확인한다(M2-06).\n","mcp":false,"fileScope":false},
 	"git.discardLines": {"name":"git.discardLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitDiscardLinesParams","output":"GitWorkTree","doc":" 작업 트리 diff 의 hunk · 줄을 골라 버린다(작업 트리에 `git apply -R`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n 작업 트리에서 지운 파일은 파일 단위(`git.discard`)로 되살린다.\n","mcp":false,"fileScope":false},
 	"git.fetch": {"name":"git.fetch","kind":"unary","tier":"write","roles":["owner"],"params":"GitFetchParams","output":"GitFetchResult","doc":" fetch: 원격 하나 또는 전부, prune 선택. 인증은 askpass 로 창에 묻는다.\n","mcp":false,"fileScope":false},
+	"git.fileHistory": {"name":"git.fileHistory","kind":"stream","tier":"read","roles":["owner"],"params":"GitFileHistoryParams","output":"FileHistoryChunk","doc":" 이름 바뀜을 따라가는 파일 히스토리(F5-16 — `git log --follow --name-status` 와 같은 커밋 · 순서 · 상태). 행마다 해시 ·\n 부모 · 제목 · 작성자 · 시각 · 그 커밋에서의 경로 · 바뀜(A · M · D · R · C · T)과 이름 바뀜의 원래 경로. 첫 청크는 200행\n 이하, 그 뒤는 500행 이하이고 모인 행은 100 ms 안에 보낸다. 저장소가 없거나 HEAD 가 태어나지 않았으면 청크 없이 끝난다.\n 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 시작 리비전에서 폴더인 경로는 invalid params.\n","mcp":false,"fileScope":false},
 	"git.log": {"name":"git.log","kind":"stream","tier":"read","roles":["owner"],"params":"GitLogParams","output":"LogChunk","doc":" 커밋 로그(F5-1 · F5-2). 행마다 해시 · 부모 · 제목 · 작성자 · 시각 · ref 장식 · 레인 배치. 첫 청크는 200행을 배치하자마자\n 보내고(`total` 이 실린다) 나머지는 500행씩. 브랜치 밖의 필터가 켜지면 행의 `graph` 가 `null` 이고 맞는 커밋만 온다.\n 저장소가 없으면 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 모르는 ref, 잘못된 정규식 · 경로 · 해시는 invalid params.\n","mcp":false,"fileScope":false},
 	"git.logPage": {"name":"git.logPage","kind":"unary","tier":"read","roles":["owner"],"params":"GitLogPageParams","output":"GitLogPage","doc":" `git.log` 의 쪽 단위(결정 M2-D7). 같은 행을 `cursor` 부터 많아야 `limit`(1~500)행. 저장소가 없으면 빈 쪽.\n","mcp":false,"fileScope":false},
 	"git.merge": {"name":"git.merge","kind":"unary","tier":"write","roles":["owner"],"params":"GitMergeParams","output":"GitHistoryResult","doc":" 리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.\n git 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.\n","mcp":false,"fileScope":false},
@@ -677,6 +693,72 @@ export type AskpassHint =
 "confirm" | 
 /**  알림만(ssh 의 `none` — 보안 키를 만지라는 안내). ssh 가 일을 마치면 도우미를 끝내고 질문이 닫힌다. 답은 `cancel`(내리기)만. */
 "notice";
+
+/**  `git.blame` 스트림의 항목 하나. */
+export type BlameChunk = {
+	/**  첫 청크에만 있다. */
+	file: BlameFile | null,
+	/**  이 청크의 범위가 처음 가리키는 커밋(앞 청크에 실린 커밋은 다시 싣지 않는다). */
+	commits: BlameCommit[],
+	/**  범위(순서는 정해져 있지 않다 — `git` 엔진은 찾는 대로 보낸다). */
+	ranges: BlameRange[],
+};
+
+/**  범위가 가리키는 커밋. 스트림에서 처음 나올 때 한 번만 실린다. */
+export type BlameCommit = {
+	/**  전체 해시(16진). */
+	hash: string,
+	/**  작성자(mailmap 적용). */
+	authorName: string,
+	authorEmail: string,
+	/**  작성 시각(유닉스 초). */
+	authorTime: number,
+	/**  제목(메시지 첫 문단을 한 줄로). */
+	subject: string,
+	/**
+	 *  경계 커밋(git 의 `boundary`): 첫 커밋(`blame.showRoot` 를 켜지 않았으면 — git 의 기본)이거나 얕은 클론의 끝이라 그 앞을 볼
+	 *  수 없는 커밋. 얕은 클론의 끝이면 이 커밋의 줄이 정말 이 커밋에서 생겼는지는 모른다.
+	 */
+	boundary: boolean,
+};
+
+export type BlameEngine = 
+/**  `git blame --incremental -M` — 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다. */
+"git" | 
+/**  gix blame — `git blame`(`-M` 없이)과 같다. 옮긴 줄은 옮긴 커밋의 것이다. */
+"gix";
+
+/**  blame 한 파일. 첫 청크에만 실린다. */
+export type BlameFile = {
+	/**  blame 한 커밋(받은 `rev` 를 푼 해시). */
+	commit: string,
+	/**  그 커밋에서의 파일 줄 수. 모든 청크의 범위를 합치면 1 ~ `lines` 를 겹치지 않고 한 번씩 덮는다. */
+	lines: number,
+	engine: BlameEngine,
+};
+
+/**  「이 커밋 이전으로」 의 대상: 부모 커밋과 그 부모에서의 파일 경로. */
+export type BlamePrevious = {
+	commit: string,
+	/**  저장소 꼭대기 기준 경로(`/` 구분). 이름이 바뀐 커밋이면 바뀌기 전 이름이다. */
+	path: string,
+};
+
+/**  연속한 줄 범위 하나와 그 줄을 마지막으로 바꾼 커밋. */
+export type BlameRange = {
+	/**  첫 줄(1부터, blame 한 리비전의 파일 기준). */
+	line: number,
+	/**  줄 수(1 이상). */
+	count: number,
+	/**  커밋 해시([`BlameChunk::commits`] 에 앞서 실렸다). */
+	commit: string,
+	/**  그 커밋에서의 경로(이름 바뀜을 따라간 것). */
+	sourcePath: string,
+	/**  그 커밋의 파일에서의 첫 줄(1부터). */
+	sourceLine: number,
+	/**  「이 커밋 이전으로」. 그 커밋이 첫 커밋이거나 부모에 그 파일이 없으면 `null`. */
+	previous: BlamePrevious | null,
+};
 
 export type Bom = "utf8" | "utf16Le" | "utf16Be";
 
@@ -1060,6 +1142,45 @@ export type FastForward =
 /**  늘 merge 커밋(`--no-ff`). */
 "never";
 
+export type FileChangeKind = 
+/**  `A`. */
+"added" | 
+/**  `M`(내용이나 실행 비트). */
+"modified" | 
+/**  `D`. */
+"deleted" | 
+/**  `R` — `oldPath` 에서 이름이 바뀌었다. */
+"renamed" | 
+/**  `C` — `oldPath` 를 복사했다(원본은 남았다). */
+"copied" | 
+/**  `T` — 파일 · 심볼릭 링크 · 서브모듈 사이에서 종류가 바뀌었다. */
+"typeChanged";
+
+/**  `git.fileHistory` 스트림의 항목 하나. */
+export type FileHistoryChunk = {
+	rows: FileHistoryRow[],
+};
+
+/**  파일 히스토리의 한 행. */
+export type FileHistoryRow = {
+	/**  전체 해시(16진). */
+	hash: string,
+	/**  부모 해시(커밋에 적힌 순서. 얕은 클론의 경계 커밋은 비어 있다). */
+	parents: string[],
+	/**  제목(메시지의 첫 문단을 한 줄로). */
+	subject: string,
+	/**  작성자(mailmap 적용). */
+	authorName: string,
+	authorEmail: string,
+	/**  작성 시각(유닉스 초). */
+	authorTime: number,
+	/**  이 커밋에서의 경로(저장소 꼭대기 기준, `/` 구분). 지운 커밋이면 지운 경로. */
+	path: string,
+	change: FileChangeKind,
+	/**  이름 바뀜 · 복사의 원래 경로(부모에서의 경로). */
+	oldPath: string | null,
+};
+
 /**  맞는 파일 하나. */
 export type FileMatch = {
 	/**  절대 경로. 루트 안 심링크를 지났으면 링크 쪽 경로다 — 실제 경로는 `fs.stat` 이 준다. */
@@ -1312,6 +1433,16 @@ export type FsWritten = {
 	mtimeMs: number | null,
 	/**  쓴 뒤의 `version`. 다음 쓰기의 `expectedVersion`. */
 	version: string,
+};
+
+export type GitBlameParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`git.repo` 와 같다). */
+	worktree?: string | null,
+	/**  저장소 꼭대기 기준 파일 경로(`/` 구분 — Windows 는 `\` 도 받는다). */
+	path: string,
+	/**  리비전(git 의 리비전 문법 — 「이 커밋 이전으로」 는 범위의 `previous` 커밋). 없으면 HEAD. */
+	rev?: string | null,
 };
 
 export type GitBlob = {
@@ -1641,6 +1772,16 @@ export type GitFetchParams = {
 export type GitFetchResult = {
 	/**  저장소의 작업 트리 꼭대기(절대 경로). */
 	workTree: string,
+};
+
+export type GitFileHistoryParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`git.repo` 와 같다). */
+	worktree?: string | null,
+	/**  저장소 꼭대기 기준 파일 경로(`/` 구분 — Windows 는 `\` 도 받는다). 그 리비전에 없는 경로(지운 파일)도 따라간다. */
+	path: string,
+	/**  시작 리비전(git 의 리비전 문법). 없으면 HEAD. */
+	rev?: string | null,
 };
 
 /**  merge · cherry-pick · revert · rebase 의 결과. */
