@@ -314,6 +314,7 @@ impl Status {
             if !opened.trusted {
                 crate::diff::changes::without_filter_drivers(&mut opened.repo)?;
             }
+            crate::diff::changes::without_safecrlf(&mut opened.repo)?;
             if let Some(why) = unsupported(&opened.repo) {
                 return Ok(Err(Some((display(&opened.target.work_tree), why))));
             }

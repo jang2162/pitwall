@@ -238,6 +238,18 @@ pub fn without_filter_drivers(repo: &mut gix::Repository) -> Result<(), RpcError
     Ok(())
 }
 
+/// 읽기 핸들에서 `core.safecrlf` 를 끈다 — git 에서 그것은 쓰기(`git add`)의 검사이고 `git diff` 는 경고만 낸다. gix 는 변환마다
+/// 검사해 `autocrlf=true` 에 LF 작업 트리 파일이면 변환을 거절한다(diff 가 내부 오류로 끝난다). [`without_filter_drivers`] 처럼
+/// 요청마다 새로 연 핸들의 메모리 안 설정만 바꾼다.
+pub fn without_safecrlf(repo: &mut gix::Repository) -> Result<(), RpcError> {
+    let mut config = repo.config_snapshot_mut();
+    config
+        .set_value(&gix::config::tree::Core::SAFE_CRLF, "false")
+        .map_err(internal)?;
+    config.commit().map_err(internal)?;
+    Ok(())
+}
+
 /// 요청의 두 쪽을 고른다. 커밋은 `(커밋, 트리)` 다.
 fn pair(repo: &gix::Repository, params: &GitDiffParams) -> Result<Pair, RpcError> {
     let invalid = || {

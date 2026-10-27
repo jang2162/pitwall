@@ -1157,3 +1157,21 @@ fn replaced_parents_do_not_reuse_kept_generations() {
         .map(|t| (t.ahead, t.behind));
     assert_eq!(track, Some((3, 0)));
 }
+
+/// `core.safecrlf=true` 는 git 에서 쓰기(`git add`)의 검사다 — `git status` 는 그것으로 실패하지 않는다. `autocrlf=true` 에 LF 작업
+/// 트리 파일이 있어도 상태는 git 과 같다(`crate::diff::changes::without_safecrlf`).
+#[test]
+fn safecrlf_does_not_fail_the_status_like_git() {
+    let r = TestRepo::with_commit();
+    r.write("lf.txt", "a\nb\n");
+    r.commit_all("lf");
+    r.write("lf.txt", "a\nB\n");
+    r.git(&["config", "core.autocrlf", "true"]);
+    r.git(&["config", "core.safecrlf", "true"]);
+    let fx = Fx::new();
+    let id = fx.project(r.root());
+    assert_same_status(&fx, &r, &id, None);
+    let got = fx.status(&id, None);
+    let lf = got.entries.iter().find(|e| e.path == "lf.txt").unwrap();
+    assert_eq!(lf.unstaged, Some(GitChange::Modified));
+}

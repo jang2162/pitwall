@@ -41,12 +41,14 @@ impl Git {
         show::contained_in(&opened.repo, &params.rev)
     }
 
-    /// `git.diff`. 미신뢰 프로젝트는 필터 드라이버를 모두 떼고 읽는다([`changes::without_filter_drivers`]).
+    /// `git.diff`. 미신뢰 프로젝트는 필터 드라이버를 모두 떼고 읽는다([`changes::without_filter_drivers`]). `core.safecrlf` 는
+    /// 보지 않는다([`changes::without_safecrlf`]).
     pub fn diff(&self, params: &GitDiffParams) -> Result<GitDiff, RpcError> {
         let mut opened = self.opened(&params.project_id, params.worktree.as_deref())?;
         if !opened.trusted {
             changes::without_filter_drivers(&mut opened.repo)?;
         }
+        changes::without_safecrlf(&mut opened.repo)?;
         changes::diff(&opened, params, &changes::Stats::default())
     }
 

@@ -580,3 +580,36 @@ fn autocrlf_leaves_files_committed_with_crlf_alone_like_git() {
         assert!(ours.contains("-b\r\n+B\r\n"), "{ours:?}");
     }
 }
+
+/// `core.safecrlf=true` 는 git 에서 쓰기(`git add`)의 검사다 — `git diff` 는 경고만 내고 diff 를 보인다. `autocrlf=true` 에 작업
+/// 트리가 LF 이면(되돌리면 CRLF 가 되어 왕복이 깨진다) gix 는 그 검사로 변환을 거절하므로, diff 읽기에서는 그 검사를 끈다.
+#[test]
+fn safecrlf_does_not_fail_a_work_tree_diff_like_git() {
+    let r = TestRepo::with_commit();
+    r.write("lf.txt", "a\nb\nc\n");
+    r.commit_all("lf");
+    r.write("lf.txt", "a\nB\nc\nD\n");
+    let repo = Repo::new(r);
+    fs::write(
+        repo.r.base().join("home/.gitconfig"),
+        "[core]\n\tautocrlf = true\n\tsafecrlf = true\n",
+    )
+    .unwrap();
+    let diff = repo.diff(None, DiffSide::WorkTree);
+    let ours: String = diff.files[0].hunks.iter().map(hunk_text).collect();
+    let git = repo.r.git(&[
+        "-c",
+        "core.autocrlf=true",
+        "-c",
+        "core.safecrlf=true",
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--",
+        "lf.txt",
+    ]);
+    let theirs = &git[git.find("@@").expect("git shows a hunk")..];
+    assert_eq!(ours, theirs);
+    assert!(ours.contains("-b\n+B\n"), "{ours:?}");
+}
