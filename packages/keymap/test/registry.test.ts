@@ -31,4 +31,15 @@ describe("ActionRegistry 인자", () => {
     expect(registry.run("x", {})).toBe(false);
     expect(run).not.toHaveBeenCalled();
   });
+
+  it("isAvailable 은 인자 필요 여부와 무관하게 등록 · 켜짐만 본다", () => {
+    const registry = new ActionRegistry();
+    let on = true;
+    registry.register({ id: "x", label: "x", args: true, enabled: () => on, run: vi.fn() });
+    expect(registry.isAvailable("x")).toBe(true);
+    expect(registry.isEnabled("x")).toBe(false);
+    on = false;
+    expect(registry.isAvailable("x")).toBe(false);
+    expect(registry.isAvailable("missing")).toBe(false);
+  });
 });

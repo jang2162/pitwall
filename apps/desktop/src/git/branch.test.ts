@@ -17,7 +17,7 @@ import { isVcsAction, keywordFilter } from "./branch-popup";
 import { BranchStore, watchBranch } from "./branch-state";
 import { headName, trackText } from "./branch-status";
 import { type BranchStrings, branchStrings } from "./branch-strings";
-import { compareCommits } from "./compare-action";
+import { canCompareCommits, compareCommits } from "./compare-action";
 import { switchWorktree } from "./git-branch-feature";
 import { GitStatusStore } from "./git-status";
 
@@ -286,7 +286,7 @@ describe("branch operations", () => {
     });
     const registry = new ActionRegistry();
     const compared = vi.fn();
-    registry.register({ id: "git.compareCommits", label: "compare", run: compared });
+    registry.register({ id: "git.compareCommits", label: "compare", args: true, run: compared });
     const { ops, calls } = opsWith({ refs: () => both, registry });
     const branch = { kind: "local", branch: both.branches[2]! } as const;
     const tag = { kind: "tag", tag: both.tags[0]! } as const;
@@ -322,7 +322,7 @@ describe("branch operations", () => {
   it("compares through the M2-15 action with { a: HEAD's branch, b: the chosen ref }", () => {
     const registry = new ActionRegistry();
     const run = vi.fn();
-    registry.register({ id: "git.compareCommits", label: "compare", run });
+    registry.register({ id: "git.compareCommits", label: "compare", args: true, run });
     const { ops, notify } = opsWith({ registry });
     ops.compare({ kind: "remote", branch: refs().remoteBranches[1]! });
     expect(run).toHaveBeenCalledWith({ a: "refs/heads/main", b: "refs/remotes/origin/topic" });
@@ -335,9 +335,27 @@ describe("compareCommits", () => {
     const registry = new ActionRegistry();
     expect(compareCommits(registry, { a: "x", b: "y" })).toBe(false);
     const run = vi.fn();
-    registry.register({ id: "git.compareCommits", label: "compare", run });
+    registry.register({ id: "git.compareCommits", label: "compare", args: true, run });
     expect(compareCommits(registry, { a: "x", b: "y" })).toBe(true);
     expect(run).toHaveBeenCalledWith({ a: "x", b: "y" });
+  });
+
+  // M2-15 의 액션은 `args: true` 라 `isEnabled` 가 늘 거짓이다 — 그걸로 보이면 [비교] 가 사라진다.
+  it("shows the compare entry for M2-15's args action while it is enabled, not otherwise", () => {
+    const registry = new ActionRegistry();
+    expect(canCompareCommits(registry)).toBe(false);
+    let ready = true;
+    registry.register({
+      id: "git.compareCommits",
+      label: "compare",
+      args: true,
+      enabled: () => ready,
+      run: vi.fn(),
+    });
+    expect(canCompareCommits(registry)).toBe(true);
+    ready = false;
+    expect(canCompareCommits(registry)).toBe(false);
+    expect(compareCommits(registry, { a: "x", b: "y" })).toBe(false);
   });
 });
 

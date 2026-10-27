@@ -51,8 +51,16 @@ export class ActionRegistry {
 
   /** 지금 (인자 없이) 실행할 수 있는가. 등록되지 않았거나 인자가 있어야 하는 액션(`args`)이면 거짓. */
   isEnabled(id: string): boolean {
+    return this.isAvailable(id) && this.actions.get(id)?.args !== true;
+  }
+
+  /**
+   * 등록됐고 지금 켜져 있는가 — 인자가 있어야 하는지는 보지 않는다. 다른 기능이 `run(id, args)` 로 부를 항목(예: 브랜치 팝업의
+   * [비교] → `git.compareCommits`)을 보일지 정할 때 쓴다. `isEnabled` 는 `args` 액션에 늘 거짓이라 이 판정에 쓸 수 없다.
+   */
+  isAvailable(id: string): boolean {
     const action = this.actions.get(id);
-    return action !== undefined && action.args !== true && (action.enabled?.() ?? true);
+    return action !== undefined && (action.enabled?.() ?? true);
   }
 
   /** 인자가 있어야 도는 액션인가(`Action.args`). */
@@ -78,7 +86,7 @@ export class ActionRegistry {
    */
   run(id: string, args?: unknown): boolean {
     const action = this.actions.get(id);
-    if (!action || !(action.enabled?.() ?? true)) return false;
+    if (!action || !this.isAvailable(id)) return false;
     if (action.args === true && args === undefined) return false;
     try {
       void Promise.resolve(action.run(args)).catch((e: unknown) =>

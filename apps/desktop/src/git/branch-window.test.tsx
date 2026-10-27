@@ -476,11 +476,12 @@ it("opens the branch popup with ⌃⇧B under a Korean IME and checks a remote b
   expect(values()).toEqual(["remote:refs/remotes/origin/topic"]);
   await choose("remote:refs/remotes/origin/topic");
   expect(popup()?.getAttribute("data-git-popup")).toBe("branch-menu");
-  // 비교 액션(M2-15)이 없는 창에서는 「비교」 를 두지 않는다.
+  // 「비교」 는 프로젝트 창이 등록한 M2-15 의 `git.compareCommits`(인자가 있어야 도는 액션)가 켜져 있어서 있다.
   expect(values()).toEqual([
     "menu:back",
     "menu:checkout",
     "menu:new",
+    "menu:compare",
     "menu:merge",
     "menu:rebase",
     "menu:favorite",
