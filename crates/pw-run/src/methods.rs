@@ -93,7 +93,8 @@ rpc_method! {
     /// 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB
     /// 이하)이고, 소비자가 읽지 않으면 Host 버퍼(512 KiB)가 찬 뒤 셸이 쓰기에서 멈춘다 — 기본 window(32)면 내보낸 청크와 합쳐
     /// 1 MiB 를 넘지 않는다. `terminalId` 는 이 세션(연결) 안에서만 유효하다. 없는 프로젝트 · 프로젝트 밖이거나 없는
-    /// `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).
+    /// `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 그 프로젝트의 창이 아닌 연결(웰컴 · 설정 · 다른 프로젝트 창)이면 permission
+    /// denied 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).
     pub TerminalCreate: "terminal.create" {
         params: TerminalCreateParams,
         stream: TerminalEvent,
@@ -136,7 +137,8 @@ pub fn register(router: &mut Router, terminals: Arc<Terminals>) {
     let resize = Arc::clone(&terminals);
     router
         .stream(TerminalCreate, move |ctx, params, sink| {
-            Arc::clone(&create).run(ctx.session(), params, sink)
+            let (create, scope) = (Arc::clone(&create), ctx.scope().clone());
+            async move { create.run(ctx.session(), &scope, params, sink).await }
         })
         .unary(TerminalInput, move |ctx, params: TerminalInputParams| {
             let result = input.input(ctx.session(), params.terminal_id, params.data.into_bytes());

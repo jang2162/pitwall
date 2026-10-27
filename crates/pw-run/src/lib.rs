@@ -31,9 +31,10 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use pw_core::config::ConfigStore;
+use pw_core::registry::exec::{ExecGrant, Launch, exec_grant};
 use pw_core::registry::path::{WorktreeRootError, normalize, worktree_link, worktree_root};
 use pw_core::registry::{Project, Registry as Projects, RegistryError};
-use pw_rpc::{RpcError, SessionId, StreamSink, code};
+use pw_rpc::{ConnectionScope, RpcError, SessionId, StreamSink, code};
 use pw_runtime::Runtime;
 
 use crate::methods::{TerminalCreateParams, TerminalEvent, TerminalId};
@@ -140,19 +141,23 @@ impl Terminals {
             .map(|(_, pty)| Arc::clone(pty))
     }
 
-    /// `terminal.create` 스트림 본체.
+    /// `terminal.create` 스트림 본체. 셸은 그 프로젝트의 창(`scope` 가 그 프로젝트)만 띄운다([`exec_grant`]) — 다른 프로젝트 창 ·
+    /// 웰컴 · 설정 · 파일 창이면 아무것도 띄우지 않고 `PERMISSION_DENIED` 로 끝난다.
     pub async fn run(
         self: Arc<Self>,
         owner: SessionId,
+        scope: &ConnectionScope,
         params: TerminalCreateParams,
         sink: StreamSink<TerminalEvent>,
     ) -> Result<(), RpcError> {
+        let grant = exec_grant(scope, &params.project_id, &Launch::Process)?;
         check_size(params.cols, params.rows)?;
         // 레지스트리 읽기 · 로그인 셸 기다리기 · 띄우기는 블로킹이다. 스트림이 그사이 버려지면 결과(`Live`)도 버려져 띄운 셸이 끝난다.
         let this = Arc::clone(&self);
-        let (live, started) = tokio::task::spawn_blocking(move || this.start(owner, &params))
-            .await
-            .map_err(|e| RpcError::internal(e.to_string()))??;
+        let (live, started) =
+            tokio::task::spawn_blocking(move || this.start(owner, &grant, &params))
+                .await
+                .map_err(|e| RpcError::internal(e.to_string()))??;
         sink.send(started).await?;
         pump(&live.pty, &sink).await?;
         let code = live.pty.exited().await;
@@ -163,12 +168,13 @@ impl Terminals {
     fn start(
         &self,
         owner: SessionId,
+        grant: &ExecGrant,
         params: &TerminalCreateParams,
     ) -> Result<(Live, TerminalEvent), RpcError> {
         let host = self.host()?;
         let project = host
             .projects
-            .get(&params.project_id)
+            .get(grant.project_id())
             .map_err(registry_error)?;
         // 워크트리는 `cwd` 를 줬어도 검사한다 — 위조한 워크트리 인자를 조용히 무시하지 않는다.
         let in_worktree = match &params.worktree {

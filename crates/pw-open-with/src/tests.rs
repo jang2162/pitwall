@@ -123,7 +123,20 @@ impl Fixture {
     }
 
     fn run(&self, params: OpenWithRunParams) -> OpenWithOutcome {
-        self.open_with.run(&params).unwrap()
+        self.try_run(&params).unwrap()
+    }
+
+    /// 그 프로젝트의 창(`ConnectionScope::Project(params.project_id)`)이 부른 것.
+    fn try_run(&self, params: &OpenWithRunParams) -> Result<OpenWithOutcome, RpcError> {
+        self.run_in(&ConnectionScope::Project(params.project_id.clone()), params)
+    }
+
+    fn run_in(
+        &self,
+        scope: &ConnectionScope,
+        params: &OpenWithRunParams,
+    ) -> Result<OpenWithOutcome, RpcError> {
+        self.open_with.run(scope, params)
     }
 }
 
@@ -274,8 +287,7 @@ fn the_project_root_follows_the_active_worktree() {
     // 다른 프로젝트의 워크트리는 받지 않는다.
     let other = f.project(&f.tmp.path().join("other"));
     let err = f
-        .open_with
-        .run(&OpenWithRunParams {
+        .try_run(&OpenWithRunParams {
             project_id: other.id,
             tool: Some("fake".to_owned()),
             worktree: Some(wt.display().to_string()),
@@ -464,8 +476,7 @@ fn rejects_a_relative_file_and_an_unknown_project() {
     let f = Fixture::new("schema = 1\n");
     let project = f.project(&f.tmp.path().join("p"));
     let err = f
-        .open_with
-        .run(&OpenWithRunParams {
+        .try_run(&OpenWithRunParams {
             project_id: project.id,
             tool: Some("zed".into()),
             file: Some("src/main.rs".into()),
@@ -474,8 +485,7 @@ fn rejects_a_relative_file_and_an_unknown_project() {
         .unwrap_err();
     assert_eq!(err.code, code::INVALID_PARAMS);
     let err = f
-        .open_with
-        .run(&OpenWithRunParams {
+        .try_run(&OpenWithRunParams {
             project_id: "0000000000000000".into(),
             tool: Some("zed".into()),
             ..OpenWithRunParams::default()
@@ -621,8 +631,7 @@ fn rejects_a_relative_worktree() {
     assert!(Path::new(&relative).join(".git").is_file(), "{relative}");
 
     let err = f
-        .open_with
-        .run(&OpenWithRunParams {
+        .try_run(&OpenWithRunParams {
             project_id: project.id.clone(),
             tool: Some("fake".into()),
             worktree: Some(relative.clone()),
@@ -710,4 +719,126 @@ fn the_default_vscode_opens_the_active_file_at_its_line_and_column() {
         other => panic!("{other:?}"),
     }
     assert_eq!(f.received("code"), expected);
+}
+
+/// 띄울 수 있는지는 부른 연결의 범위로 정한다(`pw_core::registry::exec`). 그 프로젝트의 창은 파일까지 연다. 웰컴 창(Host 연결)은
+/// 등록된 도구(또는 기본 도구)로 등록된 프로젝트 루트 그대로만 연다 — 워크트리 · 파일 · 줄 · 열을 넘기거나 목록에 없는 도구를
+/// 고르면 거절이다. 다른 프로젝트 창 · 파일 창은 아무것도 열지 못한다. 거절은 `PERMISSION_DENIED` 이고 도구가 돌지 않는다.
+#[test]
+fn only_the_project_window_and_the_welcome_windows_plain_open_launch_a_tool() {
+    let f = Fixture::new(&format!(
+        "{}\n[open_with]\ndefault = \"fake\"\n",
+        settings_with_tool(
+            "fake",
+            r#"["fake-tool", "{project_root}"]"#,
+            r#"["fake-tool", "{project_root}", "{file}:{line}:{column}"]"#,
+        )
+    ));
+    f.fake_tool("fake-tool");
+    let project = f.project(&f.tmp.path().join("p1"));
+    let other = f.project(&f.tmp.path().join("p2"));
+    let root = PathBuf::from(&project.roots[0]);
+    let file = root.join("a.txt");
+    fs::write(&file, "a").unwrap();
+    let ran = f.tmp.path().join("fake-tool.argv");
+    let plain = OpenWithRunParams {
+        project_id: project.id.clone(),
+        tool: Some("fake".into()),
+        ..OpenWithRunParams::default()
+    };
+    let denied = |scope: &ConnectionScope, params: &OpenWithRunParams| {
+        let error = f.run_in(scope, params).unwrap_err();
+        assert_eq!(error.code, code::PERMISSION_DENIED, "{scope:?} {params:?}");
+    };
+
+    let file_window = pw_rpc::Caller::file(pw_rpc::Role::Owner, file.clone()).scope;
+    for scope in [ConnectionScope::Project(other.id.clone()), file_window] {
+        denied(&scope, &plain);
+        denied(
+            &scope,
+            &OpenWithRunParams {
+                tool: None,
+                ..plain.clone()
+            },
+        );
+    }
+    let host = ConnectionScope::Host;
+    for params in [
+        // 목록에 없는 도구.
+        OpenWithRunParams {
+            tool: Some("not-registered".into()),
+            ..plain.clone()
+        },
+        // 프로젝트 루트가 아닌 곳 · 웹뷰가 고른 인자.
+        OpenWithRunParams {
+            worktree: Some(root.display().to_string()),
+            ..plain.clone()
+        },
+        OpenWithRunParams {
+            file: Some(file.display().to_string()),
+            ..plain.clone()
+        },
+        OpenWithRunParams {
+            line: Some(1),
+            ..plain.clone()
+        },
+        OpenWithRunParams {
+            column: Some(1),
+            ..plain.clone()
+        },
+    ] {
+        denied(&host, &params);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!ran.exists(), "a refused open ran the tool");
+
+    // 웰컴 창: 등록된 도구 · 기본 도구로 프로젝트 루트를 연다.
+    for params in [
+        plain.clone(),
+        OpenWithRunParams {
+            tool: None,
+            ..plain.clone()
+        },
+    ] {
+        let _ = fs::remove_file(&ran);
+        let outcome = f.run_in(&host, &params).unwrap();
+        assert!(
+            matches!(outcome, OpenWithOutcome::Launched { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(f.received("fake-tool"), [root.display().to_string()]);
+    }
+    // 레지스트리에 없는 프로젝트는 웰컴 창이어도 열지 않는다.
+    let error = f
+        .run_in(
+            &host,
+            &OpenWithRunParams {
+                project_id: "nope".into(),
+                ..plain.clone()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.code, code::INVALID_PARAMS);
+
+    // 그 프로젝트의 창은 파일 · 줄 · 열까지 연다.
+    let _ = fs::remove_file(&ran);
+    let outcome = f
+        .try_run(&OpenWithRunParams {
+            file: Some(file.display().to_string()),
+            line: Some(3),
+            column: Some(4),
+            ..plain.clone()
+        })
+        .unwrap();
+    assert!(
+        matches!(outcome, OpenWithOutcome::Launched { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        f.received("fake-tool"),
+        [
+            root.display().to_string(),
+            format!("{}:3:4", file.display())
+        ]
+    );
 }

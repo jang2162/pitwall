@@ -161,6 +161,8 @@ rpc_method! {
 
     /// 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는
     /// 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
+    /// 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로
+    /// 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.
     pub OpenWithRun: "openWith.run" {
         params: OpenWithRunParams,
         result: OpenWithOutcome,
@@ -189,8 +191,8 @@ pub fn register(router: &mut Router, open_with: Arc<OpenWith>) {
                 blocking(move || s.list(&params))
             },
         )
-        .unary(OpenWithRun, move |_ctx, params: OpenWithRunParams| {
-            let s = Arc::clone(&open_with);
-            blocking(move || s.run(&params))
+        .unary(OpenWithRun, move |ctx, params: OpenWithRunParams| {
+            let (s, scope) = (Arc::clone(&open_with), ctx.scope().clone());
+            blocking(move || s.run(&scope, &params))
         });
 }

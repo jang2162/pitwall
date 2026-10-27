@@ -13,7 +13,9 @@ use pw_core::registry::{NewProject, Registry as Projects};
 use pw_rpc::protocol::{
     STREAM_CHUNK, STREAM_CREDIT, STREAM_END, StreamChunk, StreamEnd, StreamOpened, StreamOutcome,
 };
-use pw_rpc::{Caller, EventHub, Id, Outbound, Response, Role, Router, Session, code};
+use pw_rpc::{
+    Caller, ConnectionScope, EventHub, Id, Outbound, Response, Role, Router, Session, code,
+};
 use pw_runtime::methods::RuntimeSource;
 use pw_runtime::{Cancel, Layer, LoginShell, ProviderError, RuntimeEnv, RuntimeProvider};
 use serde_json::{Value, json};
@@ -107,11 +109,22 @@ impl Fixture {
         }
     }
 
+    /// 그 프로젝트의 창으로 연결한 클라이언트.
     fn client(&self) -> Client {
+        self.client_in(ConnectionScope::Project(self.project.clone()))
+    }
+
+    fn client_in(&self, scope: ConnectionScope) -> Client {
         let mut router = Router::new();
         methods::register(&mut router, Arc::clone(&self.terminals));
-        let (session, rx) =
-            Session::new(Arc::new(router), EventHub::new(), Caller::new(Role::Owner));
+        let (session, rx) = Session::new(
+            Arc::new(router),
+            EventHub::new(),
+            Caller {
+                role: Role::Owner,
+                scope,
+            },
+        );
         Client {
             session,
             rx,
@@ -735,7 +748,6 @@ async fn bad_requests_are_invalid_params() {
         json!({"projectId": f.project, "cwd": "relative", "cols": 80, "rows": 24}),
         json!({"projectId": f.project, "cwd": f.root.join("missing"), "cols": 80, "rows": 24}),
         json!({"projectId": f.project, "cols": 0, "rows": 24}),
-        json!({"projectId": "nope", "cols": 80, "rows": 24}),
     ] {
         // 스트림 메서드는 먼저 열리고 핸들러의 오류로 끝난다.
         let response = c.call("terminal.create", params.clone()).await;
@@ -749,6 +761,28 @@ async fn bad_requests_are_invalid_params() {
             other => panic!("{params}: {other:?}"),
         }
     }
+    // 레지스트리에 없는 프로젝트(그 id 로 연 연결이어도).
+    let mut nope = f.client_in(ConnectionScope::Project("nope".into()));
+    let response = nope
+        .call(
+            "terminal.create",
+            json!({"projectId": "nope", "cols": 80, "rows": 24}),
+        )
+        .await;
+    let stream = response.result_as::<StreamOpened>().unwrap().stream_id;
+    match nope.end(stream).await {
+        (
+            events,
+            StreamEnd {
+                outcome: StreamOutcome::Failed { error },
+                ..
+            },
+        ) => {
+            assert_eq!(events, []);
+            assert_eq!(error.code, code::INVALID_PARAMS);
+        }
+        other => panic!("{other:?}"),
+    }
     let response = c
         .call("terminal.input", json!({"terminalId": 99, "data": "x"}))
         .await;
@@ -758,6 +792,72 @@ async fn bad_requests_are_invalid_params() {
         .await
         .outcome
         .unwrap();
+}
+
+/// 셸은 그 프로젝트의 창만 띄운다(`pw_core::registry::exec`): 웰컴 · 설정 창(Host 연결) · 다른 프로젝트 창 · 파일 창은 프로젝트
+/// 안의 어느 `cwd` 로도 `started` 없이 `PERMISSION_DENIED` 로 끝나고 셸이 돌지 않는다(설정한 셸이 남기는 표시 파일이 없다).
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_project_window_starts_a_shell_in_it() {
+    let marker = tempfile::tempdir().unwrap();
+    let ran = marker.path().join("ran");
+    let f = Fixture::new(&format!(
+        "schema = 1\n[terminal]\nshell = [\"/bin/sh\", \"-c\", \"echo started >> {}\"]\n",
+        ran.display()
+    ));
+    let other_root = f.tmp.path().join("other");
+    fs::create_dir_all(&other_root).unwrap();
+    let other = f
+        .terminals
+        .host()
+        .unwrap()
+        .projects
+        .create(NewProject {
+            root: other_root,
+            ..NewProject::default()
+        })
+        .unwrap()
+        .id;
+    let file = Caller::file(Role::Owner, f.root.join("a.txt")).scope;
+    for scope in [ConnectionScope::Host, ConnectionScope::Project(other), file] {
+        let mut c = f.client_in(scope.clone());
+        for params in [
+            f.create_params(80, 24),
+            json!({"projectId": f.project, "cwd": f.root, "cols": 80, "rows": 24}),
+        ] {
+            // 파일 창은 디스패처가 스트림을 열기 전에 막는다(`terminal.create` 는 `file_scope` 메서드가 아니다). 나머지는 열린
+            // 스트림이 핸들러의 거절로 끝난다.
+            let response = c.call("terminal.create", params.clone()).await;
+            let error = match response.result_as::<StreamOpened>() {
+                Err(error) => error,
+                Ok(opened) => match c.end(opened.stream_id).await {
+                    (
+                        events,
+                        StreamEnd {
+                            outcome: StreamOutcome::Failed { error },
+                            ..
+                        },
+                    ) => {
+                        assert_eq!(events, [], "{scope:?} {params}");
+                        error
+                    }
+                    other => panic!("{scope:?} {params}: {other:?}"),
+                },
+            };
+            assert_eq!(error.code, code::PERMISSION_DENIED, "{scope:?} {params}");
+        }
+    }
+    assert!(
+        lock(&f.terminals.sessions).is_empty(),
+        "no terminal was registered"
+    );
+    assert!(!ran.exists(), "no shell ran");
+
+    // 그 프로젝트의 창은 띄운다 — 같은 표시 파일이 생긴다(위의 「없다」 가 셸이 안 돌았다는 뜻임을 보인다).
+    let mut c = f.client();
+    let opened = c.open(f.create_params(80, 24)).await;
+    let (_, end) = c.end(opened.stream).await;
+    assert!(matches!(end.outcome, StreamOutcome::Completed), "{end:?}");
+    assert_eq!(fs::read_to_string(&ran).unwrap(), "started\n");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1324,7 +1424,14 @@ async fn node_version_follows_mise_toml(mise: Option<PathBuf>) {
     });
     let mut router = Router::new();
     methods::register(&mut router, Arc::clone(&terminals));
-    let (session, rx) = Session::new(Arc::new(router), EventHub::new(), Caller::new(Role::Owner));
+    let (session, rx) = Session::new(
+        Arc::new(router),
+        EventHub::new(),
+        Caller {
+            role: Role::Owner,
+            scope: ConnectionScope::Project(id.clone()),
+        },
+    );
     let mut c = Client {
         session,
         rx,

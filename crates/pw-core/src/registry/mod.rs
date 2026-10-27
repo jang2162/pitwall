@@ -14,6 +14,7 @@
 //! 변경은 [`Scope::Host`] 의 [`TOPIC_CHANGED`] 이벤트로 나간다.
 
 pub mod candidates;
+pub mod exec;
 pub mod info;
 pub mod methods;
 pub mod path;

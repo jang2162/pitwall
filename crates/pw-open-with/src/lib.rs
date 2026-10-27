@@ -19,11 +19,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use pw_core::config::{AppPaths, ConfigStore};
+use pw_core::registry::exec::{ExecGrant, Launch, OpenWithLaunch, exec_grant};
 use pw_core::registry::path::{PathRejected, WorktreeRootError, normalize, worktree_root};
 use pw_core::registry::{Project, Registry as Projects, RegistryError};
 use pw_ext::Registry;
 use pw_ext::template::{SubstituteError, substitute};
-use pw_rpc::{RpcError, code};
+use pw_rpc::{ConnectionScope, RpcError, code};
 use pw_runtime::Runtime;
 use pw_runtime::program::find_program;
 
@@ -212,8 +213,37 @@ impl OpenWith {
         })
     }
 
-    pub fn run(&self, params: &OpenWithRunParams) -> Result<OpenWithOutcome, RpcError> {
+    /// 외부 도구로 연다. 띄울 수 있는지는 부른 연결의 범위로 정한다([`exec_grant`]) — 그 프로젝트의 창은 워크트리 · 파일까지,
+    /// 웰컴 창(Host 연결)은 등록된 도구로 등록된 프로젝트 루트만 연다. 다른 프로젝트 창 · 파일 창은 `PERMISSION_DENIED`.
+    pub fn run(
+        &self,
+        scope: &ConnectionScope,
+        params: &OpenWithRunParams,
+    ) -> Result<OpenWithOutcome, RpcError> {
         let host = self.host()?;
+        let tools = self.tools(host);
+        let grant = exec_grant(
+            scope,
+            &params.project_id,
+            &Launch::OpenWith(OpenWithLaunch {
+                tool: params.tool.as_deref(),
+                registered: &|id| tools.iter().any(|t| t.id == id),
+                worktree: params.worktree.as_deref(),
+                file: params.file.as_deref(),
+                line: params.line,
+                column: params.column,
+            }),
+        )?;
+        self.launch(host, &grant, tools, params)
+    }
+
+    fn launch(
+        &self,
+        host: &HostParts,
+        grant: &ExecGrant,
+        tools: Vec<Tool>,
+        params: &OpenWithRunParams,
+    ) -> Result<OpenWithOutcome, RpcError> {
         // `{file}` · `{project_root}` 는 레지스트리 · 파일 RPC(`pw-fs`)와 같은 정규화를 지난다 — `.` · `..` · 심링크가 풀린 실제
         // 경로가 도구에 간다(없는 파일은 가장 깊은 있는 조상까지).
         let file = match &params.file {
@@ -223,9 +253,8 @@ impl OpenWith {
             None => None,
         };
         let (project, project_root) =
-            Self::project_and_root(host, &params.project_id, params.worktree.as_deref())?;
+            Self::project_and_root(host, grant.project_id(), params.worktree.as_deref())?;
         let project_root = normalize(&project_root).unwrap_or(project_root);
-        let tools = self.tools(host);
         let id = match &params.tool {
             Some(id) => id.clone(),
             None => match self.default_tool(host, Some((&project, &project_root)), &tools) {

@@ -312,6 +312,8 @@ export type UnaryMethods = {
 	/**
 	 * 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는
 	 * 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.
+	 * 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로
+	 * 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.
 	 */
 	"openWith.run": { params: OpenWithRunParams; result: OpenWithOutcome };
 	/**
@@ -493,7 +495,8 @@ export type StreamMethods = {
 	 * 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB
 	 * 이하)이고, 소비자가 읽지 않으면 Host 버퍼(512 KiB)가 찬 뒤 셸이 쓰기에서 멈춘다 — 기본 window(32)면 내보낸 청크와 합쳐
 	 * 1 MiB 를 넘지 않는다. `terminalId` 는 이 세션(연결) 안에서만 유효하다. 없는 프로젝트 · 프로젝트 밖이거나 없는
-	 * `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).
+	 * `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 그 프로젝트의 창이 아닌 연결(웰컴 · 설정 · 다른 프로젝트 창)이면 permission
+	 * denied 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).
 	 */
 	"terminal.create": { params: TerminalCreateParams; item: TerminalEvent };
 };
@@ -572,7 +575,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lang.list": {"name":"lang.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"LangList","doc":" 고를 수 있는 언어(상태바의 언어 수동 변경, F4-12)와 언어마다의 줄 주석. 앱이 시작할 때 읽은 확장 레지스트리 기준이다.\n","mcp":false,"fileScope":true},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n","mcp":false,"fileScope":true},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false,"fileScope":false},
-	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n","mcp":false,"fileScope":false},
+	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":false,"fileScope":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":false,"fileScope":false},
 	"project.claimTrustPrompt": {"name":"project.claimTrustPrompt","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"bool","doc":" 신뢰 확인 다이얼로그를 띄울 차례인가. 아직 묻지 않은 프로젝트면 미신뢰로 기록하고 `true` — 같은 프로젝트의 창이 여럿이어도\n 처음 부른 하나만 `true` 를 받는다. 이미 물었으면 `false`.\n","mcp":false,"fileScope":false},
 	"project.create": {"name":"project.create","kind":"unary","tier":"write","roles":["owner"],"params":"CreateProjectParams","output":"Project","doc":" 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.\n","mcp":false,"fileScope":false},
@@ -600,7 +603,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"task.cancel": {"name":"task.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"TaskCancelParams","output":"bool","doc":" 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.\n","mcp":false,"fileScope":false},
 	"task.list": {"name":"task.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"TaskListParams","output":"Vec<TaskInfo>","doc":" 끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.\n","mcp":false,"fileScope":false},
 	"terminal.close": {"name":"terminal.close","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalCloseParams","output":"()","doc":" 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다.\n","mcp":false,"fileScope":false},
-	"terminal.create": {"name":"terminal.create","kind":"stream","tier":"exec","roles":["owner"],"params":"TerminalCreateParams","output":"TerminalEvent","doc":" 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그\n 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB\n 이하)이고, 소비자가 읽지 않으면 Host 버퍼(512 KiB)가 찬 뒤 셸이 쓰기에서 멈춘다 — 기본 window(32)면 내보낸 청크와 합쳐\n 1 MiB 를 넘지 않는다. `terminalId` 는 이 세션(연결) 안에서만 유효하다. 없는 프로젝트 · 프로젝트 밖이거나 없는\n `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).\n","mcp":false,"fileScope":false},
+	"terminal.create": {"name":"terminal.create","kind":"stream","tier":"exec","roles":["owner"],"params":"TerminalCreateParams","output":"TerminalEvent","doc":" 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그\n 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB\n 이하)이고, 소비자가 읽지 않으면 Host 버퍼(512 KiB)가 찬 뒤 셸이 쓰기에서 멈춘다 — 기본 window(32)면 내보낸 청크와 합쳐\n 1 MiB 를 넘지 않는다. `terminalId` 는 이 세션(연결) 안에서만 유효하다. 없는 프로젝트 · 프로젝트 밖이거나 없는\n `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 그 프로젝트의 창이 아닌 연결(웰컴 · 설정 · 다른 프로젝트 창)이면 permission\n denied 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).\n","mcp":false,"fileScope":false},
 	"terminal.input": {"name":"terminal.input","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalInputParams","output":"()","doc":" 셸에 입력을 보낸다. 끝난 터미널 · 다른 세션이 연 터미널이면 invalid params 오류.\n","mcp":false,"fileScope":false},
 	"terminal.resize": {"name":"terminal.resize","kind":"unary","tier":"write","roles":["owner"],"params":"TerminalResizeParams","output":"()","doc":" PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 다른 세션이 연 터미널 · 0 인 크기는\n invalid params 오류.\n","mcp":false,"fileScope":false},
 	"theme.get": {"name":"theme.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ThemeGetParams","output":"ThemeFile","doc":" 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.\n","mcp":false,"fileScope":true},
