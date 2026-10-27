@@ -21,7 +21,9 @@ import type {
   Project,
   ProjectTrust,
 } from "@pitwall/rpc-client";
-import { act, StrictMode } from "react";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import { act as reactAct, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -50,8 +52,9 @@ const host = vi.hoisted(() => ({
   encodings: new Map<string, string>(),
   /** 경로 → stat 의 종류(FIFO 는 `other`). */
   kinds: new Map<string, EntryKind>(),
-  /** `fs.readBytes` 응답을 이만큼 늦춘다(ms, 느린 Host · 원격). */
-  readBytesDelayMs: 0,
+  /** 켜면 `fs.readBytes` 응답을 `held` 에 쌓아 두고 시험이 `releaseHeld()` 로 푼다(느린 Host · 원격, 타이머 없이). */
+  hold: false,
+  held: [] as (() => void)[],
   /** 경로 → mtime(바꾸면 `version` 도 바뀐다). 없으면 1. */
   mtimes: new Map<string, number>(),
   calls: [] as { method: string; params: Record<string, unknown> }[],
@@ -252,7 +255,7 @@ vi.mock("../tauri-transport", async () => {
                 data: base64(part),
                 eof: p.offset + part.length >= realSize(),
               } satisfies FsBytes);
-            if (host.readBytesDelayMs > 0) return void setTimeout(answer, host.readBytesDelayMs);
+            if (host.hold) return void host.held.push(answer);
             return answer();
           }
           case "fs.write":
@@ -319,6 +322,28 @@ const HANGUL = '// 한글 주석\nlet 이름 = "가나다";\n';
 
 let root: Root | undefined;
 
+// 시간 초과한 시험의 본문은 멈추지 않고 계속 돈다 — 그대로 두면 다음 시험의 act · DOM · inbox 와 겹쳐 같은 파일의 시험이
+// 줄줄이 실패한다. 시험마다 토큰을 달고, 끝난 시험이 act 를 부르면 던져서 본문을 끊는다.
+const testToken = new AsyncLocalStorage<{ ended: boolean }>();
+let liveToken: { ended: boolean } | undefined;
+const inFlight = new Set<PromiseLike<unknown>>();
+const act = ((callback: Parameters<typeof reactAct>[0]) => {
+  if (testToken.getStore()?.ended) throw new Error("이 시험은 이미 끝났다");
+  const result = reactAct(callback as never) as PromiseLike<unknown> | undefined;
+  if (typeof result?.then === "function") {
+    inFlight.add(result);
+    const done = () => void inFlight.delete(result);
+    void result.then(done, done);
+  }
+  return result;
+}) as typeof reactAct;
+const test = (name: string, body: () => Promise<void>) =>
+  it(name, () => {
+    const token = { ended: false };
+    liveToken = token;
+    return testToken.run(token, body);
+  });
+
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
@@ -347,7 +372,8 @@ beforeEach(() => {
   host.sizes = new Map();
   host.encodings = new Map([[EUC_KR, "EUC-KR"]]);
   host.kinds = new Map([[FIFO, "other"]]);
-  host.readBytesDelayMs = 0;
+  host.hold = false;
+  host.held = [];
   host.mtimes = new Map();
   host.calls = [];
   host.subscribers = [];
@@ -356,14 +382,35 @@ beforeEach(() => {
   localStorage.clear();
 });
 
-afterEach(() => {
-  act(() => root?.unmount());
+afterEach(async () => {
+  // 시험이 중간에 실패해도 다음 시험으로 넘기지 않는다: 쌓아 둔 응답을 버리고, 진행 중인 act 를 비우고 나서 내린다.
+  host.hold = false;
+  host.held = [];
+  if (liveToken) liveToken.ended = true;
+  // 끝난 시험이 남긴 act 가 마치기를 기다린다(영영 안 끝나도 1초만).
+  await Promise.race([Promise.allSettled(inFlight), new Promise((r) => setTimeout(r, 1000))]);
+  inFlight.clear();
+  await reactAct(async () => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
+  closeGuard = undefined;
   vi.restoreAllMocks();
 });
 
-const settle = () => act(async () => new Promise((r) => setTimeout(r, 30)));
+/** 쌓아 둔 `fs.readBytes` 응답을 모두 보낸다. */
+const releaseHeld = () =>
+  act(async () => {
+    for (const answer of host.held.splice(0)) answer();
+  });
+
+// 응답 · 렌더가 가라앉게 이벤트 루프를 한 바퀴 돌린다. 타이머를 길게 기다리면 부하에서 깨어나는 데 그만큼 더 걸린다.
+const settle = () =>
+  act(async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+/** 뷰어의 읽기 지연(16 ms)을 지나 「요청이 더 나가지 않았다」를 볼 때만 쓴다 — 늦게 깨어나는 것은 이 단언에 해롭지 않다. */
+const outwaitReadDelay = () => act(async () => new Promise((r) => setTimeout(r, 40)));
 
 async function mount() {
   const element = document.createElement("div");
@@ -465,15 +512,11 @@ async function pickMenu(label: string) {
   await settle();
 }
 
-it("shows a 1 GB file as not opened within a second without reading a byte, and hex reads only the last page at the end", async () => {
+test("shows a 1 GB file as not opened within a second without reading a byte, and hex reads only the last page at the end", async () => {
   await mount();
-  const started = performance.now();
+  // 「1초 안에」 는 벽시계가 아니라 진행으로 본다: 안내가 뜨는 데 읽기가 하나도 끼지 않는다(실제 시간 기준은 릴리스 확인 몫).
   await act(async () => projectOpenInbox.push({ file: HUGE }));
-  await vi.waitFor(() => expect(notice()?.textContent).toContain("50 MiB 를 넘는 파일"), {
-    timeout: 1000,
-    interval: 5,
-  });
-  expect(performance.now() - started).toBeLessThan(1000);
+  await vi.waitFor(() => expect(notice()?.textContent).toContain("50 MiB 를 넘는 파일"));
   expect(notice()?.textContent).toContain("1024.0 MiB");
   expect(bytesRead(HUGE)).toBe(0);
   expect(calls("fs.read")).toEqual([]);
@@ -486,6 +529,9 @@ it("shows a 1 GB file as not opened within a second without reading a byte, and 
 
   await click(document.querySelector("[data-notice-action=hex]")!);
   await vi.waitFor(() => expect(hexRows()[0]?.text).toContain("00000000"));
+  // 첫 읽기는 뷰어의 짧은 지연 뒤에 나간다 — 시간이 아니라 요청이 나간 것을 기다린다.
+  await vi.waitFor(() => expect(calls("fs.readBytes")).toHaveLength(1));
+  await outwaitReadDelay();
   // 첫 화면: 첫 페이지만.
   expect(calls("fs.readBytes")).toEqual([
     { projectId: "p1", worktree: null, path: HUGE, offset: 0, length: HEX_PAGE_BYTES },
@@ -528,28 +574,37 @@ it("shows a 1 GB file as not opened within a second without reading a byte, and 
   expect(document.activeElement).toBe(scroller);
 });
 
-it("asks a slow Host for a hex page once, however often the view scrolls within that page", async () => {
+test("asks a slow Host for a hex page once, however often the view scrolls within that page", async () => {
   // 응답이 오기 전에 같은 페이지 안에서 스크롤해도 그 페이지를 다시 요청하지 않고, 도착한 응답을 버리지 않는다.
-  host.readBytesDelayMs = 100;
+  host.hold = true;
   await mount();
   await open(HUGE);
   await click(document.querySelector("[data-notice-action=hex]")!);
   const scroller = document.querySelector<HTMLElement>("[data-hex-scroll]")!;
-  for (let i = 1; i <= 12; i++) {
-    await act(async () => {
-      scroller.scrollTop = i * 4;
+  const scrollTo = (top: number) =>
+    act(async () => {
+      scroller.scrollTop = top;
       scroller.dispatchEvent(new Event("scroll"));
     });
-    await act(async () => new Promise((r) => setTimeout(r, 40)));
-  }
-  // 1 GB 의 스크롤 축척에서 48px 은 수백 줄이다 — 아직 첫 페이지(4096줄) 안이다.
+  // 응답이 오기 전(시험이 쥐고 있다): 같은 페이지 안에서 거듭 스크롤해도 요청은 하나다.
+  await vi.waitFor(() => expect(host.held).toHaveLength(1));
+  for (let i = 1; i <= 3; i++) await scrollTo(i * 4);
+  await outwaitReadDelay();
+  expect(host.held).toHaveLength(1);
+  await releaseHeld();
+  await settle();
+  // 응답이 온 뒤: 도착한 응답을 버리지 않고, 같은 페이지 안의 스크롤은 다시 요청하지 않는다.
+  for (let i = 4; i <= 6; i++) await scrollTo(i * 4);
+  await outwaitReadDelay();
+  // 1 GB 의 스크롤 축척에서 24px 은 수백 줄이다 — 아직 첫 페이지(4096줄) 안이다.
   expect(hexRows()[0]!.offset).toBeGreaterThan(0);
   expect(hexRows()[0]!.offset).toBeLessThan(HEX_PAGE_BYTES);
   await vi.waitFor(() => expect(hexRows()[0]!.text).toContain("00 00 00 00"));
+  expect(host.held).toHaveLength(0);
   expect(calls("fs.readBytes").map((c) => c.offset)).toEqual([0]);
 });
 
-it("shows the first 1 MiB of a file over 50 MiB as read-only text", async () => {
+test("shows the first 1 MiB of a file over 50 MiB as read-only text", async () => {
   await mount();
   await open(LOG);
   expect(calls("fs.read")).toEqual([]);
@@ -576,7 +631,7 @@ it("shows the first 1 MiB of a file over 50 MiB as read-only text", async () => 
   expect(view.state.doc.length).toBe(HEAD_PREVIEW_BYTES);
 });
 
-it("does not read a FIFO and offers only an external tool", async () => {
+test("does not read a FIFO and offers only an external tool", async () => {
   await mount();
   await open(FIFO);
   expect(notice()?.textContent).toContain("일반 파일이 아니어서(FIFO · 장치 · 소켓) 열지 않는다");
@@ -590,10 +645,11 @@ it("does not read a FIFO and offers only an external tool", async () => {
   expect(menuItems()).not.toContain("hex 로 열기");
 });
 
-it("opens a binary file in hex, and as text or back from the tab menu", async () => {
+test("opens a binary file in hex, and as text or back from the tab menu", async () => {
   await mount();
   await open(BLOB);
-  await vi.waitFor(() => expect(hexRows()).toHaveLength(1));
+  // 바이트는 뷰어의 읽기 지연 뒤에 온다 — 줄이 아니라 내용이 뜨기를 기다린다.
+  await vi.waitFor(() => expect(hexRows()[0]?.text).toContain("7F 45"));
   expect(hexRows()[0]).toEqual({
     offset: 0,
     text: `00000000${"7F 45 4C 46 00 01 02 03  41 42 43 0A FF"}${" ".repeat(9)}.ELF....ABC..`,
@@ -622,7 +678,7 @@ it("opens a binary file in hex, and as text or back from the tab menu", async ()
   expect(views()).toEqual([]);
 });
 
-it("opens a text file in hex from the tab menu", async () => {
+test("opens a text file in hex from the tab menu", async () => {
   host.files.set("/work/demo/a.txt", new TextEncoder().encode("hi\n"));
   await mount();
   await open("/work/demo/a.txt");
@@ -630,11 +686,10 @@ it("opens a text file in hex from the tab menu", async () => {
   await openTabMenu();
   expect(menuItems()).not.toContain("텍스트로 열기");
   await pickMenu("hex 로 열기");
-  await vi.waitFor(() => expect(hexRows()).toHaveLength(1));
-  expect(hexRows()[0]!.text).toContain("68 69 0A");
+  await vi.waitFor(() => expect(hexRows()[0]?.text).toContain("68 69 0A"));
 });
 
-it("shows EUC-KR text in Hangul, read-only, and no key, save or close writes it back", async () => {
+test("shows EUC-KR text in Hangul, read-only, and no key, save or close writes it back", async () => {
   await mount();
   await open(EUC_KR, 1, 6);
   const view = views()[0]!;
@@ -664,7 +719,7 @@ it("shows EUC-KR text in Hangul, read-only, and no key, save or close writes it 
   expect(calls("fs.write")).toEqual([]);
 });
 
-it("shows UTF-8 with a broken byte in Hangul as UTF-8, read-only, and no key, save or close writes it back", async () => {
+test("shows UTF-8 with a broken byte in Hangul as UTF-8, read-only, and no key, save or close writes it back", async () => {
   // 쓰는 중인 한글 로그: 끝에 깨진 바이트 하나. 파일 전체를 다른 인코딩(windows-1252)으로 깨뜨려 보이지 않는다.
   const LOSSY = "/work/demo/app.log";
   host.files.set(LOSSY, Uint8Array.from([...Buffer.from(HANGUL), 0xff]));
@@ -692,7 +747,7 @@ it("shows UTF-8 with a broken byte in Hangul as UTF-8, read-only, and no key, sa
   expect(calls("fs.write")).toEqual([]);
 });
 
-it("says the save was blocked when the file turns read-only under unsaved edits, and the close dialog's Save keeps the window", async () => {
+test("says the save was blocked when the file turns read-only under unsaved edits, and the close dialog's Save keeps the window", async () => {
   // 편집하는 사이 디스크의 파일이 같은 글자의 EUC-KR 로 다시 저장됐다(외부 도구). 글자가 같아 배너 없이 판정만 바뀌어 읽기 전용이
   // 된다 — 그때 ⌘S · 닫기의 「저장」 이 말없이 성공한 것처럼 끝나면 편집이 사라진다.
   const NOTE = "/work/demo/note.txt";
@@ -737,7 +792,7 @@ it("says the save was blocked when the file turns read-only under unsaved edits,
   expect(calls("fs.write")).toEqual([]);
 });
 
-it("opens files one byte either side of the thresholds as decided", async () => {
+test("opens files one byte either side of the thresholds as decided", async () => {
   const text = new TextEncoder().encode("x\n");
   for (const [name, size] of [
     ["at-5m", EDITABLE_MAX],
@@ -767,7 +822,7 @@ it("opens files one byte either side of the thresholds as decided", async () => 
   expect(calls("fs.read")).toHaveLength(before);
 });
 
-it("turns highlighting and wrapping off for a line over 10,000 characters", async () => {
+test("turns highlighting and wrapping off for a line over 10,000 characters", async () => {
   host.files.set("/work/demo/min.js", new TextEncoder().encode(`var a=${"1+".repeat(5001)}1;`));
   host.files.set("/work/demo/ok.js", new TextEncoder().encode("var a = 1;\n"));
   await mount();
@@ -785,7 +840,7 @@ it("turns highlighting and wrapping off for a line over 10,000 characters", asyn
   expect(view.contentDOM.classList.contains("cm-lineWrapping")).toBe(false);
 });
 
-it("turns highlighting off when the judgment says so, even for a short text", async () => {
+test("turns highlighting off when the judgment says so, even for a short text", async () => {
   // 판정이 크기 등급으로 강조를 끄는 경우(5 MiB + 1 로 알려진 파일). 내용은 짧아 에디터 쪽 길이 검사(limits.ts 의
   // `overHighlightLimit`)는 걸리지 않는다 — 판정의 `highlight` 만 보고 꺼야 한다.
   host.files.set("/work/demo/big.js", new TextEncoder().encode("var a = 1;\n"));
