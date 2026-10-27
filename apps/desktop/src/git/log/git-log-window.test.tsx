@@ -221,8 +221,9 @@ const VIEW = { width: 900, height: 10 * ROW_HEIGHT };
 let root: Root | undefined;
 let theme: ThemeStore | undefined;
 let ctx: RecordingContext;
-/** M2-15 의 액션을 흉내 낸 것: 부른 인자. */
+/** M2-15 의 문서 액션을 부른 것(id · 인자). */
 let ran: { id: string; args: unknown }[];
+const GIT_DOCUMENT_ACTIONS = ["git.showCommit", "git.compareCommits", "git.openRevisionFile"];
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -250,25 +251,19 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
     () => ctx as unknown as CanvasRenderingContext2D,
   );
-  // M2-15 의 액션이 등록된 것처럼.
+  // M2-15 의 문서 액션은 프로젝트 창이 실제로 등록한다(인자가 있어야 도는 액션 — `isEnabled` 는 거짓). 탭을 여는 실행만 막고 부른
+  // 인자를 남긴다.
   ran = [];
-  const realGet = ActionRegistry.prototype.get;
-  const realEnabled = ActionRegistry.prototype.isEnabled;
-  const fake = (id: string) => ({
-    id,
-    label: id,
-    run: (args?: unknown) => {
-      ran.push({ id, args });
-    },
-  });
-  vi.spyOn(ActionRegistry.prototype, "get").mockImplementation(function (this: ActionRegistry, id) {
-    return id.startsWith("git.") ? fake(id) : realGet.call(this, id);
-  });
-  vi.spyOn(ActionRegistry.prototype, "isEnabled").mockImplementation(function (
+  const realRun = ActionRegistry.prototype.run;
+  vi.spyOn(ActionRegistry.prototype, "run").mockImplementation(function (
     this: ActionRegistry,
     id,
+    args,
   ) {
-    return id.startsWith("git.") ? true : realEnabled.call(this, id);
+    if (!GIT_DOCUMENT_ACTIONS.includes(id)) return realRun.call(this, id, args);
+    if (!this.isAvailable(id)) return false;
+    ran.push({ id, args });
+    return true;
   });
   window.history.replaceState(null, "", "/?window=project&project=p1");
   host.calls = [];
@@ -431,6 +426,9 @@ async function mouse(el: Element, type: "click" | "dblclick" | "contextmenu", x 
   });
   await settle();
 }
+
+const buttonText = (text: string) =>
+  [...document.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent === text);
 
 const menuItem = (text: string) =>
   [...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find((e) =>
@@ -782,6 +780,54 @@ it("creates a branch and cherry-picks the selected commits oldest first from the
   );
   // ref 가 움직였으니 [되돌리기] 줄이 선다.
   await vi.waitFor(() => expect(document.body.textContent).toContain("main: "));
+});
+
+it("turns off cherry-pick and revert when a merge commit is among the chosen", async () => {
+  // 넷째 행을 머지 커밋으로(부모 둘). 그래프는 그대로 — 메뉴는 부모 수만 본다.
+  host.rows = fixtureRows("synth").map((r, i) =>
+    i === 3 ? { ...r, parents: [hashOf(4), hashOf(9)] } : r,
+  );
+  await openLog();
+  await mouse(list()!, "contextmenu", 400, rowY(3));
+  expect(menuItem("Cherry-pick")!.getAttribute("data-disabled")).not.toBeNull();
+  expect(menuItem("커밋 되돌리기(Revert)")!.getAttribute("data-disabled")).not.toBeNull();
+  await press({ key: "Escape", code: "Escape" });
+  await mouse(list()!, "contextmenu", 400, rowY(2));
+  expect(menuItem("Cherry-pick")!.getAttribute("data-disabled")).toBeNull();
+  expect(menuItem("커밋 되돌리기(Revert)")!.getAttribute("data-disabled")).toBeNull();
+});
+
+it("shows the details · compare entries only while M2-15's actions are available, and calls them with registry.run", async () => {
+  await openLog();
+  // 프로젝트 창이 등록한 액션(인자가 있어야 도는 액션 — isEnabled 는 늘 거짓)이면 메뉴 · 버튼이 있다.
+  await clickRow(2);
+  await vi.waitFor(() => expect(buttonText("커밋 상세 탭으로 열기")).toBeDefined());
+  await mouse(list()!, "contextmenu", 400, rowY(2));
+  expect(menuItem("커밋 상세 탭으로 열기")).toBeDefined();
+  expect(menuItem("두 커밋 비교 탭으로 열기")).toBeDefined();
+  await press({ key: "Escape", code: "Escape" });
+
+  // 그 창에 액션이 없으면(꺼졌으면) 감추고, 더블클릭도 아무것도 부르지 않는다.
+  const realAvailable = ActionRegistry.prototype.isAvailable;
+  vi.spyOn(ActionRegistry.prototype, "isAvailable").mockImplementation(function (
+    this: ActionRegistry,
+    id,
+  ) {
+    return GIT_DOCUMENT_ACTIONS.includes(id) ? false : realAvailable.call(this, id);
+  });
+  await clickRow(4);
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-testid=git-log-detail]")).not.toBeNull(),
+  );
+  expect(buttonText("커밋 상세 탭으로 열기")).toBeUndefined();
+  await mouse(list()!, "contextmenu", 400, rowY(4));
+  expect(menuItem("새 브랜치…")).toBeDefined();
+  expect(menuItem("커밋 상세 탭으로 열기")).toBeUndefined();
+  expect(menuItem("두 커밋 비교 탭으로 열기")).toBeUndefined();
+  await press({ key: "Escape", code: "Escape" });
+  const before = ran.length;
+  await mouse(list()!, "dblclick", 400, rowY(4));
+  expect(ran.length).toBe(before);
 });
 
 it("resets hard only after confirming the lost changes, then undoes back with reset --keep", async () => {

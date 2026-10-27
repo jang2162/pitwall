@@ -7,12 +7,13 @@
 // - 브랜치 패널 · 필터 바 · 라벨 메뉴의 ref 는 따로 읽지 않고 창의 브랜치 상태(branch-state.ts — 상태바 · 브랜치 팝업과 같은
 //   `git.refs` 읽기 하나)를 쓴다.
 // - 쓰기(우클릭 · 라벨 끌어 놓기)는 log-ops.ts. ref 를 옮긴 결과가 오면 목록 위에 [되돌리기] 줄을 단다.
-// - 커밋 상세 탭 · 두 커밋 비교 탭 · 리비전 파일 열기는 M2-15 의 액션을 id 로 부른다(git-actions.ts).
+// - 커밋 상세 탭 · 두 커밋 비교 탭 · 리비전 파일 열기는 M2-15 의 액션을 id 로 부른다(`registry.run(id, args)`). 셋 다 인자가
+//   있어야 도는 액션이라 `isEnabled` 는 늘 거짓이다 — 메뉴 항목 · 버튼을 둘지는 `isAvailable` 로 정한다(없는 창이면 감춘다).
 
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import type { GitRefMove, GitRefs, LogRef, LogRow, ResetMode } from "@pitwall/rpc-client";
 import type { IDockviewPanelProps } from "dockview-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useFileDialogs } from "../../file-tree/file-dialogs";
 import { useKeymap } from "../../keymap/keymap-provider";
@@ -24,7 +25,6 @@ import { useBranch } from "../branch-state";
 import { BranchPanel } from "./branch-panel";
 import { CommitDetail } from "./commit-detail";
 import { FilterBar } from "./filter-bar";
-import { runGitAction } from "./git-actions";
 import { paletteOf } from "./graph-render";
 import { type DropTarget, LogList } from "./log-list";
 import { EMPTY_QUERY, LogModel, type LogQuery, type LogSource } from "./log-model";
@@ -206,10 +206,17 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
     [selectedKey],
   );
 
-  const openCommit = (rev: string) =>
-    runGitAction(registry, { id: "git.showCommit", args: { rev } });
-  const compare = (a: string, b: string) =>
-    runGitAction(registry, { id: "git.compareCommits", args: { a, b } });
+  // 액션이 등록 · 해제되면 다시 그린다(메뉴 항목을 둘지가 바뀐다).
+  useSyncExternalStore(registry.subscribe, registry.getVersion);
+  const openCommit = registry.isAvailable("git.showCommit")
+    ? (rev: string) => void registry.run("git.showCommit", { rev })
+    : undefined;
+  const compare = registry.isAvailable("git.compareCommits")
+    ? (a: string, b: string) => void registry.run("git.compareCommits", { a, b })
+    : undefined;
+  const openRevisionFile = registry.isAvailable("git.openRevisionFile")
+    ? (rev: string, path: string) => void registry.run("git.openRevisionFile", { rev, path })
+    : undefined;
   const copyHashes = (hashes: readonly string[]) => {
     if (hashes.length === 0) return;
     navigator.clipboard.writeText(hashes.join("\n")).then(
@@ -331,7 +338,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
                   onSelect={(index, mode) =>
                     setSelection((s) => selectRows(model.rows, s.selected, s.anchor, index, mode))
                   }
-                  onOpen={(row) => openCommit(row.hash)}
+                  onOpen={(row) => openCommit?.(row.hash)}
                   onCopy={() => copyHashes(selected)}
                   onContextRow={(row, ref) => {
                     if (!pendingDrop.current) setMenu({ kind: "row", row, ref });
@@ -384,9 +391,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
           strings={T.detail}
           formatDate={formatDate}
           onSelectCommit={selectHash}
-          onOpenFile={(rev, path) =>
-            runGitAction(registry, { id: "git.openRevisionFile", args: { rev, path } })
-          }
+          onOpenFile={openRevisionFile}
           onOpenCommit={openCommit}
           onCompare={compare}
         />
@@ -411,8 +416,9 @@ function RowMenu({
   ops: LogOps;
   strings: ReturnType<typeof useGitLogStrings>;
   isMerge(hash: string): boolean;
-  onOpen(rev: string): void;
-  onCompare(a: string, b: string): void;
+  /** 없으면 그 항목을 두지 않는다(M2-15 의 액션이 이 창에 없다). */
+  onOpen?(rev: string): void;
+  onCompare?(a: string, b: string): void;
   onCopy(hashes: readonly string[]): void;
 }) {
   const { row } = target;
@@ -461,7 +467,11 @@ function RowMenu({
       >
         {T.menu.cherryPick(commits.length)}
       </MenuItem>
-      <MenuItem onSelect={() => void ops.revert(commits, T.menu.revert(commits.length))}>
+      {/* 머지 커밋은 어느 부모 쪽으로 되돌릴지(`-m`)를 골라야 한다 — 아직 없다(13 「하지 않는 것」). */}
+      <MenuItem
+        disabled={commits.some(isMerge)}
+        onSelect={() => void ops.revert(commits, T.menu.revert(commits.length))}
+      >
         {T.menu.revert(commits.length)}
       </MenuItem>
       <ContextMenu.Sub>
@@ -486,15 +496,19 @@ function RowMenu({
       </ContextMenu.Sub>
       {SEPARATOR}
       <MenuItem onSelect={() => onCopy(commits)}>{T.menu.copyHash}</MenuItem>
-      <MenuItem disabled={many} onSelect={() => onOpen(hash)}>
-        {T.menu.showCommit}
-      </MenuItem>
-      <MenuItem
-        disabled={commits.length !== 2}
-        onSelect={() => onCompare(commits[1]!, commits[0]!)}
-      >
-        {T.menu.compare}
-      </MenuItem>
+      {onOpen && (
+        <MenuItem disabled={many} onSelect={() => onOpen(hash)}>
+          {T.menu.showCommit}
+        </MenuItem>
+      )}
+      {onCompare && (
+        <MenuItem
+          disabled={commits.length !== 2}
+          onSelect={() => onCompare(commits[1]!, commits[0]!)}
+        >
+          {T.menu.compare}
+        </MenuItem>
+      )}
     </>
   );
 }
@@ -510,7 +524,7 @@ function DropMenu({
   refs: GitRefs | undefined;
   ops: LogOps;
   strings: ReturnType<typeof useGitLogStrings>;
-  onCompare(a: string, b: string): void;
+  onCompare?(a: string, b: string): void;
 }) {
   // 메뉴에 보이는 것은 짧은 이름, git 에 넘기는 것은 ref 전체 이름(log-ops.ts 머리 주석).
   const source = target.source.name;
@@ -542,9 +556,11 @@ function DropMenu({
       >
         {T.menu.rebase(source, dest)}
       </MenuItem>
-      <MenuItem onSelect={() => onCompare(destRev, sourceRev)}>
-        {T.menu.compareRefs(dest, source)}
-      </MenuItem>
+      {onCompare && (
+        <MenuItem onSelect={() => onCompare(destRev, sourceRev)}>
+          {T.menu.compareRefs(dest, source)}
+        </MenuItem>
+      )}
     </>
   );
 }

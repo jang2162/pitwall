@@ -27,7 +27,7 @@ git-log-filter-date = Date
 git-log-filter-since = From
 git-log-filter-until = To
 git-log-filter-path = Path
-git-log-filter-path-hint = Paths from the repository root, comma separated
+git-log-filter-path-hint = Paths from the repository root, comma separated (quote a path with a comma)
 git-log-filter-clear = Clear filters
 git-log-filter-no-graph = Filters are on: matching commits only, without the graph
 

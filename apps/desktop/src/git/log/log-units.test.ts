@@ -20,7 +20,15 @@ import { fileRows } from "./commit-detail";
 import { selectRows } from "./git-log-tool-window";
 import { graphWidth, laneAt, laneColor, paletteOf, visibleRange } from "./graph-render";
 import { FOLDED_COLOR } from "./lanes";
-import { dayToUnix, EMPTY_QUERY, isHashText, listFiltered, LogModel, logParams } from "./log-model";
+import {
+  dayToUnix,
+  EMPTY_QUERY,
+  isHashText,
+  listFiltered,
+  LogModel,
+  logParams,
+  splitPaths,
+} from "./log-model";
 import { LogOps, lostLines, refFullName, refNameProblem } from "./log-ops";
 import { gitLogStrings } from "./strings";
 import { fixtureRows } from "./testing";
@@ -93,6 +101,19 @@ describe("logParams", () => {
     for (const hex of ["deadbee", "1234567", "a".repeat(40), "a".repeat(64), " ABCDEF0 "])
       expect(isHashText(hex)).toBe(true);
     expect(dayToUnix("nope", false)).toBeNull();
+  });
+
+  it("splits the path field on commas and newlines, keeping a quoted path's commas and spaces", () => {
+    expect(splitPaths("src/a.rs,\n docs ,")).toEqual(["src/a.rs", "docs"]);
+    expect(splitPaths('"a, b.txt", docs')).toEqual(["a, b.txt", "docs"]);
+    expect(splitPaths(' "x,y" , "  lead.txt"')).toEqual(["x,y", "  lead.txt"]);
+    expect(splitPaths('src/"one, two"/z.rs')).toEqual(["src/one, two/z.rs"]);
+    expect(splitPaths('my dir/file.txt, "open, unclosed')).toEqual([
+      "my dir/file.txt",
+      "open, unclosed",
+    ]);
+    expect(splitPaths(" , ,\n")).toEqual([]);
+    expect(logParams({ ...EMPTY_QUERY, paths: '"a,b", c' }).filter.paths).toEqual(["a,b", "c"]);
   });
 
   it("knows which filters drop the graph (everything but the branch filter)", () => {

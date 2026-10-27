@@ -24,7 +24,7 @@ git-log-filter-date = 날짜
 git-log-filter-since = 부터
 git-log-filter-until = 까지
 git-log-filter-path = 경로
-git-log-filter-path-hint = 저장소 기준 경로, 쉼표로 여럿
+git-log-filter-path-hint = 저장소 기준 경로, 쉼표로 여럿(쉼표가 든 경로는 큰따옴표로)
 git-log-filter-clear = 필터 지우기
 git-log-filter-no-graph = 필터가 켜져 그래프 없이 맞는 커밋만 보인다
 

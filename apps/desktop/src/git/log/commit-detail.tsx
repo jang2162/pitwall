@@ -117,7 +117,7 @@ function FileTree({
   files: readonly DiffFile[];
   rev: string;
   strings: GitLogStrings["detail"];
-  onOpenFile(rev: string, path: string): void;
+  onOpenFile?(rev: string, path: string): void;
 }) {
   return (
     <ul role="tree" aria-label={strings.files(files.length)} className="text-[12px]">
@@ -141,7 +141,7 @@ function FileTree({
             style={{ paddingLeft: 4 + row.depth * 12 }}
             onDoubleClick={() => {
               // 지운 파일은 새 리비전에 없다 — 부모 쪽을 연다.
-              onOpenFile(row.file.status === "deleted" ? `${rev}^` : rev, row.file.path);
+              onOpenFile?.(row.file.status === "deleted" ? `${rev}^` : rev, row.file.path);
             }}
           >
             <span className="truncate">{row.name}</span>
@@ -167,9 +167,10 @@ export interface CommitDetailProps {
   strings: GitLogStrings["detail"];
   formatDate(seconds: number): string;
   onSelectCommit(hash: string): void;
-  onOpenFile(rev: string, path: string): void;
-  onOpenCommit(rev: string): void;
-  onCompare(a: string, b: string): void;
+  /** 리비전의 파일 · 커밋 상세 탭 · 비교 탭(M2-15 의 액션). 그 액션이 이 창에 없으면 없다 — 버튼을 두지 않는다. */
+  onOpenFile?(rev: string, path: string): void;
+  onOpenCommit?(rev: string): void;
+  onCompare?(a: string, b: string): void;
 }
 
 export function CommitDetail(props: CommitDetailProps) {
@@ -269,13 +270,15 @@ function SingleDetail(props: CommitDetailProps & { rev: string }) {
                   : strings.containedLoading}
             </dd>
           </dl>
-          <button
-            type="button"
-            className="self-start rounded-sm border border-ui-border px-2 py-0.5 hover:bg-ui-hover"
-            onClick={() => props.onOpenCommit(rev)}
-          >
-            {strings.openCommit}
-          </button>
+          {props.onOpenCommit && (
+            <button
+              type="button"
+              className="self-start rounded-sm border border-ui-border px-2 py-0.5 hover:bg-ui-hover"
+              onClick={() => props.onOpenCommit?.(rev)}
+            >
+              {strings.openCommit}
+            </button>
+          )}
         </>
       )}
     </div>
@@ -298,13 +301,15 @@ function CompareDetail(props: CommitDetailProps & { a: string; b: string }) {
   return (
     <div data-testid="git-log-compare" className="flex flex-col gap-2 p-2 text-[12px]">
       <h3 className="font-semibold">{strings.compare(short(a), short(b))}</h3>
-      <button
-        type="button"
-        className="self-start rounded-sm border border-ui-border px-2 py-0.5 hover:bg-ui-hover"
-        onClick={() => props.onCompare(a, b)}
-      >
-        {strings.openCompare}
-      </button>
+      {props.onCompare && (
+        <button
+          type="button"
+          className="self-start rounded-sm border border-ui-border px-2 py-0.5 hover:bg-ui-hover"
+          onClick={() => props.onCompare?.(a, b)}
+        >
+          {strings.openCompare}
+        </button>
+      )}
       {diff?.kind === "done" ? (
         <>
           <h3 className="font-semibold">{strings.files(diff.value.length)}</h3>

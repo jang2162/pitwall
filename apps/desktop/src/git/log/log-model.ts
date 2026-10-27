@@ -25,7 +25,7 @@ export interface LogQuery {
   since: string;
   /** `YYYY-MM-DD`(그날 끝까지). */
   until: string;
-  /** 저장소 꼭대기 기준 경로. 쉼표 · 줄바꿈으로 여럿. */
+  /** 저장소 꼭대기 기준 경로. 쉼표 · 줄바꿈으로 여럿, 쉼표가 든 경로는 큰따옴표로 감싼다(`splitPaths`). */
   paths: string;
 }
 
@@ -58,6 +58,38 @@ export function dayToUnix(day: string, end: boolean): number | null {
   return Number.isNaN(date.getTime()) ? null : Math.floor(date.getTime() / 1000);
 }
 
+/**
+ * 경로 칸 → 경로 목록. 쉼표 · 줄바꿈으로 가르고 앞뒤 공백을 걷는다. 큰따옴표 안의 쉼표 · 공백은 경로의 글자다(`"a, b.txt", docs`
+ * → `a, b.txt` · `docs`). 닫지 않은 따옴표는 끝까지 한 경로다. 빈 것은 뺀다.
+ */
+export function splitPaths(text: string): string[] {
+  const paths: string[] = [];
+  // 따옴표 밖 글자는 앞뒤 공백을 걷고, 따옴표 안 글자는 그대로 붙인다.
+  let path = "";
+  let loose = "";
+  let quoted = false;
+  const flushLoose = (trimEnd: boolean) => {
+    const part = path === "" ? loose.trimStart() : loose;
+    path += trimEnd ? part.trimEnd() : part;
+    loose = "";
+  };
+  const end = () => {
+    flushLoose(true);
+    if (path !== "") paths.push(path);
+    path = "";
+  };
+  for (const ch of text) {
+    if (ch === '"') {
+      if (!quoted) flushLoose(false);
+      quoted = !quoted;
+    } else if (quoted) path += ch;
+    else if (ch === "," || ch === "\n") end();
+    else loose += ch;
+  }
+  end();
+  return paths;
+}
+
 /** 필터 바의 값 → `git.log` 의 `refs` · `filter`. `textAsHash` 면 텍스트 칸을 해시 접두로(모양이 해시일 때만). */
 export function logParams(
   query: LogQuery,
@@ -65,10 +97,7 @@ export function logParams(
 ): Pick<GitLogParams, "refs" | "filter"> & { filter: LogFilter } {
   const text = query.text.trim();
   const hash = textAsHash && isHashText(text);
-  const paths = query.paths
-    .split(/[,\n]/)
-    .map((p) => p.trim())
-    .filter((p) => p !== "");
+  const paths = splitPaths(query.paths);
   return {
     refs: query.refs.length > 0 ? [...query.refs] : null,
     filter: {

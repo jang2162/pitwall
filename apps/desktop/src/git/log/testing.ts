@@ -71,8 +71,8 @@ export class RecordingContext implements Ctx {
   }
 }
 
-/** 행 번호의 가짜 전체 해시. */
-export const hashOf = (i: number) => i.toString(16).padStart(40, "a");
+/** 행 번호의 가짜 전체 해시. 앞 8자리(짧은 해시)가 행 번호라 행마다 다르다 — 앞을 16진 글자로 채우면 `a3` 과 `3` 이 같아진다. */
+export const hashOf = (i: number) => i.toString(16).padStart(8, "0").padEnd(40, "a");
 
 const graphs = fixture as unknown as Record<string, { graphs: GraphRow[] }>;
 
