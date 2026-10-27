@@ -9,7 +9,8 @@
 //! - push: 로컬 브랜치 하나를 `refs/heads/<브랜치>:<대상>` 으로 보낸다. 대상은 터미널의 `git push` 가 보낼 곳을 git 의 규칙대로 셈한
 //!   것이고(설정의 push refspec · `push.default`), git 이 거절할 상황이면 아무것도 보내지 않고 [`code::PUSH_REFUSED`] 로 거절한다
 //!   ([`target`]). 그 대상을 명시해 보내므로 lease 의 ref 가 실제로 바뀌는 ref 와 같다. 창은 `git.push.plan` 으로 같은 계산을 먼저
-//!   본다. upstream 설정은 선택이다. **force 는 `--force-with-lease=<대상>:<마지막으로 본 원격 해시>` + `--force-if-includes` 한 꼴뿐이다**(결정 M2-D6 ②, [`push_args`])
+//!   본다 — 창이 그 계획의 원격 · 대상을 `expectedTarget` 로 주면, 계획 뒤에 설정이 바뀌어 다시 센 대상이 다를 때 아무것도
+//!   보내지 않고 [`pw_rpc::code::CONFLICT`] 로 끝낸다. upstream 설정은 선택이다. **force 는 `--force-with-lease=<대상>:<마지막으로 본 원격 해시>` + `--force-if-includes` 한 꼴뿐이다**(결정 M2-D6 ②, [`push_args`])
 //!   — 입력에 `force` 가 없고(모르는 필드는 거절한다), refspec 은 언제나 `refs/heads/` 로 시작해 `+` 가 붙을 자리가 없으며, 기대
 //!   해시는 전체 16진 해시만 받는다(빈 기대값 = 「원격에 없어야 한다」 도 받지 않는다).
 
@@ -171,6 +172,16 @@ pub async fn pull(
         .await
 }
 
+/// 창이 기대하는 push 대상: `git.push.plan` 의 `remote`(주소면 사용자 정보를 지운 것) · `remoteRef` 그대로.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitPushExpectedTarget {
+    pub remote: String,
+    pub remote_ref: String,
+}
+
 /// 보낼 것: 로컬 브랜치, 원격, 원격에서 바뀔 ref([`Planned::ready`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushPlan {
@@ -269,6 +280,20 @@ pub async fn plan(
     .map_err(|e| RpcError::internal(e.to_string()))?
 }
 
+/// 계획 뒤에 대상이 바뀌었다(설정이 바뀌었다) — 창이 본 곳이 아니라 아무것도 보내지 않았다. `data` 는 지금 셈한 대상.
+fn target_moved(actual: &GitPushExpectedTarget) -> WriteError {
+    WriteError::Rpc(
+        RpcError::new(
+            pw_rpc::code::CONFLICT,
+            format!(
+                "the push target is now `{}` on `{}`, not the planned one (the git config changed); nothing was pushed",
+                actual.remote_ref, actual.remote
+            ),
+        )
+        .with_data(serde_json::to_value(actual).unwrap_or_default()),
+    )
+}
+
 /// push 의 결과.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pushed {
@@ -278,8 +303,8 @@ pub struct Pushed {
     pub terminal: Option<GitPushTerminal>,
 }
 
-/// `git.push`. 대상은 [`target::plan`] 이 셈한다 — `remote_ref` 가 있으면 그것. `lease` 가 있으면 force push 다(창이 경고한
-/// 뒤에만, 결정 M2-D6 ①).
+/// `git.push`. 대상은 [`target::plan`] 이 셈한다 — `remote_ref` 가 있으면 그것. `expected` 가 있으면 셈한 원격 · 대상이 그것과
+/// 같을 때만 보낸다(아니면 [`pw_rpc::code::CONFLICT`]). `lease` 가 있으면 force push 다(창이 경고한 뒤에만, 결정 M2-D6 ①).
 #[allow(clippy::too_many_arguments)] // RPC 입력의 칸을 그대로 받는다.
 pub async fn push(
     write: &Arc<GitWrite>,
@@ -290,6 +315,7 @@ pub async fn push(
     remote_ref: Option<String>,
     set_upstream: bool,
     lease: Option<String>,
+    expected: Option<GitPushExpectedTarget>,
 ) -> Result<Pushed, WriteError> {
     check_push_input(branch.as_deref(), remote.as_deref(), remote_ref.as_deref())
         .map_err(WriteError::Rpc)?;
@@ -324,6 +350,15 @@ pub async fn push(
             let plan = planned
                 .ready()
                 .map_err(|refusal| WriteError::Rpc(refused(&refusal)))?;
+            if let Some(expected) = &expected {
+                let actual = GitPushExpectedTarget {
+                    remote: redact(&plan.remote),
+                    remote_ref: plan.remote_ref.clone(),
+                };
+                if actual != *expected {
+                    return Err(target_moved(&actual));
+                }
+            }
             ctx.run(
                 ctx.git()
                     .args(push_args(&plan, set_upstream, lease.as_deref())),

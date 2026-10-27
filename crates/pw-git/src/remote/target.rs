@@ -8,16 +8,20 @@
 //! - `remote.<원격>.push` 가 있으면 그것(`push.default` 는 쓰이지 않는다). 정확한 이름(`HEAD` 는 그 브랜치)을 먼저 맞추고, 그다음
 //!   로컬 ref 마다 처음 맞는 패턴, 패턴이 없으면 `:`(matching — 원격에 같은 이름이 있을 때만)이다. 이미 다른 것을 보내는 원격 ref
 //!   에는 보내지 않고, `^` 가 고른 것은 뺀다. 이 브랜치를 보내는 것이 여럿이면(정확한 이름과 패턴이 둘 다 맞으면 git 은 둘 다
-//!   보낸다) 처음 것 — 정확한 이름이 먼저다.
+//!   보낸다) 처음 것 — 정확한 이름이 먼저다. 정확한 이름 둘이 한 원격 ref 로 보내면 git 처럼 거절한다. 정확한 이름의 대상이
+//!   짧으면(`refs/` 로 시작하지 않으면) 거절한다 — git 은 그 이름을 원격이 광고하는 ref 에서 찾아(`refs/heads/` 와 `refs/tags/`
+//!   에 다 있으면 거절) 정하는데, 이 계산은 원격의 ref 를 보지 않는다.
 //! - 없으면 `push.default`(없으면 `simple`): `nothing` · `matching`(맞는 브랜치를 모두 보내는 push 는 하지 않는다)은 거절,
 //!   `current` 는 같은 이름, `upstream`(`tracking`)은 upstream 브랜치(원격이 upstream 원격일 때만), `simple` 은 원격이 upstream
 //!   원격이면 upstream 의 이름이 같을 때만 같은 이름(다르면 거절)이고 다른 원격이면 `current` 와 같다. upstream 이 없으면
-//!   거절하되 `push.autoSetupRemote` 면 같은 이름이다.
+//!   거절하되 `push.autoSetupRemote` 면 같은 이름이다. `upstream` 의 `merge` 가 짧으면 짧은 대상과 같은 까닭으로 거절한다.
+//!
+//! 「원격이 하나뿐이면」 의 개수에는 설정의 원격 이름에 더해 push 원격(입력 · 설정의 주소나 설정에 없는 이름)도 센다 — git 은 그
+//! 원격도 원격 목록에 넣고 나서 upstream 원격을 다시 셈한다(`remote.c` 의 `make_remote` · `remote_for_branch`).
 //!
 //! 지금 브랜치가 아닌 브랜치도 그 브랜치가 지금 브랜치인 것처럼 셈한다. 네트워크를 쓰지 않으므로 원격에 무엇이 있는지(`:` 의
-//! 「원격에 같은 이름」)는 마지막 fetch · push 가 남긴 원격 추적 브랜치로 보고, 짧은 대상 이름은 원격의 ref 를 보지 않고 보내는
-//! 쪽의 이름 공간(`refs/heads/` · `refs/tags/`)으로 채운다. 신뢰와 상관없이 저장소 설정을 읽는다 — 값은 이름일 뿐 아무것도 띄우지
-//! 않는다(`crate::status::refs` 와 같다).
+//! 「원격에 같은 이름」)는 마지막 fetch · push 가 남긴 원격 추적 브랜치로 본다. 신뢰와 상관없이 저장소 설정을 읽는다 — 값은
+//! 이름일 뿐 아무것도 띄우지 않는다(`crate::status::refs` 와 같다).
 
 use std::collections::BTreeSet;
 
@@ -48,8 +52,13 @@ pub enum GitPushRefusalReason {
     NotPushedByConfig,
     /// `remote.<원격>.mirror` 가 켜져 있다.
     Mirror,
-    /// git 이 받지 않는 설정이다(모르는 `push.default`, 잘못됐거나 맞는 로컬 ref 가 없는 push refspec).
+    /// git 이 받지 않는 설정이다(모르는 `push.default`, 잘못됐거나 맞는 로컬 ref 가 없는 push refspec, 한 원격 ref 로 보내는
+    /// 정확한 refspec 둘).
     InvalidConfig,
+    /// 대상이 짧다(`refs/` 로 시작하지 않는다) — `remote.<원격>.push` 의 정확한 refspec 이나 `upstream` 모드의
+    /// `branch.<b>.merge`. git 은 원격이 광고하는 ref 로 그 이름을 정하므로(브랜치일 수도 태그일 수도, 둘 다면 거절) 원격의 ref
+    /// 를 보지 않고는 git 이 보낼 곳을 알 수 없다.
+    UnqualifiedDestination,
 }
 
 /// 거절. 창은 `candidates` 중 하나를 대상(`remoteRef`)으로 명시해 다시 부를 수 있다.
@@ -62,6 +71,7 @@ pub struct GitPushRefusal {
     /// 영어 설명(git 의 거절 문구와 같은 뜻). 원격 주소의 사용자 정보는 지웠다.
     pub message: String,
     /// 고를 만한 대상(원격의 전체 ref 이름) — upstream 브랜치(있고 이름이 다르면), 같은 이름 차례. `mirror` 면 비었다.
+    /// `unqualifiedDestination` 이고 그 짧은 대상이 이 브랜치의 것이면 원격에 그 이름이 없을 때 git 이 고를 것이 맨 앞이다.
     pub candidates: Vec<String>,
 }
 
@@ -89,7 +99,8 @@ pub struct GitPushTerminal {
     pub configured: Vec<String>,
     /// `push.default`(없으면 `simple`).
     pub push_default: String,
-    /// git 이 보낼 것(`[+]<로컬 ref>:<원격 ref>`, 로컬 ref 가 비었으면 그 원격 ref 를 지운다), 많아야 [`MAX_SENDS`] 개.
+    /// git 이 보낼 것(`[+]<로컬 ref>:<원격 ref>`, 로컬 ref 가 비었으면 그 원격 ref 를 지운다), 많아야 [`MAX_SENDS`] 개. 원격 ref
+    /// 가 짧으면(`refs/` 로 시작하지 않으면) 설정에 적힌 그대로다 — git 이 원격의 ref 로 정한다.
     pub sends: Vec<String>,
     /// `sends` 가 잘렸다.
     pub truncated: bool,
@@ -112,7 +123,7 @@ pub struct GitPushLease {
 /// [`GitPushTerminal::sends`] 의 상한.
 pub const MAX_SENDS: usize = 100;
 
-/// git 이 보낼 ref 하나. `src` 가 비었으면 원격 `dst` 를 지운다.
+/// git 이 보낼 ref 하나. `src` 가 비었으면 원격 `dst` 를 지운다. `dst` 가 `refs/` 로 시작하지 않으면 설정의 짧은 대상 그대로다.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Mapping {
     pub src: String,
@@ -266,20 +277,29 @@ pub fn plan(
     };
 
     let upstream_remote = config.value("branch", Some(&branch), "remote");
-    let remotes = repo.remote_names();
-    let default_remote = upstream_remote
-        .clone()
-        .or_else(|| {
-            (remotes.len() == 1)
-                .then(|| remotes.iter().next().map(|r| r.to_str_lossy().into_owned()))
-                .flatten()
-        })
-        .unwrap_or_else(|| "origin".to_owned());
+    // git 의 `remote_for_branch`: upstream 원격, 원격이 하나뿐이면 그것, 아니면 `origin`.
+    let remote_for_branch = |remotes: &BTreeSet<String>| {
+        upstream_remote
+            .clone()
+            .or_else(|| match remotes.iter().collect::<Vec<_>>().as_slice() {
+                [one] => Some((*one).clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "origin".to_owned())
+    };
+    let mut remotes: BTreeSet<String> = repo
+        .remote_names()
+        .iter()
+        .map(|r| r.to_str_lossy().into_owned())
+        .collect();
     let remote = remote
         .map(str::to_owned)
         .or_else(|| config.value("branch", Some(&branch), "pushRemote"))
         .or_else(|| config.value("remote", None, "pushDefault"))
-        .unwrap_or_else(|| default_remote.clone());
+        .unwrap_or_else(|| remote_for_branch(&remotes));
+    // git 은 push 원격(주소 · 설정에 없는 이름도)을 원격 목록에 넣은 뒤 upstream 원격을 다시 셈한다.
+    remotes.insert(remote.clone());
+    let default_remote = remote_for_branch(&remotes);
     let shown = redact(&remote);
 
     let merges: Vec<String> = config.values("branch", Some(&branch), "merge");
@@ -322,18 +342,38 @@ pub fn plan(
     } else if !configured.is_empty() {
         match configured_mappings(repo, &remote, &local, &configured) {
             Ok(sends) => {
-                let target = sends
-                    .iter()
-                    .find(|m| m.src == local)
-                    .map(|m| (m.dst.clone(), GitPushTargetSource::PushRefspec))
-                    .ok_or_else(|| {
-                        refuse(
-                            GitPushRefusalReason::NotPushedByConfig,
-                            format!(
-                                "remote.{shown}.push does not push `{branch}`; choose where to push it"
-                            ),
-                        )
-                    });
+                let target = if let Some(short) = sends.iter().find(|m| !m.dst.starts_with("refs/"))
+                {
+                    let mut refusal = refuse(
+                        GitPushRefusalReason::UnqualifiedDestination,
+                        format!(
+                            "remote.{shown}.push names the destination `{}` without refs/; git resolves it against the refs on `{shown}` (a branch or a tag), which this cannot see; choose where to push `{branch}`",
+                            short.dst
+                        ),
+                    );
+                    if let Some(guess) = sends
+                        .iter()
+                        .find(|m| m.src == local && !m.dst.starts_with("refs/"))
+                        .and_then(|m| guess_dst(&m.dst, &m.src))
+                    {
+                        refusal.candidates.retain(|c| *c != guess);
+                        refusal.candidates.insert(0, guess);
+                    }
+                    Err(refusal)
+                } else {
+                    sends
+                        .iter()
+                        .find(|m| m.src == local)
+                        .map(|m| (m.dst.clone(), GitPushTargetSource::PushRefspec))
+                        .ok_or_else(|| {
+                            refuse(
+                                GitPushRefusalReason::NotPushedByConfig,
+                                format!(
+                                    "remote.{shown}.push does not push `{branch}`; choose where to push it"
+                                ),
+                            )
+                        })
+                };
                 (Ok(sends), target)
             }
             Err(message) => {
@@ -382,7 +422,8 @@ pub fn plan(
                     "`{shown}` is not the upstream remote of `{branch}` (push.default is upstream); choose where to push it"
                 ),
             )),
-            "upstream" | "tracking" => upstream_ref().map(|up| qualify_branch(&up)),
+            // git 은 `merge` 값을 그대로 대상으로 쓴다 — 짧으면 원격의 ref 로 정한다(아래에서 거절).
+            "upstream" | "tracking" => upstream_ref(),
             "simple" if !same_remote => Ok(local.clone()),
             "simple" => upstream_ref().and_then(|up| {
                 if up == local {
@@ -414,10 +455,19 @@ pub fn plan(
                 }]
             })
         };
-        (
-            terminal,
-            dst.map(|dst| (dst, GitPushTargetSource::PushDefault)),
-        )
+        let target = dst.and_then(|dst| {
+            if dst.starts_with("refs/") {
+                Ok((dst, GitPushTargetSource::PushDefault))
+            } else {
+                Err(refuse(
+                    GitPushRefusalReason::UnqualifiedDestination,
+                    format!(
+                        "the upstream of `{branch}` is the short name `{dst}`; git resolves it against the refs on `{shown}` (a branch or a tag), which this cannot see; choose where to push it"
+                    ),
+                ))
+            }
+        });
+        (terminal, target)
     };
     // 사람이 준 대상이 이긴다 — mirror 만은 git 이 명시한 refspec 을 받지 않는다.
     let target = match input {
@@ -587,19 +637,13 @@ fn dwim(refs: &[String], pattern: &str) -> Result<String, String> {
     }
 }
 
-/// 짧은 대상 이름을 보내는 쪽의 이름 공간으로 채운다(git 의 `guess_ref` — 원격의 ref 는 보지 않는다).
-fn qualify_dst(dst: &str, src: &str) -> Result<String, String> {
-    if dst.starts_with("refs/") {
-        return Ok(dst.to_owned());
-    }
-    for space in ["refs/heads/", "refs/tags/"] {
-        if src.starts_with(space) {
-            return Ok(format!("{space}{dst}"));
-        }
-    }
-    Err(format!(
-        "the configured push refspec destination `{dst}` is not a full ref name"
-    ))
+/// 짧은 대상 이름에 원격의 어느 ref 도 맞지 않을 때 git 이 고르는 것(`guess_ref`): 보내는 쪽의 이름 공간(`refs/heads/` ·
+/// `refs/tags/`). 지우기거나 그 밖의 이름 공간이면 git 은 거절한다(`None`).
+fn guess_dst(dst: &str, src: &str) -> Option<String> {
+    ["refs/heads/", "refs/tags/"]
+        .into_iter()
+        .find(|space| src.starts_with(space))
+        .map(|space| format!("{space}{dst}"))
 }
 
 /// `remote.<원격>.push` 가 보낼 것(git 의 `match_push_refs`). `local` 은 이 브랜치(`HEAD` 가 가리키는 것으로 본다).
@@ -624,10 +668,10 @@ fn configured_mappings(
         .iter()
         .filter(|i| !i.negative && !i.matching() && !i.pattern())
     {
+        // 짧은 대상은 설정 그대로 둔다(원격의 ref 로 정해진다 — [`plan`] 이 거절한다).
         let (src, dst) = if item.src.is_empty() {
             // `:<dst>` 는 원격의 그 ref 를 지운다.
-            let dst = item.dst.unwrap_or_default();
-            (String::new(), qualify_dst(dst, "refs/heads/")?)
+            (String::new(), item.dst.unwrap_or_default().to_owned())
         } else {
             let src = if item.src == "HEAD" {
                 local.to_owned()
@@ -635,12 +679,21 @@ fn configured_mappings(
                 dwim(&refs, item.src)?
             };
             let dst = match item.dst.filter(|d| !d.is_empty()) {
-                Some(dst) => qualify_dst(dst, &src)?,
+                Some(dst) => dst.to_owned(),
                 None => src.clone(),
             };
             (src, dst)
         };
-        dsts.insert(dst.clone());
+        // git 의 `match_explicit`: 한 원격 ref 가 둘에게서 받으면 push 전체를 거절한다. 짧은 대상은 원격에 그 이름이 없을 때 git
+        // 이 고를 것으로 견준다.
+        let key = guess_dst(&dst, &src)
+            .filter(|_| !dst.starts_with("refs/"))
+            .unwrap_or_else(|| dst.clone());
+        if !dsts.insert(key.clone()) {
+            return Err(format!(
+                "the configured push refspecs send more than one source to `{key}` (dst ref receives from more than one src)"
+            ));
+        }
         out.push(Mapping {
             src,
             dst,

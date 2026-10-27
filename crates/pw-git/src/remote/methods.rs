@@ -7,7 +7,8 @@ use pw_rpc::{Router, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    GitPullMode, GitPushLease, GitPushRefusal, GitPushTargetSource, GitPushTerminal, redact,
+    GitPullMode, GitPushExpectedTarget, GitPushLease, GitPushRefusal, GitPushTargetSource,
+    GitPushTerminal, redact,
 };
 use crate::write::{GitWrite, OperationInfo};
 
@@ -94,6 +95,10 @@ pub struct GitPushParams {
     /// 준다.
     #[serde(default)]
     pub force_with_lease: Option<String>,
+    /// 창이 보인 대상(`git.push.plan` 의 `remote` · `remoteRef` 그대로). 주면 다시 센 대상이 이것과 다를 때(계획 뒤에 설정이
+    /// 바뀌었을 때) 아무것도 보내지 않고 `-32004`(conflict, `data` 는 지금 셈한 `{ remote, remoteRef }`)로 끝난다.
+    #[serde(default)]
+    pub expected_target: Option<GitPushExpectedTarget>,
 }
 
 #[derive(
@@ -188,7 +193,8 @@ rpc_method! {
 
 rpc_method! {
     /// push: 로컬 브랜치 하나를 그 원격 ref 로(대상은 `git.push.plan` 과 같은 계산). upstream 설정 선택. force 는
-    /// `forceWithLease` 뿐이다. git 이 거절할 대상이면 `2102`, 원격이 앞서 있으면 git 의 거절 원문으로 실패한다(`2004`).
+    /// `forceWithLease` 뿐이다. git 이 거절할 대상이면 `2102`, `expectedTarget` 와 대상이 다르면 `-32004`, 원격이 앞서 있으면
+    /// git 의 거절 원문으로 실패한다(`2004`).
     pub GitPushMethod: "git.push" {
         params: GitPushParams,
         result: GitPushResult,
@@ -233,6 +239,7 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
                 p.remote_ref,
                 p.set_upstream,
                 p.force_with_lease,
+                p.expected_target,
             )
             .await?;
             Ok(GitPushResult {

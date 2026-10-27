@@ -3,7 +3,7 @@
 //! 가 그대로다, 다른 꼴로 force 할 길이 없다(입력 · 설정 · 이름), git 이 거절할 대상이면 보내지 않는다(`2102`), 설정의 push
 //! refspec 이 정한 곳으로 간다. 대상 계산 자체는 `plan.rs` 가 진짜 `git push --dry-run` 과 대조한다.
 
-use super::super::methods::GitPushParams;
+use super::super::methods::{GitPushParams, plan_result};
 use super::super::*;
 use super::with_remote;
 use crate::testing::write::WriteFixture;
@@ -34,6 +34,7 @@ async fn push_to(
         remote_ref.map(str::to_owned),
         set_upstream,
         lease,
+        None,
     )
     .await
 }
@@ -168,6 +169,10 @@ fn the_lease_is_the_only_force() {
     };
     assert!(wire(serde_json::json!({})).is_ok());
     assert!(wire(serde_json::json!({"forceWithLease": hash})).is_ok());
+    assert!(
+        wire(serde_json::json!({"expectedTarget": {"remote": "origin", "remoteRef": "refs/heads/main"}}))
+            .is_ok()
+    );
     for extra in [
         serde_json::json!({"force": true}),
         serde_json::json!({"forcePush": true}),
@@ -310,4 +315,116 @@ async fn a_push_names_an_existing_local_branch() {
         );
     }
     assert_eq!(f.repo.remote_ref(&remote, "refs/heads/main"), before);
+}
+
+/// 원격 `main` 에서 만든 `feat`(upstream = origin/main)에 커밋 하나. 그 끝.
+fn feature_from_main(f: &WriteFixture) -> String {
+    f.repo.git(&[
+        "checkout",
+        "--quiet",
+        "-b",
+        "feat",
+        "--track",
+        "origin/main",
+    ]);
+    f.repo.commit_file("feat.txt", "feat\n", "feat")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_push_git_would_send_elsewhere_or_refuse_sends_nothing() {
+    let (f, remote) = with_remote();
+    f.repo.git(&["tag", "v1"]);
+    f.repo.git(&["push", "--quiet", "origin", "v1"]);
+    feature_from_main(&f);
+    let main = f.repo.remote_ref(&remote, "refs/heads/main");
+    let nothing_sent = |what: &str| {
+        for name in ["refs/heads/v1", "refs/heads/x", "refs/heads/feat"] {
+            assert_eq!(f.repo.remote_ref(&remote, name), None, "{what}: {name}");
+        }
+        assert_eq!(
+            f.repo.remote_ref(&remote, "refs/heads/main"),
+            main,
+            "{what}"
+        );
+    };
+
+    // 짧은 대상이 원격의 태그 이름이다 — git 은 `refs/tags/v1` 로 보내는데, 원격을 보지 않고 채우면 `refs/heads/v1` 을 새로
+    // 만든다.
+    f.repo.git(&["config", "remote.origin.push", "feat:v1"]);
+    let refused = refusal(push_branch(&f, None, false, None).await.unwrap_err());
+    assert_eq!(refused.reason, GitPushRefusalReason::UnqualifiedDestination);
+    nothing_sent("a short destination");
+
+    // 한 원격 ref 로 보내는 정확한 refspec 둘 — git 은 push 전체를 거절한다.
+    f.repo.git(&[
+        "config",
+        "remote.origin.push",
+        "refs/heads/feat:refs/heads/x",
+    ]);
+    f.repo.git(&[
+        "config",
+        "--add",
+        "remote.origin.push",
+        "refs/heads/main:refs/heads/x",
+    ]);
+    let refused = refusal(push_branch(&f, None, false, None).await.unwrap_err());
+    assert_eq!(refused.reason, GitPushRefusalReason::InvalidConfig);
+    nothing_sent("two sources to one destination");
+    f.repo.git(&["config", "--unset-all", "remote.origin.push"]);
+
+    // 이름 붙은 원격이 없고 push 원격이 주소다 — git 은 그 주소를 하나뿐인 원격으로 보아 upstream 을 요구한다.
+    let url = remote.url.clone();
+    f.repo.git(&["remote", "remove", "origin"]);
+    f.repo.git(&["config", "branch.feat.pushRemote", &url]);
+    let refused = refusal(push_branch(&f, None, false, None).await.unwrap_err());
+    assert_eq!(refused.reason, GitPushRefusalReason::NoUpstream);
+    nothing_sent("a URL push remote and no named remote");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_push_whose_target_changed_after_the_plan_sends_nothing() {
+    let (f, remote) = with_remote();
+    let main = f.repo.remote_ref(&remote, "refs/heads/main");
+    let tip = feature_from_main(&f);
+    f.repo.git(&["config", "push.default", "current"]);
+    let (_, planned) = plan(f.write.git(), f.project.clone(), None, None, None, None)
+        .await
+        .unwrap();
+    let shown = plan_result(String::new(), &planned);
+    let expected = GitPushExpectedTarget {
+        remote: shown.remote,
+        remote_ref: shown.remote_ref.unwrap(),
+    };
+    assert_eq!(expected.remote_ref, "refs/heads/feat");
+
+    // 다이얼로그가 계획을 보인 뒤 터미널에서 설정이 바뀌었다 — 다시 세면 대상이 main 이다.
+    f.repo.git(&["config", "push.default", "upstream"]);
+    let push_expecting = |expected: GitPushExpectedTarget| {
+        push(
+            &f.write,
+            f.project.clone(),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            Some(expected),
+        )
+    };
+    let e = RpcError::from(push_expecting(expected.clone()).await.unwrap_err());
+    assert_eq!(e.code, pw_rpc::code::CONFLICT, "{e:?}");
+    assert_eq!(
+        e.data,
+        Some(serde_json::json!({"remote": "origin", "remoteRef": "refs/heads/main"}))
+    );
+    assert_eq!(f.repo.remote_ref(&remote, "refs/heads/main"), main);
+    assert_eq!(f.repo.remote_ref(&remote, "refs/heads/feat"), None);
+
+    // 같은 대상이면 보낸다.
+    f.repo.git(&["config", "push.default", "current"]);
+    let pushed = push_expecting(expected).await.unwrap();
+    assert_eq!(pushed.plan.remote_ref, "refs/heads/feat");
+    assert_eq!(f.repo.remote_ref(&remote, "refs/heads/feat"), Some(tip));
+    assert_eq!(f.repo.remote_ref(&remote, "refs/heads/main"), main);
 }

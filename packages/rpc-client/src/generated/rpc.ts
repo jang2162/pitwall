@@ -159,7 +159,8 @@ export type UnaryMethods = {
 	"git.pull": { params: GitPullParams; result: GitPullResult };
 	/**
 	 * push: 로컬 브랜치 하나를 그 원격 ref 로(대상은 `git.push.plan` 과 같은 계산). upstream 설정 선택. force 는
-	 * `forceWithLease` 뿐이다. git 이 거절할 대상이면 `2102`, 원격이 앞서 있으면 git 의 거절 원문으로 실패한다(`2004`).
+	 * `forceWithLease` 뿐이다. git 이 거절할 대상이면 `2102`, `expectedTarget` 와 대상이 다르면 `-32004`, 원격이 앞서 있으면
+	 * git 의 거절 원문으로 실패한다(`2004`).
 	 */
 	"git.push": { params: GitPushParams; result: GitPushResult };
 	/**
@@ -482,7 +483,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.prompt.answer": {"name":"git.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"GitPromptAnswerParams","output":"()","doc":" 질문의 답. 그 프로젝트 창의 연결만 답할 수 있다. 처음 온 답만 받는다 — 이미 끝난 질문이면 not found, 종류에 맞지 않는\n 답이면 invalid params.\n","mcp":false,"fileScope":false},
 	"git.prompts": {"name":"git.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"GitPromptsParams","output":"GitPromptEvent","doc":" 프로젝트 창이 떠 있는 동안 열어 두는 질문 스트림: askpass 입력과 쓰기 전 미저장 확인. 열 때 아직 열린 질문이 먼저 온다.\n 그 프로젝트 창의 연결만 열 수 있다. 듣는 창이 없으면 askpass 는 바로 실패하고, 작업 트리를 바꾸는 쓰기는 하지 않는다\n (`2006`). 묻는 도중 창이 닫히면 askpass 는 실패하고 미저장 확인은 진행한다.\n","mcp":false,"fileScope":false},
 	"git.pull": {"name":"git.pull","kind":"unary","tier":"write","roles":["owner"],"params":"GitPullParams","output":"GitPullResult","doc":" pull(merge 또는 rebase). 작업 트리 전체가 미저장 확인 대상이다. 충돌로 멈추면 `stopped: true` 와 그 진행 중 작업.\n","mcp":false,"fileScope":false},
-	"git.push": {"name":"git.push","kind":"unary","tier":"write","roles":["owner"],"params":"GitPushParams","output":"GitPushResult","doc":" push: 로컬 브랜치 하나를 그 원격 ref 로(대상은 `git.push.plan` 과 같은 계산). upstream 설정 선택. force 는\n `forceWithLease` 뿐이다. git 이 거절할 대상이면 `2102`, 원격이 앞서 있으면 git 의 거절 원문으로 실패한다(`2004`).\n","mcp":false,"fileScope":false},
+	"git.push": {"name":"git.push","kind":"unary","tier":"write","roles":["owner"],"params":"GitPushParams","output":"GitPushResult","doc":" push: 로컬 브랜치 하나를 그 원격 ref 로(대상은 `git.push.plan` 과 같은 계산). upstream 설정 선택. force 는\n `forceWithLease` 뿐이다. git 이 거절할 대상이면 `2102`, `expectedTarget` 와 대상이 다르면 `-32004`, 원격이 앞서 있으면\n git 의 거절 원문으로 실패한다(`2004`).\n","mcp":false,"fileScope":false},
 	"git.push.plan": {"name":"git.push.plan","kind":"unary","tier":"read","roles":["owner"],"params":"GitPushPlanParams","output":"GitPushPlanResult","doc":" push 계획: `git.push` 가 같은 입력으로 보낼 곳 · 터미널과의 차이 · force 의 기대값 · 거절 이유. gix 로만 읽는다(미신뢰\n 프로젝트에서도 프로세스 0). 푸시 다이얼로그(M2-20)가 보내기 전에 보인다.\n","mcp":false,"fileScope":false},
 	"git.rebase": {"name":"git.rebase","kind":"unary","tier":"write","roles":["owner"],"params":"GitRebaseParams","output":"GitHistoryResult","doc":" 비대화형 rebase(`git rebase <upstream> [<branch>]`). 충돌이면 `outcome: stopped` 와 진행 중 작업, 끝나면 `moved` 가 그 브랜치의\n 이전 끝.\n","mcp":false,"fileScope":false},
 	"git.refs": {"name":"git.refs","kind":"unary","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitRefs","doc":" 로컬 · 원격 브랜치 · 태그 · HEAD · upstream · ahead/behind(gix). 저장소가 없으면 `workTree: null`.\n","mcp":false,"fileScope":false},
@@ -1648,6 +1649,12 @@ export type GitPullResult = {
 	stopped: boolean,
 };
 
+/**  창이 기대하는 push 대상: `git.push.plan` 의 `remote`(주소면 사용자 정보를 지운 것) · `remoteRef` 그대로. */
+export type GitPushExpectedTarget = {
+	remote: string,
+	remoteRef: string,
+};
+
 /**  force 의 기대값을 읽을 곳: 대상의 원격 추적 ref 와 지금 가리키는 커밋. 창은 이 `commit` 을 `forceWithLease` 로 준다. */
 export type GitPushLease = {
 	/**  `refs/remotes/…`. */
@@ -1680,6 +1687,11 @@ export type GitPushParams = {
 	 *  준다.
 	 */
 	forceWithLease?: string | null,
+	/**
+	 *  창이 보인 대상(`git.push.plan` 의 `remote` · `remoteRef` 그대로). 주면 다시 센 대상이 이것과 다를 때(계획 뒤에 설정이
+	 *  바뀌었을 때) 아무것도 보내지 않고 `-32004`(conflict, `data` 는 지금 셈한 `{ remote, remoteRef }`)로 끝난다.
+	 */
+	expectedTarget?: GitPushExpectedTarget | null,
 };
 
 /**  push 계획 입력: `git.push` 와 같은 칸(force · upstream 설정을 뺀 것). */
@@ -1716,7 +1728,10 @@ export type GitPushRefusal = {
 	reason: GitPushRefusalReason,
 	/**  영어 설명(git 의 거절 문구와 같은 뜻). 원격 주소의 사용자 정보는 지웠다. */
 	message: string,
-	/**  고를 만한 대상(원격의 전체 ref 이름) — upstream 브랜치(있고 이름이 다르면), 같은 이름 차례. `mirror` 면 비었다. */
+	/**
+	 *  고를 만한 대상(원격의 전체 ref 이름) — upstream 브랜치(있고 이름이 다르면), 같은 이름 차례. `mirror` 면 비었다.
+	 *  `unqualifiedDestination` 이고 그 짧은 대상이 이 브랜치의 것이면 원격에 그 이름이 없을 때 git 이 고를 것이 맨 앞이다.
+	 */
 	candidates: string[],
 };
 
@@ -1738,8 +1753,17 @@ export type GitPushRefusalReason =
 "notPushedByConfig" | 
 /**  `remote.<원격>.mirror` 가 켜져 있다. */
 "mirror" | 
-/**  git 이 받지 않는 설정이다(모르는 `push.default`, 잘못됐거나 맞는 로컬 ref 가 없는 push refspec). */
-"invalidConfig";
+/**
+ *  git 이 받지 않는 설정이다(모르는 `push.default`, 잘못됐거나 맞는 로컬 ref 가 없는 push refspec, 한 원격 ref 로 보내는
+ *  정확한 refspec 둘).
+ */
+"invalidConfig" | 
+/**
+ *  대상이 짧다(`refs/` 로 시작하지 않는다) — `remote.<원격>.push` 의 정확한 refspec 이나 `upstream` 모드의
+ *  `branch.<b>.merge`. git 은 원격이 광고하는 ref 로 그 이름을 정하므로(브랜치일 수도 태그일 수도, 둘 다면 거절) 원격의 ref
+ *  를 보지 않고는 git 이 보낼 곳을 알 수 없다.
+ */
+"unqualifiedDestination";
 
 export type GitPushResult = {
 	workTree: string,
@@ -1770,7 +1794,10 @@ export type GitPushTerminal = {
 	configured: string[],
 	/**  `push.default`(없으면 `simple`). */
 	pushDefault: string,
-	/**  git 이 보낼 것(`[+]<로컬 ref>:<원격 ref>`, 로컬 ref 가 비었으면 그 원격 ref 를 지운다), 많아야 [`MAX_SENDS`] 개. */
+	/**
+	 *  git 이 보낼 것(`[+]<로컬 ref>:<원격 ref>`, 로컬 ref 가 비었으면 그 원격 ref 를 지운다), 많아야 [`MAX_SENDS`] 개. 원격 ref
+	 *  가 짧으면(`refs/` 로 시작하지 않으면) 설정에 적힌 그대로다 — git 이 원격의 ref 로 정한다.
+	 */
 	sends: string[],
 	/**  `sends` 가 잘렸다. */
 	truncated: boolean,
