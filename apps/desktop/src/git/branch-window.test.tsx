@@ -47,6 +47,8 @@ const host = vi.hoisted(() => ({
   calls: [] as { method: string; params: Record<string, unknown> }[],
   watches: [] as { worktree: string | null }[],
   stateWrites: [] as unknown[],
+  /** `project.state.get` 이 돌려줄 저장본. */
+  savedState: null as unknown,
   emit: (_topic: string, _payload: unknown) => {},
 }));
 
@@ -165,7 +167,7 @@ vi.mock("../tauri-transport", async () => {
           case "project.claimTrustPrompt":
             return reply(false);
           case "project.state.get":
-            return reply({ state: null, problem: null });
+            return reply({ state: host.savedState, problem: null });
           case "project.state.set":
             host.stateWrites.push(params.state);
             return reply(null);
@@ -307,6 +309,7 @@ beforeEach(() => {
   host.calls = [];
   host.watches = [];
   host.stateWrites = [];
+  host.savedState = null;
   activeWorktreeStore.setState({ top: undefined });
   resetWindowFileTree();
   resetWindowGitStatus();
@@ -557,10 +560,11 @@ it("merges after one confirmation", async () => {
   const dialog = document.querySelector("[data-testid=file-confirm-dialog]")!;
   await click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "진행")!);
   await vi.waitFor(() => expect(reads("git.merge")).toHaveLength(1));
+  // ref 전체 이름 — 같은 이름의 태그가 있어도 브랜치를 merge 한다.
   expect(reads("git.merge")[0]!.params).toEqual({
     projectId: "p1",
     worktree: null,
-    rev: "feature",
+    rev: "refs/heads/feature",
   });
 });
 
@@ -578,6 +582,19 @@ it("keeps favorites in the project state and lists them first", async () => {
   await press({ code: "Escape", key: "Escape" }, input());
   await branchKey();
   expect(values()[1]).toBe("favorite:refs/heads/feature");
+});
+
+it("skips saved favorites whose branch is gone (deleted or renamed) and keeps the rest", async () => {
+  host.savedState = {
+    version: 1,
+    favoriteBranches: ["refs/heads/gone", "refs/heads/feature", "refs/remotes/origin/renamed"],
+  };
+  await mount();
+  await branchKey();
+  const favorites = values().filter((v) => v?.startsWith("favorite:"));
+  expect(favorites).toEqual(["favorite:refs/heads/feature"]);
+  // 저장본에 남은 이름은 지우지 않는다(되살아난 브랜치는 다시 즐겨찾기로 보인다).
+  expect(host.stateWrites).toEqual([]);
 });
 
 it("switches the active worktree through the open-request path and reopens the watch there", async () => {

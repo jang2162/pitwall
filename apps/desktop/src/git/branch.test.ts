@@ -270,6 +270,48 @@ describe("branch operations", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it("sends full ref names, so a branch and a tag with the same name stay apart", async () => {
+    const both = refs({
+      branches: [
+        ...refs().branches,
+        {
+          name: "v1",
+          refName: "refs/heads/v1",
+          commit: "d".repeat(40),
+          head: false,
+          upstream: null,
+        },
+      ],
+      tags: [{ name: "v1", refName: "refs/tags/v1", target: "e".repeat(40), peeled: null }],
+    });
+    const registry = new ActionRegistry();
+    const compared = vi.fn();
+    registry.register({ id: "git.compareCommits", label: "compare", run: compared });
+    const { ops, calls } = opsWith({ refs: () => both, registry });
+    const branch = { kind: "local", branch: both.branches[2]! } as const;
+    const tag = { kind: "tag", tag: both.tags[0]! } as const;
+    await ops.merge(branch);
+    await ops.merge(tag);
+    await ops.rebase(branch);
+    await ops.checkout(tag);
+    await ops.create(tag);
+    ops.compare(branch);
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["git.merge", { projectId: "p1", worktree: "/wt", rev: "refs/heads/v1" }],
+      ["git.merge", { projectId: "p1", worktree: "/wt", rev: "refs/tags/v1" }],
+      ["git.rebase", { projectId: "p1", worktree: "/wt", upstream: "refs/heads/v1" }],
+      [
+        "git.checkout",
+        { projectId: "p1", worktree: "/wt", target: { kind: "commit", rev: "refs/tags/v1" } },
+      ],
+      [
+        "git.branch.create",
+        { projectId: "p1", worktree: "/wt", name: "picked", start: "refs/tags/v1", checkout: true },
+      ],
+    ]);
+    expect(compared).toHaveBeenCalledWith({ a: "refs/heads/main", b: "refs/heads/v1" });
+  });
+
   it("rejects names git would refuse before calling it", () => {
     const taken = new Set(["main"]);
     for (const bad of ["", "a b", "-x", "a..b", "x.lock", "x/", "a~1", "main", "@"])

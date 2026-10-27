@@ -132,6 +132,19 @@ vi.mock("../tauri-transport", async () => {
               kind: "base",
               content: DEFAULT_KEYMAP_TOML,
             } satisfies KeymapFile);
+          // 상태바의 브랜치 항목(src/git/branch-state.ts)이 묻는다 — 이 시험은 저장소 없음으로 답한다.
+          case "git.refs":
+            return reply({
+              workTree: null,
+              head: null,
+              branches: [],
+              remoteBranches: [],
+              tags: [],
+              unsupported: null,
+              broken: [],
+            });
+          case "git.operation":
+            return reply({ operation: null });
           case "host.info":
             return reply({
               hostId: "local",

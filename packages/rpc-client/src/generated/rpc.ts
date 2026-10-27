@@ -1763,8 +1763,10 @@ export type GitPathsParams = {
 
 export type GitProjectBranch = {
 	projectId: string,
-	/**  주 루트를 담은 체크아웃의 브랜치. 분리된 HEAD · 저장소 밖 · 읽지 못함이면 `null`. */
+	/**  주 루트를 담은 체크아웃의 브랜치. 분리된 HEAD · 저장소 밖 · 읽지 못함 · 알 수 없는 형식이면 `null`. */
 	branch: string | null,
+	/**  파일만 읽어서는 브랜치를 알 수 없는 저장소 형식(reftable)이면 그 까닭(`git.refs` 의 `unsupported` 와 같은 값). 보통 `null`. */
+	unsupported: GitUnsupported | null,
 };
 
 export type GitProjectBranches = {

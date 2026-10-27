@@ -301,3 +301,203 @@ fn untrusted_worktree_and_branch_reads_run_no_planted_program() {
     assert_eq!(branches[0].branch.as_deref(), Some("main"));
     assert_eq!(marked(), 0, "a planted program ran on an untrusted read");
 }
+
+/// reftable 저장소의 `HEAD` 파일은 자리표시(`ref: refs/heads/.invalid`)다 — 그것을 브랜치로 보이지 않고 「알 수 없는 형식」 으로
+/// 답한다(상태바의 「지원하지 않는 저장소」 와 같은 값). 웰컴 창은 비운다. `--ref-format` 을 모르는 git 이면 건너뛴다.
+#[test]
+fn a_reftable_repository_is_unsupported_not_a_branch_named_invalid() {
+    use crate::status::GitUnsupported;
+    use crate::worktree::{HeadBranch, read_head};
+
+    let r = TestRepo::new();
+    let top = r.base().join("rt");
+    let made = r.try_git_in(
+        r.base(),
+        &[
+            "init",
+            "--quiet",
+            "--ref-format=reftable",
+            "-b",
+            "main",
+            top.to_str().unwrap(),
+        ],
+    );
+    if !made.status.success() {
+        eprintln!("skipped: this git cannot make a reftable repository");
+        return;
+    }
+    fs::write(top.join("a.txt"), "a\n").unwrap();
+    r.git_in(&top, &["add", "a.txt"]);
+    r.git_in(&top, &["commit", "--quiet", "-m", "a"]);
+    assert_eq!(
+        fs::read_to_string(top.join(".git/HEAD")).unwrap().trim(),
+        "ref: refs/heads/.invalid",
+        "git's reftable placeholder"
+    );
+    assert_eq!(
+        read_head(&top),
+        HeadBranch::Unsupported(GitUnsupported::Reftable)
+    );
+    assert_eq!(read_branch(&top), None);
+
+    let f = Fixture::new("", None);
+    let id = f.project(&top);
+    let got = f.git.project_branches().unwrap().projects;
+    let row = got.iter().find(|p| p.project_id == id).unwrap();
+    assert_eq!(row.branch, None);
+    assert_eq!(row.unsupported, Some(GitUnsupported::Reftable));
+}
+
+/// `HEAD` 나 `.git` 이 FIFO 여도(압축으로 받은 저장소) 읽기가 막히지 않고 「없음」 이다 — 웰컴 창의 `git.projectBranches` 가
+/// 멈추지 않는다. 다른 스레드에서 돌려 시간 제한을 건다.
+#[cfg(unix)]
+#[test]
+fn a_fifo_head_or_git_file_does_not_block() {
+    use std::ffi::CString;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn mkfifo(path: &Path) {
+        let c = CString::new(path.to_str().unwrap()).unwrap();
+        // SAFETY: 이 시험이 만든 임시 폴더 안의 경로로 mkfifo(3) 를 부른다.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0, "mkfifo");
+    }
+    fn within<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("{what}: blocked (잡힘)"))
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let head_fifo = dir.path().join("head-fifo");
+    fs::create_dir_all(head_fifo.join(".git")).unwrap();
+    mkfifo(&head_fifo.join(".git/HEAD"));
+    let git_file_fifo = dir.path().join("git-file-fifo");
+    fs::create_dir_all(&git_file_fifo).unwrap();
+    mkfifo(&git_file_fifo.join(".git"));
+    let linked = dir.path().join("linked");
+    fs::create_dir_all(dir.path().join("admin")).unwrap();
+    fs::create_dir_all(&linked).unwrap();
+    fs::write(linked.join(".git"), "gitdir: ../admin\n").unwrap();
+    mkfifo(&dir.path().join("admin/HEAD"));
+
+    for root in [head_fifo.clone(), git_file_fifo.clone(), linked.clone()] {
+        let shown = root.display().to_string();
+        assert_eq!(within(&shown, move || read_branch(&root)), None);
+    }
+
+    // 쓰는 쪽이 열려 있고 이름이 든 FIFO 도 읽지 않는다 — 일반 파일만 HEAD 로 본다.
+    let fed = dir.path().join("fed");
+    fs::create_dir_all(fed.join(".git")).unwrap();
+    mkfifo(&fed.join(".git/HEAD"));
+    // O_RDWR 은 읽는 쪽이 없어도 막히지 않는다. 이 핸들이 열려 있는 동안 파이프에 이름이 남아 있다.
+    let mut writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fed.join(".git/HEAD"))
+        .unwrap();
+    // 읽기 상한(4096 바이트)을 채운다 — 그러면 막히지 않는 읽기가 `EAGAIN` 없이 끝나 검사가 없을 때 이름이 그대로 나온다.
+    let mut fed_head = b"ref: refs/heads/from-fifo\n".to_vec();
+    fed_head.resize(4096, b'\n');
+    std::io::Write::write_all(&mut writer, &fed_head).unwrap();
+    let probe = fed.clone();
+    assert_eq!(within("a fed FIFO", move || read_branch(&probe)), None);
+    drop(writer);
+
+    let f = Arc::new(Fixture::new("", None));
+    for root in [&head_fifo, &git_file_fifo, &linked] {
+        f.project(root);
+    }
+    let g = Arc::clone(&f);
+    let rows = within("git.projectBranches", move || {
+        g.git.project_branches().unwrap().projects
+    });
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|p| p.branch.is_none()));
+}
+
+/// 브랜치 팝업의 merge 는 ref 전체 이름을 보낸다(apps/desktop/src/git/branch-ops.ts). 같은 이름의 브랜치와 태그가 다른 커밋을
+/// 가리키면 짧은 이름은 태그로 풀린다 — git 은 「ambiguous」 경고와 함께 태그를 merge 한다. 전체 이름이면 브랜치다. 체크아웃
+/// (`kind: "branch"`) · 삭제는 짧은 이름을 받아 Host 가 `refs/heads/` 로만 다루므로 태그와 겹치지 않는다.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_branch_and_a_tag_with_the_same_name_resolve_to_the_branch_by_full_name() {
+    use crate::branch::{Deleted, GitCheckoutTarget, checkout, delete};
+    use crate::history::FastForward;
+    use crate::history::methods::{GitMergeParams, merge};
+    use crate::testing::write::{Window, WriteFixture};
+    use crate::write::GitPromptAnswer;
+
+    let f = WriteFixture::new(true);
+    let _window = Window::open(&f.write, &f.project, |_| Some(GitPromptAnswer::Proceed));
+    let main = f.repo.head();
+    f.repo.git(&["tag", "v1"]);
+    f.repo.git(&["checkout", "-q", "-b", "v1"]);
+    let branch_tip = f.repo.commit_file("v1.txt", "branch\n", "on the branch");
+    f.repo.checkout("main");
+    // 재현: 짧은 이름은 태그(= main)로 풀린다.
+    assert_eq!(f.repo.rev_parse("v1"), main);
+    let params = |rev: &str| GitMergeParams {
+        project_id: f.project.clone(),
+        worktree: None,
+        rev: rev.to_owned(),
+        fast_forward: FastForward::Allow,
+    };
+    let short = merge(f.write.clone(), f.caller(), params("v1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        short.outcome,
+        crate::history::HistoryOutcome::UpToDate,
+        "the short name merged the tag"
+    );
+    assert_eq!(f.repo.head(), main);
+
+    let full = merge(f.write.clone(), f.caller(), params("refs/heads/v1"))
+        .await
+        .unwrap();
+    assert_eq!(full.outcome, crate::history::HistoryOutcome::FastForward);
+    assert_eq!(f.repo.head(), branch_tip);
+
+    // 체크아웃 · 삭제의 짧은 이름은 브랜치다.
+    f.repo.git(&["reset", "-q", "--hard", &main]);
+    checkout(
+        &f.write,
+        f.caller(),
+        f.project.clone(),
+        None,
+        GitCheckoutTarget::Branch { name: "v1".into() },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        f.repo.git(&["symbolic-ref", "HEAD"]).trim(),
+        "refs/heads/v1"
+    );
+    assert_eq!(f.repo.head(), branch_tip);
+    f.repo.checkout("main");
+    let deleted = delete(
+        &f.write,
+        f.caller(),
+        f.project.clone(),
+        None,
+        "v1".into(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(deleted, Deleted::Deleted { .. }), "{deleted:?}");
+    assert_eq!(f.repo.rev_parse("refs/tags/v1"), main, "the tag stays");
+    assert!(
+        f.repo
+            .try_git_in(
+                f.repo.root(),
+                &["rev-parse", "--verify", "--quiet", "refs/heads/v1"]
+            )
+            .stdout
+            .is_empty()
+    );
+}

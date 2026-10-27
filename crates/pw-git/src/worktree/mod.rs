@@ -4,8 +4,8 @@
 //!   차례: 메인, 그다음 관리 폴더 이름순) — 와 각 HEAD. 브랜치 팝업이 목록을 보이고, 고르면 창이 M1-25 의 워크트리 전환 경로로
 //!   바꾼다(그때 보낼 `worktree` 값이 [`GitWorktree::switch_to`]). gix 로만 읽는다 — 미신뢰 프로젝트도 저장소 설정의 프로그램을
 //!   돌리지 않는다(연 저장소의 열기 옵션을 그대로 쓴다, [`crate::repo::open_options`]).
-//! - `git.projectBranches`: 웰컴 창의 행마다 현재 브랜치. git 도 gix 도 띄우지 않고 `HEAD` 파일만 읽는다([`read_branch`]) — 웰컴
-//!   창은 Host 연결로 읽기만 한다.
+//! - `git.projectBranches`: 웰컴 창의 행마다 현재 브랜치. git 도 gix 도 띄우지 않고 `HEAD` 파일만 읽는다([`read_head`]) — 웰컴
+//!   창은 Host 연결로 읽기만 한다. reftable 저장소는 브랜치 대신 `unsupported` 다(웰컴은 비운다).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -15,30 +15,103 @@ use serde::{Deserialize, Serialize};
 
 use crate::methods::{GitRepoParams, RepoHead};
 use crate::repo::{display, head};
+use crate::status::GitUnsupported;
 use crate::{Git, registry_error};
 
-/// `start` 를 담은 git 체크아웃의 현재 브랜치. git 을 실행하지 않는다 — 가장 가까운 `.git`(폴더, 또는 연결 워크트리 · 서브모듈의
-/// `gitdir:` 파일)의 `HEAD` 가 `ref: refs/heads/<이름>` 이면 그 이름. 분리된 HEAD · 저장소 밖 · 읽기 실패는 `None`.
-pub fn read_branch(start: &Path) -> Option<String> {
-    let dot_git = start
+/// [`read_head`] 의 답.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeadBranch {
+    /// HEAD 가 `refs/heads/<이름>` 을 가리킨다.
+    Branch(String),
+    /// 분리된 HEAD · 저장소 밖 · 읽지 못함(일반 파일이 아닌 `HEAD` · `.git` 포함).
+    None,
+    /// 이 읽기가 알 수 없는 저장소 형식. reftable 저장소의 `HEAD` 는 자리표시 `ref: refs/heads/.invalid` 라(진짜 HEAD 는
+    /// `reftable/` 안에 있다) 파일만 읽어서는 브랜치를 모른다 — 상태바의 「지원하지 않는 저장소」 와 같은 까닭이다.
+    Unsupported(GitUnsupported),
+}
+
+/// git 의 reftable 저장소가 `HEAD` 파일에 적는 자리표시 브랜치. `refs/heads/` 아래 이름은 `.` 으로 시작할 수 없어 진짜 브랜치와
+/// 겹치지 않는다.
+const REFTABLE_PLACEHOLDER: &str = ".invalid";
+
+/// 이보다 긴 `HEAD` · `.git` 파일은 읽지 않는다(둘 다 한 줄이다).
+const MAX_POINTER_FILE: u64 = 4096;
+
+/// `path` 가 일반 파일일 때만 앞 [`MAX_POINTER_FILE`] 바이트를 읽는다. FIFO · 장치 파일은 열면서 막히지 않게 `O_NONBLOCK` 으로
+/// 열고(unix), 연 핸들의 종류를 본 뒤 읽는다 — 이름으로 본 뒤 여는 사이에 바뀌어도 막히지 않는다. 압축으로 받은 저장소에는
+/// `HEAD` 가 FIFO 일 수 있다(클론으로는 생기지 않는다).
+fn read_pointer_file(path: &Path) -> Option<String> {
+    use std::io::Read;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut text = String::new();
+    file.take(MAX_POINTER_FILE).read_to_string(&mut text).ok()?;
+    Some(text)
+}
+
+/// `start` 를 담은 git 체크아웃의 HEAD 가 가리키는 브랜치. git 을 실행하지 않는다 — 가장 가까운 `.git`(폴더, 또는 연결 워크트리 ·
+/// 서브모듈의 `gitdir:` 파일)의 `HEAD` 파일만 읽는다. 일반 파일이 아니면 읽지 않는다([`read_pointer_file`]).
+pub fn read_head(start: &Path) -> HeadBranch {
+    let Some(dot_git) = start
         .ancestors()
         .map(|d| d.join(".git"))
-        .find(|p| p.exists())?;
+        .find(|p| p.exists())
+    else {
+        return HeadBranch::None;
+    };
     let gitdir = if dot_git.is_dir() {
         dot_git
     } else {
-        let text = std::fs::read_to_string(&dot_git).ok()?;
-        let pointer = text.lines().next()?.strip_prefix("gitdir:")?.trim();
+        let Some(text) = read_pointer_file(&dot_git) else {
+            return HeadBranch::None;
+        };
+        let Some(pointer) = text
+            .lines()
+            .next()
+            .and_then(|l| l.strip_prefix("gitdir:"))
+            .map(str::trim)
+        else {
+            return HeadBranch::None;
+        };
         let pointer = Path::new(pointer);
         if pointer.is_absolute() {
             pointer.to_path_buf()
         } else {
-            dot_git.parent()?.join(pointer)
+            match dot_git.parent() {
+                Some(parent) => parent.join(pointer),
+                None => return HeadBranch::None,
+            }
         }
     };
-    let head = std::fs::read_to_string(gitdir.join("HEAD")).ok()?;
-    let name = head.trim().strip_prefix("ref: refs/heads/")?;
-    (!name.is_empty()).then(|| name.to_owned())
+    let Some(head) = read_pointer_file(&gitdir.join("HEAD")) else {
+        return HeadBranch::None;
+    };
+    let name = head.trim().strip_prefix("ref: refs/heads/");
+    if name == Some(REFTABLE_PLACEHOLDER) || gitdir.join("reftable").is_dir() {
+        return HeadBranch::Unsupported(GitUnsupported::Reftable);
+    }
+    match name {
+        Some(name) if !name.is_empty() => HeadBranch::Branch(name.to_owned()),
+        _ => HeadBranch::None,
+    }
+}
+
+/// `start` 를 담은 체크아웃의 현재 브랜치([`read_head`]). 분리된 HEAD · 저장소 밖 · 읽기 실패 · 알 수 없는 형식은 `None`.
+pub fn read_branch(start: &Path) -> Option<String> {
+    match read_head(start) {
+        HeadBranch::Branch(name) => Some(name),
+        HeadBranch::None | HeadBranch::Unsupported(_) => None,
+    }
 }
 
 #[derive(
@@ -104,8 +177,10 @@ pub struct GitProjectBranches {
 #[serde(rename_all = "camelCase")]
 pub struct GitProjectBranch {
     pub project_id: String,
-    /// 주 루트를 담은 체크아웃의 브랜치. 분리된 HEAD · 저장소 밖 · 읽지 못함이면 `null`.
+    /// 주 루트를 담은 체크아웃의 브랜치. 분리된 HEAD · 저장소 밖 · 읽지 못함 · 알 수 없는 형식이면 `null`.
     pub branch: Option<String>,
+    /// 파일만 읽어서는 브랜치를 알 수 없는 저장소 형식(reftable)이면 그 까닭(`git.refs` 의 `unsupported` 와 같은 값). 보통 `null`.
+    pub unsupported: Option<GitUnsupported>,
 }
 
 impl Git {
@@ -191,9 +266,17 @@ impl Git {
         Ok(GitProjectBranches {
             projects: projects
                 .into_iter()
-                .map(|p| GitProjectBranch {
-                    branch: read_branch(p.root()),
-                    project_id: p.id,
+                .map(|p| {
+                    let (branch, unsupported) = match read_head(p.root()) {
+                        HeadBranch::Branch(name) => (Some(name), None),
+                        HeadBranch::None => (None, None),
+                        HeadBranch::Unsupported(reason) => (None, Some(reason)),
+                    };
+                    GitProjectBranch {
+                        project_id: p.id,
+                        branch,
+                        unsupported,
+                    }
                 })
                 .collect(),
         })

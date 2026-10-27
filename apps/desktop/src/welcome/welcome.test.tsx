@@ -36,6 +36,8 @@ const host = vi.hoisted(() => ({
   projects: [] as Project[],
   /** `git.projectBranches` 의 답(프로젝트 id → 브랜치, 분리된 HEAD 면 null). */
   branches: {} as Record<string, string | null>,
+  /** reftable 저장소인 프로젝트 — `git.projectBranches` 가 브랜치 대신 `unsupported` 로 답한다. */
+  reftable: [] as string[],
   storage: { kind: "ok", path: "/d/state.db" } as StorageStatus,
   candidates: [] as RootCandidate[],
   resolve: (_path: string): Resolution | null => null,
@@ -115,6 +117,7 @@ vi.mock("../tauri-transport", async () => {
               projects: host.projects.map((p) => ({
                 projectId: p.id,
                 branch: host.branches[p.id] ?? null,
+                unsupported: host.reftable.includes(p.id) ? "reftable" : null,
               })),
             });
           case "project.storage":
@@ -227,6 +230,7 @@ beforeEach(() => {
     project("c", "infra", "/w/infra"),
   ];
   host.branches = {};
+  host.reftable = [];
   host.storage = { kind: "ok", path: "/d/state.db" };
   host.candidates = [];
   host.resolve = () => null;
@@ -374,6 +378,12 @@ it("shows each project's branch and nothing for a detached HEAD, read again when
   host.branches = { ...host.branches, c: "release" };
   await act(async () => host.emitHostEvent("project.changed"));
   await vi.waitFor(() => expect(branchOf("infra")?.textContent).toBe("release"));
+
+  // reftable 저장소는 브랜치를 알 수 없다(`unsupported`) — 행을 비운다.
+  host.branches = { ...host.branches, a: null };
+  host.reftable = ["a"];
+  await act(async () => host.emitHostEvent("project.changed"));
+  await vi.waitFor(() => expect(branchOf("web-console")).toBeNull());
 });
 
 it("closes the welcome window on ⌘W", async () => {
