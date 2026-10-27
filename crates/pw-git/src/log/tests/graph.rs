@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::testing::TestRepo;
+use crate::testing::repo::git_command;
 
 fn render(rows: &[LogRow]) -> String {
     let edges = |list: &[(u32, u32)]| -> String {
@@ -235,4 +236,159 @@ fn thousands_of_remote_branches_stay_within_the_lane_cap() {
     );
     // 한 행(해시 · 부모 · 제목 · 작성자 · 장식 · 그래프)의 평균 JSON 크기. 지나가는 레인을 행마다 실으면 수 KB 다.
     assert!(largest < 600, "{largest} bytes per row");
+}
+
+/// HEAD 의 줄은 레인 0 이다: HEAD(`main`)보다 늦은 갈래 둘이 먼저 나와 레인을 차지해도 `main` 의 노드는 레인 0 에 놓이고, 그
+/// 갈래들은 레인 0 을 새로 열지 않는다(M2-14 에서 바꾼 배정 — 바꾸기 전에는 `main` 줄이 레인 2 였다).
+#[test]
+fn head_line_stays_on_lane_zero() {
+    let r = TestRepo::with_commit();
+    r.commit_file("m.txt", "1\n", "main 1");
+    for name in ["late-a", "late-b"] {
+        r.git(&["checkout", "--quiet", "-b", name, "main"]);
+        r.commit_file(&format!("{name}.txt"), "1\n", &format!("{name} 1"));
+        r.commit_file(&format!("{name}.txt"), "2\n", &format!("{name} 2"));
+    }
+    r.checkout("main");
+    let rows = graph_of(&r);
+    let head = rows
+        .iter()
+        .find(|r| r.refs.iter().any(|d| d.current))
+        .unwrap();
+    assert_eq!(head.graph.as_ref().unwrap().lane, 0);
+    insta::assert_snapshot!(render(&rows));
+}
+
+/// `main` 2천 커밋 + 원격 갈래 300 개(갈래가 모두 HEAD 보다 늦다): 갈래가 보통 레인을 다 차지해도 HEAD 행은 레인 0 이다.
+/// M2-03 재리뷰에서 HEAD 행이 접힌 레인(64)에 놓였던 모양이다.
+#[test]
+fn head_stays_on_lane_zero_past_hundreds_of_remote_branches() {
+    use crate::log::graph::{FOLDED, MAX_LANES};
+    let tmp = tempfile::tempdir().unwrap();
+    let ceiling =
+        pw_core::registry::path::normalize(&std::fs::canonicalize(tmp.path()).unwrap()).unwrap();
+    let dir = ceiling.join("fanout");
+    synth::fanout(&dir, &ceiling, 2000, 300, synth::SEED).unwrap();
+    let rows = log(&dir, None, &LogFilter::default(), LogOrder::Topo);
+    check_lanes(&rows);
+    let at = rows
+        .iter()
+        .position(|r| r.refs.iter().any(|d| d.current))
+        .expect("the HEAD row");
+    assert!(
+        at > MAX_LANES as usize,
+        "the remote lines come first: HEAD at row {at}"
+    );
+    assert_eq!(rows[at].graph.as_ref().unwrap().lane, 0);
+    assert!(
+        rows[..at]
+            .iter()
+            .any(|r| r.graph.as_ref().unwrap().lane == FOLDED),
+        "the remote lines fill the ordinary lanes"
+    );
+}
+
+/// 쪽(`Window`)으로 이어 받은 행이 한 번에 배치한 행과 같다 — HEAD 의 줄 예약이 커서를 넘어 이어진다. 무작위 이력(시드 셋, HEAD 를
+/// 토픽 브랜치로 옮긴 것 포함) · 얕은 클론 · 여러 ref(HEAD 를 담은 것 · 뺀 것)마다, `limit` 1 · 7 · 200 · 500 으로. 쪽의 첫 행
+/// `top` 은 앞 쪽에서 이어 계산한 열린 레인과 같아야 한다([`passing`]).
+#[test]
+fn pages_lay_out_lanes_like_one_pass() {
+    let compare = |dir: &Path, refs: Option<&[&str]>, what: &str| {
+        let all = log(dir, refs, &LogFilter::default(), LogOrder::Topo);
+        check_lanes(&all);
+        let query = Query::new(
+            refs.map(|r| r.iter().map(|s| (*s).to_owned()).collect()),
+            &LogFilter::default(),
+            LogOrder::Topo,
+        )
+        .unwrap();
+        let repo = open(dir);
+        for limit in [1usize, 7, 200, 500] {
+            let mut paged = Vec::new();
+            let mut after = None;
+            loop {
+                let mut page = Vec::new();
+                let outcome = run(
+                    &repo,
+                    false,
+                    &query,
+                    Window {
+                        after,
+                        limit: Some(limit),
+                    },
+                    &AtomicBool::new(false),
+                    &mut |chunk| {
+                        page.extend(chunk.rows);
+                        true
+                    },
+                )
+                .unwrap();
+                assert!(
+                    page.first()
+                        .is_none_or(|r| r.graph.as_ref().unwrap().top.is_some()),
+                    "{what}: a page starts with its open lanes"
+                );
+                after = page
+                    .last()
+                    .map(|r| gix::ObjectId::from_hex(r.hash.as_bytes()).unwrap());
+                paged.extend(page);
+                if !outcome.more {
+                    break;
+                }
+            }
+            // 쪽마다 실린 `top` 이 이어 계산한 것과 같은지 본다(`passing` 이 단언한다).
+            passing(&paged);
+            assert_eq!(
+                without_tops(&paged),
+                without_tops(&all),
+                "{what}: limit {limit}"
+            );
+        }
+    };
+    for seed in [synth::SEED, 0x1234_5678, 0xdead_beef] {
+        let tmp = tempfile::tempdir().unwrap();
+        let ceiling =
+            pw_core::registry::path::normalize(&std::fs::canonicalize(tmp.path()).unwrap())
+                .unwrap();
+        let dir = ceiling.join("synth");
+        synth::create(&dir, &ceiling, 150, seed).unwrap();
+        let git = |args: &[&str]| {
+            let out = git_command(&dir, &ceiling).args(args).output().unwrap();
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8(out.stdout).unwrap()
+        };
+        let topics = git(&[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/topic",
+        ]);
+        let topic = topics.lines().next().expect("a topic branch").to_owned();
+        compare(&dir, None, &format!("seed {seed:x}, HEAD main"));
+        compare(
+            &dir,
+            Some(&["main", topic.as_str()]),
+            &format!("seed {seed:x}, main + {topic}"),
+        );
+        compare(
+            &dir,
+            Some(&[topic.as_str()]),
+            &format!("seed {seed:x}, {topic} only"),
+        );
+        git(&["symbolic-ref", "HEAD", &format!("refs/heads/{topic}")]);
+        compare(&dir, None, &format!("seed {seed:x}, HEAD {topic}"));
+        let clone = ceiling.join("shallow");
+        let url = format!("file://{}", dir.display());
+        git(&[
+            "clone",
+            "--quiet",
+            "--no-local",
+            "--depth",
+            "20",
+            "--no-single-branch",
+            &url,
+            clone.to_str().unwrap(),
+        ]);
+        assert!(clone.join(".git/shallow").exists());
+        compare(&clone, None, &format!("seed {seed:x}, shallow"));
+    }
 }

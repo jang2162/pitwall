@@ -248,7 +248,13 @@ pub fn run(
     // 첫 커밋을 읽을 때 연다(빈 로그 · 넘기는 행만 있는 쪽은 열지 않는다).
     let mut mailmap: Option<commit::Mailmap> = None;
     let graph = filter.keeps_graph();
-    let mut layout = graph.then(Layout::new);
+    let mut layout =
+        graph.then(
+            || match head.0.and_then(|h| dag.ids.iter().position(|&id| id == h)) {
+                Some(at) => Layout::with_head(&head_chain(&dag, at as u32), dag.len()),
+                None => Layout::new(),
+            },
+        );
     let mut out = Chunker {
         rows: Vec::new(),
         sent: 0,
@@ -336,6 +342,19 @@ pub fn run(
         more,
         abandoned: false,
     })
+}
+
+/// `at` 에서 첫 부모를 따라 뿌리(또는 얕은 경계)까지 — HEAD 의 줄([`graph`] 머리 주석). 대체 객체(`git replace`)로 고리가 생겨도
+/// 끝나게 이미 지난 커밋에서 멈춘다.
+fn head_chain(dag: &walk::Dag, at: u32) -> Vec<u32> {
+    let mut seen = vec![false; dag.len()];
+    let mut chain = Vec::new();
+    let mut next = Some(at);
+    while let Some(i) = next.filter(|&i| !std::mem::replace(&mut seen[i as usize], true)) {
+        chain.push(i);
+        next = dag.parents(i).first().copied();
+    }
+    chain
 }
 
 fn commit_matches(

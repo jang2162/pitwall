@@ -3,7 +3,7 @@
 //!
 //! 레인은 「다음에 올 커밋 하나를 기다리는 세로줄」 이다. 행마다:
 //!
-//! - 이 행의 커밋을 기다리던 레인들이 노드로 모인다(`up`). 노드는 그중 가장 왼쪽 레인에 놓인다. 기다리던 레인이 없으면(브랜치 끝)
+//! - 이 행의 커밋을 기다리던 레인들이 노드로 모인다(`up`). 노드는 그중 가장 왼쪽 레인에 놓인다(HEAD 의 줄은 레인 0 — 아래). 기다리던 레인이 없으면(브랜치 끝)
 //!   비어 있는 가장 왼쪽 레인에서 시작한다.
 //! - 나머지 레인은 그대로 지나간다.
 //! - 노드에서 부모로 간선이 나간다(`down`). 첫 부모는 노드의 레인을 이어 간다. 다른 부모는 이미 그 부모를 기다리는 레인이 있으면
@@ -11,6 +11,11 @@
 //!   잇는다 — 두 줄은 그 부모의 행에서 모인다(갈라진 자리가 그 행에 보인다).
 //!
 //! 레인은 자리를 옮기지 않는다(지나가는 간선은 언제나 수직). 빈 자리는 다음 새 레인이 다시 쓴다.
+//!
+//! **HEAD 의 줄은 레인 0**([`Layout::with_head`]): HEAD 커밋이 걷기에 있으면 HEAD 의 첫 부모 사슬(HEAD, HEAD^, HEAD^^ … 뿌리까지)의
+//! 노드는 언제나 레인 0 에 놓인다 — 그 노드를 기다리던 다른 레인은 레인 0 의 노드로 모인다. 사슬의 마지막 노드가 나오기 전에는 다른
+//! 갈래가 새 레인을 열 때 0 을 받지 않는다(HEAD 행보다 위의 행은 레인 0 이 빈 채다). 갈래가 많아 앞 행들이 레인을 다 차지해도
+//! 지금 브랜치가 접힌 레인으로 밀려나지 않게 하려는 것이다(M2-14). 레인 상한은 그대로 64 개다 — 예약된 동안 다른 갈래는 1 ~ 63 을 쓴다.
 //!
 //! **레인 상한**: 보통 레인은 [`MAX_LANES`] 개(0 ~ 63)다. 새 레인을 열 자리가 없으면 그 갈래는 맨 오른쪽의 접힌 레인
 //! [`FOLDED`] 하나로 간다 — 접힌 레인은 여러 커밋을 함께 기다리고, 접힌 갈래의 노드는 그 칸에 놓인다. 오래된 원격 브랜치가 수천
@@ -21,7 +26,8 @@
 //! 레인(접힌 레인은 [`GraphRow::fold_closes`] 일 때만), 지나가는 레인 = 윗변 − 끝나는 레인, 아랫변 = 지나가는 레인 + `down` 의 레인.
 //!
 //! 색은 레인이 열릴 때 받는 번호다(0부터 늘어난다). 첫 부모로 이어 가는 레인은 노드의 색을 그대로 갖는다. UI 는 번호를 팔레트
-//! 크기로 나눈 나머지로 `graph.lane.*` 토큰을 고른다. 접힌 레인의 간선 · 노드는 언제나 [`FOLDED_COLOR`] 다.
+//! 크기로 나눈 나머지로 `graph.lane.*` 토큰을 고른다. 접힌 레인의 간선 · 노드는 언제나 [`FOLDED_COLOR`] 다 — UI 는 나머지를 내기
+//! 전에 이 값을 따로 보고 `graph.lane.folded` 로 칠한다.
 
 use std::collections::HashSet;
 
@@ -97,11 +103,33 @@ pub struct Layout {
     /// 접힌 레인이 기다리는 커밋. 비어 있으면 접힌 레인이 닫혀 있다.
     folded: HashSet<u32>,
     next_color: u32,
+    /// HEAD 의 첫 부모 사슬에 든 커밋(번호로 찾는다). 비어 있으면 예약이 없다.
+    head_chain: Vec<bool>,
+    /// 아직 배치하지 않은 사슬 노드 수. 0 이면 레인 0 의 예약이 풀린다.
+    chain_left: usize,
 }
 
 impl Layout {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// HEAD 의 첫 부모 사슬(`chain` — 커밋 번호, 겹치지 않는다)을 레인 0 에 두는 배치(머리 주석). `len` 은 커밋 번호의 상한이다.
+    pub fn with_head(chain: &[u32], len: usize) -> Self {
+        let mut head_chain = vec![false; len];
+        for &i in chain {
+            head_chain[i as usize] = true;
+        }
+        Self {
+            head_chain,
+            chain_left: chain.len(),
+            ..Self::default()
+        }
+    }
+
+    /// 레인 0 이 HEAD 의 줄 몫으로 비워져 있는가.
+    fn reserved(&self) -> bool {
+        self.chain_left > 0
     }
 
     /// 다음 행 윗변에 열려 있는 레인(레인 순) — [`GraphRow::top`].
@@ -130,12 +158,22 @@ impl Layout {
         if self.folded.remove(&node) {
             up.push((FOLDED, FOLDED_COLOR));
         }
-        let (lane, color) = match up.first() {
-            Some(&(lane, color)) => (lane, color),
-            None => match self.free_from(0) {
-                Some(i) => (i, self.color()),
-                None => (FOLDED, FOLDED_COLOR),
-            },
+        let on_chain = self.head_chain.get(node as usize).copied().unwrap_or(false);
+        let (lane, color) = if on_chain {
+            // HEAD 의 줄: 레인 0 이 이 커밋을 기다렸으면 그 색, 아니면(사슬의 시작) 새 색.
+            self.chain_left -= 1;
+            match up.first() {
+                Some(&(0, color)) => (0, color),
+                _ => (0, self.color()),
+            }
+        } else {
+            match up.first() {
+                Some(&(lane, color)) => (lane, color),
+                None => match self.free_from(0) {
+                    Some(i) => (i, self.color()),
+                    None => (FOLDED, FOLDED_COLOR),
+                },
+            }
         };
         let mut down = Vec::with_capacity(parents.len());
         if let Some((&first, rest)) = parents.split_first() {
@@ -178,7 +216,7 @@ impl Layout {
 
     /// `from` 이상에서 비어 있는 첫 보통 레인. 모두 차 있으면 `None`(접힌 레인으로 간다).
     fn free_from(&self, from: u32) -> Option<u32> {
-        let from = from as usize;
+        let from = if self.reserved() { from.max(1) } else { from } as usize;
         (from..self.lanes.len())
             .find(|&i| self.lanes[i].is_none())
             .or_else(|| {

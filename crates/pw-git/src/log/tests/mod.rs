@@ -215,11 +215,28 @@ impl Synth {
 /// 레인 배치의 연속성: 행의 아랫변(지나가는 간선 + 노드에서 나간 간선)이 다음 행의 윗변(지나가는 간선 + 노드로 모이는 간선)과
 /// 레인 · 색까지 같고, 레인이 기다리는 커밋이 실제 부모다 — 노드로 모이는 레인은 정확히 그 커밋을 기다리던 레인들이다. 지나가는
 /// 간선은 [`passing`] 으로 이어 계산한 것이다. 보통 레인은 [`graph::MAX_LANES`] 개 안이고, 넘는 갈래는 접힌 레인이 함께 기다린다.
-/// 뿌리가 아닌 커밋의 부모는 모두 행에 있어야 한다(그래프 목록은 조상을 모두 담는다).
+/// 뿌리가 아닌 커밋의 부모는 모두 행에 있어야 한다(그래프 목록은 조상을 모두 담는다). HEAD 의 줄(장식으로 찾은 HEAD 커밋에서
+/// 행의 첫 부모를 따라간 사슬)의 노드는 레인 0 이고, 사슬이 끝나기 전에는 다른 갈래가 레인 0 을 새로 열지 않는다.
 fn check_lanes(rows: &[LogRow]) {
     use crate::log::graph::{FOLDED, FOLDED_COLOR, MAX_LANES};
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
     let passes = passing(rows);
+    let by_hash: HashMap<&str, &LogRow> = rows.iter().map(|r| (r.hash.as_str(), r)).collect();
+    let mut chain: BTreeSet<String> = BTreeSet::new();
+    let mut next = rows
+        .iter()
+        .find(|r| {
+            r.refs
+                .iter()
+                .any(|d| d.current || d.kind == LogRefKind::Head)
+        })
+        .map(|r| r.hash.as_str());
+    while let Some(hash) = next.filter(|h| chain.insert((*h).to_owned())) {
+        next = by_hash
+            .get(hash)
+            .and_then(|r| r.parents.first())
+            .map(String::as_str);
+    }
     // 보통 레인 → (기다리는 커밋, 색), 접힌 레인이 기다리는 커밋들.
     let mut lanes: BTreeMap<u32, (String, u32)> = BTreeMap::new();
     let mut folded: BTreeSet<String> = BTreeSet::new();
@@ -247,15 +264,28 @@ fn check_lanes(rows: &[LogRow]) {
             };
             assert_eq!(expected, color, "row {n}: color of up lane {lane}");
         }
-        match g.up.first() {
-            Some(&(first, _)) => assert_eq!(
-                first, g.lane,
-                "row {n}: the node sits on the leftmost waiting lane"
-            ),
-            None => assert!(
-                g.lane == FOLDED || !lanes.contains_key(&g.lane),
-                "row {n}: a new line starts on a free lane"
-            ),
+        let on_chain = chain.remove(&row.hash);
+        let reserved = !chain.is_empty();
+        if on_chain {
+            assert_eq!(g.lane, 0, "row {n}: HEAD's line sits on lane 0");
+            if let Some(&(first, color)) = g.up.first().filter(|e| e.0 == 0) {
+                assert_eq!((first, color), (g.lane, g.color), "row {n}: lane 0 goes on");
+            }
+        } else {
+            match g.up.first() {
+                Some(&(first, _)) => assert_eq!(
+                    first, g.lane,
+                    "row {n}: the node sits on the leftmost waiting lane"
+                ),
+                None => assert!(
+                    g.lane == FOLDED || !lanes.contains_key(&g.lane),
+                    "row {n}: a new line starts on a free lane"
+                ),
+            }
+            assert!(
+                !(reserved && g.up.is_empty() && g.lane == 0),
+                "row {n}: lane 0 is kept for HEAD's line"
+            );
         }
         assert!(g.lane <= FOLDED, "row {n}: lane {} over the cap", g.lane);
         if g.lane == FOLDED {
@@ -302,6 +332,11 @@ fn check_lanes(rows: &[LogRow]) {
                     (target, *c),
                     (parent, color),
                     "row {n}: edge {k} joins a lane waiting for its parent"
+                );
+            } else if k > 0 {
+                assert!(
+                    !(reserved && lane == 0),
+                    "row {n}: edge {k} opens lane 0 while it is kept for HEAD's line"
                 );
             }
             lanes.insert(lane, (parent.clone(), color));

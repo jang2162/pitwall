@@ -1,0 +1,10 @@
+---
+source: crates/pw-git/src/log/tests/graph.rs
+expression: render(&rows)
+---
+ *    late-b 2         up [] node 1:0 down [1:0]
+ *    late-b 1         up [1:0] node 1:0 down [1:0]
+ |*   late-a 2         up [] node 2:1 down [2:1]
+ |*   late-a 1         up [2:1] node 2:1 down [2:1]
+*     main 1           up [1:0,2:1] node 0:2 down [0:2]
+*     initial          up [0:2] node 0:2 down []
