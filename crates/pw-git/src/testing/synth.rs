@@ -6,6 +6,8 @@
 //! - 시각: 커밋마다 0~90초 늘린다(같은 시각이 섞인다 — 순서의 동률 처리를 본다). 자식은 언제나 부모보다 늦다.
 //! - 커밋마다 파일 하나(`d<a>/s<b>/f<c>.txt`, 1,000개 중 하나)를 고친다. 머지는 30% 가 파일 하나를 고친다.
 //! - 브랜치는 동시에 24개까지, 머지된 브랜치는 반쯤 지운다. 태그(가벼운 것 · 주석 단 것)와 원격 ref(`refs/remotes/origin/*`)도 있다.
+//!
+//! [`fanout`] 은 다른 모양이다: 곧은 `main` 곳곳에서 커밋 하나씩 갈라진 원격 브랜치가 수천 개 쌓인 저장소(레인 상한을 본다).
 
 use std::io::Write;
 use std::path::Path;
@@ -278,24 +280,12 @@ fn script(commits: usize, seed: u64) -> Script {
 /// `dir` 에 합성 저장소를 만든다(`git init` → fast-import → 머지된 브랜치 지우기 → `repack -ad`). commit-graph 는 쓰지 않는다 —
 /// 필요하면 부른 쪽이 [`write_commit_graph`] 를 부른다. 위로 찾기는 `ceiling` 에서 멈춘다(사람의 저장소 · 설정을 건드리지 않는다).
 pub fn create(dir: &Path, ceiling: &Path, commits: usize, seed: u64) -> std::io::Result<Summary> {
-    std::fs::create_dir_all(dir)?;
-    run(git_command(dir, ceiling).args(["init", "--quiet"]))?;
     let Script {
         stream,
         deleted,
         mut summary,
     } = script(commits.max(1), seed);
-    let mut child = git_command(dir, ceiling)
-        .args(["fast-import", "--quiet", "--done"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(&stream)?;
-    check(child.wait_with_output()?, "fast-import")?;
+    import(dir, ceiling, &stream)?;
     if !deleted.is_empty() {
         let mut child = git_command(dir, ceiling)
             .args(["update-ref", "--stdin"])
@@ -312,12 +302,84 @@ pub fn create(dir: &Path, ceiling: &Path, commits: usize, seed: u64) -> std::io:
             .write_all(input.as_bytes())?;
         check(child.wait_with_output()?, "update-ref")?;
     }
-    run(git_command(dir, ceiling).args(["-c", "repack.writeBitmaps=false", "repack", "-adq"]))?;
-    // fast-import 는 HEAD 가 가리키는 `main` 을 체크아웃하지 않는다 — 작업 트리를 맞춘다(status 가 깨끗하게).
-    run(git_command(dir, ceiling).args(["reset", "--quiet", "--hard", "main"]))?;
+    finish(dir, ceiling)?;
     let heads = run(git_command(dir, ceiling).args(["for-each-ref", "--format=x", "refs/heads"]))?;
     summary.branches = heads.lines().count();
     Ok(summary)
+}
+
+/// `dir` 에 곧은 `main` 커밋 `commits` 개와, 그 곳곳(시드로 고른 커밋)에서 커밋 하나씩 갈라진 원격 브랜치
+/// `refs/remotes/origin/b<n>` `branches` 개를 만든다 — 원격 브랜치가 쌓인 저장소 모양. 시각은 `main` 이 커밋마다 60초, 갈래
+/// 커밋은 모두 `main` 끝보다 늦다(오래된 커밋 위에 최근 만든 갈래 — 로그 맨 위에서 줄이 모두 시작해 갈라진 커밋까지 내려가므로
+/// 레인이 갈래 수만큼 열린다).
+pub fn fanout(
+    dir: &Path,
+    ceiling: &Path,
+    commits: usize,
+    branches: usize,
+    seed: u64,
+) -> std::io::Result<()> {
+    let mut rng = Rng(seed);
+    let commits = commits.max(1);
+    let mut out = Vec::with_capacity((commits + branches) * 200);
+    let time = |mark: usize| EPOCH + 60 * mark as i64;
+    for mark in 1..=commits {
+        let (name, email) = AUTHORS[mark % AUTHORS.len()];
+        let message = format!("main {mark}\n");
+        let _ = writeln!(out, "commit refs/heads/main\nmark :{mark}");
+        let _ = writeln!(out, "author {name} <{email}> {} +0000", time(mark));
+        let _ = writeln!(out, "committer {name} <{email}> {} +0000", time(mark));
+        let _ = write!(out, "data {}\n{message}", message.len());
+        if mark > 1 {
+            let _ = writeln!(out, "from :{}", mark - 1);
+        }
+        let content = format!("{mark}\n");
+        let _ = write!(
+            out,
+            "M 100644 inline main.txt\ndata {}\n{content}\n",
+            content.len()
+        );
+    }
+    for n in 0..branches {
+        let mark = commits + 1 + n;
+        let from = 1 + rng.below(commits);
+        let (name, email) = AUTHORS[rng.below(AUTHORS.len())];
+        let message = format!("branch {n}\n");
+        let _ = writeln!(out, "commit refs/remotes/origin/b{n}\nmark :{mark}");
+        let at = time(commits) + 30 * (n as i64 + 1);
+        let _ = writeln!(out, "author {name} <{email}> {at} +0000");
+        let _ = writeln!(out, "committer {name} <{email}> {at} +0000");
+        let _ = write!(out, "data {}\n{message}from :{from}\n", message.len());
+        let content = format!("{n}\n");
+        let _ = write!(
+            out,
+            "M 100644 inline b/{n}.txt\ndata {}\n{content}\n",
+            content.len()
+        );
+    }
+    let _ = writeln!(out, "done");
+    import(dir, ceiling, &out)?;
+    finish(dir, ceiling)
+}
+
+/// `git init` 하고 fast-import 입력 `stream` 을 들인다.
+fn import(dir: &Path, ceiling: &Path, stream: &[u8]) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    run(git_command(dir, ceiling).args(["init", "--quiet"]))?;
+    let mut child = git_command(dir, ceiling)
+        .args(["fast-import", "--quiet", "--done"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()?;
+    child.stdin.take().expect("piped stdin").write_all(stream)?;
+    check(child.wait_with_output()?, "fast-import").map(drop)
+}
+
+/// 팩을 하나로 묶고 작업 트리를 `main` 에 맞춘다.
+fn finish(dir: &Path, ceiling: &Path) -> std::io::Result<()> {
+    run(git_command(dir, ceiling).args(["-c", "repack.writeBitmaps=false", "repack", "-adq"]))?;
+    // fast-import 는 HEAD 가 가리키는 `main` 을 체크아웃하지 않는다 — 작업 트리를 맞춘다(status 가 깨끗하게).
+    run(git_command(dir, ceiling).args(["reset", "--quiet", "--hard", "main"])).map(drop)
 }
 
 /// `git commit-graph write --reachable`.

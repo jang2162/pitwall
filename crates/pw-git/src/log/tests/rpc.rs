@@ -129,16 +129,23 @@ fn page_params(p: &GitLogParams, cursor: Option<String>, limit: u32) -> GitLogPa
 
 /// 쪽을 끝까지 이어 받는다.
 async fn all_pages(fx: &Fx, p: &GitLogParams, limit: u32) -> (Vec<LogRow>, usize, Option<u32>) {
-    let (mut rows, mut pages, mut cursor) = (Vec::new(), 0, None);
+    let (mut rows, mut pages, mut cursor) = (Vec::new(), 0, None::<String>);
     let mut total = None;
     loop {
-        let page = fx.page(&page_params(p, cursor, limit)).await.unwrap();
+        let page = fx
+            .page(&page_params(p, cursor.clone(), limit))
+            .await
+            .unwrap();
         pages += 1;
         assert!(page.rows.len() <= limit as usize);
         total = total.or(page.total);
         rows.extend(page.rows);
         match page.next_cursor {
-            Some(c) => cursor = Some(c),
+            // 커서가 제자리면 끝없이 같은 쪽을 받는다 — 멈추는 대신 실패한다.
+            Some(c) => {
+                assert_ne!(cursor.as_ref(), Some(&c), "the cursor must move");
+                cursor = Some(c);
+            }
             None => return (rows, pages, total),
         }
     }
@@ -167,7 +174,11 @@ async fn the_stream_sends_a_first_screen_then_the_rest() {
     check_lanes(&rows);
     // 쪽 단위로 이어 받아도 같은 행이다(레인까지).
     let (paged, pages, page_total) = all_pages(&fx, &params(&id), 500).await;
-    assert_eq!(paged, rows);
+    assert_eq!(without_tops(&paged), without_tops(&rows));
+    // 쪽의 첫 행에는 열린 레인 전체가 있어 쪽부터 이어 계산할 수 있다.
+    for page in paged.chunks(500) {
+        assert!(page[0].graph.as_ref().unwrap().top.is_some());
+    }
     assert_eq!(page_total, Some(total as u32));
     assert_eq!(pages, total.div_ceil(500));
 }
@@ -238,9 +249,24 @@ async fn bad_requests_fail_and_a_folder_without_a_repository_is_empty() {
     }
     let e = fx.page(&page_params(&unknown, None, 10)).await.unwrap_err();
     assert_eq!(e.code, pw_rpc::code::INVALID_PARAMS);
-    // 커서가 끝을 넘으면 빈 쪽.
+    // 로그에 없는 커밋의 커서는 낡은 커서다.
+    let stale = fx
+        .page(&page_params(&params(&id), Some("ab".repeat(20)), 10))
+        .await
+        .unwrap_err();
+    assert_eq!(stale.code, pw_rpc::code::INVALID_PARAMS);
+    assert!(
+        format!("{:?}", stale.data).contains("stale cursor"),
+        "{stale:?}"
+    );
+    // 마지막 행의 커서는 빈 쪽.
+    let all = fx
+        .page(&page_params(&params(&id), None, 500))
+        .await
+        .unwrap();
+    let last = all.rows.last().unwrap().hash.clone();
     let past = fx
-        .page(&page_params(&params(&id), Some("999999".into()), 10))
+        .page(&page_params(&params(&id), Some(last), 10))
         .await
         .unwrap();
     assert!(past.rows.is_empty() && past.next_cursor.is_none());
@@ -270,6 +296,7 @@ fn a_stop_signal_or_a_gone_receiver_ends_the_log() {
         let query = Query::new(None, &LogFilter::default(), LogOrder::Topo).unwrap();
         let e = run(
             &open(&s.dir),
+            false,
             &query,
             Window::default(),
             &AtomicBool::new(true),
@@ -280,6 +307,7 @@ fn a_stop_signal_or_a_gone_receiver_ends_the_log() {
         let mut chunks = 0;
         let outcome = run(
             &open(&s.dir),
+            false,
             &query,
             Window::default(),
             &AtomicBool::new(false),
@@ -292,6 +320,80 @@ fn a_stop_signal_or_a_gone_receiver_ends_the_log() {
         assert!(outcome.abandoned);
         assert_eq!(chunks, 1);
     }
+}
+
+/// 멈춤 신호는 걷기 자체가 본다(첫 청크 전 시간의 대부분이 걷기다): 켜 두고 걸으면 commit-graph 없음(보조 스레드 미리 읽기) ·
+/// 있음 · 경로 필터의 걷기 모두 `CANCELLED` 로 끝난다.
+#[test]
+fn the_walk_itself_stops_on_the_stop_signal() {
+    let s = Synth::new(1200);
+    for graph in [false, true] {
+        if graph {
+            s.write_commit_graph();
+        }
+        let repo = open(&s.dir);
+        let tips = tips(
+            &repo,
+            None,
+            &branch_refs(&repo).unwrap(),
+            head(&repo).unwrap().0,
+        )
+        .unwrap();
+        for paths in [vec![], vec![gix::bstr::BString::from("d0")]] {
+            let e = walk::collect(&repo, &tips, &paths, &AtomicBool::new(true))
+                .err()
+                .expect("the walk stops");
+            assert_eq!(
+                e.code,
+                pw_rpc::code::CANCELLED,
+                "commit-graph {graph}, paths {paths:?}"
+            );
+        }
+    }
+}
+
+/// `git.logPage` 의 커서는 쪽의 마지막 커밋이다: 쪽 사이에 새 커밋이 생겨도 다음 쪽이 앞 쪽과 겹치지 않고, 그 커밋이 로그에서
+/// 사라지면(force push) 낡은 커서로 invalid params.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_cursor_survives_new_commits_and_rejects_a_rewritten_history() {
+    let r = crate::testing::TestRepo::with_commit();
+    for n in 0..30 {
+        r.commit_file("f.txt", &format!("{n}\n"), &format!("c{n}"));
+    }
+    let fx = Fx::new();
+    let id = fx.project(r.root());
+    let p = GitLogParams {
+        refs: Some(vec!["main".into()]),
+        ..params(&id)
+    };
+    let before: Vec<String> = fx
+        .page(&page_params(&p, None, 100))
+        .await
+        .unwrap()
+        .rows
+        .into_iter()
+        .map(|r| r.hash)
+        .collect();
+    let first = fx.page(&page_params(&p, None, 10)).await.unwrap();
+    assert_eq!(hashes(&first.rows), before[..10]);
+    r.commit_file("f.txt", "new\n", "new on top");
+    let second = fx
+        .page(&page_params(&p, first.next_cursor.clone(), 10))
+        .await
+        .unwrap();
+    assert_eq!(
+        hashes(&second.rows),
+        before[10..20],
+        "continues after the last row"
+    );
+
+    r.git(&["reset", "--quiet", "--hard", &before[15]]);
+    let e = fx
+        .page(&page_params(&p, first.next_cursor, 10))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, pw_rpc::code::INVALID_PARAMS);
+    assert!(format!("{:?}", e.data).contains("stale cursor"), "{e:?}");
 }
 
 /// 연결 워크트리를 `worktree` 로 주면 그 워크트리의 HEAD 가 장식된다(저장소는 같다).

@@ -6,8 +6,8 @@
 //! ```
 //!
 //! 저장소는 RPC 와 같은 경로로 연다(미신뢰 — `pw_git::repo::discover`). 잰 것: 저장소 열기부터 첫 청크(200행 + 레인)를 내보낼
-//! 때까지, 마지막 청크까지(전체 배치 · 메시지 읽기). 반복마다 저장소를 새로 연다(객체 캐시가 이어지지 않는다). OS 의 파일 캐시는
-//! 데워진 채다 — 첫 반복이 가장 차갑다.
+//! 때까지, 마지막 청크까지(전체 배치 · 메시지 읽기), 청크의 JSON 크기(스트림 항목 그대로 — RPC 봉투는 빼고). 반복마다 저장소를
+//! 새로 연다(객체 캐시가 이어지지 않는다). OS 의 파일 캐시는 데워진 채다 — 첫 반복이 가장 차갑다.
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -39,8 +39,10 @@ fn main() {
         let mut rows = 0usize;
         let mut lanes = 0u32;
         let mut total = 0u32;
+        let (mut bytes, mut first_bytes, mut largest) = (0usize, 0usize, 0usize);
         run(
             &repo,
+            false,
             &query,
             Window::default(),
             &AtomicBool::new(false),
@@ -49,11 +51,18 @@ fn main() {
                     first = Some(started.elapsed());
                     total = chunk.total.unwrap_or(0);
                 }
+                let size = serde_json::to_vec(&chunk).expect("serialize a chunk").len();
+                if bytes == 0 {
+                    first_bytes = size;
+                }
+                bytes += size;
+                largest = largest.max(size);
                 for row in &chunk.rows {
                     if let Some(g) = &row.graph {
                         let widest = g
-                            .pass
+                            .top
                             .iter()
+                            .flatten()
                             .chain(&g.up)
                             .chain(&g.down)
                             .map(|e| e.0)
@@ -71,9 +80,13 @@ fn main() {
         let first = first.expect("a first chunk");
         firsts.push(first);
         println!(
-            "run {n}: commit-graph {graph}, first chunk {:.1} ms, all {rows}/{total} rows {:.1} ms, widest {lanes} lanes",
+            "run {n}: commit-graph {graph}, first chunk {:.1} ms, all {rows}/{total} rows {:.1} ms, widest {lanes} lanes, \
+             stream {:.2} MB (first chunk {:.1} KB, largest {:.1} KB)",
             first.as_secs_f64() * 1000.0,
-            all.as_secs_f64() * 1000.0
+            all.as_secs_f64() * 1000.0,
+            bytes as f64 / 1e6,
+            first_bytes as f64 / 1e3,
+            largest as f64 / 1e3
         );
     }
     firsts.sort();

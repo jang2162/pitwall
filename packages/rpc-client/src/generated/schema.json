@@ -4899,10 +4899,10 @@
       "item": {
         "$defs": {
           "GraphRow": {
-            "description": "한 행의 그래프. 행의 높이를 위 · 가운데(노드) · 아래로 나누어, 간선은 각각 「윗변 → 노드」, 「노드 → 아랫변」, 「윗변 → 아랫변」 이다.\n간선 하나는 `[레인, 색]` 이다.",
+            "description": "한 행의 그래프. 행의 높이를 위 · 가운데(노드) · 아래로 나누어, 간선은 각각 「윗변 → 노드」, 「노드 → 아랫변」 이다. 곧게\n지나가는 간선은 싣지 않는다 — 앞 행에서 이어 계산한다(머리 주석).",
             "properties": {
               "color": {
-                "description": "노드의 색 번호.",
+                "description": "노드의 색 번호. 접힌 레인의 간선 · 노드는 4294967295([`FOLDED_COLOR`]).",
                 "format": "uint32",
                 "minimum": 0,
                 "type": "integer"
@@ -4928,14 +4928,20 @@
                 },
                 "type": "array"
               },
+              "foldCloses": {
+                "default": false,
+                "description": "접힌 레인이 이 행에서 닫힌다(기다리던 커밋이 모두 나왔다). 접힌 레인은 `up` 에 있어도 다른 갈래를 더 기다리면 이어진다.",
+                "type": "boolean"
+              },
               "lane": {
-                "description": "노드가 놓인 레인(0 = 가장 왼쪽).",
+                "description": "노드가 놓인 레인(0 = 가장 왼쪽). 보통 레인은 0 ~ 63, 64 는 접힌 레인이다([`MAX_LANES`] · [`FOLDED`]).",
                 "format": "uint32",
                 "minimum": 0,
                 "type": "integer"
               },
-              "pass": {
-                "description": "윗변에서 아랫변으로 같은 레인을 곧게 지나가는 간선.",
+              "top": {
+                "default": null,
+                "description": "윗변에 열려 있는 레인 전체(레인 순). 청크 · 쪽의 첫 행에만 있다 — 그 행부터 앞 행 없이 이어 계산할 수 있다.",
                 "items": {
                   "maxItems": 2,
                   "minItems": 2,
@@ -4953,10 +4959,13 @@
                   ],
                   "type": "array"
                 },
-                "type": "array"
+                "type": [
+                  "array",
+                  "null"
+                ]
               },
               "up": {
-                "description": "윗변의 그 레인에서 노드로 모이는 간선. 노드의 레인이 들어 있으면 위에서 이어 온 줄이고, 비어 있으면 이 커밋이 줄의 시작이다.",
+                "description": "윗변의 그 레인에서 노드로 모이는 간선(레인 순). 노드의 레인이 들어 있으면 위에서 이어 온 줄이고, 비어 있으면 이 커밋이 줄의\n시작이다.",
                 "items": {
                   "maxItems": 2,
                   "minItems": 2,
@@ -4982,7 +4991,8 @@
               "color",
               "up",
               "down",
-              "pass"
+              "top",
+              "foldCloses"
             ],
             "type": "object"
           },
@@ -5337,7 +5347,7 @@
         "properties": {
           "cursor": {
             "default": null,
-            "description": "앞 쪽의 `nextCursor`. 없으면 처음부터.",
+            "description": "앞 쪽의 `nextCursor`. 없으면 처음부터. 그 쪽의 마지막 커밋이 로그에서 사라졌으면(force push 등) invalid params\n(`stale cursor`) — 처음부터 다시 부른다.",
             "type": [
               "string",
               "null"
@@ -5396,10 +5406,10 @@
       "result": {
         "$defs": {
           "GraphRow": {
-            "description": "한 행의 그래프. 행의 높이를 위 · 가운데(노드) · 아래로 나누어, 간선은 각각 「윗변 → 노드」, 「노드 → 아랫변」, 「윗변 → 아랫변」 이다.\n간선 하나는 `[레인, 색]` 이다.",
+            "description": "한 행의 그래프. 행의 높이를 위 · 가운데(노드) · 아래로 나누어, 간선은 각각 「윗변 → 노드」, 「노드 → 아랫변」 이다. 곧게\n지나가는 간선은 싣지 않는다 — 앞 행에서 이어 계산한다(머리 주석).",
             "properties": {
               "color": {
-                "description": "노드의 색 번호.",
+                "description": "노드의 색 번호. 접힌 레인의 간선 · 노드는 4294967295([`FOLDED_COLOR`]).",
                 "format": "uint32",
                 "minimum": 0,
                 "type": "integer"
@@ -5425,14 +5435,20 @@
                 },
                 "type": "array"
               },
+              "foldCloses": {
+                "default": false,
+                "description": "접힌 레인이 이 행에서 닫힌다(기다리던 커밋이 모두 나왔다). 접힌 레인은 `up` 에 있어도 다른 갈래를 더 기다리면 이어진다.",
+                "type": "boolean"
+              },
               "lane": {
-                "description": "노드가 놓인 레인(0 = 가장 왼쪽).",
+                "description": "노드가 놓인 레인(0 = 가장 왼쪽). 보통 레인은 0 ~ 63, 64 는 접힌 레인이다([`MAX_LANES`] · [`FOLDED`]).",
                 "format": "uint32",
                 "minimum": 0,
                 "type": "integer"
               },
-              "pass": {
-                "description": "윗변에서 아랫변으로 같은 레인을 곧게 지나가는 간선.",
+              "top": {
+                "default": null,
+                "description": "윗변에 열려 있는 레인 전체(레인 순). 청크 · 쪽의 첫 행에만 있다 — 그 행부터 앞 행 없이 이어 계산할 수 있다.",
                 "items": {
                   "maxItems": 2,
                   "minItems": 2,
@@ -5450,10 +5466,13 @@
                   ],
                   "type": "array"
                 },
-                "type": "array"
+                "type": [
+                  "array",
+                  "null"
+                ]
               },
               "up": {
-                "description": "윗변의 그 레인에서 노드로 모이는 간선. 노드의 레인이 들어 있으면 위에서 이어 온 줄이고, 비어 있으면 이 커밋이 줄의 시작이다.",
+                "description": "윗변의 그 레인에서 노드로 모이는 간선(레인 순). 노드의 레인이 들어 있으면 위에서 이어 온 줄이고, 비어 있으면 이 커밋이 줄의\n시작이다.",
                 "items": {
                   "maxItems": 2,
                   "minItems": 2,
@@ -5479,7 +5498,8 @@
               "color",
               "up",
               "down",
-              "pass"
+              "top",
+              "foldCloses"
             ],
             "type": "object"
           },
@@ -5586,7 +5606,7 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "nextCursor": {
-            "description": "다음 쪽을 부를 커서. 더 없으면 `null`. 쪽 사이에 이력이 바뀌면 행이 밀리거나 겹칠 수 있다.",
+            "description": "다음 쪽을 부를 커서(불투명 — 이 쪽의 마지막 커밋을 가리킨다). 더 없으면 `null`. 다음 쪽은 그 커밋 다음 행부터이므로 쪽\n사이에 새 커밋이 생겨도 행이 겹치지 않는다(새 커밋이 그 커밋보다 앞에 오면 이어지는 쪽에 보이지 않는다).",
             "type": [
               "string",
               "null"

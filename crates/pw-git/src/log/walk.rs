@@ -36,6 +36,8 @@ pub struct Dag {
     hidden: Vec<bool>,
     /// 시작 커밋의 번호. 시각이 늦은 것부터, 같으면 받은 순서.
     pub starts: Vec<u32>,
+    /// 얕은 클론의 경계 커밋(부모가 없는 것으로 본다).
+    shallow: Vec<ObjectId>,
 }
 
 impl Dag {
@@ -71,6 +73,11 @@ impl Dag {
     pub fn hidden(&self, i: u32) -> bool {
         self.hidden.get(i as usize).copied().unwrap_or(false)
     }
+
+    /// 얕은 클론의 경계 커밋인가 — 행의 부모도 비운다(git 의 `%P` 와 같다).
+    pub fn is_shallow(&self, id: &ObjectId) -> bool {
+        self.shallow.contains(id)
+    }
 }
 
 fn internal(e: impl std::fmt::Display) -> RpcError {
@@ -103,6 +110,7 @@ pub fn collect(
         time: Vec::new(),
         hidden: Vec::new(),
         starts: Vec::new(),
+        shallow: Vec::new(),
     };
     let mut index: gix::hashtable::HashMap<ObjectId, u32> = gix::hashtable::HashMap::default();
     let mut add = |dag: &mut Dag, id: ObjectId| -> u32 {
@@ -190,7 +198,24 @@ pub fn collect(
     }
     starts.sort_by_key(|&i| std::cmp::Reverse(dag.time[i as usize]));
     dag.starts = starts;
+    dag.shallow = shallow;
     Ok(dag)
+}
+
+/// `--since` 로 빠지는 커밋: 커미터 시각이 `since` 보다 이른 커밋과 그 조상 모두. git 은 기준보다 오래된 커밋을 만나면 그 조상을
+/// 모두 걷지 않는 쪽(UNINTERESTING)으로 칠한다(`revision.c` 의 `limit_list` — `--since-as-filter` 는 칠하지 않고 거르기만 한다).
+/// 그래서 커밋 시각이 거꾸로 된 이력에서는 기준보다 늦은 커밋도 빠진다. `order` 는 [`order`] 의 결과(자식이 부모보다 앞).
+pub fn before(dag: &Dag, order: &[u32], since: i64) -> Vec<bool> {
+    let mut out = vec![false; dag.len()];
+    for &i in order {
+        if out[i as usize] || dag.time[i as usize] < since {
+            out[i as usize] = true;
+            for &p in dag.parents(i) {
+                out[p as usize] = true;
+            }
+        }
+    }
+    out
 }
 
 /// commit-graph 가 없을 때 커밋 객체를 미리 읽을 보조 스레드 수. 코어가 하나면 0(혼자 읽는다).

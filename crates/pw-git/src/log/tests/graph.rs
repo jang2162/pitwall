@@ -1,4 +1,4 @@
-//! 레인 배치: 픽스처(머지 · 문어발 머지 · 고아 브랜치)의 스냅숏과 합성 이력 전체의 연속성.
+//! 레인 배치: 픽스처(머지 · 문어발 머지 · 고아 브랜치)의 스냅숏, 합성 이력 전체의 연속성, 레인 상한(접힌 레인)과 청크 크기.
 //!
 //! 스냅숏은 행마다 `*`(노드) · `|`(지나가는 간선) 그림과 간선 목록(`up` 레인 → 노드 → `down` 레인, 레인:색)이다. 커밋 시각은
 //! 시험 저장소의 시계로 정해져 순서가 실행마다 같다.
@@ -13,13 +13,14 @@ fn render(rows: &[LogRow]) -> String {
             .collect::<Vec<_>>()
             .join(",")
     };
+    let passes = passing(rows);
     let mut out = String::new();
-    for row in rows {
+    for (row, pass) in rows.iter().zip(&passes) {
         let g = row.graph.as_ref().expect("a graph row");
         let width =
             g.up.iter()
                 .chain(&g.down)
-                .chain(&g.pass)
+                .chain(pass)
                 .map(|e| e.0 + 1)
                 .chain([g.lane + 1])
                 .max()
@@ -28,7 +29,7 @@ fn render(rows: &[LogRow]) -> String {
         for lane in 0..width {
             art.push(if lane == g.lane {
                 '*'
-            } else if g.pass.iter().any(|e| e.0 == lane) {
+            } else if pass.iter().any(|e| e.0 == lane) {
                 '|'
             } else {
                 ' '
@@ -135,14 +136,103 @@ fn lanes_stay_connected_across_the_synthetic_history() {
                     .all(|&(n, total)| n <= CHUNK && total.is_none())
             );
             assert_eq!(chunks.iter().map(|c| c.0).sum::<usize>(), rows.len());
-            let widest = rows
+            let widest = passing(&rows)
                 .iter()
-                .filter_map(|r| r.graph.as_ref())
-                .flat_map(|g| g.pass.iter().chain(&g.down).map(|e| e.0))
+                .zip(&rows)
+                .flat_map(|(pass, r)| {
+                    let down = &r.graph.as_ref().unwrap().down;
+                    pass.iter().chain(down).map(|e| e.0)
+                })
                 .max()
                 .unwrap();
             assert!(widest >= 4, "the history should be wide: {widest}");
         }
     }
     s.remove_commit_graph();
+}
+
+/// 머지의 둘째 부모는 노드 오른쪽의 빈 레인에 연다 — 왼쪽에 빈 레인이 있어도.
+#[test]
+fn a_second_parent_opens_right_of_the_node() {
+    let mut l = Layout::new();
+    // 0 → 레인 0(부모 2), 1 → 레인 1(부모 3), 2 는 뿌리(레인 0 이 빈다), 3 은 머지(부모 4 · 5).
+    assert_eq!(l.row(0, &[2]).lane, 0);
+    assert_eq!(l.row(1, &[3]).lane, 1);
+    assert_eq!(l.row(2, &[]).down, []);
+    let merge = l.row(3, &[4, 5]);
+    assert_eq!(merge.lane, 1);
+    assert_eq!(
+        merge.down.iter().map(|e| e.0).collect::<Vec<_>>(),
+        [1, 2],
+        "{merge:?}"
+    );
+}
+
+/// 보통 레인이 다 차면 새 갈래는 접힌 레인으로 간다. 접힌 레인은 기다리는 커밋이 모두 나온 행에서 닫힌다.
+#[test]
+fn lanes_past_the_cap_fold_into_one() {
+    use crate::log::graph::{FOLDED, FOLDED_COLOR, MAX_LANES};
+    let mut l = Layout::new();
+    let tips = MAX_LANES + 6;
+    for tip in 0..tips {
+        let row = l.row(tip, &[1000]);
+        if tip < MAX_LANES {
+            assert_eq!(row.lane, tip);
+        } else {
+            assert_eq!((row.lane, row.color), (FOLDED, FOLDED_COLOR), "tip {tip}");
+            assert_eq!(row.down, [(FOLDED, FOLDED_COLOR)]);
+        }
+        assert!(!row.fold_closes);
+    }
+    let top = l.top();
+    assert_eq!(top.len(), MAX_LANES as usize + 1);
+    assert_eq!(top.last(), Some(&(FOLDED, FOLDED_COLOR)));
+    let root = l.row(1000, &[]);
+    assert_eq!(root.lane, 0);
+    assert_eq!(root.up.len(), MAX_LANES as usize + 1);
+    assert!(root.fold_closes);
+    assert!(l.top().is_empty());
+}
+
+/// 원격 브랜치가 수천 개 쌓인 저장소(곧은 `main` 곳곳에서 커밋 하나씩 갈라짐): 레인이 상한을 넘지 않고(넘는 갈래는 접힌 레인),
+/// 행이 지나가는 레인을 싣지 않아 청크 크기가 레인 수와 상관없이 작다.
+#[test]
+fn thousands_of_remote_branches_stay_within_the_lane_cap() {
+    use crate::log::graph::FOLDED;
+    let tmp = tempfile::tempdir().unwrap();
+    let ceiling =
+        pw_core::registry::path::normalize(&std::fs::canonicalize(tmp.path()).unwrap()).unwrap();
+    let dir = ceiling.join("fanout");
+    synth::fanout(&dir, &ceiling, 2000, 1200, synth::SEED).unwrap();
+    let query = Query::new(None, &LogFilter::default(), LogOrder::Topo).unwrap();
+    let mut rows = Vec::new();
+    let mut largest = 0usize;
+    run(
+        &open(&dir),
+        false,
+        &query,
+        Window::default(),
+        &AtomicBool::new(false),
+        &mut |chunk| {
+            largest = largest.max(serde_json::to_vec(&chunk).unwrap().len() / chunk.rows.len());
+            rows.extend(chunk.rows);
+            true
+        },
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 3200);
+    check_lanes(&rows);
+    let graphs: Vec<&GraphRow> = rows.iter().map(|r| r.graph.as_ref().unwrap()).collect();
+    assert!(
+        graphs.iter().any(|g| g.lane == FOLDED),
+        "some branches fold"
+    );
+    assert!(
+        graphs
+            .iter()
+            .flat_map(|g| g.top.iter().flatten().chain(&g.up).chain(&g.down))
+            .all(|e| e.0 <= FOLDED)
+    );
+    // 한 행(해시 · 부모 · 제목 · 작성자 · 장식 · 그래프)의 평균 JSON 크기. 지나가는 레인을 행마다 실으면 수 KB 다.
+    assert!(largest < 600, "{largest} bytes per row");
 }

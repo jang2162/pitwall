@@ -3,7 +3,7 @@
 //!
 //! `--until` 만 예외가 있다: git 은 commit-graph 가 없으면 `--until` 로 빠진 커밋을 순서 계산에서도 빼서, 머지 위를 자르면 남은
 //! 커밋의 순서가 commit-graph 가 있을 때와 다르다. 우리는 언제나 commit-graph 가 있을 때의 git 과 같다(거르기 전 순서에서 거른다)
-//! — 없음에서는 집합만 맞춘다. 그 갈림 자체를 [`git_orders_until_differently_without_a_commit_graph`] 가 보인다.
+//! — 없음에서는 집합만 맞춘다. 그 갈림은 [`until_orders_like_git_with_a_commit_graph`] 가 출력으로 보인다.
 
 use super::*;
 
@@ -326,10 +326,10 @@ fn a_path_filter_simplifies_history_like_git() {
     );
 }
 
-/// git 자신이 commit-graph 유무로 `--until` 순서를 다르게 낸다(머리 주석의 근거). 머지 M(150) 아래 두 줄 A(130 · 140) · B(110 ·
-/// 120)에서 M 을 잘라 낸다.
+/// `--until` 의 순서는 commit-graph 가 있을 때의 git 과 같다. git 자신은 commit-graph 가 없으면 순서가 다르다(머리 주석 — 이 git
+/// 2.54 에서 그렇다, 출력으로 보인다). 머지 M(150) 아래 두 줄 A(130 · 140) · B(110 · 120)에서 M 을 잘라 낸다.
 #[test]
-fn git_orders_until_differently_without_a_commit_graph() {
+fn until_orders_like_git_with_a_commit_graph() {
     let r = crate::testing::TestRepo::with_commit();
     r.git(&["checkout", "--quiet", "-b", "side"]);
     r.commit_file("b.txt", "1\n", "B1");
@@ -358,10 +358,8 @@ fn git_orders_until_differently_without_a_commit_graph() {
     let without = git();
     r.git(&["commit-graph", "write", "--reachable"]);
     let with = git();
-    assert_ne!(
-        without, with,
-        "git's own --until order depends on the commit-graph"
-    );
+    // git 의 내부 동작이라 판정하지 않는다(git 이 바뀌면 우리 코드가 멀쩡해도 깨진다) — 보이기만 한다.
+    eprintln!("git --until without a commit-graph: {without:?}, with: {with:?}");
     let ours: Vec<String> = log(
         r.root(),
         Some(&["main"]),
@@ -467,5 +465,117 @@ fn paths_are_relative_to_the_work_tree_with_forward_slashes() {
         assert_eq!(with("d1\\s1"), slash);
     } else {
         assert!(with("d1\\s1").is_empty());
+    }
+}
+
+/// 커미터 · 작성 시각이 `at`(초)인 커밋. `file` 이 있으면 그 파일을 바꾼다.
+fn commit_at(r: &crate::testing::TestRepo, message: &str, at: i64, file: Option<&str>) -> String {
+    if let Some(file) = file {
+        r.write(file, &format!("{message}\n"));
+        r.git(&["add", file]);
+    }
+    let date = format!("@{at} +0000");
+    let out = r
+        .command_in(r.root())
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_DATE", &date)
+        .args(["commit", "--quiet", "--allow-empty", "-m", message])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    r.head()
+}
+
+/// `since` 는 git `--since` 와 같다: 기준보다 오래된 커밋을 만나면 그 조상은 시각이 늦어도 빠진다(`--since-as-filter` 와 다르다).
+/// 시계가 거꾸로 된 이력 — `main`: R(+300) ← X(+50) ← Y(+400) ← M(+500, 머지), `side`: R ← Z(+350) — 에서 기준 +200 이면 R 은
+/// 늦지만 오래된 X 의 조상이라 빠지고, Z 는 남는다. 기준 +350 이면 Z(경계와 같은 시각)가 남는다. 경로 필터와 함께여도 같다.
+#[test]
+fn since_drops_the_ancestors_of_older_commits_like_git() {
+    let r = crate::testing::TestRepo::new();
+    const T: i64 = 1_700_000_000;
+    commit_at(&r, "R", T + 300, Some("f.txt"));
+    r.git(&["branch", "side"]);
+    commit_at(&r, "X", T + 50, Some("f.txt"));
+    commit_at(&r, "Y", T + 400, Some("f.txt"));
+    r.checkout("side");
+    commit_at(&r, "Z", T + 350, Some("g.txt"));
+    r.checkout("main");
+    let date = format!("@{} +0000", T + 500);
+    let out = r
+        .command_in(r.root())
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_DATE", &date)
+        .args(["merge", "--quiet", "--no-ff", "-m", "M", "side"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let subjects = |args: &[&str]| -> Vec<String> {
+        r.git(&[&["log", "--format=%s"], args].concat())
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    };
+    for graph in [false, true] {
+        if graph {
+            r.git(&["commit-graph", "write", "--reachable"]);
+        }
+        for (order, flag) in [
+            (LogOrder::Topo, "--topo-order"),
+            (LogOrder::Date, "--date-order"),
+        ] {
+            for (since, paths) in [
+                (T + 200, vec![]),
+                (T + 350, vec![]),
+                (T + 200, vec!["f.txt".to_owned()]),
+            ] {
+                let filter = LogFilter {
+                    since: Some(since),
+                    paths: paths.clone(),
+                    ..LogFilter::default()
+                };
+                let ours: Vec<String> = log(r.root(), Some(&["main"]), &filter, order)
+                    .into_iter()
+                    .map(|row| row.subject)
+                    .collect();
+                let since_arg = format!("--since=@{since}");
+                let mut args = vec![flag, since_arg.as_str(), "main"];
+                if !paths.is_empty() {
+                    args.push("--");
+                    args.extend(paths.iter().map(String::as_str));
+                }
+                let theirs = subjects(&args);
+                assert_eq!(
+                    ours,
+                    theirs,
+                    "since +{} {paths:?} {flag} commit-graph {graph}",
+                    since - T
+                );
+                let what = format!("since +{} {paths:?}", since - T);
+                assert!(
+                    !ours.contains(&"R".to_owned()),
+                    "{what}: R is an ancestor of the older X"
+                );
+                if paths.is_empty() {
+                    assert!(ours.contains(&"Z".to_owned()), "{what}: Z stays");
+                }
+            }
+        }
+        let as_filter = subjects(&[
+            "--topo-order",
+            &format!("--since-as-filter=@{}", T + 200),
+            "main",
+        ]);
+        assert!(
+            as_filter.contains(&"R".to_owned()),
+            "--since-as-filter differs: {as_filter:?}"
+        );
     }
 }

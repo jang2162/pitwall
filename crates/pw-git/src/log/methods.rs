@@ -46,7 +46,8 @@ pub struct GitLogPageParams {
     pub filter: LogFilter,
     #[serde(default)]
     pub order: LogOrder,
-    /// 앞 쪽의 `nextCursor`. 없으면 처음부터.
+    /// 앞 쪽의 `nextCursor`. 없으면 처음부터. 그 쪽의 마지막 커밋이 로그에서 사라졌으면(force push 등) invalid params
+    /// (`stale cursor`) — 처음부터 다시 부른다.
     #[serde(default)]
     pub cursor: Option<String>,
     /// 1 ~ 500.
@@ -59,7 +60,8 @@ pub struct GitLogPageParams {
 #[serde(rename_all = "camelCase")]
 pub struct GitLogPage {
     pub rows: Vec<LogRow>,
-    /// 다음 쪽을 부를 커서. 더 없으면 `null`. 쪽 사이에 이력이 바뀌면 행이 밀리거나 겹칠 수 있다.
+    /// 다음 쪽을 부를 커서(불투명 — 이 쪽의 마지막 커밋을 가리킨다). 더 없으면 `null`. 다음 쪽은 그 커밋 다음 행부터이므로 쪽
+    /// 사이에 새 커밋이 생겨도 행이 겹치지 않는다(새 커밋이 그 커밋보다 앞에 오면 이어지는 쪽에 보이지 않는다).
     pub next_cursor: Option<String>,
     /// 전체 행 수(그래프 목록만, 걸러진 목록은 `null`).
     #[specta(type = Option<pw_rpc::JsNumber>)]
@@ -122,6 +124,7 @@ async fn stream(
         // 받는 쪽이 없으면(스트림이 끝남) 더 만들지 않는다.
         run(
             &opened.repo,
+            opened.trusted,
             &query,
             Window::default(),
             &stop,
@@ -143,11 +146,12 @@ fn page(git: &Git, params: &GitLogPageParams) -> Result<GitLogPage, RpcError> {
             "`limit` must be 1 to {MAX_PAGE}"
         )));
     }
-    let skip = match params.cursor.as_deref() {
-        None => 0,
-        Some(c) => c
-            .parse::<usize>()
-            .map_err(|_| RpcError::invalid_params(format!("bad `cursor`: `{c}`")))?,
+    let after = match params.cursor.as_deref() {
+        None => None,
+        Some(c) => Some(
+            gix::ObjectId::from_hex(c.as_bytes())
+                .map_err(|_| RpcError::invalid_params(format!("bad `cursor`: `{c}`")))?,
+        ),
     };
     let query = Query::new(params.refs.clone(), &params.filter, params.order)?;
     let empty = GitLogPage {
@@ -161,11 +165,12 @@ fn page(git: &Git, params: &GitLogPageParams) -> Result<GitLogPage, RpcError> {
     let mut rows = Vec::new();
     let mut total = None;
     let window = Window {
-        skip,
+        after,
         limit: Some(params.limit as usize),
     };
     let outcome = run(
         &opened.repo,
+        opened.trusted,
         &query,
         window,
         &AtomicBool::new(false),
@@ -175,7 +180,10 @@ fn page(git: &Git, params: &GitLogPageParams) -> Result<GitLogPage, RpcError> {
             true
         },
     )?;
-    let next_cursor = outcome.more.then(|| (skip + rows.len()).to_string());
+    let next_cursor = outcome
+        .more
+        .then(|| rows.last().map(|r| r.hash.clone()))
+        .flatten();
     Ok(GitLogPage {
         rows,
         next_cursor,

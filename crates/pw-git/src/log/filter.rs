@@ -5,16 +5,17 @@
 //!
 //! | 필터 | git |
 //! |---|---|
-//! | `author` | `--author=<패턴>` — 「이름 <메일>」 에 맞춘다 |
+//! | `author` | `--author=<패턴>` — mailmap 을 적용한 「이름 <메일>」 에 맞춘다([`super::commit`]) |
 //! | `message` | `--grep=<패턴>` — 메시지(제목 · 본문)의 줄마다 맞춘다 |
 //! | `regex` | 켜면 `-E`(정규식), 끄면 `-F`(글자 그대로). `author` · `message` 둘 다 |
 //! | `ignoreCase` | `-i` |
-//! | `since` · `until` | `--since` · `--until`(커미터 시각, 둘 다 경계 포함) |
+//! | `since` · `until` | `--since` · `--until`(커미터 시각, 둘 다 경계 포함). `since` 는 기준보다 오래된 커밋의 조상도 뺀다([`super::walk::before`]) |
 //! | `paths` | `-- <경로>…` — 이력 단순화는 `walk` 가 한다 |
 //! | `hash` | 해시 접두(git 에는 같은 옵션이 없다) |
 //!
-//! 여럿이면 모두 맞아야 한다(git 도 `--author` 와 `--grep` 을 AND 로 묶는다). 정규식 문법은 Rust `regex` 다 — POSIX ERE 와 흔한
-//! 문법은 같고, 역참조 · POSIX 문자 클래스 이름 같은 것은 다르다.
+//! 여럿이면 모두 맞아야 한다(git 도 `--author` 와 `--grep` 을 AND 로 묶는다). 작성자 · 메시지는 커밋의 `encoding` 헤더에서 UTF-8 로
+//! 바꾼 글자에 맞춘다(git 과 같다). 정규식 문법은 Rust `regex` 다 — POSIX ERE 와 흔한 문법은 같고, 역참조 · POSIX 문자 클래스 이름
+//! 같은 것은 다르다. 경로는 글자 그대로의 파일 · 폴더다 — git pathspec 의 글롭(`dir/*`)은 받지 않는다.
 //!
 //! 시각 필터의 순서: 거르기 전 전체 이력의 순서에서 맞는 커밋만 남긴다. git 은 commit-graph 가 있을 때 이렇게 하고, 없을 때는
 //! `--until` 로 빠진 커밋을 순서 계산에서도 빼서 머지 위를 자르면 순서가 달라진다(같은 git 이 commit-graph 유무로 순서가 다르다).
@@ -114,6 +115,11 @@ impl Filter {
             Some(prefix) => id.to_hex().to_string().starts_with(prefix.as_str()),
             None => true,
         }
+    }
+
+    /// `since`(커미터 시각, 유닉스 초).
+    pub fn since(&self) -> Option<i64> {
+        self.since
     }
 
     /// 커밋 내용을 봐야 하는 것이 있는가.

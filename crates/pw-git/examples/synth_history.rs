@@ -2,10 +2,12 @@
 //!
 //! ```text
 //! cargo run --release -p pw-git --features test-support --example synth_history -- <폴더> [커밋 수=100000] [시드] [--commit-graph]
+//! cargo run --release -p pw-git --features test-support --example synth_history -- <폴더> 20000 --fanout 3000
 //! ```
 //!
 //! `<폴더>` 는 비어 있거나 없어야 한다. 위로 찾기는 `<폴더>` 의 부모에서 멈춘다. `--commit-graph` 면 `git commit-graph write
-//! --reachable` 까지 한다(없음 · 있음 둘 다 재려면 폴더 두 개를 만든다).
+//! --reachable` 까지 한다(없음 · 있음 둘 다 재려면 폴더 두 개를 만든다). `--fanout <n>` 이면 브랜치 · 머지가 섞인 이력 대신 곧은
+//! `main` 곳곳에서 갈라진 원격 브랜치 `n` 개를 만든다(`testing::synth::fanout` — 레인 상한).
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -16,6 +18,14 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let graph = args.iter().any(|a| a == "--commit-graph");
     args.retain(|a| a != "--commit-graph");
+    let fanout = args.iter().position(|a| a == "--fanout").map(|i| {
+        let n: usize = args
+            .get(i + 1)
+            .and_then(|n| n.parse().ok())
+            .expect("--fanout <branches>");
+        args.drain(i..=i + 1);
+        n
+    });
     let Some(dir) = args.first().map(PathBuf::from) else {
         eprintln!("usage: synth_history <dir> [commits=100000] [seed] [--commit-graph]");
         std::process::exit(2);
@@ -40,12 +50,21 @@ fn main() {
     let dir = std::fs::canonicalize(&dir).expect("resolve the folder");
     let ceiling = dir.parent().expect("a parent folder").to_path_buf();
     let started = Instant::now();
-    let summary = synth::create(&dir, &ceiling, commits, seed).expect("create the repository");
+    let summary = match fanout {
+        Some(branches) => {
+            synth::fanout(&dir, &ceiling, commits, branches, seed).expect("create the repository");
+            format!("fanout {commits} commits, {branches} remote branches")
+        }
+        None => format!(
+            "{:?}",
+            synth::create(&dir, &ceiling, commits, seed).expect("create the repository")
+        ),
+    };
     if graph {
         synth::write_commit_graph(&dir, &ceiling).expect("write the commit-graph");
     }
     println!(
-        "{}: {summary:?}, seed {seed:#x}, commit-graph {graph}, {:.1}s",
+        "{}: {summary}, seed {seed:#x}, commit-graph {graph}, {:.1}s",
         dir.display(),
         started.elapsed().as_secs_f64()
     );

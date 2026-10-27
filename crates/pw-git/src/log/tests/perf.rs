@@ -23,6 +23,7 @@ fn first_chunk(dir: &Path) -> Duration {
     let mut first = None;
     run(
         &repo,
+        false,
         &query,
         Window::default(),
         &AtomicBool::new(false),

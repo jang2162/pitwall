@@ -49,6 +49,7 @@ cargo test --release -p pw-syntax --test perf -- --ignored --nocapture --exact m
 cargo nextest run -p pw-fs --run-ignored only -E 'test(=ops::tests::the_os_trash_takes_a_test_file_on_macos)'   # 진짜 macOS 휴지통에 pitwall-test-trash-*.txt 하나를 넣는다(기본 시험 · CI 에서 빠진다). 확인한 뒤 휴지통에서 지운다
 cargo nextest run -p pw-fs --release -j 1 -E 'test(/^search::tests::stopping_/) | test(=search::tests::the_stream_sends_files_then_done_and_ends_soon_after_cancel)'   # 검색 취소 100 ms(M1-07 완료 기준)를 벽시계로 판정한다 — debug 빌드는 멈춘 뒤에 한 일로만 판정한다(`crates/pw-fs/src/search/tests.rs` 의 `RELEASE_TIMING`)
 PW_RESET_FUZZ_CASES=200 cargo nextest run -p pw-git -E 'test(/history::tests::fuzz::/)'   # reset 미리보기의 차등 퍼즈 긴 판(조각 넷 × 200 개, 기본 시험은 × 10). 실패하면 시드를 보인다 — PW_RESET_FUZZ_SEED=<시드> PW_RESET_FUZZ_CASES=1 로 그 경우만(`crates/pw-git/src/history/tests/fuzz.rs`)
+cargo nextest run --release -p pw-git -j 1 --run-ignored only -E 'test(=log::tests::perf::the_first_chunk_of_100k_commits_is_within_300ms)' --no-capture   # git 로그 첫 청크 300 ms(M2-03 완료 기준, 합성 10만 커밋 · commit-graph 있음 · 없음). 저장소 생성까지 10~55초가 걸려 `test-release`(CI)에는 넣지 않는다 — 같은 기기에서 손으로 돌린다(M2-22)
 mise run test-release   # 위 release 판정 시험(검색 취소 100 ms · `fs.list` 1만 개 · 구문 강조 16 ms · git 감시 이벤트 500 ms)을 한 번에 — CI 의 「release timing tests」 단계와 같은 명령이다. 8개를 돌린다(0개면 실패)
 ```
 

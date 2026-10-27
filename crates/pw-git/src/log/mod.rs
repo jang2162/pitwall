@@ -14,6 +14,7 @@
 //! 않는다 — 미신뢰 프로젝트에서도 같은 경로다. 요청 하나 동안만 저장소 핸들을 쥐고 캐시를 남기지 않으므로 신뢰가 바뀌어도 다음
 //! 요청이 새로 연다.
 
+pub mod commit;
 pub mod filter;
 pub mod graph;
 pub mod methods;
@@ -201,10 +202,10 @@ impl Query {
     }
 }
 
-/// 내보낼 행의 범위: 앞의 `skip` 행을 건너뛰고 많아야 `limit` 행.
+/// 내보낼 행의 범위: 커밋 `after` 의 다음 행부터(없으면 처음부터) 많아야 `limit` 행.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Window {
-    pub skip: usize,
+    pub after: Option<ObjectId>,
     pub limit: Option<usize>,
 }
 
@@ -222,19 +223,30 @@ fn internal(e: impl std::fmt::Display) -> RpcError {
 }
 
 /// 로그를 만들어 청크로 `emit` 한다(첫 청크 [`FIRST_CHUNK`] 행, 다음은 [`CHUNK`] 행). 그래프 목록은 청크를 적어도 하나 보낸다(빈
-/// 저장소면 빈 청크 하나 — `total` 을 알린다). `emit` 이 `false` 를 돌려주거나 `stop` 이 켜지면 멈춘다(멈춤은 `CANCELLED` 오류).
+/// 저장소면 빈 청크 하나 — `total` 을 알린다). 청크의 첫 행에는 열린 레인 전체([`GraphRow::top`])가 실린다. `emit` 이 `false` 를
+/// 돌려주거나 `stop` 이 켜지면 멈춘다(멈춤은 `CANCELLED` 오류). `trusted` 는 연 저장소의 신뢰다(mailmap 설정을 볼지,
+/// [`commit::Mailmap::of`]). `window.after` 의 커밋이 로그에 없으면 invalid params(`stale cursor`).
 pub fn run(
     repo: &gix::Repository,
+    trusted: bool,
     query: &Query,
     window: Window,
     stop: &AtomicBool,
     emit: &mut dyn FnMut(LogChunk) -> bool,
 ) -> Result<Outcome, RpcError> {
-    let decorations = decorations(repo)?;
-    let tips = tips(repo, query.refs.as_deref())?;
+    // ref 목록은 한 번만 읽는다(낱개 ref 파일이 수천 개인 저장소에서 파일 열기가 첫 청크 시간의 대부분이다).
+    let refs = branch_refs(repo)?;
+    let head = head(repo)?;
+    let decorations = decorations(&refs, &head);
+    let tips = tips(repo, query.refs.as_deref(), &refs, head.0)?;
     let dag = walk::collect(repo, &tips, &query.filter.paths, stop)?;
     let order = walk::order(&dag, query.order, stop)?;
     let filter = &query.filter;
+    let old = filter
+        .since()
+        .map(|since| walk::before(&dag, &order, since));
+    // 첫 커밋을 읽을 때 연다(빈 로그 · 넘기는 행만 있는 쪽은 열지 않는다).
+    let mut mailmap: Option<commit::Mailmap> = None;
     let graph = filter.keeps_graph();
     let mut layout = graph.then(Layout::new);
     let mut out = Chunker {
@@ -244,6 +256,7 @@ pub fn run(
         since_flush: Instant::now(),
         timed: !graph,
     };
+    let mut passed = window.after.is_none();
     let mut matched = 0usize;
     let mut buf = Vec::new();
     let mut more = false;
@@ -251,49 +264,53 @@ pub fn run(
         if n % 256 == 0 && stop.load(Ordering::Relaxed) {
             return Err(RpcError::cancelled());
         }
-        let row_graph = layout.as_mut().map(|l| l.row(i, dag.parents(i)));
         let id = dag.ids[i as usize];
-        if dag.hidden(i) || !filter.matches_cheaply(&id, dag.time[i as usize]) {
+        // 그래프 목록은 거르는 행이 없다 — 내보낼 행이면 청크의 첫 행인지 지금 안다.
+        let top = layout
+            .as_ref()
+            .filter(|_| passed && out.rows.is_empty())
+            .map(Layout::top);
+        let row_graph = layout.as_mut().map(|l| GraphRow {
+            top,
+            ..l.row(i, dag.parents(i))
+        });
+        if !passed {
+            passed = window.after == Some(id);
             continue;
         }
-        let wanted = matched >= window.skip;
-        if window
-            .limit
-            .is_some_and(|limit| matched >= window.skip + limit)
+        if dag.hidden(i)
+            || old.as_ref().is_some_and(|old| old[i as usize])
+            || !filter.matches_cheaply(&id, dag.time[i as usize])
         {
+            continue;
+        }
+        if window.limit.is_some_and(|limit| matched >= limit) {
             // 한 행 더 맞는지만 본다.
-            if !filter.needs_commit() || commit_matches(repo, filter, &id, &mut buf)? {
+            let mailmap = mailmap.get_or_insert_with(|| commit::Mailmap::of(repo, trusted));
+            if !filter.needs_commit() || commit_matches(repo, filter, mailmap, &id, &mut buf)? {
                 more = true;
                 break;
             }
             continue;
         }
-        if !wanted && !filter.needs_commit() {
-            matched += 1;
-            continue;
-        }
         let commit = repo.objects.find_commit(&id, &mut buf).map_err(internal)?;
-        let author = commit.author().map_err(internal)?;
-        let (name, email) = (
-            author.name.trim().to_str_lossy(),
-            author.email.trim().to_str_lossy(),
-        );
-        if filter.needs_commit()
-            && !filter.matches_commit(&format!("{name} <{email}>"), &commit.message.to_str_lossy())
-        {
+        let mailmap = mailmap.get_or_insert_with(|| commit::Mailmap::of(repo, trusted));
+        let text = commit::Text::read(&commit, mailmap)?;
+        if filter.needs_commit() && !filter.matches_commit(&text.ident(), &text.message) {
             continue;
         }
         matched += 1;
-        if !wanted {
-            continue;
-        }
         let row = LogRow {
             hash: id.to_string(),
-            parents: commit.parents().map(|p| p.to_string()).collect(),
-            subject: commit.message().summary().to_str_lossy().into_owned(),
-            author_name: name.into_owned(),
-            author_email: email.into_owned(),
-            author_time: author.seconds(),
+            parents: if dag.is_shallow(&id) {
+                Vec::new()
+            } else {
+                commit.parents().map(|p| p.to_string()).collect()
+            },
+            subject: commit::subject(&commit),
+            author_name: commit::clip(&text.author_name, commit::MAX_IDENT),
+            author_email: commit::clip(&text.author_email, commit::MAX_IDENT),
+            author_time: text.author_time,
             refs: decorations.get(&id).cloned().unwrap_or_default(),
             graph: row_graph,
         };
@@ -303,6 +320,11 @@ pub fn run(
                 abandoned: true,
             });
         }
+    }
+    if !passed {
+        return Err(RpcError::invalid_params(
+            "stale cursor: its commit is no longer in the log",
+        ));
     }
     if !out.finish(emit) {
         return Ok(Outcome {
@@ -319,17 +341,13 @@ pub fn run(
 fn commit_matches(
     repo: &gix::Repository,
     filter: &Filter,
+    mailmap: &commit::Mailmap,
     id: &ObjectId,
     buf: &mut Vec<u8>,
 ) -> Result<bool, RpcError> {
     let commit = repo.objects.find_commit(id, buf).map_err(internal)?;
-    let author = commit.author().map_err(internal)?;
-    let who = format!(
-        "{} <{}>",
-        author.name.trim().to_str_lossy(),
-        author.email.trim().to_str_lossy()
-    );
-    Ok(filter.matches_commit(&who, &commit.message.to_str_lossy()))
+    let text = commit::Text::read(&commit, mailmap)?;
+    Ok(filter.matches_commit(&text.ident(), &text.message))
 }
 
 /// 행을 청크로 묶는다.
@@ -441,21 +459,24 @@ fn head(
     Ok((commit, branch))
 }
 
-/// 시작 커밋(받은 순서). `refs` 가 없으면 `git log --branches --remotes --tags HEAD` 와 같은 차례.
-fn tips(repo: &gix::Repository, refs: Option<&[String]>) -> Result<Vec<ObjectId>, RpcError> {
+/// 시작 커밋(받은 순서). `refs` 가 없으면 `git log --branches --remotes --tags HEAD` 와 같은 차례(`all` 은 [`branch_refs`],
+/// `head` 는 HEAD 의 커밋).
+fn tips(
+    repo: &gix::Repository,
+    refs: Option<&[String]>,
+    all: &[RefTip],
+    head: Option<ObjectId>,
+) -> Result<Vec<ObjectId>, RpcError> {
     let Some(refs) = refs else {
-        let mut tips: Vec<ObjectId> = branch_refs(repo)?
-            .into_iter()
-            .filter_map(|r| r.commit)
-            .collect();
-        tips.extend(head(repo)?.0);
+        let mut tips: Vec<ObjectId> = all.iter().filter_map(|r| r.commit).collect();
+        tips.extend(head);
         return Ok(tips);
     };
     let mut tips = Vec::with_capacity(refs.len());
     for name in refs {
         let unknown = || RpcError::invalid_params(format!("unknown ref `{name}`"));
         let id = if name == "HEAD" {
-            head(repo)?.0.ok_or_else(unknown)?
+            head.ok_or_else(unknown)?
         } else {
             let mut reference = repo
                 .try_find_reference(name.as_str())
@@ -473,18 +494,21 @@ fn tips(repo: &gix::Repository, refs: Option<&[String]>) -> Result<Vec<ObjectId>
     Ok(tips)
 }
 
-/// 커밋마다 붙일 ref 장식. 원격의 심볼릭 ref(`origin/HEAD`)는 뺀다.
-fn decorations(repo: &gix::Repository) -> Result<HashMap<ObjectId, Vec<LogRef>>, RpcError> {
-    let (head_commit, head_branch) = head(repo)?;
+/// 커밋마다 붙일 ref 장식(`refs` 는 [`branch_refs`], `head` 는 [`head`]). 원격의 심볼릭 ref(`origin/HEAD`)는 뺀다.
+fn decorations(
+    refs: &[RefTip],
+    head: &(Option<ObjectId>, Option<gix::refs::FullName>),
+) -> HashMap<ObjectId, Vec<LogRef>> {
+    let (head_commit, head_branch) = head;
     let mut map: HashMap<ObjectId, Vec<LogRef>> = HashMap::new();
-    if let (Some(commit), None) = (head_commit, &head_branch) {
+    if let (Some(commit), None) = (*head_commit, head_branch) {
         map.entry(commit).or_default().push(LogRef {
             name: "HEAD".to_owned(),
             kind: LogRefKind::Head,
             current: false,
         });
     }
-    for r in branch_refs(repo)? {
+    for r in refs {
         let Some(commit) = r.commit else { continue };
         let kind = match rank(r.name.as_bstr()) {
             0 => LogRefKind::Branch,
@@ -505,5 +529,5 @@ fn decorations(repo: &gix::Repository) -> Result<HashMap<ObjectId, Vec<LogRef>>,
             list.push(entry);
         }
     }
-    Ok(map)
+    map
 }

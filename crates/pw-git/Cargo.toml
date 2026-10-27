@@ -11,16 +11,19 @@ publish.workspace = true
 test-support = ["dep:tempfile"]
 
 [dependencies]
+# 로그 커밋의 `encoding` 헤더를 UTF-8 로(`log::commit`). 버전은 pw-fs 와 같게 둔다.
+encoding_rs = "0.8.35"
 # 읽기(결정 M2-D1). 기본 기능을 끄고 쓰는 것만 켠다 — 네트워크 · credentials 는 켜지 않는다(fetch · push 는 CLI).
 # 이미 들어와 있는 `gix-attributes`(pw-lang) · `gix-parallel`(pw-fs)과 같은 gitoxide 릴리스다. 올릴 때 셋을 함께 올린다.
 # `status`: 작업 트리 상태(M2-02, `src/status`). `parallel`: status 의 index↔작업 트리 비교 · 디렉터리 걷기를 스레드로 나누고 중간에
-# 멈출 수 있게 한다(없으면 결과를 다 모은 뒤에야 돌려주고 멈추지 못한다).
+# 멈출 수 있게 한다(없으면 결과를 다 모은 뒤에야 돌려주고 멈추지 못한다). `mailmap`: 로그의 작성자(`log::commit`).
 gix = { version = "0.90.0", default-features = false, features = [
   "sha1",
   "blob-diff",
   "revision",
   "status",
   "parallel",
+  "mailmap",
 ] }
 # git 디렉터리 감시(M2-02, `src/watch`). 버전은 pw-fs · pw-core 와 같다.
 notify = "8.2.0"

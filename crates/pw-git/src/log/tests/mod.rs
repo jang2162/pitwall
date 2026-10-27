@@ -1,6 +1,7 @@
 //! 로그 시험. 저장소는 임시 폴더에 진짜 git 으로 만들고(`crate::testing`), 순서 · 필터는 같은 옵션의 `git log` 출력과 맞춘다.
 //! 레인 배치는 스냅숏(insta)과 연속성 검사([`check_lanes`])로 본다.
 
+mod commits;
 mod filters;
 mod graph;
 mod order;
@@ -24,7 +25,7 @@ fn open(dir: &Path) -> gix::Repository {
         .expect("a repository")
 }
 
-/// 로그 전체(청크를 이어 붙인 행)와 청크마다의 (행 수, `total`).
+/// 로그 전체(청크를 이어 붙인 행)와 청크마다의 (행 수, `total`). 그래프 목록이면 청크의 첫 행에만 `top` 이 있다.
 fn log_chunks(
     dir: &Path,
     refs: Option<&[&str]>,
@@ -41,10 +42,20 @@ fn log_chunks(
     let mut chunks = Vec::new();
     run(
         &open(dir),
+        false,
         &query,
         Window::default(),
         &AtomicBool::new(false),
         &mut |chunk| {
+            for (k, row) in chunk.rows.iter().enumerate() {
+                if let Some(g) = &row.graph {
+                    assert_eq!(
+                        g.top.is_some(),
+                        k == 0,
+                        "`top` only on the first row of a chunk"
+                    );
+                }
+            }
             chunks.push((chunk.rows.len(), chunk.total));
             rows.extend(chunk.rows);
             true
@@ -52,6 +63,48 @@ fn log_chunks(
     )
     .expect("the log");
     (rows, chunks)
+}
+
+/// `top` 을 지운 행(청크 경계가 다른 두 목록을 견준다).
+fn without_tops(rows: &[LogRow]) -> Vec<LogRow> {
+    rows.iter()
+        .cloned()
+        .map(|mut r| {
+            if let Some(g) = &mut r.graph {
+                g.top = None;
+            }
+            r
+        })
+        .collect()
+}
+
+/// 행마다 지나가는 간선 — `graph` 머리 주석의 규칙대로 앞 행에서 이어 계산한다(UI 가 하는 일). `top` 이 실린 행은 이어 계산한
+/// 윗변과 같아야 한다.
+fn passing(rows: &[LogRow]) -> Vec<Vec<(u32, u32)>> {
+    use std::collections::BTreeMap;
+    let mut open: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut out = Vec::with_capacity(rows.len());
+    for (n, row) in rows.iter().enumerate() {
+        let g = row.graph.as_ref().expect("a graph row");
+        if let Some(top) = &g.top {
+            let expected: Vec<(u32, u32)> = open.iter().map(|(&l, &c)| (l, c)).collect();
+            assert_eq!(top, &expected, "row {n}: `top` is the open lanes");
+        }
+        let ends: Vec<u32> =
+            g.up.iter()
+                .map(|e| e.0)
+                .filter(|&lane| lane != crate::log::graph::FOLDED || g.fold_closes)
+                .collect();
+        let pass: Vec<(u32, u32)> = open
+            .iter()
+            .filter(|(lane, _)| !ends.contains(lane))
+            .map(|(&l, &c)| (l, c))
+            .collect();
+        open = pass.iter().copied().collect();
+        open.extend(g.down.iter().copied());
+        out.push(pass);
+    }
+    out
 }
 
 fn log(dir: &Path, refs: Option<&[&str]>, filter: &LogFilter, order: LogOrder) -> Vec<LogRow> {
@@ -160,19 +213,26 @@ impl Synth {
 }
 
 /// 레인 배치의 연속성: 행의 아랫변(지나가는 간선 + 노드에서 나간 간선)이 다음 행의 윗변(지나가는 간선 + 노드로 모이는 간선)과
-/// 레인 · 색까지 같고, 레인이 기다리는 커밋이 실제 부모다 — 노드로 모이는 레인은 정확히 그 커밋을 기다리던 레인들이다. 뿌리가
-/// 아닌 커밋의 부모는 모두 행에 있어야 한다(그래프 목록은 조상을 모두 담는다).
+/// 레인 · 색까지 같고, 레인이 기다리는 커밋이 실제 부모다 — 노드로 모이는 레인은 정확히 그 커밋을 기다리던 레인들이다. 지나가는
+/// 간선은 [`passing`] 으로 이어 계산한 것이다. 보통 레인은 [`graph::MAX_LANES`] 개 안이고, 넘는 갈래는 접힌 레인이 함께 기다린다.
+/// 뿌리가 아닌 커밋의 부모는 모두 행에 있어야 한다(그래프 목록은 조상을 모두 담는다).
 fn check_lanes(rows: &[LogRow]) {
-    use std::collections::BTreeMap;
-    // 레인 → (기다리는 커밋, 색).
+    use crate::log::graph::{FOLDED, FOLDED_COLOR, MAX_LANES};
+    use std::collections::{BTreeMap, BTreeSet};
+    let passes = passing(rows);
+    // 보통 레인 → (기다리는 커밋, 색), 접힌 레인이 기다리는 커밋들.
     let mut lanes: BTreeMap<u32, (String, u32)> = BTreeMap::new();
+    let mut folded: BTreeSet<String> = BTreeSet::new();
     for (n, row) in rows.iter().enumerate() {
         let g = row.graph.as_ref().expect("a graph row");
-        let waiting: Vec<u32> = lanes
+        let mut waiting: Vec<u32> = lanes
             .iter()
             .filter(|(_, (target, _))| *target == row.hash)
             .map(|(&lane, _)| lane)
             .collect();
+        if folded.contains(&row.hash) {
+            waiting.push(FOLDED);
+        }
         let up: Vec<u32> = g.up.iter().map(|e| e.0).collect();
         assert_eq!(
             up, waiting,
@@ -180,20 +240,38 @@ fn check_lanes(rows: &[LogRow]) {
             row.subject
         );
         for &(lane, color) in &g.up {
-            assert_eq!(lanes[&lane].1, color, "row {n}: color of up lane {lane}");
+            let expected = if lane == FOLDED {
+                FOLDED_COLOR
+            } else {
+                lanes[&lane].1
+            };
+            assert_eq!(expected, color, "row {n}: color of up lane {lane}");
         }
-        if let Some(&(first, _)) = g.up.first() {
-            assert_eq!(
+        match g.up.first() {
+            Some(&(first, _)) => assert_eq!(
                 first, g.lane,
                 "row {n}: the node sits on the leftmost waiting lane"
-            );
+            ),
+            None => assert!(
+                g.lane == FOLDED || !lanes.contains_key(&g.lane),
+                "row {n}: a new line starts on a free lane"
+            ),
         }
-        let passing: Vec<(u32, u32)> = lanes
+        assert!(g.lane <= FOLDED, "row {n}: lane {} over the cap", g.lane);
+        if g.lane == FOLDED {
+            assert_eq!(g.color, FOLDED_COLOR, "row {n}: a folded node");
+        }
+        let was_folded = !folded.is_empty();
+        folded.remove(&row.hash);
+        let mut passing: Vec<(u32, u32)> = lanes
             .iter()
             .filter(|(_, (target, _))| *target != row.hash)
             .map(|(&lane, &(_, color))| (lane, color))
             .collect();
-        assert_eq!(g.pass, passing, "row {n}: passing lanes");
+        if !folded.is_empty() {
+            passing.push((FOLDED, FOLDED_COLOR));
+        }
+        assert_eq!(passes[n], passing, "row {n}: passing lanes");
         for lane in &up {
             lanes.remove(lane);
         }
@@ -210,6 +288,15 @@ fn check_lanes(rows: &[LogRow]) {
                     "row {n}: first parent keeps the node lane"
                 );
             }
+            if lane == FOLDED {
+                assert_eq!(
+                    color, FOLDED_COLOR,
+                    "row {n}: edge {k} into the folded lane"
+                );
+                folded.insert(parent.clone());
+                continue;
+            }
+            assert!(lane < MAX_LANES, "row {n}: lane {lane} over the cap");
             if let Some((target, c)) = lanes.get(&lane) {
                 assert_eq!(
                     (target, *c),
@@ -219,9 +306,14 @@ fn check_lanes(rows: &[LogRow]) {
             }
             lanes.insert(lane, (parent.clone(), color));
         }
+        assert_eq!(
+            g.fold_closes,
+            was_folded && folded.is_empty(),
+            "row {n}: the folded lane closes"
+        );
     }
     assert!(
-        lanes.is_empty(),
-        "lanes still waiting after the last row: {lanes:?}"
+        lanes.is_empty() && folded.is_empty(),
+        "lanes still waiting after the last row: {lanes:?} {folded:?}"
     );
 }
