@@ -10,6 +10,8 @@
 //!   고르지 못한다.
 //! - 기록은 창마다 마지막 드롭 하나이고, 한 번 꺼내면 버리고, [`DROP_TTL`] 이 지나면 버린다. 번호가 다르거나(위조 · 옛 드롭) 다른
 //!   창의 번호면 거절한다.
+//! - 그 프로젝트의 창만 그 프로젝트로 들여온다(창 label 의 범위로 [`pw_fs::Fs::write_roots`] — RPC 쓰기와 같은 판정). 다른
+//!   프로젝트 창 · 웰컴 · 설정 · 단일 파일 창은 거절한다.
 //! - 대상 폴더는 pw-fs 의 쓰기 규칙으로 판정하고, 같은 이름은 덮지 않는다([`pw_fs::Fs::import`] — 링크는 링크로, 특수 파일은 건너뛴다).
 //! - 복사는 그 프로젝트의 `Task` 로 돈다(상태바의 진행 · 취소, M1-04). 취소하면 지금 항목을 치우고 멈춘다.
 //!
@@ -25,7 +27,7 @@ use pw_core::task::{TaskProgress, TaskSpawner};
 use pw_core::{Scope, task};
 use pw_fs::Fs;
 use pw_fs::ops::Imported;
-use pw_rpc::RpcError;
+use pw_rpc::{ConnectionScope, RpcError};
 use serde::Serialize;
 use tauri::{DragDropEvent, Emitter, EventTarget, Runtime, State, Window, WindowEvent};
 use tokio_util::sync::CancellationToken;
@@ -185,12 +187,16 @@ pub async fn import_drop<R: Runtime>(
     dir: String,
     title: String,
 ) -> Result<Imported, RpcError> {
-    // 단일 파일 창(M1-24)은 그 파일 하나에만 닿는다 — 그 창의 드롭으로 프로젝트에 들여오지 않는다.
-    if crate::windows::WindowKind::of_label(window.label())
-        == Some(crate::windows::WindowKind::File)
-    {
-        return Err(RpcError::outside_file_scope("import_drop"));
-    }
+    // 그 프로젝트의 창만 그 프로젝트로 들여온다 — RPC 연결의 범위와 같은 판정이다([`Fs::write_roots`]). 창의 범위는 label 로
+    // 정한다(Rust 가 창을 만들 때 붙인 것, 웹뷰가 보낸 값이 아니다): 프로젝트 창은 그 프로젝트, 웰컴 · 설정 · 단일 파일 창(M1-24)은
+    // 어느 프로젝트에도 쓰지 못한다. 거절하면 드롭 기록을 꺼내지 않는다.
+    let scope = crate::windows::project_of_label(window.label())
+        .map_or(ConnectionScope::Host, |id| {
+            ConnectionScope::Project(id.to_owned())
+        });
+    let roots = state
+        .fs
+        .write_roots(&scope, &project_id, worktree.as_deref())?;
     let sources = state
         .drops
         .take(window.label(), drop_id, indices.as_deref(), Instant::now())
@@ -200,7 +206,7 @@ pub async fn import_drop<R: Runtime>(
     let (tx, rx) = tokio::sync::oneshot::channel();
     let tasks = state
         .tasks
-        .scoped(Scope::Project(project_id.clone()), CancellationToken::new());
+        .scoped(Scope::Project(project_id), CancellationToken::new());
     let handle = tasks.spawn(title, move |ctx: task::TaskCtx| async move {
         let ctx = Arc::new(ctx);
         let worker = Arc::clone(&ctx);
@@ -212,8 +218,7 @@ pub async fn import_drop<R: Runtime>(
                 message: None,
             });
             fs.import(
-                &project_id,
-                worktree.as_deref(),
+                &roots,
                 Path::new(&dir),
                 &sources,
                 &|| cancel.is_cancelled(),
@@ -299,30 +304,92 @@ mod tests {
         assert_eq!(drops.take("w", id, None, then), Err(Refused::Unknown));
     }
 
-    /// 단일 파일 창(M1-24)의 드롭은 프로젝트로 들여오지 않는다 — 그 창은 그 파일 하나에만 닿는다. 드롭 기록도 쓰지 않는다.
+    /// 그 프로젝트의 창만 그 프로젝트로 들여온다. 다른 프로젝트 창 · 웰컴 · 설정 · 단일 파일 창(M1-24)의 드롭은 거절하고
+    /// (`PERMISSION_DENIED`) 아무것도 복사하지 않으며 드롭 기록도 꺼내지 않는다.
     #[test]
-    fn a_file_window_cannot_import_a_drop() {
+    fn only_the_project_window_imports_into_its_project() {
+        use pw_core::bus::{DEFAULT_CAPACITY, EventBus};
+        use pw_core::config::AppPaths;
+        use pw_core::registry::path::simplify;
+        use pw_core::registry::{NewProject, Registry};
         use tauri::Manager as _;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let base = simplify(std::fs::canonicalize(tmp.path()).unwrap());
+        let registry = Registry::new(
+            AppPaths::under(&base.join("app")),
+            None,
+            EventBus::new(DEFAULT_CAPACITY),
+        );
+        let project = |name: &str| {
+            let root = base.join(name);
+            std::fs::create_dir_all(root.join("in")).unwrap();
+            let id = registry
+                .create(NewProject {
+                    root: root.clone(),
+                    ..NewProject::default()
+                })
+                .unwrap()
+                .id;
+            (id, root)
+        };
+        let (p1, root) = project("p1");
+        let (p2, _) = project("p2");
+        let dropped = base.join("Desktop/a.txt");
+        std::fs::create_dir_all(dropped.parent().unwrap()).unwrap();
+        std::fs::write(&dropped, "dropped").unwrap();
 
         let app = tauri::test::mock_app();
         let host = pw_core::LocalHost::new("local");
-        app.manage(DropImport::new(Arc::new(Fs::new()), host.tasks().clone()));
-        let window = tauri::WebviewWindowBuilder::new(&app, "file-1", Default::default())
-            .build()
-            .unwrap();
+        let fs = Arc::new(Fs::new());
+        fs.attach(registry.clone());
+        app.manage(DropImport::new(fs, host.tasks().clone()));
         let state = app.state::<DropImport>();
-        let id = state.drops.record("file-1", paths(), Instant::now());
-        let result = tauri::async_runtime::block_on(import_drop(
-            window.as_ref().window(),
-            app.state::<DropImport>(),
-            id,
-            None,
-            "p1".into(),
-            None,
-            "/work/p1".into(),
-            "import".into(),
-        ));
-        assert_eq!(result.unwrap_err().code, pw_rpc::code::PERMISSION_DENIED);
-        assert!(state.drops.take("file-1", id, None, Instant::now()).is_ok());
+        let import = |label: &str| {
+            let window = tauri::WebviewWindowBuilder::new(&app, label, Default::default())
+                .build()
+                .unwrap();
+            let id = state
+                .drops
+                .record(label, vec![dropped.clone()], Instant::now());
+            let result = tauri::async_runtime::block_on(import_drop(
+                window.as_ref().window(),
+                app.state::<DropImport>(),
+                id,
+                None,
+                p1.clone(),
+                None,
+                root.join("in").display().to_string(),
+                "import".into(),
+            ));
+            (result, id)
+        };
+        for label in [
+            crate::windows::project_label(&p2),
+            crate::windows::WELCOME_LABEL.to_owned(),
+            crate::windows::SETTINGS_LABEL.to_owned(),
+            "file-1".to_owned(),
+        ] {
+            let (result, id) = import(&label);
+            assert_eq!(
+                result.unwrap_err().code,
+                pw_rpc::code::PERMISSION_DENIED,
+                "{label}"
+            );
+            assert!(!root.join("in/a.txt").exists(), "{label}");
+            assert!(
+                state.drops.take(&label, id, None, Instant::now()).is_ok(),
+                "{label}"
+            );
+        }
+        let (result, _) = import(&crate::windows::project_label(&p1));
+        assert_eq!(
+            result.unwrap().copied,
+            [root.join("in/a.txt").display().to_string()]
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("in/a.txt")).unwrap(),
+            "dropped"
+        );
     }
 }

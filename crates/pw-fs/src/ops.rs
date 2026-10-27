@@ -1,7 +1,8 @@
 //! 파일 조작(`docs/design/12-m1-plan.md` M1-21, F3-2): 만들기 `fs.create` · 이름 바꾸기와 이동 `fs.rename` · 복사 `fs.copy` · 휴지통
 //! `fs.trash`, 그리고 Finder 에서 드롭한 항목을 들여오는 [`Fs::import`](데스크톱 command 만 부른다, RPC 가 아니다).
 //!
-//! 접근 범위는 [`crate::scope`] 와 같다(결정 M1-D8). 조작은 항목 **자체**에 한다 — 이름을 바꾸거나 지우는 심링크는 링크가 바뀌고
+//! 접근 범위는 [`crate::scope`] 와 같고(결정 M1-D8), 그 전에 부른 연결의 범위가 그 프로젝트에 쓸 수 있어야 한다
+//! ([`Fs::write_roots`] — 그 프로젝트의 창만). 조작은 항목 **자체**에 한다 — 이름을 바꾸거나 지우는 심링크는 링크가 바뀌고
 //! 대상은 그대로다. 그래도 판정은 실제 대상으로 한다(규칙 A): 원본이 루트 밖을 가리키는 링크면 거절한다. 대상(새 이름 · 복사본)은
 //! 들어갈 폴더를 실제 경로로 풀어 그 안이 루트 안일 때만 받는다. 프로젝트 루트 자체는 바꾸거나 지울 수 없다.
 //!
@@ -31,10 +32,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pw_core::registry::path::normalize;
-use pw_rpc::{Router, RpcError, code, rpc_method};
+use pw_rpc::{ConnectionScope, Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 
-use crate::scope::{Denied, Roots};
+use crate::scope::{Denied, WriteRoots};
 use crate::{Fs, denied, io_error};
 
 /// 만들 것.
@@ -221,21 +222,21 @@ pub(crate) fn register(router: &mut Router, fs: Arc<Fs>) {
     }
     let (create, rename, copy) = (Arc::clone(&fs), Arc::clone(&fs), Arc::clone(&fs));
     router
-        .unary(FsCreateMethod, move |_ctx, params: FsCreateParams| {
+        .unary(FsCreateMethod, move |ctx, params: FsCreateParams| {
             let s = Arc::clone(&create);
-            blocking(move || s.create(&params))
+            blocking(move || s.create(ctx.scope(), &params))
         })
-        .unary(FsRenameMethod, move |_ctx, params: FsFromToParams| {
+        .unary(FsRenameMethod, move |ctx, params: FsFromToParams| {
             let s = Arc::clone(&rename);
-            blocking(move || s.rename(&params))
+            blocking(move || s.rename(ctx.scope(), &params))
         })
-        .unary(FsCopyMethod, move |_ctx, params: FsFromToParams| {
+        .unary(FsCopyMethod, move |ctx, params: FsFromToParams| {
             let s = Arc::clone(&copy);
-            blocking(move || s.copy(&params))
+            blocking(move || s.copy(ctx.scope(), &params))
         })
-        .unary(FsTrashMethod, move |_ctx, params: FsTrashParams| {
+        .unary(FsTrashMethod, move |ctx, params: FsTrashParams| {
             let s = Arc::clone(&fs);
-            blocking(move || s.trash(&params))
+            blocking(move || s.trash(ctx.scope(), &params))
         });
 }
 
@@ -255,8 +256,12 @@ pub(crate) fn os_trash(path: &Path) -> Result<(), trash::Error> {
 }
 
 impl Fs {
-    pub fn create(&self, params: &FsCreateParams) -> Result<FsCreated, RpcError> {
-        let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
+    pub fn create(
+        &self,
+        scope: &ConnectionScope,
+        params: &FsCreateParams,
+    ) -> Result<FsCreated, RpcError> {
+        let roots = self.write_roots(scope, &params.project_id, params.worktree.as_deref())?;
         let path = destination(&roots, Path::new(&params.path), None)?;
         let made = match params.kind {
             FsCreateKind::File => fs::OpenOptions::new()
@@ -272,8 +277,12 @@ impl Fs {
         })
     }
 
-    pub fn rename(&self, params: &FsFromToParams) -> Result<FsMoved, RpcError> {
-        let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
+    pub fn rename(
+        &self,
+        scope: &ConnectionScope,
+        params: &FsFromToParams,
+    ) -> Result<FsMoved, RpcError> {
+        let roots = self.write_roots(scope, &params.project_id, params.worktree.as_deref())?;
         let from = entry(&roots, Path::new(&params.from))?;
         let to = destination(&roots, Path::new(&params.to), Some(&from))?;
         if to == from {
@@ -297,8 +306,12 @@ impl Fs {
         })
     }
 
-    pub fn copy(&self, params: &FsFromToParams) -> Result<FsCopied, RpcError> {
-        let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
+    pub fn copy(
+        &self,
+        scope: &ConnectionScope,
+        params: &FsFromToParams,
+    ) -> Result<FsCopied, RpcError> {
+        let roots = self.write_roots(scope, &params.project_id, params.worktree.as_deref())?;
         let from = entry(&roots, Path::new(&params.from))?;
         let to = destination(&roots, Path::new(&params.to), None)?;
         if under(&from, &to) {
@@ -318,16 +331,21 @@ impl Fs {
         })
     }
 
-    pub fn trash(&self, params: &FsTrashParams) -> Result<FsTrashed, RpcError> {
-        self.trash_with(params, &os_trash)
+    pub fn trash(
+        &self,
+        scope: &ConnectionScope,
+        params: &FsTrashParams,
+    ) -> Result<FsTrashed, RpcError> {
+        self.trash_with(scope, params, &os_trash)
     }
 
     pub(crate) fn trash_with(
         &self,
+        scope: &ConnectionScope,
         params: &FsTrashParams,
         trasher: Trasher<'_>,
     ) -> Result<FsTrashed, RpcError> {
-        let roots = self.roots(&params.project_id, params.worktree.as_deref())?;
+        let roots = self.write_roots(scope, &params.project_id, params.worktree.as_deref())?;
         // 모두 판정한 뒤에 지운다 — 하나라도 루트 밖이면 아무것도 지우지 않는다. 없는 것은 판정을 막지 않고 `missing` 으로 싣는다.
         let mut targets = Vec::new();
         let mut failed = Vec::new();
@@ -373,19 +391,18 @@ impl Fs {
     }
 
     /// Finder 에서 드롭한 항목(`sources`, 루트 밖이어도 된다)을 `dir` 폴더로 복사한다. 원본은 데스크톱이 그 창의 네이티브 드롭
-    /// 이벤트에서 받은 경로만이다 — 이 함수는 RPC 로 열지 않는다(원본 검사가 없다). 대상 폴더는 쓰기 규칙으로 판정하고, 같은 이름이
+    /// 이벤트에서 받은 경로만이다 — 이 함수는 RPC 로 열지 않는다(원본 검사가 없다). `roots` 는 드롭을 받은 창의 범위로 얻는다
+    /// ([`Fs::write_roots`] — 데스크톱 `import_drop` 이 창 label 에서 범위를 정한다). 대상 폴더는 쓰기 규칙으로 판정하고, 같은 이름이
     /// 있는 항목은 덮지 않고 `conflicts` 에 싣는다. `cancelled` 가 참이 되면 지금 항목을 치우고 멈춘다. `progress` 는 항목 하나를
     /// 끝낼 때마다 끝낸 수로 부른다.
     pub fn import(
         &self,
-        project_id: &str,
-        worktree: Option<&str>,
+        roots: &WriteRoots,
         dir: &Path,
         sources: &[PathBuf],
         cancelled: &dyn Fn() -> bool,
         progress: &mut dyn FnMut(usize),
     ) -> Result<Imported, RpcError> {
-        let roots = self.roots(project_id, worktree)?;
         let dir = roots.writable_dir(dir).map_err(denied)?;
         if !fs::metadata(&dir).is_ok_and(|m| m.is_dir()) {
             return Err(RpcError::invalid_params(format!(
@@ -431,7 +448,7 @@ impl Fs {
     }
 }
 
-impl Roots {
+impl WriteRoots {
     /// 무언가를 넣을 폴더: 실제 경로가 루트 안(루트 자체 포함)이어야 한다.
     pub(crate) fn writable_dir(&self, dir: &Path) -> Result<PathBuf, Denied> {
         let real = normalize(dir).map_err(|_| Denied::Relative(dir.to_path_buf()))?;
@@ -459,7 +476,7 @@ fn split(path: &Path) -> Result<(&Path, &std::ffi::OsStr), RpcError> {
 
 /// 조작할 항목 자체의 경로: 들어 있는 폴더를 실제 경로로 풀고 마지막 이름은 그대로 둔다(링크를 따르지 않는다). 규칙 A — 링크면
 /// 실제 대상도 루트 안이어야 한다. 없으면 `NOT_FOUND`.
-fn entry(roots: &Roots, path: &Path) -> Result<PathBuf, RpcError> {
+fn entry(roots: &WriteRoots, path: &Path) -> Result<PathBuf, RpcError> {
     let (parent, name) = split(path)?;
     let parent = normalize(parent).map_err(|_| denied(Denied::Relative(path.to_path_buf())))?;
     let entry = parent.join(name);
@@ -474,7 +491,7 @@ fn entry(roots: &Roots, path: &Path) -> Result<PathBuf, RpcError> {
 
 /// 새로 생길 항목의 경로: 들어갈 폴더(있어야 한다)를 실제 경로로 풀어 그 안. 이미 있으면 `CONFLICT` — `same` 과 같은 항목이면
 /// (대소문자만 다른 이름) 받는다. 여기서의 「있음」 확인은 빨리 알리려는 것이고, 덮지 않는 보장은 마지막 OS 호출이 한다.
-fn destination(roots: &Roots, path: &Path, same: Option<&Path>) -> Result<PathBuf, RpcError> {
+fn destination(roots: &WriteRoots, path: &Path, same: Option<&Path>) -> Result<PathBuf, RpcError> {
     let (parent, name) = split(path)?;
     let parent = normalize(parent).map_err(|_| denied(Denied::Relative(path.to_path_buf())))?;
     let dest = parent.join(name);
@@ -496,7 +513,7 @@ fn destination(roots: &Roots, path: &Path, same: Option<&Path>) -> Result<PathBu
 }
 
 /// `entry` 가 루트 안이고 루트 자체가 아니다.
-fn inside_not_root(roots: &Roots, requested: &Path, entry: &Path) -> Result<(), RpcError> {
+fn inside_not_root(roots: &WriteRoots, requested: &Path, entry: &Path) -> Result<(), RpcError> {
     if roots.as_slice().iter().any(|root| root == entry) {
         return Err(RpcError::invalid_params(format!(
             "`{}` is a project root",

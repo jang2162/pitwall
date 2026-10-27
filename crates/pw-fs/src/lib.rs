@@ -38,8 +38,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use pw_core::registry::methods::rpc_error;
 use pw_core::registry::path::{normalize, worktree_link};
+use pw_core::registry::state::scope_may_write;
 use pw_core::registry::{Project, Registry as Projects};
-use pw_rpc::{FileScope, RpcError, code};
+use pw_rpc::{ConnectionScope, FileScope, RpcError, code};
 
 use crate::judge::{Bom, Judgment, judge, size_class};
 use crate::limits::{READ_ONLY_MAX, SNIFF_BYTES};
@@ -47,7 +48,7 @@ use crate::list::{EntryKind, mtime_ms};
 use crate::methods::{
     FsContent, FsList, FsPathParams, FsRead, FsReadParams, FsStat, FsWriteParams, FsWritten,
 };
-use crate::scope::{Denied, Roots};
+use crate::scope::{Denied, Roots, WriteRoots};
 
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
@@ -132,7 +133,7 @@ impl Fs {
         Ok(Roots::confirmed(roots))
     }
 
-    /// 요청의 접근 범위. 파일 범위 호출자(단일 파일 창, [`pw_rpc::Caller::file`])면 요청의 프로젝트 · 워크트리를 보지 않고 그
+    /// 읽기 요청의 접근 범위(쓰기는 [`Self::write_roots`]). 파일 범위 호출자(단일 파일 창, [`pw_rpc::Caller::file`])면 요청의 프로젝트 · 워크트리를 보지 않고 그
     /// 파일 하나가 루트다([`Roots::file`]).
     pub fn roots_in(
         &self,
@@ -143,6 +144,38 @@ impl Fs {
         match file {
             Some(file) => Ok(Roots::file(file.path().to_path_buf())),
             None => self.roots(project_id, worktree),
+        }
+    }
+
+    /// 쓰기 요청의 접근 범위 — 쓰기 RPC(`fs.write` · `fs.create` · `fs.rename` · `fs.copy` · `fs.trash`)와 드롭 들여오기가 쓸 경로를
+    /// 고르기 전에 모두 이것을 지난다([`WriteRoots`] 만 쓸 경로를 판정한다). 범위는 요청 값이 아니라 연결이 정한 것이다(`scope`,
+    /// [`pw_rpc::Ctx::scope`]):
+    /// - 프로젝트로 고른 연결([`ConnectionScope::Project`], 그 프로젝트의 창)은 그 프로젝트(활성 워크트리 포함)에만 쓴다 —
+    ///   `project_id` 가 다른 프로젝트면 거절한다. 판정은 git 쓰기와 같은 함수다([`scope_may_write`]).
+    /// - 파일 하나에만 닿는 연결([`ConnectionScope::File`], 단일 파일 창)은 그 파일만 쓴다([`Roots::file`], 요청의 프로젝트는 보지
+    ///   않는다).
+    /// - Host 를 고른 연결(웰컴 · 설정 창, 창의 UI 로그)은 프로젝트 파일을 쓰지 못한다.
+    ///
+    /// 거절은 `PERMISSION_DENIED` 이고 아무것도 바꾸지 않는다. `.git/config` 같은 파일 하나를 덮는 것으로 훅 · `core.fsmonitor` ·
+    /// credential helper 를 거쳐 코드 실행까지 가므로, git 쓰기를 그 프로젝트의 창으로 묶은 판정이 이 길로 새지 않게 한다.
+    pub fn write_roots(
+        &self,
+        scope: &ConnectionScope,
+        project_id: &str,
+        worktree: Option<&str>,
+    ) -> Result<WriteRoots, RpcError> {
+        match scope {
+            ConnectionScope::File(file) => {
+                Ok(WriteRoots::granted(Roots::file(file.path().to_path_buf())))
+            }
+            _ if scope_may_write(scope, project_id) => {
+                Ok(WriteRoots::granted(self.roots(project_id, worktree)?))
+            }
+            ConnectionScope::Project(_) | ConnectionScope::Host => Err(RpcError::new(
+                code::PERMISSION_DENIED,
+                "only the project's own window may write its files",
+            )
+            .with_data(serde_json::json!({ "projectId": project_id }))),
         }
     }
 
@@ -277,26 +310,22 @@ impl Fs {
         })
     }
 
-    pub fn write(&self, params: &FsWriteParams) -> Result<FsWritten, RpcError> {
-        self.write_in(None, params)
-    }
-
-    /// [`Self::write`] 를 `file` 범위로([`Self::roots_in`]).
+    /// 파일 하나를 쓴다. 범위는 그 쓰기를 부른 연결의 것이다([`Self::write_roots`]).
     pub fn write_in(
         &self,
-        file: Option<&FileScope>,
+        scope: &ConnectionScope,
         params: &FsWriteParams,
     ) -> Result<FsWritten, RpcError> {
-        self.write_with(file, params, |_| Ok(()))
+        self.write_with(scope, params, |_| Ok(()))
     }
 
     fn write_with(
         &self,
-        file: Option<&FileScope>,
+        scope: &ConnectionScope,
         params: &FsWriteParams,
         fault: impl Fn(write::Stage) -> io::Result<()>,
     ) -> Result<FsWritten, RpcError> {
-        let roots = self.roots_in(file, &params.project_id, params.worktree.as_deref())?;
+        let roots = self.write_roots(scope, &params.project_id, params.worktree.as_deref())?;
         let real = roots.writable(Path::new(&params.path)).map_err(denied)?;
         let bytes = match (&params.content, params.bom) {
             (FsContent::Text { text }, bom) => {

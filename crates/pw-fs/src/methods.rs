@@ -222,6 +222,6 @@ pub fn register(router: &mut Router, fs: Arc<Fs>) {
         })
         .unary(FsWriteMethod, move |ctx, params: FsWriteParams| {
             let s = Arc::clone(&fs);
-            blocking(move || s.write_in(ctx.file_scope(), &params))
+            blocking(move || s.write_in(ctx.scope(), &params))
         });
 }

@@ -19,6 +19,8 @@
 //!   같은 폴더의 다른 파일 · 그 아래 경로(`a.txt/x`) · 다른 파일을 가리키는 링크는 루트 밖이다. 루트는 실제 경로라 그 파일을
 //!   가리키는 링크로 온 요청은 받는다. 쓰기는 그 파일 자체만 받는다(원자 쓰기의 임시 파일은 [`crate::write`] 가 만들고 RPC 로는
 //!   이름을 고를 수 없다).
+//! - **연결 범위(쓰기)**: 위 경로 판정 전에 부른 연결이 그 프로젝트에 쓸 수 있는가를 본다([`crate::Fs::write_roots`] — 그 프로젝트의
+//!   창 · 그 파일의 창만, Host 연결은 쓰지 못한다). 쓸 경로를 고르는 판정은 그 판정을 지난 [`WriteRoots`] 에만 있다.
 //! - **한계(쓰기)**: 판정은 경로 글자로 하고 쓰기는 그 뒤에 경로로 연다. 판정과 rename 사이에 다른 로컬 프로세스가 경로의 폴더
 //!   하나를 루트 밖 링크로 바꾸면 임시 파일 · rename 이 루트 밖에 떨어진다. 막으려면 폴더 핸들 기준 `openat` · `renameat` 가
 //!   필요하다(M1 에서는 하지 않는다). 루트 안에 동시에 쓸 수 있는 로컬 프로세스가 있어야 생기는 경합이다.
@@ -155,12 +157,25 @@ impl Roots {
             Err(Denied::Outside(path.to_path_buf()))
         }
     }
+}
+
+/// 쓰기를 받은 루트. 연결 범위가 그 루트에 쓰도록 허락했다는 판정([`crate::Fs::write_roots`])을 지난 것만 이것이 된다 — 쓸 경로를
+/// 고르는 판정([`Self::writable`], 파일 조작의 대상 · 원본)이 이 타입에만 있어, 쓰기 RPC 는 연결 범위를 보지 않고는 쓸 경로를 얻지
+/// 못한다. 읽기 판정은 [`Roots`] 그대로다(`Deref`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteRoots(Roots);
+
+impl WriteRoots {
+    /// 연결 범위를 본 쪽만 부른다([`crate::Fs::write_roots`]).
+    pub(crate) fn granted(roots: Roots) -> Self {
+        Self(roots)
+    }
 
     /// 쓸 실제 경로. 심링크면 그 대상이다 — 링크를 rename 으로 덮지 않고 대상 파일을 바꾼다.
     pub fn writable(&self, path: &Path) -> Result<PathBuf, Denied> {
         let real = absolute_normalized(path)?;
         // 폴더 루트 자체는 파일로 쓸 수 없다. 파일 루트는 그것만 쓴다.
-        if self.deepest(&real).is_none() || (!self.file && self.roots.contains(&real)) {
+        if self.deepest(&real).is_none() || (!self.0.file && self.0.roots.contains(&real)) {
             return Err(Denied::Outside(path.to_path_buf()));
         }
         // 정규화는 풀리는 링크를 대상으로 바꾼다 — 그래도 링크로 남았으면 대상이 없거나 고리다.
@@ -169,6 +184,14 @@ impl Roots {
         } else {
             Ok(real)
         }
+    }
+}
+
+impl std::ops::Deref for WriteRoots {
+    type Target = Roots;
+
+    fn deref(&self) -> &Roots {
+        &self.0
     }
 }
 
@@ -254,7 +277,7 @@ mod tests {
         let (_tmp, base) = real_tmp();
         fs::create_dir_all(base.join("proj/src")).unwrap();
         fs::write(base.join("secret"), "s").unwrap();
-        let roots = Roots::new([base.join("proj")]);
+        let roots = WriteRoots::granted(Roots::new([base.join("proj")]));
 
         assert_eq!(
             roots.readable(Path::new("src/main.rs")),
@@ -303,7 +326,7 @@ mod tests {
         std::os::unix::fs::symlink(base.join("store/pkg"), proj.join("node_modules/global"))
             .unwrap();
         std::os::unix::fs::symlink("..", proj.join("up")).unwrap();
-        let roots = Roots::new([proj.clone()]);
+        let roots = WriteRoots::granted(Roots::new([proj.clone()]));
 
         let inside = roots
             .readable(&proj.join("node_modules/pkg/index.js"))

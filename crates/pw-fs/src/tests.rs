@@ -69,8 +69,14 @@ impl Fixture {
         text: &str,
         expected: Option<String>,
     ) -> Result<FsWritten, RpcError> {
-        self.fs.write(&write_params(project, path, text, expected))
+        self.fs
+            .write_in(&own(project), &write_params(project, path, text, expected))
     }
+}
+
+/// 그 프로젝트의 창의 연결 범위([`Fs::write_roots`]).
+fn own(project: &str) -> ConnectionScope {
+    ConnectionScope::Project(project.to_owned())
 }
 
 fn write_params(project: &str, path: &Path, text: &str, expected: Option<String>) -> FsWriteParams {
@@ -382,7 +388,7 @@ fn an_injected_failure_keeps_the_original_content_and_permissions() {
     for stage in [write::Stage::Created, write::Stage::Written] {
         let err =
             f.fs.write_with(
-                None,
+                &own(&id),
                 &write_params(&id, &path, "new", version.clone()),
                 |s| {
                     if s == stage {
@@ -462,10 +468,13 @@ fn reads_report_binary_bom_and_line_endings() {
     );
 
     // 받은 텍스트와 판정 그대로 다시 쓰면 바이트가 같다.
-    f.fs.write(&FsWriteParams {
-        bom: true,
-        ..write_params(&id, &crlf, text(&read), read.version.clone())
-    })
+    f.fs.write_in(
+        &own(&id),
+        &FsWriteParams {
+            bom: true,
+            ..write_params(&id, &crlf, text(&read), read.version.clone())
+        },
+    )
     .unwrap();
     assert_eq!(fs::read(&crlf).unwrap(), original);
 
@@ -647,7 +656,7 @@ fn concurrent_writes_with_the_same_version_do_not_both_succeed() {
         let (a, b) = std::thread::scope(|s| {
             let a = s.spawn(|| {
                 f.fs.write_with(
-                    None,
+                    &own(&id),
                     &write_params(&id, &path, "from-A", version.clone()),
                     move |stage| {
                         if stage == write::Stage::Created {

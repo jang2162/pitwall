@@ -810,14 +810,16 @@ fn content_and_an_fs_write_of_the_same_file_take_turns() {
         let (tx, rx) = mpsc::channel::<Result<FsWritten, RpcError>>();
         let (tx, rx) = (Mutex::new(Some(tx)), Arc::new(Mutex::new(rx)));
         let (fs_service, waiting) = (Arc::clone(f.write.fs()), Arc::clone(&rx));
+        // 그 프로젝트 창의 저장이다(`fs.write` 는 그 연결만 쓴다).
+        let scope = pw_rpc::ConnectionScope::Project(f.project.clone());
         let saved = Arc::new(Mutex::new(None));
         let slot = Arc::clone(&saved);
         // 해결이 확인을 지나 쓰기 직전: 같은 파일의 저장을 띄우고 끝나기를 잠시 기다린다. 잠금을 나누면 저장은 해결이 쓸 때까지
         // 기다리므로 여기서는 끝나지 않는다.
         *f.write.before_conflict_write.lock().unwrap() = Some(Arc::new(move || {
-            let (fs_service, save) = (Arc::clone(&fs_service), save.clone());
+            let (fs_service, save, scope) = (Arc::clone(&fs_service), save.clone(), scope.clone());
             let tx = tx.lock().unwrap().take().expect("one write");
-            std::thread::spawn(move || tx.send(fs_service.write_in(None, &save)).unwrap());
+            std::thread::spawn(move || tx.send(fs_service.write_in(&scope, &save)).unwrap());
             if let Ok(done) = waiting.lock().unwrap().recv_timeout(Duration::from_secs(1)) {
                 *slot.lock().unwrap() = Some(done);
             }

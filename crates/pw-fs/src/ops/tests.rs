@@ -59,20 +59,23 @@ impl Fixture {
     }
 
     fn create(&self, id: &str, path: &Path, kind: FsCreateKind) -> Result<FsCreated, RpcError> {
-        self.fs.create(&FsCreateParams {
-            project_id: id.to_owned(),
-            worktree: None,
-            path: path.display().to_string(),
-            kind,
-        })
+        self.fs.create(
+            &own(id),
+            &FsCreateParams {
+                project_id: id.to_owned(),
+                worktree: None,
+                path: path.display().to_string(),
+                kind,
+            },
+        )
     }
 
     fn rename(&self, id: &str, from: &Path, to: &Path) -> Result<FsMoved, RpcError> {
-        self.fs.rename(&from_to(id, from, to))
+        self.fs.rename(&own(id), &from_to(id, from, to))
     }
 
     fn copy(&self, id: &str, from: &Path, to: &Path) -> Result<FsCopied, RpcError> {
-        self.fs.copy(&from_to(id, from, to))
+        self.fs.copy(&own(id), &from_to(id, from, to))
     }
 
     fn trash(
@@ -83,6 +86,7 @@ impl Fixture {
         trasher: Trasher<'_>,
     ) -> Result<FsTrashed, RpcError> {
         self.fs.trash_with(
+            &own(id),
             &FsTrashParams {
                 project_id: id.to_owned(),
                 worktree: None,
@@ -92,6 +96,16 @@ impl Fixture {
             trasher,
         )
     }
+}
+
+/// 그 프로젝트의 창의 연결 범위([`Fs::write_roots`]).
+fn own(id: &str) -> ConnectionScope {
+    ConnectionScope::Project(id.to_owned())
+}
+
+/// 그 프로젝트의 창이 받은 쓰기 루트(드롭 들여오기).
+fn granted(fx: &Fixture, id: &str) -> WriteRoots {
+    fx.fs.write_roots(&own(id), id, None).unwrap()
 }
 
 fn from_to(id: &str, from: &Path, to: &Path) -> FsFromToParams {
@@ -454,8 +468,7 @@ fn a_root_swapped_to_an_outside_link_refuses_file_operations() {
             .map(drop),
         fx.fs
             .import(
-                &id,
-                None,
+                &granted(&fx, &id),
                 &root,
                 &[fx.base.join("drop/d.txt")],
                 &|| false,
@@ -786,7 +799,14 @@ async fn only_the_owner_may_call_file_operations_and_none_is_an_mcp_tool() {
     assert!(!root.join("b.txt").exists());
 
     // owner 는 부른다.
-    let (session, mut rx) = Session::new(router, EventHub::new(), Caller::new(Role::Owner));
+    let (session, mut rx) = Session::new(
+        router,
+        EventHub::new(),
+        Caller {
+            role: Role::Owner,
+            scope: own(&id),
+        },
+    );
     session.handle_value(
         json!({"jsonrpc": "2.0", "id": 1, "method": "fs.copy", "params": calls[2].1}),
     );
@@ -837,9 +857,13 @@ fn import_copies_dropped_items_into_a_folder_inside_the_roots() {
     let mut seen = Vec::new();
     let out = fx
         .fs
-        .import(&id, None, &root.join("in"), &sources, &|| false, &mut |n| {
-            seen.push(n)
-        })
+        .import(
+            &granted(&fx, &id),
+            &root.join("in"),
+            &sources,
+            &|| false,
+            &mut |n| seen.push(n),
+        )
         .unwrap();
     assert_eq!(
         out.copied,
@@ -871,14 +895,24 @@ fn import_copies_dropped_items_into_a_folder_inside_the_roots() {
         root.join("finder-link"),
         root.join("in/one.txt"),
     ] {
-        let result = fx
-            .fs
-            .import(&id, None, &dir, &sources[..1], &|| false, &mut |_| {});
+        let result = fx.fs.import(
+            &granted(&fx, &id),
+            &dir,
+            &sources[..1],
+            &|| false,
+            &mut |_| {},
+        );
         assert_code(result, code::INVALID_PARAMS);
     }
     // 루트 자체에는 넣을 수 있다.
     fx.fs
-        .import(&id, None, &root, &sources[..1], &|| false, &mut |_| {})
+        .import(
+            &granted(&fx, &id),
+            &root,
+            &sources[..1],
+            &|| false,
+            &mut |_| {},
+        )
         .unwrap();
     assert_eq!(read(&root.join("one.txt")), "one");
 }
@@ -901,8 +935,7 @@ fn import_stops_when_cancelled_and_cleans_up_the_current_item() {
     let out = fx
         .fs
         .import(
-            &id,
-            None,
+            &granted(&fx, &id),
             &root,
             &[finder.join("big"), finder.join("after.txt")],
             &cancelled,
