@@ -218,7 +218,7 @@ async fn nothing_to_blame_ends_without_chunks_and_bad_params_fail() {
 }
 
 /// git 이 출력을 멈춘 동안 모인 범위는 기다리지 않고 보낸다(100 ms), 멈추면(`stream.cancel`) `git blame` 의 프로세스 그룹이 1초
-/// 안에 끝난다 — 가짜 git 이 범위 하나를 내고, 잠시 뒤 하나를 더 내고 30초 잔다.
+/// 안에 끝난다 — 가짜 git 이 범위 하나를 내고, 30 ms 뒤 하나를 더 내고 30초 잔다.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelling_ends_git_blame_within_a_second() {
@@ -236,7 +236,7 @@ async fn cancelling_ends_git_blame_within_a_second() {
     std::fs::write(
         &fake,
         format!(
-            "#!/bin/sh\nprintf '{head} 1 1 1\\nauthor A\\nauthor-mail <a@x>\\nauthor-time 1\\nsummary s\\nfilename a.txt\\n'\nsleep 0.3\nprintf '{head} 2 2 1\\nfilename a.txt\\n'\nsleep 30 &\necho \"$$ $!\" > '{pids}.tmp'\nmv '{pids}.tmp' '{pids}'\nwait\n",
+            "#!/bin/sh\nprintf '{head} 1 1 1\\nauthor A\\nauthor-mail <a@x>\\nauthor-time 1\\nsummary s\\nfilename a.txt\\n'\nsleep 0.03\nprintf '{head} 2 2 1\\nfilename a.txt\\n'\nsleep 30 &\necho \"$$ $!\" > '{pids}.tmp'\nmv '{pids}.tmp' '{pids}'\nwait\n",
             pids = pids.display()
         ),
     )
@@ -248,24 +248,23 @@ async fn cancelling_ends_git_blame_within_a_second() {
 
     let (session, mut rx) = fx.session();
     let opened = open_stream(&session, &mut rx, "git.blame", &params(&id, "a.txt", None)).await;
-    let note = next(&mut rx).await.into_notification().unwrap();
-    assert_eq!(
-        note.method, STREAM_CHUNK,
-        "the first range arrives before git ends"
-    );
-    let chunk: BlameChunk =
-        serde_json::from_value(note.params_as::<StreamChunk>().unwrap().data).unwrap();
-    assert_eq!(chunk.file.unwrap().engine, BlameEngine::Git);
-    // 둘째 범위: git 이 더 내지 않아도(30초 잔다) 곧 온다.
-    let note = next(&mut rx).await.into_notification().unwrap();
-    assert_eq!(
-        note.method, STREAM_CHUNK,
-        "the pending range is sent while git waits"
-    );
-    let chunk: BlameChunk =
-        serde_json::from_value(note.params_as::<StreamChunk>().unwrap().data).unwrap();
-    assert_eq!(chunk.ranges.len(), 1);
-    assert_eq!(chunk.ranges[0].line, 2);
+    // 첫 범위는 곧바로, 30 ms 뒤에 온 둘째 범위는 git 이 더 내지 않아도(30초 잔다) 100 ms 안팎에 온다 — 둘째는 데이터가 더 오지
+    // 않는 동안의 시간 기준 보내기만 보낼 수 있다(git 이 둘을 한 번에 냈으면 첫 청크에 함께 온다).
+    let mut lines = Vec::new();
+    while lines.len() < 2 {
+        let note = next(&mut rx).await.into_notification().unwrap();
+        assert_eq!(
+            note.method, STREAM_CHUNK,
+            "ranges arrive while git still runs"
+        );
+        let chunk: BlameChunk =
+            serde_json::from_value(note.params_as::<StreamChunk>().unwrap().data).unwrap();
+        if lines.is_empty() {
+            assert_eq!(chunk.file.unwrap().engine, BlameEngine::Git);
+        }
+        lines.extend(chunk.ranges.iter().map(|r| r.line));
+    }
+    assert_eq!(lines, [1, 2]);
     let deadline = Instant::now() + Duration::from_secs(10);
     let (git, child) = loop {
         if let Ok(text) = std::fs::read_to_string(&pids) {
