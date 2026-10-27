@@ -392,3 +392,32 @@ fn pages_lay_out_lanes_like_one_pass() {
         compare(&clone, None, &format!("seed {seed:x}, shallow"));
     }
 }
+
+/// 데스크톱의 레인 잇기 시험(apps/desktop/src/git/log/lanes.test.ts)이 읽는 픽스처를 다시 만든다: 합성 이력(머지 · 문어발 ·
+/// 고아)과 갈래가 레인 상한을 넘는 이력(접힌 레인)의 행 그래프(청크마다 첫 행에 `top`)와, 여기서 이어 계산한 지나가는 레인
+/// ([`passing`]). 배정을 바꾸면 돌린다: `cargo nextest run -p pw-git --run-ignored only -E 'test(=log::tests::graph::write_ui_lane_fixture)'`
+#[test]
+#[ignore = "writes the desktop lane fixture"]
+fn write_ui_lane_fixture() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ceiling =
+        pw_core::registry::path::normalize(&std::fs::canonicalize(tmp.path()).unwrap()).unwrap();
+    let synth_dir = ceiling.join("synth");
+    synth::create(&synth_dir, &ceiling, 300, synth::SEED).unwrap();
+    let fan_dir = ceiling.join("fan");
+    synth::fanout(&fan_dir, &ceiling, 150, 90, synth::SEED).unwrap();
+    let mut cases = serde_json::Map::new();
+    for (name, dir) in [("synth", &synth_dir), ("fanout", &fan_dir)] {
+        let rows = log(dir, None, &LogFilter::default(), LogOrder::Topo);
+        check_lanes(&rows);
+        let graphs: Vec<&GraphRow> = rows.iter().map(|r| r.graph.as_ref().unwrap()).collect();
+        cases.insert(
+            name.to_owned(),
+            serde_json::json!({ "graphs": graphs, "passing": passing(&rows) }),
+        );
+    }
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/desktop/src/git/log/testdata/lanes.json");
+    std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::write(&out, serde_json::to_string(&cases).unwrap() + "\n").unwrap();
+}

@@ -15,8 +15,10 @@ declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
 }
 
-// 레이아웃만 본다. 파일 트리는 에디터 · 키맵 · Host 를 쓰므로(file-tree.test.tsx 가 본다) 빈 내용으로 바꾼다.
+// 레이아웃만 본다. 파일 트리 · Git 로그는 에디터 · 키맵 · Host 를 쓰므로(file-tree.test.tsx · git-log-window.test.tsx 가 본다) 빈
+// 내용으로 바꾼다.
 vi.mock("../file-tree/file-tree", () => ({ FileTreeToolWindow: () => null }));
+vi.mock("../git/log/git-log-tool-window", () => ({ GitLogToolWindow: () => null }));
 
 let root: Root | undefined;
 

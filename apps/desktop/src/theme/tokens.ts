@@ -77,9 +77,15 @@ export const GRAPH_LANES = 8;
 export const graphLaneToken = (lane: number): GraphLaneToken =>
   `graph.lane.${(((lane % GRAPH_LANES) + GRAPH_LANES) % GRAPH_LANES) + 1}` as GraphLaneToken;
 
-export type GraphLaneToken = Exclude<(typeof GRAPH_TOKENS)[number], "graph.node">;
+export type GraphLaneToken = Exclude<
+  (typeof GRAPH_TOKENS)[number],
+  "graph.node" | "graph.lane.folded"
+>;
 
-/** 커밋 그래프(M2-14 의 canvas 렌더러가 구독한다). `graph.node` 는 커밋 점의 테두리 — 점을 지나는 레인 선과 떼어 보이게 한다. */
+/**
+ * 커밋 그래프(M2-14 의 canvas 렌더러가 구독한다). `graph.node` 는 커밋 점의 테두리 — 점을 지나는 레인 선과 떼어 보이게 한다.
+ * `graph.lane.folded` 는 레인 상한을 넘은 갈래가 함께 기다리는 「접힌 레인」(13-m2-plan 결정 M2-D2)의 색 — 순환에 들지 않는다.
+ */
 export const GRAPH_TOKENS = [
   "graph.lane.1",
   "graph.lane.2",
@@ -89,6 +95,7 @@ export const GRAPH_TOKENS = [
   "graph.lane.6",
   "graph.lane.7",
   "graph.lane.8",
+  "graph.lane.folded",
   "graph.node",
 ] as const;
 

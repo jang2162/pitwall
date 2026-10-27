@@ -218,11 +218,13 @@ mod tests {
             [
                 "builtin:i18n-default/i18n/ko/app.ftl",
                 "builtin:i18n-default/i18n/ko/file-window.ftl",
+                "builtin:i18n-default/i18n/ko/git-log.ftl",
                 "builtin:i18n-default/i18n/ko/menu.ftl",
                 "builtin:i18n-default/i18n/ko/project.ftl",
                 "builtin:i18n-default/i18n/ko/welcome.ftl",
                 "builtin:i18n-default/i18n/en/app.ftl",
                 "builtin:i18n-default/i18n/en/file-window.ftl",
+                "builtin:i18n-default/i18n/en/git-log.ftl",
                 "builtin:i18n-default/i18n/en/menu.ftl",
                 "builtin:i18n-default/i18n/en/project.ftl",
                 "builtin:i18n-default/i18n/en/welcome.ftl",

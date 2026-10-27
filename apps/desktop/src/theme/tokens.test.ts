@@ -120,8 +120,22 @@ describe("git · graph · diff tokens (M2-12)", () => {
       const values = defaultTheme.variants[appearance]!;
       const git = GIT_STATUS_TOKENS.map((t) => values[t].toLowerCase());
       expect(new Set(git).size).toBe(GIT_STATUS_TOKENS.length);
-      const lanes = GRAPH_TOKENS.filter((t) => t !== "graph.node").map((t) => values[t]);
+      const lanes = GRAPH_TOKENS.filter((t) => /^graph\.lane\.\d+$/.test(t)).map((t) =>
+        values[t].toLowerCase(),
+      );
       expect(new Set(lanes).size).toBe(GRAPH_LANES);
+    }
+  });
+
+  it("keep the folded lane apart from the cycled lanes and visible (3:1) on the panel background", () => {
+    for (const appearance of ["light", "dark"] as const) {
+      const values = defaultTheme.variants[appearance]!;
+      const folded = values["graph.lane.folded"].toLowerCase();
+      const lanes = Array.from({ length: GRAPH_LANES }, (_, i) =>
+        values[graphLaneToken(i)].toLowerCase(),
+      );
+      expect(lanes).not.toContain(folded);
+      expect(contrast(folded, values["ui.panelBackground"])).toBeGreaterThanOrEqual(3);
     }
   });
 
@@ -148,7 +162,7 @@ describe("git · graph · diff tokens (M2-12)", () => {
   });
 
   it("cycle graph lanes through graph.lane.1..GRAPH_LANES", () => {
-    expect(GRAPH_TOKENS.filter((t) => t.startsWith("graph.lane."))).toHaveLength(GRAPH_LANES);
+    expect(GRAPH_TOKENS.filter((t) => /^graph\.lane\.\d+$/.test(t))).toHaveLength(GRAPH_LANES);
     expect(graphLaneToken(0)).toBe("graph.lane.1");
     expect(graphLaneToken(GRAPH_LANES - 1)).toBe(`graph.lane.${GRAPH_LANES}`);
     expect(graphLaneToken(GRAPH_LANES)).toBe("graph.lane.1");

@@ -3,7 +3,10 @@
 //! ```text
 //! cargo run --release -p pw-git --example log_timing -- <저장소> [반복=5] [topo|date]
 //! /usr/bin/time -l target/release/examples/log_timing <저장소> 1      # 최고 메모리(maximum resident set size)
+//! target/release/examples/log_timing <저장소> 1 --dump <파일>            # 마지막 반복의 청크를 JSON 배열로 남긴다
 //! ```
+//!
+//! `--dump` 는 데스크톱의 그래프 측정 하네스(apps/desktop/perf/git-log)가 읽는 스트림 그대로다(`LogChunk` 의 배열).
 //!
 //! 저장소는 RPC 와 같은 경로로 연다(미신뢰 — `pw_git::repo::discover`). 잰 것: 저장소 열기부터 첫 청크(200행 + 레인)를 내보낼
 //! 때까지, 마지막 청크까지(전체 배치 · 메시지 읽기), 청크의 JSON 크기(스트림 항목 그대로 — RPC 봉투는 빼고). 반복마다 저장소를
@@ -16,7 +19,12 @@ use std::time::Instant;
 use pw_git::log::{LogFilter, LogOrder, Query, Window, run};
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let dump = args.iter().position(|a| a == "--dump").map(|i| {
+        let path = PathBuf::from(args.get(i + 1).expect("--dump <file>"));
+        args.drain(i..=i + 1);
+        path
+    });
     let Some(dir) = args.first().map(PathBuf::from) else {
         eprintln!("usage: log_timing <repo> [runs=5] [topo|date]");
         std::process::exit(2);
@@ -29,7 +37,9 @@ fn main() {
     };
     let query = Query::new(None, &LogFilter::default(), order).expect("a query");
     let mut firsts = Vec::new();
+    let mut chunks = Vec::new();
     for n in 1..=runs {
+        chunks.clear();
         let started = Instant::now();
         let repo = pw_git::repo::discover(&dir, false)
             .expect("open the repository")
@@ -72,6 +82,9 @@ fn main() {
                     }
                 }
                 rows += chunk.rows.len();
+                if dump.is_some() {
+                    chunks.push(chunk);
+                }
                 true
             },
         )
@@ -88,6 +101,14 @@ fn main() {
             first_bytes as f64 / 1e3,
             largest as f64 / 1e3
         );
+    }
+    if let Some(path) = dump {
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&chunks).expect("serialize the chunks"),
+        )
+        .expect("write the dump");
+        println!("dumped {} chunks to {}", chunks.len(), path.display());
     }
     firsts.sort();
     println!(

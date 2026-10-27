@@ -61,6 +61,7 @@ import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-
 import { FileWatch } from "../fs/file-watch";
 import { GitBranchFeature } from "../git/git-branch-feature";
 import { GitDocuments } from "../git/documents/git-documents";
+import { GitLogToolWindow } from "../git/log/git-log-tool-window";
 import { GitPrompts } from "../git/git-prompts";
 import { GitStatusWatch } from "../git/git-status";
 import { useAppStrings } from "../i18n/app-strings";
@@ -136,6 +137,7 @@ const ICONS: Record<string, LucideIcon> = {
  * 요소에 `data-tool-window={api.id}` 와 `tabIndex={-1}` 을 단다 — 키맵 컨텍스트의 툴 윈도우 층이다(src/keymap/context.ts).
  */
 const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>> = {
+  git: GitLogToolWindow,
   notifications: NotificationsToolWindow,
   project: FileTreeToolWindow,
   searchResults: SearchResultsToolWindow,
