@@ -6,7 +6,8 @@
 // - 파일을 고르면 에디터 영역에 diff 미리보기 탭(스테이징됨 = HEAD ↔ index, 변경 = index ↔ 작업 트리 — 그 탭의 hunk · 줄 체크가
 //   부분 스테이징이다, staging-changes.tsx). 버전 관리 안 되는 파일은 파일 자체를 미리보기로 연다. 더블클릭 · Enter 는 고정 탭.
 // - 체크 = 스테이징(commit-model.ts). 쓰기는 commit-ops.ts.
-// - 진행 중 작업 배너(M2-19 의 `OperationBanner`)는 목록 위 한 줄 자리다 — 둘 중 나중에 리베이스하는 쪽이 그 줄을 채운다.
+// - 진행 중 작업 배너(M2-19 의 `OperationBanner`, `placement="commit"`)를 위 막대와 목록 사이에 단다. 배너는 창의 키맵(액션)을 쓰므로
+//   툴 윈도우가 넘긴다 — 키맵 없이 목록만 그리는 측정 하네스는 넘기지 않는다.
 // - stash 는 목록 끝의 그룹이다: 만들기(메시지를 묻는다, untracked 포함 체크) · 적용 · 꺼내기 · 버리기(확인).
 
 import type { StashEntry } from "@pitwall/rpc-client";
@@ -30,6 +31,7 @@ import type { GitDocumentSpec } from "../documents/spec";
 import { activeWorktree } from "../../open-with/active-worktree";
 import { windowGitStatus } from "../git-status";
 import { gitToneClass } from "../git-status-mark";
+import { OperationBanner } from "../merge/operation-banner";
 import {
   type CheckState,
   type CommitGroup,
@@ -173,17 +175,19 @@ export function CommitToolWindow({ api }: IDockviewPanelProps) {
       tabIndex={-1}
       className="flex h-full flex-col bg-ui-panel text-ui-foreground outline-none"
     >
-      <CommitView />
+      <CommitView banner={<OperationBanner placement="commit" />} />
     </div>
   );
 }
 
 export interface CommitViewProps {
+  /** 위 막대 아래에 둘 진행 중 작업 배너. */
+  banner?: ReactNode;
   /** 성능 측정: 그룹 행을 그린 뒤 부른다. */
   onDrawn?(): void;
 }
 
-export function CommitView({ onDrawn }: CommitViewProps) {
+export function CommitView({ banner, onDrawn }: CommitViewProps) {
   const T = useGitCommitStrings();
   const feature = commitFeature((s) => s.current);
   const { groups, workTree, unsupported } = useCommitGroups();
@@ -194,6 +198,7 @@ export function CommitView({ onDrawn }: CommitViewProps) {
       groups={groups}
       workTree={workTree}
       unsupported={unsupported}
+      banner={banner}
       onDrawn={onDrawn}
     />
   );
@@ -212,12 +217,14 @@ function CommitBody({
   groups,
   workTree,
   unsupported,
+  banner,
   onDrawn,
 }: {
   feature: CommitFeature;
   groups: CommitGroups;
   workTree: string | null;
   unsupported: boolean;
+  banner?: ReactNode;
   onDrawn?(): void;
 }) {
   const T = useGitCommitStrings();
@@ -351,7 +358,7 @@ function CommitBody({
           <FileDiff size={14} aria-hidden />
         </ToolButton>
       </div>
-      <div data-operation-banner-slot="" />
+      {banner}
       <div className="min-h-0 flex-1">{list}</div>
       <MessageArea feature={feature} />
     </>

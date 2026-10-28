@@ -70,6 +70,8 @@ const host = vi.hoisted(() => ({
   rejectWith: undefined as string | undefined,
   /** 설정의 코드 글꼴(`[editor]`). */
   editor: undefined as Record<string, unknown> | undefined,
+  /** 진행 중 작업(`git.operation`). */
+  operation: null as unknown,
   emit: (_topic: string, _payload: unknown) => {},
   fixture: undefined as unknown as typeof FIXTURE,
 }));
@@ -185,7 +187,7 @@ vi.mock("../../tauri-transport", async () => {
               broken: [],
             });
           case "git.operation":
-            return reply({ operation: null });
+            return reply({ operation: host.operation });
           case "git.watch": {
             const streamId = next++;
             send({ id: m.id, result: { streamId } });
@@ -313,6 +315,7 @@ beforeEach(() => {
   host.template = null;
   host.rejectWith = undefined;
   host.editor = undefined;
+  host.operation = null;
   host.fixture = FIXTURE;
   activeWorktreeStore.setState({ top: undefined });
   diffPreferences.setState({ mode: "split" });
@@ -611,4 +614,34 @@ it("uses the editor font setting in the diff preview", async () => {
   });
   expect(getComputedStyle(scroller).fontFamily).toContain("Iosevka Test");
   expect(getComputedStyle(scroller.closest(".cm-editor")!).fontSize).toBe("17px");
+});
+
+it("shows the operation-in-progress banner (M2-19) above the list while a merge is stopped", async () => {
+  host.operation = {
+    kind: "merge",
+    heads: ["b".repeat(40)],
+    branch: null,
+    onto: null,
+    step: null,
+    remaining: null,
+    actions: ["continue", "abort"],
+  };
+  host.entries = [{ ...MODIFIED, unstaged: null, conflict: "bothModified" }];
+  await mount();
+  await act(async () => {
+    windowRegistry().run("git.commit");
+  });
+  const banner = await vi.waitFor(() => {
+    const b = document.querySelector<HTMLElement>(
+      '[data-tool-window="commit"] [data-testid="git-operation-banner"]',
+    );
+    expect(b).not.toBeNull();
+    return b!;
+  });
+  expect(banner.dataset.placement).toBe("commit");
+  expect(banner.dataset.operation).toBe("merge");
+  // 배너는 목록보다 위에 있다.
+  const list = document.querySelector("[data-commit-list]")!;
+  expect(banner.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(row("conflicts:src/app.rs")).not.toBeNull();
 });
