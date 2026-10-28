@@ -18,6 +18,7 @@ import { BranchStore, watchBranch } from "./branch-state";
 import { headName, trackText } from "./branch-status";
 import { type BranchStrings, branchStrings } from "./branch-strings";
 import { canCompareCommits, compareCommits } from "./compare-action";
+import { gitDialogStrings } from "./dialogs/strings";
 import { switchWorktree } from "./git-branch-feature";
 import { GitStatusStore } from "./git-status";
 
@@ -212,9 +213,12 @@ function opsWith(over: Partial<BranchOpsDeps> = {}) {
     worktree: () => "/wt",
     refs: () => refs(),
     askName: async () => "picked",
+    askBranch: async (q) => ({ name: "picked", checkout: q.checkout ?? false }),
     confirm: async () => true,
     notify,
+    offerUndo: (_move, _kind, title) => notify({ level: "info", title }),
     strings: () => T,
+    dialogStrings: () => gitDialogStrings((id) => id),
     registry: new ActionRegistry(),
     ...over,
   };

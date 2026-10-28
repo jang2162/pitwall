@@ -77,33 +77,21 @@ export function gitLogStrings(t: Translate) {
       compareRefs: (a: string, b: string) => t("git-log-menu-compare-refs", { a, b }),
     },
     dialog: {
-      newBranch: t("git-log-dialog-new-branch"),
       newTag: t("git-log-dialog-new-tag"),
       from: (rev: string) => t("git-log-dialog-from", { rev }),
       nameEmpty: t("git-log-dialog-name-empty"),
       nameInvalid: t("git-log-dialog-name-invalid"),
-      reset: (mode: string, rev: string) => t("git-log-dialog-reset", { mode, rev }),
-      resetLost: (count: number) => t("git-log-dialog-reset-lost", { count }),
-      resetNothing: t("git-log-dialog-reset-nothing"),
-      resetConfirm: t("git-log-dialog-reset-confirm"),
-      undo: (rev: string) => t("git-log-dialog-undo", { rev }),
-      undoLost: (count: number) => t("git-log-dialog-undo-lost", { count }),
-      undoConfirm: t("git-log-dialog-undo-confirm"),
-      cannotConfirm: t("git-log-dialog-cannot-confirm"),
-      moreLost: (count: number) => t("git-log-dialog-more-lost", { count }),
     },
     result: {
       moved: (ref: string, from: string, to: string) =>
         t("git-log-result-moved", { ref, from, to }),
       undo: t("git-log-result-undo"),
       dismiss: t("git-log-result-dismiss"),
-      undone: (ref: string) => t("git-log-result-undone", { ref }),
       stopped: t("git-log-result-stopped"),
       stoppedBody: t("git-log-result-stopped-body"),
       upToDate: t("git-log-result-up-to-date"),
       failed: (action: string) => t("git-log-result-failed", { action }),
       copied: t("git-log-result-copied"),
-      changed: t("git-log-result-changed"),
     },
   };
 }

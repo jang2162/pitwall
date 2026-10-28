@@ -4,19 +4,23 @@
 // - 체크아웃: 로컬 브랜치는 그대로, 원격 브랜치는 그것을 upstream 으로 하는 로컬 브랜치를 만들어 간다(`git.checkout` 의 `remote`).
 //   같은 이름의 로컬 브랜치가 이미 그 원격을 따르면 그 로컬 브랜치로 간다. 다른 것을 따르면(또는 아무것도 안 따르면) 새 로컬 이름을
 //   묻는다. 태그는 분리된 HEAD 다. 미저장 문서와 겹치는 확인은 쓰기 실행기가 창에 묻는다(git-prompts.tsx).
-// - 삭제: 먼저 `force` 없이 부른다. 병합 안 된 브랜치면 Host 가 `2101` 로 거절하고, 그때만 「강제 삭제」 를 묻는다(결정 M2-D6 ①).
-//   지운 결과의 이전 해시를 알림에 적는다 — [되돌리기] 단추는 M2-20 이 단다.
+// - 삭제: 먼저 `force` 없이 부른다. 병합 안 된 브랜치면 Host 가 `2101` 로 거절하고, 그때만 git 의 원문과 함께 「강제 삭제」 를 위험
+//   다이얼로그로 묻는다(결정 M2-D6 ①). 지운 결과의 이전 해시를 알림에 적고 [되돌리기](그 해시에 다시 만든다)를 단다(M2-20).
+// - 새 브랜치 · 이름 바꾸기는 브랜치 이름 다이얼로그(M2-20, dialogs/git-dialogs.tsx)로 묻는다. 만든 브랜치의 알림에도 [되돌리기]
+//   (지운다)를 단다.
 // - git 에 넘기는 리비전(merge · rebase · 태그 체크아웃 · 새 브랜치의 시작 · 비교)은 ref 전체 이름(`refs/heads/` · `refs/remotes/` ·
 //   `refs/tags/`)이다 — 같은 이름의 브랜치와 태그가 있어도 고른 것으로 풀린다. merge · rebase 는 Host 가 실행 직전에 모호하지
 //   않은 짧은 이름으로 바꿔 git 을 부른다(메시지 · reflog 가 터미널과 같다). 로컬 브랜치의 체크아웃 · 이름 바꾸기 · 삭제는 RPC 가
 //   짧은 이름을 받아 Host 가 `refs/heads/<이름>` 으로만 다룬다(crates/pw-git/src/branch/mod.rs — `git switch` · `git branch` 는
 //   브랜치만 본다). 원격 체크아웃도 Host 가 `refs/remotes/<원격>/<브랜치>` 를 만든다.
-// - merge · rebase 는 확인 한 번을 묻는다(위험 작업 다이얼로그의 주인은 M2-20 — 여기는 M1 의 확인 대화상자로 최소한만).
+// - merge · rebase 는 확인 한 번을 묻고(위험 표시는 없다 — 결정 M2-D6 ① 의 목록 밖), ref 를 옮겼으면 그 알림에 [되돌리기]
+//   (`reset --keep`, 미리보기를 거친다 — dialogs/undo.ts)를 단다.
 // - git 이 거절한 것(`2004`)은 쓰기 Task 의 실패 알림이 이미 원문을 보였다 — 여기서 또 알리지 않는다. 그 밖의 실패는 알린다.
 
 import type { ActionRegistry } from "@pitwall/keymap";
 import {
   type GitBranch,
+  type GitRefMove,
   type GitRefs,
   type GitRemoteBranch,
   type GitTag,
@@ -24,16 +28,16 @@ import {
   type RpcClient,
 } from "@pitwall/rpc-client";
 
-import type { ConfirmQuestion, NameQuestion } from "../file-tree/file-ops";
+import type { NameQuestion } from "../file-tree/file-ops";
 import type { NotificationInput } from "../notifications/notifications";
 import type { BranchStrings } from "./branch-strings";
 import { SHORT_HASH, headBranch, headName } from "./branch-status";
 import { compareCommits } from "./compare-action";
+import type { BranchNameAnswer, BranchNameQuestion, GitConfirm } from "./dialogs/git-dialogs";
+import type { GitDialogStrings } from "./dialogs/strings";
+import { GIT_FAILED, NOT_MERGED, type UndoKind, shortHash } from "./dialogs/undo";
 
-/** `crates/pw-git/src/branch/mod.rs` 의 `code::NOT_MERGED`. */
-export const NOT_MERGED = 2101;
-/** `crates/pw-git/src/write/mod.rs` 의 git 실패(원문은 Task 알림이 보였다). */
-export const GIT_FAILED = 2004;
+export { GIT_FAILED, NOT_MERGED };
 
 /** 팝업 · 검색이 고르는 ref 하나. */
 export type BranchRef =
@@ -101,9 +105,15 @@ export interface BranchOpsDeps {
   /** 지금 ref(창의 `windowBranch()`). */
   refs(): GitRefs | undefined;
   askName(question: NameQuestion): Promise<string | undefined>;
-  confirm(question: ConfirmQuestion): Promise<boolean>;
+  /** 브랜치 이름 다이얼로그(M2-20). */
+  askBranch(question: BranchNameQuestion): Promise<BranchNameAnswer | undefined>;
+  /** 위험 작업 다이얼로그(M2-20). */
+  confirm(question: GitConfirm): Promise<boolean>;
   notify(input: NotificationInput): void;
+  /** ref 를 옮긴 결과를 알리고 [되돌리기] 를 단다(dialogs/undo.ts 의 `offerUndo`). */
+  offerUndo(move: GitRefMove, kind: UndoKind, title: string): void;
   strings(): BranchStrings;
+  dialogStrings(): GitDialogStrings;
   registry: ActionRegistry;
 }
 
@@ -132,6 +142,15 @@ export function createBranchOps(deps: BranchOpsDeps) {
 
   const info = (title: string, body?: string) =>
     deps.notify({ level: "info", title, ...(body !== undefined && { body }) });
+
+  /** merge · rebase 의 결과: ref 를 옮겼으면 [되돌리기](keep)와 함께 알린다. */
+  const settled = (result: { outcome: string; moved: GitRefMove | null }, done: string) => {
+    const T = deps.strings();
+    if (result.outcome === "upToDate") return info(T.results.upToDate);
+    if (result.outcome === "stopped") return info(T.results.stopped);
+    if (result.moved) deps.offerUndo(result.moved, { kind: "head", mode: "keep" }, done);
+    else info(done);
+  };
 
   async function checkout(ref: BranchRef): Promise<void> {
     const T = deps.strings();
@@ -193,26 +212,32 @@ export function createBranchOps(deps: BranchOpsDeps) {
     }
   }
 
-  /** 새 브랜치를 만들고 그리로 간다. `start` 가 없으면 HEAD 에서. */
+  /** 새 브랜치를 만든다(「만든 뒤 체크아웃」 이 처음부터 켜져 있다). `start` 가 없으면 HEAD 에서. */
   async function create(start?: BranchRef): Promise<void> {
     const T = deps.strings();
-    const names = taken();
+    const D = deps.dialogStrings();
     const from = start ? shortName(start) : current();
-    const name = await deps.askName({
-      title: T.dialogs.newTitle,
-      hint: T.dialogs.newHint(from),
+    const answer = await deps.askBranch({
+      title: D.branch.createTitle,
+      hint: D.branch.createFrom(from),
       initial: start?.kind === "remote" ? remoteBranchName(start.branch) : "",
-      validate: (n) => branchNameProblem(T, n, names),
+      confirm: D.branch.create,
+      taken: taken(),
+      checkout: true,
     });
-    if (name === undefined) return;
+    if (answer === undefined) return;
     try {
-      await host().call("git.branch.create", {
+      const result = await host().call("git.branch.create", {
         ...scope(),
-        name,
+        name: answer.name,
         ...(start && { start: refName(start) }),
-        checkout: true,
+        checkout: answer.checkout,
       });
-      info(T.results.created(name));
+      deps.offerUndo(
+        { refName: result.refName, previous: null, current: result.commit },
+        { kind: "branchCreated" },
+        T.results.created(answer.name),
+      );
     } catch (e) {
       failed(T.popup.newBranch)(e);
     }
@@ -220,17 +245,23 @@ export function createBranchOps(deps: BranchOpsDeps) {
 
   async function rename(branch: GitBranch): Promise<void> {
     const T = deps.strings();
+    const D = deps.dialogStrings();
     const names = taken();
     names.delete(branch.name);
-    const next = await deps.askName({
-      title: T.dialogs.renameTitle(branch.name),
+    const answer = await deps.askBranch({
+      title: D.branch.renameTitle(branch.name),
       initial: branch.name,
-      validate: (n) => branchNameProblem(T, n, names),
+      confirm: D.branch.rename,
+      taken: names,
     });
-    if (next === undefined || next === branch.name) return;
+    if (answer === undefined || answer.name === branch.name) return;
     try {
-      await host().call("git.branch.rename", { ...scope(), name: branch.name, newName: next });
-      info(T.results.renamed(next));
+      await host().call("git.branch.rename", {
+        ...scope(),
+        name: branch.name,
+        newName: answer.name,
+      });
+      info(T.results.renamed(answer.name));
     } catch (e) {
       failed(T.popup.menu.rename)(e);
     }
@@ -253,20 +284,29 @@ export function createBranchOps(deps: BranchOpsDeps) {
           typeof e.data.stderr === "string"
             ? e.data.stderr.trim()
             : "";
+        const D = deps.dialogStrings();
+        const commit =
+          e.data && typeof e.data === "object" && !Array.isArray(e.data)
+            ? (e.data as { commit?: unknown }).commit
+            : undefined;
         const ok = await deps.confirm({
-          title: T.dialogs.forceTitle(branch.name),
-          body: T.dialogs.forceBody(branch.name),
-          ...(stderr && { warning: stderr }),
-          confirm: T.dialogs.forceConfirm,
+          title: D.branch.forceTitle(branch.name),
+          body: D.branch.forceBody(
+            branch.name,
+            shortHash(typeof commit === "string" ? commit : branch.commit),
+          ),
+          ...(stderr && { detail: stderr }),
+          confirm: D.branch.forceConfirm,
           danger: true,
         });
         if (!ok) return;
         result = await call(true);
       }
       const previous = result.deleted.previous;
-      info(
+      deps.offerUndo(
+        result.deleted,
+        { kind: "branchDeleted" },
         T.results.deleted(branch.name, previous ? previous.slice(0, SHORT_HASH) : ""),
-        previous ?? undefined,
       );
     } catch (e) {
       failed(T.popup.menu.delete)(e);
@@ -287,13 +327,7 @@ export function createBranchOps(deps: BranchOpsDeps) {
       // 한다). Host 가 잠금 안에서 짧은 이름이 모호하지 않으면 짧은 이름으로 git 을 불러 merge 메시지가 터미널의 `git merge x` 와
       // 같다(crates/pw-git/src/history/mod.rs `unambiguous_short`).
       const result = await host().call("git.merge", { ...scope(), rev: refName(ref) });
-      info(
-        result.outcome === "upToDate"
-          ? T.results.upToDate
-          : result.outcome === "stopped"
-            ? T.results.stopped
-            : T.results.merged(name),
-      );
+      settled(result, T.results.merged(name));
     } catch (e) {
       failed(T.popup.menu.merge(name, current()))(e);
     }
@@ -310,13 +344,7 @@ export function createBranchOps(deps: BranchOpsDeps) {
     if (!ok) return;
     try {
       const result = await host().call("git.rebase", { ...scope(), upstream: refName(ref) });
-      info(
-        result.outcome === "upToDate"
-          ? T.results.upToDate
-          : result.outcome === "stopped"
-            ? T.results.stopped
-            : T.results.rebased(current()),
-      );
+      settled(result, T.results.rebased(current()));
     } catch (e) {
       failed(T.popup.menu.rebase(current(), name))(e);
     }

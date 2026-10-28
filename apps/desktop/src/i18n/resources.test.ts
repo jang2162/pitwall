@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { fileTreeStrings } from "../file-tree/strings";
 import { fileWindowStrings } from "../file-window/strings";
 import { branchStrings } from "../git/branch-strings";
+import { gitDialogStrings } from "../git/dialogs/strings";
 import { gitLogStrings } from "../git/log/strings";
 import { gitMergeStrings } from "../git/merge/strings";
 import { PANELS } from "../layout/project-layout";
@@ -113,6 +114,27 @@ describe("built-in translations", () => {
       gitMergeStrings(t).conflicts.kind(kind);
     for (const reason of ["binary", "large", "deleted", "submodule", "symlink", "other"] as const)
       gitMergeStrings(t).conflicts.pickOnly(reason);
+    callAll(gitDialogStrings(t));
+    for (const count of [1, 3]) {
+      const g = gitDialogStrings(t);
+      g.lost.count(count);
+      g.push.commits(count);
+    }
+    for (const source of ["input", "pushRefspec", "pushDefault"] as const)
+      gitDialogStrings(t).push.source(source);
+    for (const reason of [
+      "nothing",
+      "matching",
+      "noUpstream",
+      "upstreamNameDiffers",
+      "notUpstreamRemote",
+      "multipleUpstreams",
+      "notPushedByConfig",
+      "mirror",
+      "invalidConfig",
+      "unqualifiedDestination",
+    ] as const)
+      gitDialogStrings(t).push.refused(reason);
     // 선택식은 갈래를 하나씩 본다 — 아무 문자열로 부르면 기본 갈래만 지난다.
     for (const appearance of ["light", "dark"] as const)
       projectStrings(t).status.appearance(appearance);
@@ -125,8 +147,6 @@ describe("built-in translations", () => {
       g.status.matched(count);
       g.menu.cherryPick(count);
       g.menu.revert(count);
-      g.dialog.resetLost(count);
-      g.dialog.undoLost(count);
       const m = gitMergeStrings(t);
       m.banner.conflicts(count);
       m.doc.unresolved(count);

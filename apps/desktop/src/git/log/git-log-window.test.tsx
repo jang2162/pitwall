@@ -437,7 +437,7 @@ const menuItem = (text: string) =>
 
 async function answerName(name: string) {
   const input = await vi.waitFor(() => {
-    const el = document.querySelector<HTMLInputElement>("[data-testid=file-name-dialog] input");
+    const el = document.querySelector<HTMLInputElement>("[data-testid=git-branch-dialog] input");
     if (!el) throw new Error("no name dialog");
     return el;
   });
@@ -450,7 +450,7 @@ async function answerName(name: string) {
 
 async function answerConfirm(label: string): Promise<string> {
   const dialog = await vi.waitFor(() => {
-    const el = document.querySelector<HTMLElement>("[data-testid=file-confirm-dialog]");
+    const el = document.querySelector<HTMLElement>("[data-testid=git-confirm-dialog]");
     if (!el) throw new Error("no confirm dialog");
     return el;
   });
@@ -832,18 +832,35 @@ it("shows the details · compare entries only while M2-15's actions are availabl
 
 it("resets hard only after confirming the lost changes, then undoes back with reset --keep", async () => {
   const head = hashOf(0);
-  host.answers.set("git.resetPreview", {
-    workTree: "/work/demo",
-    head,
-    target: hashOf(4),
-    lost: {
-      changes: [
-        { path: "src/a.rs", origPath: null, staged: null, unstaged: "modified", conflict: null },
-      ],
-      overwritten: ["build/out.txt"],
-    },
-    fingerprint: "fp1",
-  });
+  // 되돌리기(keep)의 미리보기는 잃을 것이 없다 — 묻지 않고 그 지문으로 부른다.
+  host.answers.set("git.resetPreview", (p: { mode: string }) =>
+    p.mode === "keep"
+      ? {
+          workTree: "/work/demo",
+          head: hashOf(4),
+          target: head,
+          lost: { changes: [], overwritten: [] },
+          fingerprint: "fpk",
+        }
+      : {
+          workTree: "/work/demo",
+          head,
+          target: hashOf(4),
+          lost: {
+            changes: [
+              {
+                path: "src/a.rs",
+                origPath: null,
+                staged: null,
+                unstaged: "modified",
+                conflict: null,
+              },
+            ],
+            overwritten: ["build/out.txt"],
+          },
+          fingerprint: "fp1",
+        },
+  );
   host.answers.set("git.reset", (p: { mode: string }) => ({
     workTree: "/work/demo",
     head: p.mode === "keep" ? head : hashOf(4),
@@ -902,9 +919,13 @@ it("resets hard only after confirming the lost changes, then undoes back with re
       mode: "keep",
       expected: hashOf(4),
       expectedRef: "refs/heads/main",
-      fingerprint: null,
+      fingerprint: "fpk",
     }),
   );
+  expect(host.calls.filter((c) => c.method === "git.resetPreview").at(-1)!.params).toMatchObject({
+    commit: head,
+    mode: "keep",
+  });
 });
 
 it("cancels a hard reset when the confirmation is refused", async () => {
@@ -925,7 +946,7 @@ it("cancels a hard reset when the confirmation is refused", async () => {
   await settle();
   await mouse(menuItem("이 커밋으로 Reset --hard")!, "click");
   const text = await answerConfirm("취소");
-  expect(text).toContain("잃는 변경이 없다");
+  expect(text).toContain("잃는 것이 없다");
   await settle();
   expect(host.calls.some((c) => c.method === "git.reset")).toBe(false);
 });

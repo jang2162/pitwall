@@ -96,6 +96,27 @@ it("keeps at most TOAST_LIMIT toasts open and only records the rest", async () =
   expect(store.getState().items).toHaveLength(100);
 });
 
+it("runs a notification's action once, from the toast or the record, and keeps it out of what is stored", async () => {
+  const store = createNotificationStore();
+  await mount(store);
+  const run = vi.fn();
+  await act(async () => {
+    notify({ level: "info", title: "main: a → b", action: { label: "되돌리기", run } });
+  });
+  await settle();
+  const button = toastNodes()[0]!.querySelector<HTMLButtonElement>("button[data-button]")!;
+  expect(button.textContent).toBe("되돌리기");
+  await act(async () => button.click());
+  expect(run).toHaveBeenCalledTimes(1);
+  const [item] = store.getState().items;
+  expect(item!.acted).toBe(true);
+  // 기록 쪽에서 다시 눌러도 돌지 않는다.
+  expect(store.getState().act(item!.id)).toBe(false);
+  expect(run).toHaveBeenCalledTimes(1);
+  // 함수는 직렬화되지 않는다 — 기록을 옮기면(창을 다시 열면) 단추가 없다.
+  expect(JSON.parse(JSON.stringify(item))).not.toHaveProperty("action.run");
+});
+
 it("keeps the newest NOTIFICATION_LIMIT notifications in the record", () => {
   const store = createNotificationStore();
   for (let i = 0; i < 250; i++) store.getState().push({ level: "info", title: `n${i}` });

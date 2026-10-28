@@ -34,16 +34,28 @@ import { useHost } from "../rpc/host";
 
 export type NotificationLevel = "info" | "warning" | "error";
 
+/**
+ * 알림에 다는 단추 하나(작업 결과의 [되돌리기] 등). 토스트와 알림 툴 윈도우의 그 행에 함께 보이고, 어느 쪽에서든 한 번 누르면
+ * 둘 다 꺼진다. 함수라 창의 메모리에만 있다 — 저장 · 직렬화하지 않으므로 창을 다시 열면 단추가 없다.
+ */
+export interface NotificationAction {
+  label: string;
+  run(): void;
+}
+
 export interface NotificationInput {
   level: NotificationLevel;
   title: string;
   body?: string;
+  action?: NotificationAction;
 }
 
 export interface AppNotification extends NotificationInput {
   id: number;
   /** 낸 시각(epoch ms). */
   at: number;
+  /** `action` 을 이미 눌렀다. */
+  acted?: boolean;
 }
 
 /** 기록에 남기는 최대 개수. 넘으면 오래된 것부터 버린다. */
@@ -57,6 +69,8 @@ interface NotificationState {
   push(input: NotificationInput, at?: number): AppNotification;
   /** 알림 툴 윈도우가 보이는 동안 부른다. */
   markSeen(): void;
+  /** `id` 의 단추를 누른다 — 처음 한 번만 `run` 을 부르고 참을 돌려준다. */
+  act(id: number): boolean;
   clear(): void;
 }
 
@@ -64,7 +78,7 @@ export type NotificationStore = StoreApi<NotificationState>;
 
 export function createNotificationStore(): NotificationStore {
   let nextId = 1;
-  return createStore<NotificationState>()((set) => ({
+  return createStore<NotificationState>()((set, get) => ({
     items: [],
     unseenErrors: 0,
     push(input, at = Date.now()) {
@@ -76,6 +90,13 @@ export function createNotificationStore(): NotificationStore {
       return item;
     },
     markSeen: () => set((s) => (s.unseenErrors === 0 ? s : { unseenErrors: 0 })),
+    act(id) {
+      const item = get().items.find((n) => n.id === id);
+      if (!item?.action || item.acted) return false;
+      set((s) => ({ items: s.items.map((n) => (n.id === id ? { ...n, acted: true } : n)) }));
+      item.action.run();
+      return true;
+    },
     clear: () => set({ items: [], unseenErrors: 0 }),
   }));
 }
@@ -147,7 +168,7 @@ export function useNotify(): (input: NotificationInput) => void {
   repeatedRef.current = repeated;
   return useCallback(
     (input: NotificationInput) => {
-      store.getState().push(input);
+      const item = store.getState().push(input);
       const key = `${input.level}:${input.title}`;
       const count = gate.admit(key);
       if (count === undefined) return;
@@ -155,6 +176,12 @@ export function useNotify(): (input: NotificationInput) => void {
       TOASTS[input.level](count > 1 ? repeatedRef.current(input.title, count) : input.title, {
         id: key,
         description: input.body,
+        ...(input.action && {
+          action: {
+            label: input.action.label,
+            onClick: () => store.getState().act(item.id),
+          },
+        }),
         onDismiss: release,
         onAutoClose: release,
       });
@@ -275,6 +302,7 @@ export function NotificationsToolWindow({ api }: IDockviewPanelProps) {
   const items = useNotifications((s) => s.items);
   const markSeen = useNotifications((s) => s.markSeen);
   const clear = useNotifications((s) => s.clear);
+  const act = useNotifications((s) => s.act);
   const visible = usePanelVisible(api);
   useEffect(() => {
     if (visible) markSeen();
@@ -320,6 +348,16 @@ export function NotificationsToolWindow({ api }: IDockviewPanelProps) {
                     <time className="flex-none text-ui-muted-foreground">{time(n.at)}</time>
                   </div>
                   {n.body && <div className="break-words text-ui-muted-foreground">{n.body}</div>}
+                  {n.action && (
+                    <button
+                      type="button"
+                      disabled={n.acted}
+                      onClick={() => act(n.id)}
+                      className="mt-0.5 rounded-sm border border-ui-border px-2 hover:bg-ui-hover disabled:opacity-50"
+                    >
+                      {n.action.label}
+                    </button>
+                  )}
                 </div>
               </li>
             );

@@ -380,6 +380,21 @@ mac = "ctrl+v"
 win = "alt+`"
 linux = "alt+`"
 
+# 푸시 · 업데이트(풀) 다이얼로그(M2-20, src/git/dialogs/git-remote-feature.tsx). ⌘T 는 터미널에 포커스가 있으면 새 터미널 탭이다
+# (`terminalFocus` 가 더 안쪽 조건이라 이긴다 — IntelliJ 와 같다).
+
+[[bindings]]
+action = "git.push.open"
+mac = "cmd+shift+k"
+win = "ctrl+shift+k"
+linux = "ctrl+shift+k"
+
+[[bindings]]
+action = "git.pull.open"
+mac = "cmd+t"
+win = "ctrl+t"
+linux = "ctrl+t"
+
 # diff 뷰의 다음 · 이전 차이(M2-15, src/git/documents/git-documents.tsx)는 diff 뷰에 포커스가 있을 때만
 # (`diffFocus`) — 같은 F7 을 쓰는 디버그 스텝 인투(M6)와 범위가 갈린다.
 

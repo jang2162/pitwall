@@ -71,6 +71,8 @@ describe("default keymap overlaps", () => {
         ["⌘W", ["window.close []", "terminal.closeTab [terminalFocus]"]],
         // 텍스트 에디터의 줄로 이동과 hex 뷰어의 오프셋으로 이동 — hex 뷰어는 `editorFocus` 를 가린다(src/keymap/context.ts).
         ["⌘L", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
+        // 업데이트(풀, M2-20)와 터미널의 새 탭 — IntelliJ 처럼 터미널에 포커스가 있으면 새 탭이다.
+        ["⌘T", ["terminal.newTab [terminalFocus]", "git.pull.open []"]],
       ],
       win: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).

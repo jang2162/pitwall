@@ -89,7 +89,8 @@ describe("keys while the terminal has focus", () => {
     const t = engine("mac", false);
     expect(actionOf(t, key("KeyW", { metaKey: true }))).toBe("window.close");
     expect(actionOf(t, key("Backslash", { metaKey: true }))).toBe("editor.splitRight");
-    expect(actionOf(t, key("KeyT", { metaKey: true }))).toBeUndefined();
+    // 터미널 밖의 ⌘T 는 업데이트(풀, M2-20)다 — 새 터미널 탭이 아니다.
+    expect(actionOf(t, key("KeyT", { metaKey: true }))).toBe("git.pull.open");
   });
 });
 

@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 // 프로젝트 창(App kind="project")의 브랜치 기능(13-m2-plan M2-13 완료 기준)을 가짜 Host 에 붙여 본다: 상태바가 `git.refs` 의 ↑↓ 를 보이고
 // 터미널의 체크아웃(`git.refsChanged`) 뒤 다시 한 번만 읽는다 — 감시(`git.watch`)는 하나다; 한글 입력 상태의 ⌃⇧B 가 브랜치 팝업을 열고
-// 원격 브랜치를 고르면 추적 브랜치로 체크아웃한다; 병합 안 된 브랜치 삭제는 2101 뒤 「강제 삭제」 확인을 거친다; 즐겨찾기가 프로젝트
+// 원격 브랜치를 고르면 추적 브랜치로 체크아웃한다; 병합 안 된 브랜치 삭제는 2101 뒤 「강제 삭제」 확인(M2-20 의 위험 다이얼로그)을
+// 거치고, 지운 · merge 한 뒤의 알림에 [되돌리기] 가 있다; 즐겨찾기가 프로젝트
 // 상태에 남는다; 워크트리를 고르면 M1-25 의 경로로 활성 워크트리가 바뀐다; ⇧⇧ 브랜치 탭에서 찾아 체크아웃한다; ⌃V 가 git 액션을 보인다.
 
 import type {
@@ -50,6 +51,8 @@ const host = vi.hoisted(() => ({
   /** `project.state.get` 이 돌려줄 저장본. */
   savedState: null as unknown,
   emit: (_topic: string, _payload: unknown) => {},
+  /** `git.resetPreview` 의 잃을 변경 수와 지문(`null` 이면 확인할 수 없다). */
+  preview: { lost: 1, fingerprint: "fp-keep" as string | null },
 }));
 
 function refs(head: "main" | "feature"): GitRefs {
@@ -227,6 +230,32 @@ vi.mock("../tauri-transport", async () => {
               workTree: "/work/demo",
               deleted: { refName: "refs/heads/feature", previous: FEATURE, current: null },
             });
+          case "git.branch.create":
+            return reply({
+              workTree: "/work/demo",
+              refName: `refs/heads/${params.name as string}`,
+              commit: (params.start as string | undefined) ?? MAIN,
+              head: null,
+            });
+          case "git.resetPreview":
+            return reply({
+              workTree: "/work/demo",
+              head: FEATURE,
+              target: MAIN,
+              lost: {
+                changes: Array.from({ length: host.preview.lost }, (_, i) => ({
+                  path: i === 0 ? "src/edited.rs" : `src/more-${i}.rs`,
+                  origPath: null,
+                  staged: null,
+                  unstaged: "modified" as const,
+                  conflict: null,
+                })),
+                overwritten: [],
+              },
+              fingerprint: host.preview.fingerprint,
+            });
+          case "git.reset":
+            return reply({ workTree: "/work/demo", head: MAIN, moved: null, lost: null });
           case "git.merge":
             return reply({
               workTree: "/work/demo",
@@ -307,6 +336,7 @@ beforeEach(() => {
     ],
   };
   host.calls = [];
+  host.preview = { lost: 35, fingerprint: "fp-keep" };
   host.watches = [];
   host.stateWrites = [];
   host.savedState = null;
@@ -523,10 +553,10 @@ it("asks to force-delete only after the Host says the branch is not merged (2101
   await choose("local:refs/heads/feature");
   await choose("menu:delete");
   await vi.waitFor(() =>
-    expect(document.querySelector("[data-testid=file-confirm-dialog]")).not.toBeNull(),
+    expect(document.querySelector("[data-testid=git-confirm-dialog]")).not.toBeNull(),
   );
   expect(reads("git.branch.delete").map((c) => c.params.force)).toEqual([false]);
-  const dialog = document.querySelector("[data-testid=file-confirm-dialog]")!;
+  const dialog = document.querySelector("[data-testid=git-confirm-dialog]")!;
   expect(dialog.textContent).toContain("not fully merged");
   const force = [...dialog.querySelectorAll("button")].find((b) => b.textContent === "강제 삭제")!;
   await click(force);
@@ -535,15 +565,122 @@ it("asks to force-delete only after the Host says the branch is not merged (2101
   );
 });
 
+/** 토스트(sonner)의 단추. */
+const toastButton = (label: string) =>
+  vi.waitFor(() => {
+    const b = [...document.querySelectorAll<HTMLButtonElement>("[data-sonner-toast] button")].find(
+      (e) => e.textContent === label,
+    );
+    if (!b) throw new Error(`no toast button ${label}`);
+    return b;
+  });
+
+it("offers [Undo] after deleting a branch and restores it at the commit it pointed at", async () => {
+  await mount();
+  await branchKey();
+  await choose("local:refs/heads/feature");
+  await choose("menu:delete");
+  const dialog = await vi.waitFor(() => {
+    const el = document.querySelector<HTMLElement>("[data-testid=git-confirm-dialog]");
+    if (!el) throw new Error("no confirm");
+    return el;
+  });
+  expect(dialog.getAttribute("data-danger")).toBe("true");
+  expect(dialog.querySelector("[data-testid=git-confirm-detail]")!.textContent).toContain(
+    "error: the branch 'feature' is not fully merged",
+  );
+  await click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "강제 삭제")!);
+  await click(await toastButton("되돌리기"));
+  await vi.waitFor(() => expect(reads("git.branch.create")).toHaveLength(1));
+  expect(reads("git.branch.create")[0]!.params).toEqual({
+    projectId: "p1",
+    worktree: null,
+    name: "feature",
+    start: FEATURE,
+    checkout: false,
+  });
+});
+
+it("offers [Undo] after a merge that previews with reset --keep and asks before losing changes", async () => {
+  await mount();
+  await branchKey();
+  await choose("local:refs/heads/feature");
+  await choose("menu:merge");
+  const merge = await vi.waitFor(() => {
+    const el = document.querySelector<HTMLElement>("[data-testid=git-confirm-dialog]");
+    if (!el) throw new Error("no confirm");
+    return el;
+  });
+  await click([...merge.querySelectorAll("button")].find((b) => b.textContent === "진행")!);
+  await click(await toastButton("되돌리기"));
+  await vi.waitFor(() => expect(reads("git.resetPreview")).toHaveLength(1));
+  expect(reads("git.resetPreview")[0]!.params).toEqual({
+    projectId: "p1",
+    worktree: null,
+    commit: MAIN,
+    mode: "keep",
+  });
+  const lost = await vi.waitFor(() => {
+    const el = document.querySelector<HTMLElement>("[data-testid=git-confirm-dialog]");
+    if (!el) throw new Error("no confirm");
+    return el;
+  });
+  const list = lost.querySelector("[data-testid=git-lost-list]")!;
+  expect(list.textContent).toContain("src/edited.rs");
+  // 30줄까지 보이고 나머지는 수로.
+  expect(list.querySelectorAll("li")).toHaveLength(31);
+  expect(list.lastElementChild!.textContent).toBe("…그리고 5개 더");
+  expect(lost.textContent).toContain("이 변경 35개를 잃는다");
+  expect(reads("git.reset")).toHaveLength(0);
+  await click([...lost.querySelectorAll("button")].find((b) => b.textContent === "되돌리기")!);
+  await vi.waitFor(() => expect(reads("git.reset")).toHaveLength(1));
+  expect(reads("git.reset")[0]!.params).toEqual({
+    projectId: "p1",
+    worktree: null,
+    commit: MAIN,
+    mode: "keep",
+    expected: FEATURE,
+    expectedRef: "refs/heads/main",
+    fingerprint: "fp-keep",
+  });
+});
+
+it("shows that an undo cannot be confirmed when the preview has no fingerprint, and does not reset", async () => {
+  host.preview = { lost: 1, fingerprint: null };
+  await mount();
+  await branchKey();
+  await choose("local:refs/heads/feature");
+  await choose("menu:merge");
+  const merge = await vi.waitFor(() => {
+    const el = document.querySelector<HTMLElement>("[data-testid=git-confirm-dialog]");
+    if (!el) throw new Error("no confirm");
+    return el;
+  });
+  await click([...merge.querySelectorAll("button")].find((b) => b.textContent === "진행")!);
+  await click(await toastButton("되돌리기"));
+  const blocked = await vi.waitFor(() => {
+    const el = document.querySelector<HTMLElement>("[data-testid=git-lost-unverifiable]");
+    if (!el) throw new Error("no unverifiable");
+    return el.closest<HTMLElement>("[data-testid=git-confirm-dialog]")!;
+  });
+  const confirm = [...blocked.querySelectorAll("button")].find(
+    (b) => b.textContent === "되돌리기",
+  )!;
+  expect(confirm.disabled).toBe(true);
+  await click([...blocked.querySelectorAll("button")].find((b) => b.textContent === "취소")!);
+  await settle(50);
+  expect(reads("git.reset")).toHaveLength(0);
+});
+
 it("cancelling the force-delete question deletes nothing", async () => {
   await mount();
   await branchKey();
   await choose("local:refs/heads/feature");
   await choose("menu:delete");
   await vi.waitFor(() =>
-    expect(document.querySelector("[data-testid=file-confirm-dialog]")).not.toBeNull(),
+    expect(document.querySelector("[data-testid=git-confirm-dialog]")).not.toBeNull(),
   );
-  const dialog = document.querySelector("[data-testid=file-confirm-dialog]")!;
+  const dialog = document.querySelector("[data-testid=git-confirm-dialog]")!;
   await click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "취소")!);
   await settle(50);
   expect(reads("git.branch.delete").map((c) => c.params.force)).toEqual([false]);
@@ -555,10 +692,10 @@ it("merges after one confirmation", async () => {
   await choose("local:refs/heads/feature");
   await choose("menu:merge");
   await vi.waitFor(() =>
-    expect(document.querySelector("[data-testid=file-confirm-dialog]")).not.toBeNull(),
+    expect(document.querySelector("[data-testid=git-confirm-dialog]")).not.toBeNull(),
   );
   expect(reads("git.merge")).toHaveLength(0);
-  const dialog = document.querySelector("[data-testid=file-confirm-dialog]")!;
+  const dialog = document.querySelector("[data-testid=git-confirm-dialog]")!;
   await click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "진행")!);
   await vi.waitFor(() => expect(reads("git.merge")).toHaveLength(1));
   // ref 전체 이름 — 같은 이름의 태그가 있어도 브랜치를 merge 한다.

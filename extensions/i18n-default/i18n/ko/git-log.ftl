@@ -97,25 +97,11 @@ git-log-menu-compare-refs = { $a } 와 { $b } 비교
 
 ## 확인 대화상자.
 
-git-log-dialog-new-branch = 새 브랜치
 git-log-dialog-new-tag = 새 태그
 # $rev: 짧은 해시
 git-log-dialog-from = { $rev } 에서
 git-log-dialog-name-empty = 이름을 입력한다
 git-log-dialog-name-invalid = 쓸 수 없는 이름이다
-# $mode: hard · mixed · keep, $rev: 짧은 해시
-git-log-dialog-reset = { $rev } 로 reset --{ $mode }
-# $count: 잃는 변경 수
-git-log-dialog-reset-lost = 이 변경 { $count }개를 잃는다:
-git-log-dialog-reset-nothing = 잃는 변경이 없다
-git-log-dialog-reset-confirm = Reset
-# $rev: 돌아갈 짧은 해시
-git-log-dialog-undo = { $rev } 로 되돌리기
-git-log-dialog-undo-lost = 되돌리면 이 변경 { $count }개를 잃는다:
-git-log-dialog-undo-confirm = 되돌리기
-git-log-dialog-cannot-confirm = 잃을 것이 너무 많아 목록을 다 확인할 수 없다 — 이 작업은 할 수 없다
-# $count: 목록에서 줄인 나머지 수
-git-log-dialog-more-lost = …그리고 { $count }개 더
 
 ## 쓰기의 결과.
 
@@ -123,12 +109,9 @@ git-log-dialog-more-lost = …그리고 { $count }개 더
 git-log-result-moved = { $ref }: { $from } → { $to }
 git-log-result-undo = 되돌리기
 git-log-result-dismiss = 닫기
-# $ref: 되돌린 ref
-git-log-result-undone = { $ref } 를 되돌렸다
 git-log-result-stopped = 충돌로 멈췄다
 git-log-result-stopped-body = 충돌을 해결한 뒤 계속하거나 중단한다(커밋 툴 윈도우)
 git-log-result-up-to-date = 바뀐 것이 없다
 # $action: 메뉴 항목 이름
 git-log-result-failed = { $action } 실패
 git-log-result-copied = 해시를 복사했다
-git-log-result-changed = 그사이 저장소가 바뀌었다 — 다시 확인한다

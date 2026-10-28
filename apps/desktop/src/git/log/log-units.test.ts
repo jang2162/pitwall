@@ -11,8 +11,9 @@ import {
 } from "@pitwall/rpc-client";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ConfirmQuestion } from "../../file-tree/file-ops";
 import { bundledTranslator } from "../../i18n/testing";
+import { type GitConfirm, lostEntries } from "../dialogs/git-dialogs";
+import { gitDialogStrings } from "../dialogs/strings";
 import defaultTheme from "../../../../../extensions/theme-default/themes/default.json";
 import { parseTheme } from "../../theme/tokens";
 import { panelRows, pickRef } from "./branch-panel";
@@ -29,11 +30,13 @@ import {
   logParams,
   splitPaths,
 } from "./log-model";
-import { LogOps, lostLines, refFullName, refNameProblem } from "./log-ops";
+import { LogOps, refFullName, refNameProblem, undoModeOf } from "./log-ops";
 import { gitLogStrings } from "./strings";
 import { fixtureRows } from "./testing";
 
 const T = gitLogStrings(bundledTranslator("ko"));
+const D = gitDialogStrings(bundledTranslator("ko"));
+const KEEP = { kind: "head", mode: "keep" } as const;
 
 describe("logParams", () => {
   it("passes every filter field through as LogFilter, and a hex text as a hash prefix only when told it resolves", () => {
@@ -268,7 +271,7 @@ describe("LogOps", () => {
       expect(refNameProblem(good, T.dialog)).toBeUndefined();
   });
 
-  it("shortens a long list of lost changes", () => {
+  it("lists lost changes renamed-first-as-written, then the overwritten untracked paths", () => {
     const lost = {
       changes: Array.from({ length: 40 }, (_, i) => ({
         path: `f${i}`,
@@ -279,15 +282,15 @@ describe("LogOps", () => {
       })),
       overwritten: ["u"],
     };
-    const lines = lostLines(lost, T.dialog).split("\n");
+    const lines = lostEntries(lost);
     expect(lines[0]).toBe("old → f0");
-    expect(lines).toHaveLength(31);
-    expect(lines.at(-1)).toBe("…그리고 11개 더");
+    expect(lines).toHaveLength(41);
+    expect(lines.at(-1)).toBe("u");
   });
 
   function opsWith(answers: (method: string, params: Record<string, unknown>) => unknown) {
     const calls: { method: string; params: Record<string, unknown> }[] = [];
-    const confirms: ConfirmQuestion[] = [];
+    const confirms: GitConfirm[] = [];
     const notes: string[] = [];
     const client = {
       call: async (method: string, params: Record<string, unknown>) => {
@@ -300,12 +303,14 @@ describe("LogOps", () => {
       client,
       projectId: "p1",
       askName: async () => undefined,
+      askBranch: async () => undefined,
       confirm: async (q) => {
         confirms.push(q);
         return true;
       },
       notify: (n) => notes.push(n.title),
       strings: T,
+      dialogStrings: D,
       moved,
     });
     return { ops, calls, confirms, notes, moved };
@@ -336,7 +341,8 @@ describe("LogOps", () => {
     });
     await ops.reset("t", "hard", "reset");
     expect(confirms).toHaveLength(2);
-    expect(confirms[1]!.body).toContain("new.txt");
+    expect(confirms[1]!.lost!.changes.overwritten).toEqual(["new.txt"]);
+    expect(confirms[1]!.body).toBe(D.lost.changed);
     expect(
       calls
         .filter((c) => c.method === "git.reset")
@@ -345,15 +351,14 @@ describe("LogOps", () => {
       ["h0", "a"],
       ["h1", "b"],
     ]);
-    expect(moved).toHaveBeenCalledWith({
-      refName: "refs/heads/main",
-      previous: "h1",
-      current: "t",
-    });
+    expect(moved).toHaveBeenCalledWith(
+      { refName: "refs/heads/main", previous: "h1", current: "t" },
+      KEEP,
+    );
   });
 
-  it("does not reset when the preview cannot be fingerprinted", async () => {
-    const { ops, calls, notes } = opsWith(() => ({
+  it("shows that it cannot confirm, and does not reset, when the preview has no fingerprint", async () => {
+    const { ops, calls, confirms } = opsWith(() => ({
       workTree: "/r",
       head: "h0",
       target: "t",
@@ -361,8 +366,10 @@ describe("LogOps", () => {
       fingerprint: null,
     }));
     await ops.reset("t", "mixed", "reset");
+    // 확인 단추를 눌렀다고 답해도(여기서는 늘 참) 하지 않는다.
     expect(calls.map((c) => c.method)).toEqual(["git.resetPreview"]);
-    expect(notes).toHaveLength(1);
+    expect(confirms).toHaveLength(1);
+    expect(confirms[0]!.lost!.fingerprint).toBeNull();
   });
 
   it("resets mixed without asking when nothing would be lost", async () => {
@@ -382,31 +389,75 @@ describe("LogOps", () => {
     expect(calls.at(-1)!.params).toMatchObject({ mode: "mixed", fingerprint: "a", expected: "h0" });
   });
 
-  it("asks before an undo that would lose changes, then sends that fingerprint", async () => {
-    let n = 0;
-    const { ops, calls, confirms } = opsWith(() => {
-      n++;
-      if (n === 1) throw conflict({ head: "c", lost: lostOne, fingerprint: "k" });
-      return { workTree: "/r", head: "p", moved: null, lost: null };
-    });
-    const done = await ops.undo(
-      { refName: "refs/heads/main", previous: "p", current: "c" },
-      "undo",
+  it("previews an undo, asks when it would lose changes, then sends that fingerprint", async () => {
+    const { ops, calls, confirms } = opsWith((method) =>
+      method === "git.resetPreview"
+        ? { workTree: "/r", head: "c", target: "p", lost: lostOne, fingerprint: "k" }
+        : { workTree: "/r", head: "p", moved: null, lost: null },
     );
+    const done = await ops.undo({ refName: "refs/heads/main", previous: "p", current: "c" }, KEEP);
     expect(done).toBe(true);
-    expect(confirms[0]!.body).toContain("new.txt");
-    expect(calls.map((c) => c.params.fingerprint)).toEqual([null, "k"]);
-    expect(calls[0]!.params).toMatchObject({
+    expect(confirms[0]!.lost!.changes.overwritten).toEqual(["new.txt"]);
+    expect(calls.map((c) => c.method)).toEqual(["git.resetPreview", "git.reset"]);
+    expect(calls[0]!.params).toMatchObject({ commit: "p", mode: "keep" });
+    expect(calls[1]!.params).toMatchObject({
       commit: "p",
       mode: "keep",
       expected: "c",
       expectedRef: "refs/heads/main",
+      fingerprint: "k",
     });
+  });
+
+  it("asks again with the new list when the working tree changed between the undo preview and the reset", async () => {
+    let resets = 0;
+    const { ops, calls, confirms } = opsWith((method) => {
+      if (method === "git.resetPreview")
+        return {
+          workTree: "/r",
+          head: "c",
+          target: "p",
+          lost: { changes: [], overwritten: [] },
+          fingerprint: "a",
+        };
+      resets++;
+      if (resets === 1) throw conflict({ head: "c", lost: lostOne, fingerprint: "k" });
+      return { workTree: "/r", head: "p", moved: null, lost: null };
+    });
+    expect(await ops.undo({ refName: "refs/heads/main", previous: "p", current: "c" }, KEEP)).toBe(
+      true,
+    );
+    expect(confirms).toHaveLength(1);
+    expect(calls.filter((c) => c.method === "git.reset").map((c) => c.params.fingerprint)).toEqual([
+      "a",
+      "k",
+    ]);
+  });
+
+  it("undoes a soft reset with a soft reset and no preview, a mixed one with mixed", async () => {
+    expect(undoModeOf("soft")).toBe("soft");
+    expect(undoModeOf("mixed")).toBe("mixed");
+    expect(undoModeOf("keep")).toBe("keep");
+    expect(undoModeOf("hard")).toBe("keep");
+    const { ops, calls, confirms } = opsWith(() => ({
+      workTree: "/r",
+      head: "p",
+      moved: null,
+      lost: null,
+    }));
+    await ops.undo(
+      { refName: "refs/heads/main", previous: "p", current: "c" },
+      { kind: "head", mode: "soft" },
+    );
+    expect(confirms).toHaveLength(0);
+    expect(calls.map((c) => [c.method, c.params.mode, c.params.fingerprint])).toEqual([
+      ["git.reset", "soft", null],
+    ]);
   });
 
   it("does not undo a ref that was created (no previous commit)", async () => {
     const { ops, calls } = opsWith(() => ({}));
-    expect(await ops.undo({ refName: "refs/heads/x", previous: null, current: "c" }, "undo")).toBe(
+    expect(await ops.undo({ refName: "refs/heads/x", previous: null, current: "c" }, KEEP)).toBe(
       false,
     );
     expect(calls).toHaveLength(0);
@@ -440,9 +491,11 @@ describe("LogOps", () => {
       } as unknown as RpcClient,
       projectId: "p1",
       askName: async () => undefined,
+      askBranch: async () => undefined,
       confirm: async () => true,
       notify: (n) => notes.push(n),
       strings: T,
+      dialogStrings: D,
       moved: () => {},
     });
     await ops.checkoutCommit("c", "checkout");

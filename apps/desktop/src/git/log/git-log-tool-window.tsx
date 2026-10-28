@@ -28,6 +28,9 @@ import { FilterBar } from "./filter-bar";
 import { paletteOf } from "./graph-render";
 import { type DropTarget, LogList } from "./log-list";
 import { EMPTY_QUERY, LogModel, type LogQuery, type LogSource } from "./log-model";
+import { useGitDialogs } from "../dialogs/git-dialogs";
+import { useGitDialogStrings } from "../dialogs/strings";
+import type { UndoKind } from "../dialogs/undo";
 import { LogOps, refFullName, short } from "./log-ops";
 import { useGitLogStrings } from "./strings";
 
@@ -114,6 +117,8 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
   const { registry } = useKeymap();
   const notify = useNotify();
   const dialogs = useFileDialogs();
+  const gitDialogs = useGitDialogs();
+  const D = useGitDialogStrings();
   const theme = useTheme((s) => s.theme);
   const appearance = useTheme((s) => s.appearance);
   const palette = useMemo(() => {
@@ -128,7 +133,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
     selected: [],
     anchor: -1,
   });
-  const [moves, setMoves] = useState<GitRefMove[]>([]);
+  const [moves, setMoves] = useState<{ move: GitRefMove; kind: UndoKind }[]>([]);
   const [menu, setMenu] = useState<MenuTarget>();
   const [reveal, setReveal] = useState<{ index: number; seq: number }>();
   const [, setTick] = useState(0);
@@ -182,14 +187,19 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
             projectId: source.projectId,
             worktree: source.worktree,
             askName: dialogs.askName,
-            confirm: dialogs.confirm,
+            askBranch: gitDialogs.askBranch,
+            confirm: gitDialogs.confirm,
             notify,
             strings: T,
-            moved: (move) =>
-              setMoves((m) => [move, ...m.filter((x) => x.refName !== move.refName)]),
+            dialogStrings: D,
+            moved: (move, kind) =>
+              setMoves((m) => [
+                { move, kind },
+                ...m.filter((x) => x.move.refName !== move.refName),
+              ]),
           })
         : undefined,
-    [source, dialogs.askName, dialogs.confirm, notify, T],
+    [source, dialogs.askName, gitDialogs.askBranch, gitDialogs.confirm, notify, T, D],
   );
 
   // 고른 것은 로그 차례로(상세 · cherry-pick 이 차례를 쓴다). 지금 목록에 없는 해시는 빠진다.
@@ -280,7 +290,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
       </div>
       <div className="flex min-w-0 flex-1 flex-col">
         <FilterBar query={query} onChange={setQuery} refs={refs} strings={T.filter} />
-        {moves.map((move) => (
+        {moves.map(({ move, kind }) => (
           <div
             key={move.refName}
             role="status"
@@ -298,10 +308,9 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
                 type="button"
                 className="rounded-sm border border-ui-border px-2 hover:bg-ui-hover"
                 onClick={() => {
-                  void ops?.undo(move, T.result.undo).then((done) => {
-                    if (!done) return;
-                    setMoves((m) => m.filter((x) => x !== move));
-                    notify({ level: "info", title: T.result.undone(move.refName) });
+                  // 알림(되돌렸다 · 실패)은 undo 가 낸다.
+                  void ops?.undo(move, kind).then((done) => {
+                    if (done) setMoves((m) => m.filter((x) => x.move !== move));
                   });
                 }}
               >
@@ -311,7 +320,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
             <button
               type="button"
               className="ml-auto text-ui-muted-foreground hover:text-ui-foreground"
-              onClick={() => setMoves((m) => m.filter((x) => x !== move))}
+              onClick={() => setMoves((m) => m.filter((x) => x.move !== move))}
             >
               {T.result.dismiss}
             </button>
@@ -397,6 +406,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
         />
       </div>
       {dialogs.element}
+      {gitDialogs.element}
     </div>
   );
 }

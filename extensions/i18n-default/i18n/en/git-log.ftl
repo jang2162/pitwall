@@ -109,31 +109,11 @@ git-log-menu-compare-refs = Compare { $a } with { $b }
 
 ## Confirmations.
 
-git-log-dialog-new-branch = New Branch
 git-log-dialog-new-tag = New Tag
 # $rev: short hash
 git-log-dialog-from = From { $rev }
 git-log-dialog-name-empty = Enter a name
 git-log-dialog-name-invalid = This name cannot be used
-# $mode: hard, mixed or keep, $rev: short hash
-git-log-dialog-reset = Reset --{ $mode } to { $rev }
-# $count: number of changes lost
-git-log-dialog-reset-lost = { $count ->
-        [one] This change will be lost:
-       *[other] These { $count } changes will be lost:
-    }
-git-log-dialog-reset-nothing = Nothing will be lost
-git-log-dialog-reset-confirm = Reset
-# $rev: short hash to go back to
-git-log-dialog-undo = Undo back to { $rev }
-git-log-dialog-undo-lost = { $count ->
-        [one] Undoing loses this change:
-       *[other] Undoing loses these { $count } changes:
-    }
-git-log-dialog-undo-confirm = Undo
-git-log-dialog-cannot-confirm = Too much would be lost to list it all, so this cannot be done
-# $count: entries left out of the list
-git-log-dialog-more-lost = …and { $count } more
 
 ## Results of writes.
 
@@ -141,12 +121,9 @@ git-log-dialog-more-lost = …and { $count } more
 git-log-result-moved = { $ref }: { $from } → { $to }
 git-log-result-undo = Undo
 git-log-result-dismiss = Dismiss
-# $ref: the ref put back
-git-log-result-undone = Put { $ref } back
 git-log-result-stopped = Stopped on a conflict
 git-log-result-stopped-body = Resolve the conflicts, then continue or abort (Commit tool window)
 git-log-result-up-to-date = Nothing changed
 # $action: the menu item
 git-log-result-failed = { $action } failed
 git-log-result-copied = Copied the hash
-git-log-result-changed = The repository changed meanwhile, asking again

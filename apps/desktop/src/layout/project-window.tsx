@@ -60,6 +60,7 @@ import { FileTreeToolWindow } from "../file-tree/file-tree";
 import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
 import { GitBranchFeature } from "../git/git-branch-feature";
+import { GitRemoteFeature } from "../git/dialogs/git-remote-feature";
 import { GitDocuments } from "../git/documents/git-documents";
 import { GitLogToolWindow } from "../git/log/git-log-tool-window";
 import { GitMerge } from "../git/merge/git-merge";
@@ -815,6 +816,7 @@ function ProjectWindowBody({
           {projectId !== undefined && <GitPrompts projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitDocuments projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitMerge projectId={projectId} workspace={workspace} />}
+          {projectId !== undefined && <GitRemoteFeature projectId={projectId} />}
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
           {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
