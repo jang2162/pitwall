@@ -59,12 +59,16 @@ fn cli(dir: &Path, ceiling: &Path, moves: bool) -> (Duration, Duration, usize) {
     let subject = subject(&repo, None, PATH).unwrap().unwrap();
     let mut command = git_command(dir, ceiling);
     // RPC 와 같은 인자. `-M` 없는 참고 측정은 그것만 뺀다.
-    command.args(ARGS.iter().filter(|a| moves || **a != "-M"));
+    command.args(ARGS);
+    if moves {
+        command.arg("-M");
+    }
     command.args([&subject.commit.to_string(), "--", PATH]);
     let file = BlameFile {
         commit: subject.commit.to_string(),
         lines: subject.lines,
         engine: BlameEngine::Git,
+        moves,
     };
     rt.block_on(async move {
         let mut child = tokio::process::Command::from(command)

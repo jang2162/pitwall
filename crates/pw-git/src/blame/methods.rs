@@ -101,6 +101,7 @@ async fn cli(
         commit: subject.commit.to_string(),
         lines: subject.lines,
         engine: BlameEngine::Git,
+        moves: incremental::moves(subject),
     };
     let mut to_sink = ToSink { sink, gone: None };
     let Some(drained) = incremental::pump(stdout, file, &mut to_sink).await? else {

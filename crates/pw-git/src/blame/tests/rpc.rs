@@ -509,3 +509,145 @@ async fn files_over_the_limit_and_submodule_paths_are_refused_by_both_engines() 
         }
     }
 }
+
+/// 진짜 git 으로: 스트림 credit 을 하나만 주면 받는 쪽이 멈추고, `git blame` 은 출력(범위 1만 개 — 파이프 버퍼보다 크다)을 쓰다
+/// 막혀 살아 있다. `stream.cancel` 하면 그 git 프로세스(이 시험 프로세스의 자식)가 1초 안에 사라진다.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_ends_the_real_git_blame_process() {
+    use std::time::Instant;
+
+    use pw_rpc::protocol::STREAM_CANCEL;
+
+    let repo = TestRepo::new();
+    let lines = |f: &dyn Fn(usize) -> String| -> String { (0..20_000).map(f).collect() };
+    repo.commit_file("a.txt", &lines(&|i| format!("line {i}\n")), "add");
+    repo.commit_file(
+        "a.txt",
+        &lines(&|i| {
+            if i % 2 == 0 {
+                format!("changed {i}\n")
+            } else {
+                format!("line {i}\n")
+            }
+        }),
+        "change",
+    );
+    let fx = Fx::new("");
+    let id = fx.project(repo.root());
+    fx.trust(&id, true);
+    let (session, mut rx) = fx.session();
+    session.handle_value(
+        json!({"jsonrpc": "2.0", "id": 1, "method": "git.blame", "params": params(&id, "a.txt", None)}),
+    );
+    let opened: StreamOpened = next(&mut rx)
+        .await
+        .into_response()
+        .unwrap()
+        .result_as()
+        .unwrap();
+    session.handle_value(json!({"jsonrpc": "2.0", "method": "stream.credit", "params": {"streamId": opened.stream_id, "credit": 1}}));
+    let note = next(&mut rx).await.into_notification().unwrap();
+    assert_eq!(note.method, STREAM_CHUNK);
+    let chunk: BlameChunk =
+        serde_json::from_value(note.params_as::<StreamChunk>().unwrap().data).unwrap();
+    assert_eq!(chunk.file.unwrap().engine, BlameEngine::Git);
+
+    // 이 시험 프로세스(nextest 는 시험마다 프로세스 하나)의 자식 중 git.
+    let git_children = || -> Vec<libc::pid_t> {
+        let out = std::process::Command::new("pgrep")
+            .args(["-P", &std::process::id().to_string(), "-x", "git"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .map(|p| p.parse().unwrap())
+            .collect()
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let pids = loop {
+        let pids = git_children();
+        if !pids.is_empty() {
+            break pids;
+        }
+        assert!(Instant::now() < deadline, "git blame is not running");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    // 출력을 쓰다 막혀 있다(끝나지 않는다).
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(git_children(), pids, "git blame waits for the reader");
+
+    let cancelled = Instant::now();
+    session.handle_value(
+        json!({"jsonrpc": "2.0", "method": STREAM_CANCEL, "params": {"streamId": opened.stream_id}}),
+    );
+    let alive = |pid: libc::pid_t| {
+        // SAFETY: 신호 0 은 프로세스가 있는지만 본다.
+        unsafe { libc::kill(pid, 0) == 0 }
+    };
+    while pids.iter().any(|&p| alive(p)) {
+        assert!(
+            cancelled.elapsed() < Duration::from_secs(1),
+            "git {pids:?} still alive after cancel"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// 신뢰 경로에서 줄 수가 `MOVES_MAX_LINES` 를 넘으면 `-M` 없이 돌리고 첫 청크의 `moves` 가 `false` 다 — 옮긴 블록이 있어 `-M`
+/// 유무가 결과를 가른다: 넘는 파일은 `git blame`(-M 없이)과, 상한 이하는 `git blame -M` 과 줄마다 같다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn files_over_the_move_limit_blame_without_moves_and_say_so() {
+    let repo = TestRepo::new();
+    let (dir, ceiling) = (repo.root(), repo.base());
+    let body = |n: u32, moved: bool| -> String {
+        let mut lines: Vec<String> = (0..n).map(|i| format!("line {i} of {n}\n")).collect();
+        if moved {
+            let block: Vec<String> = lines.drain(10..15).collect();
+            lines.extend(block);
+        }
+        lines.concat()
+    };
+    let (big, small) = (MOVES_MAX_LINES + 1, 200);
+    repo.write("big.txt", &body(big, false));
+    repo.write("small.txt", &body(small, false));
+    repo.commit_all("add");
+    repo.write("big.txt", &body(big, true));
+    repo.write("small.txt", &body(small, true));
+    repo.commit_all("move a block");
+
+    let fx = Fx::new("");
+    let id = fx.project(dir);
+    fx.trust(&id, true);
+    for (path, moves) in [("big.txt", false), ("small.txt", true)] {
+        let (chunks, outcome) = fx
+            .stream::<_, BlameChunk>("git.blame", &params(&id, path, None))
+            .await;
+        assert_eq!(outcome, StreamOutcome::Completed);
+        let (file, lines, _) = expand(&chunks);
+        assert_eq!(
+            (file.engine, file.moves),
+            (BlameEngine::Git, moves),
+            "{path}"
+        );
+        assert_eq!(
+            lines,
+            git_blame(dir, ceiling, "HEAD", path, moves).0,
+            "{path}"
+        );
+        assert_ne!(
+            lines,
+            git_blame(dir, ceiling, "HEAD", path, !moves).0,
+            "{path}: -M decides the moved block"
+        );
+    }
+    // 미신뢰(gix)는 늘 `false`.
+    fx.trust(&id, false);
+    let (chunks, _) = fx
+        .stream::<_, BlameChunk>("git.blame", &params(&id, "small.txt", None))
+        .await;
+    assert_eq!(
+        (expand(&chunks).0.engine, expand(&chunks).0.moves),
+        (BlameEngine::Gix, false)
+    );
+}

@@ -725,7 +725,7 @@ export type BlameCommit = {
 };
 
 export type BlameEngine = 
-/**  `git blame --incremental -M` — 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다. */
+/**  `git blame --incremental` — 줄 수가 [`MOVES_MAX_LINES`] 이하면 `-M` 으로 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다. */
 "git" | 
 /**  gix blame — `git blame`(`-M` 없이)과 같다. 옮긴 줄은 옮긴 커밋의 것이다. */
 "gix";
@@ -737,6 +737,11 @@ export type BlameFile = {
 	/**  그 커밋에서의 파일 줄 수. 모든 청크의 범위를 합치면 1 ~ `lines` 를 겹치지 않고 한 번씩 덮는다. */
 	lines: number,
 	engine: BlameEngine,
+	/**
+	 *  파일 안에서 옮긴 줄을 원래 커밋으로 돌렸는가(`git blame -M`). `false` 면 옮긴 줄은 옮긴 커밋의 것이다 — 엔진 `gix` 이거나,
+	 *  줄 수가 [`MOVES_MAX_LINES`] 를 넘어 `-M` 없이 돌렸다. 창이 「줄 이동 추적 안 함」 을 알린다.
+	 */
+	moves: boolean,
 };
 
 /**  「이 커밋 이전으로」 의 대상: 부모 커밋과 그 부모에서의 파일 경로. */

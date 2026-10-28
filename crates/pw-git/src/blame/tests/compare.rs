@@ -238,6 +238,7 @@ fn chunks_carry_at_most_chunk_ranges_and_the_first_one_goes_out_at_once() {
         commit: "c".into(),
         lines: 2000,
         engine: BlameEngine::Gix,
+        moves: false,
     });
     let range = |line| BlameRange {
         line,
@@ -315,6 +316,47 @@ fn the_object_reader_fails_once_stopped() {
     assert!(objects.try_find(&id, &mut buf).unwrap().is_some());
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(objects.try_find(&id, &mut buf).is_err());
+}
+
+/// 크기 검사 두 겹을 따로 본다: 헤더(`try_header` — 리소스 캐시가 내용을 읽기 전에 묻는다)와 읽은 뒤 길이(`try_find` — gix-blame
+/// 이 blob 을 바로 읽을 때). 둘 다 상한(`READ_ONLY_MAX`)을 넘는 blob 을 실패시키고 `too_large` 를 켠다. 상한 안의 blob 은 지난다.
+#[test]
+fn the_object_reader_refuses_blobs_over_the_limit_by_header_and_by_data() {
+    use gix::objs::{Find, FindHeader};
+    use pw_fs::limits::READ_ONLY_MAX;
+
+    let repo = TestRepo::new();
+    let big = repo.base().join("big");
+    std::fs::write(&big, vec![b'x'; READ_ONLY_MAX as usize + 1]).unwrap();
+    let small = repo.base().join("small");
+    std::fs::write(&small, "x\n").unwrap();
+    let hash = |p: &Path| {
+        let id = repo.git(&["hash-object", "-w", "--", p.to_str().unwrap()]);
+        gix::ObjectId::from_hex(id.trim().as_bytes()).unwrap()
+    };
+    let (big, small) = (hash(&big), hash(&small));
+    let r = open(repo.root());
+    let (stop, shallow) = (AtomicBool::new(false), std::collections::HashSet::new());
+    let reader = |too_large| native::Objects {
+        odb: &r.objects,
+        stop: &stop,
+        shallow: &shallow,
+        too_large,
+    };
+    let mut buf = Vec::new();
+
+    let flag = AtomicBool::new(false);
+    assert!(reader(&flag).try_header(&small).unwrap().is_some());
+    assert!(reader(&flag).try_find(&small, &mut buf).unwrap().is_some());
+    assert!(!flag.load(std::sync::atomic::Ordering::Relaxed));
+
+    let by_header = AtomicBool::new(false);
+    assert!(reader(&by_header).try_header(&big).is_err());
+    assert!(by_header.load(std::sync::atomic::Ordering::Relaxed));
+
+    let by_data = AtomicBool::new(false);
+    assert!(reader(&by_data).try_find(&big, &mut buf).is_err());
+    assert!(by_data.load(std::sync::atomic::Ordering::Relaxed));
 }
 
 /// 바이너리(NUL · 0xff) · `-diff` · `binary` 속성 · CRLF · NUL 이 든 텍스트 파일도 두 엔진이 `git blame` 과 줄마다 같다 — git blame 은

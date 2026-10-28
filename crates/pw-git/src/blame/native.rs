@@ -160,6 +160,7 @@ pub fn run(
         commit: subject.commit.to_string(),
         lines: subject.lines,
         engine: BlameEngine::Gix,
+        moves: false,
     });
     let mut previous: HashMap<(ObjectId, BString), Option<BlamePrevious>> = HashMap::new();
     let mut buf = Vec::new();

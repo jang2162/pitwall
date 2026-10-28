@@ -32,6 +32,11 @@ use pw_fs::limits::READ_ONLY_MAX;
 use pw_rpc::RpcError;
 use serde::{Deserialize, Serialize};
 
+/// 엔진 `git` 이 `-M` 을 붙이는 줄 수 상한(그 리비전의 파일). `-M` 은 결과를 다 찾은 뒤에야 첫 항목을 내고 줄 수에 따라 빠르게
+/// 늘어 — 75만 줄 파일에서 첫 항목이 60 s 를 넘었다 — 파일을 열 때 도는 인라인 blame(M2-17)이 기다릴 수 없다. 측정 곡선에서
+/// `-M` 첫 항목이 1 s 안인 가장 큰 크기다(`docs/design/13-m2-plan.md` 결정 M2-D1, `examples/blame_size.rs`).
+pub const MOVES_MAX_LINES: u32 = 100_000;
+
 /// 범위를 이만큼 모으면 청크를 보낸다(첫 청크는 범위가 생기는 대로 보낸다).
 pub const CHUNK: usize = 500;
 /// 모인 범위가 있으면 이만큼 기다린 뒤 보낸다.
@@ -42,7 +47,7 @@ const FLUSH_AFTER: Duration = Duration::from_millis(100);
 )]
 #[serde(rename_all = "camelCase")]
 pub enum BlameEngine {
-    /// `git blame --incremental -M` — 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다.
+    /// `git blame --incremental` — 줄 수가 [`MOVES_MAX_LINES`] 이하면 `-M` 으로 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다.
     Git,
     /// gix blame — `git blame`(`-M` 없이)과 같다. 옮긴 줄은 옮긴 커밋의 것이다.
     Gix,
@@ -60,6 +65,9 @@ pub struct BlameFile {
     #[specta(type = pw_rpc::JsNumber)]
     pub lines: u32,
     pub engine: BlameEngine,
+    /// 파일 안에서 옮긴 줄을 원래 커밋으로 돌렸는가(`git blame -M`). `false` 면 옮긴 줄은 옮긴 커밋의 것이다 — 엔진 `gix` 이거나,
+    /// 줄 수가 [`MOVES_MAX_LINES`] 를 넘어 `-M` 없이 돌렸다. 창이 「줄 이동 추적 안 함」 을 알린다.
+    pub moves: bool,
 }
 
 /// 범위가 가리키는 커밋. 스트림에서 처음 나올 때 한 번만 실린다.

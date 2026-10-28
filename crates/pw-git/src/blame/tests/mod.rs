@@ -193,12 +193,13 @@ pub(crate) fn blame_cli(dir: &Path, ceiling: &Path, rev: &str, path: &str) -> Ve
     let subject = subject(&repo, Some(rev), path).unwrap().expect("the file");
     let mut command = git_command(dir, ceiling);
     command
-        .args(incremental::ARGS)
+        .args(incremental::args(&subject))
         .args([&subject.commit.to_string(), "--", path]);
     let file = BlameFile {
         commit: subject.commit.to_string(),
         lines: subject.lines,
         engine: BlameEngine::Git,
+        moves: incremental::moves(&subject),
     };
     tokio::runtime::Builder::new_current_thread()
         .enable_all()

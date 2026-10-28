@@ -1,4 +1,4 @@
-//! `git blame --incremental -M --no-textconv <커밋> -- <경로>`([`ARGS`])의 출력을 받는 대로 범위로 푼다(신뢰한 프로젝트 — [`super`] 머리 주석).
+//! `git blame --incremental [-M] --no-textconv <커밋> -- <경로>`([`args`])의 출력을 받는 대로 범위로 푼다(신뢰한 프로젝트 — [`super`] 머리 주석).
 //!
 //! 출력은 범위마다 `<해시> <원래 줄> <지금 줄> <줄 수>` 한 줄로 시작하고 `filename <경로>` 로 끝난다. 그 사이에 그 커밋이 처음
 //! 나올 때만 작성자 · 시각 · 제목(`author` … `summary`) · `boundary` 가, 그 범위의 원래 파일에 부모가 있으면 `previous <해시>
@@ -10,7 +10,8 @@ use pw_rpc::RpcError;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::{
-    BlameChunk, BlameCommit, BlameFile, BlamePrevious, BlameRange, Chunker, Subject, path_text,
+    BlameChunk, BlameCommit, BlameFile, BlamePrevious, BlameRange, Chunker, MOVES_MAX_LINES,
+    Subject, path_text,
 };
 use crate::cli::GitCommand;
 use crate::log::commit::{MAX_IDENT, MAX_SUBJECT, clip};
@@ -21,12 +22,26 @@ const MAX_LINE: usize = 64 * 1024;
 
 /// `git blame` 의 인자(커밋 · `--` · 경로 앞). `--no-textconv`: git blame 은 기본으로 저장소 설정의 textconv 를 돌려 그 출력의 줄을
 /// blame 한다 — 줄이 커밋의 내용(에디터 · [`super::BlameFile::lines`])과 어긋나고, textconv 는 신뢰해도 쓰지 않는다(M2-04 의
-/// `crate::diff` 와 같다).
-pub const ARGS: [&str; 4] = ["blame", "--incremental", "-M", "--no-textconv"];
+/// `crate::diff` 와 같다). `-M` 은 [`moves`] 일 때만 붙인다([`args`]).
+pub const ARGS: [&str; 3] = ["blame", "--incremental", "--no-textconv"];
+
+/// `subject` 를 `-M` 으로 blame 하는가: 줄 수가 [`MOVES_MAX_LINES`] 이하일 때.
+pub fn moves(subject: &Subject) -> bool {
+    subject.lines <= MOVES_MAX_LINES
+}
+
+/// `subject` 의 git 인자(커밋 앞까지).
+pub fn args(subject: &Subject) -> Vec<&'static str> {
+    let mut args = ARGS.to_vec();
+    if moves(subject) {
+        args.push("-M");
+    }
+    args
+}
 
 /// `subject` 를 blame 하는 git 명령(신뢰한 프로젝트의 읽기 명령에 인자를 붙인다).
 pub fn command(git: GitCommand, subject: &Subject) -> GitCommand {
-    git.args(ARGS)
+    git.args(args(subject))
         .arg(subject.commit.to_string())
         .arg("--")
         // 경로는 RPC 의 글자(UTF-8)에서 왔다.
