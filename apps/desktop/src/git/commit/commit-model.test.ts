@@ -11,6 +11,7 @@ import {
   groupEntries,
   itemCheck,
   selectItems,
+  templateUnedited,
   unstagePaths,
   withoutTemplateComments,
 } from "./commit-model";
@@ -87,6 +88,16 @@ it("drops only the template's untouched comment lines", () => {
     "feat: x\n\n# Ticket: 12\n#7 fixed\n",
   );
   expect(withoutTemplateComments("# keep\n", undefined)).toBe("# keep\n");
+  // `core.commentChar` 가 `;` 면 `;` 줄만 템플릿 주석이다.
+  expect(withoutTemplateComments("x\n; why\n# kept\n", "; why\n# kept\n", ";")).toBe("x\n# kept\n");
+});
+
+it("sees an unedited template the way git does (comments and surrounding blanks ignored)", () => {
+  const template = "Subject\n\n# Why?\n";
+  expect(templateUnedited(template, template)).toBe(true);
+  expect(templateUnedited("Subject\r\n\r\n", template)).toBe(true);
+  expect(templateUnedited("Subject changed\n\n# Why?\n", template)).toBe(false);
+  expect(templateUnedited("anything", undefined)).toBe(false);
 });
 
 describe("stageGroups", () => {

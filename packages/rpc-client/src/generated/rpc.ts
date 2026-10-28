@@ -1636,10 +1636,12 @@ export type GitCommitResult = {
 
 export type GitCommitTemplate = {
 	/**
-	 *  템플릿 파일의 내용(UTF-8 이 아닌 바이트는 U+FFFD). 설정이 없거나 · 저장소가 없거나 · 파일을 읽지 못하거나 ·
+	 *  템플릿 파일의 내용(UTF-8 이 아닌 바이트는 U+FFFD). 설정이 없거나 · 저장소가 없거나 · 읽지 않는 파일이거나(머리 주석) ·
 	 *  [`TEMPLATE_MAX`] 를 넘으면 `null` 이다.
 	 */
 	template: string | null,
+	/**  주석 줄을 여는 글자(`core.commentChar`, 없거나 `auto` 면 `#`). 창이 손대지 않은 템플릿 주석을 걷을 때 쓴다. */
+	commentChar: string,
 };
 
 export type GitCommitTemplateParams = {

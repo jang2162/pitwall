@@ -19,8 +19,13 @@
 //! `git.commit.template`(M2-16 — 13-m2-plan 넘김 표 「커밋 템플릿」): 창이 메시지 칸에 미리 채울 `commit.template` 파일의 내용. 읽기라
 //! git CLI 를 띄우지 않고 gix 로 설정을 읽는다. 경로는 gix 의 「믿을 만한 설정에서만」 접근(`trusted_path`)으로 읽는다 — 미신뢰
 //! 프로젝트는 저장소 안의 설정(`.git/config` 와 그것이 include 한 파일)이 정한 경로를 쓰지 않는다(`crate::repo::open_options`).
-//! 사람의 전역 설정의 템플릿은 어느 쪽이든 쓴다. `~` 는 git 처럼 홈으로, 상대 경로는 작업 트리 꼭대기 기준으로 푼다(Host 는 git 을
-//! 작업 트리 꼭대기에서 띄운다).
+//! 사람의 전역 설정의 템플릿은 어느 쪽이든 쓴다. `~` 는 git 처럼 홈으로 푼다.
+//!
+//! 읽는 파일(M2-16 리뷰 F1 — 메인 판정): 일반 파일만, [`TEMPLATE_MAX`] 까지. FIFO 에서 막히지 않게 비차단으로 열고 연 핸들이 일반
+//! 파일인지 본다. 신뢰한 프로젝트는 git 처럼 상대 경로를 작업 트리 꼭대기 기준으로 푼다(Host 는 git 을 작업 트리 꼭대기에서 띄운다).
+//! **미신뢰 프로젝트는 상대 경로를 풀지 않고**(절대 · `~` 경로만), 경로의 어느 구성 요소도(링크를 따른 실제 자리까지) 작업 트리 안을
+//! 지나지 않을 때만 읽는다 — 전역 설정의 `commit.template = .gitmessage` 를 저장소 안의 링크(`.gitmessage -> ~/.ssh/id_rsa`)가
+//! 가로채지 못하게. 못 읽으면 칸을 비운 채 둔다(로그 한 줄).
 
 #[cfg(all(test, unix))]
 mod tests;
@@ -98,13 +103,24 @@ pub struct GitCommitTemplateParams {
 }
 
 #[derive(
-    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitTemplate {
-    /// 템플릿 파일의 내용(UTF-8 이 아닌 바이트는 U+FFFD). 설정이 없거나 · 저장소가 없거나 · 파일을 읽지 못하거나 ·
+    /// 템플릿 파일의 내용(UTF-8 이 아닌 바이트는 U+FFFD). 설정이 없거나 · 저장소가 없거나 · 읽지 않는 파일이거나(머리 주석) ·
     /// [`TEMPLATE_MAX`] 를 넘으면 `null` 이다.
     pub template: Option<String>,
+    /// 주석 줄을 여는 글자(`core.commentChar`, 없거나 `auto` 면 `#`). 창이 손대지 않은 템플릿 주석을 걷을 때 쓴다.
+    pub comment_char: String,
+}
+
+impl Default for GitCommitTemplate {
+    fn default() -> Self {
+        Self {
+            template: None,
+            comment_char: "#".to_owned(),
+        }
+    }
 }
 
 rpc_method! {
@@ -126,34 +142,115 @@ pub fn template(
     let Some(opened) = git.open(&params.project_id, params.worktree.as_deref())? else {
         return Ok(GitCommitTemplate::default());
     };
+    let comment_char = comment_char(&opened.repo);
     let path = match opened
         .repo
         .config_snapshot()
         .trusted_path("commit.template")
     {
         Ok(Some(path)) => path,
-        Ok(None) => return Ok(GitCommitTemplate::default()),
+        Ok(None) => {
+            return Ok(GitCommitTemplate {
+                template: None,
+                comment_char,
+            });
+        }
         Err(e) => {
             tracing::warn!(target: "pw_git", error = %e, "cannot read commit.template");
-            return Ok(GitCommitTemplate::default());
+            return Ok(GitCommitTemplate {
+                template: None,
+                comment_char,
+            });
         }
     };
-    let path = opened.target.work_tree.join(path);
-    let read = || -> std::io::Result<Option<Vec<u8>>> {
-        use std::io::Read;
-        let file = std::fs::File::open(&path)?;
-        let mut bytes = Vec::new();
-        file.take(TEMPLATE_MAX + 1).read_to_end(&mut bytes)?;
-        Ok((bytes.len() as u64 <= TEMPLATE_MAX).then_some(bytes))
-    };
-    let template = match read() {
-        Ok(bytes) => bytes.map(|b| String::from_utf8_lossy(&b).into_owned()),
+    let template = match read_template(&path, &opened.target.work_tree, opened.trusted) {
+        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
         Err(e) => {
-            tracing::warn!(target: "pw_git", path = %path.display(), error = %e, "cannot read the commit template");
+            tracing::warn!(target: "pw_git", path = %path.display(), error = %e, "not using the commit template");
             None
         }
     };
-    Ok(GitCommitTemplate { template })
+    Ok(GitCommitTemplate {
+        template,
+        comment_char,
+    })
+}
+
+/// `core.commentChar` 의 글자 하나. 없거나 `auto`(git 이 메시지에 없는 글자를 고른다 — 창은 미리 알 수 없다) · 글자 하나가 아니면 `#`.
+fn comment_char(repo: &gix::Repository) -> String {
+    let value = repo.config_snapshot().string("core.commentChar");
+    match value.as_ref().map(|v| v.to_string()) {
+        Some(v) if v != "auto" && v.chars().count() == 1 => v,
+        _ => "#".to_owned(),
+    }
+}
+
+/// `path` 가 `dir` 이거나 그 아래다(글자 그대로 — 둘 다 정규화한 값을 넘긴다).
+fn within(path: &std::path::Path, dir: &std::path::Path) -> bool {
+    path.starts_with(dir)
+}
+
+/// 템플릿 파일을 읽는다(머리 주석의 규칙). 읽지 않는 까닭은 오류로 돌려준다.
+fn read_template(
+    path: &std::path::Path,
+    work_tree: &std::path::Path,
+    trusted: bool,
+) -> std::io::Result<Vec<u8>> {
+    use std::io::{Error, ErrorKind, Read};
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else if trusted {
+        work_tree.join(path)
+    } else {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "a relative template path is not resolved in an untrusted project",
+        ));
+    };
+    if !trusted {
+        // 앞에서부터 구성 요소마다 그 자리(글자 그대로)와 링크를 따른 실제 자리가 작업 트리 밖인지 본다.
+        let tree = std::fs::canonicalize(work_tree)?;
+        let mut prefix = std::path::PathBuf::new();
+        for part in path.components() {
+            prefix.push(part);
+            let real = std::fs::canonicalize(&prefix)?;
+            if within(&prefix, work_tree) || within(&prefix, &tree) || within(&real, &tree) {
+                return Err(Error::new(
+                    ErrorKind::PermissionDenied,
+                    "the template path goes through the untrusted work tree",
+                ));
+            }
+        }
+    }
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)?
+    };
+    #[cfg(not(unix))]
+    let file = std::fs::File::open(&path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(Error::new(ErrorKind::InvalidInput, "not a regular file"));
+    }
+    if meta.len() > TEMPLATE_MAX {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "the template is too large",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(TEMPLATE_MAX + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > TEMPLATE_MAX {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "the template is too large",
+        ));
+    }
+    Ok(bytes)
 }
 
 /// `git.commit`(머리 주석).

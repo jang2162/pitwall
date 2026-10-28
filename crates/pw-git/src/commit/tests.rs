@@ -543,6 +543,159 @@ async fn the_commit_template_comes_from_trusted_config_only() {
     assert_eq!(read(), None);
 }
 
+/// `git.commit.template` 의 읽는 파일(M2-16 리뷰 F1): 미신뢰 프로젝트는 전역 설정의 상대 경로를 풀지 않고, 절대 경로라도 작업 트리
+/// 안을 지나면(직접 · 밖의 링크가 안을 가리킴) 읽지 않는다. 신뢰 · 미신뢰 모두 FIFO 에서 막히지 않고 일반 파일이 아니면 · 너무 크면
+/// 읽지 않는다. 신뢰한 프로젝트의 상대 경로는 git 처럼 작업 트리 꼭대기 기준이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_commit_template_reads_only_regular_files_outside_an_untrusted_work_tree() {
+    use std::os::unix::fs::symlink;
+    let f = WriteFixture::new(false);
+    let global = isolate_global_config(f.repo.base());
+    let p = GitCommitTemplateParams {
+        project_id: f.project.clone(),
+        worktree: None,
+    };
+    let read = || template(f.write.git(), &p).unwrap().template;
+    let set = |value: &str| {
+        fs::write(&global, format!("[commit]\n\ttemplate = {value}\n")).unwrap();
+    };
+    let secret = f.repo.base().join("outside-secret.txt");
+    fs::write(&secret, "SECRET KEY\n").unwrap();
+
+    // 전역 설정의 상대 경로 + 저장소 안의 링크 → 루트 밖 파일. 미신뢰면 풀지 않는다.
+    symlink(&secret, f.repo.root().join(".gitmessage")).unwrap();
+    set(".gitmessage");
+    assert_eq!(read(), None);
+    // 절대 경로라도 작업 트리 안이면(그 링크) 읽지 않는다.
+    set(&f.repo.root().join(".gitmessage").display().to_string());
+    assert_eq!(read(), None);
+    // 밖의 링크가 작업 트리 안 파일을 가리키면 읽지 않는다.
+    f.repo.write("inside.txt", "inside\n");
+    let hop = f.repo.base().join("hop.txt");
+    symlink(f.repo.root().join("inside.txt"), &hop).unwrap();
+    set(&hop.display().to_string());
+    assert_eq!(read(), None);
+    // 밖의 일반 파일(절대 경로)은 읽는다.
+    let plain = f.repo.base().join("plain.txt");
+    fs::write(&plain, "Subject\n# why\n").unwrap();
+    set(&plain.display().to_string());
+    assert_eq!(read().as_deref(), Some("Subject\n# why\n"));
+
+    // FIFO: 막히지 않고 읽지 않는다(신뢰 · 미신뢰).
+    let fifo = f.repo.base().join("fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    set(&fifo.display().to_string());
+    for trusted in [false, true] {
+        f.projects.set_trust(&f.project, trusted).unwrap();
+        let git = Arc::clone(f.write.git());
+        let p = p.clone();
+        let got = tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::task::spawn_blocking(move || template(&git, &p).unwrap().template),
+        )
+        .await
+        .expect("reading a FIFO template must not block")
+        .unwrap();
+        assert_eq!(got, None);
+    }
+    // 폴더 · 너무 큰 파일도 읽지 않는다(신뢰).
+    set(&f.repo.base().display().to_string());
+    assert_eq!(read(), None);
+    let big = f.repo.base().join("big.txt");
+    fs::write(&big, "x".repeat(TEMPLATE_MAX as usize + 1)).unwrap();
+    set(&big.display().to_string());
+    assert_eq!(read(), None);
+    // 신뢰하면 상대 경로는 작업 트리 꼭대기 기준이다(git 과 같다).
+    set("inside.txt");
+    assert_eq!(read().as_deref(), Some("inside\n"));
+}
+
+/// `core.commentChar`(M2-16 리뷰 F5): 창이 템플릿 주석을 걷을 글자. 없거나 `auto` 면 `#`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_comment_char_comes_from_core_comment_char() {
+    let f = WriteFixture::new(true);
+    isolate_global_config(f.repo.base());
+    let p = GitCommitTemplateParams {
+        project_id: f.project.clone(),
+        worktree: None,
+    };
+    let char = || template(f.write.git(), &p).unwrap().comment_char;
+    assert_eq!(char(), "#");
+    f.repo.git(&["config", "core.commentChar", ";"]);
+    assert_eq!(char(), ";");
+    f.repo.git(&["config", "core.commentChar", "auto"]);
+    assert_eq!(char(), "#");
+}
+
+/// 커밋 툴 윈도우의 ⌘⌥Z 를 스테이징된 이름 바뀜에 했을 때 창이 보내는 두 호출(M2-16 리뷰 F2): 스테이징을 풀고 옛 경로 · 새 경로를 둘 다
+/// 버리면 옛 파일이 HEAD 의 바이트로 돌아오고 새 파일은 untracked 로 남는다(지우지 않는다). 옛 경로를 빼고 버리면(고치기 전의 창)
+/// 옛 파일이 지워진 채 남는다 — 그 차이를 함께 본다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rolling_back_a_staged_rename_restores_the_old_file() {
+    use crate::stage::methods::{GitDiscardParams, GitPathsParams};
+    for with_old in [true, false] {
+        let f = WriteFixture::new(true);
+        // 버리기는 미저장 문서를 창에 묻는다 — 창이 「계속」 으로 답한다.
+        let _window = crate::testing::write::Window::open(&f.write, &f.project, |_| {
+            Some(crate::write::prompt::GitPromptAnswer::Proceed)
+        });
+        let body = "line one\nline two\r\nno newline at end";
+        f.repo.write("old.txt", body);
+        f.repo.commit_all("old");
+        f.repo.git(&["mv", "old.txt", "new.txt"]);
+        assert_eq!(
+            f.repo.git(&["status", "--porcelain=v1"]),
+            "R  old.txt -> new.txt\n"
+        );
+        let both = vec!["new.txt".to_owned(), "old.txt".to_owned()];
+        f.write
+            .unstage(
+                f.caller(),
+                GitPathsParams {
+                    project_id: f.project.clone(),
+                    worktree: None,
+                    paths: both.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let result = f
+            .write
+            .discard(
+                f.caller(),
+                GitDiscardParams {
+                    project_id: f.project.clone(),
+                    worktree: None,
+                    paths: if with_old {
+                        both
+                    } else {
+                        vec!["new.txt".to_owned()]
+                    },
+                    confirmed: true,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.untracked, ["new.txt"]);
+        let status = f.repo.git(&["status", "--porcelain=v1"]);
+        if with_old {
+            assert_eq!(status, "?? new.txt\n");
+            assert_eq!(
+                fs::read(f.repo.root().join("old.txt")).unwrap(),
+                body.as_bytes()
+            );
+            assert_eq!(f.repo.git(&["show", "HEAD:old.txt"]), body);
+        } else {
+            assert_eq!(status, " D old.txt\n?? new.txt\n");
+            assert!(!f.repo.root().join("old.txt").exists());
+        }
+    }
+}
+
 /// 커밋 툴 윈도우의 창 시험 픽스처(13-m2-plan M2-16 완료 기준 「시나리오 2」): 작업 트리 diff 의 hunk 하나(묶음 체크)와 다른 hunk 의
 /// 줄 둘(줄 체크)을 차례로 `git.stageLines` 로 스테이징하고 커밋한 결과를 JSON 으로 남긴다(`apps/desktop/src/git/commit/fixtures/
 /// stage-commit.json`). 단계마다 그때의 `git.diff`(작업 트리) · index 쪽 `git.blob` · 작업 트리 파일 · 그 단계에서 보낸 요청이 있다 —

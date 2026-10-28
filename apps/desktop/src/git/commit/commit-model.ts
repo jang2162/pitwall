@@ -163,17 +163,22 @@ export function unstagePaths(items: readonly CommitItem[]): string[] {
 }
 
 /**
- * 템플릿(`commit.template`)에서 온 주석 줄을 걷는다: 메시지의 줄 중 템플릿의 `#` 로 시작하는 줄과 글자 그대로 같은 것만. 커밋은
+ * 템플릿(`commit.template`)에서 온 주석 줄을 걷는다: 메시지의 줄 중 템플릿의 주석 글자(`core.commentChar`, 기본 `#`)로 시작하는 줄과
+ * 글자 그대로 같은 것만. 커밋은
  * `git commit -F -` 라 git 의 기본 정리(`whitespace`)가 주석 줄을 남긴다 — 사람이 손대지 않은 템플릿 안내문이 커밋 메시지에 들지
  * 않게 한다. 사람이 쓴 `#` 줄(`#123 고침`)은 템플릿에 없으면 남는다.
  */
-export function withoutTemplateComments(message: string, template: string | undefined): string {
+export function withoutTemplateComments(
+  message: string,
+  template: string | undefined,
+  commentChar = "#",
+): string {
   if (!template) return message;
   const comments = new Set(
     template
       .replaceAll("\r\n", "\n")
       .split("\n")
-      .filter((l) => l.startsWith("#")),
+      .filter((l) => l.startsWith(commentChar)),
   );
   if (comments.size === 0) return message;
   return message
@@ -181,6 +186,20 @@ export function withoutTemplateComments(message: string, template: string | unde
     .filter((l) => !comments.has(l.replace(/\r$/, "")))
     .join("\n")
     .replace(/\n+$/, "\n");
+}
+
+/**
+ * 템플릿을 손대지 않았다: 템플릿 주석을 걷은 메시지가 템플릿에서 주석을 걷은 것과 같다(앞뒤 공백 무시). git 은 이때 「메시지를 고치지
+ * 않았다」 로 커밋하지 않는다 — 창도 부르지 않는다.
+ */
+export function templateUnedited(
+  message: string,
+  template: string | undefined,
+  commentChar = "#",
+): boolean {
+  if (!template) return false;
+  const clean = (text: string) => withoutTemplateComments(text, template, commentChar).trim();
+  return clean(message.replaceAll("\r\n", "\n")) === clean(template.replaceAll("\r\n", "\n"));
 }
 
 /** 고르기: 클릭 · ⌘ · ⇧ 를 고른 키 목록(행 차례)으로. 파일 행만 고른다. */

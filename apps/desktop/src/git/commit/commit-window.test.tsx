@@ -70,6 +70,10 @@ const host = vi.hoisted(() => ({
   rejectWith: undefined as string | undefined,
   /** 설정의 코드 글꼴(`[editor]`). */
   editor: undefined as Record<string, unknown> | undefined,
+  /** 주석 글자(`core.commentChar`). */
+  commentChar: "#",
+  /** 있으면 `git.commit` 의 답을 이것이 풀릴 때까지 미룬다. */
+  holdCommit: undefined as Promise<void> | undefined,
   /** 진행 중 작업(`git.operation`). */
   operation: null as unknown,
   emit: (_topic: string, _payload: unknown) => {},
@@ -212,7 +216,7 @@ vi.mock("../../tauri-transport", async () => {
           case "git.show":
             return reply({ message: host.headMessage });
           case "git.commit.template":
-            return reply({ template: host.template });
+            return reply({ template: host.template, commentChar: host.commentChar });
           case "git.stash.list":
             return reply({ workTree: "/repo", stashes: [] });
           case "git.stageLines":
@@ -224,6 +228,23 @@ vi.mock("../../tauri-transport", async () => {
           case "git.discard":
             return reply({ workTree: "/repo", untracked: [] });
           case "git.commit":
+            if (host.holdCommit) {
+              const held = host.holdCommit;
+              host.holdCommit = undefined;
+              void held.then(() =>
+                reply({
+                  commit: "c0ffee0000000000000000000000000000000000",
+                  moved: {
+                    refName: "refs/heads/main",
+                    previous: "aaaaaaa000000000000000000000000000000000",
+                    current: "c0ffee0000000000000000000000000000000000",
+                  },
+                  workTree: "/repo",
+                  output: "",
+                }),
+              );
+              return;
+            }
             if (host.rejectWith !== undefined)
               return send({
                 id: m.id,
@@ -316,6 +337,8 @@ beforeEach(() => {
   host.rejectWith = undefined;
   host.editor = undefined;
   host.operation = null;
+  host.commentChar = "#";
+  host.holdCommit = undefined;
   host.fixture = FIXTURE;
   activeWorktreeStore.setState({ top: undefined });
   diffPreferences.setState({ mode: "split" });
@@ -644,4 +667,67 @@ it("shows the operation-in-progress banner (M2-19) above the list while a merge 
   const list = document.querySelector("[data-commit-list]")!;
   expect(banner.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(row("conflicts:src/app.rs")).not.toBeNull();
+});
+
+it("rolls back a staged rename with the old path too (review F2)", async () => {
+  host.entries = [
+    {
+      path: "src/new.rs",
+      origPath: "src/old.rs",
+      staged: "renamed",
+      unstaged: null,
+      conflict: null,
+    },
+    MODIFIED,
+  ];
+  await openCommitWindow();
+  await click(row("staged:src/new.rs")!);
+  await act(async () => {
+    windowRegistry().run("git.rollback");
+  });
+  const confirm = await vi.waitFor(() => {
+    const b = [...document.querySelectorAll("button")].find((x) => x.textContent === "되돌리기");
+    expect(b).toBeDefined();
+    return b!;
+  });
+  await click(confirm);
+  await vi.waitFor(() => expect(calls("git.discard")).toHaveLength(1));
+  expect(calls("git.unstage")[0]!.params.paths).toEqual(["src/new.rs", "src/old.rs"]);
+  expect(calls("git.discard")[0]!.params).toMatchObject({
+    paths: ["src/new.rs", "src/old.rs"],
+    confirmed: true,
+  });
+});
+
+it("does not commit an unedited template and uses core.commentChar (review F5)", async () => {
+  host.entries = [{ ...MODIFIED, staged: "modified" }];
+  host.template = "Subject\n\n; Explain why.\n";
+  host.commentChar = ";";
+  await openCommitWindow();
+  await vi.waitFor(() => expect(messageBox()!.value).toBe(host.template));
+  await act(async () => {
+    windowRegistry().run("git.commit.run");
+  });
+  await settle(50);
+  expect(calls("git.commit")).toHaveLength(0);
+  await type("feat: real subject\n\n; Explain why.\n");
+  await act(async () => {
+    windowRegistry().run("git.commit.run");
+  });
+  await vi.waitFor(() => expect(calls("git.commit")).toHaveLength(1));
+  expect(calls("git.commit")[0]!.params.message).toBe("feat: real subject\n");
+});
+
+it("locks the message box while committing (review F6)", async () => {
+  host.entries = [{ ...MODIFIED, staged: "modified" }];
+  let release!: () => void;
+  host.holdCommit = new Promise((r) => (release = r));
+  await openCommitWindow();
+  await type("feat: slow hook\n");
+  await click(document.querySelector("[data-commit-run]")!);
+  await vi.waitFor(() => expect(calls("git.commit")).toHaveLength(1));
+  expect(messageBox()!.readOnly).toBe(true);
+  await act(async () => release());
+  await vi.waitFor(() => expect(messageBox()!.readOnly).toBe(false));
+  expect(messageBox()!.value).toBe("");
 });

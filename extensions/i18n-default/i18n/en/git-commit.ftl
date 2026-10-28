@@ -41,6 +41,7 @@ git-commit-run-and-push = Commit and Push
 git-commit-running = Committing…
 git-commit-nothing-staged = Nothing is staged
 git-commit-empty-message = The commit message is empty
+git-commit-template-unedited = The commit template was not edited; write a message first
 
 ## Commit result and hook output
 

@@ -18,7 +18,7 @@ import { create } from "zustand";
 
 import type { NotificationInput } from "../../notifications/notifications";
 import type { CommitOps } from "./commit-ops";
-import { withoutTemplateComments } from "./commit-model";
+import { templateUnedited, withoutTemplateComments } from "./commit-model";
 import type { GitCommitStrings } from "./strings";
 
 /** 푸시 다이얼로그(M2-20 의 주인 — 행 사이 이음매). */
@@ -33,8 +33,9 @@ export interface CommitPanelState {
   message: string;
   amend: boolean;
   signoff: boolean;
-  /** 미리 채운 `commit.template`(손대지 않은 주석 줄을 걷을 때 쓴다). */
+  /** 미리 채운 `commit.template`(손대지 않은 주석 줄을 걷을 때 쓴다)과 주석 글자(`core.commentChar`). */
   template: string | undefined;
+  commentChar: string;
   /** amend 를 켜기 전의 칸과 채운 HEAD 메시지(끌 때 돌린다). */
   amendFill: { before: string; filled: string } | undefined;
   output: CommitOutput | undefined;
@@ -52,6 +53,7 @@ const INITIAL: CommitPanelState = {
   amend: false,
   signoff: false,
   template: undefined,
+  commentChar: "#",
   amendFill: undefined,
   output: undefined,
   busy: false,
@@ -95,11 +97,11 @@ export function setMessage(message: string) {
 
 /** 비어 있는 메시지 칸에 템플릿을 채운다. */
 export async function fillTemplate(feature: CommitFeature) {
-  const template = await feature.ops.template();
+  const { template, commentChar } = await feature.ops.template();
   const s = commitPanel.getState();
   if (s.message === "" && !s.amend && template)
-    commitPanel.setState({ message: template, template });
-  else commitPanel.setState({ template });
+    commitPanel.setState({ message: template, template, commentChar });
+  else commitPanel.setState({ template, commentChar });
 }
 
 /** amend 켜기 · 끄기(머리 주석). */
@@ -127,7 +129,11 @@ export async function runCommit(feature: CommitFeature, push: boolean): Promise<
   const s = commitPanel.getState();
   if (s.busy) return false;
   const T = feature.strings();
-  const message = withoutTemplateComments(s.message, s.template);
+  const message = withoutTemplateComments(s.message, s.template, s.commentChar);
+  if (!s.amend && templateUnedited(s.message, s.template, s.commentChar)) {
+    feature.notify({ level: "warning", title: T.message.templateUnedited });
+    return false;
+  }
   if (message.trim() === "") {
     feature.notify({ level: "warning", title: T.message.empty });
     return false;
@@ -150,9 +156,11 @@ export async function runCommit(feature: CommitFeature, push: boolean): Promise<
   const { result } = outcome;
   feature.remember(message);
   const output = result.output.trim();
+  // 칸은 커밋하는 동안 잠겨 있다. 그래도 그사이 바뀌었으면(기록에서 고름 등) 그 글을 지우지 않는다.
+  const unchanged = commitPanel.getState().message === s.message;
   commitPanel.setState({
     busy: false,
-    message: "",
+    ...(unchanged && { message: "" }),
     amend: false,
     amendFill: undefined,
     selected: [],

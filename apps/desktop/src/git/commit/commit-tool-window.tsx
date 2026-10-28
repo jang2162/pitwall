@@ -699,6 +699,8 @@ function MessageArea({ feature }: { feature: CommitFeature }) {
         aria-label={T.message.label}
         placeholder={T.message.label}
         value={message}
+        readOnly={busy}
+        aria-busy={busy}
         spellCheck={false}
         onChange={(e) => setMessage(e.target.value)}
         className="h-[96px] min-h-[48px] resize-y rounded-sm border border-ui-border bg-editor-background px-1.5 py-1 font-mono text-[12px] text-ui-foreground outline-none focus:border-ui-accent"

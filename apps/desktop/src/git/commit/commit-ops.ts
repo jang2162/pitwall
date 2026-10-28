@@ -5,7 +5,8 @@
 // - 묻는 화면은 M1 의 확인 부품(file-tree/file-dialogs.tsx)이다. 작업 트리 변경 버리기 · stash 버리기는 결정 M2-D6 ① 의 확인 대상이다
 //   — 위험 작업 다이얼로그(M2-20)가 들어오면 그 부품으로 바꾼다.
 // - 되돌리기(⌘⌥Z): 스테이징된 것은 스테이징을 풀고(`git.unstage`) 작업 트리를 index 로 돌린다(`git.discard`) — 둘을 거치면 HEAD 다.
-//   untracked · 새로 더한 파일은 지우지 않는다(`git.discard` 가 돌려준 목록을 알린다).
+//   스테이징된 이름 바뀜은 옛 경로까지 두 호출에 다 넘긴다(옛 파일이 작업 트리에서 지워진 채 남지 않게). untracked · 새로 더한 파일은
+//   지우지 않는다(`git.discard` 가 돌려준 목록을 알린다).
 // - git 이 거절한 것(`2004`)은 쓰기 Task 의 실패 알림이 원문을 보였다 — 여기서 또 알리지 않는다. 커밋의 거절(훅 실패)만은 툴 윈도우에
 //   그 출력을 남긴다(완료 기준 — 메시지 칸이 그대로 남는다).
 // - 경로는 모두 작업 트리 꼭대기 기준 상대 경로(`/`)다(`git.status` 의 경로 그대로).
@@ -66,10 +67,14 @@ export function createCommitOps(deps: CommitOpsDeps) {
     if (!c) throw new Error("Host is not connected");
     return c;
   };
-  const scope = (worktree = deps.worktree()) => ({
+  /** 그 워크트리(`undefined` = 메인 체크아웃)의 범위. */
+  const at = (worktree: string | undefined) => ({
     projectId: deps.projectId,
     worktree: worktree ?? null,
   });
+  /** 누른 때의 활성 워크트리의 범위. 탭이 정한 워크트리가 있는 쓰기(미리보기 diff)는 `at` 을 쓴다 — 메인 체크아웃의 탭이 연결
+   * 워크트리로 쓰지 않게. */
+  const scope = () => at(deps.worktree());
   /** 실패를 알린다(git 의 거절은 Task 알림이 이미 보였다). */
   const failed = (e: unknown) => {
     if (e instanceof RpcCallError && e.code === GIT_FAILED) return;
@@ -108,7 +113,7 @@ export function createCommitOps(deps: CommitOpsDeps) {
         deps.notify({ level: "warning", title: T().rollback.none });
         return false;
       }
-      const paths = [...new Set(chosen.map((i) => i.path))].sort();
+      const paths = unstagePaths(chosen).sort();
       const ok = await deps.confirm({
         title: T().rollback.title,
         body: `${T().rollback.body(paths.length)}\n\n${listLines(paths, LISTED, T().rollback.more)}`,
@@ -139,7 +144,7 @@ export function createCommitOps(deps: CommitOpsDeps) {
     ): Promise<"done" | "changed" | "failed"> {
       try {
         await host().call(mode === "stage" ? "git.stageLines" : "git.unstageLines", {
-          ...scope(worktree),
+          ...at(worktree),
           path,
           oldPath: mode === "unstage" ? (oldPath ?? null) : null,
           hunks: [{ hunk: selection.hunk, lines: [...selection.lines] }],
@@ -171,7 +176,7 @@ export function createCommitOps(deps: CommitOpsDeps) {
       if (!ok) return "cancelled";
       try {
         await host().call("git.discardLines", {
-          ...scope(worktree),
+          ...at(worktree),
           path,
           hunks: [{ hunk: selection.hunk, lines: [...selection.lines] }],
           ignoreWhitespace: false,
@@ -211,13 +216,14 @@ export function createCommitOps(deps: CommitOpsDeps) {
       }
     },
 
-    /** `commit.template` 의 내용. 없으면 `undefined`. */
-    async template(): Promise<string | undefined> {
+    /** `commit.template` 의 내용(없으면 `undefined`)과 주석 글자(`core.commentChar`). */
+    async template(): Promise<{ template: string | undefined; commentChar: string }> {
       try {
-        return (await host().call("git.commit.template", scope())).template ?? undefined;
+        const r = await host().call("git.commit.template", scope());
+        return { template: r.template ?? undefined, commentChar: r.commentChar };
       } catch (e) {
         console.warn("[git] git.commit.template failed", errorText(e));
-        return undefined;
+        return { template: undefined, commentChar: "#" };
       }
     },
 

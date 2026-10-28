@@ -63,7 +63,11 @@ async function main() {
   });
   commitFeature.setState({
     current: {
-      ops: { ...ops, stashList: async () => undefined, template: async () => undefined },
+      ops: {
+        ...ops,
+        stashList: async () => undefined,
+        template: async () => ({ template: undefined, commentChar: "#" }),
+      },
       registry: new ActionRegistry(),
       strings: () => strings,
       notify: () => {},

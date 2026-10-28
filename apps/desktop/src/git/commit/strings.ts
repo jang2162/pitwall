@@ -46,6 +46,7 @@ export function gitCommitStrings(t: Translate) {
       running: t("git-commit-running"),
       nothingStaged: t("git-commit-nothing-staged"),
       empty: t("git-commit-empty-message"),
+      templateUnedited: t("git-commit-template-unedited"),
     },
     result: {
       output: t("git-commit-output"),

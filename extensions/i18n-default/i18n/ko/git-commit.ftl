@@ -41,6 +41,7 @@ git-commit-run-and-push = 커밋 후 푸시
 git-commit-running = 커밋하는 중…
 git-commit-nothing-staged = 스테이징된 변경이 없다
 git-commit-empty-message = 커밋 메시지가 비었다
+git-commit-template-unedited = 템플릿을 고치지 않았다 — 메시지를 쓴 뒤 커밋한다
 
 ## 커밋 결과 · 훅 출력
 
