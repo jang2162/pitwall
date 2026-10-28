@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { FirstFrameMark, perfMarkRequested } from "./perf-mark";
+import { FirstFrameMark, perfMarkRequested, perfScenarioRequested } from "./perf-mark";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -24,6 +24,13 @@ it("only the measurement query asks for the mark", () => {
   expect(perfMarkRequested("?window=project&project=a&perf=1")).toBe(true);
   expect(perfMarkRequested("?window=project&project=a")).toBe(false);
   expect(perfMarkRequested("?window=project&perf=0")).toBe(false);
+});
+
+it("a scenario runs only in measurement mode and only by a known name", () => {
+  expect(perfScenarioRequested("?window=project&perf=1&perfScenario=git")).toBe("git");
+  expect(perfScenarioRequested("?window=project&perfScenario=git")).toBeUndefined();
+  expect(perfScenarioRequested("?window=project&perf=1&perfScenario=other")).toBeUndefined();
+  expect(perfScenarioRequested("?window=project&perf=1")).toBeUndefined();
 });
 
 function visibility(initial: DocumentVisibilityState) {

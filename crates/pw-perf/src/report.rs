@@ -200,6 +200,29 @@ fn met(value: Option<bool>) -> &'static str {
 }
 
 /// 사람이 읽는 요약(GitHub job summary 에도 그대로 붙인다).
+/// 요약 머리의 빌드 · 커밋 · OS · 하드웨어 줄(개행 없이). git 시나리오 요약(`crate::git`)도 쓴다.
+pub fn environment(build: &Build, commit: &Commit, os: &Os, hw: &Hardware) -> String {
+    let sha = match (&commit.sha, commit.dirty) {
+        (Some(sha), Some(true)) => format!("`{sha}` (uncommitted changes)"),
+        (Some(sha), _) => format!("`{sha}`"),
+        (None, _) => "unknown".into(),
+    };
+
+    format!(
+        "- build: {} (`{}`)\n- commit: {sha}\n- os: {} {} ({})\n- hardware: {} · {} · {} CPUs · {} GiB",
+        build.profile,
+        build.app,
+        os.name,
+        os.version.as_deref().unwrap_or("?"),
+        os.build.as_deref().unwrap_or("?"),
+        hw.model.as_deref().unwrap_or("?"),
+        hw.cpu.as_deref().unwrap_or("?"),
+        hw.cpus.map_or("?".into(), |n| n.to_string()),
+        hw.memory_bytes
+            .map_or("?".into(), |b| (b / GIB).to_string()),
+    )
+}
+
 pub fn markdown(report: &Report) -> String {
     let mut out = String::new();
     let push = |out: &mut String, line: String| {
@@ -222,27 +245,9 @@ pub fn markdown(report: &Report) -> String {
         );
         push(&mut out, String::new());
     }
-    let commit = match (&report.commit.sha, report.commit.dirty) {
-        (Some(sha), Some(true)) => format!("`{sha}` (uncommitted changes)"),
-        (Some(sha), _) => format!("`{sha}`"),
-        (None, _) => "unknown".into(),
-    };
-    let hw = &report.hardware;
     push(
         &mut out,
-        format!(
-            "- build: {} (`{}`)\n- commit: {commit}\n- os: {} {} ({})\n- hardware: {} · {} · {} CPUs · {} GiB",
-            report.build.profile,
-            report.build.app,
-            report.os.name,
-            report.os.version.as_deref().unwrap_or("?"),
-            report.os.build.as_deref().unwrap_or("?"),
-            hw.model.as_deref().unwrap_or("?"),
-            hw.cpu.as_deref().unwrap_or("?"),
-            hw.cpus.map_or("?".into(), |n| n.to_string()),
-            hw.memory_bytes
-                .map_or("?".into(), |b| (b / GIB).to_string()),
-        ),
+        environment(&report.build, &report.commit, &report.os, &report.hardware),
     );
     push(
         &mut out,

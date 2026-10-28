@@ -21,6 +21,14 @@ function fakeTransport(): Plugin {
   };
 }
 
+const page = (name: string) => fileURLToPath(new URL(name, import.meta.url));
+
+// 하네스(index.html)와 시나리오 스모크(scenario.html) 두 쪽을 함께 만든다.
 export default defineConfig((env) =>
-  mergeConfig(typeof app === "function" ? app(env) : app, { plugins: [fakeTransport()] }),
+  mergeConfig(typeof app === "function" ? app(env) : app, {
+    plugins: [fakeTransport()],
+    build: {
+      rollupOptions: { input: { index: page("index.html"), scenario: page("scenario.html") } },
+    },
+  }),
 );

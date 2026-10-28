@@ -12,76 +12,16 @@
 
 import "../bench.css";
 
-import type { DiffFile, DiffHunk, DiffLine } from "@pitwall/rpc-client";
+import type { DiffFile } from "@pitwall/rpc-client";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { buildDiffView, type DiffMode } from "../../src/git/diff/diff-view";
 import { applyTokens, parseTheme } from "../../src/theme/tokens";
+import { input, LINES } from "./ten-thousand";
 
 const RUNS = 11;
-const LINES = 20_000;
 
 const nextFrame = () => new Promise<number>((r) => requestAnimationFrame(r));
-
-/** pw-git 의 `git.diff` 와 같은 꼴의 hunk(문맥 3줄 — 짝수 줄마다 바뀌어 hunk 하나로 이어진다). */
-function input() {
-  const before: string[] = [];
-  const after: string[] = [];
-  for (let i = 0; i < LINES; i++) {
-    before.push(`    let value_${i} = ${i};`);
-    after.push(i % 2 === 0 ? `    let value_${i} = ${i} + 1;` : `    let value_${i} = ${i};`);
-  }
-  const lines: DiffLine[] = [];
-  for (let i = 0; i < LINES; i++) {
-    const n = i + 1;
-    if (i % 2 === 0) {
-      lines.push({
-        kind: "removed",
-        text: before[i]!,
-        oldLine: n,
-        newLine: null,
-        noNewline: false,
-      });
-      lines.push({ kind: "added", text: after[i]!, oldLine: null, newLine: n, noNewline: false });
-    } else
-      lines.push({ kind: "context", text: before[i]!, oldLine: n, newLine: n, noNewline: false });
-  }
-  const hunk: DiffHunk = {
-    oldStart: 1,
-    oldLines: LINES,
-    newStart: 1,
-    newLines: LINES,
-    header: "",
-    lines,
-  };
-  const file: DiffFile = {
-    status: "modified",
-    path: "big.rs",
-    oldPath: null,
-    oldMode: "100644",
-    newMode: "100644",
-    oldId: null,
-    newId: null,
-    binary: false,
-    tooLarge: false,
-    hunksOmitted: false,
-    generated: false,
-    submodule: null,
-    added: LINES / 2,
-    removed: LINES / 2,
-    hunks: [hunk],
-    error: null,
-  };
-  const blob = (text: string) => ({
-    content: { kind: "text", text },
-    judgment: { highlight: true },
-  });
-  return {
-    diff: JSON.stringify({ workTree: "/r", oldCommit: "a", newCommit: "b", files: [file] }),
-    old: JSON.stringify(blob(`${before.join("\n")}\n`)),
-    new: JSON.stringify(blob(`${after.join("\n")}\n`)),
-  };
-}
 
 async function measure(wire: ReturnType<typeof input>, mode: DiffMode) {
   const parent = document.getElementById("root")!;

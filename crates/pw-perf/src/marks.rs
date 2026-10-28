@@ -14,6 +14,9 @@ pub struct Mark {
     /// `first_frame` 만: 그 전에 창(문서)이 한 번이라도 가려졌는가.
     #[serde(default)]
     pub hidden: Option<bool>,
+    /// 시나리오의 단계(`perf_report`)만: 프론트엔드가 잰 값(src/perf-scenario.ts).
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
 }
 
 /// 읽을 수 없는 줄은 건너뛴다 — 앱이 아직 쓰는 중인 마지막 줄이 반쪽일 수 있다.

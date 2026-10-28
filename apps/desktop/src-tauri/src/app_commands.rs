@@ -36,6 +36,8 @@ pub const COMMANDS: &[(&str, &[WindowKind])] = &[
     ("take_pending_project_opens", &[Project, File]),
     // 프로젝트 창의 파일 트리 드롭(src/file-tree/tree-drop.ts).
     ("import_drop", &[Project]),
+    // 프로젝트 창의 측정 시나리오(src/perf-scenario.ts).
+    ("perf_report", &[Project]),
     // 단일 파일 창의 「프로젝트로 열기」(src/file-window/file-window.tsx).
     ("open_file_as_project", &[File]),
 ];
@@ -110,7 +112,7 @@ mod tests {
         assert_eq!(allowed_in("settings"), common_and(&["write_clipboard"]));
         assert_eq!(
             allowed_in("project-ab12"),
-            common_and(&["take_pending_project_opens", "import_drop"])
+            common_and(&["take_pending_project_opens", "import_drop", "perf_report"])
         );
         assert_eq!(
             allowed_in("file-1"),

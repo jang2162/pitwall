@@ -36,6 +36,7 @@ mise trust && mise install && pnpm install
 | Linguist `samples/` 일치율 시험(samples 를 GitHub 에서 받는다, 아래 「Linguist 데이터」)                      | `mise run lang-samples` |
 | 내장 언어 확장의 강조 쿼리 · 넣은 문법 파일 다시 만들기(소스를 GitHub 에서 받는다, 아래 「tree-sitter 문법」) | `mise run grammars`     |
 | 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)                          | `mise run perf`         |
+| 데스크톱 앱 release 번들의 git 시나리오 측정(macOS, 아래 「성능 기준선」 의 「git 시나리오」)                 | `mise run perf-git`     |
 
 하위 단위만 돌릴 때:
 
@@ -51,7 +52,7 @@ cargo nextest run -p pw-fs --release -j 1 -E 'test(/^search::tests::stopping_/) 
 PW_RESET_FUZZ_CASES=200 cargo nextest run -p pw-git -E 'test(/history::tests::fuzz::/)'   # reset 미리보기의 차등 퍼즈 긴 판(조각 넷 × 200 개, 기본 시험은 × 10). 실패하면 시드를 보인다 — PW_RESET_FUZZ_SEED=<시드> PW_RESET_FUZZ_CASES=1 로 그 경우만(`crates/pw-git/src/history/tests/fuzz.rs`)
 cargo nextest run --release -p pw-git -j 1 --run-ignored only -E 'test(=log::tests::perf::the_first_chunk_of_100k_commits_is_within_300ms)' --no-capture   # git 로그 첫 청크 300 ms(M2-03 완료 기준, 합성 10만 커밋 · commit-graph 있음 · 없음). 저장소 생성까지 10~55초가 걸려 `test-release`(CI)에는 넣지 않는다 — 같은 기기에서 손으로 돌린다(M2-22)
 node apps/desktop/perf/run-headless.cjs webkit http://127.0.0.1:<포트>/index.html __diffCheck <playwright-core 경로> [webkit 실행 파일]   # diff 뷰의 계산된 색 · 보기 전환 스크롤을 헤드리스 WebKit 에서 본다(창을 띄우지 않는다). 먼저 `pnpm --filter @pitwall/desktop exec vite build perf/diff-check --config vite.config.ts --outDir <폴더> --emptyOutDir --base ./` 한 폴더를 127.0.0.1 정적 서버로 연다. 저장소는 playwright 에 의존하지 않아 `mise run test` 에 들지 않는다 — diff 색 · 줄 맞춤을 고쳤으면 돌린다(`apps/desktop/perf/diff-check/diff-check.tsx` 머리 주석)
-node apps/desktop/perf/git-log/run.mjs <폴더> 5   # Git 로그 툴 윈도우의 첫 그림 · 10만 행 스크롤(M2-14, 헤드리스 WebKit — 앱 창을 띄우지 않는다). 폴더 만들기와 `PLAYWRIGHT` 는 그 파일 머리 주석
+node apps/desktop/perf/git-log/run.mjs <폴더> 5   # Git 로그 툴 윈도우의 첫 그림 · 10만 행 스크롤(M2-14, 헤드리스 WebKit — 앱 창을 띄우지 않는다). 폴더 만들기와 `PLAYWRIGHT` 는 그 파일 머리 주석. `PAGE=scenario.html` 이면 앱 안 측정 시나리오(`apps/desktop/src/perf-scenario.ts`)를 실제 App 위에서 끝까지 돌리는 스모크 — 시나리오 · 그 DOM 을 고쳤으면 `mise run perf-git` 전에 돌린다
 cargo run --release -p pw-git --features test-support --example blame_timing -- <빈 폴더> 5   # blame 첫 청크 · 전체 시간을 gix · git CLI 로(5,000줄 · 커밋 1천 개 합성 파일, 결정 M2-D1 판정 · M2-22). 저장소는 처음에 그 폴더에 만든다
 PW_BLAME_SEEDS=200 cargo nextest run -p pw-git -E 'test(/random_histories/)'   # blame 두 엔진 · 파일 히스토리를 무작위 이력 200개에서 git 과 대조하는 긴 판(기본 시험은 8개, `crates/pw-git/src/testing/blame.rs`)
 mise run test-release   # 위 release 판정 시험(검색 취소 100 ms · `fs.list` 1만 개 · 구문 강조 16 ms · git 감시 이벤트 500 ms · 터미널 체크아웃 → 상태바 브랜치의 `git.refs` 500 ms)을 한 번에 — CI 의 「release timing tests」 단계와 같은 명령이다. 9개를 돌린다(0개면 실패)
@@ -104,9 +105,22 @@ Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오�
 - **끄기**: 그 앱 pid 에 AppKit 종료 요청(정상 종료라 단일 인스턴스 소켓을 지운다) → SIGTERM → SIGKILL 순으로 끈다. 사람이 띄운 다른 Pitwall 은 건드리지 않는다. 끈 뒤 그 인스턴스의 프로세스나 단일 인스턴스 소켓(`/tmp/<키>_si.sock`)이 남아 있으면 실패한다.
 - **하네스가 멈출 때**: 앱은 떼어 띄워져 터미널의 신호가 닿지 않는다. 하네스는 SIGINT · SIGTERM · SIGHUP 과 패닉에서도 진행 중인 회의 앱을 끄고 임시 폴더를 지운 뒤 끝난다. SIGKILL 처럼 정리할 틈이 없는 끝은 앱이 `PITWALL_PERF_PARENT` 로 받은 하네스 pid 를 0.25초마다 보고 그 pid 가 사라지면 스스로 정상 종료한다(하네스 pid 가 그 사이 다른 프로세스에 다시 쓰이면 잡지 못한다). 이때 임시 폴더(`$TMPDIR/pw-perf-<pid>`)와 그 회의 웹뷰 저장소는 남는다.
 
+git 저장소를 프로젝트로 잴 때는(M2-22) `--project <폴더>` 를 준다 — 임시 프로젝트 대신 그 폴더를 회마다 등록한다(지우지 않는다). 예: `mise run perf -- --project target/perf-git/graph`(`mise run perf-git-repos` 가 만든다).
+
 다시 재기: `mise run perf`(번들을 다시 만든다). 만든 번들을 다시 재기만 할 때는 `cargo run -q --release -p pw-perf -- --app target/release/bundle/macos/Pitwall.app`. 인자는 `mise run perf -- --runs 3` 처럼 넘긴다. 기준선을 갱신할 때는 커밋하지 않은 변경이 없는 트리에서 재고(`commit.dirty` 가 false), `docs/superpowers/reports/<날짜>-perf-baseline-report.md` 와 같은 이름의 `.json` 으로 남긴다.
 
-보지 않는 것: Linux · Windows, 캐시를 비운 진짜 콜드 기동, 웰컴 창 경로, LSP · 프로젝트 여러 개, 06 의 나머지 목표(git 그래프 · 퍼지 검색 · 그리드). CI 의 `perf` 잡은 같은 태스크를 돌려 job summary 와 artifact(`perf-baseline`)로 남긴다 — 러너는 느리고 들쭉날쭉하므로 기준선이 아니라 추세 참고다.
+보지 않는 것: Linux · Windows, 캐시를 비운 진짜 콜드 기동, 웰컴 창 경로, LSP · 프로젝트 여러 개, 06 의 나머지 목표(퍼지 검색 · 그리드 — git 그래프는 아래 「git 시나리오」). CI 의 `perf` 잡은 같은 태스크를 돌려 job summary 와 artifact(`perf-baseline`)로 남긴다 — 러너는 느리고 들쭉날쭉하므로 기준선이 아니라 추세 참고다.
+
+### git 시나리오
+
+`mise run perf-git`(macOS)는 release 번들을 만들고, 합성 10만 커밋 저장소 둘(`mise run perf-git-repos` 가 `target/perf-git/graph` · `no-graph` 에 만든다 — commit-graph 있음 · 없음, 결정 M2-D10)을 차례로 프로젝트로 열어 13-m2-plan.md 의 세 완료 기준을 잰다: M2-14 의 ⌘9 → 첫 행 그림(500 ms) · 10만 행 스크롤(프레임 95% 가 16.7 ms 안), M2-15 의 1만 줄 diff 첫 그림(200 ms), M2-13 의 터미널 `git checkout` → 상태바(500 ms). 위의 실행 · 프로세스 고르기 · 끄기 · 임시 폴더 · 신호 처리는 그대로이고, 다른 것만 적는다.
+
+- **시나리오는 앱 안에서 돈다.** 하네스가 `PITWALL_PERF_SCENARIO=git` 을 주면 측정 모드의 앱이 프로젝트 창 주소에 `perfScenario=git` 을 붙이고, 프론트엔드가 첫 프레임 뒤에 `apps/desktop/src/perf-scenario.ts` 를 돌려 단계마다 `perf_report` 로 표시(`data` 에 잰 값)를 남긴다. 단계와 각 시작점 · 끝점은 그 파일 머리 주석이 정본이다 — ⌘9 · 더블클릭 · ⌃⌥⇧↑(툴 윈도우 키우기)는 웹뷰 안에서 만든 이벤트라 **OS 키 입력을 보내지 않는다**(화면 잠금의 암호 칸으로 들어갈 일이 없다). 체크아웃만 하네스가 한다: 앱이 `checkout_ready` 를 남기면 그 저장소에서 `git checkout -q perf-checkout` 을 돌리고(띄우기 직전의 벽시계가 시작점), 앱이 상태바 이름이 바뀐 다음 프레임의 벽시계를 `branch_shown` 으로 남긴다.
+- **저장소**: `synth_history --perf-fixture` 로 만든 것만 받는다 — `main` 과 `perf-checkout` 브랜치가 있고 작업 트리가 깨끗해야 하며, 아니면 띄우기 전에 실패한다. 회마다 `main` 으로 돌려놓고 띄우고, 실패한 회도 돌려놓는다. git 2.54 는 `git commit` 뒤에 `git maintenance run --auto --detach` 로 commit-graph 를 백그라운드에서 쓴다 — 픽스처는 저장소 설정에 `maintenance.auto=false` · `gc.auto=0` 을 남기고 하네스의 git 도 같은 설정으로 돈다. 측정 전후로 commit-graph 유무가 바뀌면 실패한다(저장소를 다시 만든다 — `target/perf-git/` 를 지우고 `mise run perf-git-repos`).
+- **반복**: 저장소마다 준비 1회 + 측정 5회(`--warmup`, `--runs`) — 프로젝트 창이 회마다 한 번 앞에 뜬다(기본 12번). 회마다 1분 남짓(10만 행 받기 · 스크롤 2,600 프레임 · diff · 체크아웃)이라 번들을 만든 뒤 15분쯤 걸린다. 시나리오가 `--scenario-timeout-secs`(300) 안에 끝나지 않거나 단계가 실패하면(`scenario_error`) 그 측정이 실패한다.
+- **제외**: 첫 프레임 전 · 시나리오 중에 창이 가려졌거나(`hidden`) 화면이 잠긴 회는 결과에 남기되 중앙값에서 뺀다 — 가려진 창은 WebKit 이 rAF 를 미뤄 프레임 · 첫 그림 수치가 실제 화면의 것이 아니다. **측정 중에는 프로젝트 창을 가리지 않는다.**
+- **결과**: `target/perf/<시각>/result.json`(저장소별 회 값 · 중앙값 · 목표 판정, 정의는 `definitions`)과 `summary.md`, 회마다 `repo-<N>/run-<N>/` 에 표시 파일과 앱 로그. 메모리는 시나리오가 끝난 직후의 footprint 다(10만 행 · 커밋 탭 하나를 연 뒤) — 유휴 기준선이 아니다. 종료 코드는 위와 같다(유효한 회가 어느 저장소든 `--runs` 의 절반보다 적으면 3).
+- **보지 않는 것**: 툴 윈도우를 에디터 탭으로 키운 모양(하단 dock 을 위로 키운 모양만), 테마 전환 다시 칠하기, 필터 바, 진짜 터미널(앱의 터미널 탭)에서 친 체크아웃 — 하네스의 체크아웃은 같은 저장소 감시 경로를 타지만 터미널 탭의 출력 처리는 들지 않는다. 시나리오가 찾는 DOM(`[data-testid=git-log-list]`, `.pw-diff-line`, `[data-testid=status-branch-name]`)이 바뀌면 시나리오가 단계 이름과 함께 실패한다 — 그 전에 위 「명령」 절의 스모크(`PAGE=scenario.html`)로 본다.
 
 ## RPC 타입 생성
 

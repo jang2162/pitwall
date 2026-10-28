@@ -9,6 +9,9 @@
 //! 측정 모드에서 [`PARENT_ENV`] 에 측정하는 프로세스(하네스)의 pid 를 주면, 앱은 그 pid 가 사라질 때 스스로 끝난다
 //! ([`watch_parent`]). 하네스가 SIGKILL 등으로 정리 없이 죽어도 떼어 띄운 앱이 임시 데이터로 남지 않게 한다.
 //!
+//! 측정 모드에서 [`SCENARIO_ENV`] 에 시나리오 이름([`SCENARIOS`])을 주면 프로젝트 창 주소에 `perfScenario=<이름>` 도 붙고, 프론트엔드가
+//! 첫 프레임 뒤에 그 시나리오를 돌려 단계마다 [`perf_report`] 로 표시를 남긴다(src/perf-scenario.ts — 표시의 `data` 에 잰 값).
+//!
 //! 변수를 지우지 않는 이유: CLI 콜드 스타트는 앱을 떼어 다시 띄우는데(detach.rs) 그 자식이 같은 환경을 물려받아야 첫 프레임을
 //! 남긴다. 그래서 측정 모드로 띄운 앱이 여는 프로세스도 변수를 물려받는다 — 측정할 때만 켜는 변수다.
 
@@ -24,13 +27,23 @@ pub const MARK_ENV: &str = "PITWALL_PERF_MARK";
 /// 측정하는 프로세스의 pid. 측정 모드([`MARK_ENV`])에서만 읽는다.
 pub const PARENT_ENV: &str = "PITWALL_PERF_PARENT";
 
+/// 프로젝트 창이 첫 프레임 뒤에 돌릴 시나리오. 측정 모드([`MARK_ENV`])에서만 읽는다.
+pub const SCENARIO_ENV: &str = "PITWALL_PERF_SCENARIO";
+
+/// 아는 시나리오(src/perf-scenario.ts 의 `SCENARIOS`). 모르는 이름은 무시한다 — 창 주소에는 이 목록의 값만 들어간다.
+pub const SCENARIOS: &[&str] = &["git"];
+
 /// 측정 모드인 프로젝트 창의 주소에 붙는 쿼리(src/perf-mark.tsx 의 `perfMarkRequested`).
 const QUERY: (&str, &str) = ("perf", "1");
+
+/// 시나리오를 알리는 쿼리 이름(src/perf-mark.tsx 의 `perfScenarioRequested`).
+const SCENARIO_QUERY: &str = "perfScenario";
 
 /// 표시 파일. `None` 이면 측정 모드가 아니다.
 pub struct PerfMarks {
     file: Option<PathBuf>,
     parent: Option<u32>,
+    scenario: Option<&'static str>,
 }
 
 impl PerfMarks {
@@ -39,21 +52,43 @@ impl PerfMarks {
         let parent = file
             .as_ref()
             .and_then(|_| std::env::var(PARENT_ENV).ok()?.parse().ok());
-        Self { file, parent }
+        let scenario = file
+            .as_ref()
+            .and_then(|_| scenario_named(&std::env::var(SCENARIO_ENV).ok()?));
+        Self {
+            file,
+            parent,
+            scenario,
+        }
     }
 
     #[cfg(test)]
     pub fn at(file: Option<PathBuf>) -> Self {
-        Self { file, parent: None }
+        Self {
+            file,
+            parent: None,
+            scenario: None,
+        }
     }
 
     /// `event` 와 지금 시각을 덧붙인다. 쓰지 못하면 로그만 남긴다 — 표시 파일이 앱을 막지 않는다.
     pub fn record(&self, event: &str, window: Option<&str>, hidden: Option<bool>) {
+        self.record_with(event, window, hidden, None);
+    }
+
+    /// [`Self::record`] 에 잰 값(`data`)을 싣는다.
+    pub fn record_with(
+        &self,
+        event: &str,
+        window: Option<&str>,
+        hidden: Option<bool>,
+        data: Option<&serde_json::Value>,
+    ) {
         let Some(file) = &self.file else { return };
         let epoch_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
-        let line = mark_line(event, std::process::id(), epoch_ms, window, hidden);
+        let line = mark_line(event, std::process::id(), epoch_ms, window, hidden, data);
         let written = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -65,27 +100,38 @@ impl PerfMarks {
     }
 }
 
-/// 표시 한 줄(개행 포함). 형식은 `crates/pw-perf` 의 `Mark` 가 읽는다.
+fn scenario_named(name: &str) -> Option<&'static str> {
+    SCENARIOS.iter().copied().find(|s| *s == name)
+}
+
+/// 표시 한 줄(개행 포함). 형식은 `crates/pw-perf` 의 `Mark` 가 읽는다. `data` 는 있을 때만 싣는다.
 fn mark_line(
     event: &str,
     pid: u32,
     epoch_ms: f64,
     window: Option<&str>,
     hidden: Option<bool>,
+    data: Option<&serde_json::Value>,
 ) -> String {
-    let mut line = serde_json::json!({
+    let mut value = serde_json::json!({
         "event": event, "pid": pid, "epoch_ms": epoch_ms, "window": window, "hidden": hidden,
-    })
-    .to_string();
+    });
+    if let Some(data) = data {
+        value["data"] = data.clone();
+    }
+    let mut line = value.to_string();
     line.push('\n');
     line
 }
 
 /// 프로젝트 창 주소에 더할 쿼리. 측정 모드가 아니면 없다.
-pub fn project_query<R: Runtime>(app: &AppHandle<R>) -> Option<(&'static str, &'static str)> {
-    app.try_state::<PerfMarks>()
-        .is_some_and(|marks| marks.file.is_some())
-        .then_some(QUERY)
+pub fn project_query<R: Runtime>(app: &AppHandle<R>) -> Vec<(&'static str, &'static str)> {
+    let Some(marks) = app.try_state::<PerfMarks>().filter(|m| m.file.is_some()) else {
+        return Vec::new();
+    };
+    let mut query = vec![QUERY];
+    query.extend(marks.scenario.map(|s| (SCENARIO_QUERY, s)));
+    query
 }
 
 /// 측정하는 프로세스([`PARENT_ENV`])가 사라지면 앱을 정상 종료한다(단일 인스턴스 소켓을 지운다). 주 인스턴스의 setup 에서
@@ -144,19 +190,42 @@ pub fn perf_hidden<R: Runtime>(window: WebviewWindow<R>, marks: State<'_, PerfMa
     marks.record("hidden", Some(window.label()), Some(true));
 }
 
+/// 시나리오의 한 단계(src/perf-scenario.ts): 이름(`event`)과 잰 값(`data`). 측정 모드가 아니면 아무것도 하지 않는다.
+#[tauri::command]
+pub fn perf_report<R: Runtime>(
+    window: WebviewWindow<R>,
+    marks: State<'_, PerfMarks>,
+    event: String,
+    data: serde_json::Value,
+) {
+    marks.record_with(&event, Some(window.label()), None, Some(&data));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn a_mark_is_one_json_line() {
-        let line = mark_line("first_frame", 42, 1.5, Some("project-a"), Some(true));
+        let line = mark_line("first_frame", 42, 1.5, Some("project-a"), Some(true), None);
         assert!(line.ends_with('\n') && !line.trim_end().contains('\n'));
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(
             v,
             serde_json::json!({"event": "first_frame", "pid": 42, "epoch_ms": 1.5, "window": "project-a", "hidden": true})
         );
+        let data = serde_json::json!({"openMs": 120.5});
+        let line = mark_line(
+            "git_log_open",
+            42,
+            2.0,
+            Some("project-a"),
+            None,
+            Some(&data),
+        );
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["data"], data);
+        assert_eq!(v["event"], "git_log_open");
     }
 
     #[test]
@@ -206,12 +275,39 @@ mod tests {
     #[test]
     fn only_measurement_mode_adds_the_perf_query() {
         let app = tauri::test::mock_app();
-        assert_eq!(project_query(app.handle()), None, "상태가 없으면 없다");
+        assert_eq!(project_query(app.handle()), [], "상태가 없으면 없다");
         app.manage(PerfMarks::at(None));
-        assert_eq!(project_query(app.handle()), None);
+        assert_eq!(project_query(app.handle()), []);
 
         let app = tauri::test::mock_app();
         app.manage(PerfMarks::at(Some(PathBuf::from("/tmp/marks.jsonl"))));
-        assert_eq!(project_query(app.handle()), Some(("perf", "1")));
+        assert_eq!(project_query(app.handle()), [("perf", "1")]);
+    }
+
+    /// 시나리오는 측정 모드에서만, 아는 이름만 주소에 붙는다.
+    #[test]
+    fn a_known_scenario_joins_the_perf_query() {
+        assert_eq!(scenario_named("git"), Some("git"));
+        assert_eq!(scenario_named("git&x=1"), None);
+        assert_eq!(scenario_named(""), None);
+
+        let app = tauri::test::mock_app();
+        app.manage(PerfMarks {
+            file: Some(PathBuf::from("/tmp/marks.jsonl")),
+            parent: None,
+            scenario: Some("git"),
+        });
+        assert_eq!(
+            project_query(app.handle()),
+            [("perf", "1"), ("perfScenario", "git")]
+        );
+
+        let app = tauri::test::mock_app();
+        app.manage(PerfMarks {
+            file: None,
+            parent: None,
+            scenario: Some("git"),
+        });
+        assert_eq!(project_query(app.handle()), []);
     }
 }

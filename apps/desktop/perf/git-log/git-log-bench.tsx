@@ -8,8 +8,8 @@
 // - `open`: ⌘9 keydown 을 넣은 때부터 첫 행(짧은 해시)을 canvas 에 그린 뒤 다음 프레임까지(그 프레임이 화면에 나간다). Host 의 첫 청크
 //   시간(pw-git `log_timing`, release)은 빠져 있다 — 06 의 500 ms 판정은 둘을 더한 것이고, 빠진 것은 Tauri IPC 전송 자체다.
 // - 스크롤(10만 행을 모두 받은 뒤): `fling` = 처음부터 끝까지 `FLING_FRAMES` 프레임에(한 프레임에 약 50행 — 보이는 행이 매 프레임
-//   모두 바뀐다), `steady` = 한 프레임에 2행씩 600 프레임. 값 둘 — `interval`(rAF 시각의 차이, 16.7 ms 를 넘으면 놓친 프레임)과
-//   `work`(목록이 그 프레임에 그린 데 든 시간 — 목록의 rAF 콜백 하나). file-tree 하네스(perf/file-tree-bench.tsx, M1-14)와 같은 방법이다.
+//   모두 바뀐다), `steady` = 한 프레임에 2행씩 600 프레임. 값 둘 — `interval` 과 `work`(src/perf-frames.ts 머리 주석). 앱 안 측정
+//   시나리오(src/perf-scenario.ts, release 번들)도 같은 부품으로 잰다.
 // 헤드리스 브라우저는 화면 합성을 거치지 않으므로 실제 창의 값과 같지 않다 — 보고에 어느 브라우저로 쟀는지 함께 적는다.
 
 import "../bench.css";
@@ -20,6 +20,7 @@ import { createRoot } from "react-dom/client";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { App } from "../../src/App";
+import { installFrameWork, scrollFrames } from "../../src/perf-frames";
 import type { KeymapNative } from "../../src/keymap/native";
 import { createThemeStore } from "../../src/theme/theme-store";
 import { ThemeStoreProvider } from "../../src/theme/theme-switcher";
@@ -42,16 +43,10 @@ const native: KeymapNative = {
   closeWindow: async () => {},
 };
 
-// 하네스 자신의 프레임은 원래의 rAF 로 잰다. 앱이 거는 콜백(목록의 그리기)은 감싸 그 시간을 적는다.
-const rawFrame = window.requestAnimationFrame.bind(window);
-const nextFrame = () => new Promise<number>((r) => rawFrame(r));
-let work: number[] | undefined;
-window.requestAnimationFrame = (callback) =>
-  rawFrame((t) => {
-    const started = performance.now();
-    callback(t);
-    work?.push(performance.now() - started);
-  });
+// 하네스 자신의 프레임은 원래의 rAF 로 잰다. 앱이 거는 콜백(목록의 그리기)은 감싸 그 시간을 적는다(src/perf-frames.ts).
+const work = installFrameWork();
+const rawFrame = (callback: () => void) => void work.frame().then(callback);
+const nextFrame = () => work.frame();
 
 // 첫 행의 짧은 해시를 그린 때(제목은 폭에 따라 잘려 그려진다).
 let firstSubject: string | undefined;
@@ -74,40 +69,8 @@ function until(what: string, test: () => boolean, timeoutMs = 60_000): Promise<n
   });
 }
 
-function percentile(sorted: number[], p: number): number {
-  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * p) - 1)]!;
-}
-
-function stats(samples: number[]) {
-  const sorted = [...samples].sort((a, b) => a - b);
-  const round = (x: number) => Math.round(x * 100) / 100;
-  const share = (ok: (d: number) => boolean) => round(sorted.filter(ok).length / sorted.length);
-  return {
-    n: sorted.length,
-    p50: round(percentile(sorted, 0.5)),
-    p95: round(percentile(sorted, 0.95)),
-    p99: round(percentile(sorted, 0.99)),
-    max: round(sorted.at(-1)!),
-    within16_7: share((d) => d <= 16.7),
-    over18: share((d) => d > 18),
-  };
-}
-
-async function scroll(list: HTMLElement, frames: number, step: (frame: number) => number) {
-  const intervals: number[] = [];
-  work = [];
-  let last = await nextFrame();
-  for (let frame = 0; frame < frames; frame++) {
-    list.scrollTop = step(frame);
-    list.dispatchEvent(new Event("scroll"));
-    const now = await nextFrame();
-    intervals.push(now - last);
-    last = now;
-  }
-  const worked = work;
-  work = undefined;
-  return { interval: stats(intervals), work: stats(worked) };
-}
+const scroll = (list: HTMLElement, frames: number, step: (frame: number) => number) =>
+  scrollFrames(list, frames, step, work);
 
 async function main() {
   const params = new URLSearchParams(location.search);

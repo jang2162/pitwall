@@ -193,6 +193,7 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             crate::drop_import::import_drop,
             crate::perf::perf_first_frame,
             crate::perf::perf_hidden,
+            crate::perf::perf_report,
             crate::update::window_close_cancelled
         ]))
         .on_window_event(on_window_event)

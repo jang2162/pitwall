@@ -80,6 +80,37 @@ run = [
   "cargo run -q --release -p pw-perf -- --app target/release/bundle/macos/Pitwall.app",
 ]
 
+# git 시나리오(M2-13 · M2-14 · M2-15)의 합성 10만 커밋 저장소 둘을 만든다: target/perf-git/graph(commit-graph 있음) · no-graph(없음).
+# 둘 다 1만 줄 diff 커밋과 체크아웃용 브랜치(`synth_history --perf-fixture`)가 든다. 픽스처 브랜치가 있는 저장소는 다시 만들지 않는다 —
+# 만들다 멈춘 폴더(브랜치가 없다)는 지우고 다시 만든다. 처음에는 저장소마다 10~55초.
+[tasks.perf-git-repos]
+description = "git 시나리오의 합성 10만 커밋 저장소 둘(target/perf-git/, commit-graph 있음 · 없음)"
+run = """
+set -eu
+for kind in graph no-graph; do
+  dir="target/perf-git/$kind"
+  if git -C "$dir" rev-parse -q --verify refs/heads/perf-checkout >/dev/null 2>&1; then
+    echo "$dir: ready"
+    continue
+  fi
+  rm -rf "$dir"
+  flag=""
+  if [ "$kind" = graph ]; then flag="--commit-graph"; fi
+  cargo run -q --release -p pw-git --features test-support --example synth_history -- "$dir" 100000 --perf-fixture $flag
+done
+"""
+
+# release 번들에서 git 시나리오(⌘9 첫 그림 · 10만 행 스크롤 · 1만 줄 diff · 체크아웃 → 상태바)를 저장소 둘 × (준비 1 + 측정 5)회 잰다
+# (macOS). 측정 방법은 CONTRIBUTING.md 「성능 기준선」 의 「git 시나리오」. 프로젝트 창이 회마다 한 번 앞에 뜬다(기본 12번) — OS 키 입력은
+# 보내지 않는다. 인자는 마지막 명령(pw-perf)에 붙는다 — 예: `mise run perf-git -- --runs 3`.
+[tasks.perf-git]
+description = "release 번들의 git 시나리오 측정(macOS, 결과는 target/perf/)"
+depends = ["install-deps", "perf-git-repos"]
+run = [
+  "pnpm --filter @pitwall/desktop tauri build --bundles app",
+  "cargo run -q --release -p pw-perf -- --app target/release/bundle/macos/Pitwall.app --git-repo target/perf-git/graph --git-repo target/perf-git/no-graph",
+]
+
 # Linguist `samples/`(36MB, 저장소에 넣지 않는다)를 고정 커밋에서 받아 pw-lang 의 일치율 시험을 돌린다(네트워크 필요).
 # 받은 samples 는 target/linguist-samples/<커밋>/ 에 두고 다시 받지 않는다. 기본 `test` 에서는 빠진다(`#[ignore]`).
 [tasks.lang-samples]

@@ -2,6 +2,7 @@
 //! 사용법은 CONTRIBUTING.md 「성능 기준선」 절이 정본이다. 실행 본체는 main.rs, 앱이 남기는 표시는
 //! `apps/desktop/src-tauri/src/perf.rs`.
 
+pub mod git;
 pub mod marks;
 pub mod report;
 pub mod stats;
@@ -11,6 +12,9 @@ pub mod macos;
 
 /// 앱에 표시 파일을 알리는 변수(`apps/desktop/src-tauri/src/perf.rs` 의 `MARK_ENV`).
 pub const MARK_ENV: &str = "PITWALL_PERF_MARK";
+
+/// 앱에 측정 시나리오를 알리는 변수(`apps/desktop/src-tauri/src/perf.rs` 의 `SCENARIO_ENV`).
+pub const SCENARIO_ENV: &str = "PITWALL_PERF_SCENARIO";
 
 /// `ioreg -n Root -d1 -a` 의 plist 에서 화면 잠금을 읽는다. 키가 없으면 잠기지 않은 것이다.
 pub fn screen_locked(ioreg_plist: &str) -> bool {

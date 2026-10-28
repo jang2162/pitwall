@@ -44,6 +44,7 @@ mod measure {
     use pw_core::EventBus;
     use pw_core::config::AppPaths;
     use pw_core::registry::{NewProject, Registry};
+    use pw_perf::git::{self, GitReport, GitRun, GitSettings, Progress, RepoResult};
     use pw_perf::macos;
     use pw_perf::marks::{self, Mark};
     use pw_perf::report::{
@@ -51,7 +52,7 @@ mod measure {
         summarize_runs, targets, too_few_valid, valid_runs,
     };
 
-    const USAGE: &str = "usage: pw-perf --app <Pitwall.app | binary> [--runs N] [--warmup N] [--idle-secs S] [--timeout-secs S] [--out DIR]";
+    const USAGE: &str = "usage: pw-perf --app <Pitwall.app | binary> [--runs N] [--warmup N] [--idle-secs S] [--timeout-secs S] [--out DIR] [--project DIR]\n       pw-perf --app <Pitwall.app | binary> --git-repo <synth repo> [--git-repo <synth repo> ...] [--checkout BRANCH] [--scenario-timeout-secs S] [--runs N] [--warmup N] [--out DIR]";
 
     /// 앱이 측정하는 프로세스(이 하네스)의 pid 를 받는 변수(`apps/desktop/src-tauri/src/perf.rs` 의 `PARENT_ENV`).
     const PARENT_ENV: &str = "PITWALL_PERF_PARENT";
@@ -98,6 +99,12 @@ mod measure {
         idle: Duration,
         timeout: Duration,
         out: PathBuf,
+        /// 임시 프로젝트 대신 등록할 폴더(기준선을 git 저장소 프로젝트로 잰다 — M2-22).
+        project: Option<PathBuf>,
+        /// 있으면 git 시나리오를 잰다(저장소마다 준비 + 측정 회).
+        git_repos: Vec<PathBuf>,
+        checkout: String,
+        scenario_timeout: Duration,
     }
 
     fn parse(args: Vec<String>) -> Result<Options, String> {
@@ -107,6 +114,10 @@ mod measure {
         let mut idle = 10;
         let mut timeout = 60;
         let mut out = None;
+        let mut project = None;
+        let mut git_repos = Vec::new();
+        let mut checkout = git::DEFAULT_CHECKOUT.to_owned();
+        let mut scenario_timeout = 300;
         let mut it = args.into_iter();
         while let Some(flag) = it.next() {
             let mut value = || {
@@ -121,6 +132,10 @@ mod measure {
                 "--idle-secs" => idle = number(value()?)?,
                 "--timeout-secs" => timeout = number(value()?)?,
                 "--out" => out = Some(PathBuf::from(value()?)),
+                "--project" => project = Some(PathBuf::from(value()?)),
+                "--git-repo" => git_repos.push(PathBuf::from(value()?)),
+                "--checkout" => checkout = value()?,
+                "--scenario-timeout-secs" => scenario_timeout = number(value()?)?,
                 "-h" | "--help" => return Err(USAGE.into()),
                 other => return Err(format!("unknown argument {other}\n{USAGE}")),
             }
@@ -139,6 +154,17 @@ mod measure {
         if runs == 0 {
             return Err("--runs must be at least 1".into());
         }
+        if project.is_some() && !git_repos.is_empty() {
+            return Err(format!("--project and --git-repo do not mix\n{USAGE}"));
+        }
+        let resolve = |dir: PathBuf| {
+            std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))
+        };
+        let project = project.map(resolve).transpose()?;
+        let git_repos = git_repos
+            .into_iter()
+            .map(resolve)
+            .collect::<Result<Vec<_>, _>>()?;
         let out = match out {
             Some(dir) => dir,
             None => PathBuf::from("target/perf").join(format!("{}", epoch_ms() as u64)),
@@ -151,6 +177,10 @@ mod measure {
             idle: Duration::from_secs(idle),
             timeout: Duration::from_secs(timeout),
             out,
+            project,
+            git_repos,
+            checkout,
+            scenario_timeout: Duration::from_secs(scenario_timeout),
         })
     }
 
@@ -180,6 +210,9 @@ mod measure {
         std::fs::create_dir_all(&opts.out).map_err(|e| format!("{}: {e}", opts.out.display()))?;
         let out = std::fs::canonicalize(&opts.out).map_err(|e| e.to_string())?;
         let scratch = Scratch(std::env::temp_dir().join(format!("pw-perf-{}", std::process::id())));
+        if !opts.git_repos.is_empty() {
+            return run_git(&opts, &scratch.0, &out);
+        }
         let total = opts.warmup + opts.runs;
         say(format!(
             "pw-perf: {} ({} warm-up + {} measured; each opens one project window) → {}",
@@ -192,13 +225,19 @@ mod measure {
         let mut runs = Vec::new();
         for index in 0..total {
             check_interrupted()?;
+            let warmup = index < opts.warmup;
             let run = run_once(
                 &opts,
                 &scratch.0,
                 &out,
                 store_root.as_deref(),
                 index,
-                index < opts.warmup,
+                opts.project.as_deref(),
+                None,
+                |launch, dir| {
+                    let started = first_frame(&opts, launch, dir, index)?;
+                    observe_idle(&opts, started, launch, dir, index, warmup)
+                },
             )?;
             say(format!(
                 "pw-perf: run {index}{}{}: cold start {:.0} ms, idle footprint {:.1} MB ({} processes)",
@@ -220,23 +259,10 @@ mod measure {
         let report = Report {
             schema: 1,
             definitions: DEFINITIONS,
-            build: Build {
-                profile: profile_of(&opts.binary).into(),
-                app: opts.app.display().to_string(),
-                binary: opts.binary.display().to_string(),
-            },
+            build: build(&opts),
             commit: commit(),
-            os: Os {
-                name: "macOS".into(),
-                version: macos::sysctl_string("kern.osproductversion"),
-                build: macos::sysctl_string("kern.osversion"),
-            },
-            hardware: Hardware {
-                model: macos::sysctl_string("hw.model"),
-                cpu: macos::sysctl_string("machdep.cpu.brand_string"),
-                cpus: macos::sysctl_u64("hw.ncpu").map(|n| n as u32),
-                memory_bytes: macos::sysctl_u64("hw.memsize"),
-            },
+            os: os(),
+            hardware: hardware(),
             settings: Settings {
                 runs: opts.runs,
                 warmup: opts.warmup,
@@ -262,6 +288,31 @@ mod measure {
             say(format!("pw-perf: warning: {warning}"));
         }
         Ok(report.warning.is_none())
+    }
+
+    fn os() -> Os {
+        Os {
+            name: "macOS".into(),
+            version: macos::sysctl_string("kern.osproductversion"),
+            build: macos::sysctl_string("kern.osversion"),
+        }
+    }
+
+    fn hardware() -> Hardware {
+        Hardware {
+            model: macos::sysctl_string("hw.model"),
+            cpu: macos::sysctl_string("machdep.cpu.brand_string"),
+            cpus: macos::sysctl_u64("hw.ncpu").map(|n| n as u32),
+            memory_bytes: macos::sysctl_u64("hw.memsize"),
+        }
+    }
+
+    fn build(opts: &Options) -> Build {
+        Build {
+            profile: profile_of(&opts.binary).into(),
+            app: opts.app.display().to_string(),
+            binary: opts.binary.display().to_string(),
+        }
     }
 
     /// 바이너리가 놓인 `target/<프로필>/` 로 빌드 종류를 판정한다.
@@ -339,7 +390,8 @@ mod measure {
     }
 
     impl RunDir {
-        fn create(scratch: &Path, index: usize) -> Result<Self, String> {
+        /// `project` 가 있으면 그 폴더를 등록한다(지우지 않는다). 없으면 회 폴더 안에 빈 프로젝트를 만든다.
+        fn create(scratch: &Path, index: usize, project: Option<&Path>) -> Result<Self, String> {
             let root = scratch.join(format!("run-{index}"));
             let paths = AppPaths::under(&root);
             // MCP 소켓이 `$STATE/run` 에 들어가는지 앱과 같은 규칙으로 본다 — 넘으면 공용 temp 로 가서 남는다.
@@ -351,10 +403,17 @@ mod measure {
                     root.display()
                 ));
             }
-            let project = root.join("project");
-            std::fs::create_dir_all(&project).map_err(|e| e.to_string())?;
-            std::fs::write(project.join("README.md"), "perf baseline project\n")
-                .map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+            let project = match project {
+                Some(project) => project.to_path_buf(),
+                None => {
+                    let project = root.join("project");
+                    std::fs::create_dir_all(&project).map_err(|e| e.to_string())?;
+                    std::fs::write(project.join("README.md"), "perf baseline project\n")
+                        .map_err(|e| e.to_string())?;
+                    project
+                }
+            };
             let registry = Registry::new(paths.clone(), None, EventBus::new(16));
             registry
                 .create(NewProject {
@@ -398,18 +457,57 @@ mod measure {
         }
     }
 
-    /// 앱 하나: 임시 `PITWALL_*_DIR` 에 프로젝트를 등록하고 CLI 로 띄워 첫 프레임 · 유휴 메모리를 잰 뒤 pid 로 끈다.
-    /// 실패 · 신호 · 패닉 어느 쪽으로 끝나도 띄운 앱을 끄고 임시 폴더를 지운다.
-    fn run_once(
+    /// 한 회에 잰 것. 끈 뒤 [`run_once`] 가 묶음 키로 남은 프로세스를 보고 SIGKILL 여부를 적는다.
+    trait Observed {
+        fn group(&self) -> u32;
+        fn killed(self, killed: bool) -> Self;
+    }
+
+    impl Observed for Run {
+        fn group(&self) -> u32 {
+            self.group
+        }
+        fn killed(self, killed: bool) -> Self {
+            Run {
+                killed,
+                leftovers: Vec::new(),
+                ..self
+            }
+        }
+    }
+
+    impl Observed for GitRun {
+        fn group(&self) -> u32 {
+            self.group
+        }
+        fn killed(self, killed: bool) -> Self {
+            GitRun { killed, ..self }
+        }
+    }
+
+    /// 띄운 프로세스와 그 시각.
+    struct Launch {
+        pid: u32,
+        started: Instant,
+        /// 띄우기 직전의 벽시계.
+        t0: f64,
+    }
+
+    /// 앱 하나: 임시 `PITWALL_*_DIR` 에 프로젝트를 등록하고 CLI 로 띄워 `observe` 로 잰 뒤 pid 로 끈다. `scenario` 가 있으면
+    /// 앱에 그 시나리오를 돌리게 한다. 실패 · 신호 · 패닉 어느 쪽으로 끝나도 띄운 앱을 끄고 임시 폴더를 지운다.
+    #[allow(clippy::too_many_arguments)] // 회 하나의 설정 — 묶을 구조체를 따로 두면 부르는 두 곳이 모두 그것을 채워야 한다.
+    fn run_once<T: Observed>(
         opts: &Options,
         scratch: &Path,
         out: &Path,
         store_root: Option<&Path>,
         index: usize,
-        warmup: bool,
-    ) -> Result<Run, String> {
+        project: Option<&Path>,
+        scenario: Option<&str>,
+        observe: impl FnOnce(&Launch, &RunDir) -> Result<T, String>,
+    ) -> Result<T, String> {
         preflight()?;
-        let dir = RunDir::create(scratch, index)?;
+        let dir = RunDir::create(scratch, index, project)?;
 
         let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
             .filter(|(k, _)| {
@@ -428,6 +526,9 @@ mod measure {
             env.push((key.into(), value.into()));
         }
         env.push((PARENT_ENV.into(), std::process::id().to_string().into()));
+        if let Some(scenario) = scenario {
+            env.push((pw_perf::SCENARIO_ENV.into(), scenario.into()));
+        }
 
         let started = Instant::now();
         let t0 = epoch_ms();
@@ -435,18 +536,21 @@ mod measure {
             macos::spawn_disclaimed(&opts.binary, &[dir.project.as_os_str()], &dir.root, &env)
                 .map_err(|e| format!("cannot launch {}: {e}", opts.binary.display()))?;
 
-        let observed = catch_unwind(AssertUnwindSafe(|| {
-            observe(opts, launcher, started, t0, &dir, index, warmup)
-        }));
+        let launch = Launch {
+            pid: launcher,
+            started,
+            t0,
+        };
+        let observed = catch_unwind(AssertUnwindSafe(|| observe(&launch, &dir)));
         // 이 회의 것: 띄운 pid, 표시 파일에 `main` 을 남긴 pid(떼어 띄운 앱), 그 앱의 묶음 키. 표시 파일 경로는 이 측정이
         // 준 환경을 받은 프로세스만 안다.
         let marked = marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
         let mut groups = vec![launcher];
         groups.extend(marked_pids(&marked, launcher));
         if let Ok(Ok(run)) = &observed {
-            groups.push(run.group);
+            groups.push(run.group());
         }
-        let (killed, mut leftovers) = shut_down(opts, launcher, &groups);
+        let (killed, leftovers) = shut_down(opts, launcher, &groups);
         let log = dir.log();
         let mut sockets = Vec::new();
         if let Some(key) = pw_perf::log_field(&log, "single-instance key", "identifier") {
@@ -483,23 +587,26 @@ mod measure {
                 leftover_note(&leftovers, &sockets)
             ));
         }
-        leftovers.clear();
-        Ok(Run {
-            killed,
-            leftovers,
-            ..run
-        })
+        Ok(run.killed(killed))
     }
 
-    fn observe(
+    /// 첫 프레임을 낸 앱.
+    struct Started {
+        frame: Mark,
+        app_pid: u32,
+        /// 메모리를 합칠 묶음 키(책임 프로세스).
+        group: u32,
+        cold_start_ms: f64,
+    }
+
+    /// 첫 프레임 표시를 기다리고, 그 표시를 낸 앱이 이 측정이 띄운 것인지 본다.
+    fn first_frame(
         opts: &Options,
-        launcher: u32,
-        started: Instant,
-        t0: f64,
+        launch: &Launch,
         dir: &RunDir,
         index: usize,
-        warmup: bool,
-    ) -> Result<Run, String> {
+    ) -> Result<Started, String> {
+        let (launcher, started, t0) = (launch.pid, launch.started, launch.t0);
         let read_marks = || marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
         let mut launcher_exit = None;
         let frame: Mark = loop {
@@ -562,6 +669,31 @@ mod measure {
             ));
         }
         let cold_start_ms = frame.epoch_ms - t0;
+        Ok(Started {
+            frame,
+            app_pid,
+            group,
+            cold_start_ms,
+        })
+    }
+
+    /// 첫 프레임 뒤 `--idle-secs` 만큼 기다려 유휴 메모리를 잰다(콜드 스타트 · 유휴 메모리 기준선).
+    fn observe_idle(
+        opts: &Options,
+        started: Started,
+        launch: &Launch,
+        dir: &RunDir,
+        index: usize,
+        warmup: bool,
+    ) -> Result<Run, String> {
+        let Started {
+            frame,
+            app_pid,
+            group,
+            cold_start_ms,
+        } = started;
+        let (launcher, t0) = (launch.pid, launch.t0);
+        let read_marks = || marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
 
         // 유휴: 표본 시각까지 기다리며 신호와 화면 잠금을 본다(중간에 잠겼다 풀린 것도 잡는다).
         let sample_at = Instant::now() + opts.idle;
@@ -613,6 +745,263 @@ mod measure {
             leftovers: Vec::new(),
             killed: false,
         })
+    }
+
+    /// git 시나리오: 저장소마다 준비 + 측정 회를 돌려 `result.json` · `summary.md` 를 쓴다. 회마다 저장소를 `main` 으로 돌려놓고
+    /// 띄우며, 앱이 체크아웃을 기다린다고 알리면 그 저장소에서 `git checkout <--checkout>` 을 돌린다.
+    fn run_git(opts: &Options, scratch: &Path, out: &Path) -> Result<bool, String> {
+        for repo in &opts.git_repos {
+            check_fixture(repo, &opts.checkout)?;
+        }
+        let total = opts.warmup + opts.runs;
+        say(format!(
+            "pw-perf: git scenario on {} repositories × ({} warm-up + {} measured); each run opens one project window → {}",
+            opts.git_repos.len(),
+            opts.warmup,
+            opts.runs,
+            out.display()
+        ));
+        let store_root = webkit_store_root(&opts.app);
+        let mut repos = Vec::new();
+        for (r, repo) in opts.git_repos.iter().enumerate() {
+            let repo_out = out.join(format!("repo-{r}"));
+            let graph_before = has_commit_graph(repo);
+            let mut runs = Vec::new();
+            for index in 0..total {
+                check_interrupted()?;
+                let warmup = index < opts.warmup;
+                git_in(repo, &["checkout", "-q", "main"])?;
+                let run = run_once(
+                    opts,
+                    scratch,
+                    &repo_out,
+                    store_root.as_deref(),
+                    index,
+                    Some(repo),
+                    Some("git"),
+                    |launch, dir| {
+                        let started = first_frame(opts, launch, dir, index)?;
+                        observe_git(opts, started, dir, index, warmup, repo)
+                    },
+                );
+                // 실패한 회도 저장소를 돌려놓는다 — 다음 회 · 다음 측정이 `main` 에서 시작한다.
+                let back = git_in(repo, &["checkout", "-q", "main"]);
+                let run = run?;
+                back?;
+                let m = &run.measure;
+                say(format!(
+                    "pw-perf: {} run {index}{}{}: open {:.0} ms, fling ≤16.7 ms {:.2}, diff {:.0} ms, checkout → status bar {:.0} ms",
+                    repo.display(),
+                    if run.warmup { " (warm-up)" } else { "" },
+                    run.excluded
+                        .as_deref()
+                        .map_or(String::new(), |why| format!(" (excluded: {why})")),
+                    m.open_ms,
+                    m.fling.interval.within16_7,
+                    m.diff_ms,
+                    m.branch_ms
+                ));
+                runs.push(run);
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            let summary = git::summarize_git(&runs);
+            let valid = runs
+                .iter()
+                .filter(|r| !r.warmup && r.excluded.is_none())
+                .count();
+            let graph_after = has_commit_graph(repo);
+            if graph_before != graph_after {
+                return Err(format!(
+                    "{}: commit-graph went from {graph_before} to {graph_after} during the runs — something wrote to the repository; recreate it",
+                    repo.display()
+                ));
+            }
+            repos.push(RepoResult {
+                path: repo.display().to_string(),
+                commit_graph: graph_before,
+                commits: git_in(repo, &["rev-list", "--count", "--all"])
+                    .ok()
+                    .and_then(|n| n.trim().parse().ok()),
+                targets: git::git_targets(&summary),
+                summary,
+                valid_runs: valid,
+                runs,
+            });
+        }
+        let warning = repos.iter().find_map(|r| {
+            too_few_valid(r.valid_runs, opts.runs).map(|w| format!("{}: {w}", r.path))
+        });
+        let report = GitReport {
+            schema: 1,
+            scenario: "git",
+            definitions: git::DEFINITIONS,
+            build: build(opts),
+            commit: commit(),
+            os: os(),
+            hardware: hardware(),
+            settings: GitSettings {
+                runs: opts.runs,
+                warmup: opts.warmup,
+                checkout: opts.checkout.clone(),
+            },
+            repos,
+            warning,
+        };
+        let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+        std::fs::write(out.join("result.json"), json + "\n").map_err(|e| e.to_string())?;
+        let md = git::git_report_markdown(&report);
+        std::fs::write(out.join("summary.md"), &md).map_err(|e| e.to_string())?;
+        let _ = writeln!(std::io::stdout(), "{md}");
+        say(format!(
+            "pw-perf: wrote {} and {}",
+            out.join("result.json").display(),
+            out.join("summary.md").display()
+        ));
+        if let Some(warning) = &report.warning {
+            say(format!("pw-perf: warning: {warning}"));
+        }
+        Ok(report.warning.is_none())
+    }
+
+    /// 앱의 시나리오를 따라간다: 체크아웃을 기다린다는 표시가 오면 저장소에서 체크아웃하고, 끝 표시가 오면 메모리를 잰다.
+    fn observe_git(
+        opts: &Options,
+        started: Started,
+        dir: &RunDir,
+        index: usize,
+        warmup: bool,
+        repo: &Path,
+    ) -> Result<GitRun, String> {
+        let Started {
+            frame,
+            app_pid,
+            group,
+            cold_start_ms,
+        } = started;
+        let deadline = Instant::now() + opts.scenario_timeout;
+        let mut checked_out_at = None;
+        let mut locked = false;
+        let mut next_lock_check = Instant::now();
+        let measure = loop {
+            check_interrupted()?;
+            if Instant::now() >= next_lock_check {
+                locked |= screen_locked()?;
+                next_lock_check = Instant::now() + Duration::from_millis(500);
+            }
+            let all = marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
+            match git::progress(&all, app_pid, checked_out_at) {
+                Progress::Waiting => {}
+                Progress::CheckoutReady => {
+                    // 「터미널에서 git checkout」 의 시작점: 띄우기 직전의 벽시계.
+                    checked_out_at = Some(epoch_ms());
+                    git_in(repo, &["checkout", "-q", &opts.checkout])?;
+                    continue;
+                }
+                Progress::Done(m) => break *m,
+                Progress::Failed(e) => return Err(format!("run {index}: {e}")),
+            }
+            if !macos::alive(app_pid) {
+                return Err(format!(
+                    "run {index}: the app {app_pid} exited during the scenario"
+                ));
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "run {index}: the scenario did not finish within {}s (is the window hidden or the screen locked?)",
+                    opts.scenario_timeout.as_secs()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        locked |= screen_locked()?;
+        let ended = epoch_ms();
+        let memory = sample(group);
+        let all = marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
+        let hidden = all
+            .iter()
+            .any(|m| m.event == "hidden" && m.pid == app_pid && m.epoch_ms <= ended);
+        // 가려진 창은 WebKit 이 rAF 를 미뤄 프레임 · 첫 그림 수치가 실제 화면의 것이 아니다.
+        let excluded = if frame.hidden == Some(true) {
+            Some("window hidden before its first frame".to_owned())
+        } else if hidden {
+            Some("window hidden during the scenario".to_owned())
+        } else if locked {
+            Some("screen locked during the run".to_owned())
+        } else {
+            None
+        };
+        Ok(GitRun {
+            index,
+            warmup,
+            excluded,
+            app_pid,
+            group,
+            cold_start_ms,
+            measure,
+            memory,
+            killed: false,
+        })
+    }
+
+    /// 저장소에서 git 을 돌린다(사람의 전역 · 시스템 설정과 훅은 읽지 않는다). 실패하면 stderr 를 붙여 돌려준다.
+    fn git_in(repo: &Path, args: &[&str]) -> Result<String, String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            // 커밋 뒤 자동 유지보수(git 2.54 의 `maintenance run --auto --detach`)가 「commit-graph 없음」 저장소에 그래프를 쓰지 않게.
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "maintenance.auto=false",
+                "-c",
+                "gc.auto=0",
+            ])
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|e| format!("cannot run git: {e}"))?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else {
+            Err(format!(
+                "git {args:?} in {} failed: {}",
+                repo.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
+        }
+    }
+
+    /// 픽스처(`synth_history --perf-fixture`)가 든 저장소인가: `main` 과 체크아웃 대상 브랜치가 있고 작업 트리가 깨끗하다.
+    fn check_fixture(repo: &Path, checkout: &str) -> Result<(), String> {
+        let hint = "make it with `mise run perf-git-repos` (synth_history --perf-fixture)";
+        for branch in ["main", checkout] {
+            git_in(
+                repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "-q",
+                    &format!("refs/heads/{branch}"),
+                ],
+            )
+            .map_err(|_| format!("{} has no branch `{branch}`; {hint}", repo.display()))?;
+        }
+        let status = git_in(repo, &["status", "--porcelain"])?;
+        if !status.is_empty() {
+            return Err(format!(
+                "{} has uncommitted changes; the scenario checks out branches in it",
+                repo.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn has_commit_graph(repo: &Path) -> bool {
+        let info = repo.join(".git/objects/info");
+        info.join("commit-graph").is_file() || info.join("commit-graphs").is_dir()
     }
 
     /// 책임 프로세스가 `group` 인 프로세스(앱 + 그 앱이 요청한 WebKit 등)의 메모리.

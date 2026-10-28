@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 
 import defaultTheme from "../../../extensions/theme-default/themes/default.json";
 import { App } from "./App";
-import { FirstFrameMark, perfMarkRequested } from "./perf-mark";
+import { FirstFrameMark, perfMarkRequested, perfScenarioRequested } from "./perf-mark";
 import { connectHost } from "./tauri-transport";
 import "./styles.css";
 import {
@@ -77,11 +77,22 @@ void applyRegistryTheme(
   log,
 );
 
-// src-tauri/src/perf.rs 의 perf_first_frame · perf_hidden. 측정 모드가 아니면 그리지 않는다(perf-mark.tsx).
+// src-tauri/src/perf.rs 의 perf_first_frame · perf_hidden · perf_report. 측정 모드가 아니면 그리지 않는다(perf-mark.tsx). 시나리오는
+// 첫 프레임을 알린 뒤에 불러와 돌린다(perf-scenario.ts) — 측정 모드가 아니면 그 모듈을 받지도 않는다.
+const perfScenario = perfScenarioRequested(window.location.search);
+
 function markFirstFrame(mark: { hidden: boolean }) {
   invoke("perf_first_frame", mark).catch((e: unknown) =>
     log.warn(`perf mark failed: ${String(e)}`, "perf"),
   );
+  if (perfScenario)
+    void import("./perf-scenario").then(({ runScenario }) =>
+      runScenario(perfScenario, (event, data) =>
+        invoke<void>("perf_report", { event, data }).catch((e: unknown) =>
+          log.warn(`perf report failed: ${String(e)}`, "perf"),
+        ),
+      ),
+    );
 }
 
 function markHidden() {

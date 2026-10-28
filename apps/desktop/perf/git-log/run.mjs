@@ -5,6 +5,9 @@
 //   pnpm --filter @pitwall/desktop exec vite build perf/git-log --config perf/git-log/vite.config.ts --outDir <폴더> --base ./
 //   PLAYWRIGHT=<playwright-core 폴더> node apps/desktop/perf/git-log/run.mjs <폴더> [회수=5] [WebKit 실행 파일]
 //
+// `PAGE=scenario.html` 이면 하네스 대신 앱 안 측정 시나리오의 스모크(scenario-bench.tsx)를 연다. 덤프는 작은 저장소(`synth_history <저장소>
+// 2000 --perf-fixture`)로도 된다 — `?data=` 없이 `log-100k.json` 을 읽으니 그 이름으로 둔다.
+//
 // `vite build` 는 `--emptyOutDir` 없이 — 덤프가 같은 폴더에 있다. 회마다 페이지를 새로 연다(앞 회의 JIT · 캐시가 이어지지 않게).
 // playwright-core 는 저장소 의존성이 아니다(측정 도구) — 설치된 것의 폴더를 `PLAYWRIGHT` 로 준다. 결과는 회마다 한 줄 JSON.
 
@@ -53,7 +56,7 @@ const browser = await webkit.launch({
 try {
   for (let run = 1; run <= runs; run++) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    await page.goto(`http://127.0.0.1:${port}/index.html`);
+    await page.goto(`http://127.0.0.1:${port}/${process.env.PAGE ?? "index.html"}`);
     await page.waitForFunction(() => /^(done|error) /.test(document.title), null, {
       timeout: 300_000,
     });
