@@ -6,7 +6,8 @@
 // - 글자를 치면 speed search: 위에 뜨는 입력 칸에 이어 치고(두 번째 글자부터는 입력 칸이 받아 IME 조합도 된다), 보이는 행 중
 //   이름에 그 글자가 든 것으로 간다. ↑↓ 는 앞뒤 일치, Enter 는 그 행을 연다, Esc 는 닫는다.
 // - 우클릭 메뉴: 새 파일 · 새 폴더 · 이름 바꾸기 · 삭제(M1-21, file-ops.ts), 경로 복사 · 상대 경로 복사 · Finder 에서 보기 · 터미널에서
-//   열기 · 외부 도구로 열기 · 이 폴더에서 찾기(src/search). 외부 도구는 Host 의 `openWith.run` 이 띄운다(open-with/open-with.tsx).
+//   열기 · 외부 도구로 열기 · 이 폴더에서 찾기(src/search) · 히스토리 보기(파일만 — `git.showFileHistory`, M2-18). 외부 도구는
+//   Host 의 `openWith.run` 이 띄운다(open-with/open-with.tsx).
 // - 행을 끌어 폴더(또는 파일 — 그 부모)에 놓으면 옮기고, ⌥ 를 누른 채 놓으면 복사한다 — 포인터 이벤트로 끈다(tree-drag.ts).
 //   Finder 에서의 드롭은 툴 윈도우가 데스크톱의 드롭 알림으로 받는다(tree-drop.ts).
 // - 루트 밖을 가리키는 심링크는 「루트 밖을 가리킴」 을 달고 펼치거나 열지 않는다(결정 M1-D8).
@@ -47,6 +48,7 @@ import type { FsCopied, FsCreated, FsMoved, FsTrashed } from "@pitwall/rpc-clien
 
 import { useEditorWorkspace } from "../editor/editor-workspace";
 import { useGitDecoration } from "../git/git-status";
+import { useGitHistoryStrings } from "../git/history/strings";
 import {
   GitStatusMark,
   type GitStatusStrings,
@@ -118,6 +120,8 @@ export interface FileTreeHandlers {
   ops?: Pick<FileOps, "create" | "rename" | "remove" | "move">;
   /** 「터미널에서 열기」. 폴더 경로를 받는다. */
   openInTerminal?(dir: string): void;
+  /** 「히스토리 보기」(파일만). 없으면 메뉴에서 뺀다. */
+  history?(path: string): void;
 }
 
 function TreeRowView({
@@ -287,6 +291,7 @@ export function FileTree({
   const gitStrings = projectStrings.git.status;
   const openWith = useAppStrings().openWith;
   const findStrings = useFindStrings();
+  const historyStrings = useGitHistoryStrings();
   useModelVersion(model);
   const rows = model.rows();
   const selected = model.selected();
@@ -662,6 +667,14 @@ export function FileTree({
               {findStrings.inFolder}
             </MenuItem>
           )}
+          {handlers.history && (
+            <MenuItem
+              disabled={!target || target.dir || target.outside}
+              onSelect={() => target && handlers.history?.(target.path)}
+            >
+              {historyStrings.menu}
+            </MenuItem>
+          )}
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
@@ -746,7 +759,9 @@ export function FileTreeToolWindow({ api }: IDockviewPanelProps) {
   const notify = useNotify();
   const editorStrings = useProjectStrings().editor;
   const strings = useFileTreeStrings();
-  const { platform } = useKeymap();
+  const { platform, registry } = useKeymap();
+  // 액션이 등록 · 해제되면 메뉴의 「히스토리 보기」 를 둘지 다시 정한다.
+  const actionsVersion = useRegistryVersion(registry);
   const { client } = useHost();
   const dialogs = useFileDialogs();
   const latest = useRef({ notify, editorStrings, strings, dialogs });
@@ -890,8 +905,19 @@ export function FileTreeToolWindow({ api }: IDockviewPanelProps) {
       findInFolder,
       ops,
       openInTerminal,
+      ...(registry.isAvailable("git.showFileHistory") && {
+        history: (path: string) =>
+          void registry.run("git.showFileHistory", {
+            path,
+            ...(treeScope.getState().worktree !== undefined && {
+              worktree: treeScope.getState().worktree,
+            }),
+          }),
+      }),
     };
-  }, [model, workspace, run, openPopup, platform, ops, openInTerminal]);
+    // `actionsVersion` 은 읽지 않지만 바뀌면 다시 만든다(`isAvailable` 의 답이 바뀐다).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, workspace, run, openPopup, platform, ops, openInTerminal, registry, actionsVersion]);
 
   return (
     <div

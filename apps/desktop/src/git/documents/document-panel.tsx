@@ -8,6 +8,7 @@
 // - diff: 파일 하나의 diff(트리 없이). 작업 트리 · 스테이징된 diff 는 커밋 툴 윈도우의 미리보기라 hunk · 줄 체크를 단다(M2-16 —
 //   git/commit/staging-changes.tsx).
 // - 머지: 충돌 파일 하나의 3-way 머지(src/git/merge/merge-document.tsx, M2-19).
+// - 파일 히스토리: 그 파일의 커밋 목록 + 고른 커밋에서의 diff(src/git/history/history-document.tsx, M2-18).
 
 import { EditorState } from "@codemirror/state";
 import {
@@ -31,6 +32,7 @@ import { useKeymap } from "../../keymap/keymap-provider";
 import { useProjectStrings } from "../../layout/strings";
 import { normalizeText } from "../diff/diff-model";
 import { revisionHighlight, revisionSyntax } from "../diff/revision-syntax";
+import { HistoryDocument } from "../history/history-document";
 import { MergeDocument } from "../merge/merge-document";
 import { isStagingDiff, StagingChanges } from "../commit/staging-changes";
 import { ChangesView } from "./changes-view";
@@ -273,6 +275,8 @@ export function GitDocumentPanel({
       );
     case "merge":
       return <MergeDocument path={spec.path} worktree={params.worktree} panelId={panelId} />;
+    case "history":
+      return <HistoryDocument path={spec.path} worktree={params.worktree} />;
   }
 }
 

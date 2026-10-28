@@ -55,6 +55,7 @@ beforeEach(() => {
     openWith: vi.fn(),
     findInFolder: vi.fn(),
     openInTerminal: vi.fn(),
+    history: vi.fn(),
   };
   fakeTreeLayout(400);
 });
@@ -295,6 +296,27 @@ it("copies the absolute and the relative path and finds in the folder from the c
   expect(handlers.findInFolder).toHaveBeenLastCalledWith(
     expect.objectContaining({ path: "/r/src/lib.rs", dir: false }),
   );
+});
+
+it("shows the history of a file from the context menu, and not of a folder", async () => {
+  const model = modelOf({ "/r": [dir("src")], "/r/src": [file("lib.rs")] });
+  await model.setRoot("/r");
+  await model.expand("/r/src");
+  await render(model);
+
+  const historyItem = async (path: string) => {
+    await mouse(row(path)!, "contextmenu");
+    return [...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find(
+      (e) => e.textContent === "히스토리 보기",
+    );
+  };
+  const onFile = await historyItem("/r/src/lib.rs");
+  expect(onFile?.hasAttribute("data-disabled")).toBe(false);
+  await mouse(onFile!, "click");
+  expect(handlers.history).toHaveBeenLastCalledWith("/r/src/lib.rs");
+  await key(document.activeElement as HTMLElement, "Escape");
+  const onFolder = await historyItem("/r/src");
+  expect(onFolder?.hasAttribute("data-disabled")).toBe(true);
 });
 
 it("scrolls a revealed row into view and focuses the tree", async () => {

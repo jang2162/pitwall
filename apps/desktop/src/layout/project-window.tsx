@@ -64,7 +64,9 @@ import { CommitToolWindow } from "../git/commit/commit-tool-window";
 import { GitBranchFeature } from "../git/git-branch-feature";
 import { GitRemoteFeature } from "../git/dialogs/git-remote-feature";
 import { GitDocuments } from "../git/documents/git-documents";
+import { GitFileHistory } from "../git/history/git-history";
 import { GitLogToolWindow } from "../git/log/git-log-tool-window";
+import { GitLogReveal } from "../git/log/log-reveal";
 import { GitMerge } from "../git/merge/git-merge";
 import { OperationBanner } from "../git/merge/operation-banner";
 import { GitPrompts } from "../git/git-prompts";
@@ -828,6 +830,8 @@ function ProjectWindowBody({
               api={api}
             />
           )}
+          {projectId !== undefined && <GitFileHistory workspace={workspace} />}
+          {projectId !== undefined && <GitLogReveal workspace={workspace} />}
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
           {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}

@@ -41,6 +41,8 @@ declare global {
 const host = vi.hoisted(() => ({
   calls: [] as { method: string; params: Record<string, unknown> }[],
   rows: [] as unknown[],
+  /** 있으면 `git.log` 의 행을 이것으로 고른다(없거나 `undefined` 를 돌려주면 `rows`). 브랜치 거르기에서 빠지는 커밋을 흉내 낸다. */
+  logRows: undefined as ((params: Record<string, unknown>) => unknown[] | undefined) | undefined,
   /** 메서드 → 답(없으면 기본). 함수면 params 로 부른다. */
   answers: new Map<string, unknown>(),
   emit: (_topic: string, _payload: unknown) => {},
@@ -133,7 +135,7 @@ vi.mock("../../tauri-transport", async () => {
           case "git.log": {
             const streamId = next++;
             send({ id: m.id, result: { streamId } });
-            const rows = host.rows as LogRow[];
+            const rows = (host.logRows?.(params) ?? host.rows) as LogRow[];
             const filtered = Object.values((params.filter ?? {}) as Record<string, unknown>).some(
               (v) => v !== null && v !== false && !(Array.isArray(v) && v.length === 0),
             );
@@ -268,6 +270,7 @@ beforeEach(() => {
   window.history.replaceState(null, "", "/?window=project&project=p1");
   host.calls = [];
   host.rows = fixtureRows("synth");
+  host.logRows = undefined;
   host.answers = new Map<string, unknown>([
     ["git.refs", REFS],
     // 창의 브랜치 상태(branch-state.ts)가 ref 와 함께 읽는다.
@@ -1102,4 +1105,110 @@ it("reloads the log with the same filter when refs change", async () => {
   await act(async () => host.emit("git.refsChanged", { worktree: "/work/other" }));
   await settle();
   expect(logCalls().length).toBe(before + 1);
+});
+
+// 「Git 로그에서 선택」(M2-18 — log-reveal.ts): 다른 화면(파일 히스토리 · blame 주석)이 `registry.run("git.log.reveal", { rev })` 로
+// 부른다.
+
+/** 창의 액션 레지스트리를 잡는다(마운트 전에 부른다). */
+function captureRegistry(): () => ActionRegistry | undefined {
+  const seen = new Set<ActionRegistry>();
+  const register = ActionRegistry.prototype.register;
+  vi.spyOn(ActionRegistry.prototype, "register").mockImplementation(function (
+    this: ActionRegistry,
+    action,
+  ) {
+    seen.add(this);
+    return register.call(this, action);
+  });
+  return () => [...seen].at(-1);
+}
+
+/** 상세가 그 커밋의 바뀐 파일을 물었는가(고른 커밋이 하나이고 그것이다). */
+const detailAsked = (hash: string) =>
+  host.calls.some(
+    (c) =>
+      c.method === "git.diff" &&
+      (c.params.to as { rev?: string } | undefined)?.rev === hash &&
+      c.params.from === undefined,
+  );
+
+it("git.log.reveal opens the log, selects the commit, scrolls it into view and focuses the list", async () => {
+  const registry = captureRegistry();
+  await mount();
+  await vi.waitFor(() => expect(registry()?.get("git.log.reveal")).toBeDefined());
+  // 인자가 있어야만 돈다 — 키 · 액션 찾기에서는 부를 수 없다.
+  expect(registry()!.isEnabled("git.log.reveal")).toBe(false);
+  expect(list()).toBeNull();
+  const hash = hashOf(40);
+  await act(async () => void registry()!.run("git.log.reveal", { rev: hash }));
+  await vi.waitFor(() => expect(list()).not.toBeNull());
+  // 리비전은 커밋 해시로 푼다.
+  expect(host.calls.find((c) => c.method === "git.show")!.params.rev).toBe(hash);
+  await vi.waitFor(() => expect(detailAsked(hash)).toBe(true));
+  await vi.waitFor(() => expect(document.activeElement).toBe(list()));
+  // 행 40 이 화면(10행) 안으로 굴렀다.
+  const top = list()!.scrollTop;
+  expect(40 * ROW_HEIGHT).toBeGreaterThanOrEqual(top);
+  expect(41 * ROW_HEIGHT).toBeLessThanOrEqual(top + VIEW.height);
+  // 필터를 건드리지 않았다 — 한 번만 받았다.
+  expect(logCalls()).toHaveLength(1);
+});
+
+it("git.log.reveal clears a branch filter that leaves the commit out, reloads and selects it", async () => {
+  const registry = captureRegistry();
+  const hash = hashOf(40);
+  // feat/x 로 거르면 앞 다섯 행만 온다(행 40 은 빠진다).
+  host.logRows = (params) =>
+    (params.refs as string[] | null)?.includes("refs/heads/feat/x")
+      ? (host.rows as LogRow[]).slice(0, 5)
+      : undefined;
+  await openLog();
+  const branch = (name: string) => document.querySelector<HTMLElement>(`[data-ref="${name}"]`)!;
+  await vi.waitFor(() => expect(branch("refs/heads/feat/x")).not.toBeNull());
+  await mouse(branch("refs/heads/feat/x"), "click");
+  expect(logCalls().at(-1)!.params.refs).toEqual(["refs/heads/feat/x"]);
+  expect(branch("refs/heads/feat/x").getAttribute("aria-selected")).toBe("true");
+  const before = logCalls().length;
+
+  await act(async () => void registry()!.run("git.log.reveal", { rev: hash }));
+  // 모든 ref 에서 닿는지 한 행으로 묻고, 닿으니 필터를 모두 풀고 다시 받는다.
+  await vi.waitFor(() => expect(logCalls().length).toBe(before + 1));
+  expect(host.calls.filter((c) => c.method === "git.logPage").at(-1)!.params).toMatchObject({
+    refs: null,
+    filter: { hash },
+    limit: 1,
+  });
+  expect(logCalls().at(-1)!.params).toMatchObject({
+    refs: null,
+    filter: { author: null, message: null, since: null, until: null, paths: [], hash: null },
+  });
+  await vi.waitFor(() => expect(detailAsked(hash)).toBe(true));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("필터를 풀었다"));
+  // 브랜치 패널도 「모든 브랜치」 로 돌아왔다.
+  expect(branch("refs/heads/feat/x").getAttribute("aria-selected")).toBe("false");
+});
+
+it("git.log.reveal keeps the filter and warns when no ref reaches the commit", async () => {
+  const registry = captureRegistry();
+  const stray = "f".repeat(40);
+  host.logRows = (params) =>
+    (params.refs as string[] | null)?.includes("refs/heads/feat/x")
+      ? (host.rows as LogRow[]).slice(0, 5)
+      : undefined;
+  await openLog();
+  await mouse(document.querySelector<HTMLElement>('[data-ref="refs/heads/feat/x"]')!, "click");
+  const before = logCalls().length;
+  await act(async () => void registry()!.run("git.log.reveal", { rev: stray }));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Git 로그에 없는 커밋이다"));
+  expect(document.body.textContent).toContain("ffffff");
+  // 거르기는 그대로다.
+  expect(logCalls().length).toBe(before);
+  expect(logCalls().at(-1)!.params.refs).toEqual(["refs/heads/feat/x"]);
+
+  // 풀지 못하는 리비전은 오류 알림이고 아무것도 고르지 않는다.
+  host.answers.set("git.show", { error: { code: -32602, message: "unknown revision: nope" } });
+  await act(async () => void registry()!.run("git.log.reveal", { rev: "nope" }));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("unknown revision: nope"));
+  expect(logCalls().length).toBe(before);
 });

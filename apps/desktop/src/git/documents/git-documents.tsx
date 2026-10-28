@@ -49,8 +49,10 @@ export function gitDocumentTitle(
     case "revision":
       return T.revisionTitle(spec.path.split("/").pop() ?? spec.path, short(spec.rev));
     case "diff":
-    // 머지 문서는 여는 쪽(src/git/merge/git-merge.tsx)이 「이름 (머지)」 로 이름을 단다.
+    // 머지 문서는 여는 쪽(src/git/merge/git-merge.tsx)이 「이름 (머지)」 로, 파일 히스토리는 src/git/history/git-history.tsx 가
+    // 「이름 히스토리」 로 이름을 단다.
     case "merge":
+    case "history":
       return spec.path.split("/").pop() ?? spec.path;
   }
 }

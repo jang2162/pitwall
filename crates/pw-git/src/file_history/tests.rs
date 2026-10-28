@@ -10,6 +10,8 @@ use crate::testing::blame::{load, random};
 use crate::testing::repo::git_command;
 use pw_rpc::protocol::StreamOutcome;
 
+mod view_fixture;
+
 /// 행 하나를 `git log --name-status` 의 꼴로: (해시, 상태 글자, 경로들 — 이름 바뀜 · 복사는 원래 경로가 앞).
 type Entry = (String, char, Vec<String>);
 

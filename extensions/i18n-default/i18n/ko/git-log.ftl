@@ -115,3 +115,14 @@ git-log-result-up-to-date = 바뀐 것이 없다
 # $action: 메뉴 항목 이름
 git-log-result-failed = { $action } 실패
 git-log-result-copied = 해시를 복사했다
+
+## 다른 화면이 로그에서 커밋을 고르게 할 때(액션 git.log.reveal — blame 주석 · 파일 히스토리).
+
+git-log-reveal-action = Git 로그에서 커밋 선택
+git-log-reveal-cleared = 지금 필터에 없는 커밋이라 필터를 풀었다
+git-log-reveal-cleared-body = 브랜치 · 텍스트 · 작성자 · 날짜 · 경로 필터를 모두 지우고 그 커밋을 골랐다
+git-log-reveal-missing = Git 로그에 없는 커밋이다
+# $rev: 짧은 해시
+git-log-reveal-missing-body = { $rev } 는 어느 브랜치 · 태그 · HEAD 에서도 닿지 않는다
+# $message: Host 의 오류 원문
+git-log-reveal-failed = 커밋을 찾지 못했다: { $message }

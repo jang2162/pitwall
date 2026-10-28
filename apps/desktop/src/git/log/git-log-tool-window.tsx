@@ -7,6 +7,7 @@
 // - 브랜치 패널 · 필터 바 · 라벨 메뉴의 ref 는 따로 읽지 않고 창의 브랜치 상태(branch-state.ts — 상태바 · 브랜치 팝업과 같은
 //   `git.refs` 읽기 하나)를 쓴다.
 // - 쓰기(우클릭 · 라벨 끌어 놓기)는 log-ops.ts. ref 를 옮긴 결과가 오면 목록 위에 [되돌리기] 줄을 단다.
+// - 다른 화면의 「로그에서 선택」(`git.log.reveal`, log-reveal.ts)을 받아 그 커밋을 고른다 — 지금 필터에 없으면 필터를 푼다.
 // - 커밋 상세 탭 · 두 커밋 비교 탭 · 리비전 파일 열기는 M2-15 의 액션을 id 로 부른다(`registry.run(id, args)`). 셋 다 인자가
 //   있어야 도는 액션이라 `isEnabled` 는 늘 거짓이다 — 메뉴 항목 · 버튼을 둘지는 `isAvailable` 로 정한다(없는 창이면 감춘다).
 
@@ -27,11 +28,12 @@ import { CommitDetail } from "./commit-detail";
 import { FilterBar } from "./filter-bar";
 import { paletteOf } from "./graph-render";
 import { type DropTarget, LogList } from "./log-list";
-import { EMPTY_QUERY, LogModel, type LogQuery, type LogSource } from "./log-model";
+import { EMPTY_QUERY, LogModel, type LogQuery, type LogSource, logParams } from "./log-model";
 import { useGitDialogs } from "../dialogs/git-dialogs";
 import { useGitDialogStrings } from "../dialogs/strings";
 import { type UndoKind, canUndo } from "../dialogs/undo";
 import { LogOps, refFullName, short } from "./log-ops";
+import { logRevealRequests } from "./log-reveal";
 import { useGitLogStrings } from "./strings";
 
 const RESET_MODES: readonly ResetMode[] = ["soft", "mixed", "keep", "hard"];
@@ -90,6 +92,33 @@ export function selectRows(
     return { selected: rows.slice(from, to + 1).map((r) => r.hash), anchor };
   }
   return { selected: [hash], anchor: index };
+}
+
+/** 필터가 하나도 없는가(브랜치 · 글자 칸이 모두 비었다). */
+function isEmptyQuery(query: LogQuery): boolean {
+  return (
+    query.refs.length === 0 &&
+    [query.text, query.author, query.since, query.until, query.paths].every((v) => v.trim() === "")
+  );
+}
+
+/** 커밋이 모든 ref(브랜치 · 원격 · 태그 · HEAD)에서 닿는가 — 거르지 않은 로그에 들까. 묻지 못하면 거짓. */
+async function reachable(source: LogSource, hash: string): Promise<boolean> {
+  const { filter } = logParams({ ...EMPTY_QUERY, text: hash }, true);
+  try {
+    const page = await source.client.call("git.logPage", {
+      projectId: source.projectId,
+      worktree: source.worktree ?? null,
+      refs: null,
+      filter,
+      order: "topo",
+      limit: 1,
+    });
+    return page.rows.length > 0;
+  } catch (e) {
+    console.warn("[git] could not check whether the commit is in the log", e);
+    return false;
+  }
 }
 
 export interface GitLogViewProps {
@@ -242,6 +271,87 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
     setReveal({ index, seq: (reveal?.seq ?? 0) + 1 });
   };
 
+  // 「로그에서 선택」(log-reveal.ts — 다른 화면이 `git.log.reveal { rev }` 로 부른다): 요청을 받아 커밋 해시로 풀고, 그 행이 목록에
+  // 오면 고르고 목록에 포커스를 준다. 받은 목록에 없고 `git.log` 가 끝났으면 모든 ref 에서 닿는지 묻고, 닿으면 필터를 풀어 다시
+  // 받는다(그 뒤에도 없으면 「없다」). 이 효과들은 로그를 받는 효과(위) 뒤에 둔다 — 필터를 풀면 같은 커밋에서 받기가 먼저 시작돼야
+  // 끝난 옛 목록을 보고 「없다」 고 하지 않는다.
+  const [pending, setPending] = useState<{ rev: string; hash?: string; cleared: boolean }>();
+  useEffect(() => {
+    const take = () => {
+      const { rev } = logRevealRequests.getState();
+      if (rev === undefined) return;
+      logRevealRequests.setState({ rev: undefined });
+      setPending({ rev, cleared: false });
+    };
+    take();
+    return logRevealRequests.subscribe(take);
+  }, []);
+  const latest = useRef({ notify, T });
+  latest.current = { notify, T };
+  useEffect(() => {
+    if (!pending || pending.hash !== undefined || !source) return;
+    let current = true;
+    source.client
+      .call("git.show", {
+        projectId: source.projectId,
+        worktree: source.worktree ?? null,
+        rev: pending.rev,
+      })
+      .then(
+        (show) => current && setPending((p) => (p === pending ? { ...p, hash: show.commit } : p)),
+        (e: unknown) => {
+          if (!current) return;
+          setPending(undefined);
+          const { notify, T } = latest.current;
+          notify({
+            level: "error",
+            title: T.reveal.failed(e instanceof Error ? e.message : String(e)),
+          });
+        },
+      );
+    return () => {
+      current = false;
+    };
+  }, [pending, source]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const version = model.getVersion();
+  useEffect(() => {
+    const hash = pending?.hash;
+    if (!pending || hash === undefined || !source) return;
+    const { notify, T } = latest.current;
+    const missing = () => {
+      setPending(undefined);
+      notify({
+        level: "warning",
+        title: T.reveal.missing,
+        body: T.reveal.missingBody(short(hash)),
+      });
+    };
+    if (model.indexOf(hash) >= 0) {
+      setPending(undefined);
+      selectHash(hash);
+      requestAnimationFrame(() =>
+        rootRef.current?.querySelector<HTMLElement>('[role="grid"]')?.focus(),
+      );
+      return;
+    }
+    if (model.status.kind !== "done" && model.status.kind !== "error") return;
+    if (pending.cleared || isEmptyQuery(query)) return missing();
+    let current = true;
+    void reachable(source, hash).then((yes) => {
+      if (!current) return;
+      if (!yes) return missing();
+      setPending({ ...pending, cleared: true });
+      setQuery(EMPTY_QUERY);
+      notify({ level: "info", title: T.reveal.cleared, body: T.reveal.clearedBody });
+    });
+    return () => {
+      current = false;
+    };
+    // `selectHash` 는 렌더마다 새로 만든다 — 행이 오거나(`version`) 요청 · 필터가 바뀔 때만 본다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, version, query, source, model]);
+
   const onDropLabel = (
     source_: LogRef,
     from: LogRow,
@@ -275,7 +385,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
     return <p className="p-2 text-[12px] text-ui-muted-foreground">{T.status.noProject}</p>;
 
   return (
-    <div className="flex h-full min-h-0">
+    <div ref={rootRef} className="flex h-full min-h-0">
       <div className="w-[clamp(120px,18%,220px)] shrink-0 border-r border-ui-border">
         <BranchPanel
           refs={refs}

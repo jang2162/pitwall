@@ -19,6 +19,8 @@ import { commitActions } from "../git/commit/commit-feature";
 import { remoteActions } from "../git/dialogs/git-remote-feature";
 import { branchActions } from "../git/git-branch-feature";
 import { gitDocumentActions } from "../git/documents/git-documents";
+import { fileHistoryAction } from "../git/history/git-history";
+import { gitHistoryStrings } from "../git/history/strings";
 import { FileTreeModel } from "../file-tree/tree-model";
 import { openWithActions } from "../open-with/open-with";
 import { findActions } from "../search/find-actions";
@@ -149,6 +151,14 @@ const ACTION_IDS = new Set(
       feature: () => undefined,
       open() {},
       activeFile: () => undefined,
+    }),
+    fileHistoryAction({
+      strings: () => gitHistoryStrings((id) => id),
+      ready: () => true,
+      current: () => undefined,
+      workTree: async () => "/",
+      open() {},
+      notify() {},
     }),
   ].map((a) => a.id),
 );

@@ -1,0 +1,1118 @@
+{
+  "blobs": {
+    "1ea280909fa2f66dd763f4c56302198f60bb92dc:b.txt": {
+      "content": {
+        "kind": "text",
+        "text": "line 1 of the original file with some words\nline 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nside 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\n"
+      },
+      "eof": true,
+      "id": "eef22258a828e719258cf11b681f9f9756c5e708",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 1341,
+      "tooLarge": false
+    },
+    "20da116edc2bfcf3a9f5ffb936d6de727704519b:b.txt": {
+      "content": {
+        "kind": "text",
+        "text": "line 1 of the original file with some words\nline 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nline 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\n"
+      },
+      "eof": true,
+      "id": "fff8a5a7e6c91f888c0c0f83032af457b964ca6c",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 1341,
+      "tooLarge": false
+    },
+    "433602c12e48d7d9acd4b20e2e42c659a9951e03:dir/c.txt": {
+      "content": {
+        "kind": "text",
+        "text": "line 1 of the original file with some words\nmain 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nside 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\ntail added\n"
+      },
+      "eof": true,
+      "id": "27597d2cbd252eb2cd85cf451cf012713ea9f5fc",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 1352,
+      "tooLarge": false
+    },
+    "7c8282a88692a36741ee0dba71f8da472ac704c9:a.txt": {
+      "content": {
+        "kind": "text",
+        "text": "line 1 of the original file with some words\nline 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nline 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nline 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\n"
+      },
+      "eof": true,
+      "id": "94323ab67ff4ae61063f3d758a0f93becea35a36",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 1341,
+      "tooLarge": false
+    },
+    "ae0845e61017a9992750cdf974df53d9e298fb3b:dir/c.txt": {
+      "content": {
+        "kind": "text",
+        "text": "line 1 of the original file with some words\nmain 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nside 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\n"
+      },
+      "eof": true,
+      "id": "6f1a0955ff437e35a80b37b4de42d5e50adad2b0",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 1341,
+      "tooLarge": false
+    },
+    "aec43bed84bf6a0ee687366af2ad9377de2429ec:b.txt": {
+      "content": {
+        "kind": "text",
+        "text": "line 1 of the original file with some words\nmain 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nside 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\n"
+      },
+      "eof": true,
+      "id": "6f1a0955ff437e35a80b37b4de42d5e50adad2b0",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 1341,
+      "tooLarge": false
+    },
+    "c28230e16c51e5780d0bea29388f40027a1b613a:a.txt": {
+      "content": {
+        "kind": "text",
+        "text": "line 1 of the original file with some words\nline 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nline 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\n"
+      },
+      "eof": true,
+      "id": "fff8a5a7e6c91f888c0c0f83032af457b964ca6c",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 1341,
+      "tooLarge": false
+    },
+    "dccb8748fcec00aabe8936f2e2bc3dc607de8592:b.txt": {
+      "content": {
+        "kind": "text",
+        "text": "line 1 of the original file with some words\nline 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nline 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\n"
+      },
+      "eof": true,
+      "id": "c6bfff780e7fd9f62ee2129acc68af77237d09c7",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 1341,
+      "tooLarge": false
+    },
+    "f7f35b27e00d8473ea4d02c74f6e985a8f5ac910:b.txt": {
+      "content": {
+        "kind": "text",
+        "text": "line 1 of the original file with some words\nmain 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nline 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\n"
+      },
+      "eof": true,
+      "id": "3b144458f83dd6c1a12d08ad1f9175dc9ea140aa",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 1341,
+      "tooLarge": false
+    }
+  },
+  "diffs": {
+    "1ea280909fa2f66dd763f4c56302198f60bb92dc": {
+      "files": [
+        {
+          "added": 1,
+          "binary": false,
+          "error": null,
+          "generated": false,
+          "hunks": [
+            {
+              "header": "line 16 of the original file with some words",
+              "lines": [
+                {
+                  "kind": "context",
+                  "newLine": 12,
+                  "noNewline": false,
+                  "oldLine": 12,
+                  "text": "line 17 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 13,
+                  "noNewline": false,
+                  "oldLine": 13,
+                  "text": "line 18 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 14,
+                  "noNewline": false,
+                  "oldLine": 14,
+                  "text": "line 19 of the original file with some words"
+                },
+                {
+                  "kind": "removed",
+                  "newLine": null,
+                  "noNewline": false,
+                  "oldLine": 15,
+                  "text": "line 20 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 15,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "side 20 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 16,
+                  "noNewline": false,
+                  "oldLine": 16,
+                  "text": "line 21 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 17,
+                  "noNewline": false,
+                  "oldLine": 17,
+                  "text": "line 22 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 18,
+                  "noNewline": false,
+                  "oldLine": 18,
+                  "text": "line 23 of the original file with some words"
+                }
+              ],
+              "newLines": 7,
+              "newStart": 12,
+              "oldLines": 7,
+              "oldStart": 12
+            }
+          ],
+          "hunksOmitted": false,
+          "newId": "eef22258a828e719258cf11b681f9f9756c5e708",
+          "newMode": "100644",
+          "oldId": "c6bfff780e7fd9f62ee2129acc68af77237d09c7",
+          "oldMode": "100644",
+          "oldPath": null,
+          "path": "b.txt",
+          "removed": 1,
+          "status": "modified",
+          "submodule": null,
+          "tooLarge": false
+        }
+      ],
+      "newCommit": "1ea280909fa2f66dd763f4c56302198f60bb92dc",
+      "oldCommit": "dccb8748fcec00aabe8936f2e2bc3dc607de8592",
+      "workTree": "/repo"
+    },
+    "20da116edc2bfcf3a9f5ffb936d6de727704519b": {
+      "files": [
+        {
+          "added": 0,
+          "binary": false,
+          "error": null,
+          "generated": false,
+          "hunks": [],
+          "hunksOmitted": false,
+          "newId": "fff8a5a7e6c91f888c0c0f83032af457b964ca6c",
+          "newMode": "100644",
+          "oldId": "fff8a5a7e6c91f888c0c0f83032af457b964ca6c",
+          "oldMode": "100644",
+          "oldPath": "a.txt",
+          "path": "b.txt",
+          "removed": 0,
+          "status": "renamed",
+          "submodule": null,
+          "tooLarge": false
+        }
+      ],
+      "newCommit": "20da116edc2bfcf3a9f5ffb936d6de727704519b",
+      "oldCommit": "c28230e16c51e5780d0bea29388f40027a1b613a",
+      "workTree": "/repo"
+    },
+    "433602c12e48d7d9acd4b20e2e42c659a9951e03": {
+      "files": [
+        {
+          "added": 1,
+          "binary": false,
+          "error": null,
+          "generated": false,
+          "hunks": [
+            {
+              "header": "line 11 of the original file with some words",
+              "lines": [
+                {
+                  "kind": "context",
+                  "newLine": 28,
+                  "noNewline": false,
+                  "oldLine": 28,
+                  "text": "line 12 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 29,
+                  "noNewline": false,
+                  "oldLine": 29,
+                  "text": "line 13 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 30,
+                  "noNewline": false,
+                  "oldLine": 30,
+                  "text": "line 14 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 31,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "tail added"
+                }
+              ],
+              "newLines": 4,
+              "newStart": 28,
+              "oldLines": 3,
+              "oldStart": 28
+            }
+          ],
+          "hunksOmitted": false,
+          "newId": "27597d2cbd252eb2cd85cf451cf012713ea9f5fc",
+          "newMode": "100644",
+          "oldId": "6f1a0955ff437e35a80b37b4de42d5e50adad2b0",
+          "oldMode": "100644",
+          "oldPath": null,
+          "path": "dir/c.txt",
+          "removed": 0,
+          "status": "modified",
+          "submodule": null,
+          "tooLarge": false
+        }
+      ],
+      "newCommit": "433602c12e48d7d9acd4b20e2e42c659a9951e03",
+      "oldCommit": "ae0845e61017a9992750cdf974df53d9e298fb3b",
+      "workTree": "/repo"
+    },
+    "7c8282a88692a36741ee0dba71f8da472ac704c9": {
+      "files": [
+        {
+          "added": 30,
+          "binary": false,
+          "error": null,
+          "generated": false,
+          "hunks": [
+            {
+              "header": "",
+              "lines": [
+                {
+                  "kind": "added",
+                  "newLine": 1,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 1 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 2,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 2 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 3,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 3 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 4,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 4 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 5,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 5 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 6,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 6 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 7,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 7 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 8,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 8 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 9,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 9 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 10,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 10 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 11,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 11 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 12,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 12 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 13,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 13 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 14,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 14 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 15,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 15 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 16,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 16 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 17,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 17 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 18,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 18 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 19,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 19 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 20,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 20 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 21,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 21 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 22,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 22 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 23,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 23 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 24,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 24 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 25,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 25 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 26,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 26 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 27,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 27 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 28,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 28 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 29,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 29 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 30,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 30 of the original file with some words"
+                }
+              ],
+              "newLines": 30,
+              "newStart": 1,
+              "oldLines": 0,
+              "oldStart": 0
+            }
+          ],
+          "hunksOmitted": false,
+          "newId": "94323ab67ff4ae61063f3d758a0f93becea35a36",
+          "newMode": "100644",
+          "oldId": null,
+          "oldMode": null,
+          "oldPath": null,
+          "path": "a.txt",
+          "removed": 0,
+          "status": "added",
+          "submodule": null,
+          "tooLarge": false
+        }
+      ],
+      "newCommit": "7c8282a88692a36741ee0dba71f8da472ac704c9",
+      "oldCommit": null,
+      "workTree": "/repo"
+    },
+    "ae0845e61017a9992750cdf974df53d9e298fb3b": {
+      "files": [
+        {
+          "added": 0,
+          "binary": false,
+          "error": null,
+          "generated": false,
+          "hunks": [],
+          "hunksOmitted": false,
+          "newId": "6f1a0955ff437e35a80b37b4de42d5e50adad2b0",
+          "newMode": "100644",
+          "oldId": "6f1a0955ff437e35a80b37b4de42d5e50adad2b0",
+          "oldMode": "100644",
+          "oldPath": "b.txt",
+          "path": "dir/c.txt",
+          "removed": 0,
+          "status": "renamed",
+          "submodule": null,
+          "tooLarge": false
+        }
+      ],
+      "newCommit": "ae0845e61017a9992750cdf974df53d9e298fb3b",
+      "oldCommit": "aec43bed84bf6a0ee687366af2ad9377de2429ec",
+      "workTree": "/repo"
+    },
+    "c28230e16c51e5780d0bea29388f40027a1b613a": {
+      "files": [
+        {
+          "added": 1,
+          "binary": false,
+          "error": null,
+          "generated": false,
+          "hunks": [
+            {
+              "header": "line 1 of the original file with some words",
+              "lines": [
+                {
+                  "kind": "context",
+                  "newLine": 2,
+                  "noNewline": false,
+                  "oldLine": 2,
+                  "text": "line 2 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 3,
+                  "noNewline": false,
+                  "oldLine": 3,
+                  "text": "line 3 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 4,
+                  "noNewline": false,
+                  "oldLine": 4,
+                  "text": "line 4 of the original file with some words"
+                },
+                {
+                  "kind": "removed",
+                  "newLine": null,
+                  "noNewline": false,
+                  "oldLine": 5,
+                  "text": "line 5 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 5,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "LINE 5 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 6,
+                  "noNewline": false,
+                  "oldLine": 6,
+                  "text": "line 6 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 7,
+                  "noNewline": false,
+                  "oldLine": 7,
+                  "text": "line 7 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 8,
+                  "noNewline": false,
+                  "oldLine": 8,
+                  "text": "line 8 of the original file with some words"
+                }
+              ],
+              "newLines": 7,
+              "newStart": 2,
+              "oldLines": 7,
+              "oldStart": 2
+            }
+          ],
+          "hunksOmitted": false,
+          "newId": "fff8a5a7e6c91f888c0c0f83032af457b964ca6c",
+          "newMode": "100644",
+          "oldId": "94323ab67ff4ae61063f3d758a0f93becea35a36",
+          "oldMode": "100644",
+          "oldPath": null,
+          "path": "a.txt",
+          "removed": 1,
+          "status": "modified",
+          "submodule": null,
+          "tooLarge": false
+        }
+      ],
+      "newCommit": "c28230e16c51e5780d0bea29388f40027a1b613a",
+      "oldCommit": "7c8282a88692a36741ee0dba71f8da472ac704c9",
+      "workTree": "/repo"
+    },
+    "dccb8748fcec00aabe8936f2e2bc3dc607de8592": {
+      "files": [
+        {
+          "added": 5,
+          "binary": false,
+          "error": null,
+          "generated": false,
+          "hunks": [
+            {
+              "header": "line 6 of the original file with some words",
+              "lines": [
+                {
+                  "kind": "context",
+                  "newLine": 7,
+                  "noNewline": false,
+                  "oldLine": 7,
+                  "text": "line 7 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 8,
+                  "noNewline": false,
+                  "oldLine": 8,
+                  "text": "line 8 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 9,
+                  "noNewline": false,
+                  "oldLine": 9,
+                  "text": "line 9 of the original file with some words"
+                },
+                {
+                  "kind": "removed",
+                  "newLine": null,
+                  "noNewline": false,
+                  "oldLine": 10,
+                  "text": "line 10 of the original file with some words"
+                },
+                {
+                  "kind": "removed",
+                  "newLine": null,
+                  "noNewline": false,
+                  "oldLine": 11,
+                  "text": "line 11 of the original file with some words"
+                },
+                {
+                  "kind": "removed",
+                  "newLine": null,
+                  "noNewline": false,
+                  "oldLine": 12,
+                  "text": "line 12 of the original file with some words"
+                },
+                {
+                  "kind": "removed",
+                  "newLine": null,
+                  "noNewline": false,
+                  "oldLine": 13,
+                  "text": "line 13 of the original file with some words"
+                },
+                {
+                  "kind": "removed",
+                  "newLine": null,
+                  "noNewline": false,
+                  "oldLine": 14,
+                  "text": "line 14 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 10,
+                  "noNewline": false,
+                  "oldLine": 15,
+                  "text": "line 15 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 11,
+                  "noNewline": false,
+                  "oldLine": 16,
+                  "text": "line 16 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 12,
+                  "noNewline": false,
+                  "oldLine": 17,
+                  "text": "line 17 of the original file with some words"
+                }
+              ],
+              "newLines": 6,
+              "newStart": 7,
+              "oldLines": 11,
+              "oldStart": 7
+            },
+            {
+              "header": "line 27 of the original file with some words",
+              "lines": [
+                {
+                  "kind": "context",
+                  "newLine": 23,
+                  "noNewline": false,
+                  "oldLine": 28,
+                  "text": "line 28 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 24,
+                  "noNewline": false,
+                  "oldLine": 29,
+                  "text": "line 29 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 25,
+                  "noNewline": false,
+                  "oldLine": 30,
+                  "text": "line 30 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 26,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 10 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 27,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 11 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 28,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 12 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 29,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 13 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 30,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "line 14 of the original file with some words"
+                }
+              ],
+              "newLines": 8,
+              "newStart": 23,
+              "oldLines": 3,
+              "oldStart": 28
+            }
+          ],
+          "hunksOmitted": false,
+          "newId": "c6bfff780e7fd9f62ee2129acc68af77237d09c7",
+          "newMode": "100644",
+          "oldId": "fff8a5a7e6c91f888c0c0f83032af457b964ca6c",
+          "oldMode": "100644",
+          "oldPath": null,
+          "path": "b.txt",
+          "removed": 5,
+          "status": "modified",
+          "submodule": null,
+          "tooLarge": false
+        }
+      ],
+      "newCommit": "dccb8748fcec00aabe8936f2e2bc3dc607de8592",
+      "oldCommit": "20da116edc2bfcf3a9f5ffb936d6de727704519b",
+      "workTree": "/repo"
+    },
+    "f7f35b27e00d8473ea4d02c74f6e985a8f5ac910": {
+      "files": [
+        {
+          "added": 1,
+          "binary": false,
+          "error": null,
+          "generated": false,
+          "hunks": [
+            {
+              "header": "",
+              "lines": [
+                {
+                  "kind": "context",
+                  "newLine": 1,
+                  "noNewline": false,
+                  "oldLine": 1,
+                  "text": "line 1 of the original file with some words"
+                },
+                {
+                  "kind": "removed",
+                  "newLine": null,
+                  "noNewline": false,
+                  "oldLine": 2,
+                  "text": "line 2 of the original file with some words"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 2,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "main 2 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 3,
+                  "noNewline": false,
+                  "oldLine": 3,
+                  "text": "line 3 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 4,
+                  "noNewline": false,
+                  "oldLine": 4,
+                  "text": "line 4 of the original file with some words"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 5,
+                  "noNewline": false,
+                  "oldLine": 5,
+                  "text": "LINE 5 of the original file with some words"
+                }
+              ],
+              "newLines": 5,
+              "newStart": 1,
+              "oldLines": 5,
+              "oldStart": 1
+            }
+          ],
+          "hunksOmitted": false,
+          "newId": "3b144458f83dd6c1a12d08ad1f9175dc9ea140aa",
+          "newMode": "100644",
+          "oldId": "c6bfff780e7fd9f62ee2129acc68af77237d09c7",
+          "oldMode": "100644",
+          "oldPath": null,
+          "path": "b.txt",
+          "removed": 1,
+          "status": "modified",
+          "submodule": null,
+          "tooLarge": false
+        }
+      ],
+      "newCommit": "f7f35b27e00d8473ea4d02c74f6e985a8f5ac910",
+      "oldCommit": "dccb8748fcec00aabe8936f2e2bc3dc607de8592",
+      "workTree": "/repo"
+    }
+  },
+  "follow": [
+    ["433602c12e48d7d9acd4b20e2e42c659a9951e03", "M", ["dir/c.txt"]],
+    ["ae0845e61017a9992750cdf974df53d9e298fb3b", "R", ["b.txt", "dir/c.txt"]],
+    ["f7f35b27e00d8473ea4d02c74f6e985a8f5ac910", "M", ["b.txt"]],
+    ["1ea280909fa2f66dd763f4c56302198f60bb92dc", "M", ["b.txt"]],
+    ["dccb8748fcec00aabe8936f2e2bc3dc607de8592", "M", ["b.txt"]],
+    ["20da116edc2bfcf3a9f5ffb936d6de727704519b", "R", ["a.txt", "b.txt"]],
+    ["c28230e16c51e5780d0bea29388f40027a1b613a", "M", ["a.txt"]],
+    ["7c8282a88692a36741ee0dba71f8da472ac704c9", "A", ["a.txt"]]
+  ],
+  "patches": {
+    "1ea280909fa2f66dd763f4c56302198f60bb92dc": "diff --git a/b.txt b/b.txt\nindex c6bfff7..eef2225 100644\n--- a/b.txt\n+++ b/b.txt\n@@ -12,7 +12,7 @@ line 16 of the original file with some words\n line 17 of the original file with some words\n line 18 of the original file with some words\n line 19 of the original file with some words\n-line 20 of the original file with some words\n+side 20 of the original file with some words\n line 21 of the original file with some words\n line 22 of the original file with some words\n line 23 of the original file with some words\n",
+    "20da116edc2bfcf3a9f5ffb936d6de727704519b": "diff --git a/a.txt b/b.txt\nsimilarity index 100%\nrename from a.txt\nrename to b.txt\n",
+    "433602c12e48d7d9acd4b20e2e42c659a9951e03": "diff --git a/dir/c.txt b/dir/c.txt\nindex 6f1a095..27597d2 100644\n--- a/dir/c.txt\n+++ b/dir/c.txt\n@@ -28,3 +28,4 @@ line 11 of the original file with some words\n line 12 of the original file with some words\n line 13 of the original file with some words\n line 14 of the original file with some words\n+tail added\n",
+    "7c8282a88692a36741ee0dba71f8da472ac704c9": "diff --git a/a.txt b/a.txt\nnew file mode 100644\nindex 0000000..94323ab\n--- /dev/null\n+++ b/a.txt\n@@ -0,0 +1,30 @@\n+line 1 of the original file with some words\n+line 2 of the original file with some words\n+line 3 of the original file with some words\n+line 4 of the original file with some words\n+line 5 of the original file with some words\n+line 6 of the original file with some words\n+line 7 of the original file with some words\n+line 8 of the original file with some words\n+line 9 of the original file with some words\n+line 10 of the original file with some words\n+line 11 of the original file with some words\n+line 12 of the original file with some words\n+line 13 of the original file with some words\n+line 14 of the original file with some words\n+line 15 of the original file with some words\n+line 16 of the original file with some words\n+line 17 of the original file with some words\n+line 18 of the original file with some words\n+line 19 of the original file with some words\n+line 20 of the original file with some words\n+line 21 of the original file with some words\n+line 22 of the original file with some words\n+line 23 of the original file with some words\n+line 24 of the original file with some words\n+line 25 of the original file with some words\n+line 26 of the original file with some words\n+line 27 of the original file with some words\n+line 28 of the original file with some words\n+line 29 of the original file with some words\n+line 30 of the original file with some words\n",
+    "ae0845e61017a9992750cdf974df53d9e298fb3b": "diff --git a/b.txt b/dir/c.txt\nsimilarity index 100%\nrename from b.txt\nrename to dir/c.txt\n",
+    "c28230e16c51e5780d0bea29388f40027a1b613a": "diff --git a/a.txt b/a.txt\nindex 94323ab..fff8a5a 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -2,7 +2,7 @@ line 1 of the original file with some words\n line 2 of the original file with some words\n line 3 of the original file with some words\n line 4 of the original file with some words\n-line 5 of the original file with some words\n+LINE 5 of the original file with some words\n line 6 of the original file with some words\n line 7 of the original file with some words\n line 8 of the original file with some words\n",
+    "dccb8748fcec00aabe8936f2e2bc3dc607de8592": "diff --git a/b.txt b/b.txt\nindex fff8a5a..c6bfff7 100644\n--- a/b.txt\n+++ b/b.txt\n@@ -7,11 +7,6 @@ line 6 of the original file with some words\n line 7 of the original file with some words\n line 8 of the original file with some words\n line 9 of the original file with some words\n-line 10 of the original file with some words\n-line 11 of the original file with some words\n-line 12 of the original file with some words\n-line 13 of the original file with some words\n-line 14 of the original file with some words\n line 15 of the original file with some words\n line 16 of the original file with some words\n line 17 of the original file with some words\n@@ -28,3 +23,8 @@ line 27 of the original file with some words\n line 28 of the original file with some words\n line 29 of the original file with some words\n line 30 of the original file with some words\n+line 10 of the original file with some words\n+line 11 of the original file with some words\n+line 12 of the original file with some words\n+line 13 of the original file with some words\n+line 14 of the original file with some words\n",
+    "f7f35b27e00d8473ea4d02c74f6e985a8f5ac910": "diff --git a/b.txt b/b.txt\nindex c6bfff7..3b14445 100644\n--- a/b.txt\n+++ b/b.txt\n@@ -1,5 +1,5 @@\n line 1 of the original file with some words\n-line 2 of the original file with some words\n+main 2 of the original file with some words\n line 3 of the original file with some words\n line 4 of the original file with some words\n LINE 5 of the original file with some words\n"
+  },
+  "path": "dir/c.txt",
+  "rows": [
+    {
+      "authorEmail": "test@pitwall.invalid",
+      "authorName": "Pitwall Test",
+      "authorTime": 1700001800,
+      "change": "modified",
+      "hash": "433602c12e48d7d9acd4b20e2e42c659a9951e03",
+      "oldPath": null,
+      "parents": ["ae0845e61017a9992750cdf974df53d9e298fb3b"],
+      "path": "dir/c.txt",
+      "subject": "append"
+    },
+    {
+      "authorEmail": "test@pitwall.invalid",
+      "authorName": "Pitwall Test",
+      "authorTime": 1700001620,
+      "change": "renamed",
+      "hash": "ae0845e61017a9992750cdf974df53d9e298fb3b",
+      "oldPath": "b.txt",
+      "parents": ["aec43bed84bf6a0ee687366af2ad9377de2429ec"],
+      "path": "dir/c.txt",
+      "subject": "rename b to dir/c"
+    },
+    {
+      "authorEmail": "test@pitwall.invalid",
+      "authorName": "Pitwall Test",
+      "authorTime": 1700001260,
+      "change": "modified",
+      "hash": "f7f35b27e00d8473ea4d02c74f6e985a8f5ac910",
+      "oldPath": null,
+      "parents": ["dccb8748fcec00aabe8936f2e2bc3dc607de8592"],
+      "path": "b.txt",
+      "subject": "main edit 2"
+    },
+    {
+      "authorEmail": "test@pitwall.invalid",
+      "authorName": "Pitwall Test",
+      "authorTime": 1700001020,
+      "change": "modified",
+      "hash": "1ea280909fa2f66dd763f4c56302198f60bb92dc",
+      "oldPath": null,
+      "parents": ["dccb8748fcec00aabe8936f2e2bc3dc607de8592"],
+      "path": "b.txt",
+      "subject": "side edit 20"
+    },
+    {
+      "authorEmail": "test@pitwall.invalid",
+      "authorName": "Pitwall Test",
+      "authorTime": 1700000720,
+      "change": "modified",
+      "hash": "dccb8748fcec00aabe8936f2e2bc3dc607de8592",
+      "oldPath": null,
+      "parents": ["20da116edc2bfcf3a9f5ffb936d6de727704519b"],
+      "path": "b.txt",
+      "subject": "move block"
+    },
+    {
+      "authorEmail": "test@pitwall.invalid",
+      "authorName": "Pitwall Test",
+      "authorTime": 1700000540,
+      "change": "renamed",
+      "hash": "20da116edc2bfcf3a9f5ffb936d6de727704519b",
+      "oldPath": "a.txt",
+      "parents": ["c28230e16c51e5780d0bea29388f40027a1b613a"],
+      "path": "b.txt",
+      "subject": "rename a to b"
+    },
+    {
+      "authorEmail": "test@pitwall.invalid",
+      "authorName": "Pitwall Test",
+      "authorTime": 1700000300,
+      "change": "modified",
+      "hash": "c28230e16c51e5780d0bea29388f40027a1b613a",
+      "oldPath": null,
+      "parents": ["7c8282a88692a36741ee0dba71f8da472ac704c9"],
+      "path": "a.txt",
+      "subject": "edit 5"
+    },
+    {
+      "authorEmail": "test@pitwall.invalid",
+      "authorName": "Pitwall Test",
+      "authorTime": 1700000120,
+      "change": "added",
+      "hash": "7c8282a88692a36741ee0dba71f8da472ac704c9",
+      "oldPath": null,
+      "parents": [],
+      "path": "a.txt",
+      "subject": "add a"
+    }
+  ]
+}

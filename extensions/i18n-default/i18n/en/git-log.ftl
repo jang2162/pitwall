@@ -127,3 +127,14 @@ git-log-result-up-to-date = Nothing changed
 # $action: the menu item
 git-log-result-failed = { $action } failed
 git-log-result-copied = Copied the hash
+
+## When another screen selects a commit in the log (action git.log.reveal — blame annotations, file history).
+
+git-log-reveal-action = Select Commit in Git Log
+git-log-reveal-cleared = The commit is not in the current filter, so the filter was cleared
+git-log-reveal-cleared-body = Cleared the branch, text, author, date and path filters and selected the commit
+git-log-reveal-missing = The commit is not in the Git log
+# $rev: short hash
+git-log-reveal-missing-body = { $rev } is not reachable from any branch, tag or HEAD
+# $message: the Host's error text
+git-log-reveal-failed = Could not find the commit: { $message }

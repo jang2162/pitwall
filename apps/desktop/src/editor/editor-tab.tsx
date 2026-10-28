@@ -5,7 +5,8 @@
 // 문서에 미저장 편집이 있으면 이름 앞에 ● 를 둔다. 「텍스트로 열기」 · 「hex 로 열기」(M1-23)는 지금 그 뷰어가 아닐 때만, 「기본 뷰어로
 // 열기」 는 탭이 뷰어를 덮어쓰고 있을 때만 보인다. 일반 파일이 아니어서 열지 않은 문서(FIFO · 장치)에는 셋 다 없다.
 // 파일의 git 상태(M2-12, src/git/git-status.ts)가 있으면 제목을 그 색으로 칠하고 이름 앞에 글자(M · A …)를 둔다 — 색만으로 가르지
-// 않는다. 툴팁은 경로 다음 줄에 상태를 적는다.
+// 않는다. 툴팁은 경로 다음 줄에 상태를 적는다. 파일 탭(git 문서가 아님)의 메뉴 끝에 「히스토리 보기」(`git.showFileHistory`, M2-18 —
+// 그 액션이 이 창에 있을 때만).
 
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { DockviewDefaultTab, type IDockviewPanelHeaderProps } from "dockview-react";
@@ -14,6 +15,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { useStore } from "zustand";
 
 import { gitDocumentDetail } from "../git/documents/spec";
+import { useGitHistoryStrings } from "../git/history/strings";
 import { useGitDecoration } from "../git/git-status";
 import { GitStatusMark, gitStatusTitle, gitToneClass } from "../git/git-status-mark";
 import { useAppStrings } from "../i18n/app-strings";
@@ -52,6 +54,7 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
   const T = project.editor;
   const openWith = useAppStrings().openWith;
   const { registry, platform } = useKeymap();
+  const history = useGitHistoryStrings();
   const params = useTabParams(props.api, props.params);
   const { documents, unsavedTabs } = useEditorWorkspace();
   const docDirty = useStore(documents.store, (s) => {
@@ -142,6 +145,21 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
           <MenuItem onSelect={() => run("editor.copyPath")}>{T.actions.copyPath}</MenuItem>
           <MenuItem onSelect={() => run("editor.reveal")}>{T.actions.reveal(platform)}</MenuItem>
           <MenuItem onSelect={() => run("openWith.popup")}>{openWith.action}</MenuItem>
+          {!params.git && registry.isAvailable("git.showFileHistory") && (
+            <>
+              <ContextMenu.Separator className="my-1 h-px bg-ui-border" />
+              <MenuItem
+                onSelect={() =>
+                  registry.run("git.showFileHistory", {
+                    path: params.path,
+                    ...(params.worktree !== undefined && { worktree: params.worktree }),
+                  })
+                }
+              >
+                {history.menu}
+              </MenuItem>
+            </>
+          )}
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>

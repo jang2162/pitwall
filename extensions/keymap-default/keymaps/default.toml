@@ -439,3 +439,11 @@ mac = "shift+f7"
 win = "shift+f7"
 linux = "shift+f7"
 when = "diffFocus"
+
+# 파일 히스토리(M2-18, src/git/history/git-history.tsx): 트리에 포커스가 있으면 고른 파일, 아니면 활성 에디터 탭의 파일.
+
+[[bindings]]
+action = "git.showFileHistory"
+mac = "ctrl+alt+h"
+win = "ctrl+alt+h"
+linux = "ctrl+alt+h"
