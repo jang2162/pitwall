@@ -81,6 +81,7 @@
         "text": "fn a() {\n    a1 changed\n}\nconst F0: u32 = 0;\nconst F1: u32 = 1;\nconst F2: u32 = 2;\nconst F3: u32 = 3;\nconst F4: u32 = 4;\nconst F5: u32 = 5;\nconst F6: u32 = 6;\nconst F7: u32 = 7;\nconst F8: u32 = 8;\nconst F9: u32 = 9;\nconst F10: u32 = 10;\nconst F11: u32 = 11;\nconst F12: u32 = 12;\nconst F13: u32 = 13;\nconst F14: u32 = 14;\nconst F15: u32 = 15;\nconst F16: u32 = 16;\nconst F17: u32 = 17;\nconst F18: u32 = 18;\nconst F19: u32 = 19;\nconst F20: u32 = 20;\nconst F21: u32 = 21;\nconst F22: u32 = 22;\nconst F23: u32 = 23;\nconst F24: u32 = 24;\nconst F25: u32 = 25;\nconst F26: u32 = 26;\nconst F27: u32 = 27;\nconst F28: u32 = 28;\nconst F29: u32 = 29;\nfn b() {\n    b1 new\n}\n"
       },
       "eof": true,
+      "filter": null,
       "id": "04c4962a493a597c3440bd5b4237a1409bc2868c",
       "judgment": {
         "binary": false,
@@ -244,6 +245,7 @@
           "text": "fn a() {\n    a1\n}\nconst F0: u32 = 0;\nconst F1: u32 = 1;\nconst F2: u32 = 2;\nconst F3: u32 = 3;\nconst F4: u32 = 4;\nconst F5: u32 = 5;\nconst F6: u32 = 6;\nconst F7: u32 = 7;\nconst F8: u32 = 8;\nconst F9: u32 = 9;\nconst F10: u32 = 10;\nconst F11: u32 = 11;\nconst F12: u32 = 12;\nconst F13: u32 = 13;\nconst F14: u32 = 14;\nconst F15: u32 = 15;\nconst F16: u32 = 16;\nconst F17: u32 = 17;\nconst F18: u32 = 18;\nconst F19: u32 = 19;\nconst F20: u32 = 20;\nconst F21: u32 = 21;\nconst F22: u32 = 22;\nconst F23: u32 = 23;\nconst F24: u32 = 24;\nconst F25: u32 = 25;\nconst F26: u32 = 26;\nconst F27: u32 = 27;\nconst F28: u32 = 28;\nconst F29: u32 = 29;\nfn b() {\n    b1 old\n}\n"
         },
         "eof": true,
+        "filter": null,
         "id": "14a76ce14b1edfd19a6d30aa04447ddd8039df92",
         "judgment": {
           "binary": false,
@@ -413,6 +415,7 @@
           "text": "fn a() {\n    a1 changed\n}\nconst F0: u32 = 0;\nconst F1: u32 = 1;\nconst F2: u32 = 2;\nconst F3: u32 = 3;\nconst F4: u32 = 4;\nconst F5: u32 = 5;\nconst F6: u32 = 6;\nconst F7: u32 = 7;\nconst F8: u32 = 8;\nconst F9: u32 = 9;\nconst F10: u32 = 10;\nconst F11: u32 = 11;\nconst F12: u32 = 12;\nconst F13: u32 = 13;\nconst F14: u32 = 14;\nconst F15: u32 = 15;\nconst F16: u32 = 16;\nconst F17: u32 = 17;\nconst F18: u32 = 18;\nconst F19: u32 = 19;\nconst F20: u32 = 20;\nconst F21: u32 = 21;\nconst F22: u32 = 22;\nconst F23: u32 = 23;\nconst F24: u32 = 24;\nconst F25: u32 = 25;\nconst F26: u32 = 26;\nconst F27: u32 = 27;\nconst F28: u32 = 28;\nconst F29: u32 = 29;\nfn b() {\n    b1 old\n}\n"
         },
         "eof": true,
+        "filter": null,
         "id": "8be88f4b69c764895ff0832eacd3de0f1fb37ce6",
         "judgment": {
           "binary": false,
@@ -589,6 +592,7 @@
           "text": "fn a() {\n    a1 changed\n}\nconst F0: u32 = 0;\nconst F1: u32 = 1;\nconst F2: u32 = 2;\nconst F3: u32 = 3;\nconst F4: u32 = 4;\nconst F5: u32 = 5;\nconst F6: u32 = 6;\nconst F7: u32 = 7;\nconst F8: u32 = 8;\nconst F9: u32 = 9;\nconst F10: u32 = 10;\nconst F11: u32 = 11;\nconst F12: u32 = 12;\nconst F13: u32 = 13;\nconst F14: u32 = 14;\nconst F15: u32 = 15;\nconst F16: u32 = 16;\nconst F17: u32 = 17;\nconst F18: u32 = 18;\nconst F19: u32 = 19;\nconst F20: u32 = 20;\nconst F21: u32 = 21;\nconst F22: u32 = 22;\nconst F23: u32 = 23;\nconst F24: u32 = 24;\nconst F25: u32 = 25;\nconst F26: u32 = 26;\nconst F27: u32 = 27;\nconst F28: u32 = 28;\nconst F29: u32 = 29;\nfn b() {\n    b1 old\n    b1 new\n}\n"
         },
         "eof": true,
+        "filter": null,
         "id": "4c4117f50853fb18999aaa9f498c74d0dbf38b23",
         "judgment": {
           "binary": false,
