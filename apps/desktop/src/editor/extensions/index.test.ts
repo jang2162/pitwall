@@ -45,6 +45,8 @@ it("assembles one extension per feature, in list order", () => {
     "highlight",
     "readOnly",
     "cursorReport",
+    "gitGutter",
+    "blame",
     "editing",
     "operations",
     "navigation",

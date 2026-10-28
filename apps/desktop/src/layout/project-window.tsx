@@ -71,6 +71,7 @@ import { GitMerge } from "../git/merge/git-merge";
 import { OperationBanner } from "../git/merge/operation-banner";
 import { GitPrompts } from "../git/git-prompts";
 import { GitStatusWatch } from "../git/git-status";
+import { GitGutter } from "../git/gutter/git-gutter";
 import { useAppStrings } from "../i18n/app-strings";
 import { toolWindowActions } from "../keymap/actions";
 import { useKeymap, useRegisterActions, useRegistryVersion } from "../keymap/keymap-provider";
@@ -820,6 +821,7 @@ function ProjectWindowBody({
           )}
           {projectId !== undefined && <GitPrompts projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitDocuments projectId={projectId} workspace={workspace} />}
+          {projectId !== undefined && <GitGutter projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitMerge projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitRemoteFeature projectId={projectId} />}
           {projectId !== undefined && (

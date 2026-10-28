@@ -643,6 +643,8 @@ action-diff-previous-change = Previous Difference in Diff
 git-doc-commit-title = Commit { $hash }
 git-doc-compare-title = { $a } ↔ { $b }
 git-doc-revision-title = { $name } ({ $hash })
+# A revision blame document (M2-17). $name: file name, $hash: short hash
+git-doc-blame-title = { $name } (blame { $hash })
 git-doc-loading = Loading…
 git-doc-failed = Could not open: { $message }
 git-doc-bad-args = Invalid arguments for { $action }

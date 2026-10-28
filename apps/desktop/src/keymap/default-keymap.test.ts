@@ -69,6 +69,22 @@ describe("default keymap overlaps", () => {
         ["⌘⌫", ["project.removeFromList []", "editor.deleteLine [editorFocus]"]],
         // 웰컴 창의 「새 프로젝트」 시트의 만들기와 프로젝트 창 커밋 툴 윈도우 안의 커밋(M2-16).
         ["⌘↩", ["project.create []", "git.commit.run [activeToolWindow == 'commit']"]],
+        // 툴 윈도우 크기 조절(툴 윈도우에 포커스)과 에디터의 다음 · 이전 변경 위치(M2-17) — 10-ui §4.2 「툴 윈도우 · 창」 · 「Git (VCS)」.
+        // Win/Linux 의 크기 조절은 `Ctrl+Shift+화살표` 라 겹치지 않는다.
+        [
+          "⌃⌥⇧↑",
+          [
+            "toolWindow.stretchUp [toolWindowFocus && !inputFocus]",
+            "git.previousChange [editorFocus]",
+          ],
+        ],
+        [
+          "⌃⌥⇧↓",
+          [
+            "toolWindow.stretchDown [toolWindowFocus && !inputFocus]",
+            "git.nextChange [editorFocus]",
+          ],
+        ],
         // 터미널의 ⌘W 는 탭 닫기(IntelliJ 와 같다), 나머지는 탭 또는 창 닫기.
         ["⌘W", ["window.close []", "terminal.closeTab [terminalFocus]"]],
         // 텍스트 에디터의 줄로 이동과 hex 뷰어의 오프셋으로 이동 — hex 뷰어는 `editorFocus` 를 가린다(src/keymap/context.ts).

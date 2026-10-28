@@ -9,8 +9,9 @@
 //   git/commit/staging-changes.tsx).
 // - 머지: 충돌 파일 하나의 3-way 머지(src/git/merge/merge-document.tsx, M2-19).
 // - 파일 히스토리: 그 파일의 커밋 목록 + 고른 커밋에서의 diff(src/git/history/history-document.tsx, M2-18).
+// - blame: 리비전의 파일(위와 같다) + blame 주석 칸(src/git/gutter/blame-extension.ts, M2-17 — 「이 커밋 이전으로 blame」).
 
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Extension } from "@codemirror/state";
 import {
   drawSelection,
   EditorView,
@@ -21,7 +22,7 @@ import {
 } from "@codemirror/view";
 import type { GitShow, Signature } from "@pitwall/rpc-client";
 import type { IDockviewPanelProps } from "dockview-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useEditorFont } from "../../editor/editor-font";
 import type { EditorTabParams } from "../../editor/editor-tabs";
@@ -31,6 +32,8 @@ import { useI18n } from "../../i18n/i18n-provider";
 import { useKeymap } from "../../keymap/keymap-provider";
 import { useProjectStrings } from "../../layout/strings";
 import { normalizeText } from "../diff/diff-model";
+import { revisionBlameExtension } from "../gutter/blame-extension";
+import { gitGutterHost } from "../gutter/host-store";
 import { revisionHighlight, revisionSyntax } from "../diff/revision-syntax";
 import { HistoryDocument } from "../history/history-document";
 import { MergeDocument } from "../merge/merge-document";
@@ -145,11 +148,15 @@ function RevisionDocument({
   rev,
   path,
   worktree,
+  blame = false,
 }: {
   rev: string;
   path: string;
   worktree: string | undefined;
+  /** blame 주석 칸을 단다(`kind: "blame"`). */
+  blame?: boolean;
 }) {
+  const gutter = gitGutterHost((s) => s.host);
   const T = useProjectStrings();
   const D = T.git.documents;
   const source = gitDocumentSource((s) => s.source);
@@ -180,6 +187,10 @@ function RevisionDocument({
   }, [source, rev, path, worktree]);
 
   const ready = text && !("failed" in text) && text.side.kind === "text" ? text : undefined;
+  const annotated = useMemo<Extension>(
+    () => (blame && gutter ? revisionBlameExtension(gutter, rev, path) : []),
+    [blame, gutter, rev, path],
+  );
   useEffect(() => {
     const parent = host.current;
     if (!parent || !ready || ready.side.kind !== "text") return;
@@ -201,11 +212,12 @@ function RevisionDocument({
           revisionHighlight(
             source?.syntax && revisionSyntax(source.syntax, ready.language, content),
           ),
+          annotated,
         ],
       }),
     });
     return () => view.destroy();
-  }, [ready, source, font]);
+  }, [ready, source, font, annotated]);
 
   let body;
   if (!text) body = <Status text={D.loading} />;
@@ -277,6 +289,8 @@ export function GitDocumentPanel({
       return <MergeDocument path={spec.path} worktree={params.worktree} panelId={panelId} />;
     case "history":
       return <HistoryDocument path={spec.path} worktree={params.worktree} />;
+    case "blame":
+      return <RevisionDocument rev={spec.rev} path={spec.path} worktree={params.worktree} blame />;
   }
 }
 

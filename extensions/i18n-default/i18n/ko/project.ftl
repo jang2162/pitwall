@@ -625,6 +625,8 @@ action-diff-previous-change = diff 에서 이전 차이
 git-doc-commit-title = 커밋 { $hash }
 git-doc-compare-title = { $a } ↔ { $b }
 git-doc-revision-title = { $name } ({ $hash })
+# 리비전 blame 문서(M2-17). $name: 파일 이름, $hash: 짧은 해시
+git-doc-blame-title = { $name } (blame { $hash })
 git-doc-loading = 읽는 중…
 git-doc-failed = 열지 못했다: { $message }
 git-doc-bad-args = { $action } 에 넘긴 값이 맞지 않다

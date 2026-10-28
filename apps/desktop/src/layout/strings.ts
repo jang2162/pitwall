@@ -271,6 +271,7 @@ export function projectStrings(t: Translate) {
         commitTitle: (hash: string) => t("git-doc-commit-title", { hash }),
         compareTitle: (a: string, b: string) => t("git-doc-compare-title", { a, b }),
         revisionTitle: (name: string, hash: string) => t("git-doc-revision-title", { name, hash }),
+        blameTitle: (name: string, hash: string) => t("git-doc-blame-title", { name, hash }),
         loading: t("git-doc-loading"),
         failed: (message: string) => t("git-doc-failed", { message }),
         badArgs: (action: string) => t("git-doc-bad-args", { action }),

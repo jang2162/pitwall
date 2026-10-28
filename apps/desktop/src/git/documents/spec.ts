@@ -32,7 +32,12 @@ export type GitDocumentSpec =
    * 파일 히스토리(F5-16, M2-18): 이름 바뀜을 따라가는 그 파일의 커밋 목록 + 고른 커밋에서의 그 파일 diff. `path` 는 HEAD 에서의
    * 경로(저장소 꼭대기 기준, `/`). 내용은 `git.fileHistory` 이고 HEAD 가 움직이면 다시 받는다(src/git/history/history-document.tsx).
    */
-  | { kind: "history"; path: string };
+  | { kind: "history"; path: string }
+  /**
+   * 리비전의 파일 읽기 전용 + blame 주석(M2-17 의 「이 커밋 이전으로 blame」). `rev` 는 커밋 해시, `path` 는 저장소 꼭대기 기준(`/`).
+   * 주석은 그 리비전의 `git.blame` 이다(src/git/gutter/blame-extension.ts `revisionBlameExtension`).
+   */
+  | { kind: "blame"; rev: string; path: string };
 
 const sideKey = (side: DiffSide | undefined) =>
   side === undefined ? "-" : side.kind === "commit" ? side.rev : side.kind;
@@ -52,6 +57,8 @@ export function gitDocumentKey(spec: GitDocumentSpec): string {
       return `git:merge:${spec.path}`;
     case "history":
       return `git:history:${spec.path}`;
+    case "blame":
+      return `git:blame:${spec.rev}:${spec.path}`;
   }
 }
 
@@ -65,6 +72,7 @@ export function gitDocumentDetail(spec: GitDocumentSpec): string {
     case "compare":
       return `${spec.a}..${spec.b}`;
     case "revision":
+    case "blame":
       return `${spec.path} @ ${spec.rev}`;
     case "diff":
       return spec.oldPath ? `${spec.oldPath} → ${spec.path}` : spec.path;
@@ -85,6 +93,7 @@ export function isGitDocumentSpec(value: unknown): value is GitDocumentSpec {
     case "compare":
       return str("a") && str("b");
     case "revision":
+    case "blame":
       return str("rev") && str("path");
     case "diff":
       return str("path") && typeof v.to === "object" && v.to !== null;

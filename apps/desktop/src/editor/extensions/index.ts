@@ -30,10 +30,13 @@ import { Compartment, type Extension, Facet, type TransactionSpec } from "@codem
 import type { EditorView, Panel } from "@codemirror/view";
 import type { Judgment } from "@pitwall/rpc-client";
 
+import type { EditorGit } from "../../git/gutter/gutter-extension";
 import { base } from "./base";
+import { blame } from "./blame";
 import { cursorReport } from "./cursor-report";
 import type { SyntaxSessions } from "../syntax-sessions";
 import { editing } from "./editing";
+import { gitGutter } from "./git-gutter";
 import { highlight } from "./highlight";
 import { navigation } from "./navigation";
 import { operations } from "./operations";
@@ -86,6 +89,8 @@ export interface EditorFeatureContext {
   readonly font: EditorFont;
   /** 찾기 · 바꾸기 패널(`operations`, M1-18). 텍스트 뷰어가 그 자리에 찾기 막대(../find-bar.tsx)를 그린다. */
   readonly createFindPanel: (view: EditorView) => Panel;
+  /** 창의 git 거터 · blame 호스트와 이 문서의 텍스트(`gitGutter` · `blame`, M2-17). 프로젝트 창만 넘긴다. */
+  readonly git?: EditorGit;
 }
 
 export interface EditorFeature {
@@ -108,6 +113,8 @@ export const EDITOR_FEATURES: readonly EditorFeature[] = [
   highlight,
   readOnly,
   cursorReport,
+  gitGutter,
+  blame,
   editing,
   operations,
   navigation,

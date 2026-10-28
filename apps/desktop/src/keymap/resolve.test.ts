@@ -21,6 +21,8 @@ import { branchActions } from "../git/git-branch-feature";
 import { gitDocumentActions } from "../git/documents/git-documents";
 import { fileHistoryAction } from "../git/history/git-history";
 import { gitHistoryStrings } from "../git/history/strings";
+import { gitGutterActions } from "../git/gutter/git-gutter";
+import { gitGutterStrings } from "../git/gutter/strings";
 import { FileTreeModel } from "../file-tree/tree-model";
 import { openWithActions } from "../open-with/open-with";
 import { findActions } from "../search/find-actions";
@@ -127,6 +129,11 @@ const ACTION_IDS = new Set(
       strings: KO_APP.actions,
       openSearch() {},
       canSwitchProjects: true,
+    }),
+    ...gitGutterActions({
+      view: () => undefined,
+      strings: gitGutterStrings((id) => id),
+      openBlame() {},
     }),
     ...branchActions({
       strings: { branches: "branches", vcsOperations: "vcs" },

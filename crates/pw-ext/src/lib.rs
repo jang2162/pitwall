@@ -147,6 +147,7 @@ mod tests {
             "file-window.ftl",
             "git-commit.ftl",
             "git-dialogs.ftl",
+            "git-gutter.ftl",
             "git-history.ftl",
             "git-log.ftl",
             "git-merge.ftl",

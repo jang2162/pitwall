@@ -423,6 +423,29 @@ mac = "cmd+alt+z"
 win = "ctrl+alt+z"
 linux = "ctrl+alt+z"
 
+# 에디터 거터의 다음 · 이전 변경 위치와 blame 주석 토글(M2-17, src/git/gutter/git-gutter.tsx). 에디터에 포커스가 있을 때만.
+
+[[bindings]]
+action = "git.nextChange"
+mac = "ctrl+alt+shift+down"
+win = "ctrl+alt+shift+down"
+linux = "ctrl+alt+shift+down"
+when = "editorFocus"
+
+[[bindings]]
+action = "git.previousChange"
+mac = "ctrl+alt+shift+up"
+win = "ctrl+alt+shift+up"
+linux = "ctrl+alt+shift+up"
+when = "editorFocus"
+
+[[bindings]]
+action = "git.toggleBlame"
+mac = "ctrl+alt+a"
+win = "ctrl+alt+a"
+linux = "ctrl+alt+a"
+when = "editorFocus"
+
 # diff 뷰의 다음 · 이전 차이(M2-15, src/git/documents/git-documents.tsx)는 diff 뷰에 포커스가 있을 때만
 # (`diffFocus`) — 같은 F7 을 쓰는 디버그 스텝 인투(M6)와 범위가 갈린다.
 

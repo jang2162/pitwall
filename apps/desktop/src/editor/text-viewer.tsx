@@ -21,6 +21,7 @@ import { EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { gitGutterHost } from "../git/gutter/host-store";
 import { useProjectStrings } from "../layout/strings";
 import { useTheme } from "../theme/theme-switcher";
 import { CompareView, DiskBanner } from "./disk-banner";
@@ -48,6 +49,11 @@ function useFeatureContext(
   const live = text?.live;
   const judgment = text?.judgment;
   const readOnly = text?.readOnly;
+  const gutterHost = gitGutterHost((s) => s.host);
+  const git = useMemo(
+    () => (gutterHost && live ? { host: gutterHost, live } : undefined),
+    [gutterHost, live],
+  );
   return useMemo(
     () =>
       live && judgment && readOnly !== undefined
@@ -63,6 +69,7 @@ function useFeatureContext(
             syntax: workspace.syntax,
             font,
             createFindPanel,
+            ...(git && { git }),
           }
         : undefined,
     [
@@ -76,6 +83,7 @@ function useFeatureContext(
       appearance,
       font,
       createFindPanel,
+      git,
     ],
   );
 }

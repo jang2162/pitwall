@@ -1,4 +1,4 @@
-// 빠진 번역을 잡는다: 내장 언어(ko · en)가 같은 메시지 집합을 갖는지, 화면 코드(welcome · layout · settings · file-tree · search · file-window · git/log · git/merge · git/commit · git/history 의 strings.ts ·
+// 빠진 번역을 잡는다: 내장 언어(ko · en)가 같은 메시지 집합을 갖는지, 화면 코드(welcome · layout · settings · file-tree · search · file-window · git/gutter · git/log · git/merge · git/commit · git/history 의 strings.ts ·
 // git/branch-strings.ts · app-strings.ts)와 네이티브 메뉴 · 대화상자 · OS 창 제목(src-tauri/src/menu.rs · shell_command.rs · windows.rs)이 쓰는 id 가
 // 두 언어에 모두 있고 오류 없이 만들어지는지. 폴백(en)이 빠진 메시지를 덮어 화면에서는
 // 티가 나지 않으므로 여기서 언어마다 따로 본다.
@@ -15,6 +15,7 @@ import { fileWindowStrings } from "../file-window/strings";
 import { branchStrings } from "../git/branch-strings";
 import { gitCommitStrings } from "../git/commit/strings";
 import { gitDialogStrings } from "../git/dialogs/strings";
+import { gitGutterStrings } from "../git/gutter/strings";
 import { gitHistoryStrings } from "../git/history/strings";
 import { gitLogStrings } from "../git/log/strings";
 import { gitMergeStrings } from "../git/merge/strings";
@@ -95,6 +96,7 @@ describe("built-in translations", () => {
     callAll(branchStrings(t));
     for (const kind of ["merge", "rebase", "cherryPick", "revert", "bisect", "am"] as const)
       branchStrings(t).status.operation(kind);
+    callAll(gitGutterStrings(t));
     callAll(gitLogStrings(t));
     callAll(gitMergeStrings(t));
     callAll(gitHistoryStrings(t));
