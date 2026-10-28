@@ -133,3 +133,52 @@ fn an_untrusted_project_runs_no_filter_inside_its_submodule() {
     assert_eq!(dirty_of(&diff), Some(true), "{diff:#?}");
     assert!(marks.join("clean").exists());
 }
+
+/// 사람의 전역 설정의 필터 드라이버도 미신뢰 프로젝트의 서브모듈 안에서는 돌지 않는다 — 서브모듈의 `.gitattributes` 가 그 드라이버를
+/// 골라도(바깥 저장소처럼 `without_filter_drivers` 로 뗀다). 신뢰하면 돈다.
+#[test]
+fn a_global_filter_driver_does_not_run_inside_an_untrusted_submodule() {
+    let r = TestRepo::with_commit();
+    let config = isolate_global_config(r.base());
+    let sub = r.root().join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    r.git_in(&sub, &["init", "-q"]);
+    fs::write(sub.join("s.txt"), "one\n").unwrap();
+    fs::write(sub.join(".gitattributes"), "* filter=lfs\n").unwrap();
+    r.commit_all_in(&sub, "s1");
+    r.commit_all("add sub");
+    let marks = r.base().join("marks");
+    fs::create_dir_all(&marks).unwrap();
+    let clean = r.base().join("clean.sh");
+    fs::write(
+        &clean,
+        format!(
+            "#!/bin/sh\necho clean >> '{}'\ncat\n",
+            marks.join("clean").display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&clean, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        &config,
+        format!("[filter \"lfs\"]\n\tclean = {}\n", clean.display()),
+    )
+    .unwrap();
+    fs::write(sub.join("s.txt"), "two\n").unwrap();
+    let later = std::time::SystemTime::now() + Duration::from_secs(5);
+    fs::File::options()
+        .write(true)
+        .open(sub.join("s.txt"))
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    let repo = Repo::new(r);
+    assert!(!repo.f.projects.is_trusted(&repo.id));
+
+    assert_eq!(dirty_of(&repo.diff(None, DiffSide::WorkTree)), Some(true));
+    assert!(!marks.join("clean").exists());
+
+    repo.f.trust(&repo.id, true);
+    assert_eq!(dirty_of(&repo.diff(None, DiffSide::WorkTree)), Some(true));
+    assert!(marks.join("clean").exists());
+}

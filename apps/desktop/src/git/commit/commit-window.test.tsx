@@ -155,7 +155,7 @@ vi.mock("../../tauri-transport", async () => {
             return reply({ path: params.path, entries: [] });
           case "fs.read":
             return reply({
-              path: params.path,
+              path: params.path as string,
               size: state().workTree.length,
               mtimeMs: 1,
               offset: 0,
@@ -541,6 +541,23 @@ it("fills the HEAD message for amend and restores the box when amend is turned o
   await vi.waitFor(() => expect(calls("git.commit")).toHaveLength(1));
   expect(calls("git.commit")[0]!.params).toMatchObject({ amend: true, signoff: true });
   await vi.waitFor(() => expect(commitPanel.getState().amend).toBe(false));
+});
+
+it("does not roll back when the confirmation is cancelled", async () => {
+  await openCommitWindow();
+  await click(row("changes:src/app.rs")!);
+  await act(async () => {
+    windowRegistry().run("git.rollback");
+  });
+  const cancel = await vi.waitFor(() => {
+    const b = [...document.querySelectorAll("button")].find((x) => x.textContent === "취소");
+    expect(b).toBeDefined();
+    return b!;
+  });
+  await click(cancel);
+  await settle(50);
+  expect(calls("git.discard")).toHaveLength(0);
+  expect(calls("git.unstage")).toHaveLength(0);
 });
 
 it("rolls back the selected file with ⌘⌥Z only after the confirmation", async () => {
