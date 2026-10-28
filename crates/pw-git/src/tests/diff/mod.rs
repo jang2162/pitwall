@@ -13,6 +13,8 @@ mod submodule_dirty;
 mod untrusted;
 mod view_fixture;
 #[cfg(unix)]
+mod work_tree_form;
+#[cfg(unix)]
 mod worktree;
 
 use super::*;

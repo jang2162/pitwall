@@ -4,11 +4,14 @@
 //! `pw_fs::limits::READ_ONLY_MAX`)을 넘는 blob 은 객체 헤더로 크기만 알리고 풀지 않는다(`tooLarge` — 범위 읽기도 하지 않는다,
 //! 13-m2-plan M2-04 메모). 편집 상한(5 MiB)을 넘는 blob 은 Host 전체에서 [`BIG_BLOBS_AT_ONCE`] 개씩만 함께 푼다 — 메모리가
 //! 50 MiB × 요청 수로 늘지 않게(`pw-fs` 검색의 큰 파일 상한과 같은 방식). `git.diff` 의 큰 파일도 같은 차례를 쓴다.
+//!
+//! `workTreeForm`(에디터 거터의 기준, 13-m2-plan M2-17)은 푼 blob 을 `git checkout` 의 내장 변환으로 작업 트리 꼴로 바꾼다
+//! ([`work_tree_form`]). 거터는 파일을 열 때마다 저절로 부르므로 외부 필터 드라이버는 신뢰한 프로젝트에서도 돌리지 않는다.
 
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
-use gix::bstr::ByteSlice;
+use gix::bstr::{BStr, ByteSlice};
 use gix::objs::tree::EntryKind;
 use pw_fs::judge::{Bom, judge};
 use pw_fs::limits::{EDITABLE_MAX, READ_ONLY_MAX, SNIFF_BYTES};
@@ -71,6 +74,11 @@ pub fn blob(repo: &gix::Repository, params: &GitBlobParams) -> Result<GitBlob, R
             return Err(RpcError::invalid_params(format!("`{path}` is a submodule")));
         }
     };
+    if params.work_tree_form && (params.offset.is_some() || params.length.is_some()) {
+        return Err(RpcError::invalid_params(
+            "`workTreeForm` reads the whole blob: drop `offset` and `length`",
+        ));
+    }
     if params.length.is_some_and(|l| l > READ_ONLY_MAX) {
         return Err(RpcError::invalid_params(format!(
             "a range read is at most {READ_ONLY_MAX} bytes"
@@ -88,6 +96,7 @@ pub fn blob(repo: &gix::Repository, params: &GitBlobParams) -> Result<GitBlob, R
             eof: false,
             content: None,
             judgment: None,
+            filter: None,
         });
     }
     let _seat = if size > EDITABLE_MAX {
@@ -100,7 +109,30 @@ pub fn blob(repo: &gix::Repository, params: &GitBlobParams) -> Result<GitBlob, R
         None
     };
     let object = repo.find_object(id).map_err(internal)?;
-    let data = &object.data;
+    let converted;
+    let data: &[u8] = if params.work_tree_form && kind != EntryKind::Link {
+        match work_tree_form(repo, path, &object.data)? {
+            Form::Bytes(bytes) => {
+                converted = bytes;
+                &converted
+            }
+            Form::Filtered(driver) => {
+                return Ok(GitBlob {
+                    id: id.to_string(),
+                    mode: mode.to_owned(),
+                    size,
+                    too_large: false,
+                    offset: 0,
+                    eof: true,
+                    content: None,
+                    judgment: None,
+                    filter: Some(driver),
+                });
+            }
+        }
+    } else {
+        &object.data
+    };
     let start = usize::try_from(offset)
         .unwrap_or(usize::MAX)
         .min(data.len());
@@ -128,7 +160,117 @@ pub fn blob(repo: &gix::Repository, params: &GitBlobParams) -> Result<GitBlob, R
         eof,
         content: Some(pw_fs::content(params.bytes, &judgment, range, bom)),
         judgment: Some(judgment),
+        filter: None,
     })
+}
+
+/// [`work_tree_form`] 의 결과.
+enum Form {
+    /// 작업 트리 꼴의 바이트.
+    Bytes(Vec<u8>),
+    /// 그 경로에 외부 필터 드라이버가 걸려 있다(드라이버 이름).
+    Filtered(String),
+}
+
+/// blob 을 `git checkout` 이 쓰는 꼴로 바꾼다: `ident` → 줄바꿈(`core.autocrlf` · `core.eol` · `text` · `eol` 속성) →
+/// `working-tree-encoding`(gix 의 필터 파이프라인 — 속성은 작업 트리의 `.gitattributes`, 맨 저장소면 HEAD 의 것).
+///
+/// 외부 드라이버(`filter.<x>.smudge` · `process`)는 돌리지 않는다. 그 경로의 `filter` 속성이 가리키는 드라이버가 설정에 있으면
+/// 바꾸지 않고 [`Form::Filtered`] 다 — 드라이버가 없는 `filter` 속성은 git 처럼 무시한다. 변환은 드라이버를 모두 뗀 핸들
+/// ([`super::changes::without_filter_drivers`])로 해서 판정이 빗나가도 프로세스가 뜨지 않는다.
+fn work_tree_form(repo: &gix::Repository, path: &str, data: &[u8]) -> Result<Form, RpcError> {
+    let rela = path.as_bytes().as_bstr();
+    let drivers = gix::filter::Pipeline::options(repo)
+        .map_err(internal)?
+        .drivers;
+    let (pipeline, _index) = repo.filter_pipeline(None).map_err(internal)?;
+    let (_, mut attributes) = pipeline.into_parts();
+    let mut found =
+        attributes.selected_attribute_matches(["filter", "ident", "working-tree-encoding"]);
+    attributes
+        .at_entry(rela, None, &repo.objects)
+        .map_err(internal)?
+        .matching_attributes(&mut found);
+    let mut ident = false;
+    for m in found.iter_selected() {
+        match m.assignment.name.as_str() {
+            "ident" => {
+                ident = m.assignment.state.is_set();
+                continue;
+            }
+            "working-tree-encoding" => {
+                if let gix::attrs::StateRef::Value(label) = m.assignment.state {
+                    reproducible_encoding(path, label.as_bstr())?;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if let gix::attrs::StateRef::Value(name) = m.assignment.state {
+            let name = name.as_bstr();
+            if drivers
+                .iter()
+                .any(|d| d.name == name && (d.smudge.is_some() || d.process.is_some()))
+            {
+                return Ok(Form::Filtered(name.to_str_lossy().into_owned()));
+            }
+        }
+    }
+    let mut plain = repo.clone();
+    super::changes::without_filter_drivers(&mut plain)?;
+    let (mut pipeline, _index) = plain.filter_pipeline(None).map_err(internal)?;
+    use gix::filter::plumbing::pipeline::convert::{ToWorktreeOutcome, to_worktree};
+    let outcome = pipeline
+        .convert_to_worktree(
+            data,
+            rela,
+            to_worktree::Options {
+                can_delay: gix::filter::plumbing::driver::apply::Delay::Forbid,
+                unknown_encoding: to_worktree::UnknownEncoding::Fail,
+            },
+        )
+        .map_err(internal)?;
+    let bytes = match outcome {
+        ToWorktreeOutcome::Unchanged(bytes) | ToWorktreeOutcome::Buffer(bytes) => bytes.to_vec(),
+        ToWorktreeOutcome::Process(_) => {
+            return Err(RpcError::internal(format!(
+                "`{path}` went through a filter driver although none is configured"
+            )));
+        }
+    };
+    Ok(Form::Bytes(if ident {
+        git_ident(
+            bytes,
+            &gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, data)
+                .map_err(internal)?
+                .to_string(),
+        )
+    } else {
+        bytes
+    }))
+}
+
+/// `working-tree-encoding` 의 인코딩을 git 과 같은 바이트로 쓸 수 있는가. gix 는 encoding_rs 로 쓰는데, encoding_rs 는 WHATWG
+/// 규칙대로 UTF-16 계열을 UTF-8 로 쓴다(`output_encoding`) — 그 파일은 git 과 다른 바이트가 된다. 이름을 모르는 인코딩(git 은
+/// iconv 로 읽는 `UTF-16LE-BOM` · `UTF-32` 등)도 쓸 수 없다. 둘 다 틀린 기준 대신 invalid params 다.
+fn reproducible_encoding(path: &str, label: &BStr) -> Result<(), RpcError> {
+    match encoding_rs::Encoding::for_label(label) {
+        Some(encoding) if encoding.output_encoding() == encoding => Ok(()),
+        _ => Err(RpcError::invalid_params(format!(
+            "`{path}` has working-tree-encoding `{label}`, which cannot be written like git does"
+        ))),
+    }
+}
+
+/// gix(gix-filter 0.36)의 `ident` 는 `$Id: <해시>$` 로 펼치고 git 은 `$Id: <해시> $` 로 펼친다(convert.c `ident_to_worktree`).
+/// git 은 `$Id$` · `$Id: …$` 를 모두 그 꼴로 바꾸므로, gix 가 펼친 자리(`$Id: <이 blob 의 해시>$`)는 모두 git 이 펼친 자리다.
+fn git_ident(bytes: Vec<u8>, hash: &str) -> Vec<u8> {
+    let theirs = format!("$Id: {hash}$");
+    let ours = format!("$Id: {hash} $");
+    if bytes.find(theirs.as_bytes()).is_none() {
+        return bytes;
+    }
+    bytes.replace(theirs.as_bytes(), ours.as_bytes())
 }
 
 fn not_found(path: &str, at: &str) -> RpcError {
