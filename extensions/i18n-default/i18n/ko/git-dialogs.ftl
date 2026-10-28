@@ -63,6 +63,8 @@ git-undo-restored = { $name } 을(를) 되살렸다
 # $name: 브랜치
 git-undo-removed = { $name } 을(를) 지웠다
 git-undo-failed = 되돌리기 실패
+# $name: 브랜치, $commit: 지금 가리키는 짧은 해시(없으면 ∅)
+git-undo-moved-since = { $name } 이(가) 그사이 { $commit } 로 움직였다 — 되돌리지 않는다
 
 ## reset 확인.
 

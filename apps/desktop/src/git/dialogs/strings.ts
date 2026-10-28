@@ -54,6 +54,7 @@ export function gitDialogStrings(t: Translate) {
       restored: (name: string) => t("git-undo-restored", { name }),
       removed: (name: string) => t("git-undo-removed", { name }),
       failed: t("git-undo-failed"),
+      movedSince: (name: string, commit: string) => t("git-undo-moved-since", { name, commit }),
     },
     reset: {
       title: (mode: string, commit: string) => t("git-reset-title", { mode, commit }),

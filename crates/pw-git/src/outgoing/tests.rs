@@ -107,6 +107,12 @@ async fn unknown_branches_commits_and_limits_are_invalid_params() {
         params(&f, "main", Some("xyz".into()), 10),
         params(&f, "main", None, 0),
         params(&f, "main", None, MAX_COMMITS + 1),
+        params(&f, "../main", None, 10),
+        params(&f, "-x", None, 10),
+        GitPushCommitsParams {
+            remote: "origin/../x".into(),
+            ..params(&f, "main", None, 10)
+        },
     ] {
         let e = git.push_commits(&p).unwrap_err();
         assert_eq!(e.code, pw_rpc::code::INVALID_PARAMS, "{p:?}: {e:?}");

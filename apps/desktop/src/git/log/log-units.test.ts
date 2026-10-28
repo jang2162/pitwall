@@ -311,6 +311,7 @@ describe("LogOps", () => {
       notify: (n) => notes.push(n.title),
       strings: T,
       dialogStrings: D,
+      branches: () => new Set(["main"]),
       moved,
     });
     return { ops, calls, confirms, notes, moved };
@@ -463,6 +464,45 @@ describe("LogOps", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("asks a new branch name against the existing branches, then offers undoing the branch it made", async () => {
+    const asked: { taken: ReadonlySet<string>; checkout?: boolean }[] = [];
+    const moved = vi.fn();
+    const calls: string[] = [];
+    const ops = new LogOps({
+      client: {
+        call: async (method: string) => {
+          calls.push(method);
+          return {
+            workTree: "/r",
+            refName: "refs/heads/topic",
+            commit: "t".repeat(40),
+            head: null,
+          };
+        },
+      } as unknown as RpcClient,
+      projectId: "p1",
+      askName: async () => undefined,
+      askBranch: async (q) => {
+        asked.push(q);
+        return { name: "topic", checkout: false };
+      },
+      confirm: async () => true,
+      notify: () => {},
+      strings: T,
+      dialogStrings: D,
+      branches: () => new Set(["main", "feat/x"]),
+      moved,
+    });
+    await ops.createBranch("t".repeat(40), "new branch");
+    expect([...asked[0]!.taken]).toEqual(["main", "feat/x"]);
+    expect(asked[0]!.checkout).toBe(false);
+    expect(calls).toEqual(["git.branch.create"]);
+    expect(moved).toHaveBeenCalledWith(
+      { refName: "refs/heads/topic", previous: null, current: "t".repeat(40) },
+      { kind: "branchCreated" },
+    );
+  });
+
   it("reverts newest first and reports a conflict stop without an undo", async () => {
     const { ops, calls, notes, moved } = opsWith(() => ({
       workTree: "/r",
@@ -496,6 +536,7 @@ describe("LogOps", () => {
       notify: (n) => notes.push(n),
       strings: T,
       dialogStrings: D,
+      branches: () => new Set(["main"]),
       moved: () => {},
     });
     await ops.checkoutCommit("c", "checkout");

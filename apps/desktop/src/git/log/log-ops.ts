@@ -40,6 +40,8 @@ export interface LogOpsDeps {
   notify(input: NotificationInput): void;
   strings: GitLogStrings;
   dialogStrings: GitDialogStrings;
+  /** 이미 있는 로컬 브랜치 이름(새 브랜치 이름이 겹치면 다이얼로그가 막는다). */
+  branches(): ReadonlySet<string>;
   /** ref 가 움직였다 — [되돌리기] 를 단다. `kind` 가 되돌리는 법이다. */
   moved(move: GitRefMove, kind: UndoKind): void;
 }
@@ -164,11 +166,11 @@ export class LogOps {
       hint: D.createFrom(short(hash)),
       initial: "",
       confirm: D.create,
-      taken: new Set(),
+      taken: this.deps.branches(),
       checkout: false,
     });
     if (answer === undefined) return;
-    await this.run(label, () =>
+    const result = await this.run(label, () =>
       this.deps.client.call("git.branch.create", {
         ...this.base,
         name: answer.name,
@@ -176,6 +178,12 @@ export class LogOps {
         ...(answer.checkout && { checkout: true }),
       }),
     );
+    // 만든 브랜치에도 [되돌리기](지운다 — 그사이 움직였으면 거절, ../dialogs/undo.ts).
+    if (result)
+      this.deps.moved(
+        { refName: result.refName, previous: null, current: result.commit },
+        { kind: "branchCreated" },
+      );
   }
 
   async createTag(hash: string, label: string) {

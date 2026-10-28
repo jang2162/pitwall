@@ -21,7 +21,7 @@ import { useNotify } from "../../notifications/notifications";
 import { useActiveWorktree } from "../../open-with/active-worktree";
 import { useHost } from "../../rpc/host";
 import { useTheme } from "../../theme/theme-switcher";
-import { useBranch } from "../branch-state";
+import { useBranch, windowBranch } from "../branch-state";
 import { BranchPanel } from "./branch-panel";
 import { CommitDetail } from "./commit-detail";
 import { FilterBar } from "./filter-bar";
@@ -30,7 +30,7 @@ import { type DropTarget, LogList } from "./log-list";
 import { EMPTY_QUERY, LogModel, type LogQuery, type LogSource } from "./log-model";
 import { useGitDialogs } from "../dialogs/git-dialogs";
 import { useGitDialogStrings } from "../dialogs/strings";
-import type { UndoKind } from "../dialogs/undo";
+import { type UndoKind, canUndo } from "../dialogs/undo";
 import { LogOps, refFullName, short } from "./log-ops";
 import { useGitLogStrings } from "./strings";
 
@@ -192,6 +192,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
             notify,
             strings: T,
             dialogStrings: D,
+            branches: () => new Set((windowBranch().get().refs?.branches ?? []).map((b) => b.name)),
             moved: (move, kind) =>
               setMoves((m) => [
                 { move, kind },
@@ -303,7 +304,7 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
                 move.current ? short(move.current) : "∅",
               )}
             </span>
-            {move.previous && (
+            {canUndo(move, kind) && (
               <button
                 type="button"
                 className="rounded-sm border border-ui-border px-2 hover:bg-ui-hover"

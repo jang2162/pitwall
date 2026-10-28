@@ -235,7 +235,7 @@ pub fn refused(refusal: &GitPushRefusal) -> RpcError {
 }
 
 /// push 의 입력(`git.push` · `git.push.plan` 이 같다): 이름 꼴을 git 을 띄우기 전에 거절한다.
-fn check_push_input(
+pub(crate) fn check_push_input(
     branch: Option<&str>,
     remote: Option<&str>,
     remote_ref: Option<&str>,

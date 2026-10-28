@@ -3,7 +3,8 @@
 // - 보내기 전에 `git.push.plan` 을 보인다: 보낼 곳(브랜치 → 원격 : 원격 ref)과 그것을 정한 것, 터미널의 `git push` 와의 차이
 //   (`terminal` — 보통 `null`), git 이 거절할 상황이면 그 까닭과 후보(고르면 그 후보를 `remoteRef` 로 다시 계획한다). 보낼 커밋은
 //   `git.push.commits`(원격에 있다고 아는 마지막 커밋 `lease.commit` 부터).
-// - 보낼 때는 계획에 쓴 입력 그대로에 그 계획의 `remote` · `remoteRef` 를 `expectedTarget` 으로 싣는다 — 계획 뒤에 설정이 바뀌어
+// - 보낼 때는 계획에 쓴 입력 그대로에 계획의 브랜치(`branch` — 그사이 체크아웃해도 계획한 브랜치가 간다)와 그 계획의 `remote` ·
+//   `remoteRef` 를 `expectedTarget` 으로 싣는다 — 계획 뒤에 설정이 바뀌어
 //   대상이 달라졌으면 Host 가 `-32004` 로 아무것도 보내지 않고, 다이얼로그는 계획을 다시 보인다(`2102` 도 같다). 대상을 입력
 //   `remoteRef` 로 고정해 보내지 않는다 — 그러면 그 검사가 늘 맞아 바뀐 설정을 못 본다.
 // - force 는 force-with-lease 하나뿐이다: 「강제 푸시」 를 고르면 보내기 전에 위험 다이얼로그로 묻고, `forceWithLease` 에 계획의
@@ -154,6 +155,9 @@ export function PushDialog({
       const result = await deps.client.call("git.push", {
         ...base,
         ...input,
+        // 계획한 브랜치를 고정한다 — 없으면 Host 가 보낼 때의 HEAD 로 다시 세어, 그사이 체크아웃한 다른 브랜치가 계획의 대상 ·
+        // lease 로 나갈 수 있다(대상이 같으면 expectedTarget 이 막지 못한다).
+        branch: plan.branch,
         setUpstream,
         forceWithLease: force ? lease : null,
         expectedTarget: { remote: plan.remote, remoteRef },

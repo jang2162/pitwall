@@ -767,6 +767,13 @@ it("creates a branch and cherry-picks the selected commits oldest first from the
     name: "topic",
     start: hashOf(3),
   });
+  // 만든 브랜치에도 [되돌리기] 띠가 선다(지운다 — 그사이 움직였으면 거절).
+  await vi.waitFor(() => {
+    const row = [...document.querySelectorAll<HTMLElement>("[role=status]")].find((e) =>
+      e.textContent?.startsWith("topic: ∅ →"),
+    );
+    expect(row?.textContent).toContain("되돌리기");
+  });
 
   await clickRow(3);
   await clickRow(5, { metaKey: true });

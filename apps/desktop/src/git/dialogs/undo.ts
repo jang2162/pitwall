@@ -8,7 +8,8 @@
 //   다르면 Host 가 conflict 로 새 목록을 주고, 한 번 더 묻는다. 그사이 HEAD 커밋 · HEAD 의 ref 가 바뀌었으면 Host 의 거절(conflict)을
 //   그대로 오류 알림으로 보인다 — 아무것도 하지 않는다.
 // - 지운 브랜치(`current: null`): `previous` 에 같은 이름으로 다시 만든다(체크아웃하지 않는다).
-// - 만든 브랜치(`previous: null`): 그 브랜치를 지운다 — 병합 안 됐다고 git 이 거절하면(2101) 원문을 보이고 「강제 삭제」 를 물은 뒤에만.
+// - 만든 브랜치(`previous: null`): 그 브랜치를 지운다 — 그사이 움직였으면(지금 끝이 `current` 가 아니면) 그 사실을 알리고 지우지
+//   않는다. 병합 안 됐다고 git 이 거절하면(2101) 원문과 지금 끝을 보이고 「강제 삭제」 를 물은 뒤에만.
 //
 // 부르는 연결은 프로젝트 창의 연결이다(Host 는 git 쓰기를 그 프로젝트 창의 연결로만 받는다).
 
@@ -111,15 +112,31 @@ export async function undoMove(deps: UndoDeps, move: GitRefMove, kind: UndoKind)
       return true;
     }
     if (kind.kind === "branchCreated") {
+      // 그사이 움직였으면(커밋을 쌓았으면) 지우지 않는다 — 기대 해시를 받는 삭제가 없으므로 지금 끝을 먼저 읽고, 병합 안 됨
+      // (2101)의 `data.commit` 으로 한 번 더 본다.
+      const refused = (now: string | null) => {
+        deps.notify({
+          level: "error",
+          title: T.undo.failed,
+          body: T.undo.movedSince(name, shortHash(now)),
+        });
+        return false;
+      };
+      const refs = await deps.client.call("git.refs", base);
+      const now = refs.branches.find((b) => b.refName === move.refName)?.commit ?? null;
+      if (now !== move.current) return refused(now);
       const remove = (force: boolean) =>
         deps.client.call("git.branch.delete", { ...base, name, force });
       try {
         await remove(false);
       } catch (e) {
         if (!(e instanceof RpcCallError && e.code === NOT_MERGED)) throw e;
+        const data = (e.data ?? {}) as { commit?: unknown };
+        const tip = typeof data.commit === "string" ? data.commit : null;
+        if (tip !== move.current) return refused(tip);
         const ok = await deps.confirm({
           title: T.branch.forceTitle(name),
-          body: T.branch.forceBody(name, shortHash(move.current)),
+          body: T.branch.forceBody(name, shortHash(tip)),
           detail: errorText(e),
           confirm: T.branch.forceConfirm,
           danger: true,

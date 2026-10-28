@@ -90,6 +90,11 @@ impl Git {
         if params.limit == 0 || params.limit > MAX_COMMITS {
             return Err(invalid(format!("limit must be 1 ~ {MAX_COMMITS}")));
         }
+        // `git.push` 와 같은 이름 검사(브랜치는 `check-ref-format --branch`, 원격은 평범한 이름) — ref 이름에 그대로 붙이므로.
+        crate::remote::check_push_input(Some(&params.branch), Some(&params.remote), None)?;
+        // 원격 이름은 `refs/remotes/<원격>/` 접두가 되므로 ref 이름의 규칙(`..` · 제어 문자 등)도 지켜야 한다.
+        gix::refs::FullName::try_from(format!("refs/remotes/{}/x", params.remote).as_str())
+            .map_err(|e| invalid(format!("remote `{}`: {e}", params.remote)))?;
         let Some(opened) = self.open(&params.project_id, params.worktree.as_deref())? else {
             return Ok(GitPushCommits {
                 work_tree: None,

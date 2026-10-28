@@ -71,25 +71,63 @@ it("restores a deleted branch at the commit it pointed at, without checking it o
   expect(notes[0]!.title).toBe(T.undo.restored("feat/x"));
 });
 
-it("removes a created branch, forcing only after showing git's refusal and asking", async () => {
-  const { deps, calls, confirms } = depsWith((_m, p) => {
-    if (!p.force)
-      throw new RpcCallError({
-        code: NOT_MERGED,
-        message: "not merged",
-        data: { stderr: "error: the branch 'x' is not fully merged", commit: "c" } as never,
-      });
+const X = "c".repeat(40);
+const created: GitRefMove = { refName: "refs/heads/x", previous: null, current: X };
+const refsAt = (commit: string | null) => ({
+  workTree: "/r",
+  branches:
+    commit === null
+      ? []
+      : [{ name: "x", refName: "refs/heads/x", commit, head: false, upstream: null }],
+});
+const notMerged = (commit: string) =>
+  new RpcCallError({
+    code: NOT_MERGED,
+    message: "not merged",
+    data: { stderr: "error: the branch 'x' is not fully merged", commit } as never,
+  });
+
+it("removes a created branch, forcing only after showing git's refusal and the tip it is at now", async () => {
+  const { deps, calls, confirms } = depsWith((method, p) => {
+    if (method === "git.refs") return refsAt(X);
+    if (!p.force) throw notMerged(X);
     return {};
   });
-  const done = await undoMove(
-    deps,
-    { refName: "refs/heads/x", previous: null, current: "c".repeat(40) },
-    { kind: "branchCreated" },
-  );
-  expect(done).toBe(true);
+  expect(await undoMove(deps, created, { kind: "branchCreated" })).toBe(true);
   expect(confirms[0]!.danger).toBe(true);
   expect(confirms[0]!.detail).toContain("not fully merged");
-  expect(calls.map((c) => c.params.force)).toEqual([false, true]);
+  expect(confirms[0]!.body).toBe(T.branch.forceBody("x", "cccccccc"));
+  expect(calls.filter((c) => c.method === "git.branch.delete").map((c) => c.params.force)).toEqual([
+    false,
+    true,
+  ]);
+});
+
+it("refuses to remove a created branch that moved since, and says where it is now", async () => {
+  const moved = "d".repeat(40);
+  const { deps, calls, confirms, notes } = depsWith((method) =>
+    method === "git.refs" ? refsAt(moved) : {},
+  );
+  expect(await undoMove(deps, created, { kind: "branchCreated" })).toBe(false);
+  expect(calls.map((c) => c.method)).toEqual(["git.refs"]);
+  expect(confirms).toEqual([]);
+  expect(notes).toEqual([
+    { level: "error", title: T.undo.failed, body: T.undo.movedSince("x", "dddddddd") },
+  ]);
+});
+
+it("refuses when the branch moved between the check and the delete (2101 names another tip)", async () => {
+  const moved = "e".repeat(40);
+  const { deps, calls, confirms, notes } = depsWith((method) => {
+    if (method === "git.refs") return refsAt(X);
+    throw notMerged(moved);
+  });
+  expect(await undoMove(deps, created, { kind: "branchCreated" })).toBe(false);
+  expect(confirms).toEqual([]);
+  expect(calls.filter((c) => c.method === "git.branch.delete").map((c) => c.params.force)).toEqual([
+    false,
+  ]);
+  expect(notes[0]!.body).toBe(T.undo.movedSince("x", "eeeeeeee"));
 });
 
 it("does not reset when the undo preview cannot be fingerprinted, whatever the dialog answers", async () => {

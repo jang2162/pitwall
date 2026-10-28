@@ -64,6 +64,8 @@ git-undo-restored = Restored { $name }
 # $name: branch
 git-undo-removed = Removed { $name }
 git-undo-failed = Undo failed
+# $name: branch, $commit: short hash it is at now (∅ when gone)
+git-undo-moved-since = { $name } moved to { $commit } since — not undoing
 
 ## Reset confirmation.
 

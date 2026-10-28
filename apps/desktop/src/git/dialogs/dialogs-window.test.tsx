@@ -417,6 +417,7 @@ it("shows the plan and the commits before sending, and sends the plan's target a
   expect(calls("git.push")[0]!.params).toEqual({
     projectId: "p1",
     worktree: null,
+    branch: "main",
     setUpstream: false,
     forceWithLease: null,
     expectedTarget: { remote: "origin", remoteRef: "refs/heads/main" },
@@ -428,6 +429,27 @@ it("shows the plan and the commits before sending, and sends the plan's target a
   );
   expect(document.body.textContent).toContain("보낸 것: refs/heads/main:refs/heads/main");
   expect(document.body.textContent).toContain("터미널의 git push 는 다르게 한다");
+});
+
+it("sends the planned branch even when HEAD moved to another branch after the plan", async () => {
+  await mount();
+  const dialog = await openPush();
+  // 터미널에서 다른 브랜치로 체크아웃했다 — 계획(main)은 그대로 보인다.
+  host.refs = {
+    ...refs(),
+    head: { kind: "branch", name: "other", commit: SEEN },
+    branches: [
+      { ...refs().branches[0]!, head: false },
+      { name: "other", refName: "refs/heads/other", commit: SEEN, head: true, upstream: null },
+    ],
+  };
+  await click(button(dialog, "푸시")!);
+  await vi.waitFor(() => expect(calls("git.push")).toHaveLength(1));
+  // Host 는 그 브랜치를 지금 브랜치인 것처럼 셈해 계획한 대상으로 보낸다(crates/pw-git/src/remote/tests/dialog.rs).
+  expect(calls("git.push")[0]!.params).toMatchObject({
+    branch: "main",
+    expectedTarget: { remote: "origin", remoteRef: "refs/heads/main" },
+  });
 });
 
 it("shows the plan again when the target changed after it was shown (-32004)", async () => {
@@ -569,6 +591,7 @@ it("explains a refusal, lists the candidates, and plans again with the one chose
     projectId: "p1",
     worktree: null,
     remoteRef: "refs/heads/main",
+    branch: "main",
     setUpstream: true,
     forceWithLease: null,
     expectedTarget: { remote: "origin", remoteRef: "refs/heads/main" },

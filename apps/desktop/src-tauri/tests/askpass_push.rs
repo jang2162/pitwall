@@ -1,7 +1,7 @@
 //! askpass 다이얼로그에 넣은 값으로 원격에 인증한다(docs/design/13-m2-plan.md M2-20 완료 기준): 진짜 `pitwall askpass` 를 거친
 //! `git.push`(`pw_git::remote::push`)가 암호를 묻는 로컬 원격 픽스처로 보낸다. 창이 맞는 값을 답하면 원격 ref 가 움직이고(값이
 //! 인증에 쓰였다), 틀린 값이면 원격이 거절해 그대로다. 두 경우 모두 넣은 값이 앱 로그(TRACE 까지) · 버스 이벤트(Task 진행 · 알림) ·
-//! 결과 · 오류 · 앱 폴더 · 그때 떠 있던 모든 프로세스의 인자(`ps`) 어디에도 없다.
+//! 결과 · 오류 · 앱 폴더 · 그때 떠 있던 모든 프로세스의 인자와 환경(`ps`, `ps -E`) · git 의 자식 환경 어디에도 없다.
 //!
 //! 원격 픽스처: git 의 `ext::` 전송으로 띄우는 `sh <authremote> <서비스> <bare 저장소>` 가 `$GIT_ASKPASS` 로 암호를 묻고, 그 답이 암호
 //! 파일의 내용과 같을 때만 그 bare 저장소의 `git receive-pack` 을 잇는다. 사람의 git 설정 · 셸 · 네트워크를 쓰지 않는다 — 모두 임시
@@ -51,14 +51,15 @@ fn files_containing(dir: &Path, needle: &str) -> Vec<PathBuf> {
 }
 
 /// 원격 픽스처의 스크립트를 `bin/authremote` 에 만든다. 암호는 `password` 파일에서 읽는다(인자 · 환경으로 넘기지 않는다). 물은 뒤
-/// 모든 프로세스의 인자를 `<out>.ps` 에, 인증 결과를 `<out>.auth` 에 더한다.
+/// 모든 프로세스의 인자를 `<out>.ps`, 환경을 `<out>.psenv`(macOS `ps -E`), 자기 환경(git 의 자식 환경)을 `<out>.env`, 인증 결과를
+/// `<out>.auth` 에 더한다.
 fn auth_remote(bin: &Path, password: &Path, out: &Path) -> PathBuf {
     let path = bin.join("authremote");
     let out = out.display();
     fs::write(
         &path,
         format!(
-            "#!/bin/sh\nservice=\"$1\"\nrepo=\"$2\"\nanswer=$(\"$GIT_ASKPASS\" \"{QUESTION}\")\nps -axww -o args= >> '{out}.ps'\nif [ \"$answer\" != \"$(cat '{password}')\" ]; then\n  echo denied >> '{out}.auth'\n  echo 'fatal: Authentication failed for ext://fixture' >&2\n  exit 128\nfi\necho granted >> '{out}.auth'\nexec git \"${{service#git-}}\" \"$repo\"\n",
+            "#!/bin/sh\nservice=\"$1\"\nrepo=\"$2\"\nanswer=$(\"$GIT_ASKPASS\" \"{QUESTION}\")\nps -axww -o args= >> '{out}.ps'\nps -axwwE -o command= >> '{out}.psenv' 2>/dev/null || true\nenv >> '{out}.env'\nif [ \"$answer\" != \"$(cat '{password}')\" ]; then\n  echo denied >> '{out}.auth'\n  echo 'fatal: Authentication failed for ext://fixture' >&2\n  exit 128\nfi\necho granted >> '{out}.auth'\nexec git \"${{service#git-}}\" \"$repo\"\n",
             password = password.display(),
         ),
     )
@@ -200,6 +201,23 @@ async fn the_askpass_answer_authenticates_a_push_and_is_kept_nowhere() {
     assert!(ps.contains("authremote"), "ps saw the fixture: {ps}");
     for needle in needles {
         assert!(!ps.contains(needle), "a process argument holds {needle}");
+    }
+    // 환경: 물은 순간 git 이 띄운 픽스처의 환경(git 의 자식 환경)과, 같은 사용자의 모든 프로세스의 환경(`ps -E`, macOS).
+    let env = fs::read_to_string(out.with_extension("env")).unwrap();
+    assert!(
+        env.contains("GIT_ASKPASS="),
+        "the fixture saw git's environment"
+    );
+    let psenv = fs::read_to_string(out.with_extension("psenv")).unwrap_or_default();
+    for needle in needles {
+        assert!(
+            !env.contains(needle),
+            "the git child environment holds {needle}"
+        );
+        assert!(
+            !psenv.contains(needle),
+            "a process environment holds {needle}"
+        );
     }
     let log = fs::read_dir(&logs)
         .unwrap()
