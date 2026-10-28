@@ -67,6 +67,8 @@ describe("default keymap overlaps", () => {
       mac: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 에디터의 줄 삭제(10-ui §4.2 「웰컴 창」).
         ["⌘⌫", ["project.removeFromList []", "editor.deleteLine [editorFocus]"]],
+        // 웰컴 창의 「새 프로젝트」 시트의 만들기와 프로젝트 창 커밋 툴 윈도우 안의 커밋(M2-16).
+        ["⌘↩", ["project.create []", "git.commit.run [activeToolWindow == 'commit']"]],
         // 터미널의 ⌘W 는 탭 닫기(IntelliJ 와 같다), 나머지는 탭 또는 창 닫기.
         ["⌘W", ["window.close []", "terminal.closeTab [terminalFocus]"]],
         // 텍스트 에디터의 줄로 이동과 hex 뷰어의 오프셋으로 이동 — hex 뷰어는 `editorFocus` 를 가린다(src/keymap/context.ts).
@@ -77,11 +79,13 @@ describe("default keymap overlaps", () => {
       win: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
         ["Delete", ["project.removeFromList []", "fileTree.delete [fileTree]"]],
+        ["Ctrl+Enter", ["project.create []", "git.commit.run [activeToolWindow == 'commit']"]],
         ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
       ],
       linux: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
         ["Delete", ["project.removeFromList []", "fileTree.delete [fileTree]"]],
+        ["Ctrl+Enter", ["project.create []", "git.commit.run [activeToolWindow == 'commit']"]],
         ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
       ],
     });

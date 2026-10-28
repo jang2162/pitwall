@@ -212,6 +212,14 @@ export class GitStatusStore {
     return [...this.items.values()];
   }
 
+  /**
+   * 상대 경로(`/`) 하나의 항목. 그 경로를 다시 읽을 때마다(내용이 같아도) 새 객체다 — 커밋 툴 윈도우의 미리보기가 이것으로 diff 를
+   * 다시 읽는다(M2-16).
+   */
+  entry(rel: string): GitStatusEntry | undefined {
+    return this.items.get(rel);
+  }
+
   /** 비운다(감시를 닫았다). */
   clear() {
     if (this.tree === null && this.reason === null && this.items.size === 0) return;

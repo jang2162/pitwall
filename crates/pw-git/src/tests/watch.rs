@@ -782,3 +782,40 @@ fn the_status_bar_follows_a_terminal_checkout_on_one_shared_watch() {
     drop(windows);
     assert_eq!(w.git_watch.watched(), 0);
 }
+
+/// 커밋 툴 윈도우(M2-16)의 경로: 창은 같은 `git.watch` 의 `git.statusChanged` 를 받아 그 경로의 `git.status` 를 다시 읽고 그룹을 다시
+/// 묶는다. 터미널의 `git add` 가 끝난 때부터 그 이벤트 뒤의 `git.status` 가 파일을 스테이징됨으로 돌려줄 때까지를 잰다(release 에서
+/// 500 ms 를 단언한다 — [`RELEASE_TIMING`]). 창 쪽(이벤트 → 그룹 이동)은 apps/desktop/src/git/commit/commit-window.test.tsx.
+#[test]
+fn a_terminal_git_add_reaches_the_commit_window_status_read() {
+    use crate::status::{GitChange, GitStatusEntry};
+    let r = TestRepo::with_commit();
+    r.commit_file("src/lib.rs", "fn a() {}\n", "lib");
+    let w = Watched::new();
+    let id = w.fx.project(r.root());
+    let _fs = w.fs(&id, None);
+    let _git = w.git(&id, None);
+    let mut events = Events::new(&w.fx.bus(), &id);
+    events.settle();
+    r.write("src/lib.rs", "fn a() { changed() }\n");
+    events.until("edit", &[&status_for("src/lib.rs")]);
+    events.settle();
+    let entry = |staged, unstaged| GitStatusEntry {
+        path: "src/lib.rs".into(),
+        orig_path: None,
+        staged,
+        unstaged,
+        conflict: None,
+    };
+    assert_eq!(
+        w.fx.status(&id, Some(&["src/lib.rs"])).entries,
+        [entry(None, Some(GitChange::Modified))]
+    );
+
+    let started = Instant::now();
+    r.git(&["add", "src/lib.rs"]);
+    events.until("git add", &[&any_status]);
+    let got = w.fx.status(&id, Some(&["src/lib.rs"]));
+    latency("git add → git.status", started, &[Instant::now()]);
+    assert_eq!(got.entries, [entry(Some(GitChange::Modified), None)]);
+}

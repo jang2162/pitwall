@@ -5,7 +5,8 @@
 // - 두 커밋 비교(F5-4): `a` → `b` 의 바뀐 파일과 diff.
 // - 리비전의 파일(F5-19): 그 커밋의 파일 내용을 읽기 전용 에디터로. 위 막대(10-ui.md 「코드 에디터」 의 미니 툴바)에 리비전과
 //   「읽기 전용」.
-// - diff: 파일 하나의 diff(트리 없이).
+// - diff: 파일 하나의 diff(트리 없이). 작업 트리 · 스테이징된 diff 는 커밋 툴 윈도우의 미리보기라 hunk · 줄 체크를 단다(M2-16 —
+//   git/commit/staging-changes.tsx).
 // - 머지: 충돌 파일 하나의 3-way 머지(src/git/merge/merge-document.tsx, M2-19).
 
 import { EditorState } from "@codemirror/state";
@@ -21,7 +22,9 @@ import type { GitShow, Signature } from "@pitwall/rpc-client";
 import type { IDockviewPanelProps } from "dockview-react";
 import { useEffect, useRef, useState } from "react";
 
+import { useEditorFont } from "../../editor/editor-font";
 import type { EditorTabParams } from "../../editor/editor-tabs";
+import { fontTheme } from "../../editor/extensions/operations";
 import { editorTheme } from "../../editor/extensions/theme";
 import { useI18n } from "../../i18n/i18n-provider";
 import { useKeymap } from "../../keymap/keymap-provider";
@@ -29,6 +32,7 @@ import { useProjectStrings } from "../../layout/strings";
 import { normalizeText } from "../diff/diff-model";
 import { revisionHighlight, revisionSyntax } from "../diff/revision-syntax";
 import { MergeDocument } from "../merge/merge-document";
+import { isStagingDiff, StagingChanges } from "../commit/staging-changes";
 import { ChangesView } from "./changes-view";
 import { gitDocumentSource, revisionText, type SideText } from "./source";
 import type { GitDocumentSpec } from "./spec";
@@ -147,6 +151,7 @@ function RevisionDocument({
   const T = useProjectStrings();
   const D = T.git.documents;
   const source = gitDocumentSource((s) => s.source);
+  const font = useEditorFont();
   const host = useRef<HTMLDivElement>(null);
   const [text, setText] = useState<
     { side: SideText; language: string | null } | { failed: string } | undefined
@@ -188,6 +193,7 @@ function RevisionDocument({
           highlightSpecialChars(),
           drawSelection(),
           editorTheme,
+          fontTheme(font),
           EditorState.readOnly.of(true),
           EditorState.lineSeparator.of("\n"),
           revisionHighlight(
@@ -197,7 +203,7 @@ function RevisionDocument({
       }),
     });
     return () => view.destroy();
-  }, [ready, source]);
+  }, [ready, source, font]);
 
   let body;
   if (!text) body = <Status text={D.loading} />;
@@ -254,6 +260,8 @@ export function GitDocumentPanel({
     case "revision":
       return <RevisionDocument rev={spec.rev} path={spec.path} worktree={params.worktree} />;
     case "diff":
+      // 작업 트리 · 스테이징된 diff 는 hunk · 줄 체크(부분 스테이징)를 단다(M2-16).
+      if (isStagingDiff(spec)) return <StagingChanges spec={spec} worktree={params.worktree} />;
       return (
         <ChangesView
           from={spec.from}

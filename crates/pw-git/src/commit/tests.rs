@@ -542,3 +542,181 @@ async fn the_commit_template_comes_from_trusted_config_only() {
     fs::remove_file(f.repo.root().join("local.txt")).unwrap();
     assert_eq!(read(), None);
 }
+
+/// 커밋 툴 윈도우의 창 시험 픽스처(13-m2-plan M2-16 완료 기준 「시나리오 2」): 작업 트리 diff 의 hunk 하나(묶음 체크)와 다른 hunk 의
+/// 줄 둘(줄 체크)을 차례로 `git.stageLines` 로 스테이징하고 커밋한 결과를 JSON 으로 남긴다(`apps/desktop/src/git/commit/fixtures/
+/// stage-commit.json`). 단계마다 그때의 `git.diff`(작업 트리) · index 쪽 `git.blob` · 작업 트리 파일 · 그 단계에서 보낸 요청이 있다 —
+/// 창 시험(`apps/desktop/src/git/commit/commit-window.test.tsx`)이 이것을 가짜 Host 의 답으로 쓰고, 체크를 눌러 창이 보낸 요청이 이
+/// 요청과 같은지 본다. 이 요청을 진짜 git 으로 돌린 뒤의 `git show --stat` 이 `stat` 이다. 다른지는 이 시험이 본다 — 다시 만들 때는
+/// `PW_UPDATE_COMMIT_FIXTURE=1`.
+mod window_fixture {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::diff::methods::{DiffSide, GitBlobParams, GitDiffParams, LineKind};
+    use crate::stage::methods::{GitLinesParams, HunkSelection};
+
+    const FIXTURE: &str = "../../apps/desktop/src/git/commit/fixtures/stage-commit.json";
+    const PATH: &str = "src/app.rs";
+    pub const MESSAGE: &str = "Change app\n\nStage one hunk and two lines of another.\n";
+
+    fn text(variant: u8) -> String {
+        let mut s = String::from("fn a() {\n");
+        s.push_str(if variant == 0 {
+            "    a1\n"
+        } else {
+            "    a1 changed\n"
+        });
+        s.push_str("}\n");
+        for i in 0..30 {
+            s.push_str(&format!("const F{i}: u32 = {i};\n"));
+        }
+        s.push_str("fn b() {\n");
+        if variant == 0 {
+            s.push_str("    b1 old\n");
+        } else {
+            s.push_str("    b1 new\n    b extra\n");
+        }
+        s.push_str("}\n");
+        s
+    }
+
+    /// 고를 것: 첫 변경 묶음 전체, 또는 글자가 같은 바뀐 줄 하나.
+    enum Pick {
+        FirstGroup,
+        Line(&'static str),
+    }
+
+    fn select(diff: &crate::diff::methods::GitDiff, pick: &Pick) -> HunkSelection {
+        let hunks = &diff.files[0].hunks;
+        match pick {
+            Pick::FirstGroup => {
+                let hunk = &hunks[0];
+                let first = hunk
+                    .lines
+                    .iter()
+                    .position(|l| l.kind != LineKind::Context)
+                    .unwrap();
+                let lines: Vec<u32> = (first..hunk.lines.len())
+                    .take_while(|&i| hunk.lines[i].kind != LineKind::Context)
+                    .map(|i| i as u32)
+                    .collect();
+                HunkSelection {
+                    hunk: hunk.clone(),
+                    lines: Some(lines),
+                }
+            }
+            Pick::Line(text) => {
+                let (hunk, index) = hunks
+                    .iter()
+                    .find_map(|h| {
+                        h.lines
+                            .iter()
+                            .position(|l| l.kind != LineKind::Context && l.text == *text)
+                            .map(|i| (h, i))
+                    })
+                    .unwrap();
+                HunkSelection {
+                    hunk: hunk.clone(),
+                    lines: Some(vec![index as u32]),
+                }
+            }
+        }
+    }
+
+    async fn fixture_value() -> serde_json::Value {
+        let f = WriteFixture::new(true);
+        f.repo.write(PATH, &text(0));
+        f.repo.commit_all("base");
+        f.repo.write(PATH, &text(1));
+        let git = f.write.git();
+        let diff_params = GitDiffParams {
+            project_id: f.project.clone(),
+            worktree: None,
+            from: None,
+            to: DiffSide::WorkTree,
+            paths: Some(vec![PATH.to_owned()]),
+            ignore_whitespace: false,
+        };
+        let state = || {
+            let mut diff = git.diff(&diff_params).unwrap();
+            diff.work_tree = "/repo".to_owned();
+            let index = git
+                .blob(&GitBlobParams {
+                    project_id: f.project.clone(),
+                    path: PATH.to_owned(),
+                    ..GitBlobParams::default()
+                })
+                .unwrap();
+            let work_tree = fs::read_to_string(f.repo.root().join(PATH)).unwrap();
+            (diff, index, work_tree)
+        };
+        let mut steps = Vec::new();
+        for pick in [
+            Pick::FirstGroup,
+            Pick::Line("    b1 new"),
+            Pick::Line("    b1 old"),
+        ] {
+            let (diff, index, work_tree) = state();
+            let selection = select(&diff, &pick);
+            let request = GitLinesParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                path: PATH.to_owned(),
+                old_path: None,
+                hunks: vec![selection],
+                ignore_whitespace: false,
+            };
+            f.write
+                .stage_lines(f.caller(), request.clone())
+                .await
+                .unwrap();
+            steps.push(json!({
+                "diff": diff,
+                "index": index,
+                "workTree": work_tree,
+                "request": { "path": request.path, "hunks": request.hunks },
+            }));
+        }
+        let (diff, index, work_tree) = state();
+        commit(&f.write, f.caller(), params(&f, MESSAGE))
+            .await
+            .unwrap();
+        json!({
+            "path": PATH,
+            "message": MESSAGE,
+            "steps": steps,
+            "staged": { "diff": diff, "index": index, "workTree": work_tree },
+            "stat": f.repo.git(&["show", "--stat", "--format=", "HEAD"]),
+            "patch": f.repo.git(&["show", "--format=", "-U3", "--no-color", "HEAD"]),
+            "left": f.repo.git(&["diff", "--no-color"]),
+            "committedMessage": message_of(&f.repo, "HEAD"),
+        })
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn commit_window_fixture_matches_pw_git_and_git() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
+        let got = fixture_value().await;
+        // 줄 단위로 고른 커밋: 첫 hunk 전체와 둘째 hunk 의 두 줄만 들었고 `b extra` 는 작업 트리에 남았다.
+        assert!(got["patch"].as_str().unwrap().contains("+    a1 changed\n"));
+        assert!(got["patch"].as_str().unwrap().contains("+    b1 new\n"));
+        assert!(!got["patch"].as_str().unwrap().contains("b extra"));
+        assert!(got["left"].as_str().unwrap().contains("+    b extra\n"));
+        if std::env::var_os("PW_UPDATE_COMMIT_FIXTURE").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = serde_json::to_string_pretty(&got).unwrap();
+            std::fs::write(&path, format!("{text}\n")).unwrap();
+            return;
+        }
+        let want: serde_json::Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        assert!(
+            got == want,
+            "{} 이 지금 pw-git · git 의 출력과 다르다 — PW_UPDATE_COMMIT_FIXTURE=1 로 이 시험을 돌려 다시 만든다",
+            path.display()
+        );
+    }
+}

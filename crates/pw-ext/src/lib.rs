@@ -145,6 +145,7 @@ mod tests {
         let files = vec![
             "app.ftl",
             "file-window.ftl",
+            "git-commit.ftl",
             "git-dialogs.ftl",
             "git-log.ftl",
             "git-merge.ftl",

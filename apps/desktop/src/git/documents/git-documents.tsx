@@ -55,12 +55,16 @@ export function gitDocumentTitle(
   }
 }
 
-/** git 문서 탭을 연다(이미 있으면 그 탭을 앞으로). 열린 탭을 돌려준다. */
+/**
+ * git 문서 탭을 연다(이미 있으면 그 탭을 앞으로). 열린 탭을 돌려준다. `preview` 면 미리보기 탭(다음 미리보기가 대신한다 — 커밋 툴
+ * 윈도우의 diff 미리보기, M2-16).
+ */
 export function openGitDocument(
   workspace: EditorWorkspace,
   spec: GitDocumentSpec,
   title: string,
   worktree: string | undefined,
+  preview = false,
 ) {
   const api = workspace.api();
   if (!api) return undefined;
@@ -69,6 +73,7 @@ export function openGitDocument(
     worktree,
     git: spec,
     title,
+    preview,
     recent: workspace.recent(),
   });
   panel.api.setActive();

@@ -59,6 +59,8 @@ import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { FileTreeToolWindow } from "../file-tree/file-tree";
 import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
+import { GitCommitFeature } from "../git/commit/commit-feature";
+import { CommitToolWindow } from "../git/commit/commit-tool-window";
 import { GitBranchFeature } from "../git/git-branch-feature";
 import { GitRemoteFeature } from "../git/dialogs/git-remote-feature";
 import { GitDocuments } from "../git/documents/git-documents";
@@ -140,6 +142,7 @@ const ICONS: Record<string, LucideIcon> = {
  * 요소에 `data-tool-window={api.id}` 와 `tabIndex={-1}` 을 단다 — 키맵 컨텍스트의 툴 윈도우 층이다(src/keymap/context.ts).
  */
 const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>> = {
+  commit: CommitToolWindow,
   git: GitLogToolWindow,
   notifications: NotificationsToolWindow,
   project: FileTreeToolWindow,
@@ -817,6 +820,14 @@ function ProjectWindowBody({
           {projectId !== undefined && <GitDocuments projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitMerge projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitRemoteFeature projectId={projectId} />}
+          {projectId !== undefined && (
+            <GitCommitFeature
+              projectId={projectId}
+              state={projectState.store}
+              workspace={workspace}
+              api={api}
+            />
+          )}
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
           {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}

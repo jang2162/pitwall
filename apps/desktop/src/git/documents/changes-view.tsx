@@ -7,6 +7,8 @@
 //   파일(`hunksOmitted`)은 고를 때 그 파일만 다시 묻는다. 바이너리 · 서브모듈 포인터 · 읽지 못함은 그 까닭을 보인다.
 // - 위 막대: 보기(나란히 / 통합 — 창 안에서 모든 diff 가 함께 쓴다), 공백 무시(이 문서의 `git.diff` 를 `ignoreWhitespace` 로 다시
 //   묻는다), 이전 · 다음 차이(`⇧F7` · `F7` 과 같다).
+// - 코드 글꼴(`[editor] font_family` · `font_size`)을 diff 뷰에 넘긴다. 확장 지점(`slots`)과 다시 읽기(`reloadKey`)는 커밋 툴 윈도우의
+//   미리보기(M2-16 — git/commit/staging-changes.tsx)가 쓴다.
 
 import type { DiffFile, DiffSide, GitDiff } from "@pitwall/rpc-client";
 import * as ToggleGroup from "@radix-ui/react-toggle-group";
@@ -15,8 +17,15 @@ import { ChevronDown, ChevronRight, ChevronUp } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 
+import { useEditorFont } from "../../editor/editor-font";
 import { type ProjectStrings, useProjectStrings } from "../../layout/strings";
-import { type DiffContent, type DiffController, type DiffMode, DiffView } from "../diff/diff-view";
+import {
+  type DiffContent,
+  type DiffController,
+  type DiffMode,
+  DiffView,
+  type DiffViewSlots,
+} from "../diff/diff-view";
 import { gitDocumentSource, loadFileTexts, sidesOf } from "./source";
 
 /** 창 안 diff 뷰가 함께 쓰는 보기(나란히 · 통합). 기억하지 않는다 — 창을 새로 열면 나란히. */
@@ -234,6 +243,7 @@ function FileDiffPane({
   expanded,
   onExpand,
   onController,
+  slots,
 }: {
   diff: GitDiff;
   file: DiffFile;
@@ -244,10 +254,12 @@ function FileDiffPane({
   expanded: boolean;
   onExpand(): void;
   onController(c: DiffController | undefined): void;
+  slots?: DiffViewSlots;
 }) {
   const T = useProjectStrings().git.documents;
   const source = gitDocumentSource((s) => s.source);
   const mode = diffPreferences((s) => s.mode);
+  const font = useEditorFont();
   const [loaded, setLoaded] = useState<Loaded>({ kind: "loading" });
   const collapsedGenerated = file.generated && !expanded;
   const skip =
@@ -310,7 +322,9 @@ function FileDiffPane({
       <Notice
         text={T.diff.submodule(
           short(file.submodule.old) || T.diff.submoduleNone,
-          short(file.submodule.new) || T.diff.submoduleNone,
+          // 작업 트리 쪽 서브모듈 안에 커밋하지 않은 변경이 있으면 git 처럼 `-dirty` 를 붙인다(M2-16).
+          (short(file.submodule.new) || T.diff.submoduleNone) +
+            (file.submodule.dirty ? "-dirty" : ""),
         )}
       />
     );
@@ -341,6 +355,8 @@ function FileDiffPane({
         mode={mode}
         syntax={source?.syntax}
         phrases={phrases}
+        font={font}
+        slots={slots}
         onController={onController}
       />
     );
@@ -446,6 +462,8 @@ export function ChangesView({
   header,
   paths,
   tree = true,
+  slots,
+  reloadKey,
 }: {
   from: DiffSide | undefined;
   to: DiffSide;
@@ -455,6 +473,10 @@ export function ChangesView({
   paths?: readonly string[];
   /** 파일 트리를 둔다. 파일 하나의 diff 문서는 두지 않는다. */
   tree?: boolean;
+  /** diff 뷰의 확장 지점. 공백 무시 여부를 받는다 — 같은 값이면 같은 객체를 돌려준다. */
+  slots?: (ignoreWhitespace: boolean) => DiffViewSlots | undefined;
+  /** 바뀌면 `git.diff` 를 다시 읽는다(스테이징한 뒤 등). */
+  reloadKey?: unknown;
 }) {
   const T = useProjectStrings().git.documents;
   const source = gitDocumentSource((s) => s.source);
@@ -494,6 +516,7 @@ export function ChangesView({
     JSON.stringify(paths),
     worktree,
     ignoreWhitespace,
+    reloadKey,
   ]);
 
   const diff = state.kind === "ready" ? state.diff : undefined;
@@ -538,6 +561,7 @@ export function ChangesView({
                 expanded={expanded.has(file.path)}
                 onExpand={() => setExpanded((s) => new Set(s).add(file.path))}
                 onController={setController}
+                slots={slots?.(ignoreWhitespace)}
               />
             )}
           </div>

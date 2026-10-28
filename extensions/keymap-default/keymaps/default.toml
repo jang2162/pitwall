@@ -395,6 +395,34 @@ mac = "cmd+t"
 win = "ctrl+t"
 linux = "ctrl+t"
 
+# 커밋 툴 윈도우(M2-16, src/git/commit/commit-feature.tsx): ⌘K 는 툴 윈도우를 열고 메시지 칸으로, ⌘↩ 는 그 툴 윈도우 안에서만
+# 커밋(DB 콘솔의 실행 ⌘↩ 와 범위가 갈린다), ⌘⌥K 는 커밋 후 푸시, ⌘⌥Z 는 변경 되돌리기(확인 뒤).
+
+[[bindings]]
+action = "git.commit"
+mac = "cmd+k"
+win = "ctrl+k"
+linux = "ctrl+k"
+
+[[bindings]]
+action = "git.commit.run"
+mac = "cmd+enter"
+win = "ctrl+enter"
+linux = "ctrl+enter"
+when = "activeToolWindow == 'commit'"
+
+[[bindings]]
+action = "git.commitAndPush"
+mac = "cmd+alt+k"
+win = "ctrl+alt+k"
+linux = "ctrl+alt+k"
+
+[[bindings]]
+action = "git.rollback"
+mac = "cmd+alt+z"
+win = "ctrl+alt+z"
+linux = "ctrl+alt+z"
+
 # diff 뷰의 다음 · 이전 차이(M2-15, src/git/documents/git-documents.tsx)는 diff 뷰에 포커스가 있을 때만
 # (`diffFocus`) — 같은 F7 을 쓰는 디버그 스텝 인투(M6)와 범위가 갈린다.
 

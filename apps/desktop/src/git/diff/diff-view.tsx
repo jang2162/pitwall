@@ -26,6 +26,8 @@ import type { DiffFile } from "@pitwall/rpc-client";
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 
+import type { EditorFont } from "../../editor/extensions";
+import { fontTheme } from "../../editor/extensions/operations";
 import { editorTheme } from "../../editor/extensions/theme";
 import {
   buildDiffModel,
@@ -100,13 +102,14 @@ interface Built {
 
 const readOnly = [EditorState.readOnly.of(true), EditorState.lineSeparator.of("\n")];
 
-function common(phrases: Record<string, string>): Extension[] {
+function common(phrases: Record<string, string>, font: EditorFont | undefined): Extension[] {
   return [
     lineNumbers(),
     highlightSpecialChars(),
     highlightActiveLine(),
     drawSelection(),
     editorTheme,
+    font ? fontTheme(font) : [],
     diffTheme,
     readOnly,
     EditorState.phrases.of(phrases),
@@ -120,6 +123,8 @@ interface BuildOptions {
   syntax?: StaticSyntaxSource;
   slots?: DiffViewSlots;
   phrases: Record<string, string>;
+  /** 코드 글꼴(`[editor] font_family` · `font_size`, M2-16). 없으면 기본(13px 고정폭). */
+  font?: EditorFont;
 }
 
 /** 뷰를 만든다(React 밖 — 측정 하네스도 이것을 부른다). */
@@ -130,6 +135,7 @@ export function buildDiffView({
   syntax,
   slots,
   phrases,
+  font,
 }: BuildOptions): Built {
   const model = buildDiffModel(content.file);
   const aText = normalizeText(content.oldText);
@@ -150,7 +156,7 @@ export function buildDiffView({
       a: {
         doc: a,
         extensions: [
-          common(phrases),
+          common(phrases, font),
           revisionHighlight(synA),
           EditorView.decorations.of(lineDecorations(model, "a", a)),
           charHighlights(model, "a", a, b),
@@ -160,7 +166,7 @@ export function buildDiffView({
       b: {
         doc: b,
         extensions: [
-          common(phrases),
+          common(phrases, font),
           revisionHighlight(synB),
           EditorView.decorations.of(lineDecorations(model, "b", b)),
           charHighlights(model, "b", a, b),
@@ -186,7 +192,7 @@ export function buildDiffView({
         doc: b,
         extensions: [
           oldLineNumbers(model),
-          common(phrases),
+          common(phrases, font),
           revisionHighlight(synB),
           unifiedMergeView({
             original: a,
@@ -311,6 +317,8 @@ export interface DiffViewProps {
   slots?: DiffViewSlots;
   /** merge 의 「바뀌지 않은 줄 $개」 같은 문구(`EditorState.phrases`). */
   phrases: Record<string, string>;
+  /** 코드 글꼴. 바뀌면 뷰를 다시 만든다(같은 값이면 같은 객체 — `useEditorFont`). */
+  font?: EditorFont;
   /** 뷰를 만들 때마다(보기를 바꿨을 때 포함) 손잡이를 받는다. */
   onController?(controller: DiffController | undefined): void;
 }
@@ -319,7 +327,15 @@ export interface DiffViewProps {
  * 파일 하나의 diff. `mode` 가 바뀌면 뷰를 다시 만들고 화면 맨 위 줄을 잇는다. `content` 가 바뀌면(다른 파일 · 공백 무시) 처음부터
  * 그린다.
  */
-export function DiffView({ content, mode, syntax, slots, phrases, onController }: DiffViewProps) {
+export function DiffView({
+  content,
+  mode,
+  syntax,
+  slots,
+  phrases,
+  font,
+  onController,
+}: DiffViewProps) {
   const host = useRef<HTMLDivElement>(null);
   /** 보기를 바꾸기 직전의 맨 위 줄(새 쪽). 같은 내용일 때만 잇는다. */
   const carried = useRef<{ content: DiffContent; line: number } | undefined>(undefined);
@@ -329,7 +345,7 @@ export function DiffView({ content, mode, syntax, slots, phrases, onController }
   useEffect(() => {
     const parent = host.current;
     if (!parent) return;
-    const built = buildDiffView({ content, mode, parent, syntax, slots, phrases });
+    const built = buildDiffView({ content, mode, parent, syntax, slots, phrases, font });
     const keep = carried.current;
     const stop =
       keep?.content === content ? restoreTopLine(built.controller, parent, keep.line) : undefined;
@@ -341,7 +357,7 @@ export function DiffView({ content, mode, syntax, slots, phrases, onController }
       onControllerRef.current?.(undefined);
       built.destroy();
     };
-  }, [content, mode, syntax, slots, phrases]);
+  }, [content, mode, syntax, slots, phrases, font]);
 
   // 키맵 컨텍스트(src/keymap/context.ts): `F7` / `⇧F7` 바인딩이 `when = "diffFocus"` 로 쓴다.
   return (

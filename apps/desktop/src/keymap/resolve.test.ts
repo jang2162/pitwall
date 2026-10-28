@@ -15,6 +15,7 @@ import { editorOpsActions } from "../editor/editor-ops";
 import { createEditorWorkspace } from "../editor/editor-workspace";
 import { fileOpsActions } from "../file-tree/file-ops";
 import { fileTreeStrings } from "../file-tree/strings";
+import { commitActions } from "../git/commit/commit-feature";
 import { remoteActions } from "../git/dialogs/git-remote-feature";
 import { branchActions } from "../git/git-branch-feature";
 import { gitDocumentActions } from "../git/documents/git-documents";
@@ -142,6 +143,12 @@ const ACTION_IDS = new Set(
       open() {},
       strings: KO_PROJECT.git.documents,
       fail() {},
+    }),
+    ...commitActions({
+      strings: { open: "commit", run: "run", runAndPush: "push", rollback: "rollback" },
+      feature: () => undefined,
+      open() {},
+      activeFile: () => undefined,
     }),
   ].map((a) => a.id),
 );

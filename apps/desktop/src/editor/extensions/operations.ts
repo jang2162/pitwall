@@ -37,7 +37,8 @@ export const findMode = StateField.define<FindMode>({
 // 사람이 설정에 적은 만큼이다.
 const fontThemes = new Map<string, Extension>();
 
-function fontTheme({ family, size }: EditorFont): Extension {
+/** 코드 글꼴(`[editor] font_family` · `font_size`)의 테마. diff 뷰 · 리비전 파일(M2-16)도 이것을 끼운다. */
+export function fontTheme({ family, size }: EditorFont): Extension {
   if (family === undefined && size === undefined) return [];
   const key = `${family ?? ""}\n${size ?? ""}`;
   let theme = fontThemes.get(key);
