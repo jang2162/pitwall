@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { annotations, toggleAnnotations } from "./blame-extension";
 import { goToChange, gutterLink, gutterState, togglePopupAt } from "./gutter-extension";
 import { BLAME_REVISION_ACTION, HISTORY_ACTION, REVEAL_ACTION } from "./gutter-host";
-import { FakeSource, type Harness, openEditor, textBlob, TOP } from "./testing";
+import { FakeSource, type Harness, openEditor, textBlob, TOP, unifiedFile } from "./testing";
 
 let open: Harness[] = [];
 afterEach(() => {
@@ -62,15 +62,13 @@ function clickMark(h: Harness, line: number) {
 }
 
 describe("gutter markers", () => {
-  it("marks an unsaved edit of a committed line within 100 ms, and an added and a deleted line", async () => {
+  it("marks an unsaved edit of a committed line, and an added and a deleted line", async () => {
     const h = start({ text: "one\ntwo\nthree\nfour\n" });
     await ready(h);
     expect(hunks(h)).toEqual([]);
-    const t0 = performance.now();
+    // 100 ms 기준은 gutter-perf.test.tsx 가 가짜 시계로 본다(벽시계는 부하에 흔들린다).
     type(h, 2, "TWO");
-    await vi.waitFor(() => expect(marks(h)).toEqual(["modified"]), { interval: 1 });
-    const elapsed = performance.now() - t0;
-    expect(elapsed).toBeLessThan(100);
+    await vi.waitFor(() => expect(marks(h)).toEqual(["modified"]));
     expect(h.live.dirty).toBe(true);
     // 더한 줄 · 지운 줄.
     h.view.dispatch({ changes: { from: 0, insert: "zero\n" } });
@@ -161,7 +159,7 @@ describe("gutter markers", () => {
     open.push(h);
     await ready(h);
     await vi.waitFor(() =>
-      expect(hunks(h)).toEqual([{ oldFrom: 1, oldTo: 1, newFrom: 1, newTo: 4 }]),
+      expect(hunks(h)).toEqual([{ oldFrom: 1, oldTo: 1, newFrom: 1, newTo: 3 }]),
     );
   });
 
@@ -361,6 +359,8 @@ describe("staging from the popup", () => {
     await ready(h);
     await vi.waitFor(() => expect(hunks(h)).toHaveLength(2));
     clickMark(h, 6);
+    // 열 때 스테이징할 수 있는지 미리 본다 — 그동안은 꺼져 있다.
+    await vi.waitFor(() => expect(popupButton(h, "stage").disabled).toBe(false));
     popupButton(h, "stage").click();
     await vi.waitFor(() => expect(source.staged).toHaveLength(1));
     expect(source.staged[0]).toEqual({
@@ -373,7 +373,7 @@ describe("staging from the popup", () => {
 
   it("is off with the reason while there are unsaved edits", async () => {
     const source = new FakeSource();
-    source.diffs.set("a.txt", workTreeDiff);
+    source.diffs.set("a.txt", { ...workTreeDiff, ...unifiedFile("@@ -1,2 +1,2 @@\n a\n-b\n+B\n") });
     const h = start({ text: "a\nb\n", source }, "a\nb\n");
     await ready(h);
     type(h, 2, "B");
@@ -401,11 +401,33 @@ describe("staging from the popup", () => {
     await ready(h);
     await vi.waitFor(() => expect(hunks(h)).toHaveLength(2));
     clickMark(h, 2);
-    popupButton(h, "stage").click();
+    // 미리 본 판정이 버튼을 끄고 까닭을 적는다.
     await vi.waitFor(() =>
       expect(h.view.dom.querySelector(".pw-git-popup-status")?.textContent).toBe(
         "git-gutter-stage-disk-changed",
       ),
+    );
+    expect(popupButton(h, "stage").disabled).toBe(true);
+    expect(popupButton(h, "stage").title).toBe("git-gutter-stage-disk-changed");
+    expect(source.staged).toEqual([]);
+  });
+
+  it("is off with the reason when git's diff cannot stage that hunk on its own", async () => {
+    // HEAD a b c, index a B c(b → B 를 스테이징), 작업 트리 a b C. 거터 hunk 「c → C」 의 앞 줄이 index 에서 바뀌었다.
+    const source = new FakeSource();
+    source.stored.set("index:a.txt", textBlob("a\nB\nc\n"));
+    source.diffs.set("a.txt", {
+      ...workTreeDiff,
+      ...unifiedFile("@@ -1,3 +1,3 @@\n a\n-B\n-c\n+b\n+C\n"),
+    });
+    const h = start({ text: "a\nb\nC\n", source }, "a\nb\nc\n");
+    await ready(h);
+    await vi.waitFor(() => expect(hunks(h)).toHaveLength(1));
+    clickMark(h, 3);
+    await vi.waitFor(() => expect(popupButton(h, "stage").title).toBe("git-gutter-stage-inexact"));
+    expect(popupButton(h, "stage").disabled).toBe(true);
+    expect(h.view.dom.querySelector(".pw-git-popup-status")?.textContent).toBe(
+      "git-gutter-stage-inexact",
     );
     expect(source.staged).toEqual([]);
   });
@@ -591,6 +613,40 @@ describe("blame", () => {
     );
     document.querySelector<HTMLElement>('[data-blame-menu="history"]')!.click();
     expect(h.ran.at(-1)).toEqual({ id: HISTORY_ACTION, args: { path: `${TOP}/a.txt` } });
+  });
+
+  it("runs at most two blames per window, drops the oldest and fetches it again when its tab is looked at (review F5)", async () => {
+    const source = new FakeSource();
+    const names = ["a.txt", "b.txt", "c.txt"];
+    for (const name of names) {
+      source.files.set(name, textBlob("x\n"));
+      source.hang.add(name);
+    }
+    const first = openEditor({ text: "x\n", path: `${TOP}/a.txt`, source });
+    open.push(first);
+    const host = first.host;
+    const views = [first];
+    for (const name of names.slice(1)) {
+      const h = openEditor({ text: "x\n", path: `${TOP}/${name}`, source, host });
+      open.push(h);
+      views.push(h);
+    }
+    const doc = (h: Harness) => h.view.plugin(gutterLink)!.doc!;
+    // 셋째 blame 이 자리를 얻으며 가장 오래된 첫째가 끊긴다.
+    await vi.waitFor(() => expect(source.aborted).toEqual(["a.txt"]));
+    expect(host.slots.count).toBe(2);
+    expect(views.map((h) => doc(h).blame.kind)).toEqual(["idle", "loading", "loading"]);
+    // 첫째 탭을 다시 본다(포커스) — 다시 받고, 이번에는 그때 가장 오래된 둘째가 끊긴다.
+    vi.spyOn(first.view, "hasFocus", "get").mockReturnValue(true);
+    first.view.contentDOM.dispatchEvent(new FocusEvent("focus"));
+    await vi.waitFor(() => expect(source.aborted).toEqual(["a.txt", "b.txt"]));
+    expect(source.blameCalls.map((c) => c.path)).toEqual(["a.txt", "b.txt", "c.txt", "a.txt"]);
+    expect(views.map((h) => doc(h).blame.kind)).toEqual(["loading", "idle", "loading"]);
+    // 주석 칸을 켜도 다시 받는다.
+    toggleAnnotations(views[1]!.view);
+    await vi.waitFor(() => expect(source.aborted).toEqual(["a.txt", "b.txt", "c.txt"]));
+    expect(views.map((h) => doc(h).blame.kind)).toEqual(["loading", "loading", "idle"]);
+    expect(host.slots.count).toBe(2);
   });
 
   it("hides the Git log, previous-revision and history entries while those actions are unavailable", async () => {

@@ -26,6 +26,7 @@ git-gutter-popup-position = { $index } / { $count }
 git-gutter-stage-dirty = The document has unsaved edits — save it to stage this change
 git-gutter-stage-read-only = This document cannot be edited, so the change is not rolled back
 git-gutter-staged-already = This change is already staged
+git-gutter-stage-inexact = This change does not line up with git's diff, so it cannot be staged on its own — pick the lines in the Commit tool window
 git-gutter-stage-disk-changed = The file on disk differs from this document, so nothing was staged
 git-gutter-stage-failed = Could not stage: { $message }
 

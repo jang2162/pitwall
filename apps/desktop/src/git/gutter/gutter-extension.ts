@@ -34,7 +34,7 @@ import {
 import type { DiffFile, DiffHunk, DiffLine } from "@pitwall/rpc-client";
 
 import type { DiffGroup } from "../diff/diff-model";
-import type { GutterHost } from "./gutter-host";
+import type { GutterHost, StageOutcome } from "./gutter-host";
 import { type GutterDoc, type GutterOff, type GutterText, revertChange } from "./gutter-model";
 
 /** 에디터 확장이 받는 git 쪽(`EditorFeatureContext.git`). */
@@ -374,9 +374,8 @@ function popupView(view: EditorView, index: number, hunk: DiffGroup): TooltipVie
 
   const revert = button(T.revert, "revert", () => {
     if (config.readOnly) return;
-    const lines = doc.baseLines(hunk.oldFrom, hunk.oldTo);
     view.dispatch({
-      changes: revertChange(view.state.doc, hunk, lines, view.state.lineBreak),
+      changes: revertChange(view.state.doc, hunk, doc.baseFile, view.state.lineBreak),
       annotations: isolateHistory.of("full"),
       userEvent: "input.revert",
     });
@@ -387,26 +386,42 @@ function popupView(view: EditorView, index: number, hunk: DiffGroup): TooltipVie
     revert.title = T.readOnly;
   }
 
+  /** 스테이징할 수 없는 까닭(버튼을 끄고 툴팁 · 상태 줄에 적는다). */
+  const reason = (outcome: Exclude<StageOutcome, { kind: "staged" }>) =>
+    outcome.kind === "dirty"
+      ? T.stageDirty
+      : outcome.kind === "already"
+        ? T.stagedAlready
+        : outcome.kind === "inexact"
+          ? T.stageInexact
+          : outcome.kind === "diskChanged"
+            ? T.diskChanged
+            : T.stageFailed(outcome.message);
+  const blocked = (outcome: Exclude<StageOutcome, { kind: "staged" }>) => {
+    stage.disabled = true;
+    stage.title = reason(outcome);
+    status.textContent = outcome.kind === "dirty" ? "" : reason(outcome);
+  };
   const stage = button(T.stage, "stage", () => {
     stage.disabled = true;
-    void host.stage(doc, hunk).then((outcome) => {
+    void host.stage(doc, hunk, config.git.live).then((outcome) => {
       if (outcome.kind === "staged") return close();
-      stage.disabled = doc.dirty;
-      status.textContent =
-        outcome.kind === "dirty"
-          ? T.stageDirty
-          : outcome.kind === "already"
-            ? T.stagedAlready
-            : outcome.kind === "diskChanged"
-              ? T.diskChanged
-              : outcome.kind === "failed"
-                ? T.stageFailed(outcome.message)
-                : "";
+      blocked(outcome);
     });
   });
+  // 열 때(그리고 저장할 때) 스테이징할 수 있는지 미리 본다 — 정확히 담을 수 없는 hunk 는 누르기 전에 끈다.
+  let checking = 0;
   const syncStage = () => {
-    stage.disabled = doc.dirty;
-    stage.title = doc.dirty ? T.stageDirty : "";
+    const mine = ++checking;
+    stage.disabled = true;
+    stage.title = "";
+    status.textContent = "";
+    if (doc.dirty) return blocked({ kind: "dirty" });
+    void host.plan(doc, hunk, config.git.live).then((check) => {
+      if (mine !== checking) return;
+      if (check.kind === "ready") stage.disabled = false;
+      else blocked(check);
+    });
   };
   syncStage();
   const offDirty = config.git.live.onDirtyChange(syncStage);

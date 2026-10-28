@@ -9,6 +9,8 @@
 // - 바뀜: 문서가 바뀔 때마다 `RECOMPUTE_MS` 안에 한 번 기준과 견준다(line-diff.ts). 결과(`hunks`)를 뷰에 알린다.
 // - blame: 기준을 받은 뒤 `git.blame { rev: 같은 해시 }` 을 스트림으로 받는다. 범위는 HEAD 의 줄 번호라 지금 텍스트의 줄로 옮길 때
 //   거터와 같은 hunk 를 쓴다 — hunk 안의 새 줄(저장 안 한 편집 · 저장했으나 커밋 안 한 변경)은 「아직 커밋 안 됨」 이다(M2-05).
+//   창 하나에서 동시에 도는 blame 은 `BLAME_SLOTS` 개다(`BlameSlots`, 호스트가 나눈다) — 넘으면 가장 오래된 것을 끊고, 끊긴 문서는
+//   그 뷰가 포커스를 받거나 주석 칸을 켤 때(`requestBlame`) 다시 받는다. 커밋 직후 열린 탭마다 blame 이 한꺼번에 뜨지 않게.
 
 import type { Text } from "@codemirror/state";
 import {
@@ -24,7 +26,14 @@ import {
 } from "@pitwall/rpc-client";
 
 import type { DiffGroup } from "../diff/diff-model";
-import { diffLines, splitLines } from "./line-diff";
+import {
+  type DiffStats,
+  diffLines,
+  docLines,
+  type FileLines,
+  keysOf,
+  splitLines,
+} from "./line-diff";
 
 /** 문서가 바뀐 뒤 다시 견주기까지의 최대 지연(ms). 거터 표시는 이것 + 계산 시간 안에 따라온다(완료 기준 100 ms). */
 export const RECOMPUTE_MS = 30;
@@ -52,6 +61,7 @@ export type LineBlame =
   | { kind: "uncommitted" };
 
 export type BlameState =
+  /** 아직 부르지 않았거나, 다른 문서의 blame 에 자리를 내주어 끊겼다(`requestBlame` 으로 다시). */
   | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "failed"; message: string }
@@ -82,6 +92,32 @@ function codeOf(e: unknown): number | undefined {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** 창 하나에서 동시에 도는 blame 의 수. */
+export const BLAME_SLOTS = 2;
+
+/** 동시에 도는 blame 의 자리(호스트가 창마다 하나 둔다). */
+export class BlameSlots {
+  private readonly running: { stop(): void }[] = [];
+
+  constructor(readonly size = BLAME_SLOTS) {}
+
+  /** 자리를 얻는다. 자리가 없으면 가장 오래된 것의 `stop` 을 부르고 그 자리를 쓴다. 돌려준 함수로 내놓는다. */
+  enter(stop: () => void): () => void {
+    const seat = { stop };
+    this.running.push(seat);
+    while (this.running.length > this.size) this.running.shift()!.stop();
+    return () => {
+      const at = this.running.indexOf(seat);
+      if (at >= 0) this.running.splice(at, 1);
+    };
+  }
+
+  /** 지금 도는 수(시험). */
+  get count(): number {
+    return this.running.length;
+  }
+}
+
 /** 모델이 붙는 문서(`LiveText` 의 일부). */
 export interface GutterText {
   readonly text: Text;
@@ -91,6 +127,8 @@ export interface GutterText {
   /** 미저장 여부가 바뀔 때(저장 · 되돌림). */
   onDirtyChange(listener: () => void): () => void;
 }
+
+const EMPTY: FileLines = { lines: [], eol: true };
 
 /** 지금 줄 → HEAD 줄(`undefined` 면 맞는 줄이 없다). hunk 는 줄 순이다. */
 export function baseLineOf(hunks: readonly DiffGroup[], line: number): number | undefined {
@@ -113,7 +151,12 @@ export class GutterDoc {
   state: GutterState = { kind: "loading" };
   blame: BlameState = { kind: "idle" };
   /** HEAD 의 줄(작업 트리 꼴). `on` 일 때만 뜻이 있다. */
-  private base: string[] = [];
+  private base: FileLines = { lines: [], eol: true };
+  /** 기준의 견줄 열쇠(`keysOf(base)`). */
+  private baseKeys: string[] = [];
+  /** 자리를 내주어 끊긴 blame(다시 부를 것). */
+  private wanted: { rel: string; rev: string } | undefined;
+  private releaseSlot: (() => void) | undefined;
   /** blame 범위를 첫 줄 순으로. */
   private ranges: BlameRange[] = [];
   private readonly commits = new Map<string, BlameCommit>();
@@ -129,11 +172,15 @@ export class GutterDoc {
     letter: undefined,
   };
   disposed = false;
+  /** 다시 견준 횟수와 마지막 비교의 비용(측정 · 시험 — 키 입력마다의 일이 줄 수에 비례하는 비교 한 번인지 본다). */
+  recomputes = 0;
+  lastStats: DiffStats = { middle: 0, cost: 0, anchored: 0 };
 
   constructor(
     private readonly source: GutterSource,
     readonly path: string,
     private readonly live: GutterText,
+    private readonly slots?: BlameSlots,
   ) {
     this.offText = live.onChange(() => this.schedule());
     this.offSource = source.subscribe(() => this.sourceChanged());
@@ -155,6 +202,7 @@ export class GutterDoc {
     this.generation++;
     clearTimeout(this.timer);
     this.blameAbort?.abort();
+    this.releaseSlot?.();
     this.offText();
     this.offSource();
     this.listeners.clear();
@@ -167,7 +215,17 @@ export class GutterDoc {
 
   /** HEAD 의 줄 `[from, to)`(1 기준). */
   baseLines(from: number, to: number): string[] {
-    return this.base.slice(from - 1, to - 1);
+    return this.base.lines.slice(from - 1, to - 1);
+  }
+
+  /** HEAD 의 파일(작업 트리 꼴, git 처럼 센 줄). */
+  get baseFile(): FileLines {
+    return this.base;
+  }
+
+  /** 기준을 받은 HEAD 커밋(꺼져 있으면 없다). */
+  get rev(): string | undefined {
+    return this.state.kind === "on" ? this.state.rev : undefined;
   }
 
   private sourceChanged() {
@@ -187,7 +245,8 @@ export class GutterDoc {
     this.seen = { head, letter, rel };
     const off = (why: GutterOff) => {
       this.state = { kind: "off", ...why };
-      this.base = [];
+      this.base = { lines: [], eol: true };
+      this.baseKeys = [];
       this.stopBlame();
       this.emit();
     };
@@ -195,7 +254,7 @@ export class GutterDoc {
     if (letter === "?") return off({ reason: "untracked" });
     if (head === null) {
       // 커밋이 없는 브랜치: HEAD 에 아무것도 없다. 스테이징한 파일만 빈 기준과 견준다.
-      if (letter === "A") return this.useBase(generation, "", [], "HEAD");
+      if (letter === "A") return this.useBase(generation, "", EMPTY, "HEAD");
       return off({ reason: "untracked" });
     }
     const rev = head ?? "HEAD";
@@ -207,7 +266,7 @@ export class GutterDoc {
         if (generation !== this.generation) return;
         if (codeOf(e) === ERROR_CODE.NOT_FOUND)
           return letter === "A"
-            ? this.useBase(generation, "", [], rev)
+            ? this.useBase(generation, "", EMPTY, rev)
             : off({ reason: "untracked" });
         return off({ reason: "unreadable", message: errorText(e) });
       }
@@ -219,9 +278,10 @@ export class GutterDoc {
     })();
   }
 
-  private useBase(generation: number, rel: string, base: string[], rev: string) {
+  private useBase(generation: number, rel: string, base: FileLines, rev: string) {
     if (generation !== this.generation) return;
     this.base = base;
+    this.baseKeys = keysOf(base);
     this.state = { kind: "on", rev, hunks: [] };
     this.recompute();
     this.startBlame(rel, rev);
@@ -240,7 +300,10 @@ export class GutterDoc {
     if (this.state.kind !== "on") return;
     clearTimeout(this.timer);
     this.timer = undefined;
-    const hunks = diffLines(this.base, this.live.text.toJSON());
+    const stats: DiffStats = { middle: 0, cost: 0, anchored: 0 };
+    const hunks = diffLines(this.baseKeys, keysOf(docLines(this.live.text)), undefined, stats);
+    this.recomputes++;
+    this.lastStats = stats;
     this.state = { ...this.state, hunks };
     this.emit();
   }
@@ -248,6 +311,9 @@ export class GutterDoc {
   private stopBlame() {
     this.blameAbort?.abort();
     this.blameAbort = undefined;
+    this.releaseSlot?.();
+    this.releaseSlot = undefined;
+    this.wanted = undefined;
     this.ranges = [];
     this.commits.clear();
     this.blame = { kind: "idle" };
@@ -263,6 +329,19 @@ export class GutterDoc {
     }
     const abort = (this.blameAbort = new AbortController());
     this.blame = { kind: "loading" };
+    const release = (this.releaseSlot = this.slots?.enter(() => {
+      // 다른 문서의 blame 에 자리를 내준다 — 다시 부를 때까지 「부르지 않음」.
+      abort.abort();
+      this.releaseSlot = undefined;
+      this.blameAbort = undefined;
+      this.blame = { kind: "idle" };
+      this.wanted = { rel, rev };
+      this.emit();
+    }));
+    const done = () => {
+      release?.();
+      if (this.releaseSlot === release) this.releaseSlot = undefined;
+    };
     void (async () => {
       let file: BlameFile | null = null;
       const ranges: BlameRange[] = [];
@@ -274,11 +353,13 @@ export class GutterDoc {
           ranges.push(...chunk.ranges);
         }
       } catch (e) {
+        done();
         if (abort.signal.aborted) return;
         this.blame = { kind: "failed", message: errorText(e) };
         this.emit();
         return;
       }
+      done();
       if (abort.signal.aborted) return;
       ranges.sort((a, b) => a.line - b.line);
       this.ranges = ranges;
@@ -287,17 +368,23 @@ export class GutterDoc {
     })();
   }
 
+  /** 자리를 내주어 끊긴 blame 을 다시 받는다(뷰가 포커스를 받았다 · 주석 칸을 켰다). 그 밖에는 아무것도 하지 않는다. */
+  requestBlame() {
+    const wanted = this.wanted;
+    if (this.blame.kind !== "idle" || !wanted || this.state.kind !== "on") return;
+    this.startBlame(wanted.rel, wanted.rev);
+  }
+
   /** 지금 텍스트의 줄(1 기준)의 blame. blame 을 아직 받지 못했으면 `undefined`. */
   lineBlame(line: number): LineBlame | undefined {
     if (this.blame.kind !== "done" || this.state.kind !== "on") return undefined;
     const base = baseLineOf(this.state.hunks, line);
     if (base === undefined) return { kind: "uncommitted" };
+    // 파일 끝 줄바꿈 뒤의 빈 줄(CodeMirror 의 마지막 줄)은 git 에게 줄이 아니다 — 주석을 달지 않는다.
+    if (line > docLines(this.live.text).lines.length) return undefined;
     const range = rangeAt(this.ranges, base);
     const commit = range && this.commits.get(range.commit);
     if (range && commit) return { kind: "commit", commit, range };
-    // 파일 끝 줄바꿈 뒤의 빈 줄(CodeMirror 의 마지막 줄)은 git 에게 줄이 아니다 — 주석을 달지 않는다.
-    const lines = this.blame.file?.lines ?? 0;
-    if (base > lines && this.base[base - 1] === "" && base === this.base.length) return undefined;
     return { kind: "uncommitted" };
   }
 
@@ -333,67 +420,26 @@ function rangeAt(ranges: readonly BlameRange[], line: number): BlameRange | unde
 }
 
 /**
- * [되돌리기]: 문서에서 hunk 하나를 HEAD 의 줄로 바꾸는 변경(CodeMirror `ChangeSpec`). 줄은 문서의 줄 구분으로 넣는다 — 저장할 때
- * 문서의 줄바꿈으로 바뀐다(live-text.ts `serialize`). 바뀌는 것은 그 hunk 의 줄과 그 경계의 줄바꿈뿐이다.
+ * [되돌리기]: 문서에서 hunk 하나를 HEAD 의 줄로 바꾸는 변경(CodeMirror `ChangeSpec`). 바꾸는 자리는 hunk 의 새 줄 `[newFrom, newTo)`
+ * 의 첫 줄 시작부터 `newTo` 줄 시작(그 줄이 없으면 문서 끝)까지 — 줄바꿈까지다. 넣는 것은 HEAD 의 줄마다 줄바꿈을 붙인 것이고,
+ * HEAD 의 파일 끝까지 닿는데 HEAD 에 끝 줄바꿈이 없으면 마지막 줄바꿈을 뺀다. 줄은 문서의 줄 구분으로 넣는다 — 저장할 때 문서의
+ * 줄바꿈으로 바뀐다(live-text.ts `serialize`). 바뀌는 것은 그 hunk 의 줄과 그 끝의 줄바꿈뿐이다.
  */
 export function revertChange(
   doc: Text,
   hunk: DiffGroup,
-  /** HEAD 의 줄 `[oldFrom, oldTo)`(`GutterDoc.baseLines`). */
-  lines: readonly string[],
+  /** HEAD 의 파일(`GutterDoc.baseFile`). */
+  base: FileLines,
   lineBreak: string,
 ): { from: number; to: number; insert: string } {
-  const removes = hunk.newTo > hunk.newFrom;
-  const adds = lines.length > 0;
-  if (removes && adds)
-    return {
-      from: doc.line(hunk.newFrom).from,
-      to: doc.line(hunk.newTo - 1).to,
-      insert: lines.join(lineBreak),
-    };
-  if (removes) {
-    // 더한 줄만: 그 줄들과 줄바꿈 하나를 지운다. 파일 끝이면 앞 줄의 줄바꿈을 지운다.
-    if (hunk.newTo <= doc.lines)
-      return { from: doc.line(hunk.newFrom).from, to: doc.line(hunk.newTo).from, insert: "" };
-    const from = hunk.newFrom > 1 ? doc.line(hunk.newFrom - 1).to : 0;
-    return { from, to: doc.length, insert: "" };
-  }
-  // 지운 줄만: 그 자리(줄 `newFrom` 앞)에 HEAD 의 줄을 넣는다. 파일 끝이면 마지막 줄 뒤에.
-  if (hunk.newFrom <= doc.lines) {
-    const at = doc.line(hunk.newFrom).from;
-    return { from: at, to: at, insert: lines.join(lineBreak) + lineBreak };
-  }
-  return { from: doc.length, to: doc.length, insert: lineBreak + lines.join(lineBreak) };
-}
-
-/**
- * [스테이징]: 거터 hunk(HEAD ↔ 문서 — 문서가 디스크와 같을 때)와 겹치는 작업 트리 diff(index ↔ 작업 트리)의 줄을 고른다. 더한 줄은
- * 새 줄 번호가 거터 hunk 의 새 범위 안이면, 뺀 줄은 그 줄이 끼어 있던 자리(다음 새 줄)가 범위 안(지운 묶음이면 그 자리)이면 고른다.
- * 이미 스테이징한 줄은 작업 트리 diff 에 없으므로 고르지 않는다 — 고를 것이 없으면 빈 목록이다.
- */
-export function stageSelection(file: Pick<DiffFile, "hunks">, hunk: DiffGroup): HunkSelection[] {
-  const inside = (anchor: number) =>
-    hunk.newFrom === hunk.newTo
-      ? anchor === hunk.newFrom
-      : anchor >= hunk.newFrom && anchor < hunk.newTo;
-  const out: HunkSelection[] = [];
-  for (const h of file.hunks) {
-    let next = h.newLines === 0 ? h.newStart + 1 : h.newStart;
-    const picked: number[] = [];
-    let changes = 0;
-    h.lines.forEach((line, i) => {
-      if (line.kind === "context") {
-        next = (line.newLine ?? next) + 1;
-        return;
-      }
-      changes++;
-      if (line.kind === "added") {
-        const n = line.newLine ?? next;
-        if (inside(n)) picked.push(i);
-        next = n + 1;
-      } else if (inside(next)) picked.push(i);
-    });
-    if (picked.length > 0) out.push({ hunk: h, lines: picked.length === changes ? null : picked });
-  }
-  return out;
+  const lineStart = (n: number) => (n <= doc.lines ? doc.line(n).from : doc.length);
+  const from = lineStart(hunk.newFrom);
+  const to = lineStart(hunk.newTo);
+  let insert = base.lines
+    .slice(hunk.oldFrom - 1, hunk.oldTo - 1)
+    .map((l) => l + lineBreak)
+    .join("");
+  if (hunk.oldTo - 1 === base.lines.length && !base.eol && insert !== "")
+    insert = insert.slice(0, -lineBreak.length);
+  return { from, to, insert };
 }

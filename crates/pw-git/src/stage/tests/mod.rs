@@ -6,6 +6,8 @@ mod patch;
 #[cfg(unix)]
 mod files;
 #[cfg(unix)]
+mod gutter;
+#[cfg(unix)]
 mod rpc;
 #[cfg(unix)]
 mod select;

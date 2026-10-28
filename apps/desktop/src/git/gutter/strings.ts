@@ -31,6 +31,7 @@ export function gitGutterStrings(t: Translate) {
       stageDirty: t("git-gutter-stage-dirty"),
       readOnly: t("git-gutter-stage-read-only"),
       stagedAlready: t("git-gutter-staged-already"),
+      stageInexact: t("git-gutter-stage-inexact"),
       diskChanged: t("git-gutter-stage-disk-changed"),
       stageFailed: (message: string) => t("git-gutter-stage-failed", { message }),
     },

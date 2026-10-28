@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 import { Text } from "@codemirror/state";
-import type { DiffFile } from "@pitwall/rpc-client";
 import { describe, expect, it, vi } from "vitest";
 
 import { LiveText } from "../../editor/live-text";
@@ -8,9 +7,11 @@ import { gitDocumentKey, isGitDocumentSpec } from "../documents/spec";
 import { RevisionBlame } from "./blame-extension";
 import { gitGutterActions } from "./git-gutter";
 import { BLAME_REVISION_ACTION } from "./gutter-host";
-import { baseLineOf, revertChange, stageSelection } from "./gutter-model";
+import { baseLineOf, revertChange } from "./gutter-model";
+import { diffLines, keysOf, splitLines } from "./line-diff";
+import { applyLines, planStage, storedLines } from "./stage-plan";
 import { gitGutterStrings } from "./strings";
-import { FakeSource, openEditor, textBlob, TOP } from "./testing";
+import { FakeSource, openEditor, textBlob, TOP, unifiedFile } from "./testing";
 
 describe("baseLineOf", () => {
   const hunks = [
@@ -36,65 +37,125 @@ describe("baseLineOf", () => {
 });
 
 describe("revertChange", () => {
-  it("replaces, removes and re-inserts lines with the document's line break", () => {
-    const doc = Text.of(["a", "B", "c"]);
-    expect(revertChange(doc, { oldFrom: 2, oldTo: 3, newFrom: 2, newTo: 3 }, ["b"], "\n")).toEqual({
-      from: 2,
-      to: 3,
-      insert: "b",
-    });
-    expect(revertChange(doc, { oldFrom: 2, oldTo: 2, newFrom: 2, newTo: 3 }, [], "\n")).toEqual({
-      from: 2,
-      to: 4,
-      insert: "",
-    });
-    expect(revertChange(doc, { oldFrom: 3, oldTo: 4, newFrom: 3, newTo: 3 }, ["x"], "\n")).toEqual({
-      from: 4,
-      to: 4,
-      insert: "x\n",
-    });
+  const lf = (lines: string[], eol = true) => ({ lines, eol });
+  it("replaces, removes and re-inserts lines up to the next line's start", () => {
+    const doc = Text.of(["a", "B", "c", ""]);
+    expect(
+      revertChange(doc, { oldFrom: 2, oldTo: 3, newFrom: 2, newTo: 3 }, lf(["a", "b", "c"]), "\n"),
+    ).toEqual({ from: 2, to: 4, insert: "b\n" });
+    expect(
+      revertChange(doc, { oldFrom: 2, oldTo: 2, newFrom: 2, newTo: 3 }, lf(["a", "c"]), "\n"),
+    ).toEqual({ from: 2, to: 4, insert: "" });
+    expect(
+      revertChange(
+        doc,
+        { oldFrom: 4, oldTo: 5, newFrom: 4, newTo: 4 },
+        lf(["a", "B", "c", "x"]),
+        "\n",
+      ),
+    ).toEqual({ from: 6, to: 6, insert: "x\n" });
+  });
+
+  it("keeps HEAD's missing final newline when the hunk reaches HEAD's end", () => {
+    const doc = Text.of(["a", "b", "c", ""]);
+    // HEAD "a\nb" → 지금 "a\nb\nc\n": 끝 줄(개행 없음 → 있음)과 더한 줄이 한 hunk 다.
+    expect(
+      revertChange(
+        doc,
+        { oldFrom: 2, oldTo: 3, newFrom: 2, newTo: 4 },
+        lf(["a", "b"], false),
+        "\n",
+      ),
+    ).toEqual({ from: 2, to: 6, insert: "b" });
   });
 });
 
-/** index ↔ 작업 트리 diff 하나: 3번 줄 앞에서 두 줄을 지우고(옛 3 · 4) 5번 줄을 더했다. */
-const file: Pick<DiffFile, "hunks"> = {
-  hunks: [
-    {
-      oldStart: 2,
-      oldLines: 4,
-      newStart: 2,
-      newLines: 3,
-      header: "",
-      lines: [
-        { kind: "context", text: "b", oldLine: 2, newLine: 2, noNewline: false },
-        { kind: "removed", text: "c", oldLine: 3, newLine: null, noNewline: false },
-        { kind: "removed", text: "d", oldLine: 4, newLine: null, noNewline: false },
-        { kind: "context", text: "e", oldLine: 5, newLine: 3, noNewline: false },
-        { kind: "added", text: "N", oldLine: null, newLine: 4, noNewline: false },
-      ],
-    },
-  ],
-};
+/** 진짜 git(2.54 `git diff -U3`)의 출력으로 거터 hunk 의 스테이징 계획을 본다. */
+describe("planStage", () => {
+  /** HEAD(= index)와 작업 트리, git 의 diff 로 거터 hunk 마다의 계획. */
+  function plansOf(head: string, work: string, patch: string) {
+    const diff = unifiedFile(patch);
+    const index = storedLines(head);
+    const hunks = diffLines(
+      keysOf(splitLines(head, undefined)),
+      keysOf(splitLines(work, undefined)),
+    );
+    return hunks.map((hunk) => {
+      const plan = planStage({
+        head: index,
+        index,
+        diff,
+        hunk,
+        workTreeLines: splitLines(work, undefined).lines.length,
+      });
+      const staged =
+        plan.kind === "ready"
+          ? applyLines(keysOf(index), diff, (hi, li) =>
+              plan.hunks.some(
+                (s) => s.hunk === diff.hunks[hi] && (s.lines == null || s.lines.includes(li)),
+              ),
+            )
+          : undefined;
+      return { hunk, kind: plan.kind, staged };
+    });
+  }
 
-describe("stageSelection", () => {
-  it("picks the removed lines of a deletion hunk at its place and the added lines of an added hunk", () => {
-    expect(stageSelection(file, { oldFrom: 3, oldTo: 5, newFrom: 3, newTo: 3 })).toEqual([
-      { hunk: file.hunks[0], lines: [1, 2] },
-    ]);
-    expect(stageSelection(file, { oldFrom: 6, oldTo: 6, newFrom: 4, newTo: 5 })).toEqual([
-      { hunk: file.hunks[0], lines: [4] },
-    ]);
-    // 두 hunk 를 다 덮으면 hunk 전체(`lines: null`).
-    expect(stageSelection(file, { oldFrom: 3, oldTo: 6, newFrom: 3, newTo: 5 })).toEqual([
-      { hunk: file.hunks[0], lines: null },
+  it("deletes a block at the end of the file where git does (review F1 case)", () => {
+    const got = plansOf(
+      "fn a() {\n}\n\nfn b() {\n}\n",
+      "fn a() {\n}\n",
+      "@@ -1,5 +1,2 @@\n fn a() {\n }\n-\n-fn b() {\n-}\n",
+    );
+    expect(got).toEqual([
+      {
+        hunk: { oldFrom: 3, oldTo: 6, newFrom: 3, newTo: 3 },
+        kind: "ready",
+        staged: ["fn a() {", "}"],
+      },
     ]);
   });
 
-  it("finds nothing when the gutter hunk is already staged (absent from the work tree diff)", () => {
-    expect(stageSelection(file, { oldFrom: 1, oldTo: 2, newFrom: 1, newTo: 2 })).toEqual([]);
-    expect(stageSelection({ hunks: [] }, { oldFrom: 1, oldTo: 2, newFrom: 1, newTo: 2 })).toEqual(
-      [],
-    );
+  it("finds the lines when git lines up the same content at another place", () => {
+    const got = plansOf("b\n\n\nc\n", "b\n*\n\nc\n", "@@ -1,4 +1,4 @@\n b\n-\n+*\n \n c\n");
+    expect(got.map((p) => [p.kind, p.staged])).toEqual([["ready", ["b", "*", "", "c"]]]);
+  });
+
+  it("refuses a hunk whose neighbouring HEAD line is changed in the index", () => {
+    // HEAD a b c, index a B c(b → B 를 스테이징), 작업 트리 a b C(B 를 되돌리고 c → C). 거터 hunk 「c → C」 의 앞 줄(HEAD 의 b)이
+    // index 에서 바뀌어 index 의 어디에 얹을지 정할 수 없다.
+    expect(
+      planStage({
+        head: storedLines("a\nb\nc\n"),
+        index: storedLines("a\nB\nc\n"),
+        diff: unifiedFile("@@ -1,3 +1,3 @@\n a\n-B\n-c\n+b\n+C\n"),
+        hunk: { oldFrom: 3, oldTo: 4, newFrom: 3, newTo: 4 },
+        workTreeLines: 3,
+      }),
+    ).toEqual({ kind: "inexact" });
+  });
+
+  it("refuses when the work tree diff does not match the document's lines", () => {
+    expect(
+      planStage({
+        head: storedLines("a\n"),
+        index: storedLines("a\n"),
+        diff: unifiedFile("@@ -1 +1 @@\n-a\n+b\n"),
+        hunk: { oldFrom: 1, oldTo: 2, newFrom: 1, newTo: 2 },
+        workTreeLines: 2,
+      }),
+    ).toEqual({ kind: "inexact" });
+  });
+
+  it("knows a hunk already in the index", () => {
+    expect(
+      planStage({
+        head: storedLines("a\nb\n"),
+        index: storedLines("a\nB\n"),
+        diff: undefined,
+        hunk: { oldFrom: 2, oldTo: 3, newFrom: 2, newTo: 3 },
+        workTreeLines: 2,
+      }),
+    ).toEqual({ kind: "already" });
   });
 });
 

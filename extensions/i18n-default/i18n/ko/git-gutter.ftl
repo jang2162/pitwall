@@ -26,6 +26,7 @@ git-gutter-popup-position = { $index } / { $count }
 git-gutter-stage-dirty = 저장하지 않은 편집이 있습니다 — 저장한 뒤 스테이징할 수 있습니다
 git-gutter-stage-read-only = 이 문서는 고칠 수 없어 되돌리지 않습니다
 git-gutter-staged-already = 이 변경은 이미 스테이징돼 있습니다
+git-gutter-stage-inexact = git 의 diff 와 줄이 맞지 않아 이 변경만 정확히 스테이징할 수 없습니다 — 커밋 툴 윈도우에서 줄을 고르세요
 git-gutter-stage-disk-changed = 디스크의 파일이 이 문서와 달라 스테이징하지 않았습니다
 git-gutter-stage-failed = 스테이징하지 못했습니다: { $message }
 

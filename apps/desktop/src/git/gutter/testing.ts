@@ -84,16 +84,34 @@ export class FakeSource implements GutterSource {
     for (const l of this.listeners) l();
   }
 
+  /** 저장소 꼴(`workTreeForm` 없이)의 blob: `head:<경로>` · `index:<경로>`. 없으면 `files` 의 것. */
+  stored = new Map<string, GitBlob>();
+
   async blob(params: { rev?: string | null; path: string; workTreeForm?: boolean }) {
     this.blobCalls.push(params);
-    const found = this.files.get(params.path);
+    const raw = params.workTreeForm
+      ? undefined
+      : this.stored.get(`${params.rev === null ? "index" : "head"}:${params.path}`);
+    const found = raw ?? this.files.get(params.path);
     if (found instanceof Error) throw found;
     if (!found) throw Object.assign(new Error("not in HEAD"), { code: -32005 });
     return found;
   }
 
-  async *blame(params: { path: string; rev: string }) {
+  /** 이 경로의 blame 은 끝나지 않는다(첫 청크도 없다) — 끊길 때(`signal`)까지 기다린다. 끊긴 경로를 `aborted` 에 적는다. */
+  hang = new Set<string>();
+  aborted: string[] = [];
+
+  async *blame(params: { path: string; rev: string }, signal?: AbortSignal) {
     this.blameCalls.push(params);
+    if (this.hang.has(params.path)) {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve();
+        signal?.addEventListener("abort", () => resolve());
+      });
+      this.aborted.push(params.path);
+      return;
+    }
     for (const chunk of this.blames.get(params.path) ?? []) yield chunk;
   }
 
@@ -125,23 +143,27 @@ export function openEditor(options: {
   versions?: GutterHostDeps["versions"];
   sizeClass?: Judgment["sizeClass"];
   readOnly?: boolean;
+  /** 다른 뷰의 호스트를 함께 쓴다(창 하나의 여러 탭). */
+  host?: GutterHost;
 }): Harness {
   const path = options.path ?? `${TOP}/a.txt`;
   const source = options.source ?? new FakeSource();
   const ran: { id: string; args: unknown }[] = [];
   const available = new Set(options.available ?? []);
-  const host = new GutterHost({
-    source,
-    strings: gitGutterStrings((id, args) => (args ? `${id} ${JSON.stringify(args)}` : id)),
-    available: (id) => available.has(id),
-    run: (id, args) => {
-      ran.push({ id, args });
-      return available.has(id);
-    },
-    versions: options.versions ?? (async () => ({ document: "v1", disk: "v1" })),
-    notify() {},
-    locale: "en",
-  });
+  const host =
+    options.host ??
+    new GutterHost({
+      source,
+      strings: gitGutterStrings((id, args) => (args ? `${id} ${JSON.stringify(args)}` : id)),
+      available: (id) => available.has(id),
+      run: (id, args) => {
+        ran.push({ id, args });
+        return available.has(id);
+      },
+      versions: options.versions ?? (async () => ({ document: "v1", disk: "v1" })),
+      notify() {},
+      locale: "en",
+    });
   const lineEnding = options.lineEnding ?? "lf";
   const live = new LiveText({ text: options.text, lineEnding, bom: false });
   const context: EditorFeatureContext = {
@@ -178,4 +200,51 @@ export function openEditor(options: {
       parent.remove();
     },
   };
+}
+
+/**
+ * `git diff -U3` 의 hunk 글(`@@` 줄부터)을 `git.diff` 의 파일로 — 시험에 진짜 git 의 출력을 박아 쓴다. `\ No newline at end of file`
+ * 은 앞 줄의 `noNewline` 이다.
+ */
+export function unifiedFile(patch: string): Pick<DiffFile, "hunks"> {
+  const hunks: DiffFile["hunks"] = [];
+  let oldLine = 0;
+  let newLine = 0;
+  for (const raw of patch.split("\n")) {
+    const head = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(raw);
+    if (head) {
+      const [, os, ol, ns, nl] = head;
+      hunks.push({
+        oldStart: Number(os),
+        oldLines: ol === undefined ? 1 : Number(ol),
+        newStart: Number(ns),
+        newLines: nl === undefined ? 1 : Number(nl),
+        header: "",
+        lines: [],
+      });
+      oldLine = Number(os);
+      newLine = Number(ns);
+      if (ol === "0") oldLine++;
+      if (nl === "0") newLine++;
+      continue;
+    }
+    const h = hunks[hunks.length - 1];
+    if (!h || raw === "") continue;
+    const text = raw.slice(1);
+    if (raw[0] === "\\") {
+      h.lines[h.lines.length - 1]!.noNewline = true;
+    } else if (raw[0] === " ")
+      h.lines.push({
+        kind: "context",
+        text,
+        oldLine: oldLine++,
+        newLine: newLine++,
+        noNewline: false,
+      });
+    else if (raw[0] === "-")
+      h.lines.push({ kind: "removed", text, oldLine: oldLine++, newLine: null, noNewline: false });
+    else if (raw[0] === "+")
+      h.lines.push({ kind: "added", text, oldLine: null, newLine: newLine++, noNewline: false });
+  }
+  return { hunks };
 }

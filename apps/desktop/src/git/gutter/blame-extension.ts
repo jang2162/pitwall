@@ -38,6 +38,8 @@ export interface BlameProvider {
   readonly blame: BlameState;
   lineBlame(line: number): LineBlame | undefined;
   subscribe(listener: () => void): () => void;
+  /** 자리를 내주어 끊긴 blame 을 다시 받는다(`GutterDoc.requestBlame`). */
+  requestBlame?(): void;
 }
 
 interface BlameConfig {
@@ -115,6 +117,11 @@ class BlameLink {
   }
 
   update(update: ViewUpdate) {
+    // 끊긴 blame(창의 동시 blame 자리를 내줬다)은 그 뷰를 다시 볼 때 — 포커스를 받거나 주석 칸을 켤 때 — 다시 받는다.
+    const opened = update.transactions.some((t) =>
+      t.effects.some((e) => e.is(setAnnotations) && e.value),
+    );
+    if ((update.focusChanged && update.view.hasFocus) || opened) this.provider?.requestBlame?.();
     const config = update.state.facet(blameConfig);
     const same =
       config !== undefined &&

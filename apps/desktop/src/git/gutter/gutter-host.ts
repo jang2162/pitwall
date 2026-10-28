@@ -7,11 +7,18 @@
 //   registry.run("git.showFileHistory", { path }) 주석 칸 우클릭 「파일 히스토리」(M2-18 의 ⌃⌥H, `path` 는 문서의 절대 경로)
 // 둘 다 `isAvailable` 일 때만 보인다(누를 수 있다).
 //
-// 스테이징(`stage`): 미저장 편집이 있으면 하지 않는다(팝업이 버튼을 끄고 까닭을 보인다). 저장된 문서면 작업 트리 diff 를 받은 뒤
-// 디스크의 `version` 을 읽어 문서의 것과 견준다 — 다르면(그사이 디스크가 바뀜) 부르지 않는다. 고른 줄은 `stageSelection`.
+// 스테이징(`plan` · `stage`): 미저장 편집이 있으면 하지 않는다(팝업이 버튼을 끄고 까닭을 보인다). 저장된 문서면 작업 트리 diff ·
+// HEAD 와 index 의 그 파일(저장소 꼴)을 받은 뒤 디스크의 `version` 을 읽어 문서의 것과 견준다 — 다르면(그사이 디스크가 바뀜) 부르지
+// 않는다. 고른 줄은 stage-plan.ts `planStage` — 그 hunk 하나만 정확히 담을 수 없으면 부르지 않고 까닭을 보인다(`inexact`).
+//
+// blame 은 창 하나에서 동시에 `BLAME_SLOTS` 개만 돈다(`slots`) — 가장 오래된 것부터 끊는다(gutter-model.ts 머리 주석).
 
 import type { DiffGroup } from "../diff/diff-model";
-import { GutterDoc, type GutterSource, type GutterText, stageSelection } from "./gutter-model";
+import { ERROR_CODE, type GitBlob, type HunkSelection } from "@pitwall/rpc-client";
+
+import { BlameSlots, GutterDoc, type GutterSource, type GutterText } from "./gutter-model";
+import { docLines, type FileLines } from "./line-diff";
+import { planStage, storedLines } from "./stage-plan";
 import type { GitGutterStrings } from "./strings";
 
 /** Git 로그에서 커밋을 고르는 액션(M2-18 이 Git 로그 툴 윈도우에 더한다). */
@@ -25,8 +32,15 @@ export type StageOutcome =
   | { kind: "staged" }
   | { kind: "dirty" }
   | { kind: "already" }
+  /** git 의 diff 와 정렬이 달라 그 hunk 하나만 정확히 담을 수 없다. */
+  | { kind: "inexact" }
   | { kind: "diskChanged" }
   | { kind: "failed"; message: string };
+
+/** 스테이징하기 전의 판정: 부를 수 있으면 `ready`, 아니면 그 까닭(`StageOutcome` 의 나머지). */
+export type StageCheck =
+  | { kind: "ready"; rel: string; hunks: HunkSelection[] }
+  | Exclude<StageOutcome, { kind: "staged" }>;
 
 export interface GutterHostDeps {
   source: GutterSource;
@@ -47,6 +61,8 @@ interface Held {
 
 export class GutterHost {
   private readonly docs = new WeakMap<GutterText, Held>();
+  /** 창 하나에서 동시에 도는 blame 의 자리. */
+  readonly slots = new BlameSlots();
 
   constructor(readonly deps: GutterHostDeps) {}
 
@@ -63,7 +79,7 @@ export class GutterHost {
     let held = this.docs.get(live);
     if (!held || held.doc.disposed || held.doc.path !== path) {
       held?.doc.dispose();
-      held = { doc: new GutterDoc(this.deps.source, path, live), count: 0 };
+      held = { doc: new GutterDoc(this.deps.source, path, live, this.slots), count: 0 };
       this.docs.set(live, held);
     }
     held.count++;
@@ -89,19 +105,45 @@ export class GutterHost {
     return this.deps.run(id, args);
   }
 
-  /** hunk 하나를 스테이징한다(머리 주석). */
-  async stage(doc: GutterDoc, hunk: DiffGroup): Promise<StageOutcome> {
+  /** hunk 하나를 스테이징할 수 있는지 본다(머리 주석). 부를 RPC 의 인자까지 만든다. */
+  async plan(doc: GutterDoc, hunk: DiffGroup, live: GutterText): Promise<StageCheck> {
     if (doc.dirty) return { kind: "dirty" };
     const rel = this.deps.source.relative(doc.path);
-    if (rel === undefined) return { kind: "failed", message: "outside the repository" };
+    const rev = doc.rev;
+    if (rel === undefined || rev === undefined)
+      return { kind: "failed", message: "outside the repository" };
     try {
-      const file = await this.deps.source.workTreeDiff(rel);
+      const [file, head, index] = await Promise.all([
+        this.deps.source.workTreeDiff(rel),
+        // 커밋이 없는 브랜치면 HEAD 에 아무것도 없다.
+        this.deps.source.head() === null
+          ? Promise.resolve<FileLines>({ lines: [], eol: true })
+          : stored(this.deps.source, rev, rel, true),
+        stored(this.deps.source, null, rel, false),
+      ]);
       const { document, disk } = await this.deps.versions(doc.path);
       if (doc.dirty) return { kind: "dirty" };
       if (document === null || document !== disk) return { kind: "diskChanged" };
-      const hunks = file ? stageSelection(file, hunk) : [];
-      if (hunks.length === 0) return { kind: "already" };
-      await this.deps.source.stageLines(rel, hunks);
+      if (!head || !index) return { kind: "inexact" };
+      const plan = planStage({
+        head,
+        index,
+        diff: file,
+        hunk,
+        workTreeLines: docLines(live.text).lines.length,
+      });
+      return plan.kind === "ready" ? { kind: "ready", rel, hunks: plan.hunks } : plan;
+    } catch (e) {
+      return { kind: "failed", message: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** hunk 하나를 스테이징한다 — 부르기 직전에 다시 판정한다. */
+  async stage(doc: GutterDoc, hunk: DiffGroup, live: GutterText): Promise<StageOutcome> {
+    const check = await this.plan(doc, hunk, live);
+    if (check.kind !== "ready") return check;
+    try {
+      await this.deps.source.stageLines(check.rel, check.hunks);
       return { kind: "staged" };
     } catch (e) {
       return { kind: "failed", message: e instanceof Error ? e.message : String(e) };
@@ -134,4 +176,28 @@ export class GutterHost {
       if (Math.abs(diff) >= size) return format.format(Math.round(diff / size), unit);
     return format.format(Math.round(diff), "second");
   }
+}
+
+/**
+ * 리비전(`null` = index)의 그 파일을 저장소 꼴의 줄로. 없으면 `missing` 이 참일 때 빈 파일(HEAD 에 없는 새 파일), 아니면 `undefined`.
+ * 텍스트가 아니거나 UTF-8 이 아니면 `undefined` — 줄을 바이트로 견줄 수 없다.
+ */
+async function stored(
+  source: GutterSource,
+  rev: string | null,
+  path: string,
+  missing: boolean,
+): Promise<FileLines | undefined> {
+  let blob: GitBlob;
+  try {
+    blob = await source.blob({ rev, path });
+  } catch (e) {
+    const code = (e as { code?: unknown } | null)?.code;
+    if (missing && code === ERROR_CODE.NOT_FOUND) return { lines: [], eol: true };
+    throw e;
+  }
+  const j = blob.judgment;
+  if (blob.content?.kind !== "text" || !j || j.binary || j.lossy || j.encoding !== "UTF-8")
+    return undefined;
+  return storedLines(blob.content.text);
 }

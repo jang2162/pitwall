@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { diffLines, splitLines } from "./line-diff";
+import { diffLines, MAX_COST, splitLines } from "./line-diff";
 
 /** 묶음을 `a` 에 적용해 `b` 를 다시 만든다. */
 function apply(a: string[], b: string[], groups: ReturnType<typeof diffLines>): string[] {
@@ -88,8 +88,38 @@ describe("diffLines", () => {
     ]);
   });
 
+  it("splits a big scattered change at unique lines instead of marking unchanged lines (review F3)", () => {
+    // 5,000줄에 900줄을 흩어 고침 — 바뀐 줄 1,800(뺀 + 더한)이 Myers 상한(`MAX_COST`)을 넘는다.
+    const a = Array.from({ length: 5000 }, (_, i) => `    let value_${i} = compute(${i});`);
+    const b = a.slice();
+    const changed: number[] = [];
+    for (let k = 0; k < 900; k++) {
+      const at = k * 5 + 2;
+      b[at] = `${b[at]} // edited`;
+      changed.push(at + 1);
+    }
+    const stats = { middle: 0, cost: 0, anchored: 0 };
+    const groups = diffLines(a, b, MAX_COST, stats);
+    expect(stats.anchored).toBeGreaterThan(0);
+    // 묶음은 고친 줄마다 하나 — 안 바뀐 줄은 어느 묶음에도 없다.
+    expect(groups).toEqual(
+      changed.map((n) => ({ oldFrom: n, oldTo: n + 1, newFrom: n, newTo: n + 1 })),
+    );
+    expect(apply(a, b, groups)).toEqual(b);
+  });
+
+  it("still uses one group for a stretch without any unique line", () => {
+    const a = ["x", ...Array.from({ length: 30 }, () => "same"), "y"];
+    const b = ["x", ...Array.from({ length: 30 }, () => "other"), "y"];
+    expect(diffLines(a, b, 10)).toEqual([{ oldFrom: 2, oldTo: 32, newFrom: 2, newTo: 32 }]);
+  });
+
   it("splits a base the way the document splits its lines", () => {
-    expect(splitLines("a\r\nb\rc\nd", undefined)).toEqual(["a", "b", "c", "d"]);
-    expect(splitLines("a\r\nb\rc\nd", "\n")).toEqual(["a\r", "b\rc", "d"]);
+    expect(splitLines("a\r\nb\rc\nd", undefined)).toEqual({
+      lines: ["a", "b", "c", "d"],
+      eol: false,
+    });
+    expect(splitLines("a\r\nb\rc\nd\n", "\n")).toEqual({ lines: ["a\r", "b\rc", "d"], eol: true });
+    expect(splitLines("", undefined)).toEqual({ lines: [], eol: true });
   });
 });
