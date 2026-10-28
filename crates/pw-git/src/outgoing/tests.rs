@@ -117,6 +117,12 @@ async fn unknown_branches_commits_and_limits_are_invalid_params() {
         let e = git.push_commits(&p).unwrap_err();
         assert_eq!(e.code, pw_rpc::code::INVALID_PARAMS, "{p:?}: {e:?}");
     }
+    // 이름은 `git.push` 와 같은 검사로 먼저 거절한다(찾기 전에 — 「그런 브랜치 없음」 이 아니라 그 규칙으로).
+    let e = git.push_commits(&params(&f, "-x", None, 10)).unwrap_err();
+    assert!(
+        format!("{:?}", e.data).contains("must not start with `-`"),
+        "{e:?}"
+    );
 }
 
 /// 미신뢰: PATH 맨 앞의 가짜 `git` 이 불리지 않고(프로세스 0), 저장소 설정에 심은 프로그램도 돌지 않는다. 결과는 신뢰했을 때와
