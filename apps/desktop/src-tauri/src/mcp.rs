@@ -160,7 +160,7 @@ async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
     }
     let services = services(&host, &paths, "stdio");
     let cancel = tokio_util::sync::CancellationToken::new();
-    match pw_mcp::serve(
+    let code = match pw_mcp::serve(
         services,
         request,
         (tokio::io::stdin(), tokio::io::stdout()),
@@ -174,7 +174,13 @@ async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
             eprintln!("pitwall mcp: {e}");
             1
         }
+    };
+    // 세션 태스크가 Host 의 복제본을 쥔 채 런타임 종료 시간(`run` 의 2초)을 넘기면 `Drop` 없이 프로세스가 끝나 SQLite 가 닫히지
+    // 않는다 — `state.db-wal` · `-shm` 이 남는다. 종료 전에 직접 닫는다.
+    if let Some(registry) = host.registry() {
+        registry.close();
     }
+    code
 }
 
 /// 세션들이 함께 쓰는 것. 앱과 헤드리스가 같은 규칙으로 만든다.

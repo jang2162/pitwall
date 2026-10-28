@@ -187,6 +187,28 @@ fn create_get_list_update_delete() {
     assert_eq!(f.add(&f.dir("beta")).tags, Vec::<String>::new());
 }
 
+/// `Drop` 이 돌지 않는 종료(`std::process::exit`) 앞에서 복제본이 남아 있어도 `close` 가 연결을 닫아 WAL 사이드카를 걷는다.
+#[test]
+fn close_removes_the_wal_sidecars_while_a_clone_is_still_alive() {
+    let fx = Fixture::new();
+    fx.add(&fx.dir("alpha"));
+    let straggler = fx.registry.clone();
+    let names = |paths: &AppPaths| {
+        let mut names: Vec<_> = fs::read_dir(&paths.data)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    assert!(names(&fx.paths).contains(&"state.db-wal".to_owned()));
+
+    fx.registry.close();
+
+    assert_eq!(names(&fx.paths), ["state.db"]);
+    drop(straggler);
+}
+
 #[test]
 fn create_rejects_bad_roots_and_names() {
     let f = Fixture::new();

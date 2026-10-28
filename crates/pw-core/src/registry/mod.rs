@@ -573,6 +573,13 @@ impl Registry {
             .collect())
     }
 
+    /// 저장소 연결을 닫는다. 마지막 연결이면 SQLite 가 닫으며 WAL 을 파일에 옮기고 `-wal` · `-shm` 을 지운다. `Registry` 의 복제본이
+    /// 어디에 남아 있든 닫히므로, `Drop` 이 돌지 않는 종료(`std::process::exit`)가 사이드카를 남기지 않게 하려면 종료 직전에 부른다.
+    /// 이후 호출이 오면 파일을 다시 연다.
+    pub fn close(&self) {
+        *self.lock() = None;
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<store::Opened>> {
         self.inner.db.lock().unwrap_or_else(PoisonError::into_inner)
     }
