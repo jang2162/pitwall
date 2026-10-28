@@ -97,6 +97,7 @@ export function gitLogStrings(t: Translate) {
       action: t("git-log-reveal-action"),
       cleared: t("git-log-reveal-cleared"),
       clearedBody: t("git-log-reveal-cleared-body"),
+      restore: t("git-log-reveal-restore"),
       missing: t("git-log-reveal-missing"),
       missingBody: (rev: string) => t("git-log-reveal-missing-body", { rev }),
       failed: (message: string) => t("git-log-reveal-failed", { message }),

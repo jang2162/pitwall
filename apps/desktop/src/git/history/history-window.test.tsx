@@ -59,6 +59,8 @@ const host = vi.hoisted(() => ({
   calls: [] as { method: string; params: Record<string, unknown> }[],
   /** `git.fileHistory` 가 보낼 행. */
   history: [] as unknown[],
+  /** 있으면 `git.fileHistory` 가 행을 보낸 뒤 이 오류로 끝난다. */
+  historyError: undefined as unknown,
   fixture: undefined as unknown as {
     diffs: Record<string, unknown>;
     blobs: Record<string, unknown>;
@@ -98,8 +100,10 @@ vi.mock("../../tauri-transport", async () => {
         ignored: false,
       });
       const folders: Record<string, FsEntry[]> = {
-        "/repo": [entry("dir", "dir")],
+        "/repo": [entry("dir", "dir"), entry("sub", "dir")],
         "/repo/dir": [entry("c.txt", "file")],
+        // 서브모듈(작업 트리에 `.git` 파일).
+        "/repo/sub": [entry(".git", "file"), entry("x.txt", "file")],
       };
       server.onMessage((text) => {
         const m = JSON.parse(text) as { id?: number; method: string; params: never };
@@ -211,6 +215,11 @@ vi.mock("../../tauri-transport", async () => {
               const data = { rows: rows.slice(at, at + (at === 0 ? 200 : 500)) };
               send({ method: "stream.chunk", params: { streamId, data } });
             }
+            if (host.historyError)
+              return send({
+                method: "stream.end",
+                params: { streamId, status: "failed", error: host.historyError },
+              });
             return send({ method: "stream.end", params: { streamId, status: "completed" } });
           }
           case "git.diff": {
@@ -316,6 +325,7 @@ beforeEach(() => {
   window.history.replaceState(null, "", "/?window=project&project=p1");
   host.calls = [];
   host.history = FIXTURE.rows;
+  host.historyError = undefined;
   host.fixture = FIXTURE;
   activeWorktreeStore.setState({ top: undefined });
   diffPreferences.setState({ mode: "split" });
@@ -660,4 +670,53 @@ it("does not open for a path outside the repository and says so", async () => {
   await vi.waitFor(() => expect(document.body.textContent).toContain("저장소 밖의 파일이다"));
   expect(fileHistoryCalls()).toHaveLength(0);
   expect(document.querySelector("[data-git-history]")).toBeNull();
+});
+
+it("a file inside a submodule: the menus are off, ⌃⌥H says why, and a submodule the Host refuses shows why", async () => {
+  await mount();
+  await vi.waitFor(() => expect(treeRow("/repo/sub")).not.toBeNull());
+  await mouse(treeRow("/repo/sub")!, "dblclick");
+  await vi.waitFor(() => expect(treeRow("/repo/sub/x.txt")).not.toBeNull());
+  await mouse(treeRow("/repo/sub/x.txt")!, "contextmenu");
+  expect(menuItem("히스토리 보기")!.hasAttribute("data-disabled")).toBe(true);
+  await press(document.activeElement ?? document.body, { key: "Escape", code: "Escape" });
+  const tree = document.querySelector<HTMLElement>("[role=tree]")!;
+  tree.focus();
+  await press(tree, CTRL_ALT_H);
+  await vi.waitFor(() =>
+    expect(document.body.textContent).toContain("sub 는 따로 된 저장소(서브모듈 · 중첩 저장소)다"),
+  );
+  expect(fileHistoryCalls()).toHaveLength(0);
+
+  // 트리가 펼친 적 없는 서브모듈이면 Host 가 거절하고(`data.submodule`), 탭이 빈 목록 대신 그 까닭을 보인다.
+  host.history = [];
+  host.historyError = {
+    code: -32602,
+    message: "invalid params",
+    data: { detail: "`libs/sub/a.txt` is inside the submodule `libs/sub`", submodule: "libs/sub" },
+  };
+  await act(async () => void windowRegistry()!.run("git.showFileHistory", { path: FILE }));
+  await vi.waitFor(() =>
+    expect(status()).toBe(
+      "libs/sub 서브모듈 안의 파일이다 — 히스토리는 그 서브모듈 저장소에서 본다",
+    ),
+  );
+  expect(document.body.textContent).not.toContain("이 파일을 바꾼 커밋이 없다");
+});
+
+it("keeps the rows that came before a failure and shows the Host's reason, not just its code", async () => {
+  host.history = FIXTURE.rows.slice(0, 2);
+  host.historyError = {
+    code: -32602,
+    message: "invalid params",
+    data: "the path `caf\uFFFD.txt` is not UTF-8 — it cannot be named again",
+  };
+  await mount();
+  await act(async () => void windowRegistry()!.run("git.showFileHistory", { path: FILE }));
+  await vi.waitFor(() => expect(status()).toContain("히스토리를 읽지 못했다: the path `caf"));
+  expect(status()).toContain("is not UTF-8");
+  expect(status()).not.toContain("-32602");
+  expect(historyRows().map((r) => r.dataset.gitHistoryRow)).toEqual(
+    FIXTURE.rows.slice(0, 2).map((r) => r.hash),
+  );
 });

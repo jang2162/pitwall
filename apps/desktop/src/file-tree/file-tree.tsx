@@ -48,6 +48,7 @@ import type { FsCopied, FsCreated, FsMoved, FsTrashed } from "@pitwall/rpc-clien
 
 import { useEditorWorkspace } from "../editor/editor-workspace";
 import { useGitDecoration } from "../git/git-status";
+import { nestedRepository } from "../git/history/git-history";
 import { useGitHistoryStrings } from "../git/history/strings";
 import {
   GitStatusMark,
@@ -669,7 +670,13 @@ export function FileTree({
           )}
           {handlers.history && (
             <MenuItem
-              disabled={!target || target.dir || target.outside}
+              // 서브모듈 · 중첩 저장소 안의 파일은 이 저장소의 이력에 없다.
+              disabled={
+                !target ||
+                target.dir ||
+                target.outside ||
+                nestedRepository(model, target.path) !== undefined
+              }
               onSelect={() => target && handlers.history?.(target.path)}
             >
               {historyStrings.menu}

@@ -13,12 +13,14 @@ import { bundledLocalization, KO_PROJECT } from "../i18n/testing";
 import {
   createNotificationStore,
   HOST_NOTIFICATION_TOPIC,
+  type NotificationHandle,
   type NotificationInput,
   NotificationProvider,
   NOTIFICATION_LIMIT,
   type NotificationStore,
   TOAST_LIMIT,
   ToastGate,
+  useRetirableNotify,
   useHostNotifications,
   useNotify,
 } from "./notifications";
@@ -29,6 +31,7 @@ declare global {
 
 let root: Root | undefined;
 let notify: (input: NotificationInput) => void = () => {};
+let notifyRetirable: (input: NotificationInput) => NotificationHandle = () => ({ retire() {} });
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -48,6 +51,7 @@ afterEach(async () => {
 
 function Notifier({ client, projectId }: { client?: RpcClient; projectId?: string }) {
   notify = useNotify();
+  notifyRetirable = useRetirableNotify();
   useHostNotifications(client, projectId);
   return null;
 }
@@ -115,6 +119,30 @@ it("runs a notification's action once, from the toast or the record, and keeps i
   expect(run).toHaveBeenCalledTimes(1);
   // 함수는 직렬화되지 않는다 — 기록을 옮기면(창을 다시 열면) 단추가 없다.
   expect(JSON.parse(JSON.stringify(item))).not.toHaveProperty("action.run");
+});
+
+it("retires an action without running it: the record's button is off and the toast loses its button", async () => {
+  const store = createNotificationStore();
+  await mount(store);
+  const run = vi.fn();
+  let handle: NotificationHandle | undefined;
+  await act(async () => {
+    handle = notifyRetirable({
+      level: "info",
+      title: "필터를 풀었다",
+      action: { label: "되돌리기", run },
+    });
+  });
+  await settle();
+  expect(toastNodes()[0]!.querySelector("button[data-button]")).not.toBeNull();
+  await act(async () => handle!.retire());
+  await settle();
+  expect(toastNodes()[0]!.textContent).toContain("필터를 풀었다");
+  expect(toastNodes()[0]!.querySelector("button[data-button]")).toBeNull();
+  const [item] = store.getState().items;
+  expect(item!.acted).toBe(true);
+  expect(store.getState().act(item!.id)).toBe(false);
+  expect(run).not.toHaveBeenCalled();
 });
 
 it("keeps the newest NOTIFICATION_LIMIT notifications in the record", () => {

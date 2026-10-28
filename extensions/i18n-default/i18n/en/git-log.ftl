@@ -133,6 +133,8 @@ git-log-result-copied = Copied the hash
 git-log-reveal-action = Select Commit in Git Log
 git-log-reveal-cleared = The commit is not in the current filter, so the filter was cleared
 git-log-reveal-cleared-body = Cleared the branch, text, author, date and path filters and selected the commit
+# Notification button — brings the cleared filter back
+git-log-reveal-restore = Restore Filter
 git-log-reveal-missing = The commit is not in the Git log
 # $rev: short hash
 git-log-reveal-missing-body = { $rev } is not reachable from any branch, tag or HEAD

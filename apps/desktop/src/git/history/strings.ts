@@ -16,6 +16,7 @@ export function gitHistoryStrings(t: Translate) {
     loading: t("git-history-loading"),
     empty: t("git-history-empty"),
     failed: (message: string) => t("git-history-failed", { message }),
+    submodule: (submodule: string) => t("git-history-submodule", { submodule }),
     count: (count: number) => t("git-history-count", { count }),
     pick: t("git-history-pick"),
     renamed: (from: string, to: string) => t("git-history-renamed", { from, to }),
@@ -42,6 +43,7 @@ export function gitHistoryStrings(t: Translate) {
       noFileBody: t("git-history-no-file-body"),
       outside: t("git-history-outside"),
       folder: t("git-history-folder"),
+      nested: (repo: string) => t("git-history-nested", { repo }),
       failed: (message: string) => t("git-history-open-failed", { message }),
     },
   };

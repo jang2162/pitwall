@@ -116,6 +116,25 @@ pub fn check_start(repo: &gix::Repository, start: ObjectId, path: &BStr) -> Resu
             "`{path}` is a directory in {start}"
         )));
     }
+    // 서브모듈 안의 파일은 이 저장소의 이력에 없다(그 저장소의 커밋이다) — 빈 목록 대신 그 서브모듈을 알린다(`data.submodule`).
+    let parts: Vec<&[u8]> = path.split(|&b| b == b'/').collect();
+    for end in 1..parts.len() {
+        let prefix = BString::from(parts[..end].join(&b'/'));
+        let entry = tree
+            .lookup_entry_by_path(prefix.to_path_lossy())
+            .map_err(internal)?;
+        if entry.is_some_and(|e| e.mode().is_commit()) {
+            let detail = format!(
+                "`{path}` is inside the submodule `{prefix}` — its history is in that repository"
+            );
+            return Err(
+                RpcError::invalid_params(detail.clone()).with_data(serde_json::json!({
+                    "detail": detail,
+                    "submodule": prefix.to_string(),
+                })),
+            );
+        }
+    }
     Ok(())
 }
 
@@ -223,6 +242,21 @@ pub fn run(
             (Change::Deleted, _) => (FileChangeKind::Deleted, None),
             (Change::TypeChanged, _) => (FileChangeKind::TypeChanged, None),
         };
+        // UTF-8 이 아닌 경로는 싣지 못한다 — 그때까지 모인 행을 먼저 보내고 invalid params 로 끝난다(13-m2-plan 「하지 않는 것」).
+        let paths = crate::blame::path_text(path.as_bstr()).and_then(|row_path| {
+            let old = old_path
+                .as_ref()
+                .map(|p| crate::blame::path_text(p.as_bstr()))
+                .transpose()?;
+            Ok((row_path, old))
+        });
+        let (row_path, row_old_path) = match paths {
+            Ok(paths) => paths,
+            Err(e) => {
+                out.finish(emit);
+                return Err(e);
+            }
+        };
         let found = repo.objects.find_commit(&id, &mut buf).map_err(internal)?;
         let mailmap = mailmap.get_or_insert_with(|| Mailmap::of(repo, trusted));
         let text = Text::read(&found, mailmap)?;
@@ -233,12 +267,9 @@ pub fn run(
             author_name: clip(&text.author_name, MAX_IDENT),
             author_email: clip(&text.author_email, MAX_IDENT),
             author_time: text.author_time,
-            path: crate::blame::path_text(path.as_bstr())?,
+            path: row_path,
             change: kind,
-            old_path: old_path
-                .as_ref()
-                .map(|p| crate::blame::path_text(p.as_bstr()))
-                .transpose()?,
+            old_path: row_old_path,
         };
         // 그 뒤로 걷는 커밋은 모두 원래 경로를 따라간다(머리 주석).
         if let Some(source) = old_path {

@@ -352,8 +352,8 @@ async fn trusted_blame_reads_the_stored_content_not_the_textconv_output() {
     assert!(!marks.exists(), "textconv ran");
 }
 
-/// UTF-8 이 아닌 경로(`caf\xe9.txt` → `cafe.txt` 이름 바뀜)는 U+FFFD 로 바꿔 싣지 않고 invalid params 로 끝난다 — 바꾼 이름으로는
-/// 다시 지목할 수 없어 「이 커밋 이전으로」 가 조용히 빈 결과가 된다(`super::super::path_text`). 두 엔진 · 파일 히스토리 모두.
+/// UTF-8 이 아닌 경로(`caf\xe9.txt` → `cafe.txt` 이름 바뀜 뒤 수정)는 U+FFFD 로 바꿔 싣지 않고 invalid params 로 끝난다(파일
+/// 히스토리는 그 경로가 나오기 전의 행을 보낸 뒤) — 바꾼 이름으로는 다시 지목할 수 없어 「이 커밋 이전으로」 가 조용히 빈 결과가 된다(`super::super::path_text`). 두 엔진 · 파일 히스토리 모두.
 /// macOS 는 그런 파일 이름을 만들 수 없어 index 로 커밋한다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn paths_that_are_not_utf8_fail_instead_of_turning_into_replacement_characters() {
@@ -394,6 +394,8 @@ async fn paths_that_are_not_utf8_fail_instead_of_turning_into_replacement_charac
     );
     index_info(rename);
     repo.git(&["commit", "-q", "-m", "rename"]);
+    index_info(format!("100644 {} 0\tcafe.txt\n", blob("a\nb\nc\nd\ne\nf\nG\nH\n")).into_bytes());
+    repo.git(&["commit", "-q", "-m", "edit"]);
     // git 도 이름 바뀜으로 본다(대조의 전제).
     assert!(
         repo.git(&[
@@ -404,7 +406,7 @@ async fn paths_that_are_not_utf8_fail_instead_of_turning_into_replacement_charac
             "--",
             "cafe.txt"
         ])
-        .starts_with('R'),
+        .contains("\nR"),
     );
 
     let fx = Fx::new("");
@@ -429,7 +431,7 @@ async fn paths_that_are_not_utf8_fail_instead_of_turning_into_replacement_charac
                     .all(|r| !r.source_path.contains('\u{fffd}'))
             );
         }
-        let (_, outcome) = fx
+        let (chunks, outcome) = fx
             .stream::<_, FileHistoryChunk>(
                 "git.fileHistory",
                 &GitFileHistoryParams {
@@ -441,6 +443,13 @@ async fn paths_that_are_not_utf8_fail_instead_of_turning_into_replacement_charac
             )
             .await;
         assert!(invalid(&outcome), "fileHistory: {outcome:?}");
+        // 그 경로가 나오기 전의 행(이름 바뀜 뒤의 수정)은 보낸 뒤 끝난다.
+        let rows: Vec<(String, String)> = chunks
+            .into_iter()
+            .flat_map(|c| c.rows)
+            .map(|r| (r.subject, r.path))
+            .collect();
+        assert_eq!(rows, [("edit".to_owned(), "cafe.txt".to_owned())]);
     }
 }
 

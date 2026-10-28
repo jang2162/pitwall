@@ -165,6 +165,33 @@ fn a_deleted_file_has_a_history_and_a_directory_is_refused() {
     );
 }
 
+/// 서브모듈 안의 파일은 이 저장소의 이력에 없다 — 빈 목록 대신 invalid params 로 그 서브모듈을 알린다(`data.submodule`). 서브모듈
+/// 자리 자체(gitlink)는 파일처럼 따라간다(`git log --follow -- sub` 와 같다).
+#[test]
+fn a_file_inside_a_submodule_is_refused_with_the_submodule() {
+    let repo = TestRepo::new();
+    repo.commit_file("a.txt", "one\n", "add");
+    let gitlink = repo.head();
+    repo.git(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("160000,{gitlink},libs/sub"),
+    ]);
+    repo.git(&["commit", "-q", "-m", "submodule"]);
+    let r = crate::blame::tests::open(repo.root());
+    let head = crate::blame::start_commit(&r, None).unwrap().unwrap();
+    let err = check_start(&r, head, "libs/sub/src/x.txt".into()).unwrap_err();
+    assert_eq!(err.code, pw_rpc::code::INVALID_PARAMS);
+    let data = err.data.unwrap();
+    assert_eq!(data["submodule"], "libs/sub");
+    assert!(data["detail"].as_str().unwrap().contains("submodule"));
+    // 서브모듈 자리 · 그 밖의 경로는 받는다.
+    check_start(&r, head, "libs/sub".into()).unwrap();
+    check_start(&r, head, "libs/other/x.txt".into()).unwrap();
+    assert_matches(repo.root(), repo.base(), "HEAD", "libs/sub");
+}
+
 /// 무작위 이력(이름 바뀜 · 지웠다가 다른 파일의 복사로 다시 만들기 · 갈래와 머지 · 시각 동률 · 시계 어긋남)에서 대상 파일이 거친
 /// 모든 이름의 히스토리가 git 과 같다.
 #[test]

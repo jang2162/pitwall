@@ -121,6 +121,8 @@ git-log-result-copied = 해시를 복사했다
 git-log-reveal-action = Git 로그에서 커밋 선택
 git-log-reveal-cleared = 지금 필터에 없는 커밋이라 필터를 풀었다
 git-log-reveal-cleared-body = 브랜치 · 텍스트 · 작성자 · 날짜 · 경로 필터를 모두 지우고 그 커밋을 골랐다
+# 알림의 단추 — 푼 필터를 되살린다
+git-log-reveal-restore = 필터 되돌리기
 git-log-reveal-missing = Git 로그에 없는 커밋이다
 # $rev: 짧은 해시
 git-log-reveal-missing-body = { $rev } 는 어느 브랜치 · 태그 · HEAD 에서도 닿지 않는다

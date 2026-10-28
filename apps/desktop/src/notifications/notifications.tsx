@@ -2,6 +2,8 @@
 // 오류는 알림 툴 윈도우를 볼 때까지 상태바의 알림 아이콘을 강조한다. 기록은 창 하나의 메모리에만 있다 — 창을 닫으면 사라진다.
 //
 // 알림을 내는 법: 창 안의 컴포넌트에서 `const notify = useNotify();` 를 받아 `notify({ level: "error", title, body })`.
+// 단추(`action`)가 더는 뜻이 없어질 수 있으면(되돌릴 상태가 그사이 바뀜) `useRetirableNotify()` 로 내고, 돌려받은 손잡이의
+// `retire()` 로 끈다.
 // 문장은 그 기능의 문자열(Fluent)로 만들어 넘긴다. `body` 에는 오류 원문(RPC 오류 메시지 등)을 그대로 둔다.
 //
 // Host 가 내는 알림(감시 한도 초과 등)은 버스 토픽 `notification.show`(crates/pw-core/src/notification.rs)로 온다. 창은
@@ -71,6 +73,8 @@ interface NotificationState {
   markSeen(): void;
   /** `id` 의 단추를 누른다 — 처음 한 번만 `run` 을 부르고 참을 돌려준다. */
   act(id: number): boolean;
+  /** `id` 의 단추를 누르지 않고 끈다(`run` 을 부르지 않는다). 끌 단추가 있었으면 참. */
+  retire(id: number): boolean;
   clear(): void;
 }
 
@@ -97,6 +101,12 @@ export function createNotificationStore(): NotificationStore {
       item.action.run();
       return true;
     },
+    retire(id) {
+      const item = get().items.find((n) => n.id === id);
+      if (!item?.action || item.acted) return false;
+      set((s) => ({ items: s.items.map((n) => (n.id === id ? { ...n, acted: true } : n)) }));
+      return true;
+    },
     clear: () => set({ items: [], unseenErrors: 0 }),
   }));
 }
@@ -119,6 +129,11 @@ export class ToastGate {
 
   release(key: string): void {
     this.open.delete(key);
+  }
+
+  /** 그 키의 토스트가 떠 있는가. */
+  isOpen(key: string): boolean {
+    return this.open.has(key);
   }
 }
 
@@ -160,31 +175,53 @@ export function useNotifications<T>(selector: (state: NotificationState) => T): 
 
 const TOASTS = { info: toast.info, warning: toast.warning, error: toast.error } as const;
 
+/** `notify` 가 돌려주는 손잡이. */
+export interface NotificationHandle {
+  /** 단추를 끈다: 기록의 단추를 누를 수 없게 하고, 토스트가 떠 있으면 단추 없이 다시 그린다. 이미 눌렀거나 꺼졌으면 아무것도 안 한다. */
+  retire(): void;
+}
+
 /** 알림을 기록하고 토스트로 띄우는 함수. 함수는 창이 사는 동안 같다. 토스트를 합치고 막는 규칙은 머리 주석. */
 export function useNotify(): (input: NotificationInput) => void {
+  const notify = useRetirableNotify();
+  return useCallback((input: NotificationInput) => void notify(input), [notify]);
+}
+
+/** `useNotify` 와 같고, 낸 알림의 단추를 나중에 끌 손잡이를 돌려준다. */
+export function useRetirableNotify(): (input: NotificationInput) => NotificationHandle {
   const { store, gate } = useNotificationContext();
   const repeated = useProjectStrings().notifications.repeated;
   const repeatedRef = useRef(repeated);
   repeatedRef.current = repeated;
   return useCallback(
-    (input: NotificationInput) => {
+    (input: NotificationInput): NotificationHandle => {
       const item = store.getState().push(input);
       const key = `${input.level}:${input.title}`;
       const count = gate.admit(key);
-      if (count === undefined) return;
       const release = () => gate.release(key);
-      TOASTS[input.level](count > 1 ? repeatedRef.current(input.title, count) : input.title, {
-        id: key,
-        description: input.body,
-        ...(input.action && {
-          action: {
-            label: input.action.label,
-            onClick: () => store.getState().act(item.id),
+      const show = (withAction: boolean) =>
+        TOASTS[input.level](
+          count !== undefined && count > 1 ? repeatedRef.current(input.title, count) : input.title,
+          {
+            id: key,
+            description: input.body,
+            // 같은 id 로 다시 그리면 sonner 는 옛 옵션에 덮어쓴다 — 단추를 없앨 때는 `undefined` 를 적어 넘긴다.
+            action:
+              withAction && input.action
+                ? { label: input.action.label, onClick: () => store.getState().act(item.id) }
+                : undefined,
+            onDismiss: release,
+            onAutoClose: release,
           },
-        }),
-        onDismiss: release,
-        onAutoClose: release,
-      });
+        );
+      if (count !== undefined) show(true);
+      return {
+        retire: () => {
+          // 같은 키의 토스트가 떠 있으면(이 알림 · 뒤에 합쳐진 같은 제목) 단추 없이 다시 그린다.
+          if (store.getState().retire(item.id) && count !== undefined && gate.isOpen(key))
+            show(false);
+        },
+      };
     },
     [store, gate],
   );

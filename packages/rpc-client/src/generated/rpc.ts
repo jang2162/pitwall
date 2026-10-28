@@ -507,8 +507,9 @@ export type StreamMethods = {
 	 * 이름 바뀜을 따라가는 파일 히스토리(F5-16 — `git log --follow --name-status` 와 같은 커밋 · 순서 · 상태). 행마다 해시 ·
 	 * 부모 · 제목 · 작성자 · 시각 · 그 커밋에서의 경로 · 바뀜(A · M · D · R · C · T)과 이름 바뀜의 원래 경로. 첫 청크는 200행
 	 * 이하, 그 뒤는 500행 이하이고 모인 행은 100 ms 안에 보낸다. 저장소가 없거나 HEAD 가 태어나지 않았으면 청크 없이 끝난다.
-	 * 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 시작 리비전에서 폴더인 경로는 invalid params. 걷다가 UTF-8 이 아닌 경로가
-	 * 나오면 그때까지의 행을 보낸 뒤 invalid params 로 끝난다(경로를 U+FFFD 로 바꿔 싣지 않는다).
+	 * 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 시작 리비전에서 폴더인 경로는 invalid params. 시작 리비전에서 서브모듈 안의
+	 * 경로면 invalid params 이고 `data` 가 `{ detail, submodule }`(서브모듈 자리, 저장소 꼭대기 기준)이다. 걷다가 UTF-8 이 아닌
+	 * 경로가 나오면 그때까지의 행을 보낸 뒤 invalid params 로 끝난다(경로를 U+FFFD 로 바꿔 싣지 않는다).
 	 */
 	"git.fileHistory": { params: GitFileHistoryParams; item: FileHistoryChunk };
 	/**
@@ -588,7 +589,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.discardLines": {"name":"git.discardLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitDiscardLinesParams","output":"GitWorkTree","doc":" 작업 트리 diff 의 hunk · 줄을 골라 버린다(작업 트리에 `git apply -R`). `confirmed: true` 가 있어야 한다(결정 M2-D6 ①).\n 작업 트리에서 지운 파일은 파일 단위(`git.discard`)로 되살린다.\n","mcp":false,"fileScope":false},
 	"git.executable": {"name":"git.executable","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"GitExecutable","doc":" 설정 창 「Git」: git 실행 파일 경로 · 찾은 버전 · 쓰기를 끈 이유. 로그인 셸의 PATH 로 찾고 고정 argv `git --version` 만\n 띄운다(작업 디렉터리는 어느 프로젝트 안도 아닌 곳). 처음이면 로그인 셸을 기다린다.\n","mcp":false,"fileScope":false},
 	"git.fetch": {"name":"git.fetch","kind":"unary","tier":"write","roles":["owner"],"params":"GitFetchParams","output":"GitFetchResult","doc":" fetch: 원격 하나 또는 전부, prune 선택. 인증은 askpass 로 창에 묻는다.\n","mcp":false,"fileScope":false},
-	"git.fileHistory": {"name":"git.fileHistory","kind":"stream","tier":"read","roles":["owner"],"params":"GitFileHistoryParams","output":"FileHistoryChunk","doc":" 이름 바뀜을 따라가는 파일 히스토리(F5-16 — `git log --follow --name-status` 와 같은 커밋 · 순서 · 상태). 행마다 해시 ·\n 부모 · 제목 · 작성자 · 시각 · 그 커밋에서의 경로 · 바뀜(A · M · D · R · C · T)과 이름 바뀜의 원래 경로. 첫 청크는 200행\n 이하, 그 뒤는 500행 이하이고 모인 행은 100 ms 안에 보낸다. 저장소가 없거나 HEAD 가 태어나지 않았으면 청크 없이 끝난다.\n 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 시작 리비전에서 폴더인 경로는 invalid params. 걷다가 UTF-8 이 아닌 경로가\n 나오면 그때까지의 행을 보낸 뒤 invalid params 로 끝난다(경로를 U+FFFD 로 바꿔 싣지 않는다).\n","mcp":false,"fileScope":false},
+	"git.fileHistory": {"name":"git.fileHistory","kind":"stream","tier":"read","roles":["owner"],"params":"GitFileHistoryParams","output":"FileHistoryChunk","doc":" 이름 바뀜을 따라가는 파일 히스토리(F5-16 — `git log --follow --name-status` 와 같은 커밋 · 순서 · 상태). 행마다 해시 ·\n 부모 · 제목 · 작성자 · 시각 · 그 커밋에서의 경로 · 바뀜(A · M · D · R · C · T)과 이름 바뀜의 원래 경로. 첫 청크는 200행\n 이하, 그 뒤는 500행 이하이고 모인 행은 100 ms 안에 보낸다. 저장소가 없거나 HEAD 가 태어나지 않았으면 청크 없이 끝난다.\n 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 시작 리비전에서 폴더인 경로는 invalid params. 시작 리비전에서 서브모듈 안의\n 경로면 invalid params 이고 `data` 가 `{ detail, submodule }`(서브모듈 자리, 저장소 꼭대기 기준)이다. 걷다가 UTF-8 이 아닌\n 경로가 나오면 그때까지의 행을 보낸 뒤 invalid params 로 끝난다(경로를 U+FFFD 로 바꿔 싣지 않는다).\n","mcp":false,"fileScope":false},
 	"git.log": {"name":"git.log","kind":"stream","tier":"read","roles":["owner"],"params":"GitLogParams","output":"LogChunk","doc":" 커밋 로그(F5-1 · F5-2). 행마다 해시 · 부모 · 제목 · 작성자 · 시각 · ref 장식 · 레인 배치. 첫 청크는 200행을 배치하자마자\n 보내고(`total` 이 실린다) 나머지는 500행씩. 브랜치 밖의 필터가 켜지면 행의 `graph` 가 `null` 이고 맞는 커밋만 온다.\n 저장소가 없으면 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 모르는 ref, 잘못된 정규식 · 경로 · 해시는 invalid params.\n","mcp":false,"fileScope":false},
 	"git.logPage": {"name":"git.logPage","kind":"unary","tier":"read","roles":["owner"],"params":"GitLogPageParams","output":"GitLogPage","doc":" `git.log` 의 쪽 단위(결정 M2-D7). 같은 행을 `cursor` 부터 많아야 `limit`(1~500)행. 저장소가 없으면 빈 쪽.\n","mcp":false,"fileScope":false},
 	"git.merge": {"name":"git.merge","kind":"unary","tier":"write","roles":["owner"],"params":"GitMergeParams","output":"GitHistoryResult","doc":" 리비전을 지금 브랜치에 merge 한다(`git merge --no-edit`, fast-forward 선택). 충돌이면 `outcome: stopped` 와 진행 중 작업.\n git 이 거절하면(덮어써질 로컬 변경, `--ff-only` 로 못 함 등) 원문으로 실패한다.\n","mcp":false,"fileScope":false},

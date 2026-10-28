@@ -50,5 +50,9 @@ git-history-no-file = No file to show the history of
 git-history-no-file-body = Open a file in the editor or choose one in the project tree
 git-history-outside = The file is outside the repository
 git-history-folder = Folders have no history view — choose a file
+# $submodule: the submodule's path (from the repository top)
+git-history-submodule = The file is inside the submodule { $submodule } — its history is in that submodule's repository
+# $repo: that repository's folder (from the tree root)
+git-history-nested = { $repo } is a separate repository (submodule or nested repository) — the history of files inside it is in that repository
 # $message: the error text
 git-history-open-failed = Could not open the file history: { $message }

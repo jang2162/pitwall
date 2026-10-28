@@ -15,6 +15,8 @@ import { type ReactNode, useEffect, useState } from "react";
 import { useStore } from "zustand";
 
 import { gitDocumentDetail } from "../git/documents/spec";
+import { windowFileTree } from "../file-tree/project-view";
+import { nestedRepository } from "../git/history/git-history";
 import { useGitHistoryStrings } from "../git/history/strings";
 import { useGitDecoration } from "../git/git-status";
 import { GitStatusMark, gitStatusTitle, gitToneClass } from "../git/git-status-mark";
@@ -38,10 +40,19 @@ function useTabParams(
   return params;
 }
 
-function MenuItem({ children, onSelect }: { children: ReactNode; onSelect(): void }) {
+function MenuItem({
+  children,
+  onSelect,
+  disabled,
+}: {
+  children: ReactNode;
+  onSelect(): void;
+  disabled?: boolean;
+}) {
   return (
     <ContextMenu.Item
       onSelect={onSelect}
+      disabled={disabled}
       className="flex h-[24px] cursor-default items-center gap-3 px-3 outline-none data-[disabled]:text-ui-muted-foreground data-[highlighted]:bg-ui-active"
     >
       {children}
@@ -149,6 +160,8 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
             <>
               <ContextMenu.Separator className="my-1 h-px bg-ui-border" />
               <MenuItem
+                // 서브모듈 · 중첩 저장소 안의 파일(트리가 읽은 행으로 판정)은 끈다.
+                disabled={nestedRepository(windowFileTree(), params.path) !== undefined}
                 onSelect={() =>
                   registry.run("git.showFileHistory", {
                     path: params.path,

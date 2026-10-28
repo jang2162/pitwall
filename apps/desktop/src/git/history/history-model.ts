@@ -2,16 +2,35 @@
 // 안의 배열이고, 화면은 `version` 이 바뀔 때만 다시 그린다(Git 로그의 log-model.ts 와 같은 꼴).
 //
 // - 처음 받을 때는 청크가 오는 대로 보인다(첫 청크 = 화면 한 쪽, M2-05).
+// - 오류로 끝나면 상태에 그 까닭(Host 오류의 `data`)을 둔다. 처음 받던 중이면 그때까지 온 행은 남긴다.
 // - 다시 받을 때(HEAD 가 움직임 — `git.refsChanged`)는 끝까지 받은 뒤 한 번에 바꾼다. 받는 동안 옛 목록과 고른 행이 그대로라 목록이
 //   비었다가 다시 차지 않는다. 다시 받다 실패하면 옛 목록을 두고 상태만 오류다.
 // - `load` 를 다시 부르거나 `dispose` 하면 도는 스트림을 끊는다(`AbortController` — Host 의 걷기도 멈춘다).
 
-import type { FileHistoryRow, RpcClient } from "@pitwall/rpc-client";
+import { type FileHistoryRow, type RpcClient, RpcCallError } from "@pitwall/rpc-client";
 
 export type HistoryStatus =
   | { kind: "loading" }
   | { kind: "done" }
-  | { kind: "error"; message: string };
+  /** `submodule` 이 있으면 그 서브모듈 안의 파일이라 Host 가 거절했다(`git.fileHistory` 의 `data.submodule`). */
+  | { kind: "error"; message: string; submodule?: string };
+
+/** 오류의 까닭: Host 오류는 `data`(글이면 그것, `{ detail }` 이면 그것)가 이유다 — 메시지(`invalid params`)만으로는 모른다. */
+export function errorStatus(e: unknown): Extract<HistoryStatus, { kind: "error" }> {
+  if (e instanceof RpcCallError) {
+    const data = e.data;
+    if (typeof data === "string") return { kind: "error", message: data };
+    if (data && typeof data === "object" && !Array.isArray(data)) {
+      const { detail, submodule } = data as { detail?: unknown; submodule?: unknown };
+      return {
+        kind: "error",
+        message: typeof detail === "string" ? detail : e.message,
+        ...(typeof submodule === "string" && { submodule }),
+      };
+    }
+  }
+  return { kind: "error", message: e instanceof Error ? e.message : String(e) };
+}
 
 /** 히스토리를 부를 곳. */
 export interface HistorySource {
@@ -69,7 +88,8 @@ export class HistoryModel {
         this.status = { kind: "done" };
       } catch (e) {
         if (abort.signal.aborted) return;
-        this.status = { kind: "error", message: e instanceof Error ? e.message : String(e) };
+        // 처음 받던 중이면 그때까지 온 행은 이미 보이고 있다(UTF-8 이 아닌 경로가 나오면 Host 가 그 앞까지 보낸 뒤 끝낸다).
+        this.status = errorStatus(e);
       }
       this.changed();
     })();

@@ -1187,6 +1187,53 @@ it("git.log.reveal clears a branch filter that leaves the commit out, reloads an
   await vi.waitFor(() => expect(document.body.textContent).toContain("필터를 풀었다"));
   // 브랜치 패널도 「모든 브랜치」 로 돌아왔다.
   expect(branch("refs/heads/feat/x").getAttribute("aria-selected")).toBe("false");
+
+  // 알림의 [필터 되돌리기] 가 푼 필터를 한 번 되살린다.
+  const restore = toastRestore()!;
+  expect(recordRestore()!.disabled).toBe(false);
+  await mouse(restore, "click");
+  await vi.waitFor(() => expect(logCalls().at(-1)!.params.refs).toEqual(["refs/heads/feat/x"]));
+  expect(branch("refs/heads/feat/x").getAttribute("aria-selected")).toBe("true");
+  // 한 번만 — 기록의 단추는 꺼지고, 닫히는 중인 토스트의 단추를 다시 눌러도 아무것도 하지 않는다.
+  await vi.waitFor(() => expect(recordRestore()!.disabled).toBe(true));
+  await mouse(branch("refs/heads/main"), "click");
+  const calls = logCalls().length;
+  if (restore.isConnected) await mouse(restore, "click");
+  await settle();
+  expect(logCalls().length).toBe(calls);
+  expect(logCalls().at(-1)!.params.refs).toEqual(["refs/heads/main"]);
+});
+
+/** 「필터를 풀었다」 알림의 [필터 되돌리기] 단추들(토스트 · 알림 기록). */
+const restoreButtons = () =>
+  [...document.querySelectorAll<HTMLButtonElement>("button")].filter(
+    (b) => b.textContent === "필터 되돌리기",
+  );
+/** 누를 수 있는 [필터 되돌리기]. */
+const restoreButton = () => restoreButtons().find((b) => !b.disabled);
+/** 토스트의 [필터 되돌리기](sonner 의 단추는 `data-button`). 기록(알림 툴 윈도우)의 단추는 그 밖의 것이다. */
+const toastRestore = () => restoreButtons().find((b) => b.hasAttribute("data-button"));
+const recordRestore = () => restoreButtons().find((b) => !b.hasAttribute("data-button"));
+
+it("git.log.reveal turns the restore button off once the person changes the filter", async () => {
+  const registry = captureRegistry();
+  host.logRows = (params) =>
+    (params.refs as string[] | null)?.includes("refs/heads/feat/x")
+      ? (host.rows as LogRow[]).slice(0, 5)
+      : undefined;
+  await openLog();
+  const branch = (name: string) => document.querySelector<HTMLElement>(`[data-ref="${name}"]`)!;
+  await mouse(branch("refs/heads/feat/x"), "click");
+  await act(async () => void registry()!.run("git.log.reveal", { rev: hashOf(40) }));
+  await vi.waitFor(() => expect(restoreButton()).toBeDefined());
+  // 사람이 필터를 다시 건다 — 되돌릴 것은 더 이상 그 필터가 아니다.
+  await mouse(branch("refs/heads/main"), "click");
+  expect(logCalls().at(-1)!.params.refs).toEqual(["refs/heads/main"]);
+  // 토스트의 단추는 사라지고 알림 기록의 단추는 꺼진다.
+  await vi.waitFor(() => expect(restoreButton()).toBeUndefined());
+  expect(restoreButtons().length).toBeGreaterThan(0);
+  expect(restoreButtons().every((b) => b.disabled)).toBe(true);
+  expect(document.body.textContent).toContain("필터를 풀었다");
 });
 
 it("git.log.reveal keeps the filter and warns when no ref reaches the commit", async () => {

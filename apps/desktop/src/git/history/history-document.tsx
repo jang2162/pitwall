@@ -279,9 +279,15 @@ export function HistoryDocument({
     e.preventDefault();
   };
 
-  const status =
+  const failure =
     model.status.kind === "error"
-      ? T.failed(model.status.message)
+      ? model.status.submodule !== undefined
+        ? T.submodule(model.status.submodule)
+        : T.failed(model.status.message)
+      : undefined;
+  const status =
+    failure !== undefined
+      ? failure
       : model.status.kind === "loading" && rows.length === 0
         ? T.loading
         : model.status.kind === "done" && rows.length === 0
@@ -388,7 +394,7 @@ export function HistoryDocument({
             role="status"
             className="flex h-full items-center justify-center px-4 text-center text-ui-muted-foreground"
           >
-            {model.status.kind === "done" ? T.empty : T.pick}
+            {failure ?? (model.status.kind === "done" ? T.empty : T.pick)}
           </div>
         )}
       </div>

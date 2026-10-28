@@ -156,6 +156,7 @@ const ACTION_IDS = new Set(
       strings: () => gitHistoryStrings((id) => id),
       ready: () => true,
       current: () => undefined,
+      nested: () => undefined,
       workTree: async () => "/",
       open() {},
       notify() {},

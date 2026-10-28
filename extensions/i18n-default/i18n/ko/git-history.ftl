@@ -47,5 +47,9 @@ git-history-no-file = 히스토리를 볼 파일이 없다
 git-history-no-file-body = 에디터에서 파일을 열거나 프로젝트 트리에서 파일을 고른다
 git-history-outside = 저장소 밖의 파일이다
 git-history-folder = 폴더의 히스토리는 볼 수 없다 — 파일을 고른다
+# $submodule: 서브모듈 자리(저장소 기준 경로)
+git-history-submodule = { $submodule } 서브모듈 안의 파일이다 — 히스토리는 그 서브모듈 저장소에서 본다
+# $repo: 그 저장소 폴더(트리 루트 기준)
+git-history-nested = { $repo } 는 따로 된 저장소(서브모듈 · 중첩 저장소)다 — 그 안 파일의 히스토리는 그 저장소에서 본다
 # $message: 오류 원문
 git-history-open-failed = 파일 히스토리를 열지 못했다: { $message }

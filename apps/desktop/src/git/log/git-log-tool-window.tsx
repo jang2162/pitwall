@@ -18,7 +18,11 @@ import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalSt
 
 import { useFileDialogs } from "../../file-tree/file-dialogs";
 import { useKeymap } from "../../keymap/keymap-provider";
-import { useNotify } from "../../notifications/notifications";
+import {
+  type NotificationHandle,
+  useNotify,
+  useRetirableNotify,
+} from "../../notifications/notifications";
 import { useActiveWorktree } from "../../open-with/active-worktree";
 import { useHost } from "../../rpc/host";
 import { useTheme } from "../../theme/theme-switcher";
@@ -286,8 +290,19 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
     take();
     return logRevealRequests.subscribe(take);
   }, []);
-  const latest = useRef({ notify, T });
-  latest.current = { notify, T };
+  const notifyRetirable = useRetirableNotify();
+  const latest = useRef({ notify, notifyRetirable, T });
+  latest.current = { notify, notifyRetirable, T };
+  // 「로그에서 선택」 이 푼 필터와 그 알림. 필터가 그 뒤 바뀌면(되돌리기 · 사람의 고침) 알림의 단추를 끈다 — 창이 닫혀도.
+  const clearedFilter = useRef<{ cleared: LogQuery; handle: NotificationHandle }>(undefined);
+  useEffect(() => {
+    const c = clearedFilter.current;
+    if (c && c.cleared !== query) {
+      c.handle.retire();
+      clearedFilter.current = undefined;
+    }
+  }, [query]);
+  useEffect(() => () => clearedFilter.current?.handle.retire(), []);
   useEffect(() => {
     if (!pending || pending.hash !== undefined || !source) return;
     let current = true;
@@ -342,8 +357,22 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
       if (!current) return;
       if (!yes) return missing();
       setPending({ ...pending, cleared: true });
-      setQuery(EMPTY_QUERY);
-      notify({ level: "info", title: T.reveal.cleared, body: T.reveal.clearedBody });
+      // 푼 필터는 알림의 [필터 되돌리기] 로 한 번 되살린다. 그사이 사람이 필터를 바꾸면 단추를 끈다(아래 효과).
+      const previous = query;
+      const cleared = { ...EMPTY_QUERY };
+      setQuery(cleared);
+      const handle = latest.current.notifyRetirable({
+        level: "info",
+        title: T.reveal.cleared,
+        body: T.reveal.clearedBody,
+        action: {
+          label: T.reveal.restore,
+          run: () => {
+            if (queryRef.current === cleared) setQuery(previous);
+          },
+        },
+      });
+      clearedFilter.current = { cleared, handle };
     });
     return () => {
       current = false;
