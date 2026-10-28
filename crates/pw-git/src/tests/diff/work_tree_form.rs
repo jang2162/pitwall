@@ -175,8 +175,9 @@ fn work_tree_form_refuses_a_range_read() {
     assert!(repo.f.git.blob(&params).is_err());
 }
 
-/// 사람의 전역 설정에 smudge · process 드라이버(부르면 `marks/<이름>` 을 남긴다)를 두고, 커밋된 `.gitattributes` 가 `*.lfs`
-/// 에 그것을, `*.none` 에 설정에 없는 드라이버를 건다.
+/// 사람의 전역 설정에 smudge · process 드라이버(부르면 `marks/<이름>` 을 남긴다)를, 저장소 설정(`.git/config`)에 smudge 드라이버
+/// 하나를 두고, 커밋된 `.gitattributes` 가 `*.lfs` · `*.proc` 에 전역의 것을, `*.loc` 에 저장소 설정의 것을, `*.none` 에 어디에도 없는
+/// 드라이버를 건다. 미신뢰 프로젝트는 저장소 설정을 읽지 않는다(`repo::open_options`).
 fn drivers() -> (Repo, PathBuf) {
     let r = TestRepo::with_commit();
     let config = isolate_global_config(r.base());
@@ -199,11 +200,13 @@ fn drivers() -> (Repo, PathBuf) {
     };
     r.write(
         ".gitattributes",
-        "*.lfs filter=lfs\n*.proc filter=proc\n*.none filter=none\n",
+        "*.lfs filter=lfs\n*.proc filter=proc\n*.loc filter=loc\n*.none filter=none\n",
     );
     r.write("big.lfs", "pointer\n");
     r.write("p.proc", "process\n");
+    r.write("l.loc", "local\n");
     r.write("x.none", "no driver\n");
+    r.write("plain.txt", "plain\n");
     // 담을 때는 드라이버가 없다(빈 전역 설정) — 담긴 것은 글 그대로다.
     r.commit_all("filtered");
     fs::write(
@@ -216,6 +219,8 @@ fn drivers() -> (Repo, PathBuf) {
         ),
     )
     .unwrap();
+    let local = script("local");
+    r.git(&["config", "filter.loc.smudge", &local]);
     (Repo::new(r), marks)
 }
 
@@ -226,14 +231,19 @@ fn marks(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// 드라이버가 걸린 경로는 내용 없이 `filter` 로 알리고 드라이버를 띄우지 않는다 — 신뢰 · 미신뢰 같다. 설정에 없는 드라이버를
-/// 가리키는 `filter` 속성은 git 처럼 무시한다.
+/// `filter` 속성이 가리키면 드라이버가 전역 설정에 있든 저장소 설정에만 있든(미신뢰는 그것을 읽지 않는다) 어디에도 없든 내용 없이
+/// `filter` 로 알리고 드라이버를 띄우지 않는다 — 신뢰 · 미신뢰 같다. `filter` 속성이 없는 파일은 바꿔 준다.
 #[test]
-fn a_filter_driver_is_reported_and_never_started_trusted_or_not() {
+fn a_filter_attribute_is_reported_and_never_started_trusted_or_not() {
     let (repo, dir) = drivers();
     for trusted in [false, true] {
         repo.f.trust(&repo.id, trusted);
-        for (path, driver) in [("big.lfs", "lfs"), ("p.proc", "proc")] {
+        for (path, driver) in [
+            ("big.lfs", "lfs"),
+            ("p.proc", "proc"),
+            ("l.loc", "loc"),
+            ("x.none", "none"),
+        ] {
             let blob = repo.f.git.blob(&work_tree_params(&repo, path)).unwrap();
             assert_eq!(
                 blob.filter.as_deref(),
@@ -242,7 +252,7 @@ fn a_filter_driver_is_reported_and_never_started_trusted_or_not() {
             );
             assert_eq!((blob.content, blob.judgment), (None, None), "{path}");
         }
-        assert_eq!(ours(&repo, "x.none"), b"no driver\n");
+        assert_eq!(ours(&repo, "plain.txt"), b"plain\n");
         assert_eq!(marks(&dir), Vec::<String>::new(), "trusted={trusted}");
     }
 }

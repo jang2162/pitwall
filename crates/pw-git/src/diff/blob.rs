@@ -175,14 +175,13 @@ enum Form {
 /// blob 을 `git checkout` 이 쓰는 꼴로 바꾼다: `ident` → 줄바꿈(`core.autocrlf` · `core.eol` · `text` · `eol` 속성) →
 /// `working-tree-encoding`(gix 의 필터 파이프라인 — 속성은 작업 트리의 `.gitattributes`, 맨 저장소면 HEAD 의 것).
 ///
-/// 외부 드라이버(`filter.<x>.smudge` · `process`)는 돌리지 않는다. 그 경로의 `filter` 속성이 가리키는 드라이버가 설정에 있으면
-/// 바꾸지 않고 [`Form::Filtered`] 다 — 드라이버가 없는 `filter` 속성은 git 처럼 무시한다. 변환은 드라이버를 모두 뗀 핸들
-/// ([`super::changes::without_filter_drivers`])로 해서 판정이 빗나가도 프로세스가 뜨지 않는다.
+/// 외부 드라이버(`filter.<x>.smudge` · `process`)는 돌리지 않는다. 그 경로의 `filter` 속성이 무엇이든 가리키면 바꾸지 않고
+/// [`Form::Filtered`] 다 — 드라이버가 어느 설정에 있든(전역 · 저장소 설정 — 미신뢰는 저장소 설정을 읽지 않는다) 없든, 신뢰 ·
+/// 미신뢰 같다(13-m2-plan M2-17 리뷰 F4). 드라이버 정의를 찾아 판정하면 미신뢰 저장소의 설정에만 있는 드라이버를 놓쳐 smudge
+/// 전의 내용을 기준으로 삼는다. 변환은 드라이버를 모두 뗀 핸들([`super::changes::without_filter_drivers`])로 해서 프로세스가
+/// 뜨지 않는다.
 fn work_tree_form(repo: &gix::Repository, path: &str, data: &[u8]) -> Result<Form, RpcError> {
     let rela = path.as_bytes().as_bstr();
-    let drivers = gix::filter::Pipeline::options(repo)
-        .map_err(internal)?
-        .drivers;
     let (pipeline, _index) = repo.filter_pipeline(None).map_err(internal)?;
     let (_, mut attributes) = pipeline.into_parts();
     let mut found =
@@ -192,29 +191,25 @@ fn work_tree_form(repo: &gix::Repository, path: &str, data: &[u8]) -> Result<For
         .map_err(internal)?
         .matching_attributes(&mut found);
     let mut ident = false;
+    let mut filter = None;
+    let mut encoding = None;
     for m in found.iter_selected() {
+        let value = match m.assignment.state {
+            gix::attrs::StateRef::Value(v) => Some(v.as_bstr().to_owned()),
+            _ => None,
+        };
         match m.assignment.name.as_str() {
-            "ident" => {
-                ident = m.assignment.state.is_set();
-                continue;
-            }
-            "working-tree-encoding" => {
-                if let gix::attrs::StateRef::Value(label) = m.assignment.state {
-                    reproducible_encoding(path, label.as_bstr())?;
-                }
-                continue;
-            }
+            "ident" => ident = m.assignment.state.is_set(),
+            "working-tree-encoding" => encoding = value,
+            "filter" => filter = value,
             _ => {}
         }
-        if let gix::attrs::StateRef::Value(name) = m.assignment.state {
-            let name = name.as_bstr();
-            if drivers
-                .iter()
-                .any(|d| d.name == name && (d.smudge.is_some() || d.process.is_some()))
-            {
-                return Ok(Form::Filtered(name.to_str_lossy().into_owned()));
-            }
-        }
+    }
+    if let Some(name) = filter {
+        return Ok(Form::Filtered(name.to_str_lossy().into_owned()));
+    }
+    if let Some(label) = encoding {
+        reproducible_encoding(path, label.as_ref())?;
     }
     let mut plain = repo.clone();
     super::changes::without_filter_drivers(&mut plain)?;

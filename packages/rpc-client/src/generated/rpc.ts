@@ -1488,7 +1488,7 @@ export type GitBlob = {
 	/**  `fs.read` 와 같은 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급). */
 	judgment: Judgment | null,
 	/**
-	 *  `workTreeForm` 으로 불렀는데 그 경로에 외부 필터 드라이버가 걸려 있다 — 그 드라이버 이름(`lfs` 등). 있으면 `content` ·
+	 *  `workTreeForm` 으로 불렀는데 그 경로의 `filter` 속성이 드라이버를 가리킨다 — 그 이름(`lfs` 등). 있으면 `content` ·
 	 *  `judgment` 가 `null` 이다(드라이버를 돌리지 않으므로 작업 트리 꼴을 만들 수 없다). 그 밖에는 `null` 이다.
 	 */
 	filter?: string | null,
@@ -1511,8 +1511,8 @@ export type GitBlobParams = {
 	/**
 	 *  작업 트리 꼴로 받는다 — `git checkout` 이 쓰는 내장 변환(`core.autocrlf` · `eol` · `text` · `ident` ·
 	 *  `working-tree-encoding`)을 거친 바이트(에디터 거터의 기준, 13-m2-plan M2-17). 외부 필터 드라이버(`filter.<x>.smudge` ·
-	 *  `process` — LFS 등)는 신뢰한 프로젝트에서도 돌리지 않는다: 그 경로의 `filter` 속성에 드라이버가 걸려 있으면 내용 대신
-	 *  [`GitBlob::filter`] 를 준다. 범위 읽기(`offset` · `length`)와 함께면 invalid params. 심링크는 바꾸지 않는다.
+	 *  `process` — LFS 등)는 신뢰한 프로젝트에서도 돌리지 않는다: 그 경로의 `filter` 속성이 무엇이든 가리키면(드라이버 정의가
+	 *  어디 있든 없든) 내용 대신 [`GitBlob::filter`] 를 준다. 범위 읽기(`offset` · `length`)와 함께면 invalid params. 심링크는 바꾸지 않는다.
 	 */
 	workTreeForm?: boolean,
 };
