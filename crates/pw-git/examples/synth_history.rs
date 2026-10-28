@@ -3,11 +3,13 @@
 //! ```text
 //! cargo run --release -p pw-git --features test-support --example synth_history -- <폴더> [커밋 수=100000] [시드] [--commit-graph]
 //! cargo run --release -p pw-git --features test-support --example synth_history -- <폴더> 20000 --fanout 3000
+//! cargo run --release -p pw-git --features test-support --example synth_history -- <폴더> 100000 --perf-fixture [--commit-graph]
 //! ```
 //!
 //! `<폴더>` 는 비어 있거나 없어야 한다. 위로 찾기는 `<폴더>` 의 부모에서 멈춘다. `--commit-graph` 면 `git commit-graph write
 //! --reachable` 까지 한다(없음 · 있음 둘 다 재려면 폴더 두 개를 만든다). `--fanout <n>` 이면 브랜치 · 머지가 섞인 이력 대신 곧은
-//! `main` 곳곳에서 갈라진 원격 브랜치 `n` 개를 만든다(`testing::synth::fanout` — 레인 상한).
+//! `main` 곳곳에서 갈라진 원격 브랜치 `n` 개를 만든다(`testing::synth::fanout` — 레인 상한). `--perf-fixture` 면 실기 측정이 쓰는
+//! 1만 줄 diff 커밋과 체크아웃용 브랜치를 commit-graph 보다 먼저 더한다(`testing::synth::perf_fixture`, `mise run perf-git`).
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -17,7 +19,8 @@ use pw_git::testing::synth;
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let graph = args.iter().any(|a| a == "--commit-graph");
-    args.retain(|a| a != "--commit-graph");
+    let perf = args.iter().any(|a| a == "--perf-fixture");
+    args.retain(|a| a != "--commit-graph" && a != "--perf-fixture");
     let fanout = args.iter().position(|a| a == "--fanout").map(|i| {
         let n: usize = args
             .get(i + 1)
@@ -27,7 +30,9 @@ fn main() {
         n
     });
     let Some(dir) = args.first().map(PathBuf::from) else {
-        eprintln!("usage: synth_history <dir> [commits=100000] [seed] [--commit-graph]");
+        eprintln!(
+            "usage: synth_history <dir> [commits=100000] [seed] [--commit-graph] [--perf-fixture]"
+        );
         std::process::exit(2);
     };
     let commits = args
@@ -59,6 +64,12 @@ fn main() {
             "{:?}",
             synth::create(&dir, &ceiling, commits, seed).expect("create the repository")
         ),
+    };
+    let summary = if perf {
+        let fixture = synth::perf_fixture(&dir, &ceiling).expect("add the perf fixture");
+        format!("{summary}, perf fixture {}", fixture.commit)
+    } else {
+        summary
     };
     if graph {
         synth::write_commit_graph(&dir, &ceiling).expect("write the commit-graph");

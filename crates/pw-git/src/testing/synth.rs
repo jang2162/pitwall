@@ -382,6 +382,72 @@ pub(super) fn finish(dir: &Path, ceiling: &Path) -> std::io::Result<()> {
     run(git_command(dir, ceiling).args(["reset", "--quiet", "--hard", "main"])).map(drop)
 }
 
+/// 실기 측정 픽스처([`perf_fixture`])의 큰 파일 줄 수 — 그중 짝수 줄 절반을 바꾼다.
+pub const PERF_LINES: usize = 20_000;
+
+/// 실기 측정 픽스처의 큰 파일(커밋 상세 탭이 첫 파일로 고르도록 파일 하나만 바꾼다).
+pub const PERF_PATH: &str = "perf/big.rs";
+
+/// 실기 측정 픽스처의 체크아웃 대상 브랜치. `main` 과 같은 커밋이라 체크아웃은 HEAD 만 바꾼다.
+pub const PERF_BRANCH: &str = "perf-checkout";
+
+/// [`perf_fixture`] 가 더한 것.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PerfFixture {
+    /// 1만 줄을 바꾼 커밋(`main` 의 끝 — 로그 첫 행).
+    pub commit: String,
+}
+
+/// 실기 측정(`crates/pw-perf` 의 git 시나리오, CONTRIBUTING.md 「성능 기준선」)이 쓰는 커밋 둘과 브랜치 하나를 `main` 위에 더한다:
+/// [`PERF_PATH`] 를 [`PERF_LINES`] 줄로 만드는 커밋, 그 짝수 줄 1만 개를 바꾸는 커밋(M2-15 의 「1만 줄 바뀐 파일」 — 앱 쪽
+/// `apps/desktop/perf/diff/diff-bench.tsx` 와 같은 꼴), 그 커밋을 가리키는 [`PERF_BRANCH`](M2-13 의 체크아웃). 시각은 합성 이력의
+/// 어느 커밋보다 늦은 고정값이라 같은 저장소면 같은 해시다. commit-graph 를 쓸 저장소면 이것을 먼저 부른다(새 커밋이 그래프에 든다).
+/// 저장소 설정에 `maintenance.auto=false` · `gc.auto=0` 을 남긴다 — 「commit-graph 없음」 이 그대로 남게.
+pub fn perf_fixture(dir: &Path, ceiling: &Path) -> std::io::Result<PerfFixture> {
+    let before: Vec<String> = (0..PERF_LINES)
+        .map(|i| format!("    let value_{i} = {i};"))
+        .collect();
+    let after: Vec<String> = before
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            if i % 2 == 0 {
+                format!("    let value_{i} = {i} + 1;")
+            } else {
+                line.clone()
+            }
+        })
+        .collect();
+    // git 2.54 는 commit 뒤에 `git maintenance run --auto --detach` 를 띄워 commit-graph 를 쓴다 — 「commit-graph 없음」 저장소가 백그라운드
+    // 에서 조용히 「있음」 이 된다. 이 저장소에서 그 뒤에 도는 git(측정하는 쪽의 체크아웃 포함)도 쓰지 않게 저장소 설정에 끈다.
+    for (key, value) in [("maintenance.auto", "false"), ("gc.auto", "0")] {
+        run(git_command(dir, ceiling).args(["config", key, value]))?;
+    }
+    let path = dir.join(PERF_PATH);
+    std::fs::create_dir_all(path.parent().expect("a parent folder"))?;
+    // 합성 이력은 커밋마다 90초까지 늘어 100만 커밋이어도 이 시각에 닿지 않는다.
+    for (step, (lines, message)) in [
+        (&before, "perf: add big.rs"),
+        (&after, "perf: change 10,000 lines"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        std::fs::write(&path, format!("{}\n", lines.join("\n")))?;
+        let at = format!("{} +0000", EPOCH + 100_000_000 + 60 * step as i64);
+        run(git_command(dir, ceiling).args(["add", PERF_PATH]))?;
+        run(git_command(dir, ceiling)
+            .env("GIT_AUTHOR_DATE", &at)
+            .env("GIT_COMMITTER_DATE", &at)
+            .args(["commit", "--quiet", "-m", message]))?;
+    }
+    run(git_command(dir, ceiling).args(["branch", PERF_BRANCH]))?;
+    let commit = run(git_command(dir, ceiling).args(["rev-parse", "HEAD"]))?;
+    Ok(PerfFixture {
+        commit: commit.trim().to_owned(),
+    })
+}
+
 /// `git commit-graph write --reachable`.
 pub fn write_commit_graph(dir: &Path, ceiling: &Path) -> std::io::Result<()> {
     run(git_command(dir, ceiling).args(["commit-graph", "write", "--reachable"])).map(drop)
@@ -402,5 +468,69 @@ fn check(out: std::process::Output, what: &str) -> std::io::Result<String> {
             out.status,
             String::from_utf8_lossy(&out.stderr)
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git(dir: &Path, ceiling: &Path, args: &[&str]) -> String {
+        run(git_command(dir, ceiling).args(args)).unwrap()
+    }
+
+    /// 픽스처는 `main` 끝에 1만 줄을 바꾼 파일 하나짜리 커밋을 두고, 같은 커밋에 체크아웃용 브랜치를 단다. 같은 저장소면 같은 해시다.
+    #[test]
+    fn the_perf_fixture_changes_ten_thousand_lines_of_one_file_on_main() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ceiling = std::fs::canonicalize(tmp.path()).unwrap();
+        let mut commits = Vec::new();
+        let mut dirs = Vec::new();
+        for name in ["a", "b"] {
+            let dir = ceiling.join(name);
+            // 200 커밋: git 의 자동 유지보수는 그래프 밖 커밋이 100 개를 넘어야 commit-graph 를 쓴다.
+            create(&dir, &ceiling, 200, SEED).unwrap();
+            let fixture = perf_fixture(&dir, &ceiling).unwrap();
+            assert_eq!(
+                git(&dir, &ceiling, &["rev-parse", "main"]).trim(),
+                fixture.commit
+            );
+            assert_eq!(
+                git(
+                    &dir,
+                    &ceiling,
+                    &["log", "-1", "--format=%H", "--date-order", "--all"]
+                )
+                .trim(),
+                fixture.commit,
+                "로그 첫 행이 아니다"
+            );
+            assert_eq!(
+                git(&dir, &ceiling, &["diff", "--numstat", "HEAD~1", "HEAD"]),
+                format!("10000\t10000\t{PERF_PATH}\n")
+            );
+            assert_eq!(
+                git(&dir, &ceiling, &["rev-parse", PERF_BRANCH]).trim(),
+                fixture.commit
+            );
+            assert_eq!(
+                git(&dir, &ceiling, &["symbolic-ref", "--short", "HEAD"]).trim(),
+                "main"
+            );
+            assert_eq!(git(&dir, &ceiling, &["status", "--porcelain"]), "");
+            commits.push(fixture.commit);
+            dirs.push(dir);
+        }
+        assert_eq!(commits[0], commits[1]);
+        // 커밋 뒤 백그라운드 유지보수가 commit-graph 를 쓰지 않았다(돌았다면 끝날 틈을 준다).
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        for dir in &dirs {
+            let info = dir.join(".git/objects/info");
+            assert!(
+                !info.join("commit-graph").exists() && !info.join("commit-graphs").exists(),
+                "{} got a commit-graph",
+                dir.display()
+            );
+        }
     }
 }
