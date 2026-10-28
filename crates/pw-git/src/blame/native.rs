@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use gix::ObjectId;
 use gix::bstr::{BStr, BString, ByteSlice};
 use gix::objs::FindExt;
+use pw_fs::limits::READ_ONLY_MAX;
 use pw_rpc::RpcError;
 
 use super::{
@@ -22,10 +23,25 @@ use crate::log::commit::{self, MAX_IDENT, Mailmap, Text, clip};
 
 /// gix-blame 에 주는 객체 저장소. 멈춤 신호가 켜지면 객체 읽기가 실패하고, 얕은 클론의 경계 커밋은 부모 없이(`parent` 줄을
 /// 걷어) 보인다 — git 처럼 그 커밋에서 blame 이 멈춘다(gix-blame 은 얕은 클론을 몰라 없는 부모를 읽다 실패한다).
+/// [`READ_ONLY_MAX`] 를 넘는 blob 은 읽지 않고 실패하며 `too_large` 를 켠다([`text_cache`]).
 pub(super) struct Objects<'a, O> {
     pub(super) odb: &'a O,
     pub(super) stop: &'a AtomicBool,
     pub(super) shallow: &'a HashSet<ObjectId>,
+    pub(super) too_large: &'a AtomicBool,
+}
+
+impl<O> Objects<'_, O> {
+    fn refuse_large(&self, kind: gix::object::Kind, size: u64) -> Result<(), gix::Error> {
+        if kind == gix::object::Kind::Blob && size > READ_ONLY_MAX {
+            self.too_large.store(true, Ordering::Relaxed);
+            return Err(gix::Error::from_error(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "blob larger than the blame limit",
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl<O: gix::objs::Find> gix::objs::Find for Objects<'_, O> {
@@ -41,7 +57,11 @@ impl<O: gix::objs::Find> gix::objs::Find for Objects<'_, O> {
             )));
         }
         if !self.shallow.contains(id) {
-            return self.odb.try_find(id, buffer);
+            let found = self.odb.try_find(id, buffer)?;
+            if let Some(found) = &found {
+                self.refuse_large(found.kind, found.data.len() as u64)?;
+            }
+            return Ok(found);
         }
         let mut raw = Vec::new();
         let Some(found) = self.odb.try_find(id, &mut raw)? else {
@@ -77,7 +97,11 @@ fn without_parents(commit: &[u8]) -> Vec<u8> {
 
 impl<O: gix::objs::FindHeader> gix::objs::FindHeader for Objects<'_, O> {
     fn try_header(&self, id: &gix::oid) -> Result<Option<gix::objs::Header>, gix::Error> {
-        self.odb.try_header(id)
+        let header = self.odb.try_header(id)?;
+        if let Some(header) = &header {
+            self.refuse_large(header.kind, header.size)?;
+        }
+        Ok(header)
     }
 }
 
@@ -90,7 +114,7 @@ pub fn run(
     stop: &AtomicBool,
     emit: &mut dyn FnMut(BlameChunk) -> bool,
 ) -> Result<bool, RpcError> {
-    let mut cache = repo.diff_resource_cache_for_tree_diff().map_err(internal)?;
+    let mut cache = text_cache(repo)?;
     let options = gix::blame::Options {
         diff_algorithm: repo.diff_algorithm().map_err(internal)?,
         ranges: gix::blame::BlameRanges::default(),
@@ -99,6 +123,7 @@ pub fn run(
         debug_track_path: false,
     };
     let shallow = shallow(repo)?;
+    let too_large = AtomicBool::new(false);
     // commit-graph 의 부모는 걷을 수 없다 — 얕은 클론이면 쓰지 않는다(git 도 얕은 저장소에서는 commit-graph 를 쓰지 않는다).
     let graph = if shallow.is_empty() {
         repo.commit_graph_if_enabled().map_err(internal)?
@@ -110,6 +135,7 @@ pub fn run(
             odb: &repo.objects,
             stop,
             shallow: &shallow,
+            too_large: &too_large,
         },
         gix::blame::Start::Commit(subject.commit),
         graph,
@@ -119,6 +145,12 @@ pub fn run(
     );
     if stop.load(Ordering::Relaxed) {
         return Err(RpcError::cancelled());
+    }
+    if too_large.load(Ordering::Relaxed) {
+        return Err(RpcError::invalid_params(format!(
+            "a version of `{}` (or a file its rename is matched against) is larger than {READ_ONLY_MAX} bytes; blame reads at most that much",
+            subject.path
+        )));
     }
     let outcome = outcome.map_err(|e| RpcError::internal(format!("blame failed: {e}")))?;
     // git 은 `blame.showRoot` 가 없으면 첫 커밋도 경계로 보인다.
@@ -160,7 +192,8 @@ pub fn run(
         let before = match previous.get(&key) {
             Some(found) => found.clone(),
             None => {
-                let found = previous_of(repo, &shallow, entry.commit_id, key.1.as_bstr())?;
+                let found =
+                    previous_of(repo, &mut cache, &shallow, entry.commit_id, key.1.as_bstr())?;
                 previous.insert(key.clone(), found.clone());
                 found
             }
@@ -180,6 +213,69 @@ pub fn run(
     Ok(chunker.finish().is_none_or(emit))
 }
 
+/// blame 이 견주는 리소스 캐시. 모든 경로를 텍스트로 본다 — git blame 은 바이너리(앞 8000바이트의 NUL) · `-diff` · `binary` 속성을
+/// 보지 않고 커밋의 바이트를 줄로 견준다. gix 의 tree diff 용 캐시는 그런 파일을 빈 데이터로 주어, gix-blame 이 「바뀐 것 없음」
+/// 으로 보고 줄을 조용히 부모로 넘긴다(debug 빌드는 gix-blame 의 줄 대조가 패닉한다). 그래서 저장소의 속성을 읽지 않고 모든
+/// 경로에 「바이너리 아님 · textconv 없음」 드라이버를 준다. 내용은 저장소 그대로(`Mode::ToGit` — 필터 · textconv 가 돌지 않는다).
+/// 크기 기준은 [`READ_ONLY_MAX`] 다(텍스트와 같은 상한). 그보다 큰 버전은 빈 데이터가 되므로 [`Objects`] 가 그 blob 을 읽지 않고
+/// 실패해 blame 이 invalid params 로 끝난다 — 조용히 다른 결과를 내지 않는다.
+fn text_cache(repo: &gix::Repository) -> Result<gix::diff::blob::Platform, RpcError> {
+    use gix::diff::blob::{Driver, Pipeline, Platform, pipeline, platform};
+    use gix::worktree::stack::{State, state};
+
+    const DRIVER: &str = "pitwall-blame-text";
+    let mut collection = gix::attrs::search::MetadataCollection::default();
+    let mut globals = gix::attrs::Search::default();
+    globals
+        .add_patterns_buffer(
+            format!("* diff={DRIVER}").as_bytes(),
+            "[pitwall-blame]".into(),
+            None,
+            &mut collection,
+            false,
+        )
+        .map_err(internal)?;
+    // `IdMapping` 에 매핑이 없으니 저장소의 `.gitattributes` 를 읽지 않는다. 경로는 쓰이지 않는다(작업 트리를 보지 않는다).
+    let attributes = gix::worktree::Stack::new(
+        repo.git_dir(),
+        State::AttributesStack(state::Attributes::new(
+            globals,
+            None,
+            state::attributes::Source::IdMapping,
+            collection,
+        )),
+        gix::glob::pattern::Case::Sensitive,
+        Vec::new(),
+        Vec::new(),
+    );
+    let filter = gix::filter::plumbing::Pipeline::new(
+        repo.command_context().map_err(internal)?,
+        repo.object_hash(),
+        gix::filter::Pipeline::options(repo).map_err(internal)?,
+    );
+    Ok(Platform::new(
+        platform::Options {
+            algorithm: Some(repo.diff_algorithm().map_err(internal)?),
+            skip_internal_diff_if_external_is_configured: false,
+        },
+        Pipeline::new(
+            pipeline::WorktreeRoots::default(),
+            filter,
+            vec![Driver {
+                name: DRIVER.into(),
+                is_binary: Some(false),
+                ..Driver::default()
+            }],
+            pipeline::Options {
+                large_file_threshold_bytes: READ_ONLY_MAX,
+                fs: gix::fs::Capabilities::default(),
+            },
+        ),
+        pipeline::Mode::ToGit,
+        attributes,
+    ))
+}
+
 /// 얕은 클론의 경계 커밋(`.git/shallow`).
 fn shallow(repo: &gix::Repository) -> Result<HashSet<ObjectId>, RpcError> {
     Ok(repo
@@ -192,6 +288,7 @@ fn shallow(repo: &gix::Repository) -> Result<HashSet<ObjectId>, RpcError> {
 /// `commit` 의 `path` 의 「이 커밋 이전으로」(머리 주석).
 fn previous_of(
     repo: &gix::Repository,
+    cache: &mut gix::diff::blob::Platform,
     shallow: &HashSet<ObjectId>,
     commit: ObjectId,
     path: &BStr,
@@ -214,7 +311,7 @@ fn previous_of(
         let origin = if exists {
             Some(path.to_owned())
         } else {
-            rename_source(repo, &parent_tree, &tree, path)?
+            rename_source(repo, cache, &parent_tree, &tree, path)?
         };
         if let Some(origin) = origin {
             return Ok(Some(BlamePrevious {
@@ -226,27 +323,43 @@ fn previous_of(
     Ok(None)
 }
 
-/// `old` → `new` 에서 `path` 로 이름이 바뀐 파일의 원래 경로.
+/// `old` → `new` 에서 `path` 로 이름이 바뀐 파일의 원래 경로. 비슷함은 blame 과 같은 [`text_cache`] 로 잰다 — gix 의 기본 캐시는
+/// 바이너리 파일을 빈 데이터로 보아 이름 바뀜을 찾지 못한다(git 은 찾는다).
 fn rename_source(
     repo: &gix::Repository,
+    cache: &mut gix::diff::blob::Platform,
     old: &gix::Tree<'_>,
     new: &gix::Tree<'_>,
     path: &BStr,
 ) -> Result<Option<BString>, RpcError> {
-    let changes = repo
-        .diff_tree_to_tree(
-            old,
-            new,
-            gix::diff::Options::default().with_rewrites(Some(gix::diff::Rewrites::default())),
-        )
-        .map_err(internal)?;
-    Ok(changes.into_iter().find_map(|change| match change {
-        gix::object::tree::diff::ChangeDetached::Rewrite {
-            source_location,
-            location,
-            copy: false,
-            ..
-        } if location == path => Some(source_location),
-        _ => None,
-    }))
+    use gix::diff::tree_with_rewrites::{ChangeRef, Options};
+
+    let mut found = None;
+    gix::diff::tree_with_rewrites(
+        gix::objs::TreeRefIter::from_bytes(&old.data, old.id.kind()),
+        gix::objs::TreeRefIter::from_bytes(&new.data, new.id.kind()),
+        cache,
+        &mut gix::diff::tree::State::default(),
+        &repo.objects,
+        |change| {
+            if let ChangeRef::Rewrite {
+                source_location,
+                location,
+                copy: false,
+                ..
+            } = change
+                && location == path
+            {
+                found = Some(source_location.to_owned());
+                return Ok(std::ops::ControlFlow::Break(()));
+            }
+            Ok(std::ops::ControlFlow::Continue(()))
+        },
+        Options {
+            location: Some(gix::diff::tree::recorder::Location::Path),
+            rewrites: Some(gix::diff::Rewrites::default()),
+        },
+    )
+    .map_err(internal)?;
+    Ok(found)
 }

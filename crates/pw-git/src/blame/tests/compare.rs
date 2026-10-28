@@ -309,9 +309,130 @@ fn the_object_reader_fails_once_stopped() {
         odb: &r.objects,
         stop: &stop,
         shallow: &shallow,
+        too_large: &AtomicBool::new(false),
     };
     let mut buf = Vec::new();
     assert!(objects.try_find(&id, &mut buf).unwrap().is_some());
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(objects.try_find(&id, &mut buf).is_err());
+}
+
+/// 바이너리(NUL · 0xff) · `-diff` · `binary` 속성 · CRLF · NUL 이 든 텍스트 파일도 두 엔진이 `git blame` 과 줄마다 같다 — git blame 은
+/// 바이너리 판정을 보지 않고 바이트를 줄로 견준다(`native::text_cache`). 바이너리 파일의 이름 바뀜도 따라간다. debug 빌드에서는
+/// gix-blame 의 줄 대조(`debug_assertions`)도 함께 돈다 — 패닉하면 이 시험이 실패한다.
+#[test]
+fn binary_undiffable_crlf_and_nul_files_blame_like_git() {
+    let repo = TestRepo::new();
+    let (dir, ceiling) = (repo.root(), repo.base());
+    let write = |rel: &str, bytes: Vec<u8>| std::fs::write(dir.join(rel), bytes).unwrap();
+    let text = |n: usize, line: &dyn Fn(usize) -> String| -> Vec<u8> {
+        (1..=n).flat_map(|i| line(i).into_bytes()).collect()
+    };
+    let binary = |changed: &[usize]| -> Vec<u8> {
+        (1..=42)
+            .flat_map(|i| {
+                let mut l = format!("line {i}").into_bytes();
+                if changed.contains(&i) {
+                    l.extend_from_slice(b" changed");
+                }
+                l.extend_from_slice(b"\0\xff\n");
+                l
+            })
+            .collect()
+    };
+    repo.write(".gitattributes", "undiff.txt -diff\nmarked.txt binary\n");
+    write("bin.dat", binary(&[]));
+    write("undiff.txt", text(30, &|i| format!("plain {i}\n")));
+    write("marked.txt", text(30, &|i| format!("marked {i}\n")));
+    write("crlf.txt", text(30, &|i| format!("row {i}\r\n")));
+    write(
+        "nul.txt",
+        text(30, &|i| {
+            if i == 5 {
+                format!("has\0nul {i}\n")
+            } else {
+                format!("text {i}\n")
+            }
+        }),
+    );
+    repo.commit_all("add");
+
+    write("bin.dat", binary(&[1, 42]));
+    write(
+        "undiff.txt",
+        text(30, &|i| {
+            format!("plain {i}{}\n", if i == 3 { " x" } else { "" })
+        }),
+    );
+    write(
+        "marked.txt",
+        text(30, &|i| {
+            format!("marked {i}{}\n", if i == 20 { " x" } else { "" })
+        }),
+    );
+    write(
+        "crlf.txt",
+        text(30, &|i| match i {
+            3 => "row 3 changed\r\n".to_owned(),
+            10 => "row 10\n".to_owned(),
+            _ => format!("row {i}\r\n"),
+        }),
+    );
+    write(
+        "nul.txt",
+        text(30, &|i| match i {
+            5 => "has\0nul 5 changed\n".to_owned(),
+            6 => "text 6 changed\n".to_owned(),
+            _ => format!("text {i}\n"),
+        }),
+    );
+    repo.commit_all("change");
+
+    repo.git(&["mv", "bin.dat", "bin2.dat"]);
+    write("bin2.dat", binary(&[1, 7, 42]));
+    write(
+        "undiff.txt",
+        text(32, &|i| match i {
+            3 => "plain 3 x\n".to_owned(),
+            15 | 16 => format!("inserted {i}\n"),
+            i if i > 16 => format!("plain {}\n", i - 2),
+            _ => format!("plain {i}\n"),
+        }),
+    );
+    write(
+        "marked.txt",
+        text(28, &|i| match i {
+            i if i >= 10 => format!("marked {}{}\n", i + 2, if i + 2 == 20 { " x" } else { "" }),
+            _ => format!("marked {i}\n"),
+        }),
+    );
+    repo.commit_all("rename and edit");
+
+    for path in [
+        "bin2.dat",
+        "undiff.txt",
+        "marked.txt",
+        "crlf.txt",
+        "nul.txt",
+    ] {
+        let cli = assert_cli_matches(dir, ceiling, "HEAD", path);
+        let gix = assert_gix_matches(dir, ceiling, "HEAD", path);
+        // 바뀐 줄이 조용히 첫 커밋으로 넘어가지 않았다.
+        let commits: BTreeSet<_> = gix.iter().map(|l| l.commit.clone()).collect();
+        assert!(commits.len() >= 2, "{path}: {commits:?}");
+        follow_previous(dir, ceiling, cli, assert_cli_matches);
+        follow_previous(dir, ceiling, gix, assert_gix_matches);
+    }
+    // 바이너리의 이름 바뀜: 바꾸지 않은 줄은 처음 이름의 첫 커밋, 1 · 42행은 둘째 커밋, 7행은 이름을 바꾼 커밋이고 그 「이 커밋
+    // 이전으로」 는 바뀌기 전 이름이다.
+    let gix = assert_gix_matches(dir, ceiling, "HEAD", "bin2.dat");
+    assert_eq!(gix[1].path, "bin.dat");
+    assert_eq!(gix[1].commit, repo.rev_parse("HEAD~2"));
+    assert_eq!(gix[0].commit, repo.rev_parse("HEAD~1"));
+    assert_eq!(gix[41].commit, repo.rev_parse("HEAD~1"));
+    assert_eq!(gix[6].commit, repo.rev_parse("HEAD"));
+    assert_eq!(
+        gix[6].previous,
+        Some((repo.rev_parse("HEAD~1"), "bin.dat".to_owned()))
+    );
 }

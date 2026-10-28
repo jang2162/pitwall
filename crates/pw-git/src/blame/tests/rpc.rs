@@ -443,3 +443,69 @@ async fn paths_that_are_not_utf8_fail_instead_of_turning_into_replacement_charac
         assert!(invalid(&outcome), "fileHistory: {outcome:?}");
     }
 }
+
+/// 크기 상한(`READ_ONLY_MAX`, 50 MiB — 텍스트 · 바이너리 같다)과 서브모듈 경로.
+/// - 그 리비전의 파일이 상한을 넘으면 두 엔진 모두 invalid params(git blame 은 읽는다 — 이 상한은 우리 것이다).
+/// - 지금은 작고 이력에만 상한을 넘는 버전이 있으면: 엔진 `git` 은 `git blame -M` 과 줄마다 같고, 엔진 `gix` 는 그 버전을 읽지
+///   않고 invalid params 다 — 상한을 넘는 버전을 빈 데이터로 견주어 조용히 다른 결과를 내지 않는다(`native::text_cache`).
+/// - 서브모듈 경로는 두 엔진 모두 invalid params(git blame 도 파일이 아니라 실패한다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn files_over_the_limit_and_submodule_paths_are_refused_by_both_engines() {
+    use pw_fs::limits::READ_ONLY_MAX;
+
+    let repo = TestRepo::new();
+    let (dir, ceiling) = (repo.root(), repo.base());
+    let line = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\n";
+    let big: String = line.repeat(READ_ONLY_MAX as usize / line.len() + 1);
+    assert!(big.len() as u64 > READ_ONLY_MAX);
+    repo.write("past.txt", &format!("first\n{big}"));
+    repo.write("now.txt", &big);
+    repo.commit_all("big");
+    repo.write("past.txt", "first\nsecond\n");
+    repo.commit_all("small");
+    let gitlink = repo.head();
+    repo.git(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("160000,{gitlink},sub"),
+    ]);
+    repo.git(&["commit", "-q", "-m", "submodule"]);
+    let out = git_command(dir, ceiling)
+        .args(["blame", "HEAD", "--", "sub"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "git blame of a submodule path fails");
+
+    let fx = Fx::new("");
+    let id = fx.project(dir);
+    let failed = |outcome: &StreamOutcome, needle: &str| {
+        matches!(outcome, StreamOutcome::Failed { error } if error.code == pw_rpc::code::INVALID_PARAMS
+            && error.data.as_ref().and_then(|d| d.as_str()).is_some_and(|d| d.contains(needle)))
+    };
+    for trusted in [false, true] {
+        fx.trust(&id, trusted);
+        for (path, needle) in [("now.txt", "blame reads at most"), ("sub", "is not a file")] {
+            let (chunks, outcome) = fx
+                .stream::<_, BlameChunk>("git.blame", &params(&id, path, None))
+                .await;
+            assert!(chunks.is_empty(), "{path}");
+            assert!(
+                failed(&outcome, needle),
+                "trusted {trusted}, {path}: {outcome:?}"
+            );
+        }
+        let (chunks, outcome) = fx
+            .stream::<_, BlameChunk>("git.blame", &params(&id, "past.txt", None))
+            .await;
+        if trusted {
+            assert_eq!(outcome, StreamOutcome::Completed);
+            let (file, lines, _) = expand(&chunks);
+            assert_eq!(file.engine, BlameEngine::Git);
+            assert_eq!(lines, git_blame(dir, ceiling, "HEAD", "past.txt", true).0);
+        } else {
+            assert!(chunks.is_empty());
+            assert!(failed(&outcome, "is larger than"), "{outcome:?}");
+        }
+    }
+}

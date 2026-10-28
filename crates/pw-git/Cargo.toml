@@ -91,3 +91,8 @@ name = "log_timing"
 # 결정 M2-D1 의 되돌림 판정: blame 첫 청크 · 전체 시간을 gix · git CLI 로 잰다(release, `docs/design/13-m2-plan.md` M2-05).
 name = "blame_timing"
 required-features = ["test-support"]
+
+[[example]]
+# 상한 가까운 텍스트 · 바이너리 파일의 blame 시간 · 메모리(release, `docs/design/13-m2-plan.md` M2-05).
+name = "blame_size"
+required-features = ["test-support"]

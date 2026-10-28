@@ -6,8 +6,9 @@
 //!   조건을 넘었기 때문이다 — gix blame(gix-blame 0.20)은 파일 안에서 옮긴 줄을 찾지 않아(`-M`) 줄 이동 픽스처에서 `git blame -M`
 //!   과 다르다(13-m2-plan.md 결정 M2-D1 의 판정 — 시험 `gix_blame_misses_moved_lines_so_trusted_projects_use_the_cli`).
 //! - [`native`]: 미신뢰 프로젝트(git CLI 로 읽지 않는다 — 03-architecture.md 「보안」)와 git 을 찾지 못했을 때는 gix blame 이다.
-//!   `git blame`(`-M` 없이)과 같은 결과다 — 옮긴 줄은 옮긴 커밋의 것이 된다. 저장소의 프로그램(필터 드라이버 · textconv)은 돌지
-//!   않는다: 커밋의 blob 만 견준다.
+//!   `git blame`(`-M` 없이)과 같은 결과다 — 옮긴 줄은 옮긴 커밋의 것이 된다. 바이너리 · `-diff` 파일도 git 처럼 바이트를 줄로
+//!   견준다(`native::text_cache`). 이력의 버전이 [`READ_ONLY_MAX`] 를 넘으면 invalid params 다. 저장소의 프로그램(필터 드라이버 ·
+//!   textconv)은 돌지 않는다: 커밋의 blob 만 견준다.
 //!
 //! 공통: 리비전(`rev`, 없으면 HEAD)을 gix 로 커밋까지 풀어 그 해시를 git 에 넘긴다(git 이 리비전 문법을 다시 풀지 않는다 — `-` 로
 //! 시작하는 글자가 옵션이 되지 않는다). 작업 트리 · index 는 읽지 않는다 — 커밋하지 않은 변경 · 저장하지 않은 편집은 blame 하지
