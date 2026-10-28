@@ -7,8 +7,7 @@
 //                                        진행 중 작업을 계속 · 이 단계 건너뛰기 · 중단(`git.operation.continue` · `skip` · `abort`).
 //                                        그 작업이 할 수 있을 때만 켜진다. 중단은 확인 뒤에만(결정 M2-D6 ①)
 //
-// 중단 확인은 지금 M1 의 확인 대화상자(file-tree/file-dialogs.tsx)다 — 위험 작업 다이얼로그 부품의 주인은 M2-20 이고 그것이 들어오면
-// 바꾼다. 계속 · 건너뛰기가 다음 단계에서 다시 멈추면 경고 알림과 함께 충돌 목록을 연다. 끝나면 알림만 — [되돌리기] 는 M2-20.
+// 중단 확인은 위험 작업 다이얼로그 부품(M2-20, ../dialogs/git-dialogs.tsx — 위험 표시, 처음 포커스는 취소)이다. 계속 · 건너뛰기가 다음 단계에서 다시 멈추면 경고 알림과 함께 충돌 목록을 연다. 끝나면 알림만 — [되돌리기] 는 M2-20.
 // git 이 거절한 것(`2004` — 덜 푼 충돌로 continue 등)은 쓰기 Task 의 실패 알림이 이미 원문을 보였다 — 여기서 또 알리지 않는다.
 
 import type { Action } from "@pitwall/keymap";
@@ -21,13 +20,12 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { EditorWorkspace } from "../../editor/editor-workspace";
-import type { ConfirmQuestion } from "../../file-tree/file-ops";
-import { useFileDialogs } from "../../file-tree/file-dialogs";
 import { useRegisterActions } from "../../keymap/keymap-provider";
 import { type NotificationInput, useNotify } from "../../notifications/notifications";
 import { activeWorktree, useActiveWorktree } from "../../open-with/active-worktree";
 import { useHost } from "../../rpc/host";
 import { GIT_FAILED } from "../branch-ops";
+import { type GitConfirm, useGitDialogs } from "../dialogs/git-dialogs";
 import { windowBranch } from "../branch-state";
 import { openGitDocument } from "../documents/git-documents";
 import { ConflictsDialog } from "./conflicts-dialog";
@@ -73,7 +71,7 @@ export interface MergeActionDeps {
   /** 지금 진행 중 작업(창의 브랜치 상태). */
   operation(): OperationInfo | null;
   strings(): GitMergeStrings;
-  confirm(question: ConfirmQuestion): Promise<boolean>;
+  confirm(question: GitConfirm): Promise<boolean>;
   notify(input: NotificationInput): void;
   openConflicts(): void;
   /** 결과 칸을 고쳤지만 저장하지 않은 머지 탭 수(중단 확인의 경고). */
@@ -181,7 +179,7 @@ export function GitMerge({
   const T = useGitMergeStrings();
   const { client } = useHost();
   const notify = useNotify();
-  const dialogs = useFileDialogs();
+  const dialogs = useGitDialogs();
   const worktree = useActiveWorktree();
   const [conflictsOpen, setConflictsOpen] = useState(false);
 

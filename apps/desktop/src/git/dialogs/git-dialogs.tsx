@@ -27,6 +27,8 @@ export const LOST_SHOWN = 30;
 export interface GitConfirm {
   title: string;
   body?: string;
+  /** 본문 아래 경고(함께 사라지는 것 — 저장하지 않은 머지 탭 등). */
+  warning?: string;
   /** 그대로 보일 원문(git 의 stderr 등). */
   detail?: string;
   /** 잃을 변경(`git.resetPreview`). `fingerprint` 가 `null` 이면 확인할 수 없다 — 확인 단추가 꺼진다. */
@@ -155,6 +157,11 @@ export function ConfirmDialog({
           <Dialog.Description className={question.body ? "whitespace-pre-line" : "sr-only"}>
             {question.body ?? question.title}
           </Dialog.Description>
+          {question.warning && (
+            <p role="alert" className="whitespace-pre-line text-ui-accent">
+              {question.warning}
+            </p>
+          )}
           {question.detail && (
             <pre
               data-testid="git-confirm-detail"

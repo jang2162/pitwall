@@ -389,6 +389,8 @@ const calls = (method: string) =>
   host.calls.filter((c) => c.method === method).map((c) => c.params);
 const confirmDialog = () =>
   document.querySelector<HTMLElement>("[data-testid=file-confirm-dialog]");
+/** [중단] 의 확인 — 위험 작업 다이얼로그(M2-20). */
+const abortDialog = () => document.querySelector<HTMLElement>("[data-testid=git-confirm-dialog]");
 const toasts = () => document.body.textContent ?? "";
 
 async function openMerge(path = "notes.txt") {
@@ -507,17 +509,20 @@ it("aborts a rebase from the banner only after the confirmation", async () => {
 
   // 취소하면 부르지 않는다.
   await click(bannerButton("abort")!);
-  await vi.waitFor(() => expect(confirmDialog()).not.toBeNull());
-  expect(confirmDialog()!.textContent).toContain("리베이스을(를) 중단할까?");
+  await vi.waitFor(() => expect(abortDialog()).not.toBeNull());
+  expect(abortDialog()!.textContent).toContain("리베이스을(를) 중단할까?");
+  // 위험 표시 — 처음 포커스는 취소다(Enter 한 번에 중단하지 않는다).
+  expect(abortDialog()!.dataset.danger).toBe("true");
+  expect(document.activeElement?.textContent).toBe("취소");
   expect(calls("git.operation.abort")).toHaveLength(0);
-  const [cancel] = confirmDialog()!.querySelectorAll("button");
+  const [cancel] = abortDialog()!.querySelectorAll("button");
   await click(cancel!);
-  expect(confirmDialog()).toBeNull();
+  expect(abortDialog()).toBeNull();
   expect(calls("git.operation.abort")).toHaveLength(0);
 
   await click(bannerButton("abort")!);
-  await vi.waitFor(() => expect(confirmDialog()).not.toBeNull());
-  const buttons = confirmDialog()!.querySelectorAll("button");
+  await vi.waitFor(() => expect(abortDialog()).not.toBeNull());
+  const buttons = abortDialog()!.querySelectorAll("button");
   await click(buttons[buttons.length - 1]!);
   await vi.waitFor(() =>
     expect(calls("git.operation.abort")).toEqual([{ projectId: "p1", worktree: null }]),
@@ -824,8 +829,8 @@ it("warns that aborting drops the edited result of open merge tabs", async () =>
   await openMerge();
   await editMerge();
   await click(bannerButton("abort")!);
-  await vi.waitFor(() => expect(confirmDialog()).not.toBeNull());
-  expect(confirmDialog()!.textContent).toContain(
+  await vi.waitFor(() => expect(abortDialog()).not.toBeNull());
+  expect(abortDialog()!.querySelector("[role=alert]")!.textContent).toContain(
     "저장하지 않은 머지 탭 1개의 고친 결과도 사라진다",
   );
 });
