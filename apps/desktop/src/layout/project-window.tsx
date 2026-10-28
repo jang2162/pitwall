@@ -62,6 +62,8 @@ import { FileWatch } from "../fs/file-watch";
 import { GitBranchFeature } from "../git/git-branch-feature";
 import { GitDocuments } from "../git/documents/git-documents";
 import { GitLogToolWindow } from "../git/log/git-log-tool-window";
+import { GitMerge } from "../git/merge/git-merge";
+import { OperationBanner } from "../git/merge/operation-banner";
 import { GitPrompts } from "../git/git-prompts";
 import { GitStatusWatch } from "../git/git-status";
 import { useAppStrings } from "../i18n/app-strings";
@@ -787,6 +789,7 @@ function ProjectWindowBody({
     <EditorWorkspaceProvider workspace={workspace}>
       <PreviewHostProvider host={previewHost}>
         <div className="flex min-h-0 flex-1 flex-col">
+          {projectId !== undefined && <OperationBanner placement="editor" />}
           <div className="flex min-h-0 flex-1">
             <ToolWindowBar dock="left" api={api} />
             {projectState.ready ? (
@@ -811,6 +814,7 @@ function ProjectWindowBody({
           )}
           {projectId !== undefined && <GitPrompts projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitDocuments projectId={projectId} workspace={workspace} />}
+          {projectId !== undefined && <GitMerge projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
           {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}

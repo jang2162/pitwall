@@ -11,6 +11,8 @@ mod read;
 mod resolve;
 #[cfg(unix)]
 mod untrusted;
+#[cfg(unix)]
+mod view_fixture;
 
 #[cfg(unix)]
 use std::future::Future;

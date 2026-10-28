@@ -27,7 +27,7 @@ export function EditorPanel(props: IDockviewPanelProps<EditorTabParams>) {
   return (
     <div data-keymap-context="gitDocument" data-editor-tab={api.id} className="h-full">
       {isGitDocumentSpec(params.git) ? (
-        <GitDocumentPanel params={params} spec={params.git} />
+        <GitDocumentPanel params={params} spec={params.git} panelId={api.id} />
       ) : (
         <EditorNotice text={T.failed("git")} openWith={false} />
       )}

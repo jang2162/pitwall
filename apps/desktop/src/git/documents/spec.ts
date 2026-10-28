@@ -22,7 +22,12 @@ export type GitDocumentSpec =
    * 파일 하나의 diff(`git.diff` 의 짝 그대로 — 커밋 툴 윈도우의 미리보기 · 파일 히스토리). `path` 는 새 경로(저장소 꼭대기 기준),
    * 이름이 바뀌었으면 `oldPath`.
    */
-  | { kind: "diff"; from?: DiffSide; to: DiffSide; path: string; oldPath?: string };
+  | { kind: "diff"; from?: DiffSide; to: DiffSide; path: string; oldPath?: string }
+  /**
+   * 충돌 중인 파일 하나의 3-way 머지(M2-19, 결정 M2-D4): 왼쪽 ours · 가운데 결과 · 오른쪽 theirs. `path` 는 저장소 꼭대기 기준(`/`).
+   * 내용은 연 때의 `git.conflict.get` 이고, 저장하면 `git.conflict.resolve` 로 푼다(src/git/merge/merge-document.tsx).
+   */
+  | { kind: "merge"; path: string };
 
 const sideKey = (side: DiffSide | undefined) =>
   side === undefined ? "-" : side.kind === "commit" ? side.rev : side.kind;
@@ -38,6 +43,8 @@ export function gitDocumentKey(spec: GitDocumentSpec): string {
       return `git:revision:${spec.rev}:${spec.path}`;
     case "diff":
       return `git:diff:${sideKey(spec.from)}..${sideKey(spec.to)}:${spec.path}`;
+    case "merge":
+      return `git:merge:${spec.path}`;
   }
 }
 
@@ -54,6 +61,8 @@ export function gitDocumentDetail(spec: GitDocumentSpec): string {
       return `${spec.path} @ ${spec.rev}`;
     case "diff":
       return spec.oldPath ? `${spec.oldPath} → ${spec.path}` : spec.path;
+    case "merge":
+      return spec.path;
   }
 }
 
@@ -71,6 +80,8 @@ export function isGitDocumentSpec(value: unknown): value is GitDocumentSpec {
       return str("rev") && str("path");
     case "diff":
       return str("path") && typeof v.to === "object" && v.to !== null;
+    case "merge":
+      return str("path");
     default:
       return false;
   }

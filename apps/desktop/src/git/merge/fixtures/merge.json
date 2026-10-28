@@ -1,0 +1,320 @@
+{
+  "conflicts": {
+    "files": [
+      {
+        "base": {
+          "id": "e3e039a60623a2ab736dff5dfde1f57b8ae45028",
+          "mode": "100644"
+        },
+        "binary": true,
+        "kind": "bothModified",
+        "large": false,
+        "ours": {
+          "id": "487796f51719c64b63bb47b78868ee74c5aa1ead",
+          "mode": "100644"
+        },
+        "path": "image.bin",
+        "submodule": false,
+        "symlink": false,
+        "theirs": {
+          "id": "e5a175da1073750302838734e29fa09dabce80ff",
+          "mode": "100644"
+        },
+        "tooLarge": false
+      },
+      {
+        "base": {
+          "id": "3b2259409315c9bdcd9438e7a7f19fe3367e1b99",
+          "mode": "100644"
+        },
+        "binary": false,
+        "kind": "bothModified",
+        "large": false,
+        "ours": {
+          "id": "35022f5702b3202fbbf07fd1528e6076317ab109",
+          "mode": "100644"
+        },
+        "path": "notes.txt",
+        "submodule": false,
+        "symlink": false,
+        "theirs": {
+          "id": "09f4fdec6280f55df93a5cdd2066c11e5fcaf5e3",
+          "mode": "100644"
+        },
+        "tooLarge": false
+      }
+    ],
+    "workTree": "/repo"
+  },
+  "detail": {
+    "base": {
+      "content": {
+        "kind": "text",
+        "text": "alpha\none\ntwo\nthree\nmid1\nmid2\nmid3\nmid4\nmid5\nfour\nfive\nsix\nseven\nomega\n"
+      },
+      "id": "3b2259409315c9bdcd9438e7a7f19fe3367e1b99",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "size": 71,
+      "tooLarge": false
+    },
+    "clean": false,
+    "file": {
+      "base": {
+        "id": "3b2259409315c9bdcd9438e7a7f19fe3367e1b99",
+        "mode": "100644"
+      },
+      "binary": false,
+      "kind": "bothModified",
+      "large": false,
+      "ours": {
+        "id": "35022f5702b3202fbbf07fd1528e6076317ab109",
+        "mode": "100644"
+      },
+      "path": "notes.txt",
+      "submodule": false,
+      "symlink": false,
+      "theirs": {
+        "id": "09f4fdec6280f55df93a5cdd2066c11e5fcaf5e3",
+        "mode": "100644"
+      },
+      "tooLarge": false
+    },
+    "merged": "alpha\ntwo\nthree\nmid1\nmid2 theirs\nmid3\nmid4\nmid5\nfive\nsix\nseven\nomega ours\n",
+    "ours": {
+      "content": {
+        "kind": "text",
+        "text": "alpha\none ours\ntwo\nthree\nmid1\nmid2\nmid3\nmid4\nmid5\nfour ours\nfive\nsix\nseven\nomega ours\n"
+      },
+      "id": "35022f5702b3202fbbf07fd1528e6076317ab109",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "size": 86,
+      "tooLarge": false
+    },
+    "regions": [
+      {
+        "base": {
+          "count": 1,
+          "start": 1
+        },
+        "kind": "conflict",
+        "merged": {
+          "count": 0,
+          "start": 1
+        },
+        "ours": {
+          "count": 1,
+          "start": 1
+        },
+        "theirs": {
+          "count": 1,
+          "start": 1
+        }
+      },
+      {
+        "base": {
+          "count": 1,
+          "start": 5
+        },
+        "kind": "theirs",
+        "merged": {
+          "count": 1,
+          "start": 4
+        },
+        "ours": {
+          "count": 1,
+          "start": 5
+        },
+        "theirs": {
+          "count": 1,
+          "start": 5
+        }
+      },
+      {
+        "base": {
+          "count": 1,
+          "start": 9
+        },
+        "kind": "conflict",
+        "merged": {
+          "count": 0,
+          "start": 8
+        },
+        "ours": {
+          "count": 1,
+          "start": 9
+        },
+        "theirs": {
+          "count": 1,
+          "start": 9
+        }
+      },
+      {
+        "base": {
+          "count": 1,
+          "start": 13
+        },
+        "kind": "ours",
+        "merged": {
+          "count": 1,
+          "start": 11
+        },
+        "ours": {
+          "count": 1,
+          "start": 13
+        },
+        "theirs": {
+          "count": 1,
+          "start": 13
+        }
+      }
+    ],
+    "theirs": {
+      "content": {
+        "kind": "text",
+        "text": "alpha\none theirs\ntwo\nthree\nmid1\nmid2 theirs\nmid3\nmid4\nmid5\nfour theirs\nfive\nsix\nseven\nomega\n"
+      },
+      "id": "09f4fdec6280f55df93a5cdd2066c11e5fcaf5e3",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "size": 92,
+      "tooLarge": false
+    },
+    "version": "fixture-version",
+    "workTree": "/repo"
+  },
+  "expected": "alpha\none ours\ntwo\nthree\nmid1\nmid2 theirs\nmid3\nmid4\nmid5\n넷 — 손으로 고침\nfive\nsix\nseven\nomega ours\n",
+  "image": {
+    "base": {
+      "content": null,
+      "id": "e3e039a60623a2ab736dff5dfde1f57b8ae45028",
+      "judgment": {
+        "binary": true,
+        "bom": null,
+        "editable": false,
+        "encoding": null,
+        "highlight": false,
+        "lineEnding": "none",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "size": 5,
+      "tooLarge": false
+    },
+    "clean": false,
+    "file": {
+      "base": {
+        "id": "e3e039a60623a2ab736dff5dfde1f57b8ae45028",
+        "mode": "100644"
+      },
+      "binary": true,
+      "kind": "bothModified",
+      "large": false,
+      "ours": {
+        "id": "487796f51719c64b63bb47b78868ee74c5aa1ead",
+        "mode": "100644"
+      },
+      "path": "image.bin",
+      "submodule": false,
+      "symlink": false,
+      "theirs": {
+        "id": "e5a175da1073750302838734e29fa09dabce80ff",
+        "mode": "100644"
+      },
+      "tooLarge": false
+    },
+    "merged": null,
+    "ours": {
+      "content": null,
+      "id": "487796f51719c64b63bb47b78868ee74c5aa1ead",
+      "judgment": {
+        "binary": true,
+        "bom": null,
+        "editable": false,
+        "encoding": null,
+        "highlight": false,
+        "lineEnding": "none",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "size": 5,
+      "tooLarge": false
+    },
+    "regions": [],
+    "theirs": {
+      "content": null,
+      "id": "e5a175da1073750302838734e29fa09dabce80ff",
+      "judgment": {
+        "binary": true,
+        "bom": null,
+        "editable": false,
+        "encoding": null,
+        "highlight": false,
+        "lineEnding": "none",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "size": 7,
+      "tooLarge": false
+    },
+    "version": "fixture-version",
+    "workTree": "/repo"
+  },
+  "rebase": {
+    "abort": {
+      "moved": null,
+      "operation": null,
+      "stopped": false
+    },
+    "operation": {
+      "actions": ["continue", "abort", "skip"],
+      "branch": "main",
+      "heads": ["9d6fea61c3f1ac7d1499e2aea828eae257d0853e"],
+      "kind": "rebase",
+      "onto": "44895581020cdd02321248599d127295ec094fb4",
+      "remaining": 0,
+      "step": {
+        "current": 1,
+        "total": 1
+      }
+    }
+  },
+  "typed": "넷 — 손으로 고침\n"
+}

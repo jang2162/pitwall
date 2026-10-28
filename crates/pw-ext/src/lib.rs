@@ -146,6 +146,7 @@ mod tests {
             "app.ftl",
             "file-window.ftl",
             "git-log.ftl",
+            "git-merge.ftl",
             "menu.ftl",
             "project.ftl",
             "welcome.ftl",

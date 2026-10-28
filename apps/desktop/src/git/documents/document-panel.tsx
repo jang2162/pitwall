@@ -6,6 +6,7 @@
 // - 리비전의 파일(F5-19): 그 커밋의 파일 내용을 읽기 전용 에디터로. 위 막대(10-ui.md 「코드 에디터」 의 미니 툴바)에 리비전과
 //   「읽기 전용」.
 // - diff: 파일 하나의 diff(트리 없이).
+// - 머지: 충돌 파일 하나의 3-way 머지(src/git/merge/merge-document.tsx, M2-19).
 
 import { EditorState } from "@codemirror/state";
 import {
@@ -27,6 +28,7 @@ import { useKeymap } from "../../keymap/keymap-provider";
 import { useProjectStrings } from "../../layout/strings";
 import { normalizeText } from "../diff/diff-model";
 import { revisionHighlight, revisionSyntax } from "../diff/revision-syntax";
+import { MergeDocument } from "../merge/merge-document";
 import { ChangesView } from "./changes-view";
 import { gitDocumentSource, revisionText, type SideText } from "./source";
 import type { GitDocumentSpec } from "./spec";
@@ -223,9 +225,12 @@ function RevisionDocument({
 export function GitDocumentPanel({
   params,
   spec,
+  panelId,
 }: {
   params: EditorTabParams;
   spec: GitDocumentSpec;
+  /** 탭(dockview 패널) id. */
+  panelId: string;
 }) {
   const T = useProjectStrings().git.documents;
   const source = gitDocumentSource((s) => s.source);
@@ -258,6 +263,8 @@ export function GitDocumentPanel({
           tree={false}
         />
       );
+    case "merge":
+      return <MergeDocument path={spec.path} worktree={params.worktree} panelId={panelId} />;
   }
 }
 

@@ -1,4 +1,4 @@
-// 빠진 번역을 잡는다: 내장 언어(ko · en)가 같은 메시지 집합을 갖는지, 화면 코드(welcome · layout · settings · file-tree · search · file-window · git/log 의 strings.ts ·
+// 빠진 번역을 잡는다: 내장 언어(ko · en)가 같은 메시지 집합을 갖는지, 화면 코드(welcome · layout · settings · file-tree · search · file-window · git/log · git/merge 의 strings.ts ·
 // git/branch-strings.ts · app-strings.ts)와 네이티브 메뉴 · 대화상자 · OS 창 제목(src-tauri/src/menu.rs · shell_command.rs · windows.rs)이 쓰는 id 가
 // 두 언어에 모두 있고 오류 없이 만들어지는지. 폴백(en)이 빠진 메시지를 덮어 화면에서는
 // 티가 나지 않으므로 여기서 언어마다 따로 본다.
@@ -14,6 +14,7 @@ import { fileTreeStrings } from "../file-tree/strings";
 import { fileWindowStrings } from "../file-window/strings";
 import { branchStrings } from "../git/branch-strings";
 import { gitLogStrings } from "../git/log/strings";
+import { gitMergeStrings } from "../git/merge/strings";
 import { PANELS } from "../layout/project-layout";
 import { projectStrings } from "../layout/strings";
 import { findStrings } from "../search/strings";
@@ -92,6 +93,26 @@ describe("built-in translations", () => {
     for (const kind of ["merge", "rebase", "cherryPick", "revert", "bisect", "am"] as const)
       branchStrings(t).status.operation(kind);
     callAll(gitLogStrings(t));
+    callAll(gitMergeStrings(t));
+    for (const kind of ["merge", "rebase", "cherryPick", "revert", "bisect", "am"] as const) {
+      const m = gitMergeStrings(t);
+      m.kind(kind);
+      m.banner.title(kind);
+      m.abort.title(kind);
+      m.results.done(kind);
+    }
+    for (const kind of [
+      "bothModified",
+      "bothAdded",
+      "addedByUs",
+      "addedByThem",
+      "deletedByUs",
+      "deletedByThem",
+      "bothDeleted",
+    ] as const)
+      gitMergeStrings(t).conflicts.kind(kind);
+    for (const reason of ["binary", "large", "deleted", "submodule", "symlink", "other"] as const)
+      gitMergeStrings(t).conflicts.pickOnly(reason);
     // 선택식은 갈래를 하나씩 본다 — 아무 문자열로 부르면 기본 갈래만 지난다.
     for (const appearance of ["light", "dark"] as const)
       projectStrings(t).status.appearance(appearance);
@@ -106,7 +127,13 @@ describe("built-in translations", () => {
       g.menu.revert(count);
       g.dialog.resetLost(count);
       g.dialog.undoLost(count);
+      const m = gitMergeStrings(t);
+      m.banner.conflicts(count);
+      m.doc.unresolved(count);
+      m.doc.unresolvedTitle(count);
     }
+    gitMergeStrings(t).banner.conflicts(0);
+    gitMergeStrings(t).doc.unresolved(0);
     for (const count of [1, 2]) fileTreeStrings(t).ops.delete.body(count, "x");
     for (const level of ["info", "warning", "error"] as const)
       projectStrings(t).notifications.level(level);
