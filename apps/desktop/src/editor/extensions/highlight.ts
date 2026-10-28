@@ -26,7 +26,8 @@ import type { HighlightSpan, SyntaxToken } from "@pitwall/rpc-client";
 import { SYNTAX_TOKENS, syntaxTokenName, tokenCssVar } from "../../theme/tokens";
 import { PLAIN_TEXT } from "../language";
 import type { SyntaxHandle, SyntaxSessions } from "../syntax-sessions";
-import { type EditorFeature, type EditorFeatureContext, editorContext } from ".";
+import type { EditorFeature, EditorFeatureContext } from ".";
+import { editorContext } from "./context";
 
 /** 토큰의 CSS 클래스: `function.method` → `pw-syntax-function-method`. */
 export const tokenClass = (token: SyntaxToken) => `pw-syntax-${token.replaceAll(".", "-")}`;

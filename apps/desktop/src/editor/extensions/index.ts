@@ -25,13 +25,16 @@
 //     자리(../text-viewer.tsx `useFeatureContext`)에서 채운다. 그 값이 바뀌면 다시 구성이 저절로 돈다.
 //
 // 기능끼리는 서로를 import 하지 않는다. 함께 쓰는 값(테마 색 등)은 CSS 변수(src/theme/tokens.ts)나 `context` 로 받는다.
+// 기능 모듈은 `"."` 에서 타입만 가져온다(`import type`). 값(`editorContext`)은 `./context` 에서 가져온다 — `"."` 에서 값을 가져오면
+// index ↔ 기능이 순환해, 그 기능 모듈을 이 목록보다 먼저 읽는 경로가 생기는 순간 `EDITOR_FEATURES` 에 `undefined` 가 든다(context.ts).
 
-import { Compartment, type Extension, Facet, type TransactionSpec } from "@codemirror/state";
+import { Compartment, type Extension, type TransactionSpec } from "@codemirror/state";
 import type { EditorView, Panel } from "@codemirror/view";
 import type { Judgment } from "@pitwall/rpc-client";
 
 import type { EditorGit } from "../../git/gutter/gutter-extension";
 import { base } from "./base";
+import { editorContext } from "./context";
 import { blame } from "./blame";
 import { cursorReport } from "./cursor-report";
 import type { SyntaxSessions } from "../syntax-sessions";
@@ -99,10 +102,7 @@ export interface EditorFeature {
   extension(context: EditorFeatureContext): Extension;
 }
 
-/** 뷰의 지금 context. 기능의 명령 · 리스너가 `state.facet(editorContext)` 로 읽는다. */
-export const editorContext = Facet.define<EditorFeatureContext, EditorFeatureContext | undefined>({
-  combine: (values) => values[0],
-});
+export { editorContext } from "./context";
 
 const contextFeature: EditorFeature = { id: "context", extension: (c) => editorContext.of(c) };
 

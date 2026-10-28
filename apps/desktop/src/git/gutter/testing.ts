@@ -145,6 +145,8 @@ export function openEditor(options: {
   readOnly?: boolean;
   /** 다른 뷰의 호스트를 함께 쓴다(창 하나의 여러 탭). */
   host?: GutterHost;
+  /** 액션을 이 레지스트리로 부른다(git-gutter.tsx 와 같다). 없으면 `available` 로 흉내 낸다. */
+  registry?: { isAvailable(id: string): boolean; run(id: string, args?: unknown): boolean };
 }): Harness {
   const path = options.path ?? `${TOP}/a.txt`;
   const source = options.source ?? new FakeSource();
@@ -155,10 +157,10 @@ export function openEditor(options: {
     new GutterHost({
       source,
       strings: gitGutterStrings((id, args) => (args ? `${id} ${JSON.stringify(args)}` : id)),
-      available: (id) => available.has(id),
+      available: (id) => options.registry?.isAvailable(id) ?? available.has(id),
       run: (id, args) => {
         ran.push({ id, args });
-        return available.has(id);
+        return options.registry ? options.registry.run(id, args) : available.has(id);
       },
       versions: options.versions ?? (async () => ({ document: "v1", disk: "v1" })),
       notify() {},

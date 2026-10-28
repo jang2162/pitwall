@@ -10,7 +10,7 @@
 import { indentWithTab } from "@codemirror/commands";
 import { EditorView, keymap } from "@codemirror/view";
 
-import { type EditorFeatureContext, type EditorFeature } from ".";
+import type { EditorFeature, EditorFeatureContext } from ".";
 
 /** 문서의 undo · redo. 읽기 전용이면 하지 않는다. 키맵 액션(../editor-ops.ts)도 이것을 쓴다. */
 export function historyCommand(
