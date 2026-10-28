@@ -6,6 +6,7 @@
         "text": "line 1 of the original file with some words\nline 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nside 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\n"
       },
       "eof": true,
+      "filter": null,
       "id": "eef22258a828e719258cf11b681f9f9756c5e708",
       "judgment": {
         "binary": false,
@@ -29,6 +30,7 @@
         "text": "line 1 of the original file with some words\nline 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nline 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\n"
       },
       "eof": true,
+      "filter": null,
       "id": "fff8a5a7e6c91f888c0c0f83032af457b964ca6c",
       "judgment": {
         "binary": false,
@@ -52,6 +54,7 @@
         "text": "line 1 of the original file with some words\nmain 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nside 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\ntail added\n"
       },
       "eof": true,
+      "filter": null,
       "id": "27597d2cbd252eb2cd85cf451cf012713ea9f5fc",
       "judgment": {
         "binary": false,
@@ -75,6 +78,7 @@
         "text": "line 1 of the original file with some words\nline 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nline 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nline 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\n"
       },
       "eof": true,
+      "filter": null,
       "id": "94323ab67ff4ae61063f3d758a0f93becea35a36",
       "judgment": {
         "binary": false,
@@ -98,6 +102,7 @@
         "text": "line 1 of the original file with some words\nmain 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nside 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\n"
       },
       "eof": true,
+      "filter": null,
       "id": "6f1a0955ff437e35a80b37b4de42d5e50adad2b0",
       "judgment": {
         "binary": false,
@@ -121,6 +126,7 @@
         "text": "line 1 of the original file with some words\nmain 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nside 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\n"
       },
       "eof": true,
+      "filter": null,
       "id": "6f1a0955ff437e35a80b37b4de42d5e50adad2b0",
       "judgment": {
         "binary": false,
@@ -144,6 +150,7 @@
         "text": "line 1 of the original file with some words\nline 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nline 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\n"
       },
       "eof": true,
+      "filter": null,
       "id": "fff8a5a7e6c91f888c0c0f83032af457b964ca6c",
       "judgment": {
         "binary": false,
@@ -167,6 +174,7 @@
         "text": "line 1 of the original file with some words\nline 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nline 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\n"
       },
       "eof": true,
+      "filter": null,
       "id": "c6bfff780e7fd9f62ee2129acc68af77237d09c7",
       "judgment": {
         "binary": false,
@@ -190,6 +198,7 @@
         "text": "line 1 of the original file with some words\nmain 2 of the original file with some words\nline 3 of the original file with some words\nline 4 of the original file with some words\nLINE 5 of the original file with some words\nline 6 of the original file with some words\nline 7 of the original file with some words\nline 8 of the original file with some words\nline 9 of the original file with some words\nline 15 of the original file with some words\nline 16 of the original file with some words\nline 17 of the original file with some words\nline 18 of the original file with some words\nline 19 of the original file with some words\nline 20 of the original file with some words\nline 21 of the original file with some words\nline 22 of the original file with some words\nline 23 of the original file with some words\nline 24 of the original file with some words\nline 25 of the original file with some words\nline 26 of the original file with some words\nline 27 of the original file with some words\nline 28 of the original file with some words\nline 29 of the original file with some words\nline 30 of the original file with some words\nline 10 of the original file with some words\nline 11 of the original file with some words\nline 12 of the original file with some words\nline 13 of the original file with some words\nline 14 of the original file with some words\n"
       },
       "eof": true,
+      "filter": null,
       "id": "3b144458f83dd6c1a12d08ad1f9175dc9ea140aa",
       "judgment": {
         "binary": false,
