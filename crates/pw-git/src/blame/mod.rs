@@ -47,7 +47,7 @@ const FLUSH_AFTER: Duration = Duration::from_millis(100);
 )]
 #[serde(rename_all = "camelCase")]
 pub enum BlameEngine {
-    /// `git blame --incremental` — 줄 수가 [`MOVES_MAX_LINES`] 이하면 `-M` 으로 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다.
+    /// `git blame --incremental` — 줄 수가 10만 줄([`MOVES_MAX_LINES`]) 이하면 `-M` 으로 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다.
     Git,
     /// gix blame — `git blame`(`-M` 없이)과 같다. 옮긴 줄은 옮긴 커밋의 것이다.
     Gix,
@@ -66,7 +66,7 @@ pub struct BlameFile {
     pub lines: u32,
     pub engine: BlameEngine,
     /// 파일 안에서 옮긴 줄을 원래 커밋으로 돌렸는가(`git blame -M`). `false` 면 옮긴 줄은 옮긴 커밋의 것이다 — 엔진 `gix` 이거나,
-    /// 줄 수가 [`MOVES_MAX_LINES`] 를 넘어 `-M` 없이 돌렸다. 창이 「줄 이동 추적 안 함」 을 알린다.
+    /// 줄 수가 10만 줄([`MOVES_MAX_LINES`])을 넘어 `-M` 없이 돌렸다. 창이 「줄 이동 추적 안 함」 을 알린다.
     pub moves: bool,
 }
 
