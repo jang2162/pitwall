@@ -53,11 +53,14 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
   const openWith = useAppStrings().openWith;
   const { registry, platform } = useKeymap();
   const params = useTabParams(props.api, props.params);
-  const { documents } = useEditorWorkspace();
-  const dirty = useStore(documents.store, (s) => {
+  const { documents, unsavedTabs } = useEditorWorkspace();
+  const docDirty = useStore(documents.store, (s) => {
     const doc = s.docs[params.path];
     return doc?.status === "text" && doc.dirty;
   });
+  // 문서 모델 밖의 편집(머지 문서의 결과 칸).
+  const tabDirty = useStore(unsavedTabs, (s) => s.panels.has(props.api.id));
+  const dirty = docDirty || tabDirty;
   // 지금 그리는 뷰어. 읽는 중 · 실패 · 일반 파일이 아님이면 `null`(뷰어를 바꿀 수 없다), 크기로 열지 않은 문서는 덮어쓴 것.
   const viewer = useStore(documents.store, (s): ViewerKind | "notice" | null => {
     const doc = s.docs[params.path];

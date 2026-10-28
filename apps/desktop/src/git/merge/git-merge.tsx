@@ -31,6 +31,7 @@ import { GIT_FAILED } from "../branch-ops";
 import { windowBranch } from "../branch-state";
 import { openGitDocument } from "../documents/git-documents";
 import { ConflictsDialog } from "./conflicts-dialog";
+import { dirtyMergeSessions } from "./merge-sessions";
 import { fileName, type MergeSource, mergeSource } from "./source";
 import { type GitMergeStrings, useGitMergeStrings } from "./strings";
 
@@ -75,6 +76,8 @@ export interface MergeActionDeps {
   confirm(question: ConfirmQuestion): Promise<boolean>;
   notify(input: NotificationInput): void;
   openConflicts(): void;
+  /** 결과 칸을 고쳤지만 저장하지 않은 머지 탭 수(중단 확인의 경고). */
+  dirtyMerges(): number;
   openMerge(path: string, worktree: string | undefined): void;
 }
 
@@ -91,9 +94,11 @@ export function mergeActions(deps: MergeActionDeps): Action[] {
     const source = deps.source();
     if (!op || !source) return;
     if (action === "abort") {
+      const dirty = deps.dirtyMerges();
       const ok = await deps.confirm({
         title: S.abort.title(op.kind),
         body: S.abort.body,
+        ...(dirty > 0 && { warning: S.abort.unsaved(dirty) }),
         confirm: S.abort.confirm,
         danger: true,
       });
@@ -200,6 +205,7 @@ export function GitMerge({
         confirm: (q) => live.current.dialogs.confirm(q),
         notify: (n) => live.current.notify(n),
         openConflicts: () => setConflictsOpen(true),
+        dirtyMerges: () => dirtyMergeSessions().length,
         openMerge: (path, wt) =>
           openGitDocument(
             workspace,

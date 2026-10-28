@@ -13,9 +13,12 @@
 // - 결과 칸에서 구간의 자리는 바뀜을 따라 옮긴다(`MergeRange` — 문서 위치). 빈 구간(고르기 전의 충돌)에 친 글자는 그 구간에 든다.
 // - 상태 바뀜은 되돌릴 수 있다 — `≫` 뒤 ⌘Z 는 글과 단추를 함께 되돌린다(`invertedEffects`).
 //
-// 줄과 줄바꿈: 구간의 줄 번호는 `\n` 으로 나눈 줄이다(CRLF 의 `\r` 은 줄 내용). 결과 칸은 텍스트의 줄바꿈이 하나면 그것으로
-// 나누고 저장할 때 되돌린다(`lineModel` · `serialize` — 문서 모델(src/editor/live-text.ts)과 같은 규칙). 섞였으면 `\n` 으로만
-// 나눠 `\r` 을 글자로 남긴다. 어느 쪽이든 CodeMirror 의 줄 i 는 `\n` 으로 나눈 줄 i 다.
+// 줄과 줄바꿈: 구간의 줄 번호는 `\n` 으로 나눈 줄이다(CRLF 의 `\r` 은 줄 내용). 줄바꿈 모델은 세 쪽과 자동 병합 결과를 함께 보고
+// 정한다(`lineModel`) — 어디에도 `\r` 이 없으면 LF, 모두가 순수 CRLF 면 `\r\n` 을 `\n` 으로 바꿔 넣고 저장할 때 되돌리고(문서
+// 모델(src/editor/live-text.ts)과 같은 규칙), 하나라도 섞였거나 홀로 선 `\r` 이 있으면 `\n` 으로만 나눠 `\r` 을 글자로 남긴다. 세 칸과
+// 구간의 줄은 모두 그 모델로 바꾼 글(`MergeInput.docs`)에서 꺼낸다 — `≫` · `≪` 가 넣는 바이트가 그쪽 원문 그대로다. 어느 쪽이든
+// CodeMirror 의 줄 i 는 `\n` 으로 나눈 줄 i 다. 한 충돌에 두 쪽을 이어 붙일 때 앞의 것이 개행 없이 끝나면 git 의 `--union` 처럼 개행을
+// 넣는다 — CRLF 인지는 git 과 같은 규칙으로 고른다(`needsCr`, git xdiff/xmerge.c 의 `is_cr_needed`).
 
 import { invertedEffects } from "@codemirror/commands";
 import {
@@ -33,24 +36,29 @@ import type { GitConflictDetail, MergeLines, MergeRegion } from "@pitwall/rpc-cl
 export type MergeSide = "ours" | "theirs";
 export type SideState = "pending" | "applied" | "ignored";
 
-/** 텍스트의 줄바꿈 모델: CodeMirror 에 넣을 글 · 저장할 때의 줄바꿈 · 줄 구분(섞였으면 `\n`). */
+/** 줄바꿈 모델: 저장할 때의 줄바꿈 · 줄 구분(섞였으면 `\n`). */
 export interface LineModel {
-  /** CodeMirror 에 넣는 글. CRLF 하나면 `\n` 으로 바꾼 것. */
-  readonly doc: string;
+  /** CRLF 면 CodeMirror 의 글은 `\n` 이고 저장할 때 `\r\n` 으로 되돌린다. */
   readonly eol: "\n" | "\r\n";
   /** `EditorState.lineSeparator` — 섞인 줄바꿈이면 `\n`(`\r` 을 글자로 남긴다). */
   readonly separator: "\n" | undefined;
 }
 
-/** `text` 의 줄바꿈: `\r` 이 없으면 LF, 모든 `\r` 이 `\r\n` 의 것이고 모든 `\n` 앞에 `\r` 이 있으면 CRLF, 아니면 섞임. */
-export function lineModel(text: string): LineModel {
-  if (!text.includes("\r")) return { doc: text, eol: "\n", separator: undefined };
-  const crlf = text.split("\r\n").length - 1;
-  const lf = text.split("\n").length - 1;
-  const cr = text.split("\r").length - 1;
-  if (crlf === lf && crlf === cr)
-    return { doc: text.replaceAll("\r\n", "\n"), eol: "\r\n", separator: undefined };
-  return { doc: text, eol: "\n", separator: "\n" };
+const count = (text: string, part: string) => text.split(part).length - 1;
+
+/** 글들의 줄바꿈: 어디에도 `\r` 이 없으면 LF, 모두의 모든 `\r` 이 `\r\n` 의 것이고 모든 `\n` 앞에 `\r` 이 있으면 CRLF, 아니면 섞임. */
+export function lineModel(...texts: string[]): LineModel {
+  if (!texts.some((t) => t.includes("\r"))) return { eol: "\n", separator: undefined };
+  const pure = texts.every((t) => {
+    const crlf = count(t, "\r\n");
+    return crlf === count(t, "\n") && crlf === count(t, "\r");
+  });
+  return pure ? { eol: "\r\n", separator: undefined } : { eol: "\n", separator: "\n" };
+}
+
+/** 원문을 모델의 CodeMirror 글로(CRLF 면 `\r\n` → `\n`). */
+export function toDoc(text: string, model: LineModel): string {
+  return model.eol === "\r\n" ? text.replaceAll("\r\n", "\n") : text;
 }
 
 /** CodeMirror 의 글(`doc.toString()` — 줄을 `\n` 으로 잇는다)을 파일의 줄바꿈으로. */
@@ -130,23 +138,25 @@ export function sideButtons(state: RegionState, side: MergeSide): ("apply" | "ig
   return s === "applied" ? ["ignore"] : ["apply"];
 }
 
-/** 결과 칸의 세 쪽 글(구간 줄을 꺼낼 때 쓴다). 결과 칸의 줄바꿈 모델로 바꾼 것이다. */
+/** 세 쪽의 줄(줄 끝 포함 — 구간 줄을 꺼낼 때 쓴다). 모델의 CodeMirror 글에서 나눈 것이다. */
 export interface MergeTexts {
   readonly base: readonly string[];
   readonly ours: readonly string[];
   readonly theirs: readonly string[];
 }
 
-/** 결과 칸에 넣을 그 줄들. 결과가 CRLF 모델이면 `\r\n` 을 `\n` 으로 — CodeMirror 가 줄로 나눈다. */
-function toResult(text: string, model: LineModel): string {
-  return model.eol === "\r\n" ? text.replaceAll("\r\n", "\n") : text;
-}
-
 /** 머지 문서 하나의 고정된 입력(바뀌지 않는다). */
 export interface MergeInput {
   readonly regions: readonly MergeRegion[];
+  readonly model: LineModel;
+  /** 네 글을 모델의 CodeMirror 글로 바꾼 것(세 칸이 이것을 보인다). */
+  readonly docs: {
+    readonly base: string;
+    readonly ours: string;
+    readonly theirs: string;
+    readonly result: string;
+  };
   readonly texts: MergeTexts;
-  readonly result: LineModel;
 }
 
 /** `git.conflict.get` 의 결과에서 머지 입력. 자동 병합 결과가 없으면(한쪽 고르기만) `undefined`. */
@@ -154,20 +164,48 @@ export function mergeInput(detail: GitConflictDetail): MergeInput | undefined {
   if (detail.merged === null) return undefined;
   const text = (side: GitConflictDetail["base"]) =>
     side?.content?.kind === "text" ? side.content.text : "";
+  const raw = [text(detail.base), text(detail.ours), text(detail.theirs), detail.merged] as const;
+  const model = lineModel(...raw);
+  const [base, ours, theirs, result] = raw.map((t) => toDoc(t, model)) as [
+    string,
+    string,
+    string,
+    string,
+  ];
   return {
     regions: detail.regions,
-    texts: {
-      base: rawLines(text(detail.base)),
-      ours: rawLines(text(detail.ours)),
-      theirs: rawLines(text(detail.theirs)),
-    },
-    result: lineModel(detail.merged),
+    model,
+    docs: { base, ours, theirs, result },
+    texts: { base: rawLines(base), ours: rawLines(ours), theirs: rawLines(theirs) },
   };
+}
+
+/**
+ * 줄 `i` 의 줄바꿈이 CRLF 인가(git xdiff/xmerge.c 의 `is_eol_crlf`): 끝 줄이 아니면 그 줄, 끝 줄이 개행 없이 끝나면 그 앞 줄을 본다.
+ * 줄이 없거나 하나뿐인 줄에 개행이 없으면 모른다(`-1`).
+ */
+function eolCrlf(lines: readonly string[], i: number): 1 | 0 | -1 {
+  const crlf = (line: string) => (line.endsWith("\r\n") ? 1 : 0);
+  if (i < lines.length - 1) return crlf(lines[i]!);
+  if (lines.length === 0) return -1;
+  const last = lines[i]!;
+  if (last.endsWith("\n")) return crlf(last);
+  if (i === 0) return -1;
+  return crlf(lines[i - 1]!);
+}
+
+/** 충돌에 두 쪽을 이어 붙일 때 넣는 개행이 CRLF 인가(git 의 `is_cr_needed`: ours · theirs 의 충돌 앞 줄, 그다음 base 의 첫 줄). */
+function needsCr(input: MergeInput, region: MergeRegion): boolean {
+  const before = (n: number) => (n > 0 ? n - 1 : 0);
+  let cr = eolCrlf(input.texts.ours, before(region.ours.start));
+  if (cr !== 0) cr = eolCrlf(input.texts.theirs, before(region.theirs.start));
+  if (cr !== 0) cr = eolCrlf(input.texts.base, 0);
+  return cr === 1;
 }
 
 /** 결과 칸 처음 글에서 구간마다의 위치. */
 export function initialRanges(input: MergeInput): MergeRange[] {
-  const lines = rawLines(input.result.doc);
+  const lines = rawLines(input.docs.result);
   return input.regions.map((r) => {
     const from = lineOffset(lines, r.merged.start);
     return { from, to: lineOffset(lines, r.merged.start + r.merged.count) };
@@ -289,40 +327,57 @@ export function regionAction(
   const range = ranges[index];
   const region = input.regions[index];
   if (!before || !range || !region || !sideButtons(before, side).includes(action)) return undefined;
-  const sideText = toResult(sliceLines(input.texts[side], region[side]), input.result);
+  const sideText = sliceLines(input.texts[side], region[side]);
+  const nl = newline(input, region);
   const effect = (after: RegionState) => setRegionState.of({ index, before, after });
   if (before.kind === "conflict") {
     const after = { ...before, [side]: action === "apply" ? "applied" : "ignored" };
     if (action === "ignore") return { effects: effect(after), annotations: mergeAction.of(true) };
+    // 이미 든 글(다른 쪽 · 사람의 글) 뒤에 붙인다 — 앞 글이 개행 없이 끝나면 git `--union` 처럼 개행을 넣는다(붙일 줄이 없어도).
+    const append = range.to > range.from;
     return {
-      changes: { from: range.to, insert: joinAt(state.doc, range.to, sideText) },
+      changes: {
+        from: range.to,
+        insert: joinAt(state.doc, range.to, sideText, nl, range.to, append),
+      },
       effects: effect(after),
       annotations: mergeAction.of(true),
     };
   }
-  const insert =
-    action === "apply"
-      ? sideText
-      : toResult(sliceLines(input.texts.base, region.base), input.result);
+  const insert = action === "apply" ? sideText : sliceLines(input.texts.base, region.base);
   return {
     changes: {
       from: range.from,
       to: range.to,
-      insert: joinAt(state.doc, range.to, insert, range.from),
+      insert: joinAt(state.doc, range.to, insert, nl, range.from),
     },
     effects: effect({ ...before, [side]: action === "apply" ? "applied" : "ignored" }),
     annotations: mergeAction.of(true),
   };
 }
 
+/** 구간에 넣는 개행: CRLF 모델이면 CodeMirror 의 `\n`(저장할 때 `\r\n`), 섞임 모델이면 git 이 고를 것. */
+function newline(input: MergeInput, region: MergeRegion): string {
+  return input.model.separator === "\n" && needsCr(input, region) ? "\r\n" : "\n";
+}
+
 /**
- * `pos` 에 줄들을 넣을 때의 글: 넣는 글이 줄바꿈 없이 끝나는데(그쪽 파일의 끝 줄) 뒤에 글이 이어지면 줄바꿈을 붙인다 — 붙이지
- * 않으면 다음 줄과 한 줄이 된다. `start` 는 바꾸는 범위의 시작(바꾸기면 그 범위 뒤를 본다).
+ * `start`..`pos` 를 줄들로 바꿀 때 넣는 글. 앞 글이 개행 없이 끝나면(그쪽 파일의 끝 줄을 먼저 넣었다) 앞에 개행을 — `append` 면
+ * 넣을 줄이 없어도(git `--union` 의 `add_nl`). 넣는 글이 개행 없이 끝나는데 뒤에 글이 이어지면 뒤에 개행을 붙인다 — 붙이지 않으면
+ * 다음 줄과 한 줄이 된다.
  */
-function joinAt(doc: Text, pos: number, insert: string, start = pos): string {
-  if (insert === "" || insert.endsWith("\n")) return insert;
-  const before = start > 0 && doc.sliceString(start - 1, start) !== "\n" ? "\n" : "";
-  return pos < doc.length ? `${before}${insert}\n` : `${before}${insert}`;
+function joinAt(
+  doc: Text,
+  pos: number,
+  insert: string,
+  nl: string,
+  start = pos,
+  append = false,
+): string {
+  const open = start > 0 && doc.sliceString(start - 1, start) !== "\n";
+  const before = open && (insert !== "" || append) ? nl : "";
+  const after = insert !== "" && !insert.endsWith("\n") && pos < doc.length ? nl : "";
+  return `${before}${insert}${after}`;
 }
 
 /** 「충돌 없는 변경 모두 적용」: 무시한 한쪽만 바꾼 구간을 모두 다시 그쪽 줄로. 할 것이 없으면 `undefined`. */
@@ -347,7 +402,8 @@ export function applyNonConflicting(
       insert: joinAt(
         state.doc,
         range.to,
-        toResult(sliceLines(input.texts[side], region[side]), input.result),
+        sliceLines(input.texts[side], region[side]),
+        newline(input, region),
         range.from,
       ),
     });

@@ -45,6 +45,8 @@ git-merge-banner-abort = 중단
 git-merge-abort-title = { $kind }을(를) 중단할까?
 git-merge-abort-body = 작업을 시작하기 전의 HEAD 와 작업 트리로 돌린다. 이 작업에서 풀어 둔 충돌도 사라진다.
 git-merge-abort-confirm = 중단
+# $count: 결과 칸을 고쳤지만 저장하지 않은 머지 탭 수
+git-merge-abort-unsaved = 저장하지 않은 머지 탭 { $count }개의 고친 결과도 사라진다.
 
 ## 결과 알림.
 

@@ -16,7 +16,7 @@ import {
   RangeSetBuilder,
   StateEffect,
   StateField,
-  type Text,
+  Text,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -341,11 +341,15 @@ function baseChanges(input: MergeInput, side: MergeSide): Change[] {
   });
 }
 
-/** base 와 비교하는 확장(켤 때만 넣는다). `sideDoc` · `baseDoc` 은 그 칸 · base 의 CodeMirror 글이다. */
-export function compareWithBase(input: MergeInput, side: MergeSide, baseDoc: string): Extension {
+/**
+ * base 와 비교하는 확장(켤 때만 넣는다). 바뀐 곳의 위치는 모델로 바꾼 글(`MergeInput.texts` · `docs`)의 것이라 칸의 글과 같은
+ * 공간이다. base 글은 `\n` 으로만 나눈 줄로 넘긴다 — 문자열로 넘기면 merge 가 `\r\n` 을 줄바꿈으로 나눠 섞인 줄바꿈 글의 위치가
+ * 어긋난다.
+ */
+export function compareWithBase(input: MergeInput, side: MergeSide): Extension {
   const changes = baseChanges(input, side);
   return unifiedMergeView({
-    original: baseDoc,
+    original: Text.of(input.docs.base.split("\n")),
     mergeControls: false,
     highlightChanges: false,
     gutter: true,

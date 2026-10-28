@@ -603,11 +603,16 @@ fn merged(sides: &[Option<Side>; 3]) -> Option<(String, Vec<MergeRegion>)> {
     let (ours, theirs) = (ours.as_ref()?.mergeable()?, theirs.as_ref()?.mergeable()?);
     let merged = merge::merge(base, ours, theirs);
     let text = String::from_utf8(merged.text()).ok()?;
+    Some((text, regions_of(&merged)))
+}
+
+/// 병합 결과의 구간을 RPC 꼴로.
+pub(crate) fn regions_of(merged: &merge::Merged<'_>) -> Vec<MergeRegion> {
     let line_range = |r: &std::ops::Range<u32>| MergeLines {
         start: r.start,
         count: r.end - r.start,
     };
-    let regions = merged
+    merged
         .regions
         .iter()
         .map(|r| MergeRegion {
@@ -621,8 +626,7 @@ fn merged(sides: &[Option<Side>; 3]) -> Option<(String, Vec<MergeRegion>)> {
             theirs: line_range(&r.theirs),
             merged: line_range(&r.merged),
         })
-        .collect();
-    Some((text, regions))
+        .collect()
 }
 
 /// `content` 해결의 쓸 자리(모듈 머리 주석의 규칙 A): 들어 있는 폴더(실제 경로)와 그 아래의 항목. `version` 도 이 판정을

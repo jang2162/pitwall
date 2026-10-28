@@ -18,6 +18,9 @@
 //
 // 닫기 확인: 탭을 닫는 길(⌘W · 탭 닫기 액션 · 다른 탭 닫기 · 탭의 × · 가운데 클릭)은 모두 `closeTabs` 를 지난다. 그 문서를 보는
 // 마지막 탭을 닫는데 미저장 편집이 있으면 [저장] [저장 안 함] [취소] 를 묻는다. 창 닫기 · 앱 종료는 `confirmWindowClose` 다.
+// 문서 모델 밖의 편집(머지 문서 탭의 결과 칸 — src/git/merge)은 그 탭이 `markUnsavedTab` 으로 알린다 — 닫기 · 창 닫기(워크트리
+// 전환의 탭 닫기 포함)가 같은 확인에 함께 묻고, [저장] 은 그 탭의 저장이다. git 쓰기 전의 확인(`unsavedUnder`)에는 넣지 않는다 —
+// 그 확인은 저장소 잠금을 쥔 채 묻는데 머지 탭의 저장도 git 쓰기라 잠금을 기다린다.
 // 미리보기 탭의 문서에 미저장 편집이 생기면 그 탭을 보통 탭으로 바꾼다 — 다음 미리보기가 편집을 조용히 닫지 않게(10-ui §5.4
 // 「편집 시작 → 고정 탭」).
 //
@@ -31,6 +34,7 @@ import { EditorView } from "@codemirror/view";
 import type { FsStat } from "@pitwall/rpc-client";
 import type { DockviewApi, IDockviewPanel } from "dockview-react";
 import { createContext, type ReactNode, useContext } from "react";
+import { createStore } from "zustand/vanilla";
 
 import type { DocumentStore } from "./documents";
 import { bindDocumentLanguages } from "./language";
@@ -90,6 +94,15 @@ export function cursorOf(view: EditorView): Cursor {
 /** 미저장 확인의 답. */
 export type UnsavedAnswer = "save" | "discard" | "cancel";
 
+/** 문서 모델 밖의 미저장 탭(머지 문서). */
+export interface UnsavedTab {
+  readonly panelId: string;
+  /** 미저장 확인에 실리는 경로 자리 — 대화상자는 끝 조각(파일 이름)을 보인다. 문서 경로와 겹치지 않게 `git:` 로 시작한다. */
+  readonly key: string;
+  /** 저장한다. 다 했으면 `true`. */
+  save(): Promise<boolean>;
+}
+
 export interface EditorWorkspaceDeps {
   documents: DocumentStore;
   stat(path: string, worktree: string | undefined): Promise<FsStat>;
@@ -123,6 +136,11 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
   const holds = new Map<string, { path: string; release(): void }>();
   /** 미저장 확인이 떠 있다. 그동안의 닫기 요청은 버린다. */
   let confirming = false;
+  /** 문서 모델 밖의 미저장 탭(키 → 탭). 탭 머리의 표시는 `unsavedTabs` 를 본다. */
+  const extraUnsaved = new Map<string, UnsavedTab>();
+  const unsavedTabs = createStore<{ panels: ReadonlySet<string> }>(() => ({ panels: new Set() }));
+  const syncUnsavedTabs = () =>
+    unsavedTabs.setState({ panels: new Set([...extraUnsaved.values()].map((t) => t.panelId)) });
 
   const recentOrder = () => recent?.order() ?? [];
 
@@ -165,7 +183,9 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     }
     if (answer === "cancel") return false;
     if (answer === "discard") return true;
-    const saved = await Promise.all(paths.map((path) => save(path)));
+    const saved = await Promise.all(
+      paths.map((path) => extraUnsaved.get(path)?.save() ?? save(path)),
+    );
     if (saved.every(Boolean)) return true;
     deps.onCloseAborted?.();
     return false;
@@ -194,6 +214,19 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
 
   return {
     documents: deps.documents,
+    /** 문서 모델 밖의 미저장 탭의 패널 id(탭 머리의 미저장 표시). */
+    unsavedTabs,
+
+    /** 탭의 문서 모델 밖 편집이 미저장이다(머지 문서). 돌려준 함수(또는 같은 키의 다음 호출)가 거둔다. */
+    markUnsavedTab(tab: UnsavedTab): () => void {
+      extraUnsaved.set(tab.key, tab);
+      syncUnsavedTabs();
+      return () => {
+        if (extraUnsaved.get(tab.key) !== tab) return;
+        extraUnsaved.delete(tab.key);
+        syncUnsavedTabs();
+      };
+    },
     log: deps.log,
     /** 창의 구문 세션. 강조 기능이 탭의 context 로 받는다. */
     syntax,
@@ -278,6 +311,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
         if (doc?.status !== "text" || !doc.live.dirty) return false;
         return !open.some((p) => !closing.has(p.id) && tabParams(p).path === path);
       });
+      for (const tab of extraUnsaved.values()) if (closing.has(tab.panelId)) lost.push(tab.key);
       if (!(await settleUnsaved(lost))) return false;
       for (const panel of panels) if (api?.getPanel(panel.id)) panel.api.close();
       return true;
@@ -324,7 +358,8 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     },
 
     /** 창을 닫기 전(창의 닫기 단추 · ⌘W · 앱 종료). 미저장 편집이 있으면 묻는다. 닫아도 되면 `true`. */
-    confirmWindowClose: (): Promise<boolean> => settleUnsaved(deps.documents.unsaved()),
+    confirmWindowClose: (): Promise<boolean> =>
+      settleUnsaved([...deps.documents.unsaved(), ...extraUnsaved.keys()]),
 
     /** 탭의 문서를 저장한다(`⌘S`). */
     save: (panel: IDockviewPanel): Promise<boolean> => save(tabParams(panel).path),

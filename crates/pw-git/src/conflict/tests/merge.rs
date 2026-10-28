@@ -256,3 +256,108 @@ fn random_three_way_merges_have_the_regions_of_git_merge_file() {
         "conflicts {conflicts}, clean {clean}"
     );
 }
+
+/// 머지 문서(M2-19)의 `≫` · `≪` 가 git 과 같은 바이트를 만드는지 창 시험이 견줄 무작위 충돌:
+/// `apps/desktop/src/git/merge/fixtures/merge-cases.json`. 줄바꿈 세 갈래(LF · 순수 CRLF · 섞임 — CRLF 와 LF 가 섞이고 줄 안에
+/// 홀로 선 `\r` 이 있다)마다 충돌이 있는 경우를 모아 세 쪽 · 자동 병합 결과 · 구간(`git.conflict.get` 과 같은 꼴)과
+/// `git merge-file -p --diff3 --ours` · `--theirs` · `--union` 의 출력을 싣는다(구간이 `--diff3` 의 것이라 그 모드로 — 없으면 git 이 충돌을
+/// 더 잘게 쪼갠다). 창 시험(`merge-model.test.ts`)이 모든 충돌에 `≫`(또는
+/// `≪`, 또는 `≫` 뒤 `≪`)를 누른 결과를 이 출력과 바이트로 견준다. 이 시험은 그 JSON 이 지금 pw-git · git 의 출력과 같은지
+/// 본다 — 다시 만들 때는 `PW_UPDATE_MERGE_CASES=1`.
+#[test]
+fn window_merge_cases_match_pw_git_and_git_merge_file() {
+    const FIXTURE: &str = "../../apps/desktop/src/git/merge/fixtures/merge-cases.json";
+    const PER_STYLE: usize = 80;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let mut rng = Rng(0x6d65_7267_6500_0019);
+    let common = ["a", "b", "c", "d", "e", "{", "}", "", "한글"];
+    let side = |dir: &Path, flag: &str, b: &str, o: &str, t: &str| -> String {
+        for (name, data) in [("base", b), ("ours", o), ("theirs", t)] {
+            std::fs::write(dir.join(name), data).unwrap();
+        }
+        let out = crate::testing::repo::git_command(dir, dir)
+            .args([
+                "merge-file",
+                "-p",
+                "--diff3",
+                flag,
+                "ours",
+                "base",
+                "theirs",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.code().is_some_and(|c| (0..=127).contains(&c)));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let mut cases = Vec::new();
+    for style in 0..3 {
+        let mut found = 0;
+        while found < PER_STYLE {
+            let n = rng.below(14);
+            let base: Vec<String> = (0..n)
+                .map(|_| common[rng.below(common.len())].to_owned())
+                .collect();
+            let ours = mutate(&mut rng, &base, &["a", "b", "o", "x\ry", "가", ""]);
+            let theirs = mutate(&mut rng, &base, &["a", "c", "t", "x\ry", "가", ""]);
+            let mut join = |lines: &[String]| -> String {
+                let mut text = String::new();
+                for l in lines {
+                    let l = if style == 2 {
+                        l.clone()
+                    } else {
+                        l.replace('\r', "")
+                    };
+                    let eol = match style {
+                        0 => "\n",
+                        1 => "\r\n",
+                        _ => ["\n", "\r\n"][rng.below(2)],
+                    };
+                    text.push_str(&l);
+                    text.push_str(eol);
+                }
+                if !text.is_empty() && rng.below(8) == 0 {
+                    text.pop();
+                    if text.ends_with('\r') && style == 1 {
+                        text.pop();
+                    }
+                }
+                text
+            };
+            let (b, o, t) = (join(&base), join(&ours), join(&theirs));
+            let m = merge(b.as_bytes(), o.as_bytes(), t.as_bytes());
+            if m.conflicts().count() == 0 {
+                continue;
+            }
+            found += 1;
+            let name = ["lf", "crlf", "mixed"][style];
+            cases.push(serde_json::json!({
+                "style": name,
+                "base": b,
+                "ours": o,
+                "theirs": t,
+                "merged": String::from_utf8(m.text()).unwrap(),
+                "regions": super::super::regions_of(&m),
+                "ours_result": side(dir, "--ours", &b, &o, &t),
+                "theirs_result": side(dir, "--theirs", &b, &o, &t),
+                "union_result": side(dir, "--union", &b, &o, &t),
+            }));
+        }
+    }
+    let got = serde_json::Value::Array(cases);
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
+    if std::env::var_os("PW_UPDATE_MERGE_CASES").is_some() {
+        std::fs::write(&path, format!("{}\n", serde_json::to_string(&got).unwrap())).unwrap();
+        return;
+    }
+    let want: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    assert!(
+        got == want,
+        "{} 이 지금 pw-git · git 의 출력과 다르다 — PW_UPDATE_MERGE_CASES=1 로 이 시험을 돌려 다시 만든다",
+        path.display()
+    );
+}

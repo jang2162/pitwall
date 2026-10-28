@@ -38,6 +38,7 @@ import { resetWindowBranch } from "../branch-state";
 import { resetWindowGitStatus } from "../git-status";
 import fixture from "./fixtures/merge.json";
 import { mergeField } from "./merge-model";
+import { resetMergeSessions } from "./merge-sessions";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -73,6 +74,9 @@ const host = vi.hoisted(() => ({
   continueResult: undefined as unknown,
   abortResult: undefined as unknown,
   emit: (_topic: string, _payload: unknown) => {},
+  /** Host 범위 이벤트(`config.changed` — 언어를 바꾼 뒤). */
+  emitHostEvent: (_topic: string) => {},
+  locale: "ko",
 }));
 
 vi.mock("../../tauri-transport", async () => {
@@ -115,7 +119,7 @@ vi.mock("../../tauri-transport", async () => {
         host.calls.push({ method: m.method, params });
         switch (m.method) {
           case "i18n.get":
-            return reply(i18nState("ko"));
+            return reply(i18nState(host.locale));
           case "config.get":
             return reply({
               snapshot: { files: [], notices: [] },
@@ -236,6 +240,15 @@ vi.mock("../../tauri-transport", async () => {
               : send({ id: m.id, error: { code: -32601, message: `no ${m.method}` } });
         }
       });
+      host.emitHostEvent = (topic) => {
+        for (const [subscriptionId, s] of subs) {
+          if (s.projectId !== undefined || !s.topics.includes(topic)) continue;
+          send({
+            method: "events.event",
+            params: { subscriptionId, projectId: null, topic, payload: {} },
+          });
+        }
+      };
       host.emit = (topic, payload) => {
         for (const [subscriptionId, s] of subs) {
           if (s.projectId !== "p1" || !s.topics.includes(topic)) continue;
@@ -250,11 +263,20 @@ vi.mock("../../tauri-transport", async () => {
   };
 });
 
+/** 창의 닫기 요청을 받으면 묻는 함수(`guardClose`). */
+let closeGuard: (() => Promise<boolean>) | undefined;
+
 const native: KeymapNative = {
   syncMenu: async () => {},
   onMenuAction: () => () => {},
   openSettings: async () => {},
   closeWindow: async () => {},
+  guardClose: (shouldClose: () => Promise<boolean>) => {
+    closeGuard = shouldClose;
+    return () => {
+      if (closeGuard === shouldClose) closeGuard = undefined;
+    };
+  },
 };
 
 let root: Root | undefined;
@@ -280,6 +302,8 @@ beforeEach(() => {
   host.refuseResolve = undefined;
   host.continueResult = { operation: null, stopped: false, moved: null };
   host.abortResult = FIXTURE.rebase.abort;
+  host.locale = "ko";
+  resetMergeSessions();
   activeWorktreeStore.setState({ top: undefined });
   resetWindowFileTree();
   resetWindowGitStatus();
@@ -652,4 +676,156 @@ it("turns Merge… off for a file over 5 MiB and says why", async () => {
   expect(
     conflictRow("notes.txt")!.querySelector<HTMLButtonElement>("[data-git-pick=theirs]")!.disabled,
   ).toBe(false);
+});
+
+const mergeTab = () => document.querySelector<HTMLElement>("[data-git-merge='notes.txt']");
+const unsavedDialog = () => document.querySelector<HTMLElement>("[data-testid=unsaved-dialog]");
+const dialogButton = (text: string) =>
+  [...unsavedDialog()!.querySelectorAll<HTMLElement>("button")].find(
+    (b) => b.textContent === text,
+  )!;
+const mergeHeader = () =>
+  [...document.querySelectorAll<HTMLElement>("[data-editor-tab-header]")].find((h) =>
+    h.textContent?.includes("notes.txt"),
+  );
+
+/** 구간 0 은 ≫, 구간 2 에는 직접 친다. 결과 칸의 글을 돌려준다. */
+async function editMerge(): Promise<string> {
+  await click(regionButton("ours", 0, "apply")!);
+  await act(async () => {
+    pane("result").dispatch({
+      changes: { from: rangeOf(2).from, insert: FIXTURE.typed },
+      userEvent: "input.type",
+    });
+  });
+  await settle();
+  return pane("result").state.doc.toString();
+}
+
+it("keeps the result through a pin, a language change, a theme switch and a tab switch", async () => {
+  await mount();
+  await openMerge();
+  const text = await editMerge();
+  expect(text).not.toBe(FIXTURE.detail.merged);
+  const same = () => {
+    expect(pane("result").state.doc.toString()).toBe(text);
+    // 고른 단추는 거둔 채, 고르지 않은 쪽은 그대로다.
+    expect(regionButton("ours", 0, "apply")).toBeNull();
+    expect(regionButton("theirs", 0, "apply")).not.toBeNull();
+  };
+
+  await act(async () => {
+    windowRegistry()!.run("editor.togglePin");
+  });
+  await settle();
+  expect(mergeHeader()?.querySelector("[aria-label='고정됨']")).not.toBeNull();
+  same();
+  expect(unresolvedText()).toBe("모든 충돌을 골랐다");
+
+  await act(async () => theme!.getState().setPreference("dark"));
+  await settle();
+  same();
+
+  host.locale = "en";
+  await act(async () => host.emitHostEvent("config.changed"));
+  await vi.waitFor(() => expect(unresolvedText()).toBe("All conflicts picked"));
+  same();
+
+  // 다른 탭을 앞으로 가져왔다가 돌아온다.
+  await act(async () => {
+    windowRegistry()!.run("git.openMerge", { path: "image.bin" });
+  });
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-git-merge-pick-only=binary]")).not.toBeNull(),
+  );
+  await openMerge();
+  same();
+  // ⌘Z 는 이어진 기록으로 되돌린다(마지막 입력).
+  await act(async () => {
+    windowRegistry()!.run("editor.undo");
+  });
+  expect(pane("result").state.doc.toString()).not.toContain(FIXTURE.typed);
+});
+
+it("asks before closing an edited merge tab: cancel keeps it, discard drops it, save resolves", async () => {
+  await mount();
+  await openMerge();
+  // 고치지 않은 탭은 묻지 않고 닫는다.
+  await act(async () => {
+    windowRegistry()!.run("editor.closeTab");
+  });
+  await settle();
+  expect(unsavedDialog()).toBeNull();
+  expect(mergeTab()).toBeNull();
+
+  await openMerge();
+  const text = await editMerge();
+  expect(mergeHeader()?.dataset.dirty).toBe("");
+  await act(async () => {
+    windowRegistry()!.run("editor.closeTab");
+  });
+  await vi.waitFor(() => expect(unsavedDialog()).not.toBeNull());
+  expect(unsavedDialog()!.textContent).toContain("notes.txt");
+  await click(dialogButton("취소"));
+  expect(mergeTab()).not.toBeNull();
+  expect(pane("result").state.doc.toString()).toBe(text);
+
+  await act(async () => {
+    windowRegistry()!.run("editor.closeTab");
+  });
+  await vi.waitFor(() => expect(unsavedDialog()).not.toBeNull());
+  await click(dialogButton("저장 안 함"));
+  await vi.waitFor(() => expect(mergeTab()).toBeNull());
+  expect(calls("git.conflict.resolve")).toHaveLength(0);
+  // 다시 열면 처음부터다.
+  await openMerge();
+  expect(pane("result").state.doc.toString()).toBe(FIXTURE.detail.merged);
+
+  await editMerge();
+  await act(async () => {
+    windowRegistry()!.run("editor.closeTab");
+  });
+  await vi.waitFor(() => expect(unsavedDialog()).not.toBeNull());
+  await click(dialogButton("저장"));
+  await vi.waitFor(() => expect(calls("git.conflict.resolve")).toHaveLength(1));
+  expect(calls("git.conflict.resolve")[0]!.content).toEqual({
+    text: FIXTURE.expected,
+    bom: false,
+    expectedVersion: "fixture-version",
+  });
+  await vi.waitFor(() => expect(mergeTab()).toBeNull());
+  expect(unsavedDialog()).toBeNull();
+});
+
+it("asks about an edited merge tab when the window closes", async () => {
+  await mount();
+  await openMerge();
+  await editMerge();
+  let closing: Promise<boolean> | undefined;
+  await act(async () => {
+    closing = closeGuard!();
+  });
+  await vi.waitFor(() => expect(unsavedDialog()).not.toBeNull());
+  await click(dialogButton("취소"));
+  expect(await closing).toBe(false);
+  expect(mergeTab()).not.toBeNull();
+
+  await act(async () => {
+    closing = closeGuard!();
+  });
+  await vi.waitFor(() => expect(unsavedDialog()).not.toBeNull());
+  await click(dialogButton("저장 안 함"));
+  expect(await closing).toBe(true);
+  expect(calls("git.conflict.resolve")).toHaveLength(0);
+});
+
+it("warns that aborting drops the edited result of open merge tabs", async () => {
+  await mount();
+  await openMerge();
+  await editMerge();
+  await click(bannerButton("abort")!);
+  await vi.waitFor(() => expect(confirmDialog()).not.toBeNull());
+  expect(confirmDialog()!.textContent).toContain(
+    "저장하지 않은 머지 탭 1개의 고친 결과도 사라진다",
+  );
 });

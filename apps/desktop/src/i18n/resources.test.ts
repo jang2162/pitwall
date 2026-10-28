@@ -131,6 +131,7 @@ describe("built-in translations", () => {
       m.banner.conflicts(count);
       m.doc.unresolved(count);
       m.doc.unresolvedTitle(count);
+      m.abort.unsaved(count);
     }
     gitMergeStrings(t).banner.conflicts(0);
     gitMergeStrings(t).doc.unresolved(0);

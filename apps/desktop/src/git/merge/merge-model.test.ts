@@ -17,6 +17,7 @@ import {
   regionAction,
   serialize,
   sideButtons,
+  toDoc,
   unresolved,
 } from "./merge-model";
 
@@ -83,7 +84,7 @@ function detail(over: Partial<GitConflictDetail> = {}): GitConflictDetail {
 
 function start(input: MergeInput) {
   return EditorState.create({
-    doc: input.result.doc,
+    doc: input.docs.result,
     extensions: [history(), mergeResultExtension(input), EditorState.lineSeparator.of("\n")],
   });
 }
@@ -101,11 +102,14 @@ function act(
 }
 
 describe("line model", () => {
-  it("keeps LF, folds a CRLF-only text and leaves a mixed one split on LF", () => {
-    expect(lineModel("a\nb\n")).toEqual({ doc: "a\nb\n", eol: "\n", separator: undefined });
-    expect(lineModel("a\r\nb\r\n")).toEqual({ doc: "a\nb\n", eol: "\r\n", separator: undefined });
-    expect(lineModel("a\r\nb\n")).toEqual({ doc: "a\r\nb\n", eol: "\n", separator: "\n" });
-    expect(lineModel("a\rb")).toEqual({ doc: "a\rb", eol: "\n", separator: "\n" });
+  it("keeps LF, folds CRLF only when every text is pure CRLF, else splits on LF", () => {
+    expect(lineModel("a\nb\n", "c\n")).toEqual({ eol: "\n", separator: undefined });
+    expect(lineModel("a\r\nb\r\n", "", "c")).toEqual({ eol: "\r\n", separator: undefined });
+    // 결과에는 CRLF 가 없어도 한쪽이 CRLF 면 CRLF 다(파일 전체가 충돌인 경우).
+    expect(lineModel("", "b\r\n", "x\r\n", "")).toEqual({ eol: "\r\n", separator: undefined });
+    expect(lineModel("a\r\n", "b\n")).toEqual({ eol: "\n", separator: "\n" });
+    expect(lineModel("a\rb\r\n")).toEqual({ eol: "\n", separator: "\n" });
+    expect(toDoc("a\r\nb", { eol: "\r\n", separator: undefined })).toBe("a\nb");
     expect(serialize("a\nb\n", { eol: "\r\n" })).toBe("a\r\nb\r\n");
     expect(rawLines("a\nb")).toEqual(["a\n", "b"]);
     expect(rawLines("")).toEqual([]);
@@ -192,7 +196,7 @@ describe("merge regions", () => {
       }),
     )!;
     const s = act(start(i), i, 0, "ours", "apply");
-    expect(serialize(s.doc.toString(), i.result)).toBe(
+    expect(serialize(s.doc.toString(), i.model)).toBe(
       crlf("1\n2 ours\n3\n4\n5\n6 theirs\n7\n8\n9 ours\n10\n"),
     );
   });

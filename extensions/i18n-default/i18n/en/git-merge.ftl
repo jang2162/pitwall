@@ -46,6 +46,11 @@ git-merge-banner-abort = Abort
 git-merge-abort-title = Abort the { $kind }?
 git-merge-abort-body = HEAD and the work tree go back to where they were before the operation. Conflicts resolved during it are lost.
 git-merge-abort-confirm = Abort
+# $count: merge tabs whose result was edited but not saved
+git-merge-abort-unsaved = { $count ->
+        [one] The edited result in 1 unsaved merge tab is lost too.
+       *[other] The edited results in { $count } unsaved merge tabs are lost too.
+    }
 
 ## Result notifications.
 

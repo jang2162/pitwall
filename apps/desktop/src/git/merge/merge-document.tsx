@@ -10,9 +10,12 @@
 //   `version` 이다. 그사이 파일이 바뀌어 `CONFLICT` 면 쓰지 않고 다시 읽는다 — 세 쪽이 그대로면 결과 칸은 두고 `version` 만 새로
 //   받는다(다시 저장하면 그 파일을 덮는다는 것을 알린다). 고르지 않은 충돌이 남았으면 먼저 묻는다. 풀었으면 탭을 닫는다.
 // - BOM 은 ours 쪽에 있었으면 붙인다(병합은 세 쪽 모두 BOM 을 떼고 한다 — M2-11).
+// - 읽은 충돌 · 결과 칸 상태는 탭의 세션(merge-sessions.ts)에 있다 — 이 컴포넌트가 다시 그려지거나 다시 마운트돼도(탭 고정 · 언어 ·
+//   테마 · 그룹 사이로 옮김) 결과 칸의 글 · undo · 고른 단추가 그대로다. 결과 칸이 처음 글과 다르면 작업 공간에 미저장 탭으로 알려
+//   닫기 · 창 닫기 · 워크트리 전환 때 에디터 탭과 같은 확인([저장] = 저장하고 해결)을 묻는다.
 
 import { history, redo, undo } from "@codemirror/commands";
-import { Compartment, EditorState, type Text } from "@codemirror/state";
+import { Compartment, EditorState, StateEffect, type Text } from "@codemirror/state";
 import {
   drawSelection,
   EditorView,
@@ -42,12 +45,12 @@ import { useNotify } from "../../notifications/notifications";
 import { useHost } from "../../rpc/host";
 import { useTheme } from "../../theme/theme-switcher";
 import { GIT_FAILED } from "../branch-ops";
+import { hostPath } from "../git-prompts";
 import { revisionHighlight, revisionSyntax } from "../diff/revision-syntax";
 import { gitDocumentSource } from "../documents/source";
 import {
   applyNonConflicting,
   hasIgnoredNonConflicting,
-  lineModel,
   mergeField,
   mergeInput,
   type MergeInput,
@@ -66,6 +69,13 @@ import {
   setSpacers,
   sidePaneExtension,
 } from "./merge-panes";
+import {
+  dropMergeSession,
+  isDirty,
+  type Loaded,
+  type MergeSession,
+  mergeSession,
+} from "./merge-sessions";
 import { isConflict, isGone, mergeSource, pickOnlyReason } from "./source";
 import { type GitMergeStrings, useGitMergeStrings } from "./strings";
 
@@ -75,12 +85,6 @@ const BUTTON =
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
-
-type Loaded =
-  | { kind: "loading" }
-  | { kind: "failed"; message: string }
-  | { kind: "gone" }
-  | { kind: "ready"; detail: GitConflictDetail; language: string | null; seq: number };
 
 /** 탭 하나의 머지 문서. */
 export function MergeDocument({
@@ -95,45 +99,72 @@ export function MergeDocument({
   const T = useGitMergeStrings();
   const source = mergeSource((s) => s.source);
   const docs = gitDocumentSource((s) => s.source);
-  const [loaded, setLoaded] = useState<Loaded>({ kind: "loading" });
-  const seq = useRef(0);
+  const workspace = useEditorWorkspace();
+  const session = useMemo(() => mergeSession(panelId, path, worktree), [panelId, path, worktree]);
+  const [loaded, setShown] = useState<Loaded>(session.loaded);
+  const setLoaded = useCallback(
+    (next: Loaded) => {
+      session.loaded = next;
+      setShown(next);
+    },
+    [session],
+  );
 
-  const load = useCallback(async () => {
-    if (!source) return;
-    try {
-      const detail = await source.conflict(path, worktree);
-      let language: string | null = null;
-      const sample = detail.ours?.content?.kind === "text" ? detail.ours.content.text : undefined;
-      if (docs && sample !== undefined && detail.ours?.judgment?.highlight)
-        language = await docs
-          .detect(`${detail.workTree}/${path}`, sample.slice(0, 50 * 1024), worktree)
-          .catch(() => null);
-      setLoaded({ kind: "ready", detail, language, seq: ++seq.current });
-    } catch (e) {
-      setLoaded(isGone(e) ? { kind: "gone" } : { kind: "failed", message: errorText(e) });
-    }
-  }, [source, docs, path, worktree]);
-
+  // 세션마다 한 번 읽는다 — 이미 읽은 세션이면(다시 마운트) 그것을 쓴다.
   useEffect(() => {
-    void load();
-  }, [load]);
+    setShown(session.loaded);
+    if (!source || session.loaded.kind !== "loading") return;
+    let current = true;
+    void (async () => {
+      try {
+        const detail = await source.conflict(path, worktree);
+        let language: string | null = null;
+        const sample = detail.ours?.content?.kind === "text" ? detail.ours.content.text : undefined;
+        if (docs && sample !== undefined && detail.ours?.judgment?.highlight)
+          language = await docs
+            .detect(`${detail.workTree}/${path}`, sample.slice(0, 50 * 1024), worktree)
+            .catch(() => null);
+        if (!current) return;
+        session.version = detail.version;
+        setLoaded({ kind: "ready", detail, language, input: mergeInput(detail) });
+      } catch (e) {
+        if (current)
+          setLoaded(isGone(e) ? { kind: "gone" } : { kind: "failed", message: errorText(e) });
+      }
+    })();
+    return () => {
+      current = false;
+    };
+  }, [source, docs, session, path, worktree, setLoaded]);
+
+  // 탭이 닫혔으면 세션을 버린다(다시 마운트 · 그룹 사이로 옮김이면 패널이 남아 있다).
+  useEffect(
+    () => () => {
+      queueMicrotask(() => {
+        if (!workspace.api()?.getPanel(panelId)) dropMergeSession(panelId);
+      });
+    },
+    [workspace, panelId],
+  );
 
   if (loaded.kind === "loading") return <Status text={T.doc.loading} />;
   if (loaded.kind === "failed") return <Status text={T.doc.failed(loaded.message)} />;
   if (loaded.kind === "gone") return <Status text={T.doc.gone} />;
-  const input = mergeInput(loaded.detail);
-  if (!input)
+  if (!loaded.input)
     return <PickOnly detail={loaded.detail} path={path} worktree={worktree} panelId={panelId} />;
   return (
     <MergeView
-      key={loaded.seq}
+      session={session}
       detail={loaded.detail}
-      input={input}
+      input={loaded.input}
       language={loaded.language}
       path={path}
       worktree={worktree}
       panelId={panelId}
-      onGone={() => setLoaded({ kind: "gone" })}
+      onGone={() => {
+        session.state = undefined;
+        setLoaded({ kind: "gone" });
+      }}
     />
   );
 }
@@ -154,7 +185,8 @@ function useResolved(panelId: string, path: string) {
   const T = useGitMergeStrings();
   const notify = useNotify();
   const workspace = useEditorWorkspace();
-  return (left: number) => {
+  return (left: number, before?: () => void) => {
+    before?.();
     notify({
       level: "info",
       title: T.doc.saved(path),
@@ -282,6 +314,7 @@ interface Views {
 }
 
 function MergeView({
+  session,
   detail,
   input,
   language,
@@ -290,6 +323,7 @@ function MergeView({
   panelId,
   onGone,
 }: {
+  session: MergeSession;
   detail: GitConflictDetail;
   input: MergeInput;
   language: string | null;
@@ -314,10 +348,29 @@ function MergeView({
     theirs: useRef<HTMLDivElement>(null),
   };
   const views = useRef<Views>(undefined);
-  const version = useRef(detail.version);
-  const [summary, setSummary] = useState({ left: unresolvedCount(input), ignored: false });
-  const [base, setBase] = useState(false);
-  const baseOn = useRef(false);
+  const [summary, setSummary] = useState(() =>
+    session.state
+      ? { left: unresolved(session.state).length, ignored: hasIgnoredNonConflicting(session.state) }
+      : { left: unresolvedCount(input), ignored: false },
+  );
+  const [base, setBase] = useState(session.base);
+  /** 미저장 표시를 거두는 함수(작업 공간). 표시가 없으면 없다. */
+  const unmark = useRef<() => void>(undefined);
+  const mark = useCallback(
+    (dirty: boolean) => {
+      if (dirty && !unmark.current)
+        unmark.current = workspace.markUnsavedTab({
+          panelId,
+          key: `git:merge:${hostPath(detail.workTree, path)}`,
+          save: () => session.save?.() ?? Promise.resolve(false),
+        });
+      else if (!dirty && unmark.current) {
+        unmark.current();
+        unmark.current = undefined;
+      }
+    },
+    [workspace, panelId, detail.workTree, path, session],
+  );
   const [saving, setSaving] = useState(false);
   const [find, setFind] = useState<{ view: EditorView; dom: HTMLElement }>();
   const clientRef = useRef(client);
@@ -379,9 +432,10 @@ function MergeView({
     [input],
   );
 
-  const save = useCallback(async () => {
+  /** 저장하고 해결한다. 풀었으면 `true`(탭을 닫는다). */
+  const save = useCallback(async (): Promise<boolean> => {
     const v = views.current?.result;
-    if (!v || !source) return;
+    if (!v || !source) return false;
     const left = unresolved(v.state).length;
     if (left > 0) {
       const ok = await dialogs.confirm({
@@ -389,7 +443,7 @@ function MergeView({
         body: T.doc.unresolvedBody,
         confirm: T.doc.unresolvedConfirm,
       });
-      if (!ok) return;
+      if (!ok) return false;
     }
     setSaving(true);
     try {
@@ -397,14 +451,19 @@ function MergeView({
         {
           path,
           content: {
-            text: serialize(v.state.doc.toString(), input.result),
+            text: serialize(v.state.doc.toString(), input.model),
             bom: detail.ours?.judgment?.bom === "utf8",
-            expectedVersion: version.current,
+            expectedVersion: session.version,
           },
         },
         worktree,
       );
-      resolved(files.length);
+      // 풀었다 — 미저장 표시를 거둔 뒤 닫는다(닫기가 다시 묻지 않게).
+      resolved(files.length, () => {
+        mark(false);
+        session.state = undefined;
+      });
+      return true;
     } catch (e) {
       if (isConflict(e)) {
         // 다시 읽는다. 세 쪽이 그대로면 결과 칸은 두고 `version` 만 새로.
@@ -413,7 +472,7 @@ function MergeView({
           const same = (["base", "ours", "theirs"] as const).every(
             (s) => again[s]?.id === detail[s]?.id,
           );
-          version.current = again.version;
+          session.version = again.version;
           notify({ level: "warning", title: T.doc.saveConflict });
           if (!same) onGone();
         } catch (again) {
@@ -424,12 +483,15 @@ function MergeView({
       } else if (isGone(e)) onGone();
       else if (!(e instanceof RpcCallError && e.code === GIT_FAILED))
         notify({ level: "error", title: T.results.failed(T.doc.save), body: errorText(e) });
+      return false;
     } finally {
       setSaving(false);
     }
-  }, [source, dialogs, T, path, input, detail, worktree, resolved, notify, onGone]);
+  }, [source, dialogs, T, path, input, detail, worktree, resolved, notify, onGone, session, mark]);
   const saveRef = useRef(save);
   saveRef.current = save;
+  const markRef = useRef(mark);
+  markRef.current = mark;
 
   // 세 칸을 만든다(입력이 바뀌면 문서가 key 로 새로 만든다).
   useEffect(() => {
@@ -446,20 +508,19 @@ function MergeView({
     });
     const baseCompartments = { ours: new Compartment(), theirs: new Compartment() };
     const sideView = (side: MergeSide) => {
-      const raw = detail[side]?.content?.kind === "text" ? detail[side].content.text : "";
-      const model = lineModel(raw);
+      const text = input.docs[side];
       return new EditorView({
         parent: parents[side]!,
         state: EditorState.create({
-          doc: model.doc,
+          doc: text,
           extensions: [
             lineNumbers(),
             highlightSpecialChars(),
             drawSelection(),
             editorTheme,
             EditorState.readOnly.of(true),
-            model.separator ? EditorState.lineSeparator.of(model.separator) : [],
-            revisionHighlight(docs?.syntax && revisionSyntax(docs.syntax, language, model.doc)),
+            input.model.separator ? EditorState.lineSeparator.of(input.model.separator) : [],
+            revisionHighlight(docs?.syntax && revisionSyntax(docs.syntax, language, text)),
             baseCompartments[side].of([]),
             sidePaneExtension(input, side, labels(side), press),
           ],
@@ -472,7 +533,7 @@ function MergeView({
     const refresh = (state: EditorState) => {
       const field = state.field(mergeField);
       for (const side of [ours, theirs]) side.dispatch({ effects: setSideStates.of(field.states) });
-      const spacers = baseOn.current
+      const spacers = session.base
         ? { ours: [], result: [], theirs: [] }
         : alignSpacers(
             input,
@@ -484,44 +545,54 @@ function MergeView({
       return spacers.result;
     };
 
-    const initial = EditorState.create({
-      doc: input.result.doc,
-      extensions: [
-        keymap.of([{ key: "Mod-s", run: () => (void saveRef.current(), true) }]),
-        ...editorExtensions(ctx),
-        history(),
-        input.result.separator ? EditorState.lineSeparator.of(input.result.separator) : [],
-        mergeResultExtension(input),
-        resultPaneExtension(mergeField),
-        EditorView.updateListener.of((u: ViewUpdate) => {
-          if (u.docChanged)
-            resultDoc.emit({
-              kind: "edit",
-              changes: u.changes,
-              before: u.startState.doc,
-              after: u.state.doc,
-            });
-          if (u.docChanged || u.startState.field(mergeField) !== u.state.field(mergeField)) {
-            const spacers = refresh(u.state);
-            // 결과 칸의 빈 블록은 이 업데이트가 끝난 뒤에 넣는다(업데이트 안에서 dispatch 하지 않는다).
-            queueMicrotask(() => {
-              if (views.current?.result !== u.view) return;
-              u.view.dispatch({ effects: setSpacers.of(spacers) });
-            });
-            setSummary({
-              left: unresolved(u.state).length,
-              ignored: hasIgnoredNonConflicting(u.state),
-            });
-          }
-        }),
-      ],
-    });
+    const extensions = [
+      keymap.of([{ key: "Mod-s", run: () => (void saveRef.current(), true) }]),
+      ...editorExtensions(ctx),
+      history(),
+      input.model.separator ? EditorState.lineSeparator.of(input.model.separator) : [],
+      mergeResultExtension(input),
+      resultPaneExtension(mergeField),
+      EditorView.updateListener.of((u: ViewUpdate) => {
+        session.state = u.state;
+        if (u.docChanged)
+          resultDoc.emit({
+            kind: "edit",
+            changes: u.changes,
+            before: u.startState.doc,
+            after: u.state.doc,
+          });
+        if (u.docChanged || u.startState.field(mergeField) !== u.state.field(mergeField)) {
+          const spacers = refresh(u.state);
+          // 결과 칸의 빈 블록은 이 업데이트가 끝난 뒤에 넣는다(업데이트 안에서 dispatch 하지 않는다).
+          queueMicrotask(() => {
+            if (views.current?.result !== u.view) return;
+            u.view.dispatch({ effects: setSpacers.of(spacers) });
+          });
+          setSummary({
+            left: unresolved(u.state).length,
+            ignored: hasIgnoredNonConflicting(u.state),
+          });
+          markRef.current(isDirty(session));
+        }
+      }),
+    ];
+    // 세션에 결과 칸이 있으면(다시 마운트) 그 글 · undo · 구간 상태를 그대로 잇고 확장만 이 마운트의 것으로 바꾼다.
+    const initial = session.state
+      ? session.state.update({ effects: StateEffect.reconfigure.of(extensions) }).state
+      : EditorState.create({ doc: input.docs.result, extensions });
+    session.state = initial;
     resultDoc.set(initial.doc);
     const result = new EditorView({ parent: parents.result, state: initial });
     configured.current = ctx;
     result.dispatch({ effects: setSpacers.of(refresh(result.state)) });
     views.current = { ours, result, theirs };
     const unregister = workspace.registerView(panelId, result);
+    session.save = () => saveRef.current();
+    markRef.current(isDirty(session));
+    setSummary({
+      left: unresolved(result.state).length,
+      ignored: hasIgnoredNonConflicting(result.state),
+    });
 
     // 스크롤을 함께 한다.
     const all = [ours, result, theirs];
@@ -540,28 +611,32 @@ function MergeView({
     });
 
     baseToggle.current = (on: boolean) => {
-      baseOn.current = on;
+      session.base = on;
       for (const [side, view] of [
         ["ours", ours],
         ["theirs", theirs],
       ] as const)
         view.dispatch({
-          effects: baseCompartments[side].reconfigure(
-            on ? compareWithBase(input, side, lineModel(input.texts.base.join("")).doc) : [],
-          ),
+          effects: baseCompartments[side].reconfigure(on ? compareWithBase(input, side) : []),
         });
       result.dispatch({ effects: setSpacers.of(refresh(result.state)) });
     };
+    if (session.base) baseToggle.current(true);
 
     return () => {
       for (const off of listeners) off();
       unregister();
+      session.state = result.state;
+      if (session.save) session.save = undefined;
       baseToggle.current = undefined;
       views.current = undefined;
       for (const v of all) v.destroy();
     };
-    // 뷰는 문서(입력)마다 한 번 만든다. 바뀌는 값은 ref · 다시 구성으로 받는다.
-  }, [input]);
+    // 뷰는 마운트마다 한 번 만든다(글은 세션에서 잇는다). 바뀌는 값은 ref · 다시 구성으로 받는다.
+  }, [session, input]);
+
+  // 마운트가 끝나면(탭이 닫힘 · 다시 마운트) 미저장 표시를 거둔다 — 다음 마운트가 세션을 보고 다시 단다.
+  useEffect(() => () => mark(false), [mark]);
 
   const baseToggle = useRef<(on: boolean) => void>(undefined);
 

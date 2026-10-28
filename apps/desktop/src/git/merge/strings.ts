@@ -38,6 +38,7 @@ export function gitMergeStrings(t: Translate) {
       title: (k: RepoOperation) => t("git-merge-abort-title", { kind: kind(k) }),
       body: t("git-merge-abort-body"),
       confirm: t("git-merge-abort-confirm"),
+      unsaved: (count: number) => t("git-merge-abort-unsaved", { count }),
     },
     results: {
       done: (k: RepoOperation) => t("git-merge-result-done", { kind: kind(k) }),
