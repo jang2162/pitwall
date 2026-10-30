@@ -61,5 +61,5 @@
 |---|---|
 | 포지션 재확인 (Orca와 겹치는 원격 · 모바일 · diff 리뷰) | 모바일 **보류**(D13). Pitwall 고유 가치(DB · git · 실행/디버그 · LSP)에 집중 |
 | MCP 툴 개별 on/off | **반영** — 05 §3-1, F10-6 (D14) |
-| DBX 코드 검토 | **확인 완료: Apache-2.0** — 02 §2.7 크레이트 구조, F6-9 위험도 분류, F6-3b JDBC 방식 (D15) |
+| DBX 코드 검토 | **확인 완료: Apache-2.0** — 02 §2.7 크레이트 구조, F6-9 위험도 분류, F6-3b JDBC 방식 (D15). M3 착수 전 코드 검토(기능별 차용 판정 · 크레이트 후보 · 사람이 정할 질문): [`docs/superpowers/reports/2026-10-31-dbx-review.md`](../superpowers/reports/2026-10-31-dbx-review.md) |
 | Zed 원격 방식 | **반영** — 08 §4~5, F9 (D16) |
