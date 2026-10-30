@@ -152,7 +152,7 @@ pub fn valid_runs(runs: &[Run]) -> usize {
 pub fn too_few_valid(valid: usize, requested: usize) -> Option<String> {
     (valid * 2 < requested).then(|| {
         format!(
-            "only {valid} of {requested} measured runs are valid (the rest were excluded); the medians are not a baseline — rerun with the project window unobscured"
+            "only {valid} of {requested} measured runs are valid (the rest were excluded or failed — see the runs and failed runs); the medians are not a baseline — rerun with the project window unobscured"
         )
     })
 }
