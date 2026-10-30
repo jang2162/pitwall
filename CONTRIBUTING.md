@@ -52,8 +52,8 @@ cargo nextest run -p pw-fs --run-ignored only -E 'test(=ops::tests::the_os_trash
 cargo nextest run -p pw-fs --release -j 1 -E 'test(/^search::tests::stopping_/) | test(=search::tests::the_stream_sends_files_then_done_and_ends_soon_after_cancel)'   # 검색 취소 100 ms(M1-07 완료 기준)를 벽시계로 판정한다 — debug 빌드는 멈춘 뒤에 한 일로만 판정한다(`crates/pw-fs/src/search/tests.rs` 의 `RELEASE_TIMING`)
 PW_RESET_FUZZ_CASES=200 cargo nextest run -p pw-git -E 'test(/history::tests::fuzz::/)'   # reset 미리보기의 차등 퍼즈 긴 판(조각 넷 × 200 개, 기본 시험은 × 10). 실패하면 시드를 보인다 — PW_RESET_FUZZ_SEED=<시드> PW_RESET_FUZZ_CASES=1 로 그 경우만(`crates/pw-git/src/history/tests/fuzz.rs`)
 cargo nextest run --release -p pw-git -j 1 --run-ignored only -E 'test(=log::tests::perf::the_first_chunk_of_100k_commits_is_within_300ms)' --no-capture   # git 로그 첫 청크 300 ms(M2-03 완료 기준, 합성 10만 커밋 · commit-graph 있음 · 없음). 저장소 생성까지 10~55초가 걸려 `test-release`(CI)에는 넣지 않는다 — 같은 기기에서 손으로 돌린다(M2-22)
-node apps/desktop/perf/run-headless.cjs webkit http://127.0.0.1:<포트>/index.html __diffCheck <playwright-core 경로> [webkit 실행 파일]   # diff 뷰의 계산된 색 · 보기 전환 스크롤을 헤드리스 WebKit 에서 본다(창을 띄우지 않는다). 먼저 `pnpm --filter @pitwall/desktop exec vite build perf/diff-check --config vite.config.ts --outDir <폴더> --emptyOutDir --base ./` 한 폴더를 127.0.0.1 정적 서버로 연다. 저장소는 playwright 에 의존하지 않아 `mise run test` 에 들지 않는다 — diff 색 · 줄 맞춤을 고쳤으면 돌린다(`apps/desktop/perf/diff-check/diff-check.tsx` 머리 주석)
-node apps/desktop/perf/git-log/run.mjs <폴더> 5   # Git 로그 툴 윈도우의 첫 그림 · 10만 행 스크롤(M2-14, 헤드리스 WebKit — 앱 창을 띄우지 않는다). 폴더 만들기와 `PLAYWRIGHT` 는 그 파일 머리 주석. `PAGE=scenario.html` 이면 앱 안 측정 시나리오(`apps/desktop/src/perf-scenario.ts`)를 실제 App 위에서 끝까지 돌리는 스모크 — 시나리오 · 그 DOM 을 고쳤으면 `mise run perf-git` 전에 돌린다
+node apps/desktop/perf/run-headless.cjs webkit http://127.0.0.1:<포트>/index.html __diffCheck <playwright-core 경로> [webkit 실행 파일]   # diff 뷰의 계산된 색 · 보기 전환 스크롤을 헤드리스 WebKit 에서 본다(창을 띄우지 않는다). 먼저 `pnpm --filter @pitwall/desktop exec vite build perf/diff-check --config vite.config.ts --outDir <폴더> --emptyOutDir --base ./` 한 폴더를 127.0.0.1 정적 서버로 연다. 저장소는 playwright 에 의존하지 않아 `mise run test` 에 들지 않는다 — diff 색 · 줄 맞춤을 고쳤으면 돌린다(`apps/desktop/perf/diff-check/diff-check.tsx` 머리 주석). playwright-core 가 찾는 브라우저 판본이 캐시(`~/Library/Caches/ms-playwright/`)에 없으면 마지막 인자로 캐시에 있는 실행 파일(`webkit-<판본>/pw_run.sh`)을 준다 — 보고에 그 판본과 UA 를 적는다
+node apps/desktop/perf/git-log/run.mjs <폴더> 5   # Git 로그 툴 윈도우의 첫 그림 · 10만 행 스크롤(M2-14, 헤드리스 WebKit — 앱 창을 띄우지 않는다). 폴더 만들기와 `PLAYWRIGHT` 는 그 파일 머리 주석. `PAGE=scenario.html` 이면 앱 안 측정 시나리오(`apps/desktop/src/perf-scenario.ts`)를 실제 App 위에서 끝까지 돌리는 스모크 — 시나리오 · 그 DOM 을 고쳤으면 `mise run perf-git` 전에 돌린다. 스모크 페이지는 덤프를 시작할 때 다 읽어 들고 있으므로 WebContent 메모리 비교에는 쓰지 않는다 — 덤프를 `git.log` 가 불릴 때 읽는 페이지가 필요하다
 cargo run --release -p pw-git --features test-support --example blame_timing -- <빈 폴더> 5   # blame 첫 청크 · 전체 시간을 gix · git CLI 로(5,000줄 · 커밋 1천 개 합성 파일, 결정 M2-D1 판정 · M2-22). 저장소는 처음에 그 폴더에 만든다
 PW_BLAME_SEEDS=200 cargo nextest run -p pw-git -E 'test(/random_histories/)'   # blame 두 엔진 · 파일 히스토리를 무작위 이력 200개에서 git 과 대조하는 긴 판(기본 시험은 8개, `crates/pw-git/src/testing/blame.rs`)
 mise run test-release   # 위 release 판정 시험(검색 취소 100 ms · `fs.list` 1만 개 · 구문 강조 16 ms · git 감시 이벤트 500 ms · 터미널 체크아웃 → 상태바 브랜치의 `git.refs` 500 ms)을 한 번에 — CI 의 「release timing tests」 단계와 같은 명령이다. 9개를 돌린다(0개면 실패)
@@ -61,9 +61,24 @@ mise run test-release   # 위 release 판정 시험(검색 취소 100 ms · `fs.
 
 **테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N test(s) run: N passed`), doctest 는 크레이트마다 `test result: ok. N passed` 줄, Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.
 
-Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오류 없이 빈 문자열이 온다. 시험에서 CSS 내용을 보려면 `node:fs` 로 읽는다(`apps/desktop/src/theme/tokens.test.ts`).
+**전체 Vitest 가 `Test timed out` 으로 실패하면** `uptime` 의 load average 와 함께, 실패한 파일을 `pnpm exec vitest run <파일>` 로 단독 재실행한 결과를 보고에 적는다 — 단독에서 통과해도 실패를 「원래 흔들리는 시험」 으로 빼지 않는다. 시험 하나가 단독으로 1초에 가까우면 부하에서 5초 제한을 넘으므로 쪼갠다. 창 시험은 react 의 `act` · vitest 의 `it` 대신 `apps/desktop/src/test-support/ended-test.ts` 의 `act` · `it` 을 쓰고 `afterEach` 맨 앞에서 `endTest()` 를 기다린다 — 시간 초과한 시험의 본문이 끝나지 않고 계속 돌아 같은 파일의 다음 시험을 줄줄이 실패시키는 것을 끊는다.
 
-**Windows · Linux 교차 clippy(macOS 에서).** `mise run lint` 는 이 기기의 타깃만 본다. `cfg(windows)` · `cfg(unix)` 로 갈린 코드를 고쳤으면 다른 타깃도 clippy 로 본다. 이 기기에는 그 타깃의 C 컴파일러가 없어 C 를 빌드하는 크레이트의 빌드 스크립트가 실패하므로, 출력 파일 자리만 만드는 가짜 C 도구 둘을 준다. 컴파일러는 인자의 `-o <파일>` · `-Fo<파일>` · `-out:<파일>` 을 `touch` 하고 0 으로 끝나고, 아카이버는 `-out:<파일>` 또는 둘째 인자를 `touch` 한다. 이 둘을 `CC_<타깃>` · `CXX_<타깃>` · `AR_<타깃>`(타깃의 `-` 는 `_`)으로 주고 `cargo clippy --workspace --exclude pitwall-desktop --target <x86_64-pc-windows-msvc | x86_64-unknown-linux-gnu> --all-targets --all-features -- -D warnings` 를 돌린다. clippy 는 링크하지 않으므로 빈 오브젝트로 충분하다. **데스크톱 크레이트는 보지 않는다** — Tauri(Windows) · GTK(Linux) 빌드 스크립트가 이 방법으로 돌지 않으므로 CI 가 본다.
+**부하 아래에서 시험할 때** 부하 프로세스는 코어 수만큼만 띄우고 pid 를 **배열**로 모아 trap 으로 끈다: `pids=(); for i in $(seq $(sysctl -n hw.ncpu)); do yes >/dev/null & pids+=($!); done; trap 'kill $pids' EXIT`. zsh 는 따옴표 없는 문자열 변수를 낱말로 나누지 않아 `pids="$pids $!"` 로 모은 문자열은 `kill` 이 실패하고 부하가 고아로 남는다. 끝나면 `ps -o pid= -p <그 pid들>` 로 남은 것이 없는지 본다.
+
+`mise run fmt` 는 JSON 도 oxfmt 로 다시 쓴다 — 생성기가 만든 픽스처를 바이트로 견주는 시험은 그 폴더를 `.oxfmtrc.json` 의 `ignorePatterns` 에 더하거나 읽은 값으로 견준다.
+
+**되돌림 실증**(지키는 코드를 일부러 되돌려 시험이 실패하는지 보는 것)은 커밋된 작업 트리에서 하고, 끝나면 `git diff` 가 비었는지로 복원을 확인한다 — 스크래치패드의 백업 파일은 재부팅 · 세션 끊김에 사라져 되돌림이 소스에 남는다. 시험 실행에는 시간 제한을 건다(무한 루프로 되돌리면 실패하지 않고 멈춘다 — 「잡힘(멈춤)」). 되돌려도 통과하면 구현이 아니라 시험 입력을 의심한다: 되돌린 코드만 다르게 답하는 입력(값에는 있고 이름에는 없는 낱말 등)을 시험에 더한다.
+
+Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오류 없이 빈 문자열이 온다. 시험에서 CSS 내용을 보려면 `node:fs` 로 읽는다(`apps/desktop/src/theme/tokens.test.ts`). 같은 이유로 happy-dom 은 명시도 · 높이도 계산하지 않는다 — 색 · 배경이 완료 기준인 화면(diff · 상태 색)은 happy-dom 의 속성(`data-*`) 검사만으로 끝내지 않는다. 위 `diff-check` 처럼 `vite build` 한 페이지를 헤드리스 WebKit 으로 열어 `getComputedStyle` 의 배경이 토큰 색인지 한 번 본다.
+
+창 시험을 쓸 때:
+
+- Vitest 는 타입을 보지 않는다(esbuild) — 창 시험을 새로 썼으면 커밋 전에 `pnpm --filter @pitwall/desktop run typecheck` 를 돌린다. CodeMirror 의 내부 API(`view.observer` 등)는 시험이 돌아도 여기서 걸린다.
+- 편집 가능한 CodeMirror 칸을 가진 탭은 편집 뒤 `editor.togglePin`(dockview `updateParameters`)을 불러 내용이 남는지 본다 — 렌더마다 새로 만든 객체를 뷰를 만드는 effect 의 의존성으로 넘기면 뷰가 다시 만들어져 편집이 사라지는데, 부모를 다시 그리지 않는 시험은 이것을 못 잡는다.
+- IME 조합 시험은 단계마다 `view.domAtPos` 로 지금 글자 노드를 다시 찾아 고친다 — 장식이 바뀌어 줄이 다시 그려지면 잡아 둔 글자 노드가 끊긴다(`apps/desktop/src/git/merge/merge-window.test.tsx`).
+- sonner 토스트는 같은 파일의 시험 사이에 남는다 — 단추를 글자로 찾을 때는 문서 전체가 아니라 그 다이얼로그(`[data-testid=…]`)나 제목으로 고른 `[data-sonner-toast]` 안에서 찾는다(같은 글자의 「되돌리기」 가 토스트에도 있다).
+
+**Windows · Linux 교차 clippy(macOS 에서).** `mise run lint` 는 이 기기의 타깃만 본다. `cfg(windows)` · `cfg(unix)` 로 갈린 코드를 고쳤으면 다른 타깃도 clippy 로 본다. 이 기기에는 그 타깃의 C 컴파일러가 없어 C 를 빌드하는 크레이트의 빌드 스크립트가 실패하므로, 출력 파일 자리만 만드는 가짜 C 도구 둘을 준다. 컴파일러는 인자의 `-o <파일>` · `-Fo<파일>` · `-out:<파일>` 을 `touch` 하고 0 으로 끝나고, 아카이버는 `-out:<파일>` 또는 둘째 인자를 `touch` 한다. 이 둘을 `CC_<타깃>` · `CXX_<타깃>` · `AR_<타깃>`(타깃의 `-` 는 `_`)에 **절대 경로로만** 주고(PATH 에 넣지 않는다 — PATH 에서 `cc` 로 잡히면 호스트 빌드 스크립트 · proc-macro 가 빈 파일로 링크돼 `target/debug` 에 남고, 그 뒤 빌드가 `Permission denied (os error 13)` 로 실패한다. 그렇게 됐으면 0바이트 `build-script-build` · `*.dylib` 와 같은 이름의 `target/debug/.fingerprint/<크레이트>-<해시>` 를 지운다) `mise exec -- cargo clippy --workspace --exclude pitwall-desktop --target <x86_64-pc-windows-msvc | x86_64-unknown-linux-gnu> --all-targets --all-features -- -D warnings` 를 돌린다. clippy 는 링크하지 않으므로 빈 오브젝트로 충분하다. **데스크톱 크레이트는 보지 않는다** — Tauri(Windows) · GTK(Linux) 빌드 스크립트가 이 방법으로 돌지 않으므로 CI 가 본다.
 
 데스크톱 앱(`mise run dev`)을 손으로 확인할 때:
 
