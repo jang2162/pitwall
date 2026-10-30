@@ -148,8 +148,11 @@ function TrustDialog({
             {T.body}
           </Dialog.Description>
           <div className="flex justify-end gap-2">
+            {/* 처음 포커스는 「신뢰하지 않음」 이다 — 신뢰는 훅 · mise · git 설정을 켜는 보안 결정이라, 다이얼로그가 뜬 순간 사람이 치던
+                Enter · Space 한 번으로 신뢰가 되면 안 된다(위험 작업 확인이 취소에 처음 포커스를 두는 것과 같다). */}
             <button
               type="button"
+              autoFocus
               className={BUTTON}
               disabled={busy}
               onClick={() => onAnswer(false)}
@@ -158,7 +161,6 @@ function TrustDialog({
             </button>
             <button
               type="button"
-              autoFocus
               className={`${BUTTON} border-ui-accent`}
               disabled={busy}
               onClick={() => onAnswer(true)}

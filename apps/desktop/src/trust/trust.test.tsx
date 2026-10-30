@@ -315,3 +315,24 @@ it("neither asks nor offers trust when the registry cannot be saved", async () =
   expect(dialog()).toBeNull();
   expect(host.sets).toEqual([]);
 });
+
+it("focuses 신뢰하지 않음 first, so Enter or Space right after the dialog opens does not trust", async () => {
+  await mount();
+  expect(document.activeElement).toBe(button("신뢰하지 않음"));
+
+  // 브라우저는 포커스된 단추에 Enter · Space 가 오면 그 단추를 누른다(happy-dom 은 이 기본 동작이 없어 직접 누른다).
+  // IME 조합 중의 Enter 도 같은 단추로 가므로 포커스가 신뢰 쪽이 아니면 신뢰가 되지 않는다.
+  await click(document.activeElement as HTMLElement);
+  expect(host.sets).toEqual([false]);
+  expect(host.trust).toBe(false);
+  expect(trustStatus()).not.toBeNull();
+});
+
+it("trusts only after moving focus to 신뢰", async () => {
+  await mount();
+  button("신뢰")!.focus();
+  expect(document.activeElement).toBe(button("신뢰"));
+  await click(document.activeElement as HTMLElement);
+  expect(host.sets).toEqual([true]);
+  expect(host.trust).toBe(true);
+});
