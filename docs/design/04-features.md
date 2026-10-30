@@ -142,7 +142,7 @@ pitwall <path>[:line[:col]]
 | F6-6 | 스키마 기반 SQL 자동완성 (테이블/컬럼/별칭) | P1 |
 | F6-7 | 결과 그리드: 가상 스크롤, 정렬/필터, 셀 상세(JSON 뷰어), 복사(CSV/JSON/INSERT 문) | P0 |
 | F6-8 | 테이블 데이터 편집 (셀 수정 → 변경 미리보기 → 트랜잭션 커밋) | P1 |
-| F6-9 | 안전장치: 연결별 read-only, 프로덕션 태그(색상), 수동 커밋 모드, **SQL 위험도 분류**(파서 기반: 조회 / 쓰기 / WHERE 없는 UPDATE·DELETE / DDL / DROP·TRUNCATE) → 등급별 확인 · 차단 (DBX `dbx-sql` 방식 참고) | P0 |
+| F6-9 | 안전장치: 연결별 read-only, 프로덕션 태그(색상), 수동 커밋 모드, **SQL 위험도 분류**(파서 기반: 조회 / 쓰기 / WHERE 없는 UPDATE·DELETE / DDL / DROP·TRUNCATE) → 등급별 확인 · 차단 (DBX `dbx-sql-core` 의 분류기를 차용 — 14-m3-plan 결정 M3-D5) | P0 |
 | F6-10 | 쿼리 히스토리 · 즐겨찾기 쿼리 (`.pitwall/queries/*.sql` 공유 가능) | P1 |
 | F6-11 | 결과 내보내기 (CSV/JSON/XLSX) | P1 |
 | F6-12 | ER 다이어그램 | P2 |

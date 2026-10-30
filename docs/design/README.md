@@ -18,18 +18,19 @@
 | [11-m0-plan.md](11-m0-plan.md) | M0(기반) 작업 분할 |
 | [12-m1-plan.md](12-m1-plan.md) | M1(탐색) 작업 분할 · M1 결정 |
 | [13-m2-plan.md](13-m2-plan.md) | M2(Git) 작업 분할 · M2 결정(결정 필요) |
+| [14-m3-plan.md](14-m3-plan.md) | M3(DB) 작업 분할 · M3 결정 |
 
 ## 한 줄 요약
 
 - **Tauri 2 + Rust 코어 + React/TypeScript UI**
 - 코어는 UI와 분리된 **헤드리스 "Host" 서비스**로 설계 → 같은 API를 UI · MCP · 원격(SSH)이 공유
-- Git = 읽기 `gitoxide`, 쓰기 `git CLI` / DB = `sqlx`+드라이버 / 디버깅 = **DAP** / 코드 인텔리전스 = **LSP + tree-sitter**
+- Git = 읽기 `gitoxide`, 쓰기 `git CLI` / DB = 네이티브 드라이버(`tokio-postgres` · `mysql_async` · `rusqlite` · `redis`) + 공통 trait / 디버깅 = **DAP** / 코드 인텔리전스 = **LSP + tree-sitter**
 - 에디터는 "뷰어 우선, 가벼운 편집" (CodeMirror 6)
 - **macOS 우선**, Linux/Windows 지원
 - 확장: 선언형 확장(테마 · 언어 · 키맵) + WASM 플러그인, 내장 기능도 확장 API 위에서 구현
 - 원격: 원격 머신에 **Pitwall Relay** 설치 → 직접 연결(LAN · Tailscale), SSH 대체. 중계 서버 없음
 - 모바일: **보류** (MVP · 로드맵 제외)
 - MCP: 툴별 on/off · 프리셋 · 등급별 자동 승인
-- DB 계층은 DBX(Apache-2.0) 구조 참고
+- DB 계층은 DBX(Apache-2.0) 구조 참고 + SQL 위험도 분류 · Redis 명령 분류 코드 차용(고지)
 - MVP: 탐색 · Git · DB(PG/MySQL/SQLite/Redis). 실행 · 디버그는 후순위
 - 라이선스: MIT

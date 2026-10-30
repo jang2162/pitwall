@@ -16,7 +16,7 @@
 | 터미널 | xterm.js + `portable-pty` | 실행 콘솔/터미널 공용 |
 | Git 읽기 | **gitoxide (`gix`)** | log/graph/status/blame/diff를 빠르게 (blame 은 신뢰한 프로젝트에서 git CLI — 13-m2-plan.md 결정 M2-D1 판정) |
 | Git 쓰기 | **git CLI** | commit/merge/rebase/checkout/push — 훅, 서명, credential helper 존중 |
-| DB | **sqlx** (Postgres/MySQL/SQLite) + **`redis-rs`** (Redis) | 드라이버 추상화 계층 위에 얹음. MSSQL(`tiberius`)은 이후, Oracle 등은 JDBC 브리지 확장 검토 |
+| DB | **네이티브 드라이버**: PostgreSQL `tokio-postgres` + `deadpool-postgres`, MySQL/MariaDB `mysql_async`, SQLite `rusqlite`(로컬 저장소와 같은 판), Redis `redis` | 공통 trait + 지원 플래그 위에 드라이버마다 크레이트, 코어는 trait 로만 부른다(아래 「DB 계층: DBX 구조 참고」). TLS 는 rustls(`ring`) + OS 신뢰 저장소, SSH 터널은 시스템 `ssh`. MSSQL(`tiberius`)은 이후, Oracle 등은 JDBC 브리지 확장 검토 — 14-m3-plan.md 결정 M3-D1 ~ D4 · D10 · D11 |
 | DB 그리드 | Glide Data Grid (canvas) | 수십만 행 가상 스크롤 |
 | SQL 편집 | CodeMirror `@codemirror/lang-sql` + 스키마 기반 자동완성 | |
 | 디버깅 | **DAP 클라이언트** (Rust 구현) | js-debug, debugpy, codelldb, delve, java-debug |
@@ -34,7 +34,7 @@
 | 비밀 | `keyring` (macOS Keychain / Windows Credential / Secret Service) | |
 | 원격 | **Pitwall Relay 데몬** + 연결 계층 `pw-link` (QUIC `quinn`, Noise `snow`, mDNS) | 직접 연결(LAN/Tailscale) → SSH(`russh`) 대체. 중계 서버 없음 (08 참고) |
 | 모바일 | (보류) React Native (Expo) 후보 | D13 — 로드맵 제외 |
-| 라이선스 검사 | `cargo-deny`, `pnpm licenses list`(npm, `scripts/licenses.mjs`) | MIT 프로젝트 — 허용형 라이선스만. MPL-2.0 은 Tauri 전이 의존성에 한해 크레이트 단위 예외(수정 없이 사용, `deny.toml` `[[licenses.exceptions]]`). CC0-1.0(퍼블릭 도메인 헌정, 의무 없음)은 파일 감시 `notify` 에 한해 같은 방식의 크레이트 단위 예외. BSL-1.0(Boost, 허용형 · 바이너리 배포에 고지 의무 없음)은 클립보드 플러그인의 Windows 전용 전이 의존성(`clipboard-win` · `error-code`)에 한해 같은 방식의 크레이트 단위 예외 — 전역 허용 목록에는 넣지 않는다. CDLA-Permissive-2.0(데이터용 허용형)은 자동 업데이트(`tauri-plugin-updater` → `reqwest` → `rustls-platform-verifier`)가 끌어오는 `webpki-root-certs` 에 한해 같은 방식의 크레이트 단위 예외 — wasm32 전용 의존성이라 배포하는 3 OS 바이너리에 들어가지 않는다(`cargo tree -e normal -i webpki-root-certs --target <배포 타깃>` 이 비어 있다). 배포 타깃의 그래프에 들어오면 예외를 걷고 다시 판단한다. npm 도 dev 전용 패키지에 한해 패키지 단위 예외(이유 필수, prod 에 나타나면 실패, `licenses/npm-exceptions.toml`) |
+| 라이선스 검사 | `cargo-deny`, `pnpm licenses list`(npm, `scripts/licenses.mjs`) | MIT 프로젝트 — 허용형 라이선스만. MPL-2.0 은 Tauri 전이 의존성에 한해 크레이트 단위 예외(수정 없이 사용, `deny.toml` `[[licenses.exceptions]]`). CC0-1.0(퍼블릭 도메인 헌정, 의무 없음)은 파일 감시 `notify` 에 한해 같은 방식의 크레이트 단위 예외. BSL-1.0(Boost, 허용형 · 바이너리 배포에 고지 의무 없음)은 클립보드 플러그인의 Windows 전용 전이 의존성(`clipboard-win` · `error-code`)에 한해 같은 방식의 크레이트 단위 예외 — 전역 허용 목록에는 넣지 않는다. CDLA-Permissive-2.0(데이터용 허용형)은 자동 업데이트(`tauri-plugin-updater` → `reqwest` → `rustls-platform-verifier`)가 끌어오는 `webpki-root-certs` 에 한해 같은 방식의 크레이트 단위 예외 — wasm32 전용 의존성이라 배포하는 3 OS 바이너리에 들어가지 않는다(`cargo tree -e normal -i webpki-root-certs --target <배포 타깃>` 이 비어 있다). 배포 타깃의 그래프에 들어오면 예외를 걷고 다시 판단한다. DB 드라이버의 두 예외(14-m3-plan.md 결정 M3-D14)도 같은 크레이트 단위다 — BSL-1.0 은 Redis 드라이버(`redis` 의 `aio` 기능)가 무조건 끌어오는 `xxhash-rust` 에 한해, CDLA-Permissive-2.0 은 MySQL 드라이버(`mysql_async` 의 rustls 기능)가 무조건 끌어오는 `webpki-roots` 에 한해. 둘 다 배포 바이너리에 들어간다 — `webpki-roots` 는 링크되지만 그 루트 데이터는 쓰지 않는다(내장 루트를 늘 끄고 OS 신뢰 저장소의 루트만 넣는다, 시험이 지킨다). npm 도 dev 전용 패키지에 한해 패키지 단위 예외(이유 필수, prod 에 나타나면 실패, `licenses/npm-exceptions.toml`) |
 | 확장 런타임 | `wasmtime` (WASM Component Model, WIT) | 권한 기반 샌드박스 (07 참고) |
 | 테마 | 디자인 토큰 → CSS 변수, VS Code 테마 import | |
 | UI 언어(i18n) | **Fluent** (`fluent-rs` / `@fluent/bundle`) | 코어 · 데스크톱 공용 리소스 |
@@ -89,23 +89,27 @@
 
 ### 2.7 DB 계층: DBX 구조 참고
 
-[DBX](https://github.com/t8y2/dbx)(Apache-2.0, Tauri 2 + Vue 3 + CodeMirror 6, Rust `sqlx`/`tiberius`/`redis-rs`)는 Pitwall과 스택이 거의 같고 성숙한(2026-10 기준 스타 2.5만) DB 클라이언트다. Apache-2.0은 MIT 프로젝트에서 차용 가능(라이선스 · NOTICE 고지, 변경 표기 필요).
+[DBX](https://github.com/t8y2/dbx)(Apache-2.0, Tauri 2 + Vue 3 + CodeMirror 6)는 Pitwall과 스택이 거의 같은 DB 클라이언트다. Apache-2.0은 MIT 프로젝트에서 차용 가능(라이선스 · NOTICE 고지, 변경 표기 필요). DBX 의 드라이버는 PG `tokio-postgres` + `deadpool-postgres`, MySQL `mysql_async`(둘 다 포크 패치), SQLite `rusqlite`, Redis `redis`, MSSQL `tiberius` 이고 sqlx 는 쓰지 않는다. 공통 드라이버 trait 는 없고 연결 종류의 enum 을 연산마다 분기한다.
 
-DBX의 크레이트 분할을 참고해 `pw-db`를 다음처럼 나눈다:
+Pitwall 의 선택과 DBX 에서 가져오는 것(14-m3-plan.md 결정 M3-D1 ~ D5 · D10 · D11 · D15):
 
-| Pitwall | 참고한 DBX 크레이트 | 역할 |
+- **드라이버는 네이티브**(「결론」 표의 DB 행) — 결과를 서버 커서에서 credit 만큼 읽고(PG 포털 · MySQL 결과 집합 스트리밍) PG 를 와이어 CancelRequest 로 취소하려면 프로토콜에 가까운 드라이버가 맞는다. crates.io 공개판만 쓴다(포크 git 은 `deny.toml` 이 거절한다). SQLite 는 로컬 저장소가 이미 쓰는 `rusqlite` 다 — `sqlx-sqlite` 는 그 판의 `libsqlite3-sys` 와 한 빌드에 들어가지 못한다(`links = "sqlite3"`)
+- **공통 trait + 지원 플래그**, 드라이버마다 크레이트, 코어는 trait 로만 부른다. trait 의 입출력은 `pw-db-types` 의 serde 타입이라 프로세스 밖 구현(JDBC 브리지 F6-3b, 외부 확장 — 07 「확장 단위와 계층」)이 같은 trait 를 프록시로 구현할 수 있다
+- **SQLite 는 메인 Host 안**에서 연다 — 연결마다 블로킹 스레드 하나, `busy_timeout`, 취소는 `interrupt`. 확장 로드는 늘 끈다. 별도 워커 프로세스를 두지 않는다(DBX 의 `dbx-sqlite-worker` 는 SSH 원격 호스트의 파일을 읽으려고 원격에 올리는 바이너리다 — Pitwall 의 원격 파일은 Relay 가 그 머신에서 연다, 08)
+- **SSH 터널은 시스템 `ssh -L`** — 사람의 `~/.ssh/config` · 에이전트 · ProxyJump · known_hosts 를 그대로 쓴다(Relay 설치와 같은 원칙, 08). 인증 질문은 git 과 같은 askpass. DBX 는 in-process `russh` 다
+- **TLS 루트는 OS 신뢰 저장소**(PG `rustls-platform-verifier`, MySQL · Redis 는 `rustls-native-certs` 로 읽은 루트 — MySQL 은 드라이버의 내장 루트를 끈다), `sslmode` 는 libpq 뜻 그대로
+- **DBX 에서 코드를 옮기는 것**은 둘이다 — SQL 위험도 분류의 AST 부분과 그 시험(`dbx-sql-core` 의 `sql_risk.rs`, 결함을 고쳐서), Redis 명령의 허용 목록 분류(`dbx-driver-redis` 의 `classify_command`). 옮길 때 `licenses/vendored.md` 와 `THIRD_PARTY_NOTICES.md` 에 기록한다(CONTRIBUTING.md 「의존성과 라이선스」). 나머지(크레이트 분할 · 실행 예산과 취소 · 스키마 탐색 질의 방식 · 큰 셀 처리)는 방식만 참고한다
+
+| Pitwall | 대응하는 DBX 크레이트 | 역할 |
 |---|---|---|
-| `pw-db-types` | `dbx-types` | 연결 · 쿼리 · 메타데이터 공용 타입 |
-| `pw-db-sql` | `dbx-sql` | SQL 파싱(sqlparser-rs), 방언, **위험도 분류**, DDL/DML 생성 |
-| `pw-db-driver` | `dbx-drivers`, `dbx-driver-support` | 드라이버 trait, 생명주기, 실행 제한(행 수 · 타임아웃), SSH 터널 |
-| `pw-db-driver-{postgres,mysql,sqlite,redis}` | `dbx-driver-*` | 드라이버별 구현 (드라이버마다 크레이트 분리 → 빌드 · 의존성 격리) |
-| `pw-db` | `dbx-core` | 연결 풀, 쿼리 실행/스트리밍, 스키마 캐시, 히스토리 |
-| (P2) JDBC 브리지 확장 | `dbx-driver-agent`, `agents/` | 별도 JVM 프로세스 + 드라이버 jar 설치 |
+| `pw-db-types` | `dbx-types` | 연결 설정 · 값(`DbValue` — JS 안전 정수 · 문자열 decimal 등, 14 결정 M3-D8) · 결과 · 메타데이터 공용 타입 |
+| `pw-db-sql` | `dbx-sql-core` · `dbx-sql-data`(DBX 는 넷으로 나눴다) | SQL 파싱(`sqlparser`), 방언, **위험도 분류**, 문장 나누기, 그리드 편집 DML 생성 — 한 크레이트 안의 모듈 |
+| `pw-db-driver` | `dbx-driver-support`(공통 trait 는 DBX 에 없다) | 공통 trait · 지원 플래그, 실행 예산(타임아웃) · 취소, TLS 설정, SSH 터널(시스템 `ssh`) |
+| `pw-db-driver-{pg,mysql,sqlite,redis}` | `dbx-driver-*`(SQLite 전용 크레이트는 DBX 에 없다) | 드라이버별 구현 (드라이버마다 크레이트 분리 → 빌드 · 의존성 · 라이선스 예외 격리) |
+| `pw-db` | `dbx-core`(크기 · 범위는 비교 대상이 아니다) | 연결 관리 · 세션, 쿼리 실행/스트리밍, 실행 관문(연결 범위 · 위험도 등급 · read-only), 스키마 캐시 |
+| (P2) JDBC 브리지 확장 | `dbx-driver-agent`, `agents/` | 별도 JVM 프로세스 + 드라이버 jar 설치 — 공통 trait 를 프로세스 밖에서 구현한다 |
 
-추가로 참고할 점:
-- SQLite 파일은 **격리된 워커 프로세스**에서 연다(`dbx-sqlite-worker`) → 손상 파일/긴 쿼리가 메인 프로세스를 막지 않음
-- DBX도 MCP 서버(`dbx-mcp`)와 CLI를 같은 코어 위에 제공 → Pitwall의 헤드리스 Host 원칙과 일치
-- 구현 착수(M3) 전에 드라이버 trait · 위험도 분류 · Redis 뷰어 코드를 검토하고, 차용 시 `THIRD_PARTY_NOTICES.md`에 기록
+DBX 도 MCP 서버(`dbx-mcp`)와 CLI 를 같은 코어 위에 둔다 — Pitwall 의 헤드리스 Host 원칙과 같다. 다만 Pitwall 은 위험도 판정 경로가 하나다(Host 의 분류를 UI · MCP 가 RPC 로 함께 쓴다 — DBX 는 Rust 와 TS 에 분류기가 따로 있고 CLI 는 MCP 정책과 다른 쓰기 판정을 쓴다).
 
 ## 3. 지원 플랫폼 — macOS 우선
 
@@ -154,7 +158,7 @@ pitwall/
 │  ├─ pw-perf/           # 콜드 스타트 · 유휴 메모리 측정 하네스 (`mise run perf`, 06 「성능 목표 (검증 기준)」)
 │  ├─ pw-fs/             # 파일 트리, 감시, 검색
 │  ├─ pw-git/            # gix 읽기 + CLI 쓰기
-│  ├─ pw-db*/            # pw-db, pw-db-types, pw-db-sql, pw-db-driver(-postgres/-mysql/-sqlite/-redis) (§2.7)
+│  ├─ pw-db*/            # pw-db, pw-db-types, pw-db-sql, pw-db-driver(-pg/-mysql/-sqlite/-redis) (§2.7)
 │  ├─ pw-lsp/            # LSP 클라이언트, 서버 관리자
 │  ├─ pw-dap/            # DAP 클라이언트
 │  ├─ pw-runtime/        # 런타임 제공자 (mise · direnv · asdf · 로그인 셸), (프로젝트, 디렉터리)별 env 캐시 — 지금은 로그인 셸 환경만(03 §5-1)

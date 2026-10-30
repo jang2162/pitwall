@@ -29,7 +29,7 @@
 ### DB
 | 앱 | 라이선스 | 참고 포인트 |
 |---|---|---|
-| **DBX** (t8y2/dbx) | **Apache-2.0** (MIT 프로젝트에서 차용 가능, 고지 필요) | Tauri 2 + Vue 3 + CodeMirror 6, `sqlx`/`tiberius`/`redis-rs`/`mongodb`. 스타 2.5만 · 커밋 7.9천으로 성숙. 크레이트 분할(types/sql/drivers/driver-*), SQL 위험도 분류, JDBC agent, SQLite 격리 워커, MCP · CLI 동반 → **02 §2.7에 반영** |
+| **DBX** (t8y2/dbx) | **Apache-2.0** (MIT 프로젝트에서 차용 가능, 고지 필요) | Tauri 2 + Vue 3 + CodeMirror 6. 드라이버는 `tokio-postgres` + `deadpool-postgres` · `mysql_async`(둘 다 포크 패치) · `rusqlite` · `redis` · `tiberius` · `mongodb` 등이고 sqlx 는 쓰지 않는다. SSH 터널은 in-process `russh`. 공통 드라이버 trait 없이 연결 종류 enum 을 연산마다 분기한다. `dbx-sqlite-worker` 는 SSH 원격 호스트의 SQLite 파일용(로컬은 메인 프로세스). 스타 2.5만 · 커밋 7.9천으로 성숙. **코드 차용**: SQL 위험도 분류의 AST 부분과 시험, Redis 명령 허용 목록 분류. **방식 참고**: 크레이트 분할(types/sql/driver-support/driver-*), 실행 예산 · 취소, 스키마 탐색 질의, JDBC agent(F6-3b), MCP · CLI 동반 → **02 「DB 계층: DBX 구조 참고」, 14-m3-plan** |
 | TablePlus | 상용 | 경량 네이티브 DB 클라이언트 UX 기준점, 연결 색상 태그(프로덕션 경고) |
 | Beekeeper Studio | GPLv3(Community) | SQL 콘솔/그리드 UX. **GPL이라 코드 차용 불가**(MIT 프로젝트) — UX만 참고 |
 | DbGate | 오픈소스(라이선스 확인 필요) | SQL + NoSQL 통합, 데스크톱/웹 동시 제공 |
@@ -61,5 +61,5 @@
 |---|---|
 | 포지션 재확인 (Orca와 겹치는 원격 · 모바일 · diff 리뷰) | 모바일 **보류**(D13). Pitwall 고유 가치(DB · git · 실행/디버그 · LSP)에 집중 |
 | MCP 툴 개별 on/off | **반영** — 05 §3-1, F10-6 (D14) |
-| DBX 코드 검토 | **확인 완료: Apache-2.0** — 02 §2.7 크레이트 구조, F6-9 위험도 분류, F6-3b JDBC 방식 (D15). M3 착수 전 코드 검토(기능별 차용 판정 · 크레이트 후보 · 사람이 정할 질문): [`docs/superpowers/reports/2026-10-31-dbx-review.md`](../superpowers/reports/2026-10-31-dbx-review.md) |
+| DBX 코드 검토 | **확인 완료: Apache-2.0** — 02 「DB 계층: DBX 구조 참고」, F6-9 위험도 분류, F6-3b JDBC 방식 (D15). M3 착수 전 코드 검토(기능별 차용 판정 · 크레이트 후보 · 사람이 정할 질문): [`docs/superpowers/reports/2026-10-31-dbx-review.md`](../superpowers/reports/2026-10-31-dbx-review.md). 그 질문의 답과 M3 결정: [14-m3-plan.md](14-m3-plan.md) 「착수 전 준비물 · 결정」 (D44 ~ D50) |
 | Zed 원격 방식 | **반영** — 08 §4~5, F9 (D16) |
