@@ -170,6 +170,7 @@ function fakeWindow(clock: { t: number }) {
   let original = "";
   let changedSince: number | undefined;
   let commitRows = 0;
+  let partialFrames = 0;
   let commit: HTMLElement | undefined;
   const state = { changed: false, staged: false };
   perfRow.addEventListener("dblclick", () => {
@@ -236,9 +237,11 @@ function fakeWindow(clock: { t: number }) {
         view.dom.append(el);
       }
     }
-    // 고친 파일이 두 번에 나뉘어 들어온다(감시 · 상태 새로 읽기).
-    if (state.changed && commitRows < CHANGED_FILES + 3)
-      commitRows = commitRows === 0 ? 4000 : CHANGED_FILES + 3;
+    // 고친 파일이 두 번에 나뉘어 들어온다(감시 · 상태 새로 읽기) — 4,000 행에서 settle 시간(50 ms)보다 오래 머문다.
+    if (state.changed && commitRows < CHANGED_FILES + 3) {
+      if (commitRows === 0) commitRows = 4000;
+      else if (++partialFrames > 10) commitRows = CHANGED_FILES + 3;
+    }
     if (state.staged && commit && !commit.querySelector("[data-commit-item]")) {
       const row = doc.createElement("div");
       row.setAttribute("data-commit-item", `staged:${STAGE_PATH}`);
