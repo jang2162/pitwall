@@ -44,7 +44,9 @@ mod measure {
     use pw_core::EventBus;
     use pw_core::config::AppPaths;
     use pw_core::registry::{NewProject, Registry};
-    use pw_perf::git::{self, Acted, Action, GitReport, GitRun, GitSettings, Progress, RepoResult};
+    use pw_perf::git::{
+        self, Acted, Action, GitReport, GitRun, GitSettings, Progress, RepoResult, RunFailure,
+    };
     use pw_perf::macos;
     use pw_perf::marks::{self, Mark};
     use pw_perf::report::{
@@ -117,7 +119,7 @@ mod measure {
         let mut project = None;
         let mut git_repos = Vec::new();
         let mut checkout = git::DEFAULT_CHECKOUT.to_owned();
-        let mut scenario_timeout = 300;
+        let mut scenario_timeout = 420;
         let mut it = args.into_iter();
         while let Some(flag) = it.next() {
             let mut value = || {
@@ -203,10 +205,50 @@ mod measure {
         }
     }
 
+    /// 측정하는 동안 잠자기 · 디스플레이 잠들기를 막는 `caffeinate`. `-w` 로 이 하네스가 어떻게 끝나든 함께 끝나고, 정상으로
+    /// 끝날 때는 띄운 그 pid 만 끈다. 띄우지 못하면 알리고 그대로 잰다.
+    struct Awake(Option<std::process::Child>);
+
+    impl Awake {
+        fn start() -> Self {
+            let child = std::process::Command::new("/usr/bin/caffeinate")
+                .args(["-d", "-i", "-m", "-w", &std::process::id().to_string()])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            match child {
+                Ok(child) => {
+                    say(format!(
+                        "pw-perf: caffeinate {} keeps the display and the system awake while measuring",
+                        child.id()
+                    ));
+                    Self(Some(child))
+                }
+                Err(e) => {
+                    say(format!(
+                        "pw-perf: warning: cannot start caffeinate ({e}) — the display may sleep and lock during the runs"
+                    ));
+                    Self(None)
+                }
+            }
+        }
+    }
+
+    impl Drop for Awake {
+        fn drop(&mut self) {
+            if let Some(child) = &mut self.0 {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
     /// 결과 파일을 썼으면 `Ok`. 값은 유효한 회가 충분한가(아니면 종료 코드 3).
     pub fn run(args: Vec<String>) -> Result<bool, String> {
         let opts = parse(args)?;
         macos::check_responsibility()?;
+        let _awake = Awake::start();
         std::fs::create_dir_all(&opts.out).map_err(|e| format!("{}: {e}", opts.out.display()))?;
         let out = std::fs::canonicalize(&opts.out).map_err(|e| e.to_string())?;
         let scratch = Scratch(std::env::temp_dir().join(format!("pw-perf-{}", std::process::id())));
@@ -457,6 +499,34 @@ mod measure {
         }
     }
 
+    /// 한 회가 끝나지 못한 까닭. `fatal` 이면 다음 회로 가지 않는다 — 중단 신호, 회 폴더 · 띄우기 실패, 끈 뒤 남은 프로세스 ·
+    /// 소켓(다음 회와 섞일 수 있다).
+    struct RunError {
+        message: String,
+        fatal: bool,
+    }
+
+    impl RunError {
+        fn run(message: String) -> Self {
+            Self {
+                message,
+                fatal: interrupted().is_some(),
+            }
+        }
+        fn fatal(message: String) -> Self {
+            Self {
+                message,
+                fatal: true,
+            }
+        }
+    }
+
+    impl From<RunError> for String {
+        fn from(e: RunError) -> Self {
+            e.message
+        }
+    }
+
     /// 한 회에 잰 것. 끈 뒤 [`run_once`] 가 묶음 키로 남은 프로세스를 보고 SIGKILL 여부를 적는다.
     trait Observed {
         fn group(&self) -> u32;
@@ -505,9 +575,9 @@ mod measure {
         project: Option<&Path>,
         scenario: Option<&str>,
         observe: impl FnOnce(&Launch, &RunDir) -> Result<T, String>,
-    ) -> Result<T, String> {
-        preflight()?;
-        let dir = RunDir::create(scratch, index, project)?;
+    ) -> Result<T, RunError> {
+        preflight().map_err(RunError::run)?;
+        let dir = RunDir::create(scratch, index, project).map_err(RunError::fatal)?;
 
         let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
             .filter(|(k, _)| {
@@ -534,7 +604,9 @@ mod measure {
         let t0 = epoch_ms();
         let launcher =
             macos::spawn_disclaimed(&opts.binary, &[dir.project.as_os_str()], &dir.root, &env)
-                .map_err(|e| format!("cannot launch {}: {e}", opts.binary.display()))?;
+                .map_err(|e| {
+                    RunError::fatal(format!("cannot launch {}: {e}", opts.binary.display()))
+                })?;
 
         let launch = Launch {
             pid: launcher,
@@ -578,14 +650,21 @@ mod measure {
         };
         let run = match observed {
             Err(panic) => resume_unwind(panic),
-            Ok(Err(e)) => return Err(format!("{e}{}", leftover_note(&leftovers, &sockets))),
+            Ok(Err(e)) => {
+                let message = format!("{e}{}", leftover_note(&leftovers, &sockets));
+                return Err(if leftovers.is_empty() && sockets.is_empty() {
+                    RunError::run(message)
+                } else {
+                    RunError::fatal(message)
+                });
+            }
             Ok(Ok(run)) => run,
         };
         if !leftovers.is_empty() || !sockets.is_empty() {
-            return Err(format!(
+            return Err(RunError::fatal(format!(
                 "run {index} did not clean up after quitting{}",
                 leftover_note(&leftovers, &sockets)
-            ));
+            )));
         }
         Ok(run.killed(killed))
     }
@@ -749,9 +828,17 @@ mod measure {
 
     /// git 시나리오: 저장소마다 준비 + 측정 회를 돌려 `result.json` · `summary.md` 를 쓴다. 회마다 저장소를 `main` 으로 돌려놓고
     /// 띄우며, 앱이 기다린다고 알리는 일(`git checkout <--checkout>`, 픽스처 파일 1만 개 고치기, `git add <파일>`)을 그 저장소에서 한다.
+    /// 한 회가 멈추거나(시나리오 시간 제한) 실패하면 그 회를 실패로 적고 다음 회로 간다 — 앱은 그 회의 pid 로만 끈다. 회가 끝날
+    /// 때마다 결과 파일을 다시 써서, 중단 신호나 되돌릴 수 없는 실패로 멈춰도 그때까지의 요약이 남는다.
     fn run_git(opts: &Options, scratch: &Path, out: &Path) -> Result<bool, String> {
+        let mut expected = Vec::new();
         for repo in &opts.git_repos {
             check_fixture(repo, &opts.checkout)?;
+            let commits: u64 = git_in(repo, &["rev-list", "--count", "--all"])?
+                .trim()
+                .parse()
+                .map_err(|e| format!("{}: cannot count the commits: {e}", repo.display()))?;
+            expected.push(commits);
         }
         let total = opts.warmup + opts.runs;
         say(format!(
@@ -762,15 +849,30 @@ mod measure {
             out.display()
         ));
         let store_root = webkit_store_root(&opts.app);
-        let mut repos = Vec::new();
-        for (r, repo) in opts.git_repos.iter().enumerate() {
+        let mut repos: Vec<RepoResult> = Vec::new();
+        let mut stopped = None;
+        'repos: for (r, repo) in opts.git_repos.iter().enumerate() {
             let repo_out = out.join(format!("repo-{r}"));
             let graph_before = has_commit_graph(repo);
+            repos.push(repo_result(
+                repo,
+                graph_before,
+                expected[r],
+                Vec::new(),
+                Vec::new(),
+            ));
             let mut runs = Vec::new();
+            let mut failures = Vec::new();
             for index in 0..total {
-                check_interrupted()?;
+                if let Err(e) = check_interrupted() {
+                    stopped = Some(e);
+                    break 'repos;
+                }
                 let warmup = index < opts.warmup;
-                git_in(repo, &["checkout", "-q", "main"])?;
+                if let Err(e) = git_in(repo, &["checkout", "-q", "main"]) {
+                    stopped = Some(e);
+                    break 'repos;
+                }
                 let run = run_once(
                     opts,
                     scratch,
@@ -781,58 +883,118 @@ mod measure {
                     Some("git"),
                     |launch, dir| {
                         let started = first_frame(opts, launch, dir, index)?;
-                        observe_git(opts, started, dir, index, warmup, repo)
+                        observe_git(opts, started, dir, index, warmup, repo, expected[r])
                     },
                 );
                 // 실패한 회도 저장소를 돌려놓는다 — 다음 회 · 다음 측정이 고치지 않은 `main` 에서 시작한다.
                 let back = git_in(repo, &["checkout", "-q", "HEAD", "--", git::CHANGES_DIR])
                     .and_then(|_| git_in(repo, &["checkout", "-q", "main"]));
-                let run = run?;
-                back?;
-                let m = &run.measure;
-                say(format!(
-                    "pw-perf: {} run {index}{}{}: open {:.0} ms, fling ≤16.7 ms {:.2}, diff {:.0} ms, checkout → status bar {:.0} ms, gutter {:.0} ms, typing block max {:.0} ms, commit fling ≤16.7 ms {:.2}, git add → staged {:.0} ms",
-                    repo.display(),
-                    if run.warmup { " (warm-up)" } else { "" },
-                    run.excluded
-                        .as_deref()
-                        .map_or(String::new(), |why| format!(" (excluded: {why})")),
-                    m.open_ms,
-                    m.fling.interval.within16_7,
-                    m.diff_ms,
-                    m.branch_ms,
-                    m.gutter_ms,
-                    m.typing.blocks.max_ms,
-                    m.commit_fling.interval.within16_7,
-                    m.stage_ms
-                ));
-                runs.push(run);
+                match run {
+                    Ok(run) => {
+                        let m = &run.measure;
+                        say(format!(
+                            "pw-perf: {} run {index}{}{}: open {:.0} ms, fling ≤16.7 ms {:.2}, diff {:.0} ms, checkout → status bar {:.0} ms, gutter {:.0} ms, typing block max {:.0} ms, commit fling ≤16.7 ms {:.2}, git add → staged {:.0} ms",
+                            repo.display(),
+                            if run.warmup { " (warm-up)" } else { "" },
+                            run.excluded
+                                .as_deref()
+                                .map_or(String::new(), |why| format!(" (excluded: {why})")),
+                            m.open_ms,
+                            m.fling.interval.within16_7,
+                            m.diff_ms,
+                            m.branch_ms,
+                            m.gutter_ms,
+                            m.typing.blocks.max_ms,
+                            m.commit_fling.interval.within16_7,
+                            m.stage_ms
+                        ));
+                        runs.push(run);
+                    }
+                    Err(e) => {
+                        say(format!(
+                            "pw-perf: {} run {index}{} failed: {}",
+                            repo.display(),
+                            if warmup { " (warm-up)" } else { "" },
+                            e.message
+                        ));
+                        failures.push(RunFailure {
+                            index,
+                            warmup,
+                            reason: e.message.clone(),
+                        });
+                        if e.fatal {
+                            stopped = Some(e.message);
+                        }
+                    }
+                }
+                if stopped.is_none()
+                    && let Err(e) = back
+                {
+                    stopped = Some(format!("cannot restore the repository: {e}"));
+                }
+                *repos.last_mut().expect("pushed above") = repo_result(
+                    repo,
+                    graph_before,
+                    expected[r],
+                    runs.clone(),
+                    failures.clone(),
+                );
+                write_git_report(opts, out, &repos, stopped.as_deref(), false)?;
+                if stopped.is_some() {
+                    break 'repos;
+                }
                 std::thread::sleep(Duration::from_secs(1));
             }
-            let summary = git::summarize_git(&runs);
-            let valid = runs
-                .iter()
-                .filter(|r| !r.warmup && r.excluded.is_none())
-                .count();
             let graph_after = has_commit_graph(repo);
             if graph_before != graph_after {
-                return Err(format!(
+                stopped = Some(format!(
                     "{}: commit-graph went from {graph_before} to {graph_after} during the runs — something wrote to the repository; recreate it",
                     repo.display()
                 ));
+                break;
             }
-            repos.push(RepoResult {
-                path: repo.display().to_string(),
-                commit_graph: graph_before,
-                commits: git_in(repo, &["rev-list", "--count", "--all"])
-                    .ok()
-                    .and_then(|n| n.trim().parse().ok()),
-                targets: git::git_targets(&summary),
-                summary,
-                valid_runs: valid,
-                runs,
-            });
         }
+        let report = write_git_report(opts, out, &repos, stopped.as_deref(), true)?;
+        if let Some(stopped) = stopped {
+            return Err(format!(
+                "{stopped} (the runs before it are in {})",
+                out.join("summary.md").display()
+            ));
+        }
+        Ok(report.warning.is_none())
+    }
+
+    fn repo_result(
+        repo: &Path,
+        commit_graph: bool,
+        commits: u64,
+        runs: Vec<GitRun>,
+        failures: Vec<RunFailure>,
+    ) -> RepoResult {
+        let summary = git::summarize_git(&runs);
+        RepoResult {
+            path: repo.display().to_string(),
+            commit_graph,
+            commits: Some(commits),
+            targets: git::git_targets(&summary),
+            summary,
+            valid_runs: runs
+                .iter()
+                .filter(|r| !r.warmup && r.excluded.is_none())
+                .count(),
+            runs,
+            failures,
+        }
+    }
+
+    /// 지금까지의 회로 `result.json` · `summary.md` 를 (다시) 쓴다. `last` 면 요약을 화면에도 낸다.
+    fn write_git_report(
+        opts: &Options,
+        out: &Path,
+        repos: &[RepoResult],
+        stopped: Option<&str>,
+        last: bool,
+    ) -> Result<GitReport, String> {
         let warning = repos.iter().find_map(|r| {
             too_few_valid(r.valid_runs, opts.runs).map(|w| format!("{}: {w}", r.path))
         });
@@ -849,24 +1011,33 @@ mod measure {
                 warmup: opts.warmup,
                 checkout: opts.checkout.clone(),
             },
-            repos,
+            repos: repos.to_vec(),
             warning,
+            stopped: stopped.map(str::to_owned),
         };
         let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
         std::fs::write(out.join("result.json"), json + "\n").map_err(|e| e.to_string())?;
         let md = git::git_report_markdown(&report);
         std::fs::write(out.join("summary.md"), &md).map_err(|e| e.to_string())?;
-        let _ = writeln!(std::io::stdout(), "{md}");
-        say(format!(
-            "pw-perf: wrote {} and {}",
-            out.join("result.json").display(),
-            out.join("summary.md").display()
-        ));
-        if let Some(warning) = &report.warning {
-            say(format!("pw-perf: warning: {warning}"));
+        if last {
+            let _ = writeln!(std::io::stdout(), "{md}");
+            say(format!(
+                "pw-perf: wrote {} and {}",
+                out.join("result.json").display(),
+                out.join("summary.md").display()
+            ));
+            if let Some(warning) = &report.warning {
+                say(format!("pw-perf: warning: {warning}"));
+            }
         }
-        Ok(report.warning.is_none())
+        Ok(report)
     }
+
+    /// 시나리오를 따라가며 표시 파일을 다시 읽는 간격. 측정하는 쪽의 반응 지연은 수치에 들지 않는다(시작점은 git 을 띄우기 직전의
+    /// 벽시계) — 프레임을 재는 동안 같은 기기에서 도는 일을 줄인다.
+    const POLL: Duration = Duration::from_millis(50);
+    /// 화면 잠금을 보는 간격(`ioreg` 를 띄운다).
+    const LOCK_CHECK: Duration = Duration::from_secs(2);
 
     /// 앱의 시나리오를 따라간다: 앱이 기다리는 일(체크아웃 · 파일 고치기 · `git add`)을 저장소에서 하고, 끝 표시가 오면 메모리를 잰다.
     fn observe_git(
@@ -876,6 +1047,7 @@ mod measure {
         index: usize,
         warmup: bool,
         repo: &Path,
+        commits: u64,
     ) -> Result<GitRun, String> {
         let Started {
             frame,
@@ -891,7 +1063,7 @@ mod measure {
             check_interrupted()?;
             if Instant::now() >= next_lock_check {
                 locked |= screen_locked()?;
-                next_lock_check = Instant::now() + Duration::from_millis(500);
+                next_lock_check = Instant::now() + LOCK_CHECK;
             }
             let all = marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
             match git::progress(&all, app_pid, acted) {
@@ -924,7 +1096,10 @@ mod measure {
                     git_in(repo, &["add", "--", &path])?;
                     continue;
                 }
-                Progress::Done(m) => break *m,
+                Progress::Done(m) => {
+                    git::check_rows(&m, commits).map_err(|e| format!("run {index}: {e}"))?;
+                    break *m;
+                }
                 Progress::Failed(e) => return Err(format!("run {index}: {e}")),
             }
             if !macos::alive(app_pid) {
@@ -938,7 +1113,7 @@ mod measure {
                     opts.scenario_timeout.as_secs()
                 ));
             }
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(POLL);
         };
         locked |= screen_locked()?;
         let ended = epoch_ms();
@@ -972,7 +1147,21 @@ mod measure {
 
     /// 저장소에서 git 을 돌린다(사람의 전역 · 시스템 설정과 훅은 읽지 않는다). 실패하면 stderr 를 붙여 돌려준다.
     fn git_in(repo: &Path, args: &[&str]) -> Result<String, String> {
-        let out = std::process::Command::new("git")
+        let mut command = std::process::Command::new("git");
+        // 물려받은 `GIT_DIR` · `GIT_WORK_TREE` · `GIT_INDEX_FILE` 류(git 훅 안에서 돌 때)가 다른 저장소를 가리키지 않게 지우고,
+        // 저장소가 아닌 폴더를 받았을 때 위의 저장소(이 워크트리 등)를 집지 않게 위로 찾기를 저장소의 부모에서 멈춘다.
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("GIT_") {
+                command.env_remove(key);
+            }
+        }
+        if let Some(parent) = std::fs::canonicalize(repo)
+            .ok()
+            .and_then(|r| r.parent().map(Path::to_path_buf))
+        {
+            command.env("GIT_CEILING_DIRECTORIES", parent);
+        }
+        let out = command
             .arg("-C")
             .arg(repo)
             // 커밋 뒤 자동 유지보수(git 2.54 의 `maintenance run --auto --detach`)가 「commit-graph 없음」 저장소에 그래프를 쓰지 않게.

@@ -23,6 +23,7 @@ pub const TARGET_BRANCH_MS: f64 = 500.0;
 /// 저장 안 한 한 줄 편집 → 그 줄의 수정 표시(M2-17).
 pub const TARGET_GUTTER_MS: f64 = 100.0;
 /// 5,000줄 파일에서 초당 10자 30초 타이핑 중 메인 스레드가 한 번에 막힌 시간의 최댓값(M2-17 — 「50 ms 넘는 롱태스크가 없다」).
+/// 「없다」 라서 중앙값이 아니라 유효한 회 **모두**의 최댓값으로 판정한다 — 한 회라도 넘으면 넘은 것이다.
 pub const TARGET_BLOCK_MS: f64 = 50.0;
 /// 1만 개 바뀐 파일의 커밋 목록을 끝까지 스크롤할 때 16.7 ms 안인 프레임의 몫(M2-16 — M1-14 와 같은 기준).
 pub const TARGET_COMMIT_SCROLL_SHARE: f64 = 0.95;
@@ -45,6 +46,8 @@ pub const DEFINITIONS: GitDefinitions = GitDefinitions {
     commit_scroll: "the harness appends a line to each of the 10,000 files in perf/many; after ⌘0 (webview event) and every row arrived (row count unchanged for 1 s): fling = top to bottom in 1500 frames, steady = 2 rows per frame for 600 frames; share within 16.7 ms judged on fling",
     stage: "from the harness's wall clock just before it runs `git add <file>` in the repository to the webview's wall clock at the frame after that file's row appeared in the staged group",
     memory: "phys_footprint of the app instance right after the scenario finished (100k rows loaded, one commit tab and perf/typing.rs open, 10,000 changed files listed); not an idle baseline",
+    judgement: "medians over valid measured runs, except the typing block: it is judged on the largest block of every valid run (\"no long task over 50 ms\" fails if any run has one); a run whose Git log row count differs from `git rev-list --count --all` fails",
+    trust: "the project is registered untrusted (the default): blame uses the native (gix) engine, the git CLI paths of trusted projects are not measured",
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,6 +61,8 @@ pub struct GitDefinitions {
     pub commit_scroll: &'static str,
     pub stage: &'static str,
     pub memory: &'static str,
+    pub judgement: &'static str,
+    pub trust: &'static str,
 }
 
 /// src/perf-frames.ts 의 `FrameStats`.
@@ -416,6 +421,26 @@ pub struct GitSummary {
     pub footprint_bytes: Option<Summary>,
 }
 
+/// 끝나지 못한 회 하나.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunFailure {
+    pub index: usize,
+    pub warmup: bool,
+    pub reason: String,
+}
+
+/// Git 로그가 저장소의 커밋을 모두 보였는가(「10만 행을 끝까지」 — 덜 받은 채 멈춘 목록을 스크롤한 회는 잰 것이 아니다).
+pub fn check_rows(measure: &Measure, commits: u64) -> Result<(), String> {
+    if measure.rows == commits {
+        Ok(())
+    } else {
+        Err(format!(
+            "the Git log settled at {} rows but the repository has {commits} commits (git rev-list --count --all)",
+            measure.rows
+        ))
+    }
+}
+
 /// 중앙값이 목표 안인가(값이 없으면 `None`).
 #[derive(Debug, Clone, Serialize)]
 pub struct GitTargets {
@@ -442,9 +467,11 @@ pub struct RepoResult {
     pub path: String,
     /// `.git/objects/info/commit-graph`(또는 `commit-graphs/`)가 있었는가.
     pub commit_graph: bool,
-    /// `git rev-list --count --all`.
+    /// `git rev-list --count --all` — Git 로그 목록이 보여야 하는 행 수.
     pub commits: Option<u64>,
     pub runs: Vec<GitRun>,
+    /// 끝나지 못한 회(멈춤 · 단계 실패 · 행 수 어긋남). 요약에 들지 않는다.
+    pub failures: Vec<RunFailure>,
     pub valid_runs: usize,
     pub summary: GitSummary,
     pub targets: GitTargets,
@@ -495,9 +522,10 @@ pub fn git_targets(summary: &GitSummary) -> GitTargets {
         diff_met: summary.diff_ms.map(|s| s.median <= TARGET_DIFF_MS),
         branch_met: summary.branch_ms.map(|s| s.median <= TARGET_BRANCH_MS),
         gutter_met: summary.gutter_ms.map(|s| s.median <= TARGET_GUTTER_MS),
+        // 「없다」: 유효한 회 모두의 최댓값(중앙값은 참고로만 표에 싣는다).
         block_met: summary
             .typing_max_block_ms
-            .map(|s| s.median <= TARGET_BLOCK_MS),
+            .map(|s| s.max <= TARGET_BLOCK_MS),
         commit_scroll_met: summary
             .commit_fling_within16_7
             .map(|s| s.median >= TARGET_COMMIT_SCROLL_SHARE),
@@ -544,12 +572,19 @@ pub struct GitReport {
     pub repos: Vec<RepoResult>,
     /// 유효한 회가 어느 저장소에서든 `--runs` 의 절반보다 적을 때. 있으면 pw-perf 는 3 으로 끝난다.
     pub warning: Option<String>,
+    /// 측정을 끝까지 하지 못하고 멈춘 까닭(중단 신호 · 저장소를 되돌리지 못함 · 앱을 치우지 못함). 그때까지의 회는 남긴다.
+    pub stopped: Option<String>,
 }
 
 /// git 시나리오의 `summary.md`.
 pub fn git_report_markdown(report: &GitReport) -> String {
     let mut md =
         String::from("## Pitwall git scenario (M2-13 · M2-14 · M2-15 · M2-16 · M2-17)\n\n");
+    if let Some(stopped) = &report.stopped {
+        md.push_str(&format!(
+            "> **Stopped early:** {stopped}. The tables hold the runs before it.\n\n"
+        ));
+    }
     if let Some(warning) = &report.warning {
         md.push_str(&format!("> **Warning:** {warning}.\n\n"));
     }
@@ -566,7 +601,7 @@ pub fn git_report_markdown(report: &GitReport) -> String {
         &report.hardware,
     ));
     md.push_str(&format!(
-        "\n- runs per repository: {} measured + {} warm-up · checkout branch `{}` · medians over valid measured runs\n",
+        "\n- runs per repository: {} measured + {} warm-up · checkout branch `{}` · medians over valid measured runs, except the typing block (largest over every valid run) · project registered untrusted\n",
         report.settings.runs, report.settings.warmup, report.settings.checkout
     ));
     md.push_str(&git_markdown(&report.repos));
@@ -636,9 +671,9 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
                 t.gutter_met,
             ),
             (
-                "typing 30 s: longest main-thread block (M2-17)",
+                "typing 30 s: longest main-thread block (M2-17, judged on the max)",
                 cell(s.typing_max_block_ms, " ms"),
-                format!("≤ {TARGET_BLOCK_MS} ms"),
+                format!("max ≤ {TARGET_BLOCK_MS} ms in every run"),
                 t.block_met,
             ),
             (
@@ -711,6 +746,17 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
                 m.scroll_viewport.width,
                 m.scroll_viewport.height
             ));
+        }
+        if !repo.failures.is_empty() {
+            md.push_str("\n| Failed run | Reason |\n|---|---|\n");
+            for f in &repo.failures {
+                md.push_str(&format!(
+                    "| {}{} | {} |\n",
+                    f.index,
+                    if f.warmup { " (warm-up)" } else { "" },
+                    f.reason.replace('|', "\\|").replace('\n', " ")
+                ));
+            }
         }
     }
     md
@@ -876,6 +922,70 @@ mod tests {
         assert!(why.contains("not a file right under perf/many"), "{why}");
     }
 
+    /// 목록이 저장소의 커밋을 다 받지 못한 채 멈췄으면 그 회는 실패다.
+    #[test]
+    fn a_run_whose_log_rows_differ_from_the_commit_count_fails() {
+        let pid = 42;
+        let done = parse(
+            &[
+                until_ready(pid),
+                until_changes(pid),
+                line(
+                    "stage_ready",
+                    pid,
+                    11.0,
+                    serde_json::json!({"path": "perf/many/f00000.txt"}),
+                ),
+                line(
+                    "staged_shown",
+                    pid,
+                    12.0,
+                    serde_json::json!({"path": "perf/many/f00000.txt", "epochMs": 20_210.0}),
+                ),
+                line("scenario_done", pid, 13.0, serde_json::json!({})),
+            ]
+            .concat(),
+        );
+        let acted = Acted {
+            checked_out_at: Some(10_000.0),
+            changed: true,
+            staged_at: Some(20_000.0),
+        };
+        let Progress::Done(m) = progress(&done, pid, acted) else {
+            panic!("not done");
+        };
+        assert_eq!(check_rows(&m, 100_002), Ok(()));
+        let why = check_rows(&m, 100_003).unwrap_err();
+        assert!(
+            why.contains("settled at 100002 rows") && why.contains("100003 commits"),
+            "{why}"
+        );
+    }
+
+    /// 끝나지 못한 회와 멈춘 까닭이 요약에 남는다.
+    #[test]
+    fn the_summary_lists_failed_runs_and_why_the_measurement_stopped() {
+        let repo = RepoResult {
+            path: "target/perf-git/graph".into(),
+            commit_graph: true,
+            commits: Some(100_003),
+            runs: Vec::new(),
+            failures: vec![RunFailure {
+                index: 2,
+                warmup: false,
+                reason: "run 2: the scenario did not finish within 420s".into(),
+            }],
+            valid_runs: 0,
+            summary: summarize_git(&[]),
+            targets: git_targets(&summarize_git(&[])),
+        };
+        let md = git_markdown(std::slice::from_ref(&repo));
+        assert!(
+            md.contains("| 2 | run 2: the scenario did not finish within 420s |"),
+            "{md}"
+        );
+    }
+
     #[test]
     fn every_file_in_the_changes_folder_gets_one_more_line() {
         let repo = std::env::temp_dir().join(format!("pw-perf-changes-{}", std::process::id()));
@@ -957,5 +1067,11 @@ mod tests {
         };
         assert_eq!(met(git_targets(&summary(0.0))), [Some(true); 8]);
         assert_eq!(met(git_targets(&summary(0.1))), [Some(false); 8]);
+        // 막힘은 중앙값이 아니라 최댓값: 다섯 회 중 두 회가 넘으면 중앙값(40)이 안이어도 넘은 것이다.
+        let mut s = summary(0.0);
+        s.typing_max_block_ms = summarize(&[30.0, 35.0, 40.0, 80.0, 120.0]);
+        assert_eq!(git_targets(&s).block_met, Some(false));
+        s.typing_max_block_ms = summarize(&[30.0, 35.0, 40.0, 45.0, 50.0]);
+        assert_eq!(git_targets(&s).block_met, Some(true));
     }
 }
