@@ -18,9 +18,11 @@ import type {
   ProjectTrust,
 } from "@pitwall/rpc-client";
 import type { DockviewApi } from "dockview-react";
-import { act, StrictMode } from "react";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import { act as reactAct, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it as vitestIt, vi } from "vitest";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { App } from "../App";
@@ -313,6 +315,28 @@ function lines(n: number): string {
   return Array.from({ length: n }, (_, i) => `line ${i + 1} — some text`).join("\n");
 }
 
+// 시간 초과한 시험의 본문은 멈추지 않고 계속 돈다 — 그대로 두면 다음 시험의 act · DOM · inbox 와 겹쳐 이 파일의 시험이 줄줄이
+// 실패한다(부하에서 26 개). 시험마다 토큰을 달고, 끝난 시험이 act 를 부르면 던져서 본문을 끊는다.
+const testToken = new AsyncLocalStorage<{ ended: boolean }>();
+let liveToken: { ended: boolean } | undefined;
+const inFlight = new Set<PromiseLike<unknown>>();
+const act = ((callback: Parameters<typeof reactAct>[0]) => {
+  if (testToken.getStore()?.ended) throw new Error("이 시험은 이미 끝났다");
+  const result = reactAct(callback as never) as PromiseLike<unknown> | undefined;
+  if (typeof result?.then === "function") {
+    inFlight.add(result);
+    const done = () => void inFlight.delete(result);
+    void result.then(done, done);
+  }
+  return result;
+}) as typeof reactAct;
+const it = (name: string, body: () => Promise<void>) =>
+  vitestIt(name, () => {
+    const token = { ended: false };
+    liveToken = token;
+    return testToken.run(token, body);
+  });
+
 let root: Root | undefined;
 let themeStore: ReturnType<typeof createThemeStore> | undefined;
 let dock: DockviewApi | undefined;
@@ -342,10 +366,16 @@ beforeEach(() => {
   localStorage.clear();
 });
 
-afterEach(() => {
-  act(() => root?.unmount());
+afterEach(async () => {
+  // 시험이 중간에 실패해도 다음 시험으로 넘기지 않는다: 진행 중인 act 를 비우고 나서 내린다.
+  if (liveToken) liveToken.ended = true;
+  await Promise.race([Promise.allSettled(inFlight), new Promise((r) => setTimeout(r, 1000))]);
+  inFlight.clear();
+  await reactAct(async () => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
+  closeGuard = undefined;
+  menuListener = undefined;
   vi.restoreAllMocks();
 });
 
@@ -687,7 +717,7 @@ it("brings tabs back once from the worktree's tab set, never from the saved layo
   expect(localStorage.getItem(LAYOUT_STORAGE_KEY)).toBeNull();
 });
 
-it("restores each project's layout and five tabs with the active tab and cursor line after a restart", async () => {
+it("restores five tabs with the active tab, cursor line and a hidden project panel after a restart", async () => {
   const files = [1, 2, 3, 4, 5].map((n) => `/work/demo/src/f${n}.rs`);
   for (const f of files) host.files.set(f, lines(50));
   await mount();
@@ -705,18 +735,44 @@ it("restores each project's layout and five tabs with the active tab and cursor 
     { timeout: 2000 },
   );
 
-  await restart("p2");
-  expect(editorTabs()).toEqual([]);
-  expect(dock!.getPanel("project")).toBeDefined();
-  await openRequest(MAIN, 7);
-  await vi.waitFor(() => expect(savedState("p2")?.main?.tabs).toHaveLength(1), { timeout: 2000 });
-
   await restart("p1");
   expect(editorTabs().map((t) => t.path)).toEqual(files);
   expect(activeTabTitle()).toBe("f3.rs");
   const active = views().find((v) => v.hasFocus) ?? views()[2]!;
   expect(cursorOf(active)).toEqual({ line: 33, column: 4 });
   expect(dock!.getPanel("project")).toBeUndefined();
+});
+
+// 위 시험과 나눈 것은 한 시험에서 다시 띄움을 세 번 겪으면 부하에서 5 초 제한을 넘기기 때문이다. 여기서는 저장 디바운스를
+// 기다리지 않고 창을 닫을 때의 즉시 저장(`closeGuard`)으로 저장본을 만든다 — 디바운스는 위 시험과 「한 번만 되살린다」 시험이 본다.
+it("keeps each project's layout and tabs apart across restarts", async () => {
+  await mount();
+  await openRequest(LIB, 12);
+  await act(async () => dock!.getPanel("project")!.api.close());
+  await settle();
+  await act(async () => (await closeGuard!()) || undefined);
+  expect(savedState()?.main?.tabs).toHaveLength(1);
+  expect(JSON.stringify(savedState()?.layout)).toContain('"hidden":{"project"');
+
+  await restart("p2");
+  expect(editorTabs()).toEqual([]);
+  expect(dock!.getPanel("project")).toBeDefined();
+  await openRequest(MAIN, 7);
+  await act(async () => (await closeGuard!()) || undefined);
+  expect(savedState("p2")?.main?.tabs).toHaveLength(1);
+
+  await restart("p1");
+  expect(editorTabs().map((t) => t.path)).toEqual([LIB]);
+  expect(cursorOf(views()[0]!).line).toBe(12);
+  expect(dock!.getPanel("project")).toBeUndefined();
+});
+
+it("restores the other project's tab, cursor line and default layout after a restart", async () => {
+  window.history.replaceState(null, "", "/?window=project&project=p2");
+  await mount();
+  await openRequest(MAIN, 7);
+  await act(async () => (await closeGuard!()) || undefined);
+  expect(savedState("p2")?.main?.tabs).toHaveLength(1);
 
   await restart("p2");
   expect(editorTabs().map((t) => t.path)).toEqual([MAIN]);

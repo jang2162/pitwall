@@ -19,6 +19,9 @@ import { FakeSource, type Harness, openEditor, textBlob } from "./testing";
 
 const LINES = 5000;
 const KEYS = 300;
+// 300 자를 한 시험에 넣으면 부하(빌드와 함께 도는 전체 실행)에서 5 초 제한을 넘는다 — 같은 일을 세 시험으로 나눈다. 키마다의 단언은
+// 그대로고, 나눈 시험마다 처음부터 다시 연다.
+const BATCH = 100;
 /** 키 사이(초당 10자). */
 const KEY_MS = 100;
 
@@ -70,41 +73,44 @@ async function settle() {
   for (let i = 0; i < 4; i++) await Promise.resolve();
 }
 
-it(`types ${KEYS} characters into a ${LINES}-line file with one small comparison per key`, async () => {
-  const text = bigFile();
-  h = openEditor({ text, source: bigSource(text) });
-  h.view.focus = () => {};
-  vi.spyOn(h.view, "hasFocus", "get").mockReturnValue(true);
-  await ready(h);
-  toggleAnnotations(h.view);
-  const doc = h.view.plugin(gutterLink)!.doc!;
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const durations: number[] = [];
-  for (let i = 0; i < KEYS; i++) {
-    const before = doc.recomputes;
-    // 문서 가운데 줄 끝에 한 자씩(그 줄과 한 칸씩 아래 줄을 오간다).
-    const line = h.view.state.doc.line(LINES / 2 + (i % 20));
-    const t0 = performance.now();
-    h.view.dispatch({
-      changes: { from: line.to, insert: "x" },
-      selection: { anchor: line.to + 1 },
-      userEvent: "input.type",
-    });
-    vi.advanceTimersByTime(KEY_MS);
-    await settle();
-    durations.push(performance.now() - t0);
-    expect(doc.recomputes - before).toBe(1);
-    // 고친 줄이 hunk 에 이어 붙는 동안 가운데는 그 줄들(두 쪽)뿐이다 — 고친 줄이 20개라 가장 많아도 40.
-    expect(doc.lastStats.middle).toBeLessThanOrEqual(40);
-    expect(doc.lastStats.cost).toBeLessThanOrEqual(40);
-    expect(doc.lastStats.anchored).toBe(0);
-  }
-  durations.sort((a, b) => a - b);
-  console.info(
-    `[perf] gutter typing ${LINES} lines × ${KEYS} keys (wall clock, not asserted): p50 ${durations[Math.floor(KEYS / 2)]!.toFixed(2)} ms, p99 ${durations[Math.floor(KEYS * 0.99)]!.toFixed(2)} ms, max ${durations.at(-1)!.toFixed(2)} ms`,
-  );
-  expect(h.view.state.field(gutterState).hunks).toHaveLength(1);
-});
+it.each(Array.from({ length: KEYS / BATCH }, (_, n) => n * BATCH))(
+  `types ${BATCH} characters into a ${LINES}-line file with one small comparison per key (keys from %i of ${KEYS})`,
+  async (first) => {
+    const text = bigFile();
+    h = openEditor({ text, source: bigSource(text) });
+    h.view.focus = () => {};
+    vi.spyOn(h.view, "hasFocus", "get").mockReturnValue(true);
+    await ready(h);
+    toggleAnnotations(h.view);
+    const doc = h.view.plugin(gutterLink)!.doc!;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const durations: number[] = [];
+    for (let i = first; i < first + BATCH; i++) {
+      const before = doc.recomputes;
+      // 문서 가운데 줄 끝에 한 자씩(그 줄과 한 칸씩 아래 줄을 오간다).
+      const line = h.view.state.doc.line(LINES / 2 + (i % 20));
+      const t0 = performance.now();
+      h.view.dispatch({
+        changes: { from: line.to, insert: "x" },
+        selection: { anchor: line.to + 1 },
+        userEvent: "input.type",
+      });
+      vi.advanceTimersByTime(KEY_MS);
+      await settle();
+      durations.push(performance.now() - t0);
+      expect(doc.recomputes - before).toBe(1);
+      // 고친 줄이 hunk 에 이어 붙는 동안 가운데는 그 줄들(두 쪽)뿐이다 — 고친 줄이 20개라 가장 많아도 40.
+      expect(doc.lastStats.middle).toBeLessThanOrEqual(40);
+      expect(doc.lastStats.cost).toBeLessThanOrEqual(40);
+      expect(doc.lastStats.anchored).toBe(0);
+    }
+    durations.sort((a, b) => a - b);
+    console.info(
+      `[perf] gutter typing ${LINES} lines × ${BATCH} keys from ${first} (wall clock, not asserted): p50 ${durations[Math.floor(BATCH / 2)]!.toFixed(2)} ms, p99 ${durations[Math.floor(BATCH * 0.99)]!.toFixed(2)} ms, max ${durations.at(-1)!.toFixed(2)} ms`,
+    );
+    expect(h.view.state.field(gutterState).hunks).toHaveLength(1);
+  },
+);
 
 it(`marks an edit of a ${LINES}-line file once RECOMPUTE_MS (< 100 ms) has passed`, async () => {
   expect(RECOMPUTE_MS).toBeLessThan(100);
