@@ -10,7 +10,8 @@
 //   경고만.
 // - amend 를 켜면 메시지 칸이 비었거나 템플릿 그대로일 때 HEAD 의 메시지(`git.show`)를 채우고, 끄면 그 메시지가 그대로일 때 켜기 전의
 //   칸으로 돌린다.
-// - ref 를 옮긴 amend 의 [되돌리기] 단추는 작업 결과 알림의 주인(M2-20)이 단다 — 여기는 알림에 이전 → 지금 해시를 적는다.
+// - amend 는 ref 를 옮긴 쓰기다: 결과의 `moved` 로 M2-20 의 액션 `git.undo.offer { move, mode: "soft" }` 를 부른다 — 그 알림(이전 →
+//   지금 해시)에 [되돌리기](soft reset — index 의 고친 내용은 남는다)를 단다. 그 액션이 이 창에 없으면 단추 없이 해시만 알린다.
 
 import type { ActionRegistry } from "@pitwall/keymap";
 import type { StashEntry } from "@pitwall/rpc-client";
@@ -23,6 +24,8 @@ import type { GitCommitStrings } from "./strings";
 
 /** 푸시 다이얼로그(M2-20 의 주인 — 행 사이 이음매). */
 export const PUSH_OPEN = "git.push.open";
+/** ref 를 옮긴 쓰기의 알림과 [되돌리기](M2-20 의 주인 — 행 사이 이음매). */
+export const UNDO_OFFER = "git.undo.offer";
 
 export interface CommitOutput {
   readonly failed: boolean;
@@ -167,12 +170,14 @@ export async function runCommit(feature: CommitFeature, push: boolean): Promise<
     anchor: undefined,
     output: output !== "" ? { failed: false, text: result.output } : undefined,
   });
-  feature.notify({
-    level: "info",
-    title: s.amend
-      ? T.result.amended(short(result.moved.previous), short(result.commit))
-      : T.result.done(short(result.commit)),
-  });
+  if (!s.amend) feature.notify({ level: "info", title: T.result.done(short(result.commit)) });
+  else if (feature.registry.isAvailable(UNDO_OFFER))
+    feature.registry.run(UNDO_OFFER, { move: result.moved, mode: "soft" });
+  else
+    feature.notify({
+      level: "info",
+      title: T.result.amended(short(result.moved.previous), short(result.commit)),
+    });
   void fillTemplate(feature);
   if (push) {
     if (feature.registry.isAvailable(PUSH_OPEN)) feature.registry.run(PUSH_OPEN);

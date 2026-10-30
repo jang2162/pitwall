@@ -4,6 +4,10 @@
 // 출력과 같은지 본다): 체크를 눌러 창이 보낸 `git.stageLines` 요청이 그 JSON 의 요청과 같으면, 그 요청을 진짜 git 으로 돌린 뒤의
 // `git show --stat` 이 JSON 의 `stat` 이다.
 //
+// 위험 작업 확인(M2-20 의 부품 — 변경 되돌리기 · 묶음 되돌리기 · stash 버리기)과 amend 의 [되돌리기] 는 fixtures/discard.json 이 답이다
+// (crates/pw-git `commit::tests::discard_fixture` 가 진짜 pw-git · git 으로 돌려 만들고 같은지 본다): 확인 목록이 그 git 이 실제로 바꾼
+// 것과 같고, 취소하면 아무것도 부르지 않고, 확인하면 보낸 요청이 그 git 으로 돌린 요청과 같다.
+//
 // 액션은 키 · 다른 행이 부르는 길 그대로 부른다(⌘↩ 키, `registry.run`).
 
 import { ActionRegistry } from "@pitwall/keymap";
@@ -36,6 +40,7 @@ import { parseTheme } from "../../theme/tokens";
 import { diffPreferences } from "../documents/changes-view";
 import { resetWindowGitStatus } from "../git-status";
 import { commitPanel, resetCommitPanel } from "./commit-state";
+import discardFixture from "./fixtures/discard.json";
 import fixture from "./fixtures/stage-commit.json";
 
 declare global {
@@ -77,7 +82,11 @@ const host = vi.hoisted(() => ({
   /** 진행 중 작업(`git.operation`). */
   operation: null as unknown,
   emit: (_topic: string, _payload: unknown) => {},
-  fixture: undefined as unknown as typeof FIXTURE,
+  fixture: undefined as unknown as Pick<typeof FIXTURE, "steps" | "staged">,
+  /** `git.stash.list` 의 답. */
+  stashes: [] as unknown[],
+  /** 있으면 `git.commit` 의 `moved`. */
+  moved: undefined as unknown,
 }));
 
 vi.mock("../../tauri-transport", async () => {
@@ -218,7 +227,19 @@ vi.mock("../../tauri-transport", async () => {
           case "git.commit.template":
             return reply({ template: host.template, commentChar: host.commentChar });
           case "git.stash.list":
-            return reply({ workTree: "/repo", stashes: [] });
+            return reply({ workTree: "/repo", stashes: host.stashes });
+          case "git.stash.drop":
+          case "git.discardLines":
+            return reply({ workTree: "/repo" });
+          case "git.reset":
+            return reply({
+              moved: {
+                refName: params.expectedRef,
+                previous: params.expected,
+                current: params.commit,
+              },
+              workTree: "/repo",
+            });
           case "git.stageLines":
             host.step++;
             return reply({ workTree: "/repo" });
@@ -256,7 +277,7 @@ vi.mock("../../tauri-transport", async () => {
               });
             return reply({
               commit: "c0ffee0000000000000000000000000000000000",
-              moved: {
+              moved: host.moved ?? {
                 refName: "refs/heads/main",
                 previous: "aaaaaaa000000000000000000000000000000000",
                 current: "c0ffee0000000000000000000000000000000000",
@@ -340,6 +361,8 @@ beforeEach(() => {
   host.commentChar = "#";
   host.holdCommit = undefined;
   host.fixture = FIXTURE;
+  host.stashes = [];
+  host.moved = undefined;
   activeWorktreeStore.setState({ top: undefined });
   diffPreferences.setState({ mode: "split" });
   resetWindowFileTree();
@@ -417,13 +440,13 @@ const row = (key: string) => document.querySelector<HTMLElement>(`[data-commit-i
 const messageBox = () => document.querySelector<HTMLTextAreaElement>("[data-commit-message]");
 const calls = (method: string) => host.calls.filter((c) => c.method === method);
 
-/** ⌘K 로 커밋 툴 윈도우를 연다(메시지 칸에 포커스가 든다). */
-async function openCommitWindow() {
+/** ⌘K 로 커밋 툴 윈도우를 연다(메시지 칸에 포커스가 든다). `first` 행이 그려질 때까지 기다린다. */
+async function openCommitWindow(first = "changes:src/app.rs") {
   await mount();
   await act(async () => {
     windowRegistry().run("git.commit");
   });
-  await vi.waitFor(() => expect(row("changes:src/app.rs")).not.toBeNull());
+  await vi.waitFor(() => expect(row(first)).not.toBeNull());
   await vi.waitFor(() => expect(document.activeElement).toBe(messageBox()));
 }
 
@@ -593,11 +616,8 @@ it("rolls back the selected file with ⌘⌥Z only after the confirmation", asyn
     row("changes:src/app.rs")!.closest<HTMLElement>("[data-commit-list]")!.focus(),
   );
   await key(document.activeElement!, { key: "z", code: "KeyZ", metaKey: true, altKey: true });
-  const confirm = await vi.waitFor(() => {
-    const b = [...document.querySelectorAll("button")].find((x) => x.textContent === "되돌리기");
-    expect(b).toBeDefined();
-    return b!;
-  });
+  // 다이얼로그 안의 단추다 — 앞 시험의 토스트(sonner 는 시험 사이에 남는다)에도 「되돌리기」 가 있다.
+  const confirm = dialogButton(await confirmDialog(), "되돌리기");
   expect(calls("git.discard")).toHaveLength(0);
   await click(confirm);
   await vi.waitFor(() => expect(calls("git.discard")).toHaveLength(1));
@@ -685,12 +705,7 @@ it("rolls back a staged rename with the old path too (review F2)", async () => {
   await act(async () => {
     windowRegistry().run("git.rollback");
   });
-  const confirm = await vi.waitFor(() => {
-    const b = [...document.querySelectorAll("button")].find((x) => x.textContent === "되돌리기");
-    expect(b).toBeDefined();
-    return b!;
-  });
-  await click(confirm);
+  await click(dialogButton(await confirmDialog(), "되돌리기"));
   await vi.waitFor(() => expect(calls("git.discard")).toHaveLength(1));
   expect(calls("git.unstage")[0]!.params.paths).toEqual(["src/new.rs", "src/old.rs"]);
   expect(calls("git.discard")[0]!.params).toMatchObject({
@@ -730,4 +745,229 @@ it("locks the message box while committing (review F6)", async () => {
   await act(async () => release());
   await vi.waitFor(() => expect(messageBox()!.readOnly).toBe(false));
   expect(messageBox()!.value).toBe("");
+});
+
+interface Rollback {
+  entries: GitStatusEntry[];
+  unstage: string[];
+  discard: string[];
+  lost: string[];
+  kept: string[];
+}
+
+const DISCARD = discardFixture as unknown as {
+  rollback: Rollback;
+  rollbackChanges: Rollback;
+  hunk: Step & { path: string; request: { path: string; hunks: unknown[] }; after: string };
+  stash: {
+    stashes: { index: number; commit: string; message: string }[];
+    request: { index: number; commit: string };
+    after: unknown[];
+  };
+  amend: { moved: { refName: string; previous: string; current: string }; request: object };
+};
+
+/** 떠 있는 위험 작업 확인(M2-20 의 부품). */
+const confirmDialog = () =>
+  vi.waitFor(() => {
+    const d = document.querySelector<HTMLElement>('[data-testid="git-confirm-dialog"]');
+    expect(d).not.toBeNull();
+    return d!;
+  });
+
+const dialogButton = (dialog: HTMLElement, label: string) =>
+  [...dialog.querySelectorAll("button")].find((b) => b.textContent === label)!;
+
+/** 위험 표시가 있고 처음 포커스가 취소다(M2-20 의 다른 확인과 같다). */
+function expectDanger(dialog: HTMLElement) {
+  expect(dialog.dataset.danger).toBe("true");
+  expect(dialog.querySelector('[aria-label="Pitwall 에서 되돌릴 수 없다"]')).not.toBeNull();
+  expect(document.activeElement).toBe(dialogButton(dialog, "취소"));
+}
+
+/** 제목에 `title` 이 든 토스트(sonner — 앞 시험의 토스트가 남아 있다)의 단추. */
+const toastButton = (title: string, label: string) =>
+  vi.waitFor(() => {
+    const toast = [...document.querySelectorAll<HTMLElement>("[data-sonner-toast]")].find((t) =>
+      t.textContent?.includes(title),
+    );
+    const b = [...(toast?.querySelectorAll("button") ?? [])].find((e) => e.textContent === label);
+    if (!b) throw new Error(`no toast button ${label} for ${title}`);
+    return b;
+  });
+
+/** 변경 그룹(`stagedToo` 면 스테이징됨 그룹도)의 파일을 모두 고르고 ⌘⌥Z 의 확인을 띄운다. */
+async function rollbackEverything({ entries }: Rollback, stagedToo = true) {
+  const staged = stagedToo
+    ? entries.filter((e) => e.staged && e.unstaged !== "untracked").map((e) => e.path)
+    : [];
+  const changes = entries
+    .filter((e) => e.unstaged && e.unstaged !== "untracked")
+    .map((e) => e.path);
+  await click(row(stagedToo ? `staged:${staged[0]}` : `changes:${changes[0]}`)!);
+  await click(row(`changes:${changes.at(-1)}`)!, { shiftKey: true });
+  expect(commitPanel.getState().selected).toHaveLength(staged.length + changes.length);
+  await act(async () => {
+    windowRegistry().run("git.rollback");
+  });
+  return confirmDialog();
+}
+
+it("lists exactly what git changes on disk before rolling back, and nothing when cancelled", async () => {
+  host.entries = DISCARD.rollback.entries;
+  await openCommitWindow("staged:added.txt");
+  const dialog = await rollbackEverything(DISCARD.rollback);
+  expectDanger(dialog);
+  // 잃는 것: 목록의 줄 → 디스크에서 바뀌는 경로(이름 바뀜 「옛 → 새」 은 HEAD 의 것으로 돌아오는 옛 경로).
+  const lost = [...dialog.querySelectorAll('[data-testid="git-lost-list"] li')].map(
+    (li) => li.textContent!,
+  );
+  expect(lost).toEqual([
+    "added-gone.txt",
+    "gone.txt",
+    "mod.txt",
+    "old.txt → new.txt",
+    "staged.txt",
+    "old.txt",
+  ]);
+  expect(new Set(lost.map((l) => l.split(" → ")[0]))).toEqual(new Set(DISCARD.rollback.lost));
+  // 남는 것: 본문의 「지우지 않는다」 아래 줄이 git 이 그대로 둔 파일이다.
+  const body = dialog.querySelector(".whitespace-pre-line")!.textContent!.split("\n");
+  const kept = body.slice(body.findIndex((l) => l.includes("지우지 않고")) + 1);
+  expect(kept).toEqual(DISCARD.rollback.kept);
+  await click(dialogButton(dialog, "취소"));
+  await settle(50);
+  expect(calls("git.unstage")).toHaveLength(0);
+  expect(calls("git.discard")).toHaveLength(0);
+  expect(document.querySelector('[data-testid="git-confirm-dialog"]')).toBeNull();
+});
+
+it("rolls back with the requests git ran for that list after the confirmation", async () => {
+  host.entries = DISCARD.rollback.entries;
+  await openCommitWindow("staged:added.txt");
+  const dialog = await rollbackEverything(DISCARD.rollback);
+  await click(dialogButton(dialog, "되돌리기"));
+  await vi.waitFor(() => expect(calls("git.discard")).toHaveLength(1));
+  expect(calls("git.unstage").map((c) => c.params.paths)).toEqual([DISCARD.rollback.unstage]);
+  expect(calls("git.discard")[0]!.params).toMatchObject({
+    paths: DISCARD.rollback.discard,
+    confirmed: true,
+  });
+});
+
+it("rolls back only the work tree when only the changes group is chosen, keeping intent-to-add files", async () => {
+  const fx = DISCARD.rollbackChanges;
+  host.entries = fx.entries;
+  await openCommitWindow("changes:ita.txt");
+  const dialog = await rollbackEverything(fx, false);
+  expectDanger(dialog);
+  const lost = [...dialog.querySelectorAll('[data-testid="git-lost-list"] li')].map(
+    (li) => li.textContent!,
+  );
+  expect(lost).toEqual(fx.lost);
+  const body = dialog.querySelector(".whitespace-pre-line")!.textContent!.split("\n");
+  expect(body.slice(body.findIndex((l) => l.includes("지우지 않고")) + 1)).toEqual(fx.kept);
+  await click(dialogButton(dialog, "되돌리기"));
+  await vi.waitFor(() => expect(calls("git.discard")).toHaveLength(1));
+  expect(calls("git.unstage")).toHaveLength(0);
+  expect(fx.unstage).toEqual([]);
+  expect(calls("git.discard")[0]!.params).toMatchObject({ paths: fx.discard, confirmed: true });
+});
+
+it("shows the hunk's lines before reverting it and sends the request git ran", async () => {
+  const step = DISCARD.hunk;
+  host.fixture = { steps: [step], staged: step };
+  host.entries = [MODIFIED];
+  await openCommitWindow();
+  await click(row("changes:src/app.rs")!);
+  const revert = () => document.querySelector<HTMLElement>(".cm-merge-b [data-stage-revert]");
+  await vi.waitFor(() => expect(revert()).toBeTruthy());
+  await click(revert()!);
+  let dialog = await confirmDialog();
+  expectDanger(dialog);
+  const shown = dialog
+    .querySelector('[data-testid="git-confirm-detail"]')!
+    .textContent!.split("\n");
+  const { hunk, lines } = step.request.hunks[0] as {
+    hunk: { lines: { kind: string; text: string }[] };
+    lines: number[];
+  };
+  expect(shown).toEqual(
+    lines.map((i) => `${hunk.lines[i]!.kind === "added" ? "+" : "-"}${hunk.lines[i]!.text}`),
+  );
+  // 그 줄이 git 이 실제로 바꾼 것이다: + 줄은 파일에서 지워지고 - 줄이 돌아왔다.
+  const before = step.workTree.split("\n");
+  const after = step.after.split("\n");
+  for (const line of shown) {
+    const text = line.slice(1);
+    if (line.startsWith("+"))
+      expect([before.includes(text), after.includes(text)]).toEqual([true, false]);
+    else expect([before.includes(text), after.includes(text)]).toEqual([false, true]);
+  }
+  await click(dialogButton(dialog, "취소"));
+  await settle(50);
+  expect(calls("git.discardLines")).toHaveLength(0);
+
+  await click(revert()!);
+  dialog = await confirmDialog();
+  await click(dialogButton(dialog, "되돌리기"));
+  await vi.waitFor(() => expect(calls("git.discardLines")).toHaveLength(1));
+  const { params } = calls("git.discardLines")[0]!;
+  expect({ path: params.path, hunks: params.hunks }).toEqual(step.request);
+  expect(params).toMatchObject({ confirmed: true, ignoreWhitespace: false });
+});
+
+it("names the stash before dropping it and drops the one git dropped", async () => {
+  host.stashes = DISCARD.stash.stashes;
+  await openCommitWindow();
+  const { index, commit } = DISCARD.stash.request;
+  const drop = () =>
+    document.querySelector<HTMLElement>(
+      `[data-commit-stash="${index}"] [data-commit-stash-action="drop"]`,
+    );
+  await vi.waitFor(() => expect(drop()).not.toBeNull());
+  await click(drop()!);
+  let dialog = await confirmDialog();
+  expectDanger(dialog);
+  const message = DISCARD.stash.stashes.find((s) => s.index === index)!.message;
+  expect(dialog.textContent).toContain(`stash@{${index}} ${message}`);
+  await click(dialogButton(dialog, "취소"));
+  await settle(50);
+  expect(calls("git.stash.drop")).toHaveLength(0);
+
+  host.stashes = DISCARD.stash.after;
+  await click(drop()!);
+  dialog = await confirmDialog();
+  await click(dialogButton(dialog, "버리기"));
+  await vi.waitFor(() => expect(calls("git.stash.drop")).toHaveLength(1));
+  expect(calls("git.stash.drop")[0]!.params).toMatchObject({ index, commit, confirmed: true });
+  // 다시 읽은 목록은 git 이 남긴 것이다.
+  await vi.waitFor(() => expect(drop()).toBeNull());
+});
+
+it("offers [Undo] after amend through git.undo.offer and resets soft to the previous commit", async () => {
+  host.entries = [{ ...MODIFIED, staged: "modified" }];
+  host.moved = DISCARD.amend.moved;
+  await openCommitWindow();
+  await click(document.querySelector("[data-commit-amend]")!);
+  await vi.waitFor(() => expect(messageBox()!.value).toBe(host.headMessage));
+  await act(async () => {
+    windowRegistry().run("git.commit.run");
+  });
+  await vi.waitFor(() => expect(calls("git.commit")).toHaveLength(1));
+  const { previous, current } = DISCARD.amend.moved;
+  const undo = await toastButton(
+    `main: ${previous.slice(0, 8)} → ${current.slice(0, 8)}`,
+    "되돌리기",
+  );
+  expect(calls("git.reset")).toHaveLength(0);
+  await click(undo);
+  await vi.waitFor(() => expect(calls("git.reset")).toHaveLength(1));
+  // soft 라 미리보기 · 확인 없이 — 그 git 으로 돌린 요청 그대로다(HEAD 는 이전 커밋, index 는 amend 직전 그대로).
+  expect(calls("git.reset")[0]!.params).toEqual({
+    projectId: "p1",
+    worktree: null,
+    ...DISCARD.amend.request,
+  });
+  expect(calls("git.resetPreview")).toHaveLength(0);
 });

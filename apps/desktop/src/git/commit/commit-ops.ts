@@ -2,11 +2,13 @@
 // 쓰기 실행기로 git CLI 가 하고, 부르는 연결은 프로젝트 창의 연결이다(Host 는 git 쓰기를 그 프로젝트 창의 연결 —
 // `ConnectionScope::Project` — 로만 받는다).
 //
-// - 묻는 화면은 M1 의 확인 부품(file-tree/file-dialogs.tsx)이다. 작업 트리 변경 버리기 · stash 버리기는 결정 M2-D6 ① 의 확인 대상이다
-//   — 위험 작업 다이얼로그(M2-20)가 들어오면 그 부품으로 바꾼다.
+// - 확인은 위험 작업 다이얼로그(M2-20, git/dialogs/git-dialogs.tsx)다 — 작업 트리 변경 버리기 · stash 버리기는 결정 M2-D6 ① 의 확인
+//   대상이라 위험 표시를 두고 처음 포커스가 취소다. 이름 묻기(stash 메시지)는 M1 의 부품(file-tree/file-dialogs.tsx) 그대로다.
 // - 되돌리기(⌘⌥Z): 스테이징된 것은 스테이징을 풀고(`git.unstage`) 작업 트리를 index 로 돌린다(`git.discard`) — 둘을 거치면 HEAD 다.
 //   스테이징된 이름 바뀜은 옛 경로까지 두 호출에 다 넘긴다(옛 파일이 작업 트리에서 지워진 채 남지 않게). untracked · 새로 더한 파일은
-//   지우지 않는다(`git.discard` 가 돌려준 목록을 알린다).
+//   지우지 않는다(`git.discard` 가 돌려준 목록을 알린다). 확인에는 잃는 변경과 디스크에 남는 새 파일을 따로 보인다(commit-model.ts
+//   `rollbackPlan`).
+// - 묶음 되돌리기의 확인에는 그 묶음의 줄을 그대로 보인다 — `+` 줄이 파일에서 지워지고 `-` 줄이 돌아온다.
 // - git 이 거절한 것(`2004`)은 쓰기 Task 의 실패 알림이 원문을 보였다 — 여기서 또 알리지 않는다. 커밋의 거절(훅 실패)만은 툴 윈도우에
 //   그 출력을 남긴다(완료 기준 — 메시지 칸이 그대로 남는다).
 // - 경로는 모두 작업 트리 꼭대기 기준 상대 경로(`/`)다(`git.status` 의 경로 그대로).
@@ -20,9 +22,10 @@ import {
   type StashEntry,
 } from "@pitwall/rpc-client";
 
-import type { ConfirmQuestion, NameQuestion } from "../../file-tree/file-ops";
+import type { NameQuestion } from "../../file-tree/file-ops";
 import type { NotificationInput } from "../../notifications/notifications";
-import { type CommitItem, listLines, unstagePaths } from "./commit-model";
+import type { GitConfirm } from "../dialogs/git-dialogs";
+import { type CommitItem, listLines, rollbackPlan, unstagePaths } from "./commit-model";
 import type { StageSelection } from "./hunk-staging";
 import type { GitCommitStrings } from "./strings";
 
@@ -32,6 +35,8 @@ export const GIT_FAILED = 2004;
 export const CONFLICT = -32004;
 /** 확인 목록에 보이는 줄 수. */
 const LISTED = 30;
+/** 창이 셈한 잃을 목록의 지문 자리(`null` 이 아니면 확인 단추가 켜진다 — git-dialogs.tsx `GitConfirm.lost`). */
+const LISTED_HERE = "listed-before-the-call";
 
 export function errorText(e: unknown): string {
   if (e instanceof RpcCallError) {
@@ -46,7 +51,7 @@ export interface CommitOpsDeps {
   projectId: string;
   /** 지금 활성 워크트리(`ActiveWorktree.top`). 누른 때의 값을 읽는다. */
   worktree(): string | undefined;
-  confirm(question: ConfirmQuestion): Promise<boolean>;
+  confirm(question: GitConfirm): Promise<boolean>;
   askName(question: NameQuestion): Promise<string | undefined>;
   notify(input: NotificationInput): void;
   strings(): GitCommitStrings;
@@ -106,25 +111,35 @@ export function createCommitOps(deps: CommitOpsDeps) {
       });
     },
 
-    /** 변경 되돌리기(⌘⌥Z, 머리 주석). 묻고 나서 한다. 한 것이 있으면 참. */
-    async rollback(items: readonly CommitItem[]): Promise<boolean> {
+    /**
+     * 변경 되돌리기(⌘⌥Z, 머리 주석). 묻고 나서 한다. 한 것이 있으면 참. `untracked` 는 지금 버전 관리 안 됨 그룹의 경로다(이름 바뀜의
+     * 옛 경로에 있으면 덮인다).
+     */
+    async rollback(items: readonly CommitItem[], untracked: readonly string[]): Promise<boolean> {
       const chosen = items.filter((i) => i.group === "staged" || i.group === "changes");
       if (chosen.length === 0) {
         deps.notify({ level: "warning", title: T().rollback.none });
         return false;
       }
-      const paths = unstagePaths(chosen).sort();
+      const plan = rollbackPlan(chosen, untracked);
+      const lost = plan.lost.changes.length + plan.lost.overwritten.length;
+      const kept =
+        plan.kept.length > 0
+          ? `\n\n${T().rollback.kept(plan.kept.length)}\n${listLines(plan.kept, LISTED, T().rollback.more)}`
+          : "";
       const ok = await deps.confirm({
         title: T().rollback.title,
-        body: `${T().rollback.body(paths.length)}\n\n${listLines(paths, LISTED, T().rollback.more)}`,
+        body: `${T().rollback.body(new Set(chosen.map((i) => i.path)).size)}${kept}`,
+        // 목록은 부르기 전의 상태로 셈한 것이다 — Host 의 지문은 없다(버리는 경로가 정해져 있어 그 밖은 바뀌지 않는다).
+        lost: { changes: plan.lost, fingerprint: LISTED_HERE },
         confirm: T().rollback.confirm,
-        danger: true,
+        danger: lost > 0,
       });
       if (!ok) return false;
-      const staged = chosen.filter((i) => i.group === "staged");
+      const paths = plan.discard;
       return run(async () => {
-        if (staged.length > 0)
-          await host().call("git.unstage", { ...scope(), paths: unstagePaths(staged) });
+        if (plan.unstage.length > 0)
+          await host().call("git.unstage", { ...scope(), paths: plan.unstage });
         const result = await host().call("git.discard", { ...scope(), paths, confirmed: true });
         if (result.untracked.length > 0)
           deps.notify({
@@ -167,9 +182,14 @@ export function createCommitOps(deps: CommitOpsDeps) {
       selection: StageSelection,
       worktree: string | undefined,
     ): Promise<"done" | "changed" | "failed" | "cancelled"> {
+      const lines = selection.lines.map((i) => {
+        const line = selection.hunk.lines[i]!;
+        return `${line.kind === "added" ? "+" : "-"}${line.text}`;
+      });
       const ok = await deps.confirm({
         title: T().hunk.revertTitle,
         body: `${T().hunk.revertBody}\n\n${path}`,
+        detail: listLines(lines, LISTED, T().rollback.more),
         confirm: T().rollback.confirm,
         danger: true,
       });

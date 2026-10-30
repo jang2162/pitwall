@@ -1,0 +1,386 @@
+{
+  "amend": {
+    "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "headBefore": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "index": "100644 ce013625030ba8dba906f756967f9e9ca394464a 0\tREADME.md\n100644 eaaa2f850255dbabab16074c24aaa935b9804f3d 0\ta.txt\n",
+    "indexBefore": "100644 ce013625030ba8dba906f756967f9e9ca394464a 0\tREADME.md\n100644 eaaa2f850255dbabab16074c24aaa935b9804f3d 0\ta.txt\n",
+    "moved": {
+      "current": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "previous": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "refName": "refs/heads/main"
+    },
+    "request": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expectedRef": "refs/heads/main",
+      "fingerprint": null,
+      "mode": "soft"
+    },
+    "staged": "M\ta.txt\n"
+  },
+  "hunk": {
+    "after": "fn a() {\n    a1\n}\nconst F0: u32 = 0;\nconst F1: u32 = 1;\nconst F2: u32 = 2;\nconst F3: u32 = 3;\nconst F4: u32 = 4;\nconst F5: u32 = 5;\nconst F6: u32 = 6;\nconst F7: u32 = 7;\nconst F8: u32 = 8;\nconst F9: u32 = 9;\nconst F10: u32 = 10;\nconst F11: u32 = 11;\nconst F12: u32 = 12;\nconst F13: u32 = 13;\nconst F14: u32 = 14;\nconst F15: u32 = 15;\nconst F16: u32 = 16;\nconst F17: u32 = 17;\nconst F18: u32 = 18;\nconst F19: u32 = 19;\nconst F20: u32 = 20;\nconst F21: u32 = 21;\nconst F22: u32 = 22;\nconst F23: u32 = 23;\nconst F24: u32 = 24;\nconst F25: u32 = 25;\nconst F26: u32 = 26;\nconst F27: u32 = 27;\nconst F28: u32 = 28;\nconst F29: u32 = 29;\nfn b() { changed }\n",
+    "diff": {
+      "files": [
+        {
+          "added": 3,
+          "binary": false,
+          "error": null,
+          "generated": false,
+          "hunks": [
+            {
+              "header": "",
+              "lines": [
+                {
+                  "kind": "context",
+                  "newLine": 1,
+                  "noNewline": false,
+                  "oldLine": 1,
+                  "text": "fn a() {"
+                },
+                {
+                  "kind": "removed",
+                  "newLine": null,
+                  "noNewline": false,
+                  "oldLine": 2,
+                  "text": "    a1"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 2,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "    a1 changed"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 3,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "    a2 added"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 4,
+                  "noNewline": false,
+                  "oldLine": 3,
+                  "text": "}"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 5,
+                  "noNewline": false,
+                  "oldLine": 4,
+                  "text": "const F0: u32 = 0;"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 6,
+                  "noNewline": false,
+                  "oldLine": 5,
+                  "text": "const F1: u32 = 1;"
+                }
+              ],
+              "newLines": 6,
+              "newStart": 1,
+              "oldLines": 5,
+              "oldStart": 1
+            },
+            {
+              "header": "const F26: u32 = 26;",
+              "lines": [
+                {
+                  "kind": "context",
+                  "newLine": 32,
+                  "noNewline": false,
+                  "oldLine": 31,
+                  "text": "const F27: u32 = 27;"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 33,
+                  "noNewline": false,
+                  "oldLine": 32,
+                  "text": "const F28: u32 = 28;"
+                },
+                {
+                  "kind": "context",
+                  "newLine": 34,
+                  "noNewline": false,
+                  "oldLine": 33,
+                  "text": "const F29: u32 = 29;"
+                },
+                {
+                  "kind": "removed",
+                  "newLine": null,
+                  "noNewline": false,
+                  "oldLine": 34,
+                  "text": "fn b() {}"
+                },
+                {
+                  "kind": "added",
+                  "newLine": 35,
+                  "noNewline": false,
+                  "oldLine": null,
+                  "text": "fn b() { changed }"
+                }
+              ],
+              "newLines": 4,
+              "newStart": 32,
+              "oldLines": 4,
+              "oldStart": 31
+            }
+          ],
+          "hunksOmitted": false,
+          "newId": null,
+          "newMode": "100644",
+          "oldId": "5a35656f173d9b96a6203ca81500fe874510b345",
+          "oldMode": "100644",
+          "oldPath": null,
+          "path": "src/app.rs",
+          "removed": 2,
+          "status": "modified",
+          "submodule": null,
+          "tooLarge": false
+        }
+      ],
+      "newCommit": null,
+      "oldCommit": null,
+      "workTree": "/repo"
+    },
+    "index": {
+      "content": {
+        "kind": "text",
+        "text": "fn a() {\n    a1\n}\nconst F0: u32 = 0;\nconst F1: u32 = 1;\nconst F2: u32 = 2;\nconst F3: u32 = 3;\nconst F4: u32 = 4;\nconst F5: u32 = 5;\nconst F6: u32 = 6;\nconst F7: u32 = 7;\nconst F8: u32 = 8;\nconst F9: u32 = 9;\nconst F10: u32 = 10;\nconst F11: u32 = 11;\nconst F12: u32 = 12;\nconst F13: u32 = 13;\nconst F14: u32 = 14;\nconst F15: u32 = 15;\nconst F16: u32 = 16;\nconst F17: u32 = 17;\nconst F18: u32 = 18;\nconst F19: u32 = 19;\nconst F20: u32 = 20;\nconst F21: u32 = 21;\nconst F22: u32 = 22;\nconst F23: u32 = 23;\nconst F24: u32 = 24;\nconst F25: u32 = 25;\nconst F26: u32 = 26;\nconst F27: u32 = 27;\nconst F28: u32 = 28;\nconst F29: u32 = 29;\nfn b() {}\n"
+      },
+      "eof": true,
+      "filter": null,
+      "id": "5a35656f173d9b96a6203ca81500fe874510b345",
+      "judgment": {
+        "binary": false,
+        "bom": null,
+        "editable": true,
+        "encoding": "UTF-8",
+        "highlight": true,
+        "lineEnding": "lf",
+        "longLines": false,
+        "lossy": false,
+        "sizeClass": "editable"
+      },
+      "mode": "100644",
+      "offset": 0,
+      "size": 638,
+      "tooLarge": false
+    },
+    "left": "diff --git a/src/app.rs b/src/app.rs\nindex 5a35656..e172507 100644\n--- a/src/app.rs\n+++ b/src/app.rs\n@@ -31,4 +31,4 @@ const F26: u32 = 26;\n const F27: u32 = 27;\n const F28: u32 = 28;\n const F29: u32 = 29;\n-fn b() {}\n+fn b() { changed }\n",
+    "path": "src/app.rs",
+    "request": {
+      "hunks": [
+        {
+          "hunk": {
+            "header": "",
+            "lines": [
+              {
+                "kind": "context",
+                "newLine": 1,
+                "noNewline": false,
+                "oldLine": 1,
+                "text": "fn a() {"
+              },
+              {
+                "kind": "removed",
+                "newLine": null,
+                "noNewline": false,
+                "oldLine": 2,
+                "text": "    a1"
+              },
+              {
+                "kind": "added",
+                "newLine": 2,
+                "noNewline": false,
+                "oldLine": null,
+                "text": "    a1 changed"
+              },
+              {
+                "kind": "added",
+                "newLine": 3,
+                "noNewline": false,
+                "oldLine": null,
+                "text": "    a2 added"
+              },
+              {
+                "kind": "context",
+                "newLine": 4,
+                "noNewline": false,
+                "oldLine": 3,
+                "text": "}"
+              },
+              {
+                "kind": "context",
+                "newLine": 5,
+                "noNewline": false,
+                "oldLine": 4,
+                "text": "const F0: u32 = 0;"
+              },
+              {
+                "kind": "context",
+                "newLine": 6,
+                "noNewline": false,
+                "oldLine": 5,
+                "text": "const F1: u32 = 1;"
+              }
+            ],
+            "newLines": 6,
+            "newStart": 1,
+            "oldLines": 5,
+            "oldStart": 1
+          },
+          "lines": [1, 2, 3]
+        }
+      ],
+      "path": "src/app.rs"
+    },
+    "workTree": "fn a() {\n    a1 changed\n    a2 added\n}\nconst F0: u32 = 0;\nconst F1: u32 = 1;\nconst F2: u32 = 2;\nconst F3: u32 = 3;\nconst F4: u32 = 4;\nconst F5: u32 = 5;\nconst F6: u32 = 6;\nconst F7: u32 = 7;\nconst F8: u32 = 8;\nconst F9: u32 = 9;\nconst F10: u32 = 10;\nconst F11: u32 = 11;\nconst F12: u32 = 12;\nconst F13: u32 = 13;\nconst F14: u32 = 14;\nconst F15: u32 = 15;\nconst F16: u32 = 16;\nconst F17: u32 = 17;\nconst F18: u32 = 18;\nconst F19: u32 = 19;\nconst F20: u32 = 20;\nconst F21: u32 = 21;\nconst F22: u32 = 22;\nconst F23: u32 = 23;\nconst F24: u32 = 24;\nconst F25: u32 = 25;\nconst F26: u32 = 26;\nconst F27: u32 = 27;\nconst F28: u32 = 28;\nconst F29: u32 = 29;\nfn b() { changed }\n"
+  },
+  "rollback": {
+    "after": " A ita.txt\n?? added.txt\n?? loose.txt\n?? new.txt\n",
+    "discard": [
+      "added-gone.txt",
+      "added.txt",
+      "gone.txt",
+      "ita.txt",
+      "mod.txt",
+      "new.txt",
+      "old.txt",
+      "staged.txt"
+    ],
+    "entries": [
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "added-gone.txt",
+        "staged": "added",
+        "unstaged": "deleted"
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "added.txt",
+        "staged": "added",
+        "unstaged": null
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "gone.txt",
+        "staged": null,
+        "unstaged": "deleted"
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "ita.txt",
+        "staged": null,
+        "unstaged": "added"
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "loose.txt",
+        "staged": null,
+        "unstaged": "untracked"
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "mod.txt",
+        "staged": null,
+        "unstaged": "modified"
+      },
+      {
+        "conflict": null,
+        "origPath": "old.txt",
+        "path": "new.txt",
+        "staged": "renamed",
+        "unstaged": null
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "old.txt",
+        "staged": null,
+        "unstaged": "untracked"
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "staged.txt",
+        "staged": "modified",
+        "unstaged": "modified"
+      }
+    ],
+    "kept": ["added.txt", "ita.txt", "new.txt"],
+    "lost": ["added-gone.txt", "gone.txt", "mod.txt", "old.txt", "staged.txt"],
+    "unstage": ["added-gone.txt", "added.txt", "new.txt", "old.txt", "staged.txt"],
+    "untracked": ["added-gone.txt", "added.txt", "ita.txt", "new.txt"]
+  },
+  "rollbackChanges": {
+    "after": "A  added.txt\nM  both.txt\n A ita.txt\n",
+    "discard": ["added.txt", "both.txt", "ita.txt"],
+    "entries": [
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "added.txt",
+        "staged": "added",
+        "unstaged": "modified"
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "both.txt",
+        "staged": "modified",
+        "unstaged": "modified"
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "ita.txt",
+        "staged": null,
+        "unstaged": "added"
+      }
+    ],
+    "kept": ["ita.txt"],
+    "lost": ["added.txt", "both.txt"],
+    "unstage": [],
+    "untracked": ["ita.txt"]
+  },
+  "stash": {
+    "after": [
+      {
+        "commit": "1111111111111111111111111111111111111111",
+        "index": 0,
+        "message": "On main: newer",
+        "time": 1700000000
+      }
+    ],
+    "request": {
+      "commit": "2222222222222222222222222222222222222222",
+      "index": 1
+    },
+    "stashes": [
+      {
+        "commit": "1111111111111111111111111111111111111111",
+        "index": 0,
+        "message": "On main: newer",
+        "time": 1700000000
+      },
+      {
+        "commit": "2222222222222222222222222222222222222222",
+        "index": 1,
+        "message": "On main: older",
+        "time": 1700000000
+      }
+    ]
+  }
+}

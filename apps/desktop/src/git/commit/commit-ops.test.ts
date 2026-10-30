@@ -27,7 +27,14 @@ it("writes from a preview tab to that tab's worktree, null for the main checkout
     strings: () => strings,
   });
   const selection = {
-    hunk: { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, header: "", lines: [] },
+    hunk: {
+      oldStart: 1,
+      oldLines: 0,
+      newStart: 1,
+      newLines: 1,
+      header: "",
+      lines: [{ kind: "added" as const, text: "x", oldLine: null, newLine: 1, noNewline: false }],
+    },
     lines: [0],
   };
   await ops.stageLines("stage", "a.txt", undefined, selection, undefined);

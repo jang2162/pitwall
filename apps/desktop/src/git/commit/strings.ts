@@ -61,6 +61,7 @@ export function gitCommitStrings(t: Translate) {
       title: t("git-commit-rollback-title"),
       body: (count: number) => t("git-commit-rollback-body", { count }),
       confirm: t("git-commit-rollback-confirm"),
+      kept: (count: number) => t("git-commit-rollback-kept", { count }),
       untracked: (files: string) => t("git-commit-rollback-untracked", { files }),
       none: t("git-commit-rollback-none"),
       more: (count: number) => t("git-commit-more", { count }),

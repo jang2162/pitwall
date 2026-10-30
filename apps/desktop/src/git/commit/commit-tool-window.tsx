@@ -343,7 +343,14 @@ function CommitBody({
         <ToolButton
           label={T.toolbar.rollback}
           disabled={writing || panel.selected.length === 0}
-          onClick={() => void write(() => feature.ops.rollback(selectedItems()))}
+          onClick={() =>
+            void write(() =>
+              feature.ops.rollback(
+                selectedItems(),
+                groups.untracked.map((i) => i.path),
+              ),
+            )
+          }
         >
           <Undo2 size={14} aria-hidden />
         </ToolButton>

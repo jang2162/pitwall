@@ -873,3 +873,475 @@ mod window_fixture {
         );
     }
 }
+
+/// 커밋 툴 윈도우의 위험 작업 확인(M2-20 의 부품으로 바꾼 M2-16 의 확인)이 보이는 목록이 진짜 git 이 하는 일과 같은지 — 넷을 진짜
+/// pw-git · git 으로 돌린 결과를 JSON 으로 남긴다(`apps/desktop/src/git/commit/fixtures/discard.json`). 창 시험(`commit-window.test.tsx`)이
+/// 이것을 가짜 Host 의 답으로 쓰고, 확인 목록이 여기의 결과와 같은지 · 확인한 뒤 보낸 요청이 여기서 돌린 요청과 같은지 본다:
+///
+/// - `rollback`: 상태가 여러 가지인 파일(` M` · `MM` · ` D` · `A ` · `AD` · ` A` · 옛 경로에 추적 안 된 파일이 있는 `R `)을 모두 골라
+///   ⌘⌥Z 한 요청(`git.unstage` → `git.discard`). `lost` 는 디스크의 바이트가 바뀌었거나 남지 않은 경로, `kept` 는 그대로 남은 경로다.
+///   `rollbackChanges` 는 변경 그룹만 고른 것(`MM` · `AM` · ` A` — 스테이징을 풀지 않는다).
+/// - `hunk`: 작업 트리 diff 의 첫 변경 묶음을 `git.discardLines` 로 버린 요청과 그 뒤의 작업 트리.
+/// - `stash`: stash 둘 중 오래된 것을 버린 요청과 그 뒤의 목록.
+/// - `amend`: amend 결과의 `moved` 로 [되돌리기](`git.reset` soft)한 요청과 그 뒤의 HEAD · index.
+///
+/// 커밋 · stash 해시와 stash 의 시각은 돌 때마다 바뀌므로 정한 값으로 바꿔 둔다. 다시 만들 때는 `PW_UPDATE_COMMIT_FIXTURE=1`.
+mod discard_fixture {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::diff::methods::{DiffSide, GitBlobParams, GitDiffParams, LineKind};
+    use crate::history::ResetMode;
+    use crate::history::methods::{GitResetParams, reset};
+    use crate::stage::methods::{
+        GitDiscardLinesParams, GitDiscardParams, GitPathsParams, GitStashDropParams,
+        GitStashListParams, GitStashPushParams, HunkSelection,
+    };
+    use crate::status::{GitChange, GitStatusEntry, GitStatusParams, Status};
+    use crate::testing::write::Window;
+    use crate::write::GitPromptAnswer;
+
+    const FIXTURE: &str = "../../apps/desktop/src/git/commit/fixtures/discard.json";
+
+    fn proceed(f: &WriteFixture) -> Window {
+        Window::open(&f.write, &f.project, |_| Some(GitPromptAnswer::Proceed))
+    }
+
+    async fn entries(f: &WriteFixture) -> Vec<GitStatusEntry> {
+        Arc::new(Status::new(Arc::clone(f.write.git())))
+            .status(GitStatusParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                paths: None,
+            })
+            .await
+            .unwrap()
+            .entries
+    }
+
+    fn disk(f: &WriteFixture, path: &str) -> Option<Vec<u8>> {
+        fs::read(f.repo.root().join(path)).ok()
+    }
+
+    fn remove(f: &WriteFixture, path: &str) {
+        fs::remove_file(f.repo.root().join(path)).unwrap();
+    }
+
+    /// 창의 고르기와 같다(commit-model.ts `groupEntries` · `rollbackPlan`): 스테이징됨 그룹(경로순, `staged_too` 일 때만) · 변경
+    /// 그룹(경로순)을 모두 고르면 스테이징을 풀 경로는 스테이징됨 그룹의 경로와 그 옛 경로(그 차례 그대로, 겹치면 하나), 버릴 경로는
+    /// 둘 다의 경로순이다.
+    fn requests(entries: &[GitStatusEntry], staged_too: bool) -> (Vec<String>, Vec<String>) {
+        let untracked = |e: &GitStatusEntry| e.unstaged == Some(GitChange::Untracked);
+        let mut unstage: Vec<String> = Vec::new();
+        let add = |list: &mut Vec<String>, path: &str| {
+            if !list.iter().any(|p| p == path) {
+                list.push(path.to_owned());
+            }
+        };
+        if staged_too {
+            for e in entries
+                .iter()
+                .filter(|e| e.staged.is_some() && !untracked(e))
+            {
+                add(&mut unstage, &e.path);
+                if let Some(orig) = &e.orig_path {
+                    add(&mut unstage, orig);
+                }
+            }
+        }
+        let mut discard: BTreeSet<String> = unstage.iter().cloned().collect();
+        for e in entries
+            .iter()
+            .filter(|e| e.unstaged.is_some() && !untracked(e))
+        {
+            discard.insert(e.path.clone());
+        }
+        (unstage, discard.into_iter().collect())
+    }
+
+    /// 지금 상태에서 고른 것을 되돌리고(`git.unstage` → `git.discard`), 디스크의 바이트가 그대로인 경로(`kept`)와 아닌 경로(`lost`).
+    async fn roll_back(f: &WriteFixture, staged_too: bool) -> serde_json::Value {
+        let before = entries(f).await;
+        let (unstage, discard) = requests(&before, staged_too);
+        let touched: BTreeSet<String> = unstage.iter().chain(&discard).cloned().collect();
+        let bytes: BTreeMap<String, Option<Vec<u8>>> =
+            touched.iter().map(|p| (p.clone(), disk(f, p))).collect();
+        if !unstage.is_empty() {
+            f.write
+                .unstage(
+                    f.caller(),
+                    GitPathsParams {
+                        project_id: f.project.clone(),
+                        worktree: None,
+                        paths: unstage.clone(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let result = f
+            .write
+            .discard(
+                f.caller(),
+                GitDiscardParams {
+                    project_id: f.project.clone(),
+                    worktree: None,
+                    paths: discard.clone(),
+                    confirmed: true,
+                },
+            )
+            .await
+            .unwrap();
+        let (mut lost, mut kept) = (Vec::new(), Vec::new());
+        for (path, was) in &bytes {
+            let now = disk(f, path);
+            if was.is_some() && *was == now {
+                kept.push(path.clone());
+            } else {
+                lost.push(path.clone());
+            }
+        }
+        json!({
+            "entries": before,
+            "unstage": unstage,
+            "discard": discard,
+            "untracked": result.untracked,
+            "lost": lost,
+            "kept": kept,
+            "after": f.repo.git(&["status", "--porcelain=v1", "--untracked-files=all"]),
+        })
+    }
+
+    /// 스테이징됨 · 변경 그룹을 모두 고른다.
+    async fn rollback() -> serde_json::Value {
+        let f = WriteFixture::new(true);
+        let _window = proceed(&f);
+        for (path, body) in [
+            ("mod.txt", "m0\n"),
+            ("staged.txt", "s0\n"),
+            ("gone.txt", "g0\n"),
+            ("old.txt", "renamed body\n"),
+        ] {
+            f.repo.write(path, body);
+        }
+        f.repo.commit_all("base");
+        f.repo.write("mod.txt", "m1\n");
+        f.repo.write("staged.txt", "s1\n");
+        f.repo.git(&["add", "staged.txt"]);
+        f.repo.write("staged.txt", "s2\n");
+        remove(&f, "gone.txt");
+        f.repo.write("added.txt", "new file\n");
+        f.repo.write("added-gone.txt", "staged then deleted\n");
+        f.repo.git(&["add", "added.txt", "added-gone.txt"]);
+        remove(&f, "added-gone.txt");
+        f.repo.write("ita.txt", "intent to add\n");
+        f.repo.git(&["add", "-N", "ita.txt"]);
+        f.repo.git(&["mv", "old.txt", "new.txt"]);
+        f.repo
+            .write("old.txt", "someone else's file at the old path\n");
+        f.repo.write("loose.txt", "untracked, not chosen\n");
+        roll_back(&f, true).await
+    }
+
+    /// 변경 그룹만 고른다(스테이징은 그대로 — 작업 트리를 index 로).
+    async fn rollback_changes() -> serde_json::Value {
+        let f = WriteFixture::new(true);
+        let _window = proceed(&f);
+        f.repo.write("both.txt", "b0\n");
+        f.repo.commit_all("base");
+        f.repo.write("both.txt", "b1\n");
+        f.repo.git(&["add", "both.txt"]);
+        f.repo.write("both.txt", "b2\n");
+        f.repo.write("added.txt", "staged\n");
+        f.repo.git(&["add", "added.txt"]);
+        f.repo.write("added.txt", "staged, then edited\n");
+        f.repo.write("ita.txt", "intent to add\n");
+        f.repo.git(&["add", "-N", "ita.txt"]);
+        roll_back(&f, false).await
+    }
+
+    fn app_text(variant: u8) -> String {
+        let mut s = String::from("fn a() {\n");
+        s.push_str(if variant == 0 {
+            "    a1\n"
+        } else {
+            "    a1 changed\n    a2 added\n"
+        });
+        s.push_str("}\n");
+        for i in 0..30 {
+            s.push_str(&format!("const F{i}: u32 = {i};\n"));
+        }
+        s.push_str(if variant == 0 {
+            "fn b() {}\n"
+        } else {
+            "fn b() { changed }\n"
+        });
+        s
+    }
+
+    async fn hunk() -> serde_json::Value {
+        const PATH: &str = "src/app.rs";
+        let f = WriteFixture::new(true);
+        let _window = proceed(&f);
+        f.repo.write(PATH, &app_text(0));
+        f.repo.commit_all("base");
+        f.repo.write(PATH, &app_text(1));
+        let git = f.write.git();
+        let mut diff = git
+            .diff(&GitDiffParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                from: None,
+                to: DiffSide::WorkTree,
+                paths: Some(vec![PATH.to_owned()]),
+                ignore_whitespace: false,
+            })
+            .unwrap();
+        diff.work_tree = "/repo".to_owned();
+        let index = git
+            .blob(&GitBlobParams {
+                project_id: f.project.clone(),
+                path: PATH.to_owned(),
+                ..GitBlobParams::default()
+            })
+            .unwrap();
+        let work_tree = fs::read_to_string(f.repo.root().join(PATH)).unwrap();
+        // 첫 변경 묶음(창의 ↶ 와 같다 — hunk-staging.ts `stageGroups`): 첫 hunk 의 문맥 줄 없이 이어진 바뀐 줄.
+        let first = &diff.files[0].hunks[0];
+        let start = first
+            .lines
+            .iter()
+            .position(|l| l.kind != LineKind::Context)
+            .unwrap();
+        let lines: Vec<u32> = (start..first.lines.len())
+            .take_while(|&i| first.lines[i].kind != LineKind::Context)
+            .map(|i| i as u32)
+            .collect();
+        let hunks = vec![HunkSelection {
+            hunk: first.clone(),
+            lines: Some(lines),
+        }];
+        f.write
+            .discard_lines(
+                f.caller(),
+                GitDiscardLinesParams {
+                    project_id: f.project.clone(),
+                    worktree: None,
+                    path: PATH.to_owned(),
+                    hunks: hunks.clone(),
+                    ignore_whitespace: false,
+                    confirmed: true,
+                },
+            )
+            .await
+            .unwrap();
+        json!({
+            "path": PATH,
+            "diff": diff,
+            "index": index,
+            "workTree": work_tree,
+            "request": { "path": PATH, "hunks": hunks },
+            "after": fs::read_to_string(f.repo.root().join(PATH)).unwrap(),
+            "left": f.repo.git(&["diff", "--no-color"]),
+        })
+    }
+
+    async fn stash(names: &mut Vec<(String, String)>) -> serde_json::Value {
+        let f = WriteFixture::new(true);
+        let _window = proceed(&f);
+        f.repo.write("a.txt", "a0\n");
+        f.repo.commit_all("base");
+        for (i, message) in ["older", "newer"].into_iter().enumerate() {
+            f.repo.write("a.txt", &format!("a{}\n", i + 1));
+            f.write
+                .stash_push(
+                    f.caller(),
+                    GitStashPushParams {
+                        project_id: f.project.clone(),
+                        worktree: None,
+                        message: Some(message.to_owned()),
+                        include_untracked: false,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        // 만든 시각은 돌 때마다 다르다 — 정한 값으로 둔다.
+        let list = || async {
+            let mut stashes = f
+                .write
+                .stash_list(GitStashListParams {
+                    project_id: f.project.clone(),
+                    worktree: None,
+                })
+                .await
+                .unwrap()
+                .stashes;
+            for s in &mut stashes {
+                s.time = 1_700_000_000;
+            }
+            stashes
+        };
+        let before = list().await;
+        let older = before
+            .iter()
+            .find(|s| s.message.ends_with("older"))
+            .unwrap();
+        for (i, s) in before.iter().enumerate() {
+            names.push((s.commit.clone(), format!("{}", i + 1).repeat(40)));
+        }
+        let request = GitStashDropParams {
+            project_id: f.project.clone(),
+            worktree: None,
+            index: older.index,
+            commit: older.commit.clone(),
+            confirmed: true,
+        };
+        f.write
+            .stash_drop(f.caller(), request.clone())
+            .await
+            .unwrap();
+        json!({
+            "stashes": before,
+            "request": { "index": request.index, "commit": request.commit },
+            "after": list().await,
+        })
+    }
+
+    async fn amend(names: &mut Vec<(String, String)>) -> serde_json::Value {
+        let f = WriteFixture::new(true);
+        f.repo.write("a.txt", "first\n");
+        let previous = f.repo.commit_all("add a");
+        f.repo.write("a.txt", "fixed\n");
+        f.repo.git(&["add", "a.txt"]);
+        let index_before = f.repo.git(&["ls-files", "-s"]);
+        let result = commit(
+            &f.write,
+            f.caller(),
+            GitCommitParams {
+                amend: true,
+                ..params(&f, "add a\n")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.moved.previous.as_deref(), Some(previous.trim()));
+        names.push((previous.trim().to_owned(), "a".repeat(40)));
+        names.push((result.commit.clone(), "b".repeat(40)));
+        let request = GitResetParams {
+            project_id: f.project.clone(),
+            worktree: None,
+            commit: result.moved.previous.clone().unwrap(),
+            mode: ResetMode::Soft,
+            expected: result.moved.current.clone(),
+            expected_ref: Some(result.moved.ref_name.clone()),
+            fingerprint: None,
+        };
+        reset(f.write.clone(), f.caller(), request.clone())
+            .await
+            .unwrap();
+        json!({
+            "moved": result.moved,
+            "request": {
+                "commit": request.commit,
+                "mode": request.mode,
+                "expected": request.expected,
+                "expectedRef": request.expected_ref,
+                "fingerprint": request.fingerprint,
+            },
+            "headBefore": previous.trim(),
+            "head": f.repo.head(),
+            "indexBefore": index_before,
+            "index": f.repo.git(&["ls-files", "-s"]),
+            "staged": f.repo.git(&["diff", "--cached", "--name-status"]),
+        })
+    }
+
+    async fn fixture_value() -> serde_json::Value {
+        let mut names = Vec::new();
+        let value = json!({
+            "rollback": rollback().await,
+            "rollbackChanges": rollback_changes().await,
+            "hunk": hunk().await,
+            "stash": stash(&mut names).await,
+            "amend": amend(&mut names).await,
+        });
+        let mut text = serde_json::to_string(&value).unwrap();
+        for (hash, name) in &names {
+            text = text.replace(hash.as_str(), name);
+        }
+        serde_json::from_str(&text).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn discard_window_fixture_matches_pw_git_and_git() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
+        let got = fixture_value().await;
+        let rollback = &got["rollback"];
+        // 새 파일 · intent-to-add · 이름 바뀜의 새 경로는 디스크에 남고, 나머지(옛 경로의 남의 파일 포함)는 바뀐다.
+        assert_eq!(
+            rollback["kept"],
+            json!(["added.txt", "ita.txt", "new.txt"]),
+            "{rollback}"
+        );
+        assert_eq!(
+            rollback["lost"],
+            json!([
+                "added-gone.txt",
+                "gone.txt",
+                "mod.txt",
+                "old.txt",
+                "staged.txt"
+            ]),
+            "{rollback}"
+        );
+        // 고르지 않은 untracked 는 그대로다.
+        assert!(rollback["after"].as_str().unwrap().contains("?? loose.txt"));
+        // 변경 그룹만이면 작업 트리를 index 로 — 스테이징한 것은 남고 intent-to-add 만 그대로다.
+        let changes = &got["rollbackChanges"];
+        assert_eq!(changes["unstage"], json!([]), "{changes}");
+        assert_eq!(changes["kept"], json!(["ita.txt"]), "{changes}");
+        assert_eq!(
+            changes["lost"],
+            json!(["added.txt", "both.txt"]),
+            "{changes}"
+        );
+        assert_eq!(
+            changes["after"],
+            json!("A  added.txt\nM  both.txt\n A ita.txt\n"),
+            "{changes}"
+        );
+        // 첫 묶음만 버렸다.
+        let left = got["hunk"]["left"].as_str().unwrap();
+        assert!(
+            !left.contains("a1 changed") && !left.contains("a2 added"),
+            "{left}"
+        );
+        assert!(left.contains("+fn b() { changed }"), "{left}");
+        // 오래된 stash 만 사라졌다.
+        let after = got["stash"]["after"].as_array().unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after[0]["message"].as_str().unwrap().ends_with("newer"));
+        // amend 를 되돌리면 HEAD 는 이전 커밋이고 index 는 amend 직전 그대로(고친 내용이 스테이징돼 있다).
+        let amend = &got["amend"];
+        assert_eq!(amend["head"], amend["headBefore"]);
+        assert_eq!(amend["index"], amend["indexBefore"]);
+        assert_eq!(amend["staged"], json!("M\ta.txt\n"));
+        if std::env::var_os("PW_UPDATE_COMMIT_FIXTURE").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = serde_json::to_string_pretty(&got).unwrap();
+            std::fs::write(&path, format!("{text}\n")).unwrap();
+            return;
+        }
+        let want: serde_json::Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        assert!(
+            got == want,
+            "{} 이 지금 pw-git · git 의 출력과 다르다 — PW_UPDATE_COMMIT_FIXTURE=1 로 이 시험을 돌려 다시 만든다",
+            path.display()
+        );
+    }
+}

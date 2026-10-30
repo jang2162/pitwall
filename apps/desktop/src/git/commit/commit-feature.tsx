@@ -6,7 +6,7 @@
 //   git.commitAndPush     ⌘⌥K  커밋 후 푸시 다이얼로그(M2-20 의 `git.push.open`). 메시지 칸이 비었으면 ⌘K 와 같다
 //   git.rollback          ⌘⌥Z  변경 되돌리기(확인 뒤) — 커밋 툴 윈도우에서 고른 파일, 그 밖이면 활성 에디터 탭의 파일
 //
-// 확인 · 이름 묻기는 M1 의 대화상자(file-tree/file-dialogs.tsx)다 — 위험 작업 다이얼로그(M2-20)가 들어오면 바꾼다.
+// 확인은 위험 작업 다이얼로그(M2-20, git/dialogs/git-dialogs.tsx), stash 메시지 묻기는 M1 의 이름 묻기(file-tree/file-dialogs.tsx)다.
 
 import type { Action, ActionRegistry } from "@pitwall/keymap";
 import type { DockviewApi } from "dockview-react";
@@ -20,6 +20,7 @@ import type { ProjectState } from "../../layout/project-state";
 import { useNotify } from "../../notifications/notifications";
 import { activeWorktree, useActiveWorktree } from "../../open-with/active-worktree";
 import { useHost } from "../../rpc/host";
+import { useGitDialogs } from "../dialogs/git-dialogs";
 import { windowGitStatus } from "../git-status";
 import { type CommitGroups, type CommitItem, groupEntries } from "./commit-model";
 import { createCommitOps } from "./commit-ops";
@@ -112,7 +113,10 @@ export function commitActions({
           focusInCommitWindow(),
           activeFile(),
         );
-        await f.ops.rollback(items);
+        await f.ops.rollback(
+          items,
+          groups.untracked.map((i) => i.path),
+        );
       },
     },
   ];
@@ -134,11 +138,12 @@ export function GitCommitFeature({
   const { registry } = useKeymap();
   const notify = useNotify();
   const dialogs = useFileDialogs();
+  const gitDialogs = useGitDialogs();
   const worktree = useActiveWorktree();
 
   // 동작은 누른 때의 값을 읽는다(Host 연결 · 문구 · 대화상자 · dock).
-  const live = useRef({ client, T, dialogs, notify, api });
-  live.current = { client, T, dialogs, notify, api };
+  const live = useRef({ client, T, dialogs, gitDialogs, notify, api });
+  live.current = { client, T, dialogs, gitDialogs, notify, api };
   const feature = useMemo(
     () => createFeature(projectId, state, registry, live),
     [projectId, state, registry],
@@ -172,7 +177,12 @@ export function GitCommitFeature({
     [T, workspace],
   );
   useRegisterActions(actions);
-  return <>{dialogs.element}</>;
+  return (
+    <>
+      {dialogs.element}
+      {gitDialogs.element}
+    </>
+  );
 }
 
 function createFeature(
@@ -184,6 +194,7 @@ function createFeature(
       client: ReturnType<typeof useHost>["client"];
       T: GitCommitStrings;
       dialogs: ReturnType<typeof useFileDialogs>;
+      gitDialogs: ReturnType<typeof useGitDialogs>;
       notify: ReturnType<typeof useNotify>;
     };
   },
@@ -192,7 +203,7 @@ function createFeature(
     client: () => live.current.client,
     projectId,
     worktree: activeWorktree,
-    confirm: (q) => live.current.dialogs.confirm(q),
+    confirm: (q) => live.current.gitDialogs.confirm(q),
     askName: (q) => live.current.dialogs.askName(q),
     notify: (n) => live.current.notify(n),
     strings: () => live.current.T,

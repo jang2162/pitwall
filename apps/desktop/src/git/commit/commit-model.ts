@@ -8,7 +8,13 @@
 // - 정렬은 경로의 코드 단위 순(`<`)이다 — 1만 개를 다시 묶을 때 `localeCompare` 는 수십 ms 가 든다.
 // - 행은 그룹 머리 · 파일 · stash 머리 · stash 항목이다. 접힌 그룹의 파일은 행에서 빠진다.
 
-import type { GitChange, GitConflict, GitStatusEntry, StashEntry } from "@pitwall/rpc-client";
+import type {
+  GitChange,
+  GitConflict,
+  GitLostChanges,
+  GitStatusEntry,
+  StashEntry,
+} from "@pitwall/rpc-client";
 
 import { entryLetter, type GitLetter, type GitTone } from "../git-status";
 
@@ -160,6 +166,66 @@ export function unstagePaths(items: readonly CommitItem[]): string[] {
     if (i.origPath) out.add(i.origPath);
   }
   return [...out];
+}
+
+/** 변경 되돌리기(⌘⌥Z)가 할 일과 그것이 디스크에서 바꾸는 것(확인 다이얼로그의 목록). */
+export interface RollbackPlan {
+  /** `git.unstage` 에 넘길 경로(스테이징됨 그룹에서 고른 것, 이름 바뀜은 옛 경로도). 비면 부르지 않는다. */
+  readonly unstage: string[];
+  /** `git.discard` 에 넘길 경로(경로순). */
+  readonly discard: string[];
+  /** 잃는 것: 작업 트리가 HEAD(스테이징을 풀지 않으면 index)로 돌아가는 변경과 덮이는 추적 안 된 파일. */
+  readonly lost: GitLostChanges;
+  /** 지우지 않고 디스크에 그대로 두는 새 파일(스테이징을 풀면 버전 관리 안 됨이 된다). 경로순. */
+  readonly kept: string[];
+}
+
+/** 스테이징이 HEAD 에 없는 경로를 더했다(그 경로를 HEAD 로 돌릴 것이 없다). */
+const NEW_IN_INDEX: ReadonlySet<GitChange | null> = new Set(["added", "copied", "renamed"]);
+
+/**
+ * 고른 항목(스테이징됨 · 변경 그룹의 것만 넘긴다)의 되돌리기: 스테이징된 것은 스테이징을 풀고 작업 트리를 index 로 돌린다 — 둘을 거치면 HEAD 다.
+ * `git.discard` 는 index 에 없는 경로와 intent-to-add 파일을 지우지 않는다(crates/pw-git/src/stage/mod.rs `split_tracked`). 그래서:
+ *
+ * - 스테이징을 푸는 새 파일(추가 · 복사 · 이름 바뀜의 새 경로)은 디스크에 남는다 — 작업 트리에서 지운 것(`AD`)만 남을 것이 없어
+ *   스테이징한 내용을 잃는다. 이름 바뀜은 옛 경로가 HEAD 의 것으로 돌아오므로 그 바뀜도 잃는 쪽에 든다.
+ * - 스테이징을 풀지 않으면(변경 그룹만 고름) 작업 트리를 index 로 돌린다 — intent-to-add 파일(`.A`)만 그대로 남는다.
+ * - 이름 바뀜의 옛 경로에 추적 안 된 파일이 있으면(`untracked`) 그 파일은 HEAD 의 내용으로 덮인다.
+ *
+ * 무엇을 잃고 무엇이 남는지가 진짜 git 과 같은지는 fixtures/discard.json(crates/pw-git `commit::tests::discard_fixture`)이 본다.
+ */
+export function rollbackPlan(
+  chosen: readonly CommitItem[],
+  untracked: readonly string[],
+): RollbackPlan {
+  const staged = chosen.filter((i) => i.group === "staged");
+  const unstaging = new Set(staged.map((i) => i.path));
+  const entries = new Map<string, GitStatusEntry>();
+  for (const i of chosen) entries.set(i.path, i.entry);
+  const outside = new Set(untracked);
+  const changes: GitStatusEntry[] = [];
+  const overwritten = new Set<string>();
+  const kept: string[] = [];
+  for (const [path, e] of entries) {
+    const unstage = unstaging.has(path);
+    const keeps = unstage
+      ? NEW_IN_INDEX.has(e.staged) && e.unstaged !== "deleted"
+      : e.unstaged === "added";
+    if (keeps) kept.push(path);
+    if (!keeps || (unstage && e.staged === "renamed")) changes.push(e);
+    if (unstage && e.origPath && e.staged === "renamed" && outside.has(e.origPath))
+      overwritten.add(e.origPath);
+  }
+  const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+  return {
+    unstage: unstagePaths(staged),
+    discard: unstagePaths(chosen).sort(order),
+    lost: {
+      changes: changes.sort((a, b) => order(a.path, b.path)),
+      overwritten: [...overwritten].sort(order),
+    },
+    kept: kept.sort(order),
+  };
 }
 
 /**

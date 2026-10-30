@@ -65,6 +65,11 @@ git-commit-rollback-body = { $count ->
        *[other] Discard the changes to { $count } files? Staged changes are unstaged and reset to HEAD. This cannot be undone.
     }
 git-commit-rollback-confirm = Rollback
+# $count: number of files
+git-commit-rollback-kept = { $count ->
+        [one] This new file is not deleted and stays on disk:
+       *[other] These { $count } new files are not deleted and stay on disk:
+    }
 # $files: one file per line
 git-commit-rollback-untracked = Unversioned files were not deleted: { $files }
 git-commit-rollback-none = No changes are selected
@@ -79,7 +84,7 @@ git-commit-line-stage = Stage this line
 git-commit-line-unstage = Unstage this line
 git-commit-hunk-revert = Revert this change
 git-commit-hunk-revert-title = Revert Change
-git-commit-hunk-revert-body = Discard this change from the work tree? This cannot be undone.
+git-commit-hunk-revert-body = Discard this change from the work tree? The + lines below are removed from the file and the - lines come back. This cannot be undone.
 git-commit-hunk-changed = The file changed in the meantime; the diff was read again
 
 ## Stashes

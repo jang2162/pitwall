@@ -62,6 +62,8 @@ git-commit-rollback-title = 변경 되돌리기
 # $count: 파일 수
 git-commit-rollback-body = 파일 { $count }개의 변경을 버린다. 스테이징된 것은 스테이징을 풀고 HEAD 로 돌린다. 되돌릴 수 없다.
 git-commit-rollback-confirm = 되돌리기
+# $count: 파일 수
+git-commit-rollback-kept = 이 새 파일 { $count }개는 지우지 않고 디스크에 그대로 둔다:
 # $files: 줄마다 파일 하나
 git-commit-rollback-untracked = 버전 관리 안 되는 파일은 지우지 않았다: { $files }
 git-commit-rollback-none = 되돌릴 변경을 고르지 않았다
@@ -76,7 +78,7 @@ git-commit-line-stage = 이 줄 스테이징
 git-commit-line-unstage = 이 줄 스테이징 풀기
 git-commit-hunk-revert = 이 묶음 되돌리기
 git-commit-hunk-revert-title = 변경 묶음 되돌리기
-git-commit-hunk-revert-body = 이 묶음의 작업 트리 변경을 버린다. 되돌릴 수 없다.
+git-commit-hunk-revert-body = 이 묶음의 작업 트리 변경을 버린다 — 아래의 + 줄은 파일에서 지워지고 - 줄이 돌아온다. 되돌릴 수 없다.
 git-commit-hunk-changed = 그사이 파일이 바뀌었다 — diff 를 다시 읽었다
 
 ## Stash
