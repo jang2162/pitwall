@@ -172,12 +172,13 @@ function AskpassDialog({
           )}
           {prompt.hint === "confirm" && (
             <div className="flex justify-end gap-2">
-              <button type="button" className={BUTTON} onClick={() => onAnswer(CANCEL)}>
+              {/* 처음 포커스는 「아니오」 다 — 모르는 호스트 키를 받아들이는 것은 보안 결정이라 뜬 순간 친 Enter · Space 로 예가 되면
+                  안 된다(신뢰 확인 · 위험 작업 확인과 같은 원칙). */}
+              <button type="button" autoFocus className={BUTTON} onClick={() => onAnswer(CANCEL)}>
                 {T.no}
               </button>
               <button
                 type="button"
-                autoFocus
                 className={`${BUTTON} border-ui-accent`}
                 onClick={() => onAnswer({ kind: "proceed" })}
               >

@@ -682,6 +682,39 @@ it("answers askpass through git.prompt.answer only — the value is not logged, 
     expect(JSON.stringify(c.params)).not.toContain(SECRET);
 });
 
+it("focuses 아니오 first in an ssh yes/no askpass, so a stray Enter cannot accept an unknown host key", async () => {
+  await mount();
+  await act(async () =>
+    host.prompt({
+      kind: "open",
+      prompt: {
+        promptId: 8,
+        request: {
+          kind: "askpass",
+          text: "Are you sure you want to continue connecting (yes/no)? ",
+          hint: "confirm",
+        },
+      },
+    }),
+  );
+  const dialog = await vi.waitFor(() => {
+    const el = byTestId("git-askpass-dialog");
+    if (!el) throw new Error("no askpass dialog");
+    return el;
+  });
+  const no = button(dialog, "아니오");
+  expect(no).toBeDefined();
+  expect(document.activeElement).toBe(no);
+  // 브라우저는 포커스된 단추에 Enter · Space 가 오면 그 단추를 누른다(happy-dom 은 그 기본 동작이 없어 직접 누른다).
+  await click(document.activeElement as HTMLElement);
+  await vi.waitFor(() => expect(calls("git.prompt.answer")).toHaveLength(1));
+  expect(calls("git.prompt.answer")[0]!.params).toEqual({
+    projectId: "p1",
+    promptId: 8,
+    answer: { kind: "cancel" },
+  });
+});
+
 it("lists push, update and fetch in the VCS popup (⌃V) — not the args-only undo offer — and fetches every remote", async () => {
   host.answers.set("git.fetch", { workTree: "/work/demo" });
   await mount();
