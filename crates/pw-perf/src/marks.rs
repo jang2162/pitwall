@@ -33,9 +33,82 @@ pub fn first<'a>(marks: &'a [Mark], event: &str, pid: Option<u32>) -> Option<&'a
         .find(|m| m.event == event && pid.is_none_or(|p| p == m.pid))
 }
 
+/// 멈춘 회(첫 프레임 · 시나리오를 기다리다 시간이 다 됨)의 실패 까닭에 붙이는 진단: 마지막 진행 표시와 그 뒤로 흐른 시간, 창의
+/// 가려짐(`hidden` · `visible` 표시), 기다리는 동안 화면이 잠겼는가. 가려진 창 · 잠긴 화면에서는 WebKit 이 rAF 를 멈추고
+/// 타이머를 늦춰 회가 제품 탓 없이 멈춘다 — 이것으로 둘을 가른다. `now_ms` 는 기다림이 끝난 벽시계(Unix epoch, ms).
+pub fn stall_note(marks: &[Mark], now_ms: f64, locked: bool) -> String {
+    let visibility = |m: &&Mark| m.event == "hidden" || m.event == "visible";
+    let progress = match marks.iter().rev().find(|m| !visibility(m)) {
+        Some(m) => format!(
+            "last mark `{}` {:.1} s before",
+            m.event,
+            (now_ms - m.epoch_ms) / 1000.0
+        ),
+        None => "no mark".to_owned(),
+    };
+    let hidden = marks.iter().filter(|m| m.event == "hidden").count();
+    let visible = marks.iter().filter(|m| m.event == "visible").count();
+    let window = match marks.iter().rev().find(visibility) {
+        None => "window never hidden".to_owned(),
+        Some(last) if last.event == "hidden" => format!(
+            "window hidden {hidden}x, visible again {visible}x, hidden at the end (for {:.1} s)",
+            (now_ms - last.epoch_ms) / 1000.0
+        ),
+        Some(_) => {
+            format!("window hidden {hidden}x, visible again {visible}x, visible at the end")
+        }
+    };
+    let screen = if locked {
+        "screen locked while waiting"
+    } else {
+        "screen not locked while waiting"
+    };
+    format!("{progress}; {window}; {screen}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mark(event: &str, epoch_ms: f64) -> Mark {
+        Mark {
+            event: event.into(),
+            pid: 7,
+            epoch_ms,
+            window: Some("project-a".into()),
+            hidden: None,
+            data: None,
+        }
+    }
+
+    #[test]
+    fn a_stall_note_names_the_last_step_and_whether_the_window_stayed_hidden() {
+        let run = [
+            mark("main", 0.0),
+            mark("first_frame", 500.0),
+            mark("gutter_mark", 38_000.0),
+            mark("hidden", 48_000.0),
+            mark("visible", 50_000.0),
+            mark("changes_ready", 156_000.0),
+            mark("hidden", 245_000.0),
+        ];
+        assert_eq!(
+            stall_note(&run, 420_000.0, false),
+            "last mark `changes_ready` 264.0 s before; window hidden 2x, visible again 1x, hidden at the end (for 175.0 s); screen not locked while waiting"
+        );
+        assert_eq!(
+            stall_note(&run[..5], 60_000.0, true),
+            "last mark `gutter_mark` 22.0 s before; window hidden 1x, visible again 1x, visible at the end; screen locked while waiting"
+        );
+        assert_eq!(
+            stall_note(&run[..1], 60_000.0, false),
+            "last mark `main` 60.0 s before; window never hidden; screen not locked while waiting"
+        );
+        assert_eq!(
+            stall_note(&[], 1.0, false),
+            "no mark; window never hidden; screen not locked while waiting"
+        );
+    }
 
     #[test]
     fn marks_are_read_line_by_line_and_a_torn_line_is_skipped() {

@@ -107,3 +107,44 @@ it("reports a window that was hidden before its first frame", () => {
   frames.shift()!();
   expect(onFrame).toHaveBeenCalledWith({ hidden: true });
 });
+
+it("reports each return to visible, so a stalled run shows whether the window stayed hidden", () => {
+  const onHidden = vi.fn();
+  const onVisible = vi.fn();
+  const doc = visibility("visible");
+  root = createRoot(document.createElement("div"));
+  act(() =>
+    root!.render(
+      <FirstFrameMark
+        onFrame={() => {}}
+        onHidden={onHidden}
+        onVisible={onVisible}
+        frame={() => {}}
+        doc={doc}
+      />,
+    ),
+  );
+  doc.set("hidden");
+  doc.set("visible");
+  doc.set("hidden");
+  expect(onHidden).toHaveBeenCalledTimes(2);
+  expect(onVisible).toHaveBeenCalledTimes(1);
+});
+
+it("reports a window hidden from the start without waiting for a first frame that may never come", () => {
+  const onHidden = vi.fn();
+  const onFrame = vi.fn();
+  root = createRoot(document.createElement("div"));
+  act(() =>
+    root!.render(
+      <FirstFrameMark
+        onFrame={onFrame}
+        onHidden={onHidden}
+        frame={() => {}}
+        doc={visibility("hidden")}
+      />,
+    ),
+  );
+  expect(onFrame).not.toHaveBeenCalled();
+  expect(onHidden).toHaveBeenCalledTimes(1);
+});

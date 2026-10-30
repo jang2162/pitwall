@@ -77,7 +77,7 @@ void applyRegistryTheme(
   log,
 );
 
-// src-tauri/src/perf.rs 의 perf_first_frame · perf_hidden · perf_report. 측정 모드가 아니면 그리지 않는다(perf-mark.tsx). 시나리오는
+// src-tauri/src/perf.rs 의 perf_first_frame · perf_hidden · perf_visible · perf_report. 측정 모드가 아니면 그리지 않는다(perf-mark.tsx). 시나리오는
 // 첫 프레임을 알린 뒤에 불러와 돌린다(perf-scenario.ts) — 측정 모드가 아니면 그 모듈을 받지도 않는다.
 const perfScenario = perfScenarioRequested(window.location.search);
 
@@ -99,6 +99,10 @@ function markHidden() {
   invoke("perf_hidden").catch((e: unknown) => log.warn(`perf mark failed: ${String(e)}`, "perf"));
 }
 
+function markVisible() {
+  invoke("perf_visible").catch((e: unknown) => log.warn(`perf mark failed: ${String(e)}`, "perf"));
+}
+
 const root = document.getElementById("root");
 if (!root) throw new Error("#root 가 index.html 에 없다");
 
@@ -108,7 +112,7 @@ createRoot(root).render(
       <App kind={windowKind} log={log} />
     </ThemeStoreProvider>
     {perfMarkRequested(window.location.search) && (
-      <FirstFrameMark onFrame={markFirstFrame} onHidden={markHidden} />
+      <FirstFrameMark onFrame={markFirstFrame} onHidden={markHidden} onVisible={markVisible} />
     )}
   </StrictMode>,
 );

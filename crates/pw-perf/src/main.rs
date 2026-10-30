@@ -681,8 +681,14 @@ mod measure {
         let (launcher, started, t0) = (launch.pid, launch.started, launch.t0);
         let read_marks = || marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
         let mut launcher_exit = None;
+        let mut locked = false;
+        let mut next_lock_check = Instant::now();
         let frame: Mark = loop {
             check_interrupted()?;
+            if Instant::now() >= next_lock_check {
+                locked |= screen_locked()?;
+                next_lock_check = Instant::now() + LOCK_CHECK;
+            }
             if launcher_exit.is_none() {
                 launcher_exit = macos::try_wait(launcher).map_err(|e| e.to_string())?;
             }
@@ -707,8 +713,9 @@ mod measure {
             }
             if started.elapsed() > opts.timeout {
                 return Err(format!(
-                    "run {index}: no first-frame mark within {}s (is the window hidden or the screen locked?)",
-                    opts.timeout.as_secs()
+                    "run {index}: no first-frame mark within {}s ({})",
+                    opts.timeout.as_secs(),
+                    marks::stall_note(&all, epoch_ms(), locked)
                 ));
             }
             std::thread::sleep(Duration::from_millis(2));
@@ -1102,8 +1109,9 @@ mod measure {
             }
             if Instant::now() > deadline {
                 return Err(format!(
-                    "run {index}: the scenario did not finish within {}s (is the window hidden or the screen locked?)",
-                    opts.scenario_timeout.as_secs()
+                    "run {index}: the scenario did not finish within {}s ({})",
+                    opts.scenario_timeout.as_secs(),
+                    marks::stall_note(&all, epoch_ms(), locked)
                 ));
             }
             std::thread::sleep(POLL);

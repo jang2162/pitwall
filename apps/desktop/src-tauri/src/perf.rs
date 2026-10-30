@@ -2,7 +2,7 @@
 //!
 //! [`MARK_ENV`] 에 파일 경로를 주고 띄우면 앱이 두 시각을 그 파일에 JSON 한 줄씩 덧붙인다 — `main` 에 들어온 때와 프로젝트
 //! 창이 첫 화면을 그린 때(`first_frame`). `first_frame` 에는 그 전에 창이 가려져 있었는지(`hidden`)도 싣고, 그 뒤에도 창이
-//! 가려질 때마다 `hidden` 표시를 하나씩 남긴다 — 가려진 창은 WebKit 이 프레임을 미루고 메모리를 줄여 그 회의 수치가
+//! 가려질 때마다 `hidden`, 다시 보일 때마다 `visible` 표시를 하나씩 남긴다 — 가려진 창은 WebKit 이 프레임을 미루고 메모리를 줄여 그 회의 수치가
 //! 기준선이 아니다. 변수가 없으면 아무것도 쓰지 않고, 프로젝트 창 주소에 `perf=1` 도 붙지 않아 프론트엔드는 표시 코드를
 //! 돌리지 않는다(src/perf-mark.tsx).
 //!
@@ -34,7 +34,7 @@ pub const SCENARIO_ENV: &str = "PITWALL_PERF_SCENARIO";
 pub const SCENARIOS: &[&str] = &["git"];
 
 /// 시나리오가 남기는 표시 이름(src/perf-scenario.ts 의 `env.report` — 시험이 그 파일과 같은지 본다). 하네스가 판정에 쓰는
-/// 표시(`first_frame` · `hidden` · `main`)는 웹뷰가 남기지 못하고, 모르는 이름도 남지 않는다.
+/// 표시(`first_frame` · `hidden` · `visible` · `main`)는 웹뷰가 남기지 못하고, 모르는 이름도 남지 않는다.
 pub const SCENARIO_EVENTS: &[&str] = &[
     "git_log_open",
     "git_log_rows",
@@ -212,6 +212,13 @@ pub fn perf_hidden<R: Runtime>(window: WebviewWindow<R>, marks: State<'_, PerfMa
     marks.record("hidden", Some(window.label()), Some(true));
 }
 
+/// 가려졌던 프로젝트 창의 문서가 다시 보인다(src/perf-mark.tsx). 하네스가 멈춘 회의 끝에 창이 가려져 있었는지 가른다. 측정
+/// 모드가 아니면 아무것도 하지 않는다.
+#[tauri::command]
+pub fn perf_visible<R: Runtime>(window: WebviewWindow<R>, marks: State<'_, PerfMarks>) {
+    marks.record("visible", Some(window.label()), Some(false));
+}
+
 /// 시나리오의 한 단계(src/perf-scenario.ts): 이름(`event`)과 잰 값(`data`). 측정 모드가 아니면 아무것도 하지 않는다.
 #[tauri::command]
 pub fn perf_report<R: Runtime>(
@@ -260,7 +267,7 @@ mod tests {
         for event in SCENARIO_EVENTS {
             assert_eq!(scenario_report_refused(event, &small), None, "{event}");
         }
-        for event in ["first_frame", "hidden", "main", "scenario_done "] {
+        for event in ["first_frame", "hidden", "visible", "main", "scenario_done "] {
             assert_eq!(
                 scenario_report_refused(event, &small),
                 Some("unknown event name"),
