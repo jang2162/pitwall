@@ -1,0 +1,2372 @@
+{
+  "schema": 1,
+  "scenario": "git",
+  "definitions": {
+    "open": "in the webview: from dispatching a ⌘9 keydown on the document (no OS key event) to the animation frame after the Git log canvas first drew a short hash",
+    "scroll": "after every row arrived (row count unchanged for 1 s): fling = top to bottom in 2000 frames, steady = 2 rows per frame for 600 frames; interval = rAF timestamp deltas, share within 16.7 ms judged on fling",
+    "diff": "in the webview: from a dblclick on the first log row (the 10,000-changed-line commit) to the frame after the commit tab's diff lines (.pw-diff-line) appeared — includes git.show/git.diff/git.blob and IPC",
+    "branch": "from the harness's wall clock just before it runs `git checkout <branch>` in the repository to the webview's wall clock at the frame after the status bar branch name changed",
+    "gutter": "in the webview: from dispatching an unsaved one-line edit to perf/typing.rs (5,000 lines, the gutter's HEAD base already loaded) to the frame after a `modified` gutter mark appeared",
+    "typing": "300 one-character inserts at 100 ms intervals (10 chars/s for 30 s) into perf/typing.rs; a 5 ms setTimeout probe runs meanwhile and a block is its callback gap minus 5 ms (WebKit has no Long Tasks API); judged on the longest block; the edits are reverted afterwards (nothing is saved)",
+    "commit_scroll": "the harness appends a line to each of the 10,000 files in perf/many; after ⌘0 (webview event) and every row arrived (row count unchanged for 1 s): fling = top to bottom in 1500 frames, steady = 2 rows per frame for 600 frames; share within 16.7 ms judged on fling",
+    "stage": "from the harness's wall clock just before it runs `git add <file>` in the repository to the webview's wall clock at the frame after that file's row appeared in the staged group",
+    "memory": "phys_footprint of the app instance right after the scenario finished (100k rows loaded, one commit tab and perf/typing.rs open, 10,000 changed files listed); not an idle baseline",
+    "judgement": "medians over valid measured runs, except the typing block: it is judged on the largest block of every valid run (\"no long task over 50 ms\" fails if any run has one); a run whose Git log row count differs from `git rev-list --count --all` fails",
+    "trust": "the project is registered untrusted, as if the first-open trust prompt was answered \"don't trust\" (no prompt is shown): blame uses the native (gix) engine, the git CLI paths of trusted projects are not measured"
+  },
+  "build": {
+    "profile": "release",
+    "app": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m2-realcheck-run/target/release/bundle/macos/Pitwall.app",
+    "binary": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m2-realcheck-run/target/release/bundle/macos/Pitwall.app/Contents/MacOS/pitwall"
+  },
+  "commit": {
+    "sha": "bc3d80b51ac1f8ae5e108127e17ae82132314d29",
+    "dirty": true
+  },
+  "os": {
+    "name": "macOS",
+    "version": "27.0.1",
+    "build": "26A434"
+  },
+  "hardware": {
+    "model": "Mac17,9",
+    "cpu": "Apple M5 Pro",
+    "cpus": 15,
+    "memory_bytes": 51539607552
+  },
+  "settings": {
+    "runs": 5,
+    "warmup": 1,
+    "checkout": "perf-checkout"
+  },
+  "repos": [
+    {
+      "path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m2-realcheck-run/target/perf-git/graph",
+      "commit_graph": true,
+      "commits": 100003,
+      "runs": [
+        {
+          "index": 0,
+          "warmup": true,
+          "excluded": null,
+          "app_pid": 66474,
+          "group": 66474,
+          "cold_start_ms": 1329.084716796875,
+          "measure": {
+            "open_ms": 94.0,
+            "first_draw_ms": 53.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 399.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 36.0,
+                "within16_7": 0.45,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 2000,
+                "p50": 2.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 7.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 27.0,
+                "within16_7": 0.43,
+                "over18": 0.0
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 2.0,
+                "p99": 2.0,
+                "max": 2.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 143.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 139.220947265625,
+            "gutter_ms": 58.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3877,
+                "maxMs": 20.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 2.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 1369.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 19.0,
+                "max": 24.0,
+                "within16_7": 0.42,
+                "over18": 0.02
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 19.0,
+                "within16_7": 0.42,
+                "over18": 0.0
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 159.419189453125
+          },
+          "memory": {
+            "footprint_bytes": 869538032,
+            "rss_bytes": 1596030976,
+            "processes": [
+              {
+                "pid": 66477,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 615532464,
+                "rss_bytes": 1219411968
+              },
+              {
+                "pid": 66474,
+                "name": "pitwall",
+                "footprint_bytes": 128320952,
+                "rss_bytes": 289390592
+              },
+              {
+                "pid": 66476,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 112363080,
+                "rss_bytes": 52183040
+              },
+              {
+                "pid": 66491,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 66478,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5177872,
+                "rss_bytes": 12910592
+              },
+              {
+                "pid": 66475,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2408784,
+                "rss_bytes": 10141696
+              }
+            ]
+          },
+          "killed": false
+        },
+        {
+          "index": 1,
+          "warmup": false,
+          "excluded": null,
+          "app_pid": 46281,
+          "group": 46281,
+          "cold_start_ms": 428.51806640625,
+          "measure": {
+            "open_ms": 153.0,
+            "first_draw_ms": 107.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 527.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 19.0,
+                "max": 25.0,
+                "within16_7": 0.44,
+                "over18": 0.05
+              },
+              "work": {
+                "n": 2000,
+                "p50": 1.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 6.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 33.0,
+                "within16_7": 0.5,
+                "over18": 0.15
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 1.0,
+                "p99": 2.0,
+                "max": 3.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 147.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 141.0478515625,
+            "gutter_ms": 64.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3862,
+                "maxMs": 18.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 2.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 865.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 58.0,
+                "within16_7": 0.49,
+                "over18": 0.12
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 20.0,
+                "within16_7": 0.45,
+                "over18": 0.1
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 176.845947265625
+          },
+          "memory": {
+            "footprint_bytes": 1084430408,
+            "rss_bytes": 1487568896,
+            "processes": [
+              {
+                "pid": 46284,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 838321976,
+                "rss_bytes": 1120059392
+              },
+              {
+                "pid": 46281,
+                "name": "pitwall",
+                "footprint_bytes": 120784288,
+                "rss_bytes": 287571968
+              },
+              {
+                "pid": 46283,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 111986224,
+                "rss_bytes": 48168960
+              },
+              {
+                "pid": 46286,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 46285,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5210640,
+                "rss_bytes": 9633792
+              },
+              {
+                "pid": 46282,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2392400,
+                "rss_bytes": 10141696
+              }
+            ]
+          },
+          "killed": false
+        },
+        {
+          "index": 2,
+          "warmup": false,
+          "excluded": null,
+          "app_pid": 82208,
+          "group": 82208,
+          "cold_start_ms": 462.8701171875,
+          "measure": {
+            "open_ms": 80.0,
+            "first_draw_ms": 37.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 434.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 34.0,
+                "within16_7": 0.47,
+                "over18": 0.12
+              },
+              "work": {
+                "n": 2000,
+                "p50": 1.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 6.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 27.0,
+                "within16_7": 0.47,
+                "over18": 0.12
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 2.0,
+                "p99": 2.0,
+                "max": 4.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 147.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 133.715087890625,
+            "gutter_ms": 57.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3865,
+                "maxMs": 21.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 3.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 1025.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 23.0,
+                "within16_7": 0.47,
+                "over18": 0.11
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 20.0,
+                "max": 27.0,
+                "within16_7": 0.46,
+                "over18": 0.12
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 165.425048828125
+          },
+          "memory": {
+            "footprint_bytes": 1090033664,
+            "rss_bytes": 1470480384,
+            "processes": [
+              {
+                "pid": 82603,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 832800520,
+                "rss_bytes": 1085816832
+              },
+              {
+                "pid": 82208,
+                "name": "pitwall",
+                "footprint_bytes": 129713544,
+                "rss_bytes": 304660480
+              },
+              {
+                "pid": 82586,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 114165320,
+                "rss_bytes": 48349184
+              },
+              {
+                "pid": 82653,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 82652,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5210616,
+                "rss_bytes": 9519104
+              },
+              {
+                "pid": 82536,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2408784,
+                "rss_bytes": 10141696
+              }
+            ]
+          },
+          "killed": false
+        },
+        {
+          "index": 3,
+          "warmup": false,
+          "excluded": null,
+          "app_pid": 80415,
+          "group": 80415,
+          "cold_start_ms": 463.928955078125,
+          "measure": {
+            "open_ms": 88.0,
+            "first_draw_ms": 51.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 430.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 50.0,
+                "within16_7": 0.47,
+                "over18": 0.13
+              },
+              "work": {
+                "n": 2000,
+                "p50": 1.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 6.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 47.0,
+                "within16_7": 0.48,
+                "over18": 0.14
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 2.0,
+                "p99": 2.0,
+                "max": 4.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 142.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 126.26611328125,
+            "gutter_ms": 55.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3864,
+                "maxMs": 19.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 3.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 511.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 22.0,
+                "within16_7": 0.44,
+                "over18": 0.1
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 19.0,
+                "within16_7": 0.45,
+                "over18": 0.1
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 161.868896484375
+          },
+          "memory": {
+            "footprint_bytes": 1072551840,
+            "rss_bytes": 1443790848,
+            "processes": [
+              {
+                "pid": 80612,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 833505032,
+                "rss_bytes": 1086570496
+              },
+              {
+                "pid": 80415,
+                "name": "pitwall",
+                "footprint_bytes": 113984832,
+                "rss_bytes": 277250048
+              },
+              {
+                "pid": 80595,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 111724080,
+                "rss_bytes": 48234496
+              },
+              {
+                "pid": 80694,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 80613,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5194232,
+                "rss_bytes": 9601024
+              },
+              {
+                "pid": 80561,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2408784,
+                "rss_bytes": 10141696
+              }
+            ]
+          },
+          "killed": false
+        },
+        {
+          "index": 4,
+          "warmup": false,
+          "excluded": null,
+          "app_pid": 10048,
+          "group": 10048,
+          "cold_start_ms": 415.251953125,
+          "measure": {
+            "open_ms": 90.0,
+            "first_draw_ms": 53.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 384.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 25.0,
+                "within16_7": 0.47,
+                "over18": 0.13
+              },
+              "work": {
+                "n": 2000,
+                "p50": 2.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 7.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 25.0,
+                "within16_7": 0.5,
+                "over18": 0.19
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 2.0,
+                "p99": 2.0,
+                "max": 3.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 149.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 134.425048828125,
+            "gutter_ms": 50.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3879,
+                "maxMs": 13.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 2.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 520.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 23.0,
+                "within16_7": 0.42,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 20.0,
+                "max": 25.0,
+                "within16_7": 0.43,
+                "over18": 0.02
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 141.87890625
+          },
+          "memory": {
+            "footprint_bytes": 679827552,
+            "rss_bytes": 1540407296,
+            "processes": [
+              {
+                "pid": 10051,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 432097152,
+                "rss_bytes": 1183694848
+              },
+              {
+                "pid": 10048,
+                "name": "pitwall",
+                "footprint_bytes": 121374112,
+                "rss_bytes": 275775488
+              },
+              {
+                "pid": 10050,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 113034752,
+                "rss_bytes": 49152000
+              },
+              {
+                "pid": 10053,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 10052,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5145104,
+                "rss_bytes": 9617408
+              },
+              {
+                "pid": 10049,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2441552,
+                "rss_bytes": 10174464
+              }
+            ]
+          },
+          "killed": false
+        },
+        {
+          "index": 5,
+          "warmup": false,
+          "excluded": null,
+          "app_pid": 63267,
+          "group": 63267,
+          "cold_start_ms": 492.845947265625,
+          "measure": {
+            "open_ms": 82.0,
+            "first_draw_ms": 47.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 415.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 19.0,
+                "max": 40.0,
+                "within16_7": 0.43,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 2000,
+                "p50": 2.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 6.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 28.0,
+                "within16_7": 0.43,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 2.0,
+                "p99": 2.0,
+                "max": 2.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 151.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 143.343994140625,
+            "gutter_ms": 64.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3864,
+                "maxMs": 18.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 3.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 494.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 21.0,
+                "within16_7": 0.4,
+                "over18": 0.0
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 18.0,
+                "within16_7": 0.4,
+                "over18": 0.0
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 150.054931640625
+          },
+          "memory": {
+            "footprint_bytes": 722655208,
+            "rss_bytes": 1434599424,
+            "processes": [
+              {
+                "pid": 63290,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 478152456,
+                "rss_bytes": 1074823168
+              },
+              {
+                "pid": 63267,
+                "name": "pitwall",
+                "footprint_bytes": 119686584,
+                "rss_bytes": 279789568
+              },
+              {
+                "pid": 63288,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 111494656,
+                "rss_bytes": 48283648
+              },
+              {
+                "pid": 63338,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 63291,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5177848,
+                "rss_bytes": 9568256
+              },
+              {
+                "pid": 63287,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2408784,
+                "rss_bytes": 10141696
+              }
+            ]
+          },
+          "killed": false
+        }
+      ],
+      "failures": [],
+      "valid_runs": 5,
+      "summary": {
+        "open_ms": {
+          "median": 88.0,
+          "min": 80.0,
+          "max": 153.0,
+          "n": 5
+        },
+        "first_draw_ms": {
+          "median": 51.0,
+          "min": 37.0,
+          "max": 107.0,
+          "n": 5
+        },
+        "all_rows_ms": {
+          "median": 430.0,
+          "min": 384.0,
+          "max": 527.0,
+          "n": 5
+        },
+        "fling_within16_7": {
+          "median": 0.47,
+          "min": 0.43,
+          "max": 0.47,
+          "n": 5
+        },
+        "fling_p95_ms": {
+          "median": 19.0,
+          "min": 18.0,
+          "max": 19.0,
+          "n": 5
+        },
+        "steady_within16_7": {
+          "median": 0.48,
+          "min": 0.43,
+          "max": 0.5,
+          "n": 5
+        },
+        "diff_ms": {
+          "median": 147.0,
+          "min": 142.0,
+          "max": 151.0,
+          "n": 5
+        },
+        "branch_ms": {
+          "median": 134.425048828125,
+          "min": 126.26611328125,
+          "max": 143.343994140625,
+          "n": 5
+        },
+        "gutter_ms": {
+          "median": 57.0,
+          "min": 50.0,
+          "max": 64.0,
+          "n": 5
+        },
+        "typing_max_block_ms": {
+          "median": 18.0,
+          "min": 13.0,
+          "max": 21.0,
+          "n": 5
+        },
+        "typing_over50": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0,
+          "n": 5
+        },
+        "commit_all_rows_ms": {
+          "median": 520.0,
+          "min": 494.0,
+          "max": 1025.0,
+          "n": 5
+        },
+        "commit_fling_within16_7": {
+          "median": 0.44,
+          "min": 0.4,
+          "max": 0.49,
+          "n": 5
+        },
+        "commit_fling_p95_ms": {
+          "median": 19.0,
+          "min": 18.0,
+          "max": 19.0,
+          "n": 5
+        },
+        "commit_steady_within16_7": {
+          "median": 0.45,
+          "min": 0.4,
+          "max": 0.46,
+          "n": 5
+        },
+        "stage_ms": {
+          "median": 161.868896484375,
+          "min": 141.87890625,
+          "max": 176.845947265625,
+          "n": 5
+        },
+        "footprint_bytes": {
+          "median": 1072551840.0,
+          "min": 679827552.0,
+          "max": 1090033664.0,
+          "n": 5
+        }
+      },
+      "targets": {
+        "open_ms": 500.0,
+        "scroll_share": 0.95,
+        "diff_ms": 200.0,
+        "branch_ms": 500.0,
+        "gutter_ms": 100.0,
+        "block_ms": 50.0,
+        "commit_scroll_share": 0.95,
+        "stage_ms": 500.0,
+        "open_met": true,
+        "scroll_met": false,
+        "diff_met": true,
+        "branch_met": true,
+        "gutter_met": true,
+        "block_met": true,
+        "commit_scroll_met": false,
+        "stage_met": true
+      }
+    },
+    {
+      "path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m2-realcheck-run/target/perf-git/no-graph",
+      "commit_graph": false,
+      "commits": 100003,
+      "runs": [
+        {
+          "index": 0,
+          "warmup": true,
+          "excluded": null,
+          "app_pid": 99441,
+          "group": 99441,
+          "cold_start_ms": 405.47314453125,
+          "measure": {
+            "open_ms": 208.0,
+            "first_draw_ms": 166.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 587.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 26.0,
+                "within16_7": 0.42,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 2000,
+                "p50": 1.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 7.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 19.0,
+                "max": 23.0,
+                "within16_7": 0.46,
+                "over18": 0.02
+              },
+              "work": {
+                "n": 601,
+                "p50": 0.0,
+                "p95": 1.0,
+                "p99": 1.0,
+                "max": 2.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 141.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 135.385986328125,
+            "gutter_ms": 49.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3881,
+                "maxMs": 13.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 2.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 1640.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 24.0,
+                "within16_7": 0.41,
+                "over18": 0.0
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 19.0,
+                "max": 30.0,
+                "within16_7": 0.42,
+                "over18": 0.04
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 158.8310546875
+          },
+          "memory": {
+            "footprint_bytes": 1073682384,
+            "rss_bytes": 1466155008,
+            "processes": [
+              {
+                "pid": 99444,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 825394952,
+                "rss_bytes": 1091764224
+              },
+              {
+                "pid": 99441,
+                "name": "pitwall",
+                "footprint_bytes": 123127200,
+                "rss_bytes": 295026688
+              },
+              {
+                "pid": 99443,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 111855128,
+                "rss_bytes": 47710208
+              },
+              {
+                "pid": 99471,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 99445,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5161440,
+                "rss_bytes": 9519104
+              },
+              {
+                "pid": 99442,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2408784,
+                "rss_bytes": 10141696
+              }
+            ]
+          },
+          "killed": false
+        },
+        {
+          "index": 1,
+          "warmup": false,
+          "excluded": null,
+          "app_pid": 53224,
+          "group": 53224,
+          "cold_start_ms": 400.827880859375,
+          "measure": {
+            "open_ms": 126.0,
+            "first_draw_ms": 86.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 432.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 31.0,
+                "within16_7": 0.48,
+                "over18": 0.14
+              },
+              "work": {
+                "n": 2000,
+                "p50": 1.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 7.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 16.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 30.0,
+                "within16_7": 0.5,
+                "over18": 0.16
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 2.0,
+                "p99": 2.0,
+                "max": 2.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 146.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 131.77099609375,
+            "gutter_ms": 59.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3835,
+                "maxMs": 22.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 3.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 480.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 24.0,
+                "within16_7": 0.45,
+                "over18": 0.11
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 30.0,
+                "within16_7": 0.45,
+                "over18": 0.12
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 148.05615234375
+          },
+          "memory": {
+            "footprint_bytes": 1093736448,
+            "rss_bytes": 1507508224,
+            "processes": [
+              {
+                "pid": 53228,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 853346008,
+                "rss_bytes": 1142308864
+              },
+              {
+                "pid": 53224,
+                "name": "pitwall",
+                "footprint_bytes": 115295672,
+                "rss_bytes": 285261824
+              },
+              {
+                "pid": 53227,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 111756848,
+                "rss_bytes": 48283648
+              },
+              {
+                "pid": 53230,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 53229,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5177872,
+                "rss_bytes": 9486336
+              },
+              {
+                "pid": 53225,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2425168,
+                "rss_bytes": 10174464
+              }
+            ]
+          },
+          "killed": false
+        },
+        {
+          "index": 2,
+          "warmup": false,
+          "excluded": null,
+          "app_pid": 93035,
+          "group": 93035,
+          "cold_start_ms": 426.10791015625,
+          "measure": {
+            "open_ms": 144.0,
+            "first_draw_ms": 98.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 437.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 37.0,
+                "within16_7": 0.48,
+                "over18": 0.15
+              },
+              "work": {
+                "n": 2000,
+                "p50": 1.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 6.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 29.0,
+                "within16_7": 0.5,
+                "over18": 0.15
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 2.0,
+                "p99": 2.0,
+                "max": 2.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 133.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 138.93701171875,
+            "gutter_ms": 55.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3856,
+                "maxMs": 23.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 3.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 547.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 19.0,
+                "max": 23.0,
+                "within16_7": 0.41,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 19.0,
+                "max": 25.0,
+                "within16_7": 0.4,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 157.443115234375
+          },
+          "memory": {
+            "footprint_bytes": 678058032,
+            "rss_bytes": 1477787648,
+            "processes": [
+              {
+                "pid": 93038,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 436275000,
+                "rss_bytes": 1113866240
+              },
+              {
+                "pid": 93035,
+                "name": "pitwall",
+                "footprint_bytes": 115803552,
+                "rss_bytes": 283934720
+              },
+              {
+                "pid": 93037,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 112641560,
+                "rss_bytes": 48234496
+              },
+              {
+                "pid": 93064,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 93039,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5194256,
+                "rss_bytes": 9617408
+              },
+              {
+                "pid": 93036,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2408784,
+                "rss_bytes": 10141696
+              }
+            ]
+          },
+          "killed": false
+        },
+        {
+          "index": 3,
+          "warmup": false,
+          "excluded": null,
+          "app_pid": 39486,
+          "group": 39486,
+          "cold_start_ms": 449.1982421875,
+          "measure": {
+            "open_ms": 125.0,
+            "first_draw_ms": 88.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 435.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 29.0,
+                "within16_7": 0.44,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 2000,
+                "p50": 2.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 7.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 39.0,
+                "within16_7": 0.45,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 2.0,
+                "p99": 2.0,
+                "max": 5.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 147.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 134.048828125,
+            "gutter_ms": 57.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3856,
+                "maxMs": 20.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 2.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 494.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 25.0,
+                "within16_7": 0.41,
+                "over18": 0.0
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 22.0,
+                "within16_7": 0.41,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 148.505126953125
+          },
+          "memory": {
+            "footprint_bytes": 1092032464,
+            "rss_bytes": 1501167616,
+            "processes": [
+              {
+                "pid": 39491,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 851511072,
+                "rss_bytes": 1142505472
+              },
+              {
+                "pid": 39486,
+                "name": "pitwall",
+                "footprint_bytes": 118031800,
+                "rss_bytes": 278855680
+              },
+              {
+                "pid": 39489,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 111592912,
+                "rss_bytes": 48185344
+              },
+              {
+                "pid": 39492,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5145080,
+                "rss_bytes": 9453568
+              },
+              {
+                "pid": 39493,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 3326432,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 39488,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2425168,
+                "rss_bytes": 10174464
+              }
+            ]
+          },
+          "killed": false
+        },
+        {
+          "index": 4,
+          "warmup": false,
+          "excluded": null,
+          "app_pid": 77844,
+          "group": 77844,
+          "cold_start_ms": 406.8046875,
+          "measure": {
+            "open_ms": 134.0,
+            "first_draw_ms": 96.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 433.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 32.0,
+                "within16_7": 0.43,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 2000,
+                "p50": 2.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 7.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 20.0,
+                "max": 26.0,
+                "within16_7": 0.43,
+                "over18": 0.03
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 1.0,
+                "p99": 2.0,
+                "max": 2.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 162.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 162.180908203125,
+            "gutter_ms": 56.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3864,
+                "maxMs": 19.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 2.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 814.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 19.0,
+                "max": 28.0,
+                "within16_7": 0.42,
+                "over18": 0.01
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 18.0,
+                "p99": 18.0,
+                "max": 18.0,
+                "within16_7": 0.41,
+                "over18": 0.0
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 157.593994140625
+          },
+          "memory": {
+            "footprint_bytes": 1106171832,
+            "rss_bytes": 1512636416,
+            "processes": [
+              {
+                "pid": 77847,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 839042824,
+                "rss_bytes": 1121288192
+              },
+              {
+                "pid": 77844,
+                "name": "pitwall",
+                "footprint_bytes": 141723088,
+                "rss_bytes": 311279616
+              },
+              {
+                "pid": 77846,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 112100816,
+                "rss_bytes": 48365568
+              },
+              {
+                "pid": 77849,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 77848,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5145056,
+                "rss_bytes": 9535488
+              },
+              {
+                "pid": 77845,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2425168,
+                "rss_bytes": 10174464
+              }
+            ]
+          },
+          "killed": false
+        },
+        {
+          "index": 5,
+          "warmup": false,
+          "excluded": null,
+          "app_pid": 26712,
+          "group": 26712,
+          "cold_start_ms": 418.0439453125,
+          "measure": {
+            "open_ms": 165.0,
+            "first_draw_ms": 122.0,
+            "first_hash": "42743392",
+            "open_viewport": {
+              "width": 376.0,
+              "height": 92.0
+            },
+            "rows": 100003,
+            "all_rows_ms": 591.0,
+            "scroll_viewport": {
+              "width": 376.0,
+              "height": 542.0
+            },
+            "fling": {
+              "interval": {
+                "n": 2000,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 31.0,
+                "within16_7": 0.46,
+                "over18": 0.11
+              },
+              "work": {
+                "n": 2000,
+                "p50": 1.0,
+                "p95": 3.0,
+                "p99": 3.0,
+                "max": 6.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 34.0,
+                "within16_7": 0.47,
+                "over18": 0.12
+              },
+              "work": {
+                "n": 601,
+                "p50": 1.0,
+                "p95": 2.0,
+                "p99": 2.0,
+                "max": 5.0,
+                "within16_7": 1.0,
+                "over18": 0.0
+              }
+            },
+            "diff_ms": 142.0,
+            "diff_path": "perf/big.rs",
+            "painted_lines": 36,
+            "branch_from": "main",
+            "branch_to": "perf-checkout",
+            "branch_ms": 143.738037109375,
+            "gutter_ms": 54.0,
+            "typing": {
+              "keys": 300,
+              "lines": 5001,
+              "blocks": {
+                "samples": 3831,
+                "maxMs": 20.0,
+                "over50": 0
+              },
+              "dispatchP50Ms": 1.0,
+              "dispatchMaxMs": 3.0
+            },
+            "commit_rows": 10002,
+            "commit_all_rows_ms": 500.0,
+            "commit_viewport": {
+              "width": 232.0,
+              "height": 542.0
+            },
+            "commit_fling": {
+              "interval": {
+                "n": 1500,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 35.0,
+                "within16_7": 0.43,
+                "over18": 0.1
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "commit_steady": {
+              "interval": {
+                "n": 600,
+                "p50": 17.0,
+                "p95": 19.0,
+                "p99": 19.0,
+                "max": 23.0,
+                "within16_7": 0.45,
+                "over18": 0.11
+              },
+              "work": {
+                "n": 0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "max": 0.0,
+                "within16_7": 0.0,
+                "over18": 0.0
+              }
+            },
+            "stage_path": "perf/many/f00000.txt",
+            "stage_ms": 150.283935546875
+          },
+          "memory": {
+            "footprint_bytes": 743004184,
+            "rss_bytes": 1491468288,
+            "processes": [
+              {
+                "pid": 26715,
+                "name": "com.apple.WebKit.WebContent",
+                "footprint_bytes": 497927968,
+                "rss_bytes": 1128906752
+              },
+              {
+                "pid": 26712,
+                "name": "pitwall",
+                "footprint_bytes": 119702944,
+                "rss_bytes": 282673152
+              },
+              {
+                "pid": 26714,
+                "name": "com.apple.WebKit.GPU",
+                "footprint_bytes": 112035400,
+                "rss_bytes": 48185344
+              },
+              {
+                "pid": 26717,
+                "name": "com.apple.audio.SandboxHelper",
+                "footprint_bytes": 5734880,
+                "rss_bytes": 11993088
+              },
+              {
+                "pid": 26716,
+                "name": "com.apple.WebKit.Networking",
+                "footprint_bytes": 5161440,
+                "rss_bytes": 9535488
+              },
+              {
+                "pid": 26713,
+                "name": "SetStoreUpdateService",
+                "footprint_bytes": 2441552,
+                "rss_bytes": 10174464
+              }
+            ]
+          },
+          "killed": false
+        }
+      ],
+      "failures": [],
+      "valid_runs": 5,
+      "summary": {
+        "open_ms": {
+          "median": 134.0,
+          "min": 125.0,
+          "max": 165.0,
+          "n": 5
+        },
+        "first_draw_ms": {
+          "median": 96.0,
+          "min": 86.0,
+          "max": 122.0,
+          "n": 5
+        },
+        "all_rows_ms": {
+          "median": 435.0,
+          "min": 432.0,
+          "max": 591.0,
+          "n": 5
+        },
+        "fling_within16_7": {
+          "median": 0.46,
+          "min": 0.43,
+          "max": 0.48,
+          "n": 5
+        },
+        "fling_p95_ms": {
+          "median": 19.0,
+          "min": 18.0,
+          "max": 19.0,
+          "n": 5
+        },
+        "steady_within16_7": {
+          "median": 0.47,
+          "min": 0.43,
+          "max": 0.5,
+          "n": 5
+        },
+        "diff_ms": {
+          "median": 146.0,
+          "min": 133.0,
+          "max": 162.0,
+          "n": 5
+        },
+        "branch_ms": {
+          "median": 138.93701171875,
+          "min": 131.77099609375,
+          "max": 162.180908203125,
+          "n": 5
+        },
+        "gutter_ms": {
+          "median": 56.0,
+          "min": 54.0,
+          "max": 59.0,
+          "n": 5
+        },
+        "typing_max_block_ms": {
+          "median": 20.0,
+          "min": 19.0,
+          "max": 23.0,
+          "n": 5
+        },
+        "typing_over50": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0,
+          "n": 5
+        },
+        "commit_all_rows_ms": {
+          "median": 500.0,
+          "min": 480.0,
+          "max": 814.0,
+          "n": 5
+        },
+        "commit_fling_within16_7": {
+          "median": 0.42,
+          "min": 0.41,
+          "max": 0.45,
+          "n": 5
+        },
+        "commit_fling_p95_ms": {
+          "median": 18.0,
+          "min": 18.0,
+          "max": 19.0,
+          "n": 5
+        },
+        "commit_steady_within16_7": {
+          "median": 0.41,
+          "min": 0.4,
+          "max": 0.45,
+          "n": 5
+        },
+        "stage_ms": {
+          "median": 150.283935546875,
+          "min": 148.05615234375,
+          "max": 157.593994140625,
+          "n": 5
+        },
+        "footprint_bytes": {
+          "median": 1092032464.0,
+          "min": 678058032.0,
+          "max": 1106171832.0,
+          "n": 5
+        }
+      },
+      "targets": {
+        "open_ms": 500.0,
+        "scroll_share": 0.95,
+        "diff_ms": 200.0,
+        "branch_ms": 500.0,
+        "gutter_ms": 100.0,
+        "block_ms": 50.0,
+        "commit_scroll_share": 0.95,
+        "stage_ms": 500.0,
+        "open_met": true,
+        "scroll_met": false,
+        "diff_met": true,
+        "branch_met": true,
+        "gutter_met": true,
+        "block_met": true,
+        "commit_scroll_met": false,
+        "stage_met": true
+      }
+    }
+  ],
+  "warning": null,
+  "stopped": null
+}
