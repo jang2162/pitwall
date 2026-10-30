@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EDITOR_PANEL } from "../editor/editor-tabs";
 import {
+  applyPreset,
   buildDefaultLayout,
   collapseAllDocks,
   hiddenPanels,
@@ -371,6 +372,25 @@ describe("persistLayout", () => {
     persisted.dispose();
   });
 
+  it("saves a tool window dock that is folded or resized", async () => {
+    vi.useFakeTimers();
+    const api = dockview();
+    buildDefaultLayout(api);
+    const storage = memoryStorage();
+    const persisted = persistLayout(api, storage, { frameMs: 16, win: new EventTarget() });
+    // dockview 는 edge group 의 크기 · 접힘에 onDidLayoutChange 를 내지 않는다.
+    api.getEdgeGroup("right")!.collapse();
+    api.getEdgeGroup("bottom")!.setSize({ height: 300 });
+    await settle();
+    vi.advanceTimersByTime(16);
+    persisted.dispose();
+
+    const restored = dockview();
+    restoreLayout(restored, storage);
+    expect(restored.getEdgeGroup("right")!.isCollapsed()).toBe(true);
+    expect(restored.getEdgeGroup("bottom")!.height).toBe(300);
+  });
+
   it("flushes a pending save on pagehide", async () => {
     vi.useFakeTimers();
     const api = dockview();
@@ -439,5 +459,133 @@ describe("editor tabs in a save", () => {
     const second = dockview();
     restoreLayout(second, storage);
     expect(second.toJSON().panels.project!.tabComponent).toBeUndefined();
+  });
+});
+
+describe("layout presets", () => {
+  /** dock 마다 보이는 툴 윈도우 · 크기 · 접힘. */
+  type DockState = { active: string | undefined; size: number; collapsed: boolean };
+  function docks(api: DockviewApi): Record<"left" | "bottom" | "right", DockState> {
+    return Object.fromEntries(
+      (["left", "bottom", "right"] as const).map((d) => {
+        const group = api.getEdgeGroup(d)!;
+        return [
+          d,
+          {
+            active: edge(api, d).activePanel?.id,
+            size: d === "bottom" ? group.height : group.width,
+            collapsed: group.isCollapsed(),
+          },
+        ];
+      }),
+    ) as Record<"left" | "bottom" | "right", DockState>;
+  }
+
+  const GIT_REVIEW = {
+    left: { active: "commit", size: 260, collapsed: false },
+    bottom: { active: "git", size: 320, collapsed: false },
+    right: { active: "notifications", size: 260, collapsed: true },
+  };
+  const DEFAULT = {
+    left: { active: "project", size: 260, collapsed: false },
+    bottom: { active: "run", size: 200, collapsed: false },
+    right: { active: "notifications", size: 260, collapsed: false },
+  };
+
+  /** 잰 크기에서 접힌 dock 의 크기는 보지 않는다(접힌 띠의 크기다). */
+  const expanded = (d: ReturnType<typeof docks>) =>
+    Object.fromEntries(
+      Object.entries(d).map(([k, v]) => [k, v.collapsed ? { ...v, size: undefined } : v]),
+    );
+  const withoutCollapsedSize = (d: Record<string, { size: number; collapsed: boolean }>) =>
+    Object.fromEntries(
+      Object.entries(d).map(([k, v]) => [k, v.collapsed ? { ...v, size: undefined } : v]),
+    );
+
+  it("opens the commit and Git log tool windows with a tall log and the right dock folded for Git review", () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    applyPreset(api, "gitReview");
+    expect(expanded(docks(api))).toEqual(withoutCollapsedSize(GIT_REVIEW));
+    expect(placement(api)).toEqual(defaultPlacement);
+  });
+
+  it("goes back to the default layout", () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    applyPreset(api, "gitReview");
+    applyPreset(api, "default");
+    expect(docks(api)).toEqual(DEFAULT);
+    expect(placement(api)).toEqual(defaultPlacement);
+  });
+
+  it("brings back hidden tool windows and those moved to the centre, a floating group or another dock", async () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    api.getPanel("agent")!.api.close();
+    api.getPanel("git")!.api.close();
+    await settle();
+    api.getPanel("terminal")!.api.moveTo({ group: edge(api, "left") });
+    api.getPanel("structure")!.api.moveTo({ group: api.addGroup() });
+    api.addFloatingGroup(api.getPanel("problems")!);
+    expect(hiddenPanels(api).has("git")).toBe(true);
+
+    applyPreset(api, "gitReview");
+    await settle();
+    expect(placement(api)).toEqual(defaultPlacement);
+    expect(hiddenPanels(api).size).toBe(0);
+    // 툴 윈도우가 떠난 가운데 · floating 그룹은 남지 않는다.
+    expect(api.groups.filter((g) => g.api.location.type !== "edge")).toHaveLength(0);
+    // 차례도 프리셋의 것이다.
+    expect(edge(api, "bottom").panels.map((p) => p.id)).toEqual(
+      PANELS.filter((p) => p.home === "bottom").map((p) => p.id),
+    );
+    expect(docks(api).bottom.active).toBe("git");
+  });
+
+  it("keeps the editor tabs, their groups and the active tab", () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    openEditorTabs(api);
+    const editors = ["editor-1", "editor-2"].map((id) => api.getPanel(id)!);
+    editors[0]!.api.updateParameters({ path: "/p/a.rs", pinned: true });
+    editors[1]!.api.setActive();
+    const groups = gridGroups(api).map((g) => g.id);
+    const removed: string[] = [];
+    api.onDidRemovePanel((p) => removed.push(p.id));
+
+    applyPreset(api, "gitReview");
+    applyPreset(api, "default");
+    expect(removed).toEqual([]);
+    expect(["editor-1", "editor-2"].map((id) => api.getPanel(id))).toEqual(editors);
+    expect(gridGroups(api).map((g) => g.id)).toEqual(groups);
+    expect(editors[0]!.params).toMatchObject({ pinned: true });
+    expect(api.activePanel).toBe(editors[1]);
+  });
+
+  it("shrinks a dock that would not fit the window", () => {
+    const api = dockview();
+    api.layout(600, 400);
+    buildDefaultLayout(api);
+    applyPreset(api, "gitReview");
+    const d = docks(api);
+    // 좌우는 너비의 1/4(150), 하단은 높이의 0.45(180)까지.
+    expect(d.left.size).toBe(150);
+    expect(d.bottom.size).toBe(180);
+  });
+
+  it("comes back after a restart", async () => {
+    const storage = memoryStorage();
+    const first = dockview();
+    buildDefaultLayout(first);
+    const persisted = persistLayout(first, storage);
+    applyPreset(first, "gitReview");
+    await new Promise((r) => setTimeout(r, 40));
+    persisted.dispose();
+
+    const second = dockview();
+    expect(restoreLayout(second, storage)).toBe("restored");
+    expect(expanded(docks(second))).toEqual(withoutCollapsedSize(GIT_REVIEW));
+    expect(placement(second)).toEqual(defaultPlacement);
   });
 });

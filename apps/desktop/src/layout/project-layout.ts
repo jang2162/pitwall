@@ -19,7 +19,7 @@
 // 탭 머리의 이름은 UI 언어를 따른다(layout/strings.ts). 패널은 이름 대신 id 를 달고 만들어지고, `applyPanelTitles` 가 지금
 // 언어의 이름을 붙인다 — 저장본에 남은 이름(저장할 때의 언어)도 그것이 덮는다. 언어가 바뀌면 다시 부른다.
 
-import type { DockviewApi, SerializedDockview } from "dockview-react";
+import type { DockviewApi, SerializedDockview, SerializedEdgeGroups } from "dockview-react";
 
 import { EDITOR_PANEL } from "../editor/editor-tabs";
 
@@ -143,12 +143,11 @@ function expandDock(group: { location: { type: string }; isCollapsed(): boolean;
   if (group.location.type === "edge" && group.isCollapsed()) group.expand();
 }
 
+/** 처음 여는 프로젝트 · 저장본을 버린 창의 레이아웃. `⌃⌥1`(기본 프리셋)과 같은 배치다. */
 export function buildDefaultLayout(api: DockviewApi) {
   api.clear();
   hiddenOf(api).clear();
-  for (const dock of DOCKS) {
-    PANELS.filter((p) => p.home === dock).forEach((panel, i) => addPanel(api, panel, i > 0));
-  }
+  applyPreset(api, "default");
 }
 
 /** 저장본의 `hidden`. 모르는 툴 윈도우 · 자리는 빼고 읽는다 — 이것 때문에 레이아웃 전체를 버리지 않는다. */
@@ -320,16 +319,31 @@ export function persistLayout(
     timer = undefined;
     saveLayout(api, storage);
   };
-  const changed = api.onDidLayoutChange(() => {
-    // 첫 변경에서 잡은 시점에 쓴다. 뒤 변경이 시점을 미루지 않게 — 손을 떼지 않고 이어지는 크기 조절도 한 프레임마다 저장된다.
+  // 첫 변경에서 잡은 시점에 쓴다. 뒤 변경이 시점을 미루지 않게 — 손을 떼지 않고 이어지는 크기 조절도 한 프레임마다 저장된다.
+  const schedule = () => {
     timer ??= setTimeout(flush, frameMs);
-  });
+  };
+  const changed = api.onDidLayoutChange(schedule);
+  // dockview 의 onDidLayoutChange 는 툴 윈도우 dock(edge group)의 크기 · 접힘이 바뀌어도 오지 않는다(dockview 8.5) — 경계 끌기 ·
+  // 접기(⌘1 등) · 프리셋이 바꾼 것을 그 group 의 이벤트로 듣는다.
+  const edges = new Map<string, { dispose(): void }[]>();
+  const watchEdge = (group: DockviewApi["groups"][number]) => {
+    if (group.api.location.type !== "edge" || edges.has(group.id)) return;
+    edges.set(group.id, [
+      group.api.onDidDimensionsChange(schedule),
+      group.api.onDidCollapsedChange(schedule),
+    ]);
+  };
+  api.groups.forEach(watchEdge);
+  const added = api.onDidAddGroup(watchEdge);
   win.addEventListener("pagehide", flush);
   return {
     flush,
     dispose() {
       flush();
       changed.dispose();
+      added.dispose();
+      for (const listeners of edges.values()) listeners.forEach((l) => l.dispose());
       win.removeEventListener("pagehide", flush);
     },
   };
@@ -471,4 +485,115 @@ export function collapseAllDocks(api: DockviewApi) {
     const group = api.getEdgeGroup(dock);
     if (group && !group.isCollapsed()) group.collapse();
   }
+}
+
+// 레이아웃 프리셋(10-ui §2.4 「프로젝트 창」, ⌃⌥1~2). 프리셋은 dockview 직렬화의 툴 윈도우 dock 부분(`edgeGroups`) 한 벌 — 저장본의
+// 그 칸과 같은 꼴이다. 적용은 저장본을 여는 `fromJSON` 이 아니라 지금 패널을 그 자리로 옮기는 것이다: `fromJSON` 은 모든 패널을
+// 지웠다 다시 만든다 — 에디터 탭의 뷰(맡긴 선택 · 스크롤도 탭 id 째 잊는다)와 툴 윈도우 내용이 새로 그려지고, 미저장 문서는 옛
+// 탭의 React 정리가 새 탭보다 늦어서 남을 뿐이다(문서 모델은 마지막 탭이 놓으면 곧바로 문서를 버린다). 그래서 가운데 grid 의 에디터
+// 탭 · 그룹 분할은 건드리지 않고, 툴 윈도우만 dock 으로 옮기거나(가운데 · floating 으로 옮겨 둔 것도) 숨긴 것을 다시 연다. 적용한 결과는 여느 레이아웃 바뀜처럼 `persistLayout` 이 저장본에 쓰고, 다시
+// 시작하면 `restoreLayout` 이 그대로 연다.
+
+export type PresetId = "default" | "gitReview";
+
+/** dock 크기는 창의 이 몫까지만 — 좌우 dock 은 너비의 1/4, 하단 dock 은 높이의 0.45. 작은 창에서도 에디터 영역이 남는다. */
+const PRESET_SHARE: Record<Dock, number> = { left: 0.25, right: 0.25, bottom: 0.45 };
+
+function presetDocks(
+  active: Record<Dock, string>,
+  size: Record<Dock, number>,
+  collapsed: readonly Dock[] = [],
+): SerializedEdgeGroups {
+  return Object.fromEntries(
+    DOCKS.map((dock) => [
+      dock,
+      {
+        size: size[dock],
+        visible: true,
+        collapsed: collapsed.includes(dock),
+        group: {
+          views: PANELS.filter((p) => p.home === dock).map((p) => p.id),
+          activeView: active[dock],
+          id: edgeGroupId(dock),
+        },
+      },
+    ]),
+  );
+}
+
+export const PRESETS: Readonly<Record<PresetId, SerializedEdgeGroups>> = {
+  // 각 무리의 첫 툴 윈도우가 보이는 기본 배치.
+  default: presetDocks({ left: "project", bottom: "run", right: "notifications" }, DOCK_SIZES),
+  // Git 리뷰: 커밋(변경 목록) · Git 로그를 띄우고 로그를 높게, 오른쪽 dock 을 접어 가운데(diff 탭)를 넓게.
+  gitReview: presetDocks(
+    { left: "commit", bottom: "git", right: "notifications" },
+    { ...DOCK_SIZES, bottom: 320 },
+    ["right"],
+  ),
+};
+
+/**
+ * 도킹 영역 전체의 너비 · 높이. dockview 의 `width` · `height` 는 가운데 grid 의 것이라 dock 을 더한다 — 좌우 dock 은 전체 높이에
+ * 걸치고 하단 dock 은 그 사이에 놓인다.
+ */
+function dockArea(api: DockviewApi): { width: number; height: number } {
+  const size = (dock: Dock, side: "width" | "height") => api.getEdgeGroup(dock)?.[side] ?? 0;
+  return {
+    width: api.width + size("left", "width") + size("right", "width"),
+    height: api.height + size("bottom", "height"),
+  };
+}
+
+/** 프리셋의 dock 크기를 도킹 영역에 맞춘다(`PRESET_SHARE`). 영역 크기를 아직 모르면(그리기 전) 그대로. */
+function fitDockSize(area: { width: number; height: number }, dock: Dock, size: number): number {
+  const side = dock === "bottom" ? area.height : area.width;
+  if (!(side > 0)) return size;
+  return Math.max(RESIZE_MIN, Math.min(size, Math.floor(side * PRESET_SHARE[dock])));
+}
+
+/**
+ * 프리셋 배치를 적용한다(위 주석). 툴 윈도우를 프리셋의 dock · 차례로 옮기고, 숨긴 것은 다시 열고, dock 마다 보이는 툴 윈도우 ·
+ * 크기 · 접힘을 맞춘다. 에디터 탭은 그대로다 — 옮기기 · 보이기는 활성 그룹을 바꾸지 않아(`skipSetActive`) 활성 에디터 탭도 남는다.
+ * 툴 윈도우가 떠나 빈 가운데 · floating 그룹은 dockview 가 지운다.
+ */
+export function applyPreset(api: DockviewApi, id: PresetId) {
+  const preset = PRESETS[id];
+  const hidden = hiddenOf(api);
+  const area = dockArea(api);
+  const placed: { dock: Dock; edge: NonNullable<SerializedEdgeGroups[Dock]> }[] = [];
+  for (const dock of DOCKS) {
+    const edge = preset[dock];
+    const views = (edge?.group as SerializedGroupViews | undefined)?.views;
+    if (!edge || !Array.isArray(views)) continue;
+    const groupApi = ensureDock(api, dock);
+    expandDock(groupApi);
+    const group = api.groups.find((g) => g.id === groupApi.id);
+    if (!group) continue;
+    (views as string[]).forEach((panelId, index) => {
+      const panel = spec(panelId);
+      if (!panel) return;
+      const existing = api.getPanel(panelId);
+      if (!existing) {
+        hidden.delete(panelId);
+        api.addPanel({
+          id: panel.id,
+          title: panel.id,
+          component: panel.component,
+          position: { referenceGroup: group.id, index },
+          inactive: true,
+        });
+      } else if (existing.group !== group || group.panels.indexOf(existing) !== index) {
+        existing.api.moveTo({ group, index, skipSetActive: true });
+      }
+    });
+    const active = api.getPanel(String((edge.group as SerializedGroupViews).activeView));
+    if (active?.group === group) group.model.openPanel(active, { skipSetGroupActive: true });
+    placed.push({ dock, edge });
+  }
+  // 크기는 모든 dock 을 편 뒤에 맞추고 접기는 맨 나중이다 — dock 하나를 접거나 펴면 dockview 가 남은 자리를 다른 dock 에도 나눈다.
+  for (const { dock, edge } of placed) {
+    const size = fitDockSize(area, dock, edge.size);
+    api.getEdgeGroup(dock)?.setSize(dock === "bottom" ? { height: size } : { width: size });
+  }
+  for (const { dock, edge } of placed) if (edge.collapsed) api.getEdgeGroup(dock)?.collapse();
 }

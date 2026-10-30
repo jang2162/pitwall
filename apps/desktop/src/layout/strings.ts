@@ -26,6 +26,10 @@ export function projectStrings(t: Translate) {
     layoutActions: {
       lastToolWindow: t("action-tool-window-last"),
       focusEditor: t("action-focus-editor"),
+      preset: {
+        default: t("action-layout-preset-default"),
+        gitReview: t("action-layout-preset-git-review"),
+      },
       stretch: {
         left: t("action-tool-window-stretch-left"),
         right: t("action-tool-window-stretch-right"),

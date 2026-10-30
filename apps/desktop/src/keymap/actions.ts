@@ -6,10 +6,12 @@ import type { DockviewApi } from "dockview-react";
 
 import type { AppStrings } from "../i18n/app-strings";
 import {
+  applyPreset,
   type Arrow,
   collapseAllDocks,
   lastToolWindow,
   PANELS,
+  type PresetId,
   resizeToolWindow,
   showPanel,
   toggleToolWindow,
@@ -121,6 +123,12 @@ function focusToolWindow(id: string) {
   );
 }
 
+/** 레이아웃 프리셋 액션(⌃⌥1~2)과 그 영어 이름(액션 찾기의 keywords). DB(⌃⌥3)는 그 화면과 함께(M3). */
+const PRESET_ACTIONS: readonly { preset: PresetId; keywords: string[] }[] = [
+  { preset: "default", keywords: ["Layout Default", "Restore Default Layout"] },
+  { preset: "gitReview", keywords: ["Layout Git Review"] },
+];
+
 const ARROWS: readonly { arrow: Arrow; name: "Left" | "Right" | "Up" | "Down" }[] = [
   { arrow: "left", name: "Left" },
   { arrow: "right", name: "Right" },
@@ -173,6 +181,16 @@ export function toolWindowActions(
         focusToolWindow(id);
       },
     },
+    ...PRESET_ACTIONS.map(({ preset, keywords }): Action => ({
+      id: `layout.preset.${preset}`,
+      label: T.preset[preset],
+      keywords,
+      enabled,
+      run: () => {
+        const api = getApi();
+        if (api) applyPreset(api, preset);
+      },
+    })),
     ...ARROWS.map(({ arrow, name }): Action => ({
       id: `toolWindow.stretch${name}`,
       label: T.stretch[arrow],
