@@ -1,6 +1,7 @@
 //! git 시나리오(`pw-perf --git-repo <저장소>`): 앱이 프로젝트 창에서 돌린 시나리오(`apps/desktop/src/perf-scenario.ts`)의 표시를 읽어
-//! 13-m2-plan.md 의 세 완료 기준 — M2-14 의 ⌘9 첫 그림 · 10만 행 스크롤, M2-15 의 1만 줄 diff 첫 그림, M2-13 의 터미널 체크아웃 →
-//! 상태바 — 을 회마다 모으고 저장소별로 요약한다. 무엇을 어떻게 재는지는 CONTRIBUTING.md 「성능 기준선」 절의 「git 시나리오」.
+//! 13-m2-plan.md 의 완료 기준 중 release 번들에서 재는 것 — M2-14 의 ⌘9 첫 그림 · 10만 행 스크롤, M2-15 의 1만 줄 diff 첫 그림,
+//! M2-13 의 터미널 체크아웃 → 상태바, M2-17 의 수정 표시 · 타이핑 중 막힘, M2-16 의 1만 파일 목록 스크롤 · 터미널 `git add` → 그룹
+//! 이동 — 을 회마다 모으고 저장소별로 요약한다. 무엇을 어떻게 재는지는 CONTRIBUTING.md 「성능 기준선」 절의 「git 시나리오」.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,19 @@ pub const TARGET_SCROLL_SHARE: f64 = 0.95;
 pub const TARGET_DIFF_MS: f64 = 200.0;
 /// 터미널 `git checkout` → 상태바(M2-13).
 pub const TARGET_BRANCH_MS: f64 = 500.0;
+/// 저장 안 한 한 줄 편집 → 그 줄의 수정 표시(M2-17).
+pub const TARGET_GUTTER_MS: f64 = 100.0;
+/// 5,000줄 파일에서 초당 10자 30초 타이핑 중 메인 스레드가 한 번에 막힌 시간의 최댓값(M2-17 — 「50 ms 넘는 롱태스크가 없다」).
+pub const TARGET_BLOCK_MS: f64 = 50.0;
+/// 1만 개 바뀐 파일의 커밋 목록을 끝까지 스크롤할 때 16.7 ms 안인 프레임의 몫(M2-16 — M1-14 와 같은 기준).
+pub const TARGET_COMMIT_SCROLL_SHARE: f64 = 0.95;
+/// 터미널 `git add` → 커밋 목록에서 그 파일이 스테이징됨 그룹으로(M2-16).
+pub const TARGET_STAGE_MS: f64 = 500.0;
+
+/// 측정하는 쪽이 모두 고치는 파일들의 폴더(`pw_git::testing::synth::PERF_CHANGES_DIR`). 앱이 `stage_ready` 로 고르는 경로도 이 아래여야 한다.
+pub const CHANGES_DIR: &str = "perf/many";
+/// 앱이 여는 타이핑 대상(`pw_git::testing::synth::PERF_TYPING_PATH`). 픽스처가 이것까지 들었는지 보는 데 쓴다.
+pub const TYPING_PATH: &str = "perf/typing.rs";
 
 /// 결과 파일만 받은 사람도 읽을 수 있게 싣는 정의(정본은 CONTRIBUTING.md 「성능 기준선」 의 「git 시나리오」).
 pub const DEFINITIONS: GitDefinitions = GitDefinitions {
@@ -26,7 +40,11 @@ pub const DEFINITIONS: GitDefinitions = GitDefinitions {
     scroll: "after every row arrived (row count unchanged for 1 s): fling = top to bottom in 2000 frames, steady = 2 rows per frame for 600 frames; interval = rAF timestamp deltas, share within 16.7 ms judged on fling",
     diff: "in the webview: from a dblclick on the first log row (the 10,000-changed-line commit) to the frame after the commit tab's diff lines (.pw-diff-line) appeared — includes git.show/git.diff/git.blob and IPC",
     branch: "from the harness's wall clock just before it runs `git checkout <branch>` in the repository to the webview's wall clock at the frame after the status bar branch name changed",
-    memory: "phys_footprint of the app instance right after the scenario finished (100k rows loaded, one commit tab open); not an idle baseline",
+    gutter: "in the webview: from dispatching an unsaved one-line edit to perf/typing.rs (5,000 lines, the gutter's HEAD base already loaded) to the frame after a `modified` gutter mark appeared",
+    typing: "300 one-character inserts at 100 ms intervals (10 chars/s for 30 s) into perf/typing.rs; a 5 ms setTimeout probe runs meanwhile and a block is its callback gap minus 5 ms (WebKit has no Long Tasks API); judged on the longest block; the edits are reverted afterwards (nothing is saved)",
+    commit_scroll: "the harness appends a line to each of the 10,000 files in perf/many; after ⌘0 (webview event) and every row arrived (row count unchanged for 1 s): fling = top to bottom in 1500 frames, steady = 2 rows per frame for 600 frames; share within 16.7 ms judged on fling",
+    stage: "from the harness's wall clock just before it runs `git add <file>` in the repository to the webview's wall clock at the frame after that file's row appeared in the staged group",
+    memory: "phys_footprint of the app instance right after the scenario finished (100k rows loaded, one commit tab and perf/typing.rs open, 10,000 changed files listed); not an idle baseline",
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +53,10 @@ pub struct GitDefinitions {
     pub scroll: &'static str,
     pub diff: &'static str,
     pub branch: &'static str,
+    pub gutter: &'static str,
+    pub typing: &'static str,
+    pub commit_scroll: &'static str,
+    pub stage: &'static str,
     pub memory: &'static str,
 }
 
@@ -63,6 +85,30 @@ pub struct Viewport {
     pub height: f64,
 }
 
+/// 타이핑 중 메인 스레드의 막힘(src/perf-scenario.ts 의 `BlockStats`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Blocks {
+    /// 탐침이 돈 횟수.
+    pub samples: u64,
+    /// 가장 긴 막힘(ms).
+    pub max_ms: f64,
+    /// 50 ms 를 넘은 막힘의 수.
+    pub over50: u64,
+}
+
+/// 타이핑 단계(M2-17).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Typing {
+    pub keys: u64,
+    pub lines: u64,
+    pub blocks: Blocks,
+    /// 키 하나의 `view.dispatch` 가 동기로 든 시간(ms) — 중앙값 · 최댓값.
+    pub dispatch_p50_ms: f64,
+    pub dispatch_max_ms: f64,
+}
+
 /// 한 회에 시나리오가 잰 것.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Measure {
@@ -81,6 +127,34 @@ pub struct Measure {
     pub branch_from: Option<String>,
     pub branch_to: String,
     pub branch_ms: f64,
+    pub gutter_ms: f64,
+    pub typing: Typing,
+    pub commit_rows: u64,
+    pub commit_all_rows_ms: f64,
+    pub commit_viewport: Viewport,
+    pub commit_fling: Scroll,
+    pub commit_steady: Scroll,
+    pub stage_path: String,
+    pub stage_ms: f64,
+}
+
+/// 앱이 기다리는, 측정하는 쪽이 저장소에 할 일.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    /// `git checkout <--checkout>`(`checkout_ready`).
+    Checkout,
+    /// [`CHANGES_DIR`] 의 파일을 모두 고친다(`changes_ready`).
+    Change,
+    /// `git add <경로>`(`stage_ready`). 경로는 [`CHANGES_DIR`] 아래다.
+    Stage(String),
+}
+
+/// 측정하는 쪽이 이미 한 일. 시각은 그 git 을 띄우기 직전의 벽시계.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Acted {
+    pub checked_out_at: Option<f64>,
+    pub changed: bool,
+    pub staged_at: Option<f64>,
 }
 
 /// 시나리오가 어디까지 왔나([`progress`]).
@@ -88,8 +162,8 @@ pub struct Measure {
 pub enum Progress {
     /// 다음 표시를 기다린다.
     Waiting,
-    /// 앱이 체크아웃을 기다린다 — 측정하는 쪽이 아직 체크아웃하지 않았다.
-    CheckoutReady,
+    /// 앱이 기다린다 — 측정하는 쪽이 아직 하지 않았다.
+    Act(Action),
     Done(Box<Measure>),
     Failed(String),
 }
@@ -138,6 +212,59 @@ struct Shown {
 }
 
 #[derive(Deserialize)]
+struct GutterMark {
+    ms: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommitScrolled {
+    rows: u64,
+    all_rows_ms: f64,
+    viewport: Viewport,
+    fling: Scroll,
+    steady: Scroll,
+}
+
+#[derive(Deserialize)]
+struct StageReady {
+    path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Staged {
+    path: String,
+    epoch_ms: f64,
+}
+
+/// 앱이 고르라고 한 경로가 [`CHANGES_DIR`] 바로 아래 파일 하나인가 — 측정하는 쪽은 그 밖의 경로를 `git add` 하지 않는다.
+pub fn stage_path_ok(path: &str) -> bool {
+    path.strip_prefix(CHANGES_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|name| !name.is_empty() && !name.contains('/') && name != "." && name != "..")
+}
+
+/// 저장소의 [`CHANGES_DIR`] 에 있는 파일마다 줄 하나를 덧붙인다(「1만 개 바뀐 파일」). 고친 파일 수를 돌려준다 — 되돌리기는
+/// `git checkout HEAD -- <CHANGES_DIR>`.
+pub fn write_changes(repo: &std::path::Path) -> std::io::Result<usize> {
+    use std::io::Write as _;
+    let mut changed = 0;
+    for entry in std::fs::read_dir(repo.join(CHANGES_DIR))? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(entry.path())?
+            .write_all(b"changed by pw-perf\n")?;
+        changed += 1;
+    }
+    Ok(changed)
+}
+
+#[derive(Deserialize)]
 struct Failure {
     step: String,
     message: String,
@@ -157,16 +284,15 @@ fn data<T: for<'de> Deserialize<'de>>(
         .map_err(|e| format!("the app's `{event}` mark is malformed: {e}"))
 }
 
-/// `pid` 의 앱이 남긴 시나리오 표시에서 진행을 읽는다. `checked_out_at` 은 측정하는 쪽이 `git checkout` 을 띄우기 직전의 벽시계
-/// (아직 하지 않았으면 `None`).
-pub fn progress(marks: &[Mark], pid: u32, checked_out_at: Option<f64>) -> Progress {
-    match read(marks, pid, checked_out_at) {
+/// `pid` 의 앱이 남긴 시나리오 표시에서 진행을 읽는다. `acted` 는 측정하는 쪽이 이미 한 일이다.
+pub fn progress(marks: &[Mark], pid: u32, acted: Acted) -> Progress {
+    match read(marks, pid, acted) {
         Ok(p) => p,
         Err(e) => Progress::Failed(e),
     }
 }
 
-fn read(marks: &[Mark], pid: u32, checked_out_at: Option<f64>) -> Result<Progress, String> {
+fn read(marks: &[Mark], pid: u32, acted: Acted) -> Result<Progress, String> {
     if let Some(f) = data::<Failure>(marks, pid, "scenario_error")? {
         return Err(format!(
             "the scenario failed at `{}`: {}",
@@ -176,8 +302,26 @@ fn read(marks: &[Mark], pid: u32, checked_out_at: Option<f64>) -> Result<Progres
     let Some(ready) = data::<Ready>(marks, pid, "checkout_ready")? else {
         return Ok(Progress::Waiting);
     };
-    let Some(checked_out_at) = checked_out_at else {
-        return Ok(Progress::CheckoutReady);
+    let Some(checked_out_at) = acted.checked_out_at else {
+        return Ok(Progress::Act(Action::Checkout));
+    };
+    if data::<serde_json::Value>(marks, pid, "changes_ready")?.is_none() {
+        return Ok(Progress::Waiting);
+    }
+    if !acted.changed {
+        return Ok(Progress::Act(Action::Change));
+    }
+    let Some(stage) = data::<StageReady>(marks, pid, "stage_ready")? else {
+        return Ok(Progress::Waiting);
+    };
+    if !stage_path_ok(&stage.path) {
+        return Err(format!(
+            "the app asked to stage `{}`, which is not a file right under {CHANGES_DIR}",
+            stage.path
+        ));
+    }
+    let Some(staged_at) = acted.staged_at else {
+        return Ok(Progress::Act(Action::Stage(stage.path)));
     };
     if marks
         .iter()
@@ -192,6 +336,19 @@ fn read(marks: &[Mark], pid: u32, checked_out_at: Option<f64>) -> Result<Progres
         data(marks, pid, "git_log_scroll")?.ok_or_else(|| missing("git_log_scroll"))?;
     let diff: DiffOpen = data(marks, pid, "diff_open")?.ok_or_else(|| missing("diff_open"))?;
     let shown: Shown = data(marks, pid, "branch_shown")?.ok_or_else(|| missing("branch_shown"))?;
+    let gutter: GutterMark =
+        data(marks, pid, "gutter_mark")?.ok_or_else(|| missing("gutter_mark"))?;
+    let typing: Typing = data(marks, pid, "typing")?.ok_or_else(|| missing("typing"))?;
+    let commit: CommitScrolled =
+        data(marks, pid, "commit_list_scroll")?.ok_or_else(|| missing("commit_list_scroll"))?;
+    let staged: Staged =
+        data(marks, pid, "staged_shown")?.ok_or_else(|| missing("staged_shown"))?;
+    if staged.path != stage.path {
+        return Err(format!(
+            "the app asked to stage `{}` but reported `{}`",
+            stage.path, staged.path
+        ));
+    }
     Ok(Progress::Done(Box::new(Measure {
         open_ms: open.open_ms,
         first_draw_ms: open.first_draw_ms,
@@ -208,6 +365,15 @@ fn read(marks: &[Mark], pid: u32, checked_out_at: Option<f64>) -> Result<Progres
         branch_from: ready.branch,
         branch_to: shown.branch,
         branch_ms: shown.epoch_ms - checked_out_at,
+        gutter_ms: gutter.ms,
+        typing,
+        commit_rows: commit.rows,
+        commit_all_rows_ms: commit.all_rows_ms,
+        commit_viewport: commit.viewport,
+        commit_fling: commit.fling,
+        commit_steady: commit.steady,
+        stage_path: staged.path,
+        stage_ms: staged.epoch_ms - staged_at,
     })))
 }
 
@@ -239,6 +405,14 @@ pub struct GitSummary {
     pub steady_within16_7: Option<Summary>,
     pub diff_ms: Option<Summary>,
     pub branch_ms: Option<Summary>,
+    pub gutter_ms: Option<Summary>,
+    pub typing_max_block_ms: Option<Summary>,
+    pub typing_over50: Option<Summary>,
+    pub commit_all_rows_ms: Option<Summary>,
+    pub commit_fling_within16_7: Option<Summary>,
+    pub commit_fling_p95_ms: Option<Summary>,
+    pub commit_steady_within16_7: Option<Summary>,
+    pub stage_ms: Option<Summary>,
     pub footprint_bytes: Option<Summary>,
 }
 
@@ -249,10 +423,18 @@ pub struct GitTargets {
     pub scroll_share: f64,
     pub diff_ms: f64,
     pub branch_ms: f64,
+    pub gutter_ms: f64,
+    pub block_ms: f64,
+    pub commit_scroll_share: f64,
+    pub stage_ms: f64,
     pub open_met: Option<bool>,
     pub scroll_met: Option<bool>,
     pub diff_met: Option<bool>,
     pub branch_met: Option<bool>,
+    pub gutter_met: Option<bool>,
+    pub block_met: Option<bool>,
+    pub commit_scroll_met: Option<bool>,
+    pub stage_met: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -284,6 +466,14 @@ pub fn summarize_git(runs: &[GitRun]) -> GitSummary {
         steady_within16_7: values(&|r| r.measure.steady.interval.within16_7),
         diff_ms: values(&|r| r.measure.diff_ms),
         branch_ms: values(&|r| r.measure.branch_ms),
+        gutter_ms: values(&|r| r.measure.gutter_ms),
+        typing_max_block_ms: values(&|r| r.measure.typing.blocks.max_ms),
+        typing_over50: values(&|r| r.measure.typing.blocks.over50 as f64),
+        commit_all_rows_ms: values(&|r| r.measure.commit_all_rows_ms),
+        commit_fling_within16_7: values(&|r| r.measure.commit_fling.interval.within16_7),
+        commit_fling_p95_ms: values(&|r| r.measure.commit_fling.interval.p95),
+        commit_steady_within16_7: values(&|r| r.measure.commit_steady.interval.within16_7),
+        stage_ms: values(&|r| r.measure.stage_ms),
         footprint_bytes: values(&|r| r.memory.footprint_bytes as f64),
     }
 }
@@ -294,12 +484,24 @@ pub fn git_targets(summary: &GitSummary) -> GitTargets {
         scroll_share: TARGET_SCROLL_SHARE,
         diff_ms: TARGET_DIFF_MS,
         branch_ms: TARGET_BRANCH_MS,
+        gutter_ms: TARGET_GUTTER_MS,
+        block_ms: TARGET_BLOCK_MS,
+        commit_scroll_share: TARGET_COMMIT_SCROLL_SHARE,
+        stage_ms: TARGET_STAGE_MS,
         open_met: summary.open_ms.map(|s| s.median <= TARGET_OPEN_MS),
         scroll_met: summary
             .fling_within16_7
             .map(|s| s.median >= TARGET_SCROLL_SHARE),
         diff_met: summary.diff_ms.map(|s| s.median <= TARGET_DIFF_MS),
         branch_met: summary.branch_ms.map(|s| s.median <= TARGET_BRANCH_MS),
+        gutter_met: summary.gutter_ms.map(|s| s.median <= TARGET_GUTTER_MS),
+        block_met: summary
+            .typing_max_block_ms
+            .map(|s| s.median <= TARGET_BLOCK_MS),
+        commit_scroll_met: summary
+            .commit_fling_within16_7
+            .map(|s| s.median >= TARGET_COMMIT_SCROLL_SHARE),
+        stage_met: summary.stage_ms.map(|s| s.median <= TARGET_STAGE_MS),
     }
 }
 
@@ -346,7 +548,8 @@ pub struct GitReport {
 
 /// git 시나리오의 `summary.md`.
 pub fn git_report_markdown(report: &GitReport) -> String {
-    let mut md = String::from("## Pitwall git scenario (M2-13 · M2-14 · M2-15)\n\n");
+    let mut md =
+        String::from("## Pitwall git scenario (M2-13 · M2-14 · M2-15 · M2-16 · M2-17)\n\n");
     if let Some(warning) = &report.warning {
         md.push_str(&format!("> **Warning:** {warning}.\n\n"));
     }
@@ -383,7 +586,7 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
             repo.commits.map_or("?".into(), |n| n.to_string()),
             repo.valid_runs
         ));
-        let rows: [(&str, String, String, Option<bool>); 7] = [
+        let rows: [(&str, String, String, Option<bool>); 15] = [
             (
                 "⌘9 → first rows frame (M2-14)",
                 cell(s.open_ms, " ms"),
@@ -426,6 +629,54 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
                 "—".into(),
                 None,
             ),
+            (
+                "one-line edit → gutter mark (M2-17)",
+                cell(s.gutter_ms, " ms"),
+                format!("≤ {TARGET_GUTTER_MS} ms"),
+                t.gutter_met,
+            ),
+            (
+                "typing 30 s: longest main-thread block (M2-17)",
+                cell(s.typing_max_block_ms, " ms"),
+                format!("≤ {TARGET_BLOCK_MS} ms"),
+                t.block_met,
+            ),
+            (
+                "typing 30 s: blocks over 50 ms",
+                cell(s.typing_over50, ""),
+                "—".into(),
+                None,
+            ),
+            (
+                "commit list fling: frames within 16.7 ms (M2-16)",
+                cell(s.commit_fling_within16_7, ""),
+                format!("≥ {TARGET_COMMIT_SCROLL_SHARE}"),
+                t.commit_scroll_met,
+            ),
+            (
+                "commit list fling: frame interval p95",
+                cell(s.commit_fling_p95_ms, " ms"),
+                "—".into(),
+                None,
+            ),
+            (
+                "commit list steady: frames within 16.7 ms",
+                cell(s.commit_steady_within16_7, ""),
+                "—".into(),
+                None,
+            ),
+            (
+                "git add → staged group (M2-16)",
+                cell(s.stage_ms, " ms"),
+                format!("≤ {TARGET_STAGE_MS} ms"),
+                t.stage_met,
+            ),
+            (
+                "10,000 changed files listed",
+                cell(s.commit_all_rows_ms, " ms"),
+                "—".into(),
+                None,
+            ),
         ];
         for (item, value, target, result) in rows {
             let result = if target == "—" { "—" } else { met(result) };
@@ -440,11 +691,11 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
                 f.max / 1e6
             ))
         ));
-        md.push_str("\n| Run | Excluded | Open ms | Fling ≤16.7 | Diff ms | Branch ms | Rows | Viewport |\n|---|---|---|---|---|---|---|---|\n");
+        md.push_str("\n| Run | Excluded | Open ms | Fling ≤16.7 | Diff ms | Branch ms | Gutter ms | Block max ms | Commit fling ≤16.7 | Stage ms | Rows | Viewport |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n");
         for r in &repo.runs {
             let m = &r.measure;
             md.push_str(&format!(
-                "| {}{} | {} | {:.1} | {:.2} | {:.1} | {:.1} | {} | {}×{} |\n",
+                "| {}{} | {} | {:.1} | {:.2} | {:.1} | {:.1} | {:.1} | {:.1} | {:.2} | {:.1} | {} | {}×{} |\n",
                 r.index,
                 if r.warmup { " (warm-up)" } else { "" },
                 r.excluded.as_deref().unwrap_or("—"),
@@ -452,6 +703,10 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
                 m.fling.interval.within16_7,
                 m.diff_ms,
                 m.branch_ms,
+                m.gutter_ms,
+                m.typing.blocks.max_ms,
+                m.commit_fling.interval.within16_7,
+                m.stage_ms,
                 m.rows,
                 m.scroll_viewport.width,
                 m.scroll_viewport.height
@@ -487,30 +742,79 @@ mod tests {
         .concat()
     }
 
-    /// 체크아웃을 기다리는 동안은 끝나지 않고, 측정하는 쪽이 체크아웃한 뒤 `branch_shown` 이 오면 그 차이가 상태바 시간이다.
+    /// 체크아웃 뒤 타이핑 · 커밋 목록 단계의 표시(`changes_ready` 까지).
+    fn until_changes(pid: u32) -> String {
+        let scroll = serde_json::json!({"interval": stats(0.98), "work": stats(1.0)});
+        [
+            line("branch_shown", pid, 6.0, serde_json::json!({"branch": "perf-checkout", "epochMs": 10_120.5})),
+            line("gutter_mark", pid, 7.0, serde_json::json!({"ms": 48.5, "line": 12})),
+            line("typing", pid, 8.0, serde_json::json!({"keys": 300, "lines": 5000, "blocks": {"samples": 5000, "maxMs": 31.5, "over50": 0}, "dispatchP50Ms": 0.4, "dispatchMaxMs": 3.0})),
+            line("changes_ready", pid, 9.0, serde_json::json!({})),
+            line("commit_list_scroll", pid, 10.0, serde_json::json!({"rows": 10_003, "allRowsMs": 900.0, "viewport": {"width": 320, "height": 700}, "fling": scroll, "steady": scroll})),
+        ]
+        .concat()
+    }
+
+    /// 측정하는 쪽이 할 일(체크아웃 → 파일 고치기 → `git add`)을 차례로 받고, 한 뒤에야 다음으로 간다. 상태바 · 그룹 이동 시간은 그 일의
+    /// 시작 벽시계에서 잰다.
     #[test]
-    fn the_scenario_waits_for_the_checkout_and_measures_the_status_bar_from_it() {
+    fn the_scenario_waits_for_each_harness_action_and_measures_from_it() {
         let pid = 42;
+        let none = Acted::default();
         let early = parse(&line("git_log_open", pid, 1.0, serde_json::json!({})));
-        assert_eq!(progress(&early, pid, None), Progress::Waiting);
+        assert_eq!(progress(&early, pid, none), Progress::Waiting);
         let ready = parse(&until_ready(pid));
-        assert_eq!(progress(&ready, pid, None), Progress::CheckoutReady);
-        assert_eq!(progress(&ready, pid, Some(10_000.0)), Progress::Waiting);
+        assert_eq!(progress(&ready, pid, none), Progress::Act(Action::Checkout));
+        let checked = Acted {
+            checked_out_at: Some(10_000.0),
+            ..none
+        };
+        assert_eq!(progress(&ready, pid, checked), Progress::Waiting);
+        let changes = parse(&[until_ready(pid), until_changes(pid)].concat());
+        assert_eq!(
+            progress(&changes, pid, checked),
+            Progress::Act(Action::Change)
+        );
+        let changed = Acted {
+            changed: true,
+            ..checked
+        };
+        assert_eq!(progress(&changes, pid, changed), Progress::Waiting);
+        let stage = [
+            until_ready(pid),
+            until_changes(pid),
+            line(
+                "stage_ready",
+                pid,
+                11.0,
+                serde_json::json!({"path": "perf/many/f00000.txt"}),
+            ),
+        ]
+        .concat();
+        assert_eq!(
+            progress(&parse(&stage), pid, changed),
+            Progress::Act(Action::Stage("perf/many/f00000.txt".into()))
+        );
+        let staged = Acted {
+            staged_at: Some(20_000.0),
+            ..changed
+        };
+        assert_eq!(progress(&parse(&stage), pid, staged), Progress::Waiting);
         let done = parse(
             &[
-                until_ready(pid),
+                stage,
                 line(
-                    "branch_shown",
+                    "staged_shown",
                     pid,
-                    6.0,
-                    serde_json::json!({"branch": "perf-checkout", "epochMs": 10_120.5}),
+                    12.0,
+                    serde_json::json!({"path": "perf/many/f00000.txt", "epochMs": 20_210.0}),
                 ),
-                line("scenario_done", pid, 7.0, serde_json::json!({})),
+                line("scenario_done", pid, 13.0, serde_json::json!({})),
             ]
             .concat(),
         );
-        let Progress::Done(m) = progress(&done, pid, Some(10_000.0)) else {
-            panic!("{:?}", progress(&done, pid, Some(10_000.0)));
+        let Progress::Done(m) = progress(&done, pid, staged) else {
+            panic!("{:?}", progress(&done, pid, staged));
         };
         assert_eq!(m.branch_ms, 120.5);
         assert_eq!(m.open_ms, 180.5);
@@ -519,8 +823,75 @@ mod tests {
         assert_eq!(m.diff_path.as_deref(), Some("perf/big.rs"));
         assert_eq!(m.branch_from.as_deref(), Some("main"));
         assert_eq!(m.branch_to, "perf-checkout");
+        assert_eq!(m.gutter_ms, 48.5);
+        assert_eq!(m.typing.blocks.max_ms, 31.5);
+        assert_eq!(m.typing.keys, 300);
+        assert_eq!(m.commit_rows, 10_003);
+        assert_eq!(m.commit_fling.interval.within16_7, 0.98);
+        assert_eq!(m.stage_path, "perf/many/f00000.txt");
+        assert_eq!(m.stage_ms, 210.0);
         // 다른 프로세스의 표시는 보지 않는다.
-        assert_eq!(progress(&done, 7, Some(10_000.0)), Progress::Waiting);
+        assert_eq!(progress(&done, 7, staged), Progress::Waiting);
+    }
+
+    /// 앱이 고르라고 한 경로는 픽스처 폴더 바로 아래 파일 하나여야 한다 — 측정하는 쪽은 그 밖을 `git add` 하지 않는다.
+    #[test]
+    fn the_harness_stages_only_a_file_right_under_the_changes_folder() {
+        assert!(stage_path_ok("perf/many/f00000.txt"));
+        for bad in [
+            "perf/many",
+            "perf/many/",
+            "perf/many/..",
+            "perf/many/../../x",
+            "perf/many/sub/f.txt",
+            "perf/manyx/f.txt",
+            "perf/typing.rs",
+            "/perf/many/f.txt",
+            ".",
+        ] {
+            assert!(!stage_path_ok(bad), "{bad}");
+        }
+        let pid = 42;
+        let marks = parse(
+            &[
+                until_ready(pid),
+                until_changes(pid),
+                line(
+                    "stage_ready",
+                    pid,
+                    11.0,
+                    serde_json::json!({"path": "perf/many/../../x"}),
+                ),
+            ]
+            .concat(),
+        );
+        let acted = Acted {
+            checked_out_at: Some(1.0),
+            changed: true,
+            staged_at: None,
+        };
+        let Progress::Failed(why) = progress(&marks, pid, acted) else {
+            panic!("a path outside the fixture folder passed");
+        };
+        assert!(why.contains("not a file right under perf/many"), "{why}");
+    }
+
+    #[test]
+    fn every_file_in_the_changes_folder_gets_one_more_line() {
+        let repo = std::env::temp_dir().join(format!("pw-perf-changes-{}", std::process::id()));
+        let dir = repo.join(CHANGES_DIR);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        for i in 0..3 {
+            std::fs::write(dir.join(format!("f{i}.txt")), format!("file {i}\n")).unwrap();
+        }
+        std::fs::write(repo.join("perf/other.txt"), "x\n").unwrap();
+        let changed = write_changes(&repo);
+        let read = |p: &str| std::fs::read_to_string(repo.join(p)).unwrap();
+        let (f1, other) = (read("perf/many/f1.txt"), read("perf/other.txt"));
+        std::fs::remove_dir_all(&repo).unwrap();
+        assert_eq!(changed.unwrap(), 3);
+        assert_eq!(f1, "file 1\nchanged by pw-perf\n");
+        assert_eq!(other, "x\n");
     }
 
     #[test]
@@ -533,7 +904,7 @@ mod tests {
             serde_json::json!({"step": "diff open", "message": "timed out waiting for the diff lines"}),
         ));
         assert_eq!(
-            progress(&failed, pid, None),
+            progress(&failed, pid, Acted::default()),
             Progress::Failed(
                 "the scenario failed at `diff open`: timed out waiting for the diff lines".into()
             )
@@ -544,7 +915,7 @@ mod tests {
             1.0,
             serde_json::json!({"branch": 3}),
         ));
-        let Progress::Failed(why) = progress(&malformed, pid, None) else {
+        let Progress::Failed(why) = progress(&malformed, pid, Acted::default()) else {
             panic!("a malformed mark passed");
         };
         assert!(why.contains("`checkout_ready` mark is malformed"), "{why}");
@@ -552,26 +923,39 @@ mod tests {
 
     #[test]
     fn targets_judge_the_median_and_the_fling_share() {
-        let summary = |open: f64, share: f64, diff: f64, branch: f64| GitSummary {
-            open_ms: summarize(&[open]),
+        // 목표 값 그대로면 안이고, 조금 넘으면 밖이다.
+        let summary = |over: f64| GitSummary {
+            open_ms: summarize(&[TARGET_OPEN_MS + over]),
             first_draw_ms: None,
             all_rows_ms: None,
-            fling_within16_7: summarize(&[share]),
+            fling_within16_7: summarize(&[TARGET_SCROLL_SHARE - over / 10.0]),
             fling_p95_ms: None,
             steady_within16_7: summarize(&[0.5]),
-            diff_ms: summarize(&[diff]),
-            branch_ms: summarize(&[branch]),
+            diff_ms: summarize(&[TARGET_DIFF_MS + over]),
+            branch_ms: summarize(&[TARGET_BRANCH_MS + over]),
+            gutter_ms: summarize(&[TARGET_GUTTER_MS + over]),
+            typing_max_block_ms: summarize(&[TARGET_BLOCK_MS + over]),
+            typing_over50: None,
+            commit_all_rows_ms: None,
+            commit_fling_within16_7: summarize(&[TARGET_COMMIT_SCROLL_SHARE - over / 10.0]),
+            commit_fling_p95_ms: None,
+            commit_steady_within16_7: None,
+            stage_ms: summarize(&[TARGET_STAGE_MS + over]),
             footprint_bytes: None,
         };
-        let t = git_targets(&summary(500.0, 0.95, 200.0, 500.0));
-        assert_eq!(
-            (t.open_met, t.scroll_met, t.diff_met, t.branch_met),
-            (Some(true), Some(true), Some(true), Some(true))
-        );
-        let t = git_targets(&summary(500.1, 0.94, 200.1, 500.1));
-        assert_eq!(
-            (t.open_met, t.scroll_met, t.diff_met, t.branch_met),
-            (Some(false), Some(false), Some(false), Some(false))
-        );
+        let met = |t: GitTargets| {
+            [
+                t.open_met,
+                t.scroll_met,
+                t.diff_met,
+                t.branch_met,
+                t.gutter_met,
+                t.block_met,
+                t.commit_scroll_met,
+                t.stage_met,
+            ]
+        };
+        assert_eq!(met(git_targets(&summary(0.0))), [Some(true); 8]);
+        assert_eq!(met(git_targets(&summary(0.1))), [Some(false); 8]);
     }
 }

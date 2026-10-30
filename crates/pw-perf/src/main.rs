@@ -44,7 +44,7 @@ mod measure {
     use pw_core::EventBus;
     use pw_core::config::AppPaths;
     use pw_core::registry::{NewProject, Registry};
-    use pw_perf::git::{self, GitReport, GitRun, GitSettings, Progress, RepoResult};
+    use pw_perf::git::{self, Acted, Action, GitReport, GitRun, GitSettings, Progress, RepoResult};
     use pw_perf::macos;
     use pw_perf::marks::{self, Mark};
     use pw_perf::report::{
@@ -748,7 +748,7 @@ mod measure {
     }
 
     /// git 시나리오: 저장소마다 준비 + 측정 회를 돌려 `result.json` · `summary.md` 를 쓴다. 회마다 저장소를 `main` 으로 돌려놓고
-    /// 띄우며, 앱이 체크아웃을 기다린다고 알리면 그 저장소에서 `git checkout <--checkout>` 을 돌린다.
+    /// 띄우며, 앱이 기다린다고 알리는 일(`git checkout <--checkout>`, 픽스처 파일 1만 개 고치기, `git add <파일>`)을 그 저장소에서 한다.
     fn run_git(opts: &Options, scratch: &Path, out: &Path) -> Result<bool, String> {
         for repo in &opts.git_repos {
             check_fixture(repo, &opts.checkout)?;
@@ -784,13 +784,14 @@ mod measure {
                         observe_git(opts, started, dir, index, warmup, repo)
                     },
                 );
-                // 실패한 회도 저장소를 돌려놓는다 — 다음 회 · 다음 측정이 `main` 에서 시작한다.
-                let back = git_in(repo, &["checkout", "-q", "main"]);
+                // 실패한 회도 저장소를 돌려놓는다 — 다음 회 · 다음 측정이 고치지 않은 `main` 에서 시작한다.
+                let back = git_in(repo, &["checkout", "-q", "HEAD", "--", git::CHANGES_DIR])
+                    .and_then(|_| git_in(repo, &["checkout", "-q", "main"]));
                 let run = run?;
                 back?;
                 let m = &run.measure;
                 say(format!(
-                    "pw-perf: {} run {index}{}{}: open {:.0} ms, fling ≤16.7 ms {:.2}, diff {:.0} ms, checkout → status bar {:.0} ms",
+                    "pw-perf: {} run {index}{}{}: open {:.0} ms, fling ≤16.7 ms {:.2}, diff {:.0} ms, checkout → status bar {:.0} ms, gutter {:.0} ms, typing block max {:.0} ms, commit fling ≤16.7 ms {:.2}, git add → staged {:.0} ms",
                     repo.display(),
                     if run.warmup { " (warm-up)" } else { "" },
                     run.excluded
@@ -799,7 +800,11 @@ mod measure {
                     m.open_ms,
                     m.fling.interval.within16_7,
                     m.diff_ms,
-                    m.branch_ms
+                    m.branch_ms,
+                    m.gutter_ms,
+                    m.typing.blocks.max_ms,
+                    m.commit_fling.interval.within16_7,
+                    m.stage_ms
                 ));
                 runs.push(run);
                 std::thread::sleep(Duration::from_secs(1));
@@ -863,7 +868,7 @@ mod measure {
         Ok(report.warning.is_none())
     }
 
-    /// 앱의 시나리오를 따라간다: 체크아웃을 기다린다는 표시가 오면 저장소에서 체크아웃하고, 끝 표시가 오면 메모리를 잰다.
+    /// 앱의 시나리오를 따라간다: 앱이 기다리는 일(체크아웃 · 파일 고치기 · `git add`)을 저장소에서 하고, 끝 표시가 오면 메모리를 잰다.
     fn observe_git(
         opts: &Options,
         started: Started,
@@ -879,7 +884,7 @@ mod measure {
             cold_start_ms,
         } = started;
         let deadline = Instant::now() + opts.scenario_timeout;
-        let mut checked_out_at = None;
+        let mut acted = Acted::default();
         let mut locked = false;
         let mut next_lock_check = Instant::now();
         let measure = loop {
@@ -889,12 +894,34 @@ mod measure {
                 next_lock_check = Instant::now() + Duration::from_millis(500);
             }
             let all = marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
-            match git::progress(&all, app_pid, checked_out_at) {
+            match git::progress(&all, app_pid, acted) {
                 Progress::Waiting => {}
-                Progress::CheckoutReady => {
+                Progress::Act(Action::Checkout) => {
                     // 「터미널에서 git checkout」 의 시작점: 띄우기 직전의 벽시계.
-                    checked_out_at = Some(epoch_ms());
+                    acted.checked_out_at = Some(epoch_ms());
                     git_in(repo, &["checkout", "-q", &opts.checkout])?;
+                    continue;
+                }
+                Progress::Act(Action::Change) => {
+                    let changed = git::write_changes(repo).map_err(|e| {
+                        format!(
+                            "run {index}: cannot change the files in {}: {e}",
+                            git::CHANGES_DIR
+                        )
+                    })?;
+                    if changed == 0 {
+                        return Err(format!(
+                            "run {index}: {} has no files to change",
+                            repo.join(git::CHANGES_DIR).display()
+                        ));
+                    }
+                    acted.changed = true;
+                    continue;
+                }
+                Progress::Act(Action::Stage(path)) => {
+                    // 「터미널에서 git add」 의 시작점: 띄우기 직전의 벽시계.
+                    acted.staged_at = Some(epoch_ms());
+                    git_in(repo, &["add", "--", &path])?;
                     continue;
                 }
                 Progress::Done(m) => break *m,
@@ -974,7 +1001,8 @@ mod measure {
         }
     }
 
-    /// 픽스처(`synth_history --perf-fixture`)가 든 저장소인가: `main` 과 체크아웃 대상 브랜치가 있고 작업 트리가 깨끗하다.
+    /// 픽스처(`synth_history --perf-fixture`)가 든 저장소인가: `main` 과 체크아웃 대상 브랜치, 고칠 파일들과 타이핑 대상 파일이 있고
+    /// 작업 트리가 깨끗하다.
     fn check_fixture(repo: &Path, checkout: &str) -> Result<(), String> {
         let hint = "make it with `mise run perf-git-repos` (synth_history --perf-fixture)";
         for branch in ["main", checkout] {
@@ -988,6 +1016,14 @@ mod measure {
                 ],
             )
             .map_err(|_| format!("{} has no branch `{branch}`; {hint}", repo.display()))?;
+        }
+        for path in [git::CHANGES_DIR, git::TYPING_PATH] {
+            git_in(repo, &["cat-file", "-e", &format!("main:{path}")]).map_err(|_| {
+                format!(
+                    "{} has no `{path}` on main (an older fixture); remove it and {hint}",
+                    repo.display()
+                )
+            })?;
         }
         let status = git_in(repo, &["status", "--porcelain"])?;
         if !status.is_empty() {

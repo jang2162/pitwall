@@ -1,6 +1,7 @@
 // Git 시나리오 스모크: 앱 안 측정 시나리오(src/perf-scenario.ts 의 `runGitScenario`)를 그대로 앱(App, 프로젝트 창) 위에서 헤드리스 WebKit
 // 으로 끝까지 돌린다 — release 번들의 실기 측정(`mise run perf-git`) 전에 시나리오가 실제 DOM(⌘9 → 목록, 더블클릭 → 커밋 탭의 diff,
-// 상태바 브랜치)을 찾아 가는지 본다. Host 는 가짜(fake-transport.ts): `git.log` 는 덤프한 스트림, 커밋은 1만 줄 바뀐 파일 하나
+// 상태바 브랜치)을 찾아 가는지 본다. 거터 · 타이핑 · 커밋 목록 단계(5~8)는 돌지 않는다(`logOnly` — 가짜 Host 에 그 파일 · 상태가
+// 없다) — 그 단계의 DOM 은 src/perf-scenario.test.ts 가 앱 컴포넌트의 속성과 맞는지 본다. Host 는 가짜(fake-transport.ts): `git.log` 는 덤프한 스트림, 커밋은 1만 줄 바뀐 파일 하나
 // (perf/diff/ten-thousand.ts), 체크아웃은 `checkout_ready` 를 받은 이 페이지가 가짜 HEAD 를 바꾸고 `git.refsChanged` 를 보내는 것이다.
 // 잰 값은 헤드리스라 실제 창의 것이 아니다 — 판정은 실기 측정이 한다.
 //
@@ -15,7 +16,7 @@ import defaultTheme from "../../../../extensions/theme-default/themes/default.js
 import { App } from "../../src/App";
 import type { KeymapNative } from "../../src/keymap/native";
 import { installFrameWork } from "../../src/perf-frames";
-import { runGitScenario } from "../../src/perf-scenario";
+import { runGitScenario, watchBlocks } from "../../src/perf-scenario";
 import { createThemeStore } from "../../src/theme/theme-store";
 import { ThemeStoreProvider } from "../../src/theme/theme-switcher";
 import { applyTokens, parseTheme } from "../../src/theme/tokens";
@@ -55,6 +56,8 @@ async function main() {
     now: () => performance.now(),
     epochNow: () => performance.timeOrigin + performance.now(),
     sleep: (t) => new Promise((r) => setTimeout(r, t)),
+    watchBlocks: () => watchBlocks(() => performance.now()),
+    logOnly: true,
     report: async (event, data) => {
       events.push({ event, data });
       if (event === "checkout_ready") window.__fakeCheckout?.("perf-checkout");
