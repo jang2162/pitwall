@@ -31,7 +31,21 @@ mise run perf-git
 - 결과: 마지막 줄의 `target/perf/<시각>/summary.md` · `result.json`. 표의 Result 열이 `within target` / `over target` 이다. 판정(측정 회의 중앙값, 타이핑 막힘만 모든 회의 최댓값): ⌘9 → 첫 행 ≤ 500 ms(둘 다 — 결정 M2-D10), fling 프레임 ≤ 16.7 ms 몫 ≥ 0.95, 1만 줄 diff ≤ 200 ms, 체크아웃 → 상태바 ≤ 500 ms(이상 묶음 4), 한 줄 편집 → 거터 수정 표시 ≤ 100 ms, 30초 타이핑 중 가장 긴 메인 스레드 막힘이 **모든 회에서** ≤ 50 ms — 한 회라도 넘으면 `over target`(M2-17), 커밋 목록 fling 프레임 ≤ 16.7 ms 몫 ≥ 0.95, `git add` → 스테이징됨 ≤ 500 ms(M2-16). M2-18 · M2-19 · M2-20 의 완료 기준에는 수치가 없어 재지 않는다.
 - 정리 확인: `pgrep -fl 'bundle/macos/Pitwall.app'` 가 비어야 한다. 종료 코드 0 이 아니면 오류 문장에 남은 프로세스 · 소켓이 붙는다.
 - 보고에 적을 것: 명령, 기기(요약 머리의 hardware 줄), 커밋, 저장소별 표, 제외된 회와 그 이유, 실패한 회(「Failed run」 표)와 그 까닭.
-- 함께 재면 좋은 것(M2-22): `mise run perf -- --project target/perf-git/graph` — 콜드 스타트 · 유휴 메모리를 10만 커밋 저장소 프로젝트로(앞에 6번 뜬다, 3분쯤).
+- 함께 재면 좋은 것(M2-22): `mise run perf -- --project target/perf-git/graph` — 콜드 스타트 · 유휴 메모리를 10만 커밋 저장소 프로젝트로(앞에 6번 뜬다, 3분쯤). 결과의 `settings.project` 가 어느 프로젝트의 것인지 적는다.
+
+### M2-22 한 번에 — `mise run perf-m2`
+
+위 `perf-git` 와 `perf --project target/perf-git/graph` 를 차례로 돌리고 결과를 보고서 폴더로 복사한다(화면이 잠겨 있으면 시작하지 않는다, OS 키 입력 없음).
+
+| 단계 | 명령 | 걸리는 시간 | 앱이 앞으로 뜨는 횟수 |
+| --- | --- | --- | --- |
+| 1. 짧게 한 번 | `mise run perf-m2 -- --short` (둘 다 `--runs 1 --warmup 0`) | 번들 빌드(1~10분, 이후 단계는 캐시) + 6분쯤 + 1분쯤 | 2 + 1 = **3번** |
+| 2. 전체 | `mise run perf-m2` | 번들 빌드 + `perf-git` 약 30분 + `perf --project` 3분쯤 → **35~45분** | 12 + 6 = **18번** |
+
+- 1 이 끝까지 돌고(종료 코드 0, 요약에 실패 회 없음) 2 로 간다. 1 은 특히 5~8 단계(거터 · 타이핑 · 커밋 목록 · git add)가 실기에서 처음 도는지 보는 용도다.
+- 결과: 각 단계의 `target/perf/m2-git[-short]/` · `m2-graph-project[-short]/` 에 `result.json` · `summary.md` 가 남고, 스크립트가 `docs/superpowers/reports/<날짜>-m2-perf-git[-short].json|.summary.md` 와 `…-graph-project[-short].json|.summary.md` 로 복사한다. 종료 코드 3(유효한 회가 적다)이어도 복사하고 알린다.
+- 보고서에 옮기는 법: `docs/superpowers/reports/2026-10-30-m2-perf-report.md` §3 의 「실기 대기」 칸을 복사된 `summary.md` 의 중앙값으로 채우고 증가분(M1 기준선 대비)을 계산한다. 목표를 넘은 항목은 §6 에 대응 행을 더한다. 복사된 json · summary 는 보고서와 함께 커밋한다.
+- 이름으로 앱을 끄지 않는다 — 하네스가 pid 로 끈다. 끝나면 `pgrep -fl 'bundle/macos/Pitwall.app'` 가 비어야 한다.
 
 ## 2. 사람이 직접 볼 것 (한 장)
 

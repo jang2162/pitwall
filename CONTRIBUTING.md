@@ -22,21 +22,22 @@ mise trust && mise install && pnpm install
 
 모두 저장소 루트에서 실행한다. 태스크 목록은 `mise tasks`.
 
-| 하려는 일                                                                                                     | 명령                    |
-| ------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                                       | `mise run build`        |
-| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                                                  | `mise run dev`          |
-| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                                          | `mise run test`         |
-| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                                    | `mise run lint`         |
-| 포맷 적용                                                                                                     | `mise run fmt`          |
-| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                                      | `mise run gen`          |
-| 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부                     | `mise run licenses`     |
-| `THIRD_PARTY_NOTICES.md` 다시 만들기                                                                          | `mise run notices`      |
-| Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                                                | `mise run advisories`   |
-| Linguist `samples/` 일치율 시험(samples 를 GitHub 에서 받는다, 아래 「Linguist 데이터」)                      | `mise run lang-samples` |
-| 내장 언어 확장의 강조 쿼리 · 넣은 문법 파일 다시 만들기(소스를 GitHub 에서 받는다, 아래 「tree-sitter 문법」) | `mise run grammars`     |
-| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)                          | `mise run perf`         |
-| 데스크톱 앱 release 번들의 git 시나리오 측정(macOS, 아래 「성능 기준선」 의 「git 시나리오」)                 | `mise run perf-git`     |
+| 하려는 일                                                                                                        | 명령                    |
+| ---------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                                          | `mise run build`        |
+| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                                                     | `mise run dev`          |
+| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                                             | `mise run test`         |
+| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                                       | `mise run lint`         |
+| 포맷 적용                                                                                                        | `mise run fmt`          |
+| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                                         | `mise run gen`          |
+| 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부                        | `mise run licenses`     |
+| `THIRD_PARTY_NOTICES.md` 다시 만들기                                                                             | `mise run notices`      |
+| Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                                                   | `mise run advisories`   |
+| Linguist `samples/` 일치율 시험(samples 를 GitHub 에서 받는다, 아래 「Linguist 데이터」)                         | `mise run lang-samples` |
+| 내장 언어 확장의 강조 쿼리 · 넣은 문법 파일 다시 만들기(소스를 GitHub 에서 받는다, 아래 「tree-sitter 문법」)    | `mise run grammars`     |
+| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)                             | `mise run perf`         |
+| 데스크톱 앱 release 번들의 git 시나리오 측정(macOS, 아래 「성능 기준선」 의 「git 시나리오」)                    | `mise run perf-git`     |
+| M2-22 실기 측정 한 번에(`perf-git` + git 저장소 프로젝트의 콜드 스타트 · 유휴 메모리, 결과를 보고서 폴더로 복사) | `mise run perf-m2`      |
 
 하위 단위만 돌릴 때:
 
@@ -105,7 +106,7 @@ Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오�
 - **끄기**: 그 앱 pid 에 AppKit 종료 요청(정상 종료라 단일 인스턴스 소켓을 지운다) → SIGTERM → SIGKILL 순으로 끈다. 사람이 띄운 다른 Pitwall 은 건드리지 않는다. 끈 뒤 그 인스턴스의 프로세스나 단일 인스턴스 소켓(`/tmp/<키>_si.sock`)이 남아 있으면 실패한다.
 - **하네스가 멈출 때**: 앱은 떼어 띄워져 터미널의 신호가 닿지 않는다. 하네스는 SIGINT · SIGTERM · SIGHUP 과 패닉에서도 진행 중인 회의 앱을 끄고 임시 폴더를 지운 뒤 끝난다. SIGKILL 처럼 정리할 틈이 없는 끝은 앱이 `PITWALL_PERF_PARENT` 로 받은 하네스 pid 를 0.25초마다 보고 그 pid 가 사라지면 스스로 정상 종료한다(하네스 pid 가 그 사이 다른 프로세스에 다시 쓰이면 잡지 못한다). 이때 임시 폴더(`$TMPDIR/pw-perf-<pid>`)와 그 회의 웹뷰 저장소는 남는다.
 
-git 저장소를 프로젝트로 잴 때는(M2-22) `--project <폴더>` 를 준다 — 임시 프로젝트 대신 그 폴더를 회마다 등록한다(지우지 않는다). 예: `mise run perf -- --project target/perf-git/graph`(`mise run perf-git-repos` 가 만든다).
+git 저장소를 프로젝트로 잴 때는(M2-22) `--project <폴더>` 를 준다 — 임시 프로젝트 대신 그 폴더를 회마다 등록한다(지우지 않는다). 예: `mise run perf -- --project target/perf-git/graph`(`mise run perf-git-repos` 가 만든다). 결과의 `settings.project` 와 요약의 `- project:` 줄이 연 폴더를 적는다. 이 둘과 `perf-git` 를 한 번에 돌리고 결과를 `docs/superpowers/reports/` 로 복사하는 것은 `mise run perf-m2`(`scripts/perf-m2.mjs`, `--short` 는 1회씩).
 
 다시 재기: `mise run perf`(번들을 다시 만든다). 만든 번들을 다시 재기만 할 때는 `cargo run -q --release -p pw-perf -- --app target/release/bundle/macos/Pitwall.app`. 인자는 `mise run perf -- --runs 3` 처럼 넘긴다. 기준선을 갱신할 때는 커밋하지 않은 변경이 없는 트리에서 재고(`commit.dirty` 가 false), `docs/superpowers/reports/<날짜>-perf-baseline-report.md` 와 같은 이름의 `.json` 으로 남긴다.
 

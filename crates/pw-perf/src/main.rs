@@ -309,6 +309,7 @@ mod measure {
                 runs: opts.runs,
                 warmup: opts.warmup,
                 idle_secs: opts.idle.as_secs(),
+                project: opts.project.as_ref().map(|p| p.display().to_string()),
             },
             targets: targets(&summary),
             valid_runs: valid,

@@ -83,6 +83,8 @@ pub struct Settings {
     pub runs: usize,
     pub warmup: usize,
     pub idle_secs: u64,
+    /// `--project` 로 연 폴더(없으면 회마다 만든 빈 프로젝트). 기준선이 어떤 프로젝트의 것인지 결과가 말해야 한다(M2-22).
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -264,6 +266,9 @@ pub fn markdown(report: &Report) -> String {
             report.settings.idle_secs
         ),
     );
+    if let Some(project) = &report.settings.project {
+        push(&mut out, format!("- project: `{project}`"));
+    }
     push(&mut out, String::new());
     push(&mut out, "| metric | median | min – max | target |".into());
     push(&mut out, "| --- | --- | --- | --- |".into());
@@ -442,5 +447,56 @@ mod tests {
         let t = targets(&summarize_runs(&runs));
         assert_eq!(t.cold_start_met, Some(false));
         assert_eq!(t.idle_footprint_met, Some(false));
+    }
+
+    fn report(project: Option<&str>) -> Report {
+        let runs = vec![run(1, false, 500.0, 120 * MB)];
+        let summary = summarize_runs(&runs);
+        Report {
+            schema: 1,
+            definitions: DEFINITIONS,
+            build: Build {
+                profile: "release".into(),
+                app: "Pitwall.app".into(),
+                binary: "pitwall".into(),
+            },
+            commit: Commit {
+                sha: None,
+                dirty: None,
+            },
+            os: Os {
+                name: "macOS".into(),
+                version: None,
+                build: None,
+            },
+            hardware: Hardware {
+                model: None,
+                cpu: None,
+                cpus: None,
+                memory_bytes: None,
+            },
+            settings: Settings {
+                runs: 1,
+                warmup: 0,
+                idle_secs: 10,
+                project: project.map(str::to_owned),
+            },
+            valid_runs: 1,
+            warning: None,
+            targets: targets(&summary),
+            summary,
+            runs,
+        }
+    }
+
+    #[test]
+    fn the_measured_project_is_named_in_the_result_and_the_summary() {
+        let named = report(Some("/tmp/graph"));
+        assert!(markdown(&named).contains("- project: `/tmp/graph`"));
+        let json = serde_json::to_value(&named).unwrap();
+        assert_eq!(json["settings"]["project"], "/tmp/graph");
+        let empty = report(None);
+        assert!(!markdown(&empty).contains("- project:"));
+        assert!(serde_json::to_value(&empty).unwrap()["settings"]["project"].is_null());
     }
 }
