@@ -535,7 +535,8 @@ export async function runScenario(
         report,
         work,
         now: () => performance.now(),
-        epochNow: () => performance.timeOrigin + performance.now(),
+        // 측정하는 쪽의 벽시계와 같은 시계 — `timeOrigin + performance.now()` 는 단조 시계라 몇 분 지나면 벽시계와 어긋날 수 있다.
+        epochNow: () => Date.now(),
         sleep: (t) => new Promise((r) => setTimeout(r, t)),
         watchBlocks: () => watchBlocks(() => performance.now()),
       });

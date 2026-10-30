@@ -54,7 +54,7 @@ async function main() {
     doc: document,
     work,
     now: () => performance.now(),
-    epochNow: () => performance.timeOrigin + performance.now(),
+    epochNow: () => Date.now(),
     sleep: (t) => new Promise((r) => setTimeout(r, t)),
     watchBlocks: () => watchBlocks(() => performance.now()),
     logOnly: true,

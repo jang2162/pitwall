@@ -33,6 +33,28 @@ pub const SCENARIO_ENV: &str = "PITWALL_PERF_SCENARIO";
 /// 아는 시나리오(src/perf-scenario.ts 의 `SCENARIOS`). 모르는 이름은 무시한다 — 창 주소에는 이 목록의 값만 들어간다.
 pub const SCENARIOS: &[&str] = &["git"];
 
+/// 시나리오가 남기는 표시 이름(src/perf-scenario.ts 의 `env.report` — 시험이 그 파일과 같은지 본다). 하네스가 판정에 쓰는
+/// 표시(`first_frame` · `hidden` · `main`)는 웹뷰가 남기지 못하고, 모르는 이름도 남지 않는다.
+pub const SCENARIO_EVENTS: &[&str] = &[
+    "git_log_open",
+    "git_log_rows",
+    "git_log_scroll",
+    "diff_open",
+    "checkout_ready",
+    "branch_shown",
+    "gutter_mark",
+    "typing",
+    "changes_ready",
+    "commit_list_scroll",
+    "stage_ready",
+    "staged_shown",
+    "scenario_done",
+    "scenario_error",
+];
+
+/// 시나리오 표시 하나의 `data` 상한(JSON 바이트). 가장 큰 것(스크롤 통계)이 1 KiB 남짓이다.
+pub const SCENARIO_DATA_MAX: usize = 16 * 1024;
+
 /// 측정 모드인 프로젝트 창의 주소에 붙는 쿼리(src/perf-mark.tsx 의 `perfMarkRequested`).
 const QUERY: (&str, &str) = ("perf", "1");
 
@@ -198,12 +220,59 @@ pub fn perf_report<R: Runtime>(
     event: String,
     data: serde_json::Value,
 ) {
+    if let Some(why) = scenario_report_refused(&event, &data) {
+        tracing::warn!(%event, why, "ignoring a perf scenario report");
+        return;
+    }
     marks.record_with(&event, Some(window.label()), None, Some(&data));
+}
+
+/// 남기지 않을 시나리오 표시의 까닭(아는 이름 · 크기 상한 밖).
+fn scenario_report_refused(event: &str, data: &serde_json::Value) -> Option<&'static str> {
+    if !SCENARIO_EVENTS.contains(&event) {
+        return Some("unknown event name");
+    }
+    if data.to_string().len() > SCENARIO_DATA_MAX {
+        return Some("data over the size limit");
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 시나리오가 부르는 이름이 모두 받아지고, 하네스의 표시 이름 · 모르는 이름 · 큰 data 는 남지 않는다.
+    #[test]
+    fn only_the_scenario_s_own_reports_are_recorded() {
+        let source = include_str!("../../src/perf-scenario.ts");
+        let mut used: Vec<&str> = source
+            .split("env.report(\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+        used.sort_unstable();
+        used.dedup();
+        let mut known = SCENARIO_EVENTS.to_vec();
+        known.sort_unstable();
+        assert_eq!(used, known);
+        let small = serde_json::json!({"ms": 1.5});
+        for event in SCENARIO_EVENTS {
+            assert_eq!(scenario_report_refused(event, &small), None, "{event}");
+        }
+        for event in ["first_frame", "hidden", "main", "scenario_done "] {
+            assert_eq!(
+                scenario_report_refused(event, &small),
+                Some("unknown event name"),
+                "{event}"
+            );
+        }
+        let big = serde_json::json!({"text": "x".repeat(SCENARIO_DATA_MAX)});
+        assert_eq!(
+            scenario_report_refused("typing", &big),
+            Some("data over the size limit")
+        );
+    }
 
     #[test]
     fn a_mark_is_one_json_line() {
