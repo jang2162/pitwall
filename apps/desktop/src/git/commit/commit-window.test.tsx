@@ -87,6 +87,8 @@ const host = vi.hoisted(() => ({
   stashes: [] as unknown[],
   /** 있으면 `git.commit` 의 `moved`. */
   moved: undefined as unknown,
+  /** 작업 트리에서 폴더인 경로(서브모듈 — `fs.stat` 의 `kind`). */
+  dirs: new Set<string>(),
 }));
 
 vi.mock("../../tauri-transport", async () => {
@@ -166,6 +168,18 @@ vi.mock("../../tauri-transport", async () => {
             return reply({ kind: "ok", path: "/data/state.db" });
           case "project.claimTrustPrompt":
             return reply(false);
+          case "fs.stat": {
+            const rel = (params.path as string).replace(/^\/repo\//, "");
+            return reply({
+              path: params.path,
+              kind: host.dirs.has(rel) ? "dir" : "file",
+              target: null,
+              size: 1,
+              mtimeMs: 1,
+              readonly: false,
+              sizeClass: host.dirs.has(rel) ? null : "editable",
+            });
+          }
           case "fs.list":
             return reply({ path: params.path, entries: [] });
           case "fs.read":
@@ -363,6 +377,7 @@ beforeEach(() => {
   host.fixture = FIXTURE;
   host.stashes = [];
   host.moved = undefined;
+  host.dirs = new Set();
   activeWorktreeStore.setState({ top: undefined });
   diffPreferences.setState({ mode: "split" });
   resetWindowFileTree();
@@ -752,12 +767,15 @@ interface Rollback {
   unstage: string[];
   discard: string[];
   lost: string[];
+  lostIndex: string[];
   kept: string[];
+  untouched: string[];
 }
 
 const DISCARD = discardFixture as unknown as {
   rollback: Rollback;
   rollbackChanges: Rollback;
+  rollbackSubmodule: Rollback;
   hunk: Step & { path: string; request: { path: string; hunks: unknown[] }; after: string };
   stash: {
     stashes: { index: number; commit: string; message: string }[];
@@ -796,6 +814,34 @@ const toastButton = (title: string, label: string) =>
     return b;
   });
 
+/** 확인의 잃는 목록 줄. */
+const lostLines = (dialog: HTMLElement) =>
+  [...dialog.querySelectorAll('[data-testid="git-lost-list"] li')].map((li) => li.textContent!);
+
+/** 확인 본문에서 `head` 가 든 줄 아래(빈 줄까지)의 줄. 없으면 빈 목록. */
+function bodySection(dialog: HTMLElement, head: string): string[] {
+  const body = dialog.querySelector(".whitespace-pre-line")!.textContent!.split("\n");
+  const at = body.findIndex((l) => l.includes(head));
+  if (at < 0) return [];
+  const rest = body.slice(at + 1);
+  const end = rest.indexOf("");
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+/** 잃는 목록이 git 이 실제로 잃은 경로와 같다: 디스크가 바뀐 것(이름 바뀜 「옛 → 새」 은 돌아오는 옛 경로) · 스테이징한 내용이 사라진 것. */
+function expectLostLike(dialog: HTMLElement, fx: Rollback) {
+  expect(new Set(lostLines(dialog).map((l) => l.split(" → ")[0]))).toEqual(
+    new Set([...fx.lost, ...fx.lostIndex]),
+  );
+  // 남는 것: 「지우지 않고」 아래 줄이 git 이 디스크에 그대로 둔 파일이고, 스테이징한 내용을 잃는 것은 그렇게 적혀 있다.
+  const kept = bodySection(dialog, "지우지 않고");
+  expect(kept.map((l) => l.split(" — ")[0])).toEqual(fx.kept);
+  expect(
+    kept.filter((l) => l.includes("스테이징한 내용은 잃는다")).map((l) => l.split(" — ")[0]),
+  ).toEqual(fx.kept.filter((p) => fx.lostIndex.includes(p)));
+  expect(bodySection(dialog, "건드리지 않는다")).toEqual(fx.untouched);
+}
+
 /** 변경 그룹(`stagedToo` 면 스테이징됨 그룹도)의 파일을 모두 고르고 ⌘⌥Z 의 확인을 띄운다. */
 async function rollbackEverything({ entries }: Rollback, stagedToo = true) {
   const staged = stagedToo
@@ -818,23 +864,16 @@ it("lists exactly what git changes on disk before rolling back, and nothing when
   await openCommitWindow("staged:added.txt");
   const dialog = await rollbackEverything(DISCARD.rollback);
   expectDanger(dialog);
-  // 잃는 것: 목록의 줄 → 디스크에서 바뀌는 경로(이름 바뀜 「옛 → 새」 은 HEAD 의 것으로 돌아오는 옛 경로).
-  const lost = [...dialog.querySelectorAll('[data-testid="git-lost-list"] li')].map(
-    (li) => li.textContent!,
-  );
-  expect(lost).toEqual([
+  expect(lostLines(dialog)).toEqual([
     "added-gone.txt",
+    "am.txt",
     "gone.txt",
     "mod.txt",
     "old.txt → new.txt",
     "staged.txt",
     "old.txt",
   ]);
-  expect(new Set(lost.map((l) => l.split(" → ")[0]))).toEqual(new Set(DISCARD.rollback.lost));
-  // 남는 것: 본문의 「지우지 않는다」 아래 줄이 git 이 그대로 둔 파일이다.
-  const body = dialog.querySelector(".whitespace-pre-line")!.textContent!.split("\n");
-  const kept = body.slice(body.findIndex((l) => l.includes("지우지 않고")) + 1);
-  expect(kept).toEqual(DISCARD.rollback.kept);
+  expectLostLike(dialog, DISCARD.rollback);
   await click(dialogButton(dialog, "취소"));
   await settle(50);
   expect(calls("git.unstage")).toHaveLength(0);
@@ -861,17 +900,60 @@ it("rolls back only the work tree when only the changes group is chosen, keeping
   await openCommitWindow("changes:ita.txt");
   const dialog = await rollbackEverything(fx, false);
   expectDanger(dialog);
-  const lost = [...dialog.querySelectorAll('[data-testid="git-lost-list"] li')].map(
-    (li) => li.textContent!,
-  );
-  expect(lost).toEqual(fx.lost);
-  const body = dialog.querySelector(".whitespace-pre-line")!.textContent!.split("\n");
-  expect(body.slice(body.findIndex((l) => l.includes("지우지 않고")) + 1)).toEqual(fx.kept);
+  expect(lostLines(dialog)).toEqual(fx.lost);
+  expectLostLike(dialog, fx);
   await click(dialogButton(dialog, "되돌리기"));
   await vi.waitFor(() => expect(calls("git.discard")).toHaveLength(1));
   expect(calls("git.unstage")).toHaveLength(0);
   expect(fx.unstage).toEqual([]);
   expect(calls("git.discard")[0]!.params).toMatchObject({ paths: fx.discard, confirmed: true });
+});
+
+it("shows a submodule as left alone, not lost, the way git restore leaves it", async () => {
+  const fx = DISCARD.rollbackSubmodule;
+  host.entries = fx.entries;
+  host.dirs = new Set(["sm"]);
+  await openCommitWindow("staged:sm");
+  const dialog = await rollbackEverything(fx);
+  expect(lostLines(dialog)).toEqual(["plain.txt"]);
+  expectLostLike(dialog, fx);
+  await click(dialogButton(dialog, "되돌리기"));
+  await vi.waitFor(() => expect(calls("git.discard")).toHaveLength(1));
+  expect(calls("git.unstage").map((c) => c.params.paths)).toEqual([fx.unstage]);
+  expect(calls("git.discard")[0]!.params).toMatchObject({ paths: fx.discard, confirmed: true });
+});
+
+it("asks again with the new list when the state changes while the list is shown (review)", async () => {
+  // 리뷰의 재현: 「지우지 않고 그대로 둔다」 의 새 파일 n 을 보는 동안 터미널에서 커밋하고 n 을 고친다.
+  host.entries = [{ path: "n", origPath: null, staged: "added", unstaged: null, conflict: null }];
+  await openCommitWindow("staged:n");
+  await click(row("staged:n")!);
+  await act(async () => {
+    windowRegistry().run("git.rollback");
+  });
+  let dialog = await confirmDialog();
+  expect(bodySection(dialog, "지우지 않고")).toEqual(["n"]);
+  expect(lostLines(dialog)).toEqual([]);
+  host.entries = [
+    { path: "n", origPath: null, staged: null, unstaged: "modified", conflict: null },
+  ];
+  await click(dialogButton(dialog, "되돌리기"));
+  // 보였던 목록과 다르다 — 부르지 않고 새 목록으로 다시 묻는다.
+  dialog = await vi.waitFor(() => {
+    const d = document.querySelector<HTMLElement>('[data-testid="git-confirm-dialog"]');
+    expect(d?.textContent).toContain("그사이 상태가 바뀌었다");
+    return d!;
+  });
+  expect(calls("git.unstage")).toHaveLength(0);
+  expect(calls("git.discard")).toHaveLength(0);
+  expectDanger(dialog);
+  expect(lostLines(dialog)).toEqual(["n"]);
+  expect(bodySection(dialog, "지우지 않고")).toEqual([]);
+  await click(dialogButton(dialog, "되돌리기"));
+  await vi.waitFor(() => expect(calls("git.discard")).toHaveLength(1));
+  // 커밋된 뒤라 스테이징을 풀 것이 없다 — 작업 트리의 새 편집을 버린다는 것을 보인 뒤에만.
+  expect(calls("git.unstage")).toHaveLength(0);
+  expect(calls("git.discard")[0]!.params).toMatchObject({ paths: ["n"], confirmed: true });
 });
 
 it("shows the hunk's lines before reverting it and sends the request git ran", async () => {

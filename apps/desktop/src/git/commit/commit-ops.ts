@@ -25,7 +25,17 @@ import {
 import type { NameQuestion } from "../../file-tree/file-ops";
 import type { NotificationInput } from "../../notifications/notifications";
 import type { GitConfirm } from "../dialogs/git-dialogs";
-import { type CommitItem, listLines, rollbackPlan, unstagePaths } from "./commit-model";
+import {
+  type CommitItem,
+  groupEntries,
+  listLines,
+  rechoose,
+  type RollbackChoice,
+  rollbackChoice,
+  type RollbackPlan,
+  rollbackPlan,
+  unstagePaths,
+} from "./commit-model";
 import type { StageSelection } from "./hunk-staging";
 import type { GitCommitStrings } from "./strings";
 
@@ -35,6 +45,17 @@ export const GIT_FAILED = 2004;
 export const CONFLICT = -32004;
 /** 확인 목록에 보이는 줄 수. */
 const LISTED = 30;
+/** 되돌리기를 묻는 횟수(그사이 상태가 계속 바뀌면 이만큼 다시 묻고 그만둔다). 한 번 더 읽어 맞춰 보는 차례까지 셈한다. */
+const ROUNDS = 4;
+/** 서브모듈을 가리려고 `fs.stat` 할 경로의 상한. */
+const STATS = 500;
+
+/** 다시 읽은 상태로 만든 되돌리기 계획과 고른 파일 수. */
+interface Fresh {
+  plan: RollbackPlan;
+  count: number;
+}
+
 /** 창이 셈한 잃을 목록의 지문 자리(`null` 이 아니면 확인 단추가 켜진다 — git-dialogs.tsx `GitConfirm.lost`). */
 const LISTED_HERE = "listed-before-the-call";
 
@@ -95,6 +116,68 @@ export function createCommitOps(deps: CommitOpsDeps) {
     }
   };
 
+  /**
+   * 고른 경로를 지금 상태로 다시 읽어 되돌리기 계획을 만든다(commit-model.ts `rollbackPlan`). 서브모듈은 `git.status` 가 따로 알리지
+   * 않으므로 바뀐 추적 경로가 작업 트리에서 폴더인지(`fs.stat`)로 가린다 — 많으면([`STATS`] 넘게) 보지 않는다(잃는 쪽으로 보인다).
+   * 읽지 못하면 `undefined`(알렸다).
+   */
+  const freshPlan = async (choice: RollbackChoice, paths: string[]): Promise<Fresh | undefined> => {
+    try {
+      const status = await host().call("git.status", { ...scope(), paths });
+      const groups = groupEntries(status.entries);
+      const chosen = rechoose(groups, choice);
+      const candidates = [
+        ...new Set(
+          chosen
+            .filter((i) => i.entry.staged === "modified" || i.entry.unstaged === "modified")
+            .map((i) => i.path),
+        ),
+      ];
+      const submodules = new Set<string>();
+      if (status.workTree && candidates.length <= STATS)
+        await Promise.all(
+          candidates.map(async (path) => {
+            try {
+              const stat = await host().call("fs.stat", {
+                ...scope(),
+                path: `${status.workTree}/${path}`,
+              });
+              if (stat.kind === "dir") submodules.add(path);
+            } catch {
+              // 읽지 못하면 서브모듈이 아닌 것으로 본다(잃는 쪽으로 보인다).
+            }
+          }),
+        );
+      return {
+        plan: rollbackPlan(
+          chosen,
+          groups.untracked.map((i) => i.path),
+          submodules,
+        ),
+        count: new Set(chosen.map((i) => i.path)).size,
+      };
+    } catch (e) {
+      failed(e);
+      return undefined;
+    }
+  };
+  /** 확인한 계획대로 스테이징을 풀고 버린다. */
+  const execute = (plan: RollbackPlan) =>
+    run(async () => {
+      if (plan.unstage.length > 0)
+        await host().call("git.unstage", { ...scope(), paths: plan.unstage });
+      const result = await host().call("git.discard", {
+        ...scope(),
+        paths: plan.discard,
+        confirmed: true,
+      });
+      if (result.untracked.length > 0)
+        deps.notify({
+          level: "info",
+          title: T().rollback.untracked(listLines(result.untracked, LISTED, T().rollback.more)),
+        });
+    });
+
   return {
     /** 파일 체크: 스테이징됨 그룹이면 스테이징을 풀고, 아니면 스테이징한다. */
     async toggle(items: readonly CommitItem[]): Promise<boolean> {
@@ -111,42 +194,52 @@ export function createCommitOps(deps: CommitOpsDeps) {
       });
     },
 
-    /**
-     * 변경 되돌리기(⌘⌥Z, 머리 주석). 묻고 나서 한다. 한 것이 있으면 참. `untracked` 는 지금 버전 관리 안 됨 그룹의 경로다(이름 바뀜의
-     * 옛 경로에 있으면 덮인다).
-     */
-    async rollback(items: readonly CommitItem[], untracked: readonly string[]): Promise<boolean> {
+    /** 변경 되돌리기(⌘⌥Z, 머리 주석). 묻고 나서 한다. 한 것이 있으면 참. */
+    async rollback(items: readonly CommitItem[]): Promise<boolean> {
       const chosen = items.filter((i) => i.group === "staged" || i.group === "changes");
       if (chosen.length === 0) {
         deps.notify({ level: "warning", title: T().rollback.none });
         return false;
       }
-      const plan = rollbackPlan(chosen, untracked);
-      const lost = plan.lost.changes.length + plan.lost.overwritten.length;
-      const kept =
-        plan.kept.length > 0
-          ? `\n\n${T().rollback.kept(plan.kept.length)}\n${listLines(plan.kept, LISTED, T().rollback.more)}`
-          : "";
-      const ok = await deps.confirm({
-        title: T().rollback.title,
-        body: `${T().rollback.body(new Set(chosen.map((i) => i.path)).size)}${kept}`,
-        // 목록은 부르기 전의 상태로 셈한 것이다 — Host 의 지문은 없다(버리는 경로가 정해져 있어 그 밖은 바뀌지 않는다).
-        lost: { changes: plan.lost, fingerprint: LISTED_HERE },
-        confirm: T().rollback.confirm,
-        danger: lost > 0,
-      });
-      if (!ok) return false;
-      const paths = plan.discard;
-      return run(async () => {
-        if (plan.unstage.length > 0)
-          await host().call("git.unstage", { ...scope(), paths: plan.unstage });
-        const result = await host().call("git.discard", { ...scope(), paths, confirmed: true });
-        if (result.untracked.length > 0)
-          deps.notify({
-            level: "info",
-            title: T().rollback.untracked(listLines(result.untracked, LISTED, T().rollback.more)),
-          });
-      });
+      const choice = rollbackChoice(chosen);
+      // 이름 바뀜의 옛 경로도 읽는다 — 거기에 추적 안 된 파일이 있으면 덮인다.
+      const paths = [
+        ...new Set(
+          chosen.flatMap((i) => [i.path, ...(i.entry.origPath ? [i.entry.origPath] : [])]),
+        ),
+      ];
+      const ask = async ({ plan, count }: Fresh, changed: boolean) => {
+        const R = T().rollback;
+        const section = (head: string, lines: string[]) =>
+          lines.length > 0 ? `\n\n${head}\n${listLines(lines, LISTED, R.more)}` : "";
+        const without = new Set(plan.keptWithoutStaged);
+        const kept = plan.kept.map((p) => (without.has(p) ? R.keptWithoutStaged(p) : p));
+        return deps.confirm({
+          title: R.title,
+          body: `${changed ? `${R.changed}\n\n` : ""}${R.body(count)}${section(R.kept(kept.length), kept)}${section(R.untouched(plan.untouched.length), plan.untouched)}`,
+          // 목록은 부르기 직전에 다시 읽은 상태로 셈한 것이다 — Host 의 지문은 없다. 그래서 확인한 뒤에 한 번 더 읽어 같을 때만 한다.
+          lost: { changes: plan.lost, fingerprint: LISTED_HERE },
+          confirm: R.confirm,
+          danger: plan.lost.changes.length + plan.lost.overwritten.length > 0,
+        });
+      };
+      // 읽고 → 묻고 → 다시 읽어 보인 것과 같으면 한다. 다르면(목록을 보는 동안 터미널에서 커밋 · 편집) 새 목록으로 다시 묻는다.
+      // 다시 읽은 뒤 부르기까지의 짧은 틈은 남는다(Host 는 버리기에 지문을 받지 않는다).
+      let shown: string | undefined;
+      for (let round = 0; round < ROUNDS; round++) {
+        const fresh = await freshPlan(choice, paths);
+        if (!fresh) return false;
+        const key = JSON.stringify(fresh.plan);
+        if (key === shown) return execute(fresh.plan);
+        if (fresh.plan.discard.length === 0) {
+          deps.notify({ level: "warning", title: T().rollback.none });
+          return false;
+        }
+        if (!(await ask(fresh, shown !== undefined))) return false;
+        shown = key;
+      }
+      deps.notify({ level: "warning", title: T().rollback.unstable });
+      return false;
     },
 
     /** diff 미리보기의 체크(hunk-staging.ts). `worktree` 는 그 탭의 워크트리. conflict 면 거짓(다시 읽을 차례). */

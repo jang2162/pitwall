@@ -70,6 +70,15 @@ git-commit-rollback-kept = { $count ->
         [one] This new file is not deleted and stays on disk:
        *[other] These { $count } new files are not deleted and stay on disk:
     }
+# $path: file path
+git-commit-rollback-kept-without-staged = { $path } — only the content on disk stays; the staged content is lost
+# $count: number of submodules
+git-commit-rollback-untouched = { $count ->
+        [one] This submodule is left alone; the commit it points at and the changes inside it stay:
+       *[other] These { $count } submodules are left alone; the commits they point at and the changes inside them stay:
+    }
+git-commit-rollback-changed = The state changed in the meantime; check the new list
+git-commit-rollback-unstable = The state kept changing, so nothing was rolled back; try again in a moment
 # $files: one file per line
 git-commit-rollback-untracked = Unversioned files were not deleted: { $files }
 git-commit-rollback-none = No changes are selected

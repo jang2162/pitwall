@@ -880,7 +880,10 @@ mod window_fixture {
 ///
 /// - `rollback`: 상태가 여러 가지인 파일(` M` · `MM` · ` D` · `A ` · `AD` · ` A` · 옛 경로에 추적 안 된 파일이 있는 `R `)을 모두 골라
 ///   ⌘⌥Z 한 요청(`git.unstage` → `git.discard`). `lost` 는 디스크의 바이트가 바뀌었거나 남지 않은 경로, `kept` 는 그대로 남은 경로다.
-///   `rollbackChanges` 는 변경 그룹만 고른 것(`MM` · `AM` · ` A` — 스테이징을 풀지 않는다).
+///   `rollbackChanges` 는 변경 그룹만 고른 것(`MM` · `AM` · ` A` — 스테이징을 풀지 않는다), `rollbackSubmodule` 은 가리키는 커밋을
+///   스테이징한 서브모듈과 보통 파일. `lostIndex` 는 스테이징한 내용이 index 에도 디스크에도 남지 않은 경로, `untouched` 는 그대로인
+///   서브모듈이다.
+/// - `amendMixed`: 여러 상태가 섞인 저장소에서 amend → [되돌리기](soft) 앞뒤가 같은지.
 /// - `hunk`: 작업 트리 diff 의 첫 변경 묶음을 `git.discardLines` 로 버린 요청과 그 뒤의 작업 트리.
 /// - `stash`: stash 둘 중 오래된 것을 버린 요청과 그 뒤의 목록.
 /// - `amend`: amend 결과의 `moved` 로 [되돌리기](`git.reset` soft)한 요청과 그 뒤의 HEAD · index.
@@ -920,8 +923,34 @@ mod discard_fixture {
             .entries
     }
 
+    /// 디스크의 모습: 파일이면 바이트, 폴더(서브모듈)면 그 안의 HEAD 와 상태.
     fn disk(f: &WriteFixture, path: &str) -> Option<Vec<u8>> {
-        fs::read(f.repo.root().join(path)).ok()
+        let full = f.repo.root().join(path);
+        if full.is_dir() {
+            let head = f.repo.git_in(&full, &["rev-parse", "HEAD"]);
+            let status = f.repo.git_in(&full, &["status", "--porcelain"]);
+            return Some(format!("dir {head}{status}").into_bytes());
+        }
+        fs::read(full).ok()
+    }
+
+    /// index 에 있는 그 경로의 객체(없으면 `None`).
+    fn staged_object(f: &WriteFixture, path: &str) -> Option<String> {
+        let out = f.repo.try_git_in(
+            f.repo.root(),
+            &["rev-parse", "--verify", "-q", &format!(":{path}")],
+        );
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    }
+
+    /// 작업 트리 파일의 blob 해시(파일이 아니면 `None`).
+    fn disk_object(f: &WriteFixture, path: &str) -> Option<String> {
+        if !f.repo.root().join(path).is_file() {
+            return None;
+        }
+        Some(f.repo.git(&["hash-object", "--", path]).trim().to_owned())
     }
 
     fn remove(f: &WriteFixture, path: &str) {
@@ -960,13 +989,30 @@ mod discard_fixture {
         (unstage, discard.into_iter().collect())
     }
 
-    /// 지금 상태에서 고른 것을 되돌리고(`git.unstage` → `git.discard`), 디스크의 바이트가 그대로인 경로(`kept`)와 아닌 경로(`lost`).
+    /// 지금 상태에서 고른 것을 되돌리고(`git.unstage` → `git.discard`) 견준다: 디스크가 그대로인 파일(`kept`) · 아닌 경로(`lost`) ·
+    /// 그대로인 서브모듈(`untouched`), 그리고 스테이징한 내용이 index 에도 디스크에도 남지 않은 경로(`lostIndex` — intent-to-add 의 빈
+    /// 항목과 서브모듈은 빼고).
     async fn roll_back(f: &WriteFixture, staged_too: bool) -> serde_json::Value {
         let before = entries(f).await;
         let (unstage, discard) = requests(&before, staged_too);
         let touched: BTreeSet<String> = unstage.iter().chain(&discard).cloned().collect();
         let bytes: BTreeMap<String, Option<Vec<u8>>> =
             touched.iter().map(|p| (p.clone(), disk(f, p))).collect();
+        let submodules: BTreeSet<String> = touched
+            .iter()
+            .filter(|p| f.repo.root().join(p).is_dir())
+            .cloned()
+            .collect();
+        let intent = |path: &str| {
+            before.iter().any(|e| {
+                e.path == path && e.staged.is_none() && e.unstaged == Some(GitChange::Added)
+            })
+        };
+        let objects: BTreeMap<String, Option<String>> = touched
+            .iter()
+            .filter(|p| !submodules.contains(*p) && !intent(p))
+            .map(|p| (p.clone(), staged_object(f, p)))
+            .collect();
         if !unstage.is_empty() {
             f.write
                 .unstage(
@@ -993,22 +1039,35 @@ mod discard_fixture {
             )
             .await
             .unwrap();
-        let (mut lost, mut kept) = (Vec::new(), Vec::new());
+        let (mut lost, mut kept, mut untouched) = (Vec::new(), Vec::new(), Vec::new());
         for (path, was) in &bytes {
             let now = disk(f, path);
             if was.is_some() && *was == now {
-                kept.push(path.clone());
+                if submodules.contains(path) {
+                    untouched.push(path.clone());
+                } else {
+                    kept.push(path.clone());
+                }
             } else {
                 lost.push(path.clone());
             }
         }
+        let lost_index: Vec<String> = objects
+            .iter()
+            .filter(|(path, was)| {
+                was.is_some() && **was != staged_object(f, path) && **was != disk_object(f, path)
+            })
+            .map(|(path, _)| path.clone())
+            .collect();
         json!({
             "entries": before,
             "unstage": unstage,
             "discard": discard,
             "untracked": result.untracked,
             "lost": lost,
+            "lostIndex": lost_index,
             "kept": kept,
+            "untouched": untouched,
             "after": f.repo.git(&["status", "--porcelain=v1", "--untracked-files=all"]),
         })
     }
@@ -1035,6 +1094,9 @@ mod discard_fixture {
         f.repo.write("added-gone.txt", "staged then deleted\n");
         f.repo.git(&["add", "added.txt", "added-gone.txt"]);
         remove(&f, "added-gone.txt");
+        f.repo.write("am.txt", "staged first\n");
+        f.repo.git(&["add", "am.txt"]);
+        f.repo.write("am.txt", "then edited\n");
         f.repo.write("ita.txt", "intent to add\n");
         f.repo.git(&["add", "-N", "ita.txt"]);
         f.repo.git(&["mv", "old.txt", "new.txt"]);
@@ -1042,6 +1104,33 @@ mod discard_fixture {
             .write("old.txt", "someone else's file at the old path\n");
         f.repo.write("loose.txt", "untracked, not chosen\n");
         roll_back(&f, true).await
+    }
+
+    /// 서브모듈(가리키는 커밋을 바꿔 스테이징한 것)과 보통 파일을 함께 고른다 — `git restore` 는 서브모듈을 건드리지 않는다.
+    async fn rollback_submodule() -> serde_json::Value {
+        let f = WriteFixture::new(true);
+        let _window = proceed(&f);
+        let sub = crate::testing::TestRepo::with_commit();
+        f.repo.write("plain.txt", "p0\n");
+        f.repo.git(&[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            sub.root().to_str().unwrap(),
+            "sm",
+        ]);
+        f.repo.commit_all("base with a submodule");
+        f.repo.write("plain.txt", "p1\n");
+        f.repo.write("sm/inner.txt", "inner change\n");
+        f.repo
+            .commit_all_in(&f.repo.root().join("sm"), "move the submodule");
+        f.repo.git(&["add", "sm"]);
+        let mut value = roll_back(&f, true).await;
+        // 서브모듈 안의 커밋 해시는 돌 때마다 다르다 — 그 해시를 담은 `.gitmodules` 밖의 것은 없다.
+        value["after"] = json!(f.repo.git(&["status", "--porcelain=v1"]));
+        value
     }
 
     /// 변경 그룹만 고른다(스테이징은 그대로 — 작업 트리를 index 로).
@@ -1258,11 +1347,83 @@ mod discard_fixture {
         })
     }
 
+    /// 스테이징한 수정 · 삭제 · 이름 바뀜 · 새 파일, intent-to-add, 작업 트리 편집, untracked 를 섞은 저장소에서 amend 뒤 [되돌리기]
+    /// (soft) 하면 HEAD · index · 상태 · 작업 파일이 amend 전과 같다.
+    async fn amend_mixed() -> serde_json::Value {
+        let f = WriteFixture::new(true);
+        for (path, body) in [("m.txt", "m0\n"), ("d.txt", "d0\n"), ("r.txt", "r0\n")] {
+            f.repo.write(path, body);
+        }
+        let previous = f.repo.commit_all("base");
+        f.repo.write("m.txt", "m1\n");
+        f.repo.git(&["add", "m.txt"]);
+        f.repo.write("m.txt", "m2 not staged\n");
+        f.repo.git(&["rm", "-q", "d.txt"]);
+        f.repo.git(&["mv", "r.txt", "renamed.txt"]);
+        f.repo.write("n.txt", "new\n");
+        f.repo.git(&["add", "n.txt"]);
+        f.repo.write("ita.txt", "intent\n");
+        f.repo.git(&["add", "-N", "ita.txt"]);
+        f.repo.write("loose.txt", "untracked\n");
+        let look = || {
+            let mut files = BTreeMap::new();
+            for path in [
+                "m.txt",
+                "d.txt",
+                "r.txt",
+                "renamed.txt",
+                "n.txt",
+                "ita.txt",
+                "loose.txt",
+            ] {
+                files.insert(path, disk(&f, path).map(|b| String::from_utf8(b).unwrap()));
+            }
+            json!({
+                "index": f.repo.git(&["ls-files", "-s"]),
+                "status": f.repo.git(&["status", "--porcelain=v1", "--untracked-files=all"]),
+                "files": files,
+            })
+        };
+        let before = look();
+        let result = commit(
+            &f.write,
+            f.caller(),
+            GitCommitParams {
+                amend: true,
+                ..params(&f, "base, amended\n")
+            },
+        )
+        .await
+        .unwrap();
+        reset(
+            f.write.clone(),
+            f.caller(),
+            GitResetParams {
+                project_id: f.project.clone(),
+                worktree: None,
+                commit: result.moved.previous.clone().unwrap(),
+                mode: ResetMode::Soft,
+                expected: result.moved.current.clone(),
+                expected_ref: Some(result.moved.ref_name.clone()),
+                fingerprint: None,
+            },
+        )
+        .await
+        .unwrap();
+        json!({
+            "headIsPrevious": f.repo.head().trim() == previous.trim(),
+            "before": before,
+            "after": look(),
+        })
+    }
+
     async fn fixture_value() -> serde_json::Value {
         let mut names = Vec::new();
         let value = json!({
             "rollback": rollback().await,
             "rollbackChanges": rollback_changes().await,
+            "rollbackSubmodule": rollback_submodule().await,
+            "amendMixed": amend_mixed().await,
             "hunk": hunk().await,
             "stash": stash(&mut names).await,
             "amend": amend(&mut names).await,
@@ -1282,7 +1443,7 @@ mod discard_fixture {
         // 새 파일 · intent-to-add · 이름 바뀜의 새 경로는 디스크에 남고, 나머지(옛 경로의 남의 파일 포함)는 바뀐다.
         assert_eq!(
             rollback["kept"],
-            json!(["added.txt", "ita.txt", "new.txt"]),
+            json!(["added.txt", "am.txt", "ita.txt", "new.txt"]),
             "{rollback}"
         );
         assert_eq!(
@@ -1296,6 +1457,21 @@ mod discard_fixture {
             ]),
             "{rollback}"
         );
+        // 스테이징한 내용이 index 에도 디스크에도 남지 않는 것: `MM` · `AD` 와, 디스크에는 남는 `AM` 의 스테이징 쪽.
+        assert_eq!(
+            rollback["lostIndex"],
+            json!(["added-gone.txt", "am.txt", "staged.txt"]),
+            "{rollback}"
+        );
+        // 서브모듈은 가리키는 커밋을 스테이징한 것을 풀어도 그 안은 그대로다(` M sm` 이 남는다).
+        let sub = &got["rollbackSubmodule"];
+        assert_eq!(sub["untouched"], json!(["sm"]), "{sub}");
+        assert_eq!(sub["lost"], json!(["plain.txt"]), "{sub}");
+        assert_eq!(sub["after"], json!(" M sm\n"), "{sub}");
+        // 섞인 저장소에서도 amend 를 되돌리면 HEAD · index · 상태 · 작업 파일이 amend 전과 같다.
+        let mixed = &got["amendMixed"];
+        assert_eq!(mixed["headIsPrevious"], json!(true));
+        assert_eq!(mixed["before"], mixed["after"]);
         // 고르지 않은 untracked 는 그대로다.
         assert!(rollback["after"].as_str().unwrap().contains("?? loose.txt"));
         // 변경 그룹만이면 작업 트리를 index 로 — 스테이징한 것은 남고 intent-to-add 만 그대로다.

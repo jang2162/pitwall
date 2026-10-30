@@ -113,10 +113,7 @@ export function commitActions({
           focusInCommitWindow(),
           activeFile(),
         );
-        await f.ops.rollback(
-          items,
-          groups.untracked.map((i) => i.path),
-        );
+        await f.ops.rollback(items);
       },
     },
   ];

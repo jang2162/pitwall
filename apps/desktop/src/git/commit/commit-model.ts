@@ -174,29 +174,63 @@ export interface RollbackPlan {
   readonly unstage: string[];
   /** `git.discard` 에 넘길 경로(경로순). */
   readonly discard: string[];
-  /** 잃는 것: 작업 트리가 HEAD(스테이징을 풀지 않으면 index)로 돌아가는 변경과 덮이는 추적 안 된 파일. */
+  /**
+   * 잃는 것: 작업 트리가 HEAD(스테이징을 풀지 않으면 index)로 돌아가는 변경, 스테이징을 풀어 index 에서 사라지는데 디스크와 다른
+   * 내용(`AM` 의 스테이징 쪽), 덮이는 추적 안 된 파일.
+   */
   readonly lost: GitLostChanges;
   /** 지우지 않고 디스크에 그대로 두는 새 파일(스테이징을 풀면 버전 관리 안 됨이 된다). 경로순. */
   readonly kept: string[];
+  /** `kept` 중 스테이징한 내용은 잃는 것(디스크의 내용만 남는다). */
+  readonly keptWithoutStaged: string[];
+  /** 건드리지 않는 서브모듈(`git restore` 는 서브모듈의 작업 트리를 바꾸지 않는다 — 가리키는 커밋 · 그 안의 변경이 남는다). */
+  readonly untouched: string[];
 }
 
 /** 스테이징이 HEAD 에 없는 경로를 더했다(그 경로를 HEAD 로 돌릴 것이 없다). */
 const NEW_IN_INDEX: ReadonlySet<GitChange | null> = new Set(["added", "copied", "renamed"]);
+
+/** 고른 경로마다 고른 그룹(다시 읽은 상태에서 같은 것을 고르는 데 쓴다 — `rechoose`). */
+export type RollbackChoice = ReadonlyMap<string, ReadonlySet<CommitGroup>>;
+
+export function rollbackChoice(chosen: readonly CommitItem[]): RollbackChoice {
+  const out = new Map<string, Set<CommitGroup>>();
+  for (const i of chosen) {
+    const groups = out.get(i.path) ?? new Set<CommitGroup>();
+    groups.add(i.group);
+    out.set(i.path, groups);
+  }
+  return out;
+}
+
+/**
+ * 다시 읽은 상태에서 같은 경로를 고른다: 변경 그룹은 언제나, 스테이징됨 그룹은 처음에 그 경로의 스테이징됨을 골랐을 때만(고르지
+ * 않은 스테이징을 풀지 않는다). 그사이 커밋돼 스테이징됨이 변경으로 옮겨 갔으면 변경 쪽을 고른다 — 그 목록은 처음과 달라 다시 묻는다.
+ */
+export function rechoose(groups: CommitGroups, choice: RollbackChoice): CommitItem[] {
+  return [...groups.staged, ...groups.changes].filter((i) => {
+    const was = choice.get(i.path);
+    return was !== undefined && (i.group === "changes" || was.has("staged"));
+  });
+}
 
 /**
  * 고른 항목(스테이징됨 · 변경 그룹의 것만 넘긴다)의 되돌리기: 스테이징된 것은 스테이징을 풀고 작업 트리를 index 로 돌린다 — 둘을 거치면 HEAD 다.
  * `git.discard` 는 index 에 없는 경로와 intent-to-add 파일을 지우지 않는다(crates/pw-git/src/stage/mod.rs `split_tracked`). 그래서:
  *
  * - 스테이징을 푸는 새 파일(추가 · 복사 · 이름 바뀜의 새 경로)은 디스크에 남는다 — 작업 트리에서 지운 것(`AD`)만 남을 것이 없어
- *   스테이징한 내용을 잃는다. 이름 바뀜은 옛 경로가 HEAD 의 것으로 돌아오므로 그 바뀜도 잃는 쪽에 든다.
+ *   스테이징한 내용을 잃는다. 작업 트리에서 고친 것(`AM`)은 디스크의 내용이 남고 스테이징한 내용은 잃는다. 이름 바뀜은 옛 경로가
+ *   HEAD 의 것으로 돌아오므로 그 바뀜도 잃는 쪽에 든다.
  * - 스테이징을 풀지 않으면(변경 그룹만 고름) 작업 트리를 index 로 돌린다 — intent-to-add 파일(`.A`)만 그대로 남는다.
  * - 이름 바뀜의 옛 경로에 추적 안 된 파일이 있으면(`untracked`) 그 파일은 HEAD 의 내용으로 덮인다.
+ * - 서브모듈(`submodules` — 작업 트리에서 폴더인 추적 경로)은 `git restore` 가 건드리지 않는다.
  *
  * 무엇을 잃고 무엇이 남는지가 진짜 git 과 같은지는 fixtures/discard.json(crates/pw-git `commit::tests::discard_fixture`)이 본다.
  */
 export function rollbackPlan(
   chosen: readonly CommitItem[],
   untracked: readonly string[],
+  submodules: ReadonlySet<string> = new Set(),
 ): RollbackPlan {
   const staged = chosen.filter((i) => i.group === "staged");
   const unstaging = new Set(staged.map((i) => i.path));
@@ -206,13 +240,22 @@ export function rollbackPlan(
   const changes: GitStatusEntry[] = [];
   const overwritten = new Set<string>();
   const kept: string[] = [];
+  const keptWithoutStaged: string[] = [];
+  const untouched: string[] = [];
   for (const [path, e] of entries) {
+    if (submodules.has(path)) {
+      untouched.push(path);
+      continue;
+    }
     const unstage = unstaging.has(path);
     const keeps = unstage
       ? NEW_IN_INDEX.has(e.staged) && e.unstaged !== "deleted"
       : e.unstaged === "added";
+    // 스테이징을 푸는 새 파일인데 작업 트리가 그와 다르면 index 의 내용은 어디에도 남지 않는다.
+    const stagedLost = keeps && unstage && e.unstaged === "modified";
     if (keeps) kept.push(path);
-    if (!keeps || (unstage && e.staged === "renamed")) changes.push(e);
+    if (stagedLost) keptWithoutStaged.push(path);
+    if (!keeps || stagedLost || (unstage && e.staged === "renamed")) changes.push(e);
     if (unstage && e.origPath && e.staged === "renamed" && outside.has(e.origPath))
       overwritten.add(e.origPath);
   }
@@ -225,6 +268,8 @@ export function rollbackPlan(
       overwritten: [...overwritten].sort(order),
     },
     kept: kept.sort(order),
+    keptWithoutStaged: keptWithoutStaged.sort(order),
+    untouched: untouched.sort(order),
   };
 }
 

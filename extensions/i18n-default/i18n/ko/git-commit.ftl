@@ -64,6 +64,12 @@ git-commit-rollback-body = 파일 { $count }개의 변경을 버린다. 스테�
 git-commit-rollback-confirm = 되돌리기
 # $count: 파일 수
 git-commit-rollback-kept = 이 새 파일 { $count }개는 지우지 않고 디스크에 그대로 둔다:
+# $path: 파일 경로
+git-commit-rollback-kept-without-staged = { $path } — 디스크의 내용만 남고 스테이징한 내용은 잃는다
+# $count: 서브모듈 수
+git-commit-rollback-untouched = 서브모듈 { $count }개는 건드리지 않는다 — 가리키는 커밋과 그 안의 변경이 그대로 남는다:
+git-commit-rollback-changed = 그사이 상태가 바뀌었다 — 새 목록을 확인한다
+git-commit-rollback-unstable = 상태가 계속 바뀌어 되돌리지 않았다 — 잠시 뒤에 다시 한다
 # $files: 줄마다 파일 하나
 git-commit-rollback-untracked = 버전 관리 안 되는 파일은 지우지 않았다: { $files }
 git-commit-rollback-none = 되돌릴 변경을 고르지 않았다

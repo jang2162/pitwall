@@ -18,6 +18,35 @@
     },
     "staged": "M\ta.txt\n"
   },
+  "amendMixed": {
+    "after": {
+      "files": {
+        "d.txt": null,
+        "ita.txt": "intent\n",
+        "loose.txt": "untracked\n",
+        "m.txt": "m2 not staged\n",
+        "n.txt": "new\n",
+        "r.txt": null,
+        "renamed.txt": "r0\n"
+      },
+      "index": "100644 ce013625030ba8dba906f756967f9e9ca394464a 0\tREADME.md\n100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 0\tita.txt\n100644 63a911f26fe84ea7fd8a863a636cfac908895ec9 0\tm.txt\n100644 3e757656cf36eca53338e520d134963a44f793f8 0\tn.txt\n100644 60d17266071df2ebe802caa7cbe45a8305dc6015 0\trenamed.txt\n",
+      "status": "D  d.txt\n A ita.txt\nMM m.txt\nA  n.txt\nR  r.txt -> renamed.txt\n?? loose.txt\n"
+    },
+    "before": {
+      "files": {
+        "d.txt": null,
+        "ita.txt": "intent\n",
+        "loose.txt": "untracked\n",
+        "m.txt": "m2 not staged\n",
+        "n.txt": "new\n",
+        "r.txt": null,
+        "renamed.txt": "r0\n"
+      },
+      "index": "100644 ce013625030ba8dba906f756967f9e9ca394464a 0\tREADME.md\n100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 0\tita.txt\n100644 63a911f26fe84ea7fd8a863a636cfac908895ec9 0\tm.txt\n100644 3e757656cf36eca53338e520d134963a44f793f8 0\tn.txt\n100644 60d17266071df2ebe802caa7cbe45a8305dc6015 0\trenamed.txt\n",
+      "status": "D  d.txt\n A ita.txt\nMM m.txt\nA  n.txt\nR  r.txt -> renamed.txt\n?? loose.txt\n"
+    },
+    "headIsPrevious": true
+  },
   "hunk": {
     "after": "fn a() {\n    a1\n}\nconst F0: u32 = 0;\nconst F1: u32 = 1;\nconst F2: u32 = 2;\nconst F3: u32 = 3;\nconst F4: u32 = 4;\nconst F5: u32 = 5;\nconst F6: u32 = 6;\nconst F7: u32 = 7;\nconst F8: u32 = 8;\nconst F9: u32 = 9;\nconst F10: u32 = 10;\nconst F11: u32 = 11;\nconst F12: u32 = 12;\nconst F13: u32 = 13;\nconst F14: u32 = 14;\nconst F15: u32 = 15;\nconst F16: u32 = 16;\nconst F17: u32 = 17;\nconst F18: u32 = 18;\nconst F19: u32 = 19;\nconst F20: u32 = 20;\nconst F21: u32 = 21;\nconst F22: u32 = 22;\nconst F23: u32 = 23;\nconst F24: u32 = 24;\nconst F25: u32 = 25;\nconst F26: u32 = 26;\nconst F27: u32 = 27;\nconst F28: u32 = 28;\nconst F29: u32 = 29;\nfn b() { changed }\n",
     "diff": {
@@ -243,10 +272,11 @@
     "workTree": "fn a() {\n    a1 changed\n    a2 added\n}\nconst F0: u32 = 0;\nconst F1: u32 = 1;\nconst F2: u32 = 2;\nconst F3: u32 = 3;\nconst F4: u32 = 4;\nconst F5: u32 = 5;\nconst F6: u32 = 6;\nconst F7: u32 = 7;\nconst F8: u32 = 8;\nconst F9: u32 = 9;\nconst F10: u32 = 10;\nconst F11: u32 = 11;\nconst F12: u32 = 12;\nconst F13: u32 = 13;\nconst F14: u32 = 14;\nconst F15: u32 = 15;\nconst F16: u32 = 16;\nconst F17: u32 = 17;\nconst F18: u32 = 18;\nconst F19: u32 = 19;\nconst F20: u32 = 20;\nconst F21: u32 = 21;\nconst F22: u32 = 22;\nconst F23: u32 = 23;\nconst F24: u32 = 24;\nconst F25: u32 = 25;\nconst F26: u32 = 26;\nconst F27: u32 = 27;\nconst F28: u32 = 28;\nconst F29: u32 = 29;\nfn b() { changed }\n"
   },
   "rollback": {
-    "after": " A ita.txt\n?? added.txt\n?? loose.txt\n?? new.txt\n",
+    "after": " A ita.txt\n?? added.txt\n?? am.txt\n?? loose.txt\n?? new.txt\n",
     "discard": [
       "added-gone.txt",
       "added.txt",
+      "am.txt",
       "gone.txt",
       "ita.txt",
       "mod.txt",
@@ -268,6 +298,13 @@
         "path": "added.txt",
         "staged": "added",
         "unstaged": null
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "am.txt",
+        "staged": "added",
+        "unstaged": "modified"
       },
       {
         "conflict": null,
@@ -319,10 +356,12 @@
         "unstaged": "modified"
       }
     ],
-    "kept": ["added.txt", "ita.txt", "new.txt"],
+    "kept": ["added.txt", "am.txt", "ita.txt", "new.txt"],
     "lost": ["added-gone.txt", "gone.txt", "mod.txt", "old.txt", "staged.txt"],
-    "unstage": ["added-gone.txt", "added.txt", "new.txt", "old.txt", "staged.txt"],
-    "untracked": ["added-gone.txt", "added.txt", "ita.txt", "new.txt"]
+    "lostIndex": ["added-gone.txt", "am.txt", "staged.txt"],
+    "unstage": ["added-gone.txt", "added.txt", "am.txt", "new.txt", "old.txt", "staged.txt"],
+    "untouched": [],
+    "untracked": ["added-gone.txt", "added.txt", "am.txt", "ita.txt", "new.txt"]
   },
   "rollbackChanges": {
     "after": "A  added.txt\nM  both.txt\n A ita.txt\n",
@@ -352,8 +391,36 @@
     ],
     "kept": ["ita.txt"],
     "lost": ["added.txt", "both.txt"],
+    "lostIndex": [],
     "unstage": [],
+    "untouched": [],
     "untracked": ["ita.txt"]
+  },
+  "rollbackSubmodule": {
+    "after": " M sm\n",
+    "discard": ["plain.txt", "sm"],
+    "entries": [
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "plain.txt",
+        "staged": null,
+        "unstaged": "modified"
+      },
+      {
+        "conflict": null,
+        "origPath": null,
+        "path": "sm",
+        "staged": "modified",
+        "unstaged": null
+      }
+    ],
+    "kept": [],
+    "lost": ["plain.txt"],
+    "lostIndex": [],
+    "unstage": ["sm"],
+    "untouched": ["sm"],
+    "untracked": []
   },
   "stash": {
     "after": [
