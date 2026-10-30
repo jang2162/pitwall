@@ -1,6 +1,6 @@
-# M2 묶음 4 실기 확인 (M2-13 · M2-14 · M2-15)
+# M2 실기 확인 (묶음 4 · 묶음 5 · M2-17)
 
-사람이 기기를 비워 줄 때 한 번에 돌릴 것과, 사람이 직접 볼 것. 측정이 무엇을 어떻게 재는지는 `CONTRIBUTING.md` 「성능 기준선」 의 「git 시나리오」 절이 정본이다 — 이 문서는 그 절차를 한 번 돌리는 운영 메모이고, 묶음 4 의 실기 확인이 끝나면 지운다.
+사람이 기기를 비워 줄 때 한 번에 돌릴 것과, 사람이 직접 볼 것. 대상은 M2-13 · M2-14 · M2-15(묶음 4), M2-16 · M2-18 · M2-19 · M2-20(묶음 5), M2-17 이다. 측정이 무엇을 어떻게 재는지는 `CONTRIBUTING.md` 「성능 기준선」 의 「git 시나리오」 절이 정본이다 — 이 문서는 그 절차를 한 번 돌리는 운영 메모이고, M2 의 실기 확인이 끝나면 지운다.
 
 ## 1. 측정 — 한 명령
 
@@ -8,7 +8,7 @@
 
 1. **화면이 잠기지 않았는지** 본다: `ioreg -n Root -d1 -a | grep -A1 CGSSessionScreenIsLocked` 가 `<false/>` 이거나 아무것도 안 나와야 한다. 잠겨 있으면 하네스가 시작하지 않는다.
 2. 측정 중에는 **기기를 쓰지 않는다.** 프로젝트 창이 회마다 한 번 앞에 뜨고 1분쯤 머문다 — 그 창을 다른 창으로 가리거나 다른 Space 로 옮기면 그 회는 제외된다(`hidden`).
-3. 저장소가 준비됐는지 본다(없으면 태스크가 만든다, 20초쯤): `git -C target/perf-git/graph rev-parse --verify perf-checkout` · `git -C target/perf-git/no-graph rev-parse --verify perf-checkout`.
+3. 저장소가 준비됐는지 본다(없거나 옛 픽스처면 태스크가 지우고 다시 만든다, 저장소마다 20~60초): 두 저장소(`target/perf-git/graph` · `no-graph`) 각각에서 `git -C <저장소> rev-parse --verify perf-checkout` 와 `git -C <저장소> cat-file -e main:perf/typing.rs` 가 성공해야 한다. 묶음 4 때 만든 저장소에는 `perf/typing.rs` · `perf/many` 가 없어 다시 만들어진다.
 
 ### 명령
 
@@ -16,16 +16,16 @@
 mise run perf-git
 ```
 
-- 하는 일: release 번들(`target/release/bundle/macos/Pitwall.app`)을 만들고 → 저장소 둘(commit-graph 있음 · 없음) × (준비 1 + 측정 5)회. 회마다 임시 `PITWALL_*_DIR` 로 앱을 띄우고 pid 로 끈다 — 사람의 설정 · 데이터 · 다른 Pitwall 은 건드리지 않는다.
-- 걸리는 시간: 번들 빌드(코드가 바뀌었으면 5~10분, 그대로면 1~2분) + 측정 약 12~15분(회마다 1분 남짓). **모두 합쳐 20~25분.**
+- 하는 일: release 번들(`target/release/bundle/macos/Pitwall.app`)을 만들고 → 저장소 둘(commit-graph 있음 · 없음) × (준비 1 + 측정 5)회. 회마다 임시 `PITWALL_*_DIR` 로 앱을 띄우고 pid 로 끈다 — 사람의 설정 · 데이터 · 다른 Pitwall 은 건드리지 않는다. 회 안의 차례: ⌘9 Git 로그 → 10만 행 스크롤 → 1만 줄 diff → 체크아웃 → Git 로그 접기 → 트리에서 `perf/typing.rs` 열기 → 한 줄 고쳐 거터 표시 → 30초 타이핑(넣은 글자는 지운다, 저장하지 않는다) → 하네스가 `perf/many` 의 파일 1만 개를 고침 → ⌘0 커밋 목록 스크롤 → 하네스가 `git add` 한 파일이 스테이징됨으로. 회가 끝나면 하네스가 `perf/many` 를 되돌리고 `main` 으로 돌려놓는다(저장소는 `target/perf-git/` 의 합성 저장소뿐이다).
+- 걸리는 시간: 번들 빌드(코드가 바뀌었으면 5~10분, 그대로면 1~2분) + 저장소를 다시 만들면 1~2분 + 측정 약 28~32분(회마다 2분 반쯤). **모두 합쳐 35~45분.**
 - 앱이 앞으로 뜨는 횟수: **12번**(프로젝트 창, 저장소 2 × 6회). 웰컴 창은 뜨지 않는다.
-- 키 입력: **OS 키 입력을 보내지 않는다.** ⌘9 · 더블클릭 · ⌃⌥⇧↑ 은 웹뷰 안에서 만든 이벤트이고, 체크아웃은 하네스가 저장소에서 `git checkout` 을 돌린다. 측정 도중 화면이 잠겨도 잠금 화면에 글자가 들어가지 않는다(그 회는 제외로 남는다).
+- 키 입력: **OS 키 입력을 보내지 않는다.** ⌘9 · ⌘0 · 더블클릭 · ⌃⌥⇧↑ 은 웹뷰 안에서 만든 이벤트이고, 타이핑은 에디터에 `view.dispatch` 로 넣는다. 체크아웃 · 파일 고치기 · `git add` 는 하네스가 저장소에서 한다. 측정 도중 화면이 잠겨도 잠금 화면에 글자가 들어가지 않는다(그 회는 제외로 남는다).
 - 앱 고르기 · 끄기: 하네스가 띄운 pid 와 그 책임 프로세스 묶음으로만 고르고, AppKit 종료 → SIGTERM → SIGKILL 순으로 그 pid 만 끈다(`AGENTS.md` 「데스크톱 앱은 이름이 아니라 pid 로 고르고 끈다」). 이름(`pitwall`)으로 고르거나 `pkill` 하지 않는다. Ctrl+C 로 멈춰도 진행 중인 회의 앱을 끄고 끝난다.
-- 짧게 먼저 볼 때: `mise run perf-git -- --runs 1 --warmup 0`(앞에 2번 뜬다, 5분 안).
+- 짧게 먼저 볼 때: `mise run perf-git -- --runs 1 --warmup 0`(앞에 2번 뜬다, 번들 · 저장소가 준비돼 있으면 6분 안). **5~8 단계(거터 · 타이핑 · 커밋 목록 · git add)는 이번에 처음 실기로 돈다** — 헤드리스 스모크가 그 단계를 돌지 않으므로(가짜 Host 에 그 상태가 없다) 긴 측정 전에 이것부터 돌려 끝까지 가는지 본다. 단계가 실패하면 하네스가 그 단계 이름(`gutter` · `typing` · `commit list` · `stage`)과 까닭을 적고 그 회를 끝낸다.
 
 ### 끝나면
 
-- 결과: 마지막 줄의 `target/perf/<시각>/summary.md` · `result.json`. 표의 Result 열이 `within target` / `over target` 이다. 판정: ⌘9 → 첫 행 ≤ 500 ms(둘 다 — 결정 M2-D10), fling 프레임 ≤ 16.7 ms 몫 ≥ 0.95, 1만 줄 diff ≤ 200 ms, 체크아웃 → 상태바 ≤ 500 ms.
+- 결과: 마지막 줄의 `target/perf/<시각>/summary.md` · `result.json`. 표의 Result 열이 `within target` / `over target` 이다. 판정(모두 측정 회의 중앙값): ⌘9 → 첫 행 ≤ 500 ms(둘 다 — 결정 M2-D10), fling 프레임 ≤ 16.7 ms 몫 ≥ 0.95, 1만 줄 diff ≤ 200 ms, 체크아웃 → 상태바 ≤ 500 ms(이상 묶음 4), 한 줄 편집 → 거터 수정 표시 ≤ 100 ms, 30초 타이핑 중 가장 긴 메인 스레드 막힘 ≤ 50 ms(M2-17), 커밋 목록 fling 프레임 ≤ 16.7 ms 몫 ≥ 0.95, `git add` → 스테이징됨 ≤ 500 ms(M2-16). M2-18 · M2-19 · M2-20 의 완료 기준에는 수치가 없어 재지 않는다.
 - 정리 확인: `pgrep -fl 'bundle/macos/Pitwall.app'` 가 비어야 한다. 종료 코드 0 이 아니면 오류 문장에 남은 프로세스 · 소켓이 붙는다.
 - 보고에 적을 것: 명령, 기기(요약 머리의 hardware 줄), 커밋, 저장소별 표, 제외된 회와 그 이유.
 - 함께 재면 좋은 것(M2-22): `mise run perf -- --project target/perf-git/graph` — 콜드 스타트 · 유휴 메모리를 10만 커밋 저장소 프로젝트로(앞에 6번 뜬다, 3분쯤).
@@ -51,6 +51,18 @@ mise run perf-git
 | 13 | 머지 도구(아래 준비) | 결과 칸에서 입력기를 한글로 두고 「충돌」 을 친다 | 조합 중 글자가 결과 칸에 보이고, 확정 뒤 한 번만 들어간다. ⌘Z 로 지워진다 |
 | 14 | 머지 도구 | 세 칸을 끝까지 스크롤 | 왼쪽 ours · 가운데 결과 · 오른쪽 theirs, 칸마다 머리에 이름. 구간마다 짧은 칸에 빗금 빈 블록이 붙어 세 칸의 줄이 나란하고 스크롤이 함께 간다 |
 
+| 15 | 커밋 툴 윈도우(아래 「연습 저장소」) | `⌘0` | 툴 윈도우가 뜨고 그룹이 「변경」 · 「버전 관리 안 됨」 순으로 보인다(빈 그룹은 머리도 없다). 파일을 누르면 에디터 영역에 미리보기 diff 탭, 더블클릭은 고정 탭. 「변경」 의 `b.txt` 체크를 누르면 잠시 뒤 「스테이징됨」 으로 옮겨진다 |
+| 16 | 커밋 툴 윈도우 → `a.txt` 미리보기 | diff 거터의 줄 체크로 바뀐 줄 둘 중 **위 줄 하나만** 체크 | 그 줄만 스테이징된다: 목록에서 `a.txt` 가 「스테이징됨」 과 「변경(부분)」 두 곳에 있고, 터미널의 `git diff --cached a.txt` 가 그 한 줄만 보인다. 묶음 체크는 그 묶음 전체 |
+| 17 | 커밋 툴 윈도우(실패하는 훅 — 아래 준비) | 메시지 「훅 확인」 을 치고 `⌘↩` | 커밋되지 않고 메시지 칸 위에 「커밋하지 않았다 — 훅 · git 의 출력」 과 훅 출력 원문(`훅이 거절했다`)이 남고, 메시지 칸의 글은 그대로다. 훅을 성공하는 것(아래)으로 바꾸고 다시 `⌘↩` 하면 커밋되고 칸이 비며 「훅 출력」(`훅 통과`)이 칸 위에 남는다 |
+| 18 | 커밋 툴 윈도우 | `c.txt`(바뀐 파일)를 고르고 `⌘⌥Z` | 「변경 되돌리기」 확인: 위험 표시, 「파일 1개의 변경을 버린다 … 되돌릴 수 없다」 와 파일 목록, 처음 포커스가 [취소](M2-20 의 위험 작업 다이얼로그). [취소] 면 그대로, [되돌리기] 면 `c.txt` 가 HEAD 로 돌아가 목록에서 빠진다. 버전 관리 안 됨 파일(`new.txt`)만 골라 `⌘⌥Z` 하면 묻지 않고 「되돌릴 변경을 고르지 않았다」 경고만 뜨고 파일은 남는다 |
+| 19 | 푸시(사람이 고른 실제 원격 하나 — **강제 push 는 하지 않는다**) | 그 원격이 있는 저장소에서 새 브랜치 `pitwall-check-<날짜>` 를 만들어 커밋 하나를 얹고 `⌘⇧K` | 다이얼로그에 「pitwall-check-<날짜> → <원격> : refs/heads/pitwall-check-<날짜>」, 정한 것(push.default 등), 보낼 커밋 목록(그 커밋 하나), upstream 이 없으니 「upstream 으로 정하기」 가 켜져 있다. [푸시] 하면 알림이 성공을 알리고 `git ls-remote <원격> pitwall-check-<날짜>` 가 그 해시. force 칸은 켜지 않는다. 끝나면 터미널에서 `git push <원격> --delete pitwall-check-<날짜>` 로 지운다 |
+| 20 | askpass | 인증을 묻는 원격(HTTPS 토큰 원격, 또는 agent 에 없는 암호 걸린 ssh 키)에서 fetch(⌃V → Fetch) 또는 19 의 푸시 | 비밀번호 칸이 있는 다이얼로그(글자가 가려진다). 맞는 값을 넣으면 작업이 끝나고, 취소하면 그 작업이 인증 실패로 끝난다. 넣은 값이 화면 · 알림에 없고, 앱 로그에도 없다: `grep -rF '<넣은 값>' "${PITWALL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pitwall}/logs"` 가 아무것도 내지 않는다 |
+| 21 | 에디터 거터(연습 저장소의 `a.txt` 를 연다) | 커밋된 줄 하나를 고치고(저장 안 함) 그 줄 왼쪽 거터의 표시를 누른다 | 고치자마자(눈으로 지연이 안 보일 만큼) 그 줄에 수정 표시. 누르면 인라인 diff 팝업: [되돌리기] [스테이징] 이전/다음. [스테이징] 은 꺼져 있고 「저장하지 않은 편집이 있습니다 — 저장한 뒤 스테이징할 수 있습니다」 가 보인다(거절) |
+| 22 | 에디터 거터 | 21 의 팝업에서 [되돌리기], 그다음 `⌘Z` | [되돌리기] 는 그 hunk 만 HEAD 의 줄로 돌리고(다른 고친 곳은 그대로) 확인을 묻지 않는다. `⌘Z` 한 번에 고친 글이 돌아온다. 다시 고쳐 `⌘S` 로 저장한 뒤 팝업의 [스테이징] 을 누르면 그 hunk 만 스테이징되고(커밋 툴 윈도우에 「부분」), 표시는 남는다(거터 기준은 HEAD). 터미널에서 `git commit -qm x` 하면 표시가 사라진다 |
+| 23 | 인라인 blame · blame 주석 | 커밋된 줄에 커서를 둔다, 고친(커밋 안 한) 줄에 둔다, `⌃⌥A` | 줄 끝에 흐린 글씨로 작성자 · 시각 · 요약, 고친 줄은 「아직 커밋 안 됨」. `⌃⌥A` 로 거터에 줄별 커밋 주석 — 호버하면 커밋 툴팁, 누르면 Git 로그가 그 커밋을 고른다, 우클릭 「이 커밋 이전으로 blame」 은 그 리비전 파일에 주석을 단 탭을 연다. 줄별 커밋이 터미널의 `git blame <파일>` 과 같다 |
+| 24 | blame 중 git 자식 프로세스 수 | 아래 「자식 프로세스 세기」 를 띄워 두고, 신뢰한 큰 저장소에서 긴 이력 파일 4~5개를 빠르게 열며 각 탭에서 `⌃⌥A` | 센 수가 **2 를 넘지 않는다**(창 하나에서 동시에 도는 blame 은 둘, 넘으면 가장 오래된 것을 끊는다). 탭을 모두 닫고 몇 초 뒤 0 으로 돌아온다. **미신뢰** 프로젝트에서 같은 것을 하면 늘 0 이다(미신뢰는 git CLI 를 띄우지 않는다) |
+| 25 | 파일 히스토리(아래 준비) | `c.txt` 를 연 채 `⌃⌥H`. 프로젝트 트리의 `c.txt` 우클릭 · 탭 머리 우클릭의 「히스토리 보기」 도 | 「c.txt 히스토리」 탭: 커밋 4개가 `git log --follow --oneline c.txt` 와 같은 차례, 이름 바뀐 두 커밋 행에 「이름 바뀜 a.txt → b.txt」 · 「이름 바뀜 b.txt → c.txt」. 행을 고르면 아래 diff 가 그때 경로로 열린다(첫 커밋은 `a.txt`). 행 우클릭 「Git 로그에서 선택」 은 Git 로그에서 그 커밋을 고른다 |
+
 머지 도구 준비(13 · 14) — 충돌 난 저장소를 임시 폴더에 만들어 프로젝트로 연다:
 
 ```bash
@@ -59,4 +71,36 @@ printf '하나\n둘\n셋\n' > a.txt && git add a.txt && git commit -qm base
 git switch -qc other && printf '하나\n둘 (그쪽)\n셋\n' > a.txt && git commit -qam theirs
 git switch -q main && printf '하나\n둘 (내 것)\n셋\n' > a.txt && git commit -qam ours
 git merge other     # 충돌로 멈춘다 → 앱에서 이 폴더를 열고 a.txt 의 [병합…]
+```
+
+연습 저장소(15 ~ 18 · 21 ~ 23) — 임시 폴더에 만들어 프로젝트로 열고, 신뢰를 물으면 **신뢰한다**(훅 · blame 의 git 은 신뢰한 프로젝트에서만 돈다):
+
+```bash
+d=$(mktemp -d)/practice && git init -q -b main "$d" && cd "$d"
+seq 1 40 | sed 's/^/줄 /' > a.txt && printf 'b\n' > b.txt && printf 'c\n' > c.txt
+git add . && git commit -qm base
+sed -i '' -e 's/^줄 5$/줄 5 (고침)/' -e 's/^줄 30$/줄 30 (고침)/' a.txt   # 16: 떨어진 두 묶음
+printf 'b 고침\n' > b.txt && printf 'c 고침\n' > c.txt && printf 'new\n' > new.txt
+printf '#!/bin/sh\necho 훅이 거절했다 >&2\nexit 1\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit   # 17
+echo "$d"
+```
+
+17 의 성공하는 훅: `printf '#!/bin/sh\necho 훅 통과\nexit 0\n' > "$d/.git/hooks/pre-commit"`. 확인이 끝나면 `rm -rf "$(dirname "$d")"`.
+
+파일 히스토리 준비(25) — 이름이 두 번 바뀐 파일:
+
+```bash
+d=$(mktemp -d)/history && git init -q -b main "$d" && cd "$d"
+printf '1\n' > a.txt && git add a.txt && git commit -qm 'add a'
+git mv a.txt b.txt && git commit -qm 'a → b'
+printf '2\n' >> b.txt && git commit -qam 'edit b'
+git mv b.txt c.txt && git commit -qm 'b → c'
+git log --follow --oneline c.txt   # 앱의 목록과 견줄 것
+```
+
+자식 프로세스 세기(24) — 이 워크트리에서 `mise run dev` 로 띄운 앱의 pid 로 센다(이름으로 고르지 않는다 — `AGENTS.md`). 0.2초마다 그 pid 를 부모로 둔 `git … blame` 수를 찍는다(Ctrl+C 로 멈춘다):
+
+```bash
+pid=$(pgrep -f "$PWD/target/debug/pitwall" | head -1); echo "app pid $pid"
+while sleep 0.2; do ps -A -o ppid=,command= | awk -v p="$pid" '$1 == p && /git/ && /blame/' | wc -l; done
 ```
