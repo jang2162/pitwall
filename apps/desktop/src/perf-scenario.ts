@@ -92,6 +92,8 @@ export interface BlockProbe {
 }
 
 const LIST = "[data-testid=git-log-list]";
+/** 첫 열기의 신뢰 확인(src/trust/trust.tsx `TrustDialog`). */
+export const TRUST_DIALOG = "[data-testid=trust-dialog]";
 const SHORT_HASH = /^[0-9a-f]{8}$/;
 
 /** 상태바의 브랜치 이름(저장소를 아직 읽지 않았으면 없다). */
@@ -495,6 +497,11 @@ export async function runGitScenario(env: ScenarioEnv): Promise<void> {
     await until(env, "the status bar branch", () => branchName(env.doc));
     // 키맵이 붙고 첫 그림의 뒤처리가 끝나도록(헤드리스 하네스와 같다).
     await env.sleep(300);
+    // 신뢰 확인 다이얼로그는 키맵 팝업이라 ⌘9 를 버린다 — 떠 있으면 첫 행을 기다리지 않고 여기서 멈춘다. 하네스는 묻기를 답한
+    // 채로 등록한다(crates/pw-perf `register_untrusted`).
+    step = "trust prompt";
+    if (env.doc.querySelector(TRUST_DIALOG))
+      throw new Error("the trust prompt is open — the project was registered without answering it");
     step = "git log open";
     const { list, started } = await gitLogOpen(env);
     step = "git log scroll";

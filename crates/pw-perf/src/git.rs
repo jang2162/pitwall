@@ -47,7 +47,7 @@ pub const DEFINITIONS: GitDefinitions = GitDefinitions {
     stage: "from the harness's wall clock just before it runs `git add <file>` in the repository to the webview's wall clock at the frame after that file's row appeared in the staged group",
     memory: "phys_footprint of the app instance right after the scenario finished (100k rows loaded, one commit tab and perf/typing.rs open, 10,000 changed files listed); not an idle baseline",
     judgement: "medians over valid measured runs, except the typing block: it is judged on the largest block of every valid run (\"no long task over 50 ms\" fails if any run has one); a run whose Git log row count differs from `git rev-list --count --all` fails",
-    trust: "the project is registered untrusted (the default): blame uses the native (gix) engine, the git CLI paths of trusted projects are not measured",
+    trust: "the project is registered untrusted, as if the first-open trust prompt was answered \"don't trust\" (no prompt is shown): blame uses the native (gix) engine, the git CLI paths of trusted projects are not measured",
 };
 
 #[derive(Debug, Clone, Serialize)]

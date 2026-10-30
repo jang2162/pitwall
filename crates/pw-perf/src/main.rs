@@ -41,9 +41,7 @@ mod measure {
     use std::sync::atomic::{AtomicI32, Ordering};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-    use pw_core::EventBus;
     use pw_core::config::AppPaths;
-    use pw_core::registry::{NewProject, Registry};
     use pw_perf::git::{
         self, Acted, Action, GitReport, GitRun, GitSettings, Progress, RepoResult, RunFailure,
     };
@@ -457,13 +455,7 @@ mod measure {
                     project
                 }
             };
-            let registry = Registry::new(paths.clone(), None, EventBus::new(16));
-            registry
-                .create(NewProject {
-                    root: project.clone(),
-                    ..NewProject::default()
-                })
-                .map_err(|e| format!("cannot register the project: {e}"))?;
+            pw_perf::register_untrusted(&paths, &project)?;
             Ok(Self {
                 marks: root.join("marks.jsonl"),
                 root,

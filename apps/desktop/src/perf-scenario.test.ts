@@ -480,6 +480,40 @@ it("a step that never finishes ends the scenario with an error naming the step",
   ]);
 });
 
+it("an open trust prompt stops the scenario before ⌘9, which the prompt would swallow", async () => {
+  const clock = { t: 0 };
+  const project = document.createElement("div");
+  project.setAttribute("data-tool-window", "project");
+  const branch = document.createElement("span");
+  branch.setAttribute("data-testid", "status-branch-name");
+  branch.textContent = "main";
+  const prompt = document.createElement("div");
+  prompt.setAttribute("data-testid", "trust-dialog");
+  document.body.append(project, branch, prompt);
+  let presses = 0;
+  document.addEventListener("keydown", () => presses++, { signal: listeners.signal });
+  const events: [string, Record<string, unknown>][] = [];
+  await runGitScenario({
+    doc: document,
+    work: fakeWork(clock),
+    now: () => clock.t,
+    epochNow: () => clock.t,
+    sleep: async () => {},
+    watchBlocks: quietBlocks,
+    report: async (event, data) => void events.push([event, data]),
+  });
+  expect(events).toEqual([
+    [
+      "scenario_error",
+      {
+        step: "trust prompt",
+        message: "the trust prompt is open — the project was registered without answering it",
+      },
+    ],
+  ]);
+  expect(presses).toBe(0);
+});
+
 it("the tool window is stretched up with ⌃⌥⇧↑ until its height stops growing", async () => {
   const clock = { t: 0 };
   const list = document.createElement("div");

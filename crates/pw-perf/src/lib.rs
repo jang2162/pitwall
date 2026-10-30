@@ -39,6 +39,28 @@ pub fn log_field(log: &str, message: &str, field: &str) -> Option<String> {
         })
 }
 
+/// 측정할 프로젝트 `root` 를 `paths` 의 레지스트리에 미신뢰로 등록한다 — 처음 연 사람이 신뢰 확인에서 「신뢰하지 않음」 을 고른
+/// 것과 같은 저장 값이다(`Registry::claim_trust_prompt` 가 미신뢰를 적고, 「신뢰하지 않음」 의 `set_trust(false)` 는 같은 값이라
+/// 쓰지 않는다). 묻지 않은 채로 두면 앱이 첫 열기에서 신뢰 확인 다이얼로그를 띄운다: 키맵 팝업이라 시나리오의 ⌘9 를 버리고
+/// (Git 로그가 열리지 않는다), [신뢰] 에 포커스가 있어 그 창에 들어간 사람의 키 하나가 프로젝트를 신뢰로 바꾼다.
+pub fn register_untrusted(
+    paths: &pw_core::config::AppPaths,
+    root: &std::path::Path,
+) -> Result<pw_core::registry::Project, String> {
+    let registry =
+        pw_core::registry::Registry::new(paths.clone(), None, pw_core::EventBus::new(16));
+    let project = registry
+        .create(pw_core::registry::NewProject {
+            root: root.to_path_buf(),
+            ..pw_core::registry::NewProject::default()
+        })
+        .map_err(|e| format!("cannot register the project: {e}"))?;
+    registry
+        .claim_trust_prompt(&project.id)
+        .map_err(|e| format!("cannot record the project as untrusted: {e}"))?;
+    Ok(project)
+}
+
 /// `tauri-plugin-single-instance` 2.5 macOS 의 소켓 경로(apps/desktop/src-tauri/src/instance.rs 머리 주석).
 pub fn single_instance_socket(identifier: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(format!(
@@ -79,6 +101,58 @@ mod tests {
             single_instance_socket("dev.pitwall.desktop.data-00ff"),
             std::path::Path::new("/tmp/dev_pitwall_desktop_data_00ff_si.sock")
         );
+    }
+
+    /// 시험마다 지우는 임시 폴더(이 크레이트는 `tempfile` 에 의존하지 않는다).
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("pw-perf-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("project")).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn the_project_is_registered_as_if_the_trust_prompt_was_answered_untrusted() {
+        use pw_core::config::AppPaths;
+        use pw_core::registry::{NewProject, Registry, TrustState};
+
+        let harness = Scratch::new("harness");
+        let paths = AppPaths::under(&harness.0.join("app"));
+        let project = register_untrusted(&paths, &harness.0.join("project")).unwrap();
+
+        // 사람의 첫 열기: 창이 묻기 차례를 잡아(다이얼로그가 뜬다) 「신뢰하지 않음」 을 고른다(trust.tsx `answer(false)`).
+        let person = Scratch::new("person");
+        let person_paths = AppPaths::under(&person.0.join("app"));
+        let registry = Registry::new(person_paths.clone(), None, pw_core::EventBus::new(16));
+        let theirs = registry
+            .create(NewProject {
+                root: person.0.join("project"),
+                ..NewProject::default()
+            })
+            .unwrap();
+        assert!(registry.claim_trust_prompt(&theirs.id).unwrap());
+        registry.set_trust(&theirs.id, false).unwrap();
+
+        // 앱이 여는 레지스트리(새로 연다)에서 두 프로젝트가 같아 보인다: 미신뢰이고, 창이 다이얼로그를 다시 띄우지 않는다.
+        for (paths, id) in [(&paths, &project.id), (&person_paths, &theirs.id)] {
+            let app = Registry::new(paths.clone(), None, pw_core::EventBus::new(16));
+            assert_eq!(app.trust(id).unwrap().state, TrustState::Untrusted);
+            assert!(!app.is_trusted(id));
+            assert!(
+                !app.claim_trust_prompt(id).unwrap(),
+                "the window would show the trust prompt"
+            );
+        }
     }
 
     #[test]
