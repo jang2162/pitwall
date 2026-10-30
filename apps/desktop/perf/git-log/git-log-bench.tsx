@@ -1,4 +1,4 @@
-// Git 로그 측정 하네스(docs/design/13-m2-plan.md M2-14 의 성능 완료 기준 — 첫 그림 500 ms · 스크롤 프레임 95% 16.7 ms): 앱(App,
+// Git 로그 측정 하네스(docs/design/13-m2-plan.md M2-14 의 성능 완료 기준 — 첫 그림 500 ms · 스크롤은 화면 갱신을 놓치지 않은 프레임 95% · 간격 중앙값 17 ms 이하 — release 번들의 판정은 `crates/pw-perf`): 앱(App,
 // 프로젝트 창)을 그대로 띄우고 ⌘9 로 Git 로그 툴 윈도우를 연다. Host 는 메모리 속 가짜(fake-transport.ts)이고 `git.log` 는 pw-git 이
 // 합성 10만 커밋 저장소에서 낸 스트림 그대로다(`log_timing --dump`) — 메시지는 IPC 처럼 JSON 으로 오간다.
 //

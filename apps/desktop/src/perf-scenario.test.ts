@@ -97,6 +97,20 @@ it("on a 60 Hz display the whole-millisecond rAF times split on-time frames into
   expect(stats.withinVsync).toBe(0.99);
 });
 
+it("the scroll judgement inputs: on-time 60 Hz, 60 Hz with 6% missed refreshes, and 30 Hz", () => {
+  const ticks = (hz: number, n: number) =>
+    Array.from({ length: n + 1 }, (_, k) => Math.floor((k * 1000) / hz));
+  const deltas = (times: number[]) => times.slice(1).map((t, i) => t - times[i]!);
+  const onTime = frameStats(deltas(ticks(60, 100)));
+  expect([onTime.vsyncMs, onTime.withinVsync]).toEqual([17, 1]);
+  expect(onTime.within16_7).toBeLessThan(0.5);
+  const missed = deltas(ticks(60, 100));
+  for (let i = 0; i < 6; i++) missed[i * 15] = 33;
+  expect(frameStats(missed).withinVsync).toBe(0.94);
+  const slow = frameStats(deltas(ticks(30, 100)));
+  expect([slow.vsyncMs, slow.withinVsync]).toEqual([33, 1]);
+});
+
 it("the frame work wrapper records the app's callbacks only between start and take", () => {
   const queued: FrameRequestCallback[] = [];
   const raw = (cb: FrameRequestCallback) => queued.push(cb);

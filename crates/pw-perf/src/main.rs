@@ -44,6 +44,7 @@ mod measure {
     use pw_core::config::AppPaths;
     use pw_perf::git::{
         self, Acted, Action, GitReport, GitRun, GitSettings, Progress, RepoResult, RunFailure,
+        refresh_share,
     };
     use pw_perf::macos;
     use pw_perf::marks::{self, Mark};
@@ -893,18 +894,20 @@ mod measure {
                     Ok(run) => {
                         let m = &run.measure;
                         say(format!(
-                            "pw-perf: {} run {index}{}{}: open {:.0} ms, fling ≤16.7 ms {:.2}, diff {:.0} ms, checkout → status bar {:.0} ms, gutter {:.0} ms, typing block max {:.0} ms, commit fling ≤16.7 ms {:.2}, git add → staged {:.0} ms",
+                            "pw-perf: {} run {index}{}{}: open {:.0} ms, fling within one refresh {} (≤16.7 ms {:.2}), diff {:.0} ms, checkout → status bar {:.0} ms, gutter {:.0} ms, typing block max {:.0} ms, commit fling within one refresh {} (≤16.7 ms {:.2}), git add → staged {:.0} ms",
                             repo.display(),
                             if run.warmup { " (warm-up)" } else { "" },
                             run.excluded
                                 .as_deref()
                                 .map_or(String::new(), |why| format!(" (excluded: {why})")),
                             m.open_ms,
+                            refresh_share(&m.fling.interval),
                             m.fling.interval.within16_7,
                             m.diff_ms,
                             m.branch_ms,
                             m.gutter_ms,
                             m.typing.blocks.max_ms,
+                            refresh_share(&m.commit_fling.interval),
                             m.commit_fling.interval.within16_7,
                             m.stage_ms
                         ));

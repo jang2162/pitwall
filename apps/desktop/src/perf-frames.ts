@@ -11,7 +11,7 @@ export interface FrameStats {
   p95: number;
   p99: number;
   max: number;
-  /** 16.7 ms 안인 표본의 몫(0~1). 06 의 「스크롤 60fps」 판정은 이것이 0.95 이상이다(13-m2-plan M2-14). */
+  /** 16.7 ms 안인 표본의 몫(0~1). 참고 — 판정은 `withinVsync` 다(아래). */
   within16_7: number;
   /** 18 ms 를 넘는 표본의 몫. */
   over18: number;
@@ -20,7 +20,8 @@ export interface FrameStats {
   /**
    * 갱신을 놓치지 않은 표본의 몫: 간격이 `vsyncMs` 의 1.5배 이하. WebKit 의 rAF 시각은 1 ms 단위라 60 Hz 의 제때 그린 프레임도
    * 16 · 17 ms 로 갈리고 17 은 `within16_7` 에서 빠진다 — 그래서 60 Hz 화면에서 `within16_7` 은 렌더와 상관없이 0.5 언저리가
-   * 위끝이다. 판정은 아직 `within16_7` 이다(13-m2-plan M2-14 · 16) — 이 값은 함께 싣는 참고다.
+   * 위끝이다. 그래서 스크롤 판정(13-m2-plan M2-14 · 16)은 이것 ≥ 0.95 이고 `vsyncMs` ≤ 17 ms(60 fps 이상)다 — `within16_7` 은
+   * 참고로 싣는다(하네스 `crates/pw-perf/src/git.rs`).
    */
   withinVsync: number;
 }
