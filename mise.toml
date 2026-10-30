@@ -42,6 +42,8 @@ run = [
   "cargo nextest run --workspace --all-features --no-tests=fail",
   "cargo test --workspace --all-features --doc",
   "pnpm -r --if-present run test",
+  # 실기 측정 스크립트(scripts/perf-m2.mjs)의 종료 코드 · 복사 이름 · 덮어쓰기 · 잠금 확인 — 가짜 mise 로 앱 없이 돈다.
+  "node --test scripts/perf-m2.test.mjs",
 ]
 
 # 「release 빌드에서만 판정」하는 시험을 모아 돈다 — 기본 `test` 는 debug 라 시간 상한(검색 취소 100 ms · `fs.list` 1만 개 100 ms ·

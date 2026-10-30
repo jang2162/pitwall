@@ -106,7 +106,7 @@ Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오�
 - **끄기**: 그 앱 pid 에 AppKit 종료 요청(정상 종료라 단일 인스턴스 소켓을 지운다) → SIGTERM → SIGKILL 순으로 끈다. 사람이 띄운 다른 Pitwall 은 건드리지 않는다. 끈 뒤 그 인스턴스의 프로세스나 단일 인스턴스 소켓(`/tmp/<키>_si.sock`)이 남아 있으면 실패한다.
 - **하네스가 멈출 때**: 앱은 떼어 띄워져 터미널의 신호가 닿지 않는다. 하네스는 SIGINT · SIGTERM · SIGHUP 과 패닉에서도 진행 중인 회의 앱을 끄고 임시 폴더를 지운 뒤 끝난다. SIGKILL 처럼 정리할 틈이 없는 끝은 앱이 `PITWALL_PERF_PARENT` 로 받은 하네스 pid 를 0.25초마다 보고 그 pid 가 사라지면 스스로 정상 종료한다(하네스 pid 가 그 사이 다른 프로세스에 다시 쓰이면 잡지 못한다). 이때 임시 폴더(`$TMPDIR/pw-perf-<pid>`)와 그 회의 웹뷰 저장소는 남는다.
 
-git 저장소를 프로젝트로 잴 때는(M2-22) `--project <폴더>` 를 준다 — 임시 프로젝트 대신 그 폴더를 회마다 등록한다(지우지 않는다). 예: `mise run perf -- --project target/perf-git/graph`(`mise run perf-git-repos` 가 만든다). 결과의 `settings.project` 와 요약의 `- project:` 줄이 연 폴더를 적는다. 이 둘과 `perf-git` 를 한 번에 돌리고 결과를 `docs/superpowers/reports/` 로 복사하는 것은 `mise run perf-m2`(`scripts/perf-m2.mjs`, `--short` 는 1회씩).
+git 저장소를 프로젝트로 잴 때는(M2-22) `--project <폴더>` 를 준다 — 임시 프로젝트 대신 그 폴더를 회마다 등록한다(지우지 않는다). 예: `mise run perf -- --project target/perf-git/graph`(`mise run perf-git-repos` 가 만든다). 결과의 `settings.project` 와 요약의 `- project:` 줄이 연 폴더를 적는다. 이 둘과 `perf-git` 를 한 번에 돌리고 결과를 `docs/superpowers/reports/` 로 복사하는 것은 `mise run perf-m2`(`scripts/perf-m2.mjs`, `--short` 는 1회씩. 종료 코드 3 은 유효한 회가 적다는 뜻이고 그대로 전해진다. 복사본 이름에 시각이 붙어 덮지 않는다).
 
 다시 재기: `mise run perf`(번들을 다시 만든다). 만든 번들을 다시 재기만 할 때는 `cargo run -q --release -p pw-perf -- --app target/release/bundle/macos/Pitwall.app`. 인자는 `mise run perf -- --runs 3` 처럼 넘긴다. 기준선을 갱신할 때는 커밋하지 않은 변경이 없는 트리에서 재고(`commit.dirty` 가 false), `docs/superpowers/reports/<날짜>-perf-baseline-report.md` 와 같은 이름의 `.json` 으로 남긴다.
 

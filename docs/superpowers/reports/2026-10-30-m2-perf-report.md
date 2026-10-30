@@ -8,7 +8,7 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 커밋 | `d5999d8`(M2-21 까지 + 실기 측정 하네스) 위의 `jang2162/m2-22-perf`. Rust 측정 코드는 main 과 같다(이 브랜치가 바꾼 것은 `pw-perf` 결과에 `settings.project` 를 더한 것뿐) |
+| 커밋 | Rust 수치는 `d5999d8`(M2-21 까지 + 실기 측정 하네스) 위의 `jang2162/m2-22-perf` 에서 쟀고, 이 브랜치는 이후 main(`c42560a`) 위로 리베이스했다(측정 코드는 같다). 실기 칸을 채울 때 그 칸의 커밋을 새로 적는다. Rust 측정 코드는 main 과 같다(이 브랜치가 바꾼 것은 `pw-perf` 결과에 `settings.project` 를 더한 것뿐) |
 | 기기 | Mac17,9 · Apple M5 Pro · 15 CPU · 48 GiB, macOS 27.0.1 (26A434) — M1 기준선과 같은 기기 |
 | 빌드 | `cargo build --release`(예제 · 시험), 같은 기기·같은 방법(각 행 완료 기준에 적힌 명령) |
 | 부하 | **기기가 한가하지 않았다.** 다른 워크트리의 워커(vitest · cargo)가 도는 중이었다. 측정 시작 직전 load average(1/5/15분) 16.7/48.1/78.8, 끝날 때 12.8/45.2/77.0, 한 번 더 확인한 nextest 시험 시작 12.0 · 끝 11.6, 40만 커밋 측정 시작 15.0 · 끝 19.0. 코어 15개 대비 1분 평균 12~19 라 **수치는 부하 속의 값이다** — 한가한 기기에서는 더 작게 나올 수 있다. 앱이 필요한 측정(§3)은 기기를 비우고 돌린다 |
@@ -81,7 +81,7 @@ M2-14 의 「그래프 첫 화면 · 스크롤 5회」 는 `perf-git` 의 저장
 
 ## 4. 측정 명령 · 하네스
 
-- `mise run perf-m2`(= `node scripts/perf-m2.mjs`): ① `mise run perf-git`(저장소 둘 × 준비 1 + 측정 5) ② `mise run perf -- --project target/perf-git/graph`(콜드 스타트 · 유휴 메모리를 10만 커밋 저장소 프로젝트로)를 차례로 돌리고, 각 `result.json` · `summary.md` 를 `docs/superpowers/reports/<날짜>-m2-perf-git.json|.summary.md` · `…-graph-project.json|.summary.md` 로 복사한다. `--short` 는 둘 다 1회(파일 이름에 `-short`). 화면이 잠겨 있으면 시작하지 않는다. OS 키 입력은 보내지 않는다.
+- `mise run perf-m2`(= `node scripts/perf-m2.mjs`): ① `mise run perf-git`(저장소 둘 × 준비 1 + 측정 5) ② `mise run perf -- --project target/perf-git/graph`(콜드 스타트 · 유휴 메모리를 10만 커밋 저장소 프로젝트로)를 차례로 돌리고, 각 `result.json` · `summary.md` 를 `docs/superpowers/reports/<날짜>-m2-perf-git-<시각>.json|.summary.md` · `…-graph-project-<시각>.json|.summary.md` 로 복사한다(이름 끝에 시각 `-HHMMSS` 가 붙어 같은 날 다시 돌려도 덮지 않는다). `--short` 는 둘 다 1회(파일 이름에 `-short`). 화면이 잠겨 있으면 그 단계를 시작하지 않는다(단계마다 본다). 종료 코드는 하위 단계의 것을 그대로 전한다(유효한 회가 적으면 3). OS 키 입력은 보내지 않는다.
 - 하네스 변경: `pw-perf` 의 `result.json` 에 `settings.project`(`--project` 로 연 폴더)를 남기고 `summary.md` 에 `- project:` 줄을 더했다 — 없으면 이 결과가 빈 프로젝트의 것인지 10만 커밋 저장소의 것인지 구별되지 않는다. `--project` 는 M2-22 준비 때 이미 들어 있었다.
 - 이 값들을 채울 때 이 문서 §3 의 칸에 옮기고 증가분을 계산한다. 기준선을 갱신할 때는 커밋하지 않은 변경이 없는 트리에서 잰다(`commit.dirty` 가 false).
 
