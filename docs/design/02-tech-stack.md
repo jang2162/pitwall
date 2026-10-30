@@ -32,7 +32,7 @@
 | 저장소 개발 도구 버전 | `mise.toml` (Rust · Node · pnpm 고정) | 워크트리 · CI · 에이전트 간 동일 버전 |
 | 로컬 저장소 | SQLite (`rusqlite`) + TOML 설정 파일 | |
 | 비밀 | `keyring` (macOS Keychain / Windows Credential / Secret Service) | |
-| 원격 | **Pitwall Relay 데몬** + 연결 계층 `pw-link` (QUIC `quinn`, Noise `snow`, mDNS) | 직접 연결(LAN/Tailscale) → SSH(`russh`) 대체. 중계 서버 없음 (08 참고) |
+| 원격 | **Pitwall Relay 데몬** + 연결 계층 `pw-link` (QUIC `quinn`, Noise `snow`, mDNS) | 직접 연결(LAN/Tailscale) → SSH(시스템 `ssh` — 08 「Relay 설치」, DB 터널도 같다: 14-m3-plan.md 결정 M3-D11) 대체. 중계 서버 없음 (08 참고). SSH 구현은 M7 이 Relay 를 만들 때 다시 판정할 수 있다 |
 | 모바일 | (보류) React Native (Expo) 후보 | D13 — 로드맵 제외 |
 | 라이선스 검사 | `cargo-deny`, `pnpm licenses list`(npm, `scripts/licenses.mjs`) | MIT 프로젝트 — 허용형 라이선스만. MPL-2.0 은 Tauri 전이 의존성에 한해 크레이트 단위 예외(수정 없이 사용, `deny.toml` `[[licenses.exceptions]]`). CC0-1.0(퍼블릭 도메인 헌정, 의무 없음)은 파일 감시 `notify` 에 한해 같은 방식의 크레이트 단위 예외. BSL-1.0(Boost, 허용형 · 바이너리 배포에 고지 의무 없음)은 클립보드 플러그인의 Windows 전용 전이 의존성(`clipboard-win` · `error-code`)에 한해 같은 방식의 크레이트 단위 예외 — 전역 허용 목록에는 넣지 않는다. CDLA-Permissive-2.0(데이터용 허용형)은 자동 업데이트(`tauri-plugin-updater` → `reqwest` → `rustls-platform-verifier`)가 끌어오는 `webpki-root-certs` 에 한해 같은 방식의 크레이트 단위 예외 — wasm32 전용 의존성이라 배포하는 3 OS 바이너리에 들어가지 않는다(`cargo tree -e normal -i webpki-root-certs --target <배포 타깃>` 이 비어 있다). 배포 타깃의 그래프에 들어오면 예외를 걷고 다시 판단한다. DB 드라이버의 두 예외(14-m3-plan.md 결정 M3-D14)도 같은 크레이트 단위다 — BSL-1.0 은 Redis 드라이버(`redis` 의 `aio` 기능)가 무조건 끌어오는 `xxhash-rust` 에 한해, CDLA-Permissive-2.0 은 MySQL 드라이버(`mysql_async` 의 rustls 기능)가 무조건 끌어오는 `webpki-roots` 에 한해. 둘 다 배포 바이너리에 들어간다 — `webpki-roots` 는 링크되지만 그 루트 데이터는 쓰지 않는다(내장 루트를 늘 끄고 OS 신뢰 저장소의 루트만 넣는다, 시험이 지킨다). npm 도 dev 전용 패키지에 한해 패키지 단위 예외(이유 필수, prod 에 나타나면 실패, `licenses/npm-exceptions.toml`) |
 | 확장 런타임 | `wasmtime` (WASM Component Model, WIT) | 권한 기반 샌드박스 (07 참고) |
@@ -97,7 +97,7 @@ Pitwall 의 선택과 DBX 에서 가져오는 것(14-m3-plan.md 결정 M3-D1 ~ D
 - **공통 trait + 지원 플래그**, 드라이버마다 크레이트, 코어는 trait 로만 부른다. trait 의 입출력은 `pw-db-types` 의 serde 타입이라 프로세스 밖 구현(JDBC 브리지 F6-3b, 외부 확장 — 07 「확장 단위와 계층」)이 같은 trait 를 프록시로 구현할 수 있다
 - **SQLite 는 메인 Host 안**에서 연다 — 연결마다 블로킹 스레드 하나, `busy_timeout`, 취소는 `interrupt`. 확장 로드는 늘 끈다. 별도 워커 프로세스를 두지 않는다(DBX 의 `dbx-sqlite-worker` 는 SSH 원격 호스트의 파일을 읽으려고 원격에 올리는 바이너리다 — Pitwall 의 원격 파일은 Relay 가 그 머신에서 연다, 08)
 - **SSH 터널은 시스템 `ssh -L`** — 사람의 `~/.ssh/config` · 에이전트 · ProxyJump · known_hosts 를 그대로 쓴다(Relay 설치와 같은 원칙, 08). 인증 질문은 git 과 같은 askpass. DBX 는 in-process `russh` 다
-- **TLS 루트는 OS 신뢰 저장소**(PG `rustls-platform-verifier`, MySQL · Redis 는 `rustls-native-certs` 로 읽은 루트 — MySQL 은 드라이버의 내장 루트를 끈다), `sslmode` 는 libpq 뜻 그대로
+- **TLS 루트는 OS 신뢰 저장소** — PG 와 Redis 는 `rustls-platform-verifier`(Redis 는 크레이트의 TLS 기능 대신 Pitwall 이 `tokio-rustls` 스트림을 만들어 연결에 넘긴다), MySQL 은 `mysql_async` 가 verifier 를 받지 못해 드라이버의 내장 루트를 끄고 `rustls-native-certs` 로 읽은 OS 루트만 넣는다. `sslmode` 는 libpq 뜻 그대로
 - **DBX 에서 코드를 옮기는 것**은 둘이다 — SQL 위험도 분류의 AST 부분과 그 시험(`dbx-sql-core` 의 `sql_risk.rs`, 결함을 고쳐서), Redis 명령의 허용 목록 분류(`dbx-driver-redis` 의 `classify_command`). 옮길 때 `licenses/vendored.md` 와 `THIRD_PARTY_NOTICES.md` 에 기록한다(CONTRIBUTING.md 「의존성과 라이선스」). 나머지(크레이트 분할 · 실행 예산과 취소 · 스키마 탐색 질의 방식 · 큰 셀 처리)는 방식만 참고한다
 
 | Pitwall | 대응하는 DBX 크레이트 | 역할 |
