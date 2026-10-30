@@ -141,6 +141,8 @@ async function mount() {
     ),
   );
   await vi.waitFor(() => expect(text("settings-git-version")).toBeDefined());
+  // 버전은 언어(`i18n.get`)보다 먼저 올 수 있다 — 그러면 영어 대체 문구로 그려진다. 한국어 문자열이 들어온 뒤부터 읽는다.
+  await vi.waitFor(() => expect(section().textContent).toContain(T.recheck));
 }
 
 it("shows the same version as this machine's git --version, the path and that writes are on", async () => {

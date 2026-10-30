@@ -23,9 +23,9 @@ import type {
   ProjectTrust,
   Resolution,
 } from "@pitwall/rpc-client";
-import { act } from "react";
+import { act as reactAct } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import defaultTheme from "../../../../../extensions/theme-default/themes/default.json";
 import { App } from "../../App";
@@ -33,6 +33,7 @@ import { resetWindowFileTree } from "../../file-tree/project-view";
 import { fakeTreeLayout } from "../../file-tree/testing";
 import type { KeymapNative } from "../../keymap/native";
 import { activeWorktreeStore } from "../../open-with/active-worktree";
+import { act, endTest, it } from "../../test-support/ended-test";
 import { documentThemeApplier } from "../../theme/adapters";
 import { createThemeStore, type ThemeStore } from "../../theme/theme-store";
 import { ThemeStoreProvider } from "../../theme/theme-switcher";
@@ -400,8 +401,9 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
-  act(() => root?.unmount());
+afterEach(async () => {
+  await endTest();
+  await reactAct(async () => root?.unmount());
   root = undefined;
   theme?.dispose();
   theme = undefined;
