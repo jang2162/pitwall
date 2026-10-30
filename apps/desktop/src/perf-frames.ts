@@ -15,6 +15,14 @@ export interface FrameStats {
   within16_7: number;
   /** 18 ms 를 넘는 표본의 몫. */
   over18: number;
+  /** 디스플레이 갱신 한 번의 간격으로 보는 값: 간격의 중앙값(ms). */
+  vsyncMs: number;
+  /**
+   * 갱신을 놓치지 않은 표본의 몫: 간격이 `vsyncMs` 의 1.5배 이하. WebKit 의 rAF 시각은 1 ms 단위라 60 Hz 의 제때 그린 프레임도
+   * 16 · 17 ms 로 갈리고 17 은 `within16_7` 에서 빠진다 — 그래서 60 Hz 화면에서 `within16_7` 은 렌더와 상관없이 0.5 언저리가
+   * 위끝이다. 판정은 아직 `within16_7` 이다(13-m2-plan M2-14 · 16) — 이 값은 함께 싣는 참고다.
+   */
+  withinVsync: number;
 }
 
 /** 오름차순 `sorted` 의 `p` 분위(가장 가까운 순위). */
@@ -24,12 +32,26 @@ export function percentile(sorted: readonly number[], p: number): number {
 
 const round = (x: number) => Math.round(x * 100) / 100;
 
+/** 갱신 한 번으로 보는 간격의 폭(`vsyncMs` 의 배수). 한 번을 놓치면 간격이 두 배가 되므로 그 사이의 가운데다. */
+export const VSYNC_SLACK = 1.5;
+
 /** 표본이 없으면 `n` 이 0 이고 나머지도 0 이다(그 구간에 앱이 그리지 않았다). */
 export function frameStats(samples: readonly number[]): FrameStats {
   if (samples.length === 0)
-    return { n: 0, p50: 0, p95: 0, p99: 0, max: 0, within16_7: 0, over18: 0 };
+    return {
+      n: 0,
+      p50: 0,
+      p95: 0,
+      p99: 0,
+      max: 0,
+      within16_7: 0,
+      over18: 0,
+      vsyncMs: 0,
+      withinVsync: 0,
+    };
   const sorted = [...samples].sort((a, b) => a - b);
   const share = (ok: (d: number) => boolean) => round(sorted.filter(ok).length / sorted.length);
+  const vsync = percentile(sorted, 0.5);
   return {
     n: sorted.length,
     p50: round(percentile(sorted, 0.5)),
@@ -38,6 +60,8 @@ export function frameStats(samples: readonly number[]): FrameStats {
     max: round(sorted.at(-1)!),
     within16_7: share((d) => d <= 16.7),
     over18: share((d) => d > 18),
+    vsyncMs: round(vsync),
+    withinVsync: share((d) => d <= vsync * VSYNC_SLACK),
   };
 }
 

@@ -79,8 +79,22 @@ it("frame stats are nearest-rank percentiles and shares of the 16.7 ms budget", 
     max: 20,
     within16_7: 0.8,
     over18: 0.1,
+    vsyncMs: 14,
+    withinVsync: 1,
   });
   expect(frameStats([]).n).toBe(0);
+});
+
+it("on a 60 Hz display the whole-millisecond rAF times split on-time frames into 16 and 17 ms", () => {
+  // WebKit 의 rAF 시각은 정수 ms 다. 16.67 ms 마다 그린 시각을 1 ms 로 자르면 간격이 16 · 17 로 섞인다 — 놓친 프레임은 33 ms 하나.
+  const times = Array.from({ length: 101 }, (_, k) => Math.floor((k * 1000) / 60));
+  const intervals = times.slice(1).map((t, i) => t - times[i]!);
+  expect(new Set(intervals)).toEqual(new Set([16, 17]));
+  intervals[50] = 33;
+  const stats = frameStats(intervals);
+  expect(stats.vsyncMs).toBe(17);
+  expect(stats.within16_7).toBeLessThan(0.5);
+  expect(stats.withinVsync).toBe(0.99);
 });
 
 it("the frame work wrapper records the app's callbacks only between start and take", () => {

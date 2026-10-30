@@ -27,6 +27,9 @@ pub const TARGET_GUTTER_MS: f64 = 100.0;
 pub const TARGET_BLOCK_MS: f64 = 50.0;
 /// 1만 개 바뀐 파일의 커밋 목록을 끝까지 스크롤할 때 16.7 ms 안인 프레임의 몫(M2-16 — M1-14 와 같은 기준).
 pub const TARGET_COMMIT_SCROLL_SHARE: f64 = 0.95;
+/// 참고 판정(`withinVsync`)이 60 fps 로 보는 갱신 간격의 위끝(ms). WebKit 의 rAF 시각은 1 ms 단위라 60 Hz 의 중앙값이 17 이다.
+/// M2-14 · 16 의 판정은 아직 `within16_7` 이다 — 이 값으로 바꿀지는 13-m2-plan · 06 이 정한다.
+pub const REFERENCE_VSYNC_MS: f64 = 17.0;
 /// 터미널 `git add` → 커밋 목록에서 그 파일이 스테이징됨 그룹으로(M2-16).
 pub const TARGET_STAGE_MS: f64 = 500.0;
 
@@ -38,7 +41,7 @@ pub const TYPING_PATH: &str = "perf/typing.rs";
 /// 결과 파일만 받은 사람도 읽을 수 있게 싣는 정의(정본은 CONTRIBUTING.md 「성능 기준선」 의 「git 시나리오」).
 pub const DEFINITIONS: GitDefinitions = GitDefinitions {
     open: "in the webview: from dispatching a ⌘9 keydown on the document (no OS key event) to the animation frame after the Git log canvas first drew a short hash",
-    scroll: "after every row arrived (row count unchanged for 1 s): fling = top to bottom in 2000 frames, steady = 2 rows per frame for 600 frames; interval = rAF timestamp deltas, share within 16.7 ms judged on fling",
+    scroll: "after every row arrived (row count unchanged for 1 s): fling = top to bottom in 2000 frames, steady = 2 rows per frame for 600 frames; interval = rAF timestamp deltas, share within 16.7 ms judged on fling; also reported for reference, not judged: the median interval (one display refresh) and the share within 1.5 × that median — WebKit's rAF timestamps are whole milliseconds, so on a 60 Hz display on-time frames read 16 or 17 ms and about half fall outside 16.7",
     diff: "in the webview: from a dblclick on the first log row (the 10,000-changed-line commit) to the frame after the commit tab's diff lines (.pw-diff-line) appeared — includes git.show/git.diff/git.blob and IPC",
     branch: "from the harness's wall clock just before it runs `git checkout <branch>` in the repository to the webview's wall clock at the frame after the status bar branch name changed",
     gutter: "in the webview: from dispatching an unsaved one-line edit to perf/typing.rs (5,000 lines, the gutter's HEAD base already loaded) to the frame after a `modified` gutter mark appeared",
@@ -75,6 +78,16 @@ pub struct FrameStats {
     pub max: f64,
     pub within16_7: f64,
     pub over18: f64,
+    /// 간격의 중앙값(디스플레이 갱신 한 번). 이 값을 싣기 전의 앱은 없다.
+    #[serde(rename = "vsyncMs", default, skip_serializing_if = "Option::is_none")]
+    pub vsync_ms: Option<f64>,
+    /// 간격이 `vsync_ms` 의 1.5배 이하인 몫 — 갱신을 놓치지 않은 프레임(src/perf-frames.ts `withinVsync`).
+    #[serde(
+        rename = "withinVsync",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub within_vsync: Option<f64>,
 }
 
 /// src/perf-frames.ts 의 `ScrollResult`.
@@ -407,6 +420,8 @@ pub struct GitSummary {
     pub all_rows_ms: Option<Summary>,
     pub fling_within16_7: Option<Summary>,
     pub fling_p95_ms: Option<Summary>,
+    pub fling_vsync_ms: Option<Summary>,
+    pub fling_within_vsync: Option<Summary>,
     pub steady_within16_7: Option<Summary>,
     pub diff_ms: Option<Summary>,
     pub branch_ms: Option<Summary>,
@@ -416,6 +431,8 @@ pub struct GitSummary {
     pub commit_all_rows_ms: Option<Summary>,
     pub commit_fling_within16_7: Option<Summary>,
     pub commit_fling_p95_ms: Option<Summary>,
+    pub commit_fling_vsync_ms: Option<Summary>,
+    pub commit_fling_within_vsync: Option<Summary>,
     pub commit_steady_within16_7: Option<Summary>,
     pub stage_ms: Option<Summary>,
     pub footprint_bytes: Option<Summary>,
@@ -460,6 +477,9 @@ pub struct GitTargets {
     pub block_met: Option<bool>,
     pub commit_scroll_met: Option<bool>,
     pub stage_met: Option<bool>,
+    /// 참고(판정 아님): fling 의 `withinVsync` 중앙값 ≥ 목표 몫이고 갱신 간격 중앙값 ≤ [`REFERENCE_VSYNC_MS`].
+    pub scroll_vsync_met: Option<bool>,
+    pub commit_scroll_vsync_met: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -484,12 +504,18 @@ pub fn summarize_git(runs: &[GitRun]) -> GitSummary {
         .collect();
     let values =
         |f: &dyn Fn(&GitRun) -> f64| summarize(&measured.iter().map(|r| f(r)).collect::<Vec<_>>());
+    // 싣지 않은 앱의 회는 뺀다.
+    let some_values = |f: &dyn Fn(&GitRun) -> Option<f64>| {
+        summarize(&measured.iter().filter_map(|r| f(r)).collect::<Vec<_>>())
+    };
     GitSummary {
         open_ms: values(&|r| r.measure.open_ms),
         first_draw_ms: values(&|r| r.measure.first_draw_ms),
         all_rows_ms: values(&|r| r.measure.all_rows_ms),
         fling_within16_7: values(&|r| r.measure.fling.interval.within16_7),
         fling_p95_ms: values(&|r| r.measure.fling.interval.p95),
+        fling_vsync_ms: some_values(&|r| r.measure.fling.interval.vsync_ms),
+        fling_within_vsync: some_values(&|r| r.measure.fling.interval.within_vsync),
         steady_within16_7: values(&|r| r.measure.steady.interval.within16_7),
         diff_ms: values(&|r| r.measure.diff_ms),
         branch_ms: values(&|r| r.measure.branch_ms),
@@ -499,6 +525,8 @@ pub fn summarize_git(runs: &[GitRun]) -> GitSummary {
         commit_all_rows_ms: values(&|r| r.measure.commit_all_rows_ms),
         commit_fling_within16_7: values(&|r| r.measure.commit_fling.interval.within16_7),
         commit_fling_p95_ms: values(&|r| r.measure.commit_fling.interval.p95),
+        commit_fling_vsync_ms: some_values(&|r| r.measure.commit_fling.interval.vsync_ms),
+        commit_fling_within_vsync: some_values(&|r| r.measure.commit_fling.interval.within_vsync),
         commit_steady_within16_7: values(&|r| r.measure.commit_steady.interval.within16_7),
         stage_ms: values(&|r| r.measure.stage_ms),
         footprint_bytes: values(&|r| r.memory.footprint_bytes as f64),
@@ -530,6 +558,29 @@ pub fn git_targets(summary: &GitSummary) -> GitTargets {
             .commit_fling_within16_7
             .map(|s| s.median >= TARGET_COMMIT_SCROLL_SHARE),
         stage_met: summary.stage_ms.map(|s| s.median <= TARGET_STAGE_MS),
+        scroll_vsync_met: vsync_met(
+            summary.fling_within_vsync,
+            summary.fling_vsync_ms,
+            TARGET_SCROLL_SHARE,
+        ),
+        commit_scroll_vsync_met: vsync_met(
+            summary.commit_fling_within_vsync,
+            summary.commit_fling_vsync_ms,
+            TARGET_COMMIT_SCROLL_SHARE,
+        ),
+    }
+}
+
+/// 참고 판정: 갱신을 놓치지 않은 몫이 `share` 이상이고, 그 갱신이 60 fps 이상이다(느린 화면에서 모두 제때인 것은 60 fps 가 아니다).
+fn vsync_met(within: Option<Summary>, vsync_ms: Option<Summary>, share: f64) -> Option<bool> {
+    Some(within?.median >= share && vsync_ms?.median <= REFERENCE_VSYNC_MS)
+}
+
+/// 회 표의 「≤1 refresh」 칸: 몫(갱신 간격 중앙값). 싣지 않은 앱이면 —.
+fn refresh(stats: &FrameStats) -> String {
+    match (stats.within_vsync, stats.vsync_ms) {
+        (Some(share), Some(ms)) => format!("{share:.2} ({ms:.0} ms)"),
+        _ => "—".into(),
     }
 }
 
@@ -539,6 +590,13 @@ fn met(value: Option<bool>) -> &'static str {
         Some(false) => "over target",
         None => "no value",
     }
+}
+
+/// 몫(0~1) 칸. 목표가 0.95 라 소수 둘째 자리까지 적는다 — 첫째 자리면 0.94 와 0.96 이 「0.9」 · 「1.0」 으로 갈려 목표 근처를 못 읽는다.
+fn share_cell(s: Option<Summary>) -> String {
+    s.map_or("—".into(), |s| {
+        format!("{:.2} ({:.2}–{:.2}, n={})", s.median, s.min, s.max, s.n)
+    })
 }
 
 fn cell(s: Option<Summary>, unit: &str) -> String {
@@ -621,7 +679,10 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
             repo.commits.map_or("?".into(), |n| n.to_string()),
             repo.valid_runs
         ));
-        let rows: [(&str, String, String, Option<bool>); 15] = [
+        let reference = format!(
+            "≥ {TARGET_SCROLL_SHARE} and median interval ≤ {REFERENCE_VSYNC_MS} ms (reference only)"
+        );
+        let rows: [(&str, String, String, Option<bool>); 19] = [
             (
                 "⌘9 → first rows frame (M2-14)",
                 cell(s.open_ms, " ms"),
@@ -630,9 +691,21 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
             ),
             (
                 "fling: frames within 16.7 ms (M2-14)",
-                cell(s.fling_within16_7, ""),
+                share_cell(s.fling_within16_7),
                 format!("≥ {TARGET_SCROLL_SHARE}"),
                 t.scroll_met,
+            ),
+            (
+                "fling: frames within one display refresh (1.5 × median interval, reference)",
+                share_cell(s.fling_within_vsync),
+                reference.clone(),
+                t.scroll_vsync_met,
+            ),
+            (
+                "fling: median frame interval (display refresh)",
+                cell(s.fling_vsync_ms, " ms"),
+                "—".into(),
+                None,
             ),
             (
                 "fling: frame interval p95",
@@ -642,7 +715,7 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
             ),
             (
                 "steady: frames within 16.7 ms",
-                cell(s.steady_within16_7, ""),
+                share_cell(s.steady_within16_7),
                 "—".into(),
                 None,
             ),
@@ -684,9 +757,21 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
             ),
             (
                 "commit list fling: frames within 16.7 ms (M2-16)",
-                cell(s.commit_fling_within16_7, ""),
+                share_cell(s.commit_fling_within16_7),
                 format!("≥ {TARGET_COMMIT_SCROLL_SHARE}"),
                 t.commit_scroll_met,
+            ),
+            (
+                "commit list fling: frames within one display refresh (reference)",
+                share_cell(s.commit_fling_within_vsync),
+                reference,
+                t.commit_scroll_vsync_met,
+            ),
+            (
+                "commit list fling: median frame interval",
+                cell(s.commit_fling_vsync_ms, " ms"),
+                "—".into(),
+                None,
             ),
             (
                 "commit list fling: frame interval p95",
@@ -696,7 +781,7 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
             ),
             (
                 "commit list steady: frames within 16.7 ms",
-                cell(s.commit_steady_within16_7, ""),
+                share_cell(s.commit_steady_within16_7),
                 "—".into(),
                 None,
             ),
@@ -726,21 +811,23 @@ pub fn git_markdown(repos: &[RepoResult]) -> String {
                 f.max / 1e6
             ))
         ));
-        md.push_str("\n| Run | Excluded | Open ms | Fling ≤16.7 | Diff ms | Branch ms | Gutter ms | Block max ms | Commit fling ≤16.7 | Stage ms | Rows | Viewport |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n");
+        md.push_str("\n| Run | Excluded | Open ms | Fling ≤16.7 | Fling ≤1 refresh | Diff ms | Branch ms | Gutter ms | Block max ms | Commit fling ≤16.7 | Commit ≤1 refresh | Stage ms | Rows | Viewport |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
         for r in &repo.runs {
             let m = &r.measure;
             md.push_str(&format!(
-                "| {}{} | {} | {:.1} | {:.2} | {:.1} | {:.1} | {:.1} | {:.1} | {:.2} | {:.1} | {} | {}×{} |\n",
+                "| {}{} | {} | {:.1} | {:.2} | {} | {:.1} | {:.1} | {:.1} | {:.1} | {:.2} | {} | {:.1} | {} | {}×{} |\n",
                 r.index,
                 if r.warmup { " (warm-up)" } else { "" },
                 r.excluded.as_deref().unwrap_or("—"),
                 m.open_ms,
                 m.fling.interval.within16_7,
+                refresh(&m.fling.interval),
                 m.diff_ms,
                 m.branch_ms,
                 m.gutter_ms,
                 m.typing.blocks.max_ms,
                 m.commit_fling.interval.within16_7,
+                refresh(&m.commit_fling.interval),
                 m.stage_ms,
                 m.rows,
                 m.scroll_viewport.width,
@@ -1032,6 +1119,80 @@ mod tests {
     }
 
     #[test]
+    fn the_refresh_share_is_read_when_present_and_judged_only_as_a_reference() {
+        // 이 값을 싣기 전의 앱 표시도 읽는다.
+        let old: FrameStats = serde_json::from_value(stats(0.45)).unwrap();
+        assert_eq!((old.vsync_ms, old.within_vsync), (None, None));
+        let mut new = stats(0.45);
+        new["vsyncMs"] = 17.0.into();
+        new["withinVsync"] = 0.99.into();
+        let new: FrameStats = serde_json::from_value(new).unwrap();
+        assert_eq!((new.vsync_ms, new.within_vsync), (Some(17.0), Some(0.99)));
+
+        let s = |within: f64, vsync: f64| GitSummary {
+            fling_within16_7: summarize(&[0.45]),
+            fling_within_vsync: summarize(&[within]),
+            fling_vsync_ms: summarize(&[vsync]),
+            commit_fling_within16_7: summarize(&[0.4]),
+            commit_fling_within_vsync: summarize(&[within]),
+            commit_fling_vsync_ms: summarize(&[vsync]),
+            ..empty_summary()
+        };
+        // 60 Hz 에서 모두 제때: 참고는 안, 판정(16.7)은 그대로 밖.
+        let t = git_targets(&s(0.99, 17.0));
+        assert_eq!(
+            (t.scroll_met, t.scroll_vsync_met, t.commit_scroll_vsync_met),
+            (Some(false), Some(true), Some(true))
+        );
+        // 갱신을 놓친 프레임이 많거나, 화면이 60 fps 보다 느리면 참고도 밖.
+        assert_eq!(git_targets(&s(0.9, 17.0)).scroll_vsync_met, Some(false));
+        assert_eq!(git_targets(&s(1.0, 33.0)).scroll_vsync_met, Some(false));
+        // 싣지 않은 앱이면 값 없음.
+        assert_eq!(git_targets(&empty_summary()).scroll_vsync_met, None);
+        let md = git_markdown(&[RepoResult {
+            path: "/r".into(),
+            commit_graph: true,
+            commits: Some(1),
+            runs: Vec::new(),
+            failures: Vec::new(),
+            valid_runs: 0,
+            summary: s(0.99, 17.0),
+            targets: git_targets(&s(0.99, 17.0)),
+        }]);
+        assert!(
+            md.contains("| fling: frames within one display refresh (1.5 × median interval, reference) | 0.99 (0.99–0.99, n=1)"),
+            "{md}"
+        );
+        assert!(md.contains("(reference only) | within target |"), "{md}");
+    }
+
+    fn empty_summary() -> GitSummary {
+        GitSummary {
+            open_ms: None,
+            first_draw_ms: None,
+            all_rows_ms: None,
+            fling_within16_7: None,
+            fling_p95_ms: None,
+            fling_vsync_ms: None,
+            fling_within_vsync: None,
+            steady_within16_7: None,
+            diff_ms: None,
+            branch_ms: None,
+            gutter_ms: None,
+            typing_max_block_ms: None,
+            typing_over50: None,
+            commit_all_rows_ms: None,
+            commit_fling_within16_7: None,
+            commit_fling_p95_ms: None,
+            commit_fling_vsync_ms: None,
+            commit_fling_within_vsync: None,
+            commit_steady_within16_7: None,
+            stage_ms: None,
+            footprint_bytes: None,
+        }
+    }
+
+    #[test]
     fn targets_judge_the_median_and_the_fling_share() {
         // 목표 값 그대로면 안이고, 조금 넘으면 밖이다.
         let summary = |over: f64| GitSummary {
@@ -1040,6 +1201,8 @@ mod tests {
             all_rows_ms: None,
             fling_within16_7: summarize(&[TARGET_SCROLL_SHARE - over / 10.0]),
             fling_p95_ms: None,
+            fling_vsync_ms: None,
+            fling_within_vsync: None,
             steady_within16_7: summarize(&[0.5]),
             diff_ms: summarize(&[TARGET_DIFF_MS + over]),
             branch_ms: summarize(&[TARGET_BRANCH_MS + over]),
@@ -1049,6 +1212,8 @@ mod tests {
             commit_all_rows_ms: None,
             commit_fling_within16_7: summarize(&[TARGET_COMMIT_SCROLL_SHARE - over / 10.0]),
             commit_fling_p95_ms: None,
+            commit_fling_vsync_ms: None,
+            commit_fling_within_vsync: None,
             commit_steady_within16_7: None,
             stage_ms: summarize(&[TARGET_STAGE_MS + over]),
             footprint_bytes: None,
