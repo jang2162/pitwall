@@ -391,6 +391,21 @@ pub const PERF_PATH: &str = "perf/big.rs";
 /// 실기 측정 픽스처의 체크아웃 대상 브랜치. `main` 과 같은 커밋이라 체크아웃은 HEAD 만 바꾼다.
 pub const PERF_BRANCH: &str = "perf-checkout";
 
+/// 실기 측정 픽스처의 타이핑 대상 파일(M2-17 — 「5,000줄 파일에서 초당 10자 30초 타이핑」 · 「한 줄을 고치면 100 ms 안에 수정 표시」).
+pub const PERF_TYPING_PATH: &str = "perf/typing.rs";
+
+/// [`PERF_TYPING_PATH`] 의 줄 수.
+pub const PERF_TYPING_LINES: usize = 5_000;
+
+/// [`PERF_TYPING_PATH`] 의 첫 줄 — 앱 안 시나리오가 열린 에디터 중 이 파일을 내용으로 알아본다(`src/perf-scenario.ts`).
+pub const PERF_TYPING_FIRST_LINE: &str = "// pitwall perf: typing target";
+
+/// 측정하는 쪽이 모두 고치는 파일들의 폴더(M2-16 — 「1만 개 바뀐 파일의 목록 스크롤」 · 「터미널의 `git add` → 그룹 이동」).
+pub const PERF_CHANGES_DIR: &str = "perf/many";
+
+/// [`PERF_CHANGES_DIR`] 의 파일 수.
+pub const PERF_CHANGES: usize = 10_000;
+
 /// [`perf_fixture`] 가 더한 것.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PerfFixture {
@@ -398,9 +413,11 @@ pub struct PerfFixture {
     pub commit: String,
 }
 
-/// 실기 측정(`crates/pw-perf` 의 git 시나리오, CONTRIBUTING.md 「성능 기준선」)이 쓰는 커밋 둘과 브랜치 하나를 `main` 위에 더한다:
-/// [`PERF_PATH`] 를 [`PERF_LINES`] 줄로 만드는 커밋, 그 짝수 줄 1만 개를 바꾸는 커밋(M2-15 의 「1만 줄 바뀐 파일」 — 앱 쪽
-/// `apps/desktop/perf/diff/diff-bench.tsx` 와 같은 꼴), 그 커밋을 가리키는 [`PERF_BRANCH`](M2-13 의 체크아웃). 시각은 합성 이력의
+/// 실기 측정(`crates/pw-perf` 의 git 시나리오, CONTRIBUTING.md 「성능 기준선」)이 쓰는 커밋 셋과 브랜치 하나를 `main` 위에 더한다:
+/// [`PERF_CHANGES_DIR`] 의 작은 파일 [`PERF_CHANGES`] 개와 [`PERF_TYPING_PATH`]([`PERF_TYPING_LINES`] 줄)를 더하는 커밋(M2-16 ·
+/// M2-17 — 측정하는 쪽이 앞의 것을 모두 고치고, 앱이 뒤의 것을 연다), [`PERF_PATH`] 를 [`PERF_LINES`] 줄로 만드는 커밋, 그 짝수 줄
+/// 1만 개를 바꾸는 커밋(M2-15 의 「1만 줄 바뀐 파일」 — 앱 쪽 `apps/desktop/perf/diff/diff-bench.tsx` 와 같은 꼴, 로그 첫 행), 그 커밋을
+/// 가리키는 [`PERF_BRANCH`](M2-13 의 체크아웃). 시각은 합성 이력의
 /// 어느 커밋보다 늦은 고정값이라 같은 저장소면 같은 해시다. commit-graph 를 쓸 저장소면 이것을 먼저 부른다(새 커밋이 그래프에 든다).
 /// 저장소 설정에 `maintenance.auto=false` · `gc.auto=0` 을 남긴다 — 「commit-graph 없음」 이 그대로 남게.
 pub fn perf_fixture(dir: &Path, ceiling: &Path) -> std::io::Result<PerfFixture> {
@@ -423,9 +440,32 @@ pub fn perf_fixture(dir: &Path, ceiling: &Path) -> std::io::Result<PerfFixture> 
     for (key, value) in [("maintenance.auto", "false"), ("gc.auto", "0")] {
         run(git_command(dir, ceiling).args(["config", key, value]))?;
     }
-    let path = dir.join(PERF_PATH);
-    std::fs::create_dir_all(path.parent().expect("a parent folder"))?;
     // 합성 이력은 커밋마다 90초까지 늘어 100만 커밋이어도 이 시각에 닿지 않는다.
+    let commit = |step: i64, message: &str| {
+        let at = format!("{} +0000", EPOCH + 100_000_000 + 60 * step);
+        run(git_command(dir, ceiling)
+            .env("GIT_AUTHOR_DATE", &at)
+            .env("GIT_COMMITTER_DATE", &at)
+            .args(["commit", "--quiet", "-m", message]))
+    };
+    let many = dir.join(PERF_CHANGES_DIR);
+    std::fs::create_dir_all(&many)?;
+    for i in 0..PERF_CHANGES {
+        std::fs::write(many.join(format!("f{i:05}.txt")), format!("file {i}\n"))?;
+    }
+    let typing: Vec<String> = std::iter::once(PERF_TYPING_FIRST_LINE.to_owned())
+        .chain(
+            (1..PERF_TYPING_LINES)
+                .map(|i| format!("    let value_{i} = compute({i}, \"some text on line {i}\");")),
+        )
+        .collect();
+    std::fs::write(
+        dir.join(PERF_TYPING_PATH),
+        format!("{}\n", typing.join("\n")),
+    )?;
+    run(git_command(dir, ceiling).args(["add", PERF_CHANGES_DIR, PERF_TYPING_PATH]))?;
+    commit(0, "perf: add 10,000 small files and typing.rs")?;
+    let path = dir.join(PERF_PATH);
     for (step, (lines, message)) in [
         (&before, "perf: add big.rs"),
         (&after, "perf: change 10,000 lines"),
@@ -434,12 +474,8 @@ pub fn perf_fixture(dir: &Path, ceiling: &Path) -> std::io::Result<PerfFixture> 
     .enumerate()
     {
         std::fs::write(&path, format!("{}\n", lines.join("\n")))?;
-        let at = format!("{} +0000", EPOCH + 100_000_000 + 60 * step as i64);
         run(git_command(dir, ceiling).args(["add", PERF_PATH]))?;
-        run(git_command(dir, ceiling)
-            .env("GIT_AUTHOR_DATE", &at)
-            .env("GIT_COMMITTER_DATE", &at)
-            .args(["commit", "--quiet", "-m", message]))?;
+        commit(1 + step as i64, message)?;
     }
     run(git_command(dir, ceiling).args(["branch", PERF_BRANCH]))?;
     let commit = run(git_command(dir, ceiling).args(["rev-parse", "HEAD"]))?;
@@ -479,7 +515,8 @@ mod tests {
         run(git_command(dir, ceiling).args(args)).unwrap()
     }
 
-    /// 픽스처는 `main` 끝에 1만 줄을 바꾼 파일 하나짜리 커밋을 두고, 같은 커밋에 체크아웃용 브랜치를 단다. 같은 저장소면 같은 해시다.
+    /// 픽스처는 `main` 끝에 1만 줄을 바꾼 파일 하나짜리 커밋을 두고, 같은 커밋에 체크아웃용 브랜치를 단다. 그 앞에 측정하는 쪽이 고칠
+    /// 파일 1만 개와 타이핑 대상 파일이 있다. 같은 저장소면 같은 해시다.
     #[test]
     fn the_perf_fixture_changes_ten_thousand_lines_of_one_file_on_main() {
         let tmp = tempfile::tempdir().unwrap();
@@ -509,6 +546,19 @@ mod tests {
                 git(&dir, &ceiling, &["diff", "--numstat", "HEAD~1", "HEAD"]),
                 format!("10000\t10000\t{PERF_PATH}\n")
             );
+            assert_eq!(
+                git(&dir, &ceiling, &["ls-files", PERF_CHANGES_DIR])
+                    .lines()
+                    .count(),
+                PERF_CHANGES
+            );
+            let typing = git(
+                &dir,
+                &ceiling,
+                &["show", &format!("HEAD:{PERF_TYPING_PATH}")],
+            );
+            assert_eq!(typing.lines().count(), PERF_TYPING_LINES);
+            assert_eq!(typing.lines().next(), Some(PERF_TYPING_FIRST_LINE));
             assert_eq!(
                 git(&dir, &ceiling, &["rev-parse", PERF_BRANCH]).trim(),
                 fixture.commit

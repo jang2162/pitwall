@@ -9,7 +9,8 @@
 //! `<폴더>` 는 비어 있거나 없어야 한다. 위로 찾기는 `<폴더>` 의 부모에서 멈춘다. `--commit-graph` 면 `git commit-graph write
 //! --reachable` 까지 한다(없음 · 있음 둘 다 재려면 폴더 두 개를 만든다). `--fanout <n>` 이면 브랜치 · 머지가 섞인 이력 대신 곧은
 //! `main` 곳곳에서 갈라진 원격 브랜치 `n` 개를 만든다(`testing::synth::fanout` — 레인 상한). `--perf-fixture` 면 실기 측정이 쓰는
-//! 1만 줄 diff 커밋과 체크아웃용 브랜치를 commit-graph 보다 먼저 더한다(`testing::synth::perf_fixture`, `mise run perf-git`).
+//! 1만 줄 diff 커밋 · 고칠 파일 1만 개 · 타이핑 대상 파일과 체크아웃용 브랜치를 commit-graph 보다 먼저 더한다
+//! (`testing::synth::perf_fixture`, `mise run perf-git`).
 
 use std::path::PathBuf;
 use std::time::Instant;
