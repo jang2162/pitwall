@@ -500,6 +500,33 @@ it("opens with ⌘9, streams git.log for this project and draws only the rows on
   expect(subjects()).toEqual(Array.from({ length: 10 }, (_, i) => `subject ${100 + i}`));
 });
 
+it("asks for git.log only once the tool window is first shown, and keeps the rows when it is hidden again", async () => {
+  await mount();
+  // 하단 dock 의 Git 탭은 처음에 뒤에 있다 — dockview 는 그 컴포넌트를 마운트해 두지만(요소는 문서 밖) 로그는 아직 받지 않는다.
+  await settle(100);
+  expect(list()).toBeNull();
+  expect(logCalls()).toHaveLength(0);
+  // 숨은 동안의 ref 바뀜도 받지 않는다.
+  await act(async () => host.emit("git.refsChanged", { worktree: null }));
+  await settle();
+  expect(logCalls()).toHaveLength(0);
+
+  await press({ code: "Digit9", key: "9", metaKey: true });
+  await vi.waitFor(() => expect(subjects().length).toBeGreaterThan(0));
+  expect(logCalls()).toHaveLength(1);
+
+  // ⌘9 를 다시 누르면 dock 이 접힌다. 받은 행은 갖고 있다 — 다시 열어도 다시 받지 않는다.
+  const collapsed = () => document.querySelectorAll(".dv-edge-collapsed").length;
+  const before = collapsed();
+  await press({ code: "Digit9", key: "9", metaKey: true }, list());
+  expect(collapsed()).toBe(before + 1);
+  await press({ code: "Digit9", key: "9", metaKey: true });
+  expect(collapsed()).toBe(before);
+  await vi.waitFor(() => expect(list()).not.toBeNull());
+  await settle(100);
+  expect(logCalls()).toHaveLength(1);
+});
+
 it("colors lanes from the graph.lane tokens and repaints on a theme switch", async () => {
   await openLog();
   const light = defaultTheme.variants.light as Record<string, string>;
@@ -1140,6 +1167,8 @@ it("git.log.reveal opens the log, selects the commit, scrolls it into view and f
   // 인자가 있어야만 돈다 — 키 · 액션 찾기에서는 부를 수 없다.
   expect(registry()!.isEnabled("git.log.reveal")).toBe(false);
   expect(list()).toBeNull();
+  // 툴 윈도우가 닫혀 있어 로그는 아직 받지 않았다 — 「로그에서 선택」 이 띄우면서 받기 시작한다.
+  expect(logCalls()).toHaveLength(0);
   const hash = hashOf(40);
   await act(async () => void registry()!.run("git.log.reveal", { rev: hash }));
   await vi.waitFor(() => expect(list()).not.toBeNull());

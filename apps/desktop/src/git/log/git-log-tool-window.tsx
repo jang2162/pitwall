@@ -4,6 +4,9 @@
 //
 // - 로그는 이 창의 활성 워크트리 · 필터로 `git.log` 를 받고(log-model.ts), 터미널 · 에이전트가 ref 를 바꾸면(`git.refsChanged`, 이
 //   창의 `git.watch` 가 낸다) 같은 필터로 다시 받는다 — 고른 커밋은 해시로 남는다.
+// - 받기는 툴 윈도우가 처음 보일 때(⌘9, `git.log.reveal` 이 띄울 때) 시작한다. dockview 는 뒤에 있는 탭 · 접힌 dock 의 패널도
+//   마운트해 두므로 마운트가 아니라 보임으로 정한다 — 큰 저장소를 열기만 해도 행 전체를 받아 들고 있지 않게. 한 번 보인 뒤 숨기면
+//   받은 행을 갖고 있고 ref 가 바뀌면 다시 받는다(다시 열 때 기다리지 않게).
 // - 브랜치 패널 · 필터 바 · 라벨 메뉴의 ref 는 따로 읽지 않고 창의 브랜치 상태(branch-state.ts — 상태바 · 브랜치 팝업과 같은
 //   `git.refs` 읽기 하나)를 쓴다.
 // - 쓰기(우클릭 · 라벨 끌어 놓기)는 log-ops.ts. ref 를 옮긴 결과가 오면 목록 위에 [되돌리기] 줄을 단다.
@@ -21,6 +24,7 @@ import { useKeymap } from "../../keymap/keymap-provider";
 import {
   type NotificationHandle,
   useNotify,
+  usePanelVisible,
   useRetirableNotify,
 } from "../../notifications/notifications";
 import { useActiveWorktree } from "../../open-with/active-worktree";
@@ -128,21 +132,26 @@ async function reachable(source: LogSource, hash: string): Promise<boolean> {
 export interface GitLogViewProps {
   /** 성능 측정: 그린 뒤 부른다. */
   onDrawn?(): void;
+  /** 거짓이면 로그를 받지 않는다(툴 윈도우가 아직 한 번도 보이지 않았다). 기본은 참. */
+  load?: boolean;
 }
 
 export function GitLogToolWindow({ api }: IDockviewPanelProps) {
+  const visible = usePanelVisible(api);
+  const [shown, setShown] = useState(visible);
+  if (visible && !shown) setShown(true);
   return (
     <div
       data-tool-window={api.id}
       tabIndex={-1}
       className="flex h-full flex-col bg-ui-panel text-ui-foreground outline-none"
     >
-      <GitLogView />
+      <GitLogView load={shown} />
     </div>
   );
 }
 
-export function GitLogView({ onDrawn }: GitLogViewProps) {
+export function GitLogView({ onDrawn, load = true }: GitLogViewProps) {
   const T = useGitLogStrings();
   const { client, target } = useHost();
   const projectId = "projectId" in target ? target.projectId : undefined;
@@ -174,8 +183,8 @@ export function GitLogView({ onDrawn }: GitLogViewProps) {
   const pendingDrop = useRef<MenuTarget | undefined>(undefined);
 
   const source: LogSource | undefined = useMemo(
-    () => (client && projectId ? { client, projectId, worktree } : undefined),
-    [client, projectId, worktree],
+    () => (load && client && projectId ? { client, projectId, worktree } : undefined),
+    [load, client, projectId, worktree],
   );
 
   useEffect(() => () => model.dispose(), [model]);
