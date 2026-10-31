@@ -863,6 +863,28 @@ it("adds, deletes and submits with ⌘N, ⌘⌫ and ⌘↩, and reverts with ⌘
   expect(q("[data-testid=db-table-data-preview]")).not.toBeNull();
 });
 
+it("takes the table data keys with focus inside the grid area too", async () => {
+  await mount();
+  await openTable();
+  await connect();
+  // 그리드 영역(결과 화면의 뿌리 — `dbGridFocus`)에 포커스: 가장 가까운 키맵 컨텍스트가 그리드의 것이어도 산다.
+  const inGrid = q<HTMLElement>("[data-testid=db-grid-copy-as-button]")!;
+  inGrid.focus();
+  await act(async () => {
+    inGrid.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "KeyN",
+        key: "n",
+        metaKey: true,
+      }),
+    );
+  });
+  await settle();
+  expect(grid().rows).toBe(3);
+});
+
 it("leaves ⌘⌫ to the WHERE field", async () => {
   await mount();
   await openTable();
