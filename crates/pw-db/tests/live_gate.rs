@@ -235,22 +235,38 @@ mod mysql {
             "SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_BACKSLASH_ESCAPES')",
             "SET sql_mode = 'ANSI_QUOTES'",
             "SET NAMES gbk",
+            // M3-03b 재리뷰 N1: 수 값 — MySQL 은 `sql_mode` 를 비트 수(1048576 = NO_BACKSLASH_ESCAPES, 4 = ANSI_QUOTES)로,
+            // 문자 집합을 번호(28 = gbk)로 받는다.
+            "SET sql_mode = 1048576",
+            "SET SESSION sql_mode = 4",
+            "SET character_set_client = 28",
         ] {
             let err = run(&mut w, exec(&s, sql)).await.unwrap_err();
             assert_eq!(reason(&err), Some("changesSqlReading"), "{sql}: {err:?}");
         }
-        let mode = run(&mut w, exec(&s, "SELECT @@SESSION.sql_mode"))
-            .await
-            .unwrap();
-        assert!(
-            !first(&mode)["text"]
-                .as_str()
-                .unwrap()
-                .contains("NO_BACKSLASH_ESCAPES"),
-            "{mode:?}"
-        );
+        let settings = run(
+            &mut w,
+            exec(
+                &s,
+                "SELECT CONCAT(@@SESSION.sql_mode, '|', @@SESSION.character_set_client)",
+            ),
+        )
+        .await
+        .unwrap();
+        let settings = first(&settings)["text"].as_str().unwrap().to_owned();
+        assert!(!settings.contains("NO_BACKSLASH_ESCAPES"), "{settings}");
+        assert!(!settings.contains("ANSI_QUOTES"), "{settings}");
+        assert!(settings.ends_with("|utf8mb4"), "{settings}");
         run(&mut w, exec(&s, "SET @pw_x = 'before'")).await.unwrap();
         let hidden = r"SELECT name FROM (SELECT 'a' AS name) AS v WHERE name = 'a\' OR 1 = 1 INTO @pw_x -- '";
+        // 재리뷰의 재현(보통 연결의 한 번 실행 — 그때는 확인 없이 돌아 서버에 파일을 썼다)을 변수 꼴로: 글 전체가 돌지 않는다.
+        let err = run(
+            &mut w,
+            exec(&s, &format!("SET sql_mode = 1048576; {hidden}")),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(reason(&err), Some("changesSqlReading"), "{err:?}");
         let err = run(
             &mut w,
             json!({ "sessionId": s, "sql": hidden, "queryOnly": true }),
