@@ -815,10 +815,11 @@ async fn a_transaction_that_ends_on_an_error_is_reported_rolled_back() {
     let e = env(true);
     e.my.respond("INSERT", FakeResponse::write(1));
     // 드라이버가 `rolled_back` 을 싣지 않는 전체 롤백: 트랜잭션이 끝났다는 것만 상태로 보인다.
-    let mut quiet =
-        FakeResponse::error(DbError::new(DbErrorKind::Server, "plugin rollback").with_code("3101"));
-    quiet.ending = Some(FakeEnding::RollBack);
-    e.my.respond("UPDATE", quiet);
+    e.my.respond(
+        "UPDATE",
+        FakeResponse::error(DbError::new(DbErrorKind::Server, "plugin rollback").with_code("3101"))
+            .ending(FakeEnding::RollBackSilently),
+    );
     let mut w = e.f.window();
     let s = e.open(&mut w, "my").await;
     run(&mut w, exec(&s, "BEGIN; INSERT INTO t VALUES (1)"))

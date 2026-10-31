@@ -434,6 +434,19 @@ async fn endings_report_implicit_commits_whole_rollbacks_and_hidden_blocks() {
     assert_eq!(conn.transaction_state(), TransactionState::Idle);
     assert!(!driver.committed().contains(&"INSERT b".to_owned()));
 
+    // 알리지 않는 전체 롤백: 오류에는 `rolled_back` 이 없고 상태만 idle 이다.
+    driver.respond(
+        "QUIET",
+        FakeResponse::error(DbError::new(DbErrorKind::Server, "plugin rollback").with_code("3101"))
+            .ending(FakeEnding::RollBackSilently),
+    );
+    conn.begin(BeginOptions::default()).await.unwrap();
+    conn.execute(stmt("INSERT q")).await.unwrap();
+    let error = conn.execute(stmt("UPDATE QUIET")).await.unwrap_err();
+    assert!(!error.rolled_back);
+    assert_eq!(conn.transaction_state(), TransactionState::Idle);
+    assert!(!driver.committed().contains(&"INSERT q".to_owned()));
+
     // 숨은 블록: 자동 커밋 문장 뒤 연결이 트랜잭션 안이다 — 쓰기는 커밋 전까지 남지 않는다.
     conn.execute(stmt("INSERT HIDDEN")).await.unwrap();
     assert_eq!(conn.transaction_state(), TransactionState::InTransaction);

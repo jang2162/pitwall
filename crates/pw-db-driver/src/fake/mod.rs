@@ -85,6 +85,9 @@ pub enum FakeEnding {
     ImplicitCommit,
     /// 트랜잭션 전체를 되돌린다(교착 등). 문장이 오류로 끝나면 그 오류에 `rolled_back` 을 싣는다.
     RollBack,
+    /// 트랜잭션 전체를 되돌렸지만 오류에 `rolled_back` 을 싣지 않는다 — 드라이버가 그 오류 코드를 모른다(MySQL 의 3101 등). 끝난
+    /// 것은 트랜잭션 상태로만 보인다.
+    RollBackSilently,
     /// 자동 커밋이었는데 서버에 트랜잭션 블록이 열렸다(PG 의 숨은 블록 — M3-06 리뷰 H1). 연결은 그 블록을 쥐고 `InTransaction` 이다.
     OpenBlock,
 }
@@ -515,6 +518,10 @@ impl FakeConnection {
                 let was = ledger.in_transaction;
                 *ledger = Ledger::default();
                 was
+            }
+            Some(FakeEnding::RollBackSilently) => {
+                *ledger = Ledger::default();
+                false
             }
             Some(FakeEnding::OpenBlock) => {
                 if !ledger.in_transaction {
