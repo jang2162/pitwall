@@ -85,6 +85,7 @@ import {
 import type { KeymapNative } from "../keymap/native";
 import { activeWorktree, activeWorktreeStore } from "../open-with/active-worktree";
 import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
+import { DbStatus } from "../db/safety/db-status";
 import { projectIdFromQuery, projectOpenInbox } from "../project-open";
 import { useHost, useRpcQuery } from "../rpc/host";
 import { useRuntimeActions } from "../runtime/runtime-actions";
@@ -836,6 +837,7 @@ function ProjectWindowBody({
           {projectId !== undefined && <GitLogReveal workspace={workspace} />}
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
+          {projectId !== undefined && <DbStatus projectId={projectId} />}
           {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
           {projectId !== undefined && <FindInFiles workspace={workspace} />}
           {projectId !== undefined && (

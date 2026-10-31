@@ -31,6 +31,9 @@
   --color-git-untracked: var(--pw-git-untracked);
   --color-git-ignored: var(--pw-git-ignored);
   --color-git-conflicted: var(--pw-git-conflicted);
+  --color-db-production: var(--pw-db-production);
+  --color-db-read-only: var(--pw-db-readOnly);
+  --color-db-insecure: var(--pw-db-insecure);
 }
 
 html,

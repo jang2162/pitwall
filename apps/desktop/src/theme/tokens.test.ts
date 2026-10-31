@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { documentThemeApplier } from "./adapters";
 import defaultThemeFile from "../../../../extensions/theme-default/themes/default.json";
 import {
+  DB_TOKENS,
   DIFF_TOKENS,
   GIT_STATUS_TOKENS,
   GRAPH_LANES,
@@ -161,6 +162,29 @@ describe("git · graph · diff tokens (M2-12)", () => {
     expect(short).toEqual([]);
   });
 
+  it("keep every DB mark at body-text contrast (4.5:1) where its label is drawn", () => {
+    // 연결 표지의 라벨(「프로덕션」 · 「읽기 전용」) · TLS 표지 · 태그 이름이 놓이는 곳: 탐색기 · 위 막대 · 다이얼로그 · 탭 · 상태바.
+    const backgrounds = [
+      "ui.panelBackground",
+      "ui.background",
+      "ui.statusBarBackground",
+      "tab.activeBackground",
+      "tab.inactiveBackground",
+      "editor.background",
+    ] as const;
+    const short: string[] = [];
+    for (const appearance of ["light", "dark"] as const) {
+      const values = defaultTheme.variants[appearance]!;
+      for (const background of backgrounds)
+        for (const token of DB_TOKENS) {
+          const ratio = contrast(values[token], values[background]);
+          if (ratio < 4.5)
+            short.push(`${appearance} ${token} on ${background}: ${ratio.toFixed(2)} < 4.50`);
+        }
+    }
+    expect(short).toEqual([]);
+  });
+
   it("cycle graph lanes through graph.lane.1..GRAPH_LANES", () => {
     expect(GRAPH_TOKENS.filter((t) => /^graph\.lane\.\d+$/.test(t))).toHaveLength(GRAPH_LANES);
     expect(graphLaneToken(0)).toBe("graph.lane.1");
@@ -238,5 +262,14 @@ describe("styles.css", () => {
       const status = token.slice("git.".length);
       expect(styles).toContain(`--color-git-${status}: var(${tokenCssVar(token)});`);
     }
+  });
+
+  it("maps the DB marks to Tailwind colors (`text-db-production` · `-read-only` · `-insecure`)", () => {
+    for (const [name, token] of [
+      ["production", "db.production"],
+      ["read-only", "db.readOnly"],
+      ["insecure", "db.insecure"],
+    ] as const)
+      expect(styles).toContain(`--color-db-${name}: var(${tokenCssVar(token)});`);
   });
 });

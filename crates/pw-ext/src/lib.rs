@@ -144,6 +144,7 @@ mod tests {
             .collect();
         let files = vec![
             "app.ftl",
+            "db-safety.ftl",
             "file-window.ftl",
             "git-commit.ftl",
             "git-dialogs.ftl",

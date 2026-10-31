@@ -109,6 +109,26 @@ export const DIFF_TOKENS = [
   "diff.char.changed",
 ] as const;
 
+/**
+ * 연결 표지의 색 태그(M3-19). 연결 설정의 `color` 가 이 이름(또는 `#rrggbb`)을 고른다 — `src/db/safety/connection-mark.tsx`.
+ * 프로덕션 연결은 `color` 와 상관없이 `db.production`(빨강)이다.
+ */
+export const DB_TAG_TOKENS = [
+  "db.tag.red",
+  "db.tag.orange",
+  "db.tag.yellow",
+  "db.tag.green",
+  "db.tag.blue",
+  "db.tag.purple",
+  "db.tag.gray",
+] as const;
+
+/**
+ * DB 안전장치 표지(M3-19, 14-m3-plan.md): 프로덕션 · 읽기 전용 라벨과 테두리, 「서버 인증서를 검증하지 않음」 · 「평문」 표지.
+ * 셋 다 글자 색으로도 쓰므로 패널 · 탭 · 상태바 배경 위에서 본문 대비(4.5:1)를 지킨다(tokens.test.ts).
+ */
+export const DB_TOKENS = ["db.production", "db.readOnly", "db.insecure", ...DB_TAG_TOKENS] as const;
+
 /** 화면이 읽는 토큰. 테마 파일의 변형(light·dark)은 있으면 이것을 전부 정의해야 한다. */
 export const TOKENS = [
   "ui.background",
@@ -155,6 +175,7 @@ export const TOKENS = [
   ...GIT_STATUS_TOKENS,
   ...GRAPH_TOKENS,
   ...DIFF_TOKENS,
+  ...DB_TOKENS,
 ] as const;
 
 export type TokenName = (typeof TOKENS)[number];

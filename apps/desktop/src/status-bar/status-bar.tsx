@@ -49,6 +49,8 @@ export const STATUS_SLOTS = {
   fileWatch: { side: "left", order: 250 },
   /** 런타임 제공자 상태 · 경고(M1-16). */
   runtime: { side: "left", order: 300 },
+  /** 지금 탭의 DB 세션 — 연결 표지 · 커밋 방식 · 트랜잭션 시간 · `failed`(M3-19, src/db/safety/db-status.tsx). */
+  db: { side: "left", order: 400 },
   /** 백그라운드 작업(F11-5). */
   tasks: { side: "right", order: 100 },
   /** 커서 줄:열 · 선택 길이(M1-18). */
