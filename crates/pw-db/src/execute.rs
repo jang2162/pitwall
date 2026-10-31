@@ -726,6 +726,12 @@ async fn run_script(
         if notice.is_some() {
             sessions.publish(&session, notice);
         }
+        // 스키마 캐시(M3-10): DDL 이상은 실패해도 버린다 — MySQL 은 실패한 DDL 도 암묵 커밋한다.
+        if statement.grade >= RiskGrade::Ddl
+            || matches!(statement.control, Some(TxControl::Commit { .. }))
+        {
+            sessions.schema_touched(&session);
+        }
         let elapsed_ms = started.elapsed().as_millis() as u64;
         sessions.progress(&session, &running, statement.index, 0, started, true);
         match outcome {

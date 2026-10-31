@@ -4352,6 +4352,894 @@
       ],
       "tier": "exec"
     },
+    "db.schema.columns": {
+      "description": "테이블 · 뷰의 열.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ObjectRef": {
+            "description": "객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "객체 하나에 대한 요청(`columns` · `indexes` · `foreignKeys` · `ddl`).",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "cursor": {
+            "default": null,
+            "description": "`ddl` 은 쪽이 없다 — 주면 무시한다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "object": {
+            "$ref": "#/$defs/ObjectRef"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId",
+          "object"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ColumnInfo": {
+            "description": "테이블 · 뷰의 열.",
+            "properties": {
+              "comment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dbType": {
+                "type": "string"
+              },
+              "default": {
+                "description": "기본값 식의 글.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "nullable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "dbType",
+              "nullable",
+              "default",
+              "comment"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "열 목록 한 쪽.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/ColumnInfo"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "db.schema.databases": {
+      "description": "DB 목록(지원 플래그 `multipleDatabases`). 그 프로젝트 창 + 신뢰한 프로젝트만. 메타데이터용 연결을 처음 쓰면 연다(비밀 ·\n확인이 필요하면 3101 · 3102, 드라이버가 실패하면 3003).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "대상 연결(입력 struct 의 공통 몫).",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "cursor": {
+            "default": null,
+            "description": "앞 쪽의 `nextCursor`. 처음 쪽은 비운다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "쪽 크기(1 ~ 500, 기본 500).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DatabaseInfo": {
+            "description": "DB(카탈로그) 하나.",
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "DB 목록 한 쪽.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/DatabaseInfo"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "db.schema.ddl": {
+      "description": "객체의 DDL 글(`⌘B`).",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ObjectRef": {
+            "description": "객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "객체 하나에 대한 요청(`columns` · `indexes` · `foreignKeys` · `ddl`).",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "cursor": {
+            "default": null,
+            "description": "`ddl` 은 쪽이 없다 — 주면 무시한다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "object": {
+            "$ref": "#/$defs/ObjectRef"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId",
+          "object"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "객체의 DDL 글.",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "db.schema.foreignKeys": {
+      "description": "테이블의 외래 키.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ObjectRef": {
+            "description": "객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "객체 하나에 대한 요청(`columns` · `indexes` · `foreignKeys` · `ddl`).",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "cursor": {
+            "default": null,
+            "description": "`ddl` 은 쪽이 없다 — 주면 무시한다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "object": {
+            "$ref": "#/$defs/ObjectRef"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId",
+          "object"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ForeignKeyInfo": {
+            "description": "외래 키.",
+            "properties": {
+              "columns": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "referencedColumns": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "references": {
+                "$ref": "#/$defs/ObjectRef"
+              }
+            },
+            "required": [
+              "name",
+              "columns",
+              "references",
+              "referencedColumns"
+            ],
+            "type": "object"
+          },
+          "ObjectRef": {
+            "description": "객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "database",
+              "schema",
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "외래 키 목록 한 쪽.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/ForeignKeyInfo"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "db.schema.indexes": {
+      "description": "테이블의 인덱스.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ObjectRef": {
+            "description": "객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "객체 하나에 대한 요청(`columns` · `indexes` · `foreignKeys` · `ddl`).",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "cursor": {
+            "default": null,
+            "description": "`ddl` 은 쪽이 없다 — 주면 무시한다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "object": {
+            "$ref": "#/$defs/ObjectRef"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId",
+          "object"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "IndexInfo": {
+            "description": "인덱스. 그리드 편집의 키 판정(M3-10 — PK 또는 NOT NULL 열만으로 된 유일 인덱스)이 `primary` · `unique` · `partial` 을 본다.",
+            "properties": {
+              "columns": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "partial": {
+                "description": "조건이 붙은 인덱스(PG 부분 인덱스). 키로 쓰지 않는다.",
+                "type": "boolean"
+              },
+              "primary": {
+                "type": "boolean"
+              },
+              "unique": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "columns",
+              "primary",
+              "unique",
+              "partial"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "인덱스 목록 한 쪽.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/IndexInfo"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "db.schema.objects": {
+      "description": "객체 목록 한 쪽 — 필터와 쪽은 서버 쪽에서 한다(`limit` 1 ~ 500).",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ObjectKind": {
+            "description": "객체 종류.",
+            "enum": [
+              "table",
+              "view",
+              "materializedView",
+              "sequence",
+              "function",
+              "procedure",
+              "trigger"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "cursor": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "database": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filter": {
+            "default": null,
+            "description": "이름에 이 글이 든 것만(서버 쪽 필터, 대소문자 무시).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/ObjectKind"
+          },
+          "limit": {
+            "description": "쪽 크기(1 ~ 500).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "schema": {
+            "default": null,
+            "description": "비우면 연결의 기본 스키마(PG `current_schema()`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId",
+          "kind",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ObjectInfo": {
+            "properties": {
+              "comment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ObjectKind"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "comment"
+            ],
+            "type": "object"
+          },
+          "ObjectKind": {
+            "description": "객체 종류.",
+            "enum": [
+              "table",
+              "view",
+              "materializedView",
+              "sequence",
+              "function",
+              "procedure",
+              "trigger"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "객체 목록의 한 쪽.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/ObjectInfo"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "다음 쪽이 있으면 그 커서(드라이버마다 뜻이 다르다 — 창은 그대로 돌려줄 뿐이다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "db.schema.refresh": {
+      "description": "수동 새로 고침: 그 연결의 스키마 캐시를 버리고 `db.schemaChanged` 를 낸다. 연결을 열지 않는다. 그 프로젝트 창만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "db.schema.schemas": {
+      "description": "스키마 목록(지원 플래그 `schemas`).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "cursor": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "database": {
+            "default": null,
+            "description": "비우면 연결 설정의 DB.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "SchemaInfo": {
+            "description": "스키마 하나(PG). MySQL 은 DB 가 곧 스키마라 스키마 목록이 없다(`Capabilities::schemas` 가 `false`).",
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "스키마 목록 한 쪽.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/SchemaInfo"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
     "db.secret.clear": {
       "description": "비밀을 키체인에서 지운다(없어도 성공). 그 프로젝트 창의 연결만.",
       "kind": "unary",

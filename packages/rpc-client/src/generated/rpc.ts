@@ -55,6 +55,39 @@ export type UnaryMethods = {
 	 */
 	"db.query.page": { params: DbQueryPageParams; result: DbQueryPage };
 	/**
+	 * 테이블 · 뷰의 열.
+	 */
+	"db.schema.columns": { params: DbSchemaObjectParams; result: DbSchemaColumns };
+	/**
+	 * DB 목록(지원 플래그 `multipleDatabases`). 그 프로젝트 창 + 신뢰한 프로젝트만. 메타데이터용 연결을 처음 쓰면 연다(비밀 ·
+	 * 확인이 필요하면 3101 · 3102, 드라이버가 실패하면 3003).
+	 */
+	"db.schema.databases": { params: DbSchemaConnectionParams; result: DbSchemaDatabases };
+	/**
+	 * 객체의 DDL 글(`⌘B`).
+	 */
+	"db.schema.ddl": { params: DbSchemaObjectParams; result: Ddl };
+	/**
+	 * 테이블의 외래 키.
+	 */
+	"db.schema.foreignKeys": { params: DbSchemaObjectParams; result: DbSchemaForeignKeys };
+	/**
+	 * 테이블의 인덱스.
+	 */
+	"db.schema.indexes": { params: DbSchemaObjectParams; result: DbSchemaIndexes };
+	/**
+	 * 객체 목록 한 쪽 — 필터와 쪽은 서버 쪽에서 한다(`limit` 1 ~ 500).
+	 */
+	"db.schema.objects": { params: DbSchemaObjectsParams; result: ObjectPage };
+	/**
+	 * 수동 새로 고침: 그 연결의 스키마 캐시를 버리고 `db.schemaChanged` 를 낸다. 연결을 열지 않는다. 그 프로젝트 창만.
+	 */
+	"db.schema.refresh": { params: DbSchemaRefreshParams; result: null };
+	/**
+	 * 스키마 목록(지원 플래그 `schemas`).
+	 */
+	"db.schema.schemas": { params: DbSchemaSchemasParams; result: DbSchemaSchemas };
+	/**
 	 * 비밀을 키체인에서 지운다(없어도 성공). 그 프로젝트 창의 연결만.
 	 */
 	"db.secret.clear": { params: DbSecretClearParams; result: null };
@@ -681,6 +714,14 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.query.cancel": {"name":"db.query.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"DbQueryCancelParams","output":"()","doc":" 실행을 취소한다(드라이버 인터럽트). 그 세션을 연 프로젝트 창만. SQLite 수동 트랜잭션 안의 쓰기면 `confirmRollback` 없이는\n 3002. 끝난 실행이면 아무것도 하지 않는다.\n","mcp":false,"fileScope":false},
 	"db.query.execute": {"name":"db.query.execute","kind":"stream","tier":"exec","roles":["owner"],"params":"DbQueryExecuteParams","output":"DbQueryEvent","doc":" 세션에서 문장들을 돌린다(스트림). 관문: 그 세션을 연 프로젝트 창만 · 신뢰 · 연결 설정이 연 때와 같음 · 등급 정책(확인이\n 필요하면 3001, read-only 연결은 조회 밖을 거절). 항목은 `accepted` → 문장마다 `started` → `columns` → `rows` … →\n `done` | `error`.\n","mcp":false,"fileScope":false},
 	"db.query.page": {"name":"db.query.page","kind":"unary","tier":"exec","roles":["owner"],"params":"DbQueryPageParams","output":"DbQueryPage","doc":" 쪽 단위 조회(스트림이 아니다): 조회 문장 하나를 새 연결의 읽기 전용 트랜잭션 안에서 `limit` 행까지. 조회가 아니면 거절.\n","mcp":false,"fileScope":false},
+	"db.schema.columns": {"name":"db.schema.columns","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"DbSchemaColumns","doc":" 테이블 · 뷰의 열.\n","mcp":false,"fileScope":false},
+	"db.schema.databases": {"name":"db.schema.databases","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaConnectionParams","output":"DbSchemaDatabases","doc":" DB 목록(지원 플래그 `multipleDatabases`). 그 프로젝트 창 + 신뢰한 프로젝트만. 메타데이터용 연결을 처음 쓰면 연다(비밀 ·\n 확인이 필요하면 3101 · 3102, 드라이버가 실패하면 3003).\n","mcp":false,"fileScope":false},
+	"db.schema.ddl": {"name":"db.schema.ddl","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"Ddl","doc":" 객체의 DDL 글(`⌘B`).\n","mcp":false,"fileScope":false},
+	"db.schema.foreignKeys": {"name":"db.schema.foreignKeys","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"DbSchemaForeignKeys","doc":" 테이블의 외래 키.\n","mcp":false,"fileScope":false},
+	"db.schema.indexes": {"name":"db.schema.indexes","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"DbSchemaIndexes","doc":" 테이블의 인덱스.\n","mcp":false,"fileScope":false},
+	"db.schema.objects": {"name":"db.schema.objects","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectsParams","output":"ObjectPage","doc":" 객체 목록 한 쪽 — 필터와 쪽은 서버 쪽에서 한다(`limit` 1 ~ 500).\n","mcp":false,"fileScope":false},
+	"db.schema.refresh": {"name":"db.schema.refresh","kind":"unary","tier":"read","roles":["owner"],"params":"DbSchemaRefreshParams","output":"()","doc":" 수동 새로 고침: 그 연결의 스키마 캐시를 버리고 `db.schemaChanged` 를 낸다. 연결을 열지 않는다. 그 프로젝트 창만.\n","mcp":false,"fileScope":false},
+	"db.schema.schemas": {"name":"db.schema.schemas","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaSchemasParams","output":"DbSchemaSchemas","doc":" 스키마 목록(지원 플래그 `schemas`).\n","mcp":false,"fileScope":false},
 	"db.secret.clear": {"name":"db.secret.clear","kind":"unary","tier":"write","roles":["owner"],"params":"DbSecretClearParams","output":"()","doc":" 비밀을 키체인에서 지운다(없어도 성공). 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
 	"db.secret.set": {"name":"db.secret.set","kind":"unary","tier":"write","roles":["owner"],"params":"DbSecretSetParams","output":"()","doc":" 비밀을 키체인에 넣는다 — 창이 보여 준 대상(드라이버 · 호스트 · 포트 · 사용자 · 터널 · `sslmode` 와 인증서 경로)과 함께.\n 그 대상이 지금 설정과 다르면 conflict. 연결 설정이 `password = { secret_ref = \"keychain\" }` 이어야 한다. 그 프로젝트 창의\n 연결 + 신뢰한 프로젝트만. 값은 돌려주지 않는다.\n","mcp":false,"fileScope":false},
 	"db.session.close": {"name":"db.session.close","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionParams","output":"()","doc":" 세션을 닫는다(도는 실행은 취소한다). 열린 트랜잭션은 DB 가 롤백한다 — 묻는 것은 화면의 몫(M3-15). 없는 세션이면 아무것도\n 하지 않는다.\n","mcp":false,"fileScope":false},
@@ -1484,6 +1525,100 @@ export type DbQueryProgress = {
 	elapsedMs: number,
 	/**  이 문장이 끝났다. */
 	finished: boolean,
+};
+
+/**  `db.schemaChanged`: 그 연결의 스키마 캐시를 버렸다 — 창은 펼친 노드를 다시 읽는다. */
+export type DbSchemaChanged = {
+	projectId: string,
+	connectionId: string,
+};
+
+/**  열 목록 한 쪽. */
+export type DbSchemaColumns = {
+	items: ColumnInfo[],
+	/**  다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다). */
+	nextCursor: string | null,
+};
+
+/**  대상 연결(입력 struct 의 공통 몫). */
+export type DbSchemaConnectionParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). */
+	worktree?: string | null,
+	connectionId: string,
+	/**  앞 쪽의 `nextCursor`. 처음 쪽은 비운다. */
+	cursor?: string | null,
+	/**  쪽 크기(1 ~ 500, 기본 500). */
+	limit?: number | null,
+};
+
+/**  DB 목록 한 쪽. */
+export type DbSchemaDatabases = {
+	items: DatabaseInfo[],
+	/**  다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다). */
+	nextCursor: string | null,
+};
+
+/**  외래 키 목록 한 쪽. */
+export type DbSchemaForeignKeys = {
+	items: ForeignKeyInfo[],
+	/**  다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다). */
+	nextCursor: string | null,
+};
+
+/**  인덱스 목록 한 쪽. */
+export type DbSchemaIndexes = {
+	items: IndexInfo[],
+	/**  다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다). */
+	nextCursor: string | null,
+};
+
+/**  객체 하나에 대한 요청(`columns` · `indexes` · `foreignKeys` · `ddl`). */
+export type DbSchemaObjectParams = {
+	projectId: string,
+	worktree?: string | null,
+	connectionId: string,
+	object: ObjectRef,
+	/**  `ddl` 은 쪽이 없다 — 주면 무시한다. */
+	cursor?: string | null,
+	limit?: number | null,
+};
+
+export type DbSchemaObjectsParams = {
+	projectId: string,
+	worktree?: string | null,
+	connectionId: string,
+	database?: string | null,
+	/**  비우면 연결의 기본 스키마(PG `current_schema()`). */
+	schema?: string | null,
+	kind: ObjectKind,
+	/**  이름에 이 글이 든 것만(서버 쪽 필터, 대소문자 무시). */
+	filter?: string | null,
+	cursor?: string | null,
+	/**  쪽 크기(1 ~ 500). */
+	limit: number,
+};
+
+export type DbSchemaRefreshParams = {
+	projectId: string,
+	connectionId: string,
+};
+
+/**  스키마 목록 한 쪽. */
+export type DbSchemaSchemas = {
+	items: SchemaInfo[],
+	/**  다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다). */
+	nextCursor: string | null,
+};
+
+export type DbSchemaSchemasParams = {
+	projectId: string,
+	worktree?: string | null,
+	connectionId: string,
+	/**  비우면 연결 설정의 DB. */
+	database?: string | null,
+	cursor?: string | null,
+	limit?: number | null,
 };
 
 export type DbSecretClearParams = {

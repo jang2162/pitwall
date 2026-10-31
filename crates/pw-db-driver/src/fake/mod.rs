@@ -200,6 +200,8 @@ struct Script {
     state_read_error: Option<DbError>,
     /// `commit` 이 돌려줄 오류(트랜잭션 기록은 그대로 둔다 — 끊긴 연결의 COMMIT 처럼 결과를 모른다).
     commit_error: Option<DbError>,
+    /// 메타데이터 메서드가 돌려줄 오류(끊긴 메타데이터용 연결 — M3-10).
+    metadata_error: Option<DbError>,
     objects: Vec<ObjectInfo>,
     tables: HashMap<String, FakeTable>,
 }
@@ -356,6 +358,12 @@ impl FakeDriver {
     /// `commit` 이 이 오류로 끝난다(`None` 이면 다시 커밋한다). 트랜잭션 기록은 건드리지 않는다.
     pub fn fail_commit(&self, error: Option<DbError>) {
         lock(&self.state.script).commit_error = error;
+    }
+
+    /// 메타데이터 메서드(`schemas` · `objects` · `columns` · `indexes` · `foreign_keys` · `ddl`)가 이 오류로 끝난다(`None` 이면 다시
+    /// 답한다). 호출은 기록한다.
+    pub fn fail_metadata(&self, error: Option<DbError>) {
+        lock(&self.state.script).metadata_error = error;
     }
 
     /// 연결 하나(`connect` 순서대로 0 부터)의 열린 트랜잭션을 파이프라인 모르게 되돌린다 — 정리 예산을 넘겨 버려진 문장이 나중에
@@ -865,6 +873,7 @@ impl SqlConnection for FakeConnection {
     fn schemas(&mut self, _database: Option<String>) -> BoxFuture<'_, DbResult<Vec<SchemaInfo>>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("schemas"));
+            self.metadata_failure()?;
             Ok(vec![SchemaInfo {
                 name: "public".into(),
             }])
@@ -874,6 +883,7 @@ impl SqlConnection for FakeConnection {
     fn objects(&mut self, query: ObjectQuery) -> BoxFuture<'_, DbResult<ObjectPage>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("objects"));
+            self.metadata_failure()?;
             let script = lock(&self.driver.state.script);
             let filter = query.filter.as_deref().map(str::to_lowercase);
             let matching: Vec<&ObjectInfo> = script
@@ -909,6 +919,7 @@ impl SqlConnection for FakeConnection {
     fn columns(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Vec<ColumnInfo>>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("columns"));
+            self.metadata_failure()?;
             Ok(self.table(&object).columns)
         })
     }
@@ -916,6 +927,7 @@ impl SqlConnection for FakeConnection {
     fn indexes(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Vec<IndexInfo>>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("indexes"));
+            self.metadata_failure()?;
             Ok(self.table(&object).indexes)
         })
     }
@@ -923,6 +935,7 @@ impl SqlConnection for FakeConnection {
     fn foreign_keys(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Vec<ForeignKeyInfo>>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("foreignKeys"));
+            self.metadata_failure()?;
             Ok(self.table(&object).foreign_keys)
         })
     }
@@ -930,6 +943,7 @@ impl SqlConnection for FakeConnection {
     fn ddl(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Ddl>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("ddl"));
+            self.metadata_failure()?;
             Ok(Ddl {
                 text: self.table(&object).ddl,
             })
@@ -945,6 +959,13 @@ impl SqlConnection for FakeConnection {
 }
 
 impl FakeConnection {
+    fn metadata_failure(&self) -> DbResult<()> {
+        match lock(&self.driver.state.script).metadata_error.clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     fn table(&self, object: &ObjectRef) -> FakeTable {
         lock(&self.driver.state.script)
             .tables

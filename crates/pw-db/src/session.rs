@@ -835,6 +835,8 @@ pub struct DbSessions {
     unattended: Mutex<HashMap<String, std::collections::VecDeque<DbUnattendedRollback>>>,
     sessions: Mutex<HashMap<String, Arc<DbSession>>>,
     pub(crate) executions: Mutex<HashMap<String, Arc<Running>>>,
+    /// 스키마 캐시와 메타데이터용 연결(M3-10).
+    pub(crate) schema: crate::schema::SchemaState,
     next_id: AtomicU64,
 }
 
@@ -850,6 +852,7 @@ impl DbSessions {
             unattended: Mutex::default(),
             sessions: Mutex::default(),
             executions: Mutex::default(),
+            schema: crate::schema::SchemaState::default(),
             next_id: AtomicU64::new(1),
         }
     }
@@ -1333,6 +1336,9 @@ impl DbSessions {
         session.sync(&link);
         drop(link);
         self.publish(&session, notice);
+        if commit {
+            self.schema_touched(&session);
+        }
         match error {
             None => {
                 tracing::info!(target: "pw_db", session = %session.id, commit, "db transaction finished");
@@ -1534,5 +1540,6 @@ pub fn register(router: &mut Router, sessions: Arc<DbSessions>) {
             },
         );
     crate::execute::register(router, Arc::clone(&sessions));
+    crate::schema::register(router, Arc::clone(&sessions));
     crate::connection::register(router, sessions);
 }

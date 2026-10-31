@@ -32,4 +32,5 @@ pw_rpc::rpc_type!(
     session::DbSessionChanged,
     execute::DbQueryProgress,
     gate::DbConfirmRequired,
+    schema::DbSchemaChanged,
 );
