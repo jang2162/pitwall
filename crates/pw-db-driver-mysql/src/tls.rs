@@ -156,11 +156,17 @@ mod tests {
 
     #[test]
     fn verify_ca_is_refused_rather_than_turned_into_verify_full() {
-        let refused = TlsPlan::new(
-            &TlsSettings::mode(SslMode::VerifyCa),
-            &tunnelled(),
-            &SSL_MODES,
+        let refused = plan(&TlsSettings::mode(SslMode::VerifyCa), &tunnelled()).unwrap_err();
+        assert_eq!(refused.kind, DbErrorKind::Invalid);
+        assert!(
+            refused.message.contains("verify-full"),
+            "the refusal names the alternative: {refused}"
         );
-        assert_eq!(refused.unwrap_err().kind, DbErrorKind::Invalid);
+        for mode in SSL_MODES {
+            assert!(
+                plan(&TlsSettings::mode(mode), &tunnelled()).is_ok(),
+                "{mode:?}"
+            );
+        }
     }
 }

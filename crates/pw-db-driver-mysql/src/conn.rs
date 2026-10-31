@@ -10,8 +10,9 @@
 //!
 //! **취소**도 새 연결로 `KILL QUERY <id>` 다. `SELECT SLEEP(30)` 처럼 죽여도 오류 없이 끝나는 문장이 있어 「인터럽트를 받은 조회」
 //! 는 끝이 정상이어도 취소로 돌려준다. 조회가 아닌 문장이 오류 없이 끝났으면 그 쓰기는 끝난 것이므로 정상으로 돌려준다.
-//! 문장이 끝난 뒤에 닿은 `KILL QUERY` 가 다음 문장을 죽이지 않게, 인터럽트를 받은 문장 뒤에는 `KILL` 이 끝나기를 기다렸다가
-//! 빈 문장(`DO 0`) 하나로 받아 낸다.
+//! (MySQL 8.4 의 `SLEEP` 은 죽여도 1 을 돌려주고, MariaDB 11.8 은 1317 오류로 끝난다.) 아직 가는 중인 `KILL QUERY` 가 다음 문장을
+//! 죽이지 않게, 인터럽트를 받은 문장 뒤에는 그 `KILL` 이 끝나기를 기다린다. 쉬는 연결에 닿은 `KILL QUERY` 는 다음 문장에 남지
+//! 않는다(MySQL 8.4 · MariaDB 11.8 에서 확인).
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -185,9 +186,8 @@ impl MysqlConnection {
         };
         if interrupted {
             let interrupter = self.interrupter.clone();
+            // 가는 중인 `KILL` 이 다음 문장에 닿지 않게 그것이 끝나기를 기다린다(머리 주석).
             let _sent = interrupter.kill.lock().await;
-            // 문장이 끝난 뒤에 닿은 `KILL QUERY` 를 여기서 받아 낸다(머리 주석). 그 오류는 이 빈 문장의 것이다.
-            let _ = self.conn().query_drop("DO 0").await;
         }
         match error {
             None => self.refresh_state(),
