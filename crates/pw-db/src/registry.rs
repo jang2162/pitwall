@@ -7,7 +7,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use pw_db_driver::DbDriver;
-use pw_db_types::DriverInfo;
+use pw_db_types::{Capabilities, DriverInfo};
+use pw_rpc::{Router, rpc_method};
+use serde::{Deserialize, Serialize};
 
 #[derive(Default, Clone)]
 pub struct DriverRegistry {
@@ -73,6 +75,51 @@ impl DriverRegistry {
     pub fn is_empty(&self) -> bool {
         self.drivers.is_empty()
     }
+}
+
+/// `db.driver.list` 의 항목 하나: 등록된 드라이버와 그 지원 플래그 전부.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbDriverEntry {
+    /// 드라이버 id — 연결 설정의 `driver` 값(`postgres` · `mysql` · `sqlite` · `redis`, 프로세스 밖 드라이버면 그 id).
+    pub kind: String,
+    pub capabilities: Capabilities,
+}
+
+rpc_method! {
+    /// 등록된 드라이버와 지원 플래그(id 순). 연결 없이 읽는 정적 정보다 — 연결 편집 다이얼로그(M3-14)는 드라이버가 받는
+    /// `sslmode`(`capabilities.sslModes`)로 나머지를 고를 수 없게 하고, DB 탐색기(M3-13)는 플래그로 트리 단계 · 기능을 정한다.
+    /// 비밀 · 프로젝트와 상관없어 범위를 묻지 않는다. MCP 에 내지 않는다.
+    pub DbDriverListMethod: "db.driver.list" {
+        params: (),
+        result: Vec<DbDriverEntry>,
+        tier: Read,
+        roles: [Owner],
+    }
+}
+
+impl DriverRegistry {
+    /// `db.driver.list` 의 답(id 순).
+    pub fn entries(&self) -> Vec<DbDriverEntry> {
+        self.drivers
+            .values()
+            .map(|d| DbDriverEntry {
+                kind: d.id().to_owned(),
+                capabilities: d.capabilities(),
+            })
+            .collect()
+    }
+}
+
+/// `db.driver.list` 를 붙인다. 데스크톱이 앱의 등록부를 넘긴다(`apps/desktop/src-tauri/src/main.rs`).
+pub fn register(router: &mut Router, drivers: DriverRegistry) {
+    let entries = drivers.entries();
+    router.unary(DbDriverListMethod, move |_ctx, (): ()| {
+        let entries = entries.clone();
+        async move { Ok(entries) }
+    });
 }
 
 #[cfg(test)]

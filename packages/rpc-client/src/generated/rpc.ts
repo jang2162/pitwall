@@ -47,6 +47,12 @@ export type UnaryMethods = {
 	 */
 	"db.connection.upsert": { params: DbConnectionUpsertParams; result: DbConnectionEntry };
 	/**
+	 * 등록된 드라이버와 지원 플래그(id 순). 연결 없이 읽는 정적 정보다 — 연결 편집 다이얼로그(M3-14)는 드라이버가 받는
+	 * `sslmode`(`capabilities.sslModes`)로 나머지를 고를 수 없게 하고, DB 탐색기(M3-13)는 플래그로 트리 단계 · 기능을 정한다.
+	 * 비밀 · 프로젝트와 상관없어 범위를 묻지 않는다. MCP 에 내지 않는다.
+	 */
+	"db.driver.list": { params: null; result: DbDriverEntry[] };
+	/**
 	 * 미리보기한 변경을 적용한다. 같은 변경 · 같은 세션 상태로 다시 만든 해시가 `previewHash` 와 다르면 `CONFLICT`
 	 * (`previewChanged`). 자동 커밋 탭이면 한 트랜잭션(영향 행이 1 이 아닌 변경이 있으면 전부 롤백 — `CONFLICT` `rowCount`),
 	 * 열린 트랜잭션이면 세이브포인트까지만 되돌린다.
@@ -774,6 +780,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.connection.list": {"name":"db.connection.list","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbConnectionList","doc":" 프로젝트의 DB 연결 목록(비밀 없이). 연결마다 신뢰 · 사용 가능 상태를 단다. 신뢰 전에도 돌려준다(상태는 모두 `untrusted`).\n","mcp":false,"fileScope":false},
 	"db.connection.test": {"name":"db.connection.test","kind":"unary","tier":"exec","roles":["owner"],"params":"DbConnectionTestParams","output":"ServerInfo","doc":" 연결 테스트: 붙어 보고 서버 판본 · TLS 상태를 돌려준 뒤 닫는다. `connectionId`(저장한 연결) 또는 `draft`(저장 전 초안)를 준다.\n 초안의 비밀(`secret`)은 저장하지 않는다. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만. 비밀 · 확인이 필요하면 3101 · 3102,\n 드라이버가 실패하면 3003(`data.error`).\n","mcp":false,"fileScope":false},
 	"db.connection.upsert": {"name":"db.connection.upsert","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionUpsertParams","output":"DbConnectionEntry","doc":" 연결 설정 파일을 만들거나 고친다(`location` 의 파일 하나에 연결 전부를 쓴다 — 개인 파일에 쓰면 공유 파일에만 있는 키는\n 그대로 남는다, 설정 계층에는 키를 지우는 문법이 없다). 그 프로젝트 창의 연결만 — 아니면 permission denied.\n","mcp":false,"fileScope":false},
+	"db.driver.list": {"name":"db.driver.list","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<DbDriverEntry>","doc":" 등록된 드라이버와 지원 플래그(id 순). 연결 없이 읽는 정적 정보다 — 연결 편집 다이얼로그(M3-14)는 드라이버가 받는\n `sslmode`(`capabilities.sslModes`)로 나머지를 고를 수 없게 하고, DB 탐색기(M3-13)는 플래그로 트리 단계 · 기능을 정한다.\n 비밀 · 프로젝트와 상관없어 범위를 묻지 않는다. MCP 에 내지 않는다.\n","mcp":false,"fileScope":false},
 	"db.edit.apply": {"name":"db.edit.apply","kind":"unary","tier":"exec","roles":["owner"],"params":"DbEditApplyParams","output":"DbEditApplied","doc":" 미리보기한 변경을 적용한다. 같은 변경 · 같은 세션 상태로 다시 만든 해시가 `previewHash` 와 다르면 `CONFLICT`\n (`previewChanged`). 자동 커밋 탭이면 한 트랜잭션(영향 행이 1 이 아닌 변경이 있으면 전부 롤백 — `CONFLICT` `rowCount`),\n 열린 트랜잭션이면 세이브포인트까지만 되돌린다.\n","mcp":false,"fileScope":false},
 	"db.edit.preview": {"name":"db.edit.preview","kind":"unary","tier":"exec","roles":["owner"],"params":"DbEditPreviewParams","output":"DbEditPreview","doc":" 변경을 방언의 DML 로 만들어 미리보기 글(값은 리터럴) · 등급 · `previewHash` 를 준다. 실행하지 않는다. 키 없는 테이블 · 키 열\n 수정 · 리터럴로 적을 수 없는 값은 `INVALID_PARAMS`(`data` 는 `DbEditError`), read-only 연결은 `PERMISSION_DENIED`.\n","mcp":false,"fileScope":false},
 	"db.edit.rowKey": {"name":"db.edit.rowKey","kind":"unary","tier":"exec","roles":["owner"],"params":"DbEditRowKeyParams","output":"DbEditRowKey","doc":" 테이블의 행 키(PK 또는 NOT NULL 열만의 유일 키 — M3-10 의 판정, 스키마 캐시를 지난다). 없으면 `key: null`. 관문: 그 세션을 연\n 프로젝트 창만 · 신뢰 · 연결 설정.\n","mcp":false,"fileScope":false},
@@ -1473,6 +1480,13 @@ export type DbConnectionUpsertParams = {
 	config: DbConnectionConfig,
 	/**  없으면 공유 파일(활성 워크트리의 것). 개인 파일은 프로젝트 하나에 하나 — 메인 체크아웃(개인 전용 모드면 그 폴더)에 쓴다. */
 	location?: DbConfigLocation,
+};
+
+/**  `db.driver.list` 의 항목 하나: 등록된 드라이버와 그 지원 플래그 전부. */
+export type DbDriverEntry = {
+	/**  드라이버 id — 연결 설정의 `driver` 값(`postgres` · `mysql` · `sqlite` · `redis`, 프로세스 밖 드라이버면 그 id). */
+	kind: string,
+	capabilities: Capabilities,
 };
 
 export type DbEditApplied = {

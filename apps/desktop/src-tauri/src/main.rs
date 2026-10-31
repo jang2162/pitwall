@@ -150,6 +150,7 @@ fn local_host(
         .methods(pw_db_sql::literal::register)
         .methods(move |router| pw_db::config::register(router, db_connection_methods))
         .methods(move |router| pw_db::register(router, db_session_methods))
+        .methods(|router| pw_db::registry::register(router, db::drivers()))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
