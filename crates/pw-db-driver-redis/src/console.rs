@@ -103,11 +103,13 @@ fn range_len(len: u64, start: i64, stop: i64) -> u64 {
 /// 목록(14-m3-plan.md M3-09 「무거운 명령 기준」 — 키 하나를 통째로 읽는 것과 응답을 부풀리는 것):
 /// - 값 바이트: `GET` · `MGET`(`STRLEN` 합), `HGET` · `HMGET`(`HSTRLEN` 합), `GETRANGE`(고르는 바이트), `JSON.GET` ·
 ///   `DUMP`(`MEMORY USAGE`).
-/// - 원소 수: `HGETALL` · `HKEYS` · `HVALS` · `SMEMBERS`, 번호 범위 `LRANGE` · `ZRANGE` 류, 묶지 않은 `ZRANGEBYSCORE` 류 ·
+/// - 원소 수: `HGETALL` · `HKEYS` · `HVALS` · `SMEMBERS`, 키 하나의 `SUNION` · `SINTER` · `SDIFF`(`SCARD`) ·
+///   `ZUNION` · `ZINTER` · `ZDIFF`(`ZCARD`), 번호 범위 `LRANGE` · `ZRANGE` 류, 묶지 않은 `ZRANGEBYSCORE` 류 ·
 ///   `XRANGE` 류, `COUNT` 로 묶지 않은 `XREAD`(stream 마다 `XLEN` 합), `XINFO STREAM … FULL COUNT 0`, 큰 count 의
 ///   `SRANDMEMBER` · `HRANDFIELD` · `ZRANDMEMBER`(음수 count 는 키 크기와 상관없이 부푼다).
 ///
-/// 이 밖(여러 키를 합치는 `SUNION` 류 · 원소 하나가 큰 `LINDEX` 등)은 응답 상한([`limited_reply`])과 응답 타임아웃이 묶는다.
+/// 이 밖(여러 키를 합치는 `SUNION` 류 · 원소 하나가 큰 `LINDEX` 등 — 14 M3-22 의 이월 목록)은 응답 상한([`limited_reply`]) ·
+/// 응답 타임아웃 · 취소가 묶는다. 서버를 오래 붙잡는 명령(`LCS` 등)은 분류(`pw_db_sql::kv_command`)가 확인을 받는다.
 pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
     let key = args.first()?;
     let upper = name.to_ascii_uppercase();
@@ -160,7 +162,14 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
         "JSON.GET" | "DUMP" => SizeProbe::new("MEMORY", key, Check::Bytes),
         "HGETALL" => SizeProbe::new("HLEN", key, Check::Elements { factor: 2 }),
         "HKEYS" | "HVALS" => SizeProbe::new("HLEN", key, Check::Elements { factor: 1 }),
+        // 키 하나의 집합 연산은 그 키 전체다(`SMEMBERS` · `ZRANGE 0 -1` 과 같다). 여러 키는 응답 상한이 끊는다.
         "SMEMBERS" => SizeProbe::new("SCARD", key, Check::Elements { factor: 1 }),
+        "SUNION" | "SINTER" | "SDIFF" if args.len() == 1 => {
+            SizeProbe::new("SCARD", key, Check::Elements { factor: 1 })
+        }
+        "ZUNION" | "ZINTER" | "ZDIFF" if int(0)? == 1 => {
+            SizeProbe::new("ZCARD", args.get(1)?, Check::Elements { factor })
+        }
         "SRANDMEMBER" | "HRANDFIELD" | "ZRANDMEMBER" => {
             let count = int(1)?;
             if count.unsigned_abs().saturating_mul(factor) <= MAX_REPLY_ELEMENTS {
@@ -469,6 +478,27 @@ mod tests {
             vec![args("XLEN a"), args("XLEN b")]
         );
         assert_eq!(asks("XINFO STREAM s FULL COUNT 0"), "XLEN");
+        // 키 하나의 집합 연산은 그 키 전체다(14 M3-22 판정(2)). 여러 키는 묻지 않는다(응답 상한).
+        for text in ["SUNION s", "SINTER s", "SDIFF s"] {
+            assert_eq!(asks(text), "SCARD", "{text}");
+        }
+        for text in ["ZUNION 1 z", "ZINTER 1 z WITHSCORES", "ZDIFF 1 z"] {
+            assert_eq!(
+                probe(text).unwrap().commands,
+                vec![args("ZCARD z")],
+                "{text}"
+            );
+        }
+        assert!(probe("ZUNION 1 z WITHSCORES").unwrap().too_large(5_001));
+        assert!(!probe("ZUNION 1 z").unwrap().too_large(5_001));
+        for text in [
+            "SUNION a b",
+            "SDIFF a b",
+            "ZUNION 2 a b",
+            "ZINTER 2 a b WITHSCORES",
+        ] {
+            assert_eq!(probe(text), None, "{text}");
+        }
         // 이미 상한 안에 묶인 것은 묻지 않는다.
         assert_eq!(probe("SRANDMEMBER s -10000"), None);
         assert_eq!(probe("SRANDMEMBER s"), None);

@@ -14,6 +14,8 @@
 //!   거절(까닭 [`BlockReason::ScanCount`] — 키 브라우저를 쓰라고 안내한다).
 //! - 대상 키를 덮는 쓰기는 `RENAME` 처럼 확인이다: `BITOP`, `STORE` · `STOREDIST` 가 붙은 `GEORADIUS` · `GEORADIUSBYMEMBER`,
 //!   `REPLACE` 가 붙은 `COPY` · `RESTORE`(DBX 는 쓰기).
+//! - 서버를 오래 붙잡는 명령은 그 등급 그대로 확인이다(14 M3-22): `LCS`, `GET` 패턴이 붙은 `SORT` · `SORT_RO`, `COUNT` 로
+//!   묶지 않은 `GEOSEARCH` · `GEORADIUS` 류(DBX 는 허용 · 쓰기). 읽기는 `Confirm(Read)` 라 read-only 연결에서도 확인 뒤 돈다.
 //! - 거절에 까닭([`BlockReason`])을 싣고, 여러 줄 묶음의 분류([`classify_script`])를 여기 하나에 둔다.
 //! - DBX 데스크톱의 「안전 확인 건너뛰기」 는 옮기지 않았다. 토크나이저는 오류 글만 그대로다.
 //!
@@ -35,7 +37,8 @@ pub enum KvCommandClass {
     Allowed,
     /// 쓰기. read-only 연결에서는 거절, 프로덕션이면 확인(결정 M3-D20).
     Write,
-    /// 지우기 · 덮기 같은 확인이 필요한 쓰기. 등급은 확인의 무게다.
+    /// 확인이 필요한 명령. 등급은 확인의 무게다 — 지우기 · 덮기 같은 쓰기는 `UnboundedWrite`, 서버를 오래 붙잡는 읽기
+    /// (`LCS` · `GET` 패턴의 `SORT_RO` · `COUNT` 없는 `GEOSEARCH` 류)는 `Read`(read-only 연결에서도 확인 뒤 돈다).
     Confirm(RiskGrade),
     /// 거절. 서버에 보내지 않는다.
     Blocked(BlockReason),
@@ -68,11 +71,15 @@ impl KvCommandClass {
         }
     }
 
-    /// 둘 중 더 위험한 쪽. 거절이 가장 위에 있다(먼저 만난 거절의 까닭을 남긴다).
+    /// 둘 중 더 위험한 쪽. 거절이 가장 위에 있다(먼저 만난 거절의 까닭을 남긴다). 어느 한쪽이 확인이면 둘 중 높은 등급의
+    /// 확인이다(`LCS` 와 `SET` 의 묶음은 쓰기 등급의 확인).
     pub fn max(self, other: Self) -> Self {
         match (self, other) {
             (Self::Blocked(_), _) => self,
             (_, Self::Blocked(_)) => other,
+            (Self::Confirm(_), _) | (_, Self::Confirm(_)) => {
+                Self::Confirm(self.grade().max(other.grade()).unwrap_or(RiskGrade::Read))
+            }
             _ if other.grade() > self.grade() => other,
             _ => self,
         }
@@ -248,7 +255,42 @@ pub fn classify_argv<A: AsRef<[u8]>>(argv: &[A]) -> KvCommandClass {
     if overwrites {
         return KvCommandClass::Confirm(RiskGrade::UnboundedWrite);
     }
-    class
+    // 서버를 오래 붙잡는 명령(응답 상한은 응답만 끊고 서버 작업은 못 막는다 — 14 M3-22): 그 등급 그대로 확인을 받는다.
+    let heavy = match upper.as_str() {
+        "SORT" | "SORT_RO" => has_word(&args, &[b"GET"]),
+        "GEOSEARCH" => !geo_counted(&args, 1),
+        "GEORADIUS" | "GEORADIUS_RO" => !geo_counted(&args, 5),
+        "GEORADIUSBYMEMBER" | "GEORADIUSBYMEMBER_RO" => !geo_counted(&args, 4),
+        _ => false,
+    };
+    match class {
+        KvCommandClass::Allowed | KvCommandClass::Write if heavy => {
+            KvCommandClass::Confirm(class.grade().unwrap_or(RiskGrade::Read))
+        }
+        class => class,
+    }
+}
+
+/// 위치 검색(`GEOSEARCH` · `GEORADIUS` 류)이 `COUNT n` 으로 묶였는가. 선택 인자를 `start` 부터 자리대로 걷는다 — 키 · 멤버 ·
+/// `STORE` 대상 이름이 `COUNT` 여도 자리로 가르므로 비켜 가지 않는다. 모르는 낱말은 하나씩 건너뛴다(서버가 오류로 답한다).
+fn geo_counted(args: &[&[u8]], start: usize) -> bool {
+    let mut i = start;
+    while let Some(word) = args.get(i) {
+        i += match word.to_ascii_uppercase().as_slice() {
+            b"COUNT" => {
+                return args
+                    .get(i + 1)
+                    .and_then(|n| std::str::from_utf8(n).ok())
+                    .and_then(|n| n.parse::<u64>().ok())
+                    .is_some_and(|n| n > 0);
+            }
+            b"FROMMEMBER" | b"STORE" | b"STOREDIST" => 2,
+            b"FROMLONLAT" | b"BYRADIUS" => 3,
+            b"BYBOX" => 4,
+            _ => 1,
+        };
+    }
+    false
 }
 
 /// `XREAD` · `XREADGROUP` 의 선택 인자를 자리대로 걷는다(`start` 부터 `STREAMS` 까지 — `COUNT n` · `BLOCK ms` · `NOACK`).
@@ -340,7 +382,6 @@ pub fn classify_command(command: &str) -> KvCommandClass {
         | "HVALS"
         | "INFO"
         | "LASTSAVE"
-        | "LCS"
         | "LINDEX"
         | "LLEN"
         | "LPOS"
@@ -445,6 +486,8 @@ pub fn classify_command(command: &str) -> KvCommandClass {
         | "TS.MRANGE"
         | "TS.QUERYINDEX"
         | "TS.RANGE" => KvCommandClass::Allowed,
+        // 두 문자열의 최장 공통 부분열 — 서버가 두 길이의 곱만큼 일한다(응답은 작아 상한으로 못 막는다).
+        "LCS" => KvCommandClass::Confirm(RiskGrade::Read),
         "BLPOP" | "BRPOP" | "BLMOVE" | "BLMPOP" | "BRPOPLPUSH" | "BZPOPMIN" | "BZPOPMAX"
         | "BZMPOP" | "WAIT" | "WAITAOF" => KvCommandClass::Blocked(BlockReason::Blocking),
         "DEL" | "UNLINK" | "EXPIRE" | "EXPIREAT" | "PEXPIRE" | "PEXPIREAT" | "RENAME"

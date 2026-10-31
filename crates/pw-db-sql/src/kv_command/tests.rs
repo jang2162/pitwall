@@ -298,7 +298,65 @@ fn writes_that_overwrite_a_target_need_confirmation() {
     ] {
         assert_eq!(class_of(text), CONFIRM, "{text}");
     }
-    for text in ["GEORADIUS g 0 0 1 km", "COPY a b", "RESTORE k 0 payload"] {
+    for text in [
+        "GEORADIUS g 0 0 1 km COUNT 5",
+        "COPY a b",
+        "RESTORE k 0 payload",
+    ] {
         assert_eq!(class_of(text), KvCommandClass::Write, "{text}");
     }
+}
+
+/// 14 M3-22 판정(1): 서버를 오래 붙잡는 명령은 그 등급 그대로 확인이다 — 읽기는 `Confirm(Read)`. 응답 상한은 응답만 끊는다.
+#[test]
+fn commands_that_hold_the_server_need_confirmation() {
+    let heavy_read = KvCommandClass::Confirm(RiskGrade::Read);
+    for text in [
+        "LCS a b",
+        "LCS a b IDX MINMATCHLEN 4",
+        "SORT_RO k GET obj:*",
+        "SORT_RO k BY w:* GET # GET obj:*",
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km",
+        "GEOSEARCH g FROMMEMBER COUNT BYBOX 1 1 km ASC",
+        "GEOSEARCH COUNT FROMMEMBER m BYRADIUS 1 km",
+        "GEOSEARCH g FROMMEMBER m BYRADIUS 1 km COUNT 0",
+        "GEORADIUS_RO g 0 0 1 km WITHDIST",
+        "GEORADIUSBYMEMBER_RO g COUNT 1 km",
+    ] {
+        assert_eq!(class_of(text), heavy_read, "{text}");
+        assert_eq!(heavy_read.grade(), Some(RiskGrade::Read));
+    }
+    // 쓰기는 쓰기 등급의 확인, 덮는 쓰기는 그대로 범위 없는 쓰기.
+    assert_eq!(
+        class_of("GEORADIUS g 0 0 1 km"),
+        KvCommandClass::Confirm(RiskGrade::Write)
+    );
+    assert_eq!(
+        class_of("GEORADIUSBYMEMBER g m 1 km WITHCOORD"),
+        KvCommandClass::Confirm(RiskGrade::Write)
+    );
+    assert_eq!(class_of("SORT k GET obj:*"), CONFIRM);
+    assert_eq!(class_of("GEORADIUS g 0 0 1 km STORE dst"), CONFIRM);
+    // 묶였거나 패턴이 없으면 그대로다.
+    for text in [
+        "SORT_RO k",
+        "SORT_RO k LIMIT 0 10 ALPHA",
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 10",
+        "GEOSEARCH g FROMMEMBER m BYBOX 1 1 km COUNT 3 ANY ASC",
+        "GEORADIUS_RO g 0 0 1 km COUNT 10",
+        "GEORADIUSBYMEMBER_RO g m 1 km COUNT 10 WITHDIST",
+    ] {
+        assert_eq!(class_of(text), KvCommandClass::Allowed, "{text}");
+    }
+    // 묶음에서 확인은 사라지지 않는다 — 더 높은 등급의 확인이 된다.
+    assert_eq!(
+        classify_script("GET a\nLCS a b").unwrap().1,
+        heavy_read,
+        "a heavy read keeps its confirmation"
+    );
+    assert_eq!(
+        classify_script("LCS a b\nSET c 1").unwrap().1,
+        KvCommandClass::Confirm(RiskGrade::Write)
+    );
+    assert_eq!(heavy_read.max(KvCommandClass::Allowed), heavy_read);
 }

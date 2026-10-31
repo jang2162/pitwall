@@ -510,7 +510,7 @@ async fn run_argv(conn: &mut Box<dyn KvConnection>, argv: &[&str]) -> KvReply {
         .unwrap()
 }
 
-/// 키 `key` 가 `n` 개의 원소를 갖게 서버에서 채운다(이미 그 크기면 그대로). `kind` 는 `set` · `hash` · `stream` · `list`.
+/// 키 `key` 가 `n` 개의 원소를 갖게 서버에서 채운다(이미 그 크기면 그대로). `kind` 는 `set` · `hash` · `zset` · `stream`.
 async fn fill(conn: &mut Box<dyn KvConnection>, kind: &str, key: &str, n: i64) {
     let (length, script) = match kind {
         "set" => (
@@ -520,6 +520,10 @@ async fn fill(conn: &mut Box<dyn KvConnection>, kind: &str, key: &str, n: i64) {
         "hash" => (
             "HLEN",
             "for i=1,tonumber(ARGV[1]),500 do local t={} for j=i,math.min(i+499,tonumber(ARGV[1])) do t[#t+1]=j t[#t+1]='v' end redis.call('HSET',KEYS[1],unpack(t)) end",
+        ),
+        "zset" => (
+            "ZCARD",
+            "for i=1,tonumber(ARGV[1]),500 do local t={} for j=i,math.min(i+499,tonumber(ARGV[1])) do t[#t+1]=j t[#t+1]=j end redis.call('ZADD',KEYS[1],unpack(t)) end",
         ),
         "stream" => (
             "XLEN",
@@ -685,11 +689,11 @@ async fn live_redis_a_cancelled_request_does_not_hold_up_the_next() {
     let connections = info_field(&mut admin, "stats", "total_connections_received").await;
     // 서버 전체의 호출 수로 「서버가 마쳤다」 를 본다 — 다른 시험이 쓰지 않는 명령이다.
     let sdiff = calls_of(&mut admin, "sdiff").await;
-    // 키 하나를 통째로 읽는 `SDIFF`(크기 사전 확인 목록 밖 — 응답 상한이 끊는다): 응답 150만 원소. 서버가 명령을 마친 뒤(응답을
+    // 여러 키의 `SDIFF`(빈 키를 빼면 그 set 전체 — 크기 사전 확인 목록 밖, 응답 상한이 끊는다): 응답 150만 원소. 서버가 명령을 마친 뒤(응답을
     // 보내고 Host 가 받아 읽는 중) 취소한다 — 그 뒤의 기다림은 서버가 아니라 버린 응답 몫이다.
     w.session.handle_value(json!({
         "jsonrpc": "2.0", "id": 900, "method": "db.kv.command",
-        "params": command(&s, "SDIFF m1:big"),
+        "params": command(&s, "SDIFF m1:big m1:none"),
     }));
     let deadline = Instant::now() + Duration::from_secs(10);
     while calls_of(&mut admin, "sdiff").await == sdiff {
@@ -724,7 +728,7 @@ async fn live_redis_a_cancelled_request_does_not_hold_up_the_next() {
 async fn live_redis_a_late_cancel_does_not_stop_the_next_request() {
     let e = env(13);
     let mut admin = e.admin().await;
-    // 다른 시험이 세지 않는 명령(`SINTER` — 키 하나면 그 set 전체)으로 몇 ms 걸리는 응답을 만든다.
+    // 다른 시험이 세지 않는 명령(`SINTER` — 같은 키 둘이면 그 set 전체, 사전 확인 없이 바로 간다)으로 몇 ms 걸리는 응답을 만든다.
     fill(&mut admin, "set", "m2:mid", 9_000).await;
     let mut w = e.f.window();
     let s = e.open(&mut w, "r").await;
@@ -741,7 +745,7 @@ async fn live_redis_a_late_cancel_does_not_stop_the_next_request() {
         let id = 10_000 + round;
         w.session.handle_value(json!({
             "jsonrpc": "2.0", "id": id, "method": "db.kv.command",
-            "params": command(&s, "SINTER m2:mid"),
+            "params": command(&s, "SINTER m2:mid m2:mid"),
         }));
         tokio::time::sleep(Duration::from_millis(2)).await;
         w.session.handle_value(json!({
@@ -775,7 +779,7 @@ async fn live_redis_a_late_cancel_does_not_stop_the_next_request() {
         let id = 20_000 + round;
         w.session.handle_value(json!({
             "jsonrpc": "2.0", "id": id, "method": "db.kv.command",
-            "params": command(&s, "SINTER m2:mid"),
+            "params": command(&s, "SINTER m2:mid m2:mid"),
         }));
         tokio::time::sleep(Duration::from_micros(500)).await;
         w.call("db.query.cancel", json!({ "executionId": execution }))
@@ -833,4 +837,105 @@ async fn info_field(conn: &mut Box<dyn KvConnection>, section: &str, field: &str
         .find_map(|line| line.strip_prefix(&prefix))
         .map(|n| n.trim().parse().unwrap())
         .unwrap_or_else(|| panic!("no {field}"))
+}
+
+/// 14 M3-22 판정(1): 서버를 오래 붙잡는 명령(`LCS` · `COUNT` 없는 `GEOSEARCH` · `GET` 패턴의 `SORT_RO`)은 확인(3001)을 받고,
+/// 확인 전에는 서버에 닿지 않는다. 등급은 조회라 read-only 연결에서도 확인 뒤 돈다. 판정은 다른 시험이 세지 않는 명령의 수다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_commands_that_hold_the_server_need_a_confirmation() {
+    let e = env(13);
+    let mut admin = e.admin().await;
+    run(&mut admin, "MSET p1:a ohmytext p1:b mynewtext").await;
+    run(&mut admin, "GEOADD p1:g 13.361389 38.115556 palermo").await;
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "ro").await;
+    let (lcs, geosearch, sort_ro) = (
+        calls_of(&mut admin, "lcs").await,
+        calls_of(&mut admin, "geosearch").await,
+        calls_of(&mut admin, "sort_ro").await,
+    );
+    for text in [
+        "LCS p1:a p1:b",
+        "GEOSEARCH p1:g FROMLONLAT 13 38 BYRADIUS 200 km",
+        "SORT_RO p1:g GET p1:*",
+    ] {
+        let err = w
+            .call("db.kv.command", command(&s, text))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, code::CONFIRM_REQUIRED, "{text}: {err:?}");
+        assert_eq!(err.data.unwrap()["grade"], "read", "{text}");
+    }
+    assert_eq!(
+        calls_of(&mut admin, "lcs").await,
+        lcs,
+        "LCS reached the server"
+    );
+    assert_eq!(calls_of(&mut admin, "geosearch").await, geosearch);
+    assert_eq!(calls_of(&mut admin, "sort_ro").await, sort_ro);
+
+    // 확인을 받으면 read-only 연결에서도 돈다.
+    let reply = call_confirmed(&mut w, "db.kv.command", command(&s, "LCS p1:a p1:b")).await;
+    assert_eq!(reply["bulk"]["text"], "mytext", "{reply}");
+    assert_eq!(calls_of(&mut admin, "lcs").await, lcs + 1);
+    // `COUNT` 로 묶으면 확인 없이 돈다.
+    let reply = w
+        .call(
+            "db.kv.command",
+            command(
+                &s,
+                "GEOSEARCH p1:g FROMLONLAT 13 38 BYRADIUS 200 km COUNT 5",
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["array"][0]["bulk"]["text"], "palermo", "{reply}");
+    run(&mut admin, "DEL p1:a p1:b p1:g").await;
+}
+
+/// 14 M3-22 판정(2): 키 하나의 `SUNION` · `SINTER` · `SDIFF` · `ZUNION` · `ZINTER` · `ZDIFF` 는 그 키 전체라 `SMEMBERS` 처럼
+/// 길이(`SCARD` · `ZCARD`)를 먼저 묻고, 상한을 넘으면 서버에 보내지 않는다. 여러 키는 그대로 가서 응답 상한이 끊는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_a_one_key_set_operation_is_probed_like_smembers() {
+    let e = env(13);
+    let mut admin = e.admin().await;
+    fill(&mut admin, "set", "p2:set", 15_000).await;
+    fill(&mut admin, "zset", "p2:zset", 15_000).await;
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "r").await;
+    let (zunion, zdiff) = (
+        calls_of(&mut admin, "zunion").await,
+        calls_of(&mut admin, "zdiff").await,
+    );
+    for text in [
+        "SUNION p2:set",
+        "SINTER p2:set",
+        "SDIFF p2:set",
+        "ZUNION 1 p2:zset",
+        "ZINTER 1 p2:zset",
+        "ZDIFF 1 p2:zset WITHSCORES",
+    ] {
+        let err = w
+            .call("db.kv.command", command(&s, text))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.data.as_ref().unwrap()["error"]["code"],
+            "KEY_TOO_LARGE",
+            "{text}: {err:?}"
+        );
+    }
+    assert_eq!(
+        calls_of(&mut admin, "zunion").await,
+        zunion,
+        "ZUNION reached the server"
+    );
+    assert_eq!(calls_of(&mut admin, "zdiff").await, zdiff);
+    // 여러 키는 묻지 않고 가서 응답 상한에서 끊긴다.
+    let reply = w
+        .call("db.kv.command", command(&s, "ZUNION 2 p2:zset p2:none"))
+        .await
+        .unwrap();
+    assert_eq!(reply["truncated"]["elements"], 15_000, "{reply}");
+    assert_eq!(calls_of(&mut admin, "zunion").await, zunion + 1);
 }

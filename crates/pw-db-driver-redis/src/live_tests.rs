@@ -893,7 +893,11 @@ async fn live_redis_whole_key_reads_are_bounded_in_the_console() {
     assert_eq!(window.len(), 100);
 
     // 묻지 않는 명령(여러 키에 걸친 `SUNION`)은 응답 상한에서 끊는다.
-    let KvReply::Truncated(cut) = conn.command(argv("SUNION members")).await.unwrap() else {
+    let KvReply::Truncated(cut) = conn
+        .command(argv("SUNION members members:none"))
+        .await
+        .unwrap()
+    else {
         panic!("truncated")
     };
     assert_eq!(cut.elements, 15_000);

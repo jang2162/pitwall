@@ -11,10 +11,11 @@
 //!   은 확인, 프로덕션 연결은 조회 밖을 모두 확인한다. **전용 메서드는 따로 등급을 두지 않는다** — 서버에 보낼 것과 같은 명령
 //!   (`setTtl` = `PEXPIRE`, `persist` = `PERSIST`, `delete` = `DEL`, `rename` = `RENAME` · 덮지 않으면 `RENAMENX`)을 같은
 //!   분류기에 넣어 그 등급 · 확인을 받는다(한 분류기). 그래서 `setTtl` 은 `PEXPIRE` 처럼 확인이고(1 ms 는 지우기와 같다),
-//!   `RENAMENX` 도 분류대로 확인이다. 확인이 필요하면 [`code::CONFIRM_REQUIRED`](crate::gate::code::CONFIRM_REQUIRED)(`data` 는
+//!   `RENAMENX` 도 분류대로 확인이다. 서버를 오래 붙잡는 읽기(`LCS` 등 — 분류의 `Confirm(Read)`)는 등급이 조회라 read-only
+//!   연결에서도 돌지만 확인을 받는다. 확인이 필요하면 [`code::CONFIRM_REQUIRED`](crate::gate::code::CONFIRM_REQUIRED)(`data` 는
 //!   [`DbKvConfirmRequired`])가 해시를 돌려주고, 창이 확인을 받은 뒤 `confirmed { grade, statementsHash }` 로 다시 부른다. 해시는
-//!   세션 · 그 세션의 확인 순번 · 메서드 · 명령 인자(바이트)에 묶인다 — 다른 키 · 다른 세션에 쓰이지 않는다. **쓰기가 관문을
-//!   지나면 그 세션의 확인을 모두 쓴다**(SQL 과 같다 — 한 번만 쓰인다). 읽기는 쓰지 않는다: 한 세션을 키 트리 · 값 뷰어 · 명령
+//!   세션 · 그 세션의 확인 순번 · 메서드 · 명령 인자(바이트)에 묶인다 — 다른 키 · 다른 세션에 쓰이지 않는다. **확인을 거친 명령이
+//!   관문을 지나면 그 세션의 확인을 모두 쓴다**(SQL 과 같다 — 한 번만 쓰인다). 확인이 없는 읽기는 쓰지 않는다: 한 세션을 키 트리 · 값 뷰어 · 명령
 //!   콘솔이 함께 쓰므로, 확인 다이얼로그가 떠 있는 동안 키 트리가 스캔을 이어 가도 확인이 깨지지 않게.
 //! - **거절은 서버에 보내기 전**이다 — 드라이버는 분류하지 않는다(`KvConnection::command` 는 부르는 쪽이 분류했다고 본다).
 //! - **진행 · 취소**(M3-05 와 같다): 스캔 스트림은 맨 앞에 `accepted { executionId }` 를 내고, `db.query.cancel { executionId }`
@@ -304,6 +305,8 @@ rpc_method! {
 struct Gated<'a> {
     action: DbKvAction,
     grade: RiskGrade,
+    /// 분류가 확인을 요구한다(`Confirm` — 서버를 오래 붙잡는 읽기는 등급이 조회여도 확인이다).
+    confirm: bool,
     /// 명령(이름 포함, 바이트) — 해시의 재료이고 보이기용 명령의 원본이다.
     argv: Vec<Vec<u8>>,
     confirmed: Option<&'a DbConfirmed>,
@@ -311,13 +314,14 @@ struct Gated<'a> {
 
 impl<'a> Gated<'a> {
     /// 명령 하나를 분류기(`classify_argv` — 하나뿐이다)에 넣어 등급을 정한다. 전용 메서드도 따로 등급을 두지 않고 같은 효과의
-    /// 명령을 넣는다. 거절 명령이면 `blockedCommand`. 조회면 `None`(관문의 확인 · read-only 판정이 없다).
+    /// 명령을 넣는다. 거절 명령이면 `blockedCommand`. 확인이 없는 조회면 `None`(관문의 확인 · read-only 판정이 없다).
     fn classify(
         action: DbKvAction,
         argv: Vec<Vec<u8>>,
         confirmed: Option<&'a DbConfirmed>,
     ) -> Result<Option<Self>, RpcError> {
-        let grade = match classify_argv(&argv) {
+        let class = classify_argv(&argv);
+        let grade = match class {
             KvCommandClass::Blocked(reason) => {
                 let name = argv
                     .first()
@@ -327,9 +331,11 @@ impl<'a> Gated<'a> {
             }
             class => class.grade().unwrap_or(RiskGrade::Destructive),
         };
-        Ok((grade != RiskGrade::Read).then_some(Self {
+        let confirm = matches!(class, KvCommandClass::Confirm(_));
+        Ok((grade != RiskGrade::Read || confirm).then_some(Self {
             action,
             grade,
+            confirm,
             argv,
             confirmed,
         }))
@@ -416,7 +422,8 @@ fn judge(session: &DbSession, gated: &Gated<'_>) -> Result<(), RpcError> {
         return Err(read_only_refusal(gated.action));
     }
     let name_required = session.production && gated.grade == RiskGrade::Destructive;
-    let needs_confirm = gated.grade >= RiskGrade::UnboundedWrite
+    let needs_confirm = gated.confirm
+        || gated.grade >= RiskGrade::UnboundedWrite
         || (session.production && gated.grade >= RiskGrade::Write);
     if !needs_confirm {
         return Ok(());
@@ -588,9 +595,9 @@ impl DbSessions {
         };
         if let Some(gated) = &gated {
             judge(session, gated)?;
-            // 쓰기가 관문을 지났다 — 낸 확인은 이것으로 끝이다(재사용 · 늦게 온 확인 거절).
+            // 관문을 거친 명령(쓰기 · 확인 받은 읽기)이 지났다 — 낸 확인은 이것으로 끝이다(재사용 · 늦게 온 확인 거절).
             session.spend_confirmations();
-            tracing::info!(target: "pw_db", session = %session.id, action = ?gated.action, grade = ?gated.grade, "running a kv write");
+            tracing::info!(target: "pw_db", session = %session.id, action = ?gated.action, grade = ?gated.grade, "running a gated kv command");
         }
         let conn = kv_conn(&mut link)?;
         let running = self.kv_running(session, conn.as_ref());
@@ -1017,6 +1024,21 @@ mod tests {
         assert_eq!(grade(&[b"RENAMENX", b"a", b"b"]), confirm);
         assert_eq!(grade(&[b"PERSIST", b"\xff"]), Some(RiskGrade::Write));
         assert_eq!(grade(&[b"GET", b"a"]), None, "reads pass no gate");
+        // 서버를 오래 붙잡는 읽기는 조회 등급 그대로 관문의 확인을 받는다(read-only 에서도 돈다).
+        let lcs = Gated::classify(
+            DbKvAction::Command,
+            vec![b"LCS".to_vec(), b"a".to_vec(), b"b".to_vec()],
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!((lcs.grade, lcs.confirm), (RiskGrade::Read, true));
+        assert!(
+            !Gated::classify(DbKvAction::Command, vec![b"SET".to_vec()], None)
+                .unwrap()
+                .unwrap()
+                .confirm
+        );
         let refused = Gated::classify(DbKvAction::Command, vec![b"FLUSHALL".to_vec()], None);
         assert!(refused.is_err_and(|e| e.code == rpc_code::PERMISSION_DENIED));
     }
