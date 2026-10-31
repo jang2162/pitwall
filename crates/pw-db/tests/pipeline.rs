@@ -414,11 +414,24 @@ async fn other_windows_cannot_open_or_drive_sessions() {
         .start("db.query.execute", exec(&s, "SELECT * FROM slow"))
         .await
         .unwrap();
-    w.credit(stream, 2);
+    w.credit(stream, 3);
     let StreamMsg::Chunk(accepted) = w.next(stream).await else {
         panic!()
     };
     let execution = accepted["executionId"].as_str().unwrap().to_owned();
+    // started · columns 뒤 실행 태스크가 `fetch` 에서 멈출 때까지 — 그 뒤로는 이 창이 부르는 것이 없다.
+    w.next(stream).await;
+    w.next(stream).await;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !e
+        .pg
+        .calls()
+        .iter()
+        .any(|c| matches!(c, FakeCall::Fetch { .. }))
+    {
+        assert!(Instant::now() < deadline, "the run never reached fetch");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let before = e.pg.calls();
 
     let file = e.f.root.join("a.sql");
@@ -898,6 +911,17 @@ async fn cancelling_a_sqlite_write_in_a_transaction_asks_first() {
     };
     w.next(stream).await;
     w.next(stream).await;
+    // 쓰기 문장이 드라이버의 `fetch` 에서 돌 때 취소한다(그 전에 온 취소는 아무것도 쓰지 않은 문장을 멈출 뿐이다).
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !e
+        .lite
+        .calls()
+        .iter()
+        .any(|c| matches!(c, FakeCall::Fetch { .. }))
+    {
+        assert!(Instant::now() < deadline, "the run never reached fetch");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let execution = accepted["executionId"].clone();
     let err = w
         .call("db.query.cancel", json!({ "executionId": execution }))
