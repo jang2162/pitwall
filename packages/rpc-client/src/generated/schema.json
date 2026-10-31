@@ -626,7 +626,7 @@
       "tier": "read"
     },
     "db.connection.approve": {
-      "description": "사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로. 지금 설정에서 나오는 것과 같을 때만\n기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.",
+      "description": "사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로. 지금 설정에서 나오는 것과 같을 때만\n기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의\n연결 + 신뢰한 프로젝트만.",
       "kind": "unary",
       "params": {
         "$defs": {
@@ -791,6 +791,14 @@
           },
           "projectId": {
             "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정을 그 워크트리에서 읽는다.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -820,6 +828,14 @@
           },
           "projectId": {
             "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -848,6 +864,14 @@
           },
           "projectId": {
             "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -862,7 +886,7 @@
             "description": "확인을 받아야 열 수 있는 것.",
             "oneOf": [
               {
-                "description": "환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음이면 `null`.",
+                "description": "환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음(기록 없음)이면 `null`.",
                 "properties": {
                   "kind": {
                     "const": "env",
@@ -1090,19 +1114,34 @@
                 "type": "object"
               },
               {
-                "description": "키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 다시 물어 `db.secret.set` 한다.",
+                "description": "키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 이전(`previous`) → 지금(`target`) 대상을\n보이고 다시 물어 `db.secret.set` 한다.",
                 "properties": {
                   "kind": {
                     "const": "secretRequired",
                     "type": "string"
                   },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbSecretTarget"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "reason": {
                     "$ref": "#/$defs/SecretMissing"
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
                   }
                 },
                 "required": [
                   "kind",
-                  "reason"
+                  "reason",
+                  "target",
+                  "previous"
                 ],
                 "type": "object"
               },
@@ -1412,6 +1451,14 @@
         "properties": {
           "projectId": {
             "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1425,7 +1472,7 @@
             "description": "확인을 받아야 열 수 있는 것.",
             "oneOf": [
               {
-                "description": "환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음이면 `null`.",
+                "description": "환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음(기록 없음)이면 `null`.",
                 "properties": {
                   "kind": {
                     "const": "env",
@@ -1694,19 +1741,34 @@
                 "type": "object"
               },
               {
-                "description": "키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 다시 물어 `db.secret.set` 한다.",
+                "description": "키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 이전(`previous`) → 지금(`target`) 대상을\n보이고 다시 물어 `db.secret.set` 한다.",
                 "properties": {
                   "kind": {
                     "const": "secretRequired",
                     "type": "string"
                   },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbSecretTarget"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "reason": {
                     "$ref": "#/$defs/SecretMissing"
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
                   }
                 },
                 "required": [
                   "kind",
-                  "reason"
+                  "reason",
+                  "target",
+                  "previous"
                 ],
                 "type": "object"
               },
@@ -1978,6 +2040,13 @@
               "null"
             ]
           },
+          "stateProblem": {
+            "description": "확인 기록(`$DATA/projects/<id>/db.json`)을 읽지 못한 이유. 그동안은 모든 확인을 다시 묻고, 고치거나 지울 때까지 기록하지 않는다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "trusted": {
             "type": "boolean"
           }
@@ -1985,6 +2054,7 @@
         "required": [
           "connections",
           "problem",
+          "stateProblem",
           "trusted"
         ],
         "type": "object"
@@ -2241,10 +2311,18 @@
           "location": {
             "$ref": "#/$defs/DbConfigLocation",
             "default": "shared",
-            "description": "없으면 공유 파일."
+            "description": "없으면 공유 파일(활성 워크트리의 것). 개인 파일은 프로젝트 하나에 하나 — 메인 체크아웃(개인 전용 모드면 그 폴더)에 쓴다."
           },
           "projectId": {
             "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2260,7 +2338,7 @@
             "description": "확인을 받아야 열 수 있는 것.",
             "oneOf": [
               {
-                "description": "환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음이면 `null`.",
+                "description": "환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음(기록 없음)이면 `null`.",
                 "properties": {
                   "kind": {
                     "const": "env",
@@ -2488,19 +2566,34 @@
                 "type": "object"
               },
               {
-                "description": "키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 다시 물어 `db.secret.set` 한다.",
+                "description": "키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 이전(`previous`) → 지금(`target`) 대상을\n보이고 다시 물어 `db.secret.set` 한다.",
                 "properties": {
                   "kind": {
                     "const": "secretRequired",
                     "type": "string"
                   },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbSecretTarget"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "reason": {
                     "$ref": "#/$defs/SecretMissing"
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
                   }
                 },
                 "required": [
                   "kind",
-                  "reason"
+                  "reason",
+                  "target",
+                  "previous"
                 ],
                 "type": "object"
               },
@@ -2844,7 +2937,7 @@
       "tier": "write"
     },
     "db.secret.set": {
-      "description": "비밀을 키체인에 넣는다 — 지금 설정의 대상(드라이버 · 호스트 · 포트 · 사용자 · 터널 · `sslmode` 와 인증서 경로)과 함께.\n연결 설정이 `password = { secret_ref = \"keychain\" }` 이어야 한다. 그 프로젝트 창의 연결만. 값은 돌려주지 않는다.",
+      "description": "비밀을 키체인에 넣는다 — 창이 보여 준 대상(드라이버 · 호스트 · 포트 · 사용자 · 터널 · `sslmode` 와 인증서 경로)과 함께.\n그 대상이 지금 설정과 다르면 conflict. 연결 설정이 `password = { secret_ref = \"keychain\" }` 이어야 한다. 그 프로젝트 창의\n연결 + 신뢰한 프로젝트만. 값은 돌려주지 않는다.",
       "kind": "unary",
       "params": {
         "$defs": {
@@ -2854,6 +2947,115 @@
               "password"
             ],
             "type": "string"
+          },
+          "DbSecretTarget": {
+            "description": "비밀을 보내도 되는 대상. 이 중 하나라도 바뀌면 저장한 비밀을 쓰지 않는다.",
+            "properties": {
+              "driver": {
+                "$ref": "#/$defs/DriverKind"
+              },
+              "host": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "description": "쓰이는 포트(적지 않았으면 드라이버 기본).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sslcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslmode": {
+                "$ref": "#/$defs/SslMode",
+                "description": "쓰이는 `sslmode`(적지 않았으면 기본값)."
+              },
+              "sslrootcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tunnel": {
+                "description": "터널 목적지(`ssh_tunnel.host_ref`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "driver",
+              "sslmode"
+            ],
+            "type": "object"
+          },
+          "DriverKind": {
+            "description": "내장 드라이버. 설정 파일의 `driver` 값이다.\n\n드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가\n이 enum 을 고치지 않고 들어올 자리다.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite",
+              "redis"
+            ],
+            "type": "string"
+          },
+          "SslMode": {
+            "description": "libpq 의 `sslmode` 뜻 그대로(결정 M3-D10). 드라이버마다 받는 값은 [`crate::Capabilities::ssl_modes`].",
+            "oneOf": [
+              {
+                "const": "disable",
+                "description": "TLS 없음.",
+                "type": "string"
+              },
+              {
+                "const": "allow",
+                "description": "평문을 먼저, 서버가 요구하면 TLS(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "prefer",
+                "description": "TLS 를 먼저, 안 되면 평문(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "require",
+                "description": "TLS 필수, 인증서를 검증하지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "verify-ca",
+                "description": "TLS 필수, 인증서 사슬만 검증(이름은 보지 않는다).",
+                "type": "string"
+              },
+              {
+                "const": "verify-full",
+                "description": "TLS 필수, 사슬과 이름 모두 검증.",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2867,14 +3069,27 @@
           "projectId": {
             "type": "string"
           },
+          "target": {
+            "$ref": "#/$defs/DbSecretTarget",
+            "description": "창이 사람에게 보여 준 대상(`db.connection.get` · `3101` 의 `target`). 지금 설정과 다르면 conflict."
+          },
           "value": {
             "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정을 그 워크트리에서 읽는다.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "projectId",
           "connectionId",
           "key",
+          "target",
           "value"
         ],
         "type": "object"

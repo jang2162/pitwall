@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::secret::{EnvLookup, SecretStore};
+use crate::trust::{Approvals, active_root};
 
 /// 설정 계층의 파일 id 앞부분(`db/<id>`).
 pub const FILE_PREFIX: &str = "db/";
@@ -494,9 +495,12 @@ pub enum DbConnectionState {
     Untrusted,
     /// 설정 파일이 틀렸다.
     Invalid { message: String },
-    /// 키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 다시 물어 `db.secret.set` 한다.
+    /// 키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 이전(`previous`) → 지금(`target`) 대상을
+    /// 보이고 다시 물어 `db.secret.set` 한다.
     SecretRequired {
         reason: crate::secret::SecretMissing,
+        target: Box<crate::secret::DbSecretTarget>,
+        previous: Option<Box<crate::secret::DbSecretTarget>>,
     },
     /// 열기 전에 사람의 확인이 필요하다(`db.connection.approve`).
     ApprovalRequired {
@@ -531,6 +535,8 @@ pub struct DbConnectionList {
     pub connections: Vec<DbConnectionEntry>,
     /// 프로젝트 설정을 읽지 못한 이유(그러면 목록이 비어 있다). 설정 계층은 파일 하나라도 깨지면 전체가 실패다(03 「데이터 저장」).
     pub problem: Option<String>,
+    /// 확인 기록(`$DATA/projects/<id>/db.json`)을 읽지 못한 이유. 그동안은 모든 확인을 다시 묻고, 고치거나 지울 때까지 기록하지 않는다.
+    pub state_problem: Option<String>,
     pub trusted: bool,
 }
 
@@ -540,6 +546,9 @@ pub struct DbConnectionList {
 #[serde(rename_all = "camelCase")]
 pub struct DbProjectParams {
     pub project_id: String,
+    /// 활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다.
+    #[serde(default)]
+    pub worktree: Option<String>,
 }
 
 #[derive(
@@ -548,6 +557,9 @@ pub struct DbProjectParams {
 #[serde(rename_all = "camelCase")]
 pub struct DbConnectionParams {
     pub project_id: String,
+    /// 활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다.
+    #[serde(default)]
+    pub worktree: Option<String>,
     pub connection_id: String,
 }
 
@@ -557,9 +569,12 @@ pub struct DbConnectionParams {
 #[serde(rename_all = "camelCase")]
 pub struct DbConnectionUpsertParams {
     pub project_id: String,
+    /// 활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다.
+    #[serde(default)]
+    pub worktree: Option<String>,
     pub connection_id: String,
     pub config: DbConnectionConfig,
-    /// 없으면 공유 파일.
+    /// 없으면 공유 파일(활성 워크트리의 것). 개인 파일은 프로젝트 하나에 하나 — 메인 체크아웃(개인 전용 모드면 그 폴더)에 쓴다.
     #[serde(default)]
     pub location: DbConfigLocation,
 }
@@ -617,10 +632,13 @@ pub struct Connections {
     pub(crate) secrets: Arc<dyn SecretStore>,
     pub(crate) env: Arc<dyn EnvLookup>,
     /// 프로젝트마다 마지막으로 본 연결 파일의 병합 값(`config.changed` 를 바뀐 것만 내려고).
-    seen: Mutex<HashMap<String, BTreeMap<String, Value>>>,
+    seen: Mutex<HashMap<SeenKey, BTreeMap<String, Value>>>,
     /// 설정 파일 · 확인 기록 쓰기를 한 줄로 세운다(같은 파일을 두 요청이 읽고 고쳐 쓰지 않게).
     pub(crate) writing: Mutex<()>,
 }
+
+/// (프로젝트 id, 활성 워크트리) — 워크트리마다 공유 설정이 다를 수 있다.
+type SeenKey = (String, Option<String>);
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -673,13 +691,28 @@ pub(crate) struct LoadedConnection {
 /// 프로젝트의 연결 설정 파일들.
 pub(crate) struct Loaded {
     pub project: Project,
+    /// 활성 워크트리 안의 프로젝트 루트(없으면 주 루트). 상대 SQLite · 인증서 경로와 런타임 환경의 기준.
+    pub root: PathBuf,
+    /// 활성 워크트리의 설정(공유 파일을 쓰는 곳).
     pub source: ConfigSource,
+    /// 개인 파일(`.local.toml`)을 쓰는 폴더 — 메인 체크아웃(개인 전용 모드면 그 폴더). 프로젝트 하나에 하나.
+    pub local_dir: PathBuf,
     pub connections: Result<Vec<LoadedConnection>, String>,
 }
 
 impl Loaded {
     pub fn get(&self, id: &str) -> Option<&LoadedConnection> {
         self.connections.as_ref().ok()?.iter().find(|c| c.id == id)
+    }
+
+    /// 대소문자만 다른 다른 연결(대소문자를 가리지 않는 파일 시스템에서는 같은 파일이다).
+    pub fn case_twin(&self, id: &str) -> Option<&str> {
+        self.connections
+            .as_ref()
+            .ok()?
+            .iter()
+            .find(|c| c.id != id && c.id.eq_ignore_ascii_case(id))
+            .map(|c| c.id.as_str())
     }
 }
 
@@ -737,12 +770,23 @@ impl Connections {
     }
 
     /// 프로젝트의 연결 설정을 읽는다(디스크에 쓰지 않는다). 설정을 읽지 못하면 `connections` 가 그 이유다.
-    pub(crate) fn load(&self, project_id: &str) -> Result<Loaded, RpcError> {
+    pub(crate) fn load(
+        &self,
+        project_id: &str,
+        worktree: Option<&str>,
+    ) -> Result<Loaded, RpcError> {
         let host = self.host()?;
         let project = host.projects.get(project_id).map_err(registry_error)?;
+        let root = active_root(&project, worktree)?;
+        let config_error = |e: pw_core::config::ConfigError| RpcError::internal(e.to_string());
         let source = project
+            .config_source(&host.paths, &root)
+            .map_err(config_error)?;
+        let local_dir = project
             .config_source(&host.paths, project.root())
-            .map_err(|e| RpcError::internal(e.to_string()))?;
+            .map_err(config_error)?
+            .dir()
+            .to_path_buf();
         let connections = source
             .clone()
             .without_writes()
@@ -751,23 +795,25 @@ impl Connections {
             .map_err(|e| e.to_string());
         if let Ok(list) = &connections {
             // 파일 감시보다 목록 요청이 먼저 바뀐 값을 봐도 `config.changed` 를 낸다 — 열린 연결(M3-05)이 놓치지 않게.
-            self.announce(project_id, list);
+            self.announce(project_id, worktree, list);
         }
         Ok(Loaded {
             project,
+            root,
             source,
+            local_dir,
             connections,
         })
     }
 
     /// 본 값을 기억하고, 전에 본 적이 있으면 바뀐 연결 id 를 돌려준다.
-    fn remember(&self, project_id: &str, list: &[LoadedConnection]) -> Vec<String> {
+    fn remember(&self, key: SeenKey, list: &[LoadedConnection]) -> Vec<String> {
         let now: BTreeMap<String, Value> = list
             .iter()
             .map(|c| (c.id.clone(), c.value.clone()))
             .collect();
         let mut seen = lock(&self.seen);
-        let Some(before) = seen.insert(project_id.to_owned(), now.clone()) else {
+        let Some(before) = seen.insert(key, now.clone()) else {
             return Vec::new();
         };
         let mut changed: Vec<String> = now
@@ -781,8 +827,8 @@ impl Connections {
     }
 
     /// 본 값을 기억하고, 전에 본 값과 다른 연결을 `config.changed`(프로젝트 범위)로 낸다.
-    fn announce(&self, project_id: &str, list: &[LoadedConnection]) {
-        let changed = self.remember(project_id, list);
+    fn announce(&self, project_id: &str, worktree: Option<&str>, list: &[LoadedConnection]) {
+        let changed = self.remember((project_id.to_owned(), worktree.map(str::to_owned)), list);
         if changed.is_empty() {
             return;
         }
@@ -806,36 +852,43 @@ impl Connections {
 
     /// 프로젝트의 연결 설정을 다시 읽어, 전에 본 값과 다른 연결을 `config.changed` 로 낸다. 한 번도 읽지 않은 프로젝트는 건너뛴다
     /// (아무도 목록을 들고 있지 않다).
-    pub fn refresh(&self, project_id: &str) {
+    pub fn refresh(&self, project_id: &str, worktree: Option<&str>) {
         let Ok(host) = self.host() else { return };
-        if !lock(&self.seen).contains_key(project_id) {
+        let key = (project_id.to_owned(), worktree.map(str::to_owned));
+        if !lock(&self.seen).contains_key(&key) {
             return;
         }
         let Ok(project) = host.projects.get(project_id) else {
             return;
         };
-        let Ok(source) = project.config_source(&host.paths, project.root()) else {
+        let Ok(root) = active_root(&project, worktree) else {
+            return;
+        };
+        let Ok(source) = project.config_source(&host.paths, &root) else {
             return;
         };
         let Ok(snapshot) = source.without_writes().load() else {
             // 깨진 파일은 다음 목록 요청이 `problem` 으로 보인다. 이전 값을 그대로 둔다(설정 계층의 「이전 설정 유지」).
             return;
         };
-        self.announce(project_id, &connections_of(&snapshot));
+        self.announce(project_id, worktree, &connections_of(&snapshot));
     }
 
+    /// `approvals` 는 신뢰한 프로젝트에서만 있다(미신뢰면 상태를 정하지 않는다).
     fn entry(
         &self,
         loaded: &Loaded,
         connection: &LoadedConnection,
-        trusted: bool,
+        approvals: Option<&Approvals>,
     ) -> DbConnectionEntry {
-        let state = match &connection.config {
-            Err(message) => DbConnectionState::Invalid {
+        let state = match (&connection.config, approvals) {
+            (Err(message), _) => DbConnectionState::Invalid {
                 message: message.clone(),
             },
-            Ok(_) if !trusted => DbConnectionState::Untrusted,
-            Ok(config) => self.readiness(&loaded.project, &connection.id, config),
+            (Ok(_), None) => DbConnectionState::Untrusted,
+            (Ok(config), Some(approvals)) => {
+                self.readiness(loaded, &connection.id, config, approvals)
+            }
         };
         DbConnectionEntry {
             id: connection.id.clone(),
@@ -854,20 +907,28 @@ impl Connections {
 
     /// `db.connection.list`.
     pub fn list(&self, params: &DbProjectParams) -> Result<DbConnectionList, RpcError> {
-        let loaded = self.load(&params.project_id)?;
+        let loaded = self.load(&params.project_id, params.worktree.as_deref())?;
         let trusted = self.trusted(&params.project_id);
+        let (approvals, state_problem) = if trusted {
+            let (approvals, problem) = self.approvals(&params.project_id)?;
+            (Some(approvals), problem)
+        } else {
+            (None, None)
+        };
         Ok(match &loaded.connections {
             Ok(list) => DbConnectionList {
                 connections: list
                     .iter()
-                    .map(|c| self.entry(&loaded, c, trusted))
+                    .map(|c| self.entry(&loaded, c, approvals.as_ref()))
                     .collect(),
                 problem: None,
+                state_problem,
                 trusted,
             },
             Err(problem) => DbConnectionList {
                 connections: Vec::new(),
                 problem: Some(problem.clone()),
+                state_problem,
                 trusted,
             },
         })
@@ -876,7 +937,7 @@ impl Connections {
     /// `db.connection.get`.
     pub fn get(&self, params: &DbConnectionParams) -> Result<DbConnectionEntry, RpcError> {
         check_connection_id(&params.connection_id)?;
-        let loaded = self.load(&params.project_id)?;
+        let loaded = self.load(&params.project_id, params.worktree.as_deref())?;
         if let Err(problem) = &loaded.connections {
             return Err(RpcError::internal(format!(
                 "cannot read the project config: {problem}"
@@ -885,8 +946,12 @@ impl Connections {
         let connection = loaded
             .get(&params.connection_id)
             .ok_or_else(|| not_found(&params.connection_id))?;
-        let trusted = self.trusted(&params.project_id);
-        Ok(self.entry(&loaded, connection, trusted))
+        let approvals = if self.trusted(&params.project_id) {
+            Some(self.approvals(&params.project_id)?.0)
+        } else {
+            None
+        };
+        Ok(self.entry(&loaded, connection, approvals.as_ref()))
     }
 
     /// `db.connection.upsert`.
@@ -900,8 +965,21 @@ impl Connections {
         validate(&params.config).map_err(RpcError::invalid_params)?;
         {
             let _writing = lock(&self.writing);
-            let loaded = self.load(&params.project_id)?;
-            let file = config_file(&loaded.source, &params.connection_id, params.location);
+            let loaded = self.load(&params.project_id, params.worktree.as_deref())?;
+            if let Some(twin) = loaded.case_twin(&params.connection_id) {
+                return Err(RpcError::new(
+                    code::CONFLICT,
+                    format!(
+                        "db connection `{twin}` differs from `{}` only in case; edit `{twin}` instead",
+                        params.connection_id
+                    ),
+                ));
+            }
+            let dir = match params.location {
+                DbConfigLocation::Shared => loaded.source.dir(),
+                DbConfigLocation::Local => loaded.local_dir.as_path(),
+            };
+            let file = config_file(dir, &params.connection_id, params.location);
             let mut doc = match fs::read_to_string(&file) {
                 Ok(text) => text.parse::<toml_edit::DocumentMut>().map_err(|e| {
                     RpcError::invalid_params(format!("cannot rewrite {}: {e}", file.display()))
@@ -923,9 +1001,10 @@ impl Connections {
             write_file(&file, &doc.to_string())?;
             tracing::info!(target: "pw_db", project = %params.project_id, connection = %params.connection_id, path = %file.display(), "db connection config written");
         }
-        self.refresh(&params.project_id);
+        self.refresh(&params.project_id, params.worktree.as_deref());
         self.get(&DbConnectionParams {
             project_id: params.project_id.clone(),
+            worktree: params.worktree.clone(),
             connection_id: params.connection_id.clone(),
         })
     }
@@ -940,23 +1019,39 @@ impl Connections {
         check_connection_id(&params.connection_id)?;
         {
             let _writing = lock(&self.writing);
-            let loaded = self.load(&params.project_id)?;
-            let mut removed = false;
-            for location in [DbConfigLocation::Shared, DbConfigLocation::Local] {
-                let file = config_file(&loaded.source, &params.connection_id, location);
-                match fs::remove_file(&file) {
-                    Ok(()) => removed = true,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(io_error("remove", &file, &e)),
-                }
-            }
-            if !removed {
+            let loaded = self.load(&params.project_id, params.worktree.as_deref())?;
+            // 정확히 그 id 의 연결만 — 대소문자를 가리지 않는 파일 시스템에서 `prod` 로 `Prod.toml` 을 지우지 않는다.
+            if loaded.get(&params.connection_id).is_none() {
                 return Err(not_found(&params.connection_id));
+            }
+            let files = [
+                config_file(
+                    loaded.source.dir(),
+                    &params.connection_id,
+                    DbConfigLocation::Shared,
+                ),
+                config_file(
+                    loaded.source.dir(),
+                    &params.connection_id,
+                    DbConfigLocation::Local,
+                ),
+                config_file(
+                    &loaded.local_dir,
+                    &params.connection_id,
+                    DbConfigLocation::Local,
+                ),
+            ];
+            for file in &files {
+                match fs::remove_file(file) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(io_error("remove", file, &e)),
+                }
             }
             self.forget(&params.project_id, &params.connection_id)?;
             tracing::info!(target: "pw_db", project = %params.project_id, connection = %params.connection_id, "db connection deleted");
         }
-        self.refresh(&params.project_id);
+        self.refresh(&params.project_id, params.worktree.as_deref());
         Ok(())
     }
 }
@@ -972,17 +1067,13 @@ fn io_error(what: &str, path: &Path, e: &std::io::Error) -> RpcError {
     RpcError::internal(format!("cannot {what} {}: {e}", path.display()))
 }
 
-/// 연결 설정 파일 경로. 개인 파일도 프로젝트(또는 개인 전용) 설정 폴더에 쓴다 — 메인 체크아웃의 폴백 자리에는 쓰지 않는다.
-pub(crate) fn config_file(
-    source: &ConfigSource,
-    connection_id: &str,
-    location: DbConfigLocation,
-) -> PathBuf {
+/// 설정 폴더(`.pitwall/` 또는 개인 전용 폴더) 안의 연결 설정 파일 경로.
+pub(crate) fn config_file(dir: &Path, connection_id: &str, location: DbConfigLocation) -> PathBuf {
     let name = match location {
         DbConfigLocation::Shared => format!("{connection_id}.toml"),
         DbConfigLocation::Local => format!("{connection_id}.local.toml"),
     };
-    source.dir().join("db").join(name)
+    dir.join("db").join(name)
 }
 
 /// 같은 폴더의 임시 파일에 쓰고 rename 한다. 있는 파일은 `pw_core` 의 설정 쓰기(심링크면 대상을 고치고 권한을 옮긴다)로.
@@ -1018,6 +1109,9 @@ pub fn subscribe_files(bus: &EventBus) -> Subscription {
 
 #[derive(Debug, Deserialize)]
 struct FsChanged {
+    /// 그 루트를 연 창의 활성 워크트리.
+    #[serde(default)]
+    worktree: Option<String>,
     #[serde(default)]
     paths: Vec<String>,
     #[serde(default)]
@@ -1037,7 +1131,7 @@ fn touches_config(paths: &[String]) -> bool {
 /// 프로젝트를 모두 다시 읽는다.
 pub async fn follow_files(mut events: Subscription, connections: Arc<Connections>) {
     while let Some(received) = events.recv().await {
-        let projects: Vec<String> = match received {
+        let keys: Vec<SeenKey> = match received {
             Received::Event(event) => {
                 let Scope::Project(project) = &event.scope else {
                     continue;
@@ -1048,7 +1142,7 @@ pub async fn follow_files(mut events: Subscription, connections: Arc<Connections
                 if !changed.rescan && !touches_config(&changed.paths) {
                     continue;
                 }
-                vec![project.clone()]
+                vec![(project.clone(), changed.worktree)]
             }
             Received::Lagged(n) => {
                 tracing::warn!(target: "pw_db", dropped = n, "missed file watch events");
@@ -1057,8 +1151,8 @@ pub async fn follow_files(mut events: Subscription, connections: Arc<Connections
         };
         let c = Arc::clone(&connections);
         let _ = tokio::task::spawn_blocking(move || {
-            for project in projects {
-                c.refresh(&project);
+            for (project, worktree) in keys {
+                c.refresh(&project, worktree.as_deref());
             }
         })
         .await;

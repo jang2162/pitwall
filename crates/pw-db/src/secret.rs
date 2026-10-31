@@ -4,6 +4,10 @@
 //! - **대상 묶기**: 항목에는 값과 함께 저장할 때의 대상([`DbSecretTarget`] — 드라이버 · 호스트 · 포트 · 사용자 · 터널 `host_ref` ·
 //!   `sslmode` 와 인증서 경로)을 적는다. 쓸 때 지금 설정의 대상과 다르면 그 비밀을 쓰지 않고 「비밀 필요」 로 답한다 — 커밋된 설정을
 //!   누가 바꿔 호스트를 갈아 끼우거나 TLS 를 내려도 저장한 비밀이 사람 모르게 나가지 않는다.
+//!   비밀이 필요하다는 답(`3101`)은 지금 대상과, 대상이 바뀐 것이면 저장할 때의 대상을 함께 싣는다(값은 싣지 않는다). `db.secret.set` 은
+//!   창이 사람에게 보여 준 대상을 받아 지금 설정과 다르면 거절한다 — 사람이 본 적 없는 대상에 묶이지 않는다.
+//! - 목록(`db.connection.list`)은 키체인을 읽지 않는다: 저장할 때 대상의 사본을 확인 기록(`db.json`, [`crate::trust`])에도 적고 목록은
+//!   그것으로 상태를 정한다. 값과 대상의 정본은 키체인 항목이고, 연결을 열 때(`resolve`)만 읽는다.
 //! - 값은 RPC 응답 · 로그 · 알림 어디에도 나가지 않는다: 값은 [`Secret`] 으로만 들고(`Debug` 가 가린다), 이 모듈의 로그는 계정 ·
 //!   이유만 적는다. `db.secret.set` 의 입력 타입도 `Debug` 에서 값을 가린다.
 //! - 키체인은 [`SecretStore`] 뒤에 있다. 앱은 [`KeyringStore`](OS 키체인), 시험은 [`MemorySecretStore`] 를 쓴다 — 시험이 사람의
@@ -17,7 +21,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use pw_db_types::{DriverKind, Secret, SslMode};
-use pw_rpc::{ConnectionScope, Router, RpcError, rpc_method};
+use pw_rpc::{ConnectionScope, Router, RpcError, code as rpc_code, rpc_method};
 use pw_runtime::Runtime;
 use serde::{Deserialize, Serialize};
 
@@ -274,11 +278,22 @@ impl EnvLookup for RuntimeEnv {
 /// 키체인 항목 하나를 읽은 결과.
 pub(crate) enum Stored {
     Usable(Secret),
-    Unusable(SecretMissing),
+    /// 쓸 수 없다. 대상이 바뀐 것이면 저장할 때의 대상(값이 아니라 대상만).
+    Unusable(SecretMissing, Option<DbSecretTarget>),
+}
+
+/// 키체인 항목(값 + 대상의 JSON)의 크기 상한. Windows Credential Manager 는 UTF-16 으로 2560 바이트까지 받는다
+/// (`CRED_MAX_CREDENTIAL_BLOB_SIZE`) — 넘으면 저장 순간에 「너무 깁니다」 로 거절한다.
+pub(crate) fn item_fits(raw: &str, windows: bool) -> bool {
+    if windows {
+        raw.encode_utf16().count() * 2 <= 2560
+    } else {
+        raw.len() <= SECRET_LIMIT + 4096
+    }
 }
 
 impl Connections {
-    /// 저장한 비밀을 지금 설정의 대상으로 쓸 수 있는가. 대상이 다르면 값을 버린다.
+    /// 저장한 비밀을 지금 설정의 대상으로 쓸 수 있는가. 대상이 다르면 값을 버리고 저장할 때의 대상을 돌려준다.
     pub(crate) fn stored_secret(
         &self,
         project_id: &str,
@@ -289,40 +304,42 @@ impl Connections {
         let account = account(project_id, connection_id, key);
         let raw = match self.secrets.get(&account) {
             Ok(Some(raw)) => raw,
-            Ok(None) => return Stored::Unusable(SecretMissing::Missing),
+            Ok(None) => return Stored::Unusable(SecretMissing::Missing, None),
             Err(e) => {
                 tracing::warn!(target: "pw_db", %account, %e, "cannot read the keychain");
-                return Stored::Unusable(SecretMissing::Unavailable);
+                return Stored::Unusable(SecretMissing::Unavailable, None);
             }
         };
         let item: Item = match serde_json::from_str(raw.expose()) {
             Ok(item) => item,
             Err(_) => {
                 tracing::warn!(target: "pw_db", %account, "unreadable keychain item; asking again");
-                return Stored::Unusable(SecretMissing::Missing);
+                return Stored::Unusable(SecretMissing::Missing, None);
             }
         };
         if item.target != DbSecretTarget::of(config) {
             tracing::info!(target: "pw_db", %account, "the connection target changed since the secret was saved; not using it");
-            return Stored::Unusable(SecretMissing::TargetChanged);
+            return Stored::Unusable(SecretMissing::TargetChanged, Some(item.target));
         }
         Stored::Usable(item.value)
     }
 
-    /// `db.secret.set`.
+    /// `db.secret.set`. 신뢰한 프로젝트만 — 미신뢰 설정의 대상으로 키체인 항목을 만들지 않는다.
     pub fn set_secret(
         &self,
         scope: &ConnectionScope,
         params: &DbSecretSetParams,
     ) -> Result<(), RpcError> {
         require_project_window(scope, &params.project_id)?;
+        let trusted = self.trust_gate(&params.project_id, params.worktree.as_deref())?;
         check_connection_id(&params.connection_id)?;
         if params.value.expose().len() > SECRET_LIMIT {
             return Err(RpcError::invalid_params(format!(
                 "a secret is at most {SECRET_LIMIT} bytes"
             )));
         }
-        let loaded = self.load(&params.project_id)?;
+        let _writing = lock(&self.writing);
+        let loaded = self.load(trusted.id(), params.worktree.as_deref())?;
         let connection = loaded
             .get(&params.connection_id)
             .ok_or_else(|| not_found(&params.connection_id))?;
@@ -334,16 +351,38 @@ impl Connections {
                 "the connection does not keep its password in the keychain (`password = { secret_ref = \"keychain\" }`)",
             ));
         }
+        // 창이 보여 준 대상과 지금 설정이 다르면(그 사이 `git pull` 등) 사람이 본 적 없는 대상에 묶지 않는다.
+        let target = DbSecretTarget::of(config);
+        if target != params.target {
+            return Err(RpcError::new(
+                rpc_code::CONFLICT,
+                "the connection target changed since it was shown; ask again",
+            )
+            .with_data(
+                serde_json::json!({ "connectionId": params.connection_id, "target": target }),
+            ));
+        }
+        // 목록의 상태 판정이 쓰는 대상 사본(db.json)을 쓸 수 있는지 먼저 본다 — 깨진 기록은 덮지 않는다.
+        self.approvals_for_write(trusted.id())?;
         let item = Item {
             v: 1,
-            target: DbSecretTarget::of(config),
+            target: target.clone(),
             value: params.value.clone(),
         };
         let raw = serde_json::to_string(&item).map_err(|e| RpcError::internal(e.to_string()))?;
+        if !item_fits(&raw, cfg!(windows)) {
+            return Err(RpcError::invalid_params(
+                "the secret is too long for this system's keychain",
+            ));
+        }
         let account = account(&params.project_id, &params.connection_id, params.key);
         self.secrets
             .set(&account, &Secret::new(raw))
             .map_err(|e| RpcError::internal(format!("cannot write the keychain: {e}")))?;
+        let id = params.connection_id.clone();
+        self.update_approvals(trusted.id(), move |a| {
+            a.secrets.insert(id, target);
+        })?;
         tracing::info!(target: "pw_db", %account, "db secret saved");
         Ok(())
     }
@@ -361,7 +400,11 @@ impl Connections {
             .delete(&account)
             .map_err(|e| RpcError::internal(format!("cannot write the keychain: {e}")))?;
         tracing::info!(target: "pw_db", %account, "db secret cleared");
-        Ok(())
+        let _writing = lock(&self.writing);
+        let id = params.connection_id.clone();
+        self.update_approvals(&params.project_id, move |a| {
+            a.secrets.remove(&id);
+        })
     }
 
     /// 연결을 지울 때 그 연결의 비밀을 모두 지운다.
@@ -379,8 +422,13 @@ impl Connections {
 #[serde(rename_all = "camelCase")]
 pub struct DbSecretSetParams {
     pub project_id: String,
+    /// 활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정을 그 워크트리에서 읽는다.
+    #[serde(default)]
+    pub worktree: Option<String>,
     pub connection_id: String,
     pub key: DbSecretKey,
+    /// 창이 사람에게 보여 준 대상(`db.connection.get` · `3101` 의 `target`). 지금 설정과 다르면 conflict.
+    pub target: DbSecretTarget,
     #[specta(type = String)]
     #[schemars(with = "String")]
     pub value: Secret,
@@ -390,8 +438,10 @@ impl fmt::Debug for DbSecretSetParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DbSecretSetParams")
             .field("project_id", &self.project_id)
+            .field("worktree", &self.worktree)
             .field("connection_id", &self.connection_id)
             .field("key", &self.key)
+            .field("target", &self.target)
             .field("value", &self.value)
             .finish()
     }
@@ -408,8 +458,9 @@ pub struct DbSecretClearParams {
 }
 
 rpc_method! {
-    /// 비밀을 키체인에 넣는다 — 지금 설정의 대상(드라이버 · 호스트 · 포트 · 사용자 · 터널 · `sslmode` 와 인증서 경로)과 함께.
-    /// 연결 설정이 `password = { secret_ref = "keychain" }` 이어야 한다. 그 프로젝트 창의 연결만. 값은 돌려주지 않는다.
+    /// 비밀을 키체인에 넣는다 — 창이 보여 준 대상(드라이버 · 호스트 · 포트 · 사용자 · 터널 · `sslmode` 와 인증서 경로)과 함께.
+    /// 그 대상이 지금 설정과 다르면 conflict. 연결 설정이 `password = { secret_ref = "keychain" }` 이어야 한다. 그 프로젝트 창의
+    /// 연결 + 신뢰한 프로젝트만. 값은 돌려주지 않는다.
     pub DbSecretSet: "db.secret.set" {
         params: DbSecretSetParams,
         result: (),
@@ -444,4 +495,19 @@ pub(crate) fn register(router: &mut Router, connections: Arc<Connections>) {
             let (c, scope) = (Arc::clone(&clear), ctx.scope().clone());
             blocking(move || c.clear_secret(&scope, &params))
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::item_fits;
+
+    /// Windows Credential Manager 의 한도(UTF-16 2560 바이트)를 넘는 항목은 저장 전에 거절한다. 다른 OS 는 값 상한 + 대상.
+    #[test]
+    fn a_keychain_item_fits_the_platform_limit() {
+        assert!(item_fits(&"a".repeat(1280), true));
+        assert!(!item_fits(&"a".repeat(1281), true));
+        assert!(!item_fits(&"가".repeat(1281), true));
+        assert!(item_fits(&"a".repeat(40_000), false));
+        assert!(!item_fits(&"a".repeat(80_000), false));
+    }
 }

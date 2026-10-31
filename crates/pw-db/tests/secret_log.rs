@@ -41,9 +41,20 @@ async fn secret_values_never_reach_logs_or_responses() {
         outcome
     };
 
-    let set =
-        json!({ "projectId": f.id, "connectionId": "prod", "key": "password", "value": PLANTED });
+    let prod = w
+        .call(
+            "db.connection.get",
+            json!({ "projectId": f.id, "connectionId": "prod" }),
+        )
+        .await
+        .unwrap();
+    let set = json!({ "projectId": f.id, "connectionId": "prod", "key": "password",
+                      "target": common::target_of(&prod["config"]), "value": PLANTED });
     call(&mut w, "db.secret.set", set.clone()).await.unwrap();
+    // 창이 보여 준 대상이 낡은 비밀 쓰기(거절)도 값을 싣는다.
+    let mut stale = set.clone();
+    stale["target"]["host"] = json!("stale.example");
+    call(&mut w, "db.secret.set", stale).await.unwrap_err();
     // 다른 창 · 웰컴의 비밀 쓰기(거절)도 값을 싣는다.
     let mut other = f.connect(ConnectionScope::Project(f.other.clone()));
     call(&mut other, "db.secret.set", set.clone())
@@ -71,10 +82,22 @@ async fn secret_values_never_reach_logs_or_responses() {
     )
     .await
     .unwrap();
-    let gate = f.connections.trust_gate(&f.id).unwrap();
+    let gate = f.connections.trust_gate(&f.id, None).unwrap();
     let resolved = f.connections.resolve(&gate, "prod").unwrap();
     assert_eq!(resolved.spec.password.as_ref().unwrap().expose(), PLANTED);
     tracing::debug!(target: "pw_db", ?resolved, "a resolved connection in a debug log");
+    // env 참조는 처음에도 확인을 받는다.
+    let e = f.connections.resolve(&gate, "ci").unwrap_err();
+    responses.borrow_mut().push(format!("{e:?}"));
+    let mut approval = e.data.as_ref().unwrap()["request"].clone();
+    approval.as_object_mut().unwrap().remove("previous");
+    call(
+        &mut w,
+        "db.connection.approve",
+        json!({ "projectId": f.id, "connectionId": "ci", "approval": approval }),
+    )
+    .await
+    .unwrap();
     let resolved = f.connections.resolve(&gate, "ci").unwrap();
     assert_eq!(
         resolved.spec.password.as_ref().unwrap().expose(),

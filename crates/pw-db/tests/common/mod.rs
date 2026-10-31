@@ -203,3 +203,49 @@ sslmode = "verify-full"
 [ssh_tunnel]
 host_ref = "bastion"
 "#;
+
+/// `git worktree add` 가 만드는 모양을 손으로 만든다: `main`(메인 체크아웃, `.git` 폴더를 만든다)의 연결 워크트리 `wt`. 돌려주는 것은
+/// 워크트리 꼭대기(실제 경로).
+pub fn fake_worktree(main: &Path, wt: &Path) -> PathBuf {
+    let admin = main.join(".git/worktrees/wt");
+    fs::create_dir_all(&admin).unwrap();
+    fs::write(admin.join("commondir"), "../..\n").unwrap();
+    fs::create_dir_all(wt).unwrap();
+    fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+    fs::write(
+        admin.join("gitdir"),
+        format!("{}\n", wt.join(".git").display()),
+    )
+    .unwrap();
+    simplify(fs::canonicalize(wt).unwrap())
+}
+
+/// 연결 설정(JSON)에서 창이 사람에게 보일 대상 — `db.secret.set` 의 `target`.
+pub fn target_of(config: &Value) -> Value {
+    let config: pw_db::config::DbConnectionConfig = serde_json::from_value(config.clone()).unwrap();
+    serde_json::to_value(pw_db::secret::DbSecretTarget::of(&config)).unwrap()
+}
+
+impl Conn {
+    /// 지금 설정의 대상으로 비밀번호를 넣는다(창이 대상을 보여 주고 넣는 흐름).
+    pub async fn set_password(
+        &mut self,
+        project: &str,
+        connection: &str,
+        value: &str,
+    ) -> Result<Value, RpcError> {
+        let entry = self
+            .call(
+                "db.connection.get",
+                json!({ "projectId": project, "connectionId": connection }),
+            )
+            .await?;
+        let target = target_of(&entry["config"]);
+        self.call(
+            "db.secret.set",
+            json!({ "projectId": project, "connectionId": connection, "key": "password",
+                    "target": target, "value": value }),
+        )
+        .await
+    }
+}
