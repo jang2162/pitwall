@@ -255,6 +255,65 @@ describe("sslmode default (decision M3-D10)", () => {
   });
 });
 
+describe("sslmode of a saved connection (review H1)", () => {
+  it("a default the dialog saved follows the host again: localhost → remote saves verify-full", async () => {
+    const config: DbConnectionConfig = {
+      name: "p",
+      driver: "postgres",
+      host: "localhost",
+      sslmode: "disable",
+      password: { kind: "keychain" },
+    };
+    answers["db.connection.list"] = () => list({ connections: [entryOf("p", config)] });
+    await open("p");
+    await type(field("host"), "db.example.com");
+    expect(sslmode()).toBe("verify-full");
+    expect(testid("db-conn-ssl-summary")).toBeNull();
+    await type(testid<HTMLInputElement>("db-conn-password"), SECRET);
+    await submit();
+    expect(calledWith("db.connection.upsert")[0]!.params.config).toMatchObject({
+      host: "db.example.com",
+      sslmode: "verify-full",
+    });
+    expect(calledWith("db.secret.set")[0]!.params.target).toMatchObject({
+      host: "db.example.com",
+      sslmode: "verify-full",
+    });
+  });
+
+  it("a mode the person chose stays, and plaintext to a remote host is shown beside [Save]", async () => {
+    const chosen: DbConnectionConfig = {
+      name: "p",
+      driver: "postgres",
+      host: "localhost",
+      sslmode: "require",
+    };
+    answers["db.connection.list"] = () => list({ connections: [entryOf("p", chosen)] });
+    await open("p");
+    await type(field("host"), "db.example.com");
+    expect(sslmode()).toBe("require");
+    act(() => root?.unmount());
+    root = undefined;
+    document.body.innerHTML = "";
+
+    const remotePlain: DbConnectionConfig = {
+      name: "q",
+      driver: "postgres",
+      host: "db.internal",
+      sslmode: "disable",
+    };
+    answers["db.connection.list"] = () => list({ connections: [entryOf("q", remotePlain)] });
+    await open("q");
+    expect(sslmode()).toBe("disable");
+    // 일반 탭에 있어도 [저장] 옆에 보인다(SSL 탭은 숨어 있다).
+    expect(document.querySelector<HTMLElement>("[data-panel=ssl]")!.hidden).toBe(true);
+    const summary = testid("db-conn-ssl-summary")!;
+    expect(summary.dataset.warning).toBe("plaintext");
+    expect(summary.textContent).toBe(T.ssl.plaintext);
+    expect(summary.closest("[hidden]")).toBeNull();
+  });
+});
+
 describe("sslmode warnings and the driver's modes", () => {
   it("require and prefer warn that the server certificate is not verified", async () => {
     await open();
@@ -302,6 +361,12 @@ describe("sslmode warnings and the driver's modes", () => {
     await choose(field("sslmode"), "prefer");
     await choose(field("driver"), "redis");
     expect(testid("db-conn-ssl-unsupported")).toBeTruthy();
+    // 다른 탭에서도 [저장] 이 꺼진 까닭이 [저장] 옆에 보인다.
+    await tab("general");
+    const summary = testid("db-conn-ssl-summary")!;
+    expect(summary.dataset.warning).toBe("unsupported");
+    expect(summary.closest("[hidden]")).toBeNull();
+    expect(summary.textContent).toContain(T.ssl.unsupportedChosen);
     expect(testid<HTMLButtonElement>("db-conn-save")!.disabled).toBe(true);
     expect(testid<HTMLButtonElement>("db-conn-test")!.disabled).toBe(true);
   });
@@ -655,6 +720,40 @@ describe("SSH tunnel tab", () => {
       projectId: "p1",
       worktree: "/work/wt",
     });
+  });
+});
+
+describe("the ssh host list (review L1)", () => {
+  it("does not hold the form back: the form is drawn before ~/.ssh/config is read", async () => {
+    let answer: (v: unknown) => void = () => {};
+    answers["db.ssh.hosts"] = () => new Promise((resolve) => (answer = resolve));
+    await open();
+    await tab("ssh");
+    await click(field("tunnel"));
+    expect(document.body.textContent).toContain(T.loading);
+    expect(field<HTMLSelectElement>("hostPick")!.disabled).toBe(true);
+    await act(async () => answer({ hosts: ["bastion"] }));
+    expect([...field<HTMLSelectElement>("hostPick")!.options].map((o) => o.value)).toEqual([
+      "",
+      "bastion",
+    ]);
+  });
+
+  it("a saved destination from the list is shown as picked once the list arrives", async () => {
+    let answer: (v: unknown) => void = () => {};
+    answers["db.ssh.hosts"] = () => new Promise((resolve) => (answer = resolve));
+    const config: DbConnectionConfig = {
+      name: "p",
+      driver: "postgres",
+      host: "db.internal",
+      sshTunnel: { hostRef: "bastion" },
+    };
+    answers["db.connection.list"] = () => list({ connections: [entryOf("p", config)] });
+    await open("p");
+    await act(async () => answer({ hosts: ["bastion", "jump-eu"] }));
+    await tab("ssh");
+    expect(field<HTMLSelectElement>("hostPick")!.value).toBe("bastion");
+    expect(field("hostRef")!.readOnly).toBe(true);
   });
 });
 

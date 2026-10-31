@@ -108,7 +108,7 @@ db-conn-color-tag = { $tag ->
    *[other] { $tag }
 }
 db-conn-connect-timeout = Connect Timeout (seconds)
-db-conn-connect-timeout-hint = 10 seconds when empty
+db-conn-connect-timeout-hint = 1 to 600 seconds; 10 seconds when empty
 
 ## Save location.
 

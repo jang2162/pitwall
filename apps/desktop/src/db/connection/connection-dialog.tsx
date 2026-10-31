@@ -102,8 +102,15 @@ type Loaded = {
   /** 등록된 드라이버(읽지 못했으면 `undefined` — 그때는 값을 흐리게 하지 않고 Host 가 판정한다). */
   drivers: DbDriverEntry[] | undefined;
   list: DbConnectionList;
-  hosts: string[] | undefined;
+  /** `~/.ssh/config` 의 호스트 — 폼은 이것을 기다리지 않고 먼저 그린다(느린 홈 폴더 · 이상한 `Include` 에 막히지 않게). */
+  hosts: HostList;
 };
+
+/** 미신뢰 프로젝트는 읽지 않는다. 읽기 실패는 빈 목록이다. */
+export type HostList =
+  | { kind: "untrusted" }
+  | { kind: "loading" }
+  | { kind: "ready"; hosts: string[] };
 
 type Load =
   | { kind: "loading" }
@@ -146,20 +153,30 @@ export function ConnectionDialog({
           ),
           client.call("db.connection.list", base),
         ]);
-        const hosts = list.trusted
-          ? await client.call("db.ssh.hosts", base).then(
-              (r) => r.hosts,
-              (e: unknown) => {
-                console.warn("[db] ssh hosts unavailable", e);
-                return [];
-              },
-            )
-          : undefined;
+        if (stale) return;
+        setLoad({
+          kind: "ready",
+          loaded: {
+            fields: fieldsFromSchema(schema),
+            drivers,
+            list,
+            hosts: list.trusted ? { kind: "loading" } : { kind: "untrusted" },
+          },
+        });
+        if (!list.trusted) return;
+        const hosts = await client.call("db.ssh.hosts", base).then(
+          (r) => r.hosts,
+          (e: unknown) => {
+            console.warn("[db] ssh hosts unavailable", e);
+            return [];
+          },
+        );
         if (!stale)
-          setLoad({
-            kind: "ready",
-            loaded: { fields: fieldsFromSchema(schema), drivers, list, hosts },
-          });
+          setLoad((prev) =>
+            prev.kind === "ready"
+              ? { ...prev, loaded: { ...prev.loaded, hosts: { kind: "ready", hosts } } }
+              : prev,
+          );
       } catch (e) {
         if (!stale) setLoad({ kind: "failed", message: errorText(e) });
       }
@@ -318,13 +335,19 @@ function ConnectionEditor({
   const [test, setTest] = useState<TestResult>();
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<unknown>();
-  const [direct, setDirect] = useState(() => {
-    const ref = initial.hostRef;
-    return ref !== "" && !(hosts ?? []).includes(ref);
-  });
+  const hostNames = hosts.kind === "ready" ? hosts.hosts : [];
+  // 목록에 없는 목적지는 직접 입력한 것이다. 목록이 늦게 와도 사람이 고르기 전까지는 목록으로 다시 정한다.
+  const directChosen = useRef(false);
+  const [direct, setDirect] = useState(() => initial.hostRef !== "");
   const password = useRef<HTMLInputElement>(null);
   // 사람이 sslmode 를 골랐는가. 저장한 연결이 sslmode 를 적어 두었으면 고른 것으로 본다.
-  const sslChosen = useRef(editing && entry.config.sslmode != null);
+  // 저장한 값이 저장한 호스트의 기본값이면 다이얼로그가 적은 것으로 본다(새 연결은 기본값을 파일에 적는다) — 그러지 않으면
+  // `localhost` 로 만든 연결의 호스트를 원격으로 고쳐도 `disable` 이 남아 비밀번호가 평문 연결의 대상에 묶인다.
+  const sslChosen = useRef(
+    editing &&
+      entry.config.sslmode != null &&
+      entry.config.sslmode !== defaultSslMode(entry.config.host ?? ""),
+  );
   const idTouched = useRef(editing);
 
   const driver = watch("driver");
@@ -338,6 +361,11 @@ function ConnectionEditor({
   const production = watch("production");
   const readOnly = watch("readOnly");
   const hostRef = watch("hostRef");
+  useEffect(() => {
+    if (!directChosen.current) setDirect(hostRef !== "" && !hostNames.includes(hostRef));
+    // 목록이 도착할 때만 다시 정한다 — 칸을 고칠 때마다 바꾸지 않는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hosts]);
 
   // 고르기 전까지 sslmode 는 호스트를 따른다(결정 M3-D10).
   useEffect(() => {
@@ -367,6 +395,8 @@ function ConnectionEditor({
   const network = driver !== "sqlite";
   const keychain = network && passwordSource === "keychain";
   const note = storedPasswordNote(T.password, entry);
+  // 루프백이 아닌 호스트에 TLS 없이 붙는다. SSL 탭 밖([저장] 옆)에도 보인다 — 호스트는 일반 탭에서 고친다.
+  const plaintext = network && sslmode === "disable" && defaultSslMode(host) !== "disable";
   const keepAutomaticSslMode = () => editing && entry.config.sslmode == null && !sslChosen.current;
 
   const base = { projectId: deps.projectId, worktree: deps.worktree ?? null };
@@ -645,9 +675,10 @@ function ConnectionEditor({
               <select
                 className={INPUT}
                 value={direct ? "" : hostRef}
-                disabled={hosts === undefined || hosts.length === 0}
+                disabled={hostNames.length === 0}
                 data-field="hostPick"
                 onChange={(e) => {
+                  directChosen.current = true;
                   if (e.target.value === "") setDirect(true);
                   else {
                     setDirect(false);
@@ -656,7 +687,7 @@ function ConnectionEditor({
                 }}
               >
                 <option value="">{T.ssh.direct}</option>
-                {(hosts ?? []).map((h) => (
+                {hostNames.map((h) => (
                   <option key={h} value={h}>
                     {h}
                   </option>
@@ -668,7 +699,7 @@ function ConnectionEditor({
                 className={INPUT}
                 spellCheck={false}
                 placeholder={T.ssh.directPlaceholder}
-                readOnly={!direct && (hosts ?? []).length > 0}
+                readOnly={!direct && hostNames.length > 0}
                 {...register(
                   "hostRef",
                   requiredIf(T.ssh.host, (all) => all.driver !== "sqlite" && all.tunnel),
@@ -678,11 +709,13 @@ function ConnectionEditor({
             </Row>
             {error("hostRef")}
             <p className={HINT}>
-              {hosts === undefined
+              {hosts.kind === "untrusted"
                 ? T.ssh.untrusted
-                : hosts.length === 0
-                  ? T.ssh.noHosts
-                  : T.ssh.pick}
+                : hosts.kind === "loading"
+                  ? T.loading
+                  : hostNames.length === 0
+                    ? T.ssh.noHosts
+                    : T.ssh.pick}
             </p>
           </>
         )}
@@ -726,7 +759,7 @@ function ConnectionEditor({
             {T.ssl.unverified}
           </p>
         )}
-        {sslmode === "disable" && defaultSslMode(host) !== "disable" && (
+        {plaintext && (
           <p
             data-testid="db-conn-ssl-warning"
             data-warning="plaintext"
@@ -850,6 +883,18 @@ function ConnectionEditor({
         </p>
       )}
 
+      {(unsupportedChosen || plaintext) && (
+        <p
+          role="alert"
+          data-testid="db-conn-ssl-summary"
+          data-warning={unsupportedChosen ? "unsupported" : "plaintext"}
+          className="text-db-insecure"
+        >
+          {unsupportedChosen
+            ? `${T.ssl.unsupportedChosen} — ${unsupportedReason(T.ssl, driver, driverName, sslmode)}`
+            : T.ssl.plaintext}
+        </p>
+      )}
       <div className="flex items-center justify-end gap-2">
         <span className={`mr-auto ${HINT}`}>{T.test.draft}</span>
         <button

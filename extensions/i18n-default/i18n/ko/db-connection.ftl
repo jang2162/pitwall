@@ -108,7 +108,7 @@ db-conn-color-tag = { $tag ->
    *[other] { $tag }
 }
 db-conn-connect-timeout = 연결 타임아웃(초)
-db-conn-connect-timeout-hint = 비우면 10초
+db-conn-connect-timeout-hint = 1~600초. 비우면 10초
 
 ## 저장 위치.
 
