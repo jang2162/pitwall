@@ -1,5 +1,5 @@
-// 설정 창. 설정 화면(10-ui §2.7)이 들어오기 전까지 외관 > 테마 · 언어, Git(실행 파일 · 버전 · 쓰기 — M2-20)과 외부 도구 > Orca 에서
-// Pitwall 열기(F8-6)만 둔다.
+// 설정 창. 설정 화면(10-ui §2.7)이 들어오기 전까지 외관 > 테마 · 언어, Git(실행 파일 · 버전 · 쓰기 — M2-20), DB(`[db]` 상한 · 타임아웃 ·
+// 구분자 — M3-20)와 외부 도구 > Orca 에서 Pitwall 열기(F8-6)만 둔다.
 
 import { useState } from "react";
 
@@ -7,6 +7,7 @@ import { useI18n } from "../i18n/i18n-provider";
 import { selectedLanguage } from "../i18n/localization";
 import { ThemeSwitcher } from "../theme/theme-switcher";
 import type { SettingsNative } from "./native";
+import { DbSection } from "./db-section";
 import { GitSection } from "./git-section";
 import { OrcaSection } from "./orca-section";
 import { useSettingsStrings } from "./strings";
@@ -24,6 +25,9 @@ export function SettingsWindow({ native }: { native: SettingsNative }) {
       <LanguageSelect />
       <div className="mt-6">
         <GitSection />
+      </div>
+      <div className="mt-6">
+        <DbSection />
       </div>
       <h2 className="mt-6 mb-2 text-sm font-semibold">{S.externalTools}</h2>
       <OrcaSection native={native} />

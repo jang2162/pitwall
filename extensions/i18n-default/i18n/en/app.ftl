@@ -136,6 +136,31 @@ settings-orca-absolute = Orca cannot find this app on PATH. Enter the absolute p
 settings-orca-path-fallback = Could not read the login shell environment, so this used the app's PATH — it may differ from the PATH Orca sees ({ $reason }).
 settings-orca-worktree = Worktrees Orca creates do not have the uncommitted .pitwall/*.local.toml files; Pitwall then reads the ones in the main repository. To copy them into worktrees as well, list literal paths such as .pitwall/project.local.toml in .worktreeinclude at the repository root (Orca does not accept globs).
 
+## Settings window, DB page (M3-20). The host judges the ranges.
+settings-db-title = Database
+settings-db-intro = The [db] table of the global settings.toml. A changed value applies from the next run and the next connection.
+settings-db-loading = Loading…
+settings-db-failed = Could not change the setting: { $error }
+settings-db-grid-max-rows = Grid row limit
+settings-db-grid-max-bytes = Grid byte limit
+settings-db-cell-max-bytes = Cell limit
+settings-db-redis-response-timeout = Redis response timeout
+settings-db-redis-key-separator = Redis key separator (initial)
+settings-db-connect-timeout = Default connect timeout
+settings-db-unit-rows = rows
+settings-db-unit-bytes = bytes
+settings-db-unit-seconds = seconds
+settings-db-apply = Apply
+settings-db-reset = Reset to Default
+settings-db-default = default { $value }
+settings-db-range = range { $min } to { $max } { $unit }
+settings-db-now = now { $value }
+settings-db-not-integer = Must be an integer
+settings-db-out-of-range = Must be an integer from { $min } to { $max }
+settings-db-not-text = Must be text
+settings-db-bad-separator = Must be 1 to { $max } characters without spaces or control characters
+settings-db-file-refused = Not using { $key } from settings.toml, using the default: { $reason }
+
 ## Open In (⌥F1) and Open in Default External Tool (⌘⌥E).
 
 action-open-with = Open In…

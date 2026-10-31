@@ -18,6 +18,37 @@ export function settingsStrings(t: Translate) {
       languageFailed: (error: string) => t("settings-language-failed", { error }),
     },
     externalTools: t("settings-external-tools"),
+    /** 「DB」 페이지(M3-20, db-section.tsx). */
+    db: {
+      title: t("settings-db-title"),
+      intro: t("settings-db-intro"),
+      loading: t("settings-db-loading"),
+      failed: (error: string) => t("settings-db-failed", { error }),
+      labels: {
+        gridMaxRows: t("settings-db-grid-max-rows"),
+        gridMaxBytes: t("settings-db-grid-max-bytes"),
+        cellMaxBytes: t("settings-db-cell-max-bytes"),
+        redisResponseTimeout: t("settings-db-redis-response-timeout"),
+        redisKeySeparator: t("settings-db-redis-key-separator"),
+        connectTimeout: t("settings-db-connect-timeout"),
+      },
+      units: {
+        rows: t("settings-db-unit-rows"),
+        bytes: t("settings-db-unit-bytes"),
+        seconds: t("settings-db-unit-seconds"),
+      },
+      apply: t("settings-db-apply"),
+      reset: t("settings-db-reset"),
+      defaultIs: (value: string) => t("settings-db-default", { value }),
+      rangeHint: (min: number, max: number, unit: string) =>
+        t("settings-db-range", { min, max, unit }),
+      now: (value: string) => t("settings-db-now", { value }),
+      notInteger: t("settings-db-not-integer"),
+      range: (min: number, max: number) => t("settings-db-out-of-range", { min, max }),
+      notText: t("settings-db-not-text"),
+      separator: (max: number) => t("settings-db-bad-separator", { max }),
+      fileRefused: (key: string, reason: string) => t("settings-db-file-refused", { key, reason }),
+    },
     orca: {
       title: t("settings-orca-title"),
       intro: t("settings-orca-intro"),

@@ -136,6 +136,31 @@ settings-orca-absolute = Orca 가 PATH 로 이 앱을 찾지 못한다. 명령 �
 settings-orca-path-fallback = 로그인 셸 환경을 읽지 못해 앱의 PATH 로 찾았다 — Orca 가 보는 PATH 와 다를 수 있다({ $reason }).
 settings-orca-worktree = Orca 가 만든 워크트리에는 커밋하지 않은 .pitwall/*.local.toml 이 없다. Pitwall 은 그때 메인 저장소의 것을 읽는다. 워크트리에도 복사하려면 저장소 루트의 .worktreeinclude 에 .pitwall/project.local.toml 같은 리터럴 경로를 적는다(Orca 는 glob 을 받지 않는다).
 
+## 설정 창 「DB」(M3-20) — 값의 범위는 Host 가 판정한다.
+settings-db-title = DB
+settings-db-intro = 전역 settings.toml 의 [db] 다. 바꾼 값은 다음 실행 · 다음 연결부터 쓰인다.
+settings-db-loading = 읽는 중…
+settings-db-failed = 설정을 바꾸지 못했다: { $error }
+settings-db-grid-max-rows = 그리드 보유 행 상한
+settings-db-grid-max-bytes = 그리드 보유 바이트 상한
+settings-db-cell-max-bytes = 셀 상한
+settings-db-redis-response-timeout = Redis 응답 타임아웃
+settings-db-redis-key-separator = Redis 키 구분자(처음 값)
+settings-db-connect-timeout = 연결 타임아웃 기본값
+settings-db-unit-rows = 행
+settings-db-unit-bytes = 바이트
+settings-db-unit-seconds = 초
+settings-db-apply = 적용
+settings-db-reset = 기본값으로
+settings-db-default = 기본 { $value }
+settings-db-range = 범위 { $min } ~ { $max }{ $unit }
+settings-db-now = 지금 { $value }
+settings-db-not-integer = 정수여야 한다
+settings-db-out-of-range = { $min } ~ { $max } 사이의 정수여야 한다
+settings-db-not-text = 글이어야 한다
+settings-db-bad-separator = 1 ~ { $max }글자여야 하고 공백 · 제어 문자가 없어야 한다
+settings-db-file-refused = settings.toml 의 { $key } 를 쓰지 않고 기본값을 쓴다 — { $reason }
+
 ## 다음에서 열기(⌥F1)와 기본 외부 도구로 열기(⌘⌥E).
 
 action-open-with = 다음에서 열기…
