@@ -5311,6 +5311,7 @@ dependencies = [
  "keyring",
  "pw-core",
  "pw-db-driver",
+ "pw-db-driver-mysql",
  "pw-db-driver-pg",
  "pw-db-driver-redis",
  "pw-db-driver-sqlite",

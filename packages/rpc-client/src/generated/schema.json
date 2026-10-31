@@ -3662,6 +3662,1278 @@
       ],
       "tier": "write"
     },
+    "db.edit.apply": {
+      "description": "미리보기한 변경을 적용한다. 같은 변경 · 같은 세션 상태로 다시 만든 해시가 `previewHash` 와 다르면 `CONFLICT`\n(`previewChanged`). 자동 커밋 탭이면 한 트랜잭션(영향 행이 1 이 아닌 변경이 있으면 전부 롤백 — `CONFLICT` `rowCount`),\n열린 트랜잭션이면 세이브포인트까지만 되돌린다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbBytes": {
+            "description": "바이트 값.",
+            "properties": {
+              "hex": {
+                "description": "`0x` 로 시작하는 소문자 hex. 잘렸으면 앞부분만.",
+                "type": "string"
+              },
+              "size": {
+                "description": "원래 크기(바이트).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "hex",
+              "size",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "DbEditCell": {
+            "description": "열 하나와 그 값.",
+            "properties": {
+              "column": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/DbValue"
+              }
+            },
+            "required": [
+              "column",
+              "value"
+            ],
+            "type": "object"
+          },
+          "DbEditChanges": {
+            "description": "제출할 변경. 문장 번호는 삭제 → 수정 → 추가 순이다.",
+            "properties": {
+              "deletes": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/DbEditDelete"
+                },
+                "type": "array"
+              },
+              "inserts": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/DbEditInsert"
+                },
+                "type": "array"
+              },
+              "updates": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/DbEditUpdate"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "DbEditDelete": {
+            "description": "행 하나의 삭제.",
+            "properties": {
+              "key": {
+                "items": {
+                  "$ref": "#/$defs/DbEditCell"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "key"
+            ],
+            "type": "object"
+          },
+          "DbEditInsert": {
+            "description": "새 행. 빠진 열은 기본값이다(값이 하나도 없으면 모든 열이 기본값).",
+            "properties": {
+              "values": {
+                "items": {
+                  "$ref": "#/$defs/DbEditCell"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "values"
+            ],
+            "type": "object"
+          },
+          "DbEditUpdate": {
+            "description": "행 하나의 수정: 키로 행을 가리키고 `values` 의 열을 바꾼다.",
+            "properties": {
+              "key": {
+                "description": "키 열 전부와 그 (원래) 값.",
+                "items": {
+                  "$ref": "#/$defs/DbEditCell"
+                },
+                "type": "array"
+              },
+              "values": {
+                "description": "바꿀 열과 새 값. 키 열은 넣지 않는다.",
+                "items": {
+                  "$ref": "#/$defs/DbEditCell"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "key",
+              "values"
+            ],
+            "type": "object"
+          },
+          "DbFloat": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "description": "`NaN` · `Infinity` · `-Infinity`.",
+                "type": "string"
+              }
+            ],
+            "description": "실수 값. 유한하지 않은 값은 그 이름의 문자열이다 — [`DbValue::float`] 로 만든다. 받을 때 그 셋 밖의 글은 거절한다."
+          },
+          "DbInt": {
+            "anyOf": [
+              {
+                "description": "|값| ≤ 2^53 − 1.",
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "description": "그 밖. 10진 문자열.",
+                "type": "string"
+              }
+            ],
+            "description": "정수 값. 수인지 문자열인지는 값의 크기가 정한다 — [`DbValue::int`] 로 만든다.\n\n받을 때는 규칙대로 다시 고른다 — `{\"int\": 9007199254740993}` 은 문자열로, `{\"int\": \"5\"}` 는 수로 받는다(창이 보낸 바인드\n값 · 프로세스 밖 드라이버가 규칙을 어겨도 같은 값이 같은 모양이 된다). 정수가 아닌 글은 거절한다."
+          },
+          "DbOther": {
+            "description": "분류되지 않은 값.",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "typeName": {
+                "description": "DB 가 부르는 타입 이름(PG `tsvector`, MySQL `GEOMETRY` 등).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "typeName"
+            ],
+            "type": "object"
+          },
+          "DbTruncated": {
+            "description": "셀 상한을 넘어 잘린 값.",
+            "properties": {
+              "of": {
+                "$ref": "#/$defs/TruncatedKind",
+                "description": "원래 값의 종류."
+              },
+              "prefix": {
+                "description": "앞부분(UTF-8 문자 경계에서 자른다).",
+                "type": "string"
+              },
+              "size": {
+                "description": "원래 크기(UTF-8 바이트).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "typeName": {
+                "description": "`of` 가 `other` 일 때의 DB 타입 이름.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "of",
+              "prefix",
+              "size"
+            ],
+            "type": "object"
+          },
+          "DbValue": {
+            "description": "셀 값.",
+            "oneOf": [
+              {
+                "enum": [
+                  "null"
+                ],
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "bool": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "bool"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "정수. ±(2^53−1) 안은 수, 밖은 문자열.",
+                "properties": {
+                  "int": {
+                    "$ref": "#/$defs/DbInt"
+                  }
+                },
+                "required": [
+                  "int"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "실수. 유한하면 수, `NaN` · `Infinity` · `-Infinity` 는 문자열(JSON 에 그 수가 없다).",
+                "properties": {
+                  "float": {
+                    "$ref": "#/$defs/DbFloat"
+                  }
+                },
+                "required": [
+                  "float"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "decimal · numeric · money. 정밀도를 잃지 않게 늘 문자열.",
+                "properties": {
+                  "decimal": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "decimal"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "바이트. 늘 `0x` hex, 셀 상한을 넘으면 앞부분만.",
+                "properties": {
+                  "bytes": {
+                    "$ref": "#/$defs/DbBytes"
+                  }
+                },
+                "required": [
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "json · jsonb. 서버가 준 글 그대로(파싱하지 않는다).",
+                "properties": {
+                  "json": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "json"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "날짜 · 시각 · 타임스탬프. 서버가 준 텍스트 그대로 — timestamptz 는 서버 세션 시간대의 텍스트다.",
+                "properties": {
+                  "datetime": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "datetime"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "array": {
+                    "items": {
+                      "$ref": "#/$defs/DbValue"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "array"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "셀 상한을 넘은 텍스트 · json · 그 밖 값의 앞부분.",
+                "properties": {
+                  "truncated": {
+                    "$ref": "#/$defs/DbTruncated"
+                  }
+                },
+                "required": [
+                  "truncated"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "위 어디에도 들지 않는 값: 서버의 텍스트 표현과 DB 타입 이름.",
+                "properties": {
+                  "other": {
+                    "$ref": "#/$defs/DbOther"
+                  }
+                },
+                "required": [
+                  "other"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "ObjectRef": {
+            "description": "객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "TruncatedKind": {
+            "enum": [
+              "text",
+              "json",
+              "other"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "changes": {
+            "$ref": "#/$defs/DbEditChanges"
+          },
+          "previewHash": {
+            "description": "`db.edit.preview` 가 준 그대로.",
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "table": {
+            "$ref": "#/$defs/ObjectRef"
+          }
+        },
+        "required": [
+          "sessionId",
+          "table",
+          "changes",
+          "previewHash"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbOpenTransaction": {
+            "description": "열린 트랜잭션(설정이 바뀐 세션에서 그대로 남은 것).",
+            "properties": {
+              "failed": {
+                "description": "오류 뒤 롤백만 되는 트랜잭션(PG).",
+                "type": "boolean"
+              },
+              "since": {
+                "description": "연 시각(유닉스 밀리초).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "since",
+              "failed"
+            ],
+            "type": "object"
+          },
+          "DbSessionInfo": {
+            "description": "세션 하나의 지금 모습.",
+            "properties": {
+              "connectionId": {
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/$defs/DbSessionMode"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/DbSessionState"
+              }
+            },
+            "required": [
+              "sessionId",
+              "projectId",
+              "connectionId",
+              "mode",
+              "state"
+            ],
+            "type": "object"
+          },
+          "DbSessionMode": {
+            "oneOf": [
+              {
+                "const": "auto",
+                "description": "자동 커밋: 문장마다 커밋된다(사람이 친 `BEGIN` 은 그 `COMMIT` · `ROLLBACK` 까지 트랜잭션을 연다).",
+                "type": "string"
+              },
+              {
+                "const": "manual",
+                "description": "수동 커밋: 파이프라인이 첫 문장 앞에서 트랜잭션을 열고 [커밋] · [롤백] 까지 그대로 둔다.",
+                "type": "string"
+              }
+            ]
+          },
+          "DbSessionState": {
+            "description": "세션 상태.",
+            "oneOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "idle",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "트랜잭션이 열려 있다. `since` 는 연 시각(유닉스 밀리초 — 상태바의 열린 시간).",
+                "properties": {
+                  "kind": {
+                    "const": "inTransaction",
+                    "type": "string"
+                  },
+                  "since": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "since"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "오류 · 취소 뒤 롤백만 되는 트랜잭션(PG). 커밋해도 롤백된다.",
+                "properties": {
+                  "kind": {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  "since": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "since"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다(커밋 도중이었으면 결과를 모른다 — 알림 `connectionLost` 의\n`outcomeUnknown`). 다시 붙는 것은 사람이 새 세션을 열 때다.",
+                "properties": {
+                  "kind": {
+                    "const": "disconnected",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "연결 설정이 바뀌었다 — 저절로 다시 붙지 않는다(「설정 바뀜 — 다시 연결」). 새 실행은 받지 않고, 열린 트랜잭션은 커밋 · 롤백할\n수 있다.",
+                "properties": {
+                  "kind": {
+                    "const": "configChanged",
+                    "type": "string"
+                  },
+                  "transaction": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbOpenTransaction"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "transaction"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "rowsAffected": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "$ref": "#/$defs/DbSessionInfo",
+            "description": "적용 뒤 세션(수동 커밋 탭이면 트랜잭션이 열린 채다)."
+          },
+          "statements": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "statements",
+          "rowsAffected",
+          "session"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "db.edit.preview": {
+      "description": "변경을 방언의 DML 로 만들어 미리보기 글(값은 리터럴) · 등급 · `previewHash` 를 준다. 실행하지 않는다. 키 없는 테이블 · 키 열\n수정 · 리터럴로 적을 수 없는 값은 `INVALID_PARAMS`(`data` 는 `DbEditError`), read-only 연결은 `PERMISSION_DENIED`.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbBytes": {
+            "description": "바이트 값.",
+            "properties": {
+              "hex": {
+                "description": "`0x` 로 시작하는 소문자 hex. 잘렸으면 앞부분만.",
+                "type": "string"
+              },
+              "size": {
+                "description": "원래 크기(바이트).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "hex",
+              "size",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "DbEditCell": {
+            "description": "열 하나와 그 값.",
+            "properties": {
+              "column": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/DbValue"
+              }
+            },
+            "required": [
+              "column",
+              "value"
+            ],
+            "type": "object"
+          },
+          "DbEditChanges": {
+            "description": "제출할 변경. 문장 번호는 삭제 → 수정 → 추가 순이다.",
+            "properties": {
+              "deletes": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/DbEditDelete"
+                },
+                "type": "array"
+              },
+              "inserts": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/DbEditInsert"
+                },
+                "type": "array"
+              },
+              "updates": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/DbEditUpdate"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "DbEditDelete": {
+            "description": "행 하나의 삭제.",
+            "properties": {
+              "key": {
+                "items": {
+                  "$ref": "#/$defs/DbEditCell"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "key"
+            ],
+            "type": "object"
+          },
+          "DbEditInsert": {
+            "description": "새 행. 빠진 열은 기본값이다(값이 하나도 없으면 모든 열이 기본값).",
+            "properties": {
+              "values": {
+                "items": {
+                  "$ref": "#/$defs/DbEditCell"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "values"
+            ],
+            "type": "object"
+          },
+          "DbEditUpdate": {
+            "description": "행 하나의 수정: 키로 행을 가리키고 `values` 의 열을 바꾼다.",
+            "properties": {
+              "key": {
+                "description": "키 열 전부와 그 (원래) 값.",
+                "items": {
+                  "$ref": "#/$defs/DbEditCell"
+                },
+                "type": "array"
+              },
+              "values": {
+                "description": "바꿀 열과 새 값. 키 열은 넣지 않는다.",
+                "items": {
+                  "$ref": "#/$defs/DbEditCell"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "key",
+              "values"
+            ],
+            "type": "object"
+          },
+          "DbFloat": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "description": "`NaN` · `Infinity` · `-Infinity`.",
+                "type": "string"
+              }
+            ],
+            "description": "실수 값. 유한하지 않은 값은 그 이름의 문자열이다 — [`DbValue::float`] 로 만든다. 받을 때 그 셋 밖의 글은 거절한다."
+          },
+          "DbInt": {
+            "anyOf": [
+              {
+                "description": "|값| ≤ 2^53 − 1.",
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "description": "그 밖. 10진 문자열.",
+                "type": "string"
+              }
+            ],
+            "description": "정수 값. 수인지 문자열인지는 값의 크기가 정한다 — [`DbValue::int`] 로 만든다.\n\n받을 때는 규칙대로 다시 고른다 — `{\"int\": 9007199254740993}` 은 문자열로, `{\"int\": \"5\"}` 는 수로 받는다(창이 보낸 바인드\n값 · 프로세스 밖 드라이버가 규칙을 어겨도 같은 값이 같은 모양이 된다). 정수가 아닌 글은 거절한다."
+          },
+          "DbOther": {
+            "description": "분류되지 않은 값.",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "typeName": {
+                "description": "DB 가 부르는 타입 이름(PG `tsvector`, MySQL `GEOMETRY` 등).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "typeName"
+            ],
+            "type": "object"
+          },
+          "DbTruncated": {
+            "description": "셀 상한을 넘어 잘린 값.",
+            "properties": {
+              "of": {
+                "$ref": "#/$defs/TruncatedKind",
+                "description": "원래 값의 종류."
+              },
+              "prefix": {
+                "description": "앞부분(UTF-8 문자 경계에서 자른다).",
+                "type": "string"
+              },
+              "size": {
+                "description": "원래 크기(UTF-8 바이트).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "typeName": {
+                "description": "`of` 가 `other` 일 때의 DB 타입 이름.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "of",
+              "prefix",
+              "size"
+            ],
+            "type": "object"
+          },
+          "DbValue": {
+            "description": "셀 값.",
+            "oneOf": [
+              {
+                "enum": [
+                  "null"
+                ],
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "bool": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "bool"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "정수. ±(2^53−1) 안은 수, 밖은 문자열.",
+                "properties": {
+                  "int": {
+                    "$ref": "#/$defs/DbInt"
+                  }
+                },
+                "required": [
+                  "int"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "실수. 유한하면 수, `NaN` · `Infinity` · `-Infinity` 는 문자열(JSON 에 그 수가 없다).",
+                "properties": {
+                  "float": {
+                    "$ref": "#/$defs/DbFloat"
+                  }
+                },
+                "required": [
+                  "float"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "decimal · numeric · money. 정밀도를 잃지 않게 늘 문자열.",
+                "properties": {
+                  "decimal": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "decimal"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "바이트. 늘 `0x` hex, 셀 상한을 넘으면 앞부분만.",
+                "properties": {
+                  "bytes": {
+                    "$ref": "#/$defs/DbBytes"
+                  }
+                },
+                "required": [
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "json · jsonb. 서버가 준 글 그대로(파싱하지 않는다).",
+                "properties": {
+                  "json": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "json"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "날짜 · 시각 · 타임스탬프. 서버가 준 텍스트 그대로 — timestamptz 는 서버 세션 시간대의 텍스트다.",
+                "properties": {
+                  "datetime": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "datetime"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "array": {
+                    "items": {
+                      "$ref": "#/$defs/DbValue"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "array"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "셀 상한을 넘은 텍스트 · json · 그 밖 값의 앞부분.",
+                "properties": {
+                  "truncated": {
+                    "$ref": "#/$defs/DbTruncated"
+                  }
+                },
+                "required": [
+                  "truncated"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "위 어디에도 들지 않는 값: 서버의 텍스트 표현과 DB 타입 이름.",
+                "properties": {
+                  "other": {
+                    "$ref": "#/$defs/DbOther"
+                  }
+                },
+                "required": [
+                  "other"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "ObjectRef": {
+            "description": "객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "TruncatedKind": {
+            "enum": [
+              "text",
+              "json",
+              "other"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "changes": {
+            "$ref": "#/$defs/DbEditChanges"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "table": {
+            "$ref": "#/$defs/ObjectRef"
+          }
+        },
+        "required": [
+          "sessionId",
+          "table",
+          "changes"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbEditApplies": {
+            "description": "편집이 어느 트랜잭션에서 도는가.",
+            "oneOf": [
+              {
+                "const": "ownTransaction",
+                "description": "자동 커밋 탭: 편집만의 트랜잭션을 열고 끝에 커밋한다.",
+                "type": "string"
+              },
+              {
+                "const": "openTransaction",
+                "description": "수동 커밋 탭 · 열린 트랜잭션: 그 안의 세이브포인트에서. 커밋은 사람이 한다.",
+                "type": "string"
+              }
+            ]
+          },
+          "DbEditChangeKind": {
+            "enum": [
+              "update",
+              "insert",
+              "delete"
+            ],
+            "type": "string"
+          },
+          "DbEditChangeRef": {
+            "description": "변경 하나를 가리킨다: 종류와 그 목록(`changes.updates` 등)의 번호(0부터).",
+            "properties": {
+              "index": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "$ref": "#/$defs/DbEditChangeKind"
+              }
+            },
+            "required": [
+              "kind",
+              "index"
+            ],
+            "type": "object"
+          },
+          "DbEditPreviewStatement": {
+            "description": "미리보기의 문장 하나.",
+            "properties": {
+              "change": {
+                "$ref": "#/$defs/DbEditChangeRef"
+              },
+              "grade": {
+                "$ref": "#/$defs/RiskGrade"
+              },
+              "index": {
+                "description": "적용 순서(삭제 → 수정 → 추가).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sql": {
+                "description": "값을 리터럴로 적은 글(`pw_db_sql::literal`). 서버에는 같은 문장이 바인드 값으로 간다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "index",
+              "change",
+              "sql",
+              "grade"
+            ],
+            "type": "object"
+          },
+          "RiskGrade": {
+            "description": "등급. 순서가 위험도 순서다 — 여러 문장의 합산은 가장 높은 등급(`Ord::max`).",
+            "oneOf": [
+              {
+                "enum": [
+                  "ddl"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "read",
+                "description": "조회 — 데이터를 바꾸지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "쓰기(키로 한정한 `UPDATE` · `INSERT` · 부작용 함수가 든 `SELECT` · 트랜잭션 제어 등).",
+                "type": "string"
+              },
+              {
+                "const": "unboundedWrite",
+                "description": "범위 없는 쓰기(WHERE 가 없거나 항진식인 `UPDATE` · `DELETE`).",
+                "type": "string"
+              },
+              {
+                "const": "destructive",
+                "description": "파괴(`DROP` · `TRUNCATE`). 파서가 읽지 못한 문장도 여기다(까닭 `unparsed`, fail-closed).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "applies": {
+            "$ref": "#/$defs/DbEditApplies"
+          },
+          "grade": {
+            "$ref": "#/$defs/RiskGrade",
+            "description": "가장 높은 등급(쓰기를 넘지 않는다)."
+          },
+          "key": {
+            "description": "행을 가리킨 키 열.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "previewHash": {
+            "description": "`db.edit.apply` 에 그대로 싣는다.",
+            "type": "string"
+          },
+          "statements": {
+            "items": {
+              "$ref": "#/$defs/DbEditPreviewStatement"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "statements",
+          "grade",
+          "key",
+          "applies",
+          "previewHash"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "db.edit.rowKey": {
+      "description": "테이블의 행 키(PK 또는 NOT NULL 열만의 유일 키 — M3-10 의 판정, 스키마 캐시를 지난다). 없으면 `key: null`. 관문: 그 세션을 연\n프로젝트 창만 · 신뢰 · 연결 설정.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ObjectRef": {
+            "description": "객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "table": {
+            "$ref": "#/$defs/ObjectRef",
+            "description": "테이블. PG 는 `database` · `schema`, MySQL 은 `database` 가 있어야 한다(SQLite 는 없으면 `main`)."
+          }
+        },
+        "required": [
+          "sessionId",
+          "table"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbRowKey": {
+            "description": "테이블의 행 키(M3-10 의 판정).",
+            "properties": {
+              "columns": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "index": {
+                "description": "키를 이루는 인덱스(PK 또는 NOT NULL 열만의 유일 인덱스)의 이름.",
+                "type": "string"
+              },
+              "primary": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "index",
+              "columns",
+              "primary"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DbRowKey"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "키 없는 테이블이면 `null` — 그리드 편집을 받지 않는다(결정 M3-D9)."
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
     "db.kv.command": {
       "description": "명령 하나(콘솔). 분류(`pw_db_sql::kv_command`)로 관문을 지난다 — 거절 명령은 permission denied(`data.reason =\n\"blockedCommand\"`, `data.block` 은 `notAllowed` · `blocking` · `scanCount`), read-only 연결은 읽기만, 확인 명령은 3001.\n키를 통째로 읽는 큰 명령은 드라이버가 보내기 전에 거절하고(3003, `data.error.code = \"KEY_TOO_LARGE\"`), 큰 응답은\n`truncated` 로 끊는다.",
       "kind": "unary",

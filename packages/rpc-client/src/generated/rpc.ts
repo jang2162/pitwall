@@ -47,6 +47,22 @@ export type UnaryMethods = {
 	 */
 	"db.connection.upsert": { params: DbConnectionUpsertParams; result: DbConnectionEntry };
 	/**
+	 * 미리보기한 변경을 적용한다. 같은 변경 · 같은 세션 상태로 다시 만든 해시가 `previewHash` 와 다르면 `CONFLICT`
+	 * (`previewChanged`). 자동 커밋 탭이면 한 트랜잭션(영향 행이 1 이 아닌 변경이 있으면 전부 롤백 — `CONFLICT` `rowCount`),
+	 * 열린 트랜잭션이면 세이브포인트까지만 되돌린다.
+	 */
+	"db.edit.apply": { params: DbEditApplyParams; result: DbEditApplied };
+	/**
+	 * 변경을 방언의 DML 로 만들어 미리보기 글(값은 리터럴) · 등급 · `previewHash` 를 준다. 실행하지 않는다. 키 없는 테이블 · 키 열
+	 * 수정 · 리터럴로 적을 수 없는 값은 `INVALID_PARAMS`(`data` 는 `DbEditError`), read-only 연결은 `PERMISSION_DENIED`.
+	 */
+	"db.edit.preview": { params: DbEditPreviewParams; result: DbEditPreview };
+	/**
+	 * 테이블의 행 키(PK 또는 NOT NULL 열만의 유일 키 — M3-10 의 판정, 스키마 캐시를 지난다). 없으면 `key: null`. 관문: 그 세션을 연
+	 * 프로젝트 창만 · 신뢰 · 연결 설정.
+	 */
+	"db.edit.rowKey": { params: DbEditRowKeyParams; result: DbEditRowKey };
+	/**
 	 * 명령 하나(콘솔). 분류(`pw_db_sql::kv_command`)로 관문을 지난다 — 거절 명령은 permission denied(`data.reason =
 	 * "blockedCommand"`, `data.block` 은 `notAllowed` · `blocking` · `scanCount`), read-only 연결은 읽기만, 확인 명령은 3001.
 	 * 키를 통째로 읽는 큰 명령은 드라이버가 보내기 전에 거절하고(3003, `data.error.code = "KEY_TOO_LARGE"`), 큰 응답은
@@ -752,6 +768,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.connection.list": {"name":"db.connection.list","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbConnectionList","doc":" 프로젝트의 DB 연결 목록(비밀 없이). 연결마다 신뢰 · 사용 가능 상태를 단다. 신뢰 전에도 돌려준다(상태는 모두 `untrusted`).\n","mcp":false,"fileScope":false},
 	"db.connection.test": {"name":"db.connection.test","kind":"unary","tier":"exec","roles":["owner"],"params":"DbConnectionTestParams","output":"ServerInfo","doc":" 연결 테스트: 붙어 보고 서버 판본 · TLS 상태를 돌려준 뒤 닫는다. `connectionId`(저장한 연결) 또는 `draft`(저장 전 초안)를 준다.\n 초안의 비밀(`secret`)은 저장하지 않는다. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만. 비밀 · 확인이 필요하면 3101 · 3102,\n 드라이버가 실패하면 3003(`data.error`).\n","mcp":false,"fileScope":false},
 	"db.connection.upsert": {"name":"db.connection.upsert","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionUpsertParams","output":"DbConnectionEntry","doc":" 연결 설정 파일을 만들거나 고친다(`location` 의 파일 하나에 연결 전부를 쓴다 — 개인 파일에 쓰면 공유 파일에만 있는 키는\n 그대로 남는다, 설정 계층에는 키를 지우는 문법이 없다). 그 프로젝트 창의 연결만 — 아니면 permission denied.\n","mcp":false,"fileScope":false},
+	"db.edit.apply": {"name":"db.edit.apply","kind":"unary","tier":"exec","roles":["owner"],"params":"DbEditApplyParams","output":"DbEditApplied","doc":" 미리보기한 변경을 적용한다. 같은 변경 · 같은 세션 상태로 다시 만든 해시가 `previewHash` 와 다르면 `CONFLICT`\n (`previewChanged`). 자동 커밋 탭이면 한 트랜잭션(영향 행이 1 이 아닌 변경이 있으면 전부 롤백 — `CONFLICT` `rowCount`),\n 열린 트랜잭션이면 세이브포인트까지만 되돌린다.\n","mcp":false,"fileScope":false},
+	"db.edit.preview": {"name":"db.edit.preview","kind":"unary","tier":"exec","roles":["owner"],"params":"DbEditPreviewParams","output":"DbEditPreview","doc":" 변경을 방언의 DML 로 만들어 미리보기 글(값은 리터럴) · 등급 · `previewHash` 를 준다. 실행하지 않는다. 키 없는 테이블 · 키 열\n 수정 · 리터럴로 적을 수 없는 값은 `INVALID_PARAMS`(`data` 는 `DbEditError`), read-only 연결은 `PERMISSION_DENIED`.\n","mcp":false,"fileScope":false},
+	"db.edit.rowKey": {"name":"db.edit.rowKey","kind":"unary","tier":"exec","roles":["owner"],"params":"DbEditRowKeyParams","output":"DbEditRowKey","doc":" 테이블의 행 키(PK 또는 NOT NULL 열만의 유일 키 — M3-10 의 판정, 스키마 캐시를 지난다). 없으면 `key: null`. 관문: 그 세션을 연\n 프로젝트 창만 · 신뢰 · 연결 설정.\n","mcp":false,"fileScope":false},
 	"db.kv.command": {"name":"db.kv.command","kind":"unary","tier":"exec","roles":["owner"],"params":"DbKvCommandParams","output":"KvReply","doc":" 명령 하나(콘솔). 분류(`pw_db_sql::kv_command`)로 관문을 지난다 — 거절 명령은 permission denied(`data.reason =\n \"blockedCommand\"`, `data.block` 은 `notAllowed` · `blocking` · `scanCount`), read-only 연결은 읽기만, 확인 명령은 3001.\n 키를 통째로 읽는 큰 명령은 드라이버가 보내기 전에 거절하고(3003, `data.error.code = \"KEY_TOO_LARGE\"`), 큰 응답은\n `truncated` 로 끊는다.\n","mcp":false,"fileScope":false},
 	"db.kv.delete": {"name":"db.kv.delete","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvDeleteParams","output":"DbKvDeleted","doc":" 키를 지운다(확인 3001 이 필요하다 — `DEL` 과 같은 등급). 지운 수를 돌려준다.\n","mcp":false,"fileScope":false},
 	"db.kv.get": {"name":"db.kv.get","kind":"unary","tier":"read","roles":["owner"],"params":"DbKvGetParams","output":"KvValuePage","doc":" 값 한 쪽(타입별, 쪽 하나 4 MiB 예산). 키가 없으면 `value` 가 `missing`.\n","mcp":false,"fileScope":false},
@@ -1449,6 +1468,162 @@ export type DbConnectionUpsertParams = {
 	location?: DbConfigLocation,
 };
 
+export type DbEditApplied = {
+	statements: number,
+	rowsAffected: number,
+	/**  적용 뒤 세션(수동 커밋 탭이면 트랜잭션이 열린 채다). */
+	session: DbSessionInfo,
+};
+
+/**  편집이 어느 트랜잭션에서 도는가. */
+export type DbEditApplies = 
+/**  자동 커밋 탭: 편집만의 트랜잭션을 열고 끝에 커밋한다. */
+"ownTransaction" | 
+/**  수동 커밋 탭 · 열린 트랜잭션: 그 안의 세이브포인트에서. 커밋은 사람이 한다. */
+"openTransaction";
+
+export type DbEditApplyParams = {
+	sessionId: string,
+	table: ObjectRef,
+	changes: DbEditChanges,
+	/**  `db.edit.preview` 가 준 그대로. */
+	previewHash: string,
+};
+
+/**  열 하나와 그 값. */
+export type DbEditCell = {
+	column: string,
+	value: DbValue,
+};
+
+export type DbEditChangeKind = "update" | "insert" | "delete";
+
+/**  변경 하나를 가리킨다: 종류와 그 목록(`changes.updates` 등)의 번호(0부터). */
+export type DbEditChangeRef = {
+	kind: DbEditChangeKind,
+	index: number,
+};
+
+/**  제출할 변경. 문장 번호는 삭제 → 수정 → 추가 순이다. */
+export type DbEditChanges = {
+	updates?: DbEditUpdate[],
+	inserts?: DbEditInsert[],
+	deletes?: DbEditDelete[],
+};
+
+/**  행 하나의 삭제. */
+export type DbEditDelete = {
+	key: DbEditCell[],
+};
+
+/**  [`build`] 의 실패: 어느 변경 · 어느 열(알면)과 까닭. */
+export type DbEditError = {
+	change: DbEditChangeRef | null,
+	column: string | null,
+	reason: DbEditErrorReason,
+};
+
+/**  변경을 문장으로 만들 수 없는 까닭. */
+export type DbEditErrorReason = 
+/**  변경이 없다. */
+"noChanges" | 
+/**  변경이 [`MAX_EDIT_CHANGES`] 를 넘는다. */
+"tooManyChanges" | 
+/**  테이블 이름이 한정되지 않았다(PG 는 DB · 스키마, MySQL 은 DB 가 있어야 한다). */
+"unqualifiedTable" | 
+/**  키 없는 테이블(PK · NOT NULL 열만의 유일 키가 없다 — 결정 M3-D9). */
+"noRowKey" | 
+/**  수정 · 삭제의 키가 테이블의 키 열과 다르다(빠짐 · 남는 열). */
+"keyMismatch" | 
+/**  수정이 키 열을 바꾼다(이월 — 14 §3). */
+"keyColumnChanged" | 
+/**  키 값이 NULL 이다. */
+"nullKey" | 
+/**  수정에 바꿀 열이 없다. */
+"noValues" | 
+/**  같은 열이 한 변경에 두 번 있다. */
+"duplicateColumn" | 
+/**  같은 행(같은 키)을 두 변경이 가리킨다. */
+"duplicateRow" | 
+/**  열 · 테이블 이름이 비었다. */
+"emptyName" | 
+/**  셀 상한에서 잘린 값(원래 값이 아니다). */
+"truncated" | 
+/**  그 방언에 리터럴이 없는 값(배열 · NaN 등). */
+"unsupported" | 
+/**  그 방언이 NUL 을 담지 못한다(PG 문자열 · 식별자). */
+"nul";
+
+/**  실패한 편집: 어느 문장 · 변경에서, 영향 행 수(알면), 무엇이 되돌려졌는가. 커밋 · 세이브포인트 정리의 실패면 문장이 없다. */
+export type DbEditFailure = {
+	statement: number | null,
+	change: DbEditChangeRef | null,
+	rowsAffected: number | null,
+	undone: DbEditUndone,
+};
+
+/**  새 행. 빠진 열은 기본값이다(값이 하나도 없으면 모든 열이 기본값). */
+export type DbEditInsert = {
+	values: DbEditCell[],
+};
+
+export type DbEditPreview = {
+	statements: DbEditPreviewStatement[],
+	/**  가장 높은 등급(쓰기를 넘지 않는다). */
+	grade: RiskGrade,
+	/**  행을 가리킨 키 열. */
+	key: string[],
+	applies: DbEditApplies,
+	/**  `db.edit.apply` 에 그대로 싣는다. */
+	previewHash: string,
+};
+
+export type DbEditPreviewParams = {
+	sessionId: string,
+	table: ObjectRef,
+	changes: DbEditChanges,
+};
+
+/**  미리보기의 문장 하나. */
+export type DbEditPreviewStatement = {
+	/**  적용 순서(삭제 → 수정 → 추가). */
+	index: number,
+	change: DbEditChangeRef,
+	/**  값을 리터럴로 적은 글(`pw_db_sql::literal`). 서버에는 같은 문장이 바인드 값으로 간다. */
+	sql: string,
+	grade: RiskGrade,
+};
+
+export type DbEditRowKey = {
+	/**  키 없는 테이블이면 `null` — 그리드 편집을 받지 않는다(결정 M3-D9). */
+	key: DbRowKey | null,
+};
+
+export type DbEditRowKeyParams = {
+	sessionId: string,
+	/**  테이블. PG 는 `database` · `schema`, MySQL 은 `database` 가 있어야 한다(SQLite 는 없으면 `main`). */
+	table: ObjectRef,
+};
+
+/**  실패한 편집에서 되돌린 것. */
+export type DbEditUndone = 
+/**  편집만의 트랜잭션을 롤백했다(자동 커밋 탭) — 아무것도 바뀌지 않았다. */
+"edit" | 
+/**  세이브포인트까지 되돌렸다 — 열린 트랜잭션의 앞선 변경은 남는다. */
+"savepoint" | 
+/**  서버가 트랜잭션 전체를 끝냈다(교착 · 끊김 등) — 세션 상태 이벤트가 까닭을 싣는다. */
+"transaction" | 
+/**  되돌렸는지 모른다(되돌리기 · 커밋이 실패했다). */
+"unknown";
+
+/**  행 하나의 수정: 키로 행을 가리키고 `values` 의 열을 바꾼다. */
+export type DbEditUpdate = {
+	/**  키 열 전부와 그 (원래) 값. */
+	key: DbEditCell[],
+	/**  바꿀 열과 새 값. 키 열은 넣지 않는다. */
+	values: DbEditCell[],
+};
+
 /**  확인한 (변수 이름, 대상). */
 export type DbEnvBinding = {
 	variable: string,
@@ -1682,6 +1857,14 @@ export type DbQueryProgress = {
 	elapsedMs: number,
 	/**  이 문장이 끝났다. */
 	finished: boolean,
+};
+
+/**  테이블의 행 키(M3-10 의 판정). */
+export type DbRowKey = {
+	/**  키를 이루는 인덱스(PK 또는 NOT NULL 열만의 유일 인덱스)의 이름. */
+	index: string,
+	columns: string[],
+	primary: boolean,
 };
 
 /**  `db.schemaChanged`: 그 연결의 스키마 캐시를 버렸다 — 창은 펼친 노드를 다시 읽는다. */

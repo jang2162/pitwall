@@ -1645,5 +1645,6 @@ pub fn register(router: &mut Router, sessions: Arc<DbSessions>) {
     crate::execute::register(router, Arc::clone(&sessions));
     crate::schema::register(router, Arc::clone(&sessions));
     crate::kv::register(router, Arc::clone(&sessions));
+    crate::edit::register(router, Arc::clone(&sessions));
     crate::connection::register(router, sessions);
 }
