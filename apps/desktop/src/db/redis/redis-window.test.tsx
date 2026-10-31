@@ -58,6 +58,8 @@ const host = vi.hoisted(() => ({
   needSecret: false,
   /** 있으면 `db.session.open` 의 답을 이것이 풀릴 때까지 붙잡는다. */
   holdOpen: undefined as Promise<void> | undefined,
+  /** 설정 `[db] redis_key_separator`(M3-20 — `db.settings.get`). */
+  separator: ":",
 }));
 
 const glide = vi.hoisted(() => ({
@@ -193,6 +195,22 @@ vi.mock("../../tauri-transport", async () => {
               layers: [],
               readOnly: false,
               state: { kind: "ready" },
+            });
+          case "db.settings.get":
+            return reply({
+              items: [
+                {
+                  key: "redisKeySeparator",
+                  fileKey: "db.redis_key_separator",
+                  unit: "text",
+                  value: host.separator,
+                  default: ":",
+                  min: null,
+                  max: null,
+                  configured: host.separator !== ":",
+                  refused: null,
+                },
+              ],
             });
           case "db.secret.set":
             host.needSecret = false;
@@ -342,6 +360,7 @@ beforeEach(() => {
   host.targetExists = true;
   host.needSecret = false;
   host.holdOpen = undefined;
+  host.separator = ":";
   glide.rows = [];
   glide.cells = [];
 });
@@ -498,6 +517,16 @@ describe("the Redis key document", () => {
     await settle();
     expect(calls("db.kv.get").map((c) => c.params.key)).toEqual(["b"]);
     expect($("[data-testid=redis-value]")?.dataset.key).toBe("b");
+  });
+
+  // 구분자의 처음 값은 설정 창 「DB」 의 `[db] redis_key_separator`(M3-20) — 위 막대에서 바꾸는 것은 그 탭만이다.
+  it("groups keys by the separator from the db settings", async () => {
+    host.separator = "/";
+    host.keys = [info("session/1", "string"), info("session:2", "string")];
+    await openConnected();
+    expect($<HTMLInputElement>("[data-testid=redis-separator]")?.value).toBe("/");
+    expect($("[data-group='session/']")).not.toBeNull();
+    expect($("[data-group='session:']")).toBeNull();
   });
 
   it("calls db.kv.setTtl with the typed TTL, through the confirmation the Host asked for", async () => {

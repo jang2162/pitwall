@@ -108,6 +108,26 @@ export function RedisDocument({ spec, params, panelId }: DbDocumentProps<"redis"
     return { tree, scan: new KeyScan(tree) };
   });
   const scanState = useScanState(browse.scan);
+  // 구분자의 처음 값은 전역 설정 `[db] redis_key_separator`(M3-20, 설정 창 「DB」). 사람이 위 막대에서 바꾸기 전에 온 값만 따른다.
+  const typedSeparator = useRef(false);
+  const treeRef = useRef(browse.tree);
+  treeRef.current = browse.tree;
+  useEffect(() => {
+    if (!client) return;
+    let live = true;
+    client.call("db.settings.get", null).then(
+      (view) => {
+        const value = view.items.find((i) => i.key === "redisKeySeparator")?.value;
+        if (!live || typedSeparator.current || typeof value !== "string") return;
+        setSeparator(value);
+        treeRef.current.setSeparator(value);
+      },
+      (e: unknown) => console.info("[db] the key separator setting was not read", e),
+    );
+    return () => {
+      live = false;
+    };
+  }, [client]);
   // 트리에서 고른 키(줄 칠하기)와 값 뷰어가 보이는 키는 따로다 — 고르기만으로 값을 읽지 않는다(10-ui.md §5.6: 더블클릭 · Enter 가
   // 값 보기). ↑ ↓ 로 훑을 때마다 읽고 버리면 Host 가 버린 요청의 연결을 매번 다시 만든다(M3-22 ⓓ).
   const [selected, setSelected] = useState<KeyEntry>();
@@ -485,6 +505,7 @@ export function RedisDocument({ spec, params, panelId }: DbDocumentProps<"redis"
             spellCheck={false}
             autoComplete="off"
             onChange={(e) => {
+              typedSeparator.current = true;
               setSeparator(e.target.value);
               tree.setSeparator(e.target.value);
             }}
