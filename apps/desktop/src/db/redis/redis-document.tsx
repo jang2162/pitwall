@@ -28,6 +28,7 @@ import { useHost } from "../../rpc/host";
 import type { DbDocumentProps } from "../documents/db-document-panel";
 import { writeClipboardText } from "../grid/clipboard";
 import { ConnectionMark, connectionFrameStyle, TlsMark } from "../safety/connection-mark";
+import { useDbAccessPrompt } from "../safety/access-prompt";
 import { type DbActiveSession, useDbTabSession } from "../safety/db-status";
 import { DbRefusalMessage, dbRefusal, dbRefusalText } from "../safety/messages";
 import { type KvConfirmQuestion, useRiskConfirm } from "../safety/risk-confirm";
@@ -62,6 +63,7 @@ export function RedisDocument({ spec, params, panelId }: DbDocumentProps<"redis"
   const workspace = useEditorWorkspace();
   const notify = useNotify();
   const { confirm, element: confirmElement } = useRiskConfirm();
+  const access = useDbAccessPrompt();
   const worktree = params.worktree ?? null;
 
   // 연결 설정(읽기만). 못 읽으면 `null` — 표지는 연결 id 로.
@@ -147,14 +149,30 @@ export function RedisDocument({ spec, params, panelId }: DbDocumentProps<"redis"
     if (!client || !projectId || connecting) return;
     setConnecting(true);
     setConnectError(undefined);
-    try {
-      const o = await client.call("db.session.open", {
+    const open = () =>
+      client.call("db.session.open", {
         projectId,
         worktree,
         connectionId: spec.connectionId,
         database,
         tabId: spec.tabId,
       });
+    try {
+      let o: DbSessionOpened;
+      try {
+        o = await open();
+      } catch (e) {
+        // 비밀(3101) · 확인(3102)이 필요하면 M3-13 의 공유 묻기로 받아 넣고 한 번 다시 연다.
+        const target = {
+          calls: client,
+          projectId,
+          worktree,
+          connectionId: spec.connectionId,
+          connectionName: name,
+        };
+        if (!(await access.resolve(e, target))) throw e;
+        o = await open();
+      }
       setOpened(o);
       startScan(o.session.sessionId, pattern);
     } catch (e) {
@@ -537,6 +555,7 @@ export function RedisDocument({ spec, params, panelId }: DbDocumentProps<"redis"
         <KvConsole session={consoleSession} />
       </div>
       {confirmElement}
+      {access.element}
       {prompt && <KeyPromptDialog question={prompt.question} onAnswer={prompt.answer} />}
     </div>
   );

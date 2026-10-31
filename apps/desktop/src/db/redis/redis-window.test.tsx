@@ -54,6 +54,8 @@ const host = vi.hoisted(() => ({
   pages: new Map<string, unknown>(),
   /** 이름 바꾸기 대상이 있는가. */
   targetExists: true,
+  /** 세션을 열 때 비밀이 필요하다(3101) — `db.secret.set` 이 오면 풀린다. */
+  needSecret: false,
 }));
 
 const glide = vi.hoisted(() => ({
@@ -176,7 +178,28 @@ vi.mock("../../tauri-transport", async () => {
               readOnly: false,
               state: { kind: "ready" },
             });
+          case "db.secret.set":
+            host.needSecret = false;
+            return reply(null);
           case "db.session.open":
+            if (host.needSecret)
+              return fail(3101, "db connection `redis-local` needs its password", {
+                connectionId: "redis-local",
+                key: "password",
+                reason: "missing",
+                target: {
+                  driver: "redis",
+                  host: "localhost",
+                  port: 6379,
+                  user: null,
+                  tunnel: null,
+                  sslmode: "disable",
+                  sslrootcert: null,
+                  sslcert: null,
+                  sslkey: null,
+                },
+                previous: null,
+              });
             return reply({
               session: {
                 sessionId: "s1",
@@ -301,6 +324,7 @@ beforeEach(() => {
   host.keys = [];
   host.pages = new Map();
   host.targetExists = true;
+  host.needSecret = false;
   glide.rows = [];
   glide.cells = [];
 });
@@ -557,6 +581,28 @@ describe("the Redis key document", () => {
     expect(calls("db.kv.rename").map((c) => c.params.overwrite)).toEqual([false, false, true]);
     expect($("[data-testid=redis-key-tree] [data-key=a]")).not.toBeNull();
     expect($("[data-testid=redis-key-tree] [data-key=b]")).not.toBeNull();
+  });
+
+  it("asks for the password the Host needs and connects with it", async () => {
+    host.needSecret = true;
+    host.keys = [info("a", "string")];
+    await mountApp();
+    await act(async () => {
+      openTab(dock!, { path: dbDocumentKey(SPEC), db: SPEC, title: "redis-local · DB 0" });
+    });
+    await settle();
+    await click($("[data-redis-document] [data-action=connect]"));
+    expect($("[data-testid=db-access-prompt]")).not.toBeNull();
+    await type($<HTMLInputElement>("[data-testid=db-access-secret]"), "pw-1");
+    await click($("[data-testid=db-access-prompt] [data-action=run]"));
+    await vi.waitFor(() => expect($("[data-testid=redis-scan-status]")?.dataset.scan).toBe("done"));
+    expect(calls("db.secret.set")[0]!.params).toMatchObject({
+      connectionId: "redis-local",
+      key: "password",
+      value: "pw-1",
+    });
+    expect(calls("db.session.open")).toHaveLength(2);
+    expect($("[data-testid=redis-connect-error]")).toBeNull();
   });
 
   it("does not call a connection RPC when restarted with the tab open", async () => {
