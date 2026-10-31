@@ -14,7 +14,7 @@
 //! `clear_type_cache` 한다. 트랜잭션이 열린 채 닫힌 연결은 풀에서 떼어 닫는다(DB 가 롤백한다). 5분 넘게 쉰 연결은 다음 `connect` 때 닫는다. 연결 테스트는 풀을 쓰지 않는다 — 저장하지 않은
 //! 초안의 비밀로 연 연결을 남기지 않는다.
 //!
-//! 실 DB 시험은 `#[cfg(pw_live_pg)]` 를 달고 이름에 `live_pg` 를 넣는다(`pw_db_driver::live` 머리 주석) — `src/live_tests.rs`.
+//! 실 DB 시험은 `#[cfg(pw_live_pg)]` 를 달고 함수 이름을 `live_pg_` 로 시작한다(`pw_db_driver::live` 머리 주석) — `src/live_tests.rs`.
 
 mod control;
 mod error;

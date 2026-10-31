@@ -117,7 +117,9 @@ pub trait SqlConnection: Send {
     /// 트랜잭션을 끝낸다. **실패한 트랜잭션(`TransactionState::Failed`)이면** 드라이버는 그래도 트랜잭션을 끝내고(PG 는 `COMMIT` 에
     /// 롤백으로 답한다) `rolled_back` 이 켜진 오류로 답한다 — 롤백을 성공으로 보이지 않는다(결정 M3-D21). 커밋 자체가 실패하면(지연
     /// 제약 등) 서버가 트랜잭션 전체를 되돌렸으므로 그 오류도 `rolled_back` 이다. 실패 상태가 없는 드라이버(오류가 트랜잭션을 깨지
-    /// 않는 SQLite · MySQL 등)에는 해당 드라이버만의 약속이다.
+    /// 않는 SQLite · MySQL 등)에는 해당 드라이버만의 약속이다. 커밋 오류 뒤 [`transaction_state`](Self::transaction_state) 가
+    /// `Idle` 이면 실행 파이프라인(M3-05)은 `rolled_back` 이 없어도 롤백으로 보고, 열린 채면(SQLite `BUSY`) 트랜잭션을 그대로 둔다 —
+    /// 상태는 정확히 보고한다.
     fn commit(&mut self) -> BoxFuture<'_, DbResult<()>>;
 
     fn rollback(&mut self) -> BoxFuture<'_, DbResult<()>>;

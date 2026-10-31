@@ -1024,3 +1024,43 @@ async fn a_running_session_is_busy_until_it_finishes_or_closes() {
         .unwrap_err();
     assert_eq!(err.code, rpc_code::NOT_FOUND);
 }
+
+/// 숨은 블록 안에서 오류가 나면(PG 25P02 — 롤백만 된다) 세션은 `failed` 를 보이고, 커밋하면 롤백되며 그것을 알린다(M3-06 이월의
+/// 파이프라인 쪽 — PG 실기는 live 시험의 몫).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_hidden_block_shows_failed_and_rolls_back_on_commit() {
+    let e = env(true);
+    e.pg.respond(
+        "HIDDEN",
+        FakeResponse::write(1).ending(FakeEnding::OpenBlock),
+    );
+    e.pg.respond(
+        "BAD",
+        FakeResponse::error(
+            DbError::new(DbErrorKind::Server, "division by zero").with_code("22012"),
+        ),
+    );
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    run(&mut w, exec(&s, "INSERT INTO HIDDEN VALUES (1)"))
+        .await
+        .unwrap();
+    let mut events =
+        e.f.bus
+            .subscribe(Filter::all().topics(["db.sessionChanged"]));
+    let items = run(&mut w, exec(&s, "SELECT 1/0 FROM BAD")).await.unwrap();
+    assert_eq!(items.last().unwrap()["kind"], "error");
+    let Received::Event(event) = events.recv().await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(event.payload["session"]["state"]["kind"], "failed");
+    // 실패한 블록의 다음 문장은 서버가 거절한다(25P02) — 세션은 그대로 failed.
+    let items = run(&mut w, exec(&s, "SELECT 2")).await.unwrap();
+    assert_eq!(items.last().unwrap()["error"]["code"], "25P02");
+    let err = w
+        .call("db.session.commit", json!({ "sessionId": s }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.data.unwrap()["error"]["rolledBack"], true);
+    assert!(e.pg.committed().is_empty());
+}

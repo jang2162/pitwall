@@ -1,7 +1,8 @@
 //! 실 DB 시험 도우미(14-m3-plan.md M3-01, 결정 M3-D16).
 //!
-//! **시험을 다는 법**: `#[cfg(pw_live_pg)]`(MySQL · MariaDB 는 `pw_live_mysql`, Redis 는 `pw_live_redis`)를 달고 이름에
-//! `live_pg` · `live_mysql` · `live_redis` 를 넣는다. 환경 변수가 없으면 시험이 목록에 없다(크레이트의 빌드 스크립트
+//! **시험을 다는 법**: `#[cfg(pw_live_pg)]`(MySQL · MariaDB 는 `pw_live_mysql`, Redis 는 `pw_live_redis`)를 달고 함수 이름을
+//! `live_pg_` · `live_mysql_` · `live_redis_` 로 시작한다 — `scripts/db-live.mjs` 의 필터는 이름 조각의 처음만 보고, 실 DB 없이 도는
+//! 시험은 이 접두어로 시작하지 않는다(CONTRIBUTING.md 「명령」 의 실 DB 시험 이름 규칙). 환경 변수가 없으면 시험이 목록에 없다(크레이트의 빌드 스크립트
 //! `live_cfg.rs` 머리 주석). URL 은 [`LiveDb::url`]. **live 시험은 `pw-db*` 크레이트에만 둔다** — 그 크레이트의 `Cargo.toml` 에
 //! `build = "../pw-db-driver/live_cfg.rs"` 가 있어야 표지가 켜지고(없으면 `unexpected_cfgs` 로 lint 가 실패한다),
 //! `scripts/db-live.mjs` 는 `pw-db*` 패키지만 빌드해 돌린다(데스크톱 크레이트에 둔 live 시험은 돌지 않는다).

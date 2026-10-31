@@ -62,6 +62,14 @@ export function selectedTests(listJson) {
   return names.sort();
 }
 
+/**
+ * 그 DB 의 nextest 필터 식. 실 DB 시험은 함수 이름이 `live_<db>_` 로 시작한다(CONTRIBUTING.md 「명령」 의 「실 DB 시험」) — 이름
+ * 가운데에 `live_pg` 가 든 단위 시험(`…_on_live_pg_are_not_reads`)은 고르지 않는다. 경로 조각(`::`)의 처음에만 맞춘다.
+ */
+export function filterExpr(filter) {
+  return `test(/(^|::)${filter}_/)`;
+}
+
 /** 준비 확인 시험인가(이름의 마지막 조각이 `<필터>_ready`). */
 export function isReadyTest(name, filter) {
   const last = name.split(/::|\s/).at(-1);
@@ -181,7 +189,7 @@ function runTarget(db, floor, ci, started) {
   }
   const tls = startTlsServers(tlsToStart(target, process.env, dockerAvailable()), started);
   const env = { ...process.env, ...tls, [target.testEnv]: url };
-  const expr = `test(/${target.filter}/)`;
+  const expr = filterExpr(target.filter);
   const pkgs = packages(env);
   console.log(`\n== ${db}: cargo nextest run --release -E '${expr}' (${target.env})`);
   const list = cargo(

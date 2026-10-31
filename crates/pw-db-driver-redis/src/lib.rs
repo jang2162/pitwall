@@ -10,7 +10,7 @@
 //!   연결을 다시 만든다([`connection`] 머리 주석).
 //! - **명령 분류는 여기 없다** — 부르는 쪽(관문 M3-22)이 `pw_db_sql::kv_command` 로 먼저 한다.
 //!
-//! 실 DB 시험은 `#[cfg(pw_live_redis)]` 를 달고 이름에 `live_redis` 를 넣는다(`pw_db_driver::live` 머리 주석). 하한은
+//! 실 DB 시험은 `#[cfg(pw_live_redis)]` 를 달고 함수 이름을 `live_redis_` 로 시작한다(`pw_db_driver::live` 머리 주석). 하한은
 //! `scripts/db-live.toml` 의 `redis`.
 
 mod browse;

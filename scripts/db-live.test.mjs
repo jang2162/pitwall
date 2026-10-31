@@ -9,6 +9,7 @@ import { test } from "node:test";
 import {
   TARGETS,
   exitCode,
+  filterExpr,
   isReadyTest,
   judge,
   parseFloors,
@@ -153,4 +154,22 @@ test("tls container names are per worktree and per run", async () => {
   assert.match(a, /^pitwall-tls-[0-9a-f]{8}-1-pg$/);
   assert.notEqual(a, tlsName("/w/b", 1, "pg"));
   assert.notEqual(a, tlsName("/w/a", 2, "pg"));
+});
+
+test("the filter picks live tests by the start of the function name only", () => {
+  assert.equal(filterExpr("live_pg"), "test(/(^|::)live_pg_/)");
+  const re = /(^|::)live_pg_/;
+  for (const name of [
+    "live::tests::live_pg_ready",
+    "live_tests::live_pg_a_read_only_transaction_refuses_writes",
+    "live_pg_top_level",
+  ]) {
+    assert.ok(re.test(name), name);
+  }
+  for (const name of [
+    "risk::tests::hardening::functions_that_passed_read_only_on_live_pg_are_not_reads",
+    "tests::not_live_pg_at_all",
+  ]) {
+    assert.ok(!re.test(name), name);
+  }
 });
