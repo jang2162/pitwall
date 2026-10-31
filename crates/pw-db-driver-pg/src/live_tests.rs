@@ -177,6 +177,30 @@ async fn live_pg_a_portal_waits_for_credit() {
     // 자동 커밋 탭은 커서를 버리면 포털의 트랜잭션을 끝낸다.
     assert_eq!(backend_state(&mut observer, pid).await, "idle");
     assert_eq!(count(&mut conn, "SELECT 1").await, 1);
+
+    // 서버가 실제로 만든 행 수: 시퀀스는 트랜잭션과 상관없이 다른 연결에 보인다. credit 만큼만 만들고, 조회의 커서를 버리면 멈춘다.
+    run(&mut conn, "DROP SEQUENCE IF EXISTS pw_live_portal_seq").await;
+    run(&mut conn, "CREATE SEQUENCE pw_live_portal_seq").await;
+    conn.execute(read(
+        "SELECT nextval('pw_live_portal_seq') FROM generate_series(1, 1000000)",
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        conn.fetch(FetchLimit::rows(1000)).await.unwrap().rows.len(),
+        1000
+    );
+    let produced = count(&mut observer, "SELECT last_value FROM pw_live_portal_seq").await;
+    assert!(
+        produced <= 1001,
+        "the server produced {produced} rows for 1,000 credits"
+    );
+    conn.discard_cursor().await.unwrap();
+    let produced = count(&mut observer, "SELECT last_value FROM pw_live_portal_seq").await;
+    assert!(
+        produced <= 1001,
+        "discarding a read let the server run on to {produced}"
+    );
 }
 
 /// ② 수동 커밋 세션에서 쓰기 → 상한 + 1 행 조회를 상한에서 끊기 → 커밋하면 쓰기가 남는다.
@@ -257,6 +281,24 @@ async fn live_pg_an_autocommit_returning_write_survives_the_row_limit() {
         .await
         .unwrap();
     assert!(vacuum.end.is_some());
+
+    // 조회가 아닌 문장의 커서를 버리면 멈추지 않고 끝까지 읽어 버린다 — 부작용이 문장 끝까지 돈다.
+    run(&mut conn, "DROP SEQUENCE IF EXISTS pw_live_drain_seq").await;
+    run(&mut conn, "CREATE SEQUENCE pw_live_drain_seq").await;
+    conn.execute(write(
+        "SELECT nextval('pw_live_drain_seq') FROM generate_series(1, 5000)",
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        conn.fetch(FetchLimit::rows(1000)).await.unwrap().rows.len(),
+        1000
+    );
+    conn.discard_cursor().await.unwrap();
+    assert_eq!(
+        count(&mut other, "SELECT last_value FROM pw_live_drain_seq").await,
+        5000
+    );
 }
 
 /// ③ 자동 커밋: `pg_sleep(30)` 을 취소하면 1 s 안에 취소 오류이고 백엔드는 `idle` 이다.
