@@ -150,6 +150,7 @@ mod tests {
             "db-grid.ftl",
             "db-redis.ftl",
             "db-safety.ftl",
+            "db-table-data.ftl",
             "file-window.ftl",
             "git-commit.ftl",
             "git-dialogs.ftl",

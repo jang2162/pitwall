@@ -65,16 +65,27 @@ describe("default keymap overlaps", () => {
       Object.fromEntries((["mac", "win", "linux"] as const).map((p) => [p, overlaps(p)])),
     ).toEqual({
       mac: [
+        // 웰컴 창에만 등록되는 「새 프로젝트」 와 테이블 데이터의 행 추가(M3-17 — 테이블 데이터에 포커스, 입력 칸 밖).
+        ["⌘N", ["project.new []", "db.tableData.addRow [dbTableDataFocus && !inputFocus]"]],
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 에디터의 줄 삭제(10-ui §4.2 「웰컴 창」).
-        ["⌘⌫", ["project.removeFromList []", "editor.deleteLine [editorFocus]"]],
+        // …와 테이블 데이터의 행 삭제(M3-17 — 10-ui §4.2 「DB」 의 그리드 행, 입력 칸 밖).
+        [
+          "⌘⌫",
+          [
+            "project.removeFromList []",
+            "editor.deleteLine [editorFocus]",
+            "db.tableData.deleteRow [dbTableDataFocus && !inputFocus]",
+          ],
+        ],
         // 웰컴 창의 「새 프로젝트」 시트의 만들기와 프로젝트 창 커밋 툴 윈도우 안의 커밋(M2-16).
-        // …와 SQL 콘솔의 실행(M3-15 — 콘솔에 포커스가 있을 때만).
+        // …와 SQL 콘솔의 실행(M3-15 — 콘솔에 포커스가 있을 때만), 테이블 데이터의 변경 제출(M3-17).
         [
           "⌘↩",
           [
             "project.create []",
             "git.commit.run [activeToolWindow == 'commit']",
             "db.console.run [dbConsoleFocus]",
+            "db.tableData.submit [dbTableDataFocus]",
           ],
         ],
         // 툴 윈도우 크기 조절(툴 윈도우에 포커스)과 에디터의 다음 · 이전 변경 위치(M2-17) — 10-ui §4.2 「툴 윈도우 · 창」 · 「Git (VCS)」.
@@ -99,6 +110,8 @@ describe("default keymap overlaps", () => {
         ["⌘L", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
         // 업데이트(풀, M2-20)와 터미널의 새 탭 — IntelliJ 처럼 터미널에 포커스가 있으면 새 탭이다.
         ["⌘T", ["terminal.newTab [terminalFocus]", "git.pull.open []"]],
+        // 변경 롤백(M2) 과 테이블 데이터의 변경 되돌리기(M3-17 — 10-ui §4.2 「DB」, 테이블 데이터에 포커스가 있을 때만).
+        ["⌥⌘Z", ["git.rollback []", "db.tableData.revert [dbTableDataFocus]"]],
       ],
       win: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
@@ -109,11 +122,22 @@ describe("default keymap overlaps", () => {
             "project.create []",
             "git.commit.run [activeToolWindow == 'commit']",
             "db.console.run [dbConsoleFocus]",
+            "db.tableData.submit [dbTableDataFocus]",
           ],
         ],
         ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
+        // 에디터의 줄 삭제와 테이블 데이터의 행 삭제(M3-17 — 10-ui §4.2 「DB」 의 그리드 행).
+        [
+          "Ctrl+Y",
+          [
+            "editor.deleteLine [editorFocus]",
+            "db.tableData.deleteRow [dbTableDataFocus && !inputFocus]",
+          ],
+        ],
         // 터미널의 복사와 결과 그리드의 다른 형식으로 복사(M3-16) — 포커스 범위가 갈린다.
         ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
+        // 변경 롤백(M2)과 테이블 데이터의 변경 되돌리기(M3-17).
+        ["Ctrl+Alt+Z", ["git.rollback []", "db.tableData.revert [dbTableDataFocus]"]],
       ],
       linux: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
@@ -124,10 +148,21 @@ describe("default keymap overlaps", () => {
             "project.create []",
             "git.commit.run [activeToolWindow == 'commit']",
             "db.console.run [dbConsoleFocus]",
+            "db.tableData.submit [dbTableDataFocus]",
           ],
         ],
         ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
+        // 에디터의 줄 삭제와 테이블 데이터의 행 삭제(M3-17 — 10-ui §4.2 「DB」 의 그리드 행).
+        [
+          "Ctrl+Y",
+          [
+            "editor.deleteLine [editorFocus]",
+            "db.tableData.deleteRow [dbTableDataFocus && !inputFocus]",
+          ],
+        ],
         ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
+        // 변경 롤백(M2)과 테이블 데이터의 변경 되돌리기(M3-17).
+        ["Ctrl+Alt+Z", ["git.rollback []", "db.tableData.revert [dbTableDataFocus]"]],
       ],
     });
   });

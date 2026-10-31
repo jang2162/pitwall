@@ -529,3 +529,36 @@ mac = "cmd+f2"
 win = "ctrl+f2"
 linux = "ctrl+f2"
 when = "dbConsoleFocus"
+
+# 테이블 데이터(M3-17, src/db/table-data/table-data-feature.tsx — 10-ui §4.2 「DB」 의 그리드 행): 변경 제출(⌘↩) · 되돌리기(⌘⌥Z) ·
+# 행 추가(⌘N, Win/Linux Alt+Insert) · 행 삭제(⌘⌫, Win/Linux Ctrl+Y). 테이블 데이터 뿌리와 그 안의 그리드에 포커스가 있을 때만
+# (`dbTableDataFocus`) — ⌘↩ 은 콘솔의 실행 · 커밋 창의 커밋, ⌘N 은 웰컴 창의 새 프로젝트, ⌘⌫ · Ctrl+Y 는 에디터의 줄 삭제와 범위가
+# 갈린다. 행 추가 · 삭제는 WHERE · ORDER BY 칸과 셀 편집 칸 안에서는 쉰다(`!inputFocus` — ⌘⌫ 은 줄 앞까지 지우기다).
+
+[[bindings]]
+action = "db.tableData.submit"
+mac = "cmd+enter"
+win = "ctrl+enter"
+linux = "ctrl+enter"
+when = "dbTableDataFocus"
+
+[[bindings]]
+action = "db.tableData.revert"
+mac = "cmd+alt+z"
+win = "ctrl+alt+z"
+linux = "ctrl+alt+z"
+when = "dbTableDataFocus"
+
+[[bindings]]
+action = "db.tableData.addRow"
+mac = "cmd+n"
+win = "alt+insert"
+linux = "alt+insert"
+when = "dbTableDataFocus && !inputFocus"
+
+[[bindings]]
+action = "db.tableData.deleteRow"
+mac = "cmd+backspace"
+win = "ctrl+y"
+linux = "ctrl+y"
+when = "dbTableDataFocus && !inputFocus"

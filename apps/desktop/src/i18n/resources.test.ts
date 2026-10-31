@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { dbConnectionStrings } from "../db/connection/strings";
 import { dbExplorerStrings } from "../db/explorer/strings";
 import { dbConsoleStrings } from "../db/console/strings";
+import { dbTableDataStrings } from "../db/table-data/strings";
 import { dbGridStrings } from "../db/grid/strings";
 import { dbRedisStrings } from "../db/redis/strings";
 import { dbAccessStrings } from "../db/safety/access-strings";
@@ -161,6 +162,11 @@ describe("built-in translations", () => {
       gitDialogStrings(t).push.refused(reason);
     callAll(gitCommitStrings(t));
     callAll(dbConsoleStrings(t));
+    callAll(dbTableDataStrings(t));
+    for (const count of [1, 3]) {
+      dbTableDataStrings(t).bar.pending(count);
+      dbTableDataStrings(t).preview.statements(count);
+    }
     callAll(dbSafetyStrings(t));
     callAll(dbExplorerStrings(t));
     callAll(dbAccessStrings(t));

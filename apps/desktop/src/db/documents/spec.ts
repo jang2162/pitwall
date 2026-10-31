@@ -37,6 +37,18 @@ export type DbDocumentSpec =
       connectionId?: string | null;
       database?: string | null;
       schema?: string | null;
+    }
+  /**
+   * 테이블 데이터(M3-17): 테이블 · 뷰 하나의 행. `where` · `orderBy` 는 위 막대의 조각(빈 글이면 그 절이 없다) — 되살린 탭은 그
+   * 조각을 둔 채 연결하지 않은 채 열린다. 제출하지 않은 변경은 탭에 저장하지 않는다(닫기 전에 묻는다).
+   */
+  | {
+      kind: "tableData";
+      tabId: string;
+      connectionId: string;
+      object: ObjectRef;
+      where?: string;
+      orderBy?: string;
     };
 
 export type DbDocumentKind = DbDocumentSpec["kind"];
@@ -63,6 +75,14 @@ export function dbDocumentDetail(spec: DbDocumentSpec): string {
       return `${spec.connectionId} · DB ${spec.database}`;
     case "ddl":
       return `${spec.connectionId} · ${[spec.object.database, spec.object.schema, spec.object.name].filter(Boolean).join(".")}`;
+    case "tableData":
+      return [
+        spec.connectionId,
+        [spec.object.database, spec.object.schema, spec.object.name].filter(Boolean).join("."),
+        spec.where ? `WHERE ${spec.where}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
   }
 }
 
@@ -79,6 +99,10 @@ const DB_DOCUMENT_SHAPES: { [K in DbDocumentKind]: (v: Record<string, unknown>) 
   redis: (v) =>
     str(v, "connectionId") && typeof v.database === "string" && /^\d+$/.test(v.database),
   ddl: (v) => str(v, "connectionId") && isObjectRef(v.object),
+  tableData: (v) =>
+    str(v, "connectionId") &&
+    isObjectRef(v.object) &&
+    ["where", "orderBy"].every((k) => v[k] === undefined || typeof v[k] === "string"),
 };
 
 /** `ObjectRef` 의 꼴(이름은 비지 않고, DB · 스키마는 글 또는 `null`). */

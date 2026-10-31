@@ -64,6 +64,7 @@ import { DbExplorerToolWindow } from "../db/explorer/explorer-feature";
 import { DbConsoleFeature } from "../db/console/console-feature";
 import { DbGridFeature } from "../db/grid/db-grid-feature";
 import { DbRedisFeature } from "../db/redis/redis-feature";
+import { DbTableDataFeature } from "../db/table-data/table-data-feature";
 import { GitCommitFeature } from "../git/commit/commit-feature";
 import { CommitToolWindow } from "../git/commit/commit-tool-window";
 import { GitBranchFeature } from "../git/git-branch-feature";
@@ -838,6 +839,9 @@ function ProjectWindowBody({
           )}
           {projectId !== undefined && (
             <DbRedisFeature projectId={projectId} workspace={workspace} />
+          )}
+          {projectId !== undefined && (
+            <DbTableDataFeature projectId={projectId} workspace={workspace} api={api} />
           )}
           {projectId !== undefined && (
             <GitCommitFeature

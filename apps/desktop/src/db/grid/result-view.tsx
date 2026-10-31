@@ -14,7 +14,8 @@
 //   에 둔다.
 // - 테이블 데이터(M3-17)가 쓰는 가산 이음매(넘기지 않으면 지금 그대로): `onActivate`(셀 더블클릭 · ↩ — 기본은 셀 상세),
 //   `cellMark` · `onCellClick`(glide-grid.tsx), `localFilter: false`(보유 행 필터 막대를 숨긴다 — 서버의 WHERE 를 쓰는 화면),
-//   `gridRef`(그리드 핸들 — 고르기 · 셀 사각형), `onCursor`(지금 칸).
+//   `gridRef`(그리드 핸들 — 고르기 · 셀 사각형), `onCursor`(지금 칸), `keymapContext`(그리드 영역에 더할 키맵 컨텍스트 키 —
+//   src/keymap/context.ts 는 가장 가까운 `data-keymap-context` 만 읽는다).
 // - 「다른 형식으로 복사」 는 Host 의 클립보드 쓰기로 쓴다(clipboard.ts — 비동기 뒤의 `navigator.clipboard.writeText` 는 WebKit
 //   이 거절할 수 있다).
 
@@ -67,6 +68,8 @@ export interface ResultViewProps {
   gridRef?: MutableRefObject<ResultGridHandle | null>;
   /** 지금 칸이 바뀌었다. */
   onCursor?: (cell: { row: number; column: number } | undefined) => void;
+  /** 그리드 영역에 함께 둘 키맵 컨텍스트 키(`dbGridFocus` 에 더한다 — 가장 가까운 컨텍스트만 읽히므로). */
+  keymapContext?: string;
 }
 
 function useVersion(buffer: ResultBuffer) {
@@ -234,6 +237,7 @@ function ResultBody({
   localFilter = true,
   gridRef,
   onCursor,
+  keymapContext,
   detail,
   setDetail,
 }: ResultViewProps & { detail: boolean; setDetail: (open: boolean) => void }) {
@@ -312,7 +316,7 @@ function ResultBody({
     <div
       ref={root}
       className="relative flex min-h-0 flex-1 flex-col"
-      data-keymap-context="dbGridFocus"
+      data-keymap-context={keymapContext ? `dbGridFocus ${keymapContext}` : "dbGridFocus"}
       onFocus={() => setActiveGrid(target)}
     >
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-ui-border px-2">

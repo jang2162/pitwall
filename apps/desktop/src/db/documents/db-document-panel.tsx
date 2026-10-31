@@ -8,6 +8,7 @@ import type { EditorTabParams } from "../../editor/editor-tabs";
 import { ConsoleTab } from "../console/console-tab";
 import { DdlDocument } from "../explorer/ddl-document";
 import { RedisDocument } from "../redis/redis-document";
+import { TableDataTab } from "../table-data/table-data-tab";
 import type { DbDocumentKind, DbDocumentSpec } from "./spec";
 
 export interface DbDocumentProps<K extends DbDocumentKind = DbDocumentKind> {
@@ -21,6 +22,7 @@ const DB_DOCUMENTS: { [K in DbDocumentKind]: ComponentType<DbDocumentProps<K>> }
   console: ConsoleTab,
   redis: RedisDocument,
   ddl: DdlDocument,
+  tableData: TableDataTab,
 };
 
 export function DbDocumentPanel({ spec, params, panelId }: DbDocumentProps) {

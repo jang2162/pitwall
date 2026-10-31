@@ -19,6 +19,8 @@ import { explorerActions } from "../db/explorer/explorer-feature";
 import { dbExplorerStrings } from "../db/explorer/strings";
 import { consoleActions } from "../db/console/console-feature";
 import { dbConsoleStrings } from "../db/console/strings";
+import { dbTableDataStrings } from "../db/table-data/strings";
+import { tableDataActions } from "../db/table-data/table-data-feature";
 import { gridActions } from "../db/grid/db-grid-feature";
 import { dbGridStrings } from "../db/grid/strings";
 import { commitActions } from "../git/commit/commit-feature";
@@ -180,6 +182,11 @@ const ACTION_IDS = new Set(
       model: { selected: () => undefined, node: () => undefined },
       openDdl() {},
     }),
+    ...tableDataActions({
+      strings: dbTableDataStrings((id) => id).actions,
+      activeTab: () => undefined,
+      open() {},
+    }),
     ...consoleActions({
       strings: dbConsoleStrings((id) => id).actions,
       activeTab: () => undefined,
@@ -269,6 +276,15 @@ describe("default keymap file", () => {
     expect(label("linux", "db.console.run")).toEqual(["Ctrl+Enter"]);
     expect(label("mac", "db.console.cancel")).toEqual(["⌘F2"]);
     expect(label("win", "db.console.cancel")).toEqual(["Ctrl+F2"]);
+    // 10-ui 「DB」 의 그리드 행 — 테이블 데이터(M3-17)
+    expect(label("mac", "db.tableData.submit")).toEqual(["⌘↩"]);
+    expect(label("win", "db.tableData.submit")).toEqual(["Ctrl+Enter"]);
+    expect(label("mac", "db.tableData.revert")).toEqual(["⌥⌘Z"]);
+    expect(label("linux", "db.tableData.revert")).toEqual(["Ctrl+Alt+Z"]);
+    expect(label("mac", "db.tableData.addRow")).toEqual(["⌘N"]);
+    expect(label("win", "db.tableData.addRow")).toEqual(["Alt+Insert"]);
+    expect(label("mac", "db.tableData.deleteRow")).toEqual(["⌘⌫"]);
+    expect(label("linux", "db.tableData.deleteRow")).toEqual(["Ctrl+Y"]);
   });
 });
 
