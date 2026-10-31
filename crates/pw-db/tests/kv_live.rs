@@ -1,12 +1,12 @@
 //! M3-22 의 실 Redis 시험(14-m3-plan.md M3-22 완료 기준 ① ~ ⑤): 실제 드라이버(`pw-db-driver-redis`)를 관문 뒤에 붙여 `db.kv.*`
 //! 를 RPC 세션 너머에서 부른다. `PW_TEST_REDIS_URL` 이 있을 때만 목록에 있다(`pw_db_driver::live`).
 //!
-//! 「서버에 닿지 않았다」 는 서버에 물어 판정한다 — `INFO commandstats` 의 호출 수(다른 시험이 그 명령을 서버에 보내지 않는 것만:
-//! `FLUSHALL` · `KEYS`), 그 밖은 키가 그대로인지(`EXISTS` · `PTTL`), 연결은 드라이버의 `connect` 수.
+//! 「서버에 닿지 않았다」 는 서버에 물어 판정한다 — `INFO commandstats` 의 호출 수(다른 시험이 그 명령을 서버에 보내지 않는 것만 —
+//! CONTRIBUTING.md 「명령」 의 실 DB 시험 단락), 그 밖은 키가 그대로인지(`EXISTS` · `PTTL`), 연결은 드라이버의 `connect` 수.
 //!
 //! 시험마다 DB 번호를 따로 쓴다(nextest 는 시험마다 프로세스를 띄워 함께 돌린다). M3-09 의 드라이버 시험이 0 ~ 10 을 쓰므로 여기는
-//! 11(키 100만 개 — 이미 심겨 있으면 다시 심지 않는다) · 12 ~ 15 다. 13 은 두 시험이 함께 쓴다 — 둘 다 DB 를 지우지 않고 자기 키만
-//! 쓴다.
+//! 11(키 100만 개 — 이미 심겨 있으면 다시 심지 않는다) · 12 ~ 15 다. 13 은 여러 시험이 함께 쓴다 — 모두 DB 를 지우지 않고 자기 접두사의
+//! 키만 쓴다.
 
 #![cfg(pw_live_redis)]
 
@@ -510,7 +510,7 @@ async fn run_argv(conn: &mut Box<dyn KvConnection>, argv: &[&str]) -> KvReply {
         .unwrap()
 }
 
-/// 키 `key` 가 `n` 개의 원소를 갖게 서버에서 채운다(이미 그 크기면 그대로). `kind` 는 `set` · `hash` · `zset` · `stream`.
+/// 키 `key` 가 `n` 개의 원소를 갖게 서버에서 채운다(이미 그 크기면 그대로). `kind` 는 `set` · `hash` · `list` · `zset` · `stream`.
 async fn fill(conn: &mut Box<dyn KvConnection>, kind: &str, key: &str, n: i64) {
     let (length, script) = match kind {
         "set" => (
@@ -520,6 +520,10 @@ async fn fill(conn: &mut Box<dyn KvConnection>, kind: &str, key: &str, n: i64) {
         "hash" => (
             "HLEN",
             "for i=1,tonumber(ARGV[1]),500 do local t={} for j=i,math.min(i+499,tonumber(ARGV[1])) do t[#t+1]=j t[#t+1]='v' end redis.call('HSET',KEYS[1],unpack(t)) end",
+        ),
+        "list" => (
+            "LLEN",
+            "for i=1,tonumber(ARGV[1]),1000 do local t={} for j=i,math.min(i+999,tonumber(ARGV[1])) do t[#t+1]=j end redis.call('RPUSH',KEYS[1],unpack(t)) end",
         ),
         "zset" => (
             "ZCARD",
@@ -601,11 +605,57 @@ async fn live_redis_a_nested_reply_is_cut_at_the_reply_limits() {
         .await
         .unwrap_err();
     assert_eq!(err.data.unwrap()["error"]["code"], "KEY_TOO_LARGE");
+    // 재리뷰 A: `COUNT 0` 은 Redis 에서 무제한이고, 키 자리의 `COUNT` 낱말은 선택 인자가 아니다 — 둘 다 묻는다.
+    for text in [
+        "XREAD COUNT 0 STREAMS h2:st 0",
+        "XREAD STREAMS h2:st COUNT 0 0",
+    ] {
+        let err = w
+            .call("db.kv.command", command(&s, text))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.data.unwrap()["error"]["code"],
+            "KEY_TOO_LARGE",
+            "{text}"
+        );
+    }
     assert_eq!(
         calls_of(&mut admin, "xread").await,
         xread,
         "the unbounded XREAD reached the server"
     );
+    // 재리뷰 F: id `$` 는 그 뒤의 새 항목만이라 빈 답이다 — 묻지 않고 간다.
+    let reply = w
+        .call("db.kv.command", command(&s, "XREAD STREAMS h2:st $"))
+        .await
+        .unwrap();
+    assert_eq!(reply, json!("nil"));
+    assert_eq!(calls_of(&mut admin, "xread").await, xread + 1);
+    // 재리뷰 E: `XREADGROUP` 도 같다(`>` 는 쌓인 만큼 준다). 서버에 가지 않으므로 PEL 도 비어 있다.
+    run_argv(&mut admin, &["XGROUP", "DESTROY", "h2:st", "g"]).await;
+    run_argv(&mut admin, &["XGROUP", "CREATE", "h2:st", "g", "0"]).await;
+    let xreadgroup = calls_of(&mut admin, "xreadgroup").await;
+    for text in [
+        "XREADGROUP GROUP g c STREAMS h2:st >",
+        "XREADGROUP GROUP g c COUNT 0 STREAMS h2:st >",
+    ] {
+        let err = w
+            .call("db.kv.command", command(&s, text))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.data.unwrap()["error"]["code"],
+            "KEY_TOO_LARGE",
+            "{text}"
+        );
+    }
+    assert_eq!(calls_of(&mut admin, "xreadgroup").await, xreadgroup);
+    let KvReply::Array(pending) = run(&mut admin, "XPENDING h2:st g").await else {
+        panic!("XPENDING is a list")
+    };
+    assert_eq!(pending.first().map(int), Some(0), "entries went to the PEL");
+    run_argv(&mut admin, &["XGROUP", "DESTROY", "h2:st", "g"]).await;
 
     // 묶인 `XREAD`(COUNT 9000 — 맨 위 원소 하나, 중첩 원소 45,003개)는 서버에 가고 응답 상한에서 끊긴다.
     let started = Instant::now();
@@ -641,15 +691,19 @@ async fn live_redis_amplifying_and_whole_reads_are_refused_before_the_server() {
     run_argv(&mut admin, &["SET", "m3:big", &big]).await;
     let mut w = e.f.window();
     let s = e.open(&mut w, "r").await;
-    let (srandmember, dump) = (
+    let (srandmember, dump, mget) = (
         calls_of(&mut admin, "srandmember").await,
         calls_of(&mut admin, "dump").await,
+        calls_of(&mut admin, "mget").await,
     );
     for text in [
         "SRANDMEMBER m3:tiny -2000000",
         "GETRANGE m3:big 0 -1",
         "GETRANGE m3:big 0 5000000",
         "DUMP m3:big",
+        // 재리뷰 B: 다른 타입 키(`m3:tiny` 는 set — `STRLEN` 이 WRONGTYPE)를 섞어도 묻기가 열리지 않는다. `MGET` 은 그 키에 nil
+        // 로 답하므로 서버 쪽은 실패하지 않는다.
+        "MGET m3:tiny m3:big",
     ] {
         let err = w
             .call("db.kv.command", command(&s, text))
@@ -663,6 +717,11 @@ async fn live_redis_amplifying_and_whole_reads_are_refused_before_the_server() {
     }
     assert_eq!(calls_of(&mut admin, "srandmember").await, srandmember);
     assert_eq!(calls_of(&mut admin, "dump").await, dump);
+    assert_eq!(
+        calls_of(&mut admin, "mget").await,
+        mget,
+        "the mixed MGET reached the server"
+    );
     // 상한 안이면 돈다.
     let reply = w
         .call("db.kv.command", command(&s, "SRANDMEMBER m3:tiny -3"))
@@ -839,7 +898,7 @@ async fn info_field(conn: &mut Box<dyn KvConnection>, section: &str, field: &str
         .unwrap_or_else(|| panic!("no {field}"))
 }
 
-/// 14 M3-22 판정(1): 서버를 오래 붙잡는 명령(`LCS` · `COUNT` 없는 `GEOSEARCH` · `GET` 패턴의 `SORT_RO`)은 확인(3001)을 받고,
+/// 14 M3-22 판정(1): 서버를 오래 붙잡는 명령(`LCS` · `COUNT n ANY` 없는 `GEOSEARCH`)은 확인(3001)을 받고,
 /// 확인 전에는 서버에 닿지 않는다. 등급은 조회라 read-only 연결에서도 확인 뒤 돈다. 판정은 다른 시험이 세지 않는 명령의 수다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_redis_commands_that_hold_the_server_need_a_confirmation() {
@@ -849,15 +908,15 @@ async fn live_redis_commands_that_hold_the_server_need_a_confirmation() {
     run(&mut admin, "GEOADD p1:g 13.361389 38.115556 palermo").await;
     let mut w = e.f.window();
     let s = e.open(&mut w, "ro").await;
-    let (lcs, geosearch, sort_ro) = (
+    let (lcs, geosearch) = (
         calls_of(&mut admin, "lcs").await,
         calls_of(&mut admin, "geosearch").await,
-        calls_of(&mut admin, "sort_ro").await,
     );
     for text in [
         "LCS p1:a p1:b",
         "GEOSEARCH p1:g FROMLONLAT 13 38 BYRADIUS 200 km",
-        "SORT_RO p1:g GET p1:*",
+        // 재리뷰 C: `ANY` 없는 `COUNT` 는 서버 일을 줄이지 않는다 — 큰 `COUNT` 로 비켜 가지 않는다.
+        "GEOSEARCH p1:g FROMLONLAT 13 38 BYRADIUS 200 km COUNT 9223372036854775807",
     ] {
         let err = w
             .call("db.kv.command", command(&s, text))
@@ -872,19 +931,18 @@ async fn live_redis_commands_that_hold_the_server_need_a_confirmation() {
         "LCS reached the server"
     );
     assert_eq!(calls_of(&mut admin, "geosearch").await, geosearch);
-    assert_eq!(calls_of(&mut admin, "sort_ro").await, sort_ro);
 
     // 확인을 받으면 read-only 연결에서도 돈다.
     let reply = call_confirmed(&mut w, "db.kv.command", command(&s, "LCS p1:a p1:b")).await;
     assert_eq!(reply["bulk"]["text"], "mytext", "{reply}");
     assert_eq!(calls_of(&mut admin, "lcs").await, lcs + 1);
-    // `COUNT` 로 묶으면 확인 없이 돈다.
+    // `COUNT n ANY` 로 묶으면 확인 없이 돈다.
     let reply = w
         .call(
             "db.kv.command",
             command(
                 &s,
-                "GEOSEARCH p1:g FROMLONLAT 13 38 BYRADIUS 200 km COUNT 5",
+                "GEOSEARCH p1:g FROMLONLAT 13 38 BYRADIUS 200 km COUNT 5 ANY",
             ),
         )
         .await
@@ -938,4 +996,46 @@ async fn live_redis_a_one_key_set_operation_is_probed_like_smembers() {
         .unwrap();
     assert_eq!(reply["truncated"]["elements"], 15_000, "{reply}");
     assert_eq!(calls_of(&mut admin, "zunion").await, zunion + 1);
+}
+
+/// 재리뷰 D: `SORT_RO` 의 비용(`BY` · 정렬)은 목록 길이에 비례한다 — `LIMIT` 과 상관없이 길이를 먼저 묻고, `SMEMBERS` 와 같은
+/// 상한(원소 1만)을 넘으면 서버에 보내지 않는다. 타입마다 길이 명령이 다르다(list · set · zset).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_sort_ro_is_probed_by_the_list_length() {
+    let e = env(13);
+    let mut admin = e.admin().await;
+    fill(&mut admin, "list", "p3:list", 15_000).await;
+    fill(&mut admin, "set", "p3:set", 15_000).await;
+    run(&mut admin, "DEL p3:small").await;
+    run(&mut admin, "RPUSH p3:small 3 1 2").await;
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "ro").await;
+    let sort_ro = calls_of(&mut admin, "sort_ro").await;
+    for text in [
+        "SORT_RO p3:list",
+        "SORT_RO p3:list LIMIT 0 10",
+        "SORT_RO p3:set BY nosort LIMIT 0 10",
+    ] {
+        let err = w
+            .call("db.kv.command", command(&s, text))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.data.as_ref().unwrap()["error"]["code"],
+            "KEY_TOO_LARGE",
+            "{text}: {err:?}"
+        );
+    }
+    assert_eq!(
+        calls_of(&mut admin, "sort_ro").await,
+        sort_ro,
+        "SORT_RO reached the server"
+    );
+    // 짧은 목록은 확인 없이(read-only 에서도) 돈다.
+    let reply = w
+        .call("db.kv.command", command(&s, "SORT_RO p3:small"))
+        .await
+        .unwrap();
+    assert_eq!(reply["array"].as_array().unwrap().len(), 3, "{reply}");
+    assert_eq!(calls_of(&mut admin, "sort_ro").await, sort_ro + 1);
 }

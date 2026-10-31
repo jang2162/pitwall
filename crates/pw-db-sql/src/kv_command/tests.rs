@@ -299,7 +299,7 @@ fn writes_that_overwrite_a_target_need_confirmation() {
         assert_eq!(class_of(text), CONFIRM, "{text}");
     }
     for text in [
-        "GEORADIUS g 0 0 1 km COUNT 5",
+        "GEORADIUS g 0 0 1 km COUNT 5 ANY",
         "COPY a b",
         "RESTORE k 0 payload",
     ] {
@@ -314,9 +314,13 @@ fn commands_that_hold_the_server_need_confirmation() {
     for text in [
         "LCS a b",
         "LCS a b IDX MINMATCHLEN 4",
-        "SORT_RO k GET obj:*",
-        "SORT_RO k BY w:* GET # GET obj:*",
         "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km",
+        // `ANY` 없는 `COUNT` 는 서버 일을 줄이지 않는다(재리뷰 C) — 큰 `COUNT` 로 비켜 가지 않는다.
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 10",
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 9223372036854775807",
+        "GEORADIUS_RO g 0 0 1 km COUNT 5",
+        "GEOSEARCH g FROMMEMBER ANY BYRADIUS 1 km COUNT 3",
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 0 ANY",
         "GEOSEARCH g FROMMEMBER COUNT BYBOX 1 1 km ASC",
         "GEOSEARCH COUNT FROMMEMBER m BYRADIUS 1 km",
         "GEOSEARCH g FROMMEMBER m BYRADIUS 1 km COUNT 0",
@@ -339,12 +343,14 @@ fn commands_that_hold_the_server_need_confirmation() {
     assert_eq!(class_of("GEORADIUS g 0 0 1 km STORE dst"), CONFIRM);
     // 묶였거나 패턴이 없으면 그대로다.
     for text in [
+        // `SORT_RO` 는 분류가 아니라 드라이버의 길이 사전 확인이 묶는다(재리뷰 D — 비용은 목록 길이).
         "SORT_RO k",
         "SORT_RO k LIMIT 0 10 ALPHA",
-        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 10",
+        "SORT_RO k BY w:* GET # GET obj:*",
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 10 ANY",
         "GEOSEARCH g FROMMEMBER m BYBOX 1 1 km COUNT 3 ANY ASC",
-        "GEORADIUS_RO g 0 0 1 km COUNT 10",
-        "GEORADIUSBYMEMBER_RO g m 1 km COUNT 10 WITHDIST",
+        "GEORADIUS_RO g 0 0 1 km COUNT 10 ANY",
+        "GEORADIUSBYMEMBER_RO g m 1 km COUNT 10 ANY WITHDIST",
     ] {
         assert_eq!(class_of(text), KvCommandClass::Allowed, "{text}");
     }

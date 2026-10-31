@@ -105,7 +105,8 @@ fn range_len(len: u64, start: i64, stop: i64) -> u64 {
 ///   `DUMP`(`MEMORY USAGE`).
 /// - 원소 수: `HGETALL` · `HKEYS` · `HVALS` · `SMEMBERS`, 키 하나의 `SUNION` · `SINTER` · `SDIFF`(`SCARD`) ·
 ///   `ZUNION` · `ZINTER` · `ZDIFF`(`ZCARD`), 번호 범위 `LRANGE` · `ZRANGE` 류, 묶지 않은 `ZRANGEBYSCORE` 류 ·
-///   `XRANGE` 류, `COUNT` 로 묶지 않은 `XREAD`(stream 마다 `XLEN` 합), `XINFO STREAM … FULL COUNT 0`, 큰 count 의
+///   `XRANGE` 류, `COUNT` 로 묶지 않은(또는 `COUNT 0`) `XREAD` · `XREADGROUP`(stream 마다 `XLEN` 합, `XREAD` 의 id `$` 는 뺀다), `SORT_RO`
+///   (`LIMIT` 과 상관없이 목록 길이 — `LLEN` · `SCARD` · `ZCARD` 합), `XINFO STREAM … FULL COUNT 0`, 큰 count 의
 ///   `SRANDMEMBER` · `HRANDFIELD` · `ZRANDMEMBER`(음수 count 는 키 크기와 상관없이 부푼다).
 ///
 /// 이 밖(여러 키를 합치는 `SUNION` 류 · 원소 하나가 큰 `LINDEX` 등 — 14 M3-22 의 이월 목록)은 응답 상한([`limited_reply`]) ·
@@ -208,15 +209,21 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
         }
         "XRANGE" | "XREVRANGE" => (!bounded_by("COUNT", 1, 1))
             .then(|| SizeProbe::new("XLEN", key, Check::Elements { factor: 1 }))?,
-        "XREAD" => {
-            // `[COUNT n] STREAMS k1 … kn id1 … idn` — `COUNT` 는 stream 마다다.
-            let at = args
-                .iter()
-                .position(|a| a.eq_ignore_ascii_case("STREAMS"))?;
-            let rest = &args[at + 1..];
-            let keys = &rest[..rest.len() / 2];
-            (!bounded_by("COUNT", 1, keys.len() as u64))
-                .then(|| SizeProbe::each(each("XLEN", keys), Check::Elements { factor: 1 }))?
+        // `[COUNT n] [BLOCK ms] [NOACK] STREAMS k1 … kn id1 … idn` — `COUNT` 는 stream 마다다. 둘 다 `COUNT 0` 은 묶지 않은
+        // 것이다(`XRANGE` 류의 0 은 빈 답이라 다르다). `XREAD` 의 id `$` 는 그 뒤의 새 항목만이라 BLOCK 없이는 빈 답이다 —
+        // 묻지 않는다. `XREADGROUP` 의 `>` 는 쌓인 만큼 주므로 묻는다.
+        "XREAD" => stream_read_probe(args, 0, true),
+        "XREADGROUP" if key.eq_ignore_ascii_case("GROUP") => stream_read_probe(args, 3, false),
+        "SORT_RO" => {
+            // 비용(`BY` · 정렬)은 목록 길이에 비례한다 — `LIMIT` 과 상관없이 길이를 묻는다. 타입마다 길이 명령이 다르므로 셋을
+            // 묻고 합한다(다른 타입의 `WRONGTYPE` 은 0 — `refuse_if_too_large`).
+            SizeProbe::each(
+                ["LLEN", "SCARD", "ZCARD"]
+                    .iter()
+                    .map(|c| vec![(*c).to_owned(), key.clone()])
+                    .collect(),
+                Check::Elements { factor: 1 },
+            )
         }
         "XINFO" => {
             // `XINFO STREAM k FULL [COUNT n]` — 기본 10, `COUNT 0` 은 모든 항목.
@@ -229,6 +236,49 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
         }
         _ => None,
     }
+}
+
+/// `XREAD` · `XREADGROUP` 의 사전 확인. 선택 인자를 `start` 부터 `STREAMS` 까지 자리대로 걷는다 — 키 자리의 `COUNT` 낱말을
+/// 선택 인자로 읽지 않는다(분류기의 `stream_read_options` 와 같은 걸음). 형식이 틀리면 묻지 않는다(서버가 오류로 답한다).
+fn stream_read_probe(args: &[String], start: usize, skip_dollar: bool) -> Option<SizeProbe> {
+    let mut i = start;
+    let mut count = None;
+    loop {
+        let word = args.get(i)?.to_ascii_uppercase();
+        match word.as_str() {
+            "STREAMS" => break,
+            "COUNT" => {
+                count = Some(args.get(i + 1)?.parse::<u64>().ok()?);
+                i += 2;
+            }
+            "BLOCK" => i += 2,
+            "NOACK" => i += 1,
+            _ => return None,
+        }
+    }
+    let rest = &args[i + 1..];
+    if rest.is_empty() || !rest.len().is_multiple_of(2) {
+        return None;
+    }
+    let (keys, ids) = rest.split_at(rest.len() / 2);
+    let keys: Vec<String> = keys
+        .iter()
+        .zip(ids)
+        .filter(|(_, id)| !(skip_dollar && id.as_str() == "$"))
+        .map(|(k, _)| k.clone())
+        .collect();
+    let bounded = count
+        .filter(|&n| n > 0)
+        .is_some_and(|n| n.saturating_mul(keys.len() as u64) <= MAX_REPLY_ELEMENTS);
+    if bounded {
+        return None;
+    }
+    SizeProbe::each(
+        keys.iter()
+            .map(|k| vec!["XLEN".to_owned(), k.clone()])
+            .collect(),
+        Check::Elements { factor: 1 },
+    )
 }
 
 /// 응답을 상한에서 끊는다. 상한 안이면 그대로다.
@@ -504,6 +554,49 @@ mod tests {
         assert_eq!(probe("SRANDMEMBER s"), None);
         assert_eq!(probe("HRANDFIELD h -5000 WITHVALUES"), None);
         assert_eq!(probe("XREAD COUNT 100 STREAMS a b 0 0"), None);
+        // 재리뷰 A: `COUNT 0` 은 묶지 않은 것이고, 키 자리의 `COUNT` 낱말은 선택 인자가 아니다.
+        assert_eq!(
+            probe("XREAD COUNT 0 STREAMS a 0").unwrap().commands,
+            vec![args("XLEN a")]
+        );
+        assert_eq!(
+            probe("XREAD STREAMS a COUNT 0 0").unwrap().commands,
+            vec![args("XLEN a"), args("XLEN COUNT")]
+        );
+        // 재리뷰 F: id `$` 의 stream 은 빈 답이라 묻지 않는다.
+        assert_eq!(probe("XREAD STREAMS a $"), None);
+        assert_eq!(
+            probe("XREAD STREAMS a b $ 0").unwrap().commands,
+            vec![args("XLEN b")]
+        );
+        // 재리뷰 E: `XREADGROUP` 도 같은 규칙이고 `>` 는 쌓인 만큼이라 묻는다.
+        assert_eq!(
+            probe("XREADGROUP GROUP g c STREAMS a >").unwrap().commands,
+            vec![args("XLEN a")]
+        );
+        assert!(probe("XREADGROUP GROUP g c COUNT 0 NOACK STREAMS a >").is_some());
+        assert_eq!(probe("XREADGROUP GROUP g c COUNT 10 STREAMS a >"), None);
+        assert_eq!(
+            probe("XREADGROUP GROUP STREAMS COUNT STREAMS a >")
+                .unwrap()
+                .commands,
+            vec![args("XLEN a")],
+            "group and consumer names are skipped by position"
+        );
+        // 재리뷰 D: `SORT_RO` 는 `LIMIT` 과 상관없이 목록 길이를 묻는다(타입마다 길이 명령 — 맞지 않는 타입은 0).
+        for text in [
+            "SORT_RO k",
+            "SORT_RO k LIMIT 0 10",
+            "SORT_RO k BY nosort GET #",
+        ] {
+            assert_eq!(
+                probe(text).unwrap().commands,
+                vec![args("LLEN k"), args("SCARD k"), args("ZCARD k")],
+                "{text}"
+            );
+        }
+        assert!(probe("SORT_RO k").unwrap().too_large(10_001));
+        assert!(!probe("SORT_RO k").unwrap().too_large(10_000));
         assert!(
             probe("XREAD COUNT 6000 STREAMS a b 0 0").is_some(),
             "COUNT is per stream"

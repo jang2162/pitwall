@@ -608,18 +608,24 @@ impl RedisKv {
                     }
                     cmd.arg(&argv[1..]);
                 }
-                pipe.query_async::<Vec<Value>>(&mut c).await
+                // 답마다 오류를 따로 받는다 — 하나가 실패해도 나머지 답을 버리지 않는다.
+                pipe.ignore_errors()
+                    .query_async::<Vec<redis::RedisResult<Value>>>(&mut c)
+                    .await
             })
             .await?;
-        // 크기를 못 물으면(모듈 없음 · 권한 · 다른 타입) 막지 않는다 — 응답 상한이 남는다. 없는 키(`nil`)는 0 이다.
+        // 크기를 못 물으면(모듈 없음 · 권한) 막지 않는다 — 응답 상한이 남는다. 없는 키(`nil`)는 0 이다. 다른 타입(`WRONGTYPE`)도
+        // 0 이다: `MGET` 은 다른 타입 키에 nil 로 답하므로, 그 답 하나로 묻기 전체를 버리면 섞인 타입 한 키로 사전 확인을 비켜
+        // 간다(재리뷰 B). `SORT_RO` 는 타입마다 길이 명령 셋을 물어 맞는 하나만 센다.
         let Ok(answers) = answers else {
             return Ok(());
         };
         let mut size = 0_u64;
         for answer in answers {
             match answer {
-                Value::Int(n) => size = size.saturating_add(u64::try_from(n).unwrap_or(0)),
-                Value::Nil => {}
+                Ok(Value::Int(n)) => size = size.saturating_add(u64::try_from(n).unwrap_or(0)),
+                Ok(Value::Nil) => {}
+                Err(e) if e.code() == Some("WRONGTYPE") => {}
                 _ => return Ok(()),
             }
         }

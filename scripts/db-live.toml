@@ -1,12 +1,12 @@
 # 실 DB 시험(live_*)의 실행 개수 하한 — DB 마다 한 줄(14-m3-plan.md M3-01, 결정 M3-D16). `scripts/db-live.mjs` 가 읽는다.
 #
 # 값은 그 DB 의 필터가 고른 시험 가운데 준비 확인 시험(`live_<db>_ready`)을 뺀 수의 하한이다. 처음 값은 0 이고, 드라이버 행이
-# 자기 완료 기준의 N 으로 올린다(M3-06 pg ≥ 10, M3-07 mysql · mariadb ≥ 8, M3-09 redis ≥ 8, M3-22 가 redis 를 13 으로, 그 리뷰 수정 회차가 21 로, M3-11 ssh_tunnel ≥ 6).
+# 자기 완료 기준의 N 으로 올린다(M3-06 pg ≥ 10, M3-07 mysql · mariadb ≥ 8, M3-09 redis ≥ 8, M3-22 가 redis 를 13 으로, 그 리뷰 수정 회차가 22 로, M3-11 ssh_tunnel ≥ 6).
 # 준비 확인을 포함한 필터 전체는 하한과 상관없이 늘 1개 이상이어야 한다(`--no-tests=fail`) — 0개면 그 단계가 실패한다.
 # 줄을 지우거나 값을 내리면 리뷰에서 거절한다(14 「공유 부품의 주인」).
 
 pg = 10
 mysql = 8
 mariadb = 8
-redis = 21
+redis = 22
 ssh_tunnel = 6
