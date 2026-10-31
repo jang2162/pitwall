@@ -202,9 +202,9 @@ function TableDataBody({
           const ask = tableDataWindow.getState().askDiscard;
           const count = store.getState().buffer?.pendingCount ?? 0;
           if (!ask) return false;
-          const discard = await ask({ table: store.getState().spec.object.name, count });
-          if (discard) store.revert();
-          return discard;
+          // 답만 돌려준다 — 버리는 것은 실제로 닫힐 때(패널이 빠지며 `dispose`)다. 여러 탭을 묻다 뒤에서 [취소] 하면 아무것도
+          // 닫히지 않으므로 앞 탭의 변경도 그대로여야 한다(리뷰 L2).
+          return ask({ table: store.getState().spec.object.name, count });
         },
       }),
     [workspace, panelId, store],
@@ -223,7 +223,7 @@ function TableDataBody({
       const blocked = store.editBlock();
       if (!b) return;
       if (blocked) {
-        if (blocked !== "notConnected" && blocked !== "loading")
+        if (blocked !== "notConnected" && blocked !== "loading" && blocked !== "submitting")
           info(T.block[blocked](errorMessage(store.getState().rowKey)));
         return;
       }
@@ -260,7 +260,8 @@ function TableDataBody({
       const b = store.getState().buffer;
       setEditing(undefined);
       editingRef.current = undefined;
-      if (now && b && value !== undefined) {
+      // 미리보기를 받는 중 · 떠 있는 동안에는 고침을 받지 않는다(리뷰 M1).
+      if (now && b && value !== undefined && store.editBlock() !== "submitting") {
         const original = b.original(now.row)?.[now.column];
         const next =
           value === "input" ? valueFromInput(now.text, b.columns[now.column], original) : value;
@@ -328,13 +329,15 @@ function TableDataBody({
         ? foreignKeys.find((k) => k.columns.some((col) => sameColumnName(dialect, col, name)))
         : undefined;
       if (!fk) return;
-      const row = b.row(cell.row);
-      if (!row) return;
+      // 읽은 값(고치기 전)만 따라간다 — 추가 행 · 고친 칸은 따라가지 않는다(리뷰 L1).
+      const row = b.original(cell.row);
+      if (!row) return info(T.edit.fkPending);
       const pairs: { column: string; value: DbValue }[] = [];
       for (const [i, col] of fk.columns.entries()) {
         const at = b.columns.findIndex((m) => sameColumnName(dialect, m.name, col));
         const referenced = fk.referencedColumns[i];
         if (at < 0 || referenced === undefined) return;
+        if (b.mark(cell.row, at) === "changed") return info(T.edit.fkPending);
         pairs.push({ column: referenced, value: row[at]! });
       }
       try {
@@ -654,7 +657,7 @@ function Notices({
   if (!opened) lines.push({ key: "idle", text: T.bar.notConnected });
   if (opened?.session.state.kind === "disconnected")
     lines.push({ key: "lost", text: T.bar.disconnected, warning: true });
-  if (block && block !== "notConnected" && block !== "loading")
+  if (block && block !== "notConnected" && block !== "loading" && block !== "submitting")
     lines.push({ key: "block", text: T.block[block](errorMessage(rowKey)) });
   if (notice) lines.push({ key: "notice", text: dbNoticeText(notice, S.notice), warning: true });
   if (applied)

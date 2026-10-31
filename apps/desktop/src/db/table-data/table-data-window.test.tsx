@@ -58,6 +58,8 @@ const host = vi.hoisted(() => ({
   /** 있으면 다음 `db.edit.apply` 가 이 오류로 답한다(한 번). */
   applyError: null as object | null,
   readOnly: false,
+  /** 있으면 `db.edit.preview` 가 이것이 풀린 뒤에 답한다(느린 Host — 원격 DB · 터널). */
+  previewGate: null as Promise<void> | null,
 }));
 
 interface FakeGlide {
@@ -299,26 +301,28 @@ vi.mock("../../tauri-transport", async () => {
           case "stream.cancel":
             return;
           case "db.edit.preview":
-            return reply({
-              statements: [
-                {
-                  index: 0,
-                  change: { kind: "delete", index: 0 },
-                  sql: 'DELETE FROM "app"."public"."t" WHERE "id" = 2',
-                  grade: "write",
-                },
-                {
-                  index: 1,
-                  change: { kind: "update", index: 0 },
-                  sql: `UPDATE "app"."public"."t" SET "name" = 'uno' WHERE "id" = 1`,
-                  grade: "write",
-                },
-              ],
-              grade: "write",
-              key: ["id"],
-              applies: "ownTransaction",
-              previewHash: "ph-1",
-            });
+            return void (host.previewGate ?? Promise.resolve()).then(() =>
+              reply({
+                statements: [
+                  {
+                    index: 0,
+                    change: { kind: "delete", index: 0 },
+                    sql: 'DELETE FROM "app"."public"."t" WHERE "id" = 2',
+                    grade: "write",
+                  },
+                  {
+                    index: 1,
+                    change: { kind: "update", index: 0 },
+                    sql: `UPDATE "app"."public"."t" SET "name" = 'uno' WHERE "id" = 1`,
+                    grade: "write",
+                  },
+                ],
+                grade: "write",
+                key: ["id"],
+                applies: "ownTransaction",
+                previewHash: "ph-1",
+              }),
+            );
           case "db.edit.apply":
             if (host.applyError) {
               const error = host.applyError;
@@ -388,6 +392,7 @@ beforeEach(() => {
   ];
   host.applyError = null;
   host.readOnly = false;
+  host.previewGate = null;
   glide.props = [];
 });
 
@@ -782,6 +787,74 @@ it("follows a foreign key on ⌘+click through db.tableData.open with that key",
   expect(callsOf("db.query.execute").at(-1)!.params.sql).toBe(
     'SELECT * FROM "public"."users"\nWHERE id = 7',
   );
+});
+
+it("takes no edits from [제출] until the preview closes, so nothing typed meanwhile is lost (review M1)", async () => {
+  await mount();
+  await openTable();
+  await connect();
+  await edit(1, 0, "uno");
+  let release!: () => void;
+  host.previewGate = new Promise<void>((r) => (release = r));
+  await click(button("db-table-data-submit"));
+  expect(callsOf("db.edit.preview")).toHaveLength(1);
+  // 미리보기 답이 오기 전: 편집기 · 행 추가 · 행 삭제 · 키 모두 받지 않는다.
+  await act(async () => grid().onCellActivated([1, 1]));
+  await settle();
+  expect(q("[data-testid=db-table-data-inline-editor]")).toBeNull();
+  await press({ code: "KeyN", key: "n", metaKey: true });
+  await selectRow(1);
+  await press({ code: "Backspace", key: "Backspace", metaKey: true });
+  expect(grid().rows).toBe(2);
+  expect(grid().getCellContent([1, 1]).displayData).toBe("two");
+  expect(button("db-table-data-add-row").disabled).toBe(true);
+  // 되돌리기도 미리보기 동안은 버리지 않는다.
+  await press({ code: "KeyZ", key: "z", metaKey: true, altKey: true });
+  expect(grid().getCellContent([1, 0]).displayData).toBe("✎ uno");
+  await act(async () => release());
+  await settle();
+  expect(q("[data-testid=db-table-data-preview]")).not.toBeNull();
+  await click(q("[data-testid=db-table-data-preview] [data-answer=cancel]")!);
+  // 미리보기가 닫히면 다시 고칠 수 있다.
+  await edit(1, 1, "dos");
+  expect(grid().getCellContent([1, 1]).displayData).toBe("✎ dos");
+});
+
+it("follows a foreign key only by the value that was read, not an edited cell or an added row (review L1)", async () => {
+  await mount();
+  await openTable();
+  await connect();
+  await edit(2, 0, "8");
+  await act(async () => grid().onCellClicked!([2, 0], { metaKey: true, ctrlKey: false }));
+  await settle();
+  await click(button("db-table-data-add-row"));
+  await act(async () => grid().onCellClicked!([2, 2], { metaKey: true, ctrlKey: false }));
+  await settle();
+  expect(tableTabs()).toHaveLength(1);
+  expect(methods()).not.toContain("db.sql.insertText");
+  // 고침을 되돌리면(읽은 값과 같아지면) 따라간다.
+  await edit(2, 0, "7");
+  await act(async () => grid().onCellClicked!([2, 0], { metaKey: true, ctrlKey: false }));
+  await settle();
+  expect(callsOf("db.sql.insertText")[0]!.params).toMatchObject({ rows: [[{ int: 7 }]] });
+});
+
+it("discards on the actual close, not on the answer, so a later [취소] keeps every change (review L2)", async () => {
+  await mount();
+  await openTable();
+  await connect();
+  await edit(1, 0, "uno");
+  // 창 닫기의 질문에 [버리고 닫기] 로 답해도, 창이 실제로 닫히기 전(다른 탭이 [취소] 할 수 있다)에는 버리지 않는다.
+  let answer: Promise<boolean> | undefined;
+  await act(async () => {
+    answer = closeGuard!();
+  });
+  await settle();
+  const dialog = q("[data-testid=git-confirm-dialog]")!;
+  await click([...dialog.querySelectorAll("button")].find((b) => b.textContent !== "취소")!);
+  expect(await answer).toBe(true);
+  expect(grid().getCellContent([1, 0]).displayData).toBe("✎ uno");
+  expect(q("[data-testid=db-table-data-pending]")).not.toBeNull();
 });
 
 it("opens nothing when the foreign key value is NULL", async () => {

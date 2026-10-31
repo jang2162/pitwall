@@ -53,6 +53,7 @@ db-table-data-edit-key = 키 열은 고치지 않는다 — 키를 바꾸는 편
 db-table-data-edit-truncated = 잘린 값이라 고치지 않는다 — 원래 값 전체를 읽지 못했다.
 db-table-data-edit-deleted = 지울 행은 고치지 않는다 — 행 삭제를 다시 눌러 되살린 뒤 고친다.
 db-table-data-fk-null = 값이 NULL 이라 가리키는 행이 없다.
+db-table-data-fk-pending = 추가 행 · 고친 칸의 값은 따라가지 않는다 — FK 는 읽은 값으로 따라간다.
 
 ## 변경 제출 미리보기
 

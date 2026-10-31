@@ -12,7 +12,8 @@
 //   read-only 연결 · 뷰도 끈다(Host 가 거절하는 것을 미리 끈다 — 거절의 정본은 Host). [제출] 은 `db.edit.preview` 를 불러 미리보기
 //   (Host 가 만든 문장 글 · 등급 · `previewHash`)를 띄우고, 미리보기의 [적용] 이 같은 `changes` · 같은 `previewHash` 로
 //   `db.edit.apply` 를 부른다 — 그것이 결정 M3-D20 의 확인이다(M3-12 ⓐ). 적용되면 변경을 비우고 다시 읽는다. 실패하면 변경은 그대로
-//   두고 까닭을 보인다(영향 행 수 · DB 오류 · 미리보기 뒤 바뀜).
+//   두고 까닭을 보인다(영향 행 수 · DB 오류 · 미리보기 뒤 바뀜). [제출] 을 누른 뒤 미리보기가 닫힐 때까지는 편집이 꺼진다
+//   (`editBlock` 의 `submitting` — 그 사이의 편집은 적용에 실리지 않고 적용 뒤 버려지므로, 리뷰 M1).
 // - **FK**(⌘+클릭): 연결하면 `db.schema.foreignKeys` 로 FK 를 받아 둔다(메타데이터용 연결 — 세션과 따로).
 // - **닫기 전에 묻기**: 제출하지 않은 변경이 있으면 `needsCloseAnswer()` 가 참 — 묻는 것은 창의 몫(table-data-feature.tsx).
 
@@ -65,6 +66,8 @@ export interface TableDataDeps {
 export type EditBlock =
   | "notConnected"
   | "loading"
+  /** [제출] 을 누른 뒤 미리보기가 닫힐 때까지(리뷰 M1 — 그 사이의 편집은 적용에 실리지 않고 적용 뒤 버려진다). */
+  | "submitting"
   | "readOnly"
   | "noKey"
   | "keyNotInResult"
@@ -288,8 +291,9 @@ function tableDataActions(store: StoreApi<TableDataState>, deps: TableDataDeps) 
 
     /** 편집이 꺼진 까닭(켜졌으면 `undefined`). */
     editBlock(): EditBlock | undefined {
-      const { opened, rowKey, buffer, running } = get();
+      const { opened, rowKey, buffer, running, submitting, preview } = get();
       if (!opened) return "notConnected";
+      if (submitting || preview) return "submitting";
       if (opened.readOnly) return "readOnly";
       if (!rowKey || running || !buffer) return "loading";
       if ("failed" in rowKey) return "failed";
@@ -360,6 +364,8 @@ function tableDataActions(store: StoreApi<TableDataState>, deps: TableDataDeps) 
 
     /** [되돌리기]: 제출하지 않은 변경을 모두 버린다. */
     revert() {
+      // 미리보기가 떠 있거나 받는 중이면 버리지 않는다 — 적용 뒤 버퍼를 비우는 것은 `apply` 다.
+      if (get().submitting || get().preview) return;
       get().buffer?.revert();
       set({ applyError: undefined });
     },

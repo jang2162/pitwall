@@ -22,7 +22,7 @@ export function dbTableDataStrings(t: Translate) {
     unknown: t("db-table-data-undone-unknown"),
   };
   const block: Record<
-    Exclude<EditBlock, "notConnected" | "loading">,
+    Exclude<EditBlock, "notConnected" | "loading" | "submitting">,
     (message: string) => string
   > = {
     readOnly: () => t("db-table-data-block-read-only"),
@@ -69,6 +69,7 @@ export function dbTableDataStrings(t: Translate) {
       truncated: t("db-table-data-edit-truncated"),
       deleted: t("db-table-data-edit-deleted"),
       fkNull: t("db-table-data-fk-null"),
+      fkPending: t("db-table-data-fk-pending"),
     },
     preview: {
       title: t("db-table-data-preview-title"),

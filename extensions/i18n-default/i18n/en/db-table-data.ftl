@@ -56,6 +56,7 @@ db-table-data-edit-key = Key columns are not edited — an edit that changes the
 db-table-data-edit-truncated = This value was cut short, so it is not edited — the whole value was not read.
 db-table-data-edit-deleted = A row to delete is not edited — press Delete Row again to keep it, then edit.
 db-table-data-fk-null = The value is NULL, so it points at no row.
+db-table-data-fk-pending = An added row or an edited cell is not followed — a foreign key is followed by the value that was read.
 
 ## Submit preview
 
