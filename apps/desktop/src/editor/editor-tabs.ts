@@ -11,6 +11,7 @@
 
 import type { DockviewApi, DockviewGroupPanel, IDockviewPanel } from "dockview-react";
 
+import type { DbDocumentSpec } from "../db/documents/spec";
 import type { GitDocumentSpec } from "../git/documents/spec";
 import type { ViewerKind } from "./viewer-kinds";
 
@@ -20,7 +21,10 @@ export const EDITOR_PANEL = "editorTab";
 export const EDITOR_TAB_HEADER = "editorTab";
 
 export interface EditorTabParams {
-  /** 정규화한 실제 경로. git 문서(`git`)면 문서 키(`git:…`, src/git/documents/spec.ts). */
+  /**
+   * 정규화한 실제 경로. git 문서(`git`)면 문서 키(`git:…`, src/git/documents/spec.ts), DB 문서(`db`)면 문서 키(`db:…`,
+   * src/db/documents/spec.ts).
+   */
   path: string;
   /**
    * 이 탭을 연 워크트리의 꼭대기(`ActiveWorktree.top`). 없으면 메인 체크아웃. 문서 읽기(`fs.*`)의 접근 범위와 외부 도구 문맥
@@ -36,6 +40,11 @@ export interface EditorTabParams {
   pinned?: boolean;
   /** git 문서(커밋 상세 · 비교 · 리비전 파일 · diff). 있으면 파일 문서가 아니다(src/git/documents/spec.ts 머리 주석). */
   git?: GitDocumentSpec;
+  /**
+   * DB 문서(SQL 콘솔 · 테이블 데이터 · Redis 키). 있으면 파일 문서가 아니다 — git 문서와 달리 워크트리 탭 묶음에 담겨 다시 시작하면
+   * 연결하지 않은 채 되살아난다(src/db/documents/spec.ts 머리 주석).
+   */
+  db?: DbDocumentSpec;
 }
 
 export function isEditorPanel(panel: IDockviewPanel | undefined): panel is IDockviewPanel {
@@ -49,6 +58,17 @@ export function tabParams(panel: IDockviewPanel): EditorTabParams {
 /** git 문서 탭인가(파일 문서가 아니다). */
 export function isGitTab(panel: IDockviewPanel): boolean {
   return tabParams(panel).git !== undefined;
+}
+
+/** DB 문서 탭인가(파일 문서가 아니다). */
+export function isDbTab(panel: IDockviewPanel): boolean {
+  return tabParams(panel).db !== undefined;
+}
+
+/** 파일 문서 탭인가(git 문서 · DB 문서가 아니다) — 경로를 쓰는 탭 동작(경로 복사 · 저장 · 뷰어 · 최근 파일)은 이것에만 뜻이 있다. */
+export function isFileTab(panel: IDockviewPanel): boolean {
+  const { git, db } = tabParams(panel);
+  return git === undefined && db === undefined;
 }
 
 export function editorPanels(api: DockviewApi): IDockviewPanel[] {
@@ -125,6 +145,7 @@ export function openTab(
     preview = false,
     recent = [],
     git,
+    db,
     title,
   }: {
     path: string;
@@ -133,6 +154,8 @@ export function openTab(
     recent?: readonly string[];
     /** git 문서로 연다(`path` 는 그 문서 키). */
     git?: GitDocumentSpec;
+    /** DB 문서로 연다(`path` 는 그 문서 키). */
+    db?: DbDocumentSpec;
     /** 탭 이름. 없으면 경로의 마지막 조각. */
     title?: string;
   },
@@ -156,6 +179,7 @@ export function openTab(
     preview,
     ...(worktree !== undefined && { worktree }),
     ...(git !== undefined && { git }),
+    ...(db !== undefined && { db }),
   };
   const panel = api.addPanel({
     id: nextPanelId(api),

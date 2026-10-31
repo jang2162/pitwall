@@ -311,4 +311,32 @@ describe("readStateFile", () => {
     expect(readStateFile({ version: 2 })).toBeUndefined();
     expect(readStateFile("x")).toBeUndefined();
   });
+
+  it("keeps a DB document tab with its spec and title, and drops one whose spec is broken", () => {
+    const db = { kind: "redis", tabId: "t1", connectionId: "c1", database: "0" };
+    expect(
+      readStateFile({
+        version: STATE_VERSION,
+        main: {
+          tabs: [
+            {
+              path: "db:redis:t1",
+              db,
+              title: "c1 · DB 0",
+              pinned: true,
+              cursor: { line: 1, column: 1 },
+            },
+            { path: "db:redis:t2", db: { ...db, tabId: "t2", database: "x" } },
+            { path: "db:redis:t3", db: { ...db, tabId: "" } },
+            { path: "db:other:t4", db: { kind: "other", tabId: "t4" } },
+            { path: "/f", title: "ignored for files" },
+          ],
+          usedAt: 1,
+        },
+      })?.main?.tabs,
+    ).toEqual([
+      { path: "db:redis:t1", db, title: "c1 · DB 0", pinned: true, cursor: { line: 1, column: 1 } },
+      { path: "/f" },
+    ]);
+  });
 });

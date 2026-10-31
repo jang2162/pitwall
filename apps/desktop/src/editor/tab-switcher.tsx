@@ -9,6 +9,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 
 import { useKeymapPopup } from "../keymap/keymap-provider";
 import { useProjectStrings } from "../layout/strings";
+import { dbDocumentDetail } from "../db/documents/spec";
 import { gitDocumentDetail } from "../git/documents/spec";
 import { baseName, isEditorPanel, tabParams } from "./editor-tabs";
 import type { EditorWorkspace } from "./editor-workspace";
@@ -111,10 +112,10 @@ export function useTabSwitcher(workspace: EditorWorkspace): {
         {state.ids.map((id, i) => {
           const panel = api?.getPanel(id);
           if (!panel) return null;
-          const { path, preview, git } = tabParams(panel);
-          // git 문서 탭은 문서 키(`git:…`) 대신 탭 이름과 사람이 읽는 설명을 보인다.
-          const name = git ? (panel.title ?? baseName(path)) : baseName(path);
-          const detail = git ? gitDocumentDetail(git) : parentOf(path);
+          const { path, preview, git, db } = tabParams(panel);
+          // git · DB 문서 탭은 문서 키(`git:…` · `db:…`) 대신 탭 이름과 사람이 읽는 설명을 보인다.
+          const name = git || db ? (panel.title ?? baseName(path)) : baseName(path);
+          const detail = git ? gitDocumentDetail(git) : db ? dbDocumentDetail(db) : parentOf(path);
           return (
             <div
               key={id}

@@ -7,6 +7,8 @@
 // - 창이 처음 열리면 활성 워크트리의 묶음을 연다. 첫 요청이 다른 워크트리를 가리키면 그 묶음만 연다(쓸데없이 열었다 닫지 않게).
 // - 탭은 에디터의 공개 열기 길(`workspace.open`)로 다시 연다. 열기 전에 파일이 아직 있는지 보고(`exists`), 사라진 파일의 탭은 조용히
 //   건너뛴다 — 열기 실패 알림을 띄우지 않는다. 분할(에디터 그룹 여럿)은 되살리지 않고 한 그룹에 차례로 연다.
+// - DB 문서 탭(src/db/documents/spec.ts)도 묶음에 담는다 — 문서의 꼴(`db`)과 탭 이름을 함께. 다시 열 때는 파일을 보지 않고 탭만
+//   연다(`openTab`) — 연결 · 세션 RPC 는 부르지 않는다(결정 M3-D13, 문서가 [연결] 을 기다린다). git 문서 탭은 담지 않는다.
 // - 탭은 그 탭을 연 워크트리로 다시 연다(`TabState.worktree`) — ⌘E · Search Everywhere 는 활성 워크트리를 바꾸지 않고 다른
 //   워크트리의 파일을 연다(M1-19). 그 워크트리가 사라졌으면 열기 실패 알림이 뜬다(M1-19 의 「열 수 없음」). 묶음의 워크트리로 바꿔
 //   열지 않는다.
@@ -19,8 +21,10 @@ import type { DockviewApi, IDockviewPanel } from "dockview-react";
 
 import {
   editorPanels,
+  isDbTab,
   isEditorPanel,
-  isGitTab,
+  isFileTab,
+  openTab,
   tabParams,
   togglePinned,
 } from "../editor/editor-tabs";
@@ -92,10 +96,19 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
       .filter((g) => g.api.location.type === "grid")
       .flatMap((g) => g.panels)
       // git 문서 탭은 묶음에 담지 않는다(src/git/documents/spec.ts) — 다시 시작해도 되살리지 않는다.
-      .filter((p) => isEditorPanel(p) && !isGitTab(p));
+      .filter((p) => isEditorPanel(p) && (isFileTab(p) || isDbTab(p)));
     const active = workspace.activeTab();
     const tabs = panels.map((panel): TabState => {
-      const { path, worktree, preview, pinned } = tabParams(panel);
+      const { path, worktree, preview, pinned, db } = tabParams(panel);
+      if (db)
+        return {
+          path,
+          db,
+          ...(panel.title !== undefined && { title: panel.title }),
+          ...(worktree !== key && { worktree: worktree ?? null }),
+          ...(preview && { preview: true }),
+          ...(pinned && { pinned: true }),
+        };
       const view = workspace.view(panel.id);
       const last = known.get(panel.id);
       const cursor = view ? cursorOf(view) : last?.cursor;
@@ -155,6 +168,19 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
       // 해제된 뒤에도 끝까지 연다 — 받은 요청은 이 세션이 마저 처리한다(`after`).
       for (const tab of bundle?.tabs ?? []) {
         const worktree = tab.worktree === undefined ? key : (tab.worktree ?? undefined);
+        if (tab.db) {
+          const { panel } = openTab(api, {
+            path: tab.path,
+            worktree,
+            db: tab.db,
+            title: tab.title,
+            preview: tab.preview,
+            recent: workspace.recent(),
+          });
+          opened.push(panel);
+          if (tab.pinned && !tabParams(panel).pinned) togglePinned(panel);
+          continue;
+        }
         if (!(await deps.exists(tab.path, worktree))) {
           deps.log?.(`skipped a saved tab, the file is gone: ${tab.path}`);
           opened.push(undefined);

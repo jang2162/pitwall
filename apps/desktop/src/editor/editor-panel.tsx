@@ -5,10 +5,12 @@
 // 뷰어는 탭의 덮어쓰기(`params.viewer`)와 문서의 종류로 고른다(viewer-kinds.ts `chooseViewer`).
 //
 // params 에 `git` 이 있으면 파일이 아니라 git 문서(커밋 상세 · 비교 · 리비전 파일 · diff)다 — 문서 모델을 잡지 않고 그 문서를
-// 그린다(src/git/documents).
+// 그린다(src/git/documents). `db` 가 있으면 DB 문서(src/db/documents)다 — 마찬가지로 문서 모델을 잡지 않는다.
 
 import type { IDockviewPanelProps } from "dockview-react";
 
+import { DbDocumentPanel } from "../db/documents/db-document-panel";
+import { isDbDocumentSpec } from "../db/documents/spec";
 import { GitDocumentPanel } from "../git/documents/document-panel";
 import { isGitDocumentSpec } from "../git/documents/spec";
 import { useProjectStrings } from "../layout/strings";
@@ -22,6 +24,17 @@ import { UNREAD_VIEWERS, VIEWERS } from "./viewers";
 export function EditorPanel(props: IDockviewPanelProps<EditorTabParams>) {
   const { api, params } = props;
   const T = useProjectStrings().editor;
+  if (params.db !== undefined)
+    // DB 문서의 키 컨텍스트는 문서마다 자기 뿌리에 둔다(콘솔 · Redis 가 다르다).
+    return (
+      <div data-editor-tab={api.id} className="h-full">
+        {isDbDocumentSpec(params.db) ? (
+          <DbDocumentPanel spec={params.db} params={params} panelId={api.id} />
+        ) : (
+          <EditorNotice text={T.failed("db")} openWith={false} />
+        )}
+      </div>
+    );
   if (params.git === undefined) return <FilePanel {...props} />;
   // git 문서는 글자 에디터가 아니다 — 에디터 키(`editorFocus`)를 받지 않는다. diff 뷰 안은 `diffFocus`(src/git/diff/diff-view.tsx).
   return (

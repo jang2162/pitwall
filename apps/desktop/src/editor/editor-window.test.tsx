@@ -33,7 +33,8 @@ import { createThemeStore } from "../theme/theme-store";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
 import { act, endTest, it } from "../test-support/ended-test";
-import { EDITOR_PANEL } from "./editor-tabs";
+import { type DbDocumentSpec, dbDocumentKey } from "../db/documents/spec";
+import { EDITOR_PANEL, openTab, tabParams } from "./editor-tabs";
 import { cursorOf } from "./editor-workspace";
 import { editorContext } from "./extensions";
 
@@ -948,6 +949,61 @@ it("skips a saved tab whose file is gone without an open error", async () => {
   expect(editorTabs().map((t) => t.title)).toEqual(["lib.rs"]);
   expect(host.calls.filter((c) => c.method === "fs.read" && c.params.path === MAIN)).toEqual([]);
   expect(document.body.textContent).not.toContain("main.rs");
+});
+
+// DB 문서 탭(src/db/documents/spec.ts, 14-m3-plan M3-18 · 결정 M3-D13): 워크트리 묶음에 담겨 다시 시작하면 같은 `tabId` 로 되살아나고,
+// 되살릴 때 연결 · 세션 RPC 를 부르지 않는다 — 파일이 있는지도 보지 않는다.
+it("restores a DB document tab with its tab id after a restart, without any connection RPC", async () => {
+  const spec: DbDocumentSpec = {
+    kind: "redis",
+    tabId: "tab-redis-1",
+    connectionId: "redis-local",
+    database: "3",
+  };
+  await mount();
+  await openRequest(LIB);
+  await act(async () => {
+    openTab(dock!, { path: dbDocumentKey(spec), db: spec, title: "redis-local · DB 3" });
+  });
+  await vi.waitFor(
+    () =>
+      expect(savedState()?.main?.tabs).toEqual([
+        expect.objectContaining({ path: LIB }),
+        { path: dbDocumentKey(spec), db: spec, title: "redis-local · DB 3" },
+      ]),
+    { timeout: 2000 },
+  );
+  host.calls = [];
+  await restart();
+  expect(editorTabs().map((t) => t.title)).toEqual(["lib.rs", "redis-local · DB 3"]);
+  const restored = dock!.panels.find((p) => tabParams(p).db !== undefined);
+  expect(tabParams(restored!).db).toEqual(spec);
+  // 그 탭이 앞에 와도(활성) 연결하지 않는다.
+  await act(async () => restored!.api.setActive());
+  await settle();
+  expect(document.querySelector(`[data-redis-document="${restored!.id}"]`)).not.toBeNull();
+  expect(
+    host.calls.map((c) => c.method).filter((m) => /^db\.(session|kv|query)\./.test(m)),
+  ).toEqual([]);
+  // 문서 키를 파일로 읽지 않는다 — 파일 문서 · 최근 파일에 들지 않는다.
+  expect(host.calls.filter((c) => String(c.params.path ?? "").startsWith("db:"))).toEqual([]);
+});
+
+it("drops a saved DB document tab whose shape is broken, keeping the rest", async () => {
+  host.files.set(LIB, "fn lib() {}");
+  host.states.set("p1", {
+    version: 1,
+    main: {
+      tabs: [
+        { path: "db:redis:x", db: { kind: "redis", tabId: "x", connectionId: "", database: "0" } },
+        { path: "db:nope:y", db: { kind: "nope", tabId: "y" } },
+        { path: LIB },
+      ],
+      usedAt: 1,
+    },
+  });
+  await mount();
+  expect(editorTabs().map((t) => t.title)).toEqual(["lib.rs"]);
 });
 
 it("opens the default layout when the saved project state is broken", async () => {

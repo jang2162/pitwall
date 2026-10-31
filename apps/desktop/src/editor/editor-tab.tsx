@@ -14,6 +14,7 @@ import { Pin } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { useStore } from "zustand";
 
+import { dbDocumentDetail } from "../db/documents/spec";
 import { gitDocumentDetail } from "../git/documents/spec";
 import { windowFileTree } from "../file-tree/project-view";
 import { nestedRepository } from "../git/history/git-history";
@@ -104,9 +105,11 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
           title={
             params.git
               ? `${props.api.title ?? ""}\n${gitDocumentDetail(params.git)}`
-              : git
-                ? `${params.path}\n${gitStatusTitle(git, gitStrings)}`
-                : params.path
+              : params.db
+                ? `${props.api.title ?? ""}\n${dbDocumentDetail(params.db)}`
+                : git
+                  ? `${params.path}\n${gitStatusTitle(git, gitStrings)}`
+                  : params.path
           }
           onDoubleClick={() => run("editor.toggleMaximized")}
           className={`flex h-full items-center ${params.preview ? "italic" : ""} ${gitToneClass(git)}`}
@@ -156,7 +159,7 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
           <MenuItem onSelect={() => run("editor.copyPath")}>{T.actions.copyPath}</MenuItem>
           <MenuItem onSelect={() => run("editor.reveal")}>{T.actions.reveal(platform)}</MenuItem>
           <MenuItem onSelect={() => run("openWith.popup")}>{openWith.action}</MenuItem>
-          {!params.git && registry.isAvailable("git.showFileHistory") && (
+          {!params.git && !params.db && registry.isAvailable("git.showFileHistory") && (
             <>
               <ContextMenu.Separator className="my-1 h-px bg-ui-border" />
               <MenuItem

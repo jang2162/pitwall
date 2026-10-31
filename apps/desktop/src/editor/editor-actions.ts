@@ -20,7 +20,7 @@ import type { Action } from "@pitwall/keymap";
 
 import type { ProjectStrings } from "../layout/strings";
 import {
-  isGitTab,
+  isFileTab,
   otherTabs,
   setTabViewer,
   splitRight,
@@ -44,10 +44,10 @@ export function editorActions(deps: {
   const { workspace } = deps;
   const T = deps.strings.actions;
   const hasTab = () => workspace.activeTab() !== undefined;
-  // 파일 문서 탭(git 문서 탭이 아님) — 경로 복사 · 저장 · 뷰어 바꾸기는 파일에만 뜻이 있다.
+  // 파일 문서 탭(git · DB 문서 탭이 아님) — 경로 복사 · 저장 · 뷰어 바꾸기는 파일에만 뜻이 있다.
   const hasFileTab = () => {
     const panel = workspace.activeTab();
-    return panel !== undefined && !isGitTab(panel);
+    return panel !== undefined && isFileTab(panel);
   };
   const withTab =
     (run: (panel: NonNullable<ReturnType<EditorWorkspace["activeTab"]>>) => void) => () => {

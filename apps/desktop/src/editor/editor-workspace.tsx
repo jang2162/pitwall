@@ -43,7 +43,7 @@ import {
   baseName,
   editorPanels,
   isEditorPanel,
-  isGitTab,
+  isFileTab,
   keepTab,
   openTab,
   type RecentTabs,
@@ -155,8 +155,8 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
   }
 
   function hold(panel: IDockviewPanel) {
-    // git 문서 탭은 파일 문서가 아니다 — 문서 모델을 잡지 않는다(src/git/documents/spec.ts).
-    if (!isEditorPanel(panel) || isGitTab(panel) || holds.has(panel.id)) return;
+    // git · DB 문서 탭은 파일 문서가 아니다 — 문서 모델을 잡지 않는다(src/git/documents/spec.ts, src/db/documents/spec.ts).
+    if (!isEditorPanel(panel) || !isFileTab(panel) || holds.has(panel.id)) return;
     const { path, worktree } = tabParams(panel);
     holds.set(panel.id, { path, release: deps.documents.acquire(path, worktree) });
   }
@@ -413,16 +413,16 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     },
 
     /**
-     * 활성 탭의 워크트리 · 파일 · 커서(외부 도구 문맥). 탭이 없으면 `undefined`. 뷰가 없는 탭(이미지 등)은 커서 없이, git 문서 탭은 파일 없이. `worktree`
+     * 활성 탭의 워크트리 · 파일 · 커서(외부 도구 문맥). 탭이 없으면 `undefined`. 뷰가 없는 탭(이미지 등)은 커서 없이, git · DB 문서 탭은 파일 없이. `worktree`
      * 가 `undefined` 면 그 탭은 메인 체크아웃의 것이다.
      */
     activeContext(): { worktree?: string; file?: string; cursor?: Cursor } | undefined {
       const panel = activeTab();
       if (!panel) return undefined;
       const view = views.get(panel.id);
-      const { path, worktree, git } = tabParams(panel);
-      // git 문서 탭은 파일이 아니다 — 워크트리만 넘긴다.
-      if (git) return { worktree };
+      const { path, worktree } = tabParams(panel);
+      // git · DB 문서 탭은 파일이 아니다 — 워크트리만 넘긴다.
+      if (!isFileTab(panel)) return { worktree };
       return { worktree, file: path, cursor: view ? cursorOf(view) : undefined };
     },
   };

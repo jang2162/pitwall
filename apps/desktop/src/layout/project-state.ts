@@ -18,6 +18,7 @@
 
 import type { JsonValue, RpcClient } from "@pitwall/rpc-client";
 
+import { type DbDocumentSpec, isDbDocumentSpec } from "../db/documents/spec";
 import type { Cursor } from "../editor/editor-workspace";
 import { LAYOUT_STORAGE_KEY, type LayoutStorage } from "./project-layout";
 
@@ -34,9 +35,13 @@ export const LOAD_LIMIT_MS = 2000;
 /** 창을 닫을 때 마지막 쓰기를 기다리는 시간. */
 export const CLOSE_FLUSH_LIMIT_MS = 1500;
 
-/** 탭 하나. 경로는 정규화한 실제 경로(탭의 키, editor-tabs.ts). */
+/** 탭 하나. 경로는 정규화한 실제 경로(탭의 키, editor-tabs.ts) — DB 문서 탭이면 문서 키(`db:…`). */
 export interface TabState {
   path: string;
+  /** DB 문서 탭(src/db/documents/spec.ts). 있으면 파일이 아니다 — 파일이 있는지 보지 않고 연결하지 않은 채 다시 연다. */
+  db?: DbDocumentSpec;
+  /** 탭 이름(DB 문서 탭만 — 파일 탭은 경로에서 다시 만든다). */
+  title?: string;
   /**
    * 탭을 연 워크트리가 묶음의 워크트리와 다를 때만(⌘E · Search Everywhere 로 다른 워크트리의 파일을 연 탭): 그 워크트리 꼭대기,
    * 메인 체크아웃이면 `null`. 없으면 묶음의 워크트리다(옛 저장본도 그렇게 읽는다).
@@ -116,8 +121,12 @@ function readWorktree(value: unknown): WorktreeState | undefined {
   for (const tab of value.tabs as unknown[]) {
     if (!isObject(tab) || typeof tab.path !== "string" || tab.path === "") continue;
     const cursor = tab.cursor;
+    // DB 문서 탭은 꼴이 맞을 때만 — 깨진 `db` 칸을 파일 경로로 읽지 않는다.
+    if (tab.db !== undefined && !isDbDocumentSpec(tab.db)) continue;
     tabs.push({
       path: tab.path,
+      ...(tab.db !== undefined && { db: tab.db as DbDocumentSpec }),
+      ...(typeof tab.title === "string" && tab.db !== undefined && { title: tab.title }),
       ...((typeof tab.worktree === "string" || tab.worktree === null) && {
         worktree: tab.worktree,
       }),
