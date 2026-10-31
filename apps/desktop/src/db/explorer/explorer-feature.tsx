@@ -9,8 +9,9 @@
 import type { Action } from "@pitwall/keymap";
 import type { ObjectRef } from "@pitwall/rpc-client";
 import type { IDockviewPanelProps } from "dockview-react";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
+import { useEditorWorkspace } from "../../editor/editor-workspace";
 import { useGitDialogs } from "../../git/dialogs/git-dialogs";
 import { useKeymap, useRegisterActions } from "../../keymap/keymap-provider";
 import { useNotify, usePanelVisible } from "../../notifications/notifications";
@@ -18,6 +19,7 @@ import { useActiveWorktree } from "../../open-with/active-worktree";
 import { useHost } from "../../rpc/host";
 import { writeClipboardText } from "../grid/clipboard";
 import { DbExplorerView, type ExplorerOps } from "./db-explorer";
+import { openDdlDocument } from "./ddl-document";
 import { EXPLORER_ACTIONS } from "./explorer-actions";
 import { ExplorerModel } from "./explorer-model";
 import { type DbExplorerStrings, useDbExplorerStrings } from "./strings";
@@ -78,14 +80,31 @@ export function DbExplorerToolWindow({ api }: IDockviewPanelProps) {
   );
 }
 
-/** 탐색기가 여는 DDL 문서(창이 정한다 — 에디터 탭). 없으면 「DDL 보기」 가 알림만 낸다. */
+/** 탐색기가 여는 DDL 문서(ddl-document.tsx — 에디터 탭). */
 export type OpenDdl = (connectionId: string, object: ObjectRef) => void;
 
-function DbExplorerPanel({ openDdl }: { openDdl?: OpenDdl }) {
+/** 툴 윈도우는 프로젝트 창의 에디터 작업 공간 안에서 그려진다. 측정 하네스처럼 밖이면 없다. */
+function useEditorWorkspaceOptional() {
+  try {
+    return useEditorWorkspace();
+  } catch {
+    return undefined;
+  }
+}
+
+function DbExplorerPanel() {
   const T = useDbExplorerStrings();
   const { client, target } = useHost();
   const projectId = "projectId" in target ? target.projectId : undefined;
   const worktree = useActiveWorktree();
+  const workspace = useEditorWorkspaceOptional();
+  const openDdl = useCallback<OpenDdl>(
+    (connectionId, object) => {
+      if (workspace)
+        openDdlDocument(workspace, connectionId, object, T.ddl.title(object.name), worktree);
+    },
+    [workspace, T, worktree],
+  );
   const { registry, shortcuts } = useKeymap();
   const notify = useNotify();
   const dialogs = useGitDialogs();
@@ -107,7 +126,7 @@ function DbExplorerPanel({ openDdl }: { openDdl?: OpenDdl }) {
       copy: writeClipboardText,
       confirm: dialogs.confirm,
       notify,
-      openDdl: (connectionId, object) => openDdl?.(connectionId, object),
+      openDdl,
       shortcut: (action) => shortcuts(action)[0]?.text,
     }),
     [dialogs.confirm, notify, openDdl, shortcuts],

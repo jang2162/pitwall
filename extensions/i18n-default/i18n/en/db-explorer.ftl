@@ -91,3 +91,11 @@ db-explorer-row-count-body = { $name }: { $count } rows
 db-explorer-action-failed = { $action } failed: { $error }
 # $name: name
 db-explorer-copied = Copied { $name }
+
+## DDL document (⌘B).
+
+# $name: object name
+db-explorer-ddl-title = { $name } DDL
+db-explorer-ddl-read = Read DDL
+db-explorer-ddl-reload = Reload
+db-explorer-ddl-restored = This tab was restored — reading it opens this connection's metadata connection

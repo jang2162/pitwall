@@ -13,12 +13,19 @@
 // 종류(`kind`)는 행마다 한 줄씩 더한다: 이 유니온, `DB_DOCUMENT_SHAPES`(저장본 검사), db-document-panel.tsx 의 `DB_DOCUMENTS`.
 // 있는 종류의 칸 이름 · 뜻을 바꾸지 않는다(저장본이 그 꼴로 남아 있다).
 
+import type { ObjectRef } from "@pitwall/rpc-client";
+
 export type DbDocumentSpec =
   /**
    * Redis 키 문서(M3-18): 왼쪽 키 트리 + 오른쪽 값 뷰어 + 명령 콘솔. `database` 는 DB 번호(`"0"` …) — 위 막대의 번호 전환이 이 값을
    * 바꾼다(그 번호의 연결로 옮긴다).
    */
-  { kind: "redis"; tabId: string; connectionId: string; database: string };
+  | { kind: "redis"; tabId: string; connectionId: string; database: string }
+  /**
+   * 객체의 DDL(M3-13 — 탐색기의 `⌘B`): 읽기 전용 SQL. 내용(`db.schema.ddl`)은 연 창의 메모리에만 있다 — 되살린 탭은 사람이 [읽기] 를
+   * 누를 때 읽는다(메타데이터용 연결을 연다).
+   */
+  | { kind: "ddl"; tabId: string; connectionId: string; object: ObjectRef };
 
 export type DbDocumentKind = DbDocumentSpec["kind"];
 
@@ -40,6 +47,8 @@ export function dbDocumentDetail(spec: DbDocumentSpec): string {
   switch (spec.kind) {
     case "redis":
       return `${spec.connectionId} · DB ${spec.database}`;
+    case "ddl":
+      return `${spec.connectionId} · ${[spec.object.database, spec.object.schema, spec.object.name].filter(Boolean).join(".")}`;
   }
 }
 
@@ -49,7 +58,16 @@ const str = (v: Record<string, unknown>, k: string) => typeof v[k] === "string" 
 const DB_DOCUMENT_SHAPES: { [K in DbDocumentKind]: (v: Record<string, unknown>) => boolean } = {
   redis: (v) =>
     str(v, "connectionId") && typeof v.database === "string" && /^\d+$/.test(v.database),
+  ddl: (v) => str(v, "connectionId") && isObjectRef(v.object),
 };
+
+/** `ObjectRef` 의 꼴(이름은 비지 않고, DB · 스키마는 글 또는 `null`). */
+function isObjectRef(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const o = value as Record<string, unknown>;
+  const part = (k: string) => o[k] === null || typeof o[k] === "string";
+  return str(o, "name") && part("database") && part("schema");
+}
 
 /** 탭 params · 저장본의 `db` 칸이 문서의 꼴인가(옛 · 깨진 값을 거른다). */
 export function isDbDocumentSpec(value: unknown): value is DbDocumentSpec {

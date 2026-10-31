@@ -5,6 +5,7 @@
 import type { ComponentType } from "react";
 
 import type { EditorTabParams } from "../../editor/editor-tabs";
+import { DdlDocument } from "../explorer/ddl-document";
 import { RedisDocument } from "../redis/redis-document";
 import type { DbDocumentKind, DbDocumentSpec } from "./spec";
 
@@ -17,6 +18,7 @@ export interface DbDocumentProps<K extends DbDocumentKind = DbDocumentKind> {
 
 const DB_DOCUMENTS: { [K in DbDocumentKind]: ComponentType<DbDocumentProps<K>> } = {
   redis: RedisDocument,
+  ddl: DdlDocument,
 };
 
 export function DbDocumentPanel({ spec, params, panelId }: DbDocumentProps) {

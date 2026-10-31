@@ -85,6 +85,12 @@ export function dbExplorerStrings(t: Translate) {
     actionFailed: (action: string, error: string) =>
       t("db-explorer-action-failed", { action, error }),
     copied: (name: string) => t("db-explorer-copied", { name }),
+    ddl: {
+      title: (name: string) => t("db-explorer-ddl-title", { name }),
+      read: t("db-explorer-ddl-read"),
+      reload: t("db-explorer-ddl-reload"),
+      restored: t("db-explorer-ddl-restored"),
+    },
   };
 }
 

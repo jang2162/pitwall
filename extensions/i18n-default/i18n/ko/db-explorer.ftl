@@ -91,3 +91,11 @@ db-explorer-row-count-body = { $name }: { $count } 행
 db-explorer-action-failed = { $action } 하지 못했다: { $error }
 # $name: 이름
 db-explorer-copied = { $name } 을 복사했다
+
+## DDL 문서(`⌘B`).
+
+# $name: 객체 이름
+db-explorer-ddl-title = { $name } DDL
+db-explorer-ddl-read = DDL 읽기
+db-explorer-ddl-reload = 다시 읽기
+db-explorer-ddl-restored = 다시 연 탭이다 — 읽으면 이 연결의 메타데이터용 연결을 연다
