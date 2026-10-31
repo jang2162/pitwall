@@ -510,6 +510,24 @@ describe("RiskConfirmDialog for a Redis command", () => {
     ]);
   });
 
+  // 리뷰 M2: 방향 제어 · 0폭 · C1 · BOM 이 든 글 인자는 날것으로 그리지 않는다 — 거꾸로 그려지는 인자, 같아 보이는 다른 키를 막는다.
+  it("shows invisible characters in text arguments as code points with a mark", async () => {
+    const raw = ["\u202e", "\u2066", "\u200b", "\u2060", "\ufeff", "\u0085", "\u200e", "\u0007"];
+    await show({
+      kv: kv({ argv: ["DEL", `user:${raw.join("")}gnp.1`, "plain"] }),
+      connection: DEV,
+    });
+    const args = [...document.querySelectorAll<HTMLElement>("[data-testid=db-confirm-kv-arg]")];
+    const command = document.querySelector("[data-testid=db-confirm-kv-command]")!.textContent!;
+    for (const c of raw) expect(command).not.toContain(c);
+    expect(args[1]!.textContent).toBe(
+      `"user:⟨U+202E⟩⟨U+2066⟩⟨U+200B⟩⟨U+2060⟩⟨U+FEFF⟩⟨U+0085⟩⟨U+200E⟩⟨U+0007⟩gnp.1"${T.confirm.kv.invisible}`,
+    );
+    expect(args[1]!.dataset.invisible).toBe("true");
+    expect(args[2]!.textContent).toBe('"plain"');
+    expect(args[2]!.dataset.invisible).toBeUndefined();
+  });
+
   it("shows the note and cuts a long argument list with a count", async () => {
     const argv = ["DEL", ...Array.from({ length: KV_ARGS_SHOWN + 9 }, (_, i) => `k:${i}`)];
     await show({ kv: kv({ argv }), connection: DEV, note: "the target key is overwritten" });
@@ -520,5 +538,21 @@ describe("RiskConfirmDialog for a Redis command", () => {
       KV_ARGS_SHOWN,
     );
     expect(dialog().textContent).toContain(T.confirm.kv.more(10));
+  });
+});
+
+describe("RiskConfirmDialog statement text", () => {
+  // 리뷰 M2 와 같은 자리: SQL 문장 원문도 그리드와 같은 표지로 보인다(탭 · 줄바꿈은 그대로).
+  it("shows invisible characters in a statement as code points, keeping tabs and line breaks", async () => {
+    const sql = "DELETE FROM t\tWHERE name = 'a\u202eb\u200b'\n";
+    await show({
+      request: request({
+        statements: [statement(0, "unboundedWrite", ["missingWhere"], { from: 0, to: sql.length })],
+      }),
+      connection: DEV,
+      sql,
+    });
+    const text = document.querySelector("[data-testid=db-confirm-statement] pre")!.textContent!;
+    expect(text).toBe("DELETE FROM t\tWHERE name = 'a⟨U+202E⟩b⟨U+200B⟩'\n");
   });
 });

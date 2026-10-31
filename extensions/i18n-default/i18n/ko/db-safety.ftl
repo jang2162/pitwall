@@ -59,6 +59,8 @@ db-confirm-run = 실행
 db-confirm-kv-command = 서버에 보낼 명령
 # 글이 아니라 바이트인 인자의 표지(hex 옆)
 db-confirm-kv-bytes = 바이트
+# 보이지 않는 글자(방향 제어 · 0폭 · 제어 문자)를 ⟨U+XXXX⟩ 로 바꿔 보인 글 인자의 표지
+db-confirm-kv-invisible = 보이지 않는 글자 포함
 # $count: 보이지 않은 인자 수
 db-confirm-kv-more = …그리고 인자 { $count }개 더
 

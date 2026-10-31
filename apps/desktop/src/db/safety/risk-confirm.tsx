@@ -34,6 +34,7 @@ import { TriangleAlert } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 import { BUTTON, SHEET } from "../../git/dialogs/git-dialogs";
+import { showInvisible } from "../grid/values";
 import { useKeymapPopup } from "../../keymap/keymap-provider";
 import { isComposingKey, keepOpenWhileComposing } from "../../ui/ime";
 import { ConnectionMark, type DbConnectionMarkInput } from "./connection-mark";
@@ -150,10 +151,13 @@ function rejectedText(rejected: string, T: DbSafetyStrings["confirm"]["rejected"
   }
 }
 
+/** 문장 원문(보이기용). 보이지 않는 제어 · 방향 · 0폭 문자는 그리드와 같은 `⟨U+XXXX⟩` 로 — 사람이 확인하는 마지막 자리다. */
 function statementText(sql: string | undefined, statement: DbStatementClass): string | undefined {
   if (sql === undefined) return undefined;
   const text = sql.slice(statement.range.from, statement.range.to);
-  return text.length > STATEMENT_TEXT_SHOWN ? `${text.slice(0, STATEMENT_TEXT_SHOWN)}…` : text;
+  return showInvisible(
+    text.length > STATEMENT_TEXT_SHOWN ? `${text.slice(0, STATEMENT_TEXT_SHOWN)}…` : text,
+  );
 }
 
 function StatementList({
@@ -219,13 +223,25 @@ function StatementList({
   );
 }
 
-/** 인자 하나(보이기용). 글은 따옴표 안에, 바이트는 hex 와 「바이트」 표지로. */
+/**
+ * 인자 하나(보이기용). 글은 따옴표 안에, 바이트는 hex 와 「바이트」 표지로. 글의 보이지 않는 제어 · 방향 · 0폭 문자는 그리드와 같은
+ * `⟨U+XXXX⟩` 로 바꾸고 「보이지 않는 글자 포함」 표지를 단다 — 같아 보이는 다른 키, 거꾸로 그려지는 인자를 막는다.
+ */
 function KvArg({ arg, T }: { arg: KvKey; T: DbSafetyStrings }) {
   if (typeof arg === "string") {
-    const text = arg.length > STATEMENT_TEXT_SHOWN ? `${arg.slice(0, STATEMENT_TEXT_SHOWN)}…` : arg;
+    const cut = arg.length > STATEMENT_TEXT_SHOWN ? `${arg.slice(0, STATEMENT_TEXT_SHOWN)}…` : arg;
+    const text = showInvisible(cut);
     return (
-      <span data-testid="db-confirm-kv-arg" data-arg="text" className="break-all">
+      <span
+        data-testid="db-confirm-kv-arg"
+        data-arg="text"
+        data-invisible={text === cut ? undefined : "true"}
+        className="break-all"
+      >
         {JSON.stringify(text)}
+        {text !== cut && (
+          <span className="ml-1 text-[11px] text-ui-accent">{T.confirm.kv.invisible}</span>
+        )}
       </span>
     );
   }

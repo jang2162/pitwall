@@ -66,6 +66,7 @@ export function dbSafetyStrings(t: Translate) {
       kv: {
         command: t("db-confirm-kv-command"),
         bytes: t("db-confirm-kv-bytes"),
+        invisible: t("db-confirm-kv-invisible"),
         more: (count: number) => t("db-confirm-kv-more", { count }),
       },
       rejected: {

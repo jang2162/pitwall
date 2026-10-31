@@ -59,6 +59,8 @@ db-confirm-run = Run
 db-confirm-kv-command = Command to send to the server
 # Mark of an argument that is bytes, not text (next to its hex)
 db-confirm-kv-bytes = bytes
+# Mark of a text argument whose invisible characters (direction controls, zero-width, control characters) are shown as ⟨U+XXXX⟩
+db-confirm-kv-invisible = has invisible characters
 # $count: arguments not shown
 db-confirm-kv-more = …and { $count } more arguments
 
