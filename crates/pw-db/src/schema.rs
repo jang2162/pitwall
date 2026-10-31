@@ -8,16 +8,18 @@
 //!   미신뢰 프로젝트에는 내주지 않는다. 연결은 `crate::connection::connect` 로만 연다.
 //! - **메타데이터용 연결**: 사람의 세션(콘솔 탭)과 따로, (프로젝트, 워크트리, 연결 id, 카탈로그)마다 하나를 열어 둔다. 사람의 세션
 //!   연결과 갈라져 있으므로 **커밋된 스키마만 본다** — 수동 커밋 탭의 커밋 전 DDL 은 그 탭의 `COMMIT` 뒤 무효화로 보인다. 그 연결을
-//!   처음 연 창의 RPC 연결이 닫히면 닫는다. 스키마 단계가 있는 드라이버(지원 플래그 `schemas` — PG)는 연결이 그 DB 의 카탈로그만
-//!   읽으므로 DB 마다 따로 연다.
-//! - **캐시**: (연결, DB, 스키마) 단위 메모리 캐시. 콘솔에서 DDL 등급 이상의 문장이 끝나거나(실패도 — MySQL 은 실패한 DDL 도 암묵
-//!   커밋한다) `COMMIT` 하면 실행 파이프라인이 [`DbSessions::schema_touched`] 를 불러 **그 연결의 캐시를 워크트리와 상관없이 모두**
-//!   버리고 `db.schemaChanged` 를 낸다. 수동 새로 고침도 같다. 연결 설정이 바뀌면 그 설정으로 채운 캐시를 버린다.
-//! - **키 판정**([`row_key`], 그리드 편집 M3-12 이 쓴다): PK, 아니면 NOT NULL 열만으로 된 유일 인덱스(부분 인덱스 · 식 인덱스는
-//!   제외). 없으면 키 없는 테이블이다(결정 M3-D9).
+//!   처음 연 창의 RPC 연결이 닫히거나 [`IDLE_CLOSE`] 동안 쓰지 않으면 닫는다. 스키마 단계가 있는 드라이버(지원 플래그 `schemas` —
+//!   PG)는 연결이 그 DB 의 카탈로그만 읽으므로 DB 마다 따로 열되, (프로젝트, 연결 id)마다 [`MAX_LINKS`] 개를 넘으면 가장 오래 안 쓴
+//!   것을 닫는다. 질의 도중 RPC 가 취소되면(핸들러 future 가 버려진다) 그 연결을 다시 쓰지 않고 닫는다.
+//! - **캐시**: (연결, DB, 스키마) 단위 메모리 캐시, Host 전체 [`MAX_CACHED`] 항목(넘으면 가장 오래 안 쓴 것부터 버린다). 콘솔에서
+//!   DDL 등급 이상의 문장이 끝나거나(실패도 — MySQL 은 실패한 DDL 도 암묵 커밋한다) `COMMIT` 하면 실행 파이프라인이
+//!   [`DbSessions::schema_touched`] 를 불러 **그 연결의 캐시를 워크트리와 상관없이 모두** 버리고 `db.schemaChanged` 를 낸다. 수동
+//!   새로 고침도 같다. 연결 설정이 바뀌면 그 설정으로 채운 캐시를 버린다.
+//! - **키 판정**([`row_key`], 그리드 편집 M3-12 이 쓴다): NOT NULL 열만의 PK, 아니면 NOT NULL 열만으로 된 유일 인덱스(부분
+//!   인덱스 · 식 인덱스는 제외). 없으면 키 없는 테이블이다(결정 M3-D9).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,6 +33,7 @@ use pw_db_types::{
 use pw_rpc::{Ctx, Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::DbConnectionConfig;
@@ -48,6 +51,18 @@ const MAX_NAME: usize = 1024;
 
 /// 메타데이터 질의 하나의 시간 상한(쪽 단위 실행의 비활동 타임아웃과 같다). 넘으면 그 연결을 버린다 — 질의가 어디서 멈췄는지 모른다.
 const META_WAIT: Duration = Duration::from_secs(30);
+
+/// (프로젝트, 연결 id)마다 열어 두는 메타데이터용 연결의 상한. DB 마다 따로 여는 드라이버(PG)에서 DB 가 많은 서버(테넌트마다 DB)를
+/// 훑어도 서버의 연결 상한(PG `max_connections` 기본 100)을 사람의 콘솔 세션 · 다른 앱과 나눠 쓸 수 있게 한다. 트리는 한 번에 한두
+/// DB 를 펼치므로 넷이면 오가며 펼친 DB 가 대개 열린 채이고, 넘으면 가장 오래 안 쓴 것을 닫는다(다시 펼치면 다시 연다).
+pub const MAX_LINKS: usize = 4;
+
+/// 이만큼 쓰지 않은 메타데이터용 연결을 닫는다 — 탐색기를 펼쳐 둔 채 쉬는 창이 서버 연결을 쥐고 있지 않게.
+pub const IDLE_CLOSE: Duration = Duration::from_secs(5 * 60);
+
+/// 캐시 항목 수 상한(Host 전체). 항목 하나는 객체 목록 한 쪽(≤ 500개)이나 객체 하나의 열 · 인덱스 · FK 목록 · DDL 이다. 서버 쪽
+/// 찾기(글자마다 요청)가 쪽마다 항목을 만들므로 상한 없이는 Host 메모리가 쓰는 동안 계속 는다. 넘으면 가장 오래 안 쓴 것부터 버린다.
+pub const MAX_CACHED: usize = 512;
 
 /// 대상 연결(입력 struct 의 공통 몫).
 #[derive(
@@ -266,11 +281,13 @@ pub struct RowKey {
 
 /// 키 판정(결정 M3-D9): PK 가 있으면 그것, 없으면 **NOT NULL 열만으로 된** 유일 인덱스 가운데 열이 가장 적은 것(같으면 이름 순).
 /// 부분 인덱스(PG `WHERE …`)는 몇 행만 유일하게 하므로, 열 목록에 없는 이름(식 인덱스의 식)이 낀 인덱스는 행을 열 값으로 가리키지
-/// 못하므로 키가 아니다. NULL 허용 열이 낀 유일 인덱스는 NULL 이 여러 번 들어갈 수 있어 키가 아니다. 없으면 `None`(키 없는 테이블 —
-/// 그리드 편집을 받지 않는다).
+/// 못하므로 키가 아니다. NULL 허용 열이 낀 유일 인덱스는 NULL 이 여러 번 들어갈 수 있어 키가 아니다 — PK 도 같다(SQLite 의 rowid
+/// 테이블은 `INTEGER PRIMARY KEY` 가 아닌 PK 열에 NULL 을 받는다. 드라이버가 그 열을 NULL 허용으로 낸다). 없으면 `None`(키 없는
+/// 테이블 — 그리드 편집을 받지 않는다).
 pub fn row_key(columns: &[ColumnInfo], indexes: &[IndexInfo]) -> Option<RowKey> {
     let not_null = |name: &String| columns.iter().any(|c| &c.name == name && !c.nullable);
-    let usable = |i: &&IndexInfo| !i.partial && !i.columns.is_empty();
+    let usable =
+        |i: &&IndexInfo| !i.partial && !i.columns.is_empty() && i.columns.iter().all(not_null);
     let key = |i: &IndexInfo| RowKey {
         index: i.name.clone(),
         columns: i.columns.clone(),
@@ -282,7 +299,7 @@ pub fn row_key(columns: &[ColumnInfo], indexes: &[IndexInfo]) -> Option<RowKey> 
     indexes
         .iter()
         .filter(usable)
-        .filter(|i| i.unique && i.columns.iter().all(not_null))
+        .filter(|i| i.unique)
         .min_by(|a, b| {
             a.columns
                 .len()
@@ -420,38 +437,172 @@ struct MetaConn {
     retired: CancellationToken,
 }
 
-#[derive(Default)]
+/// 질의하는 동안 연결을 쥔다. 질의가 끝나기 전에 버려지면(RPC 취소는 핸들러 future 를 그 자리에서 버린다) 연결도 닫는다 — 프로토콜
+/// 한가운데서 멈춘 연결(MySQL 의 읽다 만 패킷 · 닫지 못한 준비 문장)을 다음 조회가 쓰면 어긋난 응답을 읽는다.
+struct InFlight(Option<MetaConn>);
+
+impl InFlight {
+    fn conn(&mut self) -> Option<&mut dyn SqlConnection> {
+        Some(self.0.as_mut()?.conn.as_mut())
+    }
+
+    /// 질의가 끝났다 — 연결을 돌려받는다.
+    fn land(mut self) -> Option<MetaConn> {
+        self.0.take()
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        let Some(meta) = self.0.take() else { return };
+        tracing::debug!(target: "pw_db", "a db metadata query was dropped mid-way; closing its connection");
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(retire(meta));
+            }
+            // 런타임 밖(종료 중)이면 닫기를 기다릴 수 없다 — 버리면 드라이버가 소켓을 닫는다.
+            Err(_) => meta.retired.cancel(),
+        }
+    }
+}
+
+/// (프로젝트, 워크트리, 연결 id, 카탈로그) 하나의 메타데이터용 연결 자리.
 struct MetaLink {
-    open: AsyncMutex<Option<MetaConn>>,
+    open: Arc<AsyncMutex<Option<MetaConn>>>,
+    /// 자리가 표에서 빠졌다(상한 · 쉼 · 창 닫힘) — 이 자리를 쥔 조회는 표에서 새 자리를 받는다.
+    gone: AtomicBool,
+    /// 마지막으로 조회가 쓴 때(가장 오래 안 쓴 것 고르기 · 쉼).
+    used: Mutex<Instant>,
+}
+
+impl MetaLink {
+    fn new() -> Self {
+        Self {
+            open: Arc::default(),
+            gone: AtomicBool::new(false),
+            used: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn touch(&self) {
+        *lock(&self.used) = Instant::now();
+    }
+
+    fn used(&self) -> Instant {
+        *lock(&self.used)
+    }
+
+    fn gone(&self) -> bool {
+        self.gone.load(Ordering::SeqCst)
+    }
+}
+
+type Links = Arc<Mutex<HashMap<LinkKey, Arc<MetaLink>>>>;
+
+/// 캐시 항목.
+struct Entry {
+    value: Cached,
+    /// 마지막으로 읽거나 넣은 순번(가장 오래 안 쓴 것 고르기).
+    used: u64,
+}
+
+/// 캐시와 무효화 순번 — 한 잠금 안에 둔다. 순번을 보고 넣는 사이에 무효화가 끼면 낡은 값이 비운 캐시에 들어간다.
+#[derive(Default)]
+struct Cache {
+    entries: HashMap<CacheKey, Entry>,
+    /// (프로젝트, 연결 id)마다 무효화 순번 — 버리기 전에 시작한 조회가 버린 뒤에 낡은 값을 넣지 못하게. 조회를 시작할 때 만든다
+    /// (신뢰 게이트와 설정 읽기를 지난 연결만 — 아무 연결 id 의 새로 고침이 항목을 늘리지 않는다).
+    generations: HashMap<(String, String), u64>,
+    tick: u64,
+}
+
+impl Cache {
+    fn get(&mut self, key: &CacheKey) -> Option<Cached> {
+        self.tick += 1;
+        let entry = self.entries.get_mut(key)?;
+        entry.used = self.tick;
+        Some(entry.value.clone())
+    }
+
+    fn generation(&mut self, project: &str, connection: &str) -> u64 {
+        *self
+            .generations
+            .entry((project.to_owned(), connection.to_owned()))
+            .or_default()
+    }
+
+    fn bump(&mut self, project: &str, connection: &str) {
+        if let Some(g) = self
+            .generations
+            .get_mut(&(project.to_owned(), connection.to_owned()))
+        {
+            *g += 1;
+        }
+    }
+
+    /// `generation` 에 시작한 조회의 결과를 넣는다 — 그 뒤 무효화가 있었으면 넣지 않는다.
+    fn put(&mut self, key: CacheKey, value: Cached, generation: u64) {
+        let now = self
+            .generations
+            .get(&(key.conn.project.clone(), key.conn.connection.clone()))
+            .copied()
+            .unwrap_or(0);
+        if now != generation {
+            return;
+        }
+        self.tick += 1;
+        self.entries.insert(
+            key,
+            Entry {
+                value,
+                used: self.tick,
+            },
+        );
+        while self.entries.len() > MAX_CACHED {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, e)| e.used)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
 }
 
 /// 스키마 캐시와 메타데이터용 연결(`DbSessions` 가 하나 갖는다).
-#[derive(Default)]
 pub struct SchemaState {
-    cache: Mutex<HashMap<CacheKey, Cached>>,
+    cache: Mutex<Cache>,
     /// 캐시를 채운 설정(연결마다). 지금 설정과 다르면 그 연결의 캐시를 버린다.
     configs: Mutex<HashMap<ConnKey, DbConnectionConfig>>,
-    /// (프로젝트, 연결 id)마다 무효화 순번 — 버리기 전에 시작한 조회가 버린 뒤에 낡은 값을 넣지 못하게.
-    generations: Mutex<HashMap<(String, String), u64>>,
-    links: Arc<Mutex<HashMap<LinkKey, Arc<MetaLink>>>>,
+    links: Links,
+    /// 쉬는 연결을 닫는 시간([`IDLE_CLOSE`], 시험이 줄인다).
+    idle_close: Mutex<Duration>,
     /// 지금까지 연 메타데이터용 연결 수(시험).
     opened: AtomicU64,
 }
 
-impl SchemaState {
-    fn generation(&self, project: &str, connection: &str) -> u64 {
-        lock(&self.generations)
-            .get(&(project.to_owned(), connection.to_owned()))
-            .copied()
-            .unwrap_or(0)
+impl Default for SchemaState {
+    fn default() -> Self {
+        Self {
+            cache: Mutex::default(),
+            configs: Mutex::default(),
+            links: Links::default(),
+            idle_close: Mutex::new(IDLE_CLOSE),
+            opened: AtomicU64::new(0),
+        }
     }
+}
 
+impl SchemaState {
     /// 그 연결(모든 워크트리)의 캐시를 버린다.
     fn invalidate(&self, project: &str, connection: &str) {
-        *lock(&self.generations)
-            .entry((project.to_owned(), connection.to_owned()))
-            .or_default() += 1;
-        lock(&self.cache)
+        let mut cache = lock(&self.cache);
+        cache.bump(project, connection);
+        cache
+            .entries
             .retain(|k, _| !(k.conn.project == project && k.conn.connection == connection));
     }
 
@@ -463,19 +614,68 @@ impl SchemaState {
         }
         configs.insert(conn.clone(), now.clone());
         drop(configs);
-        *lock(&self.generations)
-            .entry((conn.project.clone(), conn.connection.clone()))
-            .or_default() += 1;
-        lock(&self.cache).retain(|k, _| &k.conn != conn);
+        let mut cache = lock(&self.cache);
+        cache.bump(&conn.project, &conn.connection);
+        cache.entries.retain(|k, _| &k.conn != conn);
     }
 
     fn cached(&self, key: &CacheKey) -> Option<Cached> {
-        lock(&self.cache).get(key).cloned()
+        lock(&self.cache).get(key)
+    }
+
+    /// `key` 의 자리를 준다. 새 자리를 만들어 그 (프로젝트, 연결 id)의 자리가 [`MAX_LINKS`] 를 넘으면 가장 오래 안 쓴 자리를 표에서
+    /// 빼서 돌려준다 — 부른 쪽이 그 연결을 닫은 뒤에 새 연결을 연다.
+    fn link(&self, key: &LinkKey) -> (Arc<MetaLink>, Vec<Arc<MetaLink>>) {
+        let mut links = lock(&*self.links);
+        if let Some(link) = links.get(key) {
+            link.touch();
+            return (Arc::clone(link), Vec::new());
+        }
+        let same = |k: &LinkKey| {
+            k.conn.project == key.conn.project && k.conn.connection == key.conn.connection
+        };
+        let mut evicted = Vec::new();
+        while links.keys().filter(|k| same(k)).count() >= MAX_LINKS {
+            let Some(oldest) = links
+                .iter()
+                .filter(|(k, _)| same(k))
+                .min_by_key(|(_, l)| l.used())
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            if let Some(link) = links.remove(&oldest) {
+                link.gone.store(true, Ordering::SeqCst);
+                evicted.push(link);
+            }
+        }
+        let link = Arc::new(MetaLink::new());
+        links.insert(key.clone(), Arc::clone(&link));
+        (link, evicted)
+    }
+
+    /// 쉬는 메타데이터용 연결을 닫는 시간을 바꾼다(시험 — 이미 연 연결에는 닿지 않는다).
+    pub fn set_idle_close(&self, idle: Duration) {
+        *lock(&self.idle_close) = idle;
     }
 
     /// 지금까지 연 메타데이터용 연결 수(시험).
     pub fn connections_opened(&self) -> u64 {
         self.opened.load(Ordering::SeqCst)
+    }
+
+    /// 지금 열어 둔 메타데이터용 연결 자리 수(시험).
+    pub fn open_links(&self) -> usize {
+        lock(&*self.links).len()
+    }
+}
+
+/// 표에서 뺀 자리의 연결을 닫는다(그 자리에서 도는 조회가 있으면 끝나기를 기다린다).
+async fn shut(link: &MetaLink) {
+    link.gone.store(true, Ordering::SeqCst);
+    let mut open = link.open.lock().await;
+    if let Some(meta) = open.take() {
+        retire(meta).await;
     }
 }
 
@@ -618,7 +818,7 @@ impl DbSessions {
         if let Some(hit) = self.schema.cached(&key) {
             return Ok(hit);
         }
-        let generation = self.schema.generation(&conn.project, &conn.connection);
+        let generation = lock(&self.schema.cache).generation(&conn.project, &conn.connection);
         let catalog = if capabilities.schemas {
             request.database().cloned()
         } else {
@@ -628,12 +828,17 @@ impl DbSessions {
             conn: conn.clone(),
             catalog: catalog.clone(),
         };
-        let link = Arc::clone(
-            lock(&*self.schema.links)
-                .entry(link_key.clone())
-                .or_default(),
-        );
-        let mut open = link.open.lock().await;
+        // 자리를 받아 잠근다. 기다리는 사이에 자리가 표에서 빠졌으면(상한 · 쉼 · 창 닫힘) 새 자리를 받는다.
+        let (link, mut open) = loop {
+            let (link, evicted) = self.schema.link(&link_key);
+            for old in evicted {
+                shut(&old).await;
+            }
+            let open = Arc::clone(&link.open).lock_owned().await;
+            if !link.gone() {
+                break (link, open);
+            }
+        };
         // 같은 것을 먼저 기다린 조회가 채웠으면 그것을 쓴다.
         if let Some(hit) = self.schema.cached(&key) {
             return Ok(hit);
@@ -657,7 +862,7 @@ impl DbSessions {
             };
             let id = self.schema.opened.fetch_add(1, Ordering::SeqCst);
             let retired = CancellationToken::new();
-            self.watch_window(
+            self.watch(
                 ctx.connection_closed(),
                 retired.clone(),
                 id,
@@ -671,30 +876,33 @@ impl DbSessions {
                 retired,
             });
         }
-        let Some(meta) = open.as_mut() else {
+        link.touch();
+        // 질의하는 동안 연결은 자리 밖(`InFlight`)에 있다 — 이 future 가 버려지면 연결도 닫힌다.
+        let mut flight = InFlight(open.take());
+        let Some(conn) = flight.conn() else {
             return Err(unexpected());
         };
-        let result = within(META_WAIT, "metadata", request.run(meta.conn.as_mut())).await;
+        let result = within(META_WAIT, "metadata", request.run(conn)).await;
+        let meta = flight.land();
         match result {
             Ok(value) => {
-                if self.schema.generation(&conn.project, &conn.connection) == generation {
-                    lock(&self.schema.cache).insert(key, value.clone());
-                }
+                *open = meta;
+                lock(&self.schema.cache).put(key, value.clone(), generation);
                 Ok(value)
             }
             Err(error) => {
-                if breaks_connection(&error)
-                    && let Some(broken) = open.take()
-                {
-                    retire(broken).await;
+                match meta {
+                    Some(broken) if breaks_connection(&error) => retire(broken).await,
+                    meta => *open = meta,
                 }
                 Err(db_error(error))
             }
         }
     }
 
-    /// 메타데이터용 연결을 연 창의 RPC 연결이 닫히면 그 연결을 닫는다(사람이 누를 때만 연결이 열려 있게 — 결정 M3-D13).
-    fn watch_window(
+    /// 메타데이터용 연결을 지켜보다 닫는다: 연 창의 RPC 연결이 닫히거나(사람이 누를 때만 연결이 열려 있게 — 결정 M3-D13) 쉬는
+    /// 시간이 지나면 자리를 표에서 빼고 연결을 닫는다. 연결이 다른 길로 닫히면(`retired`) 끝난다.
+    fn watch(
         &self,
         window_closed: CancellationToken,
         retired: CancellationToken,
@@ -707,21 +915,31 @@ impl DbSessions {
             key.clone(),
             Arc::clone(&self.schema.links),
         );
+        let idle = *lock(&self.schema.idle_close);
         tokio::spawn(async move {
-            tokio::select! {
-                () = window_closed.cancelled() => {}
-                () = retired.cancelled() => return,
+            loop {
+                tokio::select! {
+                    () = window_closed.cancelled() => break,
+                    () = retired.cancelled() => return,
+                    () = tokio::time::sleep_until(link.used() + idle) => {
+                        if link.used() + idle <= Instant::now() {
+                            break;
+                        }
+                    }
+                }
             }
+            {
+                let mut links = lock(&*links);
+                if links.get(&key).is_some_and(|l| Arc::ptr_eq(l, &link)) {
+                    links.remove(&key);
+                }
+            }
+            link.gone.store(true, Ordering::SeqCst);
             let mut open = link.open.lock().await;
             if open.as_ref().is_some_and(|m| m.id == id)
                 && let Some(meta) = open.take()
             {
                 retire(meta).await;
-            }
-            drop(open);
-            let mut links = lock(&*links);
-            if links.get(&key).is_some_and(|l| Arc::ptr_eq(l, &link)) {
-                links.remove(&key);
             }
         });
     }

@@ -117,6 +117,21 @@ fn the_row_key_table() {
         ),
         ("no index: no key", vec![col("id", false)], vec![], None),
         (
+            "a PK with a nullable column (SQLite rowid table) is not a key",
+            vec![col("code", true), col("v", true)],
+            vec![index("pk", &["code"], true, true, false)],
+            None,
+        ),
+        (
+            "a nullable PK skipped, a NOT NULL unique index taken",
+            vec![col("code", true), col("id", false)],
+            vec![
+                index("pk", &["code"], true, true, false),
+                index("t_id", &["id"], false, true, false),
+            ],
+            key("t_id", &["id"], false),
+        ),
+        (
             "of two NOT NULL unique indexes the narrower, then by name",
             vec![col("a", false), col("b", false), col("c", false)],
             vec![

@@ -38,4 +38,6 @@ tracing = "0.1.44"
 pw-diag = { path = "../pw-diag" }
 tempfile = "3.27.0"
 pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
+# 행 키 판정을 실제 SQLite 의 메타데이터로 본다(tests/schema.rs).
+pw-db-driver-sqlite = { path = "../pw-db-driver-sqlite" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }

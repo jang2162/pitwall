@@ -506,3 +506,52 @@ async fn the_state_read_follows_the_ledger_and_can_fail() {
         DbErrorKind::Disconnected
     );
 }
+
+/// 붙잡힌 메타데이터 호출은 기록한 뒤 풀릴 때까지 답하지 않는다. 풀면 답하고, 풀지 않고 그 future 를 버리면(RPC 취소 · 연결 버림)
+/// 그 자리에서 끝난다 — 멈춘 채 남지 않는다. 그 사이 다른 메서드는 붙잡히지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn held_metadata_answers_on_release_and_ends_when_dropped() {
+    let driver = FakeDriver::new();
+    driver.set_objects(vec![ObjectInfo {
+        name: "t".into(),
+        kind: ObjectKind::Table,
+        comment: None,
+    }]);
+    driver.hold_metadata(true);
+    let query = ObjectQuery {
+        database: None,
+        schema: None,
+        kind: ObjectKind::Table,
+        filter: None,
+        cursor: None,
+        limit: 10,
+    };
+
+    let mut conn = sql(&driver).await;
+    let held = conn.objects(query.clone());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), held)
+            .await
+            .is_err(),
+        "a held call does not answer"
+    );
+    // timeout 이 future 를 버렸다 — 같은 연결이 다시 쓸 수 있고 닫을 수 있다.
+    assert_eq!(driver.count(&FakeCall::Metadata("objects")), 1);
+
+    let mut other = sql(&driver).await;
+    let waiting = tokio::spawn(async move {
+        let page = other.objects(query).await;
+        (other, page)
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!waiting.is_finished());
+    driver.hold_metadata(false);
+    let (other, page) = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("released")
+        .unwrap();
+    assert_eq!(page.unwrap().items.len(), 1);
+    other.close().await.unwrap();
+    conn.close().await.unwrap();
+    assert_eq!(driver.count(&FakeCall::Close), 2);
+}

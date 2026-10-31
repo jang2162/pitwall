@@ -5310,6 +5310,7 @@ dependencies = [
  "keyring",
  "pw-core",
  "pw-db-driver",
+ "pw-db-driver-sqlite",
  "pw-db-sql",
  "pw-db-types",
  "pw-diag",

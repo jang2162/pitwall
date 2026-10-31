@@ -223,6 +223,8 @@ struct State {
     capabilities: Capabilities,
     /// 트랜잭션 안에서 도는 `fetch` 를 인터럽트하면 트랜잭션 전체가 롤백된다(SQLite 의 쓰기 취소). 아니면 `Failed`(PG).
     interrupt_rolls_back: AtomicBool,
+    /// `true` 인 동안 메타데이터 메서드가 호출을 기록한 뒤 답하지 않고 기다린다([`FakeDriver::hold_metadata`]).
+    metadata_hold: tokio::sync::watch::Sender<bool>,
     script: Mutex<Script>,
     /// (연결 번호, 호출).
     calls: Mutex<Vec<(u32, FakeCall)>>,
@@ -291,6 +293,7 @@ impl FakeDriver {
                 dialect,
                 capabilities,
                 interrupt_rolls_back: AtomicBool::new(false),
+                metadata_hold: tokio::sync::watch::Sender::new(false),
                 script: Mutex::default(),
                 calls: Mutex::default(),
                 committed: Mutex::default(),
@@ -364,6 +367,12 @@ impl FakeDriver {
     /// 답한다). 호출은 기록한다.
     pub fn fail_metadata(&self, error: Option<DbError>) {
         lock(&self.state.script).metadata_error = error;
+    }
+
+    /// `true` 면 메타데이터 메서드가 호출을 기록한 뒤 `false` 가 될 때까지 답하지 않는다 — 질의 도중 취소 · 무효화를 보는 시험. 기다리는
+    /// 호출은 그 future 를 버리면(RPC 취소 · 연결 버림) 그 자리에서 끝난다.
+    pub fn hold_metadata(&self, hold: bool) {
+        self.state.metadata_hold.send_replace(hold);
     }
 
     /// 연결 하나(`connect` 순서대로 0 부터)의 열린 트랜잭션을 파이프라인 모르게 되돌린다 — 정리 예산을 넘겨 버려진 문장이 나중에
@@ -873,7 +882,7 @@ impl SqlConnection for FakeConnection {
     fn schemas(&mut self, _database: Option<String>) -> BoxFuture<'_, DbResult<Vec<SchemaInfo>>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("schemas"));
-            self.metadata_failure()?;
+            self.metadata_failure().await?;
             Ok(vec![SchemaInfo {
                 name: "public".into(),
             }])
@@ -883,7 +892,7 @@ impl SqlConnection for FakeConnection {
     fn objects(&mut self, query: ObjectQuery) -> BoxFuture<'_, DbResult<ObjectPage>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("objects"));
-            self.metadata_failure()?;
+            self.metadata_failure().await?;
             let script = lock(&self.driver.state.script);
             let filter = query.filter.as_deref().map(str::to_lowercase);
             let matching: Vec<&ObjectInfo> = script
@@ -919,7 +928,7 @@ impl SqlConnection for FakeConnection {
     fn columns(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Vec<ColumnInfo>>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("columns"));
-            self.metadata_failure()?;
+            self.metadata_failure().await?;
             Ok(self.table(&object).columns)
         })
     }
@@ -927,7 +936,7 @@ impl SqlConnection for FakeConnection {
     fn indexes(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Vec<IndexInfo>>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("indexes"));
-            self.metadata_failure()?;
+            self.metadata_failure().await?;
             Ok(self.table(&object).indexes)
         })
     }
@@ -935,7 +944,7 @@ impl SqlConnection for FakeConnection {
     fn foreign_keys(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Vec<ForeignKeyInfo>>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("foreignKeys"));
-            self.metadata_failure()?;
+            self.metadata_failure().await?;
             Ok(self.table(&object).foreign_keys)
         })
     }
@@ -943,7 +952,7 @@ impl SqlConnection for FakeConnection {
     fn ddl(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Ddl>> {
         Box::pin(async move {
             self.record(FakeCall::Metadata("ddl"));
-            self.metadata_failure()?;
+            self.metadata_failure().await?;
             Ok(Ddl {
                 text: self.table(&object).ddl,
             })
@@ -959,7 +968,11 @@ impl SqlConnection for FakeConnection {
 }
 
 impl FakeConnection {
-    fn metadata_failure(&self) -> DbResult<()> {
+    /// 붙잡혀 있으면([`FakeDriver::hold_metadata`]) 풀릴 때까지 기다린 뒤 정한 오류를 낸다.
+    async fn metadata_failure(&self) -> DbResult<()> {
+        let mut hold = self.driver.state.metadata_hold.subscribe();
+        // 보내는 쪽은 드라이버 상태가 쥐고 있어 닫히지 않는다.
+        let _ = hold.wait_for(|held| !held).await;
         match lock(&self.driver.state.script).metadata_error.clone() {
             Some(error) => Err(error),
             None => Ok(()),

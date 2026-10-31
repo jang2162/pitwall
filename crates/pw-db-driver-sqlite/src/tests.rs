@@ -1294,3 +1294,39 @@ async fn cancelling_a_write_in_a_manual_transaction_reports_the_rollback() {
 /// 끝나지 않는 행 목록(쓰기 문장 안에 넣는다).
 const ENDLESS_ROWS: &str =
     "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT x FROM c";
+
+/// rowid 테이블의 기본 키 열은 rowid 별칭(`INTEGER PRIMARY KEY`)이 아니면 NULL 을 받는다 — NULL 허용으로 낸다(행 키가 될 수 없다).
+/// `WITHOUT ROWID` 테이블의 기본 키 열은 SQLite 가 NOT NULL 을 강제하고 `notnull` 도 1 로 낸다 — NULL 허용이 아니다(행 키가 된다).
+#[tokio::test]
+async fn primary_keys_are_nullable_only_where_sqlite_takes_null() {
+    let fixture = SqliteFixture::file();
+    let mut conn = connect(spec(fixture.path().unwrap())).await;
+    for sql in [
+        "CREATE TABLE loose (code TEXT PRIMARY KEY, v INTEGER)",
+        "CREATE TABLE tight (code TEXT PRIMARY KEY, v INTEGER) WITHOUT ROWID",
+        "INSERT INTO loose VALUES (NULL, 1), (NULL, 2)",
+    ] {
+        rows_of(conn.as_mut(), write(sql)).await.unwrap();
+    }
+    assert_eq!(
+        count(
+            conn.as_mut(),
+            "SELECT count(*) FROM loose WHERE code IS NULL"
+        )
+        .await,
+        2,
+        "a rowid table's primary key takes NULL"
+    );
+    rows_of(conn.as_mut(), write("INSERT INTO tight VALUES (NULL, 1)"))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        conn.columns(table("loose")).await.unwrap(),
+        [column("code", "TEXT", true), column("v", "INTEGER", true)]
+    );
+    assert_eq!(
+        conn.columns(table("tight")).await.unwrap(),
+        [column("code", "TEXT", false), column("v", "INTEGER", true)]
+    );
+}

@@ -2,7 +2,8 @@
 //! ① 1만 개 목록의 첫 쪽은 드라이버를 한 번만 부르고 같은 쪽 두 번째는 캐시 ② DDL 실행 뒤 `db.schemaChanged` 가 오고 다음 조회가
 //! 드라이버로 간다(③ 키 판정 표는 `schema::tests`) ④ 다른 창 · 미신뢰 프로젝트의 `db.schema.*` 는 거절되고 드라이버가 불리지 않는다.
 //! 그 밖에 메타데이터용 연결이 사람의 세션과 갈라져 커밋된 스키마만 보는 것, 이벤트가 그 프로젝트 범위로만 나가는 것, 창을 닫으면
-//! 메타데이터용 연결이 닫히는 것, 설정이 바뀌면 캐시를 버리는 것.
+//! 메타데이터용 연결이 닫히는 것, 설정이 바뀌면 캐시를 버리는 것, 질의 도중 취소된 연결을 다시 쓰지 않는 것, 메타데이터용 연결 수 ·
+//! 캐시 항목 수의 상한, 실제 SQLite 의 행 키 판정.
 
 mod common;
 
@@ -13,7 +14,9 @@ use common::{Conn, Fixture};
 use pw_core::bus::{Filter, Received, Scope, Subscription};
 use pw_db::DbSessions;
 use pw_db::gate::code;
+use pw_db::schema::{MAX_CACHED, MAX_LINKS, row_key};
 use pw_db_driver::fake::{FakeCall, FakeDriver, FakeResponse, FakeTable};
+use pw_db_driver_sqlite::SqliteDriver;
 use pw_db_types::{
     ColumnInfo, DbError, DbErrorKind, IndexInfo, ObjectInfo, ObjectKind, SqlDialect,
 };
@@ -139,6 +142,15 @@ fn no_more(events: &mut Subscription) {
         events.try_recv().is_none(),
         "an unexpected db.schemaChanged"
     );
+}
+
+/// `done` 이 참이 될 때까지 기다린다(5 초 넘으면 `what` 으로 실패).
+async fn wait_until(what: &str, done: impl Fn() -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !done() {
+        assert!(tokio::time::Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 fn denied(e: &RpcError) -> bool {
@@ -601,4 +613,236 @@ async fn indexes_and_ddl_are_cached_per_object() {
     assert_eq!(ddl["text"], "");
     w.call("db.schema.ddl", e.table("users")).await.unwrap();
     assert_eq!(e.metadata_calls("ddl"), 1);
+}
+
+/// 질의 도중 RPC 가 취소되면(핸들러 future 가 버려진다) 그 메타데이터용 연결을 닫는다 — 프로토콜 한가운데서 멈춘 연결을 다음 조회가
+/// 쓰지 않는다. 다음 조회는 새 연결을 연다(설계 ⓒ 「취소면 버린다」).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_metadata_query_does_not_leave_its_connection_behind() {
+    let e = env(true);
+    e.pg.set_objects(tables(3));
+    let mut w = e.f.window();
+    w.call("db.schema.columns", e.table("t00000"))
+        .await
+        .unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Connect), 1);
+
+    e.pg.hold_metadata(true);
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "id": 900, "method": "db.schema.objects", "params": e.objects(),
+    }));
+    wait_until("the query did not reach the driver", || {
+        e.metadata_calls("objects") == 1
+    })
+    .await;
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "method": "request.cancel", "params": { "id": 900 },
+    }));
+    // 드라이버가 아직 답하지 않았는데(붙잡혀 있다) 연결이 닫힌다.
+    wait_until("the cancelled query's connection stayed open", || {
+        e.pg.count(&FakeCall::Close) == 1
+    })
+    .await;
+    e.pg.hold_metadata(false);
+
+    w.call("db.schema.objects", e.objects()).await.unwrap();
+    assert_eq!(
+        e.pg.count(&FakeCall::Connect),
+        2,
+        "the next query opens a new connection"
+    );
+    assert_eq!(e.pg.calls_of(0).last(), Some(&FakeCall::Close));
+    assert!(e.pg.calls_of(1).contains(&FakeCall::Metadata("objects")));
+}
+
+/// 조회가 드라이버에 있는 동안 콘솔의 DDL 이 캐시를 버리면, 그 조회의 결과(버리기 전의 스키마)는 캐시에 들어가지 않는다 — 다음
+/// 조회는 드라이버로 간다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_query_that_ddl_overtakes_is_not_cached() {
+    let e = env(true);
+    e.pg.set_objects(tables(3));
+    e.pg.respond("CREATE", FakeResponse::write(0));
+    let mut events = schema_events(&e);
+    let mut w = e.f.window();
+    let s = e.open(&mut w).await;
+
+    e.pg.hold_metadata(true);
+    let mut slow = e.f.window();
+    let params = e.objects();
+    let read = tokio::spawn(async move { slow.call("db.schema.objects", params).await });
+    wait_until("the query did not reach the driver", || {
+        e.metadata_calls("objects") == 1
+    })
+    .await;
+    run_confirmed(&mut w, &s, "CREATE TABLE t9 (id int)").await;
+    next_schema_change(&mut events).await;
+    e.pg.hold_metadata(false);
+    read.await.unwrap().unwrap();
+
+    w.call("db.schema.objects", e.objects()).await.unwrap();
+    assert_eq!(
+        e.metadata_calls("objects"),
+        2,
+        "the page read before the DDL was not cached"
+    );
+    w.call("db.schema.objects", e.objects()).await.unwrap();
+    assert_eq!(e.metadata_calls("objects"), 2, "the fresh page was");
+}
+
+/// DB 마다 메타데이터용 연결을 여는 드라이버(PG)에서 DB 120개를 훑어도 (프로젝트, 연결 id)의 연결은 [`MAX_LINKS`] 개를 넘지 않는다 —
+/// 넘으면 가장 오래 안 쓴 것을 닫은 뒤에 새 것을 연다. 최근에 쓴 DB 의 연결은 남는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metadata_connections_stay_under_the_cap_across_many_databases() {
+    let e = env(true);
+    e.pg.set_objects(tables(3));
+    let mut w = e.f.window();
+    let at = |db: &str, filter: Option<&str>| {
+        let mut params = e.objects();
+        params["database"] = json!(db);
+        if let Some(filter) = filter {
+            params["filter"] = json!(filter);
+        }
+        params
+    };
+    let open = |e: &Env| e.pg.count(&FakeCall::Connect) - e.pg.count(&FakeCall::Close);
+
+    for db in ["db0", "db1", "db2", "db3"] {
+        w.call("db.schema.objects", at(db, None)).await.unwrap();
+    }
+    assert_eq!(open(&e), MAX_LINKS);
+    // db0 을 다시 쓰면 가장 오래 안 쓴 것은 db1 이다.
+    w.call("db.schema.objects", at("db0", Some("t")))
+        .await
+        .unwrap();
+    w.call("db.schema.objects", at("db4", None)).await.unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Connect), 5);
+    assert_eq!(
+        e.pg.calls_of(1).last(),
+        Some(&FakeCall::Close),
+        "db1 closed"
+    );
+    w.call("db.schema.objects", at("db0", Some("t0")))
+        .await
+        .unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Connect), 5, "db0 kept its connection");
+
+    for i in 5..120 {
+        w.call("db.schema.objects", at(&format!("db{i}"), None))
+            .await
+            .unwrap();
+        assert!(open(&e) <= MAX_LINKS, "{} open after db{i}", open(&e));
+    }
+    assert_eq!(e.pg.count(&FakeCall::Connect), 120);
+    assert_eq!(open(&e), MAX_LINKS);
+    assert_eq!(e.sessions.schema_state().open_links(), MAX_LINKS);
+}
+
+/// 쉬는 메타데이터용 연결은 닫는다(시험은 쉬는 시간을 줄인다). 다음 조회는 다시 연다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_idle_metadata_connection_is_closed() {
+    let e = env(true);
+    e.sessions
+        .schema_state()
+        .set_idle_close(Duration::from_millis(200));
+    e.pg.set_objects(tables(3));
+    let mut w = e.f.window();
+    w.call("db.schema.objects", e.objects()).await.unwrap();
+    wait_until("the idle connection stayed open", || {
+        e.pg.count(&FakeCall::Close) == 1
+    })
+    .await;
+    assert_eq!(e.sessions.schema_state().open_links(), 0);
+    w.call("db.schema.columns", e.table("t00000"))
+        .await
+        .unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Connect), 2);
+}
+
+/// 캐시는 [`MAX_CACHED`] 항목을 넘지 않는다 — 넘으면 가장 오래 안 쓴 것부터 버린다(서버 쪽 찾기가 글자마다 쪽을 만든다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_cache_keeps_at_most_max_cached_entries() {
+    let e = env(true);
+    e.pg.set_objects(tables(3));
+    let mut w = e.f.window();
+    let find = |i: usize| {
+        let mut params = e.objects();
+        params["filter"] = json!(format!("f{i}"));
+        params
+    };
+    for i in 0..MAX_CACHED {
+        w.call("db.schema.objects", find(i)).await.unwrap();
+    }
+    assert_eq!(e.metadata_calls("objects"), MAX_CACHED);
+    // f0 을 읽어 두면 넘칠 때 버리는 것은 f1 이다.
+    w.call("db.schema.objects", find(0)).await.unwrap();
+    w.call("db.schema.objects", find(MAX_CACHED)).await.unwrap();
+    assert_eq!(e.metadata_calls("objects"), MAX_CACHED + 1);
+    w.call("db.schema.objects", find(0)).await.unwrap();
+    w.call("db.schema.objects", find(MAX_CACHED)).await.unwrap();
+    assert_eq!(e.metadata_calls("objects"), MAX_CACHED + 1, "kept");
+    w.call("db.schema.objects", find(1)).await.unwrap();
+    assert_eq!(
+        e.metadata_calls("objects"),
+        MAX_CACHED + 2,
+        "f1 was dropped"
+    );
+}
+
+/// 행 키(③)를 실제 SQLite 의 메타데이터로: rowid 테이블의 `TEXT PRIMARY KEY` 는 NULL 을 받아 키가 아니고(그리드 편집에서 빠진다),
+/// `WITHOUT ROWID` 테이블의 같은 PK 는 키다. rowid 별칭(`INTEGER PRIMARY KEY`)도 키다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sqlite_primary_keys_that_take_null_are_not_row_keys() {
+    let mut drivers = pw_db::DriverRegistry::new();
+    drivers.register(Arc::new(SqliteDriver::new())).unwrap();
+    let f = Fixture::build(true, |router, connections| {
+        pw_db::register(
+            router,
+            Arc::new(DbSessions::new(Arc::clone(connections), drivers)),
+        );
+    });
+    std::fs::write(f.root.join("app.db"), "").unwrap();
+    f.write_db(
+        "lite.toml",
+        "schema = 1\nname = \"lite\"\ndriver = \"sqlite\"\npath = \"app.db\"\n",
+    );
+    let mut w = f.window();
+    let opened = w
+        .call(
+            "db.session.open",
+            json!({ "projectId": f.id, "connectionId": "lite" }),
+        )
+        .await
+        .unwrap();
+    let s = opened["session"]["sessionId"].as_str().unwrap().to_owned();
+    run_confirmed(
+        &mut w,
+        &s,
+        "CREATE TABLE loose (code TEXT PRIMARY KEY, v INTEGER); \
+         CREATE TABLE tight (code TEXT PRIMARY KEY, v INTEGER) WITHOUT ROWID; \
+         CREATE TABLE aliased (id INTEGER PRIMARY KEY, v INTEGER)",
+    )
+    .await;
+
+    let mut keys = Vec::new();
+    for table in ["loose", "tight", "aliased"] {
+        let params =
+            json!({ "projectId": f.id, "connectionId": "lite", "object": { "name": table } });
+        let columns: Vec<ColumnInfo> = serde_json::from_value(
+            w.call("db.schema.columns", params.clone()).await.unwrap()["items"].clone(),
+        )
+        .unwrap();
+        let indexes: Vec<IndexInfo> = serde_json::from_value(
+            w.call("db.schema.indexes", params).await.unwrap()["items"].clone(),
+        )
+        .unwrap();
+        keys.push(row_key(&columns, &indexes).map(|k| k.columns));
+    }
+    assert_eq!(
+        keys,
+        [
+            None,
+            Some(vec!["code".to_owned()]),
+            Some(vec!["id".to_owned()])
+        ]
+    );
 }
