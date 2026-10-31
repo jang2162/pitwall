@@ -194,7 +194,7 @@ function ConsoleBody({
     T,
     S,
     color: undefined as string | null | undefined,
-    resolveAccess: (_error: unknown) => Promise.resolve(false),
+    resolveAccess: (_error: unknown, _connectionId: string) => Promise.resolve(false),
   });
   latest.current = { ...latest.current, client, projectId, onSpec, risk, dialogs, T, S };
 
@@ -208,7 +208,7 @@ function ConsoleBody({
         latest.current.dialogs.confirm({ ...latest.current.S.cancelRollback, danger: true }),
       onSpec: (next) => latest.current.onSpec(next),
       color: () => latest.current.color,
-      resolveAccess: (error) => latest.current.resolveAccess(error),
+      resolveAccess: (error, connectionId) => latest.current.resolveAccess(error, connectionId),
     }),
   );
   const state = useStore(store);
@@ -235,23 +235,27 @@ function ConsoleBody({
   const entry = connections.find((c) => c.id === state.spec.connectionId);
   const color = entry?.config?.color ?? null;
   latest.current.color = color;
-  latest.current.resolveAccess = (error) => {
-    const connectionId = state.spec.connectionId;
-    if (!client || !connectionId) return Promise.resolve(false);
+  // 넘기는 연결은 그 RPC 에 실은 것이다(렌더 때의 고른 연결이 아니다 — 그사이 바뀌었을 수 있다).
+  latest.current.resolveAccess = (error, connectionId) => {
+    if (!client) return Promise.resolve(false);
+    const named = connections.find((c) => c.id === connectionId)?.config?.name;
     return access.resolve(error, {
       calls: client,
       projectId,
       worktree: activeWorktree() ?? null,
       connectionId,
-      connectionName: opened?.name ?? entry?.config?.name ?? connectionId,
+      connectionName: named ?? connectionId,
     });
   };
-  /** 연결을 여는 RPC 를 부르고, `3101` · `3102` 면 묻고 넣은 뒤 한 번 더 부른다. */
-  const withAccess = async <R,>(call: () => Promise<R> | undefined): Promise<R | undefined> => {
+  /** `connectionId` 로 연결을 여는 RPC 를 부르고, `3101` · `3102` 면 묻고 넣은 뒤 한 번 더 부른다. */
+  const withAccess = async <R,>(
+    connectionId: string,
+    call: () => Promise<R> | undefined,
+  ): Promise<R | undefined> => {
     try {
       return await call();
     } catch (e) {
-      if (await latest.current.resolveAccess(e)) return call();
+      if (await latest.current.resolveAccess(e, connectionId)) return call();
       throw e;
     }
   };
@@ -445,7 +449,7 @@ function ConsoleBody({
             value={state.spec.database ?? null}
             disabled={choosingLocked}
             load={() =>
-              withAccess(() =>
+              withAccess(opened.session.connectionId, () =>
                 latest.current.client?.call("db.schema.databases", {
                   projectId,
                   worktree: activeWorktree() ?? null,
@@ -465,7 +469,7 @@ function ConsoleBody({
             value={state.spec.schema ?? null}
             disabled={choosingLocked}
             load={() =>
-              withAccess(() =>
+              withAccess(opened.session.connectionId, () =>
                 latest.current.client?.call("db.schema.schemas", {
                   projectId,
                   worktree: activeWorktree() ?? null,

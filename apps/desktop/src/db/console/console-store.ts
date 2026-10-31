@@ -65,9 +65,9 @@ export interface ConsoleDeps {
   color?(): string | null | undefined;
   /**
    * 연결을 여는 RPC 가 `3101`(비밀 필요) · `3102`(확인 필요)로 답했을 때 사람에게 묻고 Host 에 넣는다(M3-13 `useDbAccessPrompt`).
-   * 넣었으면 `true` — 그 RPC 를 다시 부른다.
+   * 넣었으면 `true` — 그 RPC 를 다시 부른다. `connectionId` 는 그 RPC 에 실은 것(다르면 묻지 않는다). 탭이 사라지면 `false` 로 끝난다.
    */
-  resolveAccess?(error: unknown): Promise<boolean>;
+  resolveAccess?(error: unknown, connectionId: string): Promise<boolean>;
 }
 
 /** 실행 하나: 그 결과(문장마다의 버퍼)와 도는 중인지. */
@@ -244,7 +244,8 @@ function consoleActions(store: StoreApi<ConsoleState>, deps: ConsoleDeps) {
             set({ opened: await client().call("db.session.open", params) });
             return;
           } catch (e) {
-            if (attempt >= ACCESS_RETRIES || !(await deps.resolveAccess?.(e))) throw e;
+            if (attempt >= ACCESS_RETRIES || !(await deps.resolveAccess?.(e, params.connectionId)))
+              throw e;
           }
         }
       } catch (e) {
