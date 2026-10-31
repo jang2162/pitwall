@@ -4,11 +4,12 @@
 //
 // 본다: 상한 + 1 행이면 「상한에서 멈춤」, 라이트 ↔ 다크 전환에 새 색으로 다시 칠함, DB 값은 늘 글자 칸(HTML 칸 · 오버레이
 // 편집기 없음)이고 셀 상세도 글자로만 그림, 머리 클릭 정렬 · 열 순서 · 너비, ⌘C 의 TSV · 다른 형식으로 복사(CSV · INSERT),
-// ⌘⇧C 액션이 포커스가 든 그리드에만 산다.
+// ⌘⇧C 액션이 포커스가 든 그리드에만 산다, 결과를 바꾸면 결과에 묶인 화면 상태가 하나도 넘어오지 않는다, NULL 은 색 + 기울임 +
+// 접근성 글로 갈린다, 「다른 형식으로 복사」 는 Host 의 클립보드 쓰기로 간다(웹뷰의 `navigator.clipboard` 를 쓰지 않는다).
 
 import { LocalizationProvider } from "@fluent/react";
 import type { DbQueryEvent, DbValue, RpcClient } from "@pitwall/rpc-client";
-import { forwardRef, useImperativeHandle } from "react";
+import { forwardRef, useImperativeHandle, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 
@@ -22,8 +23,11 @@ import { gridActions } from "./db-grid-feature";
 import { focusedGrid } from "./grid-focus";
 import { QueryRun } from "./query-stream";
 import type { ResultBuffer } from "./result-buffer";
+import { ResultGrid } from "./glide-grid";
+import { gridColors } from "./grid-theme";
 import { ResultView, type ResultViewProps } from "./result-view";
 import { dbGridStrings } from "./strings";
+import { formatSize } from "./values";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -36,6 +40,7 @@ interface FakeProps {
   getCellContent: (cell: [number, number]) => {
     kind: string;
     data?: string;
+    displayData?: string;
     allowOverlay: boolean;
     readonly?: boolean;
     contentAlign?: string;
@@ -50,15 +55,23 @@ interface FakeProps {
   onGridSelectionChange: (s: unknown) => void;
   onCellActivated: (cell: [number, number]) => void;
   keybindings: Record<string, boolean>;
+  gridSelection: { current?: unknown };
+  drawHeader: (args: Record<string, unknown>) => void;
+  /** 가짜 편집기가 몇 번째로 붙었는가 — 바뀌면 Glide 안의 상태(스크롤 등)는 새로 시작한다. */
+  mount: number;
 }
 
-const glide = vi.hoisted(() => ({ props: [] as FakeProps[] }));
+const glide = vi.hoisted(() => ({ props: [] as FakeProps[], mounts: 0 }));
+const host = vi.hoisted(() => ({ invoke: vi.fn(async (_cmd: string, _args?: unknown) => {}) }));
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: host.invoke }));
 
 vi.mock("@glideapps/glide-data-grid", () => ({
   CompactSelection: { empty: () => ({ toArray: () => [] }) },
   GridCellKind: { Text: "text", Loading: "loading" },
-  DataEditor: forwardRef(function FakeEditor(props: FakeProps, ref) {
-    glide.props.push(props);
+  DataEditor: forwardRef(function FakeEditor(props: Omit<FakeProps, "mount">, ref) {
+    const [mount] = useState(() => ++glide.mounts);
+    glide.props.push({ ...props, mount });
     useImperativeHandle(ref, () => ({ focus: () => {} }));
     return <button type="button" data-testid="fake-glide" />;
   }),
@@ -152,9 +165,27 @@ describe("status line", () => {
     ]);
     await mount({ buffer });
     const capped = byTestId("db-grid-capped");
-    expect(capped?.textContent).toBe(T.status.capped(1000));
+    expect(capped?.textContent).toBe(T.status.capped(1000, formatSize(buffer.heldBytes)));
+    // 행 상한이 먼저 닿았다: 1000행 · 받은 크기는 작다.
+    expect(buffer.heldBytes).toBeLessThan(64 * 1024);
     expect(byTestId("db-grid-status")?.textContent).toContain(T.status.rows(1000));
     expect(byTestId("db-grid-status")?.textContent).toContain(T.status.elapsed(42));
+  });
+
+  it("says how many rows and how many bytes it held when the byte limit came first", async () => {
+    const cell = "x".repeat(1_000_000);
+    const buffer = run([
+      ...STARTED,
+      ...Array.from({ length: 5 }, (_, i): DbQueryEvent => ({
+        kind: "rows",
+        index: 0,
+        rows: [[{ int: i }, { text: cell }]],
+      })),
+      { kind: "done", index: 0, rowsAffected: null, elapsedMs: 7, truncated: true },
+    ]);
+    await mount({ buffer });
+    expect(buffer.heldBytes).toBe(5 * (8 + 1_000_000));
+    expect(byTestId("db-grid-capped")?.textContent).toBe(T.status.capped(5, "4.8 MiB"));
   });
 
   it("does not claim a limit when the rows ended on their own, and shows errors", async () => {
@@ -198,6 +229,58 @@ describe("grid", () => {
     await act(async () => root!.unmount());
     await mount({ buffer: nullBuffer });
     expect(last().getCellContent([0, 0]).themeOverride?.textDark).toBe(DARK["grid.null"]);
+  });
+
+  it("tells NULL apart from the text NULL by shape and by what a screen reader reads, not by colour alone", async () => {
+    const buffer = run([
+      ...STARTED,
+      { kind: "rows", index: 0, rows: [["null", { text: "NULL" }]] },
+    ]);
+    await mount({ buffer });
+    const nullCell = last().getCellContent([0, 0]);
+    const textCell = last().getCellContent([1, 0]);
+    expect(nullCell.displayData).toBe("NULL");
+    expect(textCell.displayData).toBe("NULL");
+    // 모양: NULL 은 기울임, 글자 「NULL」 은 보통 글꼴.
+    expect(nullCell.themeOverride?.baseFontStyle).toMatch(/^italic /);
+    expect(textCell.themeOverride).toBeUndefined();
+    // 접근성 표는 `data` 를 읽는다.
+    expect(nullCell.data).toBe(T.nullValue);
+    expect(textCell.data).toBe("NULL");
+    expect(T.nullValue).not.toBe("NULL");
+  });
+
+  it("draws a selected column header in grid.background over grid.accent", async () => {
+    const buffer = run([...STARTED, { kind: "rows", index: 0, rows: rows(1) }]);
+    await mount({ buffer });
+    const paint = (isSelected: boolean) => {
+      const fills: string[] = [];
+      const ctx = {
+        save() {},
+        restore() {},
+        beginPath() {},
+        rect() {},
+        clip() {},
+        measureText: () => ({ width: 10 }),
+        fillText(this: { fillStyle: string }) {
+          fills.push(this.fillStyle);
+        },
+        fillStyle: "",
+        font: "",
+        textAlign: "",
+        textBaseline: "",
+      };
+      last().drawHeader({
+        ctx,
+        column: last().columns[0],
+        rect: { x: 0, y: 0, width: 100, height: 28 },
+        theme: { headerFontStyle: "600 12px", baseFontStyle: "12px", fontFamily: "x" },
+        isSelected,
+      });
+      return fills;
+    };
+    expect(paint(false)).toEqual([LIGHT["grid.headerForeground"], LIGHT["grid.headerType"]]);
+    expect(paint(true)).toEqual([LIGHT["grid.background"], LIGHT["grid.background"]]);
   });
 
   it("draws every DB value as plain text cells without the overlay editor", async () => {
@@ -273,7 +356,7 @@ describe("grid", () => {
     await act(async () => last().onHeaderClicked(0, { ...click, metaKey: true }));
     expect(buffer.sort).toBeUndefined();
     await act(async () => last().onColumnMoved(0, 1));
-    expect(last().columns.map((c) => c.title)).toEqual(["body", "id"]);
+    expect(last().columns.map((c) => c.title)).toEqual(["body (text)", "id (int8)"]);
     expect(last().getCellContent([0, 0]).data).toBe("b");
     await act(async () => last().onColumnResize({ id: "0" }, 222));
     expect(last().columns.find((c) => c.id === "0")?.width).toBe(222);
@@ -281,6 +364,115 @@ describe("grid", () => {
 });
 
 describe("switching results", () => {
+  it("drops every result-bound screen state when another result comes in: filter, sort, selection, cursor, detail, scroll, column layout", async () => {
+    const three: DbQueryEvent[] = [
+      { kind: "accepted", executionId: "a", statements: 1 },
+      { kind: "started", index: 0, range: { from: 0, to: 8 }, grade: "read" },
+      {
+        kind: "columns",
+        index: 0,
+        columns: [
+          { name: "x", dbType: "int4", nullable: false },
+          { name: "y", dbType: "text", nullable: true },
+          { name: "z", dbType: "text", nullable: true },
+        ],
+      },
+      {
+        kind: "rows",
+        index: 0,
+        rows: [
+          [{ int: 1 }, { text: "a1-1" }, { text: "a2-1" }],
+          [{ int: 2 }, { text: "a1-2" }, { text: "a2-2" }],
+        ],
+      },
+      { kind: "done", index: 0, rowsAffected: null, elapsedMs: 1, truncated: false },
+    ];
+    const a = run(three);
+    const b = run([
+      { kind: "accepted", executionId: "b", statements: 1 },
+      { kind: "started", index: 0, range: { from: 0, to: 8 }, grade: "read" },
+      { kind: "columns", index: 0, columns: [{ name: "only", dbType: "text", nullable: true }] },
+      { kind: "rows", index: 0, rows: [1, 2, 3, 4, 5].map((i) => [{ text: `b${i}` }]) },
+      { kind: "done", index: 0, rowsAffected: null, elapsedMs: 1, truncated: false },
+    ]);
+    const view = (buffer: ResultBuffer) => (
+      <ThemeStoreProvider store={theme}>
+        <LocalizationProvider l10n={bundledLocalization("ko")}>
+          <ResultView buffer={buffer} />
+        </LocalizationProvider>
+      </ThemeStoreProvider>
+    );
+    const filter = () => byTestId("db-grid-filter") as HTMLInputElement;
+    const filterColumn = () => byTestId("db-grid-filter-column") as HTMLSelectElement;
+    const settle = () => act(async () => new Promise((r) => setTimeout(r, 170)));
+    await mount({ buffer: a });
+    // A 에서: 필터(열 z, 「a2-1」), 정렬, 열 순서 · 너비, 고르기 · 커서, 셀 상세.
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      set.call(filter(), "a2-1");
+      filter().dispatchEvent(new Event("input", { bubbles: true }));
+      filterColumn().value = "2";
+      filterColumn().dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    expect(a.filter).toEqual({ text: "a2-1", column: 2 });
+    expect(a.rowCount).toBe(1);
+    const click = { metaKey: false, ctrlKey: false, preventDefault: () => {} };
+    await act(async () => last().onHeaderClicked(0, click));
+    expect(a.sort).toEqual({ column: 0, direction: "asc" });
+    await act(async () => last().onColumnMoved(2, 0));
+    await act(async () => last().onColumnResize({ id: "2" }, 333));
+    await act(async () => select({ x: 0, y: 0, width: 2, height: 1 }));
+    await act(async () => last().onCellActivated([0, 0]));
+    expect(byTestId("db-cell-detail")?.textContent).toContain("a2-1");
+    const mountA = last().mount;
+
+    await act(async () => root!.render(view(b)));
+    await settle();
+    // B: 앞 결과의 필터 칸 · 열 · 정렬 · 고르기 · 커서 · 레이아웃 · Glide 안의 상태가 하나도 없다.
+    expect(filter().value).toBe("");
+    expect(filterColumn().value).toBe("");
+    expect(b.filter).toBeUndefined();
+    expect(b.sort).toBeUndefined();
+    expect(b.rowCount).toBe(5);
+    expect(last().rows).toBe(5);
+    expect(byTestId("db-grid-status")?.textContent).toContain(T.status.rows(5));
+    expect(last().gridSelection.current).toBeUndefined();
+    expect(last().columns.map((c) => c.id)).toEqual(["0"]);
+    expect(last().columns[0]!.width).not.toBe(333);
+    expect(last().mount).not.toBe(mountA);
+    // 셀 상세 패널은 열린 채(결과와 무관한 화면 상태)지만 고른 셀이 없다.
+    expect(byTestId("db-cell-detail")?.textContent).toBe(T.detail.none);
+    // A 의 필터는 B 가 덮어쓰지 않았다 — 돌아가면 A 의 것 그대로 보인다.
+    expect(a.filter).toEqual({ text: "a2-1", column: 2 });
+    await act(async () => root!.render(view(a)));
+    await settle();
+    expect(filter().value).toBe("a2-1");
+    expect(filterColumn().value).toBe("2");
+    expect(a.rowCount).toBe(1);
+  });
+
+  it("gives the grid alone (M3-17 · M3-18 reuse it) a fresh body per result: Glide state, selection and layout", async () => {
+    const a = run([...STARTED, { kind: "rows", index: 0, rows: rows(3) }]);
+    const b = run([...STARTED, { kind: "rows", index: 0, rows: rows(4) }]);
+    const grid = (buffer: ResultBuffer) => (
+      <LocalizationProvider l10n={bundledLocalization("ko")}>
+        <ResultGrid buffer={buffer} colors={gridColors(LIGHT)} />
+      </LocalizationProvider>
+    );
+    root = createRoot(element);
+    await act(async () => root!.render(grid(a)));
+    await act(async () => last().onColumnMoved(1, 0));
+    await act(async () => select({ x: 0, y: 0, width: 1, height: 1 }));
+    expect(last().gridSelection.current).toBeDefined();
+    const mountA = last().mount;
+    // 같은 열 꼴의 다른 결과 — 열 목록으로는 갈리지 않는다(결과 id 로 갈린다).
+    await act(async () => root!.render(grid(b)));
+    expect(last().mount).not.toBe(mountA);
+    expect(last().gridSelection.current).toBeUndefined();
+    expect(last().columns.map((c) => c.id)).toEqual(["0", "1"]);
+  });
+
   it("starts the next result with its own column order before its columns arrive", async () => {
     const first = run([
       ...STARTED,
@@ -290,7 +482,7 @@ describe("switching results", () => {
     await mount({ buffer: first });
     await act(async () => last().onColumnMoved(1, 0));
     await act(async () => last().onColumnResize({ id: "1" }, 300));
-    expect(last().columns.map((c) => c.title)).toEqual(["body", "id"]);
+    expect(last().columns.map((c) => c.title)).toEqual(["body (text)", "id (int8)"]);
     // 다음 실행: `started` 만 받은 결과(열이 아직 없다)로 바꾼다 — 옛 순서로 새 열을 읽으면 렌더가 던져 화면이 사라진다.
     const q = new QueryRun();
     q.apply({ kind: "accepted", executionId: "e2", statements: 1 });
@@ -316,7 +508,9 @@ describe("switching results", () => {
       q.apply({ kind: "rows", index: 0, rows: [[{ text: "v" }]] });
       await new Promise((r) => requestAnimationFrame(() => r(undefined)));
     });
-    expect(last().columns.map((c) => [c.title, c.width])).toEqual([["only", expect.any(Number)]]);
+    expect(last().columns.map((c) => [c.title, c.width])).toEqual([
+      ["only (text)", expect.any(Number)],
+    ]);
     expect(last().columns[0]!.width).not.toBe(300);
     expect(last().getCellContent([0, 0]).data).toBe("v");
   });
@@ -392,6 +586,49 @@ describe("copy", () => {
     expect(call).toHaveBeenCalledTimes(1);
     expect(written).toEqual([]);
     expect(notes.pop()).toBe(T.copy.truncated(2, "body"));
+  });
+
+  it("writes copy-as text through the Host clipboard, also after the INSERT round trip, never through the webview clipboard", async () => {
+    const buffer = run([...STARTED, { kind: "rows", index: 0, rows: rows(2) }]);
+    const webview = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: webview, write: webview },
+    });
+    host.invoke.mockClear();
+    let answer: (v: { text: string }) => void = () => {};
+    const call = vi.fn(
+      () =>
+        new Promise<{ text: string }>((r) => {
+          answer = r;
+        }),
+    );
+    await mount({
+      buffer,
+      insert: { client: { call } as unknown as RpcClient, dialect: "postgres", table: null },
+    });
+    await act(async () => select({ x: 0, y: 0, width: 2, height: 1 }));
+    const pick = async (format: string) => {
+      await act(async () => byTestId("db-grid-copy-as-button")!.click());
+      await act(async () =>
+        element
+          .querySelector<HTMLButtonElement>(
+            `[data-testid="db-grid-copy-as"] [data-format="${format}"]`,
+          )!
+          .click(),
+      );
+    };
+    await pick("csv");
+    expect(host.invoke).toHaveBeenLastCalledWith("write_clipboard", {
+      text: "id,body\r\n0,row 0\r\n",
+    });
+    // INSERT: Host 가 글을 돌려준 뒤(사용자 동작이 끝난 뒤)에도 Host 의 클립보드로 쓴다.
+    await pick("insert");
+    expect(host.invoke).toHaveBeenCalledTimes(1);
+    await act(async () => answer({ text: "INSERT …;\n" }));
+    expect(host.invoke).toHaveBeenLastCalledWith("write_clipboard", { text: "INSERT …;\n" });
+    expect(webview).not.toHaveBeenCalled();
+    Reflect.deleteProperty(navigator, "clipboard");
   });
 
   it("offers no INSERT format without a Host and dialect", async () => {

@@ -12,9 +12,9 @@ db-grid-rows = { $count }행
 db-grid-filtered = { $visible } / { $total }행
 # $ms: 걸린 시간(밀리초)
 db-grid-elapsed = { $ms } ms
-# $count: 그리드 보유 행 상한
-db-grid-capped = 상한에서 멈춤({ $count }행)
-db-grid-capped-hint = 그리드는 이 행 수까지만 받는다. 더 보려면 쿼리를 좁힌다.
+# $count: 받은 행 수, $size: 받은 셀 크기(예: 64.0 MiB)
+db-grid-capped = 상한에서 멈춤({ $count }행 · { $size })
+db-grid-capped-hint = 그리드는 행 상한(설정 [db] grid_max_rows)이나 받은 크기 상한([db] grid_max_bytes) 중 먼저 닿는 데까지만 받는다. 더 보려면 쿼리를 좁힌다.
 # $count: 바뀐 행 수
 db-grid-affected = { $count }행 바뀜
 db-grid-cancelled = 취소됨
@@ -26,6 +26,7 @@ db-grid-no-columns = 결과 행이 없는 문장이다
 
 db-grid-filter = 받은 행에서 거르기
 db-grid-filter-all-columns = 모든 열
+db-grid-filter-column = 거를 열
 db-grid-filter-clear = 필터 지우기
 
 ## 복사(⌘C 는 TSV, ⌘⇧C 는 형식을 고른다)
@@ -48,6 +49,11 @@ db-grid-copy-too-large = 고른 셀이 너무 많아 INSERT 문으로 복사할 
 # $message: 오류 문장
 db-grid-copy-failed = 복사하지 못했다: { $message }
 
+## 셀 값
+
+# 화면 읽기 프로그램이 읽는 NULL(글자 「NULL」 과 갈린다)
+db-grid-null-value = NULL 값
+
 ## 셀 상세 패널(더블클릭 · ↩)
 
 db-grid-detail = 셀 상세
@@ -62,5 +68,7 @@ db-grid-detail-json-invalid = JSON 으로 읽지 못해 글로 보인다
 db-grid-detail-truncated = 셀 상한에서 잘렸다 — 원래 { $size }, 받은 앞부분 { $received }
 # $count: 더 있는 항목 수
 db-grid-detail-more = … { $count }개 더
+# $shown: 보이는 앞부분 크기, $size: 받은 크기
+db-grid-detail-hex-partial = 앞 { $shown } 만 보인다(받은 것 { $size })
 db-grid-detail-expand = 펼치기
 db-grid-detail-collapse = 접기

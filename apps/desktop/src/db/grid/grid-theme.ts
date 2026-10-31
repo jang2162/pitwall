@@ -8,6 +8,10 @@ import type { TokenValues } from "../../theme/tokens";
 /** 그리드 글꼴: 에디터와 같은 고정폭(10-ui.md 「UI 스택」 의 폰트 행). */
 export const GRID_FONT_FAMILY = '"SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 
+/** 셀 글자 크기와 NULL 셀의 글꼴(기울임 — 색만으로 글자 「NULL」 과 가르지 않는다, 10-ui.md §6). */
+const BASE_FONT_STYLE = "12px";
+export const NULL_FONT_STYLE = `italic ${BASE_FONT_STYLE}`;
+
 export interface GridColors {
   background: string;
   foreground: string;
@@ -67,7 +71,7 @@ export function glideTheme(c: GridColors) {
     cellHorizontalPadding: 8,
     cellVerticalPadding: 3,
     headerFontStyle: "600 12px",
-    baseFontStyle: "12px",
+    baseFontStyle: BASE_FONT_STYLE,
     markerFontStyle: "11px",
     fontFamily: GRID_FONT_FAMILY,
     editorFontSize: "12px",

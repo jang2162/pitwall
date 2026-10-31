@@ -21,7 +21,7 @@ export function dbGridStrings(t: Translate) {
       rows: (count: number) => t("db-grid-rows", { count }),
       filtered: (visible: number, total: number) => t("db-grid-filtered", { visible, total }),
       elapsed: (ms: number) => t("db-grid-elapsed", { ms }),
-      capped: (count: number) => t("db-grid-capped", { count }),
+      capped: (count: number, size: string) => t("db-grid-capped", { count, size }),
       cappedHint: t("db-grid-capped-hint"),
       affected: (count: number) => t("db-grid-affected", { count }),
       cancelled: t("db-grid-cancelled"),
@@ -31,6 +31,7 @@ export function dbGridStrings(t: Translate) {
     filter: {
       placeholder: t("db-grid-filter"),
       allColumns: t("db-grid-filter-all-columns"),
+      column: t("db-grid-filter-column"),
       clear: t("db-grid-filter-clear"),
     },
     copy: {
@@ -47,6 +48,7 @@ export function dbGridStrings(t: Translate) {
       tooLarge: t("db-grid-copy-too-large"),
       failed: (message: string) => t("db-grid-copy-failed", { message }),
     },
+    nullValue: t("db-grid-null-value"),
     detail: {
       title: t("db-grid-detail"),
       show: t("db-grid-detail-show"),
@@ -59,6 +61,7 @@ export function dbGridStrings(t: Translate) {
       truncated: (size: string, received: string) =>
         t("db-grid-detail-truncated", { size, received }),
       more: (count: number) => t("db-grid-detail-more", { count }),
+      hexPartial: (shown: string, size: string) => t("db-grid-detail-hex-partial", { shown, size }),
       expand: t("db-grid-detail-expand"),
       collapse: t("db-grid-detail-collapse"),
     },

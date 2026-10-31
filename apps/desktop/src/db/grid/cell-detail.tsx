@@ -1,11 +1,21 @@
 // 셀 상세 패널(M3-16): 고른 셀 하나의 값 전부를 보인다 — JSON 은 접는 트리, 긴 글은 줄바꿈한 글, 바이트는 hex 덤프, 셀 상한에서
 // 잘린 값은 원래 크기를 함께. 값은 신뢰할 수 없는 글이라 React 의 글자 노드로만 그린다(HTML 로 해석하는 길을 두지 않는다).
+// JSON 트리는 원래 글을 지키는 파서(json-text.ts)로 읽는다 — 수는 받은 글 그대로(큰 정수 · 긴 소수 · `-0` · 지수), 같은 키도 모두
+// 보인다. 보이지 않는 제어 · 방향 · 0폭 문자는 `⟨U+XXXX⟩` 로 보인다(values.ts 의 `showInvisible`).
 
 import type { ColumnMeta, DbValue } from "@pitwall/rpc-client";
 import { useMemo, useState } from "react";
 
+import { type JsonText, parseJsonText } from "./json-text";
 import type { DbGridStrings } from "./strings";
-import { isTruncated, originalSize, valueKind, valueText } from "./values";
+import {
+  formatSize,
+  isTruncated,
+  originalSize,
+  showInvisible,
+  valueKind,
+  valueText,
+} from "./values";
 
 /** 트리의 한 마디에서 처음 펼쳐 보이는 자식 수. 나머지는 「… N개 더」 를 눌러 본다. */
 export const TREE_PAGE = 200;
@@ -14,18 +24,9 @@ const HEX_ROW = 16;
 /** hex 덤프로 그리는 최대 바이트(넘으면 앞부분만). */
 const HEX_LIMIT = 64 * 1024;
 
-export function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GiB`;
-}
-
 function utf8Length(s: string): number {
   return new TextEncoder().encode(s).length;
 }
-
-type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 function JsonNode({
   name,
@@ -34,7 +35,7 @@ function JsonNode({
   T,
 }: {
   name?: string;
-  value: Json;
+  value: JsonText;
   depth: number;
   T: DbGridStrings;
 }) {
@@ -42,19 +43,25 @@ function JsonNode({
   const [shown, setShown] = useState(TREE_PAGE);
   const label =
     name === undefined ? null : <span className="text-ui-muted-foreground">{name}: </span>;
-  if (value === null || typeof value !== "object") {
-    const text = typeof value === "string" ? JSON.stringify(value) : String(value);
+  if (value.kind !== "array" && value.kind !== "object") {
+    const text =
+      value.kind === "string"
+        ? JSON.stringify(value.value)
+        : value.kind === "number"
+          ? value.raw
+          : value.kind === "bool"
+            ? String(value.value)
+            : "null";
     return (
       <div className="whitespace-pre-wrap break-all pl-4" data-json-leaf>
         {label}
-        <span>{text}</span>
+        <span>{showInvisible(text)}</span>
       </div>
     );
   }
-  const entries: [string, Json][] = Array.isArray(value)
-    ? value.map((v, i) => [String(i), v])
-    : Object.entries(value);
-  const brackets = Array.isArray(value) ? ["[", "]"] : ["{", "}"];
+  const entries: [string, JsonText][] =
+    value.kind === "array" ? value.items.map((v, i) => [String(i), v]) : value.entries;
+  const brackets = value.kind === "array" ? ["[", "]"] : ["{", "}"];
   return (
     <div className="pl-4" data-json-node>
       <button
@@ -73,8 +80,9 @@ function JsonNode({
       </span>
       {open && (
         <>
-          {entries.slice(0, shown).map(([k, v]) => (
-            <JsonNode key={k} name={k} value={v} depth={depth + 1} T={T} />
+          {entries.slice(0, shown).map(([k, v], i) => (
+            // 객체는 같은 키가 여럿일 수 있다 — 자리로 키를 삼는다.
+            <JsonNode key={i} name={showInvisible(k)} value={v} depth={depth + 1} T={T} />
           ))}
           {entries.length > shown && (
             <button
@@ -90,6 +98,10 @@ function JsonNode({
       )}
     </div>
   );
+}
+
+function hexBytes(hex: string): number {
+  return (hex.startsWith("0x") ? hex.length - 2 : hex.length) / 2;
 }
 
 function hexDump(hex: string): string {
@@ -125,12 +137,12 @@ export function CellDetail({
 }) {
   const kind = value === undefined ? undefined : valueKind(value);
   const text = value === undefined ? null : valueText(value);
-  const parsed = useMemo((): { ok: true; json: Json } | { ok: false } | undefined => {
+  const parsed = useMemo((): { ok: true; json: JsonText } | { ok: false } | undefined => {
     if (value === undefined || value === "null") return undefined;
     const raw = value.json;
     if (raw === undefined) return undefined;
     try {
-      return { ok: true, json: JSON.parse(raw) as Json };
+      return { ok: true, json: parseJsonText(raw) };
     } catch {
       return { ok: false };
     }
@@ -188,13 +200,20 @@ export function CellDetail({
         ) : view === "json" && parsed?.ok ? (
           <JsonNode value={parsed.json} depth={0} T={T} />
         ) : view === "hex" && value.bytes !== undefined ? (
-          <pre className="whitespace-pre">{hexDump(value.bytes.hex)}</pre>
+          <>
+            {hexBytes(value.bytes.hex) > HEX_LIMIT && (
+              <div className="mb-1 text-ui-muted-foreground" data-testid="db-cell-hex-partial">
+                {T.detail.hexPartial(formatSize(HEX_LIMIT), formatSize(hexBytes(value.bytes.hex)))}
+              </div>
+            )}
+            <pre className="whitespace-pre">{hexDump(value.bytes.hex)}</pre>
+          </>
         ) : (
           <>
             {view === "json" && parsed && !parsed.ok && (
               <div className="mb-1 text-ui-muted-foreground">{T.detail.jsonInvalid}</div>
             )}
-            <pre className="whitespace-pre-wrap break-all">{text}</pre>
+            <pre className="whitespace-pre-wrap break-all">{showInvisible(text ?? "")}</pre>
           </>
         )}
       </div>

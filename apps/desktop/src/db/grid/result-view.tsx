@@ -7,6 +7,13 @@
 //   db-grid-feature.tsx). 결과 그림의 「⤓ 내보내기」 는 두지 않는다(F6-11 과 함께 이월 — 14-m3-plan §3).
 // - 이 컴포넌트가 요구하는 공급자는 테마(`ThemeStoreProvider`)와 번역(`LocalizationProvider`)뿐이다 — Host 연결 · 알림은 쓰는
 //   화면이 넘긴다(시험과 재사용이 가볍게).
+// - **결과에 묶인 화면 상태는 한 곳(`ResultBody`, 결과 id `buffer.id` 를 키로)에 둔다**: 필터 칸의 글 · 열, 고르기 · 커서,
+//   「다른 형식으로 복사」 메뉴, 그리드의 열 순서 · 너비 · 스크롤. 다른 결과를 넘기면 몸체가 새로 생겨 하나도 넘어오지 않는다
+//   (M3-16 리뷰: 앞 결과의 필터가 다음 결과에 걸려 「0 / N」 으로 보였다). 정렬 · 필터 자체는 버퍼의 것이라 그 결과로 돌아가면
+//   그대로 보인다. 결과와 무관한 것(셀 상세 패널을 열어 두었는가)만 바깥 `ResultView` 에 둔다 — 새 상태를 더할 때는 `ResultBody`
+//   에 둔다.
+// - 「다른 형식으로 복사」 는 Host 의 클립보드 쓰기로 쓴다(clipboard.ts — 비동기 뒤의 `navigator.clipboard.writeText` 는 WebKit
+//   이 거절할 수 있다).
 
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import type { ObjectRef, RpcClient, SqlDialect } from "@pitwall/rpc-client";
@@ -24,6 +31,7 @@ import {
 import type { NotificationInput } from "../../notifications/notifications";
 import { useTheme } from "../../theme/theme-switcher";
 import { CellDetail } from "./cell-detail";
+import { writeClipboardText } from "./clipboard";
 import { COPY_FORMATS, type CopyFormat, CopyRefused, formatBlock } from "./copy";
 import { ResultGrid, type ResultGridHandle } from "./glide-grid";
 import { clearActiveGrid, type GridTarget, setActiveGrid } from "./grid-focus";
@@ -31,6 +39,7 @@ import { gridColors } from "./grid-theme";
 import type { ResultBuffer } from "./result-buffer";
 import { isEmptyPick, pickBlock } from "./selection";
 import { type DbGridStrings, useDbGridStrings } from "./strings";
+import { formatSize } from "./values";
 
 export interface ResultViewProps {
   buffer: ResultBuffer;
@@ -38,7 +47,7 @@ export interface ResultViewProps {
   insert?: { client: RpcClient; dialect: SqlDialect; table: ObjectRef | null };
   /** 복사 결과 · 거절을 알린다. 쓰는 화면이 `useNotify()` 를 넘긴다. */
   notify?: (input: NotificationInput) => void;
-  /** 클립보드에 쓴다. 기본은 `navigator.clipboard.writeText`. */
+  /** 클립보드에 쓴다. 기본은 Host 의 클립보드 쓰기(clipboard.ts). */
   writeClipboard?: (text: string) => Promise<void>;
   /** 막대 오른쪽에 붙일 것(콘솔의 결과 탭 단추 등). */
   toolbar?: ReactNode;
@@ -84,7 +93,7 @@ export function StatusLine({ buffer, T }: { buffer: ResultBuffer; T: DbGridStrin
       <span>{parts.join(" · ")}</span>
       {s.kind === "done" && s.truncated && (
         <span className="font-semibold" title={T.status.cappedHint} data-testid="db-grid-capped">
-          {T.status.capped(buffer.loadedRows)}
+          {T.status.capped(buffer.loadedRows, formatSize(buffer.heldBytes))}
         </span>
       )}
       {s.kind === "error" && (
@@ -119,7 +128,7 @@ function FilterBar({ buffer, T }: { buffer: ResultBuffer; T: DbGridStrings }) {
       <select
         value={column ?? ""}
         onChange={(e) => setColumn(e.target.value === "" ? undefined : Number(e.target.value))}
-        aria-label={T.filter.allColumns}
+        aria-label={T.filter.column}
         data-testid="db-grid-filter-column"
         className="h-6 rounded border border-ui-border bg-ui-background px-1 text-[12px]"
       >
@@ -191,7 +200,21 @@ function CopyAsMenu({
 const MENU_ITEM =
   "flex h-[24px] cursor-default items-center gap-3 px-3 outline-none data-[disabled]:text-ui-muted-foreground data-[highlighted]:bg-ui-active";
 
-export function ResultView({ buffer, insert, notify, writeClipboard, toolbar }: ResultViewProps) {
+export function ResultView(props: ResultViewProps) {
+  // 결과와 무관한 화면 상태만 여기 — 결과에 묶인 것은 `ResultBody`(결과 id 를 키로).
+  const [detail, setDetail] = useState(false);
+  return <ResultBody key={props.buffer.id} {...props} detail={detail} setDetail={setDetail} />;
+}
+
+function ResultBody({
+  buffer,
+  insert,
+  notify,
+  writeClipboard,
+  toolbar,
+  detail,
+  setDetail,
+}: ResultViewProps & { detail: boolean; setDetail: (open: boolean) => void }) {
   const T = useDbGridStrings();
   const themeValue = useTheme((s) => s.theme);
   const appearance = useTheme((s) => s.appearance);
@@ -203,7 +226,6 @@ export function ResultView({ buffer, insert, notify, writeClipboard, toolbar }: 
   const grid = useRef<ResultGridHandle>(null);
   const root = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState<{ row: number; column: number }>();
-  const [detail, setDetail] = useState(false);
   const [copyAs, setCopyAs] = useState(false);
   const formats = useMemo(
     () => COPY_FORMATS.filter((f) => f !== "insert" || insert !== undefined),
@@ -211,7 +233,7 @@ export function ResultView({ buffer, insert, notify, writeClipboard, toolbar }: 
   );
 
   const write = useCallback(
-    (text: string) => (writeClipboard ?? ((t) => navigator.clipboard.writeText(t)))(text),
+    (text: string) => (writeClipboard ?? writeClipboardText)(text),
     [writeClipboard],
   );
 

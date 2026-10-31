@@ -15,6 +15,7 @@ import {
   GRAPH_LANES,
   GRAPH_TOKENS,
   graphLaneToken,
+  GRID_TOKENS,
   parseTheme,
   resolveAppearance,
   themeAppearances,
@@ -200,6 +201,44 @@ describe("git · graph · diff tokens (M2-12)", () => {
     expect(tokenCssVar("git.conflicted")).toBe("--pw-git-conflicted");
     expect(tokenCssVar("graph.lane.8")).toBe("--pw-graph-lane-8");
     expect(tokenCssVar("diff.char.added")).toBe("--pw-diff-char-added");
+  });
+});
+
+describe("grid tokens (M3-16)", () => {
+  // 결과 그리드(canvas)에서 글자가 놓이는 자리: 셀 글자 · NULL · 행 번호(Glide `textLight` = grid.null)는 보통 · 고른 셀 위,
+  // 열 머리의 이름 · 타입 · 정렬 화살표는 보통 · hover(고른 셀이 있는 열 머리 포함) 위, 고른 열 머리의 글자는 accent 위.
+  const TEXT_ON: Record<string, readonly string[]> = {
+    "grid.foreground": ["grid.background", "grid.selection"],
+    "grid.null": ["grid.background", "grid.selection"],
+    "grid.headerForeground": ["grid.headerBackground", "grid.headerHover"],
+    "grid.headerType": ["grid.headerBackground", "grid.headerHover"],
+    "grid.accent": ["grid.headerBackground", "grid.headerHover"],
+    "grid.background": ["grid.accent"],
+  };
+  // 글자를 그리지 않는 선(셀 · 머리 경계).
+  const LINES = ["grid.border"];
+
+  it("place every grid token: as text over its backgrounds, as a background, or as a line", () => {
+    const placed = new Set([...Object.keys(TEXT_ON), ...Object.values(TEXT_ON).flat(), ...LINES]);
+    expect([...GRID_TOKENS].filter((t) => !placed.has(t))).toEqual([]);
+    expect([...placed].filter((t) => !(GRID_TOKENS as readonly string[]).includes(t))).toEqual([]);
+  });
+
+  it("keep every grid text at body-text contrast (4.5:1) on light, dark, selected and hovered backgrounds", () => {
+    const short: string[] = [];
+    for (const appearance of ["light", "dark"] as const) {
+      const values = defaultTheme.variants[appearance]!;
+      for (const [token, backgrounds] of Object.entries(TEXT_ON))
+        for (const background of backgrounds) {
+          const ratio = contrast(
+            values[token as (typeof GRID_TOKENS)[number]],
+            values[background as (typeof GRID_TOKENS)[number]],
+          );
+          if (ratio < 4.5)
+            short.push(`${appearance} ${token} on ${background}: ${ratio.toFixed(2)} < 4.50`);
+        }
+    }
+    expect(short).toEqual([]);
   });
 });
 

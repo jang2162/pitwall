@@ -75,6 +75,70 @@ describe("json", () => {
   });
 });
 
+describe("json values keep their text", () => {
+  it("copies big integers, long decimals, -0 and exponents in json values as written (reviewer's 9007199254740993)", () => {
+    const out = toJson({
+      columns: [{ name: "doc", dbType: "jsonb", nullable: null }],
+      rows: [
+        [
+          {
+            json: '{"id": 9007199254740993, "d": 0.10000000000000000555, "z": -0, "e": 1E+400, "n": [12345678901234567890]}',
+          },
+        ],
+      ],
+    });
+    expect(out).toContain('"id": 9007199254740993');
+    expect(out).toContain('"d": 0.10000000000000000555');
+    expect(out).toContain('"z": -0');
+    expect(out).toContain('"e": 1E+400');
+    expect(out).toContain("12345678901234567890");
+    // 여전히 JSON 이다.
+    expect(() => JSON.parse(out)).not.toThrow();
+  });
+
+  it("keeps a __proto__ column, duplicate json keys, and never lets a renamed column take another's name", () => {
+    const out = toJson({
+      columns: [
+        { name: "__proto__", dbType: "text", nullable: null },
+        { name: "a", dbType: "int4", nullable: null },
+        { name: "a", dbType: "int4", nullable: null },
+        { name: "a_2", dbType: "int4", nullable: null },
+        { name: "j", dbType: "json", nullable: null },
+      ],
+      rows: [[{ text: "kept" }, { int: 1 }, { int: 2 }, { int: 3 }, { json: '{"k": 1, "k": 2}' }]],
+    });
+    expect(out).toContain('"__proto__": "kept"');
+    expect(out).toContain('"a": 1');
+    expect(out).toContain('"a_3": 2');
+    expect(out).toContain('"a_2": 3');
+    expect(out).toContain('"k": 1');
+    expect(out).toContain('"k": 2');
+  });
+
+  it("writes the same layout as JSON.stringify with two spaces", () => {
+    const block: CellBlock = {
+      columns: [
+        { name: "x", dbType: "int4", nullable: null },
+        { name: "y", dbType: "jsonb", nullable: null },
+      ],
+      rows: [
+        [{ int: 1 }, { json: '{"a":[1,{"b":null}],"c":{},"d":[]}' }],
+        [{ float: 1.5 }, { json: '"s\\\\"' }],
+      ],
+    };
+    expect(toJson(block)).toBe(
+      JSON.stringify(
+        [
+          { x: 1, y: { a: [1, { b: null }], c: {}, d: [] } },
+          { x: 1.5, y: "s\\" },
+        ],
+        null,
+        2,
+      ),
+    );
+  });
+});
+
 describe("insert", () => {
   function client(call: (method: string, params: unknown) => Promise<unknown>) {
     return { call: vi.fn(call) } as unknown as RpcClient & { call: ReturnType<typeof vi.fn> };

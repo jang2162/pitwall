@@ -31,8 +31,8 @@ pub const COMMANDS: &[(&str, &[WindowKind])] = &[
     ("open_file_window", &[Welcome]),
     ("take_pending_find_project", &[Welcome]),
     ("path_kind", &[Welcome]),
-    // 설정 창(src/settings/native.ts).
-    ("write_clipboard", &[Settings]),
+    // 설정 창(src/settings/native.ts)과 프로젝트 창의 DB 결과 그리드 「다른 형식으로 복사」(src/db/grid/clipboard.ts).
+    ("write_clipboard", &[Settings, Project]),
     // 열기 요청을 받는 창(src/project-open.ts).
     ("take_pending_project_opens", &[Project, File]),
     // 프로젝트 창의 파일 트리 드롭(src/file-tree/tree-drop.ts).
@@ -114,7 +114,12 @@ mod tests {
         assert_eq!(allowed_in("settings"), common_and(&["write_clipboard"]));
         assert_eq!(
             allowed_in("project-ab12"),
-            common_and(&["take_pending_project_opens", "import_drop", "perf_report"])
+            common_and(&[
+                "take_pending_project_opens",
+                "import_drop",
+                "perf_report",
+                "write_clipboard"
+            ])
         );
         assert_eq!(
             allowed_in("file-1"),

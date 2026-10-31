@@ -12,9 +12,9 @@ db-grid-rows = { $count } rows
 db-grid-filtered = { $visible } of { $total } rows
 # $ms: elapsed milliseconds
 db-grid-elapsed = { $ms } ms
-# $count: the grid row limit
-db-grid-capped = Stopped at the limit ({ $count } rows)
-db-grid-capped-hint = The grid keeps only this many rows. Narrow the query to see more.
+# $count: rows received, $size: size of the received cells (e.g. 64.0 MiB)
+db-grid-capped = Stopped at the limit ({ $count } rows · { $size })
+db-grid-capped-hint = The grid keeps rows only up to the row limit (setting [db] grid_max_rows) or the received size limit ([db] grid_max_bytes), whichever comes first. Narrow the query to see more.
 # $count: rows changed
 db-grid-affected = { $count } rows affected
 db-grid-cancelled = Cancelled
@@ -26,6 +26,7 @@ db-grid-no-columns = The statement returns no rows
 
 db-grid-filter = Filter received rows
 db-grid-filter-all-columns = All columns
+db-grid-filter-column = Column to filter
 db-grid-filter-clear = Clear filter
 
 ## Copy (⌘C copies TSV, ⌘⇧C picks a format)
@@ -48,6 +49,11 @@ db-grid-copy-too-large = Too many cells are selected to copy as INSERT
 # $message: the error
 db-grid-copy-failed = Could not copy: { $message }
 
+## Cell values
+
+# What a screen reader says for NULL (told apart from the text "NULL")
+db-grid-null-value = NULL value
+
 ## Cell detail panel (double-click or ↩)
 
 db-grid-detail = Cell Detail
@@ -62,5 +68,7 @@ db-grid-detail-json-invalid = Not valid JSON, shown as text
 db-grid-detail-truncated = Truncated at the cell limit — original { $size }, received { $received }
 # $count: items not shown
 db-grid-detail-more = … { $count } more
+# $shown: size of the part shown, $size: size received
+db-grid-detail-hex-partial = Showing the first { $shown } only ({ $size } received)
 db-grid-detail-expand = Expand
 db-grid-detail-collapse = Collapse

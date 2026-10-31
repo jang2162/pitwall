@@ -2,13 +2,19 @@
 // 행만 `row(i)` 로 읽는다. 화면은 `subscribe` 로 「바뀌었다」 만 받는다 — 알림은 한 프레임에 한 번으로 모은다(청크마다 다시
 // 그리지 않게).
 //
+// 결과마다 `id` 가 다르다 — 화면은 결과에 묶인 상태(필터 칸 · 고르기 · 커서 · 스크롤 · 열 순서 · 너비)를 이 id 를 키로 둔다
+// (result-view.tsx · glide-grid.tsx). 정렬 · 필터 자체는 버퍼의 것이라 그 결과로 돌아가면 그대로다.
+//
+// `heldBytes` 는 받은 셀 바이트 합이다 — Host 가 그리드 보유 바이트 상한(`[db] grid_max_bytes`)을 세는 규칙(`pw_db::execute::
+// cell_bytes`)과 같게 세어 「상한에서 멈춤(N행 · M MiB)」 에 쓴다.
+//
 // 정렬 · 필터는 보유한 행 위에서 한다(서버로 다시 묻지 않는다 — 서버 정렬 · 필터는 M3-17). 뷰는 원래 행 번호의 배열이다.
 // 정렬 · 필터 중에 행이 더 오면: 필터는 새 행만 걸러 뒤에 붙이고, 정렬은 `RESORT_MS` 마다 한 번 다시 정렬한다(그 사이 새 행은
 // 정렬되지 않은 채 뒤에 있다). 스트림이 끝나면 곧바로 다시 정렬한다.
 
 import type { ColumnMeta, DbValue } from "@pitwall/rpc-client";
 
-import { compareKeys, displayText, type SortKey, sortKey } from "./values";
+import { compareKeys, filterText, type SortKey, sortKey } from "./values";
 
 export interface SortSpec {
   /** 원래 열 번호. */
@@ -32,12 +38,53 @@ export const RESORT_MS = 500;
 
 type Schedule = (run: () => void) => void;
 
+let nextId = 1;
+
+/** UTF-8 바이트 수(글을 만들지 않고 센다). 짝 없는 서로게이트는 U+FFFD(3바이트)로 센다 — Rust 쪽에 그런 글은 오지 않는다. */
+function utf8Bytes(s: string): number {
+  let n = s.length;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) continue;
+    if (c < 0x800) n += 1;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        // 서로게이트 쌍 = 4바이트(글자 수 2 에 2를 더한다).
+        n += 2;
+        i++;
+      } else n += 2;
+    } else n += 2;
+  }
+  return n;
+}
+
+/**
+ * 셀 하나의 바이트(Host 의 `pw_db::execute::cell_bytes` 와 같은 규칙 — 바꾸면 둘을 함께 바꾼다): 글은 UTF-8 바이트, 바이트 값은
+ * hex 글 길이, 배열은 요소의 합 + 2, 그 밖(NULL · 참거짓 · 수 · 문자열로 온 큰 정수)은 8.
+ */
+export function cellBytes(v: DbValue): number {
+  if (v === "null" || v.bool !== undefined || v.int !== undefined || v.float !== undefined)
+    return 8;
+  if (v.decimal !== undefined) return utf8Bytes(v.decimal);
+  if (v.text !== undefined) return utf8Bytes(v.text);
+  if (v.json !== undefined) return utf8Bytes(v.json);
+  if (v.datetime !== undefined) return utf8Bytes(v.datetime);
+  if (v.uuid !== undefined) return utf8Bytes(v.uuid);
+  if (v.bytes !== undefined) return v.bytes.hex.length;
+  if (v.truncated !== undefined) return utf8Bytes(v.truncated.prefix);
+  if (v.array !== undefined) return v.array.reduce((n, item) => n + cellBytes(item), 2);
+  return utf8Bytes(v.other.text);
+}
+
 const frame: Schedule = (run) => {
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => run());
   else setTimeout(run, 0);
 };
 
 export class ResultBuffer {
+  /** 결과마다 다른 번호 — 화면이 결과에 묶인 상태의 키로 쓴다. */
+  readonly id = nextId++;
   private cols: ColumnMeta[] = [];
   private readonly rows: DbValue[][] = [];
   private view: number[] | undefined;
@@ -73,6 +120,9 @@ export class ResultBuffer {
     return this.filterSpec;
   }
 
+  /** 받은 셀 바이트 합(`cellBytes`). */
+  heldBytes = 0;
+
   /** 받은 행 수(정렬 · 필터와 상관없이). */
   get loadedRows(): number {
     return this.rows.length;
@@ -102,7 +152,10 @@ export class ResultBuffer {
   append(rows: DbValue[][]) {
     if (rows.length === 0) return;
     if (this.firstRowAt === undefined) this.firstRowAt = performance.now();
-    for (const r of rows) this.rows.push(r);
+    for (const r of rows) {
+      this.rows.push(r);
+      for (const v of r) this.heldBytes += cellBytes(v);
+    }
     if (this.filterSpec && !this.sortSpec) this.extendFilter();
     if (this.sortSpec) this.scheduleResort();
     this.changed(false);
@@ -121,7 +174,10 @@ export class ResultBuffer {
   }
 
   setFilter(filter: FilterSpec | undefined) {
-    this.filterSpec = filter && filter.text !== "" ? filter : undefined;
+    const next = filter && filter.text !== "" ? filter : undefined;
+    const now = this.filterSpec;
+    if (next?.text === now?.text && next?.column === now?.column) return;
+    this.filterSpec = next;
     this.rebuildView();
     this.changed(true);
   }
@@ -142,9 +198,9 @@ export class ResultBuffer {
     const needle = f.text.toLowerCase();
     if (f.column !== undefined) {
       const v = row[f.column];
-      return v !== undefined && displayText(v).toLowerCase().includes(needle);
+      return v !== undefined && filterText(v).toLowerCase().includes(needle);
     }
-    return row.some((v) => displayText(v).toLowerCase().includes(needle));
+    return row.some((v) => filterText(v).toLowerCase().includes(needle));
   }
 
   private extendFilter() {

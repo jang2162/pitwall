@@ -6,7 +6,13 @@
 //   셀 함수를 새로 만들어 다시 칠한다.
 // - **셀은 늘 글자(`Text`) 칸이다.** DB 값은 신뢰할 수 없는 글이라 HTML 로 그리는 칸(markdown · uri · image)을 쓰지 않고,
 //   오버레이 편집기(그 지연 청크에 marked · 이미지 캐러셀이 있다)도 열지 않는다(`allowOverlay: false`).
-// - 열 머리: 이름(굵게) · 타입(흐리게) · 정렬 화살표를 직접 그린다. 머리 클릭은 정렬(오름 → 내림 → 없음), 드래그는 순서,
+// - **결과에 묶인 상태는 결과 id 로 둔다**: 열 순서 · 너비 · 고르기와 Glide 안의 상태(스크롤 등)는 `buffer.id` 를 키로 한
+//   몸체(`GridBody`)에 산다 — 다른 결과를 넘기면 몸체가 새로 생겨 앞 결과의 것이 하나도 넘어오지 않는다(M3-16 리뷰: 옛 열 순서 ·
+//   필터가 다음 결과에 걸렸다). 같은 결과 안에서 열이 늦게 오면(`started` 만 받은 결과) 그 렌더에서 처음 값을 쓴다.
+// - NULL 은 `NULL` 을 흐린 색(`grid.null`) + 기울임으로 그리고(색만으로 가르지 않는다 — 10-ui.md §6), 화면 읽기 프로그램에는
+//   「NULL 값」 으로 읽힌다(Glide 접근성 표는 셀의 `data` 를 읽는다). 글자 「NULL」 인 값은 보통 글자다.
+// - 열 머리: 이름(굵게) · 타입(흐리게) · 정렬 화살표를 직접 그린다(고른 열은 `grid.accent` 위에 `grid.background` 글자). 접근성
+//   표의 열 머리 글은 「이름 (타입)」 이다. 머리 클릭은 정렬(오름 → 내림 → 없음), 드래그는 순서,
 //   경계 더블클릭은 화면에 보이는 행으로 너비 맞춤(Glide 의 `getCellsForSelection` 측정).
 // - 고르기: 드래그 · ⇧+클릭(사각형), 행 번호 칸(행), 열 머리 ⌘+클릭(열). ⌘C 는 `copy` 이벤트에서 TSV 를 쓴다(Glide 의 복사는
 //   끈다 — 글은 copy.ts 가 정한다).
@@ -39,9 +45,10 @@ import {
 } from "react";
 
 import { toTsv } from "./copy";
-import { type GridColors, glideTheme } from "./grid-theme";
+import { type GridColors, glideTheme, NULL_FONT_STYLE } from "./grid-theme";
 import type { ResultBuffer, SortSpec } from "./result-buffer";
 import { EMPTY_PICK, type GridPick, isEmptyPick, pickBlock } from "./selection";
+import { useDbGridStrings } from "./strings";
 import { displayText, isNumeric } from "./values";
 
 export interface ResultGridHandle {
@@ -91,10 +98,18 @@ const EMPTY_SELECTION: GridSelection = {
   rows: CompactSelection.empty(),
 };
 
-export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(function ResultGrid(
+/** 결과 그리드. 결과(`buffer.id`)가 바뀌면 몸체를 새로 만든다 — 결과에 묶인 상태가 다음 결과로 넘어가지 않는다. */
+export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(
+  function ResultGrid(props, ref) {
+    return <GridBody key={props.buffer.id} ref={ref} {...props} />;
+  },
+);
+
+const GridBody = forwardRef<ResultGridHandle, ResultGridProps>(function GridBody(
   { buffer, colors, onActivate, onCursor, onFocus },
   ref,
 ) {
+  const T = useDbGridStrings();
   const version = useBufferVersion(buffer);
   const meta = buffer.columns;
   // 열 순서 · 너비 · 고르기는 그 열 목록의 것이다. 결과(버퍼)나 열이 바뀌면 그 렌더에서 곧바로 처음 값을 쓴다 — 효과로 나중에
@@ -136,7 +151,8 @@ export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(function
         if (!c) return [];
         return {
           id: String(src),
-          title: c.name,
+          // 접근성 표의 열 머리 글(그림은 `drawHeader` 가 그린다).
+          title: `${c.name} (${c.dbType})`,
           width: widths[src] ?? initialWidth(c.name, c.dbType),
         };
       }),
@@ -154,24 +170,32 @@ export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(function
         return { kind: GridCellKind.Loading, allowOverlay: false };
       }
       const text = displayText(value);
+      const isNull = value === "null";
       return {
         kind: GridCellKind.Text,
-        data: text,
+        // 접근성 표가 읽는 글 — NULL 은 「NULL 값」(글자 「NULL」 과 갈린다).
+        data: isNull ? T.nullValue : text,
         displayData: text,
         allowOverlay: false,
         readonly: true,
         contentAlign: isNumeric(value) ? "right" : "left",
-        themeOverride: value === "null" ? { textDark: colors.null } : undefined,
+        themeOverride: isNull
+          ? { textDark: colors.null, baseFontStyle: NULL_FONT_STYLE }
+          : undefined,
       };
     },
-    [buffer, order, viewVersion, colors.null],
+    [buffer, order, viewVersion, colors.null, T.nullValue],
   );
 
   const drawHeader: DrawHeaderCallback = useCallback(
-    ({ ctx, column, rect, theme }) => {
+    ({ ctx, column, rect, theme, isSelected }) => {
       const src = Number(column.id);
       const c = meta[src];
       if (!c) return;
+      // 고른 열의 머리는 Glide 가 `accentColor` 로 칠한다 — 그 위 글자는 `textHeaderSelected`(= grid.background).
+      const fore = isSelected ? colors.background : colors.headerForeground;
+      const type = isSelected ? colors.background : colors.headerType;
+      const arrow = isSelected ? colors.background : colors.accent;
       const pad = 8;
       ctx.save();
       ctx.beginPath();
@@ -180,15 +204,15 @@ export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(function
       const y = rect.y + rect.height / 2;
       ctx.textBaseline = "middle";
       ctx.font = `${theme.headerFontStyle} ${theme.fontFamily}`;
-      ctx.fillStyle = colors.headerForeground;
+      ctx.fillStyle = fore;
       ctx.fillText(c.name, rect.x + pad, y);
       const nameWidth = ctx.measureText(c.name).width;
       ctx.font = `${theme.baseFontStyle} ${theme.fontFamily}`;
-      ctx.fillStyle = colors.headerType;
+      ctx.fillStyle = type;
       ctx.fillText(c.dbType, rect.x + pad * 2 + nameWidth, y);
       const s: SortSpec | undefined = sort?.column === src ? sort : undefined;
       if (s) {
-        ctx.fillStyle = colors.accent;
+        ctx.fillStyle = arrow;
         ctx.textAlign = "right";
         ctx.fillText(s.direction === "asc" ? "▲" : "▼", rect.x + rect.width - pad, y);
       }
@@ -266,6 +290,8 @@ export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(function
   return (
     <div
       className="relative min-h-0 flex-1"
+      role="region"
+      aria-label={T.label}
       data-testid="db-result-grid"
       data-rows={buffer.rowCount}
       data-version={version}

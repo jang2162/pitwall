@@ -1,16 +1,41 @@
 // 셀 값 `DbValue`(14-m3-plan 결정 M3-D8)의 표시 · 정렬 · 필터 규칙(M3-16). 그리드 · 셀 상세 · 복사가 이것 하나를 쓴다.
 //
-// - 표시: 문자열로 온 큰 정수 · decimal 도 숫자처럼 오른쪽 정렬, NULL 은 흐린 `NULL`(글자가 「NULL」 인 문자열과 색으로
-//   갈린다), 바이트는 `0x…`, 잘린 값은 앞부분 + `…`. 셀 한 칸에는 첫 줄의 앞부분만 그린다(`CELL_CHARS`) — 긴 글 · JSON 은
-//   셀 상세 패널이 보인다.
+// - 표시: 문자열로 온 큰 정수 · decimal 도 숫자처럼 오른쪽 정렬, NULL 은 `NULL` 을 흐린 색 + 기울임으로 그린다(색만으로 가르지
+//   않는다 — 10-ui.md §6, 기울임은 glide-grid.tsx 가 정한다), 바이트는 `0x…`, Host 가 셀 상한에서 자른 값은 앞부분 + `… (원래
+//   크기)`. 셀 한 칸에는 첫 줄의 앞부분만 그린다(`CELL_CHARS`) — 앞 `CELL_CHARS` 글자만 훑는다(1 MiB 셀을 그릴 때마다 통째로 훑지
+//   않게). 보이지 않는 제어 · 방향 · 0폭 문자는 `⟨U+202E⟩` 꼴로 보인다(값이 다르게 읽히지 않게). 긴 글 · JSON 은 셀 상세 패널이
+//   보인다.
 // - 정렬: 숫자끼리는 값으로(문자열로 온 큰 정수 · decimal 은 10진 글 비교라 정밀도를 잃지 않는다), 그 밖은 글자로. NULL 은
 //   늘 맨 뒤(오름 · 내림 모두).
-// - 필터: 보이는 글(`displayText`)에 대소문자를 가리지 않는 포함 검색.
+// - 필터: 값 글의 앞 `FILTER_CHARS` 글자(줄바꿈 뒤 포함)에 대소문자를 가리지 않는 포함 검색. NULL 은 `NULL` 로 찾는다.
 
 import type { DbValue } from "@pitwall/rpc-client";
 
 /** 셀 한 칸에 그리는 글자 수 상한. 넘으면 앞부분 + `…`. */
 export const CELL_CHARS = 500;
+/** 필터가 보는 값 글의 앞부분(글자). 넘는 뒤로는 찾지 못한다 — 10만 행을 글자마다 거를 때 큰 셀이 시간을 다 쓰지 않게. */
+export const FILTER_CHARS = 4096;
+
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GiB`;
+}
+
+// C0 · C1 제어(탭 · 줄바꿈 제외), 0폭 공백 · 단어 결합자 · BOM, 방향 표시 · 덮어쓰기 · 격리(U+200E · 200F · 202A~202E · 2066~2069 ·
+// 061C). ZWJ · ZWNJ(U+200C · 200D)는 글자 모양(이모지 · 문자 체계)에 쓰이므로 그대로 둔다.
+const INVISIBLE =
+  // oxlint-disable-next-line no-control-regex -- 제어 문자를 찾아 보이게 하는 것이 이 식의 목적이다.
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+
+/** 보이지 않는 제어 · 방향 · 0폭 문자를 `⟨U+XXXX⟩` 로 보인다(셀 · 셀 상세의 글 보기). */
+export function showInvisible(s: string): string {
+  return s.replace(
+    INVISIBLE,
+    (c) => `⟨U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`,
+  );
+}
 
 export type ValueKind =
   | "null"
@@ -92,16 +117,27 @@ export function originalSize(v: DbValue): number | undefined {
   return undefined;
 }
 
-/** 셀 한 칸에 그릴 글. NULL 은 `NULL`(흐린 색은 그리기가 정한다), 첫 줄의 앞부분만. */
+/** 셀 한 칸에 그릴 글. NULL 은 `NULL`(흐린 색 · 기울임은 그리기가 정한다), 첫 줄의 앞부분만. 앞 `CELL_CHARS` 글자만 훑는다. */
 export function displayText(v: DbValue): string {
   const t = valueText(v);
   if (t === null) return "NULL";
-  let line = t;
+  // 그리는 것은 앞 `CELL_CHARS` 글자뿐이다 — 그 뒤는 줄바꿈을 찾지도 않는다.
+  let line = t.length > CELL_CHARS ? t.slice(0, CELL_CHARS + 1) : t;
   const nl = line.search(/[\r\n]/);
   if (nl >= 0) line = `${line.slice(0, nl)} ⏎…`;
   if (line.length > CELL_CHARS) line = `${line.slice(0, CELL_CHARS)}…`;
-  else if (isTruncated(v)) line = `${line}…`;
+  line = showInvisible(line);
+  const size = originalSize(v);
+  // Host 가 자른 값은 원래 크기를 붙인다 — 원래 `…` 로 끝나는 값과 갈린다.
+  if (size !== undefined) line = `${line.endsWith("…") ? line : `${line}…`} (${formatSize(size)})`;
   return line;
+}
+
+/** 필터가 견주는 글: 값 글의 앞 `FILTER_CHARS` 글자(여러 줄 그대로), NULL 은 `NULL`. */
+export function filterText(v: DbValue): string {
+  const t = valueText(v);
+  if (t === null) return "NULL";
+  return t.length > FILTER_CHARS ? t.slice(0, FILTER_CHARS) : t;
 }
 
 // --- 정렬 ---------------------------------------------------------------------------------------------------------------

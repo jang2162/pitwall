@@ -4,7 +4,7 @@
 import type { DbValue } from "@pitwall/rpc-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { RESORT_MS, ResultBuffer } from "./result-buffer";
+import { cellBytes, RESORT_MS, ResultBuffer } from "./result-buffer";
 
 const now = (run: () => void) => run();
 
@@ -83,5 +83,29 @@ describe("ResultBuffer", () => {
     b.append([row(9, "z")]);
     b.finish({ kind: "done", truncated: false, elapsedMs: 3, rowsAffected: null });
     expect(b.row(0)).toEqual(row(9, "z"));
+  });
+
+  it("counts the held cell bytes the way the Host counts them for the byte limit", () => {
+    expect(cellBytes("null")).toBe(8);
+    expect(cellBytes({ int: "9007199254740993" })).toBe(8);
+    expect(cellBytes({ text: "abc" })).toBe(3);
+    expect(cellBytes({ text: "한" })).toBe(3);
+    expect(cellBytes({ text: "😀" })).toBe(4);
+    expect(cellBytes({ bytes: { hex: "0x00ff", size: 2, truncated: false } })).toBe(6);
+    expect(cellBytes({ array: [{ text: "ab" }, "null"] })).toBe(12);
+    expect(cellBytes({ truncated: { of: "text", prefix: "pq", size: 9e6, typeName: null } })).toBe(
+      2,
+    );
+    const b = buffer();
+    b.append([row(1, "한글"), row(2, null)]);
+    expect(b.heldBytes).toBe(8 + 6 + 8 + 8);
+  });
+
+  it("each result has its own id, and filtering finds text after the first line", () => {
+    expect(buffer().id).not.toBe(buffer().id);
+    const b = buffer();
+    b.append([row(1, "first\nneedle"), row(2, "other")]);
+    b.setFilter({ text: "NEEDLE" });
+    expect(b.rowCount).toBe(1);
   });
 });

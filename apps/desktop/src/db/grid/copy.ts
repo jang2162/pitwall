@@ -4,7 +4,11 @@
 //   싸고 안의 `"` 를 두 번 쓴다. NULL 은 빈 칸.
 // - CSV: RFC 4180 — 머리 줄(열 이름), 줄 끝 CRLF, `,` · `"` · CR · LF 가 든 필드는 `"…"` 로 싸고 안의 `"` 를 두 번. NULL 은 빈 필드.
 // - JSON: 행마다 객체의 배열. 정수(±2^53 안) · 유한한 실수는 수, 큰 정수 · decimal 은 문자열(정밀도), 바이트는 `0x…` 글, json
-//   값은 읽을 수 있으면 그 JSON, 아니면 글. 같은 열 이름이 둘이면 뒤의 것에 `_2` …를 붙인다.
+//   값은 읽을 수 있으면 그 JSON — 수는 원래 글 그대로(큰 정수 · 긴 소수 · `-0` · 지수 표기, json-text.ts), 같은 키 · 키 순서도
+//   그대로 — 아니면 글. 같은 열 이름이 둘이면 뒤의 것에 `_2` …를 붙이되 다른 열의 이름과 겹치지 않게 고른다. 행 객체는 손으로
+//   쓴다(`__proto__` 같은 열 이름도 그대로 남는다).
+// - TSV · CSV 는 원래 값 그대로다 — `=` `+` `-` `@` 로 시작하는 값에 접두 `'` 를 붙이지 않는다(DB 도구의 복사는 데이터 정확성이
+//   먼저다. 스프레드시트 수식 방어는 파일 내보내기 F6-11 에서 — 14-m3-plan M3-16 행 · 10-ui.md §5.6).
 // - INSERT: Host 의 `db.sql.insertText`(리터럴 규칙의 정본은 `pw_db_sql::literal`). 잘린 셀이 있으면 Host 에 보내기 전에 거절한다.
 //
 // 잘린 셀(셀 상한)은 TSV · CSV · JSON 에서 받은 앞부분 그대로다(원래 값이 아니다 — 상태 줄 · 상세 패널이 원래 크기를 보인다).
@@ -19,6 +23,7 @@ import {
   type SqlDialect,
 } from "@pitwall/rpc-client";
 
+import { type JsonText, parseJsonText, writeJsonText } from "./json-text";
 import { isTruncated, valueText } from "./values";
 
 export type CopyFormat = "tsv" | "csv" | "json" | "insert";
@@ -52,41 +57,54 @@ export function toCsv(block: CellBlock): string {
   return `${lines.join("\r\n")}\r\n`;
 }
 
-function jsonValue(v: DbValue): unknown {
-  if (v === "null") return null;
-  if (v.bool !== undefined) return v.bool;
-  if (v.int !== undefined) return v.int;
-  if (v.float !== undefined) return typeof v.float === "number" ? v.float : v.float;
+function jsonValue(v: DbValue): JsonText {
+  if (v === "null") return { kind: "null" };
+  if (v.bool !== undefined) return { kind: "bool", value: v.bool };
+  if (v.int !== undefined) {
+    return typeof v.int === "number"
+      ? { kind: "number", raw: String(v.int) }
+      : { kind: "string", value: v.int };
+  }
+  if (v.float !== undefined) {
+    return typeof v.float === "number"
+      ? { kind: "number", raw: JSON.stringify(v.float) }
+      : { kind: "string", value: v.float };
+  }
   if (v.json !== undefined) {
     try {
-      return JSON.parse(v.json) as unknown;
+      return parseJsonText(v.json);
     } catch {
-      return v.json;
+      return { kind: "string", value: v.json };
     }
   }
-  if (v.array !== undefined) return v.array.map(jsonValue);
-  return valueText(v);
+  if (v.array !== undefined) return { kind: "array", items: v.array.map(jsonValue) };
+  return { kind: "string", value: valueText(v) ?? "" };
 }
 
+/** JSON 의 키: 같은 이름이 둘이면 뒤의 것에 `_2` …를 붙이되, 다른 열의 원래 이름 · 이미 쓴 이름과 겹치지 않는 것을 고른다. */
 function uniqueNames(columns: ColumnMeta[]): string[] {
-  const seen = new Map<string, number>();
+  const original = new Set(columns.map((c) => c.name));
+  const used = new Set<string>();
   return columns.map((c) => {
-    const n = (seen.get(c.name) ?? 0) + 1;
-    seen.set(c.name, n);
-    return n === 1 ? c.name : `${c.name}_${n}`;
+    let name = c.name;
+    for (let n = 2; used.has(name); n++) {
+      const candidate = `${c.name}_${n}`;
+      if (!original.has(candidate) && !used.has(candidate)) name = candidate;
+    }
+    used.add(name);
+    return name;
   });
 }
 
 export function toJson(block: CellBlock): string {
   const names = uniqueNames(block.columns);
-  const rows = block.rows.map((r) => {
-    const o: Record<string, unknown> = {};
-    r.forEach((v, i) => {
-      o[names[i]!] = jsonValue(v);
-    });
-    return o;
+  return writeJsonText({
+    kind: "array",
+    items: block.rows.map((r) => ({
+      kind: "object",
+      entries: r.map((v, i): [string, JsonText] => [names[i]!, jsonValue(v)]),
+    })),
   });
-  return JSON.stringify(rows, null, 2);
 }
 
 /** INSERT 로 복사할 수 없는 첫 셀(행 · 열, 덩어리 기준 0부터). */
