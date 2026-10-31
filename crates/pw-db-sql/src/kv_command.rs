@@ -562,7 +562,7 @@ rpc_method! {
     }
 }
 
-/// 콘솔 한 줄을 argv 로(`db.kv.parseCommand` 의 몸체).
+/// 콘솔 한 줄을 argv 로(`db.kv.parseCommand` 의 몸체). 나누기는 [`split_console_args`] — redis-cli 와 같다.
 pub fn parse_console_line(text: &str) -> Result<Vec<KvKey>, String> {
     if text.len() > MAX_COMMAND_TEXT_BYTES {
         return Err(format!(
@@ -572,10 +572,116 @@ pub fn parse_console_line(text: &str) -> Result<Vec<KvKey>, String> {
     if text.contains(['\n', '\r']) {
         return Err("one line holds one Redis command".to_string());
     }
-    Ok(parse_command_argv(text)?
-        .iter()
-        .map(|arg| KvKey::from_bytes(arg))
-        .collect())
+    // redis-cli 는 C 문자열이라 NUL 에서 줄이 끝난다 — 같은 꼴로 나눌 수 없으니 다르게 나누는 대신 거절한다.
+    if text.contains('\0') {
+        return Err(
+            "a Redis command line cannot hold a NUL character; write it as \"\\x00\"".to_string(),
+        );
+    }
+    let argv = split_console_args(text)?;
+    if argv.is_empty() {
+        return Err("Redis command is empty".to_string());
+    }
+    Ok(argv.iter().map(|arg| KvKey::from_bytes(arg)).collect())
+}
+
+/// 콘솔 글을 redis-cli 와 똑같이 나눈다(Redis `sds.c` 의 `sdssplitargs` 규칙). 비프로덕션의 쓰기는 확인 없이 가므로
+/// (결정 M3-D20) 사람이 redis-cli 에서 익힌 글이 다른 값으로 써지면 아무도 모른다. 그래서 [`parse_command_argv`]
+/// (분류용, DBX 꼴 — 따옴표 밖 · 작은따옴표 안의 `\` 도 풀고 끝 `;` 를 버린다)를 쓰지 않는다.
+///
+/// - 따옴표 밖: 공백(` ` · 탭 · CR · LF)이 인자를 가른다. `\` 와 `;` 는 글자 그대로다. 따옴표는 그 자리에서 따옴표 구간을 연다.
+/// - 큰따옴표 안: `\xHH` 는 바이트 하나, `\n` `\r` `\t` `\b` `\a` 는 그 제어 문자, 그 밖의 `\c` 는 `c`.
+/// - 작은따옴표 안: `\'` 만 `'` 이고 나머지는 글자 그대로다.
+/// - 닫는 따옴표 바로 뒤는 공백이거나 글의 끝이어야 한다(`"a"b` 는 오류). 닫히지 않은 따옴표도 오류다.
+pub fn split_console_args(text: &str) -> Result<Argv, String> {
+    let bytes = text.as_bytes();
+    let at = |i: usize| bytes.get(i).copied();
+    // 앞 공백을 건너뛸 때는 C 의 `isspace`(VT · FF 포함), 인자를 가를 때는 넷뿐이다 — `sdssplitargs` 가 그렇다.
+    let skips = |b: u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
+    let ends = |b: u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r');
+    let closes = |next: Option<u8>| next.is_none_or(skips);
+    let mut argv = Vec::new();
+    let mut i = 0;
+    loop {
+        while at(i).is_some_and(skips) {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return Ok(argv);
+        }
+        let mut current = Vec::new();
+        let (mut double, mut single) = (false, false);
+        loop {
+            let Some(b) = at(i) else {
+                if double || single {
+                    return Err("Redis command has an unterminated quote".to_string());
+                }
+                break;
+            };
+            if double {
+                match (b, at(i + 1)) {
+                    (b'\\', Some(b'x'))
+                        if at(i + 2).is_some_and(|h| h.is_ascii_hexdigit())
+                            && at(i + 3).is_some_and(|h| h.is_ascii_hexdigit()) =>
+                    {
+                        let hex = std::str::from_utf8(&bytes[i + 2..i + 4]).expect("ascii hex");
+                        current.push(u8::from_str_radix(hex, 16).expect("two hex digits"));
+                        i += 4;
+                    }
+                    (b'\\', Some(c)) => {
+                        current.push(match c {
+                            b'n' => b'\n',
+                            b'r' => b'\r',
+                            b't' => b'\t',
+                            b'b' => 0x08,
+                            b'a' => 0x07,
+                            other => other,
+                        });
+                        i += 2;
+                    }
+                    (b'"', next) => {
+                        if !closes(next) {
+                            return Err("a closing quote must be followed by a space".to_string());
+                        }
+                        i += 1;
+                        break;
+                    }
+                    _ => {
+                        current.push(b);
+                        i += 1;
+                    }
+                }
+            } else if single {
+                match (b, at(i + 1)) {
+                    (b'\\', Some(b'\'')) => {
+                        current.push(b'\'');
+                        i += 2;
+                    }
+                    (b'\'', next) => {
+                        if !closes(next) {
+                            return Err("a closing quote must be followed by a space".to_string());
+                        }
+                        i += 1;
+                        break;
+                    }
+                    _ => {
+                        current.push(b);
+                        i += 1;
+                    }
+                }
+            } else if ends(b) {
+                break;
+            } else {
+                match b {
+                    b'"' => double = true,
+                    b'\'' => single = true,
+                    _ => current.push(b),
+                }
+                i += 1;
+            }
+        }
+        argv.push(current);
+    }
 }
 
 /// 메서드를 붙인다. 상태 없는 계산이다.

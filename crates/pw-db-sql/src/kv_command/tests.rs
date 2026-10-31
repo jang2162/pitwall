@@ -379,7 +379,7 @@ fn commands_that_hold_the_server_need_confirmation() {
 #[test]
 fn a_console_line_becomes_text_arguments_and_hex_for_non_utf8_bytes() {
     assert_eq!(
-        parse_console_line(r#"SET "a b" "\xea\xb0\x80" "0xff" "\xff";"#).unwrap(),
+        parse_console_line(r#"SET "a b" "\xea\xb0\x80" "0xff" "\xff""#).unwrap(),
         vec![
             KvKey::Text("SET".into()),
             KvKey::Text("a b".into()),
@@ -392,7 +392,15 @@ fn a_console_line_becomes_text_arguments_and_hex_for_non_utf8_bytes() {
 
 #[test]
 fn a_console_line_refuses_newlines_open_quotes_empty_text_and_huge_text() {
-    for text in ["GET a\nDEL b", "GET a\r", "GET \"a", "", "   ;"] {
+    for text in [
+        "GET a\nDEL b",
+        "GET a\r",
+        "GET \"a",
+        "",
+        "   ",
+        "\x0b\x0c",
+        "GET a\0b",
+    ] {
         assert!(parse_console_line(text).is_err(), "{text:?}");
     }
     let huge = format!("GET {}", "k".repeat(MAX_COMMAND_TEXT_BYTES));
@@ -430,4 +438,65 @@ async fn the_parse_command_method_answers_argv_or_invalid_params() {
     );
     let err = call("GET \"a").await;
     assert_eq!(err["error"]["code"], json!(pw_rpc::code::INVALID_PARAMS));
+}
+
+/// 콘솔 줄은 redis-cli 와 똑같이 나뉜다(14 M3-18 ⓑ, 리뷰 M1). 기대값은 redis:7.2.10 의 redis-cli 에 같은 줄을
+/// `RPUSH __argv <줄>` 로 보내 `LRANGE` 로 읽은 것이다(`None` 은 redis-cli 의 「Invalid argument(s)」).
+#[test]
+fn a_console_line_splits_like_redis_cli() {
+    let cases: &[(&str, Option<&[&[u8]]>)] = &[
+        (r"SET t1 'C:\new'", Some(&[b"SET", b"t1", b"C:\\new"])),
+        (r"SET t2 C:\x41", Some(&[b"SET", b"t2", b"C:\\x41"])),
+        ("SET t3 v;", Some(&[b"SET", b"t3", b"v;"])),
+        (r#"SET t4 "a"b"#, None),
+        (r#"SET t5 "a\x41\n""#, Some(&[b"SET", b"t5", b"aA\n"])),
+        (r"SET t6 'it\'s'", Some(&[b"SET", b"t6", b"it's"])),
+        (r"SET t7 'a\nb'", Some(&[b"SET", b"t7", b"a\\nb"])),
+        (r#"SET t8 "x\y""#, Some(&[b"SET", b"t8", b"xy"])),
+        (r#"SET t9 ab"cd ef""#, Some(&[b"SET", b"t9", b"abcd ef"])),
+        ("SET t10 'a'b", None),
+        (r#"SET t11 "unterminated"#, None),
+        (r#"SET t12 """#, Some(&[b"SET", b"t12", b""])),
+        (r#"SET t13 "\xZZ""#, Some(&[b"SET", b"t13", b"xZZ"])),
+        (
+            r#"SET t14 "a\f\v\b\a\r\t""#,
+            Some(&[b"SET", b"t14", b"afv\x08\x07\r\t"]),
+        ),
+        ("SET t15 키:값", Some(&[b"SET", b"t15", "키:값".as_bytes()])),
+        (r"SET t16 a\ b", Some(&[b"SET", b"t16", b"a\\", b"b"])),
+        ("SET\tt17\tv", Some(&[b"SET", b"t17", b"v"])),
+        (r#"SET t18 "\"q\"""#, Some(&[b"SET", b"t18", b"\"q\""])),
+        (
+            "SET t19 a\x0bb c\x0cd",
+            Some(&[b"SET", b"t19", b"a\x0bb", b"c\x0cd"]),
+        ),
+        (r"SET t20 'a\\b'", Some(&[b"SET", b"t20", b"a\\\\b"])),
+        (r#"SET t21 "\x4a\x4B""#, Some(&[b"SET", b"t21", b"JK"])),
+        (
+            r#"SET t22 "\xff\x00""#,
+            Some(&[b"SET", b"t22", b"\xff\x00"]),
+        ),
+        ("SET t23 'x'", Some(&[b"SET", b"t23", b"x"])),
+        (r#"SET t24 "a\""#, None),
+        (r#"SET t25 a"b"c"#, None),
+        ("SET t26 'a''b'", None),
+        (
+            "SET t27 \"a\" \"b\"\t'c'",
+            Some(&[b"SET", b"t27", b"a", b"b", b"c"]),
+        ),
+        (r#"SET t28 "a\"#, None),
+        (r"SET t29 'a\'", None),
+        ("  SET   t30   v  ", Some(&[b"SET", b"t30", b"v"])),
+    ];
+    for (line, wanted) in cases {
+        // `db.kv.parseCommand` 의 몸체를 지난다 — 나누기를 바꿔 끼우면 여기서 걸린다.
+        let got = parse_console_line(line);
+        match wanted {
+            Some(argv) => {
+                let argv: Vec<KvKey> = argv.iter().map(|a| KvKey::from_bytes(a)).collect();
+                assert_eq!(got.as_ref(), Ok(&argv), "{line:?}");
+            }
+            None => assert!(got.is_err(), "{line:?} split as {got:?}"),
+        }
+    }
 }
