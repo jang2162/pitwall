@@ -4,13 +4,15 @@
 //! 0 · 2(⑤), 1(① 키 100만 개 — 이미 심겨 있으면 다시 심지 않는다), 3 ~ 9(나머지). Redis 의 기본 DB 수는 16 이다.
 //!
 //! TLS 시험(⑦)은 `PW_TEST_REDIS_TLS_URL`(`rediss://localhost:6380/0`)과 `PW_TEST_TLS_CA`(시험 CA 의 PEM 경로)를 읽는다 —
-//! CI 의 `db-live` 잡 「tls test servers」 단계가 `scripts/db-tls-certs.sh` 로 만든다(주인 M3-06). 없으면 건너뛰지 않고 실패한다.
+//! CI 의 `db-live` 잡 「tls test servers」 단계가 `scripts/db-tls.mjs` 로 만든다(주인 M3-06 — 그 행이 병합되면 TARGETS 에 redis 항목 하나를 더한다). 없으면 건너뛰지 않고 실패한다.
 
 use std::time::{Duration, Instant};
 
 use pw_db_driver::live::{LiveDb, endpoint};
 use pw_db_driver::{DbConnection, DbDriver, KvConnection};
-use pw_db_sql::kv_command::{KvCommandClass, classify_argv, classify_command, parse_command_argv};
+use pw_db_sql::kv_command::{
+    BlockReason, KvCommandClass, classify_argv, classify_command, parse_command_argv,
+};
 use pw_db_types::{
     ConnectionSpec, DbErrorKind, DbValue, DriverKind, KvKey, KvRange, KvRenameOutcome, KvReply,
     KvScanRequest, KvType, KvValue, Secret, SslMode, Target, TlsSettings, TlsStatus,
@@ -144,7 +146,7 @@ async fn live_redis_the_classifier_agrees_with_the_server_s_command_flags() {
         "PITWALL.NOSUCH x",
     ] {
         let class = classify_argv(&parse_command_argv(text).unwrap());
-        assert_eq!(class, KvCommandClass::Blocked, "{text}");
+        assert!(matches!(class, KvCommandClass::Blocked(_)), "{text}");
     }
     for text in ["DEL a", "RENAME a b"] {
         let class = classify_argv(&parse_command_argv(text).unwrap());
@@ -183,7 +185,11 @@ async fn live_redis_the_classifier_agrees_with_the_server_s_command_flags() {
         }
         if flags.iter().any(|f| f == "blocking") && !matches!(name.as_str(), "XREAD" | "XREADGROUP")
         {
-            assert_eq!(class, KvCommandClass::Blocked, "{name} {flags:?}");
+            assert_eq!(
+                class,
+                KvCommandClass::Blocked(BlockReason::Blocking),
+                "{name} {flags:?}"
+            );
         }
         checked += 1;
     }
@@ -678,4 +684,176 @@ async fn live_redis_the_connection_test_reports_the_server_version() {
         "{version}"
     );
     assert_eq!(server.tls, TlsStatus::Plaintext);
+}
+
+/// 리뷰 2: 응답 타임아웃 · 취소 뒤 다시 연 연결이 DB 번호와 사용자(AUTH)를 다시 적용한다 — DB 2 · ACL 사용자로 연 연결이 다시
+/// 열린 뒤에도 키를 DB 2 에 쓰고(DB 0 에 없다) `ACL WHOAMI` 가 그 사용자다.
+#[tokio::test(flavor = "multi_thread")]
+async fn live_redis_a_rebuilt_connection_keeps_its_database_and_user() {
+    let stamp = std::process::id();
+    let user = format!("pitwall-live-{stamp}");
+    let password = format!("pw-{stamp}");
+    let mut admin = raw(0).await;
+    let _: () = redis::cmd("ACL")
+        .arg("SETUSER")
+        .arg(&user)
+        .arg("reset")
+        .arg("on")
+        .arg(format!(">{password}"))
+        .arg("~*")
+        .arg("&*")
+        .arg("+@all")
+        .query_async(&mut admin)
+        .await
+        .unwrap();
+
+    let mut spec = spec(2);
+    spec.user = Some(user.clone());
+    spec.password = Some(Secret::new(password));
+    spec.response_timeout_ms = Some(1_000);
+    let mut conn = open(spec).await;
+    let whoami = |reply: KvReply| match reply {
+        KvReply::Bulk(DbValue::Text(name)) | KvReply::Status(name) => name,
+        other => panic!("{other:?}"),
+    };
+
+    let after_timeout = format!("pitwall:live:rebuilt:timeout:{stamp}");
+    let error = conn
+        .command(argv("BLPOP pitwall:live:never-again 0"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, DbErrorKind::Timeout);
+    conn.command(vec!["SET".into(), after_timeout.clone(), "1".into()])
+        .await
+        .unwrap();
+    assert_eq!(
+        whoami(conn.command(argv("ACL WHOAMI")).await.unwrap()),
+        user
+    );
+
+    let after_cancel = format!("pitwall:live:rebuilt:cancel:{stamp}");
+    let interrupt = conn.interrupter();
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        interrupt.interrupt().await.unwrap();
+    });
+    let error = conn
+        .command(argv("BLPOP pitwall:live:never-again 0"))
+        .await
+        .unwrap_err();
+    canceller.await.unwrap();
+    assert_eq!(error.kind, DbErrorKind::Cancelled);
+    conn.command(vec!["SET".into(), after_cancel.clone(), "1".into()])
+        .await
+        .unwrap();
+    assert_eq!(
+        whoami(conn.command(argv("ACL WHOAMI")).await.unwrap()),
+        user
+    );
+
+    let mut two = raw(2).await;
+    for key in [&after_timeout, &after_cancel] {
+        let in_two: bool = redis::cmd("EXISTS")
+            .arg(key)
+            .query_async(&mut two)
+            .await
+            .unwrap();
+        let in_zero: bool = redis::cmd("EXISTS")
+            .arg(key)
+            .query_async(&mut admin)
+            .await
+            .unwrap();
+        assert!(in_two && !in_zero, "{key}: db2 {in_two}, db0 {in_zero}");
+        let _: () = redis::cmd("DEL")
+            .arg(key)
+            .query_async(&mut two)
+            .await
+            .unwrap();
+    }
+    let _: () = redis::cmd("ACL")
+        .arg("DELUSER")
+        .arg(&user)
+        .query_async(&mut admin)
+        .await
+        .unwrap();
+}
+
+/// 서버가 그 명령을 몇 번 돌렸는가(`INFO commandstats` 의 `cmdstat_<name>:calls=`).
+async fn calls_of(conn: &mut redis::aio::MultiplexedConnection, name: &str) -> u64 {
+    let info: String = redis::cmd("INFO")
+        .arg("commandstats")
+        .query_async(conn)
+        .await
+        .unwrap();
+    let prefix = format!("cmdstat_{name}:calls=");
+    info.lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .and_then(|rest| rest.split(',').next())
+        .map_or(0, |n| n.parse().unwrap())
+}
+
+/// 리뷰 3 · 메인 판정: 키 하나를 통째로 읽는 명령은 크기를 먼저 물어 상한을 넘으면 서버에 보내지 않고(`KEY_TOO_LARGE`),
+/// 묻지 않는 응답은 상한에서 끊어 `Truncated` 로 싣는다. 상한 안의 읽기는 그대로 돈다.
+#[tokio::test]
+async fn live_redis_whole_key_reads_are_bounded_in_the_console() {
+    let mut seed = raw(10).await;
+    let _: () = redis::cmd("FLUSHDB").query_async(&mut seed).await.unwrap();
+    let mut pipe = redis::pipe();
+    for i in 0..6_000 {
+        pipe.hset("big", format!("f{i}"), i).ignore();
+    }
+    for i in 0..10 {
+        pipe.hset("small", format!("f{i}"), i).ignore();
+    }
+    for i in 0..15_000 {
+        pipe.sadd("members", i).ignore();
+    }
+    pipe.set("huge", vec![b'x'; PAGE_BUDGET + 1]).ignore();
+    for i in 0..20_000 {
+        pipe.rpush("list", i).ignore();
+    }
+    let _: () = pipe.query_async(&mut seed).await.unwrap();
+
+    let mut conn = open(spec(10)).await;
+    let before = calls_of(&mut seed, "hgetall").await;
+    for text in [
+        "HGETALL big",
+        "SMEMBERS members",
+        "GET huge",
+        "LRANGE list 0 -1",
+    ] {
+        let error = conn.command(argv(text)).await.unwrap_err();
+        assert_eq!(
+            error.code.as_deref(),
+            Some("KEY_TOO_LARGE"),
+            "{text}: {error}"
+        );
+    }
+    assert_eq!(
+        calls_of(&mut seed, "hgetall").await,
+        before,
+        "the refused HGETALL reached the server"
+    );
+    assert_eq!(calls_of(&mut seed, "smembers").await, 0);
+
+    // 상한 안이면 그대로 돈다(서버에 닿는다).
+    let KvReply::Array(small) = conn.command(argv("HGETALL small")).await.unwrap() else {
+        panic!("array")
+    };
+    assert_eq!(small.len(), 20);
+    assert_eq!(calls_of(&mut seed, "hgetall").await, before + 1);
+    let KvReply::Array(window) = conn.command(argv("LRANGE list 0 99")).await.unwrap() else {
+        panic!("array")
+    };
+    assert_eq!(window.len(), 100);
+
+    // 묻지 않는 명령(여러 키에 걸친 `SUNION`)은 응답 상한에서 끊는다.
+    let KvReply::Truncated(cut) = conn.command(argv("SUNION members")).await.unwrap() else {
+        panic!("truncated")
+    };
+    assert_eq!(cut.elements, 15_000);
+    let KvReply::Array(shown) = *cut.reply else {
+        panic!("array")
+    };
+    assert_eq!(shown.len(), 10_000);
 }

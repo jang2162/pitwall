@@ -3194,15 +3194,26 @@ export type KvRenameOutcome = "renamed" |
 /**  명령 응답(RESP). */
 export type KvReply = "nil" | 
 /**  상태 응답(`+OK`). */
-({ status: string }) & { array?: never; bool?: never; bulk?: never; double?: never; error?: never; int?: never; map?: never } | 
+({ status: string }) & { array?: never; bool?: never; bulk?: never; double?: never; error?: never; int?: never; map?: never; truncated?: never } | 
 /**  오류 응답(`-ERR …`). */
-({ error: string }) & { array?: never; bool?: never; bulk?: never; double?: never; int?: never; map?: never; status?: never } | ({ int: DbValue }) & { array?: never; bool?: never; bulk?: never; double?: never; error?: never; map?: never; status?: never } | ({ double: string }) & { array?: never; bool?: never; bulk?: never; error?: never; int?: never; map?: never; status?: never } | ({ bool: boolean }) & { array?: never; bulk?: never; double?: never; error?: never; int?: never; map?: never; status?: never } | 
+({ error: string }) & { array?: never; bool?: never; bulk?: never; double?: never; int?: never; map?: never; status?: never; truncated?: never } | ({ int: DbValue }) & { array?: never; bool?: never; bulk?: never; double?: never; error?: never; map?: never; status?: never; truncated?: never } | ({ double: string }) & { array?: never; bool?: never; bulk?: never; error?: never; int?: never; map?: never; status?: never; truncated?: never } | ({ bool: boolean }) & { array?: never; bulk?: never; double?: never; error?: never; int?: never; map?: never; status?: never; truncated?: never } | 
 /**  벌크 문자열. */
-({ bulk: DbValue }) & { array?: never; bool?: never; double?: never; error?: never; int?: never; map?: never; status?: never } | ({ array: KvReply[] }) & { bool?: never; bulk?: never; double?: never; error?: never; int?: never; map?: never; status?: never } | ({ map: KvReplyPair[] }) & { array?: never; bool?: never; bulk?: never; double?: never; error?: never; int?: never; status?: never };
+({ bulk: DbValue }) & { array?: never; bool?: never; double?: never; error?: never; int?: never; map?: never; status?: never; truncated?: never } | ({ array: KvReply[] }) & { bool?: never; bulk?: never; double?: never; error?: never; int?: never; map?: never; status?: never; truncated?: never } | ({ map: KvReplyPair[] }) & { array?: never; bool?: never; bulk?: never; double?: never; error?: never; int?: never; status?: never; truncated?: never } | 
+/**  콘솔 응답 상한(맨 위 원소 10,000 · 4 MiB — 드라이버가 정한다)에서 끊은 응답. 맨 위만 감싼다. */
+({ truncated: KvReplyTruncated }) & { array?: never; bool?: never; bulk?: never; double?: never; error?: never; int?: never; map?: never; status?: never };
 
 export type KvReplyPair = {
 	key: KvReply,
 	value: KvReply,
+};
+
+export type KvReplyTruncated = {
+	/**  상한까지의 앞부분(배열 · 맵은 앞 원소들). */
+	reply: KvReply,
+	/**  원래 응답의 맨 위 원소 수(배열 · 맵의 길이, 값 하나면 1). */
+	elements: number,
+	/**  원래 응답의 값 바이트 합. */
+	bytes: number,
 };
 
 /**  스캔 한 묶음: 키마다 타입 · TTL · 크기(결정 M3-D15 의 1,000키 파이프라인). */

@@ -32,7 +32,8 @@ pub use capability::{Capabilities, DriverInfo};
 pub use error::{DbError, DbErrorKind};
 pub use kv::{
     KvField, KvKey, KvKeyBytes, KvKeyInfo, KvRange, KvRenameOutcome, KvReply, KvReplyPair,
-    KvScanPage, KvScanRequest, KvScored, KvStreamEntry, KvType, KvValue, KvValuePage,
+    KvReplyTruncated, KvScanPage, KvScanRequest, KvScored, KvStreamEntry, KvType, KvValue,
+    KvValuePage,
 };
 pub use meta::{
     ColumnInfo, DatabaseInfo, Ddl, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, ObjectPage,

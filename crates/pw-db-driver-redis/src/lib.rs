@@ -15,6 +15,7 @@
 
 mod browse;
 mod connection;
+mod console;
 mod reply;
 mod tls;
 
@@ -42,6 +43,12 @@ pub const DEFAULT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 값 읽기 한 쪽의 예산(바이트). 값 하나가 이보다 크면 앞부분만 싣는다.
 pub const PAGE_BUDGET: usize = 4 * 1024 * 1024;
+
+/// 키 스캔 한 묶음의 키 수 상한 — 콘솔 스캔의 `COUNT` 상한(`pw_db_sql::kv_command::MAX_SCAN_COUNT`)과 같은 값이다.
+pub const MAX_SCAN_COUNT: u32 = 10_000;
+
+/// 콘솔 명령 응답의 맨 위 원소 수 상한. 넘으면 앞부분만 싣고 `KvReply::Truncated` 로 감싼다(바이트 상한은 [`PAGE_BUDGET`]).
+pub const MAX_REPLY_ELEMENTS: u64 = 10_000;
 
 #[derive(Debug, Default)]
 pub struct RedisDriver;
@@ -234,6 +241,15 @@ mod tests {
         assert_eq!(
             super::endpoint(&spec).unwrap().response_timeout,
             DEFAULT_RESPONSE_TIMEOUT
+        );
+    }
+
+    /// 드라이버의 스캔 묶음 상한과 콘솔 스캔의 `COUNT` 상한은 같은 값이다(리뷰 5).
+    #[test]
+    fn the_scan_limit_matches_the_console_limit() {
+        assert_eq!(
+            u64::from(MAX_SCAN_COUNT),
+            pw_db_sql::kv_command::MAX_SCAN_COUNT
         );
     }
 

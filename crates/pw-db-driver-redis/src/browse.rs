@@ -22,6 +22,7 @@ use redis::Value;
 
 use crate::PAGE_BUDGET;
 use crate::connection::Connection;
+use crate::console;
 use crate::reply::{self, bytes_value};
 
 /// 패턴이 드문 키 공간에서 `SCAN` 한 번이 빈 묶음을 낼 수 있다 — 한 묶음을 채우려고 더 묻는 상한.
@@ -55,7 +56,8 @@ impl RedisKv {
     }
 
     async fn scan_page(&mut self, request: KvScanRequest) -> DbResult<KvScanPage> {
-        let count = request.count.max(1);
+        // 드라이버의 마지막 자리에서 묶는다 — 콘솔 스캔의 상한과 같은 값(`pw_db_sql::kv_command::MAX_SCAN_COUNT`).
+        let count = request.count.clamp(1, crate::MAX_SCAN_COUNT);
         let mut cursor = match request.cursor.as_deref() {
             None => 0,
             Some(text) => parse_cursor(text)?,
@@ -213,7 +215,9 @@ impl RedisKv {
             Some(text) => parse_cursor(text)?,
         };
         let window = window.clamp(1, PAGE_BUDGET) as u64;
-        let end = offset + window - 1;
+        let end = offset
+            .checked_add(window - 1)
+            .ok_or_else(|| DbError::new(DbErrorKind::Invalid, "the cursor is out of range"))?;
         let (mut chunk, total): (Vec<u8>, u64) = self
             .conn
             .query(|mut c| async move {
@@ -329,7 +333,9 @@ impl RedisKv {
         loop {
             let hint = budget.next_chunk() as u64;
             let probe = key.clone();
-            let stop = start + hint - 1;
+            let stop = start
+                .checked_add(hint - 1)
+                .ok_or_else(|| DbError::new(DbErrorKind::Invalid, "the cursor is out of range"))?;
             let raw: Vec<Vec<u8>> = self
                 .conn
                 .query(|mut c| async move {
@@ -439,7 +445,9 @@ impl RedisKv {
         })
     }
 
-    /// RedisJSON: `JSON.GET`(문서 하나, 예산을 넘으면 앞부분). 모듈이 답하지 않으면 string 으로 읽는다.
+    /// RedisJSON: `JSON.GET`(문서 하나, 예산을 넘으면 앞부분). 모듈이 답하지 않으면 string 으로 읽는다. 문서는 쪽으로 나눌
+    /// 길이 없어 통째로 받는다 — 키 하나 안의 읽기는 허용하는 규칙(14-m3-plan.md M3-09)이고, Host 의 일시 메모리는 응답 타임아웃 ·
+    /// 취소가 묶는다.
     async fn read_json(
         &mut self,
         key: Vec<u8>,
@@ -561,6 +569,9 @@ impl RedisKv {
         let Some((name, args)) = argv.split_first() else {
             return Err(DbError::new(DbErrorKind::Invalid, "the command is empty"));
         };
+        if let Some(probe) = console::size_probe(name, args) {
+            self.refuse_if_too_large(probe).await?;
+        }
         let name = name.clone();
         let args = args.to_vec();
         let result = self
@@ -573,9 +584,33 @@ impl RedisKv {
             })
             .await?;
         Ok(match result {
-            Ok(value) => reply::reply(value),
+            Ok(value) => console::limited_reply(value),
             Err(error) => KvReply::Error(reply::server_reply_text(&error)),
         })
+    }
+
+    /// 키 하나를 통째로 읽는 명령의 크기를 먼저 묻는다(같은 연결, 분류 밖의 내부 명령). 상한을 넘으면 그 명령을 서버에 보내지
+    /// 않고 거절한다. 묻기와 읽기 사이에 키가 커지는 경합은 받아들인다 — 그때는 응답 상한(`Truncated`)과 응답 타임아웃이 막는다.
+    async fn refuse_if_too_large(&mut self, probe: console::SizeProbe) -> DbResult<()> {
+        let (command, key) = (probe.command, probe.key.clone());
+        let size = self
+            .conn
+            .run(|mut c| async move {
+                let mut cmd = redis::cmd(command);
+                if command == "MEMORY" {
+                    cmd.arg("USAGE");
+                }
+                cmd.arg(&key).query_async::<Value>(&mut c).await
+            })
+            .await?;
+        // 크기를 못 물으면(모듈 없음 · 권한) 막지 않는다 — 응답 상한이 남는다.
+        let Ok(Value::Int(size)) = size else {
+            return Ok(());
+        };
+        if probe.too_large(u64::try_from(size).unwrap_or(0)) {
+            return Err(console::too_large());
+        }
+        Ok(())
     }
 }
 

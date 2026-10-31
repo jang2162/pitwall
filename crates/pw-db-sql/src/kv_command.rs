@@ -10,7 +10,16 @@
 //!   `WAIT` · `WAITAOF`)을 허용 · 확인 목록에서 빼 거절로 옮겼다. 한 DB 번호의 연결 하나를 콘솔과 키 브라우저가 함께 쓰므로
 //!   (multiplexed) 막힌 명령 뒤에서 키 브라우저가 멈춘다. `BLOCK` 인자가 붙은 `XREAD` · `XREADGROUP` 도 같다 —
 //!   인자를 보는 [`classify_argv`] 를 더했다.
+//! - 키 공간 전체를 한 번에 도는 스캔을 막는다: `SCAN` · `HSCAN` · `SSCAN` · `ZSCAN` 의 `COUNT` 가 [`MAX_SCAN_COUNT`] 를 넘으면
+//!   거절(까닭 [`BlockReason::ScanCount`] — 키 브라우저를 쓰라고 안내한다).
+//! - 대상 키를 덮는 쓰기는 `RENAME` 처럼 확인이다: `BITOP`, `STORE` · `STOREDIST` 가 붙은 `GEORADIUS` · `GEORADIUSBYMEMBER`,
+//!   `REPLACE` 가 붙은 `COPY` · `RESTORE`(DBX 는 쓰기).
+//! - 거절에 까닭([`BlockReason`])을 싣고, 여러 줄 묶음의 분류([`classify_script`])를 여기 하나에 둔다.
 //! - DBX 데스크톱의 「안전 확인 건너뛰기」 는 옮기지 않았다. 토크나이저는 오류 글만 그대로다.
+//!
+//! **막는 기준**(14-m3-plan.md M3-09): 키 공간 전체를 도는 서버 작업(`KEYS` · `FLUSH*` · 큰 `COUNT` 의 스캔)과 연결의 상태를
+//! 바꾸거나 점유하는 명령이다. 키 하나 안의 읽기(`HGETALL` · `SMEMBERS` · `LRANGE 0 -1` · `JSON.GET`)는 허용하고, 콘솔 응답
+//! 상한으로 끊는다(드라이버 — `pw-db-driver-redis`). 키 브라우저(M3-18)는 쪽 읽기를 쓴다.
 //!
 //! **분류기는 이것 하나다** — 관문(M3-22 `db.kv.command`)이 부르고, 드라이버(`pw-db-driver-redis`)는 부르지 않는다
 //! (`KvConnection::command` 는 부르는 쪽이 먼저 분류했다고 본다). 모르는 명령(새 Redis 판 · 모듈 · 프록시 명령)은 거절이다.
@@ -29,8 +38,24 @@ pub enum KvCommandClass {
     /// 지우기 · 덮기 같은 확인이 필요한 쓰기. 등급은 확인의 무게다.
     Confirm(RiskGrade),
     /// 거절. 서버에 보내지 않는다.
-    Blocked,
+    Blocked(BlockReason),
 }
+
+/// 거절의 까닭(창이 안내 글을 고른다).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BlockReason {
+    /// 허용 목록 밖(모르는 명령 · 키 공간 전체 · 연결 상태를 바꾸는 명령 · 형식이 틀린 인자).
+    NotAllowed,
+    /// 서버에서 기다리며 연결을 붙잡는 명령(`BLPOP` 류 · `WAIT` · `BLOCK` 이 붙은 `XREAD`).
+    Blocking,
+    /// 스캔의 `COUNT` 가 [`MAX_SCAN_COUNT`] 를 넘는다 — 키 브라우저를 쓴다.
+    ScanCount,
+}
+
+/// 콘솔 스캔(`SCAN` · `HSCAN` · `SSCAN` · `ZSCAN`)의 `COUNT` 상한. 키 브라우저의 한 묶음(1,000키 — 14 M3-09 ①)의 열 배다.
+/// 실측(redis 7.2.10, 키 100만 개, `SLOWLOG`): `COUNT 10000` 한 번이 서버를 2 ms 남짓 붙잡고, `COUNT 2000000` 은 349 ms 로
+/// 거절되는 `KEYS *`(240 ms)보다 길었다. 드라이버의 스캔 묶음도 같은 값으로 묶는다(`pw_db_driver_redis::MAX_SCAN_COUNT`).
+pub const MAX_SCAN_COUNT: u64 = 10_000;
 
 impl KvCommandClass {
     /// SQL 다섯 갈래와 같은 이름 공간의 등급(읽기 = 조회, `Write` = 쓰기, `Confirm` = 그 등급의 확인). 거절이면 `None`.
@@ -39,10 +64,40 @@ impl KvCommandClass {
             Self::Allowed => Some(RiskGrade::Read),
             Self::Write => Some(RiskGrade::Write),
             Self::Confirm(grade) => Some(grade),
-            Self::Blocked => None,
+            Self::Blocked(_) => None,
+        }
+    }
+
+    /// 둘 중 더 위험한 쪽. 거절이 가장 위에 있다(먼저 만난 거절의 까닭을 남긴다).
+    pub fn max(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Blocked(_), _) => self,
+            (_, Self::Blocked(_)) => other,
+            _ if other.grade() > self.grade() => other,
+            _ => self,
         }
     }
 }
+
+/// 여러 줄 명령 글(콘솔에서 한 번에 보낸 것)의 분류: 줄마다 명령 하나로 나눠 분류하고, 하나라도 거절이면 전체가 거절, 아니면
+/// 가장 높은 등급이다. 빈 줄은 건너뛴다. 따옴표 안의 줄바꿈은 받지 않는다(줄이 곧 명령 경계다). 명령이 없거나 어느 줄이든
+/// 나눌 수 없으면 그 오류.
+pub fn classify_script(text: &str) -> Result<(Vec<Argv>, KvCommandClass), String> {
+    let mut commands = Vec::new();
+    let mut class = KvCommandClass::Allowed;
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let argv = parse_command_argv(line)?;
+        class = class.max(classify_argv(&argv));
+        commands.push(argv);
+    }
+    if commands.is_empty() {
+        return Err("Redis command is empty".to_string());
+    }
+    Ok((commands, class))
+}
+
+/// 명령 하나의 인자(이름 포함, 바이트).
+pub type Argv = Vec<Vec<u8>>;
 
 /// 명령 글을 argv 로 나눈다(redis-cli 와 같은 따옴표 · `\` 이스케이프 · `\xHH` 바이트). 끝의 `;` 는 버린다.
 pub fn parse_command_argv(command_text: &str) -> Result<Vec<Vec<u8>>, String> {
@@ -161,25 +216,91 @@ pub fn parse_command_argv(command_text: &str) -> Result<Vec<Vec<u8>>, String> {
 /// argv 하나를 분류한다 — 명령 이름([`classify_command`])에 인자가 바꾸는 규칙을 더한다. 빈 argv 는 거절이다.
 pub fn classify_argv<A: AsRef<[u8]>>(argv: &[A]) -> KvCommandClass {
     let Some(name) = argv.first() else {
-        return KvCommandClass::Blocked;
+        return KvCommandClass::Blocked(BlockReason::NotAllowed);
     };
     let Ok(name) = std::str::from_utf8(name.as_ref()) else {
-        return KvCommandClass::Blocked;
+        return KvCommandClass::Blocked(BlockReason::NotAllowed);
     };
     let class = classify_command(name);
+    let args: Vec<&[u8]> = argv[1..].iter().map(|a| a.as_ref()).collect();
     let upper = name.to_ascii_uppercase();
-    if matches!(upper.as_str(), "XREAD" | "XREADGROUP") && blocks(&argv[1..]) {
-        return KvCommandClass::Blocked;
+    let refused = match upper.as_str() {
+        "XREAD" => stream_read_options(&args, 0),
+        "XREADGROUP" => match args.first() {
+            // `GROUP <그룹> <소비자>` 뒤가 선택 인자다.
+            Some(group) if group.eq_ignore_ascii_case(b"GROUP") && args.len() >= 3 => {
+                stream_read_options(&args, 3)
+            }
+            _ => Some(BlockReason::NotAllowed),
+        },
+        "SCAN" => scan_options(&args, 1),
+        "HSCAN" | "SSCAN" | "ZSCAN" => scan_options(&args, 2),
+        _ => None,
+    };
+    if let Some(reason) = refused {
+        return KvCommandClass::Blocked(reason);
+    }
+    let overwrites = match upper.as_str() {
+        "GEORADIUS" | "GEORADIUSBYMEMBER" => has_word(&args, &[b"STORE", b"STOREDIST"]),
+        "COPY" | "RESTORE" => has_word(&args, &[b"REPLACE"]),
+        _ => false,
+    };
+    if overwrites {
+        return KvCommandClass::Confirm(RiskGrade::UnboundedWrite);
     }
     class
 }
 
-/// `XREAD` · `XREADGROUP` 의 선택 인자(`STREAMS` 앞)에 `BLOCK` 이 있는가. `STREAMS` 뒤는 키 · id 라 보지 않는다.
-fn blocks<A: AsRef<[u8]>>(args: &[A]) -> bool {
+/// `XREAD` · `XREADGROUP` 의 선택 인자를 자리대로 걷는다(`start` 부터 `STREAMS` 까지 — `COUNT n` · `BLOCK ms` · `NOACK`).
+/// 그룹 · 소비자 · 키 이름이 `STREAMS` · `BLOCK` 같은 낱말이어도 자리로 가르므로 비켜 가지 않는다. `BLOCK` 이면 거절, 모르는
+/// 선택 인자나 `STREAMS` 가 없는 형식도 거절이다(서버가 받는 새 선택 인자는 검토 전까지 막는다).
+fn stream_read_options(args: &[&[u8]], start: usize) -> Option<BlockReason> {
+    let mut i = start;
+    loop {
+        let Some(word) = args.get(i) else {
+            return Some(BlockReason::NotAllowed);
+        };
+        let word = match word {
+            w if w.eq_ignore_ascii_case(b"STREAMS") => return None,
+            w => w.to_ascii_uppercase(),
+        };
+        match word.as_slice() {
+            b"BLOCK" => return Some(BlockReason::Blocking),
+            b"COUNT" => i += 2,
+            b"NOACK" => i += 1,
+            _ => return Some(BlockReason::NotAllowed),
+        }
+    }
+}
+
+/// 스캔의 선택 인자를 자리대로 걷는다(`MATCH p` · `COUNT n` · `TYPE t` · `NOVALUES` · `NOSCORES`). `COUNT` 가 수가 아니거나
+/// [`MAX_SCAN_COUNT`] 를 넘으면 거절, 모르는 선택 인자도 거절이다.
+fn scan_options(args: &[&[u8]], start: usize) -> Option<BlockReason> {
+    let mut i = start;
+    while let Some(word) = args.get(i) {
+        match word.to_ascii_uppercase().as_slice() {
+            b"COUNT" => {
+                let count = args
+                    .get(i + 1)
+                    .and_then(|n| std::str::from_utf8(n).ok())
+                    .and_then(|n| n.parse::<u64>().ok());
+                match count {
+                    Some(n) if n <= MAX_SCAN_COUNT => i += 2,
+                    _ => return Some(BlockReason::ScanCount),
+                }
+            }
+            b"MATCH" | b"TYPE" if i + 1 < args.len() => i += 2,
+            b"NOVALUES" | b"NOSCORES" => i += 1,
+            _ => return Some(BlockReason::NotAllowed),
+        }
+    }
+    None
+}
+
+/// 인자 중에 그 낱말이 있는가(대소문자 무시). 키 이름이 같은 낱말이면 더 엄한 쪽(확인)으로 틀린다.
+fn has_word(args: &[&[u8]], words: &[&[u8]]) -> bool {
     args.iter()
-        .map(|a| a.as_ref())
-        .take_while(|a| !a.eq_ignore_ascii_case(b"STREAMS"))
-        .any(|a| a.eq_ignore_ascii_case(b"BLOCK"))
+        .any(|a| words.iter().any(|w| a.eq_ignore_ascii_case(w)))
 }
 
 /// 명령 이름 하나를 분류한다(대소문자 무시). 인자를 봐야 하는 규칙은 [`classify_argv`] 에 있다.
@@ -324,6 +445,8 @@ pub fn classify_command(command: &str) -> KvCommandClass {
         | "TS.MRANGE"
         | "TS.QUERYINDEX"
         | "TS.RANGE" => KvCommandClass::Allowed,
+        "BLPOP" | "BRPOP" | "BLMOVE" | "BLMPOP" | "BRPOPLPUSH" | "BZPOPMIN" | "BZPOPMAX"
+        | "BZMPOP" | "WAIT" | "WAITAOF" => KvCommandClass::Blocked(BlockReason::Blocking),
         "DEL" | "UNLINK" | "EXPIRE" | "EXPIREAT" | "PEXPIRE" | "PEXPIREAT" | "RENAME"
         | "RENAMENX" | "GETDEL" | "HDEL" | "HEXPIRE" | "HEXPIREAT" | "HPEXPIRE" | "HPEXPIREAT"
         | "HPERSIST" | "JSON.ARRPOP" | "JSON.ARRTRIM" | "JSON.CLEAR" | "JSON.DEL"
@@ -331,10 +454,10 @@ pub fn classify_command(command: &str) -> KvCommandClass {
         | "SPOP" | "SREM" | "ZREM" | "ZPOPMAX" | "ZPOPMIN" | "ZMPOP" | "ZREMRANGEBYLEX"
         | "ZREMRANGEBYRANK" | "ZREMRANGEBYSCORE" | "XDEL" | "XTRIM" | "MOVE" | "SORT"
         | "SDIFFSTORE" | "SINTERSTORE" | "SUNIONSTORE" | "ZDIFFSTORE" | "ZINTERSTORE"
-        | "ZRANGESTORE" | "ZUNIONSTORE" | "PFMERGE" | "GEOSEARCHSTORE" => {
+        | "ZRANGESTORE" | "ZUNIONSTORE" | "PFMERGE" | "GEOSEARCHSTORE" | "BITOP" => {
             KvCommandClass::Confirm(RiskGrade::UnboundedWrite)
         }
-        "APPEND" | "BITFIELD" | "BITOP" | "COPY" | "DECR" | "DECRBY" | "GEOADD" | "GEORADIUS"
+        "APPEND" | "BITFIELD" | "COPY" | "DECR" | "DECRBY" | "GEOADD" | "GEORADIUS"
         | "GEORADIUSBYMEMBER" | "GETEX" | "GETSET" | "INCR" | "INCRBY" | "INCRBYFLOAT" | "SET"
         | "SETEX" | "PSETEX" | "SETNX" | "SETRANGE" | "MSET" | "MSETNX" | "PERSIST" | "HSET"
         | "HMSET" | "HINCRBY" | "HINCRBYFLOAT" | "HSETNX" | "JSON.ARRAPPEND" | "JSON.ARRINSERT"
@@ -343,8 +466,8 @@ pub fn classify_command(command: &str) -> KvCommandClass {
         | "RPUSH" | "RPUSHX" | "RESTORE" | "SADD" | "ZADD" | "ZINCRBY" | "SETBIT" | "SPUBLISH"
         | "PUBLISH" | "TOUCH" | "XADD" | "XACK" | "XAUTOCLAIM" | "XCLAIM" | "XREADGROUP"
         | "XSETID" => KvCommandClass::Write,
-        // 막히는 명령(BLPOP · WAIT …)과 연결 상태 · 점유 명령, 모르는 명령은 모두 여기다(머리 주석).
-        _ => KvCommandClass::Blocked,
+        // 연결 상태 · 점유 명령, 키 공간 전체 명령, 모르는 명령은 모두 여기다(머리 주석).
+        _ => KvCommandClass::Blocked(BlockReason::NotAllowed),
     }
 }
 

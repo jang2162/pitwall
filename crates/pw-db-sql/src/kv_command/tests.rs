@@ -8,6 +8,9 @@ fn class_of(text: &str) -> KvCommandClass {
 }
 
 const CONFIRM: KvCommandClass = KvCommandClass::Confirm(RiskGrade::UnboundedWrite);
+const BLOCKED: KvCommandClass = KvCommandClass::Blocked(BlockReason::NotAllowed);
+const BLOCKING: KvCommandClass = KvCommandClass::Blocked(BlockReason::Blocking);
+const SCAN_COUNT: KvCommandClass = KvCommandClass::Blocked(BlockReason::ScanCount);
 
 #[test]
 fn parses_command_text_with_quotes_and_escapes() {
@@ -68,38 +71,57 @@ fn classifies_safe_confirmed_and_blocked_commands() {
     assert_eq!(classify_command("GETEX"), KvCommandClass::Write);
     assert_eq!(classify_command("XREADGROUP"), KvCommandClass::Write);
     assert_eq!(classify_command("del"), CONFIRM);
-    assert_eq!(classify_command("flushdb"), KvCommandClass::Blocked);
+    assert_eq!(classify_command("flushdb"), BLOCKED);
     assert_eq!(classify_command("JSON.DEL"), CONFIRM);
     assert_eq!(classify_command("JSON.FORGET"), CONFIRM);
     assert_eq!(classify_command("JSON.CLEAR"), CONFIRM);
-    assert_eq!(classify_command("KEYS"), KvCommandClass::Blocked);
-    assert_eq!(classify_command("flushall"), KvCommandClass::Blocked);
-    assert_eq!(classify_command("eval"), KvCommandClass::Blocked);
-    assert_eq!(classify_command("FCALL"), KvCommandClass::Blocked);
-    assert_eq!(classify_command("XGROUP"), KvCommandClass::Blocked);
-    assert_eq!(classify_command("VENDOR.WRITE"), KvCommandClass::Blocked);
+    assert_eq!(classify_command("KEYS"), BLOCKED);
+    assert_eq!(classify_command("flushall"), BLOCKED);
+    assert_eq!(classify_command("eval"), BLOCKED);
+    assert_eq!(classify_command("FCALL"), BLOCKED);
+    assert_eq!(classify_command("XGROUP"), BLOCKED);
+    assert_eq!(classify_command("VENDOR.WRITE"), BLOCKED);
 }
 
 /// 여러 줄 중 하나라도 모르는 명령이면 묶음 전체가 거절이다(어느 자리에 있든). DBX 원본은 줄 전체(`"DEL victim"`)를 명령
-/// 이름으로 넘겨 모든 줄이 「모르는 명령」 으로 거절되던 시험이었다 — 여기서는 줄마다 argv 로 나눠 `DEL` 은 확인, `FCALL` 은
-/// 거절로 분류한 뒤 합친다.
+/// 이름으로 넘겨 모든 줄이 「모르는 명령」 으로 거절되던 시험이었다 — 여기서는 묶음 분류의 주인 `classify_script` 가 줄마다
+/// argv 로 나눠 `DEL` 은 확인, `FCALL` 은 거절로 분류한 뒤 합친다.
 #[test]
 fn classify_command_batch_blocks_on_any_unknown_member() {
-    for batch in [
-        ["DEL victim", "FCALL wipe 0"],
-        ["FCALL wipe 0", "DEL victim"],
-    ] {
-        let classes: Vec<KvCommandClass> = batch.iter().map(|line| class_of(line)).collect();
-        assert!(classes.contains(&CONFIRM), "{batch:?}: {classes:?}");
-        let highest = classes
-            .iter()
-            .map(|c| c.grade())
-            .try_fold(RiskGrade::Read, |acc, g| g.map(|g| acc.max(g)));
+    for batch in ["DEL victim\nFCALL wipe 0", "FCALL wipe 0\nDEL victim"] {
+        let (commands, class) = classify_script(batch).unwrap();
+        assert_eq!(commands.len(), 2);
+        assert!(
+            commands.iter().any(|argv| classify_argv(argv) == CONFIRM),
+            "{batch:?}"
+        );
         assert_eq!(
-            highest, None,
+            class, BLOCKED,
             "batch {batch:?} must be refused because it contains FCALL"
         );
     }
+}
+
+/// 여러 줄은 줄마다 명령이다 — 한 줄로 읽으면 `[GET, k, FLUSHALL]` 이 허용으로 보인다(리뷰 8). 빈 줄은 건너뛰고, 거절이 없으면
+/// 가장 높은 등급이다.
+#[test]
+fn scripts_split_on_lines_and_take_the_highest_class() {
+    assert_eq!(classify_script("GET k\nFLUSHALL").unwrap().1, BLOCKED);
+    let (commands, class) = classify_script("GET a\n\n  \nSET b 1\nDEL c\n").unwrap();
+    assert_eq!(commands.len(), 3);
+    assert_eq!(class, CONFIRM);
+    assert_eq!(classify_script("GET a").unwrap().1, KvCommandClass::Allowed);
+    assert!(classify_script(" \n ").is_err());
+    assert!(classify_script("GET \"a").is_err());
+    assert_eq!(
+        BLOCKING.max(BLOCKED),
+        BLOCKING,
+        "the first refusal's reason stays"
+    );
+    assert_eq!(
+        KvCommandClass::Write.max(KvCommandClass::Allowed),
+        KvCommandClass::Write
+    );
 }
 
 /// 14-m3-plan.md M3-09 완료 기준 ② 의 표.
@@ -113,7 +135,7 @@ fn the_plan_table_blocks_and_confirms_what_it_says() {
         "SELECT 2",
         "NOSUCHCOMMAND a b",
     ] {
-        assert_eq!(class_of(text), KvCommandClass::Blocked, "{text}");
+        assert_eq!(class_of(text), BLOCKED, "{text}");
     }
     for text in ["DEL a", "RENAME a b"] {
         assert_eq!(class_of(text), CONFIRM, "{text}");
@@ -138,7 +160,7 @@ fn blocking_commands_are_refused() {
         "xread count 10 block 100 streams s 0",
         "XREADGROUP GROUP g c BLOCK 0 STREAMS s >",
     ] {
-        assert_eq!(class_of(text), KvCommandClass::Blocked, "{text}");
+        assert_eq!(class_of(text), BLOCKING, "{text}");
     }
     // `BLOCK` 이 없으면 막히지 않는다. `STREAMS` 뒤의 `BLOCK` 은 키 이름이다.
     assert_eq!(
@@ -176,7 +198,7 @@ fn connection_state_commands_are_refused() {
         "DEBUG SLEEP 3",
         "SHUTDOWN",
     ] {
-        assert_eq!(class_of(text), KvCommandClass::Blocked, "{text}");
+        assert_eq!(class_of(text), BLOCKED, "{text}");
     }
 }
 
@@ -194,10 +216,89 @@ fn grades_share_the_sql_names_and_refusals_have_none() {
 
 #[test]
 fn empty_or_binary_names_are_refused() {
-    assert_eq!(classify_argv::<Vec<u8>>(&[]), KvCommandClass::Blocked);
-    assert_eq!(
-        classify_argv(&[vec![0xff_u8, 0x47]]),
-        KvCommandClass::Blocked
-    );
+    assert_eq!(classify_argv::<Vec<u8>>(&[]), BLOCKED);
+    assert_eq!(classify_argv(&[vec![0xff_u8, 0x47]]), BLOCKED);
     assert_eq!(classify_argv(&["get", "k"]), KvCommandClass::Allowed);
+}
+
+/// 리뷰 1: 그룹 · 소비자 · 키 이름이 `STREAMS` · `BLOCK` 같은 낱말이어도 자리로 가른다.
+#[test]
+fn stream_reads_find_block_by_position() {
+    for text in [
+        "XREADGROUP GROUP STREAMS c BLOCK 0 STREAMS s >",
+        "XREADGROUP GROUP g STREAMS BLOCK 0 STREAMS s >",
+        "xreadgroup group g streams block 0 streams s >",
+        "XREADGROUP GROUP g c COUNT 5 NOACK BLOCK 10 STREAMS s >",
+        "XREAD COUNT 1 BLOCK 0 STREAMS s $",
+    ] {
+        assert_eq!(class_of(text), BLOCKING, "{text}");
+    }
+    // 이름이 `BLOCK` 인 소비자 · 키는 막히지 않는다.
+    assert_eq!(
+        class_of("XREADGROUP GROUP g BLOCK COUNT 1 STREAMS s >"),
+        KvCommandClass::Write
+    );
+    assert_eq!(
+        class_of("XREADGROUP GROUP BLOCK c STREAMS BLOCK >"),
+        KvCommandClass::Write
+    );
+    assert_eq!(class_of("XREAD STREAMS BLOCK 0"), KvCommandClass::Allowed);
+    // 모르는 선택 인자 · `STREAMS` 가 없는 형식 · `GROUP` 이 없는 `XREADGROUP` 은 거절이다.
+    for text in [
+        "XREAD FOO 1 STREAMS s 0",
+        "XREAD COUNT 1",
+        "XREAD COUNT",
+        "XREADGROUP g c STREAMS s >",
+        "XREADGROUP GROUP g",
+        "XREADGROUP GROUP g c CLAIM 10 STREAMS s >",
+    ] {
+        assert_eq!(class_of(text), BLOCKED, "{text}");
+    }
+}
+
+/// 리뷰 3 · 메인 판정: 스캔의 `COUNT` 는 [`MAX_SCAN_COUNT`] 까지. 넘거나 수가 아니면 키 브라우저로 안내하는 거절이다.
+#[test]
+fn scans_over_the_count_limit_are_refused() {
+    assert_eq!(class_of("SCAN 0 COUNT 10000"), KvCommandClass::Allowed);
+    assert_eq!(
+        class_of("SCAN 0 MATCH a* COUNT 1000 TYPE hash"),
+        KvCommandClass::Allowed
+    );
+    assert_eq!(
+        class_of("ZSCAN z 0 COUNT 5 NOSCORES"),
+        KvCommandClass::Allowed
+    );
+    assert_eq!(class_of("HSCAN h 0 NOVALUES"), KvCommandClass::Allowed);
+    for text in [
+        "SCAN 0 COUNT 10001",
+        "SCAN 0 COUNT 2000000",
+        "HSCAN h 0 COUNT 100000000",
+        "SSCAN s 0 MATCH * COUNT 99999",
+        "ZSCAN z 0 COUNT many",
+        "SCAN 0 COUNT",
+        // 키 이름이 `COUNT` 여도 자리로 읽는다.
+        "HSCAN COUNT 0 COUNT 99999",
+    ] {
+        assert_eq!(class_of(text), SCAN_COUNT, "{text}");
+    }
+    assert_eq!(class_of("SCAN 0 SORTED"), BLOCKED);
+    assert_eq!(class_of("SCAN 0 MATCH"), BLOCKED);
+}
+
+/// 리뷰 4: 대상 키를 덮는 쓰기는 `RENAME` 처럼 확인이다.
+#[test]
+fn writes_that_overwrite_a_target_need_confirmation() {
+    for text in [
+        "BITOP AND dst a b",
+        "GEORADIUS g 0 0 1 km STORE dst",
+        "GEORADIUSBYMEMBER g m 1 km STOREDIST dst",
+        "COPY a b DB 5 REPLACE",
+        "RESTORE k 0 payload REPLACE",
+        "SORT k STORE dst",
+    ] {
+        assert_eq!(class_of(text), CONFIRM, "{text}");
+    }
+    for text in ["GEORADIUS g 0 0 1 km", "COPY a b", "RESTORE k 0 payload"] {
+        assert_eq!(class_of(text), KvCommandClass::Write, "{text}");
+    }
 }

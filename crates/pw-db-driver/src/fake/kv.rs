@@ -6,6 +6,9 @@
 //! ([`FakeKvCall`], [`FakeKvDriver::calls_of`]). `command` 는 `PING` · `GET` · `SET` · `DEL` · `EXISTS` · `TYPE` · `TTL` 만
 //! 흉내 내고 나머지는 오류 응답이다 — 분류는 부르는 쪽이 먼저 한다는 계약대로 여기서도 분류하지 않는다.
 //! [`FakeKvDriver::hang_on`] 으로 고른 명령은 그 연결의 인터럽트가 올 때까지 끝나지 않는다(취소 시험).
+//! `command` 는 실제 드라이버처럼 read-only 연결에서도 쓴다 — read-only 판정은 관문(M3-22)의 것이다. 관문 시험은 「키가 안
+//! 생겼다」 가 아니라 「명령이 서버에 닿지 않았다」([`FakeKvDriver::commands`])로 판정한다(가짜의 거절에 기대면 관문이 빠져도
+//! 통과한다). 전용 메서드(`set_ttl` · `persist` · `delete` · `rename`)의 read-only 거절은 실제 드라이버와 같다.
 //!
 //! ```
 //! # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
@@ -341,7 +344,7 @@ impl FakeKvConnection {
                 }) => KvReply::Bulk(text(b)),
                 Some(_) => KvReply::Error("WRONGTYPE (fake)".into()),
             }),
-            ("SET", [key, value]) if !self.read_only => {
+            ("SET", [key, value]) => {
                 self.space(|s| {
                     s.insert(
                         key.as_bytes().to_vec(),
@@ -353,7 +356,7 @@ impl FakeKvConnection {
                 });
                 KvReply::Status("OK".into())
             }
-            ("DEL", keys) if !keys.is_empty() && !self.read_only => {
+            ("DEL", keys) if !keys.is_empty() => {
                 let removed = self.space(|s| {
                     keys.iter()
                         .filter(|k| s.remove(k.as_bytes()).is_some())
@@ -761,6 +764,12 @@ mod tests {
             .unwrap_err();
         assert_eq!(refused.kind, DbErrorKind::ReadOnly);
         assert!(driver.get(3, b"k2").is_some());
+        // `command` 는 read-only 를 보지 않는다(실제 드라이버와 같다 — 관문의 몫).
+        viewer
+            .command(vec!["SET".into(), "written".into(), "1".into()])
+            .await
+            .unwrap();
+        assert!(driver.get(3, b"written").is_some());
         assert!(glob(b"a*c?", b"abbbcd") && !glob(b"a*c", b"abd"));
     }
 }

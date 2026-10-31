@@ -204,6 +204,21 @@ pub enum KvReply {
     Bulk(DbValue),
     Array(Vec<KvReply>),
     Map(Vec<KvReplyPair>),
+    /// 콘솔 응답 상한(맨 위 원소 10,000 · 4 MiB — 드라이버가 정한다)에서 끊은 응답. 맨 위만 감싼다.
+    Truncated(KvReplyTruncated),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KvReplyTruncated {
+    /// 상한까지의 앞부분(배열 · 맵은 앞 원소들).
+    pub reply: Box<KvReply>,
+    /// 원래 응답의 맨 위 원소 수(배열 · 맵의 길이, 값 하나면 1).
+    #[specta(type = JsNumber)]
+    pub elements: u64,
+    /// 원래 응답의 값 바이트 합.
+    #[specta(type = JsNumber)]
+    pub bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
