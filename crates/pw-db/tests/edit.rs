@@ -852,3 +852,42 @@ async fn closing_the_window_mid_apply_undoes_the_edit() {
     assert!(!calls.contains(&FakeCall::Commit));
     assert_eq!(e.db.committed(), Vec::<String>::new());
 }
+
+/// 적용 요청이 살아 있는 채 세션이 닫혀도(같은 프로젝트의 다른 연결이 `db.session.close`) 세션의 실행 자리로 멈춰 되돌린다 — 닫기가
+/// 잠긴 문장을 기다려 서지 않고, 적용 요청은 오류로 끝난다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closing_the_session_mid_apply_stops_and_undoes_the_edit() {
+    let e = env_with(true, "mysql", SqlDialect::Mysql);
+    e.db.respond("SELECT 1 FROM", FakeResponse::rows(1).hanging());
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    let p = w
+        .call(
+            "db.edit.preview",
+            json!({ "sessionId": s, "table": my_table(), "changes": my_changes() }),
+        )
+        .await
+        .unwrap();
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "id": 902, "method": "db.edit.apply",
+        "params": { "sessionId": s, "table": my_table(), "changes": my_changes(), "previewHash": p["previewHash"] },
+    }));
+    wait_until("the probe to hang", || {
+        e.db.calls_of(0)
+            .iter()
+            .any(|c| matches!(c, FakeCall::Fetch { .. }))
+    })
+    .await;
+    let mut other = e.f.window();
+    other
+        .call("db.session.close", json!({ "sessionId": s }))
+        .await
+        .unwrap();
+    let err = w.response(902).await.unwrap_err();
+    assert_eq!(err.code, code::DB_ERROR, "{err:?}");
+    let calls = e.db.calls_of(0);
+    let rollback = calls.iter().position(|c| *c == FakeCall::Rollback);
+    let close = calls.iter().position(|c| *c == FakeCall::Close);
+    assert!(rollback.is_some() && rollback < close, "{calls:?}");
+    assert_eq!(e.db.committed(), Vec::<String>::new());
+}
