@@ -34,17 +34,26 @@ export interface KeyMenuActions {
   copyName(entry: KeyEntry): void;
 }
 
-/** 트리가 바뀐 것을 따라 다시 그릴 번호. 스캔 중에는 `RELAYOUT_MS` 에 한 번. */
+/**
+ * 트리가 바뀐 것을 따라 다시 그릴 번호. 스캔 중에는 `RELAYOUT_MS` 에 한 번 — 앞 다시 펴기에서 그만큼 지났으면 곧바로(첫 묶음이
+ * 기다리지 않고 첫 화면이 된다), 아니면 남은 시간 뒤에.
+ */
 function useTreeVersion(tree: KeyTree, loading: boolean): number {
   const [version, setVersion] = useState(tree.version);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let last = -Infinity;
+    const apply = () => {
+      timer = undefined;
+      last = performance.now();
+      setVersion(tree.version);
+    };
     const update = () => {
       if (!loading) return setVersion(tree.version);
-      timer ??= setTimeout(() => {
-        timer = undefined;
-        setVersion(tree.version);
-      }, RELAYOUT_MS);
+      if (timer !== undefined) return;
+      const wait = last + RELAYOUT_MS - performance.now();
+      if (wait <= 0) apply();
+      else timer = setTimeout(apply, wait);
     };
     const off = tree.subscribe(update);
     setVersion(tree.version);
