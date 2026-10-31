@@ -275,18 +275,22 @@ async fn live_redis_an_interrupt_cancels_the_request_and_the_connection_recovers
     assert!(started.elapsed() < Duration::from_millis(900));
 }
 
-/// ④ 4 MiB 를 넘는 hash 가 쪽으로 나뉜다: 필드 40개 × 256 KiB = 10 MiB 가 세 쪽 이상이고, 쪽마다 예산의 1.25 배 안이며,
-/// 쪽을 다 모으면 필드 40개가 한 번씩 나온다.
+/// ④ 4 MiB 를 넘는 hash 가 쪽으로 나뉜다: 필드 160개 × 64 KiB = 10 MiB 가 세 쪽 이상이고, 쪽마다 예산의 1.25 배 안이며,
+/// 쪽을 다 모으면 필드 160개가 한 번씩 나온다.
+///
+/// 예산을 넘는 것은 마지막 `HSCAN` 응답 하나다. 그 응답이 묻는 수보다 몇 개 더 주는지는 서버의 해시 시드(프로세스마다 새로
+/// 뽑는다)에 따라 다르다 — 필드가 256 KiB 이던 판은 넘침 4개(1 MiB)에서 상한을 넘어 어떤 인스턴스에서는 늘 실패했다(M3-18
+/// 리뷰). 필드를 64 KiB 로 줄여 여유(예산의 1/4 = 필드 16개)가 응답 하나의 넘침을 담게 한다.
 #[tokio::test]
 async fn live_redis_a_hash_over_the_budget_is_read_in_pages() {
-    const FIELDS: usize = 40;
-    const FIELD_SIZE: usize = 256 * 1024;
+    const FIELDS: usize = 160;
+    const FIELD_SIZE: usize = 64 * 1024;
     let mut seed = raw(5).await;
     let _: () = redis::cmd("FLUSHDB").query_async(&mut seed).await.unwrap();
     let mut pipe = redis::pipe();
     for i in 0..FIELDS {
         let value = vec![b'a' + (i % 26) as u8; FIELD_SIZE];
-        pipe.hset("big", format!("f{i:02}"), value).ignore();
+        pipe.hset("big", format!("f{i:03}"), value).ignore();
     }
     let _: () = pipe.query_async(&mut seed).await.unwrap();
 
