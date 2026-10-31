@@ -837,7 +837,9 @@ function ProjectWindowBody({
           {projectId !== undefined && <GitLogReveal workspace={workspace} />}
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
-          {projectId !== undefined && <DbStatus projectId={projectId} />}
+          {projectId !== undefined && (
+            <DbStatus projectId={projectId} workspace={workspace} api={api} />
+          )}
           {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
           {projectId !== undefined && <FindInFiles workspace={workspace} />}
           {projectId !== undefined && (

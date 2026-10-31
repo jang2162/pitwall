@@ -108,7 +108,7 @@
       "db.insecure": "#ab4119",
       "db.tag.red": "#c0212b",
       "db.tag.orange": "#ab4119",
-      "db.tag.yellow": "#7a6300",
+      "db.tag.yellow": "#766000",
       "db.tag.green": "#067315",
       "db.tag.blue": "#1f5fc6",
       "db.tag.purple": "#7b3fc4",
@@ -215,16 +215,16 @@
       "diff.char.added": "#57c27f59",
       "diff.char.deleted": "#f26b6259",
       "diff.char.changed": "#548af759",
-      "db.production": "#f26b62",
-      "db.readOnly": "#6ea0f7",
-      "db.insecure": "#e5a050",
-      "db.tag.red": "#f26b62",
-      "db.tag.orange": "#e5a050",
+      "db.production": "#f69993",
+      "db.readOnly": "#8bb3f9",
+      "db.insecure": "#e6a559",
+      "db.tag.red": "#f69993",
+      "db.tag.orange": "#e6a559",
       "db.tag.yellow": "#d9c04a",
-      "db.tag.green": "#57c27f",
-      "db.tag.blue": "#6ea0f7",
-      "db.tag.purple": "#b48cf2",
-      "db.tag.gray": "#a0a4ab"
+      "db.tag.green": "#61c686",
+      "db.tag.blue": "#8bb3f9",
+      "db.tag.purple": "#c3a3f5",
+      "db.tag.gray": "#afb2b8"
     }
   }
 }

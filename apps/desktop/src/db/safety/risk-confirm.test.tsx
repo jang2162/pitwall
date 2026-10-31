@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 // 위험 쿼리 확인 다이얼로그(M3-19 ②): 등급마다 문구 · 처음 포커스([취소]), 프로덕션 파괴 등급의 연결 이름 입력(다르면 [실행] 이
-// 꺼짐 · 같으면 친 이름과 받은 해시를 돌려줌), `unparsed` 문장의 「분석하지 못한 문장」, 트랜잭션 효과 · 다시 묻는 까닭, 실행 전
-// 정책(`confirmationFor`). 창의 키맵은 가짜로 둔다 — 떠 있는 동안 키맵을 쉬게 하는지만 본다.
+// 꺼짐 · 같으면 친 이름과 받은 해시를 돌려줌), 한글 조합 중의 Enter · Esc, `unparsed` 문장의 「분석하지 못한 문장」 과 읽지 못한
+// 파괴의 제목, 트랜잭션 효과 · 다시 묻는 까닭, 한 번에 하나만 묻기(같은 요청 · 다른 요청 · 주인 언마운트), 실행 전 정책
+// (`confirmationFor`). 창의 키맵은 가짜로 둔다 — 떠 있는 동안 키맵을 쉬게 하는지만 본다.
 
 import { LocalizationProvider } from "@fluent/react";
 import type {
@@ -20,6 +21,7 @@ import { act, endTest, it } from "../../test-support/ended-test";
 import { bundledLocalization, bundledTranslator } from "../../i18n/testing";
 import {
   confirmationFor,
+  type RiskConfirmAnswer,
   type RiskConfirmQuestion,
   RiskConfirmDialog,
   STATEMENTS_SHOWN,
@@ -130,7 +132,7 @@ describe("RiskConfirmDialog", () => {
   );
 
   it("titles differ for every grade", async () => {
-    expect(new Set(Object.values(T.confirm.title)).size).toBe(5);
+    expect(new Set([...Object.values(T.confirm.title), T.confirm.titleUnread]).size).toBe(6);
     expect(new Set(Object.values(T.grade)).size).toBe(5);
   });
 
@@ -186,6 +188,42 @@ describe("RiskConfirmDialog", () => {
     ]);
   });
 
+  it("lets a Korean IME finish composing the name: Enter and Esc while composing neither run nor close", async () => {
+    const answers = await show({
+      request: request({
+        grade: "destructive",
+        statements: [statement(0, "destructive", ["drop"])],
+        nameRequired: true,
+      }),
+      connection: { ...PROD, name: "결제-운영" },
+    });
+    await type(nameInput()!, "결제-운영");
+    expect(button("run").disabled).toBe(false);
+    // 조합을 끝내는 Enter(조합 중 · WebKit 의 keyCode 229)는 실행하지 않는다.
+    for (const init of [{ isComposing: true }, { keyCode: 229 }])
+      await act(async () =>
+        nameInput()!.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init }),
+        ),
+      );
+    expect(answers).toEqual([]);
+    // 조합을 취소하는 Esc 는 다이얼로그를 닫지 않는다 — 친 이름이 남는다.
+    for (const init of [{ isComposing: true }, { keyCode: 229 }])
+      await act(async () =>
+        nameInput()!.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...init }),
+        ),
+      );
+    expect(answers).toEqual([]);
+    expect(dialog()).not.toBeNull();
+    expect(nameInput()!.value).toBe("결제-운영");
+    // 조합이 끝난 뒤의 Enter 는 실행한다.
+    await act(async () =>
+      nameInput()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    expect(answers).toEqual([{ grade: "destructive", statementsHash: "h-1", name: "결제-운영" }]);
+  });
+
   it("does not ask for the name when the Host does not require it", async () => {
     const answers = await show({
       request: request({
@@ -226,6 +264,29 @@ describe("RiskConfirmDialog", () => {
     expect(dialog().textContent).toContain(T.confirm.statements(2));
   });
 
+  it.each([
+    { reasons: [["unparsed"]], title: "unread" },
+    { reasons: [["tooLarge"], ["tooDeep"]], title: "unread" },
+    { reasons: [["unparsed"], ["drop"]], title: "destructive" },
+    { reasons: [["truncate"]], title: "destructive" },
+  ] as const)(
+    "titles a destructive run by what is known: $title for $reasons",
+    async ({ reasons, title }) => {
+      await show({
+        request: request({
+          grade: "destructive",
+          statements: reasons.map((r, i) => statement(i, "destructive", [...r])),
+        }),
+        connection: DEV,
+      });
+      const heading = dialog().querySelector<HTMLElement>("[data-title]")!;
+      expect(heading.dataset.title).toBe(title);
+      expect(heading.textContent).toBe(
+        title === "unread" ? T.confirm.titleUnread : T.confirm.title.destructive,
+      );
+    },
+  );
+
   it("shows the implicit commit effect and why the Host asks again", async () => {
     await show({
       request: request({ grade: "ddl", effects: ["implicitCommit"], rejected: "hashMismatch" }),
@@ -265,15 +326,16 @@ describe("RiskConfirmDialog", () => {
 });
 
 describe("useRiskConfirm", () => {
-  it("asks one question at a time — a second one while open is cancelled at once", async () => {
-    let confirm: ReturnType<typeof useRiskConfirm>["confirm"] | undefined;
-    function Asker() {
-      const asked = useRiskConfirm();
-      useEffect(() => {
-        confirm = asked.confirm;
-      });
-      return <>{asked.element}</>;
-    }
+  let confirm: ReturnType<typeof useRiskConfirm>["confirm"] | undefined;
+  function Asker() {
+    const asked = useRiskConfirm();
+    useEffect(() => {
+      confirm = asked.confirm;
+    });
+    return <>{asked.element}</>;
+  }
+  async function mountAsker() {
+    confirm = undefined;
     const element = document.createElement("div");
     document.body.append(element);
     root = createRoot(element);
@@ -284,19 +346,56 @@ describe("useRiskConfirm", () => {
         </LocalizationProvider>,
       ),
     );
-    let first: Promise<DbConfirmed | undefined> | undefined;
+  }
+
+  it("asks one question at a time — the same request shares the answer, another one is told busy", async () => {
+    await mountAsker();
+    let first: Promise<RiskConfirmAnswer> | undefined;
+    let again: Promise<RiskConfirmAnswer> | undefined;
     await act(async () => {
       first = confirm!({ request: request(), connection: DEV });
     });
-    const second = await confirm!({ request: request({ statementsHash: "h-2" }), connection: DEV });
-    expect(second).toBeUndefined();
-    await act(async () => button("run").click());
-    await expect(first).resolves.toEqual({
-      grade: "unboundedWrite",
-      statementsHash: "h-1",
-      name: null,
+    // 실행 키를 두 번 눌러 같은 요청을 다시 묻는다 — 다이얼로그는 하나, 답은 같다.
+    await act(async () => {
+      again = confirm!({ request: request(), connection: DEV });
     });
+    expect(document.querySelectorAll("[data-testid=db-risk-confirm]")).toHaveLength(1);
+    // 다른 요청은 묻지 않는다 — 사람의 취소(`undefined`)와 구별된다.
+    await expect(
+      confirm!({ request: request({ statementsHash: "h-2" }), connection: DEV }),
+    ).resolves.toBe("busy");
+    await expect(
+      confirm!({ request: request(), connection: { ...DEV, name: "other-pg" } }),
+    ).resolves.toBe("busy");
+    await act(async () => button("run").click());
+    const confirmed = { grade: "unboundedWrite", statementsHash: "h-1", name: null };
+    await expect(first).resolves.toEqual(confirmed);
+    await expect(again).resolves.toEqual(confirmed);
     expect(dialog()).toBeNull();
+
+    // 답한 뒤에는 다시 묻는다.
+    let next: Promise<RiskConfirmAnswer> | undefined;
+    await act(async () => {
+      next = confirm!({ request: request({ statementsHash: "h-2" }), connection: DEV });
+    });
+    await act(async () => button("cancel").click());
+    await expect(next).resolves.toBeUndefined();
+  });
+
+  it("ends a pending question as cancelled when its owner unmounts", async () => {
+    await mountAsker();
+    let pending: Promise<RiskConfirmAnswer> | undefined;
+    await act(async () => {
+      pending = confirm!({ request: request(), connection: DEV });
+    });
+    expect(dialog()).not.toBeNull();
+    act(() => root!.unmount());
+    root = undefined;
+    const settled = await Promise.race([
+      pending!.then((value) => ({ value })),
+      new Promise((r) => setTimeout(() => r("still waiting"), 50)),
+    ]);
+    expect(settled).toEqual({ value: undefined });
   });
 });
 
@@ -334,11 +433,14 @@ describe("confirmationFor", () => {
     });
   });
 
-  it("refuses everything but queries on a read-only connection", async () => {
+  it("leaves a read-only connection to the Host — no pre-judgment either way", async () => {
+    // Host 는 read-only 연결에서 확인을 묻지 않고 돌리거나 `readOnlyConnection` 으로 거절한다(세션 설정 · 트랜잭션 제어처럼
+    // 분류에 없는 것으로도). 화면은 그 거절을 보인다 — 등급만으로 미리 거절하거나 미리 통과시키지 않는다.
     const readOnly = { readOnly: true, production: true };
-    expect(confirmationFor(classified("read"), readOnly)).toBeUndefined();
-    for (const grade of ["write", "unboundedWrite", "ddl", "destructive"] as const)
-      expect(confirmationFor(classified(grade), readOnly)).toBe("refused");
+    for (const grade of ["read", "write", "unboundedWrite", "ddl", "destructive"] as const) {
+      expect(confirmationFor(classified(grade), readOnly)).toBeUndefined();
+      expect(confirmationFor(classified(grade, ["implicitCommit"]), readOnly)).toBeUndefined();
+    }
   });
 });
 

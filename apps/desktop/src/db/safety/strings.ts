@@ -48,6 +48,8 @@ export function dbSafetyStrings(t: Translate) {
         ddl: t("db-confirm-title-ddl"),
         destructive: t("db-confirm-title-destructive"),
       } satisfies Record<RiskGrade, string>,
+      /** 파괴 등급이 문장을 읽지 못해서인 때의 제목(risk-confirm.tsx `confirmTitleKind` 가 `"unread"`). */
+      titleUnread: t("db-confirm-title-unread"),
       grade: (grade: string) => t("db-confirm-grade", { grade }),
       connection: (connection: string) => t("db-confirm-connection", { connection }),
       production: (connection: string) => t("db-confirm-production", { connection }),

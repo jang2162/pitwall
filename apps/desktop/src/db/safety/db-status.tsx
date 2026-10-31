@@ -1,16 +1,21 @@
 // 상태바 항목 `db`(14-m3-plan.md M3-19 ①, 결정 M3-D21): 지금 탭의 연결(색 · 이름 · 프로덕션 · 읽기 전용 라벨), 커밋 방식,
 // 트랜잭션 상태 — 열린 시간(초마다), `failed`(롤백만 된다), 끊김, 설정 바뀜. `db.sessionChanged`(프로젝트 범위 이벤트)를 따른다.
 //
-// 이음매 — 「지금 탭」 은 콘솔 · 테이블 데이터 · Redis 탭(M3-15 · M3-17 · M3-18)이 정한다: 탭이 앞에 오면 `setActiveDbSession`
-// 으로 그 세션(`db.session.open` · `resume` 의 답)을 두고, 탭이 뒤로 가거나 닫히면 `undefined` 로 비운다. 창마다 웹뷰가 따로라
-// 모듈 상태로 둔다(runtime-status.tsx 와 같다). 항목은 이 창의 프로젝트에 `db.sessionChanged` 를 구독해 같은 세션의 상태를 바꾼다
-// — 탭 쪽도 받은 이벤트를 `applyDbSessionChanged` 로 넣어도 된다(같은 일을 두 번 해도 결과가 같다).
+// 이음매 — 세션은 탭이 제 것을 제 id(dockview 패널 id)로 둔다: 콘솔 · 테이블 데이터 · Redis 탭(M3-15 · M3-17 · M3-18)은
+// `useDbTabSession(panelId, active)` 로 세션(`db.session.open` · `resume` 의 답)을 두고, 세션을 닫으면 `undefined` 를 넘긴다 —
+// 탭이 닫히면(언마운트) 저절로 빠진다. 「지금 탭」 은 창이 정한다: `DbStatus` 가 에디터 영역의 지금 탭
+// (`workspace.activeTab()` — 툴 윈도우가 앞이면 마지막에 쓴 에디터 탭)을 따라 그 id 의 세션만 보인다. 그래서 탭끼리 쓰는 순서와
+// 상관없이 앞에 온 탭의 세션이 보이고, 뒤로 간 · 닫힌 탭의 세션은 보이지 않는다. 창마다 웹뷰가 따로라 모듈 상태로 둔다
+// (runtime-status.tsx 와 같다). 항목은 이 창의 프로젝트에 `db.sessionChanged` 를 구독해 같은 세션의 상태를 바꾼다 — 탭 쪽도
+// 받은 이벤트를 `applyDbSessionChanged` 로 넣어도 된다(같은 일을 두 번 해도 결과가 같다).
 
 import type { DbSessionChanged, DbSessionInfo, DbSessionState } from "@pitwall/rpc-client";
 import { Database } from "lucide-react";
+import type { DockviewApi } from "dockview-react";
 import { useEffect, useState } from "react";
 import { createStore, useStore } from "zustand";
 
+import type { EditorWorkspace } from "../../editor/editor-workspace";
 import { useHost } from "../../rpc/host";
 import { STATUS_SLOTS, useStatusBarItem } from "../../status-bar/status-bar";
 import { ConnectionMark, connectionColor } from "./connection-mark";
@@ -31,25 +36,60 @@ export interface DbActiveSession {
 interface DbStatusState {
   /** 이 창의 프로젝트(`DbStatus` 가 둔다). */
   projectId: string | undefined;
-  active: DbActiveSession | undefined;
+  /** 탭(dockview 패널 id)마다 그 탭이 둔 세션. 탭만 제 id 를 바꾼다. */
+  tabs: Readonly<Record<string, DbActiveSession>>;
+  /** 에디터 영역의 지금 탭(패널 id). `DbStatus` 가 창의 도킹 영역을 따라 둔다. */
+  frontTabId: string | undefined;
 }
 
 /** 이 창의 상태바 `db` 항목이 보는 것. 시험 · 다른 행은 아래 함수로만 바꾼다. */
 export const dbStatusStore = createStore<DbStatusState>()(() => ({
   projectId: undefined,
-  active: undefined,
+  tabs: {},
+  frontTabId: undefined,
 }));
 
-/** 지금 탭의 세션을 둔다(탭이 앞에 올 때) · 비운다(`undefined` — 탭이 뒤로 가거나 닫힐 때). */
-export function setActiveDbSession(active: DbActiveSession | undefined) {
-  dbStatusStore.setState({ active });
+/** 탭 `tabId` 의 세션을 둔다 · 뺀다(`undefined` — 세션을 닫았거나 탭이 닫힐 때). 다른 탭의 것은 건드리지 않는다. */
+export function setDbTabSession(tabId: string, active: DbActiveSession | undefined) {
+  dbStatusStore.setState((s) => {
+    if (active) return { tabs: { ...s.tabs, [tabId]: active } };
+    if (!Object.hasOwn(s.tabs, tabId)) return s;
+    const tabs = { ...s.tabs };
+    delete tabs[tabId];
+    return { tabs };
+  });
 }
 
-/** `db.sessionChanged` 를 넣는다. 지금 탭의 세션이 아니면 아무것도 바꾸지 않는다. */
+/**
+ * 탭 컴포넌트가 부른다: 마운트돼 있는 동안 그 탭의 세션을 둔다. `active` 가 바뀌면 바꾸고, 언마운트(탭 닫힘) · `tabId` 가 바뀌면
+ * 뺀다. `active` 는 세션이 바뀔 때만 새 객체로 넘긴다 — 렌더마다 새 객체면 `db.sessionChanged` 로 바뀐 상태를 탭의 옛 값으로 덮는다.
+ */
+export function useDbTabSession(tabId: string, active: DbActiveSession | undefined) {
+  useEffect(() => setDbTabSession(tabId, active), [tabId, active]);
+  useEffect(() => () => setDbTabSession(tabId, undefined), [tabId]);
+}
+
+/** 에디터 영역의 지금 탭을 둔다(`DbStatus` 가 부른다). */
+export function setDbFrontTab(tabId: string | undefined) {
+  dbStatusStore.setState({ frontTabId: tabId });
+}
+
+/** 상태바가 보이는 세션: 지금 탭이 둔 세션. 지금 탭이 DB 탭이 아니면 `undefined`. */
+export function frontDbSession(state: DbStatusState): DbActiveSession | undefined {
+  return state.frontTabId === undefined ? undefined : state.tabs[state.frontTabId];
+}
+
+/** `db.sessionChanged` 를 넣는다. 그 세션을 둔 탭의 것만 바꾼다. */
 export function applyDbSessionChanged(event: DbSessionChanged) {
-  const { active } = dbStatusStore.getState();
-  if (!active || active.session.sessionId !== event.session.sessionId) return;
-  dbStatusStore.setState({ active: { ...active, session: event.session } });
+  dbStatusStore.setState((s) => {
+    let tabs: Record<string, DbActiveSession> | undefined;
+    for (const [tabId, active] of Object.entries(s.tabs)) {
+      if (active.session.sessionId !== event.session.sessionId) continue;
+      tabs ??= { ...s.tabs };
+      tabs[tabId] = { ...active, session: event.session };
+    }
+    return tabs ? { tabs } : s;
+  });
 }
 
 /** 지난 시간(밀리초)을 `m:ss` · `h:mm:ss` 로. 음수(시계 차이)는 0 으로 본다. */
@@ -117,7 +157,7 @@ function useNow(ticking: boolean): number {
 /** 상태바 항목: 지금 탭의 DB 세션. 지금 탭이 DB 탭이 아니면 그리지 않는다. */
 export function DbStatusItem() {
   const T = useDbSafetyStrings();
-  const active = useStore(dbStatusStore, (s) => s.active);
+  const active = useStore(dbStatusStore, frontDbSession);
   const since = active ? transactionSince(active.session.state) : undefined;
   const now = useNow(since !== undefined);
   if (!active) return null;
@@ -156,13 +196,42 @@ export function DbStatusItem() {
   );
 }
 
-/** 이 창의 프로젝트로 `db` 항목을 두고 그 프로젝트의 `db.sessionChanged` 를 따른다. `StatusBarProvider` 안에 둔다. */
-export function DbStatus({ projectId }: { projectId: string }) {
+/**
+ * 이 창의 프로젝트로 `db` 항목을 두고 그 프로젝트의 `db.sessionChanged` 를 따른다. 에디터 영역의 지금 탭(`workspace.activeTab()`)을
+ * 따라 「지금 탭」 을 둔다 — 도킹 영역(`api`)이 붙기 전에는 지금 탭이 없다. `StatusBarProvider` 안에 둔다.
+ */
+export function DbStatus({
+  projectId,
+  workspace,
+  api,
+}: {
+  projectId: string;
+  workspace: Pick<EditorWorkspace, "activeTab">;
+  api: Pick<DockviewApi, "onDidActivePanelChange" | "onDidRemovePanel"> | undefined;
+}) {
   const { client } = useHost();
   useEffect(() => {
     dbStatusStore.setState({ projectId });
-    return () => dbStatusStore.setState({ projectId: undefined, active: undefined });
+    return () => dbStatusStore.setState({ projectId: undefined });
   }, [projectId]);
+  useEffect(() => {
+    let live = true;
+    const refresh = () => setDbFrontTab(workspace.activeTab()?.id);
+    // 활성 · 제거 이벤트가 끝난 뒤에 읽는다 — 그 안에서는 최근 탭 순서가 아직 바뀌기 전일 수 있다(editor-status.tsx 와 같다).
+    const later = () =>
+      queueMicrotask(() => {
+        if (live) refresh();
+      });
+    refresh();
+    const activated = api?.onDidActivePanelChange(later);
+    const removed = api?.onDidRemovePanel(later);
+    return () => {
+      live = false;
+      activated?.dispose();
+      removed?.dispose();
+      setDbFrontTab(undefined);
+    };
+  }, [workspace, api]);
   useEffect(() => {
     if (!client) return;
     const opened = client.subscribe({ projectId, topics: [DB_SESSION_CHANGED_TOPIC] }, (event) =>

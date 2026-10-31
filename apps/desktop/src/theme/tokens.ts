@@ -125,7 +125,7 @@ export const DB_TAG_TOKENS = [
 
 /**
  * DB 안전장치 표지(M3-19, 14-m3-plan.md): 프로덕션 · 읽기 전용 라벨과 테두리, 「서버 인증서를 검증하지 않음」 · 「평문」 표지.
- * 셋 다 글자 색으로도 쓰므로 패널 · 탭 · 상태바 배경 위에서 본문 대비(4.5:1)를 지킨다(tokens.test.ts).
+ * 태그까지 모두 글자 색으로도 쓰므로 패널(보통 · 호버 · 선택 행) · 탭 · 상태바 배경 위에서 본문 대비(4.5:1)를 지킨다(tokens.test.ts).
  */
 export const DB_TOKENS = ["db.production", "db.readOnly", "db.insecure", ...DB_TAG_TOKENS] as const;
 

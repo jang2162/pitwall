@@ -4,12 +4,16 @@
 //
 // - 바탕은 M2-20 의 위험 작업 확인(git/dialogs/git-dialogs.tsx 의 `ConfirmDialog`)과 같다: 위쪽 시트, 바깥 · Esc 는 취소, 떠 있는
 //   동안 창의 키맵은 쉰다, **처음 포커스는 [취소]**(Enter 한 번에 실행되지 않게 — 등급과 상관없이), 한글 조합 중의 Enter 는 조합을
-//   끝낼 뿐이다.
+//   끝낼 뿐이고 조합 중의 Esc 는 조합만 취소한다(친 이름을 잃지 않게).
+// - 제목은 실제 등급을 말한다. 파괴 등급이라도 그것이 문장을 읽지 못해서(`unparsed` · `tooLarge` · `tooDeep`)라면 「되돌릴 수
+//   없다」 고 단정하지 않고 「분석하지 못해 파괴로 다룬다」 고 말한다.
 // - 파괴 등급 · 프로덕션 연결(`nameRequired`)은 연결 이름을 그대로 쳐야 [실행] 이 켜진다. **강제는 Host 가 한다**(M3-05 관문이
 //   이름 · 해시 · 등급을 다시 본다) — 이 다이얼로그는 그 요청을 보여 주고 친 이름을 실어 보낼 뿐이다.
 // - `unparsed` 문장은 「분석하지 못한 문장」 으로 따로 표시한다(무엇을 하는지 모르는 문장 — fail-closed, 결정 M3-D5).
 // - 등급을 TS 에서 매기지 않는다(결정 M3-D5 — 분류기는 Host 하나). `confirmationFor` 는 Host 가 이미 매긴 분류(`db.sql.classify`)에
-//   정책(결정 M3-D20)을 얹어 실행 전에 미리 물을지만 정한다 — 그래도 Host 가 `3001` 을 주면 그것을 다시 묻는다.
+//   정책(결정 M3-D20)을 얹어 실행 전에 미리 물을지만 정한다 — 그래도 Host 가 `3001` 을 주면 그것을 다시 묻는다. read-only 연결은
+//   미리 판정하지 않는다: 분류에는 Host 가 함께 보는 것(세션 설정 · 트랜잭션 제어 문장)이 없어 화면이 Host 보다 느슨하거나 엄격해질
+//   수 있다 — 그대로 보내 Host 가 주는 거절(`readOnlyConnection` 과 거절한 문장, messages.tsx 의 `DbRefusalMessage`)을 보인다.
 
 import * as Dialog from "@radix-ui/react-dialog";
 import type {
@@ -18,13 +22,14 @@ import type {
   DbSqlClassification,
   DbStatementClass,
   RiskGrade,
+  RiskReason,
 } from "@pitwall/rpc-client";
 import { TriangleAlert } from "lucide-react";
-import { type ReactNode, useCallback, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 import { BUTTON, SHEET } from "../../git/dialogs/git-dialogs";
 import { useKeymapPopup } from "../../keymap/keymap-provider";
-import { isComposingKey } from "../../ui/ime";
+import { isComposingKey, keepOpenWhileComposing } from "../../ui/ime";
 import { ConnectionMark, type DbConnectionMarkInput } from "./connection-mark";
 import { type DbSafetyStrings, useDbSafetyStrings } from "./strings";
 
@@ -59,17 +64,17 @@ export interface RiskConfirmQuestion {
 }
 
 /**
- * 연결 정책(결정 M3-D20, crates/pw-db/src/gate.rs `judge` 와 같은 규칙)으로 본 분류의 처분: 확인 없이 돈다(`undefined`), 확인을
- * 받는다(`DbConfirmRequired` — `rejected` 는 `null`), read-only 연결이라 거절된다(`"refused"`). 판정의 정본은 Host 다 — 이것은
- * 실행 전에 미리 묻기 위한 것이고, Host 가 `3001` 을 주면 그 `data` 로 다시 묻는다.
+ * 연결 정책(결정 M3-D20, crates/pw-db/src/gate.rs `judge` 와 같은 규칙)으로 본 분류의 처분: 확인 없이 보낸다(`undefined`), 확인을
+ * 받는다(`DbConfirmRequired` — `rejected` 는 `null`). 판정의 정본은 Host 다 — 이것은 실행 전에 미리 묻기 위한 것이고, Host 가
+ * `3001` 을 주면 그 `data` 로 다시 묻는다. read-only 연결은 늘 `undefined` 다 — Host 는 거기서 확인을 묻지 않고 돌리거나 거절하며,
+ * 거절은 Host 가 준 까닭으로 보인다(머리 주석).
  */
 export function confirmationFor(
   classification: DbSqlClassification,
   connection: { production?: boolean | null; readOnly?: boolean | null },
-): DbConfirmRequired | "refused" | undefined {
+): DbConfirmRequired | undefined {
   const { grade, effects } = classification;
-  if (connection.readOnly)
-    return classification.statements.some((s) => s.grade !== "read") ? "refused" : undefined;
+  if (connection.readOnly) return undefined;
   const production = connection.production === true;
   const needs =
     gradeRank(grade) >= gradeRank("unboundedWrite") ||
@@ -84,6 +89,24 @@ export function confirmationFor(
     nameRequired: production && grade === "destructive",
     rejected: null,
   };
+}
+
+/** 문장을 읽지 못해 파괴로 다룬 까닭 — 그 문장이 무엇을 하는지 모른다(crates/pw-db-sql 의 `RiskReason`). */
+const UNREAD_REASONS: readonly RiskReason[] = ["unparsed", "tooLarge", "tooDeep"];
+
+/**
+ * 다이얼로그 제목의 종류: 가장 높은 등급, 단 파괴 등급의 문장이 모두 읽지 못한 문장(까닭이 `UNREAD_REASONS` 뿐)이면 `"unread"`.
+ * 읽고 파괴로 판정한 문장(`drop` 등)이 하나라도 있으면 `"destructive"` 다.
+ */
+export function confirmTitleKind(request: DbConfirmRequired): RiskGrade | "unread" {
+  if (request.grade !== "destructive") return request.grade;
+  const destructive = request.statements.filter((s) => s.grade === "destructive");
+  const unread =
+    destructive.length > 0 &&
+    destructive.every(
+      (s) => s.reasons.length > 0 && s.reasons.every((r) => UNREAD_REASONS.includes(r)),
+    );
+  return unread ? "unread" : "destructive";
 }
 
 function rejectedText(rejected: string, T: DbSafetyStrings["confirm"]["rejected"]): string {
@@ -188,6 +211,7 @@ export function RiskConfirmDialog({
     });
   };
   const risky = gradeRank(request.grade) >= gradeRank("unboundedWrite");
+  const titleKind = confirmTitleKind(request);
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onAnswer(undefined)}>
       <Dialog.Portal>
@@ -196,6 +220,7 @@ export function RiskConfirmDialog({
           data-testid="db-risk-confirm"
           data-grade={request.grade}
           className={SHEET}
+          onEscapeKeyDown={keepOpenWhileComposing}
           onOpenAutoFocus={(e) => {
             // 처음 포커스는 [취소] — Radix 가 첫 포커스 가능한 것(이름 칸)을 고르지 않게 직접 둔다.
             e.preventDefault();
@@ -204,9 +229,12 @@ export function RiskConfirmDialog({
               ?.focus();
           }}
         >
-          <Dialog.Title className="flex items-center gap-2 text-sm font-semibold">
+          <Dialog.Title
+            data-title={titleKind}
+            className="flex items-center gap-2 text-sm font-semibold"
+          >
             {risky && <TriangleAlert size={16} aria-hidden className="flex-none text-ui-accent" />}
-            {T.confirm.title[request.grade]}
+            {titleKind === "unread" ? T.confirm.titleUnread : T.confirm.title[titleKind]}
           </Dialog.Title>
           <Dialog.Description asChild>
             <div className="flex flex-col gap-1">
@@ -295,34 +323,55 @@ export function RiskConfirmDialog({
 }
 
 /**
- * 위험 쿼리 확인을 묻는 함수와 그 다이얼로그. `element` 를 그린다. 한 번에 하나만 묻는다 — 떠 있는 동안의 질문은 곧바로 취소
- * (`undefined`)다(M2-20 의 `useGitDialogs` 와 같다).
+ * `confirm` 의 답: 사람이 [실행] 한 확인(`DbConfirmed`), 취소(`undefined` — [취소] · Esc · 바깥, 또는 묻는 동안 이 훅의 주인이
+ * 사라졌다), 다른 질문이 떠 있어 묻지 않았다(`"busy"`).
+ */
+export type RiskConfirmAnswer = DbConfirmed | undefined | "busy";
+
+/** 떠 있는 질문과 같은 요청인가 — 같은 연결의 같은 문장(해시) · 등급 · 이름 요구. */
+function sameRequest(a: RiskConfirmQuestion, b: RiskConfirmQuestion): boolean {
+  return (
+    a.connection.name === b.connection.name &&
+    a.request.statementsHash === b.request.statementsHash &&
+    a.request.grade === b.request.grade &&
+    a.request.nameRequired === b.request.nameRequired
+  );
+}
+
+interface Asked {
+  question: RiskConfirmQuestion;
+  promise: Promise<DbConfirmed | undefined>;
+  answer(value: DbConfirmed | undefined): void;
+}
+
+/**
+ * 위험 쿼리 확인을 묻는 함수와 그 다이얼로그. `element` 를 그린다. 한 번에 하나만 묻는다 — 떠 있는 동안 같은 요청을 다시 물으면
+ * (실행 키를 두 번 누름) 떠 있는 질문의 답을 함께 받고, 다른 요청은 묻지 않고 `"busy"` 를 받는다. 훅의 주인이 언마운트되면 떠 있던
+ * 질문은 취소(`undefined`)로 끝난다 — 기다리는 쪽이 영영 멈추지 않게.
  */
 export function useRiskConfirm(): {
-  confirm(question: RiskConfirmQuestion): Promise<DbConfirmed | undefined>;
+  confirm(question: RiskConfirmQuestion): Promise<RiskConfirmAnswer>;
   element: ReactNode;
 } {
-  const [asked, setAsked] = useState<{
-    question: RiskConfirmQuestion;
-    answer(value: DbConfirmed | undefined): void;
-  }>();
-  const open = useRef(false);
-  const confirm = useCallback(
-    (question: RiskConfirmQuestion) =>
-      new Promise<DbConfirmed | undefined>((resolve) => {
-        if (open.current) return resolve(undefined);
-        open.current = true;
-        setAsked({
-          question,
-          answer: (value) => {
-            open.current = false;
-            setAsked(undefined);
-            resolve(value);
-          },
-        });
-      }),
-    [],
-  );
+  const [asked, setAsked] = useState<Asked>();
+  const current = useRef<Asked>(undefined);
+  useEffect(() => () => current.current?.answer(undefined), []);
+  const confirm = useCallback((question: RiskConfirmQuestion): Promise<RiskConfirmAnswer> => {
+    const open = current.current;
+    if (open) return sameRequest(open.question, question) ? open.promise : Promise.resolve("busy");
+    const entry = { question } as Asked;
+    entry.promise = new Promise<DbConfirmed | undefined>((resolve) => {
+      entry.answer = (value) => {
+        if (current.current !== entry) return;
+        current.current = undefined;
+        setAsked(undefined);
+        resolve(value);
+      };
+    });
+    current.current = entry;
+    setAsked(entry);
+    return entry.promise;
+  }, []);
   const element = asked ? (
     <RiskConfirmDialog question={asked.question} onAnswer={asked.answer} />
   ) : undefined;

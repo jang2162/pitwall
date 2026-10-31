@@ -163,9 +163,12 @@ describe("git · graph · diff tokens (M2-12)", () => {
   });
 
   it("keep every DB mark at body-text contrast (4.5:1) where its label is drawn", () => {
-    // 연결 표지의 라벨(「프로덕션」 · 「읽기 전용」) · TLS 표지 · 태그 이름이 놓이는 곳: 탐색기 · 위 막대 · 다이얼로그 · 탭 · 상태바.
+    // 연결 표지의 라벨(「프로덕션」 · 「읽기 전용」) · TLS 표지 · 태그 이름이 놓이는 곳: 탐색기의 보통 · 호버 · 선택 행, 위 막대,
+    // 다이얼로그, 탭, 상태바.
     const backgrounds = [
       "ui.panelBackground",
+      "ui.hoverBackground",
+      "ui.activeBackground",
       "ui.background",
       "ui.statusBarBackground",
       "tab.activeBackground",

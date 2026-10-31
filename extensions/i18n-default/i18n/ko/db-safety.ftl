@@ -28,6 +28,7 @@ db-confirm-title-write = 데이터를 바꾸는 문장이다
 db-confirm-title-unbounded-write = 범위 없이 여러 행을 바꿀 수 있다
 db-confirm-title-ddl = 스키마를 바꾸는 문장이다
 db-confirm-title-destructive = 되돌릴 수 없는 문장이다
+db-confirm-title-unread = 분석하지 못한 문장이 있다 — 무엇을 하는지 몰라 되돌릴 수 없는 것으로 다룬다
 
 ## 위험 쿼리 확인 다이얼로그.
 

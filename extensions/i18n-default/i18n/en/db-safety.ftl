@@ -28,6 +28,7 @@ db-confirm-title-write = These statements change data
 db-confirm-title-unbounded-write = These statements can change many rows at once
 db-confirm-title-ddl = These statements change the schema
 db-confirm-title-destructive = These statements cannot be undone
+db-confirm-title-unread = Some statements could not be analyzed — treated as irreversible because what they do is unknown
 
 ## The risky-query confirmation.
 
