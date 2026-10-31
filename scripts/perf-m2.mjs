@@ -10,7 +10,9 @@
 // 같은 날 다시 돌려도 앞 결과를 덮지 않는다: 출력 폴더와 복사본 이름에 시작 시각이 붙는다.
 // 종료 코드: 0 — 두 단계 모두 0. 3 — 결과는 복사했지만 어느 단계든 유효한 회가 적었다(pw-perf 의 3). 그 밖 — 그 단계의 코드
 // 그대로(신호로 끝났으면 1)이고 뒤 단계는 돌지 않는다. 시험(scripts/perf-m2.test.mjs)을 위해 환경 변수로 하위 명령을 바꾼다:
-// PERF_M2_MISE(mise) · PERF_M2_IOREG(화면 잠금을 읽는 명령) · PERF_M2_REPORTS(복사 폴더) · PERF_M2_STAMP(시각).
+// PERF_M2_MISE(mise) · PERF_M2_IOREG(화면 잠금을 읽는 명령) · PERF_M2_REPORTS(복사 폴더) · PERF_M2_STAMP(시각) ·
+// PERF_M2_PLATFORM(darwin 검사용). 명령 변수는 `["node","가짜.mjs"]` 같은 JSON 배열도 받는다(공백이 든 경로, Windows 시험용).
+// macOS 전용이다(화면 잠금을 ioreg 로 읽고 앱을 앞으로 띄운다). 다른 OS 에서는 측정을 시작하지 않고 거절한다(`--dry-run` 은 허용).
 
 import { spawnSync } from "node:child_process";
 import { constants, copyFileSync, existsSync, mkdirSync } from "node:fs";
@@ -26,8 +28,18 @@ const stamp =
   `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 const suffix = short ? "-short" : "";
 const reports = process.env.PERF_M2_REPORTS ?? "docs/superpowers/reports";
-const mise = process.env.PERF_M2_MISE ?? "mise";
-const ioreg = (process.env.PERF_M2_IOREG ?? "ioreg -n Root -d1 -a").split(" ");
+// 명령 변수: `[` 로 시작하면 JSON 배열, 아니면 공백으로 나눈다.
+const commandOf = (value) => (value.startsWith("[") ? JSON.parse(value) : value.split(" "));
+const miseCmd = commandOf(process.env.PERF_M2_MISE ?? "mise");
+const mise = miseCmd.join(" ");
+const ioreg = commandOf(process.env.PERF_M2_IOREG ?? "ioreg -n Root -d1 -a");
+const platform = process.env.PERF_M2_PLATFORM ?? process.platform;
+if (platform !== "darwin" && !dry && process.env.PERF_M2_IOREG === undefined) {
+  console.error(
+    `perf-m2: macOS only (it reads the screen lock with ioreg and brings the app to the front); this is ${platform}`,
+  );
+  process.exit(1);
+}
 const extra = short ? ["--runs", "1", "--warmup", "0"] : [];
 
 const stepOf = (kind, args) => {
@@ -61,7 +73,7 @@ for (const step of steps) {
     );
     process.exit(1);
   }
-  const run = spawnSync(mise, step.args, { stdio: "inherit" });
+  const run = spawnSync(miseCmd[0], [...miseCmd.slice(1), ...step.args], { stdio: "inherit" });
   // 3 = 결과는 썼지만 유효한 회가 적다. 결과는 옮기고, 끝에서 3 으로 끝낸다.
   if (run.status !== 0 && run.status !== 3) {
     console.error(

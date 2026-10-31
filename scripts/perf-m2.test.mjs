@@ -3,40 +3,54 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 const script = resolve(import.meta.dirname, "perf-m2.mjs");
 
+// 가짜 mise · ioreg 는 node 스크립트다 — 셸 스크립트(#!/bin/sh + chmod)는 Windows 에서 실행되지 않는다.
+// 명령은 JSON 배열로 넘긴다(perf-m2.mjs 의 명령 변수). node 경로의 공백도 안전하다.
 // 가짜 mise: `--out <폴더>` 에 result.json · summary.md 를 쓰고, 단계(git · graph-project)별 종료 코드를 환경 변수로 받는다.
-const fakeMise = `#!/bin/sh
-case "$*" in *"--project"*) kind=graph;; *) kind=git;; esac
-out=""; prev=""
-for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; prev="$a"; done
-mkdir -p "$out"; echo "{\\"kind\\":\\"$kind\\"}" > "$out/result.json"; echo "summary $kind" > "$out/summary.md"
-echo "$kind $*" >> "$FAKE_LOG"
-if [ "$kind" = git ]; then exit "\${FAKE_GIT:-0}"; else exit "\${FAKE_GRAPH:-0}"; fi
+const fakeMise = `
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+const kind = args.join(" ").includes("--project") ? "graph" : "git";
+const out = args[args.indexOf("--out") + 1];
+mkdirSync(out, { recursive: true });
+writeFileSync(join(out, "result.json"), JSON.stringify({ kind }) + "\\n");
+writeFileSync(join(out, "summary.md"), "summary " + kind + "\\n");
+appendFileSync(process.env.FAKE_LOG, kind + " " + args.join(" ") + "\\n");
+process.exit(Number((kind === "git" ? process.env.FAKE_GIT : process.env.FAKE_GRAPH) ?? 0));
 `;
-const unlockedPlist = `#!/bin/sh\necho '<key>IOConsoleUsers</key>'\n`;
-const lockedPlist = `#!/bin/sh\necho '<key>CGSSessionScreenIsLocked</key><true/>'\n`;
+const unlockedPlist = `console.log("<key>IOConsoleUsers</key>");`;
+const lockedPlist = `console.log("<key>CGSSessionScreenIsLocked</key><true/>");`;
+// 첫 호출은 잠기지 않음, 둘째 호출부터 잠김(스크립트 옆의 seen 파일로 구분).
+const flipPlist = `
+import { existsSync, writeFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+const seen = join(dirname(process.argv[1]), "seen");
+if (existsSync(seen)) console.log("<key>CGSSessionScreenIsLocked</key><true/>");
+else writeFileSync(seen, "");
+`;
 
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "perf-m2-test-"));
   const put = (name, body) => {
     const p = join(dir, name);
     writeFileSync(p, body);
-    chmodSync(p, 0o755);
-    return p;
+    return JSON.stringify([process.execPath, p]);
   };
   return {
     dir,
     reports: join(dir, "reports"),
     log: join(dir, "log"),
-    mise: put("mise", fakeMise),
-    unlocked: put("ioreg-ok", unlockedPlist),
-    locked: put("ioreg-locked", lockedPlist),
+    mise: put("mise.mjs", fakeMise),
+    unlocked: put("ioreg-ok.mjs", unlockedPlist),
+    locked: put("ioreg-locked.mjs", lockedPlist),
+    flip: put("ioreg-flip.mjs", flipPlist),
   };
 }
 
@@ -111,17 +125,20 @@ test("checks the screen lock before every step", () => {
 
 test("a lock that appears between the steps stops the second step", () => {
   const t = setup();
-  // 첫 호출은 잠기지 않음, 둘째 호출부터 잠김.
-  const flip = join(t.dir, "ioreg-flip");
-  writeFileSync(
-    flip,
-    `#!/bin/sh\nif [ -e "${t.dir}/seen" ]; then echo '<key>CGSSessionScreenIsLocked</key><true/>'; else touch "${t.dir}/seen"; fi\n`,
-  );
-  chmodSync(flip, 0o755);
-  const r = run(t, { PERF_M2_IOREG: flip });
+  const r = run(t, { PERF_M2_IOREG: t.flip });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /not starting graph-project/);
   assert.equal(readFileSync(t.log, "utf8").split("\n").filter(Boolean).length, 1);
+});
+
+test("refuses to start on a non-darwin platform and says so", () => {
+  const t = setup();
+  const env = { ...process.env, PERF_M2_PLATFORM: "win32", PERF_M2_MISE: t.mise, FAKE_LOG: t.log };
+  delete env.PERF_M2_IOREG;
+  const r = spawnSync("node", [script], { cwd: t.dir, encoding: "utf8", env });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /macOS only/);
+  assert.equal(readdirSync(t.dir).includes("log"), false, "no step was started");
 });
 
 test("--dry-run starts nothing and creates no folder", () => {
