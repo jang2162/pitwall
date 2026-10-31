@@ -6,6 +6,8 @@
 //! - `Match` 줄의 조건(`Match host …`)은 읽지 않는다 — 그것은 호스트 이름이 아니라 조건이다.
 //! - `Include` 는 따라간다: 상대 경로는 `~/.ssh` 기준, `~/` 는 홈, 마지막 경로 조각의 `*` · `?` 만 펼친다. 깊이 [`MAX_DEPTH`] ·
 //!   파일 [`MAX_FILES`] 개 · 파일당 [`MAX_FILE_BYTES`] · 이름 [`MAX_HOSTS`] 개에서 멈춘다.
+//! - 일반 파일만 읽는다(FIFO · 장치 · 폴더는 건너뛴다 — 크기가 0 으로 보여 크기 검사로는 못 거르고, 열거나 읽으면 멈춘다). 파일당
+//!   상한은 실제로 읽는 바이트에 건다.
 //! - 읽기 실패(파일 없음 · 권한 · UTF-8 아님)는 오류가 아니라 빈 목록이다 — 로그에만 남긴다(메인 판정).
 //! - 범위: 그 프로젝트 창의 연결 + **신뢰한 프로젝트만**(메인 판정 — 호스트 이름은 비밀은 아니지만 사람의 개인 정보다. 미신뢰
 //!   프로젝트의 확장 · 웹 콘텐츠에 내주지 않는다). MCP 에 내지 않는다.
@@ -74,22 +76,8 @@ impl Reader<'_> {
             return;
         }
         self.files += 1;
-        let text = match std::fs::metadata(path) {
-            Ok(meta) if meta.len() > MAX_FILE_BYTES => {
-                tracing::info!(target: "pw_db", path = %path.display(), "ssh config file is too large to list hosts");
-                return;
-            }
-            Ok(_) => match std::fs::read_to_string(path) {
-                Ok(text) => text,
-                Err(e) => {
-                    tracing::info!(target: "pw_db", path = %path.display(), error = %e, "cannot read ssh config");
-                    return;
-                }
-            },
-            Err(e) => {
-                tracing::debug!(target: "pw_db", path = %path.display(), error = %e, "no ssh config");
-                return;
-            }
+        let Some(text) = read_limited(path) else {
+            return;
         };
         for line in text.lines() {
             let Some((keyword, args)) = split_line(line) else {
@@ -153,6 +141,46 @@ impl Reader<'_> {
         files.sort();
         files
     }
+}
+
+/// 일반 파일만, [`MAX_FILE_BYTES`] 까지 읽는다. FIFO · 장치 · 폴더는 열지 않는다 — FIFO 는 여는 순간 쓰는 쪽을 기다리고 `/dev/zero`
+/// 는 끝이 없으며, 둘 다 크기가 0 으로 보여 크기 검사로는 거르지 못한다. 상한은 실제로 읽는 바이트에 건다(검사와 읽기 사이에 파일이
+/// 커져도 그 이상 읽지 않는다). 넘거나 읽지 못하면 `None`(로그만).
+fn read_limited(path: &Path) -> Option<String> {
+    use std::io::Read;
+
+    let skip = |why: &str| {
+        tracing::info!(target: "pw_db", path = %path.display(), why, "ssh config file not read for the host list");
+        None
+    };
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => return skip("not a regular file"),
+        Err(e) => {
+            tracing::debug!(target: "pw_db", path = %path.display(), error = %e, "no ssh config");
+            return None;
+        }
+    }
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return skip("cannot open"),
+    };
+    // 검사와 열기 사이에 바뀌었으면 연 것을 다시 본다.
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
+        return skip("not a regular file");
+    }
+    let mut bytes = Vec::new();
+    if file
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return skip("cannot read");
+    }
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return skip("too large");
+    }
+    String::from_utf8(bytes).ok().or_else(|| skip("not utf-8"))
 }
 
 /// 한 줄을 (키워드, 나머지)로. 빈 줄 · 주석은 `None`. ssh 처럼 키워드 뒤의 공백 또는 `=` 하나로 가른다.
@@ -362,6 +390,34 @@ mod tests {
         text.push_str(&"#".repeat(MAX_FILE_BYTES as usize));
         let config = write(&ssh, "config", &text);
         assert!(hosts_in(&config, &ssh, home.path()).is_empty());
+    }
+
+    /// FIFO · 장치 · 폴더를 가리키는 `Include` 는 건너뛰고 나머지를 읽는다 — 멈추지 않는다(시간 상한을 걸고 본다).
+    #[cfg(unix)]
+    #[test]
+    fn includes_of_fifos_devices_and_folders_are_skipped_without_hanging() {
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        let config = write(
+            &ssh,
+            "config",
+            "Host a\nInclude pipe /dev/zero folder\nHost b\n",
+        );
+        let made = std::process::Command::new("mkfifo")
+            .arg(ssh.join("pipe"))
+            .status()
+            .unwrap();
+        assert!(made.success());
+        std::fs::create_dir(ssh.join("folder")).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (config2, ssh2, home2) = (config.clone(), ssh.clone(), home.path().to_path_buf());
+        std::thread::spawn(move || {
+            let _ = tx.send(hosts_in(&config2, &ssh2, &home2));
+        });
+        let hosts = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("reading a fifo or a device must not hang");
+        assert_eq!(hosts, ["a", "b"]);
     }
 
     #[test]
