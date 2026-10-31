@@ -46,6 +46,8 @@ run = [
   "node --test scripts/perf-m2.test.mjs",
   # 실 DB 시험 실행 개수 검사(scripts/db-live.mjs)의 판정 — 실 DB 없이 돈다.
   "node --test scripts/db-live.test.mjs",
+  # TLS 시험 서버 스크립트(scripts/db-tls.mjs)의 인자 읽기 — 도커 · openssl 없이 돈다.
+  "node --test scripts/db-tls.test.mjs",
 ]
 
 # 실 DB 시험(live_*)을 DB 마다 따로 돌리고 실행 개수를 하한(scripts/db-live.toml)과 견준다 — CI 의 `db-live` 잡과 같은 명령이다.

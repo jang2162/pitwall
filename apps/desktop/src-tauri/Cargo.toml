@@ -18,6 +18,7 @@ pw-core = { path = "../../../crates/pw-core" }
 # DB 드라이버 등록부(src/db.rs). 드라이버 크레이트(pw-db-driver-*)는 각 드라이버 행이 여기 더한다.
 pw-db = { path = "../../../crates/pw-db" }
 pw-db-driver-mysql = { path = "../../../crates/pw-db-driver-mysql" }
+pw-db-driver-pg = { path = "../../../crates/pw-db-driver-pg" }
 pw-db-driver-sqlite = { path = "../../../crates/pw-db-driver-sqlite" }
 # 문장 나누기 · 현재 문장 RPC(`db.sql.split` · `db.sql.statementAt`, M3-04).
 pw-db-sql = { path = "../../../crates/pw-db-sql" }

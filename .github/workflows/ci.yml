@@ -250,6 +250,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      # TLS 시험 서버(14-m3-plan.md M3-06): 서비스 컨테이너는 checkout 전에 떠 저장소의 파일을 마운트할 수 없어 여기서 띄운다. 시험
+      # CA · 서버 인증서를 그 자리에서 만들고 시험 CA 로 서명한 두 번째 PG 를 띄운 뒤 PW_TEST_PG_TLS_URL · PW_TEST_TLS_CA 를
+      # GITHUB_ENV 로 넘긴다(scripts/db-tls.mjs). 서버가 다 뜨기는 TLS 시험이 준비 확인으로 기다린다.
+      - name: tls test servers
+        run: node scripts/db-tls.mjs --out "$RUNNER_TEMP/pitwall-tls"
+
       # `--ci`: URL 이 없으면 건너뛰지 않고 실패한다. 단계마다 고른 · 돈 · 센 시험 수를 출력한다. 한 DB 가 실패해도 나머지
       # DB 의 단계는 돈다(`!cancelled()`) — 판정은 DB 마다 따로다.
       - name: live pg

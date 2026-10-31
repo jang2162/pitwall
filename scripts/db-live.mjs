@@ -12,15 +12,19 @@
 // 실 DB 시험을 다는 법은 crates/pw-db-driver/src/live.rs 머리 주석.
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { TARGETS as TLS_TARGETS, makeCertificates, startTls, stopTls } from "./db-tls.mjs";
+
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-// DB → (URL 변수, nextest 이름 필터, 시험에 넘길 변수). 새 단계(M3-11 의 ssh_tunnel 등)는 여기와 db-live.toml 에 한 줄씩.
+// DB → (URL 변수, nextest 이름 필터, 시험에 넘길 변수, 함께 쓰는 TLS 시험 서버 — scripts/db-tls.mjs 의 TARGETS). 새 단계(M3-11 의
+// ssh_tunnel 등)는 여기와 db-live.toml 에 한 줄씩.
 export const TARGETS = {
-  pg: { env: "PW_TEST_PG_URL", filter: "live_pg", testEnv: "PW_TEST_PG_URL" },
+  pg: { env: "PW_TEST_PG_URL", filter: "live_pg", testEnv: "PW_TEST_PG_URL", tls: ["pg"] },
   mysql: { env: "PW_TEST_MYSQL_URL", filter: "live_mysql", testEnv: "PW_TEST_MYSQL_URL" },
   mariadb: { env: "PW_TEST_MARIADB_URL", filter: "live_mysql", testEnv: "PW_TEST_MYSQL_URL" },
   redis: { env: "PW_TEST_REDIS_URL", filter: "live_redis", testEnv: "PW_TEST_REDIS_URL" },
@@ -95,6 +99,9 @@ export function judge({ db, filter, selected, run, floor, exitCode }) {
   return { ok: true, message: `${line} — ok` };
 }
 
+/** 사람이 끊었다(Ctrl-C) — 띄운 TLS 서버를 끄고 끝낸다. */
+class Interrupted extends Error {}
+
 function cargo(args, env, { capture }) {
   const result = spawnSync("cargo", args, {
     cwd: root,
@@ -104,6 +111,8 @@ function cargo(args, env, { capture }) {
     stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
   if (result.error) throw result.error;
+  if (result.signal === "SIGINT" || result.signal === "SIGTERM")
+    throw new Interrupted(`cargo stopped by ${result.signal}`);
   return result;
 }
 
@@ -118,7 +127,45 @@ function packages(env) {
     .flatMap((name) => ["-p", name]);
 }
 
-function runTarget(db, floor, ci) {
+/**
+ * 띄워야 할 TLS 시험 서버(scripts/db-tls.mjs 의 db 이름들). 그 DB 의 URL 이 있고(시험이 돈다), TLS URL 이 없고, 도커가 있을 때만 —
+ * CI 는 `tls test servers` 단계가 먼저 띄워 TLS URL 이 있다. 도커가 없으면 띄우지 않는다(그 TLS 시험은 건너뛰지 않고 실패한다).
+ */
+export function tlsToStart(target, env, dockerAvailable) {
+  if (!target.tls || !env[target.env] || !dockerAvailable) return [];
+  return target.tls.filter((db) => !env[TLS_TARGETS[db].urlEnv]);
+}
+
+function dockerAvailable() {
+  const result = spawnSync("docker", ["info", "--format", "{{.ServerVersion}}"], {
+    encoding: "utf8",
+  });
+  return !result.error && result.status === 0;
+}
+
+/** 이 워크트리 · 이 실행만의 컨테이너 이름 — 다른 워크트리의 서버와 겹치지 않고, 끌 때 이 이름만 끈다. */
+export function tlsName(rootPath, pid, db) {
+  const worktree = createHash("sha256").update(rootPath).digest("hex").slice(0, 8);
+  return `pitwall-tls-${worktree}-${pid}-${db}`;
+}
+
+/** 필요한 TLS 서버를 띄우고 시험에 넘길 변수를 돌려준다. 띄운 이름은 `started` 에 쌓는다(끌 때 쓴다). */
+function startTlsServers(dbs, started) {
+  if (dbs.length === 0) return {};
+  const out = join(root, "target", "db-tls");
+  makeCertificates(out);
+  const env = {};
+  for (const db of dbs) {
+    const name = tlsName(root, process.pid, db);
+    started.push(name);
+    const server = startTls(db, { name, port: 0, out });
+    console.log(`== tls: started ${name} on 127.0.0.1:${server.port} (stopped when this run ends)`);
+    Object.assign(env, server.env);
+  }
+  return env;
+}
+
+function runTarget(db, floor, ci, started) {
   const target = TARGETS[db];
   const url = process.env[target.env];
   if (!url) {
@@ -127,7 +174,8 @@ function runTarget(db, floor, ci) {
       ? { ok: false, message: `${message} (the CI job must set it)` }
       : { ok: true, skipped: true, message: `${message}; skipped, not counted as passed` };
   }
-  const env = { ...process.env, [target.testEnv]: url };
+  const tls = startTlsServers(tlsToStart(target, process.env, dockerAvailable()), started);
+  const env = { ...process.env, ...tls, [target.testEnv]: url };
   const expr = `test(/${target.filter}/)`;
   const pkgs = packages(env);
   console.log(`\n== ${db}: cargo nextest run --release -E '${expr}' (${target.env})`);
@@ -179,7 +227,22 @@ function main(argv) {
   for (const db of dbs) {
     if (!TARGETS[db]) throw new Error(`unknown db ${db} (${Object.keys(TARGETS).join(", ")})`);
   }
-  const results = dbs.map((db) => runTarget(db, floors.get(db), ci));
+  // 띄운 TLS 서버는 끝날 때 — 실패 · Ctrl-C 를 포함해 — 이름으로 끈다(자기가 띄운 것만).
+  const started = [];
+  const stopAll = () => {
+    for (const name of started.splice(0)) {
+      stopTls(name);
+      console.log(`== tls: stopped ${name}`);
+    }
+  };
+  process.once("SIGINT", stopAll);
+  process.once("SIGTERM", stopAll);
+  let results;
+  try {
+    results = dbs.map((db) => runTarget(db, floors.get(db), ci, started));
+  } finally {
+    stopAll();
+  }
   console.log("\n== db-live summary");
   for (const r of results)
     console.log(`${r.ok ? (r.skipped ? "SKIP" : "PASS") : "FAIL"}  ${r.message}`);
@@ -196,6 +259,6 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     process.exitCode = main(process.argv.slice(2));
   } catch (e) {
     console.error(`db-live: ${e.message}`);
-    process.exitCode = 2;
+    process.exitCode = e instanceof Interrupted ? 130 : 2;
   }
 }

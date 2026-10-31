@@ -131,3 +131,25 @@ test("running nothing is not a pass", () => {
   assert.equal(exitCode([pass, skip]), 0);
   assert.equal(exitCode([pass, fail, skip]), 1);
 });
+
+test("tls servers start only for a running db without a tls url, and only with docker", async () => {
+  const { tlsToStart } = await import("./db-live.mjs");
+  const pg = TARGETS.pg;
+  assert.deepEqual(tlsToStart(pg, { PW_TEST_PG_URL: "postgres://x" }, true), ["pg"]);
+  assert.deepEqual(tlsToStart(pg, { PW_TEST_PG_URL: "postgres://x" }, false), []);
+  assert.deepEqual(tlsToStart(pg, {}, true), [], "the db itself is not run");
+  assert.deepEqual(
+    tlsToStart(pg, { PW_TEST_PG_URL: "postgres://x", PW_TEST_PG_TLS_URL: "postgres://y" }, true),
+    [],
+    "CI started it already",
+  );
+  assert.deepEqual(tlsToStart(TARGETS.redis, { PW_TEST_REDIS_URL: "redis://x" }, true), []);
+});
+
+test("tls container names are per worktree and per run", async () => {
+  const { tlsName } = await import("./db-live.mjs");
+  const a = tlsName("/w/a", 1, "pg");
+  assert.match(a, /^pitwall-tls-[0-9a-f]{8}-1-pg$/);
+  assert.notEqual(a, tlsName("/w/b", 1, "pg"));
+  assert.notEqual(a, tlsName("/w/a", 2, "pg"));
+});

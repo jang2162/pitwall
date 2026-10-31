@@ -25,6 +25,15 @@ specta-serde = "=0.0.12"
 specta-typescript = "=0.0.12"
 # SQL 위험도 분류(pw-db-sql 의 risk, 14-m3-plan.md 결정 M3-D5). 기능은 쓰는 크레이트가 켠다(`visitor`).
 sqlparser = "0.63.0"
+# PostgreSQL 드라이버(pw-db-driver-pg, 14-m3-plan.md 결정 M3-D1 · M3-D10). TLS 공급자는 `ring` 하나 — 각 크레이트에서 기능을 고른다.
+tokio-postgres = "0.7.18"
+deadpool-postgres = "0.14.2"
+tokio-postgres-rustls = { version = "0.14.0", default-features = false }
+rustls = { version = "0.23.46", default-features = false }
+rustls-platform-verifier = "0.7.1"
+rustls-webpki = { version = "0.103.16", default-features = false }
+bytes = "1.12.1"
+futures-util = { version = "0.3.34", default-features = false }
 
 # 구문 분석(pw-syntax)의 `wasm` 기능은 문법 WASM 을 wasmtime 의 cranelift 로 기계어로 컴파일해 올린다(시험만 켠다). dev 빌드에서 이
 # 크레이트들을 최적화하지 않으면 큰 문법 하나를 올리는 데 1초쯤 걸려 함께 도는 시간 민감 시험을 흔든다.

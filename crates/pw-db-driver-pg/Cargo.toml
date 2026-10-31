@@ -8,10 +8,27 @@ publish.workspace = true
 # 실 DB 시험 표지(`cfg(pw_live_pg)`)를 환경 변수에서 정한다 — pw-db-driver 와 같은 빌드 스크립트(그 머리 주석).
 build = "../pw-db-driver/live_cfg.rs"
 
-# 드라이버 의존성은 이 크레이트의 행(M3-06)이 들인다.
 [dependencies]
 pw-db-driver = { path = "../pw-db-driver" }
 pw-db-types = { path = "../pw-db-types" }
+# 연결 하나를 쥔 태스크(`actor`)와 명령 채널.
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net"] }
+# 프로토콜: 포털(`Execute` 최대 행) · CancelRequest. 값은 바이너리 그대로 받아 이 크레이트가 푼다(`value`) — `with-*` 기능을 켜지 않는다.
+tokio-postgres = { workspace = true }
+# 값을 바이너리 그대로 서버에 되돌려 보내는 매개변수(`value::RawParam`)가 `ToSql` 의 버퍼 타입으로 쓴다.
+bytes = { workspace = true }
+# 포털에서 읽는 행 스트림(`RowStream`)을 걷는다.
+futures-util = { workspace = true }
+# 연결 풀(결정 M3-D1). 세션 연결도 풀에서 꺼내고, 트랜잭션이 열린 채 닫히면 풀에 돌려주지 않는다(`pool`).
+deadpool-postgres = { workspace = true }
+# TLS: 암호 공급자는 `ring` 만(aws-lc-rs 를 끌어오지 않는다 — 결정 M3-D14 의 준비물). 루트는 OS 신뢰 저장소(`rustls-platform-verifier`).
+tokio-postgres-rustls = { workspace = true, features = ["ring"] }
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = { workspace = true }
+# `verify-ca` 가 서버 인증서의 DNS 이름을 꺼내 사슬만 검증한다(`tls::ChainOnly`). rustls 가 이미 끌어오는 크레이트다.
+rustls-webpki = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "macros", "time", "net"] }
+serde_json = { workspace = true }
