@@ -189,14 +189,17 @@ it("opens table data on ⌘↩ (Ctrl+Enter on Windows and Linux), also from a Ko
     await open();
     await type("customers");
     expect(selected()).toContain(platform === "mac" ? "⌘↩ 데이터" : "Ctrl+Enter 데이터");
-    // 조합 중인 키(한글 입력 확정)는 단축키가 아니다.
-    await key({ key: "Enter", code: "Enter", metaKey: true, ctrlKey: true, isComposing: true });
-    expect(data).not.toHaveBeenCalled();
-    await key(
+    // 조합 중인 키(한글 입력 확정)는 단축키가 아니다 — 같은 수식키라도.
+    const openData =
       platform === "mac"
         ? { key: "Enter", code: "Enter", metaKey: true }
-        : { key: "Enter", code: "Enter", ctrlKey: true },
-    );
+        : { key: "Enter", code: "Enter", ctrlKey: true };
+    await key({ ...openData, isComposing: true });
+    expect(data).not.toHaveBeenCalled();
+    await key({ ...openData, keyCode: 229 } as KeyboardEventInit);
+    expect(data).not.toHaveBeenCalled();
+    expect(mode, platform).toBe("dbObjects");
+    await key(openData);
     expect(mode, platform).toBeUndefined();
     await settle();
     expect(data, platform).toHaveBeenCalledWith({
