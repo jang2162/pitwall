@@ -4141,6 +4141,26 @@ export type KvParseCommandParams = {
 	text: string,
 };
 
+/**  콘솔 한 줄을 나누지 못한 까닭 — `db.kv.parseCommand` 의 `INVALID_PARAMS` 오류 `data`([`KvParseRefused`])로 실어 창이 번역한다. */
+export type KvParseRefusal = 
+/**  글이 [`MAX_COMMAND_TEXT_BYTES`] 를 넘는다. */
+"tooLarge" | 
+/**  줄바꿈이 있다 — 한 줄이 명령 하나다. */
+"newline" | 
+/**  NUL 이 있다 — redis-cli 와 같은 꼴로 나눌 수 없다(`"\x00"` 로 쓴다). */
+"nul" | 
+/**  명령이 없다. */
+"empty" | 
+/**  닫히지 않은 따옴표. */
+"unterminatedQuote" | 
+/**  닫는 따옴표 바로 뒤가 공백이 아니다(`"a"b`). */
+"closingQuote";
+
+/**  `db.kv.parseCommand` 의 `INVALID_PARAMS` 오류 `data`. */
+export type KvParseRefused = {
+	reason: KvParseRefusal,
+};
+
 export type KvParsedCommand = {
 	/**
 	 *  명령 이름과 인자. UTF-8 이면 글, 아니면 `{ "hex": "0x…" }`(`\xHH` 로 만든 바이트) — `db.kv.command` 는 글만 받으므로

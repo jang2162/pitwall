@@ -438,6 +438,33 @@ async fn the_parse_command_method_answers_argv_or_invalid_params() {
     );
     let err = call("GET \"a").await;
     assert_eq!(err["error"]["code"], json!(pw_rpc::code::INVALID_PARAMS));
+    // 까닭은 코드로 실린다 — 창이 번역한다(재리뷰 F4).
+    assert_eq!(
+        err["error"]["data"],
+        json!({ "reason": "unterminatedQuote" })
+    );
+}
+
+#[test]
+fn a_refused_console_line_names_its_reason() {
+    let huge = format!("GET {}", "k".repeat(MAX_COMMAND_TEXT_BYTES));
+    for (text, reason) in [
+        (huge.as_str(), KvParseRefusal::TooLarge),
+        ("GET a\nDEL b", KvParseRefusal::Newline),
+        ("GET a\0b", KvParseRefusal::Nul),
+        ("   ", KvParseRefusal::Empty),
+        ("GET \"a", KvParseRefusal::UnterminatedQuote),
+        ("GET 'a", KvParseRefusal::UnterminatedQuote),
+        ("GET \"a\"b", KvParseRefusal::ClosingQuote),
+        ("GET 'a'b", KvParseRefusal::ClosingQuote),
+    ] {
+        assert_eq!(
+            parse_console_line(text),
+            Err(reason),
+            "{:?}",
+            &text[..text.len().min(20)]
+        );
+    }
 }
 
 /// 콘솔 줄은 redis-cli 와 똑같이 나뉜다(14 M3-18 ⓑ, 리뷰 M1). 기대값은 redis:7.2.10 의 redis-cli 에 같은 줄을

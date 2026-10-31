@@ -10,6 +10,7 @@ import {
   type DbKvConfirmRequired,
   ERROR_CODE,
   type JsonValue,
+  type KvParseRefusal,
   RpcCallError,
 } from "@pitwall/rpc-client";
 
@@ -34,6 +35,23 @@ export function kvConfirmRequiredOf(error: unknown): DbKvConfirmRequired | undef
   if (!data || typeof data.statementsHash !== "string" || !Array.isArray(data.argv))
     return undefined;
   return data as unknown as DbKvConfirmRequired;
+}
+
+const PARSE_REFUSALS: readonly KvParseRefusal[] = [
+  "tooLarge",
+  "newline",
+  "nul",
+  "empty",
+  "unterminatedQuote",
+  "closingQuote",
+];
+
+/** `db.kv.parseCommand` 가 줄을 나누지 못한 까닭(`INVALID_PARAMS` · `data.reason` — `KvParseRefused`). 창이 번역한다. */
+export function kvParseRefusalOf(error: unknown): KvParseRefusal | undefined {
+  if (!(error instanceof RpcCallError) || error.code !== ERROR_CODE.INVALID_PARAMS)
+    return undefined;
+  const reason = dataOf(error)?.reason;
+  return PARSE_REFUSALS.find((r) => r === reason);
 }
 
 const BLOCKS: readonly KvBlock[] = ["notAllowed", "blocking", "scanCount"];

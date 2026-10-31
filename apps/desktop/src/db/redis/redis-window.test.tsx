@@ -272,8 +272,15 @@ vi.mock("../../tauri-transport", async () => {
               );
             return reply(!overwrite && host.targetExists ? "targetExists" : "renamed");
           }
-          case "db.kv.parseCommand":
-            return reply({ argv: String((params as { text: string }).text).split(/\s+/) });
+          case "db.kv.parseCommand": {
+            const text = String((params as { text: string }).text);
+            // 닫는 따옴표 뒤에 글자가 붙은 줄은 Host 처럼 까닭 코드와 함께 거절한다.
+            if (/"[^"]*"\S/.test(text))
+              return fail(-32602, "invalid params: a closing quote must be followed by a space", {
+                reason: "closingQuote",
+              });
+            return reply({ argv: text.split(/\s+/) });
+          }
           case "db.kv.command": {
             const { argv } = params as { argv: string[] };
             if (argv[0]?.toUpperCase() === "FLUSHALL")
@@ -541,6 +548,20 @@ describe("the Redis key document", () => {
     expect(refusal?.textContent).toBe(R.console.blocked.notAllowed("FLUSHALL"));
     expect(confirmDialog()).toBeNull();
     expect(calls("db.kv.command")).toHaveLength(1);
+  });
+
+  // 재리뷰 F4: 나누지 못한 까닭은 Host 의 코드를 번역해 기록에 보이고, 명령을 보내지 않는다.
+  it("shows why a console line could not be split, in the window's language", async () => {
+    await openConnected();
+    const input = $<HTMLInputElement>("[data-testid=redis-console-input]");
+    await type(input, 'SET k "a"b');
+    await enter(input);
+    await vi.waitFor(() => expect($("[data-testid=redis-console-error]")).not.toBeNull());
+    expect($("[data-testid=redis-console-error]")!.textContent).toBe(
+      R.console.parseFailed(R.console.parseRefused.closingQuote),
+    );
+    expect($("[data-testid=redis-console-error]")!.textContent).not.toContain("closing quote");
+    expect(calls("db.kv.command")).toEqual([]);
   });
 
   it("asks to overwrite when the rename target exists", async () => {

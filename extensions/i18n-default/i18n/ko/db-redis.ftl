@@ -123,6 +123,13 @@ db-redis-console-needs-session = 먼저 연결한다
 db-redis-console-bytes-arg = UTF-8 이 아닌 인자(\xHH 로 만든 바이트)는 콘솔에서 보낼 수 없다
 # $message: 까닭
 db-redis-console-parse-failed = 명령을 나누지 못했다: { $message }
+## 나누지 못한 까닭(Host 의 `KvParseRefusal` — redis-cli 와 같은 규칙)
+db-redis-console-parse-too-large = 명령이 4 MiB 를 넘는다
+db-redis-console-parse-newline = 한 줄에 명령 하나만 쓴다
+db-redis-console-parse-nul = NUL 글자는 쓸 수 없다 — "\x00" 로 쓴다
+db-redis-console-parse-empty = 명령이 비었다
+db-redis-console-parse-unterminated-quote = 따옴표가 닫히지 않았다
+db-redis-console-parse-closing-quote = 닫는 따옴표 바로 뒤에는 공백이 와야 한다
 db-redis-console-cancelled = 확인을 취소해 보내지 않았다
 db-redis-console-busy = 다른 확인이 떠 있어 보내지 않았다
 # $message: 까닭

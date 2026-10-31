@@ -562,25 +562,67 @@ rpc_method! {
     }
 }
 
+/// 콘솔 한 줄을 나누지 못한 까닭 — `db.kv.parseCommand` 의 `INVALID_PARAMS` 오류 `data`([`KvParseRefused`])로 실어 창이 번역한다.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum KvParseRefusal {
+    /// 글이 [`MAX_COMMAND_TEXT_BYTES`] 를 넘는다.
+    TooLarge,
+    /// 줄바꿈이 있다 — 한 줄이 명령 하나다.
+    Newline,
+    /// NUL 이 있다 — redis-cli 와 같은 꼴로 나눌 수 없다(`"\x00"` 로 쓴다).
+    Nul,
+    /// 명령이 없다.
+    Empty,
+    /// 닫히지 않은 따옴표.
+    UnterminatedQuote,
+    /// 닫는 따옴표 바로 뒤가 공백이 아니다(`"a"b`).
+    ClosingQuote,
+}
+
+impl KvParseRefusal {
+    /// 오류 `message`(영어, 로그용 — 창은 `data.reason` 을 번역한다).
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::TooLarge => "the command is over the byte limit",
+            Self::Newline => "one line holds one Redis command",
+            Self::Nul => "a Redis command line cannot hold a NUL character; write it as \"\\x00\"",
+            Self::Empty => "Redis command is empty",
+            Self::UnterminatedQuote => "Redis command has an unterminated quote",
+            Self::ClosingQuote => "a closing quote must be followed by a space",
+        }
+    }
+}
+
+/// `db.kv.parseCommand` 의 `INVALID_PARAMS` 오류 `data`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct KvParseRefused {
+    pub reason: KvParseRefusal,
+}
+
+// 메서드가 참조하지 않는 오류 `data` 의 타입 — 생성기에 따로 등록한다.
+pw_rpc::rpc_type!(KvParseRefused);
+
 /// 콘솔 한 줄을 argv 로(`db.kv.parseCommand` 의 몸체). 나누기는 [`split_console_args`] — redis-cli 와 같다.
-pub fn parse_console_line(text: &str) -> Result<Vec<KvKey>, String> {
+pub fn parse_console_line(text: &str) -> Result<Vec<KvKey>, KvParseRefusal> {
     if text.len() > MAX_COMMAND_TEXT_BYTES {
-        return Err(format!(
-            "the command is over the {MAX_COMMAND_TEXT_BYTES} byte limit"
-        ));
+        return Err(KvParseRefusal::TooLarge);
     }
     if text.contains(['\n', '\r']) {
-        return Err("one line holds one Redis command".to_string());
+        return Err(KvParseRefusal::Newline);
     }
     // redis-cli 는 C 문자열이라 NUL 에서 줄이 끝난다 — 같은 꼴로 나눌 수 없으니 다르게 나누는 대신 거절한다.
     if text.contains('\0') {
-        return Err(
-            "a Redis command line cannot hold a NUL character; write it as \"\\x00\"".to_string(),
-        );
+        return Err(KvParseRefusal::Nul);
     }
     let argv = split_console_args(text)?;
     if argv.is_empty() {
-        return Err("Redis command is empty".to_string());
+        return Err(KvParseRefusal::Empty);
     }
     Ok(argv.iter().map(|arg| KvKey::from_bytes(arg)).collect())
 }
@@ -593,7 +635,7 @@ pub fn parse_console_line(text: &str) -> Result<Vec<KvKey>, String> {
 /// - 큰따옴표 안: `\xHH` 는 바이트 하나, `\n` `\r` `\t` `\b` `\a` 는 그 제어 문자, 그 밖의 `\c` 는 `c`.
 /// - 작은따옴표 안: `\'` 만 `'` 이고 나머지는 글자 그대로다.
 /// - 닫는 따옴표 바로 뒤는 공백이거나 글의 끝이어야 한다(`"a"b` 는 오류). 닫히지 않은 따옴표도 오류다.
-pub fn split_console_args(text: &str) -> Result<Argv, String> {
+pub fn split_console_args(text: &str) -> Result<Argv, KvParseRefusal> {
     let bytes = text.as_bytes();
     let at = |i: usize| bytes.get(i).copied();
     // 앞 공백을 건너뛸 때는 C 의 `isspace`(VT · FF 포함), 인자를 가를 때는 넷뿐이다 — `sdssplitargs` 가 그렇다.
@@ -614,7 +656,7 @@ pub fn split_console_args(text: &str) -> Result<Argv, String> {
         loop {
             let Some(b) = at(i) else {
                 if double || single {
-                    return Err("Redis command has an unterminated quote".to_string());
+                    return Err(KvParseRefusal::UnterminatedQuote);
                 }
                 break;
             };
@@ -641,7 +683,7 @@ pub fn split_console_args(text: &str) -> Result<Argv, String> {
                     }
                     (b'"', next) => {
                         if !closes(next) {
-                            return Err("a closing quote must be followed by a space".to_string());
+                            return Err(KvParseRefusal::ClosingQuote);
                         }
                         i += 1;
                         break;
@@ -659,7 +701,7 @@ pub fn split_console_args(text: &str) -> Result<Argv, String> {
                     }
                     (b'\'', next) => {
                         if !closes(next) {
-                            return Err("a closing quote must be followed by a space".to_string());
+                            return Err(KvParseRefusal::ClosingQuote);
                         }
                         i += 1;
                         break;
@@ -691,7 +733,10 @@ pub fn register(router: &mut Router) {
         |_ctx, p: KvParseCommandParams| async move {
             parse_console_line(&p.text)
                 .map(|argv| KvParsedCommand { argv })
-                .map_err(RpcError::invalid_params)
+                .map_err(|reason| {
+                    RpcError::invalid_params(reason.message())
+                        .with_data(serde_json::json!(KvParseRefused { reason }))
+                })
         },
     );
 }

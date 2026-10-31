@@ -12,7 +12,7 @@ import { isComposingKey } from "../../ui/ime";
 import { dbRefusal, dbRefusalText } from "../safety/messages";
 import type { RiskConfirmAnswer } from "../safety/risk-confirm";
 import { useDbSafetyStrings } from "../safety/strings";
-import { errorText, kvBlockedOf, kvDbErrorOf, withKvConfirm } from "./kv-gate";
+import { errorText, kvBlockedOf, kvDbErrorOf, kvParseRefusalOf, withKvConfirm } from "./kv-gate";
 import { replyLines } from "./reply-text";
 import { useDbRedisStrings } from "./strings";
 
@@ -76,7 +76,12 @@ export function KvConsole({ session }: { session: KvConsoleSession | undefined }
         return settle(id, { kind: "error", text: T.bytesArg });
       argv = parsed.argv as string[];
     } catch (e) {
-      return settle(id, { kind: "error", text: T.parseFailed(errorText(e)) });
+      // 나누지 못한 까닭은 Host 가 코드로 싣는다 — 번역해 보인다(영어 `message` 는 로그용).
+      const refusal = kvParseRefusalOf(e);
+      return settle(id, {
+        kind: "error",
+        text: T.parseFailed(refusal ? T.parseRefused[refusal] : errorText(e)),
+      });
     }
     try {
       const result = await withKvConfirm<KvReply>(

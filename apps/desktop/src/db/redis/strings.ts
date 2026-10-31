@@ -2,6 +2,7 @@
 // 가 ko · en 리소스에 모두 있는지는 src/i18n/resources.test.ts 가 본다.
 
 import { useLocalization } from "@fluent/react";
+import type { KvParseRefusal } from "@pitwall/rpc-client";
 import { useMemo } from "react";
 
 import { type Translate, translator } from "../../i18n/localization";
@@ -108,6 +109,14 @@ export function dbRedisStrings(t: Translate) {
       needsSession: t("db-redis-console-needs-session"),
       bytesArg: t("db-redis-console-bytes-arg"),
       parseFailed: (message: string) => t("db-redis-console-parse-failed", { message }),
+      parseRefused: {
+        tooLarge: t("db-redis-console-parse-too-large"),
+        newline: t("db-redis-console-parse-newline"),
+        nul: t("db-redis-console-parse-nul"),
+        empty: t("db-redis-console-parse-empty"),
+        unterminatedQuote: t("db-redis-console-parse-unterminated-quote"),
+        closingQuote: t("db-redis-console-parse-closing-quote"),
+      } satisfies Record<KvParseRefusal, string>,
       cancelled: t("db-redis-console-cancelled"),
       busy: t("db-redis-console-busy"),
       keyTooLarge: (message: string) => t("db-redis-console-key-too-large", { message }),

@@ -123,6 +123,13 @@ db-redis-console-needs-session = Connect first
 db-redis-console-bytes-arg = Arguments that are not UTF-8 (bytes made with \xHH) cannot be sent from the console
 # $message: reason
 db-redis-console-parse-failed = Could not split the command: { $message }
+## Why a line could not be split (the Host's `KvParseRefusal` — the same rules as redis-cli)
+db-redis-console-parse-too-large = the command is over 4 MiB
+db-redis-console-parse-newline = write one command per line
+db-redis-console-parse-nul = a NUL character cannot be typed — write it as "\x00"
+db-redis-console-parse-empty = the command is empty
+db-redis-console-parse-unterminated-quote = a quote is not closed
+db-redis-console-parse-closing-quote = a closing quote must be followed by a space
 db-redis-console-cancelled = Not sent: the confirmation was cancelled
 db-redis-console-busy = Not sent: another confirmation is open
 # $message: reason
