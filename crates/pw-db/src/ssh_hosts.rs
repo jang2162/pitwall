@@ -110,9 +110,8 @@ impl Reader<'_> {
     }
 
     fn add(&mut self, pattern: &str) {
+        // 와일드카드(`*` · `?`) · 부정(`!`) 패턴은 목적지 허용 글자 밖이라 이 검사 하나로 빠진다.
         if self.hosts.len() >= MAX_HOSTS
-            || pattern.starts_with('!')
-            || pattern.contains(['*', '?'])
             || pw_db_driver::tunnel::check_destination(pattern).is_err()
             || self.hosts.iter().any(|h| h == pattern)
         {
