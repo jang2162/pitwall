@@ -410,14 +410,17 @@ async fn live_mysql_metadata_lists_the_fixture_schema() {
         ]
     );
     let filtered = conn
-        .objects(query(Some("T_"), None, ObjectKind::Table))
+        .objects(ObjectQuery {
+            limit: 10,
+            ..query(Some("T_"), None, ObjectKind::Table)
+        })
         .await
         .unwrap();
     let filtered: Vec<_> = filtered.items.iter().map(|o| o.name.as_str()).collect();
     assert_eq!(
         filtered,
-        ["t_a", "t_b"],
-        "`_` is a letter, not a wildcard; the case is ignored"
+        ["t_a", "t_b", "t_c"],
+        "`_` is a letter, not a wildcard (no `tax`); the case is ignored"
     );
     let views = conn
         .objects(query(None, None, ObjectKind::View))
