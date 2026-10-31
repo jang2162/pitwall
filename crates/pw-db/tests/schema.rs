@@ -969,3 +969,136 @@ async fn sqlite_primary_keys_that_take_null_are_not_row_keys() {
         ]
     );
 }
+
+/// `db.schema.cached`(M3-20 의 Search Everywhere 「DB 객체」 탭): 캐시에 이미 든 테이블 · 뷰 이름만 — 연결을 열지 않고 드라이버를
+/// 부르지 않는다. 캐시가 비면 빈 목록, 스키마가 바뀌거나 새로 고치면(캐시를 버리면) 사라진다. 테이블 · 뷰가 아닌 객체는 내지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cached_names_come_only_from_the_cache_and_open_nothing() {
+    let e = env(true);
+    let mut objects = tables(3);
+    objects.push(ObjectInfo {
+        name: "v_active".into(),
+        kind: ObjectKind::View,
+        comment: None,
+    });
+    objects.push(ObjectInfo {
+        name: "seq_ids".into(),
+        kind: ObjectKind::Sequence,
+        comment: None,
+    });
+    e.pg.set_objects(objects);
+    let mut w = e.f.window();
+    let cached = json!({ "projectId": e.f.id });
+
+    let empty = w.call("db.schema.cached", cached.clone()).await.unwrap();
+    assert_eq!(empty, json!({ "items": [], "truncated": false }));
+    assert!(e.pg.calls().is_empty(), "{:?}", e.pg.calls());
+    assert_eq!(e.sessions.schema_state().connections_opened(), 0);
+
+    w.call("db.schema.objects", e.objects()).await.unwrap();
+    let mut views = e.objects();
+    views["kind"] = json!("view");
+    w.call("db.schema.objects", views).await.unwrap();
+    let mut sequences = e.objects();
+    sequences["kind"] = json!("sequence");
+    w.call("db.schema.objects", sequences).await.unwrap();
+    let before = e.pg.calls().len();
+
+    let found = w.call("db.schema.cached", cached.clone()).await.unwrap();
+    let names: Vec<_> = found["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["object"]["name"].as_str().unwrap(),
+                i["kind"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("t00000", "table"),
+            ("t00001", "table"),
+            ("t00002", "table"),
+            ("v_active", "view"),
+        ]
+    );
+    assert_eq!(found["items"][0]["connectionId"], "dev");
+    assert_eq!(found["items"][0]["connectionName"], "dev");
+    assert_eq!(
+        e.pg.calls().len(),
+        before,
+        "no driver call for the cached names"
+    );
+    assert_eq!(e.sessions.schema_state().connections_opened(), 1);
+
+    // 다른 워크트리의 캐시는 섞이지 않는다.
+    let mut other = cached.clone();
+    other["worktree"] = json!(e.f.root.join("wt").to_string_lossy());
+    let err = w.call("db.schema.cached", other).await;
+    assert!(
+        err.as_ref().map_or(true, |v| v["items"] == json!([])),
+        "{err:?}"
+    );
+
+    w.call(
+        "db.schema.refresh",
+        json!({ "projectId": e.f.id, "connectionId": "dev" }),
+    )
+    .await
+    .unwrap();
+    let dropped = w.call("db.schema.cached", cached).await.unwrap();
+    assert_eq!(dropped["items"], json!([]));
+    assert_eq!(e.pg.calls().len(), before);
+}
+
+/// 캐시를 채운 연결 설정이 지금 것과 다르면(다른 서버일 수 있다) 그 이름을 내지 않는다 — 드라이버도 부르지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cached_names_of_a_changed_connection_are_not_shown() {
+    let e = env(true);
+    e.pg.set_objects(tables(2));
+    let mut w = e.f.window();
+    w.call("db.schema.objects", e.objects()).await.unwrap();
+    let before = e.pg.calls().len();
+    e.f.edit_db("dev.toml", "host = \"localhost\"", "host = \"127.0.0.1\"");
+    let found = w
+        .call("db.schema.cached", json!({ "projectId": e.f.id }))
+        .await
+        .unwrap();
+    assert_eq!(found["items"], json!([]));
+    assert_eq!(e.pg.calls().len(), before);
+}
+
+/// 다른 프로젝트 창 · 웰컴(Host 범위) · 파일 창은 `PERMISSION_DENIED`, 미신뢰 프로젝트는 `untrusted` — 그 프로젝트 창이 채운 캐시도
+/// 내주지 않고 드라이버는 불리지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn other_windows_and_untrusted_projects_get_no_cached_names() {
+    let e = env(true);
+    e.pg.set_objects(tables(2));
+    let mut ours = e.f.window();
+    ours.call("db.schema.objects", e.objects()).await.unwrap();
+    let before = e.pg.calls().len();
+    let file = e.f.root.join("a.sql");
+    std::fs::write(&file, "SELECT 1").unwrap();
+    for scope in [
+        ConnectionScope::Project(e.f.other.clone()),
+        ConnectionScope::Host,
+        pw_rpc::Caller::file(pw_rpc::Role::Owner, file).scope,
+    ] {
+        let mut w = e.f.connect(scope.clone());
+        let err = w
+            .call("db.schema.cached", json!({ "projectId": e.f.id }))
+            .await
+            .unwrap_err();
+        assert!(denied(&err), "{scope:?}: {err:?}");
+    }
+    e.f.projects.set_trust(&e.f.id, false).unwrap();
+    let err = ours
+        .call("db.schema.cached", json!({ "projectId": e.f.id }))
+        .await
+        .unwrap_err();
+    assert_eq!(reason(&err), Some("untrusted"));
+    assert_eq!(e.pg.calls().len(), before);
+}

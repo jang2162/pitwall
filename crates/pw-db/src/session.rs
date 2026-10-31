@@ -873,7 +873,6 @@ pub struct DbSessions {
     pub(crate) connections: Arc<Connections>,
     pub(crate) drivers: DriverRegistry,
     pub(crate) tunnels: OnceLock<Arc<dyn DbTunnels>>,
-    global: OnceLock<ConfigStore>,
     /// 0 이면 설정을 따른다.
     grid_max_rows: AtomicU64,
     /// 0 이면 설정을 따른다.
@@ -897,7 +896,6 @@ impl DbSessions {
             connections,
             drivers,
             tunnels: OnceLock::new(),
-            global: OnceLock::new(),
             grid_max_rows: AtomicU64::new(0),
             grid_max_bytes: AtomicU64::new(0),
             unattended_keep: Mutex::new(None),
@@ -910,9 +908,10 @@ impl DbSessions {
         }
     }
 
-    /// 전역 설정(`[db] grid_max_rows` · `grid_max_bytes` 등). 두 번째부터는 무시한다.
+    /// 전역 설정(`[db]` — `crate::settings`). 연결 관리자가 갖고(연결 타임아웃 기본값 · Redis 응답 타임아웃), 세션 · 실행
+    /// 파이프라인은 그것을 읽는다. 두 번째부터는 무시한다.
     pub fn attach_settings(&self, global: ConfigStore) {
-        let _ = self.global.set(global);
+        self.connections.settings.attach(global);
     }
 
     /// 터널(M3-11). 두 번째부터는 무시한다.
@@ -926,19 +925,11 @@ impl DbSessions {
             .store(rows.map_or(0, |r| r.max(1)), Ordering::SeqCst);
     }
 
-    /// 그리드 보유 행 상한(결정 M3-D7): 고정값, 아니면 설정 `[db] grid_max_rows`(1 이상의 정수), 아니면 10만.
+    /// 그리드 보유 행 상한(결정 M3-D7): 고정값, 아니면 설정 `[db] grid_max_rows`(범위 안의 정수 — `crate::settings`), 아니면
+    /// 10만.
     pub fn grid_max_rows(&self) -> u64 {
         match self.grid_max_rows.load(Ordering::SeqCst) {
-            0 => self
-                .global
-                .get()
-                .and_then(|g| {
-                    g.snapshot()
-                        .get("settings", GRID_MAX_ROWS_KEY)
-                        .and_then(serde_json::Value::as_u64)
-                })
-                .filter(|n| *n >= 1)
-                .unwrap_or(DEFAULT_GRID_MAX_ROWS),
+            0 => self.connections.settings.grid_max_rows(),
             n => n,
         }
     }
@@ -949,21 +940,18 @@ impl DbSessions {
             .store(bytes.map_or(0, |b| b.max(1)), Ordering::SeqCst);
     }
 
-    /// 그리드 보유 바이트 상한: 고정값, 아니면 설정 `[db] grid_max_bytes`(1 이상의 정수), 아니면 64 MiB.
+    /// 그리드 보유 바이트 상한: 고정값, 아니면 설정 `[db] grid_max_bytes`(범위 안의 정수 — `crate::settings`), 아니면 64 MiB.
     pub fn grid_max_bytes(&self) -> u64 {
         match self.grid_max_bytes.load(Ordering::SeqCst) {
-            0 => self
-                .global
-                .get()
-                .and_then(|g| {
-                    g.snapshot()
-                        .get("settings", GRID_MAX_BYTES_KEY)
-                        .and_then(serde_json::Value::as_u64)
-                })
-                .filter(|n| *n >= 1)
-                .unwrap_or(DEFAULT_GRID_MAX_BYTES),
+            0 => self.connections.settings.grid_max_bytes(),
             n => n,
         }
+    }
+
+    /// 셀 하나의 상한: 설정 `[db] cell_max_bytes`(범위 안의 정수 — `crate::settings`), 아니면 1 MiB. 실행 · 쪽 읽기 · 편집의
+    /// 드라이버 요청(`ExecuteRequest.cell_limit`)에 싣는다.
+    pub fn cell_limit(&self) -> pw_db_types::CellLimit {
+        self.connections.settings.cell_limit()
     }
 
     /// 창 없이 남은 열린 트랜잭션의 보존 시간을 설정 대신 고정한다(시험 · 내장). `None` 이면 설정을 따른다.
@@ -978,8 +966,9 @@ impl DbSessions {
             return keep;
         }
         let minutes = self
-            .global
-            .get()
+            .connections
+            .settings
+            .store()
             .and_then(|g| {
                 g.snapshot()
                     .get("settings", UNATTENDED_MINUTES_KEY)

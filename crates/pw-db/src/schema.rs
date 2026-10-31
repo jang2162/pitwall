@@ -212,6 +212,45 @@ pub struct DbSchemaChanged {
     pub connection_id: String,
 }
 
+/// `db.schema.cached` 의 입력.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbSchemaCachedParams {
+    pub project_id: String,
+    /// 창의 활성 워크트리. 없으면 메인 체크아웃.
+    #[serde(default)]
+    pub worktree: Option<String>,
+}
+
+/// 캐시에 든 테이블 · 뷰 하나.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbCachedObject {
+    pub connection_id: String,
+    /// 지금 연결 설정의 이름.
+    pub connection_name: String,
+    pub object: ObjectRef,
+    pub kind: ObjectKind,
+}
+
+/// `db.schema.cached` 의 결과. 연결 이름 → DB → 스키마 → 이름 순.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbSchemaCached {
+    pub items: Vec<DbCachedObject>,
+    /// [`MAX_CACHED_NAMES`] 에서 잘랐다.
+    pub truncated: bool,
+}
+
+/// `db.schema.cached` 가 한 번에 내는 이름 수. 캐시는 [`MAX_CACHED`] 항목 × 쪽 [`MAX_PAGE`] 까지 쌓일 수 있다.
+pub const MAX_CACHED_NAMES: usize = 20_000;
+
 rpc_method! {
     /// DB 목록(지원 플래그 `multipleDatabases`). 그 프로젝트 창 + 신뢰한 프로젝트만. 메타데이터용 연결을 처음 쓰면 연다(비밀 ·
     /// 확인이 필요하면 3101 · 3102, 드라이버가 실패하면 3003).
@@ -284,6 +323,16 @@ rpc_method! {
     pub DbSchemaDisconnectMethod: "db.schema.disconnect" {
         params: DbSchemaDisconnectParams,
         result: (),
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// Search Everywhere 의 「DB 객체」 탭(14-m3-plan.md M3-20): 이 프로젝트 · 워크트리의 스키마 캐시에 이미 든 테이블 · 뷰 이름만.
+    /// **연결을 열지 않고 드라이버를 부르지 않는다** — 캐시가 비면 빈 목록이다(결정 M3-D13: 연결은 사람이 누를 때만). 그 프로젝트
+    /// 창만(`DbGrant`), 신뢰 게이트를 지난다(미신뢰면 `untrusted`). 캐시를 채운 연결 설정이 지금 것과 다르거나 사라진 연결은 뺀다.
+    pub DbSchemaCachedMethod: "db.schema.cached" {
+        params: DbSchemaCachedParams,
+        result: DbSchemaCached,
         tier: Read,
         roles: [Owner],
     }
@@ -860,6 +909,89 @@ impl DbSessions {
         &self.schema
     }
 
+    /// `db.schema.cached`: 연결 범위 → 신뢰 · 지금 설정(파일만 읽는다) → 캐시. 드라이버 · 메타데이터용 연결에 닿지 않는다.
+    async fn cached_names(
+        self: &Arc<Self>,
+        ctx: &Ctx,
+        p: DbSchemaCachedParams,
+    ) -> Result<DbSchemaCached, RpcError> {
+        let grant = db_grant(ctx.scope(), &p.project_id)?;
+        check_text("worktree", p.worktree.as_deref())?;
+        let (c, project, wt) = (
+            Arc::clone(&self.connections),
+            grant.project_id().to_owned(),
+            p.worktree.clone(),
+        );
+        // 지금 설정의 연결(이름 · 설정). 틀린 설정 · 읽지 못한 파일의 연결은 뺀다.
+        let current: HashMap<String, DbConnectionConfig> = blocking(move || {
+            c.trust_gate(&project, wt.as_deref())?;
+            let loaded = c.load(&project, wt.as_deref())?;
+            Ok(loaded
+                .connections
+                .as_ref()
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|c| Some((c.id.clone(), c.config.as_ref().ok()?.clone())))
+                        .collect()
+                })
+                .unwrap_or_default())
+        })
+        .await?;
+        let configs = lock(&self.schema.configs);
+        let cache = lock(&self.schema.cache);
+        let mut seen = std::collections::HashSet::new();
+        let mut items = Vec::new();
+        for (key, entry) in &cache.entries {
+            if key.conn.project != grant.project_id() || key.conn.worktree != p.worktree {
+                continue;
+            }
+            let (Item::Objects { .. }, Cached::Objects(page)) = (&key.item, &entry.value) else {
+                continue;
+            };
+            let Some(config) = current.get(&key.conn.connection) else {
+                continue;
+            };
+            // 캐시를 채운 설정이 지금 것과 다르면(다른 서버일 수 있다) 내지 않는다 — 다음 조회가 그 캐시를 버린다.
+            if configs.get(&key.conn) != Some(config) {
+                continue;
+            }
+            for info in &page.items {
+                if !matches!(info.kind, ObjectKind::Table | ObjectKind::View) {
+                    continue;
+                }
+                let object = ObjectRef {
+                    database: key.database.clone(),
+                    schema: key.schema.clone(),
+                    name: info.name.clone(),
+                };
+                if !seen.insert((key.conn.connection.clone(), object.clone(), info.kind)) {
+                    continue;
+                }
+                items.push(DbCachedObject {
+                    connection_id: key.conn.connection.clone(),
+                    connection_name: config.name.clone(),
+                    object,
+                    kind: info.kind,
+                });
+            }
+        }
+        drop((cache, configs));
+        let order = |o: &DbCachedObject| {
+            (
+                o.connection_name.clone(),
+                o.connection_id.clone(),
+                o.object.database.clone(),
+                o.object.schema.clone(),
+                o.object.name.clone(),
+                o.kind as u8,
+            )
+        };
+        items.sort_by_cached_key(order);
+        let truncated = items.len() > MAX_CACHED_NAMES;
+        items.truncate(MAX_CACHED_NAMES);
+        Ok(DbSchemaCached { items, truncated })
+    }
+
     /// 관문(연결 범위는 부른 쪽이 [`DbGrant`] 로 지났다) → 신뢰 · 지금 설정 → 캐시 → 메타데이터용 연결.
     async fn meta(
         self: &Arc<Self>,
@@ -1218,6 +1350,7 @@ async fn retire(meta: MetaConn) {
 /// `db.schema.*` 를 붙인다.
 pub(crate) fn register(router: &mut Router, sessions: Arc<DbSessions>) {
     let s = sessions;
+    let cached = Arc::clone(&s);
     let (databases, schemas, objects, columns, indexes, foreign_keys, ddl, refresh, disconnect) = (
         Arc::clone(&s),
         Arc::clone(&s),
@@ -1315,6 +1448,10 @@ pub(crate) fn register(router: &mut Router, sessions: Arc<DbSessions>) {
                 }
             },
         )
+        .unary(DbSchemaCachedMethod, move |ctx, p: DbSchemaCachedParams| {
+            let s = Arc::clone(&cached);
+            async move { s.cached_names(&ctx, p).await }
+        })
         .unary(
             DbSchemaDisconnectMethod,
             move |ctx, p: DbSchemaDisconnectParams| {

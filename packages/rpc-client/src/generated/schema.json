@@ -8276,6 +8276,122 @@
       ],
       "tier": "exec"
     },
+    "db.schema.cached": {
+      "description": "Search Everywhere 의 「DB 객체」 탭(14-m3-plan.md M3-20): 이 프로젝트 · 워크트리의 스키마 캐시에 이미 든 테이블 · 뷰 이름만.\n**연결을 열지 않고 드라이버를 부르지 않는다** — 캐시가 비면 빈 목록이다(결정 M3-D13: 연결은 사람이 누를 때만). 그 프로젝트\n창만(`DbGrant`), 신뢰 게이트를 지난다(미신뢰면 `untrusted`). 캐시를 채운 연결 설정이 지금 것과 다르거나 사라진 연결은 뺀다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`db.schema.cached` 의 입력.",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "창의 활성 워크트리. 없으면 메인 체크아웃.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbCachedObject": {
+            "description": "캐시에 든 테이블 · 뷰 하나.",
+            "properties": {
+              "connectionId": {
+                "type": "string"
+              },
+              "connectionName": {
+                "description": "지금 연결 설정의 이름.",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/ObjectKind"
+              },
+              "object": {
+                "$ref": "#/$defs/ObjectRef"
+              }
+            },
+            "required": [
+              "connectionId",
+              "connectionName",
+              "object",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "ObjectKind": {
+            "description": "객체 종류.",
+            "enum": [
+              "table",
+              "view",
+              "materializedView",
+              "sequence",
+              "function",
+              "procedure",
+              "trigger"
+            ],
+            "type": "string"
+          },
+          "ObjectRef": {
+            "description": "객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "database",
+              "schema",
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`db.schema.cached` 의 결과. 연결 이름 → DB → 스키마 → 이름 순.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/DbCachedObject"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "[`MAX_CACHED_NAMES`] 에서 잘랐다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "db.schema.columns": {
       "description": "테이블 · 뷰의 열.",
       "kind": "unary",
@@ -10907,6 +11023,469 @@
         "owner"
       ],
       "tier": "read"
+    },
+    "db.settings.get": {
+      "description": "설정 창 「DB」 페이지의 항목(지금 값 · 기본값 · 범위 · 파일 값의 문제). 파일을 읽지 않는다 — 전역 설정의 지금 스냅숏이다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "DbSettingItem": {
+            "description": "항목 하나의 지금 상태.",
+            "properties": {
+              "configured": {
+                "description": "파일에 이 키가 있다(틀렸어도). 창은 이것으로 「기본값으로」 단추를 켠다.",
+                "type": "boolean"
+              },
+              "default": true,
+              "fileKey": {
+                "description": "`settings.toml` 의 키(「파일로 열기」 · 안내에 적는다).",
+                "type": "string"
+              },
+              "key": {
+                "$ref": "#/$defs/DbSettingKey"
+              },
+              "max": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "min": {
+                "description": "정수 항목의 범위. 글 항목은 `None`.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "refused": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbSettingRefusal"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "파일의 값이 틀려 기본값을 쓰고 있다 — 그 까닭."
+              },
+              "unit": {
+                "$ref": "#/$defs/DbSettingUnit"
+              },
+              "value": {
+                "description": "지금 쓰이는 값(파일 값이 틀렸거나 없으면 기본값)."
+              }
+            },
+            "required": [
+              "key",
+              "fileKey",
+              "unit",
+              "value",
+              "default",
+              "min",
+              "max",
+              "configured",
+              "refused"
+            ],
+            "type": "object"
+          },
+          "DbSettingKey": {
+            "description": "설정 페이지의 항목. 파일의 키는 [`DbSettingKey::file_key`].",
+            "oneOf": [
+              {
+                "const": "gridMaxRows",
+                "description": "그리드 보유 행 상한(결정 M3-D7).",
+                "type": "string"
+              },
+              {
+                "const": "gridMaxBytes",
+                "description": "그리드 보유 바이트 상한(받은 셀 바이트 합, M3-16).",
+                "type": "string"
+              },
+              {
+                "const": "cellMaxBytes",
+                "description": "셀 하나의 상한(넘는 값은 잘려 온다, 결정 M3-D8).",
+                "type": "string"
+              },
+              {
+                "const": "redisResponseTimeout",
+                "description": "Redis 응답 타임아웃(초, M3-09).",
+                "type": "string"
+              },
+              {
+                "const": "redisKeySeparator",
+                "description": "Redis 키 트리의 구분자 처음 값(M3-18 — 화면의 위 막대에서 바꾸는 것은 그 탭만).",
+                "type": "string"
+              },
+              {
+                "const": "connectTimeout",
+                "description": "연결 설정에 `connect_timeout` 이 없을 때 쓰는 연결 타임아웃(초, M3-14).",
+                "type": "string"
+              }
+            ]
+          },
+          "DbSettingRefusal": {
+            "oneOf": [
+              {
+                "description": "정수가 아니다(소수 · 글 · 불 등).",
+                "properties": {
+                  "kind": {
+                    "const": "notInteger",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "범위 밖(양 끝 포함).",
+                "properties": {
+                  "kind": {
+                    "const": "range",
+                    "type": "string"
+                  },
+                  "max": {
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "min": {
+                    "format": "int64",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "min",
+                  "max"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "글이 아니다.",
+                "properties": {
+                  "kind": {
+                    "const": "notText",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "구분자가 비었거나 [`MAX_KEY_SEPARATOR_CHARS`] 글자를 넘거나 제어 문자 · 공백이 들었다.",
+                "properties": {
+                  "kind": {
+                    "const": "separator",
+                    "type": "string"
+                  },
+                  "max": {
+                    "format": "int64",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "max"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbSettingUnit": {
+            "description": "값의 단위(창이 칸 옆에 적는다).",
+            "enum": [
+              "rows",
+              "bytes",
+              "seconds",
+              "text"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "items": {
+            "description": "[`DbSettingKey::ALL`] 의 차례.",
+            "items": {
+              "$ref": "#/$defs/DbSettingItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "db.settings.set": {
+      "description": "설정 창 「DB」 페이지의 항목 하나를 전역 `settings.toml` 의 `[db]` 에 쓴다(`value: null` 이면 그 키를 지운다). 범위는 Host 가\n판정한다 — 범위 밖이면 쓰지 않고 `INVALID_PARAMS`(`data` 는 `DbSettingRefused`). 쓴 뒤 설정을 다시 읽고(`config.changed`)\n새 상태를 돌려준다. 파일을 고칠 수 없으면(TOML 이 깨졌다 등) 쓰지 않고 오류다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbSettingKey": {
+            "description": "설정 페이지의 항목. 파일의 키는 [`DbSettingKey::file_key`].",
+            "oneOf": [
+              {
+                "const": "gridMaxRows",
+                "description": "그리드 보유 행 상한(결정 M3-D7).",
+                "type": "string"
+              },
+              {
+                "const": "gridMaxBytes",
+                "description": "그리드 보유 바이트 상한(받은 셀 바이트 합, M3-16).",
+                "type": "string"
+              },
+              {
+                "const": "cellMaxBytes",
+                "description": "셀 하나의 상한(넘는 값은 잘려 온다, 결정 M3-D8).",
+                "type": "string"
+              },
+              {
+                "const": "redisResponseTimeout",
+                "description": "Redis 응답 타임아웃(초, M3-09).",
+                "type": "string"
+              },
+              {
+                "const": "redisKeySeparator",
+                "description": "Redis 키 트리의 구분자 처음 값(M3-18 — 화면의 위 막대에서 바꾸는 것은 그 탭만).",
+                "type": "string"
+              },
+              {
+                "const": "connectTimeout",
+                "description": "연결 설정에 `connect_timeout` 이 없을 때 쓰는 연결 타임아웃(초, M3-14).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "key": {
+            "$ref": "#/$defs/DbSettingKey"
+          },
+          "value": {
+            "default": null,
+            "description": "새 값. `null` 이면 파일에서 그 키를 지운다(기본값으로)."
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbSettingItem": {
+            "description": "항목 하나의 지금 상태.",
+            "properties": {
+              "configured": {
+                "description": "파일에 이 키가 있다(틀렸어도). 창은 이것으로 「기본값으로」 단추를 켠다.",
+                "type": "boolean"
+              },
+              "default": true,
+              "fileKey": {
+                "description": "`settings.toml` 의 키(「파일로 열기」 · 안내에 적는다).",
+                "type": "string"
+              },
+              "key": {
+                "$ref": "#/$defs/DbSettingKey"
+              },
+              "max": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "min": {
+                "description": "정수 항목의 범위. 글 항목은 `None`.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "refused": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbSettingRefusal"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "파일의 값이 틀려 기본값을 쓰고 있다 — 그 까닭."
+              },
+              "unit": {
+                "$ref": "#/$defs/DbSettingUnit"
+              },
+              "value": {
+                "description": "지금 쓰이는 값(파일 값이 틀렸거나 없으면 기본값)."
+              }
+            },
+            "required": [
+              "key",
+              "fileKey",
+              "unit",
+              "value",
+              "default",
+              "min",
+              "max",
+              "configured",
+              "refused"
+            ],
+            "type": "object"
+          },
+          "DbSettingKey": {
+            "description": "설정 페이지의 항목. 파일의 키는 [`DbSettingKey::file_key`].",
+            "oneOf": [
+              {
+                "const": "gridMaxRows",
+                "description": "그리드 보유 행 상한(결정 M3-D7).",
+                "type": "string"
+              },
+              {
+                "const": "gridMaxBytes",
+                "description": "그리드 보유 바이트 상한(받은 셀 바이트 합, M3-16).",
+                "type": "string"
+              },
+              {
+                "const": "cellMaxBytes",
+                "description": "셀 하나의 상한(넘는 값은 잘려 온다, 결정 M3-D8).",
+                "type": "string"
+              },
+              {
+                "const": "redisResponseTimeout",
+                "description": "Redis 응답 타임아웃(초, M3-09).",
+                "type": "string"
+              },
+              {
+                "const": "redisKeySeparator",
+                "description": "Redis 키 트리의 구분자 처음 값(M3-18 — 화면의 위 막대에서 바꾸는 것은 그 탭만).",
+                "type": "string"
+              },
+              {
+                "const": "connectTimeout",
+                "description": "연결 설정에 `connect_timeout` 이 없을 때 쓰는 연결 타임아웃(초, M3-14).",
+                "type": "string"
+              }
+            ]
+          },
+          "DbSettingRefusal": {
+            "oneOf": [
+              {
+                "description": "정수가 아니다(소수 · 글 · 불 등).",
+                "properties": {
+                  "kind": {
+                    "const": "notInteger",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "범위 밖(양 끝 포함).",
+                "properties": {
+                  "kind": {
+                    "const": "range",
+                    "type": "string"
+                  },
+                  "max": {
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "min": {
+                    "format": "int64",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "min",
+                  "max"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "글이 아니다.",
+                "properties": {
+                  "kind": {
+                    "const": "notText",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "구분자가 비었거나 [`MAX_KEY_SEPARATOR_CHARS`] 글자를 넘거나 제어 문자 · 공백이 들었다.",
+                "properties": {
+                  "kind": {
+                    "const": "separator",
+                    "type": "string"
+                  },
+                  "max": {
+                    "format": "int64",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "max"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbSettingUnit": {
+            "description": "값의 단위(창이 칸 옆에 적는다).",
+            "enum": [
+              "rows",
+              "bytes",
+              "seconds",
+              "text"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "items": {
+            "description": "[`DbSettingKey::ALL`] 의 차례.",
+            "items": {
+              "$ref": "#/$defs/DbSettingItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
     },
     "db.sql.classify": {
       "description": "SQL 을 나누고 문장마다 위험도를 매긴다(M3-04 + M3-03). 방언은 세션 · 연결의 드라이버 것, 없으면 `dialect`.",

@@ -173,10 +173,11 @@ impl DbConnectionConfig {
         }
     }
 
-    /// 쓰이는 연결 타임아웃(밀리초).
-    pub fn effective_connect_timeout_ms(&self) -> u32 {
+    /// 쓰이는 연결 타임아웃(밀리초). 연결 설정에 없으면 `default_secs`(전역 설정 `[db] connect_timeout`, 없으면
+    /// [`DEFAULT_CONNECT_TIMEOUT_SECS`] — `crate::settings`).
+    pub fn effective_connect_timeout_ms(&self, default_secs: u32) -> u32 {
         self.connect_timeout
-            .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS)
+            .unwrap_or(default_secs)
             .saturating_mul(1000)
     }
 }
@@ -637,6 +638,8 @@ pub struct Connections {
     seen: Mutex<HashMap<SeenKey, BTreeMap<String, Value>>>,
     /// 설정 파일 · 확인 기록 쓰기를 한 줄로 세운다(같은 파일을 두 요청이 읽고 고쳐 쓰지 않게).
     pub(crate) writing: Mutex<()>,
+    /// 전역 설정의 `[db]`(M3-20 — 연결 타임아웃 기본값 · Redis 응답 타임아웃 · 그리드 · 셀 상한).
+    pub settings: crate::settings::DbSettings,
 }
 
 /// (프로젝트 id, 활성 워크트리) — 워크트리마다 공유 설정이 다를 수 있다.
@@ -757,6 +760,7 @@ impl Connections {
             env,
             seen: Mutex::default(),
             writing: Mutex::new(()),
+            settings: crate::settings::DbSettings::default(),
         }
     }
 
@@ -1231,5 +1235,6 @@ pub fn register(router: &mut Router, connections: Arc<Connections>) {
             },
         );
     crate::secret::register(router, Arc::clone(&connections));
+    crate::settings::register(router, Arc::clone(&connections));
     crate::trust::register(router, connections);
 }

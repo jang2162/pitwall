@@ -51,8 +51,8 @@ use pw_db_driver::{Budget, DbConnection, QueryCancel, SqlConnection};
 use pw_db_sql::split::SqlRange;
 use pw_db_sql::txn::{TxControl, plans_or_analyzes};
 use pw_db_types::{
-    BeginOptions, ColumnMeta, DbError, DbErrorKind, DbValue, ExecuteRequest, ExplainPlan,
-    FetchLimit, RiskGrade, Row, SqlDialect, TransactionState,
+    BeginOptions, CellLimit, ColumnMeta, DbError, DbErrorKind, DbValue, ExecuteRequest,
+    ExplainPlan, FetchLimit, RiskGrade, Row, SqlDialect, TransactionState,
 };
 use pw_rpc::{Ctx, JsNumber, Router, RpcError, StreamSink, code as rpc_code, rpc_method};
 use serde::{Deserialize, Serialize};
@@ -507,6 +507,7 @@ impl DbSessions {
         let limit = GridLimit {
             rows: self.grid_max_rows(),
             bytes: self.grid_max_bytes(),
+            cell: self.cell_limit(),
         };
         let task = tokio::spawn(run_script(
             Arc::clone(&self),
@@ -683,7 +684,7 @@ impl DbSessions {
             )
             .with_data(json!({ "reason": "readOnlyConnection" })));
         }
-        let result = read_page(conn.as_mut(), statement, params.limit).await;
+        let result = read_page(conn.as_mut(), statement, params.limit, self.cell_limit()).await;
         let _ = within(Budget::PAGE.cancel_cleanup, "rollback", conn.rollback()).await;
         let _ = within(Budget::PAGE.connect, "close", conn.close()).await;
         result.map_err(db_error)
@@ -848,14 +849,15 @@ async fn read_page(
     conn: &mut dyn SqlConnection,
     statement: &Planned,
     limit: u32,
+    cell: CellLimit,
 ) -> Result<DbQueryPage, DbError> {
     let mut inactivity = Inactivity::new(Budget::PAGE.inactivity);
     inactivity
         .guard(conn.begin(BeginOptions { read_only: true }))
         .await?;
-    let started = inactivity
-        .guard(conn.execute(ExecuteRequest::new(statement.text.clone(), RiskGrade::Read)))
-        .await?;
+    let mut request = ExecuteRequest::new(statement.text.clone(), RiskGrade::Read);
+    request.cell_limit = cell;
+    let started = inactivity.guard(conn.execute(request)).await?;
     let mut page = DbQueryPage {
         columns: started.columns,
         rows: Vec::new(),
@@ -905,6 +907,8 @@ async fn read_page(
 struct GridLimit {
     rows: u64,
     bytes: u64,
+    /// 셀 하나의 상한(`[db] cell_max_bytes`, M3-20) — 실행이 시작할 때 읽은 값을 그 실행의 모든 문장에 싣는다.
+    cell: CellLimit,
 }
 
 /// 그리드 보유 바이트 상한이 세는 셀 하나의 크기: 글(텍스트 · decimal · json · 시각 · uuid · 잘린 값의 앞부분 · 그 밖 값의 글)은 UTF-8
@@ -1075,7 +1079,8 @@ async fn run_statement(
     let Some(conn) = link.sql() else {
         return (Outcome::Failed(disconnected()), None, false);
     };
-    let request = ExecuteRequest::new(statement.text.clone(), statement.grade);
+    let mut request = ExecuteRequest::new(statement.text.clone(), statement.grade);
+    request.cell_limit = grid.cell;
     let begun = running.cancel.run(conn.execute(request)).await;
     let begun = match begun {
         Ok(begun) => begun,

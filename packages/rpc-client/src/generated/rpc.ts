@@ -120,6 +120,12 @@ export type UnaryMethods = {
 	 */
 	"db.query.page": { params: DbQueryPageParams; result: DbQueryPage };
 	/**
+	 * Search Everywhere 의 「DB 객체」 탭(14-m3-plan.md M3-20): 이 프로젝트 · 워크트리의 스키마 캐시에 이미 든 테이블 · 뷰 이름만.
+	 * **연결을 열지 않고 드라이버를 부르지 않는다** — 캐시가 비면 빈 목록이다(결정 M3-D13: 연결은 사람이 누를 때만). 그 프로젝트
+	 * 창만(`DbGrant`), 신뢰 게이트를 지난다(미신뢰면 `untrusted`). 캐시를 채운 연결 설정이 지금 것과 다르거나 사라진 연결은 뺀다.
+	 */
+	"db.schema.cached": { params: DbSchemaCachedParams; result: DbSchemaCached };
+	/**
 	 * 테이블 · 뷰의 열.
 	 */
 	"db.schema.columns": { params: DbSchemaObjectParams; result: DbSchemaColumns };
@@ -212,6 +218,16 @@ export type UnaryMethods = {
 	 * 창이 열릴 때 읽어 사람에게 보인다. 그 프로젝트 창의 연결만.
 	 */
 	"db.session.unattendedRollbacks": { params: DbUnattendedRollbacksParams; result: DbUnattendedRollback[] };
+	/**
+	 * 설정 창 「DB」 페이지의 항목(지금 값 · 기본값 · 범위 · 파일 값의 문제). 파일을 읽지 않는다 — 전역 설정의 지금 스냅숏이다.
+	 */
+	"db.settings.get": { params: null; result: DbSettingsView };
+	/**
+	 * 설정 창 「DB」 페이지의 항목 하나를 전역 `settings.toml` 의 `[db]` 에 쓴다(`value: null` 이면 그 키를 지운다). 범위는 Host 가
+	 * 판정한다 — 범위 밖이면 쓰지 않고 `INVALID_PARAMS`(`data` 는 `DbSettingRefused`). 쓴 뒤 설정을 다시 읽고(`config.changed`)
+	 * 새 상태를 돌려준다. 파일을 고칠 수 없으면(TOML 이 깨졌다 등) 쓰지 않고 오류다.
+	 */
+	"db.settings.set": { params: DbSettingsSetParams; result: DbSettingsView };
 	/**
 	 * SQL 을 나누고 문장마다 위험도를 매긴다(M3-04 + M3-03). 방언은 세션 · 연결의 드라이버 것, 없으면 `dialect`.
 	 */
@@ -830,6 +846,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.query.execute": {"name":"db.query.execute","kind":"stream","tier":"exec","roles":["owner"],"params":"DbQueryExecuteParams","output":"DbQueryEvent","doc":" 세션에서 문장들을 돌린다(스트림). 관문: 그 세션을 연 프로젝트 창만 · 신뢰 · 연결 설정이 연 때와 같음 · 등급 정책(확인이\n 필요하면 3001, read-only 연결은 조회 밖을 거절). 항목은 `accepted` → 문장마다 `started` → `columns` → `rows` … →\n `done` | `error`.\n","mcp":false,"fileScope":false},
 	"db.query.explain": {"name":"db.query.explain","kind":"unary","tier":"exec","roles":["owner"],"params":"DbQueryExplainParams","output":"ExplainPlan","doc":" 문장 하나의 실행 계획(M3-15). 관문은 `db.query.execute` 와 같다(그 세션을 연 프로젝트 창만 · 신뢰 · 설정 · busy · 등급 정책 —\n 확인이 필요하면 3001). 문장을 돌리지 않는다 — `EXPLAIN` 만이고 `ANALYZE` 는 없다: 계획 · 통계 문장(`EXPLAIN` · `DESCRIBE` ·\n `ANALYZE`)과 트랜잭션 제어 문장(`data.reason = \"transactionStatement\"`)은 invalid params. 드라이버에 계획이 없으면\n 3003(`unsupported`).\n","mcp":false,"fileScope":false},
 	"db.query.page": {"name":"db.query.page","kind":"unary","tier":"exec","roles":["owner"],"params":"DbQueryPageParams","output":"DbQueryPage","doc":" 쪽 단위 조회(스트림이 아니다): 조회 문장 하나를 새 연결의 읽기 전용 트랜잭션 안에서 `limit` 행까지. 조회가 아니면 거절.\n","mcp":false,"fileScope":false},
+	"db.schema.cached": {"name":"db.schema.cached","kind":"unary","tier":"read","roles":["owner"],"params":"DbSchemaCachedParams","output":"DbSchemaCached","doc":" Search Everywhere 의 「DB 객체」 탭(14-m3-plan.md M3-20): 이 프로젝트 · 워크트리의 스키마 캐시에 이미 든 테이블 · 뷰 이름만.\n **연결을 열지 않고 드라이버를 부르지 않는다** — 캐시가 비면 빈 목록이다(결정 M3-D13: 연결은 사람이 누를 때만). 그 프로젝트\n 창만(`DbGrant`), 신뢰 게이트를 지난다(미신뢰면 `untrusted`). 캐시를 채운 연결 설정이 지금 것과 다르거나 사라진 연결은 뺀다.\n","mcp":false,"fileScope":false},
 	"db.schema.columns": {"name":"db.schema.columns","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"DbSchemaColumns","doc":" 테이블 · 뷰의 열.\n","mcp":false,"fileScope":false},
 	"db.schema.databases": {"name":"db.schema.databases","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaConnectionParams","output":"DbSchemaDatabases","doc":" DB 목록(지원 플래그 `multipleDatabases`). 그 프로젝트 창 + 신뢰한 프로젝트만. 메타데이터용 연결을 처음 쓰면 연다(비밀 ·\n 확인이 필요하면 3101 · 3102, 드라이버가 실패하면 3003).\n","mcp":false,"fileScope":false},
 	"db.schema.ddl": {"name":"db.schema.ddl","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"Ddl","doc":" 객체의 DDL 글(`⌘B`).\n","mcp":false,"fileScope":false},
@@ -848,6 +865,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.session.rollback": {"name":"db.session.rollback","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionParams","output":"DbSessionInfo","doc":" 열린 트랜잭션을 롤백한다(없으면 아무것도 하지 않는다). 실행 중이면 conflict(`busy`).\n","mcp":false,"fileScope":false},
 	"db.session.setMode": {"name":"db.session.setMode","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionSetModeParams","output":"DbSessionInfo","doc":" 자동 / 수동 커밋을 바꾼다. 트랜잭션이 열려 있으면 자동으로 바꾸지 않는다(conflict, `data.reason = \"transactionOpen\"`).\n","mcp":false,"fileScope":false},
 	"db.session.unattendedRollbacks": {"name":"db.session.unattendedRollbacks","kind":"unary","tier":"read","roles":["owner"],"params":"DbUnattendedRollbacksParams","output":"Vec<DbUnattendedRollback>","doc":" 보존 시간 안에 아무도 붙지 않아 롤백한 열린 트랜잭션의 기록(이 Host 가 도는 동안, 프로젝트마다 최근 32개, 오래된 것부터).\n 창이 열릴 때 읽어 사람에게 보인다. 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
+	"db.settings.get": {"name":"db.settings.get","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DbSettingsView","doc":" 설정 창 「DB」 페이지의 항목(지금 값 · 기본값 · 범위 · 파일 값의 문제). 파일을 읽지 않는다 — 전역 설정의 지금 스냅숏이다.\n","mcp":false,"fileScope":false},
+	"db.settings.set": {"name":"db.settings.set","kind":"unary","tier":"write","roles":["owner"],"params":"DbSettingsSetParams","output":"DbSettingsView","doc":" 설정 창 「DB」 페이지의 항목 하나를 전역 `settings.toml` 의 `[db]` 에 쓴다(`value: null` 이면 그 키를 지운다). 범위는 Host 가\n 판정한다 — 범위 밖이면 쓰지 않고 `INVALID_PARAMS`(`data` 는 `DbSettingRefused`). 쓴 뒤 설정을 다시 읽고(`config.changed`)\n 새 상태를 돌려준다. 파일을 고칠 수 없으면(TOML 이 깨졌다 등) 쓰지 않고 오류다.\n","mcp":false,"fileScope":false},
 	"db.sql.classify": {"name":"db.sql.classify","kind":"unary","tier":"read","roles":["owner"],"params":"DbSqlClassifyParams","output":"DbSqlClassification","doc":" SQL 을 나누고 문장마다 위험도를 매긴다(M3-04 + M3-03). 방언은 세션 · 연결의 드라이버 것, 없으면 `dialect`.\n","mcp":false,"fileScope":false},
 	"db.sql.insertText": {"name":"db.sql.insertText","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlInsertTextParams","output":"SqlInsertTextResult","doc":" 결과 행을 그 방언의 `INSERT` 글로(행마다 한 문장, 리터럴 규칙은 `pw_db_sql::literal`). 연결을 열지 않는 계산이다.\n 잘린 값 · 방언에 없는 값이 있으면 `INVALID_PARAMS` 이고 `data` 가 그 셀(`InsertTextError`)이다. 셀이\n [`MAX_INSERT_CELLS`] 를 넘어도 `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"db.sql.split": {"name":"db.sql.split","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlSplitParams","output":"SqlSplitResult","doc":" SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\n UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면\n `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
@@ -1401,6 +1420,15 @@ export type DbBytes = {
 	/**  원래 크기(바이트). */
 	size: number,
 	truncated: boolean,
+};
+
+/**  캐시에 든 테이블 · 뷰 하나. */
+export type DbCachedObject = {
+	connectionId: string,
+	/**  지금 연결 설정의 이름. */
+	connectionName: string,
+	object: ObjectRef,
+	kind: ObjectKind,
 };
 
 /**  확인한 (인증서 파일, 대상). */
@@ -1971,6 +1999,20 @@ export type DbRowKey = {
 	primary: boolean,
 };
 
+/**  `db.schema.cached` 의 결과. 연결 이름 → DB → 스키마 → 이름 순. */
+export type DbSchemaCached = {
+	items: DbCachedObject[],
+	/**  [`MAX_CACHED_NAMES`] 에서 잘랐다. */
+	truncated: boolean,
+};
+
+/**  `db.schema.cached` 의 입력. */
+export type DbSchemaCachedParams = {
+	projectId: string,
+	/**  창의 활성 워크트리. 없으면 메인 체크아웃. */
+	worktree?: string | null,
+};
+
 /**  `db.schemaChanged`: 그 연결의 스키마 캐시를 버렸다 — 창은 펼친 노드를 다시 읽는다. */
 export type DbSchemaChanged = {
 	projectId: string,
@@ -2229,6 +2271,69 @@ export type DbSessionState = { kind: "idle" } |
  *  수 있다.
  */
 { kind: "configChanged"; transaction: DbOpenTransaction | null };
+
+/**  항목 하나의 지금 상태. */
+export type DbSettingItem = {
+	key: DbSettingKey,
+	/**  `settings.toml` 의 키(「파일로 열기」 · 안내에 적는다). */
+	fileKey: string,
+	unit: DbSettingUnit,
+	/**  지금 쓰이는 값(파일 값이 틀렸거나 없으면 기본값). */
+	value: JsonValue,
+	default: JsonValue,
+	/**  정수 항목의 범위. 글 항목은 `None`. */
+	min: number | null,
+	max: number | null,
+	/**  파일에 이 키가 있다(틀렸어도). 창은 이것으로 「기본값으로」 단추를 켠다. */
+	configured: boolean,
+	/**  파일의 값이 틀려 기본값을 쓰고 있다 — 그 까닭. */
+	refused: DbSettingRefusal | null,
+};
+
+/**  설정 페이지의 항목. 파일의 키는 [`DbSettingKey::file_key`]. */
+export type DbSettingKey = 
+/**  그리드 보유 행 상한(결정 M3-D7). */
+"gridMaxRows" | 
+/**  그리드 보유 바이트 상한(받은 셀 바이트 합, M3-16). */
+"gridMaxBytes" | 
+/**  셀 하나의 상한(넘는 값은 잘려 온다, 결정 M3-D8). */
+"cellMaxBytes" | 
+/**  Redis 응답 타임아웃(초, M3-09). */
+"redisResponseTimeout" | 
+/**  Redis 키 트리의 구분자 처음 값(M3-18 — 화면의 위 막대에서 바꾸는 것은 그 탭만). */
+"redisKeySeparator" | 
+/**  연결 설정에 `connect_timeout` 이 없을 때 쓰는 연결 타임아웃(초, M3-14). */
+"connectTimeout";
+
+export type DbSettingRefusal = 
+/**  정수가 아니다(소수 · 글 · 불 등). */
+{ kind: "notInteger" } | 
+/**  범위 밖(양 끝 포함). */
+{ kind: "range"; min: number; max: number } | 
+/**  글이 아니다. */
+{ kind: "notText" } | 
+/**  구분자가 비었거나 [`MAX_KEY_SEPARATOR_CHARS`] 글자를 넘거나 제어 문자 · 공백이 들었다. */
+{ kind: "separator"; max: number };
+
+/**  쓰기를 거절한 까닭(`INVALID_PARAMS` 의 `data`). 영어 `message` 는 로그용이고 창은 이것을 번역한다. */
+export type DbSettingRefused = {
+	key: DbSettingKey,
+	reason: DbSettingRefusal,
+};
+
+/**  값의 단위(창이 칸 옆에 적는다). */
+export type DbSettingUnit = "rows" | "bytes" | "seconds" | "text";
+
+export type DbSettingsSetParams = {
+	key: DbSettingKey,
+	/**  새 값. `null` 이면 파일에서 그 키를 지운다(기본값으로). */
+	value?: JsonValue | null,
+};
+
+export type DbSettingsView = {
+	/**  [`DbSettingKey::ALL`] 의 차례. */
+	items: DbSettingItem[],
+};
 
 export type DbSqlClassification = {
 	statements: DbStatementClass[],

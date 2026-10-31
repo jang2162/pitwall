@@ -773,7 +773,7 @@ impl Connections {
                 Ok(blocked) => blocked.into_error(connection_id),
                 Err(e) => e,
             })?;
-        let spec = build_spec(&config, &loaded.root, checked);
+        let spec = build_spec(&config, &loaded.root, checked, &self.settings);
         Ok(ResolvedConnection {
             connection_id: connection_id.map(str::to_owned),
             tunnel: config.ssh_tunnel.as_ref().map(|t| t.host_ref.clone()),
@@ -888,8 +888,14 @@ impl Connections {
 
 /// 연결 설정 → 드라이버 입력. 판정(`Connections::check`)을 지난 값으로만 만든다 — 크레이트 밖에 열지 않는다. SQLite 는 판정한 실제
 /// 경로를 연다. 상대 인증서 경로는 활성 워크트리 안의 루트 기준으로 푼 실제 경로([`cert_path`] — 확인이 묶인 그 경로). 터널은
-/// 아직 열지 않았다(`connect_to` 는 M3-11 이 채운다).
-fn build_spec(config: &DbConnectionConfig, root: &Path, checked: Checked) -> ConnectionSpec {
+/// 아직 열지 않았다(`connect_to` 는 M3-11 이 채운다). 연결 설정에 없는 연결 타임아웃과 Redis 응답 타임아웃은 전역 설정의 `[db]`
+/// 다(M3-20).
+fn build_spec(
+    config: &DbConnectionConfig,
+    root: &Path,
+    checked: Checked,
+    settings: &crate::settings::DbSettings,
+) -> ConnectionSpec {
     let target = match checked.file {
         Some(path) => Target::File { path },
         None => Target::Network {
@@ -909,7 +915,8 @@ fn build_spec(config: &DbConnectionConfig, root: &Path, checked: Checked) -> Con
         client_key: config.sslkey.as_ref().map(|p| cert_path(root, p)),
     };
     spec.read_only = config.read_only;
-    spec.connect_timeout_ms = config.effective_connect_timeout_ms();
+    spec.connect_timeout_ms = config.effective_connect_timeout_ms(settings.connect_timeout_secs());
+    spec.response_timeout_ms = Some(settings.redis_response_timeout_ms());
     spec.allowed_roots = checked.allowed_roots;
     spec
 }
