@@ -772,6 +772,7 @@ async fn live_pg_a_failed_text_output_marks_only_those_values() {
 #[tokio::test(flavor = "multi_thread")]
 async fn live_pg_transaction_statements_are_refused_and_savepoints_pass() {
     let mut conn = open(&plain()).await;
+    run(&mut conn, "DROP TABLE IF EXISTS pw_live_deferred").await;
     run(&mut conn, "DROP TABLE IF EXISTS pw_live_savepoint").await;
     run(&mut conn, "CREATE TABLE pw_live_savepoint (id int)").await;
     for sql in [
@@ -815,6 +816,29 @@ async fn live_pg_transaction_statements_are_refused_and_savepoints_pass() {
     )
     .await;
     assert_eq!(ids, vec![vec![DbValue::int(1)]]);
+
+    // COMMIT 이 실패하면(지연 제약) 서버가 트랜잭션 전체를 되돌렸다 — 오류가 `rolled_back` 을 싣고 세션은 idle 이다.
+    run(&mut conn, "DROP TABLE IF EXISTS pw_live_deferred").await;
+    run(
+        &mut conn,
+        "ALTER TABLE pw_live_savepoint ADD PRIMARY KEY (id)",
+    )
+    .await;
+    run(
+        &mut conn,
+        "CREATE TABLE pw_live_deferred (id int, parent int REFERENCES pw_live_savepoint (id) DEFERRABLE INITIALLY DEFERRED)",
+    )
+    .await;
+    conn.begin(BeginOptions::default()).await.unwrap();
+    run(&mut conn, "INSERT INTO pw_live_deferred VALUES (1, 999)").await;
+    let error = conn.commit().await.unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("23503"), "{error:?}");
+    assert!(error.rolled_back);
+    assert_eq!(conn.transaction_state(), TransactionState::Idle);
+    assert_eq!(
+        count(&mut conn, "SELECT count(*) FROM pw_live_deferred").await,
+        0
+    );
 }
 
 /// 교차 계약(M3-04): 나뉜 문장 하나 = 서버 문장 하나. 사람의 문장은 확장 프로토콜(Parse 하나에 한 문장)로만 간다 — 두 문장을 한

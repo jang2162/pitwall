@@ -167,8 +167,12 @@ pub(crate) async fn run(mut object: Object, mut commands: Commands, shared: Arc<
                 send(reply, Ok(()));
                 match manual(&tx, &mut commands, &shared).await {
                     End::Commit(reply) => {
-                        // 실패한 트랜잭션의 COMMIT 은 서버가 롤백으로 끝낸다(오류 없이). 어느 쪽이든 트랜잭션은 끝났다.
-                        let result = shared.busy(async { pg(tx.commit().await) }).await;
+                        // 실패한 트랜잭션의 COMMIT 은 서버가 롤백으로 끝낸다(오류 없이). COMMIT 이 오류면(지연 제약 등) 서버가 트랜잭션
+                        // 전체를 되돌렸다 — `rolled_back` 으로 알린다. 어느 쪽이든 트랜잭션은 끝났다.
+                        let result = shared
+                            .busy(async { pg(tx.commit().await) })
+                            .await
+                            .map_err(DbError::with_rolled_back);
                         shared.set(TransactionState::Idle);
                         send(reply, result);
                     }
