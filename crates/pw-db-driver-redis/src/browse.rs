@@ -1,7 +1,9 @@
 //! `KvConnection` 의 구현: 키 스캔(키마다 타입 · TTL · 크기 파이프라인), 타입별 값 읽기(쪽 단위, 쪽 하나 [`PAGE_BUDGET`]),
 //! TTL · 삭제 · 이름 바꾸기, 명령.
 //!
-//! 쪽 예산은 「닿으면 멈춘다」 다: 원소 수 상한이나 바이트 예산에 닿은 응답에서 쪽을 끝낸다. 서버에 묻는 원소 수를 남은 예산에
+//! 쪽 예산은 「닿으면 멈춘다」 다: 원소 수 상한이나 바이트 예산에 닿은 응답에서 쪽을 끝낸다. 바이트는 **창으로 갈 JSON 의
+//! 크기**로 센다(원소마다 `{"field":…,"value":…}` 같은 덧붙임 · hex 로 두 배가 되는 바이트 값까지 — 원본 바이트만 세면 작은
+//! 필드가 많은 hash 한 쪽이 예산의 몇 배가 된다). 서버에 묻는 원소 수를 남은 예산에
 //! 맞춰 줄이므로 넘는 것은 마지막 응답 하나뿐이다 — 번호 범위(list · zset · stream)는 정확히 그 수가 오지만 `HSCAN` ·
 //! `SSCAN` 의 `COUNT` 는 근사라 몇 개 더 올 수 있다(필드 256 KiB 의 hash 에서 쪽 하나가 4.5 MiB 쯤, 실측). 원소 하나가 예산보다
 //! 크면 그 값은 앞부분만 싣는다.
@@ -284,17 +286,19 @@ impl RedisKv {
                         let [field, value] = pair else {
                             return Err(protocol("HSCAN returned an odd list"));
                         };
-                        budget.add(field.len() + value.len());
-                        fields.push(KvField {
+                        let field = KvField {
                             field: bytes_value(field),
                             value: bytes_value(value),
-                        });
+                        };
+                        budget.add(json_len(&field));
+                        fields.push(field);
                     }
                 }
                 Scanned::Set => {
                     for member in &raw {
-                        budget.add(member.len());
-                        members.push(bytes_value(member));
+                        let member = bytes_value(member);
+                        budget.add(json_len(&member));
+                        members.push(member);
                     }
                 }
             }
@@ -350,8 +354,9 @@ impl RedisKv {
             let got = match kind {
                 Ranged::List => {
                     for item in &raw {
-                        budget.add(item.len());
-                        items.push(bytes_value(item));
+                        let item = bytes_value(item);
+                        budget.add(json_len(&item));
+                        items.push(item);
                     }
                     raw.len() as u64
                 }
@@ -360,11 +365,12 @@ impl RedisKv {
                         let [member, score] = pair else {
                             return Err(protocol("ZRANGE WITHSCORES returned an odd list"));
                         };
-                        budget.add(member.len() + score.len());
-                        scored.push(KvScored {
+                        let scored_member = KvScored {
                             member: bytes_value(member),
                             score: String::from_utf8_lossy(score).into_owned(),
-                        });
+                        };
+                        budget.add(json_len(&scored_member));
+                        scored.push(scored_member);
                     }
                     raw.len() as u64 / 2
                 }
@@ -424,9 +430,7 @@ impl RedisKv {
             let got = items.len();
             for item in items {
                 let entry = stream_entry(item)?;
-                for field in &entry.fields {
-                    budget.add(value_len(&field.field) + value_len(&field.value));
-                }
+                budget.add(json_len(&entry));
                 start = format!("({}", entry.id);
                 entries.push(entry);
             }
@@ -592,22 +596,34 @@ impl RedisKv {
     /// 키 하나를 통째로 읽는 명령의 크기를 먼저 묻는다(같은 연결, 분류 밖의 내부 명령). 상한을 넘으면 그 명령을 서버에 보내지
     /// 않고 거절한다. 묻기와 읽기 사이에 키가 커지는 경합은 받아들인다 — 그때는 응답 상한(`Truncated`)과 응답 타임아웃이 막는다.
     async fn refuse_if_too_large(&mut self, probe: console::SizeProbe) -> DbResult<()> {
-        let (command, key) = (probe.command, probe.key.clone());
-        let size = self
+        let commands = probe.commands.clone();
+        let answers = self
             .conn
             .run(|mut c| async move {
-                let mut cmd = redis::cmd(command);
-                if command == "MEMORY" {
-                    cmd.arg("USAGE");
+                let mut pipe = redis::pipe();
+                for argv in &commands {
+                    let cmd = pipe.cmd(&argv[0]);
+                    if argv[0] == "MEMORY" {
+                        cmd.arg("USAGE");
+                    }
+                    cmd.arg(&argv[1..]);
                 }
-                cmd.arg(&key).query_async::<Value>(&mut c).await
+                pipe.query_async::<Vec<Value>>(&mut c).await
             })
             .await?;
-        // 크기를 못 물으면(모듈 없음 · 권한) 막지 않는다 — 응답 상한이 남는다.
-        let Ok(Value::Int(size)) = size else {
+        // 크기를 못 물으면(모듈 없음 · 권한 · 다른 타입) 막지 않는다 — 응답 상한이 남는다. 없는 키(`nil`)는 0 이다.
+        let Ok(answers) = answers else {
             return Ok(());
         };
-        if probe.too_large(u64::try_from(size).unwrap_or(0)) {
+        let mut size = 0_u64;
+        for answer in answers {
+            match answer {
+                Value::Int(n) => size = size.saturating_add(u64::try_from(n).unwrap_or(0)),
+                Value::Nil => {}
+                _ => return Ok(()),
+            }
+        }
+        if probe.too_large(size) {
             return Err(console::too_large());
         }
         Ok(())
@@ -742,6 +758,24 @@ impl Budget {
     }
 }
 
+/// 창으로 갈 JSON 의 바이트 수(원소 사이의 `,` 하나를 더한다). 쓰지 않고 센다.
+fn json_len<T: serde::Serialize>(value: &T) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(1);
+    // 직렬화는 실패하지 않는다(문자열 열쇠 · 유한한 값뿐). 실패하면 센 데까지다.
+    let _ = serde_json::to_writer(&mut count, value);
+    count.0
+}
+
 fn key_bytes(key: &KvKey) -> DbResult<Vec<u8>> {
     key.to_bytes()
         .ok_or_else(|| DbError::new(DbErrorKind::Invalid, "the key's hex form is malformed"))
@@ -849,16 +883,6 @@ fn bulk(value: Value) -> DbValue {
             KvReply::Bulk(v) | KvReply::Int(v) => v,
             _ => DbValue::Null,
         },
-    }
-}
-
-/// 예산 계산용 값 크기(대략).
-fn value_len(value: &DbValue) -> usize {
-    match value {
-        DbValue::Text(t) => t.len(),
-        DbValue::Bytes(b) => b.size as usize,
-        DbValue::Truncated(t) => t.size as usize,
-        _ => 8,
     }
 }
 

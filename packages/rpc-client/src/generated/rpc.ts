@@ -62,16 +62,17 @@ export type UnaryMethods = {
 	 */
 	"db.kv.get": { params: DbKvGetParams; result: KvValuePage };
 	/**
-	 * TTL 을 지운다(쓰기). 키가 없거나 TTL 이 없었으면 `false`.
+	 * TTL 을 지운다(`PERSIST` 와 같은 등급 — 쓰기, 프로덕션 연결은 확인). 키가 없거나 TTL 이 없었으면 `false`.
 	 */
 	"db.kv.persist": { params: DbKvPersistParams; result: boolean };
 	/**
-	 * 이름을 바꾼다. `overwrite` 가 아니면 쓰기(`RENAMENX` — 대상이 있으면 바꾸지 않고 `targetExists`), `overwrite` 면 대상을 덮는
-	 * 「덮어쓰기」 확인(3001)이 필요하다.
+	 * 이름을 바꾼다. `overwrite` 면 `RENAME`(대상을 덮는다), 아니면 `RENAMENX`(대상이 있으면 바꾸지 않고 `targetExists`) —
+	 * 둘 다 분류대로 확인(3001)이 필요하다.
 	 */
 	"db.kv.rename": { params: DbKvRenameParams; result: KvRenameOutcome };
 	/**
-	 * TTL 을 바꾼다(쓰기 — read-only 연결은 거절, 프로덕션 연결은 확인 3001). 키가 없으면 `false`.
+	 * TTL 을 바꾼다. `PEXPIRE` 와 같은 등급 — 확인(3001)이 필요하다(짧은 TTL 은 지우기와 같다). read-only 연결은 거절. 키가
+	 * 없으면 `false`.
 	 */
 	"db.kv.setTtl": { params: DbKvSetTtlParams; result: boolean };
 	/**
@@ -754,10 +755,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.kv.command": {"name":"db.kv.command","kind":"unary","tier":"exec","roles":["owner"],"params":"DbKvCommandParams","output":"KvReply","doc":" 명령 하나(콘솔). 분류(`pw_db_sql::kv_command`)로 관문을 지난다 — 거절 명령은 permission denied(`data.reason =\n \"blockedCommand\"`, `data.block` 은 `notAllowed` · `blocking` · `scanCount`), read-only 연결은 읽기만, 확인 명령은 3001.\n 키를 통째로 읽는 큰 명령은 드라이버가 보내기 전에 거절하고(3003, `data.error.code = \"KEY_TOO_LARGE\"`), 큰 응답은\n `truncated` 로 끊는다.\n","mcp":false,"fileScope":false},
 	"db.kv.delete": {"name":"db.kv.delete","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvDeleteParams","output":"DbKvDeleted","doc":" 키를 지운다(확인 3001 이 필요하다 — `DEL` 과 같은 등급). 지운 수를 돌려준다.\n","mcp":false,"fileScope":false},
 	"db.kv.get": {"name":"db.kv.get","kind":"unary","tier":"read","roles":["owner"],"params":"DbKvGetParams","output":"KvValuePage","doc":" 값 한 쪽(타입별, 쪽 하나 4 MiB 예산). 키가 없으면 `value` 가 `missing`.\n","mcp":false,"fileScope":false},
-	"db.kv.persist": {"name":"db.kv.persist","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvPersistParams","output":"bool","doc":" TTL 을 지운다(쓰기). 키가 없거나 TTL 이 없었으면 `false`.\n","mcp":false,"fileScope":false},
-	"db.kv.rename": {"name":"db.kv.rename","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvRenameParams","output":"KvRenameOutcome","doc":" 이름을 바꾼다. `overwrite` 가 아니면 쓰기(`RENAMENX` — 대상이 있으면 바꾸지 않고 `targetExists`), `overwrite` 면 대상을 덮는\n 「덮어쓰기」 확인(3001)이 필요하다.\n","mcp":false,"fileScope":false},
+	"db.kv.persist": {"name":"db.kv.persist","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvPersistParams","output":"bool","doc":" TTL 을 지운다(`PERSIST` 와 같은 등급 — 쓰기, 프로덕션 연결은 확인). 키가 없거나 TTL 이 없었으면 `false`.\n","mcp":false,"fileScope":false},
+	"db.kv.rename": {"name":"db.kv.rename","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvRenameParams","output":"KvRenameOutcome","doc":" 이름을 바꾼다. `overwrite` 면 `RENAME`(대상을 덮는다), 아니면 `RENAMENX`(대상이 있으면 바꾸지 않고 `targetExists`) —\n 둘 다 분류대로 확인(3001)이 필요하다.\n","mcp":false,"fileScope":false},
 	"db.kv.scan": {"name":"db.kv.scan","kind":"stream","tier":"read","roles":["owner"],"params":"DbKvScanParams","output":"DbKvScanEvent","doc":" 키를 묶음으로 찾는다(스트림, `SCAN` + 묶음마다 타입 · TTL · 크기). 항목은 `accepted` → `keys` … → `done`. 그 세션을 연 프로젝트\n 창만 · 신뢰 · 연결 설정이 연 때와 같음. 취소는 `db.query.cancel { executionId }` 나 스트림 취소.\n","mcp":false,"fileScope":false},
-	"db.kv.setTtl": {"name":"db.kv.setTtl","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvSetTtlParams","output":"bool","doc":" TTL 을 바꾼다(쓰기 — read-only 연결은 거절, 프로덕션 연결은 확인 3001). 키가 없으면 `false`.\n","mcp":false,"fileScope":false},
+	"db.kv.setTtl": {"name":"db.kv.setTtl","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvSetTtlParams","output":"bool","doc":" TTL 을 바꾼다. `PEXPIRE` 와 같은 등급 — 확인(3001)이 필요하다(짧은 TTL 은 지우기와 같다). read-only 연결은 거절. 키가\n 없으면 `false`.\n","mcp":false,"fileScope":false},
 	"db.query.cancel": {"name":"db.query.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"DbQueryCancelParams","output":"()","doc":" 실행을 취소한다(드라이버 인터럽트). 그 세션을 연 프로젝트 창만. SQLite 수동 트랜잭션 안의 쓰기면 `confirmRollback` 없이는\n 3002. 끝난 실행이면 아무것도 하지 않는다.\n","mcp":false,"fileScope":false},
 	"db.query.execute": {"name":"db.query.execute","kind":"stream","tier":"exec","roles":["owner"],"params":"DbQueryExecuteParams","output":"DbQueryEvent","doc":" 세션에서 문장들을 돌린다(스트림). 관문: 그 세션을 연 프로젝트 창만 · 신뢰 · 연결 설정이 연 때와 같음 · 등급 정책(확인이\n 필요하면 3001, read-only 연결은 조회 밖을 거절). 항목은 `accepted` → 문장마다 `started` → `columns` → `rows` … →\n `done` | `error`.\n","mcp":false,"fileScope":false},
 	"db.query.page": {"name":"db.query.page","kind":"unary","tier":"exec","roles":["owner"],"params":"DbQueryPageParams","output":"DbQueryPage","doc":" 쪽 단위 조회(스트림이 아니다): 조회 문장 하나를 새 연결의 읽기 전용 트랜잭션 안에서 `limit` 행까지. 조회가 아니면 거절.\n","mcp":false,"fileScope":false},
@@ -1525,8 +1526,11 @@ export type DbKvCommandParams = {
 export type DbKvConfirmRequired = {
 	grade: RiskGrade,
 	action: DbKvAction,
-	/**  서버에 갈 명령(보이기용 — UTF-8 이 아닌 키는 `0x…`). 지울 키가 많으면 모두 싣는다(상한 10,000). */
-	argv: string[],
+	/**
+	 *  서버에 갈 명령(보이기용). 인자마다 UTF-8 이면 글 그대로, 아니면 `{ "hex": "0x…" }` — 글 `"0xff"` 와 바이트 `0xff` 를
+	 *  가른다. 지울 키가 많으면 모두 싣는다(상한 10,000).
+	 */
+	argv: KvKey[],
 	statementsHash: string,
 	/**  연결 이름을 쳐야 한다(프로덕션 연결의 파괴 등급 — Redis 분류에는 아직 파괴 등급이 없다). */
 	nameRequired: boolean,

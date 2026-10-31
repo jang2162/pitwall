@@ -214,6 +214,29 @@ impl Conn {
         }
     }
 
+    /// 앞서 `session.handle_value` 로 직접 보낸 요청 `id` 의 답(그사이 받은 다른 것은 남겨 둔다).
+    pub async fn response(&mut self, id: i64) -> Result<Value, RpcError> {
+        let ours =
+            |msg: &Outbound| matches!(msg, Outbound::Response(r) if r.id == pw_rpc::Id::Number(id));
+        if let Some(at) = self.pending.iter().position(ours)
+            && let Some(Outbound::Response(response)) = self.pending.remove(at)
+        {
+            return response.outcome;
+        }
+        loop {
+            let msg = tokio::time::timeout(Duration::from_secs(5), self.rx.recv())
+                .await
+                .expect("no response")
+                .expect("closed");
+            match msg {
+                Outbound::Response(response) if response.id == pw_rpc::Id::Number(id) => {
+                    return response.outcome;
+                }
+                other => self.pending.push_back(other),
+            }
+        }
+    }
+
     /// 스트림 메서드를 연다. 열리면 스트림 id.
     pub async fn start(&mut self, method: &str, params: Value) -> Result<u64, RpcError> {
         let opened = self.call(method, params).await?;

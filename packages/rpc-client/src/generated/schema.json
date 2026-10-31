@@ -4890,7 +4890,7 @@
       "tier": "read"
     },
     "db.kv.persist": {
-      "description": "TTL 을 지운다(쓰기). 키가 없거나 TTL 이 없었으면 `false`.",
+      "description": "TTL 을 지운다(`PERSIST` 와 같은 등급 — 쓰기, 프로덕션 연결은 확인). 키가 없거나 TTL 이 없었으면 `false`.",
       "kind": "unary",
       "params": {
         "$defs": {
@@ -5009,7 +5009,7 @@
       "tier": "write"
     },
     "db.kv.rename": {
-      "description": "이름을 바꾼다. `overwrite` 가 아니면 쓰기(`RENAMENX` — 대상이 있으면 바꾸지 않고 `targetExists`), `overwrite` 면 대상을 덮는\n「덮어쓰기」 확인(3001)이 필요하다.",
+      "description": "이름을 바꾼다. `overwrite` 면 `RENAME`(대상을 덮는다), 아니면 `RENAMENX`(대상이 있으면 바꾸지 않고 `targetExists`) —\n둘 다 분류대로 확인(3001)이 필요하다.",
       "kind": "unary",
       "params": {
         "$defs": {
@@ -5351,7 +5351,7 @@
       "tier": "read"
     },
     "db.kv.setTtl": {
-      "description": "TTL 을 바꾼다(쓰기 — read-only 연결은 거절, 프로덕션 연결은 확인 3001). 키가 없으면 `false`.",
+      "description": "TTL 을 바꾼다. `PEXPIRE` 와 같은 등급 — 확인(3001)이 필요하다(짧은 TTL 은 지우기와 같다). read-only 연결은 거절. 키가\n없으면 `false`.",
       "kind": "unary",
       "params": {
         "$defs": {

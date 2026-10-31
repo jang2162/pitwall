@@ -281,7 +281,8 @@ async fn reads_between_do_not_spend_a_confirmation() {
     assert_eq!(deleted["deleted"], 1);
 }
 
-/// `db.kv.delete` 와 덮는 `db.kv.rename` 은 확인이 필요하다. 덮지 않는 이름 바꾸기는 대상이 있으면 바꾸지 않고 `targetExists`.
+/// `db.kv.delete` 와 `db.kv.rename` 은 분류(`DEL` · `RENAME` · `RENAMENX`)대로 확인이 필요하다. 덮지 않는 이름 바꾸기는
+/// 대상이 있으면 바꾸지 않고 `targetExists`. 확인 데이터의 명령은 글과 바이트를 가른다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_and_overwriting_rename_need_a_confirmation() {
     let e = env(true);
@@ -301,7 +302,7 @@ async fn delete_and_overwriting_rename_need_a_confirmation() {
         .unwrap_err();
     let data = confirm_data(&err);
     assert_eq!(data["action"], "delete");
-    assert_eq!(data["argv"], json!(["DEL", "a", "0xff01"]));
+    assert_eq!(data["argv"], json!(["DEL", "a", { "hex": "0xff01" }]));
     assert_eq!(e.reached(), vec![]);
     let deleted = w
         .call(
@@ -313,12 +314,33 @@ async fn delete_and_overwriting_rename_need_a_confirmation() {
     assert_eq!(deleted["deleted"], 2);
     assert!(e.kv.get(3, &[0xff, 0x01]).is_none());
 
-    // 덮지 않는 이름 바꾸기: 쓰기 — 확인 없이 돌고, 대상이 있으면 그대로 둔다.
+    // 덮지 않는 이름 바꾸기(`RENAMENX`)도 분류대로 확인이다. 확인을 받으면 돌고, 대상이 있으면 그대로 둔다.
     e.seed("c", "3");
-    let outcome = w
+    let before = e.reached().len();
+    let err = w
         .call(
             "db.kv.rename",
             json!({ "sessionId": s, "from": "c", "to": "b" }),
+        )
+        .await
+        .unwrap_err();
+    let nx = confirm_data(&err);
+    assert_eq!(nx["argv"], json!(["RENAMENX", "c", "b"]));
+    assert_eq!(e.reached().len(), before);
+    // 덮지 않는 것에 받은 확인은 덮는 것에 맞지 않는다(같은 키라도).
+    let err = w
+        .call(
+            "db.kv.rename",
+            json!({ "sessionId": s, "from": "c", "to": "b", "overwrite": true,
+                    "confirmed": confirmed_from(&nx) }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(confirm_data(&err)["rejected"], "hashMismatch");
+    let outcome = w
+        .call(
+            "db.kv.rename",
+            json!({ "sessionId": s, "from": "c", "to": "b", "confirmed": confirmed_from(&nx) }),
         )
         .await
         .unwrap();
@@ -336,7 +358,6 @@ async fn delete_and_overwriting_rename_need_a_confirmation() {
     assert_eq!(data["action"], "rename");
     assert_eq!(data["argv"], json!(["RENAME", "c", "b"]));
     assert_eq!(e.reached().len(), before);
-    // 덮지 않는 것에 받은 확인은 덮는 것에 맞지 않는다(같은 키라도).
     let outcome = w
         .call(
             "db.kv.rename",
@@ -402,7 +423,7 @@ async fn a_read_only_connection_runs_reads_only() {
     assert_eq!(page["value"]["string"]["text"], "1", "{page}");
 }
 
-/// 프로덕션 연결은 조회 밖을 모두 확인한다(결정 M3-D20) — 확인이 필요 없는 쓰기(`SET` · TTL)도.
+/// 프로덕션 연결은 조회 밖을 모두 확인한다(결정 M3-D20) — 확인이 필요 없는 쓰기(`SET` · `PERSIST`)도.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_production_connection_confirms_every_write() {
     let e = env(true);
@@ -417,30 +438,28 @@ async fn a_production_connection_confirms_every_write() {
     assert_eq!(data["grade"], "write");
     assert_eq!(data["nameRequired"], false);
     let err = w
-        .call(
-            "db.kv.setTtl",
-            json!({ "sessionId": s, "key": "a", "ttlMs": 5000 }),
-        )
+        .call("db.kv.persist", json!({ "sessionId": s, "key": "a" }))
         .await
         .unwrap_err();
-    let ttl = confirm_data(&err);
-    assert_eq!(ttl["action"], "setTtl");
+    let persist = confirm_data(&err);
+    assert_eq!(persist["action"], "persist");
+    assert_eq!(persist["grade"], "write");
     assert_eq!(e.reached(), vec![]);
     w.call(
-        "db.kv.setTtl",
-        json!({ "sessionId": s, "key": "a", "ttlMs": 5000, "confirmed": confirmed_from(&ttl) }),
+        "db.kv.persist",
+        json!({ "sessionId": s, "key": "a", "confirmed": confirmed_from(&persist) }),
     )
     .await
     .unwrap();
     assert_eq!(
         e.reached(),
-        vec![FakeKvCall::SetTtl(KvKey::Text("a".into()), 5000)]
+        vec![FakeKvCall::Persist(KvKey::Text("a".into()))]
     );
     // 읽기는 그대로.
     w.call("db.kv.command", command(&s, "GET a")).await.unwrap();
 }
 
-/// 자동 커밋 연결의 쓰기는 확인 없이 돈다. TTL 은 1 이상이어야 한다.
+/// 프로덕션이 아닌 연결의 쓰기(`SET` · `PERSIST`)는 확인 없이 돈다. TTL 은 1 이상이어야 한다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plain_writes_run_without_a_confirmation() {
     let e = env(true);
@@ -451,19 +470,15 @@ async fn plain_writes_run_without_a_confirmation() {
         .await
         .unwrap();
     assert_eq!(e.kv.get(3, b"a"), Some(FakeKvValue::String(b"2".to_vec())));
-    let set = w
-        .call(
-            "db.kv.setTtl",
-            json!({ "sessionId": s, "key": "a", "ttlMs": 9000 }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(set, true);
     let dropped = w
         .call("db.kv.persist", json!({ "sessionId": s, "key": "a" }))
         .await
         .unwrap();
-    assert_eq!(dropped, true);
+    assert_eq!(dropped, false, "the key has no TTL to drop");
+    assert!(
+        e.reached()
+            .contains(&FakeKvCall::Persist(KvKey::Text("a".into())))
+    );
     let err = w
         .call(
             "db.kv.setTtl",
@@ -472,6 +487,55 @@ async fn plain_writes_run_without_a_confirmation() {
         .await
         .unwrap_err();
     assert_eq!(err.code, rpc_code::INVALID_PARAMS);
+}
+
+/// M3-22 리뷰 H1: `db.kv.setTtl` 은 같은 효과의 `PEXPIRE` 와 같은 분류 — 같은 등급의 확인(3001)이 필요하고, 확인 전에는 드라이버에
+/// 닿지 않는다(1 ms 는 지우기와 같다). 받은 확인은 그 TTL 에 묶인다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_ttl_takes_the_confirmation_of_pexpire() {
+    let e = env(true);
+    e.seed("a", "1");
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "cache").await;
+    let err = w
+        .call("db.kv.command", command(&s, "PEXPIRE a 1"))
+        .await
+        .unwrap_err();
+    let pexpire = confirm_data(&err);
+    let err = w
+        .call(
+            "db.kv.setTtl",
+            json!({ "sessionId": s, "key": "a", "ttlMs": 1 }),
+        )
+        .await
+        .unwrap_err();
+    let ttl = confirm_data(&err);
+    assert_eq!(ttl["grade"], pexpire["grade"]);
+    assert_eq!(ttl["action"], "setTtl");
+    assert_eq!(ttl["argv"], json!(["PEXPIRE", "a", "1"]));
+    assert_eq!(e.reached(), vec![], "a TTL reached the driver unconfirmed");
+    assert_eq!(e.kv.get(3, b"a"), Some(FakeKvValue::String(b"1".to_vec())));
+    // 다른 TTL 에는 맞지 않는다.
+    let err = w
+        .call(
+            "db.kv.setTtl",
+            json!({ "sessionId": s, "key": "a", "ttlMs": 2, "confirmed": confirmed_from(&ttl) }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(confirm_data(&err)["rejected"], "hashMismatch");
+    let set = w
+        .call(
+            "db.kv.setTtl",
+            json!({ "sessionId": s, "key": "a", "ttlMs": 1, "confirmed": confirmed_from(&ttl) }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(set, true);
+    assert_eq!(
+        e.reached(),
+        vec![FakeKvCall::SetTtl(KvKey::Text("a".into()), 1)]
+    );
 }
 
 /// 완료 기준 ④: 다른 프로젝트 창 · 웰컴(Host 범위) · 파일 창은 세션 id 를 알아도 `db.kv.*` 를 쓸 수 없고 드라이버에 닿지 않는다.
@@ -687,10 +751,7 @@ async fn a_scan_stops_on_db_query_cancel_from_its_own_window_only() {
         StreamOutcome::Failed { error } => assert_eq!(error.code, rpc_code::CANCELLED),
         outcome => panic!("{outcome:?}"),
     }
-    assert!(
-        e.kv.calls().contains(&FakeKvCall::Interrupt),
-        "no driver interrupt"
-    );
+    // credit 을 기다리는 동안은 드라이버에서 도는 요청이 없다 — 인터럽트는 보내지 않는다(실행에 묶인다, 아래 시험).
     let scans =
         e.kv.calls()
             .iter()
@@ -704,9 +765,10 @@ async fn a_scan_stops_on_db_query_cancel_from_its_own_window_only() {
     w.call("db.kv.command", command(&s, "PING")).await.unwrap();
 }
 
-/// 단항 요청은 요청 취소(`request.cancel`)가 드라이버를 인터럽트하고, 같은 세션의 다음 요청이 곧바로 돈다.
+/// 단항 요청의 요청 취소(`request.cancel`)는 드라이버 호출을 버린다 — 같은 세션의 다음 요청이 곧바로 돈다(Redis 드라이버는
+/// 그때 연결을 버린다, `kv_live.rs` 의 실 Redis 시험). 버린 요청 몫의 늦은 인터럽트는 없다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_request_cancel_interrupts_a_hanging_command() {
+async fn a_request_cancel_frees_the_session_at_once() {
     let e = env(true);
     e.kv.hang_on("GET");
     let mut w = e.f.window();
@@ -722,17 +784,68 @@ async fn a_request_cancel_interrupts_a_hanging_command() {
     w.session.handle_value(json!({
         "jsonrpc": "2.0", "method": "request.cancel", "params": { "id": 900 },
     }));
-    wait_until("the driver interrupt", || {
-        e.kv.calls().contains(&FakeKvCall::Interrupt)
-    })
-    .await;
     // 연결 잠금이 풀려 다음 요청이 곧바로 돈다.
     let pong = w.call("db.kv.command", command(&s, "PING")).await.unwrap();
     assert_eq!(pong["status"], "PONG");
     assert!(started.elapsed() < Duration::from_secs(1));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!e.kv.calls().contains(&FakeKvCall::Interrupt));
 }
 
-/// 창이 닫히면 그 창의 KV 세션은 닫히고, 도는 요청은 응답 타임아웃을 기다리지 않고 곧바로 인터럽트된다.
+/// M3-22 리뷰 M2: 취소는 실행에 묶인다 — credit 을 기다리는(드라이버에서 돌지 않는) 스캔을 `db.query.cancel` 로 끄면, 같은
+/// 세션에서 도는 무관한 요청은 인터럽트되지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_an_idle_scan_leaves_the_running_request_alone() {
+    let e = env(true);
+    for i in 0..500 {
+        e.seed(&format!("k{i}"), "x");
+    }
+    e.kv.hang_on("GET");
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "cache").await;
+    let stream = w
+        .start("db.kv.scan", json!({ "sessionId": s, "count": 10 }))
+        .await
+        .unwrap();
+    w.credit(stream, 2);
+    let StreamMsg::Chunk(accepted) = w.next(stream).await else {
+        panic!("accepted")
+    };
+    let execution = accepted["executionId"].as_str().unwrap().to_owned();
+    let _ = w.next(stream).await;
+    // 스캔은 credit 을 기다린다. 같은 세션의 GET 이 드라이버에서 돈다.
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "id": 902, "method": "db.kv.command", "params": command(&s, "GET a"),
+    }));
+    wait_until("the GET to reach the driver", || {
+        e.kv.commands().iter().any(|c| c[0] == "GET")
+    })
+    .await;
+    w.call("db.query.cancel", json!({ "executionId": execution }))
+        .await
+        .unwrap();
+    let outcome = loop {
+        match w.next(stream).await {
+            StreamMsg::Chunk(_) => {}
+            StreamMsg::End(outcome) => break outcome,
+        }
+    };
+    assert!(
+        matches!(outcome, StreamOutcome::Failed { error } if error.code == rpc_code::CANCELLED)
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !e.kv.calls().contains(&FakeKvCall::Interrupt),
+        "the scan's cancel interrupted the GET"
+    );
+    // GET 은 그대로 돈다 — 세션을 닫으면 그것이 멈춘다.
+    w.call("db.session.close", json!({ "sessionId": s }))
+        .await
+        .unwrap();
+    assert!(e.kv.calls().contains(&FakeKvCall::Interrupt));
+}
+
+/// 창이 닫히면 그 창의 KV 세션은 닫히고, 도는 요청은 응답 타임아웃을 기다리지 않고 곧바로 끝난다(창의 요청이 버려진다).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn closing_the_window_interrupts_a_hanging_command_at_once() {
     let e = env(true);
@@ -751,7 +864,6 @@ async fn closing_the_window_interrupts_a_hanging_command_at_once() {
     drop(w);
     wait_until("the session to close", || e.sessions.session_count() == 0).await;
     assert!(started.elapsed() < Duration::from_secs(1));
-    assert!(e.kv.calls().contains(&FakeKvCall::Interrupt));
     wait_until("the connection to close", || {
         e.kv.calls().contains(&FakeKvCall::Close)
     })
@@ -829,4 +941,58 @@ async fn get_reads_a_page_of_a_value() {
         .await
         .unwrap_err();
     assert_eq!(err.code, rpc_code::INVALID_PARAMS);
+}
+
+/// M3-22 리뷰 L4: 긴 스캔은 묶음마다 관문을 다시 본다 — 신뢰를 거두면 다음 묶음에서 `untrusted` 로 끝난다. credit 을 기다리던
+/// 스캔은 `db.session.close` 로도 곧바로 끝난다(창이 스트림을 끊기를 기다리지 않는다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_scan_rechecks_the_gate_at_every_batch() {
+    let e = env(true);
+    for i in 0..500 {
+        e.seed(&format!("k{i}"), "x");
+    }
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "cache").await;
+    let stream = w
+        .start("db.kv.scan", json!({ "sessionId": s, "count": 10 }))
+        .await
+        .unwrap();
+    w.credit(stream, 2);
+    let _ = w.next(stream).await;
+    let StreamMsg::Chunk(first) = w.next(stream).await else {
+        panic!("keys")
+    };
+    assert_eq!(first["kind"], "keys");
+    e.f.projects.set_trust(&e.f.id, false).unwrap();
+    let (_, outcome) = w.collect(stream).await;
+    match outcome {
+        StreamOutcome::Failed { error } => assert!(denied(&error, "untrusted"), "{error:?}"),
+        outcome => panic!("the scan went on after the trust was revoked: {outcome:?}"),
+    }
+    let scans =
+        e.kv.calls()
+            .iter()
+            .filter(|c| matches!(c, FakeKvCall::Scan { .. }))
+            .count();
+    assert!(scans <= 3, "{scans} batches");
+
+    e.f.projects.set_trust(&e.f.id, true).unwrap();
+    let s = e.open(&mut w, "cache").await;
+    let stream = w
+        .start("db.kv.scan", json!({ "sessionId": s, "count": 10 }))
+        .await
+        .unwrap();
+    w.credit(stream, 2);
+    let _ = w.next(stream).await;
+    let _ = w.next(stream).await;
+    let started = Instant::now();
+    w.call("db.session.close", json!({ "sessionId": s }))
+        .await
+        .unwrap();
+    let ended = w.next_in(stream, Duration::from_secs(1)).await;
+    assert!(
+        matches!(ended, Some(StreamMsg::End(StreamOutcome::Failed { .. }))),
+        "{ended:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
 }

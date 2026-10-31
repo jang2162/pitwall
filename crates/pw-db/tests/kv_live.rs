@@ -432,7 +432,8 @@ async fn live_redis_the_first_scan_chunk_of_a_million_keys_is_fast() {
     assert!(best < Duration::from_millis(200), "{best:?}");
 }
 
-/// 전용 메서드가 실 서버에서: 값 쪽 읽기, TTL 바꾸기 · 지우기, 덮지 않는 이름 바꾸기의 `targetExists`, 덮는 이름 바꾸기는 확인 뒤에만.
+/// 전용 메서드가 실 서버에서: 값 쪽 읽기, TTL 바꾸기(`PEXPIRE` 의 확인 뒤) · 지우기, 덮지 않는 이름 바꾸기(`RENAMENX` 의 확인 뒤)의
+/// `targetExists`, 덮는 이름 바꾸기는 확인 뒤에만.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_redis_the_key_methods_change_the_server_only_through_the_gate() {
     let e = env(13);
@@ -449,13 +450,8 @@ async fn live_redis_the_key_methods_change_the_server_only_through_the_gate() {
         .await
         .unwrap();
     assert_eq!(page["value"]["string"]["text"], "alpha", "{page}");
-    let set = w
-        .call(
-            "db.kv.setTtl",
-            json!({ "sessionId": s, "key": "m:a", "ttlMs": 600000 }),
-        )
-        .await
-        .unwrap();
+    let ttl = json!({ "sessionId": s, "key": "m:a", "ttlMs": 600000 });
+    let set = call_confirmed(&mut w, "db.kv.setTtl", ttl).await;
     assert_eq!(set, true);
     assert!(int(&run(&mut admin, "PTTL m:a").await) > 0);
     let persisted = w
@@ -465,13 +461,8 @@ async fn live_redis_the_key_methods_change_the_server_only_through_the_gate() {
     assert_eq!(persisted, true);
     assert_eq!(int(&run(&mut admin, "PTTL m:a").await), -1);
 
-    let outcome = w
-        .call(
-            "db.kv.rename",
-            json!({ "sessionId": s, "from": "m:a", "to": "m:b" }),
-        )
-        .await
-        .unwrap();
+    let rename = json!({ "sessionId": s, "from": "m:a", "to": "m:b" });
+    let outcome = call_confirmed(&mut w, "db.kv.rename", rename).await;
     assert_eq!(outcome, "targetExists");
     let err = w
         .call(
@@ -500,4 +491,346 @@ async fn live_redis_the_key_methods_change_the_server_only_through_the_gate() {
     };
     assert_eq!(b, "alpha");
     assert_eq!(int(&run(&mut admin, "EXISTS m:a").await), 0);
+}
+
+/// 확인(3001)을 받고 그 해시로 다시 부른다. 확인 전에는 서버에 닿지 않는다(부르는 쪽이 본다).
+async fn call_confirmed(w: &mut Conn, method: &str, mut params: Value) -> Value {
+    let err = w.call(method, params.clone()).await.unwrap_err();
+    assert_eq!(err.code, code::CONFIRM_REQUIRED, "{method}: {err:?}");
+    let data = err.data.unwrap();
+    params["confirmed"] =
+        json!({ "grade": data["grade"], "statementsHash": data["statementsHash"] });
+    w.call(method, params).await.unwrap()
+}
+
+/// 관문을 거치지 않는 준비용 명령(argv 그대로 — `EVAL` 의 스크립트처럼 공백이 든 인자).
+async fn run_argv(conn: &mut Box<dyn KvConnection>, argv: &[&str]) -> KvReply {
+    conn.command(argv.iter().map(|a| (*a).to_owned()).collect())
+        .await
+        .unwrap()
+}
+
+/// 키 `key` 가 `n` 개의 원소를 갖게 서버에서 채운다(이미 그 크기면 그대로). `kind` 는 `set` · `hash` · `stream` · `list`.
+async fn fill(conn: &mut Box<dyn KvConnection>, kind: &str, key: &str, n: i64) {
+    let (length, script) = match kind {
+        "set" => (
+            "SCARD",
+            "for i=1,tonumber(ARGV[1]),1000 do local t={} for j=i,math.min(i+999,tonumber(ARGV[1])) do t[#t+1]=j end redis.call('SADD',KEYS[1],unpack(t)) end",
+        ),
+        "hash" => (
+            "HLEN",
+            "for i=1,tonumber(ARGV[1]),500 do local t={} for j=i,math.min(i+499,tonumber(ARGV[1])) do t[#t+1]=j t[#t+1]='v' end redis.call('HSET',KEYS[1],unpack(t)) end",
+        ),
+        "stream" => (
+            "XLEN",
+            "for i=1,tonumber(ARGV[1]) do redis.call('XADD',KEYS[1],i..'-1','f','v') end",
+        ),
+        _ => panic!("{kind}"),
+    };
+    if int(&run_argv(conn, &[length, key]).await) == n {
+        return;
+    }
+    run_argv(conn, &["DEL", key]).await;
+    run_argv(conn, &["EVAL", script, "1", key, &n.to_string()]).await;
+    assert_eq!(int(&run_argv(conn, &[length, key]).await), n);
+}
+
+/// M3-22 리뷰 H1: `db.kv.setTtl` 은 `PEXPIRE` 와 같은 확인(3001)을 받는다 — `ttlMs: 1` 은 확인 없이 키를 지우지 않는다(서버에
+/// 닿지 않는다). 확인을 받은 뒤에만 그 TTL 이 걸린다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_set_ttl_needs_the_confirmation_of_pexpire() {
+    let e = env(13);
+    let mut admin = e.admin().await;
+    // ② 와 같은 DB 라 지우지 않고 자기 키만 쓴다.
+    run(&mut admin, "SET h1:victim 1").await;
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "r").await;
+    let pexpire = w
+        .call("db.kv.command", command(&s, "PEXPIRE h1:victim 1"))
+        .await
+        .unwrap_err();
+    assert_eq!(pexpire.code, code::CONFIRM_REQUIRED, "{pexpire:?}");
+    let err = w
+        .call(
+            "db.kv.setTtl",
+            json!({ "sessionId": s, "key": "h1:victim", "ttlMs": 1 }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, code::CONFIRM_REQUIRED, "{err:?}");
+    let data = err.data.unwrap();
+    assert_eq!(data["grade"], pexpire.data.unwrap()["grade"]);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(
+        int(&run(&mut admin, "EXISTS h1:victim").await),
+        1,
+        "setTtl 1 ms deleted the key without a confirmation"
+    );
+    assert_eq!(int(&run(&mut admin, "PTTL h1:victim").await), -1);
+    let set = w
+        .call(
+            "db.kv.setTtl",
+            json!({ "sessionId": s, "key": "h1:victim", "ttlMs": 1,
+                    "confirmed": { "grade": data["grade"], "statementsHash": data["statementsHash"] } }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(set, true);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(int(&run(&mut admin, "EXISTS h1:victim").await), 0);
+}
+
+/// M3-22 리뷰 H2 · M3: 중첩 응답은 원소 · 바이트를 중첩 전체로 세어 끊는다(`XREAD` 는 맨 위 원소가 stream 하나뿐이다). `COUNT` 로
+/// 묶지 않은 `XREAD` 는 stream 길이를 먼저 물어 서버에 보내지 않는다(리뷰어 재현: 항목 20만 개 stream 이 20 MB 로 갔다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_a_nested_reply_is_cut_at_the_reply_limits() {
+    const ENTRIES: i64 = 200_000;
+    let e = env(13);
+    let mut admin = e.admin().await;
+    fill(&mut admin, "stream", "h2:st", ENTRIES).await;
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "r").await;
+
+    let xread = calls_of(&mut admin, "xread").await;
+    let err = w
+        .call("db.kv.command", command(&s, "XREAD STREAMS h2:st 0"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.data.unwrap()["error"]["code"], "KEY_TOO_LARGE");
+    assert_eq!(
+        calls_of(&mut admin, "xread").await,
+        xread,
+        "the unbounded XREAD reached the server"
+    );
+
+    // 묶인 `XREAD`(COUNT 9000 — 맨 위 원소 하나, 중첩 원소 45,003개)는 서버에 가고 응답 상한에서 끊긴다.
+    let started = Instant::now();
+    let reply = w
+        .call(
+            "db.kv.command",
+            command(&s, "XREAD COUNT 9000 STREAMS h2:st 0"),
+        )
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+    let json = serde_json::to_vec(&reply).unwrap().len();
+    let cut = &reply["truncated"];
+    assert_eq!(
+        cut["elements"],
+        1 + 2 + 9_000 * 5,
+        "{}",
+        &reply.to_string()[..200]
+    );
+    assert!(json < 2 * 1024 * 1024, "{json} bytes went to the window");
+    println!("bounded XREAD of a {ENTRIES}-entry stream: {elapsed:?}, {json} JSON bytes");
+}
+
+/// M3-22 리뷰 M3: 응답을 부풀리는 읽기(음수 count 의 `SRANDMEMBER`)와 키를 통째로 읽는 `GETRANGE 0 -1` · `DUMP` 는 크기를
+/// 먼저 물어 서버에 보내지 않는다(`KEY_TOO_LARGE`). 상한 안의 것은 돈다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_amplifying_and_whole_reads_are_refused_before_the_server() {
+    let e = env(13);
+    let mut admin = e.admin().await;
+    run(&mut admin, "DEL m3:tiny").await;
+    run(&mut admin, "SADD m3:tiny x").await;
+    let big = "y".repeat(8 * 1024 * 1024);
+    run_argv(&mut admin, &["SET", "m3:big", &big]).await;
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "r").await;
+    let (srandmember, dump) = (
+        calls_of(&mut admin, "srandmember").await,
+        calls_of(&mut admin, "dump").await,
+    );
+    for text in [
+        "SRANDMEMBER m3:tiny -2000000",
+        "GETRANGE m3:big 0 -1",
+        "GETRANGE m3:big 0 5000000",
+        "DUMP m3:big",
+    ] {
+        let err = w
+            .call("db.kv.command", command(&s, text))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.data.as_ref().unwrap()["error"]["code"],
+            "KEY_TOO_LARGE",
+            "{text}: {err:?}"
+        );
+    }
+    assert_eq!(calls_of(&mut admin, "srandmember").await, srandmember);
+    assert_eq!(calls_of(&mut admin, "dump").await, dump);
+    // 상한 안이면 돈다.
+    let reply = w
+        .call("db.kv.command", command(&s, "SRANDMEMBER m3:tiny -3"))
+        .await
+        .unwrap();
+    assert_eq!(reply["array"].as_array().unwrap().len(), 3, "{reply}");
+    let reply = w
+        .call("db.kv.command", command(&s, "GETRANGE m3:big 0 9"))
+        .await
+        .unwrap();
+    assert_eq!(reply["bulk"]["text"], "yyyyyyyyyy", "{reply}");
+    run(&mut admin, "DEL m3:big").await;
+}
+
+/// M3-22 리뷰 M1: 요청 취소는 그 연결을 버린다 — 버린 응답 뒤에 다음 요청이 서지 않고, 새 연결은 그 DB 번호로 다시 붙는다.
+/// 리뷰어 재현(큰 응답을 취소한 뒤 같은 세션의 `PING` 3,565 ms)이 빠른 응답이 된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_a_cancelled_request_does_not_hold_up_the_next() {
+    let e = env(13);
+    let mut admin = e.admin().await;
+    fill(&mut admin, "set", "m1:big", 1_500_000).await;
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "r").await;
+    let connections = info_field(&mut admin, "stats", "total_connections_received").await;
+    // 서버 전체의 호출 수로 「서버가 마쳤다」 를 본다 — 다른 시험이 쓰지 않는 명령이다.
+    let sdiff = calls_of(&mut admin, "sdiff").await;
+    // 키 하나를 통째로 읽는 `SDIFF`(크기 사전 확인 목록 밖 — 응답 상한이 끊는다): 응답 150만 원소. 서버가 명령을 마친 뒤(응답을
+    // 보내고 Host 가 받아 읽는 중) 취소한다 — 그 뒤의 기다림은 서버가 아니라 버린 응답 몫이다.
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "id": 900, "method": "db.kv.command",
+        "params": command(&s, "SDIFF m1:big"),
+    }));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while calls_of(&mut admin, "sdiff").await == sdiff {
+        assert!(Instant::now() < deadline, "SDIFF never ran");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "method": "request.cancel", "params": { "id": 900 },
+    }));
+    let started = Instant::now();
+    let pong = w.call("db.kv.command", command(&s, "PING")).await.unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(pong["status"], "PONG");
+    println!("PING after a cancelled 1.5M-element reply: {elapsed:?}");
+    assert!(elapsed < Duration::from_millis(500), "{elapsed:?}");
+    assert!(
+        info_field(&mut admin, "stats", "total_connections_received").await > connections,
+        "the cancelled request's connection was kept"
+    );
+    // 새 연결도 같은 DB 번호다(그 키는 DB 13 에만 있다).
+    let exists = w
+        .call("db.kv.command", command(&s, "EXISTS m1:big"))
+        .await
+        .unwrap();
+    assert_eq!(exists["int"]["int"], 1, "{exists}");
+}
+
+/// M3-22 리뷰 M2: 취소는 그 실행에만 닿는다. ① 요청을 보내고 곧바로 취소한 뒤의 다음 요청이 `cancelled` 가 아니다(리뷰어 재현:
+/// 200번 중 8번) ② credit 을 기다리는(서버에서 돌지 않는) 스캔을 `db.query.cancel` 로 끌 때, 같은 세션에서 도는 무관한 명령이
+/// 멈추지 않는다. 각각 100번 되풀이해 한 번도 멈추지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_a_late_cancel_does_not_stop_the_next_request() {
+    let e = env(13);
+    let mut admin = e.admin().await;
+    // 다른 시험이 세지 않는 명령(`SINTER` — 키 하나면 그 set 전체)으로 몇 ms 걸리는 응답을 만든다.
+    fill(&mut admin, "set", "m2:mid", 9_000).await;
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "r").await;
+    let stopped = |r: &Result<Value, RpcError>| {
+        r.as_ref().is_err_and(|e| {
+            e.code == rpc_code::CANCELLED
+                || e.data
+                    .as_ref()
+                    .is_some_and(|d| d["error"]["kind"] == "cancelled")
+        })
+    };
+    let mut cancelled = 0;
+    for round in 0..100 {
+        let id = 10_000 + round;
+        w.session.handle_value(json!({
+            "jsonrpc": "2.0", "id": id, "method": "db.kv.command",
+            "params": command(&s, "SINTER m2:mid"),
+        }));
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        w.session.handle_value(json!({
+            "jsonrpc": "2.0", "method": "request.cancel", "params": { "id": id },
+        }));
+        let pong = w.call("db.kv.command", command(&s, "PING")).await;
+        if stopped(&pong) {
+            cancelled += 1;
+        } else {
+            assert_eq!(pong.unwrap()["status"], "PONG", "round {round}");
+        }
+    }
+    assert_eq!(
+        cancelled, 0,
+        "a late cancel stopped {cancelled} of 100 PINGs"
+    );
+
+    for round in 0..100 {
+        let stream = w
+            .start("db.kv.scan", json!({ "sessionId": s, "count": 1 }))
+            .await
+            .unwrap();
+        w.credit(stream, 2);
+        let StreamMsg::Chunk(accepted) = w.next(stream).await else {
+            panic!("accepted")
+        };
+        let execution = accepted["executionId"].as_str().unwrap().to_owned();
+        let _ = w.next(stream).await;
+        // 다음 묶음을 읽고 credit 을 기다릴 틈.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let id = 20_000 + round;
+        w.session.handle_value(json!({
+            "jsonrpc": "2.0", "id": id, "method": "db.kv.command",
+            "params": command(&s, "SINTER m2:mid"),
+        }));
+        tokio::time::sleep(Duration::from_micros(500)).await;
+        w.call("db.query.cancel", json!({ "executionId": execution }))
+            .await
+            .unwrap();
+        let reply = w.response(id).await;
+        if stopped(&reply) {
+            cancelled += 1;
+        } else {
+            assert_eq!(
+                reply.unwrap()["array"].as_array().unwrap().len(),
+                9_000,
+                "round {round}"
+            );
+        }
+        w.cancel_stream(stream);
+    }
+    assert_eq!(
+        cancelled, 0,
+        "a scan's cancel stopped {cancelled} of 100 commands"
+    );
+}
+
+/// M3-22 리뷰 L1: 값 쪽 읽기의 예산은 창으로 갈 JSON 크기다 — 작은 필드 30만 개 hash 를 큰 `range.count` 로 읽어도 한 쪽이
+/// 예산(4 MiB) 근처에서 끝나고 다음 커서가 있다(리뷰어 재현: 30만 필드 전부, JSON 14.6 MB).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_a_value_page_is_bounded_by_its_json_size() {
+    let e = env(13);
+    let mut admin = e.admin().await;
+    fill(&mut admin, "hash", "l1:h", 300_000).await;
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "r").await;
+    let page = w
+        .call(
+            "db.kv.get",
+            json!({ "sessionId": s, "key": "l1:h", "range": { "count": 4_194_304 } }),
+        )
+        .await
+        .unwrap();
+    let json = serde_json::to_vec(&page).unwrap().len();
+    let fields = page["value"]["hash"].as_array().unwrap().len();
+    println!("one page of a 300k-field hash: {fields} fields, {json} JSON bytes");
+    assert!(json <= 4 * 1024 * 1024 + 1024 * 1024, "{json}");
+    assert!(fields < 300_000);
+    assert!(page["nextCursor"].is_string(), "{}", page["nextCursor"]);
+}
+
+/// `INFO <section>` 의 한 값(수).
+async fn info_field(conn: &mut Box<dyn KvConnection>, section: &str, field: &str) -> u64 {
+    let KvReply::Bulk(DbValue::Text(info)) = run(conn, &format!("INFO {section}")).await else {
+        panic!("INFO is a bulk string")
+    };
+    let prefix = format!("{field}:");
+    info.lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(|n| n.trim().parse().unwrap())
+        .unwrap_or_else(|| panic!("no {field}"))
 }

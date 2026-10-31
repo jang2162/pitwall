@@ -8,26 +8,33 @@
 //!   바뀌었으면 `configChanged`).
 //! - **등급 정책**(결정 M3-D20, 판정은 [`judge`]): 명령은 `pw_db_sql::kv_command` 의 분류(허용 목록 — 분류기는 그것 하나다)로
 //!   등급을 매긴다. `Blocked` 는 거절(`PERMISSION_DENIED`, `data.reason = "blockedCommand"`), read-only 연결은 조회만, `Confirm`
-//!   은 확인, 프로덕션 연결은 조회 밖을 모두 확인한다. 전용 메서드의 등급은 같은 명령의 분류를 따른다 — `setTtl` · `persist` 와
-//!   덮지 않는 `rename`(`RENAMENX`)은 쓰기, `delete` 와 덮는 `rename { overwrite: true }` 는 확인이다(`DEL` · `RENAME` 이 `Confirm`).
-//!   확인이 필요하면 [`code::CONFIRM_REQUIRED`](crate::gate::code::CONFIRM_REQUIRED)(`data` 는 [`DbKvConfirmRequired`])가 해시를
-//!   돌려주고, 창이 확인을 받은 뒤 `confirmed { grade, statementsHash }` 로 다시 부른다. 해시는 세션 · 그 세션의 확인 순번 · 메서드 ·
-//!   인자에 묶인다 — 다른 키 · 다른 세션에 쓰이지 않는다. **쓰기가 관문을 지나면 그 세션의 확인을 모두 쓴다**(SQL 과 같다 — 한 번만
-//!   쓰인다). 읽기는 쓰지 않는다: 한 세션을 키 트리 · 값 뷰어 · 명령 콘솔이 함께 쓰므로, 확인 다이얼로그가 떠 있는 동안 키 트리가
-//!   스캔을 이어 가도 확인이 깨지지 않게.
+//!   은 확인, 프로덕션 연결은 조회 밖을 모두 확인한다. **전용 메서드는 따로 등급을 두지 않는다** — 서버에 보낼 것과 같은 명령
+//!   (`setTtl` = `PEXPIRE`, `persist` = `PERSIST`, `delete` = `DEL`, `rename` = `RENAME` · 덮지 않으면 `RENAMENX`)을 같은
+//!   분류기에 넣어 그 등급 · 확인을 받는다(한 분류기). 그래서 `setTtl` 은 `PEXPIRE` 처럼 확인이고(1 ms 는 지우기와 같다),
+//!   `RENAMENX` 도 분류대로 확인이다. 확인이 필요하면 [`code::CONFIRM_REQUIRED`](crate::gate::code::CONFIRM_REQUIRED)(`data` 는
+//!   [`DbKvConfirmRequired`])가 해시를 돌려주고, 창이 확인을 받은 뒤 `confirmed { grade, statementsHash }` 로 다시 부른다. 해시는
+//!   세션 · 그 세션의 확인 순번 · 메서드 · 명령 인자(바이트)에 묶인다 — 다른 키 · 다른 세션에 쓰이지 않는다. **쓰기가 관문을
+//!   지나면 그 세션의 확인을 모두 쓴다**(SQL 과 같다 — 한 번만 쓰인다). 읽기는 쓰지 않는다: 한 세션을 키 트리 · 값 뷰어 · 명령
+//!   콘솔이 함께 쓰므로, 확인 다이얼로그가 떠 있는 동안 키 트리가 스캔을 이어 가도 확인이 깨지지 않게.
 //! - **거절은 서버에 보내기 전**이다 — 드라이버는 분류하지 않는다(`KvConnection::command` 는 부르는 쪽이 분류했다고 본다).
 //! - **진행 · 취소**(M3-05 와 같다): 스캔 스트림은 맨 앞에 `accepted { executionId }` 를 내고, `db.query.cancel { executionId }`
-//!   · 스트림 취소가 드라이버 인터럽트(Redis 는 진행 중 요청을 버리고 연결을 다시 만든다)로 멈춘다. 진행은 `db.queryProgress`
-//!   (`rows` = 지금까지 받은 키 수). 단항 메서드는 요청 취소(`request.cancel` — 창의 `AbortSignal`)가 같은 인터럽트로 멈춘다. 도는
-//!   요청은 세션의 실행 자리(`DbSession::running`)에 있어, 창이 닫히면(세션 닫기) 응답 타임아웃을 기다리지 않고 곧바로 멈춘다.
+//!   가 드라이버 인터럽트로 멈춘다. 진행은 `db.queryProgress`(`rows` = 지금까지 받은 키 수). 스트림 취소 · 단항 메서드의 요청
+//!   취소(`request.cancel` — 창의 `AbortSignal`)는 드라이버 호출을 버린다 — Redis 드라이버는 그때 그 연결을 버리고 다음 요청이
+//!   새 연결(DB 번호 · 인증을 다시 건다)을 쓴다. 버린 응답 뒤에 다음 요청이 서지 않는다. 도는 요청은 세션의 실행 자리
+//!   (`DbSession::running`)에 있어, 창이 닫히면(세션 닫기) 응답 타임아웃을 기다리지 않고 곧바로 멈춘다.
+//! - **인터럽트는 실행에 묶인다**([`BoundInterrupt`]): Redis 의 인터럽트는 연결 전체를 깨우므로, 그 실행이 실행 자리를 쥔
+//!   동안만 보낸다 — 끝난 실행의 늦은 취소(`db.query.cancel`)가 같은 세션의 무관한 다음 요청을 멈추지 않게.
 //! - **한 세션의 요청은 차례로 돈다**: 연결 잠금을 기다린다(SQL 세션처럼 `busy` 로 거절하지 않는다 — 키 트리 · 값 뷰어 · 콘솔이
-//!   한 세션을 함께 쓴다). 스캔 스트림은 묶음 하나를 읽는 동안만 잡고, 창이 credit 을 주기를 기다리는 동안은 놓는다.
+//!   한 세션을 함께 쓴다). 스캔 스트림은 묶음 하나를 읽는 동안만 잡고, 창이 credit 을 주기를 기다리는 동안은 놓는다. 긴
+//!   스캔은 **묶음마다** 범위(그 창의 세션인지) · 신뢰 · 연결 설정을 다시 본다 — 신뢰를 거두거나 설정이 바뀌면 다음 묶음에서 끝난다.
 //! - 입력은 모두 struct 다(M5 가 툴로 켤 수 있는 꼴, 결정 M3-D19). `mcp: true` 는 달지 않는다.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use pw_db_driver::{BoxFuture, Budget, DbConnection, DbResult, KvConnection, QueryCancel};
+use pw_db_driver::{
+    BoxFuture, Budget, DbConnection, DbResult, Interrupt, KvConnection, QueryCancel,
+};
 use pw_db_sql::kv_command::{BlockReason, KvCommandClass, MAX_SCAN_COUNT, classify_argv};
 use pw_db_types::{
     DbError, DbErrorKind, KvKey, KvKeyInfo, KvRange, KvRenameOutcome, KvReply, KvScanRequest,
@@ -216,8 +223,9 @@ impl DbKvAction {
 pub struct DbKvConfirmRequired {
     pub grade: RiskGrade,
     pub action: DbKvAction,
-    /// 서버에 갈 명령(보이기용 — UTF-8 이 아닌 키는 `0x…`). 지울 키가 많으면 모두 싣는다(상한 10,000).
-    pub argv: Vec<String>,
+    /// 서버에 갈 명령(보이기용). 인자마다 UTF-8 이면 글 그대로, 아니면 `{ "hex": "0x…" }` — 글 `"0xff"` 와 바이트 `0xff` 를
+    /// 가른다. 지울 키가 많으면 모두 싣는다(상한 10,000).
+    pub argv: Vec<KvKey>,
     pub statements_hash: String,
     /// 연결 이름을 쳐야 한다(프로덕션 연결의 파괴 등급 — Redis 분류에는 아직 파괴 등급이 없다).
     pub name_required: bool,
@@ -246,7 +254,8 @@ rpc_method! {
         roles: [Owner],
     }
 
-    /// TTL 을 바꾼다(쓰기 — read-only 연결은 거절, 프로덕션 연결은 확인 3001). 키가 없으면 `false`.
+    /// TTL 을 바꾼다. `PEXPIRE` 와 같은 등급 — 확인(3001)이 필요하다(짧은 TTL 은 지우기와 같다). read-only 연결은 거절. 키가
+    /// 없으면 `false`.
     pub DbKvSetTtl: "db.kv.setTtl" {
         params: DbKvSetTtlParams,
         result: bool,
@@ -254,7 +263,7 @@ rpc_method! {
         roles: [Owner],
     }
 
-    /// TTL 을 지운다(쓰기). 키가 없거나 TTL 이 없었으면 `false`.
+    /// TTL 을 지운다(`PERSIST` 와 같은 등급 — 쓰기, 프로덕션 연결은 확인). 키가 없거나 TTL 이 없었으면 `false`.
     pub DbKvPersist: "db.kv.persist" {
         params: DbKvPersistParams,
         result: bool,
@@ -270,8 +279,8 @@ rpc_method! {
         roles: [Owner],
     }
 
-    /// 이름을 바꾼다. `overwrite` 가 아니면 쓰기(`RENAMENX` — 대상이 있으면 바꾸지 않고 `targetExists`), `overwrite` 면 대상을 덮는
-    /// 「덮어쓰기」 확인(3001)이 필요하다.
+    /// 이름을 바꾼다. `overwrite` 면 `RENAME`(대상을 덮는다), 아니면 `RENAMENX`(대상이 있으면 바꾸지 않고 `targetExists`) —
+    /// 둘 다 분류대로 확인(3001)이 필요하다.
     pub DbKvRename: "db.kv.rename" {
         params: DbKvRenameParams,
         result: KvRenameOutcome,
@@ -291,15 +300,45 @@ rpc_method! {
     }
 }
 
-/// 관문을 지날 쓰기 하나: 등급과 확인 해시의 재료.
+/// 관문을 지날 쓰기 하나: 서버에 보낼 것과 같은 명령, 그 분류의 등급, 확인.
 struct Gated<'a> {
     action: DbKvAction,
     grade: RiskGrade,
-    /// 해시에 들어가는 인자(바이트).
-    parts: Vec<Vec<u8>>,
-    /// 보이기용 명령.
-    argv: Vec<String>,
+    /// 명령(이름 포함, 바이트) — 해시의 재료이고 보이기용 명령의 원본이다.
+    argv: Vec<Vec<u8>>,
     confirmed: Option<&'a DbConfirmed>,
+}
+
+impl<'a> Gated<'a> {
+    /// 명령 하나를 분류기(`classify_argv` — 하나뿐이다)에 넣어 등급을 정한다. 전용 메서드도 따로 등급을 두지 않고 같은 효과의
+    /// 명령을 넣는다. 거절 명령이면 `blockedCommand`. 조회면 `None`(관문의 확인 · read-only 판정이 없다).
+    fn classify(
+        action: DbKvAction,
+        argv: Vec<Vec<u8>>,
+        confirmed: Option<&'a DbConfirmed>,
+    ) -> Result<Option<Self>, RpcError> {
+        let grade = match classify_argv(&argv) {
+            KvCommandClass::Blocked(reason) => {
+                let name = argv
+                    .first()
+                    .map(|n| String::from_utf8_lossy(n).into_owned())
+                    .unwrap_or_default();
+                return Err(blocked(&name, reason));
+            }
+            class => class.grade().unwrap_or(RiskGrade::Destructive),
+        };
+        Ok((grade != RiskGrade::Read).then_some(Self {
+            action,
+            grade,
+            argv,
+            confirmed,
+        }))
+    }
+
+    /// 보이기용 명령: 인자마다 UTF-8 이면 글, 아니면 hex(그 바이트 그대로 — 받은 꼴이 아니라 서버에 갈 것).
+    fn shown(&self) -> Vec<KvKey> {
+        self.argv.iter().map(|a| KvKey::from_bytes(a)).collect()
+    }
 }
 
 /// 키를 서버에 보낼 바이트로. hex 가 틀렸으면 invalid params.
@@ -307,14 +346,6 @@ fn key_bytes(key: &KvKey) -> Result<Vec<u8>, RpcError> {
     key.to_bytes().ok_or_else(|| {
         RpcError::invalid_params("a key's hex must be `0x` and an even number of hex digits")
     })
-}
-
-/// 보이기용 키 글.
-fn key_text(key: &KvKey) -> String {
-    match key {
-        KvKey::Text(text) => text.clone(),
-        KvKey::Bytes(bytes) => bytes.hex.clone(),
-    }
 }
 
 fn too_large(what: &str, bytes: usize) -> RpcError {
@@ -390,7 +421,7 @@ fn judge(session: &DbSession, gated: &Gated<'_>) -> Result<(), RpcError> {
     if !needs_confirm {
         return Ok(());
     }
-    let hash = kv_hash(&session.confirm_key(), gated.action, &gated.parts);
+    let hash = kv_hash(&session.confirm_key(), gated.action, &gated.argv);
     let rejected = match gated.confirmed {
         None => None,
         Some(c) if c.statements_hash != hash => Some("hashMismatch"),
@@ -403,7 +434,7 @@ fn judge(session: &DbSession, gated: &Gated<'_>) -> Result<(), RpcError> {
     let data = DbKvConfirmRequired {
         grade: gated.grade,
         action: gated.action,
-        argv: gated.argv.clone(),
+        argv: gated.shown(),
         statements_hash: hash,
         name_required,
         rejected: rejected.map(str::to_owned),
@@ -431,11 +462,13 @@ fn not_kv() -> RpcError {
     RpcError::invalid_params("this connection is not a key-value store")
 }
 
-/// 도는 KV 요청 하나가 세션의 실행 자리를 쥔 동안. 버려지면(요청 취소 · 스트림 취소) 드라이버를 인터럽트한다.
+/// 도는 KV 요청 하나가 세션의 실행 자리를 쥔 동안. 끝나거나 버려지면 자리를 비운다.
+///
+/// 버려질 때(요청 취소 · 스트림 취소) 인터럽트를 띄우지 않는다: 드라이버 호출 future 가 함께 버려지고, Redis 드라이버는 그때
+/// 연결을 버린다(`pw_db_driver_redis` 의 `connection` 머리 주석). 늦게 도는 인터럽트는 그사이 자리를 얻은 다음 요청을 맞힌다.
 struct Slot {
     session: Arc<DbSession>,
     running: Arc<Running>,
-    done: bool,
 }
 
 impl Slot {
@@ -444,12 +477,7 @@ impl Slot {
         Self {
             session: Arc::clone(session),
             running: Arc::clone(running),
-            done: false,
         }
-    }
-
-    fn finish(mut self) {
-        self.done = true;
     }
 }
 
@@ -459,11 +487,36 @@ impl Drop for Slot {
         if slot.as_ref().is_some_and(|r| Arc::ptr_eq(r, &self.running)) {
             *slot = None;
         }
-        drop(slot);
-        if !self.done {
-            let running = Arc::clone(&self.running);
-            tokio::spawn(async move { running.halt().await });
+    }
+}
+
+/// 실행 하나에 묶인 드라이버 인터럽트. 그 실행이 세션의 실행 자리를 쥔 동안만 보낸다 — Redis 의 인터럽트는 연결에서 도는
+/// 요청을 무엇이든 깨우므로, 끝난 실행의 늦은 취소가 다음 요청을 멈추지 않게.
+///
+/// 드라이버 인터럽트를 실행 자리 잠금을 쥔 채로 부른다(future 를 만드는 것까지). Redis 드라이버는 부를 때 곧바로 깨우므로
+/// [`Slot`] 이 자리를 비우는 것과 겹치지 않는다. 기다리는 것(정리 시간)은 잠금을 놓은 뒤다.
+struct BoundInterrupt {
+    session: Weak<DbSession>,
+    execution_id: String,
+    inner: Arc<dyn Interrupt>,
+}
+
+impl Interrupt for BoundInterrupt {
+    fn interrupt(&self) -> BoxFuture<'_, DbResult<()>> {
+        let idle = || -> BoxFuture<'_, DbResult<()>> { Box::pin(std::future::ready(Ok(()))) };
+        let Some(session) = self.session.upgrade() else {
+            return idle();
+        };
+        let slot = lock(&session.running);
+        if !slot
+            .as_ref()
+            .is_some_and(|r| r.execution_id == self.execution_id)
+        {
+            return idle();
         }
+        let sent = self.inner.interrupt();
+        drop(slot);
+        sent
     }
 }
 
@@ -491,13 +544,19 @@ impl DbSessions {
         Ok(session)
     }
 
-    fn kv_running(&self, session: &DbSession, conn: &dyn KvConnection) -> Arc<Running> {
+    fn kv_running(&self, session: &Arc<DbSession>, conn: &dyn KvConnection) -> Arc<Running> {
+        let execution_id = self.next_id("dbk-");
+        let interrupt = Arc::new(BoundInterrupt {
+            session: Arc::downgrade(session),
+            execution_id: execution_id.clone(),
+            inner: conn.interrupter(),
+        });
         Arc::new(Running {
-            execution_id: self.next_id("dbk-"),
+            execution_id,
             session_id: session.id.clone(),
             project_id: session.project_id.clone(),
             dialect: None,
-            cancel: QueryCancel::new(conn.interrupter(), Budget::CONSOLE.cancel_cleanup),
+            cancel: QueryCancel::new(interrupt, Budget::CONSOLE.cancel_cleanup),
             stop: CancellationToken::new(),
             current: std::sync::Mutex::new(None),
         })
@@ -537,7 +596,7 @@ impl DbSessions {
         let running = self.kv_running(session, conn.as_ref());
         let slot = Slot::take(session, &running);
         let result = running.cancel.run(call(conn.as_mut())).await;
-        slot.finish();
+        drop(slot);
         self.kv_settle(session, &mut link, result.as_ref().err());
         result.map_err(db_error)
     }
@@ -579,6 +638,7 @@ impl DbSessions {
         let mut reported = started;
         self.emit(
             &sink,
+            &session,
             &running,
             DbKvScanEvent::Accepted {
                 execution_id: running.execution_id.clone(),
@@ -587,7 +647,18 @@ impl DbSessions {
         .await?;
         self.kv_progress(&session, &running, keys, started, false);
         let mut cursor = None;
+        let mut first = true;
         loop {
+            // 긴 스캔은 묶음마다 관문을 다시 지난다: 그 창의 세션인지(닫혔으면 not found), 신뢰, 연결 설정.
+            if !std::mem::take(&mut first) {
+                let again = self.kv_session(&ctx, &params.session_id).await?;
+                if !Arc::ptr_eq(&again, &session) {
+                    return Err(db_error(DbError::new(
+                        DbErrorKind::Disconnected,
+                        "the session is closed",
+                    )));
+                }
+            }
             let request = KvScanRequest {
                 pattern: params.pattern.clone(),
                 cursor: cursor.take(),
@@ -597,8 +668,13 @@ impl DbSessions {
             keys += page.keys.len() as u64;
             cursor = page.next_cursor;
             if !page.keys.is_empty() {
-                self.emit(&sink, &running, DbKvScanEvent::Keys { keys: page.keys })
-                    .await?;
+                self.emit(
+                    &sink,
+                    &session,
+                    &running,
+                    DbKvScanEvent::Keys { keys: page.keys },
+                )
+                .await?;
             }
             if cursor.is_none() {
                 break;
@@ -611,6 +687,7 @@ impl DbSessions {
         self.kv_progress(&session, &running, keys, started, true);
         self.emit(
             &sink,
+            &session,
             &running,
             DbKvScanEvent::Done {
                 keys,
@@ -638,7 +715,7 @@ impl DbSessions {
         let conn = kv_conn(&mut link)?;
         let slot = Slot::take(session, running);
         let result = running.cancel.run(conn.scan(request)).await;
-        slot.finish();
+        drop(slot);
         self.kv_settle(session, &mut link, result.as_ref().err());
         match result {
             Ok(page) => Ok(page),
@@ -647,16 +724,18 @@ impl DbSessions {
         }
     }
 
-    /// 항목 하나를 보낸다(창의 credit 을 기다린다). 그동안 취소되면 `CANCELLED`.
+    /// 항목 하나를 보낸다(창의 credit 을 기다린다). 그동안 취소되면 `CANCELLED`, 세션이 닫히면(`db.session.close`) `disconnected`.
     async fn emit(
         &self,
         sink: &StreamSink<DbKvScanEvent>,
+        session: &DbSession,
         running: &Running,
         event: DbKvScanEvent,
     ) -> Result<(), RpcError> {
         tokio::select! {
             biased;
             () = running.stop.cancelled() => Err(RpcError::cancelled()),
+            () = session.closed.cancelled() => Err(db_error(DbError::new(DbErrorKind::Disconnected, "the session is closed"))),
             sent = sink.send(event) => sent,
         }
     }
@@ -714,7 +793,7 @@ impl DbSessions {
             .await
     }
 
-    /// `db.kv.setTtl`.
+    /// `db.kv.setTtl`: `PEXPIRE <key> <ttlMs>` 의 등급.
     pub(crate) async fn kv_set_ttl(
         &self,
         ctx: &Ctx,
@@ -728,23 +807,21 @@ impl DbSessions {
         let key = key_bytes(&params.key)?;
         check_size("key", key.len())?;
         let session = self.kv_session(ctx, &params.session_id).await?;
-        let gated = Gated {
-            action: DbKvAction::SetTtl,
-            grade: RiskGrade::Write,
-            argv: vec![
-                "PEXPIRE".into(),
-                key_text(&params.key),
-                params.ttl_ms.to_string(),
+        let gated = Gated::classify(
+            DbKvAction::SetTtl,
+            vec![
+                b"PEXPIRE".to_vec(),
+                key,
+                params.ttl_ms.to_string().into_bytes(),
             ],
-            parts: vec![key, params.ttl_ms.to_le_bytes().to_vec()],
-            confirmed: params.confirmed.as_ref(),
-        };
+            params.confirmed.as_ref(),
+        )?;
         let (target, ttl) = (params.key.clone(), params.ttl_ms);
-        self.kv_call(&session, Some(gated), move |c| c.set_ttl(target, ttl))
+        self.kv_call(&session, gated, move |c| c.set_ttl(target, ttl))
             .await
     }
 
-    /// `db.kv.persist`.
+    /// `db.kv.persist`: `PERSIST <key>` 의 등급.
     pub(crate) async fn kv_persist(
         &self,
         ctx: &Ctx,
@@ -753,19 +830,17 @@ impl DbSessions {
         let key = key_bytes(&params.key)?;
         check_size("key", key.len())?;
         let session = self.kv_session(ctx, &params.session_id).await?;
-        let gated = Gated {
-            action: DbKvAction::Persist,
-            grade: RiskGrade::Write,
-            argv: vec!["PERSIST".into(), key_text(&params.key)],
-            parts: vec![key],
-            confirmed: params.confirmed.as_ref(),
-        };
+        let gated = Gated::classify(
+            DbKvAction::Persist,
+            vec![b"PERSIST".to_vec(), key],
+            params.confirmed.as_ref(),
+        )?;
         let target = params.key.clone();
-        self.kv_call(&session, Some(gated), move |c| c.persist(target))
+        self.kv_call(&session, gated, move |c| c.persist(target))
             .await
     }
 
-    /// `db.kv.delete`.
+    /// `db.kv.delete`: `DEL <key>…` 의 등급.
     pub(crate) async fn kv_delete(
         &self,
         ctx: &Ctx,
@@ -776,30 +851,24 @@ impl DbSessions {
                 "keys must hold 1-{MAX_DELETE_KEYS} keys"
             )));
         }
-        let parts = params
+        let keys = params
             .keys
             .iter()
             .map(key_bytes)
             .collect::<Result<Vec<_>, _>>()?;
-        check_size("key list", parts.iter().map(Vec::len).sum())?;
+        check_size("key list", keys.iter().map(Vec::len).sum())?;
         let session = self.kv_session(ctx, &params.session_id).await?;
-        let mut argv = vec!["DEL".to_owned()];
-        argv.extend(params.keys.iter().map(key_text));
-        let gated = Gated {
-            action: DbKvAction::Delete,
-            grade: grade_of_command("DEL"),
-            argv,
-            parts,
-            confirmed: params.confirmed.as_ref(),
-        };
+        let mut argv = vec![b"DEL".to_vec()];
+        argv.extend(keys);
+        let gated = Gated::classify(DbKvAction::Delete, argv, params.confirmed.as_ref())?;
         let keys = params.keys.clone();
         let deleted = self
-            .kv_call(&session, Some(gated), move |c| c.delete(keys))
+            .kv_call(&session, gated, move |c| c.delete(keys))
             .await?;
         Ok(DbKvDeleted { deleted })
     }
 
-    /// `db.kv.rename`.
+    /// `db.kv.rename`: `RENAME <from> <to>`(덮는다) · `RENAMENX <from> <to>` 의 등급.
     pub(crate) async fn kv_rename(
         &self,
         ctx: &Ctx,
@@ -808,21 +877,18 @@ impl DbSessions {
         let (from, to) = (key_bytes(&params.from)?, key_bytes(&params.to)?);
         check_size("key pair", from.len() + to.len())?;
         let session = self.kv_session(ctx, &params.session_id).await?;
-        // 덮지 않는 이름 바꾸기(`RENAMENX`)는 쓰기, 덮는 것은 `RENAME` 의 분류(확인)다.
-        let (name, grade) = if params.overwrite {
-            ("RENAME", grade_of_command("RENAME"))
+        let name: &[u8] = if params.overwrite {
+            b"RENAME"
         } else {
-            ("RENAMENX", RiskGrade::Write)
+            b"RENAMENX"
         };
-        let gated = Gated {
-            action: DbKvAction::Rename,
-            grade,
-            argv: vec![name.into(), key_text(&params.from), key_text(&params.to)],
-            parts: vec![from, to, vec![u8::from(params.overwrite)]],
-            confirmed: params.confirmed.as_ref(),
-        };
+        let gated = Gated::classify(
+            DbKvAction::Rename,
+            vec![name.to_vec(), from, to],
+            params.confirmed.as_ref(),
+        )?;
         let (a, b, overwrite) = (params.from.clone(), params.to.clone(), params.overwrite);
-        self.kv_call(&session, Some(gated), move |c| c.rename(a, b, overwrite))
+        self.kv_call(&session, gated, move |c| c.rename(a, b, overwrite))
             .await
     }
 
@@ -836,33 +902,19 @@ impl DbSessions {
             return Err(RpcError::invalid_params("argv is empty"));
         };
         check_size("command", params.argv.iter().map(String::len).sum())?;
-        let class = classify_argv(&params.argv);
         let session = self.kv_session(ctx, &params.session_id).await?;
-        let grade = match class {
-            KvCommandClass::Blocked(reason) => {
-                tracing::info!(target: "pw_db", session = %session.id, command = %name, ?reason, "kv command refused");
-                return Err(blocked(name, reason));
-            }
-            class => class.grade().unwrap_or(RiskGrade::Destructive),
-        };
-        let gated = (grade != RiskGrade::Read).then(|| Gated {
-            action: DbKvAction::Command,
-            grade,
-            parts: params.argv.iter().map(|a| a.as_bytes().to_vec()).collect(),
-            argv: params.argv.clone(),
-            confirmed: params.confirmed.as_ref(),
-        });
+        let gated = Gated::classify(
+            DbKvAction::Command,
+            params.argv.iter().map(|a| a.as_bytes().to_vec()).collect(),
+            params.confirmed.as_ref(),
+        )
+        .inspect_err(|_| {
+            tracing::info!(target: "pw_db", session = %session.id, command = %name, "kv command refused");
+        })?;
         let argv = params.argv.clone();
         self.kv_call(&session, gated, move |c| c.command(argv))
             .await
     }
-}
-
-/// 명령 이름 하나의 등급(분류기의 것 — 전용 메서드가 같은 명령의 등급을 쓴다). 거절이면 파괴(쓰이지 않는다).
-fn grade_of_command(name: &str) -> RiskGrade {
-    classify_argv(&[name])
-        .grade()
-        .unwrap_or(RiskGrade::Destructive)
 }
 
 fn check_size(what: &str, bytes: usize) -> Result<(), RpcError> {
@@ -948,10 +1000,38 @@ mod tests {
         );
     }
 
+    fn grade(argv: &[&[u8]]) -> Option<RiskGrade> {
+        let argv = argv.iter().map(|a| a.to_vec()).collect();
+        Gated::classify(DbKvAction::Command, argv, None)
+            .unwrap()
+            .map(|g| g.grade)
+    }
+
+    /// 전용 메서드는 같은 효과의 명령을 분류기에 넣는다 — 키가 UTF-8 이 아니어도 같은 등급이다.
     #[test]
     fn the_dedicated_methods_take_the_grade_of_their_command() {
-        assert_eq!(grade_of_command("DEL"), RiskGrade::UnboundedWrite);
-        assert_eq!(grade_of_command("RENAME"), RiskGrade::UnboundedWrite);
-        assert_eq!(grade_of_command("PERSIST"), RiskGrade::Write);
+        let confirm = Some(RiskGrade::UnboundedWrite);
+        assert_eq!(grade(&[b"PEXPIRE", b"\xffk", b"1"]), confirm);
+        assert_eq!(grade(&[b"DEL", b"a", b"\xff"]), confirm);
+        assert_eq!(grade(&[b"RENAME", b"a", b"b"]), confirm);
+        assert_eq!(grade(&[b"RENAMENX", b"a", b"b"]), confirm);
+        assert_eq!(grade(&[b"PERSIST", b"\xff"]), Some(RiskGrade::Write));
+        assert_eq!(grade(&[b"GET", b"a"]), None, "reads pass no gate");
+        let refused = Gated::classify(DbKvAction::Command, vec![b"FLUSHALL".to_vec()], None);
+        assert!(refused.is_err_and(|e| e.code == rpc_code::PERMISSION_DENIED));
+    }
+
+    /// 보이기용 명령은 글 `"0xff"` 와 바이트 `0xff` 를 가른다.
+    #[test]
+    fn the_shown_command_tells_text_from_bytes() {
+        let gated = Gated::classify(
+            DbKvAction::Delete,
+            vec![b"DEL".to_vec(), b"0xff".to_vec(), vec![0xff]],
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let shown = serde_json::to_value(gated.shown()).unwrap();
+        assert_eq!(shown, json!(["DEL", "0xff", { "hex": "0xff" }]));
     }
 }

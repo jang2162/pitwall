@@ -4,9 +4,11 @@
 //! - **구동 태스크**: `new_with_config` 가 돌려준 future 를 `spawn` 하고, 연결을 버릴 때 그 태스크를 끝낸다(abort). 소켓이
 //!   닫히므로 서버는 그 연결에서 막혀 있던 명령(`BLPOP` 등)을 거둔다. 이미 도는 명령(서버를 붙잡는 명령)은 멈추지 않는다 —
 //!   그래서 무거운 명령은 분류가 막는다(`pw_db_sql::kv_command`).
-//! - **응답 타임아웃 · 취소**: 요청 하나마다 [`Connection::response_timeout`] 과 인터럽트를 함께 기다린다. 어느 쪽이 먼저
-//!   오면 요청을 버리고 연결을 버린다 — 같은 연결에 남기면 다음 요청이 서버에서 그 명령 뒤에 줄을 선다. 다음 호출이 새로
-//!   연다(같은 설정, 연결 타임아웃 안에서).
+//! - **응답 타임아웃 · 취소**: 요청 하나마다 응답 타임아웃(`Endpoint::response_timeout`)과 인터럽트를 함께 기다린다. 어느
+//!   쪽이 먼저 오면 요청을 버리고 연결을 버린다 — 같은 연결에 남기면 다음 요청이 그 응답(전송 · 파싱) 뒤에 줄을 선다. 다음
+//!   호출이 새로 연다(같은 설정 — DB 번호 · 인증을 다시 건다, 연결 타임아웃 안에서).
+//! - **부르는 쪽이 요청을 버려도**(요청 취소 · 스트림 취소로 호출 future 가 drop) 같다: 응답을 받기 전에 버려지면 연결을
+//!   버린다([`InFlight`]). 인터럽트는 부를 때 곧바로 기다리는 요청을 깨운다 — 도는 요청이 없으면 아무것도 하지 않는다.
 //! - **끊김**: 서버가 연결을 닫으면(재시작 · `CLIENT KILL`) 저절로 다시 붙지 않는다 — 다음 호출마다 `Disconnected` 이고, 다시
 //!   붙는 것은 사람이 누를 때다(결정 M3-D10 의 대가, 14 §3).
 
@@ -67,6 +69,38 @@ impl Interrupt for RedisInterrupt {
     }
 }
 
+/// 요청 하나가 연결에서 도는 동안. 응답 · 타임아웃 · 인터럽트로 끝나기 전에 버려지면(부르는 쪽 future 가 drop) 연결을
+/// 버린다 — 버린 응답이 그 연결에 남아 다음 요청이 그 뒤에 서지 않게(다음 호출이 새로 연다).
+struct InFlight<'a> {
+    shared: &'a Shared,
+    live: &'a mut Option<Live>,
+    answered: bool,
+}
+
+impl<'a> InFlight<'a> {
+    fn start(shared: &'a Shared, live: &'a mut Option<Live>) -> Self {
+        shared.running.store(true, Ordering::SeqCst);
+        Self {
+            shared,
+            live,
+            answered: false,
+        }
+    }
+
+    fn answered(mut self) {
+        self.answered = true;
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.shared.running.store(false, Ordering::SeqCst);
+        if !self.answered {
+            *self.live = None;
+        }
+    }
+}
+
 pub(crate) struct Connection {
     endpoint: Arc<Endpoint>,
     live: Option<Live>,
@@ -114,17 +148,18 @@ impl Connection {
                 conn
             }
         };
-        let notified = self.shared.notify.notified();
+        let shared = Arc::clone(&self.shared);
+        let notified = shared.notify.notified();
         let mut notified = std::pin::pin!(notified);
         notified.as_mut().enable();
-        self.shared.running.store(true, Ordering::SeqCst);
+        let in_flight = InFlight::start(&shared, &mut self.live);
         let outcome = tokio::select! {
             result = tokio::time::timeout(self.endpoint.response_timeout, request(conn)) => {
                 result.map_err(|_| DbError::timeout("Redis response"))
             }
             () = &mut notified => Err(DbError::cancelled()),
         };
-        self.shared.running.store(false, Ordering::SeqCst);
+        in_flight.answered();
         match outcome {
             Ok(Err(error)) if !reply::is_server_reply(&error) => {
                 let error = reply::db_error(error);
