@@ -730,6 +730,40 @@ async fn live_pg_transaction_statements_are_refused_and_savepoints_pass() {
     assert_eq!(ids, vec![vec![DbValue::int(1)]]);
 }
 
+/// 교차 계약(M3-04): 나뉜 문장 하나 = 서버 문장 하나. 사람의 문장은 확장 프로토콜(Parse 하나에 한 문장)로만 간다 — 두 문장을 한
+/// 번에 보내면 서버가 거절하고, 숨은 둘째 문장(`DROP`)은 돌지 않는다. 자동 커밋 · 수동 트랜잭션 · 실행 계획 모두 같다.
+#[tokio::test(flavor = "multi_thread")]
+async fn live_pg_two_statements_in_one_execute_are_refused_by_the_server() {
+    let mut conn = open(&plain()).await;
+    run(&mut conn, "DROP TABLE IF EXISTS pw_live_multi").await;
+    run(&mut conn, "CREATE TABLE pw_live_multi (id int)").await;
+    let sql = "SELECT 1; DROP TABLE pw_live_multi";
+    for grade in [RiskGrade::Read, RiskGrade::Destructive] {
+        let error = conn
+            .execute(ExecuteRequest::new(sql, grade))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("42601"), "{error:?}");
+    }
+    let error = conn
+        .execute(write(
+            "INSERT INTO pw_live_multi VALUES (1); DROP TABLE pw_live_multi",
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("42601"), "{error:?}");
+    assert!(conn.explain(sql.into()).await.is_err());
+    conn.begin(BeginOptions::default()).await.unwrap();
+    let error = conn.execute(write(sql)).await.unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("42601"), "{error:?}");
+    conn.rollback().await.unwrap();
+    assert_eq!(
+        count(&mut conn, "SELECT count(*) FROM pw_live_multi").await,
+        0,
+        "the table is still there"
+    );
+}
+
 /// 실행 계획은 `EXPLAIN (FORMAT JSON)` 의 글.
 #[tokio::test(flavor = "multi_thread")]
 async fn live_pg_explain_returns_the_json_plan() {
