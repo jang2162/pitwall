@@ -92,6 +92,13 @@ allow = ["BSL-1.0"]
 crate = "error-code"
 allow = ["BSL-1.0"]
 
+# redis 크레이트(pw-db-driver-redis, 14-m3-plan.md 결정 M3-D14)가 기능과 상관없이 늘 끌어오는 xxhash-rust 도 BSL-1.0 이다. Redis 드라이버가
+# 데스크톱 앱의 드라이버 등록부에 들어가므로 배포하는 3 OS 바이너리에 링크된다. 크레이트 단위로만 허용한다 — about.toml 의
+# [xxhash-rust] 와 같아야 한다.
+[[licenses.exceptions]]
+crate = "xxhash-rust"
+allow = ["BSL-1.0"]
+
 # CDLA-Permissive-2.0(데이터용 허용형)은 전역 allow 에 넣지 않는다. 자동 업데이트(tauri-plugin-updater → reqwest →
 # rustls-platform-verifier)가 끌어오는 webpki-root-certs 는 wasm32 전용 의존성이라 배포하는 3 OS 바이너리에 들어가지 않는다
 # (`cargo tree -e normal -i webpki-root-certs --target <배포 타깃>` 이 비어 있다). [graph] targets = [] 가 모든 타깃을 봐서

@@ -8,4 +8,4 @@
 pg = 10
 mysql = 8
 mariadb = 8
-redis = 0
+redis = 8

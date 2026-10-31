@@ -1537,7 +1537,7 @@ Apache License
 
 ### Apache License 2.0 (Apache-2.0)
 
-Used by: rmcp 3.5.1, serial2 0.2.38, sync_wrapper 1.0.2
+Used by: rmcp 3.5.1, ryu 1.0.23, serial2 0.2.38, sync_wrapper 1.0.2
 
 ```text
 Apache License
@@ -1767,6 +1767,46 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### BSD 3-Clause "New" or "Revised" License (BSD-3-Clause)
 
+Used by: redis 1.8.1
+
+```text
+Copyright (c) 2022 by redis-rs contributors
+
+Redis cluster code in parts copyright (c) 2018 by Atsushi Koge.
+
+Some rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+
+    * The names of the contributors may not be used to endorse or
+      promote products derived from this software without specific
+      prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+### BSD 3-Clause "New" or "Revised" License (BSD-3-Clause)
+
 Used by: encoding_rs 0.8.35
 
 ```text
@@ -1800,7 +1840,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### Boost Software License 1.0 (BSL-1.0)
 
-Used by: error-code 3.4.0
+Used by: error-code 3.4.0, xxhash-rust 0.8.19
 
 ```text
 Boost Software License - Version 1.0 - August 17th, 2003
@@ -5889,6 +5929,38 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+### MIT License (MIT)
+
+Used by: arcstr 1.2.0
+
+```text
+Copyright (c) 2020 Thom Chiovoloni
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 ```
 
 ### MIT License (MIT)
@@ -14782,7 +14854,10 @@ SOFTWARE.
 - License: Apache-2.0 (full text below). The repository's `NOTICE` at that commit covers only its PL/SQL debugger, which is not borrowed, so it carries no notice for the files below.
 - Files (one line per borrowed source; each Pitwall file says in its header what it took and that it was modified):
   - `crates/dbx-sql-core/src/sql_risk.rs` → `crates/pw-db-sql/src/risk.rs` (statement classification, writable-CTE and side-effect-function checks, locking-clause token check), `crates/pw-db-sql/src/risk/predicate.rs` (WHERE tautology analysis), `crates/pw-db-sql/src/risk/tests/dbx.rs` (the file's 34 tests)
-- Changes: modified. The risk levels became Pitwall's five grades (read, write, unbounded write, DDL, destructive); a statement that does not parse is graded destructive instead of falling back to keyword matching; transaction control, session, lock, maintenance and pragma statements are writes; the side-effect function list was extended and now also covers table functions and `FROM` subqueries; the WHERE tautology analysis keeps its verdicts but flattens AND/OR chains once and finds complementary pairs with hash sets (the original was cubic in the chain length); the manual-transaction read proof, the keyword fallback and the Salesforce, search-engine and MCP-specific checks were not taken. The 34 tests were rewritten against the new API, and those whose expected values changed say why.
+  - `crates/dbx-driver-redis/src/lib.rs` (`classify_command`, `parse_command_argv` and their tests) → `crates/pw-db-sql/src/kv_command.rs`, `crates/pw-db-sql/src/kv_command/tests.rs`
+- Changes (all modified):
+  - `sql_risk.rs`: the risk levels became Pitwall's five grades (read, write, unbounded write, DDL, destructive); a statement that does not parse is graded destructive instead of falling back to keyword matching; transaction control, session, lock, maintenance and pragma statements are writes; the side-effect function list was extended and now also covers table functions and `FROM` subqueries; the WHERE tautology analysis keeps its verdicts but flattens AND/OR chains once and finds complementary pairs with hash sets (the original was cubic in the chain length); the manual-transaction read proof, the keyword fallback and the Salesforce, search-engine and MCP-specific checks were not taken. The 34 tests were rewritten against the new API, and those whose expected values changed say why.
+  - `dbx-driver-redis/src/lib.rs`: the Redis command classes became `KvCommandClass` and map onto Pitwall's SQL risk grades; blocking commands (`BLPOP`, `BRPOP`, `BLMOVE`, `BLMPOP`, `BRPOPLPUSH`, `BZPOPMIN`, `BZPOPMAX`, `BZMPOP`, `WAIT`, `WAITAOF`, and `XREAD` / `XREADGROUP` with `BLOCK`) moved from the allowed and confirm lists to blocked; an argument-aware `classify_argv` was added; the batch test now splits each line into argv before classifying. The tokenizer is unchanged.
 
 ```text
                                  Apache License

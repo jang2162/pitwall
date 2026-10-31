@@ -9,6 +9,8 @@
 //! 남는다(MySQL 의 길, 14-m3-plan.md M3-07). 읽은 행 수([`FakeDriver::rows_read`])로 「소비자가 credit 을 주지 않으면 드라이버가
 //! 더 읽지 않는다」 를 시험한다.
 //!
+//! KV 갈래(Redis)의 가짜는 [`kv`] 다(M3-09).
+//!
 //! ```
 //! # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
 //! use pw_db_driver::fake::{FakeCall, FakeDriver, FakeResponse};
@@ -44,6 +46,8 @@ use tokio::sync::Notify;
 use crate::driver::{
     BoxFuture, Connected, DbConnection, DbDriver, DbResult, Interrupt, SqlConnection,
 };
+
+pub mod kv;
 
 /// 가짜 드라이버가 기록하는 호출.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -35,6 +35,12 @@ rustls-webpki = { version = "0.103.16", default-features = false }
 bytes = "1.12.1"
 futures-util = { version = "0.3.34", default-features = false }
 
+# Redis 드라이버(pw-db-driver-redis, 14-m3-plan.md M3-09). 크레이트의 TLS 기능은 켜지 않는다 — TLS 스트림은 Pitwall 이
+# tokio-rustls(ring) + rustls-platform-verifier 로 만들어 넘긴다(결정 M3-D10). 기본 기능(acl · streams · script 등)도 끈다.
+# rustls · rustls-platform-verifier 는 위 PostgreSQL 줄을 함께 쓴다.
+redis = { version = "1.8.1", default-features = false, features = ["tokio-comp"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+
 # 구문 분석(pw-syntax)의 `wasm` 기능은 문법 WASM 을 wasmtime 의 cranelift 로 기계어로 컴파일해 올린다(시험만 켠다). dev 빌드에서 이
 # 크레이트들을 최적화하지 않으면 큰 문법 하나를 올리는 데 1초쯤 걸려 함께 도는 시간 민감 시험을 흔든다.
 [profile.dev.package.cranelift-codegen]

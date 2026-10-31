@@ -8,10 +8,25 @@ publish.workspace = true
 # 실 DB 시험 표지(`cfg(pw_live_redis)`)를 환경 변수에서 정한다 — pw-db-driver 와 같은 빌드 스크립트(그 머리 주석).
 build = "../pw-db-driver/live_cfg.rs"
 
-# 드라이버 의존성은 이 크레이트의 행(M3-09)이 들인다.
 [dependencies]
 pw-db-driver = { path = "../pw-db-driver" }
 pw-db-types = { path = "../pw-db-types" }
+redis = { workspace = true }
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net"] }
+tokio-rustls = { workspace = true }
 
 [dev-dependencies]
 pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
+# 실 Redis 시험이 분류표를 서버의 명령 플래그와 대조한다(완료 기준 ②).
+pw-db-sql = { path = "../pw-db-sql" }
+tokio = { workspace = true, features = [
+  "rt",
+  "rt-multi-thread",
+  "sync",
+  "macros",
+  "time",
+  "net",
+  "test-util",
+] }
