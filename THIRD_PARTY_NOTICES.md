@@ -1621,7 +1621,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### Boost Software License 1.0 (BSL-1.0)
 
-Used by: clipboard-win 5.4.1
+Used by: clipboard-win 5.4.3
 
 ```text
 Boost Software License - Version 1.0 - August 17th, 2003
