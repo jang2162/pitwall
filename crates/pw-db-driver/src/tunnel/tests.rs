@@ -241,12 +241,19 @@ mod fake {
             .unwrap()
             .replace("'CHILD'", &shell_quote(&child_file));
         write_script(&fake.path("ssh"), &script);
+        // 400 ms 는 스크립트가 pid 파일 둘을 다 쓴 뒤부터 센다 — 준비 제한 시간을 멈추는 장치(askpass 의 「묻는 중」)로 그때까지 시계를
+        // 세운다. 그러지 않으면 바쁜 기계에서 스크립트가 파일을 쓰기 전에 그룹이 끝나 시험이 시험할 것을 못 본다.
+        let written = child_file.clone();
+        let setup = AskpassGuard::new(Vec::new(), move || !written.exists(), ());
         let tunnels = Tunnels::with_ready_timeout(Duration::from_millis(400));
         let started = tokio::time::Instant::now();
-        let e = tunnels
-            .open(key("bastion"), || async { Ok(fake.launch(None)) })
-            .await
-            .unwrap_err();
+        let e = tokio::time::timeout(
+            Duration::from_secs(30),
+            tunnels.open(key("bastion"), || async { Ok(fake.launch(Some(setup))) }),
+        )
+        .await
+        .expect("the fake ssh never wrote its pid files")
+        .unwrap_err();
         assert_eq!(e.kind, DbErrorKind::Timeout, "{}", e.message);
         assert!(started.elapsed() >= Duration::from_millis(400));
         let ssh = read_pid(&fake.path("pid"));
@@ -260,6 +267,93 @@ mod fake {
             "the ssh's child {sleeper} still runs"
         );
         assert_eq!(tunnels.live_count(), 0);
+    }
+
+    /// 남이 첫 포트의 와일드카드(`0.0.0.0:<포트>`)를 잡았다: 처음 찌르기는 남의 리스너에 닿지만, ssh 가 `127.0.0.1:<포트>` 를
+    /// 바인드하면(macOS) 그 포트로 준비되고, 바인드하지 못하면(Linux) 다른 포트로 준비된다 — 어느 쪽이든 제한 시간까지 기다리지 않고,
+    /// 준비된 뒤 그 주소로 가는 연결은 남에게 가지 않는다.
+    #[tokio::test]
+    async fn a_wildcard_listener_on_the_port_does_not_stall_a_tunnel_that_listens() {
+        use std::sync::atomic::AtomicUsize;
+
+        let fake = Fake::new(concat!(
+            "prev=''\nfor a in \"$@\"; do\n  if [ \"$prev\" = -L ]; then port=$(echo \"$a\" | cut -d: -f2); fi\n  prev=\"$a\"\ndone\n",
+            // 남의 리스너가 준비 확인에 찔린 뒤에야 바인드한다(경합을 늘 같은 순서로).
+            "while [ ! -f 'SEEN' ]; do sleep 0.02; done\n",
+            "exec perl -MIO::Socket::INET -e '$s = IO::Socket::INET->new(LocalAddr => \"127.0.0.1\", LocalPort => $ARGV[0], Listen => 5, ReuseAddr => 1) or die \"bind [127.0.0.1]:$ARGV[0]: $!\\n\"; while (my $c = $s->accept) { close $c }' \"$port\"",
+        ));
+        let seen = fake.path("seen");
+        let script = fs::read_to_string(fake.path("ssh"))
+            .unwrap()
+            .replace("'SEEN'", &shell_quote(&seen));
+        write_script(&fake.path("ssh"), &script);
+
+        // 첫 포트만 남이 와일드카드로 잡는다. 남이 받은 연결 수를 센다.
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let taken = Arc::new(Mutex::new(None::<(u16, tokio::task::JoinHandle<()>)>));
+        let (count, slot) = (Arc::clone(&accepted), Arc::clone(&taken));
+        let tunnels = Tunnels::with_port_picker(move || {
+            let port = free_port()?;
+            let mut slot = lock(&slot);
+            if slot.is_none() {
+                let listener = std::net::TcpListener::bind(("0.0.0.0", port))?;
+                listener.set_nonblocking(true)?;
+                let listener = tokio::net::TcpListener::from_std(listener)?;
+                let (count, seen) = (Arc::clone(&count), seen.clone());
+                let task = tokio::spawn(async move {
+                    while let Ok((_conn, _)) = listener.accept().await {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        let _ = fs::write(&seen, "");
+                    }
+                });
+                *slot = Some((port, task));
+            }
+            Ok(port)
+        });
+        let started = tokio::time::Instant::now();
+        let lease = tokio::time::timeout(
+            Duration::from_secs(10),
+            tunnels.open(key("bastion"), || async { Ok(fake.launch(None)) }),
+        )
+        .await
+        .expect("a wildcard listener stalled the tunnel")
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "ready only after {:?}",
+            started.elapsed()
+        );
+        let (first, task) = lock(&taken).take().unwrap();
+        let probes = accepted.load(Ordering::SeqCst);
+        assert!(
+            probes >= 1,
+            "the readiness probe never met the other listener"
+        );
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                lease.local().port,
+                first,
+                "ssh listens on loopback beside the wildcard"
+            );
+        }
+        // 준비된 주소로 가는 연결은 남이 받지 않는다(드라이버가 비밀번호를 보낼 곳).
+        let conn = tokio::net::TcpStream::connect((LOOPBACK, lease.local().port))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        drop(conn);
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            probes,
+            "a connection reached the other listener"
+        );
+        let ssh = lease.pid();
+        drop(lease);
+        assert!(
+            gone_within(ssh, Duration::from_secs(2)).await,
+            "ssh {ssh} still runs"
+        );
+        task.abort();
     }
 
     #[tokio::test]

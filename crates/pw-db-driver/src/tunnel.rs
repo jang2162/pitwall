@@ -508,7 +508,9 @@ async fn spawn_until_ready(
     });
 
     let mut deadline = Instant::now() + ready_timeout;
-    // 남의 리스너를 본 뒤에는 더 찔러 보지 않는다 — ssh 는 그 포트를 바인드하지 못하고 끝난다.
+    // 남의 리스너를 봤는가. 보고도 계속 찔러 소유 확인만으로 판정한다 — 남이 와일드카드(`0.0.0.0:<포트>`)를 잡았으면 macOS 는 ssh 가
+    // 더 좁은 `127.0.0.1:<포트>` 를 바인드하고 그 주소로 오는 연결은 ssh 가 받는다(ssh 는 끝나지 않는다). 루프백을 남이 잡았으면 ssh
+    // 가 바인드하지 못하고 끝나며, 그때 이것이 「포트를 뺏겼다」 의 근거가 된다.
     let mut foreign = false;
     let mut last = Instant::now();
     let outcome = loop {
@@ -548,9 +550,6 @@ async fn spawn_until_ready(
                 ),
             ));
         }
-        if foreign {
-            continue;
-        }
         let connected = tokio::time::timeout(
             Duration::from_secs(1),
             tokio::net::TcpStream::connect((LOOPBACK, port)),
@@ -562,7 +561,9 @@ async fn spawn_until_ready(
         match listener_owned_by(pid, port).await {
             Owner::Ours => break Ok(()),
             Owner::Other => {
-                tracing::warn!(target: "pw_db", pid, port, "another process listens on the tunnel's local port; waiting for ssh to give up");
+                if !foreign {
+                    tracing::warn!(target: "pw_db", pid, port, "another process listens on the tunnel's local port; waiting until ssh listens or gives up");
+                }
                 foreign = true;
             }
         }
