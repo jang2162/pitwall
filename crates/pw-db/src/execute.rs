@@ -24,6 +24,8 @@
 //!   SQLite 수동 트랜잭션 안의 쓰기를 취소하면 트랜잭션 전체가 롤백된다 — 그때는 `confirmRollback` 없이는 `3002` 로 묻는다.
 //!   드라이버가 보고한 전체 롤백(`DbError.rolledBack`)으로 세션 상태를 맞춘다.
 //! - **예산**: 연결 10 s · 취소 정리 5 s · 비활동 타임아웃(콘솔은 없음, 쪽 단위 실행은 30 s — `pw_db_driver::Budget`).
+//! - **조회만**(`queryOnly: true` — 테이블 데이터 M3-17 의 WHERE · ORDER BY 로 만든 문장): 관문의 분류에서 조회 문장 하나가 아니면
+//!   아무것도 돌리기 전에 `db.query.page` 와 같은 판정(`only_one_query`)으로 거절한다 — 창은 따로 검사하지 않는다.
 //! - **진행**은 `db.queryProgress`(프로젝트 범위 이벤트, [`DbQueryProgress`])로도 낸다 — 문장의 시작 · 끝과 그 사이 0.5 s 마다.
 //!
 //! **쪽 단위** `db.query.page { projectId, worktree?, connectionId, sql, limit }`(결정 M3-D19 — M5 가 `db_query` 툴로 켤 수 있는
@@ -93,6 +95,11 @@ pub struct DbQueryExecuteParams {
     /// 확인(`3001` 을 받은 뒤 사람의 확인을 거쳐).
     #[serde(default)]
     pub confirmed: Option<DbConfirmed>,
+    /// 조회 문장 하나만 돌린다(테이블 데이터 M3-17 — 사람이 친 WHERE · ORDER BY 조각으로 만든 문장). 조회가 아닌 문장이 있으면
+    /// 아무것도 돌리지 않고 `db.query.page` 와 같은 거절(`PERMISSION_DENIED`, `data.reason = "notAQuery"`), 조회가 둘 이상이면
+    /// invalid params. 확인을 묻는 일이 없다.
+    #[serde(default)]
+    pub query_only: bool,
 }
 
 #[derive(
@@ -292,6 +299,30 @@ rpc_method! {
     }
 }
 
+/// 조회 문장 하나만 받는다(`db.query.page` · `db.query.execute { queryOnly }` 가 함께 쓰는 판정). 조회가 아닌 문장(등급이 조회가
+/// 아님 · 세션 설정 · 트랜잭션 제어)이 하나라도 있으면 `PERMISSION_DENIED`(`data.reason = "notAQuery"`, `data.statements` 는 그
+/// 문장들), 모두 조회인데 하나가 아니면 invalid params.
+fn only_one_query<'a>(planned: &'a [Planned], method: &str) -> Result<&'a Planned, RpcError> {
+    let refused: Vec<DbStatementClass> = planned
+        .iter()
+        .filter(|s| s.grade != RiskGrade::Read || s.settings || s.control.is_some())
+        .map(Planned::class)
+        .collect();
+    if !refused.is_empty() {
+        return Err(RpcError::new(
+            rpc_code::PERMISSION_DENIED,
+            format!("{method} runs queries only"),
+        )
+        .with_data(json!({ "reason": "notAQuery", "statements": refused })));
+    }
+    match planned {
+        [statement] => Ok(statement),
+        _ => Err(RpcError::invalid_params(format!(
+            "{method} runs exactly one statement"
+        ))),
+    }
+}
+
 /// 실행 태스크가 창으로 보내는 길. 청크 하나를 넘기면 그것이 창으로 나갈 때까지 기다린다(credit).
 struct Out {
     /// 용량 2: 확인을 기다리는 항목 하나 + 마지막 항목 하나.
@@ -444,7 +475,12 @@ impl DbSessions {
                 params.sql,
                 params.statements,
                 params.confirmed.as_ref(),
-                |_, _, _| Ok(()),
+                |_, _, planned| {
+                    if params.query_only {
+                        only_one_query(planned, "db.query.execute { queryOnly }")?;
+                    }
+                    Ok(())
+                },
             )
             .await?;
         let dialect = session.dialect();
@@ -621,18 +657,7 @@ impl DbSessions {
             .await?;
         let sql = params.sql.clone();
         let planned = on_classifier_thread(move || plan(dialect, &sql, None)).await??;
-        let [statement] = planned.as_slice() else {
-            return Err(RpcError::invalid_params(
-                "db.query.page runs exactly one statement",
-            ));
-        };
-        if statement.grade != RiskGrade::Read || statement.settings || statement.control.is_some() {
-            return Err(RpcError::new(
-                rpc_code::PERMISSION_DENIED,
-                "db.query.page runs queries only",
-            )
-            .with_data(json!({ "reason": "notAQuery", "statements": [statement.class()] })));
-        }
+        let statement = only_one_query(&planned, "db.query.page")?;
         let opened = crate::connection::connect(
             self,
             &grant,

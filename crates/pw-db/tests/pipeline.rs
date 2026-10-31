@@ -783,6 +783,72 @@ async fn pages_are_read_only_and_limited() {
     );
 }
 
+/// 테이블 데이터(M3-17)의 `queryOnly`: 사람이 친 WHERE · ORDER BY 조각으로 만든 글이 조회 문장 하나가 아니면 아무것도 돌리지 않고
+/// `db.query.page` 와 같은 거절(`PERMISSION_DENIED` · `notAQuery` · 그 문장들)이다 — 보통 · 프로덕션 · read-only 연결 모두, 확인을
+/// 묻지 않는다(3001 이 아니다). 조회가 둘이면 invalid params. 조회 하나는 그대로 돈다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_only_runs_one_query_and_refuses_everything_else() {
+    let e = env(true);
+    e.pg.respond("FROM t", FakeResponse::rows(3));
+    let mut w = e.f.window();
+    for connection in ["dev", "prod", "ro"] {
+        let s = e.open(&mut w, connection).await;
+        let before = e.pg.calls().len();
+        for sql in [
+            "SELECT * FROM t\nWHERE 1=1; UPDATE t SET x = 1 WHERE id = 1",
+            "SELECT * FROM t\nWHERE 1=1; DROP TABLE t",
+            "SET search_path = x",
+            "COMMIT",
+            "DELETE FROM t",
+            "SELECT * FROM t\nWHERE (1=1",
+        ] {
+            let err = run(
+                &mut w,
+                json!({ "sessionId": s, "sql": sql, "queryOnly": true }),
+            )
+            .await
+            .unwrap_err();
+            assert!(denied(&err), "{connection} {sql}: {err:?}");
+            let data = err.data.as_ref().unwrap();
+            assert_eq!(data["reason"], "notAQuery", "{connection} {sql}: {err:?}");
+            assert!(
+                !data["statements"].as_array().unwrap().is_empty(),
+                "{connection} {sql}: {err:?}"
+            );
+        }
+        let two = run(
+            &mut w,
+            json!({ "sessionId": s, "sql": "SELECT 1; SELECT 2", "queryOnly": true }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(two.code, rpc_code::INVALID_PARAMS, "{connection}: {two:?}");
+        assert_eq!(
+            e.pg.calls().len(),
+            before,
+            "{connection}: the driver was called: {:?}",
+            &e.pg.calls()[before..]
+        );
+        let items = run(
+            &mut w,
+            json!({ "sessionId": s, "sql": "SELECT * FROM t\nWHERE id > 0\nORDER BY id DESC", "queryOnly": true }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            items.iter().any(|i| i["kind"] == "done"),
+            "{connection}: {items:?}"
+        );
+        assert!(
+            executed(&e.pg)
+                .last()
+                .is_some_and(|sql| sql.ends_with("ORDER BY id DESC")),
+            "{connection}: {:?}",
+            executed(&e.pg)
+        );
+    }
+}
+
 /// 사람이 친 `BEGIN` · `COMMIT` · `ROLLBACK` 은 드라이버 메서드로 옮긴다 — 드라이버는 이 문장을 SQL 로 받지 않는다. `PREPARE
 /// TRANSACTION` 은 아무것도 돌리기 전에 거절한다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

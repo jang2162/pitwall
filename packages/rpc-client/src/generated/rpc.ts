@@ -1916,6 +1916,12 @@ export type DbQueryExecuteParams = {
 	statements?: number[] | null,
 	/**  확인(`3001` 을 받은 뒤 사람의 확인을 거쳐). */
 	confirmed?: DbConfirmed | null,
+	/**
+	 *  조회 문장 하나만 돌린다(테이블 데이터 M3-17 — 사람이 친 WHERE · ORDER BY 조각으로 만든 문장). 조회가 아닌 문장이 있으면
+	 *  아무것도 돌리지 않고 `db.query.page` 와 같은 거절(`PERMISSION_DENIED`, `data.reason = "notAQuery"`), 조회가 둘 이상이면
+	 *  invalid params. 확인을 묻는 일이 없다.
+	 */
+	queryOnly?: boolean,
 };
 
 export type DbQueryExplainParams = {
