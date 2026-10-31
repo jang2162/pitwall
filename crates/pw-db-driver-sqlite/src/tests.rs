@@ -240,7 +240,9 @@ async fn load_extension_is_turned_off() {
 const LOCK_HOLDER: &str = "PW_SQLITE_TEST_HOLD_WRITE_LOCK";
 const LOCK_HELD: &str = "pw-sqlite-test: write lock held";
 
-/// 완료 기준 ⑤: 다른 프로세스가 쓰기 잠금을 쥔 파일에 쓰면 `busy_timeout`(5 s) 뒤 `busy` 다. 다른 프로세스는 이 시험 바이너리를
+/// 완료 기준 ⑤: 다른 프로세스가 쓰기 잠금을 쥔 파일에 쓰면 `busy_timeout`(벽시계 5 s — `busy` 모듈) 뒤 `busy` 다. 위 끝은 5 s 에
+/// 늦게 깬 잠 하나와 부하의 여유를 더한 것이다 — 잠의 합으로 재면(SQLite 기본 핸들러) 잠이 늦게 깨는 기계에서 두 배에 가깝다(CI 의
+/// macOS 러너 10.0 s, `taskpolicy -b` 로 띄운 로컬 macOS 10.4 s). 다른 프로세스는 이 시험 바이너리를
 /// 이 시험 하나로 다시 띄운 것이다(환경 변수 [`LOCK_HOLDER`] 가 있으면 잠금을 쥐고 표준 입력이 닫힐 때까지 기다린다).
 #[tokio::test]
 async fn another_process_holding_the_write_lock_ends_in_busy_after_5s() {
@@ -283,7 +285,7 @@ async fn another_process_holding_the_write_lock_ends_in_busy_after_5s() {
     let waited = started.elapsed();
     assert_eq!(error.kind, DbErrorKind::Busy, "{error:?}");
     assert!(
-        (Duration::from_millis(4500)..Duration::from_secs(10)).contains(&waited),
+        (Duration::from_millis(4500)..Duration::from_secs(7)).contains(&waited),
         "busy after {waited:?}"
     );
 

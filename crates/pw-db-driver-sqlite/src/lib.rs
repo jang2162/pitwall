@@ -3,6 +3,7 @@
 //!
 //! - [`connection`]: 연결 스레드와 그 앞의 [`SqlConnection`](pw_db_driver::SqlConnection) 구현. async 쪽은 채널로만 말하고
 //!   tokio 워커를 잡지 않는다. 취소는 스레드 밖으로 미리 꺼내 둔 `InterruptHandle` 이다.
+//! - [`busy`]: 잠금 기다림 — `busy_timeout` 5 s 를 벽시계로 재는 busy 핸들러.
 //! - [`guard`]: 여는 플래그 · 늘 끄는 것(확장 로드 · `trusted_schema`, 결정 M3-D13) · `ATTACH` · `VACUUM INTO` 대상의 루트 판정.
 //! - [`meta`]: 메타데이터(`sqlite_schema` · `pragma_table_info` · `pragma_index_list` · `pragma_foreign_key_list`)와 `EXPLAIN
 //!   QUERY PLAN`.
@@ -12,6 +13,7 @@
 //!
 //! SQLite 시험은 실 DB 표지 없이 세 OS 에서 돈다.
 
+mod busy;
 mod connection;
 mod error;
 #[cfg(any(test, feature = "test-support"))]

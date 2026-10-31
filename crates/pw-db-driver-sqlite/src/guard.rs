@@ -20,7 +20,7 @@ use rusqlite::{Connection, OpenFlags, ffi};
 
 use crate::error::{invalid, map};
 
-/// 다른 연결 · 프로세스의 잠금을 기다리는 시간. 넘으면 `busy` 다.
+/// 다른 연결 · 프로세스의 잠금을 기다리는 시간(벽시계 — [`crate::busy`]). 넘으면 `busy` 다.
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 값을 주면 거절하는 `PRAGMA`. 앞의 둘은 프로세스 전역이다 — 메인 Host 안의 모든 SQLite 연결(로컬 저장소 포함)의 임시 · 데이터
@@ -107,7 +107,7 @@ fn harden(conn: &Connection, spec: &ConnectionSpec, guard: &Guard) -> rusqlite::
     disable_load_extension(conn)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
-    conn.busy_timeout(BUSY_TIMEOUT)?;
+    conn.busy_handler(Some(crate::busy::wait))?;
     let roots = spec.clone();
     let guard = guard.clone();
     conn.authorizer(Some(move |context: AuthContext<'_>| {

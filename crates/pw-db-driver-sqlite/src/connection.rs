@@ -42,7 +42,7 @@ use crate::error::{disconnected, invalid};
 use crate::guard::{self, Guard};
 use crate::{meta, value};
 
-/// 닫기가 스레드의 끝을 기다리는 시간. 잠금을 기다리는 중(`busy_timeout` 5 s)이면 인터럽트로 깨지 않으므로 그보다 길다.
+/// 닫기가 스레드의 끝을 기다리는 시간. 잠금을 기다리는 중(벽시계 5 s — [`crate::busy`])이면 인터럽트로 깨지 않으므로 그보다 길다.
 const CLOSE_WAIT: Duration = Duration::from_secs(10);
 
 /// `progress_handler` 가 취소 표지를 보는 간격(가상 기계 명령 수).
