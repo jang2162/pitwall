@@ -217,6 +217,7 @@ mod tests {
             files,
             [
                 "builtin:i18n-default/i18n/ko/app.ftl",
+                "builtin:i18n-default/i18n/ko/db-grid.ftl",
                 "builtin:i18n-default/i18n/ko/db-safety.ftl",
                 "builtin:i18n-default/i18n/ko/file-window.ftl",
                 "builtin:i18n-default/i18n/ko/git-commit.ftl",
@@ -229,6 +230,7 @@ mod tests {
                 "builtin:i18n-default/i18n/ko/project.ftl",
                 "builtin:i18n-default/i18n/ko/welcome.ftl",
                 "builtin:i18n-default/i18n/en/app.ftl",
+                "builtin:i18n-default/i18n/en/db-grid.ftl",
                 "builtin:i18n-default/i18n/en/db-safety.ftl",
                 "builtin:i18n-default/i18n/en/file-window.ftl",
                 "builtin:i18n-default/i18n/en/git-commit.ftl",
