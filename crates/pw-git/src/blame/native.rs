@@ -152,7 +152,18 @@ pub fn run(
             subject.path
         )));
     }
-    let outcome = outcome.map_err(|e| RpcError::internal(format!("blame failed: {e}")))?;
+    let outcome = outcome.map_err(|e| {
+        // Windows 의 gix 는 UTF-8 이 아닌 경로를 OS 경로로 바꾸지 못해 이름 바뀜 후보의 속성을 찾다 실패한다(unix 는 바이트
+        // 그대로라 끝까지 돌고 범위의 경로에서 [`path_text`] 가 거른다). 어느 OS 든 같은 invalid params 로 끝낸다.
+        if let Some(gix::diff::blob::platform::set_resource::Error::Attributes {
+            rela_path, ..
+        }) = e.downcast_any_ref()
+            && let Err(refused) = path_text(rela_path.as_bstr())
+        {
+            return refused;
+        }
+        RpcError::internal(format!("blame failed: {e}"))
+    })?;
     // git 은 `blame.showRoot` 가 없으면 첫 커밋도 경계로 보인다.
     let show_root = repo.config_snapshot().boolean("blame.showRoot") == Some(true);
     let mailmap = Mailmap::always(repo, trusted);
