@@ -119,6 +119,7 @@ fn local_host(
         &runtime,
         git_write.askpass(),
         git_write.prompts(),
+        paths.state.join("db-ssh-tunnels"),
     );
     let db_session_methods = Arc::clone(&db_sessions);
     let host = LocalHost::builder(LOCAL_HOST_ID)

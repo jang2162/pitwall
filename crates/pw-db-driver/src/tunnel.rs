@@ -17,7 +17,9 @@
 //!   마지막 리스가 떨어지면 ssh 의 프로세스 그룹째 끝낸다(SIGTERM, [`STOP_GRACE`] 뒤 SIGKILL). ssh 는 `setsid` 로 자기 세션 ·
 //!   그룹을 갖는다 — 그 그룹만 끝낸다. ssh 가 스스로 죽으면 [`TunnelLease::lost`] 가 깨어나고(연결을 「끊김」 으로 알리는 것은
 //!   부르는 쪽 — `pw_db::session`), 다시 붙는 것은 사람이 누를 때다(다음 [`Tunnels::open`] 이 새로 띄운다).
-//! - **앱이 끝날 때**: [`shutdown`] 이 남은 ssh 그룹을 모두 끝낸다(데스크톱의 `RunEvent::Exit`).
+//! - **앱이 끝날 때**: [`shutdown`] 이 남은 ssh 그룹을 모두 끝낸다(데스크톱의 `RunEvent::Exit`). **강제로 끝나면**(SIGKILL ·
+//!   크래시) `shutdown` 이 돌지 않는다 — 띄운 ssh 마다 상태 디렉터리에 기록을 두고([`Tunnels::recording`]) 다음 시작 때
+//!   [`reap_orphans`] 가 (pid, 시작 시각, argv)가 모두 맞는 것만 끈다. Linux 는 ssh 에 `PR_SET_PDEATHSIG` 도 건다.
 //! - askpass(비밀번호 · 패스프레이즈 · 모르는 호스트 키)는 부르는 쪽이 [`AskpassGuard`] 로 환경을 준다(M2-06 의 길 — `pw_git`).
 //!   없으면 ssh 는 묻지 못하고 실패한다(제어 터미널이 없다).
 
@@ -281,6 +283,8 @@ struct Inner {
     slots: Mutex<HashMap<TunnelKey, Slot>>,
     ready_timeout: Duration,
     pick_port: PortPicker,
+    /// 띄운 ssh 의 기록을 둘 폴더([`orphans`]). 없으면 적지 않는다.
+    records: Option<PathBuf>,
 }
 
 impl Default for Tunnels {
@@ -291,15 +295,26 @@ impl Default for Tunnels {
 
 impl Tunnels {
     pub fn new() -> Self {
-        Self::with_options(READY_TIMEOUT, Arc::new(free_port))
+        Self::with_options(READY_TIMEOUT, Arc::new(free_port), None)
     }
 
-    fn with_options(ready_timeout: Duration, pick_port: PortPicker) -> Self {
+    /// 띄운 ssh 마다 `dir` 에 기록을 둔다 — 앱이 강제로 끝나 남은 ssh 를 다음 시작 때 [`reap_orphans`] 가 끈다. 데스크톱은 이것을
+    /// 쓴다(`dir` 은 상태 디렉터리 아래).
+    pub fn recording(dir: PathBuf) -> Self {
+        Self::with_options(READY_TIMEOUT, Arc::new(free_port), Some(dir))
+    }
+
+    fn with_options(
+        ready_timeout: Duration,
+        pick_port: PortPicker,
+        records: Option<PathBuf>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 slots: Mutex::default(),
                 ready_timeout,
                 pick_port,
+                records,
             }),
         }
     }
@@ -307,7 +322,7 @@ impl Tunnels {
     /// 준비 제한 시간을 바꾼다(시험).
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_ready_timeout(ready_timeout: Duration) -> Self {
-        Self::with_options(ready_timeout, Arc::new(free_port))
+        Self::with_options(ready_timeout, Arc::new(free_port), None)
     }
 
     /// 로컬 포트 고르기를 바꾼다(시험 — 경합 재현).
@@ -315,7 +330,7 @@ impl Tunnels {
     pub fn with_port_picker(
         pick_port: impl Fn() -> std::io::Result<u16> + Send + Sync + 'static,
     ) -> Self {
-        Self::with_options(READY_TIMEOUT, Arc::new(pick_port))
+        Self::with_options(READY_TIMEOUT, Arc::new(pick_port), None)
     }
 
     /// 지금 떠 있는 터널 수(시험).
@@ -367,13 +382,7 @@ impl Tunnels {
             return Ok(TunnelLease { live });
         }
         let launch = launch().await?;
-        let live = start(
-            &key,
-            launch,
-            self.inner.ready_timeout,
-            &self.inner.pick_port,
-        )
-        .await?;
+        let live = start(&key, launch, &self.inner).await?;
         *current = Arc::downgrade(&live);
         Ok(TunnelLease { live })
     }
@@ -393,20 +402,23 @@ enum Attempt {
     Failed(DbError),
 }
 
-async fn start(
-    key: &TunnelKey,
-    launch: Launch,
-    ready_timeout: Duration,
-    pick_port: &PortPicker,
-) -> DbResult<Arc<Live>> {
+async fn start(key: &TunnelKey, launch: Launch, inner: &Inner) -> DbResult<Arc<Live>> {
     for attempt in 0..2 {
-        let port = pick_port().map_err(|e| {
+        let port = (inner.pick_port)().map_err(|e| {
             DbError::new(
                 DbErrorKind::Connect,
                 format!("cannot pick a local port for the ssh tunnel: {e}"),
             )
         })?;
-        match spawn_until_ready(key, &launch, port, ready_timeout).await {
+        match spawn_until_ready(
+            key,
+            &launch,
+            port,
+            inner.ready_timeout,
+            inner.records.as_deref(),
+        )
+        .await
+        {
             Attempt::Ready(live) => return Ok(live),
             Attempt::PortTaken if attempt == 0 => {
                 tracing::info!(target: "pw_db", port, "another process took the tunnel's local port; trying another port");
@@ -430,6 +442,8 @@ async fn start(
 struct Group {
     pid: u32,
     armed: bool,
+    /// 강제 종료 뒤 정리용 기록(버리면 지운다 — 신호를 보낸 뒤다). 준비되면 감시 태스크로 옮긴다.
+    record: Option<orphans::Record>,
 }
 
 impl Drop for Group {
@@ -446,6 +460,7 @@ async fn spawn_until_ready(
     launch: &Launch,
     port: u16,
     ready_timeout: Duration,
+    records: Option<&std::path::Path>,
 ) -> Attempt {
     let args = match ssh_args(port, &key.db_host, key.db_port, &key.destination) {
         Ok(args) => args,
@@ -465,11 +480,26 @@ async fn spawn_until_ready(
     }
     #[cfg(unix)]
     {
-        // SAFETY: fork 와 exec 사이에서 async-signal-safe 인 setsid(2) 하나만 부른다.
+        #[cfg(target_os = "linux")]
+        let parent = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
+        // SAFETY: fork 와 exec 사이에서 async-signal-safe 인 setsid(2) · prctl(2) · getppid(2) 만 부른다.
         unsafe {
-            command.pre_exec(|| {
+            command.pre_exec(move || {
                 if libc::setsid() == -1 {
                     return Err(std::io::Error::last_os_error());
+                }
+                // Linux: 띄운 스레드가 끝나면(앱이 죽으면 — tokio 의 일꾼 스레드는 런타임과 함께 끝난다) ssh 에 SIGTERM. 이 줄 앞에서
+                // 앱이 이미 죽었으면 부모가 바뀌었다 — 띄우지 않는다.
+                #[cfg(target_os = "linux")]
+                {
+                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::getppid() != parent {
+                        return Err(std::io::Error::other(
+                            "the app ended while ssh was starting",
+                        ));
+                    }
                 }
                 Ok(())
             });
@@ -488,7 +518,12 @@ async fn spawn_until_ready(
         return Attempt::Failed(DbError::new(DbErrorKind::Connect, "ssh exited at once"));
     };
     remember_group(pid);
-    let mut group = Group { pid, armed: true };
+    let record = records.and_then(|dir| orphans::Record::write(dir, pid, &args));
+    let mut group = Group {
+        pid,
+        armed: true,
+        record,
+    };
     tracing::info!(target: "pw_db", pid, port, project = %key.project, destination = %key.destination, "ssh tunnel starting");
     let stderr = Arc::new(Mutex::new(Vec::new()));
     let reader = child.stderr.take().map(|mut pipe| {
@@ -579,7 +614,13 @@ async fn spawn_until_ready(
         lost: CancellationToken::new(),
         stop: CancellationToken::new(),
     });
-    tokio::spawn(watch(child, pid, live.stop.clone(), live.lost.clone()));
+    tokio::spawn(watch(
+        child,
+        pid,
+        live.stop.clone(),
+        live.lost.clone(),
+        group.record.take(),
+    ));
     tracing::info!(target: "pw_db", pid, port, project = %key.project, destination = %key.destination, "ssh tunnel ready");
     Attempt::Ready(live)
 }
@@ -615,7 +656,13 @@ fn exit_error(stderr: &str, status: Option<std::process::ExitStatus>) -> DbError
 }
 
 /// 준비된 ssh 를 지켜본다: 스스로 끝나면 `lost`, 마지막 리스가 떨어지면(`stop`) 그룹째 끝내고 거둔다.
-async fn watch(mut child: Child, pid: u32, stop: CancellationToken, lost: CancellationToken) {
+async fn watch(
+    mut child: Child,
+    pid: u32,
+    stop: CancellationToken,
+    lost: CancellationToken,
+    record: Option<orphans::Record>,
+) {
     tokio::select! {
         status = child.wait() => {
             tracing::info!(target: "pw_db", pid, ?status, "ssh tunnel process ended by itself");
@@ -630,6 +677,7 @@ async fn watch(mut child: Child, pid: u32, stop: CancellationToken, lost: Cancel
         }
     }
     forget_group(pid);
+    drop(record);
     lost.cancel();
 }
 
@@ -848,6 +896,9 @@ fn owner_of(pid: u32, port: u16) -> Result<bool, String> {
 fn owner_of(_pid: u32, _port: u16) -> Result<bool, String> {
     Err("no listener owner check on this platform".to_owned())
 }
+
+mod orphans;
+pub use orphans::reap_orphans;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;

@@ -5,13 +5,14 @@
 //! registry.register(Arc::new(pw_db_driver_pg::PgDriver::new())).expect("db driver ids are unique");
 //! ```
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use pw_db::config::Connections;
 use pw_db::secret::{KeyringStore, RuntimeEnv};
 use pw_db::tunnel::{SshTunnels, TunnelAskpass};
 use pw_db::{DbSessions, DriverRegistry};
-use pw_db_driver::tunnel::AskpassGuard;
+use pw_db_driver::tunnel::{AskpassGuard, Tunnels};
 use pw_runtime::Runtime;
 
 /// 연결 설정 · 비밀 · 신뢰 게이트(M3-02). 비밀은 OS 키체인(서비스 `dev.pitwall.db`), `env` 참조는 그 프로젝트의 런타임 환경에서
@@ -30,13 +31,28 @@ pub fn sessions(connections: &Arc<Connections>) -> Arc<DbSessions> {
 
 /// SSH 터널(M3-11): 시스템 ssh 를 그 프로젝트의 런타임 환경으로 띄우고, 비밀번호 · 모르는 호스트 키는 git 과 같은 askpass(M2-06)로
 /// 그 프로젝트 창에 묻는다. 앱이 끝날 때 남은 ssh 는 `pw_db_driver::tunnel::shutdown` 이 끝낸다(main.rs 의 `RunEvent::Exit`).
+/// 앱이 강제로 끝나면 그것이 돌지 않는다 — 띄운 ssh 를 `records`(상태 디렉터리 아래)에 적고, 앞 실행이 남긴 것은 여기서 끈다(배경
+/// 스레드 — 지금 실행이 띄우는 ssh 와 겹쳐도 된다, `pw_db_driver::tunnel::reap_orphans`).
 pub fn attach_tunnels(
     sessions: &DbSessions,
     runtime: &Arc<Runtime>,
     askpass: &pw_git::write::Askpass,
     prompts: &pw_git::write::Prompts,
+    records: PathBuf,
 ) {
-    let tunnels = SshTunnels::new(Arc::new(RuntimeEnv(Arc::clone(runtime))));
+    let previous = records.clone();
+    let _ = std::thread::Builder::new()
+        .name("db-ssh-reap".into())
+        .spawn(move || {
+            let ended = pw_db_driver::tunnel::reap_orphans(&previous);
+            if ended > 0 {
+                tracing::info!(target: "pw_db", ended, "ended ssh tunnels left by a previous run");
+            }
+        });
+    let tunnels = SshTunnels::with_tunnels(
+        Arc::new(RuntimeEnv(Arc::clone(runtime))),
+        Tunnels::recording(records),
+    );
     tunnels.attach_askpass(Arc::new(GitAskpass {
         askpass: askpass.clone(),
         prompts: prompts.clone(),

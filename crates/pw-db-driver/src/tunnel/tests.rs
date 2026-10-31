@@ -15,6 +15,34 @@ fn key(destination: &str) -> TunnelKey {
     }
 }
 
+/// 끝난 프로세스의 pid(기록한 앱이 죽은 것을 흉내 낸다).
+#[cfg(unix)]
+fn a_dead_pid() -> u32 {
+    let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+/// 기록(`orphans`)의 `owner` 줄을 끝난 앱으로 바꾼다 — 앱이 강제로 끝난 뒤 다음 시작을 흉내 낸다.
+#[cfg(unix)]
+fn as_if_the_app_crashed(record: &std::path::Path) {
+    let text = std::fs::read_to_string(record).unwrap();
+    let owner = format!("owner {} ", std::process::id());
+    assert!(text.contains(&owner), "{text}");
+    let text: String = text
+        .lines()
+        .map(|l| {
+            if l.starts_with("owner ") {
+                format!("owner {} 0\n", a_dead_pid())
+            } else {
+                format!("{l}\n")
+            }
+        })
+        .collect();
+    std::fs::write(record, text).unwrap();
+}
+
 #[test]
 fn the_argv_is_fixed_and_the_values_come_last() {
     let args = ssh_args(40001, "db.internal", 5432, "bastion").unwrap();
@@ -139,7 +167,7 @@ mod fake {
 
     use super::super::testing::{TempDir, shell_quote, write_script};
     use super::super::*;
-    use super::key;
+    use super::{a_dead_pid, as_if_the_app_crashed, key};
 
     struct Fake {
         dir: TempDir,
@@ -354,6 +382,120 @@ mod fake {
             "ssh {ssh} still runs"
         );
         task.abort();
+    }
+
+    /// 앱이 강제로 끝나 남은 ssh(그룹의 자식까지)를 다음 시작의 정리가 끈다. 기록한 앱이 살아 있으면 건드리지 않는다.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_ssh_left_by_a_crashed_app_is_ended_at_the_next_start() {
+        let fake = Fake::new(&format!(
+            "sleep 30 &\necho $! > {}\nwait",
+            shell_quote(&PathBuf::from("CHILD"))
+        ));
+        let child_file = fake.path("child");
+        let script = fs::read_to_string(fake.path("ssh"))
+            .unwrap()
+            .replace("'CHILD'", &shell_quote(&child_file));
+        write_script(&fake.path("ssh"), &script);
+        let records = fake.path("records");
+        let tunnels = Tunnels::recording(records.clone());
+        // 준비되지 않은 채로 머문다(묻는 중이라 제한 시간이 멈춘다) — 앱이 그 사이 죽는다.
+        let pending = AskpassGuard::new(Vec::new(), || true, ());
+        let opening = tokio::spawn({
+            let tunnels = tunnels.clone();
+            let launch = fake.launch(Some(pending));
+            async move { tunnels.open(key("bastion"), || async { Ok(launch) }).await }
+        });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let (ssh, record) = loop {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no record was written"
+            );
+            if child_file.exists()
+                && let Ok(text) = fs::read_to_string(fake.path("pid"))
+                && let Ok(pid) = text.trim().parse::<u32>()
+                && records.join(pid.to_string()).exists()
+            {
+                break (pid, records.join(pid.to_string()));
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let sleeper = read_pid(&child_file);
+        let text = fs::read_to_string(&record).unwrap();
+        assert!(text.starts_with(super::super::orphans::MAGIC), "{text}");
+        assert!(text.contains("\narg ControlPath=none\narg -L\n"), "{text}");
+
+        // 기록한 앱(이 프로세스)이 살아 있으면 끄지 않는다.
+        let dir = records.clone();
+        let ended = tokio::task::spawn_blocking(move || reap_orphans(&dir))
+            .await
+            .unwrap();
+        assert_eq!(ended, 0);
+        assert!(alive(ssh) && alive(sleeper));
+        assert!(record.exists());
+
+        as_if_the_app_crashed(&record);
+        let dir = records.clone();
+        let ended = tokio::task::spawn_blocking(move || reap_orphans(&dir))
+            .await
+            .unwrap();
+        assert_eq!(ended, 1);
+        assert!(
+            gone_within(ssh, Duration::from_secs(2)).await,
+            "ssh {ssh} still runs"
+        );
+        assert!(
+            gone_within(sleeper, Duration::from_secs(2)).await,
+            "the ssh's child {sleeper} still runs"
+        );
+        assert!(!record.exists());
+        let opened = tokio::time::timeout(Duration::from_secs(5), opening)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(opened.is_err());
+    }
+
+    /// pid 가 다시 쓰였으면(시작 시각이 다르면) · argv 가 Pitwall 의 ssh 인자가 아니면 끄지 않는다. 세 가지가 맞을 때만 끈다.
+    #[tokio::test]
+    async fn a_reused_pid_is_not_ended() {
+        use std::os::unix::process::CommandExt as _;
+
+        let dir = TempDir::new("pw-ssh-records", None);
+        let mut other = std::process::Command::new("sleep");
+        other.arg("30").process_group(0);
+        let mut other = other.spawn().unwrap();
+        let pid = other.id();
+        let start = super::super::orphans::start_time(pid).expect("start time");
+        let dead = a_dead_pid();
+        let write = |start: &str, arg: &str| {
+            fs::write(
+                dir.path().join(pid.to_string()),
+                format!(
+                    "{}\npid {pid}\nstart {start}\nowner {dead} 0\narg {arg}\n",
+                    super::super::orphans::MAGIC
+                ),
+            )
+            .unwrap();
+        };
+
+        write("1.000000", "30");
+        assert_eq!(reap_orphans(dir.path()), 0, "another start time");
+        assert!(alive(pid));
+        assert!(
+            !dir.path().join(pid.to_string()).exists(),
+            "the stale record is dropped"
+        );
+
+        write(&start, "31");
+        assert_eq!(reap_orphans(dir.path()), 0, "another argv");
+        assert!(alive(pid));
+
+        // 셋 다 맞으면 끈다(위 둘이 다른 까닭으로 건너뛰지 않았다는 대조).
+        write(&start, "30");
+        assert_eq!(reap_orphans(dir.path()), 1);
+        let status = other.wait().unwrap();
+        assert!(!status.success(), "{status:?}");
     }
 
     #[tokio::test]
@@ -674,6 +816,38 @@ mod live {
                 }
             );
         }
+    }
+
+    /// 앱이 강제로 끝나 남은 진짜 ssh 를 다음 시작의 정리가 끈다 — 기록한 argv 가 진짜 ssh 의 argv 끝과 맞고, 끈 뒤 로컬 포트에
+    /// LISTEN 이 없다.
+    #[tokio::test]
+    async fn live_ssh_tunnel_left_by_a_crashed_app_is_ended_at_the_next_start() {
+        let f = SshFixture::from_env();
+        ready(&f).await;
+        let records = testing::TempDir::new("pw-ssh-records", None);
+        let tunnels = Tunnels::recording(records.path().to_path_buf());
+        let lease = tunnels
+            .open(key(testing::HOST), || async { Ok(f.launch(None)) })
+            .await
+            .unwrap();
+        let (pid, port) = (lease.pid(), lease.local().port);
+        let record = records.path().join(pid.to_string());
+        assert!(record.exists(), "no record for ssh {pid}");
+        super::as_if_the_app_crashed(&record);
+        let dir = records.path().to_path_buf();
+        let ended = tokio::task::spawn_blocking(move || reap_orphans(&dir))
+            .await
+            .unwrap();
+        assert_eq!(ended, 1);
+        assert!(
+            gone_within(pid, Duration::from_secs(2)).await,
+            "ssh {pid} survived"
+        );
+        assert!(
+            TcpStream::connect((LOOPBACK, port)).is_err(),
+            "the forward still listens on {port}"
+        );
+        assert!(!record.exists());
     }
 
     /// 사람의 ControlMaster 는 쓰지도 끄지도 않는다(`ControlPath=none`): 마스터가 떠 있어도 터널은 우리 ssh 가 직접 LISTEN 하고, 끄면

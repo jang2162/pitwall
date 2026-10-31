@@ -35,10 +35,14 @@ tracing = "0.1.44"
 libc = "0.2.190"
 
 [target.'cfg(windows)'.dependencies]
-# 터널의 로컬 포트를 LISTEN 하는 프로세스(`GetExtendedTcpTable`). 판은 pw-fs · pw-git 과 같다.
+# 터널의 로컬 포트를 LISTEN 하는 프로세스(`GetExtendedTcpTable`)와, 앱이 강제로 끝나 남은 ssh 를 알아보는 시작 시각
+# (`GetProcessTimes`) · 명령줄(`NtQueryInformationProcess`). 판은 pw-fs · pw-git 과 같다.
 windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
   "Win32_NetworkManagement_IpHelper",
   "Win32_Networking_WinSock",
+  "Win32_System_Threading",
+  "Wdk_System_Threading",
 ] }
 
 [dev-dependencies]
