@@ -45,7 +45,7 @@ fn chains() -> Vec<(&'static str, String)> {
         ),
         (
             "is_true",
-            format!("DELETE FROM t WHERE a{}", " IS TRUE".repeat(n / 2)),
+            format!("DELETE FROM t WHERE a{}", " IS TRUE".repeat(n)),
         ),
     ]
 }

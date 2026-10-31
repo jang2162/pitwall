@@ -39,10 +39,7 @@ fn input(kind: &str, n: usize) -> (SqlDialect, String) {
                 format!("DELETE FROM t WHERE NOT ({})", terms.join(" OR ")),
             )
         }
-        "is_true" => (
-            pg,
-            format!("DELETE FROM t WHERE a{}", " IS TRUE".repeat(n / 2)),
-        ),
+        "is_true" => (pg, format!("DELETE FROM t WHERE a{}", " IS TRUE".repeat(n))),
         // 재귀 한도에 걸리는 꼴(괄호).
         "paren" => (pg, format!("SELECT {}1{}", "(".repeat(n), ")".repeat(n))),
         // 평평한 큰 글 — `n` 바이트 근처.
