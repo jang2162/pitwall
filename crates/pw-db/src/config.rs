@@ -82,6 +82,9 @@ pub struct DbConnectionConfig {
     /// SQLite 파일. 상대 경로면 프로젝트 루트 기준.
     #[serde(default)]
     pub path: Option<String>,
+    /// 연결을 여는 시간 상한(초, [`CONNECT_TIMEOUT_RANGE`]). 없으면 [`DEFAULT_CONNECT_TIMEOUT_SECS`]. 연결 테스트도 같다.
+    #[serde(default)]
+    pub connect_timeout: Option<u32>,
 }
 
 /// 비밀번호의 출처. 파일에서는 `{ secret_ref = "keychain" }` · `{ env = "<변수>" }` 다.
@@ -129,6 +132,11 @@ pub enum DbConfigLocation {
     Local,
 }
 
+/// 연결 타임아웃을 적지 않았을 때(초).
+pub const DEFAULT_CONNECT_TIMEOUT_SECS: u32 = 10;
+/// 받는 연결 타임아웃(초). 밖이면 설정 오류다 — 판정은 Host 가 한다(화면은 그 거절을 보인다).
+pub const CONNECT_TIMEOUT_RANGE: std::ops::RangeInclusive<u32> = 1..=600;
+
 /// 드라이버의 기본 포트. SQLite 는 없다.
 pub fn default_port(driver: DriverKind) -> Option<u16> {
     match driver {
@@ -163,6 +171,13 @@ impl DbConnectionConfig {
             (None, Some(host)) => default_ssl_mode(host),
             (None, None) => SslMode::Disable,
         }
+    }
+
+    /// 쓰이는 연결 타임아웃(밀리초).
+    pub fn effective_connect_timeout_ms(&self) -> u32 {
+        self.connect_timeout
+            .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS)
+            .saturating_mul(1000)
     }
 }
 
@@ -220,6 +235,15 @@ pub fn validate(config: &DbConnectionConfig) -> Result<(), String> {
         && (color.len() > 64 || color.chars().any(|c| c.is_control() || c.is_whitespace()))
     {
         return Err("color must be a short token without spaces".to_owned());
+    }
+    if let Some(secs) = config.connect_timeout
+        && !CONNECT_TIMEOUT_RANGE.contains(&secs)
+    {
+        return Err(format!(
+            "connect_timeout must be {} to {} seconds",
+            CONNECT_TIMEOUT_RANGE.start(),
+            CONNECT_TIMEOUT_RANGE.end()
+        ));
     }
     if let Some(DbPasswordRef::Env { variable }) = &config.password
         && !valid_env_name(variable)
@@ -316,6 +340,8 @@ struct FileConnection {
     ssh_tunnel: Option<FileTunnel>,
     #[serde(default)]
     path: Option<String>,
+    #[serde(default)]
+    connect_timeout: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -372,6 +398,7 @@ pub fn from_file_value(value: &Value) -> Result<DbConnectionConfig, String> {
             host_ref: t.host_ref,
         }),
         path: file.path,
+        connect_timeout: file.connect_timeout,
     };
     validate(&config)?;
     Ok(config)
@@ -437,6 +464,10 @@ pub fn write_document(doc: &mut toml_edit::DocumentMut, config: &DbConnectionCon
     set("sslcert", text(&config.sslcert));
     set("sslkey", text(&config.sslkey));
     set("path", text(&config.path));
+    set(
+        "connect_timeout",
+        config.connect_timeout.map(|s| value(i64::from(s))),
+    );
     set(
         "ssh_tunnel",
         config.ssh_tunnel.as_ref().map(|t| {

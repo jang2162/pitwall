@@ -1120,6 +1120,16 @@
                   "null"
                 ]
               },
+              "connectTimeout": {
+                "default": null,
+                "description": "연결을 여는 시간 상한(초, [`CONNECT_TIMEOUT_RANGE`]). 없으면 [`DEFAULT_CONNECT_TIMEOUT_SECS`]. 연결 테스트도 같다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "database": {
                 "default": null,
                 "type": [
@@ -1249,7 +1259,8 @@
               "sslcert",
               "sslkey",
               "sshTunnel",
-              "path"
+              "path",
+              "connectTimeout"
             ],
             "type": "object"
           },
@@ -1831,6 +1842,16 @@
                   "null"
                 ]
               },
+              "connectTimeout": {
+                "default": null,
+                "description": "연결을 여는 시간 상한(초, [`CONNECT_TIMEOUT_RANGE`]). 없으면 [`DEFAULT_CONNECT_TIMEOUT_SECS`]. 연결 테스트도 같다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "database": {
                 "default": null,
                 "type": [
@@ -1960,7 +1981,8 @@
               "sslcert",
               "sslkey",
               "sshTunnel",
-              "path"
+              "path",
+              "connectTimeout"
             ],
             "type": "object"
           },
@@ -2394,6 +2416,16 @@
                   "null"
                 ]
               },
+              "connectTimeout": {
+                "default": null,
+                "description": "연결을 여는 시간 상한(초, [`CONNECT_TIMEOUT_RANGE`]). 없으면 [`DEFAULT_CONNECT_TIMEOUT_SECS`]. 연결 테스트도 같다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "database": {
                 "default": null,
                 "type": [
@@ -2727,6 +2759,16 @@
                 "description": "연결 표지 색(M3-19 의 테마 토큰 이름이나 `#rrggbb`).",
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "connectTimeout": {
+                "default": null,
+                "description": "연결을 여는 시간 상한(초, [`CONNECT_TIMEOUT_RANGE`]). 없으면 [`DEFAULT_CONNECT_TIMEOUT_SECS`]. 연결 테스트도 같다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -3150,6 +3192,16 @@
                   "null"
                 ]
               },
+              "connectTimeout": {
+                "default": null,
+                "description": "연결을 여는 시간 상한(초, [`CONNECT_TIMEOUT_RANGE`]). 없으면 [`DEFAULT_CONNECT_TIMEOUT_SECS`]. 연결 테스트도 같다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "database": {
                 "default": null,
                 "type": [
@@ -3279,7 +3331,8 @@
               "sslcert",
               "sslkey",
               "sshTunnel",
-              "path"
+              "path",
+              "connectTimeout"
             ],
             "type": "object"
           },
@@ -11680,6 +11733,50 @@
         "owner",
         "mobile",
         "readonly"
+      ],
+      "tier": "read"
+    },
+    "db.ssh.hosts": {
+      "description": "`~/.ssh/config`(과 그 `Include`)의 `Host` 이름 — 와일드카드 · 부정 패턴이 없고 터널 목적지로 쓸 수 있는 것만. 다른 값은\n읽지 않는다. 읽지 못하면 빈 목록. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "hosts": {
+            "description": "파일에 나온 순서, 같은 이름은 한 번.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "hosts"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
       ],
       "tier": "read"
     },

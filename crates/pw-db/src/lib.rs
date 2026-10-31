@@ -10,6 +10,7 @@
 //! - [`schema`]: 스키마 탐색 RPC · 캐시(M3-10).
 //! - [`edit`]: 그리드 편집 적용 RPC(M3-12).
 //! - [`kv`]: Redis RPC(M3-22).
+//! - [`ssh_hosts`]: 연결 편집 다이얼로그의 `~/.ssh/config` 호스트 이름 목록(M3-14).
 //!
 //! 모듈 배치의 주인은 M3-01 이다. 이후 행은 자기 모듈을 채우고, 메서드 등록 줄을 하나씩 더한다(14 「공유 부품의 주인」).
 
@@ -23,6 +24,7 @@ pub mod registry;
 pub mod schema;
 pub mod secret;
 pub mod session;
+pub mod ssh_hosts;
 pub mod trust;
 pub mod tunnel;
 

@@ -909,6 +909,7 @@ fn build_spec(config: &DbConnectionConfig, root: &Path, checked: Checked) -> Con
         client_key: config.sslkey.as_ref().map(|p| cert_path(root, p)),
     };
     spec.read_only = config.read_only;
+    spec.connect_timeout_ms = config.effective_connect_timeout_ms();
     spec.allowed_roots = checked.allowed_roots;
     spec
 }

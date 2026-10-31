@@ -228,6 +228,11 @@ export type UnaryMethods = {
 	 */
 	"db.sql.statementAt": { params: SqlStatementAtParams; result: SqlStatementAtResult };
 	/**
+	 * `~/.ssh/config`(과 그 `Include`)의 `Host` 이름 — 와일드카드 · 부정 패턴이 없고 터널 목적지로 쓸 수 있는 것만. 다른 값은
+	 * 읽지 않는다. 읽지 못하면 빈 목록. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.
+	 */
+	"db.ssh.hosts": { params: DbProjectParams; result: DbSshHosts };
+	/**
 	 * 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.
 	 * 경로 · 비밀 · 홈 디렉터리 이름은 가린다.
 	 */
@@ -840,6 +845,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.sql.insertText": {"name":"db.sql.insertText","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlInsertTextParams","output":"SqlInsertTextResult","doc":" 결과 행을 그 방언의 `INSERT` 글로(행마다 한 문장, 리터럴 규칙은 `pw_db_sql::literal`). 연결을 열지 않는 계산이다.\n 잘린 값 · 방언에 없는 값이 있으면 `INVALID_PARAMS` 이고 `data` 가 그 셀(`InsertTextError`)이다. 셀이\n [`MAX_INSERT_CELLS`] 를 넘어도 `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"db.sql.split": {"name":"db.sql.split","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlSplitParams","output":"SqlSplitResult","doc":" SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\n UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면\n `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
+	"db.ssh.hosts": {"name":"db.ssh.hosts","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbSshHosts","doc":" `~/.ssh/config`(과 그 `Include`)의 `Host` 이름 — 와일드카드 · 부정 패턴이 없고 터널 목적지로 쓸 수 있는 것만. 다른 값은\n 읽지 않는다. 읽지 못하면 빈 목록. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.\n","mcp":false,"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":false,"fileScope":false},
 	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":false,"fileScope":false},
 	"fs.copy": {"name":"fs.copy","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsCopied","doc":" 파일이나 폴더(그 아래 전부)를 복사한다. 심링크는 따르지 않고 링크로 복사한다. 대상 이름이 있으면 덮지 않고 `CONFLICT`.\n","mcp":false,"fileScope":false},
@@ -1461,6 +1467,8 @@ export type DbConnectionConfig = {
 	sshTunnel?: DbSshTunnel | null,
 	/**  SQLite 파일. 상대 경로면 프로젝트 루트 기준. */
 	path?: string | null,
+	/**  연결을 여는 시간 상한(초, [`CONNECT_TIMEOUT_RANGE`]). 없으면 [`DEFAULT_CONNECT_TIMEOUT_SECS`]. 연결 테스트도 같다. */
+	connectTimeout?: number | null,
 };
 
 export type DbConnectionEntry = {
@@ -2229,6 +2237,11 @@ export type DbSqlClassifyParams = {
 	dialect?: SqlDialect | null,
 	sql: string,
 	statements?: number[] | null,
+};
+
+export type DbSshHosts = {
+	/**  파일에 나온 순서, 같은 이름은 한 번. */
+	hosts: string[],
 };
 
 /**  SSH 터널(결정 M3-D11). 목적지 하나뿐이다 — `~/.ssh/config` 의 호스트 이름이나 `ssh://[user@]host[:port]`. */

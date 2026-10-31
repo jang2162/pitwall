@@ -111,6 +111,7 @@ fn local_host(
     // DB 연결 설정 · 비밀 · 신뢰 게이트(`db.connection.*` · `db.secret.*`, M3-02). 비밀은 OS 키체인, env 참조는 런타임 환경.
     let db_connections = db::connections(&runtime);
     let db_connection_methods = Arc::clone(&db_connections);
+    let db_ssh_host_methods = Arc::clone(&db_connections);
     // DB 세션 · 실행 파이프라인(`db.session.*` · `db.query.*` · `db.sql.classify` · `db.connection.test`, M3-05).
     let db_sessions = db::sessions(&db_connections);
     // SSH 터널(M3-11) — git 쓰기와 같은 askpass · 창 질의를 쓴다.
@@ -151,6 +152,7 @@ fn local_host(
         .methods(move |router| pw_db::config::register(router, db_connection_methods))
         .methods(move |router| pw_db::register(router, db_session_methods))
         .methods(|router| pw_db::registry::register(router, db::drivers()))
+        .methods(move |router| pw_db::ssh_hosts::register(router, db_ssh_host_methods))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
