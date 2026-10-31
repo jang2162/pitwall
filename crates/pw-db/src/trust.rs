@@ -13,8 +13,8 @@
 //!   - **`env` 참조**: 사람이 확인한 (변수 이름, 대상)을 프로젝트 상태 `$DATA/projects/<id>/db.json` 에 기억하고, 그것과 지금이 다르면 —
 //!     처음 쓸 때도 — 변수를 읽기 전에 [`code::APPROVAL_REQUIRED`] 로 묻는다. 확인하면 창이 `db.connection.approve` 로 기록한다.
 //!   - **터널 목적지 · 인증서 파일**(M3-11, M3-02 에서 넘어온 규칙): 저장한 연결의 `ssh_tunnel.host_ref` 와 그때의 대상, 인증서
-//!     파일(`sslrootcert` · `sslcert` · `sslkey` 를 루트 기준으로 푼 절대 경로)과 그때의 대상을 사람이 확인한 그대로 같은 파일에
-//!     기억하고, 지금과 다르면 — 처음 쓸 때도 — ssh 를 띄우거나 파일을 읽기 전에 [`code::APPROVAL_REQUIRED`] 로 묻는다. 커밋된 설정을
+//!     파일(`sslrootcert` · `sslcert` · `sslkey` 를 루트 기준으로 풀고 링크를 끝까지 푼 실제 경로 — 드라이버도 그 경로를 읽는다)과
+//!     그때의 대상을 사람이 확인한 그대로 같은 파일에 기억하고(인증서는 (연결 id, 루트)마다 — 워크트리를 오가도 서로 덮지 않는다), 지금과 다르면 — 처음 쓸 때도 — ssh 를 띄우거나 파일을 읽기 전에 [`code::APPROVAL_REQUIRED`] 로 묻는다. 커밋된 설정을
 //!     누가 바꿔 사람의 ssh 에이전트 · 키를 다른 호스트로 쓰게 하거나 다른 파일을 서버에 보내게 하지 못한다. **연결 id 없는 초안**
 //!     (「연결 추가」 의 [연결 테스트])은 묻지 않는다 — 그 값은 창에서 사람이 친 것이다(`env` 참조는 초안에서도 묻는다). 연결 id 가
 //!     있는 초안은 그 연결의 기록과 같을 때만 묻지 않는다.
@@ -222,7 +222,7 @@ pub struct DbTunnelBinding {
     pub target: DbSecretTarget,
 }
 
-/// 인증서 파일(활성 워크트리 안의 루트 기준으로 푼 절대 경로). 적지 않은 것은 `null`.
+/// 인증서 파일(활성 워크트리 안의 루트 기준으로 풀고 링크를 끝까지 푼 실제 경로 — 드라이버도 그 경로를 읽는다). 적지 않은 것은 `null`.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -237,7 +237,7 @@ impl DbCertFiles {
     fn of(config: &DbConnectionConfig, root: &Path) -> Option<Self> {
         let resolve = |p: &Option<String>| {
             p.as_ref()
-                .map(|p| root.join(p).to_string_lossy().into_owned())
+                .map(|p| cert_path(root, p).to_string_lossy().into_owned())
         };
         let files = Self {
             sslrootcert: resolve(&config.sslrootcert),
@@ -311,9 +311,10 @@ pub(crate) struct Approvals {
     /// 연결 id → 확인한 (터널 목적지, 대상)(M3-11).
     #[serde(default)]
     pub tunnels: BTreeMap<String, DbTunnelBinding>,
-    /// 연결 id → 확인한 (인증서 파일, 대상)(M3-11).
+    /// 연결 id → 루트(활성 워크트리 안의 프로젝트 루트) → 확인한 (인증서 파일, 대상)(M3-11). 루트마다 따로 둔다 — 같은 프로젝트를
+    /// 워크트리 둘에서 번갈아 열어도 서로의 확인을 덮지 않는다.
     #[serde(default)]
-    pub certs: BTreeMap<String, DbCertBinding>,
+    pub certs: BTreeMap<String, BTreeMap<String, DbCertBinding>>,
 }
 
 /// 드라이버에 줄 연결과 그 바탕.
@@ -409,6 +410,14 @@ fn read_approvals(file: &Path) -> Result<Approvals, String> {
 /// 실제 경로(링크를 끝까지 푼 것). 없는 파일은 연결할 수 없다 — 드라이버도 파일을 만들지 않는다. Windows 에서 `canonicalize` 가
 /// 붙이는 verbatim 접두(`\\?\`)는 걷는다 — 확인 요청(`realPath`)으로 사람에게 보이고 프로젝트 상태에 저장하는 경로다
 /// (`pw_core::registry::path` 머리 주석의 규칙).
+/// 인증서 파일의 경로: 루트 기준으로 풀고 링크를 끝까지 푼 실제 경로. 확인은 이 경로에 묶이고 드라이버도 이 경로를 읽는다 — 커밋으로
+/// `certs/client.crt` 를 루트 밖 파일로의 링크로 바꾸면 경로가 달라져 다시 묻는다. 없는 파일은 푼 경로 그대로(드라이버가 읽지
+/// 못해 실패한다 — 나중에 생기면 실제 경로가 되어 다시 묻는다).
+fn cert_path(root: &Path, path: &str) -> PathBuf {
+    let joined = root.join(path);
+    fs::canonicalize(&joined).map_or(joined, simplify)
+}
+
 fn real_path(path: &Path) -> Result<PathBuf, RpcError> {
     fs::canonicalize(path).map(simplify).map_err(|e| {
         RpcError::invalid_params(format!(
@@ -610,7 +619,10 @@ impl Connections {
                     files,
                     target: target.clone(),
                 };
-                let previous = approvals.certs.get(id);
+                let previous = approvals
+                    .certs
+                    .get(id)
+                    .and_then(|roots| roots.get(&*loaded.root.to_string_lossy()));
                 if previous != Some(&now) {
                     return Err(Ok(Blocked::Approval(DbApprovalRequest::CertFiles {
                         files: now.files,
@@ -843,9 +855,12 @@ impl Connections {
                 if now.files != *files || now.target != **target {
                     return Err(changed());
                 }
-                let id = params.connection_id.clone();
+                let (id, root) = (
+                    params.connection_id.clone(),
+                    loaded.root.to_string_lossy().into_owned(),
+                );
                 self.update_approvals(trusted.id(), move |a| {
-                    a.certs.insert(id, now);
+                    a.certs.entry(id).or_default().insert(root, now);
                 })?;
                 tracing::info!(target: "pw_db", project = %params.project_id, connection = %params.connection_id, "approved the certificate files of a db connection");
             }
@@ -872,7 +887,8 @@ impl Connections {
 }
 
 /// 연결 설정 → 드라이버 입력. 판정(`Connections::check`)을 지난 값으로만 만든다 — 크레이트 밖에 열지 않는다. SQLite 는 판정한 실제
-/// 경로를 연다. 상대 인증서 경로는 활성 워크트리 안의 루트 기준. 터널은 아직 열지 않았다(`connect_to` 는 M3-11 이 채운다).
+/// 경로를 연다. 상대 인증서 경로는 활성 워크트리 안의 루트 기준으로 푼 실제 경로([`cert_path`] — 확인이 묶인 그 경로). 터널은
+/// 아직 열지 않았다(`connect_to` 는 M3-11 이 채운다).
 fn build_spec(config: &DbConnectionConfig, root: &Path, checked: Checked) -> ConnectionSpec {
     let target = match checked.file {
         Some(path) => Target::File { path },
@@ -888,9 +904,9 @@ fn build_spec(config: &DbConnectionConfig, root: &Path, checked: Checked) -> Con
     spec.password = checked.password;
     spec.tls = TlsSettings {
         mode: config.effective_ssl_mode(),
-        root_cert: config.sslrootcert.as_ref().map(|p| root.join(p)),
-        client_cert: config.sslcert.as_ref().map(|p| root.join(p)),
-        client_key: config.sslkey.as_ref().map(|p| root.join(p)),
+        root_cert: config.sslrootcert.as_ref().map(|p| cert_path(root, p)),
+        client_cert: config.sslcert.as_ref().map(|p| cert_path(root, p)),
+        client_key: config.sslkey.as_ref().map(|p| cert_path(root, p)),
     };
     spec.read_only = config.read_only;
     spec.allowed_roots = checked.allowed_roots;

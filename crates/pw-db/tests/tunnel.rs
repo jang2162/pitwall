@@ -597,6 +597,76 @@ mod fake_ssh {
         assert_eq!(e.specs.lock().unwrap().len(), 1);
     }
 
+    /// 인증서 확인은 실제 경로(링크를 끝까지 푼 것)에 묶이고 드라이버도 그 경로를 읽는다 — 확인 뒤 커밋이 그 파일을 루트 밖으로의
+    /// 링크로 바꾸면(설정은 그대로) 다시 묻는다. 확인은 (연결 id, 루트)마다라 워크트리 둘을 번갈아 열어도 서로 덮지 않는다.
+    #[tokio::test]
+    async fn certificate_approvals_follow_the_real_file_and_each_worktree_keeps_its_own() {
+        let ssh = FakeSsh::new();
+        let e = env(true, ssh.tunnels());
+        let config = "schema = 1\nname = \"tls\"\ndriver = \"postgres\"\nhost = \"db.example\"\nsslmode = \"verify-full\"\nsslrootcert = \"certs/ca.pem\"\n";
+        e.f.write_db("c.toml", config);
+        fs::create_dir_all(e.f.root.join("certs")).unwrap();
+        fs::write(e.f.root.join("certs/ca.pem"), "ca").unwrap();
+        let real = |p: &std::path::Path| {
+            pw_core::registry::path::simplify(fs::canonicalize(p).unwrap())
+                .to_string_lossy()
+                .into_owned()
+        };
+        let mut w = e.f.window();
+        let main = open_params(&e.f, "c");
+        let err = w.call("db.session.open", main.clone()).await.unwrap_err();
+        let inside = real(&e.f.root.join("certs/ca.pem"));
+        assert_eq!(
+            err.data.as_ref().unwrap()["request"]["files"]["sslrootcert"],
+            inside.as_str()
+        );
+        approve(&mut w, &e.f, "c", &err).await;
+        w.call("db.session.open", main.clone()).await.unwrap();
+        let read = |e: &Env| {
+            let spec = e.specs.lock().unwrap().last().cloned().unwrap();
+            spec.tls.root_cert.unwrap().to_string_lossy().into_owned()
+        };
+        assert_eq!(read(&e), inside, "the driver reads the approved file");
+
+        // 커밋이 그 파일을 루트 밖 파일로의 링크로 바꾼다.
+        let outside = e.f.base.join("outside.pem");
+        fs::write(&outside, "secret").unwrap();
+        fs::remove_file(e.f.root.join("certs/ca.pem")).unwrap();
+        std::os::unix::fs::symlink(&outside, e.f.root.join("certs/ca.pem")).unwrap();
+        let err = w.call("db.session.open", main.clone()).await.unwrap_err();
+        let request = &err.data.as_ref().unwrap()["request"];
+        assert_eq!(request["kind"], "certFiles", "{err:?}");
+        assert_eq!(request["files"]["sslrootcert"], real(&outside).as_str());
+        assert_eq!(request["previous"]["files"]["sslrootcert"], inside.as_str());
+        assert_eq!(e.specs.lock().unwrap().len(), 1, "the driver must not run");
+        approve(&mut w, &e.f, "c", &err).await;
+        w.call("db.session.open", main.clone()).await.unwrap();
+
+        // 워크트리: 그 루트의 확인을 따로 받고, 메인 루트의 확인을 덮지 않는다.
+        let wt = common::fake_worktree(&e.f.root, &e.f.base.join("p1-wt"));
+        let top = wt.display().to_string();
+        fs::create_dir_all(wt.join(".pitwall/db")).unwrap();
+        fs::write(wt.join(".pitwall/db/c.toml"), config).unwrap();
+        fs::create_dir_all(wt.join("certs")).unwrap();
+        fs::write(wt.join("certs/ca.pem"), "ca").unwrap();
+        let mut in_wt = main.clone();
+        in_wt["worktree"] = json!(top);
+        let err = w.call("db.session.open", in_wt.clone()).await.unwrap_err();
+        let request = err.data.as_ref().unwrap()["request"].clone();
+        assert_eq!(request["kind"], "certFiles", "{err:?}");
+        w.call(
+            "db.connection.approve",
+            json!({ "projectId": e.f.id, "worktree": top, "connectionId": "c",
+                    "approval": { "kind": "certFiles", "files": request["files"], "target": request["target"] } }),
+        )
+        .await
+        .unwrap();
+        w.call("db.session.open", in_wt.clone()).await.unwrap();
+        w.call("db.session.open", main).await.unwrap();
+        w.call("db.session.open", in_wt).await.unwrap();
+        assert_eq!(e.specs.lock().unwrap().len(), 5);
+    }
+
     /// 「연결 추가」 의 초안(연결 id 없음)은 창에서 사람이 친 값이라 터널을 묻지 않는다. 저장한 연결을 고치는 초안은 그 기록대로 묻는다.
     #[tokio::test]
     async fn a_new_draft_tunnel_is_not_asked_but_a_saved_connections_draft_is() {

@@ -1274,7 +1274,7 @@ export type DbCertBinding = {
 	target: DbSecretTarget,
 };
 
-/**  인증서 파일(활성 워크트리 안의 루트 기준으로 푼 절대 경로). 적지 않은 것은 `null`. */
+/**  인증서 파일(활성 워크트리 안의 루트 기준으로 풀고 링크를 끝까지 푼 실제 경로 — 드라이버도 그 경로를 읽는다). 적지 않은 것은 `null`. */
 export type DbCertFiles = {
 	sslrootcert: string | null,
 	sslcert: string | null,
