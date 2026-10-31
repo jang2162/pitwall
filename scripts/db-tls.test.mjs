@@ -46,6 +46,21 @@ test("the pg target hands the tests a localhost URL, and the CA is shared", () =
   assert.ok(args.at(-1).includes("ssl=on"));
 });
 
+test("the redis target is tls-only on a pinned image and shares the CA", () => {
+  assert.equal(TARGETS.redis.urlEnv, "PW_TEST_REDIS_TLS_URL");
+  assert.equal(TARGETS.redis.url(6380), "rediss://localhost:6380/0");
+  const args = TARGETS.redis.args({ out: "/certs" });
+  assert.ok(args.includes("/certs:/pw-tls:ro"), args.join(" "));
+  assert.ok(
+    args.some((a) => /^redis:[\d.]+@sha256:[0-9a-f]{64}$/.test(a)),
+    args.join(" "),
+  );
+  const command = args.at(-1);
+  assert.match(command, /--port 0 --tls-port 6380 /);
+  assert.match(command, /--tls-ca-cert-file \/tls\/ca\.pem/);
+  assert.equal(TARGETS.redis.innerPort, 6380);
+});
+
 test("port 0 lets docker pick a free port", () => {
   assert.equal(publish(0, 5432), "127.0.0.1::5432");
   assert.equal(publish(5443, 5432), "127.0.0.1:5443:5432");

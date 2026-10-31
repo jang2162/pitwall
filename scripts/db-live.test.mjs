@@ -143,7 +143,8 @@ test("tls servers start only for a running db without a tls url, and only with d
     [],
     "CI started it already",
   );
-  assert.deepEqual(tlsToStart(TARGETS.redis, { PW_TEST_REDIS_URL: "redis://x" }, true), []);
+  assert.deepEqual(tlsToStart(TARGETS.redis, { PW_TEST_REDIS_URL: "redis://x" }, true), ["redis"]);
+  assert.deepEqual(tlsToStart(TARGETS.mysql, { PW_TEST_MYSQL_URL: "mysql://x" }, true), []);
 });
 
 test("tls container names are per worktree and per run", async () => {

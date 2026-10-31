@@ -4,7 +4,8 @@
 //! 0 · 2(⑤), 1(① 키 100만 개 — 이미 심겨 있으면 다시 심지 않는다), 3 ~ 9(나머지). Redis 의 기본 DB 수는 16 이다.
 //!
 //! TLS 시험(⑦)은 `PW_TEST_REDIS_TLS_URL`(`rediss://localhost:6380/0`)과 `PW_TEST_TLS_CA`(시험 CA 의 PEM 경로)를 읽는다 —
-//! CI 의 `db-live` 잡 「tls test servers」 단계가 `scripts/db-tls.mjs` 로 만든다(주인 M3-06 — 그 행이 병합되면 TARGETS 에 redis 항목 하나를 더한다). 없으면 건너뛰지 않고 실패한다.
+//! `scripts/db-tls.mjs` 의 redis 항목이 띄운다(CI 는 `db-live` 잡 「tls test servers」 단계, 로컬은 `mise run test-db`). 없으면
+//! 건너뛰지 않고 실패한다.
 
 use std::time::{Duration, Instant};
 
@@ -655,6 +656,20 @@ async fn live_redis_tls_verify_full_trusts_only_the_given_ca() {
         spec
     };
     let driver = RedisDriver::new();
+
+    // 서버는 시험 직전에 뜰 수 있다(`mise run test-db` 가 띄운다). 준비 확인(`wait_ready`)은 평문 PING 이라 TLS 만 받는 포트에는 못
+    // 쓴다 — 검증 없는 TLS 연결이 될 때까지 기다린다.
+    let started = Instant::now();
+    while let Err(error) = driver
+        .connect(tls_spec(SslMode::Require, false, "localhost"))
+        .await
+    {
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "the TLS server is not ready: {error}"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 
     let refused = driver
         .connect(tls_spec(SslMode::VerifyFull, false, "localhost"))

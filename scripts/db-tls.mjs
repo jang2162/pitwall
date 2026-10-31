@@ -1,7 +1,7 @@
 // 실 DB 시험의 TLS 서버를 띄운다(14-m3-plan.md M3-06 「TLS 시험 서버」). 시험 CA 와 서버 인증서를 그 자리에서 만들고, 그 인증서를 단
 // 컨테이너를 띄운 뒤 시험이 읽을 환경 변수를 알린다.
 //
-//   node scripts/db-tls.mjs [--out <폴더>] [--name <이름 앞부분>] [--port <db>=<포트> …] [db …]     db: pg(없으면 전부)
+//   node scripts/db-tls.mjs [--out <폴더>] [--name <이름 앞부분>] [--port <db>=<포트> …] [db …]     db: pg · redis(없으면 전부)
 //
 // CI 의 `db-live` 잡은 checkout 뒤 이것을 부른다 — 서비스 컨테이너는 checkout 전에 떠 저장소의 파일을 마운트할 수 없다. 환경 변수는
 // `GITHUB_ENV` 가 있으면 거기에 더하고(다음 단계가 받는다), 늘 표준 출력에 `이름=값` 줄로 낸다(로컬은 그대로 export 한다).
@@ -12,7 +12,7 @@
 // 보여 서버가 키를 못 찾고 곧바로 꺼졌다(실측). 인증서는 실행마다 새로 만든다(유효 30일) — 저장소에 키를 두지 않고, 만료로 시험이
 // 깨지지 않는다. 서버 인증서의 이름은 `localhost` 와 `127.0.0.1` 이다. CA 는 모든 DB 가 함께 쓴다(`PW_TEST_TLS_CA`).
 // 컨테이너는 `--rm` 이다 — 끝나면 `docker stop <이름>`. 같은 이름이 이미 떠 있으면 실패한다(다른 워크트리의 서버를 끄지 않는다 —
-// 로컬은 `--name` · `--port` 로 가른다). 새 DB(M3-09 의 Redis 등)는 TARGETS 에 한 항목을 더한다.
+// 로컬은 `--name` · `--port` 로 가른다). 새 DB 는 TARGETS 에 한 항목을 더한다.
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
@@ -24,6 +24,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 // CI 서비스와 같은 판(.github/workflows/ci.yml 의 db-live 잡). 올리면 둘을 함께 올린다.
 const PG_IMAGE =
   "postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929";
+const REDIS_IMAGE =
+  "redis:7.2.10@sha256:8cd70b529aec2af55a072917098c1ae6f1d9eb975ac1cf36928c7d5af7574f08";
 
 /** CA 경로를 넘기는 변수(모든 DB 공용). */
 export const CA_ENV = "PW_TEST_TLS_CA";
@@ -66,6 +68,31 @@ export const TARGETS = {
         "cp /pw-tls/init.sql /docker-entrypoint-initdb.d/",
         "exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.pem " +
           "-c ssl_key_file=/var/lib/postgresql/server.key -c hba_file=/var/lib/postgresql/pg_hba.conf",
+      ].join(" && "),
+    ],
+  },
+  // TLS 만 받는 Redis(평문 포트를 닫는다 — 평문 시험은 CI 서비스의 PW_TEST_REDIS_URL). 클라이언트 인증서는 요구하지 않는다.
+  redis: {
+    port: 6380,
+    innerPort: 6380,
+    urlEnv: "PW_TEST_REDIS_TLS_URL",
+    url: (port) => `rediss://localhost:${port}/0`,
+    files: {},
+    args: ({ out }) => [
+      "-v",
+      `${out}:/pw-tls:ro`,
+      "--entrypoint",
+      "sh",
+      REDIS_IMAGE,
+      "-c",
+      // 마운트한 키는 호스트 사용자의 것이라 redis 사용자가 못 읽을 수 있다 — 복사해 맞춘다.
+      [
+        "install -d -o redis /tls",
+        "install -o redis -m 600 /pw-tls/server.key /tls/server.key",
+        "install -o redis -m 644 /pw-tls/server.pem /tls/server.pem",
+        "install -o redis -m 644 /pw-tls/ca.pem /tls/ca.pem",
+        "exec docker-entrypoint.sh redis-server --port 0 --tls-port 6380 --tls-cert-file /tls/server.pem " +
+          "--tls-key-file /tls/server.key --tls-ca-cert-file /tls/ca.pem --tls-auth-clients no",
       ].join(" && "),
     ],
   },

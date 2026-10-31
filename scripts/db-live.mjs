@@ -27,7 +27,12 @@ export const TARGETS = {
   pg: { env: "PW_TEST_PG_URL", filter: "live_pg", testEnv: "PW_TEST_PG_URL", tls: ["pg"] },
   mysql: { env: "PW_TEST_MYSQL_URL", filter: "live_mysql", testEnv: "PW_TEST_MYSQL_URL" },
   mariadb: { env: "PW_TEST_MARIADB_URL", filter: "live_mysql", testEnv: "PW_TEST_MYSQL_URL" },
-  redis: { env: "PW_TEST_REDIS_URL", filter: "live_redis", testEnv: "PW_TEST_REDIS_URL" },
+  redis: {
+    env: "PW_TEST_REDIS_URL",
+    filter: "live_redis",
+    testEnv: "PW_TEST_REDIS_URL",
+    tls: ["redis"],
+  },
 };
 
 /** `name = 정수` 줄들. 빈 줄 · `#` 주석은 건너뛴다. 모르는 꼴 · 같은 이름 두 번은 오류다. */
