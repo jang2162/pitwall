@@ -121,8 +121,11 @@ export function RedisDocument({ spec, params, panelId }: DbDocumentProps<"redis"
   clientRef.current = client;
   const scanRef = useRef(browse.scan);
   scanRef.current = browse.scan;
+  // 탭이 닫힌 뒤에 풀린 `db.session.open` 은 그 세션을 곧바로 닫고 스캔을 시작하지 않는다(정리는 이미 지나갔다).
+  const mountedRef = useRef(true);
   useEffect(
     () => () => {
+      mountedRef.current = false;
       scanRef.current.stop();
       const sessionId = sessionRef.current;
       if (sessionId)
@@ -171,7 +174,12 @@ export function RedisDocument({ spec, params, panelId }: DbDocumentProps<"redis"
           connectionName: name,
         };
         if (!(await access.resolve(e, target))) throw e;
+        if (!mountedRef.current) return;
         o = await open();
+      }
+      if (!mountedRef.current) {
+        void client.call("db.session.close", { sessionId: o.session.sessionId }).catch(() => {});
+        return;
       }
       setOpened(o);
       startScan(o.session.sessionId, pattern);

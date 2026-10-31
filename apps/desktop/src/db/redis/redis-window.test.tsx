@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 
 import defaultTheme from "../../../../../extensions/theme-default/themes/default.json";
 import { App } from "../../App";
-import { openTab } from "../../editor/editor-tabs";
+import { openTab, tabParams } from "../../editor/editor-tabs";
 import { bundledTranslator } from "../../i18n/testing";
 import type { KeymapNative } from "../../keymap/native";
 import { act, endTest, it } from "../../test-support/ended-test";
@@ -56,6 +56,8 @@ const host = vi.hoisted(() => ({
   targetExists: true,
   /** 세션을 열 때 비밀이 필요하다(3101) — `db.secret.set` 이 오면 풀린다. */
   needSecret: false,
+  /** 있으면 `db.session.open` 의 답을 이것이 풀릴 때까지 붙잡는다. */
+  holdOpen: undefined as Promise<void> | undefined,
 }));
 
 const glide = vi.hoisted(() => ({
@@ -90,6 +92,20 @@ vi.mock("../../tauri-transport", async () => {
       let next = 1;
       const streams = new Map<number, unknown[]>();
       const send = (m: object) => server.send(JSON.stringify({ jsonrpc: "2.0", ...m }));
+      const opened = {
+        session: {
+          sessionId: "s1",
+          projectId: "p1",
+          connectionId: "redis-local",
+          mode: "auto",
+          state: { kind: "idle" },
+        },
+        name: "redis-local",
+        readOnly: false,
+        production: false,
+        driver: { id: "redis", dialect: null, supports: {} },
+        server: { version: "7.2.10", tls: "plaintext" },
+      } as unknown as DbSessionOpened;
       server.onMessage((text) => {
         const m = JSON.parse(text) as { id?: number; method: string; params: never };
         const params = (m.params ?? {}) as Record<string, unknown>;
@@ -182,6 +198,12 @@ vi.mock("../../tauri-transport", async () => {
             host.needSecret = false;
             return reply(null);
           case "db.session.open":
+            if (host.holdOpen && !host.needSecret) {
+              const held = host.holdOpen;
+              host.holdOpen = undefined;
+              void held.then(() => reply(opened));
+              return;
+            }
             if (host.needSecret)
               return fail(3101, "db connection `redis-local` needs its password", {
                 connectionId: "redis-local",
@@ -200,20 +222,7 @@ vi.mock("../../tauri-transport", async () => {
                 },
                 previous: null,
               });
-            return reply({
-              session: {
-                sessionId: "s1",
-                projectId: "p1",
-                connectionId: "redis-local",
-                mode: "auto",
-                state: { kind: "idle" },
-              },
-              name: "redis-local",
-              readOnly: false,
-              production: false,
-              driver: { id: "redis", dialect: null, supports: {} },
-              server: { version: "7.2.10", tls: "plaintext" },
-            } as unknown as DbSessionOpened);
+            return reply(opened);
           case "db.session.close":
             return reply(null);
           case "db.kv.scan": {
@@ -325,6 +334,7 @@ beforeEach(() => {
   host.pages = new Map();
   host.targetExists = true;
   host.needSecret = false;
+  host.holdOpen = undefined;
   glide.rows = [];
   glide.cells = [];
 });
@@ -603,6 +613,47 @@ describe("the Redis key document", () => {
     });
     expect(calls("db.session.open")).toHaveLength(2);
     expect($("[data-testid=redis-connect-error]")).toBeNull();
+  });
+
+  async function openTabAndConnect() {
+    await mountApp();
+    await act(async () => {
+      openTab(dock!, { path: dbDocumentKey(SPEC), db: SPEC, title: "redis-local · DB 0" });
+    });
+    await settle();
+    await click($("[data-redis-document] [data-action=connect]"));
+  }
+
+  const closeRedisTab = () =>
+    act(async () => dock!.panels.find((p) => tabParams(p).db !== undefined)!.api.close());
+
+  // 리뷰 L2: 연결 중에 탭을 닫으면 돌아온 세션을 곧바로 닫고 스캔하지 않는다.
+  it("closes a session that opens after its tab was closed, and does not scan", async () => {
+    host.keys = [info("a", "string")];
+    let release!: () => void;
+    host.holdOpen = new Promise<void>((r) => (release = r));
+    await openTabAndConnect();
+    expect(calls("db.session.open")).toHaveLength(1);
+    await closeRedisTab();
+    expect($("[data-redis-document]")).toBeNull();
+    await act(async () => release());
+    await vi.waitFor(() => expect(calls("db.session.close")).toHaveLength(1));
+    expect(calls("db.session.close")[0]!.params).toEqual({ sessionId: "s1" });
+    await settle();
+    expect(calls("db.kv.scan")).toEqual([]);
+  });
+
+  // M3-13 의 접근 묻기는 주인이 언마운트되면 거짓으로 끝난다 — 묻는 중에 탭을 닫으면 다시 열지 않는다.
+  it("does not open again when the tab closes while the password is asked", async () => {
+    host.needSecret = true;
+    await openTabAndConnect();
+    expect($("[data-testid=db-access-prompt]")).not.toBeNull();
+    await closeRedisTab();
+    await settle();
+    expect($("[data-testid=db-access-prompt]")).toBeNull();
+    expect(calls("db.session.open")).toHaveLength(1);
+    expect(calls("db.secret.set")).toEqual([]);
+    expect(calls("db.kv.scan")).toEqual([]);
   });
 
   it("does not call a connection RPC when restarted with the tab open", async () => {
