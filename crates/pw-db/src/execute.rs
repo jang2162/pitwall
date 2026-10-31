@@ -9,9 +9,12 @@
 //! - **credit 백프레셔**: 첫 청크는 첫 화면 몫(500행 또는 256 KiB 중 먼저)을 받자마자 보내고, 그 뒤는 창이 받은 만큼만 서버 커서에서
 //!   읽는다 — 실행 태스크는 청크 하나를 넘기고 그것이 창으로 나갈 때(credit 을 쓸 때)까지 다음 `fetch` 를 하지 않는다(읽은 행 ≤ 보낸
 //!   행 + 한 청크).
-//! - **그리드 보유 행 상한**(`[db] grid_max_rows`, 기본 10만)에 닿으면 한 행을 더 읽어 넘는지 보고, 넘으면 드라이버의 「커서 버리기」
-//!   를 불러 `truncated: true` — **연결은 닫지 않고 세션의 트랜잭션은 그대로**다. 다시 실행하지 않는다. 드라이버는
-//!   `ExecuteRequest.grade` 로 버리는 방법을 고른다(조회가 아니면 끝까지 읽어 버린다).
+//! - **그리드 보유 상한** — 행(`[db] grid_max_rows`, 기본 10만)과 받은 셀 바이트 합(`[db] grid_max_bytes`, 기본 64 MiB — 셀
+//!   상한 1 MiB × 10만 행이 웹뷰에 그대로 쌓이지 않게, M3-16 리뷰) 중 먼저 닿는 쪽에서 한 행을 더 읽어 넘는지 보고, 넘으면 드라이버의
+//!   「커서 버리기」 를 불러 `truncated: true` — **연결은 닫지 않고 세션의 트랜잭션은 그대로**다. 다시 실행하지 않는다. 드라이버는
+//!   `ExecuteRequest.grade` 로 버리는 방법을 고른다(조회가 아니면 끝까지 읽어 버린다). 바이트는 [`cell_bytes`] 로 센다(창의
+//!   `ResultBuffer` 가 같은 규칙으로 세어 「상한에서 멈춤(N행 · M MiB)」 을 보인다). 한 묶음은 남은 바이트만큼만 청하지만 드라이버는
+//!   행을 통째로 주므로 한 행만큼 넘을 수 있다.
 //! - **트랜잭션 제어 문장**(`BEGIN` · `START TRANSACTION` · `COMMIT` · `END` · `ROLLBACK` · `ABORT`, `AND CHAIN` 포함)은 드라이버의
 //!   `begin` · `commit` · `rollback` 으로 옮긴다(`pw_db_sql::txn`). 옮길 수 없는 것(`PREPARE TRANSACTION` 등)은 아무것도 돌리기
 //!   전에 거절한다.
@@ -39,8 +42,8 @@ use pw_db_driver::{Budget, DbConnection, QueryCancel, SqlConnection};
 use pw_db_sql::split::SqlRange;
 use pw_db_sql::txn::TxControl;
 use pw_db_types::{
-    BeginOptions, ColumnMeta, DbError, DbErrorKind, ExecuteRequest, FetchLimit, RiskGrade, Row,
-    SqlDialect, TransactionState,
+    BeginOptions, ColumnMeta, DbError, DbErrorKind, DbValue, ExecuteRequest, FetchLimit, RiskGrade,
+    Row, SqlDialect, TransactionState,
 };
 use pw_rpc::{Ctx, JsNumber, Router, RpcError, StreamSink, code as rpc_code, rpc_method};
 use serde::{Deserialize, Serialize};
@@ -399,7 +402,10 @@ impl DbSessions {
             tx,
             stop: running.stop.clone(),
         };
-        let max_rows = self.grid_max_rows();
+        let limit = GridLimit {
+            rows: self.grid_max_rows(),
+            bytes: self.grid_max_bytes(),
+        };
         let task = tokio::spawn(run_script(
             Arc::clone(&self),
             Arc::clone(&session),
@@ -407,7 +413,7 @@ impl DbSessions {
             planned,
             Arc::clone(&running),
             out,
-            max_rows,
+            limit,
         ));
         let mut guard = HaltOnDrop(Some(running));
         while let Some((event, ack)) = rx.recv().await {
@@ -684,6 +690,32 @@ async fn read_page(
     }
 }
 
+/// 그리드 보유 상한(결정 M3-D7 의 행 상한 + M3-16 리뷰의 바이트 상한). 먼저 닿는 쪽에서 커서를 버린다.
+#[derive(Debug, Clone, Copy)]
+struct GridLimit {
+    rows: u64,
+    bytes: u64,
+}
+
+/// 그리드 보유 바이트 상한이 세는 셀 하나의 크기: 글(텍스트 · decimal · json · 시각 · uuid · 잘린 값의 앞부분 · 그 밖 값의 글)은 UTF-8
+/// 바이트, 바이트 값은 받은 hex 글의 길이, 배열은 요소의 합 + 2, 그 밖(NULL · 참거짓 · 수 · 문자열로 온 큰 정수)은 8.
+/// 창(`apps/desktop/src/db/grid/result-buffer.ts` 의 `cellBytes`)이 같은 규칙으로 센다 — 바꾸면 둘을 함께 바꾼다.
+pub fn cell_bytes(value: &DbValue) -> u64 {
+    let n = match value {
+        DbValue::Text(s)
+        | DbValue::Decimal(s)
+        | DbValue::Json(s)
+        | DbValue::Datetime(s)
+        | DbValue::Uuid(s) => s.len(),
+        DbValue::Bytes(b) => b.hex.len(),
+        DbValue::Truncated(t) => t.prefix.len(),
+        DbValue::Other(o) => o.text.len(),
+        DbValue::Array(items) => return items.iter().map(cell_bytes).sum::<u64>() + 2,
+        _ => 8,
+    };
+    n as u64
+}
+
 /// 실행 태스크: 세션 잠금을 쥐고 문장을 하나씩 돌린다.
 async fn run_script(
     sessions: Arc<DbSessions>,
@@ -692,7 +724,7 @@ async fn run_script(
     planned: Vec<Planned>,
     running: Arc<Running>,
     out: Out,
-    max_rows: u64,
+    limit: GridLimit,
 ) {
     let accepted = DbQueryEvent::Accepted {
         execution_id: running.execution_id.clone(),
@@ -718,7 +750,7 @@ async fn run_script(
         }
         sessions.progress(&session, &running, statement.index, 0, started, false);
         let (outcome, notice, stopped) = run_statement(
-            &sessions, &session, &mut link, statement, &running, &out, max_rows, started,
+            &sessions, &session, &mut link, statement, &running, &out, limit, started,
         )
         .await;
         *lock(&running.current) = None;
@@ -808,7 +840,7 @@ async fn run_statement(
     statement: &Planned,
     running: &Running,
     out: &Out,
-    max_rows: u64,
+    grid: GridLimit,
     started: Instant,
 ) -> (Outcome, Option<DbSessionNotice>, bool) {
     if let Some(control) = statement.control {
@@ -865,15 +897,17 @@ async fn run_statement(
         return stop_cursor(link, implicit).await;
     }
     let mut sent: u64 = 0;
+    let mut sent_bytes: u64 = 0;
     let mut limit = FetchLimit::FIRST_SCREEN;
     let mut last_progress = Instant::now();
     loop {
         let Some(conn) = link.sql() else {
             return (Outcome::Failed(disconnected()), None, false);
         };
-        let room = max_rows.saturating_sub(sent);
-        if room == 0 {
-            // 상한에 닿았다: 한 행을 더 읽어 넘는지 본다. 넘으면 커서만 버린다 — 연결 · 트랜잭션은 그대로.
+        let room = grid.rows.saturating_sub(sent);
+        let room_bytes = grid.bytes.saturating_sub(sent_bytes);
+        if room == 0 || room_bytes == 0 {
+            // 상한(행 · 바이트 중 먼저 닿은 쪽)에 닿았다: 한 행을 더 읽어 넘는지 본다. 넘으면 커서만 버린다 — 연결 · 트랜잭션은 그대로.
             let probe = running.cancel.run(conn.fetch(FetchLimit::rows(1))).await;
             match probe {
                 Err(mut e) => {
@@ -898,7 +932,7 @@ async fn run_statement(
                         let notice = settle(link, implicit, Some(&mut e)).await;
                         return (Outcome::Failed(e), notice, false);
                     }
-                    tracing::info!(target: "pw_db", session = %session.id, rows = sent, "db result truncated at the grid row limit");
+                    tracing::info!(target: "pw_db", session = %session.id, rows = sent, bytes = sent_bytes, "db result truncated at the grid limit");
                     let notice = settle(link, implicit, None).await;
                     return (
                         Outcome::Done {
@@ -913,7 +947,7 @@ async fn run_statement(
         }
         let want = FetchLimit {
             max_rows: room.min(u64::from(limit.max_rows)) as u32,
-            max_bytes: limit.max_bytes,
+            max_bytes: room_bytes.min(u64::from(limit.max_bytes)) as u32,
         };
         let batch = match running.cancel.run(conn.fetch(want)).await {
             Ok(batch) => batch,
@@ -923,6 +957,12 @@ async fn run_statement(
             }
         };
         let count = batch.rows.len() as u64;
+        let bytes: u64 = batch
+            .rows
+            .iter()
+            .flat_map(|row| row.iter())
+            .map(cell_bytes)
+            .sum();
         if count > 0
             && out
                 .emit(DbQueryEvent::Rows {
@@ -946,6 +986,7 @@ async fn run_statement(
             return stop_cursor(link, implicit).await;
         }
         sent += count;
+        sent_bytes = sent_bytes.saturating_add(bytes);
         if last_progress.elapsed() >= PROGRESS_EVERY {
             last_progress = Instant::now();
             sessions.progress(session, running, index, sent, started, false);

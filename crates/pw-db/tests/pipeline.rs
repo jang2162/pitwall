@@ -272,6 +272,95 @@ async fn the_row_limit_discards_the_cursor_and_keeps_the_transaction() {
     assert_eq!(e.pg.count(&FakeCall::Begin { read_only: false }), 1);
 }
 
+/// 받은 셀 바이트 합(Host 가 세는 규칙 그대로).
+fn held_bytes(items: &[Value]) -> u64 {
+    items
+        .iter()
+        .filter(|i| i["kind"] == "rows")
+        .flat_map(|i| i["rows"].as_array().unwrap().iter())
+        .flat_map(|row| row.as_array().unwrap().iter())
+        .map(|cell| pw_db::execute::cell_bytes(&serde_json::from_value(cell.clone()).unwrap()))
+        .sum()
+}
+
+fn rows_of(items: &[Value]) -> usize {
+    items
+        .iter()
+        .filter(|i| i["kind"] == "rows")
+        .map(|i| i["rows"].as_array().unwrap().len())
+        .sum()
+}
+
+/// 그리드 보유 바이트 상한(`[db] grid_max_bytes`, M3-16 리뷰): 행 상한과 바이트 상한 중 먼저 닿는 쪽에서 커서를 버린다 — 연결 ·
+/// 트랜잭션은 그대로. 바이트 상한에서 멈추면 받은 바이트는 상한 이상이고 한 행 이상 넘지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_byte_limit_or_the_row_limit_stops_the_result_whichever_comes_first() {
+    let e = env(true);
+    e.pg.respond("FROM big", FakeResponse::rows(5000));
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+
+    // 바이트가 먼저: 행 상한 1000 · 바이트 상한 2000(한 행 ≈ 14 바이트 — 약 150행에서 닿는다).
+    e.sessions.set_grid_max_rows(Some(1000));
+    e.sessions.set_grid_max_bytes(Some(2000));
+    let items = run(&mut w, exec(&s, "SELECT * FROM big")).await.unwrap();
+    assert_eq!(items.last().unwrap()["truncated"], true, "{items:?}");
+    let (rows, bytes) = (rows_of(&items), held_bytes(&items));
+    assert!(rows < 1000, "{rows}");
+    assert!((2000..2000 + 32).contains(&bytes), "{bytes}");
+    assert!(
+        e.pg.calls_of(0)
+            .contains(&FakeCall::DiscardCursor { drained: false })
+    );
+    assert!(!e.pg.calls_of(0).contains(&FakeCall::Close));
+
+    // 행이 먼저: 같은 결과에 행 상한 100 · 바이트 상한 64 MiB(기본).
+    e.sessions.set_grid_max_rows(Some(100));
+    e.sessions.set_grid_max_bytes(None);
+    assert_eq!(e.sessions.grid_max_bytes(), 64 * 1024 * 1024);
+    let items = run(&mut w, exec(&s, "SELECT * FROM big")).await.unwrap();
+    assert_eq!(items.last().unwrap()["truncated"], true, "{items:?}");
+    assert_eq!(rows_of(&items), 100);
+    assert!(held_bytes(&items) < 2000);
+
+    // 둘 다 넉넉하면 끝까지.
+    e.sessions.set_grid_max_rows(Some(5000));
+    e.sessions.set_grid_max_bytes(Some(1_000_000));
+    let items = run(&mut w, exec(&s, "SELECT * FROM big")).await.unwrap();
+    assert_eq!(items.last().unwrap()["truncated"], false, "{items:?}");
+    assert_eq!(rows_of(&items), 5000);
+}
+
+/// 상한은 전역 `settings.toml` 의 `[db] grid_max_rows` · `grid_max_bytes` 를 읽는다(1 이상의 정수가 아니면 기본값).
+#[test]
+fn the_grid_limits_come_from_the_global_settings() {
+    use pw_core::bus::{DEFAULT_CAPACITY, EventBus, Scope};
+    use pw_core::config::{AppPaths, ConfigSource, ConfigStore};
+    let sessions = |settings: &str| {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(&tmp.path().join("app"));
+        fs::create_dir_all(&paths.config).unwrap();
+        fs::write(paths.config.join("settings.toml"), settings).unwrap();
+        let global = ConfigStore::open(
+            ConfigSource::global(&paths),
+            EventBus::new(DEFAULT_CAPACITY),
+            Scope::Host,
+        );
+        let e = env(true);
+        e.sessions.attach_settings(global);
+        (e.sessions.grid_max_rows(), e.sessions.grid_max_bytes())
+    };
+    assert_eq!(
+        sessions("schema = 1\n[db]\ngrid_max_rows = 500\ngrid_max_bytes = 1048576\n"),
+        (500, 1_048_576)
+    );
+    assert_eq!(
+        sessions("schema = 1\n[db]\ngrid_max_bytes = 0\n"),
+        (100_000, 64 * 1024 * 1024)
+    );
+    assert_eq!(sessions("schema = 1\n"), (100_000, 64 * 1024 * 1024));
+}
+
 /// ③ read-only 연결의 `DELETE` · 파싱 실패 · `SET` 문장은 드라이버에 닿지 않는다. 조회는 읽기 전용 트랜잭션 안에서 돌고 끝나면 롤백한다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_only_connections_keep_writes_from_the_driver() {

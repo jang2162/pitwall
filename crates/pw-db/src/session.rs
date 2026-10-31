@@ -65,6 +65,12 @@ pub const TOPIC_QUERY_PROGRESS: &str = "db.queryProgress";
 pub const GRID_MAX_ROWS_KEY: &str = "db.grid_max_rows";
 pub const DEFAULT_GRID_MAX_ROWS: u64 = 100_000;
 
+/// 그리드 보유 바이트 상한의 설정 키(전역 `settings` 의 `[db] grid_max_bytes` — 받은 셀 바이트 합, `crate::execute::cell_bytes`)와
+/// 기본값 64 MiB. 셀 상한(1 MiB) × 행 상한(10만)이 웹뷰 메모리에 그대로 쌓이지 않게 둔다(M3-16 리뷰, 메인 판정). 웹뷰는 글을 UTF-16
+/// 으로 들고 객체 머리가 붙으므로 실제 메모리는 이 값의 몇 배다.
+pub const GRID_MAX_BYTES_KEY: &str = "db.grid_max_bytes";
+pub const DEFAULT_GRID_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
 /// 연결을 닫을 때 드라이버를 기다리는 시간.
 const CLOSE_WAIT: Duration = Duration::from_secs(10);
 
@@ -829,6 +835,8 @@ pub struct DbSessions {
     global: OnceLock<ConfigStore>,
     /// 0 이면 설정을 따른다.
     grid_max_rows: AtomicU64,
+    /// 0 이면 설정을 따른다.
+    grid_max_bytes: AtomicU64,
     /// 창 없이 남은 열린 트랜잭션의 보존 시간(시험 · 내장 고정값). `None` 이면 설정을 따른다.
     unattended_keep: Mutex<Option<Duration>>,
     /// 보존 시간 뒤 롤백한 기록(프로젝트 id → 최근 것).
@@ -848,6 +856,7 @@ impl DbSessions {
             tunnels: OnceLock::new(),
             global: OnceLock::new(),
             grid_max_rows: AtomicU64::new(0),
+            grid_max_bytes: AtomicU64::new(0),
             unattended_keep: Mutex::new(None),
             unattended: Mutex::default(),
             sessions: Mutex::default(),
@@ -857,7 +866,7 @@ impl DbSessions {
         }
     }
 
-    /// 전역 설정(`[db] grid_max_rows`). 두 번째부터는 무시한다.
+    /// 전역 설정(`[db] grid_max_rows` · `grid_max_bytes` 등). 두 번째부터는 무시한다.
     pub fn attach_settings(&self, global: ConfigStore) {
         let _ = self.global.set(global);
     }
@@ -886,6 +895,29 @@ impl DbSessions {
                 })
                 .filter(|n| *n >= 1)
                 .unwrap_or(DEFAULT_GRID_MAX_ROWS),
+            n => n,
+        }
+    }
+
+    /// 그리드 보유 바이트 상한을 설정 대신 고정한다(시험 · 내장). `None` 이면 설정을 따른다.
+    pub fn set_grid_max_bytes(&self, bytes: Option<u64>) {
+        self.grid_max_bytes
+            .store(bytes.map_or(0, |b| b.max(1)), Ordering::SeqCst);
+    }
+
+    /// 그리드 보유 바이트 상한: 고정값, 아니면 설정 `[db] grid_max_bytes`(1 이상의 정수), 아니면 64 MiB.
+    pub fn grid_max_bytes(&self) -> u64 {
+        match self.grid_max_bytes.load(Ordering::SeqCst) {
+            0 => self
+                .global
+                .get()
+                .and_then(|g| {
+                    g.snapshot()
+                        .get("settings", GRID_MAX_BYTES_KEY)
+                        .and_then(serde_json::Value::as_u64)
+                })
+                .filter(|n| *n >= 1)
+                .unwrap_or(DEFAULT_GRID_MAX_BYTES),
             n => n,
         }
     }

@@ -40,4 +40,6 @@ tempfile = "3.27.0"
 pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
 # 행 키 판정을 실제 SQLite 의 메타데이터로 본다(tests/schema.rs).
 pw-db-driver-sqlite = { path = "../pw-db-driver-sqlite" }
+# 그리드 보유 상한을 실 PG 로 관문 너머에서 본다(tests/live_grid.rs, `cfg(pw_live_pg)`).
+pw-db-driver-pg = { path = "../pw-db-driver-pg" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
