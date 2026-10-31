@@ -84,6 +84,7 @@ db-conn-ssl-plaintext = Connects without TLS (plaintext)
 db-conn-ssl-unsupported = The { $driver } driver does not take { $mode }
 db-conn-ssl-unsupported-mysql-verify-ca = The driver cannot skip only the name check — use verify-full or match the certificate name
 db-conn-ssl-unsupported-chosen = This driver does not take the chosen sslmode — pick another value
+db-conn-ssl-followed = sslmode follows the host: { $from } → { $to }
 db-conn-ssl-rootcert = CA Certificate
 db-conn-ssl-cert = Client Certificate
 db-conn-ssl-key = Client Key

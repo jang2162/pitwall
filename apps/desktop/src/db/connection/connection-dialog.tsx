@@ -397,6 +397,24 @@ function ConnectionEditor({
   const note = storedPasswordNote(T.password, entry);
   // 루프백이 아닌 호스트에 TLS 없이 붙는다. SSL 탭 밖([저장] 옆)에도 보인다 — 호스트는 일반 탭에서 고친다.
   const plaintext = network && sslmode === "disable" && defaultSslMode(host) !== "disable";
+  // 루프백이 아닌 호스트에 인증서를 검증하지 않는 값 — `prefer` 는 원격에서 조용히 평문으로 떨어질 수 있다(재리뷰 N2).
+  const unverified = network && UNVERIFIED_MODES.has(sslmode) && defaultSslMode(host) !== "disable";
+  const summary = unsupportedChosen
+    ? "unsupported"
+    : plaintext
+      ? "plaintext"
+      : unverified
+        ? "unverified"
+        : undefined;
+  // 편집 중 sslmode 가 호스트를 따라 바뀌었으면 「이전 → 지금」 을 [저장] 옆에 보인다 — 원격 → 루프백의
+  // `verify-full → disable` 도 사람이 알고 저장하게(재리뷰 N1).
+  const savedSslMode = editing
+    ? (entry.config.sslmode ?? defaultSslMode(entry.config.host ?? ""))
+    : undefined;
+  const followed =
+    network && savedSslMode !== undefined && !sslChosen.current && sslmode !== savedSslMode
+      ? { from: savedSslMode, to: sslmode }
+      : undefined;
   const keepAutomaticSslMode = () => editing && entry.config.sslmode == null && !sslChosen.current;
 
   const base = { projectId: deps.projectId, worktree: deps.worktree ?? null };
@@ -883,16 +901,28 @@ function ConnectionEditor({
         </p>
       )}
 
-      {(unsupportedChosen || plaintext) && (
+      {summary && (
         <p
           role="alert"
           data-testid="db-conn-ssl-summary"
-          data-warning={unsupportedChosen ? "unsupported" : "plaintext"}
+          data-warning={summary}
           className="text-db-insecure"
         >
-          {unsupportedChosen
+          {summary === "unsupported"
             ? `${T.ssl.unsupportedChosen} — ${unsupportedReason(T.ssl, driver, driverName, sslmode)}`
-            : T.ssl.plaintext}
+            : summary === "plaintext"
+              ? T.ssl.plaintext
+              : T.ssl.unverified}
+        </p>
+      )}
+      {followed && (
+        <p
+          data-testid="db-conn-ssl-followed"
+          data-from={followed.from}
+          data-to={followed.to}
+          className={HINT}
+        >
+          {T.ssl.followed(followed.from, followed.to)}
         </p>
       )}
       <div className="flex items-center justify-end gap-2">

@@ -83,6 +83,7 @@ export function dbConnectionStrings(t: Translate) {
         t("db-conn-ssl-unsupported", { driver, mode }),
       unsupportedMysqlVerifyCa: t("db-conn-ssl-unsupported-mysql-verify-ca"),
       unsupportedChosen: t("db-conn-ssl-unsupported-chosen"),
+      followed: (from: SslMode, to: SslMode) => t("db-conn-ssl-followed", { from, to }),
       rootcert: t("db-conn-ssl-rootcert"),
       cert: t("db-conn-ssl-cert"),
       key: t("db-conn-ssl-key"),

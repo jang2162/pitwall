@@ -84,6 +84,7 @@ db-conn-ssl-plaintext = TLS 없이 붙는다(평문)
 db-conn-ssl-unsupported = { $driver } 드라이버는 { $mode } 를 받지 않는다
 db-conn-ssl-unsupported-mysql-verify-ca = 드라이버가 이름 검증만 건너뛸 수 없다 — verify-full 을 쓰거나 인증서 이름을 맞춘다
 db-conn-ssl-unsupported-chosen = 고른 sslmode 를 이 드라이버가 받지 않는다 — 다른 값을 고른다
+db-conn-ssl-followed = sslmode 가 호스트를 따라 바뀐다: { $from } → { $to }
 db-conn-ssl-rootcert = CA 인증서
 db-conn-ssl-cert = 클라이언트 인증서
 db-conn-ssl-key = 클라이언트 키

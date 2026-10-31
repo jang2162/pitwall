@@ -314,6 +314,52 @@ describe("sslmode of a saved connection (review H1)", () => {
   });
 });
 
+describe("sslmode beside [Save] (re-review N1 · N2)", () => {
+  it("a chosen prefer moved to a remote host is shown as unverified beside [Save]", async () => {
+    const config: DbConnectionConfig = {
+      name: "p",
+      driver: "postgres",
+      host: "localhost",
+      sslmode: "prefer",
+    };
+    answers["db.connection.list"] = () => list({ connections: [entryOf("p", config)] });
+    await open("p");
+    expect(testid("db-conn-ssl-summary")).toBeNull();
+    await type(field("host"), "db.example.com");
+    expect(sslmode()).toBe("prefer");
+    const summary = testid("db-conn-ssl-summary")!;
+    expect(summary.dataset.warning).toBe("unverified");
+    expect(summary.textContent).toBe(T.ssl.unverified);
+    expect(summary.closest("[hidden]")).toBeNull();
+    await choose(field("sslmode"), "verify-full");
+    expect(testid("db-conn-ssl-summary")).toBeNull();
+  });
+
+  it("a mode that follows the host while editing is shown as before → now", async () => {
+    const config: DbConnectionConfig = {
+      name: "p",
+      driver: "postgres",
+      host: "db.a.com",
+      sslmode: "verify-full",
+    };
+    answers["db.connection.list"] = () => list({ connections: [entryOf("p", config)] });
+    await open("p");
+    expect(testid("db-conn-ssl-followed")).toBeNull();
+    await type(field("host"), "localhost");
+    expect(sslmode()).toBe("disable");
+    const followed = testid("db-conn-ssl-followed")!;
+    expect(followed.textContent).toBe(T.ssl.followed("verify-full", "disable"));
+    expect(followed.closest("[hidden]")).toBeNull();
+    // 저장한 호스트로 돌아오면 사라진다.
+    await type(field("host"), "db.a.com");
+    expect(testid("db-conn-ssl-followed")).toBeNull();
+    // 사람이 고른 값은 따라 바뀌지 않으므로 줄도 없다.
+    await choose(field("sslmode"), "require");
+    await type(field("host"), "localhost");
+    expect(testid("db-conn-ssl-followed")).toBeNull();
+  });
+});
+
 describe("sslmode warnings and the driver's modes", () => {
   it("require and prefer warn that the server certificate is not verified", async () => {
     await open();
