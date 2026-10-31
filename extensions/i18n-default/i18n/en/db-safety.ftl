@@ -174,3 +174,4 @@ db-access-sslkey = Client key
 db-access-none = (none)
 # $error: error text
 db-access-failed = Failed: { $error }
+db-access-sending = Sending — Cancel now only stops waiting. A value the host already received is saved and used the next time this connection opens

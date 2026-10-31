@@ -14,7 +14,8 @@
 //   다이얼로그가 뜨지 않는다.
 // - 한 번에 하나만 묻는다 — 떠 있는 동안 온 다른 요청은 묻지 않고 거짓이다.
 // - 답은 그 질문에만 닿는다(질문마다 번호): 제출하는 동안에도 [취소] · Esc 는 듣고(걸린 Host 호출에서 빠져나오게) 그 질문은
-//   거짓으로 끝난다 — 늦게 끝난 제출은 아무것도 닫지 않는다(뒤의 질문은 그대로 떠 있다). 훅의 주인이 언마운트되면 떠 있는 질문은
+//   거짓으로 끝난다 — 늦게 끝난 제출은 아무것도 닫지 않는다(뒤의 질문은 그대로 떠 있다). 이미 보낸 값은 Host 가 받으면 저장되므로
+//   제출 중에는 그 뜻(취소는 기다림만 멈춘다)을 다이얼로그에 적는다. 훅의 주인이 언마운트되면 떠 있는 질문은
 //   거짓으로 끝난다(M3-19 `useRiskConfirm` 과 같다).
 // - 오류의 `data.connectionId` 가 부른 쪽의 연결과 다르면 묻지 않는다 — 다른 연결에 비밀번호 · 확인이 가지 않게.
 
@@ -327,6 +328,11 @@ function AccessDialog({ asked }: { asked: Asked }) {
                 className="rounded-sm border border-ui-border bg-transparent px-2 py-1 outline-none focus:border-ui-accent"
               />
             </label>
+          )}
+          {busy && (
+            <p data-testid="db-access-sending" className="text-[12px] text-ui-muted-foreground">
+              {T.sending}
+            </p>
           )}
           {failed !== undefined && (
             <p role="alert" data-testid="db-access-failed" className="text-[12px] text-ui-accent">

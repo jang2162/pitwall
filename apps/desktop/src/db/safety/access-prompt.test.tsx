@@ -328,6 +328,10 @@ describe("each answer reaches only its own question", () => {
     const { answer: first } = await ask(secretError());
     await type(PASSWORD);
     await click(button("run"));
+    // 제출 중에는 [취소] 가 기다림만 멈춘다는 것을 적는다.
+    expect(document.querySelector("[data-testid=db-access-sending]")?.textContent).toContain(
+      "지금 취소하면 기다림만 멈춘다",
+    );
     // 제출이 걸린 동안 [취소] — 그 질문은 거짓으로 끝난다.
     await click(button("cancel"));
     expect(await first).toBe(false);

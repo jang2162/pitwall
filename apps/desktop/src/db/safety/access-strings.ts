@@ -50,6 +50,8 @@ export function dbAccessStrings(t: Translate) {
     },
     none: t("db-access-none"),
     failed: (error: string) => t("db-access-failed", { error }),
+    /** 제출 중 — [취소] 는 기다림만 멈춘다(이미 보낸 값은 Host 가 받으면 저장된다). */
+    sending: t("db-access-sending"),
   };
 }
 

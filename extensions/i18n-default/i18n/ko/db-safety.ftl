@@ -174,3 +174,4 @@ db-access-sslkey = 클라이언트 키
 db-access-none = (없음)
 # $error: 오류 글
 db-access-failed = 하지 못했다: { $error }
+db-access-sending = 보내는 중이다 — 지금 취소하면 기다림만 멈춘다. Host 가 이미 받은 값은 저장되어 다음에 이 연결을 열 때 쓰인다
