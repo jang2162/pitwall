@@ -21,6 +21,9 @@
 // 문서 모델 밖의 편집(머지 문서 탭의 결과 칸 — src/git/merge)은 그 탭이 `markUnsavedTab` 으로 알린다 — 닫기 · 창 닫기(워크트리
 // 전환의 탭 닫기 포함)가 같은 확인에 함께 묻고, [저장] 은 그 탭의 저장이다. git 쓰기 전의 확인(`unsavedUnder`)에는 넣지 않는다 —
 // 그 확인은 저장소 잠금을 쥔 채 묻는데 머지 탭의 저장도 git 쓰기라 잠금을 기다린다.
+// 문서 밖의 「닫으면 잃는 것」(SQL 콘솔의 열린 트랜잭션 — 14-m3-plan M3-15, 테이블 데이터의 미제출 변경 — M3-17)은 그 탭이
+// `guardClose` 로 등록한다. 탭 닫기 · 창 닫기 · 앱 종료 · 워크트리 전환이 미저장 확인 뒤에 그 탭의 질문을 하나씩 묻고(질문 ·
+// 답에 따라 하는 일은 탭이 정한다 — 콘솔은 [커밋] [롤백] [취소]), 하나라도 취소면 아무것도 닫지 않는다.
 // 미리보기 탭의 문서에 미저장 편집이 생기면 그 탭을 보통 탭으로 바꾼다 — 다음 미리보기가 편집을 조용히 닫지 않게(10-ui §5.4
 // 「편집 시작 → 고정 탭」).
 //
@@ -103,6 +106,18 @@ export interface UnsavedTab {
   save(): Promise<boolean>;
 }
 
+/**
+ * 닫기 전에 물을 것이 있는 탭(머리 주석). 문서 모델 밖의 상태라 미저장 확인과 따로 묻는다 — 탭 닫기는 그 탭의 것만, 창 닫기 · 앱
+ * 종료는 모두를 등록 순서로.
+ */
+export interface CloseGuard {
+  readonly panelId: string;
+  /** 지금 물을 것이 있다(열린 트랜잭션 · 미제출 변경). 거짓이면 묻지 않는다. */
+  pending(): boolean;
+  /** 묻고 답대로 한다. 닫아도 되면 `true`, 취소했거나 하지 못했으면 `false`. */
+  settle(): Promise<boolean>;
+}
+
 export interface EditorWorkspaceDeps {
   documents: DocumentStore;
   stat(path: string, worktree: string | undefined): Promise<FsStat>;
@@ -141,6 +156,8 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
   const unsavedTabs = createStore<{ panels: ReadonlySet<string> }>(() => ({ panels: new Set() }));
   const syncUnsavedTabs = () =>
     unsavedTabs.setState({ panels: new Set([...extraUnsaved.values()].map((t) => t.panelId)) });
+  /** 닫기 전에 물을 탭(`guardClose`), 등록 순서. */
+  const guards = new Set<CloseGuard>();
 
   const recentOrder = () => recent?.order() ?? [];
 
@@ -191,6 +208,20 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     return false;
   }
 
+  /** `guards` 중 물을 것이 있는 것을 하나씩 묻는다(머리 주석). 다 닫아도 되면 `true` — 하나라도 취소면 거기서 멈춘다. */
+  async function settleGuards(chosen: readonly CloseGuard[]): Promise<boolean> {
+    const asking = chosen.filter((guard) => guard.pending());
+    if (asking.length === 0) return true;
+    if (confirming) return false;
+    confirming = true;
+    try {
+      for (const guard of asking) if (!(await guard.settle())) return false;
+      return true;
+    } finally {
+      confirming = false;
+    }
+  }
+
   /**
    * 문서를 저장한다. 저장했거나 쓸 것이 없으면 `true`. 실패 · 읽기 전용이라 못 쓴 편집은 알리고, 충돌은 탭의 배너가 보인다. 못 쓴
    * 편집이 있으면 `false` 라 닫기 확인의 「저장」 이 창을 닫지 않는다.
@@ -225,6 +256,13 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
         if (extraUnsaved.get(tab.key) !== tab) return;
         extraUnsaved.delete(tab.key);
         syncUnsavedTabs();
+      };
+    },
+    /** 탭이 닫히기 전에 물을 것을 등록한다(`CloseGuard`). 돌려준 함수가 거둔다 — 탭이 사라질 때 부른다. */
+    guardClose(guard: CloseGuard): () => void {
+      guards.add(guard);
+      return () => {
+        guards.delete(guard);
       };
     },
     log: deps.log,
@@ -313,6 +351,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       });
       for (const tab of extraUnsaved.values()) if (closing.has(tab.panelId)) lost.push(tab.key);
       if (!(await settleUnsaved(lost))) return false;
+      if (!(await settleGuards([...guards].filter((g) => closing.has(g.panelId))))) return false;
       for (const panel of panels) if (api?.getPanel(panel.id)) panel.api.close();
       return true;
     },
@@ -357,9 +396,15 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       }
     },
 
-    /** 창을 닫기 전(창의 닫기 단추 · ⌘W · 앱 종료). 미저장 편집이 있으면 묻는다. 닫아도 되면 `true`. */
-    confirmWindowClose: (): Promise<boolean> =>
-      settleUnsaved([...deps.documents.unsaved(), ...extraUnsaved.keys()]),
+    /**
+     * 창을 닫기 전(창의 닫기 단추 · ⌘W · 앱 종료). 미저장 편집이 있으면 묻고, 그다음 닫기 전에 물을 탭(`guardClose`)을 하나씩
+     * 묻는다. 닫아도 되면 `true`.
+     */
+    async confirmWindowClose(): Promise<boolean> {
+      if (!(await settleUnsaved([...deps.documents.unsaved(), ...extraUnsaved.keys()])))
+        return false;
+      return settleGuards([...guards]);
+    },
 
     /** 탭의 문서를 저장한다(`⌘S`). */
     save: (panel: IDockviewPanel): Promise<boolean> => save(tabParams(panel).path),

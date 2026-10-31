@@ -46,7 +46,11 @@ const source: DocumentSource = {
 
 /** 작업 공간이 쓰는 만큼만 흉내 낸 도킹 영역. */
 function fakeDock() {
-  type Panel = { id: string; params: { path: string }; api: { component: string } };
+  type Panel = {
+    id: string;
+    params: { path: string };
+    api: { component: string; close(): void };
+  };
   type Listener = (panel: Panel) => void;
   const panels: Panel[] = [];
   const added = new Set<Listener>();
@@ -68,7 +72,11 @@ function fakeDock() {
   return {
     api: api as unknown as DockviewApi,
     add(id: string, path: string) {
-      const panel = { id, params: { path }, api: { component: EDITOR_PANEL } };
+      const panel: Panel = {
+        id,
+        params: { path },
+        api: { component: EDITOR_PANEL, close: () => this.remove(id) },
+      };
       panels.push(panel);
       for (const l of added) l(panel);
     },
@@ -108,4 +116,66 @@ it("keeps a tab's document while the tab exists, even when its content unmounts 
 
   dock.remove("editor-1");
   expect(documents.get(PATH)).toBeUndefined();
+});
+
+/**
+ * 닫기 전에 물을 탭(`guardClose` — SQL 콘솔의 열린 트랜잭션 M3-15, 테이블 데이터의 미제출 변경 M3-17 이 등록만 하는 꼴): 탭 닫기는
+ * 그 탭의 것만 묻고 [취소] 면 아무것도 닫지 않는다. 창 닫기는 물을 것이 있는 탭 모두를 등록 순서로 묻고, 하나라도 취소면 거기서
+ * 멈춘다. 물을 것이 없는 탭 · 거둔 등록은 묻지 않는다.
+ */
+it("asks the close guards of the closing tabs, and every pending guard when the window closes", async () => {
+  const documents = createDocumentStore(source);
+  const workspace = createEditorWorkspace({
+    documents,
+    stat: source.stat,
+    onOpenFailed() {},
+    onSaveFailed() {},
+    onSaveBlocked() {},
+    confirmUnsaved: async () => "discard",
+  });
+  const dock = fakeDock();
+  workspace.attach(dock.api);
+  dock.add("console", "/p/a.sql");
+  dock.add("table", "/p/b.sql");
+  dock.add("plain", "/p/c.sql");
+  const asked: string[] = [];
+  const answers: Record<string, boolean> = { console: false, table: true };
+  const pending: Record<string, boolean> = { console: true, table: true };
+  const guard = (panelId: string) => ({
+    panelId,
+    pending: () => pending[panelId] ?? false,
+    settle: async () => {
+      asked.push(panelId);
+      return answers[panelId] ?? true;
+    },
+  });
+  workspace.guardClose(guard("console"));
+  const unguard = workspace.guardClose(guard("table"));
+  const panel = (id: string) => dock.api.getPanel(id)!;
+
+  // 묻지 않는 탭은 그냥 닫힌다.
+  expect(await workspace.closeTabs([panel("plain")])).toBe(true);
+  expect(asked).toEqual([]);
+  // [취소] 면 닫지 않는다 — 함께 닫으려던 탭도.
+  expect(await workspace.closeTabs([panel("console"), panel("table")])).toBe(false);
+  expect(asked).toEqual(["console"]);
+  expect(dock.api.panels.map((p) => p.id)).toEqual(["console", "table"]);
+
+  // 창 닫기: 등록 순서로, 취소에서 멈춘다.
+  asked.length = 0;
+  expect(await workspace.confirmWindowClose()).toBe(false);
+  expect(asked).toEqual(["console"]);
+  answers.console = true;
+  asked.length = 0;
+  expect(await workspace.confirmWindowClose()).toBe(true);
+  expect(asked).toEqual(["console", "table"]);
+
+  // 물을 것이 없거나 거둔 등록은 묻지 않는다.
+  pending.console = false;
+  unguard();
+  asked.length = 0;
+  expect(await workspace.confirmWindowClose()).toBe(true);
+  expect(await workspace.closeTabs([panel("console"), panel("table")])).toBe(true);
+  expect(asked).toEqual([]);
+  expect(dock.api.panels).toEqual([]);
 });
