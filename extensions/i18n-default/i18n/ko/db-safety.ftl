@@ -54,6 +54,14 @@ db-confirm-unparsed = 분석하지 못한 문장
 db-confirm-statement = { $index }번 문장
 db-confirm-cancel = 취소
 db-confirm-run = 실행
+## Redis 명령의 확인(argv 한 줄 — 글 인자와 바이트 인자를 가른다).
+
+db-confirm-kv-command = 서버에 보낼 명령
+# 글이 아니라 바이트인 인자의 표지(hex 옆)
+db-confirm-kv-bytes = 바이트
+# $count: 보이지 않은 인자 수
+db-confirm-kv-more = …그리고 인자 { $count }개 더
+
 db-confirm-rejected-hash-mismatch = 확인한 뒤 실행할 문장이 바뀌어 다시 묻는다
 db-confirm-rejected-grade-too-low = 확인한 것보다 위험한 문장이 있어 다시 묻는다
 db-confirm-rejected-name-mismatch = 친 연결 이름이 달라 다시 묻는다

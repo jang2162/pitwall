@@ -62,6 +62,12 @@ export function dbSafetyStrings(t: Translate) {
       statement: (index: number) => t("db-confirm-statement", { index }),
       cancel: t("db-confirm-cancel"),
       run: t("db-confirm-run"),
+      /** Redis 명령의 확인(`DbKvConfirmRequired` — risk-confirm.tsx 의 `KvConfirmQuestion`). */
+      kv: {
+        command: t("db-confirm-kv-command"),
+        bytes: t("db-confirm-kv-bytes"),
+        more: (count: number) => t("db-confirm-kv-more", { count }),
+      },
       rejected: {
         hashMismatch: t("db-confirm-rejected-hash-mismatch"),
         gradeTooLow: t("db-confirm-rejected-grade-too-low"),

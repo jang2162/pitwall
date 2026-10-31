@@ -8,6 +8,7 @@ import { LocalizationProvider } from "@fluent/react";
 import type {
   DbConfirmed,
   DbConfirmRequired,
+  DbKvConfirmRequired,
   DbSqlClassification,
   DbStatementClass,
   RiskGrade,
@@ -20,9 +21,10 @@ import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { act, endTest, it } from "../../test-support/ended-test";
 import { bundledLocalization, bundledTranslator } from "../../i18n/testing";
 import {
+  type ConfirmQuestion,
   confirmationFor,
+  KV_ARGS_SHOWN,
   type RiskConfirmAnswer,
-  type RiskConfirmQuestion,
   RiskConfirmDialog,
   STATEMENTS_SHOWN,
   useRiskConfirm,
@@ -79,7 +81,7 @@ function request(over: Partial<DbConfirmRequired> = {}): DbConfirmRequired {
 const DEV = { name: "local-pg", production: false, readOnly: false, color: "db.tag.green" };
 const PROD = { name: "prod-billing", production: true, readOnly: false, color: null };
 
-async function show(question: RiskConfirmQuestion) {
+async function show(question: ConfirmQuestion) {
   const answers: (DbConfirmed | undefined)[] = [];
   const element = document.createElement("div");
   document.body.append(element);
@@ -456,5 +458,67 @@ describe("reason wording", () => {
       "바이너리 · 릴레이 로그와 복제 위치를 지운다 — 되돌릴 수 없다",
     );
     expect(T.cancelRollback.title).toBe("취소하면 트랜잭션 전체가 롤백된다");
+  });
+});
+
+// Redis 명령(M3-18 — `db.kv.*` 의 `3001` 은 `data` 가 `DbKvConfirmRequired`): 문장 목록 대신 명령 한 줄, 글과 바이트를 갈라 보이고,
+// 이름 치기 · 처음 포커스 · 돌려주는 값은 SQL 과 같다.
+describe("RiskConfirmDialog for a Redis command", () => {
+  function kv(over: Partial<DbKvConfirmRequired> = {}): DbKvConfirmRequired {
+    return {
+      grade: "unboundedWrite",
+      action: "delete",
+      argv: ["DEL", "0xff", { hex: "0xff" }],
+      statementsHash: "kv-1",
+      nameRequired: false,
+      rejected: null,
+      ...over,
+    };
+  }
+
+  it("shows the command with text and byte arguments apart, no reasons, and [Cancel] first", async () => {
+    const answers = await show({ kv: kv(), connection: DEV });
+    expect(dialog().dataset.grade).toBe("unboundedWrite");
+    expect(dialog().textContent).toContain(T.confirm.title.unboundedWrite);
+    expect(dialog().textContent).toContain(T.confirm.kv.command);
+    const args = [...document.querySelectorAll<HTMLElement>("[data-testid=db-confirm-kv-arg]")];
+    expect(args.map((a) => a.dataset.arg)).toEqual(["text", "text", "bytes"]);
+    // 글 "0xff" 는 따옴표 안에, 바이트 0xff 는 표지와 함께 — 같아 보이지 않는다.
+    expect(args[1]!.textContent).toBe('"0xff"');
+    expect(args[2]!.textContent).toBe(`0xff${T.confirm.kv.bytes}`);
+    expect(document.querySelector("[data-testid=db-confirm-statements]")).toBeNull();
+    expect(document.querySelector("[data-reason]")).toBeNull();
+    expect(document.activeElement).toBe(button("cancel"));
+    await act(async () => button("run").click());
+    expect(answers).toEqual([{ grade: "unboundedWrite", statementsHash: "kv-1", name: null }]);
+  });
+
+  it("asks a production destructive command for the typed connection name", async () => {
+    const answers = await show({
+      kv: kv({ grade: "destructive", nameRequired: true, statementsHash: "kv-2" }),
+      connection: PROD,
+    });
+    expect(document.activeElement).toBe(button("cancel"));
+    expect(button("run").disabled).toBe(true);
+    await type(nameInput()!, "prod-billing ");
+    expect(button("run").disabled).toBe(true);
+    await type(nameInput()!, "prod-billing");
+    expect(button("run").disabled).toBe(false);
+    await act(async () => button("run").click());
+    expect(answers).toEqual([
+      { grade: "destructive", statementsHash: "kv-2", name: "prod-billing" },
+    ]);
+  });
+
+  it("shows the note and cuts a long argument list with a count", async () => {
+    const argv = ["DEL", ...Array.from({ length: KV_ARGS_SHOWN + 9 }, (_, i) => `k:${i}`)];
+    await show({ kv: kv({ argv }), connection: DEV, note: "the target key is overwritten" });
+    expect(document.querySelector("[data-testid=db-confirm-note]")?.textContent).toBe(
+      "the target key is overwritten",
+    );
+    expect(document.querySelectorAll("[data-testid=db-confirm-kv-arg]")).toHaveLength(
+      KV_ARGS_SHOWN,
+    );
+    expect(dialog().textContent).toContain(T.confirm.kv.more(10));
   });
 });

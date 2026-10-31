@@ -54,6 +54,14 @@ db-confirm-unparsed = Statement that could not be analyzed
 db-confirm-statement = Statement { $index }
 db-confirm-cancel = Cancel
 db-confirm-run = Run
+## The confirmation of a Redis command (one argv line — text arguments told apart from byte arguments).
+
+db-confirm-kv-command = Command to send to the server
+# Mark of an argument that is bytes, not text (next to its hex)
+db-confirm-kv-bytes = bytes
+# $count: arguments not shown
+db-confirm-kv-more = …and { $count } more arguments
+
 db-confirm-rejected-hash-mismatch = The statements changed after you confirmed, so this asks again
 db-confirm-rejected-grade-too-low = A statement is riskier than what you confirmed, so this asks again
 db-confirm-rejected-name-mismatch = The typed connection name did not match, so this asks again
