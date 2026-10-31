@@ -48,13 +48,16 @@ run = [
   "node --test scripts/db-live.test.mjs",
   # TLS 시험 서버 스크립트(scripts/db-tls.mjs)의 인자 읽기 — 도커 · openssl 없이 돈다.
   "node --test scripts/db-tls.test.mjs",
+  # SSH 터널 시험의 sshd 스크립트(scripts/db-ssh.mjs)의 인자 읽기 — 도커 · ssh-keygen 없이 돈다.
+  "node --test scripts/db-ssh.test.mjs",
 ]
 
 # 실 DB 시험(live_*)을 DB 마다 따로 돌리고 실행 개수를 하한(scripts/db-live.toml)과 견준다 — CI 의 `db-live` 잡과 같은 명령이다.
 # URL(PW_TEST_PG_URL · PW_TEST_MYSQL_URL · PW_TEST_MARIADB_URL · PW_TEST_REDIS_URL)이 없는 DB 는 건너뛰고 그렇게 알린다 — 통과로
-# 세지 않는다(모두 건너뛰면 종료 코드 3). 인자로 DB 를 고른다 — 예: `mise run test-db -- pg redis`.
+# 세지 않는다(모두 건너뛰면 종료 코드 3). 인자로 DB 를 고른다 — 예: `mise run test-db -- pg redis`. SSH 터널(`ssh_tunnel`)은
+# PW_TEST_SSH_URL 이 없으면 도커로 이 실행만의 sshd 를 띄운다(scripts/db-ssh.mjs).
 [tasks.test-db]
-description = "실 DB 시험(PG · MySQL · MariaDB · Redis)을 DB 마다 돌리고 실행 개수 하한 검사(URL 이 없는 DB 는 건너뜀)"
+description = "실 DB 시험(PG · MySQL · MariaDB · Redis · SSH 터널)을 DB 마다 돌리고 실행 개수 하한 검사(URL 이 없는 DB 는 건너뜀)"
 run = "node scripts/db-live.mjs"
 
 # 「release 빌드에서만 판정」하는 시험을 모아 돈다 — 기본 `test` 는 debug 라 시간 상한(검색 취소 100 ms · `fs.list` 1만 개 100 ms ·

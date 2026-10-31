@@ -17,12 +17,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { makeKeys, startSsh } from "./db-ssh.mjs";
 import { TARGETS as TLS_TARGETS, makeCertificates, startTls, stopTls } from "./db-tls.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-// DB → (URL 변수, nextest 이름 필터, 시험에 넘길 변수, 함께 쓰는 TLS 시험 서버 — scripts/db-tls.mjs 의 TARGETS). 새 단계(M3-11 의
-// ssh_tunnel 등)는 여기와 db-live.toml 에 한 줄씩.
+// DB → (URL 변수, nextest 이름 필터, 시험에 넘길 변수, 함께 쓰는 TLS 시험 서버 — scripts/db-tls.mjs 의 TARGETS). 새 단계는 여기와
+// db-live.toml 에 한 줄씩. `ssh_tunnel`(M3-11)은 DB 가 아니라 SSH 터널 시험이고, 로컬에서 URL 이 없으면 sshd 컨테이너를 띄운다
+// (`ssh: true` — scripts/db-ssh.mjs, 도커가 있을 때만).
 export const TARGETS = {
   pg: { env: "PW_TEST_PG_URL", filter: "live_pg", testEnv: "PW_TEST_PG_URL", tls: ["pg"] },
   mysql: { env: "PW_TEST_MYSQL_URL", filter: "live_mysql", testEnv: "PW_TEST_MYSQL_URL" },
@@ -32,6 +34,12 @@ export const TARGETS = {
     filter: "live_redis",
     testEnv: "PW_TEST_REDIS_URL",
     tls: ["redis"],
+  },
+  ssh_tunnel: {
+    env: "PW_TEST_SSH_URL",
+    filter: "live_ssh_tunnel",
+    testEnv: "PW_TEST_SSH_URL",
+    ssh: true,
   },
 };
 
@@ -156,6 +164,14 @@ function dockerAvailable() {
   return !result.error && result.status === 0;
 }
 
+/**
+ * sshd 컨테이너를 띄울 것인가: SSH 단계이고, URL 이 없고, CI 가 아니고(CI 는 단계가 먼저 띄워 URL 이 있다 — 없으면 실패해야 한다),
+ * 도커가 있을 때만.
+ */
+export function sshToStart(target, env, ci, dockerAvailable) {
+  return Boolean(target.ssh) && !env[target.env] && !ci && dockerAvailable;
+}
+
 /** 이 워크트리 · 이 실행만의 컨테이너 이름 — 다른 워크트리의 서버와 겹치지 않고, 끌 때 이 이름만 끈다. */
 export function tlsName(rootPath, pid, db) {
   const worktree = createHash("sha256").update(rootPath).digest("hex").slice(0, 8);
@@ -178,9 +194,23 @@ function startTlsServers(dbs, started) {
   return env;
 }
 
+/** sshd 를 띄우고 시험에 넘길 변수를 돌려준다. 띄운 이름은 `started` 에 쌓는다(끌 때 쓴다). */
+function startSshServer(started) {
+  const out = join(root, "target", "db-ssh");
+  makeKeys(out);
+  const name = tlsName(root, process.pid, "ssh");
+  started.push(name);
+  const server = startSsh({ name, port: 0, out });
+  console.log(`== ssh: started ${name} on 127.0.0.1:${server.port} (stopped when this run ends)`);
+  return server.env;
+}
+
 function runTarget(db, floor, ci, started) {
   const target = TARGETS[db];
-  const url = process.env[target.env];
+  const ssh = sshToStart(target, process.env, ci, target.ssh ? dockerAvailable() : false)
+    ? startSshServer(started)
+    : {};
+  const url = process.env[target.env] ?? ssh[target.env];
   if (!url) {
     const message = `${db}: ${target.env} is not set — not run`;
     return ci
@@ -188,7 +218,7 @@ function runTarget(db, floor, ci, started) {
       : { ok: true, skipped: true, message: `${message}; skipped, not counted as passed` };
   }
   const tls = startTlsServers(tlsToStart(target, process.env, dockerAvailable()), started);
-  const env = { ...process.env, ...tls, [target.testEnv]: url };
+  const env = { ...process.env, ...tls, ...ssh, [target.testEnv]: url };
   const expr = filterExpr(target.filter);
   const pkgs = packages(env);
   console.log(`\n== ${db}: cargo nextest run --release -E '${expr}' (${target.env})`);
@@ -240,12 +270,12 @@ function main(argv) {
   for (const db of dbs) {
     if (!TARGETS[db]) throw new Error(`unknown db ${db} (${Object.keys(TARGETS).join(", ")})`);
   }
-  // 띄운 TLS 서버는 끝날 때 — 실패 · Ctrl-C 를 포함해 — 이름으로 끈다(자기가 띄운 것만).
+  // 띄운 TLS 서버 · sshd 는 끝날 때 — 실패 · Ctrl-C 를 포함해 — 이름으로 끈다(자기가 띄운 것만).
   const started = [];
   const stopAll = () => {
     for (const name of started.splice(0)) {
       stopTls(name);
-      console.log(`== tls: stopped ${name}`);
+      console.log(`== stopped ${name}`);
     }
   };
   process.once("SIGINT", stopAll);

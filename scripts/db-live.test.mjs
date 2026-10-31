@@ -148,6 +148,25 @@ test("tls servers start only for a running db without a tls url, and only with d
   assert.deepEqual(tlsToStart(TARGETS.mysql, { PW_TEST_MYSQL_URL: "mysql://x" }, true), []);
 });
 
+test("an sshd starts only locally, for the ssh step, without a url, and only with docker", async () => {
+  const { sshToStart } = await import("./db-live.mjs");
+  const ssh = TARGETS.ssh_tunnel;
+  assert.equal(sshToStart(ssh, {}, false, true), true);
+  assert.equal(sshToStart(ssh, {}, false, false), false, "no docker");
+  assert.equal(
+    sshToStart(ssh, {}, true, true),
+    false,
+    "CI starts it in its own step and must fail without it",
+  );
+  assert.equal(sshToStart(ssh, { PW_TEST_SSH_URL: "ssh://x" }, false, true), false, "given");
+  assert.equal(sshToStart(TARGETS.pg, {}, false, true), false, "not a db");
+  assert.equal(filterExpr(ssh.filter), "test(/(^|::)live_ssh_tunnel_/)");
+  assert.equal(
+    isReadyTest("pw-db-driver tunnel::tests::live::live_ssh_tunnel_ready", ssh.filter),
+    true,
+  );
+});
+
 test("tls container names are per worktree and per run", async () => {
   const { tlsName } = await import("./db-live.mjs");
   const a = tlsName("/w/a", 1, "pg");

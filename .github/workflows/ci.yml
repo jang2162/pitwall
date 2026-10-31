@@ -193,7 +193,7 @@ jobs:
       - run: mise run lang-samples
 
   # 실 DB 시험(14-m3-plan.md M3-01 · 결정 M3-D16). 서비스 컨테이너는 Linux 러너에서만 돌고 행렬 잡에는 `services:` 를 걸 수
-  # 없어 ubuntu 잡을 따로 둔다. DB 마다 단계 하나 — scripts/db-live.mjs 가 그 DB 의 live 시험만 release 로 돌리고, 필터가 0개를
+  # 없어 ubuntu 잡을 따로 둔다. DB 마다(와 SSH 터널 — M3-11) 단계 하나 — scripts/db-live.mjs 가 그 DB 의 live 시험만 release 로 돌리고, 필터가 0개를
   # 고르거나 준비 확인 시험(live_<db>_ready)을 뺀 수가 하한(scripts/db-live.toml) 아래면 실패한다. 이 잡에서 어느 DB 든 「0개면
   # 실패」 를 지우는 변경은 리뷰에서 거절한다(14 「공유 부품의 주인」). 병합을 막으려면 저장소 설정에서 필수 검사로 둔다.
   # 서비스 이미지는 판과 digest 로 고정한다(배포물이 아니라 라이선스는 따지지 않는다). Redis 는 7.2 줄이다 — 서버 라이선스가
@@ -256,6 +256,11 @@ jobs:
       - name: tls test servers
         run: node scripts/db-tls.mjs --out "$RUNNER_TEMP/pitwall-tls"
 
+      # SSH 터널 시험의 sshd(14-m3-plan.md M3-11): 키를 그 자리에서 만들고 alpine 에 openssh-server 를 설치해 띄운 뒤
+      # PW_TEST_SSH_URL · PW_TEST_SSH_DIR 을 GITHUB_ENV 로 넘긴다(scripts/db-ssh.mjs). 설치가 끝나기는 준비 확인 시험이 기다린다.
+      - name: ssh test server
+        run: node scripts/db-ssh.mjs --out "$RUNNER_TEMP/pitwall-ssh"
+
       # `--ci`: URL 이 없으면 건너뛰지 않고 실패한다. 단계마다 고른 · 돈 · 센 시험 수를 출력한다. 한 DB 가 실패해도 나머지
       # DB 의 단계는 돈다(`!cancelled()`) — 판정은 DB 마다 따로다.
       - name: live pg
@@ -270,6 +275,9 @@ jobs:
       - name: live redis
         if: ${{ !cancelled() }}
         run: mise run test-db -- --ci redis
+      - name: live ssh_tunnel
+        if: ${{ !cancelled() }}
+        run: mise run test-db -- --ci ssh_tunnel
 
   advisories:
     name: advisories

@@ -5,6 +5,7 @@
 //! - [`budget`]: 실행 예산(연결 · 취소 정리 · 「행이 올 때마다 다시 감는」 비활동 타임아웃).
 //! - [`cancel`]: 실행 하나의 취소 — 토큰과 그 연결의 인터럽트(한 번만 부른다).
 //! - [`tls`]: `sslmode` 를 libpq 뜻대로 푼 TLS 계획(결정 M3-D10). TLS 라이브러리는 드라이버 크레이트가 고른다.
+//! - [`tunnel`]: SSH 터널 — 시스템 `ssh -N -L` 의 argv · 로컬 포트 · 준비 확인 · 함께 쓰기 · 프로세스 그룹 수명(M3-11, 결정 M3-D11).
 //! - `fake`(시험 · `test-support` 기능): 가짜 드라이버 — 실행 파이프라인 · 그리드 시험이 실 DB 없이 쓴다.
 //! - `live`(시험 · `test-support` 기능): 실 DB 시험의 URL 과 준비 확인(`std::net` 만).
 //!
@@ -23,6 +24,7 @@ pub mod fake;
 #[cfg(any(test, feature = "test-support"))]
 pub mod live;
 pub mod tls;
+pub mod tunnel;
 
 pub use budget::Budget;
 pub use cancel::QueryCancel;
