@@ -61,7 +61,8 @@ db-console-action-explain = 실행 계획 보기
 ## 오류 · 알림
 
 # $message: 까닭
-db-console-load-failed = 콘솔 글을 읽지 못했다: { $message }
+db-console-load-failed = 콘솔 글을 읽지 못해 읽기 전용이고 저장하지 않는다: { $message }
+db-console-reload = 다시 읽기
 # $message: 까닭
 db-console-save-failed = 콘솔 글을 저장하지 못했다: { $message }
 # $message: Host 가 준 오류

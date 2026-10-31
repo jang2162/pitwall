@@ -61,7 +61,8 @@ db-console-action-explain = Show Query Plan
 ## Errors and notices
 
 # $message: reason
-db-console-load-failed = Cannot read the console: { $message }
+db-console-load-failed = Cannot read the console, so it is read-only and not saved: { $message }
+db-console-reload = Read again
 # $message: reason
 db-console-save-failed = Cannot save the console: { $message }
 # $message: the Host's error

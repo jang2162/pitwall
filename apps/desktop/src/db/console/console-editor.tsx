@@ -27,6 +27,7 @@ import { base } from "../../editor/extensions/base";
 import { editing } from "../../editor/extensions/editing";
 import { highlight } from "../../editor/extensions/highlight";
 import { navigation } from "../../editor/extensions/navigation";
+import { readOnly as readOnlyFeature } from "../../editor/extensions/read-only";
 import { theme } from "../../editor/extensions/theme";
 import {
   createSyntaxSessions,
@@ -61,6 +62,7 @@ const CONSOLE_FEATURES: readonly EditorFeature[] = [
   highlight,
   editing,
   navigation,
+  readOnlyFeature,
 ];
 
 /** 콘솔 글의 바뀜을 구문 세션에 넘기는 자리(문서 모델의 `onChange` 와 같은 꼴). */
@@ -88,6 +90,8 @@ export interface ConsoleEditorProps {
   consoleId: string;
   /** 처음 글. `undefined` 면 아직 읽는 중(뷰를 만들지 않는다). */
   initial: string | undefined;
+  /** 사람이 고칠 수 없다(콘솔 파일을 읽지 못했다). */
+  readOnly?: boolean;
   onChange(text: string): void;
   /** 구문 분석 서비스(창의 Host 연결). 없으면 강조하지 않는다. */
   syntax?: SyntaxSource;
@@ -99,6 +103,7 @@ export function ConsoleEditor({
   panelId,
   consoleId,
   initial,
+  readOnly = false,
   onChange,
   syntax,
   onView,
@@ -118,7 +123,7 @@ export function ConsoleEditor({
       panelId,
       path,
       judgment: CONSOLE_JUDGMENT,
-      readOnly: false,
+      readOnly,
       language: CONSOLE_LANGUAGE,
       appearance,
       onCursor: () => {},
@@ -127,7 +132,7 @@ export function ConsoleEditor({
       font,
       createFindPanel: () => ({ dom: document.createElement("div") }),
     }),
-    [panelId, path, appearance, sessions, font],
+    [panelId, path, readOnly, appearance, sessions, font],
   );
   const contextRef = useRef(context);
   contextRef.current = context;

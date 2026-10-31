@@ -149,6 +149,8 @@ function consoleActions(store: StoreApi<ConsoleState>, deps: ConsoleDeps) {
   };
   /** 지금 실행의 취소 신호(스트림을 그만 읽는다). */
   let abort: AbortController | undefined;
+  /** 탭이 닫혔다 — 그 뒤에 돌아온 세션은 곧바로 닫는다. */
+  let disposed = false;
 
   const connection = (opened: DbSessionOpened): RiskConfirmQuestion["connection"] => ({
     name: opened.name,
@@ -241,10 +243,22 @@ function consoleActions(store: StoreApi<ConsoleState>, deps: ConsoleDeps) {
         // 묻고 넣은 뒤 다시 연다. 한 연결이 여럿을 차례로 물을 수 있다(터널 확인 → 비밀번호) — 끝없이 돌지 않게 수를 둔다.
         for (let attempt = 0; ; attempt++) {
           try {
-            set({ opened: await client().call("db.session.open", params) });
+            const next = await client().call("db.session.open", params);
+            // [연결] 이 도는 중에 탭이 닫혔으면 아무도 닫지 않을 세션이 창이 닫힐 때까지 남는다 — 곧바로 닫는다.
+            if (disposed) {
+              await client()
+                .call("db.session.close", { sessionId: next.session.sessionId })
+                .catch(() => undefined);
+              return;
+            }
+            set({ opened: next });
             return;
           } catch (e) {
-            if (attempt >= ACCESS_RETRIES || !(await deps.resolveAccess?.(e, params.connectionId)))
+            if (
+              disposed ||
+              attempt >= ACCESS_RETRIES ||
+              !(await deps.resolveAccess?.(e, params.connectionId))
+            )
               throw e;
           }
         }
@@ -426,8 +440,9 @@ function consoleActions(store: StoreApi<ConsoleState>, deps: ConsoleDeps) {
       return answer === "commit" ? actions.commit() : actions.rollback();
     },
 
-    /** 탭이 닫혔다: 세션을 닫는다(답을 받은 뒤라 열린 트랜잭션은 없다 — 남았으면 DB 가 롤백한다). */
+    /** 탭이 닫혔다: 세션을 닫는다(답을 받은 뒤라 열린 트랜잭션은 없다 — 남았으면 DB 가 롤백한다). [연결] 이 도는 중이면 돌아온 세션을 곧바로 닫는다. */
     async dispose() {
+      disposed = true;
       abort?.abort();
       await actions.disconnect();
     },

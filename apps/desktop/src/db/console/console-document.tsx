@@ -75,45 +75,82 @@ export interface ConsoleDocumentProps {
   onTitle?(title: string): void;
 }
 
-/** 콘솔 파일을 읽고, 편집을 모아 쓴다. 탭이 닫힐 때 `flush` 로 마저 쓴다. */
+/**
+ * 콘솔 파일을 읽고, 편집을 모아 쓴다. 탭이 닫힐 때 `flush` 로 마저 쓴다.
+ *
+ * - **읽기가 성공한 뒤에만 쓰고 지운다.** 읽기 전(느린 읽기 중 탭 닫기)이나 읽지 못했을 때(16 MiB 초과 · UTF-8 아님 · 읽기 오류)
+ *   쓰면 그 파일을 빈 글이나 친 글로 덮고, 닫으면 빈 글로 보고 지운다 — 저장된 콘솔이 사라진다. 읽지 못했으면 편집기를 읽기 전용으로
+ *   두고(`readFailed`) [다시 읽기](`reload`)를 준다.
+ * - **쓰기는 하나씩**: 앞 쓰기가 끝나기 전에는 다음을 보내지 않고 마지막 글만 남긴다 — Host 의 원자적 쓰기가 늦게 끝나면 옛 글이
+ *   새 글 뒤에 이름을 바꿔 사람의 글이 사라진다. 지우기도 기다리던 쓰기가 끝난 뒤에 보낸다.
+ */
 function useConsoleFile(
   client: RpcClient | undefined,
   projectId: string | undefined,
   consoleId: string,
 ) {
   const [initial, setInitial] = useState<string>();
+  const [readFailed, setReadFailed] = useState<string>();
+  /** 다시 읽은 횟수 — 편집기를 새로 만드는 열쇠. */
+  const [generation, setGeneration] = useState(0);
   const [error, setError] = useState<string>();
   const pending = useRef<{ text: string; timer: ReturnType<typeof setTimeout> }>(undefined);
+  /** 읽기가 성공했다(그 뒤에만 쓰고 지운다). */
+  const loaded = useRef(false);
+  const queue = useRef<{ running?: Promise<void>; next?: string }>({});
   const latest = useRef({ client, projectId });
   latest.current = { client, projectId };
   useEffect(() => {
-    if (!client || !projectId || initial !== undefined) return;
+    if (!client || !projectId || initial !== undefined || readFailed !== undefined) return;
     let live = true;
     client.call("project.console.read", { projectId, consoleId }).then(
-      (read) => live && setInitial(read.text ?? ""),
+      (read) => {
+        if (!live) return;
+        loaded.current = true;
+        setInitial(read.text ?? "");
+      },
       (e: unknown) => {
         if (!live) return;
-        setError(e instanceof Error ? e.message : String(e));
+        setReadFailed(e instanceof Error ? e.message : String(e));
         setInitial("");
       },
     );
     return () => {
       live = false;
     };
-  }, [client, projectId, consoleId, initial]);
+  }, [client, projectId, consoleId, initial, readFailed]);
+  const reload = useCallback(() => {
+    setReadFailed(undefined);
+    setInitial(undefined);
+    setGeneration((n) => n + 1);
+  }, []);
   const write = useCallback(
-    (text: string) => {
-      const { client, projectId } = latest.current;
-      if (!client || !projectId) return Promise.resolve();
-      return client.call("project.console.write", { projectId, consoleId, text }).then(
-        () => setError(undefined),
-        (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
-      );
+    (text: string): Promise<void> => {
+      const q = queue.current;
+      q.next = text;
+      if (q.running) return q.running;
+      const drain = async () => {
+        while (q.next !== undefined) {
+          const next = q.next;
+          q.next = undefined;
+          const { client, projectId } = latest.current;
+          if (!client || !projectId || !loaded.current) return;
+          await client.call("project.console.write", { projectId, consoleId, text: next }).then(
+            () => setError(undefined),
+            (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+          );
+        }
+      };
+      q.running = drain().finally(() => {
+        q.running = undefined;
+      });
+      return q.running;
     },
     [consoleId],
   );
   const changed = useCallback(
     (text: string) => {
+      if (!loaded.current) return;
       if (pending.current) clearTimeout(pending.current.timer);
       const timer = setTimeout(() => {
         pending.current = undefined;
@@ -129,9 +166,12 @@ function useConsoleFile(
       const waiting = pending.current;
       if (waiting) clearTimeout(waiting.timer);
       pending.current = undefined;
+      // 읽기 전 · 읽지 못한 파일은 그대로 둔다.
+      if (!loaded.current) return;
       const text = waiting?.text ?? current;
       const { client, projectId } = latest.current;
-      if (removeEmpty && (text ?? "").trim() === "" && client && projectId) {
+      if (removeEmpty && text !== undefined && text.trim() === "" && client && projectId) {
+        await queue.current.running;
         await client
           .call("project.console.delete", { projectId, consoleId })
           .catch(() => undefined);
@@ -150,7 +190,7 @@ function useConsoleFile(
       out();
     };
   }, [flush]);
-  return { initial, error, changed, flush };
+  return { initial, readFailed, generation, reload, error, changed, flush };
 }
 
 /** `QueryRun` 이 바뀔 때마다 다시 그린다. */
@@ -589,13 +629,21 @@ function ConsoleBody({
           </span>
         )}
       </div>
-      <ConsoleNotices store={store} T={T} fileError={file.error} />
+      <ConsoleNotices
+        store={store}
+        T={T}
+        fileError={file.error}
+        readFailed={file.readFailed}
+        onReload={file.reload}
+      />
       <ConsoleSplit
         editor={
           <ConsoleEditor
+            key={file.generation}
             panelId={panelId}
             consoleId={spec.consoleId}
             initial={file.initial}
+            readOnly={file.readFailed !== undefined}
             onChange={file.changed}
             syntax={syntax}
             onView={(view) => {
@@ -618,15 +666,22 @@ function ConsoleNotices({
   store,
   T,
   fileError,
+  readFailed,
+  onReload,
 }: {
   store: ConsoleStore;
   T: DbConsoleStrings;
   fileError: string | undefined;
+  /** 콘솔 파일을 읽지 못한 까닭(편집기는 읽기 전용이다). */
+  readFailed: string | undefined;
+  onReload(): void;
 }) {
   const S = useDbSafetyStrings();
   const { opened, error, notice, resumed } = useStore(store);
   const kind = opened?.session.state.kind;
   const lines: { key: string; text: string; warning?: boolean }[] = [];
+  if (readFailed !== undefined)
+    lines.push({ key: "read", text: T.error.load(readFailed), warning: true });
   if (resumed && !opened) lines.push({ key: "idle", text: T.bar.notConnected });
   if (kind === "failed") lines.push({ key: "failed", text: T.bar.failed, warning: true });
   if (kind === "disconnected") lines.push({ key: "lost", text: T.bar.disconnected, warning: true });
@@ -655,6 +710,16 @@ function ConsoleNotices({
           className={line.warning ? "text-db-production" : "text-ui-muted-foreground"}
         >
           {line.text}
+          {line.key === "read" && (
+            <button
+              type="button"
+              data-testid="db-console-reload"
+              className={`${BUTTON} ml-2 inline-flex`}
+              onClick={onReload}
+            >
+              {T.error.reload}
+            </button>
+          )}
         </p>
       ))}
       {refused && <DbRefusalMessage error={error} />}

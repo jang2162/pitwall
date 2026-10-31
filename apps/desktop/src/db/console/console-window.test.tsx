@@ -5,7 +5,8 @@
 // `db.session.rollback` 을 부른다, ⌘F2 가 `db.query.cancel` 을 부른다, 수동 트랜잭션이 열린 탭 닫기 · 창 닫기(앱 종료도 같은 길 —
 // `guardClose`)가 묻고 [취소] 면 닫히지 않는다, 콘솔 탭이 열린 채 다시 시작하면 `db.session.open` 이 불리지 않는다(`resume` 만),
 // `failed` 세션에서 [커밋] 이 꺼져 있다, 한글 IME 로 SQL 을 칠 수 있다(조합 중의 ⌘↩ 은 돌지 않는다). 그 밖에 실행 계획 트리,
-// [연결] 이 `3101` 을 받으면 DB 접근 묻기(M3-13)로 비밀번호를 넣고 다시 연다.
+// [연결] 이 `3101` 을 받으면 DB 접근 묻기(M3-13)로 비밀번호를 넣고 다시 연다, 읽지 못한 · 아직 읽지 않은 콘솔 파일은 쓰거나 지우지
+// 않는다, 콘솔 쓰기는 하나씩 가고 마지막 글이 남는다, 연결 중에 닫은 탭의 세션은 돌아오면 닫는다.
 //
 // Glide 는 canvas 라 happy-dom 에서 그릴 수 없어 기록하는 가짜로 바꾼다(결과 그리드 자체는 src/db/grid 의 시험이 본다).
 
@@ -37,6 +38,7 @@ import { ThemeStoreProvider } from "../../theme/theme-switcher";
 import { parseTheme } from "../../theme/tokens";
 import { type DbDocumentSpec, dbDocumentKey } from "../documents/spec";
 import { dbStatusStore } from "../safety/db-status";
+import { SAVE_DELAY_MS } from "./console-document";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -69,7 +71,20 @@ const host = vi.hoisted(() => ({
   unattended: [] as unknown[],
   /** 참이면 다음 `db.session.open` 이 `3101`(비밀 필요)로 답한다(한 번). */
   openNeedsSecret: false,
+  /** 있으면 `project.console.read` 가 이 글의 오류로 답한다. */
+  consoleReadError: null as string | null,
+  /** 있으면 `project.console.read` · `write` · `db.session.open` 이 이것이 풀린 뒤에 답한다. */
+  readGate: null as Promise<void> | null,
+  writeGate: null as Promise<void> | null,
+  openGate: null as Promise<void> | null,
 }));
+
+/** 손으로 푸는 약속(느린 Host). */
+function gate(): { promise: Promise<void>; open(): void } {
+  let open!: () => void;
+  const promise = new Promise<void>((r) => (open = r));
+  return { promise, open };
+}
 
 const SECRET_TARGET = vi.hoisted(() => ({
   driver: "postgres",
@@ -247,31 +262,33 @@ vi.mock("../../tauri-transport", async () => {
                 },
               });
             }
-            return reply({
-              session: session(),
-              name: "dev db",
-              readOnly: false,
-              production: false,
-              driver: {
-                id: "postgres",
-                dialect: "postgres",
-                capabilities: {
-                  sql: true,
-                  kv: false,
-                  serverCursor: true,
-                  cancel: true,
-                  transactions: true,
-                  savepoints: true,
-                  readOnlyTransaction: true,
-                  explain: true,
-                  metadata: true,
-                  schemas: true,
-                  multipleDatabases: true,
-                  sslModes: [],
+            return void (host.openGate ?? Promise.resolve()).then(() =>
+              reply({
+                session: session(),
+                name: "dev db",
+                readOnly: false,
+                production: false,
+                driver: {
+                  id: "postgres",
+                  dialect: "postgres",
+                  capabilities: {
+                    sql: true,
+                    kv: false,
+                    serverCursor: true,
+                    cancel: true,
+                    transactions: true,
+                    savepoints: true,
+                    readOnlyTransaction: true,
+                    explain: true,
+                    metadata: true,
+                    schemas: true,
+                    multipleDatabases: true,
+                    sslModes: [],
+                  },
                 },
-              },
-              server: { version: "17", tls: "plaintext" },
-            } satisfies DbSessionOpened);
+                server: { version: "17", tls: "plaintext" },
+              } satisfies DbSessionOpened),
+            );
           case "db.session.close":
             return reply(null);
           case "db.session.setMode":
@@ -345,10 +362,16 @@ vi.mock("../../tauri-transport", async () => {
           case "db.query.explain":
             return reply(host.plan);
           case "project.console.read":
-            return reply({ text: host.consoleText });
+            return void (host.readGate ?? Promise.resolve()).then(() =>
+              host.consoleReadError
+                ? send({ id: m.id, error: { code: -32602, message: host.consoleReadError } })
+                : reply({ text: host.consoleText }),
+            );
           case "project.console.write":
-            host.consoleText = String(params.text);
-            return reply(null);
+            return void (host.writeGate ?? Promise.resolve()).then(() => {
+              host.consoleText = String(params.text);
+              reply(null);
+            });
           case "project.console.delete":
             return reply(null);
           default:
@@ -403,6 +426,10 @@ beforeEach(() => {
   host.plan = { format: "json", text: "[]" };
   host.execution = "";
   host.openNeedsSecret = false;
+  host.consoleReadError = null;
+  host.readGate = null;
+  host.writeGate = null;
+  host.openGate = null;
   host.unattended = [];
   glide.rows = [];
 });
@@ -845,6 +872,94 @@ it("leaves the console unconnected when the password question is cancelled", asy
   expect(callsOf("db.session.open")).toHaveLength(1);
   expect(q("[data-testid=db-console-disconnect]")).toBeNull();
   expect(button("db-console-connect")).toBeTruthy();
+});
+
+it("keeps a console file it could not read: read-only, no write when typing, and reads it again", async () => {
+  host.consoleReadError = "the console is not UTF-8 text";
+  await mount();
+  await openConsole();
+  expect(q("[data-testid=db-console-notices] [data-notice=read]")!.textContent).toContain(
+    "the console is not UTF-8 text",
+  );
+  expect(view().state.readOnly).toBe(true);
+  // 키 입력은 읽기 전용이 막는다 — 막히지 않은 바뀜(붙여 넣기 경로 등)이 와도 파일을 쓰지 않는다.
+  await act(async () => view().dispatch({ changes: { from: 0, insert: "x" } }));
+  await act(async () => new Promise((r) => setTimeout(r, SAVE_DELAY_MS + 40)));
+  expect(callsOf("project.console.write")).toEqual([]);
+  // [다시 읽기]: 이번엔 읽히면 고칠 수 있고, 친 글을 쓴다.
+  host.consoleReadError = null;
+  host.consoleText = "SELECT 9";
+  await click(button("db-console-reload"));
+  expect(q("[data-notice=read]")).toBeNull();
+  expect(view().state.readOnly).toBe(false);
+  expect(view().state.doc.toString()).toBe("SELECT 9");
+  await act(async () => view().dispatch({ changes: { from: 8, insert: ";" } }));
+  await vi.waitFor(() => expect(host.consoleText).toBe("SELECT 9;"));
+});
+
+it("does not delete a console file it could not read when the tab closes", async () => {
+  host.consoleReadError = "the console is larger than 16 MiB";
+  await mount();
+  await openConsole();
+  await press({ code: "KeyW", key: "w", metaKey: true });
+  expect(consoleTab()).toBeUndefined();
+  await settle();
+  expect(methods()).not.toContain("project.console.delete");
+  expect(methods()).not.toContain("project.console.write");
+});
+
+it("does not delete the console file when the tab closes before it was read", async () => {
+  const slow = gate();
+  host.readGate = slow.promise;
+  await mount();
+  await openConsole();
+  await press({ code: "KeyW", key: "w", metaKey: true });
+  expect(consoleTab()).toBeUndefined();
+  await act(async () => slow.open());
+  await settle();
+  expect(callsOf("project.console.read")).toHaveLength(1);
+  expect(methods()).not.toContain("project.console.delete");
+  expect(methods()).not.toContain("project.console.write");
+});
+
+it("writes the console one write at a time and keeps the last text", async () => {
+  host.consoleText = "";
+  await mount();
+  await openConsole();
+  const slow = gate();
+  host.writeGate = slow.promise;
+  const type = async (text: string) => {
+    await act(async () =>
+      view().dispatch({ changes: { from: view().state.doc.length, insert: text } }),
+    );
+    await act(async () => new Promise((r) => setTimeout(r, SAVE_DELAY_MS + 40)));
+  };
+  await type("SELECT 1");
+  expect(callsOf("project.console.write").map((c) => c.params.text)).toEqual(["SELECT 1"]);
+  // 앞 쓰기가 끝나기 전에는 다음을 보내지 않고, 그사이 글은 마지막 것만 남긴다.
+  await type(", 2");
+  await type(", 3");
+  expect(callsOf("project.console.write")).toHaveLength(1);
+  host.writeGate = null;
+  await act(async () => slow.open());
+  await vi.waitFor(() => expect(callsOf("project.console.write")).toHaveLength(2));
+  expect(callsOf("project.console.write")[1]!.params.text).toBe("SELECT 1, 2, 3");
+  await vi.waitFor(() => expect(host.consoleText).toBe("SELECT 1, 2, 3"));
+});
+
+it("closes the session that comes back after the tab was closed while connecting", async () => {
+  await mount();
+  await openConsole();
+  const slow = gate();
+  host.openGate = slow.promise;
+  await click(button("db-console-connect"));
+  expect(callsOf("db.session.open")).toHaveLength(1);
+  await press({ code: "KeyW", key: "w", metaKey: true });
+  expect(consoleTab()).toBeUndefined();
+  expect(methods()).not.toContain("db.session.close");
+  await act(async () => slow.open());
+  await settle();
+  expect(callsOf("db.session.close").map((c) => c.params)).toEqual([{ sessionId: "s1" }]);
 });
 
 it("opens a new console for the last connected connection with ⇧⌘L", async () => {

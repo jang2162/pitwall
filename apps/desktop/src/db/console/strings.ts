@@ -63,6 +63,7 @@ export function dbConsoleStrings(t: Translate) {
     },
     error: {
       load: (message: string) => t("db-console-load-failed", { message }),
+      reload: t("db-console-reload"),
       save: (message: string) => t("db-console-save-failed", { message }),
       other: (message: string) => t("db-console-error", { message }),
       nothingToRun: t("db-console-nothing-to-run"),
