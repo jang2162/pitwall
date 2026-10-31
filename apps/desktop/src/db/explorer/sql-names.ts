@@ -5,7 +5,8 @@
 //   그대로 둔다. 사람이 콘솔에 치는 모양과 같게 하려는 것이다. 예약어 목록은 흔한 것과 SQL 값 함수 이름(`current_user` 등 — PG 는
 //   FROM 에서 함수로 읽어 문법 오류 없이 다른 질의가 된다)이다. 그래도 빠진 것이 있으면 따옴표 없이 나간다 — 사람이 콘솔에서 보고
 //   고친다.
-// - 「행 수」 의 이름은 늘 따옴표를 친다 — 사람이 보지 않는 글이라 모양보다 정확함이 먼저다.
+// - 「행 수」 의 이름은 늘 따옴표를 치고 PG 는 스키마를 `public` 이어도 붙인다 — 사람이 보지 않는 글이라 모양보다 정확함이
+//   먼저다(`search_path` 의 앞자리 — 기본 `"$user"` — 에 같은 이름의 테이블이 있으면 그것을 세지 않게).
 // - 끌어 넣는 이름은 이름 하나, `SELECT * FROM` · 「행 수」 는 PG 는 스키마(`public` 이 아니면), MySQL 은 DB 를 붙인다 — 콘솔이 다른
 //   DB · 스키마를 보고 있어도 그 테이블을 가리킨다.
 
@@ -39,11 +40,14 @@ export function quoteName(driver: DriverKind, name: string): string {
   return plain(driver, name) ? name : quoted(driver, name);
 }
 
-/** 다른 DB · 스키마를 보는 콘솔에서도 그 객체를 가리키는 이름. `always` 면 모든 이름에 따옴표를 친다. */
+/**
+ * 다른 DB · 스키마를 보는 콘솔에서도 그 객체를 가리키는 이름. `always` 면 모든 이름에 따옴표를 치고 PG 의 `public` 스키마도
+ * 붙인다.
+ */
 export function qualifiedName(driver: DriverKind, object: ObjectRef, always = false): string {
   const q = always ? quoted : quoteName;
   const name = q(driver, object.name);
-  if (driver === "postgres" && object.schema && object.schema !== "public")
+  if (driver === "postgres" && object.schema && (always || object.schema !== "public"))
     return `${q(driver, object.schema)}.${name}`;
   if (driver === "mysql" && object.database) return `${q(driver, object.database)}.${name}`;
   return name;

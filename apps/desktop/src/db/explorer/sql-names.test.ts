@@ -46,9 +46,10 @@ it("drops a bare name or a qualified SELECT, and counts by the qualified name", 
   expect(countSql("mysql", object)).toBe("SELECT count(*) FROM `shop`.`order`");
 });
 
-it("always quotes the names it counts by — no one reads that SQL", () => {
+it("always quotes the names it counts by and names PostgreSQL's public schema too", () => {
+  // search_path 의 앞자리("$user")에 같은 이름의 테이블이 있어도 public 의 것을 센다.
   expect(countSql("postgres", { database: "b", schema: "public", name: "current_user" })).toBe(
-    'SELECT count(*) FROM "current_user"',
+    'SELECT count(*) FROM "public"."current_user"',
   );
   expect(countSql("postgres", { database: "b", schema: "sales", name: "t" })).toBe(
     'SELECT count(*) FROM "sales"."t"',
