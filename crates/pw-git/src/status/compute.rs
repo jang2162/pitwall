@@ -141,6 +141,14 @@ pub fn status(
     if interrupt.load(Ordering::Relaxed) {
         return Err(Stopped::Interrupted);
     }
+    // index 에 있는 경로는 untracked 가 아니다. 대소문자를 가리는 작업 트리(`core.ignorecase` 가 꺼짐 — Linux 의 기본)에서 gix 의
+    // 폴더 걷기는 index 에서 단계 0 · 2 만 찾아(`gix_index::State::entry_by_path`) 「우리가 지움」 · 「그쪽이 더함」(단계 1 · 3,
+    // 단계 3 만)인 충돌 파일을 untracked 로도 낸다.
+    for entry in entries.values_mut() {
+        if entry.conflict.is_some() && entry.unstaged == Some(GitChange::Untracked) {
+            entry.unstaged = None;
+        }
+    }
 
     // HEAD↔index. 충돌한 경로(단계 1~3 만 있다)는 gix 가 내지 않는다 — git 처럼 충돌만 보인다.
     let tree = repo.head_tree_id_or_empty()?.detach();

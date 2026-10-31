@@ -305,47 +305,53 @@ fn type_changes_and_the_executable_bit_match_git() {
     assert_eq!(got.entries.len(), 4, "{got:?}");
 }
 
-/// 충돌의 종류(UU · AA · UD · DU)가 git 과 같고, 충돌한 경로는 스테이징 쪽이 비어 있다.
+/// 충돌의 종류(UU · AA · UD · DU)가 git 과 같고, 충돌한 경로는 스테이징 쪽이 비어 있다. 대소문자를 가리는 작업 트리
+/// (`core.ignorecase=false` — Linux 의 기본)와 가리지 않는 작업 트리(macOS · Windows 의 기본) 둘 다 — 앞쪽에서는 「우리가
+/// 지움」 파일이 untracked 로 섞이면 안 된다(`crate::status::compute::status`).
 #[test]
 fn conflicts_match_git() {
-    let r = TestRepo::with_commit();
-    r.write("both-modified.txt", "base\n");
-    r.write("deleted-by-them.txt", "base\n");
-    r.write("deleted-by-us.txt", "base\n");
-    r.commit_all("base");
-    r.git(&["checkout", "--quiet", "-b", "theirs"]);
-    r.write("both-modified.txt", "theirs\n");
-    r.write("both-added.txt", "theirs\n");
-    r.write("deleted-by-us.txt", "theirs\n");
-    fs::remove_file(r.root().join("deleted-by-them.txt")).unwrap();
-    r.commit_all("theirs");
-    r.checkout("main");
-    r.write("both-modified.txt", "ours\n");
-    r.write("both-added.txt", "ours\n");
-    r.write("deleted-by-them.txt", "ours\n");
-    fs::remove_file(r.root().join("deleted-by-us.txt")).unwrap();
-    r.write("clean-change.txt", "staged during the merge\n");
-    r.commit_all("ours");
-    let out = r.try_git_in(r.root(), &["merge", "theirs"]);
-    assert!(!out.status.success());
-    let fx = Fx::new();
-    let id = fx.project(r.root());
-    assert_same_status(&fx, &r, &id, None);
-    let got = fx.status(&id, None);
-    let conflicts: Vec<_> = got
-        .entries
-        .iter()
-        .filter_map(|e| e.conflict.map(|c| (e.path.as_str(), c, e.staged)))
-        .collect();
-    assert_eq!(
-        conflicts,
-        [
-            ("both-added.txt", GitConflict::BothAdded, None),
-            ("both-modified.txt", GitConflict::BothModified, None),
-            ("deleted-by-them.txt", GitConflict::DeletedByThem, None),
-            ("deleted-by-us.txt", GitConflict::DeletedByUs, None),
-        ]
-    );
+    for ignorecase in ["false", "true"] {
+        let r = TestRepo::with_commit();
+        r.git(&["config", "core.ignorecase", ignorecase]);
+        r.write("both-modified.txt", "base\n");
+        r.write("deleted-by-them.txt", "base\n");
+        r.write("deleted-by-us.txt", "base\n");
+        r.commit_all("base");
+        r.git(&["checkout", "--quiet", "-b", "theirs"]);
+        r.write("both-modified.txt", "theirs\n");
+        r.write("both-added.txt", "theirs\n");
+        r.write("deleted-by-us.txt", "theirs\n");
+        fs::remove_file(r.root().join("deleted-by-them.txt")).unwrap();
+        r.commit_all("theirs");
+        r.checkout("main");
+        r.write("both-modified.txt", "ours\n");
+        r.write("both-added.txt", "ours\n");
+        r.write("deleted-by-them.txt", "ours\n");
+        fs::remove_file(r.root().join("deleted-by-us.txt")).unwrap();
+        r.write("clean-change.txt", "staged during the merge\n");
+        r.commit_all("ours");
+        let out = r.try_git_in(r.root(), &["merge", "theirs"]);
+        assert!(!out.status.success());
+        let fx = Fx::new();
+        let id = fx.project(r.root());
+        assert_same_status(&fx, &r, &id, None);
+        let got = fx.status(&id, None);
+        let conflicts: Vec<_> = got
+            .entries
+            .iter()
+            .filter_map(|e| e.conflict.map(|c| (e.path.as_str(), c, e.staged)))
+            .collect();
+        assert_eq!(
+            conflicts,
+            [
+                ("both-added.txt", GitConflict::BothAdded, None),
+                ("both-modified.txt", GitConflict::BothModified, None),
+                ("deleted-by-them.txt", GitConflict::DeletedByThem, None),
+                ("deleted-by-us.txt", GitConflict::DeletedByUs, None),
+            ],
+            "core.ignorecase={ignorecase}"
+        );
+    }
 }
 
 /// 경로 한정: 그 경로(폴더면 그 아래)의 항목만, 스테이징한 이름 바뀜은 새 경로만 불러도 원래 경로와 함께 나온다.
