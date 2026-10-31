@@ -989,6 +989,21 @@ it("restores a DB document tab with its tab id after a restart, without any conn
   expect(host.calls.filter((c) => String(c.params.path ?? "").startsWith("db:"))).toEqual([]);
 });
 
+it("keys a restored DB document tab by its document, not by the saved path", async () => {
+  host.files.set(LIB, "fn lib() {}");
+  const spec: DbDocumentSpec = { kind: "redis", tabId: "t-1", connectionId: "c1", database: "0" };
+  // 깨진 저장본: DB 탭이 파일 경로를 키로 가졌다.
+  host.states.set("p1", {
+    version: 1,
+    main: { tabs: [{ path: LIB, db: spec, title: "c1 · DB 0" }], usedAt: 1 },
+  });
+  await mount();
+  expect(editorTabs().map((t) => t.title)).toEqual(["c1 · DB 0"]);
+  // 그 파일을 열면 DB 탭이 아니라 파일 탭이 생긴다.
+  await openRequest(LIB);
+  expect(editorTabs().map((t) => t.title)).toEqual(["c1 · DB 0", "lib.rs"]);
+});
+
 it("drops a saved DB document tab whose shape is broken, keeping the rest", async () => {
   host.files.set(LIB, "fn lib() {}");
   host.states.set("p1", {

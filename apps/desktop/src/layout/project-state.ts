@@ -18,7 +18,7 @@
 
 import type { JsonValue, RpcClient } from "@pitwall/rpc-client";
 
-import { type DbDocumentSpec, isDbDocumentSpec } from "../db/documents/spec";
+import { type DbDocumentSpec, dbDocumentKey, isDbDocumentSpec } from "../db/documents/spec";
 import type { Cursor } from "../editor/editor-workspace";
 import { LAYOUT_STORAGE_KEY, type LayoutStorage } from "./project-layout";
 
@@ -123,9 +123,12 @@ function readWorktree(value: unknown): WorktreeState | undefined {
     const cursor = tab.cursor;
     // DB 문서 탭은 꼴이 맞을 때만 — 깨진 `db` 칸을 파일 경로로 읽지 않는다.
     if (tab.db !== undefined && !isDbDocumentSpec(tab.db)) continue;
+    const db = tab.db as DbDocumentSpec | undefined;
     tabs.push({
-      path: tab.path,
-      ...(tab.db !== undefined && { db: tab.db as DbDocumentSpec }),
+      // DB 문서 탭의 키는 저장본의 `path` 를 믿지 않고 문서에서 다시 만든다 — 파일 경로를 키로 가진 DB 탭이 되살아나면 그 파일을
+      // 열 때 `openTab` 이 그 탭을 앞으로 가져오고 파일은 열리지 않는다.
+      path: db ? dbDocumentKey(db) : tab.path,
+      ...(db !== undefined && { db }),
       ...(typeof tab.title === "string" && tab.db !== undefined && { title: tab.title }),
       ...((typeof tab.worktree === "string" || tab.worktree === null) && {
         worktree: tab.worktree,
