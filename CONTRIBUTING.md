@@ -22,23 +22,23 @@ mise trust && mise install && pnpm install
 
 모두 저장소 루트에서 실행한다. 태스크 목록은 `mise tasks`.
 
-| 하려는 일                                                                                                          | 명령                    |
-| ------------------------------------------------------------------------------------------------------------------ | ----------------------- |
-| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                                            | `mise run build`        |
-| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                                                       | `mise run dev`          |
-| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                                               | `mise run test`         |
-| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                                         | `mise run lint`         |
-| 포맷 적용                                                                                                          | `mise run fmt`          |
-| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                                           | `mise run gen`          |
-| 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부                          | `mise run licenses`     |
-| `THIRD_PARTY_NOTICES.md` 다시 만들기                                                                               | `mise run notices`      |
-| Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                                                     | `mise run advisories`   |
-| 실 DB 시험(PG · MySQL · MariaDB · Redis, `PW_TEST_*_URL` 이 있는 DB 만) + 실행 개수 하한 검사(아래 「실 DB 시험」) | `mise run test-db`      |
-| Linguist `samples/` 일치율 시험(samples 를 GitHub 에서 받는다, 아래 「Linguist 데이터」)                           | `mise run lang-samples` |
-| 내장 언어 확장의 강조 쿼리 · 넣은 문법 파일 다시 만들기(소스를 GitHub 에서 받는다, 아래 「tree-sitter 문법」)      | `mise run grammars`     |
-| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)                               | `mise run perf`         |
-| 데스크톱 앱 release 번들의 git 시나리오 측정(macOS, 아래 「성능 기준선」 의 「git 시나리오」)                      | `mise run perf-git`     |
-| M2-22 실기 측정 한 번에(`perf-git` + git 저장소 프로젝트의 콜드 스타트 · 유휴 메모리, 결과를 보고서 폴더로 복사)   | `mise run perf-m2`      |
+| 하려는 일                                                                                                                     | 명령                    |
+| ----------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                                                       | `mise run build`        |
+| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                                                                  | `mise run dev`          |
+| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                                                          | `mise run test`         |
+| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                                                    | `mise run lint`         |
+| 포맷 적용                                                                                                                     | `mise run fmt`          |
+| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                                                      | `mise run gen`          |
+| 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부                                     | `mise run licenses`     |
+| `THIRD_PARTY_NOTICES.md` 다시 만들기                                                                                          | `mise run notices`      |
+| Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                                                                | `mise run advisories`   |
+| 실 DB 시험(PG · MySQL · MariaDB · Redis · SSH 터널, `PW_TEST_*_URL` 이 있는 DB 만) + 실행 개수 하한 검사(아래 「실 DB 시험」) | `mise run test-db`      |
+| Linguist `samples/` 일치율 시험(samples 를 GitHub 에서 받는다, 아래 「Linguist 데이터」)                                      | `mise run lang-samples` |
+| 내장 언어 확장의 강조 쿼리 · 넣은 문법 파일 다시 만들기(소스를 GitHub 에서 받는다, 아래 「tree-sitter 문법」)                 | `mise run grammars`     |
+| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)                                          | `mise run perf`         |
+| 데스크톱 앱 release 번들의 git 시나리오 측정(macOS, 아래 「성능 기준선」 의 「git 시나리오」)                                 | `mise run perf-git`     |
+| M2-22 실기 측정 한 번에(`perf-git` + git 저장소 프로젝트의 콜드 스타트 · 유휴 메모리, 결과를 보고서 폴더로 복사)              | `mise run perf-m2`      |
 
 하위 단위만 돌릴 때:
 
@@ -61,7 +61,7 @@ PW_BLAME_SEEDS=200 cargo nextest run -p pw-git -E 'test(/random_histories/)'   #
 mise run test-release   # 위 release 판정 시험(검색 취소 100 ms · `fs.list` 1만 개 · 구문 강조 16 ms · git 감시 이벤트 500 ms · 터미널 체크아웃 → 상태바 브랜치의 `git.refs` 500 ms · SQL 문장 나누기 1 MiB 와 긴 `DELIMITER` 각 50 ms · 10만 행 쿼리의 첫 `rows` 청크 50 ms)을 한 번에 — CI 의 「release timing tests」 단계와 같은 명령이다. 12개를 돌린다(0개면 실패)
 ```
 
-**실 DB 시험**(`live_*`, 14-m3-plan.md 결정 M3-D16)은 URL 환경 변수가 있을 때만 목록에 생긴다 — 없으면 건너뛰는 것이 아니라 그 시험이 없다(`crates/pw-db-driver/live_cfg.rs`). `PW_TEST_PG_URL` · `PW_TEST_MYSQL_URL` · `PW_TEST_MARIADB_URL` · `PW_TEST_REDIS_URL` 을 주고 `mise run test-db`(인자로 DB 를 고른다 — `mise run test-db -- pg`)를 돌리면 CI 의 `db-live` 잡과 같은 명령이 돈다. URL 이 없는 DB 는 `SKIP … not counted as passed` 로 끝에 나온다 — 그 DB 는 통과가 아니다. 모두 건너뛰었으면 종료 코드가 3 이다. 로컬 서버는 컨테이너로 띄운다(CI 와 같은 판은 `.github/workflows/ci.yml` 의 `db-live` 잡): `docker run -d --rm --name pw-pg -e POSTGRES_USER=pitwall -e POSTGRES_PASSWORD=pitwall -e POSTGRES_DB=pitwall -p 127.0.0.1:55432:5432 postgres:17.6` 뒤 `PW_TEST_PG_URL=postgres://pitwall:pitwall@127.0.0.1:55432/pitwall`. PG 의 TLS 시험(`live_pg_tls_*`)은 시험 CA 로 서명한 두 번째 서버를 쓴다(`PW_TEST_PG_TLS_URL` · `PW_TEST_TLS_CA`). `mise run test-db` 는 도커가 있고 TLS URL 이 없으면 `scripts/db-tls.mjs` 로 이 워크트리 · 이 실행만의 이름(`pitwall-tls-<워크트리 해시>-<pid>-pg`)과 빈 포트에 띄우고, 끝나면(실패 · Ctrl-C 포함) 그 이름만 끈다. 도커가 없으면 띄우지 않고 그 시험은 건너뛰지 않고 실패한다. 손으로 띄울 때는 `node scripts/db-tls.mjs pg --name <이름> --port pg=<포트>` 가 낸 `이름=값` 줄을 export 하고, 끝나면 `docker stop <이름>-pg`. `--out`(기본 `target/db-tls/`)은 도커가 마운트할 수 있는 폴더여야 한다(macOS Docker Desktop 은 `/private/tmp` 아래를 비워 보여 서버가 곧바로 꺼진다). `PW_TEST_PG_URL` 은 버려도 되는 서버여야 한다 — PG live 시험은 서버 전역을 바꾸는 함수(`pg_reload_conf` · `pg_switch_wal` · `pg_stat_reset_shared` · `pg_backup_start`)와 복제 슬롯 · 오리진을 시험이 만든 이름으로 쓰고 치운다(`live_pg_side_effect_functions_that_pass_a_read_only_transaction`). 시험을 다는 법(`#[cfg(pw_live_pg)]` · 이름 규칙)은 `crates/pw-db-driver/src/live.rs` 머리 주석, 하한은 `scripts/db-live.toml`. **이름 규칙**: 실 DB 시험의 함수 이름은 `live_<db>_` 로 시작하고(`live_pg_…` · `live_mysql_…` · `live_redis_…`), 실 DB 없이 도는 시험의 이름은 `live_<db>_` 로 시작하지 않는다 — `db-live` 의 필터는 이름 조각의 처음만 본다(`test(/(^|::)live_pg_/)`, `scripts/db-live.mjs` 의 `filterExpr`). 이름 가운데의 `…_on_live_pg_…` 는 고르지 않으므로 단위 시험이 하한 개수에 섞이지 않는다.
+**실 DB 시험**(`live_*`, 14-m3-plan.md 결정 M3-D16)은 URL 환경 변수가 있을 때만 목록에 생긴다 — 없으면 건너뛰는 것이 아니라 그 시험이 없다(`crates/pw-db-driver/live_cfg.rs`). `PW_TEST_PG_URL` · `PW_TEST_MYSQL_URL` · `PW_TEST_MARIADB_URL` · `PW_TEST_REDIS_URL` 을 주고 `mise run test-db`(인자로 DB 를 고른다 — `mise run test-db -- pg`)를 돌리면 CI 의 `db-live` 잡과 같은 명령이 돈다. URL 이 없는 DB 는 `SKIP … not counted as passed` 로 끝에 나온다 — 그 DB 는 통과가 아니다. 모두 건너뛰었으면 종료 코드가 3 이다. 로컬 서버는 컨테이너로 띄운다(CI 와 같은 판은 `.github/workflows/ci.yml` 의 `db-live` 잡): `docker run -d --rm --name pw-pg -e POSTGRES_USER=pitwall -e POSTGRES_PASSWORD=pitwall -e POSTGRES_DB=pitwall -p 127.0.0.1:55432:5432 postgres:17.6` 뒤 `PW_TEST_PG_URL=postgres://pitwall:pitwall@127.0.0.1:55432/pitwall`. PG 의 TLS 시험(`live_pg_tls_*`)은 시험 CA 로 서명한 두 번째 서버를 쓴다(`PW_TEST_PG_TLS_URL` · `PW_TEST_TLS_CA`). `mise run test-db` 는 도커가 있고 TLS URL 이 없으면 `scripts/db-tls.mjs` 로 이 워크트리 · 이 실행만의 이름(`pitwall-tls-<워크트리 해시>-<pid>-pg`)과 빈 포트에 띄우고, 끝나면(실패 · Ctrl-C 포함) 그 이름만 끈다. 도커가 없으면 띄우지 않고 그 시험은 건너뛰지 않고 실패한다. 손으로 띄울 때는 `node scripts/db-tls.mjs pg --name <이름> --port pg=<포트>` 가 낸 `이름=값` 줄을 export 하고, 끝나면 `docker stop <이름>-pg`. `--out`(기본 `target/db-tls/`)은 도커가 마운트할 수 있는 폴더여야 한다(macOS Docker Desktop 은 `/private/tmp` 아래를 비워 보여 서버가 곧바로 꺼진다). `PW_TEST_PG_URL` 은 버려도 되는 서버여야 한다 — PG live 시험은 서버 전역을 바꾸는 함수(`pg_reload_conf` · `pg_switch_wal` · `pg_stat_reset_shared` · `pg_backup_start`)와 복제 슬롯 · 오리진을 시험이 만든 이름으로 쓰고 치운다(`live_pg_side_effect_functions_that_pass_a_read_only_transaction`). 시험을 다는 법(`#[cfg(pw_live_pg)]` · 이름 규칙)은 `crates/pw-db-driver/src/live.rs` 머리 주석, 하한은 `scripts/db-live.toml`. **SSH 터널 시험**(`live_ssh_tunnel_*`, `mise run test-db -- ssh_tunnel`)은 `PW_TEST_SSH_URL` 이 없으면 도커로 이 실행만의 sshd 컨테이너(`scripts/db-ssh.mjs` — alpine 에 시작 때 `openssh-server` 를 설치하므로 네트워크가 필요하다)를 띄우고 끝나면 끈다. 손으로 띄울 때는 `node scripts/db-ssh.mjs --name <이름>` 이 낸 `PW_TEST_SSH_URL` · `PW_TEST_SSH_DIR` 을 export 하고, 끝나면 `docker stop <이름>`. 시험의 ssh 는 `-F <시험 설정>` 감싸개로 돌아 사람의 `~/.ssh/config` · 에이전트를 쓰지 않는다(`crates/pw-db-driver/src/tunnel/testing.rs`). **이름 규칙**: 실 DB 시험의 함수 이름은 `live_<db>_` 로 시작하고(`live_pg_…` · `live_mysql_…` · `live_redis_…`), 실 DB 없이 도는 시험의 이름은 `live_<db>_` 로 시작하지 않는다 — `db-live` 의 필터는 이름 조각의 처음만 본다(`test(/(^|::)live_pg_/)`, `scripts/db-live.mjs` 의 `filterExpr`). 이름 가운데의 `…_on_live_pg_…` 는 고르지 않으므로 단위 시험이 하한 개수에 섞이지 않는다.
 
 **테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N test(s) run: N passed`), doctest 는 크레이트마다 `test result: ok. N passed` 줄, Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.
 

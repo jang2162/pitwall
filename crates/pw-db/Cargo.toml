@@ -34,6 +34,8 @@ toml_edit = "0.25.17"
 tracing = "0.1.44"
 
 [dev-dependencies]
+# SSH 터널의 askpass 가 그 프로젝트 창으로 가는지(tests/tunnel.rs 의 ⑤ — 데스크톱과 같은 `pw_git` askpass 를 붙인다).
+pw-git = { path = "../pw-git" }
 # 비밀 값이 로그 파일에 없는지 앱과 같은 로그 구독자로 본다(tests/secret_log.rs).
 pw-diag = { path = "../pw-diag" }
 tempfile = "3.27.0"

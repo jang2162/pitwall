@@ -525,6 +525,8 @@ impl DbSessions {
             None,
         )
         .await?;
+        // 터널은 연결을 닫을 때까지 쥔다(이 함수 끝에서 놓는다).
+        let _tunnel = opened.tunnel;
         let mut conn = match opened.connection {
             DbConnection::Sql(conn) => conn,
             other => {

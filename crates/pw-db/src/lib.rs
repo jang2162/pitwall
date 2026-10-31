@@ -6,6 +6,7 @@
 //! - [`registry`]: 드라이버 등록부(M3-01).
 //! - [`config`] · [`secret`] · [`trust`]: 연결 설정 파일 · 비밀 · 신뢰 게이트(M3-02).
 //! - [`connection`] · [`session`] · [`gate`] · [`execute`]: 연결 관리자 · 세션 · 실행 관문 · 실행 파이프라인(M3-05).
+//! - [`tunnel`]: SSH 터널을 연결 관리자에 붙이는 자리(M3-11 — 터널 자체는 `pw_db_driver::tunnel`).
 //! - [`schema`]: 스키마 탐색 RPC · 캐시(M3-10).
 //! - [`edit`]: 그리드 편집 적용 RPC(M3-12).
 //! - [`kv`]: Redis RPC(M3-22).
@@ -23,6 +24,7 @@ pub mod schema;
 pub mod secret;
 pub mod session;
 pub mod trust;
+pub mod tunnel;
 
 pub use registry::{DriverRegistry, RegisterError};
 pub use session::{DbSessions, register};

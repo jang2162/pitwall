@@ -35,6 +35,8 @@ async fn secret_values_never_reach_logs_or_responses() {
     f.env.set("PGPASSWORD", PLANTED_ENV);
     let responses = RefCell::new(Vec::new());
     let mut w = f.window();
+    // 터널 목적지는 처음 쓸 때 확인한다(M3-11).
+    w.approve_tunnel(&f.id, "prod").await.unwrap();
     let call = async |conn: &mut common::Conn, method: &str, params: serde_json::Value| {
         let outcome = conn.call(method, params).await;
         responses.borrow_mut().push(format!("{outcome:?}"));

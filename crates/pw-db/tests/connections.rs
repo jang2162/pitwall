@@ -65,6 +65,17 @@ async fn a_round_trip_keeps_only_the_secret_ref() {
         .await
         .unwrap();
     assert_eq!(entry["config"]["password"], json!({ "kind": "keychain" }));
+    // 터널 목적지는 처음 쓸 때 묻는다(M3-11) — 확인한 뒤에 비밀번호를 묻는다.
+    assert_eq!(entry["state"]["kind"], "approvalRequired", "{entry}");
+    assert_eq!(entry["state"]["request"]["kind"], "tunnel", "{entry}");
+    w.approve_tunnel(&f.id, "prod").await.unwrap();
+    let entry = w
+        .call(
+            "db.connection.get",
+            json!({ "projectId": f.id, "connectionId": "prod" }),
+        )
+        .await
+        .unwrap();
     assert_eq!(entry["state"]["kind"], "secretRequired", "{entry}");
     assert_eq!(entry["state"]["reason"], "missing", "{entry}");
     assert_eq!(entry["state"]["target"], target_of(&entry["config"]));
@@ -142,6 +153,7 @@ async fn a_secret_is_not_sent_to_a_changed_target() {
         let f = Fixture::new(true);
         f.write_db("prod.toml", REMOTE_PG);
         let mut w = f.window();
+        w.approve_tunnel(&f.id, "prod").await.unwrap();
         w.set_password(&f.id, "prod", "s3cret").await.unwrap();
         let before = w
             .call(
@@ -155,6 +167,11 @@ async fn a_secret_is_not_sent_to_a_changed_target() {
         assert_eq!(resolved.spec.password.as_ref().unwrap().expose(), "s3cret");
 
         f.edit_db("prod.toml", from, to);
+        // 터널 목적지 확인도 (값, 대상)에 묶여 먼저 다시 묻는다(M3-11) — 사람이 확인한 뒤에 비밀을 본다.
+        let e = f.connections.resolve(&gate, "prod").unwrap_err();
+        assert_eq!(e.code, code::APPROVAL_REQUIRED, "{from} → {to}: {e:?}");
+        assert_eq!(data(&e)["request"]["kind"], "tunnel");
+        w.approve_tunnel(&f.id, "prod").await.unwrap();
         let e = f.connections.resolve(&gate, "prod").unwrap_err();
         assert_eq!(e.code, code::SECRET_REQUIRED, "{from} → {to}: {e:?}");
         assert_eq!(reason(&e), Some("targetChanged"), "{e:?}");
@@ -220,6 +237,7 @@ async fn a_secret_is_not_bound_to_a_target_nobody_saw() {
 async fn a_missing_secret_is_asked_for() {
     let f = Fixture::new(true);
     f.write_db("prod.toml", REMOTE_PG);
+    f.window().approve_tunnel(&f.id, "prod").await.unwrap();
     let gate = f.connections.trust_gate(&f.id, None).unwrap();
     let e = f.connections.resolve(&gate, "prod").unwrap_err();
     assert_eq!(
@@ -579,6 +597,7 @@ async fn revoking_trust_stops_a_held_gate_pass() {
     let f = Fixture::new(true);
     f.write_db("prod.toml", REMOTE_PG);
     let mut w = f.window();
+    w.approve_tunnel(&f.id, "prod").await.unwrap();
     w.set_password(&f.id, "prod", "s3cret").await.unwrap();
     let gate = f.connections.trust_gate(&f.id, None).unwrap();
     assert!(f.connections.resolve(&gate, "prod").is_ok());

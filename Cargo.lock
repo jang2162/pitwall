@@ -4977,6 +4977,7 @@ dependencies = [
  "libc",
  "pw-core",
  "pw-db",
+ "pw-db-driver",
  "pw-db-driver-mysql",
  "pw-db-driver-pg",
  "pw-db-driver-redis",
@@ -5315,6 +5316,7 @@ dependencies = [
  "pw-db-sql",
  "pw-db-types",
  "pw-diag",
+ "pw-git",
  "pw-rpc",
  "pw-runtime",
  "schemars 1.2.3",
@@ -5333,9 +5335,12 @@ dependencies = [
 name = "pw-db-driver"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "pw-db-types",
  "tokio",
  "tokio-util",
+ "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

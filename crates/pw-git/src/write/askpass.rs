@@ -8,7 +8,8 @@
 //!   쓰지 않고 1 로 끝난다 — git 은 인증 실패로 끝난다(`GIT_TERMINAL_PROMPT=0` 이라 터미널로 묻지 않는다). ssh 가
 //!   `SSH_ASKPASS_PROMPT` 로 알려 주는 질문의 종류(`confirm` 예 · 아니오, `none` 알림만)는 [`AskpassHint`] 로 함께 넘긴다. 도우미가
 //!   답을 받기 전에 끝나면(ssh 가 알림 도우미를 끝냄 등) 앱은 연결이 끊긴 것을 보고 그 질문을 닫는다.
-//! - **어느 쓰기에**: 인증을 물을 수 있는 쓰기([`super::WriteRequest::askpass`])에만 준다.
+//! - **어느 쓰기에**: 인증을 물을 수 있는 쓰기([`super::WriteRequest::askpass`])에만 준다. DB 의 SSH 터널(M3-11, `pw_db::tunnel`)도
+//!   ssh 를 띄울 때 [`Askpass::session`] 으로 같은 길을 쓴다 — 질문은 그 터널을 연 프로젝트의 창으로 간다.
 //! - **섞이지 않게**: 소켓은 앱(주 인스턴스)이 하나 열고, 경로는 데스크톱이 단일 인스턴스 키와 `$STATE` 로 정한다(MCP 소켓과 같은
 //!   규칙, `apps/desktop/src-tauri/src/main.rs` 의 `askpass_socket`). 도우미는 경로를 다시 계산하지 않고 환경 변수([`SOCKET_ENV`])로
 //!   받는다 — 그 git 을 띄운 앱의 소켓이다. 질문에는 쓰기 한 번마다 새로 만든 토큰([`TOKEN_ENV`])을 붙이고, 앱은 지금 도는 쓰기의
@@ -22,6 +23,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -97,6 +99,8 @@ struct Entry {
     prompts: Prompts,
     cancel: CancellationToken,
     timeout: Duration,
+    /// 지금 창에 묻고 있는 질문 수([`Session::asking`]).
+    asking: Arc<AtomicUsize>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -119,16 +123,13 @@ impl Askpass {
         lock(&self.inner.sessions).len()
     }
 
-    /// 쓰기 한 번의 askpass. 소켓을 열지 않았으면 `None`. 버리면 그 토큰의 질문을 끝낸다.
-    pub(crate) fn session(
-        &self,
-        project: &str,
-        prompts: &Prompts,
-        timeout: Duration,
-    ) -> Option<Session> {
+    /// 쓰기(또는 DB 터널의 ssh) 한 번의 askpass. 질문은 `project` 를 듣는 창으로 간다. 소켓을 열지 않았으면 `None`. 버리면 그
+    /// 토큰의 질문을 끝낸다.
+    pub fn session(&self, project: &str, prompts: &Prompts, timeout: Duration) -> Option<Session> {
         let serving = lock(&self.inner.serving).clone()?;
         let token = new_token();
         let cancel = CancellationToken::new();
+        let asking = Arc::new(AtomicUsize::new(0));
         lock(&self.inner.sessions).insert(
             token.clone(),
             Entry {
@@ -136,6 +137,7 @@ impl Askpass {
                 prompts: prompts.clone(),
                 cancel: cancel.clone(),
                 timeout,
+                asking: Arc::clone(&asking),
             },
         );
         Some(Session {
@@ -143,6 +145,7 @@ impl Askpass {
             token,
             cancel,
             serving,
+            asking,
         })
     }
 
@@ -165,6 +168,8 @@ impl Askpass {
             tracing::warn!(target: "pw_git", "askpass request for a write that is not running; refused");
             return refuse("this askpass request does not belong to a running git command");
         };
+        entry.asking.fetch_add(1, Ordering::SeqCst);
+        let _asked = Asking(Arc::clone(&entry.asking));
         let asked = entry.prompts.ask(
             &entry.project,
             super::GitPromptRequest::Askpass {
@@ -213,17 +218,34 @@ impl Askpass {
     }
 }
 
+/// 묻는 동안 센다(끝나면 뺀다).
+#[cfg(unix)]
+struct Asking(Arc<AtomicUsize>);
+
+#[cfg(unix)]
+impl Drop for Asking {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// 쓰기 한 번의 askpass 표. 버리면 표에서 빠지고, 그 토큰으로 기다리던 질문이 끝난다.
-pub(crate) struct Session {
+pub struct Session {
     askpass: Askpass,
     token: String,
     cancel: CancellationToken,
     serving: Serving,
+    asking: Arc<AtomicUsize>,
 }
 
 impl Session {
+    /// 지금 이 토큰의 질문이 창에 떠 있는가(사람의 답을 기다린다). DB 터널은 그동안 준비 제한 시간을 세지 않는다.
+    pub fn asking(&self) -> bool {
+        self.asking.load(Ordering::SeqCst) > 0
+    }
+
     /// 자식 환경에 도우미와 소켓 · 토큰을 넣는다.
-    pub(crate) fn apply(&self, env: &mut Vec<(OsString, OsString)>) {
+    pub fn apply(&self, env: &mut Vec<(OsString, OsString)>) {
         crate::cli::set_askpass(env, &self.serving.helper);
         env.retain(|(name, _)| name != SOCKET_ENV && name != TOKEN_ENV);
         env.push((SOCKET_ENV.into(), self.serving.socket.clone().into()));

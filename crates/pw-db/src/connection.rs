@@ -1,8 +1,9 @@
 //! 연결 관리자(M3-05): 관문을 지난 값으로만 드라이버 연결을 연다.
 //!
 //! 순서는 하나다 — [`DbGrant`](연결 범위, 결정 M3-D18) → 신뢰 게이트와 연결 설정 풀기(M3-02 `Connections::trust_gate` ·
-//! `resolve` · `resolve_draft`, 비밀 · 확인 판정 포함) → 터널(M3-11 의 [`DbTunnels`] — 없으면 터널 연결은 열지 않는다) → 등록부의
-//! 드라이버(연결 타임아웃 10 s). 풀은 드라이버가 갖는다. 연결을 여는 다른 길(M3-10 메타데이터 · M3-12 편집 · M3-22 Redis)도
+//! `resolve` · `resolve_draft`, 비밀 · 확인 판정 포함 — 터널 목적지 · 인증서 파일의 확인도) → 터널(M3-11 의
+//! [`crate::session::DbTunnels`] — 없으면 터널 연결은 열지 않는다) → 등록부의 드라이버(연결 타임아웃 10 s). 터널을 쓰는 연결은
+//! [`OpenedConnection::tunnel`] 을 연결과 함께 쥔다. 풀은 드라이버가 갖는다. 연결을 여는 다른 길(M3-10 메타데이터 · M3-12 편집 · M3-22 Redis)도
 //! [`connect`] 를 지난다.
 //!
 //! **연결 테스트** `db.connection.test { projectId, worktree?, connectionId | draft, secret? }`: 저장한 연결이나 저장 전 초안으로 붙어
@@ -19,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::DbConnectionConfig;
 use crate::gate::{DbGrant, db_grant};
-use crate::session::{DbSessions, blocking, db_error};
+use crate::session::{DbSessions, DbTunnelLease, blocking, db_error};
 use crate::trust::ResolvedConnection;
 
 /// 연 연결과 그 바탕.
@@ -29,6 +30,8 @@ pub struct OpenedConnection {
     pub driver: DriverInfo,
     /// 연 때의 연결 설정(비밀 없음).
     pub config: DbConnectionConfig,
+    /// SSH 터널(M3-11). **연결을 쥐는 동안 이것도 쥔다** — 먼저 버리면 터널이 닫혀 연결이 끊긴다.
+    pub tunnel: Option<DbTunnelLease>,
 }
 
 /// 저장한 연결 하나를 연다(머리 주석의 순서). `database` 가 있으면 설정의 DB 대신 그것을 고른다.
@@ -51,16 +54,18 @@ pub async fn connect(
     })
     .await?;
     let config = resolved.config.clone();
-    let (info, connection, server) = open_resolved(sessions, grant, resolved, database).await?;
+    let (info, connection, server, tunnel) =
+        open_resolved(sessions, grant, resolved, database).await?;
     Ok(OpenedConnection {
         connection,
         server,
         driver: info,
         config,
+        tunnel,
     })
 }
 
-type Opened = (DriverInfo, DbConnection, ServerInfo);
+type Opened = (DriverInfo, DbConnection, ServerInfo, Option<DbTunnelLease>);
 
 /// 푼 연결을 드라이버로 연다. 터널이 있으면 [`DbTunnels`] 를 지난다.
 async fn open_resolved(
@@ -74,14 +79,19 @@ async fn open_resolved(
     if database.is_some() {
         spec.database = database;
     }
-    if let Some(host_ref) = &resolved.tunnel {
-        let Some(tunnels) = sessions.tunnels.get() else {
-            return Err(db_error(DbError::unsupported("ssh tunnels")));
-        };
-        tunnels
-            .open(grant.project_id(), host_ref, &mut spec)
-            .await?;
-    }
+    let tunnel = match &resolved.tunnel {
+        Some(host_ref) => {
+            let Some(tunnels) = sessions.tunnels.get() else {
+                return Err(db_error(DbError::unsupported("ssh tunnels")));
+            };
+            Some(
+                tunnels
+                    .open(grant.project_id(), &resolved.root, host_ref, &mut spec)
+                    .await?,
+            )
+        }
+        None => None,
+    };
     let info = DriverInfo {
         id: driver.id().to_owned(),
         dialect: driver.dialect(),
@@ -97,7 +107,7 @@ async fn open_resolved(
             info.id
         )));
     }
-    Ok((info, connected.connection, connected.server))
+    Ok((info, connected.connection, connected.server, tunnel))
 }
 
 fn driver_for(
@@ -177,10 +187,12 @@ impl DbSessions {
             }
         })
         .await?;
-        let (info, connection, server) = open_resolved(self, grant, resolved, None).await?;
+        let (info, connection, server, tunnel) = open_resolved(self, grant, resolved, None).await?;
         if let Err(e) = within(Budget::CONSOLE.connect, "close", connection.close()).await {
             tracing::info!(target: "pw_db", driver = %info.id, %e, "closing the test connection failed");
         }
+        // 터널은 연결을 닫은 뒤에 놓는다.
+        drop(tunnel);
         tracing::info!(target: "pw_db", project = grant.project_id(), driver = %info.id, "db connection test succeeded");
         Ok(server)
     }

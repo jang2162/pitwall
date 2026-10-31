@@ -17,6 +17,8 @@ tauri-build = { version = "2.7.2", features = [] }
 pw-core = { path = "../../../crates/pw-core" }
 # DB 드라이버 등록부(src/db.rs). 드라이버 크레이트(pw-db-driver-*)는 각 드라이버 행이 여기 더한다.
 pw-db = { path = "../../../crates/pw-db" }
+# SSH 터널의 askpass 붙임 · 앱 종료 때 남은 ssh 정리(src/db.rs · main.rs, M3-11).
+pw-db-driver = { path = "../../../crates/pw-db-driver" }
 pw-db-driver-mysql = { path = "../../../crates/pw-db-driver-mysql" }
 pw-db-driver-pg = { path = "../../../crates/pw-db-driver-pg" }
 pw-db-driver-redis = { path = "../../../crates/pw-db-driver-redis" }

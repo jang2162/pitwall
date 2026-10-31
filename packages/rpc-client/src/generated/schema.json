@@ -626,7 +626,7 @@
       "tier": "read"
     },
     "db.connection.approve": {
-      "description": "사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로. 지금 설정에서 나오는 것과 같을 때만\n기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의\n연결 + 신뢰한 프로젝트만.",
+      "description": "사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로, SSH 터널 목적지 · 인증서 파일의\n(값, 대상). 지금 설정에서 나오는 것과 같을 때만\n기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의\n연결 + 신뢰한 프로젝트만.",
       "kind": "unary",
       "params": {
         "$defs": {
@@ -668,8 +668,72 @@
                   "realPath"
                 ],
                 "type": "object"
+              },
+              {
+                "properties": {
+                  "hostRef": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "tunnel",
+                    "type": "string"
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "hostRef",
+                  "target"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "files": {
+                    "$ref": "#/$defs/DbCertFiles"
+                  },
+                  "kind": {
+                    "const": "certFiles",
+                    "type": "string"
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "files",
+                  "target"
+                ],
+                "type": "object"
               }
             ]
+          },
+          "DbCertFiles": {
+            "description": "인증서 파일(활성 워크트리 안의 루트 기준으로 푼 절대 경로). 적지 않은 것은 `null`.",
+            "properties": {
+              "sslcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslrootcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           },
           "DbSecretTarget": {
             "description": "비밀을 보내도 되는 대상. 이 중 하나라도 바뀌면 저장한 비밀을 쓰지 않는다.",
@@ -933,8 +997,117 @@
                   "realPath"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "SSH 터널 목적지 `host_ref` 로 ssh 를 띄워 `target` 에 붙는다(M3-11). `previous` 는 전에 확인한 (목적지, 대상).",
+                "properties": {
+                  "hostRef": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "tunnel",
+                    "type": "string"
+                  },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbTunnelBinding"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "hostRef",
+                  "target",
+                  "previous"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "인증서 파일을 읽어 `target` 과의 TLS 에 쓴다(M3-11). `previous` 는 전에 확인한 (파일, 대상).",
+                "properties": {
+                  "files": {
+                    "$ref": "#/$defs/DbCertFiles"
+                  },
+                  "kind": {
+                    "const": "certFiles",
+                    "type": "string"
+                  },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbCertBinding"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "files",
+                  "target",
+                  "previous"
+                ],
+                "type": "object"
               }
             ]
+          },
+          "DbCertBinding": {
+            "description": "확인한 (인증서 파일, 대상).",
+            "properties": {
+              "files": {
+                "$ref": "#/$defs/DbCertFiles"
+              },
+              "target": {
+                "$ref": "#/$defs/DbSecretTarget"
+              }
+            },
+            "required": [
+              "files",
+              "target"
+            ],
+            "type": "object"
+          },
+          "DbCertFiles": {
+            "description": "인증서 파일(활성 워크트리 안의 루트 기준으로 푼 절대 경로). 적지 않은 것은 `null`.",
+            "properties": {
+              "sslcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslrootcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "sslrootcert",
+              "sslcert",
+              "sslkey"
+            ],
+            "type": "object"
           },
           "DbConnectionConfig": {
             "description": "연결 설정. 설정 파일의 키(snake_case)를 RPC 에서는 camelCase 로 쓴다. 비밀 값은 들어갈 자리가 없다.",
@@ -1311,6 +1484,22 @@
             ],
             "type": "object"
           },
+          "DbTunnelBinding": {
+            "description": "확인한 (터널 목적지, 대상).",
+            "properties": {
+              "hostRef": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/$defs/DbSecretTarget"
+              }
+            },
+            "required": [
+              "hostRef",
+              "target"
+            ],
+            "type": "object"
+          },
           "DriverKind": {
             "description": "내장 드라이버. 설정 파일의 `driver` 값이다.\n\n드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가\n이 enum 을 고치지 않고 들어올 자리다.",
             "enum": [
@@ -1519,8 +1708,117 @@
                   "realPath"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "SSH 터널 목적지 `host_ref` 로 ssh 를 띄워 `target` 에 붙는다(M3-11). `previous` 는 전에 확인한 (목적지, 대상).",
+                "properties": {
+                  "hostRef": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "tunnel",
+                    "type": "string"
+                  },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbTunnelBinding"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "hostRef",
+                  "target",
+                  "previous"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "인증서 파일을 읽어 `target` 과의 TLS 에 쓴다(M3-11). `previous` 는 전에 확인한 (파일, 대상).",
+                "properties": {
+                  "files": {
+                    "$ref": "#/$defs/DbCertFiles"
+                  },
+                  "kind": {
+                    "const": "certFiles",
+                    "type": "string"
+                  },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbCertBinding"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "files",
+                  "target",
+                  "previous"
+                ],
+                "type": "object"
               }
             ]
+          },
+          "DbCertBinding": {
+            "description": "확인한 (인증서 파일, 대상).",
+            "properties": {
+              "files": {
+                "$ref": "#/$defs/DbCertFiles"
+              },
+              "target": {
+                "$ref": "#/$defs/DbSecretTarget"
+              }
+            },
+            "required": [
+              "files",
+              "target"
+            ],
+            "type": "object"
+          },
+          "DbCertFiles": {
+            "description": "인증서 파일(활성 워크트리 안의 루트 기준으로 푼 절대 경로). 적지 않은 것은 `null`.",
+            "properties": {
+              "sslcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslrootcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "sslrootcert",
+              "sslcert",
+              "sslkey"
+            ],
+            "type": "object"
           },
           "DbConnectionConfig": {
             "description": "연결 설정. 설정 파일의 키(snake_case)를 RPC 에서는 camelCase 로 쓴다. 비밀 값은 들어갈 자리가 없다.",
@@ -1935,6 +2233,22 @@
             },
             "required": [
               "hostRef"
+            ],
+            "type": "object"
+          },
+          "DbTunnelBinding": {
+            "description": "확인한 (터널 목적지, 대상).",
+            "properties": {
+              "hostRef": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/$defs/DbSecretTarget"
+              }
+            },
+            "required": [
+              "hostRef",
+              "target"
             ],
             "type": "object"
           },
@@ -2713,8 +3027,117 @@
                   "realPath"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "SSH 터널 목적지 `host_ref` 로 ssh 를 띄워 `target` 에 붙는다(M3-11). `previous` 는 전에 확인한 (목적지, 대상).",
+                "properties": {
+                  "hostRef": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "tunnel",
+                    "type": "string"
+                  },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbTunnelBinding"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "hostRef",
+                  "target",
+                  "previous"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "인증서 파일을 읽어 `target` 과의 TLS 에 쓴다(M3-11). `previous` 는 전에 확인한 (파일, 대상).",
+                "properties": {
+                  "files": {
+                    "$ref": "#/$defs/DbCertFiles"
+                  },
+                  "kind": {
+                    "const": "certFiles",
+                    "type": "string"
+                  },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbCertBinding"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "files",
+                  "target",
+                  "previous"
+                ],
+                "type": "object"
               }
             ]
+          },
+          "DbCertBinding": {
+            "description": "확인한 (인증서 파일, 대상).",
+            "properties": {
+              "files": {
+                "$ref": "#/$defs/DbCertFiles"
+              },
+              "target": {
+                "$ref": "#/$defs/DbSecretTarget"
+              }
+            },
+            "required": [
+              "files",
+              "target"
+            ],
+            "type": "object"
+          },
+          "DbCertFiles": {
+            "description": "인증서 파일(활성 워크트리 안의 루트 기준으로 푼 절대 경로). 적지 않은 것은 `null`.",
+            "properties": {
+              "sslcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslrootcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "sslrootcert",
+              "sslcert",
+              "sslkey"
+            ],
+            "type": "object"
           },
           "DbConnectionConfig": {
             "description": "연결 설정. 설정 파일의 키(snake_case)를 RPC 에서는 camelCase 로 쓴다. 비밀 값은 들어갈 자리가 없다.",
@@ -3088,6 +3511,22 @@
             },
             "required": [
               "hostRef"
+            ],
+            "type": "object"
+          },
+          "DbTunnelBinding": {
+            "description": "확인한 (터널 목적지, 대상).",
+            "properties": {
+              "hostRef": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/$defs/DbSecretTarget"
+              }
+            },
+            "required": [
+              "hostRef",
+              "target"
             ],
             "type": "object"
           },

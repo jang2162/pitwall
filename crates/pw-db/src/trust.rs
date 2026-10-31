@@ -12,6 +12,12 @@
 //!     것이면 저장할 때의 대상을 싣는다).
 //!   - **`env` 참조**: 사람이 확인한 (변수 이름, 대상)을 프로젝트 상태 `$DATA/projects/<id>/db.json` 에 기억하고, 그것과 지금이 다르면 —
 //!     처음 쓸 때도 — 변수를 읽기 전에 [`code::APPROVAL_REQUIRED`] 로 묻는다. 확인하면 창이 `db.connection.approve` 로 기록한다.
+//!   - **터널 목적지 · 인증서 파일**(M3-11, M3-02 에서 넘어온 규칙): 저장한 연결의 `ssh_tunnel.host_ref` 와 그때의 대상, 인증서
+//!     파일(`sslrootcert` · `sslcert` · `sslkey` 를 루트 기준으로 푼 절대 경로)과 그때의 대상을 사람이 확인한 그대로 같은 파일에
+//!     기억하고, 지금과 다르면 — 처음 쓸 때도 — ssh 를 띄우거나 파일을 읽기 전에 [`code::APPROVAL_REQUIRED`] 로 묻는다. 커밋된 설정을
+//!     누가 바꿔 사람의 ssh 에이전트 · 키를 다른 호스트로 쓰게 하거나 다른 파일을 서버에 보내게 하지 못한다. **연결 id 없는 초안**
+//!     (「연결 추가」 의 [연결 테스트])은 묻지 않는다 — 그 값은 창에서 사람이 친 것이다(`env` 참조는 초안에서도 묻는다). 연결 id 가
+//!     있는 초안은 그 연결의 기록과 같을 때만 묻지 않는다.
 //!   - **루트 밖 SQLite**: `path` 의 실제 경로(링크를 끝까지 푼 것)가 프로젝트 루트(활성 워크트리 안의 루트와 주 루트) 밖이면 확인을 받고
 //!     (프로젝트, 실제 경로)를 같은 파일에 기억한다. 드라이버에는 판정한 **실제 경로**를 넘긴다 — 판정 뒤 링크를 바꿔 끼워도 여는 파일이
 //!     바뀌지 않는다. 확인한 경로는 `ConnectionSpec::allowed_roots` 에도 들어간다(`ATTACH` 판정, M3-08).
@@ -165,6 +171,18 @@ pub enum DbApprovalRequest {
     },
     /// 프로젝트 루트 밖의 SQLite 파일(링크를 끝까지 푼 실제 경로)을 연다.
     File { real_path: String },
+    /// SSH 터널 목적지 `host_ref` 로 ssh 를 띄워 `target` 에 붙는다(M3-11). `previous` 는 전에 확인한 (목적지, 대상).
+    Tunnel {
+        host_ref: String,
+        target: Box<DbSecretTarget>,
+        previous: Option<Box<DbTunnelBinding>>,
+    },
+    /// 인증서 파일을 읽어 `target` 과의 TLS 에 쓴다(M3-11). `previous` 는 전에 확인한 (파일, 대상).
+    CertFiles {
+        files: DbCertFiles,
+        target: Box<DbSecretTarget>,
+        previous: Option<Box<DbCertBinding>>,
+    },
 }
 
 /// 확인한 것(창이 보여 준 그대로 돌려준다). Host 는 지금 설정과 같을 때만 기록한다 — 다르면 conflict.
@@ -184,6 +202,61 @@ pub enum DbApproval {
     File {
         real_path: String,
     },
+    Tunnel {
+        host_ref: String,
+        target: Box<DbSecretTarget>,
+    },
+    CertFiles {
+        files: DbCertFiles,
+        target: Box<DbSecretTarget>,
+    },
+}
+
+/// 확인한 (터널 목적지, 대상).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbTunnelBinding {
+    pub host_ref: String,
+    pub target: DbSecretTarget,
+}
+
+/// 인증서 파일(활성 워크트리 안의 루트 기준으로 푼 절대 경로). 적지 않은 것은 `null`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbCertFiles {
+    pub sslrootcert: Option<String>,
+    pub sslcert: Option<String>,
+    pub sslkey: Option<String>,
+}
+
+impl DbCertFiles {
+    fn of(config: &DbConnectionConfig, root: &Path) -> Option<Self> {
+        let resolve = |p: &Option<String>| {
+            p.as_ref()
+                .map(|p| root.join(p).to_string_lossy().into_owned())
+        };
+        let files = Self {
+            sslrootcert: resolve(&config.sslrootcert),
+            sslcert: resolve(&config.sslcert),
+            sslkey: resolve(&config.sslkey),
+        };
+        (files.sslrootcert.is_some() || files.sslcert.is_some() || files.sslkey.is_some())
+            .then_some(files)
+    }
+}
+
+/// 확인한 (인증서 파일, 대상).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbCertBinding {
+    pub files: DbCertFiles,
+    pub target: DbSecretTarget,
 }
 
 /// 확인한 (변수 이름, 대상).
@@ -210,7 +283,8 @@ pub struct DbConnectionApproveParams {
 }
 
 rpc_method! {
-    /// 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로. 지금 설정에서 나오는 것과 같을 때만
+    /// 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로, SSH 터널 목적지 · 인증서 파일의
+    /// (값, 대상). 지금 설정에서 나오는 것과 같을 때만
     /// 기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의
     /// 연결 + 신뢰한 프로젝트만.
     pub DbConnectionApprove: "db.connection.approve" {
@@ -234,6 +308,12 @@ pub(crate) struct Approvals {
     /// 연결 id → 키체인에 넣은 비밀번호의 대상(사본 — 정본은 키체인 항목). 목록이 키체인을 읽지 않고 상태를 정한다.
     #[serde(default)]
     pub secrets: BTreeMap<String, DbSecretTarget>,
+    /// 연결 id → 확인한 (터널 목적지, 대상)(M3-11).
+    #[serde(default)]
+    pub tunnels: BTreeMap<String, DbTunnelBinding>,
+    /// 연결 id → 확인한 (인증서 파일, 대상)(M3-11).
+    #[serde(default)]
+    pub certs: BTreeMap<String, DbCertBinding>,
 }
 
 /// 드라이버에 줄 연결과 그 바탕.
@@ -247,6 +327,8 @@ pub struct ResolvedConnection {
     pub spec: ConnectionSpec,
     /// 터널 목적지(M3-11 이 `spec` 의 `connect_to` 를 채운다).
     pub tunnel: Option<String>,
+    /// 활성 워크트리 안의 프로젝트 루트(터널의 ssh 가 쓸 런타임 환경을 고른다).
+    pub root: PathBuf,
 }
 
 /// 풀지 못한 이유 — RPC 오류로 바꿔 창에 돌려준다.
@@ -413,6 +495,8 @@ impl Connections {
         self.update_approvals(project_id, |a| {
             a.env.remove(connection_id);
             a.secrets.remove(connection_id);
+            a.tunnels.remove(connection_id);
+            a.certs.remove(connection_id);
         })
     }
 
@@ -504,6 +588,38 @@ impl Connections {
             file = Some(real);
         }
         let target = DbSecretTarget::of(config);
+        // 터널 목적지 · 인증서 파일(M3-11): 저장한 연결(과 그 연결을 고치는 초안)만 묻는다 — 연결 id 없는 초안의 값은 창에서 사람이
+        // 친 것이다(머리 주석). 기억한 확인이 지금과 정확히 같을 때만 묻지 않는다.
+        if let Some(id) = connection_id {
+            if let Some(tunnel) = &config.ssh_tunnel {
+                let now = DbTunnelBinding {
+                    host_ref: tunnel.host_ref.clone(),
+                    target: target.clone(),
+                };
+                let previous = approvals.tunnels.get(id);
+                if previous != Some(&now) {
+                    return Err(Ok(Blocked::Approval(DbApprovalRequest::Tunnel {
+                        host_ref: now.host_ref,
+                        target: Box::new(now.target),
+                        previous: previous.cloned().map(Box::new),
+                    })));
+                }
+            }
+            if let Some(files) = DbCertFiles::of(config, &loaded.root) {
+                let now = DbCertBinding {
+                    files,
+                    target: target.clone(),
+                };
+                let previous = approvals.certs.get(id);
+                if previous != Some(&now) {
+                    return Err(Ok(Blocked::Approval(DbApprovalRequest::CertFiles {
+                        files: now.files,
+                        target: Box::new(now.target),
+                        previous: previous.cloned().map(Box::new),
+                    })));
+                }
+            }
+        }
         let password = match &config.password {
             None => draft_secret,
             Some(DbPasswordRef::Keychain) => match (draft_secret, connection_id) {
@@ -649,6 +765,7 @@ impl Connections {
         Ok(ResolvedConnection {
             connection_id: connection_id.map(str::to_owned),
             tunnel: config.ssh_tunnel.as_ref().map(|t| t.host_ref.clone()),
+            root: loaded.root.clone(),
             config,
             spec,
         })
@@ -697,6 +814,40 @@ impl Connections {
                     a.env.insert(id, now);
                 })?;
                 tracing::info!(target: "pw_db", project = %params.project_id, connection = %params.connection_id, %variable, "approved the env reference of a db connection");
+            }
+            DbApproval::Tunnel { host_ref, target } => {
+                let now = match &config.ssh_tunnel {
+                    Some(tunnel) => DbTunnelBinding {
+                        host_ref: tunnel.host_ref.clone(),
+                        target: DbSecretTarget::of(config),
+                    },
+                    None => return Err(changed()),
+                };
+                if now.host_ref != *host_ref || now.target != **target {
+                    return Err(changed());
+                }
+                let id = params.connection_id.clone();
+                self.update_approvals(trusted.id(), move |a| {
+                    a.tunnels.insert(id, now);
+                })?;
+                tracing::info!(target: "pw_db", project = %params.project_id, connection = %params.connection_id, %host_ref, "approved the ssh tunnel of a db connection");
+            }
+            DbApproval::CertFiles { files, target } => {
+                let now = match DbCertFiles::of(config, &loaded.root) {
+                    Some(now) => DbCertBinding {
+                        files: now,
+                        target: DbSecretTarget::of(config),
+                    },
+                    None => return Err(changed()),
+                };
+                if now.files != *files || now.target != **target {
+                    return Err(changed());
+                }
+                let id = params.connection_id.clone();
+                self.update_approvals(trusted.id(), move |a| {
+                    a.certs.insert(id, now);
+                })?;
+                tracing::info!(target: "pw_db", project = %params.project_id, connection = %params.connection_id, "approved the certificate files of a db connection");
             }
             DbApproval::File { real_path } => {
                 if config.path.is_none() {

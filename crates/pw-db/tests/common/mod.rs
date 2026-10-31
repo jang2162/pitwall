@@ -320,6 +320,28 @@ pub fn target_of(config: &Value) -> Value {
 }
 
 impl Conn {
+    /// 지금 설정의 터널 목적지를 확인한다(창이 확인 요청을 보여 주고 [확인] 을 누른 흐름 — M3-11 의 첫 사용 확인).
+    pub async fn approve_tunnel(
+        &mut self,
+        project: &str,
+        connection: &str,
+    ) -> Result<Value, RpcError> {
+        let entry = self
+            .call(
+                "db.connection.get",
+                json!({ "projectId": project, "connectionId": connection }),
+            )
+            .await?;
+        let config = &entry["config"];
+        self.call(
+            "db.connection.approve",
+            json!({ "projectId": project, "connectionId": connection, "approval": {
+                "kind": "tunnel", "hostRef": config["sshTunnel"]["hostRef"], "target": target_of(config),
+            } }),
+        )
+        .await
+    }
+
     /// 지금 설정의 대상으로 비밀번호를 넣는다(창이 대상을 보여 주고 넣는 흐름).
     pub async fn set_password(
         &mut self,

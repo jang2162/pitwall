@@ -17,7 +17,8 @@ export type UnaryMethods = {
 	 */
 	"config.paths": { params: null; result: ConfigPathsInfo };
 	/**
-	 * 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로. 지금 설정에서 나오는 것과 같을 때만
+	 * 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로, SSH 터널 목적지 · 인증서 파일의
+	 * (값, 대상). 지금 설정에서 나오는 것과 같을 때만
 	 * 기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의
 	 * 연결 + 신뢰한 프로젝트만.
 	 */
@@ -711,7 +712,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"cli.status": {"name":"cli.status","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"CliStatus","doc":" 「Orca 에서 Pitwall 열기」 안내의 검사(04 F8-6): 설치 위치의 심링크가 이 앱을 가리키는가, 로그인 셸 PATH 로 찾은\n `pitwall` 이 이 앱인가. 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n","mcp":false,"fileScope":false},
 	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n","mcp":false,"fileScope":true},
 	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n","mcp":false,"fileScope":false},
-	"db.connection.approve": {"name":"db.connection.approve","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionApproveParams","output":"()","doc":" 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로. 지금 설정에서 나오는 것과 같을 때만\n 기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의\n 연결 + 신뢰한 프로젝트만.\n","mcp":false,"fileScope":false},
+	"db.connection.approve": {"name":"db.connection.approve","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionApproveParams","output":"()","doc":" 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로, SSH 터널 목적지 · 인증서 파일의\n (값, 대상). 지금 설정에서 나오는 것과 같을 때만\n 기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의\n 연결 + 신뢰한 프로젝트만.\n","mcp":false,"fileScope":false},
 	"db.connection.delete": {"name":"db.connection.delete","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionParams","output":"()","doc":" 연결 설정 파일(공유 · 개인 둘 다)과 그 연결의 비밀 · 확인 기록을 지운다. 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
 	"db.connection.get": {"name":"db.connection.get","kind":"unary","tier":"read","roles":["owner"],"params":"DbConnectionParams","output":"DbConnectionEntry","doc":" 연결 하나. 없으면 not found 오류.\n","mcp":false,"fileScope":false},
 	"db.connection.list": {"name":"db.connection.list","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbConnectionList","doc":" 프로젝트의 DB 연결 목록(비밀 없이). 연결마다 신뢰 · 사용 가능 상태를 단다. 신뢰 전에도 돌려준다(상태는 모두 `untrusted`).\n","mcp":false,"fileScope":false},
@@ -1245,14 +1246,18 @@ export type DatabaseInfo = {
 };
 
 /**  확인한 것(창이 보여 준 그대로 돌려준다). Host 는 지금 설정과 같을 때만 기록한다 — 다르면 conflict. */
-export type DbApproval = { kind: "env"; variable: string; target: DbSecretTarget } | { kind: "file"; realPath: string };
+export type DbApproval = { kind: "env"; variable: string; target: DbSecretTarget } | { kind: "file"; realPath: string } | { kind: "tunnel"; hostRef: string; target: DbSecretTarget } | { kind: "certFiles"; files: DbCertFiles; target: DbSecretTarget };
 
 /**  확인을 받아야 열 수 있는 것. */
 export type DbApprovalRequest = 
 /**  환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음(기록 없음)이면 `null`. */
 { kind: "env"; variable: string; target: DbSecretTarget; previous: DbEnvBinding | null } | 
 /**  프로젝트 루트 밖의 SQLite 파일(링크를 끝까지 푼 실제 경로)을 연다. */
-{ kind: "file"; realPath: string };
+{ kind: "file"; realPath: string } | 
+/**  SSH 터널 목적지 `host_ref` 로 ssh 를 띄워 `target` 에 붙는다(M3-11). `previous` 는 전에 확인한 (목적지, 대상). */
+{ kind: "tunnel"; hostRef: string; target: DbSecretTarget; previous: DbTunnelBinding | null } | 
+/**  인증서 파일을 읽어 `target` 과의 TLS 에 쓴다(M3-11). `previous` 는 전에 확인한 (파일, 대상). */
+{ kind: "certFiles"; files: DbCertFiles; target: DbSecretTarget; previous: DbCertBinding | null };
 
 /**  바이트 값. */
 export type DbBytes = {
@@ -1261,6 +1266,19 @@ export type DbBytes = {
 	/**  원래 크기(바이트). */
 	size: number,
 	truncated: boolean,
+};
+
+/**  확인한 (인증서 파일, 대상). */
+export type DbCertBinding = {
+	files: DbCertFiles,
+	target: DbSecretTarget,
+};
+
+/**  인증서 파일(활성 워크트리 안의 루트 기준으로 푼 절대 경로). 적지 않은 것은 `null`. */
+export type DbCertFiles = {
+	sslrootcert: string | null,
+	sslcert: string | null,
+	sslkey: string | null,
 };
 
 /**  저장할 파일: 커밋하는 공유 파일 또는 개인 `.local.toml`. */
@@ -1829,6 +1847,12 @@ export type DbTruncated = {
 	size: number,
 	/**  `of` 가 `other` 일 때의 DB 타입 이름. */
 	typeName: string | null,
+};
+
+/**  확인한 (터널 목적지, 대상). */
+export type DbTunnelBinding = {
+	hostRef: string,
+	target: DbSecretTarget,
 };
 
 /**  실행이 트랜잭션에 미치는 효과 — 등급과 따로 확인을 받는다(결정 M3-D21). */

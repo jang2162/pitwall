@@ -425,6 +425,8 @@ pub(crate) fn config_changed_error(connection_id: &str) -> RpcError {
 pub(crate) struct Link {
     /// 끊겼으면 `None`.
     pub conn: Option<DbConnection>,
+    /// 연결이 쓰는 SSH 터널(M3-11). 연결과 함께 버린다.
+    pub tunnel: Option<DbTunnelLease>,
     pub mode: DbSessionMode,
     /// 마지막으로 맞춘 드라이버의 트랜잭션 상태.
     pub tx: TransactionState,
@@ -608,9 +610,11 @@ impl Link {
         self.tx = TransactionState::Idle;
         self.since = None;
         self.owned_read_only = false;
+        let tunnel = self.tunnel.take();
         if let Some(conn) = self.conn.take() {
             tokio::spawn(async move {
                 let _ = within(CLOSE_WAIT, "close", conn.close()).await;
+                drop(tunnel);
             });
         }
         DbSessionNotice::ConnectionLost {
@@ -816,15 +820,47 @@ impl Running {
     }
 }
 
-/// 연결을 여는 터널(M3-11 이 채운다). 없으면 터널이 있는 연결은 열지 않는다.
+/// 연결을 여는 터널(M3-11 — `crate::tunnel::SshTunnels`). 없으면 터널이 있는 연결은 열지 않는다.
 pub trait DbTunnels: Send + Sync {
-    /// `spec` 의 `connect_to` 를 터널의 로컬 끝으로 채운다. 터널은 그 연결이 닫힐 때까지 산다(구현의 몫).
+    /// `spec` 의 `connect_to` 를 터널의 로컬 끝으로 채우고, 그 터널을 쓰는 동안 쥘 리스를 돌려준다. `root` 는 활성 워크트리 안의
+    /// 프로젝트 루트(런타임 환경을 고른다). 관문 · 신뢰 게이트 · 확인을 지난 뒤에만 부른다(`crate::connection`).
     fn open<'a>(
         &'a self,
         project_id: &'a str,
+        root: &'a std::path::Path,
         host_ref: &'a str,
         spec: &'a mut pw_db_types::ConnectionSpec,
-    ) -> pw_db_driver::BoxFuture<'a, Result<(), RpcError>>;
+    ) -> pw_db_driver::BoxFuture<'a, Result<DbTunnelLease, RpcError>>;
+}
+
+/// 연결이 터널을 쓰는 동안 쥐는 것(M3-11). 버리면 그 연결의 몫이 끝난다 — 마지막 몫이면 ssh 가 끝난다. **연결을 쥐는 동안 함께
+/// 쥔다**: [`crate::connection::OpenedConnection::tunnel`] 을 먼저 버리면 연결이 살아 있어도 터널이 닫힌다.
+pub struct DbTunnelLease {
+    _keep: Box<dyn std::any::Any + Send + Sync>,
+    lost: CancellationToken,
+}
+
+impl DbTunnelLease {
+    /// `keep` 은 쥐고 있을 것(터널 구현의 리스), `lost` 는 터널이 끊기면 취소되는 토큰.
+    pub fn new(keep: impl std::any::Any + Send + Sync, lost: CancellationToken) -> Self {
+        Self {
+            _keep: Box::new(keep),
+            lost,
+        }
+    }
+
+    /// 터널이 끊기면 깨어난다(돌려준 토큰을 취소해도 터널은 끝나지 않는다).
+    pub fn lost(&self) -> CancellationToken {
+        self.lost.child_token()
+    }
+}
+
+impl std::fmt::Debug for DbTunnelLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbTunnelLease")
+            .field("lost", &self.lost.is_cancelled())
+            .finish_non_exhaustive()
+    }
 }
 
 /// 세션 · 실행 파이프라인의 Host 쪽 상태. 데스크톱 크레이트가 하나 만들어 [`register`] 로 붙인다.
@@ -1025,6 +1061,7 @@ impl DbSessions {
         )
         .await?;
         let id = self.next_id("dbs-");
+        let tunnel_lost = opened.tunnel.as_ref().map(DbTunnelLease::lost);
         let tx = match &opened.connection {
             DbConnection::Sql(conn) => conn.transaction_state(),
             DbConnection::Kv(_) => TransactionState::Idle,
@@ -1053,6 +1090,7 @@ impl DbSessions {
             closed: CancellationToken::new(),
             link: Arc::new(AsyncMutex::new(Link {
                 conn: Some(opened.connection),
+                tunnel: opened.tunnel,
                 mode: DbSessionMode::Auto,
                 tx,
                 since: (tx != TransactionState::Idle).then(now_ms),
@@ -1069,7 +1107,37 @@ impl DbSessions {
         lock(&self.sessions).insert(id.clone(), Arc::clone(&session));
         tracing::info!(target: "pw_db", project = %session.project_id, connection = %session.connection_id, session = %id, "db session opened");
         self.watch_owner(&session, 0);
+        if let Some(lost) = tunnel_lost {
+            self.watch_tunnel(&session, lost);
+        }
         Ok(session.opened())
+    }
+
+    /// 세션의 SSH 터널이 끊기기를 기다린다(M3-11): 끊기면 도는 실행을 멈추고 연결을 버려 「끊김」(`disconnected` +
+    /// `connectionLost`)을 낸다. 다시 붙는 것은 사람이 누를 때다(새 세션).
+    fn watch_tunnel(self: &Arc<Self>, session: &Arc<DbSession>, lost: CancellationToken) {
+        let (this, watched) = (Arc::clone(self), Arc::clone(session));
+        tokio::spawn(async move {
+            tokio::select! {
+                () = lost.cancelled() => {}
+                () = watched.closed.cancelled() => return,
+            }
+            let running = lock(&watched.running).clone();
+            if let Some(running) = running {
+                running.halt().await;
+            }
+            let mut link = watched.link.lock().await;
+            if link.conn.is_none() || watched.closed.is_cancelled() {
+                // 실행이 끊김을 먼저 보고 알렸거나 세션이 닫혔다.
+                return;
+            }
+            // 실행과 실행 사이 — 열린 트랜잭션은 DB 가 롤백한다.
+            let notice = link.lose(false);
+            watched.sync(&link);
+            drop(link);
+            tracing::info!(target: "pw_db", session = %watched.id, connection = %watched.connection_id, "the ssh tunnel of a db session ended");
+            this.publish(&watched, Some(notice));
+        });
     }
 
     /// 세션을 쥔 창의 연결이 닫히기를 기다린다(머리 주석의 「창이 닫히면」). `generation` 은 지금 붙음의 순번이다.
@@ -1152,6 +1220,7 @@ impl DbSessions {
         {
             tracing::info!(target: "pw_db", session = %session.id, %e, "closing the db connection failed");
         }
+        link.tunnel = None;
         session.sync(&link);
         drop(link);
         let kept_minutes = (kept.as_millis() as u64).div_ceil(60_000);
@@ -1258,6 +1327,7 @@ impl DbSessions {
         {
             tracing::info!(target: "pw_db", session = %session.id, %e, "closing the db connection failed");
         }
+        link.tunnel = None;
         tracing::info!(target: "pw_db", session = %session.id, "db session closed");
     }
 

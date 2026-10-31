@@ -113,6 +113,13 @@ fn local_host(
     let db_connection_methods = Arc::clone(&db_connections);
     // DB 세션 · 실행 파이프라인(`db.session.*` · `db.query.*` · `db.sql.classify` · `db.connection.test`, M3-05).
     let db_sessions = db::sessions(&db_connections);
+    // SSH 터널(M3-11) — git 쓰기와 같은 askpass · 창 질의를 쓴다.
+    db::attach_tunnels(
+        &db_sessions,
+        &runtime,
+        git_write.askpass(),
+        git_write.prompts(),
+    );
     let db_session_methods = Arc::clone(&db_sessions);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
@@ -481,6 +488,8 @@ fn main() {
             // 여기서 기다려 끝낸다(M1-08). 업데이트를 설치하고 창을 모두 닫은 것이면 그 뒤 새 버전으로 다시 시작한다.
             if let tauri::RunEvent::Exit = event {
                 pw_run::shutdown();
+                // DB 의 SSH 터널(M3-11) — 남은 ssh 프로세스 그룹을 끝낸다.
+                pw_db_driver::tunnel::shutdown();
                 update::restart_if_installed(app);
             }
         });

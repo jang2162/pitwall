@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use pw_db::config::Connections;
 use pw_db::secret::{KeyringStore, RuntimeEnv};
+use pw_db::tunnel::{SshTunnels, TunnelAskpass};
 use pw_db::{DbSessions, DriverRegistry};
+use pw_db_driver::tunnel::AskpassGuard;
 use pw_runtime::Runtime;
 
 /// 연결 설정 · 비밀 · 신뢰 게이트(M3-02). 비밀은 OS 키체인(서비스 `dev.pitwall.db`), `env` 참조는 그 프로젝트의 런타임 환경에서
@@ -24,6 +26,43 @@ pub fn connections(runtime: &Arc<Runtime>) -> Arc<Connections> {
 /// 세션 · 실행 파이프라인(M3-05): 연결 설정(M3-02)과 드라이버 등록부를 받는다.
 pub fn sessions(connections: &Arc<Connections>) -> Arc<DbSessions> {
     Arc::new(DbSessions::new(Arc::clone(connections), drivers()))
+}
+
+/// SSH 터널(M3-11): 시스템 ssh 를 그 프로젝트의 런타임 환경으로 띄우고, 비밀번호 · 모르는 호스트 키는 git 과 같은 askpass(M2-06)로
+/// 그 프로젝트 창에 묻는다. 앱이 끝날 때 남은 ssh 는 `pw_db_driver::tunnel::shutdown` 이 끝낸다(main.rs 의 `RunEvent::Exit`).
+pub fn attach_tunnels(
+    sessions: &DbSessions,
+    runtime: &Arc<Runtime>,
+    askpass: &pw_git::write::Askpass,
+    prompts: &pw_git::write::Prompts,
+) {
+    let tunnels = SshTunnels::new(Arc::new(RuntimeEnv(Arc::clone(runtime))));
+    tunnels.attach_askpass(Arc::new(GitAskpass {
+        askpass: askpass.clone(),
+        prompts: prompts.clone(),
+    }));
+    sessions.attach_tunnels(Arc::new(tunnels));
+}
+
+/// git 의 askpass 세션을 ssh 에 준다. 질문은 그 터널을 연 프로젝트의 창으로 간다.
+struct GitAskpass {
+    askpass: pw_git::write::Askpass,
+    prompts: pw_git::write::Prompts,
+}
+
+impl TunnelAskpass for GitAskpass {
+    fn session(&self, project_id: &str) -> Option<AskpassGuard> {
+        let session = self.askpass.session(
+            project_id,
+            &self.prompts,
+            pw_git::write::prompt::ASKPASS_TIMEOUT,
+        )?;
+        let mut env = Vec::new();
+        session.apply(&mut env);
+        let session = Arc::new(session);
+        let asking = Arc::clone(&session);
+        Some(AskpassGuard::new(env, move || asking.asking(), session))
+    }
 }
 
 /// 앱의 드라이버 등록부. 실행 파이프라인(M3-05)이 Host 를 만들 때 받는다.
