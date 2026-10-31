@@ -32,7 +32,11 @@ import { ThemeStoreProvider } from "../../theme/theme-switcher";
 import { parseTheme } from "../../theme/tokens";
 import { type DbDocumentSpec, dbDocumentKey } from "../documents/spec";
 import { dbStatusStore } from "../safety/db-status";
+import { bundledTranslator } from "../../i18n/testing";
+import { dbTableDataStrings } from "./strings";
 import { markOpenedHere } from "./table-data-window";
+
+const KO = dbTableDataStrings(bundledTranslator("ko"));
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -613,7 +617,7 @@ it("turns editing off on a table without a key and says why", async () => {
   expect(button("db-table-data-add-row").disabled).toBe(true);
   expect(button("db-table-data-delete-row").disabled).toBe(true);
   expect(button("db-table-data-submit").disabled).toBe(true);
-  expect(q("[data-notice=block]")!.textContent).toContain("키");
+  expect(q("[data-notice=block]")!.textContent).toBe(KO.block.noKey(""));
   await act(async () => grid().onCellActivated([1, 0]));
   await settle();
   expect(q("[data-testid=db-table-data-inline-editor]")).toBeNull();
@@ -628,7 +632,7 @@ it("turns editing off on a read-only connection", async () => {
   await openTable();
   await connect();
   expect(button("db-table-data-add-row").disabled).toBe(true);
-  expect(q("[data-notice=block]")).not.toBeNull();
+  expect(q("[data-notice=block]")!.textContent).toBe(KO.block.readOnly(""));
 });
 
 it("shows the Host's refusal when the WHERE fragment makes more than a query", async () => {

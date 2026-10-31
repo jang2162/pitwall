@@ -235,12 +235,11 @@ function tableDataActions(store: StoreApi<TableDataState>, deps: TableDataDeps) 
       }
     },
 
-    /** 지금 조각으로 다시 읽는다. 제출하지 않은 변경이 있으면 읽지 않고 `false`. */
+    /** 지금 조각으로 다시 읽는다(제출하지 않은 변경은 부르는 쪽이 본다 — `query` · 적용 뒤의 `revert`). */
     async read(): Promise<boolean> {
-      const { opened, spec, buffer } = get();
+      const { opened, spec } = get();
       const d = dialect();
       if (!opened || !d || opened.session.state.kind === "disconnected") return false;
-      if (buffer && buffer.pendingCount > 0) return false;
       abort?.abort();
       const controller = new AbortController();
       abort = controller;
