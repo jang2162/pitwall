@@ -456,30 +456,63 @@ mod fake {
         assert!(opened.is_err());
     }
 
-    /// pid 가 다시 쓰였으면(시작 시각이 다르면) · argv 가 Pitwall 의 ssh 인자가 아니면 끄지 않는다. 세 가지가 맞을 때만 끈다.
+    /// pid 가 다시 쓰였으면(시작 시각이 다르면) · 기록이 Pitwall 의 ssh 꼴이 아니면(위조 기록) · 프로세스가 `ssh` 가 아니면 끄지
+    /// 않는다. 모두 맞을 때만 끈다.
     #[tokio::test]
-    async fn a_reused_pid_is_not_ended() {
+    async fn a_reused_pid_or_a_forged_record_is_not_ended() {
         use std::os::unix::process::CommandExt as _;
 
         let dir = TempDir::new("pw-ssh-records", None);
+        let bin = TempDir::new("pw-ssh-bin", None);
+        let args = ssh_args(40001, "db.internal", 5432, "bastion").unwrap();
+        let spawn = |name: &str, args: &[OsString]| {
+            let program = bin.path().join(name);
+            write_script(&program, "#!/bin/sh\nsleep 30\n");
+            let mut command = std::process::Command::new(&program);
+            command.args(args).process_group(0);
+            command.spawn().unwrap()
+        };
+        let dead = a_dead_pid();
+        let write = |pid: u32, start: &str, port: u16, args: &[OsString]| {
+            let mut text = format!(
+                "{}\npid {pid}\nstart {start}\nowner {dead} 0\nport {port}\n",
+                super::super::orphans::MAGIC
+            );
+            for arg in args {
+                text.push_str(&format!("arg {}\n", arg.to_string_lossy()));
+            }
+            fs::write(dir.path().join(pid.to_string()), text).unwrap();
+        };
+
+        // 위조 기록: 남의 프로세스(`sleep 30`)의 argv 끝을 그대로 적었다 — 시작 시각 · argv 끝은 맞지만 우리 꼴이 아니다.
         let mut other = std::process::Command::new("sleep");
         other.arg("30").process_group(0);
         let mut other = other.spawn().unwrap();
-        let pid = other.id();
-        let start = super::super::orphans::start_time(pid).expect("start time");
-        let dead = a_dead_pid();
-        let write = |start: &str, arg: &str| {
-            fs::write(
-                dir.path().join(pid.to_string()),
-                format!(
-                    "{}\npid {pid}\nstart {start}\nowner {dead} 0\narg {arg}\n",
-                    super::super::orphans::MAGIC
-                ),
-            )
-            .unwrap();
-        };
+        let start = super::super::orphans::start_time(other.id()).expect("start time");
+        write(other.id(), &start, 40001, &[OsString::from("30")]);
+        assert_eq!(reap_orphans(dir.path()), 0, "a forged record");
+        assert!(alive(other.id()));
+        assert!(
+            !dir.path().join(other.id().to_string()).exists(),
+            "the forged record is dropped"
+        );
+        other.kill().unwrap();
+        other.wait().unwrap();
 
-        write("1.000000", "30");
+        // 우리 꼴의 인자를 받았지만 `ssh` 가 아닌 프로그램.
+        let mut not_ssh = spawn("not-ssh", &args);
+        let start = super::super::orphans::start_time(not_ssh.id()).expect("start time");
+        write(not_ssh.id(), &start, 40001, &args);
+        assert_eq!(reap_orphans(dir.path()), 0, "not ssh");
+        assert!(alive(not_ssh.id()));
+        signal_group(not_ssh.id(), Signal::Kill);
+        not_ssh.wait().unwrap();
+
+        let mut ssh = spawn("ssh", &args);
+        let pid = ssh.id();
+        let start = super::super::orphans::start_time(pid).expect("start time");
+
+        write(pid, "1.000000", 40001, &args);
         assert_eq!(reap_orphans(dir.path()), 0, "another start time");
         assert!(alive(pid));
         assert!(
@@ -487,14 +520,14 @@ mod fake {
             "the stale record is dropped"
         );
 
-        write(&start, "31");
-        assert_eq!(reap_orphans(dir.path()), 0, "another argv");
+        write(pid, &start, 40002, &args);
+        assert_eq!(reap_orphans(dir.path()), 0, "another recorded port");
         assert!(alive(pid));
 
-        // 셋 다 맞으면 끈다(위 둘이 다른 까닭으로 건너뛰지 않았다는 대조).
-        write(&start, "30");
+        // 모두 맞으면 끈다(위 넷이 다른 까닭으로 건너뛰지 않았다는 대조).
+        write(pid, &start, 40001, &args);
         assert_eq!(reap_orphans(dir.path()), 1);
-        let status = other.wait().unwrap();
+        let status = ssh.wait().unwrap();
         assert!(!status.success(), "{status:?}");
     }
 

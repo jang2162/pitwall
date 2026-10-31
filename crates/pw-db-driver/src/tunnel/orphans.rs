@@ -5,7 +5,11 @@
 //! **세 가지가 모두 맞는 것만** 끈다:
 //!
 //! 1. pid 의 **시작 시각**이 기록과 같다 — pid 는 다시 쓰인다. 같은 pid 의 다른 프로세스(사람의 것)를 끄지 않는다.
-//! 2. 그 프로세스의 **argv 끝이 Pitwall 이 준 ssh 인자 그대로**다(`-N … -o ControlPath=none -L 127.0.0.1:<포트>:… -- <목적지>`).
+//! 2. 그 프로세스가 **Pitwall 이 띄우는 꼴의 ssh** 다: 기록의 인자가 우리 고정 argv([`super::ssh_args`] 가 만드는 것 — `-N`,
+//!    고정 `-o` 셋(`ControlPath=none` 포함), 기록한 포트의 `-L 127.0.0.1:<포트>:<호스트>:<포트>`, `--`, 허용 글자의 목적지)와 한
+//!    글자도 다르지 않고, 프로세스의 argv 끝이 그 인자 그대로이며, 그 앞에 이름이 `ssh` 인 실행 파일이 있다. 기록 파일은
+//!    누구든 쓸 수 있는 자리일 수 있으니 기록이 적은 인자를 믿지 않는다 — 위조 기록(남의 프로세스의 argv 끝을 적은 것)으로 남의
+//!    프로세스 그룹을 끄지 않게(M3-11 재리뷰).
 //! 3. 기록한 **앱이 이미 끝났다**(그 pid 가 없거나 시작 시각이 다르다) — 같은 상태 디렉터리를 쓰는 살아 있는 앱(두 번째 실행이 첫
 //!    실행에 넘기기 전 등)의 터널을 끄지 않는다.
 //!
@@ -32,14 +36,14 @@ pub(super) struct Record {
 
 impl Record {
     /// `dir/<pid>` 에 적는다. 적지 못하면 경고만 남긴다(터널은 그대로 쓴다 — 강제 종료 뒤 정리만 못 한다).
-    pub(super) fn write(dir: &Path, pid: u32, args: &[OsString]) -> Option<Self> {
+    pub(super) fn write(dir: &Path, pid: u32, port: u16, args: &[OsString]) -> Option<Self> {
         let Some(start) = start_time(pid) else {
             tracing::warn!(target: "pw_db", pid, "cannot read the ssh tunnel's start time; it will not be cleaned up after a crash");
             return None;
         };
         let owner = std::process::id();
         let mut text = format!(
-            "{MAGIC}\npid {pid}\nstart {start}\nowner {owner} {}\n",
+            "{MAGIC}\npid {pid}\nstart {start}\nowner {owner} {}\nport {port}\n",
             start_time(owner).unwrap_or_default()
         );
         for arg in args {
@@ -79,6 +83,7 @@ struct Parsed {
     start: String,
     owner: u32,
     owner_start: String,
+    port: u16,
     args: Vec<String>,
 }
 
@@ -90,10 +95,11 @@ fn parse(text: &str) -> Option<Parsed> {
     let pid = lines.next()?.strip_prefix("pid ")?.parse().ok()?;
     let start = lines.next()?.strip_prefix("start ")?.to_owned();
     let (owner, owner_start) = lines.next()?.strip_prefix("owner ")?.split_once(' ')?;
+    let port = lines.next()?.strip_prefix("port ")?.parse().ok()?;
     let args = lines
         .map(|l| l.strip_prefix("arg ").map(str::to_owned))
         .collect::<Option<Vec<_>>>()?;
-    if start.is_empty() || args.is_empty() {
+    if start.is_empty() || !our_shape(port, &args) {
         return None;
     }
     Some(Parsed {
@@ -101,8 +107,37 @@ fn parse(text: &str) -> Option<Parsed> {
         start,
         owner: owner.parse().ok()?,
         owner_start: owner_start.to_owned(),
+        port,
         args,
     })
+}
+
+/// `args` 가 포트 `port` 로 [`super::ssh_args`] 가 만드는 인자 그대로인가. `-L` 에서 DB 호스트 · 포트를 읽어 같은 함수로 다시 만들어
+/// 비교한다 — 꼴의 정본은 `ssh_args` 하나다.
+fn our_shape(port: u16, args: &[String]) -> bool {
+    let [.., forward, _, destination] = args else {
+        return false;
+    };
+    let Some((host, db_port)) = forward
+        .strip_prefix(&format!("{}:{port}:", super::LOOPBACK))
+        .and_then(|rest| rest.rsplit_once(':'))
+    else {
+        return false;
+    };
+    let Ok(db_port) = db_port.parse() else {
+        return false;
+    };
+    super::ssh_args(port, host, db_port, destination).is_ok_and(|built| {
+        built.len() == args.len() && built.iter().zip(args).all(|(b, a)| b.to_str() == Some(a))
+    })
+}
+
+/// 실행 파일 경로의 이름이 `ssh` 인가(Windows 는 `ssh.exe`, 대소문자 무시).
+fn is_ssh(program: &str) -> bool {
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    name == "ssh"
+        || (cfg!(windows)
+            && (name.eq_ignore_ascii_case("ssh") || name.eq_ignore_ascii_case("ssh.exe")))
 }
 
 /// 앱 시작 때: `dir` 의 기록 가운데 앞 실행이 남긴 ssh(머리 주석의 세 가지가 맞는 것)를 프로세스 그룹째 끝내고, 기록을 지운다.
@@ -130,7 +165,7 @@ pub fn reap_orphans(dir: &Path) -> usize {
             continue;
         }
         if start_time(record.pid).as_deref() == Some(record.start.as_str())
-            && args_end_with(record.pid, &record.args)
+            && runs_ssh_with(record.pid, &record.args)
         {
             tracing::info!(target: "pw_db", pid = record.pid, "ending an ssh tunnel left by a previous run");
             signal_group(record.pid, Signal::Term);
@@ -249,14 +284,20 @@ pub(super) fn start_time(_pid: u32) -> Option<String> {
     None
 }
 
-/// argv 끝이 `args` 그대로인가(앞은 실행 파일 — 진짜 ssh 면 `ssh`, 시험의 스크립트면 `/bin/sh <스크립트>`).
+/// argv 끝이 `args` 그대로이고 그 앞에 `ssh` 실행 파일이 있는가 — 진짜 ssh 면 `argv[0]`, 시험의 가짜 스크립트면
+/// `/bin/sh <…/ssh>` 의 스크립트 경로, 실 sshd 시험의 감싸개(`exec ssh -F <설정> "$@"`)면 `argv[0]` 과 우리 인자 사이에
+/// `-F <설정>` 이 낀다.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn args_end_with(pid: u32, args: &[String]) -> bool {
-    argv(pid).is_some_and(|argv| argv.len() > args.len() && argv.ends_with(args))
+fn runs_ssh_with(pid: u32, args: &[String]) -> bool {
+    argv(pid).is_some_and(|argv| {
+        argv.len() > args.len()
+            && argv.ends_with(args)
+            && argv[..argv.len() - args.len()].iter().any(|a| is_ssh(a))
+    })
 }
 
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
-fn args_end_with(_pid: u32, _args: &[String]) -> bool {
+fn runs_ssh_with(_pid: u32, _args: &[String]) -> bool {
     false
 }
 
@@ -311,9 +352,10 @@ pub(super) fn start_time(pid: u32) -> Option<String> {
     })
 }
 
-/// 명령줄이 ` <args 를 공백으로 이은 것>` 으로 끝나는가. 인자에 공백 · 따옴표가 없어 `Command` 가 따옴표를 붙이지 않는다.
+/// 명령줄이 `<ssh 실행 파일> <args 를 공백으로 이은 것>` 인가. 인자에 공백 · 따옴표가 없어 `Command` 가 따옴표를 붙이지 않는다.
+/// 실행 파일은 `Command` 가 따옴표로 감싼다.
 #[cfg(windows)]
-fn args_end_with(pid: u32, args: &[String]) -> bool {
+fn runs_ssh_with(pid: u32, args: &[String]) -> bool {
     use windows_sys::Wdk::System::Threading::{
         NtQueryInformationProcess, ProcessCommandLineInformation,
     };
@@ -348,35 +390,119 @@ fn args_end_with(pid: u32, args: &[String]) -> bool {
             usize::from(head.Length) / 2,
         ))
     };
-    text.trim_end().ends_with(&format!(" {}", args.join(" ")))
+    text.trim_end()
+        .strip_suffix(&format!(" {}", args.join(" ")))
+        .is_some_and(|program| is_ssh(program.trim().trim_matches('"')))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn ours(port: u16, db_host: &str, destination: &str) -> Vec<String> {
+        super::super::ssh_args(port, db_host, 5432, destination)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.into_string().unwrap())
+            .collect()
+    }
+
+    fn record(port: u16, args: &[String]) -> String {
+        let mut text = format!("{MAGIC}\npid 42\nstart 1.000001\nowner 7 9.5\nport {port}\n");
+        for arg in args {
+            text.push_str(&format!("arg {arg}\n"));
+        }
+        text
+    }
+
     #[test]
     fn a_record_round_trips_and_unknown_shapes_are_refused() {
-        let text =
-            format!("{MAGIC}\npid 42\nstart 1.000001\nowner 7 9.5\narg -N\narg --\narg bastion\n");
+        let args = ours(40001, "db.internal", "bastion");
         assert_eq!(
-            parse(&text),
+            parse(&record(40001, &args)),
             Some(Parsed {
                 pid: 42,
                 start: "1.000001".into(),
                 owner: 7,
                 owner_start: "9.5".into(),
-                args: vec!["-N".into(), "--".into(), "bastion".into()],
+                port: 40001,
+                args: args.clone(),
             })
         );
+        let v6 = ours(40001, "fd00::5", "ssh://deploy@[fd00::1]:2222");
+        assert!(parse(&record(40001, &v6)).is_some(), "{v6:?}");
         for bad in [
-            "pitwall-ssh-tunnel 2\npid 42\nstart 1\nowner 7 9\narg -N\n".to_owned(),
-            format!("{MAGIC}\npid x\nstart 1\nowner 7 9\narg -N\n"),
-            format!("{MAGIC}\npid 42\nstart \nowner 7 9\narg -N\n"),
-            format!("{MAGIC}\npid 42\nstart 1\nowner 7 9\n"),
-            format!("{MAGIC}\npid 42\nstart 1\nowner 7 9\nrm -rf\n"),
+            "pitwall-ssh-tunnel 2\npid 42\nstart 1\nowner 7 9\nport 1\narg -N\n".to_owned(),
+            format!("{MAGIC}\npid x\nstart 1\nowner 7 9\nport 40001\narg -N\n"),
+            format!("{MAGIC}\npid 42\nstart \nowner 7 9\nport 40001\narg -N\n"),
+            format!("{MAGIC}\npid 42\nstart 1\nowner 7 9\nport 40001\n"),
+            format!("{MAGIC}\npid 42\nstart 1\nowner 7 9\nport 40001\nrm -rf\n"),
+            // 포트 줄이 없다(앞 형식).
+            format!("{MAGIC}\npid 42\nstart 1\nowner 7 9\narg -N\n"),
         ] {
             assert_eq!(parse(&bad), None, "{bad:?}");
+        }
+    }
+
+    /// 기록의 인자는 우리 고정 꼴과 한 글자도 다르지 않아야 한다 — 남의 프로세스의 argv 끝을 적은 위조 기록은 읽지 않는다.
+    #[test]
+    fn a_record_with_args_other_than_ours_is_refused() {
+        let good = ours(40001, "db.internal", "bastion");
+        let with = |i: usize, value: &str| {
+            let mut args = good.clone();
+            args[i] = value.to_owned();
+            args
+        };
+        let forged: Vec<(&str, u16, Vec<String>)> = vec![
+            ("another program's argv tail", 40001, vec!["30".into()]),
+            ("no -N", 40001, with(0, "-T")),
+            ("ControlPath kept", 40001, with(6, "ControlPath=/tmp/m")),
+            ("another option", 40001, with(4, "ProxyCommand=sh")),
+            ("-R in place of -L", 40001, with(7, "-R")),
+            (
+                "forward off loopback",
+                40001,
+                with(8, "0.0.0.0:40001:db.internal:5432"),
+            ),
+            ("another port than recorded", 40002, good.clone()),
+            ("db port 0", 40001, with(8, "127.0.0.1:40001:db.internal:0")),
+            (
+                "db host outside the allowlist",
+                40001,
+                with(8, "127.0.0.1:40001:a;id:5432"),
+            ),
+            ("no --", 40001, with(9, "-v")),
+            (
+                "destination outside the allowlist",
+                40001,
+                with(10, "a$(id)"),
+            ),
+            (
+                "an extra argument",
+                40001,
+                [good.clone(), vec!["x".into()]].concat(),
+            ),
+            ("a missing argument", 40001, good[..good.len() - 1].to_vec()),
+        ];
+        for (why, port, args) in forged {
+            assert_eq!(parse(&record(port, &args)), None, "{why}: {args:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_program_named_ssh_counts() {
+        for ok in ["ssh", "/usr/bin/ssh", "/tmp/pw-fake-ssh-1/ssh"] {
+            assert!(is_ssh(ok), "{ok}");
+        }
+        for not in [
+            "sleep",
+            "/usr/bin/sshd",
+            "/bin/sh",
+            "ssh-agent",
+            "/opt/ssh/bash",
+            "",
+        ] {
+            assert!(!is_ssh(not), "{not}");
         }
     }
 }

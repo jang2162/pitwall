@@ -518,7 +518,7 @@ async fn spawn_until_ready(
         return Attempt::Failed(DbError::new(DbErrorKind::Connect, "ssh exited at once"));
     };
     remember_group(pid);
-    let record = records.and_then(|dir| orphans::Record::write(dir, pid, &args));
+    let record = records.and_then(|dir| orphans::Record::write(dir, pid, port, &args));
     let mut group = Group {
         pid,
         armed: true,
