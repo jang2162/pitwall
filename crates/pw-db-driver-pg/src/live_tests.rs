@@ -439,6 +439,14 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
     run(&mut conn, "DROP SEQUENCE IF EXISTS pw_live_probe_seq").await;
     run(&mut conn, "CREATE SEQUENCE pw_live_probe_seq").await;
     let victim_pid = backend_pid(&mut victim).await;
+    let own_pid = backend_pid(&mut conn).await;
+    // 서버 상태를 바꾸는 후보(복제 슬롯 · 오리진 · 백업)는 이 시험이 만든 이름만 쓰고 끝나면 치운다(`probe_cleanup`).
+    probe_cleanup(&mut conn).await;
+    run(
+        &mut conn,
+        "SELECT pg_create_physical_replication_slot('pw_live_probe_drop')",
+    )
+    .await;
     let probes = [
         format!("SELECT pg_cancel_backend({victim_pid})"),
         "SELECT pg_reload_conf()".to_owned(),
@@ -452,6 +460,22 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
         "SELECT lo_create(0)".to_owned(),
         "SELECT nextval('pw_live_probe_seq')".to_owned(),
         "SELECT setval('pw_live_probe_seq', 5)".to_owned(),
+        // M3-03 리뷰(H2)의 후보.
+        "SELECT pg_create_physical_replication_slot('pw_live_probe_new')".to_owned(),
+        "SELECT pg_drop_replication_slot('pw_live_probe_drop')".to_owned(),
+        "SELECT pg_create_logical_replication_slot('pw_live_probe_logical', 'pgoutput')".to_owned(),
+        "SELECT pg_replication_origin_create('pw_live_probe')".to_owned(),
+        "SELECT pg_create_restore_point('pw_live_probe')".to_owned(),
+        "SELECT pg_backup_start('pw_live_probe')".to_owned(),
+        "SELECT pg_wal_replay_pause()".to_owned(),
+        "SELECT pg_promote()".to_owned(),
+        "SELECT pg_stat_reset_shared('bgwriter')".to_owned(),
+        format!("SELECT pg_log_backend_memory_contexts({own_pid})"),
+        "SELECT pg_logical_emit_message(true, 'pw', 'x')".to_owned(),
+        "SELECT pg_ls_dir('.')".to_owned(),
+        "SELECT pg_stat_file('postgresql.conf')".to_owned(),
+        "SELECT pg_current_xact_id()".to_owned(),
+        "SELECT pg_file_write('/tmp/pw_live_probe', 'y', false)".to_owned(),
     ];
     let mut table = Vec::new();
     for sql in &probes {
@@ -476,8 +500,9 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
             outcome,
         ));
     }
+    probe_cleanup(&mut conn).await;
     for (function, outcome) in &table {
-        println!("{function:24} {outcome}");
+        println!("{function:40} {outcome}");
     }
     let outcome = |name: &str| table.iter().find(|(f, _)| f == name).unwrap().1.as_str();
     for name in [
@@ -490,12 +515,74 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
         "pg_stat_reset",
         "pg_switch_wal",
         "txid_current",
+        "pg_create_physical_replication_slot",
+        "pg_drop_replication_slot",
+        "pg_replication_origin_create",
+        "pg_create_restore_point",
+        "pg_backup_start",
+        "pg_stat_reset_shared",
+        "pg_log_backend_memory_contexts",
+        "pg_logical_emit_message",
+        "pg_ls_dir",
+        "pg_stat_file",
+        "pg_current_xact_id",
     ] {
         assert_eq!(outcome(name), "passes", "{name}");
     }
     for name in ["lo_create", "nextval", "setval"] {
         assert_eq!(outcome(name), "25006", "{name}");
     }
+    // 읽기 전용이 아니라 서버 상태가 막는다: 논리 슬롯은 `wal_level = logical`, 재생 정지 · 승격은 대기 서버에서만(55000).
+    for name in [
+        "pg_create_logical_replication_slot",
+        "pg_wal_replay_pause",
+        "pg_promote",
+    ] {
+        assert_eq!(outcome(name), "55000", "{name}");
+    }
+    // adminpack 은 PG 17 에 없다.
+    assert_eq!(outcome("pg_file_write"), "42883");
+    // 치웠다.
+    assert_eq!(
+        count(
+            &mut conn,
+            "SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE 'pw\\_live\\_probe%'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(
+            &mut conn,
+            "SELECT count(*) FROM pg_replication_origin WHERE roname = 'pw_live_probe'"
+        )
+        .await,
+        0
+    );
+}
+
+/// 함수 표 시험이 만든 서버 상태를 치운다(없으면 아무것도 하지 않는다).
+async fn probe_cleanup(conn: &mut PgConnection) {
+    run(
+        conn,
+        "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name LIKE 'pw\\_live\\_probe%'",
+    )
+    .await;
+    run(
+        conn,
+        "SELECT pg_replication_origin_drop(roname) FROM pg_replication_origin WHERE roname = 'pw_live_probe'",
+    )
+    .await;
+    // 이 세션에서 시작한 백업이 있으면 끝낸다(없으면 오류 — 무시).
+    let _ = all_or_error(conn, "SELECT pg_backup_stop(false)").await;
+}
+
+async fn all_or_error(conn: &mut PgConnection, sql: &str) -> Result<(), pw_db_types::DbError> {
+    let started = conn.execute(write(sql)).await?;
+    if started.end.is_none() {
+        conn.discard_cursor().await?;
+    }
+    Ok(())
 }
 
 /// ⑤ 값 표(결정 M3-D8).
