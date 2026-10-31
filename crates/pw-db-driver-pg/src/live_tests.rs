@@ -400,6 +400,18 @@ async fn live_pg_a_read_only_transaction_refuses_writes() {
         1
     );
 
+    // 첫 문장의 `SET` 은 읽기 전용 트랜잭션을 푼다(스냅숏 전이라 PG 가 허락한다) — 드라이버는 막지 않는다. read-only 연결의
+    // `SET` · `RESET` · `SET TRANSACTION` 은 관문(M3-05)이 거절한다(결정 M3-D6, 리뷰 M2). 이 시험은 그 사실을 고정한다.
+    for lift in [
+        "SET transaction_read_only = off",
+        "SET TRANSACTION READ WRITE",
+    ] {
+        conn.begin(BeginOptions { read_only: true }).await.unwrap();
+        run(&mut conn, lift).await;
+        run(&mut conn, "INSERT INTO pw_live_read_only VALUES (9)").await;
+        conn.rollback().await.unwrap();
+    }
+
     let victim_pid = backend_pid(&mut victim).await;
     conn.begin(BeginOptions { read_only: true }).await.unwrap();
     let terminated = one(
@@ -466,7 +478,7 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
         "SELECT pg_create_logical_replication_slot('pw_live_probe_logical', 'pgoutput')".to_owned(),
         "SELECT pg_replication_origin_create('pw_live_probe')".to_owned(),
         "SELECT pg_create_restore_point('pw_live_probe')".to_owned(),
-        "SELECT pg_backup_start('pw_live_probe')".to_owned(),
+        "SELECT pg_backup_start('pw_live_probe', true)".to_owned(),
         "SELECT pg_wal_replay_pause()".to_owned(),
         "SELECT pg_promote()".to_owned(),
         "SELECT pg_stat_reset_shared('bgwriter')".to_owned(),
@@ -783,10 +795,22 @@ async fn live_pg_transaction_statements_are_refused_and_savepoints_pass() {
         "END",
         "ABORT",
         "PREPARE TRANSACTION 'x'",
+        // PG 렉서와 같게 읽는다(M3-06 리뷰 H1): 서버는 이것들을 모두 BEGIN · COMMIT 으로 읽는다.
+        "\x0bBEGIN",
+        "\x0cBEGIN",
+        "-- note\rBEGIN",
+        ";BEGIN",
+        "/* a /* b */ c */\x0b COMMIT",
     ] {
         let error = conn.execute(write(sql)).await.unwrap_err();
         assert_eq!(error.kind, DbErrorKind::Invalid, "{sql}");
         assert!(error.code.is_none(), "{sql} never reached the server");
+        assert_eq!(conn.transaction_state(), TransactionState::Idle);
+    }
+    // 거르개가 지나보내는 「BEGIN 비슷한 것」 은 서버도 키워드가 아닌 식별자로 읽어 문법 오류다.
+    for sql in ["BEGIN$x", "\u{3000}BEGIN", "BEGIN한"] {
+        let error = conn.execute(write(sql)).await.unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("42601"), "{sql}: {error:?}");
         assert_eq!(conn.transaction_state(), TransactionState::Idle);
     }
 
@@ -838,6 +862,30 @@ async fn live_pg_transaction_statements_are_refused_and_savepoints_pass() {
     assert_eq!(
         count(&mut conn, "SELECT count(*) FROM pw_live_deferred").await,
         0
+    );
+
+    // 실패한 트랜잭션의 commit 은 성공이 아니다(M3-06 리뷰 H2): 서버는 COMMIT 에 롤백으로 답했다 — 오류 + rolled_back.
+    let mut other = open(&plain()).await;
+    conn.begin(BeginOptions::default()).await.unwrap();
+    run(&mut conn, "INSERT INTO pw_live_deferred VALUES (2, NULL)").await;
+    let error = match conn.execute(read("SELECT 1/0")).await {
+        Err(e) => e,
+        Ok(_) => conn.fetch(FetchLimit::rows(1)).await.unwrap_err(),
+    };
+    assert_eq!(error.code.as_deref(), Some("22012"));
+    assert_eq!(conn.transaction_state(), TransactionState::Failed);
+    let failed = conn.commit().await.unwrap_err();
+    assert!(failed.rolled_back, "{failed:?}");
+    assert_eq!(failed.code.as_deref(), Some("25P02"));
+    assert_eq!(conn.transaction_state(), TransactionState::Idle);
+    assert_eq!(
+        count(&mut other, "SELECT count(*) FROM pw_live_deferred").await,
+        0
+    );
+    assert_eq!(
+        count(&mut conn, "SELECT 1").await,
+        1,
+        "the session is usable again"
     );
 }
 
@@ -924,6 +972,7 @@ async fn live_pg_closing_rolls_back_and_the_pool_resets_sessions() {
     let (mut idle, _) = driver.open(&plain()).await.unwrap();
     let idle_pid = backend_pid(&mut idle).await;
     run(&mut idle, "SET TimeZone = 'Asia/Seoul'").await;
+    run(&mut idle, "PREPARE pw_live_leak AS SELECT 1").await;
     Box::new(idle).close().await.unwrap();
     let (mut again, _) = driver.open(&plain()).await.unwrap();
     assert_eq!(
@@ -936,7 +985,154 @@ async fn live_pg_closing_rolls_back_and_the_pool_resets_sessions() {
         "Asia/Seoul",
         "the pool reset the session"
     );
+    // 사람의 PREPARE 도 다음 탭에 넘어가지 않는다(`DISCARD ALL`, 리뷰 L2).
+    let leaked = again
+        .execute(write("EXECUTE pw_live_leak"))
+        .await
+        .unwrap_err();
+    assert_eq!(leaked.code.as_deref(), Some("26000"), "{leaked:?}");
+    // 풀이 지운 타입 조회 문장을 다시 만든다(꺼낼 때 `clear_type_cache`) — 모르는 타입의 열도 읽힌다.
+    assert!(matches!(
+        one(&mut again, "SELECT 'pg_class'::regclass").await,
+        DbValue::Other(_)
+    ));
     assert_eq!(again.transaction_state(), TransactionState::Idle);
+}
+
+/// 거르개가 놓친 숨은 `BEGIN` 이 서버에 블록을 열어도(M3-06 리뷰 H1 의 둘째 겹) 그 블록은 그 탭에 묶인다: 탭의 상태가 「트랜잭션
+/// 열림」 이 되고, 닫으면 풀로 돌아가지 않고 DB 가 롤백한다 — 다른 탭의 자동 커밋이 앞 탭의 쓰기를 커밋하지 않는다(리뷰어 재현).
+#[tokio::test(flavor = "multi_thread")]
+async fn live_pg_a_hidden_transaction_block_stays_with_its_tab() {
+    let driver = PgDriver::new();
+    let mut observer = open(&plain()).await;
+    run(&mut observer, "DROP TABLE IF EXISTS pw_live_hidden").await;
+    run(&mut observer, "CREATE TABLE pw_live_hidden (id int)").await;
+
+    let (mut a, _) = driver.open(&plain()).await.unwrap();
+    let a_pid = backend_pid(&mut a).await;
+    a.skip_statement_filter(true);
+    run(&mut a, "BEGIN").await;
+    assert_eq!(a.transaction_state(), TransactionState::InTransaction);
+    run(&mut a, "INSERT INTO pw_live_hidden VALUES (1)").await;
+    assert_eq!(
+        count(&mut a, "SELECT count(*) FROM pw_live_hidden").await,
+        1
+    );
+    assert_eq!(a.transaction_state(), TransactionState::InTransaction);
+    assert_eq!(
+        count(&mut observer, "SELECT count(*) FROM pw_live_hidden").await,
+        0
+    );
+    Box::new(a).close().await.unwrap();
+
+    let (mut b, _) = driver.open(&plain()).await.unwrap();
+    assert_ne!(
+        backend_pid(&mut b).await,
+        a_pid,
+        "the tab's open block did not go back to the pool"
+    );
+    assert_eq!(
+        count(&mut b, "SELECT count(*) FROM pw_live_hidden").await,
+        0
+    );
+    assert_eq!(b.transaction_state(), TransactionState::Idle);
+    assert_eq!(
+        count(&mut observer, "SELECT count(*) FROM pw_live_hidden").await,
+        0,
+        "nobody committed tab A's write"
+    );
+
+    // 사람이 그 블록을 커밋하면(콘솔의 커밋) 그때 남는다.
+    b.skip_statement_filter(true);
+    run(&mut b, "BEGIN").await;
+    run(&mut b, "INSERT INTO pw_live_hidden VALUES (2)").await;
+    b.commit().await.unwrap();
+    assert_eq!(b.transaction_state(), TransactionState::Idle);
+    assert_eq!(
+        count(&mut observer, "SELECT count(*) FROM pw_live_hidden").await,
+        1
+    );
+}
+
+/// 사람의 트랜잭션 안에서 메타데이터는 풀의 다른 연결로, 실행 계획은 같은 연결의 세이브포인트 안에서 — 어느 쪽이 실패해도 사람의
+/// 트랜잭션은 `Failed` 가 되지 않는다(M3-06 리뷰 M1).
+#[tokio::test(flavor = "multi_thread")]
+async fn live_pg_metadata_and_plans_leave_the_persons_transaction_alone() {
+    let mut conn = open(&plain()).await;
+    let mut observer = open(&plain()).await;
+    run(&mut conn, "DROP TABLE IF EXISTS pw_live_meta_tx").await;
+    conn.begin(BeginOptions::default()).await.unwrap();
+    run(&mut conn, "CREATE TABLE pw_live_meta_tx (id int)").await;
+    let query = ObjectQuery {
+        database: None,
+        schema: Some("public".into()),
+        kind: ObjectKind::Table,
+        filter: Some("pw_live_meta_tx".into()),
+        cursor: None,
+        limit: 10,
+    };
+    // 다른 연결은 아직 커밋되지 않은 테이블을 보지 못한다 — 메타데이터가 사람의 연결 밖에서 돌았다.
+    assert!(conn.objects(query.clone()).await.unwrap().items.is_empty());
+    // 다른 연결에서의 메타데이터 오류(없는 테이블)는 사람의 트랜잭션과 상관없다.
+    let missing = ObjectRef {
+        database: None,
+        schema: Some("public".into()),
+        name: "pw_live_meta_tx".into(),
+    };
+    assert!(conn.columns(missing).await.is_err());
+    assert_eq!(conn.transaction_state(), TransactionState::InTransaction);
+    // 실행 계획은 같은 연결이라 그 트랜잭션의 테이블을 본다. 문법 오류여도 트랜잭션은 산다.
+    let plan = conn
+        .explain("SELECT * FROM pw_live_meta_tx".into())
+        .await
+        .unwrap();
+    assert!(plan.text.contains("pw_live_meta_tx"), "{}", plan.text);
+    let error = conn.explain("SELEC 1".into()).await.unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("42601"));
+    assert_eq!(conn.transaction_state(), TransactionState::InTransaction);
+    run(&mut conn, "INSERT INTO pw_live_meta_tx VALUES (1)").await;
+    conn.commit().await.unwrap();
+    assert_eq!(
+        count(&mut observer, "SELECT count(*) FROM pw_live_meta_tx").await,
+        1
+    );
+    assert_eq!(conn.objects(query).await.unwrap().items.len(), 1);
+}
+
+/// 바이너리 send 함수가 없는 타입(`aclitem`)의 열은 서버가 거절한다 — 오류가 그 열 · 타입과 `::text` 힌트를 싣는다(리뷰 M3).
+#[tokio::test(flavor = "multi_thread")]
+async fn live_pg_a_column_without_binary_output_names_itself() {
+    let mut conn = open(&plain()).await;
+    let sql = "SELECT relname, relacl FROM pg_class WHERE relacl IS NOT NULL LIMIT 1";
+    let error = match conn.execute(read(sql)).await {
+        Err(e) => e,
+        Ok(_) => conn.fetch(FetchLimit::rows(1)).await.unwrap_err(),
+    };
+    assert_eq!(error.code.as_deref(), Some("42883"), "{error:?}");
+    assert!(
+        error.message.contains("column relacl (type aclitem[])"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains("\"relacl\"::text"),
+        "{}",
+        error.message
+    );
+    assert_eq!(conn.transaction_state(), TransactionState::Idle);
+    let rows = all(
+        &mut conn,
+        read("SELECT relname, relacl::text FROM pg_class WHERE relacl IS NOT NULL LIMIT 1"),
+    )
+    .await;
+    assert_eq!(rows.len(), 1);
+    conn.begin(BeginOptions::default()).await.unwrap();
+    let error = match conn.execute(read(sql)).await {
+        Err(e) => e,
+        Ok(_) => conn.fetch(FetchLimit::rows(1)).await.unwrap_err(),
+    };
+    assert!(error.message.contains("relacl"), "{}", error.message);
+    conn.rollback().await.unwrap();
 }
 
 /// ⑥ `verify-full`: OS 루트에 없는 CA 의 서버는 거절, 시험 CA 를 루트 자리(`root_cert`)에 넣으면 「검증함」 으로 붙는다.

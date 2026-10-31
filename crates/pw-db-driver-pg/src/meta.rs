@@ -45,9 +45,7 @@ pub(crate) async fn run(
     shared: &Shared,
 ) -> DbResult<MetaResponse> {
     match request {
-        MetaRequest::Explain(sql) => explain(client, &sql, shared)
-            .await
-            .map(MetaResponse::Explain),
+        MetaRequest::Explain(sql) => explain(client, &sql).await.map(MetaResponse::Explain),
         MetaRequest::Databases => databases(client).await.map(MetaResponse::Databases),
         MetaRequest::Schemas(database) => {
             same_database(shared, database.as_deref())?;
@@ -105,14 +103,29 @@ fn same_database(shared: &Shared, database: Option<&str>) -> DbResult<()> {
     }
 }
 
+/// 사람의 트랜잭션 안의 실행 계획: 같은 연결(그 트랜잭션이 보는 것을 본다)에서 세이브포인트로 감싼다 — 실패하면 세이브포인트까지
+/// 되돌려 사람의 트랜잭션을 `Failed` 로 만들지 않는다(M3-06 리뷰 M1). 이미 실패한 트랜잭션이면 세이브포인트가 25P02 로 거절된다.
+pub(crate) async fn explain_in_savepoint(client: &Client, sql: &str) -> DbResult<ExplainPlan> {
+    const SAVEPOINT: &str = "pitwall_explain";
+    client
+        .batch_execute(&format!("SAVEPOINT {SAVEPOINT}"))
+        .await
+        .map_err(|e| db_error(&e))?;
+    let result = explain(client, sql).await;
+    let end = match &result {
+        Ok(_) => format!("RELEASE SAVEPOINT {SAVEPOINT}"),
+        Err(_) => format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}; RELEASE SAVEPOINT {SAVEPOINT}"),
+    };
+    client.batch_execute(&end).await.map_err(|e| db_error(&e))?;
+    result
+}
+
 /// `EXPLAIN (FORMAT JSON) <문장>`. 문장의 위험도는 파이프라인이 먼저 봤다(`ANALYZE` 는 안의 문장 등급).
-async fn explain(client: &Client, sql: &str, shared: &Shared) -> DbResult<ExplainPlan> {
+async fn explain(client: &Client, sql: &str) -> DbResult<ExplainPlan> {
     if let Some(why) = control::refused(sql) {
         return Err(invalid(why));
     }
-    let rows = shared
-        .busy(query(client, &format!("EXPLAIN (FORMAT JSON) {sql}"), &[]))
-        .await?;
+    let rows = query(client, &format!("EXPLAIN (FORMAT JSON) {sql}"), &[]).await?;
     let mut text = String::new();
     for row in &rows {
         let Raw(raw) = get(row, 0)?;

@@ -642,13 +642,22 @@ impl SqlConnection for FakeConnection {
             self.record(FakeCall::Commit);
             let mut ledger = lock(&self.session.ledger);
             let pending = std::mem::take(&mut ledger.pending);
-            // 실패한 트랜잭션의 COMMIT 은 롤백이다(PG 와 같다).
-            if !ledger.failed {
+            // 실패한 트랜잭션의 COMMIT 은 롤백이다(PG 와 같다) — trait 의 약속대로 `rolled_back` 오류로 답한다.
+            let failed = ledger.failed;
+            if !failed {
                 lock(&self.driver.state.committed).extend(pending);
             }
             ledger.in_transaction = false;
             ledger.failed = false;
             ledger.savepoints.clear();
+            if failed {
+                return Err(DbError::new(
+                    DbErrorKind::Server,
+                    "the transaction had failed, so COMMIT rolled it back",
+                )
+                .with_code("25P02")
+                .with_rolled_back());
+            }
             Ok(())
         })
     }

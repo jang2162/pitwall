@@ -177,7 +177,10 @@ async fn errors_fail_the_transaction_until_rollback() {
     assert_eq!(conn.transaction_state(), TransactionState::Failed);
     let blocked = conn.execute(stmt("INSERT INTO t VALUES (2)")).await;
     assert_eq!(blocked.unwrap_err().code.as_deref(), Some("25P02"));
-    conn.commit().await.unwrap();
+    // 실패한 트랜잭션의 commit 은 끝내되 롤백을 오류(`rolled_back`)로 알린다(trait 의 약속).
+    let failed = conn.commit().await.unwrap_err();
+    assert!(failed.rolled_back, "{failed:?}");
+    assert_eq!(failed.code.as_deref(), Some("25P02"));
     assert!(
         driver.committed().is_empty(),
         "a failed transaction commits nothing"

@@ -11,14 +11,24 @@
 //! 버린다(문장을 멈추지 않는다 — `SqlConnection::discard_cursor` 의 약속).
 //!
 //! **상태**: 수동 트랜잭션에서 서버 오류 · 취소가 나면 `Failed`(롤백만 된다). 자동 커밋의 포털 트랜잭션은 오류면 롤백하고 `Idle`
-//! 이다 — 사람이 연 트랜잭션이 아니다.
+//! 이다 — 사람이 연 트랜잭션이 아니다. `Failed` 에서의 `commit` 은 `COMMIT` 을 보내 트랜잭션을 끝내고(서버는 롤백으로 답한다)
+//! `rolled_back` 오류로 답한다 — 성공으로 보이지 않는다(결정 M3-D21).
+//!
+//! **숨은 트랜잭션 블록**(M3-06 리뷰 H1): 트랜잭션 문장은 거르개(`control`)가 막지만, 거르개가 놓쳐 자동 커밋 탭의 문장이 서버에
+//! 블록을 열었으면 그 연결은 그 탭에 묶는다 — 행을 돌려주지 않는 자동 커밋 문장 뒤마다 서버에 블록 안인지 묻고([`block_state`]),
+//! 안이면 탭의 상태를 「트랜잭션 열림」 으로 바꿔 사람의 커밋 · 롤백을 기다린다(몰래 커밋도 몰래 롤백도 하지 않는다). 닫을 때도
+//! 묻고, 블록 안이거나 물을 수 없으면 풀에 돌려주지 않고 닫는다. 풀의 재활용 문장(`DISCARD ALL`)은 블록 안에서 실패하므로 그래도
+//! 새면 풀이 그 연결을 버린다(`lib.rs`).
+//!
+//! **메타데이터**(M3-06 리뷰 M1): 사람의 트랜잭션이 열려 있으면 메타데이터 질의는 풀의 다른 연결로 돈다 — 그 질의의 실패가 사람의
+//! 트랜잭션을 `Failed` 로 만들지 않게. 실행 계획은 사람의 트랜잭션이 보는 것을 봐야 하므로 같은 연결에서 세이브포인트로 감싼다.
 
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use deadpool_postgres::Object;
+use deadpool_postgres::{Object, Pool};
 use futures_util::StreamExt;
 use pw_db_driver::DbResult;
 use pw_db_types::{
@@ -26,10 +36,10 @@ use pw_db_types::{
     StatementEnd, StatementStarted, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
-use tokio_postgres::{Client, Portal, Statement, Transaction};
+use tokio_postgres::{CancelToken, Client, Portal, Statement, Transaction};
 
 use crate::control;
-use crate::error::{db_error, invalid};
+use crate::error::{db_error, invalid, pool_error};
 use crate::meta::{self, MetaRequest, MetaResponse};
 use crate::value::{self, Raw, TextRequests};
 
@@ -71,13 +81,16 @@ pub(crate) fn quote_ident(name: &str) -> String {
 }
 
 /// 태스크와 trait 쪽이 함께 보는 것.
-#[derive(Debug)]
 pub(crate) struct Shared {
     state: Mutex<TransactionState>,
     /// 서버에서 도는 요청이 있다 — 인터럽트는 이때만 CancelRequest 를 보낸다(쉬는 연결에 보내면 다음 문장이 멈출 수 있다).
     pub(crate) running: AtomicBool,
     /// 시험: 서버의 텍스트 출력 되돌려 받기를 일부러 실패시킨다(`value::text_outputs`).
     pub(crate) text_fault: AtomicBool,
+    /// 시험: 트랜잭션 문장 거르개를 건너뛴다 — 거르개가 놓친 경우의 겹방어([`block_state`])를 시험한다.
+    pub(crate) skip_filter: AtomicBool,
+    /// 지금 도는 요청이 이 연결이 아니라 풀의 다른 연결(메타데이터)에 있으면 그 연결의 취소 토큰.
+    cancel_elsewhere: Mutex<Option<CancelToken>>,
     /// 연결한 DB(`current_database()`) — 메타데이터가 다른 DB 를 묻으면 거절한다.
     pub(crate) database: String,
 }
@@ -88,6 +101,8 @@ impl Shared {
             state: Mutex::new(TransactionState::Idle),
             running: AtomicBool::new(false),
             text_fault: AtomicBool::new(false),
+            skip_filter: AtomicBool::new(false),
+            cancel_elsewhere: Mutex::new(None),
             database,
         }
     }
@@ -104,6 +119,21 @@ impl Shared {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = state;
+    }
+
+    /// 인터럽트가 보낼 곳: 다른 연결에서 도는 요청이 있으면 그 토큰.
+    pub(crate) fn cancel_elsewhere(&self) -> Option<CancelToken> {
+        self.cancel_elsewhere
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_cancel_elsewhere(&self, token: Option<CancelToken>) {
+        *self
+            .cancel_elsewhere
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = token;
     }
 
     /// 서버 요청 하나를 「도는 중」 으로 표시하고 기다린다.
@@ -129,22 +159,52 @@ fn aborts(error: &DbError) -> bool {
     error.code.is_some()
 }
 
-/// 연결을 쥐고 명령을 받는다. 닫히면(또는 trait 쪽이 사라지면) 쉬는 연결은 풀에 돌려주고, 트랜잭션이 열린 연결은 풀에서 떼어 닫는다 —
-/// DB 가 그 트랜잭션을 롤백한다.
-pub(crate) async fn run(mut object: Object, mut commands: Commands, shared: Arc<Shared>) {
+/// 연결을 쥐고 명령을 받는다. 닫히면(또는 trait 쪽이 사라지면) 쉬는 연결은 풀에 돌려주고, 트랜잭션이 열린 연결 · 블록 여부를
+/// 확인하지 못한 연결은 풀에서 떼어 닫는다 — DB 가 그 트랜잭션을 롤백한다.
+pub(crate) async fn run(
+    mut object: Object,
+    mut commands: Commands,
+    shared: Arc<Shared>,
+    pool: Pool,
+) {
     let mut pending: Option<Command> = None;
+    // 닫기의 답은 연결을 풀에 돌려주거나 떼어 닫은 **뒤에** 보낸다 — 부른 쪽이 곧바로 다음 탭을 열면 같은 연결을 받는다.
+    let mut closing: Option<Reply<()>> = None;
     let detach = loop {
         let Some(command) = next(&mut pending, &mut commands).await else {
-            break false;
+            break !closes_clean(&object).await;
         };
         let client: &mut Client = &mut object;
         match command {
             Command::Close(reply) => {
-                send(reply, Ok(()));
-                break false;
+                closing = Some(reply);
+                break !closes_clean(client).await;
             }
             Command::Execute(request, reply) => {
-                pending = idle_execute(client, request, reply, &mut commands, &shared).await;
+                match idle_execute(client, request, reply, &mut commands, &shared).await {
+                    IdleNext::Done => {}
+                    IdleNext::Pending(command) => pending = Some(command),
+                    IdleNext::Block => {
+                        // 거르개가 놓친 문장이 블록을 열었다. 그 블록을 사람의 트랜잭션으로 쥔다 — `BEGIN` 은 블록 안이라
+                        // 서버가 경고(25001)만 내고 아무것도 바꾸지 않는다.
+                        // 블록이 이미 실패했으면(롤백만 된다) 포털이 필요 없으니 연결로 바로 쥔다.
+                        if shared.state() == TransactionState::Failed {
+                            if let Some(reply) = hold_failed(client, &mut commands, &shared).await {
+                                closing = reply;
+                                break true;
+                            }
+                            continue;
+                        }
+                        let Ok(tx) = client.transaction().await else {
+                            // 블록을 쥘 수 없다 — 풀에 돌려주지 않고 닫는다(DB 가 롤백한다). 다음 명령은 끊김으로 답한다.
+                            break true;
+                        };
+                        if let Some(reply) = hold(tx, &mut commands, &shared, &pool).await {
+                            closing = reply;
+                            break true;
+                        }
+                    }
+                }
             }
             Command::Begin(options, reply) => {
                 let started = shared
@@ -165,31 +225,9 @@ pub(crate) async fn run(mut object: Object, mut commands: Commands, shared: Arc<
                 };
                 shared.set(TransactionState::InTransaction);
                 send(reply, Ok(()));
-                match manual(&tx, &mut commands, &shared).await {
-                    End::Commit(reply) => {
-                        // 실패한 트랜잭션의 COMMIT 은 서버가 롤백으로 끝낸다(오류 없이). COMMIT 이 오류면(지연 제약 등) 서버가 트랜잭션
-                        // 전체를 되돌렸다 — `rolled_back` 으로 알린다. 어느 쪽이든 트랜잭션은 끝났다.
-                        let result = shared
-                            .busy(async { pg(tx.commit().await) })
-                            .await
-                            .map_err(DbError::with_rolled_back);
-                        shared.set(TransactionState::Idle);
-                        send(reply, result);
-                    }
-                    End::Rollback(reply) => {
-                        let result = shared.busy(async { pg(tx.rollback().await) }).await;
-                        shared.set(TransactionState::Idle);
-                        send(reply, result);
-                    }
-                    End::Close(reply) => {
-                        drop(tx);
-                        send(reply, Ok(()));
-                        break true;
-                    }
-                    End::Hangup => {
-                        drop(tx);
-                        break true;
-                    }
+                if let Some(reply) = hold(tx, &mut commands, &shared, &pool).await {
+                    closing = reply;
+                    break true;
                 }
             }
             Command::Fetch(_, reply) => send(reply, Err(invalid("no open cursor"))),
@@ -201,7 +239,7 @@ pub(crate) async fn run(mut object: Object, mut commands: Commands, shared: Arc<
                 send(reply, Err(invalid("savepoints need an open transaction")));
             }
             Command::Meta(request, reply) => {
-                let result = meta::run(client, request, &shared).await;
+                let result = shared.busy(meta::run(client, request, &shared)).await;
                 send(reply, result);
             }
         }
@@ -209,7 +247,135 @@ pub(crate) async fn run(mut object: Object, mut commands: Commands, shared: Arc<
     shared.set(TransactionState::Idle);
     if detach {
         drop(Object::take(object));
+    } else {
+        drop(object);
     }
+    if let Some(reply) = closing {
+        send(reply, Ok(()));
+    }
+}
+
+/// 쉬는 연결을 풀에 돌려줘도 되는가 — 서버가 트랜잭션 블록 밖이라고 답할 때만.
+async fn closes_clean(client: &Client) -> bool {
+    matches!(block_state(client).await, Ok(TransactionState::Idle))
+}
+
+/// 서버의 트랜잭션 블록 상태. `set_config(…, is_local => true)` 는 블록 밖이면 그 문장의 암묵 트랜잭션과 함께 사라지고 블록
+/// 안에서만 다음 문장까지 남는다 — 두 문장으로 그것을 본다. 오류 없이 답하므로 서버 로그에 오류가 쌓이지 않는다(블록 안에서만
+/// 실패하는 문장(`SAVEPOINT`)을 쓰면 자동 커밋 문장마다 서버 로그에 ERROR 가 남는다). 실패한 블록이면 첫 문장이 25P02 다. 블록
+/// 안이면 이 설정은 그 블록이 끝날 때 사라진다.
+pub(crate) async fn block_state(client: &Client) -> DbResult<TransactionState> {
+    let (set, read) = tokio::join!(
+        client.batch_execute("SELECT pg_catalog.set_config('pitwall.block_probe', 'in', true)"),
+        client.query_one(
+            "SELECT pg_catalog.current_setting('pitwall.block_probe', true)",
+            &[]
+        )
+    );
+    if let Err(error) = set {
+        let error = db_error(&error);
+        return match error.code.as_deref() {
+            Some("25P02") => Ok(TransactionState::Failed),
+            _ => Err(error),
+        };
+    }
+    let value: Option<String> = pg(pg(read)?.try_get(0))?;
+    Ok(if value.as_deref() == Some("in") {
+        TransactionState::InTransaction
+    } else {
+        TransactionState::Idle
+    })
+}
+
+/// 사람의 트랜잭션을 끝날 때까지 쥔다. 탭이 닫혔으면 `Some`(안에 닫기의 답 — 사라졌으면 `None`): 연결을 풀에서 떼어 닫는다(DB 가
+/// 롤백한다).
+async fn hold(
+    tx: Transaction<'_>,
+    commands: &mut Commands,
+    shared: &Shared,
+    pool: &Pool,
+) -> Option<Option<Reply<()>>> {
+    shared.set(TransactionState::InTransaction);
+    match manual(&tx, commands, shared, pool).await {
+        End::Commit(reply) => {
+            let failed = shared.state() == TransactionState::Failed;
+            // COMMIT 이 오류면(지연 제약 등) 서버가 트랜잭션 전체를 되돌렸다. 실패한 트랜잭션의 COMMIT 은 서버가 오류 없이
+            // 롤백으로 끝낸다 — 그 사실 그대로 `rolled_back` 오류로 알린다(성공으로 보이지 않게, 결정 M3-D21).
+            let result = shared
+                .busy(async { pg(tx.commit().await) })
+                .await
+                .map_err(DbError::with_rolled_back)
+                .and_then(|()| if failed { Err(failed_commit()) } else { Ok(()) });
+            shared.set(TransactionState::Idle);
+            send(reply, result);
+            None
+        }
+        End::Rollback(reply) => {
+            let result = shared.busy(async { pg(tx.rollback().await) }).await;
+            shared.set(TransactionState::Idle);
+            send(reply, result);
+            None
+        }
+        End::Close(reply) => {
+            drop(tx);
+            Some(Some(reply))
+        }
+        End::Hangup => Some(None),
+    }
+}
+
+/// 실패한 트랜잭션에 `commit` 을 부른 답.
+fn failed_commit() -> DbError {
+    DbError::new(
+        pw_db_types::DbErrorKind::Server,
+        "the transaction had failed, so COMMIT rolled it back",
+    )
+    .with_code("25P02")
+    .with_rolled_back()
+}
+
+/// 이미 실패한 숨은 블록(롤백만 된다)을 끝날 때까지 쥔다 — 포털 · 문장은 쓸 수 없으니 연결로 `COMMIT` · `ROLLBACK` 만 보낸다.
+async fn hold_failed(
+    client: &Client,
+    commands: &mut Commands,
+    shared: &Shared,
+) -> Option<Option<Reply<()>>> {
+    shared.set(TransactionState::Failed);
+    loop {
+        let Some(command) = commands.recv().await else {
+            return Some(None);
+        };
+        match command {
+            Command::Commit(reply) => {
+                let result = pg(client.batch_execute("COMMIT").await).and(Err(failed_commit()));
+                shared.set(TransactionState::Idle);
+                send(reply, result);
+                return None;
+            }
+            Command::Rollback(reply) => {
+                let result = pg(client.batch_execute("ROLLBACK").await);
+                shared.set(TransactionState::Idle);
+                send(reply, result);
+                return None;
+            }
+            Command::Close(reply) => return Some(Some(reply)),
+            Command::Execute(_, reply) => send(reply, Err(aborted())),
+            Command::Fetch(_, reply) => send(reply, Err(invalid("no open cursor"))),
+            Command::Discard(reply) => send(reply, Ok(())),
+            Command::Begin(_, reply) | Command::Savepoint(_, _, reply) => {
+                send(reply, Err(aborted()))
+            }
+            Command::Meta(_, reply) => send(reply, Err(aborted())),
+        }
+    }
+}
+
+fn aborted() -> DbError {
+    DbError::new(
+        pw_db_types::DbErrorKind::Server,
+        "current transaction is aborted, commands ignored until end of transaction block",
+    )
+    .with_code("25P02")
 }
 
 async fn next(pending: &mut Option<Command>, commands: &mut Commands) -> Option<Command> {
@@ -227,7 +393,12 @@ enum End {
 }
 
 /// 사람이 연 트랜잭션 안.
-async fn manual(tx: &Transaction<'_>, commands: &mut Commands, shared: &Shared) -> End {
+async fn manual(
+    tx: &Transaction<'_>,
+    commands: &mut Commands,
+    shared: &Shared,
+    pool: &Pool,
+) -> End {
     let mut pending: Option<Command> = None;
     loop {
         let Some(command) = next(&mut pending, commands).await else {
@@ -256,15 +427,30 @@ async fn manual(tx: &Transaction<'_>, commands: &mut Commands, shared: &Shared) 
             }
             Command::Fetch(_, reply) => send(reply, Err(invalid("no open cursor"))),
             Command::Discard(reply) => send(reply, Ok(())),
-            Command::Meta(request, reply) => {
-                let result = meta::run(tx.client(), request, shared).await;
-                if result.as_ref().is_err_and(aborts) {
-                    shared.set(TransactionState::Failed);
-                }
+            Command::Meta(MetaRequest::Explain(sql), reply) => {
+                // 실행 계획은 사람의 트랜잭션이 보는 것을 봐야 한다 — 같은 연결, 세이브포인트 안. 실패해도 트랜잭션은 그대로다.
+                let result = shared
+                    .busy(meta::explain_in_savepoint(tx.client(), &sql))
+                    .await
+                    .map(MetaResponse::Explain);
                 send(reply, result);
+            }
+            Command::Meta(request, reply) => {
+                // 사람의 트랜잭션 밖(풀의 다른 연결)에서 — 실패가 사람의 트랜잭션을 깨지 않는다.
+                send(reply, elsewhere(pool, request, shared).await);
             }
         }
     }
+}
+
+/// 메타데이터를 풀의 다른 연결로. 그동안 인터럽트는 그 연결을 멈춘다.
+async fn elsewhere(pool: &Pool, request: MetaRequest, shared: &Shared) -> DbResult<MetaResponse> {
+    let object = pool.get().await.map_err(pool_error)?;
+    object.clear_type_cache();
+    shared.set_cancel_elsewhere(Some(object.cancel_token()));
+    let result = shared.busy(meta::run(&object, request, shared)).await;
+    shared.set_cancel_elsewhere(None);
+    result
 }
 
 /// 문장을 준비하고 바인드 값을 맞춘다. 서버에 닿기 전 거절(트랜잭션 문장 · 바인드 값)은 트랜잭션을 건드리지 않는다.
@@ -273,7 +459,9 @@ async fn prepare(
     request: &ExecuteRequest,
     shared: &Shared,
 ) -> DbResult<(Statement, Vec<value::TextParam>)> {
-    if let Some(why) = control::refused(&request.sql) {
+    if !shared.skip_filter.load(Ordering::SeqCst)
+        && let Some(why) = control::refused(&request.sql)
+    {
         return Err(invalid(why));
     }
     let statement = shared
@@ -315,33 +503,58 @@ fn ended(rows_affected: u64) -> StatementStarted {
     }
 }
 
-/// 자동 커밋 탭의 문장. 남은 명령(커서가 열린 채 온 다른 명령)이 있으면 돌려준다.
+/// 자동 커밋 문장 뒤에 할 일.
+enum IdleNext {
+    Done,
+    /// 커서가 열린 채 온 다른 명령.
+    Pending(Command),
+    /// 문장이 서버에 트랜잭션 블록을 열었다(거르개가 놓쳤다) — 그 블록을 사람의 트랜잭션으로 쥔다.
+    Block,
+}
+
+/// 자동 커밋 탭의 문장.
 async fn idle_execute(
     client: &mut Client,
     request: ExecuteRequest,
     reply: Reply<StatementStarted>,
     commands: &mut Commands,
     shared: &Shared,
-) -> Option<Command> {
+) -> IdleNext {
     let (statement, params) = match prepare(client, &request, shared).await {
         Ok(prepared) => prepared,
         Err(e) => {
             send(reply, Err(e));
-            return None;
+            return IdleNext::Done;
         }
     };
     if statement.columns().is_empty() {
         let result = shared
             .busy(async { pg(client.execute_raw(&statement, &params).await) })
             .await;
+        // 행을 돌려주지 않는 문장만 블록을 열 수 있다(`BEGIN` 류). 블록이 열렸으면 답하기 전에 상태를 맞춘다 — 부른 쪽이 답을 받은
+        // 뒤 `transaction_state` 를 보면 「트랜잭션 열림」 이다. 물을 수 없으면 그 오류를 답에 싣는다(연결이 끊긴 것이다).
+        let next = match &result {
+            Ok(_) => match block_state(client).await {
+                Ok(TransactionState::Idle) => IdleNext::Done,
+                Ok(state) => {
+                    shared.set(state);
+                    IdleNext::Block
+                }
+                Err(e) => {
+                    send(reply, Err(e));
+                    return IdleNext::Done;
+                }
+            },
+            Err(_) => IdleNext::Done,
+        };
         send(reply, result.map(ended));
-        return None;
+        return next;
     }
     let tx = match shared.busy(async { pg(client.transaction().await) }).await {
         Ok(tx) => tx,
         Err(e) => {
             send(reply, Err(e));
-            return None;
+            return IdleNext::Done;
         }
     };
     let portal = match shared
@@ -351,8 +564,8 @@ async fn idle_execute(
         Ok(portal) => portal,
         Err(e) => {
             let _ = tx.rollback().await;
-            send(reply, Err(e));
-            return None;
+            send(reply, Err(binary_hint(e, &statement)));
+            return IdleNext::Done;
         }
     };
     send(
@@ -380,14 +593,63 @@ async fn idle_execute(
                 Ok(()) => drop(commit(tx, shared).await),
                 Err(_) => drop(tx.rollback().await),
             }
-            return Some(command);
+            return IdleNext::Pending(command);
         }
         CursorEnd::Hangup(discarded) => match discarded {
             Ok(()) => drop(commit(tx, shared).await),
             Err(_) => drop(tx.rollback().await),
         },
     }
-    None
+    IdleNext::Done
+}
+
+/// 결과 열에 바이너리 send 함수가 없는 타입(`aclitem` 등)이 있으면 서버는 Bind · Execute 를 42883 으로 거절한다 —
+/// `tokio-postgres` 는 모든 열을 바이너리로 요구하므로 드라이버가 텍스트로 바꿔 받을 수 없다(14 §3 이월). 어느 열 · 어느 타입이
+/// 문제인지와 `::text` 로 바꿔 다시 실행하라는 힌트를 싣는다. 문장은 돌지 않았다(포털을 시작하기 전에 거절된다).
+fn binary_hint(mut error: DbError, statement: &Statement) -> DbError {
+    const PREFIX: &str = "no binary output function available for type ";
+    if error.code.as_deref() != Some("42883") || !error.message.starts_with(PREFIX) {
+        return error;
+    }
+    let ty = error.message[PREFIX.len()..]
+        .split(['\n', ' '])
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let columns: Vec<(&str, String)> = statement
+        .columns()
+        .iter()
+        .filter(|c| {
+            let element = match c.type_().kind() {
+                tokio_postgres::types::Kind::Array(element) => element.name(),
+                _ => c.type_().name(),
+            };
+            element == ty
+        })
+        .map(|c| (c.name(), value::type_name(c.type_())))
+        .collect();
+    let casts = columns
+        .iter()
+        .map(|(name, _)| format!("{}::text", quote_ident(name)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let named = columns
+        .iter()
+        .map(|(name, ty)| format!("{name} (type {ty})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    error.message = if columns.is_empty() {
+        format!(
+            "PostgreSQL cannot send type {ty} in binary, which this driver reads — cast that value to text (`…::text`) and run again\n{}",
+            error.message
+        )
+    } else {
+        format!(
+            "PostgreSQL cannot send column {named} in binary, which this driver reads — select {casts} instead and run again\n{}",
+            error.message
+        )
+    };
+    error
 }
 
 async fn commit(tx: Transaction<'_>, shared: &Shared) -> DbResult<()> {
@@ -436,7 +698,7 @@ async fn manual_execute(
         Ok(portal) => portal,
         Err(e) => {
             fail(&e);
-            send(reply, Err(e));
+            send(reply, Err(binary_hint(e, &statement)));
             return None;
         }
     };
@@ -516,7 +778,7 @@ async fn cursor(
                             buffered.extend(rows);
                             end = done;
                         }
-                        Err(e) => return CursorEnd::Failed(reply, e),
+                        Err(e) => return CursorEnd::Failed(reply, binary_hint(e, statement)),
                     }
                 }
                 let rows = take(&mut buffered, limit);

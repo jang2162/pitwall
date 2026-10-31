@@ -40,16 +40,34 @@ pub(crate) fn is_rollback_to(sql: &str) -> bool {
     }
 }
 
-/// 앞 낱말 `n` 개(대문자). 공백 · `--` 주석 · `/* */`(겹침 포함) 주석을 건너뛰고, 낱말이 아닌 글자에서 멈춘다.
+/// PG 렉서(`scan.l`)의 공백: `[ \t\n\r\f\v]`. `char::is_ascii_whitespace` 는 `\v` 를 빼므로 쓰지 않는다 — 서버가 공백으로 보는 글자를
+/// 거르개가 낱말 밖의 글자로 보면 `"\x0bBEGIN"` 이 낱말 0개로 지나가 서버에서 `BEGIN` 이 된다(M3-06 리뷰 H1).
+fn is_pg_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0c | 0x0b)
+}
+
+/// PG 식별자의 첫 글자 `[A-Za-z\200-\377_]` 와 이어지는 글자(`$` · 숫자 더함).
+fn is_ident_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_' || b >= 0x80
+}
+
+fn is_ident_cont(b: u8) -> bool {
+    is_ident_start(b) || b.is_ascii_digit() || b == b'$'
+}
+
+/// 앞 낱말 `n` 개(ASCII 대문자). PG 렉서와 같게 읽는다: 공백([`is_pg_space`]), `--` 주석은 `\n` **또는 `\r`** 에서 끝나고, `/* */` 는
+/// 겹친다. 첫 낱말 앞의 `;` 는 빈 문장이라 건너뛴다(PG 는 `";BEGIN"` 을 `BEGIN` 하나로 읽는다). 식별자는 PG 처럼 높은 바이트 · `$` ·
+/// 숫자까지 한 낱말이다 — `BEGIN$x` · `BEGIN` 뒤에 붙은 한글은 키워드가 아니다(서버도 식별자로 읽어 문법 오류다). 그 밖의 글자에서 멈춘다.
 fn leading_words(sql: &str, n: usize) -> Vec<String> {
     let bytes = sql.as_bytes();
     let mut i = 0;
     let mut words = Vec::new();
     while words.len() < n && i < bytes.len() {
         match bytes[i] {
-            b if b.is_ascii_whitespace() => i += 1,
+            b if is_pg_space(b) => i += 1,
+            b';' if words.is_empty() => i += 1,
             b'-' if bytes.get(i + 1) == Some(&b'-') => {
-                while i < bytes.len() && bytes[i] != b'\n' {
+                while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
                     i += 1;
                 }
             }
@@ -70,12 +88,13 @@ fn leading_words(sql: &str, n: usize) -> Vec<String> {
                     }
                 }
             }
-            b if b.is_ascii_alphabetic() || b == b'_' => {
+            b if is_ident_start(b) => {
                 let start = i;
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                while i < bytes.len() && is_ident_cont(bytes[i]) {
                     i += 1;
                 }
-                words.push(sql[start..i].to_ascii_uppercase());
+                // 높은 바이트는 UTF-8 글자 중간에서 끊기지 않는다(이어지는 바이트도 높은 바이트다).
+                words.push(String::from_utf8_lossy(&bytes[start..i]).to_ascii_uppercase());
             }
             _ => break,
         }
@@ -101,6 +120,15 @@ mod tests {
             "rollback and chain",
             "ROLLBACK WORK",
             "  -- note\n /* a /* nested */ comment */ COMMIT;",
+            // PG 렉서와 같게(M3-06 리뷰 H1): \v · \f 는 공백, `--` 주석은 \r 에서도 끝난다, 앞의 빈 문장 `;`.
+            "\x0bBEGIN",
+            "\x0cBEGIN",
+            "-- note\rBEGIN",
+            "-- note\r\nCOMMIT",
+            ";BEGIN",
+            " ; ;\tCOMMIT",
+            "/* a /* b */ c */BEGIN",
+            "\x0b-- x\r/* y */\x0cROLLBACK",
         ] {
             assert!(refused(sql).is_some(), "{sql}");
         }
@@ -123,6 +151,11 @@ mod tests {
             "SELECT 'BEGIN'",
             "/* BEGIN */ SELECT 1",
             "starter_table",
+            // 서버도 키워드가 아니라 식별자로 읽는다(문법 오류) — 거르개가 막지 않아도 서버에서 BEGIN 이 되지 않는다.
+            "BEGIN$x",
+            "BEGIN한",
+            "\u{3000}BEGIN",
+            "SELECT 1; BEGIN",
             "",
         ] {
             assert_eq!(refused(sql), None, "{sql}");

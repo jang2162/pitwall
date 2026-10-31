@@ -7,9 +7,11 @@
 //! - 연결 하나 = 그 연결을 쥔 태스크 하나(`session`): 포털 행 스트림 · 자동 커밋 / 수동 트랜잭션 · 커서 버리기.
 //! - 값 변환(결정 M3-D8)은 `value`, 메타데이터 · 실행 계획은 `meta`, 취소는 [`PgInterrupt`](와이어 CancelRequest).
 //!
-//! **풀**: 설정(대상 · 사용자 · 비밀 · TLS · 연결 시간)마다 풀 하나. 세션 연결도 풀에서 꺼낸다. 닫을 때 쉬는 연결은 풀로 돌아가
-//! 다음에 꺼낼 때 세션 상태를 지운다(`RecyclingMethod::Clean` — `RESET ALL` · `DISCARD TEMP` …). 트랜잭션이 열린 채 닫힌 연결은
-//! 풀에서 떼어 닫는다(DB 가 롤백한다). 5분 넘게 쉰 연결은 다음 `connect` 때 닫는다. 연결 테스트는 풀을 쓰지 않는다 — 저장하지 않은
+//! **풀**: 설정(대상 · 사용자 · 비밀 · TLS · 연결 시간)마다 풀 하나. 세션 연결도 풀에서 꺼낸다. 닫을 때 서버가 트랜잭션 블록 밖이라고
+//! 답한 쉬는 연결만 풀로 돌아가고, 다음에 꺼낼 때 `DISCARD ALL` 로 세션 상태를 모두 지운다(`RESET ALL` · `DEALLOCATE ALL` — 사람의
+//! `PREPARE` 가 다음 탭에 넘어가지 않는다 · `DISCARD TEMP` …). `DISCARD ALL` 은 트랜잭션 블록 안에서 실패하므로 그래도 블록이 열린
+//! 연결이 돌아왔으면 풀이 그 연결을 버린다. `DEALLOCATE ALL` 이 `tokio-postgres` 가 캐시한 타입 조회 문장도 지우므로 꺼낼 때마다
+//! `clear_type_cache` 한다. 트랜잭션이 열린 채 닫힌 연결은 풀에서 떼어 닫는다(DB 가 롤백한다). 5분 넘게 쉰 연결은 다음 `connect` 때 닫는다. 연결 테스트는 풀을 쓰지 않는다 — 저장하지 않은
 //! 초안의 비밀로 연 연결을 남기지 않는다.
 //!
 //! 실 DB 시험은 `#[cfg(pw_live_pg)]` 를 달고 이름에 `live_pg` 를 넣는다(`pw_db_driver::live` 머리 주석) — `src/live_tests.rs`.
@@ -78,6 +80,7 @@ impl PgDriver {
             let pool = self.pool(spec, mode, &config, &tls)?;
             match pool.get().await.map_err(pool_error) {
                 Ok(object) => {
+                    object.clear_type_cache();
                     let (server, database) = match startup(&object, &plan).await {
                         Ok(found) => found,
                         Err(e) => {
@@ -92,7 +95,7 @@ impl PgDriver {
                         shared: shared.clone(),
                     });
                     let (commands, receiver) = mpsc::unbounded_channel();
-                    tokio::spawn(session::run(object, receiver, shared.clone()));
+                    tokio::spawn(session::run(object, receiver, shared.clone(), pool.clone()));
                     return Ok((
                         PgConnection {
                             commands,
@@ -134,7 +137,7 @@ impl PgDriver {
             config.clone(),
             tls.clone(),
             ManagerConfig {
-                recycling_method: RecyclingMethod::Clean,
+                recycling_method: RecyclingMethod::Custom("DISCARD ALL".to_owned()),
             },
         );
         let pool = Pool::builder(manager)
@@ -343,7 +346,12 @@ impl Interrupt for PgInterrupt {
             if !self.shared.running.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            self.token
+            // 메타데이터가 풀의 다른 연결에서 돌고 있으면 그 연결을 멈춘다.
+            let token = self
+                .shared
+                .cancel_elsewhere()
+                .unwrap_or_else(|| self.token.clone());
+            token
                 .cancel_query(self.tls.clone())
                 .await
                 .map_err(|e| db_error(&e))
@@ -376,6 +384,12 @@ impl PgConnection {
     }
 
     /// 시험: 서버의 텍스트 출력 되돌려 받기를 일부러 실패시킨다.
+    /// 시험: 트랜잭션 문장 거르개를 건너뛴다(거르개가 놓친 경우의 겹방어를 본다).
+    #[cfg(all(test, pw_live_pg))]
+    pub(crate) fn skip_statement_filter(&self, skip: bool) {
+        self.shared.skip_filter.store(skip, Ordering::SeqCst);
+    }
+
     #[cfg(all(test, pw_live_pg))]
     pub(crate) fn fail_text_output(&self, fail: bool) {
         self.shared.text_fault.store(fail, Ordering::SeqCst);
