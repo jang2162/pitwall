@@ -12,6 +12,9 @@
 //   (M3-16 리뷰: 앞 결과의 필터가 다음 결과에 걸려 「0 / N」 으로 보였다). 정렬 · 필터 자체는 버퍼의 것이라 그 결과로 돌아가면
 //   그대로 보인다. 결과와 무관한 것(셀 상세 패널을 열어 두었는가)만 바깥 `ResultView` 에 둔다 — 새 상태를 더할 때는 `ResultBody`
 //   에 둔다.
+// - 테이블 데이터(M3-17)가 쓰는 가산 이음매(넘기지 않으면 지금 그대로): `onActivate`(셀 더블클릭 · ↩ — 기본은 셀 상세),
+//   `cellMark` · `onCellClick`(glide-grid.tsx), `localFilter: false`(보유 행 필터 막대를 숨긴다 — 서버의 WHERE 를 쓰는 화면),
+//   `gridRef`(그리드 핸들 — 고르기 · 셀 사각형), `onCursor`(지금 칸).
 // - 「다른 형식으로 복사」 는 Host 의 클립보드 쓰기로 쓴다(clipboard.ts — 비동기 뒤의 `navigator.clipboard.writeText` 는 WebKit
 //   이 거절할 수 있다).
 
@@ -19,6 +22,7 @@ import * as ContextMenu from "@radix-ui/react-context-menu";
 import type { ObjectRef, RpcClient, SqlDialect } from "@pitwall/rpc-client";
 import {
   type KeyboardEvent,
+  type MutableRefObject,
   type ReactNode,
   useCallback,
   useEffect,
@@ -33,7 +37,7 @@ import { useTheme } from "../../theme/theme-switcher";
 import { CellDetail } from "./cell-detail";
 import { writeClipboardText } from "./clipboard";
 import { COPY_FORMATS, type CopyFormat, CopyRefused, formatBlock } from "./copy";
-import { ResultGrid, type ResultGridHandle } from "./glide-grid";
+import { type GridCellMark, ResultGrid, type ResultGridHandle } from "./glide-grid";
 import { clearActiveGrid, type GridTarget, setActiveGrid } from "./grid-focus";
 import { gridColors } from "./grid-theme";
 import type { ResultBuffer } from "./result-buffer";
@@ -51,6 +55,18 @@ export interface ResultViewProps {
   writeClipboard?: (text: string) => Promise<void>;
   /** 막대 오른쪽에 붙일 것(콘솔의 결과 탭 단추 등). */
   toolbar?: ReactNode;
+  /** 셀 더블클릭 · ↩. 없으면 그 셀의 상세 패널을 연다. */
+  onActivate?: (cell: { row: number; column: number }) => void;
+  /** 편집 대기 표지(glide-grid.tsx `cellMark`). */
+  cellMark?: (row: number, column: number) => GridCellMark | undefined;
+  /** 셀 클릭(glide-grid.tsx `onCellClick`). */
+  onCellClick?: (cell: { row: number; column: number }, modifiers: { mod: boolean }) => void;
+  /** 보유한 행 위의 필터 막대를 두는가(기본 `true`). */
+  localFilter?: boolean;
+  /** 그리드 핸들을 받는다. */
+  gridRef?: MutableRefObject<ResultGridHandle | null>;
+  /** 지금 칸이 바뀌었다. */
+  onCursor?: (cell: { row: number; column: number } | undefined) => void;
 }
 
 function useVersion(buffer: ResultBuffer) {
@@ -212,6 +228,12 @@ function ResultBody({
   notify,
   writeClipboard,
   toolbar,
+  onActivate,
+  cellMark,
+  onCellClick,
+  localFilter = true,
+  gridRef,
+  onCursor,
   detail,
   setDetail,
 }: ResultViewProps & { detail: boolean; setDetail: (open: boolean) => void }) {
@@ -294,7 +316,7 @@ function ResultBody({
       onFocus={() => setActiveGrid(target)}
     >
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-ui-border px-2">
-        <FilterBar buffer={buffer} T={T} />
+        {localFilter && <FilterBar buffer={buffer} T={T} />}
         <span className="flex-1" />
         {toolbar}
         <button
@@ -337,13 +359,22 @@ function ResultBody({
           <ContextMenu.Trigger asChild>
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               <ResultGrid
-                ref={grid}
+                ref={(handle) => {
+                  grid.current = handle;
+                  if (gridRef) gridRef.current = handle;
+                }}
                 buffer={buffer}
                 colors={colors}
-                onCursor={setCursor}
+                cellMark={cellMark}
+                onCellClick={onCellClick}
+                onCursor={(cell) => {
+                  setCursor(cell);
+                  onCursor?.(cell);
+                }}
                 onActivate={(cell) => {
                   setCursor(cell);
-                  setDetail(true);
+                  if (onActivate) onActivate(cell);
+                  else setDetail(true);
                 }}
               />
             </div>

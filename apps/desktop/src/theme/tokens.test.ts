@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { opaqueOver } from "../db/grid/grid-theme";
 import { documentThemeApplier } from "./adapters";
 import defaultThemeFile from "../../../../extensions/theme-default/themes/default.json";
 import {
@@ -239,6 +240,33 @@ describe("grid tokens (M3-16)", () => {
         }
     }
     expect(short).toEqual([]);
+  });
+});
+
+describe("grid edit marks (M3-17)", () => {
+  // 테이블 데이터의 편집 대기 셀(바뀐 셀 · 추가 행 · 지울 행)은 diff 토큰을 그리드 배경 위에 섞은 색(grid-theme.ts `opaqueOver`)을
+  // 배경으로 두고 그 위에 셀 글자 · NULL · 표지 글자를 그린다 — 새 토큰 없이 기존 토큰을 읽으므로 그 조합을 여기서 잰다.
+  const MARKS = ["diff.line.changed", "diff.line.added", "diff.line.deleted"] as const;
+
+  it("keep cell text and NULL at body-text contrast (4.5:1) on every mark background", () => {
+    const short: string[] = [];
+    for (const appearance of ["light", "dark"] as const) {
+      const values = defaultTheme.variants[appearance]!;
+      for (const mark of MARKS) {
+        const background = opaqueOver(values[mark], values["grid.background"]);
+        for (const token of ["grid.foreground", "grid.null"] as const) {
+          const ratio = contrast(values[token], background);
+          if (ratio < 4.5)
+            short.push(`${appearance} ${token} on ${mark}: ${ratio.toFixed(2)} < 4.50`);
+        }
+      }
+    }
+    expect(short).toEqual([]);
+  });
+
+  it("mixes a translucent mark over the grid background into an opaque color", () => {
+    expect(opaqueOver("#ff000080", "#000000")).toBe("#800000");
+    expect(opaqueOver("#123456", "#ffffff")).toBe("#123456");
   });
 });
 

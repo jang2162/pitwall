@@ -17,6 +17,10 @@
 // - 고르기: 드래그 · ⇧+클릭(사각형), 행 번호 칸(행), 열 머리 ⌘+클릭(열). ⌘C 는 `copy` 이벤트에서 TSV 를 쓴다(Glide 의 복사는
 //   끈다 — 글은 copy.ts 가 정한다).
 // - 색: `grid.*` 토큰(grid-theme.ts). 테마 · 외관이 바뀌면 다시 칠한다.
+// - **편집 대기 표지**(테이블 데이터 M3-17 — 쓰지 않는 화면은 그대로다): `cellMark` 가 돌려준 셀은 배경색(diff 토큰을 섞은
+//   `colors.marks`) + 셀 앞 표지 글자(`MARK_GLYPHS`) + 접근성 글(「<label>: <값>」)로 그린다 — 색만으로 가르지 않는다(10-ui.md §6).
+//   `cellMark` 함수가 바뀌면 다시 칠한다(쓰는 화면이 변경마다 새 함수를 넘긴다). `onCellClick` 은 셀 클릭(⌘ · Ctrl 을 함께 —
+//   FK 따라가기), 핸들의 `bounds` 는 셀의 화면 사각형(제자리 편집 칸의 자리)이다.
 
 import "@glideapps/glide-data-grid/dist/index.css";
 
@@ -45,7 +49,7 @@ import {
 } from "react";
 
 import { toTsv } from "./copy";
-import { type GridColors, glideTheme, NULL_FONT_STYLE } from "./grid-theme";
+import { type GridCellMarkKind, type GridColors, glideTheme, NULL_FONT_STYLE } from "./grid-theme";
 import type { ResultBuffer, SortSpec } from "./result-buffer";
 import { EMPTY_PICK, type GridPick, isEmptyPick, pickBlock } from "./selection";
 import { useDbGridStrings } from "./strings";
@@ -57,7 +61,30 @@ export interface ResultGridHandle {
   /** 보이는 열 순서(보이는 → 원래 열 번호). */
   order(): readonly number[];
   focus(): void;
+  /** 셀(원래 열 번호, 보이는 행 번호)의 화면 사각형(뷰포트 기준). 열이 숨었거나 그리드가 없으면 `undefined`. */
+  bounds(cell: { row: number; column: number }): GridRect | undefined;
 }
+
+/** 화면 사각형(뷰포트 기준 px). */
+export interface GridRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** 편집 대기 표지 하나: 종류와 접근성 글의 앞말(「바뀜」 등 — 쓰는 화면의 번역). */
+export interface GridCellMark {
+  kind: GridCellMarkKind;
+  label: string;
+}
+
+/** 표지 종류마다 셀 앞에 그리는 글자. */
+export const MARK_GLYPHS: Record<GridCellMarkKind, string> = {
+  changed: "✎",
+  inserted: "+",
+  deleted: "✕",
+};
 
 export interface ResultGridProps {
   buffer: ResultBuffer;
@@ -68,6 +95,10 @@ export interface ResultGridProps {
   onCursor?: (cell: { row: number; column: number } | undefined) => void;
   /** 그리드에 포커스가 들어왔다. */
   onFocus?: () => void;
+  /** 셀(원래 열 번호, 보이는 행 번호)의 편집 대기 표지. 없으면 표지가 없다. */
+  cellMark?: (row: number, column: number) => GridCellMark | undefined;
+  /** 셀을 눌렀다(`mod` 는 ⌘ · Ctrl 을 함께 눌렀는가). */
+  onCellClick?: (cell: { row: number; column: number }, modifiers: { mod: boolean }) => void;
 }
 
 const HEADER_HEIGHT = 28;
@@ -106,7 +137,7 @@ export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(
 );
 
 const GridBody = forwardRef<ResultGridHandle, ResultGridProps>(function GridBody(
-  { buffer, colors, onActivate, onCursor, onFocus },
+  { buffer, colors, onActivate, onCursor, onFocus, cellMark, onCellClick },
   ref,
 ) {
   const T = useDbGridStrings();
@@ -139,6 +170,10 @@ const GridBody = forwardRef<ResultGridHandle, ResultGridProps>(function GridBody
       pick: () => toPick(selection),
       order: () => order,
       focus: () => editor.current?.focus(),
+      bounds: ({ row, column }) => {
+        const col = order.indexOf(column);
+        return col < 0 ? undefined : editor.current?.getBounds(col, row);
+      },
     }),
     [selection, order],
   );
@@ -171,20 +206,26 @@ const GridBody = forwardRef<ResultGridHandle, ResultGridProps>(function GridBody
       }
       const text = displayText(value);
       const isNull = value === "null";
+      const mark = src === undefined ? undefined : cellMark?.(row, src);
+      // 접근성 표가 읽는 글 — NULL 은 「NULL 값」(글자 「NULL」 과 갈린다).
+      const spoken = isNull ? T.nullValue : text;
       return {
         kind: GridCellKind.Text,
-        // 접근성 표가 읽는 글 — NULL 은 「NULL 값」(글자 「NULL」 과 갈린다).
-        data: isNull ? T.nullValue : text,
-        displayData: text,
+        data: mark ? `${mark.label}: ${spoken}` : spoken,
+        displayData: mark ? `${MARK_GLYPHS[mark.kind]} ${text}` : text,
         allowOverlay: false,
         readonly: true,
         contentAlign: isNumeric(value) ? "right" : "left",
-        themeOverride: isNull
-          ? { textDark: colors.null, baseFontStyle: NULL_FONT_STYLE }
-          : undefined,
+        themeOverride:
+          isNull || mark
+            ? {
+                ...(isNull && { textDark: colors.null, baseFontStyle: NULL_FONT_STYLE }),
+                ...(mark && { bgCell: colors.marks[mark.kind] }),
+              }
+            : undefined,
       };
     },
-    [buffer, order, viewVersion, colors.null, T.nullValue],
+    [buffer, order, viewVersion, colors.null, colors.marks, T.nullValue, cellMark],
   );
 
   const drawHeader: DrawHeaderCallback = useCallback(
@@ -275,6 +316,15 @@ const GridBody = forwardRef<ResultGridHandle, ResultGridProps>(function GridBody
     [order, onActivate],
   );
 
+  const onCellClicked = useCallback(
+    ([col, row]: Item, event: { metaKey: boolean; ctrlKey: boolean }) => {
+      const src = order[col];
+      if (src !== undefined)
+        onCellClick?.({ row, column: src }, { mod: event.metaKey || event.ctrlKey });
+    },
+    [order, onCellClick],
+  );
+
   const onCopy = useCallback(
     (e: ClipboardEvent<HTMLDivElement>) => {
       const pick = toPick(selection);
@@ -322,6 +372,7 @@ const GridBody = forwardRef<ResultGridHandle, ResultGridProps>(function GridBody
         onColumnMoved={onColumnMoved}
         onColumnResize={onColumnResize}
         onCellActivated={onCellActivated}
+        onCellClicked={onCellClick ? onCellClicked : undefined}
         keybindings={{ copy: false, paste: false, cut: false, search: false, delete: false }}
         maxColumnAutoWidth={480}
         maxColumnWidth={2000}

@@ -23,6 +23,29 @@ export interface GridColors {
   border: string;
   selection: string;
   accent: string;
+  /**
+   * 편집 대기 셀의 배경(테이블 데이터 M3-17): 바뀐 셀 · 추가 행 · 지울 행. diff 토큰(`diff.line.*` — 반투명)을 그리드 배경 위에
+   * 미리 섞은 불투명 색이다(대비를 그 색으로 잰다 — tokens.test.ts).
+   */
+  marks: Record<GridCellMarkKind, string>;
+}
+
+/** 편집 대기 표지의 종류(glide-grid.tsx 의 `cellMark`). */
+export type GridCellMarkKind = "changed" | "inserted" | "deleted";
+
+/** `#rrggbb` · `#rrggbbaa` 색을 불투명한 `base`(`#rrggbb`) 위에 섞은 불투명 `#rrggbb`. 다른 꼴이면 `color` 그대로. */
+export function opaqueOver(color: string, base: string): string {
+  const c = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(color);
+  const b = /^#([0-9a-f]{6})$/i.exec(base);
+  if (!c || !b) return color;
+  const alpha = c[2] === undefined ? 1 : parseInt(c[2], 16) / 255;
+  const channel = (hex: string, i: number) => parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  const out = [0, 1, 2].map((i) =>
+    Math.round(channel(c[1]!, i) * alpha + channel(b[1]!, i) * (1 - alpha))
+      .toString(16)
+      .padStart(2, "0"),
+  );
+  return `#${out.join("")}`;
 }
 
 export function gridColors(values: TokenValues): GridColors {
@@ -37,6 +60,11 @@ export function gridColors(values: TokenValues): GridColors {
     border: values["grid.border"],
     selection: values["grid.selection"],
     accent: values["grid.accent"],
+    marks: {
+      changed: opaqueOver(values["diff.line.changed"], values["grid.background"]),
+      inserted: opaqueOver(values["diff.line.added"], values["grid.background"]),
+      deleted: opaqueOver(values["diff.line.deleted"], values["grid.background"]),
+    },
   };
 }
 

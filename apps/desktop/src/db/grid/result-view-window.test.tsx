@@ -54,6 +54,7 @@ interface FakeProps {
   onColumnResize: (column: { id: string }, size: number) => void;
   onGridSelectionChange: (s: unknown) => void;
   onCellActivated: (cell: [number, number]) => void;
+  onCellClicked?: (cell: [number, number], e: { metaKey: boolean; ctrlKey: boolean }) => void;
   keybindings: Record<string, boolean>;
   gridSelection: { current?: unknown };
   drawHeader: (args: Record<string, unknown>) => void;
@@ -72,7 +73,15 @@ vi.mock("@glideapps/glide-data-grid", () => ({
   DataEditor: forwardRef(function FakeEditor(props: Omit<FakeProps, "mount">, ref) {
     const [mount] = useState(() => ++glide.mounts);
     glide.props.push({ ...props, mount });
-    useImperativeHandle(ref, () => ({ focus: () => {} }));
+    useImperativeHandle(ref, () => ({
+      focus: () => {},
+      getBounds: (col: number, row: number) => ({
+        x: col * 100,
+        y: row * 24,
+        width: 100,
+        height: 24,
+      }),
+    }));
     return <button type="button" data-testid="fake-glide" />;
   }),
 }));
@@ -248,6 +257,72 @@ describe("grid", () => {
     expect(nullCell.data).toBe(T.nullValue);
     expect(textCell.data).toBe("NULL");
     expect(T.nullValue).not.toBe("NULL");
+  });
+
+  it("marks pending cells by colour, glyph and spoken label only when a screen asks (M3-17), and repaints when the marks change", async () => {
+    const buffer = run([...STARTED, { kind: "rows", index: 0, rows: [["null", { text: "b" }]] }]);
+    // 쓰지 않는 화면은 그대로다.
+    await mount({ buffer });
+    expect(last().getCellContent([1, 0]).themeOverride).toBeUndefined();
+    expect(last().getCellContent([1, 0]).displayData).toBe("b");
+    await act(async () => root?.unmount());
+    const colors = gridColors(LIGHT);
+    await mount({
+      buffer,
+      cellMark: (row, column) =>
+        row === 0 && column === 1 ? { kind: "changed", label: "바뀜" } : undefined,
+    });
+    const marked = last().getCellContent([1, 0]);
+    expect(marked.themeOverride?.bgCell).toBe(colors.marks.changed);
+    expect(marked.displayData).toBe("✎ b");
+    expect(marked.data).toBe("바뀜: b");
+    // NULL 셀의 표지는 NULL 의 모양 · 접근성 글을 지우지 않는다.
+    await act(async () => root?.unmount());
+    await mount({ buffer, cellMark: () => ({ kind: "deleted", label: "지울 행" }) });
+    const deletedNull = last().getCellContent([0, 0]);
+    expect(deletedNull.themeOverride?.baseFontStyle).toMatch(/^italic /);
+    expect(deletedNull.themeOverride?.bgCell).toBe(colors.marks.deleted);
+    expect(deletedNull.data).toBe(`지울 행: ${T.nullValue}`);
+    // 셋의 색이 서로 다르고 보통 배경과도 다르다.
+    expect(new Set([colors.background, ...Object.values(colors.marks)]).size).toBe(4);
+  });
+
+  it("lets a screen take over cell activation, clicks, the filter bar and the grid handle (M3-17)", async () => {
+    const buffer = run([...STARTED, { kind: "rows", index: 0, rows: rows(3) }]);
+    const activated: unknown[] = [];
+    const clicked: unknown[] = [];
+    const gridRef = { current: null } as ResultViewProps["gridRef"] & {};
+    await mount({
+      buffer,
+      localFilter: false,
+      onActivate: (cell) => activated.push(cell),
+      onCellClick: (cell, m) => clicked.push([cell, m.mod]),
+      gridRef,
+    });
+    expect(byTestId("db-grid-filter")).toBeNull();
+    await act(async () => last().onCellActivated([1, 2]));
+    expect(activated).toEqual([{ row: 2, column: 1 }]);
+    // 셀 상세는 열리지 않았다(기본 동작을 바꿨다).
+    expect(byTestId("db-grid-detail-toggle")!.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => last().onCellClicked!([0, 1], { metaKey: true, ctrlKey: false }));
+    await act(async () => last().onCellClicked!([1, 0], { metaKey: false, ctrlKey: false }));
+    expect(clicked).toEqual([
+      [{ row: 1, column: 0 }, true],
+      [{ row: 0, column: 1 }, false],
+    ]);
+    expect(gridRef.current?.bounds({ row: 2, column: 1 })).toEqual({
+      x: 100,
+      y: 48,
+      width: 100,
+      height: 24,
+    });
+    // 넘기지 않으면 클릭 콜백을 Glide 에 걸지 않고, ↩ 은 셀 상세다.
+    await act(async () => root?.unmount());
+    await mount({ buffer });
+    expect(last().onCellClicked).toBeUndefined();
+    expect(byTestId("db-grid-filter")).not.toBeNull();
+    await act(async () => last().onCellActivated([1, 2]));
+    expect(byTestId("db-grid-detail-toggle")!.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("draws a selected column header in grid.background over grid.accent", async () => {
