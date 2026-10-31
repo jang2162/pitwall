@@ -4914,6 +4914,12 @@ export type RiskReason =
 "truncate" | 
 /**  `COPY … TO/FROM PROGRAM` — DB 서버에서 셸 명령을 돌린다. 파괴. */
 "copyProgram" | 
+/**
+ *  세션의 글 읽기를 바꾼다(PG `standard_conforming_strings` · `client_encoding`, MySQL `sql_mode` 의 `NO_BACKSLASH_ESCAPES` ·
+ *  `ANSI_QUOTES`, 백슬래시를 삼키는 문자 집합) — 그 뒤 분류기와 서버가 같은 글을 다르게 읽는다. 파괴이고 관문이 거절한다
+ *  (`reading` 모듈).
+ */
+"changesSqlReading" | 
 /**  `CREATE` · `ALTER` · `GRANT` · `REVOKE` · `COMMENT ON` · `RENAME`, PG 의 `SELECT … INTO 새 표`. */
 "ddl" | 
 /**  WHERE 없는 `UPDATE` · `DELETE`. 범위 없는 쓰기. */

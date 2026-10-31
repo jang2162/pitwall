@@ -450,7 +450,7 @@ describe("reason wording", () => {
   it("words every RiskReason distinctly in both languages, including replicationReset", async () => {
     for (const strings of [T, EN]) {
       const texts = Object.values(strings.reason);
-      expect(texts).toHaveLength(27);
+      expect(texts).toHaveLength(28);
       expect(new Set(texts).size).toBe(texts.length);
       for (const text of texts) expect(text.trim()).not.toBe("");
     }

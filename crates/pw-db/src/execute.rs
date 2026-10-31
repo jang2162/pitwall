@@ -48,7 +48,6 @@ use std::time::{Duration, Instant};
 
 use pw_db_driver::budget::{Inactivity, within};
 use pw_db_driver::{Budget, DbConnection, QueryCancel, SqlConnection};
-use pw_db_sql::risk::RiskReason;
 use pw_db_sql::split::SqlRange;
 use pw_db_sql::txn::{TxControl, plans_or_analyzes};
 use pw_db_types::{
@@ -63,7 +62,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::gate::{
     DbConfirmed, DbStatementClass, DbTxEffect, Planned, Policy, code, db_grant, grade_of, judge,
-    on_classifier_thread, plan, refuse_untranslatable, statements_hash,
+    on_classifier_thread, plan, refuse_reading_changes, refuse_untranslatable, statements_hash,
 };
 use crate::session::{
     Current, DbSession, DbSessionMode, DbSessionNotice, DbSessions, Link, Running, Step,
@@ -304,26 +303,12 @@ rpc_method! {
 /// 아님 · 세션 설정 · 트랜잭션 제어)이 하나라도 있으면 `PERMISSION_DENIED`(`data.reason = "notAQuery"`, `data.statements` 는 그
 /// 문장들), 모두 조회인데 하나가 아니면 invalid params.
 ///
-/// 서버가 고를 수 있는 읽기 가운데 분류기가 읽지 못한 것이 있는 문장([`Planned::unread_reading`] — MySQL `NO_BACKSLASH_ESCAPES`
-/// 의 읽기)도 조회가 아니다: 그 읽기를 서버만 읽으면 조회 등급의 글이 파일을 쓴다(M3-17 리뷰 X3). 일반 실행은 그 읽기를 등급에
-/// 넣지 않으므로 이 판정에서만 파싱 실패(파괴 · `unparsed`)로 싣는다.
+/// 조회인지는 read-only 연결의 판정과 같다([`Planned::is_strict_query`] — 분류기가 읽지 못한 읽기가 있는 문장도 조회가 아니다).
 fn only_one_query<'a>(planned: &'a [Planned], method: &str) -> Result<&'a Planned, RpcError> {
     let refused: Vec<DbStatementClass> = planned
         .iter()
-        .filter(|s| {
-            s.grade != RiskGrade::Read || s.settings || s.control.is_some() || s.unread_reading
-        })
-        .map(|s| {
-            if s.grade == RiskGrade::Read && s.unread_reading {
-                DbStatementClass {
-                    grade: RiskGrade::Destructive,
-                    reasons: vec![RiskReason::Unparsed],
-                    ..s.class()
-                }
-            } else {
-                s.class()
-            }
-        })
+        .filter(|s| !s.is_strict_query())
+        .map(Planned::strict_class)
         .collect();
     if !refused.is_empty() {
         return Err(RpcError::new(
@@ -433,6 +418,7 @@ impl DbSessions {
             on_classifier_thread(move || plan(dialect, &sql, selected.as_deref())).await??;
         check(&session, dialect, &planned)?;
         refuse_untranslatable(&planned)?;
+        refuse_reading_changes(&planned)?;
         if session.read_only && !session.driver.capabilities.read_only_transaction {
             return Err(RpcError::new(
                 rpc_code::PERMISSION_DENIED,

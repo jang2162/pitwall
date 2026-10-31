@@ -170,6 +170,30 @@ impl Planned {
             reasons: self.reasons.clone(),
         }
     }
+
+    /// 조회만 받는 자리(read-only 연결 · `db.query.page` · `queryOnly`)가 이 문장을 조회로 보는가. 서버가 고를 수 있는 읽기 가운데
+    /// 분류기가 읽지 못한 것이 있으면([`Planned::unread_reading`]) 조회가 아니다 — 그 읽기를 서버만 읽으면 조회 등급의 글이 파일
+    /// · 변수를 쓴다(M3-17 리뷰 X3, MySQL 의 읽기 전용 트랜잭션은 `INTO OUTFILE` · `INTO @변수` 를 막지 않는다 — M3-03b 리뷰 M1).
+    pub fn is_strict_query(&self) -> bool {
+        self.grade == RiskGrade::Read
+            && !self.settings
+            && self.control.is_none()
+            && !self.unread_reading
+    }
+
+    /// 조회만 받는 자리가 거절하며 싣는 분류. 읽지 못한 읽기 때문에 거절한 조회는 파싱 실패(파괴 · `unparsed`)로 싣는다 — 조회
+    /// 등급 그대로면 「조회인데 거절」 로 읽힌다.
+    pub fn strict_class(&self) -> DbStatementClass {
+        if self.grade == RiskGrade::Read && self.unread_reading {
+            DbStatementClass {
+                grade: RiskGrade::Destructive,
+                reasons: vec![RiskReason::Unparsed],
+                ..self.class()
+            }
+        } else {
+            self.class()
+        }
+    }
 }
 
 /// 분류 스레드의 스택. M3-03 의 입력 상한은 2 MiB 에서도 넘치지 않게 잡혀 있다 — 이것은 그 위의 겹방어다.
@@ -313,8 +337,8 @@ pub(crate) fn judge(
     if policy.read_only {
         let refused: Vec<DbStatementClass> = statements
             .iter()
-            .filter(|s| s.grade != RiskGrade::Read || s.settings || s.control.is_some())
-            .map(Planned::class)
+            .filter(|s| !s.is_strict_query())
+            .map(Planned::strict_class)
             .collect();
         if !refused.is_empty() {
             return Err(RpcError::new(
@@ -354,6 +378,26 @@ pub(crate) fn judge(
         "confirm before running these statements",
     )
     .with_data(serde_json::to_value(data).unwrap_or_default()))
+}
+
+/// 세션의 글 읽기를 바꾸는 문장([`RiskReason::ChangesSqlReading`] — PG `standard_conforming_strings` · MySQL `sql_mode` 의
+/// `NO_BACKSLASH_ESCAPES` 등)이 있으면 아무것도 돌리기 전에 거절한다(`PERMISSION_DENIED`, `data.reason = "changesSqlReading"`,
+/// `data.statements` 는 그 문장들). 확인으로 풀지 않는다 — 그 뒤 같은 세션의 글을 분류기와 서버가 다르게 읽어, 분류가 범위 있는
+/// `DELETE` 로 본 글이 범위 없이 돈다(M3-03b 리뷰 M2).
+pub(crate) fn refuse_reading_changes(statements: &[Planned]) -> Result<(), RpcError> {
+    let refused: Vec<DbStatementClass> = statements
+        .iter()
+        .filter(|s| s.reasons.contains(&RiskReason::ChangesSqlReading))
+        .map(Planned::class)
+        .collect();
+    if refused.is_empty() {
+        return Ok(());
+    }
+    Err(RpcError::new(
+        rpc_code::PERMISSION_DENIED,
+        "this statement changes how the server reads SQL text, so Pitwall's classification would no longer hold",
+    )
+    .with_data(json!({ "reason": "changesSqlReading", "statements": refused })))
 }
 
 /// 메서드로 옮길 수 없는 트랜잭션 제어 문장(`PREPARE TRANSACTION` · 옮기지 못하는 옵션)이 있으면 아무것도 돌리기 전에 거절한다.

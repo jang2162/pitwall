@@ -84,6 +84,7 @@ db-reason-too-deep = Nested too deeply to analyze, so it counts as destructive
 db-reason-drop = Drops an object, a column or a partition
 db-reason-truncate = Deletes every row of a table
 db-reason-copy-program = Runs a shell command on the database server
+db-reason-changes-sql-reading = Changes how the server reads SQL text (strings, backslashes, character set); it does not run
 db-reason-ddl = Creates or changes schema objects or privileges
 db-reason-missing-where = Has no WHERE, so every row changes
 db-reason-unbounded-where = Its WHERE does not limit the rows (always true, or a subquery)
@@ -112,6 +113,7 @@ db-refusal-read-only-connection = This connection is read-only and only runs que
 db-refusal-untrusted = This project is not trusted, so it does not connect to databases. Trust the project, then connect again
 db-refusal-not-project-window = A database connection is used only from its project's window
 db-refusal-not-a-query = Only a single query runs here; the statement did not run
+db-refusal-changes-sql-reading = This statement changes how the server reads SQL text, so the risk classification would no longer hold; it did not run
 # $message: the Host's reason
 db-refusal-transaction-statement = This transaction statement cannot run: { $message }
 db-refusal-busy = Another run is still going in this tab

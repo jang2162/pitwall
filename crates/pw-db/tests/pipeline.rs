@@ -905,6 +905,72 @@ async fn query_only_refuses_a_mysql_reading_the_classifier_could_not_read() {
     );
 }
 
+/// M3-03b 리뷰 M1: read-only MySQL 연결의 일반 실행도 분류기가 읽지 못한 읽기가 있는 조회를 거절한다(`readOnlyConnection`, 그
+/// 문장은 파괴 · `unparsed`) — MySQL 의 읽기 전용 트랜잭션은 `INTO OUTFILE` 을 막지 않는다. 드라이버는 부르지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_only_mysql_connection_refuses_a_reading_the_classifier_could_not_read() {
+    let e = env(true);
+    e.f.write_db(
+        "myro.toml",
+        "schema = 1\nname = \"myro\"\ndriver = \"mysql\"\nhost = \"localhost\"\nread_only = true\n",
+    );
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "myro").await;
+    let before = e.my.calls().len();
+    let sql = r#"SELECT * FROM t WHERE name = 'a\' OR id = 1 INTO OUTFILE "/var/lib/mysql-files/x.txt" -- '"#;
+    let err = run(&mut w, exec(&s, sql)).await.unwrap_err();
+    assert!(denied(&err), "{err:?}");
+    assert_eq!(reason(&err), Some("readOnlyConnection"));
+    let data = err.data.as_ref().unwrap();
+    assert_eq!(data["statements"][0]["reasons"], json!(["unparsed"]));
+    assert_eq!(e.my.calls().len(), before, "{:?}", &e.my.calls()[before..]);
+}
+
+/// M3-03b 리뷰 M2: 세션의 글 읽기를 바꾸는 문장은 어느 연결에서도 · 확인을 실어도 돌지 않는다(`changesSqlReading`). 리뷰의 재현
+/// (`SET standard_conforming_strings = off; DELETE … 숨김`)은 앞 문장 때문에 글 전체가 아무것도 돌리지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn statements_that_change_how_text_is_read_never_run() {
+    let e = env(true);
+    let mut w = e.f.window();
+    for (connection, sql) in [
+        (
+            "dev",
+            "SET standard_conforming_strings = off; DELETE FROM t WHERE name = 'a\\'' OR true --'",
+        ),
+        (
+            "prod",
+            "SELECT set_config('standard_conforming_strings', 'off', false)",
+        ),
+        (
+            "dev",
+            "UPDATE pg_settings SET setting = 'off' WHERE name = 'standard_conforming_strings'",
+        ),
+        (
+            "my",
+            "SET SESSION sql_mode = CONCAT(@@sql_mode, ',NO_BACKSLASH_ESCAPES')",
+        ),
+        ("my", "SET NAMES sjis"),
+    ] {
+        let s = e.open(&mut w, connection).await;
+        let driver = if connection == "my" { &e.my } else { &e.pg };
+        let before = driver.calls().len();
+        let err = run(&mut w, exec(&s, sql)).await.unwrap_err();
+        assert!(denied(&err), "{sql}: {err:?}");
+        assert_eq!(reason(&err), Some("changesSqlReading"), "{sql}: {err:?}");
+        // 확인 해시를 지어 실어도 같다 — 확인 단계에 닿지 않는다.
+        let forged = json!({ "sessionId": s, "sql": sql,
+                             "confirmed": { "grade": "destructive", "statementsHash": "x", "name": "prod db" } });
+        let err = run(&mut w, forged).await.unwrap_err();
+        assert_eq!(reason(&err), Some("changesSqlReading"), "{sql}: {err:?}");
+        assert_eq!(
+            driver.calls().len(),
+            before,
+            "{sql}: {:?}",
+            &driver.calls()[before..]
+        );
+    }
+}
+
 /// 사람이 친 `BEGIN` · `COMMIT` · `ROLLBACK` 은 드라이버 메서드로 옮긴다 — 드라이버는 이 문장을 SQL 로 받지 않는다. `PREPARE
 /// TRANSACTION` 은 아무것도 돌리기 전에 거절한다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

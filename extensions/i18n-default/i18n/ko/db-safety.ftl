@@ -84,6 +84,7 @@ db-reason-too-deep = 중첩이 너무 깊어 분석하지 않았다 — 파괴�
 db-reason-drop = 객체나 열 · 파티션을 지운다
 db-reason-truncate = 표의 모든 행을 지운다
 db-reason-copy-program = DB 서버에서 셸 명령을 돌린다
+db-reason-changes-sql-reading = 분류기와 서버의 글 읽기를 바꾼다(문자열 · 백슬래시 · 문자 집합) — 돌리지 않는다
 db-reason-ddl = 스키마나 권한을 만들거나 바꾼다
 db-reason-missing-where = WHERE 가 없어 모든 행이 바뀐다
 db-reason-unbounded-where = WHERE 가 범위를 한정하지 않는다(항상 참인 조건 · 서브쿼리)
@@ -112,6 +113,7 @@ db-refusal-read-only-connection = 읽기 전용 연결이라 조회만 돌린다
 db-refusal-untrusted = 이 프로젝트를 신뢰하지 않아 DB 에 연결하지 않는다 — 프로젝트를 신뢰한 뒤 다시 연결한다
 db-refusal-not-project-window = DB 연결은 그 프로젝트의 창에서만 쓴다
 db-refusal-not-a-query = 조회 문장 하나만 돌린다 — 이 문장은 돌리지 않았다
+db-refusal-changes-sql-reading = 이 문장은 서버가 SQL 글을 읽는 방식을 바꿔 위험도 분류가 맞지 않게 된다 — 돌리지 않았다
 # $message: Host 가 준 까닭
 db-refusal-transaction-statement = 이 트랜잭션 문장은 돌릴 수 없다: { $message }
 db-refusal-busy = 이 탭에서 다른 실행이 아직 돈다

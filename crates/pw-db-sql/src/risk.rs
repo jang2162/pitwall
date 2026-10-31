@@ -33,9 +33,9 @@ use std::ops::ControlFlow;
 use pw_db_types::{RiskGrade, SqlDialect};
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{
-    AlterTableOperation, ContextModifier, CopyTarget, Delete, Expr, FromTable, ObjectName, Query,
-    Reset, ResetStatement, Set, SetExpr, SqliteOnConflict, Statement, TableFactor, Update, Visit,
-    Visitor,
+    AccessExpr, AlterTableOperation, ContextModifier, CopyTarget, Delete, Expr, FromTable,
+    FunctionArg, FunctionArguments, Ident, ObjectName, Query, Reset, ResetStatement, Set, SetExpr,
+    SqliteOnConflict, Statement, TableFactor, Update, Visit, Visitor,
 };
 use sqlparser::dialect::{Dialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::keywords::Keyword;
@@ -44,6 +44,7 @@ use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 
 mod mysql;
 mod predicate;
+mod reading;
 mod recognize;
 #[cfg(test)]
 mod tests;
@@ -90,6 +91,10 @@ pub enum RiskReason {
     Truncate,
     /// `COPY … TO/FROM PROGRAM` — DB 서버에서 셸 명령을 돌린다. 파괴.
     CopyProgram,
+    /// 세션의 글 읽기를 바꾼다(PG `standard_conforming_strings` · `client_encoding`, MySQL `sql_mode` 의 `NO_BACKSLASH_ESCAPES` ·
+    /// `ANSI_QUOTES`, 백슬래시를 삼키는 문자 집합) — 그 뒤 분류기와 서버가 같은 글을 다르게 읽는다. 파괴이고 관문이 거절한다
+    /// (`reading` 모듈).
+    ChangesSqlReading,
     /// `CREATE` · `ALTER` · `GRANT` · `REVOKE` · `COMMENT ON` · `RENAME`, PG 의 `SELECT … INTO 새 표`.
     Ddl,
     /// WHERE 없는 `UPDATE` · `DELETE`. 범위 없는 쓰기.
@@ -232,6 +237,10 @@ fn classify_text(dialect: SqlDialect, text: &str) -> Outcome {
             if nesting_depth(&tokens) >= TOO_DEEP_NESTING {
                 return not_parsed(RiskReason::TooDeep);
             }
+            // 인식기보다 먼저 — `SET PERSIST sql_mode = …` 를 인식기가 관리 작업으로 매기면 확인 뒤에 돈다.
+            if reading::unparsed_set_changes_reading(&tokens) {
+                return not_parsed(RiskReason::ChangesSqlReading);
+            }
             return match recognize::recognize(dialect, text, &tokens) {
                 Some(classification) => Outcome {
                     classification,
@@ -245,6 +254,9 @@ fn classify_text(dialect: SqlDialect, text: &str) -> Outcome {
     let mut found = Found::default();
     for statement in &statements {
         classify_ast(statement, dialect, &mut found);
+    }
+    if dialect == SqlDialect::Postgres {
+        add_function_effect(unicode_identifier_effect(&tokens), &mut found);
     }
     let plain = || tokens.iter().map(|token| &token.token);
     leading_keyword_floor(plain(), &mut found);
@@ -408,7 +420,10 @@ fn classify_ast(statement: &Statement, dialect: SqlDialect, found: &mut Found) {
     // 조회는 [`classify_query`] 가 함수를 보고, `EXPLAIN` 은 `ANALYZE` 일 때 안의 문장으로 내려가 본다(돌리지 않는 `EXPLAIN` 안의
     // 함수는 돌지 않는다). 그 밖의 문장(`INSERT … SELECT pg_terminate_backend(pid) …` 등)은 여기서 본다.
     if !matches!(statement, Statement::Query(_) | Statement::Explain { .. }) {
-        classify_functions(statement, found);
+        classify_functions(statement, dialect, found);
+    }
+    if reading::statement_changes_reading(statement, dialect) {
+        found.add(Destructive, RiskReason::ChangesSqlReading);
     }
     match statement {
         Statement::Query(query) => classify_query(query, dialect, found),
@@ -708,14 +723,25 @@ fn classify_query(query: &Query, dialect: SqlDialect, found: &mut Found) {
     if !query.locks.is_empty() {
         found.add(RiskGrade::Write, RiskReason::LockingRead);
     }
-    classify_functions(query, found);
+    classify_functions(query, dialect, found);
 }
 
 /// 문장 안 어디든(서브쿼리 · CTE · 함수 인자 · `FROM` 의 표 함수) 부르는 부작용 함수를 등급에 더한다.
-fn classify_functions(node: &impl Visit, found: &mut Found) {
-    let mut visitor = FunctionVisitor::default();
+fn classify_functions(node: &impl Visit, dialect: SqlDialect, found: &mut Found) {
+    let mut visitor = FunctionVisitor {
+        dialect,
+        effect: None,
+    };
     let _ = node.visit(&mut visitor);
-    match visitor.effect {
+    add_function_effect(visitor.effect, found);
+}
+
+fn add_function_effect(effect: Option<FunctionEffect>, found: &mut Found) {
+    match effect {
+        Some(FunctionEffect::ChangesReading) => {
+            found.add(RiskGrade::Destructive, RiskReason::ChangesSqlReading)
+        }
+        Some(FunctionEffect::Unreadable) => found.add(RiskGrade::Destructive, RiskReason::Unparsed),
         Some(FunctionEffect::ServerAdmin) => {
             found.add(RiskGrade::UnboundedWrite, RiskReason::ServerAdmin)
         }
@@ -877,9 +903,13 @@ const SIDE_EFFECT_FUNCTION_PREFIXES: &[&str] = &[
 /// `cursor_to_xml` · `cursor_to_xmlschema`(이미 연 커서에서 읽을 뿐 — 커서를 여는 `DECLARE` 가 따로 분류된다), `table_to_xml` 류
 /// (표 이름만 받는다). `query_to_xmlschema` 는 질의를 준비만 하고 행을 읽지 않아 PG 17.6 에서 안의 함수가 돌지 않았지만, 계획 단계는
 /// 돈다 — 같은 무리로 둔다. `ts_rewrite` 는 SQL 을 받지 않는 3인자 판도 이름이 같아 함께 걸린다(확인을 한 번 더 받을 뿐이다).
-/// 확장 함수는 판과 상관없이 이름으로 본다(문서 · 소스 판단): `pg_background_launch` · `pg_background_submit`(백그라운드 작업자에서
-/// 돈다), pg_cron 의 `cron.schedule` · `cron.schedule_in_database` · `cron.alter_job`(나중에 다른 세션에서 돈다 — 이름이 흔해 스키마
-/// `cron` 으로 한정했을 때만, [`CRON_SQL_TEXT_FUNCTIONS`]).
+/// contrib 밖의 흔한 확장(M3-03b 리뷰 L1): pgRouting `pgr_*`(모든 함수가 간선 · 정점 질의 글을 받는다) · pgTAP(아래 이름 — 글을
+/// 같은 트랜잭션에서 돌린다)은 PG 17.6 + PGDG 패키지에서 read-only 의 다른 세션 끊기를 리뷰가 확인했다. 나머지는 판과 상관없이
+/// 이름으로 본다(문서 판단): `pg_background_*`(백그라운드 작업자에서 돈다), citus `run_command_on_*`(워커에 새 연결 — 읽기 전용 밖),
+/// oracle_fdw `oracle_execute`, 스키마로 한정했을 때만 pg_cron `cron.schedule` 류(나중에 다른 세션에서 돈다) · RDS
+/// `aws_s3.query_export_to_s3` · pg_graphql `graphql.resolve`(mutation 이 돈다) — 이름이 흔해 한정 없이는 보지 않는다
+/// ([`QUALIFIED_SQL_TEXT_FUNCTIONS`]). 목록 밖에 남긴 것: 글이 아니라 함수 · 프로시저 이름을 받아 돌리는 작업 예약(TimescaleDB
+/// `add_job` · pg_partman `run_maintenance` 류 — 사용자 정의 함수와 같은 한계), MADlib 처럼 표 이름을 받는 분석 함수.
 const SQL_TEXT_FUNCTIONS: &[&str] = &[
     // PG 내장
     "query_to_xml",
@@ -891,32 +921,173 @@ const SQL_TEXT_FUNCTIONS: &[&str] = &[
     "connectby",
     // xml2(`xpath_table` 도 같다 — 마지막 인자가 WHERE 조각이다)
     "xpath_table",
+    // pgTAP
+    "lives_ok",
+    "throws_ok",
+    "throws_like",
+    "throws_ilike",
+    "throws_matching",
+    "throws_imatching",
+    "results_eq",
+    "results_ne",
+    "set_eq",
+    "set_ne",
+    "set_has",
+    "set_hasnt",
+    "bag_eq",
+    "bag_ne",
+    "bag_has",
+    "bag_hasnt",
+    "is_empty",
+    "isnt_empty",
+    "row_eq",
+    "performs_ok",
+    "performs_within",
+    "runtests",
+    "do_tap",
+    // oracle_fdw
+    "oracle_execute",
 ];
 
 /// 이 접두사로 시작하는 이름도 [`SQL_TEXT_FUNCTIONS`] 다: `crosstab` · `crosstab2` ~ `crosstab4`(tablefunc), `dblink` 류 전부
-/// (dblink — `dblink_connect` · `dblink_build_sql_*` 처럼 글을 실행하지 않는 것도 함께 걸린다), `pg_background_*`.
-const SQL_TEXT_FUNCTION_PREFIXES: &[&str] = &["crosstab", "dblink", "pg_background_"];
+/// (dblink — `dblink_connect` · `dblink_build_sql_*` 처럼 글을 실행하지 않는 것도 함께 걸린다), `pg_background_*`, pgRouting
+/// `pgr_*`, citus `run_command_on_*`.
+const SQL_TEXT_FUNCTION_PREFIXES: &[&str] = &[
+    "crosstab",
+    "dblink",
+    "pg_background_",
+    "pgr_",
+    "run_command_on_",
+];
 
-/// 스키마 `cron`(pg_cron) 으로 한정했을 때만 [`SQL_TEXT_FUNCTIONS`] 인 이름. 한정하지 않은 `schedule(…)` 은 사용자 함수일 수 있어
-/// 보지 않는다 — `search_path` 에 `cron` 을 두고 한정 없이 부르면 놓친다.
-const CRON_SQL_TEXT_FUNCTIONS: &[&str] = &["schedule", "schedule_in_database", "alter_job"];
+/// (스키마, 이름)으로 한정했을 때만 [`SQL_TEXT_FUNCTIONS`] 인 것. 한정하지 않은 `schedule(…)` · `resolve(…)` 는 사용자 함수일 수
+/// 있어 보지 않는다 — `search_path` 에 그 스키마를 두고 한정 없이 부르면 놓친다.
+const QUALIFIED_SQL_TEXT_FUNCTIONS: &[(&str, &str)] = &[
+    ("cron", "schedule"),
+    ("cron", "schedule_in_database"),
+    ("cron", "alter_job"),
+    ("aws_s3", "query_export_to_s3"),
+    ("graphql", "resolve"),
+];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum FunctionEffect {
     SideEffect,
     ServerAdmin,
+    /// 이름을 정본으로 바꿀 수 없다([`canonical_name`]) — 파괴 · `unparsed`.
+    Unreadable,
+    /// 글 읽기를 바꾸는 `set_config`(`reading` 모듈) — 파괴 · `changesSqlReading`.
+    ChangesReading,
 }
 
-fn function_effect(name: &ObjectName) -> Option<FunctionEffect> {
-    let ident = name.0.last().and_then(|part| part.as_ident())?;
-    let schema = name
-        .0
-        .iter()
-        .rev()
-        .nth(1)
-        .and_then(|part| part.as_ident())
-        .map(|ident| ident.value.to_ascii_lowercase());
-    let name = ident.value.to_ascii_lowercase();
+/// 이름 조각을 서버가 해석하는 정본(소문자)으로. 맞추기는 목록과 정본으로 한다 — 글자 그대로 맞추면 같은 함수를 부르는 다른 표기
+/// (M3-03b 리뷰 H2 의 `U&"query\005fto_xml"`)를 놓친다.
+///
+/// - 대소문자 · 큰따옴표 · 백틱: 소문자로 맞춘다. PG 의 따옴표 이름은 대소문자를 지키므로(`"NEXTVAL"` 은 다른 이름) 넓게 잡는 쪽이다.
+/// - PG `U&"…"`: sqlparser 는 `U & "…"` 로 읽어 이름에 `\XXXX` · `\+XXXXXX` · `\\` 를 그대로 남긴다. 따옴표 이름에 `\` 가 있으면
+///   PG 의 유니코드 이스케이프(UTF-16 대리 쌍 포함)로 풀고, 풀 수 없으면 `None` — 알 수 없는 이름은 조회로 두지 않는다.
+///   `U&` 없이 `\` 를 글자로 담은 이름도 같이 풀린다(넓게 잡는 쪽). `UESCAPE` 꼴은 파서가 읽지 못해 이미 파괴다.
+/// - 공백 · 주석 · 스키마 한정은 파서가 조각으로 나눠 준다. 마지막 조각이 함수 이름, 그 앞이 스키마다.
+fn canonical_name(ident: &Ident, dialect: SqlDialect) -> Option<String> {
+    if dialect == SqlDialect::Postgres
+        && ident.quote_style == Some('"')
+        && ident.value.contains('\\')
+    {
+        return decode_unicode_escapes(&ident.value).map(|name| name.to_ascii_lowercase());
+    }
+    Some(ident.value.to_ascii_lowercase())
+}
+
+/// PG 의 `U&"…"` 이름을 토큰에서 찾아(`U` · `&` · 큰따옴표 이름이 붙어 있다) 함수 이름으로 맞춘다. sqlparser 는 이것을 `U & "…"`
+/// 로 읽으므로 이름이 AST 의 어느 자리로 갈지 모른다 — `(1).U&"pg\005fcancel\005fbackend"` 는 필드 접근 `U` 와 열 이름의 비트 AND 가
+/// 된다. 그래서 자리와 상관없이 그 이름을 함수로 본다(같은 이름의 열이면 확인을 한 번 더 받을 뿐이다).
+fn unicode_identifier_effect(tokens: &[TokenWithSpan]) -> Option<FunctionEffect> {
+    tokens
+        .windows(3)
+        .filter_map(|w| match (&w[0].token, &w[1].token, &w[2].token) {
+            (Token::Word(u), Token::Ampersand, Token::Word(name))
+                if u.quote_style.is_none()
+                    && u.value.eq_ignore_ascii_case("u")
+                    && name.quote_style == Some('"') =>
+            {
+                let ident = Ident::with_quote('"', name.value.clone());
+                function_effect(&[&ident], None, SqlDialect::Postgres)
+            }
+            _ => None,
+        })
+        .max()
+}
+
+/// PG `U&` 의 이스케이프(`\XXXX` · `\+XXXXXX` · `\\`)를 푼다. 틀린 꼴이면 `None`.
+fn decode_unicode_escapes(text: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    let mut pending_high: Option<u32> = None;
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            if pending_high.is_some() {
+                return None;
+            }
+            out.push(c);
+            continue;
+        }
+        let digits = match chars.peek() {
+            Some('\\') => {
+                chars.next();
+                if pending_high.is_some() {
+                    return None;
+                }
+                out.push('\\');
+                continue;
+            }
+            Some('+') => {
+                chars.next();
+                6
+            }
+            _ => 4,
+        };
+        let hex: String = (0..digits).filter_map(|_| chars.next()).collect();
+        if hex.len() != digits || !hex.chars().all(|h| h.is_ascii_hexdigit()) {
+            return None;
+        }
+        let code = u32::from_str_radix(&hex, 16).ok()?;
+        match (pending_high.take(), code) {
+            (None, 0xD800..=0xDBFF) => pending_high = Some(code),
+            (Some(high), 0xDC00..=0xDFFF) => {
+                out.push(char::from_u32(
+                    0x10000 + ((high - 0xD800) << 10) + (code - 0xDC00),
+                )?);
+            }
+            (Some(_), _) => return None,
+            (None, code) => out.push(char::from_u32(code)?),
+        }
+    }
+    pending_high.is_none().then_some(out)
+}
+
+/// 정본 이름(마지막 조각)과 그 앞 조각(스키마)으로 효과를 찾는다. `args` 는 `set_config` 의 이름 · 값을 보려고 받는다.
+fn function_effect(
+    parts: &[&Ident],
+    args: Option<&[FunctionArg]>,
+    dialect: SqlDialect,
+) -> Option<FunctionEffect> {
+    let (last, rest) = parts.split_last()?;
+    let Some(name) = canonical_name(last, dialect) else {
+        return Some(FunctionEffect::Unreadable);
+    };
+    let schema = match rest.last() {
+        Some(ident) => match canonical_name(ident, dialect) {
+            Some(schema) => Some(schema),
+            None => return Some(FunctionEffect::Unreadable),
+        },
+        None => None,
+    };
+    if dialect == SqlDialect::Postgres
+        && name == "set_config"
+        && args.is_none_or(reading::set_config_changes_reading)
+    {
+        return Some(FunctionEffect::ChangesReading);
+    }
     if SERVER_ADMIN_FUNCTIONS.contains(&name.as_str())
         || SERVER_ADMIN_FUNCTION_PREFIXES
             .iter()
@@ -925,7 +1096,9 @@ fn function_effect(name: &ObjectName) -> Option<FunctionEffect> {
         || SQL_TEXT_FUNCTION_PREFIXES
             .iter()
             .any(|prefix| name.starts_with(prefix))
-        || (schema.as_deref() == Some("cron") && CRON_SQL_TEXT_FUNCTIONS.contains(&name.as_str()))
+        || schema
+            .as_deref()
+            .is_some_and(|schema| QUALIFIED_SQL_TEXT_FUNCTIONS.contains(&(schema, name.as_str())))
     {
         Some(FunctionEffect::ServerAdmin)
     } else if SIDE_EFFECT_FUNCTIONS.contains(&name.as_str())
@@ -939,18 +1112,27 @@ fn function_effect(name: &ObjectName) -> Option<FunctionEffect> {
     }
 }
 
+fn object_parts(name: &ObjectName) -> Option<Vec<&Ident>> {
+    name.0.iter().map(|part| part.as_ident()).collect()
+}
+
 /// 문장 전체(CTE · `FROM` 서브쿼리 · `LATERAL` · `ORDER BY` · 함수 인자 포함)에서 가장 센 부작용 함수를 찾는다. DBX 는
 /// `visit_expressions` 로 표현식만 봐서 `FROM dblink(…)` 같은 표 함수를 놓쳤다.
-#[derive(Default)]
 struct FunctionVisitor {
+    dialect: SqlDialect,
     effect: Option<FunctionEffect>,
 }
 
 impl FunctionVisitor {
-    fn see(&mut self, name: &ObjectName) -> ControlFlow<()> {
-        self.effect = self.effect.max(function_effect(name));
+    fn see(&mut self, parts: Option<Vec<&Ident>>, args: Option<&[FunctionArg]>) -> ControlFlow<()> {
+        let effect = match parts {
+            Some(parts) => function_effect(&parts, args, self.dialect),
+            // 이름 조각이 식별자가 아니다(파서의 다른 꼴) — 알 수 없는 이름.
+            None => Some(FunctionEffect::Unreadable),
+        };
+        self.effect = self.effect.max(effect);
         // 가장 센 것을 찾았으면 더 볼 것이 없다.
-        if self.effect == Some(FunctionEffect::ServerAdmin) {
+        if self.effect == Some(FunctionEffect::ChangesReading) {
             ControlFlow::Break(())
         } else {
             ControlFlow::Continue(())
@@ -963,7 +1145,26 @@ impl Visitor for FunctionVisitor {
 
     fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<()> {
         match expr {
-            Expr::Function(function) => self.see(&function.name),
+            Expr::Function(function) => {
+                let args = match &function.args {
+                    FunctionArguments::List(list) => Some(list.args.as_slice()),
+                    _ => None,
+                };
+                self.see(object_parts(&function.name), args)
+            }
+            // PG 의 attribute notation: `(식).함수` 는 인자 하나인 `함수(식)` 이다(인자가 composite 가 아니어도 — PG 17.6). 파서는
+            // 필드 접근으로 읽으므로 점 뒤의 이름을 모두 함수 이름으로 본다 — 같은 이름의 열이면 확인을 한 번 더 받을 뿐이다(M3-03b
+            // 리뷰 H1). 괄호 없는 `t.f` 는 표 전체 행을 인자로 넘기는 꼴이라 목록의 함수(composite 를 받지 않는다)에 닿지 않는다.
+            Expr::CompoundFieldAccess { access_chain, .. } => {
+                for access in access_chain {
+                    if let AccessExpr::Dot(Expr::Identifier(ident)) = access
+                        && self.see(Some(vec![ident]), Some(&[])).is_break()
+                    {
+                        return ControlFlow::Break(());
+                    }
+                }
+                ControlFlow::Continue(())
+            }
             _ => ControlFlow::Continue(()),
         }
     }
@@ -972,10 +1173,10 @@ impl Visitor for FunctionVisitor {
         match table_factor {
             TableFactor::Table {
                 name,
-                args: Some(_),
+                args: Some(args),
                 ..
-            }
-            | TableFactor::Function { name, .. } => self.see(name),
+            } => self.see(object_parts(name), Some(&args.args)),
+            TableFactor::Function { name, args, .. } => self.see(object_parts(name), Some(args)),
             _ => ControlFlow::Continue(()),
         }
     }

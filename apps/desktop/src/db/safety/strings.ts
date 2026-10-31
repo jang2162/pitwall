@@ -16,6 +16,7 @@ export type DbRefusalReason =
   | "untrusted"
   | "notProjectWindow"
   | "notAQuery"
+  | "changesSqlReading"
   | "transactionStatement"
   | "busy"
   | "configChanged"
@@ -92,6 +93,7 @@ export function dbSafetyStrings(t: Translate) {
       drop: t("db-reason-drop"),
       truncate: t("db-reason-truncate"),
       copyProgram: t("db-reason-copy-program"),
+      changesSqlReading: t("db-reason-changes-sql-reading"),
       ddl: t("db-reason-ddl"),
       missingWhere: t("db-reason-missing-where"),
       unboundedWhere: t("db-reason-unbounded-where"),
@@ -119,6 +121,7 @@ export function dbSafetyStrings(t: Translate) {
       untrusted: () => t("db-refusal-untrusted"),
       notProjectWindow: () => t("db-refusal-not-project-window"),
       notAQuery: () => t("db-refusal-not-a-query"),
+      changesSqlReading: () => t("db-refusal-changes-sql-reading"),
       transactionStatement: (message: string) => t("db-refusal-transaction-statement", { message }),
       busy: () => t("db-refusal-busy"),
       configChanged: () => t("db-refusal-config-changed"),

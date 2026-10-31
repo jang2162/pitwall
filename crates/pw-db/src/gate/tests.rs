@@ -265,3 +265,56 @@ fn read_only_refuses_settings_even_when_graded_as_reads() {
         assert_eq!(e.code, rpc_code::PERMISSION_DENIED, "{sql}");
     }
 }
+
+/// M3-03b 리뷰 M1: 서버가 고를 수 있는 읽기를 분류기가 읽지 못한 조회(MySQL `NO_BACKSLASH_ESCAPES` 읽기의 `INTO OUTFILE`)는
+/// read-only 연결에서 조회가 아니다 — MySQL 의 읽기 전용 트랜잭션은 `INTO OUTFILE` · `INTO @변수` 를 막지 않는다. 실은 문장은 파괴 ·
+/// `unparsed`. 보통 연결은 등급(조회)대로 확인 없이 지난다.
+#[test]
+fn read_only_refuses_a_query_with_a_reading_the_classifier_could_not_read() {
+    let sql = r#"SELECT * FROM t WHERE name = 'a\' OR id = 1 INTO OUTFILE "/tmp/x" -- '"#;
+    let statements = planned(SqlDialect::Mysql, sql);
+    assert_eq!(statements[0].grade, RiskGrade::Read);
+    assert!(statements[0].unread_reading);
+    let e = judge(&policy(true, false), &statements, &[], "h", None).unwrap_err();
+    assert_eq!(e.code, rpc_code::PERMISSION_DENIED);
+    let data = e.data.unwrap();
+    assert_eq!(data["reason"], "readOnlyConnection");
+    assert_eq!(data["statements"][0]["grade"], "destructive");
+    assert_eq!(data["statements"][0]["reasons"], json!(["unparsed"]));
+    judge(&policy(false, false), &statements, &[], "h", None).unwrap();
+    // 뒤의 읽기를 읽은 조회는 read-only 에서도 돈다.
+    let read = planned(
+        SqlDialect::Mysql,
+        r"SELECT * FROM t WHERE c = 'x\' OR 1=1 -- '",
+    );
+    judge(&policy(true, false), &read, &[], "h", None).unwrap();
+}
+
+/// M3-03b 리뷰 M2: 글 읽기를 바꾸는 문장은 확인으로 풀리지 않는 거절이다(`changesSqlReading`). 같은 글의 다른 문장도 돌지 않는다.
+#[test]
+fn statements_that_change_how_text_is_read_are_refused() {
+    for (dialect, sql) in [
+        (
+            SqlDialect::Postgres,
+            "SET standard_conforming_strings = off; DELETE FROM t WHERE name = 'a\\'' OR true --'",
+        ),
+        (
+            SqlDialect::Postgres,
+            "SELECT set_config('standard_conforming_strings', 'off', false)",
+        ),
+        (SqlDialect::Mysql, "SET sql_mode = 'NO_BACKSLASH_ESCAPES'"),
+        (SqlDialect::Mysql, "SET NAMES gbk"),
+    ] {
+        let statements = planned(dialect, sql);
+        let e = refuse_reading_changes(&statements).unwrap_err();
+        assert_eq!(e.code, rpc_code::PERMISSION_DENIED, "{sql}");
+        let data = e.data.unwrap();
+        assert_eq!(data["reason"], "changesSqlReading", "{sql}");
+        assert_eq!(data["statements"].as_array().unwrap().len(), 1, "{sql}");
+    }
+    refuse_reading_changes(&planned(
+        SqlDialect::Postgres,
+        "SET search_path = x; SELECT 1",
+    ))
+    .unwrap();
+}

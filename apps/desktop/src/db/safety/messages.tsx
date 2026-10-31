@@ -37,6 +37,8 @@ const REFUSAL_CODES: Record<DbRefusalReason, number> = {
   notProjectWindow: ERROR_CODE.PERMISSION_DENIED,
   // `db.query.page` · `db.query.execute { queryOnly }`(crates/pw-db/src/execute.rs `only_one_query`)가 낸다 — 코드는 Host 가 정본.
   notAQuery: ERROR_CODE.PERMISSION_DENIED,
+  // 세션의 글 읽기를 바꾸는 문장(crates/pw-db/src/gate.rs `refuse_reading_changes`) — 확인으로 풀지 않는다.
+  changesSqlReading: ERROR_CODE.PERMISSION_DENIED,
   transactionStatement: ERROR_CODE.INVALID_PARAMS,
   busy: ERROR_CODE.CONFLICT,
   configChanged: ERROR_CODE.CONFLICT,

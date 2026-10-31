@@ -199,7 +199,7 @@ fn mysql_persist_and_global_transaction_defaults_reach_the_whole_server() {
         "SET @@PERSIST_ONLY.innodb_log_file_size = 1",
         "SET PERSIST max_connections = 10",
         "SET PERSIST_ONLY validate_password.length = 12",
-        "SET PERSIST sql_mode = '', GLOBAL read_only = ON, max_connections = -1",
+        "SET PERSIST sort_buffer_size = 1, GLOBAL read_only = ON, max_connections = -1",
         "SET GLOBAL TRANSACTION ISOLATION LEVEL READ UNCOMMITTED",
         "set global transaction read write",
         "RESET PERSIST",
@@ -208,6 +208,14 @@ fn mysql_persist_and_global_transaction_defaults_reach_the_whole_server() {
     ] {
         expect(Mysql, sql, UnboundedWrite, &[ServerAdmin]);
     }
+    // 파서가 못 읽는 `SET PERSIST` 에 `sql_mode` 가 있으면 글 읽기를 바꿀 수 있어 거절이다(M3-03b 리뷰 M2 — 이 꼴은 전에 위
+    // 목록에서 관리 작업이었다, `reading.rs`).
+    expect(
+        Mysql,
+        "SET PERSIST sql_mode = '', GLOBAL read_only = ON, max_connections = -1",
+        Destructive,
+        &[ChangesSqlReading],
+    );
     // 세션 범위는 그대로 쓰기다.
     for sql in [
         "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",

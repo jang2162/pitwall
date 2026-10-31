@@ -108,6 +108,14 @@ mod pg {
         let kill = format!("select pg_terminate_backend({victim_pid})");
         for sql in [
             format!("SELECT query_to_xml('{kill}', true, false, '')"),
+            // M3-03b 리뷰 H1 · H2: 같은 함수를 다른 꼴로 — attribute notation 과 `U&"…"` 이름.
+            format!("SELECT ({victim_pid}).pg_terminate_backend"),
+            format!("SELECT 1 WHERE ({victim_pid}).pg_terminate_backend"),
+            format!(
+                "SELECT ('select to_tsvector(''a'') from (select pg_terminate_backend({victim_pid})) s').ts_stat"
+            ),
+            format!(r#"SELECT U&"query\005fto_xml"('{kill}', true, false, '')"#),
+            format!(r#"SELECT (({victim_pid})).U&"pg\005fterminate\005fbackend""#),
             format!("SELECT query_to_xml_and_xmlschema('{kill}', true, false, '')"),
             format!("SELECT count(*) FROM ts_stat('select to_tsvector(''a'') from ({kill}) s')"),
             format!(
@@ -148,16 +156,71 @@ mod pg {
             .expect("the other session was ended");
         assert_eq!(first(&again)["int"].as_i64(), Some(victim_pid));
     }
+
+    /// M3-03b 리뷰 M2: 보통 연결(운영 표시 없음)에서 `SET standard_conforming_strings = off; DELETE … WHERE name = 'a\'' OR true
+    /// --'` 는 리뷰 때 확인 없이 돌아 세 행을 모두 지웠다. 이제 글 전체가 거절되고(`changesSqlReading`) 행 · 세션 설정이 그대로다.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_pg_a_session_cannot_turn_standard_strings_off() {
+        let (f, mut w) = host(LiveDb::Pg, Arc::new(pw_db_driver_pg::PgDriver::new())).await;
+        let s = open(&f, &mut w, "dev").await;
+        let table = format!("pw_live_scs_gate_{}", std::process::id());
+        let exec = |sql: &str| json!({ "sessionId": s, "sql": sql });
+        run_confirmed(&mut w, exec(&format!("DROP TABLE IF EXISTS {table}"))).await;
+        run_confirmed(&mut w, exec(&format!("CREATE TABLE {table} (name text)"))).await;
+        run(
+            &mut w,
+            exec(&format!("INSERT INTO {table} VALUES ('a'), ('b'), ('c')")),
+        )
+        .await
+        .unwrap();
+        for sql in [
+            format!(
+                r"SET standard_conforming_strings = off; DELETE FROM {table} WHERE name = 'a\'' OR true --'"
+            ),
+            "SELECT set_config('standard_conforming_strings', 'off', false)".to_owned(),
+            "SET LOCAL standard_conforming_strings TO off".to_owned(),
+            "UPDATE pg_settings SET setting = 'off' WHERE name = 'standard_conforming_strings'"
+                .to_owned(),
+        ] {
+            let err = run(&mut w, exec(&sql)).await.unwrap_err();
+            assert_eq!(err.code, rpc_code::PERMISSION_DENIED, "{sql}: {err:?}");
+            assert_eq!(reason(&err), Some("changesSqlReading"), "{sql}: {err:?}");
+        }
+        let count = run(&mut w, exec(&format!("SELECT count(*) FROM {table}")))
+            .await
+            .unwrap();
+        assert_eq!(first(&count)["int"], 3);
+        let setting = run(&mut w, exec("SHOW standard_conforming_strings"))
+            .await
+            .unwrap();
+        assert_eq!(first(&setting)["text"], "on");
+        run_confirmed(&mut w, exec(&format!("DROP TABLE {table}"))).await;
+    }
+
+    /// 확인을 받아야 하면 받은 해시 · 등급으로 다시 보낸다(시험 준비 · 정리용 DDL).
+    async fn run_confirmed(w: &mut Conn, params: Value) {
+        match run(w, params.clone()).await {
+            Ok(_) => {}
+            Err(err) if err.code == code::CONFIRM_REQUIRED => {
+                let data = err.data.unwrap();
+                let mut again = params;
+                again["confirmed"] =
+                    json!({ "grade": data["grade"], "statementsHash": data["statementsHash"] });
+                run(w, again).await.unwrap();
+            }
+            Err(err) => panic!("{err:?}"),
+        }
+    }
 }
 
 #[cfg(pw_live_mysql)]
 mod mysql {
     use super::*;
 
-    /// X3: `NO_BACKSLASH_ESCAPES` 세션에서 `'a\' OR 1 = 1 INTO @변수 -- '` 는 분류기의 두 읽기 가운데 뒤의 것을 파서가 읽지 못한다 —
-    /// 조회만 받는 호출(`queryOnly` · `db.query.page`)은 거절하고 세션 변수는 그대로다. 같은 글을 일반 실행하면 조회 등급으로 돌아
-    /// 변수가 바뀐다 — 그 글이 실제로 서버에서 쓰기라는 대조이자 14 M3-03 칸의 남는 틈. `sql_mode` 는 이 시험의 세션에만 건다(서버
-    /// 설정을 바꾸지 않는다 — CONTRIBUTING.md 「실 DB 시험」).
+    /// X3 · M3-03b 리뷰 M1 · M2: `'a\' OR 1 = 1 INTO @변수 -- '` 는 분류기의 두 읽기 가운데 뒤의 것(`NO_BACKSLASH_ESCAPES`)을 파서가
+    /// 읽지 못한다 — 조회만 받는 호출(`queryOnly` · `db.query.page`)과 read-only 연결의 일반 실행이 거절하고 세션 변수는 그대로다.
+    /// 세션에서 `NO_BACKSLASH_ESCAPES` 를 켜는 `SET` 은 거절된다(`changesSqlReading`). 서버 설정은 바꾸지 않는다(CONTRIBUTING.md
+    /// 「실 DB 시험」) — 서버 전역에 켠 재현은 그 실행만의 컨테이너에서 했다(M3-03b 보고서).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn live_mysql_query_only_refuses_a_reading_the_classifier_could_not_read() {
         let (f, mut w) = host(
@@ -166,14 +229,27 @@ mod mysql {
         )
         .await;
         let s = open(&f, &mut w, "dev").await;
-        let exec = |sql: &str| json!({ "sessionId": s, "sql": sql });
-        run(
-            &mut w,
-            exec("SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_BACKSLASH_ESCAPES')"),
-        )
-        .await
-        .unwrap();
-        run(&mut w, exec("SET @pw_x = 'before'")).await.unwrap();
+        let ro = open(&f, &mut w, "ro").await;
+        let exec = |session: &str, sql: &str| json!({ "sessionId": session, "sql": sql });
+        for sql in [
+            "SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_BACKSLASH_ESCAPES')",
+            "SET sql_mode = 'ANSI_QUOTES'",
+            "SET NAMES gbk",
+        ] {
+            let err = run(&mut w, exec(&s, sql)).await.unwrap_err();
+            assert_eq!(reason(&err), Some("changesSqlReading"), "{sql}: {err:?}");
+        }
+        let mode = run(&mut w, exec(&s, "SELECT @@SESSION.sql_mode"))
+            .await
+            .unwrap();
+        assert!(
+            !first(&mode)["text"]
+                .as_str()
+                .unwrap()
+                .contains("NO_BACKSLASH_ESCAPES"),
+            "{mode:?}"
+        );
+        run(&mut w, exec(&s, "SET @pw_x = 'before'")).await.unwrap();
         let hidden = r"SELECT name FROM (SELECT 'a' AS name) AS v WHERE name = 'a\' OR 1 = 1 INTO @pw_x -- '";
         let err = run(
             &mut w,
@@ -194,12 +270,9 @@ mod mysql {
             .await
             .unwrap_err();
         assert_eq!(reason(&err), Some("notAQuery"), "{err:?}");
-        let read_x = exec("SELECT @pw_x");
-        assert_eq!(
-            first(&run(&mut w, read_x.clone()).await.unwrap())["text"],
-            "before"
-        );
-        run(&mut w, exec(hidden)).await.unwrap();
-        assert_eq!(first(&run(&mut w, read_x).await.unwrap())["text"], "a");
+        let err = run(&mut w, exec(&ro, hidden)).await.unwrap_err();
+        assert_eq!(reason(&err), Some("readOnlyConnection"), "{err:?}");
+        let read_x = exec(&s, "SELECT @pw_x");
+        assert_eq!(first(&run(&mut w, read_x).await.unwrap())["text"], "before");
     }
 }

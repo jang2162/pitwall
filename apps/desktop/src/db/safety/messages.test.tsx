@@ -90,6 +90,22 @@ describe("dbRefusal", () => {
     expect(alert.textContent).toBe(T.refusal.notAQuery());
   });
 
+  it("reads the changes-sql-reading refusal with the code the host sends", async () => {
+    // Host 가 내는 그대로(crates/pw-db/src/gate.rs `refuse_reading_changes`): PERMISSION_DENIED · changesSqlReading · 그 문장들.
+    const statements = [
+      {
+        index: 0,
+        range: { from: 0, to: 37 },
+        grade: "destructive",
+        reasons: ["changesSqlReading"],
+      },
+    ];
+    const host = err(ERROR_CODE.PERMISSION_DENIED, { reason: "changesSqlReading", statements });
+    expect(dbRefusal(host)).toEqual({ reason: "changesSqlReading", message: "", statements });
+    expect(dbRefusalText(dbRefusal(host)!, T.refusal)).toBe(T.refusal.changesSqlReading());
+    expect(dbRefusal(err(ERROR_CODE.CONFLICT, { reason: "changesSqlReading" }))).toBeUndefined();
+  });
+
   it("does not read other errors as refusals", async () => {
     expect(dbRefusal(new Error("x"))).toBeUndefined();
     expect(dbRefusal(err(ERROR_CODE.PERMISSION_DENIED))).toBeUndefined();
@@ -103,7 +119,7 @@ describe("dbRefusal", () => {
   it("words every refusal distinctly in both languages", async () => {
     for (const strings of [T, EN]) {
       const texts = Object.values(strings.refusal).map((f) => f("why"));
-      expect(texts).toHaveLength(8);
+      expect(texts).toHaveLength(9);
       expect(new Set(texts).size).toBe(texts.length);
     }
   });
