@@ -23,7 +23,7 @@ use pw_db::session::{DbTunnelLease, DbTunnels};
 use pw_db::trust::code as trust_code;
 #[cfg(unix)]
 use pw_db::tunnel::{SshTunnels, TunnelEnv};
-use pw_db_driver::fake::FakeDriver;
+use pw_db_driver::fake::{FakeCall, FakeDriver};
 use pw_db_driver::{BoxFuture, Connected, DbDriver, DbResult};
 use pw_db_types::{Capabilities, ConnectionSpec, ServerInfo, SqlDialect, Target};
 use pw_rpc::RpcError;
@@ -74,19 +74,35 @@ impl TunnelEnv for FixedEnv {
     }
 }
 
-/// 가짜 터널: 리스를 버렸는지(`dropped`)와 끊김(`lost`)을 시험이 본다.
+/// 리스를 놓을 때 부르는 것(시험이 그때의 상태를 적는다 — 예: 드라이버가 닫은 연결 수).
+type Probe = Arc<dyn Fn() -> usize + Send + Sync>;
+
+/// 가짜 터널: 리스를 버렸는지(`dropped`) · 살아 있는 리스 수(`live`)와 끊김(`lost`)을 시험이 본다.
 #[derive(Default)]
 struct FakeTunnels {
     opened: AtomicUsize,
     dropped: Arc<AtomicBool>,
+    live: Arc<AtomicUsize>,
     lost: Mutex<Option<CancellationToken>>,
+    /// 놓을 때마다 `probe` 의 값을 `released` 에 적는다.
+    probe: Mutex<Option<Probe>>,
+    released: Arc<Mutex<Vec<usize>>>,
 }
 
-struct DropFlag(Arc<AtomicBool>);
+struct DropFlag {
+    dropped: Arc<AtomicBool>,
+    live: Arc<AtomicUsize>,
+    probe: Option<Probe>,
+    released: Arc<Mutex<Vec<usize>>>,
+}
 
 impl Drop for DropFlag {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
+        if let Some(probe) = &self.probe {
+            self.released.lock().unwrap().push(probe());
+        }
+        self.live.fetch_sub(1, Ordering::SeqCst);
+        self.dropped.store(true, Ordering::SeqCst);
     }
 }
 
@@ -109,8 +125,14 @@ impl DbTunnels for FakeTunnels {
             let lost = CancellationToken::new();
             *self.lost.lock().unwrap() = Some(lost.clone());
             self.dropped.store(false, Ordering::SeqCst);
+            self.live.fetch_add(1, Ordering::SeqCst);
             Ok(DbTunnelLease::new(
-                DropFlag(Arc::clone(&self.dropped)),
+                DropFlag {
+                    dropped: Arc::clone(&self.dropped),
+                    live: Arc::clone(&self.live),
+                    probe: self.probe.lock().unwrap().clone(),
+                    released: Arc::clone(&self.released),
+                },
                 lost,
             ))
         })
@@ -121,12 +143,15 @@ struct Env {
     f: Fixture,
     sessions: Arc<DbSessions>,
     specs: Arc<Mutex<Vec<ConnectionSpec>>>,
+    /// 드라이버(같은 상태를 나눈 복제 — 호출을 센다).
+    pg: FakeDriver,
 }
 
 fn env(trusted: bool, tunnels: Arc<dyn DbTunnels>) -> Env {
     let specs = Arc::new(Mutex::new(Vec::new()));
+    let pg = FakeDriver::named("postgres", SqlDialect::Postgres);
     let driver = SpyDriver {
-        inner: FakeDriver::named("postgres", SqlDialect::Postgres),
+        inner: pg.clone(),
         specs: Arc::clone(&specs),
     };
     let mut drivers = pw_db::DriverRegistry::new();
@@ -142,6 +167,7 @@ fn env(trusted: bool, tunnels: Arc<dyn DbTunnels>) -> Env {
         f,
         sessions: slot.unwrap(),
         specs,
+        pg,
     }
 }
 
@@ -293,6 +319,90 @@ async fn a_lost_tunnel_disconnects_its_session_with_an_event() {
         "no reconnect by itself"
     );
     assert_eq!(e.sessions.session_count(), 1, "the tab keeps its session");
+}
+
+/// 조건이 참이 될 때까지 기다린다(2 s).
+async fn wait_until(what: &str, done: impl Fn() -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while !done() {
+        assert!(tokio::time::Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// 스키마 탐색(M3-10)의 메타데이터용 연결도 터널 리스를 쥔다: 조회 둘이 같은 터널로 가고 그 사이 리스가 0 이 되지 않으며, 연결이
+/// 닫히면(취소 · 쉼) 연결을 **닫은 뒤에** 리스를 놓는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn schema_metadata_connections_hold_their_tunnel_until_they_close() {
+    let tunnels = Arc::new(FakeTunnels::default());
+    let e = env(true, tunnels.clone());
+    let pg = e.pg.clone();
+    *tunnels.probe.lock().unwrap() = Some(Arc::new(move || pg.count(&FakeCall::Close)));
+    e.f.write_db("t.toml", &tunnelled("bastion", 5432));
+    let mut w = e.f.window();
+    let objects =
+        json!({ "projectId": e.f.id, "connectionId": "t", "kind": "table", "limit": 500 });
+    let columns = json!({ "projectId": e.f.id, "connectionId": "t",
+                          "object": { "schema": "public", "name": "t0" } });
+    let err = w
+        .call("db.schema.objects", objects.clone())
+        .await
+        .unwrap_err();
+    approve(&mut w, &e.f, "t", &err).await;
+
+    // 조회 둘(두 번째는 캐시가 아니라 드라이버로 간다)이 한 연결 · 한 터널을 쓰고, 그 사이 리스는 살아 있다.
+    w.call("db.schema.objects", objects.clone()).await.unwrap();
+    assert_eq!(tunnels.opened.load(Ordering::SeqCst), 1);
+    assert_eq!(tunnels.live.load(Ordering::SeqCst), 1);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        tunnels.live.load(Ordering::SeqCst),
+        1,
+        "the metadata connection must hold its tunnel between queries"
+    );
+    w.call("db.schema.columns", columns.clone()).await.unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Metadata("columns")), 1);
+    assert_eq!(e.pg.count(&FakeCall::Connect), 1);
+    assert_eq!(tunnels.opened.load(Ordering::SeqCst), 1, "one tunnel");
+    assert_eq!(tunnels.live.load(Ordering::SeqCst), 1);
+
+    // 질의 도중 취소 → 연결을 닫고 그다음 리스를 놓는다.
+    e.pg.hold_metadata(true);
+    let mut filtered = objects.clone();
+    filtered["filter"] = json!("t");
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "id": 900, "method": "db.schema.objects", "params": filtered,
+    }));
+    wait_until("the query did not reach the driver", || {
+        e.pg.count(&FakeCall::Metadata("objects")) == 2
+    })
+    .await;
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "method": "request.cancel", "params": { "id": 900 },
+    }));
+    wait_until("the cancelled connection kept its tunnel", || {
+        tunnels.live.load(Ordering::SeqCst) == 0
+    })
+    .await;
+    e.pg.hold_metadata(false);
+    assert_eq!(
+        *tunnels.released.lock().unwrap(),
+        vec![1],
+        "the tunnel is released after its connection is closed"
+    );
+
+    // 다음 조회는 새 연결 · 새 리스. 쉬어서 닫히면 역시 닫은 뒤에 놓는다.
+    e.sessions
+        .schema_state()
+        .set_idle_close(Duration::from_millis(200));
+    w.call("db.schema.ddl", columns).await.unwrap();
+    assert_eq!(tunnels.opened.load(Ordering::SeqCst), 2);
+    assert_eq!(tunnels.live.load(Ordering::SeqCst), 1);
+    wait_until("the idle connection kept its tunnel", || {
+        tunnels.live.load(Ordering::SeqCst) == 0
+    })
+    .await;
+    assert_eq!(*tunnels.released.lock().unwrap(), vec![1, 2]);
 }
 
 // --- 관문 · 확인(가짜 ssh — unix) -------------------------------------------------------------------------------------

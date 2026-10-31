@@ -38,7 +38,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::DbConnectionConfig;
 use crate::gate::{DbGrant, db_grant};
-use crate::session::{DbSession, DbSessions, blocking, db_error, lock};
+use crate::session::{DbSession, DbSessions, DbTunnelLease, blocking, db_error, lock};
 
 /// 스키마가 바뀌었을 수 있다. 내용은 [`DbSchemaChanged`]. 그 프로젝트 범위로만 나간다.
 pub const TOPIC_SCHEMA_CHANGED: &str = "db.schemaChanged";
@@ -435,6 +435,9 @@ struct MetaConn {
     id: u64,
     /// 닫히면 취소된다(연 창을 지켜보는 태스크가 끝난다).
     retired: CancellationToken,
+    /// SSH 터널(M3-11). 연결을 쥐는 동안 함께 쥐고 [`retire`] 가 연결을 닫은 뒤에 놓는다 — 먼저 버리면 ssh 가 끝나 연결이 끊긴다.
+    /// 필드 순서가 버리는 순서다: 런타임 밖에서 그냥 버려질 때도 `conn` 이 먼저 버려지게 맨 뒤에 둔다.
+    tunnel: Option<DbTunnelLease>,
 }
 
 /// 질의하는 동안 연결을 쥔다. 질의가 끝나기 전에 버려지면(RPC 취소는 핸들러 future 를 그 자리에서 버린다) 연결도 닫는다 — 프로토콜
@@ -851,10 +854,12 @@ impl DbSessions {
         if open.is_none() {
             let opened =
                 crate::connection::connect(self, grant, worktree, connection_id, catalog).await?;
+            let tunnel = opened.tunnel;
             let sql = match opened.connection {
                 DbConnection::Sql(sql) => sql,
                 other => {
                     let _ = other.close().await;
+                    drop(tunnel);
                     return Err(RpcError::invalid_params(format!(
                         "db connection `{connection_id}` has no schema to browse"
                     )));
@@ -874,6 +879,7 @@ impl DbSessions {
                 config: opened.config,
                 id,
                 retired,
+                tunnel,
             });
         }
         link.touch();
@@ -1079,10 +1085,18 @@ impl DbSessions {
 
 /// 메타데이터용 연결을 닫는다.
 async fn retire(meta: MetaConn) {
-    meta.retired.cancel();
-    if let Err(e) = within(Duration::from_secs(10), "close", meta.conn.close()).await {
+    let MetaConn {
+        conn,
+        retired,
+        tunnel,
+        ..
+    } = meta;
+    retired.cancel();
+    if let Err(e) = within(Duration::from_secs(10), "close", conn.close()).await {
         tracing::info!(target: "pw_db", %e, "closing a db metadata connection failed");
     }
+    // 터널은 연결을 닫은 뒤에 놓는다.
+    drop(tunnel);
 }
 
 /// `db.schema.*` 를 붙인다.
