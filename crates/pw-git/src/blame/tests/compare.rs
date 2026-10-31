@@ -387,8 +387,9 @@ fn binary_undiffable_crlf_and_nul_files_blame_like_git() {
     write("undiff.txt", text(30, &|i| format!("plain {i}\n")));
     write("marked.txt", text(30, &|i| format!("marked {i}\n")));
     write("crlf.txt", text(30, &|i| format!("row {i}\r\n")));
+    // `nul.txt` 는 Windows 의 장치 이름(`NUL`)이라 파일로 만들 수 없다.
     write(
-        "nul.txt",
+        "with-nul.txt",
         text(30, &|i| {
             if i == 5 {
                 format!("has\0nul {i}\n")
@@ -421,7 +422,7 @@ fn binary_undiffable_crlf_and_nul_files_blame_like_git() {
         }),
     );
     write(
-        "nul.txt",
+        "with-nul.txt",
         text(30, &|i| match i {
             5 => "has\0nul 5 changed\n".to_owned(),
             6 => "text 6 changed\n".to_owned(),
@@ -455,7 +456,7 @@ fn binary_undiffable_crlf_and_nul_files_blame_like_git() {
         "undiff.txt",
         "marked.txt",
         "crlf.txt",
-        "nul.txt",
+        "with-nul.txt",
     ] {
         let cli = assert_cli_matches(dir, ceiling, "HEAD", path);
         let gix = assert_gix_matches(dir, ceiling, "HEAD", path);

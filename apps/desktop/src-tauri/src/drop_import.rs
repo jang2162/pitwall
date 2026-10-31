@@ -376,7 +376,7 @@ mod tests {
                 pw_rpc::code::PERMISSION_DENIED,
                 "{label}"
             );
-            assert!(!root.join("in/a.txt").exists(), "{label}");
+            assert!(!root.join("in").join("a.txt").exists(), "{label}");
             assert!(
                 state.drops.take(&label, id, None, Instant::now()).is_ok(),
                 "{label}"
@@ -385,10 +385,10 @@ mod tests {
         let (result, _) = import(&crate::windows::project_label(&p1));
         assert_eq!(
             result.unwrap().copied,
-            [root.join("in/a.txt").display().to_string()]
+            [root.join("in").join("a.txt").display().to_string()]
         );
         assert_eq!(
-            std::fs::read_to_string(root.join("in/a.txt")).unwrap(),
+            std::fs::read_to_string(root.join("in").join("a.txt")).unwrap(),
             "dropped"
         );
     }

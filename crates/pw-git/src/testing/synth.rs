@@ -520,7 +520,9 @@ mod tests {
     #[test]
     fn the_perf_fixture_changes_ten_thousand_lines_of_one_file_on_main() {
         let tmp = tempfile::tempdir().unwrap();
-        let ceiling = std::fs::canonicalize(tmp.path()).unwrap();
+        // Windows 의 `canonicalize` 는 `\\?\` 를 붙이고, 그 경로의 `GIT_CONFIG_GLOBAL` 을 git 이 읽지 못한다 — [`crate::testing::TestRepo`]
+        // 와 같은 정규화를 쓴다.
+        let ceiling = pw_core::registry::path::normalize(tmp.path()).unwrap();
         let mut commits = Vec::new();
         let mut dirs = Vec::new();
         for name in ["a", "b"] {

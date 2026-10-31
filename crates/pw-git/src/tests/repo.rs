@@ -88,7 +88,7 @@ fn a_linked_worktree_reads_its_own_head_and_shares_the_common_dir() {
     let id = f.project(r.root());
     let expected = RepoInfo {
         work_tree: s(&wt),
-        git_dir: s(&r.root().join(".git/worktrees/wt")),
+        git_dir: s(&r.root().join(".git").join("worktrees").join("wt")),
         common_dir: s(&r.root().join(".git")),
         linked_worktree: true,
         head: RepoHead::Branch {
@@ -352,7 +352,10 @@ fn a_submodule_is_its_own_repository() {
     let id = f.project(&module);
     let got = info(&f, &id, None);
     assert_eq!(got.work_tree, s(&module));
-    assert_eq!(got.git_dir, s(&r.root().join(".git/modules/m")));
+    assert_eq!(
+        got.git_dir,
+        s(&r.root().join(".git").join("modules").join("m"))
+    );
     assert_eq!(
         got.head,
         RepoHead::Branch {
@@ -395,7 +398,7 @@ fn a_work_tree_moved_elsewhere_by_core_worktree_is_none() {
 #[test]
 fn a_separate_git_dir_repository_is_a_repository() {
     let r = TestRepo::new();
-    let store = r.base().join("store/proj.git");
+    let store = r.base().join("store").join("proj.git");
     let proj = r.base().join("proj");
     fs::create_dir_all(r.base().join("store")).unwrap();
     r.git_in(
