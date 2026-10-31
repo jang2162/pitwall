@@ -131,6 +131,22 @@ async fn live_redis_the_first_scan_batch_of_a_million_keys_is_fast() {
     assert!(page.keys.iter().any(|k| k.ttl_ms.is_some()));
     assert!(page.keys.iter().any(|k| k.ttl_ms.is_none()));
     assert!(best < Duration::from_millis(200), "{best:?}");
+
+    // 리뷰 5: 드라이버가 묶음 크기를 묶는다 — `count` 를 아무리 크게 줘도 한 묶음은 `MAX_SCAN_COUNT` 근처다(묶지 않으면 키 공간
+    // 전체 + 키당 세 명령 파이프라인).
+    let huge = conn
+        .scan(KvScanRequest {
+            pattern: None,
+            cursor: None,
+            count: u32::MAX,
+        })
+        .await
+        .unwrap();
+    assert!(
+        huge.keys.len() <= 2 * crate::MAX_SCAN_COUNT as usize,
+        "{}",
+        huge.keys.len()
+    );
 }
 
 /// ② 분류 표(완료 기준) + 서버가 아는 명령의 플래그와의 대조 — 허용 목록의 명령에 `write` · `blocking` 플래그가 없고,
@@ -420,6 +436,20 @@ async fn live_redis_each_type_reads_in_pages() {
         if expect != "set" {
             assert!(pages >= 3, "{expect}: {pages} pages");
         }
+    }
+    // 리뷰 6: 창이 보낸 커서가 끝 값이어도 넘치지 않고 요청 오류다(debug 빌드에서 panic 하지 않는다).
+    for key in ["s", "l", "z"] {
+        let error = conn
+            .read(
+                KvKey::Text(key.into()),
+                KvRange {
+                    cursor: Some(u64::MAX.to_string()),
+                    count: 10,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, DbErrorKind::Invalid, "{key}: {error}");
     }
     let missing = conn
         .read(

@@ -212,7 +212,7 @@ impl RedisKv {
     ) -> DbResult<KvValuePage> {
         let offset = match cursor.as_deref() {
             None => 0,
-            Some(text) => parse_cursor(text)?,
+            Some(text) => parse_index(text)?,
         };
         let window = window.clamp(1, PAGE_BUDGET) as u64;
         let end = offset
@@ -323,7 +323,7 @@ impl RedisKv {
     ) -> DbResult<KvValuePage> {
         let mut start = match cursor.as_deref() {
             None => 0,
-            Some(text) => parse_cursor(text)?,
+            Some(text) => parse_index(text)?,
         };
         let total = self.length(&key, kind.length()).await?;
         let mut items = Vec::new();
@@ -750,6 +750,18 @@ fn key_bytes(key: &KvKey) -> DbResult<Vec<u8>> {
 fn parse_cursor(text: &str) -> DbResult<u64> {
     text.parse()
         .map_err(|_| DbError::new(DbErrorKind::Invalid, format!("bad cursor {text:?}")))
+}
+
+/// 번호 커서(string 바이트 위치 · list · zset 번호). Redis 의 번호는 i64 라 그 밖은 요청 오류다.
+fn parse_index(text: &str) -> DbResult<u64> {
+    let index = parse_cursor(text)?;
+    if index > i64::MAX as u64 {
+        return Err(DbError::new(
+            DbErrorKind::Invalid,
+            format!("cursor {text:?} is out of range"),
+        ));
+    }
+    Ok(index)
 }
 
 fn protocol(what: &str) -> DbError {
