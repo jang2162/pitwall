@@ -35,7 +35,8 @@ const REFUSAL_CODES: Record<DbRefusalReason, number> = {
   readOnlyConnection: ERROR_CODE.PERMISSION_DENIED,
   untrusted: ERROR_CODE.PERMISSION_DENIED,
   notProjectWindow: ERROR_CODE.PERMISSION_DENIED,
-  notAQuery: ERROR_CODE.INVALID_PARAMS,
+  // `db.query.page` · `db.query.execute { queryOnly }`(crates/pw-db/src/execute.rs `only_one_query`)가 낸다 — 코드는 Host 가 정본.
+  notAQuery: ERROR_CODE.PERMISSION_DENIED,
   transactionStatement: ERROR_CODE.INVALID_PARAMS,
   busy: ERROR_CODE.CONFLICT,
   configChanged: ERROR_CODE.CONFLICT,

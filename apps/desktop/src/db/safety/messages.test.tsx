@@ -66,6 +66,30 @@ describe("dbRefusal", () => {
     expect(dbRefusalText(statement!, T.refusal)).toContain("PREPARE TRANSACTION");
   });
 
+  it("shows the not-a-query refusal of db.query.page as a refusal sentence", async () => {
+    // Host 가 내는 그대로(crates/pw-db/src/execute.rs `only_one_query`): PERMISSION_DENIED · notAQuery · 거절한 문장.
+    const statements = [
+      { index: 1, range: { from: 21, to: 33 }, grade: "destructive", reasons: ["drop"] },
+    ];
+    const host = err(ERROR_CODE.PERMISSION_DENIED, { reason: "notAQuery", statements });
+    expect(dbRefusal(host)).toEqual({ reason: "notAQuery", message: "", statements });
+    // 같은 이름이라도 다른 코드면 거절로 읽지 않는다.
+    expect(dbRefusal(err(ERROR_CODE.INVALID_PARAMS, { reason: "notAQuery" }))).toBeUndefined();
+    const element = document.createElement("div");
+    document.body.append(element);
+    root = createRoot(element);
+    await act(async () =>
+      root!.render(
+        <LocalizationProvider l10n={bundledLocalization("ko")}>
+          <DbRefusalMessage error={host} />
+        </LocalizationProvider>,
+      ),
+    );
+    const alert = element.querySelector<HTMLElement>("[role=alert]")!;
+    expect(alert.dataset.reason).toBe("notAQuery");
+    expect(alert.textContent).toBe(T.refusal.notAQuery());
+  });
+
   it("does not read other errors as refusals", async () => {
     expect(dbRefusal(new Error("x"))).toBeUndefined();
     expect(dbRefusal(err(ERROR_CODE.PERMISSION_DENIED))).toBeUndefined();
