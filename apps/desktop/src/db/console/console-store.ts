@@ -2,7 +2,8 @@
 //
 // - **연결은 사람이 누를 때만**(결정 M3-D13): 탭이 처음 그려질 때는 `db.session.resume { projectId, tabId }` 만 부른다 — 새로고침 ·
 //   웹뷰 재시작 뒤 Host 가 보존한 열린 트랜잭션 세션이 있으면 그대로 잇고(새 연결을 열지 않는다), 없으면 연결하지 않은 채다.
-//   [연결] 이 `db.session.open { …, tabId }` 를 부른다 — `tabId` 는 탭을 복원해도 같다.
+//   [연결] 이 `db.session.open { …, tabId }` 를 부른다 — `tabId` 는 탭을 복원해도 같다. `3101` · `3102` 면 DB 접근 묻기(M3-13)로
+//   비밀 · 확인을 받아 넣고 다시 연다.
 // - **실행**: `db.sql.classify { sessionId, statements }` 로 등급을 미리 받아 확인이 필요하면(M3-19 `confirmationFor` — 정책의 정본은
 //   Host) 위험 쿼리 확인을 띄우고, 받은 `DbConfirmed`(statementsHash · 친 이름)를 `confirmed` 로 실어 `db.query.execute` 를 부른다.
 //   Host 가 그래도 `3001` 을 주면(미리 본 뒤 세션 상태가 바뀜) 그 `data` 로 한 번 더 묻는다. [취소] 면 실행 RPC 를 부르지 않는다.
@@ -62,6 +63,11 @@ export interface ConsoleDeps {
   onSpec(spec: ConsoleSpec): void;
   /** 연결 표지 색(연결 설정의 `color`) — 확인 다이얼로그에 싣는다. */
   color?(): string | null | undefined;
+  /**
+   * 연결을 여는 RPC 가 `3101`(비밀 필요) · `3102`(확인 필요)로 답했을 때 사람에게 묻고 Host 에 넣는다(M3-13 `useDbAccessPrompt`).
+   * 넣었으면 `true` — 그 RPC 를 다시 부른다.
+   */
+  resolveAccess?(error: unknown): Promise<boolean>;
 }
 
 /** 실행 하나: 그 결과(문장마다의 버퍼)와 도는 중인지. */
@@ -119,6 +125,9 @@ function sessionOf(error: unknown): DbSessionInfo | undefined {
 }
 
 export type ConsoleStore = StoreApi<ConsoleState> & ReturnType<typeof consoleActions>;
+
+/** [연결] 한 번에 물어 넣고 다시 여는 최대 수. */
+const ACCESS_RETRIES = 4;
 
 export function createConsoleStore(spec: ConsoleSpec, deps: ConsoleDeps): ConsoleStore {
   const store = createStore<ConsoleState>()(() => ({
@@ -220,16 +229,24 @@ function consoleActions(store: StoreApi<ConsoleState>, deps: ConsoleDeps) {
       const { spec, opened, busy } = get();
       if (opened || busy || !spec.connectionId) return;
       set({ busy: true, error: undefined, notice: undefined });
+      const params = {
+        projectId: deps.projectId,
+        worktree: deps.worktree() ?? null,
+        connectionId: spec.connectionId,
+        database: spec.database ?? null,
+        schema: spec.schema ?? null,
+        tabId: spec.tabId,
+      };
       try {
-        const next = await client().call("db.session.open", {
-          projectId: deps.projectId,
-          worktree: deps.worktree() ?? null,
-          connectionId: spec.connectionId,
-          database: spec.database ?? null,
-          schema: spec.schema ?? null,
-          tabId: spec.tabId,
-        });
-        set({ opened: next });
+        // 묻고 넣은 뒤 다시 연다. 한 연결이 여럿을 차례로 물을 수 있다(터널 확인 → 비밀번호) — 끝없이 돌지 않게 수를 둔다.
+        for (let attempt = 0; ; attempt++) {
+          try {
+            set({ opened: await client().call("db.session.open", params) });
+            return;
+          } catch (e) {
+            if (attempt >= ACCESS_RETRIES || !(await deps.resolveAccess?.(e))) throw e;
+          }
+        }
       } catch (e) {
         set({ error: e });
       } finally {

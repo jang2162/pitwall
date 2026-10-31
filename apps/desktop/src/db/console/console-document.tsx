@@ -40,6 +40,7 @@ import {
   type DbActiveSession,
   useDbTabSession,
 } from "../safety/db-status";
+import { useDbAccessPrompt } from "../safety/access-prompt";
 import { DbRefusalMessage, dbNoticeText, dbRefusal } from "../safety/messages";
 import { useRiskConfirm } from "../safety/risk-confirm";
 import { useDbSafetyStrings } from "../safety/strings";
@@ -181,6 +182,7 @@ function ConsoleBody({
   const notify = useNotify();
   const risk = useRiskConfirm();
   const dialogs = useGitDialogs();
+  const access = useDbAccessPrompt();
   const root = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView>(undefined);
   const latest = useRef({
@@ -192,6 +194,7 @@ function ConsoleBody({
     T,
     S,
     color: undefined as string | null | undefined,
+    resolveAccess: (_error: unknown) => Promise.resolve(false),
   });
   latest.current = { ...latest.current, client, projectId, onSpec, risk, dialogs, T, S };
 
@@ -205,6 +208,7 @@ function ConsoleBody({
         latest.current.dialogs.confirm({ ...latest.current.S.cancelRollback, danger: true }),
       onSpec: (next) => latest.current.onSpec(next),
       color: () => latest.current.color,
+      resolveAccess: (error) => latest.current.resolveAccess(error),
     }),
   );
   const state = useStore(store);
@@ -231,6 +235,26 @@ function ConsoleBody({
   const entry = connections.find((c) => c.id === state.spec.connectionId);
   const color = entry?.config?.color ?? null;
   latest.current.color = color;
+  latest.current.resolveAccess = (error) => {
+    const connectionId = state.spec.connectionId;
+    if (!client || !connectionId) return Promise.resolve(false);
+    return access.resolve(error, {
+      calls: client,
+      projectId,
+      worktree: activeWorktree() ?? null,
+      connectionId,
+      connectionName: opened?.name ?? entry?.config?.name ?? connectionId,
+    });
+  };
+  /** 연결을 여는 RPC 를 부르고, `3101` · `3102` 면 묻고 넣은 뒤 한 번 더 부른다. */
+  const withAccess = async <R,>(call: () => Promise<R> | undefined): Promise<R | undefined> => {
+    try {
+      return await call();
+    } catch (e) {
+      if (await latest.current.resolveAccess(e)) return call();
+      throw e;
+    }
+  };
   const title = opened?.name ?? entry?.config?.name;
   useEffect(() => {
     if (title) onTitle?.(T.tabTitle(title));
@@ -421,13 +445,13 @@ function ConsoleBody({
             value={state.spec.database ?? null}
             disabled={choosingLocked}
             load={() =>
-              latest.current.client
-                ?.call("db.schema.databases", {
+              withAccess(() =>
+                latest.current.client?.call("db.schema.databases", {
                   projectId,
                   worktree: activeWorktree() ?? null,
                   connectionId: opened.session.connectionId,
-                })
-                .then((r) => r.items.map((i) => i.name))
+                }),
+              ).then((r) => r?.items.map((i) => i.name) ?? [])
             }
             onPick={(database) =>
               void store.choose({ connectionId: state.spec.connectionId, database, schema: null })
@@ -441,14 +465,14 @@ function ConsoleBody({
             value={state.spec.schema ?? null}
             disabled={choosingLocked}
             load={() =>
-              latest.current.client
-                ?.call("db.schema.schemas", {
+              withAccess(() =>
+                latest.current.client?.call("db.schema.schemas", {
                   projectId,
                   worktree: activeWorktree() ?? null,
                   connectionId: opened.session.connectionId,
                   database: state.spec.database ?? null,
-                })
-                .then((r) => r.items.map((i) => i.name))
+                }),
+              ).then((r) => r?.items.map((i) => i.name) ?? [])
             }
             onPick={(schema) =>
               void store.choose({
@@ -580,6 +604,7 @@ function ConsoleBody({
       />
       {risk.element}
       {dialogs.element}
+      {access.element}
     </div>
   );
 }

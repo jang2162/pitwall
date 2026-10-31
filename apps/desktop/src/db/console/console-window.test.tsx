@@ -4,7 +4,8 @@
 // [취소] 면 실행 RPC 가 불리지 않으며 [실행] 이면 받은 `statementsHash` 가 그대로 실린다, 수동 커밋에서 [롤백] 이
 // `db.session.rollback` 을 부른다, ⌘F2 가 `db.query.cancel` 을 부른다, 수동 트랜잭션이 열린 탭 닫기 · 창 닫기(앱 종료도 같은 길 —
 // `guardClose`)가 묻고 [취소] 면 닫히지 않는다, 콘솔 탭이 열린 채 다시 시작하면 `db.session.open` 이 불리지 않는다(`resume` 만),
-// `failed` 세션에서 [커밋] 이 꺼져 있다, 한글 IME 로 SQL 을 칠 수 있다(조합 중의 ⌘↩ 은 돌지 않는다). 그 밖에 실행 계획 트리.
+// `failed` 세션에서 [커밋] 이 꺼져 있다, 한글 IME 로 SQL 을 칠 수 있다(조합 중의 ⌘↩ 은 돌지 않는다). 그 밖에 실행 계획 트리,
+// [연결] 이 `3101` 을 받으면 DB 접근 묻기(M3-13)로 비밀번호를 넣고 다시 연다.
 //
 // Glide 는 canvas 라 happy-dom 에서 그릴 수 없어 기록하는 가짜로 바꾼다(결과 그리드 자체는 src/db/grid 의 시험이 본다).
 
@@ -66,6 +67,20 @@ const host = vi.hoisted(() => ({
   execution: "",
   /** `db.session.unattendedRollbacks` 의 답. */
   unattended: [] as unknown[],
+  /** 참이면 다음 `db.session.open` 이 `3101`(비밀 필요)로 답한다(한 번). */
+  openNeedsSecret: false,
+}));
+
+const SECRET_TARGET = vi.hoisted(() => ({
+  driver: "postgres",
+  host: "localhost",
+  port: 5432,
+  user: "app",
+  tunnel: null,
+  sslmode: "disable",
+  sslrootcert: null,
+  sslcert: null,
+  sslkey: null,
 }));
 
 const glide = vi.hoisted(() => ({ rows: [] as number[] }));
@@ -212,7 +227,26 @@ vi.mock("../../tauri-transport", async () => {
             return reply({ items: [{ name: "app" }], nextCursor: null });
           case "db.session.resume":
             return reply(host.resumed);
+          case "db.secret.set":
+            return reply(null);
           case "db.session.open":
+            if (host.openNeedsSecret) {
+              host.openNeedsSecret = false;
+              return send({
+                id: m.id,
+                error: {
+                  code: 3101,
+                  message: "db connection `dev` needs its password",
+                  data: {
+                    connectionId: "dev",
+                    key: "password",
+                    reason: "missing",
+                    target: SECRET_TARGET,
+                    previous: null,
+                  },
+                },
+              });
+            }
             return reply({
               session: session(),
               name: "dev db",
@@ -368,6 +402,7 @@ beforeEach(() => {
   host.grade = () => "read";
   host.plan = { format: "json", text: "[]" };
   host.execution = "";
+  host.openNeedsSecret = false;
   host.unattended = [];
   glide.rows = [];
 });
@@ -776,6 +811,40 @@ it("reopens the session with the chosen schema and keeps the choice in the tab",
   await sessionChanged({ kind: "inTransaction", since: Date.now() });
   expect(q<HTMLSelectElement>("select[aria-label='스키마']")!.disabled).toBe(true);
   expect(q<HTMLSelectElement>("[data-testid=db-console-connection]")!.disabled).toBe(true);
+});
+
+it("asks for the password when [연결] gets 3101, saves it and opens again", async () => {
+  await mount();
+  await openConsole();
+  host.openNeedsSecret = true;
+  await click(button("db-console-connect"));
+  const prompt = q<HTMLElement>("[data-testid=db-access-prompt]")!;
+  expect(prompt.dataset.kind).toBe("secret");
+  expect(callsOf("db.session.open")).toHaveLength(1);
+  const input = q<HTMLInputElement>("[data-testid=db-access-secret]")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "pw-1");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(prompt.querySelector("[data-action=run]")!);
+  expect(callsOf("db.secret.set").map((c) => c.params)).toEqual([
+    expect.objectContaining({ connectionId: "dev", key: "password", target: SECRET_TARGET }),
+  ]);
+  expect(callsOf("db.session.open")).toHaveLength(2);
+  expect(q("[data-testid=db-access-prompt]")).toBeNull();
+  expect(button("db-console-disconnect")).toBeTruthy();
+});
+
+it("leaves the console unconnected when the password question is cancelled", async () => {
+  await mount();
+  await openConsole();
+  host.openNeedsSecret = true;
+  await click(button("db-console-connect"));
+  await click(q<HTMLElement>("[data-testid=db-access-prompt] [data-action=cancel]")!);
+  expect(callsOf("db.secret.set")).toEqual([]);
+  expect(callsOf("db.session.open")).toHaveLength(1);
+  expect(q("[data-testid=db-console-disconnect]")).toBeNull();
+  expect(button("db-console-connect")).toBeTruthy();
 });
 
 it("opens a new console for the last connected connection with ⇧⌘L", async () => {
