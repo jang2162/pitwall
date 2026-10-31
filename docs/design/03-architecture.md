@@ -44,7 +44,7 @@
 | `runtime` | 런타임 환경 해석 (mise · direnv · asdf · 로그인 셸 · 수동), 디렉터리별 env 캐시 — §5-1 | `runtime.changed` |
 | `run` | 실행 구성, 태스크 감지, 프로세스/PTY, 로그 버퍼 | `run.output`, `run.exited` |
 | `dap` | 디버그 세션, 브레이크포인트, 스택/변수 | `dap.stopped`, `dap.output` |
-| `db` | 연결 풀, 쿼리 실행(스트리밍), 스키마 캐시 | `db.queryProgress` |
+| `db` | 연결 풀, 쿼리 실행(스트리밍), 스키마 캐시 | `db.queryProgress`, `db.schemaChanged` |
 | `secrets` | 키체인 접근 (로컬에서만; 원격 Relay에는 필요 시 전달) | |
 
 - 모든 모듈은 `ProjectContext`(루트 경로, 설정, 이벤트 버스, 취소 토큰)를 받는다
