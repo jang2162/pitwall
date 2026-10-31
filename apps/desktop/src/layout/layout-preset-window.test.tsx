@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// 레이아웃 프리셋(⌃⌥1 · ⌃⌥2, project-layout.ts 의 `applyPreset`)을 프로젝트 창(App kind="project")에서 본다: 한글 입력 상태의 키로
+// 레이아웃 프리셋(⌃⌥1 · ⌃⌥2 · ⌃⌥3, project-layout.ts 의 `applyPreset`)을 프로젝트 창(App kind="project")에서 본다: 한글 입력 상태의 키로
 // 적용되고, 열린 에디터 탭 · 고정 탭 · 저장 안 한 편집을 잃지 않고, 창을 다시 열면 그 배치가 프로젝트 상태(`project.state.*`)에서
 // 돌아온다.
 
@@ -290,6 +290,12 @@ const GIT_REVIEW = {
   bottom: { active: "git", collapsed: false },
   right: { active: "notifications", collapsed: true },
 };
+// DB(M3-20): 탐색기를 띄우고 하단 · 오른쪽을 접는다.
+const DB = {
+  left: { active: "database", collapsed: false },
+  bottom: { active: "run", collapsed: true },
+  right: { active: "notifications", collapsed: true },
+};
 const DEFAULT = {
   left: { active: "project", collapsed: false },
   bottom: { active: "run", collapsed: false },
@@ -313,7 +319,7 @@ const dirtyTabs = () =>
     (e) => e.title,
   );
 
-it("applies Git review with ⌃⌥2 under a Korean IME, keeps the tabs and unsaved edits, and restores it after a restart", async () => {
+it("applies Git review with ⌃⌥2 and DB with ⌃⌥3 under a Korean IME, keeps the tabs and unsaved edits, and restores them after a restart", async () => {
   await mount();
   expect(layoutOf()).toEqual(DEFAULT);
   await openRequest(LIB);
@@ -339,10 +345,6 @@ it("applies Git review with ⌃⌥2 under a Korean IME, keeps the tabs and unsav
   expect(libView().state.doc.toString()).toBe("x fn lib() {}\n");
   expect(dock!.panels.filter((p) => p.api.component === lib.api.component)).toEqual(editorPanels);
 
-  // ⌃⌥3(DB)은 M3 — 등록하지 않았다.
-  await pressPreset(3);
-  expect(layoutOf()).toEqual(GIT_REVIEW);
-
   // 닫기 확인의 미저장 질문은 이 시험이 보는 것이 아니다 — 편집을 버리고 닫는다.
   await act(async () => libView().dispatch({ changes: { from: 0, to: 2, insert: "" } }));
   await settle();
@@ -354,4 +356,11 @@ it("applies Git review with ⌃⌥2 under a Korean IME, keeps the tabs and unsav
   expect(layoutOf()).toEqual(DEFAULT);
   await restart();
   expect(layoutOf()).toEqual(DEFAULT);
+
+  // ⌃⌥3: DB 배치(M3-20). 에디터 탭은 그대로이고 다시 시작해도 그 배치다.
+  await pressPreset(3);
+  expect(layoutOf()).toEqual(DB);
+  expect(editorTabs()).toEqual([LIB, MAIN]);
+  await restart();
+  expect(layoutOf()).toEqual(DB);
 });

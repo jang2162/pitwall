@@ -4,9 +4,8 @@
 // 판정한다(Host 쪽 판정 · 파일 쓰기 · 다음 실행의 상한은 crates/pw-db/tests/settings.rs).
 
 import type { DbSettingItem, DbSettingsView, HostInfo } from "@pitwall/rpc-client";
-import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { App } from "../App";
@@ -15,6 +14,7 @@ import type { KeymapNative } from "../keymap/native";
 import { createThemeStore } from "../theme/theme-store";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
+import { act, endTest, it } from "../test-support/ended-test";
 import { settingsStrings } from "./strings";
 
 declare global {
@@ -167,8 +167,9 @@ beforeEach(() => {
   localStorage.clear();
 });
 
-afterEach(() => {
-  act(() => root?.unmount());
+afterEach(async () => {
+  await endTest();
+  await act(async () => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
   vi.restoreAllMocks();
