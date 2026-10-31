@@ -2,10 +2,13 @@
 // 실행: node --test scripts/db-tls.test.mjs   (`mise run test` 에 든다)
 
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 
-import { CA_ENV, TARGETS, parseArgs, publish } from "./db-tls.mjs";
+import { CA_ENV, TARGETS, makeCertificates, parseArgs, publish } from "./db-tls.mjs";
 
 test("no db means every target, on its default port and name", () => {
   const options = parseArgs([]);
@@ -65,3 +68,25 @@ test("port 0 lets docker pick a free port", () => {
   assert.equal(publish(0, 5432), "127.0.0.1::5432");
   assert.equal(publish(5443, 5432), "127.0.0.1:5443:5432");
 });
+
+// openssl 이 없는 환경(예: Windows 러너)에서는 건너뛰고 그렇게 알린다.
+const hasOpenssl = spawnSync("openssl", ["version"]).status === 0;
+test(
+  "makeCertificates writes the serial file into the certificate folder, not the cwd",
+  { skip: hasOpenssl ? false : "openssl not found" },
+  () => {
+    // LibreSSL 은 CA 경로의 첫 `.` 부터를 `.srl` 로 바꿔 일련번호 파일 이름을 만든다. 경로에 점이 든 폴더(`.worktrees/…` 등)가 있으면 이름이 비어
+    // `.srl` 이 cwd 에 생긴다 — 그 조건을 만든다.
+    const cwd = mkdtempSync(join(tmpdir(), "db-tls-cwd-"));
+    const before = process.cwd();
+    process.chdir(cwd);
+    try {
+      makeCertificates(".certs");
+    } finally {
+      process.chdir(before);
+    }
+    assert.deepEqual(readdirSync(cwd), [".certs"], "nothing was left in the cwd");
+    assert.ok(existsSync(join(cwd, ".certs", "ca.srl")));
+    assert.ok(existsSync(join(cwd, ".certs", "server.pem")));
+  },
+);

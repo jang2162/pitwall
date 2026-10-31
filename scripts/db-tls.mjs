@@ -165,6 +165,9 @@ export function makeCertificates(out) {
     "-CAkey",
     at("ca.key"),
     "-CAcreateserial",
+    "-CAserial",
+    at("ca.srl"),
+    // 일련번호 파일을 지정하지 않으면 LibreSSL(macOS)은 `.srl` 을 현재 디렉터리에 쓴다 — 인증서 폴더 안에만 쓴다.
     "-extfile",
     at("server.ext"),
     "-out",
