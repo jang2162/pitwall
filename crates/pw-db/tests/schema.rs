@@ -10,7 +10,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{Conn, Fixture};
+use common::{Conn, Fixture, fake_worktree};
 use pw_core::bus::{Filter, Received, Scope, Subscription};
 use pw_db::DbSessions;
 use pw_db::gate::code;
@@ -1034,15 +1034,6 @@ async fn cached_names_come_only_from_the_cache_and_open_nothing() {
     );
     assert_eq!(e.sessions.schema_state().connections_opened(), 1);
 
-    // 다른 워크트리의 캐시는 섞이지 않는다.
-    let mut other = cached.clone();
-    other["worktree"] = json!(e.f.root.join("wt").to_string_lossy());
-    let err = w.call("db.schema.cached", other).await;
-    assert!(
-        err.as_ref().map_or(true, |v| v["items"] == json!([])),
-        "{err:?}"
-    );
-
     w.call(
         "db.schema.refresh",
         json!({ "projectId": e.f.id, "connectionId": "dev" }),
@@ -1100,5 +1091,68 @@ async fn other_windows_and_untrusted_projects_get_no_cached_names() {
         .await
         .unwrap_err();
     assert_eq!(reason(&err), Some("untrusted"));
+    assert_eq!(e.pg.calls().len(), before);
+}
+
+/// 캐시는 (프로젝트, 워크트리)마다다 — 메인 체크아웃이 채운 이름은 그 프로젝트의 연결 워크트리에서 묻는 `db.schema.cached` 에 나오지
+/// 않고, 그 반대도 같다. 두 쪽의 연결 설정은 같다(설정 비교로 걸러지지 않게 — 워크트리 필터만이 막는다, M3-20 리뷰 2번).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cached_names_stay_in_their_worktree() {
+    for fill_main in [true, false] {
+        let e = env(true);
+        e.pg.set_objects(tables(2));
+        std::fs::create_dir_all(e.f.root.join(".git")).unwrap();
+        let wt = fake_worktree(&e.f.root, &e.f.base.join("p1-wt"));
+        std::fs::create_dir_all(wt.join(".pitwall/db")).unwrap();
+        std::fs::write(wt.join(".pitwall/db/dev.toml"), DEV).unwrap();
+        let wt = json!(wt.to_string_lossy());
+        let mut w = e.f.window();
+        let (filled, other) = if fill_main {
+            (Value::Null, wt.clone())
+        } else {
+            (wt.clone(), Value::Null)
+        };
+        let mut objects = e.objects();
+        objects["worktree"] = filled.clone();
+        w.call("db.schema.objects", objects).await.unwrap();
+        let before = e.pg.calls().len();
+        let ask = |worktree: &Value| json!({ "projectId": e.f.id, "worktree": worktree });
+        let own = w.call("db.schema.cached", ask(&filled)).await.unwrap();
+        assert_eq!(
+            own["items"].as_array().unwrap().len(),
+            2,
+            "fill_main={fill_main}"
+        );
+        let elsewhere = w.call("db.schema.cached", ask(&other)).await.unwrap();
+        assert_eq!(elsewhere["items"], json!([]), "fill_main={fill_main}");
+        assert_eq!(e.pg.calls().len(), before);
+    }
+}
+
+/// 다른 신뢰한 프로젝트가 같은 연결 id · 같은 설정을 가져도, 이 프로젝트가 채운 캐시는 그 프로젝트 창의 `db.schema.cached` 에 나오지
+/// 않는다(프로젝트 필터 — M3-20 리뷰 2번).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cached_names_stay_in_their_project() {
+    let e = env(true);
+    e.pg.set_objects(tables(2));
+    let other_root = e.f.base.join("p2");
+    std::fs::create_dir_all(other_root.join(".pitwall/db")).unwrap();
+    std::fs::write(other_root.join(".pitwall/db/dev.toml"), DEV).unwrap();
+    e.f.projects.set_trust(&e.f.other, true).unwrap();
+    let mut ours = e.f.window();
+    ours.call("db.schema.objects", e.objects()).await.unwrap();
+    let before = e.pg.calls().len();
+
+    let mut theirs = e.f.connect(ConnectionScope::Project(e.f.other.clone()));
+    let found = theirs
+        .call("db.schema.cached", json!({ "projectId": e.f.other }))
+        .await
+        .unwrap();
+    assert_eq!(found["items"], json!([]));
+    let own = ours
+        .call("db.schema.cached", json!({ "projectId": e.f.id }))
+        .await
+        .unwrap();
+    assert_eq!(own["items"].as_array().unwrap().len(), 2);
     assert_eq!(e.pg.calls().len(), before);
 }

@@ -9,12 +9,17 @@
 //!   쓴다 — 다시 읽을 때 설정 계층이 마이그레이션한다.
 //! - 심링크는 링크가 아니라 대상 파일을 고친다(dotfiles 연결을 끊지 않는다). 대상이 없는 링크는 오류다.
 //! - 같은 파일을 다른 프로세스(편집기 · 다른 Pitwall)가 쓰는 경합: 읽은 내용으로 새 내용을 만든 뒤 쓰기 직전에 다시 읽어
-//!   달라졌으면 새로 읽은 것으로 다시 만든다([`ATTEMPTS`] 번까지). 다시 읽은 뒤 rename 까지의 아주 짧은 틈은 막지 못한다 — 그
-//!   사이에 쓴 쪽의 변경은 이 쓰기에 덮인다. 파일 잠금은 두지 않는다(편집기 · dotfiles 도구가 잠금을 보지 않는다).
+//!   달라졌으면 새로 읽은 것으로 다시 만든다([`ATTEMPTS`] 번까지). 파일 잠금은 두지 않는다(편집기 · dotfiles 도구가 잠금을 보지
+//!   않는다).
+//! - 같은 프로세스 안의 쓰기(설정 창의 DB 페이지 · 다른 창의 언어 쓰기)는 프로세스 전역 잠금([`IN_PROCESS`])으로 한 줄로 세운다 —
+//!   다시 읽은 뒤 rename 까지는 임시 파일 쓰기 · fsync 가 들어 짧지 않아, 잠금 없이 두 키를 동시에 쓰면 거의 늘 한쪽이 사라진다
+//!   (M3-20 리뷰 1번 — 300/300). 잠금이 막지 못하는 것은 다른 프로세스(편집기 · 다른 Pitwall)와의 그 틈뿐이고, 그 사이에 쓴 쪽의
+//!   변경은 이 쓰기에 덮인다.
 
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use toml_edit::{DocumentMut, Item, Table};
 
@@ -28,6 +33,9 @@ const SETTINGS_KIND: &str = "settings";
 
 /// 경합으로 다시 만드는 횟수.
 pub const ATTEMPTS: usize = 3;
+
+/// 이 프로세스의 쓰기를 한 줄로 세우는 잠금(모듈 문서). 읽기 → 고치기 → 다시 읽기 → rename 전체를 쥔다.
+static IN_PROCESS: Mutex<()> = Mutex::new(());
 
 #[derive(Debug)]
 pub enum WriteError {
@@ -80,6 +88,8 @@ pub fn write_setting_with(
     value: Option<toml_edit::Value>,
     before_recheck: &mut dyn FnMut(&Path),
 ) -> Result<bool, WriteError> {
+    // 쓰다 패닉한 쪽이 있어도 파일은 rename 으로만 바뀌므로 반쯤 쓴 내용은 없다 — 독은 무시한다.
+    let _one_at_a_time = IN_PROCESS.lock().unwrap_or_else(PoisonError::into_inner);
     let path = config_dir.join(SETTINGS_FILE);
     let io_err = |error| WriteError::Io {
         path: path.clone(),
@@ -243,6 +253,43 @@ mod tests {
             "schema = 1\n[db]\nconnect_timeout = 5\n"
         );
         assert!(!write_setting(dir.path(), "db.grid_max_rows", None).unwrap());
+    }
+
+    /// 같은 프로세스에서 두 키를 동시에 써도 둘 다 남는다(M3-20 리뷰 1번 — 잠금이 없으면 거의 매번 한쪽이 사라졌다, 300/300).
+    #[test]
+    fn concurrent_writes_in_one_process_keep_both_keys() {
+        use std::sync::{Arc, Barrier};
+        const ROUNDS: usize = 100;
+        let mut lost = 0;
+        for _ in 0..ROUNDS {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join(SETTINGS_FILE), "schema = 1\n").unwrap();
+            let start = Arc::new(Barrier::new(2));
+            let writers: Vec<_> = [
+                ("db.grid_max_rows", toml_edit::Value::from(5)),
+                ("ui.language", toml_edit::Value::from("ko")),
+            ]
+            .into_iter()
+            .map(|(key, value)| {
+                let (dir, start) = (dir.path().to_owned(), Arc::clone(&start));
+                std::thread::spawn(move || {
+                    start.wait();
+                    write_setting(&dir, key, Some(value)).unwrap()
+                })
+            })
+            .collect();
+            for w in writers {
+                assert!(
+                    w.join().unwrap(),
+                    "each write reports that it changed the file"
+                );
+            }
+            let text = fs::read_to_string(dir.path().join(SETTINGS_FILE)).unwrap();
+            if !(text.contains("grid_max_rows = 5") && text.contains("language = \"ko\"")) {
+                lost += 1;
+            }
+        }
+        assert_eq!(lost, 0, "{lost} of {ROUNDS} rounds lost a key");
     }
 
     #[test]
