@@ -832,3 +832,17 @@ it("tells once about transactions Host rolled back while no one was attached", a
   await act(async () => new Promise((r) => setTimeout(r, 100)));
   expect(toasts()).toEqual([]);
 });
+
+it("leaves the session to Host when the window goes away (reload), so an open transaction can be resumed", async () => {
+  await mount();
+  await openConsole();
+  await connect();
+  await sessionChanged({ kind: "inTransaction", since: Date.now() });
+  // 창이 내려가는 것(새로고침 · 웹뷰 재시작)은 탭을 닫는 것이 아니다 — 세션을 닫지 않는다(Host 가 보존한다, M3-05 ⓘ).
+  await restart();
+  expect(methods()).not.toContain("db.session.close");
+  expect(callsOf("db.session.resume").at(-1)!.params).toEqual({
+    projectId: "p1",
+    tabId: SPEC.tabId,
+  });
+});
