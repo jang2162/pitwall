@@ -1330,3 +1330,60 @@ async fn primary_keys_are_nullable_only_where_sqlite_takes_null() {
         [column("code", "TEXT", false), column("v", "INTEGER", true)]
     );
 }
+
+/// 리터럴 왕복(M3-16 — 「INSERT 문으로 복사」 의 리터럴, `pw_db_sql::literal`): 무작위 값(NUL · 제어 문자 · 따옴표 포함)을
+/// 리터럴 `INSERT` 와 바인드 `INSERT` 로 한 행씩 넣고 다시 읽은 두 값이 원래 값과 같은지. 시드는 `PW_LITERAL_SEED` 로 고정한다.
+#[tokio::test]
+async fn literals_round_trip_through_a_real_sqlite_file() {
+    use pw_db_sql::literal::{insert_text, testing};
+    use pw_db_types::SqlDialect;
+
+    let (mut rng, seed) = testing::Rng::from_env();
+    let samples = testing::samples(SqlDialect::Sqlite, &mut rng, 100);
+    let fixture = SqliteFixture::file();
+    let mut conn = connect(spec(fixture.path().unwrap())).await;
+    for (i, s) in samples.iter().enumerate() {
+        let table = format!("lit_{i}");
+        rows_of(
+            &mut *conn,
+            write(&format!(
+                "CREATE TEMP TABLE {table} (k INTEGER, v {})",
+                s.column_type
+            )),
+        )
+        .await
+        .unwrap();
+        let object = ObjectRef {
+            database: None,
+            schema: None,
+            name: table.clone(),
+        };
+        let cols = ["k".to_owned(), "v".to_owned()];
+        let insert = insert_text(
+            SqlDialect::Sqlite,
+            Some(&object),
+            &cols,
+            &[vec![DbValue::int(1), s.value.clone()]],
+        )
+        .unwrap_or_else(|e| panic!("seed {seed}: {e:?} for {:?}", s.value));
+        rows_of(&mut *conn, write(insert.trim_end())).await.unwrap();
+        let mut bound = write(&format!("INSERT INTO {table} (k, v) VALUES (2, ?)"));
+        bound.params = vec![s.value.clone()];
+        rows_of(&mut *conn, bound).await.unwrap();
+        let rows = query(&mut *conn, &format!("SELECT v FROM {table} ORDER BY k")).await;
+        assert_eq!(
+            rows[0][0], rows[1][0],
+            "seed {seed}, {}: literal {insert:?} read back differently from the bound value {:?}",
+            s.column_type, s.value
+        );
+        assert_eq!(
+            rows[0][0], s.value,
+            "seed {seed}, {}: literal {insert:?}",
+            s.column_type
+        );
+    }
+    eprintln!(
+        "sqlite literal round trip: {} samples, seed {seed}",
+        samples.len()
+    );
+}

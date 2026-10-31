@@ -24,6 +24,8 @@ bytes = "1.12.1"
 futures-core = "0.3.34"
 
 [dev-dependencies]
+# 리터럴 왕복 시험(`pw_db_sql::literal::testing`, M3-16).
+pw-db-sql = { path = "../pw-db-sql", features = ["test-support"] }
 pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
 tokio = { workspace = true, features = [
   "rt",

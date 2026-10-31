@@ -5345,6 +5345,7 @@ dependencies = [
  "futures-core",
  "mysql_async",
  "pw-db-driver",
+ "pw-db-sql",
  "pw-db-types",
  "rustls",
  "rustls-native-certs",
@@ -5360,6 +5361,7 @@ dependencies = [
  "deadpool-postgres",
  "futures-util",
  "pw-db-driver",
+ "pw-db-sql",
  "pw-db-types",
  "rustls",
  "rustls-platform-verifier",
@@ -5389,6 +5391,7 @@ name = "pw-db-driver-sqlite"
 version = "0.0.0"
 dependencies = [
  "pw-db-driver",
+ "pw-db-sql",
  "pw-db-types",
  "rusqlite",
  "tempfile",

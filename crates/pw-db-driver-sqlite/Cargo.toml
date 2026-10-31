@@ -21,6 +21,8 @@ tempfile = { version = "3.27.0", optional = true }
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+# 리터럴 왕복 시험(`pw_db_sql::literal::testing`, M3-16).
+pw-db-sql = { path = "../pw-db-sql", features = ["test-support"] }
 pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }

@@ -139,6 +139,7 @@ fn local_host(
         .methods(move |router| pw_git::status::register(router, git_status_methods))
         .methods(move |router| pw_git::watch::register(router, git_watch))
         .methods(pw_db_sql::split::register)
+        .methods(pw_db_sql::literal::register)
         .methods(move |router| pw_db::config::register(router, db_connection_methods))
         .methods(move |router| pw_db::register(router, db_session_methods))
         .build();

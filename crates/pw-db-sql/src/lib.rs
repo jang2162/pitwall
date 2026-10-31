@@ -4,11 +4,14 @@
 //! - [`risk`]: 문장 하나의 위험도 분류 `classify_statement`(M3-03, DBX 차용 — 결정 M3-D5). 분류기는 이것 하나다.
 //! - [`split`]: 문장 나누기 · 현재 문장, `db.sql.split` · `db.sql.statementAt`(M3-04).
 //! - [`edit`]: 그리드 편집의 방언별 DML 과 미리보기 글(M3-12).
+//! - [`literal`]: 방언별 리터럴 · 식별자 따옴표와 결과 행의 `INSERT` 글, `db.sql.insertText`(M3-16). 리터럴의 정본 — M3-12 의
+//!   미리보기 글도 이것을 쓴다.
 //! - [`txn`]: 트랜잭션 제어 문장을 `begin` · `commit` · `rollback` 으로 옮기기와 MySQL 암묵 커밋 문장(M3-05).
 //! - [`kv_command`]: Redis 명령 분류 `classify_argv` 와 명령 글 토크나이저(M3-09, DBX 차용 — 결정 M3-D15).
 
 pub mod edit;
 pub mod kv_command;
+pub mod literal;
 pub mod risk;
 pub mod split;
 pub mod txn;

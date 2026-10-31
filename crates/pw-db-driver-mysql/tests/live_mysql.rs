@@ -1132,3 +1132,92 @@ async fn live_mysql_diagnostics_show_the_person_s_warnings_and_errors() {
     write(conn.as_mut(), &format!("DROP TABLE {table}")).await;
     conn.close().await.unwrap();
 }
+
+/// 리터럴 왕복(M3-16 — 「INSERT 문으로 복사」 의 리터럴, `pw_db_sql::literal`): 무작위 값을 리터럴 `INSERT` 와 바인드 `INSERT`
+/// 로 한 행씩 넣고 다시 읽은 두 값이 같은지(그리고 표현이 그대로인 타입은 원래 값과도) — 기본 `sql_mode` 와
+/// `NO_BACKSLASH_ESCAPES,ANSI_QUOTES` 를 더한 세션 둘 다. MariaDB 는 `scripts/db-live.mjs` 가 같은 시험을 한 번 더 돈다. 시드는
+/// `PW_LITERAL_SEED` 로 고정한다.
+#[tokio::test]
+async fn live_mysql_literals_round_trip_under_both_sql_modes() {
+    use pw_db_sql::literal::{insert_text, testing};
+    use pw_db_types::SqlDialect;
+
+    let (mut rng, seed) = testing::Rng::from_env();
+    let samples = testing::samples(SqlDialect::Mysql, &mut rng, 30);
+    let (mut conn, _) = open(SslMode::Disable).await;
+    let base = match scalar(conn.as_mut(), "SELECT @@SESSION.sql_mode").await {
+        DbValue::Text(t) => t,
+        other => panic!("sql_mode is {other:?}"),
+    };
+    let modes = [
+        ("default", base.clone()),
+        (
+            "no-backslash-ansi-quotes",
+            format!("{base},NO_BACKSLASH_ESCAPES,ANSI_QUOTES")
+                .trim_start_matches(',')
+                .to_owned(),
+        ),
+    ];
+    for (mode, sql_mode) in &modes {
+        write(
+            conn.as_mut(),
+            &format!("SET SESSION sql_mode = '{sql_mode}'"),
+        )
+        .await;
+        for (i, s) in samples.iter().enumerate() {
+            let table = unique(&format!("lit_{i}"));
+            write(
+                conn.as_mut(),
+                &format!(
+                    "CREATE TEMPORARY TABLE `{table}` (k INT, v {})",
+                    s.column_type
+                ),
+            )
+            .await;
+            let object = ObjectRef {
+                database: None,
+                schema: None,
+                name: table.clone(),
+            };
+            let cols = ["k".to_owned(), "v".to_owned()];
+            let insert = insert_text(
+                SqlDialect::Mysql,
+                Some(&object),
+                &cols,
+                &[vec![DbValue::int(1), s.value.clone()]],
+            )
+            .unwrap_or_else(|e| panic!("seed {seed}: {e:?} for {:?}", s.value));
+            write(conn.as_mut(), insert.trim_end()).await;
+            let mut bound = ExecuteRequest::new(
+                format!("INSERT INTO `{table}` (k, v) VALUES (2, ?)"),
+                RiskGrade::Write,
+            );
+            bound.params = vec![s.value.clone()];
+            run(conn.as_mut(), bound).await;
+            let rows = rows(
+                conn.as_mut(),
+                &format!("SELECT v FROM `{table}` ORDER BY k"),
+                RiskGrade::Read,
+            )
+            .await;
+            assert_eq!(
+                rows[0][0], rows[1][0],
+                "seed {seed}, {mode}, {}: literal {insert:?} read back differently from the bound value {:?}",
+                s.column_type, s.value
+            );
+            if s.exact {
+                assert_eq!(
+                    rows[0][0], s.value,
+                    "seed {seed}, {mode}, {}: literal {insert:?}",
+                    s.column_type
+                );
+            }
+            write(conn.as_mut(), &format!("DROP TEMPORARY TABLE `{table}`")).await;
+        }
+    }
+    eprintln!(
+        "mysql literal round trip: {} samples × 2 modes, seed {seed}",
+        samples.len()
+    );
+    conn.close().await.unwrap();
+}

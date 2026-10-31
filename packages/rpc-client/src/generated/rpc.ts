@@ -146,6 +146,12 @@ export type UnaryMethods = {
 	 */
 	"db.sql.classify": { params: DbSqlClassifyParams; result: DbSqlClassification };
 	/**
+	 * 결과 행을 그 방언의 `INSERT` 글로(행마다 한 문장, 리터럴 규칙은 `pw_db_sql::literal`). 연결을 열지 않는 계산이다.
+	 * 잘린 값 · 방언에 없는 값이 있으면 `INVALID_PARAMS` 이고 `data` 가 그 셀(`InsertTextError`)이다. 셀이
+	 * [`MAX_INSERT_CELLS`] 를 넘어도 `INVALID_PARAMS`.
+	 */
+	"db.sql.insertText": { params: SqlInsertTextParams; result: SqlInsertTextResult };
+	/**
 	 * SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는
 	 * UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면
 	 * `INVALID_PARAMS`.
@@ -732,6 +738,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.session.setMode": {"name":"db.session.setMode","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionSetModeParams","output":"DbSessionInfo","doc":" 자동 / 수동 커밋을 바꾼다. 트랜잭션이 열려 있으면 자동으로 바꾸지 않는다(conflict, `data.reason = \"transactionOpen\"`).\n","mcp":false,"fileScope":false},
 	"db.session.unattendedRollbacks": {"name":"db.session.unattendedRollbacks","kind":"unary","tier":"read","roles":["owner"],"params":"DbUnattendedRollbacksParams","output":"Vec<DbUnattendedRollback>","doc":" 보존 시간 안에 아무도 붙지 않아 롤백한 열린 트랜잭션의 기록(이 Host 가 도는 동안, 프로젝트마다 최근 32개, 오래된 것부터).\n 창이 열릴 때 읽어 사람에게 보인다. 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
 	"db.sql.classify": {"name":"db.sql.classify","kind":"unary","tier":"read","roles":["owner"],"params":"DbSqlClassifyParams","output":"DbSqlClassification","doc":" SQL 을 나누고 문장마다 위험도를 매긴다(M3-04 + M3-03). 방언은 세션 · 연결의 드라이버 것, 없으면 `dialect`.\n","mcp":false,"fileScope":false},
+	"db.sql.insertText": {"name":"db.sql.insertText","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlInsertTextParams","output":"SqlInsertTextResult","doc":" 결과 행을 그 방언의 `INSERT` 글로(행마다 한 문장, 리터럴 규칙은 `pw_db_sql::literal`). 연결을 열지 않는 계산이다.\n 잘린 값 · 방언에 없는 값이 있으면 `INVALID_PARAMS` 이고 `data` 가 그 셀(`InsertTextError`)이다. 셀이\n [`MAX_INSERT_CELLS`] 를 넘어도 `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"db.sql.split": {"name":"db.sql.split","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlSplitParams","output":"SqlSplitResult","doc":" SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\n UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면\n `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":false,"fileScope":false},
@@ -3580,6 +3587,13 @@ export type IndexInfo = {
 	partial: boolean,
 };
 
+/**  [`insert_text`] 의 실패: 어느 셀(머리면 행이 없다)과 까닭. */
+export type InsertTextError = {
+	row: number | null,
+	column: number | null,
+	reason: LiteralError,
+};
+
 /**  `jsonrpc` 필드. 값은 `"2.0"` 하나다. */
 export type JsonRpcVersion = "2.0";
 
@@ -3868,6 +3882,15 @@ export type LineEnding = "lf" | "crlf" | "cr" |
 "none";
 
 export type LineKind = "context" | "added" | "removed";
+
+/**  리터럴로 만들 수 없는 까닭. */
+export type LiteralError = 
+/**  셀 상한에서 잘린 값(원래 값이 아니다). */
+"truncated" | 
+/**  그 방언에 없는 값(배열 · NaN · 무한대). */
+"unsupported" | 
+/**  NUL 이 든 글을 그 방언이 담지 못한다(PG). */
+"nul";
 
 /**  `git.log` 스트림의 항목 하나. */
 export type LogChunk = {
@@ -4604,6 +4627,18 @@ export type SizeClass =
 
 /**  SQL 방언 — 위험도 분류(M3-03)와 문장 나누기(M3-04)가 고른다. MariaDB 는 MySQL 이다. */
 export type SqlDialect = "postgres" | "mysql" | "sqlite";
+
+export type SqlInsertTextParams = {
+	dialect: SqlDialect,
+	/**  테이블. 모르면(콘솔 결과) `null` — 자리표시 이름 [`PLACEHOLDER_TABLE`]. */
+	table: ObjectRef | null,
+	columns: string[],
+	rows: DbValue[][],
+};
+
+export type SqlInsertTextResult = {
+	text: string,
+};
 
 /**  원문 안의 범위. UTF-16 단위, `to` 는 포함하지 않는다(CodeMirror 의 `from` · `to` 와 같다). */
 export type SqlRange = {

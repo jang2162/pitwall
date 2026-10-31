@@ -12,14 +12,19 @@ pw-rpc = { path = "../pw-rpc" }
 # 분류 결과(`Classification` · `RiskReason`)는 `db.sql.classify`(M3-05)의 출력에 그대로 실린다.
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+# `db.sql.insertText` 의 오류 `data`(실패한 셀).
+serde_json = { workspace = true }
 specta = { workspace = true, features = ["derive"] }
 # 기본 기능의 `recursive-protection` 을 끄지 않는다 — 미신뢰 SQL 의 깊은 중첩이 파서의 스택을 넘지 않게 한다.
 sqlparser = { workspace = true, features = ["visitor"] }
 # RPC 핸들러가 나누기를 블로킹 스레드에서 돌린다(`spawn_blocking`).
 tokio = { workspace = true, features = ["rt"] }
 
+[features]
+# 리터럴 왕복 시험의 무작위 값(`literal::testing`) — 드라이버 크레이트의 live 시험이 dev 의존성으로 켠다.
+test-support = []
+
 [dev-dependencies]
-serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
 
 # examples/classify_bench.rs 가 스레드 CPU 시간(`CLOCK_THREAD_CPUTIME_ID`)을 잰다 — 다른 일로 붐비는 기기에서 벽시계보다 덜 흔들린다.

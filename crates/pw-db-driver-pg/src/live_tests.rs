@@ -1627,3 +1627,71 @@ async fn live_pg_text_output_cost_on_a_hundred_thousand_rows() {
     );
     assert!(stamped.0 < Duration::from_millis(500), "{:?}", stamped.0);
 }
+
+/// 리터럴 왕복(M3-16 — 「INSERT 문으로 복사」 의 리터럴, `pw_db_sql::literal`): 무작위 값을 리터럴 `INSERT` 와 바인드 `INSERT`
+/// 로 한 행씩 넣고 다시 읽은 두 값이 같은지(그리고 표현이 그대로인 타입은 원래 값과도) — `standard_conforming_strings` 가 켜진
+/// 세션과 꺼진 세션 둘 다. 시드는 `PW_LITERAL_SEED` 로 고정한다.
+#[tokio::test]
+async fn live_pg_literals_round_trip_under_both_string_settings() {
+    use pw_db_sql::literal::{insert_text, testing};
+    use pw_db_types::SqlDialect;
+
+    let (mut rng, seed) = testing::Rng::from_env();
+    let samples = testing::samples(SqlDialect::Postgres, &mut rng, 30);
+    let mut conn = open(&plain()).await;
+    for (mode, setting) in [("on", "on"), ("off", "off")] {
+        run(
+            &mut conn,
+            &format!("SET standard_conforming_strings = {setting}"),
+        )
+        .await;
+        run(&mut conn, "SET escape_string_warning = off").await;
+        for (i, s) in samples.iter().enumerate() {
+            let table = format!("lit_{}_{mode}_{i}", std::process::id());
+            run(
+                &mut conn,
+                &format!("CREATE TEMP TABLE {table} (k int, v {})", s.column_type),
+            )
+            .await;
+            let object = ObjectRef {
+                database: None,
+                schema: None,
+                name: table.clone(),
+            };
+            let cols = ["k".to_owned(), "v".to_owned()];
+            let insert = insert_text(
+                SqlDialect::Postgres,
+                Some(&object),
+                &cols,
+                &[vec![DbValue::int(1), s.value.clone()]],
+            )
+            .unwrap_or_else(|e| panic!("seed {seed}: {e:?} for {:?}", s.value));
+            run(&mut conn, insert.trim_end()).await;
+            let mut bound = write(&format!("INSERT INTO {table} (k, v) VALUES (2, $1)"));
+            bound.params = vec![s.value.clone()];
+            all(&mut conn, bound).await;
+            let rows = all(
+                &mut conn,
+                read(&format!("SELECT v FROM {table} ORDER BY k")),
+            )
+            .await;
+            assert_eq!(
+                rows[0][0], rows[1][0],
+                "seed {seed}, scs {mode}, {}: literal {insert:?} read back differently from the bound value {:?}",
+                s.column_type, s.value
+            );
+            if s.exact {
+                assert_eq!(
+                    rows[0][0], s.value,
+                    "seed {seed}, scs {mode}, {}: literal {insert:?}",
+                    s.column_type
+                );
+            }
+            run(&mut conn, &format!("DROP TABLE {table}")).await;
+        }
+    }
+    eprintln!(
+        "pg literal round trip: {} samples × 2 settings, seed {seed}",
+        samples.len()
+    );
+}
