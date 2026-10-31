@@ -631,10 +631,12 @@ fn classify_set_expr(expr: &SetExpr, dialect: SqlDialect, found: &mut Found) {
 /// 다른 세션 · 서버 전체에 닿는 관리 함수 — 범위 없는 쓰기(결정 M3-D20 에서 어느 연결이든 확인을 받는다). 이름은 스키마를 떼고
 /// 마지막 이름 · 대소문자 무시로 견준다.
 ///
-/// 근거: PG 는 `BEGIN READ ONLY` 안에서도 이것들을 막지 않는다 — 읽기 전용 검사(`PreventCommandIfReadOnly` · `XactReadOnly`)를 하지
-/// 않는 함수들이다(PG 17 소스 판단, M3-03 리뷰 목록). DB 수준 읽기 전용이 받쳐 주지 못하므로 분류가 첫 방어다(결정 M3-D6 의 전제가
-/// 깨지는 내장 함수). live 확인: M3-06 이 PG 17.6 에서 `pg_terminate_backend` 를 확인했고, 나머지 목록의 live 표는 M3-06 이 확정
-/// 중이다(확정 전) — 표가 오면 여기를 맞춘다.
+/// 근거: PG 소스 + M3-06 live 표(PG 17.6). PG 는 `BEGIN READ ONLY` 안에서도 이것들을 막지 않는다 — 읽기 전용 검사
+/// (`PreventCommandIfReadOnly` · `XactReadOnly`)를 하지 않는 함수들이다. DB 수준 읽기 전용이 받쳐 주지 못하므로 분류가 첫 방어다
+/// (결정 M3-D6 의 전제가 깨지는 내장 함수). live 표(`live_pg_side_effect_functions_that_pass_a_read_only_transaction`)에서 지나간
+/// 함수는 모두 이 목록이나 [`SIDE_EFFECT_FUNCTIONS`] 에 있다. 표에서 확인하지 못한 것도 남긴다: 논리 복제 슬롯 · `pg_promote` ·
+/// `pg_wal_replay_*` 는 서버 상태(`wal_level` · 대기 서버)가 막았을 뿐 조건이 맞으면 지나가고, 슬롯 복사 · 진행 · `pg_backup_stop` 은
+/// 같은 계열(소스 판단), adminpack `pg_file_*` 은 PG 17 에서 빠졌지만 16 이하에 있다.
 const SERVER_ADMIN_FUNCTIONS: &[&str] = &[
     // 다른 세션을 끊는다
     "pg_terminate_backend",
