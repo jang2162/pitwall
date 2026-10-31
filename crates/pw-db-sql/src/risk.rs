@@ -32,7 +32,8 @@ use pw_db_types::{RiskGrade, SqlDialect};
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{
     AlterTableOperation, ContextModifier, CopyTarget, Delete, Expr, FromTable, ObjectName, Query,
-    Set, SetExpr, SqliteOnConflict, Statement, TableFactor, Update, Visit, Visitor,
+    Reset, ResetStatement, Set, SetExpr, SqliteOnConflict, Statement, TableFactor, Update, Visit,
+    Visitor,
 };
 use sqlparser::dialect::{Dialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::keywords::Keyword;
@@ -106,8 +107,11 @@ pub enum RiskReason {
     /// 부작용 함수(`nextval` · `pg_sleep` · `GET_LOCK` …)를 부르는 조회.
     SideEffectFunction,
     /// 다른 세션 · 서버 전체에 닿는 관리 작업 — 함수(`pg_terminate_backend` · `pg_reload_conf` · `pg_notify` …)와 MySQL `KILL` ·
-    /// `FLUSH` · `SET GLOBAL`. 범위 없는 쓰기.
+    /// `FLUSH` · `SET GLOBAL` · `SET PERSIST` · `RESET PERSIST`. 범위 없는 쓰기.
     ServerAdmin,
+    /// MySQL `RESET MASTER` · `RESET BINARY LOGS AND GTIDS` · `RESET REPLICA` · `PURGE BINARY LOGS` — 바이너리 · 릴레이 로그와 복제
+    /// 위치를 지운다(되돌릴 수 없다). 파괴.
+    ReplicationReset,
     /// `SELECT … INTO`(MySQL 의 변수 · 파일, SQLite).
     SelectInto,
     /// `BEGIN` · `COMMIT` · `ROLLBACK` · `SAVEPOINT` · `SET TRANSACTION`.
@@ -136,7 +140,8 @@ pub enum RiskReason {
 /// 근거(release, `crates/pw-db-sql/examples/classify_bench.rs` — 다시 잴 때 그 머리 주석의 명령): 분류 시간은 평평한 큰 문장
 /// (`INSERT … VALUES` 여러 행)에서 길이에 비례해 가장 길고, 1 MiB 에서 중앙값 약 160 ms · 최대 약 200 ms 였다 — 문장당 200 ms
 /// 목표에 여유를 두려고 그 절반으로 둔다. 이보다 큰 문장(mysqldump 의 확장 INSERT 는 `--net-buffer-length` 까지 커진다)은 확인을
-/// 받는다.
+/// 받는다. 목표는 한가한 기기 기준이다 — 부하가 큰 기기에서 재리뷰가 잰 최악은 이 상한 바로 아래의 넓은 값 목록(`SELECT 1,1,…`)
+/// MySQL 267 ms 였다(M3-03 재리뷰, 기록만).
 pub const MAX_STATEMENT_BYTES: usize = 512 << 10;
 
 /// 연산자 토큰(연산자 기호와 따옴표 없는 키워드 — `NULL` · `TRUE` · `FALSE` · `DEFAULT` 빼고)의 상한. 넘으면 파괴 · `tooLarge`.
@@ -149,7 +154,15 @@ pub const MAX_STATEMENT_BYTES: usize = 512 << 10;
 pub const MAX_OPERATOR_TOKENS: usize = 5_000;
 
 /// 파서의 재귀 한도(sqlparser 기본값과 같다). 괄호 · 서브쿼리 · 단항 연산자의 중첩이 이것을 넘으면 파괴 · `tooDeep`.
+///
+/// 글로 보이는 깊이는 이보다 얕다(M3-03 재리뷰 실측): 괄호 · `CASE` 46겹, 서브쿼리 · `IN (서브쿼리)` · `a AND (…)` 23겹(한 겹이 재귀
+/// 두 칸)까지 읽고 그보다 깊으면 `tooDeep` 이다. 사람이 쓴 SQL · 흔한 ORM 은 10겹을 넘기 어렵고, 넘는 생성 SQL 은 확인을 받는다.
 pub const RECURSION_LIMIT: usize = 50;
+
+/// 파싱이 재귀 한도 밖의 오류로 실패했을 때, 글의 중첩([`nesting_depth`])이 이만큼이면 그 실패를 깊이 탓(`tooDeep`)으로 본다 —
+/// `CASE` · 연이은 `NOT` 은 파서가 재귀 한도 오류를 다른 오류로 바꿔 올린다(M3-03 재리뷰 L-B · L-C, 한도를 올려 다시 읽어도 `NOT`
+/// 은 같다). 괄호 46겹에서 재귀 한도에 닿으므로 그 값이다. 등급은 어느 쪽이든 파괴이고 바뀌는 것은 까닭 라벨뿐이다.
+const TOO_DEEP_NESTING: usize = RECURSION_LIMIT - 4;
 
 /// 문장 하나를 분류한다. 방언은 연결의 드라이버로 정한다(실행 관문은 요청의 방언이 아니라 연결의 것을 쓴다 — M3-05).
 ///
@@ -191,6 +204,9 @@ fn classify_text(dialect: SqlDialect, text: &str) -> Outcome {
         Ok(statements) => statements,
         Err(ParserError::RecursionLimitExceeded) => return not_parsed(RiskReason::TooDeep),
         Err(_) => {
+            if nesting_depth(&tokens) >= TOO_DEEP_NESTING {
+                return not_parsed(RiskReason::TooDeep);
+            }
             return match recognize::recognize(dialect, text, &tokens) {
                 Some(classification) => Outcome {
                     classification,
@@ -213,6 +229,12 @@ fn classify_text(dialect: SqlDialect, text: &str) -> Outcome {
     // MySQL 의 `SELECT @a := 1` 은 세션 변수를 바꾼다. PG 의 `:=` 는 함수의 이름 붙은 인자라 MySQL 에서만 본다.
     if dialect == SqlDialect::Mysql && plain().any(|token| matches!(token, Token::Assignment)) {
         found.add(RiskGrade::Write, RiskReason::SessionState);
+    }
+    // MySQL `SET GLOBAL TRANSACTION …` 은 서버 전체의 기본 격리 수준 · 접근 모드를 바꾼다. 파서는 `GLOBAL` 을 AST 에 남기지 않는다.
+    if dialect == SqlDialect::Mysql
+        && contains_keyword_run(plain(), &["SET", "GLOBAL", "TRANSACTION"])
+    {
+        found.add(RiskGrade::UnboundedWrite, RiskReason::ServerAdmin);
     }
     Outcome {
         classification: found.finish(),
@@ -264,6 +286,36 @@ fn operator_tokens(tokens: &[TokenWithSpan]) -> usize {
         previous = Some(token);
     }
     count
+}
+
+/// 글의 가장 깊은 중첩: 열린 괄호 · `CASE` 수에 그 자리에서 이어지는 전위 연산자(`NOT` · `-` · `+` · `~` · `!`) 수를 더한 것의 최댓값.
+/// 따옴표 안 · 주석은 토큰이 아니므로 세지 않는다.
+fn nesting_depth(tokens: &[TokenWithSpan]) -> usize {
+    let mut open = 0usize;
+    let mut prefix_run = 0usize;
+    let mut deepest = 0usize;
+    for token in tokens.iter().map(|token| &token.token) {
+        match token {
+            Token::Whitespace(_) => continue,
+            Token::LParen => open += 1,
+            Token::RParen => open = open.saturating_sub(1),
+            Token::Word(word) if word.quote_style.is_none() && word.keyword == Keyword::CASE => {
+                open += 1
+            }
+            Token::Word(word) if word.quote_style.is_none() && word.keyword == Keyword::END => {
+                open = open.saturating_sub(1)
+            }
+            _ => {}
+        }
+        let prefix = match token {
+            Token::Word(word) => word.quote_style.is_none() && word.keyword == Keyword::NOT,
+            Token::Minus | Token::Plus | Token::Tilde | Token::ExclamationMark => true,
+            _ => false,
+        };
+        prefix_run = if prefix { prefix_run + 1 } else { 0 };
+        deepest = deepest.max(open + prefix_run);
+    }
+    deepest
 }
 
 fn parser_dialect(dialect: SqlDialect) -> Box<dyn Dialect> {
@@ -441,13 +493,18 @@ fn classify_ast(statement: &Statement, dialect: SqlDialect, found: &mut Found) {
             found.add(Write, RiskReason::TransactionControl)
         }
         // 다른 세션 · 서버 전체에 닿는다 — PG 의 `pg_terminate_backend` · `ALTER SYSTEM` 과 같은 일은 같은 등급(관리 함수 목록 주석).
-        // `SET PERSIST` · `SHUTDOWN` · PG `ALTER SYSTEM` 은 파서가 읽지 못해 이미 파괴다.
+        // `SET PERSIST x = …` 는 파서가 읽지 못해 인식기가 같은 등급으로 매기고, `SHUTDOWN` · PG `ALTER SYSTEM` 은 이미 파괴다.
         Statement::Kill { .. } | Statement::Flush { .. } => {
             found.add(UnboundedWrite, RiskReason::ServerAdmin)
         }
         Statement::Set(set) if set_is_global(set) => {
             found.add(UnboundedWrite, RiskReason::ServerAdmin)
         }
+        // PG 의 `RESET 이름` 은 세션 설정이다(아래 갈래). MySQL 의 `RESET` 은 서버 전체 작업이다.
+        Statement::Reset(reset) if dialect == SqlDialect::Mysql => match mysql_reset(reset) {
+            Some((grade, reason)) => found.add(grade, reason),
+            None => found.add(Write, RiskReason::SessionState),
+        },
         Statement::Set(_)
         | Statement::Use { .. }
         | Statement::Reset { .. }
@@ -488,13 +545,50 @@ fn classify_ast(statement: &Statement, dialect: SqlDialect, found: &mut Found) {
     }
 }
 
-/// MySQL `SET GLOBAL x = …` · `SET @@global.x = …` — 서버 전체의 변수를 바꾼다.
+/// 파서가 읽는 MySQL `RESET 낱말` — `MASTER` · `REPLICA` · `SLAVE` 는 로그 · 복제 위치를 지우고(파괴), `PERSIST` 는 영속 설정을
+/// 지운다(범위 없는 쓰기). 그 밖의 꼴(`RESET MASTER TO n` · `RESET REPLICA ALL` · `RESET BINARY LOGS AND GTIDS` ·
+/// `RESET PERSIST x` · `PURGE BINARY LOGS`)은 파서가 읽지 못해 인식기가 같은 등급으로 매긴다.
+fn mysql_reset(reset: &ResetStatement) -> Option<(RiskGrade, RiskReason)> {
+    let Reset::ConfigurationParameter(name) = &reset.reset else {
+        return None;
+    };
+    let [part] = name.0.as_slice() else {
+        return None;
+    };
+    let word = part.as_ident()?.value.to_ascii_uppercase();
+    match word.as_str() {
+        "MASTER" | "REPLICA" | "SLAVE" => {
+            Some((RiskGrade::Destructive, RiskReason::ReplicationReset))
+        }
+        "PERSIST" => Some((RiskGrade::UnboundedWrite, RiskReason::ServerAdmin)),
+        _ => None,
+    }
+}
+
+/// 따옴표 없는 낱말 `keywords` 가 빈칸 · 주석만 사이에 두고 이어 나오는가.
+fn contains_keyword_run<'a>(tokens: impl Iterator<Item = &'a Token>, keywords: &[&str]) -> bool {
+    let words: Vec<&Token> = tokens
+        .filter(|token| !matches!(token, Token::Whitespace(_)))
+        .collect();
+    words.windows(keywords.len()).any(|window| {
+        window.iter().zip(keywords).all(|(token, keyword)| {
+            matches!(token, Token::Word(word) if word.quote_style.is_none() && word.value.eq_ignore_ascii_case(keyword))
+        })
+    })
+}
+
+/// MySQL `SET GLOBAL x = …` · `SET @@global.x = …` · `SET @@persist.x = …` · `SET @@persist_only.x = …` — 서버 전체의 변수를
+/// 바꾼다(`PERSIST` 는 재시작 뒤에도 남는다). `SET PERSIST x = …` 꼴은 파서가 읽지 못해 인식기(`recognize.rs`)가 맡는다.
 fn set_is_global(set: &Set) -> bool {
     let global_name = |name: &ObjectName| {
         name.0
             .first()
             .and_then(|part| part.as_ident())
-            .is_some_and(|ident| ident.value.eq_ignore_ascii_case("@@global"))
+            .is_some_and(|ident| {
+                ["@@global", "@@persist", "@@persist_only"]
+                    .iter()
+                    .any(|scope| ident.value.eq_ignore_ascii_case(scope))
+            })
     };
     let global_scope =
         |scope: &Option<ContextModifier>| matches!(scope, Some(ContextModifier::Global));
@@ -636,7 +730,9 @@ fn classify_set_expr(expr: &SetExpr, dialect: SqlDialect, found: &mut Found) {
 /// (결정 M3-D6 의 전제가 깨지는 내장 함수). live 표(`live_pg_side_effect_functions_that_pass_a_read_only_transaction`)에서 지나간
 /// 함수는 모두 이 목록이나 [`SIDE_EFFECT_FUNCTIONS`] 에 있다. 표에서 확인하지 못한 것도 남긴다: 논리 복제 슬롯 · `pg_promote` ·
 /// `pg_wal_replay_*` 는 서버 상태(`wal_level` · 대기 서버)가 막았을 뿐 조건이 맞으면 지나가고, 슬롯 복사 · 진행 · `pg_backup_stop` 은
-/// 같은 계열(소스 판단), adminpack `pg_file_*` 은 PG 17 에서 빠졌지만 16 이하에 있다.
+/// 같은 계열(소스 판단), adminpack `pg_file_*` 은 PG 17 에서 빠졌지만 16 이하에 있다. live 표 밖에서 더한 것(M3-03 재리뷰 M-A):
+/// 인덱스를 고치는 `brin_*` · `gin_clean_pending_list`, `pg_import_system_collations` · `pg_log_standby_snapshot` 은 PG 17.6 에서
+/// `BEGIN READ ONLY` 를 지나는 것을 확인했고, 나머지(옛 · 새 판의 백업 · 통계 함수, 확장 함수)는 문서 · 소스 판단이다.
 const SERVER_ADMIN_FUNCTIONS: &[&str] = &[
     // 다른 세션을 끊는다
     "pg_terminate_backend",
@@ -664,6 +760,25 @@ const SERVER_ADMIN_FUNCTIONS: &[&str] = &[
     "pg_wal_replay_resume",
     // 다른 세션의 `LISTEN` 에 알린다 — 같은 일의 `NOTIFY` 문장은 쓰기지만 함수 꼴은 조회로 새고 있었다
     "pg_notify",
+    // 서버 전체 상태를 바꾼다: 콜레이션을 들인다, 대기 서버에 스냅숏을 보낸다 · 슬롯을 맞춘다, 옛 백업 함수(PG 14 이하),
+    // 복구 대기(PG 17 개발판), 통계를 지우거나 덮는다(PG 18)
+    "pg_import_system_collations",
+    "pg_log_standby_snapshot",
+    "pg_sync_replication_slots",
+    "pg_start_backup",
+    "pg_stop_backup",
+    "pg_wal_replay_wait",
+    "pg_clear_relation_stats",
+    "pg_set_relation_stats",
+    "pg_clear_attribute_stats",
+    "pg_restore_relation_stats",
+    "pg_restore_attribute_stats",
+    // 인덱스를 고친다(BRIN 요약 · GIN 대기 목록 비우기 — `brin_*` 는 접두사)
+    "gin_clean_pending_list",
+    // 확장: 통계 지우기 · 버퍼 데우기 · 가시성 맵 비우기
+    "pg_stat_statements_reset",
+    "pg_prewarm",
+    "pg_truncate_visibility_map",
     // adminpack: 서버 파일을 쓴다
     "pg_file_write",
     "pg_file_rename",
@@ -671,8 +786,21 @@ const SERVER_ADMIN_FUNCTIONS: &[&str] = &[
     "pg_file_sync",
 ];
 
-/// 이 접두사로 시작하는 이름도 관리 함수다: `pg_replication_origin_*`(복제 원점 만들기 · 지우기 · 진행), `pg_stat_reset*`(통계 지우기).
-const SERVER_ADMIN_FUNCTION_PREFIXES: &[&str] = &["pg_replication_origin_", "pg_stat_reset"];
+/// 이 접두사로 시작하는 이름도 관리 함수다: `pg_replication_origin_*`(복제 원점 만들기 · 지우기 · 진행), `pg_stat_reset*`(통계 지우기),
+/// `pg_logical_slot_*`(`get` 은 슬롯의 변경을 소비한다 — `peek` 은 소비하지 않지만 같은 디코딩을 돌린다), `brin_summarize*` ·
+/// `brin_desummarize*`(BRIN 인덱스를 고친다), `binary_upgrade_*`(pg_upgrade 전용, 카탈로그를 고친다).
+///
+/// 같은 꼴(이름에 `_get_changes` · `summarize` · `clean` · `advance` · `reset` · `peek`)을 PG 17.6 `pg_proc` 에서 훑었다(M3-03 마지막
+/// 회차) — 그 25개 가운데 상태를 바꾸는 것은 모두 이 목록 · 접두사에 있고, 남은 것(`pg_stat_get_*_clean` · `*_stat_reset_time` ·
+/// `pg_get_wal_summarizer_state`)은 읽기다.
+const SERVER_ADMIN_FUNCTION_PREFIXES: &[&str] = &[
+    "pg_replication_origin_",
+    "pg_stat_reset",
+    "pg_logical_slot_",
+    "brin_summarize",
+    "brin_desummarize",
+    "binary_upgrade_",
+];
 
 /// 조회를 쓰기로 만드는 부작용 함수(이름 견주기는 [`SERVER_ADMIN_FUNCTIONS`] 와 같다). DBX 의 `SIDE_EFFECT_SELECT_FUNCTIONS`
 /// (관리 함수는 [`SERVER_ADMIN_FUNCTIONS`] 로 옮겼다)에 14-m3-plan.md M3-03 행 ④ 의 것과 SQLite `load_extension`(네이티브 코드를

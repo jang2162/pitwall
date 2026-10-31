@@ -117,6 +117,8 @@ fn mysql_load_data_infile_from_the_server_only() {
         "LOAD DATA INFILE '/var/lib/mysql-files/x.csv' INTO TABLE t",
         "LOAD DATA LOW_PRIORITY INFILE '/x.csv' REPLACE INTO TABLE db.t",
         "LOAD DATA INFILE '/x.csv' IGNORE INTO TABLE t CHARACTER SET utf8mb4 FIELDS TERMINATED BY ',' ENCLOSED BY '\"' LINES TERMINATED BY '\\n' IGNORE 1 LINES (a, b)",
+        "LOAD DATA CONCURRENT INFILE '/x.csv' INTO TABLE t PARTITION (p0, p1) COLUMNS TERMINATED BY '\\t' OPTIONALLY ENCLOSED BY '\"' ESCAPED BY '\\\\' LINES STARTING BY 'x' TERMINATED BY '\\n' IGNORE 2 ROWS (a, @skip, `c`)",
+        "LOAD DATA INFILE '/x.csv' INTO TABLE t CHARACTER SET 'utf8mb4';",
     ] {
         expect(Mysql, sql, Write, &[DataTransfer]);
     }
@@ -127,6 +129,16 @@ fn mysql_load_data_infile_from_the_server_only() {
         "LOAD DATA INFILE '/x.csv' INTO TABLE t (a) SET b = SLEEP(10)",
         "LOAD DATA INFILE '/x.csv' INTO TABLE t; DROP TABLE u",
         "LOAD DATA INFILE @path INTO TABLE t",
+        // 재리뷰 L-D: 꼬리의 아무 낱말 — 문서의 순서 · 절 밖.
+        "LOAD DATA INFILE 'f' INTO TABLE t LOCAL",
+        "LOAD DATA INFILE 'f' INTO TABLE t INTO OUTFILE 'g'",
+        "LOAD DATA INFILE 'f' INTO TABLE t DROP",
+        "LOAD DATA INFILE 'f' INTO TABLE t SELECT 1",
+        "LOAD DATA INFILE 'f' INTO TABLE t LINES TERMINATED BY ',' FIELDS TERMINATED BY ','",
+        "LOAD DATA INFILE 'f' INTO TABLE t FIELDS",
+        "LOAD DATA INFILE 'f' INTO TABLE t IGNORE x LINES",
+        "LOAD DATA INFILE 'f' INTO TABLE t (a, (b))",
+        "LOAD DATA INFILE 'f' INTO TABLE t (a) (b)",
     ] {
         expect_unparsed(Mysql, sql);
     }

@@ -2,7 +2,7 @@
 //! `examples/classify_bench.rs`(release).
 
 use pw_db_types::RiskGrade::{Destructive, Read, Write};
-use pw_db_types::SqlDialect::{self, Mysql, Postgres};
+use pw_db_types::SqlDialect::{self, Mysql, Postgres, Sqlite};
 
 use crate::risk::RiskReason::*;
 use crate::risk::{
@@ -139,9 +139,47 @@ fn nesting_over_the_recursion_limit_is_too_deep() {
             (Destructive, vec![TooDeep])
         );
     }
-    // 긴 `NOT` 사슬은 파서가 그보다 먼저 거절한다 — 어느 쪽이든 파괴.
     let classification = on_small_stack(Postgres, format!("SELECT {}1", "NOT ".repeat(1_000)));
-    assert_eq!(classification.grade, Destructive);
+    assert_eq!(
+        (classification.grade, classification.reasons),
+        (Destructive, vec![TooDeep])
+    );
+}
+
+/// 재리뷰 L-B · L-C: `CASE` · 연이은 `NOT` 은 파서가 재귀 한도 오류를 다른 오류로 바꿔 올린다 — 글의 중첩으로 `tooDeep` 를 맞춘다.
+/// 깊은 꼴도 1 MiB 스택(2 MiB 의 절반)에서 abort 없이 끝난다.
+#[test]
+fn too_deep_label_survives_parser_paths_that_rewrite_the_error() {
+    let case = |depth: usize| {
+        format!(
+            "SELECT {}1{}",
+            "CASE WHEN a THEN ".repeat(depth),
+            " END".repeat(depth)
+        )
+    };
+    let not = |depth: usize| format!("SELECT {}1", "NOT ".repeat(depth));
+    let in_case = |depth: usize| {
+        format!(
+            "SELECT {}(SELECT 1){}",
+            "CASE WHEN a THEN (SELECT ".repeat(depth),
+            ") END".repeat(depth)
+        )
+    };
+    for dialect in [Postgres, Mysql, Sqlite] {
+        for sql in [case(47), not(60), case(98), not(99), in_case(40)] {
+            let classification = on_stack(1024, dialect, sql);
+            assert_eq!(
+                (classification.grade, classification.reasons),
+                (Destructive, vec![TooDeep]),
+                "{dialect:?}"
+            );
+        }
+        // 한도 안은 읽는다.
+        assert_eq!(classify_statement(dialect, &case(20)).grade, Read);
+    }
+    // 깊이와 무관한 문법 오류는 그대로 `unparsed`.
+    let classification = classify_statement(Postgres, &format!("{} FROM", case(5)));
+    assert_eq!(classification.reasons, vec![Unparsed]);
 }
 
 /// OR 사슬 술어는 DBX 의 세제곱(release 로 2,000 항 11 s)이 아니다 — CPU 시간으로 본다(벽시계는 붐비는 기기에서 흔들린다).

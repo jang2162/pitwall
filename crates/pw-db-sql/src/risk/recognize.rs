@@ -5,6 +5,10 @@
 //! - (나) **정해진 토큰 꼴과 정확히 맞을 때만**(글 전체가 그 문장 하나, 끝의 `;` 하나만 허용). 조금이라도 다르면 `None` 이고
 //!   부르는 쪽이 파괴 · `unparsed` 로 닫는다.
 //!
+//! MySQL 의 서버 전체 문장도 여기서 정확한 꼴만 매긴다: `SET PERSIST|PERSIST_ONLY 이름 = 값 [, …]` · `RESET PERSIST [[IF EXISTS] 이름]`
+//! 은 범위 없는 쓰기, `RESET MASTER [TO n]` · `RESET BINARY LOGS AND GTIDS [TO n]` · `RESET REPLICA|SLAVE [ALL] [FOR CHANNEL '…']` ·
+//! `PURGE BINARY|MASTER LOGS TO|BEFORE '…'` 은 파괴(까닭 `replicationReset` — 파서가 읽는 `RESET MASTER` 와 같은 까닭).
+//!
 //! 일부러 인식하지 않는 것(파괴 그대로): MySQL `LOAD DATA LOCAL INFILE`(사람 기기의 파일을 서버로 보낸다 — 막는 자리는 드라이버,
 //! M3-07), PG `DO $$…$$`(본문이 임의의 PL/pgSQL), MySQL `INTO OUTFILE/DUMPFILE` · `HANDLER` · `XA` · `PREPARE … FROM`.
 
@@ -35,7 +39,9 @@ pub(super) fn recognize(
             .or_else(|| sqlite_detach(statement))
             .or_else(|| sqlite_reindex(statement))?,
         SqlDialect::Postgres => postgres_refresh(statement)?,
-        SqlDialect::Mysql => mysql_load_data_infile(statement)?,
+        SqlDialect::Mysql => mysql_load_data_infile(statement)
+            .or_else(|| mysql_set_persist(statement))
+            .or_else(|| mysql_reset_or_purge(statement))?,
     };
     Some(Classification {
         grade,
@@ -150,39 +156,178 @@ fn postgres_refresh(statement: &[&Token]) -> Option<(RiskGrade, RiskReason)> {
 }
 
 /// MySQL `LOAD DATA [LOW_PRIORITY | CONCURRENT] INFILE '파일' [REPLACE | IGNORE] INTO TABLE [db.]이름 …` — 서버 쪽 파일을 표에 넣는
-/// 일괄 쓰기. `LOCAL` 은 이 꼴에 없다(파괴 그대로). 뒤의 선택 절(`FIELDS TERMINATED BY …` · 열 목록 · `IGNORE n LINES` ·
-/// `CHARACTER SET`)은 낱말 · 문자열 · 수 · 쉼표 · 괄호만 받는다 — 식을 쓰는 `SET 열 = 식` 절은 `=` 에서 걸린다.
+/// 일괄 쓰기. `LOCAL` 은 이 꼴에 없다(파괴 그대로). 뒤의 선택 절은 MySQL 문서의 순서 그대로만 받는다:
+/// `PARTITION (이름, …)` · `CHARACTER SET 이름` · `FIELDS|COLUMNS [TERMINATED BY '…'] [[OPTIONALLY] ENCLOSED BY '…'] [ESCAPED BY '…']` ·
+/// `LINES [STARTING BY '…'] [TERMINATED BY '…']` · `IGNORE n LINES|ROWS` · `(열 | @변수, …)`. 식을 쓰는 `SET 열 = 식` 절은 받지 않는다
+/// (부작용 함수가 들어갈 수 있다 — 파괴 그대로).
+///
+/// `REPLACE` 는 키가 겹치는 행을 지우고 넣지만 `REPLACE INTO` · SQLite `INSERT OR REPLACE` 와 같이 쓰기로 둔다(행마다 넣을 행이 있다).
 fn mysql_load_data_infile(statement: &[&Token]) -> Option<(RiskGrade, RiskReason)> {
     let rest = keyword_prefix(statement, &["LOAD", "DATA"])?;
     let rest = keyword_prefix(rest, &["LOW_PRIORITY"])
         .or_else(|| keyword_prefix(rest, &["CONCURRENT"]))
         .unwrap_or(rest);
     let rest = keyword_prefix(rest, &["INFILE"])?;
-    let [
-        Token::SingleQuotedString(_) | Token::DoubleQuotedString(_),
-        rest @ ..,
-    ] = rest
-    else {
-        return None;
-    };
+    let rest = string(rest)?;
     let rest = keyword_prefix(rest, &["REPLACE"])
         .or_else(|| keyword_prefix(rest, &["IGNORE"]))
         .unwrap_or(rest);
     let rest = keyword_prefix(rest, &["INTO", "TABLE"])?;
-    let tail = qualified_name(rest)?;
-    let tail_ok = tail.iter().all(|token| {
-        matches!(
-            token,
-            Token::Word(_)
-                | Token::Number(..)
-                | Token::SingleQuotedString(_)
-                | Token::DoubleQuotedString(_)
-                | Token::Comma
-                | Token::LParen
-                | Token::RParen
-        )
-    });
-    tail_ok.then_some((RiskGrade::Write, RiskReason::DataTransfer))
+    let mut rest = qualified_name(rest)?;
+    if let Some(after) = keyword_prefix(rest, &["PARTITION"]) {
+        rest = word_list(after)?;
+    }
+    if let Some(after) = keyword_prefix(rest, &["CHARACTER", "SET"]) {
+        rest = match after {
+            [Token::Word(_), after @ ..] => after,
+            _ => string(after)?,
+        };
+    }
+    if let Some(after) =
+        keyword_prefix(rest, &["FIELDS"]).or_else(|| keyword_prefix(rest, &["COLUMNS"]))
+    {
+        let mut after = after;
+        let mut any = false;
+        for clause in [
+            &["TERMINATED", "BY"][..],
+            &["OPTIONALLY", "ENCLOSED", "BY"],
+            &["ENCLOSED", "BY"],
+            &["ESCAPED", "BY"],
+        ] {
+            if let Some(next) = keyword_prefix(after, clause) {
+                after = string(next)?;
+                any = true;
+            }
+        }
+        if !any {
+            return None;
+        }
+        rest = after;
+    }
+    if let Some(after) = keyword_prefix(rest, &["LINES"]) {
+        let mut after = after;
+        let mut any = false;
+        for clause in [&["STARTING", "BY"][..], &["TERMINATED", "BY"]] {
+            if let Some(next) = keyword_prefix(after, clause) {
+                after = string(next)?;
+                any = true;
+            }
+        }
+        if !any {
+            return None;
+        }
+        rest = after;
+    }
+    if let Some(after) = keyword_prefix(rest, &["IGNORE"]) {
+        let [Token::Number(..), after @ ..] = after else {
+            return None;
+        };
+        rest = keyword_prefix(after, &["LINES"]).or_else(|| keyword_prefix(after, &["ROWS"]))?;
+    }
+    if !rest.is_empty() {
+        rest = word_list(rest)?;
+    }
+    rest.is_empty()
+        .then_some((RiskGrade::Write, RiskReason::DataTransfer))
+}
+
+/// MySQL `SET PERSIST|PERSIST_ONLY 이름 = 값 [, [PERSIST|PERSIST_ONLY|GLOBAL|SESSION] 이름 = 값 …]` — 서버 변수를 바꾸고 재시작 뒤에도
+/// 남긴다. 첫 대입이 `PERSIST` 류여야 하고(파서가 읽지 못하는 까닭), 값은 낱말 · 수(부호 하나) · 문자열 하나다.
+fn mysql_set_persist(statement: &[&Token]) -> Option<(RiskGrade, RiskReason)> {
+    let mut rest = keyword_prefix(statement, &["SET"])?;
+    let mut first = true;
+    loop {
+        let scoped = ["PERSIST", "PERSIST_ONLY", "GLOBAL", "SESSION"]
+            .iter()
+            .find_map(|scope| keyword_prefix(rest, &[scope]).map(|after| (*scope, after)));
+        rest = match scoped {
+            Some((scope, after)) if !first || scope.starts_with("PERSIST") => after,
+            _ if first => return None,
+            _ => rest,
+        };
+        rest = qualified_name(rest)?;
+        let [Token::Eq, value @ ..] = rest else {
+            return None;
+        };
+        rest = match value {
+            [Token::Minus | Token::Plus, Token::Number(..), after @ ..] => after,
+            [Token::Word(_) | Token::Number(..), after @ ..] => after,
+            _ => string(value)?,
+        };
+        first = false;
+        match rest {
+            [] => return Some((RiskGrade::UnboundedWrite, RiskReason::ServerAdmin)),
+            [Token::Comma, after @ ..] => rest = after,
+            _ => return None,
+        }
+    }
+}
+
+/// MySQL 의 로그 · 복제 지우기와 영속 설정 지우기 가운데 파서가 읽지 못하는 꼴(파서가 읽는 `RESET MASTER` 등은 `risk.rs` 의
+/// `mysql_reset`).
+fn mysql_reset_or_purge(statement: &[&Token]) -> Option<(RiskGrade, RiskReason)> {
+    let destroyed = Some((RiskGrade::Destructive, RiskReason::ReplicationReset));
+    if let Some(rest) = keyword_prefix(statement, &["PURGE"]) {
+        let rest = keyword_prefix(rest, &["BINARY", "LOGS"])
+            .or_else(|| keyword_prefix(rest, &["MASTER", "LOGS"]))?;
+        let rest = keyword_prefix(rest, &["TO"]).or_else(|| keyword_prefix(rest, &["BEFORE"]))?;
+        return string(rest)?.is_empty().then_some(destroyed?);
+    }
+    let rest = keyword_prefix(statement, &["RESET"])?;
+    let to_number = |rest: &[&Token]| match rest {
+        [] => true,
+        [to, Token::Number(..)] => is_keyword(to, "TO"),
+        _ => false,
+    };
+    if let Some(rest) = keyword_prefix(rest, &["MASTER"])
+        .or_else(|| keyword_prefix(rest, &["BINARY", "LOGS", "AND", "GTIDS"]))
+    {
+        return to_number(rest).then_some(destroyed?);
+    }
+    if let Some(rest) =
+        keyword_prefix(rest, &["REPLICA"]).or_else(|| keyword_prefix(rest, &["SLAVE"]))
+    {
+        let rest = keyword_prefix(rest, &["ALL"]).unwrap_or(rest);
+        let ok = rest.is_empty()
+            || keyword_prefix(rest, &["FOR", "CHANNEL"])
+                .and_then(string)
+                .is_some_and(<[_]>::is_empty);
+        return ok.then_some(destroyed?);
+    }
+    let rest = keyword_prefix(rest, &["PERSIST"])?;
+    let rest = keyword_prefix(rest, &["IF", "EXISTS"]).unwrap_or(rest);
+    matches!(rest, [] | [Token::Word(_)])
+        .then_some((RiskGrade::UnboundedWrite, RiskReason::ServerAdmin))
+}
+
+/// 문자열 하나를 지나고 그 뒤를 돌려준다.
+fn string<'a, 'b>(tokens: &'a [&'b Token]) -> Option<&'a [&'b Token]> {
+    match tokens {
+        [
+            Token::SingleQuotedString(_) | Token::DoubleQuotedString(_),
+            rest @ ..,
+        ] => Some(rest),
+        _ => None,
+    }
+}
+
+/// `(이름 | @변수, …)` 를 지나고 그 뒤를 돌려준다.
+fn word_list<'a, 'b>(tokens: &'a [&'b Token]) -> Option<&'a [&'b Token]> {
+    let [Token::LParen, rest @ ..] = tokens else {
+        return None;
+    };
+    let mut rest = rest;
+    loop {
+        rest = match rest {
+            [Token::AtSign, Token::Word(_), after @ ..] | [Token::Word(_), after @ ..] => after,
+            _ => return None,
+        };
+        rest = match rest {
+            [Token::Comma, after @ ..] => after,
+            [Token::RParen, after @ ..] => return Some(after),
+            _ => return None,
+        };
+    }
 }
 
 fn is_keyword(token: &Token, keyword: &str) -> bool {
