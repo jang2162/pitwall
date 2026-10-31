@@ -59,6 +59,7 @@ import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { FileTreeToolWindow } from "../file-tree/file-tree";
 import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
+import { DbConnectionFeature } from "../db/connection/connection-feature";
 import { DbExplorerToolWindow } from "../db/explorer/explorer-feature";
 import { DbConsoleFeature } from "../db/console/console-feature";
 import { DbGridFeature } from "../db/grid/db-grid-feature";
@@ -830,6 +831,7 @@ function ProjectWindowBody({
           {projectId !== undefined && <GitMerge projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitRemoteFeature projectId={projectId} />}
           {projectId !== undefined && <DbGridFeature />}
+          {projectId !== undefined && <DbConnectionFeature projectId={projectId} />}
           {projectId !== undefined && (
             <DbConsoleFeature projectId={projectId} workspace={workspace} api={api} />
           )}
