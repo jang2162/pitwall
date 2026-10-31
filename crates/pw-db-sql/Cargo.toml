@@ -9,9 +9,12 @@ publish.workspace = true
 [dependencies]
 pw-db-types = { path = "../pw-db-types" }
 pw-rpc = { path = "../pw-rpc" }
+# 분류 결과(`Classification` · `RiskReason`)는 `db.sql.classify`(M3-05)의 출력에 그대로 실린다.
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 specta = { workspace = true, features = ["derive"] }
+# 기본 기능의 `recursive-protection` 을 끄지 않는다 — 미신뢰 SQL 의 깊은 중첩이 파서의 스택을 넘지 않게 한다.
+sqlparser = { workspace = true, features = ["visitor"] }
 # RPC 핸들러가 나누기를 블로킹 스레드에서 돌린다(`spawn_blocking`).
 tokio = { workspace = true, features = ["rt"] }
 
