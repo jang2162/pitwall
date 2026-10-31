@@ -190,6 +190,9 @@ pub struct ConnectionSpec {
     pub target: Target,
     /// 처음 고를 DB. Redis 는 DB 번호(`"0"` …) — Redis 는 DB 번호마다 연결을 따로 연다(결정 M3-D15).
     pub database: Option<String>,
+    /// 처음 고를 스키마(지원 플래그 `schemas` 가 켜진 드라이버만 — PG 는 연결 시작 옵션의 `search_path`). `None` 이면 서버 기본.
+    /// 스키마가 없는 드라이버에 주는 것은 실행 관문(M3-05 `db.session.open`)이 거절한다.
+    pub schema: Option<String>,
     pub user: Option<String>,
     pub password: Option<Secret>,
     pub tls: TlsSettings,
@@ -214,6 +217,7 @@ impl ConnectionSpec {
             driver: driver.into(),
             target,
             database: None,
+            schema: None,
             user: None,
             password: None,
             tls: TlsSettings::mode(SslMode::VerifyFull),

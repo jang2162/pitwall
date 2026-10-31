@@ -174,9 +174,10 @@ fn retry(error: &DbError) -> bool {
 fn pool_key(spec: &ConnectionSpec, mode: PgSslMode) -> String {
     // `Debug` 는 비밀을 가리므로 비밀은 따로 붙인다. 이 열쇠는 로그 · 오류로 나가지 않는다.
     format!(
-        "{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{}\u{0}{:?}",
+        "{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{}\u{0}{:?}",
         spec.target,
         spec.database,
+        spec.schema,
         spec.user,
         spec.tls,
         mode,
@@ -227,6 +228,9 @@ async fn pg_config(spec: &ConnectionSpec, mode: PgSslMode) -> DbResult<tokio_pos
     if let Some(database) = &spec.database {
         config.dbname(database);
     }
+    if let Some(schema) = &spec.schema {
+        config.options(search_path_option(schema));
+    }
     if let Some(user) = &spec.user {
         config.user(user);
     }
@@ -234,6 +238,27 @@ async fn pg_config(spec: &ConnectionSpec, mode: PgSslMode) -> DbResult<tokio_pos
         config.password(password.expose());
     }
     Ok(config)
+}
+
+/// 고른 스키마(M3-15 콘솔의 스키마 고르기)를 연결 시작 옵션 `-c search_path=…` 로 — SQL `SET` 을 보내지 않는다(read-only 연결의
+/// 관문은 `SET` 을 거절한다, 결정 M3-D6). 경로는 고른 스키마 다음 `public`(고른 것이 `public` 이면 그것 하나) — 확장 함수가 흔히
+/// `public` 에 있다. 이름은 따옴표 친 식별자(`"` 는 두 번)이고, 서버는 `options` 를 공백에서 나누며 `\` 를 다음 글자의 이스케이프로
+/// 읽으므로(libpq 「options」) 공백과 `\` 앞에 `\` 를 붙인다. 제어 문자는 세션을 열 때 이미 거절했다.
+fn search_path_option(schema: &str) -> String {
+    let quoted = format!("\"{}\"", schema.replace('"', "\"\""));
+    let path = if schema == "public" {
+        quoted
+    } else {
+        format!("{quoted},public")
+    };
+    let mut option = String::from("-c search_path=");
+    for c in path.chars() {
+        if c == '\\' || c.is_whitespace() {
+            option.push('\\');
+        }
+        option.push(c);
+    }
+    option
 }
 
 /// 붙은 뒤 한 번: 서버 판본 · 연결한 DB · 이 연결이 TLS 인지.

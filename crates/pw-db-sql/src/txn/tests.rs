@@ -217,3 +217,31 @@ fn set_and_reset_change_session_settings() {
         assert!(!changes_session_settings(Postgres, text), "{text}");
     }
 }
+
+/// 실행 계획 RPC 가 거절하는 계획 · 통계 문장(M3-15): 주석 · MySQL 실행 주석 뒤의 첫 낱말까지 본다. 계획 · 통계가 아닌 문장과
+/// 그 낱말이 뒤에 오는 문장은 아니다.
+#[test]
+fn plan_and_analyze_statements_are_found_behind_comments() {
+    for (dialect, text) in [
+        (Postgres, "EXPLAIN ANALYZE DELETE FROM t"),
+        (Postgres, "explain (analyze) delete from t"),
+        (Postgres, "/* a */ -- b\n EXPLAIN SELECT 1"),
+        (Postgres, "ANALYZE t"),
+        (Postgres, "analyse t"),
+        (Mysql, "/*!80018 EXPLAIN ANALYZE */ SELECT 1"),
+        (Mysql, "# note\nDESCRIBE t"),
+        (Mysql, "desc t"),
+        (Sqlite, "EXPLAIN QUERY PLAN SELECT 1"),
+    ] {
+        assert!(plans_or_analyzes(dialect, text), "{dialect:?} {text}");
+    }
+    for (dialect, text) in [
+        (Postgres, "SELECT 'EXPLAIN'"),
+        (Postgres, "DELETE FROM explain"),
+        (Mysql, "SELECT * FROM t ORDER BY a DESC"),
+        (Mysql, "/* EXPLAIN */ SELECT 1"),
+        (Sqlite, ""),
+    ] {
+        assert!(!plans_or_analyzes(dialect, text), "{dialect:?} {text}");
+    }
+}

@@ -91,6 +91,26 @@ fn pool_keys_differ_by_password_and_mode() {
     );
 }
 
+/// 고른 스키마는 연결 시작 옵션 `search_path` 로 간다(M3-15) — 따옴표 친 식별자, 공백 · `\` 는 이스케이프, `public` 이 뒤에 붙는다.
+/// 스키마가 다르면 풀 열쇠도 다르다(풀의 연결을 다른 스키마의 세션이 받지 않게).
+#[tokio::test]
+async fn a_chosen_schema_goes_to_the_startup_search_path() {
+    let mut chosen = spec(None);
+    chosen.schema = Some("my \"bill\\ing".into());
+    let config = pg_config(&chosen, PgSslMode::Disable).await.unwrap();
+    assert_eq!(
+        config.get_options(),
+        Some(r#"-c search_path="my\ ""bill\\ing",public"#)
+    );
+    assert_eq!(search_path_option("public"), r#"-c search_path="public""#);
+    let plain = pg_config(&spec(None), PgSslMode::Disable).await.unwrap();
+    assert_eq!(plain.get_options(), None);
+    assert_ne!(
+        pool_key(&chosen, PgSslMode::Disable),
+        pool_key(&spec(None), PgSslMode::Disable)
+    );
+}
+
 #[test]
 fn the_driver_is_a_valid_sql_driver_with_every_sslmode() {
     let driver = PgDriver::new();

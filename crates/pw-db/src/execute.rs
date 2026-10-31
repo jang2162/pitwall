@@ -30,6 +30,13 @@
 //! 꼴): 스트림이 아니다. 문장 하나만, 조회가 아니면 거절하고, 새 연결의 읽기 전용 트랜잭션 안에서 `limit` 행까지 읽고 롤백한 뒤
 //! 닫는다. `confirmed` 를 받지 않는다.
 //!
+//! **실행 계획** `db.query.explain { sessionId, sql, statements?, confirmed? }`(M3-15): 문장 하나의 계획을 드라이버의 `explain`
+//! (PG `EXPLAIN (FORMAT JSON)` · MySQL `EXPLAIN FORMAT=JSON` · SQLite `EXPLAIN QUERY PLAN`)으로 받는다. 관문은 실행과 **같은 길**
+//! ([`DbSessions::admit`] — 세션 범위 · 신뢰 · 설정 재확인 · busy · 등급 정책 · 확인 해시)이다. `ANALYZE` 는 없다: 계획 · 통계
+//! 문장(`EXPLAIN` · `DESCRIBE` · `ANALYZE` 등, `pw_db_sql::txn::plans_or_analyzes`)과 트랜잭션 제어 문장은 거절한다. read-only
+//! 연결은 읽기 전용 트랜잭션 안에서, 수동 커밋 탭이어도 트랜잭션을 새로 열지 않는다(계획은 아무것도 바꾸지 않는다). 계획이
+//! [`EXPLAIN_LIMIT`] 안에 오지 않으면 드라이버 인터럽트로 멈춘다.
+//!
 //! **분류** `db.sql.classify { projectId, sql, sessionId? | connectionId? | dialect?, statements? }`: 나누기 + 문장마다 분류 +
 //! 확인 해시. 콘솔 UI · 실행 관문 · MCP 가 이 하나를 쓴다. 방언은 세션 · 연결의 드라이버 것이 앞서고, `dialect` 는 연결이 없는 편집기
 //! 표시용이다.
@@ -40,10 +47,10 @@ use std::time::{Duration, Instant};
 use pw_db_driver::budget::{Inactivity, within};
 use pw_db_driver::{Budget, DbConnection, QueryCancel, SqlConnection};
 use pw_db_sql::split::SqlRange;
-use pw_db_sql::txn::TxControl;
+use pw_db_sql::txn::{TxControl, plans_or_analyzes};
 use pw_db_types::{
-    BeginOptions, ColumnMeta, DbError, DbErrorKind, DbValue, ExecuteRequest, FetchLimit, RiskGrade,
-    Row, SqlDialect, TransactionState,
+    BeginOptions, ColumnMeta, DbError, DbErrorKind, DbValue, ExecuteRequest, ExplainPlan,
+    FetchLimit, RiskGrade, Row, SqlDialect, TransactionState,
 };
 use pw_rpc::{Ctx, JsNumber, Router, RpcError, StreamSink, code as rpc_code, rpc_method};
 use serde::{Deserialize, Serialize};
@@ -69,6 +76,8 @@ const NEXT_FETCH: FetchLimit = FetchLimit {
 const PROGRESS_EVERY: Duration = Duration::from_millis(500);
 /// `db.query.page` 의 `limit` 상한.
 pub const MAX_PAGE_ROWS: u32 = 10_000;
+/// 실행 계획을 기다리는 시간. 넘으면 드라이버 인터럽트로 멈춘다(잠금을 기다리는 `EXPLAIN` 이 세션을 영영 쥐지 않게).
+pub const EXPLAIN_LIMIT: Duration = Duration::from_secs(30);
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -82,6 +91,22 @@ pub struct DbQueryExecuteParams {
     #[serde(default)]
     pub statements: Option<Vec<u32>>,
     /// 확인(`3001` 을 받은 뒤 사람의 확인을 거쳐).
+    #[serde(default)]
+    pub confirmed: Option<DbConfirmed>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbQueryExplainParams {
+    pub session_id: String,
+    /// 편집기의 SQL(전부 — `statements` 의 번호는 이 글을 나눈 것).
+    pub sql: String,
+    /// 계획을 볼 문장 번호(`db.sql.split` 의 순서) — 고른 문장이 꼭 하나여야 한다. 없으면 `sql` 전체가 문장 하나여야 한다.
+    #[serde(default)]
+    pub statements: Option<Vec<u32>>,
+    /// 확인(`3001` 을 받은 뒤 — 등급 정책은 실행과 같다).
     #[serde(default)]
     pub confirmed: Option<DbConfirmed>,
 }
@@ -239,6 +264,17 @@ rpc_method! {
         roles: [Owner],
     }
 
+    /// 문장 하나의 실행 계획(M3-15). 관문은 `db.query.execute` 와 같다(그 세션을 연 프로젝트 창만 · 신뢰 · 설정 · busy · 등급 정책 —
+    /// 확인이 필요하면 3001). 문장을 돌리지 않는다 — `EXPLAIN` 만이고 `ANALYZE` 는 없다: 계획 · 통계 문장(`EXPLAIN` · `DESCRIBE` ·
+    /// `ANALYZE`)과 트랜잭션 제어 문장(`data.reason = "transactionStatement"`)은 invalid params. 드라이버에 계획이 없으면
+    /// 3003(`unsupported`).
+    pub DbQueryExplain: "db.query.explain" {
+        params: DbQueryExplainParams,
+        result: ExplainPlan,
+        tier: Exec,
+        roles: [Owner],
+    }
+
     /// 쪽 단위 조회(스트림이 아니다): 조회 문장 하나를 새 연결의 읽기 전용 트랜잭션 안에서 `limit` 행까지. 조회가 아니면 거절.
     pub DbQueryPageMethod: "db.query.page" {
         params: DbQueryPageParams,
@@ -328,21 +364,26 @@ fn effects_of(statements: &[Planned], in_transaction: bool, manual: bool) -> Vec
 }
 
 impl DbSessions {
-    /// `db.query.execute`.
-    pub(crate) async fn execute(
-        self: Arc<Self>,
-        ctx: Ctx,
-        params: DbQueryExecuteParams,
-        sink: StreamSink<DbQueryEvent>,
-    ) -> Result<(), RpcError> {
-        let (session, _grant) = self.session_for(&ctx, &params.session_id)?;
+    /// 실행 관문(`db.query.execute` · `db.query.explain` 이 함께 쓴다): 그 세션을 연 프로젝트 창 · 설정 재확인 · 나누기와 분류 ·
+    /// `check`(요청마다의 추가 거절 — 잠그기 전, 확인을 묻기 전) · 옮길 수 없는 트랜잭션 문장 · read-only 드라이버 · busy(세션 잠금)
+    /// · 등급 정책과 확인 해시. 지나면 확인을 써 버리고(재사용 거절) 잠근 연결과 문장들을 돌려준다.
+    async fn admit(
+        &self,
+        ctx: &Ctx,
+        session_id: &str,
+        sql: String,
+        selected: Option<Vec<u32>>,
+        confirmed: Option<&DbConfirmed>,
+        check: impl FnOnce(&DbSession, SqlDialect, &[Planned]) -> Result<(), RpcError>,
+    ) -> Result<Admitted, RpcError> {
+        let (session, _grant) = self.session_for(ctx, session_id)?;
         let Some(dialect) = session.dialect() else {
             return Err(RpcError::invalid_params("this connection does not run SQL"));
         };
         self.recheck(&session).await?;
-        let (sql, selected) = (params.sql, params.statements);
         let planned =
             on_classifier_thread(move || plan(dialect, &sql, selected.as_deref())).await??;
+        check(&session, dialect, &planned)?;
         refuse_untranslatable(&planned)?;
         if session.read_only && !session.driver.capabilities.read_only_transaction {
             return Err(RpcError::new(
@@ -373,22 +414,47 @@ impl DbSessions {
             production: session.production,
             name: session.name.clone(),
         };
-        judge(
-            &policy,
-            &planned,
-            &effects,
-            &hash,
-            params.confirmed.as_ref(),
-        )?;
+        judge(&policy, &planned, &effects, &hash, confirmed)?;
         // 관문을 지났다 — 낸 확인은 이것으로 끝이다(재사용 · 늦게 온 확인 거절).
         session.spend_confirmations();
+        Ok(Admitted {
+            session,
+            link,
+            planned,
+            interrupter,
+        })
+    }
+
+    /// `db.query.execute`.
+    pub(crate) async fn execute(
+        self: Arc<Self>,
+        ctx: Ctx,
+        params: DbQueryExecuteParams,
+        sink: StreamSink<DbQueryEvent>,
+    ) -> Result<(), RpcError> {
+        let Admitted {
+            session,
+            link,
+            planned,
+            interrupter,
+        } = self
+            .admit(
+                &ctx,
+                &params.session_id,
+                params.sql,
+                params.statements,
+                params.confirmed.as_ref(),
+                |_, _, _| Ok(()),
+            )
+            .await?;
+        let dialect = session.dialect();
 
         let execution_id = self.next_id("dbx-");
         let running = Arc::new(Running {
             execution_id: execution_id.clone(),
             session_id: session.id.clone(),
             project_id: session.project_id.clone(),
-            dialect: Some(dialect),
+            dialect,
             cancel: QueryCancel::new(interrupter, Budget::CONSOLE.cancel_cleanup),
             stop: CancellationToken::new(),
             current: std::sync::Mutex::new(None),
@@ -425,6 +491,56 @@ impl DbSessions {
         guard.0 = None;
         let _ = task.await;
         Ok(())
+    }
+
+    /// `db.query.explain`(머리 주석).
+    pub(crate) async fn explain(
+        &self,
+        ctx: &Ctx,
+        params: DbQueryExplainParams,
+    ) -> Result<ExplainPlan, RpcError> {
+        let Admitted {
+            session,
+            mut link,
+            planned,
+            interrupter,
+        } = self
+            .admit(
+                ctx,
+                &params.session_id,
+                params.sql,
+                params.statements,
+                params.confirmed.as_ref(),
+                explainable,
+            )
+            .await?;
+        let text = planned[0].text.clone();
+        let mut result = explain_on(&mut link, session.read_only, text, interrupter).await;
+        let mut notice = match &mut result {
+            Ok(_) => None,
+            Err(e) => {
+                settle(
+                    &mut link,
+                    Step::Statement {
+                        implicit_commit: false,
+                        may_end: false,
+                    },
+                    Some(e),
+                )
+                .await
+            }
+        };
+        // read-only 연결이면 연 읽기 전용 트랜잭션을 닫는다(실행의 끝과 같다).
+        if link.owned_read_only {
+            if let Some(conn) = link.sql() {
+                let _ = within(Budget::CONSOLE.cancel_cleanup, "rollback", conn.rollback()).await;
+            }
+            notice = link.reconcile(Step::Rollback, None).or(notice);
+        }
+        session.sync(&link);
+        drop(link);
+        self.publish(&session, notice);
+        result.map_err(db_error)
     }
 
     /// `db.query.cancel`.
@@ -632,6 +748,73 @@ impl DbSessions {
             statements: planned.iter().map(Planned::class).collect(),
             effects,
         })
+    }
+}
+
+/// 관문을 지난 요청([`DbSessions::admit`]): 세션 · 쥔 연결 · 문장들 · 그 연결의 인터럽트.
+struct Admitted {
+    session: Arc<DbSession>,
+    link: OwnedMutexGuard<Link>,
+    planned: Vec<Planned>,
+    interrupter: Arc<dyn pw_db_driver::Interrupt>,
+}
+
+/// 실행 계획이 받는 문장인가(관문의 `check`): 꼭 하나, 계획 · 통계 문장(`ANALYZE` 포함)도 트랜잭션 제어 문장도 아니고, 드라이버에
+/// 계획이 있다. 잠그기 · 확인을 묻기 전에 거절한다.
+fn explainable(
+    session: &DbSession,
+    dialect: SqlDialect,
+    planned: &[Planned],
+) -> Result<(), RpcError> {
+    if !session.driver.capabilities.explain {
+        return Err(db_error(DbError::unsupported("explain")));
+    }
+    let [statement] = planned else {
+        return Err(RpcError::invalid_params(
+            "db.query.explain explains exactly one statement",
+        ));
+    };
+    if plans_or_analyzes(dialect, &statement.text) {
+        return Err(RpcError::invalid_params(
+            "explain the statement itself: EXPLAIN, DESCRIBE and ANALYZE statements are not explained again",
+        ));
+    }
+    if statement.control.is_some() {
+        let why = "transaction statements have no plan";
+        return Err(RpcError::invalid_params(why).with_data(json!({
+            "reason": "transactionStatement",
+            "index": statement.index,
+            "message": why,
+        })));
+    }
+    Ok(())
+}
+
+/// 계획 하나: read-only 연결이면 읽기 전용 트랜잭션 안에서(결정 M3-D6), 아니면 그대로 — 수동 커밋이어도 트랜잭션을 열지 않는다.
+/// [`EXPLAIN_LIMIT`] 를 넘으면 드라이버 인터럽트로 멈추고 타임아웃.
+async fn explain_on(
+    link: &mut Link,
+    read_only: bool,
+    text: String,
+    interrupter: Arc<dyn pw_db_driver::Interrupt>,
+) -> Result<ExplainPlan, DbError> {
+    if read_only {
+        link.ensure_transaction(true).await?;
+    }
+    let Some(conn) = link.sql() else {
+        return Err(disconnected());
+    };
+    let cancel = QueryCancel::new(interrupter, Budget::CONSOLE.cancel_cleanup);
+    let result = tokio::time::timeout(EXPLAIN_LIMIT, cancel.run(conn.explain(text))).await;
+    match result {
+        Ok(result) => result,
+        Err(_) => {
+            let _ = cancel.cancel().await;
+            Err(DbError::new(
+                DbErrorKind::Timeout,
+                format!("the plan did not come within {} s", EXPLAIN_LIMIT.as_secs()),
+            ))
+        }
     }
 }
 
@@ -1102,7 +1285,8 @@ async fn run_control(
 }
 
 pub(crate) fn register(router: &mut Router, sessions: Arc<DbSessions>) {
-    let (execute, cancel, page, classify) = (
+    let (execute, explain, cancel, page, classify) = (
+        Arc::clone(&sessions),
         Arc::clone(&sessions),
         Arc::clone(&sessions),
         Arc::clone(&sessions),
@@ -1115,6 +1299,10 @@ pub(crate) fn register(router: &mut Router, sessions: Arc<DbSessions>) {
                 Arc::clone(&execute).execute(ctx, params, sink)
             },
         )
+        .unary(DbQueryExplain, move |ctx, params: DbQueryExplainParams| {
+            let s = Arc::clone(&explain);
+            async move { s.explain(&ctx, params).await }
+        })
         .unary(DbQueryCancel, move |ctx, params: DbQueryCancelParams| {
             let s = Arc::clone(&cancel);
             async move { s.cancel(&ctx, params).await }

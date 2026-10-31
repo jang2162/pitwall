@@ -253,6 +253,10 @@ pub struct DbSessionOpenParams {
     /// 처음 고를 DB(없으면 설정의 것).
     #[serde(default)]
     pub database: Option<String>,
+    /// 처음 고를 스키마(없으면 서버 기본). 지원 플래그 `schemas` 가 꺼진 드라이버(MySQL · SQLite — DB 가 곧 스키마)면 invalid
+    /// params. PG 는 연결 시작 옵션의 `search_path` 로 건다(SQL `SET` 을 보내지 않는다 — M3-15).
+    #[serde(default)]
+    pub schema: Option<String>,
     /// 이 세션을 쥐는 콘솔 탭의 id(창 안에서 탭마다 다르고 탭을 복원해도 같은 값, 1~256자). 있으면 창이 새로고침돼도 열린
     /// 트랜잭션이 있는 세션을 보존하고 `db.session.resume` 으로 다시 붙을 수 있다.
     #[serde(default)]
@@ -1044,24 +1048,27 @@ impl DbSessions {
         params: DbSessionOpenParams,
     ) -> Result<DbSessionOpened, RpcError> {
         let grant = db_grant(ctx.scope(), &params.project_id)?;
-        if let Some(database) = &params.database
-            && (database.is_empty()
-                || database.len() > 256
-                || database.chars().any(char::is_control))
-        {
-            return Err(RpcError::invalid_params(
-                "database must be 1-256 characters without control characters",
-            ));
+        for (what, name) in [("database", &params.database), ("schema", &params.schema)] {
+            if let Some(name) = name
+                && (name.is_empty() || name.len() > 256 || name.chars().any(char::is_control))
+            {
+                return Err(RpcError::invalid_params(format!(
+                    "{what} must be 1-256 characters without control characters"
+                )));
+            }
         }
         if let Some(tab) = &params.tab_id {
             valid_tab_id(tab)?;
         }
-        let opened = crate::connection::connect(
+        let opened = crate::connection::connect_with(
             self,
             &grant,
             params.worktree.as_deref(),
             &params.connection_id,
-            params.database.clone(),
+            crate::connection::Choice {
+                database: params.database.clone(),
+                schema: params.schema.clone(),
+            },
         )
         .await?;
         let id = self.next_id("dbs-");

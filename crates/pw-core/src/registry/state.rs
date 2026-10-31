@@ -61,7 +61,7 @@ pub fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-fn checked_id(id: &str) -> Result<&str, RegistryError> {
+pub(crate) fn checked_id(id: &str) -> Result<&str, RegistryError> {
     if valid_id(id) {
         Ok(id)
     } else {
@@ -103,8 +103,6 @@ pub fn read_state(file: &Path) -> Result<Option<serde_json::Value>, String> {
 
 /// 상태를 원자적으로 쓴다(머리 주석). 폴더가 없으면 만든다. 객체가 아니거나 [`STATE_LIMIT`] 를 넘으면 쓰지 않는다.
 pub fn write_state(file: &Path, state: &serde_json::Value) -> Result<(), RegistryError> {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
     let invalid = |reason: String| RegistryError::InvalidPath {
         path: file.to_owned(),
         reason,
@@ -119,18 +117,30 @@ pub fn write_state(file: &Path, state: &serde_json::Value) -> Result<(), Registr
             text.len()
         )));
     }
+    write_atomically(file, &text)
+}
+
+/// `file` 을 원자적으로 쓴다(머리 주석의 「쓰기」 — 같은 폴더의 임시 파일 → 동기화 → rename). 폴더가 없으면 만든다. 상태 파일과
+/// SQL 콘솔 파일(`super::consoles`)이 함께 쓴다.
+pub(crate) fn write_atomically(file: &Path, bytes: &[u8]) -> Result<(), RegistryError> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let io = |op: &str, path: &Path, e: std::io::Error| {
         RegistryError::Db(format!("cannot {op} {}: {e}", path.display()))
     };
-    let dir = file.parent().expect("state file has a parent");
+    let dir = file.parent().expect("the file has a parent");
+    let name = file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .expect("the file has a UTF-8 name");
     fs::create_dir_all(dir).map_err(|e| io("create", dir, e))?;
-    remove_stale_temps(dir);
+    remove_stale_temps(dir, name);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.subsec_nanos());
     let (tmp, mut out) = loop {
         let tmp = dir.join(format!(
-            ".{STATE_FILE}.{}.{}.{nanos}{TMP_SUFFIX}",
+            ".{name}.{}.{}.{nanos}{TMP_SUFFIX}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed),
         ));
@@ -145,7 +155,7 @@ pub fn write_state(file: &Path, state: &serde_json::Value) -> Result<(), Registr
         }
     };
     let written = out
-        .write_all(&text)
+        .write_all(bytes)
         .and_then(|()| out.sync_all())
         .map_err(|e| io("write", &tmp, e));
     drop(out);
@@ -164,17 +174,17 @@ pub fn write_state(file: &Path, state: &serde_json::Value) -> Result<(), Registr
     renamed
 }
 
-/// 죽은 프로세스가 쓰다 남긴 임시 파일을 지운다(머리 주석). 이 프로세스의 것은 지금 쓰는 중일 수 있어 두고, 지우지 못해도 쓰기를
-/// 막지 않는다.
-fn remove_stale_temps(dir: &Path) {
+/// 죽은 프로세스가 `file`(이름)을 쓰다 남긴 임시 파일을 지운다(머리 주석). 이 프로세스의 것은 지금 쓰는 중일 수 있어 두고, 지우지
+/// 못해도 쓰기를 막지 않는다.
+fn remove_stale_temps(dir: &Path, file: &str) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let ours = format!(".{STATE_FILE}.{}.", std::process::id());
+    let ours = format!(".{file}.{}.", std::process::id());
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if name.starts_with(&format!(".{STATE_FILE}."))
+        if name.starts_with(&format!(".{file}."))
             && name.ends_with(TMP_SUFFIX)
             && !name.starts_with(&ours)
         {

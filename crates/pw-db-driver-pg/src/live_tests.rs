@@ -977,6 +977,58 @@ async fn live_pg_explain_returns_the_json_plan() {
     assert!(plan.text.contains("\"Function Scan\""), "{}", plan.text);
 }
 
+/// 실행 계획은 문장을 돌리지 않는다(M3-15 — `EXPLAIN` 만, `ANALYZE` 없음): `DELETE` 의 계획을 받아도 행이 그대로이고, 사람이 친
+/// `EXPLAIN ANALYZE …` · `ANALYZE …` 를 넘겨도 겹친 `EXPLAIN` 이 되어 서버가 문법 오류로 거절한다(파이프라인은 그 전에 거절한다).
+#[tokio::test(flavor = "multi_thread")]
+async fn live_pg_explain_never_runs_the_statement() {
+    let mut conn = open(&plain()).await;
+    run(&mut conn, "DROP TABLE IF EXISTS pw_live_explain").await;
+    run(&mut conn, "CREATE TABLE pw_live_explain (id int)").await;
+    run(&mut conn, "INSERT INTO pw_live_explain VALUES (1), (2)").await;
+    let plan = conn
+        .explain("DELETE FROM pw_live_explain".into())
+        .await
+        .unwrap();
+    assert!(plan.text.contains("\"Delete\""), "{}", plan.text);
+    for nested in [
+        "EXPLAIN ANALYZE DELETE FROM pw_live_explain",
+        "EXPLAIN (ANALYZE) DELETE FROM pw_live_explain",
+        "ANALYZE pw_live_explain",
+    ] {
+        let error = conn.explain(nested.into()).await.unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("42601"), "{nested}: {error:?}");
+    }
+    assert_eq!(
+        count(&mut conn, "SELECT count(*) FROM pw_live_explain").await,
+        2
+    );
+    run(&mut conn, "DROP TABLE pw_live_explain").await;
+}
+
+/// 고른 스키마(M3-15 의 스키마 고르기)는 연결 시작 옵션의 `search_path` 다 — `SET` 을 보내지 않고, 따옴표 · 공백이 든 이름도 그대로
+/// 지금 스키마가 된다. `public` 이 뒤에 남는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn live_pg_a_chosen_schema_is_the_current_schema() {
+    let name = "pw live \"schema\"";
+    let mut admin = open(&plain()).await;
+    run(
+        &mut admin,
+        r#"DROP SCHEMA IF EXISTS "pw live ""schema""" CASCADE"#,
+    )
+    .await;
+    run(&mut admin, r#"CREATE SCHEMA "pw live ""schema""""#).await;
+    let mut spec = plain();
+    spec.schema = Some(name.to_owned());
+    let mut conn = open(&spec).await;
+    assert_eq!(
+        text(&one(&mut conn, "SELECT current_schema()::text").await),
+        name
+    );
+    let path = one(&mut conn, "SHOW search_path").await;
+    assert!(text(&path).ends_with("public"), "{path:?}");
+    run(&mut admin, r#"DROP SCHEMA "pw live ""schema""" CASCADE"#).await;
+}
+
 /// 트랜잭션이 열린 채 닫으면 DB 가 롤백한다. 쉬는 연결은 풀로 돌아가 세션 상태를 지우고 다시 쓰인다.
 #[tokio::test(flavor = "multi_thread")]
 async fn live_pg_closing_rolls_back_and_the_pool_resets_sessions() {

@@ -6,6 +6,8 @@
 //!   `WITH CONSISTENT SNAPSHOT` · SQLite 의 `IMMEDIATE` · MySQL 의 `RELEASE`)이 붙어 있으면 조용히 버리지 않고 거절한다.
 //!   `PREPARE TRANSACTION`(2단계 커밋)도 옮길 메서드가 없어 거절이다. `SAVEPOINT` · `RELEASE SAVEPOINT` · `ROLLBACK TO` 와
 //!   `COMMIT PREPARED` · `ROLLBACK PREPARED` 는 트랜잭션 블록을 열거나 닫지 않으므로 여기서 고르지 않는다(SQL 그대로 간다).
+//! - [`plans_or_analyzes`]: `EXPLAIN` · `DESCRIBE` · `DESC` · `ANALYZE` · `ANALYSE` 로 시작하는 문장 — 실행 계획 RPC(M3-15
+//!   `db.query.explain`)가 거절한다(드라이버가 그 앞에 `EXPLAIN` 을 붙이므로 겹친 계획 · `ANALYZE` 가 실행으로 새는 길을 막는다).
 //! - [`changes_session_settings`]: `SET` · `RESET` — read-only 연결의 관문이 거절한다(결정 M3-D6).
 //! - [`implicitly_commits`]: MySQL · MariaDB 에서 열린 트랜잭션을 실행 전에 커밋하는 문장(DDL · `LOCK TABLES` · `TRUNCATE` 등,
 //!   MySQL 8.4 매뉴얼 「Statements That Cause an Implicit Commit」). 수동 트랜잭션에서 실행하기 전에 확인을 받는다(결정 M3-D21).
@@ -211,6 +213,18 @@ fn mentions_word(text: &str, word: &str) -> bool {
             && (i == 0 || !ident(bytes[i - 1]))
             && bytes.get(i + n).is_none_or(|&b| !ident(b))
     })
+}
+
+/// 계획 · 통계 문장인가: `EXPLAIN` · `DESCRIBE` · `DESC` · `ANALYZE` · `ANALYSE` 로 시작한다. 실행 계획 RPC(`db.query.explain`)는
+/// 이런 문장을 받지 않는다 — 드라이버는 받은 문장 앞에 `EXPLAIN` 을 붙이는데(PG `EXPLAIN (FORMAT JSON)`, MySQL
+/// `EXPLAIN FORMAT=JSON`, SQLite `EXPLAIN QUERY PLAN`) `ANALYZE` 는 안의 문장을 실제로 돌린다. 겹친 꼴이 방언에 따라 문법 오류인지
+/// 실행인지 갈리지 않게 그 앞에서 거절한다.
+pub fn plans_or_analyzes(dialect: SqlDialect, text: &str) -> bool {
+    let lexed = lex(dialect, text, 1);
+    matches!(
+        lexed.words.first().map(String::as_str),
+        Some("EXPLAIN" | "DESCRIBE" | "DESC" | "ANALYZE" | "ANALYSE")
+    )
 }
 
 /// `SET` · `RESET` 으로 시작하는 문장인가(`SET TRANSACTION` · `SET SESSION CHARACTERISTICS` 포함). read-only 연결의 실행 관문이

@@ -103,6 +103,13 @@ export type UnaryMethods = {
 	 */
 	"db.query.cancel": { params: DbQueryCancelParams; result: null };
 	/**
+	 * 문장 하나의 실행 계획(M3-15). 관문은 `db.query.execute` 와 같다(그 세션을 연 프로젝트 창만 · 신뢰 · 설정 · busy · 등급 정책 —
+	 * 확인이 필요하면 3001). 문장을 돌리지 않는다 — `EXPLAIN` 만이고 `ANALYZE` 는 없다: 계획 · 통계 문장(`EXPLAIN` · `DESCRIBE` ·
+	 * `ANALYZE`)과 트랜잭션 제어 문장(`data.reason = "transactionStatement"`)은 invalid params. 드라이버에 계획이 없으면
+	 * 3003(`unsupported`).
+	 */
+	"db.query.explain": { params: DbQueryExplainParams; result: ExplainPlan };
+	/**
 	 * 쪽 단위 조회(스트림이 아니다): 조회 문장 하나를 새 연결의 읽기 전용 트랜잭션 안에서 `limit` 행까지. 조회가 아니면 거절.
 	 */
 	"db.query.page": { params: DbQueryPageParams; result: DbQueryPage };
@@ -559,6 +566,22 @@ export type UnaryMethods = {
 	 */
 	"project.claimTrustPrompt": { params: ProjectIdParams; result: boolean };
 	/**
+	 * SQL 콘솔 하나를 지운다(없으면 아무것도 하지 않는다). 그 프로젝트 창만.
+	 */
+	"project.console.delete": { params: ConsoleParams; result: null };
+	/**
+	 * 프로젝트의 SQL 콘솔 파일(`$DATA/projects/<id>/consoles/*.sql`), 이름순. 레지스트리에 없는 id 면 invalid params 오류.
+	 */
+	"project.console.list": { params: ProjectScopedParams; result: ConsoleFile[] };
+	/**
+	 * SQL 콘솔 하나의 글. 없으면 `text: null`. 16 MiB 를 넘거나 UTF-8 이 아니면 invalid params 오류.
+	 */
+	"project.console.read": { params: ConsoleParams; result: ConsoleText };
+	/**
+	 * SQL 콘솔 하나를 통째로 쓴다(원자적). 그 프로젝트 창만, 16 MiB 를 넘으면 invalid params 오류.
+	 */
+	"project.console.write": { params: WriteConsoleParams; result: null };
+	/**
 	 * 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.
 	 */
 	"project.create": { params: CreateProjectParams; result: Project };
@@ -793,6 +816,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.kv.setTtl": {"name":"db.kv.setTtl","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvSetTtlParams","output":"bool","doc":" TTL 을 바꾼다. `PEXPIRE` 와 같은 등급 — 확인(3001)이 필요하다(짧은 TTL 은 지우기와 같다). read-only 연결은 거절. 키가\n 없으면 `false`.\n","mcp":false,"fileScope":false},
 	"db.query.cancel": {"name":"db.query.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"DbQueryCancelParams","output":"()","doc":" 실행을 취소한다(드라이버 인터럽트). 그 세션을 연 프로젝트 창만. SQLite 수동 트랜잭션 안의 쓰기면 `confirmRollback` 없이는\n 3002. 끝난 실행이면 아무것도 하지 않는다.\n","mcp":false,"fileScope":false},
 	"db.query.execute": {"name":"db.query.execute","kind":"stream","tier":"exec","roles":["owner"],"params":"DbQueryExecuteParams","output":"DbQueryEvent","doc":" 세션에서 문장들을 돌린다(스트림). 관문: 그 세션을 연 프로젝트 창만 · 신뢰 · 연결 설정이 연 때와 같음 · 등급 정책(확인이\n 필요하면 3001, read-only 연결은 조회 밖을 거절). 항목은 `accepted` → 문장마다 `started` → `columns` → `rows` … →\n `done` | `error`.\n","mcp":false,"fileScope":false},
+	"db.query.explain": {"name":"db.query.explain","kind":"unary","tier":"exec","roles":["owner"],"params":"DbQueryExplainParams","output":"ExplainPlan","doc":" 문장 하나의 실행 계획(M3-15). 관문은 `db.query.execute` 와 같다(그 세션을 연 프로젝트 창만 · 신뢰 · 설정 · busy · 등급 정책 —\n 확인이 필요하면 3001). 문장을 돌리지 않는다 — `EXPLAIN` 만이고 `ANALYZE` 는 없다: 계획 · 통계 문장(`EXPLAIN` · `DESCRIBE` ·\n `ANALYZE`)과 트랜잭션 제어 문장(`data.reason = \"transactionStatement\"`)은 invalid params. 드라이버에 계획이 없으면\n 3003(`unsupported`).\n","mcp":false,"fileScope":false},
 	"db.query.page": {"name":"db.query.page","kind":"unary","tier":"exec","roles":["owner"],"params":"DbQueryPageParams","output":"DbQueryPage","doc":" 쪽 단위 조회(스트림이 아니다): 조회 문장 하나를 새 연결의 읽기 전용 트랜잭션 안에서 `limit` 행까지. 조회가 아니면 거절.\n","mcp":false,"fileScope":false},
 	"db.schema.columns": {"name":"db.schema.columns","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"DbSchemaColumns","doc":" 테이블 · 뷰의 열.\n","mcp":false,"fileScope":false},
 	"db.schema.databases": {"name":"db.schema.databases","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaConnectionParams","output":"DbSchemaDatabases","doc":" DB 목록(지원 플래그 `multipleDatabases`). 그 프로젝트 창 + 신뢰한 프로젝트만. 메타데이터용 연결을 처음 쓰면 연다(비밀 ·\n 확인이 필요하면 3101 · 3102, 드라이버가 실패하면 3003).\n","mcp":false,"fileScope":false},
@@ -895,6 +919,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":false,"fileScope":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":false,"fileScope":false},
 	"project.claimTrustPrompt": {"name":"project.claimTrustPrompt","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"bool","doc":" 신뢰 확인 다이얼로그를 띄울 차례인가. 아직 묻지 않은 프로젝트면 미신뢰로 기록하고 `true` — 같은 프로젝트의 창이 여럿이어도\n 처음 부른 하나만 `true` 를 받는다. 이미 물었으면 `false`.\n","mcp":false,"fileScope":false},
+	"project.console.delete": {"name":"project.console.delete","kind":"unary","tier":"write","roles":["owner"],"params":"ConsoleParams","output":"()","doc":" SQL 콘솔 하나를 지운다(없으면 아무것도 하지 않는다). 그 프로젝트 창만.\n","mcp":false,"fileScope":false},
+	"project.console.list": {"name":"project.console.list","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectScopedParams","output":"Vec<ConsoleFile>","doc":" 프로젝트의 SQL 콘솔 파일(`$DATA/projects/<id>/consoles/*.sql`), 이름순. 레지스트리에 없는 id 면 invalid params 오류.\n","mcp":false,"fileScope":false},
+	"project.console.read": {"name":"project.console.read","kind":"unary","tier":"read","roles":["owner"],"params":"ConsoleParams","output":"ConsoleText","doc":" SQL 콘솔 하나의 글. 없으면 `text: null`. 16 MiB 를 넘거나 UTF-8 이 아니면 invalid params 오류.\n","mcp":false,"fileScope":false},
+	"project.console.write": {"name":"project.console.write","kind":"unary","tier":"write","roles":["owner"],"params":"WriteConsoleParams","output":"()","doc":" SQL 콘솔 하나를 통째로 쓴다(원자적). 그 프로젝트 창만, 16 MiB 를 넘으면 invalid params 오류.\n","mcp":false,"fileScope":false},
 	"project.create": {"name":"project.create","kind":"unary","tier":"write","roles":["owner"],"params":"CreateProjectParams","output":"Project","doc":" 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.\n","mcp":false,"fileScope":false},
 	"project.delete": {"name":"project.delete","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"()","doc":" 레지스트리에서 지운다. 프로젝트 폴더와 설정 파일은 그대로 둔다.\n","mcp":false,"fileScope":false},
 	"project.get": {"name":"project.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트 하나. 없으면 invalid params 오류.\n","mcp":false,"fileScope":false},
@@ -1292,6 +1320,26 @@ export type ConflictStage = {
 	id: string,
 	/**  git 의 8진 모드(`100644` · `100755` · `120000` · `160000`). */
 	mode: string,
+};
+
+/**  콘솔 파일 하나. */
+export type ConsoleFile = {
+	consoleId: string,
+	/**  바이트. */
+	size: number,
+	/**  마지막으로 쓴 시각(유닉스 밀리초). 파일 시스템이 주지 않으면 `null`. */
+	modifiedMs: number | null,
+};
+
+export type ConsoleParams = {
+	projectId: string,
+	/**  콘솔 id(영소문자 · 숫자 · `-`, 1~64자 — 파일은 `<id>.sql`). */
+	consoleId: string,
+};
+
+/**  읽은 콘솔. 파일이 없으면 `text` 가 `null` 이다(새 콘솔). */
+export type ConsoleText = {
+	text: string | null,
 };
 
 export type ContributionIds = {
@@ -1855,6 +1903,16 @@ export type DbQueryExecuteParams = {
 	confirmed?: DbConfirmed | null,
 };
 
+export type DbQueryExplainParams = {
+	sessionId: string,
+	/**  편집기의 SQL(전부 — `statements` 의 번호는 이 글을 나눈 것). */
+	sql: string,
+	/**  계획을 볼 문장 번호(`db.sql.split` 의 순서) — 고른 문장이 꼭 하나여야 한다. 없으면 `sql` 전체가 문장 하나여야 한다. */
+	statements?: number[] | null,
+	/**  확인(`3001` 을 받은 뒤 — 등급 정책은 실행과 같다). */
+	confirmed?: DbConfirmed | null,
+};
+
 export type DbQueryPage = {
 	columns: ColumnMeta[],
 	rows: DbValue[][],
@@ -2096,6 +2154,11 @@ export type DbSessionOpenParams = {
 	connectionId: string,
 	/**  처음 고를 DB(없으면 설정의 것). */
 	database?: string | null,
+	/**
+	 *  처음 고를 스키마(없으면 서버 기본). 지원 플래그 `schemas` 가 꺼진 드라이버(MySQL · SQLite — DB 가 곧 스키마)면 invalid
+	 *  params. PG 는 연결 시작 옵션의 `search_path` 로 건다(SQL `SET` 을 보내지 않는다 — M3-15).
+	 */
+	schema?: string | null,
 	/**
 	 *  이 세션을 쥐는 콘솔 탭의 id(창 안에서 탭마다 다르고 탭을 복원해도 같은 값, 1~256자). 있으면 창이 새로고침돼도 열린
 	 *  트랜잭션이 있는 세션을 보존하고 `db.session.resume` 으로 다시 붙을 수 있다.
@@ -5425,3 +5488,10 @@ export type WatchMode =
 "polling" | 
 /**  파일 하나(단일 파일 창): 그 파일이 든 폴더를 비재귀로 보고 그 파일의 변경만 낸다([`file`]). */
 "file";
+
+export type WriteConsoleParams = {
+	projectId: string,
+	consoleId: string,
+	/**  콘솔의 글 전부(16 MiB 까지). 저장된 것을 통째로 바꾼다. */
+	text: string,
+};

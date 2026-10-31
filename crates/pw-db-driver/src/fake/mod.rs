@@ -233,6 +233,8 @@ struct State {
     next_connection: AtomicU32,
     /// 연결 번호 → 그 연결의 것(시험이 실행 밖에서 트랜잭션을 끝낼 때 — [`FakeDriver::end_transaction_behind`]).
     sessions: Mutex<HashMap<u32, Arc<Session>>>,
+    /// `connect` 가 받은 설정(차례대로) — [`FakeDriver::connect_specs`].
+    specs: Mutex<Vec<ConnectionSpec>>,
 }
 
 impl State {
@@ -286,6 +288,11 @@ impl FakeDriver {
         Self::build(id, dialect, Self::full_capabilities())
     }
 
+    /// [`named`](Self::named) 에 지원 플래그까지 고른다(스키마 · 계획이 없는 드라이버를 흉내 낼 때).
+    pub fn named_with(id: &str, dialect: SqlDialect, capabilities: Capabilities) -> Self {
+        Self::build(id, dialect, capabilities)
+    }
+
     fn build(id: &str, dialect: SqlDialect, capabilities: Capabilities) -> Self {
         Self {
             state: Arc::new(State {
@@ -300,6 +307,7 @@ impl FakeDriver {
                 rows_read: AtomicU64::new(0),
                 next_connection: AtomicU32::new(0),
                 sessions: Mutex::default(),
+                specs: Mutex::default(),
             }),
         }
     }
@@ -396,6 +404,11 @@ impl FakeDriver {
     }
 
     /// 지금까지 불린 메서드(모든 연결).
+    /// `connect` 가 받은 설정, 차례대로(고른 DB · 스키마가 드라이버까지 갔는지 보는 시험).
+    pub fn connect_specs(&self) -> Vec<ConnectionSpec> {
+        lock(&self.state.specs).clone()
+    }
+
     pub fn calls(&self) -> Vec<FakeCall> {
         lock(&self.state.calls)
             .iter()
@@ -455,10 +468,11 @@ impl DbDriver for FakeDriver {
         self.state.capabilities.clone()
     }
 
-    fn connect(&self, _spec: ConnectionSpec) -> BoxFuture<'_, DbResult<Connected>> {
+    fn connect(&self, spec: ConnectionSpec) -> BoxFuture<'_, DbResult<Connected>> {
         Box::pin(async move {
             let id = self.state.next_connection.fetch_add(1, Ordering::SeqCst);
             self.state.record(id, FakeCall::Connect);
+            lock(&self.state.specs).push(spec);
             if let Some(error) = lock(&self.state.script).connect_error.clone() {
                 return Err(error);
             }

@@ -15,12 +15,15 @@
 //!   바꾼다(에이전트가 자기가 돌 프로젝트를 스스로 신뢰하지 못하게).
 //! - 상태(`project.state.get` · `project.state.set`, [`super::state`]): 프로젝트 창의 레이아웃 · 탭 묶음. 둘 다 owner 만이고(읽기
 //!   `read`, 쓰기 `write`) **MCP 툴로 내놓지 않는다** — 창이 저장하고 다시 여는 UI 상태라 에이전트가 볼 일이 없다.
+//! - SQL 콘솔 파일(`project.console.list` · `read` · `write` · `delete`, [`super::consoles`] — M3-15): 상태와 같은 규칙이다(owner
+//!   만, 쓰기 · 지우기는 그 프로젝트 창의 연결만, MCP 툴 아님).
 
 use std::path::PathBuf;
 
 use pw_rpc::{JsonValue, Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 
+use super::consoles::{ConsoleFile, ConsoleText};
 use super::info::ProjectInfo;
 use super::state::{ProjectState, connection_may_write};
 use super::trust::ProjectTrust;
@@ -104,6 +107,27 @@ pub struct SetProjectStateParams {
     /// 상태 전체(JSON 객체). 저장된 것을 통째로 바꾼다.
     #[specta(type = JsonValue)]
     pub state: serde_json::Value,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleParams {
+    pub project_id: String,
+    /// 콘솔 id(영소문자 · 숫자 · `-`, 1~64자 — 파일은 `<id>.sql`).
+    pub console_id: String,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteConsoleParams {
+    pub project_id: String,
+    pub console_id: String,
+    /// 콘솔의 글 전부(16 MiB 까지). 저장된 것을 통째로 바꾼다.
+    pub text: String,
 }
 
 #[derive(
@@ -216,6 +240,36 @@ rpc_method! {
     /// 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.
     pub ProjectStateSet: "project.state.set" {
         params: SetProjectStateParams,
+        result: (),
+        tier: Write,
+    }
+
+    /// 프로젝트의 SQL 콘솔 파일(`$DATA/projects/<id>/consoles/*.sql`), 이름순. 레지스트리에 없는 id 면 invalid params 오류.
+    pub ProjectConsoleList: "project.console.list" {
+        params: ProjectScopedParams,
+        result: Vec<ConsoleFile>,
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// SQL 콘솔 하나의 글. 없으면 `text: null`. 16 MiB 를 넘거나 UTF-8 이 아니면 invalid params 오류.
+    pub ProjectConsoleRead: "project.console.read" {
+        params: ConsoleParams,
+        result: ConsoleText,
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// SQL 콘솔 하나를 통째로 쓴다(원자적). 그 프로젝트 창만, 16 MiB 를 넘으면 invalid params 오류.
+    pub ProjectConsoleWrite: "project.console.write" {
+        params: WriteConsoleParams,
+        result: (),
+        tier: Write,
+    }
+
+    /// SQL 콘솔 하나를 지운다(없으면 아무것도 하지 않는다). 그 프로젝트 창만.
+    pub ProjectConsoleDelete: "project.console.delete" {
+        params: ConsoleParams,
         result: (),
         tier: Write,
     }
@@ -337,6 +391,48 @@ pub fn register(router: &mut Router, registry: &Registry) {
             }
             blocking(r, move |r| {
                 r.set_project_state(&params.project_id, &params.state)
+            })
+            .await
+        }
+    });
+    let r = registry.clone();
+    router.unary(ProjectConsoleList, move |_ctx, params| {
+        blocking(r.clone(), move |r| r.consoles(&params.project_id))
+    });
+    let r = registry.clone();
+    router.unary(ProjectConsoleRead, move |_ctx, params| {
+        blocking(r.clone(), move |r| {
+            r.read_console(&params.project_id, &params.console_id)
+        })
+    });
+    let r = registry.clone();
+    router.unary(ProjectConsoleWrite, move |ctx, params| {
+        let r = r.clone();
+        async move {
+            if !connection_may_write(&ctx, &params.project_id) {
+                return Err(RpcError::new(
+                    code::PERMISSION_DENIED,
+                    "only the project's own window may save its consoles",
+                ));
+            }
+            blocking(r, move |r| {
+                r.write_console(&params.project_id, &params.console_id, &params.text)
+            })
+            .await
+        }
+    });
+    let r = registry.clone();
+    router.unary(ProjectConsoleDelete, move |ctx, params| {
+        let r = r.clone();
+        async move {
+            if !connection_may_write(&ctx, &params.project_id) {
+                return Err(RpcError::new(
+                    code::PERMISSION_DENIED,
+                    "only the project's own window may remove its consoles",
+                ));
+            }
+            blocking(r, move |r| {
+                r.delete_console(&params.project_id, &params.console_id)
             })
             .await
         }

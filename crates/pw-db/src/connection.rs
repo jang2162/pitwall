@@ -42,6 +42,36 @@ pub async fn connect(
     connection_id: &str,
     database: Option<String>,
 ) -> Result<OpenedConnection, RpcError> {
+    connect_with(
+        sessions,
+        grant,
+        worktree,
+        connection_id,
+        Choice {
+            database,
+            schema: None,
+        },
+    )
+    .await
+}
+
+/// 연결을 열 때 설정 대신 고를 것(콘솔의 DB · 스키마 고르기, M3-15).
+#[derive(Debug, Clone, Default)]
+pub struct Choice {
+    /// 설정의 DB 대신.
+    pub database: Option<String>,
+    /// 처음 스키마. 지원 플래그 `schemas` 가 꺼진 드라이버면 연결을 열지 않고 invalid params.
+    pub schema: Option<String>,
+}
+
+/// [`connect`] 에 스키마까지 고른다.
+pub async fn connect_with(
+    sessions: &DbSessions,
+    grant: &DbGrant,
+    worktree: Option<&str>,
+    connection_id: &str,
+    choice: Choice,
+) -> Result<OpenedConnection, RpcError> {
     let c = Arc::clone(&sessions.connections);
     let (project, worktree, id) = (
         grant.project_id().to_owned(),
@@ -55,7 +85,7 @@ pub async fn connect(
     .await?;
     let config = resolved.config.clone();
     let (info, connection, server, tunnel) =
-        open_resolved(sessions, grant, resolved, database).await?;
+        open_resolved(sessions, grant, resolved, choice).await?;
     Ok(OpenedConnection {
         connection,
         server,
@@ -72,13 +102,21 @@ async fn open_resolved(
     sessions: &DbSessions,
     grant: &DbGrant,
     resolved: ResolvedConnection,
-    database: Option<String>,
+    choice: Choice,
 ) -> Result<Opened, RpcError> {
     let driver = driver_for(sessions, &resolved.config)?;
-    let mut spec = resolved.spec;
-    if database.is_some() {
-        spec.database = database;
+    // 스키마가 없는 드라이버에 고른 스키마를 조용히 버리지 않는다 — 터널 · 연결을 열기 전에 거절한다.
+    if choice.schema.is_some() && !driver.capabilities().schemas {
+        return Err(RpcError::invalid_params(format!(
+            "db driver `{}` has no schemas to choose",
+            driver.id()
+        )));
     }
+    let mut spec = resolved.spec;
+    if choice.database.is_some() {
+        spec.database = choice.database;
+    }
+    spec.schema = choice.schema;
     let tunnel = match &resolved.tunnel {
         Some(host_ref) => {
             let Some(tunnels) = sessions.tunnels.get() else {
@@ -187,7 +225,8 @@ impl DbSessions {
             }
         })
         .await?;
-        let (info, connection, server, tunnel) = open_resolved(self, grant, resolved, None).await?;
+        let (info, connection, server, tunnel) =
+            open_resolved(self, grant, resolved, Choice::default()).await?;
         if let Err(e) = within(Budget::CONSOLE.connect, "close", connection.close()).await {
             tracing::info!(target: "pw_db", driver = %info.id, %e, "closing the test connection failed");
         }

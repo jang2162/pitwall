@@ -7645,6 +7645,140 @@
       ],
       "tier": "exec"
     },
+    "db.query.explain": {
+      "description": "문장 하나의 실행 계획(M3-15). 관문은 `db.query.execute` 와 같다(그 세션을 연 프로젝트 창만 · 신뢰 · 설정 · busy · 등급 정책 —\n확인이 필요하면 3001). 문장을 돌리지 않는다 — `EXPLAIN` 만이고 `ANALYZE` 는 없다: 계획 · 통계 문장(`EXPLAIN` · `DESCRIBE` ·\n`ANALYZE`)과 트랜잭션 제어 문장(`data.reason = \"transactionStatement\"`)은 invalid params. 드라이버에 계획이 없으면\n3003(`unsupported`).",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbConfirmed": {
+            "description": "창이 사람의 확인을 받은 증거. `statementsHash` 는 [`code::CONFIRM_REQUIRED`] 가 준 그대로.",
+            "properties": {
+              "grade": {
+                "$ref": "#/$defs/RiskGrade"
+              },
+              "name": {
+                "default": null,
+                "description": "사람이 친 연결 이름(프로덕션 파괴 등급).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "statementsHash": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "grade",
+              "statementsHash"
+            ],
+            "type": "object"
+          },
+          "RiskGrade": {
+            "description": "등급. 순서가 위험도 순서다 — 여러 문장의 합산은 가장 높은 등급(`Ord::max`).",
+            "oneOf": [
+              {
+                "enum": [
+                  "ddl"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "read",
+                "description": "조회 — 데이터를 바꾸지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "쓰기(키로 한정한 `UPDATE` · `INSERT` · 부작용 함수가 든 `SELECT` · 트랜잭션 제어 등).",
+                "type": "string"
+              },
+              {
+                "const": "unboundedWrite",
+                "description": "범위 없는 쓰기(WHERE 가 없거나 항진식인 `UPDATE` · `DELETE`).",
+                "type": "string"
+              },
+              {
+                "const": "destructive",
+                "description": "파괴(`DROP` · `TRUNCATE`). 파서가 읽지 못한 문장도 여기다(까닭 `unparsed`, fail-closed).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "confirmed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DbConfirmed"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "확인(`3001` 을 받은 뒤 — 등급 정책은 실행과 같다)."
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "sql": {
+            "description": "편집기의 SQL(전부 — `statements` 의 번호는 이 글을 나눈 것).",
+            "type": "string"
+          },
+          "statements": {
+            "default": null,
+            "description": "계획을 볼 문장 번호(`db.sql.split` 의 순서) — 고른 문장이 꼭 하나여야 한다. 없으면 `sql` 전체가 문장 하나여야 한다.",
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sessionId",
+          "sql"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PlanFormat": {
+            "enum": [
+              "json",
+              "text"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "실행 계획.",
+        "properties": {
+          "format": {
+            "$ref": "#/$defs/PlanFormat"
+          },
+          "text": {
+            "description": "드라이버가 받은 계획 그대로(PG · MySQL 은 JSON 글).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "format",
+          "text"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
     "db.query.page": {
       "description": "쪽 단위 조회(스트림이 아니다): 조회 문장 하나를 새 연결의 읽기 전용 트랜잭션 안에서 `limit` 행까지. 조회가 아니면 거절.",
       "kind": "unary",
@@ -9364,6 +9498,14 @@
           },
           "projectId": {
             "type": "string"
+          },
+          "schema": {
+            "default": null,
+            "description": "처음 고를 스키마(없으면 서버 기본). 지원 플래그 `schemas` 가 꺼진 드라이버(MySQL · SQLite — DB 가 곧 스키마)면 invalid\nparams. PG 는 연결 시작 옵션의 `search_path` 로 건다(SQL `SET` 을 보내지 않는다 — M3-15).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tabId": {
             "default": null,
@@ -23868,6 +24010,169 @@
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "boolean"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "project.console.delete": {
+      "description": "SQL 콘솔 하나를 지운다(없으면 아무것도 하지 않는다). 그 프로젝트 창만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "consoleId": {
+            "description": "콘솔 id(영소문자 · 숫자 · `-`, 1~64자 — 파일은 `<id>.sql`).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "consoleId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "project.console.list": {
+      "description": "프로젝트의 SQL 콘솔 파일(`$DATA/projects/<id>/consoles/*.sql`), 이름순. 레지스트리에 없는 id 면 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "기능 메서드의 프로젝트 지정(`docs/design/03-architecture.md` §4). MCP 서버는 세션의 프로젝트가 있으면 이 키를 채워 준다.",
+        "properties": {
+          "projectId": {
+            "description": "프로젝트 id(`project_list` 의 `id`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ConsoleFile": {
+            "description": "콘솔 파일 하나.",
+            "properties": {
+              "consoleId": {
+                "type": "string"
+              },
+              "modifiedMs": {
+                "description": "마지막으로 쓴 시각(유닉스 밀리초). 파일 시스템이 주지 않으면 `null`.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "size": {
+                "description": "바이트.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "consoleId",
+              "size",
+              "modifiedMs"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/ConsoleFile"
+        },
+        "type": "array"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "project.console.read": {
+      "description": "SQL 콘솔 하나의 글. 없으면 `text: null`. 16 MiB 를 넘거나 UTF-8 이 아니면 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "consoleId": {
+            "description": "콘솔 id(영소문자 · 숫자 · `-`, 1~64자 — 파일은 `<id>.sql`).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "consoleId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "읽은 콘솔. 파일이 없으면 `text` 가 `null` 이다(새 콘솔).",
+        "properties": {
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "project.console.write": {
+      "description": "SQL 콘솔 하나를 통째로 쓴다(원자적). 그 프로젝트 창만, 16 MiB 를 넘으면 invalid params 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "consoleId": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "text": {
+            "description": "콘솔의 글 전부(16 MiB 까지). 저장된 것을 통째로 바꾼다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "consoleId",
+          "text"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
       },
       "roles": [
         "owner"
