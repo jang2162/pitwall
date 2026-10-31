@@ -792,6 +792,39 @@ export type CancelRequestParams = {
 	id: Id,
 };
 
+export type Capabilities = {
+	/**  갈래 `SqlConnection`: 문장 실행 · 행 커서 · 트랜잭션. 창 — SQL 콘솔 · 테이블 데이터 · 스키마 탐색기. */
+	sql: boolean,
+	/**  갈래 `KvConnection`: 키 스캔 · 값 읽기 · TTL · 명령. 창 — Redis 화면. */
+	kv: boolean,
+	/**
+	 *  행을 서버 커서에서 읽는 만큼만 받아 온다(PG 포털 · MySQL 결과 집합 스트리밍 · SQLite 문장 걷기). 꺼져 있으면 드라이버가
+	 *  결과를 다 받아 둔 뒤 나눠 준다 — 파이프라인은 같게 부르지만 큰 결과의 메모리 · 첫 화면 시간이 보장되지 않는다.
+	 */
+	serverCursor: boolean,
+	/**  진행 중 실행을 서버에서 멈춘다(`Interrupt`). 창 — ■ 취소(`⌘F2`). */
+	cancel: boolean,
+	/**  `begin` · `commit` · `rollback`. 창 — TX 자동 / 수동 전환과 [커밋] [롤백]. */
+	transactions: boolean,
+	/**  세이브포인트(`savepoint` · `rollbackToSavepoint` · `releaseSavepoint`). 수동 커밋 탭의 그리드 편집 적용(M3-12). */
+	savepoints: boolean,
+	/**
+	 *  읽기 전용 트랜잭션(`begin { readOnly }`). read-only 연결의 실행은 이 안에서만 돈다(결정 M3-D6) — 꺼진 드라이버의
+	 *  read-only 연결은 실행 관문이 거절한다.
+	 */
+	readOnlyTransaction: boolean,
+	/**  실행 계획(`explain`). 창 — 실행 계획 액션. */
+	explain: boolean,
+	/**  메타데이터 조회(객체 목록 · 열 · 인덱스 · FK · DDL). 창 — 스키마 탐색기 · `⌘B` DDL · 그리드 편집의 키 판정. */
+	metadata: boolean,
+	/**  스키마 단계가 있다(PG). 꺼져 있으면 탐색기가 DB 아래에 곧바로 객체를 놓는다(MySQL · SQLite). */
+	schemas: boolean,
+	/**  한 서버에 DB 가 여럿이고 고를 수 있다(`databases`). 창 — 콘솔 위 막대의 DB 고르기 · Redis DB 번호 전환. */
+	multipleDatabases: boolean,
+	/**  이 드라이버가 받는 `sslmode` 값. 연결 편집 다이얼로그(M3-14)는 이 밖의 값을 고를 수 없게 한다. 파일 DB 는 빈 목록. */
+	sslModes: SslMode[],
+};
+
 /**  설치 위치의 상태. */
 export type CliInstall = 
 /**  아무것도 없다. */
@@ -832,6 +865,25 @@ export type CliStatus = {
 	/**  찾아본 PATH 의 출처. 로그인 셸을 읽지 못했으면 앱 프로세스의 것이다(`path_status` 가 그 이유). */
 	pathSource: RuntimeSource,
 	pathStatus: RuntimeStatus,
+};
+
+/**  테이블 · 뷰의 열. */
+export type ColumnInfo = {
+	name: string,
+	dbType: string,
+	nullable: boolean,
+	/**  기본값 식의 글. */
+	default: string | null,
+	comment: string | null,
+};
+
+/**  결과 열 하나. */
+export type ColumnMeta = {
+	name: string,
+	/**  DB 가 부르는 타입 이름(`int8` · `BIGINT UNSIGNED` · `TEXT` …). */
+	dbType: string,
+	/**  열이 NULL 을 받을 수 있는지. 드라이버가 모르면 `None`. */
+	nullable: boolean | null,
 };
 
 /**  마지막 읽기의 실패. 성공하면 사라진다. */
@@ -1005,6 +1057,107 @@ export type CreateProjectParams = {
 	tags?: string[] | null,
 };
 
+/**  DB(카탈로그) 하나. */
+export type DatabaseInfo = {
+	name: string,
+};
+
+/**  바이트 값. */
+export type DbBytes = {
+	/**  `0x` 로 시작하는 소문자 hex. 잘렸으면 앞부분만. */
+	hex: string,
+	/**  원래 크기(바이트). */
+	size: number,
+	truncated: boolean,
+};
+
+export type DbError = {
+	kind: DbErrorKind,
+	/**  사람이 읽는 글(서버 메시지 그대로일 수 있다). */
+	message: string,
+	/**  서버의 오류 코드(PG SQLSTATE `25006`, MySQL 오류 번호 `1792` 등). */
+	code: string | null,
+};
+
+export type DbErrorKind = 
+/**  서버에 닿지 못했다(이름 풀기 · TCP · 터널). */
+"connect" | 
+/**  인증 실패. */
+"auth" | 
+/**  TLS 협상 · 인증서 검증 실패. */
+"tls" | 
+/**  예산(연결 · 응답 · 비활동 타임아웃)을 넘었다. */
+"timeout" | 
+/**  취소됐다(SQLite 의 `interrupted` 포함). */
+"cancelled" | 
+/**  잠금을 기다리다 포기했다(SQLite `busy`). */
+"busy" | 
+/**  읽기 전용 트랜잭션 · 연결에서 쓰기가 거절됐다(PG 25006 · MySQL 1792 · SQLite `readonly`). */
+"readOnly" | 
+/**  드라이버가 지원하지 않는 기능(지원 플래그가 꺼진 trait 메서드). */
+"unsupported" | 
+/**  서버가 문장을 거절했다(문법 · 제약 · 권한 등). `code` 에 서버 코드. */
+"server" | 
+/**  연결이 끊겼다. 다시 붙는 것은 사람이 누를 때다(결정 M3-D13). */
+"disconnected" | 
+/**  요청이 틀렸다(커서 없이 `fetch`, 알 수 없는 세이브포인트 등). */
+"invalid";
+
+/**  실수 값. 유한하지 않은 값은 그 이름의 문자열이다 — [`DbValue::float`] 로 만든다. */
+export type DbFloat = number | 
+/**  `NaN` · `Infinity` · `-Infinity`. */
+string;
+
+/**  정수 값. 수인지 문자열인지는 값의 크기가 정한다 — [`DbValue::int`] 로 만든다. */
+export type DbInt = 
+/**  |값| ≤ 2^53 − 1. */
+number | 
+/**  그 밖. 10진 문자열. */
+string;
+
+/**  분류되지 않은 값. */
+export type DbOther = {
+	text: string,
+	/**  DB 가 부르는 타입 이름(PG `tsvector`, MySQL `GEOMETRY` 등). */
+	typeName: string,
+};
+
+/**  셀 상한을 넘어 잘린 값. */
+export type DbTruncated = {
+	/**  원래 값의 종류. */
+	of: TruncatedKind,
+	/**  앞부분(UTF-8 문자 경계에서 자른다). */
+	prefix: string,
+	/**  원래 크기(UTF-8 바이트). */
+	size: number,
+	/**  `of` 가 `other` 일 때의 DB 타입 이름. */
+	typeName: string | null,
+};
+
+/**  셀 값. */
+export type DbValue = "null" | ({ bool: boolean }) & { array?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
+/**  정수. ±(2^53−1) 안은 수, 밖은 문자열. */
+({ int: DbInt }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
+/**  실수. 유한하면 수, `NaN` · `Infinity` · `-Infinity` 는 문자열(JSON 에 그 수가 없다). */
+({ float: DbFloat }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
+/**  decimal · numeric · money. 정밀도를 잃지 않게 늘 문자열. */
+({ decimal: string }) & { array?: never; bool?: never; bytes?: never; datetime?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | ({ text: string }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; truncated?: never; uuid?: never } | 
+/**  바이트. 늘 `0x` hex, 셀 상한을 넘으면 앞부분만. */
+({ bytes: DbBytes }) & { array?: never; bool?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
+/**  json · jsonb. 서버가 준 글 그대로(파싱하지 않는다). */
+({ json: string }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
+/**  날짜 · 시각 · 타임스탬프. 서버가 준 텍스트 그대로 — timestamptz 는 서버 세션 시간대의 텍스트다. */
+({ datetime: string }) & { array?: never; bool?: never; bytes?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | ({ uuid: string }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never } | ({ array: DbValue[] }) & { bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
+/**  셀 상한을 넘은 텍스트 · json · 그 밖 값의 앞부분. */
+({ truncated: DbTruncated }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; uuid?: never } | 
+/**  위 어디에도 들지 않는 값: 서버의 텍스트 표현과 DB 타입 이름. */
+({ other: DbOther }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; text?: never; truncated?: never; uuid?: never };
+
+/**  객체의 DDL 글. */
+export type Ddl = {
+	text: string,
+};
+
 /**  기본 도구. */
 export type DefaultToolInfo = { kind: "tool"; id: string } | 
 /**  프로젝트 · 전역 설정 어디에도 `open_with.default` 가 없다. */
@@ -1106,6 +1259,23 @@ export type DiffSide =
 /**  작업 트리. 추적하는 파일만 본다(`git diff` 와 같이 untracked 는 빠진다). */
 { kind: "workTree" };
 
+/**  등록된 드라이버 하나(드라이버 등록부 — `pw_db::DriverRegistry`). */
+export type DriverInfo = {
+	/**  설정 파일의 `driver` 값. */
+	id: string,
+	/**  SQL 갈래의 방언. KV 드라이버는 `None`. */
+	dialect: SqlDialect | null,
+	capabilities: Capabilities,
+};
+
+/**
+ *  내장 드라이버. 설정 파일의 `driver` 값이다.
+ * 
+ *  드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가
+ *  이 enum 을 고치지 않고 들어올 자리다.
+ */
+export type DriverKind = "postgres" | "mysql" | "sqlite" | "redis";
+
 export type EntryKind = "file" | "dir" | "symlink" | 
 /**  소켓 · 장치 · FIFO 등. */
 "other";
@@ -1116,6 +1286,13 @@ export type EventMessage = {
 	projectId: string | null,
 	topic: string,
 	payload: JsonValue,
+};
+
+/**  실행 계획. */
+export type ExplainPlan = {
+	format: PlanFormat,
+	/**  드라이버가 받은 계획 그대로(PG · MySQL 은 JSON 글). */
+	text: string,
 };
 
 export type ExtensionDiagnostic = {
@@ -1232,6 +1409,14 @@ export type FileStatus = "added" | "deleted" |
 "renamed" | 
 /**  종류가 바뀌었다(파일 ↔ 심링크 ↔ 서브모듈). git 의 patch 는 지우기 + 더하기 둘로 보인다. */
 "typeChanged";
+
+/**  외래 키. */
+export type ForeignKeyInfo = {
+	name: string,
+	columns: string[],
+	references: ObjectRef,
+	referencedColumns: string[],
+};
 
 export type FsBytes = {
 	/**  정규화한 실제 경로. */
@@ -2667,6 +2852,16 @@ export type I18nState = {
  */
 export type Id = number | string | null;
 
+/**  인덱스. 그리드 편집의 키 판정(M3-10 — PK 또는 NOT NULL 열만으로 된 유일 인덱스)이 `primary` · `unique` · `partial` 을 본다. */
+export type IndexInfo = {
+	name: string,
+	columns: string[],
+	primary: boolean,
+	unique: boolean,
+	/**  조건이 붙은 인덱스(PG 부분 인덱스). 키로 쓰지 않는다. */
+	partial: boolean,
+};
+
 /**  `jsonrpc` 필드. 값은 `"2.0"` 하나다. */
 export type JsonRpcVersion = "2.0";
 
@@ -2733,6 +2928,103 @@ export type KeymapInfo = {
 
 export type KeymapList = {
 	keymaps: KeymapInfo[],
+};
+
+export type KvField = {
+	field: DbValue,
+	value: DbValue,
+};
+
+/**  키. UTF-8 이면 문자열 그대로, 아니면 `{ "hex": "0x…" }`. */
+export type KvKey = string | KvKeyBytes;
+
+export type KvKeyBytes = {
+	/**  `0x` 로 시작하는 소문자 hex. */
+	hex: string,
+};
+
+export type KvKeyInfo = {
+	key: KvKey,
+	kind: KvType,
+	/**  남은 수명(밀리초). 만료가 없으면 `None`. */
+	ttlMs: number | null,
+	/**  크기(바이트, `MEMORY USAGE` — 없으면 타입별 길이). 모르면 `None`. */
+	size: number | null,
+};
+
+/**  값 읽기의 범위. 컬렉션은 쪽 단위로 읽는다(쪽 하나 4 MiB 예산). */
+export type KvRange = {
+	/**  앞 쪽의 [`KvValuePage::next_cursor`]. 처음은 `None`. */
+	cursor: string | null,
+	/**  한 쪽의 원소 수 상한(string 은 바이트 창의 크기). */
+	count: number,
+};
+
+/**  이름 바꾸기의 결과(`RENAMENX` — 결정 M3-D15). */
+export type KvRenameOutcome = "renamed" | 
+/**  대상 키가 이미 있어 바꾸지 않았다 — 덮으려면 「덮어쓰기」 확인을 받고 `overwrite` 로 다시 부른다. */
+"targetExists";
+
+/**  명령 응답(RESP). */
+export type KvReply = "nil" | 
+/**  상태 응답(`+OK`). */
+({ status: string }) & { array?: never; bool?: never; bulk?: never; double?: never; error?: never; int?: never; map?: never } | 
+/**  오류 응답(`-ERR …`). */
+({ error: string }) & { array?: never; bool?: never; bulk?: never; double?: never; int?: never; map?: never; status?: never } | ({ int: DbValue }) & { array?: never; bool?: never; bulk?: never; double?: never; error?: never; map?: never; status?: never } | ({ double: string }) & { array?: never; bool?: never; bulk?: never; error?: never; int?: never; map?: never; status?: never } | ({ bool: boolean }) & { array?: never; bulk?: never; double?: never; error?: never; int?: never; map?: never; status?: never } | 
+/**  벌크 문자열. */
+({ bulk: DbValue }) & { array?: never; bool?: never; double?: never; error?: never; int?: never; map?: never; status?: never } | ({ array: KvReply[] }) & { bool?: never; bulk?: never; double?: never; error?: never; int?: never; map?: never; status?: never } | ({ map: KvReplyPair[] }) & { array?: never; bool?: never; bulk?: never; double?: never; error?: never; int?: never; status?: never };
+
+export type KvReplyPair = {
+	key: KvReply,
+	value: KvReply,
+};
+
+/**  스캔 한 묶음: 키마다 타입 · TTL · 크기(결정 M3-D15 의 1,000키 파이프라인). */
+export type KvScanPage = {
+	keys: KvKeyInfo[],
+	/**  다음 묶음의 커서. `None` 이면 스캔이 끝났다. */
+	nextCursor: string | null,
+};
+
+/**  스캔 한 번의 요청. */
+export type KvScanRequest = {
+	/**  `MATCH` 패턴. 없으면 모든 키. */
+	pattern: string | null,
+	/**  앞 묶음의 커서. 처음은 `None`. */
+	cursor: string | null,
+	/**  한 묶음의 키 수(`COUNT` 힌트, 기본 1,000). */
+	count: number,
+};
+
+export type KvScored = {
+	member: DbValue,
+	/**  점수(Redis 가 준 글 그대로 — `inf` 등). */
+	score: string,
+};
+
+export type KvStreamEntry = {
+	id: string,
+	fields: KvField[],
+};
+
+/**  값의 타입. */
+export type KvType = "string" | "hash" | "list" | "set" | "zset" | "stream" | 
+/**  RedisJSON(`ReJSON-RL`). */
+"json" | 
+/**  그 밖의 모듈 타입. `TYPE` 이 돌려준 이름. */
+{ other: string };
+
+/**  타입별 값. 원소는 UTF-8 이면 텍스트, 아니면 바이트 [`DbValue`]. */
+export type KvValue = 
+/**  키가 없다(그사이 지워졌거나 만료). */
+"missing" | ({ string: DbValue }) & { hash?: never; json?: never; list?: never; set?: never; stream?: never; zset?: never } | ({ hash: KvField[] }) & { json?: never; list?: never; set?: never; stream?: never; string?: never; zset?: never } | ({ list: DbValue[] }) & { hash?: never; json?: never; set?: never; stream?: never; string?: never; zset?: never } | ({ set: DbValue[] }) & { hash?: never; json?: never; list?: never; stream?: never; string?: never; zset?: never } | ({ zset: KvScored[] }) & { hash?: never; json?: never; list?: never; set?: never; stream?: never; string?: never } | ({ stream: KvStreamEntry[] }) & { hash?: never; json?: never; list?: never; set?: never; string?: never; zset?: never } | ({ json: DbValue }) & { hash?: never; list?: never; set?: never; stream?: never; string?: never; zset?: never };
+
+/**  값 한 쪽. */
+export type KvValuePage = {
+	value: KvValue,
+	/**  전체 길이(원소 수, string 은 바이트). 모르면 `None`. */
+	total: number | null,
+	nextCursor: string | null,
 };
 
 export type LangDetectFile = {
@@ -2972,6 +3264,42 @@ export type NotificationMessage = {
 	params: JsonValue,
 };
 
+export type ObjectInfo = {
+	name: string,
+	kind: ObjectKind,
+	comment: string | null,
+};
+
+/**  객체 종류. */
+export type ObjectKind = "table" | "view" | "materializedView" | "sequence" | "function" | "procedure" | "trigger";
+
+/**  객체 목록의 한 쪽. */
+export type ObjectPage = {
+	items: ObjectInfo[],
+	/**  다음 쪽이 있으면 그 커서(드라이버마다 뜻이 다르다 — 창은 그대로 돌려줄 뿐이다). */
+	nextCursor: string | null,
+};
+
+/**  객체 목록 한 쪽의 요청. */
+export type ObjectQuery = {
+	database: string | null,
+	schema: string | null,
+	kind: ObjectKind,
+	/**  이름에 이 글이 든 것만(서버 쪽 필터, 대소문자 무시). */
+	filter: string | null,
+	/**  앞 쪽의 [`ObjectPage::next_cursor`]. 처음 쪽은 `None`. */
+	cursor: string | null,
+	/**  쪽 크기(1 ~ 500). */
+	limit: number,
+};
+
+/**  객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12). */
+export type ObjectRef = {
+	database: string | null,
+	schema: string | null,
+	name: string,
+};
+
 export type OpenWithList = {
 	/**  이 OS 에서 쓸 수 있는 도구(`platforms` 로 거른 것). 확장 순서, 그 뒤에 설정에서만 정의한 도구. */
 	tools: ExternalToolInfo[],
@@ -3051,6 +3379,8 @@ export type PingParams = {
 	/**  그대로 돌려받는 값. 클라이언트가 응답을 자기 요청과 맞춰 보는 데 쓴다. */
 	nonce?: string,
 };
+
+export type PlanFormat = "json" | "text";
 
 export type Pong = {
 	nonce: string,
@@ -3231,6 +3561,13 @@ export type RootCandidate = {
 	buildFiles: string[],
 };
 
+/**  커서에서 읽은 행 묶음. */
+export type RowBatch = {
+	rows: DbValue[][],
+	/**  커서가 다 읽혔으면 그 끝. `None` 이면 더 읽을 행이 있을 수 있다. */
+	end: StatementEnd | null,
+};
+
 /**  JSON-RPC 2.0 오류 객체. 와이어 형식 그대로 직렬화된다. `data` 가 없으면 키를 생략한다. */
 export type RpcError = {
 	code: number,
@@ -3294,6 +3631,11 @@ export type RuntimeToolInfo = {
 	version: string,
 	/**  버전을 정한 파일. */
 	sourceFile: string | null,
+};
+
+/**  스키마 하나(PG). MySQL 은 DB 가 곧 스키마라 스키마 목록이 없다(`Capabilities::schemas` 가 `false`). */
+export type SchemaInfo = {
+	name: string,
 };
 
 /**  파일 하나의 결과. */
@@ -3407,6 +3749,13 @@ export type SearchTextParams = {
 	maxResults?: number | null,
 };
 
+/**  연결을 연 결과(연결 테스트의 답이기도 하다). */
+export type ServerInfo = {
+	/**  서버가 알린 판본(`16.4` · `8.4.6` · `11.8.3-MariaDB` …). */
+	version: string | null,
+	tls: TlsStatus,
+};
+
 export type SetLanguageParams = {
 	/**  `"system"` 또는 등록된 언어 태그. */
 	language: string,
@@ -3441,6 +3790,24 @@ export type SizeClass =
 /**  50 MiB 초과: 열지 않는다(앞부분 · hex 는 범위 읽기로). */
 "tooLarge";
 
+/**  SQL 방언 — 위험도 분류(M3-03)와 문장 나누기(M3-04)가 고른다. MariaDB 는 MySQL 이다. */
+export type SqlDialect = "postgres" | "mysql" | "sqlite";
+
+/**  libpq 의 `sslmode` 뜻 그대로(결정 M3-D10). 드라이버마다 받는 값은 [`crate::Capabilities::ssl_modes`]. */
+export type SslMode = 
+/**  TLS 없음. */
+"disable" | 
+/**  평문을 먼저, 서버가 요구하면 TLS(검증 없음). */
+"allow" | 
+/**  TLS 를 먼저, 안 되면 평문(검증 없음). */
+"prefer" | 
+/**  TLS 필수, 인증서를 검증하지 않는다. */
+"require" | 
+/**  TLS 필수, 인증서 사슬만 검증(이름은 보지 않는다). */
+"verify-ca" | 
+/**  TLS 필수, 사슬과 이름 모두 검증. */
+"verify-full";
+
 export type StashEntry = {
 	/**  `stash@{index}` 의 수. 0 이 가장 최근이다. */
 	index: number,
@@ -3450,6 +3817,20 @@ export type StashEntry = {
 	message: string,
 	/**  만든 시각(유닉스 초). */
 	time: number,
+};
+
+/**  문장의 끝. */
+export type StatementEnd = {
+	/**  바뀐 행 수(`UPDATE` 등). 드라이버가 알려 주지 않는 문장은 `None`. 2^53 을 넘지 않는다고 본다. */
+	rowsAffected: number | null,
+};
+
+/**  문장을 시작한 결과. 행이 있는 문장이면 커서가 열려 있고 [`FetchLimit`] 만큼씩 읽는다. */
+export type StatementStarted = {
+	/**  결과 열. 행을 돌려주지 않는 문장(`INSERT` 등)은 빈 목록이고 커서도 없다 — 곧바로 [`StatementStarted::end`] 가 있다. */
+	columns: ColumnMeta[],
+	/**  행이 없는 문장의 끝. `Some` 이면 읽을 커서가 없다. */
+	end: StatementEnd | null,
 };
 
 /**
@@ -3734,6 +4115,26 @@ export type ThemeList = {
  *  둘 중 어느 쪽을 정책으로 할지는 MCP 툴 레지스트리(M0-17)에서 확정한다.
  */
 export type Tier = "read" | "write" | "exec" | "dangerous";
+
+/**  연결의 TLS 상태(10-ui.md 의 「서버 인증서를 검증하지 않음」 · 「평문」 표지 — M3-19). */
+export type TlsStatus = 
+/**  TLS, 인증서를 검증했다. */
+"verified" | 
+/**  TLS, 인증서를 검증하지 않았다(`require` · `prefer` · `allow`) 또는 이름을 보지 않았다(`verify-ca`). */
+"unverified" | 
+/**  TLS 없음. */
+"plaintext" | 
+/**  파일 DB(SQLite) — 네트워크가 없다. */
+"notApplicable";
+
+/**  연결이 보는 트랜잭션 상태. 세션 상태(`disconnected` · `configChanged` 등 — M3-05)는 이것 위에 얹는다. */
+export type TransactionState = 
+/**  열린 트랜잭션이 없다(자동 커밋). */
+"idle" | "inTransaction" | 
+/**  오류 · 취소 뒤 롤백만 되는 트랜잭션(PG). */
+"failed";
+
+export type TruncatedKind = "text" | "json" | "other";
 
 /**  프로젝트의 신뢰 상태. `trusted` 가 아니면 런타임 제공자를 돌리지 않는다. */
 export type TrustState = 

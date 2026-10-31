@@ -1,0 +1,10 @@
+[package]
+name = "pw-db-sql"
+description = "Pitwall SQL language services: risk classification, statement splitting, grid edit DML"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pw-db-types = { path = "../pw-db-types" }

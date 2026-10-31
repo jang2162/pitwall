@@ -244,7 +244,7 @@ async fn main() -> ExitCode {
         &MethodInfo::unary::<Fail>(),
         &MethodInfo::unary::<Wait>(),
     ];
-    let ts = match or_exit(typescript(&methods)) {
+    let ts = match or_exit(typescript(&methods, &[])) {
         Ok(ts) => ts,
         Err(code) => return code,
     };

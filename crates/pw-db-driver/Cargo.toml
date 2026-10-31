@@ -1,0 +1,23 @@
+[package]
+name = "pw-db-driver"
+description = "Pitwall DB driver contract: the driver traits and capability flags, execution budget, cancellation and TLS planning"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+# 실 DB 시험 표지(`cfg(pw_live_pg)` 등)를 환경 변수에서 정한다. 드라이버 크레이트 넷도 같은 파일을 쓴다 — 머리 주석.
+build = "live_cfg.rs"
+
+[features]
+# 가짜 드라이버(`fake`)와 실 DB 시험 도우미(`live`)를 다른 크레이트의 시험에도 연다. 이 크레이트의 시험은 기능 없이도 쓴다.
+test-support = []
+
+[dependencies]
+pw-db-types = { path = "../pw-db-types" }
+# 예산(시간 상한)과 취소를 기다린다. 드라이버마다 같은 런타임을 쓴다.
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
+# 실행 하나의 취소 토큰.
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "test-util"] }

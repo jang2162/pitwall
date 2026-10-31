@@ -4,6 +4,8 @@
 //! 돌려주고, 생성기(`crates/pw-rpc-gen`)가 TS 타입과 JSON Schema 를, MCP 툴 레지스트리가 툴 목록을 여기서 만든다.
 //! [`Router`](crate::Router) 를 채울 필요가 없다 — 핸들러는 런타임 구성이고 타입 목록은 선언의 속성이다.
 //!
+//! 메서드가 참조하지 않는 타입도 [`rpc_type!`](crate::rpc_type) 로 등록하면 [`types`] 가 돌려주고 생성기가 TS 로 내보낸다.
+//!
 //! **링크된 크레이트의 선언만 보인다.** 메서드를 선언한 크레이트가 실행 파일에 링크되지 않으면 그 메서드는
 //! 오류 없이 목록에서 빠진다. 생성기에 메서드 크레이트를 더하는 법은 `crates/pw-rpc-gen/src/main.rs` 머리 주석.
 
@@ -122,6 +124,71 @@ pub fn methods() -> Vec<&'static MethodInfo> {
     let mut all: Vec<_> = seen.into_values().collect();
     all.sort_by_key(|m| m.meta.name);
     all
+}
+
+/// 메서드가 참조하지 않아도 TS 로 내보낼 이름 있는 타입. [`rpc_type!`](crate::rpc_type) 가 등록한다.
+///
+/// 메서드의 입출력이 아직 없는 공용 타입(다른 크레이트의 메서드가 나중에 쓸 값 타입 등)을 창이 먼저 쓰게 할 때 쓴다.
+/// JSON Schema 는 메서드 단위라 여기에 들지 않는다.
+pub struct TypeInfo {
+    /// 선언에 적힌 Rust 타입 경로(진단용). TS 이름은 specta 가 정한다.
+    pub name: &'static str,
+    ts: fn(&mut Types) -> DataType,
+}
+
+impl TypeInfo {
+    /// `rpc_type!` 가 등록할 때 쓴다.
+    pub const fn of<T: specta::Type>(name: &'static str) -> Self {
+        Self {
+            name,
+            ts: <T as specta::Type>::definition,
+        }
+    }
+
+    /// 그 타입을 `types` 에 등록하고 참조를 돌려준다.
+    pub fn register(&self, types: &mut Types) -> DataType {
+        (self.ts)(types)
+    }
+}
+
+inventory::collect!(TypeInfo);
+
+/// 링크된 모든 크레이트가 [`rpc_type!`](crate::rpc_type) 로 등록한 타입을 선언 이름순으로.
+///
+/// # Panics
+/// 같은 선언 이름이 두 번 등록되면 패닉한다(프로그래밍 오류).
+pub fn types() -> Vec<&'static TypeInfo> {
+    let mut seen = HashMap::new();
+    for info in inventory::iter::<TypeInfo> {
+        let previous = seen.insert(info.name, info);
+        assert!(
+            previous.is_none(),
+            "rpc type `{}` registered twice",
+            info.name
+        );
+    }
+    let mut all: Vec<_> = seen.into_values().collect();
+    all.sort_by_key(|t| t.name);
+    all
+}
+
+/// 메서드가 참조하지 않아도 TS 로 내보낼 타입을 등록한다([`TypeInfo`]). 타입은 `specta::Type` 을 derive 한다.
+///
+/// ```
+/// #[derive(serde::Serialize, specta::Type)]
+/// pub struct CellValue { pub text: String }
+///
+/// pw_rpc::rpc_type!(CellValue);
+/// ```
+///
+/// 선언한 크레이트는 메서드와 같이 생성기에 링크돼야 한다(`crates/pw-rpc-gen/src/main.rs` 머리 주석).
+#[macro_export]
+macro_rules! rpc_type {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            $crate::__private::inventory::submit! { $crate::TypeInfo::of::<$ty>(stringify!($ty)) }
+        )*
+    };
 }
 
 #[doc(hidden)]

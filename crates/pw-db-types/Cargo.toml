@@ -1,0 +1,17 @@
+[package]
+name = "pw-db-types"
+description = "Pitwall DB shared types: connection spec, driver kinds, values, results, metadata and Redis DTOs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# `rpc_type!` 로 TS 타입에 내보내고(`DbValue` 등), 64비트 정수 필드의 TS 표식(`JsNumber`)을 쓴다.
+pw-rpc = { path = "../pw-rpc" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+specta = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

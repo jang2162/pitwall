@@ -1,0 +1,17 @@
+[package]
+name = "pw-db"
+description = "Pitwall DB core: driver registry, connections and sessions, execution pipeline and gate, schema cache"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# 드라이버 크레이트(pw-db-driver-*)에 의존하지 않는다 — trait 로만 부른다(14-m3-plan.md 결정 M3-D3). 드라이버는 데스크톱
+# 크레이트가 등록부에 넣는다. `tests/driver_free.rs` 가 지킨다.
+[dependencies]
+pw-db-driver = { path = "../pw-db-driver" }
+pw-db-types = { path = "../pw-db-types" }
+
+[dev-dependencies]
+pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
+tokio = { workspace = true, features = ["rt", "macros"] }

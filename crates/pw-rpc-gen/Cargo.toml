@@ -7,8 +7,13 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# 메서드를 선언한 크레이트. 여기 더하고 src/main.rs 에 `use <크레이트> as _;` 도 더한다.
+# 메서드를 선언하거나 `rpc_type!` 으로 타입을 등록한 크레이트. 여기 더하고 src/main.rs 에 `use <크레이트> as _;` 도 더한다.
 pw-core = { path = "../pw-core" }
+# DB 계층(14-m3-plan.md M3-01): 타입을 등록하는 pw-db-types, 메서드를 선언할 pw-db-sql(M3-04) · pw-db(M3-02 이후).
+# 드라이버 크레이트는 RPC 를 선언하지 않는다 — 선언하게 되면 그 행이 여기 더한다.
+pw-db = { path = "../pw-db" }
+pw-db-sql = { path = "../pw-db-sql" }
+pw-db-types = { path = "../pw-db-types" }
 pw-diag = { path = "../pw-diag" }
 pw-ext = { path = "../pw-ext" }
 pw-fs = { path = "../pw-fs" }

@@ -17,6 +17,7 @@ mod app_commands;
 mod cli;
 mod clipboard;
 mod config_log;
+mod db;
 mod detach;
 mod diag;
 mod drop_import;

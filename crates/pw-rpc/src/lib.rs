@@ -5,6 +5,7 @@
 //!
 //! - 메서드 선언: [`rpc_method!`] → [`MethodMeta`](이름 · 입출력 타입 · 권한 등급 · role)
 //! - 선언 열거(핸들러 없이): [`methods`] → [`MethodInfo`]. TS 타입 · JSON Schema · MCP 툴 목록의 원천
+//! - 메서드가 참조하지 않는 TS 타입: [`rpc_type!`] → [`types`]
 //! - 핸들러 등록 · 열거: [`Router`]
 //! - 권한 검사: 호출자의 [`Role`] 이 메서드의 [`RoleSet`] 에 있어야 한다([`MethodMeta::permits`])
 //! - 스트림 · 취소 · 구독의 와이어 형식: [`protocol`]
@@ -32,7 +33,7 @@ pub use router::{
     Caller, ConnectionScope, Ctx, FILE_EVENT_SCOPE_PREFIX, FileScope, Router, SessionId, StreamSink,
 };
 pub use session::Session;
-pub use typegen::{JsNumber, JsonValue, MethodInfo, methods};
+pub use typegen::{JsNumber, JsonValue, MethodInfo, TypeInfo, methods, types};
 
 #[doc(hidden)]
 pub use typegen::__private;

@@ -4438,6 +4438,7 @@ version = "0.0.0"
 dependencies = [
  "libc",
  "pw-core",
+ "pw-db",
  "pw-diag",
  "pw-ext",
  "pw-fs",
@@ -4710,6 +4711,76 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-db"
+version = "0.0.0"
+dependencies = [
+ "pw-db-driver",
+ "pw-db-types",
+ "tokio",
+]
+
+[[package]]
+name = "pw-db-driver"
+version = "0.0.0"
+dependencies = [
+ "pw-db-types",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "pw-db-driver-mysql"
+version = "0.0.0"
+dependencies = [
+ "pw-db-driver",
+ "pw-db-types",
+]
+
+[[package]]
+name = "pw-db-driver-pg"
+version = "0.0.0"
+dependencies = [
+ "pw-db-driver",
+ "pw-db-types",
+]
+
+[[package]]
+name = "pw-db-driver-redis"
+version = "0.0.0"
+dependencies = [
+ "pw-db-driver",
+ "pw-db-types",
+]
+
+[[package]]
+name = "pw-db-driver-sqlite"
+version = "0.0.0"
+dependencies = [
+ "pw-db-driver",
+ "pw-db-types",
+ "rusqlite",
+ "tempfile",
+]
+
+[[package]]
+name = "pw-db-sql"
+version = "0.0.0"
+dependencies = [
+ "pw-db-types",
+]
+
+[[package]]
+name = "pw-db-types"
+version = "0.0.0"
+dependencies = [
+ "pw-rpc",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "specta",
+]
+
+[[package]]
 name = "pw-diag"
 version = "0.0.0"
 dependencies = [
@@ -4917,6 +4988,9 @@ name = "pw-rpc-gen"
 version = "0.0.0"
 dependencies = [
  "pw-core",
+ "pw-db",
+ "pw-db-sql",
+ "pw-db-types",
  "pw-diag",
  "pw-ext",
  "pw-fs",
