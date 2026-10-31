@@ -103,7 +103,14 @@ fn statements(value: &str) -> Vec<EditStatement> {
         }],
         ..DbEditChanges::default()
     };
-    build(SqlDialect::Postgres, &table("t"), &["id".into()], &changes).unwrap()
+    build(
+        SqlDialect::Postgres,
+        &table("t"),
+        &["id".into(), "v".into()],
+        &["id".into()],
+        &changes,
+    )
+    .unwrap()
 }
 
 fn table(name: &str) -> ObjectRef {

@@ -427,6 +427,65 @@ async fn edit_to_the_same_value_counts_its_row(mut db: Db) {
     db.cleanup().await;
 }
 
+/// 열 이름은 방언의 규칙으로 메타데이터의 정본 이름에 맞춘 뒤 판정한다: MySQL · SQLite 는 `ID` 가 키 열 `id` 라 키 열 수정으로
+/// 거절되고(글자 비교면 PK 가 바뀐다), `NAME` 은 `name` 으로 적용된다. PG 는 글자 그대로라 `ID` 는 없는 열이고, 63바이트를 넘는
+/// 이름(서버가 잘라 63자 PK 열에 맞춘다)은 받지 않는다. 어느 쪽이든 행은 그대로다.
+async fn edit_matches_column_names_by_the_dialect_rules(mut db: Db) {
+    let a = db.a.clone();
+    let change = |column: &str, value: Value| json!({ "updates": [{ "key": key(1), "values": [cell(column, value)] }] });
+    let err = db
+        .submit(&a, &change("ID", json!({ "int": 77 })))
+        .await
+        .unwrap_err();
+    let data = err.data.unwrap();
+    let want = match db.dialect {
+        SqlDialect::Postgres => "unknownColumn",
+        SqlDialect::Mysql | SqlDialect::Sqlite => "keyColumnChanged",
+    };
+    assert_eq!(data["reason"], want, "{data}");
+    assert_eq!(db.names(&a).await, named(&[(1, "one"), (2, "two")]));
+    let renamed = db.submit(&a, &change("NAME", text("uno"))).await;
+    if db.dialect == SqlDialect::Postgres {
+        assert_eq!(
+            renamed.unwrap_err().data.unwrap()["reason"],
+            "unknownColumn"
+        );
+    } else {
+        renamed.unwrap();
+        assert_eq!(db.names(&a).await, named(&[(1, "uno"), (2, "two")]));
+    }
+    if db.dialect == SqlDialect::Postgres {
+        let long = "a".repeat(63);
+        let table = format!("{}_long", db.name);
+        db.exec(
+            &a,
+            &format!("CREATE TABLE {table} (\"{long}\" INTEGER NOT NULL PRIMARY KEY, v INTEGER)"),
+        )
+        .await;
+        db.exec(&a, &format!("INSERT INTO {table} VALUES (1, 5)"))
+            .await;
+        let mut t = db.table.clone();
+        t["name"] = json!(table);
+        let changes = json!({ "updates": [{ "key": [cell(&long, json!({ "int": 1 }))],
+                                            "values": [cell(&format!("{long}X"), json!({ "int": 77 }))] }] });
+        let err =
+            db.w.call(
+                "db.edit.preview",
+                json!({ "sessionId": a, "table": t, "changes": changes }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.data.unwrap()["reason"], "nameTooLong");
+        let rows = db
+            .exec(&a, &format!("SELECT \"{long}\" FROM {table}"))
+            .await;
+        let row = rows.iter().find(|i| i["kind"] == "rows").unwrap()["rows"][0][0].clone();
+        assert_eq!(int(&row), 1);
+        db.exec(&a, &format!("DROP TABLE {table}")).await;
+    }
+    db.cleanup().await;
+}
+
 /// 시나리오마다 시험 함수 하나(이름은 그 DB 의 접두어로 시작한다 — 실 DB 시험의 필터가 이름 조각의 처음을 본다).
 macro_rules! scenarios {
     ($open:ident; $($name:ident => $scenario:ident),* $(,)?) => {
@@ -462,6 +521,7 @@ mod sqlite {
         sqlite_edit_stores_a_hostile_value_as_it_is => edit_stores_a_hostile_value_as_it_is,
         sqlite_edit_preview_literals_equal_the_bound_values => edit_preview_literals_equal_the_bound_values,
         sqlite_edit_to_the_same_value_counts_its_row => edit_to_the_same_value_counts_its_row,
+        sqlite_edit_matches_column_names_by_the_dialect_rules => edit_matches_column_names_by_the_dialect_rules,
     );
 }
 
@@ -513,6 +573,7 @@ mod pg {
         live_pg_edit_stores_a_hostile_value_as_it_is => edit_stores_a_hostile_value_as_it_is,
         live_pg_edit_preview_literals_equal_the_bound_values => edit_preview_literals_equal_the_bound_values,
         live_pg_edit_to_the_same_value_counts_its_row => edit_to_the_same_value_counts_its_row,
+        live_pg_edit_matches_column_names_by_the_dialect_rules => edit_matches_column_names_by_the_dialect_rules,
     );
 }
 
@@ -549,5 +610,65 @@ mod mysql {
         live_mysql_edit_stores_a_hostile_value_as_it_is => edit_stores_a_hostile_value_as_it_is,
         live_mysql_edit_preview_literals_equal_the_bound_values => edit_preview_literals_equal_the_bound_values,
         live_mysql_edit_to_the_same_value_counts_its_row => edit_to_the_same_value_counts_its_row,
+        live_mysql_edit_matches_column_names_by_the_dialect_rules => edit_matches_column_names_by_the_dialect_rules,
+        live_mysql_edit_refuses_an_update_whose_key_matches_several_rows => edit_refuses_an_update_whose_key_matches_several_rows,
     );
+
+    /// MySQL · MariaDB 의 영향 행은 바뀐 행이다: 숫자꼴 VARCHAR 키에 정수 키 값을 보내면 `'1'` · `'01'` · `'1.0'` 세 행에 맞고 하나만 값이
+    /// 달라 영향 행이 1 이다. 수정 앞의 잠그는 읽기가 2행 이상을 보고 거절해야 하고(전부 롤백) 세 행은 그대로다.
+    async fn edit_refuses_an_update_whose_key_matches_several_rows(mut db: Db) {
+        let a = db.a.clone();
+        let table = format!("{}_codes", db.name);
+        db.exec(
+            &a,
+            &format!("CREATE TABLE {table} (code VARCHAR(10) NOT NULL PRIMARY KEY, v INT)"),
+        )
+        .await;
+        db.exec(
+            &a,
+            &format!("INSERT INTO {table} VALUES ('1', 5), ('01', 9), ('1.0', 5)"),
+        )
+        .await;
+        let mut t = db.table.clone();
+        t["name"] = json!(table);
+        let changes = json!({ "updates": [{ "key": [cell("code", json!({ "int": 1 }))],
+                                            "values": [cell("v", json!({ "int": 5 }))] }] });
+        let p =
+            db.w.call(
+                "db.edit.preview",
+                json!({ "sessionId": a, "table": t, "changes": changes }),
+            )
+            .await
+            .unwrap();
+        let err = db
+            .w
+            .call(
+                "db.edit.apply",
+                json!({ "sessionId": a, "table": t, "changes": changes, "previewHash": p["previewHash"] }),
+            )
+            .await
+            .unwrap_err();
+        let data = err.data.unwrap();
+        assert_eq!(data["reason"], "rowCount", "{data}");
+        assert_eq!(data["failure"]["rowsAffected"], 2);
+        let rows = db
+            .exec(&a, &format!("SELECT code, v FROM {table} ORDER BY code"))
+            .await;
+        let got: Vec<(String, i64)> = rows
+            .iter()
+            .filter(|i| i["kind"] == "rows")
+            .flat_map(|i| i["rows"].as_array().unwrap().clone())
+            .map(|r| (r[0]["text"].as_str().unwrap().to_owned(), int(&r[1])))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("01".to_owned(), 9),
+                ("1".to_owned(), 5),
+                ("1.0".to_owned(), 5)
+            ]
+        );
+        db.exec(&a, &format!("DROP TABLE {table}")).await;
+        db.cleanup().await;
+    }
 }

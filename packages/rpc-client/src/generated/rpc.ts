@@ -1541,8 +1541,12 @@ export type DbEditErrorReason =
 "nullKey" | 
 /**  수정에 바꿀 열이 없다. */
 "noValues" | 
-/**  같은 열이 한 변경에 두 번 있다. */
+/**  같은 열이 한 변경에 두 번 있다(방언의 규칙으로 같은 이름 — MySQL `name` 과 `NAME` 등). */
 "duplicateColumn" | 
+/**  그 이름의 열이 테이블에 없다(방언의 규칙으로 맞춰도). */
+"unknownColumn" | 
+/**  PG 식별자 상한(63바이트)을 넘는 이름 — 서버가 잘라 다른 열에 맞출 수 있어 받지 않는다. */
+"nameTooLong" | 
 /**  같은 행(같은 키)을 두 변경이 가리킨다. */
 "duplicateRow" | 
 /**  열 · 테이블 이름이 비었다. */

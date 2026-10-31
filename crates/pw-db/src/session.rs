@@ -882,6 +882,8 @@ pub struct DbSessions {
     pub(crate) executions: Mutex<HashMap<String, Arc<Running>>>,
     /// 스키마 캐시와 메타데이터용 연결(M3-10).
     pub(crate) schema: crate::schema::SchemaState,
+    /// 그리드 편집 문장 하나의 기다림 상한(밀리초, 0 이면 기본 — M3-12 `crate::edit::EDIT_STATEMENT_WAIT`). 시험이 줄인다.
+    pub(crate) edit_wait_ms: AtomicU64,
     next_id: AtomicU64,
 }
 
@@ -899,6 +901,7 @@ impl DbSessions {
             sessions: Mutex::default(),
             executions: Mutex::default(),
             schema: crate::schema::SchemaState::default(),
+            edit_wait_ms: AtomicU64::new(0),
             next_id: AtomicU64::new(1),
         }
     }

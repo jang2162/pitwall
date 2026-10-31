@@ -61,6 +61,28 @@ fn scenario() -> DbEditChanges {
     }
 }
 
+/// 변경 · 키에 나온 열 이름을 그대로 테이블의 열로 두고 만든다(철자 맞춤은 따로 본다).
+fn build_all(
+    d: SqlDialect,
+    t: &ObjectRef,
+    key: &[String],
+    changes: &DbEditChanges,
+) -> Result<Vec<EditStatement>, DbEditError> {
+    let mut columns: Vec<String> = key.to_vec();
+    let cells = changes
+        .updates
+        .iter()
+        .flat_map(|u| u.key.iter().chain(&u.values))
+        .chain(changes.inserts.iter().flat_map(|i| &i.values))
+        .chain(changes.deletes.iter().flat_map(|d| &d.key));
+    for c in cells {
+        if !c.column.is_empty() && !columns.contains(&c.column) {
+            columns.push(c.column.clone());
+        }
+    }
+    build(d, t, &columns, key, changes)
+}
+
 fn ids() -> Vec<String> {
     vec!["id".to_owned()]
 }
@@ -68,7 +90,7 @@ fn ids() -> Vec<String> {
 #[test]
 fn postgres_statements_bind_values_and_qualify_the_table() {
     let d = SqlDialect::Postgres;
-    let out = build(d, &table(d, "t"), &ids(), &scenario()).unwrap();
+    let out = build_all(d, &table(d, "t"), &ids(), &scenario()).unwrap();
     let sql: Vec<&str> = out.iter().map(|s| s.sql.as_str()).collect();
     assert_eq!(
         sql,
@@ -115,7 +137,7 @@ fn postgres_statements_bind_values_and_qualify_the_table() {
 #[test]
 fn mysql_statements_use_backticks_and_probe_updates_with_a_locking_read() {
     let d = SqlDialect::Mysql;
-    let out = build(d, &table(d, "t"), &ids(), &scenario()).unwrap();
+    let out = build_all(d, &table(d, "t"), &ids(), &scenario()).unwrap();
     let sql: Vec<&str> = out.iter().map(|s| s.sql.as_str()).collect();
     assert_eq!(
         sql,
@@ -137,14 +159,14 @@ fn mysql_statements_use_backticks_and_probe_updates_with_a_locking_read() {
 #[test]
 fn sqlite_statements_name_main_when_the_table_has_no_schema() {
     let d = SqlDialect::Sqlite;
-    let out = build(d, &table(d, "t"), &ids(), &scenario()).unwrap();
+    let out = build_all(d, &table(d, "t"), &ids(), &scenario()).unwrap();
     assert_eq!(out[0].sql, r#"DELETE FROM "main"."t" WHERE "id" = ?"#);
     let attached = ObjectRef {
         database: Some("aux".into()),
         schema: None,
         name: "t".into(),
     };
-    let out = build(d, &attached, &ids(), &scenario()).unwrap();
+    let out = build_all(d, &attached, &ids(), &scenario()).unwrap();
     assert_eq!(out[0].sql, r#"DELETE FROM "aux"."t" WHERE "id" = ?"#);
 }
 
@@ -158,7 +180,7 @@ fn composite_keys_follow_the_key_column_order() {
         }],
         ..DbEditChanges::default()
     };
-    let out = build(d, &table(d, "t"), &["a".into(), "b".into()], &changes).unwrap();
+    let out = build_all(d, &table(d, "t"), &["a".into(), "b".into()], &changes).unwrap();
     assert_eq!(
         out[0].sql,
         r#"DELETE FROM "app"."public"."t" WHERE "a" = $1 AND "b" = $2"#
@@ -175,7 +197,7 @@ fn an_insert_without_values_takes_the_defaults() {
     let got: Vec<String> = ALL
         .iter()
         .map(|&d| {
-            build(d, &table(d, "t"), &ids(), &changes).unwrap()[0]
+            build_all(d, &table(d, "t"), &ids(), &changes).unwrap()[0]
                 .sql
                 .clone()
         })
@@ -202,7 +224,7 @@ fn a_hostile_value_stays_a_bind_value() {
             }],
             ..DbEditChanges::default()
         };
-        let out = build(d, &table(d, "t"), &ids(), &changes).unwrap();
+        let out = build_all(d, &table(d, "t"), &ids(), &changes).unwrap();
         assert!(!out[0].sql.contains("DROP"), "{d:?}: {}", out[0].sql);
         assert_eq!(out[0].params[0], text_value(hostile));
         assert!(
@@ -247,7 +269,7 @@ fn the_preview_is_the_bind_form_with_each_value_as_its_literal() {
                 }],
                 deletes: vec![],
             };
-            let out = build(d, &table(d, "t"), &ids(), &changes)
+            let out = build_all(d, &table(d, "t"), &ids(), &changes)
                 .unwrap_or_else(|e| panic!("seed {seed}: {e:?}"));
             for statement in &out {
                 assert_eq!(
@@ -318,7 +340,7 @@ fn edit_statements_are_single_writes_even_with_hostile_names() {
                     key: vec![cell(name, DbValue::int(3))],
                 }],
             };
-            let out = build(d, &t, &[name.to_owned()], &changes).unwrap();
+            let out = build_all(d, &t, &[name.to_owned()], &changes).unwrap();
             for statement in &out {
                 let mut texts = vec![statement.sql.clone(), statement.preview.clone()];
                 if let Some(p) = &statement.probe {
@@ -336,7 +358,7 @@ fn edit_statements_are_single_writes_even_with_hostile_names() {
 
 fn reason(d: SqlDialect, t: &ObjectRef, key: &[&str], changes: DbEditChanges) -> DbEditError {
     let key: Vec<String> = key.iter().map(|k| (*k).to_owned()).collect();
-    build(d, t, &key, &changes).unwrap_err()
+    build_all(d, t, &key, &changes).unwrap_err()
 }
 
 fn update(key: Vec<DbEditCell>, values: Vec<DbEditCell>) -> DbEditChanges {
@@ -491,7 +513,7 @@ fn tables_must_be_qualified_where_the_session_could_move_them() {
         refused(SqlDialect::Mysql, named(Some("a"), Some("b"))),
         DbEditErrorReason::UnqualifiedTable
     );
-    let out = build(
+    let out = build_all(
         SqlDialect::Mysql,
         &named(None, Some("app")),
         &ids(),
@@ -602,4 +624,102 @@ fn the_wire_shape_is_camel_case_with_optional_lists() {
         serde_json::to_value(e).unwrap(),
         serde_json::json!({ "change": { "kind": "update", "index": 2 }, "column": "id", "reason": "keyColumnChanged" })
     );
+}
+
+/// 열 이름은 방언의 규칙으로 메타데이터의 정본 이름에 맞춘 뒤 판정한다 — MySQL 은 대소문자, SQLite 는 ASCII 대소문자를 가리지
+/// 않고, PG 는 글자 그대로이며 63바이트를 넘는 이름은 받지 않는다(서버가 잘라 다른 열에 맞춘다).
+#[test]
+fn column_names_are_matched_by_the_dialect_rules_before_judging() {
+    let columns = ["id".to_owned(), "name".to_owned(), "é".to_owned()];
+    let set = |column: &str| update(key(1), vec![cell(column, text_value("x"))]);
+    let judged = |d: SqlDialect, changes: DbEditChanges| {
+        build(d, &table(d, "t"), &columns, &ids(), &changes)
+    };
+    for d in [SqlDialect::Mysql, SqlDialect::Sqlite] {
+        // 키 열을 다른 철자로 고쳐도 키 열이다.
+        let e = judged(d, set("ID")).unwrap_err();
+        assert_eq!(
+            (e.reason, e.column.as_deref()),
+            (DbEditErrorReason::KeyColumnChanged, Some("id")),
+            "{d:?}"
+        );
+        // 다른 철자의 열은 정본 이름으로 적는다.
+        let out = judged(d, set("NAME")).unwrap();
+        assert!(
+            out[0].sql.contains("name") && !out[0].sql.contains("NAME"),
+            "{}",
+            out[0].sql
+        );
+        // 같은 열을 두 철자로.
+        let twice = update(
+            key(1),
+            vec![cell("name", text_value("a")), cell("Name", text_value("b"))],
+        );
+        assert_eq!(
+            judged(d, twice).unwrap_err().reason,
+            DbEditErrorReason::DuplicateColumn,
+            "{d:?}"
+        );
+        // 키 셀도 정본 이름으로 맞춘다.
+        let keyed = update(
+            vec![cell("Id", DbValue::int(1))],
+            vec![cell("name", text_value("a"))],
+        );
+        assert!(judged(d, keyed).is_ok(), "{d:?}");
+    }
+    // SQLite 는 ASCII 만 접는다, MySQL 은 유니코드도.
+    assert_eq!(
+        judged(SqlDialect::Sqlite, set("É")).unwrap_err().reason,
+        DbEditErrorReason::UnknownColumn
+    );
+    assert!(judged(SqlDialect::Mysql, set("É")).is_ok());
+    // PG 는 글자 그대로.
+    let e = judged(SqlDialect::Postgres, set("ID")).unwrap_err();
+    assert_eq!(
+        (e.reason, e.column.as_deref()),
+        (DbEditErrorReason::UnknownColumn, Some("ID"))
+    );
+    // PG 의 63바이트 넘는 이름: 키 열 63자에 한 글자를 붙여도 서버는 잘라 키 열에 맞춘다 — 받지 않는다.
+    let long = "a".repeat(63);
+    let pg_columns = [long.clone(), "v".to_owned()];
+    let e = build(
+        SqlDialect::Postgres,
+        &table(SqlDialect::Postgres, "t"),
+        &pg_columns,
+        std::slice::from_ref(&long),
+        &update(
+            vec![cell(&long, DbValue::int(1))],
+            vec![cell(&format!("{long}X"), DbValue::int(77))],
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(e.reason, DbEditErrorReason::NameTooLong);
+    let mut long_table = table(SqlDialect::Postgres, "t");
+    long_table.name = "t".repeat(64);
+    assert_eq!(
+        edit_table(SqlDialect::Postgres, &long_table)
+            .unwrap_err()
+            .reason,
+        DbEditErrorReason::NameTooLong
+    );
+}
+
+/// SQLite 방언에서 decimal 값은 받지 않는다 — 리터럴(숫자)과 바인드(글)의 저장 꼴이 `TEXT` 친화도 열에서 갈린다.
+#[test]
+fn sqlite_refuses_decimal_values() {
+    let d = SqlDialect::Sqlite;
+    let e = reason(
+        d,
+        &table(d, "t"),
+        &["id"],
+        update(key(1), vec![cell("v", DbValue::decimal("3.50"))]),
+    );
+    assert_eq!(
+        (e.reason, e.column.as_deref()),
+        (DbEditErrorReason::Unsupported, Some("v"))
+    );
+    for other in [SqlDialect::Postgres, SqlDialect::Mysql] {
+        let changes = update(key(1), vec![cell("v", DbValue::decimal("3.50"))]);
+        assert!(build_all(other, &table(other, "t"), &ids(), &changes).is_ok());
+    }
 }

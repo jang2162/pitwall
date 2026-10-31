@@ -1060,6 +1060,22 @@ impl DbSessions {
         connection_id: &str,
         table: ObjectRef,
     ) -> Result<Option<RowKey>, RpcError> {
+        Ok(self
+            .table_shape(ctx, grant, worktree, connection_id, table)
+            .await?
+            .1)
+    }
+
+    /// 테이블의 열과 행 키(그리드 편집 M3-12 — 열 이름을 방언 규칙으로 맞추는 데 열 목록이 필요하다). 캐시를 지난다. 관문은 부른 쪽이
+    /// 지났다.
+    pub async fn table_shape(
+        self: &Arc<Self>,
+        ctx: &Ctx,
+        grant: &DbGrant,
+        worktree: Option<&str>,
+        connection_id: &str,
+        table: ObjectRef,
+    ) -> Result<(Vec<ColumnInfo>, Option<RowKey>), RpcError> {
         check_object(&table)?;
         let Cached::Columns(columns) = self
             .meta(
@@ -1079,7 +1095,8 @@ impl DbSessions {
         else {
             return Err(unexpected());
         };
-        Ok(row_key(&columns, &indexes))
+        let key = row_key(&columns, &indexes);
+        Ok((columns, key))
     }
 }
 

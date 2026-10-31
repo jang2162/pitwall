@@ -22,7 +22,8 @@
 //!   (PG)에는 걸지 않는다(`CONFLICT`, `transactionFailed`). DB 오류는 `3003`(`data.error` · `data.session` · `data.failure`).
 //!   `data.failure.undone` 이 무엇이 되돌려졌는지 말한다 — 서버가 트랜잭션 전체를 끝냈으면(MySQL 교착 등) `transaction` 이고 세션
 //!   상태 이벤트가 그 까닭을 싣는다. 적용은 Host 태스크에서 돈다: 창의 요청이 취소되거나 연결이 닫히면 드라이버를 멈춰 되돌리고,
-//!   중간에 버려져 열린 트랜잭션이 남지 않는다. 문장 하나가 [`EDIT_STATEMENT_WAIT`] 를 넘기면(잠금 기다림 등) 멈추고 되돌린다.
+//!   중간에 버려져 열린 트랜잭션이 남지 않는다. 문장 하나가 [`EDIT_STATEMENT_WAIT`](시험은 `set_edit_statement_wait`)를 넘기면
+//!   (잠금 기다림 등) 멈추고 되돌린다.
 //! - **세션 상태**는 실행 파이프라인과 같은 `Link::settle` 로 맞춘다(오류 뒤에는 서버에 묻는다). 편집 DML 은 스키마를 바꾸지 않아
 //!   스키마 캐시를 버리지 않는다.
 //!
@@ -391,15 +392,17 @@ impl DbSessions {
                 },
             }));
         }
-        let key = self
-            .table_row_key(
+        let (columns, key) = self
+            .table_shape(
                 ctx,
                 &grant,
                 session.worktree.as_deref(),
                 &session.connection_id,
                 table.clone(),
             )
-            .await?
+            .await?;
+        let columns: Vec<String> = columns.into_iter().map(|c| c.name).collect();
+        let key = key
             .ok_or_else(|| {
                 edit_error(DbEditError {
                     change: None,
@@ -410,7 +413,7 @@ impl DbSessions {
             .columns;
         let (t, k) = (table.clone(), key.clone());
         let (statements, planned, probes) = on_classifier_thread(move || {
-            let statements = build(dialect, &t, &k, &changes).map_err(edit_error)?;
+            let statements = build(dialect, &t, &columns, &k, &changes).map_err(edit_error)?;
             let mut planned = Vec::with_capacity(statements.len());
             let mut probes = Vec::with_capacity(statements.len());
             for (i, statement) in statements.iter().enumerate() {
@@ -841,14 +844,15 @@ impl EditRun<'_> {
         }
     }
 
-    /// 문장 하나 → 영향 행 수(드라이버가 모르면 `None`). MySQL 수정이 0 이면 잠그는 읽기로 행이 있는지 본다.
+    /// 문장 하나 → 영향 행 수(드라이버가 모르면 `None`). MySQL 수정은 먼저 잠그는 읽기로 맞는 행을 세어(2행까지) 정확히 1행일 때만
+    /// 수정한다 — 아니면 그 수를 돌려준다(MySQL 의 영향 행은 바뀐 행이라 키가 여러 행에 맞아도 하나만 바뀌면 1 이다).
     async fn one(
         &mut self,
         statement: &EditStatement,
         grade: RiskGrade,
         probe_grade: Option<RiskGrade>,
     ) -> Result<Option<u64>, DbError> {
-        let timer = Timer::start(self.running);
+        let timer = Timer::start(self.running, self.sessions.edit_statement_wait());
         let result = self.execute(statement, grade, probe_grade).await;
         timer.finish(result)
     }
@@ -860,6 +864,31 @@ impl EditRun<'_> {
         probe_grade: Option<RiskGrade>,
     ) -> Result<Option<u64>, DbError> {
         let conn = self.link.sql().ok_or_else(disconnected)?;
+        let probed = match (&statement.probe, probe_grade) {
+            (Some(probe), Some(probe_grade)) => {
+                let mut request = ExecuteRequest::new(probe.sql.clone(), probe_grade);
+                request.params = probe.params.clone();
+                let started = self.running.cancel.run(conn.execute(request)).await?;
+                let matched = if started.end.is_some() {
+                    0
+                } else {
+                    let batch = self
+                        .running
+                        .cancel
+                        .run(conn.fetch(FetchLimit::rows(2)))
+                        .await?;
+                    if batch.end.is_none() {
+                        self.running.cancel.run(conn.discard_cursor()).await?;
+                    }
+                    batch.rows.len() as u64
+                };
+                if matched != 1 {
+                    return Ok(Some(matched));
+                }
+                true
+            }
+            _ => false,
+        };
         let mut request = ExecuteRequest::new(statement.sql.clone(), grade);
         request.params = statement.params.clone();
         let started = self.running.cancel.run(conn.execute(request)).await?;
@@ -871,27 +900,11 @@ impl EditRun<'_> {
                 None
             }
         };
-        match (affected, &statement.probe, probe_grade) {
-            (Some(0), Some(probe), Some(probe_grade)) => {
-                let mut request = ExecuteRequest::new(probe.sql.clone(), probe_grade);
-                request.params = probe.params.clone();
-                let started = self.running.cancel.run(conn.execute(request)).await?;
-                if started.end.is_some() {
-                    return Ok(Some(0));
-                }
-                let batch = self
-                    .running
-                    .cancel
-                    .run(conn.fetch(FetchLimit::rows(2)))
-                    .await?;
-                if batch.end.is_none() {
-                    self.running.cancel.run(conn.discard_cursor()).await?;
-                }
-                // 행이 있다 — 값이 그대로라 MySQL 이 0 으로 센 수정이다.
-                Ok(Some(batch.rows.len() as u64))
-            }
-            (affected, _, _) => Ok(affected),
-        }
+        Ok(match affected {
+            // 잠근 그 한 행이다 — 값이 그대로면 MySQL 이 0 으로 센다.
+            Some(0 | 1) if probed => Some(1),
+            affected => affected,
+        })
     }
 
     /// 실패한 편집을 되돌린다. 취소된 뒤에도 돌도록 실행의 취소 토큰을 쓰지 않고 정리 예산 안에서 부른다.
@@ -964,14 +977,15 @@ fn statement_step() -> Step {
     }
 }
 
-/// 문장 하나의 기다림 상한([`EDIT_STATEMENT_WAIT`]). 넘으면 실행을 멈추고, 그 문장의 취소 오류를 타임아웃으로 바꾼다.
+/// 문장 하나의 기다림 상한([`DbSessions::edit_statement_wait`], 기본 [`EDIT_STATEMENT_WAIT`]). 넘으면 실행을 멈추고, 그 문장의 취소 오류를 타임아웃으로 바꾼다.
 struct Timer {
     task: tokio::task::JoinHandle<()>,
     fired: Arc<AtomicBool>,
+    wait: Duration,
 }
 
 impl Timer {
-    fn start(running: &Running) -> Self {
+    fn start(running: &Running, wait: Duration) -> Self {
         let fired = Arc::new(AtomicBool::new(false));
         let (flag, cancel, stop) = (
             Arc::clone(&fired),
@@ -979,12 +993,12 @@ impl Timer {
             running.stop.clone(),
         );
         let task = tokio::spawn(async move {
-            tokio::time::sleep(EDIT_STATEMENT_WAIT).await;
+            tokio::time::sleep(wait).await;
             flag.store(true, Ordering::SeqCst);
             stop.cancel();
             let _ = cancel.cancel().await;
         });
-        Self { task, fired }
+        Self { task, fired, wait }
     }
 
     fn finish<T>(self, result: Result<T, DbError>) -> Result<T, DbError> {
@@ -993,13 +1007,31 @@ impl Timer {
             Err(e) if self.fired.load(Ordering::SeqCst) => {
                 let mut timeout = DbError::timeout("an edit statement");
                 timeout.message = format!(
-                    "an edit statement waited over {} s (locked by another session?): {}",
-                    EDIT_STATEMENT_WAIT.as_secs(),
+                    "an edit statement waited over {} ms (locked by another session?): {}",
+                    self.wait.as_millis(),
                     e.message
                 );
                 Err(timeout)
             }
             other => other,
+        }
+    }
+}
+
+impl DbSessions {
+    /// 편집 문장 하나의 기다림 상한을 고정한다(시험). `None` 이면 [`EDIT_STATEMENT_WAIT`].
+    pub fn set_edit_statement_wait(&self, wait: Option<Duration>) {
+        self.edit_wait_ms.store(
+            wait.map_or(0, |w| (w.as_millis() as u64).max(1)),
+            Ordering::SeqCst,
+        );
+    }
+
+    /// 편집 문장 하나의 기다림 상한.
+    pub fn edit_statement_wait(&self) -> Duration {
+        match self.edit_wait_ms.load(Ordering::SeqCst) {
+            0 => EDIT_STATEMENT_WAIT,
+            ms => Duration::from_millis(ms),
         }
     }
 }

@@ -6,6 +6,7 @@
 mod common;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use common::{Conn, Fixture};
 use pw_db::DbSessions;
@@ -19,17 +20,18 @@ use serde_json::{Value, json};
 struct Env {
     f: Fixture,
     db: FakeDriver,
+    sessions: Arc<DbSessions>,
 }
 
 fn env_with(trusted: bool, id: &str, dialect: SqlDialect) -> Env {
     let db = FakeDriver::named(id, dialect);
     let mut drivers = pw_db::DriverRegistry::new();
     drivers.register(Arc::new(db.clone())).unwrap();
+    let mut slot = None;
     let f = Fixture::build(trusted, |router, connections| {
-        pw_db::register(
-            router,
-            Arc::new(DbSessions::new(Arc::clone(connections), drivers)),
-        );
+        let sessions = Arc::new(DbSessions::new(Arc::clone(connections), drivers));
+        pw_db::register(router, Arc::clone(&sessions));
+        slot = Some(sessions);
     });
     for (file, extra) in [
         ("dev.toml", ""),
@@ -55,7 +57,11 @@ fn env_with(trusted: bool, id: &str, dialect: SqlDialect) -> Env {
     for (needle, affected) in [("DELETE", 1), ("UPDATE", 1), ("INSERT", 1)] {
         db.respond(needle, FakeResponse::write(affected));
     }
-    Env { f, db }
+    Env {
+        f,
+        db,
+        sessions: slot.unwrap(),
+    }
 }
 
 fn env(trusted: bool) -> Env {
@@ -648,4 +654,201 @@ async fn a_changed_config_stops_edits() {
         );
     }
     assert_eq!(e.reached(), before);
+}
+
+const PROBE: &str = "SELECT 1 FROM `app`.`t` WHERE `id` = ? FOR UPDATE";
+const MY_DELETE: &str = "DELETE FROM `app`.`t` WHERE `id` = ?";
+const MY_UPDATE: &str = "UPDATE `app`.`t` SET `name` = ? WHERE `id` = ?";
+
+fn my_table() -> Value {
+    json!({ "database": "app", "name": "t" })
+}
+
+/// 삭제 하나(id 2) + 수정 하나(id 1).
+fn my_changes() -> Value {
+    json!({
+        "updates": [{ "key": [{ "column": "id", "value": { "int": 1 } }],
+                      "values": [{ "column": "name", "value": { "text": "uno" } }] }],
+        "deletes": [{ "key": [{ "column": "id", "value": { "int": 2 } }] }],
+    })
+}
+
+async fn my_submit(w: &mut Conn, session: &str) -> Result<Value, RpcError> {
+    let p = w
+        .call(
+            "db.edit.preview",
+            json!({ "sessionId": session, "table": my_table(), "changes": my_changes() }),
+        )
+        .await?;
+    w.call(
+        "db.edit.apply",
+        json!({ "sessionId": session, "table": my_table(), "changes": my_changes(), "previewHash": p["previewHash"] }),
+    )
+    .await
+}
+
+fn executed(e: &Env) -> Vec<String> {
+    e.session_calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            FakeCall::Execute(sql) => Some(sql),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn wait_until(what: &str, mut ok: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ok() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// MySQL: 수정은 먼저 잠그는 읽기로 맞는 행을 센다 — 키가 두 행 이상에 맞으면(영향 행이 바뀐 행이라 1 로 보일 수 있다) 수정을 보내지
+/// 않고 전부 롤백한다. 1행이면 그 뒤에 수정한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mysql_updates_count_the_matching_rows_before_updating() {
+    let e = env_with(true, "mysql", SqlDialect::Mysql);
+    e.db.respond("SELECT 1 FROM", FakeResponse::rows(1));
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    my_submit(&mut w, &s).await.unwrap();
+    assert_eq!(executed(&e), [MY_DELETE, PROBE, MY_UPDATE]);
+
+    e.db.respond("SELECT 1 FROM", FakeResponse::rows(2));
+    let before = executed(&e).len();
+    let err = my_submit(&mut w, &s).await.unwrap_err();
+    let data = err.data.unwrap();
+    assert_eq!(data["reason"], "rowCount");
+    assert_eq!(data["failure"]["rowsAffected"], 2);
+    assert_eq!(
+        data["failure"]["change"],
+        json!({ "kind": "update", "index": 0 })
+    );
+    assert_eq!(executed(&e)[before..], [MY_DELETE, PROBE]);
+    assert_eq!(e.session_calls().last(), Some(&FakeCall::Rollback));
+}
+
+/// 문장 하나가 기다림 상한을 넘기면 멈추고 되돌린다: 자동 커밋 탭은 편집 전체(`undone: edit`, 앞의 삭제도), 수동 커밋 탭은 세이브포인트까지
+/// (`undone: savepoint` — 앞선 사람의 INSERT 는 남아 커밋된다). 오류는 `timeout` 이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_statement_over_the_wait_limit_is_stopped_and_undone() {
+    let e = env_with(true, "mysql", SqlDialect::Mysql);
+    e.db.respond("SELECT 1 FROM", FakeResponse::rows(1).hanging());
+    e.sessions
+        .set_edit_statement_wait(Some(Duration::from_millis(200)));
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    let started = Instant::now();
+    let err = my_submit(&mut w, &s).await.unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(err.code, code::DB_ERROR, "{err:?}");
+    let data = err.data.unwrap();
+    assert_eq!(data["error"]["kind"], "timeout", "{data}");
+    assert_eq!(data["failure"]["undone"], "edit");
+    assert_eq!(data["session"]["state"]["kind"], "idle");
+    assert!(e.session_calls().contains(&FakeCall::Interrupt));
+    assert_eq!(e.session_calls().last(), Some(&FakeCall::Rollback));
+    assert_eq!(e.db.committed(), Vec::<String>::new());
+
+    // 수동 커밋 탭.
+    let s = e.open(&mut w, "dev").await;
+    w.call(
+        "db.session.setMode",
+        json!({ "sessionId": s, "mode": "manual" }),
+    )
+    .await
+    .unwrap();
+    let earlier = "INSERT INTO other VALUES (1)";
+    run(&mut w, &s, earlier).await;
+    let err = my_submit(&mut w, &s).await.unwrap_err();
+    let data = err.data.unwrap();
+    assert_eq!(data["error"]["kind"], "timeout");
+    assert_eq!(data["failure"]["undone"], "savepoint");
+    assert_eq!(data["session"]["state"]["kind"], "inTransaction");
+    w.call("db.session.commit", json!({ "sessionId": s }))
+        .await
+        .unwrap();
+    assert_eq!(e.db.committed(), vec![earlier]);
+}
+
+/// 창이 적용 요청을 버리면(`request.cancel`) 드라이버를 멈추고 편집을 되돌린다 — 열린 트랜잭션이 남지 않아 같은 세션의 다음 적용이
+/// 곧바로 돌고 그것만 커밋된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_apply_request_undoes_the_edit() {
+    let e = env_with(true, "mysql", SqlDialect::Mysql);
+    e.db.respond("SELECT 1 FROM", FakeResponse::rows(1).hanging());
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    let p = w
+        .call(
+            "db.edit.preview",
+            json!({ "sessionId": s, "table": my_table(), "changes": my_changes() }),
+        )
+        .await
+        .unwrap();
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "id": 900, "method": "db.edit.apply",
+        "params": { "sessionId": s, "table": my_table(), "changes": my_changes(), "previewHash": p["previewHash"] },
+    }));
+    wait_until("the probe to hang", || {
+        e.db.calls_of(0)
+            .iter()
+            .any(|c| matches!(c, FakeCall::Fetch { .. }))
+    })
+    .await;
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "method": "request.cancel", "params": { "id": 900 },
+    }));
+    wait_until("the edit to roll back", || {
+        e.db.calls_of(0).contains(&FakeCall::Rollback)
+    })
+    .await;
+    assert!(!e.db.calls_of(0).contains(&FakeCall::Commit));
+    assert_eq!(e.db.committed(), Vec::<String>::new());
+
+    e.db.respond("SELECT 1 FROM", FakeResponse::rows(1));
+    let applied = my_submit(&mut w, &s).await.unwrap();
+    assert_eq!(applied["session"]["state"]["kind"], "idle");
+    // 잠그는 읽기(`FOR UPDATE`)는 분류가 쓰기라 가짜의 기록에도 남는다.
+    assert_eq!(e.db.committed(), vec![MY_DELETE, PROBE, MY_UPDATE]);
+}
+
+/// 적용 중 창이 닫히면 세션을 닫으며 실행을 멈추고, 편집을 되돌린 뒤 연결을 닫는다(커밋하지 않는다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closing_the_window_mid_apply_undoes_the_edit() {
+    let e = env_with(true, "mysql", SqlDialect::Mysql);
+    e.db.respond("SELECT 1 FROM", FakeResponse::rows(1).hanging());
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    let p = w
+        .call(
+            "db.edit.preview",
+            json!({ "sessionId": s, "table": my_table(), "changes": my_changes() }),
+        )
+        .await
+        .unwrap();
+    w.session.handle_value(json!({
+        "jsonrpc": "2.0", "id": 901, "method": "db.edit.apply",
+        "params": { "sessionId": s, "table": my_table(), "changes": my_changes(), "previewHash": p["previewHash"] },
+    }));
+    wait_until("the probe to hang", || {
+        e.db.calls_of(0)
+            .iter()
+            .any(|c| matches!(c, FakeCall::Fetch { .. }))
+    })
+    .await;
+    drop(w);
+    wait_until("the session to close", || e.sessions.session_count() == 0).await;
+    wait_until("the connection to close", || {
+        e.db.calls_of(0).contains(&FakeCall::Close)
+    })
+    .await;
+    let calls = e.db.calls_of(0);
+    let rollback = calls.iter().position(|c| *c == FakeCall::Rollback);
+    let close = calls.iter().position(|c| *c == FakeCall::Close);
+    assert!(rollback.is_some() && rollback < close, "{calls:?}");
+    assert!(!calls.contains(&FakeCall::Commit));
+    assert_eq!(e.db.committed(), Vec::<String>::new());
 }

@@ -10,9 +10,13 @@
 //!   키는 정확히 키 열이어야 하고, 키 열을 고치는 수정은 거절한다(키 없는 테이블 · 키 수정은 이월 — 14 §3). 키 값의 NULL 은 거절
 //!   (키 열은 NOT NULL 이다).
 //! - **순서**: 삭제 → 수정 → 추가. 지운 행의 키를 새 행이 다시 쓸 수 있고, 지운 행이 쥐던 유일 값을 수정이 받을 수 있다.
-//! - **MySQL · MariaDB 의 수정**은 값이 그대로면 영향 행 수가 0 이다(`CLIENT_FOUND_ROWS` 를 켜지 않는다). 그래서 수정마다 같은 키의
-//!   잠그는 읽기(`SELECT 1 … FOR UPDATE` — 현재 행을 읽는다. 스냅숏 읽기면 그사이 지워진 행도 보인다)를 [`EditStatement::probe`] 로
-//!   함께 내고, 실행하는 쪽이 0 일 때만 그것으로 행이 있는지 본다.
+//! - **열 이름은 메타데이터의 정본 이름으로 맞춘 뒤 판정한다**([`same_identifier`] — PG 글자 그대로 · 63바이트 초과 거절, MySQL
+//!   대소문자 무시, SQLite ASCII 대소문자 무시). 맞는 열이 없으면 거절, 키 열이면 `KeyColumnChanged`, 같은 열 둘이면
+//!   `DuplicateColumn`. 같은 행 판정(`DuplicateRow`)은 키 값의 꼴로 한다 — 서버의 비교 규칙(콜레이션 · 형 변환)이 아니다.
+//! - **MySQL · MariaDB 의 수정**은 영향 행이 바뀐 행이다(`CLIENT_FOUND_ROWS` 를 켜지 않는다). 그래서 수정마다 같은 키의 잠그는
+//!   읽기(`SELECT 1 … FOR UPDATE` — 현재 행을 읽는다)를 [`EditStatement::probe`] 로 함께 내고, 실행하는 쪽이 **수정 앞에** 맞는 행을
+//!   세어(2행까지) 정확히 1행일 때만 수정한다.
+//! - SQLite 방언의 decimal 값은 받지 않는다(리터럴은 숫자, 바인드는 글이라 `TEXT` 친화도 열에서 저장 꼴이 갈린다).
 //!
 //! 문장의 등급은 실행하는 쪽이 분류기(`crate::risk::classify_statement`)로 다시 매긴다 — 이 모듈은 등급을 정하지 않는다.
 
@@ -140,8 +144,12 @@ pub enum DbEditErrorReason {
     NullKey,
     /// 수정에 바꿀 열이 없다.
     NoValues,
-    /// 같은 열이 한 변경에 두 번 있다.
+    /// 같은 열이 한 변경에 두 번 있다(방언의 규칙으로 같은 이름 — MySQL `name` 과 `NAME` 등).
     DuplicateColumn,
+    /// 그 이름의 열이 테이블에 없다(방언의 규칙으로 맞춰도).
+    UnknownColumn,
+    /// PG 식별자 상한(63바이트)을 넘는 이름 — 서버가 잘라 다른 열에 맞출 수 있어 받지 않는다.
+    NameTooLong,
     /// 같은 행(같은 키)을 두 변경이 가리킨다.
     DuplicateRow,
     /// 열 · 테이블 이름이 비었다.
@@ -197,6 +205,10 @@ impl DbEditError {
             DbEditErrorReason::NullKey => "a row key value is null",
             DbEditErrorReason::NoValues => "an update changes no column",
             DbEditErrorReason::DuplicateColumn => "a column appears twice in one change",
+            DbEditErrorReason::UnknownColumn => "the table has no column of that name",
+            DbEditErrorReason::NameTooLong => {
+                "the name is over the 63-byte postgres identifier limit"
+            }
             DbEditErrorReason::DuplicateRow => "two changes name the same row",
             DbEditErrorReason::EmptyName => "a table or column name is empty",
             DbEditErrorReason::Truncated => "the value was truncated at the cell limit",
@@ -261,6 +273,11 @@ impl Builder {
     }
 
     fn value(&mut self, value: &DbValue) -> Result<(), LiteralError> {
+        // SQLite 의 decimal: 리터럴은 숫자, 바인드는 글이라 `TEXT` 친화도 열에서 저장 꼴이 갈린다 — SQLite 드라이버는 decimal 을
+        // 내지 않으므로(다른 DB 에서 온 값) 받지 않는다. 창은 글 · 정수 · 실수로 보낸다.
+        if self.dialect == SqlDialect::Sqlite && matches!(value, DbValue::Decimal(_)) {
+            return Err(LiteralError::Unsupported);
+        }
         self.preview.push_str(&literal(self.dialect, value)?);
         self.params.push(value.clone());
         match self.dialect {
@@ -272,6 +289,31 @@ impl Builder {
         }
         Ok(())
     }
+}
+
+/// PG 의 식별자 상한(NAMEDATALEN − 1 바이트). 넘는 이름은 서버가 잘라 맞추므로 다른 이름과 같아질 수 있다.
+pub const PG_MAX_IDENTIFIER_BYTES: usize = 63;
+
+/// 두 식별자를 서버가 같은 이름으로 보는가 — 방언의 규칙: PG 는 글자 그대로(따옴표로 싼 이름), MySQL · MariaDB 는 열 이름이 대소문자를
+/// 가리지 않고, SQLite 는 ASCII 대소문자를 가리지 않는다. Host 가 이름으로 허가 · 거절할 때(키 열 · 같은 열)는 글자 비교가 아니라 이것으로
+/// 메타데이터의 정본 이름에 맞춘 뒤 판정한다 — 글자로만 비교하면 MySQL · SQLite 의 `ID` 가 키 열 `id` 를 비켜 간다.
+pub fn same_identifier(dialect: SqlDialect, a: &str, b: &str) -> bool {
+    match dialect {
+        SqlDialect::Postgres => a == b,
+        SqlDialect::Mysql => a == b || a.to_lowercase() == b.to_lowercase(),
+        SqlDialect::Sqlite => a.eq_ignore_ascii_case(b),
+    }
+}
+
+/// 이름 하나: 비면 `EmptyName`, PG 에서 63바이트를 넘으면 `NameTooLong`(서버가 잘라 다른 이름에 맞출 수 있다).
+fn check_name(dialect: SqlDialect, name: &str) -> Result<(), DbEditErrorReason> {
+    if name.is_empty() {
+        return Err(DbEditErrorReason::EmptyName);
+    }
+    if dialect == SqlDialect::Postgres && name.len() > PG_MAX_IDENTIFIER_BYTES {
+        return Err(DbEditErrorReason::NameTooLong);
+    }
+    Ok(())
 }
 
 /// 편집할 테이블을 방언의 한정 꼴로 맞춘다: PG `{ database, schema, name }`(둘 다 있어야 한다), MySQL `{ database, name }`(스키마
@@ -313,9 +355,7 @@ pub fn edit_table(dialect: SqlDialect, table: &ObjectRef) -> Result<ObjectRef, D
     .into_iter()
     .flatten()
     {
-        if part.is_empty() {
-            return Err(DbEditError::new(DbEditErrorReason::EmptyName));
-        }
+        check_name(dialect, part).map_err(DbEditError::new)?;
         quote_ident(dialect, part).map_err(|e| DbEditError::new(e.into()))?;
     }
     Ok(canonical)
@@ -334,10 +374,13 @@ pub fn qualified_table(dialect: SqlDialect, table: &ObjectRef) -> Result<String,
     Ok(parts.join("."))
 }
 
-/// 변경을 문장으로. `key` 는 테이블의 행 키 열(M3-10 의 판정)이다 — 비었으면 `NoRowKey`.
+/// 변경을 문장으로. `columns` 는 메타데이터의 열 이름(정본), `key` 는 테이블의 행 키 열(M3-10 의 판정 — `columns` 의 이름)이다.
+/// 변경의 열 이름은 [`same_identifier`] 로 `columns` 에 맞춰 정본 이름으로 바꾼 뒤 판정하고 문장에 쓴다 — 맞는 열이 없으면
+/// `UnknownColumn`, 키 열이면 `KeyColumnChanged`. 키가 비었으면 `NoRowKey`.
 pub fn build(
     dialect: SqlDialect,
     table: &ObjectRef,
+    columns: &[String],
     key: &[String],
     changes: &DbEditChanges,
 ) -> Result<Vec<EditStatement>, DbEditError> {
@@ -360,6 +403,7 @@ pub fn build(
     }
     let ctx = Ctx {
         dialect,
+        columns,
         key,
         key_names: &key_names,
     };
@@ -390,10 +434,10 @@ pub fn build(
             return Err(DbEditError::at(at, None, DbEditErrorReason::NoValues));
         }
         let set = ctx.columns(at, &update.values)?;
-        if let Some(cell) = update.values.iter().find(|c| key.contains(&c.column)) {
+        if let Some((canonical, _)) = set.iter().find(|(c, _)| key.contains(c)) {
             return Err(DbEditError::at(
                 at,
-                Some(&cell.column),
+                Some(canonical),
                 DbEditErrorReason::KeyColumnChanged,
             ));
         }
@@ -401,7 +445,7 @@ pub fn build(
         b.text("UPDATE ");
         b.text(&table_name);
         b.text(" SET ");
-        for (n, (name, cell)) in set.iter().zip(&update.values).enumerate() {
+        for (n, ((_, name), cell)) in set.iter().zip(&update.values).enumerate() {
             if n > 0 {
                 b.text(", ");
             }
@@ -443,7 +487,8 @@ pub fn build(
             });
         } else {
             b.text(" (");
-            b.text(&names.join(", "));
+            let quoted: Vec<&str> = names.iter().map(|(_, q)| q.as_str()).collect();
+            b.text(&quoted.join(", "));
             b.text(") VALUES (");
             for (n, cell) in insert.values.iter().enumerate() {
                 if n > 0 {
@@ -471,39 +516,63 @@ fn statement(change: DbEditChangeRef, b: Builder, probe: Option<EditProbe>) -> E
 
 struct Ctx<'a> {
     dialect: SqlDialect,
+    /// 메타데이터의 열 이름(정본).
+    columns: &'a [String],
     key: &'a [String],
     key_names: &'a [String],
 }
 
 impl Ctx<'_> {
-    /// 키 셀을 키 열 순서의 값으로. 정확히 키 열이어야 하고 NULL 이 없어야 한다.
+    /// 셀의 열 이름을 메타데이터의 정본 이름으로([`same_identifier`]). 없으면 `UnknownColumn`.
+    fn canonical(&self, at: DbEditChangeRef, name: &str) -> Result<&str, DbEditError> {
+        check_name(self.dialect, name).map_err(|reason| DbEditError::at(at, Some(name), reason))?;
+        self.columns
+            .iter()
+            .find(|c| same_identifier(self.dialect, c, name))
+            .map(String::as_str)
+            .ok_or_else(|| DbEditError::at(at, Some(name), DbEditErrorReason::UnknownColumn))
+    }
+
+    /// 키 셀을 키 열 순서의 값으로. 정본 이름으로 맞춰 정확히 키 열이어야 하고 NULL 이 없어야 한다.
     fn key_values<'c>(
         &self,
         at: DbEditChangeRef,
         cells: &'c [DbEditCell],
     ) -> Result<Vec<&'c DbValue>, DbEditError> {
-        if cells.len() != self.key.len() {
-            return Err(DbEditError::at(at, None, DbEditErrorReason::KeyMismatch));
-        }
-        let mut values = Vec::with_capacity(self.key.len());
-        for k in self.key {
-            let mut found = cells.iter().filter(|c| &c.column == k);
-            let Some(cell) = found.next() else {
-                return Err(DbEditError::at(at, Some(k), DbEditErrorReason::KeyMismatch));
-            };
-            if found.next().is_some() {
+        let mut values: Vec<Option<&'c DbValue>> = vec![None; self.key.len()];
+        for cell in cells {
+            let canonical = self.canonical(at, &cell.column)?;
+            let Some(slot) = self.key.iter().position(|k| k == canonical) else {
                 return Err(DbEditError::at(
                     at,
-                    Some(k),
+                    Some(canonical),
+                    DbEditErrorReason::KeyMismatch,
+                ));
+            };
+            if values[slot].is_some() {
+                return Err(DbEditError::at(
+                    at,
+                    Some(canonical),
                     DbEditErrorReason::DuplicateColumn,
                 ));
             }
             if cell.value == DbValue::Null {
-                return Err(DbEditError::at(at, Some(k), DbEditErrorReason::NullKey));
+                return Err(DbEditError::at(
+                    at,
+                    Some(canonical),
+                    DbEditErrorReason::NullKey,
+                ));
             }
-            values.push(&cell.value);
+            values[slot] = Some(&cell.value);
         }
-        Ok(values)
+        if let Some(missing) = values.iter().position(Option::is_none) {
+            return Err(DbEditError::at(
+                at,
+                Some(&self.key[missing]),
+                DbEditErrorReason::KeyMismatch,
+            ));
+        }
+        Ok(values.into_iter().flatten().collect())
     }
 
     /// 같은 행을 두 변경이 가리키면 거절한다.
@@ -543,28 +612,25 @@ impl Ctx<'_> {
         Ok(())
     }
 
-    /// 셀들의 열 이름을 따옴표로. 빈 이름 · 같은 열 두 번은 거절.
+    /// 셀들의 열 이름을 정본 이름과 그 따옴표 꼴로. 맞는 열이 없거나 같은 열이 두 번이면 거절.
     fn columns(
         &self,
         at: DbEditChangeRef,
         cells: &[DbEditCell],
-    ) -> Result<Vec<String>, DbEditError> {
-        let mut names = Vec::with_capacity(cells.len());
-        for (n, cell) in cells.iter().enumerate() {
-            if cell.column.is_empty() {
-                return Err(DbEditError::at(at, None, DbEditErrorReason::EmptyName));
-            }
-            if cells[..n].iter().any(|c| c.column == cell.column) {
+    ) -> Result<Vec<(String, String)>, DbEditError> {
+        let mut names: Vec<(String, String)> = Vec::with_capacity(cells.len());
+        for cell in cells {
+            let canonical = self.canonical(at, &cell.column)?;
+            if names.iter().any(|(c, _)| c == canonical) {
                 return Err(DbEditError::at(
                     at,
-                    Some(&cell.column),
+                    Some(canonical),
                     DbEditErrorReason::DuplicateColumn,
                 ));
             }
-            names.push(
-                quote_ident(self.dialect, &cell.column)
-                    .map_err(|e| DbEditError::at(at, Some(&cell.column), e.into()))?,
-            );
+            let quoted = quote_ident(self.dialect, canonical)
+                .map_err(|e| DbEditError::at(at, Some(canonical), e.into()))?;
+            names.push((canonical.to_owned(), quoted));
         }
         Ok(names)
     }
