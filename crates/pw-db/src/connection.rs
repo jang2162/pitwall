@@ -135,7 +135,9 @@ async fn open_resolved(
         dialect: driver.dialect(),
         capabilities: driver.capabilities(),
     };
-    let connected = within(Budget::CONSOLE.connect, "connect", driver.connect(spec))
+    // 바깥 상한도 연결 설정의 연결 타임아웃(`connect_timeout`, 기본 10 s)이다 — 드라이버가 그것을 지키지 않아도 여기서 끊는다(M3-14).
+    let limit = std::time::Duration::from_millis(u64::from(spec.connect_timeout_ms));
+    let connected = within(limit, "connect", driver.connect(spec))
         .await
         .map_err(db_error)?;
     if !connected.connection.matches(&info.capabilities) {

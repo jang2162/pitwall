@@ -284,3 +284,70 @@ async fn ssh_hosts_are_only_for_a_trusted_project_window() {
         .unwrap();
     assert!(none.hosts.is_empty());
 }
+
+/// 연결이 느린 드라이버(연결 시간 상한을 스스로 지키지 않는다). 연결은 가짜 드라이버에 맡긴다.
+struct SlowConnect {
+    inner: FakeDriver,
+    delay: std::time::Duration,
+}
+
+impl pw_db_driver::DbDriver for SlowConnect {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+
+    fn dialect(&self) -> Option<SqlDialect> {
+        self.inner.dialect()
+    }
+
+    fn capabilities(&self) -> pw_db_types::Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn connect(
+        &self,
+        spec: pw_db_types::ConnectionSpec,
+    ) -> pw_db_driver::BoxFuture<'_, pw_db_driver::DbResult<pw_db_driver::Connected>> {
+        Box::pin(async move {
+            tokio::time::sleep(self.delay).await;
+            self.inner.connect(spec).await
+        })
+    }
+}
+
+/// 연결 타임아웃이 연결을 여는 바깥 상한이다 — 드라이버가 지키지 않아도 그 시간에 끊는다(전에는 10 s 고정이라 그보다 긴 값이 먹지
+/// 않았다). 기본(10 s)은 그대로라 1.5 s 걸리는 연결은 붙는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_connect_timeout_bounds_opening_the_connection() {
+    let slow = SlowConnect {
+        inner: FakeDriver::named("postgres", SqlDialect::Postgres),
+        delay: std::time::Duration::from_millis(1500),
+    };
+    let mut drivers = pw_db::DriverRegistry::new();
+    drivers.register(Arc::new(slow)).unwrap();
+    let f = Fixture::build(true, |router, connections| {
+        let sessions = Arc::new(DbSessions::new(Arc::clone(connections), drivers));
+        pw_db::register(router, sessions);
+    });
+    let mut w = f.window();
+    let test = |timeout: Value| json!({ "projectId": f.id, "draft": local_pg(json!({ "connectTimeout": timeout })) });
+    let started = std::time::Instant::now();
+    let e = w
+        .call("db.connection.test", test(json!(1)))
+        .await
+        .unwrap_err();
+    let took = started.elapsed();
+    assert_eq!(e.code, pw_db::gate::code::DB_ERROR, "{e:?}");
+    assert_eq!(
+        e.data.as_ref().unwrap()["error"]["kind"],
+        "timeout",
+        "{e:?}"
+    );
+    assert!(took < std::time::Duration::from_millis(1400), "{took:?}");
+
+    let info = w
+        .call("db.connection.test", test(Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(info["version"], "fake 1.0", "{info}");
+}
