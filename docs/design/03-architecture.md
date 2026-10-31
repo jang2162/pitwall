@@ -103,7 +103,7 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
 | 범위 | 위치 (§5-0 XDG) | 형식 | 내용 |
 |---|---|---|---|
 | 전역 설정 | `$CONFIG/` | TOML | `settings.toml`(전역 설정 · 원격 호스트 · 외부 도구), `keymap.toml`, `themes/`, 개인 전용 프로젝트 설정 `projects/<slug>/` |
-| 앱 데이터 | `$DATA/` | SQLite · 바이너리 | `state.db`(프로젝트 레지스트리 · 최근 목록), `projects/<id>/`(열린 탭 · 레이아웃 · 브레이크포인트 · 쿼리 히스토리 — 창 상태는 `state.json`, `project.state.*`, 10-ui.md §5.2 「상태 복원」. DB 연결의 확인 기록 — `env` 참조의 (변수, 대상) · 루트 밖 SQLite 경로 — 은 `db.json`, 14-m3-plan.md M3-02), `extensions/`, `tools/`(LSP · DAP 설치본, §07 4.4), `relay/` |
+| 앱 데이터 | `$DATA/` | SQLite · 바이너리 | `state.db`(프로젝트 레지스트리 · 최근 목록), `projects/<id>/`(열린 탭 · 레이아웃 · 브레이크포인트 · 쿼리 히스토리 — 창 상태는 `state.json`, `project.state.*`, 10-ui.md §5.2 「상태 복원」. DB 연결의 확인 기록 — `env` 참조의 (변수, 대상) · 루트 밖 SQLite 경로 — 은 `db.json`, 14-m3-plan.md M3-02. SQL 콘솔의 글은 `consoles/<콘솔 id>.sql`, `project.console.*`, 14-m3-plan.md M3-15), `extensions/`, `tools/`(LSP · DAP 설치본, §07 4.4), `relay/` |
 | 상태 · 로그 | `$STATE/` | 텍스트 · SQLite | `logs/`, `backup/`(마이그레이션 원본), MCP 감사 로그 `mcp/audit.db`, 실행 중 앱의 MCP 소켓 `run/`([05-mcp.md](05-mcp.md) 「로컬 소켓과 헤드리스」)와 git askpass 소켓 · 도우미 스크립트(같은 `run/`, 13-m2-plan.md M2-06) |
 | 캐시 | `$CACHE/` | 다양 | 심볼 인덱스, registry 캐시, 원격 파일 캐시 — 지워도 재생성 |
 | 프로젝트 공유 설정 | `<project>/.pitwall/project.toml`, `run/*.toml`, `db/*.toml` | TOML | 커밋 가능. 실행 구성, DB 연결(비밀 제외), 기본 외부 도구 고르기(명령은 정의하지 못한다 — 「`[open_with]`」) |
