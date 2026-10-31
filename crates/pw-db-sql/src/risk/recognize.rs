@@ -151,7 +151,7 @@ fn postgres_refresh(statement: &[&Token]) -> Option<(RiskGrade, RiskReason)> {
 
 /// MySQL `LOAD DATA [LOW_PRIORITY | CONCURRENT] INFILE '파일' [REPLACE | IGNORE] INTO TABLE [db.]이름 …` — 서버 쪽 파일을 표에 넣는
 /// 일괄 쓰기. `LOCAL` 은 이 꼴에 없다(파괴 그대로). 뒤의 선택 절(`FIELDS TERMINATED BY …` · 열 목록 · `IGNORE n LINES` ·
-/// `CHARACTER SET`)은 낱말 · 문자열 · 수 · 쉼표 · 괄호만 받는다 — 식을 쓰는 `SET 열 = 식` 절은 받지 않는다.
+/// `CHARACTER SET`)은 낱말 · 문자열 · 수 · 쉼표 · 괄호만 받는다 — 식을 쓰는 `SET 열 = 식` 절은 `=` 에서 걸린다.
 fn mysql_load_data_infile(statement: &[&Token]) -> Option<(RiskGrade, RiskReason)> {
     let rest = keyword_prefix(statement, &["LOAD", "DATA"])?;
     let rest = keyword_prefix(rest, &["LOW_PRIORITY"])
@@ -170,20 +170,17 @@ fn mysql_load_data_infile(statement: &[&Token]) -> Option<(RiskGrade, RiskReason
         .unwrap_or(rest);
     let rest = keyword_prefix(rest, &["INTO", "TABLE"])?;
     let tail = qualified_name(rest)?;
-    let tail_ok = tail.iter().enumerate().all(|(index, token)| match token {
-        Token::Word(word)
-            if word.quote_style.is_none() && word.value.eq_ignore_ascii_case("SET") =>
-        {
-            index > 0 && is_keyword(tail[index - 1], "CHARACTER")
-        }
-        Token::Word(_)
-        | Token::Number(..)
-        | Token::SingleQuotedString(_)
-        | Token::DoubleQuotedString(_)
-        | Token::Comma
-        | Token::LParen
-        | Token::RParen => true,
-        _ => false,
+    let tail_ok = tail.iter().all(|token| {
+        matches!(
+            token,
+            Token::Word(_)
+                | Token::Number(..)
+                | Token::SingleQuotedString(_)
+                | Token::DoubleQuotedString(_)
+                | Token::Comma
+                | Token::LParen
+                | Token::RParen
+        )
     });
     tail_ok.then_some((RiskGrade::Write, RiskReason::DataTransfer))
 }

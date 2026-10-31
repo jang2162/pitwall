@@ -9,14 +9,19 @@ use crate::risk::{
     Classification, MAX_OPERATOR_TOKENS, MAX_STATEMENT_BYTES, RECURSION_LIMIT, classify_statement,
 };
 
-/// 2 MiB 스택(tokio 작업 스레드 · `spawn_blocking` 의 기본)의 스레드에서 분류한다. 넘치면 시험 프로세스가 abort 된다.
-fn on_small_stack(dialect: SqlDialect, sql: String) -> Classification {
+/// `kib` 스택의 스레드에서 분류한다. 넘치면 시험 프로세스가 abort 된다.
+fn on_stack(kib: usize, dialect: SqlDialect, sql: String) -> Classification {
     std::thread::Builder::new()
-        .stack_size(2 << 20)
+        .stack_size(kib << 10)
         .spawn(move || classify_statement(dialect, &sql))
         .unwrap()
         .join()
         .unwrap()
+}
+
+/// 2 MiB 스택(tokio 작업 스레드 · `spawn_blocking` 의 기본).
+fn on_small_stack(dialect: SqlDialect, sql: String) -> Classification {
+    on_stack(2048, dialect, sql)
 }
 
 /// 상한 바로 안쪽의 사슬 꼴(연산자 토큰 수가 `MAX_OPERATOR_TOKENS - 20` 근처).
@@ -46,9 +51,10 @@ fn chains() -> Vec<(&'static str, String)> {
 }
 
 #[test]
-fn chains_just_under_the_cap_are_classified_on_a_small_stack() {
+fn chains_just_under_the_cap_are_classified_on_half_the_default_stack() {
+    // 상한이 2 MiB 의 두 배 여유를 갖는지(`MAX_OPERATOR_TOKENS` 주석) — 그 절반인 1 MiB 에서도 넘치지 않아야 한다.
     for (name, sql) in chains() {
-        let classification = on_small_stack(Postgres, sql);
+        let classification = on_stack(1024, Postgres, sql);
         assert_ne!(classification.reasons, vec![TooLarge], "{name}");
         assert!(classification.grade <= Write, "{name}: {classification:?}");
     }
