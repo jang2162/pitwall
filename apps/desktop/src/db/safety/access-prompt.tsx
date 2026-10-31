@@ -13,6 +13,10 @@
 // - 그 밖의 오류는 묻지 않는다(`resolve` 가 거짓). 미신뢰 프로젝트는 Host 가 3101 · 3102 전에 신뢰 거절(`untrusted`)을 주므로 이
 //   다이얼로그가 뜨지 않는다.
 // - 한 번에 하나만 묻는다 — 떠 있는 동안 온 다른 요청은 묻지 않고 거짓이다.
+// - 답은 그 질문에만 닿는다(질문마다 번호): 제출하는 동안에도 [취소] · Esc 는 듣고(걸린 Host 호출에서 빠져나오게) 그 질문은
+//   거짓으로 끝난다 — 늦게 끝난 제출은 아무것도 닫지 않는다(뒤의 질문은 그대로 떠 있다). 훅의 주인이 언마운트되면 떠 있는 질문은
+//   거짓으로 끝난다(M3-19 `useRiskConfirm` 과 같다).
+// - 오류의 `data.connectionId` 가 부른 쪽의 연결과 다르면 묻지 않는다 — 다른 연결에 비밀번호 · 확인이 가지 않게.
 
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -25,7 +29,7 @@ import {
   type SecretMissing,
 } from "@pitwall/rpc-client";
 import { KeyRound, ShieldQuestion } from "lucide-react";
-import { type ReactNode, useCallback, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 import { BUTTON, SHEET } from "../../git/dialogs/git-dialogs";
 import { useKeymapPopup } from "../../keymap/keymap-provider";
@@ -46,12 +50,16 @@ export type DbAccessNeed =
   | { kind: "secret"; data: DbSecretRequired }
   | { kind: "approval"; request: DbApprovalRequest };
 
-/** 오류가 `3101` · `3102` 면 물을 것. 아니면 `undefined`. */
-export function dbAccessOf(error: unknown): DbAccessNeed | undefined {
+/**
+ * 오류가 `3101` · `3102` 면 물을 것. 아니면 `undefined`. `connectionId` 를 주면 오류의 `data.connectionId` 가 그것과 같을 때만
+ * 묻는다(Host 는 늘 싣는다 — 없거나 다르면 묻지 않는다).
+ */
+export function dbAccessOf(error: unknown, connectionId?: string): DbAccessNeed | undefined {
   if (!(error instanceof RpcCallError)) return undefined;
   const data = error.data;
   if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
   const d = data as Record<string, unknown>;
+  if (connectionId !== undefined && d.connectionId !== connectionId) return undefined;
   if (error.code === DB_ERROR_CODE.SECRET_REQUIRED && d.target && typeof d.reason === "string")
     return { kind: "secret", data: d as unknown as DbSecretRequired };
   if (
@@ -89,6 +97,8 @@ export interface DbAccessTarget {
 }
 
 interface Asked {
+  /** 질문 번호 — 답이 이 질문에만 닿게 하고, 다이얼로그를 질문마다 새로 그린다. */
+  id: number;
   need: DbAccessNeed;
   target: DbAccessTarget;
   answer(done: boolean): void;
@@ -106,24 +116,44 @@ export interface DbAccessPrompt {
 
 export function useDbAccessPrompt(): DbAccessPrompt {
   const [asked, setAsked] = useState<Asked>();
-  const open = useRef(false);
+  /** 떠 있는 질문(번호와 끝내기). 없으면 새로 물을 수 있다. */
+  const pending = useRef<{ id: number; settle(value: boolean): void }>(undefined);
+  const nextId = useRef(0);
   const resolve = useCallback((error: unknown, target: DbAccessTarget) => {
-    const need = dbAccessOf(error);
-    if (!need || open.current) return Promise.resolve(false);
-    open.current = true;
-    return new Promise<boolean>((done) =>
+    const need = dbAccessOf(error, target.connectionId);
+    if (!need || pending.current) return Promise.resolve(false);
+    const id = ++nextId.current;
+    return new Promise<boolean>((done) => {
+      let settled = false;
+      const settle = (value: boolean) => {
+        if (settled) return;
+        settled = true;
+        done(value);
+      };
+      pending.current = { id, settle };
       setAsked({
+        id,
         need,
         target,
         answer: (value) => {
-          open.current = false;
+          // 이미 끝난 질문(취소 뒤 늦게 끝난 제출 등)의 답은 지금 떠 있는 질문을 건드리지 않는다.
+          if (pending.current?.id !== id) return settle(value);
+          pending.current = undefined;
           setAsked(undefined);
-          done(value);
+          settle(value);
         },
-      }),
-    );
+      });
+    });
   }, []);
-  const element = asked ? <AccessDialog key={asked.need.kind} asked={asked} /> : undefined;
+  useEffect(
+    () => () => {
+      const p = pending.current;
+      pending.current = undefined;
+      p?.settle(false);
+    },
+    [],
+  );
+  const element = asked ? <AccessDialog key={asked.id} asked={asked} /> : undefined;
   return { resolve, element };
 }
 

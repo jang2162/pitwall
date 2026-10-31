@@ -73,6 +73,8 @@ let root: Root | undefined;
 let prompt: DbAccessPrompt;
 let calls: { method: string; params: Record<string, unknown> }[];
 let fail: Error | undefined;
+/** 있으면 Host 호출이 이것이 풀릴 때까지 걸린다. */
+let hold: Promise<void> | undefined;
 let access: DbAccessTarget;
 
 function Host() {
@@ -88,10 +90,12 @@ beforeEach(async () => {
   popup.calls = [];
   calls = [];
   fail = undefined;
+  hold = undefined;
   access = {
     calls: {
       call: (async (method: string, params: Record<string, unknown>) => {
         calls.push({ method, params });
+        if (hold) await hold;
         if (fail) throw fail;
         return null;
       }) as never,
@@ -315,6 +319,88 @@ it("does not ask for a trust refusal or any other error, and asks one thing at a
   await click(button("cancel"));
   expect(await first).toBe(false);
   expect(calls).toEqual([]);
+});
+
+describe("each answer reaches only its own question", () => {
+  it("keeps the next question open when a cancelled submit finishes late", async () => {
+    let release!: () => void;
+    hold = new Promise((r) => (release = r));
+    const { answer: first } = await ask(secretError());
+    await type(PASSWORD);
+    await click(button("run"));
+    // 제출이 걸린 동안 [취소] — 그 질문은 거짓으로 끝난다.
+    await click(button("cancel"));
+    expect(await first).toBe(false);
+    expect(dialog()).toBeNull();
+
+    hold = undefined;
+    const second = await ask(approvalError(cases0()));
+    expect(dialog()?.dataset.kind).toBe("file");
+    // 앞 질문의 제출이 이제 끝난다 — 뒤 질문은 그대로다.
+    await act(async () => release());
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+    expect(dialog()?.dataset.kind).toBe("file");
+    let settled = false;
+    void second.answer.then(() => (settled = true));
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+    expect(settled).toBe(false);
+
+    await click(button("run"));
+    expect(await second.answer).toBe(true);
+    expect(calls.map((c) => c.method)).toEqual(["db.secret.set", "db.connection.approve"]);
+  });
+
+  it("draws a new dialog for a new question of the same kind", async () => {
+    let release!: () => void;
+    hold = new Promise((r) => (release = r));
+    const { answer: first } = await ask(secretError());
+    await type(PASSWORD);
+    await click(button("run"));
+    expect(button("run").disabled).toBe(true);
+    hold = undefined;
+    // 취소와 다음 질문이 한 번에 그려진다(부른 쪽이 취소를 받자마자 다시 묻는 때) — 앞 질문의 입력 · 제출 중 상태가 남지 않는다.
+    let second: Promise<boolean> | undefined;
+    await act(async () => {
+      button("cancel").click();
+      second = prompt.resolve(secretError(), access);
+    });
+    expect(await first).toBe(false);
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+    const input = document.querySelector<HTMLInputElement>("[data-testid=db-access-secret]")!;
+    expect(input.value).toBe("");
+    expect(button("run").disabled).toBe(false);
+    await act(async () => release());
+    await click(button("cancel"));
+    expect(await second!).toBe(false);
+  });
+
+  it("ends an open question as cancelled when its owner unmounts", async () => {
+    const { answer } = await ask(secretError());
+    expect(dialog()).not.toBeNull();
+    await act(async () => root!.unmount());
+    root = undefined;
+    expect(await answer).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it("does not ask when the error names another connection", async () => {
+    const other = new RpcCallError({
+      code: 3101,
+      message: "db connection `other` needs its password",
+      data: {
+        connectionId: "other",
+        key: "password",
+        reason: "missing",
+        target: TARGET,
+        previous: null,
+      } as never,
+    });
+    expect(await (await ask(other)).answer).toBe(false);
+    expect(dialog()).toBeNull();
+    expect(dbAccessOf(other, "pg")).toBeUndefined();
+    expect(dbAccessOf(other)).toBeDefined();
+    expect(dbAccessOf(secretError(), "pg")?.kind).toBe("secret");
+  });
 });
 
 function cases0(): DbApprovalRequest {
