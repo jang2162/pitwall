@@ -36,6 +36,8 @@ const PICTOGRAPHIC = /^\p{Extended_Pictographic}$/u;
 const ZWJ = 0x200d;
 const VS15 = 0xfe0e;
 const VS16 = 0xfe0f;
+/** U+20E3 COMBINING ENCLOSING KEYCAP. */
+const KEYCAP = 0x20e3;
 
 const isPictographic = (cp: number | undefined) =>
   cp !== undefined && PICTOGRAPHIC.test(String.fromCodePoint(cp));
@@ -57,7 +59,8 @@ function before(s: string, at: number): { cp: number; start: number } | undefine
 
 /**
  * 이모지를 이루는 보이지 않는 글자인가 — 데이터 도구에서 흔한 값(이름 · 채팅 글)의 이모지를 표지로 깨지 않는다(메인 판정).
- * - 이형 선택자 U+FE0E · FE0F: 바로 앞이 Extended_Pictographic 이거나 키캡 바탕(`0-9 # *`)일 때(`❤️` · `1️⃣`).
+ * - 이형 선택자 U+FE0E · FE0F: 바로 앞이 Extended_Pictographic 일 때(`❤️`). 키캡 바탕(`0-9 # *`) 뒤의 FE0F 는 바로 다음이
+ *   U+20E3 일 때만(`1️⃣`) — 그렇지 않으면 숫자 하나로 그려져 `user:1️` 이 `user:1` 과 같아 보인다. 키캡 바탕 뒤의 FE0E 는 표지.
  * - ZWJ: Extended_Pictographic 두 글자 사이일 때(`👨‍👩‍👧`). 앞 글자 뒤의 FE0F · 피부색 수식은 건너뛰고 본다(`❤️‍🔥` · `👩🏽‍💻`).
  * 지역 표시 글자(🇰🇷) · 피부색 수식(🏽)은 보이는 글자라 처음부터 고르지 않는다. 그 밖의 ZWJ · 이형 선택자는 표지다.
  */
@@ -65,7 +68,8 @@ function isEmojiPart(s: string, c: string, at: number): boolean {
   const cp = c.codePointAt(0)!;
   if (cp === VS15 || cp === VS16) {
     const prev = before(s, at)?.cp;
-    return isPictographic(prev) || isKeycapBase(prev);
+    if (isPictographic(prev)) return true;
+    return cp === VS16 && isKeycapBase(prev) && s.charCodeAt(at + 1) === KEYCAP;
   }
   if (cp !== ZWJ) return false;
   let prev = before(s, at);
@@ -73,10 +77,20 @@ function isEmojiPart(s: string, c: string, at: number): boolean {
   return isPictographic(prev?.cp) && isPictographic(s.codePointAt(at + c.length));
 }
 
+export interface ShowInvisibleOptions {
+  /**
+   * 이모지를 이루는 ZWJ · 이형 선택자를 그대로 둔다(기본 `true` — 셀 · 셀 상세가 이름 · 채팅 글을 읽기 좋게). 위험 확인
+   * 다이얼로그는 `false` 다 — 서버에 갈 것을 확인하는 마지막 자리라 그림이 바뀌지 않는 선택자(`©︎`), 합자가 없는 ZWJ(`🍎‍🍌`)로
+   * 같아 보이는 다른 키도 드러낸다.
+   */
+  keepEmoji?: boolean;
+}
+
 /** 보이지 않는 제어 · 방향 · 0폭 문자를 `⟨U+XXXX⟩` 로 보인다(셀 · 셀 상세의 글 보기). 보조 평면 글자는 다섯 자리 이상이다. */
-export function showInvisible(s: string): string {
+export function showInvisible(s: string, options: ShowInvisibleOptions = {}): string {
+  const keepEmoji = options.keepEmoji ?? true;
   return s.replace(INVISIBLE, (c, at: number) =>
-    isEmojiPart(s, c, at)
+    keepEmoji && isEmojiPart(s, c, at)
       ? c
       : `⟨U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}⟩`,
   );

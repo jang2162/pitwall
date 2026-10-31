@@ -157,6 +157,7 @@ function statementText(sql: string | undefined, statement: DbStatementClass): st
   const text = sql.slice(statement.range.from, statement.range.to);
   return showInvisible(
     text.length > STATEMENT_TEXT_SHOWN ? `${text.slice(0, STATEMENT_TEXT_SHOWN)}…` : text,
+    { keepEmoji: false },
   );
 }
 
@@ -230,7 +231,7 @@ function StatementList({
 function KvArg({ arg, T }: { arg: KvKey; T: DbSafetyStrings }) {
   if (typeof arg === "string") {
     const cut = arg.length > STATEMENT_TEXT_SHOWN ? `${arg.slice(0, STATEMENT_TEXT_SHOWN)}…` : arg;
-    const text = showInvisible(cut);
+    const text = showInvisible(cut, { keepEmoji: false });
     return (
       <span
         data-testid="db-confirm-kv-arg"

@@ -118,6 +118,18 @@ describe("display", () => {
     expect(showInvisible("a\u200d😀")).toBe("a⟨U+200D⟩😀");
     // 이모지 옆이어도 방향 제어 · 태그 · 한글 채움 문자는 표지.
     expect(showInvisible("😀\u202e\u{e0067}\u3164")).toBe("😀⟨U+202E⟩⟨U+E0067⟩⟨U+3164⟩");
+    // 재리뷰 F2: 키캡 바탕 뒤의 선택자는 U+20E3 앞의 FE0F 만 이모지다 — `user:1️` 이 `user:1` 로 보이지 않는다.
+    expect(showInvisible("user:1\ufe0f")).toBe("user:1⟨U+FE0F⟩");
+    expect(showInvisible("1\ufe0e")).toBe("1⟨U+FE0E⟩");
+    expect(showInvisible("tag:#\ufe0f")).toBe("tag:#⟨U+FE0F⟩");
+    expect(showInvisible("1\ufe0e\u20e3")).toBe("1⟨U+FE0E⟩\u20e3");
+    expect(showInvisible("1\ufe0f\u20e3 *\ufe0f\u20e3")).toBe("1\ufe0f\u20e3 *\ufe0f\u20e3");
+    // 재리뷰 F3: `keepEmoji: false`(위험 확인 다이얼로그)는 이모지 자리도 표지로 — 그리기만 바꾸는 선택자 · 합자 없는 ZWJ 도 드러난다.
+    expect(showInvisible("👨\u200d👩 ❤\ufe0f ©\ufe0e 1\ufe0f\u20e3", { keepEmoji: false })).toBe(
+      "👨⟨U+200D⟩👩 ❤⟨U+FE0F⟩ ©⟨U+FE0E⟩ 1⟨U+FE0F⟩\u20e3",
+    );
+    // 기본은 그리드 동작 그대로.
+    expect(showInvisible("👨\u200d👩 ❤\ufe0f")).toBe("👨\u200d👩 ❤\ufe0f");
     // 셀 한 칸에도: 태그로 숨긴 글 「hi」 가 보인다.
     expect(displayText({ text: "ok\u{e0068}\u{e0069}" })).toBe("ok⟨U+E0068⟩⟨U+E0069⟩");
   });

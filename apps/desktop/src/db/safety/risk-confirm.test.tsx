@@ -540,16 +540,28 @@ describe("RiskConfirmDialog for a Redis command", () => {
     );
   });
 
-  it("keeps emoji sequences in arguments as they are, without the mark", async () => {
-    await show({ kv: kv({ argv: ["SET", "user:👨‍👩‍👧", "❤️ 🇰🇷 👍🏽", "a\u200db"] }), connection: DEV });
+  // 재리뷰 F3: 다이얼로그는 이모지 예외 없이 모두 표지로 — 서버에 갈 것을 확인하는 마지막 자리다(그리드만 예외).
+  it("marks joiners and selectors even inside emoji, and a digit's selector", async () => {
+    await show({
+      kv: kv({
+        argv: [
+          "SET",
+          "user:\u{1f468}\u200d\u{1f469}",
+          "\u2764\ufe0f \u{1f1f0}\u{1f1f7}",
+          "user:1\ufe0f",
+        ],
+      }),
+      connection: DEV,
+    });
     const args = [...document.querySelectorAll<HTMLElement>("[data-testid=db-confirm-kv-arg]")];
     expect(args.map((a) => a.textContent)).toEqual([
       '"SET"',
-      '"user:👨‍👩‍👧"',
-      '"❤️ 🇰🇷 👍🏽"',
-      `"a⟨U+200D⟩b"${T.confirm.kv.invisible}`,
+      `"user:\u{1f468}⟨U+200D⟩\u{1f469}"${T.confirm.kv.invisible}`,
+      // 국기(지역 표시 글자)는 보이는 글자라 그대로.
+      `"\u2764⟨U+FE0F⟩ \u{1f1f0}\u{1f1f7}"${T.confirm.kv.invisible}`,
+      `"user:1⟨U+FE0F⟩"${T.confirm.kv.invisible}`,
     ]);
-    expect(args.map((a) => a.dataset.invisible)).toEqual([undefined, undefined, undefined, "true"]);
+    expect(args.map((a) => a.dataset.invisible)).toEqual([undefined, "true", "true", "true"]);
   });
 
   it("shows the note and cuts a long argument list with a count", async () => {
