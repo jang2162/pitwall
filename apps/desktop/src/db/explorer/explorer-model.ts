@@ -429,6 +429,42 @@ export class ExplorerModel {
     await this.load(id, true);
   }
 
+  /**
+   * 객체를 트리에서 찾아 고른다(Search Everywhere 의 「DB 객체」 탭 — M3-20). 연결돼 있지 않은 연결(이 창이 아직 열지 않았거나
+   * 끊김 · 설정 바뀜)이면 펼치지 않고 그 연결 행만 고른다 — 연결은 사람이 누를 때만 연다(결정 M3-D13). 연결돼 있으면 DB → 스키마
+   * → 「테이블」 · 「뷰」 → 객체 차례로 펼치며 내려간다: 이미 읽은 자식은 다시 읽지 않고, 아직 읽지 않은 조상은 사람이 펼친 것과
+   * 같은 조회로 읽는다. 찾지 못하면(다음 쪽 · 걸린 필터 · 그새 사라짐) 거기까지 내려간 노드를 고른다. 고른 노드의 id.
+   */
+  async reveal(connectionId: string, object: ObjectRef, kind: BrowsedKind): Promise<string> {
+    let at = this.connectionNode(connectionId);
+    if (!this.canBrowse(connectionId) || this.statusOf(connectionId).kind !== "connected") {
+      this.select(at.id);
+      return at.id;
+    }
+    const matches = (node: ExplorerNode | undefined): boolean => {
+      switch (node?.kind) {
+        case "database":
+          return node.database === object.database;
+        case "schema":
+          return node.schema === object.schema;
+        case "group":
+          return node.objectKind === kind;
+        case "object":
+          return node.objectKind === kind && node.object.name === object.name;
+        default:
+          return false;
+      }
+    };
+    while (at.kind !== "object") {
+      await this.expand(at.id);
+      const next = (this.kids.get(at.id)?.ids ?? []).map((id) => this.nodes.get(id)).find(matches);
+      if (!next) break;
+      at = next;
+    }
+    this.select(at.id);
+    return at.id;
+  }
+
   /** 우클릭 「연결」: 연결 행을 펼쳐 읽는다(이미 연결돼 있으면 펼치기만). */
   async connect(connectionId: string): Promise<void> {
     await this.expand(this.connectionNode(connectionId).id);

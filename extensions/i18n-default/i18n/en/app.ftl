@@ -51,10 +51,12 @@ search-tab-files = Files
 search-tab-actions = Actions
 search-tab-projects = Projects
 search-tab-branches = Branches
-search-placeholder-all = Files, actions, projects, branches
+search-tab-db-objects = DB Objects
+search-placeholder-all = Files, actions, projects, branches, DB objects
 search-placeholder-files = File name, or name:line to go to the line
 search-placeholder-projects = Project name
 search-placeholder-branches = Branch or tag name
+search-placeholder-db-objects = Table or view name (only those the explorer has read)
 search-placeholder-recent-files = File name
 search-empty = Nothing found
 search-more = More
@@ -69,6 +71,13 @@ search-files-truncated = { $shown } of { $matched }
 search-files-at-line = line { $line }
 search-recent-badge = recent
 search-current-project = this window
+search-db-table = table
+search-db-view = view
+# $key: ⌘↩ or Ctrl+Enter
+search-db-open-data = { $key } data
+search-db-none = No cached names yet. Expand a connection in the Database Explorer and its names show up here
+search-db-untrusted = DB objects are hidden in a project you have not trusted
+search-db-truncated = Too many cached names, searching only the first part
 
 ## Settings window: Appearance, and "External Tools > Open Pitwall from Orca" (docs/design/04-features.md F8-6). The keys are mapped in apps/desktop/src/settings/strings.ts.
 

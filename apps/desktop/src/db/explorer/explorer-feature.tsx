@@ -5,7 +5,8 @@
 //   「설정 바뀜」 으로 둔다(저절로 다시 붙지 않는다 — 결정 M3-D13). 신뢰가 바뀌면(Host 범위 `project.changed` 의 `kind: trust` —
 //   `projectId` 는 신뢰의 주인이라 워크트리 프로젝트와 다를 수 있어 id 는 보지 않는다) 목록을 다시 읽는다. 연결은 열지 않는다.
 // - 툴 윈도우가 처음 보일 때 올린다(보이지 않는 동안 목록을 읽지 않는다). 연결은 사람이 펼치거나 「연결」 을 누를 때만 연다.
-// - 액션 `db.explorer.ddl`(`⌘B`)은 고른 행이 테이블 · 뷰일 때만 켜진다.
+// - 액션 `db.explorer.ddl`(`⌘B`)은 고른 행이 테이블 · 뷰일 때만 켜진다. `db.explorer.reveal`(인자 `{ connectionId, object, kind }`)은
+//   그 객체를 트리에서 골라 포커스를 둔다(Search Everywhere 의 「DB 객체」 탭, M3-20 — `ExplorerModel.reveal`).
 
 import type { Action } from "@pitwall/keymap";
 import type { ObjectRef } from "@pitwall/rpc-client";
@@ -23,7 +24,7 @@ import { useDbAccessPrompt } from "../safety/access-prompt";
 import { DbExplorerView, type ExplorerOps } from "./db-explorer";
 import { openDdlDocument } from "./ddl-document";
 import { EXPLORER_ACTIONS } from "./explorer-actions";
-import { ExplorerModel, shapeOf } from "./explorer-model";
+import { type BrowsedKind, ExplorerModel, shapeOf } from "./explorer-model";
 import { type DbExplorerStrings, useDbExplorerStrings } from "./strings";
 
 /** `db.schemaChanged`(crates/pw-db/src/schema.rs `TOPIC_SCHEMA_CHANGED`). */
@@ -172,8 +173,21 @@ function DbExplorerPanel() {
   );
 
   useSyncExternalStore(model?.subscribe ?? noop, model?.getVersion ?? zero);
+  // 고른 행으로 스크롤하고 트리에 포커스를 두라는 요청(`db.explorer.reveal`).
+  const [focusRequest, setFocusRequest] = useState(0);
   const actions = useMemo(
-    () => (model ? explorerActions({ strings: T, model, openDdl: ops.openDdl }) : []),
+    () =>
+      model
+        ? explorerActions({
+            strings: T,
+            model,
+            openDdl: ops.openDdl,
+            reveal: async (target) => {
+              await model.reveal(target.connectionId, target.object, target.kind);
+              setFocusRequest((n) => n + 1);
+            },
+          })
+        : [],
     [model, ops, T],
   );
   useRegisterActions(actions);
@@ -181,7 +195,7 @@ function DbExplorerPanel() {
   if (!model) return null;
   return (
     <>
-      <DbExplorerView model={model} registry={registry} ops={ops} />
+      <DbExplorerView model={model} registry={registry} ops={ops} focusRequest={focusRequest} />
       {dialogs.element}
       {access.element}
     </>
@@ -191,17 +205,48 @@ function DbExplorerPanel() {
 const noop = () => () => {};
 const zero = () => 0;
 
-/** 탐색기가 등록하는 액션. */
+/** `db.explorer.reveal` 의 인자. */
+export interface RevealTarget {
+  connectionId: string;
+  object: ObjectRef;
+  kind: BrowsedKind;
+}
+
+/** 인자가 `RevealTarget` 꼴인가(다른 기능이 레지스트리로 넘긴 값이다). */
+function revealTarget(args: unknown): RevealTarget | undefined {
+  const a = args as Partial<RevealTarget> | null | undefined;
+  if (typeof a?.connectionId !== "string" || (a.kind !== "table" && a.kind !== "view"))
+    return undefined;
+  if (typeof a.object?.name !== "string") return undefined;
+  return a as RevealTarget;
+}
+
+/** 탐색기가 등록하는 액션. `reveal` 이 없으면 `db.explorer.reveal` 을 등록하지 않는다. */
 export function explorerActions({
   strings,
   model,
   openDdl,
+  reveal,
 }: {
   strings: Pick<DbExplorerStrings, "menu">;
   model: Pick<ExplorerModel, "selected" | "node">;
   openDdl: OpenDdl;
+  reveal?: (target: RevealTarget) => Promise<void>;
 }): Action[] {
   return [
+    ...(reveal
+      ? [
+          {
+            id: EXPLORER_ACTIONS.reveal,
+            label: strings.menu.reveal,
+            args: true,
+            run: (args: unknown) => {
+              const target = revealTarget(args);
+              return target ? reveal(target) : undefined;
+            },
+          } satisfies Action,
+        ]
+      : []),
     {
       id: EXPLORER_ACTIONS.ddl,
       label: strings.menu.ddl,

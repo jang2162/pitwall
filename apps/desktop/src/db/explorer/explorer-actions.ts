@@ -19,6 +19,11 @@ export const EXTERNAL_ACTIONS = {
 export const EXPLORER_ACTIONS = {
   /** `⌘B` — 고른 테이블 · 뷰의 DDL(읽기 전용 SQL 문서). 탐색기에 포커스가 있을 때(`dbExplorerFocus`). */
   ddl: "db.explorer.ddl",
+  /**
+   * 객체를 탐색기에서 찾아 고르고 포커스를 둔다 — `{ connectionId, object: ObjectRef, kind: "table" | "view" }`, 키 없음. Search
+   * Everywhere 의 「DB 객체」 탭(M3-20)이 툴 윈도우를 띄운 뒤 부른다.
+   */
+  reveal: "db.explorer.reveal",
 } as const;
 
 /** 탐색기 트리의 키맵 컨텍스트 키(`data-keymap-context`). */

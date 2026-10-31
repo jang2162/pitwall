@@ -28,7 +28,7 @@ import { act, endTest, it } from "../../test-support/ended-test";
 import { tokenCssVar } from "../../theme/tokens";
 import { DbExplorerView, FILTER_DELAY_MS, type ExplorerOps } from "./db-explorer";
 import { DRAG_THRESHOLD } from "./explorer-drag";
-import { followExplorerEvents } from "./explorer-feature";
+import { explorerActions, followExplorerEvents } from "./explorer-feature";
 import { type ExplorerCalls, ExplorerModel, shapeOf } from "./explorer-model";
 import { type DbAccessPrompt, useDbAccessPrompt } from "../safety/access-prompt";
 
@@ -997,4 +997,73 @@ it("takes the tree levels from the drivers' capability flags", async () => {
   expect(called("db.schema.databases")).toEqual([]);
   expect(called("db.schema.schemas").map((c) => c.params.database)).toEqual([null]);
   expect(rowsOf("schema")).toEqual(["public", "sales"]);
+});
+
+// Search Everywhere 의 「DB 객체」 탭이 고른 객체를 탐색기에서 고른다(M3-20 — `ExplorerModel.reveal`, 액션 `db.explorer.reveal`).
+it("reveals an object of a connection it has not connected by selecting only the connection row", async () => {
+  await mount();
+  const before = host.calls.length;
+  const id = await act(async () =>
+    model.reveal("pg", { database: "billing", schema: "public", name: "t00001" }, "table"),
+  );
+  await settle();
+  expect(host.calls.slice(before)).toEqual([]);
+  expect(model.node(id)?.kind).toBe("connection");
+  expect(row("connection", "pg")?.getAttribute("aria-selected")).toBe("true");
+});
+
+it("reveals an object of a connected connection, reading only the levels not read yet", async () => {
+  await mount();
+  await act(async () => model.connect("pg"));
+  await settle();
+  const before = host.calls.length;
+  const target = { database: "billing", schema: "sales", name: "v00001" };
+  const id = await act(async () => model.reveal("pg", target, "view"));
+  await settle();
+  // 연결 → DB(이미 읽음) → 스키마 목록 → 「뷰」 묶음 → 객체 목록까지 처음 읽는 것만.
+  expect(host.calls.slice(before).map((c) => c.method)).toEqual([
+    "db.schema.schemas",
+    "db.schema.objects",
+  ]);
+  const node = model.node(id);
+  expect(node?.kind === "object" && node.object.name).toBe("v00001");
+  expect(row("object", "v00001")?.getAttribute("aria-selected")).toBe("true");
+
+  // 다시 고르면 이미 읽은 것만 지난다 — 조회가 없다.
+  const again = host.calls.length;
+  await act(async () =>
+    model.reveal("pg", { database: "billing", schema: "public", name: "nope" }, "table"),
+  );
+  await settle();
+  expect(host.calls.slice(again).map((c) => c.method)).toEqual(["db.schema.objects"]);
+  // 없는 이름이면 내려간 데까지(「테이블」 묶음)를 고른다.
+  expect(model.node(model.selected()!)?.kind).toBe("group");
+});
+
+it("registers db.explorer.reveal as an action that needs its target", async () => {
+  const reveal = vi.fn(async () => {});
+  const actions = explorerActions({
+    strings: { menu: { reveal: "reveal" } as never },
+    model: { selected: () => undefined, node: () => undefined },
+    openDdl: () => {},
+    reveal,
+  });
+  const action = actions.find((a) => a.id === "db.explorer.reveal")!;
+  expect(action.args).toBe(true);
+  const target = {
+    connectionId: "pg",
+    object: { database: null, schema: null, name: "t" },
+    kind: "table",
+  };
+  await action.run(target);
+  await action.run({ connectionId: "pg", kind: "sequence", object: { name: "s" } });
+  await action.run(undefined);
+  expect(reveal.mock.calls).toEqual([[target]]);
+  expect(
+    explorerActions({
+      strings: { menu: {} as never },
+      model: { selected: () => undefined, node: () => undefined },
+      openDdl: () => {},
+    }).map((a) => a.id),
+  ).toEqual(["db.explorer.ddl"]);
 });

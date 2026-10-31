@@ -65,6 +65,7 @@ db-explorer-partial = 부분
 
 db-explorer-menu-new-console = 새 콘솔
 db-explorer-menu-ddl = DDL 보기
+db-explorer-menu-reveal = DB 탐색기에서 선택
 db-explorer-menu-row-count = 행 수
 db-explorer-menu-copy-name = 이름 복사
 db-explorer-menu-table-data = 테이블 데이터 열기

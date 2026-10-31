@@ -65,6 +65,7 @@ db-explorer-partial = Partial
 
 db-explorer-menu-new-console = New Console
 db-explorer-menu-ddl = Show DDL
+db-explorer-menu-reveal = Select in Database Explorer
 db-explorer-menu-row-count = Row Count
 db-explorer-menu-copy-name = Copy Name
 db-explorer-menu-table-data = Open Table Data

@@ -63,6 +63,8 @@ export function dbExplorerStrings(t: Translate) {
     menu: {
       newConsole: t("db-explorer-menu-new-console"),
       ddl: t("db-explorer-menu-ddl"),
+      /** `db.explorer.reveal` 의 이름(인자가 있어야 도는 액션이라 액션 찾기에는 보이지 않는다). */
+      reveal: t("db-explorer-menu-reveal"),
       rowCount: t("db-explorer-menu-row-count"),
       copyName: t("db-explorer-menu-copy-name"),
       tableData: t("db-explorer-menu-table-data"),

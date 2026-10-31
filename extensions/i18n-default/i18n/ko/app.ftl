@@ -51,10 +51,12 @@ search-tab-files = 파일
 search-tab-actions = 액션
 search-tab-projects = 프로젝트
 search-tab-branches = 브랜치
-search-placeholder-all = 파일 · 액션 · 프로젝트 · 브랜치
+search-tab-db-objects = DB 객체
+search-placeholder-all = 파일 · 액션 · 프로젝트 · 브랜치 · DB 객체
 search-placeholder-files = 파일 이름 — 「이름:줄」 이면 그 줄로
 search-placeholder-projects = 프로젝트 이름
 search-placeholder-branches = 브랜치 · 태그 이름
+search-placeholder-db-objects = 테이블 · 뷰 이름(탐색기에서 읽은 것만)
 search-placeholder-recent-files = 파일 이름
 search-empty = 맞는 것이 없다
 search-more = 더 보기
@@ -69,6 +71,13 @@ search-files-truncated = { $matched }개 중 { $shown }개
 search-files-at-line = { $line }줄
 search-recent-badge = 최근
 search-current-project = 이 창
+search-db-table = 테이블
+search-db-view = 뷰
+# $key: ⌘↩ · Ctrl+Enter
+search-db-open-data = { $key } 데이터
+search-db-none = 캐시된 이름이 없다 — DB 탐색기에서 연결을 펼치면 그 이름이 여기에 보인다
+search-db-untrusted = 신뢰하지 않은 프로젝트라 DB 객체를 보이지 않는다
+search-db-truncated = 캐시된 이름이 많아 앞부분만 찾는다
 
 ## 설정 창의 외관과 「외부 도구 > Orca 에서 Pitwall 열기」(docs/design/04-features.md F8-6). 키는 apps/desktop/src/settings/strings.ts 가 잇는다.
 

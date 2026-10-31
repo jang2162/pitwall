@@ -43,12 +43,14 @@ export function appStrings(t: Translate) {
         actions: t("search-tab-actions"),
         projects: t("search-tab-projects"),
         branches: t("search-tab-branches"),
+        dbObjects: t("search-tab-db-objects"),
       },
       placeholder: {
         all: t("search-placeholder-all"),
         files: t("search-placeholder-files"),
         projects: t("search-placeholder-projects"),
         branches: t("search-placeholder-branches"),
+        dbObjects: t("search-placeholder-db-objects"),
         recentFiles: t("search-placeholder-recent-files"),
       },
       empty: t("search-empty"),
@@ -57,6 +59,15 @@ export function appStrings(t: Translate) {
       searching: t("search-files-searching"),
       busy: t("search-files-busy"),
       failed: (message: string) => t("search-failed", { message }),
+      /** DB 객체 탭(M3-20 — 캐시된 테이블 · 뷰 이름). */
+      db: {
+        table: t("search-db-table"),
+        view: t("search-db-view"),
+        openData: (key: string) => t("search-db-open-data", { key }),
+        none: t("search-db-none"),
+        untrusted: t("search-db-untrusted"),
+        truncated: t("search-db-truncated"),
+      },
       /** 상한을 넘어 일부만 보일 때. */
       truncated: (shown: number, matched: number) =>
         t("search-files-truncated", { shown, matched }),
