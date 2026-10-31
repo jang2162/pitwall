@@ -192,6 +192,79 @@ jobs:
       # Linguist samples(고정 커밋)를 GitHub 에서 받아 pw-lang 의 일치율이 하한 이상인지 본다. PR 을 막는다.
       - run: mise run lang-samples
 
+  # 실 DB 시험(14-m3-plan.md M3-01 · 결정 M3-D16). 서비스 컨테이너는 Linux 러너에서만 돌고 행렬 잡에는 `services:` 를 걸 수
+  # 없어 ubuntu 잡을 따로 둔다. DB 마다 단계 하나 — scripts/db-live.mjs 가 그 DB 의 live 시험만 release 로 돌리고, 필터가 0개를
+  # 고르거나 준비 확인 시험(live_<db>_ready)을 뺀 수가 하한(scripts/db-live.toml) 아래면 실패한다. 이 잡에서 어느 DB 든 「0개면
+  # 실패」 를 지우는 변경은 리뷰에서 거절한다(14 「공유 부품의 주인」). 병합을 막으려면 저장소 설정에서 필수 검사로 둔다.
+  # 서비스 이미지는 판과 digest 로 고정한다(배포물이 아니라 라이선스는 따지지 않는다). Redis 는 7.2 줄이다 — 서버 라이선스가
+  # 7.4 부터 RSALv2/SSPLv1(8.0 부터 AGPLv3 선택)로 바뀌었고 7.2.x 는 BSD-3-Clause 다. 판을 올리면 이 주석도 고친다.
+  # 서비스 준비는 각 단계의 준비 확인 시험이 120 s 까지 기다린다(health-cmd 를 두지 않는다).
+  db-live:
+    name: db-live
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # mise run 은 기본으로 mise.toml 의 빠진 도구를 전부 설치한다. 아래 install_args 로 고른 것만 쓰게 끈다.
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      NEXTEST_PROFILE: ci
+      PW_TEST_PG_URL: postgres://pitwall:pitwall@127.0.0.1:5432/pitwall
+      PW_TEST_MYSQL_URL: mysql://root:pitwall@127.0.0.1:3306/pitwall
+      PW_TEST_MARIADB_URL: mysql://root:pitwall@127.0.0.1:3307/pitwall
+      PW_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+    services:
+      postgres:
+        image: postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929
+        env:
+          POSTGRES_USER: pitwall
+          POSTGRES_PASSWORD: pitwall
+          POSTGRES_DB: pitwall
+        ports:
+          - 5432:5432
+      mysql:
+        image: mysql:8.4.6@sha256:869218921e61d6c3c89820955d63cca42971f0e3e6c1e2792247bbd944ebc6e9
+        env:
+          MYSQL_ROOT_PASSWORD: pitwall
+          MYSQL_DATABASE: pitwall
+        ports:
+          - 3306:3306
+      mariadb:
+        image: mariadb:11.8.3@sha256:ae6119716edac6998ae85508431b3d2e666530ddf4e94c61a10710caec9b0f71
+        env:
+          MARIADB_ROOT_PASSWORD: pitwall
+          MARIADB_DATABASE: pitwall
+        ports:
+          - 3307:3306
+      redis:
+        image: redis:7.2.10@sha256:8cd70b529aec2af55a072917098c1ae6f1d9eb975ac1cf36928c7d5af7574f08
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          # 스크립트(node) · 빌드(rust) · 시험(nextest)만 쓴다. pnpm 의존성은 설치하지 않는다.
+          install_args: node rust aqua:nextest-rs/nextest/cargo-nextest
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # `--ci`: URL 이 없으면 건너뛰지 않고 실패한다. 단계마다 고른 · 돈 · 센 시험 수를 출력한다. 한 DB 가 실패해도 나머지
+      # DB 의 단계는 돈다(`!cancelled()`) — 판정은 DB 마다 따로다.
+      - name: live pg
+        if: ${{ !cancelled() }}
+        run: mise run test-db -- --ci pg
+      - name: live mysql
+        if: ${{ !cancelled() }}
+        run: mise run test-db -- --ci mysql
+      - name: live mariadb
+        if: ${{ !cancelled() }}
+        run: mise run test-db -- --ci mariadb
+      - name: live redis
+        if: ${{ !cancelled() }}
+        run: mise run test-db -- --ci redis
+
   advisories:
     name: advisories
     runs-on: ubuntu-latest

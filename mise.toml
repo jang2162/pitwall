@@ -44,7 +44,16 @@ run = [
   "pnpm -r --if-present run test",
   # 실기 측정 스크립트(scripts/perf-m2.mjs)의 종료 코드 · 복사 이름 · 덮어쓰기 · 잠금 확인 — 가짜 mise 로 앱 없이 돈다.
   "node --test scripts/perf-m2.test.mjs",
+  # 실 DB 시험 실행 개수 검사(scripts/db-live.mjs)의 판정 — 실 DB 없이 돈다.
+  "node --test scripts/db-live.test.mjs",
 ]
+
+# 실 DB 시험(live_*)을 DB 마다 따로 돌리고 실행 개수를 하한(scripts/db-live.toml)과 견준다 — CI 의 `db-live` 잡과 같은 명령이다.
+# URL(PW_TEST_PG_URL · PW_TEST_MYSQL_URL · PW_TEST_MARIADB_URL · PW_TEST_REDIS_URL)이 없는 DB 는 건너뛰고 그렇게 알린다 — 통과로
+# 세지 않는다. 인자로 DB 를 고른다 — 예: `mise run test-db -- pg redis`.
+[tasks.test-db]
+description = "실 DB 시험(PG · MySQL · MariaDB · Redis)을 DB 마다 돌리고 실행 개수 하한 검사(URL 이 없는 DB 는 건너뜀)"
+run = "node scripts/db-live.mjs"
 
 # 「release 빌드에서만 판정」하는 시험을 모아 돈다 — 기본 `test` 는 debug 라 시간 상한(검색 취소 100 ms · `fs.list` 1만 개 100 ms ·
 # 구문 강조 16 ms)을 판정하지 않는다. `--run-ignored all` 은 release 전용 `#[ignore]` 시험도 포함한다. 벽시계를 재므로 `-j 1`,

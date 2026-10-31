@@ -22,22 +22,23 @@ mise trust && mise install && pnpm install
 
 모두 저장소 루트에서 실행한다. 태스크 목록은 `mise tasks`.
 
-| 하려는 일                                                                                                        | 명령                    |
-| ---------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                                          | `mise run build`        |
-| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                                                     | `mise run dev`          |
-| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                                             | `mise run test`         |
-| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                                       | `mise run lint`         |
-| 포맷 적용                                                                                                        | `mise run fmt`          |
-| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                                         | `mise run gen`          |
-| 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부                        | `mise run licenses`     |
-| `THIRD_PARTY_NOTICES.md` 다시 만들기                                                                             | `mise run notices`      |
-| Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                                                   | `mise run advisories`   |
-| Linguist `samples/` 일치율 시험(samples 를 GitHub 에서 받는다, 아래 「Linguist 데이터」)                         | `mise run lang-samples` |
-| 내장 언어 확장의 강조 쿼리 · 넣은 문법 파일 다시 만들기(소스를 GitHub 에서 받는다, 아래 「tree-sitter 문법」)    | `mise run grammars`     |
-| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)                             | `mise run perf`         |
-| 데스크톱 앱 release 번들의 git 시나리오 측정(macOS, 아래 「성능 기준선」 의 「git 시나리오」)                    | `mise run perf-git`     |
-| M2-22 실기 측정 한 번에(`perf-git` + git 저장소 프로젝트의 콜드 스타트 · 유휴 메모리, 결과를 보고서 폴더로 복사) | `mise run perf-m2`      |
+| 하려는 일                                                                                                          | 명령                    |
+| ------------------------------------------------------------------------------------------------------------------ | ----------------------- |
+| Rust 워크스페이스 빌드 + TS 패키지 빌드                                                                            | `mise run build`        |
+| 데스크톱 앱 개발 모드 실행(워크트리마다 다른 개발 서버 포트)                                                       | `mise run dev`          |
+| 전체 테스트(Rust nextest + Rust doctest + TS Vitest)                                                               | `mise run test`         |
+| 전체 검사(rustfmt·clippy·oxfmt·oxlint·tsc·actionlint·RPC 생성물 최신 여부)                                         | `mise run lint`         |
+| 포맷 적용                                                                                                          | `mise run fmt`          |
+| RPC 선언에서 TS 타입·JSON Schema·클라이언트 테스트 고정 입력 다시 만들기                                           | `mise run gen`          |
+| 라이선스 검사(cargo-deny licenses·bans·sources, npm) + `THIRD_PARTY_NOTICES.md` 최신 여부                          | `mise run licenses`     |
+| `THIRD_PARTY_NOTICES.md` 다시 만들기                                                                               | `mise run notices`      |
+| Rust 취약점·관리 중단 공지 검사(네트워크 필요)                                                                     | `mise run advisories`   |
+| 실 DB 시험(PG · MySQL · MariaDB · Redis, `PW_TEST_*_URL` 이 있는 DB 만) + 실행 개수 하한 검사(아래 「실 DB 시험」) | `mise run test-db`      |
+| Linguist `samples/` 일치율 시험(samples 를 GitHub 에서 받는다, 아래 「Linguist 데이터」)                           | `mise run lang-samples` |
+| 내장 언어 확장의 강조 쿼리 · 넣은 문법 파일 다시 만들기(소스를 GitHub 에서 받는다, 아래 「tree-sitter 문법」)      | `mise run grammars`     |
+| 데스크톱 앱 release 번들의 콜드 스타트·유휴 메모리 측정(macOS, 아래 「성능 기준선」)                               | `mise run perf`         |
+| 데스크톱 앱 release 번들의 git 시나리오 측정(macOS, 아래 「성능 기준선」 의 「git 시나리오」)                      | `mise run perf-git`     |
+| M2-22 실기 측정 한 번에(`perf-git` + git 저장소 프로젝트의 콜드 스타트 · 유휴 메모리, 결과를 보고서 폴더로 복사)   | `mise run perf-m2`      |
 
 하위 단위만 돌릴 때:
 
@@ -58,6 +59,8 @@ cargo run --release -p pw-git --features test-support --example blame_timing -- 
 PW_BLAME_SEEDS=200 cargo nextest run -p pw-git -E 'test(/random_histories/)'   # blame 두 엔진 · 파일 히스토리를 무작위 이력 200개에서 git 과 대조하는 긴 판(기본 시험은 8개, `crates/pw-git/src/testing/blame.rs`)
 mise run test-release   # 위 release 판정 시험(검색 취소 100 ms · `fs.list` 1만 개 · 구문 강조 16 ms · git 감시 이벤트 500 ms · 터미널 체크아웃 → 상태바 브랜치의 `git.refs` 500 ms)을 한 번에 — CI 의 「release timing tests」 단계와 같은 명령이다. 9개를 돌린다(0개면 실패)
 ```
+
+**실 DB 시험**(`live_*`, 14-m3-plan.md 결정 M3-D16)은 URL 환경 변수가 있을 때만 목록에 생긴다 — 없으면 건너뛰는 것이 아니라 그 시험이 없다(`crates/pw-db-driver/live_cfg.rs`). `PW_TEST_PG_URL` · `PW_TEST_MYSQL_URL` · `PW_TEST_MARIADB_URL` · `PW_TEST_REDIS_URL` 을 주고 `mise run test-db`(인자로 DB 를 고른다 — `mise run test-db -- pg`)를 돌리면 CI 의 `db-live` 잡과 같은 명령이 돈다. URL 이 없는 DB 는 `SKIP … not counted as passed` 로 끝에 나온다 — 그 DB 는 통과가 아니다. 로컬 서버는 컨테이너로 띄운다(CI 와 같은 판은 `.github/workflows/ci.yml` 의 `db-live` 잡): `docker run -d --rm --name pw-pg -e POSTGRES_USER=pitwall -e POSTGRES_PASSWORD=pitwall -e POSTGRES_DB=pitwall -p 127.0.0.1:55432:5432 postgres:17.6` 뒤 `PW_TEST_PG_URL=postgres://pitwall:pitwall@127.0.0.1:55432/pitwall`. 시험을 다는 법(`#[cfg(pw_live_pg)]` · 이름 규칙)은 `crates/pw-db-driver/src/live.rs` 머리 주석, 하한은 `scripts/db-live.toml`.
 
 **테스트가 몇 개 실행됐는지 확인한다.** nextest 는 `Summary` 줄(`N test(s) run: N passed`), doctest 는 크레이트마다 `test result: ok. N passed` 줄, Vitest 는 `Tests  N passed` 줄에 나온다. 0개면 통과가 아니라 실행되지 않은 것이다.
 
@@ -216,13 +219,14 @@ MIT 프로젝트라 의존성은 허용형 라이선스만 쓴다(`docs/design/0
 
 `.github/workflows/ci.yml` 이 로컬과 같은 mise 태스크를 부른다. 도구 버전은 `mise.toml` 이 정본이다.
 
-| 잡                 | 언제                | 하는 일                                                                      | 실패하면                                         |
-| ------------------ | ------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------ |
-| `check`            | PR, main push       | macOS·Linux·Windows 에서 `mise run lint`, `mise run test`, npm 라이선스 검사 | PR 을 막는다                                     |
-| `licenses`         | PR, main push       | Linux 에서 `mise run licenses`                                               | PR 을 막는다                                     |
-| `advisories`       | PR, main push, 매일 | `mise run advisories`                                                        | PR 에서는 경고만, main push·매일 실행에서는 실패 |
-| `linguist-samples` | PR, main push       | Linux 에서 `mise run lang-samples`(Linguist samples 를 GitHub 에서 받는다)   | PR 을 막는다                                     |
-| `perf`             | PR, main push       | macOS 에서 `mise run perf`, 결과를 job summary · artifact(`perf-baseline`)로 | 막지 않는다(기록만, 「성능 기준선」)             |
+| 잡                 | 언제                | 하는 일                                                                                                                  | 실패하면                                         |
+| ------------------ | ------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| `check`            | PR, main push       | macOS·Linux·Windows 에서 `mise run lint`, `mise run test`, npm 라이선스 검사                                             | PR 을 막는다                                     |
+| `licenses`         | PR, main push       | Linux 에서 `mise run licenses`                                                                                           | PR 을 막는다                                     |
+| `advisories`       | PR, main push, 매일 | `mise run advisories`                                                                                                    | PR 에서는 경고만, main push·매일 실행에서는 실패 |
+| `linguist-samples` | PR, main push       | Linux 에서 `mise run lang-samples`(Linguist samples 를 GitHub 에서 받는다)                                               | PR 을 막는다                                     |
+| `db-live`          | PR, main push       | Linux 서비스 컨테이너(PG · MySQL · MariaDB · Redis)로 DB 마다 `mise run test-db -- --ci <db>` — 0개 · 하한 미달이면 실패 | PR 을 막는다(저장소 설정에서 필수 검사로 둘 때)  |
+| `perf`             | PR, main push       | macOS 에서 `mise run perf`, 결과를 job summary · artifact(`perf-baseline`)로                                             | 막지 않는다(기록만, 「성능 기준선」)             |
 
 ## 릴리스
 
