@@ -149,6 +149,7 @@ fn local_host(
         .methods(move |router| pw_git::watch::register(router, git_watch))
         .methods(pw_db_sql::split::register)
         .methods(pw_db_sql::literal::register)
+        .methods(pw_db_sql::kv_command::register)
         .methods(move |router| pw_db::config::register(router, db_connection_methods))
         .methods(move |router| pw_db::register(router, db_session_methods))
         .methods(|router| pw_db::registry::register(router, db::drivers()))

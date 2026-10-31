@@ -6357,6 +6357,70 @@
       ],
       "tier": "read"
     },
+    "db.kv.parseCommand": {
+      "description": "Redis 콘솔 한 줄을 argv 로 나눈다([`parse_command_argv`] — 따옴표 · `\\` 이스케이프 · `\\xHH` 바이트, 끝의 `;` 는 버린다).\n연결을 열지 않는 계산이다(분류 · 관문은 `db.kv.command` 가 한다). 나눌 수 없으면(닫히지 않은 따옴표 · 빈 명령 · 줄바꿈 ·\n상한 [`MAX_COMMAND_TEXT_BYTES`] 초과) `INVALID_PARAMS`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "text": {
+            "description": "명령 한 줄(redis-cli 와 같은 꼴). 줄바꿈은 받지 않는다 — 한 줄이 명령 하나다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "KvKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/KvKeyBytes"
+              }
+            ],
+            "description": "키. UTF-8 이면 문자열 그대로, 아니면 `{ \"hex\": \"0x…\" }`."
+          },
+          "KvKeyBytes": {
+            "properties": {
+              "hex": {
+                "description": "`0x` 로 시작하는 소문자 hex.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "hex"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "argv": {
+            "description": "명령 이름과 인자. UTF-8 이면 글, 아니면 `{ \"hex\": \"0x…\" }`(`\\xHH` 로 만든 바이트) — `db.kv.command` 는 글만 받으므로\n창은 hex 인자가 있으면 보내지 않고 그렇게 알린다(14-m3-plan M3-22 ⓔ).",
+            "items": {
+              "$ref": "#/$defs/KvKey"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "argv"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "db.kv.persist": {
       "description": "TTL 을 지운다(`PERSIST` 와 같은 등급 — 쓰기, 프로덕션 연결은 확인). 키가 없거나 TTL 이 없었으면 `false`.",
       "kind": "unary",

@@ -373,3 +373,61 @@ fn commands_that_hold_the_server_need_confirmation() {
     );
     assert_eq!(heavy_read.max(KvCommandClass::Allowed), heavy_read);
 }
+
+// `db.kv.parseCommand`(M3-18 — 콘솔 글을 Host 의 토크나이저 하나로 나눈다).
+
+#[test]
+fn a_console_line_becomes_text_arguments_and_hex_for_non_utf8_bytes() {
+    assert_eq!(
+        parse_console_line(r#"SET "a b" "\xea\xb0\x80" "0xff" "\xff";"#).unwrap(),
+        vec![
+            KvKey::Text("SET".into()),
+            KvKey::Text("a b".into()),
+            KvKey::Text("가".into()),
+            KvKey::Text("0xff".into()),
+            KvKey::Bytes(pw_db_types::KvKeyBytes { hex: "0xff".into() }),
+        ]
+    );
+}
+
+#[test]
+fn a_console_line_refuses_newlines_open_quotes_empty_text_and_huge_text() {
+    for text in ["GET a\nDEL b", "GET a\r", "GET \"a", "", "   ;"] {
+        assert!(parse_console_line(text).is_err(), "{text:?}");
+    }
+    let huge = format!("GET {}", "k".repeat(MAX_COMMAND_TEXT_BYTES));
+    assert!(parse_console_line(&huge).is_err());
+    assert!(parse_console_line(&format!("GET {}", "k".repeat(1000))).is_ok());
+}
+
+#[tokio::test]
+async fn the_parse_command_method_answers_argv_or_invalid_params() {
+    use std::sync::Arc;
+
+    use pw_rpc::{Caller, EventHub, Outbound, Role, Session};
+    use serde_json::{Value, json};
+
+    async fn call(text: &str) -> Value {
+        let mut router = Router::new();
+        register(&mut router);
+        let (session, mut rx) = Session::new(
+            Arc::new(router),
+            EventHub::new(),
+            Caller::new(Role::Readonly),
+        );
+        session.handle_value(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "db.kv.parseCommand",
+            "params": { "text": text }}),
+        );
+        match rx.recv().await.unwrap() {
+            reply @ Outbound::Response(_) => serde_json::to_value(reply).unwrap(),
+            other => panic!("expected a response, got {other:?}"),
+        }
+    }
+    assert_eq!(
+        call("HGET 'h' f").await["result"],
+        json!({ "argv": ["HGET", "h", "f"] })
+    );
+    let err = call("GET \"a").await;
+    assert_eq!(err["error"]["code"], json!(pw_rpc::code::INVALID_PARAMS));
+}

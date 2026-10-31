@@ -84,6 +84,12 @@ export type UnaryMethods = {
 	 */
 	"db.kv.get": { params: DbKvGetParams; result: KvValuePage };
 	/**
+	 * Redis 콘솔 한 줄을 argv 로 나눈다([`parse_command_argv`] — 따옴표 · `\` 이스케이프 · `\xHH` 바이트, 끝의 `;` 는 버린다).
+	 * 연결을 열지 않는 계산이다(분류 · 관문은 `db.kv.command` 가 한다). 나눌 수 없으면(닫히지 않은 따옴표 · 빈 명령 · 줄바꿈 ·
+	 * 상한 [`MAX_COMMAND_TEXT_BYTES`] 초과) `INVALID_PARAMS`.
+	 */
+	"db.kv.parseCommand": { params: KvParseCommandParams; result: KvParsedCommand };
+	/**
 	 * TTL 을 지운다(`PERSIST` 와 같은 등급 — 쓰기, 프로덕션 연결은 확인). 키가 없거나 TTL 이 없었으면 `false`.
 	 */
 	"db.kv.persist": { params: DbKvPersistParams; result: boolean };
@@ -815,6 +821,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.kv.command": {"name":"db.kv.command","kind":"unary","tier":"exec","roles":["owner"],"params":"DbKvCommandParams","output":"KvReply","doc":" 명령 하나(콘솔). 분류(`pw_db_sql::kv_command`)로 관문을 지난다 — 거절 명령은 permission denied(`data.reason =\n \"blockedCommand\"`, `data.block` 은 `notAllowed` · `blocking` · `scanCount`), read-only 연결은 읽기만, 확인 명령은 3001.\n 키를 통째로 읽는 큰 명령은 드라이버가 보내기 전에 거절하고(3003, `data.error.code = \"KEY_TOO_LARGE\"`), 큰 응답은\n `truncated` 로 끊는다.\n","mcp":false,"fileScope":false},
 	"db.kv.delete": {"name":"db.kv.delete","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvDeleteParams","output":"DbKvDeleted","doc":" 키를 지운다(확인 3001 이 필요하다 — `DEL` 과 같은 등급). 지운 수를 돌려준다.\n","mcp":false,"fileScope":false},
 	"db.kv.get": {"name":"db.kv.get","kind":"unary","tier":"read","roles":["owner"],"params":"DbKvGetParams","output":"KvValuePage","doc":" 값 한 쪽(타입별, 쪽 하나 4 MiB 예산). 키가 없으면 `value` 가 `missing`.\n","mcp":false,"fileScope":false},
+	"db.kv.parseCommand": {"name":"db.kv.parseCommand","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"KvParseCommandParams","output":"KvParsedCommand","doc":" Redis 콘솔 한 줄을 argv 로 나눈다([`parse_command_argv`] — 따옴표 · `\\` 이스케이프 · `\\xHH` 바이트, 끝의 `;` 는 버린다).\n 연결을 열지 않는 계산이다(분류 · 관문은 `db.kv.command` 가 한다). 나눌 수 없으면(닫히지 않은 따옴표 · 빈 명령 · 줄바꿈 ·\n 상한 [`MAX_COMMAND_TEXT_BYTES`] 초과) `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"db.kv.persist": {"name":"db.kv.persist","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvPersistParams","output":"bool","doc":" TTL 을 지운다(`PERSIST` 와 같은 등급 — 쓰기, 프로덕션 연결은 확인). 키가 없거나 TTL 이 없었으면 `false`.\n","mcp":false,"fileScope":false},
 	"db.kv.rename": {"name":"db.kv.rename","kind":"unary","tier":"write","roles":["owner"],"params":"DbKvRenameParams","output":"KvRenameOutcome","doc":" 이름을 바꾼다. `overwrite` 면 `RENAME`(대상을 덮는다), 아니면 `RENAMENX`(대상이 있으면 바꾸지 않고 `targetExists`) —\n 둘 다 분류대로 확인(3001)이 필요하다.\n","mcp":false,"fileScope":false},
 	"db.kv.scan": {"name":"db.kv.scan","kind":"stream","tier":"read","roles":["owner"],"params":"DbKvScanParams","output":"DbKvScanEvent","doc":" 키를 묶음으로 찾는다(스트림, `SCAN` + 묶음마다 타입 · TTL · 크기). 항목은 `accepted` → `keys` … → `done`. 그 세션을 연 프로젝트\n 창만 · 신뢰 · 연결 설정이 연 때와 같음. 취소는 `db.query.cancel { executionId }` 나 스트림 취소.\n","mcp":false,"fileScope":false},
@@ -4127,6 +4134,19 @@ export type KvKeyInfo = {
 	ttlMs: number | null,
 	/**  크기(바이트, `MEMORY USAGE` — 없으면 타입별 길이). 모르면 `None`. */
 	size: number | null,
+};
+
+export type KvParseCommandParams = {
+	/**  명령 한 줄(redis-cli 와 같은 꼴). 줄바꿈은 받지 않는다 — 한 줄이 명령 하나다. */
+	text: string,
+};
+
+export type KvParsedCommand = {
+	/**
+	 *  명령 이름과 인자. UTF-8 이면 글, 아니면 `{ "hex": "0x…" }`(`\xHH` 로 만든 바이트) — `db.kv.command` 는 글만 받으므로
+	 *  창은 hex 인자가 있으면 보내지 않고 그렇게 알린다(14-m3-plan M3-22 ⓔ).
+	 */
+	argv: KvKey[],
 };
 
 /**  값 읽기의 범위. 컬렉션은 쪽 단위로 읽는다(쪽 하나 4 MiB 예산). */

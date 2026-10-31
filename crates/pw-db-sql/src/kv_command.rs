@@ -29,7 +29,9 @@
 //! 연결의 상태를 바꾸는 명령(`SELECT` · `AUTH` · `HELLO` · `CLIENT` · `MULTI` · `RESET` …)과 연결을 점유하는 명령
 //! (`MONITOR` · `SUBSCRIBE` 류 · 위 막히는 명령)은 목록에 없으므로 거절이다(결정 M3-D15).
 
-use pw_db_types::RiskGrade;
+use pw_db_types::{KvKey, RiskGrade};
+use pw_rpc::{Router, RpcError, rpc_method};
+use serde::{Deserialize, Serialize};
 
 /// 명령 하나의 분류(DBX `RedisCommandSafety`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -525,6 +527,67 @@ pub fn classify_command(command: &str) -> KvCommandClass {
         // 연결 상태 · 점유 명령, 키 공간 전체 명령, 모르는 명령은 모두 여기다(머리 주석).
         _ => KvCommandClass::Blocked(BlockReason::NotAllowed),
     }
+}
+
+/// `db.kv.parseCommand` 가 받는 글의 상한(바이트) — 관문의 요청 상한(`pw_db::kv::MAX_REQUEST_BYTES`)과 같다.
+pub const MAX_COMMAND_TEXT_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct KvParseCommandParams {
+    /// 명령 한 줄(redis-cli 와 같은 꼴). 줄바꿈은 받지 않는다 — 한 줄이 명령 하나다.
+    pub text: String,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct KvParsedCommand {
+    /// 명령 이름과 인자. UTF-8 이면 글, 아니면 `{ "hex": "0x…" }`(`\xHH` 로 만든 바이트) — `db.kv.command` 는 글만 받으므로
+    /// 창은 hex 인자가 있으면 보내지 않고 그렇게 알린다(14-m3-plan M3-22 ⓔ).
+    pub argv: Vec<KvKey>,
+}
+
+rpc_method! {
+    /// Redis 콘솔 한 줄을 argv 로 나눈다([`parse_command_argv`] — 따옴표 · `\` 이스케이프 · `\xHH` 바이트, 끝의 `;` 는 버린다).
+    /// 연결을 열지 않는 계산이다(분류 · 관문은 `db.kv.command` 가 한다). 나눌 수 없으면(닫히지 않은 따옴표 · 빈 명령 · 줄바꿈 ·
+    /// 상한 [`MAX_COMMAND_TEXT_BYTES`] 초과) `INVALID_PARAMS`.
+    pub DbKvParseCommand: "db.kv.parseCommand" {
+        params: KvParseCommandParams,
+        result: KvParsedCommand,
+        tier: Read,
+    }
+}
+
+/// 콘솔 한 줄을 argv 로(`db.kv.parseCommand` 의 몸체).
+pub fn parse_console_line(text: &str) -> Result<Vec<KvKey>, String> {
+    if text.len() > MAX_COMMAND_TEXT_BYTES {
+        return Err(format!(
+            "the command is over the {MAX_COMMAND_TEXT_BYTES} byte limit"
+        ));
+    }
+    if text.contains(['\n', '\r']) {
+        return Err("one line holds one Redis command".to_string());
+    }
+    Ok(parse_command_argv(text)?
+        .iter()
+        .map(|arg| KvKey::from_bytes(arg))
+        .collect())
+}
+
+/// 메서드를 붙인다. 상태 없는 계산이다.
+pub fn register(router: &mut Router) {
+    router.unary(
+        DbKvParseCommand,
+        |_ctx, p: KvParseCommandParams| async move {
+            parse_console_line(&p.text)
+                .map(|argv| KvParsedCommand { argv })
+                .map_err(RpcError::invalid_params)
+        },
+    );
 }
 
 #[cfg(test)]
