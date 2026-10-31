@@ -616,3 +616,36 @@ async fn a_failed_transaction_takes_no_edit() {
     let err = preview(&mut w, &s, changes()).await.unwrap_err();
     assert_eq!(reason(&err), json!("transactionFailed"), "{err:?}");
 }
+
+/// 연결 설정이 바뀐 세션은 편집도 `configChanged` 로 거절한다 — 새 설정으로 메타데이터를 읽거나 문장을 보내지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_changed_config_stops_edits() {
+    let e = env(true);
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    let hash = preview(&mut w, &s, changes()).await.unwrap()["previewHash"].clone();
+    let before = e.reached();
+    e.f.edit_db("dev.toml", "host = \"localhost\"", "host = \"elsewhere\"");
+    for (method, params) in [
+        (
+            "db.edit.rowKey",
+            json!({ "sessionId": s, "table": table() }),
+        ),
+        (
+            "db.edit.preview",
+            json!({ "sessionId": s, "table": table(), "changes": changes() }),
+        ),
+        (
+            "db.edit.apply",
+            json!({ "sessionId": s, "table": table(), "changes": changes(), "previewHash": hash }),
+        ),
+    ] {
+        let err = w.call(method, params).await.unwrap_err();
+        assert_eq!(
+            (err.code, reason(&err)),
+            (rpc_code::CONFLICT, json!("configChanged")),
+            "{method}"
+        );
+    }
+    assert_eq!(e.reached(), before);
+}
