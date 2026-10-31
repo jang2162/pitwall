@@ -625,6 +625,185 @@
       ],
       "tier": "read"
     },
+    "db.sql.split": {
+      "description": "SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\nUTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "SqlDialect": {
+            "description": "SQL 방언 — 위험도 분류(M3-03)와 문장 나누기(M3-04)가 고른다. MariaDB 는 MySQL 이다.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dialect": {
+            "$ref": "#/$defs/SqlDialect"
+          },
+          "sql": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dialect",
+          "sql"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "SqlRange": {
+            "description": "원문 안의 범위. UTF-16 단위, `to` 는 포함하지 않는다(CodeMirror 의 `from` · `to` 와 같다).",
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "statements": {
+            "description": "문장마다의 범위(UTF-16), 순서대로.",
+            "items": {
+              "$ref": "#/$defs/SqlRange"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "statements"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "db.sql.statementAt": {
+      "description": "커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "SqlDialect": {
+            "description": "SQL 방언 — 위험도 분류(M3-03)와 문장 나누기(M3-04)가 고른다. MariaDB 는 MySQL 이다.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dialect": {
+            "$ref": "#/$defs/SqlDialect"
+          },
+          "offset": {
+            "description": "커서 위치(UTF-16). `sql` 의 길이까지 받는다.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sql": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dialect",
+          "sql",
+          "offset"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "SqlRange": {
+            "description": "원문 안의 범위. UTF-16 단위, `to` 는 포함하지 않는다(CodeMirror 의 `from` · `to` 와 같다).",
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          "SqlStatementRef": {
+            "properties": {
+              "index": {
+                "description": "`db.sql.split` 의 몇 번째 문장인가.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "range": {
+                "$ref": "#/$defs/SqlRange"
+              }
+            },
+            "required": [
+              "index",
+              "range"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "statement": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SqlStatementRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "문장이 없으면(공백 · 주석뿐) `null`."
+          }
+        },
+        "required": [
+          "statement"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "diag.collect": {
       "description": "「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n경로 · 비밀 · 홈 디렉터리 이름은 가린다.",
       "kind": "unary",

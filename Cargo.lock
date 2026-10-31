@@ -4439,6 +4439,7 @@ dependencies = [
  "libc",
  "pw-core",
  "pw-db",
+ "pw-db-sql",
  "pw-diag",
  "pw-ext",
  "pw-fs",
@@ -4767,6 +4768,12 @@ name = "pw-db-sql"
 version = "0.0.0"
 dependencies = [
  "pw-db-types",
+ "pw-rpc",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "specta",
+ "tokio",
 ]
 
 [[package]]

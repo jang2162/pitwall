@@ -132,6 +132,7 @@ fn local_host(
         .methods(move |router| pw_git::stage::register(router, git_stage_methods))
         .methods(move |router| pw_git::status::register(router, git_status_methods))
         .methods(move |router| pw_git::watch::register(router, git_watch))
+        .methods(pw_db_sql::split::register)
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());

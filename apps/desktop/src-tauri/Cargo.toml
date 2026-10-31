@@ -17,6 +17,8 @@ tauri-build = { version = "2.7.2", features = [] }
 pw-core = { path = "../../../crates/pw-core" }
 # DB 드라이버 등록부(src/db.rs). 드라이버 크레이트(pw-db-driver-*)는 각 드라이버 행이 여기 더한다.
 pw-db = { path = "../../../crates/pw-db" }
+# 문장 나누기 · 현재 문장 RPC(`db.sql.split` · `db.sql.statementAt`, M3-04).
+pw-db-sql = { path = "../../../crates/pw-db-sql" }
 pw-diag = { path = "../../../crates/pw-diag" }
 pw-ext = { path = "../../../crates/pw-ext" }
 pw-fs = { path = "../../../crates/pw-fs" }

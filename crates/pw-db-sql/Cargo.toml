@@ -8,3 +8,11 @@ publish.workspace = true
 
 [dependencies]
 pw-db-types = { path = "../pw-db-types" }
+pw-rpc = { path = "../pw-rpc" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+specta = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
