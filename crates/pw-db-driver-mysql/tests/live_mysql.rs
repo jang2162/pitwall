@@ -857,3 +857,88 @@ async fn live_mysql_local_infile_is_refused_without_reading_the_file() {
         .unwrap();
     std::fs::remove_file(file).unwrap();
 }
+
+/// 교착(1213)은 트랜잭션 전체를 되돌린다 — 그 오류에 `rolled_back` 이 실리고 연결의 상태가 `Idle` 이 된다. 문장만 되돌리는 오류
+/// (중복 키 1062)는 `rolled_back` 이 아니고 트랜잭션이 남는다.
+#[tokio::test]
+async fn live_mysql_a_deadlock_reports_the_whole_transaction_rolled_back() {
+    let table = unique("pw_live_deadlock");
+    let mut admin = admin().await;
+    admin
+        .query_drop(format!(
+            "CREATE TABLE {table} (id INT PRIMARY KEY, n INT) ENGINE = InnoDB"
+        ))
+        .await
+        .unwrap();
+    admin
+        .query_drop(format!("INSERT INTO {table} VALUES (1, 0), (2, 0)"))
+        .await
+        .unwrap();
+    let (mut a, _) = open(SslMode::Disable).await;
+    let (mut b, _) = open(SslMode::Disable).await;
+    a.begin(BeginOptions::default()).await.unwrap();
+    write(
+        a.as_mut(),
+        &format!("UPDATE {table} SET n = 1 WHERE id = 1"),
+    )
+    .await;
+    b.begin(BeginOptions::default()).await.unwrap();
+    write(
+        b.as_mut(),
+        &format!("UPDATE {table} SET n = 2 WHERE id = 2"),
+    )
+    .await;
+    // a 가 b 의 행을 기다리는 동안 b 가 a 의 행을 청해 고리를 닫는다.
+    let waits = format!("UPDATE {table} SET n = 1 WHERE id = 2");
+    let a_task = tokio::spawn(async move {
+        let result = a
+            .execute(ExecuteRequest::new(waits, RiskGrade::Write))
+            .await;
+        (a, result)
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let b_result = b
+        .execute(ExecuteRequest::new(
+            format!("UPDATE {table} SET n = 2 WHERE id = 1"),
+            RiskGrade::Write,
+        ))
+        .await;
+    let (a, a_result) = a_task.await.unwrap();
+    let (mut victim, mut survivor, error) = match (a_result, b_result) {
+        (Err(e), Ok(_)) => (a, b, e),
+        (Ok(_), Err(e)) => (b, a, e),
+        other => panic!("exactly one side is the deadlock victim: {other:?}"),
+    };
+    assert_eq!(error.code.as_deref(), Some("1213"), "{error}");
+    assert!(error.rolled_back, "the whole transaction was rolled back");
+    assert_eq!(victim.transaction_state(), TransactionState::Idle);
+    assert_eq!(
+        survivor.transaction_state(),
+        TransactionState::InTransaction
+    );
+    survivor.commit().await.unwrap();
+
+    victim.begin(BeginOptions::default()).await.unwrap();
+    write(
+        victim.as_mut(),
+        &format!("UPDATE {table} SET n = 9 WHERE id = 1"),
+    )
+    .await;
+    let duplicate = victim
+        .execute(ExecuteRequest::new(
+            format!("INSERT INTO {table} VALUES (1, 0)"),
+            RiskGrade::Write,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(duplicate.code.as_deref(), Some("1062"), "{duplicate}");
+    assert!(!duplicate.rolled_back, "only the statement was rolled back");
+    assert_eq!(victim.transaction_state(), TransactionState::InTransaction);
+    victim.rollback().await.unwrap();
+    victim.close().await.unwrap();
+    survivor.close().await.unwrap();
+    admin
+        .query_drop(format!("DROP TABLE {table}"))
+        .await
+        .unwrap();
+}

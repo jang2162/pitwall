@@ -41,7 +41,7 @@ use crate::error::{Phase, code, map, server_code};
 use crate::infile::{self, RefuseLocalInfile};
 use crate::{meta, value};
 
-/// 교착으로 서버가 트랜잭션 전체를 되돌렸다.
+/// 교착으로 서버가 트랜잭션 전체를 되돌렸다(상태를 읽는 빈 문장이 실패했을 때의 기댈 곳).
 const DEADLOCK: u16 = 1213;
 
 /// 진행 중 문장을 다른 연결의 `KILL QUERY` 로 멈춘다.
@@ -128,6 +128,8 @@ pub(crate) struct MysqlConnection {
     state: TransactionState,
     /// 서버가 `LOCAL INFILE` 로 파일을 청했다는 표지(`infile` 머리 주석).
     infile_asked: Arc<AtomicBool>,
+    /// 방금 끝난 문장의 오류가 트랜잭션 전체를 되돌렸다 — 다음 [`Self::error`] 가 `DbError::rolled_back` 에 싣는다.
+    rolled_back: bool,
 }
 
 async fn next_row(conn: &mut Conn, binary: bool) -> mysql_async::Result<Option<mysql_async::Row>> {
@@ -185,6 +187,7 @@ impl MysqlConnection {
             interrupter,
             state: TransactionState::Idle,
             infile_asked,
+            rolled_back: false,
         };
         this.refresh_state();
         this
@@ -210,7 +213,8 @@ impl MysqlConnection {
         }
     }
 
-    fn begin_statement(&self) {
+    fn begin_statement(&mut self) {
+        self.rolled_back = false;
         *self.interrupter.state() = Statement {
             running: true,
             interrupted: false,
@@ -231,11 +235,28 @@ impl MysqlConnection {
         }
         match error {
             None => self.refresh_state(),
-            Some(e) if server_code(e) == Some(DEADLOCK) => self.state = TransactionState::Idle,
-            // 오류 패킷에는 상태 플래그가 없다 — 오류는 문장만 되돌리므로 앞의 상태를 그대로 둔다.
+            // 오류 패킷에는 상태 플래그가 없다. 대개 오류는 문장만 되돌리지만 교착(1213) · `innodb_rollback_on_timeout` 의 잠금
+            // 대기(1205) 등은 트랜잭션 전체를 되돌린다 — 트랜잭션 안이었으면 빈 문장 하나로 상태를 다시 읽어 가른다.
+            Some(e) if self.state == TransactionState::InTransaction => {
+                match self.conn().query_drop("DO 0").await {
+                    Ok(()) => self.refresh_state(),
+                    Err(_) if server_code(e) == Some(DEADLOCK) => {
+                        self.state = TransactionState::Idle;
+                    }
+                    Err(_) => {}
+                }
+                self.rolled_back = self.state == TransactionState::Idle;
+            }
             Some(_) => {}
         }
         interrupted
+    }
+
+    /// 문장을 마친 뒤의 오류. 트랜잭션 전체가 되돌려졌으면 그 표지를 싣는다.
+    fn error(&mut self, error: mysql_async::Error) -> DbError {
+        let mut mapped = map(error, Phase::Run);
+        mapped.rolled_back = std::mem::take(&mut self.rolled_back);
+        mapped
     }
 
     /// 방금 끝난 문장에 서버가 로컬 파일을 청했으면 거절 오류(파일은 보내지 않았다 — `infile` 머리 주석).
@@ -274,7 +295,7 @@ impl MysqlConnection {
             {
                 Ok(())
             }
-            Err(e) => Err(map(e, Phase::Run)),
+            Err(e) => Err(self.error(e)),
         }
     }
 
@@ -284,7 +305,7 @@ impl MysqlConnection {
         self.begin_statement();
         let result = self.conn().query_drop(sql).await;
         self.end_statement(result.as_ref().err()).await;
-        result.map_err(|e| map(e, Phase::Run))
+        result.map_err(|e| self.error(e))
     }
 
     /// 메타데이터 · 실행 계획처럼 결과를 통째로 받는 조회 하나. 인터럽트를 받는다.
@@ -299,7 +320,7 @@ impl MysqlConnection {
         match result {
             Ok(_) if interrupted => Err(DbError::cancelled()),
             Ok(value) => Ok(value),
-            Err(e) => Err(map(e, Phase::Run)),
+            Err(e) => Err(self.error(e)),
         }
     }
 
@@ -315,7 +336,7 @@ impl MysqlConnection {
             Ok(prepared) => prepared,
             Err(e) => {
                 self.end_statement(Some(&e)).await;
-                return Err(map(e, Phase::Run));
+                return Err(self.error(e));
             }
         };
         if prepared.is_none() && !params.is_empty() {
@@ -351,7 +372,7 @@ impl MysqlConnection {
                 self.release(prepared).await;
                 self.end_statement(Some(&e)).await;
                 self.refused_infile()?;
-                return Err(map(e, Phase::Run));
+                return Err(self.error(e));
             }
         };
         match columns.filter(|c| !c.is_empty()) {
@@ -374,7 +395,7 @@ impl MysqlConnection {
                 self.release(prepared).await;
                 let interrupted = self.end_statement(drained.as_ref().err()).await;
                 self.refused_infile()?;
-                drained.map_err(|e| map(e, Phase::Run))?;
+                drained.map_err(|e| self.error(e))?;
                 if interrupted && request.grade.is_read() {
                     return Err(DbError::cancelled());
                 }
@@ -417,7 +438,7 @@ impl MysqlConnection {
                     self.release(prepared).await;
                     let interrupted = self.end_statement(drained.as_ref().err()).await;
                     self.refused_infile()?;
-                    drained.map_err(|e| map(e, Phase::Run))?;
+                    drained.map_err(|e| self.error(e))?;
                     if interrupted && grade.is_read() {
                         return Err(DbError::cancelled());
                     }
@@ -432,7 +453,7 @@ impl MysqlConnection {
                     let prepared = self.cursor.take().and_then(|c| c.prepared);
                     self.release(prepared).await;
                     self.end_statement(Some(&e)).await;
-                    return Err(map(e, Phase::Run));
+                    return Err(self.error(e));
                 }
             }
         }
