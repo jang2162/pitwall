@@ -148,6 +148,7 @@ mod tests {
             "db-console.ftl",
             "db-explorer.ftl",
             "db-grid.ftl",
+            "db-redis.ftl",
             "db-safety.ftl",
             "file-window.ftl",
             "git-commit.ftl",
