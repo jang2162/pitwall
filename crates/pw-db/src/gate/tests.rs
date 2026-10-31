@@ -251,3 +251,17 @@ async fn classification_runs_on_the_big_stack_thread() {
     .unwrap();
     assert_eq!(deep, 0);
 }
+
+/// 겹방어: 분류기가 `SET` · 트랜잭션 제어를 조회로 잘못 매겨도 read-only 관문은 거절한다(결정 M3-D6 — 읽기 전용 트랜잭션은 첫 `SET` 으로
+/// 풀린다).
+#[test]
+fn read_only_refuses_settings_even_when_graded_as_reads() {
+    let ro = policy(true, false);
+    for sql in ["SET transaction_read_only = off", "BEGIN"] {
+        let mut statements = planned(SqlDialect::Postgres, sql);
+        statements[0].grade = RiskGrade::Read;
+        statements[0].reasons.clear();
+        let e = judge(&ro, &statements, &[], "h", None).unwrap_err();
+        assert_eq!(e.code, rpc_code::PERMISSION_DENIED, "{sql}");
+    }
+}
