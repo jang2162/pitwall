@@ -18,7 +18,7 @@ import type {
   RuntimeInfo,
 } from "@pitwall/rpc-client";
 import type { DockviewApi } from "dockview-react";
-import { forwardRef, useImperativeHandle } from "react";
+import { forwardRef, StrictMode, useImperativeHandle } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 
@@ -349,7 +349,7 @@ afterEach(async () => {
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 30)));
 
-async function mountApp() {
+async function mountApp(strict = false) {
   dock = undefined;
   const element = document.createElement("div");
   document.body.append(element);
@@ -360,13 +360,13 @@ async function mountApp() {
     apply: () => {},
   });
   root = createRoot(element);
-  await act(async () =>
-    root!.render(
-      <ThemeStoreProvider store={store}>
-        <App kind="project" native={native} onDockApi={(api) => (dock = api)} />
-      </ThemeStoreProvider>,
-    ),
+  const app = (
+    <ThemeStoreProvider store={store}>
+      <App kind="project" native={native} onDockApi={(api) => (dock = api)} />
+    </ThemeStoreProvider>
   );
+  // 앱은 StrictMode 로 그린다(src/main.tsx) — 개발 빌드처럼 effect 를 한 번 걷고 다시 돌린다.
+  await act(async () => root!.render(strict ? <StrictMode>{app}</StrictMode> : app));
   await settle();
 }
 
@@ -613,6 +613,21 @@ describe("the Redis key document", () => {
     });
     expect(calls("db.session.open")).toHaveLength(2);
     expect($("[data-testid=redis-connect-error]")).toBeNull();
+  });
+
+  // 재리뷰 F1: StrictMode 에서도 [연결] 이 연 세션은 닫히지 않고 스캔한다.
+  it("connects and scans under StrictMode", async () => {
+    host.keys = [info("a", "string")];
+    await mountApp(true);
+    await act(async () => {
+      openTab(dock!, { path: dbDocumentKey(SPEC), db: SPEC, title: "redis-local · DB 0" });
+    });
+    await settle();
+    await click($("[data-redis-document] [data-action=connect]"));
+    await vi.waitFor(() => expect($("[data-testid=redis-scan-status]")?.dataset.scan).toBe("done"));
+    expect(calls("db.session.open")).toHaveLength(1);
+    expect(calls("db.session.close")).toEqual([]);
+    expect(calls("db.kv.scan")).toHaveLength(1);
   });
 
   async function openTabAndConnect() {

@@ -121,18 +121,20 @@ export function RedisDocument({ spec, params, panelId }: DbDocumentProps<"redis"
   clientRef.current = client;
   const scanRef = useRef(browse.scan);
   scanRef.current = browse.scan;
-  // 탭이 닫힌 뒤에 풀린 `db.session.open` 은 그 세션을 곧바로 닫고 스캔을 시작하지 않는다(정리는 이미 지나갔다).
-  const mountedRef = useRef(true);
-  useEffect(
-    () => () => {
+  // 탭이 닫힌 뒤에 풀린 `db.session.open` 은 그 세션을 곧바로 닫고 스캔을 시작하지 않는다(정리는 이미 지나갔다). 표시는 effect
+  // 본문에서 켠다 — 정리에서만 끄면 개발 빌드의 StrictMode(effect 를 한 번 걷고 다시 돌린다)에서 늘 꺼져 [연결] 이 연 세션을
+  // 곧바로 닫는다.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
       scanRef.current.stop();
       const sessionId = sessionRef.current;
       if (sessionId)
         void clientRef.current?.call("db.session.close", { sessionId }).catch(() => {});
-    },
-    [],
-  );
+    };
+  }, []);
 
   const startScan = useCallback(
     (sessionId: string, keyPattern: string) => {
