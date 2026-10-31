@@ -44,4 +44,7 @@ pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
 pw-db-driver-sqlite = { path = "../pw-db-driver-sqlite" }
 # 그리드 보유 상한을 실 PG 로 관문 너머에서 본다(tests/live_grid.rs, `cfg(pw_live_pg)`).
 pw-db-driver-pg = { path = "../pw-db-driver-pg" }
+# 관문 뒤의 실 Redis 시험(tests/kv_live.rs, M3-22). 개발 의존성이라 코어가 드라이버 크레이트에 의존하지 않는다는 판정
+# (tests/driver_free.rs — 일반 의존성만 본다)과 부딪히지 않는다.
+pw-db-driver-redis = { path = "../pw-db-driver-redis" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }

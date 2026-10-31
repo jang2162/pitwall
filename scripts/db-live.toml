@@ -8,5 +8,5 @@
 pg = 10
 mysql = 8
 mariadb = 8
-redis = 8
+redis = 13
 ssh_tunnel = 6

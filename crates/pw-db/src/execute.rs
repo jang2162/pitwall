@@ -388,7 +388,7 @@ impl DbSessions {
             execution_id: execution_id.clone(),
             session_id: session.id.clone(),
             project_id: session.project_id.clone(),
-            dialect,
+            dialect: Some(dialect),
             cancel: QueryCancel::new(interrupter, Budget::CONSOLE.cancel_cleanup),
             stop: CancellationToken::new(),
             current: std::sync::Mutex::new(None),
@@ -438,7 +438,7 @@ impl DbSessions {
         };
         db_grant(ctx.scope(), &running.project_id)?;
         let current = *lock(&running.current);
-        if running.dialect == SqlDialect::Sqlite
+        if running.dialect == Some(SqlDialect::Sqlite)
             && !params.confirm_rollback
             && current.is_some_and(|c| !c.grade.is_read() && c.in_transaction)
         {

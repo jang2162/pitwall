@@ -5312,6 +5312,7 @@ dependencies = [
  "pw-core",
  "pw-db-driver",
  "pw-db-driver-pg",
+ "pw-db-driver-redis",
  "pw-db-driver-sqlite",
  "pw-db-sql",
  "pw-db-types",

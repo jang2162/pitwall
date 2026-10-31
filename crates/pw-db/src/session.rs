@@ -796,7 +796,8 @@ pub(crate) struct Running {
     pub execution_id: String,
     pub session_id: String,
     pub project_id: String,
-    pub dialect: SqlDialect,
+    /// SQL 실행의 방언. KV 실행(`db.kv.*`, M3-22)은 `None`.
+    pub dialect: Option<SqlDialect>,
     pub cancel: QueryCancel,
     /// 실행 전체를 멈춘다(창이 credit 을 주지 않아 멈춘 전송도 깨운다).
     pub stop: CancellationToken,
@@ -1643,5 +1644,6 @@ pub fn register(router: &mut Router, sessions: Arc<DbSessions>) {
         );
     crate::execute::register(router, Arc::clone(&sessions));
     crate::schema::register(router, Arc::clone(&sessions));
+    crate::kv::register(router, Arc::clone(&sessions));
     crate::connection::register(router, sessions);
 }
