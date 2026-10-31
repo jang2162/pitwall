@@ -60,6 +60,7 @@ import { FileTreeToolWindow } from "../file-tree/file-tree";
 import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
 import { DbExplorerToolWindow } from "../db/explorer/explorer-feature";
+import { DbConsoleFeature } from "../db/console/console-feature";
 import { DbGridFeature } from "../db/grid/db-grid-feature";
 import { GitCommitFeature } from "../git/commit/commit-feature";
 import { CommitToolWindow } from "../git/commit/commit-tool-window";
@@ -829,6 +830,9 @@ function ProjectWindowBody({
           {projectId !== undefined && <GitMerge projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitRemoteFeature projectId={projectId} />}
           {projectId !== undefined && <DbGridFeature />}
+          {projectId !== undefined && (
+            <DbConsoleFeature projectId={projectId} workspace={workspace} api={api} />
+          )}
           {projectId !== undefined && (
             <GitCommitFeature
               projectId={projectId}

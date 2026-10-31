@@ -505,3 +505,27 @@ mac = "cmd+b"
 win = "ctrl+b"
 linux = "ctrl+b"
 when = "dbExplorerFocus"
+
+# SQL 콘솔(M3-15, src/db/console/console-feature.tsx): 새 콘솔(⌘⇧L, Win/Linux Ctrl+Shift+F10)은 프로젝트 창 어디서나 — 인자 없이
+# 부르면 이 창에서 마지막으로 연결한 연결의 새 콘솔이다. 실행(⌘↩ — 선택이 있으면 선택, 없으면 커서의 문장)과 쿼리 취소(⌘F2)는 콘솔에
+# 포커스가 있을 때만: ⌘↩ 은 커밋 툴 윈도우의 커밋, ⌘F2 는 10-ui §4.2 의 실행 「중지」 와 범위가 갈린다.
+
+[[bindings]]
+action = "db.console.open"
+mac = "cmd+shift+l"
+win = "ctrl+shift+f10"
+linux = "ctrl+shift+f10"
+
+[[bindings]]
+action = "db.console.run"
+mac = "cmd+enter"
+win = "ctrl+enter"
+linux = "ctrl+enter"
+when = "dbConsoleFocus"
+
+[[bindings]]
+action = "db.console.cancel"
+mac = "cmd+f2"
+win = "ctrl+f2"
+linux = "ctrl+f2"
+when = "dbConsoleFocus"

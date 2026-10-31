@@ -17,6 +17,8 @@ import { fileOpsActions } from "../file-tree/file-ops";
 import { fileTreeStrings } from "../file-tree/strings";
 import { explorerActions } from "../db/explorer/explorer-feature";
 import { dbExplorerStrings } from "../db/explorer/strings";
+import { consoleActions } from "../db/console/console-feature";
+import { dbConsoleStrings } from "../db/console/strings";
 import { gridActions } from "../db/grid/db-grid-feature";
 import { dbGridStrings } from "../db/grid/strings";
 import { commitActions } from "../git/commit/commit-feature";
@@ -178,6 +180,11 @@ const ACTION_IDS = new Set(
       model: { selected: () => undefined, node: () => undefined },
       openDdl() {},
     }),
+    ...consoleActions({
+      strings: dbConsoleStrings((id) => id).actions,
+      activeTab: () => undefined,
+      open() {},
+    }),
   ].map((a) => a.id),
 );
 
@@ -255,6 +262,13 @@ describe("default keymap file", () => {
     expect(label("mac", "toolWindow.stretchDown")).toEqual(["⌃⌥⇧↓"]);
     expect(label("win", "toolWindow.stretchRight")).toEqual(["Ctrl+Shift+→"]);
     expect(label("linux", "toolWindow.stretchUp")).toEqual(["Ctrl+Shift+↑"]);
+    // 10-ui 「DB」 의 SQL 콘솔(M3-15)
+    expect(label("mac", "db.console.open")).toEqual(["⇧⌘L"]);
+    expect(label("win", "db.console.open")).toEqual(["Ctrl+Shift+F10"]);
+    expect(label("mac", "db.console.run")).toEqual(["⌘↩"]);
+    expect(label("linux", "db.console.run")).toEqual(["Ctrl+Enter"]);
+    expect(label("mac", "db.console.cancel")).toEqual(["⌘F2"]);
+    expect(label("win", "db.console.cancel")).toEqual(["Ctrl+F2"]);
   });
 });
 

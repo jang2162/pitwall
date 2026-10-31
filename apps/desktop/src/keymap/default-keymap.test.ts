@@ -68,7 +68,15 @@ describe("default keymap overlaps", () => {
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 에디터의 줄 삭제(10-ui §4.2 「웰컴 창」).
         ["⌘⌫", ["project.removeFromList []", "editor.deleteLine [editorFocus]"]],
         // 웰컴 창의 「새 프로젝트」 시트의 만들기와 프로젝트 창 커밋 툴 윈도우 안의 커밋(M2-16).
-        ["⌘↩", ["project.create []", "git.commit.run [activeToolWindow == 'commit']"]],
+        // …와 SQL 콘솔의 실행(M3-15 — 콘솔에 포커스가 있을 때만).
+        [
+          "⌘↩",
+          [
+            "project.create []",
+            "git.commit.run [activeToolWindow == 'commit']",
+            "db.console.run [dbConsoleFocus]",
+          ],
+        ],
         // 툴 윈도우 크기 조절(툴 윈도우에 포커스)과 에디터의 다음 · 이전 변경 위치(M2-17) — 10-ui §4.2 「툴 윈도우 · 창」 · 「Git (VCS)」.
         // Win/Linux 의 크기 조절은 `Ctrl+Shift+화살표` 라 겹치지 않는다.
         [
@@ -95,7 +103,14 @@ describe("default keymap overlaps", () => {
       win: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
         ["Delete", ["project.removeFromList []", "fileTree.delete [fileTree]"]],
-        ["Ctrl+Enter", ["project.create []", "git.commit.run [activeToolWindow == 'commit']"]],
+        [
+          "Ctrl+Enter",
+          [
+            "project.create []",
+            "git.commit.run [activeToolWindow == 'commit']",
+            "db.console.run [dbConsoleFocus]",
+          ],
+        ],
         ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
         // 터미널의 복사와 결과 그리드의 다른 형식으로 복사(M3-16) — 포커스 범위가 갈린다.
         ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
@@ -103,7 +118,14 @@ describe("default keymap overlaps", () => {
       linux: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
         ["Delete", ["project.removeFromList []", "fileTree.delete [fileTree]"]],
-        ["Ctrl+Enter", ["project.create []", "git.commit.run [activeToolWindow == 'commit']"]],
+        [
+          "Ctrl+Enter",
+          [
+            "project.create []",
+            "git.commit.run [activeToolWindow == 'commit']",
+            "db.console.run [dbConsoleFocus]",
+          ],
+        ],
         ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
         ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
       ],

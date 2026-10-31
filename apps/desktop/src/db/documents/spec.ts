@@ -25,7 +25,19 @@ export type DbDocumentSpec =
    * 객체의 DDL(M3-13 — 탐색기의 `⌘B`): 읽기 전용 SQL. 내용(`db.schema.ddl`)은 연 창의 메모리에만 있다 — 되살린 탭은 사람이 [읽기] 를
    * 누를 때 읽는다(메타데이터용 연결을 연다).
    */
-  | { kind: "ddl"; tabId: string; connectionId: string; object: ObjectRef };
+  | { kind: "ddl"; tabId: string; connectionId: string; object: ObjectRef }
+  /**
+   * SQL 콘솔(M3-15): 글은 콘솔 파일(`consoleId` — `project.console.*`), 연결 · DB · 스키마는 위 막대가 고른 것(없으면 고르지 않음 ·
+   * 설정의 DB · 서버 기본 스키마).
+   */
+  | {
+      kind: "console";
+      tabId: string;
+      consoleId: string;
+      connectionId?: string | null;
+      database?: string | null;
+      schema?: string | null;
+    };
 
 export type DbDocumentKind = DbDocumentSpec["kind"];
 
@@ -45,6 +57,8 @@ export function dbDocumentKey(spec: DbDocumentSpec): string {
 /** 사람이 읽는 문서 설명(탭 전환기의 둘째 칸 · 탭 툴팁 — 문서 키 `db:…` 를 보이지 않는다). */
 export function dbDocumentDetail(spec: DbDocumentSpec): string {
   switch (spec.kind) {
+    case "console":
+      return [spec.connectionId, spec.database, spec.schema].filter(Boolean).join(" · ");
     case "redis":
       return `${spec.connectionId} · DB ${spec.database}`;
     case "ddl":
@@ -56,6 +70,12 @@ const str = (v: Record<string, unknown>, k: string) => typeof v[k] === "string" 
 
 /** 종류마다 저장본 · 탭 params 의 칸 검사(`tabId` · `kind` 밖의 것). */
 const DB_DOCUMENT_SHAPES: { [K in DbDocumentKind]: (v: Record<string, unknown>) => boolean } = {
+  console: (v) =>
+    typeof v.consoleId === "string" &&
+    /^[a-z0-9-]{1,64}$/.test(v.consoleId) &&
+    ["connectionId", "database", "schema"].every(
+      (k) => v[k] === undefined || v[k] === null || str(v, k),
+    ),
   redis: (v) =>
     str(v, "connectionId") && typeof v.database === "string" && /^\d+$/.test(v.database),
   ddl: (v) => str(v, "connectionId") && isObjectRef(v.object),

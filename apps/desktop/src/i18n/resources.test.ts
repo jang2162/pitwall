@@ -11,6 +11,7 @@ import { FluentBundle, FluentResource, type FluentVariable } from "@fluent/bundl
 import { describe, expect, it } from "vitest";
 
 import { dbExplorerStrings } from "../db/explorer/strings";
+import { dbConsoleStrings } from "../db/console/strings";
 import { dbGridStrings } from "../db/grid/strings";
 import { dbAccessStrings } from "../db/safety/access-strings";
 import { dbSafetyStrings } from "../db/safety/strings";
@@ -149,6 +150,7 @@ describe("built-in translations", () => {
     ] as const)
       gitDialogStrings(t).push.refused(reason);
     callAll(gitCommitStrings(t));
+    callAll(dbConsoleStrings(t));
     callAll(dbSafetyStrings(t));
     callAll(dbExplorerStrings(t));
     callAll(dbAccessStrings(t));
