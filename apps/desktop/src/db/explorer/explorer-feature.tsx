@@ -9,7 +9,7 @@
 import type { Action } from "@pitwall/keymap";
 import type { ObjectRef } from "@pitwall/rpc-client";
 import type { IDockviewPanelProps } from "dockview-react";
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useEditorWorkspace } from "../../editor/editor-workspace";
 import { useGitDialogs } from "../../git/dialogs/git-dialogs";
@@ -18,10 +18,11 @@ import { useNotify, usePanelVisible } from "../../notifications/notifications";
 import { useActiveWorktree } from "../../open-with/active-worktree";
 import { useHost } from "../../rpc/host";
 import { writeClipboardText } from "../grid/clipboard";
+import { useDbAccessPrompt } from "../safety/access-prompt";
 import { DbExplorerView, type ExplorerOps } from "./db-explorer";
 import { openDdlDocument } from "./ddl-document";
 import { EXPLORER_ACTIONS } from "./explorer-actions";
-import { ExplorerModel } from "./explorer-model";
+import { ExplorerModel, shapeOf } from "./explorer-model";
 import { type DbExplorerStrings, useDbExplorerStrings } from "./strings";
 
 /** `db.schemaChanged`(crates/pw-db/src/schema.rs `TOPIC_SCHEMA_CHANGED`). */
@@ -109,17 +110,48 @@ function DbExplorerPanel() {
   const notify = useNotify();
   const dialogs = useGitDialogs();
 
-  const model = useMemo(
-    () =>
-      client && projectId ? new ExplorerModel({ calls: client, projectId, worktree }) : undefined,
-    [client, projectId, worktree],
-  );
+  const access = useDbAccessPrompt();
+  const resolveAccess = useRef(access.resolve);
+  resolveAccess.current = access.resolve;
+
+  const model = useMemo(() => {
+    if (!client || !projectId) return undefined;
+    const made: ExplorerModel = new ExplorerModel({
+      calls: client,
+      projectId,
+      worktree,
+      access: (error, connectionId) =>
+        resolveAccess.current(error, {
+          calls: client,
+          projectId,
+          worktree: worktree ?? null,
+          connectionId,
+          connectionName: made.entry(connectionId)?.config?.name ?? connectionId,
+        }),
+    });
+    return made;
+  }, [client, projectId, worktree]);
 
   useEffect(() => {
     if (!model || !client || !projectId) return;
     void model.reloadList();
     return followExplorerEvents(client, projectId, model);
   }, [model, client, projectId]);
+
+  // 드라이버의 지원 플래그로 트리 단계를 정한다(받기 전 · 실패하면 내장 드라이버의 모양).
+  useEffect(() => {
+    if (!model || !client) return;
+    let live = true;
+    client.call("db.driver.list", null).then(
+      (drivers) => {
+        if (live) model.setShapes(new Map(drivers.map((d) => [d.kind, shapeOf(d.capabilities)])));
+      },
+      (e: unknown) => console.warn("[db] cannot read the db drivers", e),
+    );
+    return () => {
+      live = false;
+    };
+  }, [model, client]);
 
   const ops = useMemo<ExplorerOps>(
     () => ({
@@ -144,6 +176,7 @@ function DbExplorerPanel() {
     <>
       <DbExplorerView model={model} registry={registry} ops={ops} />
       {dialogs.element}
+      {access.element}
     </>
   );
 }

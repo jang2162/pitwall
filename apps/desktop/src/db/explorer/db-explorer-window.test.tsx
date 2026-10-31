@@ -14,9 +14,11 @@ import {
   type DbConnectionEntry,
   type DbConnectionList,
   type EventMessage,
+  ERROR_CODE,
   type ObjectInfo,
   RpcCallError,
 } from "@pitwall/rpc-client";
+import { useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 
@@ -27,11 +29,14 @@ import { tokenCssVar } from "../../theme/tokens";
 import { DbExplorerView, FILTER_DELAY_MS, type ExplorerOps } from "./db-explorer";
 import { DRAG_THRESHOLD } from "./explorer-drag";
 import { followExplorerEvents } from "./explorer-feature";
-import { type ExplorerCalls, ExplorerModel } from "./explorer-model";
+import { type ExplorerCalls, ExplorerModel, shapeOf } from "./explorer-model";
+import { type DbAccessPrompt, useDbAccessPrompt } from "../safety/access-prompt";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
 }
+
+vi.mock("../../keymap/keymap-provider", () => ({ useKeymapPopup: () => {} }));
 
 const PROJECT = "p1";
 
@@ -193,13 +198,40 @@ async function settle() {
   for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 0)));
 }
 
+let access: DbAccessPrompt | undefined;
+
+/** 창(explorer-feature.tsx)처럼 접근 묻기를 탐색기에 잇는다. */
+function Explorer() {
+  const prompt = useDbAccessPrompt();
+  useEffect(() => {
+    access = prompt;
+  });
+  return (
+    <>
+      <DbExplorerView model={model} registry={registry} ops={ops} />
+      {prompt.element}
+    </>
+  );
+}
+
 async function mount(pageSize?: number) {
-  model = new ExplorerModel({ calls, projectId: PROJECT, pageSize });
+  model = new ExplorerModel({
+    calls,
+    projectId: PROJECT,
+    pageSize,
+    access: (error, connectionId) =>
+      access!.resolve(error, {
+        calls,
+        projectId: PROJECT,
+        connectionId,
+        connectionName: connectionId,
+      }),
+  });
   root = createRoot(element);
   await act(async () =>
     root!.render(
       <LocalizationProvider l10n={bundledLocalization("ko")}>
-        <DbExplorerView model={model} registry={registry} ops={ops} />
+        <Explorer />
       </LocalizationProvider>,
     ),
   );
@@ -319,6 +351,28 @@ it("lists an untrusted project's connections and opens nothing however a row is 
   await act(async () => model.connect("pg"));
   expect(opens()).toEqual([]);
   expect(rowsOf("database")).toEqual([]);
+  expect(document.querySelector("[data-testid=db-access-prompt]")).toBeNull();
+});
+
+it("asks a trust refusal nothing, even when the list still said the password was needed", async () => {
+  await mount();
+  host.override.set("db.schema.databases", () => {
+    throw new RpcCallError({
+      code: ERROR_CODE.PERMISSION_DENIED,
+      message: "untrusted",
+      data: { reason: "untrusted" } as never,
+    });
+  });
+  host.list = {
+    ...host.list,
+    trusted: false,
+    connections: [entry("pg", {}, { kind: "untrusted" })],
+  };
+  await expand("connection", "pg");
+  expect(document.querySelector("[data-testid=db-access-prompt]")).toBeNull();
+  expect(called("db.secret.set")).toEqual([]);
+  // 거절을 받으면 목록을 다시 읽어 미신뢰로 보인다.
+  expect(statusOf("pg")).toBe("untrusted");
 });
 
 it("reads only the expanded nodes again after db.schemaChanged", async () => {
@@ -778,4 +832,96 @@ it("draws only the visible rows of ten thousand tables", async () => {
   expect(model.rows().length).toBeGreaterThan(500);
   expect(document.querySelectorAll("[data-row]").length).toBeLessThan(80);
   expect(called("db.schema.objects")).toHaveLength(1);
+});
+
+it("asks for the password a connection needs, stores it and reads the node again", async () => {
+  const PASSWORD = "hunter2-explorer";
+  const target = {
+    driver: "postgres",
+    host: "localhost",
+    port: 5432,
+    user: "app",
+    tunnel: null,
+    sslmode: "disable",
+    sslrootcert: null,
+    sslcert: null,
+    sslkey: null,
+  };
+  let stored = false;
+  host.override.set("db.schema.databases", () => {
+    if (!stored)
+      throw new RpcCallError({
+        code: 3101,
+        message: "db connection `pg` needs its password",
+        data: {
+          connectionId: "pg",
+          key: "password",
+          reason: "missing",
+          target,
+          previous: null,
+        } as never,
+      });
+    return { items: [{ name: "billing" }], nextCursor: null };
+  });
+  host.override.set("db.secret.set", () => {
+    stored = true;
+    return null;
+  });
+  const logs = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
+  await mount();
+  await expand("connection", "pg");
+  const dialog = document.querySelector<HTMLElement>("[data-testid=db-access-prompt]")!;
+  expect(dialog.dataset.kind).toBe("secret");
+  const input = dialog.querySelector<HTMLInputElement>("[data-testid=db-access-secret]")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      input,
+      PASSWORD,
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await mouse(dialog.querySelector<HTMLElement>("[data-action=run]")!, "click");
+  await settle();
+  expect(called("db.secret.set").map((c) => c.params)).toEqual([
+    {
+      projectId: PROJECT,
+      worktree: null,
+      connectionId: "pg",
+      key: "password",
+      target,
+      value: PASSWORD,
+    },
+  ]);
+  expect(called("db.schema.databases")).toHaveLength(2);
+  expect(rowsOf("database")).toEqual(["billing"]);
+  expect(statusOf("pg")).toBe("connected");
+  expect(document.documentElement.outerHTML).not.toContain(PASSWORD);
+  expect(JSON.stringify(ops.notify.mock.calls)).not.toContain(PASSWORD);
+  for (const log of logs) expect(JSON.stringify(log.mock.calls)).not.toContain(PASSWORD);
+});
+
+it("takes the tree levels from the drivers' capability flags", async () => {
+  const flags = {
+    sql: true,
+    kv: false,
+    serverCursor: true,
+    cancel: true,
+    transactions: true,
+    savepoints: true,
+    readOnlyTransaction: true,
+    explain: true,
+    metadata: true,
+    schemas: true,
+    multipleDatabases: false,
+    sslModes: [],
+  };
+  expect(shapeOf(flags)).toEqual({ browse: true, databases: false, schemas: true });
+  expect(shapeOf({ ...flags, sql: false, kv: true })).toMatchObject({ browse: false });
+  await mount();
+  // DB 고르기가 없는 드라이버라고 Host 가 알리면 연결 아래에 곧바로 스키마가 온다.
+  await act(async () => model.setShapes(new Map([["postgres", shapeOf(flags)]])));
+  await expand("connection", "pg");
+  expect(called("db.schema.databases")).toEqual([]);
+  expect(called("db.schema.schemas").map((c) => c.params.database)).toEqual([null]);
+  expect(rowsOf("schema")).toEqual(["public", "sales"]);
 });

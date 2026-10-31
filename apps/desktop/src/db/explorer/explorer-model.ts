@@ -13,6 +13,7 @@
 //   않은 연결이면 트리를 접고 비운다 — 다시 읽는 것이 연결을 여는 일이라서다.
 
 import {
+  type Capabilities,
   type ColumnInfo,
   type DbConnectionEntry,
   type DbConnectionList,
@@ -121,6 +122,20 @@ export interface ExplorerDeps {
   shape?(driver: DriverKind): TreeShape | undefined;
   /** 쪽 크기(시험이 줄인다). */
   pageSize?: number;
+  /**
+   * 연결을 여는 RPC 가 `3101`(비밀 필요) · `3102`(확인 필요)로 답했다 — 사람에게 묻고 Host 에 넣었으면 참(그 노드를 다시 읽는다).
+   * 창은 `useDbAccessPrompt`(src/db/safety/access-prompt.tsx)를 잇는다.
+   */
+  access?(error: unknown, connectionId: string): Promise<boolean>;
+}
+
+/** 드라이버의 지원 플래그(`db.driver.list`)에서 트리 모양. */
+export function shapeOf(capabilities: Capabilities): TreeShape {
+  return {
+    browse: capabilities.sql && capabilities.metadata,
+    databases: capabilities.multipleDatabases,
+    schemas: capabilities.schemas,
+  };
 }
 
 interface Kids {
@@ -176,6 +191,8 @@ export class ExplorerModel {
   private readonly expanded = new Set<string>();
   private readonly status = new Map<string, ConnectionStatus>();
   private filter = "";
+  /** Host 가 알려 준 드라이버의 모양(`db.driver.list`). 없는 드라이버는 `deps.shape` · `BUILTIN_SHAPES`. */
+  private shapes = new Map<string, TreeShape>();
   private selectedId: string | undefined;
   private token = 0;
 
@@ -243,11 +260,17 @@ export class ExplorerModel {
     return { projectId: this.deps.projectId, worktree: this.deps.worktree ?? null };
   }
 
+  /** 드라이버마다 모양을 둔다(`db.driver.list` 의 지원 플래그). */
+  setShapes(shapes: ReadonlyMap<string, TreeShape>) {
+    this.shapes = new Map(shapes);
+    this.changed();
+  }
+
   /** 그 드라이버의 트리 모양. */
   shapeOf(connectionId: string): TreeShape | undefined {
     const driver = this.entry(connectionId)?.config?.driver;
     if (!driver) return undefined;
-    return this.deps.shape?.(driver) ?? BUILTIN_SHAPES[driver];
+    return this.shapes.get(driver) ?? this.deps.shape?.(driver) ?? BUILTIN_SHAPES[driver];
   }
 
   /** 연결을 열 수 있는가 — 신뢰한 프로젝트 · 틀리지 않은 설정. 아니면 연결을 여는 항목(새 콘솔 · Redis 열기)을 끈다. */
@@ -564,8 +587,21 @@ export class ExplorerModel {
     } catch (e) {
       if (this.kids.get(id)?.token !== token) return;
       this.failed(node, id, e);
+      this.changed();
+      await this.askAccess(node.connectionId, id, token, e);
+      return;
     }
     this.changed();
+  }
+
+  /** 비밀 · 확인이 필요하다는 답이면 사람에게 묻고, 넣었으면 그 노드를 다시 읽는다. */
+  private async askAccess(connectionId: string, id: string, token: number, error: unknown) {
+    const code = error instanceof RpcCallError ? error.code : undefined;
+    if (code !== DB_ERROR_CODE.SECRET_REQUIRED && code !== DB_ERROR_CODE.APPROVAL_REQUIRED) return;
+    if (!this.deps.access || !(await this.deps.access(error, connectionId))) return;
+    // 그사이 다른 읽기 · 버리기가 있었으면 그쪽을 따른다.
+    if (this.kids.get(id)?.token !== token) return;
+    await Promise.all([this.load(id, false), this.reloadList()]);
   }
 
   /** 다시 읽은 자식 가운데 이름이 같은 것은 펼친 상태 · 읽어 둔 것을 잇고, 사라진 것은 버린다. */
