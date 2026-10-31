@@ -611,6 +611,9 @@ async fn live_redis_a_nested_reply_is_cut_at_the_reply_limits() {
         "XREAD STREAMS h2:st COUNT 0 0",
         // 재리뷰 2 H: 서버는 음수 `COUNT` 를 0, 곧 무제한으로 읽는다.
         "XREAD COUNT -1 STREAMS h2:st 0",
+        // 재리뷰 3 J: 겹친 `COUNT` 는 서버가 마지막 것을 쓴다(묶이지 않은 `COUNT 1000000`).
+        "XRANGE h2:st - + COUNT 5 COUNT 1000000",
+        "XREVRANGE h2:st + - COUNT 5 COUNT 1000000",
     ] {
         let err = w
             .call("db.kv.command", command(&s, text))
@@ -980,6 +983,9 @@ async fn live_redis_a_one_key_set_operation_is_probed_like_smembers() {
         // 재리뷰 2 I: 입력은 set 도 된다(점수 1) — ZCARD 만 물으면 WRONGTYPE(0)으로 비켜 간다.
         "ZUNION 1 p2:set",
         "ZDIFF 1 p2:set",
+        // 재리뷰 3 J: 겹친 `LIMIT` 는 서버가 마지막 것을 쓴다(`LIMIT 0 -1` = 전부).
+        "ZRANGEBYSCORE p2:zset -inf +inf LIMIT 0 5 LIMIT 0 -1",
+        "ZRANGE p2:zset -inf +inf BYSCORE LIMIT 0 5 LIMIT 0 -1",
     ] {
         let err = w
             .call("db.kv.command", command(&s, text))

@@ -127,14 +127,11 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
     let start_of = |i: usize| int(i).unwrap_or(0);
     let stop_of = |i: usize| int(i).unwrap_or(-1);
     // 선택 인자 `LIMIT <offset> <count>` · `COUNT <n>` 으로 묶였는가. 선택 인자는 고정 인자(키 · 범위) 뒤 `from` 부터만 찾는다 —
-    // 키 이름이 `LIMIT` · `COUNT` 여도 선택 인자로 읽지 않는다. 낱말이 없으면 묶이지 않은 것, 수를 못 읽거나 음수(`-1` = 전부)여도
-    // 묶이지 않은 것이다.
+    // 키 이름이 `LIMIT` · `COUNT` 여도 선택 인자로 읽지 않는다. 같은 선택 인자를 겹쳐 주면 서버는 **마지막 것**을 쓴다
+    // (`LIMIT 0 5 LIMIT 0 -1` 은 전부 — 재리뷰 3 J) — 선택 인자를 걸으며 마지막 것을 남긴다. 낱말이 없으면 묶이지 않은 것, 수를
+    // 못 읽거나 음수(`-1` = 전부)여도 묶이지 않은 것이다.
     let bounded_by = |word: &str, from: usize, skip: usize, times: u64| {
-        args.get(from..)
-            .unwrap_or_default()
-            .iter()
-            .position(|a| a.eq_ignore_ascii_case(word))
-            .and_then(|i| args.get(from + i + skip))
+        last_option(args, from, word, skip)
             .and_then(|n| n.parse::<u64>().ok())
             .is_some_and(|n| n.saturating_mul(factor).saturating_mul(times) <= MAX_REPLY_ELEMENTS)
     };
@@ -248,20 +245,34 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
             let full = key.eq_ignore_ascii_case("STREAM")
                 && options.iter().any(|a| a.eq_ignore_ascii_case("FULL"));
             let stream = args.get(1)?;
-            let unbounded = options
-                .iter()
-                .position(|a| a.eq_ignore_ascii_case("COUNT"))
-                .is_some_and(|i| {
-                    options
-                        .get(i + 1)
-                        .and_then(|n| n.parse::<i64>().ok())
-                        .is_none_or(|n| n <= 0 || n as u64 > MAX_REPLY_ELEMENTS)
-                });
+            // 겹친 `COUNT` 는 서버가 거절한다 — 그래도 다른 자리와 같이 마지막 것을 읽는다.
+            let has_count = options.iter().any(|a| a.eq_ignore_ascii_case("COUNT"));
+            let unbounded = has_count
+                && last_option(args, 2, "COUNT", 1)
+                    .and_then(|n| n.parse::<i64>().ok())
+                    .is_none_or(|n| n <= 0 || n as u64 > MAX_REPLY_ELEMENTS);
             (full && unbounded)
                 .then(|| SizeProbe::new("XLEN", stream, Check::Elements { factor: 1 }))?
         }
         _ => None,
     }
+}
+
+/// `from` 부터 선택 인자를 걸어 **마지막** `word` 의 `skip` 번째 값(`LIMIT o c` 의 c 는 2, `COUNT n` 의 n 은 1). 낱말을 만나면 그
+/// 값들을 건너뛰고(값 자리의 같은 낱말을 선택 인자로 읽지 않는다), 다른 낱말은 하나씩 건넌다. 낱말이 없거나 마지막 낱말 뒤에
+/// 값이 모자라면 `None` 이다 — 부르는 쪽은 묶이지 않은 것으로 본다.
+fn last_option<'a>(args: &'a [String], from: usize, word: &str, skip: usize) -> Option<&'a str> {
+    let mut i = from;
+    let mut last = None;
+    while let Some(arg) = args.get(i) {
+        if arg.eq_ignore_ascii_case(word) {
+            last = Some(args.get(i + skip).map(String::as_str));
+            i += skip + 1;
+        } else {
+            i += 1;
+        }
+    }
+    last.flatten()
 }
 
 /// `XREAD` · `XREADGROUP` 의 사전 확인. 선택 인자를 `start` 부터 `STREAMS` 까지 자리대로 걷는다 — 키 자리의 `COUNT` 낱말을
@@ -825,5 +836,148 @@ mod unreadable_numbers {
         assert_eq!(asked("XINFO STREAM st FULL COUNT many"), ["XLEN st"]);
         assert_eq!(probe("XINFO STREAM COUNT FULL"), None);
         assert_eq!(probe("XINFO STREAM st FULL COUNT 100"), None);
+    }
+}
+
+/// 재리뷰 3 J 와 훑기 표의 「겹친 옵션」 열: 같은 선택 인자를 겹쳐 주면 서버는 마지막 것을 쓴다(`XINFO … FULL` 은 거절 — 그래도
+/// 마지막 것을 읽는다). 표의 행마다 「작은 값 뒤에 무제한 값」 꼴이 사전 확인 · 확인 · 거절 중 하나에 걸린다. 행 수를 단언해
+/// 표에서 행이 빠지거나 시험이 행을 건너뛰지 않게 한다.
+#[cfg(test)]
+mod overlapped_options {
+    use super::*;
+    use pw_db_sql::kv_command::{BlockReason, KvCommandClass, classify_argv};
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Caught {
+        /// 드라이버가 길이를 먼저 묻는다(사전 확인).
+        Probed,
+        /// 분류가 확인을 요구한다(GEO 면제가 풀린다).
+        Confirmed,
+        /// 분류가 거절한다(스캔 `COUNT` 상한).
+        Refused,
+    }
+
+    /// (작은 값 뒤에 무제한 값을 겹친 명령, 걸리는 곳, 겹치지 않은 작은 값 하나 — 걸리지 않아야 한다).
+    const ROWS: &[(&str, Caught, &str)] = &[
+        (
+            "ZRANGEBYSCORE z -inf +inf LIMIT 0 5 LIMIT 0 -1",
+            Caught::Probed,
+            "ZRANGEBYSCORE z -inf +inf LIMIT 0 5",
+        ),
+        (
+            "ZREVRANGEBYSCORE z +inf -inf LIMIT 0 5 LIMIT 0 -1",
+            Caught::Probed,
+            "ZREVRANGEBYSCORE z +inf -inf LIMIT 0 5",
+        ),
+        (
+            "ZRANGEBYLEX z - + LIMIT 0 5 LIMIT 0 -1",
+            Caught::Probed,
+            "ZRANGEBYLEX z - + LIMIT 0 5",
+        ),
+        (
+            "ZREVRANGEBYLEX z + - LIMIT 0 5 LIMIT 0 -1",
+            Caught::Probed,
+            "ZREVRANGEBYLEX z + - LIMIT 0 5",
+        ),
+        (
+            "ZRANGE z -inf +inf BYSCORE LIMIT 0 5 LIMIT 0 -1",
+            Caught::Probed,
+            "ZRANGE z -inf +inf BYSCORE LIMIT 0 5",
+        ),
+        (
+            "ZRANGE z - + BYLEX REV LIMIT 0 5 LIMIT 0 -1",
+            Caught::Probed,
+            "ZRANGE z - + BYLEX REV LIMIT 0 5",
+        ),
+        (
+            "XRANGE s - + COUNT 5 COUNT 1000000",
+            Caught::Probed,
+            "XRANGE s - + COUNT 5",
+        ),
+        (
+            "XREVRANGE s + - COUNT 5 COUNT 1000000",
+            Caught::Probed,
+            "XREVRANGE s + - COUNT 5",
+        ),
+        (
+            "XREAD COUNT 5 COUNT 0 STREAMS s 0",
+            Caught::Probed,
+            "XREAD COUNT 5 STREAMS s 0",
+        ),
+        (
+            "XREADGROUP GROUP g c COUNT 5 COUNT 0 STREAMS s >",
+            Caught::Probed,
+            "XREADGROUP GROUP g c COUNT 5 STREAMS s >",
+        ),
+        (
+            "XINFO STREAM s FULL COUNT 5 COUNT 0",
+            Caught::Probed,
+            "XINFO STREAM s FULL COUNT 5",
+        ),
+        (
+            "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 3 ANY COUNT 99999999",
+            Caught::Confirmed,
+            "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 3 ANY",
+        ),
+        (
+            "GEORADIUS_RO g 0 0 1 km COUNT 3 ANY COUNT 99999999",
+            Caught::Confirmed,
+            "GEORADIUS_RO g 0 0 1 km COUNT 3 ANY",
+        ),
+        (
+            "GEORADIUSBYMEMBER_RO g m 1 km COUNT 3 ANY COUNT 99999999",
+            Caught::Confirmed,
+            "GEORADIUSBYMEMBER_RO g m 1 km COUNT 3 ANY",
+        ),
+        (
+            "SCAN 0 COUNT 10 COUNT 1000000",
+            Caught::Refused,
+            "SCAN 0 COUNT 10",
+        ),
+        (
+            "SSCAN s 0 COUNT 10 COUNT 1000000",
+            Caught::Refused,
+            "SSCAN s 0 COUNT 10",
+        ),
+    ];
+
+    fn argv(text: &str) -> Vec<String> {
+        text.split_whitespace().map(str::to_owned).collect()
+    }
+
+    fn caught(text: &str) -> Option<Caught> {
+        let argv = argv(text);
+        match classify_argv(&argv) {
+            KvCommandClass::Blocked(BlockReason::ScanCount) => return Some(Caught::Refused),
+            KvCommandClass::Blocked(other) => panic!("{text}: refused for {other:?}"),
+            KvCommandClass::Confirm(_) => return Some(Caught::Confirmed),
+            KvCommandClass::Allowed | KvCommandClass::Write => {}
+        }
+        size_probe(&argv[0], &argv[1..]).map(|_| Caught::Probed)
+    }
+
+    #[test]
+    fn the_last_of_overlapped_options_is_judged() {
+        assert_eq!(
+            ROWS.len(),
+            16,
+            "a row was added or removed — update the report table too"
+        );
+        let mut checked = 0;
+        for &(overlapped, expected, single) in ROWS {
+            assert_eq!(caught(overlapped), Some(expected), "{overlapped}");
+            assert_eq!(caught(single), None, "{single}");
+            checked += 1;
+        }
+        assert_eq!(checked, ROWS.len());
+    }
+
+    /// 값 자리의 같은 낱말은 선택 인자가 아니다(`LIMIT 0 LIMIT` 의 끝 `LIMIT` 은 count 자리) — 못 읽는 수라 묻는다.
+    #[test]
+    fn a_trailing_option_word_without_its_values_is_unbounded() {
+        assert!(caught("ZRANGEBYSCORE z -inf +inf LIMIT 0 5 LIMIT").is_some());
+        assert!(caught("ZRANGEBYSCORE z -inf +inf LIMIT 0 LIMIT").is_some());
+        assert!(caught("XRANGE s - + COUNT 5 COUNT").is_some());
+        assert_eq!(caught("XRANGE s - + COUNT 5 WITHSCORES"), None);
     }
 }
