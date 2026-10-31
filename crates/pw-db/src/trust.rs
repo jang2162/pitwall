@@ -40,9 +40,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use pw_core::registry::path::{WorktreeRootError, worktree_root};
+use pw_core::registry::path::{WorktreeRootError, simplify, worktree_root};
 use pw_core::registry::state::{PROJECTS_DIR, valid_id};
 use pw_core::registry::{Project, Registry};
+use pw_db_types::spec::path_within;
 use pw_db_types::{ConnectionSpec, Secret, Target, TlsSettings};
 use pw_rpc::{ConnectionScope, Router, RpcError, code as rpc_code, rpc_method};
 use serde::{Deserialize, Serialize};
@@ -323,9 +324,11 @@ fn read_approvals(file: &Path) -> Result<Approvals, String> {
     serde_json::from_str(&text).map_err(|e| format!("{} is unreadable: {e}", file.display()))
 }
 
-/// 실제 경로(링크를 끝까지 푼 것). 없는 파일은 연결할 수 없다 — 드라이버도 파일을 만들지 않는다.
+/// 실제 경로(링크를 끝까지 푼 것). 없는 파일은 연결할 수 없다 — 드라이버도 파일을 만들지 않는다. Windows 에서 `canonicalize` 가
+/// 붙이는 verbatim 접두(`\\?\`)는 걷는다 — 확인 요청(`realPath`)으로 사람에게 보이고 프로젝트 상태에 저장하는 경로다
+/// (`pw_core::registry::path` 머리 주석의 규칙).
 fn real_path(path: &Path) -> Result<PathBuf, RpcError> {
-    fs::canonicalize(path).map_err(|e| {
+    fs::canonicalize(path).map(simplify).map_err(|e| {
         RpcError::invalid_params(format!(
             "cannot open the sqlite file {}: {e}",
             path.display()
@@ -431,7 +434,8 @@ impl Connections {
         {
             roots.push(main);
         }
-        let outside = !roots.iter().any(|root| real.starts_with(root));
+        // 걷지 못한 긴 경로는 verbatim 으로 남는다 — 접두의 꼴과 상관없이 견준다.
+        let outside = !roots.iter().any(|root| path_within(&real, root));
         Ok((real, roots, outside))
     }
 

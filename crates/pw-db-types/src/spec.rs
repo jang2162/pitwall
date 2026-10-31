@@ -5,6 +5,7 @@
 //! 드라이버 trait 의 입력이다. 비밀번호가 들어 있으므로 RPC 응답 · 로그로 내보내지 않는다 — TS 타입이 없고, `Debug` 는
 //! 비밀을 가린다.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -223,15 +224,45 @@ impl ConnectionSpec {
         }
     }
 
-    /// 파일 DB 가 `real_path` 를 붙여도 되는가 — [`allowed_roots`](Self::allowed_roots) 하나의 안(구성 요소 단위)일 때만.
+    /// 파일 DB 가 `real_path` 를 붙여도 되는가 — [`allowed_roots`](Self::allowed_roots) 하나의 안([`path_within`])일 때만.
     /// `real_path` 는 링크를 끝까지 푼 절대 경로여야 한다(푸는 것은 드라이버 몫이다). 상대 경로는 거절한다.
     pub fn file_allowed(&self, real_path: &Path) -> bool {
         real_path.is_absolute()
             && self
                 .allowed_roots
                 .iter()
-                .any(|root| real_path.starts_with(root))
+                .any(|root| path_within(real_path, root))
     }
+}
+
+/// `path` 가 `root` 안인가(구성 요소 단위 — `/p/proj` 가 `/p/project2` 를 품지 않는다). Windows 에서는 verbatim 접두
+/// (`\\?\C:\` · `\\?\UNC\`)와 보통 접두(`C:\` · `\\`)를 같은 자리로 본다: `fs::canonicalize` 는 verbatim 으로 돌려주고(드라이버가
+/// 푸는 `ATTACH` 대상), 신뢰 게이트가 넘기는 경로 · 루트는 그 접두를 걷은 꼴이다(`pw_core::registry::path::simplify` — 걷으면 뜻이
+/// 바뀌는 긴 경로 등은 verbatim 으로 남는다).
+pub fn path_within(path: &Path, root: &Path) -> bool {
+    path.starts_with(root) || plain(path).starts_with(plain(root))
+}
+
+/// 비교용 꼴: Windows 의 verbatim 접두를 걷는다. 다른 OS 에서는 그대로다.
+fn plain(path: &Path) -> Cow<'_, Path> {
+    #[cfg(windows)]
+    if let Some(plain) = path.to_str().and_then(without_verbatim_prefix) {
+        return Cow::Owned(PathBuf::from(plain));
+    }
+    Cow::Borrowed(path)
+}
+
+/// `\\?\C:\a` → `C:\a`, `\\?\UNC\srv\share\a` → `\\srv\share\a`. 그 밖은 `None`. 비교에만 쓴다 — 실제 경로(`canonicalize` 의
+/// 결과)는 `.` · `..` · `/` 가 없어 접두만 걷어도 구성 요소가 그대로다. 문자열만 보는 함수라 모든 OS 에서 시험한다.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn without_verbatim_prefix(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(r"\\?\")?;
+    if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        return Some(format!(r"\\{unc}"));
+    }
+    let drive = rest.as_bytes();
+    (drive.len() >= 3 && drive[0].is_ascii_alphabetic() && &drive[1..3] == b":\\")
+        .then(|| rest.to_owned())
 }
 
 #[cfg(test)]
@@ -283,6 +314,46 @@ mod tests {
             SslMode::VerifyFull,
             "the default is the safe mode"
         );
+    }
+
+    /// Windows 의 `canonicalize` 는 `\\?\` 를 붙인다 — 드라이버가 푼 `ATTACH` 대상은 그 꼴이고 루트는 접두를 걷은 꼴이다.
+    #[test]
+    fn the_verbatim_prefix_is_dropped_for_comparison_only() {
+        assert_eq!(
+            without_verbatim_prefix(r"\\?\C:\Users\me\proj\app.db").as_deref(),
+            Some(r"C:\Users\me\proj\app.db")
+        );
+        assert_eq!(
+            without_verbatim_prefix(r"\\?\UNC\srv\share\app.db").as_deref(),
+            Some(r"\\srv\share\app.db")
+        );
+        for other in [
+            r"C:\Users\me\app.db",
+            r"\\srv\share\app.db",
+            r"\\?\GLOBALROOT\Device\x",
+            r"\\?\C:",
+            "/home/me/app.db",
+        ] {
+            assert_eq!(without_verbatim_prefix(other), None, "{other}");
+        }
+    }
+
+    /// CI 의 Windows 러너: 루트는 보통 꼴(`C:\…`), 드라이버가 푼 대상은 verbatim(`\\?\C:\…`)이다. 어느 쪽이 어느 꼴이든 같은 자리다.
+    #[cfg(windows)]
+    #[test]
+    fn windows_roots_match_verbatim_and_plain_paths_alike() {
+        let mut spec = ConnectionSpec::new(
+            DriverKind::Sqlite.id(),
+            Target::File {
+                path: PathBuf::from(r"C:\proj\app.db"),
+            },
+        );
+        spec.allowed_roots = vec![PathBuf::from(r"C:\proj"), PathBuf::from(r"\\?\D:\other")];
+        assert!(spec.file_allowed(Path::new(r"\\?\C:\proj\db\x.db")));
+        assert!(spec.file_allowed(Path::new(r"C:\proj\x.db")));
+        assert!(spec.file_allowed(Path::new(r"D:\other\x.db")));
+        assert!(!spec.file_allowed(Path::new(r"\\?\C:\project2\x.db")));
+        assert!(!spec.file_allowed(Path::new(r"\\?\D:\proj\x.db")));
     }
 
     #[test]
