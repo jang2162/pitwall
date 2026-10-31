@@ -3,9 +3,12 @@ packages:
   - "apps/*"
   - "extensions/*"
 
-# Glide Data Grid(apps/desktop, M3-16)의 필수 peer 중 markdown · 이미지 칸만 쓰는 둘은 설치하지 않는다 — 앱의 vite 설정이 던지는
-# 자리(apps/desktop/src/db/grid/glide-stubs/)로 바꿔 번들에서 뺐다(결과 그리드는 DB 값을 늘 글자 칸으로 그린다). 그 둘의 「peer 없음」
-# 경고만 끈다.
+# Glide Data Grid(apps/desktop, M3-16)의 필수 peer 중 markdown · 이미지 칸만 쓰는 둘(`marked` · `react-responsive-carousel`)은
+# 앱의 dependencies 에 두지 않고, 앱의 vite 설정이 던지는 자리(apps/desktop/src/db/grid/glide-stubs/)로 바꿔 **번들에서만** 뺐다(결과
+# 그리드는 DB 값을 늘 글자 칸으로 그린다). 설치는 된다 — lockfile 의 `autoInstallPeers: true` 가 peer 로 설치하므로 아래 규칙은
+# 지금 아무 경고도 끄지 않고(peer 가 빠지는 일이 없다), THIRD_PARTY_NOTICES 에도 남는다(넘치는 쪽 — 메인 판정으로 받았다). 설치까지
+# 빼려면 auto-install-peers 를 따로 정해야 한다. 설치본은 vite 를 거치지 않는 길(vitest 의 외부화된 의존성)에서 읽힐 수 있다 —
+# 그리드 창 시험은 Glide 를 가짜로 바꿔 닿지 않는다.
 peerDependencyRules:
   ignoreMissing:
     - marked
