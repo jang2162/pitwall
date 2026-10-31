@@ -6,14 +6,17 @@
 //! 출처: DBX(<https://github.com/t8y2/dbx>) 커밋 `c5e7e0430653aaef198800a48f9dec46a7cfed5e` 의
 //! `crates/dbx-sql-core/src/sql_risk.rs` 의 `mod tests` 를 옮겨 수정함. Apache License 2.0 — 고지는 `licenses/vendored.md` 「DBX」.
 //!
-//! 기대값을 바꾼 까닭은 넷 중 하나다(시험 안에 [A]~[D] 로 적었다):
-//! - [A] 파싱 실패는 파괴 · `unparsed`(fail-closed) — DBX 는 키워드 폴백으로 쓰기 · 조회를 답했다.
+//! 기대값을 바꾼 까닭은 여섯 중 하나다(시험 안에 [A]~[F] 로 적었다):
+//! - [A] 파싱 실패는 파괴 · `unparsed`(fail-closed) — DBX 는 키워드 폴백으로 쓰기 · 조회를 답했다. 정확한 꼴 인식기(`recognize.rs`)가
+//!   읽는 잠금절(`LOCK IN SHARE MODE` · `FOR KEY SHARE`)은 DBX 와 같은 쓰기다.
 //! - [B] 다섯 갈래 — DBX 의 `Ddl` 에서 `DROP` · `TRUNCATE` 가 파괴로, `is_dangerous` 인 `UPDATE` · `DELETE` 가 범위 없는 쓰기로,
 //!   `Transaction` 이 쓰기로 갈렸다. `is_dangerous` 였던 `INSERT` 꼴(upsert · `INSERT … SELECT`)은 쓰기다(F6-9 의 범위 없는
 //!   쓰기는 `UPDATE` · `DELETE` 다).
 //! - [C] 읽기 증명(`ReadProof`)은 옮기지 않았다 — 증명이 거절하던 목록 밖 함수 · 창 함수 · 여러 문장은 분류에서 조회다(목록 밖
 //!   함수는 DB 수준 읽기 전용이 막는다, 결정 M3-D6). 같은 글을 분류의 기대값으로 단언한다.
 //! - [D] 목록을 넓혔다 — `SLEEP` · `GET_LOCK` · `pg_sleep` · `lo_import` 가 든 조회는 쓰기다.
+//! - [E] 다른 세션 · 서버에 닿는 관리 함수(`pg_terminate_backend` · `pg_cancel_backend` …)는 범위 없는 쓰기다(DBX 는 쓰기 + dangerous).
+//! - [F] PG 의 `SELECT … INTO 표` 는 표를 만든다(`CREATE TABLE … AS` 와 같다) — DDL(DBX 는 쓰기).
 
 use pw_db_types::RiskGrade::{self, Ddl, Destructive, Read, UnboundedWrite, Write};
 use pw_db_types::SqlDialect::{self, Mysql, Postgres, Sqlite};
@@ -92,9 +95,10 @@ fn mysql_session_writes_locking_and_side_effects() {
         ],
         Write,
     );
-    // [A] 파서가 `INTO OUTFILE` · `LOCK IN SHARE MODE` 를 읽지 못한다.
+    // 인식기가 잠금절을 `FOR SHARE` 로 읽는다(DBX 와 같은 쓰기).
+    expect(Mysql, "SELECT * FROM users LOCK IN SHARE MODE", Write);
+    // [A] 파서가 `INTO OUTFILE` 을 읽지 못한다.
     expect_unparsed(Mysql, "SELECT * FROM users INTO OUTFILE '/tmp/x'");
-    expect_unparsed(Mysql, "SELECT * FROM users LOCK IN SHARE MODE");
     expect_unparsed(Mysql, "SELEC * FORM users");
     expect_unparsed(Mysql, "SELECT id FROM users INTO @current_id LIMIT 1");
     // [C] 목록 밖 함수 · 창 함수 · 여러 조회 · 조회의 EXPLAIN ANALYZE 는 조회다.
@@ -142,11 +146,11 @@ fn postgres_plain_reads_and_side_effects() {
         ],
         Write,
     );
-    // PG 의 `SELECT … INTO` 는 표를 만든다(`CREATE TABLE … AS` 와 같다).
+    // [F]
     expect(Postgres, "SELECT * INTO new_t FROM t", Ddl);
-    // [A] sqlparser 는 PG 의 `FOR NO KEY UPDATE` · `FOR KEY SHARE` 를 읽지 못한다.
-    expect_unparsed(Postgres, "SELECT * FROM t FOR NO KEY UPDATE");
-    expect_unparsed(Postgres, "SELECT * FROM t FOR KEY SHARE");
+    // sqlparser 는 PG 의 `FOR NO KEY UPDATE` · `FOR KEY SHARE` 를 읽지 못한다 — 인식기가 `FOR UPDATE` · `FOR SHARE` 로 읽는다.
+    expect(Postgres, "SELECT * FROM t FOR NO KEY UPDATE", Write);
+    expect(Postgres, "SELECT * FROM t FOR KEY SHARE", Write);
     // [C]
     expect_all(
         Postgres,
@@ -220,7 +224,7 @@ fn oracle_guard_rail_inputs() {
     // [A]
     expect_unparsed(Postgres, "SELECT * FROM t@dblink");
     expect_unparsed(Postgres, "SELECT * FROM DUAL@dblink");
-    // PG 에서는 표 `v` 를 만든다.
+    // [F] PG 에서는 표 `v` 를 만든다.
     expect(Postgres, "SELECT COUNT(*) INTO v FROM t", Ddl);
     // [C] 시퀀스 의사 열(`seq.NEXTVAL`)은 함수 호출이 아니라 열 이름으로 읽힌다 — Oracle 연결이 없으므로 PG 콘솔에서는 없는 열이다.
     expect_all(
@@ -374,7 +378,7 @@ fn mysql_show_triggers_preserves_write_detection() {
 // DBX: classify_mysql_legacy_shared_lock_reads_like_for_share
 #[test]
 fn classify_mysql_legacy_shared_lock_reads() {
-    // [A] 파서가 `LOCK IN SHARE MODE` 를 읽지 못해 파괴 · `unparsed` 다(DBX 는 쓰기).
+    // 파서가 `LOCK IN SHARE MODE` 를 읽지 못하지만 인식기가 `FOR SHARE` 로 읽는다 — DBX 와 같은 쓰기.
     for sql in [
         "SELECT * FROM users LOCK IN SHARE MODE",
         "SELECT * FROM users lock in share mode",
@@ -384,7 +388,7 @@ fn classify_mysql_legacy_shared_lock_reads() {
         "WITH locked AS (SELECT * FROM users LOCK IN SHARE MODE) SELECT * FROM locked",
         "SELECT (SELECT id FROM users LOCK IN SHARE MODE)",
     ] {
-        expect_unparsed(Mysql, sql);
+        expect(Mysql, sql, Write);
     }
     // 이름 · 문자열에 든 같은 낱말은 조회다.
     expect_all(
@@ -461,6 +465,7 @@ fn classify_write_statements() {
         "EXPLAIN ANALYZE DELETE FROM users",
         UnboundedWrite,
     );
+    // [F]
     expect(Postgres, "SELECT * INTO backup_users FROM users", Ddl);
     // [A]
     expect_unparsed(Mysql, "SELECT * FROM users INTO OUTFILE '/tmp/users.csv'");
@@ -516,9 +521,10 @@ fn classify_known_side_effect_selects_and_copy() {
         Write,
     );
     // 다른 세션을 끊는 관리 함수는 범위 없는 쓰기다(DBX 는 쓰기 + dangerous).
+    // [E]
     expect(Postgres, "SELECT pg_terminate_backend(42)", UnboundedWrite);
-    // [A]
-    expect_unparsed(Postgres, "SELECT * FROM users FOR KEY SHARE");
+    // 인식기가 `FOR SHARE` 로 읽는다(DBX 와 같은 쓰기).
+    expect(Postgres, "SELECT * FROM users FOR KEY SHARE", Write);
     // DB 서버에서 셸 명령을 돌린다 — 파괴(DBX 는 쓰기 + dangerous).
     let classification = classify_statement(
         Postgres,
@@ -533,7 +539,7 @@ fn classify_known_side_effect_selects_and_copy() {
 // DBX: classify_backend_query_cancellation_as_a_side_effect
 #[test]
 fn classify_backend_query_cancellation_as_a_side_effect() {
-    // 다른 세션에 닿는 관리 함수는 범위 없는 쓰기다(DBX 는 쓰기 + dangerous).
+    // [E]
     expect(Postgres, "SELECT pg_cancel_backend(42)", UnboundedWrite);
     // Kingbase 의 같은 함수(DBX 목록 그대로).
     expect(Postgres, "SELECT sys_cancel_backend(42)", UnboundedWrite);
@@ -550,9 +556,9 @@ fn classify_dialect_specific_select_into() {
     ] {
         expect_unparsed(Mysql, sql);
     }
-    // PG 계열의 `SELECT … INTO` 는 표를 만든다.
+    // [F] PG 계열의 `SELECT … INTO` 는 표를 만든다.
     expect(Postgres, "SELECT * INTO copied_users FROM users", Ddl);
-    // SQL Server 의 임시 표 이름(`#…`)도 PG 방언에서는 표를 만드는 `SELECT … INTO` 로 읽힌다.
+    // [F] SQL Server 의 임시 표 이름(`#…`)도 PG 방언에서는 표를 만드는 `SELECT … INTO` 로 읽힌다.
     expect(Postgres, "SELECT * INTO #copied_users FROM users", Ddl);
 }
 
@@ -674,6 +680,7 @@ fn unbounded_changes_are_unbounded_writes() {
 // DBX: select_into_requires_central_high_risk_permission_for_supported_databases
 #[test]
 fn select_into_grades() {
+    // [F]
     expect(Postgres, "SELECT * INTO copied_users FROM users", Ddl);
     expect(Postgres, "SELECT * INTO #copied_users FROM users", Ddl);
     // [A]

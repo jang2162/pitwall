@@ -5237,6 +5237,7 @@ dependencies = [
 name = "pw-db-sql"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "pw-db-types",
  "pw-rpc",
  "schemars 1.2.3",

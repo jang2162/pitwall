@@ -191,11 +191,12 @@ fn parse_failures_are_destructive_and_unparsed() {
         (Sqlite, "SELECT 'unterminated"),
         // 방언에 없는(파서가 모르는) 문법
         (Postgres, "DO $$ BEGIN DROP TABLE t; END $$"),
-        (Postgres, "SELECT * FROM t FOR NO KEY UPDATE"),
-        (Postgres, "REFRESH MATERIALIZED VIEW v"),
-        (Mysql, "SELECT * FROM t LOCK IN SHARE MODE"),
-        (Mysql, "LOAD DATA INFILE '/tmp/x' INTO TABLE t"),
-        (Sqlite, "PRAGMA journal_mode = WAL"),
+        (Postgres, "ALTER SYSTEM SET work_mem = '1GB'"),
+        (Mysql, "LOAD DATA LOCAL INFILE '/tmp/x' INTO TABLE t"),
+        (Mysql, "XA START 'x'"),
+        // 인식기의 꼴에 덧붙인 문장(규칙 (나) — 정확히 그 문장 하나일 때만)
+        (Postgres, "REFRESH MATERIALIZED VIEW v; DROP TABLE t"),
+        (Sqlite, "PRAGMA table_info(t); DROP TABLE x"),
     ];
     assert!(failures.len() >= 10);
     for (dialect, sql) in failures {
@@ -204,9 +205,9 @@ fn parse_failures_are_destructive_and_unparsed() {
 }
 
 #[test]
-fn deep_nesting_is_unparsed_without_overflowing_the_stack() {
+fn deep_nesting_is_too_deep_without_overflowing_the_stack() {
     let sql = format!("SELECT {}1{}", "(".repeat(5_000), ")".repeat(5_000));
-    expect(Postgres, &sql, Destructive, &[Unparsed]);
+    expect(Postgres, &sql, Destructive, &[TooDeep]);
 }
 
 #[test]
@@ -280,7 +281,7 @@ fn server_admin_functions_are_unbounded_writes_wherever_they_hide() {
         "INSERT INTO log SELECT pg_terminate_backend(pid) FROM pg_stat_activity",
         "EXPLAIN ANALYZE SELECT pg_terminate_backend(1)",
     ] {
-        expect(Postgres, sql, UnboundedWrite, &[ServerAdminFunction]);
+        expect(Postgres, sql, UnboundedWrite, &[ServerAdmin]);
     }
     // 돌리지 않는 EXPLAIN 과 문자열 · 열 이름은 조회다.
     for sql in [
@@ -440,13 +441,10 @@ fn statements_the_parser_cannot_read_stay_destructive() {
     // 「고칠 것」 ③ 의 「쓰기 이상」 가운데 sqlparser 0.63 이 읽지 못하는 꼴 — fail-closed 로 파괴 · `unparsed` 다.
     for (dialect, sql) in [
         (Postgres, "DO $$ BEGIN PERFORM 1; END $$"),
-        (Mysql, "LOAD DATA INFILE '/tmp/x' INTO TABLE t"),
         (Mysql, "LOAD DATA LOCAL INFILE '/tmp/x' INTO TABLE t"),
         (Mysql, "SELECT * FROM t INTO OUTFILE '/tmp/x'"),
         (Mysql, "SELECT 1 /*!50000 INTO OUTFILE '/tmp/x' */"),
         (Sqlite, "VACUUM INTO '/tmp/copy.db'"),
-        (Sqlite, "DETACH DATABASE other"),
-        (Sqlite, "PRAGMA table_info(t)"),
     ] {
         expect(dialect, sql, Destructive, &[Unparsed]);
     }
