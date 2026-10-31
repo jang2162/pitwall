@@ -50,7 +50,7 @@ run = [
 
 # 실 DB 시험(live_*)을 DB 마다 따로 돌리고 실행 개수를 하한(scripts/db-live.toml)과 견준다 — CI 의 `db-live` 잡과 같은 명령이다.
 # URL(PW_TEST_PG_URL · PW_TEST_MYSQL_URL · PW_TEST_MARIADB_URL · PW_TEST_REDIS_URL)이 없는 DB 는 건너뛰고 그렇게 알린다 — 통과로
-# 세지 않는다. 인자로 DB 를 고른다 — 예: `mise run test-db -- pg redis`.
+# 세지 않는다(모두 건너뛰면 종료 코드 3). 인자로 DB 를 고른다 — 예: `mise run test-db -- pg redis`.
 [tasks.test-db]
 description = "실 DB 시험(PG · MySQL · MariaDB · Redis)을 DB 마다 돌리고 실행 개수 하한 검사(URL 이 없는 DB 는 건너뜀)"
 run = "node scripts/db-live.mjs"

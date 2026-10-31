@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# 실 DB 시험 표지(`cfg(pw_live_*)`) — 관문을 지나는 live 시험(M3-12 · M3-22)이 여기 산다. pw-db-driver 와 같은 빌드 스크립트.
+build = "../pw-db-driver/live_cfg.rs"
 
 # 드라이버 크레이트(pw-db-driver-*)에 의존하지 않는다 — trait 로만 부른다(14-m3-plan.md 결정 M3-D3). 드라이버는 데스크톱
 # 크레이트가 등록부에 넣는다. `tests/driver_free.rs` 가 지킨다.

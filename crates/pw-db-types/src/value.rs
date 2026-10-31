@@ -56,9 +56,10 @@ pub enum DbValue {
 }
 
 /// 정수 값. 수인지 문자열인지는 값의 크기가 정한다 — [`DbValue::int`] 로 만든다.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
-)]
+///
+/// 받을 때는 규칙대로 다시 고른다 — `{"int": 9007199254740993}` 은 문자열로, `{"int": "5"}` 는 수로 받는다(창이 보낸 바인드
+/// 값 · 프로세스 밖 드라이버가 규칙을 어겨도 같은 값이 같은 모양이 된다). 정수가 아닌 글은 거절한다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum DbInt {
     /// |값| ≤ 2^53 − 1.
@@ -67,13 +68,56 @@ pub enum DbInt {
     Text(String),
 }
 
-/// 실수 값. 유한하지 않은 값은 그 이름의 문자열이다 — [`DbValue::float`] 로 만든다.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+impl<'de> Deserialize<'de> for DbInt {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Signed(i64),
+            Unsigned(u64),
+            Text(String),
+        }
+        let value: i128 = match Raw::deserialize(d)? {
+            Raw::Signed(v) => v.into(),
+            Raw::Unsigned(v) => v.into(),
+            Raw::Text(t) => t
+                .parse()
+                .map_err(|_| serde::de::Error::custom(format!("not an integer: {t:?}")))?,
+        };
+        match DbValue::int(value) {
+            DbValue::Int(int) => Ok(int),
+            _ => unreachable!("DbValue::int makes an Int"),
+        }
+    }
+}
+
+/// 실수 값. 유한하지 않은 값은 그 이름의 문자열이다 — [`DbValue::float`] 로 만든다. 받을 때 그 셋 밖의 글은 거절한다.
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum DbFloat {
     Number(#[specta(type = JsNumber)] f64),
     /// `NaN` · `Infinity` · `-Infinity`.
     Text(String),
+}
+
+impl<'de> Deserialize<'de> for DbFloat {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Number(f64),
+            Text(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Number(v) => Ok(Self::Number(v)),
+            Raw::Text(t) => match t.as_str() {
+                "NaN" | "Infinity" | "-Infinity" => Ok(Self::Text(t)),
+                _ => Err(serde::de::Error::custom(format!(
+                    "a float is a number or NaN / Infinity / -Infinity, not {t:?}"
+                ))),
+            },
+        }
+    }
 }
 
 /// 바이트 값.

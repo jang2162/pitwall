@@ -99,3 +99,25 @@ fn text_over_the_cell_limit_keeps_a_prefix_on_a_char_boundary() {
         json!({ "truncated": { "of": "other", "prefix": "POINT", "size": 10, "typeName": "geometry" } })
     );
 }
+
+/// 받을 때도 정수 경계 규칙대로 다시 고른다(리뷰 L6).
+#[test]
+fn incoming_ints_and_floats_are_normalized_or_refused() {
+    let read = |v: serde_json::Value| serde_json::from_value::<DbValue>(v);
+    assert_eq!(
+        read(json!({ "int": 9_007_199_254_740_993_i64 })).unwrap(),
+        DbValue::Int(DbInt::Text("9007199254740993".into()))
+    );
+    assert_eq!(read(json!({ "int": "5" })).unwrap(), DbValue::int(5_i64));
+    assert_eq!(
+        read(json!({ "int": u64::MAX })).unwrap(),
+        DbValue::int(u64::MAX)
+    );
+    assert!(read(json!({ "int": "5.5" })).is_err());
+    assert!(read(json!({ "int": "abc" })).is_err());
+    assert_eq!(
+        read(json!({ "float": "Infinity" })).unwrap(),
+        DbValue::float(f64::INFINITY)
+    );
+    assert!(read(json!({ "float": "1.5" })).is_err());
+}

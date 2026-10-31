@@ -2,7 +2,9 @@
 //!
 //! **시험을 다는 법**: `#[cfg(pw_live_pg)]`(MySQL · MariaDB 는 `pw_live_mysql`, Redis 는 `pw_live_redis`)를 달고 이름에
 //! `live_pg` · `live_mysql` · `live_redis` 를 넣는다. 환경 변수가 없으면 시험이 목록에 없다(크레이트의 빌드 스크립트
-//! `live_cfg.rs` 머리 주석). URL 은 [`LiveDb::url`].
+//! `live_cfg.rs` 머리 주석). URL 은 [`LiveDb::url`]. **live 시험은 `pw-db*` 크레이트에만 둔다** — 그 크레이트의 `Cargo.toml` 에
+//! `build = "../pw-db-driver/live_cfg.rs"` 가 있어야 표지가 켜지고(없으면 `unexpected_cfgs` 로 lint 가 실패한다),
+//! `scripts/db-live.mjs` 는 `pw-db*` 패키지만 빌드해 돌린다(데스크톱 크레이트에 둔 live 시험은 돌지 않는다).
 //!
 //! **준비 확인**(`live_<db>_ready`): 드라이버 없이 `std::net` 으로 서버가 떴는지만 본다 — PG 는 `SSLRequest` 에 대한 1바이트
 //! 응답, MySQL · MariaDB 는 첫 핸드셰이크 패킷의 프로토콜 판본 바이트(10), Redis 는 `PING` → `+PONG`. CI 의 `db-live` 잡에서는

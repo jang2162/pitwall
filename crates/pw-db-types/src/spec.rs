@@ -6,7 +6,7 @@
 //! 비밀을 가린다.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -178,8 +178,11 @@ impl fmt::Debug for Secret {
 }
 
 /// 드라이버가 연결을 여는 데 필요한 것 전부.
+///
+/// 필드를 더해도 다른 크레이트가 깨지지 않게 `#[non_exhaustive]` 다 — [`ConnectionSpec::new`] 로 만들고 필드를 고친다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ConnectionSpec {
     /// 드라이버 id([`DriverKind::id`] 또는 프로세스 밖 드라이버의 id).
     pub driver: String,
@@ -196,6 +199,39 @@ pub struct ConnectionSpec {
     pub connect_timeout_ms: u32,
     /// 응답 하나를 기다리는 시간 상한(밀리초, Redis — 결정 M3-D15). `None` 이면 드라이버 기본값.
     pub response_timeout_ms: Option<u32>,
+    /// 파일 DB 가 붙여도 되는 루트(실제 경로) — SQLite 의 `ATTACH` · `VACUUM INTO` 대상은 [`ConnectionSpec::file_allowed`] 를
+    /// 지나야 한다(M3-08). 채우는 것은 신뢰 게이트(M3-02 `db_trust_gate`)다: 그 프로젝트의 루트(활성 워크트리 포함)와 사람이
+    /// 루트 밖 확인을 준 실제 경로(프로젝트 상태에 기억한 것). 네트워크 드라이버는 빈 목록이고, 빈 목록이면 어떤 파일도 붙이지 않는다.
+    pub allowed_roots: Vec<PathBuf>,
+}
+
+impl ConnectionSpec {
+    /// 나머지는 안전한 기본값: DB · 사용자 · 비밀 없음, `sslmode` `verify-full`(결정 M3-D10), 읽기 쓰기, 연결 10 s,
+    /// 응답 타임아웃은 드라이버 기본, 허용 루트 없음.
+    pub fn new(driver: impl Into<String>, target: Target) -> Self {
+        Self {
+            driver: driver.into(),
+            target,
+            database: None,
+            user: None,
+            password: None,
+            tls: TlsSettings::mode(SslMode::VerifyFull),
+            read_only: false,
+            connect_timeout_ms: 10_000,
+            response_timeout_ms: None,
+            allowed_roots: Vec::new(),
+        }
+    }
+
+    /// 파일 DB 가 `real_path` 를 붙여도 되는가 — [`allowed_roots`](Self::allowed_roots) 하나의 안(구성 요소 단위)일 때만.
+    /// `real_path` 는 링크를 끝까지 푼 절대 경로여야 한다(푸는 것은 드라이버 몫이다). 상대 경로는 거절한다.
+    pub fn file_allowed(&self, real_path: &Path) -> bool {
+        real_path.is_absolute()
+            && self
+                .allowed_roots
+                .iter()
+                .any(|root| real_path.starts_with(root))
+    }
 }
 
 #[cfg(test)]
@@ -204,24 +240,49 @@ mod tests {
 
     #[test]
     fn debug_hides_the_secret() {
-        let spec = ConnectionSpec {
-            driver: DriverKind::Postgres.id().to_owned(),
-            target: Target::Network {
+        let mut spec = ConnectionSpec::new(
+            DriverKind::Postgres.id(),
+            Target::Network {
                 host: "db.internal".into(),
                 port: 5432,
                 connect_to: None,
             },
-            database: None,
-            user: Some("app".into()),
-            password: Some(Secret::new("hunter2")),
-            tls: TlsSettings::mode(SslMode::VerifyFull),
-            read_only: false,
-            connect_timeout_ms: 10_000,
-            response_timeout_ms: None,
-        };
+        );
+        spec.user = Some("app".into());
+        spec.password = Some(Secret::new("hunter2"));
         let debug = format!("{spec:?}");
         assert!(!debug.contains("hunter2"), "{debug}");
         assert!(debug.contains("Secret(***)"), "{debug}");
+    }
+
+    /// 14-m3-plan.md M3-08 ⑦ 의 바탕: 루트 판정은 구성 요소 단위다(`/p/proj` 가 `/p/project2` 를 품지 않는다).
+    #[test]
+    fn file_targets_must_sit_inside_an_allowed_root() {
+        let base = std::env::temp_dir();
+        let mut spec = ConnectionSpec::new(
+            DriverKind::Sqlite.id(),
+            Target::File {
+                path: base.join("proj").join("app.db"),
+            },
+        );
+        assert!(
+            !spec.file_allowed(&base.join("proj").join("other.db")),
+            "no roots, no files"
+        );
+        spec.allowed_roots = vec![base.join("proj"), base.join("outside-ok")];
+        assert!(spec.file_allowed(&base.join("proj").join("db").join("other.db")));
+        assert!(spec.file_allowed(&base.join("outside-ok").join("x.db")));
+        assert!(!spec.file_allowed(&base.join("project2").join("x.db")));
+        assert!(!spec.file_allowed(&base.join("outside-okay.db")));
+        assert!(
+            !spec.file_allowed(Path::new("proj/app.db")),
+            "relative paths are refused"
+        );
+        assert_eq!(
+            spec.tls.mode,
+            SslMode::VerifyFull,
+            "the default is the safe mode"
+        );
     }
 
     #[test]

@@ -6,13 +6,21 @@
 use pw_rpc::JsNumber;
 use serde::{Deserialize, Serialize};
 
+use crate::risk::RiskGrade;
 use crate::value::{CellLimit, DbValue};
 
 /// 문장 하나의 실행 요청. 스크립트를 문장으로 나누는 것은 파이프라인이다(M3-04) — 드라이버는 늘 한 문장을 받는다.
+///
+/// 필드를 더해도 다른 크레이트가 깨지지 않게 `#[non_exhaustive]` 다 — [`ExecuteRequest::new`] 로 만들고 필드를 고친다.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ExecuteRequest {
     pub sql: String,
+    /// 이 문장의 위험도 등급 — M3-03 의 분류기가 매기고 파이프라인(M3-05)이 싣는다. 드라이버는 이것으로 커서 버리기의 방법을
+    /// 고른다([`RiskGrade::is_read`]): 조회면 서버에서 문장을 멈춰도 되지만, 조회가 아닌 문장(MariaDB `INSERT … RETURNING`
+    /// 등)을 멈추면 그 쓰기가 되돌려지므로 남은 행을 끝까지 읽어 버린다(14-m3-plan.md M3-07).
+    pub grade: RiskGrade,
     /// 바인드 값(그리드 편집의 DML — M3-12). 값을 SQL 글에 이어 붙이지 않는다. 자리 표시 문법은 방언의 것(`$1` · `?`).
     pub params: Vec<DbValue>,
     /// 셀 하나의 상한. 넘는 값은 [`DbValue::Truncated`] · 잘린 [`DbValue::Bytes`] 로 온다.
@@ -21,9 +29,11 @@ pub struct ExecuteRequest {
 }
 
 impl ExecuteRequest {
-    pub fn sql(sql: impl Into<String>) -> Self {
+    /// 바인드 값 없이 기본 셀 상한으로.
+    pub fn new(sql: impl Into<String>, grade: RiskGrade) -> Self {
         Self {
             sql: sql.into(),
+            grade,
             params: Vec::new(),
             cell_limit: CellLimit::DEFAULT,
         }

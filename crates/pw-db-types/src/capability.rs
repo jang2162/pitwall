@@ -49,13 +49,17 @@ impl Capabilities {
             (false, false) => return Err("a driver must be sql or kv"),
         }
         if self.kv
-            && (self.transactions
+            && (self.server_cursor
+                || self.metadata
+                || self.transactions
                 || self.savepoints
                 || self.read_only_transaction
                 || self.explain
                 || self.schemas)
         {
-            return Err("transactions, savepoints, explain and schemas are sql features");
+            return Err(
+                "server cursors, metadata, transactions, savepoints, explain and schemas are sql features",
+            );
         }
         if self.savepoints && !self.transactions {
             return Err("savepoints need transactions");

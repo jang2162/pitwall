@@ -7,7 +7,7 @@
 //! MariaDB 는 MySQL 시험을 그 URL 로 한 번 더 돈다 — `scripts/db-live.mjs` 가 `PW_TEST_MARIADB_URL` 을 `PW_TEST_MYSQL_URL` 로
 //! 넘겨 부른다.
 //!
-//! 이 파일은 `pw-db-driver` 와 드라이버 크레이트 넷의 빌드 스크립트다(각 `Cargo.toml` 의 `build`). 값이 바뀌면 다시 돌고 그
+//! 이 파일은 `pw-db-driver` · `pw-db` 와 드라이버 크레이트 넷의 빌드 스크립트다(각 `Cargo.toml` 의 `build`). 값이 바뀌면 다시 돌고 그
 //! 크레이트가 다시 컴파일된다.
 
 const MARKERS: [(&str, &str); 3] = [

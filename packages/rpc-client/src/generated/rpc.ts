@@ -1103,12 +1103,17 @@ export type DbErrorKind =
 /**  요청이 틀렸다(커서 없이 `fetch`, 알 수 없는 세이브포인트 등). */
 "invalid";
 
-/**  실수 값. 유한하지 않은 값은 그 이름의 문자열이다 — [`DbValue::float`] 로 만든다. */
+/**  실수 값. 유한하지 않은 값은 그 이름의 문자열이다 — [`DbValue::float`] 로 만든다. 받을 때 그 셋 밖의 글은 거절한다. */
 export type DbFloat = number | 
 /**  `NaN` · `Infinity` · `-Infinity`. */
 string;
 
-/**  정수 값. 수인지 문자열인지는 값의 크기가 정한다 — [`DbValue::int`] 로 만든다. */
+/**
+ *  정수 값. 수인지 문자열인지는 값의 크기가 정한다 — [`DbValue::int`] 로 만든다.
+ * 
+ *  받을 때는 규칙대로 다시 고른다 — `{"int": 9007199254740993}` 은 문자열로, `{"int": "5"}` 는 수로 받는다(창이 보낸 바인드
+ *  값 · 프로세스 밖 드라이버가 규칙을 어겨도 같은 값이 같은 모양이 된다). 정수가 아닌 글은 거절한다.
+ */
 export type DbInt = 
 /**  |값| ≤ 2^53 − 1. */
 number | 
@@ -3540,6 +3545,17 @@ export type Resolution = {
 
 /**  서버 → 클라이언트 응답의 와이어 형식. [`Response`] 가 이 형태로 직렬화된다. */
 export type ResponseMessage = ({ jsonrpc: JsonRpcVersion; id: Id; result: JsonValue }) & { error?: never } | ({ jsonrpc: JsonRpcVersion; id: Id; error: RpcError }) & { result?: never };
+
+/**  등급. 순서가 위험도 순서다 — 여러 문장의 합산은 가장 높은 등급(`Ord::max`). */
+export type RiskGrade = 
+/**  조회 — 데이터를 바꾸지 않는다. */
+"read" | 
+/**  쓰기(키로 한정한 `UPDATE` · `INSERT` · 부작용 함수가 든 `SELECT` · 트랜잭션 제어 등). */
+"write" | 
+/**  범위 없는 쓰기(WHERE 가 없거나 항진식인 `UPDATE` · `DELETE`). */
+"unboundedWrite" | "ddl" | 
+/**  파괴(`DROP` · `TRUNCATE`). 파서가 읽지 못한 문장도 여기다(까닭 `unparsed`, fail-closed). */
+"destructive";
 
 /**  호출자(페어링 기기)의 role. 값은 `docs/design/08-remote-mobile.md` 「보안 모델」 절을 따른다. */
 export type Role = 

@@ -1,38 +1,42 @@
 //! 가짜 SQL 드라이버 — 실행 파이프라인(M3-05) · 스키마 캐시(M3-10) · 그리드 시험이 실 DB 없이 쓴다.
 //!
-//! 문장마다 응답([`FakeResponse`] — 열 · 행 수 · 지연 · 오류 · 멈춤)을 정하고, 불린 메서드를 차례대로 기록한다([`FakeCall`]).
-//! 트랜잭션은 작은 모형이다: 행을 돌려주지 않는 문장을 「쓰기」 로 보고 트랜잭션 밖이면 곧바로, 안이면 `commit` 때
-//! [`FakeDriver::committed`] 에 넣는다(`rollback` · 세이브포인트 되돌리기는 버린다). 읽은 행 수([`FakeDriver::rows_read`])로
-//! 「소비자가 credit 을 주지 않으면 드라이버가 더 읽지 않는다」 를 시험한다.
+//! 문장마다 응답([`FakeResponse`] — 열 · 행 수 · 지연 · 오류 · 멈춤)을 정하고, 불린 메서드를 연결 번호와 함께 차례대로 기록한다
+//! ([`FakeCall`], [`FakeDriver::calls_of`] — 번호는 `connect` 순서대로 0 부터). 트랜잭션 · 인터럽트는 **연결마다 따로**다.
+//! 트랜잭션은 작은 모형이다: 등급([`ExecuteRequest::grade`])이 조회가 아닌 문장을 「쓰기」 로 보고, 문장이 끝날 때(행이 없으면
+//! 곧바로, 행이 있으면 커서를 끝까지 읽었거나 끝까지 읽어 버렸을 때) 트랜잭션 밖이면 곧바로, 안이면 `commit` 때
+//! [`FakeDriver::committed`](드라이버 전체)에 넣는다. `rollback` · 세이브포인트 되돌리기 · 취소된 문장의 쓰기는 버린다.
+//! 커서 버리기는 등급을 따른다 — 조회는 서버에서 멈추고(남은 행을 읽지 않는다), 조회가 아니면 남은 행을 끝까지 읽어 버려 쓰기가
+//! 남는다(MySQL 의 길, 14-m3-plan.md M3-07). 읽은 행 수([`FakeDriver::rows_read`])로 「소비자가 credit 을 주지 않으면 드라이버가
+//! 더 읽지 않는다」 를 시험한다.
 //!
 //! ```
 //! # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
 //! use pw_db_driver::fake::{FakeCall, FakeDriver, FakeResponse};
 //! use pw_db_driver::{DbConnection, DbDriver};
-//! use pw_db_types::{ExecuteRequest, FetchLimit};
+//! use pw_db_types::{ExecuteRequest, FetchLimit, RiskGrade};
 //!
 //! let driver = FakeDriver::new();
 //! driver.respond("SELECT", FakeResponse::rows(3));
 //! let DbConnection::Sql(mut conn) = driver.connect(FakeDriver::spec()).await.unwrap().connection else {
 //!     unreachable!()
 //! };
-//! conn.execute(ExecuteRequest::sql("SELECT * FROM t")).await.unwrap();
+//! conn.execute(ExecuteRequest::new("SELECT * FROM t", RiskGrade::Read)).await.unwrap();
 //! let batch = conn.fetch(FetchLimit::rows(10)).await.unwrap();
 //! assert_eq!(batch.rows.len(), 3);
-//! assert!(driver.calls().contains(&FakeCall::Execute("SELECT * FROM t".into())));
+//! assert!(driver.calls_of(0).contains(&FakeCall::Execute("SELECT * FROM t".into())));
 //! # });
 //! ```
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use pw_db_types::{
     BeginOptions, Capabilities, CellLimit, ColumnInfo, ColumnMeta, ConnectionSpec, DbError,
     DbErrorKind, DbValue, Ddl, DriverKind, ExecuteRequest, ExplainPlan, FetchLimit, ForeignKeyInfo,
-    IndexInfo, ObjectInfo, ObjectPage, ObjectQuery, ObjectRef, PlanFormat, Row, RowBatch,
-    SchemaInfo, ServerInfo, SqlDialect, SslMode, StatementEnd, StatementStarted, Target,
+    IndexInfo, ObjectInfo, ObjectPage, ObjectQuery, ObjectRef, PlanFormat, RiskGrade, Row,
+    RowBatch, SchemaInfo, ServerInfo, SqlDialect, SslMode, StatementEnd, StatementStarted, Target,
     TlsSettings, TlsStatus, TransactionState,
 };
 use tokio::sync::Notify;
@@ -49,7 +53,12 @@ pub enum FakeCall {
     Fetch {
         max_rows: u32,
     },
-    DiscardCursor,
+    /// 커서 버리기. `drained` 면 남은 행을 끝까지 읽어 버렸다(조회가 아닌 문장 — 쓰기가 남는다), 아니면 서버에서 멈췄다(조회).
+    /// 열린 커서가 없었으면 `drained: false`.
+    DiscardCursor {
+        drained: bool,
+    },
+    /// 인터럽트. 그 연결에서 도는 `fetch` 가 없으면 기록만 하고 아무것도 하지 않는다.
     Interrupt,
     Begin {
         read_only: bool,
@@ -68,7 +77,7 @@ pub enum FakeCall {
 /// 문장 하나에 대한 응답.
 #[derive(Debug, Clone)]
 pub struct FakeResponse {
-    /// 결과 열. 비어 있으면 행을 돌려주지 않는 문장(쓰기)이다.
+    /// 결과 열. 비어 있으면 행을 돌려주지 않는 문장이다(쓰기인지는 요청의 등급이 정한다).
     pub columns: Vec<ColumnMeta>,
     /// 만들어 낼 행 수. 행 `i` 의 첫 열은 정수 `i`, 나머지 열은 텍스트 `r{i}c{열}`.
     pub rows: u64,
@@ -98,7 +107,7 @@ impl FakeResponse {
         }
     }
 
-    /// 행이 없는 쓰기(`affected` 행이 바뀜).
+    /// 행이 없는 문장(`affected` 행이 바뀜). 등급이 조회가 아니면 쓰기로 기록된다.
     pub fn write(affected: u64) -> Self {
         Self {
             columns: Vec::new(),
@@ -171,24 +180,34 @@ struct Ledger {
     pending: Vec<String>,
     /// (이름, 그때의 `pending` 길이).
     savepoints: Vec<(String, usize)>,
-    committed: Vec<String>,
 }
 
+/// 드라이버 전체가 함께 쓰는 것: 응답 · 호출 기록 · 커밋된 쓰기 · 읽은 행 수.
 struct State {
     capabilities: Capabilities,
     script: Mutex<Script>,
-    calls: Mutex<Vec<FakeCall>>,
-    ledger: Mutex<Ledger>,
+    /// (연결 번호, 호출).
+    calls: Mutex<Vec<(u32, FakeCall)>>,
+    committed: Mutex<Vec<String>>,
     rows_read: AtomicU64,
-    /// 인터럽트가 와서 아직 소비되지 않았다. 다음 `execute` 가 지운다.
-    interrupted: AtomicBool,
-    wake: Notify,
+    next_connection: AtomicU32,
 }
 
 impl State {
-    fn record(&self, call: FakeCall) {
-        lock(&self.calls).push(call);
+    fn record(&self, connection: u32, call: FakeCall) {
+        lock(&self.calls).push((connection, call));
     }
+}
+
+/// 연결 하나의 것: 트랜잭션과 인터럽트. 그 연결의 [`FakeInterrupt`] 와만 함께 쓴다.
+struct Session {
+    id: u32,
+    ledger: Mutex<Ledger>,
+    /// 지금 `fetch` 가 기다리는 중이다. 인터럽트는 이때만 듣는다.
+    in_flight: AtomicBool,
+    /// 도는 `fetch` 에 인터럽트가 왔다.
+    interrupted: AtomicBool,
+    wake: Notify,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -221,10 +240,9 @@ impl FakeDriver {
                 capabilities,
                 script: Mutex::default(),
                 calls: Mutex::default(),
-                ledger: Mutex::default(),
+                committed: Mutex::default(),
                 rows_read: AtomicU64::new(0),
-                interrupted: AtomicBool::new(false),
-                wake: Notify::new(),
+                next_connection: AtomicU32::new(0),
             }),
         }
     }
@@ -248,21 +266,16 @@ impl FakeDriver {
 
     /// 가짜에 넘길 연결 설정(아무 값이나 받는다).
     pub fn spec() -> ConnectionSpec {
-        ConnectionSpec {
-            driver: DriverKind::Postgres.id().to_owned(),
-            target: Target::Network {
+        let mut spec = ConnectionSpec::new(
+            DriverKind::Postgres.id(),
+            Target::Network {
                 host: "fake".into(),
                 port: 5432,
                 connect_to: None,
             },
-            database: None,
-            user: None,
-            password: None,
-            tls: TlsSettings::mode(SslMode::Disable),
-            read_only: false,
-            connect_timeout_ms: 10_000,
-            response_timeout_ms: None,
-        }
+        );
+        spec.tls = TlsSettings::mode(SslMode::Disable);
+        spec
     }
 
     /// SQL 에 `needle` 이 든 문장의 응답. 나중에 정한 것이 먼저 맞는다.
@@ -289,27 +302,39 @@ impl FakeDriver {
             .insert(name.to_owned(), table);
     }
 
-    /// 지금까지 불린 메서드.
+    /// 지금까지 불린 메서드(모든 연결).
     pub fn calls(&self) -> Vec<FakeCall> {
-        lock(&self.state.calls).clone()
+        lock(&self.state.calls)
+            .iter()
+            .map(|(_, c)| c.clone())
+            .collect()
     }
 
-    /// `call` 과 같은 호출의 수.
+    /// 연결 하나(`connect` 순서대로 0 부터)가 부른 메서드.
+    pub fn calls_of(&self, connection: u32) -> Vec<FakeCall> {
+        lock(&self.state.calls)
+            .iter()
+            .filter(|(id, _)| *id == connection)
+            .map(|(_, c)| c.clone())
+            .collect()
+    }
+
+    /// `call` 과 같은 호출의 수(모든 연결).
     pub fn count(&self, call: &FakeCall) -> usize {
         lock(&self.state.calls)
             .iter()
-            .filter(|c| *c == call)
+            .filter(|(_, c)| c == call)
             .count()
     }
 
-    /// 커서에서 지금까지 만들어 낸 행 수.
+    /// 커서에서 지금까지 만들어 낸 행 수(모든 연결, 끝까지 읽어 버린 행 포함).
     pub fn rows_read(&self) -> u64 {
         self.state.rows_read.load(Ordering::SeqCst)
     }
 
-    /// 커밋된 쓰기(문장 글)의 순서.
+    /// 커밋된 쓰기(문장 글)의 순서(모든 연결).
     pub fn committed(&self) -> Vec<String> {
-        lock(&self.state.ledger).committed.clone()
+        lock(&self.state.committed).clone()
     }
 
     fn response_for(&self, sql: &str) -> FakeResponse {
@@ -339,12 +364,20 @@ impl DbDriver for FakeDriver {
 
     fn connect(&self, _spec: ConnectionSpec) -> BoxFuture<'_, DbResult<Connected>> {
         Box::pin(async move {
-            self.state.record(FakeCall::Connect);
+            let id = self.state.next_connection.fetch_add(1, Ordering::SeqCst);
+            self.state.record(id, FakeCall::Connect);
             if let Some(error) = lock(&self.state.script).connect_error.clone() {
                 return Err(error);
             }
             let connection = FakeConnection {
                 driver: self.clone(),
+                session: Arc::new(Session {
+                    id,
+                    ledger: Mutex::default(),
+                    in_flight: AtomicBool::new(false),
+                    interrupted: AtomicBool::new(false),
+                    wake: Notify::new(),
+                }),
                 cursor: None,
             };
             Ok(Connected {
@@ -362,21 +395,43 @@ struct Cursor {
     response: FakeResponse,
     next: u64,
     cell_limit: CellLimit,
+    sql: String,
+    grade: RiskGrade,
 }
 
 struct FakeConnection {
     driver: FakeDriver,
+    session: Arc<Session>,
     cursor: Option<Cursor>,
 }
 
 impl FakeConnection {
-    fn state(&self) -> &State {
-        &self.driver.state
+    fn record(&self, call: FakeCall) {
+        self.driver.state.record(self.session.id, call);
     }
 
-    /// 인터럽트가 오면 취소 오류. 트랜잭션 안이었으면 그 트랜잭션은 롤백만 된다(PG 와 같다).
+    /// 쓰기 하나가 끝났다: 트랜잭션 밖이면 곧바로 커밋, 안이면 그 트랜잭션의 대기 목록에.
+    fn land_write(&self, sql: &str) {
+        let mut ledger = lock(&self.session.ledger);
+        if ledger.in_transaction {
+            ledger.pending.push(sql.to_owned());
+        } else {
+            lock(&self.driver.state.committed).push(sql.to_owned());
+        }
+    }
+
+    /// 커서의 문장이 끝까지 돌았다. 조회가 아니었으면 그 쓰기가 남는다.
+    fn finish_cursor(&mut self) {
+        if let Some(cursor) = self.cursor.take()
+            && !cursor.grade.is_read()
+        {
+            self.land_write(&cursor.sql);
+        }
+    }
+
+    /// 도는 `fetch` 에 인터럽트가 왔으면 취소 오류. 트랜잭션 안이었으면 그 트랜잭션은 롤백만 된다(PG 와 같다).
     fn take_interrupt(&self) -> DbResult<()> {
-        if self.state().interrupted.swap(false, Ordering::SeqCst) {
+        if self.session.interrupted.swap(false, Ordering::SeqCst) {
             self.fail_transaction();
             return Err(DbError::cancelled());
         }
@@ -384,7 +439,7 @@ impl FakeConnection {
     }
 
     fn fail_transaction(&self) {
-        let mut ledger = lock(&self.state().ledger);
+        let mut ledger = lock(&self.session.ledger);
         if ledger.in_transaction {
             ledger.failed = true;
         }
@@ -392,20 +447,27 @@ impl FakeConnection {
 
     /// `duration` 동안(또는 영영) 기다리되 인터럽트가 오면 곧바로 취소 오류.
     async fn wait(&self, duration: Option<Duration>) -> DbResult<()> {
-        let state = self.state();
-        let mut notified = std::pin::pin!(state.wake.notified());
+        let session = &self.session;
+        session.in_flight.store(true, Ordering::SeqCst);
+        let mut notified = std::pin::pin!(session.wake.notified());
         notified.as_mut().enable();
-        self.take_interrupt()?;
-        match duration {
-            Some(d) => {
-                tokio::select! {
-                    () = notified => {}
-                    () = tokio::time::sleep(d) => return Ok(()),
+        let result = async {
+            self.take_interrupt()?;
+            match duration {
+                Some(d) => {
+                    tokio::select! {
+                        () = notified => {}
+                        () = tokio::time::sleep(d) => return Ok(()),
+                    }
                 }
+                None => notified.await,
             }
-            None => notified.await,
+            self.take_interrupt()
         }
-        self.take_interrupt()
+        .await;
+        session.in_flight.store(false, Ordering::SeqCst);
+        session.interrupted.store(false, Ordering::SeqCst);
+        result
     }
 }
 
@@ -425,11 +487,12 @@ impl SqlConnection for FakeConnection {
     fn interrupter(&self) -> Arc<dyn Interrupt> {
         Arc::new(FakeInterrupt {
             driver: self.driver.clone(),
+            session: Arc::clone(&self.session),
         })
     }
 
     fn transaction_state(&self) -> TransactionState {
-        let ledger = lock(&self.state().ledger);
+        let ledger = lock(&self.session.ledger);
         match (ledger.in_transaction, ledger.failed) {
             (false, _) => TransactionState::Idle,
             (true, false) => TransactionState::InTransaction,
@@ -440,11 +503,10 @@ impl SqlConnection for FakeConnection {
     fn execute(&mut self, request: ExecuteRequest) -> BoxFuture<'_, DbResult<StatementStarted>> {
         Box::pin(async move {
             self.cursor = None;
-            self.state().interrupted.store(false, Ordering::SeqCst);
-            self.state().record(FakeCall::Execute(request.sql.clone()));
+            self.record(FakeCall::Execute(request.sql.clone()));
             let response = self.driver.response_for(&request.sql);
             {
-                let mut ledger = lock(&self.state().ledger);
+                let mut ledger = lock(&self.session.ledger);
                 if ledger.failed {
                     return Err(DbError::new(
                         DbErrorKind::Server,
@@ -458,25 +520,25 @@ impl SqlConnection for FakeConnection {
                     }
                     return Err(error);
                 }
-                if response.columns.is_empty() {
-                    if ledger.in_transaction {
-                        ledger.pending.push(request.sql.clone());
-                    } else {
-                        ledger.committed.push(request.sql.clone());
-                    }
-                    return Ok(StatementStarted {
-                        columns: Vec::new(),
-                        end: Some(StatementEnd {
-                            rows_affected: response.rows_affected,
-                        }),
-                    });
+            }
+            if response.columns.is_empty() {
+                if !request.grade.is_read() {
+                    self.land_write(&request.sql);
                 }
+                return Ok(StatementStarted {
+                    columns: Vec::new(),
+                    end: Some(StatementEnd {
+                        rows_affected: response.rows_affected,
+                    }),
+                });
             }
             let columns = response.columns.clone();
             self.cursor = Some(Cursor {
                 response,
                 next: 0,
                 cell_limit: request.cell_limit,
+                sql: request.sql,
+                grade: request.grade,
             });
             Ok(StatementStarted { columns, end: None })
         })
@@ -484,22 +546,22 @@ impl SqlConnection for FakeConnection {
 
     fn fetch(&mut self, limit: FetchLimit) -> BoxFuture<'_, DbResult<RowBatch>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Fetch {
+            self.record(FakeCall::Fetch {
                 max_rows: limit.max_rows,
             });
             let Some(cursor) = self.cursor.as_ref() else {
                 return Err(DbError::new(DbErrorKind::Invalid, "no open cursor"));
             };
             let (hang, delay) = (cursor.response.hang, cursor.response.fetch_delay);
-            if hang {
-                self.wait(None).await.inspect_err(|_| self.cursor = None)?;
+            let waited = if hang {
+                self.wait(None).await
             } else if !delay.is_zero() {
-                self.wait(Some(delay))
-                    .await
-                    .inspect_err(|_| self.cursor = None)?;
+                self.wait(Some(delay)).await
             } else {
-                self.take_interrupt().inspect_err(|_| self.cursor = None)?;
-            }
+                Ok(())
+            };
+            // 취소된 문장은 커서째 버린다 — 그 쓰기도 남지 않는다.
+            waited.inspect_err(|_| self.cursor = None)?;
             let cursor = self.cursor.as_mut().expect("checked above");
             let columns = cursor.response.columns.len();
             let mut rows = Vec::new();
@@ -526,7 +588,7 @@ impl SqlConnection for FakeConnection {
                 rows_affected: Some(cursor.next),
             });
             if end.is_some() {
-                self.cursor = None;
+                self.finish_cursor();
             }
             Ok(RowBatch { rows, end })
         })
@@ -534,18 +596,35 @@ impl SqlConnection for FakeConnection {
 
     fn discard_cursor(&mut self) -> BoxFuture<'_, DbResult<()>> {
         Box::pin(async move {
-            self.state().record(FakeCall::DiscardCursor);
-            self.cursor = None;
+            let Some(cursor) = self.cursor.as_mut() else {
+                self.record(FakeCall::DiscardCursor { drained: false });
+                return Ok(());
+            };
+            if cursor.grade.is_read() {
+                // 조회: 서버에서 멈춘다 — 남은 행을 만들지 않는다.
+                self.cursor = None;
+                self.record(FakeCall::DiscardCursor { drained: false });
+            } else {
+                // 조회가 아님: 멈추면 쓰기가 되돌려지므로 남은 행을 끝까지 읽어 버린다.
+                let remaining = cursor.response.rows - cursor.next;
+                cursor.next = cursor.response.rows;
+                self.driver
+                    .state
+                    .rows_read
+                    .fetch_add(remaining, Ordering::SeqCst);
+                self.finish_cursor();
+                self.record(FakeCall::DiscardCursor { drained: true });
+            }
             Ok(())
         })
     }
 
     fn begin(&mut self, options: BeginOptions) -> BoxFuture<'_, DbResult<()>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Begin {
+            self.record(FakeCall::Begin {
                 read_only: options.read_only,
             });
-            let mut ledger = lock(&self.state().ledger);
+            let mut ledger = lock(&self.session.ledger);
             if ledger.in_transaction {
                 return Err(DbError::new(
                     DbErrorKind::Invalid,
@@ -560,12 +639,12 @@ impl SqlConnection for FakeConnection {
 
     fn commit(&mut self) -> BoxFuture<'_, DbResult<()>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Commit);
-            let mut ledger = lock(&self.state().ledger);
+            self.record(FakeCall::Commit);
+            let mut ledger = lock(&self.session.ledger);
             let pending = std::mem::take(&mut ledger.pending);
             // 실패한 트랜잭션의 COMMIT 은 롤백이다(PG 와 같다).
             if !ledger.failed {
-                ledger.committed.extend(pending);
+                lock(&self.driver.state.committed).extend(pending);
             }
             ledger.in_transaction = false;
             ledger.failed = false;
@@ -576,8 +655,8 @@ impl SqlConnection for FakeConnection {
 
     fn rollback(&mut self) -> BoxFuture<'_, DbResult<()>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Rollback);
-            let mut ledger = lock(&self.state().ledger);
+            self.record(FakeCall::Rollback);
+            let mut ledger = lock(&self.session.ledger);
             ledger.pending.clear();
             ledger.in_transaction = false;
             ledger.failed = false;
@@ -588,8 +667,8 @@ impl SqlConnection for FakeConnection {
 
     fn savepoint(&mut self, name: String) -> BoxFuture<'_, DbResult<()>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Savepoint(name.clone()));
-            let mut ledger = lock(&self.state().ledger);
+            self.record(FakeCall::Savepoint(name.clone()));
+            let mut ledger = lock(&self.session.ledger);
             if !ledger.in_transaction {
                 return Err(DbError::new(DbErrorKind::Invalid, "no transaction"));
             }
@@ -601,9 +680,8 @@ impl SqlConnection for FakeConnection {
 
     fn rollback_to_savepoint(&mut self, name: String) -> BoxFuture<'_, DbResult<()>> {
         Box::pin(async move {
-            self.state()
-                .record(FakeCall::RollbackToSavepoint(name.clone()));
-            let mut ledger = lock(&self.state().ledger);
+            self.record(FakeCall::RollbackToSavepoint(name.clone()));
+            let mut ledger = lock(&self.session.ledger);
             let Some(index) = ledger.savepoints.iter().rposition(|(n, _)| *n == name) else {
                 return Err(DbError::new(DbErrorKind::Invalid, "no such savepoint"));
             };
@@ -617,9 +695,8 @@ impl SqlConnection for FakeConnection {
 
     fn release_savepoint(&mut self, name: String) -> BoxFuture<'_, DbResult<()>> {
         Box::pin(async move {
-            self.state()
-                .record(FakeCall::ReleaseSavepoint(name.clone()));
-            let mut ledger = lock(&self.state().ledger);
+            self.record(FakeCall::ReleaseSavepoint(name.clone()));
+            let mut ledger = lock(&self.session.ledger);
             let Some(index) = ledger.savepoints.iter().rposition(|(n, _)| *n == name) else {
                 return Err(DbError::new(DbErrorKind::Invalid, "no such savepoint"));
             };
@@ -630,7 +707,7 @@ impl SqlConnection for FakeConnection {
 
     fn explain(&mut self, sql: String) -> BoxFuture<'_, DbResult<ExplainPlan>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Explain(sql));
+            self.record(FakeCall::Explain(sql));
             Ok(ExplainPlan {
                 format: PlanFormat::Json,
                 text: r#"[{"Plan":{"Node Type":"Seq Scan"}}]"#.to_owned(),
@@ -640,7 +717,7 @@ impl SqlConnection for FakeConnection {
 
     fn schemas(&mut self, _database: Option<String>) -> BoxFuture<'_, DbResult<Vec<SchemaInfo>>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Metadata("schemas"));
+            self.record(FakeCall::Metadata("schemas"));
             Ok(vec![SchemaInfo {
                 name: "public".into(),
             }])
@@ -649,8 +726,8 @@ impl SqlConnection for FakeConnection {
 
     fn objects(&mut self, query: ObjectQuery) -> BoxFuture<'_, DbResult<ObjectPage>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Metadata("objects"));
-            let script = lock(&self.state().script);
+            self.record(FakeCall::Metadata("objects"));
+            let script = lock(&self.driver.state.script);
             let filter = query.filter.as_deref().map(str::to_lowercase);
             let matching: Vec<&ObjectInfo> = script
                 .objects
@@ -684,28 +761,28 @@ impl SqlConnection for FakeConnection {
 
     fn columns(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Vec<ColumnInfo>>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Metadata("columns"));
+            self.record(FakeCall::Metadata("columns"));
             Ok(self.table(&object).columns)
         })
     }
 
     fn indexes(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Vec<IndexInfo>>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Metadata("indexes"));
+            self.record(FakeCall::Metadata("indexes"));
             Ok(self.table(&object).indexes)
         })
     }
 
     fn foreign_keys(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Vec<ForeignKeyInfo>>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Metadata("foreignKeys"));
+            self.record(FakeCall::Metadata("foreignKeys"));
             Ok(self.table(&object).foreign_keys)
         })
     }
 
     fn ddl(&mut self, object: ObjectRef) -> BoxFuture<'_, DbResult<Ddl>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Metadata("ddl"));
+            self.record(FakeCall::Metadata("ddl"));
             Ok(Ddl {
                 text: self.table(&object).ddl,
             })
@@ -714,7 +791,7 @@ impl SqlConnection for FakeConnection {
 
     fn close(self: Box<Self>) -> BoxFuture<'static, DbResult<()>> {
         Box::pin(async move {
-            self.state().record(FakeCall::Close);
+            self.record(FakeCall::Close);
             Ok(())
         })
     }
@@ -722,7 +799,7 @@ impl SqlConnection for FakeConnection {
 
 impl FakeConnection {
     fn table(&self, object: &ObjectRef) -> FakeTable {
-        lock(&self.state().script)
+        lock(&self.driver.state.script)
             .tables
             .get(&object.name)
             .cloned()
@@ -740,15 +817,19 @@ fn approximate_size(value: &DbValue) -> usize {
 
 struct FakeInterrupt {
     driver: FakeDriver,
+    session: Arc<Session>,
 }
 
 impl Interrupt for FakeInterrupt {
     fn interrupt(&self) -> BoxFuture<'_, DbResult<()>> {
         Box::pin(async move {
-            let state = &self.driver.state;
-            state.record(FakeCall::Interrupt);
-            state.interrupted.store(true, Ordering::SeqCst);
-            state.wake.notify_waiters();
+            let session = &self.session;
+            self.driver.state.record(session.id, FakeCall::Interrupt);
+            // 도는 `fetch` 가 없으면 아무것도 하지 않는다(`Interrupt` 의 계약).
+            if session.in_flight.load(Ordering::SeqCst) {
+                session.interrupted.store(true, Ordering::SeqCst);
+                session.wake.notify_waiters();
+            }
             Ok(())
         })
     }

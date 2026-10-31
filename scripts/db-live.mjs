@@ -3,7 +3,8 @@
 //   node scripts/db-live.mjs [--ci] [db …]     db: pg · mysql · mariadb · redis(없으면 전부)
 //
 // CI 의 `db-live` 잡이 DB 마다 한 단계씩, `mise run test-db` 가 전부를 한 번에 부른다. DB 마다:
-//   1. URL 환경 변수(PW_TEST_<DB>_URL)가 없으면 로컬은 「건너뜀」 으로 알리고 통과로 세지 않는다. `--ci` 면 실패다.
+//   1. URL 환경 변수(PW_TEST_<DB>_URL)가 없으면 로컬은 「건너뜀」 으로 알리고 통과로 세지 않는다 — 모두 건너뛰었으면 종료 코드
+//      3 이다. `--ci` 면 실패다.
 //   2. `cargo nextest list` 로 필터가 고른 시험을 세고, `cargo nextest run --release --no-tests=fail` 로 돌린다 — 필터가
 //      0개를 고르면 nextest 가 실패한다(준비 확인 시험이 있으므로 정상이면 늘 1개 이상).
 //   3. 돈 수(nextest 의 Summary 줄)가 고른 수와 같은지, 준비 확인 시험(`live_<db>_ready`)을 뺀 수가 하한 이상인지 본다.
@@ -147,6 +148,13 @@ function runTarget(db, floor, ci) {
   });
 }
 
+/** 종료 코드: 하나라도 실패하면 1, 하나도 돌지 않았으면(모두 건너뜀) 3 — 「통과」 로 읽히지 않게, 그 밖은 0. */
+export function exitCode(results) {
+  if (!results.every((r) => r.ok)) return 1;
+  if (results.length > 0 && results.every((r) => r.skipped)) return 3;
+  return 0;
+}
+
 function main(argv) {
   const ci = argv.includes("--ci");
   const asked = argv.filter((a) => a !== "--ci");
@@ -167,7 +175,7 @@ function main(argv) {
     console.log(
       `${skipped} of ${results.length} not run — set the URLs to run them (CONTRIBUTING.md 「명령」)`,
     );
-  return results.every((r) => r.ok) ? 0 : 1;
+  return exitCode(results);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

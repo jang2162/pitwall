@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use pw_db_types::{
     BeginOptions, Capabilities, ColumnInfo, ConnectionSpec, DatabaseInfo, DbError, Ddl,
-    ExecuteRequest, ExplainPlan, FetchLimit, ForeignKeyInfo, IndexInfo, KvKey, KvRange,
+    ExecuteRequest, ExplainPlan, FetchLimit, ForeignKeyInfo, IndexInfo, KvKey, KvKeyInfo, KvRange,
     KvRenameOutcome, KvReply, KvScanPage, KvScanRequest, KvValuePage, ObjectPage, ObjectQuery,
     ObjectRef, RowBatch, SchemaInfo, ServerInfo, SqlDialect, StatementStarted, TransactionState,
 };
@@ -88,6 +88,10 @@ pub trait Interrupt: Send + Sync {
 /// 원하는 만큼만 읽는다(credit 백프레셔 — 파이프라인은 창이 받은 만큼만 `fetch` 한다). 그리드 보유 행 상한에 닿으면
 /// [`discard_cursor`](Self::discard_cursor) 로 커서만 버린다 — **연결은 그대로, 세션의 트랜잭션도 그대로**다(결정 M3-D7).
 /// 커서가 열린 채 다른 메서드를 부르면 드라이버가 먼저 커서를 버린다.
+///
+/// **자동 커밋**: [`transaction_state`](Self::transaction_state) 가 `Idle` 일 때 시작한 문장은 자동 커밋이다 — 드라이버가 커서를
+/// 위해 암묵 트랜잭션이 필요하면(PG 포털 — M3-06) 스스로 열고, 문장이 끝나거나 커서를 버릴 때 커밋한다. 그동안에도
+/// `transaction_state` 는 `Idle` 로 답한다(사람이 연 트랜잭션이 아니다).
 pub trait SqlConnection: Send {
     /// 이 연결의 인터럽트. 여러 번 불러도 같은 연결을 멈춘다.
     fn interrupter(&self) -> Arc<dyn Interrupt>;
@@ -95,13 +99,16 @@ pub trait SqlConnection: Send {
     /// 지금 트랜잭션 상태. 문장 · 트랜잭션 메서드가 끝날 때마다 드라이버가 갱신한다.
     fn transaction_state(&self) -> TransactionState;
 
-    /// 문장 하나를 시작한다.
+    /// 문장 하나를 시작한다. `request.grade` 는 M3-03 의 분류기가 매긴 그 문장의 등급이다(커서 버리기가 쓴다).
     fn execute(&mut self, request: ExecuteRequest) -> BoxFuture<'_, DbResult<StatementStarted>>;
 
     /// 열린 커서에서 `limit` 만큼 읽는다. 커서가 다 읽히면 `end` 가 있고 커서는 닫힌다. 커서가 없으면 `Invalid`.
     fn fetch(&mut self, limit: FetchLimit) -> BoxFuture<'_, DbResult<RowBatch>>;
 
-    /// 남은 행을 받지 않고 커서만 버린다. 커서가 없으면 아무것도 하지 않는다.
+    /// 커서를 버린다. 방법은 그 커서를 연 [`ExecuteRequest::grade`] 가 정한다 — 조회면 남은 행을 받지 않고 서버에서 멈춰도
+    /// 된다(PG 포털 `Close` · MySQL `KILL QUERY`). 조회가 아니면 문장을 멈추지 않는다 — 멈추면 그 쓰기가 되돌려지는 드라이버
+    /// (MySQL · MariaDB `… RETURNING` 등)는 남은 행을 끝까지 읽어 버린다(14-m3-plan.md M3-07). 어느 쪽이든 연결과 세션의
+    /// 트랜잭션은 그대로다. 커서가 없으면 아무것도 하지 않는다.
     fn discard_cursor(&mut self) -> BoxFuture<'_, DbResult<()>>;
 
     /// 트랜잭션을 연다(지원 플래그 `transactions`, 읽기 전용은 `readOnlyTransaction`).
@@ -182,6 +189,12 @@ pub trait KvConnection: Send {
 
     /// 키 한 묶음과 묶음 안 키마다 타입 · TTL · 크기.
     fn scan(&mut self, request: KvScanRequest) -> BoxFuture<'_, DbResult<KvScanPage>>;
+
+    /// 키 하나의 타입 · TTL · 크기를 다시 읽는다(값 뷰어가 TTL 을 고친 뒤 등). 키가 없으면 `None`.
+    fn key_info(&mut self, key: KvKey) -> BoxFuture<'_, DbResult<Option<KvKeyInfo>>> {
+        let _ = key;
+        unsupported("key info")
+    }
 
     /// 값 한 쪽.
     fn read(&mut self, key: KvKey, range: KvRange) -> BoxFuture<'_, DbResult<KvValuePage>>;

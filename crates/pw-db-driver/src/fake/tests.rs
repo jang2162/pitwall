@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use pw_db_types::{DbErrorKind, DbInt, ObjectKind};
+use pw_db_types::{DbErrorKind, DbInt, ObjectKind, RiskGrade};
 
 use super::*;
 use crate::cancel::QueryCancel;
@@ -10,6 +10,18 @@ async fn sql(driver: &FakeDriver) -> Box<dyn SqlConnection> {
         DbConnection::Sql(conn) => conn,
         DbConnection::Kv(_) => panic!("the fake is an sql driver"),
     }
+}
+
+/// 시험 문장의 요청. 등급은 앞 낱말로(M3-03 의 분류기 대신): `SELECT` 는 조회, `BAD` 는 파괴(파싱 실패), 나머지는 쓰기.
+fn stmt(sql: &str) -> ExecuteRequest {
+    let grade = if sql.starts_with("SELECT") {
+        RiskGrade::Read
+    } else if sql.starts_with("BAD") {
+        RiskGrade::Destructive
+    } else {
+        RiskGrade::Write
+    };
+    ExecuteRequest::new(sql, grade)
 }
 
 fn first_int(row: &Row) -> i64 {
@@ -27,10 +39,7 @@ async fn a_boxed_connection_streams_1000_rows_in_order_and_one_cancel_interrupts
     driver.respond("FROM slow", FakeResponse::rows(10).hanging());
     let mut conn: Box<dyn SqlConnection> = sql(&driver).await;
 
-    let started = conn
-        .execute(ExecuteRequest::sql("SELECT * FROM big"))
-        .await
-        .unwrap();
+    let started = conn.execute(stmt("SELECT * FROM big")).await.unwrap();
     assert_eq!(started.columns.len(), 2);
     assert!(started.end.is_none(), "a row statement opens a cursor");
     let mut seen = Vec::new();
@@ -45,9 +54,7 @@ async fn a_boxed_connection_streams_1000_rows_in_order_and_one_cancel_interrupts
     assert_eq!(seen, (0..1000).collect::<Vec<_>>());
 
     // 오래 도는 쿼리를 다른 태스크에서 취소한다. 두 번 취소해도 인터럽트는 한 번이다.
-    conn.execute(ExecuteRequest::sql("SELECT * FROM slow"))
-        .await
-        .unwrap();
+    conn.execute(stmt("SELECT * FROM slow")).await.unwrap();
     let cancel = QueryCancel::new(conn.interrupter(), Duration::from_secs(5));
     let canceller = {
         let cancel = cancel.clone();
@@ -62,7 +69,7 @@ async fn a_boxed_connection_streams_1000_rows_in_order_and_one_cancel_interrupts
     assert_eq!(result.unwrap_err().kind, DbErrorKind::Cancelled);
     assert_eq!(driver.count(&FakeCall::Interrupt), 1);
     // 연결은 그대로 쓸 수 있다.
-    let again = conn.execute(ExecuteRequest::sql("SELECT * FROM big")).await;
+    let again = conn.execute(stmt("SELECT * FROM big")).await;
     assert!(again.is_ok());
     assert_eq!(driver.count(&FakeCall::Close), 0);
 }
@@ -75,17 +82,25 @@ async fn the_cursor_is_read_only_as_far_as_fetched_and_discarding_keeps_the_tran
     let mut conn = sql(&driver).await;
 
     conn.begin(BeginOptions::default()).await.unwrap();
-    conn.execute(ExecuteRequest::sql("INSERT INTO t VALUES (1)"))
+    conn.execute(stmt("INSERT INTO t VALUES (1)"))
         .await
         .unwrap();
-    conn.execute(ExecuteRequest::sql("SELECT * FROM t"))
-        .await
-        .unwrap();
+    conn.execute(stmt("SELECT * FROM t")).await.unwrap();
     let batch = conn.fetch(FetchLimit::FIRST_SCREEN).await.unwrap();
     assert_eq!(batch.rows.len(), 500);
     // 더 달라고 하지 않으면 더 읽지 않는다.
     assert_eq!(driver.rows_read(), 500);
     conn.discard_cursor().await.unwrap();
+    assert!(
+        driver
+            .calls()
+            .contains(&FakeCall::DiscardCursor { drained: false })
+    );
+    assert_eq!(
+        driver.rows_read(),
+        500,
+        "a read cursor is stopped, not drained"
+    );
     assert_eq!(conn.transaction_state(), TransactionState::InTransaction);
     assert!(driver.committed().is_empty(), "nothing is committed yet");
     let after = conn.fetch(FetchLimit::rows(1)).await;
@@ -103,13 +118,11 @@ async fn rolling_back_to_a_savepoint_keeps_the_earlier_writes() {
     let mut conn = sql(&driver).await;
 
     conn.begin(BeginOptions::default()).await.unwrap();
-    conn.execute(ExecuteRequest::sql("INSERT INTO t VALUES (1)"))
+    conn.execute(stmt("INSERT INTO t VALUES (1)"))
         .await
         .unwrap();
     conn.savepoint("pw_edit_1".into()).await.unwrap();
-    conn.execute(ExecuteRequest::sql("UPDATE t SET a = 2"))
-        .await
-        .unwrap();
+    conn.execute(stmt("UPDATE t SET a = 2")).await.unwrap();
     conn.rollback_to_savepoint("pw_edit_1".into())
         .await
         .unwrap();
@@ -117,11 +130,9 @@ async fn rolling_back_to_a_savepoint_keeps_the_earlier_writes() {
     assert_eq!(driver.committed(), ["INSERT INTO t VALUES (1)"]);
 
     // 트랜잭션 밖의 쓰기는 곧바로 커밋된다. 롤백한 트랜잭션의 쓰기는 버린다.
-    conn.execute(ExecuteRequest::sql("UPDATE t SET a = 3"))
-        .await
-        .unwrap();
+    conn.execute(stmt("UPDATE t SET a = 3")).await.unwrap();
     conn.begin(BeginOptions { read_only: true }).await.unwrap();
-    conn.execute(ExecuteRequest::sql("INSERT INTO t VALUES (9)"))
+    conn.execute(stmt("INSERT INTO t VALUES (9)"))
         .await
         .unwrap();
     conn.rollback().await.unwrap();
@@ -151,8 +162,7 @@ async fn errors_fail_the_transaction_until_rollback() {
     let mut conn = sql(&driver).await;
 
     let flaky = async {
-        conn.execute(ExecuteRequest::sql("SELECT * FROM flaky"))
-            .await?;
+        conn.execute(stmt("SELECT * FROM flaky")).await?;
         conn.fetch(FetchLimit::rows(10)).await
     }
     .await;
@@ -160,14 +170,12 @@ async fn errors_fail_the_transaction_until_rollback() {
     assert_eq!(driver.rows_read(), 3);
 
     conn.begin(BeginOptions::default()).await.unwrap();
-    conn.execute(ExecuteRequest::sql("INSERT INTO t VALUES (1)"))
+    conn.execute(stmt("INSERT INTO t VALUES (1)"))
         .await
         .unwrap();
-    assert!(conn.execute(ExecuteRequest::sql("BAD")).await.is_err());
+    assert!(conn.execute(stmt("BAD")).await.is_err());
     assert_eq!(conn.transaction_state(), TransactionState::Failed);
-    let blocked = conn
-        .execute(ExecuteRequest::sql("INSERT INTO t VALUES (2)"))
-        .await;
+    let blocked = conn.execute(stmt("INSERT INTO t VALUES (2)")).await;
     assert_eq!(blocked.unwrap_err().code.as_deref(), Some("25P02"));
     conn.commit().await.unwrap();
     assert!(
@@ -185,7 +193,7 @@ async fn a_delayed_fetch_returns_at_once_on_interrupt_and_connect_can_fail() {
         FakeResponse::rows(5).with_delay(Duration::from_secs(60)),
     );
     let mut conn = sql(&driver).await;
-    conn.execute(ExecuteRequest::sql("SELECT 1")).await.unwrap();
+    conn.execute(stmt("SELECT 1")).await.unwrap();
     let interrupter = conn.interrupter();
     let started = std::time::Instant::now();
     let (result, ()) = tokio::join!(conn.fetch(FetchLimit::rows(5)), async {
@@ -264,4 +272,124 @@ fn capabilities_name_exactly_one_branch() {
         ..FakeDriver::full_capabilities()
     };
     assert!(neither.validate().is_err());
+
+    // 서버 커서 · 메타데이터도 SQL 갈래의 기능이다(리뷰 L7).
+    let kv = Capabilities {
+        sql: false,
+        kv: true,
+        server_cursor: false,
+        cancel: true,
+        transactions: false,
+        savepoints: false,
+        read_only_transaction: false,
+        explain: false,
+        metadata: false,
+        schemas: false,
+        multiple_databases: true,
+        ssl_modes: Vec::new(),
+    };
+    assert_eq!(kv.validate(), Ok(()));
+    for broken in [
+        Capabilities {
+            server_cursor: true,
+            ..kv.clone()
+        },
+        Capabilities {
+            metadata: true,
+            ..kv.clone()
+        },
+    ] {
+        assert!(broken.validate().is_err(), "{broken:?}");
+    }
+}
+
+/// 리뷰 H1: 커서 버리기는 등급을 따른다. 조회가 아닌 문장(`INSERT … RETURNING`)을 상한에서 끊어도 쓰기는 남는다 —
+/// 수동 커밋 탭의 사람이 커밋하면 그 쓰기가 들어간다.
+#[tokio::test]
+async fn discarding_a_writing_cursor_drains_it_and_keeps_the_write() {
+    let driver = FakeDriver::new();
+    driver.respond("RETURNING", FakeResponse::rows(100_000));
+    let mut conn = sql(&driver).await;
+
+    conn.begin(BeginOptions::default()).await.unwrap();
+    conn.execute(stmt(
+        "INSERT INTO t SELECT g FROM generate_series(1, 100000) g RETURNING id",
+    ))
+    .await
+    .unwrap();
+    let first = conn.fetch(FetchLimit::FIRST_SCREEN).await.unwrap();
+    assert_eq!(first.rows.len(), 500);
+    conn.discard_cursor().await.unwrap();
+    assert!(
+        driver
+            .calls()
+            .contains(&FakeCall::DiscardCursor { drained: true }),
+        "{:?}",
+        driver.calls()
+    );
+    assert_eq!(
+        driver.rows_read(),
+        100_000,
+        "the rest was read and thrown away"
+    );
+    assert_eq!(conn.transaction_state(), TransactionState::InTransaction);
+    conn.commit().await.unwrap();
+    assert_eq!(
+        driver.committed(),
+        ["INSERT INTO t SELECT g FROM generate_series(1, 100000) g RETURNING id"]
+    );
+}
+
+/// 리뷰 M1: 트랜잭션 · 인터럽트는 연결마다 따로다(세션 둘 · 메타데이터용 연결을 한 가짜에서 연다).
+#[tokio::test]
+async fn connections_of_one_fake_keep_their_own_transaction_and_interrupt() {
+    let driver = FakeDriver::new();
+    driver.respond("INSERT", FakeResponse::write(1));
+    driver.respond("FROM slow", FakeResponse::rows(10).hanging());
+    // 지연이 있어야 fetch 가 인터럽트를 듣는 자리(기다림)를 지난다 — 남은 표식이 있으면 거기서 걸린다.
+    driver.respond(
+        "FROM quick",
+        FakeResponse::rows(5).with_delay(Duration::from_millis(10)),
+    );
+    let mut a = sql(&driver).await;
+    let mut b = sql(&driver).await;
+
+    a.begin(BeginOptions::default()).await.unwrap();
+    assert_eq!(b.transaction_state(), TransactionState::Idle);
+    b.begin(BeginOptions::default()).await.unwrap();
+    a.execute(stmt("INSERT INTO t VALUES (1)")).await.unwrap();
+    b.commit().await.unwrap();
+    assert!(
+        driver.committed().is_empty(),
+        "b's commit does not commit a's write"
+    );
+    assert_eq!(a.transaction_state(), TransactionState::InTransaction);
+    a.commit().await.unwrap();
+    assert_eq!(driver.committed(), ["INSERT INTO t VALUES (1)"]);
+    assert_eq!(
+        driver.calls_of(1),
+        [
+            FakeCall::Connect,
+            FakeCall::Begin { read_only: false },
+            FakeCall::Commit
+        ]
+    );
+
+    // a 의 인터럽트는 b 의 멈춘 fetch 를 멈추지 않는다. b 의 것은 멈춘다.
+    b.execute(stmt("SELECT * FROM slow")).await.unwrap();
+    let a_interrupt = a.interrupter();
+    let b_interrupt = b.interrupter();
+    let (result, ()) = tokio::join!(b.fetch(FetchLimit::rows(10)), async {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        a_interrupt.interrupt().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(driver.count(&FakeCall::Interrupt), 1);
+        b_interrupt.interrupt().await.unwrap();
+    });
+    assert_eq!(result.unwrap_err().kind, DbErrorKind::Cancelled);
+
+    // 도는 fetch 가 없을 때의 인터럽트는 아무것도 하지 않는다 — 다음 fetch 는 그대로 된다.
+    a.execute(stmt("SELECT * FROM quick")).await.unwrap();
+    a.interrupter().interrupt().await.unwrap();
+    assert_eq!(a.fetch(FetchLimit::rows(10)).await.unwrap().rows.len(), 5);
 }

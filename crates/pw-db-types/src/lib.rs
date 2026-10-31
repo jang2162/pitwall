@@ -5,11 +5,16 @@
 //!
 //! - [`value`]: 셀 값 [`DbValue`] — JS 안전 정수 · 문자열 decimal · hex 바이트 · 셀 상한.
 //! - [`spec`]: 드라이버가 받는 연결 설정 [`ConnectionSpec`], 드라이버 · 방언 · `sslmode` 의 이름.
+//! - [`risk`]: 문장 위험도 등급 [`RiskGrade`] — 값은 M3-03 의 분류기가 매긴다.
 //! - [`result`]: 문장 실행 요청 · 열 메타 · 행 묶음 · 트랜잭션 상태 · 실행 계획 · TLS 상태.
 //! - [`meta`]: 메타데이터 DTO(쪽 단위 객체 목록 · 열 · 인덱스 · FK · DDL).
 //! - [`kv`]: Redis 스캔 · 값 · 명령 응답.
 //! - [`capability`]: 지원 플래그 [`Capabilities`].
 //! - [`error`]: 드라이버 오류 [`DbError`].
+//!
+//! **크기 · 개수 · TTL 필드는 값 규칙의 예외다**: [`DbValue`] 의 정수는 ±(2^53−1) 밖이면 문자열이지만, 바이트 크기
+//! (`DbBytes::size` · `DbTruncated::size`) · 바뀐 행 수(`StatementEnd::rows_affected`) · Redis 의 `ttl_ms` · `size` · `total` 은
+//! `u64` 를 TS `number` 로 낸다 — 2^53(약 9 페타바이트 · 9천조 행 · 28만 년)을 넘지 않는다고 본다.
 //!
 //! 창이 쓸 타입은 `rpc_type!` 로 생성기에 등록돼 `packages/rpc-client` 의 TS 타입이 된다(메서드가 아직 참조하지 않아도).
 //! [`ConnectionSpec`] 은 비밀을 담으므로 등록하지 않는다.
@@ -19,6 +24,7 @@ pub mod error;
 pub mod kv;
 pub mod meta;
 pub mod result;
+pub mod risk;
 pub mod spec;
 pub mod value;
 
@@ -36,6 +42,7 @@ pub use result::{
     BeginOptions, ColumnMeta, ExecuteRequest, ExplainPlan, FetchLimit, PlanFormat, Row, RowBatch,
     ServerInfo, StatementEnd, StatementStarted, TlsStatus, TransactionState,
 };
+pub use risk::RiskGrade;
 pub use spec::{
     ConnectionSpec, DriverKind, Secret, SocketTarget, SqlDialect, SslMode, Target, TlsSettings,
 };
@@ -48,6 +55,7 @@ pub use value::{
 pw_rpc::rpc_type!(
     DbValue,
     DbError,
+    RiskGrade,
     Capabilities,
     DriverInfo,
     DriverKind,

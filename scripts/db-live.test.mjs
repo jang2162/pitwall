@@ -6,7 +6,15 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { TARGETS, isReadyTest, judge, parseFloors, runCount, selectedTests } from "./db-live.mjs";
+import {
+  TARGETS,
+  exitCode,
+  isReadyTest,
+  judge,
+  parseFloors,
+  runCount,
+  selectedTests,
+} from "./db-live.mjs";
 
 const listed = {
   "rust-suites": {
@@ -93,4 +101,13 @@ test("the run count comes from the last nextest summary line", () => {
   assert.equal(runCount(output), 1);
   assert.equal(runCount("Summary [   1.000s] 12 tests run: 12 passed, 3 skipped"), 12);
   assert.equal(runCount("error: no tests to run"), null);
+});
+
+test("running nothing is not a pass", () => {
+  const pass = { ok: true, message: "" };
+  const skip = { ok: true, skipped: true, message: "" };
+  const fail = { ok: false, message: "" };
+  assert.equal(exitCode([skip, skip]), 3);
+  assert.equal(exitCode([pass, skip]), 0);
+  assert.equal(exitCode([pass, fail, skip]), 1);
 });
