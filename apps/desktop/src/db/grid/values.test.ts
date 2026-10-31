@@ -13,6 +13,7 @@ import {
   isNumeric,
   isTruncated,
   originalSize,
+  showInvisible,
   sortKey,
   valueKind,
   valueText,
@@ -75,8 +76,38 @@ describe("display", () => {
     expect(displayText({ text: "abc\u202etxt.exe" })).toBe("abc⟨U+202E⟩txt.exe");
     expect(displayText({ text: "\u200b" })).toBe("⟨U+200B⟩");
     expect(displayText({ text: "a\u0000b\u001bc" })).toBe("a⟨U+0000⟩b⟨U+001B⟩c");
-    // 탭과 글자 모양에 쓰이는 결합자는 그대로.
-    expect(displayText({ text: "a\tb\u200dc" })).toBe("a\tb\u200dc");
+    // 탭은 그대로.
+    expect(displayText({ text: "a\tb" })).toBe("a\tb");
+  });
+
+  // 메인 판정(M3-18 수정 회차): Default_Ignorable_Code_Point 전부와 줄 · 단락 구분자를 표지로 — 14 M3-16 ⓝ 의 이월.
+  it("shows every default-ignorable character, tags and line separators as code points", () => {
+    const cases: [string, string][] = [
+      ["\u200c", "⟨U+200C⟩"], // ZWNJ
+      ["\u200d", "⟨U+200D⟩"], // ZWJ
+      ["\u2028", "⟨U+2028⟩"],
+      ["\u2029", "⟨U+2029⟩"],
+      ["\u00ad", "⟨U+00AD⟩"], // soft hyphen
+      ["\u034f", "⟨U+034F⟩"],
+      ["\u180e", "⟨U+180E⟩"],
+      ["\u2064", "⟨U+2064⟩"],
+      ["\u206f", "⟨U+206F⟩"],
+      ["\u3164", "⟨U+3164⟩"], // 한글 채움 문자
+      ["\ufe0f", "⟨U+FE0F⟩"], // 이형 선택자
+      ["\uffa0", "⟨U+FFA0⟩"],
+      ["\u{1d173}", "⟨U+1D173⟩"],
+      ["\u{e0001}", "⟨U+E0001⟩"], // 태그 문자
+      ["\u{e0041}", "⟨U+E0041⟩"],
+      ["\u{e007f}", "⟨U+E007F⟩"],
+      ["\u{e0100}", "⟨U+E0100⟩"],
+    ];
+    for (const [raw, shown] of cases) {
+      expect(showInvisible(`a${raw}b`), raw.codePointAt(0)!.toString(16)).toBe(`a${shown}b`);
+    }
+    // 글자 · 이모지 · 한글 · 서로게이트 쌍의 보이는 글자는 그대로.
+    expect(showInvisible("가나 😀 é")).toBe("가나 😀 é");
+    // 셀 한 칸에도: 태그로 숨긴 글 「hi」 가 보인다.
+    expect(displayText({ text: "ok\u{e0068}\u{e0069}" })).toBe("ok⟨U+E0068⟩⟨U+E0069⟩");
   });
 
   it("filters on the first FILTER_CHARS characters across lines", () => {

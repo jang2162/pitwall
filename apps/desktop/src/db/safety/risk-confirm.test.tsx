@@ -528,6 +528,18 @@ describe("RiskConfirmDialog for a Redis command", () => {
     expect(args[2]!.dataset.invisible).toBeUndefined();
   });
 
+  // 메인 판정(넓힌 showInvisible): ZWJ · ZWNJ · 줄 · 단락 구분자 · 태그 문자도 날것으로 그리지 않는다.
+  it("shows joiners, line separators and tag characters in arguments as code points", async () => {
+    const raw = ["\u200d", "\u200c", "\u2028", "\u2029", "\u{e0068}", "\u{e0069}"];
+    await show({ kv: kv({ argv: ["SET", `k${raw.join("")}`, "v"] }), connection: DEV });
+    const args = [...document.querySelectorAll<HTMLElement>("[data-testid=db-confirm-kv-arg]")];
+    const command = document.querySelector("[data-testid=db-confirm-kv-command]")!.textContent!;
+    for (const c of raw) expect(command).not.toContain(c);
+    expect(args[1]!.textContent).toBe(
+      `"k⟨U+200D⟩⟨U+200C⟩⟨U+2028⟩⟨U+2029⟩⟨U+E0068⟩⟨U+E0069⟩"${T.confirm.kv.invisible}`,
+    );
+  });
+
   it("shows the note and cuts a long argument list with a count", async () => {
     const argv = ["DEL", ...Array.from({ length: KV_ARGS_SHOWN + 9 }, (_, i) => `k:${i}`)];
     await show({ kv: kv({ argv }), connection: DEV, note: "the target key is overwritten" });
@@ -544,7 +556,7 @@ describe("RiskConfirmDialog for a Redis command", () => {
 describe("RiskConfirmDialog statement text", () => {
   // 리뷰 M2 와 같은 자리: SQL 문장 원문도 그리드와 같은 표지로 보인다(탭 · 줄바꿈은 그대로).
   it("shows invisible characters in a statement as code points, keeping tabs and line breaks", async () => {
-    const sql = "DELETE FROM t\tWHERE name = 'a\u202eb\u200b'\n";
+    const sql = "DELETE FROM t\tWHERE name = 'a\u202eb\u200b\u{e0041}'\n";
     await show({
       request: request({
         statements: [statement(0, "unboundedWrite", ["missingWhere"], { from: 0, to: sql.length })],
@@ -553,6 +565,6 @@ describe("RiskConfirmDialog statement text", () => {
       sql,
     });
     const text = document.querySelector("[data-testid=db-confirm-statement] pre")!.textContent!;
-    expect(text).toBe("DELETE FROM t\tWHERE name = 'a⟨U+202E⟩b⟨U+200B⟩'\n");
+    expect(text).toBe("DELETE FROM t\tWHERE name = 'a⟨U+202E⟩b⟨U+200B⟩⟨U+E0041⟩'\n");
   });
 });

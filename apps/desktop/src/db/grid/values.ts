@@ -23,17 +23,20 @@ export function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GiB`;
 }
 
-// C0 · C1 제어(탭 · 줄바꿈 제외), 0폭 공백 · 단어 결합자 · BOM, 방향 표시 · 덮어쓰기 · 격리(U+200E · 200F · 202A~202E · 2066~2069 ·
-// 061C). ZWJ · ZWNJ(U+200C · 200D)는 글자 모양(이모지 · 문자 체계)에 쓰이므로 그대로 둔다.
+// C0 · C1 제어(탭 · 줄바꿈 제외), 줄 · 단락 구분자(U+2028 · 2029), 그리고 Unicode 의 Default_Ignorable_Code_Point 전부 —
+// 0폭 공백 · 결합자(ZWJ · ZWNJ 포함) · 단어 결합자 · BOM · 방향 표시 · 덮어쓰기 · 격리(U+200E · 200F · 202A~202E · 2066~2069 ·
+// 061C) · 이형 선택자 · 한글 채움 문자 · 태그 문자(U+E0000 대) 등. 그려지지 않거나 글 방향 · 모양만 바꾸는 글자는 사람이 값을
+// 확인하는 자리(셀 · 셀 상세 · 위험 확인 다이얼로그)에서 숨지 않는다 — 이모지 이음(ZWJ) · 이형 선택자도 표지로 보인다.
+// 속성 이스케이프는 엔진의 Unicode 판을 따른다.
 const INVISIBLE =
   // oxlint-disable-next-line no-control-regex -- 제어 문자를 찾아 보이게 하는 것이 이 식의 목적이다.
-  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+  /[\p{Default_Ignorable_Code_Point}\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/gu;
 
-/** 보이지 않는 제어 · 방향 · 0폭 문자를 `⟨U+XXXX⟩` 로 보인다(셀 · 셀 상세의 글 보기). */
+/** 보이지 않는 제어 · 방향 · 0폭 문자를 `⟨U+XXXX⟩` 로 보인다(셀 · 셀 상세의 글 보기). 보조 평면 글자는 다섯 자리 이상이다. */
 export function showInvisible(s: string): string {
   return s.replace(
     INVISIBLE,
-    (c) => `⟨U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`,
+    (c) => `⟨U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}⟩`,
   );
 }
 
