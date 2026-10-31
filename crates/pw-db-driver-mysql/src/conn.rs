@@ -5,7 +5,16 @@
 //! 없다), 사람의 문장은 먼저 준비 문장(COM_STMT_PREPARE)으로 보낸다 — 서버는 준비할 글을 문장 하나로 읽고, 뒤에 문장이 더 있으면
 //! 1064 로 거절한다(첫 문장이 `CREATE PROCEDURE` 여도). 서버가 준비 문장으로 받지 않는 문장(1295 — MySQL 의 `USE` ·
 //! `CREATE PROCEDURE` 등)만 텍스트 프로토콜로 보낸다: 1295 는 글 전체를 문장 하나로 읽은 뒤에 나오므로 그 글은 문장 하나다
-//! (MySQL 8.4 · MariaDB 11.8 에서 확인). 문장 캐시는 0 이고 `mysql_async` 는 그때 준비 문장을 닫지 않으므로 문장이 끝나면 직접 닫는다.
+//! — 두 서버 모두 준비 모드에서 `multi_statements = false` 로 `parse_sql` 을 끝낸 뒤 `check_prepared_statement` 에서만
+//! `ER_UNSUPPORTED_PS` 를 낸다(MySQL 8.4.6 · MariaDB 11.8.3 `sql/sql_prepare.cc`, 문법 `sql_yacc.yy` 에는 그 오류가 없다). 진단 문장
+//! (`SHOW WARNINGS` 등)은 준비 시도가 진단 영역을 덮으므로 정확한 꼴일 때만 준비 없이 텍스트로 보낸다(`diag`). 문장 캐시는 0 이고
+//! `mysql_async` 는 그때 준비 문장을 닫지 않으므로 문장이 끝나면 직접 닫는다.
+//!
+//! **트랜잭션 상태**는 서버의 상태 플래그(`SERVER_STATUS_IN_TRANS`)로만 읽는다. 오류 패킷에는 그 플래그가 없으므로 트랜잭션 안에서
+//! 오류가 나면 `COM_PING` 하나로 OK 패킷을 받아 다시 읽는다 — 문장이 아니라 진단 영역을 건드리지 않는다(MySQL 8.4 은 `DO 0` 같은
+//! 문장도 진단 영역을 지운다). 트랜잭션이 끝났으면: 오류가 트랜잭션 전체를 되돌리는 것(교착 1213, `innodb_rollback_on_timeout`
+//! 이 켜진 서버의 잠금 대기 1205)이면 `DbError::rolled_back`, 그 밖은 **암묵 커밋**이다 — DDL · `LOCK TABLES` · `TRUNCATE` 등은
+//! 실행 전에 열린 트랜잭션을 커밋한 뒤 실패할 수 있다. 그때는 되돌리지 않았으므로 `rolled_back` 이 아니고 상태만 `Idle` 이 된다.
 //!
 //! **커서**는 결과 집합 스트리밍이다. `mysql_async` 는 읽다 만 결과 집합을 연결 안에 「남은 결과」 로 들고 있으므로, `fetch` 마다
 //! 그 연결로 `QueryResult` 를 다시 만들어 credit 만큼만 행을 읽는다 — 읽지 않은 행은 서버 쪽에서 소켓이 막혀 기다린다.
@@ -39,17 +48,19 @@ use pw_db_types::{
 
 use crate::error::{Phase, code, map, server_code};
 use crate::infile::{self, RefuseLocalInfile};
-use crate::{meta, value};
+use crate::{diag, meta, value};
 
-/// 교착으로 서버가 트랜잭션 전체를 되돌렸다(상태를 읽는 빈 문장이 실패했을 때의 기댈 곳).
+/// 교착 — 서버가 트랜잭션 전체를 되돌렸다.
 const DEADLOCK: u16 = 1213;
+/// 잠금 대기 시간 초과 — `innodb_rollback_on_timeout` 이 켜진 서버에서만 트랜잭션 전체를 되돌린다.
+const LOCK_WAIT_TIMEOUT: u16 = 1205;
 
 /// 진행 중 문장을 다른 연결의 `KILL QUERY` 로 멈춘다.
 pub(crate) struct Interrupter {
     /// 이 연결을 연 설정(TLS 포함) — `KILL` 연결도 같은 설정으로 연다.
     opts: Opts,
-    /// 서버의 연결 id(`CONNECTION_ID()`).
-    id: u32,
+    /// 서버의 연결 id(`CONNECTION_ID()` — MariaDB 는 64비트라 핸드셰이크의 32비트 값을 쓰지 않는다).
+    id: u64,
     /// `KILL` 연결을 열고 보내는 데 쓰는 시간 상한.
     timeout: Duration,
     state: Mutex<Statement>,
@@ -64,7 +75,7 @@ struct Statement {
 }
 
 impl Interrupter {
-    pub(crate) fn new(opts: Opts, id: u32, timeout: Duration) -> Self {
+    pub(crate) fn new(opts: Opts, id: u64, timeout: Duration) -> Self {
         Self {
             opts,
             id,
@@ -130,6 +141,8 @@ pub(crate) struct MysqlConnection {
     infile_asked: Arc<AtomicBool>,
     /// 방금 끝난 문장의 오류가 트랜잭션 전체를 되돌렸다 — 다음 [`Self::error`] 가 `DbError::rolled_back` 에 싣는다.
     rolled_back: bool,
+    /// 서버의 `innodb_rollback_on_timeout`(연결 때 읽는다).
+    rollback_on_timeout: bool,
 }
 
 async fn next_row(conn: &mut Conn, binary: bool) -> mysql_async::Result<Option<mysql_async::Row>> {
@@ -180,6 +193,7 @@ impl MysqlConnection {
         conn: Conn,
         interrupter: Arc<Interrupter>,
         infile_asked: Arc<AtomicBool>,
+        rollback_on_timeout: bool,
     ) -> Self {
         let mut this = Self {
             conn: Some(conn),
@@ -188,6 +202,7 @@ impl MysqlConnection {
             state: TransactionState::Idle,
             infile_asked,
             rolled_back: false,
+            rollback_on_timeout,
         };
         this.refresh_state();
         this
@@ -215,6 +230,8 @@ impl MysqlConnection {
 
     fn begin_statement(&mut self) {
         self.rolled_back = false;
+        // 앞 문장(연결 때의 질의 · 트랜잭션 제어 등)에서 세워진 표지가 이 문장의 것으로 읽히지 않게.
+        RefuseLocalInfile::asked(&self.infile_asked);
         *self.interrupter.state() = Statement {
             running: true,
             interrupted: false,
@@ -235,17 +252,18 @@ impl MysqlConnection {
         }
         match error {
             None => self.refresh_state(),
-            // 오류 패킷에는 상태 플래그가 없다. 대개 오류는 문장만 되돌리지만 교착(1213) · `innodb_rollback_on_timeout` 의 잠금
-            // 대기(1205) 등은 트랜잭션 전체를 되돌린다 — 트랜잭션 안이었으면 빈 문장 하나로 상태를 다시 읽어 가른다.
+            // 오류 패킷에는 상태 플래그가 없다 — 트랜잭션 안이었으면 `COM_PING` 의 OK 패킷으로 다시 읽는다(머리 주석).
             Some(e) if self.state == TransactionState::InTransaction => {
-                match self.conn().query_drop("DO 0").await {
-                    Ok(()) => self.refresh_state(),
-                    Err(_) if server_code(e) == Some(DEADLOCK) => {
-                        self.state = TransactionState::Idle;
-                    }
-                    Err(_) => {}
+                if self.conn().ping().await.is_ok() {
+                    self.refresh_state();
                 }
-                self.rolled_back = self.state == TransactionState::Idle;
+                let whole = match server_code(e) {
+                    Some(DEADLOCK) => true,
+                    Some(LOCK_WAIT_TIMEOUT) => self.rollback_on_timeout,
+                    _ => false,
+                };
+                // 끝났는데 되돌리는 오류가 아니면 암묵 커밋이다 — 되돌렸다고 알리지 않는다.
+                self.rolled_back = whole && self.state == TransactionState::Idle;
             }
             Some(_) => {}
         }
@@ -305,6 +323,7 @@ impl MysqlConnection {
         self.begin_statement();
         let result = self.conn().query_drop(sql).await;
         self.end_statement(result.as_ref().err()).await;
+        self.refused_infile()?;
         result.map_err(|e| self.error(e))
     }
 
@@ -317,6 +336,7 @@ impl MysqlConnection {
         self.begin_statement();
         let result = query(self.conn()).await;
         let interrupted = self.end_statement(result.as_ref().err()).await;
+        self.refused_infile()?;
         match result {
             Ok(_) if interrupted => Err(DbError::cancelled()),
             Ok(value) => Ok(value),
@@ -332,7 +352,13 @@ impl MysqlConnection {
             .map(value::param)
             .collect::<DbResult<Vec<_>>>()?;
         self.begin_statement();
-        let prepared = match prepare(self.conn(), &request.sql).await {
+        let diagnostic = params.is_empty() && diag::is_diagnostic(&request.sql);
+        let prepared = if diagnostic {
+            Ok(None)
+        } else {
+            prepare(self.conn(), &request.sql).await
+        };
+        let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(e) => {
                 self.end_statement(Some(&e)).await;

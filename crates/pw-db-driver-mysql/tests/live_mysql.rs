@@ -207,7 +207,7 @@ async fn live_mysql_values_follow_the_value_rules() {
         conn.as_mut(),
         &format!(
             "CREATE TABLE {table} (b BIGINT, u BIGINT UNSIGNED, d DECIMAL(30,10), bl BLOB, j JSON, dt DATETIME(6), \
-             t VARCHAR(20), f DOUBLE)"
+             t VARCHAR(20), f DOUBLE, fl FLOAT)"
         ),
     )
     .await;
@@ -215,7 +215,7 @@ async fn live_mysql_values_follow_the_value_rules() {
         conn.as_mut(),
         &format!(
             "INSERT INTO {table} VALUES (5, 18446744073709551615, 12345678901234567890.1234567890, X'DEADBEEF', \
-             '{{\"a\": [1, 2]}}', '2026-10-31 12:34:56.123456', 'héllo', 1.5)"
+             '{{\"a\": [1, 2]}}', '2026-10-31 12:34:56.123456', 'héllo', 1.5, 0.1)"
         ),
     )
     .await;
@@ -234,13 +234,30 @@ async fn live_mysql_values_follow_the_value_rules() {
         DbValue::Datetime("2026-10-31 12:34:56.123456".into()),
         DbValue::Text("héllo".into()),
         DbValue::float(1.5),
+        // 단정밀도 0.1 은 0.1 로(넓혀 보인 0.10000000149011612 가 아니다).
+        DbValue::float(0.1),
     ];
-    let select = format!("SELECT b, u, d, bl, j, dt, t, f FROM {table}");
-    let text = rows(conn.as_mut(), &select, RiskGrade::Read).await;
+    // 바인드가 있든 없든 준비 문장(바이너리 프로토콜)이다(`conn` 머리 주석).
+    let select = format!("SELECT b, u, d, bl, j, dt, t, f, fl FROM {table}");
+    let prepared = rows(conn.as_mut(), &select, RiskGrade::Read).await;
     assert_eq!(
-        text,
+        prepared,
         std::slice::from_ref(&expected),
-        "{version} text protocol"
+        "{version} prepared without binds"
+    );
+    // 텍스트 프로토콜로 행이 오는 길: `HANDLER … READ` 는 MySQL 이 준비하지 않아(1295) 텍스트로 간다(MariaDB 는 준비한다).
+    write(conn.as_mut(), &format!("HANDLER {table} OPEN")).await;
+    let handler = rows(
+        conn.as_mut(),
+        &format!("HANDLER {table} READ FIRST"),
+        RiskGrade::Read,
+    )
+    .await;
+    write(conn.as_mut(), &format!("HANDLER {table} CLOSE")).await;
+    assert_eq!(
+        handler,
+        std::slice::from_ref(&expected),
+        "{version} HANDLER READ"
     );
     let mut bound = ExecuteRequest::new(format!("{select} WHERE b = ?"), RiskGrade::Read);
     bound.params = vec![DbValue::int(5)];
@@ -728,9 +745,18 @@ async fn live_mysql_one_send_is_one_server_statement() {
         .unwrap();
     let (mut conn, _) = open(SslMode::Disable).await;
 
+    let database = spec(SslMode::Disable).database.unwrap();
+    // 서버가 준비하지 않는 문장(MySQL 1295)을 앞에 둔 꼴과 진단 문장 · 실행 주석 꼴까지 — 모두 1064 로 거절되어 텍스트로 가지 않는다.
     for hidden in [
         format!("SELECT 1; DROP TABLE {table}"),
         format!("CREATE PROCEDURE {procedure}() SELECT 1; DROP TABLE {table}"),
+        format!("USE {database}; DROP TABLE {table}"),
+        format!("BEGIN; DROP TABLE {table}"),
+        format!("SAVEPOINT a; DROP TABLE {table}"),
+        format!("LOCK TABLES {table} READ; DROP TABLE {table}"),
+        format!("SHOW WARNINGS; DROP TABLE {table}"),
+        format!("GET DIAGNOSTICS @n = NUMBER; DROP TABLE {table}"),
+        format!("USE {database} /*! ; DROP TABLE {table} */"),
     ] {
         let refused = conn
             .execute(ExecuteRequest::new(hidden.clone(), RiskGrade::Read))
@@ -760,7 +786,6 @@ async fn live_mysql_one_send_is_one_server_statement() {
     )
     .await;
     assert_eq!(first, [vec![DbValue::int(1)]], "the first result set");
-    let database = spec(SslMode::Disable).database.unwrap();
     write(conn.as_mut(), &format!("USE {database}")).await;
     write(conn.as_mut(), &format!("DROP PROCEDURE {procedure}")).await;
 
@@ -804,8 +829,13 @@ async fn live_mysql_one_send_is_one_server_statement() {
 #[tokio::test]
 async fn live_mysql_local_infile_is_refused_without_reading_the_file() {
     let table = unique("pw_live_infile");
-    let file = std::env::temp_dir().join(format!("{table}.csv"));
-    std::fs::write(&file, "1\n2\n3\n").unwrap();
+    // 쓰는 쪽이 없는 FIFO — 드라이버가 이 파일을 열기만 해도 막혀 아래 시간 상한에 걸린다(「읽지 않는다」 를 넘어 「열지 않는다」).
+    let file = std::env::temp_dir().join(format!("{table}.fifo"));
+    let made = std::process::Command::new("mkfifo")
+        .arg(&file)
+        .status()
+        .unwrap();
+    assert!(made.success(), "mkfifo {}", file.display());
     let mut admin = admin().await;
     let was: Option<String> = admin
         .query_first("SELECT @@GLOBAL.local_infile")
@@ -941,4 +971,106 @@ async fn live_mysql_a_deadlock_reports_the_whole_transaction_rolled_back() {
         .query_drop(format!("DROP TABLE {table}"))
         .await
         .unwrap();
+}
+
+/// 암묵 커밋 문장(DDL · `LOCK TABLES` 등)은 실행 전에 열린 트랜잭션을 커밋한다 — 그 뒤 실패해도 앞의 쓰기는 커밋됐다. 드라이버는
+/// 그것을 「되돌렸다」(`rolled_back`)고 하지 않고 상태를 `Idle` 로 보인다. 다른 연결에서 그 쓰기가 보인다.
+#[tokio::test]
+async fn live_mysql_an_implicit_commit_is_not_reported_as_a_rollback() {
+    let table = unique("pw_live_implicit");
+    let mut admin = admin().await;
+    admin
+        .query_drop(format!("CREATE TABLE {table} (n INT)"))
+        .await
+        .unwrap();
+    let (mut conn, _) = open(SslMode::Disable).await;
+    for (n, failing) in [
+        (1, format!("CREATE TABLE {table} (a INT)")),
+        (2, format!("DROP TABLE {table}_no_such")),
+        (3, format!("LOCK TABLES {table}_no_such READ")),
+    ] {
+        conn.begin(BeginOptions::default()).await.unwrap();
+        write(conn.as_mut(), &format!("INSERT INTO {table} VALUES ({n})")).await;
+        let error = conn
+            .execute(ExecuteRequest::new(failing.clone(), RiskGrade::Ddl))
+            .await
+            .unwrap_err();
+        assert!(
+            !error.rolled_back,
+            "{failing}: committed, not rolled back: {error}"
+        );
+        assert_eq!(
+            conn.transaction_state(),
+            TransactionState::Idle,
+            "{failing}: the implicit commit ended the transaction"
+        );
+        let seen: Option<u64> = admin
+            .query_first(format!("SELECT COUNT(*) FROM {table} WHERE n = {n}"))
+            .await
+            .unwrap();
+        assert_eq!(
+            seen,
+            Some(1),
+            "{failing}: the INSERT before it is committed"
+        );
+    }
+    conn.close().await.unwrap();
+    admin
+        .query_drop(format!("DROP TABLE {table}"))
+        .await
+        .unwrap();
+}
+
+/// 진단 문장은 사람의 앞 문장이 남긴 경고 · 오류를 보인다 — 드라이버의 준비 시도(1295)나 상태 읽기가 덮지 않는다. 붙인 문장은
+/// 지금 경로로 가서 거절된다.
+#[tokio::test]
+async fn live_mysql_diagnostics_show_the_person_s_warnings_and_errors() {
+    let table = unique("pw_live_diag");
+    let (mut conn, _) = open(SslMode::Disable).await;
+    let code = |rows: &[pw_db_types::Row]| rows.first().map(|r| r[1].clone());
+
+    scalar(conn.as_mut(), "SELECT CAST('1x' AS SIGNED)").await;
+    let warnings = rows(conn.as_mut(), "SHOW WARNINGS", RiskGrade::Read).await;
+    assert_eq!(code(&warnings), Some(DbValue::int(1292)), "{warnings:?}");
+    let count = scalar(conn.as_mut(), "show count(*) warnings;").await;
+    assert_eq!(count, DbValue::int(1));
+
+    let typo = conn
+        .execute(ExecuteRequest::new("SELEC 1", RiskGrade::Read))
+        .await
+        .unwrap_err();
+    assert_eq!(typo.code.as_deref(), Some("1064"));
+    let errors = rows(conn.as_mut(), "SHOW ERRORS LIMIT 5", RiskGrade::Read).await;
+    assert_eq!(code(&errors), Some(DbValue::int(1064)), "{errors:?}");
+    write(
+        conn.as_mut(),
+        "GET DIAGNOSTICS CONDITION 1 @pw_m = MESSAGE_TEXT, @pw_e = MYSQL_ERRNO",
+    )
+    .await;
+    assert_eq!(
+        scalar(conn.as_mut(), "SELECT @pw_e").await,
+        DbValue::int(1064)
+    );
+
+    // 트랜잭션 안의 오류 뒤에도(드라이버가 상태를 다시 읽는다) 사람의 오류가 남는다.
+    conn.begin(BeginOptions::default()).await.unwrap();
+    conn.execute(ExecuteRequest::new("SELEC 2", RiskGrade::Read))
+        .await
+        .unwrap_err();
+    assert_eq!(conn.transaction_state(), TransactionState::InTransaction);
+    let errors = rows(conn.as_mut(), "SHOW ERRORS", RiskGrade::Read).await;
+    assert_eq!(code(&errors), Some(DbValue::int(1064)), "{errors:?}");
+    conn.rollback().await.unwrap();
+
+    write(conn.as_mut(), &format!("CREATE TABLE {table} (n INT)")).await;
+    let glued = conn
+        .execute(ExecuteRequest::new(
+            format!("SHOW WARNINGS; DROP TABLE {table}"),
+            RiskGrade::Read,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(glued.code.as_deref(), Some("1064"), "{glued}");
+    write(conn.as_mut(), &format!("DROP TABLE {table}")).await;
+    conn.close().await.unwrap();
 }

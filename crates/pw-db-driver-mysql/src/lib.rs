@@ -18,6 +18,7 @@
 //! 같은 시험을 `PW_TEST_MARIADB_URL` 로 한 번 더 돈다.
 
 mod conn;
+mod diag;
 mod error;
 mod infile;
 mod meta;
@@ -206,19 +207,38 @@ impl DbDriver for MysqlDriver {
             let infile_asked = Arc::new(AtomicBool::new(false));
             let (mut conn, opts, used_tls) =
                 within(timeout, "connect", self.open(&spec, &infile_asked)).await?;
-            let version: Option<String> = conn
-                .query_first("SELECT VERSION()")
+            let (version, id): (String, u64) = conn
+                .query_first("SELECT VERSION(), CONNECTION_ID()")
                 .await
-                .map_err(|e| map(e, Phase::Run))?;
+                .map_err(|e| map(e, Phase::Run))?
+                .ok_or_else(|| {
+                    DbError::new(DbErrorKind::Server, "SELECT VERSION() returned no row")
+                })?;
+            // InnoDB 가 없는 서버면 변수가 없다 — 그때는 잠금 대기가 트랜잭션을 되돌리지 않는다고 본다.
+            let rollback_on_timeout = conn
+                .query_first::<i64, _>("SELECT @@innodb_rollback_on_timeout")
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|on| on != 0);
             let tls = tls::plan(&spec.tls, &spec.target)?.status(used_tls);
-            let interrupter = Arc::new(Interrupter::new(opts, conn.id(), timeout));
+            // `KILL` 연결은 따로 LOCAL INFILE 표지를 갖는다 — 그 연결의 요청이 이 연결의 문장을 거절로 만들지 않게.
+            let kill_opts = Opts::from(
+                OptsBuilder::from_opts(opts)
+                    .local_infile_handler(Some(infile::RefuseLocalInfile::new(Arc::default()))),
+            );
+            let interrupter = Arc::new(Interrupter::new(kill_opts, id, timeout));
             Ok(Connected {
                 connection: DbConnection::Sql(Box::new(MysqlConnection::new(
                     conn,
                     interrupter,
                     infile_asked,
+                    rollback_on_timeout,
                 ))),
-                server: ServerInfo { version, tls },
+                server: ServerInfo {
+                    version: Some(version),
+                    tls,
+                },
             })
         })
     }

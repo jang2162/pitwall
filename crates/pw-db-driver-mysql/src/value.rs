@@ -101,7 +101,9 @@ pub(crate) fn cell(column: &Column, value: Value, limit: CellLimit) -> DbValue {
         Value::NULL => return DbValue::Null,
         Value::Int(v) => return DbValue::int(v),
         Value::UInt(v) => return DbValue::int(v),
-        Value::Float(v) => return DbValue::float(f64::from(v)),
+        // 단정밀도는 f32 의 가장 짧은 십진 표기를 거쳐 넓힌다 — 그대로 넓히면 0.1 이 0.10000000149011612 가 된다(텍스트
+        // 프로토콜 · mysql 클라이언트는 0.1).
+        Value::Float(v) => return DbValue::float(v.to_string().parse().unwrap_or(f64::from(v))),
         Value::Double(v) => return DbValue::float(v),
         Value::Date(..) | Value::Time(..) => {
             return DbValue::Datetime(datetime_text(column, &value));
@@ -382,6 +384,11 @@ mod tests {
             cell(&unsigned, Value::UInt(5), CellLimit::DEFAULT),
             DbValue::int(5)
         );
+        let single = col(MYSQL_TYPE_FLOAT, none, BINARY_CHARSET);
+        let float = |v: f32| cell(&single, Value::Float(v), CellLimit::DEFAULT);
+        assert_eq!(float(0.1), DbValue::float(0.1));
+        assert_eq!(float(f32::MAX), DbValue::float(3.4028235e38));
+        assert_eq!(float(f32::NAN), DbValue::float(f64::NAN));
         let datetime = col(MYSQL_TYPE_DATETIME, none, BINARY_CHARSET).with_decimals(6);
         assert_eq!(
             cell(
