@@ -4439,6 +4439,7 @@ dependencies = [
  "libc",
  "pw-core",
  "pw-db",
+ "pw-db-driver-sqlite",
  "pw-db-sql",
  "pw-diag",
  "pw-ext",
@@ -4761,6 +4762,7 @@ dependencies = [
  "pw-db-types",
  "rusqlite",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

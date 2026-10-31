@@ -5,6 +5,8 @@
 //! registry.register(Arc::new(pw_db_driver_pg::PgDriver::new())).expect("db driver ids are unique");
 //! ```
 
+use std::sync::Arc;
+
 use pw_db::DriverRegistry;
 
 /// 앱의 드라이버 등록부. 실행 파이프라인(M3-05)이 Host 를 만들 때 받는다.
@@ -16,7 +18,11 @@ use pw_db::DriverRegistry;
     )
 )]
 pub fn drivers() -> DriverRegistry {
-    DriverRegistry::new()
+    let mut registry = DriverRegistry::new();
+    registry
+        .register(Arc::new(pw_db_driver_sqlite::SqliteDriver::new()))
+        .expect("db driver ids are unique");
+    registry
 }
 
 #[cfg(test)]
@@ -25,6 +31,6 @@ mod tests {
     fn the_registry_holds_exactly_the_built_in_drivers() {
         // 등록은 갈래 검사 · 중복 검사를 지나야 한다(`DriverRegistry::register`). 드라이버 행이 자기 id 를 더한다.
         let ids: Vec<String> = super::drivers().infos().into_iter().map(|i| i.id).collect();
-        assert_eq!(ids, Vec::<String>::new());
+        assert_eq!(ids, ["sqlite"]);
     }
 }
