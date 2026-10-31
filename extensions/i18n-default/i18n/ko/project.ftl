@@ -509,6 +509,14 @@ find-in-folder = 이 폴더에서 찾기
 # $version: 그 git 의 버전(읽지 못했으면 그 이유), $required: 쓰기에 필요한 가장 낮은 버전
 git-too-old = git { $version } 은(는) { $required } 보다 낮아 커밋 · 브랜치 같은 변경 작업을 끈다. 보기는 그대로 된다
 
+## DB. 아무도 다시 붙지 않은 열린 트랜잭션을 Host 가 롤백하면 알림(notification.show)으로 낸다(crates/pw-db/src/session.rs). 같은 롤백은
+## 다음에 창이 열릴 때 db.session.unattendedRollbacks 로도 읽힌다.
+
+# $connection: 연결 이름, $minutes: 창이 돌아오기를 기다린 시간(분)
+db-unattended-transaction-rolled-back = 연결 { $connection } 의 열린 트랜잭션을 롤백했다 — { $minutes }분 안에 다시 붙은 창이 없었다
+# $connection: 연결 이름
+db-closed-transaction-rolled-back = 연결 { $connection } 의 열린 트랜잭션을 롤백했다 — 창의 연결이 닫혔다
+
 ## git 인증(src/git/git-prompts.tsx). git 이나 ssh 가 암호 · 토큰 · 키 암호 · 호스트 키 확인을 묻는다.
 ## 다이얼로그의 질문은 git · ssh 가 준 문장 그대로이고 번역하지 않는다.
 

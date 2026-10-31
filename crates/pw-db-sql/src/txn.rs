@@ -152,6 +152,8 @@ fn finish(dialect: SqlDialect, rest: &[&str], leftover: bool, commit: bool) -> T
 /// (`GRANT` · `REVOKE` · `SET PASSWORD`), `LOCK` · `UNLOCK`, 관리(`ANALYZE` · `CHECK` · `OPTIMIZE` · `REPAIR` · `CACHE INDEX` ·
 /// `LOAD INDEX` · `FLUSH` · `RESET` — `RESET PERSIST` 는 빼고), `INSTALL` · `UNINSTALL`, 복제 제어(`START` · `STOP` ·
 /// `CHANGE REPLICATION|MASTER`), `IMPORT TABLE`, 그리고 `autocommit` 을 바꾸는 `SET`(켜면 커밋한다 — 값은 보지 않고 묻는다).
+/// `SET` 은 앞 낱말 한도와 상관없이 글 전체에서 `autocommit` 낱말을 찾는다 — `SET @a = 1, autocommit = 1` 처럼 목록 뒤쪽에 있어도
+/// 놓치지 않는다(M3-05 리뷰 L1). 따옴표 · 주석 안이나 같은 이름의 사용자 변수(`@autocommit`)도 맞는다 — 더 묻는 쪽으로 틀린다.
 pub fn implicitly_commits(dialect: SqlDialect, text: &str) -> bool {
     if dialect != SqlDialect::Mysql {
         return false;
@@ -175,9 +177,40 @@ pub fn implicitly_commits(dialect: SqlDialect, text: &str) -> bool {
             Some(&"REPLICA" | &"SLAVE" | &"GROUP_REPLICATION" | &"ALL")
         ),
         "CHANGE" => matches!(rest.first(), Some(&"REPLICATION" | &"MASTER")),
-        "SET" => rest.first() == Some(&"PASSWORD") || words.contains(&"AUTOCOMMIT"),
+        "SET" => rest.first() == Some(&"PASSWORD") || mentions_word(text, "AUTOCOMMIT"),
         _ => false,
     }
+}
+
+/// MySQL · MariaDB 에서 이 문장이 열린 트랜잭션을 끝낼 수 있는가 — [`implicitly_commits`] 의 문장에 더해, 안에서 무엇을 할지 글로는
+/// 모르는 문장(`CALL` — 프로시저 안의 `COMMIT` · `ROLLBACK` · DDL, `EXECUTE` — 준비한 문장, MariaDB 의 복합 문장 `BEGIN NOT
+/// ATOMIC`). 다른 방언은 늘 false 다(PG 는 트랜잭션 블록 안에서 문장이 블록을 끝내지 못하고, SQLite 의 `COMMIT` · `END` 는
+/// [`transaction_control`] 이 옮긴다). 실행 파이프라인이 이 문장 도중 연결이 끊겼을 때 「DB 가 롤백했다」 고 단정하지 않는 데 쓴다.
+pub fn may_end_transaction(dialect: SqlDialect, text: &str) -> bool {
+    if dialect != SqlDialect::Mysql {
+        return false;
+    }
+    if implicitly_commits(dialect, text) {
+        return true;
+    }
+    let lexed = lex(dialect, text, 2);
+    match lexed.words.first().map(String::as_str) {
+        Some("CALL" | "EXECUTE") => true,
+        Some("BEGIN") => lexed.words.get(1).map(String::as_str) == Some("NOT"),
+        _ => false,
+    }
+}
+
+/// `word`(ASCII 대문자)가 글 어디엔가 낱말로 있는가 — 앞뒤가 식별자 글자(`[A-Za-z0-9_$]`)가 아니다. 따옴표 · 주석을 가리지 않는다.
+fn mentions_word(text: &str, word: &str) -> bool {
+    let bytes = text.as_bytes();
+    let n = word.len();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$') || b >= 0x80;
+    (0..bytes.len().saturating_sub(n - 1)).any(|i| {
+        bytes[i..i + n].eq_ignore_ascii_case(word.as_bytes())
+            && (i == 0 || !ident(bytes[i - 1]))
+            && bytes.get(i + n).is_none_or(|&b| !ident(b))
+    })
 }
 
 /// `SET` · `RESET` 으로 시작하는 문장인가(`SET TRANSACTION` · `SET SESSION CHARACTERISTICS` 포함). read-only 연결의 실행 관문이

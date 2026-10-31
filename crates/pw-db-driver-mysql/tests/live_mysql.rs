@@ -1021,6 +1021,64 @@ async fn live_mysql_an_implicit_commit_is_not_reported_as_a_rollback() {
         .unwrap();
 }
 
+/// 서버에 묻는 트랜잭션 상태(`read_transaction_state` — `COM_PING` 의 `SERVER_STATUS_IN_TRANS`): 프로시저가 안에서 커밋한 뒤
+/// 실패하면(M3-05 리뷰 M1 의 재현) 서버는 트랜잭션 밖이라고 답하고 앞의 쓰기는 다른 연결에서 보인다 — 드라이버는 「되돌렸다」 고
+/// 하지 않는다. 열린 트랜잭션 안에서는 `InTransaction` 이다.
+#[tokio::test]
+async fn live_mysql_reading_the_transaction_state_asks_the_server() {
+    let table = unique("pw_live_state");
+    let procedure = format!("{table}_p");
+    let mut admin = admin().await;
+    admin
+        .query_drop(format!("CREATE TABLE {table} (n INT)"))
+        .await
+        .unwrap();
+    admin
+        .query_drop(format!(
+            "CREATE PROCEDURE {procedure}() BEGIN COMMIT; SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'after commit'; END"
+        ))
+        .await
+        .unwrap();
+    let (mut conn, _) = open(SslMode::Disable).await;
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::Idle
+    );
+    conn.begin(BeginOptions::default()).await.unwrap();
+    write(conn.as_mut(), &format!("INSERT INTO {table} VALUES (1)")).await;
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::InTransaction
+    );
+    let error = conn
+        .execute(ExecuteRequest::new(
+            format!("CALL {procedure}()"),
+            RiskGrade::Destructive,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("1644"), "{error}");
+    assert!(!error.rolled_back, "committed, not rolled back: {error}");
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::Idle
+    );
+    let seen: Option<u64> = admin
+        .query_first(format!("SELECT COUNT(*) FROM {table}"))
+        .await
+        .unwrap();
+    assert_eq!(seen, Some(1), "the INSERT before the CALL is committed");
+    conn.close().await.unwrap();
+    admin
+        .query_drop(format!("DROP PROCEDURE {procedure}"))
+        .await
+        .unwrap();
+    admin
+        .query_drop(format!("DROP TABLE {table}"))
+        .await
+        .unwrap();
+}
+
 /// 진단 문장은 사람의 앞 문장이 남긴 경고 · 오류를 보인다 — 드라이버의 준비 시도(1295)나 상태 읽기가 덮지 않는다. 붙인 문장은
 /// 지금 경로로 가서 거절된다.
 #[tokio::test]

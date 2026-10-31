@@ -341,6 +341,47 @@ async fn live_pg_cancel_in_a_manual_transaction_leaves_it_failed() {
     assert_eq!(count(&mut conn, "SELECT 1").await, 1);
 }
 
+/// 서버에 묻는 트랜잭션 상태(`read_transaction_state` — 블록 판정)는 서버의 블록을 따라간다: 밖이면 `Idle`, 안이면
+/// `InTransaction`, 오류로 깨진 블록이면 `Failed`. 물어도 트랜잭션은 그대로다(그 뒤 커밋한 쓰기가 남는다).
+#[tokio::test(flavor = "multi_thread")]
+async fn live_pg_reading_the_transaction_state_asks_the_server() {
+    let table = format!("pw_live_state_{}", std::process::id());
+    let mut conn = open(&plain()).await;
+    run(&mut conn, &format!("CREATE TABLE {table} (n int)")).await;
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::Idle
+    );
+    conn.begin(BeginOptions::default()).await.unwrap();
+    run(&mut conn, &format!("INSERT INTO {table} VALUES (1)")).await;
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::InTransaction
+    );
+    conn.commit().await.unwrap();
+    assert_eq!(
+        count(&mut conn, &format!("SELECT count(*) FROM {table}")).await,
+        1
+    );
+    conn.begin(BeginOptions::default()).await.unwrap();
+    let failed = conn.execute(read("SELECT 1 / 0")).await;
+    let failed = match failed {
+        Err(e) => e,
+        Ok(_) => conn.fetch(FetchLimit::rows(1)).await.unwrap_err(),
+    };
+    assert_eq!(failed.code.as_deref(), Some("22012"));
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::Failed
+    );
+    conn.rollback().await.unwrap();
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::Idle
+    );
+    run(&mut conn, &format!("DROP TABLE {table}")).await;
+}
+
 /// `pg_sleep(30)` 을 시작하고 0.3 s 뒤 인터럽트. (인터럽트에서 오류까지의 시간, 오류 종류).
 async fn sleep_and_cancel(conn: &mut PgConnection) -> (Duration, DbErrorKind) {
     conn.execute(read("SELECT pg_sleep(30)")).await.unwrap();

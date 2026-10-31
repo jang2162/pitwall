@@ -55,6 +55,8 @@ pub(crate) enum Command {
     Rollback(Reply<()>),
     Savepoint(SavepointOp, String, Reply<()>),
     Meta(MetaRequest, Reply<MetaResponse>),
+    /// 서버의 트랜잭션 블록 상태를 묻는다([`block_state`]).
+    State(Reply<TransactionState>),
     Close(Reply<()>),
 }
 
@@ -242,6 +244,7 @@ pub(crate) async fn run(
                 let result = shared.busy(meta::run(client, request, &shared)).await;
                 send(reply, result);
             }
+            Command::State(reply) => send(reply, shared.busy(block_state(client)).await),
         }
     };
     shared.set(TransactionState::Idle);
@@ -300,11 +303,18 @@ async fn hold(
         End::Commit(reply) => {
             let failed = shared.state() == TransactionState::Failed;
             // COMMIT 이 오류면(지연 제약 등) 서버가 트랜잭션 전체를 되돌렸다. 실패한 트랜잭션의 COMMIT 은 서버가 오류 없이
-            // 롤백으로 끝낸다 — 그 사실 그대로 `rolled_back` 오류로 알린다(성공으로 보이지 않게, 결정 M3-D21).
+            // 롤백으로 끝낸다 — 그 사실 그대로 `rolled_back` 오류로 알린다(성공으로 보이지 않게, 결정 M3-D21). 다만 COMMIT 을 보낸
+            // 뒤 연결이 끊겼으면 서버가 커밋했는지 알 수 없다 — 롤백이라고 말하지 않는다(M3-05 리뷰 L3).
             let result = shared
                 .busy(async { pg(tx.commit().await) })
                 .await
-                .map_err(DbError::with_rolled_back)
+                .map_err(|e| {
+                    if e.kind == pw_db_types::DbErrorKind::Disconnected {
+                        e
+                    } else {
+                        e.with_rolled_back()
+                    }
+                })
                 .and_then(|()| if failed { Err(failed_commit()) } else { Ok(()) });
             shared.set(TransactionState::Idle);
             send(reply, result);
@@ -366,6 +376,7 @@ async fn hold_failed(
                 send(reply, Err(aborted()))
             }
             Command::Meta(_, reply) => send(reply, Err(aborted())),
+            Command::State(reply) => send(reply, shared.busy(block_state(client)).await),
         }
     }
 }
@@ -439,6 +450,7 @@ async fn manual(
                 // 사람의 트랜잭션 밖(풀의 다른 연결)에서 — 실패가 사람의 트랜잭션을 깨지 않는다.
                 send(reply, elsewhere(pool, request, shared).await);
             }
+            Command::State(reply) => send(reply, shared.busy(block_state(tx.client())).await),
         }
     }
 }

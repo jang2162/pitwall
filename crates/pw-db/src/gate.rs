@@ -23,7 +23,8 @@ use pw_core::registry::state::scope_may_write;
 use pw_db_sql::risk::{RiskReason, classify_statement};
 use pw_db_sql::split::{SqlRange, split};
 use pw_db_sql::txn::{
-    TxControl, changes_session_settings, implicitly_commits, transaction_control,
+    TxControl, changes_session_settings, implicitly_commits, may_end_transaction,
+    transaction_control,
 };
 use pw_db_types::{RiskGrade, SqlDialect};
 use pw_rpc::{ConnectionScope, RpcError, code as rpc_code};
@@ -152,6 +153,8 @@ pub(crate) struct Planned {
     /// 트랜잭션 제어 문장이면 옮긴 것.
     pub control: Option<TxControl>,
     pub implicit_commit: bool,
+    /// 열린 트랜잭션을 끝낼 수 있다(암묵 커밋 문장 + MySQL `CALL` · `EXECUTE` 등 — `pw_db_sql::txn::may_end_transaction`).
+    pub may_end: bool,
     pub settings: bool,
 }
 
@@ -239,6 +242,7 @@ pub(crate) fn plan(
                 reasons: class.reasons,
                 control: transaction_control(dialect, &text),
                 implicit_commit: implicitly_commits(dialect, &text),
+                may_end: may_end_transaction(dialect, &text),
                 settings: changes_session_settings(dialect, &text),
                 text,
             }

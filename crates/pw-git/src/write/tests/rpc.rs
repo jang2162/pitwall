@@ -25,6 +25,7 @@ impl Client {
             Caller {
                 role,
                 scope: ConnectionScope::Project(project.to_owned()),
+                window: None,
             },
         )
         .await
@@ -266,6 +267,7 @@ async fn only_the_projects_own_window_hears_and_answers_its_prompts() {
             Caller {
                 role: Role::Owner,
                 scope: ConnectionScope::Project(other_project),
+                window: None,
             },
         ),
         ("the welcome or settings window", Caller::new(Role::Owner)),

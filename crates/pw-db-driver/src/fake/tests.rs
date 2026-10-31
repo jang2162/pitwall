@@ -472,3 +472,37 @@ async fn endings_report_implicit_commits_whole_rollbacks_and_hidden_blocks() {
     assert_eq!(conn.transaction_state(), TransactionState::Idle);
     assert!(!driver.committed().contains(&"INSERT c".to_owned()));
 }
+
+/// 서버에 묻는 상태는 기록과 같고, 묻지 못하게 할 수 있으며, 시험이 트랜잭션을 실행 밖에서 끝낼 수 있다(M3-05 리뷰 M1 · L2).
+#[tokio::test]
+async fn the_state_read_follows_the_ledger_and_can_fail() {
+    let driver = FakeDriver::new();
+    let DbConnection::Sql(mut conn) = driver.connect(FakeDriver::spec()).await.unwrap().connection
+    else {
+        unreachable!()
+    };
+    conn.begin(BeginOptions::default()).await.unwrap();
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::InTransaction
+    );
+    driver.fail_state_reads(Some(DbError::new(DbErrorKind::Timeout, "no answer")));
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap_err().kind,
+        DbErrorKind::Timeout
+    );
+    driver.fail_state_reads(None);
+    driver.end_transaction_behind(0);
+    assert_eq!(conn.transaction_state(), TransactionState::Idle);
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::Idle
+    );
+    assert_eq!(driver.count(&FakeCall::ReadTransactionState), 3);
+    driver.fail_commit(Some(DbError::new(DbErrorKind::Disconnected, "gone")));
+    conn.begin(BeginOptions::default()).await.unwrap();
+    assert_eq!(
+        conn.commit().await.unwrap_err().kind,
+        DbErrorKind::Disconnected
+    );
+}

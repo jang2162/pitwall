@@ -352,12 +352,8 @@ impl DbSessions {
             RpcError::new(rpc_code::CONFLICT, "the session is running statements")
                 .with_data(json!({ "reason": "busy" }))
         })?;
-        let notice = link.reconcile(
-            Step::Statement {
-                implicit_commit: false,
-            },
-            None,
-        );
+        // 실행 사이에 드라이버 상태가 바뀌었으면(버려진 문장이 나중에 끝남) 서버에 물어 맞춘다 — 까닭은 모른다.
+        let notice = link.catch_up().await;
         if notice.is_some() {
             session.sync(&link);
             self.publish(&session, notice);
@@ -368,7 +364,7 @@ impl DbSessions {
         let interrupter = conn.interrupter();
         let in_transaction = link.tx != TransactionState::Idle && !link.owned_read_only;
         let effects = effects_of(&planned, in_transaction, link.mode == DbSessionMode::Manual);
-        let hash = statements_hash(Some(&session.id), dialect, &planned, &effects);
+        let hash = statements_hash(Some(&session.confirm_key()), dialect, &planned, &effects);
         let policy = Policy {
             read_only: session.read_only,
             production: session.production,
@@ -381,6 +377,8 @@ impl DbSessions {
             &hash,
             params.confirmed.as_ref(),
         )?;
+        // 관문을 지났다 — 낸 확인은 이것으로 끝이다(재사용 · 늦게 온 확인 거절).
+        session.spend_confirmations();
 
         let execution_id = self.next_id("dbx-");
         let running = Arc::new(Running {
@@ -600,7 +598,7 @@ impl DbSessions {
             let open = !matches!(info.state, crate::session::DbSessionState::Idle);
             (
                 dialect,
-                Some(id.clone()),
+                Some(session.confirm_key()),
                 open,
                 info.mode == DbSessionMode::Manual,
             )
@@ -783,12 +781,13 @@ async fn run_script(
     }
 }
 
-/// 드라이버 오류를 세션에 반영한다(끊김 · 트랜잭션 끝남). 알릴 것을 돌려준다.
-fn settle(link: &mut Link, step: Step, error: Option<&mut DbError>) -> Option<DbSessionNotice> {
-    match error {
-        Some(e) if e.kind == DbErrorKind::Disconnected => Some(link.lose()),
-        error => link.reconcile(step, error),
-    }
+/// 단계의 끝을 세션에 반영한다(끊김 · 트랜잭션 끝남 — 오류 뒤에는 서버에 물어). 알릴 것을 돌려준다.
+async fn settle(
+    link: &mut Link,
+    step: Step,
+    error: Option<&mut DbError>,
+) -> Option<DbSessionNotice> {
+    link.settle(step, error).await
 }
 
 /// 문장 하나. (끝, 알릴 것, 멈춤 — 창이 받기를 멈췄거나 취소됐다).
@@ -814,11 +813,12 @@ async fn run_statement(
         .run(link.ensure_transaction(session.read_only))
         .await
     {
-        let notice = settle(link, Step::Begin, Some(&mut e));
+        let notice = settle(link, Step::Begin, Some(&mut e)).await;
         return (Outcome::Failed(e), notice, false);
     }
     let implicit = Step::Statement {
         implicit_commit: statement.implicit_commit,
+        may_end: statement.may_end,
     };
     *lock(&running.current) = Some(Current {
         grade: statement.grade,
@@ -832,12 +832,12 @@ async fn run_statement(
     let begun = match begun {
         Ok(begun) => begun,
         Err(mut e) => {
-            let notice = settle(link, implicit, Some(&mut e));
+            let notice = settle(link, implicit, Some(&mut e)).await;
             return (Outcome::Failed(e), notice, false);
         }
     };
     if let Some(end) = begun.end {
-        let notice = settle(link, implicit, None);
+        let notice = settle(link, implicit, None).await;
         return (
             Outcome::Done {
                 rows_affected: end.rows_affected,
@@ -871,11 +871,11 @@ async fn run_statement(
             let probe = running.cancel.run(conn.fetch(FetchLimit::rows(1))).await;
             match probe {
                 Err(mut e) => {
-                    let notice = settle(link, implicit, Some(&mut e));
+                    let notice = settle(link, implicit, Some(&mut e)).await;
                     return (Outcome::Failed(e), notice, false);
                 }
                 Ok(batch) if batch.rows.is_empty() && batch.end.is_some() => {
-                    let notice = settle(link, implicit, None);
+                    let notice = settle(link, implicit, None).await;
                     let rows_affected = batch.end.and_then(|e| e.rows_affected);
                     return (
                         Outcome::Done {
@@ -889,11 +889,11 @@ async fn run_statement(
                 Ok(_) => {
                     let discarded = running.cancel.run(conn.discard_cursor()).await;
                     if let Err(mut e) = discarded {
-                        let notice = settle(link, implicit, Some(&mut e));
+                        let notice = settle(link, implicit, Some(&mut e)).await;
                         return (Outcome::Failed(e), notice, false);
                     }
                     tracing::info!(target: "pw_db", session = %session.id, rows = sent, "db result truncated at the grid row limit");
-                    let notice = settle(link, implicit, None);
+                    let notice = settle(link, implicit, None).await;
                     return (
                         Outcome::Done {
                             rows_affected: None,
@@ -912,7 +912,7 @@ async fn run_statement(
         let batch = match running.cancel.run(conn.fetch(want)).await {
             Ok(batch) => batch,
             Err(mut e) => {
-                let notice = settle(link, implicit, Some(&mut e));
+                let notice = settle(link, implicit, Some(&mut e)).await;
                 return (Outcome::Failed(e), notice, false);
             }
         };
@@ -927,7 +927,7 @@ async fn run_statement(
                 .is_err()
         {
             if batch.end.is_some() {
-                let notice = settle(link, implicit, None);
+                let notice = settle(link, implicit, None).await;
                 return (
                     Outcome::Done {
                         rows_affected: batch.end.and_then(|e| e.rows_affected),
@@ -945,7 +945,7 @@ async fn run_statement(
             sessions.progress(session, running, index, sent, started, false);
         }
         if let Some(end) = batch.end {
-            let notice = settle(link, implicit, None);
+            let notice = settle(link, implicit, None).await;
             return (
                 Outcome::Done {
                     rows_affected: end.rows_affected,
@@ -983,7 +983,7 @@ async fn stop_cursor(link: &mut Link, step: Step) -> (Outcome, Option<DbSessionN
             error = e;
         }
     }
-    let notice = settle(link, step, Some(&mut error));
+    let notice = settle(link, step, Some(&mut error)).await;
     (Outcome::Failed(error), notice, true)
 }
 
@@ -1029,7 +1029,7 @@ async fn run_control(
         }
     };
     let mut error = result.err();
-    let notice = settle(link, step, error.as_mut());
+    let notice = settle(link, step, error.as_mut()).await;
     if let Some(error) = error {
         return (Outcome::Failed(error), notice, false);
     }
@@ -1044,7 +1044,7 @@ async fn run_control(
             }))
             .await;
         let mut error = begun.err();
-        let chained = settle(link, Step::Begin, error.as_mut());
+        let chained = settle(link, Step::Begin, error.as_mut()).await;
         if let Some(error) = error {
             return (Outcome::Failed(error), notice.or(chained), false);
         }

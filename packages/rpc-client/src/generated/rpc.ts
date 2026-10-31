@@ -70,8 +70,8 @@ export type UnaryMethods = {
 	 */
 	"db.session.close": { params: DbSessionParams; result: null };
 	/**
-	 * 열린 트랜잭션을 커밋한다(없으면 아무것도 하지 않는다). 실패한 트랜잭션이면 롤백되고 3003(`data.error.rolledBack`). 실행 중이면
-	 * conflict(`busy`).
+	 * 열린 트랜잭션을 커밋한다(없으면 아무것도 하지 않는다). 실패한 트랜잭션이면 롤백되고 3003(`data.error.rolledBack`). 커밋 ·
+	 * 롤백 전에 이미 끝나 있었으면(실행 사이에 끝남 — 결과 모름) 3003 이고 알림 `transactionEnded`. 실행 중이면 conflict(`busy`).
 	 */
 	"db.session.commit": { params: DbSessionParams; result: DbSessionInfo };
 	/**
@@ -81,6 +81,21 @@ export type UnaryMethods = {
 	 */
 	"db.session.open": { params: DbSessionOpenParams; result: DbSessionOpened };
 	/**
+	 * 창이 새로고침 · 웹뷰 재시작 뒤 복원한 탭의 세션을 다시 잡는다: 같은 창(`Ctx::window`)의 같은 `tabId` 로 열렸고 창의 연결이
+	 * 닫혀 Host 가 보존 중인 열린 트랜잭션 세션이 있으면 그 세션(「열린 트랜잭션」 그대로), 없으면 `null`. 새 연결은 열지 않는다
+	 * (결정 M3-D13). 그 프로젝트 창의 연결만(다른 프로젝트는 permission denied, 다른 창은 `null`).
+	 */
+	"db.session.resume": { params: DbSessionResumeParams; result: {
+	session: DbSessionInfo,
+	/**  연결 이름(프로덕션 파괴 등급 확인에서 친다). */
+	name: string,
+	readOnly: boolean,
+	production: boolean,
+	/**  드라이버 id · 방언 · 지원 플래그(창이 기능을 켜고 끈다). */
+	driver: DriverInfo,
+	server: ServerInfo,
+} | null };
+	/**
 	 * 열린 트랜잭션을 롤백한다(없으면 아무것도 하지 않는다). 실행 중이면 conflict(`busy`).
 	 */
 	"db.session.rollback": { params: DbSessionParams; result: DbSessionInfo };
@@ -88,6 +103,11 @@ export type UnaryMethods = {
 	 * 자동 / 수동 커밋을 바꾼다. 트랜잭션이 열려 있으면 자동으로 바꾸지 않는다(conflict, `data.reason = "transactionOpen"`).
 	 */
 	"db.session.setMode": { params: DbSessionSetModeParams; result: DbSessionInfo };
+	/**
+	 * 보존 시간 안에 아무도 붙지 않아 롤백한 열린 트랜잭션의 기록(이 Host 가 도는 동안, 프로젝트마다 최근 32개, 오래된 것부터).
+	 * 창이 열릴 때 읽어 사람에게 보인다. 그 프로젝트 창의 연결만.
+	 */
+	"db.session.unattendedRollbacks": { params: DbUnattendedRollbacksParams; result: DbUnattendedRollback[] };
 	/**
 	 * SQL 을 나누고 문장마다 위험도를 매긴다(M3-04 + M3-03). 방언은 세션 · 연결의 드라이버 것, 없으면 `dialect`.
 	 */
@@ -664,10 +684,12 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.secret.clear": {"name":"db.secret.clear","kind":"unary","tier":"write","roles":["owner"],"params":"DbSecretClearParams","output":"()","doc":" 비밀을 키체인에서 지운다(없어도 성공). 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
 	"db.secret.set": {"name":"db.secret.set","kind":"unary","tier":"write","roles":["owner"],"params":"DbSecretSetParams","output":"()","doc":" 비밀을 키체인에 넣는다 — 창이 보여 준 대상(드라이버 · 호스트 · 포트 · 사용자 · 터널 · `sslmode` 와 인증서 경로)과 함께.\n 그 대상이 지금 설정과 다르면 conflict. 연결 설정이 `password = { secret_ref = \"keychain\" }` 이어야 한다. 그 프로젝트 창의\n 연결 + 신뢰한 프로젝트만. 값은 돌려주지 않는다.\n","mcp":false,"fileScope":false},
 	"db.session.close": {"name":"db.session.close","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionParams","output":"()","doc":" 세션을 닫는다(도는 실행은 취소한다). 열린 트랜잭션은 DB 가 롤백한다 — 묻는 것은 화면의 몫(M3-15). 없는 세션이면 아무것도\n 하지 않는다.\n","mcp":false,"fileScope":false},
-	"db.session.commit": {"name":"db.session.commit","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionParams","output":"DbSessionInfo","doc":" 열린 트랜잭션을 커밋한다(없으면 아무것도 하지 않는다). 실패한 트랜잭션이면 롤백되고 3003(`data.error.rolledBack`). 실행 중이면\n conflict(`busy`).\n","mcp":false,"fileScope":false},
+	"db.session.commit": {"name":"db.session.commit","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionParams","output":"DbSessionInfo","doc":" 열린 트랜잭션을 커밋한다(없으면 아무것도 하지 않는다). 실패한 트랜잭션이면 롤백되고 3003(`data.error.rolledBack`). 커밋 ·\n 롤백 전에 이미 끝나 있었으면(실행 사이에 끝남 — 결과 모름) 3003 이고 알림 `transactionEnded`. 실행 중이면 conflict(`busy`).\n","mcp":false,"fileScope":false},
 	"db.session.open": {"name":"db.session.open","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSessionOpenParams","output":"DbSessionOpened","doc":" 콘솔 탭의 세션을 연다: 연결 하나를 열어 닫을 때까지 쥔다. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만(아니면 permission\n denied, `data.reason` 이 `notProjectWindow` · `untrusted`). 비밀 · 확인이 필요하면 M3-02 의 3101 · 3102, 드라이버가 실패하면\n 3003(`data.error`). 창(RPC 연결)이 닫히면 세션도 닫힌다.\n","mcp":false,"fileScope":false},
+	"db.session.resume": {"name":"db.session.resume","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionResumeParams","output":"Option<DbSessionOpened>","doc":" 창이 새로고침 · 웹뷰 재시작 뒤 복원한 탭의 세션을 다시 잡는다: 같은 창(`Ctx::window`)의 같은 `tabId` 로 열렸고 창의 연결이\n 닫혀 Host 가 보존 중인 열린 트랜잭션 세션이 있으면 그 세션(「열린 트랜잭션」 그대로), 없으면 `null`. 새 연결은 열지 않는다\n (결정 M3-D13). 그 프로젝트 창의 연결만(다른 프로젝트는 permission denied, 다른 창은 `null`).\n","mcp":false,"fileScope":false},
 	"db.session.rollback": {"name":"db.session.rollback","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionParams","output":"DbSessionInfo","doc":" 열린 트랜잭션을 롤백한다(없으면 아무것도 하지 않는다). 실행 중이면 conflict(`busy`).\n","mcp":false,"fileScope":false},
 	"db.session.setMode": {"name":"db.session.setMode","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionSetModeParams","output":"DbSessionInfo","doc":" 자동 / 수동 커밋을 바꾼다. 트랜잭션이 열려 있으면 자동으로 바꾸지 않는다(conflict, `data.reason = \"transactionOpen\"`).\n","mcp":false,"fileScope":false},
+	"db.session.unattendedRollbacks": {"name":"db.session.unattendedRollbacks","kind":"unary","tier":"read","roles":["owner"],"params":"DbUnattendedRollbacksParams","output":"Vec<DbUnattendedRollback>","doc":" 보존 시간 안에 아무도 붙지 않아 롤백한 열린 트랜잭션의 기록(이 Host 가 도는 동안, 프로젝트마다 최근 32개, 오래된 것부터).\n 창이 열릴 때 읽어 사람에게 보인다. 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
 	"db.sql.classify": {"name":"db.sql.classify","kind":"unary","tier":"read","roles":["owner"],"params":"DbSqlClassifyParams","output":"DbSqlClassification","doc":" SQL 을 나누고 문장마다 위험도를 매긴다(M3-04 + M3-03). 방언은 세션 · 연결의 드라이버 것, 없으면 `dialect`.\n","mcp":false,"fileScope":false},
 	"db.sql.split": {"name":"db.sql.split","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlSplitParams","output":"SqlSplitResult","doc":" SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\n UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면\n `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
@@ -1524,19 +1546,43 @@ export type DbSessionMode =
 
 /**  사람에게 알릴 상태 변화(드라이버의 보고에서). */
 export type DbSessionNotice = 
-/**  서버 · 드라이버가 트랜잭션 전체를 되돌렸다(교착, 실패한 트랜잭션의 커밋, SQLite 쓰기 취소 등). `message` 는 그 오류. */
+/**
+ *  서버 · 드라이버가 트랜잭션 전체를 되돌렸다(교착, 실패한 커밋, SQLite 쓰기 취소 등 — 드라이버가 그렇게 말했고 서버에 물은
+ *  상태도 끝남이다). `message` 는 그 오류.
+ */
 { kind: "rolledBack"; message: string } | 
-/**  MySQL · MariaDB 의 문장이 열린 트랜잭션을 암묵적으로 커밋했다(문장이 실패했어도). */
+/**  MySQL · MariaDB 의 암묵 커밋 문장(DDL · `LOCK TABLES` 등)이 열린 트랜잭션을 커밋했다(문장이 실패했어도). */
 { kind: "committedImplicitly" } | 
+/**
+ *  열린 트랜잭션이 끝났는데 커밋인지 롤백인지 서버가 알리지 않았다 — MySQL `CALL` · `EXECUTE` 가 안에서 커밋하거나 롤백한 뒤
+ *  실패, 드라이버가 모르는 전체 롤백 코드, 실행 사이에 버려진 문장이 끝남 등. `message` 는 그 단계의 오류(있으면). 사람이 다른
+ *  연결로 확인해야 한다.
+ */
+{ kind: "transactionEnded"; message: string | null } | 
+/**
+ *  오류 뒤 서버에 트랜잭션 상태를 묻지 못했다 — 열려 있는지 끝났는지 모른다. 세션 상태는 마지막으로 안 값 그대로다. `message`
+ *  는 묻지 못한 까닭.
+ */
+{ kind: "transactionUnknown"; message: string } | 
 /**
  *  파이프라인이 열지 않은 트랜잭션이 열렸다(PG 의 숨은 블록, MySQL `SET autocommit = 0` 등) — 그 연결은 이 탭에 묶이고 커밋 ·
  *  롤백을 기다린다.
  */
 { kind: "transactionOpened" } | 
-/**  연결이 끊겼다. 열려 있던 트랜잭션은 DB 가 롤백했다. */
-{ kind: "connectionLost"; hadTransaction: boolean } | 
+/**
+ *  연결이 끊겼다. 열려 있던 트랜잭션은 DB 가 롤백했다 — 다만 `outcomeUnknown` 이면 끊길 때 커밋 중이었거나 커밋할 수 있는
+ *  문장(MySQL `CALL` 등)이 돌고 있어 커밋됐는지 알 수 없다.
+ */
+{ kind: "connectionLost"; hadTransaction: boolean; outcomeUnknown: boolean } | 
 /**  연결 설정이 바뀌었다. */
-{ kind: "configChanged" };
+{ kind: "configChanged" } | 
+/**
+ *  세션을 연 창의 연결이 닫혔다(새로고침 · 웹뷰 재시작 · 창 닫기). 열린 트랜잭션을 `until`(유닉스 밀리초)까지 보존한다 — 그 창의
+ *  그 탭이 `db.session.resume` 으로 다시 붙지 않으면 그때 롤백한다.
+ */
+{ kind: "unattended"; until: number } | 
+/**  아무도 붙지 않아 열린 트랜잭션을 롤백하고 세션을 닫았다(`db.session.unattendedRollbacks` 에 기록이 남는다). */
+{ kind: "unattendedRolledBack" };
 
 export type DbSessionOpenParams = {
 	projectId: string,
@@ -1545,6 +1591,11 @@ export type DbSessionOpenParams = {
 	connectionId: string,
 	/**  처음 고를 DB(없으면 설정의 것). */
 	database?: string | null,
+	/**
+	 *  이 세션을 쥐는 콘솔 탭의 id(창 안에서 탭마다 다르고 탭을 복원해도 같은 값, 1~256자). 있으면 창이 새로고침돼도 열린
+	 *  트랜잭션이 있는 세션을 보존하고 `db.session.resume` 으로 다시 붙을 수 있다.
+	 */
+	tabId?: string | null,
 };
 
 /**  `db.session.open` 의 답. */
@@ -1563,6 +1614,11 @@ export type DbSessionParams = {
 	sessionId: string,
 };
 
+export type DbSessionResumeParams = {
+	projectId: string,
+	tabId: string,
+};
+
 export type DbSessionSetModeParams = {
 	sessionId: string,
 	mode: DbSessionMode,
@@ -1574,7 +1630,10 @@ export type DbSessionState = { kind: "idle" } |
 { kind: "inTransaction"; since: number } | 
 /**  오류 · 취소 뒤 롤백만 되는 트랜잭션(PG). 커밋해도 롤백된다. */
 { kind: "failed"; since: number } | 
-/**  연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다. 다시 붙는 것은 사람이 새 세션을 열 때다. */
+/**
+ *  연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다(커밋 도중이었으면 결과를 모른다 — 알림 `connectionLost` 의
+ *  `outcomeUnknown`). 다시 붙는 것은 사람이 새 세션을 열 때다.
+ */
 { kind: "disconnected" } | 
 /**
  *  연결 설정이 바뀌었다 — 저절로 다시 붙지 않는다(「설정 바뀜 — 다시 연결」). 새 실행은 받지 않고, 열린 트랜잭션은 커밋 · 롤백할
@@ -1637,6 +1696,26 @@ export type DbTxEffect =
  *  커밋된다.
  */
 "implicitCommit";
+
+/**  보존 시간 안에 아무도 붙지 않아 롤백한 열린 트랜잭션 하나. */
+export type DbUnattendedRollback = {
+	connectionId: string,
+	/**  연결 이름. */
+	name: string,
+	tabId: string | null,
+	/**  트랜잭션을 연 시각(유닉스 밀리초). */
+	since: number | null,
+	/**  롤백한 시각(유닉스 밀리초). */
+	rolledBackAt: number,
+	/**  보존한 시간(분). 창 · 탭을 몰라 보존하지 않았으면 0. */
+	keptMinutes: number,
+	/**  롤백 문장이 실패했으면 그 오류 — 그래도 연결을 닫았으므로 DB 가 롤백했다. */
+	rollbackError: string | null,
+};
+
+export type DbUnattendedRollbacksParams = {
+	projectId: string,
+};
 
 /**  셀 값. */
 export type DbValue = "null" | ({ bool: boolean }) & { array?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 

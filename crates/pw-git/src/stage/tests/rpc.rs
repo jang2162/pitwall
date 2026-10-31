@@ -18,6 +18,7 @@ impl Client {
         let caller = Caller {
             role,
             scope: ConnectionScope::Project(project.to_owned()),
+            window: None,
         };
         Self(host.connect(caller).await.unwrap(), 0)
     }
@@ -208,6 +209,7 @@ async fn only_the_project_s_own_window_may_write() {
             Caller {
                 role: Role::Owner,
                 scope: ConnectionScope::Project(other),
+                window: None,
             },
         ),
         ("host", Caller::new(Role::Owner)),

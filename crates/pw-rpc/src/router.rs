@@ -43,6 +43,10 @@ pub struct Caller {
     pub role: Role,
     /// 이 연결이 무엇을 위해 열렸는가([`ConnectionScope`]).
     pub scope: ConnectionScope,
+    /// 이 연결을 연 창의 식별자(데스크톱은 웹뷰 label). transport 가 정하고 웹뷰가 보낸 값이 아니다. 새로고침 · 웹뷰 재시작으로
+    /// 연결이 바뀌어도 같은 창이면 같다 — 연결에 묶인 자원을 같은 창의 새 연결이 이어받을 때 핸들러가 이것으로 가른다(DB 세션,
+    /// 14-m3-plan.md M3-05). 모르면(원격 · 시험) `None`.
+    pub window: Option<String>,
 }
 
 /// 연결의 범위. role 이 「무엇을 할 수 있나」 라면 이것은 「어디에 닿나」 다.
@@ -65,7 +69,15 @@ impl Caller {
         Self {
             role,
             scope: ConnectionScope::Host,
+            window: None,
         }
+    }
+
+    /// 이 연결을 연 창([`Caller::window`]).
+    #[must_use]
+    pub fn in_window(mut self, window: impl Into<String>) -> Self {
+        self.window = Some(window.into());
+        self
     }
 
     /// 파일 하나에만 닿는 호출자(단일 파일 창, `docs/design/12-m1-plan.md` M1-24). 디스패처는 `file_scope: true` 로 선언한
@@ -76,6 +88,7 @@ impl Caller {
         Self {
             role,
             scope: ConnectionScope::File(Arc::new(FileScope { path })),
+            window: None,
         }
     }
 
@@ -143,6 +156,11 @@ impl Ctx {
     /// 이 호출이 온 연결의 범위.
     pub fn scope(&self) -> &ConnectionScope {
         &self.caller.scope
+    }
+
+    /// 이 호출이 온 연결을 연 창([`Caller::window`]). 모르면 `None`.
+    pub fn window(&self) -> Option<&str> {
+        self.caller.window.as_deref()
     }
 
     /// 파일 범위 호출자면 그 파일. 경로를 받는 `file_scope` 메서드는 이것이 있으면 그 파일 밖을 거절한다.

@@ -154,6 +154,42 @@ fn mysql_implicit_commits_follow_the_manual() {
     assert!(!implicitly_commits(Sqlite, "DROP TABLE t"));
 }
 
+/// `SET` 목록의 뒤쪽 · 값이 숫자로 시작한 뒤의 `autocommit` 도 찾는다(M3-05 리뷰 L1 — 앞 낱말만 읽으면 숫자에서 멈췄다). 낱말
+/// 일부(`autocommit_x`)는 아니다.
+#[test]
+fn autocommit_anywhere_in_a_set_list_is_an_implicit_commit() {
+    for text in [
+        "SET @a = 1, autocommit = 1",
+        "SET @a := 1, autocommit = 1",
+        "SET NAMES utf8mb4, @@SESSION.AUTOCOMMIT = 1",
+        "SET sql_mode = '', `autocommit` = 1",
+    ] {
+        assert!(implicitly_commits(Mysql, text), "{text}");
+    }
+    for text in ["SET @a = 1, @autocommit_x = 2", "SELECT 1, autocommit"] {
+        assert!(!implicitly_commits(Mysql, text), "{text}");
+    }
+}
+
+/// 끝낼 수 있는 문장: 암묵 커밋 문장 + `CALL` · `EXECUTE` · MariaDB `BEGIN NOT ATOMIC`(MySQL 만).
+#[test]
+fn calls_and_prepared_statements_may_end_a_mysql_transaction() {
+    for text in [
+        "CALL p()",
+        "call db.p(1)",
+        "EXECUTE s",
+        "BEGIN NOT ATOMIC COMMIT; END",
+        "DROP TABLE t",
+    ] {
+        assert!(may_end_transaction(Mysql, text), "{text}");
+    }
+    for text in ["INSERT INTO t VALUES (1)", "SELECT 1", "PREPARE s FROM 'x'"] {
+        assert!(!may_end_transaction(Mysql, text), "{text}");
+    }
+    assert!(!may_end_transaction(Postgres, "CALL p()"));
+    assert!(!may_end_transaction(Sqlite, "DROP TABLE t"));
+}
+
 #[test]
 fn set_and_reset_change_session_settings() {
     for (dialect, text) in [

@@ -16,7 +16,8 @@
 //! 연결한다(프로젝트를 대상으로 하는 연결은 거절). 프로젝트를 대상으로 하는 연결(범위 [`pw_rpc::ConnectionScope::Project`],
 //! M1-25 의 `project.state.set` 이 본다)은 그 프로젝트의 창(label `project-<id>`, Rust 가 레지스트리를 확인하고 만든다)만 연다 —
 //! 프로젝트 창도 다른 프로젝트로는 연결하지 못하고, 웰컴 · 설정 창은 Host 로만 연결한다. 프로젝트 창의 Host 연결(UI 로그 등)은 그대로
-//! 연다.
+//! 연다. 호출자에는 그 웹뷰의 label 을 창 식별자로 싣는다([`pw_rpc::Caller::window`]) — 새로고침 · 웹뷰 재시작 뒤 같은 창의 새
+//! 연결이 그 창의 DB 세션(열린 트랜잭션)을 이어받는 판정에 쓴다(M3-05).
 //!
 //! 리로드와의 경합은 페이지 세대로 막는다. 웹뷰마다 세대를 두고 `PageLoadEvent::Started` 마다 새 값으로 바꾼다.
 //! Started 는 새 문서가 **커밋된** 시점이다(wry 가 세 백엔드 모두 커밋에 건다 — WKWebView `didCommitNavigation`,
@@ -297,7 +298,8 @@ fn caller_for<R: Runtime>(webview: &Webview<R>, target: &Target) -> Result<Calle
         {
             return Err(IpcError::ProjectScope);
         }
-        return Ok(Caller::new(Role::Owner));
+        // 창 label 은 새로고침 · 웹뷰 재시작에도 같다 — 같은 창의 새 연결이 그 창의 DB 세션을 이어받는다(M3-05).
+        return Ok(Caller::new(Role::Owner).in_window(label));
     }
     if !matches!(target, Target::HostId(_)) {
         return Err(IpcError::FileScope);
@@ -306,7 +308,7 @@ fn caller_for<R: Runtime>(webview: &Webview<R>, target: &Target) -> Result<Calle
         .try_state::<FileWindows>()
         .and_then(|files| files.file_of(label))
         .ok_or(IpcError::FileScope)?;
-    Ok(Caller::file(Role::Owner, file))
+    Ok(Caller::file(Role::Owner, file).in_window(label))
 }
 
 #[tauri::command]

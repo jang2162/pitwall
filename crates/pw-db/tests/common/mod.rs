@@ -130,13 +130,20 @@ impl Fixture {
     }
 
     pub fn connect(&self, scope: ConnectionScope) -> Conn {
-        let caller = match scope {
+        self.connect_in(scope, None)
+    }
+
+    /// `window` 창(데스크톱은 웹뷰 label)이 연 연결 — 새로고침한 창은 같은 `window` 로 새 연결을 연다.
+    pub fn connect_in(&self, scope: ConnectionScope, window: Option<&str>) -> Conn {
+        let mut caller = match scope {
             ConnectionScope::File(file) => Caller::file(Role::Owner, file.path().to_path_buf()),
             scope => Caller {
                 role: Role::Owner,
                 scope,
+                window: None,
             },
         };
+        caller.window = window.map(str::to_owned);
         let (session, rx) = Session::new(Arc::clone(&self.router), EventHub::new(), caller);
         Conn {
             session,

@@ -501,6 +501,16 @@ impl SqlConnection for MysqlConnection {
         self.state
     }
 
+    fn read_transaction_state(&mut self) -> BoxFuture<'_, DbResult<TransactionState>> {
+        Box::pin(async move {
+            // 오류 뒤 상태를 다시 읽는 것과 같은 길 — `COM_PING` 의 OK 패킷 상태 플래그(머리 주석). 문장이 아니라 진단 영역을
+            // 건드리지 않는다.
+            self.conn().ping().await.map_err(|e| map(e, Phase::Run))?;
+            self.refresh_state();
+            Ok(self.state)
+        })
+    }
+
     fn execute(&mut self, request: ExecuteRequest) -> BoxFuture<'_, DbResult<StatementStarted>> {
         Box::pin(self.start(request))
     }

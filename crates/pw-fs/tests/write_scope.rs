@@ -77,6 +77,7 @@ impl Fixture {
             Caller {
                 role: Role::Owner,
                 scope,
+                window: None,
             },
         );
         Conn {

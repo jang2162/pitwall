@@ -806,6 +806,34 @@ impl Connections {
         })
     }
 
+    /// 연결 하나의 설정을 이루는 파일 자리(지금 없는 것도): 활성 워크트리 설정 폴더의 `db/<id>.toml` · `db/<id>.local.toml`, 연결
+    /// 워크트리면 메인 체크아웃의 `db/<id>.local.toml` 폴백(`ConfigSource` 의 병합 순서). 실행마다 설정을 다시 볼 때 이 파일들의
+    /// 수정 시각 · 크기가 그대로면 다시 읽지 않는다(M3-05 리뷰 L5 — 다시 읽기는 프로젝트의 연결 파일 수에 비례한다).
+    pub(crate) fn connection_files(
+        &self,
+        project_id: &str,
+        worktree: Option<&str>,
+        connection_id: &str,
+    ) -> Result<Vec<PathBuf>, RpcError> {
+        let host = self.host()?;
+        let project = host.projects.get(project_id).map_err(registry_error)?;
+        let root = active_root(&project, worktree)?;
+        let source = project
+            .config_source(&host.paths, &root)
+            .map_err(|e| RpcError::internal(e.to_string()))?;
+        let folder = FILE_PREFIX.trim_end_matches('/');
+        let shared = format!("{connection_id}.toml");
+        let local = format!("{connection_id}.local.toml");
+        let mut files = vec![
+            source.dir().join(folder).join(shared),
+            source.dir().join(folder).join(&local),
+        ];
+        if let Some(fallback) = source.local_fallback_dir() {
+            files.push(fallback.join(folder).join(local));
+        }
+        Ok(files)
+    }
+
     /// 본 값을 기억하고, 전에 본 적이 있으면 바뀐 연결 id 를 돌려준다.
     fn remember(&self, key: SeenKey, list: &[LoadedConnection]) -> Vec<String> {
         let now: BTreeMap<String, Value> = list

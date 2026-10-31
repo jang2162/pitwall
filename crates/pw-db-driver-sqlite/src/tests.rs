@@ -173,6 +173,32 @@ async fn a_manual_commit_insert_survives_a_cut_off_query_and_is_seen_after_commi
     assert_eq!(count(&mut *other, kept).await, 1);
 }
 
+/// 서버에 묻는 트랜잭션 상태(`read_transaction_state` — `sqlite3_get_autocommit`)는 트랜잭션을 따라가고, 드라이버의 상태도 그 값이다.
+/// 들어와 있는 취소 표지를 지우지 않는다(새 일이 아니다).
+#[tokio::test]
+async fn reading_the_transaction_state_asks_the_connection() {
+    let fixture = SqliteFixture::file();
+    let mut conn = connect(spec(fixture.path().unwrap())).await;
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::Idle
+    );
+    conn.begin(BeginOptions::default()).await.unwrap();
+    conn.execute(write("INSERT INTO audit_log VALUES ('now', 'read')"))
+        .await
+        .unwrap();
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::InTransaction
+    );
+    conn.rollback().await.unwrap();
+    assert_eq!(
+        conn.read_transaction_state().await.unwrap(),
+        TransactionState::Idle
+    );
+    assert_eq!(conn.transaction_state(), TransactionState::Idle);
+}
+
 /// 완료 기준 ③: read-only 연결에서 `INSERT` · `CREATE TABLE` 이 거절되고 파일의 mtime · 내용이 그대로다. `query_only` 를 풀 수도 없다.
 #[tokio::test]
 async fn a_read_only_connection_refuses_writes_and_leaves_the_file_untouched() {

@@ -123,6 +123,7 @@ impl Fixture {
             Caller {
                 role: Role::Owner,
                 scope,
+                window: None,
             },
         );
         Client {
@@ -1430,6 +1431,7 @@ async fn node_version_follows_mise_toml(mise: Option<PathBuf>) {
         Caller {
             role: Role::Owner,
             scope: ConnectionScope::Project(id.clone()),
+            window: None,
         },
     );
     let mut c = Client {

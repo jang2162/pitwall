@@ -805,6 +805,7 @@ async fn only_the_owner_may_call_file_operations_and_none_is_an_mcp_tool() {
         Caller {
             role: Role::Owner,
             scope: own(&id),
+            window: None,
         },
     );
     session.handle_value(

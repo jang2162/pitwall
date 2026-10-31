@@ -75,6 +75,8 @@ pub enum FakeCall {
     Explain(String),
     /// 메타데이터 메서드(`objects` · `columns` …)의 이름.
     Metadata(&'static str),
+    /// 서버에 트랜잭션 상태를 물었다([`SqlConnection::read_transaction_state`]).
+    ReadTransactionState,
     Close,
 }
 
@@ -194,6 +196,10 @@ struct Script {
     /// (SQL 에 든 글, 응답). 뒤에 더한 것이 먼저 맞는다.
     responses: Vec<(String, FakeResponse)>,
     connect_error: Option<DbError>,
+    /// `read_transaction_state` 가 돌려줄 오류(서버에 묻지 못했다).
+    state_read_error: Option<DbError>,
+    /// `commit` 이 돌려줄 오류(트랜잭션 기록은 그대로 둔다 — 끊긴 연결의 COMMIT 처럼 결과를 모른다).
+    commit_error: Option<DbError>,
     objects: Vec<ObjectInfo>,
     tables: HashMap<String, FakeTable>,
 }
@@ -221,6 +227,8 @@ struct State {
     committed: Mutex<Vec<String>>,
     rows_read: AtomicU64,
     next_connection: AtomicU32,
+    /// 연결 번호 → 그 연결의 것(시험이 실행 밖에서 트랜잭션을 끝낼 때 — [`FakeDriver::end_transaction_behind`]).
+    sessions: Mutex<HashMap<u32, Arc<Session>>>,
 }
 
 impl State {
@@ -286,6 +294,7 @@ impl FakeDriver {
                 committed: Mutex::default(),
                 rows_read: AtomicU64::new(0),
                 next_connection: AtomicU32::new(0),
+                sessions: Mutex::default(),
             }),
         }
     }
@@ -337,6 +346,24 @@ impl FakeDriver {
     /// `connect` 가 이 오류로 끝난다.
     pub fn fail_connect(&self, error: DbError) {
         lock(&self.state.script).connect_error = Some(error);
+    }
+
+    /// `read_transaction_state` 가 이 오류로 끝난다(`None` 이면 다시 답한다) — 서버에 상태를 묻지 못한 경우.
+    pub fn fail_state_reads(&self, error: Option<DbError>) {
+        lock(&self.state.script).state_read_error = error;
+    }
+
+    /// `commit` 이 이 오류로 끝난다(`None` 이면 다시 커밋한다). 트랜잭션 기록은 건드리지 않는다.
+    pub fn fail_commit(&self, error: Option<DbError>) {
+        lock(&self.state.script).commit_error = error;
+    }
+
+    /// 연결 하나(`connect` 순서대로 0 부터)의 열린 트랜잭션을 파이프라인 모르게 되돌린다 — 정리 예산을 넘겨 버려진 문장이 나중에
+    /// 끝나며 트랜잭션을 롤백한 경우(SQLite 쓰기 인터럽트). 드라이버의 `transaction_state` 도 곧바로 `Idle` 이다.
+    pub fn end_transaction_behind(&self, connection: u32) {
+        if let Some(session) = lock(&self.state.sessions).get(&connection) {
+            *lock(&session.ledger) = Ledger::default();
+        }
     }
 
     /// `objects` 가 쪽으로 나눠 돌려줄 객체 목록.
@@ -418,15 +445,17 @@ impl DbDriver for FakeDriver {
             if let Some(error) = lock(&self.state.script).connect_error.clone() {
                 return Err(error);
             }
+            let session = Arc::new(Session {
+                id,
+                ledger: Mutex::default(),
+                in_flight: AtomicBool::new(false),
+                interrupted: AtomicBool::new(false),
+                wake: Notify::new(),
+            });
+            lock(&self.state.sessions).insert(id, Arc::clone(&session));
             let connection = FakeConnection {
                 driver: self.clone(),
-                session: Arc::new(Session {
-                    id,
-                    ledger: Mutex::default(),
-                    in_flight: AtomicBool::new(false),
-                    interrupted: AtomicBool::new(false),
-                    wake: Notify::new(),
-                }),
+                session,
                 cursor: None,
             };
             Ok(Connected {
@@ -595,6 +624,16 @@ impl SqlConnection for FakeConnection {
         }
     }
 
+    fn read_transaction_state(&mut self) -> BoxFuture<'_, DbResult<TransactionState>> {
+        Box::pin(async move {
+            self.record(FakeCall::ReadTransactionState);
+            if let Some(error) = lock(&self.driver.state.script).state_read_error.clone() {
+                return Err(error);
+            }
+            Ok(self.transaction_state())
+        })
+    }
+
     fn execute(&mut self, request: ExecuteRequest) -> BoxFuture<'_, DbResult<StatementStarted>> {
         Box::pin(async move {
             self.cursor = None;
@@ -736,6 +775,9 @@ impl SqlConnection for FakeConnection {
     fn commit(&mut self) -> BoxFuture<'_, DbResult<()>> {
         Box::pin(async move {
             self.record(FakeCall::Commit);
+            if let Some(error) = lock(&self.driver.state.script).commit_error.clone() {
+                return Err(error);
+            }
             let mut ledger = lock(&self.session.ledger);
             let pending = std::mem::take(&mut ledger.pending);
             // 실패한 트랜잭션의 COMMIT 은 롤백이다(PG 와 같다) — trait 의 약속대로 `rolled_back` 오류로 답한다.

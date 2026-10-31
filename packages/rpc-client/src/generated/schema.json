@@ -4585,7 +4585,7 @@
       "tier": "write"
     },
     "db.session.commit": {
-      "description": "열린 트랜잭션을 커밋한다(없으면 아무것도 하지 않는다). 실패한 트랜잭션이면 롤백되고 3003(`data.error.rolledBack`). 실행 중이면\nconflict(`busy`).",
+      "description": "열린 트랜잭션을 커밋한다(없으면 아무것도 하지 않는다). 실패한 트랜잭션이면 롤백되고 3003(`data.error.rolledBack`). 커밋 ·\n롤백 전에 이미 끝나 있었으면(실행 사이에 끝남 — 결과 모름) 3003 이고 알림 `transactionEnded`. 실행 중이면 conflict(`busy`).",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4689,7 +4689,7 @@
                 "type": "object"
               },
               {
-                "description": "연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다. 다시 붙는 것은 사람이 새 세션을 열 때다.",
+                "description": "연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다(커밋 도중이었으면 결과를 모른다 — 알림 `connectionLost` 의\n`outcomeUnknown`). 다시 붙는 것은 사람이 새 세션을 열 때다.",
                 "properties": {
                   "kind": {
                     "const": "disconnected",
@@ -4780,6 +4780,14 @@
           },
           "projectId": {
             "type": "string"
+          },
+          "tabId": {
+            "default": null,
+            "description": "이 세션을 쥐는 콘솔 탭의 id(창 안에서 탭마다 다르고 탭을 복원해도 같은 값, 1~256자). 있으면 창이 새로고침돼도 열린\n트랜잭션이 있는 세션을 보존하고 `db.session.resume` 으로 다시 붙을 수 있다.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "worktree": {
             "default": null,
@@ -4984,7 +4992,7 @@
                 "type": "object"
               },
               {
-                "description": "연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다. 다시 붙는 것은 사람이 새 세션을 열 때다.",
+                "description": "연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다(커밋 도중이었으면 결과를 모른다 — 알림 `connectionLost` 의\n`outcomeUnknown`). 다시 붙는 것은 사람이 새 세션을 열 때다.",
                 "properties": {
                   "kind": {
                     "const": "disconnected",
@@ -5180,6 +5188,419 @@
       ],
       "tier": "exec"
     },
+    "db.session.resume": {
+      "description": "창이 새로고침 · 웹뷰 재시작 뒤 복원한 탭의 세션을 다시 잡는다: 같은 창(`Ctx::window`)의 같은 `tabId` 로 열렸고 창의 연결이\n닫혀 Host 가 보존 중인 열린 트랜잭션 세션이 있으면 그 세션(「열린 트랜잭션」 그대로), 없으면 `null`. 새 연결은 열지 않는다\n(결정 M3-D13). 그 프로젝트 창의 연결만(다른 프로젝트는 permission denied, 다른 창은 `null`).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "tabId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Capabilities": {
+            "properties": {
+              "cancel": {
+                "description": "진행 중 실행을 서버에서 멈춘다(`Interrupt`). 창 — ■ 취소(`⌘F2`).",
+                "type": "boolean"
+              },
+              "explain": {
+                "description": "실행 계획(`explain`). 창 — 실행 계획 액션.",
+                "type": "boolean"
+              },
+              "kv": {
+                "description": "갈래 `KvConnection`: 키 스캔 · 값 읽기 · TTL · 명령. 창 — Redis 화면.",
+                "type": "boolean"
+              },
+              "metadata": {
+                "description": "메타데이터 조회(객체 목록 · 열 · 인덱스 · FK · DDL). 창 — 스키마 탐색기 · `⌘B` DDL · 그리드 편집의 키 판정.",
+                "type": "boolean"
+              },
+              "multipleDatabases": {
+                "description": "한 서버에 DB 가 여럿이고 고를 수 있다(`databases`). 창 — 콘솔 위 막대의 DB 고르기 · Redis DB 번호 전환.",
+                "type": "boolean"
+              },
+              "readOnlyTransaction": {
+                "description": "읽기 전용 트랜잭션(`begin { readOnly }`). read-only 연결의 실행은 이 안에서만 돈다(결정 M3-D6) — 꺼진 드라이버의\nread-only 연결은 실행 관문이 거절한다.",
+                "type": "boolean"
+              },
+              "savepoints": {
+                "description": "세이브포인트(`savepoint` · `rollbackToSavepoint` · `releaseSavepoint`). 수동 커밋 탭의 그리드 편집 적용(M3-12).",
+                "type": "boolean"
+              },
+              "schemas": {
+                "description": "스키마 단계가 있다(PG). 꺼져 있으면 탐색기가 DB 아래에 곧바로 객체를 놓는다(MySQL · SQLite).",
+                "type": "boolean"
+              },
+              "serverCursor": {
+                "description": "행을 서버 커서에서 읽는 만큼만 받아 온다(PG 포털 · MySQL 결과 집합 스트리밍 · SQLite 문장 걷기). 꺼져 있으면 드라이버가\n결과를 다 받아 둔 뒤 나눠 준다 — 파이프라인은 같게 부르지만 큰 결과의 메모리 · 첫 화면 시간이 보장되지 않는다.",
+                "type": "boolean"
+              },
+              "sql": {
+                "description": "갈래 `SqlConnection`: 문장 실행 · 행 커서 · 트랜잭션. 창 — SQL 콘솔 · 테이블 데이터 · 스키마 탐색기.",
+                "type": "boolean"
+              },
+              "sslModes": {
+                "description": "이 드라이버가 받는 `sslmode` 값. 연결 편집 다이얼로그(M3-14)는 이 밖의 값을 고를 수 없게 한다. 파일 DB 는 빈 목록.",
+                "items": {
+                  "$ref": "#/$defs/SslMode"
+                },
+                "type": "array"
+              },
+              "transactions": {
+                "description": "`begin` · `commit` · `rollback`. 창 — TX 자동 / 수동 전환과 [커밋] [롤백].",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "sql",
+              "kv",
+              "serverCursor",
+              "cancel",
+              "transactions",
+              "savepoints",
+              "readOnlyTransaction",
+              "explain",
+              "metadata",
+              "schemas",
+              "multipleDatabases",
+              "sslModes"
+            ],
+            "type": "object"
+          },
+          "DbOpenTransaction": {
+            "description": "열린 트랜잭션(설정이 바뀐 세션에서 그대로 남은 것).",
+            "properties": {
+              "failed": {
+                "description": "오류 뒤 롤백만 되는 트랜잭션(PG).",
+                "type": "boolean"
+              },
+              "since": {
+                "description": "연 시각(유닉스 밀리초).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "since",
+              "failed"
+            ],
+            "type": "object"
+          },
+          "DbSessionInfo": {
+            "description": "세션 하나의 지금 모습.",
+            "properties": {
+              "connectionId": {
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/$defs/DbSessionMode"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/DbSessionState"
+              }
+            },
+            "required": [
+              "sessionId",
+              "projectId",
+              "connectionId",
+              "mode",
+              "state"
+            ],
+            "type": "object"
+          },
+          "DbSessionMode": {
+            "oneOf": [
+              {
+                "const": "auto",
+                "description": "자동 커밋: 문장마다 커밋된다(사람이 친 `BEGIN` 은 그 `COMMIT` · `ROLLBACK` 까지 트랜잭션을 연다).",
+                "type": "string"
+              },
+              {
+                "const": "manual",
+                "description": "수동 커밋: 파이프라인이 첫 문장 앞에서 트랜잭션을 열고 [커밋] · [롤백] 까지 그대로 둔다.",
+                "type": "string"
+              }
+            ]
+          },
+          "DbSessionOpened": {
+            "description": "`db.session.open` 의 답.",
+            "properties": {
+              "driver": {
+                "$ref": "#/$defs/DriverInfo",
+                "description": "드라이버 id · 방언 · 지원 플래그(창이 기능을 켜고 끈다)."
+              },
+              "name": {
+                "description": "연결 이름(프로덕션 파괴 등급 확인에서 친다).",
+                "type": "string"
+              },
+              "production": {
+                "type": "boolean"
+              },
+              "readOnly": {
+                "type": "boolean"
+              },
+              "server": {
+                "$ref": "#/$defs/ServerInfo"
+              },
+              "session": {
+                "$ref": "#/$defs/DbSessionInfo"
+              }
+            },
+            "required": [
+              "session",
+              "name",
+              "readOnly",
+              "production",
+              "driver",
+              "server"
+            ],
+            "type": "object"
+          },
+          "DbSessionState": {
+            "description": "세션 상태.",
+            "oneOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "idle",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "트랜잭션이 열려 있다. `since` 는 연 시각(유닉스 밀리초 — 상태바의 열린 시간).",
+                "properties": {
+                  "kind": {
+                    "const": "inTransaction",
+                    "type": "string"
+                  },
+                  "since": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "since"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "오류 · 취소 뒤 롤백만 되는 트랜잭션(PG). 커밋해도 롤백된다.",
+                "properties": {
+                  "kind": {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  "since": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "since"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다(커밋 도중이었으면 결과를 모른다 — 알림 `connectionLost` 의\n`outcomeUnknown`). 다시 붙는 것은 사람이 새 세션을 열 때다.",
+                "properties": {
+                  "kind": {
+                    "const": "disconnected",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "연결 설정이 바뀌었다 — 저절로 다시 붙지 않는다(「설정 바뀜 — 다시 연결」). 새 실행은 받지 않고, 열린 트랜잭션은 커밋 · 롤백할\n수 있다.",
+                "properties": {
+                  "kind": {
+                    "const": "configChanged",
+                    "type": "string"
+                  },
+                  "transaction": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbOpenTransaction"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "transaction"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DriverInfo": {
+            "description": "등록된 드라이버 하나(드라이버 등록부 — `pw_db::DriverRegistry`).",
+            "properties": {
+              "capabilities": {
+                "$ref": "#/$defs/Capabilities"
+              },
+              "dialect": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SqlDialect"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "SQL 갈래의 방언. KV 드라이버는 `None`."
+              },
+              "id": {
+                "description": "설정 파일의 `driver` 값.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "dialect",
+              "capabilities"
+            ],
+            "type": "object"
+          },
+          "ServerInfo": {
+            "description": "연결을 연 결과(연결 테스트의 답이기도 하다).",
+            "properties": {
+              "tls": {
+                "$ref": "#/$defs/TlsStatus"
+              },
+              "version": {
+                "description": "서버가 알린 판본(`16.4` · `8.4.6` · `11.8.3-MariaDB` …).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "version",
+              "tls"
+            ],
+            "type": "object"
+          },
+          "SqlDialect": {
+            "description": "SQL 방언 — 위험도 분류(M3-03)와 문장 나누기(M3-04)가 고른다. MariaDB 는 MySQL 이다.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite"
+            ],
+            "type": "string"
+          },
+          "SslMode": {
+            "description": "libpq 의 `sslmode` 뜻 그대로(결정 M3-D10). 드라이버마다 받는 값은 [`crate::Capabilities::ssl_modes`].",
+            "oneOf": [
+              {
+                "const": "disable",
+                "description": "TLS 없음.",
+                "type": "string"
+              },
+              {
+                "const": "allow",
+                "description": "평문을 먼저, 서버가 요구하면 TLS(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "prefer",
+                "description": "TLS 를 먼저, 안 되면 평문(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "require",
+                "description": "TLS 필수, 인증서를 검증하지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "verify-ca",
+                "description": "TLS 필수, 인증서 사슬만 검증(이름은 보지 않는다).",
+                "type": "string"
+              },
+              {
+                "const": "verify-full",
+                "description": "TLS 필수, 사슬과 이름 모두 검증.",
+                "type": "string"
+              }
+            ]
+          },
+          "TlsStatus": {
+            "description": "연결의 TLS 상태(10-ui.md 의 「서버 인증서를 검증하지 않음」 · 「평문」 표지 — M3-19).",
+            "oneOf": [
+              {
+                "const": "verified",
+                "description": "TLS, 인증서를 검증했다.",
+                "type": "string"
+              },
+              {
+                "const": "unverified",
+                "description": "TLS, 인증서를 검증하지 않았다(`require` · `prefer` · `allow`) 또는 이름을 보지 않았다(`verify-ca`).",
+                "type": "string"
+              },
+              {
+                "const": "plaintext",
+                "description": "TLS 없음.",
+                "type": "string"
+              },
+              {
+                "const": "notApplicable",
+                "description": "파일 DB(SQLite) — 네트워크가 없다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DbSessionOpened"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "db.session.rollback": {
       "description": "열린 트랜잭션을 롤백한다(없으면 아무것도 하지 않는다). 실행 중이면 conflict(`busy`).",
       "kind": "unary",
@@ -5285,7 +5706,7 @@
                 "type": "object"
               },
               {
-                "description": "연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다. 다시 붙는 것은 사람이 새 세션을 열 때다.",
+                "description": "연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다(커밋 도중이었으면 결과를 모른다 — 알림 `connectionLost` 의\n`outcomeUnknown`). 다시 붙는 것은 사람이 새 세션을 열 때다.",
                 "properties": {
                   "kind": {
                     "const": "disconnected",
@@ -5482,7 +5903,7 @@
                 "type": "object"
               },
               {
-                "description": "연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다. 다시 붙는 것은 사람이 새 세션을 열 때다.",
+                "description": "연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다(커밋 도중이었으면 결과를 모른다 — 알림 `connectionLost` 의\n`outcomeUnknown`). 다시 붙는 것은 사람이 새 세션을 열 때다.",
                 "properties": {
                   "kind": {
                     "const": "disconnected",
@@ -5553,6 +5974,91 @@
         "owner"
       ],
       "tier": "write"
+    },
+    "db.session.unattendedRollbacks": {
+      "description": "보존 시간 안에 아무도 붙지 않아 롤백한 열린 트랜잭션의 기록(이 Host 가 도는 동안, 프로젝트마다 최근 32개, 오래된 것부터).\n창이 열릴 때 읽어 사람에게 보인다. 그 프로젝트 창의 연결만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbUnattendedRollback": {
+            "description": "보존 시간 안에 아무도 붙지 않아 롤백한 열린 트랜잭션 하나.",
+            "properties": {
+              "connectionId": {
+                "type": "string"
+              },
+              "keptMinutes": {
+                "description": "보존한 시간(분). 창 · 탭을 몰라 보존하지 않았으면 0.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "description": "연결 이름.",
+                "type": "string"
+              },
+              "rollbackError": {
+                "description": "롤백 문장이 실패했으면 그 오류 — 그래도 연결을 닫았으므로 DB 가 롤백했다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rolledBackAt": {
+                "description": "롤백한 시각(유닉스 밀리초).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "since": {
+                "description": "트랜잭션을 연 시각(유닉스 밀리초).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tabId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "connectionId",
+              "name",
+              "tabId",
+              "since",
+              "rolledBackAt",
+              "keptMinutes",
+              "rollbackError"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/DbUnattendedRollback"
+        },
+        "type": "array"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
     },
     "db.sql.classify": {
       "description": "SQL 을 나누고 문장마다 위험도를 매긴다(M3-04 + M3-03). 방언은 세션 · 연결의 드라이버 것, 없으면 `dialect`.",

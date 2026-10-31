@@ -61,9 +61,9 @@ run = "node scripts/db-live.mjs"
 # 구문 강조 16 ms)을 판정하지 않는다. `--run-ignored all` 은 release 전용 `#[ignore]` 시험도 포함한다. 벽시계를 재므로 `-j 1`,
 # 문법 WASM 경로(`wasm` 기능)는 앱과 같게 켜지 않는다. 시험 목록을 바꾸면 CONTRIBUTING.md 「명령」 도 맞춘다.
 [tasks.test-release]
-description = "release 에서만 판정하는 시간 상한 시험(검색 취소 · fs.list · 구문 강조 · git 감시 이벤트 · 상태바 브랜치 · SQL 문장 나누기 · 쿼리 첫 청크)"
+description = "release 에서만 판정하는 시간 상한 시험(검색 취소 · fs.list · 구문 강조 · git 감시 이벤트 · 상태바 브랜치 · SQL 문장 나누기 · 쿼리 첫 청크 · 실행마다 설정 재확인 비용)"
 depends = ["install-deps"]
-run = "cargo nextest run --release -p pw-fs -p pw-syntax -p pw-git -p pw-db-sql -p pw-db --no-tests=fail -j 1 --run-ignored all -E 'test(/^search::tests::stopping_/) | test(=search::tests::the_stream_sends_files_then_done_and_ends_soon_after_cancel) | test(=tests::list_of_10000_entries_is_fast_in_release) | test(=a_5000_line_rust_file_highlights_within_budget) | test(=tests::watch::terminal_git_actions_raise_the_matching_events_and_the_reads_follow) | test(=tests::watch::a_branch_made_in_the_main_checkout_reaches_a_linked_worktree) | test(=tests::watch::the_status_bar_follows_a_terminal_checkout_on_one_shared_watch) | test(=split::tests::a_1mib_script_of_10000_statements_splits_within_50ms) | test(=split::tests::a_long_delimiter_keeps_the_split_linear) | test(=first_rows_chunk_of_100k_arrives_within_50ms)'"
+run = "cargo nextest run --release -p pw-fs -p pw-syntax -p pw-git -p pw-db-sql -p pw-db --no-tests=fail -j 1 --run-ignored all -E 'test(/^search::tests::stopping_/) | test(=search::tests::the_stream_sends_files_then_done_and_ends_soon_after_cancel) | test(=tests::list_of_10000_entries_is_fast_in_release) | test(=a_5000_line_rust_file_highlights_within_budget) | test(=tests::watch::terminal_git_actions_raise_the_matching_events_and_the_reads_follow) | test(=tests::watch::a_branch_made_in_the_main_checkout_reaches_a_linked_worktree) | test(=tests::watch::the_status_bar_follows_a_terminal_checkout_on_one_shared_watch) | test(=split::tests::a_1mib_script_of_10000_statements_splits_within_50ms) | test(=split::tests::a_long_delimiter_keeps_the_split_linear) | test(=first_rows_chunk_of_100k_arrives_within_50ms) | test(=the_config_recheck_cost_does_not_grow_with_connection_files)'"
 
 [tasks.lint]
 description = "fmt 검사 + clippy + oxlint + tsc + actionlint + 생성물 최신 여부"

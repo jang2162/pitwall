@@ -181,6 +181,21 @@ impl SqlConnection for SqliteConnection {
         }
     }
 
+    fn read_transaction_state(&mut self) -> BoxFuture<'_, DbResult<TransactionState>> {
+        // 새 일이 아니다 — 들어와 있는 취소 표지를 지우지 않는다. 스레드가 `sqlite3_get_autocommit` 을 읽고, 답하기 전에
+        // `in_transaction` 도 맞춘다(`Worker::reply`).
+        self.send(Starts::Continuation, |reply| {
+            Command::Job(Box::new(move |worker| {
+                let state = if worker.conn.is_autocommit() {
+                    TransactionState::Idle
+                } else {
+                    TransactionState::InTransaction
+                };
+                worker.reply(reply, Ok(state));
+            }))
+        })
+    }
+
     fn execute(&mut self, request: ExecuteRequest) -> BoxFuture<'_, DbResult<StatementStarted>> {
         self.send(Starts::NewWork, |reply| Command::Execute(request, reply))
     }

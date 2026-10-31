@@ -44,6 +44,7 @@ async fn the_history_methods_speak_camel_case_over_rpc() {
         host.connect(Caller {
             role: Role::Owner,
             scope: ConnectionScope::Project(f.project.clone()),
+            window: None,
         })
         .await
         .unwrap(),
@@ -163,6 +164,7 @@ async fn only_the_project_s_own_window_may_move_history() {
             host.connect(Caller {
                 role: Role::Owner,
                 scope,
+                window: None,
             })
             .await
             .unwrap(),
@@ -194,6 +196,7 @@ async fn only_the_project_s_own_window_may_move_history() {
         host.connect(Caller {
             role: Role::Owner,
             scope: ConnectionScope::Project(f.project.clone()),
+            window: None,
         })
         .await
         .unwrap(),

@@ -28,6 +28,7 @@ impl Client {
             Caller {
                 role,
                 scope: ConnectionScope::Project(id.to_owned()),
+                window: None,
             },
         )
         .await

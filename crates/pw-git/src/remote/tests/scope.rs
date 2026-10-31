@@ -60,6 +60,7 @@ async fn only_the_project_s_own_window_may_push_or_delete_a_branch() {
             .connect(Caller {
                 role: Role::Owner,
                 scope,
+                window: None,
             })
             .await
             .unwrap();
@@ -83,6 +84,7 @@ async fn only_the_project_s_own_window_may_push_or_delete_a_branch() {
         .connect(Caller {
             role: Role::Owner,
             scope: ConnectionScope::Project(f.project.clone()),
+            window: None,
         })
         .await
         .unwrap();

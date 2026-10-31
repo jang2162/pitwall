@@ -527,6 +527,14 @@ find-in-folder = Find in Folder
 # $version: the version of that git (or why it could not be read), $required: the lowest version that can write
 git-too-old = Git { $version } is older than { $required }, so commits, branches and other changes are turned off. Viewing still works
 
+## Databases. The Host sends these as notifications (notification.show, crates/pw-db/src/session.rs) when it rolls back an open
+## transaction nobody came back to. The same rollbacks are listed by db.session.unattendedRollbacks for the next time the window opens.
+
+# $connection: the connection name, $minutes: how long the Host kept the transaction for the window to come back
+db-unattended-transaction-rolled-back = The open transaction on { $connection } was rolled back: no window came back to it within { $minutes } min
+# $connection: the connection name
+db-closed-transaction-rolled-back = The open transaction on { $connection } was rolled back because its window's connection closed
+
 ## Git authentication (src/git/git-prompts.tsx). git or ssh asks for a password, token, key passphrase or host key confirmation.
 ## The question shown in the dialog is git's or ssh's own text and is not translated.
 

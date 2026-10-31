@@ -409,6 +409,10 @@ impl SqlConnection for PgConnection {
         self.shared.state()
     }
 
+    fn read_transaction_state(&mut self) -> BoxFuture<'_, DbResult<TransactionState>> {
+        self.call(Command::State)
+    }
+
     fn execute(&mut self, request: ExecuteRequest) -> BoxFuture<'_, DbResult<StatementStarted>> {
         self.call(|reply| Command::Execute(request, reply))
     }

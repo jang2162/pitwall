@@ -373,6 +373,7 @@ async fn over_rpc_the_result_and_the_hook_failure_carry_the_output() {
         .connect(Caller {
             role: Role::Owner,
             scope: ConnectionScope::Project(f.project.clone()),
+            window: None,
         })
         .await
         .unwrap();
@@ -453,6 +454,7 @@ async fn only_the_project_s_own_window_may_commit() {
             .connect(Caller {
                 role: Role::Owner,
                 scope,
+                window: None,
             })
             .await
             .unwrap();
@@ -469,6 +471,7 @@ async fn only_the_project_s_own_window_may_commit() {
         .connect(Caller {
             role: Role::Owner,
             scope: ConnectionScope::Project(f.project.clone()),
+            window: None,
         })
         .await
         .unwrap();

@@ -99,6 +99,13 @@ pub trait SqlConnection: Send {
     /// 지금 트랜잭션 상태. 문장 · 트랜잭션 메서드가 끝날 때마다 드라이버가 갱신한다.
     fn transaction_state(&self) -> TransactionState;
 
+    /// 서버가 보는 지금 트랜잭션 상태를 **서버에 물어** 읽는다(MySQL 은 `COM_PING` 의 상태 플래그 `SERVER_STATUS_IN_TRANS`, PG 는
+    /// 트랜잭션 블록 판정, SQLite 는 `sqlite3_get_autocommit`). 오류 뒤처럼 [`transaction_state`](Self::transaction_state) 의 마지막
+    /// 값을 믿을 수 없을 때 실행 파이프라인(M3-05)이 부른다 — 트랜잭션이 끝났는지를 추정이 아니라 사실로 본다. 읽은 값으로
+    /// `transaction_state` 도 맞춘다. 묻지 못하면(연결이 끊김 등) 오류다 — 부른 쪽은 그때 상태를 「알 수 없음」 으로 둔다. 열린
+    /// 커서가 있을 때는 부르지 않는다.
+    fn read_transaction_state(&mut self) -> BoxFuture<'_, DbResult<TransactionState>>;
+
     /// 문장 하나를 시작한다. `request.grade` 는 M3-03 의 분류기가 매긴 그 문장의 등급이다(커서 버리기가 쓴다).
     fn execute(&mut self, request: ExecuteRequest) -> BoxFuture<'_, DbResult<StatementStarted>>;
 

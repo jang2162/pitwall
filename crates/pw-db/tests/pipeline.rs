@@ -73,6 +73,29 @@ fn env(trusted: bool) -> Env {
 }
 
 impl Env {
+    /// 이 프로젝트 창의 label(데스크톱의 `project-<id>`).
+    fn label(&self) -> String {
+        format!("project-{}", self.f.id)
+    }
+
+    /// `label` 창의 연결(새로고침한 창은 같은 label 로 새 연결을 연다).
+    fn window_in(&self, label: &str) -> Conn {
+        self.f
+            .connect_in(ConnectionScope::Project(self.f.id.clone()), Some(label))
+    }
+
+    /// `tab` 탭의 세션을 연다.
+    async fn open_tab(&self, w: &mut Conn, connection: &str, tab: &str) -> String {
+        let opened = w
+            .call(
+                "db.session.open",
+                json!({ "projectId": self.f.id, "connectionId": connection, "tabId": tab }),
+            )
+            .await
+            .unwrap();
+        opened["session"]["sessionId"].as_str().unwrap().to_owned()
+    }
+
     async fn open(&self, w: &mut Conn, connection: &str) -> String {
         let opened = w
             .call(
@@ -819,12 +842,39 @@ async fn mysql_implicit_commits_are_confirmed_and_reported() {
     };
     assert_eq!(event.payload["notice"]["kind"], "committedImplicitly");
     assert_eq!(event.payload["session"]["state"]["kind"], "idle");
+
+    // `SET` 목록 뒤쪽의 `autocommit` 도 암묵 커밋이다 — 확인 없이 돌지 않는다(M3-05 리뷰 L1).
+    run(&mut w, exec(&s, "BEGIN; INSERT INTO t VALUES (2)"))
+        .await
+        .unwrap();
+    let asked = run(&mut w, exec(&s, "SET @a = 1, autocommit = 1"))
+        .await
+        .unwrap_err();
+    assert_eq!(asked.code, code::CONFIRM_REQUIRED);
+    assert_eq!(asked.data.unwrap()["effects"], json!(["implicitCommit"]));
+    assert!(!executed(&e.my).iter().any(|sql| sql.starts_with("SET")));
 }
 
-/// 드라이버가 되돌렸다고 말하지 않은 채 트랜잭션이 끝난 오류(MySQL 의 모르는 전체 롤백 코드 — 3101 등)는, 암묵 커밋 문장이 아니면
-/// 되돌린 것으로 알린다(`rolledBack` 을 채운다).
+/// 다음 `db.sessionChanged` 의 알림(알림 없는 이벤트는 건너뛴다).
+async fn next_notice(events: &mut pw_core::bus::Subscription) -> Value {
+    loop {
+        let received = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("no db.sessionChanged")
+            .unwrap();
+        let Received::Event(event) = received else {
+            panic!("lagged")
+        };
+        if !event.payload["notice"].is_null() {
+            return event.payload.clone();
+        }
+    }
+}
+
+/// 드라이버가 되돌렸다고 말하지 않은 채 트랜잭션이 오류로 끝나면(MySQL 의 모르는 전체 롤백 코드 — 3101 등) 롤백이라고 단정하지
+/// 않는다 — 서버에 물어 끝난 것을 확인하고 「끝남, 커밋인지 롤백인지 모름」 으로 알린다(M3-05 리뷰 M1).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_transaction_that_ends_on_an_error_is_reported_rolled_back() {
+async fn a_transaction_that_ends_without_saying_how_is_reported_as_ended() {
     let e = env(true);
     e.my.respond("INSERT", FakeResponse::write(1));
     // 드라이버가 `rolled_back` 을 싣지 않는 전체 롤백: 트랜잭션이 끝났다는 것만 상태로 보인다.
@@ -846,11 +896,152 @@ async fn a_transaction_that_ends_on_an_error_is_reported_rolled_back() {
         .unwrap();
     let error = items.last().unwrap();
     assert_eq!(error["kind"], "error");
-    assert_eq!(error["error"]["rolledBack"], true, "{error}");
-    let Received::Event(event) = events.recv().await.unwrap() else {
-        panic!()
-    };
-    assert_eq!(event.payload["notice"]["kind"], "rolledBack");
+    assert_ne!(error["error"]["rolledBack"], true, "{error}");
+    let payload = next_notice(&mut events).await;
+    assert_eq!(
+        payload["notice"],
+        json!({ "kind": "transactionEnded", "message": "plugin rollback" })
+    );
+    assert_eq!(payload["session"]["state"]["kind"], "idle");
+    assert_eq!(
+        e.my.count(&FakeCall::ReadTransactionState),
+        1,
+        "asked the server"
+    );
+}
+
+/// 리뷰어의 재현(M3-05 리뷰 M1): MySQL 수동 트랜잭션의 `INSERT` 뒤 `CALL p()` 가 안에서 커밋한 뒤 실패하거나, `EXECUTE` 한 DDL 이
+/// 암묵 커밋한 뒤 실패하면 앞의 쓰기는 커밋됐다 — 「롤백됨」 이라고 알리지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_call_that_commits_and_then_fails_is_not_reported_rolled_back() {
+    for (sql, code) in [("CALL p()", "1644"), ("EXECUTE s", "1050")] {
+        let e = env(true);
+        e.my.respond("INSERT", FakeResponse::write(1));
+        e.my.respond(
+            sql,
+            FakeResponse::error(DbError::new(DbErrorKind::Server, "failed").with_code(code))
+                .ending(FakeEnding::ImplicitCommit),
+        );
+        let mut w = e.f.window();
+        let s = e.open(&mut w, "my").await;
+        w.call(
+            "db.session.setMode",
+            json!({ "sessionId": s, "mode": "manual" }),
+        )
+        .await
+        .unwrap();
+        run(&mut w, exec(&s, "INSERT INTO t VALUES (1)"))
+            .await
+            .unwrap();
+        let mut events =
+            e.f.bus
+                .subscribe(Filter::all().topics(["db.sessionChanged"]));
+        let items = run(&mut w, exec(&s, sql)).await.unwrap();
+        let error = items.last().unwrap();
+        assert_eq!(error["error"]["code"], code, "{sql}");
+        assert_ne!(error["error"]["rolledBack"], true, "{sql}: {error}");
+        let payload = next_notice(&mut events).await;
+        assert_eq!(payload["notice"]["kind"], "transactionEnded", "{sql}");
+        assert_eq!(payload["session"]["state"]["kind"], "idle", "{sql}");
+        assert_eq!(e.my.committed(), ["INSERT INTO t VALUES (1)"], "{sql}");
+    }
+}
+
+/// 오류 뒤 서버에 상태를 묻지 못하면 「알 수 없음」 이고 세션은 마지막으로 안 상태(열린 트랜잭션) 그대로다. 묻다가 연결이 끊겼으면
+/// 「끊김」 이되, 커밋할 수 있는 문장(`CALL`)이었으면 결과를 모른다고 알리고 그냥 쓰기였으면 DB 가 롤백했다고 알린다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreadable_state_after_an_error_is_shown_as_unknown() {
+    let e = env(true);
+    e.my.respond("INSERT", FakeResponse::write(1));
+    e.my.respond(
+        "UPDATE",
+        FakeResponse::error(DbError::new(DbErrorKind::Server, "duplicate").with_code("1062")),
+    );
+    e.my.respond(
+        "CALL",
+        FakeResponse::error(DbError::new(DbErrorKind::Server, "failed").with_code("1644")),
+    );
+    let mut w = e.f.window();
+    let mut events =
+        e.f.bus
+            .subscribe(Filter::all().topics(["db.sessionChanged"]));
+    // 세션마다 `BEGIN; INSERT` 로 트랜잭션을 연 뒤 `sql` 이 실패하고, 서버에 묻기는 `read` 로 실패한다.
+    for (sql, read, notice, state) in [
+        (
+            "UPDATE t SET a = 1 WHERE id = 1",
+            DbError::new(DbErrorKind::Timeout, "no answer"),
+            json!({ "kind": "transactionUnknown", "message": "no answer" }),
+            "inTransaction",
+        ),
+        (
+            "CALL p()",
+            DbError::new(DbErrorKind::Disconnected, "gone"),
+            json!({ "kind": "connectionLost", "hadTransaction": true, "outcomeUnknown": true }),
+            "disconnected",
+        ),
+        (
+            "UPDATE t SET a = 1 WHERE id = 1",
+            DbError::new(DbErrorKind::Disconnected, "gone"),
+            json!({ "kind": "connectionLost", "hadTransaction": true, "outcomeUnknown": false }),
+            "disconnected",
+        ),
+    ] {
+        e.my.fail_state_reads(None);
+        let s = e.open(&mut w, "my").await;
+        run(&mut w, exec(&s, "BEGIN; INSERT INTO t VALUES (1)"))
+            .await
+            .unwrap();
+        e.my.fail_state_reads(Some(read));
+        run(&mut w, exec(&s, sql)).await.unwrap();
+        let payload = next_notice(&mut events).await;
+        assert_eq!(payload["notice"], notice, "{sql}");
+        assert_eq!(payload["session"]["state"]["kind"], state, "{sql}");
+    }
+}
+
+/// 실행과 실행 사이에 트랜잭션이 끝났으면(정리 예산을 넘겨 버려진 문장이 나중에 롤백 — M3-05 리뷰 L2) [커밋] 은 성공으로 답하지
+/// 않고, 다음 실행은 「암묵 커밋」 이 아니라 「끝남, 모름」 으로 알린다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_transaction_that_ended_between_runs_is_not_reported_committed() {
+    let e = env(true);
+    e.lite.respond("INSERT", FakeResponse::write(1));
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "lite").await;
+    w.call(
+        "db.session.setMode",
+        json!({ "sessionId": s, "mode": "manual" }),
+    )
+    .await
+    .unwrap();
+    run(&mut w, exec(&s, "INSERT INTO t VALUES (1)"))
+        .await
+        .unwrap();
+    e.lite.end_transaction_behind(0);
+    let mut events =
+        e.f.bus
+            .subscribe(Filter::all().topics(["db.sessionChanged"]));
+    let err = w
+        .call("db.session.commit", json!({ "sessionId": s }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, code::DB_ERROR);
+    assert_eq!(
+        err.data.as_ref().unwrap()["session"]["state"]["kind"],
+        "idle"
+    );
+    assert_eq!(e.lite.count(&FakeCall::Commit), 0, "nothing to commit");
+    let payload = next_notice(&mut events).await;
+    assert_eq!(payload["notice"]["kind"], "transactionEnded");
+    assert!(e.lite.committed().is_empty());
+
+    // 다음 실행 앞에서 끝난 것도 같다.
+    run(&mut w, exec(&s, "INSERT INTO t VALUES (2)"))
+        .await
+        .unwrap();
+    e.lite.end_transaction_behind(0);
+    run(&mut w, exec(&s, "SELECT 1")).await.unwrap();
+    let payload = next_notice(&mut events).await;
+    assert_eq!(payload["notice"]["kind"], "transactionEnded");
 }
 
 /// PG 의 숨은 블록: 자동 커밋 문장 뒤 연결이 트랜잭션 안이면 세션이 그것을 보이고 알린다(몰래 커밋 · 롤백하지 않는다).
@@ -976,11 +1167,48 @@ async fn a_lost_connection_is_reported() {
     };
     assert_eq!(
         event.payload["notice"],
-        json!({ "kind": "connectionLost", "hadTransaction": true })
+        json!({ "kind": "connectionLost", "hadTransaction": true, "outcomeUnknown": false })
     );
     assert_eq!(event.payload["session"]["state"]["kind"], "disconnected");
     let err = run(&mut w, exec(&s, "SELECT 1")).await.unwrap_err();
     assert_eq!(err.code, code::DB_ERROR);
+}
+
+/// COMMIT 도중 연결이 끊기면 결과를 모른다 — 「DB 가 롤백했다」 고 단정하지 않는다(M3-05 리뷰 L3). [커밋] 버튼 · `COMMIT` 문장 둘 다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connection_lost_during_commit_leaves_the_outcome_unknown() {
+    for by_statement in [false, true] {
+        let e = env(true);
+        e.pg.respond("INSERT", FakeResponse::write(1));
+        let mut w = e.f.window();
+        let s = e.open(&mut w, "dev").await;
+        run(&mut w, exec(&s, "BEGIN; INSERT INTO t VALUES (1)"))
+            .await
+            .unwrap();
+        e.pg.fail_commit(Some(DbError::new(
+            DbErrorKind::Disconnected,
+            "server closed the connection",
+        )));
+        let mut events =
+            e.f.bus
+                .subscribe(Filter::all().topics(["db.sessionChanged"]));
+        if by_statement {
+            let items = run(&mut w, exec(&s, "COMMIT")).await.unwrap();
+            assert_ne!(items.last().unwrap()["error"]["rolledBack"], true);
+        } else {
+            let err = w
+                .call("db.session.commit", json!({ "sessionId": s }))
+                .await
+                .unwrap_err();
+            assert_ne!(err.data.unwrap()["error"]["rolledBack"], true);
+        }
+        let payload = next_notice(&mut events).await;
+        assert_eq!(
+            payload["notice"],
+            json!({ "kind": "connectionLost", "hadTransaction": true, "outcomeUnknown": true }),
+            "by statement: {by_statement}"
+        );
+    }
 }
 
 /// 설정이 바뀐 연결은 저절로 다시 붙지 않고 `configChanged` — 새 실행은 받지 않고 커밋 · 롤백은 받는다. 감시가 듣지 못하는 곳(메인
@@ -1087,4 +1315,337 @@ async fn a_failed_hidden_block_shows_failed_and_rolls_back_on_commit() {
         .unwrap_err();
     assert_eq!(err.data.unwrap()["error"]["rolledBack"], true);
     assert!(e.pg.committed().is_empty());
+}
+
+/// 확인은 그것이 허락한 실행 한 번에 쓰이고 끝난다 — 같은 `confirmed` 를 다시 보내거나, 확인을 받은 뒤 다른 실행이 끼면 다시
+/// 묻는다(M3-05 리뷰 L4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_confirmation_is_spent_by_the_run_it_allowed() {
+    let e = env(true);
+    e.pg.respond("DELETE", FakeResponse::write(5));
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    let asked = run(&mut w, exec(&s, "DELETE FROM t")).await.unwrap_err();
+    let data = asked.data.unwrap();
+    let confirmed = json!({ "sessionId": s, "sql": "DELETE FROM t",
+        "confirmed": { "grade": data["grade"], "statementsHash": data["statementsHash"] } });
+    run(&mut w, confirmed.clone()).await.unwrap();
+    let again = run(&mut w, confirmed).await.unwrap_err();
+    assert_eq!(again.code, code::CONFIRM_REQUIRED);
+    assert_eq!(reason_rejected(&again), Some("hashMismatch"));
+    assert_eq!(executed(&e.pg), ["DELETE FROM t"]);
+
+    // 미리 받은 확인(`db.sql.classify`) 뒤에 다른 실행이 끼면 그 확인은 낡았다.
+    let classified = w
+        .call(
+            "db.sql.classify",
+            json!({ "projectId": e.f.id, "sessionId": s, "sql": "DELETE FROM t" }),
+        )
+        .await
+        .unwrap();
+    run(&mut w, exec(&s, "SELECT 1")).await.unwrap();
+    let stale = run(
+        &mut w,
+        json!({ "sessionId": s, "sql": "DELETE FROM t",
+            "confirmed": { "grade": classified["grade"], "statementsHash": classified["statementsHash"] } }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason_rejected(&stale), Some("hashMismatch"));
+    assert_eq!(executed(&e.pg), ["DELETE FROM t", "SELECT 1"]);
+}
+
+/// 실행마다 설정을 다시 보는 것은 설정 파일의 수정 시각 · 크기가 바뀌었을 때만 읽는다(M3-05 리뷰 L5): 크기와 수정 시각을 그대로
+/// 둔 고침은 읽지 않고, 수정 시각이 바뀌면 읽어 `configChanged` 로 잡는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_config_recheck_reads_the_files_only_when_they_change() {
+    let e = env(true);
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    run(&mut w, exec(&s, "SELECT 1")).await.unwrap();
+    let path = e.f.db_file("dev.toml");
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    // 같은 크기의 다른 이름, 수정 시각은 되돌린다.
+    e.f.edit_db("dev.toml", "name = \"dev\"", "name = \"deX\"");
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    run(&mut w, exec(&s, "SELECT 1")).await.unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(modified + Duration::from_secs(2))
+        .unwrap();
+    let err = run(&mut w, exec(&s, "SELECT 1")).await.unwrap_err();
+    assert_eq!(reason(&err), Some("configChanged"));
+}
+
+/// L5 의 비용(release, `mise run test-release`): 연결 파일이 7개든 207개든 실행 한 번의 비용이 같다 — 다시 읽기가 그 연결의 파일
+/// 자리만 본다(리뷰 측정: 디버그 빌드에서 0.49 ms → 8.0 ms 로 늘었다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "release timing — mise run test-release"]
+async fn the_config_recheck_cost_does_not_grow_with_connection_files() {
+    const RUNS: u32 = 200;
+    let e = env(true);
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    run(&mut w, exec(&s, "SELECT 1")).await.unwrap();
+    let t = Instant::now();
+    for _ in 0..RUNS {
+        run(&mut w, exec(&s, "SELECT 1")).await.unwrap();
+    }
+    let few = t.elapsed() / RUNS;
+    for i in 0..200 {
+        e.f.write_db(
+            &format!("c{i}.toml"),
+            &format!("schema = 1\nname = \"c{i}\"\ndriver = \"postgres\"\nhost = \"h{i}\"\n"),
+        );
+    }
+    let t = Instant::now();
+    for _ in 0..RUNS {
+        run(&mut w, exec(&s, "SELECT 1")).await.unwrap();
+    }
+    let many = t.elapsed() / RUNS;
+    eprintln!("per run: 7 connection files {few:?}, 207 connection files {many:?}");
+    assert!(
+        many < few * 2 + Duration::from_micros(200),
+        "{few:?} -> {many:?}"
+    );
+}
+
+/// 새로고침 · 웹뷰 재시작(M3-05 리뷰 M2): 창의 연결이 닫혀도 열린 트랜잭션이 있는 세션은 닫지 않고 보존한다(알림 `unattended`) —
+/// 같은 창의 같은 탭이 새 연결로 `db.session.resume` 하면 「열린 트랜잭션」 그대로 이어지고 커밋할 수 있다. 열린 트랜잭션이 없는
+/// 세션은 그대로 닫힌다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reloaded_window_takes_its_open_transaction_back() {
+    let e = env(true);
+    e.pg.respond("INSERT", FakeResponse::write(1));
+    let label = e.label();
+    let mut w = e.window_in(&label);
+    let s = e.open_tab(&mut w, "dev", "tab-1").await;
+    e.open_tab(&mut w, "dev", "tab-2").await;
+    run(&mut w, exec(&s, "BEGIN; INSERT INTO t VALUES (1)"))
+        .await
+        .unwrap();
+    let mut events =
+        e.f.bus
+            .subscribe(Filter::all().topics(["db.sessionChanged"]));
+    drop(w);
+    let payload = next_notice(&mut events).await;
+    assert_eq!(payload["notice"]["kind"], "unattended");
+    assert!(payload["notice"]["until"].is_u64());
+    assert_eq!(payload["session"]["sessionId"], s.as_str());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while e.sessions.session_count() > 1 {
+        assert!(
+            Instant::now() < deadline,
+            "the idle tab's session stayed open"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(e.pg.count(&FakeCall::Rollback), 0);
+    assert_eq!(e.pg.count(&FakeCall::Close), 1, "only the idle tab's");
+
+    let mut w = e.window_in(&label);
+    let resumed = w
+        .call(
+            "db.session.resume",
+            json!({ "projectId": e.f.id, "tabId": "tab-1" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resumed["session"]["sessionId"], s.as_str());
+    assert_eq!(resumed["session"]["state"]["kind"], "inTransaction");
+    assert_eq!(resumed["name"], "dev");
+    // 이미 이어받았으니 다시 찾지 않는다.
+    let again = w
+        .call(
+            "db.session.resume",
+            json!({ "projectId": e.f.id, "tabId": "tab-1" }),
+        )
+        .await
+        .unwrap();
+    assert!(again.is_null());
+    w.call("db.session.commit", json!({ "sessionId": s }))
+        .await
+        .unwrap();
+    assert_eq!(e.pg.committed(), ["INSERT INTO t VALUES (1)"]);
+}
+
+/// 보존한 세션은 그 창의 그 탭만 이어받는다 — 같은 프로젝트의 다른 창 · 다른 탭은 `null`, 다른 프로젝트 창 · Host 범위 연결은
+/// permission denied(결정 M3-D18).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn other_windows_and_projects_cannot_take_a_kept_session() {
+    let e = env(true);
+    e.pg.respond("INSERT", FakeResponse::write(1));
+    let label = e.label();
+    let mut w = e.window_in(&label);
+    let s = e.open_tab(&mut w, "dev", "tab-1").await;
+    run(&mut w, exec(&s, "BEGIN; INSERT INTO t VALUES (1)"))
+        .await
+        .unwrap();
+    let mut events =
+        e.f.bus
+            .subscribe(Filter::all().topics(["db.sessionChanged"]));
+    drop(w);
+    assert_eq!(
+        next_notice(&mut events).await["notice"]["kind"],
+        "unattended"
+    );
+    let resume = json!({ "projectId": e.f.id, "tabId": "tab-1" });
+
+    let mut other_window = e.window_in("project-elsewhere");
+    let got = other_window
+        .call("db.session.resume", resume.clone())
+        .await
+        .unwrap();
+    assert!(got.is_null(), "another window");
+    let mut same = e.window_in(&label);
+    let got = same
+        .call(
+            "db.session.resume",
+            json!({ "projectId": e.f.id, "tabId": "tab-2" }),
+        )
+        .await
+        .unwrap();
+    assert!(got.is_null(), "another tab");
+    let other_label = format!("project-{}", e.f.other);
+    for mut c in [
+        e.f.connect_in(
+            ConnectionScope::Project(e.f.other.clone()),
+            Some(&other_label),
+        ),
+        e.f.connect_in(ConnectionScope::Host, Some(&label)),
+    ] {
+        let err = c
+            .call("db.session.resume", resume.clone())
+            .await
+            .unwrap_err();
+        assert!(denied(&err), "{err:?}");
+    }
+    let got = same.call("db.session.resume", resume).await.unwrap();
+    assert_eq!(got["session"]["sessionId"], s.as_str());
+}
+
+/// 보존 시간 안에 아무도 붙지 않으면 롤백하고 닫는다 — 몰래가 아니다: 알림(`notification.show`)과, 다음에 그 프로젝트 창이 열릴 때
+/// 읽는 기록(`db.session.unattendedRollbacks`)을 남긴다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unattended_transaction_is_rolled_back_and_recorded() {
+    let e = env(true);
+    e.sessions
+        .set_unattended_keep(Some(Duration::from_millis(300)));
+    e.pg.respond("INSERT", FakeResponse::write(1));
+    let label = e.label();
+    let mut w = e.window_in(&label);
+    let s = e.open_tab(&mut w, "dev", "tab-1").await;
+    run(&mut w, exec(&s, "BEGIN; INSERT INTO t VALUES (1)"))
+        .await
+        .unwrap();
+    let mut shown =
+        e.f.bus
+            .subscribe(Filter::all().topics(["notification.show"]));
+    let mut events =
+        e.f.bus
+            .subscribe(Filter::all().topics(["db.sessionChanged"]));
+    drop(w);
+    assert_eq!(
+        next_notice(&mut events).await["notice"]["kind"],
+        "unattended"
+    );
+    let payload = next_notice(&mut events).await;
+    assert_eq!(payload["notice"]["kind"], "unattendedRolledBack");
+    assert_eq!(payload["session"]["state"]["kind"], "disconnected");
+    let Received::Event(event) = tokio::time::timeout(Duration::from_secs(5), shown.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        event.payload,
+        json!({ "level": "warning", "message": "db-unattended-transaction-rolled-back",
+                "args": { "connection": "dev", "minutes": "1" } })
+    );
+    assert_eq!(event.scope, pw_core::bus::Scope::Project(e.f.id.clone()));
+    assert_eq!(e.pg.count(&FakeCall::Rollback), 1);
+    assert!(e.pg.committed().is_empty());
+    assert_eq!(e.sessions.session_count(), 0);
+
+    let mut w = e.window_in(&label);
+    let got = w
+        .call(
+            "db.session.resume",
+            json!({ "projectId": e.f.id, "tabId": "tab-1" }),
+        )
+        .await
+        .unwrap();
+    assert!(got.is_null());
+    let records = w
+        .call(
+            "db.session.unattendedRollbacks",
+            json!({ "projectId": e.f.id }),
+        )
+        .await
+        .unwrap();
+    let [record] = records.as_array().unwrap().as_slice() else {
+        panic!("{records}")
+    };
+    assert_eq!(record["connectionId"], "dev");
+    assert_eq!(record["tabId"], "tab-1");
+    assert_eq!(record["keptMinutes"], 1);
+    assert!(record["since"].is_u64() && record["rolledBackAt"].is_u64());
+    assert!(record["rollbackError"].is_null());
+    let mut other = e.f.connect(ConnectionScope::Project(e.f.other.clone()));
+    let err = other
+        .call(
+            "db.session.unattendedRollbacks",
+            json!({ "projectId": e.f.id }),
+        )
+        .await
+        .unwrap_err();
+    assert!(denied(&err));
+}
+
+/// 창 · 탭을 모르는 연결(원격 등)의 열린 트랜잭션은 보존할 열쇠가 없어 곧바로 롤백하되, 알리고 기록한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_closed_window_without_a_tab_rolls_back_at_once_and_says_so() {
+    let e = env(true);
+    e.pg.respond("INSERT", FakeResponse::write(1));
+    let mut w = e.f.window();
+    let s = e.open(&mut w, "dev").await;
+    run(&mut w, exec(&s, "BEGIN; INSERT INTO t VALUES (1)"))
+        .await
+        .unwrap();
+    let mut shown =
+        e.f.bus
+            .subscribe(Filter::all().topics(["notification.show"]));
+    drop(w);
+    let Received::Event(event) = tokio::time::timeout(Duration::from_secs(5), shown.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        event.payload["message"],
+        "db-closed-transaction-rolled-back"
+    );
+    assert_eq!(event.payload["args"], json!({ "connection": "dev" }));
+    assert_eq!(e.pg.count(&FakeCall::Rollback), 1);
+    let mut w = e.f.window();
+    let records = w
+        .call(
+            "db.session.unattendedRollbacks",
+            json!({ "projectId": e.f.id }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(records[0]["keptMinutes"], 0);
+    assert!(records[0]["tabId"].is_null());
 }
