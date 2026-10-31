@@ -349,9 +349,256 @@ fn unterminated_quotes_run_to_the_end() {
             "SELECT 1; SELECT $$a; SELECT 2",
             &["SELECT 1", "SELECT $$a; SELECT 2"],
         ),
-        // 닫히지 않은 주석은 내용이 아니므로 앞 토큰에서 끝난다.
-        (LITE, "SELECT 1 /* a; SELECT 2", &["SELECT 1"]),
+        // 닫히지 않은 주석도 끝까지 내용이다 — 버리면 「전체 실행」 이 앞 문장만 돌리고 조용히 끝난다.
+        (
+            LITE,
+            "SELECT 1 /* a; SELECT 2",
+            &["SELECT 1 /* a; SELECT 2"],
+        ),
+        (
+            PG,
+            "SELECT 1; /* unclosed ; DROP TABLE t",
+            &["SELECT 1", "/* unclosed ; DROP TABLE t"],
+        ),
+        (
+            MY,
+            "SELECT 1; /* unclosed ; DROP TABLE t",
+            &["SELECT 1", "/* unclosed ; DROP TABLE t"],
+        ),
+        // PG 의 덜 닫힌 괄호는 끝까지 한 문장이다(서버 · 분류기 모두 문법 오류로 본다).
+        (
+            PG,
+            "SELECT 1; SELECT (1; DROP TABLE t; SELECT 2",
+            &["SELECT 1", "SELECT (1; DROP TABLE t; SELECT 2"],
+        ),
     ]);
+}
+
+/// 리뷰 [높음] 1: 루틴 머리의 매개변수 · 열 이름 `begin` 은 블록을 열지 않는다 — 열면 뒤 스크립트를 통째로 삼킨다.
+#[test]
+fn begin_as_a_name_inside_a_routine_does_not_open_a_block() {
+    table(&[
+        (
+            MY,
+            "CREATE PROCEDURE p(IN begin INT) SELECT begin; DROP TABLE t; SELECT 1;",
+            &[
+                "CREATE PROCEDURE p(IN begin INT) SELECT begin",
+                "DROP TABLE t",
+                "SELECT 1",
+            ],
+        ),
+        (
+            MY,
+            "CREATE TRIGGER trg BEFORE INSERT ON ev FOR EACH ROW SET NEW.begin = NOW(); DELETE FROM ev; SELECT 1;",
+            &[
+                "CREATE TRIGGER trg BEFORE INSERT ON ev FOR EACH ROW SET NEW.begin = NOW()",
+                "DELETE FROM ev",
+                "SELECT 1",
+            ],
+        ),
+        (
+            MY,
+            "CREATE PROCEDURE p() UPDATE t SET begin = 1; DELETE FROM t; SELECT 1;",
+            &[
+                "CREATE PROCEDURE p() UPDATE t SET begin = 1",
+                "DELETE FROM t",
+                "SELECT 1",
+            ],
+        ),
+        (
+            PG,
+            "CREATE FUNCTION f(begin date) RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql; DROP TABLE t; SELECT 1;",
+            &[
+                "CREATE FUNCTION f(begin date) RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql",
+                "DROP TABLE t",
+                "SELECT 1",
+            ],
+        ),
+        (
+            PG,
+            "CREATE FUNCTION f() RETURNS TABLE(begin date, \"end\" date) AS $$ SELECT 1 $$ LANGUAGE sql; DROP TABLE t;",
+            &[
+                "CREATE FUNCTION f() RETURNS TABLE(begin date, \"end\" date) AS $$ SELECT 1 $$ LANGUAGE sql",
+                "DROP TABLE t",
+            ],
+        ),
+        (
+            PG,
+            "ALTER FUNCTION begin() OWNER TO x; DROP TABLE t; SELECT 1",
+            &[
+                "ALTER FUNCTION begin() OWNER TO x",
+                "DROP TABLE t",
+                "SELECT 1",
+            ],
+        ),
+        // PG 는 `BEGIN ATOMIC` 만 본문이다 — 열 이름 뒤에 낱말이 와도 열지 않는다.
+        (
+            PG,
+            "CREATE FUNCTION f() RETURNS int LANGUAGE sql RETURN (SELECT begin FROM t); DROP TABLE t",
+            &[
+                "CREATE FUNCTION f() RETURNS int LANGUAGE sql RETURN (SELECT begin FROM t)",
+                "DROP TABLE t",
+            ],
+        ),
+        (
+            MY,
+            "CREATE PROCEDURE p() SELECT a, begin FROM t; DROP TABLE t",
+            &[
+                "CREATE PROCEDURE p() SELECT a, begin FROM t",
+                "DROP TABLE t",
+            ],
+        ),
+        (
+            MY,
+            "CREATE PROCEDURE p() SELECT max(x) begin FROM t; DROP TABLE t",
+            &[
+                "CREATE PROCEDURE p() SELECT max(x) begin FROM t",
+                "DROP TABLE t",
+            ],
+        ),
+        (
+            MY,
+            "CREATE FUNCTION f() RETURNS INT RETURN begin; DROP TABLE t",
+            &[
+                "CREATE FUNCTION f() RETURNS INT RETURN begin",
+                "DROP TABLE t",
+            ],
+        ),
+        (
+            MY,
+            "ALTER PROCEDURE begin COMMENT 'x'; DROP TABLE t",
+            &["ALTER PROCEDURE begin COMMENT 'x'", "DROP TABLE t"],
+        ),
+        // 괄호 안의 별칭 `begin`(앞 · 뒤 낱말만으로는 본문 자리와 구별되지 않는다).
+        (
+            MY,
+            "CREATE PROCEDURE p() SELECT * FROM (SELECT 1 begin UNION SELECT 2) x; DROP TABLE t",
+            &[
+                "CREATE PROCEDURE p() SELECT * FROM (SELECT 1 begin UNION SELECT 2) x",
+                "DROP TABLE t",
+            ],
+        ),
+        // `UPDATE OF <열>` 의 열 이름.
+        (
+            LITE,
+            "CREATE TRIGGER t AFTER UPDATE OF begin ON x BEGIN DELETE FROM y; END; DROP TABLE z",
+            &[
+                "CREATE TRIGGER t AFTER UPDATE OF begin ON x BEGIN DELETE FROM y; END",
+                "DROP TABLE z",
+            ],
+        ),
+        // PG 의 타입 이름 `begin`(앞 · 뒤가 낱말이어도 `ATOMIC` 이 아니면 본문이 아니다).
+        (
+            PG,
+            "CREATE FUNCTION f() RETURNS SETOF begin LANGUAGE sql AS $$ SELECT 1 $$; DROP TABLE t",
+            &[
+                "CREATE FUNCTION f() RETURNS SETOF begin LANGUAGE sql AS $$ SELECT 1 $$",
+                "DROP TABLE t",
+            ],
+        ),
+        // 본문 안의 변수 이름 `begin` 은 겹친 블록을 열지 않는다.
+        (
+            MY,
+            "CREATE PROCEDURE p() BEGIN DECLARE begin INT; SET begin = 1; END; DROP TABLE t",
+            &[
+                "CREATE PROCEDURE p() BEGIN DECLARE begin INT; SET begin = 1; END",
+                "DROP TABLE t",
+            ],
+        ),
+        // 표 이름 `begin` 뒤의 본문 `BEGIN` 은 연다. 본문 앞의 주석은 건너 본다.
+        (
+            LITE,
+            "CREATE TRIGGER t AFTER INSERT ON begin BEGIN DELETE FROM x; END; DROP TABLE y",
+            &[
+                "CREATE TRIGGER t AFTER INSERT ON begin BEGIN DELETE FROM x; END",
+                "DROP TABLE y",
+            ],
+        ),
+        (
+            MY,
+            "CREATE PROCEDURE p() BEGIN -- 본문\n SELECT 1; END; SELECT 2",
+            &[
+                "CREATE PROCEDURE p() BEGIN -- 본문\n SELECT 1; END",
+                "SELECT 2",
+            ],
+        ),
+    ]);
+}
+
+/// 리뷰 [높음] 2: PG 는 psql 처럼 괄호 안의 `;` 에서 나누지 않는다. MySQL · SQLite 클라이언트는 괄호를 세지 않는다.
+#[test]
+fn postgres_keeps_semicolons_inside_parentheses() {
+    table(&[
+        (
+            PG,
+            "CREATE RULE r AS ON INSERT TO t DO ALSO (SELECT 1; DELETE FROM t; SELECT 2); SELECT 3",
+            &[
+                "CREATE RULE r AS ON INSERT TO t DO ALSO (SELECT 1; DELETE FROM t; SELECT 2)",
+                "SELECT 3",
+            ],
+        ),
+        // 인용 · 주석 안의 괄호는 세지 않는다.
+        (
+            PG,
+            "SELECT '(', \"(\" /* ( */; SELECT 2",
+            &["SELECT '(', \"(\"", "SELECT 2"],
+        ),
+        (PG, "SELECT (1)); SELECT 2", &["SELECT (1))", "SELECT 2"]),
+        (MY, "SELECT (1; SELECT 2)", &["SELECT (1", "SELECT 2)"]),
+        (LITE, "SELECT (1; SELECT 2)", &["SELECT (1", "SELECT 2)"]),
+    ]);
+}
+
+/// 리뷰 [중간] 3: MariaDB 의 `/*M! … */` 도 `/*!` 처럼 내용이다(M3-03 의 분류와 같게).
+#[test]
+fn mariadb_executable_comments_are_content() {
+    table(&[
+        (
+            MY,
+            "SELECT 1 /*M! ; DROP TABLE t */; SELECT 2",
+            &["SELECT 1 /*M!", "DROP TABLE t */", "SELECT 2"],
+        ),
+        (
+            MY,
+            "/*M!100100 SET x = 1 */;\n/*M 주석 */;",
+            &["/*M!100100 SET x = 1 */"],
+        ),
+        // PG 에서는 주석이다.
+        (
+            PG,
+            "SELECT 1 /*M! ; DROP TABLE t */; SELECT 2",
+            &["SELECT 1", "SELECT 2"],
+        ),
+    ]);
+}
+
+/// 리뷰 [중간] 4: 구분자는 mysql 처럼 15 바이트까지다. 글자 가운데서 자르지 않는다.
+#[test]
+fn a_long_delimiter_is_clipped_to_15_bytes() {
+    table(&[
+        // 17 바이트를 받아 앞 15 바이트(`abcdefghijklmno`)로 나눈다.
+        (
+            MY,
+            "DELIMITER abcdefghijklmnopq\nSELECT 1 abcdefghijklmno SELECT 2",
+            &["SELECT 1", "SELECT 2"],
+        ),
+        // `a` + 한글 다섯(16 바이트) → 15 에서 자르면 `마` 의 가운데라 `a가나다라`(13 바이트)까지.
+        (
+            MY,
+            "DELIMITER a가나다라마\nSELECT 1 a가나다라 SELECT 2",
+            &["SELECT 1", "SELECT 2"],
+        ),
+    ]);
+}
+
+/// 리뷰 [낮음] 6: PG 매개변수 `$1` 은 숫자까지 — 바로 뒤의 `$a$` 는 달러 인용이다.
+#[test]
+fn a_postgres_parameter_ends_at_its_digits() {
+    table(&[(
+        PG,
+        "SELECT $1$a$ ; $a$; DROP TABLE t; SELECT 3",
+        &["SELECT $1$a$ ; $a$", "DROP TABLE t", "SELECT 3"],
+    )]);
 }
 
 /// 한글(BMP — UTF-16 한 단위, UTF-8 세 바이트)과 이모지(UTF-16 두 단위)가 섞인 문장의 범위는 UTF-16 이다.
@@ -465,6 +712,33 @@ async fn an_offset_past_the_end_is_invalid() {
     assert_eq!(past["error"]["code"], pw_rpc::code::INVALID_PARAMS);
 }
 
+/// 리뷰 [낮음] 8: 상한(16 MiB)을 넘는 SQL 은 두 메서드 모두 거절한다. 상한과 같은 크기는 받는다.
+#[tokio::test]
+async fn sql_over_the_size_limit_is_invalid() {
+    let at_limit = " ".repeat(MAX_SQL_BYTES);
+    let reply = call(
+        "db.sql.split",
+        json!({"dialect": "postgres", "sql": at_limit}),
+    )
+    .await;
+    assert_eq!(reply["result"], json!({"statements": []}));
+    let over = " ".repeat(MAX_SQL_BYTES + 1);
+    for (method, params) in [
+        ("db.sql.split", json!({"dialect": "postgres", "sql": over})),
+        (
+            "db.sql.statementAt",
+            json!({"dialect": "mysql", "sql": over, "offset": 0}),
+        ),
+    ] {
+        let reply = call(method, params).await;
+        assert_eq!(
+            reply["error"]["code"],
+            pw_rpc::code::INVALID_PARAMS,
+            "{method}"
+        );
+    }
+}
+
 /// 완료 기준: 1 MiB 스크립트(문장 1만 개) 나누기가 release 에서 50 ms 안. `mise run test-release` 가 이름으로 고른다
 /// (`cargo nextest run --release -p pw-db-sql --run-ignored only -E 'test(=split::tests::a_1mib_script_of_10000_statements_splits_within_50ms)'`).
 /// debug 빌드에서는 재기만 하고 판정하지 않는다.
@@ -506,5 +780,35 @@ fn a_1mib_script_of_10000_statements_splits_within_50ms() {
     );
     if !cfg!(debug_assertions) {
         assert!(median < std::time::Duration::from_millis(50), "{median:?}");
+    }
+}
+
+/// 리뷰 [중간] 4: 긴 `DELIMITER` 에서도 나누기가 선형이다 — 1 MiB 본문이 release 에서 50 ms 안. `mise run test-release` 가
+/// 이름으로 고른다. 두 입력: ① 15 바이트 상한에 꼭 맞고 본문(`a` 만)과 앞 14 바이트가 겹치는 구분자 `a×14 b` — 자리마다
+/// 비교가 가장 길다 ② 상한을 넘는 10만 바이트 구분자 `a×100000 b` — 자르지 않으면 자리마다 10만 바이트를 비교해 이차가 된다.
+/// debug 빌드에서는 재기만 하고 판정하지 않는다.
+#[test]
+#[ignore = "release 빌드 성능 측정(위 명령)"]
+fn a_long_delimiter_keeps_the_split_linear() {
+    let body = "a".repeat(1 << 20);
+    for delimiter in ["a".repeat(14) + "b", "a".repeat(100_000) + "b"] {
+        let sql = format!("DELIMITER {delimiter}\n{body}");
+        let mut times = Vec::new();
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let statements = split(MY, &sql);
+            times.push(started.elapsed());
+            assert!(!statements.is_empty());
+        }
+        times.sort();
+        let median = times[times.len() / 2];
+        eprintln!(
+            "split of {} bytes with a {} byte DELIMITER: median {median:?}, all {times:?}",
+            sql.len(),
+            delimiter.len()
+        );
+        if !cfg!(debug_assertions) {
+            assert!(median < std::time::Duration::from_millis(50), "{median:?}");
+        }
     }
 }

@@ -12,6 +12,8 @@ pw-rpc = { path = "../pw-rpc" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 specta = { workspace = true, features = ["derive"] }
+# RPC 핸들러가 나누기를 블로킹 스레드에서 돌린다(`spawn_blocking`).
+tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
