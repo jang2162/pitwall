@@ -340,6 +340,21 @@ impl Pending {
         }
     }
 
+    /// git 디렉터리의 OS 이벤트 하나. 읽기(`Access` — inotify 는 `open` · 닫기도 낸다)는 바뀐 것이 아니라 버린다: 그러지 않으면
+    /// 다른 작업 트리의 `git add` 가 `config` · `refs/` 를 읽기만 해도 이 작업 트리의 ref · 상태가 바뀐 것이 되고, 그 알림에 창이
+    /// 다시 읽는 것이 또 이벤트가 된다(`pw_fs::watch` 도 같은 까닭으로 버린다).
+    fn event(&mut self, dirs: &Dirs, event: &notify::Event) {
+        if event.need_rescan() {
+            self.effect(Effect::Both);
+        }
+        if matches!(event.kind, notify::EventKind::Access(_)) {
+            return;
+        }
+        for path in &event.paths {
+            self.effect(classify::classify(dirs, path));
+        }
+    }
+
     fn effect(&mut self, effect: Effect) {
         match effect {
             Effect::None => {}
@@ -407,15 +422,7 @@ impl Worker {
 
     fn git_event(&mut self, event: notify::Result<notify::Event>) {
         match event {
-            Ok(event) => {
-                if event.need_rescan() {
-                    self.pending.effect(Effect::Both);
-                }
-                for path in &event.paths {
-                    let effect = classify::classify(&self.dirs, path);
-                    self.pending.effect(effect);
-                }
-            }
+            Ok(event) => self.pending.event(&self.dirs, &event),
             Err(e) => {
                 tracing::warn!(target: "pw_git", project = self.project_id, error = %e, "git directory watch error; reading everything again");
                 self.pending.effect(Effect::Both);
@@ -551,4 +558,47 @@ pub fn register(router: &mut Router, watch: GitWatch) {
             Ok(())
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use notify::event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind};
+    use notify::{Event, EventKind};
+
+    use super::*;
+
+    fn linked() -> Dirs {
+        Dirs {
+            git_dir: PathBuf::from("/r/.git/worktrees/wt"),
+            common_dir: PathBuf::from("/r/.git"),
+        }
+    }
+
+    /// 읽기는 아무것도 바꾸지 않는다 — inotify 는 다른 작업 트리의 `git add` 가 `config` · `refs/` 를 열기만 해도 낸다.
+    #[test]
+    fn reading_the_git_directory_changes_nothing() {
+        let dirs = linked();
+        let mut pending = Pending::default();
+        for rel in ["config", "refs", "refs/heads/main", "worktrees/wt/HEAD"] {
+            for kind in [
+                AccessKind::Open(AccessMode::Any),
+                AccessKind::Close(AccessMode::Read),
+                AccessKind::Read,
+            ] {
+                let event = Event::new(EventKind::Access(kind)).add_path(dirs.common_dir.join(rel));
+                pending.event(&dirs, &event);
+            }
+        }
+        assert!(pending.is_empty(), "{pending:?}");
+        // 쓰기는 그대로 받는다.
+        let written = Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Any)))
+            .add_path(dirs.common_dir.join("config"));
+        pending.event(&dirs, &written);
+        assert!(pending.refs && pending.status == Some(None));
+        let mut pending = Pending::default();
+        let created = Event::new(EventKind::Create(CreateKind::File))
+            .add_path(dirs.common_dir.join("refs/heads/x"));
+        pending.event(&dirs, &created);
+        assert!(pending.refs && pending.status.is_none());
+    }
 }
