@@ -10,6 +10,8 @@ pub(crate) mod code {
     pub const UNKNOWN_THREAD: u16 = 1094;
     pub const LOCK_WAIT_TIMEOUT: u16 = 1205;
     pub const OPTION_PREVENTS_STATEMENT: u16 = 1290;
+    /// 준비 문장(COM_STMT_PREPARE)으로 받지 않는 문장(MySQL 의 `USE` · `CREATE PROCEDURE` 등).
+    pub const UNSUPPORTED_PS: u16 = 1295;
     pub const QUERY_INTERRUPTED: u16 = 1317;
     pub const ACCOUNT_LOCKED: u16 = 1698;
     pub const READ_ONLY_TRANSACTION: u16 = 1792;

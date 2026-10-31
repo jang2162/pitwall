@@ -22,7 +22,7 @@ use support::*;
 async fn running(admin: &mut mysql_async::Conn, id: u64) -> bool {
     let count: Option<u64> = admin
         .exec_first(
-            "SELECT COUNT(*) FROM information_schema.processlist WHERE id = ? AND command = 'Query'",
+            "SELECT COUNT(*) FROM information_schema.processlist WHERE id = ? AND command IN ('Query', 'Execute')",
             (id,),
         )
         .await
@@ -691,4 +691,169 @@ async fn live_mysql_verify_ca_is_refused_before_connecting() {
         .unwrap();
     assert_eq!(connected.server.tls, TlsStatus::Unverified);
     connected.connection.close().await.unwrap();
+}
+
+/// 세션의 준비 · 닫기 횟수(`Com_stmt_prepare`, `Com_stmt_close`).
+async fn statement_counters(conn: &mut dyn SqlConnection) -> (u64, u64) {
+    let rows = rows(
+        conn,
+        "SHOW SESSION STATUS WHERE Variable_name IN ('Com_stmt_prepare', 'Com_stmt_close')",
+        RiskGrade::Read,
+    )
+    .await;
+    let value = |name: &str| {
+        let row = rows
+            .iter()
+            .find(|r| r[0] == DbValue::Text(name.into()))
+            .unwrap();
+        match &row[1] {
+            DbValue::Text(v) => v.parse::<u64>().unwrap(),
+            other => panic!("{name} = {other:?}"),
+        }
+    };
+    (value("Com_stmt_prepare"), value("Com_stmt_close"))
+}
+
+/// 나뉜 문장 하나 = 서버 문장 하나: 한 번에 보낸 `SELECT 1; DROP TABLE t` 는 서버가 거절하고 `t` 가 남는다. 준비 문장으로 받지
+/// 않는 문장(MySQL 의 `CREATE PROCEDURE` · `USE`)은 그대로 돌고, 준비 문장은 문장마다 닫힌다(세션의 준비 · 닫기 수가 같다 — 준비에
+/// 실패한 문장도 준비 수에 들어가므로, 늘 준비되는 문장만 세는 구간에서 잰다).
+#[tokio::test]
+async fn live_mysql_one_send_is_one_server_statement() {
+    let table = unique("pw_live_keep");
+    let procedure = unique("pw_live_proc");
+    let mut admin = admin().await;
+    admin
+        .query_drop(format!("CREATE TABLE {table} (n INT)"))
+        .await
+        .unwrap();
+    let (mut conn, _) = open(SslMode::Disable).await;
+
+    for hidden in [
+        format!("SELECT 1; DROP TABLE {table}"),
+        format!("CREATE PROCEDURE {procedure}() SELECT 1; DROP TABLE {table}"),
+    ] {
+        let refused = conn
+            .execute(ExecuteRequest::new(hidden.clone(), RiskGrade::Read))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (refused.kind, refused.code.as_deref()),
+            (DbErrorKind::Server, Some("1064")),
+            "{hidden}: {refused}"
+        );
+    }
+    let kept: Option<u64> = admin
+        .query_first(format!("SELECT COUNT(*) FROM {table}"))
+        .await
+        .unwrap();
+    assert_eq!(kept, Some(0), "the hidden DROP never ran");
+
+    write(
+        conn.as_mut(),
+        &format!("CREATE PROCEDURE {procedure}() BEGIN SELECT 1 AS a; SELECT 2 AS b; END"),
+    )
+    .await;
+    let first = rows(
+        conn.as_mut(),
+        &format!("CALL {procedure}()"),
+        RiskGrade::Write,
+    )
+    .await;
+    assert_eq!(first, [vec![DbValue::int(1)]], "the first result set");
+    let database = spec(SslMode::Disable).database.unwrap();
+    write(conn.as_mut(), &format!("USE {database}")).await;
+    write(conn.as_mut(), &format!("DROP PROCEDURE {procedure}")).await;
+
+    let before = statement_counters(conn.as_mut()).await;
+    assert_eq!(
+        rows(conn.as_mut(), &numbers(3), RiskGrade::Read)
+            .await
+            .len(),
+        3
+    );
+    write(conn.as_mut(), &format!("INSERT INTO {table} VALUES (1)")).await;
+    let started = conn
+        .execute(ExecuteRequest::new(numbers(10), RiskGrade::Read))
+        .await
+        .unwrap();
+    assert!(started.end.is_none());
+    conn.discard_cursor().await.unwrap();
+    conn.columns(ObjectRef {
+        database: Some(database),
+        schema: None,
+        name: table.clone(),
+    })
+    .await
+    .unwrap();
+
+    // 앞 읽기는 자신의 준비를 세고 닫기를 세지 않았고, 뒤 읽기도 그렇다 — 그 사이 문장이 다 닫혔으면 두 차이가 같다.
+    let after = statement_counters(conn.as_mut()).await;
+    assert_eq!(
+        after.0 - before.0,
+        after.1 - before.1,
+        "prepared statements left open: before {before:?}, after {after:?}"
+    );
+    conn.close().await.unwrap();
+    admin
+        .query_drop(format!("DROP TABLE {table}"))
+        .await
+        .unwrap();
+}
+
+/// `LOAD DATA LOCAL INFILE` 은 사람 기기의 파일을 읽지 않고 거절된다(서버가 허용해도). 연결은 그대로다.
+#[tokio::test]
+async fn live_mysql_local_infile_is_refused_without_reading_the_file() {
+    let table = unique("pw_live_infile");
+    let file = std::env::temp_dir().join(format!("{table}.csv"));
+    std::fs::write(&file, "1\n2\n3\n").unwrap();
+    let mut admin = admin().await;
+    let was: Option<String> = admin
+        .query_first("SELECT @@GLOBAL.local_infile")
+        .await
+        .unwrap();
+    // MySQL 8.4 은 서버 쪽 기본이 꺼져 있어 클라이언트에 묻기도 전에 거절한다 — 클라이언트의 거절을 보려고 켠다.
+    admin
+        .query_drop("SET GLOBAL local_infile = 1")
+        .await
+        .unwrap();
+    admin
+        .query_drop(format!("CREATE TABLE {table} (n INT)"))
+        .await
+        .unwrap();
+    let (mut conn, _) = open(SslMode::Disable).await;
+    let sql = format!(
+        "LOAD DATA LOCAL INFILE '{}' INTO TABLE {table}",
+        file.display()
+    );
+    let refused = tokio::time::timeout(
+        Duration::from_secs(20),
+        conn.execute(ExecuteRequest::new(sql, RiskGrade::Write)),
+    )
+    .await
+    .expect("the refusal does not hang")
+    .unwrap_err();
+    admin
+        .query_drop(format!(
+            "SET GLOBAL local_infile = {}",
+            was.as_deref().unwrap_or("0")
+        ))
+        .await
+        .unwrap();
+    assert_eq!(refused.kind, DbErrorKind::Invalid, "{refused}");
+    assert!(refused.message.contains("LOCAL INFILE"), "{refused}");
+    let loaded: Option<u64> = admin
+        .query_first(format!("SELECT COUNT(*) FROM {table}"))
+        .await
+        .unwrap();
+    assert_eq!(loaded, Some(0), "no line of the file reached the server");
+    let usable = tokio::time::timeout(Duration::from_secs(20), scalar(conn.as_mut(), "SELECT 4"))
+        .await
+        .expect("the connection is still in step with the server");
+    assert_eq!(usable, DbValue::int(4));
+    conn.close().await.unwrap();
+    admin
+        .query_drop(format!("DROP TABLE {table}"))
+        .await
+        .unwrap();
+    std::fs::remove_file(file).unwrap();
 }

@@ -5,6 +5,7 @@
 //! - `conn`: SQL 갈래 — 결과 집합 스트리밍 커서, 등급을 따르는 커서 버리기, `KILL QUERY` 취소, 트랜잭션.
 //! - [`tls`]: `sslmode` → `SslOpts`. `allow` · `prefer` 의 「TLS 가 안 되면 다른 쪽」 은 다시 붙어서 한다(아래 「`sslmode`」).
 //! - `meta`: `information_schema` 메타데이터와 `SHOW CREATE TABLE`.
+//! - `infile`: `LOAD DATA LOCAL INFILE` 거절(사람 기기의 파일을 서버로 보내지 않는다).
 //! - `value`: 열 · 셀 · 바인드 값(결정 M3-D8).
 //!
 //! **`sslmode`**(libpq 뜻): `disable` 평문, `require` TLS · 검증 없음, `verify-full` 전부. `verify-ca` 는 받지 않는다(`tls` 머리
@@ -18,11 +19,13 @@
 
 mod conn;
 mod error;
+mod infile;
 mod meta;
 pub mod tls;
 mod value;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use mysql_async::prelude::Queryable;
@@ -75,7 +78,11 @@ impl MysqlDriver {
     }
 
     /// 계획대로 붙는다. 붙은 연결 · 그 설정 · TLS 로 붙었는지.
-    async fn open(&self, spec: &ConnectionSpec) -> DbResult<(Conn, Opts, bool)> {
+    async fn open(
+        &self,
+        spec: &ConnectionSpec,
+        infile_asked: &Arc<AtomicBool>,
+    ) -> DbResult<(Conn, Opts, bool)> {
         let plan = tls::plan(&spec.tls, &spec.target)?;
         let Target::Network {
             host,
@@ -100,7 +107,8 @@ impl MysqlDriver {
             .db_name(spec.database.clone())
             // `localhost` 에서 `@@socket` 으로 갈아타지 않는다 — TLS 와 `KILL` 연결이 같은 TCP 길을 쓴다.
             .prefer_socket(false)
-            .stmt_cache_size(0);
+            .stmt_cache_size(0)
+            .local_infile_handler(Some(infile::RefuseLocalInfile::new(infile_asked.clone())));
         match plan.attempt {
             TlsAttempt::Never => self.plain(base).await,
             TlsAttempt::Required => self.secure(base, spec, &plan).await,
@@ -195,7 +203,9 @@ impl DbDriver for MysqlDriver {
     fn connect(&self, spec: ConnectionSpec) -> BoxFuture<'_, DbResult<Connected>> {
         Box::pin(async move {
             let timeout = Duration::from_millis(u64::from(spec.connect_timeout_ms));
-            let (mut conn, opts, used_tls) = within(timeout, "connect", self.open(&spec)).await?;
+            let infile_asked = Arc::new(AtomicBool::new(false));
+            let (mut conn, opts, used_tls) =
+                within(timeout, "connect", self.open(&spec, &infile_asked)).await?;
             let version: Option<String> = conn
                 .query_first("SELECT VERSION()")
                 .await
@@ -203,7 +213,11 @@ impl DbDriver for MysqlDriver {
             let tls = tls::plan(&spec.tls, &spec.target)?.status(used_tls);
             let interrupter = Arc::new(Interrupter::new(opts, conn.id(), timeout));
             Ok(Connected {
-                connection: DbConnection::Sql(Box::new(MysqlConnection::new(conn, interrupter))),
+                connection: DbConnection::Sql(Box::new(MysqlConnection::new(
+                    conn,
+                    interrupter,
+                    infile_asked,
+                ))),
                 server: ServerInfo { version, tls },
             })
         })

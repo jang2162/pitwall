@@ -1,8 +1,14 @@
 //! SQL 갈래: 연결 하나, 결과 집합 커서, 커서 버리기, 취소, 트랜잭션.
 //!
-//! **커서**는 결과 집합 스트리밍이다(`query_iter` · 문장 캐시 0). `mysql_async` 는 읽다 만 결과 집합을 연결 안에 「남은 결과」 로
-//! 들고 있으므로, `fetch` 마다 그 연결로 `QueryResult` 를 다시 만들어 credit 만큼만 행을 읽는다 — 읽지 않은 행은 서버 쪽에서
-//! 소켓이 막혀 기다린다. 바인드 값이 있으면 바이너리 프로토콜(`exec_iter`)이다.
+//! **문장 하나 = 서버 문장 하나**(파이프라인의 문장 나누기가 서버 설정과 어긋나 틀리게 나눠도 숨은 둘째 문장이 위험 분류를 비켜 가지
+//! 못하게): `mysql_async` 는 능력 `CLIENT_MULTI_STATEMENTS` 를 늘 알리고 끄는 설정이 없어(세션의 `COM_SET_OPTION` 도 보내는 길이
+//! 없다), 사람의 문장은 먼저 준비 문장(COM_STMT_PREPARE)으로 보낸다 — 서버는 준비할 글을 문장 하나로 읽고, 뒤에 문장이 더 있으면
+//! 1064 로 거절한다(첫 문장이 `CREATE PROCEDURE` 여도). 서버가 준비 문장으로 받지 않는 문장(1295 — MySQL 의 `USE` ·
+//! `CREATE PROCEDURE` 등)만 텍스트 프로토콜로 보낸다: 1295 는 글 전체를 문장 하나로 읽은 뒤에 나오므로 그 글은 문장 하나다
+//! (MySQL 8.4 · MariaDB 11.8 에서 확인). 문장 캐시는 0 이고 `mysql_async` 는 그때 준비 문장을 닫지 않으므로 문장이 끝나면 직접 닫는다.
+//!
+//! **커서**는 결과 집합 스트리밍이다. `mysql_async` 는 읽다 만 결과 집합을 연결 안에 「남은 결과」 로 들고 있으므로, `fetch` 마다
+//! 그 연결로 `QueryResult` 를 다시 만들어 credit 만큼만 행을 읽는다 — 읽지 않은 행은 서버 쪽에서 소켓이 막혀 기다린다.
 //!
 //! **커서 버리기**(14-m3-plan.md M3-07): 결과 집합은 서버가 다 보낼 때까지 연결을 잡는다. 그 커서를 연 요청의 등급이 조회면 다른
 //! 연결로 `KILL QUERY <id>` 를 보내 문장만 끝내고(트랜잭션은 그대로) 남은 패킷을 받아 버린다. 조회가 아닌 문장(MariaDB `RETURNING`
@@ -14,12 +20,15 @@
 //! 죽이지 않게, 인터럽트를 받은 문장 뒤에는 그 `KILL` 이 끝나기를 기다린다. 쉬는 연결에 닿은 `KILL QUERY` 는 다음 문장에 남지
 //! 않는다(MySQL 8.4 · MariaDB 11.8 에서 확인).
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use mysql_async::consts::StatusFlags;
 use mysql_async::prelude::Queryable;
-use mysql_async::{BinaryProtocol, Column, Conn, Opts, Params, QueryResult, TextProtocol};
+use mysql_async::{
+    BinaryProtocol, Column, Conn, Opts, Params, QueryResult, Statement as Prepared, TextProtocol,
+};
 use pw_db_driver::budget::within;
 use pw_db_driver::{BoxFuture, DbResult, Interrupt, SqlConnection};
 use pw_db_types::{
@@ -29,6 +38,7 @@ use pw_db_types::{
 };
 
 use crate::error::{Phase, code, map, server_code};
+use crate::infile::{self, RefuseLocalInfile};
 use crate::{meta, value};
 
 /// 교착으로 서버가 트랜잭션 전체를 되돌렸다.
@@ -104,7 +114,8 @@ impl Interrupt for Interrupter {
 
 /// 연 커서.
 struct Cursor {
-    binary: bool,
+    /// 준비 문장으로 보냈으면 그 문장(바이너리 프로토콜). 끝나면 닫는다. 텍스트 프로토콜이면 `None`.
+    prepared: Option<Prepared>,
     columns: Arc<[Column]>,
     grade: RiskGrade,
     cell_limit: CellLimit,
@@ -115,6 +126,8 @@ pub(crate) struct MysqlConnection {
     cursor: Option<Cursor>,
     interrupter: Arc<Interrupter>,
     state: TransactionState,
+    /// 서버가 `LOCAL INFILE` 로 파일을 청했다는 표지(`infile` 머리 주석).
+    infile_asked: Arc<AtomicBool>,
 }
 
 async fn next_row(conn: &mut Conn, binary: bool) -> mysql_async::Result<Option<mysql_async::Row>> {
@@ -134,17 +147,44 @@ async fn drain(conn: &mut Conn, binary: bool) -> mysql_async::Result<()> {
     }
 }
 
+/// 사람의 글을 서버 문장 하나로 준비한다(머리 주석의 「문장 하나」). 서버가 준비 문장으로 받지 않는 문장(1295)이면 `None` — 그때만
+/// 텍스트 프로토콜로 보낸다.
+pub(crate) async fn prepare(conn: &mut Conn, sql: &str) -> mysql_async::Result<Option<Prepared>> {
+    match conn.prep(sql).await {
+        Ok(prepared) => Ok(Some(prepared)),
+        Err(e) if server_code(&e) == Some(code::UNSUPPORTED_PS) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// 결과 첫 줄의 첫 열(실행 계획). 사람의 글이 들어가므로 [`prepare`] 를 지난다.
+async fn first_text(conn: &mut Conn, sql: String) -> mysql_async::Result<Option<String>> {
+    match prepare(conn, &sql).await? {
+        Some(prepared) => {
+            let first = conn.exec_first(&prepared, ()).await;
+            conn.close(prepared).await?;
+            first
+        }
+        None => conn.query_first(sql).await,
+    }
+}
+
 fn no_cursor() -> DbError {
     DbError::new(DbErrorKind::Invalid, "there is no open cursor")
 }
 
 impl MysqlConnection {
-    pub(crate) fn new(conn: Conn, interrupter: Arc<Interrupter>) -> Self {
+    pub(crate) fn new(
+        conn: Conn,
+        interrupter: Arc<Interrupter>,
+        infile_asked: Arc<AtomicBool>,
+    ) -> Self {
         let mut this = Self {
             conn: Some(conn),
             cursor: None,
             interrupter,
             state: TransactionState::Idle,
+            infile_asked,
         };
         this.refresh_state();
         this
@@ -198,6 +238,22 @@ impl MysqlConnection {
         interrupted
     }
 
+    /// 방금 끝난 문장에 서버가 로컬 파일을 청했으면 거절 오류(파일은 보내지 않았다 — `infile` 머리 주석).
+    fn refused_infile(&self) -> DbResult<()> {
+        if RefuseLocalInfile::asked(&self.infile_asked) {
+            Err(DbError::new(DbErrorKind::Invalid, infile::REFUSED))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// 준비 문장을 닫는다. 남은 결과를 먼저 받아 낸 뒤에 부른다. 닫지 못하면 연결이 깨진 것이고 다음 호출이 그 오류를 낸다.
+    async fn release(&mut self, prepared: Option<Prepared>) {
+        if let Some(prepared) = prepared {
+            let _ = self.conn().close(prepared).await;
+        }
+    }
+
     /// 커서를 버린다(머리 주석의 「커서 버리기」).
     async fn discard(&mut self) -> DbResult<()> {
         let Some(cursor) = self.cursor.take() else {
@@ -207,8 +263,10 @@ impl MysqlConnection {
             // 보내지 못했으면 남은 행을 다 읽어 버린다 — 느리지만 연결은 그대로다.
             let _ = self.interrupter.interrupt().await;
         }
-        let drained = drain(self.conn(), cursor.binary).await;
+        let drained = drain(self.conn(), cursor.prepared.is_some()).await;
+        self.release(cursor.prepared).await;
         self.end_statement(drained.as_ref().err()).await;
+        self.refused_infile()?;
         match drained {
             Ok(()) => Ok(()),
             Err(e)
@@ -252,22 +310,47 @@ impl MysqlConnection {
             .iter()
             .map(value::param)
             .collect::<DbResult<Vec<_>>>()?;
-        let binary = !params.is_empty();
         self.begin_statement();
+        let prepared = match prepare(self.conn(), &request.sql).await {
+            Ok(prepared) => prepared,
+            Err(e) => {
+                self.end_statement(Some(&e)).await;
+                return Err(map(e, Phase::Run));
+            }
+        };
+        if prepared.is_none() && !params.is_empty() {
+            self.end_statement(None).await;
+            return Err(DbError::new(
+                DbErrorKind::Invalid,
+                "the server does not prepare this statement, so it cannot take bind values",
+            ));
+        }
+        let binary = prepared.is_some();
         let conn = self.conn();
-        let started = if binary {
-            conn.exec_iter(request.sql.as_str(), Params::Positional(params))
+        let started = match &prepared {
+            Some(prepared) => {
+                let params = if params.is_empty() {
+                    Params::Empty
+                } else {
+                    Params::Positional(params)
+                };
+                conn.exec_iter(prepared, params)
+                    .await
+                    .map(|result| (result.columns(), result.affected_rows()))
+            }
+            None => conn
+                .query_iter(request.sql.as_str())
                 .await
-                .map(|result| (result.columns(), result.affected_rows()))
-        } else {
-            conn.query_iter(request.sql.as_str())
-                .await
-                .map(|result| (result.columns(), result.affected_rows()))
+                .map(|result| (result.columns(), result.affected_rows())),
         };
         let (columns, affected) = match started {
             Ok(started) => started,
             Err(e) => {
+                // 거절된 LOCAL INFILE 처럼 오류 뒤에도 빈 결과가 남을 수 있다 — 받아 낸 뒤 문장을 닫는다.
+                let _ = drain(self.conn(), binary).await;
+                self.release(prepared).await;
                 self.end_statement(Some(&e)).await;
+                self.refused_infile()?;
                 return Err(map(e, Phase::Run));
             }
         };
@@ -275,7 +358,7 @@ impl MysqlConnection {
             Some(columns) => {
                 let metas = columns.iter().map(value::column_meta).collect();
                 self.cursor = Some(Cursor {
-                    binary,
+                    prepared,
                     columns,
                     grade: request.grade,
                     cell_limit: request.cell_limit,
@@ -288,7 +371,9 @@ impl MysqlConnection {
             None => {
                 // 행이 없는 문장. 뒤따르는 결과(프로시저의 마지막 OK 등)까지 받아 낸다.
                 let drained = drain(self.conn(), binary).await;
+                self.release(prepared).await;
                 let interrupted = self.end_statement(drained.as_ref().err()).await;
+                self.refused_infile()?;
                 drained.map_err(|e| map(e, Phase::Run))?;
                 if interrupted && request.grade.is_read() {
                     return Err(DbError::cancelled());
@@ -306,7 +391,7 @@ impl MysqlConnection {
     async fn read(&mut self, limit: FetchLimit) -> DbResult<RowBatch> {
         let cursor = self.cursor.as_ref().ok_or_else(no_cursor)?;
         let (binary, columns, cell_limit, grade) = (
-            cursor.binary,
+            cursor.prepared.is_some(),
             cursor.columns.clone(),
             cursor.cell_limit,
             cursor.grade,
@@ -327,9 +412,11 @@ impl MysqlConnection {
                     rows.push(cells);
                 }
                 Ok(None) => {
-                    self.cursor = None;
+                    let prepared = self.cursor.take().and_then(|c| c.prepared);
                     let drained = drain(self.conn(), binary).await;
+                    self.release(prepared).await;
                     let interrupted = self.end_statement(drained.as_ref().err()).await;
+                    self.refused_infile()?;
                     drained.map_err(|e| map(e, Phase::Run))?;
                     if interrupted && grade.is_read() {
                         return Err(DbError::cancelled());
@@ -342,7 +429,8 @@ impl MysqlConnection {
                     });
                 }
                 Err(e) => {
-                    self.cursor = None;
+                    let prepared = self.cursor.take().and_then(|c| c.prepared);
+                    self.release(prepared).await;
                     self.end_statement(Some(&e)).await;
                     return Err(map(e, Phase::Run));
                 }
@@ -419,9 +507,7 @@ impl SqlConnection for MysqlConnection {
     fn explain(&mut self, sql: String) -> BoxFuture<'_, DbResult<ExplainPlan>> {
         Box::pin(async move {
             let text = self
-                .whole(|conn| {
-                    Box::pin(conn.query_first::<String, _>(format!("EXPLAIN FORMAT=JSON {sql}")))
-                })
+                .whole(|conn| Box::pin(first_text(conn, format!("EXPLAIN FORMAT=JSON {sql}"))))
                 .await?
                 .ok_or_else(|| DbError::new(DbErrorKind::Server, "EXPLAIN returned no plan"))?;
             Ok(ExplainPlan {

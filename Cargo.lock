@@ -5176,6 +5176,8 @@ dependencies = [
 name = "pw-db-driver-mysql"
 version = "0.0.0"
 dependencies = [
+ "bytes",
+ "futures-core",
  "mysql_async",
  "pw-db-driver",
  "pw-db-types",

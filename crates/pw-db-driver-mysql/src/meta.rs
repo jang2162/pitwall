@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use mysql_async::prelude::Queryable;
+use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{Conn, Params, Value};
 use pw_db_types::{
     ColumnInfo, DatabaseInfo, DbError, DbErrorKind, ForeignKeyInfo, IndexInfo, ObjectInfo,
@@ -25,6 +25,18 @@ pub(crate) fn page_size(limit: u32) -> Result<u32, DbError> {
             "the page size must be between 1 and 500",
         ))
     }
+}
+
+/// 준비 · 실행 · 닫기. 문장 캐시가 0 인 `mysql_async` 는 준비 문장을 닫지 않는다(`conn` 머리 주석).
+async fn exec_all<T: FromRow + Send + 'static>(
+    conn: &mut Conn,
+    sql: &str,
+    params: Params,
+) -> mysql_async::Result<Vec<T>> {
+    let prepared = conn.prep(sql).await?;
+    let rows = conn.exec(&prepared, params).await;
+    conn.close(prepared).await?;
+    rows
 }
 
 fn text(value: Option<String>) -> Value {
@@ -120,7 +132,7 @@ pub(crate) async fn objects(
         Value::UInt(u64::from(limit) + 1),
     ];
     let mut rows: Vec<(String, Option<String>)> =
-        conn.exec(sql, Params::Positional(params)).await?;
+        exec_all(conn, &sql, Params::Positional(params)).await?;
     let more = rows.len() > limit as usize;
     rows.truncate(limit as usize);
     let next_cursor = if more {
@@ -152,8 +164,8 @@ pub(crate) async fn columns(
     conn: &mut Conn,
     object: ObjectRef,
 ) -> mysql_async::Result<Vec<ColumnInfo>> {
-    let rows: Vec<ColumnRow> = conn
-        .exec(
+    let rows: Vec<ColumnRow> = exec_all(
+            conn,
             "SELECT column_name, column_type, is_nullable, column_default, column_comment \
              FROM information_schema.columns WHERE table_schema = COALESCE(?, DATABASE()) AND table_name = ? \
              ORDER BY ordinal_position",
@@ -176,14 +188,14 @@ pub(crate) async fn indexes(
     conn: &mut Conn,
     object: ObjectRef,
 ) -> mysql_async::Result<Vec<IndexInfo>> {
-    let rows: Vec<(String, Option<String>, i64)> = conn
-        .exec(
-            "SELECT index_name, column_name, non_unique FROM information_schema.statistics \
+    let rows: Vec<(String, Option<String>, i64)> = exec_all(
+        conn,
+        "SELECT index_name, column_name, non_unique FROM information_schema.statistics \
              WHERE table_schema = COALESCE(?, DATABASE()) AND table_name = ? \
              ORDER BY index_name <> 'PRIMARY', CAST(index_name AS BINARY), seq_in_index",
-            object_params(object),
-        )
-        .await?;
+        object_params(object),
+    )
+    .await?;
     let mut order = Vec::new();
     let mut by_name: BTreeMap<String, IndexInfo> = BTreeMap::new();
     for (name, column, non_unique) in rows {
@@ -213,8 +225,8 @@ pub(crate) async fn foreign_keys(
     conn: &mut Conn,
     object: ObjectRef,
 ) -> mysql_async::Result<Vec<ForeignKeyInfo>> {
-    let rows: Vec<(String, String, String, String, String)> = conn
-        .exec(
+    let rows: Vec<(String, String, String, String, String)> = exec_all(
+            conn,
             "SELECT constraint_name, column_name, referenced_table_schema, referenced_table_name, \
              referenced_column_name FROM information_schema.key_column_usage \
              WHERE table_schema = COALESCE(?, DATABASE()) AND table_name = ? AND referenced_table_name IS NOT NULL \

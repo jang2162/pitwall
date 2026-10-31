@@ -19,6 +19,9 @@ rustls = { version = "0.23.46", default-features = false, features = ["std"] }
 # OS 신뢰 저장소의 루트(결정 M3-D10).
 rustls-native-certs = "0.8.5"
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
+# LOCAL INFILE 거절 처리기의 파일 내용 스트림(`infile` — mysql_async 의 처리기 타입이 쓰는 것과 같은 크레이트).
+bytes = "1.12.1"
+futures-core = "0.3.34"
 
 [dev-dependencies]
 pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
