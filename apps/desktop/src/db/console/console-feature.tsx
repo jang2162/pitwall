@@ -13,9 +13,10 @@
 import type { Action } from "@pitwall/keymap";
 import type { DbUnattendedRollback } from "@pitwall/rpc-client";
 import type { DockviewApi } from "dockview-react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { EditorWorkspace } from "../../editor/editor-workspace";
+import { useI18n } from "../../i18n/i18n-provider";
 import { useRegisterActions } from "../../keymap/keymap-provider";
 import { useNotify } from "../../notifications/notifications";
 import { useHost } from "../../rpc/host";
@@ -85,6 +86,8 @@ export function consoleActions(deps: {
 }
 
 const SEEN_KEY = "pitwall.db.unattendedSeen";
+/** UI 언어(`i18n.get`)를 기다리는 시간 — 넘으면 지금 언어로 알린다. */
+const LANGUAGE_WAIT_MS = 2000;
 
 function seenUntil(projectId: string): number {
   try {
@@ -150,9 +153,17 @@ export function DbConsoleFeature({
   );
   useRegisterActions(actions);
 
-  // 창이 열릴 때 한 번: 보는 사람이 없어 롤백된 트랜잭션.
+  // 창이 열릴 때 한 번: 보는 사람이 없어 롤백된 트랜잭션. UI 언어가 정해진 뒤에 알린다(응답 전의 번들 언어로 알리지 않게) — 언어를
+  // 받지 못하면 `LANGUAGE_WAIT_MS` 뒤에 그대로 알린다.
+  const languageReady = useI18n().setting !== undefined;
+  const [waited, setWaited] = useState(false);
   useEffect(() => {
-    if (!client) return;
+    const timer = setTimeout(() => setWaited(true), LANGUAGE_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  const speak = languageReady || waited;
+  useEffect(() => {
+    if (!client || !speak) return;
     let live = true;
     client.call("db.session.unattendedRollbacks", { projectId }).then(
       (records: DbUnattendedRollback[]) => {
@@ -177,7 +188,7 @@ export function DbConsoleFeature({
     return () => {
       live = false;
     };
-  }, [client, projectId]);
+  }, [client, projectId, speak]);
 
   return prompt.element ?? null;
 }

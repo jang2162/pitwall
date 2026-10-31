@@ -23,6 +23,7 @@ import type {
 import type { DockviewApi } from "dockview-react";
 import { forwardRef, useImperativeHandle } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { toast } from "sonner";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import defaultTheme from "../../../../../extensions/theme-default/themes/default.json";
@@ -63,6 +64,8 @@ const host = vi.hoisted(() => ({
   plan: { format: "json", text: "[]" } as { format: string; text: string },
   /** 마지막 실행의 id(`accepted`). */
   execution: "",
+  /** `db.session.unattendedRollbacks` 의 답. */
+  unattended: [] as unknown[],
 }));
 
 const glide = vi.hoisted(() => ({ rows: [] as number[] }));
@@ -202,7 +205,11 @@ vi.mock("../../tauri-transport", async () => {
               trusted: true,
             });
           case "db.session.unattendedRollbacks":
-            return reply([]);
+            return reply(host.unattended);
+          case "db.schema.schemas":
+            return reply({ items: [{ name: "public" }, { name: "ledger" }], nextCursor: null });
+          case "db.schema.databases":
+            return reply({ items: [{ name: "app" }], nextCursor: null });
           case "db.session.resume":
             return reply(host.resumed);
           case "db.session.open":
@@ -361,6 +368,7 @@ beforeEach(() => {
   host.grade = () => "read";
   host.plan = { format: "json", text: "[]" };
   host.execution = "";
+  host.unattended = [];
   glide.rows = [];
 });
 
@@ -739,4 +747,88 @@ it("shows the query plan as an indented tree of nodes, cost and rows", async () 
   ]);
   expect(items[0]!.textContent).toContain("0..12.5");
   expect(items[0]!.textContent).toContain("40");
+});
+
+it("reopens the session with the chosen schema and keeps the choice in the tab", async () => {
+  await mount();
+  await openConsole();
+  await connect();
+  const schema = q<HTMLSelectElement>("select[aria-label='스키마']")!;
+  await act(async () => schema.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  await settle();
+  await act(async () => {
+    schema.value = "ledger";
+    schema.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await settle();
+  expect(callsOf("db.schema.schemas")[0]!.params).toMatchObject({
+    projectId: "p1",
+    connectionId: "dev",
+  });
+  expect(callsOf("db.session.close").map((c) => c.params)).toEqual([{ sessionId: "s1" }]);
+  expect(callsOf("db.session.open")[1]!.params).toMatchObject({
+    connectionId: "dev",
+    schema: "ledger",
+    tabId: SPEC.tabId,
+  });
+  expect(tabParams(consoleTab()!).db).toMatchObject({ kind: "console", schema: "ledger" });
+  // 트랜잭션이 열려 있으면 고르지 못한다.
+  await sessionChanged({ kind: "inTransaction", since: Date.now() });
+  expect(q<HTMLSelectElement>("select[aria-label='스키마']")!.disabled).toBe(true);
+  expect(q<HTMLSelectElement>("[data-testid=db-console-connection]")!.disabled).toBe(true);
+});
+
+it("opens a new console for the last connected connection with ⇧⌘L", async () => {
+  await mount();
+  await openConsole();
+  await connect();
+  await act(async () => {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        code: "KeyL",
+        key: "l",
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  await settle();
+  const consoles = dock!.panels.filter((p) => tabParams(p).db?.kind === "console");
+  expect(consoles).toHaveLength(2);
+  const fresh = tabParams(consoles[1]!).db!;
+  expect(fresh).toMatchObject({ kind: "console", connectionId: "dev" });
+  expect(fresh.tabId).not.toBe(SPEC.tabId);
+  // 새 콘솔도 사람이 누를 때까지 연결하지 않는다.
+  expect(callsOf("db.session.open")).toHaveLength(1);
+});
+
+it("tells once about transactions Host rolled back while no one was attached", async () => {
+  host.unattended = [
+    {
+      connectionId: "dev",
+      name: "dev db",
+      tabId: "t1",
+      since: 1_700_000_000_000,
+      rolledBackAt: 1_700_000_600_000,
+      keptMinutes: 10,
+      rollbackError: null,
+    },
+  ];
+  await mount();
+  const toasts = () =>
+    [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent);
+  await vi.waitFor(() =>
+    expect(toasts()).toEqual([expect.stringContaining("보는 사람이 없어 롤백한 트랜잭션")]),
+  );
+  expect(toasts()[0]).toContain("dev db");
+  expect(toasts()[0]).toContain("10분 기다린 뒤 롤백했다");
+  // 토스트는 sonner 의 전역 상태라 창을 다시 열어도 남는다 — 걷은 뒤 다시 연다.
+  await act(async () => void toast.dismiss());
+  await settle();
+  await restart();
+  await vi.waitFor(() => expect(callsOf("db.session.unattendedRollbacks")).toHaveLength(2));
+  await act(async () => new Promise((r) => setTimeout(r, 100)));
+  expect(toasts()).toEqual([]);
 });
