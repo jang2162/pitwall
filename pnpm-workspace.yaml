@@ -2,3 +2,11 @@ packages:
   - "packages/*"
   - "apps/*"
   - "extensions/*"
+
+# Glide Data Grid(apps/desktop, M3-16)의 필수 peer 중 markdown · 이미지 칸만 쓰는 둘은 설치하지 않는다 — 앱의 vite 설정이 던지는
+# 자리(apps/desktop/src/db/grid/glide-stubs/)로 바꿔 번들에서 뺐다(결과 그리드는 DB 값을 늘 글자 칸으로 그린다). 그 둘의 「peer 없음」
+# 경고만 끈다.
+peerDependencyRules:
+  ignoreMissing:
+    - marked
+    - react-responsive-carousel

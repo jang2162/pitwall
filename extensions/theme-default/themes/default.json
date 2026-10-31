@@ -112,7 +112,17 @@
       "db.tag.green": "#067315",
       "db.tag.blue": "#1f5fc6",
       "db.tag.purple": "#7b3fc4",
-      "db.tag.gray": "#5f6369"
+      "db.tag.gray": "#5f6369",
+      "grid.background": "#ffffff",
+      "grid.foreground": "#080808",
+      "grid.null": "#8c8c8c",
+      "grid.headerBackground": "#f7f8fa",
+      "grid.headerForeground": "#1e1f22",
+      "grid.headerType": "#6c707e",
+      "grid.headerHover": "#dfe1e5",
+      "grid.border": "#ebecf0",
+      "grid.selection": "#d5e1fb",
+      "grid.accent": "#3574f0"
     },
     "dark": {
       "ui.background": "#1e1f22",
@@ -224,7 +234,17 @@
       "db.tag.green": "#61c686",
       "db.tag.blue": "#8bb3f9",
       "db.tag.purple": "#c3a3f5",
-      "db.tag.gray": "#afb2b8"
+      "db.tag.gray": "#afb2b8",
+      "grid.background": "#1e1f22",
+      "grid.foreground": "#bcbec4",
+      "grid.null": "#6f737a",
+      "grid.headerBackground": "#2b2d30",
+      "grid.headerForeground": "#dfe1e5",
+      "grid.headerType": "#868a91",
+      "grid.headerHover": "#393b40",
+      "grid.border": "#393b40",
+      "grid.selection": "#2e436e",
+      "grid.accent": "#3574f0"
     }
   }
 }

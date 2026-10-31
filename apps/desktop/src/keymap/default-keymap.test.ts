@@ -97,12 +97,15 @@ describe("default keymap overlaps", () => {
         ["Delete", ["project.removeFromList []", "fileTree.delete [fileTree]"]],
         ["Ctrl+Enter", ["project.create []", "git.commit.run [activeToolWindow == 'commit']"]],
         ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
+        // 터미널의 복사와 결과 그리드의 다른 형식으로 복사(M3-16) — 포커스 범위가 갈린다.
+        ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
       ],
       linux: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
         ["Delete", ["project.removeFromList []", "fileTree.delete [fileTree]"]],
         ["Ctrl+Enter", ["project.create []", "git.commit.run [activeToolWindow == 'commit']"]],
         ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
+        ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
       ],
     });
   });

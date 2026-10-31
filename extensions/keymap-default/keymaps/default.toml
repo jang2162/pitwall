@@ -484,3 +484,14 @@ action = "git.showFileHistory"
 mac = "ctrl+alt+h"
 win = "ctrl+alt+h"
 linux = "ctrl+alt+h"
+
+# DB(10-ui §4.2 「DB」, 14-m3-plan 「공유 부품의 주인」 — 행마다 이 묶음 아래에 더한다). 프로젝트 창에만 등록된다.
+# 결과 그리드의 다른 형식으로 복사(M3-16, src/db/grid/db-grid-feature.tsx): 그리드에 포커스가 있을 때만. Win/Linux 의 Ctrl+Shift+C 는
+# 터미널의 복사(`terminalFocus`)와 범위가 갈린다. ⌘C(TSV)는 액션이 아니라 그리드의 copy 이벤트다.
+
+[[bindings]]
+action = "db.grid.copyAs"
+mac = "cmd+shift+c"
+win = "ctrl+shift+c"
+linux = "ctrl+shift+c"
+when = "dbGridFocus"

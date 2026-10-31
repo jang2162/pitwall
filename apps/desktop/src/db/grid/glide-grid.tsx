@@ -1,0 +1,307 @@
+// Glide Data Grid 감싸개(M3-16, 10-ui.md 「UI 스택」 · 결정 M3-D7). **Glide 를 import 하는 곳은 이 파일 하나다** — 판을 바꾸거나
+// 갈아 끼울 때 여기만 고친다(메인 판정, 2026-10-31). 판은 6.0.4-alpha24 로 고정했다(안정판 6.0.3 은 React 19 peer 밖이고 전이
+// 의존성에 CC-BY-4.0 이 든다 — 10-ui.md 「UI 스택」 의 DB 그리드 행 비고).
+//
+// - 행은 `ResultBuffer`(React 상태 밖)에서 화면 범위만 읽는다. 버퍼가 바뀌면 행 수만 상태로 올리고, 정렬 · 필터로 뷰가 바뀌면
+//   셀 함수를 새로 만들어 다시 칠한다.
+// - **셀은 늘 글자(`Text`) 칸이다.** DB 값은 신뢰할 수 없는 글이라 HTML 로 그리는 칸(markdown · uri · image)을 쓰지 않고,
+//   오버레이 편집기(그 지연 청크에 marked · 이미지 캐러셀이 있다)도 열지 않는다(`allowOverlay: false`).
+// - 열 머리: 이름(굵게) · 타입(흐리게) · 정렬 화살표를 직접 그린다. 머리 클릭은 정렬(오름 → 내림 → 없음), 드래그는 순서,
+//   경계 더블클릭은 화면에 보이는 행으로 너비 맞춤(Glide 의 `getCellsForSelection` 측정).
+// - 고르기: 드래그 · ⇧+클릭(사각형), 행 번호 칸(행), 열 머리 ⌘+클릭(열). ⌘C 는 `copy` 이벤트에서 TSV 를 쓴다(Glide 의 복사는
+//   끈다 — 글은 copy.ts 가 정한다).
+// - 색: `grid.*` 토큰(grid-theme.ts). 테마 · 외관이 바뀌면 다시 칠한다.
+
+import "@glideapps/glide-data-grid/dist/index.css";
+
+import {
+  CompactSelection,
+  DataEditor,
+  type DataEditorRef,
+  type DrawHeaderCallback,
+  type GridCell,
+  GridCellKind,
+  type GridColumn,
+  type GridSelection,
+  type Item,
+  type Theme,
+} from "@glideapps/glide-data-grid";
+import type { ColumnMeta, DbValue } from "@pitwall/rpc-client";
+import {
+  type ClipboardEvent,
+  forwardRef,
+  useCallback,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+
+import { toTsv } from "./copy";
+import { type GridColors, glideTheme } from "./grid-theme";
+import type { ResultBuffer, SortSpec } from "./result-buffer";
+import { EMPTY_PICK, type GridPick, isEmptyPick, pickBlock } from "./selection";
+import { displayText, isNumeric } from "./values";
+
+export interface ResultGridHandle {
+  /** 지금 고른 셀(없으면 빈 덩어리). */
+  pick(): GridPick;
+  /** 보이는 열 순서(보이는 → 원래 열 번호). */
+  order(): readonly number[];
+  focus(): void;
+}
+
+export interface ResultGridProps {
+  buffer: ResultBuffer;
+  colors: GridColors;
+  /** 셀을 더블클릭 · ↩ 했다(원래 열 번호, 보이는 행 번호). */
+  onActivate?: (cell: { row: number; column: number }) => void;
+  /** 지금 칸(커서)이 바뀌었다. */
+  onCursor?: (cell: { row: number; column: number } | undefined) => void;
+  /** 그리드에 포커스가 들어왔다. */
+  onFocus?: () => void;
+}
+
+const HEADER_HEIGHT = 28;
+const ROW_HEIGHT = 24;
+
+function initialWidth(name: string, type: string): number {
+  return Math.max(64, Math.min(320, 7.5 * (name.length + type.length) + 40));
+}
+
+function useBufferVersion(buffer: ResultBuffer): number {
+  return useSyncExternalStore(
+    useCallback((onChange) => buffer.subscribe(onChange), [buffer]),
+    () => buffer.version,
+  );
+}
+
+function toPick(s: GridSelection): GridPick {
+  const rects = s.current ? [s.current.range, ...s.current.rangeStack] : [];
+  return {
+    rects: rects.filter((r) => r.width > 0 && r.height > 0),
+    rows: s.rows.toArray(),
+    columns: s.columns.toArray(),
+  };
+}
+
+const EMPTY_SELECTION: GridSelection = {
+  columns: CompactSelection.empty(),
+  rows: CompactSelection.empty(),
+};
+
+export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(function ResultGrid(
+  { buffer, colors, onActivate, onCursor, onFocus },
+  ref,
+) {
+  const version = useBufferVersion(buffer);
+  const meta = buffer.columns;
+  // 열 순서 · 너비 · 고르기는 그 열 목록의 것이다. 결과(버퍼)나 열이 바뀌면 그 렌더에서 곧바로 처음 값을 쓴다 — 효과로 나중에
+  // 되돌리면 그 사이 한 번의 렌더가 옛 순서로 새 열(아직 없을 수도 있다)을 읽는다.
+  const [layout, setLayout] = useState<{
+    meta: readonly ColumnMeta[];
+    order: number[];
+    widths: Record<number, number>;
+    selection: GridSelection;
+  }>(() => ({ meta, order: meta.map((_, i) => i), widths: {}, selection: EMPTY_SELECTION }));
+  const current =
+    layout.meta === meta
+      ? layout
+      : { meta, order: meta.map((_, i) => i), widths: {}, selection: EMPTY_SELECTION };
+  if (current !== layout) setLayout(current);
+  const { order, widths, selection } = current;
+  const update = useCallback(
+    (change: (l: typeof layout) => Partial<typeof layout>) =>
+      setLayout((l) => (l.meta === buffer.columns ? { ...l, ...change(l) } : l)),
+    [buffer],
+  );
+  const editor = useRef<DataEditorRef>(null);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      pick: () => toPick(selection),
+      order: () => order,
+      focus: () => editor.current?.focus(),
+    }),
+    [selection, order],
+  );
+
+  const sort = buffer.sort;
+  const columns: GridColumn[] = useMemo(
+    () =>
+      order.flatMap((src) => {
+        const c = meta[src];
+        if (!c) return [];
+        return {
+          id: String(src),
+          title: c.name,
+          width: widths[src] ?? initialWidth(c.name, c.dbType),
+        };
+      }),
+    [order, meta, widths],
+  );
+
+  const viewVersion = buffer.viewVersion;
+  // 뷰(정렬 · 필터)가 바뀌면 함수가 바뀌어 Glide 가 다시 칠한다. 행이 붙기만 하면 새 행 번호라 그대로 둔다.
+  const getCellContent = useCallback(
+    ([col, row]: Item): GridCell => {
+      void viewVersion;
+      const src = order[col];
+      const value: DbValue | undefined = src === undefined ? undefined : buffer.row(row)?.[src];
+      if (value === undefined) {
+        return { kind: GridCellKind.Loading, allowOverlay: false };
+      }
+      const text = displayText(value);
+      return {
+        kind: GridCellKind.Text,
+        data: text,
+        displayData: text,
+        allowOverlay: false,
+        readonly: true,
+        contentAlign: isNumeric(value) ? "right" : "left",
+        themeOverride: value === "null" ? { textDark: colors.null } : undefined,
+      };
+    },
+    [buffer, order, viewVersion, colors.null],
+  );
+
+  const drawHeader: DrawHeaderCallback = useCallback(
+    ({ ctx, column, rect, theme }) => {
+      const src = Number(column.id);
+      const c = meta[src];
+      if (!c) return;
+      const pad = 8;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rect.x, rect.y, rect.width, rect.height);
+      ctx.clip();
+      const y = rect.y + rect.height / 2;
+      ctx.textBaseline = "middle";
+      ctx.font = `${theme.headerFontStyle} ${theme.fontFamily}`;
+      ctx.fillStyle = colors.headerForeground;
+      ctx.fillText(c.name, rect.x + pad, y);
+      const nameWidth = ctx.measureText(c.name).width;
+      ctx.font = `${theme.baseFontStyle} ${theme.fontFamily}`;
+      ctx.fillStyle = colors.headerType;
+      ctx.fillText(c.dbType, rect.x + pad * 2 + nameWidth, y);
+      const s: SortSpec | undefined = sort?.column === src ? sort : undefined;
+      if (s) {
+        ctx.fillStyle = colors.accent;
+        ctx.textAlign = "right";
+        ctx.fillText(s.direction === "asc" ? "▲" : "▼", rect.x + rect.width - pad, y);
+      }
+      ctx.restore();
+    },
+    [meta, colors, sort],
+  );
+
+  const onHeaderClicked = useCallback(
+    (col: number, event: { metaKey: boolean; ctrlKey: boolean; preventDefault: () => void }) => {
+      // ⌘(Win/Linux Ctrl)+클릭은 열 고르기(Glide 기본) — 정렬하지 않는다.
+      if (event.metaKey || event.ctrlKey) return;
+      event.preventDefault();
+      const src = order[col];
+      if (src === undefined) return;
+      const now = buffer.sort;
+      const next: SortSpec | undefined =
+        now?.column !== src
+          ? { column: src, direction: "asc" }
+          : now.direction === "asc"
+            ? { column: src, direction: "desc" }
+            : undefined;
+      buffer.setSort(next);
+    },
+    [buffer, order],
+  );
+
+  const onColumnMoved = useCallback(
+    (from: number, to: number) =>
+      update((l) => {
+        const next = [...l.order];
+        const [moved] = next.splice(from, 1);
+        if (moved !== undefined) next.splice(to, 0, moved);
+        return { order: next };
+      }),
+    [update],
+  );
+
+  const onColumnResize = useCallback(
+    (column: GridColumn, newSize: number) =>
+      update((l) => ({ widths: { ...l.widths, [Number(column.id)]: newSize } })),
+    [update],
+  );
+
+  const onSelectionChange = useCallback(
+    (s: GridSelection) => {
+      update(() => ({ selection: s }));
+      const cell = s.current?.cell;
+      const src = cell ? order[cell[0]] : undefined;
+      onCursor?.(cell && src !== undefined ? { row: cell[1], column: src } : undefined);
+    },
+    [order, onCursor, update],
+  );
+
+  const onCellActivated = useCallback(
+    ([col, row]: Item) => {
+      const src = order[col];
+      if (src !== undefined) onActivate?.({ row, column: src });
+    },
+    [order, onActivate],
+  );
+
+  const onCopy = useCallback(
+    (e: ClipboardEvent<HTMLDivElement>) => {
+      const pick = toPick(selection);
+      if (isEmptyPick(pick)) return;
+      e.preventDefault();
+      e.clipboardData.setData("text/plain", toTsv(pickBlock(buffer, order, pick)));
+    },
+    [selection, buffer, order],
+  );
+
+  const theme = useMemo(() => glideTheme(colors) as Partial<Theme>, [colors]);
+
+  return (
+    <div
+      className="relative min-h-0 flex-1"
+      data-testid="db-result-grid"
+      data-rows={buffer.rowCount}
+      data-version={version}
+      onCopy={onCopy}
+      onFocus={onFocus}
+    >
+      <DataEditor
+        ref={editor}
+        columns={columns}
+        rows={buffer.rowCount}
+        getCellContent={getCellContent}
+        getCellsForSelection
+        drawHeader={drawHeader}
+        theme={theme}
+        width="100%"
+        height="100%"
+        headerHeight={HEADER_HEIGHT}
+        rowHeight={ROW_HEIGHT}
+        rowMarkers="number"
+        smoothScrollX
+        smoothScrollY
+        rangeSelect="rect"
+        columnSelect="multi"
+        rowSelect="multi"
+        gridSelection={selection}
+        onGridSelectionChange={onSelectionChange}
+        onHeaderClicked={onHeaderClicked}
+        onColumnMoved={onColumnMoved}
+        onColumnResize={onColumnResize}
+        onCellActivated={onCellActivated}
+        keybindings={{ copy: false, paste: false, cut: false, search: false, delete: false }}
+        maxColumnAutoWidth={480}
+        maxColumnWidth={2000}
+      />
+    </div>
+  );
+});
+
+export { EMPTY_PICK };

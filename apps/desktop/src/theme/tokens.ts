@@ -129,6 +129,23 @@ export const DB_TAG_TOKENS = [
  */
 export const DB_TOKENS = ["db.production", "db.readOnly", "db.insecure", ...DB_TAG_TOKENS] as const;
 
+/**
+ * DB 결과 그리드(M3-16, Glide Data Grid 의 canvas — `src/db/grid/grid-theme.ts` 가 Glide 테마로 옮긴다). `null` 은 NULL 셀의
+ * 흐린 글자, `headerType` 은 열 머리의 타입 이름, `selection` 은 고른 셀 범위의 배경.
+ */
+export const GRID_TOKENS = [
+  "grid.background",
+  "grid.foreground",
+  "grid.null",
+  "grid.headerBackground",
+  "grid.headerForeground",
+  "grid.headerType",
+  "grid.headerHover",
+  "grid.border",
+  "grid.selection",
+  "grid.accent",
+] as const;
+
 /** 화면이 읽는 토큰. 테마 파일의 변형(light·dark)은 있으면 이것을 전부 정의해야 한다. */
 export const TOKENS = [
   "ui.background",
@@ -176,6 +193,7 @@ export const TOKENS = [
   ...GRAPH_TOKENS,
   ...DIFF_TOKENS,
   ...DB_TOKENS,
+  ...GRID_TOKENS,
 ] as const;
 
 export type TokenName = (typeof TOKENS)[number];

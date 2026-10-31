@@ -59,6 +59,7 @@ import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { FileTreeToolWindow } from "../file-tree/file-tree";
 import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
+import { DbGridFeature } from "../db/grid/db-grid-feature";
 import { GitCommitFeature } from "../git/commit/commit-feature";
 import { CommitToolWindow } from "../git/commit/commit-tool-window";
 import { GitBranchFeature } from "../git/git-branch-feature";
@@ -825,6 +826,7 @@ function ProjectWindowBody({
           {projectId !== undefined && <GitGutter projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitMerge projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitRemoteFeature projectId={projectId} />}
+          {projectId !== undefined && <DbGridFeature />}
           {projectId !== undefined && (
             <GitCommitFeature
               projectId={projectId}
