@@ -985,6 +985,11 @@ async fn a_dangerous_host_ref_is_refused() {
         "ssh://-oProxyCommand=x",
         "ssh://user@",
         "ssh://host:notaport",
+        // 셸 메타문자 — 사람의 `ProxyCommand … %h` 를 거치면 OpenSSH 9.6 미만에서 명령이 된다.
+        "a$(touch${IFS}x)",
+        "a;id",
+        "a`id`",
+        "ssh://x$(id)@h",
     ] {
         let mut config = remote_config();
         config["sshTunnel"]["hostRef"] = json!(host_ref);
@@ -1000,6 +1005,8 @@ async fn a_dangerous_host_ref_is_refused() {
         "ssh://jump.example",
         "ssh://me@jump.example:2222",
         "ssh://[::1]:22",
+        "prod_bastion.internal",
+        "ssh://[2001:db8::1]",
     ] {
         let mut config = remote_config();
         config["sshTunnel"]["hostRef"] = json!(host_ref);
@@ -1015,6 +1022,23 @@ async fn a_dangerous_host_ref_is_refused() {
         .await
         .unwrap_err();
     assert_eq!(e.code, rpc_code::INVALID_PARAMS);
+    for host in ["db;id", "db$(id)", "db`id`"] {
+        let mut config = remote_config();
+        config["host"] = json!(host);
+        let e = w
+            .call("db.connection.upsert", upsert_params(&f, "h", config))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, rpc_code::INVALID_PARAMS, "{host:?}");
+        assert!(!f.db_file("h.toml").exists(), "{host:?}");
+    }
+    for host in ["db_1.internal", "::1", "2001:db8::5"] {
+        let mut config = remote_config();
+        config["host"] = json!(host);
+        w.call("db.connection.upsert", upsert_params(&f, "h", config))
+            .await
+            .unwrap_or_else(|e| panic!("{host:?}: {e:?}"));
+    }
 
     f.write_db(
         "hand.toml",

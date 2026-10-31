@@ -59,6 +59,74 @@ fn values_that_ssh_would_read_as_options_are_refused() {
     assert!(ssh_args(40001, "db", 0, "bastion").is_err());
 }
 
+/// 목적지 · DB 호스트는 허용 글자 목록이다 — 셸 메타문자(사람의 `ProxyCommand … %h` 를 거치면 OpenSSH 9.6 미만에서 명령이 된다)는
+/// 어느 자리에도 들어가지 못한다. IPv6 · 밑줄 든 호스트 · `~/.ssh/config` 별칭은 받는다.
+#[test]
+fn destinations_and_db_hosts_take_only_allowed_characters() {
+    for bad in [
+        "a$(touch${IFS}x)",
+        "a;id",
+        "a`id`",
+        "ssh://x$(id)@h",
+        "ssh://h$(id)",
+        "ssh://h;id:22",
+        "ssh://[::1$(id)]:22",
+        "ssh://[::1]x",
+        "ssh://[::1]:22;id",
+        "ssh://h:+22",
+        "ssh://h:",
+        "ssh://h:0",
+        "ssh://@h",
+        "ssh://-x@h",
+        "ssh://h/x",
+        "user@host",
+        "host:22",
+        "a|b",
+        "a&b",
+        "a'b",
+        "a\"b",
+        "a>b",
+        "a*b",
+        "a%b",
+        "호스트",
+    ] {
+        assert!(check_destination(bad).is_err(), "{bad:?}");
+        let e = ssh_args(40001, "db", 5432, bad).unwrap_err();
+        assert_eq!(e.kind, DbErrorKind::Invalid, "{bad:?}");
+    }
+    for good in [
+        "bastion",
+        "prod-db_01.internal",
+        "my_host",
+        "ssh://jump.example",
+        "ssh://me@jump.example:2222",
+        "ssh://deploy.user@10.0.0.5:22/",
+        "ssh://[::1]:22",
+        "ssh://[2001:db8::1]",
+        "ssh://[fe80::1%25]:2222",
+    ] {
+        check_destination(good).unwrap_or_else(|why| panic!("{good:?}: {why}"));
+        ssh_args(40001, "db", 5432, good).unwrap();
+    }
+    for bad in [
+        "db;id", "db$(id)", "a`b`", "db/x", "-db", "db host", "", "[db;id]",
+    ] {
+        assert!(check_db_host(bad).is_err(), "{bad:?}");
+        assert!(ssh_args(40001, bad, 5432, "bastion").is_err(), "{bad:?}");
+    }
+    for good in [
+        "db",
+        "db_1.internal",
+        "10.0.0.5",
+        "::1",
+        "[::1]",
+        "2001:db8::5",
+    ] {
+        check_db_host(good).unwrap_or_else(|why| panic!("{good:?}: {why}"));
+        ssh_args(40001, good, 5432, "bastion").unwrap();
+    }
+}
+
 #[cfg(unix)]
 mod fake {
     //! 가짜 ssh: 받은 인자를 적고, 정한 대로 끝나거나 멈춘다.

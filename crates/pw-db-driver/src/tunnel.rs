@@ -3,9 +3,9 @@
 //! - **ssh 는 사람의 것을 그대로**: 실행 파일 · 환경(PATH · `SSH_AUTH_SOCK` 등)은 부르는 쪽([`Launch`])이 그 프로젝트의 런타임
 //!   환경에서 준다. 사람의 `~/.ssh/config` · 에이전트 · ProxyJump · known_hosts 를 ssh 가 그대로 따른다.
 //! - **argv 는 Pitwall 이 고정한다**([`ssh_args`]): `-N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ControlPath=none
-//!   -L 127.0.0.1:<로컬 포트>:<DB 호스트>:<DB 포트> -- <목적지>`. 설정에서 오는 값은 목적지와 DB 호스트 · 포트뿐이고, `-` 로
-//!   시작하거나 공백 · 제어 문자를 담으면 띄우기 전에 거절한다(옵션 주입 · `ProxyCommand` 로 코드 실행을 막는다 — 설정 단계의
-//!   검사(`pw_db::config`)와 겹방어). `ControlPath=none` 은 사람의 ControlMaster 를 쓰지도 만들지도 않게 한다 — 마스터가 있으면
+//!   -L 127.0.0.1:<로컬 포트>:<DB 호스트>:<DB 포트> -- <목적지>`. 설정에서 오는 값은 목적지와 DB 호스트 · 포트뿐이고, 허용
+//!   글자 목록([`check_destination`] · [`check_db_host`])을 벗어나면 띄우기 전에 거절한다(옵션 주입과, 사람의 `ProxyCommand …%h`
+//!   를 거쳐 셸 메타문자가 명령이 되는 것을 막는다 — 설정 단계의 검사(`pw_db::config`)와 겹방어). `ControlPath=none` 은 사람의 ControlMaster 를 쓰지도 만들지도 않게 한다 — 마스터가 있으면
 //!   ssh 가 포워드를 마스터에 맡기고 곧바로 끝나, 포워드가 Pitwall 이 끌 수 없는 마스터에 남는다(재현 — 14 M3-11 칸).
 //! - **로컬 포트**: `127.0.0.1:0` 바인드로 고른 뒤 넘긴다. 그 사이 다른 프로세스가 가져가면 ssh 가 `ExitOnForwardFailure` 로 끝나고,
 //!   다른 포트로 한 번 더 띄운다.
@@ -52,24 +52,84 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// ssh argv 에 들어갈 사람 값의 검사: 비어 있지 않고, `-` 로 시작하지 않고, 공백 · 제어 문자가 없다.
-pub fn argv_safe(what: &str, value: &str) -> DbResult<()> {
-    let refuse = |why: &str| {
-        Err(DbError::new(
-            DbErrorKind::Invalid,
-            format!("ssh tunnel {what} {why}"),
-        ))
+/// 호스트 이름 · 사용자 이름에 받는 글자: `[A-Za-z0-9._-]` 이고 `-` 로 시작하지 않는다.
+///
+/// 허용 목록인 까닭: OpenSSH 9.6 미만(예: Windows 10 내장 8.1p1)은 목적지의 셸 메타문자를 거르지 않는다(CVE-2023-51385) — 사람의
+/// 설정에 `ProxyCommand … %h` · `Match exec "… %h"` 가 있으면 커밋된 `host_ref` 의 `$(…)` · `;` · 백틱이 셸 명령이 된다. 금지
+/// 목록(`-` · 공백 · 제어 문자)으로는 그 글자들을 다 셀 수 없다.
+fn name_chars(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// IPv6 주소 글자: `[0-9A-Fa-f:.%]` 이고 `:` 를 담는다.
+fn ipv6_chars(value: &str) -> bool {
+    value.contains(':')
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() || matches!(b, b':' | b'.' | b'%'))
+}
+
+/// 터널 목적지(`ssh_tunnel.host_ref`, 결정 M3-D11)의 검사. 받는 꼴은 둘이다:
+///
+/// - `~/.ssh/config` 의 호스트 이름(별칭): [`name_chars`]. `host:port` · `user@host` 꼴은 받지 않는다 — ssh 는 `host:port` 를
+///   호스트 이름으로 읽는다.
+/// - `ssh://[user@]host[:port]`: 사용자 · 호스트는 [`name_chars`], 호스트가 `[…]` 이면 그 안은 [`ipv6_chars`], 포트는 1 ~ 65535.
+///
+/// 거절하면 까닭(값은 담지 않는다)을 돌려준다.
+pub fn check_destination(host_ref: &str) -> Result<(), &'static str> {
+    let Some(rest) = host_ref.strip_prefix("ssh://") else {
+        return if name_chars(host_ref) {
+            Ok(())
+        } else {
+            Err(
+                "must be a host name from ~/.ssh/config (letters, digits, `.`, `_`, `-`) or `ssh://[user@]host[:port]`",
+            )
+        };
     };
-    if value.is_empty() {
-        return refuse("is empty");
+    let uri = "is not `ssh://[user@]host[:port]` (user and host take letters, digits, `.`, `_`, `-`; an IPv6 host goes in `[…]`)";
+    let authority = rest.strip_suffix('/').unwrap_or(rest);
+    let host_port = match authority.split_once('@') {
+        Some((user, host_port)) if name_chars(user) => host_port,
+        Some(_) => return Err(uri),
+        None => authority,
+    };
+    let (host_ok, port) = match host_port.strip_prefix('[') {
+        Some(v6) => match v6.split_once(']') {
+            Some((host, "")) => (ipv6_chars(host), None),
+            Some((host, rest)) => match rest.strip_prefix(':') {
+                Some(port) => (ipv6_chars(host), Some(port)),
+                None => (false, None),
+            },
+            None => (false, None),
+        },
+        None => match host_port.split_once(':') {
+            Some((host, port)) => (name_chars(host), Some(port)),
+            None => (name_chars(host_port), None),
+        },
+    };
+    let port_ok = port.is_none_or(|p| {
+        !p.is_empty()
+            && p.bytes().all(|b| b.is_ascii_digit())
+            && p.parse::<u16>().is_ok_and(|p| p > 0)
+    });
+    if host_ok && port_ok { Ok(()) } else { Err(uri) }
+}
+
+/// `-L` 로 가는 DB 호스트의 검사: 호스트 이름([`name_chars`]) 또는 IPv6 주소(대괄호는 있어도 없어도 — [`ssh_args`] 가 감싼다).
+pub fn check_db_host(host: &str) -> Result<(), &'static str> {
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if name_chars(host) || ipv6_chars(bare) {
+        Ok(())
+    } else {
+        Err("must be a host name (letters, digits, `.`, `_`, `-`) or an IPv6 address")
     }
-    if value.starts_with('-') {
-        return refuse("must not start with `-`");
-    }
-    if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return refuse("must not contain spaces or control characters");
-    }
-    Ok(())
 }
 
 /// ssh 의 인자(실행 파일 뒤). 머리 주석의 고정 argv.
@@ -79,8 +139,11 @@ pub fn ssh_args(
     db_port: u16,
     destination: &str,
 ) -> DbResult<Vec<OsString>> {
-    argv_safe("destination", destination)?;
-    argv_safe("db host", db_host)?;
+    let refuse = |what: &str, why: &str| {
+        DbError::new(DbErrorKind::Invalid, format!("ssh tunnel {what} {why}"))
+    };
+    check_destination(destination).map_err(|why| refuse("destination", why))?;
+    check_db_host(db_host).map_err(|why| refuse("db host", why))?;
     if db_port == 0 {
         return Err(DbError::new(
             DbErrorKind::Invalid,

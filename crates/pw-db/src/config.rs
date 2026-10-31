@@ -4,8 +4,9 @@
 //!   `pw_core::config`)을 그대로 쓴다. 개인 전용 모드 프로젝트는 같은 구조가 `$CONFIG/projects/<slug>/db/` 에 있다.
 //! - 비밀은 파일에 없다: `password = { secret_ref = "keychain" }`(값은 키체인, [`crate::secret`]) 또는 `{ env = "<변수>" }`(값은
 //!   그 프로젝트의 런타임 환경). RPC 의 설정 타입([`DbConnectionConfig`])에도 값이 들어갈 자리가 없다.
-//! - SSH 터널은 `[ssh_tunnel] host_ref` 하나뿐이다 — ssh 옵션을 적는 자리가 없다(결정 M3-D11). `host_ref` · DB `host` 는 `ssh` 의
-//!   argv 로 가므로 `-` 로 시작하거나 공백 · 제어 문자를 담으면 저장도 읽기도 거절한다([`validate`]).
+//! - SSH 터널은 `[ssh_tunnel] host_ref` 하나뿐이다 — ssh 옵션을 적는 자리가 없다(결정 M3-D11). `host_ref` 와 (터널을 쓰면) DB
+//!   `host` 는 `ssh` 의 argv 로 가므로 허용 글자 목록을 벗어나면 저장도 읽기도 거절한다([`validate`],
+//!   `pw_db_driver::tunnel::check_destination`). 터널이 없는 DB `host` 는 `-` 로 시작하거나 공백 · 제어 문자를 담으면 거절한다.
 //! - 읽기는 디스크에 쓰지 않는다(`ConfigSource::without_writes`) — 목록만 봐도 커밋된 파일이 마이그레이션되면 안 된다.
 //! - 쓰기(`upsert` · `delete`)는 파일 쓰기와 같은 연결 범위다 — 그 프로젝트 창의 연결만(결정 M3-D18, `scope_may_write`).
 //! - 감시: 데스크톱은 프로젝트 설정 스토어를 열지 않으므로 파일 감시(`fs.changed`)를 따라가 `.pitwall/` 이 바뀌면 다시 읽고, 병합
@@ -200,43 +201,11 @@ fn argv_safe(what: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 터널 목적지(결정 M3-D11): `~/.ssh/config` 의 호스트 이름 그대로, 또는 `ssh://[user@]host[:port]`. `host:port` 꼴은 받지 않는다 —
-/// ssh 는 그것을 호스트 이름으로 읽는다.
+/// 터널 목적지(결정 M3-D11): `~/.ssh/config` 의 호스트 이름 그대로, 또는 `ssh://[user@]host[:port]`. 글자는 허용 목록이다 — 규칙과
+/// 까닭은 [`pw_db_driver::tunnel::check_destination`](ssh 를 띄우기 전에도 같은 검사를 다시 한다).
 pub fn validate_host_ref(host_ref: &str) -> Result<(), String> {
-    argv_safe("ssh_tunnel.host_ref", host_ref)?;
-    if let Some(rest) = host_ref.strip_prefix("ssh://") {
-        let authority = rest.strip_suffix('/').unwrap_or(rest);
-        let host_port =
-            authority.rsplit_once('@').map_or(
-                authority,
-                |(user, hp)| {
-                    if user.is_empty() { "" } else { hp }
-                },
-            );
-        let (host, port) = match host_port.strip_prefix('[') {
-            Some(v6) => match v6.split_once(']') {
-                Some((host, rest)) => (host, rest.strip_prefix(':')),
-                None => ("", None),
-            },
-            None => match host_port.rsplit_once(':') {
-                Some((host, port)) => (host, Some(port)),
-                None => (host_port, None),
-            },
-        };
-        let port_ok = port.is_none_or(|p| p.parse::<u16>().is_ok_and(|p| p > 0));
-        if host.is_empty() || host.starts_with('-') || authority.contains('/') || !port_ok {
-            return Err(format!(
-                "ssh_tunnel.host_ref `{host_ref}` is not `ssh://[user@]host[:port]`"
-            ));
-        }
-        return Ok(());
-    }
-    if host_ref.contains(':') || host_ref.contains('/') {
-        return Err(format!(
-            "ssh_tunnel.host_ref `{host_ref}` must be a host name from ~/.ssh/config or `ssh://[user@]host[:port]`"
-        ));
-    }
-    Ok(())
+    pw_db_driver::tunnel::check_destination(host_ref)
+        .map_err(|why| format!("ssh_tunnel.host_ref {host_ref:?} {why}"))
 }
 
 /// 설정이 연결을 열 수 있는 꼴인가. 저장(`upsert`)은 이것을 지나야 하고, 읽은 파일이 지나지 못하면 그 연결은 「설정 오류」 다.
@@ -305,6 +274,8 @@ pub fn validate(config: &DbConnectionConfig) -> Result<(), String> {
     }
     if let Some(tunnel) = &config.ssh_tunnel {
         validate_host_ref(&tunnel.host_ref)?;
+        // 터널을 쓰면 DB 호스트도 ssh argv(`-L`)로 간다 — 목적지와 같은 허용 목록.
+        pw_db_driver::tunnel::check_db_host(host).map_err(|why| format!("host {host:?} {why}"))?;
     }
     Ok(())
 }
