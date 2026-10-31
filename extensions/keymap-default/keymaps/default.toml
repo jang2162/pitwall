@@ -495,3 +495,13 @@ mac = "cmd+shift+c"
 win = "ctrl+shift+c"
 linux = "ctrl+shift+c"
 when = "dbGridFocus"
+
+# DB 탐색기의 DDL 보기(M3-13, src/db/explorer/explorer-feature.tsx): 고른 테이블 · 뷰의 DDL 을 읽기 전용 SQL 문서로. 탐색기 트리에
+# 포커스가 있을 때만(`dbExplorerFocus`) — 에디터의 「선언으로 이동」 ⌘B(10-ui §4.2)와 범위가 갈린다.
+
+[[bindings]]
+action = "db.explorer.ddl"
+mac = "cmd+b"
+win = "ctrl+b"
+linux = "ctrl+b"
+when = "dbExplorerFocus"

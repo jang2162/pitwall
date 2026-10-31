@@ -59,6 +59,7 @@ import { useUnsavedPrompt } from "../editor/unsaved-dialog";
 import { FileTreeToolWindow } from "../file-tree/file-tree";
 import { treeScope, useProjectView, windowFileTree } from "../file-tree/project-view";
 import { FileWatch } from "../fs/file-watch";
+import { DbExplorerToolWindow } from "../db/explorer/explorer-feature";
 import { DbGridFeature } from "../db/grid/db-grid-feature";
 import { GitCommitFeature } from "../git/commit/commit-feature";
 import { CommitToolWindow } from "../git/commit/commit-tool-window";
@@ -148,6 +149,7 @@ const ICONS: Record<string, LucideIcon> = {
  */
 const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>> = {
   commit: CommitToolWindow,
+  database: DbExplorerToolWindow,
   git: GitLogToolWindow,
   notifications: NotificationsToolWindow,
   project: FileTreeToolWindow,

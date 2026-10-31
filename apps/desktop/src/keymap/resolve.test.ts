@@ -15,6 +15,8 @@ import { editorOpsActions } from "../editor/editor-ops";
 import { createEditorWorkspace } from "../editor/editor-workspace";
 import { fileOpsActions } from "../file-tree/file-ops";
 import { fileTreeStrings } from "../file-tree/strings";
+import { explorerActions } from "../db/explorer/explorer-feature";
+import { dbExplorerStrings } from "../db/explorer/strings";
 import { gridActions } from "../db/grid/db-grid-feature";
 import { dbGridStrings } from "../db/grid/strings";
 import { commitActions } from "../git/commit/commit-feature";
@@ -171,6 +173,11 @@ const ACTION_IDS = new Set(
       notify() {},
     }),
     ...gridActions(dbGridStrings((id) => id)),
+    ...explorerActions({
+      strings: dbExplorerStrings((id) => id),
+      model: { selected: () => undefined, node: () => undefined },
+      openDdl() {},
+    }),
   ].map((a) => a.id),
 );
 
