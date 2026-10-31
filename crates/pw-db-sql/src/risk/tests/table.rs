@@ -218,8 +218,6 @@ fn side_effect_reads_are_writes() {
         (Postgres, "SELECT pg_sleep(1)"),
         (Postgres, "SELECT pg_sleep_for('1 second')"),
         (Postgres, "SELECT pg_catalog.pg_sleep(1)"),
-        (Postgres, "SELECT dblink('host=x', 'SELECT 1')"),
-        (Postgres, "SELECT dblink_exec('host=x', 'DELETE FROM t')"),
         (Postgres, "SELECT set_config('search_path', 'x', false)"),
         (Postgres, "SELECT lo_export(1, '/tmp/x')"),
         (Postgres, "SELECT lo_import('/etc/passwd')"),
@@ -229,10 +227,6 @@ fn side_effect_reads_are_writes() {
         (Postgres, "SELECT pg_try_advisory_lock(1)"),
         (Postgres, "SELECT * FROM t WHERE id = (SELECT nextval('s'))"),
         (Postgres, "WITH x AS (SELECT pg_sleep(1)) SELECT * FROM x"),
-        (
-            Postgres,
-            "SELECT * FROM dblink('host=x', 'DELETE FROM t') AS r(a int)",
-        ),
         (Mysql, "SELECT SLEEP(1)"),
         (Mysql, "SELECT GET_LOCK('a', 1)"),
         (Mysql, "SELECT RELEASE_LOCK('a')"),
@@ -288,6 +282,55 @@ fn server_admin_functions_are_unbounded_writes_wherever_they_hide() {
         "EXPLAIN SELECT pg_terminate_backend(1)",
         "SELECT 'pg_terminate_backend(1)'",
         "SELECT pg_terminate_backend_count FROM stats",
+    ] {
+        expect(Postgres, sql, Read, &[]);
+    }
+}
+
+/// 인자의 SQL 글을 실행하는 함수는 안을 알 수 없다 — 관리 함수와 같은 범위 없는 쓰기(`risk.rs` 의 `SQL_TEXT_FUNCTIONS`). 읽기
+/// 전용 트랜잭션이 안의 관리 함수를 막지 않고(PG 17.6 — M3-17 리뷰 X1), `dblink` 는 새 연결이라 읽기 전용 밖이다.
+#[test]
+fn functions_that_run_sql_text_are_unbounded_writes() {
+    for sql in [
+        // PG 내장 — 리뷰가 다른 세션을 끊은 꼴 그대로
+        "SELECT * FROM t WHERE query_to_xml('select pg_terminate_backend(pid) from pg_stat_activity', true, false, '') IS NOT NULL",
+        "SELECT query_to_xml('select nextval(''s'')', true, false, '')",
+        "SELECT query_to_xmlschema('select 1', true, false, '')",
+        "SELECT query_to_xml_and_xmlschema('select 1', true, false, '')",
+        "SELECT * FROM ts_stat('select to_tsvector(''a'')')",
+        "SELECT * FROM ts_stat('select to_tsvector(''a'')', 'a')",
+        "SELECT ts_rewrite('a'::tsquery, 'select ''a''::tsquery, ''b''::tsquery')",
+        // 대소문자 · 스키마 한정 · 숨은 자리(ORDER BY · 하위 질의 · 조회가 아닌 문장 안)
+        "SELECT PG_CATALOG.QUERY_TO_XML('select 1', true, false, '')",
+        "SELECT \"pg_catalog\".\"ts_stat\"('select 1')",
+        "SELECT id FROM t ORDER BY length(query_to_xml('select 1', true, false, '')::text)",
+        "SELECT * FROM t WHERE id IN (SELECT 1 FROM ts_stat('select 1'))",
+        "INSERT INTO log SELECT query_to_xml('select 1', true, false, '')",
+        // 확장: tablefunc · xml2 · dblink · pg_background · pg_cron(스키마 한정)
+        "SELECT * FROM crosstab('select 1, 2, 3') AS c(a int, b int)",
+        "SELECT * FROM crosstab('select 1, 2, 3', 'select 2') AS c(a int, b int)",
+        "SELECT * FROM crosstab2('select 1, 2, 3')",
+        "SELECT * FROM connectby('t', 'id', 'parent', '1', 0) AS c(k int, p int, l int)",
+        "SELECT * FROM xpath_table('id', 'doc', 't', '/a', 'true') AS x(k int, a text)",
+        "SELECT dblink('host=x', 'SELECT 1')",
+        "SELECT dblink_exec('host=x', 'DELETE FROM t')",
+        "SELECT * FROM dblink('host=x', 'DELETE FROM t') AS r(a int)",
+        "SELECT dblink_open('c', 'select 1')",
+        "SELECT dblink_send_query('c', 'select 1')",
+        "SELECT pg_background_launch('vacuum t')",
+        "SELECT cron.schedule('* * * * *', 'DELETE FROM t')",
+        "SELECT cron.schedule_in_database('j', '* * * * *', 'DELETE FROM t', 'db')",
+        "SELECT cron.alter_job(1, command => 'DROP TABLE t')",
+    ] {
+        expect(Postgres, sql, UnboundedWrite, &[ServerAdmin]);
+    }
+    // 이름이 같은 열 · 문자열, 한정하지 않은 흔한 이름은 조회다.
+    for sql in [
+        "SELECT 'query_to_xml(1)'",
+        "SELECT query_to_xml_count FROM stats",
+        "SELECT schedule('x')",
+        "SELECT other.schedule('x')",
+        "SELECT * FROM cron.job",
     ] {
         expect(Postgres, sql, Read, &[]);
     }

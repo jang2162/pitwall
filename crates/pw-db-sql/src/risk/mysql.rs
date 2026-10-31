@@ -10,32 +10,41 @@
 //!   스캐너로 센다), 문장 수가 다르면 파괴 · `unparsed`. 같으면 뒤의 읽기도 분류해 높은 등급을 받는다(`DELETE … WHERE c = 'x\' OR
 //!   1=1 -- '` 는 뒤의 읽기로 범위 없는 쓰기다). 단 뒤의 읽기를 읽지 못하면(파싱 실패 · 상한) 그 읽기는 등급에 넣지 않는다 — 넣으면 `'a\'b'` 같은
 //!   흔한 데이터가 따옴표의 홀짝에 따라 파괴가 된다. 남는 틈: `NO_BACKSLASH_ESCAPES` 서버에서, 뒤의 읽기가 sqlparser 는 못 읽고
-//!   서버는 읽는 꼴일 때. 뒤의 읽기에서 따옴표가 닫히지 않으면 서버는 그 문장에서 멈추므로 그 앞에서 끝난 문장들만 본다.
+//!   서버는 읽는 꼴일 때(`WHERE c = 'a\' OR 1=1 INTO OUTFILE '…' -- '` 가 조회로 돌아 파일을 쓴다 — M3-17 리뷰 X3, MySQL 8.4.6).
+//!   그래서 넣지 않은 읽기가 있었다는 것을 [`StatementReadings::unread_reading`] 으로 알리고, 조회만 받는 호출은 그 글을 조회로
+//!   보지 않는다 — 사람이 치는 일반 실행의 등급은 그대로라 틈이 남는다. 뒤의 읽기에서 따옴표가 닫히지 않으면 서버는 그 문장에서
+//!   멈추므로 그 앞에서 끝난 문장들만 본다.
 //!
 //! 이 둘은 분류 쪽의 방어이고, 「나뉜 문장 하나 = 서버가 돌리는 문장 하나」(드라이버가 다중 문장을 끄는 것, M3-06 · M3-07)가 겹방어다.
 
 use pw_db_types::{RiskGrade, SqlDialect};
 
-use super::{Classification, Found, MAX_STATEMENT_BYTES, RiskReason, classify_text};
+use super::{
+    Classification, Found, MAX_STATEMENT_BYTES, RiskReason, StatementReadings, classify_text,
+};
 
 /// 서버마다 다른 실행 주석 열쇠(판본 · MariaDB 전용)의 상한. 조합은 2^열쇠 수 × 백슬래시 읽기 2 번까지 분류한다(4 → 최대 32 번).
 pub(super) const MAX_EXECUTABLE_COMMENT_KEYS: usize = 4;
 
-pub(super) fn classify(text: &str) -> Classification {
+pub(super) fn classify(text: &str) -> StatementReadings {
+    let only = |classification| StatementReadings {
+        classification,
+        unread_reading: false,
+    };
     let escaped = match scan(text, true) {
         Ok(scan) => scan,
         // 이스케이프 읽기에서 닫히지 않은 글은 파서도 읽지 못한다.
-        Err(_) => return Classification::unparsed(),
+        Err(_) => return only(Classification::unparsed()),
     };
     let keys = variable_keys(&escaped.pieces);
     if keys.len() > MAX_EXECUTABLE_COMMENT_KEYS {
-        return Classification::unparsed();
+        return only(Classification::unparsed());
     }
     let backslash = text.contains('\\');
     // 읽기마다 글 전체를 분류하므로 바이트 상한을 읽기 수로 나눠 쓴다 — 시간 상한(문장당 200 ms 목표)을 지키려고.
     let readings = (1usize << keys.len()) << usize::from(backslash);
     if text.len().saturating_mul(readings) > MAX_STATEMENT_BYTES {
-        return Classification::destructive(RiskReason::TooLarge);
+        return only(Classification::destructive(RiskReason::TooLarge));
     }
 
     let mut found = Found::default();
@@ -46,7 +55,11 @@ pub(super) fn classify(text: &str) -> Classification {
     if backslash {
         classify_without_backslash_escapes(text, &escaped, &keys, &mut found);
     }
-    found.finish()
+    let unread_reading = found.unread_reading;
+    StatementReadings {
+        classification: found.finish(),
+        unread_reading,
+    }
 }
 
 /// `NO_BACKSLASH_ESCAPES` 의 읽기(머리 주석 「백슬래시」).
@@ -87,14 +100,18 @@ fn classify_without_backslash_escapes(
     }
     for mask in 0..(1u32 << keys.len()) {
         let outcome = classify_text(SqlDialect::Mysql, &render(&plain.pieces, keys, mask, false));
-        // 읽지 못한 읽기(파싱 실패 · 상한)는 넣지 않는다(머리 주석 「백슬래시」).
-        let not_read = outcome.classification.reasons.iter().all(|reason| {
-            matches!(
-                reason,
-                RiskReason::Unparsed | RiskReason::TooLarge | RiskReason::TooDeep
-            )
-        });
-        if !not_read {
+        // 읽지 못한 읽기(파싱 실패 · 상한)는 넣지 않는다(머리 주석 「백슬래시」). 조회는 까닭이 비어 있다 — 읽은 것이다.
+        let reasons = &outcome.classification.reasons;
+        let not_read = !reasons.is_empty()
+            && reasons.iter().all(|reason| {
+                matches!(
+                    reason,
+                    RiskReason::Unparsed | RiskReason::TooLarge | RiskReason::TooDeep
+                )
+            });
+        if not_read {
+            found.unread_reading = true;
+        } else {
             found.add_classification(&outcome.classification);
         }
     }

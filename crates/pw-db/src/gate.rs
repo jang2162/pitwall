@@ -20,7 +20,7 @@
 use std::fmt::Write as _;
 
 use pw_core::registry::state::scope_may_write;
-use pw_db_sql::risk::{RiskReason, classify_statement};
+use pw_db_sql::risk::{RiskReason, classify_statement_readings};
 use pw_db_sql::split::{SqlRange, split};
 use pw_db_sql::txn::{
     TxControl, changes_session_settings, implicitly_commits, may_end_transaction,
@@ -156,6 +156,9 @@ pub(crate) struct Planned {
     /// 열린 트랜잭션을 끝낼 수 있다(암묵 커밋 문장 + MySQL `CALL` · `EXECUTE` 등 — `pw_db_sql::txn::may_end_transaction`).
     pub may_end: bool,
     pub settings: bool,
+    /// 서버가 고를 수 있는 읽기 가운데 분류기가 읽지 못해 등급에 넣지 않은 것이 있었다
+    /// (`pw_db_sql::risk::StatementReadings::unread_reading`). 조회만 받는 호출만 본다.
+    pub unread_reading: bool,
 }
 
 impl Planned {
@@ -234,7 +237,8 @@ pub(crate) fn plan(
         .map(|i| {
             let statement = &statements[i];
             let text = statement.text(sql).to_owned();
-            let class = classify_statement(dialect, &text);
+            let readings = classify_statement_readings(dialect, &text);
+            let class = readings.classification;
             Planned {
                 index: i as u32,
                 range: statement.range,
@@ -244,6 +248,7 @@ pub(crate) fn plan(
                 implicit_commit: implicitly_commits(dialect, &text),
                 may_end: may_end_transaction(dialect, &text),
                 settings: changes_session_settings(dialect, &text),
+                unread_reading: readings.unread_reading,
                 text,
             }
         })

@@ -24,7 +24,9 @@
 //!   파서의 재귀 한도를 넘으면 파괴 · `tooDeep`. 근거는 그 상수들의 주석.
 //!
 //! 거부 목록은 완전할 수 없다 — 목록 밖 사용자 정의 함수가 든 `SELECT` 는 조회로 나온다. 마지막 방어는 DB 수준 읽기 전용
-//! 트랜잭션이다(결정 M3-D6, 실행 파이프라인 M3-05).
+//! 트랜잭션이다(결정 M3-D6, 실행 파이프라인 M3-05). 그 방어가 닿지 않는 함수 — 읽기 전용 검사를 하지 않는 관리 함수와, 인자의 SQL
+//! 글을 실행하는 함수(그 안의 관리 함수 · 새 연결) — 는 분류가 첫 방어라 목록으로 막는다([`SERVER_ADMIN_FUNCTIONS`] ·
+//! [`SQL_TEXT_FUNCTIONS`]).
 
 use std::ops::ControlFlow;
 
@@ -107,7 +109,8 @@ pub enum RiskReason {
     /// 부작용 함수(`nextval` · `pg_sleep` · `GET_LOCK` …)를 부르는 조회.
     SideEffectFunction,
     /// 다른 세션 · 서버 전체에 닿는 관리 작업 — 함수(`pg_terminate_backend` · `pg_reload_conf` · `pg_notify` …)와 MySQL `KILL` ·
-    /// `FLUSH` · `SET GLOBAL` · `SET PERSIST` · `RESET PERSIST`. 범위 없는 쓰기.
+    /// `FLUSH` · `SET GLOBAL` · `SET PERSIST` · `RESET PERSIST`, 그리고 인자의 SQL 글을 실행해 안을 알 수 없는 함수(`query_to_xml` ·
+    /// `dblink` …). 범위 없는 쓰기.
     ServerAdmin,
     /// MySQL `RESET MASTER` · `RESET BINARY LOGS AND GTIDS` · `RESET REPLICA` · `PURGE BINARY LOGS` — 바이너리 · 릴레이 로그와 복제
     /// 위치를 지운다(되돌릴 수 없다). 파괴.
@@ -169,12 +172,34 @@ const TOO_DEEP_NESTING: usize = RECURSION_LIMIT - 4;
 /// 글에 문장이 여럿 들어 있으면(나누기는 M3-04 의 일이지만 받은 글을 믿지 않는다) 가장 높은 등급이다. 문장이 없는 글(주석 ·
 /// 빈칸뿐)은 아무것도 돌리지 않으므로 조회다.
 pub fn classify_statement(dialect: SqlDialect, text: &str) -> Classification {
+    classify_statement_readings(dialect, text).classification
+}
+
+/// [`classify_statement`] 의 결과에, 서버가 고를 수 있는 읽기 가운데 분류기가 읽지 못해 등급에 넣지 않은 것이 있었는지를 더한 것.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatementReadings {
+    pub classification: Classification,
+    /// 서버 설정에 따라 고를 수 있는 다른 읽기(MySQL `NO_BACKSLASH_ESCAPES` 의 읽기)를 파서가 읽지 못해(파싱 실패 · 상한) 등급에
+    /// 넣지 않았다 — `mysql` 모듈 머리 주석 「백슬래시」 의 남는 틈. 사람이 치는 일반 실행은 이것을 보지 않는다(흔한 데이터
+    /// `'a\'b'` 를 파괴로 만들지 않으려고). 조회만 받는 호출(`db.query.page` · `db.query.execute { queryOnly }`)은 이것이 참이면
+    /// 조회로 보지 않는다 — 그 읽기를 서버만 읽는 꼴(`INTO OUTFILE`)이면 조회 등급으로 파일을 쓴다(M3-17 리뷰 X3).
+    pub unread_reading: bool,
+}
+
+/// [`classify_statement`] 와 같은 분류에 [`StatementReadings::unread_reading`] 을 더해 돌려준다.
+pub fn classify_statement_readings(dialect: SqlDialect, text: &str) -> StatementReadings {
     if text.len() > MAX_STATEMENT_BYTES {
-        return Classification::destructive(RiskReason::TooLarge);
+        return StatementReadings {
+            classification: Classification::destructive(RiskReason::TooLarge),
+            unread_reading: false,
+        };
     }
     match dialect {
         SqlDialect::Mysql => mysql::classify(text),
-        SqlDialect::Postgres | SqlDialect::Sqlite => classify_text(dialect, text).classification,
+        SqlDialect::Postgres | SqlDialect::Sqlite => StatementReadings {
+            classification: classify_text(dialect, text).classification,
+            unread_reading: false,
+        },
     }
 }
 
@@ -341,11 +366,15 @@ impl Classification {
 
 /// 찾은 (등급, 까닭)을 모은다. 결과는 가장 높은 등급과 그 등급의 까닭이다.
 #[derive(Default)]
-struct Found(Vec<(RiskGrade, RiskReason)>);
+struct Found {
+    found: Vec<(RiskGrade, RiskReason)>,
+    /// [`StatementReadings::unread_reading`].
+    unread_reading: bool,
+}
 
 impl Found {
     fn add(&mut self, grade: RiskGrade, reason: RiskReason) {
-        self.0.push((grade, reason));
+        self.found.push((grade, reason));
     }
 
     /// 다른 읽기의 분류를 더한다(조회는 까닭이 없어 더할 것이 없다).
@@ -357,13 +386,13 @@ impl Found {
 
     fn finish(self) -> Classification {
         let grade = self
-            .0
+            .found
             .iter()
             .map(|(grade, _)| *grade)
             .max()
             .unwrap_or(RiskGrade::Read);
         let mut reasons: Vec<RiskReason> = self
-            .0
+            .found
             .into_iter()
             .filter(|(g, _)| *g == grade)
             .map(|(_, reason)| reason)
@@ -828,16 +857,49 @@ const SIDE_EFFECT_FUNCTIONS: &[&str] = &[
 ];
 
 /// 이 접두사로 시작하는 이름도 부작용 함수다: `pg_sleep` · `pg_sleep_for` · `pg_sleep_until`, `pg_advisory_lock` 류와
-/// `pg_try_advisory_*`, `dblink` · `dblink_exec` 류, `lo_import` · `lo_export` · `lo_create` · `lo_unlink` 류, `pg_ls_dir` 류(서버
-/// 디렉터리 목록).
+/// `pg_try_advisory_*`, `lo_import` · `lo_export` · `lo_create` · `lo_unlink` 류, `pg_ls_dir` 류(서버 디렉터리 목록).
 const SIDE_EFFECT_FUNCTION_PREFIXES: &[&str] = &[
     "pg_sleep",
     "pg_advisory",
     "pg_try_advisory",
-    "dblink",
     "lo_",
     "pg_ls_",
 ];
+
+/// 인자로 받은 SQL 글(또는 글 조각으로 짓는 질의)을 실행하는 함수. 분류기는 문자열 안을 읽지 않으므로 안의 문장을 알 수 없다 —
+/// 관리 함수와 같은 범위 없는 쓰기로 본다(까닭도 [`RiskReason::ServerAdmin`]). 읽기 전용 트랜잭션도 받쳐 주지 못한다: 같은 트랜잭션
+/// 안에서 도는 것(아래 PG 내장 · `tablefunc` · `xml2`)은 안의 관리 함수를 막지 않고(`query_to_xml('select pg_terminate_backend(…)')`
+/// 이 다른 세션을 끊는다), 새 연결 · 새 프로세스에서 도는 것(`dblink` · `pg_background`)은 읽기 전용 밖이라 `nextval` 도 돈다.
+///
+/// 근거(M3-03b, PG 17.6 + 그 이미지의 contrib 확장 전부): `pg_proc` 에서 인자 이름이 `query` · `sql` · `command` · `cursor` 류인
+/// 함수와 휘발성 · 안정 함수 가운데 text · cstring · refcursor 인자를 받는 것을 훑어 골랐고, 아래 이름마다 `BEGIN READ ONLY` 안에서
+/// 다른 세션을 끊는 것을 확인했다(`live_pg_side_effect_functions_that_pass_a_read_only_transaction` 이 표로 고정한다). 넣지 않은 것:
+/// `cursor_to_xml` · `cursor_to_xmlschema`(이미 연 커서에서 읽을 뿐 — 커서를 여는 `DECLARE` 가 따로 분류된다), `table_to_xml` 류
+/// (표 이름만 받는다). `query_to_xmlschema` 는 질의를 준비만 하고 행을 읽지 않아 PG 17.6 에서 안의 함수가 돌지 않았지만, 계획 단계는
+/// 돈다 — 같은 무리로 둔다. `ts_rewrite` 는 SQL 을 받지 않는 3인자 판도 이름이 같아 함께 걸린다(확인을 한 번 더 받을 뿐이다).
+/// 확장 함수는 판과 상관없이 이름으로 본다(문서 · 소스 판단): `pg_background_launch` · `pg_background_submit`(백그라운드 작업자에서
+/// 돈다), pg_cron 의 `cron.schedule` · `cron.schedule_in_database` · `cron.alter_job`(나중에 다른 세션에서 돈다 — 이름이 흔해 스키마
+/// `cron` 으로 한정했을 때만, [`CRON_SQL_TEXT_FUNCTIONS`]).
+const SQL_TEXT_FUNCTIONS: &[&str] = &[
+    // PG 내장
+    "query_to_xml",
+    "query_to_xmlschema",
+    "query_to_xml_and_xmlschema",
+    "ts_stat",
+    "ts_rewrite",
+    // tablefunc(`connectby` 는 표 · 열 이름 인자를 따옴표 없이 이어 붙여 질의를 짓는다)
+    "connectby",
+    // xml2(`xpath_table` 도 같다 — 마지막 인자가 WHERE 조각이다)
+    "xpath_table",
+];
+
+/// 이 접두사로 시작하는 이름도 [`SQL_TEXT_FUNCTIONS`] 다: `crosstab` · `crosstab2` ~ `crosstab4`(tablefunc), `dblink` 류 전부
+/// (dblink — `dblink_connect` · `dblink_build_sql_*` 처럼 글을 실행하지 않는 것도 함께 걸린다), `pg_background_*`.
+const SQL_TEXT_FUNCTION_PREFIXES: &[&str] = &["crosstab", "dblink", "pg_background_"];
+
+/// 스키마 `cron`(pg_cron) 으로 한정했을 때만 [`SQL_TEXT_FUNCTIONS`] 인 이름. 한정하지 않은 `schedule(…)` 은 사용자 함수일 수 있어
+/// 보지 않는다 — `search_path` 에 `cron` 을 두고 한정 없이 부르면 놓친다.
+const CRON_SQL_TEXT_FUNCTIONS: &[&str] = &["schedule", "schedule_in_database", "alter_job"];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum FunctionEffect {
@@ -847,11 +909,23 @@ enum FunctionEffect {
 
 fn function_effect(name: &ObjectName) -> Option<FunctionEffect> {
     let ident = name.0.last().and_then(|part| part.as_ident())?;
+    let schema = name
+        .0
+        .iter()
+        .rev()
+        .nth(1)
+        .and_then(|part| part.as_ident())
+        .map(|ident| ident.value.to_ascii_lowercase());
     let name = ident.value.to_ascii_lowercase();
     if SERVER_ADMIN_FUNCTIONS.contains(&name.as_str())
         || SERVER_ADMIN_FUNCTION_PREFIXES
             .iter()
             .any(|prefix| name.starts_with(prefix))
+        || SQL_TEXT_FUNCTIONS.contains(&name.as_str())
+        || SQL_TEXT_FUNCTION_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        || (schema.as_deref() == Some("cron") && CRON_SQL_TEXT_FUNCTIONS.contains(&name.as_str()))
     {
         Some(FunctionEffect::ServerAdmin)
     } else if SIDE_EFFECT_FUNCTIONS.contains(&name.as_str())

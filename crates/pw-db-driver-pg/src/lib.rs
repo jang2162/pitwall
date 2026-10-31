@@ -228,9 +228,7 @@ async fn pg_config(spec: &ConnectionSpec, mode: PgSslMode) -> DbResult<tokio_pos
     if let Some(database) = &spec.database {
         config.dbname(database);
     }
-    if let Some(schema) = &spec.schema {
-        config.options(search_path_option(schema));
-    }
+    config.options(startup_options(spec.schema.as_deref()));
     if let Some(user) = &spec.user {
         config.user(user);
     }
@@ -238,6 +236,24 @@ async fn pg_config(spec: &ConnectionSpec, mode: PgSslMode) -> DbResult<tokio_pos
         config.password(password.expose());
     }
     Ok(config)
+}
+
+/// 모든 세션의 연결 시작 옵션: `standard_conforming_strings=on` 과, 고른 스키마가 있으면 그 `search_path`.
+///
+/// `standard_conforming_strings` 를 고정하는 까닭: 분류기(`pw_db_sql::risk`)와 나누기는 켜짐의 읽기(`'…'` 안의 `\` 는 글자)로 글을
+/// 읽는다. 꺼진 서버(`ALTER DATABASE|ROLE … SET standard_conforming_strings = off`)는 `'a\''` 를 `a'` 로 닫으므로, 분류기가 문자열
+/// 하나로 본 `WHERE name = 'a\'' OR lo_create(4242) > 0 --'` 를 함수 호출로 돌린다 — 한 문장 안이라 「나뉜 문장 하나 = 서버 문장
+/// 하나」 방어도 닿지 않는다(M3-17 리뷰 X2, PG 17.6). 시작 옵션은 데이터베이스 · 역할의 설정보다 앞서므로(PG `GucSource` 의
+/// `PGC_S_CLIENT`) 서버 설정과 상관없이 켜지고, 풀 재활용의 `DISCARD ALL` 도 이 값으로 되돌린다. 그래도 켜지지 않았으면(옵션을
+/// 버리는 중계기 등) [`startup`] 이 연결을 거절한다. 사람이 그 세션에서 `SET standard_conforming_strings = off` 를 치면 꺼진다 —
+/// 14-m3-plan.md M3-06 칸의 남는 틈.
+fn startup_options(schema: Option<&str>) -> String {
+    let mut options = String::from("-c standard_conforming_strings=on");
+    if let Some(schema) = schema {
+        options.push(' ');
+        options.push_str(&search_path_option(schema));
+    }
+    options
 }
 
 /// 고른 스키마(M3-15 콘솔의 스키마 고르기)를 연결 시작 옵션 `-c search_path=…` 로 — SQL `SET` 을 보내지 않는다(read-only 연결의
@@ -261,7 +277,8 @@ fn search_path_option(schema: &str) -> String {
     option
 }
 
-/// 붙은 뒤 한 번: 서버 판본 · 연결한 DB · 이 연결이 TLS 인지.
+/// 붙은 뒤 한 번: 서버 판본 · 연결한 DB · 이 연결이 TLS 인지. `standard_conforming_strings` 가 켜지지 않았으면 거절한다
+/// ([`startup_options`]).
 async fn startup(
     client: &tokio_postgres::Client,
     plan: &TlsPlan,
@@ -269,7 +286,8 @@ async fn startup(
     let row = client
         .query_one(
             "SELECT pg_catalog.current_setting('server_version'), pg_catalog.current_database()::text, \
-                    COALESCE((SELECT s.ssl FROM pg_catalog.pg_stat_ssl s WHERE s.pid = pg_catalog.pg_backend_pid()), false)",
+                    COALESCE((SELECT s.ssl FROM pg_catalog.pg_stat_ssl s WHERE s.pid = pg_catalog.pg_backend_pid()), false), \
+                    pg_catalog.current_setting('standard_conforming_strings')",
             &[],
         )
         .await
@@ -277,12 +295,29 @@ async fn startup(
     let version: String = row.try_get(0).map_err(|e| db_error(&e))?;
     let database: String = row.try_get(1).map_err(|e| db_error(&e))?;
     let ssl: bool = row.try_get(2).map_err(|e| db_error(&e))?;
+    let standard_strings: String = row.try_get(3).map_err(|e| db_error(&e))?;
+    require_standard_strings(&standard_strings)?;
     Ok((
         ServerInfo {
             version: Some(version),
             tls: plan.status(ssl),
         },
         database,
+    ))
+}
+
+/// `standard_conforming_strings` 가 켜진 세션만 쓴다 — 꺼진 채 쓰면 분류기와 서버가 같은 글을 다르게 읽는다([`startup_options`]).
+fn require_standard_strings(value: &str) -> DbResult<()> {
+    if value == "on" {
+        return Ok(());
+    }
+    Err(DbError::new(
+        DbErrorKind::Unsupported,
+        format!(
+            "the server kept standard_conforming_strings = {value} although Pitwall asked for on at startup — \
+             with it off the server reads backslashes in string literals differently from Pitwall's classifier, \
+             so Pitwall does not use this connection (check for a proxy that drops the startup options)"
+        ),
     ))
 }
 

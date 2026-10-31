@@ -16,6 +16,7 @@
 //!   함수는 DB 수준 읽기 전용이 막는다, 결정 M3-D6). 같은 글을 분류의 기대값으로 단언한다.
 //! - [D] 목록을 넓혔다 — `SLEEP` · `GET_LOCK` · `pg_sleep` · `lo_import` 가 든 조회는 쓰기다.
 //! - [E] 다른 세션 · 서버에 닿는 관리 함수(`pg_terminate_backend` · `pg_cancel_backend` …)는 범위 없는 쓰기다(DBX 는 쓰기 + dangerous).
+//!   인자의 SQL 글을 실행하는 함수(`dblink` …)도 같다 — DBX 는 `dblink` 를 부작용 함수(쓰기)로 봤다.
 //! - [F] PG 의 `SELECT … INTO 표` 는 표를 만든다(`CREATE TABLE … AS` 와 같다) — DDL(DBX 는 쓰기).
 
 use pw_db_types::RiskGrade::{self, Ddl, Destructive, Read, UnboundedWrite, Write};
@@ -174,9 +175,14 @@ fn side_effect_visitor_covers_from_subqueries_ctes_lateral_and_order_by() {
             "SELECT * FROM (SELECT pg_sleep(1)) AS x",
             "SELECT * FROM t ORDER BY pg_sleep(1)",
             "SELECT a FROM t, LATERAL (SELECT nextval('s') FROM u) d",
-            "SELECT * FROM dblink('host=x', 'DELETE FROM t') AS r(a int)",
         ],
         Write,
+    );
+    // [E] `dblink` 는 SQL 글을 실행하는 함수 — 새 연결에서 돌아 읽기 전용 트랜잭션 밖이다.
+    expect(
+        Postgres,
+        "SELECT * FROM dblink('host=x', 'DELETE FROM t') AS r(a int)",
+        UnboundedWrite,
     );
     expect(Mysql, "SELECT * FROM (SELECT SLEEP(1)) AS x", Write);
     expect(Mysql, "SELECT * FROM t ORDER BY SLEEP(1)", Write);

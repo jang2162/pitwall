@@ -11717,7 +11717,7 @@
               },
               {
                 "const": "serverAdmin",
-                "description": "다른 세션 · 서버 전체에 닿는 관리 작업 — 함수(`pg_terminate_backend` · `pg_reload_conf` · `pg_notify` …)와 MySQL `KILL` ·\n`FLUSH` · `SET GLOBAL` · `SET PERSIST` · `RESET PERSIST`. 범위 없는 쓰기.",
+                "description": "다른 세션 · 서버 전체에 닿는 관리 작업 — 함수(`pg_terminate_backend` · `pg_reload_conf` · `pg_notify` …)와 MySQL `KILL` ·\n`FLUSH` · `SET GLOBAL` · `SET PERSIST` · `RESET PERSIST`, 그리고 인자의 SQL 글을 실행해 안을 알 수 없는 함수(`query_to_xml` ·\n`dblink` …). 범위 없는 쓰기.",
                 "type": "string"
               },
               {

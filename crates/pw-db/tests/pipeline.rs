@@ -849,6 +849,62 @@ async fn query_only_runs_one_query_and_refuses_everything_else() {
     }
 }
 
+/// MySQL 글의 `NO_BACKSLASH_ESCAPES` 읽기를 분류기가 읽지 못하면(파서는 못 읽고 서버는 읽는 `INTO OUTFILE` 꼴) 조회만 받는
+/// 호출(`db.query.page` · `queryOnly`)은 그 글을 조회로 보지 않는다 — `notAQuery`, 그 문장은 파괴 · `unparsed` 로 싣는다(M3-17 리뷰
+/// X3). 사람이 치는 일반 실행의 등급은 그대로라(조회) 같은 글이 확인 없이 드라이버에 간다 — 14 M3-03 칸의 남는 틈.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_only_refuses_a_mysql_reading_the_classifier_could_not_read() {
+    let e = env(true);
+    e.my.respond("FROM t", FakeResponse::rows(1));
+    let mut w = e.f.window();
+    let sql = r#"SELECT * FROM t WHERE name = 'a\' OR id = 1 INTO OUTFILE "/var/lib/mysql-files/x.txt" -- '"#;
+    let unparsed = |err: &RpcError| {
+        assert!(denied(err), "{err:?}");
+        let data = err.data.as_ref().unwrap();
+        assert_eq!(data["reason"], "notAQuery", "{err:?}");
+        assert_eq!(data["statements"][0]["grade"], "destructive", "{err:?}");
+        assert_eq!(
+            data["statements"][0]["reasons"],
+            json!(["unparsed"]),
+            "{err:?}"
+        );
+    };
+    let err = w
+        .call(
+            "db.query.page",
+            json!({ "projectId": e.f.id, "connectionId": "my", "sql": sql, "limit": 5 }),
+        )
+        .await
+        .unwrap_err();
+    unparsed(&err);
+    let s = e.open(&mut w, "my").await;
+    let before = e.my.calls().len();
+    let err = run(
+        &mut w,
+        json!({ "sessionId": s, "sql": sql, "queryOnly": true }),
+    )
+    .await
+    .unwrap_err();
+    unparsed(&err);
+    assert_eq!(e.my.calls().len(), before, "{:?}", &e.my.calls()[before..]);
+    // 뒤의 읽기를 읽은 조회(백슬래시가 있어도)는 그대로 돈다.
+    run(
+        &mut w,
+        json!({ "sessionId": s, "sql": r"SELECT * FROM t WHERE name = 'it\'s'", "queryOnly": true }),
+    )
+    .await
+    .unwrap();
+    // 일반 실행은 등급(조회)대로 확인 없이 돈다.
+    run(&mut w, json!({ "sessionId": s, "sql": sql }))
+        .await
+        .unwrap();
+    assert!(
+        executed(&e.my).last().is_some_and(|ran| ran == sql),
+        "{:?}",
+        executed(&e.my)
+    );
+}
+
 /// 사람이 친 `BEGIN` · `COMMIT` · `ROLLBACK` 은 드라이버 메서드로 옮긴다 — 드라이버는 이 문장을 SQL 로 받지 않는다. `PREPARE
 /// TRANSACTION` 은 아무것도 돌리기 전에 거절한다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

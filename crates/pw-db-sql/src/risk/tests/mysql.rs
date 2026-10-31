@@ -1,10 +1,10 @@
 //! MySQL 글의 여러 읽기(`risk/mysql.rs`): 실행 주석의 판본(H3)과 백슬래시 이스케이프(M2).
 
 use pw_db_types::RiskGrade::{self, Destructive, Read, UnboundedWrite, Write};
-use pw_db_types::SqlDialect::Mysql;
+use pw_db_types::SqlDialect::{Mysql, Postgres, Sqlite};
 
 use crate::risk::RiskReason::{self, *};
-use crate::risk::{Classification, classify_statement};
+use crate::risk::{Classification, classify_statement, classify_statement_readings};
 
 #[track_caller]
 fn expect(sql: &str, grade: RiskGrade, reasons: &[RiskReason]) {
@@ -101,6 +101,42 @@ fn a_backslash_that_splits_differently_without_escapes_is_destructive() {
         UnboundedWrite,
         &[UnboundedWhere],
     );
+}
+
+/// 넣지 않은 읽기는 알린다 — 조회만 받는 호출(`db.query.page` · `queryOnly`)이 그 글을 조회로 보지 않게(M3-17 리뷰 X3). 등급은
+/// 그대로다(사람이 치는 일반 실행의 규칙, `common_escaped_quotes_stay_as_they_are`).
+#[test]
+fn a_reading_left_out_of_the_grade_is_reported() {
+    let readings = |sql: &str| classify_statement_readings(Mysql, sql);
+    // 뒤의 읽기(`NO_BACKSLASH_ESCAPES`)로는 `INTO OUTFILE` · `INTO @변수` 가 붙은 조회 — 파서는 못 읽고 서버는 읽는다.
+    for sql in [
+        r#"SELECT * FROM t WHERE name = 'a\' OR id = 1 INTO OUTFILE "/var/lib/mysql-files/x.txt" -- '"#,
+        r"SELECT * FROM t WHERE name = 'a\' OR id = 1 INTO @x, @y -- '",
+    ] {
+        let got = readings(sql);
+        assert_eq!(got.classification.grade, Read, "{sql}: {got:?}");
+        assert!(got.unread_reading, "{sql}: {got:?}");
+    }
+    // 쓰기여도 알린다(등급은 앞의 읽기 그대로).
+    let update = readings(r"UPDATE t SET a = 'x\' INTO @v -- ' WHERE id = 1");
+    assert_eq!(update.classification.grade, Write);
+    assert!(update.unread_reading, "{update:?}");
+    // 흔한 데이터(`'a\'b'`)는 뒤의 읽기에서 따옴표가 닫히지 않는다 — 서버가 그 문장에서 멈추므로 넣지 않은 읽기가 아니다.
+    assert!(!readings(r"INSERT INTO t VALUES ('a\'b', 1), ('c', 2)").unread_reading);
+    // 뒤의 읽기를 읽었거나(분류에 들어갔다), 따옴표가 닫히지 않아 서버가 멈추거나, 백슬래시가 없으면 넣지 않은 읽기가 없다.
+    for sql in [
+        r"DELETE FROM t WHERE c = 'x\' OR 1=1 -- '",
+        r"SELECT * FROM t WHERE c = 'x\' OR 1=1 -- '",
+        r"SELECT 'it\'s'",
+        "SELECT * FROM t INTO OUTFILE '/tmp/x'",
+        "SELECT 1",
+    ] {
+        assert!(!readings(sql).unread_reading, "{sql}: {:?}", readings(sql));
+    }
+    // PG · SQLite 는 읽기가 하나다.
+    for dialect in [Postgres, Sqlite] {
+        assert!(!classify_statement_readings(dialect, r"SELECT 'a\' OR 1 = 1 -- '").unread_reading);
+    }
 }
 
 #[test]

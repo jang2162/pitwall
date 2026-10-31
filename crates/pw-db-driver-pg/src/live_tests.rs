@@ -532,18 +532,7 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
     ];
     let mut table = Vec::new();
     for sql in &probes {
-        conn.begin(BeginOptions { read_only: true }).await.unwrap();
-        let outcome = match conn
-            .execute(ExecuteRequest::new(sql.clone(), RiskGrade::Write))
-            .await
-        {
-            Err(e) => e.code.unwrap_or_else(|| format!("{:?}", e.kind)),
-            Ok(_) => match conn.fetch(FetchLimit::rows(10)).await {
-                Ok(_) => "passes".to_owned(),
-                Err(e) => e.code.unwrap_or_else(|| format!("{:?}", e.kind)),
-            },
-        };
-        conn.rollback().await.unwrap();
+        let outcome = read_only_outcome(&mut conn, sql).await;
         table.push((
             sql.split('(')
                 .next()
@@ -552,6 +541,90 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
                 .to_owned(),
             outcome,
         ));
+    }
+    // 인자의 SQL 글을 실행하는 함수(M3-03b — `pw_db_sql::risk` 의 `SQL_TEXT_FUNCTIONS`): 안의 관리 함수가 읽기 전용을 지난다. 확장은
+    // 이 시험만 쓰고 끝나면 지운다. dblink 는 같은 서버의 새 연결이다(서버 쪽 유닉스 소켓 — 공식 이미지의 `local … trust`).
+    for extension in ["dblink", "tablefunc", "xml2"] {
+        run(
+            &mut conn,
+            &format!("CREATE EXTENSION IF NOT EXISTS {extension}"),
+        )
+        .await;
+    }
+    let cancel = format!("select pg_cancel_backend({victim_pid})");
+    let link = "'dbname=' || current_database() || ' user=' || current_user";
+    let sql_text_probes = [
+        (
+            "query_to_xml",
+            format!("SELECT query_to_xml('{cancel}', true, false, '')"),
+        ),
+        (
+            "query_to_xmlschema",
+            format!("SELECT query_to_xmlschema('{cancel}', true, false, '')"),
+        ),
+        (
+            "query_to_xml_and_xmlschema",
+            format!("SELECT query_to_xml_and_xmlschema('{cancel}', true, false, '')"),
+        ),
+        (
+            "ts_stat",
+            format!("SELECT ts_stat('select to_tsvector(''a'') from ({cancel}) s')"),
+        ),
+        (
+            "ts_rewrite",
+            format!(
+                "SELECT ts_rewrite('a'::tsquery, 'select ''a''::tsquery, ''b''::tsquery from ({cancel}) s')"
+            ),
+        ),
+        (
+            "crosstab2",
+            format!(
+                "SELECT crosstab2('select pg_cancel_backend({victim_pid})::text, ''c''::text, ''v''::text')"
+            ),
+        ),
+        (
+            "connectby",
+            format!(
+                "SELECT count(*) FROM connectby('pg_stat_activity', 'pid::text', \
+                 'case when pid = {victim_pid} then pg_cancel_backend(pid)::text end', 'true', 0) AS t(k text, p text, l int)"
+            ),
+        ),
+        (
+            "xpath_table",
+            format!(
+                "SELECT count(*) FROM xpath_table('pid', '''<a/>''::text', 'pg_stat_activity', '/a', \
+                 'case when pid = {victim_pid} then pg_cancel_backend(pid) else false end') AS t(k int, a text)"
+            ),
+        ),
+        (
+            "dblink",
+            format!("SELECT * FROM dblink({link}, '{cancel}') AS t(x bool)"),
+        ),
+        (
+            "dblink_exec",
+            format!(
+                "SELECT dblink_exec({link}, 'do $$ begin perform pg_cancel_backend({victim_pid}); end $$')"
+            ),
+        ),
+        // 같은 트랜잭션 안의 것은 읽기 전용 검사를 하는 함수(`nextval`)를 막지만, dblink 는 새 연결이라 막지 못한다.
+        (
+            "query_to_xml nextval",
+            "SELECT query_to_xml('select nextval(''pw_live_probe_seq'')', true, false, '')"
+                .to_owned(),
+        ),
+        (
+            "dblink nextval",
+            format!(
+                "SELECT * FROM dblink({link}, 'select nextval(''pw_live_probe_seq'')') AS t(x bigint)"
+            ),
+        ),
+    ];
+    for (name, sql) in &sql_text_probes {
+        let outcome = read_only_outcome(&mut conn, sql).await;
+        table.push(((*name).to_owned(), outcome));
+    }
+    for extension in ["dblink", "tablefunc", "xml2"] {
+        run(&mut conn, &format!("DROP EXTENSION IF EXISTS {extension}")).await;
     }
     probe_cleanup(&mut conn).await;
     for (function, outcome) in &table {
@@ -579,10 +652,21 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
         "pg_ls_dir",
         "pg_stat_file",
         "pg_current_xact_id",
+        "query_to_xml",
+        "query_to_xmlschema",
+        "query_to_xml_and_xmlschema",
+        "ts_stat",
+        "ts_rewrite",
+        "crosstab2",
+        "connectby",
+        "xpath_table",
+        "dblink",
+        "dblink_exec",
+        "dblink nextval",
     ] {
         assert_eq!(outcome(name), "passes", "{name}");
     }
-    for name in ["lo_create", "nextval", "setval"] {
+    for name in ["lo_create", "nextval", "setval", "query_to_xml nextval"] {
         assert_eq!(outcome(name), "25006", "{name}");
     }
     // 읽기 전용이 아니라 서버 상태가 막는다: 논리 슬롯은 `wal_level = logical`, 재생 정지 · 승격은 대기 서버에서만(55000).
@@ -612,6 +696,23 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
         .await,
         0
     );
+}
+
+/// 읽기 전용 트랜잭션에서 `sql` 을 돌려 본 결과: 지나가면 `passes`, 아니면 서버 코드(없으면 오류 갈래). 끝나면 롤백한다.
+async fn read_only_outcome(conn: &mut PgConnection, sql: &str) -> String {
+    conn.begin(BeginOptions { read_only: true }).await.unwrap();
+    let outcome = match conn
+        .execute(ExecuteRequest::new(sql, RiskGrade::Write))
+        .await
+    {
+        Err(e) => e.code.unwrap_or_else(|| format!("{:?}", e.kind)),
+        Ok(_) => match conn.fetch(FetchLimit::rows(10)).await {
+            Ok(_) => "passes".to_owned(),
+            Err(e) => e.code.unwrap_or_else(|| format!("{:?}", e.kind)),
+        },
+    };
+    conn.rollback().await.unwrap();
+    outcome
 }
 
 /// 함수 표 시험이 만든 서버 상태를 치운다(없으면 아무것도 하지 않는다).
@@ -1027,6 +1128,64 @@ async fn live_pg_a_chosen_schema_is_the_current_schema() {
     let path = one(&mut conn, "SHOW search_path").await;
     assert!(text(&path).ends_with("public"), "{path:?}");
     run(&mut admin, r#"DROP SCHEMA "pw live ""schema""" CASCADE"#).await;
+}
+
+/// `standard_conforming_strings = off` 로 둔 DB 에서도 세션은 켜짐이다(시작 옵션, M3-17 리뷰 X2) — 리뷰가 큰 객체를 만든 숨김 꼴
+/// (`'a\'' OR lo_create(…) > 0 --'`)이 문자열 하나로 읽혀 아무것도 만들지 않는다. 세션에서 끄면 같은 글이 함수를 부른다 — 그 글이
+/// 실제로 위험하다는 대조이자, 사람이 `SET` 으로 끄는 것은 막지 않는다는 남는 틈(14-m3-plan.md M3-06 칸). DB 설정은 이 시험이 만든
+/// DB 에만 건다 — 같은 서버의 다른 시험이 물려받지 않게(CONTRIBUTING.md 「실 DB 시험」).
+#[tokio::test(flavor = "multi_thread")]
+async fn live_pg_a_database_with_standard_strings_off_still_reads_backslashes_as_text() {
+    const DB: &str = "pw_live_scs_off";
+    const OID: i64 = 4_242_317;
+    let mut admin = open(&plain()).await;
+    run(
+        &mut admin,
+        &format!("DROP DATABASE IF EXISTS {DB} WITH (FORCE)"),
+    )
+    .await;
+    run(&mut admin, &format!("CREATE DATABASE {DB}")).await;
+    run(
+        &mut admin,
+        &format!("ALTER DATABASE {DB} SET standard_conforming_strings = off"),
+    )
+    .await;
+    let mut spec = plain();
+    spec.database = Some(DB.to_owned());
+    let mut conn = open(&spec).await;
+    assert_eq!(
+        text(
+            &one(
+                &mut conn,
+                "SELECT setting FROM pg_settings WHERE name = 'standard_conforming_strings'"
+            )
+            .await
+        ),
+        "on"
+    );
+    // 켜진 세션의 읽기를 바꾼 것은 시작 옵션이다 — DB 설정은 그대로 꺼짐이다.
+    assert_eq!(
+        text(
+            &one(
+                &mut conn,
+                "SELECT array_to_string(s.setconfig, ',') FROM pg_db_role_setting s \
+                 JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = current_database() AND s.setrole = 0",
+            )
+            .await
+        ),
+        "standard_conforming_strings=off"
+    );
+    let hidden = format!(
+        r"SELECT name FROM (VALUES ('a')) AS v(name) WHERE name = 'a\'' OR (lo_create({OID}) > 0) --'"
+    );
+    let objects = format!("SELECT count(*) FROM pg_largeobject_metadata WHERE oid = {OID}");
+    assert!(all(&mut conn, read(&hidden)).await.is_empty());
+    assert_eq!(count(&mut conn, &objects).await, 0, "the hidden call ran");
+    run(&mut conn, "SET standard_conforming_strings = off").await;
+    assert_eq!(all(&mut conn, read(&hidden)).await.len(), 1);
+    assert_eq!(count(&mut conn, &objects).await, 1);
+    drop(conn);
+    run(&mut admin, &format!("DROP DATABASE {DB} WITH (FORCE)")).await;
 }
 
 /// 트랜잭션이 열린 채 닫으면 DB 가 롤백한다. 쉬는 연결은 풀로 돌아가 세션 상태를 지우고 다시 쓰인다.
