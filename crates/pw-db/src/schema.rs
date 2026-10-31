@@ -19,7 +19,7 @@
 //!   인덱스 · 식 인덱스는 제외). 없으면 키 없는 테이블이다(결정 M3-D9).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -600,10 +600,15 @@ pub struct SchemaState {
     /// 캐시를 채운 설정(연결마다). 지금 설정과 다르면 그 연결의 캐시를 버린다.
     configs: Mutex<HashMap<ConnKey, DbConnectionConfig>>,
     links: Links,
+    /// (프로젝트, 연결 id)마다 「끊기」 순번 — 끊기 전에 시작한 조회가 끊기 뒤에 새 자리를 만들어 연결을 열지 않게. `links` 를 잠근
+    /// 채로만 읽고 올린다(자리 받기와 끊기 사이에 틈이 없게).
+    disconnects: Mutex<HashMap<(String, String), u64>>,
     /// 쉬는 연결을 닫는 시간([`IDLE_CLOSE`], 시험이 줄인다).
     idle_close: Mutex<Duration>,
     /// 지금까지 연 메타데이터용 연결 수(시험).
     opened: AtomicU64,
+    /// 자리의 잠금을 기다리는 조회 수(시험).
+    queued: AtomicUsize,
 }
 
 impl Default for SchemaState {
@@ -612,8 +617,10 @@ impl Default for SchemaState {
             cache: Mutex::default(),
             configs: Mutex::default(),
             links: Links::default(),
+            disconnects: Mutex::default(),
             idle_close: Mutex::new(IDLE_CLOSE),
             opened: AtomicU64::new(0),
+            queued: AtomicUsize::new(0),
         }
     }
 }
@@ -645,13 +652,30 @@ impl SchemaState {
         lock(&self.cache).get(key)
     }
 
+    /// 그 (프로젝트, 연결 id)의 「끊기」 순번.
+    fn disconnects(&self, project: &str, connection: &str) -> u64 {
+        let _links = lock(&*self.links);
+        lock(&self.disconnects)
+            .get(&(project.to_owned(), connection.to_owned()))
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// `key` 의 자리를 준다. 새 자리를 만들어 그 (프로젝트, 연결 id)의 자리가 [`MAX_LINKS`] 를 넘으면 가장 오래 안 쓴 자리를 표에서
-    /// 빼서 돌려준다 — 부른 쪽이 그 연결을 닫은 뒤에 새 연결을 연다.
-    fn link(&self, key: &LinkKey) -> (Arc<MetaLink>, Vec<Arc<MetaLink>>) {
+    /// 빼서 돌려준다 — 부른 쪽이 그 연결을 닫은 뒤에 새 연결을 연다. 조회가 시작할 때 본 「끊기」 순번(`seen`)이 그새 올랐으면
+    /// 아무것도 만들지 않고 `None` 이다.
+    fn link(&self, key: &LinkKey, seen: u64) -> Option<(Arc<MetaLink>, Vec<Arc<MetaLink>>)> {
         let mut links = lock(&*self.links);
+        let now = lock(&self.disconnects)
+            .get(&(key.conn.project.clone(), key.conn.connection.clone()))
+            .copied()
+            .unwrap_or(0);
+        if now != seen {
+            return None;
+        }
         if let Some(link) = links.get(key) {
             link.touch();
-            return (Arc::clone(link), Vec::new());
+            return Some((Arc::clone(link), Vec::new()));
         }
         let same = |k: &LinkKey| {
             k.conn.project == key.conn.project && k.conn.connection == key.conn.connection
@@ -673,12 +697,16 @@ impl SchemaState {
         }
         let link = Arc::new(MetaLink::new());
         links.insert(key.clone(), Arc::clone(&link));
-        (link, evicted)
+        Some((link, evicted))
     }
 
-    /// 그 (프로젝트, 연결 id)의 자리를 워크트리 · 카탈로그와 상관없이 모두 표에서 뺀다. 그 자리를 쥔 조회는 다음에 새 자리를 받는다.
+    /// 그 (프로젝트, 연결 id)의 자리를 워크트리 · 카탈로그와 상관없이 모두 표에서 빼고 「끊기」 순번을 올린다 — 그 전에 시작해
+    /// 자리를 기다리던 조회는 새 자리를 받지 않는다.
     fn take_links(&self, project: &str, connection: &str) -> Vec<Arc<MetaLink>> {
         let mut links = lock(&*self.links);
+        *lock(&self.disconnects)
+            .entry((project.to_owned(), connection.to_owned()))
+            .or_default() += 1;
         let keys: Vec<LinkKey> = links
             .keys()
             .filter(|k| k.conn.project == project && k.conn.connection == connection)
@@ -703,6 +731,27 @@ impl SchemaState {
     /// 지금 열어 둔 메타데이터용 연결 자리 수(시험).
     pub fn open_links(&self) -> usize {
         lock(&*self.links).len()
+    }
+
+    /// 자리의 잠금을 기다리는 조회 수(시험).
+    pub fn queued(&self) -> usize {
+        self.queued.load(Ordering::SeqCst)
+    }
+}
+
+/// 자리의 잠금을 기다리는 동안 [`SchemaState::queued`] 를 하나 올린다(기다리다 버려져도 내린다).
+struct Queued<'a>(&'a AtomicUsize);
+
+impl<'a> Queued<'a> {
+    fn new(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(count)
+    }
+}
+
+impl Drop for Queued<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -821,6 +870,8 @@ impl DbSessions {
         request: Request,
     ) -> Result<Cached, RpcError> {
         check_text("worktree", worktree)?;
+        // 끊기 전에 시작한 조회는 끊기 뒤에 연결을 새로 열지 않는다(아래 자리 받기).
+        let seen = self.schema.disconnects(grant.project_id(), connection_id);
         let (c, project, wt, id) = (
             Arc::clone(&self.connections),
             grant.project_id().to_owned(),
@@ -871,13 +922,21 @@ impl DbSessions {
             conn: conn.clone(),
             catalog: catalog.clone(),
         };
-        // 자리를 받아 잠근다. 기다리는 사이에 자리가 표에서 빠졌으면(상한 · 쉼 · 창 닫힘) 새 자리를 받는다.
+        // 자리를 받아 잠근다. 기다리는 사이에 자리가 표에서 빠졌으면(상한 · 쉼 · 창 닫힘) 새 자리를 받는다. 이 조회가 시작한 뒤에
+        // 「끊기」 가 있었으면 새 자리를 만들지 않고 끝난다 — 끊기가 답한 뒤에 그 연결의 메타데이터용 연결이 남지 않게.
         let (link, mut open) = loop {
-            let (link, evicted) = self.schema.link(&link_key);
+            let Some((link, evicted)) = self.schema.link(&link_key, seen) else {
+                return Err(db_error(DbError::new(
+                    DbErrorKind::Disconnected,
+                    format!("db connection `{connection_id}` was disconnected"),
+                )));
+            };
             for old in evicted {
                 shut(&old).await;
             }
+            let queued = Queued::new(&self.schema.queued);
             let open = Arc::clone(&link.open).lock_owned().await;
+            drop(queued);
             if !link.gone() {
                 break (link, open);
             }

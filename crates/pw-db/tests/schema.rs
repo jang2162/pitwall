@@ -576,6 +576,74 @@ async fn disconnecting_works_after_trust_is_revoked_and_opens_nothing() {
     assert_eq!(e.sessions.schema_state().open_links(), 0);
 }
 
+/// 끊기 전에 그 연결의 자리를 기다리던 조회는 새로 열지 않고 `disconnected` 로 끝난다 — 끊기가 답한 뒤에는 그 연결의 메타데이터용
+/// 연결이 없다. 드라이버에 닿아 있던 조회는 끝까지 돌고, 그 뒤에 닫힌다. 기다린 조회의 창(b)은 살려 둔다 — 창 닫힘이 남은 연결을
+/// 닫아 가리지 않게.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_query_queued_before_disconnecting_does_not_reopen() {
+    let e = env(true);
+    e.pg.set_objects(tables(3));
+    let mut w = e.f.window();
+    w.call("db.schema.objects", e.objects()).await.unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Connect), 1);
+
+    e.pg.hold_metadata(true);
+    let (mut a, mut b) = (e.f.window(), e.f.window());
+    let columns = e.table("t00000");
+    let running = tokio::spawn(async move {
+        let r = a.call("db.schema.columns", columns).await;
+        (a, r)
+    });
+    wait_until("the first query did not reach the driver", || {
+        e.metadata_calls("columns") == 1
+    })
+    .await;
+    let indexes = e.table("t00000");
+    let queued = tokio::spawn(async move {
+        let r = b.call("db.schema.indexes", indexes).await;
+        (b, r)
+    });
+    let state = e.sessions.schema_state();
+    wait_until("the second query did not queue for the link", || {
+        state.queued() == 1
+    })
+    .await;
+
+    let disconnect = tokio::spawn({
+        let mut c = e.f.window();
+        let params = json!({ "projectId": e.f.id, "connectionId": "dev" });
+        async move {
+            let r = c.call("db.schema.disconnect", params).await;
+            (c, r)
+        }
+    });
+    wait_until("the disconnect did not take the links", || {
+        state.open_links() == 0
+    })
+    .await;
+    e.pg.hold_metadata(false);
+
+    let (_a, ran) = running.await.unwrap();
+    ran.unwrap();
+    let (_b, refused) = queued.await.unwrap();
+    let refused = refused.unwrap_err();
+    assert_eq!(refused.code, code::DB_ERROR);
+    assert_eq!(refused.data.unwrap()["error"]["kind"], "disconnected");
+    let (_c, done) = disconnect.await.unwrap();
+    done.unwrap();
+
+    assert_eq!(state.open_links(), 0);
+    assert_eq!(e.pg.count(&FakeCall::Connect), 1);
+    assert_eq!(e.pg.count(&FakeCall::Close), 1);
+    assert_eq!(e.metadata_calls("indexes"), 0);
+
+    // 끊기 뒤에 시작한 조회는 새로 연다.
+    w.call("db.schema.indexes", e.table("t00000"))
+        .await
+        .unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Connect), 2);
+}
+
 /// 연결 설정이 바뀌면(다른 서버를 가리킬 수 있다) 그 설정으로 채운 캐시를 버리고 메타데이터용 연결을 다시 연다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_changed_config_drops_the_cache_and_reconnects() {
