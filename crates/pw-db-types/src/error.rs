@@ -14,6 +14,10 @@ pub struct DbError {
     pub message: String,
     /// 서버의 오류 코드(PG SQLSTATE `25006`, MySQL 오류 번호 `1792` 등).
     pub code: Option<String>,
+    /// 서버 · 드라이버가 트랜잭션 전체를 되돌렸을 때만 true — 파이프라인(M3-05)이 세션 상태를 idle 로 맞추고 사람에게 알린다
+    /// (SQLite 수동 트랜잭션 안의 쓰기를 취소했을 때 등). 없으면 false 로 받는다.
+    #[serde(default)]
+    pub rolled_back: bool,
 }
 
 #[derive(
@@ -51,7 +55,14 @@ impl DbError {
             kind,
             message: message.into(),
             code: None,
+            rolled_back: false,
         }
+    }
+
+    /// 이 오류와 함께 트랜잭션 전체가 되돌려졌다.
+    pub fn with_rolled_back(mut self) -> Self {
+        self.rolled_back = true;
+        self
     }
 
     pub fn with_code(mut self, code: impl Into<String>) -> Self {
@@ -85,3 +96,17 @@ impl fmt::Display for DbError {
 }
 
 impl std::error::Error for DbError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rolled_back_is_camel_case_and_defaults_to_false() {
+        let error = DbError::new(DbErrorKind::Cancelled, "interrupted").with_rolled_back();
+        assert_eq!(serde_json::to_value(&error).unwrap()["rolledBack"], true);
+        let old: DbError =
+            serde_json::from_str(r#"{"kind":"server","message":"x","code":null}"#).unwrap();
+        assert!(!old.rolled_back);
+    }
+}

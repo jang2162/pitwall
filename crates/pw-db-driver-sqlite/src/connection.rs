@@ -8,16 +8,26 @@
 //! **커서 버리기**는 문장을 리셋하는 것이다 — 등급과 상관없이 같다. SQLite 는 `… RETURNING` 의 쓰기를 첫 걸음에 모두 하고,
 //! 리셋해도 그 쓰기는 남는다(MySQL 과 달리 남은 행을 읽어 버릴 까닭이 없다). 트랜잭션은 그대로다.
 //!
-//! **취소**는 스레드 밖으로 미리 꺼낸 `InterruptHandle` 이다(`sqlite3_interrupt`). 도는 문장은 `interrupted` 로 끝나고, 도는
-//! 문장이 없으면 SQLite 가 다음 문장을 시작할 때 표지를 지운다. 명시 트랜잭션 안의 쓰기를 멈추면 SQLite 가 그 트랜잭션을 롤백할
-//! 수 있다 — 트랜잭션 상태는 명령이 끝날 때마다 `is_autocommit` 으로 다시 읽는다.
+//! **취소**는 연결의 취소 표지 + 스레드 밖으로 미리 꺼낸 `InterruptHandle`(`sqlite3_interrupt`)이다. `sqlite3_interrupt` 만으로는
+//! 첫 걸음 전에 온 취소가 사라진다 — 도는 문장이 없을 때의 인터럽트는 다음 문장의 첫 걸음이 지운다(`execute` 는 준비만 하고
+//! 걸음은 첫 `fetch` 가 한다). 그래서 표지를 따로 두고, 스레드가 명령을 시작할 때와 `progress_handler` 로 걸음 사이에 본다.
+//! 표지는 새 실행(`execute`)이나 커서와 상관없는 일을 **보낼 때** 지운다 — 열린 커서의 `fetch` · 버리기는 그 실행의 이어짐이라
+//! 지우지 않는다. 명령은 future 를 처음 기다릴 때 보낸다(이미 취소된 `QueryCancel::run` 은 기다리지 않으므로 아무것도 나가지 않는다).
+//!
+//! 명시 트랜잭션 안의 쓰기를 멈추면 SQLite 는 그 트랜잭션 전체를 롤백한다(`sqlite3RollbackAll`) — 막을 수 없으므로 그 오류에
+//! [`DbError::rolled_back`] 을 싣는다. 트랜잭션 상태는 명령이 끝날 때마다 `is_autocommit` 으로 다시 읽는다.
+//!
+//! **닫기**는 도는 문장을 먼저 멈추고(닫는 연결이라 잃을 것이 없다 — 열린 트랜잭션은 어차피 롤백된다) 스레드가 끝날 때까지
+//! [`CLOSE_WAIT`] 만큼 기다린다.
 
 use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
+use pw_db_driver::budget::within;
 use pw_db_driver::{BoxFuture, Connected, DbConnection, DbResult, Interrupt, SqlConnection};
 use pw_db_types::{
     BeginOptions, CellLimit, ColumnInfo, ColumnMeta, ConnectionSpec, DbError, DbErrorKind, Ddl,
@@ -31,6 +41,12 @@ use tokio::sync::oneshot;
 use crate::error::{disconnected, invalid};
 use crate::guard::{self, Guard};
 use crate::{meta, value};
+
+/// 닫기가 스레드의 끝을 기다리는 시간. 잠금을 기다리는 중(`busy_timeout` 5 s)이면 인터럽트로 깨지 않으므로 그보다 길다.
+const CLOSE_WAIT: Duration = Duration::from_secs(10);
+
+/// `progress_handler` 가 취소 표지를 보는 간격(가상 기계 명령 수).
+const CANCEL_CHECK_OPS: std::ffi::c_int = 1000;
 
 type Reply<T> = oneshot::Sender<DbResult<T>>;
 type Job = Box<dyn FnOnce(&Worker) + Send>;
@@ -49,21 +65,28 @@ pub(crate) async fn open(spec: ConnectionSpec) -> DbResult<Connected> {
     let (ready_tx, ready_rx) = oneshot::channel();
     let (commands, inbox) = mpsc::channel();
     let in_transaction = Arc::new(AtomicBool::new(false));
-    let shared = in_transaction.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let (exited_tx, exited) = oneshot::channel::<()>();
+    let shared = (in_transaction.clone(), cancelled.clone());
     thread::Builder::new()
         .name("pw-db-sqlite".to_owned())
-        .spawn(move || match Worker::open(&spec, shared) {
-            Ok(worker) => {
-                // 연결을 기다리던 쪽이 떠났으면(연결 타임아웃) 연결을 닫고 끝난다.
-                if ready_tx
-                    .send(Ok(worker.conn.get_interrupt_handle()))
-                    .is_ok()
-                {
-                    worker.run(&inbox);
+        .spawn(move || {
+            // 맨 먼저 묶어 맨 나중에 놓는다 — 연결을 닫고 스레드가 끝나는 순간을 `close` 가 안다.
+            let _exited = exited_tx;
+            let (in_transaction, cancelled) = shared;
+            match Worker::open(&spec, in_transaction, cancelled) {
+                Ok(worker) => {
+                    // 연결을 기다리던 쪽이 떠났으면(연결 타임아웃) 연결을 닫고 끝난다.
+                    if ready_tx
+                        .send(Ok(worker.conn.get_interrupt_handle()))
+                        .is_ok()
+                    {
+                        worker.run(&inbox);
+                    }
                 }
-            }
-            Err(error) => {
-                let _ = ready_tx.send(Err(error));
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error));
+                }
             }
         })
         .map_err(|e| {
@@ -76,8 +99,9 @@ pub(crate) async fn open(spec: ConnectionSpec) -> DbResult<Connected> {
     Ok(Connected {
         connection: DbConnection::Sql(Box::new(SqliteConnection {
             commands: Some(commands),
-            interrupt: Arc::new(SqliteInterrupt(handle)),
+            interrupt: Arc::new(SqliteInterrupt { handle, cancelled }),
             in_transaction,
+            exited: Some(exited),
         })),
         server: ServerInfo {
             version: Some(rusqlite::version().to_owned()),
@@ -92,22 +116,32 @@ struct SqliteConnection {
     commands: Option<mpsc::Sender<Command>>,
     interrupt: Arc<SqliteInterrupt>,
     in_transaction: Arc<AtomicBool>,
+    /// 스레드가 끝나면 닫힌다(보내는 쪽을 스레드가 쥔다).
+    exited: Option<oneshot::Receiver<()>>,
+}
+
+/// 보낼 명령이 새 일을 시작하는가(취소 표지를 지우는가). 열린 커서의 `fetch` · 버리기는 그 실행의 이어짐이다.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Starts {
+    NewWork,
+    Continuation,
 }
 
 impl SqliteConnection {
     fn send<T: Send + 'static>(
         &self,
-        command: impl FnOnce(Reply<T>) -> Command,
+        starts: Starts,
+        command: impl FnOnce(Reply<T>) -> Command + Send + 'static,
     ) -> BoxFuture<'static, DbResult<T>> {
-        let (reply, answer) = oneshot::channel();
-        let sent = self
-            .commands
-            .as_ref()
-            .is_some_and(|commands| commands.send(command(reply)).is_ok());
+        let commands = self.commands.clone();
+        let cancelled = self.interrupt.cancelled.clone();
         Box::pin(async move {
-            if !sent {
-                return Err(disconnected());
+            let commands = commands.ok_or_else(disconnected)?;
+            if starts == Starts::NewWork {
+                cancelled.store(false, Ordering::SeqCst);
             }
+            let (reply, answer) = oneshot::channel();
+            commands.send(command(reply)).map_err(|_| disconnected())?;
             answer.await.map_err(|_| disconnected())?
         })
     }
@@ -116,7 +150,7 @@ impl SqliteConnection {
         &self,
         work: impl FnOnce(&Worker) -> DbResult<T> + Send + 'static,
     ) -> BoxFuture<'static, DbResult<T>> {
-        self.send(|reply| {
+        self.send(Starts::NewWork, |reply| {
             Command::Job(Box::new(move |worker| {
                 let result = work(worker);
                 worker.reply(reply, result);
@@ -129,7 +163,7 @@ impl Drop for SqliteConnection {
     fn drop(&mut self) {
         if self.commands.take().is_some() {
             // 버려진 실행(무한 루프 등)이 스레드를 붙잡지 않게 한다. 도는 문장이 없으면 아무것도 하지 않는다.
-            self.interrupt.0.interrupt();
+            self.interrupt.fire();
         }
     }
 }
@@ -148,15 +182,17 @@ impl SqlConnection for SqliteConnection {
     }
 
     fn execute(&mut self, request: ExecuteRequest) -> BoxFuture<'_, DbResult<StatementStarted>> {
-        self.send(|reply| Command::Execute(request, reply))
+        self.send(Starts::NewWork, |reply| Command::Execute(request, reply))
     }
 
     fn fetch(&mut self, limit: FetchLimit) -> BoxFuture<'_, DbResult<RowBatch>> {
-        self.send(|reply| Command::Fetch(limit, reply))
+        self.send(Starts::Continuation, move |reply| {
+            Command::Fetch(limit, reply)
+        })
     }
 
     fn discard_cursor(&mut self) -> BoxFuture<'_, DbResult<()>> {
-        self.send(Command::Discard)
+        self.send(Starts::Continuation, Command::Discard)
     }
 
     fn begin(&mut self, options: BeginOptions) -> BoxFuture<'_, DbResult<()>> {
@@ -210,20 +246,51 @@ impl SqlConnection for SqliteConnection {
     }
 
     fn close(mut self: Box<Self>) -> BoxFuture<'static, DbResult<()>> {
-        let closing = self.send(Command::Close);
-        // 닫는 중에는 인터럽트하지 않는다(Drop).
-        self.commands = None;
-        closing
+        self.interrupt.fire();
+        let commands = self.commands.take();
+        let exited = self.exited.take();
+        Box::pin(async move {
+            within(CLOSE_WAIT, "closing the SQLite connection", async move {
+                let commands = commands.ok_or_else(disconnected)?;
+                let (reply, answer) = oneshot::channel();
+                commands
+                    .send(Command::Close(reply))
+                    .map_err(|_| disconnected())?;
+                drop(commands);
+                let closed = answer.await.map_err(|_| disconnected())?;
+                if let Some(exited) = exited {
+                    let _ = exited.await;
+                }
+                closed
+            })
+            .await
+        })
     }
 }
 
-struct SqliteInterrupt(InterruptHandle);
+/// 취소: 연결의 취소 표지를 세우고 도는 문장을 멈춘다.
+struct SqliteInterrupt {
+    handle: InterruptHandle,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl SqliteInterrupt {
+    fn fire(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        self.handle.interrupt();
+    }
+}
 
 impl Interrupt for SqliteInterrupt {
     fn interrupt(&self) -> BoxFuture<'_, DbResult<()>> {
-        self.0.interrupt();
+        self.fire();
         Box::pin(std::future::ready(Ok(())))
     }
+}
+
+/// 걸음 전에 본 취소 — SQLite 의 인터럽트와 같은 모양(`SQLITE_INTERRUPT` = 9).
+fn interrupted() -> DbError {
+    DbError::new(DbErrorKind::Cancelled, "interrupted").with_code("9")
 }
 
 /// 스레드 안의 연결.
@@ -235,18 +302,40 @@ struct Worker {
     /// 이 연결이 연 읽기 전용 트랜잭션이 열려 있다.
     read_only_transaction: Cell<bool>,
     in_transaction: Arc<AtomicBool>,
+    /// 취소 표지(async 쪽과 함께 본다).
+    cancelled: Arc<AtomicBool>,
 }
 
 impl Worker {
-    fn open(spec: &ConnectionSpec, in_transaction: Arc<AtomicBool>) -> DbResult<Self> {
+    fn open(
+        spec: &ConnectionSpec,
+        in_transaction: Arc<AtomicBool>,
+        cancelled: Arc<AtomicBool>,
+    ) -> DbResult<Self> {
         let (conn, guard) = guard::open(spec)?;
+        let watched = cancelled.clone();
+        conn.progress_handler(
+            CANCEL_CHECK_OPS,
+            Some(move || watched.load(Ordering::SeqCst)),
+        )
+        .map_err(|e| guard.error(e))?;
         Ok(Self {
             conn,
             guard,
             read_only: spec.read_only,
             read_only_transaction: Cell::new(false),
             in_transaction,
+            cancelled,
         })
+    }
+
+    /// 취소 표지가 서 있으면 그 취소를 받아(지우고) 취소 오류.
+    fn take_cancel(&self) -> DbResult<()> {
+        if self.cancelled.swap(false, Ordering::SeqCst) {
+            Err(interrupted())
+        } else {
+            Ok(())
+        }
     }
 
     fn run(self, inbox: &mpsc::Receiver<Command>) {
@@ -279,9 +368,23 @@ impl Worker {
         }
     }
 
-    /// 상태를 맞춘 뒤 답한다 — async 쪽이 답을 받은 뒤 읽는 `transaction_state` 가 이미 새 값이다.
+    /// 상태를 맞춘 뒤 답한다 — async 쪽이 답을 받은 뒤 읽는 `transaction_state` 가 이미 새 값이다. 오류와 함께 열린 트랜잭션이
+    /// 사라졌으면(SQLite 가 전체를 롤백했다) 그 오류에 [`DbError::rolled_back`] 을 싣는다.
     fn reply<T>(&self, reply: Reply<T>, result: DbResult<T>) {
+        if matches!(&result, Err(error) if error.kind == DbErrorKind::Cancelled) {
+            // 취소를 받았다 — 표지를 지워 뒤이은 상태 맞추기(`settle` 의 PRAGMA)가 멈추지 않게 한다.
+            self.cancelled.store(false, Ordering::SeqCst);
+        }
+        let was_in_transaction = self.in_transaction.load(Ordering::SeqCst);
         self.settle();
+        let rolled_back = was_in_transaction && self.conn.is_autocommit();
+        let result = result.map_err(|error| {
+            if rolled_back {
+                error.with_rolled_back()
+            } else {
+                error
+            }
+        });
         let _ = reply.send(result);
     }
 
@@ -344,6 +447,10 @@ impl Worker {
         reply: Reply<StatementStarted>,
         inbox: &mpsc::Receiver<Command>,
     ) -> Option<Command> {
+        if let Err(error) = self.take_cancel() {
+            self.reply(reply, Err(error));
+            return None;
+        }
         // 주석 · 공백뿐인 글은 SQLite 에 문장이 없다(빈 `Statement` 를 돌리면 API 오용 오류다).
         if skip_trivia(&request.sql).is_empty() {
             self.reply(
@@ -397,6 +504,11 @@ impl Worker {
             match command {
                 Command::Fetch(limit, reply) => {
                     self.guard.clear_denial();
+                    if let Err(error) = self.take_cancel() {
+                        drop(rows);
+                        self.reply(reply, Err(error));
+                        return None;
+                    }
                     match fetch(&mut rows, limit, request.cell_limit, width) {
                         Ok((batch, false)) => {
                             self.reply(

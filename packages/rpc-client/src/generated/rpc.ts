@@ -1090,6 +1090,11 @@ export type DbError = {
 	message: string,
 	/**  서버의 오류 코드(PG SQLSTATE `25006`, MySQL 오류 번호 `1792` 등). */
 	code: string | null,
+	/**
+	 *  서버 · 드라이버가 트랜잭션 전체를 되돌렸을 때만 true — 파이프라인(M3-05)이 세션 상태를 idle 로 맞추고 사람에게 알린다
+	 *  (SQLite 수동 트랜잭션 안의 쓰기를 취소했을 때 등). 없으면 false 로 받는다.
+	 */
+	rolledBack?: boolean,
 };
 
 export type DbErrorKind = 

@@ -11,8 +11,12 @@ pub(crate) fn to_db(value: ValueRef<'_>, limit: CellLimit) -> DbValue {
         ValueRef::Null => DbValue::Null,
         ValueRef::Integer(v) => DbValue::int(v),
         ValueRef::Real(v) => DbValue::float(v),
-        // TEXT 가 UTF-8 이 아닐 수 있다(SQLite 는 검사하지 않는다) — 깨진 바이트는 대체 문자로 보인다.
-        ValueRef::Text(bytes) => DbValue::text(String::from_utf8_lossy(bytes), limit),
+        // TEXT 가 UTF-8 이 아닐 수 있다(SQLite 는 검사하지 않는다). 대체 문자로 바꾸면 원래 바이트를 잃으므로(복사 · MCP 에 틀린
+        // 값) 그때는 바이트(hex)로 낸다.
+        ValueRef::Text(bytes) => match std::str::from_utf8(bytes) {
+            Ok(text) => DbValue::text(text, limit),
+            Err(_) => DbValue::bytes(bytes, limit),
+        },
         ValueRef::Blob(bytes) => DbValue::bytes(bytes, limit),
     }
 }
@@ -95,6 +99,11 @@ mod tests {
         assert_eq!(
             to_db(ValueRef::Text("한글이다".as_bytes()), CellLimit(7)),
             DbValue::text("한글이다", CellLimit(7))
+        );
+        assert_eq!(
+            to_db(ValueRef::Text(&[0xff, 0x00, 0xfe]), limit),
+            DbValue::bytes(&[0xff, 0x00, 0xfe], limit),
+            "text that is not UTF-8 keeps its bytes"
         );
     }
 

@@ -1042,3 +1042,227 @@ async fn closing_rolls_back_and_dropping_stops_the_running_statement() {
         started.elapsed()
     );
 }
+
+/// 리뷰 H1: 루트 안의 끊긴 링크가 루트 밖을 가리키면 `VACUUM INTO` · `ATTACH` 를 거절하고 루트 밖에 파일이 생기지 않는다(0 바이트도) —
+/// 읽기 쓰기 · read-only 연결 둘 다.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dangling_link_inside_the_root_cannot_create_a_file_outside() {
+    let fixture = SqliteFixture::file();
+    let root = real_parent(fixture.path().unwrap());
+    let outside = tempfile::tempdir().unwrap();
+    let link = root.join("dangling.db");
+    std::os::unix::fs::symlink(outside.path().join("escaped.db"), &link).unwrap();
+    for read_only in [false, true] {
+        let mut spec = spec(fixture.path().unwrap());
+        spec.read_only = read_only;
+        let mut conn = connect(spec).await;
+        for sql in [
+            format!("VACUUM INTO {}", literal(&link)),
+            format!("ATTACH {} AS o", literal(&link)),
+        ] {
+            let error = conn.execute(write(&sql)).await.unwrap_err();
+            assert!(
+                error
+                    .message
+                    .starts_with("attaching through a link whose target does not exist"),
+                "read_only={read_only} {sql}: {error:?}"
+            );
+        }
+    }
+    assert_eq!(
+        std::fs::read_dir(outside.path()).unwrap().count(),
+        0,
+        "nothing outside the root"
+    );
+}
+
+/// 리뷰 L2 · L4: read-only 연결은 루트 안이어도 새 파일을 만들지 않고(`VACUUM INTO`), 상대 경로 `ATTACH` 는 까닭과 함께 거절한다.
+#[tokio::test]
+async fn read_only_vacuum_into_creates_nothing_and_relative_attach_is_refused() {
+    let fixture = SqliteFixture::file();
+    let root = real_parent(fixture.path().unwrap());
+    let mut read_only = spec(fixture.path().unwrap());
+    read_only.read_only = true;
+    let mut conn = connect(read_only).await;
+    let target = root.join("copy.db");
+    let error = conn
+        .execute(write(&format!("VACUUM INTO {}", literal(&target))))
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .message
+            .starts_with("a read-only connection does not create files"),
+        "{error:?}"
+    );
+    assert!(!target.exists(), "not even an empty file");
+
+    let mut writable = connect(spec(fixture.path().unwrap())).await;
+    let relative = writable
+        .execute(write("ATTACH 'fixture.db' AS o"))
+        .await
+        .unwrap_err();
+    assert!(
+        relative
+            .message
+            .starts_with("attach a file by its absolute path"),
+        "{relative:?}"
+    );
+}
+
+/// 리뷰 M3 · L1: 프로세스 전역(`temp_store_directory` · `data_store_directory`)과 늘 끄는 설정(`trusted_schema`)을 바꾸는 PRAGMA 는
+/// 어느 연결에서든 거절된다 — 같은 프로세스의 다른 SQLite 연결이 영향을 받지 않는다.
+#[tokio::test]
+async fn process_wide_and_always_off_pragmas_cannot_be_changed() {
+    let fixture = SqliteFixture::file();
+    let elsewhere = tempfile::tempdir().unwrap();
+    for read_only in [false, true] {
+        let mut spec = spec(fixture.path().unwrap());
+        spec.read_only = read_only;
+        let mut conn = connect(spec).await;
+        for sql in [
+            format!(
+                "PRAGMA temp_store_directory = {}",
+                literal(elsewhere.path())
+            ),
+            format!(
+                "PRAGMA data_store_directory = {}",
+                literal(elsewhere.path())
+            ),
+            "PRAGMA trusted_schema = ON".to_owned(),
+            "PRAGMA main.trusted_schema(1)".to_owned(),
+        ] {
+            let error = conn.execute(write(&sql)).await.unwrap_err();
+            assert!(
+                error.message.ends_with("cannot be changed"),
+                "read_only={read_only} {sql}: {error:?}"
+            );
+        }
+        assert_eq!(count(&mut *conn, "PRAGMA trusted_schema").await, 0);
+    }
+    let unrelated = Connection::open_in_memory().unwrap();
+    let temp_dir: String = unrelated
+        .query_row("PRAGMA temp_store_directory", [], |row| row.get(0))
+        .unwrap_or_default();
+    assert_eq!(temp_dir, "", "the process-wide temp folder is untouched");
+}
+
+/// 리뷰 M1: 첫 걸음 전에 온 취소도 지켜진다 — 인터럽트를 직접 부른 뒤의 `fetch`, `QueryCancel` 로 취소한 뒤의 `rollback` 둘 다 1 s
+/// 안에 답하고 연결은 막히지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_before_the_first_step_is_not_lost() {
+    let fixture = SqliteFixture::file();
+    let spec = spec(fixture.path().unwrap());
+    let one_second = Duration::from_secs(1);
+
+    let mut conn = connect(spec.clone()).await;
+    conn.execute(read(ENDLESS)).await.unwrap();
+    conn.interrupter().interrupt().await.unwrap();
+    let error = tokio::time::timeout(one_second, conn.fetch(FetchLimit::FIRST_SCREEN))
+        .await
+        .expect("the fetch answers within 1 s")
+        .unwrap_err();
+    assert_eq!(error.kind, DbErrorKind::Cancelled, "{error:?}");
+    assert!(!error.rolled_back, "no transaction was open");
+    let answered =
+        tokio::time::timeout(one_second, count(&mut *conn, "SELECT count(*) FROM orders"));
+    assert_eq!(answered.await.expect("the connection is free"), 3);
+
+    let mut manual = connect(spec).await;
+    manual.begin(BeginOptions::default()).await.unwrap();
+    let cancel = QueryCancel::new(manual.interrupter(), Budget::CONSOLE.cancel_cleanup);
+    cancel.run(manual.execute(read(ENDLESS))).await.unwrap();
+    cancel.cancel().await.unwrap();
+    let skipped = cancel
+        .run(manual.fetch(FetchLimit::FIRST_SCREEN))
+        .await
+        .unwrap_err();
+    assert_eq!(skipped.kind, DbErrorKind::Cancelled);
+    tokio::time::timeout(one_second, manual.rollback())
+        .await
+        .expect("the rollback answers within 1 s")
+        .unwrap();
+    assert_eq!(manual.transaction_state(), TransactionState::Idle);
+}
+
+/// 리뷰 M2: `close` 는 도는 문장을 멈추고 스레드가 끝날 때까지 기다린다 — 1 s 안에 끝나고, 그 문장이 쥐던 읽기 잠금이 풀려 다른 연결의
+/// 쓰기가 막히지 않는다(`close` 의 `Ok` 는 스레드가 연결을 닫고 끝났다는 뜻이다).
+#[tokio::test]
+async fn close_stops_the_running_statement_and_waits_for_the_thread() {
+    let fixture = SqliteFixture::file();
+    let spec = spec(fixture.path().unwrap());
+    let mut reader = connect(spec.clone()).await;
+    reader
+        .execute(read(&format!("{ENDLESS}, customers")))
+        .await
+        .unwrap();
+    // 파이프라인이 비활동 타임아웃으로 기다림을 버린 꼴 — 스레드는 계속 돈다.
+    let abandoned = tokio::time::timeout(
+        Duration::from_millis(300),
+        reader.fetch(FetchLimit::rows(1)),
+    )
+    .await;
+    assert!(abandoned.is_err(), "the query was still running");
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(1), reader.close())
+        .await
+        .expect("close ends within 1 s")
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(1));
+
+    let mut writer = connect(spec).await;
+    let started = Instant::now();
+    writer
+        .execute(write("INSERT INTO audit_log VALUES ('x', 'after close')"))
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// 리뷰 M4(메인 판정): 수동 트랜잭션 안의 쓰기를 취소하면 SQLite 가 트랜잭션 전체를 롤백한다 — 그 사실(앞의 쓰기도 사라짐)을 고정하고,
+/// 드라이버는 그 오류에 `rolledBack` 을 싣고 상태를 idle 로 낸다.
+#[tokio::test]
+async fn cancelling_a_write_in_a_manual_transaction_reports_the_rollback() {
+    let fixture = SqliteFixture::file();
+    let spec = spec(fixture.path().unwrap());
+    let mut conn = connect(spec.clone()).await;
+    conn.begin(BeginOptions::default()).await.unwrap();
+    conn.execute(write("INSERT INTO audit_log VALUES ('before', 'kept?')"))
+        .await
+        .unwrap();
+    let interrupter = conn.interrupter();
+    let (result, ()) = tokio::join!(
+        conn.execute(write(&format!(
+            "INSERT INTO audit_log SELECT 'long', x FROM ({ENDLESS_ROWS})"
+        ))),
+        async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            interrupter.interrupt().await.unwrap();
+        }
+    );
+    let error = result.unwrap_err();
+    assert_eq!(error.kind, DbErrorKind::Cancelled, "{error:?}");
+    assert!(
+        error.rolled_back,
+        "the whole transaction went with the cancel"
+    );
+    assert_eq!(conn.transaction_state(), TransactionState::Idle);
+    assert_eq!(
+        count(
+            &mut *conn,
+            "SELECT count(*) FROM audit_log WHERE at IN ('before', 'long')"
+        )
+        .await,
+        0,
+        "the earlier write is gone too (SQLite rolls back the whole transaction)"
+    );
+}
+
+/// 끝나지 않는 행 목록(쓰기 문장 안에 넣는다).
+const ENDLESS_ROWS: &str =
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT x FROM c";
