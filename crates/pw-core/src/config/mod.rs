@@ -8,6 +8,7 @@
 //! - [`robust`]: Windows 의 rename 바꿔 끼우기 순간의 일시 오류 다시 시도(파일 쓰기 `pw-fs` 도 쓴다).
 //! - [`ConfigStore`]: 현재 스냅숏 · 다시 읽기 · 파일 감시 · 이벤트.
 //! - [`methods`]: 읽기 전용 RPC(`config.paths`, `config.get`).
+//! - [`write`]: 전역 `settings.toml` 의 한 키 쓰기(언어 설정 · 설정 창의 DB 페이지).
 
 pub mod gitdir;
 pub mod merge;
@@ -17,6 +18,7 @@ pub mod paths;
 pub mod robust;
 mod source;
 mod store;
+pub mod write;
 
 pub use paths::{AppPaths, OsFamily, PathEnv, PathError};
 pub use source::{
