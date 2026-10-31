@@ -59,9 +59,14 @@ export function isReadyTest(name, filter) {
   return last === `${filter}_ready`;
 }
 
-/** nextest 의 `Summary [ … ] N test(s) run: …` 줄의 N. 없으면 null. */
+/**
+ * nextest 의 `Summary [ … ] N test(s) run: …` 줄의 N. 없으면 null. 색 코드는 먼저 지운다 — CI 의 `CARGO_TERM_COLOR=always` 가
+ * `--color never` 보다 앞서는 출력이 섞여도 센다.
+ */
 export function runCount(output) {
-  const matches = [...output.matchAll(/Summary \[[^\]]*\]\s+(\d+) tests? run:/g)];
+  // oxlint-disable-next-line no-control-regex -- ANSI 색 코드(ESC)를 지운다.
+  const plain = output.replace(/\x1b\[[0-9;]*m/g, "");
+  const matches = [...plain.matchAll(/Summary \[[^\]]*\]\s+(\d+) tests? run:/g)];
   return matches.length === 0 ? null : Number(matches.at(-1)[1]);
 }
 
@@ -73,6 +78,12 @@ export function judge({ db, filter, selected, run, floor, exitCode }) {
   if (exitCode !== 0) return { ok: false, message: `${line} — nextest failed (exit ${exitCode})` };
   if (selected.length === 0)
     return { ok: false, message: `${line} — the filter selected no tests` };
+  if (run === null) {
+    return {
+      ok: false,
+      message: `${line} — could not read how many tests nextest ran (no Summary line)`,
+    };
+  }
   if (run !== selected.length) {
     return {
       ok: false,
@@ -133,9 +144,11 @@ function runTarget(db, floor, ci) {
   }
   const selected = selectedTests(JSON.parse(list.stdout));
   for (const name of selected) console.log(`   selected: ${name}`);
-  const run = cargo(["nextest", "run", "--release", ...pkgs, "-E", expr, "--no-tests=fail"], env, {
-    capture: true,
-  });
+  const run = cargo(
+    ["nextest", "run", "--release", ...pkgs, "-E", expr, "--no-tests=fail", "--color", "never"],
+    env,
+    { capture: true },
+  );
   process.stdout.write(run.stdout);
   process.stderr.write(run.stderr);
   return judge({

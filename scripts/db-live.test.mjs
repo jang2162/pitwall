@@ -103,6 +103,26 @@ test("the run count comes from the last nextest summary line", () => {
   assert.equal(runCount("error: no tests to run"), null);
 });
 
+test("a colored summary line still counts", () => {
+  // CI(run 41153877702, db-live)의 로그에서 그대로 뽑은 줄 — `CARGO_TERM_COLOR=always`.
+  const colored =
+    "\x1b[32;1m     Summary\x1b[0m [   0.005s] \x1b[1m1\x1b[0m test run: \x1b[1m1\x1b[0m \x1b[32;1mpassed\x1b[0m, \x1b[1m30\x1b[0m \x1b[33;1mskipped\x1b[0m";
+  assert.equal(runCount(colored), 1);
+});
+
+test("an unreadable run count fails and says so", () => {
+  const unread = judge({
+    db: "pg",
+    filter: "live_pg",
+    selected: ["a live_pg_ready"],
+    run: null,
+    floor: 0,
+    exitCode: 0,
+  });
+  assert.equal(unread.ok, false);
+  assert.match(unread.message, /could not read how many tests nextest ran/);
+});
+
 test("running nothing is not a pass", () => {
   const pass = { ok: true, message: "" };
   const skip = { ok: true, skipped: true, message: "" };
