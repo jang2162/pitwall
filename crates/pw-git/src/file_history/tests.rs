@@ -192,10 +192,85 @@ fn a_file_inside_a_submodule_is_refused_with_the_submodule() {
     assert_matches(repo.root(), repo.base(), "HEAD", "libs/sub");
 }
 
+/// git 2.56 부터 `--follow` 가 갈래마다 경로를 따로 따라간다(`super` 머리 주석). 그 아래 git 과는 갈래가 섞인 이력을 견줄 수
+/// 없다 — 로컬에서는 까닭을 출력하고 대조를 건너뛰지만, CI(`CI` 환경 변수)에서는 러너의 git 이 내려가 대조가 조용히 사라지지 않게
+/// 실패한다.
+fn git_follows_each_line() -> bool {
+    let out = std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let version = text.trim().trim_start_matches("git version ");
+    let mut numbers = version
+        .split(|c: char| !c.is_ascii_digit())
+        .map(|n| n.parse::<u32>().unwrap_or(0));
+    let (major, minor) = (numbers.next().unwrap_or(0), numbers.next().unwrap_or(0));
+    if (major, minor) >= (2, 56) {
+        return true;
+    }
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "git {version} follows one path for every line of history; CI must compare with git 2.56 or later"
+    );
+    eprintln!("skipped the comparison with git {version}: it is older than 2.56");
+    false
+}
+
+/// 갈래마다 따로 따라간다: `P` 를 고친 갈래(`side`)와, `P` 를 지우고 `Q` 를 `P` 로 옮긴 갈래(`main`)를 머지했다. `main` 갈래는
+/// `Q` 를 따라가고, `side` 갈래는 그대로 `P` 를 따라간다(git 2.55 이하는 `side` 의 고침을 빠뜨리고 첫 커밋을 `A Q` 로 보였다).
+/// 두 갈래가 함께 닿는 첫 커밋은 나중에 꺼낸 자식(`side` 의 고침)이 넘긴 `P` 다. 기대값은 git 판과 무관하다.
+#[test]
+fn each_line_of_history_follows_its_own_name() {
+    let repo = TestRepo::new();
+    let lines = |range: std::ops::RangeInclusive<u32>| -> String {
+        range.map(|n| format!("{n}\n")).collect()
+    };
+    repo.write("P", &lines(1..=20));
+    repo.write("Q", &lines(100..=120));
+    repo.commit_all("base");
+    repo.git(&["checkout", "--quiet", "-b", "side"]);
+    repo.commit_file("P", &(lines(1..=20) + "side\n"), "edit P on side");
+    repo.checkout("main");
+    repo.git(&["rm", "--quiet", "P"]);
+    repo.commit_all("delete P");
+    repo.git(&["mv", "Q", "P"]);
+    repo.commit_all("move Q to P");
+    repo.git(&["merge", "--quiet", "-s", "ours", "-m", "merge side", "side"]);
+
+    let rows = history(repo.root(), "main", "P");
+    let got: Vec<(&str, FileChangeKind, &str, Option<&str>)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.subject.as_str(),
+                r.change,
+                r.path.as_str(),
+                r.old_path.as_deref(),
+            )
+        })
+        .collect();
+    use FileChangeKind::*;
+    assert_eq!(
+        got,
+        [
+            ("move Q to P", Renamed, "P", Some("Q")),
+            ("edit P on side", Modified, "P", None),
+            ("base", Added, "P", None),
+        ]
+    );
+    if git_follows_each_line() {
+        assert_matches(repo.root(), repo.base(), "main", "P");
+    }
+}
+
 /// 무작위 이력(이름 바뀜 · 지웠다가 다른 파일의 복사로 다시 만들기 · 갈래와 머지 · 시각 동률 · 시계 어긋남)에서 대상 파일이 거친
-/// 모든 이름의 히스토리가 git 과 같다.
+/// 모든 이름의 히스토리가 git(2.56 이상)과 같다.
 #[test]
 fn random_histories_follow_like_git() {
+    if !git_follows_each_line() {
+        return;
+    }
     let seeds: u64 = std::env::var("PW_BLAME_SEEDS")
         .ok()
         .and_then(|s| s.parse().ok())

@@ -1,15 +1,18 @@
 //! 파일 히스토리(`docs/design/13-m2-plan.md` M2-05 — F5-16): 이름 바뀜을 따라가는 그 파일의 커밋 목록, 커밋마다 그때의 경로.
 //!
-//! `git log --follow --name-status <rev> -- <경로>` 와 같은 커밋을 같은 순서 · 같은 상태로 낸다. git 의 동작을 그대로 옮겼다:
+//! `git log --follow --name-status <rev> -- <경로>` 와 같은 커밋을 같은 순서 · 같은 상태로 낸다. git 2.56 의 동작을 그대로 옮겼다:
 //!
 //! - 순서: git log 의 기본 순서다 — 시작 커밋에서 커미터 시각이 늦은 커밋부터 꺼내고, 꺼낸 커밋의 부모를 넣는다(시각이 같으면 먼저
 //!   넣은 것부터). `--follow` 는 이력 단순화를 하지 않으므로 머지의 부모를 모두 걷는다.
-//! - 보이는 커밋: 머지가 아닌 커밋 중 첫 부모(첫 커밋은 빈 트리)와 견줘 지금 따라가는 경로가 바뀐 것. 머지는 보이지 않는다(git
+//! - 따라가는 경로는 커밋마다 따로다: 커밋을 꺼내면 자식이 넘긴 경로를 쓰고, 다 본 뒤 그 경로를 부모에게 넘긴다. 부모 하나에
+//!   자식이 여럿이면 나중에 꺼낸 자식의 것이 남는다. 머지는 부모마다 그 부모 → 머지 사이의 이름 바뀜을 찾아 넘긴다. git 2.55
+//!   이하는 경로가 하나뿐이라 한 갈래에서 바꾸면 다른 갈래의 커밋에도 그 경로를 썼다(git 커밋 304812ed 「log: improve --follow
+//!   following renames for non-linear history」 가 고쳤다) — 그 git 과는 갈래가 섞인 이력에서 결과가 다르다.
+//! - 보이는 커밋: 머지가 아닌 커밋 중 첫 부모(첫 커밋은 빈 트리)와 견줘 그 커밋이 따라가는 경로가 바뀐 것. 머지는 보이지 않는다(git
 //!   log 는 `-m` 없이 머지의 diff 를 내지 않는다).
 //! - 이름 바뀜: 그 경로가 새로 생긴 커밋이면 이름 바뀜 · 복사의 원본을 찾아([`similar`] — 부모의 모든 파일이 원본 후보인
-//!   `--find-copies-harder`, git 의 비슷함 계산으로 50% 이상), 그 경로로 온 것이 있으면 `R`/`C` 로 보이고 **그 뒤로 걷는 모든 커밋**에서 원래
-//!   경로를 따라간다(git 이 diff 의 경로를 한 번 바꾸면 다른 갈래의 커밋에도 그 경로를 쓴다 — 갈래가 섞인 이력에서 git 과 같은
-//!   결과를 내려고 그대로 따른다).
+//!   `--find-copies-harder`, git 의 비슷함 계산으로 50% 이상), 그 경로로 온 것이 있으면 `R`/`C` 로 보이고 부모에게는 원래 경로를
+//!   넘긴다.
 //!
 //! git 과 다를 수 있는 것: 점수 · 기본 이름까지 같은 원본 후보가 여럿일 때 고르는 차례(git 은 정렬이 안정적이지 않다), 원본 후보가
 //! `diff.renameLimit` 의 제곱을 넘는 큰 트리(git 은 바뀐 파일로만 좁힌다), 빈 파일의 이름 바뀜(견주지 않는다). 시작 리비전에서
@@ -187,6 +190,8 @@ pub fn run(
         buf: Vec::new(),
     };
     walk.push(start)?;
+    // 꺼내지 않은 커밋이 따라갈 경로(자식이 넘긴 것 — 머리 주석).
+    let mut follow: HashMap<ObjectId, BString> = HashMap::from([(start, path.to_owned())]);
     let mut path: BString = path.to_owned();
     let mut mailmap: Option<Mailmap> = None;
     let mut out = Chunker {
@@ -212,35 +217,67 @@ pub fn run(
         for &parent in &node.parents {
             walk.push(parent)?;
         }
+        if let Some(own) = follow.remove(&id) {
+            path = own;
+        }
         if node.parents.len() > 1 {
+            for &parent in &node.parents {
+                let parent_tree = walk.tree_of(parent)?;
+                let change = change_at(
+                    repo,
+                    Some(parent_tree),
+                    node.tree,
+                    path.as_bstr(),
+                    &mut a,
+                    &mut b,
+                )?;
+                let source = match change {
+                    Some(Change::Added) => {
+                        similar::follow(repo, parent_tree, node.tree, path.as_bstr())?
+                            .map(|(source, _)| source)
+                    }
+                    _ => None,
+                };
+                follow.insert(parent, source.unwrap_or_else(|| path.clone()));
+            }
             continue;
         }
         let parent_tree = match node.parents.first() {
             Some(parent) => Some(walk.tree_of(*parent)?),
             None => None,
         };
-        let Some(change) = change_at(repo, parent_tree, node.tree, path.as_bstr(), &mut a, &mut b)?
-        else {
-            continue;
-        };
-        let (kind, old_path) = match (change, parent_tree) {
-            (Change::Added, Some(parent_tree)) => {
-                match similar::follow(repo, parent_tree, node.tree, path.as_bstr())? {
-                    Some((source, copy)) => {
-                        let kind = if copy {
-                            FileChangeKind::Copied
-                        } else {
-                            FileChangeKind::Renamed
-                        };
-                        (kind, Some(source))
+        let shown = match change_at(repo, parent_tree, node.tree, path.as_bstr(), &mut a, &mut b)? {
+            None => None,
+            Some(change) => Some(match (change, parent_tree) {
+                (Change::Added, Some(parent_tree)) => {
+                    match similar::follow(repo, parent_tree, node.tree, path.as_bstr())? {
+                        Some((source, copy)) => {
+                            let kind = if copy {
+                                FileChangeKind::Copied
+                            } else {
+                                FileChangeKind::Renamed
+                            };
+                            (kind, Some(source))
+                        }
+                        None => (FileChangeKind::Added, None),
                     }
-                    None => (FileChangeKind::Added, None),
                 }
-            }
-            (Change::Added, None) => (FileChangeKind::Added, None),
-            (Change::Modified, _) => (FileChangeKind::Modified, None),
-            (Change::Deleted, _) => (FileChangeKind::Deleted, None),
-            (Change::TypeChanged, _) => (FileChangeKind::TypeChanged, None),
+                (Change::Added, None) => (FileChangeKind::Added, None),
+                (Change::Modified, _) => (FileChangeKind::Modified, None),
+                (Change::Deleted, _) => (FileChangeKind::Deleted, None),
+                (Change::TypeChanged, _) => (FileChangeKind::TypeChanged, None),
+            }),
+        };
+        // 부모는 이름 바뀜이면 원래 경로를, 아니면 이 경로를 따라간다(머리 주석).
+        if let Some(&parent) = node.parents.first() {
+            let next = shown
+                .as_ref()
+                .and_then(|(_, old_path)| old_path.clone())
+                .unwrap_or_else(|| path.clone());
+            follow.insert(parent, next);
+        }
+        let Some((kind, old_path)) = shown else {
+            continue;
         };
         // UTF-8 이 아닌 경로는 싣지 못한다 — 그때까지 모인 행을 먼저 보내고 invalid params 로 끝난다(13-m2-plan 「하지 않는 것」).
         let paths = crate::blame::path_text(path.as_bstr()).and_then(|row_path| {
@@ -271,10 +308,6 @@ pub fn run(
             change: kind,
             old_path: row_old_path,
         };
-        // 그 뒤로 걷는 커밋은 모두 원래 경로를 따라간다(머리 주석).
-        if let Some(source) = old_path {
-            path = source;
-        }
         if !out.push(row, emit) {
             return Ok(false);
         }
