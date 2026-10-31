@@ -140,3 +140,37 @@ db-status-config-changed = Settings changed, connect again
 # $connection: connection name
 # $mode: commit mode
 db-status-hint = { $connection } · { $mode }
+
+## Asking for DB access (apps/desktop/src/db/safety/access-prompt.tsx, 14-m3-plan.md M3-13 — 3101 password needed, 3102 approval needed).
+
+db-access-cancel = Cancel
+# $connection: connection name
+db-access-secret-title = Password for { $connection }
+db-access-secret-missing = No password is saved
+db-access-secret-target-changed = The connection target differs from when the password was saved — it was not sent. Enter the password to send to this target
+db-access-secret-unavailable = The keychain cannot be used (locked or no service)
+db-access-secret-label = Password
+db-access-secret-save = Save and Connect
+db-access-approve-title-env = Send an environment variable's value to this connection
+db-access-approve-title-file = Open an SQLite file outside the project
+db-access-approve-title-tunnel = Open an SSH tunnel
+db-access-approve-title-cert-files = Read certificate files for TLS
+db-access-approve-hint = The committed connection settings ask for this. It is asked again when it changes
+db-access-approve = Approve and Connect
+db-access-previous = Approved before
+db-access-now = Now
+db-access-variable = Environment variable
+db-access-path = File
+db-access-destination = SSH destination
+db-access-driver = Driver
+db-access-host = Host
+db-access-port = Port
+db-access-user = User
+db-access-tunnel = Tunnel
+db-access-sslmode = sslmode
+db-access-sslrootcert = Root certificate
+db-access-sslcert = Client certificate
+db-access-sslkey = Client key
+db-access-none = (none)
+# $error: error text
+db-access-failed = Failed: { $error }

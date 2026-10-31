@@ -140,3 +140,37 @@ db-status-config-changed = 설정 바뀜 — 다시 연결
 # $connection: 연결 이름
 # $mode: 커밋 방식
 db-status-hint = { $connection } · { $mode }
+
+## DB 접근 묻기(apps/desktop/src/db/safety/access-prompt.tsx, 14-m3-plan.md M3-13 — 3101 비밀 필요 · 3102 확인 필요).
+
+db-access-cancel = 취소
+# $connection: 연결 이름
+db-access-secret-title = { $connection } 의 비밀번호
+db-access-secret-missing = 저장한 비밀번호가 없다
+db-access-secret-target-changed = 비밀번호를 저장할 때와 연결 대상이 다르다 — 그 비밀번호를 보내지 않았다. 이 대상으로 보낼 비밀번호를 다시 넣는다
+db-access-secret-unavailable = 키체인을 쓸 수 없다(잠김 · 서비스 없음)
+db-access-secret-label = 비밀번호
+db-access-secret-save = 저장하고 연결
+db-access-approve-title-env = 환경 변수의 값을 이 연결에 보낸다
+db-access-approve-title-file = 프로젝트 밖의 SQLite 파일을 연다
+db-access-approve-title-tunnel = SSH 터널을 연다
+db-access-approve-title-cert-files = 인증서 파일을 읽어 TLS 에 쓴다
+db-access-approve-hint = 커밋된 연결 설정이 정한 것이다. 확인한 것이 바뀌면 다시 묻는다
+db-access-approve = 확인하고 연결
+db-access-previous = 전에 확인한 것
+db-access-now = 지금
+db-access-variable = 환경 변수
+db-access-path = 파일
+db-access-destination = SSH 목적지
+db-access-driver = 드라이버
+db-access-host = 호스트
+db-access-port = 포트
+db-access-user = 사용자
+db-access-tunnel = 터널
+db-access-sslmode = sslmode
+db-access-sslrootcert = 루트 인증서
+db-access-sslcert = 클라이언트 인증서
+db-access-sslkey = 클라이언트 키
+db-access-none = (없음)
+# $error: 오류 글
+db-access-failed = 하지 못했다: { $error }
