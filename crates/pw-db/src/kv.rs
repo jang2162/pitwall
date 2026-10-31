@@ -845,9 +845,6 @@ impl DbSessions {
             }
             class => class.grade().unwrap_or(RiskGrade::Destructive),
         };
-        if session.read_only && grade != RiskGrade::Read {
-            return Err(read_only_refusal(DbKvAction::Command));
-        }
         let gated = (grade != RiskGrade::Read).then(|| Gated {
             action: DbKvAction::Command,
             grade,
