@@ -26,17 +26,59 @@ export function formatSize(bytes: number): string {
 // C0 · C1 제어(탭 · 줄바꿈 제외), 줄 · 단락 구분자(U+2028 · 2029), 그리고 Unicode 의 Default_Ignorable_Code_Point 전부 —
 // 0폭 공백 · 결합자(ZWJ · ZWNJ 포함) · 단어 결합자 · BOM · 방향 표시 · 덮어쓰기 · 격리(U+200E · 200F · 202A~202E · 2066~2069 ·
 // 061C) · 이형 선택자 · 한글 채움 문자 · 태그 문자(U+E0000 대) 등. 그려지지 않거나 글 방향 · 모양만 바꾸는 글자는 사람이 값을
-// 확인하는 자리(셀 · 셀 상세 · 위험 확인 다이얼로그)에서 숨지 않는다 — 이모지 이음(ZWJ) · 이형 선택자도 표지로 보인다.
+// 확인하는 자리(셀 · 셀 상세 · 위험 확인 다이얼로그)에서 숨지 않는다. 예외는 이모지를 이루는 자리뿐이다(`isEmojiPart`).
 // 속성 이스케이프는 엔진의 Unicode 판을 따른다.
 const INVISIBLE =
   // oxlint-disable-next-line no-control-regex -- 제어 문자를 찾아 보이게 하는 것이 이 식의 목적이다.
   /[\p{Default_Ignorable_Code_Point}\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/gu;
 
+const PICTOGRAPHIC = /^\p{Extended_Pictographic}$/u;
+const ZWJ = 0x200d;
+const VS15 = 0xfe0e;
+const VS16 = 0xfe0f;
+
+const isPictographic = (cp: number | undefined) =>
+  cp !== undefined && PICTOGRAPHIC.test(String.fromCodePoint(cp));
+const isSkinTone = (cp: number | undefined) => cp !== undefined && cp >= 0x1f3fb && cp <= 0x1f3ff;
+/** 키캡 바탕(`1️⃣` · `#️⃣` · `*️⃣`). */
+const isKeycapBase = (cp: number | undefined) =>
+  cp !== undefined && ((cp >= 0x30 && cp <= 0x39) || cp === 0x23 || cp === 0x2a);
+
+/** `at` 바로 앞 코드 포인트와 그 시작 자리(서로게이트 쌍을 하나로). */
+function before(s: string, at: number): { cp: number; start: number } | undefined {
+  if (at <= 0) return undefined;
+  const low = s.charCodeAt(at - 1);
+  if (low >= 0xdc00 && low <= 0xdfff && at >= 2) {
+    const high = s.charCodeAt(at - 2);
+    if (high >= 0xd800 && high <= 0xdbff) return { cp: s.codePointAt(at - 2)!, start: at - 2 };
+  }
+  return { cp: low, start: at - 1 };
+}
+
+/**
+ * 이모지를 이루는 보이지 않는 글자인가 — 데이터 도구에서 흔한 값(이름 · 채팅 글)의 이모지를 표지로 깨지 않는다(메인 판정).
+ * - 이형 선택자 U+FE0E · FE0F: 바로 앞이 Extended_Pictographic 이거나 키캡 바탕(`0-9 # *`)일 때(`❤️` · `1️⃣`).
+ * - ZWJ: Extended_Pictographic 두 글자 사이일 때(`👨‍👩‍👧`). 앞 글자 뒤의 FE0F · 피부색 수식은 건너뛰고 본다(`❤️‍🔥` · `👩🏽‍💻`).
+ * 지역 표시 글자(🇰🇷) · 피부색 수식(🏽)은 보이는 글자라 처음부터 고르지 않는다. 그 밖의 ZWJ · 이형 선택자는 표지다.
+ */
+function isEmojiPart(s: string, c: string, at: number): boolean {
+  const cp = c.codePointAt(0)!;
+  if (cp === VS15 || cp === VS16) {
+    const prev = before(s, at)?.cp;
+    return isPictographic(prev) || isKeycapBase(prev);
+  }
+  if (cp !== ZWJ) return false;
+  let prev = before(s, at);
+  if (prev && (prev.cp === VS16 || isSkinTone(prev.cp))) prev = before(s, prev.start);
+  return isPictographic(prev?.cp) && isPictographic(s.codePointAt(at + c.length));
+}
+
 /** 보이지 않는 제어 · 방향 · 0폭 문자를 `⟨U+XXXX⟩` 로 보인다(셀 · 셀 상세의 글 보기). 보조 평면 글자는 다섯 자리 이상이다. */
 export function showInvisible(s: string): string {
-  return s.replace(
-    INVISIBLE,
-    (c) => `⟨U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}⟩`,
+  return s.replace(INVISIBLE, (c, at: number) =>
+    isEmojiPart(s, c, at)
+      ? c
+      : `⟨U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}⟩`,
   );
 }
 

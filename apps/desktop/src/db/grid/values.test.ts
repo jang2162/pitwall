@@ -106,6 +106,18 @@ describe("display", () => {
     }
     // 글자 · 이모지 · 한글 · 서로게이트 쌍의 보이는 글자는 그대로.
     expect(showInvisible("가나 😀 é")).toBe("가나 😀 é");
+    // 이모지를 이루는 자리는 그대로(메인 판정): ZWJ 열 · 이형 선택자 · 키캡 · 국기 · 피부색.
+    for (const emoji of ["👨‍👩‍👧", "❤️", "🇰🇷", "👍🏽", "❤️‍🔥", "👩🏽‍💻", "🏳️‍🌈", "1️⃣", "#️⃣", "☺︎"]) {
+      expect(showInvisible(`이름 ${emoji} 끝`), emoji).toBe(`이름 ${emoji} 끝`);
+    }
+    // 그 밖의 ZWJ · 이형 선택자는 표지: 글자 사이, 단독, 이모지 뒤에 글자가 오는 ZWJ.
+    expect(showInvisible("가\u200d나")).toBe("가⟨U+200D⟩나");
+    expect(showInvisible("\ufe0f")).toBe("⟨U+FE0F⟩");
+    expect(showInvisible("a\ufe0f")).toBe("a⟨U+FE0F⟩");
+    expect(showInvisible("😀\u200da")).toBe("😀⟨U+200D⟩a");
+    expect(showInvisible("a\u200d😀")).toBe("a⟨U+200D⟩😀");
+    // 이모지 옆이어도 방향 제어 · 태그 · 한글 채움 문자는 표지.
+    expect(showInvisible("😀\u202e\u{e0067}\u3164")).toBe("😀⟨U+202E⟩⟨U+E0067⟩⟨U+3164⟩");
     // 셀 한 칸에도: 태그로 숨긴 글 「hi」 가 보인다.
     expect(displayText({ text: "ok\u{e0068}\u{e0069}" })).toBe("ok⟨U+E0068⟩⟨U+E0069⟩");
   });

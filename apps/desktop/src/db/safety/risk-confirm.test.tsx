@@ -540,6 +540,18 @@ describe("RiskConfirmDialog for a Redis command", () => {
     );
   });
 
+  it("keeps emoji sequences in arguments as they are, without the mark", async () => {
+    await show({ kv: kv({ argv: ["SET", "user:👨‍👩‍👧", "❤️ 🇰🇷 👍🏽", "a\u200db"] }), connection: DEV });
+    const args = [...document.querySelectorAll<HTMLElement>("[data-testid=db-confirm-kv-arg]")];
+    expect(args.map((a) => a.textContent)).toEqual([
+      '"SET"',
+      '"user:👨‍👩‍👧"',
+      '"❤️ 🇰🇷 👍🏽"',
+      `"a⟨U+200D⟩b"${T.confirm.kv.invisible}`,
+    ]);
+    expect(args.map((a) => a.dataset.invisible)).toEqual([undefined, undefined, undefined, "true"]);
+  });
+
   it("shows the note and cuts a long argument list with a count", async () => {
     const argv = ["DEL", ...Array.from({ length: KV_ARGS_SHOWN + 9 }, (_, i) => `k:${i}`)];
     await show({ kv: kv({ argv }), connection: DEV, note: "the target key is overwritten" });
