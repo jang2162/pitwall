@@ -609,6 +609,8 @@ async fn live_redis_a_nested_reply_is_cut_at_the_reply_limits() {
     for text in [
         "XREAD COUNT 0 STREAMS h2:st 0",
         "XREAD STREAMS h2:st COUNT 0 0",
+        // 재리뷰 2 H: 서버는 음수 `COUNT` 를 0, 곧 무제한으로 읽는다.
+        "XREAD COUNT -1 STREAMS h2:st 0",
     ] {
         let err = w
             .call("db.kv.command", command(&s, text))
@@ -639,6 +641,7 @@ async fn live_redis_a_nested_reply_is_cut_at_the_reply_limits() {
     for text in [
         "XREADGROUP GROUP g c STREAMS h2:st >",
         "XREADGROUP GROUP g c COUNT 0 STREAMS h2:st >",
+        "XREADGROUP GROUP g c COUNT -1 STREAMS h2:st >",
     ] {
         let err = w
             .call("db.kv.command", command(&s, text))
@@ -917,6 +920,8 @@ async fn live_redis_commands_that_hold_the_server_need_a_confirmation() {
         "GEOSEARCH p1:g FROMLONLAT 13 38 BYRADIUS 200 km",
         // 재리뷰 C: `ANY` 없는 `COUNT` 는 서버 일을 줄이지 않는다 — 큰 `COUNT` 로 비켜 가지 않는다.
         "GEOSEARCH p1:g FROMLONLAT 13 38 BYRADIUS 200 km COUNT 9223372036854775807",
+        // 재리뷰 2 C′: `ANY` 는 n 개를 찾으면 멈출 뿐 — 큰 n 은 면제하지 않는다.
+        "GEOSEARCH p1:g FROMLONLAT 13 38 BYRADIUS 200 km COUNT 9223372036854775807 ANY",
     ] {
         let err = w
             .call("db.kv.command", command(&s, text))
@@ -972,6 +977,9 @@ async fn live_redis_a_one_key_set_operation_is_probed_like_smembers() {
         "ZUNION 1 p2:zset",
         "ZINTER 1 p2:zset",
         "ZDIFF 1 p2:zset WITHSCORES",
+        // 재리뷰 2 I: 입력은 set 도 된다(점수 1) — ZCARD 만 물으면 WRONGTYPE(0)으로 비켜 간다.
+        "ZUNION 1 p2:set",
+        "ZDIFF 1 p2:set",
     ] {
         let err = w
             .call("db.kv.command", command(&s, text))

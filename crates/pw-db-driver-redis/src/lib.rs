@@ -253,6 +253,12 @@ mod tests {
         );
     }
 
+    /// GEO 의 `COUNT n ANY` 면제 상한(분류기)은 콘솔 응답 상한과 같은 값이다(재리뷰 2 C′).
+    #[test]
+    fn the_geo_any_limit_matches_the_reply_limit() {
+        assert_eq!(pw_db_sql::kv_command::MAX_GEO_ANY_COUNT, MAX_REPLY_ELEMENTS);
+    }
+
     #[test]
     fn databases_are_numbers() {
         assert_eq!(database(None), Ok(0));

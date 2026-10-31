@@ -120,17 +120,22 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
     } else {
         1
     };
+    // **사전 확인이 못 읽는 수는 묶이지 않은 것으로 본다**(재리뷰 2 H): 읽지 못했다고 묻기를 건너뛰면, 서버가 받는 꼴(예:
+    // `XREAD COUNT -1` — 서버는 음수를 0, 곧 무제한으로 읽는다)이 사전 확인을 비켜 간다. 서버가 거절할 꼴이면 묻고 난 뒤
+    // 서버가 거절한다 — 막히는 것이 지나가는 것보다 낫다. 범위의 못 읽는 끝은 키 전체(`0` · `-1`)로 본다.
     let int = |i: usize| args.get(i).and_then(|a| a.parse::<i64>().ok());
-    // `LIMIT <offset> <count>` · `COUNT <n>` 의 수. 음수(`-1` = 전부)면 묶이지 않은 것이다.
-    let count_of = |word: &str, skip: usize| {
-        args.iter()
+    let start_of = |i: usize| int(i).unwrap_or(0);
+    let stop_of = |i: usize| int(i).unwrap_or(-1);
+    // 선택 인자 `LIMIT <offset> <count>` · `COUNT <n>` 으로 묶였는가. 선택 인자는 고정 인자(키 · 범위) 뒤 `from` 부터만 찾는다 —
+    // 키 이름이 `LIMIT` · `COUNT` 여도 선택 인자로 읽지 않는다. 낱말이 없으면 묶이지 않은 것, 수를 못 읽거나 음수(`-1` = 전부)여도
+    // 묶이지 않은 것이다.
+    let bounded_by = |word: &str, from: usize, skip: usize, times: u64| {
+        args.get(from..)
+            .unwrap_or_default()
+            .iter()
             .position(|a| a.eq_ignore_ascii_case(word))
-            .and_then(|i| args.get(i + skip))
-            .and_then(|n| n.parse::<i64>().ok())
-    };
-    let bounded_by = |word: &str, skip: usize, times: u64| {
-        count_of(word, skip)
-            .and_then(|n| u64::try_from(n).ok())
+            .and_then(|i| args.get(from + i + skip))
+            .and_then(|n| n.parse::<u64>().ok())
             .is_some_and(|n| n.saturating_mul(factor).saturating_mul(times) <= MAX_REPLY_ELEMENTS)
     };
     let each = |command: &str, keys: &[String]| -> Vec<Vec<String>> {
@@ -156,8 +161,8 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
             "STRLEN",
             key,
             Check::ByteRange {
-                start: int(1)?,
-                stop: int(2)?,
+                start: start_of(1),
+                stop: stop_of(2),
             },
         ),
         "JSON.GET" | "DUMP" => SizeProbe::new("MEMORY", key, Check::Bytes),
@@ -168,11 +173,22 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
         "SUNION" | "SINTER" | "SDIFF" if args.len() == 1 => {
             SizeProbe::new("SCARD", key, Check::Elements { factor: 1 })
         }
-        "ZUNION" | "ZINTER" | "ZDIFF" if int(0)? == 1 => {
-            SizeProbe::new("ZCARD", args.get(1)?, Check::Elements { factor })
+        // `numkeys` 를 못 읽으면 키 하나로 본다. 입력은 zset 뿐 아니라 set 도 된다(점수 1) — `SORT_RO` 처럼 둘을 함께 묻고
+        // 맞는 하나만 센다(재리뷰 2 I).
+        "ZUNION" | "ZINTER" | "ZDIFF" if int(0).is_none_or(|n| n == 1) => {
+            let input = args.get(1)?;
+            SizeProbe::each(
+                ["ZCARD", "SCARD"]
+                    .iter()
+                    .map(|c| vec![(*c).to_owned(), input.clone()])
+                    .collect(),
+                Check::Elements { factor },
+            )
         }
         "SRANDMEMBER" | "HRANDFIELD" | "ZRANDMEMBER" => {
-            let count = int(1)?;
+            // count 가 없으면 원소 하나다. 못 읽으면 키 전체(가장 큰 양수 — 길이만큼)로 본다.
+            args.get(1)?;
+            let count = int(1).unwrap_or(i64::MAX);
             if count.unsigned_abs().saturating_mul(factor) <= MAX_REPLY_ELEMENTS {
                 return None;
             }
@@ -187,27 +203,27 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
             "LLEN",
             key,
             Check::Range {
-                start: int(1)?,
-                stop: int(2)?,
+                start: start_of(1),
+                stop: stop_of(2),
                 factor: 1,
             },
         ),
-        "ZRANGE" if has("BYSCORE") || has("BYLEX") => (!bounded_by("LIMIT", 2, 1))
+        "ZRANGE" if has("BYSCORE") || has("BYLEX") => (!bounded_by("LIMIT", 3, 2, 1))
             .then(|| SizeProbe::new("ZCARD", key, Check::Elements { factor }))?,
         "ZRANGE" | "ZREVRANGE" => SizeProbe::new(
             "ZCARD",
             key,
             Check::Range {
-                start: int(1)?,
-                stop: int(2)?,
+                start: start_of(1),
+                stop: stop_of(2),
                 factor,
             },
         ),
         "ZRANGEBYSCORE" | "ZREVRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYLEX" => {
-            (!bounded_by("LIMIT", 2, 1))
+            (!bounded_by("LIMIT", 3, 2, 1))
                 .then(|| SizeProbe::new("ZCARD", key, Check::Elements { factor }))?
         }
-        "XRANGE" | "XREVRANGE" => (!bounded_by("COUNT", 1, 1))
+        "XRANGE" | "XREVRANGE" => (!bounded_by("COUNT", 3, 1, 1))
             .then(|| SizeProbe::new("XLEN", key, Check::Elements { factor: 1 }))?,
         // `[COUNT n] [BLOCK ms] [NOACK] STREAMS k1 … kn id1 … idn` — `COUNT` 는 stream 마다다. 둘 다 `COUNT 0` 은 묶지 않은
         // 것이다(`XRANGE` 류의 0 은 빈 답이라 다르다). `XREAD` 의 id `$` 는 그 뒤의 새 항목만이라 BLOCK 없이는 빈 답이다 —
@@ -226,11 +242,21 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
             )
         }
         "XINFO" => {
-            // `XINFO STREAM k FULL [COUNT n]` — 기본 10, `COUNT 0` 은 모든 항목.
-            let full = key.eq_ignore_ascii_case("STREAM") && has("FULL");
+            // `XINFO STREAM k FULL [COUNT n]` — 기본 10, `COUNT 0` 은 모든 항목. 선택 인자는 키 뒤(3 부터)에서만 찾는다 — 키
+            // 이름이 `COUNT` · `FULL` 이어도 선택 인자로 읽지 않는다. `COUNT` 의 수를 못 읽으면 묶이지 않은 것이다.
+            let options = args.get(2..).unwrap_or_default();
+            let full = key.eq_ignore_ascii_case("STREAM")
+                && options.iter().any(|a| a.eq_ignore_ascii_case("FULL"));
             let stream = args.get(1)?;
-            let unbounded =
-                count_of("COUNT", 1).is_some_and(|n| n <= 0 || n as u64 > MAX_REPLY_ELEMENTS);
+            let unbounded = options
+                .iter()
+                .position(|a| a.eq_ignore_ascii_case("COUNT"))
+                .is_some_and(|i| {
+                    options
+                        .get(i + 1)
+                        .and_then(|n| n.parse::<i64>().ok())
+                        .is_none_or(|n| n <= 0 || n as u64 > MAX_REPLY_ELEMENTS)
+                });
             (full && unbounded)
                 .then(|| SizeProbe::new("XLEN", stream, Check::Elements { factor: 1 }))?
         }
@@ -239,7 +265,9 @@ pub(crate) fn size_probe(name: &str, args: &[String]) -> Option<SizeProbe> {
 }
 
 /// `XREAD` · `XREADGROUP` 의 사전 확인. 선택 인자를 `start` 부터 `STREAMS` 까지 자리대로 걷는다 — 키 자리의 `COUNT` 낱말을
-/// 선택 인자로 읽지 않는다(분류기의 `stream_read_options` 와 같은 걸음). 형식이 틀리면 묻지 않는다(서버가 오류로 답한다).
+/// 선택 인자로 읽지 않는다(분류기의 `stream_read_options` 와 같은 걸음). `COUNT` 는 1 이상일 때만 묶는다 — 서버는 음수를 0
+/// 으로, 0 을 무제한으로 읽는다(재리뷰 2 H). 수를 못 읽어도 묶이지 않은 것으로 본다. 꼴 자체가 틀리면(`STREAMS` 가 없음 ·
+/// 모르는 선택 인자 · 키와 id 의 수가 다름) 묻지 않는다 — 서버가 오류로 답한다.
 fn stream_read_probe(args: &[String], start: usize, skip_dollar: bool) -> Option<SizeProbe> {
     let mut i = start;
     let mut count = None;
@@ -248,7 +276,7 @@ fn stream_read_probe(args: &[String], start: usize, skip_dollar: bool) -> Option
         match word.as_str() {
             "STREAMS" => break,
             "COUNT" => {
-                count = Some(args.get(i + 1)?.parse::<u64>().ok()?);
+                count = args.get(i + 1)?.parse::<i64>().ok();
                 i += 2;
             }
             "BLOCK" => i += 2,
@@ -268,6 +296,7 @@ fn stream_read_probe(args: &[String], start: usize, skip_dollar: bool) -> Option
         .map(|(k, _)| k.clone())
         .collect();
     let bounded = count
+        .and_then(|n| u64::try_from(n).ok())
         .filter(|&n| n > 0)
         .is_some_and(|n| n.saturating_mul(keys.len() as u64) <= MAX_REPLY_ELEMENTS);
     if bounded {
@@ -457,7 +486,8 @@ mod tests {
         assert_eq!(probe("ZRANGEBYSCORE z -inf +inf LIMIT 0 100"), None);
         assert!(probe("ZRANGEBYSCORE z -inf +inf LIMIT 0 -1").is_some());
         assert_eq!(probe("HEXISTS k f"), None);
-        assert_eq!(probe("LRANGE k x y"), None, "malformed: the server answers");
+        // 못 읽는 범위는 키 전체로 본다(재리뷰 2 — 묻고 나서 서버가 거절한다).
+        assert_eq!(asks("LRANGE k x y"), "LLEN");
         assert_eq!(probe("GET"), None);
     }
 
@@ -532,13 +562,6 @@ mod tests {
         for text in ["SUNION s", "SINTER s", "SDIFF s"] {
             assert_eq!(asks(text), "SCARD", "{text}");
         }
-        for text in ["ZUNION 1 z", "ZINTER 1 z WITHSCORES", "ZDIFF 1 z"] {
-            assert_eq!(
-                probe(text).unwrap().commands,
-                vec![args("ZCARD z")],
-                "{text}"
-            );
-        }
         assert!(probe("ZUNION 1 z WITHSCORES").unwrap().too_large(5_001));
         assert!(!probe("ZUNION 1 z").unwrap().too_large(5_001));
         for text in [
@@ -596,6 +619,14 @@ mod tests {
             );
         }
         assert!(probe("SORT_RO k").unwrap().too_large(10_001));
+        // 재리뷰 2 I: 한 키 ZUNION 류의 입력은 set 도 된다 — ZCARD 와 SCARD 를 함께 묻는다.
+        for text in ["ZUNION 1 z", "ZINTER 1 z WITHSCORES", "ZDIFF 1 z"] {
+            assert_eq!(
+                probe(text).unwrap().commands,
+                vec![args("ZCARD z"), args("SCARD z")],
+                "{text}"
+            );
+        }
         assert!(!probe("SORT_RO k").unwrap().too_large(10_000));
         assert!(
             probe("XREAD COUNT 6000 STREAMS a b 0 0").is_some(),
@@ -701,5 +732,98 @@ mod tests {
         let error = too_large();
         assert_eq!(error.code.as_deref(), Some(KEY_TOO_LARGE));
         assert!(error.message.contains("key browser"));
+    }
+}
+
+/// 재리뷰 2 H 와 그 꼴의 훑기: **사전 확인이 못 읽는 수는 묶이지 않은 것으로 본다**, 선택 인자는 고정 인자 뒤에서만 찾는다.
+#[cfg(test)]
+mod unreadable_numbers {
+    use super::*;
+
+    fn probe(text: &str) -> Option<SizeProbe> {
+        let argv: Vec<String> = text.split_whitespace().map(str::to_owned).collect();
+        size_probe(&argv[0], &argv[1..])
+    }
+
+    fn asked(text: &str) -> Vec<String> {
+        probe(text)
+            .unwrap_or_else(|| panic!("{text} was not probed"))
+            .commands
+            .into_iter()
+            .map(|c| c.join(" "))
+            .collect()
+    }
+
+    /// H: 서버는 음수 `COUNT` 를 0 으로, 0 을 무제한으로 읽는다. 수가 아닌 `COUNT` 도 묻는다.
+    #[test]
+    fn negative_or_unreadable_stream_counts_are_unbounded() {
+        for text in [
+            "XREAD COUNT -1 STREAMS st 0",
+            "XREAD COUNT abc STREAMS st 0",
+            "XREADGROUP GROUP g c COUNT -1 STREAMS st >",
+            "XREADGROUP GROUP g c COUNT -9223372036854775808 NOACK STREAMS st >",
+            "XREADGROUP GROUP g c COUNT 1e3 STREAMS st >",
+        ] {
+            assert_eq!(asked(text), ["XLEN st"], "{text}");
+        }
+        assert_eq!(probe("XREAD COUNT 10 STREAMS st 0"), None);
+    }
+
+    /// 범위의 못 읽는 끝은 키 전체로 본다(서버가 거절할 꼴이어도 먼저 묻는다).
+    #[test]
+    fn unreadable_range_ends_read_the_whole_key() {
+        assert_eq!(asked("GETRANGE k 0 end"), ["STRLEN k"]);
+        assert!(
+            probe("GETRANGE k 0 end")
+                .unwrap()
+                .too_large(5 * 1024 * 1024)
+        );
+        assert!(
+            !probe("GETRANGE k start 9")
+                .unwrap()
+                .too_large(5 * 1024 * 1024)
+        );
+        assert!(probe("LRANGE l 0 end").unwrap().too_large(10_001));
+        assert!(probe("ZRANGE z first -1").unwrap().too_large(10_001));
+        assert!(!probe("LRANGE l 0 99").unwrap().too_large(10_001));
+    }
+
+    /// 못 읽는 count 는 키 전체(길이만큼)다. count 가 없으면 원소 하나라 묻지 않는다.
+    #[test]
+    fn unreadable_random_counts_read_the_whole_key() {
+        assert_eq!(asked("SRANDMEMBER s many"), ["SCARD s"]);
+        assert!(probe("SRANDMEMBER s many").unwrap().too_large(10_001));
+        assert!(!probe("SRANDMEMBER s many").unwrap().too_large(10_000));
+        assert_eq!(asked("HRANDFIELD h x WITHVALUES"), ["HLEN h"]);
+        assert_eq!(probe("SRANDMEMBER s"), None);
+    }
+
+    /// 못 읽는 `numkeys` 는 키 하나로 본다.
+    #[test]
+    fn unreadable_numkeys_probe_the_first_input() {
+        assert_eq!(asked("ZUNION one z"), ["ZCARD z", "SCARD z"]);
+        assert_eq!(probe("ZUNION 2 a b"), None);
+    }
+
+    /// 선택 인자는 고정 인자 뒤에서만 찾는다 — 키 이름이 `LIMIT` · `COUNT` 여도 그것으로 묶였다고 보지 않는다. 묶인 수를 못
+    /// 읽어도 묶이지 않은 것이다.
+    #[test]
+    fn option_words_in_key_positions_do_not_bound_the_read() {
+        assert_eq!(asked("ZRANGEBYSCORE LIMIT 0 5"), ["ZCARD LIMIT"]);
+        assert_eq!(asked("ZRANGE LIMIT 0 5 BYSCORE"), ["ZCARD LIMIT"]);
+        assert_eq!(asked("XRANGE COUNT 5 +"), ["XLEN COUNT"]);
+        assert_eq!(asked("ZRANGEBYSCORE z 0 5 LIMIT 0 many"), ["ZCARD z"]);
+        assert_eq!(asked("XRANGE st - + COUNT -1"), ["XLEN st"]);
+        assert_eq!(probe("ZRANGEBYSCORE z 0 5 LIMIT 0 10"), None);
+        assert_eq!(probe("XRANGE st - + COUNT 10"), None);
+    }
+
+    /// `XINFO STREAM k FULL COUNT n` 도 같다 — 키가 `COUNT` 여도, `COUNT` 를 못 읽어도 묻는다. 기본(COUNT 없음)은 10 이다.
+    #[test]
+    fn xinfo_full_counts_are_read_after_the_key() {
+        assert_eq!(asked("XINFO STREAM COUNT FULL COUNT 0"), ["XLEN COUNT"]);
+        assert_eq!(asked("XINFO STREAM st FULL COUNT many"), ["XLEN st"]);
+        assert_eq!(probe("XINFO STREAM COUNT FULL"), None);
+        assert_eq!(probe("XINFO STREAM st FULL COUNT 100"), None);
     }
 }

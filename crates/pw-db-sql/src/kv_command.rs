@@ -14,7 +14,7 @@
 //!   거절(까닭 [`BlockReason::ScanCount`] — 키 브라우저를 쓰라고 안내한다).
 //! - 대상 키를 덮는 쓰기는 `RENAME` 처럼 확인이다: `BITOP`, `STORE` · `STOREDIST` 가 붙은 `GEORADIUS` · `GEORADIUSBYMEMBER`,
 //!   `REPLACE` 가 붙은 `COPY` · `RESTORE`(DBX 는 쓰기).
-//! - 서버를 오래 붙잡는 명령은 그 등급 그대로 확인이다(14 M3-22): `LCS`, `COUNT n ANY` 로 묶지 않은 `GEOSEARCH` · `GEORADIUS`
+//! - 서버를 오래 붙잡는 명령은 그 등급 그대로 확인이다(14 M3-22): `LCS`, `COUNT n ANY`(n ≤ [`MAX_GEO_ANY_COUNT`])로 묶지 않은 `GEOSEARCH` · `GEORADIUS`
 //!   류(DBX 는 허용 · 쓰기). 읽기는 `Confirm(Read)` 라 read-only 연결에서도 확인 뒤 돈다. `SORT_RO` 는 비용이 목록 길이에
 //!   비례하므로 분류가 아니라 드라이버의 길이 사전 확인이 묶는다(`SORT` 는 늘 확인).
 //! - 거절에 까닭([`BlockReason`])을 싣고, 여러 줄 묶음의 분류([`classify_script`])를 여기 하나에 둔다.
@@ -271,7 +271,12 @@ pub fn classify_argv<A: AsRef<[u8]>>(argv: &[A]) -> KvCommandClass {
     }
 }
 
-/// 위치 검색(`GEOSEARCH` · `GEORADIUS` 류)이 `COUNT n ANY` 로 묶였는가 — `ANY` 가 없으면 `COUNT` 가 있어도 서버는 영역 전체를
+/// `GEOSEARCH` · `GEORADIUS` 류가 확인 없이 도는 `COUNT n ANY` 의 n 상한. `ANY` 는 n 개를 찾으면 멈추므로 n 이 작을 때만 서버
+/// 일을 줄인다 — 영역 안 점 수보다 큰 n 은 끝까지 찾는다(재리뷰 2 C′: 30만 점에 `COUNT 9223372036854775807 ANY` 372 ms). 콘솔
+/// 응답 상한(원소 1만 — `pw_db_driver_redis::MAX_REPLY_ELEMENTS`)과 같은 값이다.
+pub const MAX_GEO_ANY_COUNT: u64 = 10_000;
+
+/// 위치 검색(`GEOSEARCH` · `GEORADIUS` 류)이 `COUNT n ANY`(0 < n ≤ [`MAX_GEO_ANY_COUNT`])로 묶였는가 — `ANY` 가 없으면 `COUNT` 가 있어도 서버는 영역 전체를
 /// 찾고 정렬한다(재리뷰 C: 30만 점에서 `COUNT 10` 20 ms, `COUNT 10 ANY` 0 ms). 선택 인자를 `start` 부터 자리대로 걷는다 — 키 ·
 /// 멤버 · `STORE` 대상 이름이 `COUNT` · `ANY` 여도 자리로 가르므로 비켜 가지 않는다. 모르는 낱말은 하나씩 건너뛴다(서버가
 /// 오류로 답한다).
@@ -285,7 +290,7 @@ fn geo_counted(args: &[&[u8]], start: usize) -> bool {
                     .get(i + 1)
                     .and_then(|n| std::str::from_utf8(n).ok())
                     .and_then(|n| n.parse::<u64>().ok())
-                    .is_some_and(|n| n > 0);
+                    .is_some_and(|n| (1..=MAX_GEO_ANY_COUNT).contains(&n));
                 2
             }
             b"ANY" => {

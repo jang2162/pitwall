@@ -321,6 +321,12 @@ fn commands_that_hold_the_server_need_confirmation() {
         "GEORADIUS_RO g 0 0 1 km COUNT 5",
         "GEOSEARCH g FROMMEMBER ANY BYRADIUS 1 km COUNT 3",
         "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 0 ANY",
+        // 재리뷰 2 C′: `ANY` 는 n 개를 찾으면 멈출 뿐이다 — 큰 n 은 끝까지 찾는다. 못 읽는 n 도 면제하지 않는다.
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 10001 ANY",
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 9223372036854775807 ANY",
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT -1 ANY",
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT ten ANY",
+        "GEORADIUS_RO g 0 0 1 km COUNT 10001 ANY",
         "GEOSEARCH g FROMMEMBER COUNT BYBOX 1 1 km ASC",
         "GEOSEARCH COUNT FROMMEMBER m BYRADIUS 1 km",
         "GEOSEARCH g FROMMEMBER m BYRADIUS 1 km COUNT 0",
@@ -351,6 +357,7 @@ fn commands_that_hold_the_server_need_confirmation() {
         "GEOSEARCH g FROMMEMBER m BYBOX 1 1 km COUNT 3 ANY ASC",
         "GEORADIUS_RO g 0 0 1 km COUNT 10 ANY",
         "GEORADIUSBYMEMBER_RO g m 1 km COUNT 10 ANY WITHDIST",
+        "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 1 km COUNT 10000 ANY",
     ] {
         assert_eq!(class_of(text), KvCommandClass::Allowed, "{text}");
     }
