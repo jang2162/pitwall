@@ -1,0 +1,589 @@
+// @vitest-environment happy-dom
+// Redis 키 문서(14-m3-plan M3-18 완료 기준의 창 시험): 프로젝트 창(App kind="project", `?project=p1`)을 가짜 Host 에 붙이고 Redis 탭을
+// 연다. 본다: 해시 4 MiB 초과 값이 쪽으로 넘어간다(다음 쪽이 받은 `nextCursor` 로 `db.kv.get` 을 부른다); TTL 을 고치면
+// `db.kv.setTtl` 이 그 값으로 불린다(받은 `3001` 의 확인을 거쳐); 콘솔의 `FLUSHALL` 이 거절 문장을 보인다; 대상이 있는 이름 바꾸기에
+// 확인이 뜬다(`RENAMENX` 의 확인 → `targetExists` → 「덮어쓴다」 안내와 `RENAME` 의 확인); 탭이 열린 채 다시 시작하면 연결 RPC 가
+// 불리지 않는다. Glide 는 canvas 라 셀을 기록하는 가짜로 바꾼다(src/db/grid/result-view-window.test.tsx 와 같다).
+
+import type {
+  ConfigView,
+  DbKvConfirmRequired,
+  DbSessionOpened,
+  HostInfo,
+  KeymapFile,
+  KvKeyInfo,
+  KvValuePage,
+  Project,
+  ProjectTrust,
+  RuntimeInfo,
+} from "@pitwall/rpc-client";
+import type { DockviewApi } from "dockview-react";
+import { forwardRef, useImperativeHandle } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+
+import defaultTheme from "../../../../../extensions/theme-default/themes/default.json";
+import { App } from "../../App";
+import { openTab } from "../../editor/editor-tabs";
+import { bundledTranslator } from "../../i18n/testing";
+import type { KeymapNative } from "../../keymap/native";
+import { act, endTest, it } from "../../test-support/ended-test";
+import { createThemeStore } from "../../theme/theme-store";
+import { ThemeStoreProvider } from "../../theme/theme-switcher";
+import { parseTheme } from "../../theme/tokens";
+import { type DbDocumentSpec, dbDocumentKey } from "../documents/spec";
+import { dbSafetyStrings } from "../safety/strings";
+import { dbRedisStrings } from "./strings";
+import { PAGE_COUNT } from "./value-view";
+
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean;
+}
+
+const MIB = 1024 * 1024;
+
+type Call = { method: string; params: Record<string, unknown> };
+
+const host = vi.hoisted(() => ({
+  calls: [] as { method: string; params: Record<string, unknown> }[],
+  /** 프로젝트 상태(`project.state.*`). */
+  state: null as unknown,
+  /** 스캔이 줄 키. */
+  keys: [] as unknown[],
+  /** `db.kv.get` 의 답(키 · 커서마다). */
+  pages: new Map<string, unknown>(),
+  /** 이름 바꾸기 대상이 있는가. */
+  targetExists: true,
+}));
+
+const glide = vi.hoisted(() => ({
+  rows: [] as number[],
+  cells: [] as ((cell: [number, number]) => { data?: string; displayData?: string })[],
+}));
+
+vi.mock("@glideapps/glide-data-grid", () => ({
+  CompactSelection: { empty: () => ({ toArray: () => [] }) },
+  GridCellKind: { Text: "text", Loading: "loading" },
+  DataEditor: forwardRef(function FakeEditor(
+    props: {
+      rows: number;
+      getCellContent: (cell: [number, number]) => { data?: string; displayData?: string };
+    },
+    ref,
+  ) {
+    glide.rows.push(props.rows);
+    glide.cells.push(props.getCellContent);
+    useImperativeHandle(ref, () => ({ focus: () => {} }));
+    return <button type="button" data-testid="fake-glide" />;
+  }),
+}));
+
+vi.mock("../../tauri-transport", async () => {
+  const { createMemoryTransportPair: pair } = await import("@pitwall/rpc-client");
+  const { DEFAULT_KEYMAP_TOML } = await import("../../keymap/default-keymap");
+  const { i18nState } = await import("../../i18n/testing");
+  return {
+    connectHost: async () => {
+      const [client, server] = pair();
+      let next = 1;
+      const streams = new Map<number, unknown[]>();
+      const send = (m: object) => server.send(JSON.stringify({ jsonrpc: "2.0", ...m }));
+      server.onMessage((text) => {
+        const m = JSON.parse(text) as { id?: number; method: string; params: never };
+        const params = (m.params ?? {}) as Record<string, unknown>;
+        host.calls.push({ method: m.method, params });
+        const reply = (result: unknown) => send({ id: m.id, result });
+        const fail = (code: number, message: string, data: unknown) =>
+          send({ id: m.id, error: { code, message, data } });
+        const confirmRequired = (argv: string[], hash: string) =>
+          fail(3001, "confirm before running this command", {
+            grade: "unboundedWrite",
+            action: m.method === "db.kv.setTtl" ? "setTtl" : "rename",
+            argv,
+            statementsHash: hash,
+            nameRequired: false,
+            rejected: null,
+          } satisfies DbKvConfirmRequired);
+        switch (m.method) {
+          case "i18n.get":
+            return reply(i18nState("ko"));
+          case "config.get":
+            return reply({
+              snapshot: { files: [], notices: [] },
+              error: null,
+            } satisfies ConfigView);
+          case "keymap.get":
+            return reply({
+              id: "pitwall-default",
+              extension: "dev.pitwall.keymap-default",
+              kind: "base",
+              content: DEFAULT_KEYMAP_TOML,
+            } satisfies KeymapFile);
+          case "host.info":
+            return reply({
+              hostId: "local",
+              kind: "local",
+              version: "0",
+              os: "t",
+              arch: "t",
+            } satisfies HostInfo);
+          case "task.list":
+            return reply([]);
+          case "project.get":
+            return reply({
+              id: "p1",
+              name: "demo",
+              host: "local",
+              roots: ["/work/demo"],
+              favorite: false,
+              tags: [],
+              configMode: "repository",
+              slug: "demo",
+              createdAt: 1,
+              openedAt: null,
+            } satisfies Project);
+          case "project.trust":
+            return reply({
+              projectId: "p1",
+              ownerId: "p1",
+              state: "trusted",
+            } satisfies ProjectTrust);
+          case "project.claimTrustPrompt":
+            return reply(false);
+          case "project.storage":
+            return reply({ kind: "ok", path: "/data/state.db" });
+          case "project.state.get":
+            return reply({ state: host.state, problem: null });
+          case "project.state.set":
+            host.state = structuredClone((params as { state: unknown }).state);
+            return reply(null);
+          case "runtime.get":
+            return reply({
+              provider: "shell",
+              source: { kind: "loginShell", shell: "/bin/zsh" },
+              status: { kind: "ok" },
+              tools: [],
+            } satisfies RuntimeInfo);
+          case "events.subscribe":
+            return reply({ subscriptionId: next++ });
+          case "events.unsubscribe":
+            return reply(null);
+          case "db.connection.get":
+            return reply({
+              id: "redis-local",
+              config: { name: "redis-local", driver: "redis", host: "localhost", port: 6379 },
+              layers: [],
+              readOnly: false,
+              state: { kind: "ready" },
+            });
+          case "db.session.open":
+            return reply({
+              session: {
+                sessionId: "s1",
+                projectId: "p1",
+                connectionId: "redis-local",
+                mode: "auto",
+                state: { kind: "idle" },
+              },
+              name: "redis-local",
+              readOnly: false,
+              production: false,
+              driver: { id: "redis", dialect: null, supports: {} },
+              server: { version: "7.2.10", tls: "plaintext" },
+            } as unknown as DbSessionOpened);
+          case "db.session.close":
+            return reply(null);
+          case "db.kv.scan": {
+            const streamId = next++;
+            streams.set(streamId, [
+              { kind: "accepted", executionId: "x1" },
+              { kind: "keys", keys: host.keys },
+              { kind: "done", keys: host.keys.length, elapsedMs: 3 },
+            ]);
+            return reply({ streamId });
+          }
+          case "stream.credit": {
+            const { streamId } = params as { streamId: number };
+            const chunks = streams.get(streamId);
+            if (!chunks) return;
+            streams.delete(streamId);
+            for (const data of chunks) send({ method: "stream.chunk", params: { streamId, data } });
+            return send({ method: "stream.end", params: { streamId, status: "completed" } });
+          }
+          case "stream.cancel":
+            return;
+          case "db.kv.get": {
+            const { key, range } = params as { key: string; range: { cursor: string | null } };
+            const page = host.pages.get(`${key}@${range?.cursor ?? ""}`);
+            return page ? reply(page) : fail(-32005, "no page", null);
+          }
+          case "db.kv.setTtl": {
+            const { key, ttlMs, confirmed } = params as {
+              key: string;
+              ttlMs: number;
+              confirmed: unknown;
+            };
+            if (!confirmed) return confirmRequired(["PEXPIRE", key, String(ttlMs)], "h-ttl");
+            return reply(true);
+          }
+          case "db.kv.rename": {
+            const { from, to, overwrite, confirmed } = params as {
+              from: string;
+              to: string;
+              overwrite: boolean;
+              confirmed: unknown;
+            };
+            if (!confirmed)
+              return confirmRequired(
+                [overwrite ? "RENAME" : "RENAMENX", from, to],
+                overwrite ? "h-rename" : "h-renamenx",
+              );
+            return reply(!overwrite && host.targetExists ? "targetExists" : "renamed");
+          }
+          case "db.kv.parseCommand":
+            return reply({ argv: String((params as { text: string }).text).split(/\s+/) });
+          case "db.kv.command": {
+            const { argv } = params as { argv: string[] };
+            if (argv[0]?.toUpperCase() === "FLUSHALL")
+              return fail(-32001, "`FLUSHALL` is not allowed in the console", {
+                reason: "blockedCommand",
+                block: "notAllowed",
+                command: "FLUSHALL",
+              });
+            return reply({ status: "OK" });
+          }
+          default:
+            return fail(-32601, `no ${m.method}`, null);
+        }
+      });
+      return { transport: client, close: async () => {} };
+    },
+  };
+});
+
+const R = dbRedisStrings(bundledTranslator("ko"));
+const S = dbSafetyStrings(bundledTranslator("ko"));
+
+const native: KeymapNative = {
+  syncMenu: async () => {},
+  onMenuAction: () => () => {},
+  openSettings: async () => {},
+  closeWindow: async () => {},
+};
+
+const SPEC: DbDocumentSpec = {
+  kind: "redis",
+  tabId: "tab-r1",
+  connectionId: "redis-local",
+  database: "0",
+};
+
+function info(key: string, kind: KvKeyInfo["kind"], over: Partial<KvKeyInfo> = {}): KvKeyInfo {
+  return { key, kind, ttlMs: null, size: 10, ...over };
+}
+
+let root: Root | undefined;
+let dock: DockviewApi | undefined;
+
+beforeEach(() => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.spyOn(console, "info").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  // 키 트리는 가상화한다 — happy-dom 은 높이를 계산하지 않으므로 트리에 보이는 높이를 준다.
+  for (const prop of ["offsetHeight", "clientHeight"] as const)
+    vi.spyOn(HTMLElement.prototype, prop, "get").mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute("role") === "tree" ? 600 : 0;
+    });
+  window.history.replaceState(null, "", "/?window=project&project=p1");
+  localStorage.clear();
+  host.calls = [];
+  host.state = null;
+  host.keys = [];
+  host.pages = new Map();
+  host.targetExists = true;
+  glide.rows = [];
+  glide.cells = [];
+});
+
+afterEach(async () => {
+  await endTest();
+  act(() => root?.unmount());
+  root = undefined;
+  document.body.innerHTML = "";
+  vi.restoreAllMocks();
+});
+
+const settle = () => act(async () => new Promise((r) => setTimeout(r, 30)));
+
+async function mountApp() {
+  dock = undefined;
+  const element = document.createElement("div");
+  document.body.append(element);
+  const store = createThemeStore({
+    system: { current: () => "light", subscribe: () => () => {} },
+    storage: { read: () => undefined, write: () => {} },
+    theme: parseTheme(defaultTheme),
+    apply: () => {},
+  });
+  root = createRoot(element);
+  await act(async () =>
+    root!.render(
+      <ThemeStoreProvider store={store}>
+        <App kind="project" native={native} onDockApi={(api) => (dock = api)} />
+      </ThemeStoreProvider>,
+    ),
+  );
+  await settle();
+}
+
+const $ = <T extends Element = HTMLElement>(selector: string) =>
+  document.querySelector<T>(selector);
+const calls = (method: string): Call[] => host.calls.filter((c) => c.method === method);
+
+async function click(el: Element | null) {
+  expect(el).not.toBeNull();
+  await act(async () => (el as HTMLElement).click());
+  await settle();
+}
+
+async function type(input: HTMLInputElement | null, value: string) {
+  expect(input).not.toBeNull();
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => {
+    setter.call(input, value);
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function enter(input: HTMLInputElement | null) {
+  await act(async () =>
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  await settle();
+}
+
+/** Redis 탭을 열고 [연결] 해 스캔이 끝난 데까지. */
+async function openConnected() {
+  await mountApp();
+  await act(async () => {
+    openTab(dock!, { path: dbDocumentKey(SPEC), db: SPEC, title: "redis-local · DB 0" });
+  });
+  await settle();
+  await click($("[data-redis-document] [data-action=connect]"));
+  await vi.waitFor(() => expect($("[data-testid=redis-scan-status]")?.dataset.scan).toBe("done"));
+}
+
+async function openKey(name: string) {
+  const row = $(`[data-testid=redis-key-tree] [data-key="${name}"]`);
+  expect(row).not.toBeNull();
+  await act(async () => row!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  await settle();
+}
+
+const confirmDialog = () => $("[data-testid=db-risk-confirm]");
+
+describe("the Redis key document", () => {
+  it("pages a hash over 4 MiB with the cursor the Host returned", async () => {
+    host.keys = [info("big", "hash", { size: 6 * MIB })];
+    // 첫 쪽: Host 의 4 MiB 예산에 닿아 끊은 쪽(1 MiB 값 다섯) — 다음 쪽 커서가 있다.
+    const mib = "v".repeat(MIB);
+    host.pages.set("big@", {
+      value: {
+        hash: Array.from({ length: 5 }, (_, i) => ({
+          field: { text: `f${i}` },
+          value: { text: mib },
+        })),
+      },
+      total: 7,
+      nextCursor: "29",
+    } satisfies KvValuePage);
+    host.pages.set("big@29", {
+      value: {
+        hash: [
+          { field: { text: "f5" }, value: { text: "x" } },
+          { field: { text: "f6" }, value: { text: "y" } },
+        ],
+      },
+      total: 7,
+      nextCursor: null,
+    } satisfies KvValuePage);
+    await openConnected();
+    await openKey("big");
+    expect(calls("db.kv.get")).toEqual([
+      expect.objectContaining({
+        params: expect.objectContaining({
+          sessionId: "s1",
+          key: "big",
+          range: { cursor: null, count: PAGE_COUNT },
+        }),
+      }),
+    ]);
+    expect($("[data-testid=redis-page]")?.textContent).toBe(R.viewer.page(1));
+    expect(glide.rows.at(-1)).toBe(5);
+    expect($<HTMLButtonElement>("[data-action=next-page]")!.disabled).toBe(false);
+    await click($("[data-action=next-page]"));
+    expect(calls("db.kv.get").at(-1)!.params.range).toEqual({ cursor: "29", count: PAGE_COUNT });
+    expect($("[data-testid=redis-page]")?.textContent).toBe(R.viewer.page(2));
+    expect(glide.rows.at(-1)).toBe(2);
+    expect(glide.cells.at(-1)!([0, 0]).data).toBe("f5");
+    expect($<HTMLButtonElement>("[data-action=next-page]")!.disabled).toBe(true);
+    // 앞 쪽은 지나온 커서로 돌아간다.
+    await click($("[data-action=prev-page]"));
+    expect(calls("db.kv.get").at(-1)!.params.range).toEqual({ cursor: null, count: PAGE_COUNT });
+    expect($("[data-testid=redis-page]")?.textContent).toBe(R.viewer.page(1));
+  });
+
+  it("reads a value only when the key is opened, not when it is picked", async () => {
+    host.keys = [info("a", "string"), info("b", "string")];
+    host.pages.set("b@", { value: { string: { text: "1" } }, total: 1, nextCursor: null });
+    await openConnected();
+    await click($("[data-testid=redis-key-tree] [data-key=a]"));
+    await act(async () =>
+      $("[data-testid=redis-key-tree]")!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      ),
+    );
+    await settle();
+    expect($("[data-testid=redis-key-tree] [data-key=b]")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(calls("db.kv.get")).toEqual([]);
+    expect($("[data-testid=redis-value]")).toBeNull();
+    await act(async () =>
+      $("[data-testid=redis-key-tree]")!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      ),
+    );
+    await settle();
+    expect(calls("db.kv.get").map((c) => c.params.key)).toEqual(["b"]);
+    expect($("[data-testid=redis-value]")?.dataset.key).toBe("b");
+  });
+
+  it("calls db.kv.setTtl with the typed TTL, through the confirmation the Host asked for", async () => {
+    host.keys = [info("session:1", "string", { ttlMs: 60_000 })];
+    host.pages.set("session:1@", { value: { string: { text: "v" } }, total: 1, nextCursor: null });
+    await openConnected();
+    await click($("[data-group='session:']"));
+    await openKey("session:1");
+    await click($("[data-testid=redis-value] [data-action=edit-ttl]"));
+    const input = $<HTMLInputElement>("[data-testid=redis-key-prompt-input]");
+    await type(input, "120");
+    await click($("[data-testid=redis-key-prompt] [data-action=apply]"));
+    // 확인 없이 한 번 → 3001 → 다이얼로그(서버에 갈 명령) → [실행] 이 받은 해시로 다시.
+    expect(calls("db.kv.setTtl")).toHaveLength(1);
+    expect(calls("db.kv.setTtl")[0]!.params).toMatchObject({
+      sessionId: "s1",
+      key: "session:1",
+      ttlMs: 120_000,
+      confirmed: null,
+    });
+    expect(confirmDialog()).not.toBeNull();
+    expect(
+      [...document.querySelectorAll("[data-testid=db-confirm-kv-arg]")].map((a) => a.textContent),
+    ).toEqual(['"PEXPIRE"', '"session:1"', '"120000"']);
+    await click($("[data-testid=db-risk-confirm] [data-action=run]"));
+    expect(calls("db.kv.setTtl")).toHaveLength(2);
+    expect(calls("db.kv.setTtl")[1]!.params).toMatchObject({
+      key: "session:1",
+      ttlMs: 120_000,
+      confirmed: { grade: "unboundedWrite", statementsHash: "h-ttl", name: null },
+    });
+    expect(confirmDialog()).toBeNull();
+    expect($("[data-testid=redis-ttl]")?.textContent).toBe(R.viewer.ttl("2 m 0 s"));
+  });
+
+  it("shows the refusal sentence for FLUSHALL in the console, with no confirmation", async () => {
+    await openConnected();
+    const input = $<HTMLInputElement>("[data-testid=redis-console-input]");
+    await type(input, "FLUSHALL");
+    await enter(input);
+    expect(calls("db.kv.parseCommand")[0]!.params).toEqual({ text: "FLUSHALL" });
+    expect(calls("db.kv.command")[0]!.params).toMatchObject({
+      sessionId: "s1",
+      argv: ["FLUSHALL"],
+    });
+    const refusal = $("[data-testid=redis-console-refusal]");
+    expect(refusal?.dataset.reason).toBe("notAllowed");
+    expect(refusal?.textContent).toBe(R.console.blocked.notAllowed("FLUSHALL"));
+    expect(confirmDialog()).toBeNull();
+    expect(calls("db.kv.command")).toHaveLength(1);
+  });
+
+  it("asks to overwrite when the rename target exists", async () => {
+    host.keys = [info("a", "string"), info("b", "string")];
+    host.pages.set("a@", { value: { string: { text: "1" } }, total: 1, nextCursor: null });
+    host.pages.set("b@", { value: { string: { text: "1" } }, total: 1, nextCursor: null });
+    await openConnected();
+    await openKey("a");
+    await click($("[data-testid=redis-value] [data-action=rename]"));
+    await type($<HTMLInputElement>("[data-testid=redis-key-prompt-input]"), "b");
+    await click($("[data-testid=redis-key-prompt] [data-action=apply]"));
+    // 덮지 않는 이름 바꾸기(RENAMENX)도 분류대로 확인이다.
+    expect(confirmDialog()).not.toBeNull();
+    expect($("[data-testid=db-confirm-note]")).toBeNull();
+    expect(
+      [...document.querySelectorAll("[data-testid=db-confirm-kv-arg]")].map((a) => a.textContent),
+    ).toEqual(['"RENAMENX"', '"a"', '"b"']);
+    await click($("[data-testid=db-risk-confirm] [data-action=run]"));
+    // 대상이 있었다 → 「덮어쓴다」 안내와 함께 RENAME 의 확인.
+    expect(calls("db.kv.rename").map((c) => c.params.overwrite)).toEqual([false, false, true]);
+    expect(confirmDialog()).not.toBeNull();
+    expect($("[data-testid=db-confirm-note]")?.textContent).toBe(R.key.overwriteNote("b"));
+    expect(
+      [...document.querySelectorAll("[data-testid=db-confirm-kv-arg]")].map((a) => a.textContent),
+    ).toEqual(['"RENAME"', '"a"', '"b"']);
+    expect($("[data-testid=db-risk-confirm]")?.textContent).toContain(S.confirm.kv.command);
+    await click($("[data-testid=db-risk-confirm] [data-action=run]"));
+    expect(calls("db.kv.rename").at(-1)!.params).toMatchObject({
+      from: "a",
+      to: "b",
+      overwrite: true,
+      confirmed: { statementsHash: "h-rename" },
+    });
+    expect($("[data-testid=redis-key-tree] [data-key=a]")).toBeNull();
+    expect($("[data-testid=redis-value]")?.dataset.key).toBe("b");
+  });
+
+  it("cancelling the overwrite confirmation leaves both keys", async () => {
+    host.keys = [info("a", "string"), info("b", "string")];
+    host.pages.set("a@", { value: { string: { text: "1" } }, total: 1, nextCursor: null });
+    await openConnected();
+    await openKey("a");
+    await click($("[data-testid=redis-value] [data-action=rename]"));
+    await type($<HTMLInputElement>("[data-testid=redis-key-prompt-input]"), "b");
+    await click($("[data-testid=redis-key-prompt] [data-action=apply]"));
+    await click($("[data-testid=db-risk-confirm] [data-action=run]"));
+    await click($("[data-testid=db-risk-confirm] [data-action=cancel]"));
+    expect(calls("db.kv.rename").map((c) => c.params.overwrite)).toEqual([false, false, true]);
+    expect($("[data-testid=redis-key-tree] [data-key=a]")).not.toBeNull();
+    expect($("[data-testid=redis-key-tree] [data-key=b]")).not.toBeNull();
+  });
+
+  it("does not call a connection RPC when restarted with the tab open", async () => {
+    host.keys = [info("a", "string")];
+    await openConnected();
+    expect(calls("db.session.open")).toHaveLength(1);
+    await vi.waitFor(
+      () =>
+        expect((host.state as { main?: { tabs: { db?: unknown }[] } } | null)?.main?.tabs).toEqual([
+          expect.objectContaining({ db: SPEC }),
+        ]),
+      { timeout: 2000 },
+    );
+    // 다시 시작(창의 웹뷰가 새로 뜬다).
+    act(() => root?.unmount());
+    root = undefined;
+    document.body.innerHTML = "";
+    host.calls = [];
+    await mountApp();
+    await vi.waitFor(() => expect($("[data-redis-document]")).not.toBeNull());
+    await settle();
+    expect($("[data-redis-document] [data-action=connect]")).not.toBeNull();
+    expect($("[data-testid=redis-not-connected]")).not.toBeNull();
+    expect(
+      host.calls.map((c) => c.method).filter((m) => /^db\.(session|kv|query)\./.test(m)),
+    ).toEqual([]);
+    // 연결 설정은 읽는다(표지 — 연결을 열지 않는다).
+    expect(calls("db.connection.get")).toHaveLength(1);
+  });
+});
