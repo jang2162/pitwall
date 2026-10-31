@@ -78,6 +78,8 @@ const host = vi.hoisted(() => ({
   writeGate: null as Promise<void> | null,
   openGate: null as Promise<void> | null,
   resumeGate: null as Promise<void> | null,
+  /** `3101` 의 `data.connectionId`(Host 가 비밀을 요구한 연결). */
+  secretFor: "dev",
 }));
 
 /** 손으로 푸는 약속(느린 Host). */
@@ -254,7 +256,7 @@ vi.mock("../../tauri-transport", async () => {
                   code: 3101,
                   message: "db connection `dev` needs its password",
                   data: {
-                    connectionId: "dev",
+                    connectionId: host.secretFor,
                     key: "password",
                     reason: "missing",
                     target: SECRET_TARGET,
@@ -432,6 +434,7 @@ beforeEach(() => {
   host.writeGate = null;
   host.openGate = null;
   host.resumeGate = null;
+  host.secretFor = "dev";
   host.unattended = [];
   glide.rows = [];
 });
@@ -966,6 +969,34 @@ it("writes the console one write at a time and keeps the last text", async () =>
   await vi.waitFor(() => expect(callsOf("project.console.write")).toHaveLength(2));
   expect(callsOf("project.console.write")[1]!.params.text).toBe("SELECT 1, 2, 3");
   await vi.waitFor(() => expect(host.consoleText).toBe("SELECT 1, 2, 3"));
+});
+
+it("does not ask for a password Host asked about another connection", async () => {
+  await mount();
+  await openConsole();
+  host.openNeedsSecret = true;
+  host.secretFor = "other";
+  await click(button("db-console-connect"));
+  expect(q("[data-testid=db-access-prompt]")).toBeNull();
+  expect(callsOf("db.session.open")).toHaveLength(1);
+  expect(methods()).not.toContain("db.secret.set");
+  expect(q("[data-testid=db-console-notices] [data-notice=error]")).not.toBeNull();
+  expect(button("db-console-connect")).toBeTruthy();
+});
+
+it("stops connecting when the tab closes while the password is asked", async () => {
+  await mount();
+  await openConsole();
+  host.openNeedsSecret = true;
+  await click(button("db-console-connect"));
+  expect(q("[data-testid=db-access-prompt]")).not.toBeNull();
+  // 묻는 동안은 창의 키맵이 쉬므로 탭을 직접 닫는다.
+  await act(async () => consoleTab()!.api.close());
+  await settle();
+  expect(consoleTab()).toBeUndefined();
+  expect(q("[data-testid=db-access-prompt]")).toBeNull();
+  expect(methods()).not.toContain("db.secret.set");
+  expect(callsOf("db.session.open")).toHaveLength(1);
 });
 
 it("closes the kept session that comes back after the tab was closed while resuming", async () => {
