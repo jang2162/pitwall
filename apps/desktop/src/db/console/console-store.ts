@@ -218,6 +218,14 @@ function consoleActions(store: StoreApi<ConsoleState>, deps: ConsoleDeps) {
           projectId: deps.projectId,
           tabId: get().spec.tabId,
         });
+        // 돌아오기 전에 탭이 닫혔으면 보존 세션을 아무도 닫지 않는다 — 곧바로 닫는다(사람이 탭을 닫았다. 열린 트랜잭션은
+        // DB 가 롤백한다).
+        if (found && disposed) {
+          await client()
+            .call("db.session.close", { sessionId: found.session.sessionId })
+            .catch(() => undefined);
+          return;
+        }
         if (found && !get().opened) set({ opened: found });
       } catch (e) {
         set({ error: e });
@@ -440,7 +448,7 @@ function consoleActions(store: StoreApi<ConsoleState>, deps: ConsoleDeps) {
       return answer === "commit" ? actions.commit() : actions.rollback();
     },
 
-    /** 탭이 닫혔다: 세션을 닫는다(답을 받은 뒤라 열린 트랜잭션은 없다 — 남았으면 DB 가 롤백한다). [연결] 이 도는 중이면 돌아온 세션을 곧바로 닫는다. */
+    /** 탭이 닫혔다: 세션을 닫는다(답을 받은 뒤라 열린 트랜잭션은 없다 — 남았으면 DB 가 롤백한다). [연결] · 재개(`resume`)가 도는 중이면 돌아온 세션을 곧바로 닫는다. */
     async dispose() {
       disposed = true;
       abort?.abort();
