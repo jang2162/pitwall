@@ -152,6 +152,15 @@ pub struct DbSchemaRefreshParams {
     pub connection_id: String,
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbSchemaDisconnectParams {
+    pub project_id: String,
+    pub connection_id: String,
+}
+
 macro_rules! list_type {
     ($(#[$doc:meta])* $name:ident, $item:ty) => {
         $(#[$doc])*
@@ -264,6 +273,16 @@ rpc_method! {
     /// 수동 새로 고침: 그 연결의 스키마 캐시를 버리고 `db.schemaChanged` 를 낸다. 연결을 열지 않는다. 그 프로젝트 창만.
     pub DbSchemaRefreshMethod: "db.schema.refresh" {
         params: DbSchemaRefreshParams,
+        result: (),
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// 탐색기의 「끊기」: 그 연결(모든 워크트리 · DB)의 메타데이터용 연결을 닫는다. 캐시는 둔다 — 스키마가 바뀐 것은 아니다. 연결을
+    /// 열지 않고 신뢰 게이트를 지나지 않는다(닫기만 한다 — 신뢰를 거둔 뒤에도 사람이 닫을 수 있어야 한다). 그 프로젝트 창만. 도는
+    /// 조회가 있으면 그것이 끝난 뒤 닫는다.
+    pub DbSchemaDisconnectMethod: "db.schema.disconnect" {
+        params: DbSchemaDisconnectParams,
         result: (),
         tier: Read,
         roles: [Owner],
@@ -657,6 +676,20 @@ impl SchemaState {
         (link, evicted)
     }
 
+    /// 그 (프로젝트, 연결 id)의 자리를 워크트리 · 카탈로그와 상관없이 모두 표에서 뺀다. 그 자리를 쥔 조회는 다음에 새 자리를 받는다.
+    fn take_links(&self, project: &str, connection: &str) -> Vec<Arc<MetaLink>> {
+        let mut links = lock(&*self.links);
+        let keys: Vec<LinkKey> = links
+            .keys()
+            .filter(|k| k.conn.project == project && k.conn.connection == connection)
+            .cloned()
+            .collect();
+        keys.iter()
+            .filter_map(|k| links.remove(k))
+            .inspect(|link| link.gone.store(true, Ordering::SeqCst))
+            .collect()
+    }
+
     /// 쉬는 메타데이터용 연결을 닫는 시간을 바꾼다(시험 — 이미 연 연결에는 닿지 않는다).
     pub fn set_idle_close(&self, idle: Duration) {
         *lock(&self.idle_close) = idle;
@@ -763,6 +796,13 @@ impl DbSessions {
             &payload,
         ) {
             tracing::warn!(target: "pw_db", %e, "cannot publish db.schemaChanged");
+        }
+    }
+
+    /// 그 연결의 메타데이터용 연결을 모두 닫는다(탐색기의 「끊기」). 캐시는 둔다.
+    pub async fn close_metadata(&self, project_id: &str, connection_id: &str) {
+        for link in self.schema.take_links(project_id, connection_id) {
+            shut(&link).await;
         }
     }
 
@@ -1119,7 +1159,8 @@ async fn retire(meta: MetaConn) {
 /// `db.schema.*` 를 붙인다.
 pub(crate) fn register(router: &mut Router, sessions: Arc<DbSessions>) {
     let s = sessions;
-    let (databases, schemas, objects, columns, indexes, foreign_keys, ddl, refresh) = (
+    let (databases, schemas, objects, columns, indexes, foreign_keys, ddl, refresh, disconnect) = (
+        Arc::clone(&s),
         Arc::clone(&s),
         Arc::clone(&s),
         Arc::clone(&s),
@@ -1211,6 +1252,18 @@ pub(crate) fn register(router: &mut Router, sessions: Arc<DbSessions>) {
                     db_grant(ctx.scope(), &p.project_id)?;
                     check_text("connectionId", Some(&p.connection_id))?;
                     s.schema_changed(&p.project_id, &p.connection_id);
+                    Ok(())
+                }
+            },
+        )
+        .unary(
+            DbSchemaDisconnectMethod,
+            move |ctx, p: DbSchemaDisconnectParams| {
+                let s = Arc::clone(&disconnect);
+                async move {
+                    db_grant(ctx.scope(), &p.project_id)?;
+                    check_text("connectionId", Some(&p.connection_id))?;
+                    s.close_metadata(&p.project_id, &p.connection_id).await;
                     Ok(())
                 }
             },

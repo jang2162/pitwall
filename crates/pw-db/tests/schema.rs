@@ -429,6 +429,10 @@ async fn other_windows_get_no_schema_even_from_the_cache() {
                 "db.schema.refresh",
                 json!({ "projectId": e.f.id, "connectionId": "dev" }),
             ),
+            (
+                "db.schema.disconnect",
+                json!({ "projectId": e.f.id, "connectionId": "dev" }),
+            ),
         ]
     };
     let scopes = [
@@ -519,6 +523,57 @@ async fn closing_the_window_closes_its_metadata_connection() {
     assert_eq!(e.pg.count(&FakeCall::Connect), 2);
     w.call("db.schema.objects", e.objects()).await.unwrap();
     assert_eq!(e.metadata_calls("objects"), 1);
+}
+
+/// 탐색기의 「끊기」(`db.schema.disconnect`)는 그 연결의 메타데이터용 연결을 DB 마다 모두 닫고 캐시는 둔다 — 캐시에 든 쪽은 연결
+/// 없이 나오고, 캐시에 없는 조회는 새로 연다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disconnecting_closes_every_metadata_connection_and_keeps_the_cache() {
+    let e = env(true);
+    e.pg.set_objects(tables(3));
+    let mut w = e.f.window();
+    w.call("db.schema.objects", e.objects()).await.unwrap();
+    let mut other = e.objects();
+    other["database"] = json!("analytics");
+    w.call("db.schema.objects", other).await.unwrap();
+    assert_eq!(e.sessions.schema_state().open_links(), 2);
+    w.call(
+        "db.schema.disconnect",
+        json!({ "projectId": e.f.id, "connectionId": "dev" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Close), 2);
+    assert_eq!(e.sessions.schema_state().open_links(), 0);
+
+    w.call("db.schema.objects", e.objects()).await.unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Connect), 2, "the cache answered");
+    assert_eq!(e.metadata_calls("objects"), 2);
+    w.call("db.schema.columns", e.table("t00000"))
+        .await
+        .unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Connect), 3);
+}
+
+/// 「끊기」 는 신뢰 게이트를 지나지 않는다 — 신뢰를 거둔 프로젝트에서도 열어 둔 메타데이터용 연결을 닫는다. 연결은 열지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disconnecting_works_after_trust_is_revoked_and_opens_nothing() {
+    let e = env(false);
+    let mut w = e.f.window();
+    let disconnect = json!({ "projectId": e.f.id, "connectionId": "dev" });
+    w.call("db.schema.disconnect", disconnect.clone())
+        .await
+        .unwrap();
+    assert!(e.pg.calls().is_empty());
+
+    e.f.projects.set_trust(&e.f.id, true).unwrap();
+    e.pg.set_objects(tables(3));
+    w.call("db.schema.objects", e.objects()).await.unwrap();
+    e.f.projects.set_trust(&e.f.id, false).unwrap();
+    w.call("db.schema.disconnect", disconnect).await.unwrap();
+    assert_eq!(e.pg.count(&FakeCall::Close), 1);
+    assert_eq!(e.pg.count(&FakeCall::Connect), 1);
+    assert_eq!(e.sessions.schema_state().open_links(), 0);
 }
 
 /// 연결 설정이 바뀌면(다른 서버를 가리킬 수 있다) 그 설정으로 채운 캐시를 버리고 메타데이터용 연결을 다시 연다.

@@ -114,6 +114,12 @@ export type UnaryMethods = {
 	 */
 	"db.schema.ddl": { params: DbSchemaObjectParams; result: Ddl };
 	/**
+	 * 탐색기의 「끊기」: 그 연결(모든 워크트리 · DB)의 메타데이터용 연결을 닫는다. 캐시는 둔다 — 스키마가 바뀐 것은 아니다. 연결을
+	 * 열지 않고 신뢰 게이트를 지나지 않는다(닫기만 한다 — 신뢰를 거둔 뒤에도 사람이 닫을 수 있어야 한다). 그 프로젝트 창만. 도는
+	 * 조회가 있으면 그것이 끝난 뒤 닫는다.
+	 */
+	"db.schema.disconnect": { params: DbSchemaDisconnectParams; result: null };
+	/**
 	 * 테이블의 외래 키.
 	 */
 	"db.schema.foreignKeys": { params: DbSchemaObjectParams; result: DbSchemaForeignKeys };
@@ -784,6 +790,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.schema.columns": {"name":"db.schema.columns","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"DbSchemaColumns","doc":" 테이블 · 뷰의 열.\n","mcp":false,"fileScope":false},
 	"db.schema.databases": {"name":"db.schema.databases","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaConnectionParams","output":"DbSchemaDatabases","doc":" DB 목록(지원 플래그 `multipleDatabases`). 그 프로젝트 창 + 신뢰한 프로젝트만. 메타데이터용 연결을 처음 쓰면 연다(비밀 ·\n 확인이 필요하면 3101 · 3102, 드라이버가 실패하면 3003).\n","mcp":false,"fileScope":false},
 	"db.schema.ddl": {"name":"db.schema.ddl","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"Ddl","doc":" 객체의 DDL 글(`⌘B`).\n","mcp":false,"fileScope":false},
+	"db.schema.disconnect": {"name":"db.schema.disconnect","kind":"unary","tier":"read","roles":["owner"],"params":"DbSchemaDisconnectParams","output":"()","doc":" 탐색기의 「끊기」: 그 연결(모든 워크트리 · DB)의 메타데이터용 연결을 닫는다. 캐시는 둔다 — 스키마가 바뀐 것은 아니다. 연결을\n 열지 않고 신뢰 게이트를 지나지 않는다(닫기만 한다 — 신뢰를 거둔 뒤에도 사람이 닫을 수 있어야 한다). 그 프로젝트 창만. 도는\n 조회가 있으면 그것이 끝난 뒤 닫는다.\n","mcp":false,"fileScope":false},
 	"db.schema.foreignKeys": {"name":"db.schema.foreignKeys","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"DbSchemaForeignKeys","doc":" 테이블의 외래 키.\n","mcp":false,"fileScope":false},
 	"db.schema.indexes": {"name":"db.schema.indexes","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectParams","output":"DbSchemaIndexes","doc":" 테이블의 인덱스.\n","mcp":false,"fileScope":false},
 	"db.schema.objects": {"name":"db.schema.objects","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSchemaObjectsParams","output":"ObjectPage","doc":" 객체 목록 한 쪽 — 필터와 쪽은 서버 쪽에서 한다(`limit` 1 ~ 500).\n","mcp":false,"fileScope":false},
@@ -1901,6 +1908,11 @@ export type DbSchemaDatabases = {
 	items: DatabaseInfo[],
 	/**  다음 쪽이 있으면 그 커서(창은 그대로 돌려줄 뿐이다). */
 	nextCursor: string | null,
+};
+
+export type DbSchemaDisconnectParams = {
+	projectId: string,
+	connectionId: string,
 };
 
 /**  외래 키 목록 한 쪽. */
