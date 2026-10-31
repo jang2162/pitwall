@@ -30,6 +30,12 @@ describe("csv", () => {
     );
   });
 
+  it("quotes a field that holds only a comma", () => {
+    expect(
+      toCsv({ columns: [block.columns[0]!], rows: [[{ text: "a,b" }], [{ text: "c" }]] }),
+    ).toBe('id\r\n"a,b"\r\nc\r\n');
+  });
+
   it("leaves plain fields unquoted", () => {
     expect(toCsv({ columns: [block.columns[0]!], rows: [[{ text: "a b" }]] })).toBe(
       "id\r\na b\r\n",

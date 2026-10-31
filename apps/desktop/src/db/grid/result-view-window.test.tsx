@@ -410,11 +410,14 @@ describe("copy", () => {
     const [action] = gridActions(T);
     const outside = document.createElement("button");
     document.body.append(outside);
-    outside.focus();
-    expect(action!.enabled!()).toBe(false);
     await act(async () => byTestId("fake-glide")!.focus());
     expect(focusedGrid()).toBeDefined();
     expect(action!.enabled!()).toBe(true);
+    // 그리드를 거쳐 간 포커스가 밖으로 나가면 액션이 꺼진다(마지막 그리드를 기억해도).
+    outside.focus();
+    expect(focusedGrid()).toBeUndefined();
+    expect(action!.enabled!()).toBe(false);
+    await act(async () => byTestId("fake-glide")!.focus());
     await act(async () => void action!.run());
     expect(byTestId("db-grid-copy-as")).not.toBeNull();
     outside.remove();
