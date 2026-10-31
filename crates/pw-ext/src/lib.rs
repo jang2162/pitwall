@@ -144,6 +144,7 @@ mod tests {
             .collect();
         let files = vec![
             "app.ftl",
+            "db-connection.ftl",
             "db-console.ftl",
             "db-explorer.ftl",
             "db-grid.ftl",
