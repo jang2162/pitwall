@@ -78,6 +78,17 @@ pub enum FakeCall {
     Close,
 }
 
+/// 문장이 열린 트랜잭션을 저절로 끝내는 방식(드라이버가 보고하는 상태 변화 — 실행 파이프라인이 세션 상태로 옮긴다).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FakeEnding {
+    /// 문장 앞에서 열린 트랜잭션을 커밋한다(MySQL 의 DDL · `LOCK TABLES` 등 암묵 커밋 — 문장이 실패해도 커밋은 남는다).
+    ImplicitCommit,
+    /// 트랜잭션 전체를 되돌린다(교착 등). 문장이 오류로 끝나면 그 오류에 `rolled_back` 을 싣는다.
+    RollBack,
+    /// 자동 커밋이었는데 서버에 트랜잭션 블록이 열렸다(PG 의 숨은 블록 — M3-06 리뷰 H1). 연결은 그 블록을 쥐고 `InTransaction` 이다.
+    OpenBlock,
+}
+
 /// 문장 하나에 대한 응답.
 #[derive(Debug, Clone)]
 pub struct FakeResponse {
@@ -95,6 +106,8 @@ pub struct FakeResponse {
     pub fetch_delay: Duration,
     /// 첫 `fetch` 가 인터럽트를 받을 때까지 돌아오지 않는다(오래 도는 쿼리).
     pub hang: bool,
+    /// 문장이 열린 트랜잭션을 저절로 끝내거나 연다([`FakeEnding`]). `execute` 가 오류를 돌려주기 전에 적용한다.
+    pub ending: Option<FakeEnding>,
 }
 
 impl FakeResponse {
@@ -108,6 +121,7 @@ impl FakeResponse {
             fail_after: None,
             fetch_delay: Duration::ZERO,
             hang: false,
+            ending: None,
         }
     }
 
@@ -146,6 +160,11 @@ impl FakeResponse {
 
     pub fn hanging(mut self) -> Self {
         self.hang = true;
+        self
+    }
+
+    pub fn ending(mut self, ending: FakeEnding) -> Self {
+        self.ending = Some(ending);
         self
     }
 }
@@ -188,7 +207,11 @@ struct Ledger {
 
 /// 드라이버 전체가 함께 쓰는 것: 응답 · 호출 기록 · 커밋된 쓰기 · 읽은 행 수.
 struct State {
+    id: String,
+    dialect: SqlDialect,
     capabilities: Capabilities,
+    /// 트랜잭션 안에서 도는 `fetch` 를 인터럽트하면 트랜잭션 전체가 롤백된다(SQLite 의 쓰기 취소). 아니면 `Failed`(PG).
+    interrupt_rolls_back: AtomicBool,
     script: Mutex<Script>,
     /// (연결 번호, 호출).
     calls: Mutex<Vec<(u32, FakeCall)>>,
@@ -239,9 +262,22 @@ impl FakeDriver {
     }
 
     pub fn with_capabilities(capabilities: Capabilities) -> Self {
+        Self::build("fake", SqlDialect::Postgres, capabilities)
+    }
+
+    /// 등록부의 id(설정 파일의 `driver` 값 — `postgres` · `mysql` · `sqlite`)와 방언을 고른 가짜. 실행 관문이 연결의 방언으로 분류하는지
+    /// 보는 시험이 쓴다.
+    pub fn named(id: &str, dialect: SqlDialect) -> Self {
+        Self::build(id, dialect, Self::full_capabilities())
+    }
+
+    fn build(id: &str, dialect: SqlDialect, capabilities: Capabilities) -> Self {
         Self {
             state: Arc::new(State {
+                id: id.to_owned(),
+                dialect,
                 capabilities,
+                interrupt_rolls_back: AtomicBool::new(false),
                 script: Mutex::default(),
                 calls: Mutex::default(),
                 committed: Mutex::default(),
@@ -287,6 +323,12 @@ impl FakeDriver {
         lock(&self.state.script)
             .responses
             .push((needle.to_owned(), response));
+    }
+
+    /// 트랜잭션 안에서 도는 `fetch` 를 인터럽트하면 트랜잭션 전체를 롤백하고 `rolled_back` 취소 오류로 답한다(SQLite 의 길). 기본은
+    /// PG 의 길 — 트랜잭션이 `Failed` 가 된다.
+    pub fn interrupt_rolls_back(&self, yes: bool) {
+        self.state.interrupt_rolls_back.store(yes, Ordering::SeqCst);
     }
 
     /// `connect` 가 이 오류로 끝난다.
@@ -355,11 +397,11 @@ impl FakeDriver {
 
 impl DbDriver for FakeDriver {
     fn id(&self) -> &str {
-        "fake"
+        &self.state.id
     }
 
     fn dialect(&self) -> Option<SqlDialect> {
-        Some(SqlDialect::Postgres)
+        Some(self.state.dialect)
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -433,13 +475,55 @@ impl FakeConnection {
         }
     }
 
-    /// 도는 `fetch` 에 인터럽트가 왔으면 취소 오류. 트랜잭션 안이었으면 그 트랜잭션은 롤백만 된다(PG 와 같다).
+    /// 도는 `fetch` 에 인터럽트가 왔으면 취소 오류. 트랜잭션 안이었으면 그 트랜잭션은 롤백만 된다(PG 와 같다) — 또는
+    /// [`FakeDriver::interrupt_rolls_back`] 이면 통째로 롤백되고 오류가 `rolled_back` 을 싣는다(SQLite 와 같다).
     fn take_interrupt(&self) -> DbResult<()> {
         if self.session.interrupted.swap(false, Ordering::SeqCst) {
+            if self
+                .driver
+                .state
+                .interrupt_rolls_back
+                .load(Ordering::SeqCst)
+            {
+                let mut ledger = lock(&self.session.ledger);
+                if ledger.in_transaction {
+                    *ledger = Ledger::default();
+                    return Err(DbError::cancelled().with_rolled_back());
+                }
+                return Err(DbError::cancelled());
+            }
             self.fail_transaction();
             return Err(DbError::cancelled());
         }
         Ok(())
+    }
+
+    /// 응답의 [`FakeEnding`] 을 트랜잭션에 적용한다. 되돌렸으면 true.
+    fn apply_ending(&self, ending: Option<FakeEnding>) -> bool {
+        let mut ledger = lock(&self.session.ledger);
+        match ending {
+            None => false,
+            Some(FakeEnding::ImplicitCommit) => {
+                if ledger.in_transaction {
+                    let pending = std::mem::take(&mut ledger.pending);
+                    lock(&self.driver.state.committed).extend(pending);
+                    *ledger = Ledger::default();
+                }
+                false
+            }
+            Some(FakeEnding::RollBack) => {
+                let was = ledger.in_transaction;
+                *ledger = Ledger::default();
+                was
+            }
+            Some(FakeEnding::OpenBlock) => {
+                if !ledger.in_transaction {
+                    ledger.in_transaction = true;
+                    ledger.failed = false;
+                }
+                false
+            }
+        }
     }
 
     fn fail_transaction(&self) {
@@ -509,21 +593,22 @@ impl SqlConnection for FakeConnection {
             self.cursor = None;
             self.record(FakeCall::Execute(request.sql.clone()));
             let response = self.driver.response_for(&request.sql);
-            {
+            if lock(&self.session.ledger).failed {
+                return Err(
+                    DbError::new(DbErrorKind::Server, "current transaction is aborted")
+                        .with_code("25P02"),
+                );
+            }
+            let rolled_back = self.apply_ending(response.ending);
+            if let Some(mut error) = response.error.clone() {
                 let mut ledger = lock(&self.session.ledger);
-                if ledger.failed {
-                    return Err(DbError::new(
-                        DbErrorKind::Server,
-                        "current transaction is aborted",
-                    )
-                    .with_code("25P02"));
+                if ledger.in_transaction {
+                    ledger.failed = true;
                 }
-                if let Some(error) = response.error.clone() {
-                    if ledger.in_transaction {
-                        ledger.failed = true;
-                    }
-                    return Err(error);
+                if rolled_back {
+                    error.rolled_back = true;
                 }
+                return Err(error);
             }
             if response.columns.is_empty() {
                 if !request.grade.is_read() {

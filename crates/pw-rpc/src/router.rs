@@ -130,6 +130,8 @@ pub struct Ctx {
     pub(crate) session: SessionId,
     pub(crate) caller: Caller,
     pub(crate) cancel: CancellationToken,
+    /// 세션(연결)의 뿌리 토큰. 핸들러에는 자식만 준다([`Ctx::connection_closed`]) — 핸들러가 연결 전체를 취소하지 못하게.
+    pub(crate) closed: CancellationToken,
     pub(crate) events: EventHub,
 }
 
@@ -163,6 +165,13 @@ impl Ctx {
 
     pub fn events(&self) -> &EventHub {
         &self.events
+    }
+
+    /// 이 호출이 온 연결이 닫히면(창이 닫혀 transport 가 세션을 닫으면) 취소되는 토큰. 호출 하나의 토큰([`Ctx::cancellation`])과
+    /// 달리 그 호출이 끝나거나 취소돼도 살아 있다 — 연결에 묶인 자원(DB 세션 등)을 호출 뒤에도 쥔 핸들러가, 연결이 닫히면 그 자원을
+    /// 닫는 데 쓴다.
+    pub fn connection_closed(&self) -> CancellationToken {
+        self.closed.child_token()
     }
 }
 

@@ -7,9 +7,9 @@
 
 use std::sync::Arc;
 
-use pw_db::DriverRegistry;
 use pw_db::config::Connections;
 use pw_db::secret::{KeyringStore, RuntimeEnv};
+use pw_db::{DbSessions, DriverRegistry};
 use pw_runtime::Runtime;
 
 /// 연결 설정 · 비밀 · 신뢰 게이트(M3-02). 비밀은 OS 키체인(서비스 `dev.pitwall.db`), `env` 참조는 그 프로젝트의 런타임 환경에서
@@ -21,14 +21,12 @@ pub fn connections(runtime: &Arc<Runtime>) -> Arc<Connections> {
     ))
 }
 
+/// 세션 · 실행 파이프라인(M3-05): 연결 설정(M3-02)과 드라이버 등록부를 받는다.
+pub fn sessions(connections: &Arc<Connections>) -> Arc<DbSessions> {
+    Arc::new(DbSessions::new(Arc::clone(connections), drivers()))
+}
+
 /// 앱의 드라이버 등록부. 실행 파이프라인(M3-05)이 Host 를 만들 때 받는다.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the execution pipeline (M3-05) takes the registry"
-    )
-)]
 pub fn drivers() -> DriverRegistry {
     let mut registry = DriverRegistry::new();
     registry

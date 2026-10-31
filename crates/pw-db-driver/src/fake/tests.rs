@@ -396,3 +396,66 @@ async fn connections_of_one_fake_keep_their_own_transaction_and_interrupt() {
     a.interrupter().interrupt().await.unwrap();
     assert_eq!(a.fetch(FetchLimit::rows(10)).await.unwrap().rows.len(), 5);
 }
+
+/// 문장이 트랜잭션을 저절로 끝내거나 여는 흉내(`FakeEnding`)와 SQLite 식 취소 — 파이프라인(M3-05)이 세션 상태로 옮기는 드라이버 보고.
+#[tokio::test]
+async fn endings_report_implicit_commits_whole_rollbacks_and_hidden_blocks() {
+    let driver = FakeDriver::named("mysql", SqlDialect::Mysql);
+    assert_eq!(driver.id(), "mysql");
+    assert_eq!(driver.dialect(), Some(SqlDialect::Mysql));
+    driver.respond("INSERT", FakeResponse::write(1));
+    driver.respond(
+        "CREATE",
+        FakeResponse::write(0).ending(FakeEnding::ImplicitCommit),
+    );
+    driver.respond(
+        "DEADLOCK",
+        FakeResponse::error(DbError::new(DbErrorKind::Server, "deadlock").with_code("1213"))
+            .ending(FakeEnding::RollBack),
+    );
+    driver.respond(
+        "HIDDEN",
+        FakeResponse::write(1).ending(FakeEnding::OpenBlock),
+    );
+    let mut conn = sql(&driver).await;
+
+    // 암묵 커밋: 앞의 쓰기가 커밋되고 세션은 idle 이다.
+    conn.begin(BeginOptions::default()).await.unwrap();
+    conn.execute(stmt("INSERT a")).await.unwrap();
+    conn.execute(stmt("CREATE TABLE t (id int)")).await.unwrap();
+    assert_eq!(conn.transaction_state(), TransactionState::Idle);
+    assert_eq!(driver.committed(), ["INSERT a", "CREATE TABLE t (id int)"]);
+
+    // 전체 롤백: 오류가 `rolled_back` 을 싣고, 쓰기는 사라진다.
+    conn.begin(BeginOptions::default()).await.unwrap();
+    conn.execute(stmt("INSERT b")).await.unwrap();
+    let error = conn.execute(stmt("UPDATE DEADLOCK")).await.unwrap_err();
+    assert!(error.rolled_back, "{error:?}");
+    assert_eq!(conn.transaction_state(), TransactionState::Idle);
+    assert!(!driver.committed().contains(&"INSERT b".to_owned()));
+
+    // 숨은 블록: 자동 커밋 문장 뒤 연결이 트랜잭션 안이다 — 쓰기는 커밋 전까지 남지 않는다.
+    conn.execute(stmt("INSERT HIDDEN")).await.unwrap();
+    assert_eq!(conn.transaction_state(), TransactionState::InTransaction);
+    assert!(!driver.committed().contains(&"INSERT HIDDEN".to_owned()));
+    conn.commit().await.unwrap();
+    assert!(driver.committed().contains(&"INSERT HIDDEN".to_owned()));
+
+    // SQLite 식 취소: 트랜잭션 안의 문장을 멈추면 전체가 롤백된다.
+    driver.interrupt_rolls_back(true);
+    driver.respond("SLOW", FakeResponse::rows(5).hanging());
+    conn.begin(BeginOptions::default()).await.unwrap();
+    conn.execute(stmt("INSERT c")).await.unwrap();
+    conn.execute(stmt("UPDATE SLOW RETURNING *")).await.unwrap();
+    let interrupt = conn.interrupter();
+    let stop = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        interrupt.interrupt().await.unwrap();
+    });
+    let error = conn.fetch(FetchLimit::rows(5)).await.unwrap_err();
+    stop.await.unwrap();
+    assert_eq!(error.kind, DbErrorKind::Cancelled);
+    assert!(error.rolled_back, "{error:?}");
+    assert_eq!(conn.transaction_state(), TransactionState::Idle);
+    assert!(!driver.committed().contains(&"INSERT c".to_owned()));
+}

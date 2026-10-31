@@ -3,7 +3,7 @@
 
 #![allow(dead_code, reason = "each test binary uses a part of the helpers")]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -16,6 +16,9 @@ use pw_core::registry::{NewProject, Registry};
 use pw_db::config::{Connections, HostParts};
 use pw_db::secret::{EnvLookup, MemorySecretStore};
 use pw_db_types::Secret;
+use pw_rpc::protocol::{
+    STREAM_CHUNK, STREAM_END, StreamChunk, StreamEnd, StreamOpened, StreamOutcome,
+};
 use pw_rpc::{Caller, ConnectionScope, EventHub, Outbound, Role, Router, RpcError, Session};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -72,6 +75,11 @@ pub struct Fixture {
 impl Fixture {
     /// 프로젝트 둘. `trusted` 면 시험 대상 프로젝트를 신뢰한다.
     pub fn new(trusted: bool) -> Self {
+        Self::build(trusted, |_, _| {})
+    }
+
+    /// [`Fixture::new`] 에 메서드를 더 붙인다(실행 파이프라인 등). `extra` 는 연결 설정 메서드를 붙인 뒤에 불린다.
+    pub fn build(trusted: bool, extra: impl FnOnce(&mut Router, &Arc<Connections>)) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let base = simplify(fs::canonicalize(tmp.path()).unwrap());
         let app = AppPaths::under(&base.join("app"));
@@ -87,6 +95,7 @@ impl Fixture {
         });
         let mut router = Router::new();
         pw_db::config::register(&mut router, Arc::clone(&connections));
+        extra(&mut router, &connections);
         let project = |name: &str| {
             let root = base.join(name);
             fs::create_dir_all(&root).unwrap();
@@ -133,6 +142,7 @@ impl Fixture {
             session,
             rx,
             next_id: 0,
+            pending: VecDeque::new(),
         }
     }
 
@@ -163,9 +173,18 @@ impl Fixture {
 }
 
 pub struct Conn {
-    session: Session,
+    pub session: Session,
     rx: UnboundedReceiver<Outbound>,
     next_id: i64,
+    /// 응답을 기다리며 받은 알림(스트림 청크 등) — 버리지 않고 스트림 읽기가 먼저 본다.
+    pending: VecDeque<Outbound>,
+}
+
+/// 스트림에서 받은 것.
+#[derive(Debug)]
+pub enum StreamMsg {
+    Chunk(Value),
+    End(StreamOutcome),
 }
 
 impl Conn {
@@ -179,10 +198,77 @@ impl Conn {
                 .await
                 .expect("no response")
                 .expect("closed");
-            if let Some(response) = msg.into_response()
-                && response.id == pw_rpc::Id::Number(id)
-            {
-                return response.outcome;
+            match msg {
+                Outbound::Response(response) if response.id == pw_rpc::Id::Number(id) => {
+                    return response.outcome;
+                }
+                other => self.pending.push_back(other),
+            }
+        }
+    }
+
+    /// 스트림 메서드를 연다. 열리면 스트림 id.
+    pub async fn start(&mut self, method: &str, params: Value) -> Result<u64, RpcError> {
+        let opened = self.call(method, params).await?;
+        Ok(serde_json::from_value::<StreamOpened>(opened)
+            .unwrap()
+            .stream_id)
+    }
+
+    pub fn credit(&self, stream: u64, credit: u32) {
+        self.session.handle_value(json!({
+            "jsonrpc": "2.0", "method": "stream.credit",
+            "params": { "streamId": stream, "credit": credit },
+        }));
+    }
+
+    pub fn cancel_stream(&self, stream: u64) {
+        self.session.handle_value(json!({
+            "jsonrpc": "2.0", "method": "stream.cancel", "params": { "streamId": stream },
+        }));
+    }
+
+    /// 그 스트림의 다음 청크나 끝(`wait` 안에 오지 않으면 `None`).
+    pub async fn next_in(&mut self, stream: u64, wait: Duration) -> Option<StreamMsg> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            let msg = match self.pending.pop_front() {
+                Some(msg) => msg,
+                None => tokio::time::timeout_at(deadline, self.rx.recv())
+                    .await
+                    .ok()??,
+            };
+            let Some(note) = msg.into_notification() else {
+                continue;
+            };
+            if note.method == STREAM_CHUNK {
+                let chunk: StreamChunk = note.params_as().unwrap();
+                if chunk.stream_id == stream {
+                    return Some(StreamMsg::Chunk(chunk.data));
+                }
+            } else if note.method == STREAM_END {
+                let end: StreamEnd = note.params_as().unwrap();
+                if end.stream_id == stream {
+                    return Some(StreamMsg::End(end.outcome));
+                }
+            }
+        }
+    }
+
+    pub async fn next(&mut self, stream: u64) -> StreamMsg {
+        self.next_in(stream, Duration::from_secs(5))
+            .await
+            .expect("no stream message")
+    }
+
+    /// 넉넉한 credit 을 주고 끝까지 모은다.
+    pub async fn collect(&mut self, stream: u64) -> (Vec<Value>, StreamOutcome) {
+        self.credit(stream, 1_000_000);
+        let mut items = Vec::new();
+        loop {
+            match self.next(stream).await {
+                StreamMsg::Chunk(item) => items.push(item),
+                StreamMsg::End(outcome) => return (items, outcome),
             }
         }
     }

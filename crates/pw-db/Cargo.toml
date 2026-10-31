@@ -16,14 +16,19 @@ build = "../pw-db-driver/live_cfg.rs"
 keyring = "4.2.0"
 pw-core = { path = "../pw-core" }
 pw-db-driver = { path = "../pw-db-driver" }
+# 실행 관문의 문장 나누기 · 위험도 분류 · 트랜잭션 제어 가려내기(M3-03 · M3-04 · M3-05).
+pw-db-sql = { path = "../pw-db-sql" }
 pw-db-types = { path = "../pw-db-types" }
 pw-rpc = { path = "../pw-rpc" }
 pw-runtime = { path = "../pw-runtime" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# 실행 관문의 확인 해시(세션 · 방언 · 문장 원문에 묶는다 — 결정 M3-D20). pw-fs 와 같은 판.
+sha2 = "0.10.9"
 specta = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tokio-util = { workspace = true }
 # 연결 설정 파일을 쓸 때 사람이 단 주석 · 모르는 키 순서를 지킨다(pw-core 의 설정 마이그레이션과 같은 판).
 toml_edit = "0.25.17"
 tracing = "0.1.44"

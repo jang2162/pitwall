@@ -35,10 +35,25 @@ export type UnaryMethods = {
 	 */
 	"db.connection.list": { params: DbProjectParams; result: DbConnectionList };
 	/**
+	 * 연결 테스트: 붙어 보고 서버 판본 · TLS 상태를 돌려준 뒤 닫는다. `connectionId`(저장한 연결) 또는 `draft`(저장 전 초안)를 준다.
+	 * 초안의 비밀(`secret`)은 저장하지 않는다. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만. 비밀 · 확인이 필요하면 3101 · 3102,
+	 * 드라이버가 실패하면 3003(`data.error`).
+	 */
+	"db.connection.test": { params: DbConnectionTestParams; result: ServerInfo };
+	/**
 	 * 연결 설정 파일을 만들거나 고친다(`location` 의 파일 하나에 연결 전부를 쓴다 — 개인 파일에 쓰면 공유 파일에만 있는 키는
 	 * 그대로 남는다, 설정 계층에는 키를 지우는 문법이 없다). 그 프로젝트 창의 연결만 — 아니면 permission denied.
 	 */
 	"db.connection.upsert": { params: DbConnectionUpsertParams; result: DbConnectionEntry };
+	/**
+	 * 실행을 취소한다(드라이버 인터럽트). 그 세션을 연 프로젝트 창만. SQLite 수동 트랜잭션 안의 쓰기면 `confirmRollback` 없이는
+	 * 3002. 끝난 실행이면 아무것도 하지 않는다.
+	 */
+	"db.query.cancel": { params: DbQueryCancelParams; result: null };
+	/**
+	 * 쪽 단위 조회(스트림이 아니다): 조회 문장 하나를 새 연결의 읽기 전용 트랜잭션 안에서 `limit` 행까지. 조회가 아니면 거절.
+	 */
+	"db.query.page": { params: DbQueryPageParams; result: DbQueryPage };
 	/**
 	 * 비밀을 키체인에서 지운다(없어도 성공). 그 프로젝트 창의 연결만.
 	 */
@@ -49,6 +64,34 @@ export type UnaryMethods = {
 	 * 연결 + 신뢰한 프로젝트만. 값은 돌려주지 않는다.
 	 */
 	"db.secret.set": { params: DbSecretSetParams; result: null };
+	/**
+	 * 세션을 닫는다(도는 실행은 취소한다). 열린 트랜잭션은 DB 가 롤백한다 — 묻는 것은 화면의 몫(M3-15). 없는 세션이면 아무것도
+	 * 하지 않는다.
+	 */
+	"db.session.close": { params: DbSessionParams; result: null };
+	/**
+	 * 열린 트랜잭션을 커밋한다(없으면 아무것도 하지 않는다). 실패한 트랜잭션이면 롤백되고 3003(`data.error.rolledBack`). 실행 중이면
+	 * conflict(`busy`).
+	 */
+	"db.session.commit": { params: DbSessionParams; result: DbSessionInfo };
+	/**
+	 * 콘솔 탭의 세션을 연다: 연결 하나를 열어 닫을 때까지 쥔다. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만(아니면 permission
+	 * denied, `data.reason` 이 `notProjectWindow` · `untrusted`). 비밀 · 확인이 필요하면 M3-02 의 3101 · 3102, 드라이버가 실패하면
+	 * 3003(`data.error`). 창(RPC 연결)이 닫히면 세션도 닫힌다.
+	 */
+	"db.session.open": { params: DbSessionOpenParams; result: DbSessionOpened };
+	/**
+	 * 열린 트랜잭션을 롤백한다(없으면 아무것도 하지 않는다). 실행 중이면 conflict(`busy`).
+	 */
+	"db.session.rollback": { params: DbSessionParams; result: DbSessionInfo };
+	/**
+	 * 자동 / 수동 커밋을 바꾼다. 트랜잭션이 열려 있으면 자동으로 바꾸지 않는다(conflict, `data.reason = "transactionOpen"`).
+	 */
+	"db.session.setMode": { params: DbSessionSetModeParams; result: DbSessionInfo };
+	/**
+	 * SQL 을 나누고 문장마다 위험도를 매긴다(M3-04 + M3-03). 방언은 세션 · 연결의 드라이버 것, 없으면 `dialect`.
+	 */
+	"db.sql.classify": { params: DbSqlClassifyParams; result: DbSqlClassification };
 	/**
 	 * SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는
 	 * UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면
@@ -535,6 +578,12 @@ export type UnaryMethods = {
 /** 선언된 stream 메서드: 이름 → 입력 · item 타입. */
 export type StreamMethods = {
 	/**
+	 * 세션에서 문장들을 돌린다(스트림). 관문: 그 세션을 연 프로젝트 창만 · 신뢰 · 연결 설정이 연 때와 같음 · 등급 정책(확인이
+	 * 필요하면 3001, read-only 연결은 조회 밖을 거절). 항목은 `accepted` → 문장마다 `started` → `columns` → `rows` … →
+	 * `done` | `error`.
+	 */
+	"db.query.execute": { params: DbQueryExecuteParams; item: DbQueryEvent };
+	/**
 	 * 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면
 	 * 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.
 	 */
@@ -607,9 +656,19 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.connection.delete": {"name":"db.connection.delete","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionParams","output":"()","doc":" 연결 설정 파일(공유 · 개인 둘 다)과 그 연결의 비밀 · 확인 기록을 지운다. 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
 	"db.connection.get": {"name":"db.connection.get","kind":"unary","tier":"read","roles":["owner"],"params":"DbConnectionParams","output":"DbConnectionEntry","doc":" 연결 하나. 없으면 not found 오류.\n","mcp":false,"fileScope":false},
 	"db.connection.list": {"name":"db.connection.list","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbConnectionList","doc":" 프로젝트의 DB 연결 목록(비밀 없이). 연결마다 신뢰 · 사용 가능 상태를 단다. 신뢰 전에도 돌려준다(상태는 모두 `untrusted`).\n","mcp":false,"fileScope":false},
+	"db.connection.test": {"name":"db.connection.test","kind":"unary","tier":"exec","roles":["owner"],"params":"DbConnectionTestParams","output":"ServerInfo","doc":" 연결 테스트: 붙어 보고 서버 판본 · TLS 상태를 돌려준 뒤 닫는다. `connectionId`(저장한 연결) 또는 `draft`(저장 전 초안)를 준다.\n 초안의 비밀(`secret`)은 저장하지 않는다. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만. 비밀 · 확인이 필요하면 3101 · 3102,\n 드라이버가 실패하면 3003(`data.error`).\n","mcp":false,"fileScope":false},
 	"db.connection.upsert": {"name":"db.connection.upsert","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionUpsertParams","output":"DbConnectionEntry","doc":" 연결 설정 파일을 만들거나 고친다(`location` 의 파일 하나에 연결 전부를 쓴다 — 개인 파일에 쓰면 공유 파일에만 있는 키는\n 그대로 남는다, 설정 계층에는 키를 지우는 문법이 없다). 그 프로젝트 창의 연결만 — 아니면 permission denied.\n","mcp":false,"fileScope":false},
+	"db.query.cancel": {"name":"db.query.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"DbQueryCancelParams","output":"()","doc":" 실행을 취소한다(드라이버 인터럽트). 그 세션을 연 프로젝트 창만. SQLite 수동 트랜잭션 안의 쓰기면 `confirmRollback` 없이는\n 3002. 끝난 실행이면 아무것도 하지 않는다.\n","mcp":false,"fileScope":false},
+	"db.query.execute": {"name":"db.query.execute","kind":"stream","tier":"exec","roles":["owner"],"params":"DbQueryExecuteParams","output":"DbQueryEvent","doc":" 세션에서 문장들을 돌린다(스트림). 관문: 그 세션을 연 프로젝트 창만 · 신뢰 · 연결 설정이 연 때와 같음 · 등급 정책(확인이\n 필요하면 3001, read-only 연결은 조회 밖을 거절). 항목은 `accepted` → 문장마다 `started` → `columns` → `rows` … →\n `done` | `error`.\n","mcp":false,"fileScope":false},
+	"db.query.page": {"name":"db.query.page","kind":"unary","tier":"exec","roles":["owner"],"params":"DbQueryPageParams","output":"DbQueryPage","doc":" 쪽 단위 조회(스트림이 아니다): 조회 문장 하나를 새 연결의 읽기 전용 트랜잭션 안에서 `limit` 행까지. 조회가 아니면 거절.\n","mcp":false,"fileScope":false},
 	"db.secret.clear": {"name":"db.secret.clear","kind":"unary","tier":"write","roles":["owner"],"params":"DbSecretClearParams","output":"()","doc":" 비밀을 키체인에서 지운다(없어도 성공). 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
 	"db.secret.set": {"name":"db.secret.set","kind":"unary","tier":"write","roles":["owner"],"params":"DbSecretSetParams","output":"()","doc":" 비밀을 키체인에 넣는다 — 창이 보여 준 대상(드라이버 · 호스트 · 포트 · 사용자 · 터널 · `sslmode` 와 인증서 경로)과 함께.\n 그 대상이 지금 설정과 다르면 conflict. 연결 설정이 `password = { secret_ref = \"keychain\" }` 이어야 한다. 그 프로젝트 창의\n 연결 + 신뢰한 프로젝트만. 값은 돌려주지 않는다.\n","mcp":false,"fileScope":false},
+	"db.session.close": {"name":"db.session.close","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionParams","output":"()","doc":" 세션을 닫는다(도는 실행은 취소한다). 열린 트랜잭션은 DB 가 롤백한다 — 묻는 것은 화면의 몫(M3-15). 없는 세션이면 아무것도\n 하지 않는다.\n","mcp":false,"fileScope":false},
+	"db.session.commit": {"name":"db.session.commit","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionParams","output":"DbSessionInfo","doc":" 열린 트랜잭션을 커밋한다(없으면 아무것도 하지 않는다). 실패한 트랜잭션이면 롤백되고 3003(`data.error.rolledBack`). 실행 중이면\n conflict(`busy`).\n","mcp":false,"fileScope":false},
+	"db.session.open": {"name":"db.session.open","kind":"unary","tier":"exec","roles":["owner"],"params":"DbSessionOpenParams","output":"DbSessionOpened","doc":" 콘솔 탭의 세션을 연다: 연결 하나를 열어 닫을 때까지 쥔다. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만(아니면 permission\n denied, `data.reason` 이 `notProjectWindow` · `untrusted`). 비밀 · 확인이 필요하면 M3-02 의 3101 · 3102, 드라이버가 실패하면\n 3003(`data.error`). 창(RPC 연결)이 닫히면 세션도 닫힌다.\n","mcp":false,"fileScope":false},
+	"db.session.rollback": {"name":"db.session.rollback","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionParams","output":"DbSessionInfo","doc":" 열린 트랜잭션을 롤백한다(없으면 아무것도 하지 않는다). 실행 중이면 conflict(`busy`).\n","mcp":false,"fileScope":false},
+	"db.session.setMode": {"name":"db.session.setMode","kind":"unary","tier":"write","roles":["owner"],"params":"DbSessionSetModeParams","output":"DbSessionInfo","doc":" 자동 / 수동 커밋을 바꾼다. 트랜잭션이 열려 있으면 자동으로 바꾸지 않는다(conflict, `data.reason = \"transactionOpen\"`).\n","mcp":false,"fileScope":false},
+	"db.sql.classify": {"name":"db.sql.classify","kind":"unary","tier":"read","roles":["owner"],"params":"DbSqlClassifyParams","output":"DbSqlClassification","doc":" SQL 을 나누고 문장마다 위험도를 매긴다(M3-04 + M3-03). 방언은 세션 · 연결의 드라이버 것, 없으면 `dialect`.\n","mcp":false,"fileScope":false},
 	"db.sql.split": {"name":"db.sql.split","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlSplitParams","output":"SqlSplitResult","doc":" SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\n UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면\n `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":false,"fileScope":false},
@@ -1137,6 +1196,28 @@ export type DbBytes = {
 /**  저장할 파일: 커밋하는 공유 파일 또는 개인 `.local.toml`. */
 export type DbConfigLocation = "shared" | "local";
 
+/**  [`code::CONFIRM_REQUIRED`] 의 `data`. */
+export type DbConfirmRequired = {
+	/**  실행할 문장들의 가장 높은 등급. */
+	grade: RiskGrade,
+	/**  실행할 문장들(고른 것만). */
+	statements: DbStatementClass[],
+	statementsHash: string,
+	effects: DbTxEffect[],
+	/**  연결 이름을 쳐야 한다(프로덕션 연결의 파괴 등급). */
+	nameRequired: boolean,
+	/**  앞서 실은 `confirmed` 를 받지 않은 까닭(`hashMismatch` · `gradeTooLow` · `nameMismatch`). 처음 묻는 것이면 `null`. */
+	rejected: string | null,
+};
+
+/**  창이 사람의 확인을 받은 증거. `statementsHash` 는 [`code::CONFIRM_REQUIRED`] 가 준 그대로. */
+export type DbConfirmed = {
+	grade: RiskGrade,
+	statementsHash: string,
+	/**  사람이 친 연결 이름(프로덕션 파괴 등급). */
+	name?: string | null,
+};
+
 export type DbConnectionApproveParams = {
 	projectId: string,
 	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정을 그 워크트리에서 읽는다. */
@@ -1217,6 +1298,18 @@ export type DbConnectionState =
 /**  열 수 있다(서버에 닿는지는 열어 봐야 안다). */
 { kind: "ready" };
 
+export type DbConnectionTestParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). */
+	worktree?: string | null,
+	/**  저장한 연결. `draft` 와 함께 주면 그 연결을 고치는 중인 초안이다(그 연결의 기억한 확인 · 저장한 비밀을 대상이 같을 때 쓴다). */
+	connectionId?: string | null,
+	/**  저장하지 않은 초안. */
+	draft?: DbConnectionConfig | null,
+	/**  초안의 비밀번호 — 이 요청에만 쓰고 저장하지 않는다. */
+	secret?: string | null,
+};
+
 export type DbConnectionUpsertParams = {
 	projectId: string,
 	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다. */
@@ -1287,6 +1380,14 @@ number |
 /**  그 밖. 10진 문자열. */
 string;
 
+/**  열린 트랜잭션(설정이 바뀐 세션에서 그대로 남은 것). */
+export type DbOpenTransaction = {
+	/**  연 시각(유닉스 밀리초). */
+	since: number,
+	/**  오류 뒤 롤백만 되는 트랜잭션(PG). */
+	failed: boolean,
+};
+
 /**  분류되지 않은 값. */
 export type DbOther = {
 	text: string,
@@ -1305,6 +1406,62 @@ export type DbProjectParams = {
 	projectId: string,
 	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다. */
 	worktree?: string | null,
+};
+
+export type DbQueryCancelParams = {
+	executionId: string,
+	/**  이 취소가 트랜잭션 전체를 되돌린다는 것(`3002`)을 사람이 확인했다. */
+	confirmRollback?: boolean,
+};
+
+/**  실행 스트림의 항목. */
+export type DbQueryEvent = 
+/**  관문을 지났다. `executionId` 로 취소한다. */
+{ kind: "accepted"; executionId: string; statements: number } | { kind: "started"; index: number; range: SqlRange; grade: RiskGrade } | 
+/**  행을 돌려주는 문장의 열. */
+{ kind: "columns"; index: number; columns: ColumnMeta[] } | { kind: "rows"; index: number; rows: DbValue[][] } | { kind: "done"; index: number; rowsAffected: number | null; elapsedMs: number; 
+/**  그리드 보유 행 상한에서 끊었다(커서를 버렸다 — 트랜잭션은 그대로). */
+truncated: boolean } | 
+/**  문장이 실패했다(취소는 `error.kind = cancelled`). 뒤의 문장은 돌지 않는다. */
+{ kind: "error"; index: number; error: DbError; elapsedMs: number };
+
+export type DbQueryExecuteParams = {
+	sessionId: string,
+	/**  편집기의 SQL(전부 — 범위는 이 글 기준 UTF-16). */
+	sql: string,
+	/**  돌릴 문장 번호(`db.sql.split` 의 순서). 없으면 전부. */
+	statements?: number[] | null,
+	/**  확인(`3001` 을 받은 뒤 사람의 확인을 거쳐). */
+	confirmed?: DbConfirmed | null,
+};
+
+export type DbQueryPage = {
+	columns: ColumnMeta[],
+	rows: DbValue[][],
+	/**  `limit` 을 넘는 행이 더 있었다. */
+	truncated: boolean,
+};
+
+export type DbQueryPageParams = {
+	projectId: string,
+	worktree?: string | null,
+	connectionId: string,
+	/**  조회 문장 하나. */
+	sql: string,
+	/**  돌려줄 행의 상한(1 ~ [`MAX_PAGE_ROWS`]). */
+	limit: number,
+};
+
+/**  [`TOPIC_QUERY_PROGRESS`] 의 내용. */
+export type DbQueryProgress = {
+	sessionId: string,
+	executionId: string,
+	statementIndex: number,
+	/**  이 문장에서 지금까지 받은 행. */
+	rows: number,
+	elapsedMs: number,
+	/**  이 문장이 끝났다. */
+	finished: boolean,
 };
 
 export type DbSecretClearParams = {
@@ -1343,9 +1500,122 @@ export type DbSecretTarget = {
 	sslkey: string | null,
 };
 
+/**  [`TOPIC_SESSION_CHANGED`] 의 내용. */
+export type DbSessionChanged = {
+	session: DbSessionInfo,
+	/**  바뀐 까닭(알릴 것이 있으면). */
+	notice: DbSessionNotice | null,
+};
+
+/**  세션 하나의 지금 모습. */
+export type DbSessionInfo = {
+	sessionId: string,
+	projectId: string,
+	connectionId: string,
+	mode: DbSessionMode,
+	state: DbSessionState,
+};
+
+export type DbSessionMode = 
+/**  자동 커밋: 문장마다 커밋된다(사람이 친 `BEGIN` 은 그 `COMMIT` · `ROLLBACK` 까지 트랜잭션을 연다). */
+"auto" | 
+/**  수동 커밋: 파이프라인이 첫 문장 앞에서 트랜잭션을 열고 [커밋] · [롤백] 까지 그대로 둔다. */
+"manual";
+
+/**  사람에게 알릴 상태 변화(드라이버의 보고에서). */
+export type DbSessionNotice = 
+/**  서버 · 드라이버가 트랜잭션 전체를 되돌렸다(교착, 실패한 트랜잭션의 커밋, SQLite 쓰기 취소 등). `message` 는 그 오류. */
+{ kind: "rolledBack"; message: string } | 
+/**  MySQL · MariaDB 의 문장이 열린 트랜잭션을 암묵적으로 커밋했다(문장이 실패했어도). */
+{ kind: "committedImplicitly" } | 
+/**
+ *  파이프라인이 열지 않은 트랜잭션이 열렸다(PG 의 숨은 블록, MySQL `SET autocommit = 0` 등) — 그 연결은 이 탭에 묶이고 커밋 ·
+ *  롤백을 기다린다.
+ */
+{ kind: "transactionOpened" } | 
+/**  연결이 끊겼다. 열려 있던 트랜잭션은 DB 가 롤백했다. */
+{ kind: "connectionLost"; hadTransaction: boolean } | 
+/**  연결 설정이 바뀌었다. */
+{ kind: "configChanged" };
+
+export type DbSessionOpenParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정을 그 워크트리에서 읽는다. */
+	worktree?: string | null,
+	connectionId: string,
+	/**  처음 고를 DB(없으면 설정의 것). */
+	database?: string | null,
+};
+
+/**  `db.session.open` 의 답. */
+export type DbSessionOpened = {
+	session: DbSessionInfo,
+	/**  연결 이름(프로덕션 파괴 등급 확인에서 친다). */
+	name: string,
+	readOnly: boolean,
+	production: boolean,
+	/**  드라이버 id · 방언 · 지원 플래그(창이 기능을 켜고 끈다). */
+	driver: DriverInfo,
+	server: ServerInfo,
+};
+
+export type DbSessionParams = {
+	sessionId: string,
+};
+
+export type DbSessionSetModeParams = {
+	sessionId: string,
+	mode: DbSessionMode,
+};
+
+/**  세션 상태. */
+export type DbSessionState = { kind: "idle" } | 
+/**  트랜잭션이 열려 있다. `since` 는 연 시각(유닉스 밀리초 — 상태바의 열린 시간). */
+{ kind: "inTransaction"; since: number } | 
+/**  오류 · 취소 뒤 롤백만 되는 트랜잭션(PG). 커밋해도 롤백된다. */
+{ kind: "failed"; since: number } | 
+/**  연결이 끊겼다 — 열린 트랜잭션은 DB 가 롤백했다. 다시 붙는 것은 사람이 새 세션을 열 때다. */
+{ kind: "disconnected" } | 
+/**
+ *  연결 설정이 바뀌었다 — 저절로 다시 붙지 않는다(「설정 바뀜 — 다시 연결」). 새 실행은 받지 않고, 열린 트랜잭션은 커밋 · 롤백할
+ *  수 있다.
+ */
+{ kind: "configChanged"; transaction: DbOpenTransaction | null };
+
+export type DbSqlClassification = {
+	statements: DbStatementClass[],
+	/**  가장 높은 등급. */
+	grade: RiskGrade,
+	/**  실행 관문이 견주는 해시(세션을 주지 않았으면 어느 세션에도 맞지 않는다). */
+	statementsHash: string,
+	effects: DbTxEffect[],
+};
+
+export type DbSqlClassifyParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  열린 세션 — 그 연결의 방언으로 분류하고, 해시를 그 세션에 묶는다(실행 관문이 받는 해시). */
+	sessionId?: string | null,
+	/**  연결 — 그 드라이버의 방언으로 분류한다. */
+	connectionId?: string | null,
+	/**  연결이 없는 편집기 표시용 방언. */
+	dialect?: SqlDialect | null,
+	sql: string,
+	statements?: number[] | null,
+};
+
 /**  SSH 터널(결정 M3-D11). 목적지 하나뿐이다 — `~/.ssh/config` 의 호스트 이름이나 `ssh://[user@]host[:port]`. */
 export type DbSshTunnel = {
 	hostRef: string,
+};
+
+/**  문장 하나의 분류(창이 받는 꼴). */
+export type DbStatementClass = {
+	/**  나눈 문장 가운데 몇 번째인가(`db.sql.split` 의 순서). */
+	index: number,
+	range: SqlRange,
+	grade: RiskGrade,
+	reasons: RiskReason[],
 };
 
 /**  셀 상한을 넘어 잘린 값. */
@@ -1359,6 +1629,14 @@ export type DbTruncated = {
 	/**  `of` 가 `other` 일 때의 DB 타입 이름. */
 	typeName: string | null,
 };
+
+/**  실행이 트랜잭션에 미치는 효과 — 등급과 따로 확인을 받는다(결정 M3-D21). */
+export type DbTxEffect = 
+/**
+ *  MySQL · MariaDB 에서 열린 트랜잭션을 실행 전에 커밋하는 문장(DDL · `LOCK TABLES` · `TRUNCATE` 등). 문장이 실패해도 앞의 쓰기는
+ *  커밋된다.
+ */
+"implicitCommit";
 
 /**  셀 값. */
 export type DbValue = "null" | ({ bool: boolean }) & { array?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
@@ -3788,6 +4066,69 @@ export type RiskGrade =
 "unboundedWrite" | "ddl" | 
 /**  파괴(`DROP` · `TRUNCATE`). 파서가 읽지 못한 문장도 여기다(까닭 `unparsed`, fail-closed). */
 "destructive";
+
+/**  까닭. 창(M3-19 의 확인 다이얼로그)이 문구로 바꿔 보인다 — 이름을 바꾸면 그 문구 표도 고친다. */
+export type RiskReason = 
+/**  파서가 읽지 못했다(방언에 없는 문법 · 끊긴 문장), 또는 MySQL 글을 서버 설정마다 다르게 나눈다. 파괴. */
+"unparsed" | 
+/**  글이 크기 · 연산자 수 상한을 넘어 읽지 않았다([`MAX_STATEMENT_BYTES`] · [`MAX_OPERATOR_TOKENS`]). 파괴. */
+"tooLarge" | 
+/**  괄호 · 서브쿼리 · 단항 연산자의 중첩이 파서의 재귀 한도([`RECURSION_LIMIT`])를 넘었다. 파괴. */
+"tooDeep" | 
+/**  `DROP …`, `ALTER TABLE … DROP COLUMN` · `DROP PARTITION`. 파괴. */
+"drop" | 
+/**  `TRUNCATE`. 파괴. */
+"truncate" | 
+/**  `COPY … TO/FROM PROGRAM` — DB 서버에서 셸 명령을 돌린다. 파괴. */
+"copyProgram" | 
+/**  `CREATE` · `ALTER` · `GRANT` · `REVOKE` · `COMMENT ON` · `RENAME`, PG 의 `SELECT … INTO 새 표`. */
+"ddl" | 
+/**  WHERE 없는 `UPDATE` · `DELETE`. 범위 없는 쓰기. */
+"missingWhere" | 
+/**  WHERE 가 항진식이거나 서브쿼리라 범위를 보장하지 않는다(`WHERE 1=1`, `id = id`, `x IS NULL OR x IS NOT NULL`). 범위 없는 쓰기. */
+"unboundedWhere" | 
+/**  조인 · `FROM` · `USING` · 여러 표를 건드리는 `UPDATE` · `DELETE`. 범위 없는 쓰기. */
+"multiTable" | 
+/**  SQLite `UPDATE OR REPLACE` — 충돌한 다른 행을 지운다. 범위 없는 쓰기. */
+"orReplace" | 
+/**  `MERGE`. 범위 없는 쓰기. */
+"merge" | 
+/**  `INSERT` · `UPDATE` · `DELETE`(범위가 있는 것). */
+"dml" | 
+/**  `FOR UPDATE` · `FOR SHARE` · `LOCK IN SHARE MODE` 잠금 읽기. */
+"lockingRead" | 
+/**  부작용 함수(`nextval` · `pg_sleep` · `GET_LOCK` …)를 부르는 조회. */
+"sideEffectFunction" | 
+/**
+ *  다른 세션 · 서버 전체에 닿는 관리 작업 — 함수(`pg_terminate_backend` · `pg_reload_conf` · `pg_notify` …)와 MySQL `KILL` ·
+ *  `FLUSH` · `SET GLOBAL` · `SET PERSIST` · `RESET PERSIST`. 범위 없는 쓰기.
+ */
+"serverAdmin" | 
+/**
+ *  MySQL `RESET MASTER` · `RESET BINARY LOGS AND GTIDS` · `RESET REPLICA` · `PURGE BINARY LOGS` — 바이너리 · 릴레이 로그와 복제
+ *  위치를 지운다(되돌릴 수 없다). 파괴.
+ */
+"replicationReset" | 
+/**  `SELECT … INTO`(MySQL 의 변수 · 파일, SQLite). */
+"selectInto" | 
+/**  `BEGIN` · `COMMIT` · `ROLLBACK` · `SAVEPOINT` · `SET TRANSACTION`. */
+"transactionControl" | 
+/**  `SET` · `USE` · `RESET` · `DISCARD` · MySQL 의 `@변수 := …`. */
+"sessionState" | 
+/**  `LOCK TABLE(S)` · `UNLOCK TABLES`. */
+"lock" | 
+/**  `CALL` · `EXECUTE` · `PREPARE`. */
+"procedural" | 
+/**  `ATTACH` · `DETACH`. */
+"attach" | 
+/**  `PRAGMA`. */
+"pragma" | 
+/**  `VACUUM` · `ANALYZE` · `OPTIMIZE TABLE`. */
+"maintenance" | 
+/**  `COPY` · `LOAD DATA` 류. */
+"dataTransfer" | 
+/**  위 갈래에 들지 않는 문장(`LISTEN` · `NOTIFY` …). 쓰기로 본다. */
+"other";
 
 /**  호출자(페어링 기기)의 role. 값은 `docs/design/08-remote-mobile.md` 「보안 모델」 절을 따른다. */
 export type Role = 

@@ -111,6 +111,9 @@ fn local_host(
     // DB 연결 설정 · 비밀 · 신뢰 게이트(`db.connection.*` · `db.secret.*`, M3-02). 비밀은 OS 키체인, env 참조는 런타임 환경.
     let db_connections = db::connections(&runtime);
     let db_connection_methods = Arc::clone(&db_connections);
+    // DB 세션 · 실행 파이프라인(`db.session.*` · `db.query.*` · `db.sql.classify` · `db.connection.test`, M3-05).
+    let db_sessions = db::sessions(&db_connections);
+    let db_session_methods = Arc::clone(&db_sessions);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
@@ -137,6 +140,7 @@ fn local_host(
         .methods(move |router| pw_git::watch::register(router, git_watch))
         .methods(pw_db_sql::split::register)
         .methods(move |router| pw_db::config::register(router, db_connection_methods))
+        .methods(move |router| pw_db::register(router, db_session_methods))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
@@ -192,6 +196,12 @@ fn local_host(
             tauri::async_runtime::spawn(pw_db::config::follow_files(
                 pw_db::config::subscribe_files(host.bus()),
                 db_connections,
+            ));
+            // 세션은 전역 설정(`[db] grid_max_rows`)을 읽고, 연결 설정이 바뀌면(`config.changed`) 그 세션을 「설정 바뀜」 으로 둔다.
+            db_sessions.attach_settings(config.global.clone());
+            tauri::async_runtime::spawn(pw_db::session::follow_config(
+                pw_db::session::subscribe_config(host.bus()),
+                db_sessions,
             ));
             trust.attach(projects.clone());
             tauri::async_runtime::spawn(trust::follow(

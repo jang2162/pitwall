@@ -25,3 +25,11 @@ pub mod session;
 pub mod trust;
 
 pub use registry::{DriverRegistry, RegisterError};
+pub use session::{DbSessions, register};
+
+// 이벤트 · 오류 `data` 의 타입 — 메서드가 참조하지 않으므로 생성기에 따로 등록한다.
+pw_rpc::rpc_type!(
+    session::DbSessionChanged,
+    execute::DbQueryProgress,
+    gate::DbConfirmRequired,
+);

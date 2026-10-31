@@ -215,3 +215,38 @@ async fn cancel_wins_even_when_the_handler_became_ready_in_the_same_poll() {
         );
     }
 }
+
+rpc_method! {
+    /// 연결이 닫힐 때 취소되는 토큰을 남기고 곧바로 끝난다.
+    Keep: "test.keep" { params: (), result: (), tier: Read }
+}
+
+/// `Ctx::connection_closed` 는 호출이 끝나도 살아 있다가 세션이 닫힐 때 취소된다 — 호출 하나의 취소나 다른 호출의 끝에는 반응하지 않는다.
+#[tokio::test]
+async fn the_connection_token_outlives_the_call_and_fires_when_the_session_closes() {
+    let kept = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut router = base_router();
+    let store = Arc::clone(&kept);
+    router.unary(Keep, move |ctx, ()| {
+        store.lock().unwrap().push(ctx.connection_closed());
+        async move { Ok::<_, RpcError>(()) }
+    });
+    let mut h = Harness::new(router, Role::Owner);
+    h.request(1, "test.keep", Value::Null);
+    h.next_response().await.outcome.unwrap();
+    h.request(2, "test.keep", Value::Null);
+    h.notify("request.cancel", json!({"id": 2}));
+    let _ = h.next_response().await;
+    let tokens = kept.lock().unwrap().clone();
+    assert_eq!(tokens.len(), 2);
+    assert!(
+        tokens.iter().all(|t| !t.is_cancelled()),
+        "a finished or cancelled call leaves the connection token alone"
+    );
+    h.session.close();
+    for token in &tokens {
+        timeout(Duration::from_secs(1), token.cancelled())
+            .await
+            .expect("closing the session cancels the connection token");
+    }
+}

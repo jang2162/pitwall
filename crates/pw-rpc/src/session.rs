@@ -144,6 +144,7 @@ impl Inner {
             session: self.id,
             caller: self.caller.clone(),
             cancel,
+            closed: self.root.clone(),
             events: self.events.clone(),
         }
     }
