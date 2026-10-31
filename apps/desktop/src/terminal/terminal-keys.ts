@@ -29,6 +29,7 @@ export const TERMINAL_APP_ACTIONS: ReadonlySet<string> = new Set([
   "editor.switcher",
   "layout.preset.default",
   "layout.preset.gitReview",
+  "layout.preset.db",
 ]);
 
 /** 셸이 제어 문자로 받는 Ctrl+글자(Shift · Alt · ⌘ 없이). */

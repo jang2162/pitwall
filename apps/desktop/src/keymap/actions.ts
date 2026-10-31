@@ -123,10 +123,11 @@ function focusToolWindow(id: string) {
   );
 }
 
-/** 레이아웃 프리셋 액션(⌃⌥1~2)과 그 영어 이름(액션 찾기의 keywords). DB(⌃⌥3)는 그 화면과 함께(M3). */
+/** 레이아웃 프리셋 액션(⌃⌥1~3)과 그 영어 이름(액션 찾기의 keywords). */
 const PRESET_ACTIONS: readonly { preset: PresetId; keywords: string[] }[] = [
   { preset: "default", keywords: ["Layout Default", "Restore Default Layout"] },
   { preset: "gitReview", keywords: ["Layout Git Review"] },
+  { preset: "db", keywords: ["Layout Database", "Layout DB"] },
 ];
 
 const ARROWS: readonly { arrow: Arrow; name: "Left" | "Right" | "Up" | "Down" }[] = [

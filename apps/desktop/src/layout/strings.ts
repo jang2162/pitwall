@@ -29,6 +29,7 @@ export function projectStrings(t: Translate) {
       preset: {
         default: t("action-layout-preset-default"),
         gitReview: t("action-layout-preset-git-review"),
+        db: t("action-layout-preset-db"),
       },
       stretch: {
         left: t("action-tool-window-stretch-left"),

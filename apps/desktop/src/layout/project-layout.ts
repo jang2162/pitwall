@@ -494,7 +494,7 @@ export function collapseAllDocks(api: DockviewApi) {
 // 탭 · 그룹 분할은 건드리지 않고, 툴 윈도우만 dock 으로 옮기거나(가운데 · floating 으로 옮겨 둔 것도) 숨긴 것을 다시 연다. 적용한 결과는 여느 레이아웃 바뀜처럼 `persistLayout` 이 저장본에 쓰고, 다시
 // 시작하면 `restoreLayout` 이 그대로 연다.
 
-export type PresetId = "default" | "gitReview";
+export type PresetId = "default" | "gitReview" | "db";
 
 /** dock 크기는 창의 이 몫까지만 — 좌우 dock 은 너비의 1/4, 하단 dock 은 높이의 0.45. 작은 창에서도 에디터 영역이 남는다. */
 const PRESET_SHARE: Record<Dock, number> = { left: 0.25, right: 0.25, bottom: 0.45 };
@@ -530,6 +530,11 @@ export const PRESETS: Readonly<Record<PresetId, SerializedEdgeGroups>> = {
     { ...DOCK_SIZES, bottom: 320 },
     ["right"],
   ),
+  // DB(M3-20): 왼쪽에 DB 탐색기를 띄우고 하단 · 오른쪽 dock 을 접어 가운데(SQL 콘솔과 그 안의 결과 — M3-15)를 넓게.
+  db: presetDocks({ left: "database", bottom: "run", right: "notifications" }, DOCK_SIZES, [
+    "bottom",
+    "right",
+  ]),
 };
 
 /**

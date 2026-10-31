@@ -148,8 +148,8 @@ linux = "ctrl+shift+f12"
 action = "toolWindow.last"
 key = "f12"
 
-# 레이아웃 프리셋(M2-21, 10-ui §2.4 「프로젝트 창」, src/layout/project-layout.ts 의 `applyPreset`): ⌃⌥1 기본 · ⌃⌥2 Git 리뷰. ⌃⌥3(DB)은
-# DB 화면과 함께 더한다(M3). 터미널에 포커스가 있어도 앱이 받는다(src/terminal/terminal-keys.ts 의 창 단위 액션).
+# 레이아웃 프리셋(M2-21 · M3-20, 10-ui §2.4 「프로젝트 창」, src/layout/project-layout.ts 의 `applyPreset`): ⌃⌥1 기본 · ⌃⌥2 Git 리뷰 ·
+# ⌃⌥3 DB. 터미널에 포커스가 있어도 앱이 받는다(src/terminal/terminal-keys.ts 의 창 단위 액션).
 [[bindings]]
 action = "layout.preset.default"
 mac = "ctrl+alt+1"
@@ -161,6 +161,12 @@ action = "layout.preset.gitReview"
 mac = "ctrl+alt+2"
 win = "ctrl+alt+2"
 linux = "ctrl+alt+2"
+
+[[bindings]]
+action = "layout.preset.db"
+mac = "ctrl+alt+3"
+win = "ctrl+alt+3"
+linux = "ctrl+alt+3"
 
 # 「에디터로 포커스」(src/keymap/actions.ts)는 툴 윈도우에 포커스가 있고 입력 칸이 아닐 때만 — 에디터의 찾기 막대 · 팝업 · 파일 트리의
 # 빠른 검색 칸이 Esc 로 닫히는 것과 겹치지 않는다. 터미널의 Esc 는 셸로 간다(터미널이 창으로 넘기는 액션이 아니다,
@@ -485,7 +491,70 @@ mac = "ctrl+alt+h"
 win = "ctrl+alt+h"
 linux = "ctrl+alt+h"
 
-# DB(10-ui §4.2 「DB」, 14-m3-plan 「공유 부품의 주인」 — 행마다 이 묶음 아래에 더한다). 프로젝트 창에만 등록된다.
+# DB(10-ui §4.2 「DB」, 14-m3-plan 「공유 부품의 주인」). 프로젝트 창에만 등록된다. 틀과 차례는 M3-20 이 정했다 — 10-ui 의 DB 표 차례
+# (실행 · 쿼리 취소 · 쿼리 콘솔 열기 · 그리드 셀 편집 · 행 추가 · 행 삭제 · 변경 제출 · 되돌리기 · 다른 형식으로 복사 · DDL 보기)대로 두고,
+# 행마다 자기 바인딩을 그 자리에 더한다. 포커스 범위는 키맵 컨텍스트로 가른다: SQL 콘솔 `dbConsoleFocus`(M3-15), 테이블 데이터
+# `dbTableDataFocus`(M3-17), 결과 · 테이블 데이터 그리드 `dbGridFocus`(M3-16), 탐색기 트리 `dbExplorerFocus`(M3-13). 매칭은 물리 키
+# 자리라 한글 입력 상태에서도 같다.
+
+# SQL 콘솔(M3-15, src/db/console/console-feature.tsx): 실행(⌘↩ — 선택이 있으면 선택, 없으면 커서의 문장)과 쿼리 취소(⌘F2)는 콘솔에
+# 포커스가 있을 때만: ⌘↩ 은 커밋 툴 윈도우의 커밋 · 테이블 데이터의 변경 제출, ⌘F2 는 10-ui §4.2 의 실행 「중지」 와 범위가 갈린다. 새
+# 콘솔(⌘⇧L, Win/Linux Ctrl+Shift+F10)은 프로젝트 창 어디서나 — 인자 없이 부르면 이 창에서 마지막으로 연결한 연결의 새 콘솔이다.
+
+[[bindings]]
+action = "db.console.run"
+mac = "cmd+enter"
+win = "ctrl+enter"
+linux = "ctrl+enter"
+when = "dbConsoleFocus"
+
+[[bindings]]
+action = "db.console.cancel"
+mac = "cmd+f2"
+win = "ctrl+f2"
+linux = "ctrl+f2"
+when = "dbConsoleFocus"
+
+[[bindings]]
+action = "db.console.open"
+mac = "cmd+shift+l"
+win = "ctrl+shift+f10"
+linux = "ctrl+shift+f10"
+
+# 테이블 데이터(M3-17, src/db/table-data/table-data-feature.tsx — 10-ui §4.2 「DB」 의 그리드 행): 행 추가(⌘N, Win/Linux Alt+Insert) ·
+# 행 삭제(⌘⌫, Win/Linux Ctrl+Y) · 변경 제출(⌘↩) · 되돌리기(⌘⌥Z). 셀 편집(↩)은 액션이 아니라 그리드의 키다. 테이블 데이터 뿌리와 그 안의
+# 그리드에 포커스가 있을 때만(`dbTableDataFocus`) — ⌘↩ 은 콘솔의 실행 · 커밋 창의 커밋, ⌘N 은 웰컴 창의 새 프로젝트, ⌘⌫ · Ctrl+Y 는
+# 에디터의 줄 삭제와 범위가 갈린다. 행 추가 · 삭제는 WHERE · ORDER BY 칸과 셀 편집 칸 안에서는 쉰다(`!inputFocus` — ⌘⌫ 은 줄 앞까지
+# 지우기다).
+
+[[bindings]]
+action = "db.tableData.addRow"
+mac = "cmd+n"
+win = "alt+insert"
+linux = "alt+insert"
+when = "dbTableDataFocus && !inputFocus"
+
+[[bindings]]
+action = "db.tableData.deleteRow"
+mac = "cmd+backspace"
+win = "ctrl+y"
+linux = "ctrl+y"
+when = "dbTableDataFocus && !inputFocus"
+
+[[bindings]]
+action = "db.tableData.submit"
+mac = "cmd+enter"
+win = "ctrl+enter"
+linux = "ctrl+enter"
+when = "dbTableDataFocus"
+
+[[bindings]]
+action = "db.tableData.revert"
+mac = "cmd+alt+z"
+win = "ctrl+alt+z"
+linux = "ctrl+alt+z"
+when = "dbTableDataFocus"
+
 # 결과 그리드의 다른 형식으로 복사(M3-16, src/db/grid/db-grid-feature.tsx): 그리드에 포커스가 있을 때만. Win/Linux 의 Ctrl+Shift+C 는
 # 터미널의 복사(`terminalFocus`)와 범위가 갈린다. ⌘C(TSV)는 액션이 아니라 그리드의 copy 이벤트다.
 
@@ -505,60 +574,3 @@ mac = "cmd+b"
 win = "ctrl+b"
 linux = "ctrl+b"
 when = "dbExplorerFocus"
-
-# SQL 콘솔(M3-15, src/db/console/console-feature.tsx): 새 콘솔(⌘⇧L, Win/Linux Ctrl+Shift+F10)은 프로젝트 창 어디서나 — 인자 없이
-# 부르면 이 창에서 마지막으로 연결한 연결의 새 콘솔이다. 실행(⌘↩ — 선택이 있으면 선택, 없으면 커서의 문장)과 쿼리 취소(⌘F2)는 콘솔에
-# 포커스가 있을 때만: ⌘↩ 은 커밋 툴 윈도우의 커밋, ⌘F2 는 10-ui §4.2 의 실행 「중지」 와 범위가 갈린다.
-
-[[bindings]]
-action = "db.console.open"
-mac = "cmd+shift+l"
-win = "ctrl+shift+f10"
-linux = "ctrl+shift+f10"
-
-[[bindings]]
-action = "db.console.run"
-mac = "cmd+enter"
-win = "ctrl+enter"
-linux = "ctrl+enter"
-when = "dbConsoleFocus"
-
-[[bindings]]
-action = "db.console.cancel"
-mac = "cmd+f2"
-win = "ctrl+f2"
-linux = "ctrl+f2"
-when = "dbConsoleFocus"
-
-# 테이블 데이터(M3-17, src/db/table-data/table-data-feature.tsx — 10-ui §4.2 「DB」 의 그리드 행): 변경 제출(⌘↩) · 되돌리기(⌘⌥Z) ·
-# 행 추가(⌘N, Win/Linux Alt+Insert) · 행 삭제(⌘⌫, Win/Linux Ctrl+Y). 테이블 데이터 뿌리와 그 안의 그리드에 포커스가 있을 때만
-# (`dbTableDataFocus`) — ⌘↩ 은 콘솔의 실행 · 커밋 창의 커밋, ⌘N 은 웰컴 창의 새 프로젝트, ⌘⌫ · Ctrl+Y 는 에디터의 줄 삭제와 범위가
-# 갈린다. 행 추가 · 삭제는 WHERE · ORDER BY 칸과 셀 편집 칸 안에서는 쉰다(`!inputFocus` — ⌘⌫ 은 줄 앞까지 지우기다).
-
-[[bindings]]
-action = "db.tableData.submit"
-mac = "cmd+enter"
-win = "ctrl+enter"
-linux = "ctrl+enter"
-when = "dbTableDataFocus"
-
-[[bindings]]
-action = "db.tableData.revert"
-mac = "cmd+alt+z"
-win = "ctrl+alt+z"
-linux = "ctrl+alt+z"
-when = "dbTableDataFocus"
-
-[[bindings]]
-action = "db.tableData.addRow"
-mac = "cmd+n"
-win = "alt+insert"
-linux = "alt+insert"
-when = "dbTableDataFocus && !inputFocus"
-
-[[bindings]]
-action = "db.tableData.deleteRow"
-mac = "cmd+backspace"
-win = "ctrl+y"
-linux = "ctrl+y"
-when = "dbTableDataFocus && !inputFocus"

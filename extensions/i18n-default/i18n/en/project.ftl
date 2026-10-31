@@ -24,6 +24,7 @@ action-tool-window-last = Jump to Last Tool Window
 action-focus-editor = Focus Editor
 action-layout-preset-default = Layout: Default
 action-layout-preset-git-review = Layout: Git Review
+action-layout-preset-db = Layout: Database
 action-tool-window-stretch-left = Move Tool Window Edge Left
 action-tool-window-stretch-right = Move Tool Window Edge Right
 action-tool-window-stretch-up = Move Tool Window Edge Up

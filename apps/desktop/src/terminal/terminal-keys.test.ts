@@ -85,17 +85,21 @@ describe("keys while the terminal has focus", () => {
     }
   });
 
-  it("take the layout presets ⌃⌥1 · ⌃⌥2 and leave ⌃⌥3 to the shell, also under a Korean IME", () => {
+  it("take the layout presets ⌃⌥1 · ⌃⌥2 · ⌃⌥3 and leave ⌃⌥4 to the shell, also under a Korean IME", () => {
     for (const platform of ["mac", "win", "linux"] as const) {
-      const t = engine(platform, true);
-      // 한글 입력 상태: 입력기가 처리한 키(`Process`, keyCode 229)로 와도 물리 키(`code`)로 맞춘다.
-      const preset = (digit: number) =>
-        key(`Digit${digit}`, { ctrlKey: true, altKey: true, key: "Process", keyCode: 229 });
-      expect(actionOf(t, preset(1)), platform).toBe("layout.preset.default");
-      expect(actionOf(t, preset(2)), platform).toBe("layout.preset.gitReview");
-      // DB 프리셋은 M3 — 키가 없으니 셸로 간다.
-      expect(t.peek(preset(3)), platform).toBe(false);
-      expect(actionOf(t, preset(3)), platform).toBeUndefined();
+      for (const terminal of [true, false]) {
+        const t = engine(platform, terminal);
+        // 한글 입력 상태: 입력기가 처리한 키(`Process`, keyCode 229)로 와도 물리 키(`code`)로 맞춘다.
+        const preset = (digit: number) =>
+          key(`Digit${digit}`, { ctrlKey: true, altKey: true, key: "Process", keyCode: 229 });
+        const at = `${platform} terminal=${terminal}`;
+        expect(actionOf(t, preset(1)), at).toBe("layout.preset.default");
+        expect(actionOf(t, preset(2)), at).toBe("layout.preset.gitReview");
+        expect(actionOf(t, preset(3)), at).toBe("layout.preset.db");
+        // 프리셋은 셋뿐이다 — 키가 없으니 셸로 간다.
+        expect(t.peek(preset(4)), at).toBe(false);
+        expect(actionOf(t, preset(4)), at).toBeUndefined();
+      }
     }
   });
 

@@ -486,6 +486,12 @@ describe("layout presets", () => {
     bottom: { active: "git", size: 320, collapsed: false },
     right: { active: "notifications", size: 260, collapsed: true },
   };
+  // DB(M3-20): 탐색기를 띄우고 하단 · 오른쪽을 접어 가운데(SQL 콘솔과 그 결과)를 넓게.
+  const DB = {
+    left: { active: "database", size: 260, collapsed: false },
+    bottom: { active: "run", size: 200, collapsed: true },
+    right: { active: "notifications", size: 260, collapsed: true },
+  };
   const DEFAULT = {
     left: { active: "project", size: 260, collapsed: false },
     bottom: { active: "run", size: 200, collapsed: false },
@@ -508,6 +514,16 @@ describe("layout presets", () => {
     applyPreset(api, "gitReview");
     expect(expanded(docks(api))).toEqual(withoutCollapsedSize(GIT_REVIEW));
     expect(placement(api)).toEqual(defaultPlacement);
+  });
+
+  it("shows the database explorer and folds the bottom and right docks for the DB preset", () => {
+    const api = dockview();
+    buildDefaultLayout(api);
+    applyPreset(api, "db");
+    expect(expanded(docks(api))).toEqual(withoutCollapsedSize(DB));
+    expect(placement(api)).toEqual(defaultPlacement);
+    applyPreset(api, "default");
+    expect(docks(api)).toEqual(DEFAULT);
   });
 
   it("goes back to the default layout", () => {
@@ -586,6 +602,21 @@ describe("layout presets", () => {
     const second = dockview();
     expect(restoreLayout(second, storage)).toBe("restored");
     expect(expanded(docks(second))).toEqual(withoutCollapsedSize(GIT_REVIEW));
+    expect(placement(second)).toEqual(defaultPlacement);
+  });
+
+  it("comes back to the DB layout after a restart", async () => {
+    const storage = memoryStorage();
+    const first = dockview();
+    buildDefaultLayout(first);
+    const persisted = persistLayout(first, storage);
+    applyPreset(first, "db");
+    await new Promise((r) => setTimeout(r, 40));
+    persisted.dispose();
+
+    const second = dockview();
+    expect(restoreLayout(second, storage)).toBe("restored");
+    expect(expanded(docks(second))).toEqual(withoutCollapsedSize(DB));
     expect(placement(second)).toEqual(defaultPlacement);
   });
 });

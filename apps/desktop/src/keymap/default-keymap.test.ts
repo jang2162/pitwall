@@ -271,3 +271,31 @@ describe("default keymap text editing keys in tool window inputs", () => {
     },
   );
 });
+
+// 「DB」 묶음의 틀(M3-20, 14-m3-plan 「공유 부품의 주인」): DB 바인딩은 파일의 한 자리에 모여 있고, 10-ui §4.2 의 DB 표 차례를 따른다.
+// 행마다 그 자리에 더한다 — 아래 차례 표에 없는 `db.*` 액션은 표의 그 자리에 끼면 된다.
+describe("default keymap DB group", () => {
+  const DB_TABLE_ORDER = [
+    "db.console.run",
+    "db.console.cancel",
+    "db.console.open",
+    "db.tableData.addRow",
+    "db.tableData.deleteRow",
+    "db.tableData.submit",
+    "db.tableData.revert",
+    "db.grid.copyAs",
+    "db.explorer.ddl",
+  ];
+
+  it.each(["mac", "win", "linux"] as const)(
+    "keeps the db bindings together in the order of the 10-ui DB table (%s)",
+    (platform) => {
+      const actions = chooseDefaultKeymap(undefined, platform).bindings.map((b) => b.action);
+      const at = actions.flatMap((a, i) => (a.startsWith("db.") ? [i] : []));
+      expect(at.length).toBeGreaterThan(0);
+      expect(at[at.length - 1]! - at[0]! + 1, "db bindings are contiguous").toBe(at.length);
+      const known = actions.filter((a) => DB_TABLE_ORDER.includes(a));
+      expect(known).toEqual(DB_TABLE_ORDER);
+    },
+  );
+});

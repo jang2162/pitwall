@@ -24,6 +24,7 @@ action-tool-window-last = 마지막 툴 윈도우로
 action-focus-editor = 에디터로 포커스
 action-layout-preset-default = 레이아웃: 기본
 action-layout-preset-git-review = 레이아웃: Git 리뷰
+action-layout-preset-db = 레이아웃: DB
 action-tool-window-stretch-left = 툴 윈도우 경계를 왼쪽으로
 action-tool-window-stretch-right = 툴 윈도우 경계를 오른쪽으로
 action-tool-window-stretch-up = 툴 윈도우 경계를 위로

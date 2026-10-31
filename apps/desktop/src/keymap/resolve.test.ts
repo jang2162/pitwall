@@ -230,6 +230,12 @@ describe("default keymap file", () => {
     expect(label("mac", "project.switcher")).toEqual(["⇧⌘P"]);
     expect(label("win", "project.switcher")).toEqual(["Ctrl+Shift+P"]);
     expect(label("win", "settings.open")).toEqual(["Ctrl+Alt+S"]);
+    // 10-ui 「툴 윈도우 · 창」 의 레이아웃 프리셋(M2-21 · M3-20)
+    expect(label("mac", "layout.preset.default")).toEqual(["⌃⌥1"]);
+    expect(label("mac", "layout.preset.gitReview")).toEqual(["⌃⌥2"]);
+    expect(label("mac", "layout.preset.db")).toEqual(["⌃⌥3"]);
+    expect(label("win", "layout.preset.db")).toEqual(["Ctrl+Alt+3"]);
+    expect(label("linux", "layout.preset.db")).toEqual(["Ctrl+Alt+3"]);
     // 10-ui 「외부 도구 · 프로젝트」
     expect(label("mac", "openWith.popup")).toEqual(["⌥F1"]);
     // 10-ui 「Git (VCS)」 의 diff 에서 다음/이전 차이(M2-15)
