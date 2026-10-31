@@ -212,6 +212,22 @@ it("opens Find Action with ⌘⇧A even when the IME sends a hangul key, but not
   expect(items).toContain("설정⌘,");
 });
 
+// M3-13: 한글 입력 상태의 ⌘8 — 입력기가 ⌘ 조합을 「처리한 키」(keyCode 229, key "Process")로 보내도 물리 키(`Digit8`)로 DB 탐색기를
+// 연다. 조합 중(`isComposing`)인 키는 가져가지 않는다.
+it("opens the database explorer with ⌘8 even when the IME reports the key as processed, but not while composing", async () => {
+  await mount("project");
+  const explorer = () => document.querySelector('[data-tool-window="database"]');
+  expect(explorer()).toBeNull();
+  expect(await press("Digit8", { metaKey: true, isComposing: true }, "Process")).toBe(false);
+  expect(explorer()).toBeNull();
+
+  const hangul = { metaKey: true, keyCode: 229 } as KeyboardEventInit;
+  expect(await press("Digit8", hangul, "Process")).toBe(true);
+  expect(explorer()).not.toBeNull();
+  // 한 번 더 누르면 접는다(툴 윈도우 키의 토글) — 같은 키가 계속 받힌다.
+  expect(await press("Digit8", hangul, "Process")).toBe(true);
+});
+
 it("finds an action from a half-composed hangul query and runs it", async () => {
   await mount("settings");
   await press("KeyA", { metaKey: true, shiftKey: true }, "ㅁ");
