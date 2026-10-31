@@ -677,8 +677,12 @@ describe("the Redis key document", () => {
     await settle();
     expect($("[data-redis-document] [data-action=connect]")).not.toBeNull();
     expect($("[data-testid=redis-not-connected]")).not.toBeNull();
+    // `db.session.unattendedRollbacks` 는 창이 열릴 때 콘솔 기능(M3-15)이 읽는 Host 의 기록이다 — 연결을 열지 않는다.
     expect(
-      host.calls.map((c) => c.method).filter((m) => /^db\.(session|kv|query)\./.test(m)),
+      host.calls
+        .map((c) => c.method)
+        .filter((m) => /^db\.(session|kv|query)\./.test(m))
+        .filter((m) => m !== "db.session.unattendedRollbacks"),
     ).toEqual([]);
     // 연결 설정은 읽는다(표지 — 연결을 열지 않는다).
     expect(calls("db.connection.get")).toHaveLength(1);
