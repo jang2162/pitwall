@@ -6,6 +6,6 @@
 # 줄을 지우거나 값을 내리면 리뷰에서 거절한다(14 「공유 부품의 주인」).
 
 pg = 0
-mysql = 0
-mariadb = 0
+mysql = 8
+mariadb = 8
 redis = 0

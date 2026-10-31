@@ -100,6 +100,14 @@ allow = ["BSL-1.0"]
 crate = "webpki-root-certs"
 allow = ["CDLA-Permissive-2.0"]
 
+# MySQL 드라이버(crates/pw-db-driver-mysql — mysql_async 의 `rustls-tls` 기능)가 기능과 상관없이 늘 끌어오는 webpki-roots 는 배포
+# 바이너리에 링크되지만 그 루트 데이터(TLS_SERVER_ROOTS)는 쓰지 않는다 — 드라이버가 SslOpts 의 내장 루트를 늘 끄고 OS 신뢰 저장소의
+# 루트만 넣는다(14-m3-plan.md 결정 M3-D10 · M3-D14, 시험 `every_mode_turns_the_built_in_roots_off_and_uses_only_the_supplied_roots`).
+# mysql_async 가 루트 없이 rustls 를 쓰게 되면 이 예외를 걷는다. about.toml 의 [webpki-roots] 와 같아야 한다.
+[[licenses.exceptions]]
+crate = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
 [licenses.private]
 # publish = false 인 우리 크레이트도 검사한다. 워크스페이스 라이선스(MIT)가 목록에서 빠지면 바로 실패한다.
 ignore = false

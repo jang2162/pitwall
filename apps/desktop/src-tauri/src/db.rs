@@ -32,6 +32,9 @@ pub fn connections(runtime: &Arc<Runtime>) -> Arc<Connections> {
 pub fn drivers() -> DriverRegistry {
     let mut registry = DriverRegistry::new();
     registry
+        .register(Arc::new(pw_db_driver_mysql::MysqlDriver::new()))
+        .expect("db driver ids are unique");
+    registry
         .register(Arc::new(pw_db_driver_sqlite::SqliteDriver::new()))
         .expect("db driver ids are unique");
     registry
@@ -43,6 +46,6 @@ mod tests {
     fn the_registry_holds_exactly_the_built_in_drivers() {
         // 등록은 갈래 검사 · 중복 검사를 지나야 한다(`DriverRegistry::register`). 드라이버 행이 자기 id 를 더한다.
         let ids: Vec<String> = super::drivers().infos().into_iter().map(|i| i.id).collect();
-        assert_eq!(ids, ["sqlite"]);
+        assert_eq!(ids, ["mysql", "sqlite"]);
     }
 }

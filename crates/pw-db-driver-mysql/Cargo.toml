@@ -8,10 +8,28 @@ publish.workspace = true
 # 실 DB 시험 표지(`cfg(pw_live_mysql)`)를 환경 변수에서 정한다 — pw-db-driver 와 같은 빌드 스크립트(그 머리 주석).
 build = "../pw-db-driver/live_cfg.rs"
 
-# 드라이버 의존성은 이 크레이트의 행(M3-07)이 들인다.
 [dependencies]
 pw-db-driver = { path = "../pw-db-driver" }
 pw-db-types = { path = "../pw-db-types" }
+# MySQL/MariaDB 클라이언트(결정 M3-D1). TLS 는 rustls · 공급자 `ring` 하나(결정 M3-D14) — 기본 기능(zlib · aws-lc-rs 쪽)을 끈다.
+# `rustls-tls` 가 `webpki-roots` 를 늘 끌어오지만 그 루트는 쓰지 않는다(`tls` 모듈, deny.toml 의 예외).
+mysql_async = { version = "0.37.1", default-features = false, features = ["default-rustls-ring"] }
+# mysql_async 가 쓰는 판과 같은 rustls — OS 루트 가운데 webpki 가 읽는 것만 고르고, TLS 오류를 갈래로 읽는다.
+rustls = { version = "0.23.46", default-features = false, features = ["std"] }
+# OS 신뢰 저장소의 루트(결정 M3-D10).
+rustls-native-certs = "0.8.5"
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
 
 [dev-dependencies]
 pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
+tokio = { workspace = true, features = [
+  "rt",
+  "rt-multi-thread",
+  "sync",
+  "macros",
+  "time",
+  "net",
+  "io-util",
+] }
+# 실 DB 시험의 TLS 중계(시험 CA 의 인증서를 내미는 서버 쪽 · 실 서버로 가는 클라이언트 쪽).
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
