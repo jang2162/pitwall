@@ -17,6 +17,37 @@ export type UnaryMethods = {
 	 */
 	"config.paths": { params: null; result: ConfigPathsInfo };
 	/**
+	 * 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로. 지금 설정에서 나오는 것과 같을 때만
+	 * 기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.
+	 */
+	"db.connection.approve": { params: DbConnectionApproveParams; result: null };
+	/**
+	 * 연결 설정 파일(공유 · 개인 둘 다)과 그 연결의 비밀 · 확인 기록을 지운다. 그 프로젝트 창의 연결만.
+	 */
+	"db.connection.delete": { params: DbConnectionParams; result: null };
+	/**
+	 * 연결 하나. 없으면 not found 오류.
+	 */
+	"db.connection.get": { params: DbConnectionParams; result: DbConnectionEntry };
+	/**
+	 * 프로젝트의 DB 연결 목록(비밀 없이). 연결마다 신뢰 · 사용 가능 상태를 단다. 신뢰 전에도 돌려준다(상태는 모두 `untrusted`).
+	 */
+	"db.connection.list": { params: DbProjectParams; result: DbConnectionList };
+	/**
+	 * 연결 설정 파일을 만들거나 고친다(`location` 의 파일 하나에 연결 전부를 쓴다 — 개인 파일에 쓰면 공유 파일에만 있는 키는
+	 * 그대로 남는다, 설정 계층에는 키를 지우는 문법이 없다). 그 프로젝트 창의 연결만 — 아니면 permission denied.
+	 */
+	"db.connection.upsert": { params: DbConnectionUpsertParams; result: DbConnectionEntry };
+	/**
+	 * 비밀을 키체인에서 지운다(없어도 성공). 그 프로젝트 창의 연결만.
+	 */
+	"db.secret.clear": { params: DbSecretClearParams; result: null };
+	/**
+	 * 비밀을 키체인에 넣는다 — 지금 설정의 대상(드라이버 · 호스트 · 포트 · 사용자 · 터널 · `sslmode` 와 인증서 경로)과 함께.
+	 * 연결 설정이 `password = { secret_ref = "keychain" }` 이어야 한다. 그 프로젝트 창의 연결만. 값은 돌려주지 않는다.
+	 */
+	"db.secret.set": { params: DbSecretSetParams; result: null };
+	/**
 	 * SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는
 	 * UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면
 	 * `INVALID_PARAMS`.
@@ -570,6 +601,13 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"cli.status": {"name":"cli.status","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"CliStatus","doc":" 「Orca 에서 Pitwall 열기」 안내의 검사(04 F8-6): 설치 위치의 심링크가 이 앱을 가리키는가, 로그인 셸 PATH 로 찾은\n `pitwall` 이 이 앱인가. 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n","mcp":false,"fileScope":false},
 	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n","mcp":false,"fileScope":true},
 	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n","mcp":false,"fileScope":false},
+	"db.connection.approve": {"name":"db.connection.approve","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionApproveParams","output":"()","doc":" 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로. 지금 설정에서 나오는 것과 같을 때만\n 기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.\n","mcp":false,"fileScope":false},
+	"db.connection.delete": {"name":"db.connection.delete","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionParams","output":"()","doc":" 연결 설정 파일(공유 · 개인 둘 다)과 그 연결의 비밀 · 확인 기록을 지운다. 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
+	"db.connection.get": {"name":"db.connection.get","kind":"unary","tier":"read","roles":["owner"],"params":"DbConnectionParams","output":"DbConnectionEntry","doc":" 연결 하나. 없으면 not found 오류.\n","mcp":false,"fileScope":false},
+	"db.connection.list": {"name":"db.connection.list","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbConnectionList","doc":" 프로젝트의 DB 연결 목록(비밀 없이). 연결마다 신뢰 · 사용 가능 상태를 단다. 신뢰 전에도 돌려준다(상태는 모두 `untrusted`).\n","mcp":false,"fileScope":false},
+	"db.connection.upsert": {"name":"db.connection.upsert","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionUpsertParams","output":"DbConnectionEntry","doc":" 연결 설정 파일을 만들거나 고친다(`location` 의 파일 하나에 연결 전부를 쓴다 — 개인 파일에 쓰면 공유 파일에만 있는 키는\n 그대로 남는다, 설정 계층에는 키를 지우는 문법이 없다). 그 프로젝트 창의 연결만 — 아니면 permission denied.\n","mcp":false,"fileScope":false},
+	"db.secret.clear": {"name":"db.secret.clear","kind":"unary","tier":"write","roles":["owner"],"params":"DbSecretClearParams","output":"()","doc":" 비밀을 키체인에서 지운다(없어도 성공). 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
+	"db.secret.set": {"name":"db.secret.set","kind":"unary","tier":"write","roles":["owner"],"params":"DbSecretSetParams","output":"()","doc":" 비밀을 키체인에 넣는다 — 지금 설정의 대상(드라이버 · 호스트 · 포트 · 사용자 · 터널 · `sslmode` 와 인증서 경로)과 함께.\n 연결 설정이 `password = { secret_ref = \"keychain\" }` 이어야 한다. 그 프로젝트 창의 연결만. 값은 돌려주지 않는다.\n","mcp":false,"fileScope":false},
 	"db.sql.split": {"name":"db.sql.split","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlSplitParams","output":"SqlSplitResult","doc":" SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\n UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면\n `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":false,"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":false,"fileScope":false},
@@ -1075,6 +1113,16 @@ export type DatabaseInfo = {
 	name: string,
 };
 
+/**  확인한 것(창이 보여 준 그대로 돌려준다). Host 는 지금 설정과 같을 때만 기록한다 — 다르면 conflict. */
+export type DbApproval = { kind: "env"; variable: string; target: DbSecretTarget } | { kind: "file"; realPath: string };
+
+/**  확인을 받아야 열 수 있는 것. */
+export type DbApprovalRequest = 
+/**  환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음이면 `null`. */
+{ kind: "env"; variable: string; target: DbSecretTarget; previous: DbEnvBinding | null } | 
+/**  프로젝트 루트 밖의 SQLite 파일(링크를 끝까지 푼 실제 경로)을 연다. */
+{ kind: "file"; realPath: string };
+
 /**  바이트 값. */
 export type DbBytes = {
 	/**  `0x` 로 시작하는 소문자 hex. 잘렸으면 앞부분만. */
@@ -1082,6 +1130,94 @@ export type DbBytes = {
 	/**  원래 크기(바이트). */
 	size: number,
 	truncated: boolean,
+};
+
+/**  저장할 파일: 커밋하는 공유 파일 또는 개인 `.local.toml`. */
+export type DbConfigLocation = "shared" | "local";
+
+export type DbConnectionApproveParams = {
+	projectId: string,
+	connectionId: string,
+	approval: DbApproval,
+};
+
+/**  연결 설정. 설정 파일의 키(snake_case)를 RPC 에서는 camelCase 로 쓴다. 비밀 값은 들어갈 자리가 없다. */
+export type DbConnectionConfig = {
+	/**  사람이 읽는 이름. 프로덕션 연결의 파괴 등급 확인에서 이것을 친다(결정 M3-D20). */
+	name: string,
+	driver: DriverKind,
+	/**  DB 호스트(SQLite 밖). 터널이 있으면 바스티언에서 본 이름이다. */
+	host?: string | null,
+	/**  없으면 드라이버 기본 포트([`default_port`]). */
+	port?: number | null,
+	database?: string | null,
+	user?: string | null,
+	/**  비밀번호를 어디서 가져오는가. 없으면 비밀번호 없이 붙는다. */
+	password?: DbPasswordRef | null,
+	readOnly?: boolean,
+	production?: boolean,
+	/**  연결 표지 색(M3-19 의 테마 토큰 이름이나 `#rrggbb`). */
+	color?: string | null,
+	/**  libpq 뜻 그대로(결정 M3-D10). 없으면 [`default_ssl_mode`]. */
+	sslmode?: SslMode | null,
+	sslrootcert?: string | null,
+	sslcert?: string | null,
+	sslkey?: string | null,
+	sshTunnel?: DbSshTunnel | null,
+	/**  SQLite 파일. 상대 경로면 프로젝트 루트 기준. */
+	path?: string | null,
+};
+
+export type DbConnectionEntry = {
+	/**  연결 id(파일 이름). */
+	id: string,
+	/**  설정이 틀렸으면 `null`(`state` 가 `invalid`). */
+	config: DbConnectionConfig | null,
+	/**  값을 준 파일(공유 · 개인) — 연결 편집의 「저장 위치」 가 처음 고를 것. */
+	layers: LayerOrigin[],
+	/**  앱보다 새 스키마 파일이 있어 쓰지 않는다. */
+	readOnly: boolean,
+	state: DbConnectionState,
+};
+
+export type DbConnectionList = {
+	/**  id 순. */
+	connections: DbConnectionEntry[],
+	/**  프로젝트 설정을 읽지 못한 이유(그러면 목록이 비어 있다). 설정 계층은 파일 하나라도 깨지면 전체가 실패다(03 「데이터 저장」). */
+	problem: string | null,
+	trusted: boolean,
+};
+
+export type DbConnectionParams = {
+	projectId: string,
+	connectionId: string,
+};
+
+/**  연결 하나를 지금 열 수 있는가. 값을 읽지 않고 정한다 — 키체인 항목은 대상만 보고, 환경 변수는 이름만 본다. */
+export type DbConnectionState = 
+/**  프로젝트를 신뢰하지 않았다 — 연결 · 비밀 읽기를 하지 않는다(결정 M3-D13). */
+{ kind: "untrusted" } | 
+/**  설정 파일이 틀렸다. */
+{ kind: "invalid"; message: string } | 
+/**  키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 다시 물어 `db.secret.set` 한다. */
+{ kind: "secretRequired"; reason: SecretMissing } | 
+/**  열기 전에 사람의 확인이 필요하다(`db.connection.approve`). */
+{ kind: "approvalRequired"; request: DbApprovalRequest } | 
+/**  열 수 있다(서버에 닿는지는 열어 봐야 안다). */
+{ kind: "ready" };
+
+export type DbConnectionUpsertParams = {
+	projectId: string,
+	connectionId: string,
+	config: DbConnectionConfig,
+	/**  없으면 공유 파일. */
+	location?: DbConfigLocation,
+};
+
+/**  확인한 (변수 이름, 대상). */
+export type DbEnvBinding = {
+	variable: string,
+	target: DbSecretTarget,
 };
 
 export type DbError = {
@@ -1143,6 +1279,54 @@ export type DbOther = {
 	text: string,
 	/**  DB 가 부르는 타입 이름(PG `tsvector`, MySQL `GEOMETRY` 등). */
 	typeName: string,
+};
+
+/**  비밀번호의 출처. 파일에서는 `{ secret_ref = "keychain" }` · `{ env = "<변수>" }` 다. */
+export type DbPasswordRef = 
+/**  키체인 항목(`db.secret.set` 으로 넣는다). */
+{ kind: "keychain" } | 
+/**  그 프로젝트의 런타임 환경 변수. 연결을 열 때 푼다. */
+{ kind: "env"; variable: string };
+
+export type DbProjectParams = {
+	projectId: string,
+};
+
+export type DbSecretClearParams = {
+	projectId: string,
+	connectionId: string,
+	key: DbSecretKey,
+};
+
+/**  비밀의 종류. 지금은 비밀번호 하나다. */
+export type DbSecretKey = "password";
+
+export type DbSecretSetParams = {
+	projectId: string,
+	connectionId: string,
+	key: DbSecretKey,
+	value: string,
+};
+
+/**  비밀을 보내도 되는 대상. 이 중 하나라도 바뀌면 저장한 비밀을 쓰지 않는다. */
+export type DbSecretTarget = {
+	driver: DriverKind,
+	host: string | null,
+	/**  쓰이는 포트(적지 않았으면 드라이버 기본). */
+	port: number | null,
+	user: string | null,
+	/**  터널 목적지(`ssh_tunnel.host_ref`). */
+	tunnel: string | null,
+	/**  쓰이는 `sslmode`(적지 않았으면 기본값). */
+	sslmode: SslMode,
+	sslrootcert: string | null,
+	sslcert: string | null,
+	sslkey: string | null,
+};
+
+/**  SSH 터널(결정 M3-D11). 목적지 하나뿐이다 — `~/.ssh/config` 의 호스트 이름이나 `ssh://[user@]host[:port]`. */
+export type DbSshTunnel = {
+	hostRef: string,
 };
 
 /**  셀 상한을 넘어 잘린 값. */
@@ -3782,6 +3966,15 @@ export type SearchTextParams = {
 	/**  결과(일치한 줄) 상한. 기본 [`DEFAULT_MAX_RESULTS`], 1 ~ [`MAX_RESULTS_LIMIT`]. */
 	maxResults?: number | null,
 };
+
+/**  비밀을 쓰지 못하는 이유. */
+export type SecretMissing = 
+/**  키체인에 항목이 없다(또는 읽을 수 없는 항목). */
+"missing" | 
+/**  저장할 때의 대상과 지금 설정이 다르다 — 그 비밀은 쓰지 않는다. */
+"targetChanged" | 
+/**  키체인을 쓸 수 없다(잠김 · 서비스 없음 등). */
+"unavailable";
 
 /**  연결을 연 결과(연결 테스트의 답이기도 하다). */
 export type ServerInfo = {

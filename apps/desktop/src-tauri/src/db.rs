@@ -8,6 +8,18 @@
 use std::sync::Arc;
 
 use pw_db::DriverRegistry;
+use pw_db::config::Connections;
+use pw_db::secret::{KeyringStore, RuntimeEnv};
+use pw_runtime::Runtime;
+
+/// 연결 설정 · 비밀 · 신뢰 게이트(M3-02). 비밀은 OS 키체인(서비스 `dev.pitwall.db`), `env` 참조는 그 프로젝트의 런타임 환경에서
+/// 푼다. Host 를 만든 뒤 레지스트리를 붙인다(`Connections::attach`).
+pub fn connections(runtime: &Arc<Runtime>) -> Arc<Connections> {
+    Arc::new(Connections::new(
+        Arc::new(KeyringStore::new()),
+        Arc::new(RuntimeEnv(Arc::clone(runtime))),
+    ))
+}
 
 /// 앱의 드라이버 등록부. 실행 파이프라인(M3-05)이 Host 를 만들 때 받는다.
 #[cfg_attr(

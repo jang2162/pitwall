@@ -108,6 +108,9 @@ fn local_host(
     let git_status = Arc::new(pw_git::status::Status::new(Arc::clone(&git)));
     let git_status_methods = Arc::clone(&git_status);
     let git_watch = pw_git::watch::GitWatch::new(Arc::clone(&git));
+    // DB 연결 설정 · 비밀 · 신뢰 게이트(`db.connection.*` · `db.secret.*`, M3-02). 비밀은 OS 키체인, env 참조는 런타임 환경.
+    let db_connections = db::connections(&runtime);
+    let db_connection_methods = Arc::clone(&db_connections);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
@@ -133,6 +136,7 @@ fn local_host(
         .methods(move |router| pw_git::status::register(router, git_status_methods))
         .methods(move |router| pw_git::watch::register(router, git_watch))
         .methods(pw_db_sql::split::register)
+        .methods(move |router| pw_db::config::register(router, db_connection_methods))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
@@ -179,6 +183,16 @@ fn local_host(
                 global: config.global.clone(),
                 projects: projects.clone(),
             });
+            // DB 연결 설정은 레지스트리(프로젝트 루트 · 신뢰)를 쓰고, `.pitwall/` 이 바뀌면(파일 감시) `config.changed` 를 낸다.
+            db_connections.attach(pw_db::config::HostParts {
+                paths: config.paths.clone(),
+                projects: projects.clone(),
+                bus: host.bus().clone(),
+            });
+            tauri::async_runtime::spawn(pw_db::config::follow_files(
+                pw_db::config::subscribe_files(host.bus()),
+                db_connections,
+            ));
             trust.attach(projects.clone());
             tauri::async_runtime::spawn(trust::follow(
                 trust::subscribe(host.bus()),

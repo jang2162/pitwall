@@ -625,6 +625,2269 @@
       ],
       "tier": "read"
     },
+    "db.connection.approve": {
+      "description": "사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로. 지금 설정에서 나오는 것과 같을 때만\n기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbApproval": {
+            "description": "확인한 것(창이 보여 준 그대로 돌려준다). Host 는 지금 설정과 같을 때만 기록한다 — 다르면 conflict.",
+            "oneOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "env",
+                    "type": "string"
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  },
+                  "variable": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "variable",
+                  "target"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "file",
+                    "type": "string"
+                  },
+                  "realPath": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "realPath"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbSecretTarget": {
+            "description": "비밀을 보내도 되는 대상. 이 중 하나라도 바뀌면 저장한 비밀을 쓰지 않는다.",
+            "properties": {
+              "driver": {
+                "$ref": "#/$defs/DriverKind"
+              },
+              "host": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "description": "쓰이는 포트(적지 않았으면 드라이버 기본).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sslcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslmode": {
+                "$ref": "#/$defs/SslMode",
+                "description": "쓰이는 `sslmode`(적지 않았으면 기본값)."
+              },
+              "sslrootcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tunnel": {
+                "description": "터널 목적지(`ssh_tunnel.host_ref`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "driver",
+              "sslmode"
+            ],
+            "type": "object"
+          },
+          "DriverKind": {
+            "description": "내장 드라이버. 설정 파일의 `driver` 값이다.\n\n드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가\n이 enum 을 고치지 않고 들어올 자리다.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite",
+              "redis"
+            ],
+            "type": "string"
+          },
+          "SslMode": {
+            "description": "libpq 의 `sslmode` 뜻 그대로(결정 M3-D10). 드라이버마다 받는 값은 [`crate::Capabilities::ssl_modes`].",
+            "oneOf": [
+              {
+                "const": "disable",
+                "description": "TLS 없음.",
+                "type": "string"
+              },
+              {
+                "const": "allow",
+                "description": "평문을 먼저, 서버가 요구하면 TLS(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "prefer",
+                "description": "TLS 를 먼저, 안 되면 평문(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "require",
+                "description": "TLS 필수, 인증서를 검증하지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "verify-ca",
+                "description": "TLS 필수, 인증서 사슬만 검증(이름은 보지 않는다).",
+                "type": "string"
+              },
+              {
+                "const": "verify-full",
+                "description": "TLS 필수, 사슬과 이름 모두 검증.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "approval": {
+            "$ref": "#/$defs/DbApproval"
+          },
+          "connectionId": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId",
+          "approval"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "db.connection.delete": {
+      "description": "연결 설정 파일(공유 · 개인 둘 다)과 그 연결의 비밀 · 확인 기록을 지운다. 그 프로젝트 창의 연결만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "db.connection.get": {
+      "description": "연결 하나. 없으면 not found 오류.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbApprovalRequest": {
+            "description": "확인을 받아야 열 수 있는 것.",
+            "oneOf": [
+              {
+                "description": "환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음이면 `null`.",
+                "properties": {
+                  "kind": {
+                    "const": "env",
+                    "type": "string"
+                  },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbEnvBinding"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  },
+                  "variable": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "variable",
+                  "target",
+                  "previous"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트 루트 밖의 SQLite 파일(링크를 끝까지 푼 실제 경로)을 연다.",
+                "properties": {
+                  "kind": {
+                    "const": "file",
+                    "type": "string"
+                  },
+                  "realPath": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "realPath"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbConnectionConfig": {
+            "description": "연결 설정. 설정 파일의 키(snake_case)를 RPC 에서는 camelCase 로 쓴다. 비밀 값은 들어갈 자리가 없다.",
+            "properties": {
+              "color": {
+                "default": null,
+                "description": "연결 표지 색(M3-19 의 테마 토큰 이름이나 `#rrggbb`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "database": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver": {
+                "$ref": "#/$defs/DriverKind"
+              },
+              "host": {
+                "default": null,
+                "description": "DB 호스트(SQLite 밖). 터널이 있으면 바스티언에서 본 이름이다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "사람이 읽는 이름. 프로덕션 연결의 파괴 등급 확인에서 이것을 친다(결정 M3-D20).",
+                "type": "string"
+              },
+              "password": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbPasswordRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "비밀번호를 어디서 가져오는가. 없으면 비밀번호 없이 붙는다."
+              },
+              "path": {
+                "default": null,
+                "description": "SQLite 파일. 상대 경로면 프로젝트 루트 기준.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "default": null,
+                "description": "없으면 드라이버 기본 포트([`default_port`]).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "production": {
+                "default": false,
+                "type": "boolean"
+              },
+              "readOnly": {
+                "default": false,
+                "type": "boolean"
+              },
+              "sshTunnel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbSshTunnel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "sslcert": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslmode": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SslMode"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "libpq 뜻 그대로(결정 M3-D10). 없으면 [`default_ssl_mode`]."
+              },
+              "sslrootcert": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "driver",
+              "host",
+              "port",
+              "database",
+              "user",
+              "password",
+              "readOnly",
+              "production",
+              "color",
+              "sslmode",
+              "sslrootcert",
+              "sslcert",
+              "sslkey",
+              "sshTunnel",
+              "path"
+            ],
+            "type": "object"
+          },
+          "DbConnectionState": {
+            "description": "연결 하나를 지금 열 수 있는가. 값을 읽지 않고 정한다 — 키체인 항목은 대상만 보고, 환경 변수는 이름만 본다.",
+            "oneOf": [
+              {
+                "description": "프로젝트를 신뢰하지 않았다 — 연결 · 비밀 읽기를 하지 않는다(결정 M3-D13).",
+                "properties": {
+                  "kind": {
+                    "const": "untrusted",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 파일이 틀렸다.",
+                "properties": {
+                  "kind": {
+                    "const": "invalid",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 다시 물어 `db.secret.set` 한다.",
+                "properties": {
+                  "kind": {
+                    "const": "secretRequired",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/SecretMissing"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "열기 전에 사람의 확인이 필요하다(`db.connection.approve`).",
+                "properties": {
+                  "kind": {
+                    "const": "approvalRequired",
+                    "type": "string"
+                  },
+                  "request": {
+                    "$ref": "#/$defs/DbApprovalRequest"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "request"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "열 수 있다(서버에 닿는지는 열어 봐야 안다).",
+                "properties": {
+                  "kind": {
+                    "const": "ready",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbEnvBinding": {
+            "description": "확인한 (변수 이름, 대상).",
+            "properties": {
+              "target": {
+                "$ref": "#/$defs/DbSecretTarget"
+              },
+              "variable": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "variable",
+              "target"
+            ],
+            "type": "object"
+          },
+          "DbPasswordRef": {
+            "description": "비밀번호의 출처. 파일에서는 `{ secret_ref = \"keychain\" }` · `{ env = \"<변수>\" }` 다.",
+            "oneOf": [
+              {
+                "description": "키체인 항목(`db.secret.set` 으로 넣는다).",
+                "properties": {
+                  "kind": {
+                    "const": "keychain",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "그 프로젝트의 런타임 환경 변수. 연결을 열 때 푼다.",
+                "properties": {
+                  "kind": {
+                    "const": "env",
+                    "type": "string"
+                  },
+                  "variable": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "variable"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbSecretTarget": {
+            "description": "비밀을 보내도 되는 대상. 이 중 하나라도 바뀌면 저장한 비밀을 쓰지 않는다.",
+            "properties": {
+              "driver": {
+                "$ref": "#/$defs/DriverKind"
+              },
+              "host": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "description": "쓰이는 포트(적지 않았으면 드라이버 기본).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sslcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslmode": {
+                "$ref": "#/$defs/SslMode",
+                "description": "쓰이는 `sslmode`(적지 않았으면 기본값)."
+              },
+              "sslrootcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tunnel": {
+                "description": "터널 목적지(`ssh_tunnel.host_ref`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "driver",
+              "host",
+              "port",
+              "user",
+              "tunnel",
+              "sslmode",
+              "sslrootcert",
+              "sslcert",
+              "sslkey"
+            ],
+            "type": "object"
+          },
+          "DbSshTunnel": {
+            "description": "SSH 터널(결정 M3-D11). 목적지 하나뿐이다 — `~/.ssh/config` 의 호스트 이름이나 `ssh://[user@]host[:port]`.",
+            "properties": {
+              "hostRef": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "hostRef"
+            ],
+            "type": "object"
+          },
+          "DriverKind": {
+            "description": "내장 드라이버. 설정 파일의 `driver` 값이다.\n\n드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가\n이 enum 을 고치지 않고 들어올 자리다.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite",
+              "redis"
+            ],
+            "type": "string"
+          },
+          "LayerOrigin": {
+            "oneOf": [
+              {
+                "enum": [
+                  "builtin"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "`<id>.toml` — 커밋되는 공유 설정(전역이면 그냥 설정 파일).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다.",
+                "type": "string"
+              }
+            ]
+          },
+          "SecretMissing": {
+            "description": "비밀을 쓰지 못하는 이유.",
+            "oneOf": [
+              {
+                "const": "missing",
+                "description": "키체인에 항목이 없다(또는 읽을 수 없는 항목).",
+                "type": "string"
+              },
+              {
+                "const": "targetChanged",
+                "description": "저장할 때의 대상과 지금 설정이 다르다 — 그 비밀은 쓰지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "unavailable",
+                "description": "키체인을 쓸 수 없다(잠김 · 서비스 없음 등).",
+                "type": "string"
+              }
+            ]
+          },
+          "SslMode": {
+            "description": "libpq 의 `sslmode` 뜻 그대로(결정 M3-D10). 드라이버마다 받는 값은 [`crate::Capabilities::ssl_modes`].",
+            "oneOf": [
+              {
+                "const": "disable",
+                "description": "TLS 없음.",
+                "type": "string"
+              },
+              {
+                "const": "allow",
+                "description": "평문을 먼저, 서버가 요구하면 TLS(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "prefer",
+                "description": "TLS 를 먼저, 안 되면 평문(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "require",
+                "description": "TLS 필수, 인증서를 검증하지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "verify-ca",
+                "description": "TLS 필수, 인증서 사슬만 검증(이름은 보지 않는다).",
+                "type": "string"
+              },
+              {
+                "const": "verify-full",
+                "description": "TLS 필수, 사슬과 이름 모두 검증.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DbConnectionConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "설정이 틀렸으면 `null`(`state` 가 `invalid`)."
+          },
+          "id": {
+            "description": "연결 id(파일 이름).",
+            "type": "string"
+          },
+          "layers": {
+            "description": "값을 준 파일(공유 · 개인) — 연결 편집의 「저장 위치」 가 처음 고를 것.",
+            "items": {
+              "$ref": "#/$defs/LayerOrigin"
+            },
+            "type": "array"
+          },
+          "readOnly": {
+            "description": "앱보다 새 스키마 파일이 있어 쓰지 않는다.",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/$defs/DbConnectionState"
+          }
+        },
+        "required": [
+          "id",
+          "config",
+          "layers",
+          "readOnly",
+          "state"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "db.connection.list": {
+      "description": "프로젝트의 DB 연결 목록(비밀 없이). 연결마다 신뢰 · 사용 가능 상태를 단다. 신뢰 전에도 돌려준다(상태는 모두 `untrusted`).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbApprovalRequest": {
+            "description": "확인을 받아야 열 수 있는 것.",
+            "oneOf": [
+              {
+                "description": "환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음이면 `null`.",
+                "properties": {
+                  "kind": {
+                    "const": "env",
+                    "type": "string"
+                  },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbEnvBinding"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  },
+                  "variable": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "variable",
+                  "target",
+                  "previous"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트 루트 밖의 SQLite 파일(링크를 끝까지 푼 실제 경로)을 연다.",
+                "properties": {
+                  "kind": {
+                    "const": "file",
+                    "type": "string"
+                  },
+                  "realPath": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "realPath"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbConnectionConfig": {
+            "description": "연결 설정. 설정 파일의 키(snake_case)를 RPC 에서는 camelCase 로 쓴다. 비밀 값은 들어갈 자리가 없다.",
+            "properties": {
+              "color": {
+                "default": null,
+                "description": "연결 표지 색(M3-19 의 테마 토큰 이름이나 `#rrggbb`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "database": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver": {
+                "$ref": "#/$defs/DriverKind"
+              },
+              "host": {
+                "default": null,
+                "description": "DB 호스트(SQLite 밖). 터널이 있으면 바스티언에서 본 이름이다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "사람이 읽는 이름. 프로덕션 연결의 파괴 등급 확인에서 이것을 친다(결정 M3-D20).",
+                "type": "string"
+              },
+              "password": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbPasswordRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "비밀번호를 어디서 가져오는가. 없으면 비밀번호 없이 붙는다."
+              },
+              "path": {
+                "default": null,
+                "description": "SQLite 파일. 상대 경로면 프로젝트 루트 기준.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "default": null,
+                "description": "없으면 드라이버 기본 포트([`default_port`]).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "production": {
+                "default": false,
+                "type": "boolean"
+              },
+              "readOnly": {
+                "default": false,
+                "type": "boolean"
+              },
+              "sshTunnel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbSshTunnel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "sslcert": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslmode": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SslMode"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "libpq 뜻 그대로(결정 M3-D10). 없으면 [`default_ssl_mode`]."
+              },
+              "sslrootcert": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "driver",
+              "host",
+              "port",
+              "database",
+              "user",
+              "password",
+              "readOnly",
+              "production",
+              "color",
+              "sslmode",
+              "sslrootcert",
+              "sslcert",
+              "sslkey",
+              "sshTunnel",
+              "path"
+            ],
+            "type": "object"
+          },
+          "DbConnectionEntry": {
+            "properties": {
+              "config": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbConnectionConfig"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "설정이 틀렸으면 `null`(`state` 가 `invalid`)."
+              },
+              "id": {
+                "description": "연결 id(파일 이름).",
+                "type": "string"
+              },
+              "layers": {
+                "description": "값을 준 파일(공유 · 개인) — 연결 편집의 「저장 위치」 가 처음 고를 것.",
+                "items": {
+                  "$ref": "#/$defs/LayerOrigin"
+                },
+                "type": "array"
+              },
+              "readOnly": {
+                "description": "앱보다 새 스키마 파일이 있어 쓰지 않는다.",
+                "type": "boolean"
+              },
+              "state": {
+                "$ref": "#/$defs/DbConnectionState"
+              }
+            },
+            "required": [
+              "id",
+              "config",
+              "layers",
+              "readOnly",
+              "state"
+            ],
+            "type": "object"
+          },
+          "DbConnectionState": {
+            "description": "연결 하나를 지금 열 수 있는가. 값을 읽지 않고 정한다 — 키체인 항목은 대상만 보고, 환경 변수는 이름만 본다.",
+            "oneOf": [
+              {
+                "description": "프로젝트를 신뢰하지 않았다 — 연결 · 비밀 읽기를 하지 않는다(결정 M3-D13).",
+                "properties": {
+                  "kind": {
+                    "const": "untrusted",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 파일이 틀렸다.",
+                "properties": {
+                  "kind": {
+                    "const": "invalid",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 다시 물어 `db.secret.set` 한다.",
+                "properties": {
+                  "kind": {
+                    "const": "secretRequired",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/SecretMissing"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "열기 전에 사람의 확인이 필요하다(`db.connection.approve`).",
+                "properties": {
+                  "kind": {
+                    "const": "approvalRequired",
+                    "type": "string"
+                  },
+                  "request": {
+                    "$ref": "#/$defs/DbApprovalRequest"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "request"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "열 수 있다(서버에 닿는지는 열어 봐야 안다).",
+                "properties": {
+                  "kind": {
+                    "const": "ready",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbEnvBinding": {
+            "description": "확인한 (변수 이름, 대상).",
+            "properties": {
+              "target": {
+                "$ref": "#/$defs/DbSecretTarget"
+              },
+              "variable": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "variable",
+              "target"
+            ],
+            "type": "object"
+          },
+          "DbPasswordRef": {
+            "description": "비밀번호의 출처. 파일에서는 `{ secret_ref = \"keychain\" }` · `{ env = \"<변수>\" }` 다.",
+            "oneOf": [
+              {
+                "description": "키체인 항목(`db.secret.set` 으로 넣는다).",
+                "properties": {
+                  "kind": {
+                    "const": "keychain",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "그 프로젝트의 런타임 환경 변수. 연결을 열 때 푼다.",
+                "properties": {
+                  "kind": {
+                    "const": "env",
+                    "type": "string"
+                  },
+                  "variable": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "variable"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbSecretTarget": {
+            "description": "비밀을 보내도 되는 대상. 이 중 하나라도 바뀌면 저장한 비밀을 쓰지 않는다.",
+            "properties": {
+              "driver": {
+                "$ref": "#/$defs/DriverKind"
+              },
+              "host": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "description": "쓰이는 포트(적지 않았으면 드라이버 기본).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sslcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslmode": {
+                "$ref": "#/$defs/SslMode",
+                "description": "쓰이는 `sslmode`(적지 않았으면 기본값)."
+              },
+              "sslrootcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tunnel": {
+                "description": "터널 목적지(`ssh_tunnel.host_ref`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "driver",
+              "host",
+              "port",
+              "user",
+              "tunnel",
+              "sslmode",
+              "sslrootcert",
+              "sslcert",
+              "sslkey"
+            ],
+            "type": "object"
+          },
+          "DbSshTunnel": {
+            "description": "SSH 터널(결정 M3-D11). 목적지 하나뿐이다 — `~/.ssh/config` 의 호스트 이름이나 `ssh://[user@]host[:port]`.",
+            "properties": {
+              "hostRef": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "hostRef"
+            ],
+            "type": "object"
+          },
+          "DriverKind": {
+            "description": "내장 드라이버. 설정 파일의 `driver` 값이다.\n\n드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가\n이 enum 을 고치지 않고 들어올 자리다.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite",
+              "redis"
+            ],
+            "type": "string"
+          },
+          "LayerOrigin": {
+            "oneOf": [
+              {
+                "enum": [
+                  "builtin"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "`<id>.toml` — 커밋되는 공유 설정(전역이면 그냥 설정 파일).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다.",
+                "type": "string"
+              }
+            ]
+          },
+          "SecretMissing": {
+            "description": "비밀을 쓰지 못하는 이유.",
+            "oneOf": [
+              {
+                "const": "missing",
+                "description": "키체인에 항목이 없다(또는 읽을 수 없는 항목).",
+                "type": "string"
+              },
+              {
+                "const": "targetChanged",
+                "description": "저장할 때의 대상과 지금 설정이 다르다 — 그 비밀은 쓰지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "unavailable",
+                "description": "키체인을 쓸 수 없다(잠김 · 서비스 없음 등).",
+                "type": "string"
+              }
+            ]
+          },
+          "SslMode": {
+            "description": "libpq 의 `sslmode` 뜻 그대로(결정 M3-D10). 드라이버마다 받는 값은 [`crate::Capabilities::ssl_modes`].",
+            "oneOf": [
+              {
+                "const": "disable",
+                "description": "TLS 없음.",
+                "type": "string"
+              },
+              {
+                "const": "allow",
+                "description": "평문을 먼저, 서버가 요구하면 TLS(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "prefer",
+                "description": "TLS 를 먼저, 안 되면 평문(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "require",
+                "description": "TLS 필수, 인증서를 검증하지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "verify-ca",
+                "description": "TLS 필수, 인증서 사슬만 검증(이름은 보지 않는다).",
+                "type": "string"
+              },
+              {
+                "const": "verify-full",
+                "description": "TLS 필수, 사슬과 이름 모두 검증.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connections": {
+            "description": "id 순.",
+            "items": {
+              "$ref": "#/$defs/DbConnectionEntry"
+            },
+            "type": "array"
+          },
+          "problem": {
+            "description": "프로젝트 설정을 읽지 못한 이유(그러면 목록이 비어 있다). 설정 계층은 파일 하나라도 깨지면 전체가 실패다(03 「데이터 저장」).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trusted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "connections",
+          "problem",
+          "trusted"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "db.connection.upsert": {
+      "description": "연결 설정 파일을 만들거나 고친다(`location` 의 파일 하나에 연결 전부를 쓴다 — 개인 파일에 쓰면 공유 파일에만 있는 키는\n그대로 남는다, 설정 계층에는 키를 지우는 문법이 없다). 그 프로젝트 창의 연결만 — 아니면 permission denied.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbConfigLocation": {
+            "description": "저장할 파일: 커밋하는 공유 파일 또는 개인 `.local.toml`.",
+            "enum": [
+              "shared",
+              "local"
+            ],
+            "type": "string"
+          },
+          "DbConnectionConfig": {
+            "description": "연결 설정. 설정 파일의 키(snake_case)를 RPC 에서는 camelCase 로 쓴다. 비밀 값은 들어갈 자리가 없다.",
+            "properties": {
+              "color": {
+                "default": null,
+                "description": "연결 표지 색(M3-19 의 테마 토큰 이름이나 `#rrggbb`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "database": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver": {
+                "$ref": "#/$defs/DriverKind"
+              },
+              "host": {
+                "default": null,
+                "description": "DB 호스트(SQLite 밖). 터널이 있으면 바스티언에서 본 이름이다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "사람이 읽는 이름. 프로덕션 연결의 파괴 등급 확인에서 이것을 친다(결정 M3-D20).",
+                "type": "string"
+              },
+              "password": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbPasswordRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "비밀번호를 어디서 가져오는가. 없으면 비밀번호 없이 붙는다."
+              },
+              "path": {
+                "default": null,
+                "description": "SQLite 파일. 상대 경로면 프로젝트 루트 기준.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "default": null,
+                "description": "없으면 드라이버 기본 포트([`default_port`]).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "production": {
+                "default": false,
+                "type": "boolean"
+              },
+              "readOnly": {
+                "default": false,
+                "type": "boolean"
+              },
+              "sshTunnel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbSshTunnel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "sslcert": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslmode": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SslMode"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "libpq 뜻 그대로(결정 M3-D10). 없으면 [`default_ssl_mode`]."
+              },
+              "sslrootcert": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "driver"
+            ],
+            "type": "object"
+          },
+          "DbPasswordRef": {
+            "description": "비밀번호의 출처. 파일에서는 `{ secret_ref = \"keychain\" }` · `{ env = \"<변수>\" }` 다.",
+            "oneOf": [
+              {
+                "description": "키체인 항목(`db.secret.set` 으로 넣는다).",
+                "properties": {
+                  "kind": {
+                    "const": "keychain",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "그 프로젝트의 런타임 환경 변수. 연결을 열 때 푼다.",
+                "properties": {
+                  "kind": {
+                    "const": "env",
+                    "type": "string"
+                  },
+                  "variable": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "variable"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbSshTunnel": {
+            "description": "SSH 터널(결정 M3-D11). 목적지 하나뿐이다 — `~/.ssh/config` 의 호스트 이름이나 `ssh://[user@]host[:port]`.",
+            "properties": {
+              "hostRef": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "hostRef"
+            ],
+            "type": "object"
+          },
+          "DriverKind": {
+            "description": "내장 드라이버. 설정 파일의 `driver` 값이다.\n\n드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가\n이 enum 을 고치지 않고 들어올 자리다.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite",
+              "redis"
+            ],
+            "type": "string"
+          },
+          "SslMode": {
+            "description": "libpq 의 `sslmode` 뜻 그대로(결정 M3-D10). 드라이버마다 받는 값은 [`crate::Capabilities::ssl_modes`].",
+            "oneOf": [
+              {
+                "const": "disable",
+                "description": "TLS 없음.",
+                "type": "string"
+              },
+              {
+                "const": "allow",
+                "description": "평문을 먼저, 서버가 요구하면 TLS(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "prefer",
+                "description": "TLS 를 먼저, 안 되면 평문(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "require",
+                "description": "TLS 필수, 인증서를 검증하지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "verify-ca",
+                "description": "TLS 필수, 인증서 사슬만 검증(이름은 보지 않는다).",
+                "type": "string"
+              },
+              {
+                "const": "verify-full",
+                "description": "TLS 필수, 사슬과 이름 모두 검증.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "config": {
+            "$ref": "#/$defs/DbConnectionConfig"
+          },
+          "connectionId": {
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/$defs/DbConfigLocation",
+            "default": "shared",
+            "description": "없으면 공유 파일."
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId",
+          "config"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbApprovalRequest": {
+            "description": "확인을 받아야 열 수 있는 것.",
+            "oneOf": [
+              {
+                "description": "환경 변수 `variable` 의 값을 `target` 으로 보낸다. `previous` 는 전에 확인한 (변수, 대상) — 처음이면 `null`.",
+                "properties": {
+                  "kind": {
+                    "const": "env",
+                    "type": "string"
+                  },
+                  "previous": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/DbEnvBinding"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "$ref": "#/$defs/DbSecretTarget"
+                  },
+                  "variable": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "variable",
+                  "target",
+                  "previous"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트 루트 밖의 SQLite 파일(링크를 끝까지 푼 실제 경로)을 연다.",
+                "properties": {
+                  "kind": {
+                    "const": "file",
+                    "type": "string"
+                  },
+                  "realPath": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "realPath"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbConnectionConfig": {
+            "description": "연결 설정. 설정 파일의 키(snake_case)를 RPC 에서는 camelCase 로 쓴다. 비밀 값은 들어갈 자리가 없다.",
+            "properties": {
+              "color": {
+                "default": null,
+                "description": "연결 표지 색(M3-19 의 테마 토큰 이름이나 `#rrggbb`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "database": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver": {
+                "$ref": "#/$defs/DriverKind"
+              },
+              "host": {
+                "default": null,
+                "description": "DB 호스트(SQLite 밖). 터널이 있으면 바스티언에서 본 이름이다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "사람이 읽는 이름. 프로덕션 연결의 파괴 등급 확인에서 이것을 친다(결정 M3-D20).",
+                "type": "string"
+              },
+              "password": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbPasswordRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "비밀번호를 어디서 가져오는가. 없으면 비밀번호 없이 붙는다."
+              },
+              "path": {
+                "default": null,
+                "description": "SQLite 파일. 상대 경로면 프로젝트 루트 기준.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "default": null,
+                "description": "없으면 드라이버 기본 포트([`default_port`]).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "production": {
+                "default": false,
+                "type": "boolean"
+              },
+              "readOnly": {
+                "default": false,
+                "type": "boolean"
+              },
+              "sshTunnel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbSshTunnel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "sslcert": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslmode": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SslMode"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "libpq 뜻 그대로(결정 M3-D10). 없으면 [`default_ssl_mode`]."
+              },
+              "sslrootcert": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "driver",
+              "host",
+              "port",
+              "database",
+              "user",
+              "password",
+              "readOnly",
+              "production",
+              "color",
+              "sslmode",
+              "sslrootcert",
+              "sslcert",
+              "sslkey",
+              "sshTunnel",
+              "path"
+            ],
+            "type": "object"
+          },
+          "DbConnectionState": {
+            "description": "연결 하나를 지금 열 수 있는가. 값을 읽지 않고 정한다 — 키체인 항목은 대상만 보고, 환경 변수는 이름만 본다.",
+            "oneOf": [
+              {
+                "description": "프로젝트를 신뢰하지 않았다 — 연결 · 비밀 읽기를 하지 않는다(결정 M3-D13).",
+                "properties": {
+                  "kind": {
+                    "const": "untrusted",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 파일이 틀렸다.",
+                "properties": {
+                  "kind": {
+                    "const": "invalid",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 다시 물어 `db.secret.set` 한다.",
+                "properties": {
+                  "kind": {
+                    "const": "secretRequired",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/SecretMissing"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "열기 전에 사람의 확인이 필요하다(`db.connection.approve`).",
+                "properties": {
+                  "kind": {
+                    "const": "approvalRequired",
+                    "type": "string"
+                  },
+                  "request": {
+                    "$ref": "#/$defs/DbApprovalRequest"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "request"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "열 수 있다(서버에 닿는지는 열어 봐야 안다).",
+                "properties": {
+                  "kind": {
+                    "const": "ready",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbEnvBinding": {
+            "description": "확인한 (변수 이름, 대상).",
+            "properties": {
+              "target": {
+                "$ref": "#/$defs/DbSecretTarget"
+              },
+              "variable": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "variable",
+              "target"
+            ],
+            "type": "object"
+          },
+          "DbPasswordRef": {
+            "description": "비밀번호의 출처. 파일에서는 `{ secret_ref = \"keychain\" }` · `{ env = \"<변수>\" }` 다.",
+            "oneOf": [
+              {
+                "description": "키체인 항목(`db.secret.set` 으로 넣는다).",
+                "properties": {
+                  "kind": {
+                    "const": "keychain",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "그 프로젝트의 런타임 환경 변수. 연결을 열 때 푼다.",
+                "properties": {
+                  "kind": {
+                    "const": "env",
+                    "type": "string"
+                  },
+                  "variable": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "variable"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbSecretTarget": {
+            "description": "비밀을 보내도 되는 대상. 이 중 하나라도 바뀌면 저장한 비밀을 쓰지 않는다.",
+            "properties": {
+              "driver": {
+                "$ref": "#/$defs/DriverKind"
+              },
+              "host": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "description": "쓰이는 포트(적지 않았으면 드라이버 기본).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sslcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslmode": {
+                "$ref": "#/$defs/SslMode",
+                "description": "쓰이는 `sslmode`(적지 않았으면 기본값)."
+              },
+              "sslrootcert": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tunnel": {
+                "description": "터널 목적지(`ssh_tunnel.host_ref`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "driver",
+              "host",
+              "port",
+              "user",
+              "tunnel",
+              "sslmode",
+              "sslrootcert",
+              "sslcert",
+              "sslkey"
+            ],
+            "type": "object"
+          },
+          "DbSshTunnel": {
+            "description": "SSH 터널(결정 M3-D11). 목적지 하나뿐이다 — `~/.ssh/config` 의 호스트 이름이나 `ssh://[user@]host[:port]`.",
+            "properties": {
+              "hostRef": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "hostRef"
+            ],
+            "type": "object"
+          },
+          "DriverKind": {
+            "description": "내장 드라이버. 설정 파일의 `driver` 값이다.\n\n드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가\n이 enum 을 고치지 않고 들어올 자리다.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite",
+              "redis"
+            ],
+            "type": "string"
+          },
+          "LayerOrigin": {
+            "oneOf": [
+              {
+                "enum": [
+                  "builtin"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "`<id>.toml` — 커밋되는 공유 설정(전역이면 그냥 설정 파일).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다.",
+                "type": "string"
+              }
+            ]
+          },
+          "SecretMissing": {
+            "description": "비밀을 쓰지 못하는 이유.",
+            "oneOf": [
+              {
+                "const": "missing",
+                "description": "키체인에 항목이 없다(또는 읽을 수 없는 항목).",
+                "type": "string"
+              },
+              {
+                "const": "targetChanged",
+                "description": "저장할 때의 대상과 지금 설정이 다르다 — 그 비밀은 쓰지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "unavailable",
+                "description": "키체인을 쓸 수 없다(잠김 · 서비스 없음 등).",
+                "type": "string"
+              }
+            ]
+          },
+          "SslMode": {
+            "description": "libpq 의 `sslmode` 뜻 그대로(결정 M3-D10). 드라이버마다 받는 값은 [`crate::Capabilities::ssl_modes`].",
+            "oneOf": [
+              {
+                "const": "disable",
+                "description": "TLS 없음.",
+                "type": "string"
+              },
+              {
+                "const": "allow",
+                "description": "평문을 먼저, 서버가 요구하면 TLS(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "prefer",
+                "description": "TLS 를 먼저, 안 되면 평문(검증 없음).",
+                "type": "string"
+              },
+              {
+                "const": "require",
+                "description": "TLS 필수, 인증서를 검증하지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "verify-ca",
+                "description": "TLS 필수, 인증서 사슬만 검증(이름은 보지 않는다).",
+                "type": "string"
+              },
+              {
+                "const": "verify-full",
+                "description": "TLS 필수, 사슬과 이름 모두 검증.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DbConnectionConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "설정이 틀렸으면 `null`(`state` 가 `invalid`)."
+          },
+          "id": {
+            "description": "연결 id(파일 이름).",
+            "type": "string"
+          },
+          "layers": {
+            "description": "값을 준 파일(공유 · 개인) — 연결 편집의 「저장 위치」 가 처음 고를 것.",
+            "items": {
+              "$ref": "#/$defs/LayerOrigin"
+            },
+            "type": "array"
+          },
+          "readOnly": {
+            "description": "앱보다 새 스키마 파일이 있어 쓰지 않는다.",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/$defs/DbConnectionState"
+          }
+        },
+        "required": [
+          "id",
+          "config",
+          "layers",
+          "readOnly",
+          "state"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "db.secret.clear": {
+      "description": "비밀을 키체인에서 지운다(없어도 성공). 그 프로젝트 창의 연결만.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbSecretKey": {
+            "description": "비밀의 종류. 지금은 비밀번호 하나다.",
+            "enum": [
+              "password"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "key": {
+            "$ref": "#/$defs/DbSecretKey"
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId",
+          "key"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "db.secret.set": {
+      "description": "비밀을 키체인에 넣는다 — 지금 설정의 대상(드라이버 · 호스트 · 포트 · 사용자 · 터널 · `sslmode` 와 인증서 경로)과 함께.\n연결 설정이 `password = { secret_ref = \"keychain\" }` 이어야 한다. 그 프로젝트 창의 연결만. 값은 돌려주지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbSecretKey": {
+            "description": "비밀의 종류. 지금은 비밀번호 하나다.",
+            "enum": [
+              "password"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "key": {
+            "$ref": "#/$defs/DbSecretKey"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId",
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "db.sql.split": {
       "description": "SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\nUTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면\n`INVALID_PARAMS`.",
       "kind": "unary",

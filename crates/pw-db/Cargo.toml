@@ -11,9 +11,26 @@ build = "../pw-db-driver/live_cfg.rs"
 # 드라이버 크레이트(pw-db-driver-*)에 의존하지 않는다 — trait 로만 부른다(14-m3-plan.md 결정 M3-D3). 드라이버는 데스크톱
 # 크레이트가 등록부에 넣는다. `tests/driver_free.rs` 가 지킨다.
 [dependencies]
+# 비밀마다 키체인 항목 하나(14-m3-plan.md 결정 M3-D12). 기본 기능(`v1`)이 macOS Keychain · Windows Credential Manager ·
+# Secret Service(zbus — 순수 Rust, 시스템 libdbus 에 링크하지 않는다)를 고른다.
+keyring = "4.2.0"
+pw-core = { path = "../pw-core" }
 pw-db-driver = { path = "../pw-db-driver" }
 pw-db-types = { path = "../pw-db-types" }
+pw-rpc = { path = "../pw-rpc" }
+pw-runtime = { path = "../pw-runtime" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt"] }
+# 연결 설정 파일을 쓸 때 사람이 단 주석 · 모르는 키 순서를 지킨다(pw-core 의 설정 마이그레이션과 같은 판).
+toml_edit = "0.25.17"
+tracing = "0.1.44"
 
 [dev-dependencies]
+# 비밀 값이 로그 파일에 없는지 앱과 같은 로그 구독자로 본다(tests/secret_log.rs).
+pw-diag = { path = "../pw-diag" }
+tempfile = "3.27.0"
 pw-db-driver = { path = "../pw-db-driver", features = ["test-support"] }
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
