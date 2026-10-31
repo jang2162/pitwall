@@ -2,7 +2,8 @@
 //
 // - 모델은 (Host 연결, 프로젝트, 활성 워크트리)마다 하나다 — 워크트리를 바꾸면 그 워크트리의 공유 설정으로 새로 읽는다.
 // - 그 프로젝트의 `db.schemaChanged` 로 펼친 노드를 다시 읽고, `config.changed` 의 `db/<연결 id>` 로 목록을 다시 읽고 열었던 연결을
-//   「설정 바뀜」 으로 둔다(저절로 다시 붙지 않는다 — 결정 M3-D13).
+//   「설정 바뀜」 으로 둔다(저절로 다시 붙지 않는다 — 결정 M3-D13). 신뢰가 바뀌면(Host 범위 `project.changed` 의 `kind: trust` —
+//   `projectId` 는 신뢰의 주인이라 워크트리 프로젝트와 다를 수 있어 id 는 보지 않는다) 목록을 다시 읽는다. 연결은 열지 않는다.
 // - 툴 윈도우가 처음 보일 때 올린다(보이지 않는 동안 목록을 읽지 않는다). 연결은 사람이 펼치거나 「연결」 을 누를 때만 연다.
 // - 액션 `db.explorer.ddl`(`⌘B`)은 고른 행이 테이블 · 뷰일 때만 켜진다.
 
@@ -29,6 +30,8 @@ import { type DbExplorerStrings, useDbExplorerStrings } from "./strings";
 export const DB_SCHEMA_CHANGED_TOPIC = "db.schemaChanged";
 /** `config.changed`(pw_core::config::TOPIC_CHANGED) — 연결 설정은 `db/<연결 id>` 로 온다(crates/pw-db/src/config.rs). */
 export const CONFIG_CHANGED_TOPIC = "config.changed";
+/** `project.changed`(pw_core::registry::TOPIC_CHANGED, Host 범위) — 신뢰가 바뀌면 `kind: "trust"`. */
+export const PROJECT_CHANGED_TOPIC = "project.changed";
 const CONNECTION_PREFIX = "db/";
 
 /** `config.changed` 의 `changed` 에서 연결 id. */
@@ -60,9 +63,13 @@ export function followExplorerEvents(
       void model.reloadList();
     },
   );
-  opened.catch((e: unknown) => console.warn("[db] cannot follow the explorer's events", e));
+  const trust = client.subscribe({ topics: [PROJECT_CHANGED_TOPIC] }, (event) => {
+    if ((event.payload as { kind?: unknown } | null)?.kind === "trust") void model.reloadList();
+  });
+  for (const s of [opened, trust])
+    s.catch((e: unknown) => console.warn("[db] cannot follow the explorer's events", e));
   return () => {
-    opened.then((s) => s.unsubscribe()).catch(() => {});
+    for (const s of [opened, trust]) s.then((x) => x.unsubscribe()).catch(() => {});
   };
 }
 

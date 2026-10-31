@@ -306,20 +306,35 @@ async function openTables() {
   await mouse(tables.firstElementChild!, "click");
 }
 
+/** 구독마다 그 주제만 받는다(프로젝트 범위 · Host 범위 구독이 따로다). */
 function fakeEvents() {
-  let listener: ((event: EventMessage) => void) | undefined;
+  const listeners: { topics: string[]; projectId?: string; l: (event: EventMessage) => void }[] =
+    [];
   const client = {
-    subscribe: vi.fn(async (_params: unknown, l: (event: EventMessage) => void) => {
-      listener = l;
-      return { id: 1, unsubscribe: async () => {} };
-    }),
+    subscribe: vi.fn(
+      async (
+        params: { topics: string[]; projectId?: string },
+        l: (event: EventMessage) => void,
+      ) => {
+        listeners.push({ ...params, l });
+        return { id: listeners.length, unsubscribe: async () => {} };
+      },
+    ),
   };
   return {
     client: client as unknown as Parameters<typeof followExplorerEvents>[0],
     emit: async (topic: string, payload: unknown) => {
-      await act(async () =>
-        listener!({ subscriptionId: 1, projectId: PROJECT, topic, payload: payload as never }),
-      );
+      const to = listeners.filter((x) => x.topics.includes(topic));
+      expect(to.length, `no subscription for ${topic}`).toBeGreaterThan(0);
+      await act(async () => {
+        for (const [i, x] of to.entries())
+          x.l({
+            subscriptionId: i + 1,
+            projectId: x.projectId ?? null,
+            topic,
+            payload: payload as never,
+          } as EventMessage);
+      });
       await settle();
     },
   };
@@ -646,7 +661,7 @@ it("counts rows with a read-only page query and names the table as the console w
       projectId: PROJECT,
       worktree: null,
       connectionId: "pg",
-      sql: "SELECT count(*) FROM sales.t00000",
+      sql: 'SELECT count(*) FROM "sales"."t00000"',
       limit: 1,
     },
   ]);
@@ -657,6 +672,64 @@ it("counts rows with a read-only page query and names the table as the console w
       body: `t00000: ${(1204).toLocaleString()} 행`,
     }),
   );
+});
+
+it("asks for the approval counting rows needs, and counts again once it is given", async () => {
+  let approved = false;
+  host.override.set("db.query.page", () => {
+    if (!approved)
+      throw new RpcCallError({
+        code: 3102,
+        message: "db connection `pg` needs your approval",
+        data: { connectionId: "pg", request: { kind: "file", realPath: "/x/ca.pem" } } as never,
+      });
+    return { columns: [], rows: [[{ int: 7 }]], nextCursor: null };
+  });
+  host.override.set("db.connection.approve", () => {
+    approved = true;
+    return null;
+  });
+  await mount();
+  await openTables();
+  await mouse((await menuItem("object", "t00000", "rowCount"))!, "click");
+  const dialog = document.querySelector<HTMLElement>("[data-testid=db-access-prompt]")!;
+  expect(dialog.dataset.kind).toBe("file");
+  await mouse(dialog.querySelector<HTMLElement>("[data-action=run]")!, "click");
+  await vi.waitFor(() =>
+    expect(ops.notify).toHaveBeenCalledWith({
+      level: "info",
+      title: "행 수",
+      body: `t00000: ${(7).toLocaleString()} 행`,
+    }),
+  );
+  expect(called("db.connection.approve")).toHaveLength(1);
+  expect(called("db.query.page")).toHaveLength(2);
+});
+
+it("reads the list again when the project's trust changes, and opens nothing", async () => {
+  host.list = {
+    connections: [entry("pg", {}, { kind: "untrusted" })],
+    problem: null,
+    stateProblem: null,
+    trusted: false,
+  };
+  await mount();
+  const events = fakeEvents();
+  followExplorerEvents(events.client, PROJECT, model);
+  expect(statusOf("pg")).toBe("untrusted");
+  host.list = { ...host.list, trusted: true, connections: [entry("pg")] };
+  host.calls.length = 0;
+  // 신뢰가 아닌 바뀜(이름 등)은 목록을 다시 읽지 않는다.
+  await events.emit("project.changed", { kind: "updated", projectId: PROJECT });
+  expect(called("db.connection.list")).toHaveLength(0);
+  // 신뢰의 주인(메인 프로젝트)의 id 로 와도 다시 읽는다.
+  await events.emit("project.changed", { kind: "trust", projectId: "owner-project" });
+  expect(called("db.connection.list")).toHaveLength(1);
+  expect(opens()).toEqual([]);
+  expect(document.querySelector("[data-testid=db-explorer-untrusted]")).toBeNull();
+  expect(statusOf("pg")).toBe("idle");
+  await expand("connection", "pg");
+  expect(rowsOf("database")).toEqual(["billing"]);
 });
 
 it("cannot count rows of another PostgreSQL database than the connection's", async () => {

@@ -177,6 +177,23 @@ export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * `run` 이 비밀 · 확인 필요(3101 · 3102)로 실패하면 `ask`(접근 묻기 — src/db/safety/access-prompt.tsx)로 묻고, 넣었으면 다시 부른다.
+ * 묻지 않았거나 취소했으면 그 오류를 그대로 던진다. 다시 부를 때마다 사람의 답이 있으므로 저절로 도는 고리가 아니다.
+ */
+export async function withDbAccess<T>(
+  run: () => Promise<T>,
+  ask: (error: unknown) => Promise<boolean>,
+): Promise<T> {
+  for (;;) {
+    try {
+      return await run();
+    } catch (error) {
+      if (!(await ask(error))) throw error;
+    }
+  }
+}
+
 export class ExplorerModel {
   private readonly deps: ExplorerDeps;
   private readonly listeners = new Set<() => void>();
@@ -441,15 +458,22 @@ export class ExplorerModel {
     );
   }
 
-  /** 「행 수」: `SELECT count(*)` 를 쪽 단위 조회(`db.query.page` — 읽기 전용 트랜잭션)로 돌려 그 값을 글로. */
+  /**
+   * 「행 수」: `SELECT count(*)` 를 쪽 단위 조회(`db.query.page` — 읽기 전용 트랜잭션)로 돌려 그 값을 글로. 비밀 · 확인이 필요하면
+   * 묻고 넣었으면 다시 센다.
+   */
   async countRows(connectionId: string, sql: string): Promise<string> {
-    const page = await this.deps.calls.call("db.query.page", {
-      projectId: this.deps.projectId,
-      worktree: this.deps.worktree ?? null,
-      connectionId,
-      sql,
-      limit: 1,
-    });
+    const page = await withDbAccess(
+      () =>
+        this.deps.calls.call("db.query.page", {
+          projectId: this.deps.projectId,
+          worktree: this.deps.worktree ?? null,
+          connectionId,
+          sql,
+          limit: 1,
+        }),
+      async (error) => !!this.deps.access && (await this.deps.access(error, connectionId)),
+    );
     const value = page.rows[0]?.[0];
     if (value && typeof value === "object") {
       if ("int" in value && value.int !== undefined)

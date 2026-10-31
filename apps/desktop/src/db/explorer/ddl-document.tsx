@@ -4,6 +4,8 @@
 // - 내용은 `db.schema.ddl`(M3-10 — 메타데이터용 연결 · 캐시)이고 탭에 저장하지 않는다. 이 창에서 사람이 연 탭(`openDdlDocument`)은
 //   곧바로 읽고, 다시 시작해 되살린 탭은 [DDL 읽기] 를 누를 때 읽는다 — 마운트만으로 연결을 열지 않는다(결정 M3-D13, 틀의 머리 주석).
 // - 같은 객체의 DDL 탭이 이미 열려 있으면 새로 만들지 않고 그 탭을 앞으로 가져온다.
+// - 읽기가 비밀 · 확인 필요(3101 · 3102)로 실패하면 접근 묻기(src/db/safety/access-prompt.tsx)로 묻고 넣었으면 다시 읽는다. 탭은
+//   연결 이름을 모르므로 다이얼로그 제목에는 연결 id 를 쓴다.
 // - 구문 강조는 구문 분석 서비스의 SQL 문법(내장 확장 lang-sql)이다 — 리비전 파일(src/git/documents)과 같은 길.
 
 import { EditorState } from "@codemirror/state";
@@ -17,6 +19,8 @@ import {
 } from "@codemirror/view";
 import type { ObjectRef } from "@pitwall/rpc-client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { useDbAccessPrompt } from "../safety/access-prompt";
 
 import { useEditorFont } from "../../editor/editor-font";
 import { openTab, tabParams } from "../../editor/editor-tabs";
@@ -33,7 +37,7 @@ import {
 import { useHost } from "../../rpc/host";
 import type { DbDocumentProps } from "../documents/db-document-panel";
 import { dbDocumentKey, type DbDocumentSpec, newDbTabId } from "../documents/spec";
-import { errorText } from "./explorer-model";
+import { errorText, withDbAccess } from "./explorer-model";
 import { useDbExplorerStrings } from "./strings";
 
 /** 구문 분석 서비스의 SQL 언어 이름(Linguist). */
@@ -209,16 +213,26 @@ export function DdlDocument({ spec, params }: DbDocumentProps<"ddl">) {
   const { client, target } = useHost();
   const projectId = "projectId" in target ? target.projectId : undefined;
   const font = useEditorFont();
+  const access = useDbAccessPrompt();
+  const ask = useRef(access.resolve);
+  ask.current = access.resolve;
   const load = useCallback(async () => {
     if (!client || !projectId) throw new Error("no host connection");
-    const ddl = await client.call("db.schema.ddl", {
-      projectId,
-      worktree: params.worktree ?? null,
-      connectionId: spec.connectionId,
-      object: spec.object,
-    });
+    const worktree = params.worktree ?? null;
+    const { connectionId, object } = spec;
+    const ddl = await withDbAccess(
+      () => client.call("db.schema.ddl", { projectId, worktree, connectionId, object }),
+      (error) =>
+        ask.current(error, {
+          calls: client,
+          projectId,
+          worktree,
+          connectionId,
+          connectionName: connectionId,
+        }),
+    );
     return ddl.text;
-  }, [client, projectId, params.worktree, spec.connectionId, spec.object]);
+  }, [client, projectId, params.worktree, spec]);
   const syntax = useMemo<StaticSyntaxSource | undefined>(
     () =>
       client && {
@@ -229,12 +243,15 @@ export function DdlDocument({ spec, params }: DbDocumentProps<"ddl">) {
     [client],
   );
   return (
-    <DdlView
-      spec={spec}
-      load={load}
-      eager={ddlOpenedHere(spec.tabId)}
-      font={font}
-      syntax={syntax}
-    />
+    <>
+      <DdlView
+        spec={spec}
+        load={load}
+        eager={ddlOpenedHere(spec.tabId)}
+        font={font}
+        syntax={syntax}
+      />
+      {access.element}
+    </>
   );
 }
