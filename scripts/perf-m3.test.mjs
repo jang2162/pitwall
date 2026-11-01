@@ -6,6 +6,9 @@ import { test } from "node:test";
 import {
   FAKE_FEATURE,
   FAKE_MARK,
+  PG_ROWS,
+  PG_STREAM_BURST,
+  PG_STREAM_PAUSE_MS,
   bundleProblem,
   contains,
   defaultFeatureProblem,
@@ -85,6 +88,24 @@ test("the PG seed makes rows shaped like the fake driver's", () => {
   assert.match(sql, /'r' \|\| i \|\| 'c9' AS c9/);
   assert.doesNotMatch(sql, /c10/);
   assert.match(sql, /CREATE VIEW perf_stream/);
+});
+
+test("the PG stream view pauses between bursts so a local stream lasts seconds", () => {
+  const view = pgSeed(10)
+    .split(";\n")
+    .find((s) => s.startsWith("CREATE VIEW perf_stream"));
+  assert.ok(view, "no perf_stream view");
+  // Same columns and values (pg_sleep()::text is ''), same order; c1 still reads `r<i>c1`.
+  assert.equal(
+    view,
+    `CREATE VIEW perf_stream AS SELECT id, c1 || CASE WHEN id > 0 AND id % ${PG_STREAM_BURST} = 0 ` +
+      `THEN pg_sleep(${PG_STREAM_PAUSE_MS / 1000})::text ELSE '' END AS c1, ` +
+      "c2, c3, c4, c5, c6, c7, c8, c9 FROM perf_rows ORDER BY id",
+  );
+  // Without pauses a local PG sent 100k rows in 0.35 s (17 scrolled frames — no verdict).
+  const pauses = Math.ceil(PG_ROWS / PG_STREAM_BURST) - 1;
+  assert.ok(pauses * PG_STREAM_PAUSE_MS >= 2_000, `${pauses} × ${PG_STREAM_PAUSE_MS} ms`);
+  assert.match(pgSeed(10, 4, 20), /id % 4 = 0 THEN pg_sleep\(0\.02\)/);
 });
 
 test("nothing tracked is written while measuring; reports are copied at the end", () => {

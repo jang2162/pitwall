@@ -4,7 +4,7 @@
 //   node scripts/perf-m3.mjs check-default    — 데스크톱 크레이트의 기본 feature 가 가짜 드라이버를 켜지 않는지(`mise run lint`)
 //
 // 차례(정본은 docs/ops/m3-realcheck.md, 측정 방법은 CONTRIBUTING.md 「성능 기준선」 의 「DB 시나리오」):
-//   ① 도커로 이 워크트리 전용 PG(10만 행 × 10열 테이블 `perf_rows` 와 같은 행의 뷰 `perf_stream`, trust 인증) · Redis(키 100만 개
+//   ① 도커로 이 워크트리 전용 PG(10만 행 × 10열 테이블 `perf_rows` 와 같은 행을 5,000행마다 150 ms 쉬며 내는 뷰 `perf_stream`, trust 인증) · Redis(키 100만 개
 //      `k:0` … `k:999999`)를 빈 포트에 띄운다 — CI `db-live` 와 같은 이미지. 이름은 `pitwall-perf-<워크트리 해시>-pg|redis` 이고
 //      끝나면 그 둘만 끈다(`--keep-db` 면 남긴다). 같은 이름이 이미 있으면(앞 실행이 남긴 것) 지우고 다시 띄운다.
 //   ② 데스크톱 release 번들을 두 벌 만든다: 기본(출시와 같다)과 `perf-fake-db` feature 를 켠 것(`FAKE_FEATURE` — 가짜 postgres
@@ -210,18 +210,35 @@ export function redisSeed(keys = REDIS_KEYS, batch = 10_000) {
   return parts.join("");
 }
 
-/** PG 픽스처: 10열(첫 열 정수, 나머지 `r<행>c<열>` — 가짜 드라이버의 행과 같은 꼴, 첫 행 둘째 칸이 `r0c1`). */
-export function pgSeed(rows = PG_ROWS) {
+/**
+ * 스트림 뷰 `perf_stream` 의 몰아 보내기: `PG_STREAM_BURST` 행마다 서버가 `PG_STREAM_PAUSE_MS` 쉰다(10만 행이면 19번, 3초 남짓).
+ * 쉬지 않는 뷰는 로컬 PG 가 10만 행을 0.35초에 다 보내 스트리밍 중 스크롤이 17 프레임뿐이라 판정하지 못했다(2026-11-01 보고서
+ * §3 ⑧). 행을 늘리거나 넓혀서는 늘릴 수 없다 — 행 수는 그리드 보유 상한(`[db] grid_max_rows`, 기본 10만)이, 바이트는
+ * `grid_max_bytes`(기본 64 MiB)가 막고, 넓힌 행(행당 1 KB)도 64 MiB 를 0.36초에 보냈다(2026-11-02 짧은 실기). 5,000행은 쉬지 않는
+ * 스트림이 한 프레임(16.7 ms)에 보내는 양(10만 행 / 0.35초 ≈ 4,800행)이라, 한 묶음은 쉬지 않는 스트림의 한 프레임만큼 몰아 온다.
+ * 판정은 여전히 pw-perf 가 60 프레임 이상에서만 한다(`MIN_STREAM_FRAMES`).
+ */
+export const PG_STREAM_BURST = 5_000;
+export const PG_STREAM_PAUSE_MS = 150;
+
+/**
+ * PG 픽스처: 10열(첫 열 정수, 나머지 `r<행>c<열>` — 가짜 드라이버의 행과 같은 꼴, 첫 행 둘째 칸이 `r0c1`). `perf_stream` 은 같은
+ * 행 · 같은 값 · 같은 순서의 뷰이고, `c1` 에 붙인 `pg_sleep(…)::text`(빈 글)로 묶음 사이에 쉰다. 휘발 함수라 정렬 뒤 내보내는
+ * 행마다 계산된다(인덱스 스캔이든 정렬이든 — `EXPLAIN VERBOSE` 로 확인).
+ */
+export function pgSeed(rows = PG_ROWS, burst = PG_STREAM_BURST, pauseMs = PG_STREAM_PAUSE_MS) {
   const cols = Array.from({ length: 9 }, (_, k) => `'r' || i || 'c${k + 1}' AS c${k + 1}`).join(
     ", ",
   );
+  const pause = `CASE WHEN id > 0 AND id % ${burst} = 0 THEN pg_sleep(${pauseMs / 1000})::text ELSE '' END`;
+  const rest = Array.from({ length: 8 }, (_, k) => `c${k + 2}`).join(", ");
   return (
     [
       "DROP VIEW IF EXISTS perf_stream",
       "DROP TABLE IF EXISTS perf_rows",
       `CREATE TABLE perf_rows AS SELECT i::int8 AS id, ${cols} FROM generate_series(0, ${rows - 1}) AS i`,
       "ALTER TABLE perf_rows ADD PRIMARY KEY (id)",
-      "CREATE VIEW perf_stream AS SELECT * FROM perf_rows ORDER BY id",
+      `CREATE VIEW perf_stream AS SELECT id, c1 || ${pause} AS c1, ${rest} FROM perf_rows ORDER BY id`,
       "ANALYZE perf_rows",
     ].join(";\n") + ";\n"
   );

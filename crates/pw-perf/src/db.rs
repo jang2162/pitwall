@@ -41,15 +41,16 @@ pub const TARGET_EXPLORER_MS: f64 = 500.0;
 pub const TARGET_REDIS_OPEN_MS: f64 = 500.0;
 /// 스크롤 판정의 몫(06 「스크롤 60fps」 — 간격 중앙값 [`TARGET_VSYNC_MS`] 와 함께).
 pub const TARGET_SCROLL_SHARE: f64 = 0.95;
-/// 스트리밍 중 스크롤을 판정할 최소 프레임 수(1초 남짓). 로컬 실 PG 는 10만 행을 0.4초에 보내 15 프레임쯤만 스트리밍 중이라, 첫 프레임
-/// 하나가 몫을 0.8 로 끌어내린다 — 그런 표본으로는 판정하지 않는다(M3-21 짧은 실기).
+/// 스트리밍 중 스크롤을 판정할 최소 프레임 수(1초 남짓). 쉬지 않고 보내는 로컬 실 PG 는 10만 행을 0.35초에 보내 17 프레임쯤만 스트리밍
+/// 중이라, 긴 프레임 하나가 몫을 0.88 로 끌어내린다 — 그런 표본으로는 판정하지 않는다(M3-21 실기). 그래서 실 PG 픽스처의 `perf_stream` 은
+/// 5,000행마다 150 ms 쉰다(`scripts/perf-m3.mjs` 의 `pgSeed`, 3초 남짓).
 pub const MIN_STREAM_FRAMES: f64 = 60.0;
 
 /// 결과 파일만 받은 사람도 읽을 수 있게 싣는 정의(정본은 CONTRIBUTING.md 「성능 기준선」 의 「DB 시나리오」).
 pub const DEFINITIONS: DbDefinitions = DbDefinitions {
     grid_open: "in the webview: a new SQL console of `perf-grid` (⌘⇧L, connected first) with `SELECT * FROM perf_rows` (100,000 rows × 10 columns); from a click on [Run] to the animation frame after the result grid canvas first drew the first row's second cell (`r0c1`) — includes the run-scope RPC, the Host's execution, the first chunk, IPC and drawing",
     grid_scroll: "after the status line says done with every row: fling = top to bottom in 2000 frames (about 50 rows a frame); judged as 06 「스크롤 60fps」: the share of frames within one display refresh (interval ≤ 1.5 × the median interval) ≥ 0.95 and the median interval ≤ 17 ms; the share within 16.7 ms is reference only",
-    grid_stream: "`SELECT * FROM perf_stream` (the same rows; the fake driver waits 30 ms per fetch, about 4 s for 100k rows, a real database streams as fast as it reads); once the first row is drawn, scroll down 20 rows a frame (never past the received end) until the stream ends; judged as `grid_scroll` but only when at least 60 frames were scrolled while streaming (a stream that ends sooner — a real local database sends 100k rows in about 0.4 s — has no verdict, `no value`)",
+    grid_stream: "`SELECT * FROM perf_stream` (the same rows; the fake driver waits 30 ms per fetch, about 4 s for 100k rows; the real-PG fixture's view pauses 150 ms on the server every 5,000 rows and sends each burst as fast as it reads, about 3 s — without pauses a local database sends 100k rows in about 0.35 s); once the first row is drawn, scroll down 20 rows a frame (never past the received end) until the stream ends; judged as `grid_scroll` but only when at least 60 frames were scrolled while streaming (a shorter stream has no verdict, `no value`)",
     explorer: "in the webview: ⌘8, expand the `perf-schema` connection (opens it) and the schema `public`; from a click on the ▸ of the Tables group (10,000 tables) to the frame after the first table row appeared",
     redis_open: "in the webview: double-click the `perf-redis` connection in the explorer (a tab opens unconnected); from a click on [Connect] to the frame after the key tree showed its first row (connect + the unfiltered scan's first batch, 1,000,000 keys `k:0` … `k:999999`)",
     redis_scroll: "after the scan ended: expand the group `k:` (expandMs, sorting included), then fling top to bottom in 2000 frames; judged as `grid_scroll`",
