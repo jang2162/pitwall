@@ -71,6 +71,13 @@ fn local_host(
         Arc::clone(&runtime),
     ));
     let lsp_servers_methods = Arc::clone(&lsp_servers);
+    // 언어 서버 관리자(M4-05): 그 언어의 문서를 처음 열 때 서버를 띄우고, 창이 닫히면 그 창이 띄운 서버를 끝낸다.
+    let lsp = pw_lsp::LspManager::new(
+        Arc::clone(&lsp_servers),
+        Arc::clone(&extensions),
+        pw_lsp::ManagerOptions::default(),
+    );
+    let lsp_methods = lsp.clone();
     // 도구 registry(`tools.registry.*`, M4-03): 내장 스냅숏으로 시작하고, 처음 불릴 때 캐시를 읽고 가져오기를 뒤에서 한다.
     let tools_registry = Arc::new(pw_tools::ToolsRegistry::new());
     let tools_registry_methods = Arc::clone(&tools_registry);
@@ -150,6 +157,7 @@ fn local_host(
         .methods(move |router| pw_lang::methods::register(router, lang_methods))
         .methods(move |router| pw_open_with::methods::register(router, open_with_methods))
         .methods(move |router| pw_lsp_servers::methods::register(router, lsp_servers_methods))
+        .methods(move |router| pw_lsp::register(router, &lsp_methods))
         .methods(move |router| pw_runtime::methods::register(router, runtime_methods))
         .methods(move |router| pw_fs::methods::register(router, fs_methods))
         .methods(move |router| pw_fs::watch::register(router, fs_watch_methods))
@@ -235,6 +243,28 @@ fn local_host(
             if let Some(locator) = tools_installer.locator() {
                 lsp_servers.set_tools(Arc::new(locator));
             }
+            // 서버 관리자: 진행은 작업으로, 상태 · 신뢰 해제 · 런타임 · 설정 변경은 버스로. 시작할 때 지난 Host 가 강제로 끝나며
+            // 남긴 서버 그룹을 거둔다(기록부 판정 — `pw_lsp::ledger`).
+            lsp.attach(pw_lsp::HostParts {
+                projects: projects.clone(),
+                bus: host.bus().clone(),
+                tasks: host.tasks().clone(),
+                global: config.global.clone(),
+                state_dir: config.paths.state.clone(),
+            });
+            tauri::async_runtime::spawn(
+                lsp.clone()
+                    .follow(pw_lsp::LspManager::subscribe(host.bus())),
+            );
+            // 도구를 지우기 전에 그 설치본으로 뜬 언어 서버를 멈춘다(M4-04 의 `ToolUsers`).
+            tools_installer.set_users(Arc::new(LspToolUsers(lsp.clone())));
+            let reaper = lsp.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let reaped = reaper.reap_orphans();
+                if reaped > 0 {
+                    tracing::info!(reaped, "ended language servers left by an earlier run");
+                }
+            });
             runtime.attach(RuntimeHost {
                 projects: projects.clone(),
                 bus: host.bus().clone(),
@@ -277,6 +307,19 @@ fn local_host(
         }
     }
     host
+}
+
+/// 도구 제거(`tools.uninstall`) 전에 그 패키지의 설치본으로 뜬 언어 서버를 끝낸다(`pw_tools::install::ToolUsers` — M4-05).
+struct LspToolUsers(pw_lsp::LspManager);
+
+impl pw_tools::install::ToolUsers for LspToolUsers {
+    fn stop(
+        &self,
+        package: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        let package = package.to_owned();
+        Box::pin(async move { self.0.stop_installed(&package).await })
+    }
 }
 
 /// 내장 확장과 `$DATA/extensions/` 의 사용자 확장. 진단은 로그에 남는다(로깅을 켠 뒤에 부른다).

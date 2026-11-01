@@ -1,0 +1,11 @@
+# live 시험 픽스처(crates/pw-lsp/tests/fixtures/README.md). 저장소 작업 공간에 들지 않는 독립 작업 공간이다 — 시험은 임시 폴더에
+# 복사해 연다(서버가 target/ 을 만들어도 저장소를 더럽히지 않게).
+[package]
+name = "pw_lsp_fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]

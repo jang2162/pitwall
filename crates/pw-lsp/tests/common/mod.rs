@@ -2,6 +2,9 @@
 
 #![allow(dead_code)]
 
+#[cfg(unix)]
+pub mod env;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

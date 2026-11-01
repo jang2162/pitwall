@@ -24798,6 +24798,1051 @@
       ],
       "tier": "write"
     },
+    "lsp.document.change": {
+      "description": "문서에 편집을 적용하고 떠 있는 서버에 `didChange` 를 보낸다(서버가 `Incremental` 이면 증분, 아니면 전체). 서버를 띄우지\n않는다. 없는 문서 · 다른 연결의 문서는 not found, 지난 버전 · 빠진 편집은 conflict(`data.version` 에 지금 버전 — 다시 연다),\n범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다).",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "LspTextChange": {
+            "description": "바꾸기 하나(UTF-16 범위 — `syntax.edit` 의 `TextChange` 와 같은 꼴).",
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "insert": {
+                "type": "string"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "insert"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "changes": {
+            "description": "차례로 적용한다 — 각 바꾸기의 위치는 앞 바꾸기를 적용한 뒤의 텍스트 기준이다(`syntax.edit` 와 같은 꼴, UTF-16).",
+            "items": {
+              "$ref": "#/$defs/LspTextChange"
+            },
+            "type": "array"
+          },
+          "docId": {
+            "type": "string"
+          },
+          "version": {
+            "description": "이 편집을 적용한 뒤의 버전 = 앞 버전 + 1.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "docId",
+          "version",
+          "changes"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspDocumentOff": {
+            "description": "서버에 보내지 않는 문서의 까닭. 이 `docId` 는 열리지 않았다(바꾸기 · 닫기는 not found) — 웹뷰는 그 문서의 동기화를 멈춘다.",
+            "oneOf": [
+              {
+                "const": "tooLarge",
+                "description": "5 MiB 를 넘는다(편집 등급 밖 — 결정 M1-D9).",
+                "type": "string"
+              },
+              {
+                "const": "longLine",
+                "description": "1만 자를 넘는 줄이 있다(편집 등급 밖).",
+                "type": "string"
+              },
+              {
+                "const": "noServer",
+                "description": "그 언어를 맡는 언어 서버 정의가 없다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "off": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LspDocumentOff"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "이 편집으로 편집 등급을 벗어나 서버에서 닫았다(이 `docId` 는 이제 없다)."
+          }
+        },
+        "required": [
+          "off"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.document.close": {
+      "description": "문서를 닫는다(`didClose`). 인스턴스의 마지막 문서면 유휴 시한(`[lsp] idle_shutdown_minutes`, 기본 10분) 뒤 서버를 끝낸다.\n없는 id 도 성공이다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "docId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.document.open": {
+      "description": "문서를 연다: Host 가 텍스트를 쥐고, 그 언어의 서버 인스턴스마다(없으면 띄운다 — 지연 기동) `didOpen` 을 보낸다. 그 프로젝트\n창의 연결만 부를 수 있다(다른 창 · 웰컴 · 설정 · 파일 창은 permission denied — 서버를 띄우지 않는다). 미신뢰 프로젝트는 띄우지\n않고 인스턴스 상태 `untrusted` 로 답한다. 편집 등급 밖 · 서버 없는 언어는 `off`. 경로가 프로젝트 루트 밖이면 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "language": {
+            "description": "문서 언어 — `lang.detect` 의 `language`(Linguist 이름, `Rust`) 또는 확장의 언어 id(`rust`).",
+            "type": "string"
+          },
+          "path": {
+            "description": "문서 파일의 절대 경로. 프로젝트 루트(활성 워크트리면 그 안의 루트) 안이어야 한다.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "version": {
+            "description": "웹뷰 문서의 버전. 다음 `lsp.document.change` 는 이것 + 1 이다.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "language",
+          "version",
+          "text"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspDocumentOff": {
+            "description": "서버에 보내지 않는 문서의 까닭. 이 `docId` 는 열리지 않았다(바꾸기 · 닫기는 not found) — 웹뷰는 그 문서의 동기화를 멈춘다.",
+            "oneOf": [
+              {
+                "const": "tooLarge",
+                "description": "5 MiB 를 넘는다(편집 등급 밖 — 결정 M1-D9).",
+                "type": "string"
+              },
+              {
+                "const": "longLine",
+                "description": "1만 자를 넘는 줄이 있다(편집 등급 밖).",
+                "type": "string"
+              },
+              {
+                "const": "noServer",
+                "description": "그 언어를 맡는 언어 서버 정의가 없다.",
+                "type": "string"
+              }
+            ]
+          },
+          "LspInstanceState": {
+            "description": "인스턴스의 상태.",
+            "oneOf": [
+              {
+                "description": "띄우는 중(`initialize` 를 기다림 · 죽은 뒤 물러남 재기동을 기다림).",
+                "properties": {
+                  "kind": {
+                    "const": "starting",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "ready",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 · 정의가 바뀌었다 — 다시 시작해야 새 값이 든다. 서버는 그대로 답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "restartNeeded",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "런타임 환경이 바뀌었다(`runtime.changed`) — 다시 시작을 권한다. 서버는 그대로 답한다(저절로 다시 띄우지 않는다).",
+                "properties": {
+                  "kind": {
+                    "const": "restartSuggested",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "3분 안에 5번 죽어 멈췄다 — `lsp.server.restart` 로만 다시 띄운다.",
+                "properties": {
+                  "kind": {
+                    "const": "crashed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "사람이 멈췄다(`lsp.server.stop`).",
+                "properties": {
+                  "kind": {
+                    "const": "stopped",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트를 신뢰하지 않아 띄우지 않는다(결정 M4-D8).",
+                "properties": {
+                  "kind": {
+                    "const": "untrusted",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "실행 파일을 찾지 못했다 — 설치를 제안한다(M4-17).",
+                "properties": {
+                  "kind": {
+                    "const": "notInstalled",
+                    "type": "string"
+                  },
+                  "mason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "서버를 돌릴 런타임(`requires`)을 찾지 못했다(결정 M4-D6). `tool` 은 `node` · `python` · `java`, `needed` 는 판 범위.",
+                "properties": {
+                  "kind": {
+                    "const": "runtimeMissing",
+                    "type": "string"
+                  },
+                  "needed": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tool",
+                  "needed"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정에서 껐다(`[lsp.<id>] enabled = false`).",
+                "properties": {
+                  "kind": {
+                    "const": "disabled",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "띄우지 못했다(설정 경로가 틀림 · 실행 실패 등 — 까닭).",
+                "properties": {
+                  "kind": {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "LspInstanceStatus": {
+            "description": "서버 인스턴스 하나 — (프로젝트, 워크트리, 서버, 작업 공간 루트)마다 하나(결정 M4-D11).",
+            "properties": {
+              "progress": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LspProgress"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다."
+              },
+              "root": {
+                "description": "작업 공간 루트(실제 경로).",
+                "type": "string"
+              },
+              "server": {
+                "description": "서버 id(`[contributes.language_servers.<id>]`).",
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/LspInstanceState"
+              },
+              "worktree": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "server",
+              "root",
+              "worktree",
+              "state",
+              "progress"
+            ],
+            "type": "object"
+          },
+          "LspProgress": {
+            "description": "서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`).",
+            "properties": {
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "percentage": {
+                "description": "0 ~ 100. 서버가 모르면 없다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "message",
+              "percentage"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "description": "이 문서의 id(이 연결 안에서만). `off` 면 쓰지 않는다.",
+            "type": "string"
+          },
+          "instances": {
+            "description": "이 문서를 맡는 인스턴스들(정의 순서 — 결정 M4-D12). 미신뢰 프로젝트면 상태가 `untrusted` 다.",
+            "items": {
+              "$ref": "#/$defs/LspInstanceStatus"
+            },
+            "type": "array"
+          },
+          "off": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LspDocumentOff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "docId",
+          "off",
+          "instances"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "lsp.document.save": {
+      "description": "저장을 알린다(`didSave` — 서버가 원하면 텍스트 포함). 없는 문서는 not found.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "docId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.server.restart": {
+      "description": "인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시\n받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`lsp.server.restart` · `lsp.server.stop` 의 대상 — 상태 이벤트의 인스턴스 하나.",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "root": {
+            "description": "[`LspInstanceStatus::root`] 그대로.",
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "server",
+          "root"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspInstanceState": {
+            "description": "인스턴스의 상태.",
+            "oneOf": [
+              {
+                "description": "띄우는 중(`initialize` 를 기다림 · 죽은 뒤 물러남 재기동을 기다림).",
+                "properties": {
+                  "kind": {
+                    "const": "starting",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "ready",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 · 정의가 바뀌었다 — 다시 시작해야 새 값이 든다. 서버는 그대로 답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "restartNeeded",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "런타임 환경이 바뀌었다(`runtime.changed`) — 다시 시작을 권한다. 서버는 그대로 답한다(저절로 다시 띄우지 않는다).",
+                "properties": {
+                  "kind": {
+                    "const": "restartSuggested",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "3분 안에 5번 죽어 멈췄다 — `lsp.server.restart` 로만 다시 띄운다.",
+                "properties": {
+                  "kind": {
+                    "const": "crashed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "사람이 멈췄다(`lsp.server.stop`).",
+                "properties": {
+                  "kind": {
+                    "const": "stopped",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트를 신뢰하지 않아 띄우지 않는다(결정 M4-D8).",
+                "properties": {
+                  "kind": {
+                    "const": "untrusted",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "실행 파일을 찾지 못했다 — 설치를 제안한다(M4-17).",
+                "properties": {
+                  "kind": {
+                    "const": "notInstalled",
+                    "type": "string"
+                  },
+                  "mason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "서버를 돌릴 런타임(`requires`)을 찾지 못했다(결정 M4-D6). `tool` 은 `node` · `python` · `java`, `needed` 는 판 범위.",
+                "properties": {
+                  "kind": {
+                    "const": "runtimeMissing",
+                    "type": "string"
+                  },
+                  "needed": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tool",
+                  "needed"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정에서 껐다(`[lsp.<id>] enabled = false`).",
+                "properties": {
+                  "kind": {
+                    "const": "disabled",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "띄우지 못했다(설정 경로가 틀림 · 실행 실패 등 — 까닭).",
+                "properties": {
+                  "kind": {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "LspProgress": {
+            "description": "서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`).",
+            "properties": {
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "percentage": {
+                "description": "0 ~ 100. 서버가 모르면 없다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "message",
+              "percentage"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "서버 인스턴스 하나 — (프로젝트, 워크트리, 서버, 작업 공간 루트)마다 하나(결정 M4-D11).",
+        "properties": {
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LspProgress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다."
+          },
+          "root": {
+            "description": "작업 공간 루트(실제 경로).",
+            "type": "string"
+          },
+          "server": {
+            "description": "서버 id(`[contributes.language_servers.<id>]`).",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/LspInstanceState"
+          },
+          "worktree": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "server",
+          "root",
+          "worktree",
+          "state",
+          "progress"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "lsp.server.stop": {
+      "description": "인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의\n연결만. 없는 인스턴스는 not found.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`lsp.server.restart` · `lsp.server.stop` 의 대상 — 상태 이벤트의 인스턴스 하나.",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "root": {
+            "description": "[`LspInstanceStatus::root`] 그대로.",
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "server",
+          "root"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspInstanceState": {
+            "description": "인스턴스의 상태.",
+            "oneOf": [
+              {
+                "description": "띄우는 중(`initialize` 를 기다림 · 죽은 뒤 물러남 재기동을 기다림).",
+                "properties": {
+                  "kind": {
+                    "const": "starting",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "ready",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 · 정의가 바뀌었다 — 다시 시작해야 새 값이 든다. 서버는 그대로 답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "restartNeeded",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "런타임 환경이 바뀌었다(`runtime.changed`) — 다시 시작을 권한다. 서버는 그대로 답한다(저절로 다시 띄우지 않는다).",
+                "properties": {
+                  "kind": {
+                    "const": "restartSuggested",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "3분 안에 5번 죽어 멈췄다 — `lsp.server.restart` 로만 다시 띄운다.",
+                "properties": {
+                  "kind": {
+                    "const": "crashed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "사람이 멈췄다(`lsp.server.stop`).",
+                "properties": {
+                  "kind": {
+                    "const": "stopped",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트를 신뢰하지 않아 띄우지 않는다(결정 M4-D8).",
+                "properties": {
+                  "kind": {
+                    "const": "untrusted",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "실행 파일을 찾지 못했다 — 설치를 제안한다(M4-17).",
+                "properties": {
+                  "kind": {
+                    "const": "notInstalled",
+                    "type": "string"
+                  },
+                  "mason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "서버를 돌릴 런타임(`requires`)을 찾지 못했다(결정 M4-D6). `tool` 은 `node` · `python` · `java`, `needed` 는 판 범위.",
+                "properties": {
+                  "kind": {
+                    "const": "runtimeMissing",
+                    "type": "string"
+                  },
+                  "needed": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tool",
+                  "needed"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정에서 껐다(`[lsp.<id>] enabled = false`).",
+                "properties": {
+                  "kind": {
+                    "const": "disabled",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "띄우지 못했다(설정 경로가 틀림 · 실행 실패 등 — 까닭).",
+                "properties": {
+                  "kind": {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "LspProgress": {
+            "description": "서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`).",
+            "properties": {
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "percentage": {
+                "description": "0 ~ 100. 서버가 모르면 없다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "message",
+              "percentage"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "서버 인스턴스 하나 — (프로젝트, 워크트리, 서버, 작업 공간 루트)마다 하나(결정 M4-D11).",
+        "properties": {
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LspProgress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다."
+          },
+          "root": {
+            "description": "작업 공간 루트(실제 경로).",
+            "type": "string"
+          },
+          "server": {
+            "description": "서버 id(`[contributes.language_servers.<id>]`).",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/LspInstanceState"
+          },
+          "worktree": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "server",
+          "root",
+          "worktree",
+          "state",
+          "progress"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
     "lsp.servers.list": {
       "description": "언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params\n오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).",
       "kind": "unary",
@@ -25151,6 +26196,286 @@
           "trusted",
           "problem",
           "warnings"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.status.get": {
+      "description": "그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspInstanceState": {
+            "description": "인스턴스의 상태.",
+            "oneOf": [
+              {
+                "description": "띄우는 중(`initialize` 를 기다림 · 죽은 뒤 물러남 재기동을 기다림).",
+                "properties": {
+                  "kind": {
+                    "const": "starting",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "ready",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 · 정의가 바뀌었다 — 다시 시작해야 새 값이 든다. 서버는 그대로 답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "restartNeeded",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "런타임 환경이 바뀌었다(`runtime.changed`) — 다시 시작을 권한다. 서버는 그대로 답한다(저절로 다시 띄우지 않는다).",
+                "properties": {
+                  "kind": {
+                    "const": "restartSuggested",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "3분 안에 5번 죽어 멈췄다 — `lsp.server.restart` 로만 다시 띄운다.",
+                "properties": {
+                  "kind": {
+                    "const": "crashed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "사람이 멈췄다(`lsp.server.stop`).",
+                "properties": {
+                  "kind": {
+                    "const": "stopped",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트를 신뢰하지 않아 띄우지 않는다(결정 M4-D8).",
+                "properties": {
+                  "kind": {
+                    "const": "untrusted",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "실행 파일을 찾지 못했다 — 설치를 제안한다(M4-17).",
+                "properties": {
+                  "kind": {
+                    "const": "notInstalled",
+                    "type": "string"
+                  },
+                  "mason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "서버를 돌릴 런타임(`requires`)을 찾지 못했다(결정 M4-D6). `tool` 은 `node` · `python` · `java`, `needed` 는 판 범위.",
+                "properties": {
+                  "kind": {
+                    "const": "runtimeMissing",
+                    "type": "string"
+                  },
+                  "needed": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tool",
+                  "needed"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정에서 껐다(`[lsp.<id>] enabled = false`).",
+                "properties": {
+                  "kind": {
+                    "const": "disabled",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "띄우지 못했다(설정 경로가 틀림 · 실행 실패 등 — 까닭).",
+                "properties": {
+                  "kind": {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "LspInstanceStatus": {
+            "description": "서버 인스턴스 하나 — (프로젝트, 워크트리, 서버, 작업 공간 루트)마다 하나(결정 M4-D11).",
+            "properties": {
+              "progress": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LspProgress"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다."
+              },
+              "root": {
+                "description": "작업 공간 루트(실제 경로).",
+                "type": "string"
+              },
+              "server": {
+                "description": "서버 id(`[contributes.language_servers.<id>]`).",
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/LspInstanceState"
+              },
+              "worktree": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "server",
+              "root",
+              "worktree",
+              "state",
+              "progress"
+            ],
+            "type": "object"
+          },
+          "LspProgress": {
+            "description": "서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`).",
+            "properties": {
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "percentage": {
+                "description": "0 ~ 100. 서버가 모르면 없다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "message",
+              "percentage"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "[`TOPIC_STATUS`] 의 내용이자 `lsp.status.get` 의 결과.",
+        "properties": {
+          "instances": {
+            "description": "(워크트리, 서버, 루트) 순.",
+            "items": {
+              "$ref": "#/$defs/LspInstanceStatus"
+            },
+            "type": "array"
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "instances"
         ],
         "type": "object"
       },

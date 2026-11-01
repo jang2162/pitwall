@@ -12,6 +12,10 @@ pre-commit:
       run: "pnpm exec oxlint --deny-warnings {staged_files}"
     - name: rustfmt
       glob: "*.rs"
+      # live 시험 픽스처는 흐트러진 서식 · 이름 앞 표지 주석을 일부러 둔다(crates/pw-lsp/tests/fixtures/README.md). 작업 공간 밖이라
+      # `cargo fmt` 도 보지 않는다.
+      exclude:
+        - "crates/pw-lsp/tests/fixtures/**"
       run: "rustfmt --edition 2024 {staged_files}"
       stage_fixed: true
 

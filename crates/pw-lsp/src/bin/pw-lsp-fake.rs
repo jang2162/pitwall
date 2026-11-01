@@ -30,8 +30,11 @@ impl Fake {
         let Some(path) = &self.scenario.record else {
             return;
         };
+        // 한 줄을 한 번의 `write` 로 — 같은 기록 파일을 쓰는 가짜 서버 여럿(인스턴스 여럿)의 줄이 섞이지 않게(O_APPEND).
+        let mut text = line.to_string();
+        text.push('\n');
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(file, "{line}");
+            let _ = file.write_all(text.as_bytes());
         }
     }
 

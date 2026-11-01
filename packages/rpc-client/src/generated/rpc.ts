@@ -587,10 +587,45 @@ export type UnaryMethods = {
 	 */
 	"log.write": { params: UiLogBatch; result: null };
 	/**
+	 * 문서에 편집을 적용하고 떠 있는 서버에 `didChange` 를 보낸다(서버가 `Incremental` 이면 증분, 아니면 전체). 서버를 띄우지
+	 * 않는다. 없는 문서 · 다른 연결의 문서는 not found, 지난 버전 · 빠진 편집은 conflict(`data.version` 에 지금 버전 — 다시 연다),
+	 * 범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다).
+	 */
+	"lsp.document.change": { params: LspDocumentChangeParams; result: LspDocumentChangeResult };
+	/**
+	 * 문서를 닫는다(`didClose`). 인스턴스의 마지막 문서면 유휴 시한(`[lsp] idle_shutdown_minutes`, 기본 10분) 뒤 서버를 끝낸다.
+	 * 없는 id 도 성공이다.
+	 */
+	"lsp.document.close": { params: LspDocumentRef; result: null };
+	/**
+	 * 문서를 연다: Host 가 텍스트를 쥐고, 그 언어의 서버 인스턴스마다(없으면 띄운다 — 지연 기동) `didOpen` 을 보낸다. 그 프로젝트
+	 * 창의 연결만 부를 수 있다(다른 창 · 웰컴 · 설정 · 파일 창은 permission denied — 서버를 띄우지 않는다). 미신뢰 프로젝트는 띄우지
+	 * 않고 인스턴스 상태 `untrusted` 로 답한다. 편집 등급 밖 · 서버 없는 언어는 `off`. 경로가 프로젝트 루트 밖이면 invalid params.
+	 */
+	"lsp.document.open": { params: LspDocumentOpenParams; result: LspDocumentOpened };
+	/**
+	 * 저장을 알린다(`didSave` — 서버가 원하면 텍스트 포함). 없는 문서는 not found.
+	 */
+	"lsp.document.save": { params: LspDocumentRef; result: null };
+	/**
+	 * 인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시
+	 * 받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.
+	 */
+	"lsp.server.restart": { params: LspServerControlParams; result: LspInstanceStatus };
+	/**
+	 * 인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의
+	 * 연결만. 없는 인스턴스는 not found.
+	 */
+	"lsp.server.stop": { params: LspServerControlParams; result: LspInstanceStatus };
+	/**
 	 * 언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params
 	 * 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).
 	 */
 	"lsp.servers.list": { params: LspServersListParams; result: LspServerList };
+	/**
+	 * 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다.
+	 */
+	"lsp.status.get": { params: LspStatusGetParams; result: LspStatus };
 	/**
 	 * 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.
 	 */
@@ -1012,7 +1047,14 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lang.detect": {"name":"lang.detect","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"LangDetectParams","output":"LangDetectResult","doc":" 파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·\n 그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.\n","mcp":false,"fileScope":true},
 	"lang.list": {"name":"lang.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"LangList","doc":" 고를 수 있는 언어(상태바의 언어 수동 변경, F4-12)와 언어마다의 줄 주석. 앱이 시작할 때 읽은 확장 레지스트리 기준이다.\n","mcp":false,"fileScope":true},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n","mcp":false,"fileScope":true},
+	"lsp.document.change": {"name":"lsp.document.change","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentChangeParams","output":"LspDocumentChangeResult","doc":" 문서에 편집을 적용하고 떠 있는 서버에 `didChange` 를 보낸다(서버가 `Incremental` 이면 증분, 아니면 전체). 서버를 띄우지\n 않는다. 없는 문서 · 다른 연결의 문서는 not found, 지난 버전 · 빠진 편집은 conflict(`data.version` 에 지금 버전 — 다시 연다),\n 범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다).\n","mcp":false,"fileScope":false},
+	"lsp.document.close": {"name":"lsp.document.close","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"()","doc":" 문서를 닫는다(`didClose`). 인스턴스의 마지막 문서면 유휴 시한(`[lsp] idle_shutdown_minutes`, 기본 10분) 뒤 서버를 끝낸다.\n 없는 id 도 성공이다.\n","mcp":false,"fileScope":false},
+	"lsp.document.open": {"name":"lsp.document.open","kind":"unary","tier":"exec","roles":["owner"],"params":"LspDocumentOpenParams","output":"LspDocumentOpened","doc":" 문서를 연다: Host 가 텍스트를 쥐고, 그 언어의 서버 인스턴스마다(없으면 띄운다 — 지연 기동) `didOpen` 을 보낸다. 그 프로젝트\n 창의 연결만 부를 수 있다(다른 창 · 웰컴 · 설정 · 파일 창은 permission denied — 서버를 띄우지 않는다). 미신뢰 프로젝트는 띄우지\n 않고 인스턴스 상태 `untrusted` 로 답한다. 편집 등급 밖 · 서버 없는 언어는 `off`. 경로가 프로젝트 루트 밖이면 invalid params.\n","mcp":false,"fileScope":false},
+	"lsp.document.save": {"name":"lsp.document.save","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"()","doc":" 저장을 알린다(`didSave` — 서버가 원하면 텍스트 포함). 없는 문서는 not found.\n","mcp":false,"fileScope":false},
+	"lsp.server.restart": {"name":"lsp.server.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시\n 받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
+	"lsp.server.stop": {"name":"lsp.server.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의\n 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.servers.list": {"name":"lsp.servers.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspServersListParams","output":"LspServerList","doc":" 언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params\n 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).\n","mcp":false,"fileScope":false},
+	"lsp.status.get": {"name":"lsp.status.get","kind":"unary","tier":"read","roles":["owner"],"params":"LspStatusGetParams","output":"LspStatus","doc":" 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다.\n","mcp":false,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false,"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":false,"fileScope":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":false,"fileScope":false},
@@ -4785,8 +4827,100 @@ export type LogRow = {
 	graph: GraphRow | null,
 };
 
+export type LspDocumentChangeParams = {
+	docId: string,
+	/**  이 편집을 적용한 뒤의 버전 = 앞 버전 + 1. */
+	version: number,
+	/**  차례로 적용한다 — 각 바꾸기의 위치는 앞 바꾸기를 적용한 뒤의 텍스트 기준이다(`syntax.edit` 와 같은 꼴, UTF-16). */
+	changes: LspTextChange[],
+};
+
+export type LspDocumentChangeResult = {
+	/**  이 편집으로 편집 등급을 벗어나 서버에서 닫았다(이 `docId` 는 이제 없다). */
+	off: LspDocumentOff | null,
+};
+
+/**  서버에 보내지 않는 문서의 까닭. 이 `docId` 는 열리지 않았다(바꾸기 · 닫기는 not found) — 웹뷰는 그 문서의 동기화를 멈춘다. */
+export type LspDocumentOff = 
+/**  5 MiB 를 넘는다(편집 등급 밖 — 결정 M1-D9). */
+"tooLarge" | 
+/**  1만 자를 넘는 줄이 있다(편집 등급 밖). */
+"longLine" | 
+/**  그 언어를 맡는 언어 서버 정의가 없다. */
+"noServer";
+
+export type LspDocumentOpenParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). */
+	worktree?: string | null,
+	/**  문서 파일의 절대 경로. 프로젝트 루트(활성 워크트리면 그 안의 루트) 안이어야 한다. */
+	path: string,
+	/**  문서 언어 — `lang.detect` 의 `language`(Linguist 이름, `Rust`) 또는 확장의 언어 id(`rust`). */
+	language: string,
+	/**  웹뷰 문서의 버전. 다음 `lsp.document.change` 는 이것 + 1 이다. */
+	version: number,
+	text: string,
+};
+
+export type LspDocumentOpened = {
+	/**  이 문서의 id(이 연결 안에서만). `off` 면 쓰지 않는다. */
+	docId: string,
+	off: LspDocumentOff | null,
+	/**  이 문서를 맡는 인스턴스들(정의 순서 — 결정 M4-D12). 미신뢰 프로젝트면 상태가 `untrusted` 다. */
+	instances: LspInstanceStatus[],
+};
+
+export type LspDocumentRef = {
+	docId: string,
+};
+
 /**  서버에 맡기는 기능의 이름(`features.disable` 의 값). 서버 관리자의 기능 라우팅(결정 M4-D12)이 쓴다. */
 export type LspFeature = "diagnostics" | "hover" | "definition" | "implementation" | "references" | "document_symbol" | "workspace_symbol" | "completion" | "signature_help" | "rename" | "code_action" | "formatting";
+
+/**  인스턴스의 상태. */
+export type LspInstanceState = 
+/**  띄우는 중(`initialize` 를 기다림 · 죽은 뒤 물러남 재기동을 기다림). */
+{ kind: "starting" } | 
+/**  답한다. */
+{ kind: "ready" } | 
+/**  설정 · 정의가 바뀌었다 — 다시 시작해야 새 값이 든다. 서버는 그대로 답한다. */
+{ kind: "restartNeeded" } | 
+/**  런타임 환경이 바뀌었다(`runtime.changed`) — 다시 시작을 권한다. 서버는 그대로 답한다(저절로 다시 띄우지 않는다). */
+{ kind: "restartSuggested" } | 
+/**  3분 안에 5번 죽어 멈췄다 — `lsp.server.restart` 로만 다시 띄운다. */
+{ kind: "crashed" } | 
+/**  사람이 멈췄다(`lsp.server.stop`). */
+{ kind: "stopped" } | 
+/**  프로젝트를 신뢰하지 않아 띄우지 않는다(결정 M4-D8). */
+{ kind: "untrusted" } | 
+/**  실행 파일을 찾지 못했다 — 설치를 제안한다(M4-17). */
+{ kind: "notInstalled"; mason: string | null } | 
+/**  서버를 돌릴 런타임(`requires`)을 찾지 못했다(결정 M4-D6). `tool` 은 `node` · `python` · `java`, `needed` 는 판 범위. */
+{ kind: "runtimeMissing"; tool: string; needed: string } | 
+/**  설정에서 껐다(`[lsp.<id>] enabled = false`). */
+{ kind: "disabled" } | 
+/**  띄우지 못했다(설정 경로가 틀림 · 실행 실패 등 — 까닭). */
+{ kind: "failed"; message: string };
+
+/**  서버 인스턴스 하나 — (프로젝트, 워크트리, 서버, 작업 공간 루트)마다 하나(결정 M4-D11). */
+export type LspInstanceStatus = {
+	/**  서버 id(`[contributes.language_servers.<id>]`). */
+	server: string,
+	/**  작업 공간 루트(실제 경로). */
+	root: string,
+	worktree: string | null,
+	state: LspInstanceState,
+	/**  서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다. */
+	progress: LspProgress | null,
+};
+
+/**  서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`). */
+export type LspProgress = {
+	title: string,
+	message: string | null,
+	/**  0 ~ 100. 서버가 모르면 없다. */
+	percentage: number | null,
+};
 
 /**  해석 결과. */
 export type LspResolution = { kind: "found"; 
@@ -4808,6 +4942,15 @@ export type LspRuntimeRequirement = {
 	runtime: LspServerRuntime,
 	/**  semver 범위(`>=21`). */
 	version: string,
+};
+
+/**  `lsp.server.restart` · `lsp.server.stop` 의 대상 — 상태 이벤트의 인스턴스 하나. */
+export type LspServerControlParams = {
+	projectId: string,
+	worktree?: string | null,
+	server: string,
+	/**  [`LspInstanceStatus::root`] 그대로. */
+	root: string,
 };
 
 export type LspServerInfo = {
@@ -4870,6 +5013,24 @@ export type LspSkipped = {
 	step: LspResolveStep,
 	path: string,
 	reason: string,
+};
+
+/**  [`TOPIC_STATUS`] 의 내용이자 `lsp.status.get` 의 결과. */
+export type LspStatus = {
+	projectId: string,
+	/**  (워크트리, 서버, 루트) 순. */
+	instances: LspInstanceStatus[],
+};
+
+export type LspStatusGetParams = {
+	projectId: string,
+};
+
+/**  바꾸기 하나(UTF-16 범위 — `syntax.edit` 의 `TextChange` 와 같은 꼴). */
+export type LspTextChange = {
+	from: number,
+	to: number,
+	insert: string,
 };
 
 export type MergeLines = {

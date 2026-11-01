@@ -41,6 +41,8 @@ pw-i18n = { path = "../../../crates/pw-i18n" }
 pw-index = { path = "../../../crates/pw-index" }
 pw-lang = { path = "../../../crates/pw-lang" }
 pw-mcp = { path = "../../../crates/pw-mcp" }
+# 언어 서버 관리자 · 문서 동기화(`lsp.document.*` · `lsp.status.*` · `lsp.server.*`, M4-05).
+pw-lsp = { path = "../../../crates/pw-lsp" }
 pw-lsp-servers = { path = "../../../crates/pw-lsp-servers" }
 pw-open-with = { path = "../../../crates/pw-open-with" }
 pw-run = { path = "../../../crates/pw-run" }

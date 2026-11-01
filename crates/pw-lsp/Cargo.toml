@@ -18,15 +18,27 @@ test = false
 # 메시지 타입(15-m4-plan.md 결정 M4-D9). 0.97 부터 URI 가 `fluent_uri` 기반의 `lsp_types::Uri` 다 — 경로에서 만들 때는 `url` 로 퍼센트
 # 인코딩한 뒤 넘긴다(`uri::file_uri`).
 lsp-types = "0.97.0"
-# 프로젝트 레지스트리 · 신뢰 판정 · 실행의 연결 범위(`exec_grant`) · 워크트리 루트.
+# 작업 공간 루트의 `root_markers` 글롭. 판은 pw-ext 와 같다.
+globset = "0.4.20"
+# 프로젝트 레지스트리 · 신뢰 판정 · 실행의 연결 범위(`exec_grant`) · 워크트리 루트 · 버스 · 작업 · 설정.
 pw-core = { path = "../pw-core" }
+# 언어 서버 정의 · 기능 이름 · 런타임 요구(M4-02).
+pw-ext = { path = "../pw-ext" }
+# 편집 등급 기준값(결정 M1-D9 — 5 MiB · 1만 자 줄).
+pw-fs = { path = "../pw-fs" }
+# 해석 · 합친 설정 · 서버 환경(`LspServers::setup` — M4-02).
+pw-lsp-servers = { path = "../pw-lsp-servers" }
 # 서버 로그를 구성요소별 회전 파일로(03 「로그 · 진단」).
 pw-diag = { path = "../pw-diag" }
 pw-rpc = { path = "../pw-rpc" }
 # 서버를 띄울 환경(`RuntimeEnv` — D26).
 pw-runtime = { path = "../pw-runtime" }
+schemars = { workspace = true }
+# 서버 런타임의 판 범위(`requires` — 결정 M4-D6). 판은 pw-ext 와 같다.
+semver = "1.0.28"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = [
   "rt",
   "sync",

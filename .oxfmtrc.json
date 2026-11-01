@@ -22,6 +22,7 @@
     "/crates/pw-lang/linguist/",
     "/crates/pw-syntax/tests/fixtures/",
     "/crates/pw-tools/snapshot/",
-    "/crates/pw-index/tests/fixtures/"
+    "/crates/pw-index/tests/fixtures/",
+    "/crates/pw-lsp/tests/fixtures/"
   ]
 }

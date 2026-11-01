@@ -1,0 +1,5 @@
+{
+  "name": "pw-lsp-fixture",
+  "private": true,
+  "description": "live 시험 픽스처(crates/pw-lsp/tests/fixtures/README.md). 의존이 없다 — 서버에 묶인 typescript 를 쓴다."
+}
