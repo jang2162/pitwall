@@ -48,6 +48,8 @@ run = [
   "node --test scripts/perf-m3.test.mjs",
   # 실 DB 시험 실행 개수 검사(scripts/db-live.mjs)의 판정 — 실 DB 없이 돈다.
   "node --test scripts/db-live.test.mjs",
+  # 실 언어 서버 시험 실행 개수 검사(scripts/lsp-live.mjs)의 판정 · 설정 읽기 — 실 서버 없이 돈다.
+  "node --test scripts/lsp-live.test.mjs",
   # TLS 시험 서버 스크립트(scripts/db-tls.mjs)의 인자 읽기 — 도커 · openssl 없이 돈다.
   "node --test scripts/db-tls.test.mjs",
   # SSH 터널 시험의 sshd 스크립트(scripts/db-ssh.mjs)의 인자 읽기 — 도커 · ssh-keygen 없이 돈다.
@@ -63,6 +65,14 @@ run = [
 [tasks.test-db]
 description = "실 DB 시험(PG · MySQL · MariaDB · Redis · SSH 터널)을 DB 마다 돌리고 실행 개수 하한 검사(URL 이 없는 DB 는 건너뜀)"
 run = "node scripts/db-live.mjs"
+
+# 실 언어 서버 시험(live_lsp_*)을 서버마다 따로 돌리고 실행 개수를 하한(scripts/lsp-live.toml)과 견준다 — CI 의 `lsp-live` 잡과 같은
+# 명령이다(15-m4-plan.md M4-01). 실행 파일 경로(PW_TEST_LSP_RUST_ANALYZER · PW_TEST_LSP_TYPESCRIPT_LANGUAGE_SERVER)가 없는 서버는 건너뛰고
+# 그렇게 알린다 — 통과로 세지 않는다(모두 건너뛰면 종료 코드 3). `--install` 은 lsp-live.toml 의 판 고정 서버를 target/lsp-servers/ 에
+# 받아 쓴다(네트워크). 인자로 서버를 고른다 — 예: `mise run test-lsp -- --install rust_analyzer`.
+[tasks.test-lsp]
+description = "실 언어 서버 시험(rust-analyzer · typescript-language-server)을 서버마다 돌리고 실행 개수 하한 검사(경로가 없는 서버는 건너뜀, --install 로 받기)"
+run = "node scripts/lsp-live.mjs"
 
 # 「release 빌드에서만 판정」하는 시험을 모아 돈다 — 기본 `test` 는 debug 라 시간 상한(검색 취소 100 ms · `fs.list` 1만 개 100 ms ·
 # 구문 강조 16 ms)을 판정하지 않는다. `--run-ignored all` 은 release 전용 `#[ignore]` 시험도 포함한다. 벽시계를 재므로 `-j 1`,

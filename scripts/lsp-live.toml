@@ -1,0 +1,35 @@
+# 실 서버 시험(live_lsp_*)의 실행 개수 하한 · 기대 능력 표 · 서버 받기 고정(15-m4-plan.md M4-01 ⑧, M3 의 scripts/db-live.toml 꼴).
+# `scripts/lsp-live.mjs` 가 [floors] · [download.*] 를, `crates/pw-lsp/tests/live_lsp.rs` 가 [capabilities] 를 읽는다.
+#
+# [floors]: 서버마다 그 필터(`test(/(^|::)live_lsp_<서버>_/)`)가 고른 시험 수의 하한. 0 이어도 필터가 0개를 고르면 실패한다
+#   (`--no-tests=fail`). M4-01 이 두 서버를 1 로 두었고, 기능 행이 자기 live 시험을 더하며 올리고, M4-18 이 서버를 넓히며 값을 정한다.
+# [capabilities]: 서버가 `initialize` 에 알려야 하는 정적 능력 칸(ServerCapabilities 의 키). 알리지 않으면 initialize 시험이 실패한다.
+#   값은 M4-18 이 정한다.
+# 줄을 지우거나 값을 내리는 변경 · 「하한 아래면 실패」 · 「알리지 않은 기대 능력은 실패」 를 지우는 변경은 리뷰에서 거절한다
+# (15 「공유 부품의 주인」).
+
+[floors]
+rust_analyzer = 1
+typescript_language_server = 1
+
+[capabilities]
+rust_analyzer = ["hoverProvider", "definitionProvider", "referencesProvider"]
+typescript_language_server = ["hoverProvider", "definitionProvider", "referencesProvider"]
+
+# 서버를 판 고정으로 직접 받는다(Mason 없이 — M4-04 의 설치기가 이 절을 대신하고, M4-18 이 서버를 넓힌다). 받은 것은
+# target/lsp-servers/<서버>/<판>/ 에 둔다. 해시가 다르면 받은 것을 버리고 실패한다.
+[download.rust_analyzer]
+# GitHub 릴리스 태그. 자산 `rust-analyzer-<대상>.gz` 의 SHA-256(릴리스 API 의 digest).
+version = "2026-10-26"
+aarch64-apple-darwin = "8fb90cb58f5910d8d8b24ac1a93cca49f053365cbf0eb3c682144ad0a0027dcf"
+x86_64-apple-darwin = "b3e4904877bcf7013a4a342c449cff1bf0ea0b91d5a1a30ac8df3d32142519c0"
+aarch64-unknown-linux-gnu = "1b225c4c9ae329ca96e8a75a5bbcb5562a7f1d25c57c8b55d3e02299a3dbe836"
+x86_64-unknown-linux-gnu = "4c83773525f93b636ed79761389568b4d2a89c05fa7ecc440245032d49ad80ce"
+
+[download.typescript_language_server]
+# npm 판과 레지스트리의 `dist.integrity`. 서버가 쓸 `typescript`(tsserver 가 든 JS 판 — 7.x 는 네이티브라 tsserver 가 없다)를 함께 받는다.
+# 설치는 `--ignore-scripts`(설치가 패키지 코드를 돌리지 않게 — 결정 M4-D17).
+version = "6.0.2"
+integrity = "sha512-Ph7Ql+xkUJvMamnkh1h+aKP6HxLR7lrWIYkPn9/LZBkJdJZgtIj7OoVhkDYtQ7zFPTPmqZHOVXaUKGyz9M2q1Q=="
+typescript = "6.0.3"
+typescript-integrity = "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="

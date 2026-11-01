@@ -1,0 +1,63 @@
+[package]
+name = "pw-lsp"
+description = "Pitwall LSP client: stdio framing, JSON-RPC, server lifecycle, the trust-proving launch grant and the fake test server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+# 실 서버 시험 표지(`cfg(pw_live_lsp_<서버>)`)를 환경 변수에서 정한다(15-m4-plan.md M4-01 ⑦) — 머리 주석.
+build = "live_cfg.rs"
+
+# 시험 전용 가짜 언어 서버(15-m4-plan.md M4-01 ⑥). 배포물에 들지 않는다 — 데스크톱 번들은 앱 바이너리만 싣는다.
+[[bin]]
+name = "pw-lsp-fake"
+path = "src/bin/pw-lsp-fake.rs"
+test = false
+
+[dependencies]
+# 메시지 타입(15-m4-plan.md 결정 M4-D9). 0.97 부터 URI 가 `fluent_uri` 기반의 `lsp_types::Uri` 다 — 경로에서 만들 때는 `url` 로 퍼센트
+# 인코딩한 뒤 넘긴다(`uri::file_uri`).
+lsp-types = "0.97.0"
+# 프로젝트 레지스트리 · 신뢰 판정 · 실행의 연결 범위(`exec_grant`) · 워크트리 루트.
+pw-core = { path = "../pw-core" }
+# 서버 로그를 구성요소별 회전 파일로(03 「로그 · 진단」).
+pw-diag = { path = "../pw-diag" }
+pw-rpc = { path = "../pw-rpc" }
+# 서버를 띄울 환경(`RuntimeEnv` — D26).
+pw-runtime = { path = "../pw-runtime" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
+  "rt",
+  "sync",
+  "macros",
+  "time",
+  "process",
+  "io-util",
+  # 가짜 서버(src/bin/pw-lsp-fake.rs)의 stdin · stdout.
+  "io-std",
+] }
+# 요청 하나의 취소 토큰.
+tokio-util = { workspace = true }
+tracing = "0.1.44"
+# 경로 → `file://` URI(퍼센트 인코딩 · Windows 드라이브 문자). 판은 Cargo.lock 에 이미 있는 것과 같다.
+url = "2.5.8"
+
+[target.'cfg(unix)'.dependencies]
+# 서버를 자기 프로세스 그룹으로 띄우고 그룹째 끝낸다(`killpg`). 판은 pw-runtime · pw-git 과 같다.
+libc = "0.2.190"
+
+[target.'cfg(windows)'.dependencies]
+# 서버를 Job Object 에 넣어 끝낼 때 프로세스 트리째 끝내고, 콘솔 창 없이 띄운다. 판은 pw-git 과 같다.
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "io-util"] }
+# 실 서버 시험이 기대 능력 표(scripts/lsp-live.toml)를 읽는다. 판은 Cargo.lock 에 이미 있는 것과 같다.
+toml = "1.1.8"

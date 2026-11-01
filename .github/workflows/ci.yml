@@ -283,6 +283,70 @@ jobs:
         if: ${{ !cancelled() }}
         run: mise run test-db -- --ci ssh_tunnel
 
+  # 실 언어 서버 시험(15-m4-plan.md M4-01 틀 · M4-18 이 서버를 넓힌다). 서버마다 단계 하나 — scripts/lsp-live.mjs 가 scripts/lsp-live.toml
+  # 의 판 고정 서버를 받아(`--install` — 해시 · integrity 확인, M4-04 의 설치기가 대신할 때까지) 그 서버의 live 시험(`live_lsp_<서버>_`)만
+  # 돌리고, 필터가 0개를 고르거나 실행 개수가 하한([floors]) 아래면 실패한다. 서버가 기대 능력([capabilities])을 알리지 않으면 시험이
+  # 실패한다. 「하한 아래면 실패」 · 「알리지 않은 기대 능력은 실패」 를 지우는 변경은 리뷰에서 거절한다(15 「공유 부품의 주인」). 병합을
+  # 막으려면 저장소 설정에서 필수 검사로 둔다(사람이 한다). ubuntu 는 서버를 돌릴 런타임(python · JDK 21 — M4-18 의 basedpyright ·
+  # jdtls · kotlin-lsp)도 깔고, macOS 는 rust-analyzer · typescript-language-server 두 서버만 돈다.
+  lsp-live:
+    name: lsp-live (${{ matrix.os }})
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      # mise run 은 기본으로 mise.toml 의 빠진 도구를 전부 설치한다. 아래 install_args 로 고른 것만 쓰게 끈다.
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      NEXTEST_PROFILE: ci
+      # 받은 서버 설치본(scripts/lsp-live.mjs). 아래 캐시가 덮는다 — 키는 고정 판이 적힌 lsp-live.toml(M4-03 의 registry 판으로 바뀐다).
+      PW_LSP_SERVERS_DIR: ${{ github.workspace }}/.lsp-servers
+      # 서버를 돌리는 런타임의 판(ubuntu 만). 프로젝트가 쓰는 런타임과 따로다(결정 M4-D6).
+      LSP_LIVE_PYTHON: "3.13.18"
+      LSP_LIVE_JAVA: temurin-21.0.13+9.0.LTS
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          # 스크립트(node) · 빌드(rust) · 시험(nextest) · TS 서버 받기(pnpm)만 쓴다. 저장소의 pnpm 의존성은 설치하지 않는다.
+          install_args: node rust aqua:nextest-rs/nextest/cargo-nextest npm:pnpm
+
+      # rust-toolchain.toml 의 components(rust-src — rust-analyzer 가 표준 라이브러리 소스를 읽는다)를 깐다. 까닭은 check 잡의 같은 단계.
+      - name: Rust toolchain components
+        shell: bash
+        run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
+
+      # 서버를 돌리는 런타임(M4-18 이 쓴다). mise 로 받아 PATH 에 올린다 — 저장소의 mise.toml 은 바꾸지 않는다(개발자 기기에 JDK ·
+      # python 을 깔지 않게).
+      - name: server runtimes (python · JDK 21)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mise install "python@$LSP_LIVE_PYTHON" "java@$LSP_LIVE_JAVA"
+          echo "$(mise where "java@$LSP_LIVE_JAVA")/bin" >> "$GITHUB_PATH"
+          echo "$(mise where "python@$LSP_LIVE_PYTHON")/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.PW_LSP_SERVERS_DIR }}
+          key: lsp-servers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/lsp-live.toml') }}
+
+      # `--ci`: 서버 경로가 없으면 건너뛰지 않고 실패한다. 단계마다 고른 · 돈 시험 수와 하한을 출력한다. 한 서버가 실패해도 나머지 서버의
+      # 단계는 돈다(`!cancelled()`) — 판정은 서버마다 따로다.
+      - name: live rust_analyzer
+        if: ${{ !cancelled() }}
+        run: mise run test-lsp -- --ci --install rust_analyzer
+      - name: live typescript_language_server
+        if: ${{ !cancelled() }}
+        run: mise run test-lsp -- --ci --install typescript_language_server
+
   advisories:
     name: advisories
     runs-on: ubuntu-latest

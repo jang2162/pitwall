@@ -1,4 +1,6 @@
 # mise.toml 의 rust 버전과 같은 값이어야 한다. 올릴 때 둘을 함께 고친다.
 [toolchain]
 channel = "1.99.0"
-components = ["rustfmt", "clippy"]
+# rust-src: rust-analyzer 가 표준 라이브러리 소스를 읽는다(15-m4-plan.md M4-01 — 정의로 이동이 std 로 간다, M4-08 의 live 시험). CI ·
+# 로컬이 같은 파일을 쓴다. rust-analyzer 자체는 컴포넌트가 아니라 설치기로 받는다(서버 판을 registry 고정과 맞춘다 — M4-04).
+components = ["rustfmt", "clippy", "rust-src"]

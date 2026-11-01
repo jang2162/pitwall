@@ -22,6 +22,8 @@ pw-i18n = { path = "../pw-i18n" }
 # 심볼 인덱스(15-m4-plan.md M4-15): `index.*`.
 pw-index = { path = "../pw-index" }
 pw-lang = { path = "../pw-lang" }
+# LSP(15-m4-plan.md M4-01). 이 행의 RPC 는 아직 없다 — M4-05 이후 행이 선언을 더할 때 겹치지 않게 미리 둔다.
+pw-lsp = { path = "../pw-lsp" }
 pw-lsp-servers = { path = "../pw-lsp-servers" }
 pw-open-with = { path = "../pw-open-with" }
 pw-rpc = { path = "../pw-rpc" }
