@@ -77,6 +77,9 @@ fn resolution_follows_settings_project_local_path_installed_then_not_installed()
     let name = "typescript-language-server";
     let configured = executable(&tmp.path().join("opt/ts-ls"), "true");
     let local = executable(&root.join("node_modules/.bin").join(name), "true");
+    let nearest = executable(&sub.join("node_modules/.bin").join(name), "true");
+    // 프로젝트 루트 밖(위)의 것은 프로젝트 로컬이 아니다.
+    executable(&tmp.path().join("node_modules/.bin").join(name), "true");
     let on_path = executable(&tmp.path().join("path bin").join(name), "true");
     let installed = tmp.path().join("tools/bin").join(name);
     let ts = def(name);
@@ -109,7 +112,12 @@ fn resolution_follows_settings_project_local_path_installed_then_not_installed()
         found(resolve::resolve(&ts, &config, &ctx(true))),
         (configured.clone(), LspResolveStep::Settings, None)
     );
-    // 2. 프로젝트 로컬 — 해석하는 디렉터리(packages/web)에서 프로젝트 루트까지 올라가며 찾는다.
+    // 2. 프로젝트 로컬 — 해석하는 디렉터리(packages/web)에서 프로젝트 루트까지 올라가며 가장 가까운 것.
+    assert_eq!(
+        found(resolve::resolve(&ts, &defaults, &ctx(true))),
+        (nearest.clone(), LspResolveStep::ProjectLocal, None)
+    );
+    fs::remove_file(&nearest).unwrap();
     assert_eq!(
         found(resolve::resolve(&ts, &defaults, &ctx(true))),
         (local.clone(), LspResolveStep::ProjectLocal, None)
