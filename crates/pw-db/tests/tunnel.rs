@@ -227,41 +227,6 @@ async fn session_event(events: &mut Subscription, want: impl Fn(&Value) -> bool)
     }
 }
 
-/// 세션마다 첫 `db.sessionChanged` 를 기다려 `ids` 순서로 돌려준다. 세션들의 이벤트가 오는 순서는 정해져 있지 않다(터널 끊김은
-/// 세션마다 따로 도는 감시 태스크가 알린다). 그래서 한 번 훑으며 모두 모은다 — [`session_event`] 로 하나씩 기다리면 앞 세션을
-/// 기다리며 버린 이벤트에 뒤 세션의 것이 섞여 그것을 놓친다.
-async fn session_events_of(events: &mut Subscription, ids: &[&str]) -> Vec<Value> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let mut found: Vec<Option<Value>> = vec![None; ids.len()];
-    loop {
-        if found.iter().all(Option::is_some) {
-            return found.into_iter().flatten().collect();
-        }
-        let missing: Vec<&str> = ids
-            .iter()
-            .zip(&found)
-            .filter(|(_, f)| f.is_none())
-            .map(|(id, _)| *id)
-            .collect();
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no db.sessionChanged for {missing:?}"
-        );
-        while let Some(received) = events.try_recv() {
-            if let Received::Event(event) = received
-                && event.topic == "db.sessionChanged"
-                && let Some(i) = ids
-                    .iter()
-                    .position(|id| event.payload["session"]["sessionId"] == *id)
-                && found[i].is_none()
-            {
-                found[i] = Some(event.payload.clone());
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
 // --- 세션이 리스를 쥐고 놓는다 · 끊김(가짜 터널, 모든 OS) -----------------------------------------------------------------
 
 #[tokio::test]
@@ -892,6 +857,41 @@ mod live {
             Arc::new(FixedEnv(f.env())),
             Tunnels::new(),
         ))
+    }
+
+    /// 세션마다 첫 `db.sessionChanged` 를 기다려 `ids` 순서로 돌려준다. 세션들의 이벤트가 오는 순서는 정해져 있지 않다(터널 끊김은
+    /// 세션마다 따로 도는 감시 태스크가 알린다). 그래서 한 번 훑으며 모두 모은다 — [`session_event`] 로 하나씩 기다리면 앞 세션을
+    /// 기다리며 버린 이벤트에 뒤 세션의 것이 섞여 그것을 놓친다.
+    async fn session_events_of(events: &mut Subscription, ids: &[&str]) -> Vec<Value> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut found: Vec<Option<Value>> = vec![None; ids.len()];
+        loop {
+            if found.iter().all(Option::is_some) {
+                return found.into_iter().flatten().collect();
+            }
+            let missing: Vec<&str> = ids
+                .iter()
+                .zip(&found)
+                .filter(|(_, f)| f.is_none())
+                .map(|(id, _)| *id)
+                .collect();
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no db.sessionChanged for {missing:?}"
+            );
+            while let Some(received) = events.try_recv() {
+                if let Received::Event(event) = received
+                    && event.topic == "db.sessionChanged"
+                    && let Some(i) = ids
+                        .iter()
+                        .position(|id| event.payload["session"]["sessionId"] == *id)
+                    && found[i].is_none()
+                {
+                    found[i] = Some(event.payload.clone());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     /// ⑥ ssh 를 `kill -9` 하면 그 터널을 쓰는 세션이 「끊김」 이벤트를 받는다.
