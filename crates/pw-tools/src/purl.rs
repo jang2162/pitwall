@@ -216,6 +216,16 @@ mod tests {
                 qualifiers: &[],
                 subpath: None,
             },
+            // 인코딩하지 않은 npm 스코프 — `@` 가 둘이라 판은 마지막 `@` 뒤다.
+            Case {
+                input: "pkg:npm/@vue/language-server@3.1.0",
+                kind: "npm",
+                namespace: Some("@vue"),
+                name: "language-server",
+                version: Some("3.1.0"),
+                qualifiers: &[],
+                subpath: None,
+            },
             // 네임스페이스 없음.
             Case {
                 input: "pkg:pypi/basedpyright@1.40.2",
