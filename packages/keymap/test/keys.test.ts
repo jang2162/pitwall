@@ -29,7 +29,23 @@ describe("parseKeySequence", () => {
     expect(chord.kind === "strokes" && chord.strokes.map((s) => s.code)).toEqual(["KeyK", "KeyS"]);
   });
 
+  it("reads a double tap held for a key (the multi-cursor ⌥⌥ ↓)", () => {
+    expect(parseKeySequence("alt alt+down")).toEqual({
+      kind: "doubleHold",
+      modifier: "alt",
+      stroke: { cmd: false, ctrl: false, alt: true, shift: false, code: "ArrowDown" },
+    });
+    expect(parseKeySequence("Ctrl Ctrl+Up")).toMatchObject({
+      kind: "doubleHold",
+      modifier: "ctrl",
+      stroke: { ctrl: true, code: "ArrowUp" },
+    });
+  });
+
   it.each([
+    ["alt down", "그 수정 키를 함께"],
+    ["alt ctrl+down", "그 수정 키를 함께"],
+    ["alt alt+shift", "수정 키만"],
     ["", "비어 있다"],
     ["cmd+", "빈 자리"],
     ["cmd+shift", "수정 키만"],
@@ -51,6 +67,21 @@ describe("parseKeySequence", () => {
     );
     expect(sameSequence(parseKeySequence("cmd+a"), parseKeySequence("cmd+shift+a"))).toBe(false);
     expect(sameSequence(parseKeySequence("shift shift"), parseKeySequence("alt alt"))).toBe(false);
+    const hold = parseKeySequence("alt alt+down");
+    expect(sameSequence(hold, parseKeySequence("option option+Down"))).toBe(true);
+    expect(sameSequence(hold, parseKeySequence("alt alt+up"))).toBe(false);
+    expect(sameSequence(hold, parseKeySequence("ctrl ctrl+down"))).toBe(false);
+    expect(sameSequence(hold, parseKeySequence("alt+down"))).toBe(false);
+    expect(sameSequence(hold, parseKeySequence("alt alt"))).toBe(false);
+  });
+
+  it("labels a held double tap and leaves it off the menu", () => {
+    const hold = parseKeySequence("alt alt+down");
+    expect(formatSequence(hold, "mac")).toBe("⌥⌥↓");
+    expect(formatSequence(parseKeySequence("ctrl ctrl+up"), "win")).toBe("Ctrl Ctrl+↑");
+    expect(formatSequence(parseKeySequence("ctrl ctrl+up"), "linux")).toBe("Ctrl Ctrl+↑");
+    expect(toAccelerator(hold)).toBeUndefined();
+    expect(reservedReason(hold, "mac")).toBeUndefined();
   });
 });
 

@@ -243,6 +243,134 @@ key = "shift shift"
   });
 });
 
+// 더블 탭 후 누른 채(멀티 커서의 ⌥⌥ 누른 채 ↑ ↓, 10-ui §4.2 「멀티 커서」 · 15-m4-plan M4-14). 한도는 setup 의 doubleTapMs 300.
+describe("KeymapEngine — double tap and hold", () => {
+  const bindings = keymap(`
+[[bindings]]
+action = "editor.addCursorBelow"
+key = "alt alt+down"
+[[bindings]]
+action = "editor.addCursorAbove"
+key = "alt alt+up"
+[[bindings]]
+action = "editor.shrinkSelection"
+key = "alt+down"
+[[bindings]]
+action = "alt.double"
+key = "alt alt"
+`);
+  const altDown = (rest: Partial<KeyEventLike> = {}) => key("AltLeft", { altKey: true }, rest);
+  const altUp = () => key("AltLeft");
+  const arrow = (code: string, rest: Partial<KeyEventLike> = {}) =>
+    key(code, { altKey: true }, rest);
+
+  /** 첫 탭(누름 `press` ms) → 간격 `gap` ms → 두 번째 누름(누른 채). */
+  function holdAlt(t: ReturnType<typeof setup>, press = 50, gap = 100) {
+    t.engine.keydown(altDown());
+    t.tick(press);
+    t.engine.keyup(altUp());
+    t.tick(gap);
+    t.engine.keydown(altDown());
+  }
+
+  it("runs the held key while the second press is held, as many times as pressed", () => {
+    const t = setup(bindings);
+    holdAlt(t);
+    for (let i = 0; i < 3; i++) {
+      t.tick(500); // 누르고 있는 길이에는 한도가 없다
+      expect(t.engine.keydown(arrow("ArrowDown"))).toEqual({
+        handled: true,
+        action: "editor.addCursorBelow",
+      });
+    }
+    expect(t.engine.keydown(arrow("ArrowUp")).action).toBe("editor.addCursorAbove");
+    expect(t.ran).toEqual([
+      "editor.addCursorBelow",
+      "editor.addCursorBelow",
+      "editor.addCursorBelow",
+      "editor.addCursorAbove",
+    ]);
+  });
+
+  it("ends when the modifier goes up: the next arrow is the plain key", () => {
+    const t = setup(bindings);
+    holdAlt(t);
+    t.engine.keydown(arrow("ArrowDown"));
+    // 뗌은 더블 탭(alt alt)이 아니다 — 누른 채 친 키가 이미 실행됐다.
+    expect(t.engine.keyup(altUp()).handled).toBe(false);
+    // ⌥ 없이 ↓ 는 아무 바인딩도 아니다(에디터의 보통 이동).
+    expect(t.engine.keydown(key("ArrowDown")).handled).toBe(false);
+    // ⌥ 를 한 번만 누른 ↓ 는 보통 바인딩 alt+down 이다.
+    t.engine.keydown(altDown());
+    expect(t.engine.keydown(arrow("ArrowDown")).action).toBe("editor.shrinkSelection");
+    expect(t.ran).toEqual(["editor.addCursorBelow", "editor.shrinkSelection"]);
+  });
+
+  it("accepts a first press and a gap of exactly the limit, and not one millisecond more", () => {
+    const at = (press: number, gap: number) => {
+      const t = setup(bindings);
+      holdAlt(t, press, gap);
+      return t.engine.keydown(arrow("ArrowDown")).action;
+    };
+    expect(at(300, 100)).toBe("editor.addCursorBelow");
+    expect(at(301, 100)).toBe("editor.shrinkSelection");
+    expect(at(50, 300)).toBe("editor.addCursorBelow");
+    expect(at(50, 301)).toBe("editor.shrinkSelection");
+  });
+
+  it("is not a hold with a single press, or after another key broke the taps", () => {
+    const single = setup(bindings);
+    single.engine.keydown(altDown());
+    single.tick(1000);
+    expect(single.engine.keydown(arrow("ArrowDown")).action).toBe("editor.shrinkSelection");
+
+    const broken = setup(bindings);
+    broken.engine.keydown(altDown());
+    broken.tick(30);
+    broken.engine.keyup(altUp());
+    broken.engine.keydown(key("KeyX"));
+    broken.tick(30);
+    broken.engine.keydown(altDown());
+    expect(broken.engine.keydown(arrow("ArrowDown")).action).toBe("editor.shrinkSelection");
+  });
+
+  it("still runs the plain double tap when no key was pressed while holding", () => {
+    const t = setup(bindings);
+    holdAlt(t);
+    t.tick(50);
+    expect(t.engine.keyup(altUp())).toEqual({ handled: true, action: "alt.double" });
+  });
+
+  it("repeats a held key only when the action allows it", () => {
+    const allowed = setup(bindings, { repeatable: ["editor.addCursorBelow"] });
+    holdAlt(allowed);
+    allowed.engine.keydown(arrow("ArrowDown"));
+    expect(allowed.engine.keydown(arrow("ArrowDown", { repeat: true })).action).toBe(
+      "editor.addCursorBelow",
+    );
+    expect(allowed.ran).toHaveLength(2);
+
+    const denied = setup(bindings);
+    holdAlt(denied);
+    denied.engine.keydown(arrow("ArrowDown"));
+    expect(denied.engine.keydown(arrow("ArrowDown", { repeat: true }))).toEqual({ handled: true });
+    expect(denied.ran).toHaveLength(1);
+  });
+
+  it("is seen by peek without changing the hold", () => {
+    const t = setup(bindings);
+    holdAlt(t);
+    expect(t.engine.peek(arrow("ArrowDown"))).toBe(true);
+    expect(t.engine.keydown(arrow("ArrowDown")).action).toBe("editor.addCursorBelow");
+  });
+
+  it("skips a disabled hold binding and falls back to the plain key", () => {
+    const t = setup(bindings, { disabled: ["editor.addCursorBelow"] });
+    holdAlt(t);
+    expect(t.engine.keydown(arrow("ArrowDown")).action).toBe("editor.shrinkSelection");
+  });
+});
+
 describe("KeymapEngine — when and priority", () => {
   const bindings = keymap(`
 [[bindings]]

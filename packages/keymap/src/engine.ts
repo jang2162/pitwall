@@ -17,6 +17,10 @@
 //   양보한다 — 둘이 같은 거르기를 거치므로 「터미널이 양보했는데 창도 안 받는」 키가 없다.
 // - 더블 탭: 수정 키만 눌렀다 떼기를 두 번. 첫 뗌부터 두 번째 누름까지, 그리고 각 누름의 길이가 `doubleTapMs` 이내여야
 //   한다. 두 번째 뗌에서 실행한다 — 두 번째 누름 채로 다른 키를 치면(Shift 로 대문자) 탭이 아니다.
+// - 더블 탭 후 누른 채(`doubleHold`, 멀티 커서의 `⌥⌥` 누른 채 `↑` `↓`): 첫 탭과 간격은 더블 탭과 같은 한도이고, 두 번째 누름을
+//   누르고 있는 동안 친 키가 그 바인딩과 맞으면 실행한다. 누르고 있는 길이에는 한도가 없고, 누른 채 몇 번이든 친다(반복 keydown
+//   은 액션이 허락할 때). 그 수정 키를 떼면 끝난다 — 그다음 같은 키는 보통 키(`⌥↓`)로 맞춘다. 누른 채 친 키가 실행됐으면 뗌은
+//   더블 탭(`"alt alt"`)으로 실행하지 않는다. 같은 누름의 보통 바인딩(`alt+down`)보다 먼저 본다.
 
 import {
   type KeySequence,
@@ -78,7 +82,16 @@ interface Tap {
   downAt: number;
   upAt?: number;
   second: boolean;
+  /** 두 번째 누름을 누른 채 친 키가 `doubleHold` 바인딩을 실행했다. 뗌은 더블 탭이 아니다. */
+  held?: boolean;
 }
+
+const MODIFIER_FLAGS: Record<Modifier, "metaKey" | "ctrlKey" | "altKey" | "shiftKey"> = {
+  cmd: "metaKey",
+  ctrl: "ctrlKey",
+  alt: "altKey",
+  shift: "shiftKey",
+};
 
 export function isComposingEvent(e: KeyEventLike): boolean {
   if (e.isComposing === true) return true;
@@ -116,12 +129,19 @@ export class KeymapEngine {
       this.modifierDown(modifier, e);
       return NOT_HANDLED;
     }
-    this.tap = undefined;
     const stroke = strokeFromEvent(e);
+    const repeat = e.repeat === true;
+    const hold = stroke && this.holdBinding(e, stroke);
+    if (hold) {
+      this.tap!.held = true;
+      this.pending = undefined;
+      if (repeat && !this.options.allowsRepeat?.(hold.action)) return { handled: true };
+      return this.run(hold);
+    }
+    this.tap = undefined;
     if (!stroke) return NOT_HANDLED;
 
     const now = this.now();
-    const repeat = e.repeat === true;
     if (this.pending && now - this.pending.at <= this.chordTimeoutMs) {
       const outcome = this.match([...this.pending.strokes, stroke], now, repeat);
       if (outcome.handled) return outcome;
@@ -138,6 +158,7 @@ export class KeymapEngine {
     if (isComposingEvent(e) || MODIFIER_CODES[e.code]) return false;
     const stroke = strokeFromEvent(e);
     if (!stroke) return false;
+    if (this.holdBinding(e, stroke)) return true;
     const layers = this.options.context();
     if (this.pending && this.now() - this.pending.at <= this.chordTimeoutMs) {
       const found = this.find([...this.pending.strokes, stroke], layers);
@@ -151,6 +172,10 @@ export class KeymapEngine {
     const modifier = MODIFIER_CODES[e.code];
     const tap = this.tap;
     if (!modifier || !tap || tap.modifier !== modifier || isComposingEvent(e)) return NOT_HANDLED;
+    if (tap.held) {
+      this.tap = undefined;
+      return NOT_HANDLED;
+    }
     const now = this.now();
     if (now - tap.downAt > this.doubleTapMs) {
       this.tap = undefined;
@@ -165,6 +190,19 @@ export class KeymapEngine {
       (b) => b.sequence.kind === "double" && b.sequence.modifier === modifier,
     );
     return binding ? this.run(binding) : NOT_HANDLED;
+  }
+
+  /** 더블 탭의 두 번째 누름을 누르고 있는 중에 친 `stroke` 와 맞는 살아 있는 `doubleHold` 바인딩. */
+  private holdBinding(e: KeyEventLike, stroke: Stroke): Binding | undefined {
+    const tap = this.tap;
+    if (!tap?.second || !e[MODIFIER_FLAGS[tap.modifier]]) return undefined;
+    const key = strokeKey(stroke);
+    return this.pick(
+      (b) =>
+        b.sequence.kind === "doubleHold" &&
+        b.sequence.modifier === tap.modifier &&
+        strokeKey(b.sequence.stroke) === key,
+    );
   }
 
   private modifierDown(modifier: Modifier, e: KeyEventLike) {

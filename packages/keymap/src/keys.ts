@@ -22,11 +22,13 @@ export interface Stroke {
  * 단축키 하나.
  * - `strokes`: 한 번 누르기(길이 1) 또는 연속 키(chord, `"cmd+k cmd+s"`, 길이 2 이상).
  * - `double`: 수정 키 더블 탭(`"shift shift"`). 수정 키만 된다 — 글자 키 두 번은 타이핑과 구별되지 않는다.
- *   설계의 「`⌥⌥` 누른 채 방향키」(멀티 커서)는 아직 받지 않는다 — 그 기능이 생길 때 형식을 더한다.
+ * - `doubleHold`: 수정 키를 더블 탭하고 두 번째 누름을 누른 채 키를 친다(`"alt alt+down"` — 멀티 커서의 `⌥⌥` 누른 채 `↓`).
+ *   `stroke` 는 그 키를 칠 때의 누름이라 누른 채인 수정 키가 들어 있다. 수정 키를 떼면 끝난다 — 그다음 `⌥↓` 는 보통 키다.
  */
 export type KeySequence =
   | { readonly kind: "strokes"; readonly strokes: readonly Stroke[] }
-  | { readonly kind: "double"; readonly modifier: Modifier };
+  | { readonly kind: "double"; readonly modifier: Modifier }
+  | { readonly kind: "doubleHold"; readonly modifier: Modifier; readonly stroke: Stroke };
 
 const MODIFIER_ALIASES: Record<string, Modifier> = {
   cmd: "cmd",
@@ -136,7 +138,9 @@ function parseStroke(text: string, token: string): Stroke {
   return { ...mods, code };
 }
 
-/** `"cmd+shift+a"`, `"shift shift"`, `"cmd+k cmd+s"` 를 읽는다. 대소문자는 가리지 않는다. 틀리면 `KeyParseError`. */
+/**
+ * `"cmd+shift+a"`, `"shift shift"`, `"alt alt+down"`, `"cmd+k cmd+s"` 를 읽는다. 대소문자는 가리지 않는다. 틀리면 `KeyParseError`.
+ */
 export function parseKeySequence(text: string): KeySequence {
   const tokens = text.trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) throw new KeyParseError(text, "비어 있다");
@@ -145,7 +149,18 @@ export function parseKeySequence(text: string): KeySequence {
     if (tokens.length === 2 && lone[0] && lone[0] === lone[1]) {
       return { kind: "double", modifier: lone[0] };
     }
-    throw new KeyParseError(text, "수정 키만 누르는 것은 같은 수정 키 두 번(더블 탭)만 된다");
+    if (tokens.length === 2 && lone[0] && !lone[1]) {
+      const stroke = parseStroke(text, tokens[1]!);
+      if (stroke[lone[0]]) return { kind: "doubleHold", modifier: lone[0], stroke };
+      throw new KeyParseError(
+        text,
+        `더블 탭 후 누른 채 치는 키에는 그 수정 키를 함께 적는다: "${tokens[0]} ${tokens[0]}+…"`,
+      );
+    }
+    throw new KeyParseError(
+      text,
+      "수정 키만 누르는 것은 같은 수정 키 두 번(더블 탭)이나 더블 탭 후 누른 채 치는 키(`alt alt+down`)만 된다",
+    );
   }
   return { kind: "strokes", strokes: tokens.map((t) => parseStroke(text, t)) };
 }
@@ -158,6 +173,14 @@ export function strokeKey(s: Stroke): string {
 export function sameSequence(a: KeySequence, b: KeySequence): boolean {
   if (a.kind === "double" || b.kind === "double") {
     return a.kind === "double" && b.kind === "double" && a.modifier === b.modifier;
+  }
+  if (a.kind === "doubleHold" || b.kind === "doubleHold") {
+    return (
+      a.kind === "doubleHold" &&
+      b.kind === "doubleHold" &&
+      a.modifier === b.modifier &&
+      strokeKey(a.stroke) === strokeKey(b.stroke)
+    );
   }
   return (
     a.strokes.length === b.strokes.length &&
@@ -256,13 +279,21 @@ function strokeLabel(s: Stroke, platform: Platform, layout?: LayoutMap): string 
   return [...mods.map((m) => otherModifierName(m, platform)), key].join("+");
 }
 
-/** 사람에게 보이는 라벨. macOS 는 `⌘⇧A`, 그 밖은 `Ctrl+Shift+A`. 연속 키는 `, ` 로 잇는다(IntelliJ 표기). */
+/**
+ * 사람에게 보이는 라벨. macOS 는 `⌘⇧A`, 그 밖은 `Ctrl+Shift+A`. 연속 키는 `, ` 로 잇는다(IntelliJ 표기). 더블 탭 후 누른 채는
+ * 더블 탭 라벨에 그 누름을 붙인다 — macOS `⌥⌥↓`(앞의 ⌥ 는 첫 탭, `⌥↓` 는 누른 채 친 키), 그 밖 `Ctrl Ctrl+↓`.
+ */
 export function formatSequence(seq: KeySequence, platform: Platform, layout?: LayoutMap): string {
   if (seq.kind === "double") {
     if (platform === "mac")
       return MAC_MODIFIER_LABELS.find(([m]) => m === seq.modifier)![1].repeat(2);
     const name = otherModifierName(seq.modifier, platform);
     return `${name} ${name}`;
+  }
+  if (seq.kind === "doubleHold") {
+    const held = strokeLabel(seq.stroke, platform, layout);
+    if (platform === "mac") return MAC_MODIFIER_LABELS.find(([m]) => m === seq.modifier)![1] + held;
+    return `${otherModifierName(seq.modifier, platform)} ${held}`;
   }
   return seq.strokes.map((s) => strokeLabel(s, platform, layout)).join(", ");
 }
@@ -276,12 +307,13 @@ const MISSING_CODES: Record<Platform, ReadonlySet<string>> = {
 
 /** 그 OS 에서 누를 수 없는 키가 들었으면 그 키의 `code`. 아니면 `undefined`. */
 export function missingKey(seq: KeySequence, platform: Platform): string | undefined {
-  if (seq.kind !== "strokes") return undefined;
-  return seq.strokes.find((s) => MISSING_CODES[platform].has(s.code))?.code;
+  if (seq.kind === "double") return undefined;
+  const strokes = seq.kind === "doubleHold" ? [seq.stroke] : seq.strokes;
+  return strokes.find((s) => MISSING_CODES[platform].has(s.code))?.code;
 }
 
 /**
- * Tauri(muda) 메뉴 accelerator 문자열. 한 번 누르기만 된다 — 연속 키 · 더블 탭은 메뉴가 표현하지 못해 `undefined`.
+ * Tauri(muda) 메뉴 accelerator 문자열. 한 번 누르기만 된다 — 연속 키 · 더블 탭(누른 채 포함)은 메뉴가 표현하지 못해 `undefined`.
  * `platform` 을 주면 그 OS 에 없는 키(`missingKey`)도 `undefined` 다.
  * 키 이름은 `code` 를 그대로 쓴다(muda 가 `KeyA` · `Digit1` · `Comma` 를 받는다). `cmd` 는 `Super` 다 — macOS 에서 ⌘,
  * 그 밖에서 Win 키다. `CmdOrCtrl` 는 쓰지 않는다 — OS별 차이는 키맵 파일이 이미 갈라 두었다.
