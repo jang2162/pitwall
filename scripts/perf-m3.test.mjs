@@ -12,6 +12,7 @@ import {
   parseLoad,
   pgSeed,
   redisSeed,
+  reportCopies,
 } from "./perf-m3.mjs";
 
 test("the load average is read from sysctl", () => {
@@ -83,4 +84,25 @@ test("the PG seed makes rows shaped like the fake driver's", () => {
   assert.match(sql, /'r' \|\| i \|\| 'c9' AS c9/);
   assert.doesNotMatch(sql, /c10/);
   assert.match(sql, /CREATE VIEW perf_stream/);
+});
+
+test("nothing tracked is written while measuring; reports are copied at the end", () => {
+  const pairs = reportCopies({
+    date: "2026-11-01",
+    stamp: "120000",
+    suffix: "",
+    kinds: ["db-fake", "db-pg"],
+  });
+  assert.equal(pairs.length, 1 + 2 * 2);
+  for (const [src, dst] of pairs) {
+    assert.ok(src.startsWith("target/perf/"), src);
+    assert.ok(dst.startsWith("docs/superpowers/reports/2026-11-01-m3-perf-"), dst);
+  }
+  assert.deepEqual(pairs[0], [
+    "target/perf/m3-conditions-2026-11-01-120000.json",
+    "docs/superpowers/reports/2026-11-01-m3-perf-conditions-120000.json",
+  ]);
+  assert.ok(pairs.some(([src]) => src === "target/perf/m3-db-pg-2026-11-01-120000/summary.md"));
+  const short = reportCopies({ date: "d", stamp: "s", suffix: "-short", kinds: ["db-pg"] });
+  assert.equal(short[2][1], "docs/superpowers/reports/d-m3-perf-db-pg-short-s.summary.md");
 });

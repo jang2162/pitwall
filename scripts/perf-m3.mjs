@@ -12,8 +12,10 @@
 //   ③ pw-perf 를 차례로: `empty-default` · `empty-fake`(빈 프로젝트의 콜드 스타트 · 유휴 메모리 — 두 번들의 차이가 잡음 안인지),
 //      `db-idle`(기본 번들, PG 연결 하나를 연 프로젝트), `db-fake`(가짜 번들 — 그리드 · 탐색기는 가짜 postgres, Redis 는 ①의
 //      서버), `db-pg`(기본 번들 — 그리드를 ①의 PG 로).
-//   ④ 단계마다 `result.json` · `summary.md` 를 `docs/superpowers/reports/<날짜>-m3-perf-<종류>[-short]-<시각>.json|.summary.md` 로
-//      복사하고, 조건(커밋 · 단계별 load average 와 기다린 시간 · 화면과 주사율)을 `…-m3-perf-conditions[-short]-<시각>.json` 에 남긴다.
+//   ④ 끝나면(실패해도) 끝난 단계마다 `result.json` · `summary.md` 를
+//      `docs/superpowers/reports/<날짜>-m3-perf-<종류>[-short]-<시각>.json|.summary.md` 로 복사하고, 조건(커밋 · 단계별 load
+//      average 와 기다린 시간 · 화면과 주사율)을 `…-m3-perf-conditions[-short]-<시각>.json` 에 남긴다. 측정 도중에는 `target/perf/`
+//      에만 쓴다 — 추적되는 경로에 쓰면 다음 단계의 `commit.dirty` 가 true 가 된다(`reportCopies`).
 //
 // `--only empty-default,db-fake` 처럼 측정 단계를 고른다(번들 둘은 늘 만들고 견준다 — 실패한 단계만 다시 잴 때).
 // `--short` 는 측정 단계마다 `--runs 1 --warmup 0`(끝까지 도는지만 본다 — 파일 이름에 `-short`). 단계를 시작하기 직전마다 화면
@@ -33,7 +35,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { PG_IMAGE, REDIS_IMAGE } from "./db-tls.mjs";
@@ -143,6 +145,31 @@ export function measurements({ pg, redis, short, only }) {
     if (!all.some((m) => m.kind === kind))
       throw new Error(`--only: unknown step ${kind} (${all.map((m) => m.kind).join(", ")})`);
   return all.filter((m) => only.includes(m.kind));
+}
+
+/**
+ * 측정이 끝난 뒤 보고서 폴더로 옮길 [원본, 대상] 쌍 — 조건 파일과 끝난 단계마다 `result.json` · `summary.md`.
+ * 원본은 모두 `target/perf/` 아래다: 측정 도중 추적되는 경로(`docs/`)에 무엇이든 쓰면 다음 단계의 pw-perf 가
+ * `git status` 로 트리를 dirty 로 읽어 `commit.dirty` 가 true 로 남는다.
+ */
+export function reportCopies({ date, stamp, suffix, kinds }) {
+  const reports = "docs/superpowers/reports";
+  const pairs = [
+    [
+      `target/perf/m3-conditions${suffix}-${date}-${stamp}.json`,
+      `${reports}/${date}-m3-perf-conditions${suffix}-${stamp}.json`,
+    ],
+  ];
+  for (const kind of kinds)
+    for (const [from, ext] of [
+      ["result.json", "json"],
+      ["summary.md", "summary.md"],
+    ])
+      pairs.push([
+        `target/perf/m3-${kind}${suffix}-${date}-${stamp}/${from}`,
+        `${reports}/${date}-m3-perf-${kind}${suffix}-${stamp}.${ext}`,
+      ]);
+  return pairs;
 }
 
 /** Redis 의 MSET 명령들(RESP) — `k:<i>` 의 값은 `<i>`(live 시험 `kv_live.rs` 의 100만 키와 같다). */
@@ -370,11 +397,13 @@ async function main(argv) {
     containers: { ...names, pgImage: PG_IMAGE, redisImage: REDIS_IMAGE },
     steps: [],
   };
-  const conditionsFile = join(reports, `${date}-m3-perf-conditions${suffix}-${stamp}.json`);
+  // 측정 도중에는 target/perf 에만 쓴다 — 보고서 폴더로 옮기는 것은 finally 에서 한 번(reportCopies).
+  const conditionsFile = join(root, reportCopies({ date, stamp, suffix, kinds: [] })[0][0]);
   const save = () => {
-    mkdirSync(reports, { recursive: true });
+    mkdirSync(dirname(conditionsFile), { recursive: true });
     writeFileSync(conditionsFile, `${JSON.stringify(conditions, null, 2)}\n`);
   };
+  const done = [];
   let worst = 0;
   try {
     console.log(`perf-m3: starting ${names.pg} and ${names.redis}`);
@@ -415,16 +444,11 @@ async function main(argv) {
           ),
           { exit: r.status ?? 1 },
         );
-      for (const [from, ext] of [
-        ["result.json", "json"],
-        ["summary.md", "summary.md"],
-      ]) {
+      for (const from of ["result.json", "summary.md"]) {
         const src = join(root, out, from);
         if (!existsSync(src)) throw new Error(`${step.kind}: ${src} was not written`);
-        const dst = join(reports, `${date}-m3-perf-${step.kind}${suffix}-${stamp}.${ext}`);
-        copyFileSync(src, dst, constants.COPYFILE_EXCL);
-        console.log(`perf-m3: ${src} → ${dst}`);
       }
+      done.push(step.kind);
       if (r.status === 3) {
         worst = 3;
         console.error(
@@ -439,8 +463,12 @@ async function main(argv) {
   } finally {
     conditions.ended = new Date().toISOString();
     save();
-    console.log(`perf-m3: conditions → ${conditionsFile}`);
     if (!keepDb) stopDatabases(names);
+    mkdirSync(reports, { recursive: true });
+    for (const [src, dst] of reportCopies({ date, stamp, suffix, kinds: done })) {
+      copyFileSync(join(root, src), join(root, dst), constants.COPYFILE_EXCL);
+      console.log(`perf-m3: ${src} → ${dst}`);
+    }
   }
   return worst;
 }
