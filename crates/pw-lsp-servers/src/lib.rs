@@ -54,7 +54,10 @@ pub struct LspServers {
 }
 
 /// 한 프로젝트에서 서버 하나를 띄우는 데 필요한 것. 서버 관리자(M4-05)가 받는다.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// 서버 환경(`env`) · 합친 설정은 비밀을 담을 수 있어 `Debug` 는 손으로 쓴다 — 값 대신 이름 · 키만 찍는다
+/// (`docs/design/03-architecture.md` §5-1). 로그에는 이것을 `{:?}` 로 써도 된다.
+#[derive(Clone, PartialEq)]
 pub struct ServerSetup {
     /// 기여한 확장의 id.
     pub extension: String,
@@ -67,6 +70,23 @@ pub struct ServerSetup {
     /// 서버 프로세스에 넘길 환경 전체: 그 디렉터리의 런타임 환경 위에 정의 · 설정의 `env` 를 덮은 것. 서버 관리자는 `requires`
     /// 로 찾은 런타임을 [`ServerSetup::with_runtime`] 으로 더한 뒤 이것을 그대로 준다(앱 프로세스의 환경을 따로 물려주지 않는다).
     pub env: RuntimeEnv,
+}
+
+impl std::fmt::Debug for ServerSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerSetup")
+            .field("extension", &self.extension)
+            .field("server", &self.definition.id)
+            .field("command", &self.definition.command)
+            .field("config", &self.config)
+            .field(
+                "initialization_options_keys",
+                &settings::top_keys(&self.initialization_options),
+            )
+            .field("resolution", &self.resolution)
+            .field("env", &self.env)
+            .finish()
+    }
 }
 
 /// 서버를 돌릴 런타임으로 찾은 설치본(결정 M4-D6 — 찾는 것은 서버 관리자 M4-05).

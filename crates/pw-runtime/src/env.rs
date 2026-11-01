@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 
 use crate::login_shell::RESOLVING_ENV;
 
@@ -10,7 +11,11 @@ use crate::login_shell::RESOLVING_ENV;
 pub const EXCLUDED: [&str; 4] = ["PWD", "SHLVL", "_", RESOLVING_ENV];
 
 /// 자식 프로세스의 환경 전체. 자식은 앱 프로세스의 환경을 물려받지 않고 이것만 받는다.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// 사람의 환경 변수 전체라 비밀(토큰 · 키)을 담는다 — `Debug` 는 손으로 써서 변수 **값**을 찍지 않는다(PATH · 변수 이름 · 개수 ·
+/// 제공자 도구만). 이것이나 이것을 담은 값을 로그 · 오류 · 시험 메시지에 쓸 때도 값을 꺼내 쓰지 않는다
+/// (`docs/design/03-architecture.md` §5-1).
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct RuntimeEnv {
     /// PATH.
     pub path: OsString,
@@ -18,6 +23,18 @@ pub struct RuntimeEnv {
     pub vars: BTreeMap<OsString, OsString>,
     /// 제공자가 정한 도구와 그 버전. 로그인 셸은 비어 있다.
     pub tools: Vec<RuntimeTool>,
+}
+
+impl fmt::Debug for RuntimeEnv {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names: Vec<_> = self.vars.keys().map(|k| k.to_string_lossy()).collect();
+        f.debug_struct("RuntimeEnv")
+            .field("path", &self.path)
+            .field("var_count", &self.vars.len())
+            .field("var_names", &names)
+            .field("tools", &self.tools)
+            .finish()
+    }
 }
 
 /// 제공자가 고정한 도구(`node 22.11.0`, `mise.toml` 에서).
@@ -69,6 +86,33 @@ fn same_name(name: &OsStr, wanted: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Debug` 는 PATH · 변수 이름 · 개수만 찍고 값을 찍지 않는다 — 로그 · 시험 출력에 사람의 비밀이 남지 않게.
+    #[test]
+    fn debug_output_has_no_variable_values() {
+        let env = RuntimeEnv::from_vars(
+            [
+                ("PATH", "/a:/b"),
+                ("NPM_TOKEN", "s3cr3t-token-value"),
+                ("HOME", "/home/me"),
+            ]
+            .map(|(k, v)| (OsString::from(k), OsString::from(v))),
+        );
+        let shown = format!("{env:?}");
+        assert!(!shown.contains("s3cr3t-token-value"), "{shown}");
+        assert!(!shown.contains("/home/me"), "{shown}");
+        assert!(
+            shown.contains("NPM_TOKEN") && shown.contains("HOME"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("/a:/b") && shown.contains("var_count: 2"),
+            "{shown}"
+        );
+        // 담은 값의 `{:#?}` 도 같다.
+        let pretty = format!("{:#?}", Some(env));
+        assert!(!pretty.contains("s3cr3t-token-value"), "{pretty}");
+    }
 
     #[test]
     fn splits_path_and_drops_shell_variables() {

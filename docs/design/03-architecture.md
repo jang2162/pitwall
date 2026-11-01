@@ -288,6 +288,8 @@ rust-analyzer = { cargo = { features = "all" } }
 
 GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버전(Node/Java/Python 등)을 모른다. Pitwall은 **런타임 버전을 직접 설치 · 관리하지 않고**, 외부 도구가 계산한 환경을 받아 프로세스를 띄울 때 적용한다.
 
+**비밀**: `RuntimeEnv` 는 사람의 환경 변수 전체라 비밀(토큰 · 키)을 담는다 — 그것이나 그것을 담은 값을 로그 · 오류 · 시험 메시지에 쓸 때 변수 값을 꺼내 쓰지 않는다(변수 이름 · 개수, 또는 PATH 만). 그래서 `RuntimeEnv` 의 `Debug` 는 손으로 써서 값을 찍지 않고(`crates/pw-runtime/src/env.rs`), 그것을 담은 값(언어 서버의 `ServerSetup` · `ServerConfig` — 설정의 `env` · `settings` 도 이름 · 키만)도 같은 꼴이다. 새로 담는 타입도 `Debug` 를 derive 하지 않고 같은 규칙으로 쓴다
+
 ### 런타임 제공자 (Runtime Provider)
 
 | 순서 | 제공자 | 감지 조건 | 환경 얻는 방법 |

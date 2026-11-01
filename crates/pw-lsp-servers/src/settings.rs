@@ -50,7 +50,10 @@ pub struct ConfiguredPath {
 }
 
 /// 정의 위에 설정을 합친 서버 하나의 값. 서버 관리자(M4-05)가 띄우고 `workspace/configuration` 에 답할 때 쓴다.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `env` · `settings` 에는 사람이 적은 비밀(토큰 등)이 있을 수 있어 `Debug` 는 손으로 쓴다 — `env` 는 이름만, `settings` 는 맨 위
+/// 키 이름만 찍는다(`pw_runtime::RuntimeEnv` 와 같은 규칙, `docs/design/03-architecture.md` §5-1).
+#[derive(Clone, PartialEq)]
 pub struct ServerConfig {
     pub enabled: bool,
     pub path: Option<ConfiguredPath>,
@@ -60,6 +63,27 @@ pub struct ServerConfig {
     pub settings: Json,
     /// 정렬돼 있고 겹치지 않는다.
     pub disabled_features: Vec<LspFeature>,
+}
+
+impl std::fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("enabled", &self.enabled)
+            .field("path", &self.path)
+            .field("args", &self.args)
+            .field("env_names", &self.env.keys().collect::<Vec<_>>())
+            .field("settings_keys", &top_keys(&self.settings))
+            .field("disabled_features", &self.disabled_features)
+            .finish()
+    }
+}
+
+/// 객체의 맨 위 키 이름(값은 찍지 않는다). 객체가 아니면 비어 있다.
+pub(crate) fn top_keys(value: &Json) -> Vec<&str> {
+    value
+        .as_object()
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default()
 }
 
 /// 설정 파일 하나의 `[lsp]` 값에서 서버 id 별 설정. `origin` 은 경고에 붙일 이름이다.

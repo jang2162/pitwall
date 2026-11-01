@@ -395,7 +395,7 @@ impl Fixture {
         let shell = executable(
             &tmp.path().join("fake-shell"),
             &format!(
-                "PATH='{}:/usr/bin:/bin'; export PATH\neval \"$4\"",
+                "PATH='{}:/usr/bin:/bin'; export PATH\nPW_TEST_SECRET='shell-s3cr3t'; export PW_TEST_SECRET\neval \"$4\"",
                 bin.display()
             ),
         );
@@ -770,4 +770,36 @@ fn an_old_rustup_is_not_asked_and_its_proxy_is_skipped() {
         "{resolution:?}"
     );
     assert!(!log.exists(), "rustup which ran on an old rustup");
+}
+
+/// `ServerSetup` · `ServerConfig` 의 `Debug` 에는 비밀 값이 없다 — 런타임 환경의 변수 값, 설정 `env` 의 값, `settings` 의 값 모두.
+/// 이름 · 키는 남는다(무엇이 있는지는 보이게).
+#[test]
+fn debug_output_of_a_setup_has_no_secret_values() {
+    let f = Fixture::new("schema = 1\n");
+    let (id, root) = f.project(
+        &[(
+            ".pitwall/project.toml",
+            "schema = 1\n[lsp.ruff]\nenv = { RUFF_TOKEN = \"env-s3cr3t\" }\nsettings = { auth = { token = \"settings-s3cr3t\" } }\n",
+        )],
+        true,
+    );
+    let setup = f.servers.setup(&id, None, "ruff", &root).unwrap();
+    // 비밀이 실제로 담겨 있다(그래야 아래 단언이 뜻이 있다).
+    assert_eq!(
+        setup.env.get("PW_TEST_SECRET"),
+        Some(std::ffi::OsStr::new("shell-s3cr3t"))
+    );
+    assert_eq!(setup.config.env["RUFF_TOKEN"], "env-s3cr3t");
+    for shown in [format!("{setup:?}"), format!("{setup:#?}")] {
+        for secret in ["shell-s3cr3t", "env-s3cr3t", "settings-s3cr3t"] {
+            assert!(!shown.contains(secret), "`{secret}` leaked into Debug");
+        }
+        for name in ["PW_TEST_SECRET", "RUFF_TOKEN", "auth", "ruff"] {
+            assert!(shown.contains(name), "`{name}` missing from Debug");
+        }
+    }
+    let configs = f.servers.configs(&id, None).unwrap();
+    let shown = format!("{configs:?}");
+    assert!(!shown.contains("env-s3cr3t") && !shown.contains("settings-s3cr3t"));
 }
