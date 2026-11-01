@@ -561,8 +561,9 @@ enum ListEvent {
         removed: Vec<String>,
         inserted: Vec<(Arc<str>, FileFlags)>,
     },
-    /// 파일 목록 작업이 취소됐다.
-    Suspended { project_id: String, root: PathBuf },
+    /// 파일 목록 작업이 취소됐다 — 그때 표에 있던 루트. 키로 다시 찾지 않는다: 적용 전에 감시가 풀리고 다시 걸리면 그 키의 자리는
+    /// 새 루트이고, 옛 목록의 취소가 새 루트를 멈추면 안 된다(옛 루트는 닫혀 있어 [`suspend`] 가 건너뛴다).
+    Suspended(Arc<Root>),
     /// 감시가 풀려 표에서 뺀 색인 — 이 스레드에서 놓는다(심볼 수십 MB 를 해제하는 일을 감시 표의 잠금 안에서 하지 않게).
     Release(Arc<Root>),
 }
@@ -627,10 +628,9 @@ impl FileListObserver for Observer {
     }
 
     fn suspended(&self, project_id: &str, root: &Path) {
-        self.send(ListEvent::Suspended {
-            project_id: project_id.to_owned(),
-            root: root.to_path_buf(),
-        });
+        if let Some(entry) = self.inner.get(project_id, root) {
+            self.send(ListEvent::Suspended(entry));
+        }
     }
 
     /// 표에서 빼고 닫힘을 켠다(루트 잠금을 잡지 않는다). 기다리던 요청은 「색인 없음」 으로 답한다. 일꾼 멈추기 · 메모리 놓기는
@@ -670,10 +670,10 @@ fn apply(inner: &Arc<Inner>, event: ListEvent) {
             tests::before_event(&root);
             changed(inner, &project_id, &root, &removed, &inserted);
         }
-        ListEvent::Suspended { project_id, root } => {
-            if let Some(entry) = inner.get(&project_id, &root) {
-                suspend(&entry);
-            }
+        ListEvent::Suspended(entry) => {
+            #[cfg(test)]
+            tests::before_event(&entry.root);
+            suspend(&entry);
         }
         ListEvent::Release(entry) => {
             let mut st = entry.state();

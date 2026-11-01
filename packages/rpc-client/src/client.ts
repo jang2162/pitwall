@@ -68,11 +68,14 @@ export class RpcCallError extends Error {
   }
 }
 
-/** Host 의 「바쁨」 사유 문구(crates/pw-fs: `search.files` 는 `file search is busy: …`, `search.text` 는 `search is busy: …`). */
-const BUSY_DETAIL = /^(?:file )?search is busy\b/;
+/**
+ * Host 의 「바쁨」 사유 문구. crates/pw-fs: `search.files` 는 `file search is busy: …`, `search.text` 는 `search is busy: …`.
+ * crates/pw-index: `index.symbols.search` · `index.file.symbols` 는 `the symbol index is busy: …`.
+ */
+const BUSY_DETAIL = /^(?:(?:file )?search|the symbol index) is busy\b/;
 
 /**
- * Host 가 동시 상한에 걸려 요청을 거절했다(「바쁨」, `search.files` · `search.text`). 잠시 뒤 다시 보내면 된다.
+ * Host 가 동시 상한에 걸려 요청을 거절했다(「바쁨」, `search.files` · `search.text` · `index.symbols.search` · `index.file.symbols`). 잠시 뒤 다시 보내면 된다.
  * Host 는 바쁨을 `RpcError::internal(사유)` 로 보낸다 — 와이어의 `message` 는 「internal error」 이고 사유는 `data` 문자열에 있다
  * (crates/pw-rpc/src/error.rs). 그래서 `message` 가 아니라 `code` 와 `data` 로 가른다. Host 가 바쁨 전용 오류 코드를 두면(M1-07 의
  * 이월) 그 코드로 가른다.

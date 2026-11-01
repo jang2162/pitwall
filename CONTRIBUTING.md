@@ -172,6 +172,7 @@ RPC 의 TS 타입·메서드 목록·JSON Schema 는 `rpc_method!` 선언과 그
 - **메서드를 선언하거나 `rpc_type!` 으로 타입을 등록한 크레이트는 `crates/pw-rpc-gen` 의 `Cargo.toml` 의존성과 `src/main.rs` 의 `use <크레이트> as _;` 두 곳에 더한다.** 레지스트리(`pw_rpc::methods`)는 링크된 크레이트의 선언만 본다. `use` 를 빠뜨리면 링커가 그 크레이트를 버려 메서드가 오류 없이 생성물에서 빠지고 `--check` 도 통과한다. 그 빠뜨림은 `apps/desktop/src-tauri` 의 `generated_rpc_covers_the_router` 테스트(생성물의 메서드 == 앱의 Host 가 등록한 메서드)가 잡는다. 앱에 Host 나 Router 를 더하면 그 테스트의 비교 대상에도 더한다.
 - `schema.json` 의 입력 스키마가 MCP `inputSchema`(object 필수)로 그대로 쓰이는 것은 struct 입력뿐이다. `()` 는 `{"type": "null"}`, enum 은 `oneOf` 루트다.
 - **선언에 `mcp: true` 를 단 메서드만 MCP 툴이 된다. 새 메서드는 기본으로 노출되지 않는다** — UI 전용 메서드에는 달지 않는다. 툴을 늘리면 데스크톱 크레이트의 `mcp_tools_are_exactly_these`(`apps/desktop/src-tauri/src/main.rs`) 목록도 함께 고친다 — 모든 메서드 크레이트가 링크되는 자리라 어느 크레이트의 선언이든 거기서 잡힌다(pw-mcp 의 시험은 pw-core 선언만 본다). 입력은 struct 나 `()` 여야 하고 스트림 메서드에는 달 수 없다(이름 · 스키마 규칙은 `docs/design/05-mcp.md` 「툴 레지스트리」 절).
+- **메서드에 동시 상한을 두고 「바쁨」 을 `RpcError::internal("<기능> is busy: …")` 로 낼 때는 그 사유 문구를 `packages/rpc-client/src/client.ts` 의 `BUSY_DETAIL` 에 더하고 rpc-client 시험에 한 줄을 둔다.** 화면은 `isBusyError`(코드와 이 문구)로 「바쁨 → 다시」 를 고른다 — 빠뜨리면 Rust 시험은 통과하고 화면은 그 거절을 일반 실패로 보인다. 지금 쓰는 문구는 그 정규식 위 주석에 있다(pw-git 의 `git.* is busy` 는 지금 이 정규식에 없다).
 
 ## Linguist 데이터
 

@@ -342,6 +342,16 @@ describe("isBusyError", () => {
     expect(isBusyError(await consume().catch((e: unknown) => e))).toBe(true);
   });
 
+  it("tells the symbol index refusing a request as busy", () => {
+    // crates/pw-index 의 `Inner::turn` 이 보내는 사유(`index.symbols.search` · `index.file.symbols`).
+    const error = new RpcCallError({
+      code: ERROR_CODE.INTERNAL_ERROR,
+      message: "internal error",
+      data: "the symbol index is busy: 4 requests are already running",
+    });
+    expect(isBusyError(error)).toBe(true);
+  });
+
   it("is false for other errors", () => {
     const internal = (data: unknown) =>
       new RpcCallError({

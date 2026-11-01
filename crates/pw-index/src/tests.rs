@@ -914,6 +914,14 @@ async fn cancelling_the_file_list_task_suspends_the_symbols() {
     assert_eq!(f.search(&id, "old_a").await.unwrap().matched, 0);
 }
 
+/// 화면은 `packages/rpc-client/src/client.ts` 의 `isBusyError` 로 「바쁨 → 다시」 를 고른다: 코드 INTERNAL_ERROR 에
+/// 사유 문자열이 그 정규식에 맞아야 한다. 문구를 바꾸면 그 정규식과 rpc-client 시험도 함께 고친다.
+fn assert_busy(e: &RpcError) {
+    assert_eq!(e.code, pw_rpc::code::INTERNAL_ERROR, "{e:?}");
+    let detail = e.data.as_ref().and_then(|d| d.as_str()).unwrap_or_default();
+    assert!(detail.starts_with("the symbol index is busy:"), "{e:?}");
+}
+
 /// 매칭 · 텍스트 파싱은 Host 전체에서 [`MAX_REQUESTS`] 개까지 함께 돈다 — 그 위는 [`REQUEST_WAIT`] 를 기다리다 「바쁨」(리뷰 M3).
 /// 색인을 기다리는 동안은 차례를 쥐지 않는다.
 #[tokio::test(flavor = "multi_thread")]
@@ -932,7 +940,7 @@ async fn requests_beyond_the_limit_are_busy() {
         .unwrap();
     let started = Instant::now();
     let e = f.search(&id, "limited").await.unwrap_err();
-    assert!(format!("{e:?}").contains("is busy"), "{e:?}");
+    assert_busy(&e);
     assert!(started.elapsed() >= REQUEST_WAIT);
     let e = f
         .symbols
@@ -944,7 +952,7 @@ async fn requests_beyond_the_limit_are_busy() {
         })
         .await
         .unwrap_err();
-    assert!(format!("{e:?}").contains("is busy"), "{e:?}");
+    assert_busy(&e);
     drop(held);
     assert_eq!(f.search(&id, "limited").await.unwrap().matched, 1);
 }
@@ -1073,4 +1081,42 @@ async fn releasing_a_watch_does_not_wait_for_the_root_lock() {
     );
     assert!(f.symbols.inner.get(&id, &root).is_none());
     holder.join().unwrap();
+}
+
+/// 파일 목록 작업 취소(`suspended`)를 사건 스레드가 적용하기 전에 감시가 풀리고 곧바로 다시 걸리면, 그 취소는 옛 루트의 것이다 —
+/// 새로 건 루트(만드는 중)를 멈추지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_suspension_does_not_stop_a_reopened_root() {
+    let f = Fixture::new();
+    let root = f.base.join("reopened");
+    let sentinel = f.base.join("sentinel");
+    let observer = f.symbols.observer();
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let (entered_tx, go_rx) = (Mutex::new(entered_tx), Mutex::new(go_rx));
+    set_before_event(&root, move || {
+        let _ = entered_tx.lock().unwrap().send(());
+        let _ = go_rx.lock().unwrap().recv_timeout(Duration::from_secs(5));
+    });
+    let (drained_tx, drained_rx) = std::sync::mpsc::channel::<()>();
+    let drained_tx = Mutex::new(drained_tx);
+    set_before_event(&sentinel, move || {
+        let _ = drained_tx.lock().unwrap().send(());
+    });
+
+    observer.opened("proj", &root);
+    observer.suspended("proj", &root);
+    // 사건 스레드가 취소를 집어 들고 멈춘 동안 감시가 풀리고 다시 걸린다.
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    observer.dropped("proj", &root);
+    observer.opened("proj", &root);
+    go_tx.send(()).unwrap();
+    // 앞의 사건을 다 적용했다는 표지(이 루트는 자리가 없어 아무것도 바꾸지 않는다).
+    observer.changed("proj", &sentinel, Vec::new(), Vec::new());
+    drained_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let entry = f.symbols.inner.get("proj", &root).unwrap();
+    assert_eq!(*entry.phase.borrow(), Phase::Building);
+    assert!(!entry.state().suspended);
 }
