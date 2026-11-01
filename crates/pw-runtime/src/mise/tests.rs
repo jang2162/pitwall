@@ -4,7 +4,6 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -16,12 +15,11 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/mise")
 }
 
-/// `dir/mise` 에 sh 스크립트를 쓴다.
+/// `dir/mise` 에 sh 스크립트를 쓴다(한 번 실행해 둔다 — [`crate::login_shell::tests::write_script`]).
 pub(crate) fn write_mise(dir: &Path, body: &str) -> PathBuf {
     fs::create_dir_all(dir).unwrap();
     let path = dir.join("mise");
-    fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::login_shell::tests::write_script(&path, body);
     path
 }
 

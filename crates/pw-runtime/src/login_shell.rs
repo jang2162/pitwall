@@ -587,10 +587,28 @@ pub(crate) mod tests {
         let path = dir.join("fake-shell");
         // 같은 이름으로 다시 쓸 때 돌고 있는 셸이 반쯤 쓴 파일을 읽지 않게 옆에 쓰고 옮긴다.
         let tmp = dir.join("fake-shell.tmp");
-        std::fs::write(&tmp, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_script(&tmp, body);
         std::fs::rename(&tmp, &path).unwrap();
         path
+    }
+
+    /// 실행할 수 있는 sh 스크립트 `body` 를 `path` 에 쓰고 한 번 실행해 둔다(본문은 돌지 않는다).
+    ///
+    /// macOS 는 갓 쓴 실행 파일을 처음 exec 할 때 검사로 붙잡는다 — 한가한 기기에서도 200 ms 남짓, 병렬 시험 중에는 300 ms 를
+    /// 넘는다(두 번째부터는 5 ms). 시험은 가짜 도구에 300 ms 제한을 걸고 「본문이 돌았다」(`calls.log` 한 줄)를 세므로, 이 검사가
+    /// 제한을 먹으면 본문이 한 줄도 돌기 전에 죽어 흔들린다. 진짜 도구는 갓 쓴 파일이 아니라 이 지연이 없다.
+    pub(crate) fn write_script(path: &Path, body: &str) {
+        std::fs::write(
+            path,
+            format!("#!/bin/sh\n[ -n \"$PW_TEST_WARM_UP\" ] && exit 0\n{body}\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let warmed = std::process::Command::new(path)
+            .env("PW_TEST_WARM_UP", "1")
+            .status()
+            .unwrap();
+        assert!(warmed.success(), "{}: {warmed}", path.display());
     }
 
     #[test]
