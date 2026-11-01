@@ -409,10 +409,17 @@ it("goes back to where a jump to another file left and forward to the same place
 it("records ⌘L and moves the recorded place with an edit that deletes lines above it", async () => {
   await mount();
   await openRequest(LIB, 100, 1);
+  // 열 줄 안쪽의 ⌘L 도 기록한다 — 큰 이동(10줄 넘게)이 아니어도 위치로 가기라서.
+  await gotoLine("105");
+  expect(where()).toMatchObject({ path: LIB, line: 105 });
+  await back();
+  await vi.waitFor(() => expect(where()).toMatchObject({ path: LIB, line: 100 }));
+  await forward();
+  await vi.waitFor(() => expect(where()).toMatchObject({ path: LIB, line: 105 }));
   await gotoLine("250");
   expect(where()).toMatchObject({ path: LIB, line: 250 });
 
-  // 1~10줄을 지운다 — 기록된 100줄의 글자는 90줄로 올라간다.
+  // 1~10줄을 지운다 — 기록된 105줄의 글자는 95줄로 올라간다.
   const view = activeView();
   await act(async () =>
     view.dispatch({
@@ -421,8 +428,8 @@ it("records ⌘L and moves the recorded place with an edit that deletes lines ab
     }),
   );
   await back();
-  await vi.waitFor(() => expect(where()).toMatchObject({ path: LIB, line: 90 }));
-  expect(activeView().state.doc.line(90).text).toBe("line 100 — some text");
+  await vi.waitFor(() => expect(where()).toMatchObject({ path: LIB, line: 95 }));
+  expect(activeView().state.doc.line(95).text).toBe("line 105 — some text");
   // 앞으로는 ⌘L 로 간 자리(그사이 열 줄 위로)다.
   await forward();
   await vi.waitFor(() => expect(where()).toMatchObject({ path: LIB, line: 240 }));
@@ -500,15 +507,24 @@ it("goes back on mouse button 4 and forward on button 5, once per press", async 
   await openRequest(LIB, 50, 1);
   await gotoFile("main.rs:7");
   await vi.waitFor(() => expect(where().path).toBe(MAIN));
+  await gotoLine("18");
+  // 기록: LIB 50 · MAIN 7. 한 누름이 두 번 돌면 한 칸을 더 간다.
 
   // mousedown 과 그 누름의 auxclick 이 함께 와도 한 번이다.
   await mouse("mousedown", 3);
+  await mouse("auxclick", 3);
+  await vi.waitFor(() => expect(where()).toMatchObject({ path: MAIN, line: 7 }));
+  await settle();
+  expect(where()).toMatchObject({ path: MAIN, line: 7 });
+  // auxclick 만 오는 웹뷰.
   await mouse("auxclick", 3);
   await vi.waitFor(() => expect(where()).toMatchObject({ path: LIB, line: 50 }));
   await mouse("mousedown", 4);
   await mouse("auxclick", 4);
   await vi.waitFor(() => expect(where()).toMatchObject({ path: MAIN, line: 7 }));
-  // auxclick 만 오는 웹뷰.
+  await settle();
+  expect(where()).toMatchObject({ path: MAIN, line: 7 });
+  await mouse("mousedown", 3);
   await mouse("auxclick", 3);
   await vi.waitFor(() => expect(where()).toMatchObject({ path: LIB, line: 50 }));
   // 다른 버튼은 아무것도 하지 않는다.
