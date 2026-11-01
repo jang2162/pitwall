@@ -101,18 +101,14 @@ impl Fake {
     }
 
     fn spawn_child(&self, seconds: u64) {
-        #[cfg(unix)]
-        let mut command = {
-            let mut c = std::process::Command::new("sleep");
-            c.arg(seconds.to_string());
-            c
+        // 자기 자신을 `--sleep` 으로 띄운다 — `/bin/sleep` 같은 플랫폼 바이너리는 macOS 가 환경을 가려 거두기의 표지를 읽을 수
+        // 없다(`pw_lsp::ledger` 머리 주석). 실 서버의 손자(node · java · 빌드 도구)처럼 환경을 읽을 수 있는 자식이다.
+        let Ok(me) = std::env::current_exe() else {
+            eprintln!("pw-lsp-fake: cannot find itself");
+            return;
         };
-        #[cfg(windows)]
-        let mut command = {
-            let mut c = std::process::Command::new("ping");
-            c.args(["-n", &(seconds + 1).to_string(), "127.0.0.1"]);
-            c
-        };
+        let mut command = std::process::Command::new(me);
+        command.args(["--sleep", &seconds.to_string()]);
         match command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -163,6 +159,13 @@ impl Fake {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    // `pw-lsp-fake --sleep <초>`: 그만큼 자고 끝난다(`Action::SpawnChild` 의 자식).
+    let mut args = std::env::args();
+    if args.nth(1).as_deref() == Some("--sleep") {
+        let seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        std::thread::sleep(Duration::from_secs(seconds));
+        return ExitCode::SUCCESS;
+    }
     let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) else {
         eprintln!("usage: pw-lsp-fake <scenario.json>");
         return ExitCode::from(2);

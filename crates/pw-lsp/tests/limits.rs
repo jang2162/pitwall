@@ -255,6 +255,42 @@ async fn a_grant_launches_only_inside_its_root() {
     f.server.shutdown().await;
 }
 
+/// 재리뷰 N5: 허가를 만든 연결(창)이 닫힌 뒤에는 쥐고 있던 허가로 띄울 수 없다. 짝: 닫기 전에는 같은 허가로 뜬다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_held_grant_cannot_spawn_after_its_connection_closes() {
+    let p = project();
+    let record = p.base.join("closed.jsonl");
+    let scenario = Scenario {
+        record: Some(record.clone()),
+        start: vec![Action::Stderr {
+            text: "started".into(),
+        }],
+        ..Scenario::default()
+    };
+    let path = scenario.write(&p.base, "closed").unwrap();
+    let server = pw_lsp::LanguageServer::spawn(
+        &p.grant,
+        common::fake_spec(&p.root, &path),
+        pw_lsp::ServerOptions::default(),
+    )
+    .await
+    .unwrap();
+    server.shutdown().await;
+    std::fs::remove_file(&record).ok();
+    p.connection.cancel();
+    let e = pw_lsp::LanguageServer::spawn(
+        &p.grant,
+        common::fake_spec(&p.root, &path),
+        pw_lsp::ServerOptions::default(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied, "{e}");
+    assert!(e.to_string().contains("connection"), "{e}");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!record.exists(), "a server process started");
+}
+
 /// 리뷰 M2: 신뢰를 거둔 뒤에는 쥐고 있던 허가로 띄울 수 없다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_held_grant_cannot_spawn_after_trust_is_revoked() {

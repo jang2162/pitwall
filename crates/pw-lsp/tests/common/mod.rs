@@ -18,6 +18,7 @@ use pw_rpc::ConnectionScope;
 use pw_runtime::RuntimeEnv;
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 /// 신뢰한 프로젝트 하나(임시 폴더)와 그 창의 허가.
 pub struct Project {
@@ -27,6 +28,8 @@ pub struct Project {
     pub state: PathBuf,
     pub projects: Registry,
     pub grant: LspGrant,
+    /// 허가를 만든 「연결」 의 닫힘 토큰(취소하면 창이 닫힌 것).
+    pub connection: CancellationToken,
 }
 
 pub fn project() -> Project {
@@ -53,7 +56,15 @@ pub fn project_at(dir: &Path) -> Project {
         .unwrap()
         .id;
     projects.set_trust(&id, true).unwrap();
-    let grant = lsp_grant(&ConnectionScope::Project(id.clone()), &projects, &id, None).unwrap();
+    let connection = CancellationToken::new();
+    let grant = lsp_grant(
+        &ConnectionScope::Project(id.clone()),
+        connection.clone(),
+        &projects,
+        &id,
+        None,
+    )
+    .unwrap();
     Project {
         _tmp: None,
         base,
@@ -61,6 +72,7 @@ pub fn project_at(dir: &Path) -> Project {
         state,
         projects,
         grant,
+        connection,
     }
 }
 

@@ -23,7 +23,8 @@
 //! stdin 을 읽지 않는다) 그 서버를 망가진 것으로 보고 트리째 끝낸다. 서버 → 클라이언트 요청은 동시에 [`MAX_SERVER_REQUESTS`] 개까지
 //! 처리하고 넘으면 곧바로 `RequestFailed` 로 답한다. 이벤트 채널([`ServerOptions::events`])은 부른 쪽이 정한 크기의 채널이고, 꽉
 //! 차면 `$/progress` 알림은 버리고 그 밖의 이벤트면 서버를 끝낸다(`Exited` 는 [`LanguageServer::exited`] 로도 알 수 있어 버릴 수
-//! 있다). stderr 는 줄마다 [`MAX_STDERR_LINE`] 바이트까지만 쥐고(줄바꿈이 오지 않아도 — 넘는 바이트는 세기만 한다), 로그 파일의
+//! 있다). **채널은 서버마다 따로 둔다** — 여럿이 나누면 꽉 찬 책임이 채운 서버가 아니라 그때 알림을 낸 서버에게 가 죄 없는 서버가
+//! 끝난다(M4-01 재리뷰 N2). stderr 는 줄마다 [`MAX_STDERR_LINE`] 바이트까지만 쥐고(줄바꿈이 오지 않아도 — 넘는 바이트는 세기만 한다), 로그 파일의
 //! 하루 상한은 `crate::log` 가 지킨다.
 //!
 //! **끝내기** — [`LanguageServer::shutdown`]: `shutdown`(시한 [`SHUTDOWN_TIMEOUT`]) → `exit` → stdin 닫기 → [`EXIT_GRACE`] 안에
@@ -213,7 +214,9 @@ pub struct ServerOptions {
     /// 서버 로그(`crate::log`). 없으면 stderr 는 `tracing` 으로만 간다.
     pub log: Option<Arc<ServerLog>>,
     pub handlers: Handlers,
-    /// 알림 · 상태를 받을 곳. 크기는 부른 쪽이 정한다 — 꽉 차면의 규칙은 머리 주석의 「상한」.
+    /// 알림 · 상태를 받을 곳. 크기는 부른 쪽이 정한다 — 꽉 차면의 규칙은 머리 주석의 「상한」. **서버마다 따로 만든 채널을
+    /// 준다**(같은 `Sender` 를 여러 서버에 복제해 주지 않는다): 꽉 차면 그때 알림을 낸 서버가 끝나므로, 나누면 채널을 채운 서버가
+    /// 아니라 다른 서버가 끝날 수 있다(M4-01 재리뷰 N2).
     pub events: Option<mpsc::Sender<ServerEvent>>,
     /// 강제 종료 뒤 거두기의 기록부(`crate::ledger`). 없으면 기록하지 않는다.
     pub ledger: Option<Arc<Ledger>>,
@@ -555,9 +558,11 @@ impl fmt::Debug for LanguageServer {
 
 impl LanguageServer {
     /// 서버를 띄운다. 허가([`LspGrant`])가 있어야 부를 수 있다 — 신뢰와 실행의 연결 범위를 지났다는 증거다. 띄우기 전에 작업
-    /// 디렉터리가 허가의 루트 안인지와 지금도 신뢰하는지 다시 본다(아니면 `PermissionDenied`, 아무것도 띄우지 않는다 — 리뷰 M1 ·
-    /// M2). `initialize` 는 [`Self::initialize`] 로 따로 보낸다. tokio 런타임의 async 문맥에서 부른다(블로킹 풀 스레드가 아니다 —
-    /// Linux 의 `PR_SET_PDEATHSIG` 는 띄운 스레드가 끝나면 신호를 보낸다).
+    /// 디렉터리가 허가의 루트 안인지, 허가를 만든 연결이 아직 열려 있는지, 지금도 신뢰하는지 다시 본다(아니면 `PermissionDenied`,
+    /// 아무것도 띄우지 않는다 — 리뷰 M1 · M2, 재리뷰 N5). `initialize` 는 [`Self::initialize`] 로 따로 보낸다. **tokio 런타임의 async 문맥(일꾼 스레드)에서만 부른다** —
+    /// `spawn_blocking` · `block_in_place` 안에서 부르지 않는다: Linux 의 `PR_SET_PDEATHSIG` 는 프로세스가 아니라 **띄운 스레드**가
+    /// 끝나면 신호를 보내므로, 블로킹 풀 스레드가 쉬다 끝날 때(약 10 s) 서버가 SIGTERM 으로 조용히 끝난다(M4-01 재리뷰 N3 — macOS 에는
+    /// 없는 증상이다).
     pub async fn spawn(
         grant: &LspGrant,
         spec: LaunchSpec,
@@ -573,6 +578,13 @@ impl LanguageServer {
                 ),
             ));
         }
+        if !grant.connection_open() {
+            tracing::info!(target: "pw_lsp", project = grant.project_id(), "language server refused: the window's connection is closed");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the connection that granted this launch is closed",
+            ));
+        }
         if !grant.still_trusted() {
             tracing::info!(target: "pw_lsp", project = grant.project_id(), "language server refused: trust was revoked");
             return Err(std::io::Error::new(
@@ -580,15 +592,16 @@ impl LanguageServer {
                 format!("project `{}` is no longer trusted", grant.project_id()),
             ));
         }
-        let (mut child, tree) = process::spawn(&spec)?;
+        let marker = options.ledger.as_ref().and_then(|_| Ledger::marker());
+        let (mut child, tree) = process::spawn(&spec, marker.as_deref())?;
         let pid = child.id();
-        let record = match (&options.ledger, pid) {
-            (Some(ledger), Some(pid)) => {
+        let record = match (&options.ledger, pid, &marker) {
+            (Some(ledger), Some(pid), Some(marker)) => {
                 let argv: Vec<std::ffi::OsString> =
                     std::iter::once(spec.program.clone().into_os_string())
                         .chain(spec.args.iter().cloned())
                         .collect();
-                ledger.record(pid, &argv)
+                ledger.record(pid, &argv, marker)
             }
             _ => None,
         };
@@ -960,6 +973,27 @@ mod tests {
         );
         assert_eq!(lines[2], "next");
     }
+
+    /// 재리뷰 N4: 잘린 뒤의 작은 조각도 모두 센다.
+    #[test]
+    fn small_chunks_after_the_cut_are_all_counted() {
+        let chunk = vec![b'b'; 1024];
+        let mut lines = Vec::new();
+        let mut cutter = LineCutter::default();
+        for _ in 0..40 {
+            cutter.feed(&chunk, &mut |l: &str| lines.push(l.to_owned()));
+        }
+        assert!(cutter.held() <= MAX_STDERR_LINE, "{}", cutter.held());
+        cutter.finish(&mut |l: &str| lines.push(l.to_owned()));
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[1],
+            format!(
+                "… (the line above was cut: {} more bytes dropped)",
+                40 * 1024 - MAX_STDERR_LINE
+            )
+        );
+    }
 }
 
 fn folder_name(root: &Path) -> String {
@@ -1046,18 +1080,17 @@ impl LineCutter {
                 None => (bytes, None),
             };
             let room = MAX_STDERR_LINE - self.line.len();
-            if part.len() <= room {
+            if self.cut > 0 {
+                // 이미 잘린 줄: 줄 끝까지 세기만 한다(재리뷰 N4 — 작은 조각이 `room` 안이라 쌓이면 수가 적게 나온다).
+                self.cut += part.len();
+            } else if part.len() <= room {
                 self.line.extend_from_slice(part);
             } else {
-                if self.cut == 0 {
-                    self.line.extend_from_slice(&part[..room]);
-                    let head = String::from_utf8_lossy(&self.line).into_owned();
-                    emit(&format!("{head} …"));
-                    self.line.clear();
-                    self.cut = part.len() - room;
-                } else {
-                    self.cut += part.len();
-                }
+                self.line.extend_from_slice(&part[..room]);
+                let head = String::from_utf8_lossy(&self.line).into_owned();
+                emit(&format!("{head} …"));
+                self.line.clear();
+                self.cut = part.len() - room;
             }
             match rest {
                 Some(rest) => {

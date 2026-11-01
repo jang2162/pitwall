@@ -59,8 +59,9 @@ impl ProcessTree {
     }
 }
 
-/// `spec` 을 띄운다. stdin · stdout · stderr 는 파이프다.
-pub(crate) fn spawn(spec: &LaunchSpec) -> io::Result<(Child, ProcessTree)> {
+/// `spec` 을 띄운다. stdin · stdout · stderr 는 파이프다. `marker` 가 있으면 환경의 [`crate::ledger::MARKER_ENV`] 로 넣는다(덮어쓸
+/// 수 없게 마지막에 — 강제 종료 뒤 거두기의 표지, `crate::ledger` 머리 주석).
+pub(crate) fn spawn(spec: &LaunchSpec, marker: Option<&str>) -> io::Result<(Child, ProcessTree)> {
     let mut command = Command::new(&spec.program);
     command
         .args(&spec.args)
@@ -69,6 +70,7 @@ pub(crate) fn spawn(spec: &LaunchSpec) -> io::Result<(Child, ProcessTree)> {
         .env("PATH", &spec.env.path)
         .envs(&spec.env.vars)
         .envs(&spec.extra_env)
+        .envs(marker.map(|m| (crate::ledger::MARKER_ENV, m)))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

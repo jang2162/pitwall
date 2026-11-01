@@ -45,6 +45,11 @@
 //! **신뢰를 거두면**(M4-01 리뷰 M2): 허가는 레지스트리를 함께 쥐고, 서버를 띄우는 그 자리에서 신뢰를 다시 본다
 //! ([`LspGrant::still_trusted`]) — 쥐고 있던 허가로는 신뢰를 거둔 뒤 띄울 수 없다. 물러남 재기동 · `lsp.server.restart` · 설치 뒤
 //! 기동은 그래도 매번 [`lsp_grant`] 를 다시 지난다(M4-05). 신뢰를 풀면 서버 관리자가 그 프로젝트의 서버를 끝낸다.
+//!
+//! **연결이 닫히면**(M4-01 재리뷰 N5): 연결 범위(`ConnectionScope`)는 값이라 다시 견줘도 창이 닫힌 것을 모른다. 그래서 허가는 그
+//! 요청이 온 연결의 닫힘 토큰(`Ctx::connection_closed`)을 쥐고, 서버를 띄우는 자리에서 연결이 아직 열려 있는지 본다
+//! ([`LspGrant::connection_open`]) — 창이 닫힌 뒤 쥔 허가로는 띄우지 못한다. 이미 뜬 서버를 연결이 닫힐 때 끄는 것은 서버 관리자의
+//! 수명 규칙이다(M4-05).
 
 use std::path::{Path, PathBuf};
 
@@ -54,6 +59,7 @@ use pw_core::registry::{Registry, RegistryError};
 use pw_rpc::{ConnectionScope, RpcError, code};
 use pw_runtime::{RuntimeEnv, runtime::Runtime};
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 /// [`lsp_grant`] 를 지난 허가: 이 프로젝트 · 워크트리의 루트 안에서 언어 서버를 띄워도 된다. 복제할 수 없다(머리 주석).
 pub struct LspGrant {
@@ -62,6 +68,8 @@ pub struct LspGrant {
     /// 정규화한 루트.
     root: PathBuf,
     projects: Registry,
+    /// 허가를 만든 연결이 닫히면 취소된다(`Ctx::connection_closed`).
+    connection: CancellationToken,
 }
 
 impl std::fmt::Debug for LspGrant {
@@ -94,6 +102,11 @@ impl LspGrant {
         real_path(path).is_some_and(|real| real.starts_with(&self.root))
     }
 
+    /// 허가를 만든 연결(창)이 아직 열려 있는가. 서버를 띄우는 자리가 부른다(M4-01 재리뷰 N5).
+    pub fn connection_open(&self) -> bool {
+        !self.connection.is_cancelled()
+    }
+
     /// 지금도 신뢰하는가(레지스트리를 다시 읽는다 — 블로킹이지만 짧다). 서버를 띄우는 자리가 부른다.
     pub fn still_trusted(&self) -> bool {
         self.projects.is_trusted(&self.project_id)
@@ -115,9 +128,11 @@ pub fn untrusted(project_id: &str) -> RpcError {
 }
 
 /// 이 연결이 `project_id`(활성 워크트리 `worktree`)에서 언어 서버를 띄워도 되는가(머리 주석의 두 판정). 모르는 프로젝트는
-/// `NOT_FOUND`, 그 프로젝트의 것이 아닌 워크트리는 invalid params.
+/// `NOT_FOUND`, 그 프로젝트의 것이 아닌 워크트리는 invalid params. `connection` 은 그 요청이 온 연결의 닫힘 토큰
+/// (`ctx.connection_closed()`) — 허가가 쥐고, 연결이 닫힌 뒤에는 그 허가로 띄우지 못한다(머리 주석 「연결이 닫히면」).
 pub fn lsp_grant(
     scope: &ConnectionScope,
+    connection: CancellationToken,
     projects: &Registry,
     project_id: &str,
     worktree: Option<&str>,
@@ -150,6 +165,7 @@ pub fn lsp_grant(
         worktree: worktree.map(str::to_owned),
         root,
         projects: projects.clone(),
+        connection,
     })
 }
 
@@ -177,6 +193,11 @@ mod tests {
     use pw_rpc::{Caller, Role};
 
     use super::*;
+
+    /// 열린 연결의 닫힘 토큰.
+    fn open() -> CancellationToken {
+        CancellationToken::new()
+    }
 
     struct Fixture {
         _tmp: tempfile::TempDir,
@@ -226,7 +247,7 @@ mod tests {
     fn the_trusted_projects_own_window_gets_a_grant_for_its_root() {
         let f = fixture();
         let scope = ConnectionScope::Project(f.trusted.clone());
-        let grant = lsp_grant(&scope, &f.projects, &f.trusted, None).unwrap();
+        let grant = lsp_grant(&scope, open(), &f.projects, &f.trusted, None).unwrap();
         assert_eq!(grant.project_id(), f.trusted);
         assert_eq!(grant.root(), f.root);
         assert_eq!(grant.worktree(), None);
@@ -236,13 +257,13 @@ mod tests {
     fn an_untrusted_project_never_gets_a_grant() {
         let f = fixture();
         let scope = ConnectionScope::Project(f.untrusted.clone());
-        let e = lsp_grant(&scope, &f.projects, &f.untrusted, None).unwrap_err();
+        let e = lsp_grant(&scope, open(), &f.projects, &f.untrusted, None).unwrap_err();
         assert_eq!(e.code, code::PERMISSION_DENIED);
         assert_eq!(reason(&e), Some("untrusted"));
         // 신뢰를 거두면 같은 창이라도 다시 받지 못한다.
         let scope = ConnectionScope::Project(f.trusted.clone());
         f.projects.set_trust(&f.trusted, false).unwrap();
-        let e = lsp_grant(&scope, &f.projects, &f.trusted, None).unwrap_err();
+        let e = lsp_grant(&scope, open(), &f.projects, &f.trusted, None).unwrap_err();
         assert_eq!(reason(&e), Some("untrusted"));
     }
 
@@ -255,7 +276,7 @@ mod tests {
             ConnectionScope::Project(f.untrusted.clone()),
             file,
         ] {
-            let e = lsp_grant(&scope, &f.projects, &f.trusted, None).unwrap_err();
+            let e = lsp_grant(&scope, open(), &f.projects, &f.trusted, None).unwrap_err();
             assert_eq!(e.code, code::PERMISSION_DENIED, "{scope:?}");
             assert_ne!(reason(&e), Some("untrusted"), "{scope:?}");
         }
@@ -265,14 +286,15 @@ mod tests {
     fn unknown_projects_and_foreign_worktrees_are_refused() {
         let f = fixture();
         let scope = ConnectionScope::Project("nope".to_owned());
-        let e = lsp_grant(&scope, &f.projects, "nope", None).unwrap_err();
+        let e = lsp_grant(&scope, open(), &f.projects, "nope", None).unwrap_err();
         assert_eq!(e.code, code::NOT_FOUND);
         let scope = ConnectionScope::Project(f.trusted.clone());
-        let e = lsp_grant(&scope, &f.projects, &f.trusted, Some("relative")).unwrap_err();
+        let e = lsp_grant(&scope, open(), &f.projects, &f.trusted, Some("relative")).unwrap_err();
         assert_eq!(e.code, code::INVALID_PARAMS);
         let elsewhere = f.root.parent().unwrap().join("untrusted");
         let e = lsp_grant(
             &scope,
+            open(),
             &f.projects,
             &f.trusted,
             Some(elsewhere.to_str().unwrap()),
@@ -286,7 +308,7 @@ mod tests {
     fn a_grant_contains_only_paths_under_its_real_root() {
         let f = fixture();
         let scope = ConnectionScope::Project(f.trusted.clone());
-        let grant = lsp_grant(&scope, &f.projects, &f.trusted, None).unwrap();
+        let grant = lsp_grant(&scope, open(), &f.projects, &f.trusted, None).unwrap();
         let inner = f.root.join("crates").join("a");
         fs::create_dir_all(&inner).unwrap();
         assert!(grant.contains(&f.root));
@@ -313,7 +335,7 @@ mod tests {
     fn a_held_grant_sees_trust_revoked() {
         let f = fixture();
         let scope = ConnectionScope::Project(f.trusted.clone());
-        let grant = lsp_grant(&scope, &f.projects, &f.trusted, None).unwrap();
+        let grant = lsp_grant(&scope, open(), &f.projects, &f.trusted, None).unwrap();
         assert!(grant.still_trusted());
         f.projects.set_trust(&f.trusted, false).unwrap();
         assert!(!grant.still_trusted());

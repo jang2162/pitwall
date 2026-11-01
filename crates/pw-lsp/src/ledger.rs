@@ -1,21 +1,27 @@
 //! Host 가 강제로 끝난 뒤(SIGKILL · 크래시) 남은 서버 프로세스 그룹을 다음 시작 때 끈다(M4-01 리뷰 L1 — M3-11 의 ssh 기록
-//! `pw_db_driver::tunnel::orphans` 와 같은 방식).
+//! `pw_db_driver::tunnel::orphans` 와 같은 기준: 기록 파일의 내용만으로 끄지 않는다).
 //!
 //! Host 가 정상으로 끝나면 서버 관리자가 [`crate::LanguageServer::shutdown`] 으로 그룹째 끝낸다. 강제로 끝나면 그 길이 돌지 않는다 —
 //! 실 서버 대부분은 stdin 의 끝 · `processId` 로 스스로 끝나지만 서버가 띄운 손자(빌드 · Gradle 데몬 등)는 남을 수 있다. 그래서
 //! 띄운 서버마다 상태 디렉터리([`ledger_dir`])에 기록을 두고(서버가 끝나면 지운다), Host 가 시작할 때 [`Ledger::reap_orphans`] 가
-//! 기록을 읽어 **맞는 것만** 그룹째(SIGKILL) 끈다:
+//! 기록을 읽어 **맞는 것만** 그룹째(SIGKILL) 끈다.
+//!
+//! **표지**(M4-01 재리뷰 N1): 띄울 때 128비트 무작위 값([`Ledger::marker`])을 서버 환경의 [`MARKER_ENV`] 로 넣고(자손이 물려받는다)
+//! 기록에도 적는다. 기록 파일은 같은 사용자라면 누구든 쓸 수 있는 자리라 기록이 적은 pid · 인자는 믿지 않는다 — 끄는 프로세스가
+//! **그 표지를 환경에 지니고 있어야** 우리가 띄운 것으로 본다. 위조 기록은 남의 프로세스 환경에 표지를 넣을 수 없다.
+//!
+//! 끄는 조건(모두 맞아야 한다):
 //!
 //! 1. 기록한 **Host 가 이미 끝났다**(그 pid 가 없거나 시작 시각이 다르다) — 같은 상태 디렉터리를 쓰는 살아 있는 Host 의 서버를 끄지
 //!    않는다.
-//! 2. 그룹의 리더(서버, pid = 그룹 id)가 **살아 있으면**: 그 시작 시각이 기록과 같고 argv 가 기록한 실행 파일 · 인자 그대로다
-//!    (끝이 인자 그대로이고 그 앞에 실행 파일 경로가 있다 — `#!` 스크립트면 인터프리터가 앞에 붙는다).
-//! 3. 리더가 **없으면**: 그 그룹 id 를 가진 프로세스(남은 손자)가 모두 기록한 시작 시각 이후에 시작했다. 그룹이 살아 있는 동안 그
-//!    id 는 새 pid 로 다시 쓰이지 않으므로(커널이 쓰는 중인 그룹 id 를 pid 로 내주지 않는다) 그 그룹은 우리가 띄운 그룹이다. 남은
-//!    틈: 우리 그룹이 다 끝난 뒤 같은 id 가 다른 그룹의 리더에 다시 쓰이고, 그 리더도 끝나 자식만 남은 채로 다음 시작을 맞는 경우 —
-//!    셋이 겹쳐야 한다.
+//! 2. **부팅 시각이 같다** — 재부팅을 건너면 pid 와 시작 시각을 견주는 뜻이 없다(macOS 의 시작 시각은 벽시계라 재부팅 뒤 모두 「기록
+//!    이후」 이고, Linux 는 부팅 뒤 틱이다). 다르면 지우기만 한다.
+//! 3. 그룹의 리더(서버, pid = 그룹 id)가 **살아 있으면**: 그 시작 시각이 기록과 같고, argv 가 기록한 실행 파일 · 인자 그대로이고(끝이
+//!    인자 그대로이고 그 앞에 실행 파일 경로가 있다 — `#!` 스크립트면 인터프리터가 앞에 붙는다), 환경에 표지가 있다.
+//! 4. 리더가 **없으면**(서버는 끝나고 손자만 남았다): 그 그룹 id 를 가진 프로세스가 **모두** 기록한 시작 시각 이후에 시작했고 **모두**
+//!    환경에 표지가 있다. 하나라도 표지가 없거나(환경을 비우고 띄운 자손 포함) 읽을 수 없으면(다른 사용자 소유 등) 끄지 않는다.
 //!
-//! 맞지 않는 기록은 지우기만 한다. 시작 시각 · argv 를 읽지 못하면 끄지 않는다(모르면 남의 것으로 본다).
+//! 맞지 않는 기록은 지우기만 한다. 시작 시각 · argv · 환경을 읽지 못하면 끄지 않는다(모르면 남의 것으로 본다).
 //!
 //! Linux 는 이것과 별도로 서버에 `PR_SET_PDEATHSIG`(SIGTERM)를 건다(`crate::process`) — Host 가 죽으면 그 자리에서 서버가 신호를
 //! 받는다(손자는 서버가 정리하거나 다음 시작의 거두기가). Windows 는 Job Object 가 Host 와 함께 닫혀 트리째 끝나므로 기록하지 않는다.
@@ -27,7 +33,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// 기록 파일의 첫 줄(형식이 바뀌면 숫자를 올린다 — 모르는 형식은 끄지 않고 지운다).
-const MAGIC: &str = "pitwall-lsp-server 1";
+const MAGIC: &str = "pitwall-lsp-server 2";
+
+/// 서버 환경에 넣는 표지의 이름(머리 주석 「표지」).
+pub const MARKER_ENV: &str = "PITWALL_LSP_RUN";
+
+/// 부팅 시각을 같다고 보는 차(초). 커널이 계산하는 부팅 시각은 시계 보정으로 조금 흔들린다 — 재부팅은 이보다 훨씬 길다.
+const BOOT_SLACK_SECS: u64 = 2;
 
 /// `$STATE/lsp/running`.
 pub fn ledger_dir(state: &Path) -> PathBuf {
@@ -61,19 +73,36 @@ impl Ledger {
         &self.dir
     }
 
-    /// 서버(pid = 그룹 id)와 그 argv(실행 파일 + 인자)를 적는다. 적지 못하면 경고만 남긴다(서버는 그대로 쓴다 — 강제 종료 뒤
-    /// 정리만 못 한다). Windows 는 적지 않는다(머리 주석).
-    pub(crate) fn record(&self, pid: u32, argv: &[OsString]) -> Option<Record> {
+    /// 띄울 서버에 넣을 표지(128비트 무작위, 16진수). 만들지 못하면(Windows · 난수를 읽지 못함) `None` — 그 서버는 기록하지 않는다.
+    pub(crate) fn marker() -> Option<String> {
         if cfg!(windows) {
             return None;
         }
-        let Some(start) = start_time(pid) else {
-            tracing::warn!(target: "pw_lsp", pid, "cannot read the language server's start time; it will not be cleaned up after a crash");
+        let mut bytes = [0u8; 16];
+        let read = fs::File::open("/dev/urandom")
+            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes));
+        match read {
+            Ok(()) => Some(bytes.iter().map(|b| format!("{b:02x}")).collect()),
+            Err(e) => {
+                tracing::warn!(target: "pw_lsp", %e, "cannot make a language server marker; it will not be cleaned up after a crash");
+                None
+            }
+        }
+    }
+
+    /// 서버(pid = 그룹 id)와 그 argv(실행 파일 + 인자) · 표지를 적는다. 적지 못하면 경고만 남긴다(서버는 그대로 쓴다 — 강제 종료 뒤
+    /// 정리만 못 한다). Windows 는 적지 않는다(머리 주석).
+    pub(crate) fn record(&self, pid: u32, argv: &[OsString], marker: &str) -> Option<Record> {
+        if cfg!(windows) {
+            return None;
+        }
+        let (Some(start), Some(boot)) = (start_time(pid), boot_time()) else {
+            tracing::warn!(target: "pw_lsp", pid, "cannot read the language server's start or boot time; it will not be cleaned up after a crash");
             return None;
         };
         let owner = std::process::id();
         let mut text = format!(
-            "{MAGIC}\npid {pid}\nstart {start}\nowner {owner} {}\n",
+            "{MAGIC}\npid {pid}\nstart {start}\nboot {boot}\nmark {marker}\nowner {owner} {}\n",
             start_time(owner).unwrap_or_default()
         );
         for arg in argv {
@@ -123,7 +152,7 @@ impl Ledger {
             if owner_lives(&record) {
                 continue;
             }
-            if ours(&record) {
+            if same_boot(&record) && ours(&record) {
                 tracing::info!(target: "pw_lsp", pid = record.pid, "ending a language server process group left by a previous run");
                 kill_group(record.pid);
                 ended += 1;
@@ -139,6 +168,8 @@ impl Ledger {
 struct Parsed {
     pid: u32,
     start: u128,
+    boot: u64,
+    marker: String,
     owner: u32,
     owner_start: Option<u128>,
     argv: Vec<String>,
@@ -151,15 +182,21 @@ fn parse(text: &str) -> Option<Parsed> {
     }
     let pid = lines.next()?.strip_prefix("pid ")?.parse().ok()?;
     let start = lines.next()?.strip_prefix("start ")?.parse().ok()?;
+    let boot = lines.next()?.strip_prefix("boot ")?.parse().ok()?;
+    let marker = lines.next()?.strip_prefix("mark ")?.to_owned();
     let (owner, owner_start) = lines.next()?.strip_prefix("owner ")?.split_once(' ')?;
     let owner = owner.parse().ok()?;
     let owner_start = owner_start.parse().ok();
     let argv: Vec<String> = lines
         .map(|l| l.strip_prefix("arg ").map(str::to_owned))
         .collect::<Option<_>>()?;
-    (!argv.is_empty() && pid > 1).then_some(Parsed {
+    // 표지가 짧으면(손으로 쓴 기록) 맞힐 수 있다 — 우리가 쓰는 꼴(32 자 16진수)만 받는다.
+    let marker_ok = marker.len() == 32 && marker.bytes().all(|b| b.is_ascii_hexdigit());
+    (!argv.is_empty() && pid > 1 && marker_ok).then_some(Parsed {
         pid,
         start,
+        boot,
+        marker,
         owner,
         owner_start,
         argv,
@@ -174,17 +211,35 @@ fn owner_lives(record: &Parsed) -> bool {
     }
 }
 
-/// 머리 주석의 2 · 3.
+/// 머리 주석의 2.
+fn same_boot(record: &Parsed) -> bool {
+    boot_time().is_some_and(|now| now.abs_diff(record.boot) <= BOOT_SLACK_SECS)
+}
+
+/// 머리 주석의 3 · 4.
 fn ours(record: &Parsed) -> bool {
+    let marked =
+        |pid: u32| process_args(pid).is_some_and(|args| carries(&args.env, &record.marker));
     if alive(record.pid) {
         return start_time(record.pid) == Some(record.start)
-            && argv(record.pid).is_some_and(|argv| runs(&argv, &record.argv));
+            && process_args(record.pid).is_some_and(|args| {
+                runs(&args.argv, &record.argv) && carries(&args.env, &record.marker)
+            });
     }
     let members = group_members(record.pid);
     !members.is_empty()
         && members
             .iter()
-            .all(|&m| start_time(m).is_some_and(|s| s >= record.start))
+            .all(|&m| start_time(m).is_some_and(|s| s >= record.start) && marked(m))
+}
+
+/// 환경(`이름=값` 들)에 표지가 있는가.
+fn carries(env: &[String], marker: &str) -> bool {
+    env.iter().any(|kv| {
+        kv.strip_prefix(MARKER_ENV)
+            .and_then(|rest| rest.strip_prefix('='))
+            == Some(marker)
+    })
 }
 
 /// 프로세스 argv 가 기록한 실행 파일 · 인자를 돌리는가: 끝이 인자 그대로이고 그 앞에 실행 파일 경로가 있다.
@@ -303,9 +358,14 @@ fn start_time(_pid: u32) -> Option<u128> {
     None
 }
 
-/// 프로세스의 argv(`argv[0]` 포함).
+/// 프로세스의 argv(`argv[0]` 포함)와 환경(`이름=값`).
+struct ProcessArgs {
+    argv: Vec<String>,
+    env: Vec<String>,
+}
+
 #[cfg(target_os = "macos")]
-fn argv(pid: u32) -> Option<Vec<String>> {
+fn process_args(pid: u32) -> Option<ProcessArgs> {
     let pid = libc::c_int::try_from(pid).ok()?;
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut size: libc::size_t = 0;
@@ -339,33 +399,77 @@ fn argv(pid: u32) -> Option<Vec<String>> {
         return None;
     }
     buf.truncate(size);
-    // argc(i32) · 실행 파일 경로 · NUL 채움 · argv 문자열들.
+    // argc(i32) · 실행 파일 경로 · NUL 채움 · argv 문자열들 · 환경 문자열들(그 뒤 `apple[]` 문자열 — 표지와 겹치지 않는다).
     let argc = usize::try_from(i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?)).ok()?;
     let rest = buf.get(4..)?;
     let path_end = rest.iter().position(|&b| b == 0)?;
     let mut strings = rest[path_end..]
         .split(|&b| b == 0)
-        .filter(|s| !s.is_empty());
-    let mut args = Vec::with_capacity(argc);
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned());
+    let mut argv = Vec::with_capacity(argc);
     for _ in 0..argc {
-        args.push(String::from_utf8_lossy(strings.next()?).into_owned());
+        argv.push(strings.next()?);
     }
-    Some(args)
+    Some(ProcessArgs {
+        argv,
+        env: strings.collect(),
+    })
 }
 
 #[cfg(target_os = "linux")]
-fn argv(pid: u32) -> Option<Vec<String>> {
-    let raw = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    Some(
+fn process_args(pid: u32) -> Option<ProcessArgs> {
+    let split = |raw: Vec<u8>| -> Vec<String> {
         raw.split(|&b| b == 0)
             .filter(|s| !s.is_empty())
             .map(|s| String::from_utf8_lossy(s).into_owned())
-            .collect(),
-    )
+            .collect()
+    };
+    Some(ProcessArgs {
+        argv: split(fs::read(format!("/proc/{pid}/cmdline")).ok()?),
+        env: split(fs::read(format!("/proc/{pid}/environ")).ok()?),
+    })
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn argv(_pid: u32) -> Option<Vec<String>> {
+fn process_args(_pid: u32) -> Option<ProcessArgs> {
+    None
+}
+
+/// 부팅 시각(유닉스 초).
+#[cfg(target_os = "macos")]
+fn boot_time() -> Option<u64> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_BOOTTIME];
+    // SAFETY: timeval 은 C 구조체(모두 0 이 올바른 값)이고, sysctl 은 준 크기까지만 쓴다.
+    let mut tv: libc::timeval = unsafe { std::mem::zeroed() };
+    let mut size = size_of::<libc::timeval>();
+    // SAFETY: 위와 같다.
+    let got = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            2,
+            (&raw mut tv).cast(),
+            &raw mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (got == 0 && size == size_of::<libc::timeval>())
+        .then(|| u64::try_from(tv.tv_sec).ok())
+        .flatten()
+        .filter(|&s| s > 0)
+}
+
+#[cfg(target_os = "linux")]
+fn boot_time() -> Option<u64> {
+    fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("btime ")?.trim().parse().ok())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn boot_time() -> Option<u64> {
     None
 }
 
@@ -373,8 +477,11 @@ fn argv(_pid: u32) -> Option<Vec<String>> {
 mod tests {
     use super::*;
 
+    const MARK: &str = "0123456789abcdef0123456789abcdef";
+
     fn text(pid: u32, start: u128, owner: u32, args: &[&str]) -> String {
-        let mut t = format!("{MAGIC}\npid {pid}\nstart {start}\nowner {owner} 7\n");
+        let mut t =
+            format!("{MAGIC}\npid {pid}\nstart {start}\nboot 5\nmark {MARK}\nowner {owner} 7\n");
         for a in args {
             t.push_str(&format!("arg {a}\n"));
         }
@@ -386,12 +493,37 @@ mod tests {
         let parsed = parse(&text(40, 123, 9, &["/x/rust-analyzer", "--stdio"])).unwrap();
         assert_eq!(parsed.pid, 40);
         assert_eq!(parsed.start, 123);
+        assert_eq!(parsed.boot, 5);
+        assert_eq!(parsed.marker, MARK);
         assert_eq!(parsed.owner_start, Some(7));
         assert_eq!(parsed.argv, ["/x/rust-analyzer", "--stdio"]);
         assert_eq!(parse(&text(40, 1, 9, &[])), None);
         assert_eq!(parse(&text(1, 1, 9, &["/x"])), None);
         assert_eq!(parse("pitwall-lsp-server 2\npid 4\n"), None);
         assert_eq!(parse(&format!("{}junk\n", text(40, 1, 9, &["/x"]))), None);
+        // 우리가 쓰지 않는 꼴의 표지(짧아 맞힐 수 있다)는 받지 않는다.
+        assert_eq!(parse(&text(40, 1, 9, &["/x"]).replace(MARK, "ab")), None);
+    }
+
+    #[test]
+    fn the_marker_must_be_an_exact_environment_entry() {
+        let env = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert!(carries(
+            &env(&["A=1", &format!("{MARKER_ENV}={MARK}")]),
+            MARK
+        ));
+        assert!(!carries(&env(&[&format!("{MARKER_ENV}={MARK}x")]), MARK));
+        assert!(!carries(&env(&[&format!("X{MARKER_ENV}={MARK}")]), MARK));
+        assert!(!carries(&env(&[MARK]), MARK));
+        assert!(!carries(&[], MARK));
+    }
+
+    #[test]
+    fn this_machine_reports_a_boot_time() {
+        if cfg!(any(target_os = "macos", target_os = "linux")) {
+            let boot = boot_time().expect("boot time");
+            assert!(boot > 1_000_000_000, "{boot}");
+        }
     }
 
     #[test]
@@ -413,14 +545,17 @@ mod tests {
         fs::create_dir_all(tmp.path()).unwrap();
         // 살아 있는 Host(이 시험 프로세스)의 기록: 남는다.
         let me = std::process::id();
+        let boot = boot_time().unwrap_or(0);
         let mine = format!(
-            "{MAGIC}\npid {me}\nstart {}\nowner {me} {}\narg x\n",
+            "{MAGIC}\npid {me}\nstart {}\nboot {boot}\nmark {MARK}\nowner {me} {}\narg x\n",
             start_time(me).unwrap_or(0),
             start_time(me).map(|s| s.to_string()).unwrap_or_default()
         );
         fs::write(tmp.path().join("a"), mine).unwrap();
         // 끝난 Host 의 기록이지만 pid 의 시작 시각이 다르다(남의 프로세스 — 이 시험 프로세스): 끄지 않고 지운다.
-        let stranger = format!("{MAGIC}\npid {me}\nstart 1\nowner 99999999 1\narg x\n");
+        let stranger = format!(
+            "{MAGIC}\npid {me}\nstart 1\nboot {boot}\nmark {MARK}\nowner 99999999 1\narg x\n"
+        );
         fs::write(tmp.path().join("b"), stranger).unwrap();
         fs::write(tmp.path().join(".c.partial"), "half").unwrap();
         fs::write(tmp.path().join("d"), "garbage").unwrap();
@@ -431,5 +566,211 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left, ["a"]);
+    }
+
+    /// 재리뷰 N1 의 재현과 그 짝 — 남의 프로세스를 가리키는 기록(위조 · 재사용)으로는 끄지 않고, 표지를 지닌 우리 그룹만 끈다.
+    #[cfg(unix)]
+    mod forged {
+        use std::os::unix::process::CommandExt as _;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        use super::*;
+
+        /// 끝난 Host 가 남긴 것처럼 보이는 기록을 쓴다.
+        fn write_record(dir: &Path, pid: u32, start: u128, mark: &str, argv: &[&str]) {
+            fs::create_dir_all(dir).unwrap();
+            let mut t = format!(
+                "{MAGIC}\npid {pid}\nstart {start}\nboot {}\nmark {mark}\nowner 99999999 1\n",
+                boot_time().unwrap()
+            );
+            for a in argv {
+                t.push_str(&format!("arg {a}\n"));
+            }
+            fs::write(dir.join(pid.to_string()), t).unwrap();
+        }
+
+        /// 자기 그룹으로 띄운다(`marker` 가 있으면 환경에 넣는다).
+        fn spawn_group(program: &str, args: &[&str], marker: Option<&str>) -> std::process::Child {
+            let mut c = Command::new(program);
+            c.args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(0);
+            if let Some(m) = marker {
+                c.env(MARKER_ENV, m);
+            }
+            c.spawn().unwrap()
+        }
+
+        /// `sh -c "<script>"` 을 자기 그룹으로 띄우고 리더(sh)가 끝나기를 기다린다 — 백그라운드 자식만 남은 리더 없는 그룹.
+        fn leaderless_group(script: &str, marker: Option<&str>, members: usize) -> u32 {
+            let mut sh = spawn_group("/bin/sh", &["-c", script], marker);
+            let group = sh.id();
+            sh.wait().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while group_members(group).len() < members {
+                assert!(
+                    Instant::now() < deadline,
+                    "the group's members did not start"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            group
+        }
+
+        /// 그룹이 비었는가(잠시 기다린다 — SIGKILL 뒤 사라지기까지).
+        fn emptied(group: u32) -> bool {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                if group_members(group).is_empty() {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            false
+        }
+
+        fn me_start() -> u128 {
+            start_time(std::process::id()).unwrap()
+        }
+
+        const SLEEPER: &str = "PW_LSP_LEDGER_SLEEPER";
+        const SLEEPER_ARGS: [&str; 4] = [
+            "ledger::tests::forged::sleeper",
+            "--exact",
+            "--ignored",
+            "--quiet",
+        ];
+
+        /// 도우미: 환경 변수가 있으면 그만큼(초) 잔다. 시험 바이너리 자신을 그룹원으로 쓴다 — `/bin/sleep` · `/bin/sh` 같은 플랫폼
+        /// 바이너리는 macOS 가 환경을 가려(같은 사용자여도) 표지를 읽을 수 없으므로, 판정이 표지로 갈리는지 보려면 환경을 읽을 수
+        /// 있는 프로세스여야 한다.
+        #[test]
+        #[ignore = "helper process for the ledger tests; does nothing on its own"]
+        fn sleeper() {
+            if let Some(secs) = std::env::var(SLEEPER).ok().and_then(|s| s.parse().ok()) {
+                std::thread::sleep(Duration::from_secs(secs));
+            }
+        }
+
+        fn exe() -> String {
+            std::env::current_exe()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        }
+
+        /// 도우미를 부르는 셸 명령(`sh -c` 안에 넣는다).
+        fn sleeper_cmd(secs: u32) -> String {
+            format!("{SLEEPER}={secs} '{}' {}", exe(), SLEEPER_ARGS.join(" "))
+        }
+
+        /// 재현 ①: Pitwall 과 무관한 리더 없는 그룹을 가리키는 `start 0` 기록 — 끄지 않는다.
+        #[test]
+        fn a_start_zero_record_does_not_end_a_stranger_leaderless_group() {
+            let tmp = tempfile::tempdir().unwrap();
+            let group = leaderless_group(&format!("{} & exit 0", sleeper_cmd(300)), None, 1);
+            write_record(tmp.path(), group, 0, MARK, &["/not/a/language/server"]);
+            let ended = Ledger::new(tmp.path()).reap_orphans();
+            let left = group_members(group);
+            kill_group(group);
+            assert_eq!(ended, 0);
+            assert_eq!(left.len(), 1, "the stranger's process was ended");
+        }
+
+        /// 재현 ②: 산 리더의 시작 시각 · argv 를 그대로 적은 위조 기록 — 표지가 없으므로 끄지 않는다. 짝: 같은 기록이라도 리더가
+        /// 그 표지를 지니면 끈다(시험이 다른 까닭으로 0 을 내는 것이 아님을 보인다).
+        #[test]
+        fn a_record_copying_a_living_leader_needs_its_marker() {
+            let exe = exe();
+            for (marker, expected) in [(None, 0), (Some(MARK), 1)] {
+                let tmp = tempfile::tempdir().unwrap();
+                let mut c = Command::new(&exe);
+                c.args(SLEEPER_ARGS)
+                    .env(SLEEPER, "31")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .process_group(0);
+                if let Some(m) = marker {
+                    c.env(MARKER_ENV, m);
+                }
+                let mut sleeper = c.spawn().unwrap();
+                let pid = sleeper.id();
+                // 도우미가 실행 파일을 다 올린 뒤(argv · 환경을 읽을 수 있게) 기록한다.
+                std::thread::sleep(Duration::from_millis(300));
+                let mut argv = vec![exe.as_str()];
+                argv.extend(SLEEPER_ARGS);
+                write_record(tmp.path(), pid, start_time(pid).unwrap(), MARK, &argv);
+                let ended = Ledger::new(tmp.path()).reap_orphans();
+                let status = if expected == 0 {
+                    sleeper.kill().unwrap();
+                    None
+                } else {
+                    Some(sleeper.wait().unwrap())
+                };
+                let _ = sleeper.wait();
+                assert_eq!(ended, expected, "marker {marker:?}");
+                if let Some(status) = status {
+                    use std::os::unix::process::ExitStatusExt as _;
+                    assert_eq!(status.signal(), Some(libc::SIGKILL));
+                }
+            }
+        }
+
+        /// 리더 없는 그룹에 표지 없는 그룹원이 하나라도 섞이면 끄지 않는다. 짝: 모두 표지를 지니면 끈다.
+        #[test]
+        fn a_leaderless_group_is_ended_only_when_every_member_carries_the_marker() {
+            for (script, expected) in [
+                (
+                    format!(
+                        "{} & env -u {MARKER_ENV} {} & exit 0",
+                        sleeper_cmd(300),
+                        sleeper_cmd(301)
+                    ),
+                    0,
+                ),
+                (
+                    format!("{} & {} & exit 0", sleeper_cmd(300), sleeper_cmd(301)),
+                    1,
+                ),
+            ] {
+                let tmp = tempfile::tempdir().unwrap();
+                let start = me_start();
+                let group = leaderless_group(&script, Some(MARK), 2);
+                std::thread::sleep(Duration::from_millis(300));
+                write_record(tmp.path(), group, start, MARK, &["/bin/sh"]);
+                let ended = Ledger::new(tmp.path()).reap_orphans();
+                let empty = emptied(group);
+                kill_group(group);
+                assert_eq!(ended, expected, "{script}");
+                assert_eq!(empty, expected == 1, "{script}");
+            }
+        }
+
+        /// 기록과 부팅 시각이 다르면(재부팅을 건넜다) 끄지 않고 지운다.
+        #[test]
+        fn a_record_from_another_boot_is_only_removed() {
+            let tmp = tempfile::tempdir().unwrap();
+            let start = me_start();
+            let group = leaderless_group(&format!("{} & exit 0", sleeper_cmd(300)), Some(MARK), 1);
+            std::thread::sleep(Duration::from_millis(300));
+            write_record(tmp.path(), group, start, MARK, &["/bin/sh"]);
+            let path = tmp.path().join(group.to_string());
+            let other_boot = fs::read_to_string(&path).unwrap().replace(
+                &format!("boot {}", boot_time().unwrap()),
+                &format!("boot {}", boot_time().unwrap() - 3600),
+            );
+            fs::write(&path, other_boot).unwrap();
+            let ended = Ledger::new(tmp.path()).reap_orphans();
+            let left = group_members(group);
+            kill_group(group);
+            assert_eq!(ended, 0);
+            assert_eq!(left.len(), 1);
+            assert!(!path.exists(), "the record should be removed");
+        }
     }
 }

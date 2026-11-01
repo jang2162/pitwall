@@ -96,7 +96,8 @@ pub enum Action {
     Sleep { ms: u64 },
     /// 곧바로 이 코드로 끝난다(죽음).
     Exit { code: i32 },
-    /// 같은 프로세스 그룹에 `seconds` 동안 사는 자식을 띄운다(그룹째 끝내기 시험). pid 는 `record` 에.
+    /// 같은 프로세스 그룹에 `seconds` 동안 사는 자식(가짜 서버 자신의 `--sleep` — 환경을 물려받는다)을 띄운다(그룹째 끝내기 ·
+    /// 거두기 시험). pid 는 `record` 에.
     SpawnChild { seconds: u64 },
     /// stderr 에 `bytes` 바이트의 `a` 를 쏟는다 — `newline` 이 거짓이면 줄바꿈 없이(stderr 상한 시험 — 리뷰 H1).
     StderrFlood { bytes: u64, newline: bool },
