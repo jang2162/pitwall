@@ -324,6 +324,17 @@ impl Registry {
     fn add(&mut self, engine: &Version, root: ExtensionRoot) {
         let manifest_path = RelPath::parse(MANIFEST).expect("constant path");
         let file = root.display(Some(&manifest_path));
+        // 매니페스트도 통째로 읽어 파싱하므로 다른 내용 파일과 같은 상한을 둔다(사용자 확장의 큰 파일이 시작을 붙잡지 않게).
+        if let Ok(size) = root.size(&manifest_path)
+            && size > MAX_CONTENT_BYTES
+        {
+            self.push_error(
+                &file,
+                None,
+                format!("is {size} bytes, over the {MAX_CONTENT_BYTES}-byte limit"),
+            );
+            return;
+        }
         let source = match root.read(&manifest_path) {
             Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
             Err(SourceError::NotFound) => {
@@ -1430,6 +1441,46 @@ mod tests {
                 MAX_CONTENT_BYTES + 1
             )),
             "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_manifest_over_the_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = manifest("dev.example.huge", "*", "");
+        let pad = MAX_CONTENT_BYTES as usize + 1 - body.len();
+        let root = ext(
+            dir.path(),
+            "huge",
+            &[("extension.toml", &format!("{body}{}", "#".repeat(pad)))],
+        );
+        let registry = Registry::from_roots(&engine(), [root]);
+        assert!(registry.extensions().is_empty());
+        let file = shown(dir.path(), "huge", "extension.toml");
+        assert_eq!(
+            messages(&registry),
+            [format!(
+                "{}: error: is {} bytes, over the {MAX_CONTENT_BYTES}-byte limit",
+                file.display(),
+                MAX_CONTENT_BYTES + 1
+            )]
+        );
+        // 상한과 같은 크기는 받는다.
+        let edge = ext(
+            dir.path(),
+            "edge",
+            &[(
+                "extension.toml",
+                &format!(
+                    "{}{}",
+                    manifest("dev.example.edge", "*", ""),
+                    "#".repeat(pad - 1)
+                ),
+            )],
+        );
+        assert_eq!(
+            Registry::from_roots(&engine(), [edge]).extensions().len(),
+            1
         );
     }
 

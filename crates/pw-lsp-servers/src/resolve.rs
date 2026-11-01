@@ -149,7 +149,7 @@ pub fn resolve(
     let mut skipped = Vec::new();
     if ctx.trusted
         && let Some(local) = &def.project_local
-        && let Some(path) = project_local(ctx.project_root, ctx.dir, local.as_str())
+        && let Some(path) = project_local(ctx.project_root, ctx.dir, local.as_str(), ctx.env)
     {
         return found(path, LspResolveStep::ProjectLocal, None, skipped);
     }
@@ -205,12 +205,11 @@ fn configured_path(configured: &ConfiguredPath, ctx: &ResolveContext<'_>) -> Lsp
         reason: reason.to_owned(),
     };
     let found_at = if as_path.is_absolute() {
-        find_program(raw, OsStr::new(""))
+        find_at(as_path, ctx.env)
     } else if !has_separator {
         find_program(raw, &ctx.env.path)
     } else if configured.origin == LspSettingsOrigin::Project {
-        let joined = ctx.project_root.join(as_path);
-        find_program(&joined.to_string_lossy(), OsStr::new(""))
+        find_at(&ctx.project_root.join(as_path), ctx.env)
     } else {
         return invalid(
             "a relative path in the global settings has nothing to be relative to; use an absolute path or a name on PATH",
@@ -224,12 +223,58 @@ fn configured_path(configured: &ConfiguredPath, ctx: &ResolveContext<'_>) -> Lsp
 }
 
 /// 해석하는 디렉터리부터 프로젝트 루트까지 올라가며 `rel` 이 가리키는 실행 파일. 루트 밖으로는 올라가지 않는다.
-fn project_local(root: &Path, dir: &Path, rel: &str) -> Option<PathBuf> {
-    let start = if dir.starts_with(root) { dir } else { root };
+fn project_local(root: &Path, dir: &Path, rel: &str, env: &RuntimeEnv) -> Option<PathBuf> {
+    dirs_up_to_root(root, dir)
+        .into_iter()
+        .flat_map(|d| executable_names(&d.join(rel), env))
+        .find_map(|p| find_program(&p.to_string_lossy(), OsStr::new("")))
+}
+
+/// `dir` 부터 `root` 까지의 폴더(가까운 것부터). 둘 다 실제 경로(심볼릭 링크 · `..` 를 푼 것)로 견주므로 `<root>/..` 나 루트 밖을
+/// 가리키는 링크는 루트 안이 아니다 — 그러면 `root` 하나다. `root` 의 실제 경로를 얻지 못하면 비어 있다.
+pub(crate) fn dirs_up_to_root(root: &Path, dir: &Path) -> Vec<PathBuf> {
+    let Ok(root) = std::fs::canonicalize(root) else {
+        return Vec::new();
+    };
+    let start = std::fs::canonicalize(dir)
+        .ok()
+        .filter(|d| d.starts_with(&root))
+        .unwrap_or_else(|| root.clone());
     start
         .ancestors()
-        .take_while(|d| d.starts_with(root))
-        .map(|d| d.join(rel))
+        .take_while(|d| d.starts_with(&root))
+        .map(Path::to_path_buf)
+        .collect()
+}
+
+/// 경로로 적은 실행 파일(프로젝트 로컬 · 설정의 경로)로 볼 파일. Windows 는 PATHEXT 확장자를 붙인 이름만 본다 — npm 이
+/// `node_modules/.bin` 에 함께 까는 확장자 없는 sh 스크립트는 `CreateProcess` 로 띄울 수 없다(`.cmd` 를 고른다).
+fn executable_names(path: &Path, env: &RuntimeEnv) -> Vec<PathBuf> {
+    let pathext = env.get("PATHEXT").and_then(OsStr::to_str);
+    candidate_names(path, cfg!(windows), pathext)
+}
+
+/// [`executable_names`] 의 플랫폼 무관한 꼴(시험이 두 갈래를 모두 본다).
+pub(crate) fn candidate_names(path: &Path, windows: bool, pathext: Option<&str>) -> Vec<PathBuf> {
+    if !windows {
+        return vec![path.to_path_buf()];
+    }
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return Vec::new();
+    };
+    let pathext = pathext.filter(|p| !p.is_empty()).unwrap_or(DEFAULT_PATHEXT);
+    pw_runtime::program::windows_names(name, pathext)
+        .into_iter()
+        .map(|n| path.with_file_name(n))
+        .collect()
+}
+
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+
+/// 경로로 적은 실행 파일([`executable_names`] 의 후보 중 처음 있는 것).
+fn find_at(path: &Path, env: &RuntimeEnv) -> Option<PathBuf> {
+    executable_names(path, env)
+        .into_iter()
         .find_map(|p| find_program(&p.to_string_lossy(), OsStr::new("")))
 }
 
@@ -248,6 +293,16 @@ fn path_candidate(
     if !ctx.trusted {
         return Err("a rustup proxy; not checked in an untrusted project".to_owned());
     }
+    match rustup::version(&rustup, ctx.env, rustup::WHICH_TIMEOUT) {
+        Ok(v) if v >= rustup::MIN_VERSION => {}
+        Ok((major, minor, patch)) => {
+            let (a, b, c) = rustup::MIN_VERSION;
+            return Err(format!(
+                "a rustup proxy; rustup {major}.{minor}.{patch} is older than {a}.{b}.{c} and may install a toolchain while checking, so it is not checked"
+            ));
+        }
+        Err(reason) => return Err(format!("a rustup proxy; {reason}")),
+    }
     match rustup::which(
         &rustup,
         &def.command,
@@ -258,5 +313,33 @@ fn path_candidate(
         // 프록시를 그대로 쓴다 — 서버를 그 디렉터리에서 띄우면 프록시가 같은 툴체인을 고른다.
         Ok(_) => Ok(path.to_path_buf()),
         Err(reason) => Err(format!("a rustup proxy without the component: {reason}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Windows 는 경로로 적은 실행 파일에 PATHEXT 확장자를 붙인 이름만 본다(확장자 없는 sh 스크립트는 띄울 수 없다). 그 밖은 그대로다.
+    #[test]
+    fn path_candidates_add_pathext_only_on_windows() {
+        let bin = Path::new("/p/node_modules/.bin/typescript-language-server");
+        assert_eq!(candidate_names(bin, false, Some(".EXE;.CMD")), [bin]);
+        let names: Vec<String> = candidate_names(bin, true, Some(".EXE;.CMD"))
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "typescript-language-server.EXE",
+                "typescript-language-server.CMD"
+            ]
+        );
+        // PATHEXT 가 없으면 cmd.exe 의 기본값.
+        assert_eq!(candidate_names(bin, true, None).len(), 4);
+        // 이미 확장자가 있으면 그 이름 하나.
+        let exe = Path::new("C:/tools/ra.exe");
+        assert_eq!(candidate_names(exe, true, Some(".EXE")), [exe]);
     }
 }

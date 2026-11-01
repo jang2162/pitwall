@@ -638,7 +638,19 @@ impl Parser<'_> {
             }
             names
         });
-        let mason = f.string(self, "mason", false).map(|(s, _)| s);
+        let mason = f.string(self, "mason", false).and_then(|(raw, span)| {
+            if is_package_name(&raw) {
+                Some(raw)
+            } else {
+                self.error(
+                    span,
+                    format!(
+                        "{what}: `mason` `{raw}` must be a registry package name (lowercase letters, digits, `.`, `_`, `-`)"
+                    ),
+                );
+                None
+            }
+        });
         let command = f.item(self, "command", true).and_then(|item| {
             let Some(raw) = item.as_str() else {
                 self.error(
@@ -1097,6 +1109,18 @@ impl<'t> Fields<'t> {
             }
         }
     }
+}
+
+/// Mason registry 패키지 이름: 소문자 · 숫자 · `.` · `_` · `-`, 소문자나 숫자로 시작하고 `..` 가 없다. 설치본 자리
+/// (`$DATA/tools/<패키지>`)의 경로 마디가 되므로 폴더 밖으로 나가는 이름을 받지 않는다.
+fn is_package_name(s: &str) -> bool {
+    s.bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        && !s.contains("..")
+        && s.bytes().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
+        })
 }
 
 /// 실행 파일 이름 하나인지 본다: 비지 않고, 경로 구분자 · 공백 · 제어 문자가 없고, `-` 로 시작하지 않는다.
@@ -1562,7 +1586,19 @@ list = [1, "two", [false]]
     /// 키마다의 형식 오류. 오류가 하나라도 있으면 매니페스트가 없고, 진단은 그 값의 줄 · 열을 가리킨다.
     #[test]
     fn language_server_format_errors_point_at_the_value() {
-        let cases: [(&str, &str); 19] = [
+        let cases: [(&str, &str); 22] = [
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nmason = \"../evil\"",
+                "10:9: error: language server `s`: `mason` `../evil` must be a registry package name (lowercase letters, digits, `.`, `_`, `-`)",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nmason = \"a/b\"",
+                "10:9: error: language server `s`: `mason` `a/b` must be a registry package name (lowercase letters, digits, `.`, `_`, `-`)",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nmason = \"Jdtls\"",
+                "10:9: error: language server `s`: `mason` `Jdtls` must be a registry package name (lowercase letters, digits, `.`, `_`, `-`)",
+            ),
             (
                 "command = \"x\"",
                 "7:31: error: language server `s`: missing `languages`",

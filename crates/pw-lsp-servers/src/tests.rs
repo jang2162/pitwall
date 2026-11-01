@@ -76,8 +76,16 @@ fn resolution_follows_settings_project_local_path_installed_then_not_installed()
     fs::create_dir_all(&sub).unwrap();
     let name = "typescript-language-server";
     let configured = executable(&tmp.path().join("opt/ts-ls"), "true");
-    let local = executable(&root.join("node_modules/.bin").join(name), "true");
-    let nearest = executable(&sub.join("node_modules/.bin").join(name), "true");
+    // 프로젝트 로컬은 실제 경로로 찾는다(macOS 의 /var → /private/var).
+    let real = |p: PathBuf| fs::canonicalize(p).unwrap();
+    let local = real(executable(
+        &root.join("node_modules/.bin").join(name),
+        "true",
+    ));
+    let nearest = real(executable(
+        &sub.join("node_modules/.bin").join(name),
+        "true",
+    ));
     // 프로젝트 루트 밖(위)의 것은 프로젝트 로컬이 아니다.
     executable(&tmp.path().join("node_modules/.bin").join(name), "true");
     let on_path = executable(&tmp.path().join("path bin").join(name), "true");
@@ -236,13 +244,14 @@ fn a_configured_path_is_used_or_reported_but_never_skipped() {
     );
 }
 
-/// 가짜 `rustup`: `which <이름>` 에 cwd 의 `has-component` 파일이 있으면 그 툴체인 실행 파일 경로를, 없으면 rustup 과 같은 오류를
-/// 낸다. 받은 `RUSTUP_AUTO_INSTALL` 을 `auto-install` 파일에 적는다.
-fn fake_rustup(bin: &Path, toolchain_ra: &Path, log: &Path) -> PathBuf {
+/// 가짜 `rustup`: `--version` 에는 `version` 을, `which <이름>` 에는 cwd 의 `has-component` 파일이 있으면 그 툴체인 실행 파일
+/// 경로를, 없으면 rustup 과 같은 오류를 낸다. `which` 를 받으면 받은 `RUSTUP_AUTO_INSTALL` 을 `log` 파일에 적는다.
+fn fake_rustup(bin: &Path, toolchain_ra: &Path, log: &Path, version: &str) -> PathBuf {
     executable(
         &bin.join("rustup"),
         &format!(
-            "printf '%s' \"${{RUSTUP_AUTO_INSTALL-unset}}\" > '{log}'\n\
+            "if [ \"$1\" = --version ]; then echo 'rustup {version} (d8c92c676 2026-10-21)'; exit 0; fi\n\
+             printf '%s' \"${{RUSTUP_AUTO_INSTALL-unset}}\" > '{log}'\n\
              [ \"$1\" = which ] || exit 2\n\
              if [ -f has-component ]; then echo '{ra}'; exit 0; fi\n\
              echo \"error: '$2' is not installed for the toolchain 'stable-aarch64-apple-darwin'\" >&2\nexit 1",
@@ -268,7 +277,7 @@ fn a_rustup_proxy_is_used_only_when_the_component_is_installed() {
     for link in ["hard", "symlink"] {
         let bin = tmp.path().join(format!("cargo-{link}/bin"));
         let log = tmp.path().join(format!("auto-install-{link}"));
-        let rustup = fake_rustup(&bin, &toolchain_ra, &log);
+        let rustup = fake_rustup(&bin, &toolchain_ra, &log, "1.29.2");
         let proxy = bin.join("rust-analyzer");
         if link == "hard" {
             fs::hard_link(&rustup, &proxy).unwrap();
@@ -324,7 +333,7 @@ fn a_plain_rust_analyzer_on_path_is_used_as_is() {
     let tmp = tempfile::tempdir().unwrap();
     let bin = tmp.path().join("bin");
     let log = tmp.path().join("ran");
-    fake_rustup(&bin, Path::new("/x"), &log);
+    fake_rustup(&bin, Path::new("/x"), &log, "1.29.2");
     let plain = executable(&bin.join("rust-analyzer"), "true");
     let ra = def("rust-analyzer");
     let env = env_with_path(&[&bin]);
@@ -390,7 +399,8 @@ impl Fixture {
                 bin.display()
             ),
         );
-        let runtime = Runtime::new(LoginShell::new(Some(shell), Duration::from_secs(5)));
+        // 시한이 짧으면 기기가 바쁠 때 앱 프로세스 환경으로 물러나 PATH 가 달라진다 — 넉넉히 둔다(가짜 셸은 곧바로 끝난다).
+        let runtime = Runtime::new(LoginShell::new(Some(shell), Duration::from_secs(60)));
         let servers = LspServers::new(builtin(), Arc::new(runtime));
         servers.attach(HostParts {
             paths,
@@ -587,4 +597,175 @@ fn changed_servers_are_the_ones_whose_merged_config_differs() {
     let after = f.servers.configs(&id, None).unwrap();
     assert_eq!(changed_servers(&before, &after), ["ruff"]);
     assert_eq!(changed_servers(&before, &before), Vec::<String>::new());
+}
+
+/// `setup` 의 `dir` 은 프로젝트 루트 안의 있는 폴더여야 한다 — `..` · `.` 마디, 루트 밖을 가리키는 링크, 없는 폴더는 거절한다.
+/// 루트의 부모에 있는 `node_modules` 는 프로젝트 로컬로 고르지 않는다.
+#[test]
+fn setup_rejects_a_directory_outside_the_project_root() {
+    let f = Fixture::new("schema = 1\n");
+    let (id, root) = f.project(&[("a/b/keep", "")], true);
+    let parent = root.parent().unwrap();
+    executable(
+        &parent.join("node_modules/.bin/typescript-language-server"),
+        "true",
+    );
+    fs::create_dir_all(parent.join("node_modules/typescript/lib")).unwrap();
+    let elsewhere = f.tmp.path().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, root.join("link")).unwrap();
+    let setup = |dir: PathBuf| {
+        f.servers
+            .setup(&id, None, "typescript-language-server", &dir)
+    };
+    for (dir, reason) in [
+        (root.join(".."), "has a `..` or `.` segment"),
+        (root.join("a/../.."), "has a `..` or `.` segment"),
+        (root.join("a/./b"), "has a `..` or `.` segment"),
+        (root.join("link"), "is not inside the project root"),
+        (root.join("missing"), "does not exist"),
+        (root.join("a/b/keep"), "is not a folder"),
+        (PathBuf::from("a/b"), "is not an absolute path"),
+    ] {
+        // 성공한 값은 서버 환경 전체를 담아 출력하지 않는다(사람의 환경 변수가 시험 출력에 남는다).
+        let Err(error) = setup(dir.clone()) else {
+            panic!("{}: accepted", dir.display());
+        };
+        let detail = error
+            .data
+            .as_ref()
+            .and_then(|d| d.as_str())
+            .unwrap_or_default();
+        assert!(detail.contains(reason), "{}: {detail}", dir.display());
+    }
+    let inside = setup(root.join("a/b")).unwrap();
+    assert!(
+        matches!(inside.resolution, LspResolution::NotInstalled { .. }),
+        "{:?}",
+        inside.resolution
+    );
+    assert_eq!(inside.initialization_options, json!({}));
+}
+
+/// 해석 함수를 직접 불러도(`ResolveContext` 는 공개다) 올라가기는 실제 경로로 루트 안에서만 한다.
+#[test]
+fn project_local_lookup_never_climbs_above_the_real_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("project");
+    fs::create_dir_all(root.join("a")).unwrap();
+    let name = "typescript-language-server";
+    executable(&tmp.path().join("node_modules/.bin").join(name), "true");
+    let elsewhere = tmp.path().join("elsewhere");
+    executable(&elsewhere.join("node_modules/.bin").join(name), "true");
+    std::os::unix::fs::symlink(&elsewhere, root.join("link")).unwrap();
+    let ts = def(name);
+    let config = settings::server_config(&ts, None, None);
+    let env = env_with_path(&[]);
+    for dir in [root.join(".."), root.join("a/../.."), root.join("link")] {
+        let resolution = resolve::resolve(
+            &ts,
+            &config,
+            &ResolveContext {
+                trusted: true,
+                project_root: &root,
+                dir: &dir,
+                env: &env,
+                tools: &NoTools,
+            },
+        );
+        assert!(
+            matches!(resolution, LspResolution::NotInstalled { .. }),
+            "{}: {resolution:?}",
+            dir.display()
+        );
+    }
+}
+
+/// 서버 환경은 런타임 환경 위에 정의 · 설정의 `env` 를 덮은 것이고, `requires` 로 찾은 런타임은 PATH 맨 앞 · `JAVA_HOME` 으로
+/// 들어간다(메인 판정 2026-11-02). 사람이 `[lsp.<id>] env` 에 적은 `JAVA_HOME` 은 지킨다.
+#[test]
+fn the_server_environment_puts_the_found_runtime_first() {
+    let f = Fixture::new("schema = 1\n");
+    let (id, root) = f.project(
+        &[(
+            ".pitwall/project.toml",
+            "schema = 1\n[lsp.jdtls]\nenv = { JDTLS_LOG = \"1\" }\n[lsp.kotlin-lsp]\nenv = { JAVA_HOME = \"/mine\" }\n",
+        )],
+        true,
+    );
+    let jdk = FoundRuntime {
+        runtime: LspServerRuntime::Java,
+        home: PathBuf::from("/jdks/21"),
+        bin: PathBuf::from("/jdks/21/bin"),
+    };
+    let mut jdtls = f.servers.setup(&id, None, "jdtls", &root).unwrap();
+    assert_eq!(jdtls.env.get("JDTLS_LOG"), Some(std::ffi::OsStr::new("1")));
+    let before: Vec<PathBuf> = std::env::split_paths(&jdtls.env.path).collect();
+    assert_eq!(before[0], f.bin, "the runtime environment PATH");
+    jdtls.with_runtime(&jdk);
+    let after: Vec<PathBuf> = std::env::split_paths(&jdtls.env.path).collect();
+    assert_eq!(after[0], PathBuf::from("/jdks/21/bin"));
+    assert_eq!(&after[1..], &before[..]);
+    assert_eq!(
+        jdtls.env.get("JAVA_HOME"),
+        Some(std::ffi::OsStr::new("/jdks/21"))
+    );
+    // 두 번 넣어도 PATH 에 한 번이다.
+    jdtls.with_runtime(&jdk);
+    assert_eq!(std::env::split_paths(&jdtls.env.path).count(), after.len());
+
+    let mut kotlin = f.servers.setup(&id, None, "kotlin-lsp", &root).unwrap();
+    kotlin.with_runtime(&jdk);
+    assert_eq!(
+        kotlin.env.get("JAVA_HOME"),
+        Some(std::ffi::OsStr::new("/mine"))
+    );
+    // node · python 은 PATH 만.
+    let mut ts = f
+        .servers
+        .setup(&id, None, "typescript-language-server", &root)
+        .unwrap();
+    ts.with_runtime(&FoundRuntime {
+        runtime: LspServerRuntime::Node,
+        home: PathBuf::from("/node/22"),
+        bin: PathBuf::from("/node/22/bin"),
+    });
+    assert_eq!(
+        std::env::split_paths(&ts.env.path).next(),
+        Some(PathBuf::from("/node/22/bin"))
+    );
+    assert_eq!(ts.env.get("JAVA_HOME"), None);
+}
+
+/// `RUSTUP_AUTO_INSTALL` 을 모르는 옛 rustup(1.28.1 전)이면 `rustup which` 를 돌리지 않고 그 프록시를 건너뛴다.
+#[test]
+fn an_old_rustup_is_not_asked_and_its_proxy_is_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("crate");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("has-component"), "").unwrap();
+    let bin = tmp.path().join("cargo/bin");
+    let log = tmp.path().join("which-ran");
+    let toolchain_ra = executable(&tmp.path().join("tc/rust-analyzer"), "true");
+    let rustup = fake_rustup(&bin, &toolchain_ra, &log, "1.27.1");
+    std::os::unix::fs::symlink(&rustup, bin.join("rust-analyzer")).unwrap();
+    let ra = def("rust-analyzer");
+    let env = env_with_path(&[&bin]);
+    let resolution = resolve::resolve(
+        &ra,
+        &settings::server_config(&ra, None, None),
+        &ResolveContext {
+            trusted: true,
+            project_root: &root,
+            dir: &root,
+            env: &env,
+            tools: &NoTools,
+        },
+    );
+    assert!(
+        matches!(&resolution, LspResolution::NotInstalled { skipped, .. }
+            if skipped[0].reason == "a rustup proxy; rustup 1.27.1 is older than 1.28.1 and may install a toolchain while checking, so it is not checked"),
+        "{resolution:?}"
+    );
+    assert!(!log.exists(), "rustup which ran on an old rustup");
 }

@@ -13,8 +13,7 @@ builtin_grammar = "kotlin"
 queries = "queries/kotlin"
 line_comment = "//"
 
-# 언어 서버(docs/design/15-m4-plan.md 결정 M4-D1 · D5). 배포물에 JRE 가 실렸는지는 M4-18 이 확인한다(실리지 않았으면
-# requires = { java = ">=21" } 을 더한다).
+# 언어 서버(docs/design/15-m4-plan.md 결정 M4-D1 · D5). 배포물이 JBR 25 를 함께 싣는다(M4-03 실측) — requires 가 없다.
 [contributes.language_servers.kotlin-lsp]
 languages = ["kotlin"]
 mason = "kotlin-lsp"
