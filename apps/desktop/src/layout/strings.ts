@@ -144,6 +144,13 @@ export function projectStrings(t: Translate) {
         moveLineUp: t("action-editor-move-line-up"),
         moveLineDown: t("action-editor-move-line-down"),
         commentLine: t("action-editor-comment-line"),
+        selectNextOccurrence: t("action-editor-select-next-occurrence"),
+        unselectOccurrence: t("action-editor-unselect-occurrence"),
+        selectAllOccurrences: t("action-editor-select-all-occurrences"),
+        addCursorAbove: t("action-editor-add-cursor-above"),
+        addCursorBelow: t("action-editor-add-cursor-below"),
+        toggleColumnMode: t("action-editor-toggle-column-mode"),
+        singleCursor: t("action-editor-single-cursor"),
         openAsText: t("action-editor-open-as-text"),
         openAsHex: t("action-editor-open-as-hex"),
         openAsDefault: t("action-editor-open-as-default"),
@@ -188,6 +195,11 @@ export function projectStrings(t: Translate) {
         selection: (chars: number, breaks: number) =>
           t("status-editor-selection", { chars, breaks }),
         cursorHint: t("status-editor-cursor-hint"),
+        /** 커서가 여럿일 때 줄:열 대신(M4-14). */
+        cursors: (count: number) => t("status-editor-cursors", { count }),
+        /** 컬럼 선택 모드 표지(M4-14). */
+        columnMode: t("status-editor-column-mode"),
+        columnModeHint: t("status-editor-column-mode-hint"),
         lineEnding: (ending: "lf" | "crlf" | "cr" | "mixed") =>
           t("status-editor-line-ending", { ending }),
         lineEndingHint: t("status-editor-line-ending-hint"),

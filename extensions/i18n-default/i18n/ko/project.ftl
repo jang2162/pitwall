@@ -157,6 +157,13 @@ action-editor-delete-line = 줄 삭제
 action-editor-move-line-up = 줄 위로 옮기기
 action-editor-move-line-down = 줄 아래로 옮기기
 action-editor-comment-line = 줄 주석 넣기 / 걷기
+action-editor-select-next-occurrence = 다음 일치 항목에 커서 추가
+action-editor-unselect-occurrence = 마지막 커서 추가 취소
+action-editor-select-all-occurrences = 모든 일치 항목 선택
+action-editor-add-cursor-above = 위 줄에 커서 추가
+action-editor-add-cursor-below = 아래 줄에 커서 추가
+action-editor-toggle-column-mode = 컬럼 선택 모드
+action-editor-single-cursor = 커서 하나로
 action-editor-open-as-text = 텍스트로 열기
 action-editor-open-as-hex = hex 로 열기
 action-editor-open-as-default = 기본 뷰어로 열기
@@ -206,6 +213,11 @@ status-editor-selection =
        *[other] { $chars }자, 줄바꿈 { $breaks }개
     }
 status-editor-cursor-hint = 줄로 이동
+# $count: 커서 수(둘 이상 — 멀티 커서, M4-14)
+status-editor-cursors = { $count } 커서
+# 컬럼 선택 모드가 켜져 있다(⌘⇧8)
+status-editor-column-mode = 컬럼
+status-editor-column-mode-hint = 컬럼 선택 모드: ⇧+화살표와 드래그가 사각 선택이다
 # $ending: lf | crlf | cr | mixed
 status-editor-line-ending =
     { $ending ->

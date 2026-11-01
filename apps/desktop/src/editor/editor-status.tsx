@@ -1,7 +1,8 @@
 // 상태바의 에디터 항목(12-m1-plan M1-18, 10-ui §2.4 「상태바」): 커서 줄:열 · 선택 길이, 줄바꿈, 인코딩, 언어. 모두 「활성 탭」
 // (editor-workspace.tsx)의 것이고, 활성 탭이 텍스트 뷰어가 아니면 그리지 않는다. 자리는 status-bar.tsx 의 `STATUS_SLOTS`.
 //
-// - 커서: 누르면 줄로 이동(⌘L 과 같은 대화상자). 선택이 있으면 고른 글자 수와 줄바꿈 수를 덧붙인다(IntelliJ 와 같다).
+// - 커서: 누르면 줄로 이동(⌘L 과 같은 대화상자). 선택이 있으면 고른 글자 수와 줄바꿈 수를 덧붙인다(IntelliJ 와 같다). 커서가
+//   여럿이면 줄:열 대신 「N 커서」, 컬럼 선택 모드면 「컬럼」 을 붙인다(M4-14).
 // - 언어: 누르면 언어 고르기 팝업(F4-12). 고른 값은 문서 단위다(language.ts — 같은 파일의 다른 탭에도, 탭을 다 닫으면 잊는다).
 //   맨 위 항목 「자동 판별로 되돌리기」 가 사람이 고른 값을 지운다. 언어 목록과 줄 주석은 `lang.list`.
 //
@@ -20,6 +21,7 @@ import { STATUS_SLOTS, useStatusBarItem } from "../status-bar/status-bar";
 import { SEARCH_ITEM_CLASS, SearchPopup } from "../ui/search-popup";
 import { tabParams } from "./editor-tabs";
 import { cursorOf, type EditorWorkspace, useEditorWorkspace } from "./editor-workspace";
+import { isColumnMode } from "./extensions/multi-cursor";
 import { PLAIN_TEXT, setDocLanguageOverride, useDocLanguage } from "./language";
 
 interface ActiveEditor {
@@ -31,9 +33,20 @@ interface ActiveEditor {
   chars: number;
   /** 고른 범위 안의 줄바꿈 수. */
   breaks: number;
+  /** 커서(선택 범위) 수(M4-14). 둘 이상이면 줄:열 대신 「N 커서」. */
+  cursors: number;
+  /** 컬럼 선택 모드(M4-14 — extensions/multi-cursor.ts). */
+  columnMode: boolean;
 }
 
-const NONE: ActiveEditor = { line: 1, column: 1, chars: 0, breaks: 0 };
+const NONE: ActiveEditor = {
+  line: 1,
+  column: 1,
+  chars: 0,
+  breaks: 0,
+  cursors: 1,
+  columnMode: false,
+};
 
 // 창 하나 = 웹뷰 하나라 모듈 store 가 창 단위다. `useEditorStatusItems` 를 부른 창이 채운다.
 const activeEditor = createStore<ActiveEditor>(() => NONE);
@@ -51,7 +64,14 @@ function readActive(workspace: EditorWorkspace): ActiveEditor {
     chars += r.to - r.from;
     breaks += state.doc.lineAt(r.to).number - state.doc.lineAt(r.from).number;
   }
-  return { path: tabParams(panel).path, ...cursorOf(view), chars, breaks };
+  return {
+    path: tabParams(panel).path,
+    ...cursorOf(view),
+    chars,
+    breaks,
+    cursors: state.selection.ranges.length,
+    columnMode: isColumnMode(state),
+  };
 }
 
 function useTextDoc(path: string | undefined) {
@@ -66,19 +86,25 @@ const ITEM_CLASS = "rounded px-1 hover:bg-ui-hover";
 
 function CursorStatus() {
   const T = useProjectStrings().editor.status;
-  const { path, line, column, chars, breaks } = useStore(activeEditor);
+  const { path, line, column, chars, breaks, cursors, columnMode } = useStore(activeEditor);
   const open = useStore(gotoLine, (s) => s.open);
   if (path === undefined) return null;
-  const text = T.cursor(line, column) + (chars > 0 ? ` (${T.selection(chars, breaks)})` : "");
+  const where = cursors > 1 ? T.cursors(cursors) : T.cursor(line, column);
+  const text = where + (chars > 0 ? ` (${T.selection(chars, breaks)})` : "");
   return (
     <button
       type="button"
       data-testid="status-cursor"
-      title={T.cursorHint}
+      title={columnMode ? `${T.cursorHint} · ${T.columnModeHint}` : T.cursorHint}
       onClick={() => open?.()}
       className={ITEM_CLASS}
     >
       {text}
+      {columnMode && (
+        <span data-testid="status-column-mode" className="ml-1">
+          {T.columnMode}
+        </span>
+      )}
     </button>
   );
 }

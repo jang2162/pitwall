@@ -28,6 +28,7 @@ import { editorContext } from "./extensions";
 import { historyCommand } from "./extensions/editing";
 import { openFind } from "./find-bar";
 import { getDocLanguage } from "./language";
+import { multiCursorActions } from "./multi-cursor-actions";
 
 /** 포커스가 든 에디터 뷰, 없으면 활성 탭의 뷰. */
 export function targetView(workspace: EditorWorkspace): EditorView | undefined {
@@ -117,5 +118,6 @@ export function editorOpsActions(deps: {
       const token = path === undefined ? undefined : deps.lineComment(getDocLanguage(path));
       return token !== undefined && toggleLineComment(token)(view);
     }),
+    ...multiCursorActions({ workspace: deps.workspace, strings: T }),
   ];
 }

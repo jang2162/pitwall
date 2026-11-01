@@ -41,6 +41,7 @@ import type { SyntaxSessions } from "../syntax-sessions";
 import { editing } from "./editing";
 import { gitGutter } from "./git-gutter";
 import { highlight } from "./highlight";
+import { multiCursor } from "./multi-cursor";
 import { navigation } from "./navigation";
 import { operations } from "./operations";
 import { readOnly } from "./read-only";
@@ -121,6 +122,7 @@ export const EDITOR_FEATURES: readonly EditorFeature[] = [
   blame,
   editing,
   operations,
+  multiCursor,
   navigation,
 ];
 

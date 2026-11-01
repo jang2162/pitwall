@@ -88,6 +88,11 @@ describe("default keymap overlaps", () => {
             "db.tableData.submit [dbTableDataFocus]",
           ],
         ],
+        // 툴 윈도우의 「에디터로 포커스」 와 에디터의 커서 하나로(M4-14 — 글자 영역에 포커스).
+        [
+          "⎋",
+          ["editor.focus [toolWindowFocus && !inputFocus]", "editor.singleCursor [editorFocus]"],
+        ],
         // 툴 윈도우 크기 조절(툴 윈도우에 포커스)과 에디터의 다음 · 이전 변경 위치(M2-17) — 10-ui §4.2 「툴 윈도우 · 창」 · 「Git (VCS)」.
         // Win/Linux 의 크기 조절은 `Ctrl+Shift+화살표` 라 겹치지 않는다.
         [
@@ -125,6 +130,10 @@ describe("default keymap overlaps", () => {
             "db.tableData.submit [dbTableDataFocus]",
           ],
         ],
+        [
+          "Esc",
+          ["editor.focus [toolWindowFocus && !inputFocus]", "editor.singleCursor [editorFocus]"],
+        ],
         ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
         // 에디터의 줄 삭제와 테이블 데이터의 행 삭제(M3-17 — 10-ui §4.2 「DB」 의 그리드 행).
         [
@@ -150,6 +159,10 @@ describe("default keymap overlaps", () => {
             "db.console.run [dbConsoleFocus]",
             "db.tableData.submit [dbTableDataFocus]",
           ],
+        ],
+        [
+          "Esc",
+          ["editor.focus [toolWindowFocus && !inputFocus]", "editor.singleCursor [editorFocus]"],
         ],
         ["Ctrl+G", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
         // 에디터의 줄 삭제와 테이블 데이터의 행 삭제(M3-17 — 10-ui §4.2 「DB」 의 그리드 행).

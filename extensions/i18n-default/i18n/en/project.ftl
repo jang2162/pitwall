@@ -157,6 +157,13 @@ action-editor-delete-line = Delete Line
 action-editor-move-line-up = Move Line Up
 action-editor-move-line-down = Move Line Down
 action-editor-comment-line = Comment with Line Comment
+action-editor-select-next-occurrence = Add Selection for Next Occurrence
+action-editor-unselect-occurrence = Unselect Occurrence
+action-editor-select-all-occurrences = Select All Occurrences
+action-editor-add-cursor-above = Clone Caret Above
+action-editor-add-cursor-below = Clone Caret Below
+action-editor-toggle-column-mode = Column Selection Mode
+action-editor-single-cursor = Remove Secondary Carets
 action-editor-open-as-text = Open as Text
 action-editor-open-as-hex = Open as Hex
 action-editor-open-as-default = Open with Default Viewer
@@ -216,6 +223,11 @@ status-editor-selection =
         }
     }
 status-editor-cursor-hint = Go to Line
+# $count: number of carets (two or more — multiple carets, M4-14)
+status-editor-cursors = { $count } carets
+# Column selection mode is on
+status-editor-column-mode = Column
+status-editor-column-mode-hint = Column selection mode: Shift+arrows and dragging select a rectangle
 # $ending: lf | crlf | cr | mixed
 status-editor-line-ending =
     { $ending ->

@@ -594,3 +594,56 @@ mac = "cmd+b"
 win = "ctrl+b"
 linux = "ctrl+b"
 when = "dbExplorerFocus"
+
+# 멀티 커서(10-ui §4.2 「멀티 커서」 · §5.3, 15-m4-plan M4-14, src/editor/multi-cursor-actions.ts). 글자 영역(`editorFocus`)에서만 돈다.
+# 위 · 아래 줄에 커서 추가는 「수정 키 더블 탭 후 누른 채」(packages/keymap 의 `doubleHold`)다 — macOS `⌥⌥` 를 누른 채 `↑` `↓`,
+# Win/Linux `Ctrl Ctrl` 을 누른 채. 수정 키를 떼면 끝나 다음 `⌥↓` 는 보통 키다. Esc 는 툴 윈도우의 「에디터로 포커스」
+# (`toolWindowFocus`)와 범위가 갈리고, 찾기 막대 안의 Esc 는 막대가 닫는다.
+# 마우스(⌥+드래그 사각 선택 · ⌥⇧+클릭 커서 추가)는 키맵이 아니라 에디터 확장이다(src/editor/extensions/multi-cursor.ts).
+
+[[bindings]]
+action = "editor.selectNextOccurrence"
+mac = "ctrl+g"
+win = "alt+j"
+linux = "alt+j"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.unselectOccurrence"
+mac = "ctrl+shift+g"
+win = "alt+shift+j"
+linux = "alt+shift+j"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.selectAllOccurrences"
+mac = "ctrl+cmd+g"
+win = "ctrl+alt+shift+j"
+linux = "ctrl+alt+shift+j"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.addCursorAbove"
+mac = "alt alt+up"
+win = "ctrl ctrl+up"
+linux = "ctrl ctrl+up"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.addCursorBelow"
+mac = "alt alt+down"
+win = "ctrl ctrl+down"
+linux = "ctrl ctrl+down"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.toggleColumnMode"
+mac = "cmd+shift+8"
+win = "alt+shift+insert"
+linux = "alt+shift+insert"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.singleCursor"
+key = "escape"
+when = "editorFocus"
