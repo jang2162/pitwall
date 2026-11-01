@@ -168,8 +168,10 @@ pub struct ToolUpdateInfo {
     pub installed: String,
     /// registry(지금 쓰는 판)가 가리키는 판.
     pub available: String,
-    /// 라이선스나 출처 도메인이 바뀌어 업데이트 전에 다시 묻는다.
+    /// 라이선스나 출처 도메인이 바뀌었거나, 고정 해시로 확인한 도구가 「체크섬 없음」 판이 되어 업데이트 전에 다시 묻는다.
     pub confirm_required: bool,
+    /// 받을 판에 고정 해시가 있나(`none` 이면 「체크섬 없음」 — 알림 · 버튼이 경고한다).
+    pub checksum: ToolChecksum,
 }
 
 #[derive(
@@ -391,14 +393,20 @@ pub fn updates_of(r: &ToolsInstaller) -> Result<ToolsUpdates, RpcError> {
         }
         let licenses = r.notes().effective(&name, &package.licenses);
         let domains = source_domains(&resolved);
+        let checksum = if r.registry().pinned().pinned_for(&resolved).is_some() {
+            ToolChecksum::Pinned
+        } else {
+            ToolChecksum::None
+        };
         let confirm_required = !store
             .get(&name)
-            .is_some_and(|c| consent::covers(&c, &licenses, &domains));
+            .is_some_and(|c| consent::covers(&c, &licenses, &domains, checksum));
         items.push(ToolUpdateInfo {
             name,
             installed: record.current,
             available: resolved.version,
             confirm_required,
+            checksum,
         });
     }
     Ok(ToolsUpdates {

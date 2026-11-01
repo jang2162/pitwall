@@ -184,12 +184,18 @@ pub struct ToolsInstaller {
     test: Option<TestNetwork>,
 }
 
+/// 시험: 받기를 마친 뒤 · 풀기 전에 받은 파일 경로로 부르는 것.
+#[cfg(test)]
+pub(crate) type AfterDownload = Arc<dyn Fn(&Path) + Send + Sync>;
+
 #[cfg(test)]
 #[derive(Clone)]
 struct TestNetwork {
     fetcher: Fetcher,
     /// 정의의 `https://<앞>` 을 가짜 서버로 바꾼다.
     rewrite: (String, String),
+    /// 받기를 마친 뒤 · 풀기 전에 받은 파일 경로로 부른다(리뷰 F5 시험 — 그 사이에 파일을 바꾼다).
+    after_download: Option<AfterDownload>,
 }
 
 fn now_ms() -> u64 {
@@ -262,7 +268,19 @@ impl ToolsInstaller {
 
     #[cfg(test)]
     pub(crate) fn with_test_network(mut self, fetcher: Fetcher, rewrite: (String, String)) -> Self {
-        self.test = Some(TestNetwork { fetcher, rewrite });
+        self.test = Some(TestNetwork {
+            fetcher,
+            rewrite,
+            after_download: None,
+        });
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_after_download(mut self, hook: AfterDownload) -> Self {
+        if let Some(t) = &mut self.test {
+            t.after_download = Some(hook);
+        }
         self
     }
 
@@ -361,6 +379,13 @@ impl ToolsInstaller {
             )
             .with_data(json!({ "reason": "bin", "name": name })));
         }
+        if !layout::valid_version(&resolved.version) {
+            return Err(RpcError::new(
+                code::UNSUPPORTED,
+                format!("the version {:?} cannot be a folder name", resolved.version),
+            )
+            .with_data(json!({ "reason": "version", "name": name })));
+        }
         let licenses = self.notes.effective(name, &package.licenses);
         Ok((resolved, licenses, index.version.clone()))
     }
@@ -441,7 +466,7 @@ impl ToolsInstaller {
         let store = ConsentStore::new(&host.state_dir);
         let consented = store
             .get(name)
-            .is_some_and(|c| consent::covers(&c, &ask.licenses, &ask.source_domains));
+            .is_some_and(|c| consent::covers(&c, &ask.licenses, &ask.source_domains, ask.checksum));
         if !consented {
             match confirmed {
                 Some(c)
@@ -452,9 +477,12 @@ impl ToolsInstaller {
                                 source_domains: c.source_domains.clone(),
                                 version: c.version.clone(),
                                 confirmed_at_ms: 0,
+                                // 다이얼로그가 보인 체크섬 상태는 판이 같으면 같다(고정 표는 바이너리에 묶여 있다).
+                                checksum: Some(ask.checksum),
                             },
                             &ask.licenses,
                             &ask.source_domains,
+                            ask.checksum,
                         ) =>
                 {
                     store
@@ -465,6 +493,7 @@ impl ToolsInstaller {
                                 source_domains: ask.source_domains.clone(),
                                 version: ask.version.clone(),
                                 confirmed_at_ms: now_ms(),
+                                checksum: Some(ask.checksum),
                             },
                         )
                         .map_err(|e| failed("consent", name, e))?;
@@ -483,10 +512,11 @@ impl ToolsInstaller {
         // 합류: 같은 패키지의 설치가 돌고 있으면 그 결과를 받는다.
         let existing = lock(&self.jobs).get(name).cloned();
         if let Some(job) = existing {
-            return wait_job(&job, true).await;
+            return join_job(&job, &resolved.version, name).await;
         }
 
         let toolchain = self.find_toolchain(&host, grant, &resolved).await?;
+        let resolved_version = resolved.version.clone();
         let plan = Plan {
             resolved,
             pinned: pinned_owned,
@@ -497,6 +527,10 @@ impl ToolsInstaller {
         let (job, joined) = {
             let mut jobs = lock(&self.jobs);
             match jobs.get(name).cloned() {
+                Some(job) if job.version != resolved_version => {
+                    drop(jobs);
+                    return Err(busy_other_version(name, &resolved_version));
+                }
                 Some(job) => (job, true),
                 None => {
                     let job = self.start_job(&host, plan);
@@ -812,8 +846,12 @@ impl ToolsInstaller {
         let mut unpacker = Unpacker::new(dir.to_path_buf(), self.limits.unpacked);
         for f in files {
             let path = downloads.join(&f.name);
-            let mut out =
-                fs::File::create(&path).map_err(|e| failed("download", name, e.to_string()))?;
+            let mut out = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|e| failed("download", name, e.to_string()))?;
             self.log(name, &format!("download {}", f.url));
             let got = fetcher
                 .download(&self.fetch_url(&f.url), &mut out, remaining, |n| {
@@ -833,7 +871,12 @@ impl ToolsInstaller {
                     ),
                     e => failed("download", name, e.to_string()),
                 })?;
-            drop(out);
+            #[cfg(test)]
+            if let Some(t) = &self.test
+                && let Some(hook) = &t.after_download
+            {
+                hook(&path);
+            }
             remaining = remaining.saturating_sub(got.size);
             // ⓐ 고정 해시(기본 번들). ⓑ registry 의 체크섬은 Mason 패키지 정의에 칸이 없어(M4-03 — 체크섬은 릴리스 산출물 단위뿐)
             // 볼 것이 없다. 둘 다 없으면 「체크섬 없음」 으로 기록한다.
@@ -861,7 +904,7 @@ impl ToolsInstaller {
                 }
             }
             unpacker
-                .unpack(&path, &f.name, f.format, f.dest.as_deref())
+                .unpack(out, &f.name, f.format, f.dest.as_deref())
                 .map_err(|e| failed("unpack", name, e.to_string()))?;
             let _ = fs::remove_file(&path);
             fetched.push(FetchedFile {
@@ -871,6 +914,9 @@ impl ToolsInstaller {
                 size: got.size,
             });
         }
+        unpacker
+            .finish()
+            .map_err(|e| failed("unpack", name, e.to_string()))?;
         let checksum = if plan.pinned.is_some() {
             ToolChecksum::Pinned
         } else {
@@ -973,7 +1019,13 @@ impl ToolsInstaller {
             return Err(RpcError::internal("pypi package without python"));
         };
         let dir = &fs::canonicalize(dir).map_err(|e| failed("prepare", name, e.to_string()))?;
-        let env = runner::install_env(base, &found.dirs);
+        let mut env = runner::install_env(base, &found.dirs);
+        // `--isolated` 도 시스템(GLOBAL) · SITE 설정 파일은 읽는다 — 빈 장치를 설정 파일로 준다(ensurepip 과 같은 방법, 리뷰 F8).
+        // 지우는 `PIP_*` 를 뺀 뒤에 넣는다.
+        env.insert(
+            OsString::from("PIP_CONFIG_FILE"),
+            OsString::from(if cfg!(windows) { "nul" } else { "/dev/null" }),
+        );
         let venv = dir.join("venv");
         ctx.report(TaskProgress {
             done: 0,
@@ -1129,6 +1181,9 @@ impl ToolsInstaller {
         let _ = fs::remove_file(layout.record_path(name));
         layout.unlink_bins(name);
         let dir = layout.package_dir(name);
+        if !layout::is_child_of(&dir, layout.root()) {
+            return Err(failed("remove", name, "not a package folder"));
+        }
         tokio::task::spawn_blocking(move || fs::remove_dir_all(dir))
             .await
             .map_err(|e| RpcError::internal(e.to_string()))?
@@ -1223,6 +1278,26 @@ enum Used {
     Python(UsedRuntime),
 }
 
+/// 도는 같은 패키지의 설치에 합류한다 — 판이 같을 때만(리뷰 F9 — 다른 판을 확인한 창이 옛 판의 결과를 받지 않게).
+async fn join_job(
+    job: &Job,
+    version: &str,
+    name: &str,
+) -> Result<methods::ToolInstallResult, RpcError> {
+    if job.version != version {
+        return Err(busy_other_version(name, version));
+    }
+    wait_job(job, true).await
+}
+
+fn busy_other_version(name: &str, version: &str) -> RpcError {
+    RpcError::new(
+        code::BUSY,
+        "another version of this tool is being installed",
+    )
+    .with_data(json!({ "name": name, "version": version }))
+}
+
 async fn wait_job(job: &Job, joined: bool) -> Result<methods::ToolInstallResult, RpcError> {
     let mut rx = job.outcome.clone();
     let outcome = rx
@@ -1274,13 +1349,17 @@ fn remove_other_versions(layout: &Layout, name: &str, keep: &BTreeSet<String>) {
     let Ok(entries) = fs::read_dir(layout.package_dir(name)) else {
         return;
     };
+    let package_dir = layout.package_dir(name);
     for e in entries.filter_map(Result::ok) {
         let file_name = e.file_name().to_string_lossy().into_owned();
         if file_name == layout::RECORD_FILE || keep_dirs.contains(&file_name) {
             continue;
         }
-        if e.path().is_dir() && !file_name.starts_with(".download-") {
-            let _ = fs::remove_dir_all(e.path());
+        // 잠금 아래이고 이 설치의 받기 폴더는 이미 지웠다 — 남은 `.download-*` 는 죽은 설치의 것이다(리뷰 F6).
+        let path = e.path();
+        let is_dir = fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir());
+        if is_dir && layout::is_child_of(&path, &package_dir) {
+            let _ = fs::remove_dir_all(&path);
         }
     }
 }
@@ -1328,8 +1407,18 @@ struct DirGuard {
 }
 
 impl DirGuard {
-    /// `dir` 이 이미 있으면(같은 판을 다시 설치 · 남은 조각) 먼저 지운다.
-    fn new(dir: PathBuf, _layout: &Layout, name: &str) -> Result<Self, RpcError> {
+    /// `dir` 이 이미 있으면(같은 판을 다시 설치 · 남은 조각) 먼저 지운다. `dir` 은 그 패키지 폴더의 바로 아래 자식이어야 한다 —
+    /// 아니면 아무것도 지우지 않고 실패한다(리뷰 F2 — 판 `..` 이 `$DATA/tools` 를 지우지 않게).
+    fn new(dir: PathBuf, layout: &Layout, name: &str) -> Result<Self, RpcError> {
+        if !layout::is_child_of(&dir, &layout.package_dir(name))
+            || !layout::is_child_of(&layout.package_dir(name), layout.root())
+        {
+            return Err(failed(
+                "prepare",
+                name,
+                format!("{} is not a version folder of {name}", dir.display()),
+            ));
+        }
         if fs::symlink_metadata(&dir).is_ok() {
             fs::remove_dir_all(&dir).map_err(|e| failed("prepare", name, e.to_string()))?;
         }
@@ -1428,6 +1517,20 @@ fn check_npm_lock(dir: &Path, rows: &[Artifact]) -> Result<(), String> {
     let lock: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
             .map_err(|e| format!("package-lock.json: {e}"))?;
+    // 루트와 고정 행의 배포 밖에 항목이 있으면(고정하지 않은 의존이 범위 판으로 풀렸다) 고정 밖이다(리뷰 F4).
+    let allowed: BTreeSet<String> = std::iter::once(String::new())
+        .chain(
+            rows.iter()
+                .filter_map(|a| a.dist.as_ref().map(|d| format!("node_modules/{d}"))),
+        )
+        .collect();
+    if let Some(packages) = lock.get("packages").and_then(serde_json::Value::as_object)
+        && let Some(extra) = packages.keys().find(|k| !allowed.contains(*k))
+    {
+        return Err(format!(
+            "package-lock.json has {extra} which has no pinned integrity"
+        ));
+    }
     for a in rows {
         let (Some(dist), Some(ver)) = (&a.dist, &a.dist_version) else {
             continue;

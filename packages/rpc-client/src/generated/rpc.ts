@@ -6133,8 +6133,10 @@ export type ToolUpdateInfo = {
 	installed: string,
 	/**  registry(지금 쓰는 판)가 가리키는 판. */
 	available: string,
-	/**  라이선스나 출처 도메인이 바뀌어 업데이트 전에 다시 묻는다. */
+	/**  라이선스나 출처 도메인이 바뀌었거나, 고정 해시로 확인한 도구가 「체크섬 없음」 판이 되어 업데이트 전에 다시 묻는다. */
 	confirmRequired: boolean,
+	/**  받을 판에 고정 해시가 있나(`none` 이면 「체크섬 없음」 — 알림 · 버튼이 경고한다). */
+	checksum: ToolChecksum,
 };
 
 export type ToolsInstallParams = {

@@ -171,6 +171,12 @@ impl ToolsRegistry {
             .clone()
     }
 
+    /// 시험: 지금 판을 바꾼다(설치 중에 registry 가 바뀐 경우 — M4-04 리뷰 F9).
+    #[cfg(test)]
+    pub(crate) fn replace_index_for_tests(&self, index: Index) {
+        self.set_index(index);
+    }
+
     fn set_index(&self, index: Index) {
         self.set_index_arc(Arc::new(index));
     }

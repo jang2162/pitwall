@@ -285,6 +285,33 @@ async fn npm_runs_isolated_with_fixed_registry_and_checks_integrity() {
     );
     assert!(!fx.layout().version_dir("demo-ls", "1.0.0").exists());
     assert!(fx.layout().read_record("demo-ls").unwrap().is_none());
+
+    // 리뷰 F4: lock 에 고정 행 밖의 항목(범위 판으로 풀린 의존)이 있으면 고정 밖이라 실패.
+    let fx = Fx::new().await;
+    runtimes(
+        &fx,
+        "demo-ls",
+        &lock_json(&[
+            ("demo-ls", "1.0.0", INTEGRITY),
+            ("typescript", "5.0.0", INTEGRITY),
+            ("unpinned-dep", "9.9.9", "sha512-ANY"),
+        ]),
+    );
+    let reg = registry(
+        vec![npm_pkg("demo-ls", "1.0.0", &["typescript@5.0.0"])],
+        &npm_rows(INTEGRITY),
+    );
+    let installer = fx.installer(reg, Limits::default());
+    fx.consent(&installer, "demo-ls");
+    let err = installer
+        .install(&project_grant("p1"), "demo-ls", None, None, false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        code_and_stage(&err),
+        (code::INSTALL_FAILED, Some("checksum".into()))
+    );
+    assert!(err.message.contains("unpinned-dep"), "{}", err.message);
 }
 
 fn pypi_rows() -> Vec<Row> {
@@ -388,6 +415,11 @@ async fn pip_runs_isolated_with_hashes_and_records_the_python() {
         )
     );
     assert_isolated(&rt, &argv, &env, &cwd, &dir);
+    // `--isolated` 가 끄지 않는 시스템 · SITE 설정 파일도 끈다(리뷰 F8).
+    assert!(
+        env.iter().any(|l| l == "PIP_CONFIG_FILE=/dev/null"),
+        "{env:?}"
+    );
     let entry = fx
         .layout()
         .read_record("demo-py")

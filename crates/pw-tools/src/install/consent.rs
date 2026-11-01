@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::layout::write_atomic;
+use crate::methods::ToolChecksum;
 
 /// 바이너리에 묶인 라이선스 덮어쓰기 표.
 pub const LICENSE_NOTES_TOML: &str = include_str!("../../license-notes.toml");
@@ -81,6 +82,10 @@ pub struct ConsentEntry {
     /// 확인할 때의 판(참고 — 판만 바뀐 것은 다시 묻지 않는다).
     pub version: String,
     pub confirmed_at_ms: u64,
+    /// 확인할 때 받을 것에 고정 해시가 있었나. `pinned` 로 확인한 패키지가 「체크섬 없음」 판이 되면 다시 묻는다(메인 결정 —
+    /// 리뷰 F3). 이 칸이 없는 기록은 `pinned` 로 확인한 것으로 본다(더 묻는 쪽).
+    #[serde(default)]
+    pub checksum: Option<ToolChecksum>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,8 +142,13 @@ impl ConsentStore {
         self.load().0.remove(package)
     }
 
-    /// 확인을 남긴다.
+    /// 확인을 남긴다. 읽고-고치고-쓰기를 프로세스 안 잠금으로 감싼다(두 창이 다른 패키지를 동시에 확인해도 하나가 사라지지
+    /// 않게 — 리뷰 F7). 다른 앱 프로세스와 겹치면 나중 쓰기가 이기고 진 쪽은 다음에 다시 묻는다.
     pub fn record(&self, package: &str, entry: ConsentEntry) -> Result<(), String> {
+        static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = WRITING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (mut packages, corrupt) = self.load();
         if corrupt {
             let _ = fs::rename(&self.path, self.path.with_extension("json.corrupt"));
@@ -153,9 +163,17 @@ impl ConsentStore {
     }
 }
 
-/// 확인 기록이 지금 판의 라이선스 · 출처를 덮는가(같은 목록 — 순서는 따지지 않는다).
-pub fn covers(entry: &ConsentEntry, licenses: &[String], domains: &[String]) -> bool {
-    sorted(&entry.licenses) == sorted(licenses) && sorted(&entry.source_domains) == sorted(domains)
+/// 확인 기록이 지금 판의 라이선스 · 출처 · 체크섬 상태를 덮는가(목록은 순서를 따지지 않는다). 고정 해시가 없는 판(`none`)은
+/// 「체크섬 없음」 을 보고 확인한 기록만 덮는다 — 고정 해시가 있던 도구가 해시 없는 판이 되면 다시 묻는다(리뷰 F3).
+pub fn covers(
+    entry: &ConsentEntry,
+    licenses: &[String],
+    domains: &[String],
+    checksum: ToolChecksum,
+) -> bool {
+    sorted(&entry.licenses) == sorted(licenses)
+        && sorted(&entry.source_domains) == sorted(domains)
+        && (checksum == ToolChecksum::Pinned || entry.checksum == Some(ToolChecksum::None))
 }
 
 fn sorted(list: &[String]) -> Vec<String> {

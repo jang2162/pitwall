@@ -224,10 +224,23 @@ impl Fx {
     }
 
     pub fn installer(&self, registry: Arc<ToolsRegistry>, limits: Limits) -> Arc<ToolsInstaller> {
-        let installer = ToolsInstaller::with_limits(registry, limits).with_test_network(
+        self.installer_with(registry, limits, None)
+    }
+
+    /// 받기를 마친 뒤 · 풀기 전에 `after_download` 를 부르는 설치기.
+    pub fn installer_with(
+        &self,
+        registry: Arc<ToolsRegistry>,
+        limits: Limits,
+        after_download: Option<AfterDownload>,
+    ) -> Arc<ToolsInstaller> {
+        let mut installer = ToolsInstaller::with_limits(registry, limits).with_test_network(
             Fetcher::for_install_loopback_tests(),
             (FAKE.to_owned(), self.server.base.clone()),
         );
+        if let Some(hook) = after_download {
+            installer = installer.with_after_download(hook);
+        }
         installer.attach(InstallerHost {
             tools_dir: self.tools(),
             state_dir: self.state(),
@@ -251,6 +264,7 @@ impl Fx {
                     source_domains: ask.source_domains,
                     version: ask.version,
                     confirmed_at_ms: 1,
+                    checksum: Some(ask.checksum),
                 },
             )
             .unwrap();

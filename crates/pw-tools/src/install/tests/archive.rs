@@ -59,6 +59,30 @@ async fn unsafe_archives_fail_the_whole_install_and_leave_nothing_outside() {
             vec![Entry::Symlink("demo/out", "../../pwned-dir")],
         ),
         ("link-absolute", vec![Entry::Symlink("demo/out", "/tmp")]),
+        // 링크 연쇄(리뷰 F1): 글자로 풀면 둘 다 `a` 안이지만, 커널은 l1 을 먼저 따라간 뒤 `..` 를 적용해 l2 는 판 폴더 세 단계
+        // 위(`$DATA`)를 가리킨다. 순서를 바꿔도(뒤에 오는 링크가 앞 링크의 뜻을 바꾼다) 실패다.
+        (
+            "link-chain",
+            vec![
+                Entry::Dir("a/"),
+                Entry::Dir("a/b/"),
+                Entry::Dir("a/b/c/"),
+                Entry::Dir("a/b/c/d/"),
+                Entry::Symlink("a/b/c/d/l1", "../../.."),
+                Entry::Symlink("a/b/c/d/l2", "l1/../../../.."),
+            ],
+        ),
+        (
+            "link-chain-reversed",
+            vec![
+                Entry::Dir("a/"),
+                Entry::Dir("a/b/"),
+                Entry::Dir("a/b/c/"),
+                Entry::Dir("a/b/c/d/"),
+                Entry::Symlink("a/b/c/d/l2", "l1/../../../.."),
+                Entry::Symlink("a/b/c/d/l1", "../../.."),
+            ],
+        ),
         // 설치 폴더 자신을 가리키는 링크(그 링크를 지나 폴더 밖 이름을 만들 길이 된다).
         ("link-to-root", vec![Entry::Symlink("demo/up", "..")]),
         (
@@ -135,6 +159,11 @@ async fn a_safe_archive_with_an_inside_link_installs() {
         entries.push(Entry::Dir("demo/lib/"));
         entries.push(Entry::File("demo/lib/a.txt", b"a".to_vec(), 0o644));
         entries.push(Entry::Symlink("demo/lib/b.txt", "a.txt"));
+        // 안쪽 링크의 연쇄(링크 → 링크 → 파일, 링크를 지난 `..` 가 안에 머무는 것)는 받는다.
+        entries.push(Entry::Symlink("demo/lib/c.txt", "b.txt"));
+        entries.push(Entry::Dir("demo/lib/sub/"));
+        entries.push(Entry::Symlink("demo/lib/up", "sub/.."));
+        entries.push(Entry::Symlink("demo/lib/d.txt", "up/c.txt"));
         let body = if format == "demo.zip" {
             zip(&entries)
         } else {
@@ -144,6 +173,11 @@ async fn a_safe_archive_with_an_inside_link_installs() {
         let dir = fx.layout().version_dir("demo", "1.0.0");
         assert_eq!(
             std::fs::read(dir.join("demo/lib/b.txt")).unwrap(),
+            b"a",
+            "{format}"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("demo/lib/d.txt")).unwrap(),
             b"a",
             "{format}"
         );
@@ -240,7 +274,7 @@ async fn a_single_gz_unpacks_to_the_bin_and_tar_xz_is_unsupported() {
     let mut u = extract::Unpacker::new(root, 1024);
     assert_eq!(
         u.unpack(
-            &archive,
+            std::fs::File::open(&archive).unwrap(),
             "a.tar.xz",
             crate::package::ArchiveFormat::TarXz,
             None

@@ -120,7 +120,7 @@ impl Layout {
                     .join(package)
                     .join(version_dir_name(&entry.version))
                     .join(rel);
-                let tmp = bin_dir.join(format!(".{name}.{}.tmp", std::process::id()));
+                let tmp = bin_dir.join(format!(".{name}.{}.tmp", temp_suffix()));
                 let _ = fs::remove_file(&tmp);
                 std::os::unix::fs::symlink(&target, &tmp).map_err(|e| e.to_string())?;
                 fs::rename(&tmp, bin_dir.join(name)).map_err(|e| e.to_string())?;
@@ -149,15 +149,55 @@ impl Layout {
     }
 }
 
-/// 판 이름을 폴더 이름으로: `/` 가 든 판(`kotlin-lsp/v263…`)은 `_` 로. 판은 M4-03 이 `-` 로 시작하지 않는 것만 남긴다.
+/// 판 이름을 폴더 이름으로: `/` 가 든 판(`kotlin-lsp/v263…`)은 `_` 로. 설치기는 [`valid_version`] 을 지난 판만 쓰지만, 이 함수도
+/// 폴더 밖을 가리키는 이름(빈 값 · `.` · `..`)을 내지 않는다(그런 판은 `_` 를 앞에 붙인다).
 pub fn version_dir_name(version: &str) -> String {
-    version
+    let mapped: String = version
         .chars()
         .map(|c| match c {
             '/' | '\\' | ':' => '_',
+            c if c.is_control() => '_',
             c => c,
         })
-        .collect()
+        .collect();
+    if mapped.is_empty() || mapped == "." || mapped == ".." {
+        format!("_{mapped}")
+    } else {
+        mapped
+    }
+}
+
+/// 설치할 수 있는 판인가 — registry 의 판 글은 미신뢰다(리뷰 F2). 비지 않고(128 바이트 이하), `/` 로 나눈 조각마다 비거나 `.` ·
+/// `..` 가 아니고, `\` · `:` · 제어 문자가 없다. `/` 는 받는다(kotlin-lsp 의 판 `kotlin-lsp/v263.7084.0` — 폴더 이름에서는 `_`).
+pub fn valid_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.len() <= 128
+        && !version.contains(['\\', ':'])
+        && !version.chars().any(char::is_control)
+        && version
+            .split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+}
+
+/// `path` 가 `parent` 의 바로 아래 자식(이름이 `.` · `..` 가 아닌)인가. 지우기 전에 마지막으로 본다(리뷰 F2).
+pub fn is_child_of(path: &Path, parent: &Path) -> bool {
+    path.parent() == Some(parent)
+        && path
+            .file_name()
+            .is_some_and(|n| n != "." && n != ".." && !n.is_empty())
+        && !path.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+}
+
+/// 임시 파일 이름의 꼬리: 프로세스 id 와 순번(같은 프로세스의 두 쓰기가 같은 임시 파일을 함께 쓰지 않게 — 리뷰 F7).
+fn temp_suffix() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{n}", std::process::id())
 }
 
 /// 원자적으로 쓴다(같은 폴더의 임시 파일 → 동기화 → 이름 바꾸기).
@@ -168,7 +208,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .file_name()
         .and_then(OsStr::to_str)
         .ok_or("bad file name")?;
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let tmp = dir.join(format!(".{name}.{}.tmp", temp_suffix()));
     {
         let mut f = fs::File::create(&tmp).map_err(|e| e.to_string())?;
         f.write_all(bytes).map_err(|e| e.to_string())?;

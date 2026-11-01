@@ -15,7 +15,7 @@
 
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 
 use crate::package::ArchiveFormat;
@@ -117,19 +117,20 @@ impl Unpacker {
     }
 
     /// 받은 파일 `archive` 를 `dest`(설치 폴더 기준, `/` 로 끝나면 폴더. 없으면 설치 폴더)에 푼다. `name` 은 저장 이름이다.
+    /// `archive` 는 해시를 센 그 핸들이다 — 이름으로 다시 열지 않는다(리뷰 F5 — 대조한 바이트와 푸는 바이트가 같게). 처음부터 읽는다.
     pub fn unpack(
         &mut self,
-        archive: &Path,
+        mut archive: File,
         name: &str,
         format: ArchiveFormat,
         dest: Option<&str>,
     ) -> Result<(), ExtractError> {
         let dest = dest.unwrap_or("");
+        archive.seek(SeekFrom::Start(0)).map_err(io_err)?;
         match format {
             ArchiveFormat::TarGz => {
                 let base = self.dir_prefix(dest)?;
-                let file = File::open(archive).map_err(io_err)?;
-                self.untar(flate2::read::GzDecoder::new(file), &base)
+                self.untar(flate2::read::GzDecoder::new(archive), &base)
             }
             ArchiveFormat::Zip => {
                 let base = self.dir_prefix(dest)?;
@@ -141,17 +142,15 @@ impl Unpacker {
                     .or_else(|| name.strip_suffix(".GZ"))
                     .unwrap_or(name);
                 let rel = self.file_target(dest, stem)?;
-                let file = File::open(archive).map_err(io_err)?;
                 self.write_entry(
                     &rel,
                     Kind::File { mode: None },
-                    flate2::read::GzDecoder::new(file),
+                    flate2::read::GzDecoder::new(archive),
                 )
             }
             ArchiveFormat::Plain => {
                 let rel = self.file_target(dest, name)?;
-                let file = File::open(archive).map_err(io_err)?;
-                self.write_entry(&rel, Kind::File { mode: None }, file)
+                self.write_entry(&rel, Kind::File { mode: None }, archive)
             }
             ArchiveFormat::Tar | ArchiveFormat::TarXz => Err(ExtractError::Unsupported { format }),
         }
@@ -223,19 +222,15 @@ impl Unpacker {
         Ok(())
     }
 
-    fn unzip(&mut self, archive: &Path, base: &Path) -> Result<(), ExtractError> {
-        let file = File::open(archive).map_err(io_err)?;
-        let declared = zip_declared_entries(archive)?;
+    fn unzip(&mut self, mut file: File, base: &Path) -> Result<(), ExtractError> {
+        let declared = zip_declared_entries(&mut file)?;
+        file.seek(SeekFrom::Start(0)).map_err(io_err)?;
         let mut zip =
             zip::ZipArchive::new(file).map_err(|e| ExtractError::Corrupt(e.to_string()))?;
         // `zip` 크레이트는 같은 이름의 항목을 하나로 접는다 — 중앙 디렉터리가 적은 항목 수와 다르면 같은 이름이 두 번 있다.
         if declared != Some(zip.len() as u64) {
             return Err(unsafe_entry(
-                archive
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-                    .as_str(),
+                "the zip archive",
                 "the same name appears twice",
             ));
         }
@@ -336,6 +331,30 @@ impl Unpacker {
         }
     }
 
+    /// 풀기를 모두 마친 뒤(설치의 모든 파일) 만든 링크마다 실제로 풀어 설치 폴더 안인지 본다(리뷰 F1). 링크를 만들 때의 검사는
+    /// 대상을 글자 그대로 풀므로, 앞서 푼 안쪽 링크를 지난 뒤의 `..`(커널은 링크를 먼저 따라간 뒤 `..` 를 적용한다)가 폴더 밖으로
+    /// 나가는 연쇄를 못 본다 — 그리고 뒤에 오는 링크가 앞 링크의 뜻을 바꿀 수 있으므로 모든 링크가 생긴 뒤에 본다.
+    pub fn finish(&self) -> Result<(), ExtractError> {
+        for link in &self.links {
+            let display = link.to_string_lossy().into_owned();
+            let parent: Vec<std::ffi::OsString> = link
+                .parent()
+                .map(|p| p.components().map(|c| c.as_os_str().to_owned()).collect())
+                .unwrap_or_default();
+            let target = fs::read_link(self.root.join(link)).map_err(io_err)?;
+            match resolve_inside(&self.root, parent, &target, 0) {
+                Some(stack) if !stack.is_empty() => {}
+                _ => {
+                    return Err(unsafe_entry(
+                        &display,
+                        "the link points outside the install folder",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// `rel` 폴더와 그 위가 있는지 보고 없으면 만든다. 앞서 푼 링크나 디스크의 링크를 지나면 실패.
     fn ensure_dir(&mut self, rel: &Path) -> Result<(), ExtractError> {
         let mut acc = PathBuf::new();
@@ -411,9 +430,7 @@ impl Unpacker {
 }
 
 /// 중앙 디렉터리 끝 레코드(EOCD)가 적은 항목 수(zip64 면 zip64 EOCD 의 것). 찾지 못하면 `None`.
-fn zip_declared_entries(path: &Path) -> Result<Option<u64>, ExtractError> {
-    use std::io::{Seek, SeekFrom};
-    let mut f = File::open(path).map_err(io_err)?;
+fn zip_declared_entries(f: &mut File) -> Result<Option<u64>, ExtractError> {
     let len = f.metadata().map_err(io_err)?.len();
     // EOCD 는 22 바이트 + 주석(최대 65535).
     let tail_len = len.min(22 + 65_535 + 20);
@@ -446,6 +463,43 @@ fn zip_declared_entries(path: &Path) -> Result<Option<u64>, ExtractError> {
     let mut n = [0u8; 8];
     n.copy_from_slice(&head[32..40]);
     Ok(Some(u64::from_le_bytes(n)))
+}
+
+/// 링크 풀이를 따라가는 깊이의 상한(커널의 `ELOOP` 와 같은 자리).
+const MAX_LINK_DEPTH: usize = 40;
+
+/// `root` 기준 `start`(조각들) 폴더에서 `target` 을 커널처럼 푼다: 조각마다 그 자리가 링크면 그 링크를 먼저 풀고, `..` 는 푼 뒤의
+/// 자리에서 한 단계 올라간다. 설치 폴더 위로 올라가거나 절대 경로 · 너무 깊은 연쇄면 `None`. 없는 자리(끊어진 링크)는 글자대로 둔다.
+fn resolve_inside(
+    root: &Path,
+    start: Vec<std::ffi::OsString>,
+    target: &Path,
+    depth: usize,
+) -> Option<Vec<std::ffi::OsString>> {
+    if depth > MAX_LINK_DEPTH || target.is_absolute() {
+        return None;
+    }
+    let mut stack = start;
+    for c in target.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                stack.pop()?;
+            }
+            Component::Normal(n) => {
+                stack.push(n.to_owned());
+                let here: PathBuf = stack.iter().collect();
+                let at = root.join(&here);
+                if fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
+                    let next = fs::read_link(&at).ok()?;
+                    stack.pop();
+                    stack = resolve_inside(root, stack, &next, depth + 1)?;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(stack)
 }
 
 fn unsafe_entry(entry: &str, reason: &'static str) -> ExtractError {

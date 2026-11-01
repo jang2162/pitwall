@@ -30469,6 +30469,14 @@
       },
       "result": {
         "$defs": {
+          "ToolChecksum": {
+            "description": "받을 것의 고정 해시 여부.",
+            "enum": [
+              "pinned",
+              "none"
+            ],
+            "type": "string"
+          },
           "ToolUpdateInfo": {
             "description": "업데이트가 있는 설치본.",
             "properties": {
@@ -30476,8 +30484,12 @@
                 "description": "registry(지금 쓰는 판)가 가리키는 판.",
                 "type": "string"
               },
+              "checksum": {
+                "$ref": "#/$defs/ToolChecksum",
+                "description": "받을 판에 고정 해시가 있나(`none` 이면 「체크섬 없음」 — 알림 · 버튼이 경고한다)."
+              },
               "confirmRequired": {
-                "description": "라이선스나 출처 도메인이 바뀌어 업데이트 전에 다시 묻는다.",
+                "description": "라이선스나 출처 도메인이 바뀌었거나, 고정 해시로 확인한 도구가 「체크섬 없음」 판이 되어 업데이트 전에 다시 묻는다.",
                 "type": "boolean"
               },
               "installed": {
@@ -30491,7 +30503,8 @@
               "name",
               "installed",
               "available",
-              "confirmRequired"
+              "confirmRequired",
+              "checksum"
             ],
             "type": "object"
           }

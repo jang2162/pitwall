@@ -489,3 +489,169 @@ async fn only_two_versions_stay_and_uninstall_removes_everything() {
     let err = i.uninstall(&settings_grant(), "demo").await.unwrap_err();
     assert_eq!(err.code, code::NOT_INSTALLED);
 }
+
+/// 리뷰 F2: 판이 `.` · `..` · 빈 값인 정의(github 밖 purl 은 판 글을 검사하지 않는다 — registry 의 판은 미신뢰)는 4004 이고
+/// 아무것도 지우지 않는다 — 다른 패키지 · 이 패키지의 기록이 그대로다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dot_versions_are_refused_and_delete_nothing() {
+    let fx = Fx::new().await;
+    let body = demo_archive("v1");
+    fx.server.route("/demo-1.tar.gz", Reply::Body(body.clone()));
+    let installed = fx.installer(
+        demo_registry("1.0.0", "/demo-1.tar.gz", &body, true),
+        Limits::default(),
+    );
+    fx.consent(&installed, "demo");
+    install(&installed).await.unwrap();
+    let keep = fx.tools().join("other").join("1.0.0").join("keep");
+    std::fs::create_dir_all(keep.parent().unwrap()).unwrap();
+    std::fs::write(&keep, b"keep").unwrap();
+    for version in ["..", ".", "a/../.."] {
+        let reg = registry(
+            vec![files_pkg(
+                "demo",
+                version,
+                &[("demo.tar.gz", "/demo-x.tar.gz")],
+                &[("demo", BIN)],
+                &["MIT"],
+            )],
+            &[],
+        );
+        let i = fx.installer(reg, Limits::default());
+        let err = i
+            .install(&settings_grant(), "demo", None, None, false)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, code::UNSUPPORTED, "{version}: {err:?}");
+        assert_eq!(err.data.as_ref().unwrap()["reason"], "version", "{version}");
+        assert!(keep.is_file(), "{version}: another package survives");
+        assert_eq!(
+            fx.layout().read_record("demo").unwrap().unwrap().current,
+            "1.0.0",
+            "{version}"
+        );
+        assert!(
+            fx.layout().version_dir("demo", "1.0.0").join(BIN).is_file(),
+            "{version}"
+        );
+    }
+    assert_eq!(fx.server.hits("/demo-x.tar.gz"), 0);
+
+    // 지우는 자리도 마지막에 다시 본다: 패키지 폴더의 바로 아래 자식이 아니면 아무것도 지우지 않는다.
+    let layout = fx.layout();
+    for bad in [
+        layout.package_dir("demo").join(".."),
+        layout.package_dir("demo"),
+        layout.root().join("other"),
+    ] {
+        assert!(
+            DirGuard::new(bad.clone(), &layout, "demo").is_err(),
+            "{}",
+            bad.display()
+        );
+    }
+    assert!(keep.is_file());
+    assert_eq!(layout::version_dir_name(".."), "_..");
+    assert_eq!(layout::version_dir_name(""), "_");
+    assert_eq!(
+        layout::version_dir_name("kotlin-lsp/v263.7084.0"),
+        "kotlin-lsp_v263.7084.0"
+    );
+    assert!(layout::valid_version("kotlin-lsp/v263.7084.0"));
+}
+
+/// 리뷰 F5: 해시를 센 핸들을 그대로 푼다 — 받은 뒤 · 풀기 전에 같은 이름의 파일을 다른 내용으로 바꿔 넣어도(새 파일로 이름 바꾸기)
+/// 대조한 바이트가 풀린다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_hashed_download_is_what_gets_unpacked() {
+    let fx = Fx::new().await;
+    let body = demo_archive("good");
+    let evil = demo_archive("evil");
+    fx.server.route("/demo-1.tar.gz", Reply::Body(body.clone()));
+    let hook: Arc<dyn Fn(&Path) + Send + Sync> = Arc::new(move |path: &Path| {
+        let swap = path.with_extension("swap");
+        std::fs::write(&swap, &evil).unwrap();
+        std::fs::rename(&swap, path).unwrap();
+    });
+    let installer = fx.installer_with(
+        demo_registry("1.0.0", "/demo-1.tar.gz", &body, true),
+        Limits::default(),
+        Some(hook),
+    );
+    fx.consent(&installer, "demo");
+    install(&installer).await.unwrap();
+    let bin = std::fs::read_to_string(fx.layout().version_dir("demo", "1.0.0").join(BIN)).unwrap();
+    assert!(bin.contains("good"), "{bin}");
+}
+
+/// 리뷰 F6: 죽은 설치가 남긴 `.download-*` 폴더는 다음 설치가 잠금 아래에서 지운다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dead_install_download_folder_is_cleaned_up() {
+    let fx = Fx::new().await;
+    let stale = fx
+        .layout()
+        .package_dir("demo")
+        .join(".download-0.9.0-99999");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("big.tar.gz"), b"partial").unwrap();
+    let body = demo_archive("v1");
+    fx.server.route("/demo-1.tar.gz", Reply::Body(body.clone()));
+    let installer = fx.installer(
+        demo_registry("1.0.0", "/demo-1.tar.gz", &body, true),
+        Limits::default(),
+    );
+    fx.consent(&installer, "demo");
+    install(&installer).await.unwrap();
+    assert!(!stale.exists());
+}
+
+/// 리뷰 F9: 도는 설치에 합류하는 것은 같은 판일 때만 — registry 가 바뀌어 다른 판을 확인한 창은 옛 판의 결과를 받지 않고 4005.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_different_version_does_not_join_a_running_install() {
+    let fx = Fx::new().await;
+    let v1 = demo_archive("v1");
+    let v2 = demo_archive("v2");
+    fx.server.route(
+        "/demo-1.tar.gz",
+        Reply::Trickle(v1.clone(), Duration::from_millis(150)),
+    );
+    fx.server.route("/demo-2.tar.gz", Reply::Body(v2.clone()));
+    let reg = demo_registry("1.0.0", "/demo-1.tar.gz", &v1, true);
+    let installer = fx.installer(Arc::clone(&reg), Limits::default());
+    fx.consent(&installer, "demo");
+    let a = {
+        let i = Arc::clone(&installer);
+        tokio::spawn(async move {
+            i.install(&settings_grant(), "demo", None, None, false)
+                .await
+        })
+    };
+    for _ in 0..200 {
+        if fx.server.hits("/demo-1.tar.gz") > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let json = json!({"registry": "test", "packages": [files_pkg("demo", "2.0.0", &[("demo.tar.gz", "/demo-2.tar.gz")], &[("demo", BIN)], &["MIT"])]}).to_string();
+    reg.replace_index_for_tests(crate::index::Index::from_snapshot_json(&json).unwrap());
+    // 2.0.0 은 고정 해시가 없어 먼저 묻는다(리뷰 F3) — 확인한 값으로 부른다.
+    let ask = installer
+        .install(&settings_grant(), "demo", None, None, false)
+        .await
+        .unwrap_err();
+    assert_eq!(ask.code, code::CONFIRM_REQUIRED);
+    let d: methods::ToolConfirmRequired = serde_json::from_value(ask.data.unwrap()).unwrap();
+    let confirmed = methods::ToolConfirmed {
+        version: d.version,
+        licenses: d.licenses,
+        source_domains: d.source_domains,
+    };
+    let err = installer
+        .install(&settings_grant(), "demo", None, Some(&confirmed), false)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, code::BUSY, "{err:?}");
+    let a = a.await.unwrap().unwrap();
+    assert_eq!(a.version, "1.0.0");
+    assert_eq!(fx.server.hits("/demo-2.tar.gz"), 0);
+}

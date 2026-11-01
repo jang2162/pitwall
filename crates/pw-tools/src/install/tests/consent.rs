@@ -257,3 +257,141 @@ fn the_builtin_license_notes_parse_and_name_bundled_packages() {
     );
     assert!(LicenseNotes::parse("[x]\nlicenses = [\"MIT\"]\nunknown = 1\n").is_err());
 }
+
+/// 리뷰 F3(메인 결정): 고정 해시로 확인한 도구가 「체크섬 없음」 판이 되는 업데이트는 다시 묻고(4001 `checksum: none`, 처음 묻는
+/// 것이라 `rejected: null`), `tools.updates` 가 받을 판의 체크섬과 「다시 묻는다」 를 싣는다. 「체크섬 없음」 으로 확인한 뒤의 같은
+/// 상태 판은 묻지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn losing_the_pinned_hash_asks_again() {
+    let fx = Fx::new().await;
+    let body = archive();
+    for v in ["1", "2", "3"] {
+        fx.server
+            .route(&format!("/demo-{v}.tar.gz"), Reply::Body(body.clone()));
+    }
+    let i1 = fx.installer(
+        reg("1.0.0", &["MIT"], "/demo-1.tar.gz", &body),
+        Limits::default(),
+    );
+    let ask = i1
+        .install(&settings_grant(), "demo", None, None, false)
+        .await
+        .unwrap_err();
+    assert_eq!(ask.data.as_ref().unwrap()["checksum"], "pinned");
+    i1.install(
+        &settings_grant(),
+        "demo",
+        None,
+        Some(&confirmed_of(&ask)),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ConsentStore::new(&fx.state()).get("demo").unwrap().checksum,
+        Some(ToolChecksum::Pinned)
+    );
+
+    let unpinned = |v: &str| {
+        registry(
+            vec![files_pkg(
+                "demo",
+                &format!("{v}.0.0"),
+                &[("demo.tar.gz", &format!("/demo-{v}.tar.gz"))],
+                &[("demo", BIN)],
+                &["MIT"],
+            )],
+            &[],
+        )
+    };
+    let i2 = fx.installer(unpinned("2"), Limits::default());
+    let updates = methods::updates_of(&i2).unwrap();
+    assert_eq!(updates.items[0].checksum, ToolChecksum::None);
+    assert!(updates.items[0].confirm_required);
+    let hits = fx.server.total();
+    let err = i2
+        .install(&settings_grant(), "demo", None, None, true)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, code::CONFIRM_REQUIRED);
+    assert_eq!(err.data.as_ref().unwrap()["checksum"], "none");
+    assert_eq!(err.data.as_ref().unwrap()["rejected"], Value::Null);
+    assert_eq!(
+        fx.server.total(),
+        hits,
+        "nothing is downloaded before the confirmation"
+    );
+    let done = i2
+        .install(
+            &settings_grant(),
+            "demo",
+            None,
+            Some(&confirmed_of(&err)),
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(done.checksum, ToolChecksum::None);
+
+    // 「체크섬 없음」 으로 확인했으니 다음 「체크섬 없음」 판은 묻지 않는다.
+    let i3 = fx.installer(unpinned("3"), Limits::default());
+    assert!(!methods::updates_of(&i3).unwrap().items[0].confirm_required);
+    i3.install(&settings_grant(), "demo", None, None, true)
+        .await
+        .unwrap();
+
+    // 이 칸이 없는 옛 기록은 `pinned` 로 확인한 것으로 본다(더 묻는 쪽).
+    let old: ConsentEntry = serde_json::from_value(json!({
+        "licenses": ["MIT"], "sourceDomains": ["fake.test"], "version": "1", "confirmedAtMs": 1
+    }))
+    .unwrap();
+    assert!(!crate::install::consent::covers(
+        &old,
+        &["MIT".into()],
+        &["fake.test".into()],
+        ToolChecksum::None
+    ));
+    assert!(crate::install::consent::covers(
+        &old,
+        &["MIT".into()],
+        &["fake.test".into()],
+        ToolChecksum::Pinned
+    ));
+}
+
+/// 리뷰 F7: 같은 프로세스의 여러 창이 서로 다른 패키지를 동시에 확인해도 확인 기록이 하나도 사라지지 않고 실패하지 않는다.
+#[test]
+fn concurrent_confirmations_keep_every_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = ConsentStore::new(tmp.path());
+    let barrier = std::sync::Barrier::new(16);
+    std::thread::scope(|s| {
+        for n in 0..16 {
+            let (store, barrier) = (&store, &barrier);
+            s.spawn(move || {
+                barrier.wait();
+                for round in 0..5 {
+                    store
+                        .record(
+                            &format!("pkg-{n}"),
+                            ConsentEntry {
+                                licenses: vec!["MIT".into()],
+                                source_domains: vec!["x.test".into()],
+                                version: format!("{round}"),
+                                confirmed_at_ms: 1,
+                                checksum: Some(ToolChecksum::Pinned),
+                            },
+                        )
+                        .unwrap();
+                }
+            });
+        }
+    });
+    for n in 0..16 {
+        assert_eq!(
+            store.get(&format!("pkg-{n}")).unwrap().version,
+            "4",
+            "pkg-{n}"
+        );
+    }
+}
