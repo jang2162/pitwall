@@ -87,6 +87,18 @@ pub fn drivers() -> DriverRegistry {
     registry
         .register(Arc::new(pw_db_driver_mysql::MysqlDriver::new()))
         .expect("db driver ids are unique");
+    // M3-21 측정 번들(feature `perf-fake-db`, 기본은 꺼짐)만: 측정 모드에서 달라고 하면 postgres 자리에 가짜를 둔다(perf_fake_db.rs).
+    #[cfg(feature = "perf-fake-db")]
+    if crate::perf_fake_db::requested() {
+        registry
+            .register(crate::perf_fake_db::driver())
+            .expect("db driver ids are unique");
+    } else {
+        registry
+            .register(Arc::new(pw_db_driver_pg::PgDriver::new()))
+            .expect("db driver ids are unique");
+    }
+    #[cfg(not(feature = "perf-fake-db"))]
     registry
         .register(Arc::new(pw_db_driver_pg::PgDriver::new()))
         .expect("db driver ids are unique");

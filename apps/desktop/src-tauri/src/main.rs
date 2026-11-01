@@ -28,6 +28,8 @@ mod launch;
 mod mcp;
 mod menu;
 mod perf;
+#[cfg(feature = "perf-fake-db")]
+mod perf_fake_db;
 mod shell_command;
 mod trust;
 mod update;

@@ -85,6 +85,12 @@ pub struct Settings {
     pub idle_secs: u64,
     /// `--project` 로 연 폴더(없으면 회마다 만든 빈 프로젝트). 기준선이 어떤 프로젝트의 것인지 결과가 말해야 한다(M2-22).
     pub project: Option<String>,
+    /// 사람이 붙인 이름(`--label` — 예: 같은 측정을 두 번들로 잴 때 어느 번들인지, M3-21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// 유휴 표본 전에 연 DB 연결(`--db-idle`, M3-21 「DB 연결 하나를 연 프로젝트」). 있으면 유휴 시간은 그 연결의 세션이 열린 때부터다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_connection: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +105,9 @@ pub struct Run {
     pub launcher_main_ms: Option<f64>,
     /// 시작 → 떼어 띄운 앱 프로세스가 `main` 에 들어온 때.
     pub app_main_ms: Option<f64>,
+    /// 첫 프레임 → DB 연결의 세션이 열린 때(`--db-idle` 만 — 콘솔에서 [연결] 을 눌러 세션이 열리기까지).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_connected_ms: Option<f64>,
     pub launcher_pid: u32,
     pub app_pid: u32,
     /// 메모리를 합친 묶음의 키: 책임 프로세스가 이 pid 인 프로세스를 모았다(앱 pid 이거나 띄운 pid).
@@ -131,6 +140,8 @@ pub struct Process {
 pub struct Summaries {
     pub cold_start_ms: Option<Summary>,
     pub app_main_ms: Option<Summary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_connected_ms: Option<Summary>,
     pub footprint_bytes: Option<Summary>,
     pub rss_bytes: Option<Summary>,
 }
@@ -171,6 +182,7 @@ pub fn summarize_runs(runs: &[Run]) -> Summaries {
     Summaries {
         cold_start_ms: values(&|r| Some(r.cold_start_ms)),
         app_main_ms: values(&|r| r.app_main_ms),
+        db_connected_ms: values(&|r| r.db_connected_ms),
         footprint_bytes: values(&|r| Some(r.memory.footprint_bytes as f64)),
         rss_bytes: values(&|r| Some(r.memory.rss_bytes as f64)),
     }
@@ -269,6 +281,18 @@ pub fn markdown(report: &Report) -> String {
     if let Some(project) = &report.settings.project {
         push(&mut out, format!("- project: `{project}`"));
     }
+    if let Some(label) = &report.settings.label {
+        push(&mut out, format!("- label: {label}"));
+    }
+    if let Some(db) = &report.settings.db_connection {
+        push(
+            &mut out,
+            format!(
+                "- DB connection opened before the idle sample: {db} (idle = {}s after its session opened)",
+                report.settings.idle_secs
+            ),
+        );
+    }
     push(&mut out, String::new());
     push(&mut out, "| metric | median | min – max | target |".into());
     push(&mut out, "| --- | --- | --- | --- |".into());
@@ -308,6 +332,15 @@ pub fn markdown(report: &Report) -> String {
                 mb(r.median),
                 mb(r.min),
                 mb(r.max)
+            ),
+        );
+    }
+    if let Some(c) = s.db_connected_ms {
+        push(
+            &mut out,
+            format!(
+                "| first frame → DB session opened (console [Connect]) | {:.0} ms | {:.0} – {:.0} ms | |",
+                c.median, c.min, c.max
             ),
         );
     }
@@ -374,6 +407,7 @@ mod tests {
             cold_start_ms: cold,
             launcher_main_ms: Some(5.0),
             app_main_ms: Some(40.0),
+            db_connected_ms: None,
             launcher_pid: 1,
             app_pid: 2,
             group: 2,
@@ -480,6 +514,8 @@ mod tests {
                 warmup: 0,
                 idle_secs: 10,
                 project: project.map(str::to_owned),
+                label: None,
+                db_connection: None,
             },
             valid_runs: 1,
             warning: None,
@@ -498,5 +534,37 @@ mod tests {
         let empty = report(None);
         assert!(!markdown(&empty).contains("- project:"));
         assert!(serde_json::to_value(&empty).unwrap()["settings"]["project"].is_null());
+    }
+
+    /// 「DB 연결 하나를 연 프로젝트」(M3-21)는 결과와 요약이 그 연결과 세션이 열린 시간을 말한다. 없으면 그 줄 · 키가 없다.
+    #[test]
+    fn an_opened_db_connection_is_named_in_the_result_and_the_summary() {
+        let mut r = report(None);
+        assert!(!markdown(&r).contains("DB connection"));
+        assert!(
+            serde_json::to_value(&r).unwrap()["settings"]
+                .get("db_connection")
+                .is_none()
+        );
+        r.settings.db_connection = Some("postgres 127.0.0.1:5432/perf".into());
+        r.settings.label = Some("default bundle".into());
+        r.runs[0].db_connected_ms = Some(80.0);
+        r.summary = summarize_runs(&r.runs);
+        let md = markdown(&r);
+        assert!(
+            md.contains(
+                "- DB connection opened before the idle sample: postgres 127.0.0.1:5432/perf"
+            ),
+            "{md}"
+        );
+        assert!(md.contains("- label: default bundle"), "{md}");
+        assert!(
+            md.contains("| first frame → DB session opened (console [Connect]) | 80 ms"),
+            "{md}"
+        );
+        assert_eq!(
+            serde_json::to_value(&r).unwrap()["runs"][0]["db_connected_ms"],
+            80.0
+        );
     }
 }

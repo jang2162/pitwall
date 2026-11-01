@@ -357,6 +357,7 @@ function RowView({
       aria-expanded={expandable ? expanded : undefined}
       data-row={node.kind}
       data-name={name}
+      data-object-kind={node.kind === "group" ? node.objectKind : undefined}
       data-connection={node.connectionId}
       data-expandable={expandable ? "" : undefined}
       onPointerDown={(e) => onPointerDown(row, e)}

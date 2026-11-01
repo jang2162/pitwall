@@ -30,10 +30,10 @@ pub const PARENT_ENV: &str = "PITWALL_PERF_PARENT";
 /// 프로젝트 창이 첫 프레임 뒤에 돌릴 시나리오. 측정 모드([`MARK_ENV`])에서만 읽는다.
 pub const SCENARIO_ENV: &str = "PITWALL_PERF_SCENARIO";
 
-/// 아는 시나리오(src/perf-scenario.ts 의 `SCENARIOS`). 모르는 이름은 무시한다 — 창 주소에는 이 목록의 값만 들어간다.
-pub const SCENARIOS: &[&str] = &["git"];
+/// 아는 시나리오(src/perf-scenario.ts 의 `SCENARIOS` — `db` · `db-idle` 은 src/perf-scenario-db.ts). 모르는 이름은 무시한다 — 창 주소에는 이 목록의 값만 들어간다.
+pub const SCENARIOS: &[&str] = &["git", "db", "db-idle"];
 
-/// 시나리오가 남기는 표시 이름(src/perf-scenario.ts 의 `env.report` — 시험이 그 파일과 같은지 본다). 하네스가 판정에 쓰는
+/// 시나리오가 남기는 표시 이름(src/perf-scenario.ts · src/perf-scenario-db.ts 의 `env.report` — 시험이 그 두 파일과 같은지 본다). 하네스가 판정에 쓰는
 /// 표시(`first_frame` · `hidden` · `visible` · `main`)는 웹뷰가 남기지 못하고, 모르는 이름도 남지 않는다.
 pub const SCENARIO_EVENTS: &[&str] = &[
     "git_log_open",
@@ -50,6 +50,16 @@ pub const SCENARIO_EVENTS: &[&str] = &[
     "staged_shown",
     "scenario_done",
     "scenario_error",
+    // DB 시나리오(M3-21).
+    "grid_open",
+    "grid_rows",
+    "grid_scroll",
+    "grid_stream_scroll",
+    "explorer_tables",
+    "redis_open",
+    "redis_keys",
+    "redis_scroll",
+    "db_connected",
 ];
 
 /// 시나리오 표시 하나의 `data` 상한(JSON 바이트). 가장 큰 것(스크롤 통계)이 1 KiB 남짓이다.
@@ -252,10 +262,13 @@ mod tests {
     /// 시나리오가 부르는 이름이 모두 받아지고, 하네스의 표시 이름 · 모르는 이름 · 큰 data 는 남지 않는다.
     #[test]
     fn only_the_scenario_s_own_reports_are_recorded() {
-        let source = include_str!("../../src/perf-scenario.ts");
-        let mut used: Vec<&str> = source
-            .split("env.report(\"")
-            .skip(1)
+        let sources = [
+            include_str!("../../src/perf-scenario.ts"),
+            include_str!("../../src/perf-scenario-db.ts"),
+        ];
+        let mut used: Vec<&str> = sources
+            .iter()
+            .flat_map(|source| source.split("env.report(\"").skip(1))
             .filter_map(|rest| rest.split('"').next())
             .collect();
         used.sort_unstable();

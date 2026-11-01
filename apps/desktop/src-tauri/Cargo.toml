@@ -10,6 +10,11 @@ publish.workspace = true
 name = "pitwall"
 path = "src/main.rs"
 
+[features]
+# M3-21 측정 번들 전용 — 기본으로 꺼져 있다. 켜면 측정 모드(`PITWALL_PERF_MARK` + `PITWALL_PERF_FAKE_DB`)에서 postgres 자리에 가짜
+# 드라이버를 둔다(src/perf_fake_db.rs). 출시 번들에는 가짜 코드가 들지 않는다. 이 이름은 scripts/perf-m3.mjs 의 `FAKE_FEATURE` 와 같다.
+perf-fake-db = ["pw-db-driver/test-support", "dep:pw-db-types"]
+
 [build-dependencies]
 tauri-build = { version = "2.7.2", features = [] }
 
@@ -25,6 +30,8 @@ pw-db-driver-redis = { path = "../../../crates/pw-db-driver-redis" }
 pw-db-driver-sqlite = { path = "../../../crates/pw-db-driver-sqlite" }
 # 문장 나누기 · 현재 문장 RPC(`db.sql.split` · `db.sql.statementAt`, M3-04).
 pw-db-sql = { path = "../../../crates/pw-db-sql" }
+# 가짜 드라이버의 객체 · 열 정의(`perf-fake-db` 에서만).
+pw-db-types = { path = "../../../crates/pw-db-types", optional = true }
 pw-diag = { path = "../../../crates/pw-diag" }
 pw-ext = { path = "../../../crates/pw-ext" }
 pw-fs = { path = "../../../crates/pw-fs" }

@@ -3,7 +3,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { FirstFrameMark, perfMarkRequested, perfScenarioRequested } from "./perf-mark";
+import {
+  FirstFrameMark,
+  PERF_SCENARIOS,
+  perfMarkRequested,
+  perfScenarioRequested,
+} from "./perf-mark";
+import { SCENARIOS } from "./perf-scenario";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -30,7 +36,12 @@ it("a scenario runs only in measurement mode and only by a known name", () => {
   expect(perfScenarioRequested("?window=project&perf=1&perfScenario=git")).toBe("git");
   expect(perfScenarioRequested("?window=project&perfScenario=git")).toBeUndefined();
   expect(perfScenarioRequested("?window=project&perf=1&perfScenario=other")).toBeUndefined();
+  expect(perfScenarioRequested("?window=project&perf=1&perfScenario=db")).toBe("db");
+  expect(perfScenarioRequested("?window=project&perf=1&perfScenario=db-idle")).toBe("db-idle");
+  expect(perfScenarioRequested("?window=project&perfScenario=db")).toBeUndefined();
   expect(perfScenarioRequested("?window=project&perf=1")).toBeUndefined();
+  // 이 목록은 perf-scenario.ts 의 것과 같아야 한다(그 모듈은 측정 모드에서만 불러와 여기 따로 둔다).
+  expect([...PERF_SCENARIOS]).toEqual([...SCENARIOS]);
 });
 
 function visibility(initial: DocumentVisibilityState) {

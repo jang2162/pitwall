@@ -22,9 +22,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 // CI 서비스와 같은 판(.github/workflows/ci.yml 의 db-live 잡). 올리면 둘을 함께 올린다.
-const PG_IMAGE =
+export const PG_IMAGE =
   "postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929";
-const REDIS_IMAGE =
+export const REDIS_IMAGE =
   "redis:7.2.10@sha256:8cd70b529aec2af55a072917098c1ae6f1d9eb975ac1cf36928c7d5af7574f08";
 
 /** CA 경로를 넘기는 변수(모든 DB 공용). */

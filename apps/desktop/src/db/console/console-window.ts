@@ -63,7 +63,7 @@ export function targetConsole(
   return activeTabId === undefined ? undefined : consoles.get(activeTabId);
 }
 
-const LAST_CONNECTION_KEY = "pitwall.db.console.lastConnection";
+export const LAST_CONNECTION_KEY = "pitwall.db.console.lastConnection";
 
 /** 이 프로젝트에서 마지막으로 연결한 연결 id(웹뷰 저장소 — 읽지 못하면 `undefined`). */
 export function lastConnection(projectId: string): string | undefined {

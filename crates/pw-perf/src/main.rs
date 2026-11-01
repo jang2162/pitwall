@@ -42,6 +42,7 @@ mod measure {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use pw_core::config::AppPaths;
+    use pw_perf::db::{self, Connection, DbProgress, DbReport, DbRun, DbSettings, Expect};
     use pw_perf::git::{
         self, Acted, Action, GitReport, GitRun, GitSettings, Progress, RepoResult, RunFailure,
         refresh_share,
@@ -53,7 +54,7 @@ mod measure {
         summarize_runs, targets, too_few_valid, valid_runs,
     };
 
-    const USAGE: &str = "usage: pw-perf --app <Pitwall.app | binary> [--runs N] [--warmup N] [--idle-secs S] [--timeout-secs S] [--out DIR] [--project DIR]\n       pw-perf --app <Pitwall.app | binary> --git-repo <synth repo> [--git-repo <synth repo> ...] [--checkout BRANCH] [--scenario-timeout-secs S] [--runs N] [--warmup N] [--out DIR]";
+    const USAGE: &str = "usage: pw-perf --app <Pitwall.app | binary> [--runs N] [--warmup N] [--idle-secs S] [--timeout-secs S] [--out DIR] [--project DIR | --db-idle --pg HOST:PORT/DB] [--label TEXT]\n       pw-perf --app <Pitwall.app | binary> --git-repo <synth repo> [--git-repo <synth repo> ...] [--checkout BRANCH] [--scenario-timeout-secs S] [--runs N] [--warmup N] [--out DIR]\n       pw-perf --app <Pitwall.app | binary> --db [--fake-db | --pg HOST:PORT/DB] [--redis HOST:PORT] [--scenario-timeout-secs S] [--runs N] [--warmup N] [--out DIR] [--label TEXT]";
 
     /// 앱이 측정하는 프로세스(이 하네스)의 pid 를 받는 변수(`apps/desktop/src-tauri/src/perf.rs` 의 `PARENT_ENV`).
     const PARENT_ENV: &str = "PITWALL_PERF_PARENT";
@@ -106,6 +107,16 @@ mod measure {
         git_repos: Vec<PathBuf>,
         checkout: String,
         scenario_timeout: Duration,
+        /// 결과에 남길 이름(`--label`).
+        label: Option<String>,
+        /// DB 시나리오(`--db`)를 잰다.
+        db: bool,
+        /// 콜드 스타트 · 유휴 메모리를 DB 연결 하나를 연 프로젝트로(`--db-idle --pg`).
+        db_idle: bool,
+        /// postgres 연결을 가짜로(`--fake-db` — `perf-fake-db` 로 만든 번들).
+        fake_db: bool,
+        /// 회마다 임시 프로젝트에 적을 연결. 있으면 프로젝트를 신뢰로 등록한다.
+        connections: Vec<Connection>,
     }
 
     fn parse(args: Vec<String>) -> Result<Options, String> {
@@ -119,6 +130,12 @@ mod measure {
         let mut git_repos = Vec::new();
         let mut checkout = git::DEFAULT_CHECKOUT.to_owned();
         let mut scenario_timeout = 420;
+        let mut label = None;
+        let mut db_mode = false;
+        let mut db_idle = false;
+        let mut fake_db = false;
+        let mut pg: Option<String> = None;
+        let mut redis: Option<String> = None;
         let mut it = args.into_iter();
         while let Some(flag) = it.next() {
             let mut value = || {
@@ -137,6 +154,12 @@ mod measure {
                 "--git-repo" => git_repos.push(PathBuf::from(value()?)),
                 "--checkout" => checkout = value()?,
                 "--scenario-timeout-secs" => scenario_timeout = number(value()?)?,
+                "--label" => label = Some(value()?),
+                "--db" => db_mode = true,
+                "--db-idle" => db_idle = true,
+                "--fake-db" => fake_db = true,
+                "--pg" => pg = Some(value()?),
+                "--redis" => redis = Some(value()?),
                 "-h" | "--help" => return Err(USAGE.into()),
                 other => return Err(format!("unknown argument {other}\n{USAGE}")),
             }
@@ -157,6 +180,51 @@ mod measure {
         }
         if project.is_some() && !git_repos.is_empty() {
             return Err(format!("--project and --git-repo do not mix\n{USAGE}"));
+        }
+        if (db_mode || db_idle) && (project.is_some() || !git_repos.is_empty()) {
+            return Err(format!(
+                "--db and --db-idle measure a temporary project of their own; they do not mix with --project or --git-repo\n{USAGE}"
+            ));
+        }
+        if db_mode && db_idle {
+            return Err(format!("--db and --db-idle do not mix\n{USAGE}"));
+        }
+        if !db_mode && !db_idle && (fake_db || pg.is_some() || redis.is_some()) {
+            return Err(format!(
+                "--fake-db, --pg and --redis need --db or --db-idle\n{USAGE}"
+            ));
+        }
+        let mut connections = Vec::new();
+        if db_mode {
+            if fake_db && pg.is_some() {
+                return Err(format!(
+                    "--fake-db and --pg both fill the `postgres` connections; pick one\n{USAGE}"
+                ));
+            }
+            if fake_db {
+                connections.push(Connection::fake(db::GRID));
+                connections.push(Connection::fake(db::SCHEMA));
+            }
+            if let Some(pg) = &pg {
+                connections.push(Connection::parse(db::GRID, "postgres", pg)?);
+            }
+            if let Some(redis) = &redis {
+                connections.push(Connection::parse(db::REDIS, "redis", redis)?);
+            }
+            if connections.is_empty() {
+                return Err(format!("--db needs --fake-db, --pg or --redis\n{USAGE}"));
+            }
+        }
+        if db_idle {
+            if fake_db || redis.is_some() {
+                return Err(format!(
+                    "--db-idle opens one postgres connection (--pg) only\n{USAGE}"
+                ));
+            }
+            let pg = pg
+                .as_deref()
+                .ok_or_else(|| format!("--db-idle needs --pg\n{USAGE}"))?;
+            connections.push(Connection::parse(db::IDLE, "postgres", pg)?);
         }
         let resolve = |dir: PathBuf| {
             std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))
@@ -182,6 +250,11 @@ mod measure {
             git_repos,
             checkout,
             scenario_timeout: Duration::from_secs(scenario_timeout),
+            label,
+            db: db_mode,
+            db_idle,
+            fake_db,
+            connections,
         })
     }
 
@@ -254,6 +327,9 @@ mod measure {
         if !opts.git_repos.is_empty() {
             return run_git(&opts, &scratch.0, &out);
         }
+        if opts.db {
+            return run_db(&opts, &scratch.0, &out);
+        }
         let total = opts.warmup + opts.runs;
         say(format!(
             "pw-perf: {} ({} warm-up + {} measured; each opens one project window) → {}",
@@ -274,10 +350,15 @@ mod measure {
                 store_root.as_deref(),
                 index,
                 opts.project.as_deref(),
-                None,
+                opts.db_idle.then_some("db-idle"),
                 |launch, dir| {
                     let started = first_frame(&opts, launch, dir, index)?;
-                    observe_idle(&opts, started, launch, dir, index, warmup)
+                    let connected = if opts.db_idle {
+                        Some(db_connected(&opts, &started, dir, index)?)
+                    } else {
+                        None
+                    };
+                    observe_idle(&opts, started, launch, dir, index, warmup, connected)
                 },
             )?;
             say(format!(
@@ -309,6 +390,18 @@ mod measure {
                 warmup: opts.warmup,
                 idle_secs: opts.idle.as_secs(),
                 project: opts.project.as_ref().map(|p| p.display().to_string()),
+                label: opts.label.clone(),
+                db_connection: opts.connections.first().filter(|_| opts.db_idle).map(|c| {
+                    format!(
+                        "{} {}:{}{}",
+                        c.driver,
+                        c.host,
+                        c.port,
+                        c.database
+                            .as_deref()
+                            .map_or(String::new(), |d| format!("/{d}"))
+                    )
+                }),
             },
             targets: targets(&summary),
             valid_runs: valid,
@@ -432,8 +525,14 @@ mod measure {
     }
 
     impl RunDir {
-        /// `project` 가 있으면 그 폴더를 등록한다(지우지 않는다). 없으면 회 폴더 안에 빈 프로젝트를 만든다.
-        fn create(scratch: &Path, index: usize, project: Option<&Path>) -> Result<Self, String> {
+        /// `project` 가 있으면 그 폴더를 등록한다(지우지 않는다). 없으면 회 폴더 안에 빈 프로젝트를 만든다. `connections` 가 있으면
+        /// 그 프로젝트(회 폴더 안의 것)에 연결 설정을 적고 신뢰로 등록한다(DB 시나리오 — 미신뢰 프로젝트는 연결을 열지 못한다).
+        fn create(
+            scratch: &Path,
+            index: usize,
+            project: Option<&Path>,
+            connections: &[Connection],
+        ) -> Result<Self, String> {
             let root = scratch.join(format!("run-{index}"));
             let paths = AppPaths::under(&root);
             // MCP 소켓이 `$STATE/run` 에 들어가는지 앱과 같은 규칙으로 본다 — 넘으면 공용 temp 로 가서 남는다.
@@ -456,7 +555,16 @@ mod measure {
                     project
                 }
             };
-            pw_perf::register_untrusted(&paths, &project)?;
+            if connections.is_empty() {
+                pw_perf::register_untrusted(&paths, &project)?;
+            } else {
+                for connection in connections {
+                    db::write_connection(&project, connection).map_err(|e| {
+                        format!("cannot write the connection {}: {e}", connection.id)
+                    })?;
+                }
+                pw_perf::register_trusted(&paths, &project)?;
+            }
             Ok(Self {
                 marks: root.join("marks.jsonl"),
                 root,
@@ -540,6 +648,15 @@ mod measure {
         }
     }
 
+    impl Observed for DbRun {
+        fn group(&self) -> u32 {
+            self.group
+        }
+        fn killed(self, killed: bool) -> Self {
+            DbRun { killed, ..self }
+        }
+    }
+
     impl Observed for GitRun {
         fn group(&self) -> u32 {
             self.group
@@ -571,7 +688,8 @@ mod measure {
         observe: impl FnOnce(&Launch, &RunDir) -> Result<T, String>,
     ) -> Result<T, RunError> {
         preflight().map_err(RunError::run)?;
-        let dir = RunDir::create(scratch, index, project).map_err(RunError::fatal)?;
+        let dir =
+            RunDir::create(scratch, index, project, &opts.connections).map_err(RunError::fatal)?;
 
         let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
             .filter(|(k, _)| {
@@ -592,6 +710,9 @@ mod measure {
         env.push((PARENT_ENV.into(), std::process::id().to_string().into()));
         if let Some(scenario) = scenario {
             env.push((pw_perf::SCENARIO_ENV.into(), scenario.into()));
+        }
+        if opts.fake_db {
+            env.push((db::FAKE_DB_ENV.into(), "1".into()));
         }
 
         let started = Instant::now();
@@ -765,6 +886,7 @@ mod measure {
         dir: &RunDir,
         index: usize,
         warmup: bool,
+        db_connected_ms: Option<f64>,
     ) -> Result<Run, String> {
         let Started {
             frame,
@@ -817,6 +939,7 @@ mod measure {
             cold_start_ms,
             launcher_main_ms: since(marks::first(&all, "main", Some(launcher))),
             app_main_ms: since(marks::first(&all, "main", Some(app_pid))),
+            db_connected_ms,
             launcher_pid: launcher,
             app_pid,
             group,
@@ -1034,6 +1157,290 @@ mod measure {
             }
         }
         Ok(report)
+    }
+
+    /// `--db-idle`: 첫 프레임 뒤 앱의 `db-idle` 시나리오가 콘솔에서 연결해 세션이 열렸다는 표시(`db_connected`)를 기다린다. 첫 프레임 →
+    /// 그 표시까지(ms)를 돌려준다 — 유휴 시간은 그때부터다.
+    fn db_connected(
+        opts: &Options,
+        started: &Started,
+        dir: &RunDir,
+        index: usize,
+    ) -> Result<f64, String> {
+        let deadline = Instant::now() + opts.scenario_timeout;
+        let mut locked = false;
+        let mut next_lock_check = Instant::now();
+        loop {
+            check_interrupted()?;
+            if Instant::now() >= next_lock_check {
+                locked |= screen_locked()?;
+                next_lock_check = Instant::now() + LOCK_CHECK;
+            }
+            let all = marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
+            if let Some(m) = marks::first(&all, "db_connected", Some(started.app_pid)) {
+                return Ok(m.epoch_ms - started.frame.epoch_ms);
+            }
+            if let Some(m) = marks::first(&all, "scenario_error", Some(started.app_pid)) {
+                return Err(format!(
+                    "run {index}: the app could not open the DB connection: {}",
+                    m.data.clone().unwrap_or_default()
+                ));
+            }
+            if !macos::alive(started.app_pid) {
+                return Err(format!(
+                    "run {index}: the app {} exited before its DB session opened",
+                    started.app_pid
+                ));
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "run {index}: no DB session within {}s ({})",
+                    opts.scenario_timeout.as_secs(),
+                    marks::stall_note(&all, epoch_ms(), locked)
+                ));
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
+    /// 적은 연결로 시나리오가 남겨야 할 단계.
+    fn expect(opts: &Options) -> Expect {
+        let has = |id: &str| opts.connections.iter().any(|c| c.id == id);
+        Expect {
+            grid: has(db::GRID),
+            schema: has(db::SCHEMA),
+            redis: has(db::REDIS),
+        }
+    }
+
+    /// DB 시나리오: 준비 + 측정 회를 돌려 `result.json` · `summary.md` 를 쓴다. 회마다 임시 프로젝트에 연결을 적고 신뢰로 등록해 띄운다.
+    /// 한 회가 멈추거나 실패하면 그 회를 실패로 적고 다음 회로 간다(앱은 그 회의 pid 로만 끈다). 회가 끝날 때마다 결과 파일을 다시 쓴다.
+    fn run_db(opts: &Options, scratch: &Path, out: &Path) -> Result<bool, String> {
+        let total = opts.warmup + opts.runs;
+        say(format!(
+            "pw-perf: DB scenario ({}) × ({} warm-up + {} measured); each run opens one project window → {}",
+            opts.connections
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            opts.warmup,
+            opts.runs,
+            out.display()
+        ));
+        let store_root = webkit_store_root(&opts.app);
+        let mut runs = Vec::new();
+        let mut failures = Vec::new();
+        let mut stopped = None;
+        for index in 0..total {
+            if let Err(e) = check_interrupted() {
+                stopped = Some(e);
+                break;
+            }
+            let warmup = index < opts.warmup;
+            let run = run_once(
+                opts,
+                scratch,
+                out,
+                store_root.as_deref(),
+                index,
+                None,
+                Some("db"),
+                |launch, dir| {
+                    let started = first_frame(opts, launch, dir, index)?;
+                    observe_db(opts, started, dir, index, warmup)
+                },
+            );
+            match run {
+                Ok(run) => {
+                    let m = &run.measure;
+                    let ms = |v: Option<f64>| v.map_or("—".into(), |v| format!("{v:.0} ms"));
+                    say(format!(
+                        "pw-perf: DB run {index}{}{}: grid open {}, grid fling within one refresh {}, streaming {}, explorer {}, Redis open {}, Redis fling {}",
+                        if run.warmup { " (warm-up)" } else { "" },
+                        run.excluded
+                            .as_deref()
+                            .map_or(String::new(), |why| format!(" (excluded: {why})")),
+                        ms(m.grid_open.as_ref().map(|g| g.ms)),
+                        m.grid_scroll
+                            .as_ref()
+                            .map_or("—".into(), |g| refresh_share(&g.fling.interval)),
+                        m.grid_stream
+                            .as_ref()
+                            .map_or("—".into(), |g| refresh_share(&g.interval)),
+                        ms(m.explorer.as_ref().map(|e| e.ms)),
+                        ms(m.redis_open.as_ref().map(|r| r.ms)),
+                        m.redis_scroll
+                            .as_ref()
+                            .map_or("—".into(), |g| refresh_share(&g.fling.interval)),
+                    ));
+                    runs.push(run);
+                }
+                Err(e) => {
+                    say(format!(
+                        "pw-perf: DB run {index}{} failed: {}",
+                        if warmup { " (warm-up)" } else { "" },
+                        e.message
+                    ));
+                    failures.push(RunFailure {
+                        index,
+                        warmup,
+                        reason: e.message.clone(),
+                    });
+                    if e.fatal {
+                        stopped = Some(e.message);
+                    }
+                }
+            }
+            write_db_report(opts, out, &runs, &failures, stopped.as_deref(), false)?;
+            if stopped.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        let report = write_db_report(opts, out, &runs, &failures, stopped.as_deref(), true)?;
+        if let Some(stopped) = stopped {
+            return Err(format!(
+                "{stopped} (the runs before it are in {})",
+                out.join("summary.md").display()
+            ));
+        }
+        Ok(report.warning.is_none())
+    }
+
+    fn write_db_report(
+        opts: &Options,
+        out: &Path,
+        runs: &[DbRun],
+        failures: &[RunFailure],
+        stopped: Option<&str>,
+        last: bool,
+    ) -> Result<DbReport, String> {
+        let summary = db::summarize_db(runs);
+        let valid = runs
+            .iter()
+            .filter(|r| !r.warmup && r.excluded.is_none())
+            .count();
+        let report = DbReport {
+            schema: 1,
+            scenario: "db",
+            definitions: db::DEFINITIONS,
+            build: build(opts),
+            commit: commit(),
+            os: os(),
+            hardware: hardware(),
+            settings: DbSettings {
+                runs: opts.runs,
+                warmup: opts.warmup,
+                label: opts.label.clone(),
+                fake_db: opts.fake_db,
+                connections: opts.connections.clone(),
+            },
+            runs: runs.to_vec(),
+            failures: failures.to_vec(),
+            valid_runs: valid,
+            targets: db::db_targets(&summary),
+            summary,
+            warning: too_few_valid(valid, opts.runs),
+            stopped: stopped.map(str::to_owned),
+        };
+        let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+        std::fs::write(out.join("result.json"), json + "\n").map_err(|e| e.to_string())?;
+        let md = db::db_report_markdown(&report);
+        std::fs::write(out.join("summary.md"), &md).map_err(|e| e.to_string())?;
+        if last {
+            let _ = writeln!(std::io::stdout(), "{md}");
+            say(format!(
+                "pw-perf: wrote {} and {}",
+                out.join("result.json").display(),
+                out.join("summary.md").display()
+            ));
+            if let Some(warning) = &report.warning {
+                say(format!("pw-perf: warning: {warning}"));
+            }
+        }
+        Ok(report)
+    }
+
+    /// 앱의 DB 시나리오가 끝나기를 기다려 메모리를 잰다.
+    fn observe_db(
+        opts: &Options,
+        started: Started,
+        dir: &RunDir,
+        index: usize,
+        warmup: bool,
+    ) -> Result<DbRun, String> {
+        let Started {
+            frame,
+            app_pid,
+            group,
+            cold_start_ms,
+        } = started;
+        let deadline = Instant::now() + opts.scenario_timeout;
+        let expect = expect(opts);
+        let mut locked = false;
+        let mut next_lock_check = Instant::now();
+        let measure = loop {
+            check_interrupted()?;
+            if Instant::now() >= next_lock_check {
+                locked |= screen_locked()?;
+                next_lock_check = Instant::now() + LOCK_CHECK;
+            }
+            let all = marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
+            match db::progress(&all, app_pid, expect) {
+                DbProgress::Waiting => {}
+                DbProgress::Done(m) => break *m,
+                DbProgress::Failed(e) => return Err(format!("run {index}: {e}")),
+            }
+            if !macos::alive(app_pid) {
+                return Err(format!(
+                    "run {index}: the app {app_pid} exited during the scenario"
+                ));
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "run {index}: the scenario did not finish within {}s ({})",
+                    opts.scenario_timeout.as_secs(),
+                    marks::stall_note(&all, epoch_ms(), locked)
+                ));
+            }
+            std::thread::sleep(POLL);
+        };
+        // 가짜를 달라고 했는데 앱이 등록하지 않았으면(feature 없이 만든 번들) 실 PG 드라이버가 `fake.invalid` 에 붙으려다 실패했을
+        // 것이다 — 그래도 끝났다면 그 번들의 값이 아니다.
+        if opts.fake_db && !dir.log().contains(db::FAKE_DB_LOG) {
+            return Err(format!(
+                "run {index}: the app did not register the fake postgres driver (no `{}` in its log) — build the bundle with the perf-fake-db feature",
+                db::FAKE_DB_LOG
+            ));
+        }
+        locked |= screen_locked()?;
+        let ended = epoch_ms();
+        let memory = sample(group);
+        let all = marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
+        let hidden = all
+            .iter()
+            .any(|m| m.event == "hidden" && m.pid == app_pid && m.epoch_ms <= ended);
+        let excluded = if frame.hidden == Some(true) {
+            Some("window hidden before its first frame".to_owned())
+        } else if hidden {
+            Some("window hidden during the scenario".to_owned())
+        } else if locked {
+            Some("screen locked during the run".to_owned())
+        } else {
+            None
+        };
+        Ok(DbRun {
+            index,
+            warmup,
+            excluded,
+            app_pid,
+            group,
+            cold_start_ms,
+            measure,
+            memory,
+            killed: false,
+        })
     }
 
     /// 시나리오를 따라가며 표시 파일을 다시 읽는 간격. 측정하는 쪽의 반응 지연은 수치에 들지 않는다(시작점은 git 을 띄우기 직전의

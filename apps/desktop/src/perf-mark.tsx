@@ -15,11 +15,16 @@ export function perfMarkRequested(search: string): boolean {
   return new URLSearchParams(search).get("perf") === "1";
 }
 
+/** 아는 시나리오(src/perf-scenario.ts 의 `SCENARIOS` 와 같다 — 시험이 본다. 그 모듈은 측정 모드에서만 불러오므로 여기 따로 둔다). */
+export const PERF_SCENARIOS = ["git", "db", "db-idle"] as const;
+export type PerfScenario = (typeof PERF_SCENARIOS)[number];
+
 /** 첫 프레임 뒤에 돌릴 측정 시나리오(src/perf-scenario.ts). 측정 모드가 아니거나 모르는 이름이면 없다. */
-export function perfScenarioRequested(search: string): "git" | undefined {
+export function perfScenarioRequested(search: string): PerfScenario | undefined {
   const params = new URLSearchParams(search);
   if (params.get("perf") !== "1") return undefined;
-  return params.get("perfScenario") === "git" ? "git" : undefined;
+  const name = params.get("perfScenario");
+  return PERF_SCENARIOS.find((s) => s === name);
 }
 
 /** 문서의 가려짐. 시험은 가짜를 넘긴다. */

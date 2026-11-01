@@ -32,7 +32,7 @@ import { EditorView } from "@codemirror/view";
 import { ROW_HEIGHT } from "./git/log/graph-render";
 import { type FrameWork, installFrameWork, scrollFrames } from "./perf-frames";
 
-export const SCENARIOS = ["git"] as const;
+export const SCENARIOS = ["git", "db", "db-idle"] as const;
 export type Scenario = (typeof SCENARIOS)[number];
 
 export const FLING_FRAMES = 2000;
@@ -536,17 +536,22 @@ export async function runScenario(
 ): Promise<void> {
   const work = installFrameWork();
   try {
-    if (scenario === "git")
-      await runGitScenario({
-        doc: document,
-        report,
-        work,
-        now: () => performance.now(),
-        // 측정하는 쪽의 벽시계와 같은 시계 — `timeOrigin + performance.now()` 는 단조 시계라 몇 분 지나면 벽시계와 어긋날 수 있다.
-        epochNow: () => Date.now(),
-        sleep: (t) => new Promise((r) => setTimeout(r, t)),
-        watchBlocks: () => watchBlocks(() => performance.now()),
-      });
+    const env: ScenarioEnv = {
+      doc: document,
+      report,
+      work,
+      now: () => performance.now(),
+      // 측정하는 쪽의 벽시계와 같은 시계 — `timeOrigin + performance.now()` 는 단조 시계라 몇 분 지나면 벽시계와 어긋날 수 있다.
+      epochNow: () => Date.now(),
+      sleep: (t) => new Promise((r) => setTimeout(r, t)),
+      watchBlocks: () => watchBlocks(() => performance.now()),
+    };
+    if (scenario === "git") await runGitScenario(env);
+    else {
+      // DB 시나리오(perf-scenario-db.ts)는 그때 불러온다.
+      const db = await import("./perf-scenario-db");
+      await (scenario === "db" ? db.runDbScenario(env) : db.runDbIdleScenario(env));
+    }
   } finally {
     work.restore();
   }

@@ -102,7 +102,7 @@ export interface ResultGridProps {
 }
 
 const HEADER_HEIGHT = 28;
-const ROW_HEIGHT = 24;
+export const ROW_HEIGHT = 24;
 
 function initialWidth(name: string, type: string): number {
   return Math.max(64, Math.min(320, 7.5 * (name.length + type.length) + 40));

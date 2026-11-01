@@ -2,6 +2,7 @@
 //! 사용법은 CONTRIBUTING.md 「성능 기준선」 절이 정본이다. 실행 본체는 main.rs, 앱이 남기는 표시는
 //! `apps/desktop/src-tauri/src/perf.rs`.
 
+pub mod db;
 pub mod git;
 pub mod marks;
 pub mod report;
@@ -58,6 +59,29 @@ pub fn register_untrusted(
     registry
         .claim_trust_prompt(&project.id)
         .map_err(|e| format!("cannot record the project as untrusted: {e}"))?;
+    Ok(project)
+}
+
+/// 측정할 프로젝트 `root` 를 `paths` 의 레지스트리에 신뢰로 등록한다 — 처음 연 사람이 신뢰 확인에서 「신뢰」 를 고른 것과 같은
+/// 저장 값이다(묻기 차례를 잡고 `set_trust(true)`). DB 시나리오(M3-21)가 쓴다: 미신뢰 프로젝트는 연결을 열지 못한다(결정 M3-D13).
+pub fn register_trusted(
+    paths: &pw_core::config::AppPaths,
+    root: &std::path::Path,
+) -> Result<pw_core::registry::Project, String> {
+    let registry =
+        pw_core::registry::Registry::new(paths.clone(), None, pw_core::EventBus::new(16));
+    let project = registry
+        .create(pw_core::registry::NewProject {
+            root: root.to_path_buf(),
+            ..pw_core::registry::NewProject::default()
+        })
+        .map_err(|e| format!("cannot register the project: {e}"))?;
+    registry
+        .claim_trust_prompt(&project.id)
+        .map_err(|e| format!("cannot claim the trust prompt: {e}"))?;
+    registry
+        .set_trust(&project.id, true)
+        .map_err(|e| format!("cannot record the project as trusted: {e}"))?;
     Ok(project)
 }
 
@@ -153,6 +177,23 @@ mod tests {
                 "the window would show the trust prompt"
             );
         }
+    }
+
+    #[test]
+    fn a_trusted_registration_opens_without_a_prompt() {
+        use pw_core::config::AppPaths;
+        use pw_core::registry::{Registry, TrustState};
+
+        let harness = Scratch::new("trusted");
+        let paths = AppPaths::under(&harness.0.join("app"));
+        let project = register_trusted(&paths, &harness.0.join("project")).unwrap();
+        let app = Registry::new(paths.clone(), None, pw_core::EventBus::new(16));
+        assert_eq!(app.trust(&project.id).unwrap().state, TrustState::Trusted);
+        assert!(app.is_trusted(&project.id));
+        assert!(
+            !app.claim_trust_prompt(&project.id).unwrap(),
+            "the window would show the trust prompt"
+        );
     }
 
     #[test]
