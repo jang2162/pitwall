@@ -906,10 +906,24 @@ mod tests {
 
     #[test]
     fn a_run_without_every_row_or_a_finished_scan_fails() {
-        let DbProgress::Failed(e) = progress(&full_run(7, 99_500, "done"), 7, ALL) else {
+        // 첫 결과만 덜 받았다(스트리밍 결과는 다 받음).
+        let mut marks = full_run(7, GRID_ROWS, "done");
+        marks[1] = mark(
+            "grid_rows",
+            7,
+            serde_json::json!({"rows": 99_500, "allRowsMs": 900.0, "state": "done"}),
+        );
+        let DbProgress::Failed(e) = progress(&marks, 7, ALL) else {
             panic!("short grid accepted")
         };
-        assert!(e.contains("99500 rows"), "{e}");
+        assert!(e.contains("settled at 99500 rows"), "{e}");
+        // 스트리밍 결과만 덜 받았다.
+        let mut marks = full_run(7, GRID_ROWS, "done");
+        marks[3].data.as_mut().unwrap()["rowsAtEnd"] = 99_000.into();
+        let DbProgress::Failed(e) = progress(&marks, 7, ALL) else {
+            panic!("short stream accepted")
+        };
+        assert!(e.contains("streamed result ended at 99000 rows"), "{e}");
         let DbProgress::Failed(e) = progress(&full_run(7, GRID_ROWS, "capped"), 7, ALL) else {
             panic!("capped scan accepted")
         };
