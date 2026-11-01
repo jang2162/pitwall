@@ -359,9 +359,18 @@ key = "alt alt"
 
   it("is seen by peek without changing the hold", () => {
     const t = setup(bindings);
+    // ⌥↑ 는 보통 바인딩이 없어 누른 채일 때만 가져간다.
+    expect(t.engine.peek(arrow("ArrowUp"))).toBe(false);
     holdAlt(t);
-    expect(t.engine.peek(arrow("ArrowDown"))).toBe(true);
-    expect(t.engine.keydown(arrow("ArrowDown")).action).toBe("editor.addCursorBelow");
+    expect(t.engine.peek(arrow("ArrowUp"))).toBe(true);
+    expect(t.engine.keydown(arrow("ArrowUp")).action).toBe("editor.addCursorAbove");
+  });
+
+  it("is not a hold when the key comes without the modifier (its keyup was lost to another window)", () => {
+    const t = setup(bindings);
+    holdAlt(t);
+    expect(t.engine.keydown(key("ArrowUp")).handled).toBe(false);
+    expect(t.ran).toEqual([]);
   });
 
   it("skips a disabled hold binding and falls back to the plain key", () => {

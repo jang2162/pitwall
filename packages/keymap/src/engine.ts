@@ -86,13 +86,6 @@ interface Tap {
   held?: boolean;
 }
 
-const MODIFIER_FLAGS: Record<Modifier, "metaKey" | "ctrlKey" | "altKey" | "shiftKey"> = {
-  cmd: "metaKey",
-  ctrl: "ctrlKey",
-  alt: "altKey",
-  shift: "shiftKey",
-};
-
 export function isComposingEvent(e: KeyEventLike): boolean {
   if (e.isComposing === true) return true;
   return e.keyCode === 229 && !e.metaKey && !e.ctrlKey;
@@ -131,7 +124,7 @@ export class KeymapEngine {
     }
     const stroke = strokeFromEvent(e);
     const repeat = e.repeat === true;
-    const hold = stroke && this.holdBinding(e, stroke);
+    const hold = stroke && this.holdBinding(stroke);
     if (hold) {
       this.tap!.held = true;
       this.pending = undefined;
@@ -158,7 +151,7 @@ export class KeymapEngine {
     if (isComposingEvent(e) || MODIFIER_CODES[e.code]) return false;
     const stroke = strokeFromEvent(e);
     if (!stroke) return false;
-    if (this.holdBinding(e, stroke)) return true;
+    if (this.holdBinding(stroke)) return true;
     const layers = this.options.context();
     if (this.pending && this.now() - this.pending.at <= this.chordTimeoutMs) {
       const found = this.find([...this.pending.strokes, stroke], layers);
@@ -192,10 +185,13 @@ export class KeymapEngine {
     return binding ? this.run(binding) : NOT_HANDLED;
   }
 
-  /** 더블 탭의 두 번째 누름을 누르고 있는 중에 친 `stroke` 와 맞는 살아 있는 `doubleHold` 바인딩. */
-  private holdBinding(e: KeyEventLike, stroke: Stroke): Binding | undefined {
+  /**
+   * 더블 탭의 두 번째 누름 뒤에 친 `stroke` 와 맞는 살아 있는 `doubleHold` 바인딩. 바인딩의 누름에는 그 수정 키가 늘 들어 있어
+   * (keys.ts `parseKeySequence`) 수정 키를 뗀 뒤의 키(뗌을 다른 창이 가져가 `tap` 이 남아 있어도)는 맞지 않는다.
+   */
+  private holdBinding(stroke: Stroke): Binding | undefined {
     const tap = this.tap;
-    if (!tap?.second || !e[MODIFIER_FLAGS[tap.modifier]]) return undefined;
+    if (!tap?.second) return undefined;
     const key = strokeKey(stroke);
     return this.pick(
       (b) =>
