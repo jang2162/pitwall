@@ -12,3 +12,12 @@ linguist = "Rust"
 builtin_grammar = "rust"
 queries = "queries/rust"
 line_comment = "//"
+
+# 언어 서버(docs/design/15-m4-plan.md 결정 M4-D1 · D2 · D7). 앱에 동봉하지 않는다 — 설정 경로 → 런타임 환경 PATH(rustup 프록시는
+# 컴포넌트가 있을 때만) → Pitwall 설치본($DATA/tools) 순으로 찾고, 없으면 설치를 제안한다. 판 · 설정 값은 M4-18 이 고친다.
+[contributes.language_servers.rust-analyzer]
+languages = ["rust"]
+mason = "rust-analyzer"
+command = "rust-analyzer"
+root_markers = ["Cargo.toml", "rust-project.json"]
+resolve_hint = "rustup"

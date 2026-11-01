@@ -3,11 +3,14 @@
 //! 파일을 읽지 않는 순수 함수다. 매니페스트가 가리키는 파일이 있는지는 레지스트리가 본다(`registry.rs`).
 //! 키 규칙과 모르는 키 · 기여 종류를 경고로 두는 이유는 `docs/design/07-extensibility.md` 「2. 확장 매니페스트」 「레지스트리 (`crates/pw-ext`)」 표.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
 
 use semver::{Version, VersionReq};
-use toml_edit::{Document, Item, TableLike};
+use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
+use toml_edit::{Document, Item, TableLike, Value};
 
 use crate::source::RelPath;
 use crate::template::{CommandKind, check_command};
@@ -80,6 +83,7 @@ pub struct Contributes {
     pub languages: Vec<LanguageDecl>,
     pub external_tools: Vec<ExternalToolDecl>,
     pub translations: Vec<TranslationDecl>,
+    pub language_servers: Vec<LanguageServerDecl>,
 }
 
 /// `[contributes.themes.<id>]`. 파일 형식은 07 「3. 테마」 「형식」 행 — `id` 는 표 이름과 같아야 한다.
@@ -162,6 +166,158 @@ pub struct TranslationDecl {
     pub dir: PathRef,
 }
 
+/// `[contributes.language_servers.<id>]` — 언어 서버 정의(`docs/design/07-extensibility.md` §2, `docs/design/15-m4-plan.md`
+/// M4-02). 어디서 실행 파일을 찾는지는 해석이 정한다(`crates/pw-lsp-servers`). 내장 확장의 것만 등록한다(레지스트리).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LanguageServerDecl {
+    pub id: String,
+    pub pos: Option<Pos>,
+    /// 이 서버가 맡는 언어 id(`[contributes.languages.<id>]` — 이 확장이나 다른 확장의 것). 하나 이상이다.
+    pub languages: Vec<NameRef>,
+    /// Mason registry 패키지 이름(07 §4.4). 설치본(`$DATA/tools`)을 찾고 설치를 제안할 때 쓴다.
+    pub mason: Option<String>,
+    /// 실행 파일 이름 하나. 경로 구분자 · 공백이 없다 — 셸을 거치지 않고, 인자는 `args` 로 따로 준다.
+    pub command: String,
+    pub args: Vec<String>,
+    /// 서버 프로세스에 더할 환경 변수(런타임 환경 위에 덮는다).
+    pub env: BTreeMap<String, String>,
+    /// 작업 공간 루트를 찾을 때 볼 파일 이름 글롭(`Cargo.toml`). 비면 프로젝트 루트다.
+    pub root_markers: Vec<String>,
+    /// `initialize` 의 `initializationOptions`(TOML 표를 JSON 으로).
+    pub initialization_options: Option<Json>,
+    /// `workspace/configuration` 의 답의 바탕(TOML 표를 JSON 으로). 사람의 `[lsp.<id>] settings` 가 그 위에 깊게 합쳐진다.
+    pub settings: Option<Json>,
+    /// 이 서버에 맡기지 않는 기능(`features.disable`, 결정 M4-D12).
+    pub disabled_features: Vec<LspFeature>,
+    /// 서버를 **돌리는** 런타임과 판 범위(결정 M4-D6). 프로젝트가 쓰는 런타임과 따로다.
+    pub requires: Vec<RuntimeRequirement>,
+    /// 실행 파일 해석의 특례(결정 M4-D7).
+    pub resolve_hint: Option<ResolveHint>,
+    /// 프로젝트 안의 실행 파일(프로젝트 루트 기준 상대 경로). 신뢰한 프로젝트에서만 본다.
+    pub project_local: Option<RelPath>,
+    /// 프로젝트 안에 있으면 `initialization_options` 에 그 절대 경로를 넣을 값: (`.` 으로 나눈 JSON 키 경로, 프로젝트 루트 기준
+    /// 상대 경로). 신뢰한 프로젝트에서만 본다 — TS 의 `tsserver.path`(결정 M4-D7). 적힌 순서다.
+    pub project_local_options: Vec<(String, RelPath)>,
+}
+
+/// 서버에 맡기는 기능의 이름(`features.disable` 의 값). 서버 관리자의 기능 라우팅(결정 M4-D12)이 쓴다.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum LspFeature {
+    Diagnostics,
+    Hover,
+    Definition,
+    Implementation,
+    References,
+    DocumentSymbol,
+    WorkspaceSymbol,
+    Completion,
+    SignatureHelp,
+    Rename,
+    CodeAction,
+    Formatting,
+}
+
+impl LspFeature {
+    pub const ALL: [LspFeature; 12] = [
+        LspFeature::Diagnostics,
+        LspFeature::Hover,
+        LspFeature::Definition,
+        LspFeature::Implementation,
+        LspFeature::References,
+        LspFeature::DocumentSymbol,
+        LspFeature::WorkspaceSymbol,
+        LspFeature::Completion,
+        LspFeature::SignatureHelp,
+        LspFeature::Rename,
+        LspFeature::CodeAction,
+        LspFeature::Formatting,
+    ];
+
+    /// 매니페스트 · 설정에 적는 이름.
+    pub fn key(self) -> &'static str {
+        match self {
+            LspFeature::Diagnostics => "diagnostics",
+            LspFeature::Hover => "hover",
+            LspFeature::Definition => "definition",
+            LspFeature::Implementation => "implementation",
+            LspFeature::References => "references",
+            LspFeature::DocumentSymbol => "document_symbol",
+            LspFeature::WorkspaceSymbol => "workspace_symbol",
+            LspFeature::Completion => "completion",
+            LspFeature::SignatureHelp => "signature_help",
+            LspFeature::Rename => "rename",
+            LspFeature::CodeAction => "code_action",
+            LspFeature::Formatting => "formatting",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.key() == key)
+    }
+}
+
+/// 서버를 돌리는 런타임. 서버 관리자가 결정 M4-D6 의 순서로 찾는다 — Pitwall 은 런타임을 설치하지 않는다(D26).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum LspServerRuntime {
+    Node,
+    Python,
+    Java,
+}
+
+impl LspServerRuntime {
+    pub fn key(self) -> &'static str {
+        match self {
+            LspServerRuntime::Node => "node",
+            LspServerRuntime::Python => "python",
+            LspServerRuntime::Java => "java",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        [
+            LspServerRuntime::Node,
+            LspServerRuntime::Python,
+            LspServerRuntime::Java,
+        ]
+        .into_iter()
+        .find(|r| r.key() == key)
+    }
+}
+
+/// `requires = { java = ">=21" }` 의 한 칸.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeRequirement {
+    pub runtime: LspServerRuntime,
+    pub version: VersionReq,
+}
+
+/// 실행 파일 해석의 특례(`resolve_hint`).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ResolveHint {
+    /// PATH 에서 찾은 것이 rustup 프록시면 그 디렉터리에서 `rustup which <command>` 가 성공할 때만 쓴다(결정 M4-D7).
+    Rustup,
+}
+
 /// `[wasm]`. 읽기만 하고 실행하지 않는다(L2 런타임은 이후).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wasm {
@@ -211,6 +367,16 @@ impl Parser<'_> {
 
     fn push(&mut self, severity: Severity, span: Span, message: String) {
         let pos = self.pos(&span);
+        self.diagnostics.push(Diagnostic {
+            severity,
+            file: self.file.to_owned(),
+            pos,
+            message,
+        });
+    }
+
+    /// 이미 줄 · 열로 바꾼 자리에 남긴다.
+    fn at(&mut self, severity: Severity, pos: Option<Pos>, message: String) {
         self.diagnostics.push(Diagnostic {
             severity,
             file: self.file.to_owned(),
@@ -409,6 +575,13 @@ impl Parser<'_> {
                         }
                     }
                 }
+                "language_servers" => {
+                    for (id, entry, at) in self.entries(entries, kind, kind_span, is_segment) {
+                        if let Some(decl) = self.language_server(id, entry, at) {
+                            out.language_servers.push(decl);
+                        }
+                    }
+                }
                 _ => self.warn(
                     kind_span,
                     format!(
@@ -443,6 +616,287 @@ impl Parser<'_> {
             match item.as_table_like() {
                 Some(entry) => out.push((name.to_owned(), entry, span)),
                 None => self.error(span, format!("`contributes.{kind}.{name}` must be a table")),
+            }
+        }
+        out
+    }
+
+    /// `[contributes.language_servers.<id>]` 하나. 형식 오류는 오류로, 모르는 키 · 기능 이름은 경고로 남긴다.
+    fn language_server(
+        &mut self,
+        id: String,
+        entry: &dyn TableLike,
+        at: Span,
+    ) -> Option<LanguageServerDecl> {
+        let what = format!("language server `{id}`");
+        let mut f = Fields::new(entry, at.clone(), &what);
+        let languages = f.item(self, "languages", true).and_then(|item| {
+            let names = self.name_list(item, &what, "languages");
+            if names.as_ref().is_some_and(Vec::is_empty) {
+                self.error(item.span(), format!("{what}: `languages` is empty"));
+                return None;
+            }
+            names
+        });
+        let mason = f.string(self, "mason", false).map(|(s, _)| s);
+        let command = f.item(self, "command", true).and_then(|item| {
+            let Some(raw) = item.as_str() else {
+                self.error(
+                    item.span(),
+                    format!(
+                        "{what}: `command` must be one executable name like \"rust-analyzer\" — put arguments in `args`"
+                    ),
+                );
+                return None;
+            };
+            match check_executable_name(raw) {
+                Ok(()) => Some(raw.to_owned()),
+                Err(e) => {
+                    self.error(item.span(), format!("{what}: `command` {e}"));
+                    None
+                }
+            }
+        });
+        let args = f.strings(self, "args").unwrap_or_default();
+        let env = f
+            .table(self, "env", false)
+            .map(|(table, _)| self.env(table, &what))
+            .unwrap_or_default();
+        let root_markers = f
+            .item(self, "root_markers", false)
+            .and_then(|item| self.globs(item, &what))
+            .unwrap_or_default();
+        let initialization_options = f
+            .table(self, "initialization_options", false)
+            .and_then(|(table, span)| self.json_table(table, span, &what));
+        let settings = f
+            .table(self, "settings", false)
+            .and_then(|(table, span)| self.json_table(table, span, &what));
+        let disabled_features = f
+            .table(self, "features", false)
+            .map(|(table, span)| self.features(table, span, &what))
+            .unwrap_or_default();
+        let requires = f
+            .table(self, "requires", false)
+            .map(|(table, _)| self.requires(table, &what))
+            .unwrap_or_default();
+        let resolve_hint = f
+            .string(self, "resolve_hint", false)
+            .and_then(|(raw, span)| match raw.as_str() {
+                "rustup" => Some(ResolveHint::Rustup),
+                _ => {
+                    self.error(
+                        span,
+                        format!("{what}: `resolve_hint` `{raw}` must be `rustup`"),
+                    );
+                    None
+                }
+            });
+        let project_local = f
+            .string(self, "project_local", false)
+            .and_then(|(raw, span)| {
+                RelPath::parse(&raw)
+                    .map_err(|e| {
+                        self.error(
+                            span,
+                            format!(
+                                "{what}: `project_local`: {}",
+                                e.replace("extension folder", "project")
+                            ),
+                        );
+                    })
+                    .ok()
+            });
+        let project_local_options = f
+            .table(self, "project_local_options", false)
+            .map(|(table, _)| self.project_local_options(table, &what))
+            .unwrap_or_default();
+        f.finish(self);
+        Some(LanguageServerDecl {
+            pos: self.pos(&at),
+            id,
+            languages: languages?,
+            mason,
+            command: command?,
+            args,
+            env,
+            root_markers,
+            initialization_options,
+            settings,
+            disabled_features,
+            requires,
+            resolve_hint,
+            project_local,
+            project_local_options,
+        })
+    }
+
+    /// 문자열 배열을 그 자리(배열이면 각 요소의 자리)와 함께.
+    fn name_list(&mut self, item: &Item, what: &str, key: &str) -> Option<Vec<NameRef>> {
+        let array = item.as_array();
+        let names: Option<Vec<NameRef>> = array.and_then(|array| {
+            array
+                .iter()
+                .map(|v| {
+                    v.as_str().map(|s| NameRef {
+                        name: s.to_owned(),
+                        pos: self.pos(&v.span()),
+                    })
+                })
+                .collect()
+        });
+        if names.is_none() {
+            self.error(
+                item.span(),
+                format!("{what}: `{key}` must be an array of strings"),
+            );
+        }
+        names
+    }
+
+    fn env(&mut self, table: &dyn TableLike, what: &str) -> BTreeMap<String, String> {
+        let mut out = BTreeMap::new();
+        for (name, item) in table.iter() {
+            let span = key_span(table, name).or_else(|| item.span());
+            if name.is_empty() || name.contains('=') || name.contains('\0') {
+                self.error(
+                    span,
+                    format!("{what}: `env`: `{name}` is not a variable name"),
+                );
+                continue;
+            }
+            match item.as_str() {
+                Some(value) if !value.contains('\0') => {
+                    out.insert(name.to_owned(), value.to_owned());
+                }
+                _ => self.error(
+                    item.span().or(span),
+                    format!("{what}: `env.{name}` must be a string"),
+                ),
+            }
+        }
+        out
+    }
+
+    fn globs(&mut self, item: &Item, what: &str) -> Option<Vec<String>> {
+        let names = self.name_list(item, what, "root_markers")?;
+        let mut out = Vec::new();
+        for name in names {
+            let problem = if name.name.trim().is_empty() {
+                Some("is empty".to_owned())
+            } else if name.name.contains('/') || name.name.contains('\\') {
+                Some("must be a file name pattern, not a path".to_owned())
+            } else {
+                globset::Glob::new(&name.name)
+                    .err()
+                    .map(|e| format!("is not a glob: {}", e.kind()))
+            };
+            match problem {
+                Some(problem) => self.at(
+                    Severity::Error,
+                    name.pos,
+                    format!("{what}: root marker `{}` {problem}", name.name),
+                ),
+                None => out.push(name.name),
+            }
+        }
+        Some(out)
+    }
+
+    fn json_table(&mut self, table: &dyn TableLike, span: Span, what: &str) -> Option<Json> {
+        match table_to_json(table) {
+            Ok(value) => Some(value),
+            Err(e) => {
+                self.error(span, format!("{what}: {e}"));
+                None
+            }
+        }
+    }
+
+    fn features(&mut self, table: &dyn TableLike, span: Span, what: &str) -> Vec<LspFeature> {
+        let mut f = Fields::new(table, span, &format!("{what}: `features`"));
+        let disable = f
+            .item(self, "disable", false)
+            .and_then(|item| self.name_list(item, what, "features.disable"));
+        f.finish(self);
+        let mut out = Vec::new();
+        for name in disable.unwrap_or_default() {
+            match LspFeature::from_key(&name.name) {
+                Some(feature) if !out.contains(&feature) => out.push(feature),
+                Some(_) => {}
+                None => self.at(
+                    Severity::Warning,
+                    name.pos,
+                    format!(
+                        "{what}: unknown feature `{}` in `features.disable` is ignored",
+                        name.name
+                    ),
+                ),
+            }
+        }
+        out
+    }
+
+    fn requires(&mut self, table: &dyn TableLike, what: &str) -> Vec<RuntimeRequirement> {
+        let mut out = Vec::new();
+        for (name, item) in table.iter() {
+            let span = key_span(table, name).or_else(|| item.span());
+            let Some(runtime) = LspServerRuntime::from_key(name) else {
+                self.error(
+                    span,
+                    format!(
+                        "{what}: `requires.{name}`: runtime must be `node`, `python` or `java`"
+                    ),
+                );
+                continue;
+            };
+            let Some(raw) = item.as_str() else {
+                self.error(
+                    item.span().or(span),
+                    format!("{what}: `requires.{name}` must be a version range like \">=21\""),
+                );
+                continue;
+            };
+            match VersionReq::parse(raw) {
+                Ok(version) => out.push(RuntimeRequirement { runtime, version }),
+                Err(e) => self.error(
+                    item.span().or(span),
+                    format!("{what}: `requires.{name}` `{raw}` is not a version range: {e}"),
+                ),
+            }
+        }
+        out
+    }
+
+    fn project_local_options(
+        &mut self,
+        table: &dyn TableLike,
+        what: &str,
+    ) -> Vec<(String, RelPath)> {
+        let mut out = Vec::new();
+        for (key, item) in table.iter() {
+            let span = key_span(table, key).or_else(|| item.span());
+            if key.split('.').any(str::is_empty) {
+                self.error(
+                    span,
+                    format!("{what}: `project_local_options`: `{key}` must be dot-separated option names"),
+                );
+                continue;
+            }
+            let path = item.as_str().map(RelPath::parse);
+            match path {
+                Some(Ok(path)) => out.push((key.to_owned(), path)),
+                Some(Err(e)) => self.error(
+                    item.span().or(span),
+                    format!(
+                        "{what}: `project_local_options.{key}`: {}",
+                        e.replace("extension folder", "project")
+                    ),
+                ),
+                None => self.error(
+                    item.span().or(span),
+                    format!("{what}: `project_local_options.{key}` must be a path string"),
+                ),
             }
         }
         out
@@ -643,6 +1097,68 @@ impl<'t> Fields<'t> {
             }
         }
     }
+}
+
+/// 실행 파일 이름 하나인지 본다: 비지 않고, 경로 구분자 · 공백 · 제어 문자가 없고, `-` 로 시작하지 않는다.
+fn check_executable_name(raw: &str) -> Result<(), String> {
+    if raw.trim().is_empty() {
+        return Err("is empty".to_owned());
+    }
+    if raw.contains('/') || raw.contains('\\') {
+        return Err(format!(
+            "`{raw}` must be an executable name, not a path — set a path with `[lsp.<id>] path` in settings"
+        ));
+    }
+    if raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(format!(
+            "`{raw}` must be one executable name — shell command strings are not accepted; put arguments in `args`"
+        ));
+    }
+    if raw.starts_with('-') {
+        return Err(format!("`{raw}` must not start with `-`"));
+    }
+    Ok(())
+}
+
+/// TOML 표를 JSON 객체로. 날짜 · 시각은 TOML 표기 그대로의 문자열이 된다. 유한하지 않은 실수는 JSON 에 없으므로 오류다.
+pub(crate) fn table_to_json(table: &dyn TableLike) -> Result<Json, String> {
+    let mut map = serde_json::Map::new();
+    for (key, item) in table.iter() {
+        map.insert(key.to_owned(), item_to_json(item, key)?);
+    }
+    Ok(Json::Object(map))
+}
+
+fn item_to_json(item: &Item, at: &str) -> Result<Json, String> {
+    match item {
+        Item::None => Ok(Json::Null),
+        Item::Value(value) => value_to_json(value, at),
+        Item::Table(table) => table_to_json(table),
+        Item::ArrayOfTables(array) => array
+            .iter()
+            .map(|t| table_to_json(t))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Json::Array),
+    }
+}
+
+fn value_to_json(value: &Value, at: &str) -> Result<Json, String> {
+    Ok(match value {
+        Value::String(s) => Json::String(s.value().clone()),
+        Value::Integer(i) => Json::from(*i.value()),
+        Value::Float(f) => serde_json::Number::from_f64(*f.value())
+            .map(Json::Number)
+            .ok_or_else(|| format!("`{at}`: {} has no JSON form", f.value()))?,
+        Value::Boolean(b) => Json::Bool(*b.value()),
+        Value::Datetime(d) => Json::String(d.value().to_string()),
+        Value::Array(array) => Json::Array(
+            array
+                .iter()
+                .map(|v| value_to_json(v, at))
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::InlineTable(table) => table_to_json(table)?,
+    })
 }
 
 fn key_span(table: &dyn TableLike, key: &str) -> Span {
@@ -931,6 +1447,236 @@ file_command = ["idea", "{{project_root}}"]
         assert!(
             errors[0].contains("uses `{file}`, which only `file_command` can use"),
             "{errors:?}"
+        );
+    }
+
+    const SERVER: &str = r#"
+[contributes.language_servers.ts]
+languages = ["typescript", "tsx"]
+mason = "typescript-language-server"
+command = "typescript-language-server"
+args = ["--stdio"]
+env = { TSS_LOG = "-level verbose" }
+root_markers = ["tsconfig.json", "*.code-workspace"]
+initialization_options = { preferences = { quoteStyle = "single" }, maxTsServerMemory = 4096 }
+features = { disable = ["formatting", "rename", "formatting"] }
+requires = { node = ">=20", python = ">=3.10" }
+resolve_hint = "rustup"
+project_local = "node_modules/.bin/typescript-language-server"
+project_local_options = { "tsserver.path" = "node_modules/typescript/lib" }
+
+[contributes.language_servers.ts.settings]
+typescript = { inlayHints = { enabled = true }, ratio = 0.5, when = 1979-05-27 }
+list = [1, "two", [false]]
+"#;
+
+    /// 언어 서버 정의의 키마다 읽은 값 — 표는 JSON 이 된다(`initialization_options` · `settings`).
+    #[test]
+    fn reads_a_language_server_with_every_key() {
+        let (manifest, diagnostics) = parse(&format!("{MINIMAL}{SERVER}"));
+        assert_eq!(diagnostics, vec![]);
+        let m = manifest.unwrap();
+        let s = &m.contributes.language_servers[0];
+        assert_eq!(s.id, "ts");
+        assert_eq!(
+            s.pos,
+            Some(Pos {
+                line: 7,
+                column: 31
+            })
+        );
+        let languages: Vec<&str> = s.languages.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(languages, ["typescript", "tsx"]);
+        assert_eq!(
+            s.languages[1].pos,
+            Some(Pos {
+                line: 8,
+                column: 28
+            })
+        );
+        assert_eq!(s.mason.as_deref(), Some("typescript-language-server"));
+        assert_eq!(s.command, "typescript-language-server");
+        assert_eq!(s.args, ["--stdio"]);
+        assert_eq!(
+            s.env,
+            BTreeMap::from([("TSS_LOG".to_owned(), "-level verbose".to_owned())])
+        );
+        assert_eq!(s.root_markers, ["tsconfig.json", "*.code-workspace"]);
+        assert_eq!(
+            s.initialization_options,
+            Some(
+                serde_json::json!({"preferences": {"quoteStyle": "single"}, "maxTsServerMemory": 4096})
+            )
+        );
+        assert_eq!(
+            s.settings,
+            Some(serde_json::json!({
+                "typescript": {"inlayHints": {"enabled": true}, "ratio": 0.5, "when": "1979-05-27"},
+                "list": [1, "two", [false]],
+            }))
+        );
+        assert_eq!(
+            s.disabled_features,
+            [LspFeature::Formatting, LspFeature::Rename]
+        );
+        let requires: Vec<(LspServerRuntime, String)> = s
+            .requires
+            .iter()
+            .map(|r| (r.runtime, r.version.to_string()))
+            .collect();
+        assert_eq!(
+            requires,
+            [
+                (LspServerRuntime::Node, ">=20".to_owned()),
+                (LspServerRuntime::Python, ">=3.10".to_owned())
+            ]
+        );
+        assert_eq!(s.resolve_hint, Some(ResolveHint::Rustup));
+        assert_eq!(
+            s.project_local.as_ref().map(RelPath::as_str),
+            Some("node_modules/.bin/typescript-language-server")
+        );
+        assert_eq!(
+            s.project_local_options,
+            [(
+                "tsserver.path".to_owned(),
+                RelPath::parse("node_modules/typescript/lib").unwrap()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_language_server_needs_only_languages_and_command() {
+        let (manifest, diagnostics) = parse(&format!(
+            "{MINIMAL}\n[contributes.language_servers.ra]\nlanguages = [\"rust\"]\ncommand = \"rust-analyzer\"\n"
+        ));
+        assert_eq!(diagnostics, vec![]);
+        let s = &manifest.unwrap().contributes.language_servers[0];
+        assert_eq!(
+            (s.mason.as_deref(), s.args.len(), s.settings.as_ref()),
+            (None, 0, None)
+        );
+        assert!(s.requires.is_empty() && s.disabled_features.is_empty());
+    }
+
+    /// 키마다의 형식 오류. 오류가 하나라도 있으면 매니페스트가 없고, 진단은 그 값의 줄 · 열을 가리킨다.
+    #[test]
+    fn language_server_format_errors_point_at_the_value() {
+        let cases: [(&str, &str); 19] = [
+            (
+                "command = \"x\"",
+                "7:31: error: language server `s`: missing `languages`",
+            ),
+            (
+                "languages = []\ncommand = \"x\"",
+                "8:13: error: language server `s`: `languages` is empty",
+            ),
+            (
+                "languages = \"rust\"\ncommand = \"x\"",
+                "8:13: error: language server `s`: `languages` must be an array of strings",
+            ),
+            (
+                "languages = [\"rust\"]",
+                "7:31: error: language server `s`: missing `command`",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = [\"ra\", \"--x\"]",
+                "9:11: error: language server `s`: `command` must be one executable name like \"rust-analyzer\" — put arguments in `args`",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"ra --stdio\"",
+                "9:11: error: language server `s`: `command` `ra --stdio` must be one executable name — shell command strings are not accepted; put arguments in `args`",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"bin/ra\"",
+                "9:11: error: language server `s`: `command` `bin/ra` must be an executable name, not a path — set a path with `[lsp.<id>] path` in settings",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"\"",
+                "9:11: error: language server `s`: `command` is empty",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"-x\"",
+                "9:11: error: language server `s`: `command` `-x` must not start with `-`",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nargs = \"--stdio\"",
+                "10:8: error: language server `s`: `args` must be an array of strings",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nenv = { A = 1 }",
+                "10:13: error: language server `s`: `env.A` must be a string",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nroot_markers = [\"a/Cargo.toml\"]",
+                "10:17: error: language server `s`: root marker `a/Cargo.toml` must be a file name pattern, not a path",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nroot_markers = [\"[\"]",
+                "10:17: error: language server `s`: root marker `[` is not a glob: unclosed character class; missing ']'",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nsettings = 1",
+                "10:12: error: language server `s`: `settings` must be a table",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\ninitialization_options = { x = nan }",
+                "10:26: error: language server `s`: `x`: NaN has no JSON form",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nrequires = { ruby = \">=3\" }",
+                "10:14: error: language server `s`: `requires.ruby`: runtime must be `node`, `python` or `java`",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nrequires = { java = \"twenty-one\" }",
+                "10:21: error: language server `s`: `requires.java` `twenty-one` is not a version range: unexpected character 't' while parsing major version number",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nresolve_hint = \"cargo\"",
+                "10:16: error: language server `s`: `resolve_hint` `cargo` must be `rustup`",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nproject_local = \"../bin/x\"",
+                "10:17: error: language server `s`: `project_local`: `../bin/x` points outside the project",
+            ),
+        ];
+        for (body, expected) in cases {
+            let source = format!("{MINIMAL}\n[contributes.language_servers.s]\n{body}\n");
+            let (manifest, diagnostics) = parse(&source);
+            assert!(manifest.is_none(), "{body}");
+            assert_eq!(
+                errors(&diagnostics),
+                [format!("{FILE}:{expected}")],
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn warns_and_ignores_unknown_language_server_keys_and_features() {
+        let source = format!(
+            "{MINIMAL}\n[contributes.language_servers.s]\nlanguages = [\"rust\"]\ncommand = \"x\"\ninstall = {{ url = \"https://x\" }}\nfeatures = {{ disable = [\"hover\", \"inlay_hints\"], enable = [] }}\n"
+        );
+        let (manifest, diagnostics) = parse(&source);
+        let s = &manifest
+            .expect("warnings do not reject the extension")
+            .contributes
+            .language_servers[0];
+        assert_eq!(s.disabled_features, [LspFeature::Hover]);
+        let warnings: Vec<String> = diagnostics.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            warnings,
+            [
+                format!(
+                    "{FILE}:11:50: warning: language server `s`: `features`: unknown key `enable` is ignored"
+                ),
+                format!(
+                    "{FILE}:11:34: warning: language server `s`: unknown feature `inlay_hints` in `features.disable` is ignored"
+                ),
+                format!(
+                    "{FILE}:10:1: warning: language server `s`: unknown key `install` is ignored"
+                ),
+            ]
         );
     }
 

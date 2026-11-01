@@ -12,3 +12,18 @@ linguist = "Java"
 builtin_grammar = "java"
 queries = "queries/java"
 line_comment = "//"
+
+# 언어 서버(docs/design/15-m4-plan.md 결정 M4-D1 · D4 · D6). 서버는 JDK 21 이상으로 돈다 — 프로젝트의 JDK(17 등)와 따로다.
+# 받기 · 띄우기(덮어쓰기 정의 · java -jar)는 M4-18 이 이 정의를 고쳐 정한다.
+[contributes.language_servers.jdtls]
+languages = ["java"]
+mason = "jdtls"
+command = "jdtls"
+root_markers = [
+  "settings.gradle",
+  "settings.gradle.kts",
+  "build.gradle",
+  "build.gradle.kts",
+  "pom.xml",
+]
+requires = { java = ">=21" }

@@ -39,6 +39,7 @@ pw-git = { path = "../../../crates/pw-git" }
 pw-i18n = { path = "../../../crates/pw-i18n" }
 pw-lang = { path = "../../../crates/pw-lang" }
 pw-mcp = { path = "../../../crates/pw-mcp" }
+pw-lsp-servers = { path = "../../../crates/pw-lsp-servers" }
 pw-open-with = { path = "../../../crates/pw-open-with" }
 pw-run = { path = "../../../crates/pw-run" }
 pw-runtime = { path = "../../../crates/pw-runtime" }

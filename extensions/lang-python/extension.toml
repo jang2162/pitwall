@@ -12,3 +12,21 @@ linguist = "Python"
 builtin_grammar = "python"
 queries = "queries/python"
 line_comment = "#"
+
+# 언어 서버(docs/design/15-m4-plan.md 결정 M4-D1 · D3 · D12). 타입 검사 · 완성 · 이동은 basedpyright, 포맷 · 린트는 ruff —
+# 기능은 정의 순서로 처음 맡을 수 있는 서버에 간다. basedpyright 의 PyPI 판은 Node 를 휠로 함께 받는다.
+[contributes.language_servers.basedpyright]
+languages = ["python"]
+mason = "basedpyright"
+command = "basedpyright-langserver"
+args = ["--stdio"]
+root_markers = ["pyproject.toml", "pyrightconfig.json", "setup.py", "setup.cfg", "requirements.txt"]
+requires = { python = ">=3.10" }
+features = { disable = ["formatting"] }
+
+[contributes.language_servers.ruff]
+languages = ["python"]
+mason = "ruff"
+command = "ruff"
+args = ["server"]
+root_markers = ["pyproject.toml", "ruff.toml", ".ruff.toml"]

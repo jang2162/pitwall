@@ -6,6 +6,7 @@
 //! - [`registry`]: 내장과 `$DATA/extensions/` 를 읽어 테마 · 키맵 · 언어 · 외부 도구 · UI 번역 기여를 모은다. 테마 파일과
 //!   번역 파일(.ftl)은 등록할 때 읽어 검사한다. 언어의 문법 · 쿼리는 위치만 내주고([`ResolvedLanguage`]) 구문 분석
 //!   서비스(`pw-syntax`)가 처음 쓸 때 읽는다.
+//!   언어 서버 정의(`[contributes.language_servers]`)는 내장 확장의 것만 받는다 — 실행 파일 해석 · 설정은 `pw-lsp-servers`.
 //! - [`methods`]: `ext.list` · `theme.list` · `theme.get` · `keymap.list` · `keymap.get` RPC.
 //!
 //! L2 WASM 런타임은 아직 없다 — `[wasm]` 은 읽고 검사만 한다.
@@ -17,7 +18,10 @@ pub mod registry;
 pub mod source;
 pub mod template;
 
-pub use manifest::{Diagnostic, KeymapKind, Manifest, Pos, Severity};
+pub use manifest::{
+    Diagnostic, KeymapKind, LanguageServerDecl, LspFeature, LspServerRuntime, Manifest, Pos,
+    ResolveHint, RuntimeRequirement, Severity,
+};
 pub use registry::{
     Appearance, Extension, LoadOptions, LoadedTheme, LoadedTranslation, Registry, ResolvedFile,
     ResolvedKeymap, ResolvedLanguage, TranslationFile,
@@ -66,6 +70,49 @@ mod tests {
         expected.extend(languages.iter().map(|l| format!("builtin:lang-{l}")));
         expected.push("builtin:theme-default".to_owned());
         assert_eq!(folders, expected);
+    }
+
+    /// 기본 번들 언어 서버(결정 M4-D1 ~ D5)가 진단 없이 모두 등록되고, 한 언어의 서버 순서가 정의 순서다(결정 M4-D12).
+    #[test]
+    fn the_default_bundle_language_servers_are_registered() {
+        let registry = builtin_registry();
+        assert_eq!(registry.diagnostics(), []);
+        let servers: Vec<(&str, &str, Vec<&str>)> = registry
+            .language_servers()
+            .map(|(e, s)| {
+                (
+                    e.manifest.id.as_str(),
+                    s.id.as_str(),
+                    s.languages.iter().map(|l| l.name.as_str()).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            servers,
+            [
+                ("dev.pitwall.lang-java", "jdtls", vec!["java"]),
+                ("dev.pitwall.lang-kotlin", "kotlin-lsp", vec!["kotlin"]),
+                ("dev.pitwall.lang-python", "basedpyright", vec!["python"]),
+                ("dev.pitwall.lang-python", "ruff", vec!["python"]),
+                ("dev.pitwall.lang-rust", "rust-analyzer", vec!["rust"]),
+                (
+                    "dev.pitwall.lang-typescript",
+                    "typescript-language-server",
+                    vec!["typescript", "tsx", "javascript"]
+                ),
+            ]
+        );
+        let mason: Vec<Option<&str>> = registry
+            .language_servers()
+            .map(|(_, s)| s.mason.as_deref())
+            .collect();
+        assert!(mason.iter().all(Option::is_some), "{mason:?}");
+        let (_, ra) = registry.language_server("rust-analyzer").unwrap();
+        assert_eq!(ra.resolve_hint, Some(ResolveHint::Rustup));
+        let (_, jdtls) = registry.language_server("jdtls").unwrap();
+        assert_eq!(jdtls.requires[0].runtime, LspServerRuntime::Java);
+        assert!(jdtls.requires[0].version.matches(&Version::new(21, 0, 0)));
+        assert!(!jdtls.requires[0].version.matches(&Version::new(17, 0, 0)));
     }
 
     #[test]

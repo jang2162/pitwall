@@ -37,6 +37,8 @@ pub struct ContributionIds {
     pub external_tools: Vec<String>,
     /// 언어 태그.
     pub translations: Vec<String>,
+    /// 언어 서버 id(`[contributes.language_servers.<id>]`). 내장 확장만 있다.
+    pub language_servers: Vec<String>,
 }
 
 #[derive(
@@ -274,6 +276,7 @@ fn extension_list(registry: &Registry) -> ExtensionList {
                     languages: c.languages.iter().map(|l| l.id.clone()).collect(),
                     external_tools: c.external_tools.iter().map(|t| t.id.clone()).collect(),
                     translations: c.translations.iter().map(|t| t.locale.clone()).collect(),
+                    language_servers: c.language_servers.iter().map(|s| s.id.clone()).collect(),
                 },
                 wasm: e.manifest.wasm.is_some(),
             }

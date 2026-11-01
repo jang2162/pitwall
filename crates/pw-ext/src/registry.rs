@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::builtin;
 use crate::manifest::{
-    Diagnostic, ExternalToolDecl, KeymapDecl, KeymapKind, LanguageDecl, Manifest, PathRef, Pos,
-    Severity, TranslationDecl, parse_manifest,
+    Diagnostic, ExternalToolDecl, KeymapDecl, KeymapKind, LanguageDecl, LanguageServerDecl,
+    Manifest, PathRef, Pos, Severity, TranslationDecl, parse_manifest,
 };
 use crate::source::{EntryKind, ExtensionRoot, MANIFEST, RelPath, SourceError};
 
@@ -164,6 +164,7 @@ impl Registry {
         for root in roots {
             registry.add(&options.engine, root);
         }
+        registry.check_server_languages();
         for d in &registry.diagnostics {
             match d.severity {
                 Severity::Error => tracing::error!(target: "pw_ext", "{d}"),
@@ -179,6 +180,7 @@ impl Registry {
         for root in roots {
             registry.add(engine, root);
         }
+        registry.check_server_languages();
         registry
     }
 
@@ -229,6 +231,22 @@ impl Registry {
                 .iter()
                 .map(move |t| (e, t))
         })
+    }
+
+    /// 언어 서버 정의. 등록 순서(내장 확장 폴더 이름순, 한 확장 안에서는 적힌 순서)다 — 한 언어에 서버가 여럿이면 이 순서가
+    /// 기능 라우팅의 순서다(결정 M4-D12). 내장 확장의 것만 있다.
+    pub fn language_servers(&self) -> impl Iterator<Item = (&Extension, &LanguageServerDecl)> {
+        self.extensions.iter().flat_map(|e| {
+            e.manifest
+                .contributes
+                .language_servers
+                .iter()
+                .map(move |s| (e, s))
+        })
+    }
+
+    pub fn language_server(&self, id: &str) -> Option<(&Extension, &LanguageServerDecl)> {
+        self.language_servers().find(|(_, s)| s.id == id)
     }
 
     pub fn languages(&self) -> impl Iterator<Item = (&Extension, &LanguageDecl)> {
@@ -352,6 +370,7 @@ impl Registry {
             let mut manifest = manifest;
             if !root.is_builtin() {
                 self.drop_grammars(&file, &mut manifest);
+                self.drop_language_servers(&file, &mut manifest);
             }
             self.extensions.push(Extension {
                 manifest,
@@ -440,6 +459,12 @@ impl Registry {
                 .find(|(_, x)| x.id == l.id)
                 .map(|(e, _)| e.manifest.id.as_str());
             check("language", &l.id, l.pos, owner);
+        }
+        for s in &c.language_servers {
+            let owner = self
+                .language_server(&s.id)
+                .map(|(e, _)| e.manifest.id.as_str());
+            check("language server", &s.id, s.pos, owner);
         }
         // 언어 태그는 대소문자를 가리지 않는다(BCP 47) — `KO` 팩이 내장 `ko` 옆에 따로 등록되지 않게. 한 매니페스트 안에서
         // 대소문자만 다른 두 표(`ko` · `KO`)도 겹침이다(TOML 은 둘을 다른 키로 본다).
@@ -589,6 +614,52 @@ impl Registry {
                 ),
             });
         }
+    }
+
+    /// 내장이 아닌 확장의 언어 서버 정의는 등록하지 않는다(경고를 남긴다) — 외부 확장이 아무 실행 파일을 이름으로 골라 띄우게
+    /// 하지 않는다. 외부 확장의 실행 권한은 설치 흐름(07 §6 · M8)과 함께 정한다(`docs/design/15-m4-plan.md` M4-02).
+    fn drop_language_servers(&mut self, file: &str, manifest: &mut Manifest) {
+        for server in std::mem::take(&mut manifest.contributes.language_servers) {
+            self.diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                file: file.to_owned(),
+                pos: server.pos,
+                message: format!(
+                    "language server `{}`: language servers are loaded only from built-in extensions for now; it is not registered",
+                    server.id
+                ),
+            });
+        }
+    }
+
+    /// 언어 서버가 가리키는 언어가 등록돼 있는지 모두 읽은 뒤에 본다(다른 확장의 언어를 가리킬 수 있다). 없는 언어는 경고하고
+    /// 그 서버의 목록에서 뺀다 — 그 언어의 문서에는 서버가 붙지 않는다.
+    fn check_server_languages(&mut self) {
+        let known: Vec<String> = self.languages().map(|(_, l)| l.id.clone()).collect();
+        let mut warnings = Vec::new();
+        for extension in &mut self.extensions {
+            let file = extension
+                .root
+                .display(Some(&RelPath::parse(MANIFEST).expect("constant path")));
+            for server in &mut extension.manifest.contributes.language_servers {
+                server.languages.retain(|language| {
+                    let found = known.contains(&language.name);
+                    if !found {
+                        warnings.push(Diagnostic {
+                            severity: Severity::Warning,
+                            file: file.clone(),
+                            pos: language.pos,
+                            message: format!(
+                                "language server `{}`: language `{}` is not provided by any extension; the server is not used for it",
+                                server.id, language.name
+                            ),
+                        });
+                    }
+                    found
+                });
+            }
+        }
+        self.diagnostics.extend(warnings);
     }
 
     fn push_error(&mut self, file: &str, pos: Option<Pos>, message: String) {
@@ -1243,6 +1314,92 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    const SERVER: &str =
+        "[contributes.language_servers.my-ls]\nlanguages = [\"rust\"]\ncommand = \"my-ls\"\n";
+
+    /// 사용자 확장의 언어 서버 정의는 경고와 함께 등록하지 않는다 — 확장의 다른 기여는 그대로 받는다.
+    #[test]
+    fn a_user_extension_language_server_is_not_registered() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = format!("{SERVER}\n[contributes.languages.plain]\nlinguist = \"Plain\"\n");
+        let user = ext(
+            dir.path(),
+            "ls",
+            &[("extension.toml", &manifest("dev.example.ls", "*", &body))],
+        );
+        let mut roots = builtin::roots();
+        roots.push(user);
+        let registry = Registry::from_roots(&engine(), roots);
+        assert!(registry.language_server("my-ls").is_none());
+        assert!(registry.language_for_linguist("Plain").is_some());
+        let file = shown(dir.path(), "ls", "extension.toml");
+        assert_eq!(
+            messages(&registry),
+            [format!(
+                "{}:5:31: warning: language server `my-ls`: language servers are loaded only from built-in extensions for now; it is not registered",
+                file.display()
+            )]
+        );
+    }
+
+    /// 내장 서버와 같은 id 를 정의한 확장은 통째로 거절된다(07 「레지스트리」 표 「겹침」 행) — 먼저 등록된 내장이 이긴다.
+    #[test]
+    fn a_language_server_id_cannot_be_defined_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "[contributes.language_servers.rust-analyzer]\nlanguages = [\"rust\"]\ncommand = \"evil\"\n";
+        let user = ext(
+            dir.path(),
+            "ra",
+            &[("extension.toml", &manifest("dev.example.ra", "*", body))],
+        );
+        let mut roots = builtin::roots();
+        roots.push(user);
+        let registry = Registry::from_roots(&engine(), roots);
+        assert!(
+            registry
+                .extensions()
+                .iter()
+                .all(|e| e.manifest.id != "dev.example.ra")
+        );
+        let (owner, server) = registry.language_server("rust-analyzer").unwrap();
+        assert_eq!(
+            (owner.manifest.id.as_str(), server.command.as_str()),
+            ("dev.pitwall.lang-rust", "rust-analyzer")
+        );
+        let file = shown(dir.path(), "ra", "extension.toml");
+        assert_eq!(
+            messages(&registry),
+            [format!(
+                "{}:5:31: error: language server `rust-analyzer` is already provided by `dev.pitwall.lang-rust`",
+                file.display()
+            )]
+        );
+    }
+
+    /// 서버가 가리키는 언어가 어느 확장에도 없으면 경고하고 그 언어만 뺀다(서버는 남는다).
+    #[test]
+    fn a_language_server_drops_languages_no_extension_provides() {
+        let roots: Vec<ExtensionRoot> = builtin::roots()
+            .into_iter()
+            .filter(|r| r.display(None) != "builtin:lang-tsx")
+            .collect();
+        let registry = Registry::from_roots(&engine(), roots);
+        let (_, ts) = registry
+            .language_server("typescript-language-server")
+            .unwrap();
+        let languages: Vec<&str> = ts.languages.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(languages, ["typescript", "javascript"]);
+        let messages = messages(&registry);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(
+            messages[0].starts_with("builtin:lang-typescript/extension.toml:")
+                && messages[0].ends_with(
+                    "warning: language server `typescript-language-server`: language `tsx` is not provided by any extension; the server is not used for it"
+                ),
+            "{messages:?}"
+        );
     }
 
     #[test]

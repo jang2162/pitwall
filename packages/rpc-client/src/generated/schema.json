@@ -12481,6 +12481,13 @@
                 },
                 "type": "array"
               },
+              "languageServers": {
+                "description": "언어 서버 id(`[contributes.language_servers.<id>]`). 내장 확장만 있다.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "languages": {
                 "items": {
                   "type": "string"
@@ -12506,7 +12513,8 @@
               "keymaps",
               "languages",
               "externalTools",
-              "translations"
+              "translations",
+              "languageServers"
             ],
             "type": "object"
           },
@@ -24232,6 +24240,367 @@
         "owner"
       ],
       "tier": "write"
+    },
+    "lsp.servers.list": {
+      "description": "언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params\n오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리의 설정을 읽고 그 안에서 해석한다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspFeature": {
+            "description": "서버에 맡기는 기능의 이름(`features.disable` 의 값). 서버 관리자의 기능 라우팅(결정 M4-D12)이 쓴다.",
+            "enum": [
+              "diagnostics",
+              "hover",
+              "definition",
+              "implementation",
+              "references",
+              "document_symbol",
+              "workspace_symbol",
+              "completion",
+              "signature_help",
+              "rename",
+              "code_action",
+              "formatting"
+            ],
+            "type": "string"
+          },
+          "LspResolution": {
+            "description": "해석 결과.",
+            "oneOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "found",
+                    "type": "string"
+                  },
+                  "path": {
+                    "description": "절대 경로.",
+                    "type": "string"
+                  },
+                  "skipped": {
+                    "items": {
+                      "$ref": "#/$defs/LspSkipped"
+                    },
+                    "type": "array"
+                  },
+                  "step": {
+                    "$ref": "#/$defs/LspResolveStep"
+                  },
+                  "version": {
+                    "description": "설치본만 안다(설치 기록). 그 밖은 `null`(모름).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "step",
+                  "version",
+                  "skipped"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`[lsp.<id>] enabled = false`.",
+                "properties": {
+                  "kind": {
+                    "const": "disabled",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 경로를 쓸 수 없다. 다음 단계로 가지 않는다.",
+                "properties": {
+                  "kind": {
+                    "const": "invalidPath",
+                    "type": "string"
+                  },
+                  "origin": {
+                    "$ref": "#/$defs/LspSettingsOrigin"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "origin",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "어디에도 없다 — 설치를 제안한다. `reinstall` 은 설치본이 깨졌을 때 그 까닭이다.",
+                "properties": {
+                  "kind": {
+                    "const": "notInstalled",
+                    "type": "string"
+                  },
+                  "mason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "reinstall": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "skipped": {
+                    "items": {
+                      "$ref": "#/$defs/LspSkipped"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mason",
+                  "reinstall",
+                  "skipped"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "LspResolveStep": {
+            "description": "해석의 단계.",
+            "enum": [
+              "settings",
+              "projectLocal",
+              "path",
+              "installed"
+            ],
+            "type": "string"
+          },
+          "LspRuntimeRequirement": {
+            "properties": {
+              "runtime": {
+                "$ref": "#/$defs/LspServerRuntime"
+              },
+              "version": {
+                "description": "semver 범위(`>=21`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "runtime",
+              "version"
+            ],
+            "type": "object"
+          },
+          "LspServerInfo": {
+            "properties": {
+              "args": {
+                "description": "합친 인자(설정의 `args` 가 정의의 것을 바꾼다).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "command": {
+                "description": "정의의 실행 파일 이름.",
+                "type": "string"
+              },
+              "disabledFeatures": {
+                "description": "이 서버에 맡기지 않는 기능(정의 + 설정).",
+                "items": {
+                  "$ref": "#/$defs/LspFeature"
+                },
+                "type": "array"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "서버에 더할 환경 변수(정의 위에 설정을 덮은 것).",
+                "type": "object"
+              },
+              "extension": {
+                "description": "기여한 확장의 id.",
+                "type": "string"
+              },
+              "id": {
+                "description": "서버 id(`[contributes.language_servers.<id>]` · `[lsp.<id>]`).",
+                "type": "string"
+              },
+              "initializationOptions": {
+                "description": "`initialize` 의 `initializationOptions`."
+              },
+              "languages": {
+                "description": "이 서버가 맡는 언어 id. 같은 언어의 서버가 여럿이면 목록 순서가 기능을 맡는 순서다(결정 M4-D12).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "mason": {
+                "description": "Mason registry 패키지 이름. 설치를 제안할 때 쓴다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "requires": {
+                "description": "서버를 돌리는 런타임(결정 M4-D6).",
+                "items": {
+                  "$ref": "#/$defs/LspRuntimeRequirement"
+                },
+                "type": "array"
+              },
+              "resolution": {
+                "$ref": "#/$defs/LspResolution"
+              },
+              "rootMarkers": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "settings": {
+                "description": "`workspace/configuration` 의 답의 바탕(정의 → 전역 → 프로젝트를 깊게 합친 것)."
+              }
+            },
+            "required": [
+              "id",
+              "extension",
+              "languages",
+              "mason",
+              "command",
+              "args",
+              "env",
+              "rootMarkers",
+              "requires",
+              "disabledFeatures",
+              "enabled",
+              "settings",
+              "initializationOptions",
+              "resolution"
+            ],
+            "type": "object"
+          },
+          "LspServerRuntime": {
+            "description": "서버를 돌리는 런타임. 서버 관리자가 결정 M4-D6 의 순서로 찾는다 — Pitwall 은 런타임을 설치하지 않는다(D26).",
+            "enum": [
+              "node",
+              "python",
+              "java"
+            ],
+            "type": "string"
+          },
+          "LspSettingsOrigin": {
+            "description": "설정이 어느 겹에서 왔는가. 상대 경로 `path` 를 무엇에 맞춰 풀지가 이것으로 갈린다.",
+            "oneOf": [
+              {
+                "const": "global",
+                "description": "`$CONFIG/settings.toml` · `settings.local.toml`.",
+                "type": "string"
+              },
+              {
+                "const": "project",
+                "description": "`.pitwall/project.toml` · `project.local.toml`(또는 개인 전용 폴더).",
+                "type": "string"
+              }
+            ]
+          },
+          "LspSkipped": {
+            "description": "보았지만 고르지 않은 후보와 그 까닭(상태 팝업 · 설치 안내가 보인다).",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "step": {
+                "$ref": "#/$defs/LspResolveStep"
+              }
+            },
+            "required": [
+              "step",
+              "path",
+              "reason"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "problem": {
+            "description": "프로젝트 설정을 읽지 못한 까닭. 그러면 전역 설정만 합쳤다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "servers": {
+            "description": "등록 순서(내장 확장 폴더 이름순, 한 확장 안에서는 정의 순서).",
+            "items": {
+              "$ref": "#/$defs/LspServerInfo"
+            },
+            "type": "array"
+          },
+          "trusted": {
+            "description": "프로젝트를 신뢰하는가. 아니면 공유 설정 · 프로젝트 로컬 실행 파일을 보지 않았다(서버도 띄우지 않는다 — 결정 M4-D8).",
+            "type": "boolean"
+          },
+          "warnings": {
+            "description": "설정의 형식 오류 · 모르는 키 · 모르는 서버(그 값은 버렸다).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "servers",
+          "trusted",
+          "problem",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
     },
     "openWith.list": {
       "description": "이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.",

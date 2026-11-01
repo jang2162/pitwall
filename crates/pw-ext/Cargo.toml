@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 # 번역 파일(.ftl)의 문법을 등록할 때 검사한다(docs/design/07-extensibility.md §4.1).
 fluent-syntax = "0.12.0"
+# 언어 서버 정의의 `root_markers` 글롭을 등록할 때 검사한다. 버전은 pw-fs 의 ignore 가 쓰는 것과 같게 둔다.
+globset = "0.4.20"
 pw-rpc = { path = "../pw-rpc" }
 schemars = { workspace = true }
 semver = "1.0.28"

@@ -572,6 +572,11 @@ export type UnaryMethods = {
 	 */
 	"log.write": { params: UiLogBatch; result: null };
 	/**
+	 * 언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params
+	 * 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).
+	 */
+	"lsp.servers.list": { params: LspServersListParams; result: LspServerList };
+	/**
 	 * 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.
 	 */
 	"openWith.list": { params: OpenWithListParams; result: OpenWithList };
@@ -947,6 +952,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lang.detect": {"name":"lang.detect","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"LangDetectParams","output":"LangDetectResult","doc":" 파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·\n 그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.\n","mcp":false,"fileScope":true},
 	"lang.list": {"name":"lang.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"LangList","doc":" 고를 수 있는 언어(상태바의 언어 수동 변경, F4-12)와 언어마다의 줄 주석. 앱이 시작할 때 읽은 확장 레지스트리 기준이다.\n","mcp":false,"fileScope":true},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n","mcp":false,"fileScope":true},
+	"lsp.servers.list": {"name":"lsp.servers.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspServersListParams","output":"LspServerList","doc":" 언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params\n 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).\n","mcp":false,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false,"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":false,"fileScope":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":false,"fileScope":false},
@@ -1381,6 +1387,8 @@ export type ContributionIds = {
 	externalTools: string[],
 	/**  언어 태그. */
 	translations: string[],
+	/**  언어 서버 id(`[contributes.language_servers.<id>]`). 내장 확장만 있다. */
+	languageServers: string[],
 };
 
 export type CreateProjectParams = {
@@ -4553,6 +4561,93 @@ export type LogRow = {
 	refs: LogRef[],
 	/**  레인 배치. 필터가 켜진 목록이면 `null`(결정 M2-D2). */
 	graph: GraphRow | null,
+};
+
+/**  서버에 맡기는 기능의 이름(`features.disable` 의 값). 서버 관리자의 기능 라우팅(결정 M4-D12)이 쓴다. */
+export type LspFeature = "diagnostics" | "hover" | "definition" | "implementation" | "references" | "document_symbol" | "workspace_symbol" | "completion" | "signature_help" | "rename" | "code_action" | "formatting";
+
+/**  해석 결과. */
+export type LspResolution = { kind: "found"; 
+/**  절대 경로. */
+path: string; step: LspResolveStep; 
+/**  설치본만 안다(설치 기록). 그 밖은 `null`(모름). */
+version: string | null; skipped: LspSkipped[] } | 
+/**  `[lsp.<id>] enabled = false`. */
+{ kind: "disabled" } | 
+/**  설정 경로를 쓸 수 없다. 다음 단계로 가지 않는다. */
+{ kind: "invalidPath"; path: string; origin: LspSettingsOrigin; reason: string } | 
+/**  어디에도 없다 — 설치를 제안한다. `reinstall` 은 설치본이 깨졌을 때 그 까닭이다. */
+{ kind: "notInstalled"; mason: string | null; reinstall: string | null; skipped: LspSkipped[] };
+
+/**  해석의 단계. */
+export type LspResolveStep = "settings" | "projectLocal" | "path" | "installed";
+
+export type LspRuntimeRequirement = {
+	runtime: LspServerRuntime,
+	/**  semver 범위(`>=21`). */
+	version: string,
+};
+
+export type LspServerInfo = {
+	/**  서버 id(`[contributes.language_servers.<id>]` · `[lsp.<id>]`). */
+	id: string,
+	/**  기여한 확장의 id. */
+	extension: string,
+	/**  이 서버가 맡는 언어 id. 같은 언어의 서버가 여럿이면 목록 순서가 기능을 맡는 순서다(결정 M4-D12). */
+	languages: string[],
+	/**  Mason registry 패키지 이름. 설치를 제안할 때 쓴다. */
+	mason: string | null,
+	/**  정의의 실행 파일 이름. */
+	command: string,
+	/**  합친 인자(설정의 `args` 가 정의의 것을 바꾼다). */
+	args: string[],
+	/**  서버에 더할 환경 변수(정의 위에 설정을 덮은 것). */
+	env: { [key in string]: string },
+	rootMarkers: string[],
+	/**  서버를 돌리는 런타임(결정 M4-D6). */
+	requires: LspRuntimeRequirement[],
+	/**  이 서버에 맡기지 않는 기능(정의 + 설정). */
+	disabledFeatures: LspFeature[],
+	enabled: boolean,
+	/**  `workspace/configuration` 의 답의 바탕(정의 → 전역 → 프로젝트를 깊게 합친 것). */
+	settings: JsonValue,
+	/**  `initialize` 의 `initializationOptions`. */
+	initializationOptions: JsonValue,
+	resolution: LspResolution,
+};
+
+export type LspServerList = {
+	/**  등록 순서(내장 확장 폴더 이름순, 한 확장 안에서는 정의 순서). */
+	servers: LspServerInfo[],
+	/**  프로젝트를 신뢰하는가. 아니면 공유 설정 · 프로젝트 로컬 실행 파일을 보지 않았다(서버도 띄우지 않는다 — 결정 M4-D8). */
+	trusted: boolean,
+	/**  프로젝트 설정을 읽지 못한 까닭. 그러면 전역 설정만 합쳤다. */
+	problem: string | null,
+	/**  설정의 형식 오류 · 모르는 키 · 모르는 서버(그 값은 버렸다). */
+	warnings: string[],
+};
+
+/**  서버를 돌리는 런타임. 서버 관리자가 결정 M4-D6 의 순서로 찾는다 — Pitwall 은 런타임을 설치하지 않는다(D26). */
+export type LspServerRuntime = "node" | "python" | "java";
+
+export type LspServersListParams = {
+	projectId: string,
+	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리의 설정을 읽고 그 안에서 해석한다. */
+	worktree?: string | null,
+};
+
+/**  설정이 어느 겹에서 왔는가. 상대 경로 `path` 를 무엇에 맞춰 풀지가 이것으로 갈린다. */
+export type LspSettingsOrigin = 
+/**  `$CONFIG/settings.toml` · `settings.local.toml`. */
+"global" | 
+/**  `.pitwall/project.toml` · `project.local.toml`(또는 개인 전용 폴더). */
+"project";
+
+/**  보았지만 고르지 않은 후보와 그 까닭(상태 팝업 · 설치 안내가 보인다). */
+export type LspSkipped = {
+	step: LspResolveStep,
+	path: string,
+	reason: string,
 };
 
 export type MergeLines = {

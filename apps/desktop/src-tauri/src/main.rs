@@ -65,6 +65,12 @@ fn local_host(
     let lang_methods = Arc::clone(&lang);
     let open_with = Arc::new(OpenWith::new(Arc::clone(&extensions), Arc::clone(&runtime)));
     let open_with_methods = Arc::clone(&open_with);
+    // 언어 서버 정의 · 해석 · 설정(`lsp.servers.list`, M4-02). 설치본 찾기는 설치기(M4-04)가 붙인다.
+    let lsp_servers = Arc::new(pw_lsp_servers::LspServers::new(
+        Arc::clone(&extensions),
+        Arc::clone(&runtime),
+    ));
+    let lsp_servers_methods = Arc::clone(&lsp_servers);
     let fs_methods = Arc::clone(&fs);
     let fs_watch = pw_fs::watch::Watch::new(Arc::clone(&fs));
     let fs_watch_methods = fs_watch.clone();
@@ -132,6 +138,7 @@ fn local_host(
         .methods(move |router| pw_i18n::methods::register(router, methods))
         .methods(move |router| pw_lang::methods::register(router, lang_methods))
         .methods(move |router| pw_open_with::methods::register(router, open_with_methods))
+        .methods(move |router| pw_lsp_servers::methods::register(router, lsp_servers_methods))
         .methods(move |router| pw_runtime::methods::register(router, runtime_methods))
         .methods(move |router| pw_fs::methods::register(router, fs_methods))
         .methods(move |router| pw_fs::watch::register(router, fs_watch_methods))
@@ -182,6 +189,11 @@ fn local_host(
                 bus: host.bus().clone(),
             });
             open_with.attach(HostParts {
+                paths: config.paths.clone(),
+                global: config.global.clone(),
+                projects: projects.clone(),
+            });
+            lsp_servers.attach(pw_lsp_servers::HostParts {
                 paths: config.paths.clone(),
                 global: config.global.clone(),
                 projects: projects.clone(),

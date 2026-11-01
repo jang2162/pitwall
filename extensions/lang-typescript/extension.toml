@@ -12,3 +12,15 @@ linguist = "TypeScript"
 builtin_grammar = "typescript"
 queries = "queries/typescript"
 line_comment = "//"
+
+# 언어 서버(docs/design/15-m4-plan.md 결정 M4-D1 · D2 · D7). lang-tsx · lang-javascript 의 언어도 이 정의 하나가 맡는다.
+# 신뢰한 프로젝트면 프로젝트의 node_modules 에 있는 서버와 typescript(tsserver)를 먼저 쓴다.
+[contributes.language_servers.typescript-language-server]
+languages = ["typescript", "tsx", "javascript"]
+mason = "typescript-language-server"
+command = "typescript-language-server"
+args = ["--stdio"]
+root_markers = ["tsconfig.json", "jsconfig.json", "package.json"]
+requires = { node = ">=20" }
+project_local = "node_modules/.bin/typescript-language-server"
+project_local_options = { "tsserver.path" = "node_modules/typescript/lib" }

@@ -20,6 +20,7 @@ pw-fs = { path = "../pw-fs" }
 pw-git = { path = "../pw-git" }
 pw-i18n = { path = "../pw-i18n" }
 pw-lang = { path = "../pw-lang" }
+pw-lsp-servers = { path = "../pw-lsp-servers" }
 pw-open-with = { path = "../pw-open-with" }
 pw-rpc = { path = "../pw-rpc" }
 pw-run = { path = "../pw-run" }

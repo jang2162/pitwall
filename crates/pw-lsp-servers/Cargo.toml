@@ -1,0 +1,25 @@
+[package]
+name = "pw-lsp-servers"
+description = "Pitwall language server definitions: settings, executable resolution and the server list"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pw-core = { path = "../pw-core" }
+pw-ext = { path = "../pw-ext" }
+pw-rpc = { path = "../pw-rpc" }
+pw-runtime = { path = "../pw-runtime" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+# 해석(로그인 셸 환경 기다리기 · `rustup which`)을 블로킹 스레드로 보낸다.
+tokio = { workspace = true, features = ["rt"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+semver = "1.0.28"
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "macros"] }

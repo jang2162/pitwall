@@ -4990,6 +4990,7 @@ dependencies = [
  "pw-git",
  "pw-i18n",
  "pw-lang",
+ "pw-lsp-servers",
  "pw-mcp",
  "pw-open-with",
  "pw-rpc",
@@ -5455,6 +5456,7 @@ name = "pw-ext"
 version = "0.0.0"
 dependencies = [
  "fluent-syntax",
+ "globset",
  "pw-rpc",
  "schemars 1.2.3",
  "semver",
@@ -5568,6 +5570,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-lsp-servers"
+version = "0.0.0"
+dependencies = [
+ "pw-core",
+ "pw-ext",
+ "pw-rpc",
+ "pw-runtime",
+ "schemars 1.2.3",
+ "semver",
+ "serde",
+ "serde_json",
+ "specta",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "pw-mcp"
 version = "0.0.0"
 dependencies = [
@@ -5652,6 +5672,7 @@ dependencies = [
  "pw-git",
  "pw-i18n",
  "pw-lang",
+ "pw-lsp-servers",
  "pw-open-with",
  "pw-rpc",
  "pw-run",
