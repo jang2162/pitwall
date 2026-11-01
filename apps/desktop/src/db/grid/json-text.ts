@@ -3,7 +3,9 @@
 // 수를 **원래 글 그대로**(`raw`) 들고, 객체는 키 · 값 쌍의 목록이다(순서 · 같은 키 · `__proto__` 그대로). JSON 복사(copy.ts)와 셀
 // 상세의 트리(cell-detail.tsx)가 쓴다.
 //
-// 문법은 RFC 8259 그대로다(앞뒤 공백만 받는다). 깊이가 `MAX_DEPTH` 를 넘으면 던진다 — 쓰는 쪽은 원래 글을 문자열로 보인다.
+// 문법은 RFC 8259 그대로다(앞뒤 공백만 받는다) — 받음 · 거절이 `JSON.parse` 와 같다(json-text.test.ts 의 무작위 대조). 다른
+// 것은 깊이 하나다: 배열 · 객체가 `MAX_DEPTH` 겹을 넘으면 던진다 — 쓰는 쪽은 원래 글을 그대로 들고 「JSON 아님」 으로 보인다(셀
+// 상세는 글 보기, JSON 복사는 그 글을 문자열 값으로).
 
 export type JsonText =
   | { kind: "null" }
@@ -15,7 +17,11 @@ export type JsonText =
   /** 키 · 값 쌍 — 같은 키가 여럿이어도 모두 남는다. */
   | { kind: "object"; entries: [string, JsonText][] };
 
-/** 이보다 깊게 겹친 값은 받지 않는다(재귀가 스택을 넘지 않게). */
+/**
+ * 배열 · 객체가 겹칠 수 있는 수(`[]` 가 1겹). 넘으면 받지 않는다 — 파서 · 직렬화 · 트리가 겹마다 재귀하므로 스택을 넘지 않게.
+ * 512 는 MySQL JSON 의 깊이 상한(100)을 다 담고, 트리로 보기에는 이미 넘친다(겹마다 들여쓰기). PG jsonb 는 서버 스택이 허락하는
+ * 만큼 깊을 수 있다 — 그런 값은 글로 보인다.
+ */
 export const MAX_DEPTH = 512;
 
 const NUMBER = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
@@ -46,10 +52,11 @@ export function parseJsonText(text: string): JsonText {
     }
     return fail("unterminated string");
   };
+  /** `depth` 는 이 값을 둘러싼 배열 · 객체의 수다. */
   const value = (depth: number): JsonText => {
-    if (depth > MAX_DEPTH) fail("too deep");
     space();
     const c = text[i];
+    if ((c === "{" || c === "[") && depth >= MAX_DEPTH) fail("too deep");
     if (c === "{") {
       i++;
       const entries: [string, JsonText][] = [];

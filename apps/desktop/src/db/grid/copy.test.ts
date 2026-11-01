@@ -5,6 +5,7 @@ import { RpcCallError, type RpcClient } from "@pitwall/rpc-client";
 import { describe, expect, it, vi } from "vitest";
 
 import { type CellBlock, CopyRefused, toCsv, toInsert, toJson, toTsv } from "./copy";
+import { MAX_DEPTH } from "./json-text";
 
 const block: CellBlock = {
   columns: [
@@ -113,6 +114,19 @@ describe("json values keep their text", () => {
     expect(out).toContain('"a_2": 3');
     expect(out).toContain('"k": 1');
     expect(out).toContain('"k": 2');
+  });
+
+  it("copies a json value nested past MAX_DEPTH as its original text, one level less as the value", () => {
+    const nested = (n: number) => `${"[".repeat(n)}${"]".repeat(n)}`;
+    const column = { name: "j", dbType: "jsonb", nullable: null };
+    const deep = nested(MAX_DEPTH + 1);
+    expect(JSON.parse(toJson({ columns: [column], rows: [[{ json: deep }]] }))).toEqual([
+      { j: deep },
+    ]);
+    const ok = nested(MAX_DEPTH);
+    expect(JSON.parse(toJson({ columns: [column], rows: [[{ json: ok }]] }))).toEqual([
+      { j: JSON.parse(ok) },
+    ]);
   });
 
   it("writes the same layout as JSON.stringify with two spaces", () => {

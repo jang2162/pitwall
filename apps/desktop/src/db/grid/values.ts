@@ -96,6 +96,27 @@ export function showInvisible(s: string, options: ShowInvisibleOptions = {}): st
   );
 }
 
+/**
+ * `showInvisible(raw)` 이 그린 글 `shown` 의 `[from, to)` 가 덮는 원래 글의 조각 — 고른 글을 복사할 때 표지 대신 원래 글자를
+ * 넣는다(셀 상세). 표지는 일부만 덮여도 그 글자 하나 전부다. 그대로 둔 글자는 `shown` 에 같은 글로 있고 표지는 `⟨` 로
+ * 시작하므로(표지가 되는 글자는 `⟨` 가 아니다) 옵션과 상관없이 맞대어 읽는다.
+ */
+export function originalSlice(raw: string, shown: string, from: number, to: number): string {
+  if (from >= to) return "";
+  let at = 0;
+  let start: number | undefined;
+  for (let i = 0; i < raw.length;) {
+    const width = raw.codePointAt(i)! > 0xffff ? 2 : 1;
+    if (at >= to) return start === undefined ? "" : raw.slice(start, i);
+    const c = raw.slice(i, i + width);
+    const drawn = shown.startsWith(c, at) ? width : shown.indexOf("⟩", at) + 1 - at;
+    if (start === undefined && at + drawn > from) start = i;
+    at += drawn;
+    i += width;
+  }
+  return start === undefined ? "" : raw.slice(start);
+}
+
 export type ValueKind =
   | "null"
   | "bool"

@@ -1,10 +1,11 @@
 // 셀 상세 패널(M3-16): 고른 셀 하나의 값 전부를 보인다 — JSON 은 접는 트리, 긴 글은 줄바꿈한 글, 바이트는 hex 덤프, 셀 상한에서
 // 잘린 값은 원래 크기를 함께. 값은 신뢰할 수 없는 글이라 React 의 글자 노드로만 그린다(HTML 로 해석하는 길을 두지 않는다).
 // JSON 트리는 원래 글을 지키는 파서(json-text.ts)로 읽는다 — 수는 받은 글 그대로(큰 정수 · 긴 소수 · `-0` · 지수), 같은 키도 모두
-// 보인다. 보이지 않는 제어 · 방향 · 0폭 문자는 `⟨U+XXXX⟩` 로 보인다(values.ts 의 `showInvisible`).
+// 보인다. 보이지 않는 제어 · 방향 · 0폭 문자는 `⟨U+XXXX⟩` 로 보인다(values.ts 의 `showInvisible`). 표지는 보이기만 하는 것이다
+// — 고른 글을 복사하면(⌘C · 우클릭 「복사」 모두 `copy` 이벤트) 표지 대신 원래 글자가 간다(`copyOriginal`).
 
 import type { ColumnMeta, DbValue } from "@pitwall/rpc-client";
-import { useMemo, useState } from "react";
+import { type ClipboardEvent, useMemo, useState } from "react";
 
 import { type JsonText, parseJsonText } from "./json-text";
 import type { DbGridStrings } from "./strings";
@@ -12,6 +13,7 @@ import {
   formatSize,
   isTruncated,
   originalSize,
+  originalSlice,
   showInvisible,
   valueKind,
   valueText,
@@ -28,6 +30,65 @@ function utf8Length(s: string): number {
   return new TextEncoder().encode(s).length;
 }
 
+/** `Shown` 이 그린 요소 → 원래 글. 글자 노드는 그 요소의 하나뿐인 자식이다. */
+const originals = new WeakMap<Element, string>();
+
+/** 원래 글 `text` 를 표지를 넣어 그린다. 복사는 `copyOriginal` 이 원래 글로 되돌린다. */
+function Shown({ text }: { text: string }) {
+  return (
+    <span
+      ref={(el) => {
+        if (el) originals.set(el, text);
+      }}
+    >
+      {showInvisible(text)}
+    </span>
+  );
+}
+
+/**
+ * 셀 상세에서 고른 글을 복사할 때 표지(`⟨U+XXXX⟩`)를 원래 글자로 바꿔 쓴다. 고른 곳에 표지가 없으면 웹뷰의 복사 그대로 둔다.
+ * 블록(`div` · `pre`)이 바뀌는 자리에 줄바꿈을 넣는다(JSON 트리의 한 줄이 블록 하나).
+ */
+function copyOriginal(e: ClipboardEvent<HTMLElement>) {
+  const selection = document.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+  const scope = e.currentTarget;
+  const parts: string[] = [];
+  let marked = false;
+  let block: Element | null = null;
+  for (let r = 0; r < selection.rangeCount; r++) {
+    const range = selection.getRangeAt(r);
+    const top = range.commonAncestorContainer;
+    if (!scope.contains(top)) return;
+    const texts: Text[] = [];
+    if (top instanceof Text) texts.push(top);
+    else {
+      const walker = document.createTreeWalker(top, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (range.intersectsNode(n)) texts.push(n as Text);
+      }
+    }
+    for (const node of texts) {
+      const from = node === range.startContainer ? range.startOffset : 0;
+      const to = node === range.endContainer ? range.endOffset : node.data.length;
+      if (from >= to) continue;
+      const parent = node.parentElement;
+      const here = parent?.closest("div, pre") ?? null;
+      if (block !== null && here !== block) parts.push("\n");
+      block = here;
+      const raw = parent ? originals.get(parent) : undefined;
+      if (raw !== undefined && raw !== node.data && node.data === showInvisible(raw)) {
+        marked = true;
+        parts.push(originalSlice(raw, node.data, from, to));
+      } else parts.push(node.data.slice(from, to));
+    }
+  }
+  if (!marked) return;
+  e.preventDefault();
+  e.clipboardData.setData("text/plain", parts.join(""));
+}
+
 function JsonNode({
   name,
   value,
@@ -42,7 +103,11 @@ function JsonNode({
   const [open, setOpen] = useState(depth < 1);
   const [shown, setShown] = useState(TREE_PAGE);
   const label =
-    name === undefined ? null : <span className="text-ui-muted-foreground">{name}: </span>;
+    name === undefined ? null : (
+      <span className="text-ui-muted-foreground">
+        <Shown text={name} />:{" "}
+      </span>
+    );
   if (value.kind !== "array" && value.kind !== "object") {
     const text =
       value.kind === "string"
@@ -55,7 +120,7 @@ function JsonNode({
     return (
       <div className="whitespace-pre-wrap break-all pl-4" data-json-leaf>
         {label}
-        <span>{showInvisible(text)}</span>
+        <Shown text={text} />
       </div>
     );
   }
@@ -82,7 +147,7 @@ function JsonNode({
         <>
           {entries.slice(0, shown).map(([k, v], i) => (
             // 객체는 같은 키가 여럿일 수 있다 — 자리로 키를 삼는다.
-            <JsonNode key={i} name={showInvisible(k)} value={v} depth={depth + 1} T={T} />
+            <JsonNode key={i} name={k} value={v} depth={depth + 1} T={T} />
           ))}
           {entries.length > shown && (
             <button
@@ -194,7 +259,12 @@ export function CellDetail({
           )}
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-auto p-2 font-mono text-xs" data-view={view}>
+      <div
+        className="min-h-0 flex-1 overflow-auto p-2 font-mono text-xs"
+        data-view={view}
+        data-testid="db-cell-detail-body"
+        onCopy={copyOriginal}
+      >
         {value === "null" ? (
           <span className="text-ui-muted-foreground">NULL</span>
         ) : view === "json" && parsed?.ok ? (
@@ -213,7 +283,9 @@ export function CellDetail({
             {view === "json" && parsed && !parsed.ok && (
               <div className="mb-1 text-ui-muted-foreground">{T.detail.jsonInvalid}</div>
             )}
-            <pre className="whitespace-pre-wrap break-all">{showInvisible(text ?? "")}</pre>
+            <pre className="whitespace-pre-wrap break-all">
+              <Shown text={text ?? ""} />
+            </pre>
           </>
         )}
       </div>

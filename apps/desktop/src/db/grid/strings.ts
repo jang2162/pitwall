@@ -46,6 +46,7 @@ export function dbGridStrings(t: Translate) {
       unsupported: t("db-grid-copy-unsupported"),
       nul: t("db-grid-copy-nul"),
       tooLarge: t("db-grid-copy-too-large"),
+      clipboardTooLarge: (limit: string) => t("db-grid-copy-clipboard-too-large", { limit }),
       failed: (message: string) => t("db-grid-copy-failed", { message }),
     },
     nullValue: t("db-grid-null-value"),

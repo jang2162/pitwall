@@ -46,6 +46,8 @@ db-grid-copy-truncated = A truncated cell (row { $row }, { $column }) cannot be 
 db-grid-copy-unsupported = This database has no literal for that value, so it cannot be copied as INSERT
 db-grid-copy-nul = A value with a NUL character cannot be written as a literal for this database
 db-grid-copy-too-large = Too many cells are selected to copy as INSERT
+# $limit: size limit (e.g. 1.0 GiB)
+db-grid-copy-clipboard-too-large = The copied text is larger than the clipboard limit ({ $limit }) — select fewer cells
 # $message: the error
 db-grid-copy-failed = Could not copy: { $message }
 

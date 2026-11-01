@@ -25,6 +25,7 @@ import { QueryRun } from "./query-stream";
 import type { ResultBuffer } from "./result-buffer";
 import { ResultGrid } from "./glide-grid";
 import { gridColors } from "./grid-theme";
+import { MAX_DEPTH } from "./json-text";
 import { ResultView, type ResultViewProps } from "./result-view";
 import { dbGridStrings } from "./strings";
 import { formatSize } from "./values";
@@ -438,6 +439,112 @@ describe("grid", () => {
   });
 });
 
+describe("cell detail", () => {
+  /** 셀 하나(둘째 열)의 상세를 연다. */
+  async function openDetail(value: DbValue) {
+    const buffer = run([...STARTED, { kind: "rows", index: 0, rows: [[{ int: 1 }, value]] }]);
+    await mount({ buffer });
+    await act(async () => last().onCellActivated([1, 0]));
+    return byTestId("db-cell-detail-body")!;
+  }
+
+  /** `start` · `end` 노드의 자리로 고르고 복사 이벤트를 보낸다(⌘C 와 우클릭 「복사」 가 같이 내는 이벤트). */
+  async function copySelection(start: [Node, number], end: [Node, number]) {
+    const range = document.createRange();
+    range.setStart(...start);
+    range.setEnd(...end);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const data = new Map<string, string>();
+    const event = new Event("copy", { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: { setData: (t: string, v: string) => void };
+    };
+    event.clipboardData = { setData: (t, v) => data.set(t, v) };
+    const target = start[0] instanceof Element ? start[0] : start[0].parentElement!;
+    await act(async () => target.dispatchEvent(event));
+    selection.removeAllRanges();
+    return { prevented: event.defaultPrevented, text: data.get("text/plain") };
+  }
+
+  const textOf = (el: Element) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const texts: Text[] = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) texts.push(n as Text);
+    return texts;
+  };
+
+  it("shows invisible characters as marks but copies the original characters from the text view", async () => {
+    const value = "a\u202Eb\u200Bc";
+    const body = await openDetail({ text: value });
+    const [node] = textOf(body.querySelector("pre")!);
+    expect(node!.data).toBe("a⟨U+202E⟩b⟨U+200B⟩c");
+    // 전부.
+    expect(await copySelection([node!, 0], [node!, node!.data.length])).toEqual({
+      prevented: true,
+      text: value,
+    });
+    // 표지 가운데서 시작해 `b` 까지: 표지는 일부만 골라도 그 글자 하나다.
+    expect(await copySelection([node!, 4], [node!, "a⟨U+202E⟩b".length])).toEqual({
+      prevented: true,
+      text: "\u202Eb",
+    });
+    // 표지만 고르면 그 글자 하나.
+    expect(await copySelection([node!, 2], [node!, 5])).toEqual({
+      prevented: true,
+      text: "\u202E",
+    });
+    // 이모지를 이루는 ZWJ 는 표지가 아니므로 그대로.
+    const family = "👨\u200D👩";
+    const plain = await openDetailAgain({ text: `${family}\u200B` });
+    const [f] = textOf(plain.querySelector("pre")!);
+    expect(f!.data).toBe(`${family}⟨U+200B⟩`);
+    expect((await copySelection([f!, 0], [f!, f!.data.length])).text).toBe(`${family}\u200B`);
+  });
+
+  /** 다른 값으로 다시 연다(앞 창을 내린다). */
+  async function openDetailAgain(value: DbValue) {
+    await act(async () => root?.unmount());
+    return openDetail(value);
+  }
+
+  it("leaves a copy without marks to the webview", async () => {
+    const body = await openDetail({ text: "plain ⟨U+202E⟩ text" });
+    const [node] = textOf(body.querySelector("pre")!);
+    // 원래 글에 든 표지 꼴의 글자는 표지가 아니다 — 원래 글 그대로이므로 웹뷰가 복사한다.
+    expect(await copySelection([node!, 0], [node!, node!.data.length])).toEqual({
+      prevented: false,
+      text: undefined,
+    });
+  });
+
+  it("copies keys and string values of the json tree as their original characters", async () => {
+    const body = await openDetail({ json: '{"k\u200b": "v\u202e", "n": 1}' });
+    expect(body.textContent).toContain("k⟨U+200B⟩");
+    expect(body.textContent).toContain('"v⟨U+202E⟩"');
+    const texts = textOf(body);
+    const last = texts[texts.length - 1]!;
+    const copied = await copySelection([texts[0]!, 0], [last, last.data.length]);
+    expect(copied.prevented).toBe(true);
+    expect(copied.text).toContain("k\u200B: ");
+    expect(copied.text).toContain('"v\u202E"');
+    expect(copied.text).toContain("n: 1");
+    expect(copied.text).not.toContain("⟨U+");
+  });
+
+  it("shows a json value nested past MAX_DEPTH as text that is not JSON, keeping the original", async () => {
+    const deep = `${"[".repeat(MAX_DEPTH + 1)}${"]".repeat(MAX_DEPTH + 1)}`;
+    const body = await openDetail({ json: deep });
+    expect(body.textContent).toContain(T.detail.jsonInvalid);
+    expect(body.querySelector("pre")?.textContent).toBe(deep);
+    expect(body.querySelector("[data-json-node]")).toBeNull();
+    const ok = `${"[".repeat(MAX_DEPTH)}${"]".repeat(MAX_DEPTH)}`;
+    const tree = await openDetailAgain({ json: ok });
+    expect(tree.textContent).not.toContain(T.detail.jsonInvalid);
+    expect(tree.querySelector("[data-json-node]")).not.toBeNull();
+  });
+});
+
 describe("switching results", () => {
   it("drops every result-bound screen state when another result comes in: filter, sort, selection, cursor, detail, scroll, column layout", async () => {
     const three: DbQueryEvent[] = [
@@ -704,6 +811,35 @@ describe("copy", () => {
     expect(host.invoke).toHaveBeenLastCalledWith("write_clipboard", { text: "INSERT …;\n" });
     expect(webview).not.toHaveBeenCalled();
     Reflect.deleteProperty(navigator, "clipboard");
+  });
+
+  it("tells when the Host refuses copy-as text over the clipboard limit, and shows other clipboard failures by message", async () => {
+    const buffer = run([...STARTED, { kind: "rows", index: 0, rows: rows(1) }]);
+    const notes: { level: string; title: string }[] = [];
+    await mount({ buffer, notify: (n) => notes.push({ level: n.level, title: n.title }) });
+    await act(async () => select({ x: 0, y: 0, width: 2, height: 1 }));
+    const pickCsv = async () => {
+      await act(async () => byTestId("db-grid-copy-as-button")!.click());
+      await act(async () =>
+        element
+          .querySelector<HTMLButtonElement>(`[data-testid="db-grid-copy-as"] [data-format="csv"]`)!
+          .click(),
+      );
+    };
+    // clipboard.rs 의 거절 꼴.
+    host.invoke.mockRejectedValueOnce({
+      code: "tooLarge",
+      maxBytes: 1024 ** 3,
+      message: "the text is … bytes, more than the clipboard limit of … bytes",
+    });
+    await pickCsv();
+    expect(host.invoke).toHaveBeenLastCalledWith("write_clipboard", {
+      text: "id,body\r\n0,row 0\r\n",
+    });
+    expect(notes.pop()).toEqual({ level: "warning", title: T.copy.clipboardTooLarge("1.0 GiB") });
+    host.invoke.mockRejectedValueOnce({ code: "failed", message: "no clipboard" });
+    await pickCsv();
+    expect(notes.pop()).toEqual({ level: "error", title: T.copy.failed("no clipboard") });
   });
 
   it("offers no INSERT format without a Host and dialect", async () => {

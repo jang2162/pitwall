@@ -46,6 +46,8 @@ db-grid-copy-truncated = 잘린 셀(행 { $row } · { $column })이 있어 INSER
 db-grid-copy-unsupported = 이 DB 에 그 값을 적을 리터럴이 없어 INSERT 문으로 복사할 수 없다
 db-grid-copy-nul = NUL 글자가 든 값은 이 DB 의 리터럴로 적을 수 없다
 db-grid-copy-too-large = 고른 셀이 너무 많아 INSERT 문으로 복사할 수 없다
+# $limit: 크기 상한(예: 1.0 GiB)
+db-grid-copy-clipboard-too-large = 복사할 글이 클립보드 상한({ $limit })보다 크다 — 셀을 덜 고른다
 # $message: 오류 문장
 db-grid-copy-failed = 복사하지 못했다: { $message }
 

@@ -13,6 +13,7 @@ import {
   isNumeric,
   isTruncated,
   originalSize,
+  originalSlice,
   showInvisible,
   sortKey,
   valueKind,
@@ -195,5 +196,29 @@ describe("sort", () => {
         valueText,
       ),
     ).toEqual(["-Infinity", "1.5", "Infinity", "NaN"]);
+  });
+});
+
+describe("originalSlice", () => {
+  it("maps a range of the shown text back to the original characters, a partly covered mark to its whole character", () => {
+    // U+E0001(태그 문자)는 서로게이트 쌍이고 표지는 다섯 자리다. 키캡이 아닌 숫자 뒤 FE0F 는 표지.
+    for (const keepEmoji of [true, false]) {
+      const raw = "x\u{E0001}y\u0000z1\uFE0F⟨U+0041⟩";
+      const shown = showInvisible(raw, { keepEmoji });
+      expect(shown).toBe("x⟨U+E0001⟩y⟨U+0000⟩z1⟨U+FE0F⟩⟨U+0041⟩");
+      expect(originalSlice(raw, shown, 0, shown.length)).toBe(raw);
+      expect(originalSlice(raw, shown, 3, 4)).toBe("\u{E0001}");
+      expect(originalSlice(raw, shown, 1, "x⟨U+E0001⟩y".length)).toBe("\u{E0001}y");
+      expect(originalSlice(raw, shown, "x⟨U+E0001⟩".length, "x⟨U+E0001⟩y⟨".length)).toBe("y\u0000");
+      // 원래 글의 `⟨U+0041⟩` 은 글 그대로다.
+      expect(originalSlice(raw, shown, shown.length - 8, shown.length)).toBe("⟨U+0041⟩");
+      expect(originalSlice(raw, shown, 2, 2)).toBe("");
+    }
+    // keepEmoji 에 따라 ZWJ 가 글이거나 표지다 — 어느 쪽이든 원래 글로 돌아온다.
+    const family = "👨\u200D👩";
+    expect(originalSlice(family, showInvisible(family), 0, family.length)).toBe(family);
+    const marked = showInvisible(family, { keepEmoji: false });
+    expect(marked).toBe("👨⟨U+200D⟩👩");
+    expect(originalSlice(family, marked, 0, marked.length)).toBe(family);
   });
 });

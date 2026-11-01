@@ -36,7 +36,7 @@ import {
 import type { NotificationInput } from "../../notifications/notifications";
 import { useTheme } from "../../theme/theme-switcher";
 import { CellDetail } from "./cell-detail";
-import { writeClipboardText } from "./clipboard";
+import { ClipboardTooLarge, writeClipboardText } from "./clipboard";
 import { COPY_FORMATS, type CopyFormat, CopyRefused, formatBlock } from "./copy";
 import { type GridCellMark, ResultGrid, type ResultGridHandle } from "./glide-grid";
 import { clearActiveGrid, type GridTarget, setActiveGrid } from "./grid-focus";
@@ -287,6 +287,13 @@ function ResultBody({
                   ? T.copy.tooLarge
                   : T.copy.unsupported;
           notify?.({ level: "warning", title });
+          return;
+        }
+        if (error instanceof ClipboardTooLarge) {
+          notify?.({
+            level: "warning",
+            title: T.copy.clipboardTooLarge(formatSize(error.maxBytes)),
+          });
           return;
         }
         notify?.({
