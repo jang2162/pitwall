@@ -654,6 +654,10 @@ fn invalid_requests_are_invalid_params() {
 
 /// 오래 걸리는 검색(읽기마다 쉰다)을 멈추면 남은 파일을 찾지 않는다 — 멈춘 뒤에 오는 결과는 그때 찾던 파일(스레드마다
 /// 하나)뿐이다. 100 ms 안에 끝나는지는 release 빌드에서만 판정한다([`RELEASE_TIMING`]).
+///
+/// 시간은 멈춘 때나 그 뒤 마지막 쉬는 읽기가 깬 때 중 늦은 쪽부터 잰다. 쉬는 읽기는 시험이 넣은 것이고 도중에 깨지 않으므로 그 잠은
+/// 제품의 시간이 아니다 — macOS 는 스로틀된 프로세스의 잠을 늦게 깨운다(`taskpolicy -b` 로 돌리면 20 ms 잠이 220 ms 까지 가고,
+/// 멈춘 때부터 재면 60~113 ms. macOS CI 에서 104 ms). 깬 뒤 스레드가 끝나기까지는 0.3 ms 안이었다.
 #[test]
 fn stopping_ends_the_search_within_100_ms() {
     let fx = Fixture::new();
@@ -664,6 +668,7 @@ fn stopping_ends_the_search_within_100_ms() {
     let mut plan = fx.fs.search_plan(&params(&id, &root, "needle")).unwrap();
     // 앞부분 뒤의 읽기가 파일마다 한 번(끝)이라 멈추지 않으면 256 × 20 ms / 스레드 수(12 이하) ≈ 430 ms 넘게 걸린다.
     plan.read_delay = Some(Duration::from_millis(20));
+    let woke = Arc::clone(&plan.woke);
     let stop = Arc::new(AtomicBool::new(false));
     let after_stop = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = std::sync::mpsc::channel();
@@ -684,7 +689,9 @@ fn stopping_ends_the_search_within_100_ms() {
     let stopped = Instant::now();
     stop.store(true, Ordering::Relaxed);
     let summary = worker.join().unwrap();
-    let took = stopped.elapsed();
+    let ended = Instant::now();
+    let from = woke.lock().unwrap().map_or(stopped, |w| w.max(stopped));
+    let took = ended - from;
     let after_stop = after_stop.load(Ordering::Relaxed);
     assert!(
         after_stop <= SEARCH_THREADS,
@@ -692,7 +699,11 @@ fn stopping_ends_the_search_within_100_ms() {
     );
     assert!(summary.searched_files < 256, "{summary:?}");
     if RELEASE_TIMING {
-        assert!(took < Duration::from_millis(100), "took {took:?}");
+        assert!(
+            took < Duration::from_millis(100),
+            "took {took:?} after the last fake read woke ({:?} after the stop)",
+            ended - stopped
+        );
     }
 }
 

@@ -409,6 +409,8 @@ impl Fs {
             #[cfg(test)]
             reads: Arc::default(),
             #[cfg(test)]
+            woke: Arc::default(),
+            #[cfg(test)]
             on_finish: None,
         })
     }
@@ -482,6 +484,9 @@ struct Plan {
     /// 시험: 멈춤 확인을 지나 파일에서 읽은 횟수(멈춘 뒤에 더 읽지 않는지 본다).
     #[cfg(test)]
     reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// 시험: 쉬는 읽기([`Plan::read_delay`])가 마지막으로 깬 시각. 멈춘 뒤 걸린 시간에서 시험이 넣은 잠을 덜어 낸다.
+    #[cfg(test)]
+    woke: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// 시험: 검색 스레드가 [`Plan::run`] 을 마칠 때 그 수치로 부른다.
     #[cfg(test)]
     on_finish: Option<OnFinish>,
@@ -680,6 +685,8 @@ impl Shared<'_> {
             delay: self.plan.read_delay,
             #[cfg(test)]
             reads: &self.plan.reads,
+            #[cfg(test)]
+            woke: &self.plan.woke,
         });
         let mut sink = Lines {
             shared: self,
@@ -788,6 +795,8 @@ struct Stoppable<'a> {
     delay: Option<std::time::Duration>,
     #[cfg(test)]
     reads: &'a std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    woke: &'a std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 impl Read for Stoppable<'_> {
@@ -795,6 +804,9 @@ impl Read for Stoppable<'_> {
         #[cfg(test)]
         if let Some(delay) = self.delay {
             std::thread::sleep(delay);
+            let now = std::time::Instant::now();
+            let mut woke = self.woke.lock().unwrap();
+            *woke = Some(woke.map_or(now, |w| w.max(now)));
         }
         if self.stop.load(Ordering::Relaxed) {
             return Ok(0);
