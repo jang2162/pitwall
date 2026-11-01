@@ -425,6 +425,57 @@ fn unknown_expressions_bins_keys_and_urls_make_the_package_unsupported() {
     );
 }
 
+/// 리뷰 F3: 설치기의 인자로 넘어갈 이름 · 판이 옵션(`-` 로 시작)으로 읽히지 않는다.
+#[test]
+fn npm_and_pypi_names_that_look_like_options_are_unsupported() {
+    let def = |id: &str, extra: serde_json::Value| {
+        pkg(json!({
+            "name": "x", "description": "", "homepage": "", "licenses": [], "languages": [], "categories": [],
+            "source": {"id": id, "extra_packages": extra},
+            "bin": {},
+        }))
+    };
+    let bad = [
+        (
+            "pkg:npm/x@1.0.0",
+            json!(["--no-ignore-scripts", "-g", "--foreground-scripts"]),
+        ),
+        ("pkg:npm/x@1.0.0", json!(["-g"])),
+        ("pkg:npm/x@1.0.0", json!(["typescript@--tag"])),
+        ("pkg:npm/--global@1.0.0", json!([])),
+        ("pkg:npm/%40-scope/name@1.0.0", json!([])),
+        ("pkg:npm/x@-1", json!([])),
+        ("pkg:pypi/--pre@1.0", json!([])),
+        ("pkg:pypi/x@1.0", json!(["-e."])),
+        ("pkg:pypi/x@1.0", json!(["toml==--x"])),
+        ("pkg:pypi/x-@1.0", json!([])),
+    ];
+    for (id, extra) in bad {
+        let r = def(id, extra.clone()).resolve(Some(ToolTarget::DarwinArm64), None);
+        assert!(
+            matches!(r, Err(ToolUnsupported::InvalidDefinition { .. })),
+            "{id} {extra}: {r:?}"
+        );
+    }
+    for (id, extra) in [
+        (
+            "pkg:npm/x@1.0.0",
+            json!(["typescript@6.0.3", "@vue/ts-plugin", "a.b_c~d"]),
+        ),
+        ("pkg:npm/%40vue/language-server@3.1.0", json!([])),
+        (
+            "pkg:pypi/basedpyright@1.40.2",
+            json!(["toml==0.10", "Typing_Extensions"]),
+        ),
+    ] {
+        let r = def(id, extra.clone()).resolve(Some(ToolTarget::DarwinArm64), None);
+        assert!(r.is_ok(), "{id} {extra}: {r:?}");
+    }
+    // Mason 패키지 이름(설치 폴더 이름)도 영숫자로 시작한다.
+    assert!(Package::parse(&json!({"name": "-x"})).is_err());
+    assert!(Package::parse(&json!({"name": ".x"})).is_err());
+}
+
 #[test]
 fn untrusted_sizes_and_shapes_are_bounded() {
     let mut v = github_def("a");

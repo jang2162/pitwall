@@ -418,8 +418,11 @@ impl Package {
                         .collect::<Result<_, _>>()?,
                 };
                 let package = purl.full_name();
-                if !valid_name(&package) {
-                    return Err(invalid("package name is not valid"));
+                if !valid_dist_name(&package, kind) || !valid_version(&version) {
+                    return Err(invalid(format!(
+                        "package `{package}@{version}` is not a valid {} name and version",
+                        purl.kind
+                    )));
                 }
                 let spec = ToolPackageSpec {
                     name: package,
@@ -533,7 +536,7 @@ impl ToolPackageSpec {
             }
         };
         let version = version.map(str::to_owned);
-        if !valid_name(name) || version.as_deref().is_some_and(|v| !valid_version(v)) {
+        if !valid_dist_name(name, kind) || version.as_deref().is_some_and(|v| !valid_version(v)) {
             return Err(invalid(format!("extra package `{s}` is not valid")));
         }
         Ok(ToolPackageSpec {
@@ -838,9 +841,11 @@ pub fn valid_file_name(name: &str) -> bool {
 }
 
 /// 패키지 이름(npm 스코프의 `@` · `/` 를 받는다).
+/// Mason 패키지 이름(설치 폴더 이름이 된다 — M4-04). 영숫자로 시작한다.
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 214
+        && name.starts_with(|c: char| c.is_ascii_alphanumeric())
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | '/'))
@@ -849,9 +854,41 @@ fn valid_name(name: &str) -> bool {
             .any(|s| s.is_empty() || s == "." || s == "..")
 }
 
+/// npm · PyPI 배포 이름을 그 레지스트리의 이름 문법으로 본다. 설치기(M4-04)가 이 이름을 `npm install` · `pip install` 의 인자로
+/// 넘기므로 `-` 로 시작하는 이름(`--no-ignore-scripts` · `-g` · `-e.`)은 옵션으로 읽힌다 — 거절한다.
+/// - npm: `[@<스코프>/]<이름>`, 스코프 · 이름은 영숫자로 시작하고 영숫자 · `-._~` 만(214 바이트까지).
+/// - PyPI: PEP 508 의 이름 `^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`.
+fn valid_dist_name(name: &str, kind: PurlKind) -> bool {
+    let word = |w: &str, extra: &[char]| {
+        w.starts_with(|c: char| c.is_ascii_alphanumeric())
+            && w.chars()
+                .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
+    };
+    match kind {
+        PurlKind::Npm => {
+            let rest = match name.strip_prefix('@') {
+                Some(scoped) => match scoped.split_once('/') {
+                    Some((scope, rest)) if word(scope, &['-', '.', '_', '~']) => rest,
+                    _ => return false,
+                },
+                None => name,
+            };
+            name.len() <= 214 && word(rest, &['-', '.', '_', '~'])
+        }
+        PurlKind::Pypi => {
+            name.len() <= 214
+                && word(name, &['-', '.', '_'])
+                && name.ends_with(|c: char| c.is_ascii_alphanumeric())
+        }
+        PurlKind::Github | PurlKind::Generic => valid_name(name),
+    }
+}
+
+/// 판 · 판 범위. 옵션으로 읽히지 않게 `-` 로 시작하지 않는다.
 fn valid_version(v: &str) -> bool {
     !v.is_empty()
         && v.len() <= 128
+        && !v.starts_with('-')
         && v.chars().all(|c| {
             c.is_ascii_alphanumeric()
                 || matches!(c, '-' | '_' | '.' | '+' | '~' | '^' | '<' | '>' | '=' | '*')
