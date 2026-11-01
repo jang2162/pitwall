@@ -125,6 +125,8 @@ pub fn files_pkg(
     })
 }
 
+/// 가짜 npm · python 시험(유닉스)만 쓴다.
+#[cfg(unix)]
 pub fn npm_pkg(name: &str, version: &str, extra: &[&str]) -> Value {
     json!({
         "name": name, "description": "test", "homepage": "https://example.test",
@@ -134,6 +136,8 @@ pub fn npm_pkg(name: &str, version: &str, extra: &[&str]) -> Value {
     })
 }
 
+/// 가짜 npm · python 시험(유닉스)만 쓴다.
+#[cfg(unix)]
 pub fn pypi_pkg(name: &str, version: &str) -> Value {
     json!({
         "name": name, "description": "test", "homepage": "https://example.test",
@@ -173,6 +177,8 @@ impl Toolchains for FakeChains {
     }
 }
 
+/// 가짜 npm · python 시험(유닉스)만 쓴다.
+#[cfg(unix)]
 pub fn env_with_path(path: &[&Path]) -> RuntimeEnv {
     RuntimeEnv {
         path: std::env::join_paths(path).unwrap(),
