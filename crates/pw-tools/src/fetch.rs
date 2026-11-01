@@ -99,7 +99,12 @@ impl Fetcher {
                 attempt.follow()
             }
         });
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder();
+        if loopback_http {
+            // 시험의 가짜 서버(127.0.0.1)에 사람 · CI 의 프록시 설정이 끼지 않게.
+            builder = builder.no_proxy();
+        }
+        let client = builder
             .user_agent(concat!("pitwall/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(CONNECT_TIMEOUT.min(timeout))
             .timeout(timeout)
