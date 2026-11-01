@@ -1,14 +1,15 @@
-// 내장 언어 확장(extensions/lang-<id>/)의 tree-sitter 강조 쿼리와, 저장소에 넣는 문법 파일(C 소스 · 시험용 WASM)을 출처표
-// (scripts/grammars.toml)대로 만든다. 문법 자체는 앱에 네이티브로 링크한다(crates/pw-syntax 의 문법 크레이트 · build.rs).
+// 내장 언어 확장(extensions/lang-<id>/)의 tree-sitter 쿼리(강조 `highlights.scm` · 심볼 `tags.scm`)와, 저장소에 넣는 문법 파일(C
+// 소스 · 시험용 WASM)을 출처표(scripts/grammars.toml)대로 만든다. 문법 자체는 앱에 네이티브로 링크한다(crates/pw-syntax 의 문법 크레이트 · build.rs).
 //
 //   node scripts/grammars.mjs build [id…]   고정 커밋의 소스를 target/grammars/src/ 에 받아 쿼리 · LICENSE 를 확장 폴더에,
 //                                          C 소스(`vendor`) · 시험용 WASM(`test_wasm`)을 정한 자리에 쓰고 출처표의 해시 줄을
 //                                          고친다(`mise run grammars`). id 를 주면 그 문법만
 //   node scripts/grammars.mjs verify [id…]  같은 입력으로 target/grammars/verify/ 에 다시 만들어 출처표의 해시와 견준다
 //                                          (재현성 확인 — 저장소의 파일은 건드리지 않는다)
-//   node scripts/grammars.mjs check         커밋된 쿼리 · C 소스 · 시험용 WASM 의 해시가 출처표와 맞는지, 내장 확장에 WASM 이
-//                                          없는지, 문법 크레이트의 판본이 Cargo.lock 과 맞는지, 고지가 licenses/vendored.md 에
-//                                          있는지 본다(`mise run lint`, 네트워크 · 도구 없이 돈다)
+//   node scripts/grammars.mjs check         커밋된 쿼리 · C 소스 · 시험용 WASM 의 해시가 출처표와 맞는지, 직접 쓴 쿼리
+//                                          (scripts/queries/)가 만든 tags.scm 에 그대로 들었는지, 표에 없는 tags.scm 이 없는지,
+//                                          내장 확장에 WASM 이 없는지, 문법 크레이트의 판본이 Cargo.lock 과 맞는지, 고지가
+//                                          licenses/vendored.md 에 있는지 본다(`mise run lint`, 네트워크 · 도구 없이 돈다)
 //
 // build · verify 는 git 을, `test_wasm` 문법은 PATH 의 `tree-sitter`(mise.toml 이 고정한다)도 쓴다. tree-sitter CLI 는 WASM 을
 // 만들 때 wasi-sdk · binaryen 을 자기 캐시에 받는다(버전은 CLI 가 고정한다). 순서와 규칙은 CONTRIBUTING.md 「tree-sitter 문법」 절.
@@ -34,6 +35,9 @@ const WORK = join(root, "target", "grammars");
 const LOCK = join(root, "Cargo.lock");
 /** 시험용 WASM(`test_wasm`)을 두는 자리. WASM 경로(`pw-syntax` 의 `wasm` 기능)의 시험이 읽는다. */
 const TEST_WASM = join("crates", "pw-syntax", "tests", "wasm");
+/** 원본에 없는 쿼리를 직접 써 두는 자리. 출처표의 `pitwall:<경로>` 가 이 폴더 기준이다. */
+const LOCAL_QUERIES = join(root, "scripts");
+const LOCAL_PREFIX = "pitwall:";
 
 /**
  * 출처표를 읽는다. 이 파일에 쓰는 TOML 만 받는 좁은 파서다: 주석, `[[grammar]]`, `키 = "문자열"` · `true` · `false` ·
@@ -89,6 +93,12 @@ function readTable() {
     }
     g.path ??= ".";
     g.highlights ??= [];
+    g.tags ??= [];
+    if (g.tags.length > 0 && g.tags_sha256 === undefined) {
+      throw new Error(
+        `scripts/grammars.toml: grammar ${g.id}: \`tags\` needs a \`tags_sha256\` line (write \`tags_sha256 = ""\` and run \`mise run grammars\`)`,
+      );
+    }
     g.test_wasm ??= false;
   }
   return grammars;
@@ -116,7 +126,7 @@ function writeHashes(hashes) {
       if (line.trim() === "[[grammar]]") id = null;
       const idMatch = /^id = "([^"]*)"/.exec(line);
       if (idMatch) id = idMatch[1];
-      const key = /^(wasm_sha256|highlights_sha256|vendor_sha256) = /.exec(line)?.[1];
+      const key = /^(wasm_sha256|highlights_sha256|tags_sha256|vendor_sha256) = /.exec(line)?.[1];
       if (key && id && hashes.get(id)?.[key]) return `${key} = "${hashes.get(id)[key]}"`;
       return line;
     });
@@ -164,12 +174,42 @@ function checkout(grammar) {
   return dir;
 }
 
-/** `<다른 id>:<경로>` 는 그 문법 저장소의 파일, 아니면 이 문법 저장소의 파일. */
+/**
+ * `<다른 id>:<경로>` 는 그 문법 저장소의 파일, `pitwall:<경로>` 는 이 저장소 scripts/ 아래 직접 쓴 파일(`source` 가 `null`), 아니면
+ * 이 문법 저장소의 파일.
+ */
 function queryFile(spec, grammar, byId) {
+  if (spec.startsWith(LOCAL_PREFIX)) {
+    const path = spec.slice(LOCAL_PREFIX.length);
+    return { source: null, path, file: join(LOCAL_QUERIES, path) };
+  }
   const [other, path] = spec.includes(":") ? spec.split(":", 2) : [null, spec];
   const source = other ? byId.get(other) : grammar;
-  if (!source) throw new Error(`grammar ${grammar.id}: unknown grammar \`${other}\` in highlights`);
+  if (!source)
+    throw new Error(`grammar ${grammar.id}: unknown grammar \`${other}\` in a query list`);
   return { source, path, file: join(checkout(source), path) };
+}
+
+/** 쿼리 파일들을 머리 주석과 함께 이어 붙여 `out` 에 쓴다. 원본 저장소를 `licenses` 에 모은다. */
+function concatQueries(specs, grammar, byId, out, licenses) {
+  const parts = [
+    "; 생성물 — scripts/grammars.mjs 가 아래 원본 쿼리를 이어 붙였다. 손으로 고치지 않는다(출처표 scripts/grammars.toml).",
+  ];
+  for (const spec of specs) {
+    const q = queryFile(spec, grammar, byId);
+    if (q.source) {
+      licenses.set(q.source.repo, q.source);
+      parts.push(`\n; ---- ${q.source.repo} @ ${q.source.commit} — ${q.path}\n`);
+    } else {
+      parts.push(
+        `\n; ---- Pitwall scripts/${q.path} (MIT — 원본에 없는 정의를 이 저장소가 직접 썼다)\n`,
+      );
+    }
+    parts.push(readFileSync(q.file, "utf8").trimEnd());
+  }
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, `${parts.join("\n")}\n`);
+  return sha256(out);
 }
 
 /** `out` 아래에 저장소와 같은 모양으로 쓴다. 쓴 파일의 해시를 돌려준다. */
@@ -195,20 +235,21 @@ function buildOne(grammar, byId, out) {
     hashes.vendor_sha256 = vendorHash(vendor);
   }
 
-  const parts = [
-    "; 생성물 — scripts/grammars.mjs 가 아래 원본 쿼리를 이어 붙였다. 손으로 고치지 않는다(출처표 scripts/grammars.toml).",
-  ];
   const licenses = new Map([[grammar.repo, grammar]]);
-  for (const spec of grammar.highlights) {
-    const q = queryFile(spec, grammar, byId);
-    licenses.set(q.source.repo, q.source);
-    parts.push(`\n; ---- ${q.source.repo} @ ${q.source.commit} — ${q.path}\n`);
-    parts.push(readFileSync(q.file, "utf8").trimEnd());
+  const queries = join(ext, "queries", grammar.id);
+  hashes.highlights_sha256 = concatQueries(
+    grammar.highlights,
+    grammar,
+    byId,
+    join(queries, "highlights.scm"),
+    licenses,
+  );
+  const tags = join(queries, "tags.scm");
+  if (grammar.tags.length > 0) {
+    hashes.tags_sha256 = concatQueries(grammar.tags, grammar, byId, tags, licenses);
+  } else {
+    rmSync(tags, { force: true });
   }
-  const highlights = join(ext, "queries", grammar.id, "highlights.scm");
-  mkdirSync(dirname(highlights), { recursive: true });
-  writeFileSync(highlights, `${parts.join("\n")}\n`);
-  hashes.highlights_sha256 = sha256(highlights);
 
   // 문법 저장소의 LICENSE 는 LICENSE 로, 쿼리를 빌려 온 다른 저장소의 것은 LICENSE-<id> 로.
   for (const source of licenses.values()) {
@@ -267,6 +308,15 @@ function check() {
   for (const g of grammars) {
     const ext = join(root, "extensions", g.extension);
     const files = [["highlights_sha256", join(ext, "queries", g.id, "highlights.scm")]];
+    const tags = join(ext, "queries", g.id, "tags.scm");
+    if (g.tags.length > 0) {
+      files.push(["tags_sha256", tags]);
+      problems.push(...localQueryProblems(g, tags));
+    } else if (existsSync(tags)) {
+      problems.push(
+        `${g.id}: ${tags} is not listed in scripts/grammars.toml — add \`tags\` to the grammar or remove the file`,
+      );
+    }
     if (g.test_wasm) files.push(["wasm_sha256", join(root, TEST_WASM, `${g.id}.wasm`)]);
     for (const [key, file] of files) {
       listed.add(file);
@@ -327,6 +377,24 @@ function check() {
     process.exit(1);
   }
   console.log(`grammars: ${grammars.length} grammars match scripts/grammars.toml and Cargo.lock`);
+}
+
+/**
+ * 직접 쓴 쿼리(`pitwall:<경로>`)가 만든 파일에 글자 그대로 들었는지. 해시 검사는 만든 파일만 보므로, 직접 쓴 쿼리를 고치고 다시
+ * 만들지 않은 것은 이것이 잡는다(원본 저장소의 쿼리는 커밋으로 고정돼 있다).
+ */
+function localQueryProblems(g, built) {
+  const out = [];
+  const text = existsSync(built) ? readFileSync(built, "utf8") : "";
+  for (const spec of g.tags.filter((s) => s.startsWith(LOCAL_PREFIX))) {
+    const file = join(LOCAL_QUERIES, spec.slice(LOCAL_PREFIX.length));
+    if (!existsSync(file)) {
+      out.push(`${g.id}: ${file} is missing`);
+    } else if (!text.includes(readFileSync(file, "utf8").trimEnd())) {
+      out.push(`${g.id}: ${built} does not contain ${file} — run \`mise run grammars -- ${g.id}\``);
+    }
+  }
+  return out;
 }
 
 /** Cargo.lock 의 패키지: 이름 → [{ version, source }]. */

@@ -19,10 +19,14 @@
 #   highlights  이어 붙일 쿼리 파일. 같은 노드를 여러 패턴이 잡으면 뒤의 것이 이기므로(crates/pw-syntax/src/highlight.rs) 바탕
 #               쿼리를 먼저, 그 위에 덮는 쿼리를 뒤에 둔다. 순서는 원본 저장소의 tree-sitter.json 을 따르되, 그 순서가 바탕을 뒤에
 #               두는 곳(typescript · tsx)은 거꾸로 한다. `<다른 id>:<경로>` 는 그 문법 저장소의 파일이다
+#   tags        이어 붙여 `extensions/<extension>/queries/<id>/tags.scm`(심볼 인덱스 `crates/pw-index` 의 정의 쿼리)에 쓸 쿼리 파일.
+#               `highlights` 와 같은 꼴이고, `pitwall:<경로>` 는 원본에 없는 정의를 이 저장소가 직접 쓴 `scripts/<경로>` 다(MIT —
+#               Zed(GPL-3.0) · Helix(MPL-2.0) 의 쿼리는 옮기지 않는다). 정의가 같은 이름 노드에 겹치면 앞 패턴이 이긴다(tree-sitter 의
+#               tags 와 같다). 없으면 그 언어는 심볼 인덱스에 들지 않는다
 #   test_wasm   true 면 `tree-sitter build --wasm`(버전은 mise.toml)으로 crates/pw-syntax/tests/wasm/<id>.wasm 을 만든다 — 앱이
 #               쓰지 않는 WASM 문법 경로(`pw-syntax` 의 `wasm` 기능, 외부 확장 M8)의 시험 입력(기본 false)
 #   license     SPDX. 전문은 저장소의 LICENSE 를 확장 폴더에 복사하고 licenses/vendored.md 에 싣는다
-#   highlights_sha256 · vendor_sha256 · wasm_sha256   만든 파일의 SHA-256(스크립트가 쓴다. vendor_sha256 은 파일마다
+#   highlights_sha256 · tags_sha256 · vendor_sha256 · wasm_sha256   만든 파일의 SHA-256(스크립트가 쓴다. vendor_sha256 은 파일마다
 #               `<경로>\0<SHA-256>\n` 을 이어 붙인 것의 SHA-256)
 
 [[grammar]]
@@ -34,8 +38,10 @@ commit = "77a3747266f4d621d0757825e6b11edcbf991ca5"
 crate = "tree-sitter-rust"
 version = "0.24.2"
 highlights = ["queries/highlights.scm"]
+tags = ["queries/tags.scm", "pitwall:queries/rust/tags.scm"]
 license = "MIT"
 highlights_sha256 = "8b86152dab0dbe161aa68a3751495573001a5f0ea5c1021fd4447272f58ae803"
+tags_sha256 = "750d424c13656c985fc6a2908bbaf2f57bd05116fcf421d204619618a8415a10"
 
 [[grammar]]
 id = "typescript"
@@ -48,8 +54,11 @@ version = "0.23.2"
 path = "typescript"
 # tree-sitter.json 은 ["queries/highlights.scm", JS 의 highlights.scm] 이다 — JS 의 `(identifier) @variable` 이 TS 의 규칙을 덮는다.
 highlights = ["javascript:queries/highlights.scm", "queries/highlights.scm"]
+# tree-sitter.json 의 tags 는 [TS, JS] 다 — 정의가 겹치면 앞 패턴이 이기므로(crates/pw-index) 원본 순서를 지키고 보충을 뒤에 둔다.
+tags = ["queries/tags.scm", "javascript:queries/tags.scm", "pitwall:queries/typescript/tags.scm"]
 license = "MIT"
 highlights_sha256 = "fa222f7c12814e89b9574e433fc33e50a16036e7f0536ae5d241cd3ecd759378"
+tags_sha256 = "764405ec3ddd93820359dcd9aef4aad96cde38c234626568ef92eef2e1a37834"
 
 [[grammar]]
 id = "tsx"
@@ -66,8 +75,11 @@ highlights = [
   "javascript:queries/highlights-jsx.scm",
   "queries/highlights.scm",
 ]
+# tags 는 typescript 와 같다(tree-sitter.json — JSX 는 정의를 더하지 않는다). 보충도 typescript 의 것을 함께 쓴다.
+tags = ["queries/tags.scm", "javascript:queries/tags.scm", "pitwall:queries/typescript/tags.scm"]
 license = "MIT"
 highlights_sha256 = "33fdda9523df188aa900d296a44acfa23088c31d98fca1778d59a7b379085fd0"
+tags_sha256 = "764405ec3ddd93820359dcd9aef4aad96cde38c234626568ef92eef2e1a37834"
 
 [[grammar]]
 id = "javascript"
@@ -82,8 +94,10 @@ highlights = [
   "queries/highlights-jsx.scm",
   "queries/highlights-params.scm",
 ]
+tags = ["queries/tags.scm"]
 license = "MIT"
 highlights_sha256 = "e05a467dd0e8bf6a3f12235324396cfc3ee9c668eea4f9e8de9eed81a06e70be"
+tags_sha256 = "f12721993aa7a408387f10d49f0246711dc1430d44818cd873ff12ac064100f1"
 
 [[grammar]]
 id = "json"
@@ -146,8 +160,10 @@ commit = "293fdc02038ee2bf0e2e206711b69c90ac0d413f"
 crate = "tree-sitter-python"
 version = "0.25.0"
 highlights = ["queries/highlights.scm"]
+tags = ["queries/tags.scm"]
 license = "MIT"
 highlights_sha256 = "6fce08468fca23924e48165a822c72c9ce734837435f57b77043a319f7298975"
+tags_sha256 = "cc01ee8302dc280417b6cf87b0bb14709a7a174d2c1322f17ac95104931f3473"
 
 [[grammar]]
 id = "go"
@@ -158,8 +174,10 @@ commit = "1547678a9da59885853f5f5cc8a99cc203fa2e2c"
 crate = "tree-sitter-go"
 version = "0.25.0"
 highlights = ["queries/highlights.scm"]
+tags = ["queries/tags.scm"]
 license = "MIT"
 highlights_sha256 = "fa691e49c36cdd43a71e311a17879b34dfe97daae93eb32b9c6a82ac4ecea4d4"
+tags_sha256 = "f1b45f329fa003c85d7ee7ad74d7215022fa41381936fa6a457fd5f2ffac3850"
 
 [[grammar]]
 id = "java"
@@ -170,8 +188,10 @@ commit = "94703d5a6bed02b98e438d7cad1136c01a60ba2c"
 crate = "tree-sitter-java"
 version = "0.23.5"
 highlights = ["queries/highlights.scm"]
+tags = ["queries/tags.scm", "pitwall:queries/java/tags.scm"]
 license = "MIT"
 highlights_sha256 = "9134f35f4bdefc4e9f654b752592f29718fcb6395880a766a1673f2d44ba7439"
+tags_sha256 = "47e0349609416b07915505c7b10a69918acb34cca3531b8c07c3f1d42bb1f1bf"
 
 [[grammar]]
 id = "kotlin"
@@ -182,8 +202,10 @@ repo = "https://github.com/fwcd/tree-sitter-kotlin"
 commit = "c10ad83a66c76855e006496db3bdb002afc49203"
 crate = "tree-sitter-kotlin"
 highlights = ["queries/highlights.scm"]
+tags = ["queries/tags.scm"]
 license = "MIT"
 highlights_sha256 = "0e83f6b17d64196b707ea1cfe0a9eaf116be64b5dd942f4e9b7e878d352e168f"
+tags_sha256 = "c7637d26a0726688371a82f684b258d61c2a774f155a1ff43ad0ddde224d5d09"
 
 [[grammar]]
 id = "bash"
@@ -256,8 +278,10 @@ commit = "b780e47fc780ddc8da13afa35a3f4ed5c157823d"
 crate = "tree-sitter-c"
 version = "0.24.2"
 highlights = ["queries/highlights.scm"]
+tags = ["queries/tags.scm"]
 license = "MIT"
 highlights_sha256 = "8423af1dd81e1f74f56c1aa86e3428eecbf8ae6ac87cab4c6f69114865b0baff"
+tags_sha256 = "e4acaebbbff3e7aa997a7135b18331971af3b58101116881588de9f6719f23f7"
 
 [[grammar]]
 id = "cpp"
@@ -268,5 +292,7 @@ commit = "f41e1a044c8a84ea9fa8577fdd2eab92ec96de02"
 crate = "tree-sitter-cpp"
 version = "0.23.4"
 highlights = ["c:queries/highlights.scm", "queries/highlights.scm"]
+tags = ["queries/tags.scm"]
 license = "MIT"
 highlights_sha256 = "e78eb14e4c5aa62409fe49579d10728d9271aa3d8ff4a8df6ea3ea252cfb2139"
+tags_sha256 = "c429340cb3a95d983dfdff55bd9caf7927c893ad0ea248c20dc9088573e8e218"
