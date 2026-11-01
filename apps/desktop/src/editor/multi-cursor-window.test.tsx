@@ -20,9 +20,8 @@ import type {
   Project,
   ProjectTrust,
 } from "@pitwall/rpc-client";
-import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { App } from "../App";
@@ -30,6 +29,7 @@ import type { KeymapNative } from "../keymap/native";
 import { activeWorktreeStore } from "../open-with/active-worktree";
 import { projectOpenInbox } from "../project-open";
 import { createThemeStore } from "../theme/theme-store";
+import { act, endTest, it } from "../test-support/ended-test";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
 import type { fakeSyntaxServer } from "./syntax-testing";
@@ -282,7 +282,8 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await endTest();
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
