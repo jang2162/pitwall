@@ -28407,6 +28407,14 @@
               }
             ]
           },
+          "ToolChecksum": {
+            "description": "받을 것의 고정 해시 여부.",
+            "enum": [
+              "pinned",
+              "none"
+            ],
+            "type": "string"
+          },
           "ToolDeprecation": {
             "properties": {
               "message": {
@@ -28473,7 +28481,7 @@
           "ToolPackageSummary": {
             "properties": {
               "bundled": {
-                "description": "기본 번들(Pitwall 이 해시를 고정한다).",
+                "description": "기본 번들 목록(`registry.toml` 의 `bundled`)에 있다. 고정 해시가 있는지는 [`ToolPackageDetail::checksum`] 이 말한다\n(「최신」 모드의 새 판이면 번들이어도 없다).",
                 "type": "boolean"
               },
               "categories": {
@@ -28756,6 +28764,17 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "checksum": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolChecksum"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "이 기기에서 받을 것 전부에 고정 해시가 있으면 `pinned`, 아니면 `none`(결정 M4-D17 의 「체크섬 없음」 — 번들 밖, 「최신」\n모드의 새 판, 판은 같은데 주소가 바뀐 정의). 지원하지 않는 패키지면 `null`."
+          },
           "deprecation": {
             "anyOf": [
               {
@@ -28770,7 +28789,7 @@
             "type": "string"
           },
           "pinned": {
-            "description": "받을 파일의 고정 해시(기본 번들이고 판이 고정 판과 같을 때). 없으면 빈 목록.",
+            "description": "받을 것과 (이름, 주소)로 짝지은 고정 해시. `checksum` 이 `pinned` 일 때만 차 있다.",
             "items": {
               "$ref": "#/$defs/PinnedFile"
             },
@@ -28806,6 +28825,7 @@
           "deprecation",
           "resolved",
           "pinned",
+          "checksum",
           "registryVersion"
         ],
         "type": "object"
@@ -28864,7 +28884,7 @@
           "ToolPackageSummary": {
             "properties": {
               "bundled": {
-                "description": "기본 번들(Pitwall 이 해시를 고정한다).",
+                "description": "기본 번들 목록(`registry.toml` 의 `bundled`)에 있다. 고정 해시가 있는지는 [`ToolPackageDetail::checksum`] 이 말한다\n(「최신」 모드의 새 판이면 번들이어도 없다).",
                 "type": "boolean"
               },
               "categories": {

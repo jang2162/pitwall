@@ -507,3 +507,60 @@ async fn search_and_get_answer_from_the_current_index() {
     assert!(!d.summary.bundled);
     assert!(d.pinned.is_empty());
 }
+
+/// 리뷰 F4: `get` 의 고정 해시는 받을 파일과 (이름, 주소)로 짝지어지고, 짝이 없으면 「체크섬 없음」 이다.
+#[tokio::test]
+async fn get_pairs_pinned_hashes_with_what_will_be_downloaded() {
+    use crate::methods::ToolChecksum;
+    let Some(target) = ToolTarget::current() else {
+        return;
+    };
+    let real = ToolsRegistry::new();
+    for name in Pinned::builtin().bundled {
+        let d = get_in(&real, &name).unwrap();
+        if name == "kotlin-lsp" && target == ToolTarget::LinuxArm64Gnu {
+            assert_eq!(d.checksum, None);
+            continue;
+        }
+        assert_eq!(d.checksum, Some(ToolChecksum::Pinned), "{name}");
+        if let crate::package::ToolSource::Files { files } = &d.resolved.unwrap().source {
+            let mut want: Vec<(&str, &str)> = files
+                .iter()
+                .map(|f| (f.name.as_str(), f.url.as_str()))
+                .collect();
+            let mut got: Vec<(&str, &str)> = d
+                .pinned
+                .iter()
+                .map(|p| (p.name.as_str(), p.url.as_str()))
+                .collect();
+            want.sort();
+            got.sort();
+            assert_eq!(got, want, "{name}");
+        } else {
+            assert!(!d.pinned.is_empty(), "{name}");
+        }
+    }
+    // 같은 판인데 registry 가 주소를 바꾼 정의(최신 모드 · 오염)에는 고정 해시를 내보이지 않는다.
+    let snapshot = Index::snapshot();
+    let mut ra = Value::Object(snapshot.get("rust-analyzer").unwrap().raw().clone());
+    ra["source"]["id"] = json!("pkg:github/evil-org/rust-analyzer@2026-10-26");
+    let mut ts = Value::Object(
+        snapshot
+            .get("typescript-language-server")
+            .unwrap()
+            .raw()
+            .clone(),
+    );
+    ts["source"]["extra_packages"] = json!(["typescript@9.9.9"]);
+    let json = serde_json::to_vec(&json!([ra, ts])).unwrap();
+    let index =
+        Index::from_registry_json(&json, "2026-11-01-batty-dew", RegistryOrigin::Cache, None)
+            .unwrap();
+    let r = ToolsRegistry::with_parts(Pinned::builtin(), Overrides::default(), index);
+    for name in ["rust-analyzer", "typescript-language-server"] {
+        let d = get_in(&r, name).unwrap();
+        assert!(d.summary.bundled);
+        assert_eq!(d.checksum, Some(ToolChecksum::None), "{name}");
+        assert!(d.pinned.is_empty(), "{name}");
+    }
+}

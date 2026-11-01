@@ -88,7 +88,8 @@ pub struct ToolPackageSummary {
     pub licenses: Vec<String>,
     pub languages: Vec<String>,
     pub categories: Vec<String>,
-    /// 기본 번들(Pitwall 이 해시를 고정한다).
+    /// 기본 번들 목록(`registry.toml` 의 `bundled`)에 있다. 고정 해시가 있는지는 [`ToolPackageDetail::checksum`] 이 말한다
+    /// (「최신」 모드의 새 판이면 번들이어도 없다).
     pub bundled: bool,
     pub deprecated: bool,
     /// 이 기기에서 설치할 수 없는 까닭. 설치할 수 있으면 `null`.
@@ -140,10 +141,23 @@ pub struct ToolPackageDetail {
     pub deprecation: Option<ToolDeprecation>,
     /// 이 기기에서 받을 것 · 실행할 것. 지원하지 않으면 `null`(까닭은 `summary.unsupported`).
     pub resolved: Option<ResolvedTool>,
-    /// 받을 파일의 고정 해시(기본 번들이고 판이 고정 판과 같을 때). 없으면 빈 목록.
+    /// 받을 것과 (이름, 주소)로 짝지은 고정 해시. `checksum` 이 `pinned` 일 때만 차 있다.
     pub pinned: Vec<PinnedFile>,
+    /// 이 기기에서 받을 것 전부에 고정 해시가 있으면 `pinned`, 아니면 `none`(결정 M4-D17 의 「체크섬 없음」 — 번들 밖, 「최신」
+    /// 모드의 새 판, 판은 같은데 주소가 바뀐 정의). 지원하지 않는 패키지면 `null`.
+    pub checksum: Option<ToolChecksum>,
     /// 이 정의를 읽은 registry 판.
     pub registry_version: String,
+}
+
+/// 받을 것의 고정 해시 여부.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolChecksum {
+    Pinned,
+    None,
 }
 
 rpc_method! {
@@ -302,20 +316,23 @@ pub fn get_in(r: &ToolsRegistry, name: &str) -> Result<ToolPackageDetail, RpcErr
     })?;
     let target = ToolTarget::current();
     let resolved = p.resolve(target, r.overrides().get(&p.name)).ok();
-    let pinned = match (&resolved, target) {
-        (Some(res), Some(t)) => r
-            .pinned()
-            .artifacts_for(&p.name, &res.version, t)
-            .into_iter()
-            .map(|a| PinnedFile {
-                name: a.name.clone(),
-                url: a.url.clone(),
-                sha256: a.sha256.clone(),
-                size: a.size,
-                target: a.target.clone(),
-            })
-            .collect(),
-        _ => Vec::new(),
+    let (pinned, checksum) = match &resolved {
+        None => (Vec::new(), None),
+        Some(res) => match r.pinned().pinned_for(res) {
+            Some(rows) => (
+                rows.into_iter()
+                    .map(|a| PinnedFile {
+                        name: a.name.clone(),
+                        url: a.url.clone(),
+                        sha256: a.sha256.clone(),
+                        size: a.size,
+                        target: a.target.clone(),
+                    })
+                    .collect(),
+                Some(ToolChecksum::Pinned),
+            ),
+            None => (Vec::new(), Some(ToolChecksum::None)),
+        },
     };
     Ok(ToolPackageDetail {
         summary: summary(r, p, target),
@@ -324,6 +341,7 @@ pub fn get_in(r: &ToolsRegistry, name: &str) -> Result<ToolPackageDetail, RpcErr
         deprecation: p.deprecation.clone(),
         resolved,
         pinned,
+        checksum,
         registry_version: index.version.clone(),
     })
 }

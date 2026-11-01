@@ -5779,6 +5779,9 @@ export type ToolBin =
 /**  venv 의 python 으로 돌리는 스크립트(설치 폴더 안 경로). */
 { kind: "python"; value: string };
 
+/**  받을 것의 고정 해시 여부. */
+export type ToolChecksum = "pinned" | "none";
+
 export type ToolDeprecation = {
 	since: string,
 	message: string,
@@ -5802,8 +5805,13 @@ export type ToolPackageDetail = {
 	deprecation: ToolDeprecation | null,
 	/**  이 기기에서 받을 것 · 실행할 것. 지원하지 않으면 `null`(까닭은 `summary.unsupported`). */
 	resolved: ResolvedTool | null,
-	/**  받을 파일의 고정 해시(기본 번들이고 판이 고정 판과 같을 때). 없으면 빈 목록. */
+	/**  받을 것과 (이름, 주소)로 짝지은 고정 해시. `checksum` 이 `pinned` 일 때만 차 있다. */
 	pinned: PinnedFile[],
+	/**
+	 *  이 기기에서 받을 것 전부에 고정 해시가 있으면 `pinned`, 아니면 `none`(결정 M4-D17 의 「체크섬 없음」 — 번들 밖, 「최신」
+	 *  모드의 새 판, 판은 같은데 주소가 바뀐 정의). 지원하지 않는 패키지면 `null`.
+	 */
+	checksum: ToolChecksum | null,
 	/**  이 정의를 읽은 registry 판. */
 	registryVersion: string,
 };
@@ -5822,7 +5830,10 @@ export type ToolPackageSummary = {
 	licenses: string[],
 	languages: string[],
 	categories: string[],
-	/**  기본 번들(Pitwall 이 해시를 고정한다). */
+	/**
+	 *  기본 번들 목록(`registry.toml` 의 `bundled`)에 있다. 고정 해시가 있는지는 [`ToolPackageDetail::checksum`] 이 말한다
+	 *  (「최신」 모드의 새 판이면 번들이어도 없다).
+	 */
 	bundled: boolean,
 	deprecated: boolean,
 	/**  이 기기에서 설치할 수 없는 까닭. 설치할 수 있으면 `null`. */

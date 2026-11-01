@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::overrides::Overrides;
-use crate::package::{Package, ToolSource, ToolUnsupported};
+use crate::package::{Package, ResolvedTool, ToolSource, ToolUnsupported};
 use crate::target::ToolTarget;
 
 /// 바이너리에 묶인 `registry.toml`.
@@ -98,6 +98,60 @@ impl Pinned {
                     && (a.target == "any" || a.target == target.as_str())
             })
             .collect()
+    }
+}
+
+impl Pinned {
+    /// 풀린 패키지가 받을 것 전부에 고정 해시가 있으면 그 행들(받을 파일과 (이름, 주소)로 짝지은 것), 하나라도 없으면 `None`
+    /// (리뷰 F4 — 판만 같고 주소가 바뀐 정의에 고정 해시를 내보이지 않는다). 설치기(M4-04)도 이것으로 찾는다.
+    /// - 파일(`github` · `generic`): 파일마다 (패키지, 판, 대상, 저장 이름, 주소)가 같은 행.
+    /// - npm: 본 패키지와 `extra_packages` 마다 (배포 이름, 판)이 같은 `any` 행.
+    /// - PyPI: 본 배포와 표에 적힌 의존 배포마다 그 대상(또는 `any`)의 휠 행 — 그 행 전부.
+    pub fn pinned_for(&self, resolved: &ResolvedTool) -> Option<Vec<&Artifact>> {
+        let rows = || {
+            self.artifacts
+                .iter()
+                .filter(|a| a.package == resolved.name && a.version == resolved.version)
+        };
+        match &resolved.source {
+            ToolSource::Files { files } => files
+                .iter()
+                .map(|f| {
+                    rows().find(|a| {
+                        a.target == resolved.target.as_str() && a.name == f.name && a.url == f.url
+                    })
+                })
+                .collect(),
+            ToolSource::Npm { package, extra } => std::iter::once(package)
+                .chain(extra)
+                .map(|spec| {
+                    rows().find(|a| {
+                        a.target == "any"
+                            && a.dist.as_deref() == Some(spec.name.as_str())
+                            && spec
+                                .version
+                                .as_ref()
+                                .is_none_or(|v| a.dist_version.as_ref() == Some(v))
+                    })
+                })
+                .collect(),
+            ToolSource::Pypi { package, .. } => {
+                let for_target: Vec<&Artifact> = rows()
+                    .filter(|a| a.target == "any" || a.target == resolved.target.as_str())
+                    .collect();
+                let main = normalize_pypi(&package.name);
+                let mut dists: BTreeSet<String> = rows()
+                    .filter_map(|a| a.dist.as_deref().map(normalize_pypi))
+                    .collect();
+                dists.insert(main);
+                let covered = dists.iter().all(|d| {
+                    for_target
+                        .iter()
+                        .any(|a| a.dist.as_deref().map(normalize_pypi).as_deref() == Some(d))
+                });
+                covered.then_some(for_target)
+            }
+        }
     }
 }
 
