@@ -37,4 +37,13 @@ mod tests {
         assert_eq!(file_uri(Path::new("relative")), None);
         assert_eq!(uri_path("jdt://contents/x"), None);
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_keep_the_drive_letter() {
+        let path = Path::new(r"C:\tmp\a b.rs");
+        let uri = file_uri(path).unwrap();
+        assert_eq!(uri, "file:///C:/tmp/a%20b.rs");
+        assert_eq!(uri_path(&uri).unwrap(), path);
+    }
 }

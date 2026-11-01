@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use pw_lsp::fake::{Action, Reply, Scenario};
 use pw_lsp::message::code;
+#[cfg(unix)]
 use pw_lsp::server::{EXIT_GRACE, SHUTDOWN_TIMEOUT, STOP_BUDGET};
 use pw_lsp::{ExitReason, InitializeOptions, RequestError, RequestOptions, ServerEvent};
 use serde_json::{Value, json};

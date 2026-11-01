@@ -110,7 +110,7 @@ test("a run below the floor, with no tests, failed or miscounted fails", () => {
   assert.equal(above.ok, false);
   assert.match(above.message, /below the floor/);
   // 필터가 0개를 고르면 하한이 0 이어도 실패한다.
-  const none = judge({ ...base, selected: [], run: 0, floor: 0 });
+  const none = judge({ ...base, selected: [], run: 0, floor: 0, exitCode: 4 });
   assert.equal(none.ok, false);
   assert.match(none.message, /selected no tests/);
   assert.match(judge({ ...base, floor: 1, exitCode: 100 }).message, /nextest failed/);

@@ -121,9 +121,10 @@ export function filterExpr(filter) {
 /** 한 서버의 판정. */
 export function judge({ server, selected, run, floor, exitCode: code }) {
   const line = `${server}: ${run ?? "?"} run (selected ${selected.length}), floor ${floor}`;
-  if (code !== 0) return { ok: false, message: `${line} — nextest failed (exit ${code})` };
+  // 0개를 먼저 본다 — nextest 는 `--no-tests=fail` 로 그때도 실패하므로 종료 코드보다 까닭이 분명하다.
   if (selected.length === 0)
     return { ok: false, message: `${line} — the filter selected no tests` };
+  if (code !== 0) return { ok: false, message: `${line} — nextest failed (exit ${code})` };
   if (run === null)
     return {
       ok: false,
