@@ -9,11 +9,14 @@
 //! - [`source`] · [`fetch`]: 산출물 받기(HTTPS 만 · 상한) · 해시 확인 · `$CACHE/registry/<판>/` 캐시 · 「최신」 모드.
 //! - [`registry`] · [`methods`]: Host 의 상태와 `tools.registry.*` RPC.
 //!
-//! 설치기(`$DATA/tools`, 설치 기록 · `ToolGrant`)는 M4-04 가 이 크레이트에 더한다 — 데이터 모델은 읽기만 한다.
+//! 설치 쪽(15-m4-plan.md M4-04 · 결정 M4-D17 · D18):
+//! - [`install`]: 설치기(`github` · `generic` · `npm` · `pypi`), `$DATA/tools` 배치 · 설치 기록, 라이선스 · 출처 확인 기록,
+//!   `ToolGrant`, 설치본 찾기(`pw_lsp_servers::ToolLocator`), `tools.*` 설치 RPC.
 
 pub mod expr;
 pub mod fetch;
 pub mod index;
+pub mod install;
 pub mod methods;
 pub mod overrides;
 pub mod package;
@@ -27,6 +30,7 @@ pub mod target;
 mod test_http;
 
 pub use index::{Index, RegistryOrigin};
+pub use install::{InstalledTools, ToolGrant, ToolsInstaller};
 pub use overrides::{Override, Overrides};
 pub use package::{Package, ResolvedTool, ToolUnsupported};
 pub use pinned::Pinned;

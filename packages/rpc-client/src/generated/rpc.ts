@@ -761,6 +761,19 @@ export type UnaryMethods = {
 	 */
 	"theme.list": { params: null; result: ThemeList };
 	/**
+	 * registry 의 판을 설치한다(작업이 끝날 때까지 기다린다 — 진행 · 취소는 `task.*`). 확인 기록이 없거나 라이선스 · 출처가 바뀌었으면
+	 * 4001, npm · python 이 없으면 4002, 설치 실패 4003, 지원하지 않음 4004, 취소 4007. 같은 패키지의 설치가 돌면 그 결과를 받는다.
+	 */
+	"tools.install": { params: ToolsInstallParams; result: ToolInstallResult };
+	/**
+	 * 설치본 목록(판 · 이전 판 · 크기 · 라이선스 · 체크섬 유무 · 쓸 수 없는 까닭)과 도는 설치.
+	 */
+	"tools.list": { params: null; result: ToolsList };
+	/**
+	 * 패키지의 설치 로그.
+	 */
+	"tools.log": { params: ToolsNameParams; result: ToolLog };
+	/**
 	 * 패키지 하나의 정의와 이 기기에서 받을 것. 없으면 not found.
 	 */
 	"tools.registry.get": { params: ToolsRegistryGetParams; result: ToolPackageDetail };
@@ -773,6 +786,22 @@ export type UnaryMethods = {
 	 * 뒤에서 시작한다(`fetching`).
 	 */
 	"tools.registry.status": { params: null; result: ToolsRegistryStatus };
+	/**
+	 * 남겨 둔 이전 판으로 링크를 돌린다(지금 판이 이전 판이 된다). 이전 판이 없으면 4006.
+	 */
+	"tools.rollback": { params: ToolsNameParams; result: ToolInstalledInfo };
+	/**
+	 * 설치본을 지운다(쓰는 서버가 있으면 멈춘 뒤). 확인 기록은 남긴다.
+	 */
+	"tools.uninstall": { params: ToolsNameParams; result: null };
+	/**
+	 * 설치본을 registry 의 판으로 올린다(새 판은 다른 폴더에 다 만든 뒤 링크만 바꾸고 이전 판 하나를 남긴다). 설치돼 있지 않으면 4006.
+	 */
+	"tools.update": { params: ToolsUpdateParams; result: ToolInstallResult };
+	/**
+	 * 설치본 가운데 registry 의 판이 다른 것(업데이트 알림은 M4-17).
+	 */
+	"tools.updates": { params: null; result: ToolsUpdates };
 };
 
 /** 선언된 stream 메서드: 이름 → 입력 · item 타입. */
@@ -1022,9 +1051,16 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"terminal.resize": {"name":"terminal.resize","kind":"unary","tier":"write","roles":["owner"],"params":"TerminalResizeParams","output":"()","doc":" PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 다른 세션이 연 터미널 · 0 인 크기는\n invalid params 오류.\n","mcp":false,"fileScope":false},
 	"theme.get": {"name":"theme.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ThemeGetParams","output":"ThemeFile","doc":" 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.\n","mcp":false,"fileScope":true},
 	"theme.list": {"name":"theme.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ThemeList","doc":" 등록된 테마 목록.\n","mcp":false,"fileScope":true},
+	"tools.install": {"name":"tools.install","kind":"unary","tier":"exec","roles":["owner"],"params":"ToolsInstallParams","output":"ToolInstallResult","doc":" registry 의 판을 설치한다(작업이 끝날 때까지 기다린다 — 진행 · 취소는 `task.*`). 확인 기록이 없거나 라이선스 · 출처가 바뀌었으면\n 4001, npm · python 이 없으면 4002, 설치 실패 4003, 지원하지 않음 4004, 취소 4007. 같은 패키지의 설치가 돌면 그 결과를 받는다.\n","mcp":false,"fileScope":false},
+	"tools.list": {"name":"tools.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ToolsList","doc":" 설치본 목록(판 · 이전 판 · 크기 · 라이선스 · 체크섬 유무 · 쓸 수 없는 까닭)과 도는 설치.\n","mcp":false,"fileScope":false},
+	"tools.log": {"name":"tools.log","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsNameParams","output":"ToolLog","doc":" 패키지의 설치 로그.\n","mcp":false,"fileScope":false},
 	"tools.registry.get": {"name":"tools.registry.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsRegistryGetParams","output":"ToolPackageDetail","doc":" 패키지 하나의 정의와 이 기기에서 받을 것. 없으면 not found.\n","mcp":false,"fileScope":false},
 	"tools.registry.search": {"name":"tools.registry.search","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsRegistrySearchParams","output":"ToolsRegistrySearch","doc":" 패키지 찾기(이름 · 설명, 분류 · 언어 거르기).\n","mcp":false,"fileScope":false},
 	"tools.registry.status": {"name":"tools.registry.status","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ToolsRegistryStatus","doc":" registry 의 판 · 받은 때 · 이 기기에서 지원하는 패키지 수와 지원하지 않는 까닭별 수. 처음 부르면 캐시를 읽고 가져오기를\n 뒤에서 시작한다(`fetching`).\n","mcp":false,"fileScope":false},
+	"tools.rollback": {"name":"tools.rollback","kind":"unary","tier":"exec","roles":["owner"],"params":"ToolsNameParams","output":"ToolInstalledInfo","doc":" 남겨 둔 이전 판으로 링크를 돌린다(지금 판이 이전 판이 된다). 이전 판이 없으면 4006.\n","mcp":false,"fileScope":false},
+	"tools.uninstall": {"name":"tools.uninstall","kind":"unary","tier":"exec","roles":["owner"],"params":"ToolsNameParams","output":"()","doc":" 설치본을 지운다(쓰는 서버가 있으면 멈춘 뒤). 확인 기록은 남긴다.\n","mcp":false,"fileScope":false},
+	"tools.update": {"name":"tools.update","kind":"unary","tier":"exec","roles":["owner"],"params":"ToolsUpdateParams","output":"ToolInstallResult","doc":" 설치본을 registry 의 판으로 올린다(새 판은 다른 폴더에 다 만든 뒤 링크만 바꾸고 이전 판 하나를 남긴다). 설치돼 있지 않으면 4006.\n","mcp":false,"fileScope":false},
+	"tools.updates": {"name":"tools.updates","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ToolsUpdates","doc":" 설치본 가운데 registry 의 판이 다른 것(업데이트 알림은 M4-17).\n","mcp":false,"fileScope":false},
 };
 
 /** 내장 프로토콜 메서드 이름. */
@@ -4342,6 +4378,15 @@ export type InsertTextError = {
 	reason: LiteralError,
 };
 
+/**  설치 결과. */
+export type InstallOutcome = 
+/**  새로 받아 설치했다. */
+"installed" | 
+/**  그 판이 이미 설치돼 있었다(다른 앱 프로세스가 먼저 끝낸 경우 포함) — 받지 않았다. */
+"alreadyInstalled" | 
+/**  남겨 둔 이전 판이 그 판이라 링크만 돌렸다 — 받지 않았다. */
+"switched";
+
 /**  `jsonrpc` 필드. 값은 `"2.0"` 하나다. */
 export type JsonRpcVersion = "2.0";
 
@@ -5933,8 +5978,21 @@ export type ToolBin =
 /**  venv 의 python 으로 돌리는 스크립트(설치 폴더 안 경로). */
 { kind: "python"; value: string };
 
+/**  설치 기록을 읽지 못한 패키지. */
+export type ToolBroken = {
+	name: string,
+	problem: string,
+};
+
 /**  받을 것의 고정 해시 여부. */
 export type ToolChecksum = "pinned" | "none";
+
+/**  사람이 확인한 값 — [`ToolConfirmRequired`] 의 셋을 그대로 돌려준다. */
+export type ToolConfirmed = {
+	version: string,
+	licenses: string[],
+	sourceDomains: string[],
+};
 
 export type ToolDeprecation = {
 	since: string,
@@ -5949,6 +6007,51 @@ export type ToolDownload = {
 	/**  풀 곳(설치 폴더 기준, `/` 로 끝나면 폴더). 없으면 설치 폴더. */
 	dest: string | null,
 	format: ArchiveFormat,
+};
+
+export type ToolInstallResult = {
+	name: string,
+	/**  지금 판. */
+	version: string,
+	/**  되돌리기로 갈 판. */
+	previous: string | null,
+	outcome: InstallOutcome,
+	checksum: ToolChecksum,
+	/**  설치 작업(`task.*`). 받지 않았으면 `null`. */
+	taskId: number | null,
+	/**  다른 창이 먼저 시작한 같은 패키지의 설치에 합류했다. */
+	joined: boolean,
+};
+
+/**  설치본 하나. */
+export type ToolInstalledInfo = {
+	name: string,
+	version: string,
+	previous: string | null,
+	kind: PurlKind,
+	licenses: string[],
+	checksum: ToolChecksum,
+	/**  설치 폴더의 바이트. */
+	size: number,
+	installedAtMs: number,
+	sourceUrls: string[],
+	/**  실행 파일 이름들. */
+	bins: string[],
+	/**  쓸 수 없는 까닭(다시 설치 필요 — venv 를 만든 python 이 사라짐 등). 쓸 수 있으면 `null`. */
+	problem: string | null,
+};
+
+/**  도는 설치. */
+export type ToolInstalling = {
+	name: string,
+	version: string,
+	taskId: number,
+};
+
+export type ToolLog = {
+	/**  설치 로그(끝에서부터 상한까지). 로그가 없으면 빈 글. */
+	text: string,
+	truncated: boolean,
 };
 
 export type ToolPackageDetail = {
@@ -6024,6 +6127,34 @@ export type ToolUnsupported =
 /**  받을 주소가 `https://` 가 아니다. */
 { reason: "insecureUrl"; url: string };
 
+/**  업데이트가 있는 설치본. */
+export type ToolUpdateInfo = {
+	name: string,
+	installed: string,
+	/**  registry(지금 쓰는 판)가 가리키는 판. */
+	available: string,
+	/**  라이선스나 출처 도메인이 바뀌어 업데이트 전에 다시 묻는다. */
+	confirmRequired: boolean,
+};
+
+export type ToolsInstallParams = {
+	name: string,
+	/**  주면 registry 의 판과 같아야 한다(다른 판은 설치하지 않는다). */
+	version?: string | null,
+	/**  [`super::code::CONFIRM_REQUIRED`] 를 받은 뒤 사람이 확인한 값. */
+	confirmed?: ToolConfirmed | null,
+};
+
+export type ToolsList = {
+	items: ToolInstalledInfo[],
+	unreadable: ToolBroken[],
+	installing: ToolInstalling[],
+};
+
+export type ToolsNameParams = {
+	name: string,
+};
+
 export type ToolsRegistryGetParams = {
 	name: string,
 };
@@ -6069,6 +6200,17 @@ export type ToolsRegistryStatus = {
 	fetching: boolean,
 	/**  마지막 가져오기의 실패(성공하면 지운다). */
 	lastError: string | null,
+};
+
+export type ToolsUpdateParams = {
+	name: string,
+	confirmed?: ToolConfirmed | null,
+};
+
+export type ToolsUpdates = {
+	items: ToolUpdateInfo[],
+	/**  견준 registry 판. */
+	registryVersion: string,
 };
 
 /**  연결이 보는 트랜잭션 상태. 세션 상태(`disconnected` · `configChanged` 등 — M3-05)는 이것 위에 얹는다. */

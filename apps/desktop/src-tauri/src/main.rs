@@ -74,6 +74,10 @@ fn local_host(
     // 도구 registry(`tools.registry.*`, M4-03): 내장 스냅숏으로 시작하고, 처음 불릴 때 캐시를 읽고 가져오기를 뒤에서 한다.
     let tools_registry = Arc::new(pw_tools::ToolsRegistry::new());
     let tools_registry_methods = Arc::clone(&tools_registry);
+    // 도구 설치기(`tools.install` · `update` · `rollback` · `uninstall` · `list` · `updates` · `log`, M4-04). `$DATA/tools` 에 설치하고
+    // 설치본 찾기(`ToolLocator`)를 언어 서버 해석에 붙인다. 설치는 설정 창 · 그 프로젝트 창만 한다.
+    let tools_installer = Arc::new(pw_tools::ToolsInstaller::new(Arc::clone(&tools_registry)));
+    let tools_installer_methods = Arc::clone(&tools_installer);
     let fs_methods = Arc::clone(&fs);
     let fs_watch = pw_fs::watch::Watch::new(Arc::clone(&fs));
     let fs_watch_methods = fs_watch.clone();
@@ -172,6 +176,9 @@ fn local_host(
         .methods(|router| pw_db::registry::register(router, db::drivers()))
         .methods(move |router| pw_db::ssh_hosts::register(router, db_ssh_host_methods))
         .methods(move |router| pw_tools::methods::register(router, tools_registry_methods))
+        .methods(move |router| {
+            pw_tools::install::methods::register(router, tools_installer_methods)
+        })
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
@@ -213,6 +220,21 @@ fn local_host(
                 global: config.global.clone(),
                 projects: projects.clone(),
             });
+            tools_installer.attach(pw_tools::install::InstallerHost {
+                tools_dir: config.paths.data.join("tools"),
+                state_dir: config.paths.state.clone(),
+                tasks: host.tasks().clone(),
+                toolchains: Arc::new(pw_tools::install::RuntimeToolchains {
+                    runtime: Arc::clone(&runtime),
+                    projects: projects.clone(),
+                }),
+                settings_window: Arc::new(|label: &str| {
+                    windows::WindowKind::of_label(label) == Some(windows::WindowKind::Settings)
+                }),
+            });
+            if let Some(locator) = tools_installer.locator() {
+                lsp_servers.set_tools(Arc::new(locator));
+            }
             runtime.attach(RuntimeHost {
                 projects: projects.clone(),
                 bus: host.bus().clone(),

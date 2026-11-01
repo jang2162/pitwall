@@ -20,6 +20,8 @@ pub enum Reply {
     Redirect(String),
     /// 답하지 않고 기다린다.
     Hang,
+    /// 200 과 본문을 4 KiB 씩, 조각 사이에 기다리며 보낸다(`Content-Length` 있음 — 받는 중에 취소 · 합류를 시험한다).
+    Trickle(Vec<u8>, Duration),
 }
 
 pub struct FakeServer {
@@ -87,6 +89,23 @@ impl FakeServer {
                         .into_bytes(),
                         Reply::Hang => {
                             tokio::time::sleep(Duration::from_secs(3600)).await;
+                            return;
+                        }
+                        Reply::Trickle(body, pause) => {
+                            let head = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            if sock.write_all(head.as_bytes()).await.is_err() {
+                                return;
+                            }
+                            for chunk in body.chunks(4096) {
+                                tokio::time::sleep(pause).await;
+                                if sock.write_all(chunk).await.is_err() {
+                                    return;
+                                }
+                            }
+                            let _ = sock.shutdown().await;
                             return;
                         }
                     };

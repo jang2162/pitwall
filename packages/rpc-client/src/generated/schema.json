@@ -28753,6 +28753,366 @@
       ],
       "tier": "read"
     },
+    "tools.install": {
+      "description": "registry 의 판을 설치한다(작업이 끝날 때까지 기다린다 — 진행 · 취소는 `task.*`). 확인 기록이 없거나 라이선스 · 출처가 바뀌었으면\n4001, npm · python 이 없으면 4002, 설치 실패 4003, 지원하지 않음 4004, 취소 4007. 같은 패키지의 설치가 돌면 그 결과를 받는다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ToolConfirmed": {
+            "description": "사람이 확인한 값 — [`ToolConfirmRequired`] 의 셋을 그대로 돌려준다.",
+            "properties": {
+              "licenses": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sourceDomains": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version",
+              "licenses",
+              "sourceDomains"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "confirmed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolConfirmed"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "[`super::code::CONFIRM_REQUIRED`] 를 받은 뒤 사람이 확인한 값."
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "default": null,
+            "description": "주면 registry 의 판과 같아야 한다(다른 판은 설치하지 않는다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "InstallOutcome": {
+            "description": "설치 결과.",
+            "oneOf": [
+              {
+                "const": "installed",
+                "description": "새로 받아 설치했다.",
+                "type": "string"
+              },
+              {
+                "const": "alreadyInstalled",
+                "description": "그 판이 이미 설치돼 있었다(다른 앱 프로세스가 먼저 끝낸 경우 포함) — 받지 않았다.",
+                "type": "string"
+              },
+              {
+                "const": "switched",
+                "description": "남겨 둔 이전 판이 그 판이라 링크만 돌렸다 — 받지 않았다.",
+                "type": "string"
+              }
+            ]
+          },
+          "ToolChecksum": {
+            "description": "받을 것의 고정 해시 여부.",
+            "enum": [
+              "pinned",
+              "none"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "checksum": {
+            "$ref": "#/$defs/ToolChecksum"
+          },
+          "joined": {
+            "description": "다른 창이 먼저 시작한 같은 패키지의 설치에 합류했다.",
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/$defs/InstallOutcome"
+          },
+          "previous": {
+            "description": "되돌리기로 갈 판.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "taskId": {
+            "description": "설치 작업(`task.*`). 받지 않았으면 `null`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "지금 판.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "previous",
+          "outcome",
+          "checksum",
+          "taskId",
+          "joined"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "tools.list": {
+      "description": "설치본 목록(판 · 이전 판 · 크기 · 라이선스 · 체크섬 유무 · 쓸 수 없는 까닭)과 도는 설치.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "PurlKind": {
+            "description": "설치하는 purl 형식.",
+            "enum": [
+              "github",
+              "generic",
+              "npm",
+              "pypi"
+            ],
+            "type": "string"
+          },
+          "ToolBroken": {
+            "description": "설치 기록을 읽지 못한 패키지.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "problem": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "problem"
+            ],
+            "type": "object"
+          },
+          "ToolChecksum": {
+            "description": "받을 것의 고정 해시 여부.",
+            "enum": [
+              "pinned",
+              "none"
+            ],
+            "type": "string"
+          },
+          "ToolInstalledInfo": {
+            "description": "설치본 하나.",
+            "properties": {
+              "bins": {
+                "description": "실행 파일 이름들.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "checksum": {
+                "$ref": "#/$defs/ToolChecksum"
+              },
+              "installedAtMs": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "$ref": "#/$defs/PurlKind"
+              },
+              "licenses": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "previous": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "problem": {
+                "description": "쓸 수 없는 까닭(다시 설치 필요 — venv 를 만든 python 이 사라짐 등). 쓸 수 있으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size": {
+                "description": "설치 폴더의 바이트.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sourceUrls": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "version",
+              "previous",
+              "kind",
+              "licenses",
+              "checksum",
+              "size",
+              "installedAtMs",
+              "sourceUrls",
+              "bins",
+              "problem"
+            ],
+            "type": "object"
+          },
+          "ToolInstalling": {
+            "description": "도는 설치.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "taskId": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "version",
+              "taskId"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "installing": {
+            "items": {
+              "$ref": "#/$defs/ToolInstalling"
+            },
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/$defs/ToolInstalledInfo"
+            },
+            "type": "array"
+          },
+          "unreadable": {
+            "items": {
+              "$ref": "#/$defs/ToolBroken"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "unreadable",
+          "installing"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "tools.log": {
+      "description": "패키지의 설치 로그.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "text": {
+            "description": "설치 로그(끝에서부터 상한까지). 로그가 없으면 빈 글.",
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "tools.registry.get": {
       "description": "패키지 하나의 정의와 이 기기에서 받을 것. 없으면 not found.",
       "kind": "unary",
@@ -29814,6 +30174,344 @@
           "unreadable",
           "fetching",
           "lastError"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "tools.rollback": {
+      "description": "남겨 둔 이전 판으로 링크를 돌린다(지금 판이 이전 판이 된다). 이전 판이 없으면 4006.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PurlKind": {
+            "description": "설치하는 purl 형식.",
+            "enum": [
+              "github",
+              "generic",
+              "npm",
+              "pypi"
+            ],
+            "type": "string"
+          },
+          "ToolChecksum": {
+            "description": "받을 것의 고정 해시 여부.",
+            "enum": [
+              "pinned",
+              "none"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "설치본 하나.",
+        "properties": {
+          "bins": {
+            "description": "실행 파일 이름들.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "checksum": {
+            "$ref": "#/$defs/ToolChecksum"
+          },
+          "installedAtMs": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/$defs/PurlKind"
+          },
+          "licenses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "previous": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "problem": {
+            "description": "쓸 수 없는 까닭(다시 설치 필요 — venv 를 만든 python 이 사라짐 등). 쓸 수 있으면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "description": "설치 폴더의 바이트.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sourceUrls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "previous",
+          "kind",
+          "licenses",
+          "checksum",
+          "size",
+          "installedAtMs",
+          "sourceUrls",
+          "bins",
+          "problem"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "tools.uninstall": {
+      "description": "설치본을 지운다(쓰는 서버가 있으면 멈춘 뒤). 확인 기록은 남긴다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "tools.update": {
+      "description": "설치본을 registry 의 판으로 올린다(새 판은 다른 폴더에 다 만든 뒤 링크만 바꾸고 이전 판 하나를 남긴다). 설치돼 있지 않으면 4006.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ToolConfirmed": {
+            "description": "사람이 확인한 값 — [`ToolConfirmRequired`] 의 셋을 그대로 돌려준다.",
+            "properties": {
+              "licenses": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sourceDomains": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version",
+              "licenses",
+              "sourceDomains"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "confirmed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolConfirmed"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "InstallOutcome": {
+            "description": "설치 결과.",
+            "oneOf": [
+              {
+                "const": "installed",
+                "description": "새로 받아 설치했다.",
+                "type": "string"
+              },
+              {
+                "const": "alreadyInstalled",
+                "description": "그 판이 이미 설치돼 있었다(다른 앱 프로세스가 먼저 끝낸 경우 포함) — 받지 않았다.",
+                "type": "string"
+              },
+              {
+                "const": "switched",
+                "description": "남겨 둔 이전 판이 그 판이라 링크만 돌렸다 — 받지 않았다.",
+                "type": "string"
+              }
+            ]
+          },
+          "ToolChecksum": {
+            "description": "받을 것의 고정 해시 여부.",
+            "enum": [
+              "pinned",
+              "none"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "checksum": {
+            "$ref": "#/$defs/ToolChecksum"
+          },
+          "joined": {
+            "description": "다른 창이 먼저 시작한 같은 패키지의 설치에 합류했다.",
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/$defs/InstallOutcome"
+          },
+          "previous": {
+            "description": "되돌리기로 갈 판.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "taskId": {
+            "description": "설치 작업(`task.*`). 받지 않았으면 `null`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "지금 판.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "previous",
+          "outcome",
+          "checksum",
+          "taskId",
+          "joined"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "tools.updates": {
+      "description": "설치본 가운데 registry 의 판이 다른 것(업데이트 알림은 M4-17).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "ToolUpdateInfo": {
+            "description": "업데이트가 있는 설치본.",
+            "properties": {
+              "available": {
+                "description": "registry(지금 쓰는 판)가 가리키는 판.",
+                "type": "string"
+              },
+              "confirmRequired": {
+                "description": "라이선스나 출처 도메인이 바뀌어 업데이트 전에 다시 묻는다.",
+                "type": "boolean"
+              },
+              "installed": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "installed",
+              "available",
+              "confirmRequired"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/ToolUpdateInfo"
+            },
+            "type": "array"
+          },
+          "registryVersion": {
+            "description": "견준 registry 판.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "registryVersion"
         ],
         "type": "object"
       },

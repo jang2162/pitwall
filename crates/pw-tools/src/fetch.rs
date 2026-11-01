@@ -1,7 +1,8 @@
 //! 받기 — HTTPS 만(리다이렉트도), 크기 상한(결정 M4-D17).
 //!
-//! registry 산출물(M4-03)이 쓰고, 설치기(M4-04)가 같은 규칙 위에 넓힌다(파일로 흘려 쓰기 · 큰 상한). 받은 바이트는 미신뢰다 —
-//! 해시 확인은 부르는 쪽이 한다.
+//! registry 산출물(M4-03)이 쓰고, 설치기(M4-04)가 같은 규칙 위에 넓힌다 — [`Fetcher::download`] 는 파일로 흘려 쓰며 SHA-256 을
+//! 함께 세고, 설치용 클라이언트([`Fetcher::for_install`])는 전체 시한 대신 쉬는 시간 시한을 둔다(수백 MB 를 받는 동안 끊지 않게).
+//! 받은 바이트는 미신뢰다 — 해시 확인은 부르는 쪽이 한다.
 
 use std::time::Duration;
 
@@ -9,6 +10,8 @@ use sha2::{Digest, Sha256};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// 설치 받기: 이만큼 바이트가 오지 않으면 끊는다(전체 시한은 없다).
+const INSTALL_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_REDIRECTS: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +26,8 @@ pub enum FetchError {
     Status(u16),
     /// 연결 · 시한 · TLS 등.
     Network(String),
+    /// 받은 것을 디스크에 쓰지 못했다.
+    Io(String),
 }
 
 impl std::fmt::Display for FetchError {
@@ -33,6 +38,7 @@ impl std::fmt::Display for FetchError {
             FetchError::TooLarge { limit } => write!(f, "response is larger than {limit} bytes"),
             FetchError::Status(code) => write!(f, "server answered {code}"),
             FetchError::Network(e) => write!(f, "network error: {e}"),
+            FetchError::Io(e) => write!(f, "cannot write the download: {e}"),
         }
     }
 }
@@ -80,11 +86,27 @@ impl Fetcher {
         Fetcher::build_with(true, timeout).unwrap()
     }
 
+    /// 설치기(M4-04)의 받기: 전체 시한 없이 쉬는 시간 시한([`INSTALL_READ_TIMEOUT`])만 둔다. 그 밖(HTTPS 만 · 리다이렉트 검사)은
+    /// [`Fetcher::new`] 와 같다.
+    pub fn for_install() -> Result<Fetcher, FetchError> {
+        Fetcher::build_inner(false, Timeouts::Idle(INSTALL_READ_TIMEOUT))
+    }
+
+    /// [`Fetcher::for_install`] 의 시험용(가짜 HTTP 서버).
+    #[cfg(test)]
+    pub(crate) fn for_install_loopback_tests() -> Fetcher {
+        Fetcher::build_inner(true, Timeouts::Idle(INSTALL_READ_TIMEOUT)).unwrap()
+    }
+
     fn build(loopback_http: bool) -> Result<Fetcher, FetchError> {
         Fetcher::build_with(loopback_http, REQUEST_TIMEOUT)
     }
 
     fn build_with(loopback_http: bool, timeout: Duration) -> Result<Fetcher, FetchError> {
+        Fetcher::build_inner(loopback_http, Timeouts::Total(timeout))
+    }
+
+    fn build_inner(loopback_http: bool, timeouts: Timeouts) -> Result<Fetcher, FetchError> {
         // 데스크톱 업데이터와 같은 암호 제공자(ring). 이미 걸려 있으면 그대로 둔다.
         if rustls::crypto::CryptoProvider::get_default().is_none() {
             let _ = rustls::crypto::ring::default_provider().install_default();
@@ -104,10 +126,16 @@ impl Fetcher {
             // 시험의 가짜 서버(127.0.0.1)에 사람 · CI 의 프록시 설정이 끼지 않게.
             builder = builder.no_proxy();
         }
+        builder = match timeouts {
+            Timeouts::Total(timeout) => builder
+                .connect_timeout(CONNECT_TIMEOUT.min(timeout))
+                .timeout(timeout),
+            Timeouts::Idle(idle) => builder
+                .connect_timeout(CONNECT_TIMEOUT.min(idle))
+                .read_timeout(idle),
+        };
         let client = builder
             .user_agent(concat!("pitwall/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(CONNECT_TIMEOUT.min(timeout))
-            .timeout(timeout)
             .redirect(policy)
             .build()
             .map_err(|e| FetchError::Network(e.to_string()))?;
@@ -151,6 +179,76 @@ impl Fetcher {
     }
 }
 
+/// [`Fetcher::download`] 의 결과.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Downloaded {
+    /// 받은 바이트 수.
+    pub size: u64,
+    /// 소문자 16진수 SHA-256.
+    pub sha256: String,
+}
+
+impl Fetcher {
+    /// `url` 을 `file` 에 흘려 쓰며 SHA-256 을 센다. `limit` 은 이 파일이 쓸 수 있는 바이트(`Content-Length` 가 넘으면 받지 않고,
+    /// 흘려 받다가 넘으면 그 자리에서 멈춘다). `progress` 는 받은 조각마다 그 바이트 수로 불린다. 실패하면 파일에 쓴 것은 부르는
+    /// 쪽이 지운다.
+    pub async fn download(
+        &self,
+        url: &str,
+        file: &mut std::fs::File,
+        limit: u64,
+        mut progress: impl FnMut(u64),
+    ) -> Result<Downloaded, FetchError> {
+        use std::io::Write as _;
+        let parsed = reqwest::Url::parse(url).map_err(|_| FetchError::Insecure(url.to_owned()))?;
+        if !allowed(&parsed, self.loopback_http) {
+            return Err(FetchError::Insecure(url.to_owned()));
+        }
+        let mut response = self
+            .client
+            .get(parsed)
+            .send()
+            .await
+            .map_err(|e| classify(&e))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(FetchError::Status(status.as_u16()));
+        }
+        let too_large = || FetchError::TooLarge {
+            limit: usize::try_from(limit).unwrap_or(usize::MAX),
+        };
+        if response.content_length().is_some_and(|n| n > limit) {
+            return Err(too_large());
+        }
+        let mut hasher = Sha256::new();
+        let mut size: u64 = 0;
+        while let Some(chunk) = response.chunk().await.map_err(|e| classify(&e))? {
+            let n = chunk.len() as u64;
+            if size + n > limit {
+                return Err(too_large());
+            }
+            file.write_all(&chunk)
+                .map_err(|e| FetchError::Io(e.to_string()))?;
+            hasher.update(&chunk);
+            size += n;
+            progress(n);
+        }
+        file.flush().map_err(|e| FetchError::Io(e.to_string()))?;
+        Ok(Downloaded {
+            size,
+            sha256: hex(&hasher.finalize()),
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Timeouts {
+    /// 요청 전체의 시한.
+    Total(Duration),
+    /// 바이트가 오지 않는 시간의 시한.
+    Idle(Duration),
+}
+
 /// 리다이렉트 정책이 낸 [`FetchError::Insecure`] 를 꺼낸다.
 fn classify(e: &reqwest::Error) -> FetchError {
     let mut source: Option<&dyn std::error::Error> = Some(e);
@@ -165,8 +263,11 @@ fn classify(e: &reqwest::Error) -> FetchError {
 
 /// 소문자 16진수 SHA-256.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(64);
+    hex(&Sha256::digest(bytes))
+}
+
+fn hex(digest: &[u8]) -> String {
+    let mut out = String::with_capacity(digest.len() * 2);
     for b in digest {
         out.push_str(&format!("{b:02x}"));
     }
