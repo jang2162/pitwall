@@ -196,12 +196,25 @@ pub enum StreamMsg {
 
 impl Conn {
     pub async fn call(&mut self, method: &str, params: Value) -> Result<Value, RpcError> {
+        self.call_within(method, params, Duration::from_secs(5))
+            .await
+    }
+
+    /// [`Self::call`] 인데 답을 `wait` 까지 기다린다. 5 초는 「답이 오지 않는다」를 가르는 일반 감시다 — 일의 양이 데이터에
+    /// 비례하는 호출(수 MB 쪽 읽기 등)은 부하 · 다른 시험과 나눠 쓰는 서버에서 그 감시를 넘을 수 있으므로, 제품이 그 호출에 거는
+    /// 상한을 준다(시험이 그 상한보다 먼저 「무응답」 이라고 판정하지 않게).
+    pub async fn call_within(
+        &mut self,
+        method: &str,
+        params: Value,
+        wait: Duration,
+    ) -> Result<Value, RpcError> {
         self.next_id += 1;
         let id = self.next_id;
         self.session
             .handle_value(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
         loop {
-            let msg = tokio::time::timeout(Duration::from_secs(5), self.rx.recv())
+            let msg = tokio::time::timeout(wait, self.rx.recv())
                 .await
                 .expect("no response")
                 .expect("closed");

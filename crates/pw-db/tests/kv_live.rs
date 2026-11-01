@@ -21,7 +21,7 @@ use pw_db::DbSessions;
 use pw_db::gate::code;
 use pw_db_driver::live::{LiveDb, endpoint};
 use pw_db_driver::{BoxFuture, Connected, DbConnection, DbDriver, DbResult, KvConnection};
-use pw_db_driver_redis::RedisDriver;
+use pw_db_driver_redis::{DEFAULT_RESPONSE_TIMEOUT, RedisDriver};
 use pw_db_types::{
     Capabilities, ConnectionSpec, DbValue, DriverKind, KvReply, Secret, SqlDialect, SslMode,
     Target, TlsSettings,
@@ -870,6 +870,10 @@ async fn live_redis_a_late_cancel_does_not_stop_the_next_request() {
 
 /// M3-22 리뷰 L1: 값 쪽 읽기의 예산은 창으로 갈 JSON 크기다 — 작은 필드 30만 개 hash 를 큰 `range.count` 로 읽어도 한 쪽이
 /// 예산(4 MiB) 근처에서 끝나고 다음 커서가 있다(리뷰어 재현: 30만 필드 전부, JSON 14.6 MB).
+///
+/// 이 시험은 쪽의 크기를 재지 빠르기를 재지 않는다. 4 MiB 쪽 읽기는 한가할 때 0.3 s 남짓이지만 빈 서버(CI)에서는 같은 서버에 키
+/// 100만 개를 심는 시험 둘이 함께 돌아, 부하에서 3 s 가까이 걸린 일이 있다 — `call` 의 5 초 무응답 감시 대신 제품의 Redis 응답
+/// 상한([`DEFAULT_RESPONSE_TIMEOUT`])까지 기다린다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_redis_a_value_page_is_bounded_by_its_json_size() {
     let e = env(13);
@@ -878,9 +882,10 @@ async fn live_redis_a_value_page_is_bounded_by_its_json_size() {
     let mut w = e.f.window();
     let s = e.open(&mut w, "r").await;
     let page = w
-        .call(
+        .call_within(
             "db.kv.get",
             json!({ "sessionId": s, "key": "l1:h", "range": { "count": 4_194_304 } }),
+            DEFAULT_RESPONSE_TIMEOUT,
         )
         .await
         .unwrap();
