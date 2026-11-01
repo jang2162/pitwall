@@ -60,6 +60,7 @@ node apps/desktop/perf/db-explorer/run.mjs <폴더> 5 webkit [WebKit 실행 파�
 node apps/desktop/perf/redis-keys/run.mjs <폴더> 5 webkit [WebKit 실행 파일]   # Redis 키 트리의 키 100만 개 첫 화면 500 ms(창 쪽 — Host 의 첫 묶음은 live 시험 `live_redis_the_first_scan_chunk_of_a_million_keys_is_fast` 가 잰다) · 다 받은 뒤 100만 키 그룹을 펼쳐 끝까지 스크롤 · 스캔 중 스크롤(06 「스크롤 60fps」)(M3-18, 헤드리스 — 앱 창을 띄우지 않는다). 폴더 만들기와 `PLAYWRIGHT` 는 그 파일 머리 주석, 잰 것은 `redis-keys-bench.tsx` 머리 주석. 마지막 줄이 중앙값과 판정이다. 키 트리 · 스캔을 고쳤으면 돌린다(release 번들 실기는 M3-21)
 cargo run --release -p pw-git --features test-support --example blame_timing -- <빈 폴더> 5   # blame 첫 청크 · 전체 시간을 gix · git CLI 로(5,000줄 · 커밋 1천 개 합성 파일, 결정 M2-D1 판정 · M2-22). 저장소는 처음에 그 폴더에 만든다
 PW_BLAME_SEEDS=200 cargo nextest run -p pw-git -E 'test(/random_histories/)'   # blame 두 엔진 · 파일 히스토리를 무작위 이력 200개에서 git 과 대조하는 긴 판(기본 시험은 8개, `crates/pw-git/src/testing/blame.rs`)
+PW_JSON_FUZZ_CASES=200000 pnpm --filter @pitwall/desktop exec vitest run src/db/grid/json-text.test.ts   # 결과 그리드의 원래 글을 지키는 JSON 파서와 `JSON.parse` 의 받음 · 거절을 무작위 글 20만 개에서 대조하는 긴 판(기본 시험은 2만 개). 실패하면 시드를 보인다 — `PW_JSON_FUZZ_SEED=<시드> PW_JSON_FUZZ_CASES=1` 로 그 경우만(`apps/desktop/src/db/grid/json-text.test.ts`)
 mise run test-release   # 위 release 판정 시험(검색 취소 100 ms · `fs.list` 1만 개 · 구문 강조 16 ms · git 감시 이벤트 500 ms · 터미널 체크아웃 → 상태바 브랜치의 `git.refs` 500 ms · SQL 문장 나누기 1 MiB 와 긴 `DELIMITER` 각 50 ms · 10만 행 쿼리의 첫 `rows` 청크 50 ms)을 한 번에 — CI 의 「release timing tests」 단계와 같은 명령이다. 12개를 돌린다(0개면 실패)
 ```
 
