@@ -888,7 +888,7 @@ function ConsoleResults({
       </div>
     );
   return (
-    <div className="h-full min-h-0" data-testid="db-console-results">
+    <div className="flex h-full min-h-0 flex-col" data-testid="db-console-results">
       <ResultView
         buffer={current.buffer}
         notify={notify}

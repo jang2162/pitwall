@@ -578,6 +578,20 @@ it("runs every selected statement and shows one result tab each", async () => {
   expect(shown[2]!.getAttribute("aria-selected")).toBe("true");
 });
 
+// 결과 칸은 flex 열 용기여야 한다 — 그 안의 결과 화면(ResultView 뿌리 `flex-1`)이 칸을 채운다. 아니면 결과 화면이 내용 높이로 줄어
+// 그리드가 몇 픽셀만 남는다(M3-21 release 번들 실측: 결과 칸 244px · 결과 화면 66px · 그리드 10px — 행이 하나도 보이지 않았다).
+// jsdom 은 배치를 재지 않아 클래스로 고정한다. 실제 높이는 `mise run perf-m3` 의 DB 시나리오가 본다(그리드가 낮으면 그 회가 실패).
+it("lays the result pane out as a flex column so the result view fills it", async () => {
+  await mount();
+  await openConsole();
+  await connect();
+  await click(button("db-console-run"));
+  const pane = document.querySelector<HTMLElement>("[data-testid=db-console-results]")!;
+  expect(pane.classList).toContain("flex");
+  expect(pane.classList).toContain("flex-col");
+  expect(pane.querySelector("[data-testid=db-result-grid]")).not.toBeNull();
+});
+
 it("asks before DELETE FROM t: [취소] sends nothing, [실행] carries the statementsHash it got", async () => {
   host.consoleText = "DELETE FROM t";
   host.grade = (text) => (text.startsWith("DELETE") ? "unboundedWrite" : "read");
