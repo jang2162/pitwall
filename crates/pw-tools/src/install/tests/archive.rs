@@ -39,7 +39,7 @@ async fn install_archive(fx: &Fx, file_name: &str, body: Vec<u8>) -> Result<(), 
         .map(|_| ())
 }
 
-/// 표: `../x` · 절대 경로 · 폴더 밖 링크 · 링크를 지나는 항목 · 같은 이름 두 번 · 하드 링크가 모두 설치 실패이고, 설치 폴더는 지워지고,
+/// 표: `../x` · 절대 경로 · 폴더 밖 링크 · 설치 폴더 자신을 가리키는 링크 · 링크를 지나는 항목 · 같은 이름 두 번 · 하드 링크가 모두 설치 실패이고, 설치 폴더는 지워지고,
 /// 대상 밖에 파일이 생기지 않는다(`pwned` 라는 이름의 파일이 tmp 어디에도 없다).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unsafe_archives_fail_the_whole_install_and_leave_nothing_outside() {
@@ -59,6 +59,8 @@ async fn unsafe_archives_fail_the_whole_install_and_leave_nothing_outside() {
             vec![Entry::Symlink("demo/out", "../../pwned-dir")],
         ),
         ("link-absolute", vec![Entry::Symlink("demo/out", "/tmp")]),
+        // 설치 폴더 자신을 가리키는 링크(그 링크를 지나 폴더 밖 이름을 만들 길이 된다).
+        ("link-to-root", vec![Entry::Symlink("demo/up", "..")]),
         (
             "through-link",
             vec![
