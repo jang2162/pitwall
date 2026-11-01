@@ -1,0 +1,1288 @@
+{
+  "schema": 1,
+  "scenario": "db",
+  "definitions": {
+    "grid_open": "in the webview: a new SQL console of `perf-grid` (⌘⇧L, connected first) with `SELECT * FROM perf_rows` (100,000 rows × 10 columns); from a click on [Run] to the animation frame after the result grid canvas first drew the first row's second cell (`r0c1`) — includes the run-scope RPC, the Host's execution, the first chunk, IPC and drawing",
+    "grid_scroll": "after the status line says done with every row: fling = top to bottom in 2000 frames (about 50 rows a frame); judged as 06 「스크롤 60fps」: the share of frames within one display refresh (interval ≤ 1.5 × the median interval) ≥ 0.95 and the median interval ≤ 17 ms; the share within 16.7 ms is reference only",
+    "grid_stream": "`SELECT * FROM perf_stream` (the same rows; the fake driver waits 30 ms per fetch, about 4 s for 100k rows, a real database streams as fast as it reads); once the first row is drawn, scroll down 20 rows a frame (never past the received end) until the stream ends; judged as `grid_scroll` but only when at least 60 frames were scrolled while streaming (a stream that ends sooner — a real local database sends 100k rows in about 0.4 s — has no verdict, `no value`)",
+    "explorer": "in the webview: ⌘8, expand the `perf-schema` connection (opens it) and the schema `public`; from a click on the ▸ of the Tables group (10,000 tables) to the frame after the first table row appeared",
+    "redis_open": "in the webview: double-click the `perf-redis` connection in the explorer (a tab opens unconnected); from a click on [Connect] to the frame after the key tree showed its first row (connect + the unfiltered scan's first batch, 1,000,000 keys `k:0` … `k:999999`)",
+    "redis_scroll": "after the scan ended: expand the group `k:` (expandMs, sorting included), then fling top to bottom in 2000 frames; judged as `grid_scroll`",
+    "memory": "phys_footprint of the app instance right after the scenario finished (100k-row result, explorer, a Redis tab with 1M keys); not an idle baseline",
+    "judgement": "medians over valid measured runs; a run fails if the grid settled at a row count other than 100,000 or the Redis scan did not end as done",
+    "trust": "the project is registered trusted (an untrusted project cannot open connections, M3-D13); connections have no password and TLS off"
+  },
+  "build": {
+    "profile": "release",
+    "app": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m3-21-perf/target/release/perf-m3/fake/Pitwall.app",
+    "binary": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m3-21-perf/target/release/perf-m3/fake/Pitwall.app/Contents/MacOS/pitwall"
+  },
+  "commit": {
+    "sha": "dfe9ce9be42760f560171e7eda1038cff873484d",
+    "dirty": false
+  },
+  "os": {
+    "name": "macOS",
+    "version": "27.0.1",
+    "build": "26A434"
+  },
+  "hardware": {
+    "model": "Mac17,9",
+    "cpu": "Apple M5 Pro",
+    "cpus": 15,
+    "memory_bytes": 51539607552
+  },
+  "settings": {
+    "runs": 5,
+    "warmup": 1,
+    "label": "perf-fake-db bundle: fake postgres grid/explorer + Redis 1M keys",
+    "fake_db": true,
+    "connections": [
+      {
+        "id": "perf-grid",
+        "driver": "postgres",
+        "host": "fake.invalid",
+        "port": 5432,
+        "database": "perf",
+        "user": "perf"
+      },
+      {
+        "id": "perf-schema",
+        "driver": "postgres",
+        "host": "fake.invalid",
+        "port": 5432,
+        "database": "perf",
+        "user": "perf"
+      },
+      {
+        "id": "perf-redis",
+        "driver": "redis",
+        "host": "127.0.0.1",
+        "port": 32869,
+        "database": null,
+        "user": null
+      }
+    ]
+  },
+  "runs": [
+    {
+      "index": 0,
+      "warmup": true,
+      "excluded": null,
+      "app_pid": 67874,
+      "group": 67874,
+      "cold_start_ms": 503.784912109375,
+      "measure": {
+        "grid_open": {
+          "ms": 50.0,
+          "firstDrawMs": 30.0,
+          "rowsAtFirst": 5500,
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "window": {
+            "width": 1280.0,
+            "height": 800.0
+          }
+        },
+        "grid_rows": {
+          "rows": 100000,
+          "allRowsMs": 341.0,
+          "state": "done"
+        },
+        "grid_scroll": {
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "scrollHeight": 2400028.0,
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 23.0,
+              "within16_7": 0.48,
+              "over18": 0.13,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "max": 0.0,
+              "within16_7": 0.0,
+              "over18": 0.0,
+              "vsyncMs": 0.0,
+              "withinVsync": 0.0
+            }
+          }
+        },
+        "grid_stream": {
+          "firstMs": 10.0,
+          "frames": 207,
+          "rowsAtEnd": 100000,
+          "allRowsMs": 3476.0,
+          "interval": {
+            "n": 207,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 22.0,
+            "max": 28.0,
+            "within16_7": 0.47,
+            "over18": 0.14,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 101,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 1.0,
+            "max": 1.0,
+            "within16_7": 1.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 0.98
+          }
+        },
+        "explorer": {
+          "ms": 34.0,
+          "connectMs": 17.0,
+          "domRows": 45,
+          "firstTable": "table_00000"
+        },
+        "redis_open": {
+          "ms": 50.0,
+          "firstRows": 1
+        },
+        "redis_keys": {
+          "allKeysMs": 2435.0,
+          "state": "done",
+          "text": "키 1,000,000개 · 2,425 ms"
+        },
+        "redis_scroll": {
+          "expandMs": 600.0,
+          "viewport": {
+            "width": 319.0,
+            "height": 282.0
+          },
+          "scrollHeight": 22000022.0,
+          "lastKey": "k:999999",
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 42.0,
+              "within16_7": 0.49,
+              "over18": 0.16,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 3,
+              "p50": 1.0,
+              "p95": 1.0,
+              "p99": 1.0,
+              "max": 1.0,
+              "within16_7": 1.0,
+              "over18": 0.0,
+              "vsyncMs": 1.0,
+              "withinVsync": 1.0
+            }
+          }
+        }
+      },
+      "memory": {
+        "footprint_bytes": 1270505176,
+        "rss_bytes": 1650294784,
+        "processes": [
+          {
+            "pid": 67877,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 1084262344,
+            "rss_bytes": 1303068672
+          },
+          {
+            "pid": 67876,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 111070136,
+            "rss_bytes": 70533120
+          },
+          {
+            "pid": 67874,
+            "name": "pitwall",
+            "footprint_bytes": 64243128,
+            "rss_bytes": 238174208
+          },
+          {
+            "pid": 67878,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5079616,
+            "rss_bytes": 16531456
+          },
+          {
+            "pid": 67879,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 3326456,
+            "rss_bytes": 11976704
+          },
+          {
+            "pid": 67875,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2523496,
+            "rss_bytes": 10010624
+          }
+        ]
+      },
+      "killed": false
+    },
+    {
+      "index": 1,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 74298,
+      "group": 74298,
+      "cold_start_ms": 416.85888671875,
+      "measure": {
+        "grid_open": {
+          "ms": 54.0,
+          "firstDrawMs": 35.0,
+          "rowsAtFirst": 6500,
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "window": {
+            "width": 1280.0,
+            "height": 800.0
+          }
+        },
+        "grid_rows": {
+          "rows": 100000,
+          "allRowsMs": 347.0,
+          "state": "done"
+        },
+        "grid_scroll": {
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "scrollHeight": 2400028.0,
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 30.0,
+              "within16_7": 0.47,
+              "over18": 0.12,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "max": 0.0,
+              "within16_7": 0.0,
+              "over18": 0.0,
+              "vsyncMs": 0.0,
+              "withinVsync": 0.0
+            }
+          }
+        },
+        "grid_stream": {
+          "firstMs": 10.0,
+          "frames": 207,
+          "rowsAtEnd": 100000,
+          "allRowsMs": 3480.0,
+          "interval": {
+            "n": 207,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 20.0,
+            "max": 27.0,
+            "within16_7": 0.45,
+            "over18": 0.12,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 101,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "within16_7": 1.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 1.0
+          }
+        },
+        "explorer": {
+          "ms": 31.0,
+          "connectMs": 16.0,
+          "domRows": 45,
+          "firstTable": "table_00000"
+        },
+        "redis_open": {
+          "ms": 51.0,
+          "firstRows": 1
+        },
+        "redis_keys": {
+          "allKeysMs": 2437.0,
+          "state": "done",
+          "text": "키 1,000,000개 · 2,421 ms"
+        },
+        "redis_scroll": {
+          "expandMs": 599.0,
+          "viewport": {
+            "width": 319.0,
+            "height": 282.0
+          },
+          "scrollHeight": 22000022.0,
+          "lastKey": "k:999999",
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 43.0,
+              "within16_7": 0.49,
+              "over18": 0.17,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 3,
+              "p50": 1.0,
+              "p95": 1.0,
+              "p99": 1.0,
+              "max": 1.0,
+              "within16_7": 1.0,
+              "over18": 0.0,
+              "vsyncMs": 1.0,
+              "withinVsync": 1.0
+            }
+          }
+        }
+      },
+      "memory": {
+        "footprint_bytes": 1285643848,
+        "rss_bytes": 1581826048,
+        "processes": [
+          {
+            "pid": 74301,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 1100826520,
+            "rss_bytes": 1241645056
+          },
+          {
+            "pid": 74300,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 111938512,
+            "rss_bytes": 67551232
+          },
+          {
+            "pid": 74298,
+            "name": "pitwall",
+            "footprint_bytes": 61916552,
+            "rss_bytes": 237404160
+          },
+          {
+            "pid": 74302,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5063160,
+            "rss_bytes": 13189120
+          },
+          {
+            "pid": 74303,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 3326456,
+            "rss_bytes": 11976704
+          },
+          {
+            "pid": 74299,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2572648,
+            "rss_bytes": 10059776
+          }
+        ]
+      },
+      "killed": false
+    },
+    {
+      "index": 2,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 81485,
+      "group": 81485,
+      "cold_start_ms": 435.30810546875,
+      "measure": {
+        "grid_open": {
+          "ms": 47.0,
+          "firstDrawMs": 25.0,
+          "rowsAtFirst": 3500,
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "window": {
+            "width": 1280.0,
+            "height": 800.0
+          }
+        },
+        "grid_rows": {
+          "rows": 100000,
+          "allRowsMs": 404.0,
+          "state": "done"
+        },
+        "grid_scroll": {
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "scrollHeight": 2400028.0,
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 25.0,
+              "within16_7": 0.49,
+              "over18": 0.13,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "max": 0.0,
+              "within16_7": 0.0,
+              "over18": 0.0,
+              "vsyncMs": 0.0,
+              "withinVsync": 0.0
+            }
+          }
+        },
+        "grid_stream": {
+          "firstMs": 15.0,
+          "frames": 206,
+          "rowsAtEnd": 100000,
+          "allRowsMs": 3465.0,
+          "interval": {
+            "n": 206,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 20.0,
+            "max": 24.0,
+            "within16_7": 0.46,
+            "over18": 0.1,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 101,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "within16_7": 1.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 1.0
+          }
+        },
+        "explorer": {
+          "ms": 36.0,
+          "connectMs": 16.0,
+          "domRows": 45,
+          "firstTable": "table_00000"
+        },
+        "redis_open": {
+          "ms": 46.0,
+          "firstRows": 1
+        },
+        "redis_keys": {
+          "allKeysMs": 2431.0,
+          "state": "done",
+          "text": "키 1,000,000개 · 2,410 ms"
+        },
+        "redis_scroll": {
+          "expandMs": 620.0,
+          "viewport": {
+            "width": 319.0,
+            "height": 282.0
+          },
+          "scrollHeight": 22000022.0,
+          "lastKey": "k:999999",
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 35.0,
+              "within16_7": 0.48,
+              "over18": 0.17,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 3,
+              "p50": 1.0,
+              "p95": 1.0,
+              "p99": 1.0,
+              "max": 1.0,
+              "within16_7": 1.0,
+              "over18": 0.0,
+              "vsyncMs": 1.0,
+              "withinVsync": 1.0
+            }
+          }
+        }
+      },
+      "memory": {
+        "footprint_bytes": 1224596992,
+        "rss_bytes": 1631092736,
+        "processes": [
+          {
+            "pid": 81488,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 1034733440,
+            "rss_bytes": 1253572608
+          },
+          {
+            "pid": 81487,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 111512432,
+            "rss_bytes": 67076096
+          },
+          {
+            "pid": 81485,
+            "name": "pitwall",
+            "footprint_bytes": 67437984,
+            "rss_bytes": 275234816
+          },
+          {
+            "pid": 81489,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5079568,
+            "rss_bytes": 13238272
+          },
+          {
+            "pid": 81518,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 3326456,
+            "rss_bytes": 11976704
+          },
+          {
+            "pid": 81486,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2507112,
+            "rss_bytes": 9994240
+          }
+        ]
+      },
+      "killed": false
+    },
+    {
+      "index": 3,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 88841,
+      "group": 88841,
+      "cold_start_ms": 432.781005859375,
+      "measure": {
+        "grid_open": {
+          "ms": 48.0,
+          "firstDrawMs": 27.0,
+          "rowsAtFirst": 4500,
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "window": {
+            "width": 1280.0,
+            "height": 800.0
+          }
+        },
+        "grid_rows": {
+          "rows": 100000,
+          "allRowsMs": 373.0,
+          "state": "done"
+        },
+        "grid_scroll": {
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "scrollHeight": 2400028.0,
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 26.0,
+              "within16_7": 0.49,
+              "over18": 0.15,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "max": 0.0,
+              "within16_7": 0.0,
+              "over18": 0.0,
+              "vsyncMs": 0.0,
+              "withinVsync": 0.0
+            }
+          }
+        },
+        "grid_stream": {
+          "firstMs": 11.0,
+          "frames": 207,
+          "rowsAtEnd": 100000,
+          "allRowsMs": 3479.0,
+          "interval": {
+            "n": 207,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 19.0,
+            "max": 25.0,
+            "within16_7": 0.43,
+            "over18": 0.11,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 101,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 1.0,
+            "within16_7": 1.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 0.99
+          }
+        },
+        "explorer": {
+          "ms": 35.0,
+          "connectMs": 19.0,
+          "domRows": 45,
+          "firstTable": "table_00000"
+        },
+        "redis_open": {
+          "ms": 51.0,
+          "firstRows": 1
+        },
+        "redis_keys": {
+          "allKeysMs": 2435.0,
+          "state": "done",
+          "text": "키 1,000,000개 · 2,415 ms"
+        },
+        "redis_scroll": {
+          "expandMs": 632.0,
+          "viewport": {
+            "width": 319.0,
+            "height": 282.0
+          },
+          "scrollHeight": 22000022.0,
+          "lastKey": "k:999999",
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 31.0,
+              "within16_7": 0.49,
+              "over18": 0.16,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 3,
+              "p50": 0.0,
+              "p95": 1.0,
+              "p99": 1.0,
+              "max": 1.0,
+              "within16_7": 1.0,
+              "over18": 0.0,
+              "vsyncMs": 0.0,
+              "withinVsync": 0.67
+            }
+          }
+        }
+      },
+      "memory": {
+        "footprint_bytes": 1237999200,
+        "rss_bytes": 1619542016,
+        "processes": [
+          {
+            "pid": 88849,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 1046120320,
+            "rss_bytes": 1263714304
+          },
+          {
+            "pid": 88847,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 111905792,
+            "rss_bytes": 68091904
+          },
+          {
+            "pid": 88841,
+            "name": "pitwall",
+            "footprint_bytes": 66585944,
+            "rss_bytes": 252624896
+          },
+          {
+            "pid": 88854,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5734904,
+            "rss_bytes": 11976704
+          },
+          {
+            "pid": 88852,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5095952,
+            "rss_bytes": 13107200
+          },
+          {
+            "pid": 88846,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2556288,
+            "rss_bytes": 10027008
+          }
+        ]
+      },
+      "killed": false
+    },
+    {
+      "index": 4,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 94949,
+      "group": 94949,
+      "cold_start_ms": 430.23291015625,
+      "measure": {
+        "grid_open": {
+          "ms": 70.0,
+          "firstDrawMs": 32.0,
+          "rowsAtFirst": 7500,
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "window": {
+            "width": 1280.0,
+            "height": 800.0
+          }
+        },
+        "grid_rows": {
+          "rows": 100000,
+          "allRowsMs": 355.0,
+          "state": "done"
+        },
+        "grid_scroll": {
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "scrollHeight": 2400028.0,
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 25.0,
+              "within16_7": 0.48,
+              "over18": 0.16,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "max": 0.0,
+              "within16_7": 0.0,
+              "over18": 0.0,
+              "vsyncMs": 0.0,
+              "withinVsync": 0.0
+            }
+          }
+        },
+        "grid_stream": {
+          "firstMs": 10.0,
+          "frames": 207,
+          "rowsAtEnd": 100000,
+          "allRowsMs": 3478.0,
+          "interval": {
+            "n": 207,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 21.0,
+            "max": 22.0,
+            "within16_7": 0.44,
+            "over18": 0.15,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 101,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "within16_7": 1.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 1.0
+          }
+        },
+        "explorer": {
+          "ms": 33.0,
+          "connectMs": 18.0,
+          "domRows": 45,
+          "firstTable": "table_00000"
+        },
+        "redis_open": {
+          "ms": 48.0,
+          "firstRows": 1
+        },
+        "redis_keys": {
+          "allKeysMs": 2414.0,
+          "state": "done",
+          "text": "키 1,000,000개 · 2,405 ms"
+        },
+        "redis_scroll": {
+          "expandMs": 613.0,
+          "viewport": {
+            "width": 319.0,
+            "height": 282.0
+          },
+          "scrollHeight": 22000022.0,
+          "lastKey": "k:999999",
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 44.0,
+              "within16_7": 0.48,
+              "over18": 0.17,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 3,
+              "p50": 1.0,
+              "p95": 1.0,
+              "p99": 1.0,
+              "max": 1.0,
+              "within16_7": 1.0,
+              "over18": 0.0,
+              "vsyncMs": 1.0,
+              "withinVsync": 1.0
+            }
+          }
+        }
+      },
+      "memory": {
+        "footprint_bytes": 1286037136,
+        "rss_bytes": 1592508416,
+        "processes": [
+          {
+            "pid": 94952,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 1090062280,
+            "rss_bytes": 1272119296
+          },
+          {
+            "pid": 94951,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 111692800,
+            "rss_bytes": 67747840
+          },
+          {
+            "pid": 94949,
+            "name": "pitwall",
+            "footprint_bytes": 70927728,
+            "rss_bytes": 217481216
+          },
+          {
+            "pid": 94954,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5734904,
+            "rss_bytes": 11976704
+          },
+          {
+            "pid": 94953,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5128696,
+            "rss_bytes": 13205504
+          },
+          {
+            "pid": 94950,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2490728,
+            "rss_bytes": 9977856
+          }
+        ]
+      },
+      "killed": false
+    },
+    {
+      "index": 5,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 1675,
+      "group": 1675,
+      "cold_start_ms": 418.350830078125,
+      "measure": {
+        "grid_open": {
+          "ms": 47.0,
+          "firstDrawMs": 24.0,
+          "rowsAtFirst": 4500,
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "window": {
+            "width": 1280.0,
+            "height": 800.0
+          }
+        },
+        "grid_rows": {
+          "rows": 100000,
+          "allRowsMs": 346.0,
+          "state": "done"
+        },
+        "grid_scroll": {
+          "viewport": {
+            "width": 928.0,
+            "height": 188.0
+          },
+          "scrollHeight": 2400028.0,
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 19.0,
+              "within16_7": 0.49,
+              "over18": 0.14,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "max": 0.0,
+              "within16_7": 0.0,
+              "over18": 0.0,
+              "vsyncMs": 0.0,
+              "withinVsync": 0.0
+            }
+          }
+        },
+        "grid_stream": {
+          "firstMs": 15.0,
+          "frames": 207,
+          "rowsAtEnd": 100000,
+          "allRowsMs": 3480.0,
+          "interval": {
+            "n": 207,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 20.0,
+            "max": 26.0,
+            "within16_7": 0.46,
+            "over18": 0.15,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 101,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "within16_7": 1.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 1.0
+          }
+        },
+        "explorer": {
+          "ms": 32.0,
+          "connectMs": 13.0,
+          "domRows": 45,
+          "firstTable": "table_00000"
+        },
+        "redis_open": {
+          "ms": 50.0,
+          "firstRows": 1
+        },
+        "redis_keys": {
+          "allKeysMs": 2452.0,
+          "state": "done",
+          "text": "키 1,000,000개 · 2,439 ms"
+        },
+        "redis_scroll": {
+          "expandMs": 600.0,
+          "viewport": {
+            "width": 319.0,
+            "height": 282.0
+          },
+          "scrollHeight": 22000022.0,
+          "lastKey": "k:999999",
+          "fling": {
+            "interval": {
+              "n": 2000,
+              "p50": 17.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 32.0,
+              "within16_7": 0.48,
+              "over18": 0.16,
+              "vsyncMs": 17.0,
+              "withinVsync": 1.0
+            },
+            "work": {
+              "n": 0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "max": 0.0,
+              "within16_7": 0.0,
+              "over18": 0.0,
+              "vsyncMs": 0.0,
+              "withinVsync": 0.0
+            }
+          }
+        }
+      },
+      "memory": {
+        "footprint_bytes": 1219026336,
+        "rss_bytes": 1448198144,
+        "processes": [
+          {
+            "pid": 1678,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 1027934008,
+            "rss_bytes": 1114472448
+          },
+          {
+            "pid": 1677,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 112823152,
+            "rss_bytes": 66813952
+          },
+          {
+            "pid": 1675,
+            "name": "pitwall",
+            "footprint_bytes": 64914824,
+            "rss_bytes": 231800832
+          },
+          {
+            "pid": 1680,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5734904,
+            "rss_bytes": 11976704
+          },
+          {
+            "pid": 1679,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5145128,
+            "rss_bytes": 13156352
+          },
+          {
+            "pid": 1676,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2474320,
+            "rss_bytes": 9977856
+          }
+        ]
+      },
+      "killed": false
+    }
+  ],
+  "failures": [],
+  "valid_runs": 5,
+  "summary": {
+    "grid_open_ms": {
+      "median": 48.0,
+      "min": 47.0,
+      "max": 70.0,
+      "n": 5
+    },
+    "grid_first_draw_ms": {
+      "median": 27.0,
+      "min": 24.0,
+      "max": 35.0,
+      "n": 5
+    },
+    "grid_all_rows_ms": {
+      "median": 355.0,
+      "min": 346.0,
+      "max": 404.0,
+      "n": 5
+    },
+    "grid_fling_within_vsync": {
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0,
+      "n": 5
+    },
+    "grid_fling_vsync_ms": {
+      "median": 17.0,
+      "min": 17.0,
+      "max": 17.0,
+      "n": 5
+    },
+    "grid_fling_within16_7": {
+      "median": 0.49,
+      "min": 0.47,
+      "max": 0.49,
+      "n": 5
+    },
+    "grid_fling_p95_ms": {
+      "median": 19.0,
+      "min": 19.0,
+      "max": 19.0,
+      "n": 5
+    },
+    "grid_stream_within_vsync": {
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0,
+      "n": 5
+    },
+    "grid_stream_vsync_ms": {
+      "median": 17.0,
+      "min": 17.0,
+      "max": 17.0,
+      "n": 5
+    },
+    "grid_stream_within16_7": {
+      "median": 0.45,
+      "min": 0.43,
+      "max": 0.46,
+      "n": 5
+    },
+    "grid_stream_frames": {
+      "median": 207.0,
+      "min": 206.0,
+      "max": 207.0,
+      "n": 5
+    },
+    "grid_stream_all_rows_ms": {
+      "median": 3479.0,
+      "min": 3465.0,
+      "max": 3480.0,
+      "n": 5
+    },
+    "explorer_ms": {
+      "median": 33.0,
+      "min": 31.0,
+      "max": 36.0,
+      "n": 5
+    },
+    "explorer_connect_ms": {
+      "median": 16.0,
+      "min": 13.0,
+      "max": 19.0,
+      "n": 5
+    },
+    "redis_open_ms": {
+      "median": 50.0,
+      "min": 46.0,
+      "max": 51.0,
+      "n": 5
+    },
+    "redis_all_keys_ms": {
+      "median": 2435.0,
+      "min": 2414.0,
+      "max": 2452.0,
+      "n": 5
+    },
+    "redis_expand_ms": {
+      "median": 613.0,
+      "min": 599.0,
+      "max": 632.0,
+      "n": 5
+    },
+    "redis_fling_within_vsync": {
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0,
+      "n": 5
+    },
+    "redis_fling_vsync_ms": {
+      "median": 17.0,
+      "min": 17.0,
+      "max": 17.0,
+      "n": 5
+    },
+    "redis_fling_within16_7": {
+      "median": 0.48,
+      "min": 0.48,
+      "max": 0.49,
+      "n": 5
+    },
+    "cold_start_ms": {
+      "median": 430.23291015625,
+      "min": 416.85888671875,
+      "max": 435.30810546875,
+      "n": 5
+    },
+    "footprint_bytes": {
+      "median": 1237999200.0,
+      "min": 1219026336.0,
+      "max": 1286037136.0,
+      "n": 5
+    }
+  },
+  "targets": {
+    "grid_open_ms": 500.0,
+    "explorer_ms": 500.0,
+    "redis_open_ms": 500.0,
+    "scroll_share": 0.95,
+    "vsync_ms": 17.0,
+    "grid_open_met": true,
+    "grid_scroll_met": true,
+    "grid_stream_met": true,
+    "explorer_met": true,
+    "redis_open_met": true,
+    "redis_scroll_met": true
+  },
+  "warning": null,
+  "stopped": null
+}

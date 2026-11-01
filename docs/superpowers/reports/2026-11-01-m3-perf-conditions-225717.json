@@ -1,0 +1,161 @@
+{
+  "started": "2026-11-01T13:57:17.156Z",
+  "commit": "dfe9ce9be42760f560171e7eda1038cff873484d",
+  "dirty": false,
+  "cores": 15,
+  "displays": [
+    {
+      "name": "Color LCD",
+      "resolution": "1512 x 982 @ 120.00Hz",
+      "pixels": "3024 x 1964",
+      "main": true,
+      "internal": true,
+      "connection": "spdisplays_internal"
+    }
+  ],
+  "containers": {
+    "pg": "pitwall-perf-f63c7c90-pg",
+    "redis": "pitwall-perf-f63c7c90-redis",
+    "pgImage": "postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929",
+    "redisImage": "redis:7.2.10@sha256:8cd70b529aec2af55a072917098c1ae6f1d9eb975ac1cf36928c7d5af7574f08"
+  },
+  "steps": [
+    {
+      "kind": "empty-default",
+      "args": [
+        "--app",
+        "target/release/perf-m3/default/Pitwall.app",
+        "--label",
+        "default bundle (release, no perf-fake-db)"
+      ],
+      "waitedSecs": 0,
+      "loadAtStart": [
+        3.72,
+        2.43,
+        1.59
+      ],
+      "startedAt": "2026-11-01T13:59:12.687Z",
+      "endedAt": "2026-11-01T14:01:09.564Z",
+      "loadAtEnd": [
+        1.71,
+        2.19,
+        1.6
+      ],
+      "exit": 0
+    },
+    {
+      "kind": "empty-fake",
+      "args": [
+        "--app",
+        "target/release/perf-m3/fake/Pitwall.app",
+        "--label",
+        "perf-fake-db bundle (release + perf-fake-db)"
+      ],
+      "waitedSecs": 0,
+      "loadAtStart": [
+        1.71,
+        2.19,
+        1.6
+      ],
+      "startedAt": "2026-11-01T14:01:09.584Z",
+      "endedAt": "2026-11-01T14:02:50.662Z",
+      "loadAtEnd": [
+        1.03,
+        1.78,
+        1.5
+      ],
+      "exit": 0
+    },
+    {
+      "kind": "db-idle",
+      "args": [
+        "--app",
+        "target/release/perf-m3/default/Pitwall.app",
+        "--db-idle",
+        "--pg",
+        "127.0.0.1:32868/perf",
+        "--label",
+        "default bundle, one PG connection opened"
+      ],
+      "waitedSecs": 0,
+      "loadAtStart": [
+        1.03,
+        1.78,
+        1.5
+      ],
+      "startedAt": "2026-11-01T14:02:50.681Z",
+      "endedAt": "2026-11-01T14:04:33.295Z",
+      "loadAtEnd": [
+        5.96,
+        2.89,
+        1.94
+      ],
+      "exit": 0
+    },
+    {
+      "kind": "db-fake",
+      "args": [
+        "--app",
+        "target/release/perf-m3/fake/Pitwall.app",
+        "--db",
+        "--fake-db",
+        "--redis",
+        "127.0.0.1:32869",
+        "--label",
+        "perf-fake-db bundle: fake postgres grid/explorer + Redis 1M keys"
+      ],
+      "waitedSecs": 0,
+      "loadAtStart": [
+        5.96,
+        2.89,
+        1.94
+      ],
+      "startedAt": "2026-11-01T14:04:33.315Z",
+      "endedAt": "2026-11-01T14:12:39.483Z",
+      "loadAtEnd": [
+        1.13,
+        1.77,
+        1.75
+      ],
+      "exit": 0
+    },
+    {
+      "kind": "db-pg",
+      "args": [
+        "--app",
+        "target/release/perf-m3/default/Pitwall.app",
+        "--db",
+        "--pg",
+        "127.0.0.1:32868/perf",
+        "--label",
+        "default bundle: local PG grid (100k × 10)"
+      ],
+      "waitedSecs": 0,
+      "loadAtStart": [
+        1.13,
+        1.77,
+        1.75
+      ],
+      "startedAt": "2026-11-01T14:12:39.503Z",
+      "endedAt": "2026-11-01T14:16:47.741Z",
+      "loadAtEnd": [
+        1.72,
+        1.7,
+        1.71
+      ],
+      "exit": 0
+    }
+  ],
+  "databases": {
+    "pg": "127.0.0.1:32868",
+    "redis": "127.0.0.1:32869"
+  },
+  "bundles": {
+    "default": "target/release/perf-m3/default/Pitwall.app",
+    "fake": "target/release/perf-m3/fake/Pitwall.app",
+    "defaultHasFake": false,
+    "fakeHasFake": true
+  },
+  "only": null,
+  "ended": "2026-11-01T14:16:47.744Z"
+}
