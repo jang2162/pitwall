@@ -20,6 +20,7 @@
     "/packages/rpc-client/test/fixtures/",
     "/apps/desktop/src/git/gutter/fixtures/",
     "/crates/pw-lang/linguist/",
-    "/crates/pw-syntax/tests/fixtures/"
+    "/crates/pw-syntax/tests/fixtures/",
+    "/crates/pw-tools/snapshot/"
   ]
 }

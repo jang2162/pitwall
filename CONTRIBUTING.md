@@ -221,6 +221,21 @@ RPC 의 TS 타입·메서드 목록·JSON Schema 는 `rpc_method!` 선언과 그
   rm -rf "$SANDBOX"                                        # 끝나면 지운다
   ```
 
+## 도구 registry
+
+언어 서버 · 포매터의 「어디서 받아 무엇을 실행하나」 는 Mason registry 데이터다(`crates/pw-tools`, `docs/design/07-extensibility.md` §4.4, `docs/design/15-m4-plan.md` M4-03 · 결정 M4-D16 · D17). Pitwall 판마다 registry 판 하나를 고정한다.
+
+- **생성물을 손으로 고치지 않는다.** `crates/pw-tools/registry.toml`(고정 판 · 산출물 해시 · 기본 번들 패키지의 (판, 대상, 파일)별 SHA-256), `crates/pw-tools/snapshot/bundled.json`(바이너리에 묶이는 내장 스냅숏 — 번들 패키지의 정의만), `crates/pw-tools/tests/fixtures/registry.json.zip`(고정 판 전체 — 파싱 표 시험의 입력, 배포물에 들지 않는다)은 `node scripts/tools-registry-bump.mjs bump <태그>` 가 다시 쓴다(태그를 빼면 최신). 스냅숏은 oxfmt 가 포맷하지 않는다(`.oxfmtrc.json` 의 `ignorePatterns`).
+- 기본 번들 목록은 `registry.toml` 의 `bundled` 다. 바꾸면 `bump` 를 다시 돌린다. 덮어쓰기 정의(`crates/pw-tools/overrides/<패키지>.toml`)를 더하거나 고쳐도 받을 주소가 바뀌므로 다시 돌린다.
+- `mise run lint` 의 `cargo run -q -p pw-tools --example registry_tool -- check` 가 고정 표가 스냅숏의 번들 패키지를 모두 덮는지(대상마다 받을 파일마다 해시 · 주소, npm 은 `integrity`, PyPI 는 배포마다 그 대상의 휠) 본다 — 네트워크 없이 돈다. 보지 않는 것: 해시가 실제 파일과 맞는가(설치기가 받을 때 대조한다), PyPI 의존 배포의 행을 통째로 지운 것.
+- 해시를 얻는 곳은 행의 `hash_from` 에 남는다: GitHub 릴리스 자산은 API 의 `digest`, PyPI 는 `digests.sha256`, 그 밖은 배포처가 함께 올린 `<주소>.sha256`(크기는 HEAD), 없으면 받아서 계산한다. `--download-all` 이면 모두 받는다(kotlin-lsp 는 대상마다 약 360 MB). GitHub API 가 막히면 `GITHUB_TOKEN` 을 준다.
+
+판을 올리는 순서:
+
+1. `node scripts/tools-registry-bump.mjs bump <태그>` — 받은 산출물은 `target/tools-registry/<태그>/` 에 둔다(실행하지 않는다). 대상에 항목이 없거나 표현식을 모르는 대상은 「unsupported — no pin」 으로 알린다.
+2. `cargo nextest run -p pw-tools` — 파싱 표 시험이 고정 판 전체의 「지원 · 지원하지 않음(까닭별)」 을 출력하고(`--no-capture`), 번들 패키지가 모두 지원인지 본다. 번들 패키지의 자산 이름 표(`bundled_asset_and_download_names_per_target`)는 판이 바뀌면 고친다.
+3. `licenses/vendored.md` 「Mason registry」 절의 릴리스 · 커밋 · 해시 줄을 고치고 `mise run notices` 를 돌린다.
+
 ## 의존성과 라이선스
 
 MIT 프로젝트라 의존성은 허용형 라이선스만 쓴다(`docs/design/02-tech-stack.md` 「라이선스 검사」 행).

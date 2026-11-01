@@ -1,0 +1,336 @@
+{
+  "registry": "2026-11-01-batty-dew",
+  "packages": [
+    {
+      "name": "basedpyright",
+      "description": "Fork of the Pyright static type checker for Python, with extra Pylance features.",
+      "homepage": "https://detachhead.github.io/basedpyright",
+      "licenses": [
+        "MIT"
+      ],
+      "languages": [
+        "Python"
+      ],
+      "categories": [
+        "LSP"
+      ],
+      "source": {
+        "id": "pkg:pypi/basedpyright@1.40.2"
+      },
+      "schemas": {
+        "lsp": "vscode:https://raw.githubusercontent.com/DetachHead/basedpyright/v{{version}}/packages/vscode-pyright/package.json"
+      },
+      "bin": {
+        "basedpyright": "pypi:basedpyright",
+        "basedpyright-langserver": "pypi:basedpyright-langserver"
+      },
+      "neovim": {
+        "lspconfig": "basedpyright"
+      }
+    },
+    {
+      "name": "jdtls",
+      "description": "Java language server.",
+      "homepage": "https://github.com/eclipse/eclipse.jdt.ls",
+      "licenses": [
+        "EPL-2.0"
+      ],
+      "languages": [
+        "Java"
+      ],
+      "categories": [
+        "LSP"
+      ],
+      "source": {
+        "id": "pkg:generic/eclipse/eclipse.jdt.ls@v1.63.0",
+        "download": [
+          {
+            "target": [
+              "darwin_x64",
+              "darwin_arm64"
+            ],
+            "files": {
+              "jdtls.tar.gz": "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-{{ version | strip_prefix \"v\" }}-202610191322.tar.gz",
+              "lombok.jar": "https://projectlombok.org/downloads/lombok.jar"
+            },
+            "config": "config_mac/"
+          },
+          {
+            "target": "linux",
+            "files": {
+              "jdtls.tar.gz": "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-{{ version | strip_prefix \"v\" }}-202610191322.tar.gz",
+              "lombok.jar": "https://projectlombok.org/downloads/lombok.jar"
+            },
+            "config": "config_linux/"
+          },
+          {
+            "target": "win",
+            "files": {
+              "jdtls.tar.gz": "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-{{ version | strip_prefix \"v\" }}-202610191322.tar.gz",
+              "lombok.jar": "https://projectlombok.org/downloads/lombok.jar"
+            },
+            "config": "config_win/"
+          }
+        ]
+      },
+      "schemas": {
+        "lsp": "vscode:https://raw.githubusercontent.com/redhat-developer/vscode-java/master/package.json"
+      },
+      "bin": {
+        "jdtls": "python:bin/jdtls"
+      },
+      "share": {
+        "jdtls/lombok.jar": "lombok.jar",
+        "jdtls/plugins/": "plugins/",
+        "jdtls/plugins/org.eclipse.equinox.launcher.jar": "plugins/org.eclipse.equinox.launcher_1.8.0.v20260804-1928.jar",
+        "jdtls/config/": "{{source.download.config}}"
+      },
+      "neovim": {
+        "lspconfig": "jdtls"
+      }
+    },
+    {
+      "name": "kotlin-lsp",
+      "description": "Kotlin Language Server and plugin for Visual Studio Code",
+      "homepage": "https://github.com/Kotlin/kotlin-lsp",
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "languages": [
+        "Kotlin"
+      ],
+      "categories": [
+        "LSP"
+      ],
+      "source": {
+        "id": "pkg:generic/Kotlin/kotlin-lsp@kotlin-lsp/v263.7084.0",
+        "download": [
+          {
+            "target": "darwin_x64",
+            "files": {
+              "kotlin-lsp.zip": "https://download.jetbrains.com/language-server/kotlin-server/{{ version | strip_prefix \"kotlin-lsp/v\" }}/kotlin-server-{{ version | strip_prefix \"kotlin-lsp/v\" }}.sit"
+            },
+            "bin": "kotlin-server-{{ version | strip_prefix \"kotlin-lsp/v\" }}/bin/intellij-server"
+          },
+          {
+            "target": "darwin_arm64",
+            "files": {
+              "kotlin-lsp.zip": "https://download.jetbrains.com/language-server/kotlin-server/{{ version | strip_prefix \"kotlin-lsp/v\" }}/kotlin-server-{{ version | strip_prefix \"kotlin-lsp/v\" }}-aarch64.sit"
+            },
+            "bin": "kotlin-server-{{ version | strip_prefix \"kotlin-lsp/v\" }}/bin/intellij-server"
+          },
+          {
+            "target": "linux_x64",
+            "files": {
+              "kotlin-lsp.tar.gz": "https://download.jetbrains.com/language-server/kotlin-server/{{ version | strip_prefix \"kotlin-lsp/v\" }}/kotlin-server-{{ version | strip_prefix \"kotlin-lsp/v\" }}.tar.gz"
+            },
+            "bin": "kotlin-server-{{ version | strip_prefix \"kotlin-lsp/v\" }}/bin/intellij-server"
+          },
+          {
+            "target": "linux_arm64",
+            "files": {
+              "kotlin-lsp.tar.gz": "https://download.jetbrains.com/language-server/kotlin-server/{{ version | strip_prefix \"kotlin-lsp/v\" }}/kotlin-server-{{ version | strip_prefix \"kotlin-lsp/v\" }}-aarch64.tar.gz"
+            },
+            "bin": "kotlin-server-{{{ version | strip_prefix \"kotlin-lsp/v\" }}/bin/intellij-server"
+          },
+          {
+            "target": "win_x64",
+            "files": {
+              "kotlin-lsp.zip": "https://download.jetbrains.com/language-server/kotlin-server/{{ version | strip_prefix \"kotlin-lsp/v\" }}/kotlin-server-{{ version | strip_prefix \"kotlin-lsp/v\" }}.win.zip"
+            },
+            "bin": "bin/intellij-server.exe"
+          },
+          {
+            "target": "win_arm64",
+            "files": {
+              "kotlin-lsp.zip": "https://download.jetbrains.com/language-server/kotlin-server/{{ version | strip_prefix \"kotlin-lsp/v\" }}/kotlin-server-{{ version | strip_prefix \"kotlin-lsp/v\" }}-aarch64.win.zip"
+            },
+            "bin": "bin/intellij-server.exe"
+          }
+        ]
+      },
+      "bin": {
+        "intellij-server": "{{source.download.bin}}"
+      },
+      "neovim": {
+        "lspconfig": "kotlin_lsp"
+      }
+    },
+    {
+      "name": "ruff",
+      "description": "An extremely fast Python linter and code formatter, written in Rust.",
+      "homepage": "https://github.com/astral-sh/ruff/",
+      "licenses": [
+        "MIT"
+      ],
+      "languages": [
+        "Python"
+      ],
+      "categories": [
+        "Linter",
+        "Formatter",
+        "LSP"
+      ],
+      "source": {
+        "id": "pkg:github/astral-sh/ruff@0.17.3",
+        "asset": [
+          {
+            "target": "darwin_x64",
+            "file": "ruff-x86_64-apple-darwin.tar.gz",
+            "bin": "ruff-x86_64-apple-darwin/ruff"
+          },
+          {
+            "target": "darwin_arm64",
+            "file": "ruff-aarch64-apple-darwin.tar.gz",
+            "bin": "ruff-aarch64-apple-darwin/ruff"
+          },
+          {
+            "target": "linux_x64",
+            "file": "ruff-x86_64-unknown-linux-musl.tar.gz",
+            "bin": "ruff-x86_64-unknown-linux-musl/ruff"
+          },
+          {
+            "target": "linux_arm64",
+            "file": "ruff-aarch64-unknown-linux-gnu.tar.gz",
+            "bin": "ruff-aarch64-unknown-linux-gnu/ruff"
+          },
+          {
+            "target": "linux_x64_musl",
+            "file": "ruff-x86_64-unknown-linux-musl.tar.gz",
+            "bin": "ruff-x86_64-unknown-linux-musl/ruff"
+          },
+          {
+            "target": "linux_arm64_musl",
+            "file": "ruff-aarch64-unknown-linux-musl.tar.gz",
+            "bin": "ruff-aarch64-unknown-linux-musl/ruff"
+          },
+          {
+            "target": "linux_x86",
+            "file": "ruff-i686-unknown-linux-gnu.tar.gz",
+            "bin": "ruff-i686-unknown-linux-gnu/ruff"
+          },
+          {
+            "target": "linux_armv7_gnu",
+            "file": "ruff-armv7-unknown-linux-gnueabihf.tar.gz",
+            "bin": "ruff-armv7-unknown-linux-gnueabihf/ruff"
+          },
+          {
+            "target": "win_x64",
+            "file": "ruff-x86_64-pc-windows-msvc.zip",
+            "bin": "ruff.exe"
+          },
+          {
+            "target": "win_arm64",
+            "file": "ruff-aarch64-pc-windows-msvc.zip",
+            "bin": "ruff.exe"
+          },
+          {
+            "target": "win_x86",
+            "file": "ruff-i686-pc-windows-msvc.zip",
+            "bin": "ruff.exe"
+          }
+        ]
+      },
+      "bin": {
+        "ruff": "{{source.asset.bin}}"
+      },
+      "neovim": {
+        "lspconfig": "ruff"
+      }
+    },
+    {
+      "name": "rust-analyzer",
+      "description": "rust-analyzer is an implementation of the Language Server Protocol for the\nRust programming language. It provides features like completion and goto\ndefinition for many code editors, including VS Code, Emacs and Vim.\n",
+      "homepage": "https://github.com/rust-lang/rust-analyzer",
+      "licenses": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "languages": [
+        "Rust"
+      ],
+      "categories": [
+        "LSP"
+      ],
+      "source": {
+        "id": "pkg:github/rust-lang/rust-analyzer@2026-10-26",
+        "asset": [
+          {
+            "target": "linux_x64_gnu",
+            "file": "rust-analyzer-x86_64-unknown-linux-gnu.gz",
+            "bin": "rust-analyzer-x86_64-unknown-linux-gnu"
+          },
+          {
+            "target": "linux_arm64_gnu",
+            "file": "rust-analyzer-aarch64-unknown-linux-gnu.gz",
+            "bin": "rust-analyzer-aarch64-unknown-linux-gnu"
+          },
+          {
+            "target": "linux_x64_musl",
+            "file": "rust-analyzer-x86_64-unknown-linux-musl.gz",
+            "bin": "rust-analyzer-x86_64-unknown-linux-musl"
+          },
+          {
+            "target": "darwin_x64",
+            "file": "rust-analyzer-x86_64-apple-darwin.gz",
+            "bin": "rust-analyzer-x86_64-apple-darwin"
+          },
+          {
+            "target": "darwin_arm64",
+            "file": "rust-analyzer-aarch64-apple-darwin.gz",
+            "bin": "rust-analyzer-aarch64-apple-darwin"
+          },
+          {
+            "target": "win_x64",
+            "file": "rust-analyzer-x86_64-pc-windows-msvc.zip",
+            "bin": "rust-analyzer.exe"
+          },
+          {
+            "target": "win_arm64",
+            "file": "rust-analyzer-aarch64-pc-windows-msvc.zip",
+            "bin": "rust-analyzer.exe"
+          }
+        ]
+      },
+      "schemas": {
+        "lsp": "vscode:https://raw.githubusercontent.com/rust-analyzer/rust-analyzer/{{version}}/editors/code/package.json"
+      },
+      "bin": {
+        "rust-analyzer": "{{source.asset.bin}}"
+      },
+      "neovim": {
+        "lspconfig": "rust_analyzer"
+      }
+    },
+    {
+      "name": "typescript-language-server",
+      "description": "TypeScript & JavaScript Language Server.",
+      "homepage": "https://github.com/typescript-language-server/typescript-language-server",
+      "licenses": [
+        "MIT"
+      ],
+      "languages": [
+        "TypeScript",
+        "JavaScript"
+      ],
+      "categories": [
+        "LSP"
+      ],
+      "source": {
+        "id": "pkg:npm/typescript-language-server@6.0.2",
+        "extra_packages": [
+          "typescript@6.0.3"
+        ]
+      },
+      "schemas": {
+        "lsp": "vscode:https://raw.githubusercontent.com/microsoft/vscode/main/extensions/typescript-language-features/package.json"
+      },
+      "bin": {
+        "typescript-language-server": "npm:typescript-language-server"
+      },
+      "neovim": {
+        "lspconfig": "ts_ls"
+      }
+    }
+  ]
+}

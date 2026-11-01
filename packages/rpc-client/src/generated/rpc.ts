@@ -745,6 +745,19 @@ export type UnaryMethods = {
 	 * 등록된 테마 목록.
 	 */
 	"theme.list": { params: null; result: ThemeList };
+	/**
+	 * 패키지 하나의 정의와 이 기기에서 받을 것. 없으면 not found.
+	 */
+	"tools.registry.get": { params: ToolsRegistryGetParams; result: ToolPackageDetail };
+	/**
+	 * 패키지 찾기(이름 · 설명, 분류 · 언어 거르기).
+	 */
+	"tools.registry.search": { params: ToolsRegistrySearchParams; result: ToolsRegistrySearch };
+	/**
+	 * registry 의 판 · 받은 때 · 이 기기에서 지원하는 패키지 수와 지원하지 않는 까닭별 수. 처음 부르면 캐시를 읽고 가져오기를
+	 * 뒤에서 시작한다(`fetching`).
+	 */
+	"tools.registry.status": { params: null; result: ToolsRegistryStatus };
 };
 
 /** 선언된 stream 메서드: 이름 → 입력 · item 타입. */
@@ -991,6 +1004,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"terminal.resize": {"name":"terminal.resize","kind":"unary","tier":"write","roles":["owner"],"params":"TerminalResizeParams","output":"()","doc":" PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 다른 세션이 연 터미널 · 0 인 크기는\n invalid params 오류.\n","mcp":false,"fileScope":false},
 	"theme.get": {"name":"theme.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ThemeGetParams","output":"ThemeFile","doc":" 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.\n","mcp":false,"fileScope":true},
 	"theme.list": {"name":"theme.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ThemeList","doc":" 등록된 테마 목록.\n","mcp":false,"fileScope":true},
+	"tools.registry.get": {"name":"tools.registry.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsRegistryGetParams","output":"ToolPackageDetail","doc":" 패키지 하나의 정의와 이 기기에서 받을 것. 없으면 not found.\n","mcp":false,"fileScope":false},
+	"tools.registry.search": {"name":"tools.registry.search","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsRegistrySearchParams","output":"ToolsRegistrySearch","doc":" 패키지 찾기(이름 · 설명, 분류 · 언어 거르기).\n","mcp":false,"fileScope":false},
+	"tools.registry.status": {"name":"tools.registry.status","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ToolsRegistryStatus","doc":" registry 의 판 · 받은 때 · 이 기기에서 지원하는 패키지 수와 지원하지 않는 까닭별 수. 처음 부르면 캐시를 읽고 가져오기를\n 뒤에서 시작한다(`fetching`).\n","mcp":false,"fileScope":false},
 };
 
 /** 내장 프로토콜 메서드 이름. */
@@ -1028,6 +1044,13 @@ export type ActiveWorktree = {
 	/**  프로젝트 루트에 대응하는 워크트리 안의 폴더. 파일 트리 · 터미널 · 설정의 기준. */
 	root: string,
 };
+
+/**  저장 이름의 끝으로 정한 형식. */
+export type ArchiveFormat = "tarGz" | "tarXz" | "tar" | "zip" | 
+/**  `.gz` 단일 파일. */
+"gz" | 
+/**  그 밖(`.jar` · `.vsix` 가 아닌 실행 파일 등) — 받은 그대로. */
+"plain";
 
 /**  askpass 질문의 종류. ssh 가 `SSH_ASKPASS_PROMPT` 로 알려 준다(git 은 늘 `secret`). */
 export type AskpassHint = 
@@ -4823,6 +4846,15 @@ export type PingParams = {
 	nonce?: string,
 };
 
+/**  고정 해시 하나(기본 번들). */
+export type PinnedFile = {
+	name: string,
+	url: string,
+	sha256: string,
+	size: number,
+	target: string,
+};
+
 export type PlanFormat = "json" | "text";
 
 export type Pong = {
@@ -4895,6 +4927,9 @@ export type ProjectTrust = {
 	state: TrustState,
 };
 
+/**  설치하는 purl 형식. */
+export type PurlKind = "github" | "generic" | "npm" | "pypi";
+
 export type RecentParams = {
 	/**  없으면 20. */
 	limit?: number | null,
@@ -4909,6 +4944,16 @@ export type RefLabel = {
 	fullName: string,
 	kind: RefKind,
 };
+
+/**  설정 `[tools] registry`. */
+export type RegistryMode = "pinned" | "latest";
+
+/**  목록을 어디서 읽었나. */
+export type RegistryOrigin = 
+/**  바이너리에 묶인 스냅숏(기본 번들 패키지만). */
+"snapshot" | 
+/**  `$CACHE/registry/<판>/` 에 받아 둔 판 전체. */
+"cache";
 
 export type RepoHead = 
 /**  브랜치에 있다. `name` 은 짧은 이름(`main`, `feat/x`), `commit` 은 그 끝 커밋의 해시. */
@@ -4979,6 +5024,23 @@ export type Resolution = {
 	path: string,
 	/**  등록되지 않은 연결 워크트리를 거쳐 메인 저장소 프로젝트로 왔으면 그 워크트리(F2-5). 창은 이것을 활성 워크트리로 연다. */
 	worktree: ActiveWorktree | null,
+};
+
+/**  한 대상에서 받을 것 · 실행할 것. */
+export type ResolvedTool = {
+	name: string,
+	/**  받을 판(덮어쓰기 정의가 있으면 그 판). */
+	version: string,
+	kind: PurlKind,
+	target: ToolTarget,
+	source: ToolSource,
+	/**  실행 파일 이름 → 어디 있나. */
+	bin: { [key in string]: ToolBin },
+	/**  설치 폴더 안 경로(설치 폴더 기준) → 원본(설치 폴더 기준). Mason 의 `share` 링크. */
+	share: { [key in string]: string },
+	opt: { [key in string]: string },
+	/**  Pitwall 의 덮어쓰기 정의가 이겼다. */
+	overridden: boolean,
 };
 
 /**  서버 → 클라이언트 응답의 와이어 형식. [`Response`] 가 이 형태로 직렬화된다. */
@@ -5706,6 +5768,144 @@ export type TlsStatus =
 /**  파일 DB(SQLite) — 네트워크가 없다. */
 "notApplicable";
 
+/**  실행 파일이 있는 곳. */
+export type ToolBin = 
+/**  설치 폴더 안 경로(`/` 구분). */
+{ kind: "path"; value: string } | 
+/**  npm 패키지의 실행 파일 이름(`node_modules/.bin/<이름>`). */
+{ kind: "npm"; value: string } | 
+/**  venv 의 실행 파일 이름(`venv/bin/<이름>`). */
+{ kind: "pypi"; value: string } | 
+/**  venv 의 python 으로 돌리는 스크립트(설치 폴더 안 경로). */
+{ kind: "python"; value: string };
+
+export type ToolDeprecation = {
+	since: string,
+	message: string,
+};
+
+/**  받을 파일 하나. */
+export type ToolDownload = {
+	/**  저장 이름(경로 구분자 없는 파일 이름). 압축 형식은 이것으로 정한다 — kotlin-lsp 는 `.sit` 주소를 `kotlin-lsp.zip` 으로 받는다. */
+	name: string,
+	url: string,
+	/**  풀 곳(설치 폴더 기준, `/` 로 끝나면 폴더). 없으면 설치 폴더. */
+	dest: string | null,
+	format: ArchiveFormat,
+};
+
+export type ToolPackageDetail = {
+	summary: ToolPackageSummary,
+	homepage: string,
+	/**  `source.id`(purl). */
+	sourceId: string,
+	deprecation: ToolDeprecation | null,
+	/**  이 기기에서 받을 것 · 실행할 것. 지원하지 않으면 `null`(까닭은 `summary.unsupported`). */
+	resolved: ResolvedTool | null,
+	/**  받을 파일의 고정 해시(기본 번들이고 판이 고정 판과 같을 때). 없으면 빈 목록. */
+	pinned: PinnedFile[],
+	/**  이 정의를 읽은 registry 판. */
+	registryVersion: string,
+};
+
+/**  npm · PyPI 패키지 이름과 판(판이 없으면 그 레지스트리의 최신 — registry 가 적은 그대로). */
+export type ToolPackageSpec = {
+	name: string,
+	version: string | null,
+};
+
+export type ToolPackageSummary = {
+	name: string,
+	description: string,
+	/**  registry 가 가리키는 판. */
+	version: string,
+	licenses: string[],
+	languages: string[],
+	categories: string[],
+	/**  기본 번들(Pitwall 이 해시를 고정한다). */
+	bundled: boolean,
+	deprecated: boolean,
+	/**  이 기기에서 설치할 수 없는 까닭. 설치할 수 있으면 `null`. */
+	unsupported: ToolUnsupported | null,
+};
+
+export type ToolSource = 
+/**  파일을 받는다(`github` 릴리스 자산 · `generic` URL). */
+{ kind: "files"; files: ToolDownload[] } | 
+/**  npm 패키지(+ `extra_packages`)를 설치한다. */
+{ kind: "npm"; package: ToolPackageSpec; extra: ToolPackageSpec[] } | 
+/**  PyPI 패키지(+ `extra_packages`)를 전용 venv 에 설치한다. */
+{ kind: "pypi"; package: ToolPackageSpec; extra: ToolPackageSpec[] };
+
+/**  Pitwall 이 도구를 설치하는 대상. 이 밖의 기기에서는 [`ToolTarget::current`] 가 `None` 이고 모든 패키지가 「지원하지 않음」 이다. */
+export type ToolTarget = "darwin_arm64" | "darwin_x64" | "linux_x64_gnu" | "linux_arm64_gnu" | "linux_x64_musl" | "win_x64";
+
+/**  「지원하지 않음」 의 까닭. `reason` 은 [`ToolUnsupported::reason`] 과 같다. */
+export type ToolUnsupported = 
+/**  스키마에 없는 키(최상위는 키 이름, `source` 아래는 `source.<키>`). */
+{ reason: "unknownKey"; key: string } | 
+/**  형식이 맞지 않는다(필수 키가 없다 · 형이 다르다 · 상한을 넘는다 · 경로가 폴더 밖이다). */
+{ reason: "invalidDefinition"; message: string } | 
+/**  M4 가 설치하지 않는 purl 형식(`cargo` · `golang` · `openvsx` 등 — 15-m4-plan.md §3). */
+{ reason: "purlType"; purlType: string } | 
+/**  지원하지 않는 `bin` 위임(`node:` · `java-jar:` · `exec:` 등). */
+{ reason: "toolBin"; bin: string; value: string } | 
+/**  모르는 표현식(필터 · 함수 · 오타). 대상별 항목에 있으면 그 대상만 빠진다. */
+{ reason: "expression"; expression: string } | 
+/**  이 대상의 항목이 없다(또는 `supported_platforms` 밖이다, Pitwall 이 지원하지 않는 기기다). */
+{ reason: "target" } | 
+/**  소스에서 빌드한다(`source.build`). */
+{ reason: "build" } | 
+/**  받을 주소가 `https://` 가 아니다. */
+{ reason: "insecureUrl"; url: string };
+
+export type ToolsRegistryGetParams = {
+	name: string,
+};
+
+export type ToolsRegistrySearch = {
+	/**  이름이 같은 것 → 이름이 질의로 시작하는 것 → 이름에 든 것 → 설명에 든 것, 같으면 이름순. */
+	items: ToolPackageSummary[],
+	/**  `limit` 에서 잘랐다. */
+	truncated: boolean,
+};
+
+export type ToolsRegistrySearchParams = {
+	/**  이름 · 설명에서 찾는다(대소문자 무시). 비면 모두. */
+	query: string,
+	/**  `LSP` · `Formatter` 등(대소문자 무시, 같은 것). */
+	category?: string | null,
+	/**  `Python` 등(대소문자 무시, 같은 것). */
+	language?: string | null,
+	/**  기본 100, 최대 1000. */
+	limit?: number | null,
+};
+
+export type ToolsRegistryStatus = {
+	/**  지금 쓰는 registry 판(릴리스 태그). */
+	version: string,
+	/**  이 Pitwall 판이 고정한 판(`registry.toml`). */
+	pinnedVersion: string,
+	/**  설정 `[tools] registry`. */
+	mode: RegistryMode,
+	/**  스냅숏이면 기본 번들 패키지만 있다. */
+	origin: RegistryOrigin,
+	/**  받은 때(유닉스 밀리초). 스냅숏이면 `null`. */
+	fetchedAtMs: number | null,
+	/**  이 기기의 대상. Pitwall 이 지원하지 않는 기기면 `null`(모든 패키지가 지원하지 않음). */
+	target: ToolTarget | null,
+	supported: number,
+	unsupported: number,
+	/**  까닭별 수(까닭 이름순). */
+	unsupportedByReason: UnsupportedCount[],
+	/**  패키지로 읽지 못해 뺀 항목 수. */
+	unreadable: number,
+	/**  지금 뒤에서 가져오는 중. */
+	fetching: boolean,
+	/**  마지막 가져오기의 실패(성공하면 지운다). */
+	lastError: string | null,
+};
+
 /**  연결이 보는 트랜잭션 상태. 세션 상태(`disconnected` · `configChanged` 등 — M3-05)는 이것 위에 얹는다. */
 export type TransactionState = 
 /**  열린 트랜잭션이 없다(자동 커밋). */
@@ -5737,6 +5937,12 @@ export type UiLogLevel = "debug" | "info" | "warn" | "error";
 
 export type UnsubscribeParams = {
 	subscriptionId: number,
+};
+
+export type UnsupportedCount = {
+	/**  [`ToolUnsupported`] 의 `reason`. */
+	reason: string,
+	count: number,
 };
 
 export type UpdateProjectParams = {

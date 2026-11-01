@@ -28195,6 +28195,1057 @@
         "readonly"
       ],
       "tier": "read"
+    },
+    "tools.registry.get": {
+      "description": "패키지 하나의 정의와 이 기기에서 받을 것. 없으면 not found.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ArchiveFormat": {
+            "description": "저장 이름의 끝으로 정한 형식.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tarGz",
+                  "tarXz",
+                  "tar",
+                  "zip"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "gz",
+                "description": "`.gz` 단일 파일.",
+                "type": "string"
+              },
+              {
+                "const": "plain",
+                "description": "그 밖(`.jar` · `.vsix` 가 아닌 실행 파일 등) — 받은 그대로.",
+                "type": "string"
+              }
+            ]
+          },
+          "PinnedFile": {
+            "description": "고정 해시 하나(기본 번들).",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "size": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "target": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "url",
+              "sha256",
+              "size",
+              "target"
+            ],
+            "type": "object"
+          },
+          "PurlKind": {
+            "description": "설치하는 purl 형식.",
+            "enum": [
+              "github",
+              "generic",
+              "npm",
+              "pypi"
+            ],
+            "type": "string"
+          },
+          "ResolvedTool": {
+            "description": "한 대상에서 받을 것 · 실행할 것.",
+            "properties": {
+              "bin": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/ToolBin"
+                },
+                "description": "실행 파일 이름 → 어디 있나.",
+                "type": "object"
+              },
+              "kind": {
+                "$ref": "#/$defs/PurlKind"
+              },
+              "name": {
+                "type": "string"
+              },
+              "opt": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "overridden": {
+                "description": "Pitwall 의 덮어쓰기 정의가 이겼다.",
+                "type": "boolean"
+              },
+              "share": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "설치 폴더 안 경로(설치 폴더 기준) → 원본(설치 폴더 기준). Mason 의 `share` 링크.",
+                "type": "object"
+              },
+              "source": {
+                "$ref": "#/$defs/ToolSource"
+              },
+              "target": {
+                "$ref": "#/$defs/ToolTarget"
+              },
+              "version": {
+                "description": "받을 판(덮어쓰기 정의가 있으면 그 판).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "version",
+              "kind",
+              "target",
+              "source",
+              "bin",
+              "share",
+              "opt",
+              "overridden"
+            ],
+            "type": "object"
+          },
+          "ToolBin": {
+            "description": "실행 파일이 있는 곳.",
+            "oneOf": [
+              {
+                "description": "설치 폴더 안 경로(`/` 구분).",
+                "properties": {
+                  "kind": {
+                    "const": "path",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "npm 패키지의 실행 파일 이름(`node_modules/.bin/<이름>`).",
+                "properties": {
+                  "kind": {
+                    "const": "npm",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "venv 의 실행 파일 이름(`venv/bin/<이름>`).",
+                "properties": {
+                  "kind": {
+                    "const": "pypi",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "venv 의 python 으로 돌리는 스크립트(설치 폴더 안 경로).",
+                "properties": {
+                  "kind": {
+                    "const": "python",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "ToolDeprecation": {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "since": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "since",
+              "message"
+            ],
+            "type": "object"
+          },
+          "ToolDownload": {
+            "description": "받을 파일 하나.",
+            "properties": {
+              "dest": {
+                "description": "풀 곳(설치 폴더 기준, `/` 로 끝나면 폴더). 없으면 설치 폴더.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "format": {
+                "$ref": "#/$defs/ArchiveFormat"
+              },
+              "name": {
+                "description": "저장 이름(경로 구분자 없는 파일 이름). 압축 형식은 이것으로 정한다 — kotlin-lsp 는 `.sit` 주소를 `kotlin-lsp.zip` 으로 받는다.",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "url",
+              "dest",
+              "format"
+            ],
+            "type": "object"
+          },
+          "ToolPackageSpec": {
+            "description": "npm · PyPI 패키지 이름과 판(판이 없으면 그 레지스트리의 최신 — registry 가 적은 그대로).",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "version"
+            ],
+            "type": "object"
+          },
+          "ToolPackageSummary": {
+            "properties": {
+              "bundled": {
+                "description": "기본 번들(Pitwall 이 해시를 고정한다).",
+                "type": "boolean"
+              },
+              "categories": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "deprecated": {
+                "type": "boolean"
+              },
+              "description": {
+                "type": "string"
+              },
+              "languages": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "licenses": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "unsupported": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ToolUnsupported"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "이 기기에서 설치할 수 없는 까닭. 설치할 수 있으면 `null`."
+              },
+              "version": {
+                "description": "registry 가 가리키는 판.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "version",
+              "licenses",
+              "languages",
+              "categories",
+              "bundled",
+              "deprecated",
+              "unsupported"
+            ],
+            "type": "object"
+          },
+          "ToolSource": {
+            "oneOf": [
+              {
+                "description": "파일을 받는다(`github` 릴리스 자산 · `generic` URL).",
+                "properties": {
+                  "files": {
+                    "items": {
+                      "$ref": "#/$defs/ToolDownload"
+                    },
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "files",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "files"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "npm 패키지(+ `extra_packages`)를 설치한다.",
+                "properties": {
+                  "extra": {
+                    "items": {
+                      "$ref": "#/$defs/ToolPackageSpec"
+                    },
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "npm",
+                    "type": "string"
+                  },
+                  "package": {
+                    "$ref": "#/$defs/ToolPackageSpec"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "package",
+                  "extra"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "PyPI 패키지(+ `extra_packages`)를 전용 venv 에 설치한다.",
+                "properties": {
+                  "extra": {
+                    "items": {
+                      "$ref": "#/$defs/ToolPackageSpec"
+                    },
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "pypi",
+                    "type": "string"
+                  },
+                  "package": {
+                    "$ref": "#/$defs/ToolPackageSpec"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "package",
+                  "extra"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "ToolTarget": {
+            "description": "Pitwall 이 도구를 설치하는 대상. 이 밖의 기기에서는 [`ToolTarget::current`] 가 `None` 이고 모든 패키지가 「지원하지 않음」 이다.",
+            "enum": [
+              "darwin_arm64",
+              "darwin_x64",
+              "linux_x64_gnu",
+              "linux_arm64_gnu",
+              "linux_x64_musl",
+              "win_x64"
+            ],
+            "type": "string"
+          },
+          "ToolUnsupported": {
+            "description": "「지원하지 않음」 의 까닭. `reason` 은 [`ToolUnsupported::reason`] 과 같다.",
+            "oneOf": [
+              {
+                "description": "스키마에 없는 키(최상위는 키 이름, `source` 아래는 `source.<키>`).",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "const": "unknownKey",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "key"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "형식이 맞지 않는다(필수 키가 없다 · 형이 다르다 · 상한을 넘는다 · 경로가 폴더 밖이다).",
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "const": "invalidDefinition",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "message"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "M4 가 설치하지 않는 purl 형식(`cargo` · `golang` · `openvsx` 등 — 15-m4-plan.md §3).",
+                "properties": {
+                  "purlType": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "const": "purlType",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "purlType"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "지원하지 않는 `bin` 위임(`node:` · `java-jar:` · `exec:` 등).",
+                "properties": {
+                  "bin": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "const": "toolBin",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "bin",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "모르는 표현식(필터 · 함수 · 오타). 대상별 항목에 있으면 그 대상만 빠진다.",
+                "properties": {
+                  "expression": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "const": "expression",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "expression"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "이 대상의 항목이 없다(또는 `supported_platforms` 밖이다, Pitwall 이 지원하지 않는 기기다).",
+                "properties": {
+                  "reason": {
+                    "const": "target",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "소스에서 빌드한다(`source.build`).",
+                "properties": {
+                  "reason": {
+                    "const": "build",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "받을 주소가 `https://` 가 아니다.",
+                "properties": {
+                  "reason": {
+                    "const": "insecureUrl",
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "url"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "deprecation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolDeprecation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "homepage": {
+            "type": "string"
+          },
+          "pinned": {
+            "description": "받을 파일의 고정 해시(기본 번들이고 판이 고정 판과 같을 때). 없으면 빈 목록.",
+            "items": {
+              "$ref": "#/$defs/PinnedFile"
+            },
+            "type": "array"
+          },
+          "registryVersion": {
+            "description": "이 정의를 읽은 registry 판.",
+            "type": "string"
+          },
+          "resolved": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ResolvedTool"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "이 기기에서 받을 것 · 실행할 것. 지원하지 않으면 `null`(까닭은 `summary.unsupported`)."
+          },
+          "sourceId": {
+            "description": "`source.id`(purl).",
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/$defs/ToolPackageSummary"
+          }
+        },
+        "required": [
+          "summary",
+          "homepage",
+          "sourceId",
+          "deprecation",
+          "resolved",
+          "pinned",
+          "registryVersion"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "tools.registry.search": {
+      "description": "패키지 찾기(이름 · 설명, 분류 · 언어 거르기).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "category": {
+            "default": null,
+            "description": "`LSP` · `Formatter` 등(대소문자 무시, 같은 것).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "default": null,
+            "description": "`Python` 등(대소문자 무시, 같은 것).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "기본 100, 최대 1000.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "query": {
+            "description": "이름 · 설명에서 찾는다(대소문자 무시). 비면 모두.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ToolPackageSummary": {
+            "properties": {
+              "bundled": {
+                "description": "기본 번들(Pitwall 이 해시를 고정한다).",
+                "type": "boolean"
+              },
+              "categories": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "deprecated": {
+                "type": "boolean"
+              },
+              "description": {
+                "type": "string"
+              },
+              "languages": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "licenses": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "unsupported": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ToolUnsupported"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "이 기기에서 설치할 수 없는 까닭. 설치할 수 있으면 `null`."
+              },
+              "version": {
+                "description": "registry 가 가리키는 판.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "version",
+              "licenses",
+              "languages",
+              "categories",
+              "bundled",
+              "deprecated",
+              "unsupported"
+            ],
+            "type": "object"
+          },
+          "ToolUnsupported": {
+            "description": "「지원하지 않음」 의 까닭. `reason` 은 [`ToolUnsupported::reason`] 과 같다.",
+            "oneOf": [
+              {
+                "description": "스키마에 없는 키(최상위는 키 이름, `source` 아래는 `source.<키>`).",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "const": "unknownKey",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "key"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "형식이 맞지 않는다(필수 키가 없다 · 형이 다르다 · 상한을 넘는다 · 경로가 폴더 밖이다).",
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "const": "invalidDefinition",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "message"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "M4 가 설치하지 않는 purl 형식(`cargo` · `golang` · `openvsx` 등 — 15-m4-plan.md §3).",
+                "properties": {
+                  "purlType": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "const": "purlType",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "purlType"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "지원하지 않는 `bin` 위임(`node:` · `java-jar:` · `exec:` 등).",
+                "properties": {
+                  "bin": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "const": "toolBin",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "bin",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "모르는 표현식(필터 · 함수 · 오타). 대상별 항목에 있으면 그 대상만 빠진다.",
+                "properties": {
+                  "expression": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "const": "expression",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "expression"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "이 대상의 항목이 없다(또는 `supported_platforms` 밖이다, Pitwall 이 지원하지 않는 기기다).",
+                "properties": {
+                  "reason": {
+                    "const": "target",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "소스에서 빌드한다(`source.build`).",
+                "properties": {
+                  "reason": {
+                    "const": "build",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "받을 주소가 `https://` 가 아니다.",
+                "properties": {
+                  "reason": {
+                    "const": "insecureUrl",
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason",
+                  "url"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "items": {
+            "description": "이름이 같은 것 → 이름이 질의로 시작하는 것 → 이름에 든 것 → 설명에 든 것, 같으면 이름순.",
+            "items": {
+              "$ref": "#/$defs/ToolPackageSummary"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "`limit` 에서 잘랐다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
+    "tools.registry.status": {
+      "description": "registry 의 판 · 받은 때 · 이 기기에서 지원하는 패키지 수와 지원하지 않는 까닭별 수. 처음 부르면 캐시를 읽고 가져오기를\n뒤에서 시작한다(`fetching`).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "RegistryMode": {
+            "description": "설정 `[tools] registry`.",
+            "enum": [
+              "pinned",
+              "latest"
+            ],
+            "type": "string"
+          },
+          "RegistryOrigin": {
+            "description": "목록을 어디서 읽었나.",
+            "oneOf": [
+              {
+                "const": "snapshot",
+                "description": "바이너리에 묶인 스냅숏(기본 번들 패키지만).",
+                "type": "string"
+              },
+              {
+                "const": "cache",
+                "description": "`$CACHE/registry/<판>/` 에 받아 둔 판 전체.",
+                "type": "string"
+              }
+            ]
+          },
+          "ToolTarget": {
+            "description": "Pitwall 이 도구를 설치하는 대상. 이 밖의 기기에서는 [`ToolTarget::current`] 가 `None` 이고 모든 패키지가 「지원하지 않음」 이다.",
+            "enum": [
+              "darwin_arm64",
+              "darwin_x64",
+              "linux_x64_gnu",
+              "linux_arm64_gnu",
+              "linux_x64_musl",
+              "win_x64"
+            ],
+            "type": "string"
+          },
+          "UnsupportedCount": {
+            "properties": {
+              "count": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "description": "[`ToolUnsupported`] 의 `reason`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "count"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "fetchedAtMs": {
+            "description": "받은 때(유닉스 밀리초). 스냅숏이면 `null`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fetching": {
+            "description": "지금 뒤에서 가져오는 중.",
+            "type": "boolean"
+          },
+          "lastError": {
+            "description": "마지막 가져오기의 실패(성공하면 지운다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/$defs/RegistryMode",
+            "description": "설정 `[tools] registry`."
+          },
+          "origin": {
+            "$ref": "#/$defs/RegistryOrigin",
+            "description": "스냅숏이면 기본 번들 패키지만 있다."
+          },
+          "pinnedVersion": {
+            "description": "이 Pitwall 판이 고정한 판(`registry.toml`).",
+            "type": "string"
+          },
+          "supported": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolTarget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "이 기기의 대상. Pitwall 이 지원하지 않는 기기면 `null`(모든 패키지가 지원하지 않음)."
+          },
+          "unreadable": {
+            "description": "패키지로 읽지 못해 뺀 항목 수.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsupported": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsupportedByReason": {
+            "description": "까닭별 수(까닭 이름순).",
+            "items": {
+              "$ref": "#/$defs/UnsupportedCount"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "지금 쓰는 registry 판(릴리스 태그).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "pinnedVersion",
+          "mode",
+          "origin",
+          "fetchedAtMs",
+          "target",
+          "supported",
+          "unsupported",
+          "unsupportedByReason",
+          "unreadable",
+          "fetching",
+          "lastError"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
     }
   }
 }

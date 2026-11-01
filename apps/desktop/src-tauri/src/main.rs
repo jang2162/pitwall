@@ -71,6 +71,9 @@ fn local_host(
         Arc::clone(&runtime),
     ));
     let lsp_servers_methods = Arc::clone(&lsp_servers);
+    // 도구 registry(`tools.registry.*`, M4-03): 내장 스냅숏으로 시작하고, 처음 불릴 때 캐시를 읽고 가져오기를 뒤에서 한다.
+    let tools_registry = Arc::new(pw_tools::ToolsRegistry::new());
+    let tools_registry_methods = Arc::clone(&tools_registry);
     let fs_methods = Arc::clone(&fs);
     let fs_watch = pw_fs::watch::Watch::new(Arc::clone(&fs));
     let fs_watch_methods = fs_watch.clone();
@@ -163,6 +166,7 @@ fn local_host(
         .methods(move |router| pw_db::register(router, db_session_methods))
         .methods(|router| pw_db::registry::register(router, db::drivers()))
         .methods(move |router| pw_db::ssh_hosts::register(router, db_ssh_host_methods))
+        .methods(move |router| pw_tools::methods::register(router, tools_registry_methods))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
@@ -173,6 +177,8 @@ fn local_host(
     git_status.attach(host.tasks().clone());
     if let Some(config) = host.config() {
         i18n.attach_config(config.global.clone());
+        // registry 캐시(`$CACHE/registry/`)와 설정 `[tools] registry`.
+        tools_registry.attach(config.paths.cache.clone(), config.global.clone());
         // 외부 도구 실행(⌥F1 · ⌘⌥E)이 전역 설정 · 프로젝트 레지스트리를 쓴다.
         if let Some(projects) = host.registry() {
             // 파일 RPC(`fs.*`)는 요청의 프로젝트 루트를 레지스트리에서 찾는다.

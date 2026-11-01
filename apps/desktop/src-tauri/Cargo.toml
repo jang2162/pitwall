@@ -45,6 +45,8 @@ pw-run = { path = "../../../crates/pw-run" }
 pw-runtime = { path = "../../../crates/pw-runtime" }
 pw-rpc = { path = "../../../crates/pw-rpc" }
 pw-syntax = { path = "../../../crates/pw-syntax" }
+# 도구 registry(`tools.registry.*`, 15-m4-plan.md M4-03).
+pw-tools = { path = "../../../crates/pw-tools" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tauri = { version = "2.12.3", features = [] }

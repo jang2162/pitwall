@@ -1,0 +1,37 @@
+[package]
+name = "pw-tools"
+description = "Pitwall tools: the Mason registry data (pinned version, built-in snapshot, overrides) and, later, the tool installer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pw-core = { path = "../pw-core" }
+pw-rpc = { path = "../pw-rpc" }
+# registry 받기(15-m4-plan.md M4-03 ① — M4-04 의 설치기가 같은 받기 모듈을 넓힌다). 데스크톱의 업데이트 확인과 같은 판 · TLS
+# 구성(rustls, 암호 제공자는 ring)이라 크레이트가 늘지 않는다. 첫 요청 전에 ring 제공자를 기본으로 건다.
+reqwest = { version = "0.13.5", default-features = false, features = [
+  "rustls-no-provider",
+  "system-proxy",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = "0.10.9"
+specta = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt", "fs", "sync", "time"] }
+# registry.toml · 덮어쓰기 정의를 읽는다. 버전은 pw-core 와 같게 둔다.
+toml_edit = "0.25.17"
+tracing = "0.1.44"
+# 받을 주소의 형식 검사(https 만 — 결정 M4-D17). reqwest 가 이미 쓰는 판이다.
+url = "2.5.8"
+# registry 릴리스 산출물 `registry.json.zip` 을 푼다. 데스크톱 업데이터가 이미 쓰는 판에 deflate 만 켠다.
+zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2"] }
+# zip 의 deflate 백엔드(기본 `rust_backend` — miniz_oxide). 데스크톱 업데이터 · tar 가 이미 쓰는 판이다.
+flate2 = "1.1.10"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }

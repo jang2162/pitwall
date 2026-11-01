@@ -4997,6 +4997,7 @@ dependencies = [
  "pw-run",
  "pw-runtime",
  "pw-syntax",
+ "pw-tools",
  "reqwest",
  "rustls",
  "semver",
@@ -5678,6 +5679,7 @@ dependencies = [
  "pw-run",
  "pw-runtime",
  "pw-syntax",
+ "pw-tools",
  "schemars 1.2.3",
  "serde",
  "serde_json",
@@ -5758,6 +5760,28 @@ dependencies = [
  "tree-sitter-toml-ng",
  "tree-sitter-typescript",
  "tree-sitter-yaml",
+]
+
+[[package]]
+name = "pw-tools"
+version = "0.0.0"
+dependencies = [
+ "flate2",
+ "pw-core",
+ "pw-rpc",
+ "reqwest",
+ "rustls",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "specta",
+ "tempfile",
+ "tokio",
+ "toml_edit 0.25.17+spec-1.1.0",
+ "tracing",
+ "url",
+ "zip",
 ]
 
 [[package]]
@@ -9692,6 +9716,7 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.2",
  "memchr",
 ]

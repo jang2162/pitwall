@@ -1,0 +1,419 @@
+# Pitwall 이 고정한 Mason registry 판과 기본 번들 패키지의 고정 해시(15-m4-plan.md 결정 M4-D16 · D17).
+# 손으로 고치지 않는다 — node scripts/tools-registry-bump.mjs bump <태그> 가 다시 쓴다(CONTRIBUTING.md 「도구 registry」).
+# `mise run lint` 가 번들 패키지의 (판, 대상, 파일)마다 해시가 있는지 본다(crates/pw-tools/src/pinned.rs 의 check).
+
+# 기본 번들 패키지(결정 M4-D1 ~ D5). 내장 스냅숏에 묶이고 아래에 해시를 고정한다. 바꾸면 bump 를 다시 돌린다.
+bundled = [
+  "basedpyright",
+  "jdtls",
+  "kotlin-lsp",
+  "ruff",
+  "rust-analyzer",
+  "typescript-language-server",
+]
+
+[registry]
+version = "2026-11-01-batty-dew"
+url = "https://github.com/mason-org/mason-registry/releases/download/2026-11-01-batty-dew/registry.json.zip"
+sha256 = "2ef62c6eda948f975d80d2b0841ea944d1a538ae3c6b6d04ed7a55037cdeba7a"
+json_sha256 = "b083df38b9f548ac40a9341c5f573c5f1bb228b9f97cc166fa8350e4bf973b94"
+
+[[artifact]]
+package = "basedpyright"
+version = "1.40.2"
+target = "any"
+name = "basedpyright-1.40.2-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/de/53/0031b22e118264a57a3b64dfc0c8f0659b81af5bccd419ac62933013c601/basedpyright-1.40.2-py3-none-any.whl"
+sha256 = "3a53aeb93a86675ded0e12bc27bd8476c1742356de07ad8cab67bff18110c690"
+size = 13694487
+hash_from = "pypi"
+dist = "basedpyright"
+dist_version = "1.40.2"
+
+[[artifact]]
+package = "basedpyright"
+version = "1.40.2"
+target = "darwin_arm64"
+name = "nodejs_wheel_binaries-24.19.0-py2.py3-none-macosx_13_0_arm64.whl"
+url = "https://files.pythonhosted.org/packages/8c/52/0774b52c7be8151ad9d5aff44edc100c3f13d6d8eb3765f63ffa40e69fe8/nodejs_wheel_binaries-24.19.0-py2.py3-none-macosx_13_0_arm64.whl"
+sha256 = "e12cbfd69089504e42fb14194ce734a9dcf3eb38c820ca63dd511d36fb964e9c"
+size = 56047203
+hash_from = "pypi"
+dist = "nodejs-wheel-binaries"
+dist_version = "24.19.0"
+
+[[artifact]]
+package = "basedpyright"
+version = "1.40.2"
+target = "darwin_x64"
+name = "nodejs_wheel_binaries-24.19.0-py2.py3-none-macosx_13_0_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/67/3a/4fdbbfecf2c23d52c0e3f68de7f7c1b3c97a26d328c69c5f6c49c48e340e/nodejs_wheel_binaries-24.19.0-py2.py3-none-macosx_13_0_x86_64.whl"
+sha256 = "1c890adf4b7e6556ccc1ca66c866bb81884b6c9a581dee4e530dc7f78fb9d514"
+size = 56219459
+hash_from = "pypi"
+dist = "nodejs-wheel-binaries"
+dist_version = "24.19.0"
+
+[[artifact]]
+package = "basedpyright"
+version = "1.40.2"
+target = "linux_arm64_gnu"
+name = "nodejs_wheel_binaries-24.19.0-py2.py3-none-manylinux_2_28_aarch64.whl"
+url = "https://files.pythonhosted.org/packages/5f/a8/0147149415195c59b8a72a594916bfb80d6be4d586f9fbfda313889e0efc/nodejs_wheel_binaries-24.19.0-py2.py3-none-manylinux_2_28_aarch64.whl"
+sha256 = "4e029dadfae1295876063c96b236f673487e8c27379fe146c1e2250283520227"
+size = 60588256
+hash_from = "pypi"
+dist = "nodejs-wheel-binaries"
+dist_version = "24.19.0"
+
+[[artifact]]
+package = "basedpyright"
+version = "1.40.2"
+target = "linux_x64_gnu"
+name = "nodejs_wheel_binaries-24.19.0-py2.py3-none-manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/f4/89/6631d0982353da1bb7bc00bb1988f702822c62b42634f57999ee53b5c337/nodejs_wheel_binaries-24.19.0-py2.py3-none-manylinux_2_28_x86_64.whl"
+sha256 = "4196a947bcc883f2003ab101762d729f3e99b5e86b75bd09151563403e2eceb8"
+size = 61123607
+hash_from = "pypi"
+dist = "nodejs-wheel-binaries"
+dist_version = "24.19.0"
+
+[[artifact]]
+package = "basedpyright"
+version = "1.40.2"
+target = "linux_x64_musl"
+name = "nodejs_wheel_binaries-24.19.0-py2.py3-none-musllinux_1_2_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/18/01/22d97ca72213f66cc386ee638db30c2e62757fdf761c6029074bced83d1c/nodejs_wheel_binaries-24.19.0-py2.py3-none-musllinux_1_2_x86_64.whl"
+sha256 = "28d078b2ced9e2069516e652dc4b1380e7a1a7f2d3934eccd1611586d283ba4c"
+size = 63250653
+hash_from = "pypi"
+dist = "nodejs-wheel-binaries"
+dist_version = "24.19.0"
+
+[[artifact]]
+package = "basedpyright"
+version = "1.40.2"
+target = "win_x64"
+name = "nodejs_wheel_binaries-24.19.0-py2.py3-none-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/88/d1/e3be8fa327a795bcaf7a19cd84299e338a7bce32ff0665fdce9cfa22573c/nodejs_wheel_binaries-24.19.0-py2.py3-none-win_amd64.whl"
+sha256 = "67e3abeb9c3830cae8c8487ae8a2af7cc27dfa75af06145cee5ca7d1857c81bd"
+size = 42448503
+hash_from = "pypi"
+dist = "nodejs-wheel-binaries"
+dist_version = "24.19.0"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "darwin_arm64"
+name = "jdtls.tar.gz"
+url = "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-1.63.0-202610191322.tar.gz"
+sha256 = "b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4"
+size = 51143565
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "darwin_arm64"
+name = "lombok.jar"
+url = "https://projectlombok.org/downloads/lombok.jar"
+sha256 = "85477a4655ebb2c074a9099cfb749be454449fee564d4282610df1b85f7c508b"
+size = 2055065
+hash_from = "download"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "darwin_x64"
+name = "jdtls.tar.gz"
+url = "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-1.63.0-202610191322.tar.gz"
+sha256 = "b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4"
+size = 51143565
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "darwin_x64"
+name = "lombok.jar"
+url = "https://projectlombok.org/downloads/lombok.jar"
+sha256 = "85477a4655ebb2c074a9099cfb749be454449fee564d4282610df1b85f7c508b"
+size = 2055065
+hash_from = "download"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "linux_arm64_gnu"
+name = "jdtls.tar.gz"
+url = "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-1.63.0-202610191322.tar.gz"
+sha256 = "b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4"
+size = 51143565
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "linux_arm64_gnu"
+name = "lombok.jar"
+url = "https://projectlombok.org/downloads/lombok.jar"
+sha256 = "85477a4655ebb2c074a9099cfb749be454449fee564d4282610df1b85f7c508b"
+size = 2055065
+hash_from = "download"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "linux_x64_gnu"
+name = "jdtls.tar.gz"
+url = "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-1.63.0-202610191322.tar.gz"
+sha256 = "b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4"
+size = 51143565
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "linux_x64_gnu"
+name = "lombok.jar"
+url = "https://projectlombok.org/downloads/lombok.jar"
+sha256 = "85477a4655ebb2c074a9099cfb749be454449fee564d4282610df1b85f7c508b"
+size = 2055065
+hash_from = "download"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "linux_x64_musl"
+name = "jdtls.tar.gz"
+url = "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-1.63.0-202610191322.tar.gz"
+sha256 = "b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4"
+size = 51143565
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "linux_x64_musl"
+name = "lombok.jar"
+url = "https://projectlombok.org/downloads/lombok.jar"
+sha256 = "85477a4655ebb2c074a9099cfb749be454449fee564d4282610df1b85f7c508b"
+size = 2055065
+hash_from = "download"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "win_x64"
+name = "jdtls.tar.gz"
+url = "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-1.63.0-202610191322.tar.gz"
+sha256 = "b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4"
+size = 51143565
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "jdtls"
+version = "v1.63.0"
+target = "win_x64"
+name = "lombok.jar"
+url = "https://projectlombok.org/downloads/lombok.jar"
+sha256 = "85477a4655ebb2c074a9099cfb749be454449fee564d4282610df1b85f7c508b"
+size = 2055065
+hash_from = "download"
+
+[[artifact]]
+package = "kotlin-lsp"
+version = "kotlin-lsp/v263.7084.0"
+target = "darwin_arm64"
+name = "kotlin-lsp.zip"
+url = "https://download.jetbrains.com/language-server/kotlin-server/263.7084.0/kotlin-server-263.7084.0-aarch64.sit"
+sha256 = "b403bf8a54bd458e3ba6731cf8abb3340be08b439c03576dfc02b13faf3694b8"
+size = 360201117
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "kotlin-lsp"
+version = "kotlin-lsp/v263.7084.0"
+target = "darwin_x64"
+name = "kotlin-lsp.zip"
+url = "https://download.jetbrains.com/language-server/kotlin-server/263.7084.0/kotlin-server-263.7084.0.sit"
+sha256 = "b29c393a5e541153d03d626e7946268437e358a667a5f914a126dbb4007664b1"
+size = 362158609
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "kotlin-lsp"
+version = "kotlin-lsp/v263.7084.0"
+target = "linux_x64_gnu"
+name = "kotlin-lsp.tar.gz"
+url = "https://download.jetbrains.com/language-server/kotlin-server/263.7084.0/kotlin-server-263.7084.0.tar.gz"
+sha256 = "ae0c4b01e17ab73a4a5227a78ea99e6dcbe3e499600315b22759a4e4cddd11df"
+size = 368521225
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "kotlin-lsp"
+version = "kotlin-lsp/v263.7084.0"
+target = "linux_x64_musl"
+name = "kotlin-lsp.tar.gz"
+url = "https://download.jetbrains.com/language-server/kotlin-server/263.7084.0/kotlin-server-263.7084.0.tar.gz"
+sha256 = "ae0c4b01e17ab73a4a5227a78ea99e6dcbe3e499600315b22759a4e4cddd11df"
+size = 368521225
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "kotlin-lsp"
+version = "kotlin-lsp/v263.7084.0"
+target = "win_x64"
+name = "kotlin-lsp.zip"
+url = "https://download.jetbrains.com/language-server/kotlin-server/263.7084.0/kotlin-server-263.7084.0.win.zip"
+sha256 = "be3bc4ef430cde315e6a83900ffb5d9cc454a36aabe9dd3ba7d4141b2d628164"
+size = 363435395
+hash_from = "vendor-sha256"
+
+[[artifact]]
+package = "ruff"
+version = "0.17.3"
+target = "darwin_arm64"
+name = "ruff-aarch64-apple-darwin.tar.gz"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.3/ruff-aarch64-apple-darwin.tar.gz"
+sha256 = "118f7121aa838785672bf612487f755a89108bb5f44e0f3df96c5967a72614f9"
+size = 9356803
+hash_from = "github-api"
+
+[[artifact]]
+package = "ruff"
+version = "0.17.3"
+target = "darwin_x64"
+name = "ruff-x86_64-apple-darwin.tar.gz"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.3/ruff-x86_64-apple-darwin.tar.gz"
+sha256 = "17f95b1bee24d70de62ffe5beec7f71bb541c7e3d147a1c3d84f7cd6525f6fdf"
+size = 10117731
+hash_from = "github-api"
+
+[[artifact]]
+package = "ruff"
+version = "0.17.3"
+target = "linux_arm64_gnu"
+name = "ruff-aarch64-unknown-linux-gnu.tar.gz"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.3/ruff-aarch64-unknown-linux-gnu.tar.gz"
+sha256 = "3f4639152c0e42bb5938e6c23d53d527a38f3133e000102934518f90529fa299"
+size = 9577709
+hash_from = "github-api"
+
+[[artifact]]
+package = "ruff"
+version = "0.17.3"
+target = "linux_x64_gnu"
+name = "ruff-x86_64-unknown-linux-musl.tar.gz"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.3/ruff-x86_64-unknown-linux-musl.tar.gz"
+sha256 = "85e76bbb60e708a22624b31efb227e8bdaa6978177b93c146d352de4caf37ba1"
+size = 10407681
+hash_from = "github-api"
+
+[[artifact]]
+package = "ruff"
+version = "0.17.3"
+target = "linux_x64_musl"
+name = "ruff-x86_64-unknown-linux-musl.tar.gz"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.3/ruff-x86_64-unknown-linux-musl.tar.gz"
+sha256 = "85e76bbb60e708a22624b31efb227e8bdaa6978177b93c146d352de4caf37ba1"
+size = 10407681
+hash_from = "github-api"
+
+[[artifact]]
+package = "ruff"
+version = "0.17.3"
+target = "win_x64"
+name = "ruff-x86_64-pc-windows-msvc.zip"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.3/ruff-x86_64-pc-windows-msvc.zip"
+sha256 = "a84d9ac74af8ef5bac84a1888a1634df18e6e985e2f930d35c052beacd00e813"
+size = 10282950
+hash_from = "github-api"
+
+[[artifact]]
+package = "rust-analyzer"
+version = "2026-10-26"
+target = "darwin_arm64"
+name = "rust-analyzer-aarch64-apple-darwin.gz"
+url = "https://github.com/rust-lang/rust-analyzer/releases/download/2026-10-26/rust-analyzer-aarch64-apple-darwin.gz"
+sha256 = "8fb90cb58f5910d8d8b24ac1a93cca49f053365cbf0eb3c682144ad0a0027dcf"
+size = 14092361
+hash_from = "github-api"
+
+[[artifact]]
+package = "rust-analyzer"
+version = "2026-10-26"
+target = "darwin_x64"
+name = "rust-analyzer-x86_64-apple-darwin.gz"
+url = "https://github.com/rust-lang/rust-analyzer/releases/download/2026-10-26/rust-analyzer-x86_64-apple-darwin.gz"
+sha256 = "b3e4904877bcf7013a4a342c449cff1bf0ea0b91d5a1a30ac8df3d32142519c0"
+size = 14821659
+hash_from = "github-api"
+
+[[artifact]]
+package = "rust-analyzer"
+version = "2026-10-26"
+target = "linux_arm64_gnu"
+name = "rust-analyzer-aarch64-unknown-linux-gnu.gz"
+url = "https://github.com/rust-lang/rust-analyzer/releases/download/2026-10-26/rust-analyzer-aarch64-unknown-linux-gnu.gz"
+sha256 = "1b225c4c9ae329ca96e8a75a5bbcb5562a7f1d25c57c8b55d3e02299a3dbe836"
+size = 14498733
+hash_from = "github-api"
+
+[[artifact]]
+package = "rust-analyzer"
+version = "2026-10-26"
+target = "linux_x64_gnu"
+name = "rust-analyzer-x86_64-unknown-linux-gnu.gz"
+url = "https://github.com/rust-lang/rust-analyzer/releases/download/2026-10-26/rust-analyzer-x86_64-unknown-linux-gnu.gz"
+sha256 = "4c83773525f93b636ed79761389568b4d2a89c05fa7ecc440245032d49ad80ce"
+size = 15084499
+hash_from = "github-api"
+
+[[artifact]]
+package = "rust-analyzer"
+version = "2026-10-26"
+target = "linux_x64_musl"
+name = "rust-analyzer-x86_64-unknown-linux-musl.gz"
+url = "https://github.com/rust-lang/rust-analyzer/releases/download/2026-10-26/rust-analyzer-x86_64-unknown-linux-musl.gz"
+sha256 = "b12c272401af57558d68afb6310a47f27729bdd65bb11b7171582d9d7f286d32"
+size = 15287950
+hash_from = "github-api"
+
+[[artifact]]
+package = "rust-analyzer"
+version = "2026-10-26"
+target = "win_x64"
+name = "rust-analyzer-x86_64-pc-windows-msvc.zip"
+url = "https://github.com/rust-lang/rust-analyzer/releases/download/2026-10-26/rust-analyzer-x86_64-pc-windows-msvc.zip"
+sha256 = "13549dd0c380647685c82c87b8d80904f81bc4de92a82c099b6083c5b9aa1ca1"
+size = 17767612
+hash_from = "github-api"
+
+[[artifact]]
+package = "typescript-language-server"
+version = "6.0.2"
+target = "any"
+name = "typescript-6.0.3.tgz"
+url = "https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz"
+sha256 = "33cd0ee1beaa8c9e9d15a9da836c62ddea4c34a42d7c2d349dbc80d94165d22a"
+size = 4515854
+hash_from = "download"
+integrity = "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="
+dist = "typescript"
+dist_version = "6.0.3"
+
+[[artifact]]
+package = "typescript-language-server"
+version = "6.0.2"
+target = "any"
+name = "typescript-language-server-6.0.2.tgz"
+url = "https://registry.npmjs.org/typescript-language-server/-/typescript-language-server-6.0.2.tgz"
+sha256 = "d225b223a8a4764ecbd94bdba85d2ef185eaa7b9842a1a31c38c2bbe7f2fe9b9"
+size = 517038
+hash_from = "download"
+integrity = "sha512-Ph7Ql+xkUJvMamnkh1h+aKP6HxLR7lrWIYkPn9/LZBkJdJZgtIj7OoVhkDYtQ7zFPTPmqZHOVXaUKGyz9M2q1Q=="
+dist = "typescript-language-server"
+dist_version = "6.0.2"
