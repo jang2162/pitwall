@@ -1,0 +1,64 @@
+{
+  "started": "2026-11-01T15:58:16.519Z",
+  "commit": "c7503fb006d7ba7241291389960c10034106b5ee",
+  "dirty": false,
+  "cores": 15,
+  "displays": [
+    {
+      "name": "Color LCD",
+      "resolution": "1512 x 982 @ 120.00Hz",
+      "pixels": "3024 x 1964",
+      "main": true,
+      "internal": true,
+      "connection": "spdisplays_internal"
+    }
+  ],
+  "containers": {
+    "pg": "pitwall-perf-4dd022d1-pg",
+    "redis": "pitwall-perf-4dd022d1-redis",
+    "pgImage": "postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929",
+    "redisImage": "redis:7.2.10@sha256:8cd70b529aec2af55a072917098c1ae6f1d9eb975ac1cf36928c7d5af7574f08"
+  },
+  "steps": [
+    {
+      "kind": "db-pg",
+      "args": [
+        "--app",
+        "target/release/perf-m3/default/Pitwall.app",
+        "--db",
+        "--pg",
+        "127.0.0.1:32880/perf",
+        "--label",
+        "default bundle: local PG grid (100k × 10)"
+      ],
+      "waitedSecs": 0,
+      "loadAtStart": [
+        4.06,
+        4.75,
+        5.55
+      ],
+      "startedAt": "2026-11-01T16:00:12.977Z",
+      "endedAt": "2026-11-01T16:04:54.793Z",
+      "loadAtEnd": [
+        1.54,
+        2.91,
+        4.46
+      ],
+      "exit": 0
+    }
+  ],
+  "databases": {
+    "pg": "127.0.0.1:32880",
+    "redis": "127.0.0.1:32881"
+  },
+  "bundles": {
+    "default": "target/release/perf-m3/default/Pitwall.app",
+    "fake": "target/release/perf-m3/fake/Pitwall.app",
+    "defaultHasFake": false,
+    "fakeHasFake": true
+  },
+  "only": [
+    "db-pg"
+  ],
+  "ended": "2026-11-01T16:04:54.795Z"
+}
