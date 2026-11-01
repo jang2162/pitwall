@@ -39,12 +39,8 @@ fn config() -> Config {
     Config::default().sort(SortStrategy::IndexAsc)
 }
 
-/// 매칭에 쓸 스레드 수(코어 수 − 1, 적어도 1).
-fn threads() -> usize {
-    std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1))
-}
-
 pub(crate) fn search(
+    threads: usize,
     views: &[RootView],
     query: &str,
     kinds: Option<&[IndexSymbolKind]>,
@@ -78,7 +74,7 @@ pub(crate) fn search(
     let mut hits: Vec<Hit> = if terms.is_empty() {
         at.iter().map(|&at| Hit { at, score: 0 }).collect()
     } else {
-        score_all(&names, &at, &terms)
+        score_all(&names, &at, &terms, threads)
     };
     drop(names);
     let matched = hits.len() as u64;
@@ -150,14 +146,14 @@ pub(crate) fn search(
 }
 
 /// 모든 낱말에 맞는 후보와 그 점수 합.
-fn score_all(names: &[&str], at: &[At], terms: &[&str]) -> Vec<Hit> {
+fn score_all(names: &[&str], at: &[At], terms: &[&str], threads: usize) -> Vec<Hit> {
     let config = config();
     let mut found: Option<Vec<(usize, u32)>> = None;
     for term in terms {
         let mut matcher = Matcher::new(Pattern::new(term, PatternConfig::default()), &config);
         let next: Vec<(usize, u32)> = match &found {
             None => matcher
-                .match_list_parallel(names, threads())
+                .match_list_parallel(names, threads)
                 .into_iter()
                 .map(|m| (m.index as usize, u32::from(m.score)))
                 .collect(),

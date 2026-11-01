@@ -5555,6 +5555,7 @@ version = "0.0.0"
 dependencies = [
  "frizbee",
  "insta",
+ "libc",
  "pw-core",
  "pw-ext",
  "pw-fs",

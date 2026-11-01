@@ -265,3 +265,57 @@ fn positions_are_utf16_columns() {
     assert_eq!(s.selection_range.start.character, 14);
     assert_eq!(s.selection_range.end.character, 18);
 }
+
+/// 1 MiB 상한 바로 아래의 한 줄짜리 파일: 맨 앞 비ASCII 글자 하나 + 정의를 `unit` 으로 되풀이.
+pub fn one_line(head: &str, unit: impl Fn(usize) -> String) -> String {
+    let mut text = String::from(head);
+    let mut i = 0;
+    loop {
+        let next = unit(i);
+        if (text.len() + next.len()) as u64 > pw_index::MAX_FILE_BYTES {
+            return text;
+        }
+        text.push_str(&next);
+        i += 1;
+    }
+}
+
+/// 한 줄이 긴 파일(minified 번들 꼴)도 파일 하나의 시한 안에 끝나거나 심볼 없이 건너뛴다 — 위치 계산이 줄 길이 × 심볼 수가 되지
+/// 않는다(리뷰 H1: 1 MiB 한 줄 JS 하나에 45 s 였다). `index.file.symbols { text }` 가 이 길이다.
+#[test]
+fn a_one_line_megabyte_file_finishes_within_the_budget() {
+    let index = index();
+    for (file, text) in [
+        (
+            "bundle.js",
+            one_line("var s=\"é\";", |i| format!("function a{i}(){{}}")),
+        ),
+        (
+            "one.rs",
+            one_line("const S:&str=\"é\";", |i| format!("fn a{i}(){{}}")),
+        ),
+    ] {
+        let started = std::time::Instant::now();
+        let result = index.parse_text(file, &text);
+        let took = started.elapsed();
+        println!("{file}: {} symbols in {took:?}", result.symbols.len());
+        assert!(
+            took < pw_index::extract::PARSE_BUDGET * 2,
+            "{file}: {took:?} ({} symbols)",
+            result.symbols.len()
+        );
+        // 다 뽑았으면 위치도 맞다: 마지막 심볼의 이름 자리는 그 이름 바로 앞까지의 UTF-16 글자 수.
+        if let Some(last) = result.symbols.last() {
+            let at = text
+                .rfind(&format!(" {}(", last.name))
+                .or_else(|| text.rfind(&format!("n {}(", last.name)).map(|i| i + 1))
+                .unwrap()
+                + 1;
+            assert_eq!(
+                last.selection_range.start.character as usize,
+                text[..at].encode_utf16().count(),
+                "{file}"
+            );
+        }
+    }
+}

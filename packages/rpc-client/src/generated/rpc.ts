@@ -4236,7 +4236,12 @@ export type IndexRootState =
 /**  다 만들었다(바뀐 파일을 다시 읽는 중일 수 있다 — 그동안은 옛 심볼로 답한다). */
 "ready" | 
 /**  작업이 취소돼 버렸다. 다음 요청이 다시 만든다. */
-"cancelled";
+"cancelled" | 
+/**
+ *  파일 목록 작업(`task-title-indexing-files`)이 취소돼 목록이 없다. 파일 목록을 다시 만들 때까지(파일 검색 `search.files` ·
+ *  `rescan`) 이 루트는 찾지 않는다(`unindexed`).
+ */
+"suspended";
 
 export type IndexRootStatus = {
 	root: string,

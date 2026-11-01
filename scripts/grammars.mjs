@@ -312,10 +312,6 @@ function check() {
     if (g.tags.length > 0) {
       files.push(["tags_sha256", tags]);
       problems.push(...localQueryProblems(g, tags));
-    } else if (existsSync(tags)) {
-      problems.push(
-        `${g.id}: ${tags} is not listed in scripts/grammars.toml — add \`tags\` to the grammar or remove the file`,
-      );
     }
     if (g.test_wasm) files.push(["wasm_sha256", join(root, TEST_WASM, `${g.id}.wasm`)]);
     for (const [key, file] of files) {
@@ -372,6 +368,14 @@ function check() {
       );
     }
   }
+  // 정의 쿼리는 심볼 인덱스가 언어 확장의 쿼리 폴더에서 이름으로 읽는다 — 출처표 밖 확장 폴더의 것도 훑는다.
+  for (const file of namedFiles(join(root, "extensions"), "tags.scm")) {
+    if (!listed.has(file)) {
+      problems.push(
+        `${file} is not listed in scripts/grammars.toml — add \`tags\` to the grammar or remove the file`,
+      );
+    }
+  }
   if (problems.length > 0) {
     for (const p of problems) console.error(p);
     process.exit(1);
@@ -405,6 +409,18 @@ function lockedPackages() {
     const name = field("name");
     if (!out.has(name)) out.set(name, []);
     out.get(name).push({ version: field("version"), source: field("source") });
+  }
+  return out;
+}
+
+/** `dir` 아래(하위 폴더 포함)의 이름이 `name` 인 파일들. `node_modules` 는 건너뛴다. */
+function namedFiles(dir, name) {
+  const out = [];
+  if (!existsSync(dir)) return out;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory() && entry.name !== "node_modules") out.push(...namedFiles(path, name));
+    else if (entry.isFile() && entry.name === name) out.push(path);
   }
   return out;
 }

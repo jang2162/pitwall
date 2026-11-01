@@ -205,6 +205,9 @@ pub enum IndexRootState {
     Ready,
     /// 작업이 취소돼 버렸다. 다음 요청이 다시 만든다.
     Cancelled,
+    /// 파일 목록 작업(`task-title-indexing-files`)이 취소돼 목록이 없다. 파일 목록을 다시 만들 때까지(파일 검색 `search.files` ·
+    /// `rescan`) 이 루트는 찾지 않는다(`unindexed`).
+    Suspended,
 }
 
 #[derive(

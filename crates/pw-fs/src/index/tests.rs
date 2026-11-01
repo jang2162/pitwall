@@ -1056,6 +1056,7 @@ async fn walks_and_matches_wait_for_a_turn_then_report_busy() {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Observed {
     Opened,
+    Suspended,
     Rebuilt(Vec<String>),
     Changed(Vec<String>, Vec<String>),
     Dropped,
@@ -1073,6 +1074,10 @@ impl Recorder {
 impl FileListObserver for Recorder {
     fn opened(&self, _: &str, _: &Path) {
         self.0.lock().unwrap().push(Observed::Opened);
+    }
+
+    fn suspended(&self, _: &str, _: &Path) {
+        self.0.lock().unwrap().push(Observed::Suspended);
     }
 
     fn rebuilt(&self, _: &str, _: &Path, files: Vec<(Arc<str>, FileFlags)>) {

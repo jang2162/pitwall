@@ -56,6 +56,14 @@ pub const TASK_TITLE: &str = "task-title-indexing-symbols";
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 /// 만드는 작업의 진행을 알리는 간격.
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+/// 매칭 · 텍스트 파싱이 Host 전체에서 함께 도는 수의 상한. Readonly · Mobile 기기도 부르는 Read 메서드라 이 상한이 방어선이다
+/// (심볼 50만 질의 하나가 후보 벡터 십수 MB 와 코어 − 1 스레드를 쓴다 — 파일 검색 `search.files` 와 같은 꼴, 따로 센다).
+pub const MAX_REQUESTS: usize = 4;
+/// 차례를 기다리는 최대 시간. 넘으면 「바쁨」 오류다.
+#[cfg(not(test))]
+pub const REQUEST_WAIT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+pub const REQUEST_WAIT: Duration = Duration::from_secs(1);
 
 /// 파일 내용이 그대로인지 보는 표지(크기 · 수정 시각).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +99,9 @@ enum Phase {
     Cancelled,
     /// 버렸다(감시를 놓음). 기다리던 요청은 색인이 없는 루트처럼 답한다.
     Closed,
+    /// 파일 목록 작업이 취소돼 목록이 없다(감시는 살아 있다 — 그사이의 변경이 오지 않는다). 파일 목록을 다시 만들 때까지 이 루트는
+    /// 찾지 않는다(`unindexed`). 다시 만든 목록이 오면 크기 · 수정 시각이 달라진 파일만 다시 읽는다.
+    Suspended,
 }
 
 /// 멈춤 신호. 일꾼 하나에 하나.
@@ -108,7 +119,8 @@ struct RootState {
     build: Option<Stop>,
     /// 취소로 심볼을 버렸다. 요청이 다시 만들 때까지 일꾼을 띄우지 않는다.
     cancelled: bool,
-    closed: bool,
+    /// 파일 목록 작업이 취소돼 목록이 없다([`Phase::Suspended`]). 다시 만든 목록이 올 때까지 일꾼을 띄우지 않는다.
+    suspended: bool,
 }
 
 impl RootState {
@@ -126,6 +138,9 @@ struct Root {
     /// 처음 만드는 작업의 진행(파일 수).
     done: AtomicU64,
     total: AtomicU64,
+    /// 감시가 풀려 표에서 뺐다. 잠금 없이 켠다 — 감시 표의 잠금 안에서 부르는 `dropped` 가 이 루트의 잠금(질의 · 적용이 쥔다)을
+    /// 기다리지 않게. 일꾼 · 사건은 이것을 보고 그만둔다.
+    closed: AtomicBool,
 }
 
 impl Root {
@@ -142,11 +157,25 @@ struct Inner {
     roots: Mutex<HashMap<Key, Arc<Root>>>,
     tasks: OnceLock<(TaskSpawner, tokio::runtime::Handle)>,
     threads: usize,
+    /// 매칭 · 텍스트 파싱의 차례([`MAX_REQUESTS`]).
+    turns: tokio::sync::Semaphore,
 }
 
 impl Inner {
     fn roots(&self) -> MutexGuard<'_, HashMap<Key, Arc<Root>>> {
         self.roots.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// 차례를 기다린다(많아야 [`REQUEST_WAIT`]). 넘으면 「바쁨」.
+    async fn turn(&self) -> Result<tokio::sync::SemaphorePermit<'_>, RpcError> {
+        tokio::time::timeout(REQUEST_WAIT, self.turns.acquire())
+            .await
+            .map_err(|_| {
+                RpcError::internal(format!(
+                    "the symbol index is busy: {MAX_REQUESTS} requests are already running"
+                ))
+            })?
+            .map_err(|e| RpcError::internal(e.to_string()))
     }
 
     fn get(&self, project_id: &str, root: &Path) -> Option<Arc<Root>> {
@@ -175,7 +204,19 @@ impl SymbolIndex {
                 roots: Mutex::default(),
                 tasks: OnceLock::new(),
                 threads,
+                turns: tokio::sync::Semaphore::new(MAX_REQUESTS),
             }),
+        }
+    }
+
+    /// 파싱 · 매칭 스레드 수를 `threads` 로 묶는다(기본은 코어 수 − 1). 측정이 「8 코어」 조건(스레드 7)을 흉내 낼 때 쓴다.
+    #[must_use]
+    pub fn with_threads(self, threads: usize) -> Self {
+        let mut inner = Arc::try_unwrap(self.inner)
+            .unwrap_or_else(|_| panic!("with_threads is called right after SymbolIndex::new"));
+        inner.threads = threads.max(1);
+        Self {
+            inner: Arc::new(inner),
         }
     }
 
@@ -247,8 +288,11 @@ impl SymbolIndex {
                 None => unindexed.push(root.display().to_string()),
             }
         }
+        let _turn = self.inner.turn().await?;
+        let threads = self.inner.threads;
         blocking(move || {
             Ok(search::search(
+                threads,
                 &views,
                 &params.query,
                 params.kinds.as_deref(),
@@ -310,6 +354,7 @@ impl SymbolIndex {
                 }
             }
         }
+        let _turn = self.inner.turn().await?;
         let inner = Arc::clone(&self.inner);
         let text = params.text;
         blocking(move || {
@@ -355,6 +400,7 @@ impl SymbolIndex {
                     Phase::Ready => IndexRootState::Ready,
                     Phase::Cancelled => IndexRootState::Cancelled,
                     Phase::Closed => IndexRootState::None,
+                    Phase::Suspended => IndexRootState::Suspended,
                 };
                 let st = entry.state();
                 let parsed = st.files.values().flatten();
@@ -435,13 +481,14 @@ impl SymbolIndex {
             let now = *phase.borrow_and_update();
             match now {
                 Phase::Ready => return Ok(Some(entry)),
-                Phase::Closed => return Ok(None),
+                Phase::Closed | Phase::Suspended => return Ok(None),
                 Phase::Cancelled => restart(&self.inner, &entry),
                 Phase::Building => {
                     if phase.changed().await.is_err() {
                         return Ok(None);
                     }
-                    if *phase.borrow() == Phase::Cancelled {
+                    // 우리 작업 · 파일 목록 작업 어느 쪽이 취소돼도 기다리던 만들기는 끝나지 않는다.
+                    if matches!(*phase.borrow(), Phase::Cancelled | Phase::Suspended) {
                         return Err(RpcError::new(
                             code::CANCELLED,
                             "building the symbol index was cancelled",
@@ -514,6 +561,8 @@ enum ListEvent {
         removed: Vec<String>,
         inserted: Vec<(Arc<str>, FileFlags)>,
     },
+    /// 파일 목록 작업이 취소됐다.
+    Suspended { project_id: String, root: PathBuf },
     /// 감시가 풀려 표에서 뺀 색인 — 이 스레드에서 놓는다(심볼 수십 MB 를 해제하는 일을 감시 표의 잠금 안에서 하지 않게).
     Release(Arc<Root>),
 }
@@ -549,6 +598,7 @@ impl FileListObserver for Observer {
                     phase: watch::Sender::new(Phase::Building),
                     done: AtomicU64::new(0),
                     total: AtomicU64::new(0),
+                    closed: AtomicBool::new(false),
                 })
             });
     }
@@ -576,21 +626,22 @@ impl FileListObserver for Observer {
         });
     }
 
-    /// 표에서 빼고 일꾼을 멈춘다. 기다리던 요청은 「색인 없음」 으로 답한다. 메모리는 사건 스레드가 놓는다.
+    fn suspended(&self, project_id: &str, root: &Path) {
+        self.send(ListEvent::Suspended {
+            project_id: project_id.to_owned(),
+            root: root.to_path_buf(),
+        });
+    }
+
+    /// 표에서 빼고 닫힘을 켠다(루트 잠금을 잡지 않는다). 기다리던 요청은 「색인 없음」 으로 답한다. 일꾼 멈추기 · 메모리 놓기는
+    /// 사건 스레드가 한다.
     fn dropped(&self, project_id: &str, root: &Path) {
         let removed = self
             .inner
             .roots()
             .remove(&(project_id.to_owned(), root.to_path_buf()));
         if let Some(entry) = removed {
-            {
-                let mut st = entry.state();
-                st.closed = true;
-                if let Some(stop) = st.worker.take() {
-                    stop.store(true, Ordering::Relaxed);
-                }
-                st.build = None;
-            }
+            entry.closed.store(true, Ordering::Relaxed);
             entry.phase.send_replace(Phase::Closed);
             self.send(ListEvent::Release(entry));
         }
@@ -619,12 +670,37 @@ fn apply(inner: &Arc<Inner>, event: ListEvent) {
             tests::before_event(&root);
             changed(inner, &project_id, &root, &removed, &inserted);
         }
+        ListEvent::Suspended { project_id, root } => {
+            if let Some(entry) = inner.get(&project_id, &root) {
+                suspend(&entry);
+            }
+        }
         ListEvent::Release(entry) => {
             let mut st = entry.state();
+            if let Some(stop) = st.worker.take() {
+                stop.store(true, Ordering::Relaxed);
+            }
+            st.build = None;
             st.files.clear();
             st.dirty.clear();
         }
     }
+}
+
+/// 파일 목록이 없어졌다: 일꾼을 멈추고 다시 만든 목록이 올 때까지 이 루트를 찾지 않는다. 심볼은 크기 · 수정 시각을 견주려고 둔다.
+fn suspend(entry: &Root) {
+    if entry.closed.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut st = entry.state();
+    if let Some(stop) = st.worker.take() {
+        stop.store(true, Ordering::Relaxed);
+    }
+    st.build = None;
+    st.dirty.clear();
+    st.suspended = true;
+    drop(st);
+    entry.phase.send_replace(Phase::Suspended);
 }
 
 /// 목록 전부. 감시가 건 루트(자리가 있는 것)에만 적용한다 — 감시가 풀린 뒤 늦게 닿은 목록은 버린다.
@@ -633,6 +709,11 @@ fn rebuilt(inner: &Arc<Inner>, project_id: &str, root: &Path, files: &[(Arc<str>
         return;
     };
     let mut st = entry.state();
+    if std::mem::take(&mut st.suspended) {
+        // 목록이 없던 동안의 변경은 받지 못했다 — 다 다시 볼 때까지 기다리게 한다.
+        st.cancelled = false;
+        entry.phase.send_replace(Phase::Building);
+    }
     let mut old = std::mem::take(&mut st.files);
     st.files = files
         .iter()
@@ -701,7 +782,7 @@ fn excluded(flags: FileFlags) -> bool {
 
 /// 다시 볼 파일이 있고 일꾼이 없으면 띄운다. 처음 만드는 중이면 작업으로 보인다.
 fn kick(inner: &Arc<Inner>, entry: &Arc<Root>, st: &mut RootState) {
-    if st.closed || st.cancelled || st.worker.is_some() {
+    if entry.closed.load(Ordering::Relaxed) || st.cancelled || st.suspended || st.worker.is_some() {
         return;
     }
     if st.dirty.is_empty() {
@@ -738,7 +819,7 @@ fn kick(inner: &Arc<Inner>, entry: &Arc<Root>, st: &mut RootState) {
 /// 취소로 버린 색인을 다시 만든다.
 fn restart(inner: &Arc<Inner>, entry: &Arc<Root>) {
     let mut st = entry.state();
-    if !st.cancelled || st.closed {
+    if !st.cancelled || entry.closed.load(Ordering::Relaxed) {
         return;
     }
     st.cancelled = false;
@@ -847,7 +928,10 @@ fn run(inner: &Inner, entry: &Root, stop: &Stop) {
         loop {
             let jobs: Vec<Job> = {
                 let mut st = entry.state();
-                if stop.load(Ordering::Relaxed) || !st.is(&st.worker, stop) {
+                if stop.load(Ordering::Relaxed)
+                    || entry.closed.load(Ordering::Relaxed)
+                    || !st.is(&st.worker, stop)
+                {
                     return;
                 }
                 if st.dirty.is_empty() {
@@ -908,7 +992,10 @@ fn parse_all(
         let mut out = Vec::new();
         loop {
             let i = next.fetch_add(1, Ordering::Relaxed);
-            if i >= jobs.len() || stop.load(Ordering::Relaxed) {
+            if i >= jobs.len()
+                || stop.load(Ordering::Relaxed)
+                || entry.closed.load(Ordering::Relaxed)
+            {
                 break;
             }
             let job = &jobs[i];
@@ -975,6 +1062,11 @@ fn process(
         return Outcome::Set(None);
     };
     let text = String::from_utf8_lossy(&bytes);
+    // 내용으로 판정하는 생성 파일(minified · `Code generated … DO NOT EDIT` · `@generated` 머리 등)도 뺀다 — 경로 규칙은 파일 목록 인덱스가 이미 봤고,
+    // 여기서는 같은 함수에 앞부분을 넘긴다(파일 목록 인덱스는 내용을 읽지 않아 앞 줄 규칙을 쓰지 않는다).
+    if generated(&job.rel, head(&text)) {
+        return Outcome::Set(None);
+    }
     let Some(language) = inner.languages.for_path(&job.rel, Some(head(&text))) else {
         return Outcome::Set(None);
     };
@@ -988,15 +1080,32 @@ fn process(
     Outcome::Set(parsed)
 }
 
-/// [`MAX_FILE_BYTES`] 까지 읽는다. 넘거나 읽지 못하면 `None`.
+/// 내용 규칙까지 본 생성 파일 판정 — 파일 목록 인덱스의 경로 판정과 같은 Linguist 판정(`pw_lang::generated::generated`)에 언어와
+/// 무관한 생성 표지(`@generated` · `DO NOT EDIT` 머리)를 더한 `generated_or_marked`.
+fn generated(rel: &str, head: &str) -> bool {
+    pw_lang::generated::generated_or_marked(rel, Some(head)).is_some()
+}
+
+/// [`MAX_FILE_BYTES`] 까지 읽는다. 넘거나 읽지 못하거나 보통 파일이 아니면(FIFO · 장치) `None`. 열기는 막히지 않게 하고(unix
+/// `O_NONBLOCK` — 연 뒤에 바뀐 FIFO 도 열 때 막히지 않는다) 연 핸들의 종류로 거른다.
 fn read_limited(path: &Path) -> Option<Vec<u8>> {
     use std::io::Read;
-    let mut file = std::fs::File::open(path).ok()?;
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+            .ok()?
+    };
+    #[cfg(not(unix))]
+    let file = std::fs::File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
     let mut bytes = Vec::new();
-    file.by_ref()
-        .take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes).ok()?;
     (bytes.len() as u64 <= MAX_FILE_BYTES).then_some(bytes)
 }
 

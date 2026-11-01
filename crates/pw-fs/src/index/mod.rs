@@ -164,8 +164,12 @@ pub trait FileListObserver: Send + Sync + 'static {
         removed: Vec<String>,
         inserted: Vec<(Arc<str>, FileFlags)>,
     );
-    /// 그 루트의 마지막 감시가 풀려 목록을 버렸다. 목록 작업이 취소돼 목록만 버린 것은 알리지 않는다 — 감시가 살아 있으므로 다시
-    /// 만들면 [`Self::rebuilt`] 가 다시 온다.
+    /// 목록 작업이 취소돼(사람이 `task.cancel`) 목록을 버렸다. 감시는 살아 있다 — 그사이의 변경은 오지 않고, 다음 요청 · `rescan` ·
+    /// 버스 큐 넘침이 다시 만들면 [`Self::rebuilt`] 가 다시 온다. 그때까지 옛 목록을 믿지 말라는 것이다.
+    fn suspended(&self, project_id: &str, root: &Path) {
+        let _ = (project_id, root);
+    }
+    /// 그 루트의 마지막 감시가 풀려 목록을 버렸다.
     fn dropped(&self, project_id: &str, root: &Path);
 }
 
@@ -307,6 +311,11 @@ impl RootIndex {
             dropped: true,
             ..State::default()
         };
+        if !self.closed.load(Ordering::Relaxed)
+            && let Some(observer) = &self.observer
+        {
+            observer.suspended(&self.project_id, &self.root);
+        }
         if !self.closed.load(Ordering::Relaxed) {
             self.phase.send_replace(Phase::Cancelled);
         }

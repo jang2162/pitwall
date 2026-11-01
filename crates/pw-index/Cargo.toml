@@ -31,6 +31,10 @@ tracing = "0.1.44"
 # 판본은 pw-syntax 와 같다(같은 tree-sitter 런타임의 언어 · 쿼리를 쓴다).
 tree-sitter = "0.27.1"
 
+[target."cfg(unix)".dependencies]
+# 파일을 막히지 않게 연다(`O_NONBLOCK` — FIFO 를 읽기 전에 핸들 종류로 거른다, pw-fs 의 검색과 같다). 판본은 pw-fs 와 같다.
+libc = "0.2.190"
+
 [dev-dependencies]
 # 언어마다 픽스처 하나의 심볼 표를 스냅숏으로 고정한다(tests/snapshots/).
 insta = "1.49.0"

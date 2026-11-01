@@ -11,6 +11,10 @@
 //! - `generated_html?` 의 `<meta name="generator">` 판정(속성 파서가 필요하다 — pkgdown · Doxygen · 자동 생성 머리 줄은 옮겼다).
 //!
 //! Linguist 에 없는 규칙(예: `target/`, `dist/`)은 더하지 않는다 — GitHub 와 같은 결과를 내는 것이 목적이다.
+//!
+//! 예외 하나: [`generated_or_marked`] 는 위 판정에 언어와 무관한 생성 표지(앞 5줄의 주석에 `@generated` · `DO NOT EDIT`)를 더한
+//! Pitwall 의 판정이다. 심볼 인덱스(`pw-index`, 15-m4-plan.md M4-15 리뷰 M2)만 쓴다 — [`generated`] 와 `lang.detect` 의 결과는
+//! Linguist 와 같게 둔다.
 
 use std::sync::LazyLock;
 
@@ -339,4 +343,20 @@ pub fn generated(path: &str, head: Option<&str>) -> Option<&'static str> {
         .iter()
         .find(|(_, check)| check(&ctx))
         .map(|(name, _)| *name)
+}
+
+/// [`generated`] + 언어와 무관한 생성 표지: 앞 5줄 중 주석(`//` · `/*` · `*` · `#` · `--` 로 시작)인 줄에 `@generated` 나
+/// `DO NOT EDIT` 이 있다. Linguist 밖 규칙이다(머리 주석) — 맞으면 이름 `"pitwall_marked_header?"`.
+pub fn generated_or_marked(path: &str, head: Option<&str>) -> Option<&'static str> {
+    if let Some(rule) = generated(path, head) {
+        return Some(rule);
+    }
+    let marked = head?.split('\n').take(5).any(|line| {
+        let line = line.trim_start();
+        ["//", "/*", "*", "#", "--"]
+            .iter()
+            .any(|c| line.starts_with(c))
+            && (line.contains("@generated") || line.contains("DO NOT EDIT"))
+    });
+    marked.then_some("pitwall_marked_header?")
 }
