@@ -51,6 +51,8 @@ env:
   MISE_VERSION: 2026.4.3
   # mise run 이 아니라 도구를 직접 부르지만, mise 가 빠진 도구를 저절로 깔지 않게 고른 것만 쓴다.
   MISE_TASK_RUN_AUTO_INSTALL: "false"
+  # 도구를 받는 요청이 끊기면 다시 보낸다(ci.yml 과 같은 값 — 까닭은 그쪽 주석).
+  MISE_HTTP_RETRIES: 4
 
 jobs:
   plan:
