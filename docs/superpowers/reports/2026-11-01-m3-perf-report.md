@@ -70,7 +70,7 @@ PW_TEST_REDIS_URL=redis://127.0.0.1:<port>/0 cargo nextest run --release -p pw-d
 | ⑤ | 실행 → 첫 행이 그려진 프레임, 결과 10만 행 × 10열 — 가짜 드라이버 / 로컬 PG | < 500 ms | **48 ms** (47 – 70, 5) / **57 ms** (48 – 66, 5) · 목표 안 | — | — | `db-fake` / `db-pg` |
 | ⑥ | 그리드 끝까지 연속 스크롤(fling) — 화면 갱신을 놓치지 않은 프레임 몫 · 간격 중앙값, 가짜 / PG | ≥ 0.95 · ≤ 17 ms | **1.00 · 17 ms** (1.00 – 1.00, 5) / **1.00 · 17 ms** (1.00 – 1.00, 5) · 목표 안. 참고: 16.7 ms 안 몫 0.49 / 0.48, 간격 p95 19 / 19 ms | — | — | 같은 단계 |
 | ⑦ | 스트리밍 중 스크롤(행이 들어오는 동안 fling), 가짜 드라이버 | ≥ 0.95 · ≤ 17 ms(60 프레임 이상에서 판정) | **1.00 · 17 ms** (1.00 – 1.00, 5), 스크롤한 프레임 207 (206 – 207), 스트림 끝까지 3,479 ms · 목표 안 | — | — | `db-fake` |
-| ⑧ | 스트리밍 중 스크롤, 로컬 PG | 같음 | **판정 안 됨** — 0.88 (0.87 – 0.94) · 18 ms (17 – 20), 스크롤한 프레임 **17 (15 – 18)**. PG 가 10만 행을 351 ms (341 – 377) 만에 다 보내 스트리밍 창이 60 프레임에 못 미친다 | — | — | `db-pg`, §6 |
+| ⑧ | 스트리밍 중 스크롤, 로컬 PG | 같음 | **판정 안 됨** — 0.88 (0.87 – 0.94) · 18 ms (17 – 20), 스크롤한 프레임 **17 (15 – 18)**. PG 가 10만 행을 351 ms (341 – 377) 만에 다 보내 스트리밍 창이 60 프레임에 못 미친다. 5회 모두 0.95 아래였다(긴 프레임이 회마다 1 – 2개). 가짜 드라이버의 스트림은 fetch 마다 30 ms 쉬어 몰아 받기를 재지 않으므로 ⑦ 의 1.00 이 이 경우를 대신하지 않는다. | — | — | `db-pg`, §6 |
 | ⑨ | 스키마 탐색기: 「테이블(10,000)」 그룹 ▸ → 첫 화면 | < 500 ms | **33 ms** (31 – 36, 5) · 목표 안. 참고: 연결 ▸ → 스키마 행(연결 열기 포함) 16 ms | — | — | `db-fake` |
 | ⑩ | Redis: [연결] → 첫 키 트리 행(키 100만, 패턴 없음) | < 500 ms | **50 ms** (46 – 51, 5) · 목표 안. 참고: 스캔 끝까지 2,435 ms | — | — | `db-fake` |
 | ⑪ | Redis 키 트리 끝까지 스크롤 | ≥ 0.95 · ≤ 17 ms | **1.00 · 17 ms** (1.00 – 1.00, 5) · 목표 안 | — | — | `db-fake` |
@@ -88,15 +88,15 @@ PW_TEST_REDIS_URL=redis://127.0.0.1:<port>/0 cargo nextest run --release -p pw-d
 ## 4. 측정 명령 · 하네스
 
 - **`mise run perf-m3`**(= `node scripts/perf-m3.mjs`): ① 도커로 이 워크트리 전용 PG · Redis 를 빈 포트에 띄우고 심는다 ② 기본 번들과 `perf-fake-db` 번들을 빌드하고 가짜 코드가 기본 번들에 없는지 본다 ③ pw-perf 다섯 단계(`empty-default` · `empty-fake` · `db-idle` · `db-fake` · `db-pg`) ④ 컨테이너를 끈다 ⑤ 결과를 이 폴더로 복사한다. `--short`(단계마다 1회) · `--only <종류,…>` · `--keep-db`. 단계 직전마다 화면 잠금을 보고(잠겨 있으면 멈춘다), 1분 load average 가 코어 수를 넘으면 기다린다. OS 키 입력은 보내지 않는다(앱 안 시나리오의 키는 웹뷰 안에서 만든 이벤트). 절차는 [`docs/ops/m3-realcheck.md`](../../ops/m3-realcheck.md), 무엇을 어떻게 재는지는 `CONTRIBUTING.md` 「성능 기준선」 의 「DB 시나리오」.
-- 하네스 변경(이 행): `perf-fake-db` feature(기본 꺼짐 — 가짜 postgres 드라이버를 번들에 넣는다, `apps/desktop/src-tauri/src/perf_fake_db.rs`), 앱 안 `db` · `db-idle` 시나리오(`apps/desktop/src/perf/`), pw-perf `--db` · `--db-idle` · `--fake-db` · `--pg` · `--redis` 모드와 요약(`crates/pw-perf/src/db.rs`), 그리드가 120 px 보다 작으면 그 회를 실패로 보는 판정(§5 의 버그를 다시 놓치지 않으려고), 스트리밍 중 스크롤은 60 프레임 이상에서만 판정.
-- 하네스 시험: pw-perf 32개 · scripts node 37개 통과(`dfe9ce9` 기준). 앞 커밋의 전체 실행은 nextest 1,918 · vitest 1,448 · node 36 · doctest 10. lint 통과, clippy 는 `--all-features`(feature 켬)와 feature 끈 쪽을 따로 돌렸다. 되돌림 실증: 그리드 높이 판정을 빼면 그 판정 시험이, 조건 파일을 다시 보고서 폴더에 쓰게 하면 `reportCopies` 시험이 실패한다.
+- 하네스 변경(이 행): `perf-fake-db` feature(기본 꺼짐 — 가짜 postgres 드라이버를 번들에 넣는다, `apps/desktop/src-tauri/src/perf_fake_db.rs`), 앱 안 `db` · `db-idle` 시나리오(`apps/desktop/src/perf/`), pw-perf `--db` · `--db-idle` · `--fake-db` · `--pg` · `--redis` 모드와 요약(`crates/pw-perf/src/db.rs`), 그리드가 120 px 보다 작으면 그 회를 실패로 보는 판정(§5 의 버그를 다시 놓치지 않으려고), 스트리밍 중 스크롤은 60 프레임 이상에서만 판정, `mise run lint` 의 기본 feature 검사(`node scripts/perf-m3.mjs check-default` — 데스크톱 크레이트의 `default` 가 `perf-fake-db` 에 닿으면 실패. 시험 · clippy 는 `--all-features` 라 이것을 못 잡는다).
+- 하네스 시험: pw-perf 32개 · scripts node 38개 통과(리뷰 반영 뒤 HEAD). 리뷰가 HEAD `b82d8d9` 에서 돌린 전체 실행은 nextest 1,918 · vitest 1,445 · node 37 · doctest 10(리뷰 뒤 기본 feature 검사 시험 하나를 더해 node 38). lint 통과, clippy 는 `--all-features`(feature 켬)와 feature 끈 쪽을 따로 돌렸다. 되돌림 실증: 그리드 높이 판정을 빼면 그 판정 시험이, 조건 파일을 다시 보고서 폴더에 쓰게 하면 `reportCopies` 시험이 실패한다. `apps/desktop/src-tauri/Cargo.toml` 에 `default = ["perf-fake-db"]` 를 넣으면 `mise run lint` 가 그 검사에서 종료 코드 1 로 실패한다(되돌려 확인).
 - 이번 회에 잡은 하네스 버그: 첫 전체 실행(22:37)은 스크립트가 조건 파일을 첫 단계 전에 이 폴더에 써서 모든 단계가 `commit.dirty` true 로 기록됐다. 측정 도중에는 `target/perf/` 에만 쓰고 끝에 한 번 복사하도록 고쳐(`dfe9ce9`) 다시 쟀다 — 이 문서의 값은 다시 잰 것이다(앞 회 값도 같은 범위였다: 가짜 그리드 첫 행 66 ms, 탐색기 33 ms, Redis 50 ms).
 
 ## 5. 측정이 찾은 제품 버그 — 고쳤다
 
 **콘솔의 결과 칸에서 그리드가 10 px 로 그려져 행이 하나도 보이지 않았다**(`c8c23ef`). 1280 × 800 창에서 결과 칸 244 px, ResultView 66 px, 그리드 10 px — 헤더만 그리고 행은 없었다. 결과 칸(`db-console-results`)이 flex 컨테이너가 아니어서 ResultView 의 `flex-1` 루트가 내용 크기로 줄었다. 테이블 데이터 · Redis 값 화면은 이미 같은 뷰를 flex 열로 감싸고 있었다. jsdom 은 배치를 하지 않으므로 창 시험은 그 칸의 flex 열 클래스를 고정하고, `perf-m3` 의 DB 시나리오가 그리드 120 px 미만인 회를 실패로 본다.
 
-수치를 맞추려고 고친 것이 아니라 기능 버그다(고치기 전에는 첫 행이 그려지지 않아 「첫 행이 그려진 프레임」 이 오지 않았다). 다만 이 행은 재는 행이므로 이 커밋을 이 브랜치에 둘지 따로 낼지는 병합 때 판정한다.
+수치를 맞추려고 고친 것이 아니라 기능 버그다(고치기 전에는 첫 행이 그려지지 않아 「첫 행이 그려진 프레임」 이 오지 않았다). 다만 이 행은 재는 행이므로 이 커밋을 이 브랜치에 둘지 따로 낼지는 병합 때 판정한다 — 판정: 이 브랜치에 두고 병합한다(메인, 리뷰 뒤). 실제 배치를 보는 자동 시험은 없다 — 다음 회귀는 `mise run perf-m3`(그리드 120 px 하한)를 돌릴 때 드러난다. 헤드리스 하네스(`apps/desktop/perf/result-grid`)가 콘솔 문서 안의 그리드 높이를 보게 하는 것은 이월이다.
 
 ## 6. 목표를 넘는 항목 · 판정하지 못한 항목 — M4 착수 전 제안
 
