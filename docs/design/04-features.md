@@ -89,7 +89,7 @@ pitwall <path>[:line[:col]]
 | F4-11 | 미니맵 | P2 |
 
 - 편집 수준: **L2 + 멀티 커서** (D7). 고급 리팩터링 · 라이브 템플릿 등은 비목표 → 외부 도구로 열기
-- 주력 언어 미정 (D6): 언어 지원은 전부 확장 정의(07)로 범용 구현. 구문 강조는 주요 언어 전반을 기본 제공한다. LSP 기본 번들 언어는 **Rust(rust-analyzer) · TypeScript/JavaScript(typescript-language-server) · Python · Java/Kotlin** 넷이다(D51 — 2026-11-02, 사용자) — 설치 없이 바로 되는 기본 번들이자 M4 시험 기준 언어. 「번들」 은 앱 동봉이 아니라 처음 한 번 라이선스 · 출처 확인 뒤 설치하는 방식이다([15-m4-plan.md](15-m4-plan.md) 결정 M4-D2 — 2026-11-02, 사용자). Python · Java/Kotlin 서버의 선택은 결정 M4-D3 ~ D5(미정 — 사람 확인)
+- 주력 언어 미정 (D6): 언어 지원은 전부 확장 정의(07)로 범용 구현. 구문 강조는 주요 언어 전반을 기본 제공한다. LSP 기본 번들 언어는 **Rust(rust-analyzer) · TypeScript/JavaScript(typescript-language-server) · Python · Java/Kotlin** 넷이다(D51 — 2026-11-02, 사용자) — 설치 없이 바로 되는 기본 번들이자 M4 시험 기준 언어. 「번들」 은 앱 동봉이 아니라 처음 한 번 라이선스 · 출처 확인 뒤 설치하는 방식이다([15-m4-plan.md](15-m4-plan.md) 결정 M4-D2 — 2026-11-02, 사용자). 서버는 Python basedpyright + ruff · Java jdtls · Kotlin JetBrains kotlin-lsp 다(결정 M4-D3 ~ D5 — 2026-11-02, 사용자)
 
 ## F5. Git
 
