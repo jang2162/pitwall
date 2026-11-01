@@ -31,6 +31,11 @@
 // 경로 · 이름을 바꾼다 — 탭 · 뷰 · 미저장 편집이 그대로 따라간다. 지우면 `deleted`: 미저장이 없는 탭은 닫고, 미저장이 있는 탭은
 // 남겨 「지워짐」 배너를 띄운다(M1-13 의 배너 규칙 — [저장] 하면 다시 만든다). 지우기 전의 경고는 트리의 확인 대화상자가 한다
 // (`unsavedUnder`).
+//
+// 위치로 가기(`navigateTo`, 15-m4-plan M4-09): 위치를 여는 기능(정의 · 사용처 · 심볼 · 문제 · 구조 · 줄로 이동 · 파일로 이동 · 검색
+// 결과)은 `open` 대신 이것을 부른다 — 열기 · 커서 · 내비게이션 기록(navigation.ts)을 한 함수로 한다. 같은 파일의 활성 탭이면 파일을
+// 다시 보지 않고 커서만 옮긴다. 작업 공간이 둔 커서(위치로 가기 · 열기 요청 · 복원)와 편집으로 밀린 커서는 「큰 이동」 으로 기록하지
+// 않는다(`placing`).
 
 import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -41,6 +46,7 @@ import { createStore } from "zustand/vanilla";
 
 import type { DocumentStore } from "./documents";
 import { bindDocumentLanguages } from "./language";
+import { createNavigation, type NavigateOptions, type NavTarget } from "./navigation";
 import { createSyntaxSessions, type SyntaxSource } from "./syntax-sessions";
 import {
   baseName,
@@ -135,6 +141,8 @@ export interface EditorWorkspaceDeps {
   log?(message: string): void;
   /** 구문 분석 서비스의 문서 세션 RPC(syntax-sessions.ts). 없으면 강조하지 않는다. */
   syntax?: SyntaxSource;
+  /** 창의 활성 워크트리(프로젝트 창). 내비게이션 기록이 다른 워크트리의 자리를 건너뛴다. 없으면 가리지 않는다(파일 창). */
+  activeWorktree?(): string | undefined;
 }
 
 export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
@@ -158,6 +166,8 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     unsavedTabs.setState({ panels: new Set([...extraUnsaved.values()].map((t) => t.panelId)) });
   /** 닫기 전에 물을 탭(`guardClose`), 등록 순서. */
   const guards = new Set<CloseGuard>();
+  /** 작업 공간이 지금 커서를 두고 있는 탭. 그 커서 보고는 큰 이동으로 기록하지 않는다. */
+  const placing = new Set<string>();
 
   const recentOrder = () => recent?.order() ?? [];
 
@@ -233,13 +243,105 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     return outcome.kind === "saved" || outcome.kind === "unchanged";
   }
 
+  /** 작업 공간이 커서를 둔다(`placing` — 큰 이동으로 기록하지 않는다). */
+  function place(panelId: string, view: EditorView, cursor: Cursor) {
+    placing.add(panelId);
+    try {
+      placeCursor(view, cursor);
+    } finally {
+      placing.delete(panelId);
+    }
+    view.focus();
+  }
+
   function moveCursor(panelId: string, cursor: Cursor) {
     const view = views.get(panelId);
-    if (view) {
-      placeCursor(view, cursor);
-      view.focus();
-    } else pending.set(panelId, cursor);
+    if (view) place(panelId, view, cursor);
+    else pending.set(panelId, cursor);
   }
+
+  function focus(panelId: string) {
+    const view = views.get(panelId);
+    if (view) view.focus();
+    else refocus.add(panelId);
+  }
+
+  async function open(request: OpenRequest): Promise<IDockviewPanel | undefined> {
+    const started = performance.now();
+    let stat: FsStat;
+    try {
+      stat = await deps.stat(request.path, request.worktree);
+    } catch (e) {
+      deps.onOpenFailed(request.path, e instanceof Error ? e.message : String(e));
+      return undefined;
+    }
+    if (!api) return undefined;
+    // 폴더는 탭으로 열지 않는다. 열기 요청(CLI)은 Rust 가 이미 거르고, 파일 트리는 폴더를 펼친다.
+    if (stat.kind === "dir" || stat.target === "dir") return undefined;
+    const { panel, created } = openTab(api, {
+      path: stat.path,
+      worktree: request.worktree,
+      preview: request.preview,
+      recent: recentOrder(),
+    });
+    if (created) openedAt.set(panel.id, started);
+    if (request.line !== undefined)
+      moveCursor(panel.id, { line: request.line, column: request.column ?? 1 });
+    return panel;
+  }
+
+  function activeContext(): { worktree?: string; file?: string; cursor?: Cursor } | undefined {
+    const panel = activeTab();
+    if (!panel) return undefined;
+    const view = views.get(panel.id);
+    const { path, worktree } = tabParams(panel);
+    // git · DB 문서 탭은 파일이 아니다 — 워크트리만 넘긴다.
+    if (!isFileTab(panel)) return { worktree };
+    return { worktree, file: path, cursor: view ? cursorOf(view) : undefined };
+  }
+
+  /** 위치를 연다(위치로 가기 · 뒤로 · 앞으로). 열었으면 `true`. */
+  async function openLocation(loc: NavTarget): Promise<boolean> {
+    let panel = activeTab();
+    const params = panel && isFileTab(panel) ? tabParams(panel) : undefined;
+    if (
+      panel &&
+      params?.path === loc.path &&
+      params.worktree === loc.worktree &&
+      views.has(panel.id)
+    ) {
+      if (loc.line !== undefined) moveCursor(panel.id, { line: loc.line, column: loc.column ?? 1 });
+    } else {
+      panel = await open({
+        path: loc.path,
+        worktree: loc.worktree,
+        line: loc.line,
+        column: loc.column,
+      });
+      if (!panel) return false;
+    }
+    panel.api.setActive();
+    // 고른 팝업(최근 위치 · 줄로 이동 · 검색)이 닫히며 포커스를 이전 자리로 돌려놓은 뒤에도 에디터에 둔다.
+    const id = panel.id;
+    requestAnimationFrame(() => focus(id));
+    return true;
+  }
+
+  const navigation = createNavigation({
+    documents: deps.documents,
+    here() {
+      const now = activeContext();
+      if (!now?.file) return undefined;
+      return {
+        path: now.file,
+        ...(now.worktree !== undefined && { worktree: now.worktree }),
+        line: now.cursor?.line ?? 1,
+        column: now.cursor?.column ?? 1,
+      };
+    },
+    open: openLocation,
+    ...(deps.activeWorktree && { activeWorktree: deps.activeWorktree }),
+  });
 
   const syntax = deps.syntax && createSyntaxSessions(deps.syntax, deps.documents);
 
@@ -279,6 +381,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       for (const panel of editorPanels(next)) hold(panel);
       const added = next.onDidAddPanel(hold);
       const removed = next.onDidRemovePanel((panel) => {
+        navigation.forgetPanel(panel.id);
         pending.delete(panel.id);
         openedAt.delete(panel.id);
         refocus.delete(panel.id);
@@ -317,10 +420,8 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       views.set(panelId, view);
       const cursor = pending.get(panelId);
       pending.delete(panelId);
-      if (cursor) {
-        placeCursor(view, cursor);
-        view.focus();
-      } else if (refocus.delete(panelId)) view.focus();
+      if (cursor) place(panelId, view, cursor);
+      else if (refocus.delete(panelId)) view.focus();
       return () => {
         if (views.get(panelId) !== view) return;
         views.delete(panelId);
@@ -331,11 +432,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     view: (panelId: string) => views.get(panelId),
 
     /** 탭의 뷰에 포커스를 둔다. 뷰가 아직 없으면 생길 때 둔다(⌘\ 로 나눈 새 탭). */
-    focus(panelId: string) {
-      const view = views.get(panelId);
-      if (view) view.focus();
-      else refocus.add(panelId);
-    },
+    focus,
 
     /**
      * 탭들을 닫는다. 그 문서를 보는 마지막 탭인데 미저장 편집이 있으면 먼저 묻는다 — [취소] 면 아무것도 닫지 않는다. 닫았으면
@@ -368,6 +465,10 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
 
     /** `from` 을 `to` 로 옮겼다(이름 바꾸기 · 이동). 그 아래 문서와 탭이 새 경로를 따라간다. */
     moved(from: string, to: string) {
+      navigation.moved(
+        (path) => covers(from, path),
+        (path) => to + path.slice(from.length),
+      );
       const moved = new Map(deps.documents.move(from, to));
       for (const [id, held] of holds) {
         const next = moved.get(held.path);
@@ -415,8 +516,21 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       return saved.every(Boolean);
     },
 
-    /** 뷰의 커서가 바뀌었다(extensions/cursor-report.ts 가 부른다). */
-    reportCursor(panelId: string, cursor: Cursor) {
+    /**
+     * 뷰의 커서가 바뀌었다(extensions/cursor-report.ts 가 부른다). `quiet` 면 사람이 옮긴 것이 아니다(편집이 민 커서 · 뷰가 생길
+     * 때의 커서) — 내비게이션 기록의 큰 이동으로 보지 않는다.
+     */
+    reportCursor(panelId: string, cursor: Cursor, quiet = false) {
+      const panel = api?.getPanel(panelId);
+      if (panel && isFileTab(panel)) {
+        const { path, worktree } = tabParams(panel);
+        navigation.cursorMoved(
+          panelId,
+          { path, ...(worktree !== undefined && { worktree }) },
+          cursor,
+          quiet || placing.has(panelId),
+        );
+      }
       for (const listener of cursorListeners) listener(panelId, cursor);
     },
 
@@ -433,43 +547,23 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       return at;
     },
 
-    async open(request: OpenRequest): Promise<IDockviewPanel | undefined> {
-      const started = performance.now();
-      let stat: FsStat;
-      try {
-        stat = await deps.stat(request.path, request.worktree);
-      } catch (e) {
-        deps.onOpenFailed(request.path, e instanceof Error ? e.message : String(e));
-        return undefined;
-      }
-      if (!api) return undefined;
-      // 폴더는 탭으로 열지 않는다. 열기 요청(CLI)은 Rust 가 이미 거르고, 파일 트리는 폴더를 펼친다.
-      if (stat.kind === "dir" || stat.target === "dir") return undefined;
-      const { panel, created } = openTab(api, {
-        path: stat.path,
-        worktree: request.worktree,
-        preview: request.preview,
-        recent: recentOrder(),
-      });
-      if (created) openedAt.set(panel.id, started);
-      if (request.line !== undefined)
-        moveCursor(panel.id, { line: request.line, column: request.column ?? 1 });
-      return panel;
-    },
+    open,
+
+    /**
+     * 위치로 가기(머리 주석): 연다(탭 · 커서 · 포커스). `record` 면 떠나는 자리를 내비게이션 기록에 넣는다. 갔으면 `true`. 위치를
+     * 여는 기능은 `open` + 기록을 따로 짜지 않고 이것만 부른다(15-m4-plan 「공유 부품의 주인」).
+     */
+    navigateTo: (location: NavTarget, options?: NavigateOptions): Promise<boolean> =>
+      // 루트 밖 위치(읽기 토큰으로만 여는 「외부 소스」, 결정 M4-D13)의 갈래는 M4-08 이 여기 더한다.
+      navigation.navigateTo(location, options),
+    /** 창의 내비게이션 기록(뒤로 · 앞으로 · 최근 위치). */
+    navigation,
 
     /**
      * 활성 탭의 워크트리 · 파일 · 커서(외부 도구 문맥). 탭이 없으면 `undefined`. 뷰가 없는 탭(이미지 등)은 커서 없이, git · DB 문서 탭은 파일 없이. `worktree`
      * 가 `undefined` 면 그 탭은 메인 체크아웃의 것이다.
      */
-    activeContext(): { worktree?: string; file?: string; cursor?: Cursor } | undefined {
-      const panel = activeTab();
-      if (!panel) return undefined;
-      const view = views.get(panel.id);
-      const { path, worktree } = tabParams(panel);
-      // git · DB 문서 탭은 파일이 아니다 — 워크트리만 넘긴다.
-      if (!isFileTab(panel)) return { worktree };
-      return { worktree, file: path, cursor: view ? cursorOf(view) : undefined };
-    },
+    activeContext,
   };
 }
 

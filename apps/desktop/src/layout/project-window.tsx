@@ -496,6 +496,8 @@ function useWindowEditor(
         },
       }),
       stat,
+      // 내비게이션 기록이 다른 워크트리의 자리를 건너뛴다(src/editor/navigation.ts).
+      activeWorktree,
       onOpenFailed: (path, message) =>
         latest.current.notify({
           level: "error",

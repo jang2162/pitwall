@@ -64,11 +64,12 @@ export const operations: EditorFeature = {
   id: "operations",
   extension: (c) => [
     EditorView.contentAttributes.of({ "data-keymap-context": EDITOR_FOCUS }),
+    // 뷰가 생길 때의 커서 · 편집이 민 커서는 사람이 옮긴 것이 아니다(`quiet` — 내비게이션 기록의 큰 이동이 아니다).
     ViewPlugin.define((view) => {
-      c.onCursor(cursorOf(view));
+      c.onCursor(cursorOf(view), true);
       return {
         update: (u) => {
-          if (u.docChanged && !u.selectionSet) c.onCursor(cursorOf(u.view));
+          if (u.docChanged && !u.selectionSet) c.onCursor(cursorOf(u.view), true);
         },
       };
     }),

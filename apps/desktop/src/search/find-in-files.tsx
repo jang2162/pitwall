@@ -124,23 +124,24 @@ export function pinFindResults(api: Parameters<typeof showPanel>[0] | undefined)
   if (api) showPanel(api, SEARCH_RESULTS_TOOL_WINDOW);
 }
 
-/** 결과 한 줄을 그 줄 · 첫 일치 열에서 연다(열은 1부터, UTF-16 단위 — 에디터의 열과 같다). 에디터로 포커스를 옮긴다. */
+/**
+ * 결과 한 줄을 그 줄 · 첫 일치 열에서 연다(열은 1부터, UTF-16 단위 — 에디터의 열과 같다). 에디터로 포커스를 옮긴다. 위치로 가기라
+ * 떠나는 자리가 내비게이션 기록에 든다(M4-09).
+ */
 export function openFindRow(
   workspace: EditorWorkspace,
   row: FindRow,
   worktree: string | undefined,
 ) {
-  void workspace
-    .open({
+  void workspace.navigateTo(
+    {
       path: row.file.path,
-      worktree,
+      ...(worktree !== undefined && { worktree }),
       line: row.line.line,
       column: (row.line.ranges[0]?.start ?? 0) + 1,
-    })
-    .then((panel) => {
-      // 팝업이 닫히며 포커스를 이전 자리로 돌려놓은 뒤에 옮긴다.
-      if (panel) requestAnimationFrame(() => workspace.focus(panel.id));
-    });
+    },
+    { record: true },
+  );
 }
 
 export function useFindWindow<T>(select: (s: FindWindowState) => T): T {

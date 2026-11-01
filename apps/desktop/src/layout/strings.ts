@@ -168,6 +168,13 @@ export function projectStrings(t: Translate) {
         countCurrent: (current: number, total: number | string) =>
           t("editor-find-count-current", { current, total }),
       },
+      /** 내비게이션 기록(src/editor/navigation-ui.tsx, M4-09). */
+      navigation: {
+        back: t("nav-action-back"),
+        forward: t("nav-action-forward"),
+        recentLocations: t("nav-action-recent-locations"),
+        empty: t("nav-recent-empty"),
+      },
       gotoLine: {
         title: t("editor-goto-title"),
         input: t("editor-goto-input"),

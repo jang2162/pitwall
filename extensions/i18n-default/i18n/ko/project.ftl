@@ -182,6 +182,13 @@ editor-find-count = { $total }개
 # $current: 고른 일치의 차례, $total: 일치 수
 editor-find-count-current = { $current }/{ $total }
 
+## 내비게이션 기록(M4-09, src/editor/navigation-ui.tsx): 뒤로 · 앞으로(⌘[ · ⌘]) · 「최근 위치」 팝업(⌘⇧E).
+
+nav-action-back = 뒤로
+nav-action-forward = 앞으로
+nav-action-recent-locations = 최근 위치
+nav-recent-empty = 아직 기록된 위치가 없다
+
 editor-goto-title = 줄로 이동
 editor-goto-input = 줄[:열]
 # $cursor: 지금 커서(줄:열), $lines: 문서의 줄 수

@@ -82,8 +82,11 @@ export interface EditorFeatureContext {
   readonly language: string | null;
   /** 창의 외관(라이트 · 다크). 색 자체는 CSS 변수로 따라가지만 구문 토큰 테마(M1-17)가 고를 때 쓴다. */
   readonly appearance: "light" | "dark";
-  /** 이 뷰의 커서가 바뀌었다(상태바의 줄:열, M1-18). 그 탭이 활성인지는 받는 쪽이 본다. */
-  readonly onCursor: (cursor: EditorCursor) => void;
+  /**
+   * 이 뷰의 커서가 바뀌었다(상태바의 줄:열, M1-18 · 내비게이션 기록의 큰 이동, M4-09). 그 탭이 활성인지는 받는 쪽이 본다.
+   * `quiet` 면 사람이 옮긴 커서가 아니다 — 편집이 민 커서 · 뷰가 생길 때의 커서.
+   */
+  readonly onCursor: (cursor: EditorCursor, quiet: boolean) => void;
   /** 문서의 undo · redo(`editing`). 고친 내용은 뷰의 트랜잭션으로 문서에 간다 — 기능이 따로 알릴 것은 없다. */
   readonly history: EditorHistory;
   /** 창의 구문 세션(`highlight`, ../syntax-sessions.ts). Host 에 붙지 않은 창 · 시험에는 없다. */

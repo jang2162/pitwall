@@ -146,15 +146,18 @@ it("reports the cursor through the context, and the reconfigured callback after 
       extensions: editorExtensions({ ...context, onCursor: first }),
     }),
   });
-  // 뷰가 생길 때 한 번(상태바의 첫 값, operations.ts), 선택이 바뀌면 또.
-  expect(first).toHaveBeenLastCalledWith({ line: 1, column: 1 });
+  // 뷰가 생길 때 한 번(상태바의 첫 값, operations.ts), 선택이 바뀌면 또. 뷰가 생길 때의 커서 · 편집이 민 커서는 `quiet`(둘째
+  // 인자) — 사람이 옮긴 것이 아니라 내비게이션 기록의 큰 이동으로 보지 않는다(M4-09).
+  expect(first).toHaveBeenLastCalledWith({ line: 1, column: 1 }, true);
   view.dispatch({ selection: { anchor: 6 } });
-  expect(first).toHaveBeenLastCalledWith({ line: 2, column: 3 });
+  expect(first).toHaveBeenLastCalledWith({ line: 2, column: 3 }, false);
+  view.dispatch({ changes: { from: 0, insert: "zero\n" }, selection: { anchor: 0 } });
+  expect(first).toHaveBeenLastCalledWith({ line: 1, column: 1 }, true);
 
   const second = vi.fn();
   view.dispatch(reconfigureEditor({ ...context, onCursor: second }));
   view.dispatch({ selection: { anchor: 1 } });
-  expect(second).toHaveBeenLastCalledWith({ line: 1, column: 2 });
-  expect(first).toHaveBeenCalledTimes(2);
+  expect(second).toHaveBeenLastCalledWith({ line: 1, column: 2 }, false);
+  expect(first).toHaveBeenCalledTimes(3);
   view.destroy();
 });

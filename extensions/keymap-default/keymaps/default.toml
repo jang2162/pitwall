@@ -42,6 +42,26 @@ mac = "cmd+shift+f"
 win = "ctrl+shift+f"
 linux = "ctrl+shift+f"
 
+# 내비게이션 기록(M4-09, src/editor/navigation-ui.tsx — 10-ui §4.2 「검색 · 이동」): 뒤로 · 앞으로 · 최근 위치. 에디터가 있는 창
+# (프로젝트 · 파일 창)에 등록된다. 터미널에 포커스가 있으면 셸로 간다(src/terminal/terminal-keys.ts 의 창 단위 액션이 아니다).
+[[bindings]]
+action = "navigate.back"
+mac = "cmd+["
+win = "ctrl+alt+left"
+linux = "ctrl+alt+left"
+
+[[bindings]]
+action = "navigate.forward"
+mac = "cmd+]"
+win = "ctrl+alt+right"
+linux = "ctrl+alt+right"
+
+[[bindings]]
+action = "navigate.recentLocations"
+mac = "cmd+shift+e"
+win = "ctrl+shift+e"
+linux = "ctrl+shift+e"
+
 # 프로젝트 · 웰컴 창(10-ui §2.1 · §2.3). 웰컴 창에만 등록되는 액션이라 다른 창의 같은 키와 부딪히지 않는다(registry.ts 머리 주석).
 
 [[bindings]]

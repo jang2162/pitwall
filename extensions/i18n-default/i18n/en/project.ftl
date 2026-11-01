@@ -186,6 +186,13 @@ editor-find-count =
 # $current: position of the selected match, $total: number of matches
 editor-find-count-current = { $current }/{ $total }
 
+## Navigation history (M4-09, src/editor/navigation-ui.tsx): back and forward (⌘[ and ⌘]) and the Recent Locations popup (⌘⇧E).
+
+nav-action-back = Back
+nav-action-forward = Forward
+nav-action-recent-locations = Recent Locations
+nav-recent-empty = No location recorded yet
+
 editor-goto-title = Go to Line
 editor-goto-input = Line[:column]
 # $cursor: the cursor now (line:column), $lines: lines in the document

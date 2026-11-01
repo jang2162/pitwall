@@ -218,17 +218,16 @@ function scopeOf(projectId: string): Scope {
   return { projectId, worktree: treeScope.getState().worktree ?? null };
 }
 
-/** 파일을 연다. 줄을 주면 그 줄 · 열로. 에디터로 포커스를 옮긴다. */
+/** 파일을 연다. 줄을 주면 그 줄 · 열로. 에디터로 포커스를 옮긴다. 위치로 가기라 떠나는 자리가 내비게이션 기록에 든다(M4-09). */
 function openFile(deps: Deps, row: FileRow, line?: number, column?: number) {
-  void deps.workspace
-    .open({
+  void deps.workspace.navigateTo(
+    {
       path: row.path,
       ...(row.worktree !== undefined && { worktree: row.worktree }),
       ...(line !== undefined && { line, column: column ?? 1 }),
-    })
-    .then((panel) => {
-      if (panel) requestAnimationFrame(() => deps.workspace.focus(panel.id));
-    });
+    },
+    { record: true },
+  );
 }
 
 /** 최근 파일 중 질의에 맞는 것(최근 순). */

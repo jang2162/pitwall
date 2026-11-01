@@ -64,7 +64,7 @@ function useFeatureContext(
             readOnly,
             language,
             appearance,
-            onCursor: (cursor) => workspace.reportCursor(panelId, cursor),
+            onCursor: (cursor, quiet) => workspace.reportCursor(panelId, cursor, quiet),
             history: live,
             syntax: workspace.syntax,
             font,

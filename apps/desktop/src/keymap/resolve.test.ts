@@ -13,6 +13,7 @@ import { createDocumentStore } from "../editor/documents";
 import { editorActions } from "../editor/editor-actions";
 import { editorOpsActions } from "../editor/editor-ops";
 import { createEditorWorkspace } from "../editor/editor-workspace";
+import { navigationActions } from "../editor/navigation-ui";
 import { fileOpsActions } from "../file-tree/file-ops";
 import { fileTreeStrings } from "../file-tree/strings";
 import { explorerActions } from "../db/explorer/explorer-feature";
@@ -122,6 +123,21 @@ const ACTION_IDS = new Set(
       openGotoLine() {},
       lineComment: () => undefined,
     }),
+    ...navigationActions({
+      workspace: createEditorWorkspace({
+        documents: createDocumentStore({
+          stat: () => Promise.reject(new Error("none")),
+          read: () => Promise.reject(new Error("none")),
+        }),
+        stat: () => Promise.reject(new Error("none")),
+        onOpenFailed() {},
+        onSaveFailed() {},
+        onSaveBlocked() {},
+        confirmUnsaved: async () => "cancel",
+      }),
+      strings: KO_PROJECT.editor.navigation,
+      openRecentLocations() {},
+    }),
     ...terminalActions({
       strings: KO_PROJECT.terminal,
       tabs: new TerminalTabs(),
@@ -230,6 +246,13 @@ describe("default keymap file", () => {
     expect(label("mac", "project.switcher")).toEqual(["⇧⌘P"]);
     expect(label("win", "project.switcher")).toEqual(["Ctrl+Shift+P"]);
     expect(label("win", "settings.open")).toEqual(["Ctrl+Alt+S"]);
+    // 뒤로 · 앞으로 · 최근 위치(M4-09)
+    expect(label("mac", "navigate.back")).toEqual(["⌘["]);
+    expect(label("mac", "navigate.forward")).toEqual(["⌘]"]);
+    expect(label("win", "navigate.back")).toEqual(["Ctrl+Alt+←"]);
+    expect(label("linux", "navigate.forward")).toEqual(["Ctrl+Alt+→"]);
+    expect(label("mac", "navigate.recentLocations")).toEqual(["⇧⌘E"]);
+    expect(label("win", "navigate.recentLocations")).toEqual(["Ctrl+Shift+E"]);
     // 10-ui 「툴 윈도우 · 창」 의 레이아웃 프리셋(M2-21 · M3-20)
     expect(label("mac", "layout.preset.default")).toEqual(["⌃⌥1"]);
     expect(label("mac", "layout.preset.gitReview")).toEqual(["⌃⌥2"]);

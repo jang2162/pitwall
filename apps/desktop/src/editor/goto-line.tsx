@@ -1,7 +1,8 @@
 // 줄로 이동(⌘L, IntelliJ 「Go to Line:Column」): `줄` 이나 `줄:열` 을 받아 커서를 두고 그 줄을 화면 가운데로 가져온다
 // (editor-workspace.tsx 의 `placeCursor` — 범위를 넘으면 끝에 붙인다). 칸은 지금 커서(`줄:열`)를 고른 채로 열린다. 틀린 입력이면
 // 닫지 않고 알린다. Esc · 바깥 누르기 · [취소] 는 닫기만 하고 에디터로 포커스를 돌린다. 떠 있는 동안 창의 키맵은 쉰다(창 팝업
-// 규칙, keymap-provider.tsx). 한글을 조합하는 중의 ↩ · Esc 는 조합에 둔다(ui/ime.ts).
+// 규칙, keymap-provider.tsx). 한글을 조합하는 중의 ↩ · Esc 는 조합에 둔다(ui/ime.ts). 창은 이동을 위치로 가기(`go` — 떠나는
+// 자리를 내비게이션 기록에 넣는다, M4-09)로 넘긴다.
 
 import type { EditorView } from "@codemirror/view";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -15,7 +16,23 @@ import { cursorOf, placeCursor } from "./editor-workspace";
 
 const BUTTON = "rounded-sm border border-ui-border px-3 py-1 hover:bg-ui-hover";
 
-function GotoLineDialog({ view, onClose }: { view: EditorView; onClose(): void }) {
+/** 줄로 이동의 이동. 없으면 커서만 둔다. */
+export type GotoLineGo = (view: EditorView, target: { line: number; column: number }) => void;
+
+const placeOnly: GotoLineGo = (view, target) => {
+  placeCursor(view, target);
+  view.focus();
+};
+
+function GotoLineDialog({
+  view,
+  go: move,
+  onClose,
+}: {
+  view: EditorView;
+  go: GotoLineGo;
+  onClose(): void;
+}) {
   const T = useProjectStrings().editor.gotoLine;
   useKeymapPopup(true);
   const now = cursorOf(view);
@@ -29,8 +46,7 @@ function GotoLineDialog({ view, onClose }: { view: EditorView; onClose(): void }
     const target = parseLineColumn(text);
     if (!target) return setInvalid(true);
     onClose();
-    placeCursor(view, target);
-    view.focus();
+    move(view, target);
   };
   return (
     <Dialog.Root open onOpenChange={(open) => !open && close()}>
@@ -84,11 +100,14 @@ function GotoLineDialog({ view, onClose }: { view: EditorView; onClose(): void }
 }
 
 /** 줄로 이동 대화상자를 여는 함수와 그 대화상자. `element` 를 창에 그린다. */
-export function useGotoLine(): { open(view: EditorView): void; element: ReactNode } {
+export function useGotoLine(go: GotoLineGo = placeOnly): {
+  open(view: EditorView): void;
+  element: ReactNode;
+} {
   const [view, setView] = useState<EditorView>();
   const open = useCallback((next: EditorView) => setView(next), []);
   return {
     open,
-    element: view && <GotoLineDialog view={view} onClose={() => setView(undefined)} />,
+    element: view && <GotoLineDialog view={view} go={go} onClose={() => setView(undefined)} />,
   };
 }
