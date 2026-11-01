@@ -460,6 +460,17 @@ impl LspManager {
                     Some(holder.closed.clone())
                 }
             };
+            // 같은 연결이 같은 파일을 다시 열면 앞 문서를 닫고 연다(`syntax.open` 의 「다시 연다」 와 같은 뜻) — 서버가 같은 URI 의
+            // `didOpen` 을 두 번 받지 않게.
+            let reopened: Vec<String> = state
+                .docs
+                .iter()
+                .filter(|(_, d)| d.session == session && d.uri == uri)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for old in reopened {
+                self.remove_doc(state, &old);
+            }
             state.next_doc += 1;
             let doc_id = format!("lsp-{}", state.next_doc);
             let doc = Doc {
@@ -481,7 +492,10 @@ impl LspManager {
                     .or_insert_with(|| Instance::new(*order));
                 instance.docs.insert(doc_id.clone());
                 instance.holders.insert(session);
-                instance.idle = None;
+                // 유휴 시한을 거둔다(그 태스크를 끝낸다).
+                if let Some((_, idle)) = instance.idle.take() {
+                    idle.cancel();
+                }
                 if instance.state.is_running()
                     && let Some(server) = &instance.server
                 {
@@ -1290,10 +1304,16 @@ impl LspManager {
 
     /// 인스턴스의 서버 pid(시험 · 진단).
     pub fn pids(&self, project_id: &str) -> Vec<u32> {
+        self.pids_of(project_id, None)
+    }
+
+    /// 그 프로젝트에서 서버 `server`(없으면 전부)의 서버 pid(시험 · 진단).
+    pub fn pids_of(&self, project_id: &str, server: Option<&str>) -> Vec<u32> {
         lock(&self.inner.state)
             .instances
             .iter()
             .filter(|(k, _)| k.project_id == project_id)
+            .filter(|(k, _)| server.is_none_or(|s| s == k.server))
             .filter_map(|(_, i)| i.server.as_ref()?.pid())
             .collect()
     }
@@ -1725,7 +1745,6 @@ fn status_of(key: &InstanceKey, instance: &Instance) -> LspInstanceStatus {
     LspInstanceStatus {
         server: key.server.clone(),
         root: key.root.display().to_string(),
-        worktree: key.worktree.clone(),
         state: instance.state.clone(),
         progress: instance.progress.latest(),
     }

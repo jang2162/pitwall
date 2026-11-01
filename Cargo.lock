@@ -5633,6 +5633,7 @@ dependencies = [
  "pw-lsp-servers",
  "pw-rpc",
  "pw-runtime",
+ "pw-tools",
  "schemars 1.2.3",
  "semver",
  "serde",

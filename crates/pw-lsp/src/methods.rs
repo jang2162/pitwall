@@ -112,9 +112,8 @@ pub struct LspStatus {
 pub struct LspInstanceStatus {
     /// 서버 id(`[contributes.language_servers.<id>]`).
     pub server: String,
-    /// 작업 공간 루트(실제 경로).
+    /// 작업 공간 루트(실제 경로 — 워크트리마다 다르다). `lsp.server.restart` · `stop` 은 이것과 그 창의 활성 워크트리로 고른다.
     pub root: String,
-    pub worktree: Option<String>,
     pub state: LspInstanceState,
     /// 서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다.
     pub progress: Option<LspProgress>,

@@ -86,6 +86,8 @@ pub struct Env {
     pub projects: Registry,
     pub global: ConfigStore,
     pub manager: LspManager,
+    /// 정의 · 해석(설치본 찾기를 바꿀 때 — `LspServers::set_tools`).
+    pub servers: Arc<LspServers>,
     /// 관리자가 진행을 띄우는 작업 표(같은 표를 본다).
     pub tasks: TaskSpawner,
     pub router: Arc<Router>,
@@ -166,7 +168,7 @@ impl Env {
             global: global.clone(),
             projects: projects.clone(),
         });
-        let manager = LspManager::new(servers, extensions, options.manager);
+        let manager = LspManager::new(Arc::clone(&servers), extensions, options.manager);
         let tasks = TaskSpawner::new(bus.clone(), Scope::Host, CancellationToken::new());
         manager.attach(HostParts {
             projects: projects.clone(),
@@ -239,6 +241,7 @@ impl Env {
             projects,
             global,
             manager,
+            servers,
             tasks,
             router: Arc::new(router),
             id,

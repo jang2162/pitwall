@@ -56,6 +56,8 @@ async fn an_untrusted_project_starts_nothing_until_trusted_and_revoking_ends_it_
     let file = env.file("src/main.rs", "fn main() {}\n");
     let mut win = env.window();
     let opened = win.open(&env, &file, "Rust", "fn main() {}\n").await;
+    let lib = env.file("src/lib.rs", "");
+    win.open(&env, &lib, "Rust", "").await;
     assert_eq!(
         opened["instances"][0]["state"]["kind"], "untrusted",
         "{opened}"
@@ -70,8 +72,9 @@ async fn an_untrusted_project_starts_nothing_until_trusted_and_revoking_ends_it_
     env.wait_state("rust-analyzer", LspInstanceState::Ready)
         .await;
     assert_eq!(env.manager.spawn_count(), 1);
-    // 신뢰 전에 연 문서도 서버가 뜨면 열린다.
-    assert_eq!(methods_of(&record, "textDocument/didOpen").len(), 2);
+    // 신뢰 전에 연 문서(lib.rs)도 서버가 뜨면 열린다. main.rs 는 다시 연 것 하나만.
+    let opened: Vec<Value> = methods_of(&record, "textDocument/didOpen");
+    assert_eq!(opened.len(), 2, "{opened:?}");
     let pid = env.manager.pids(&env.id)[0];
 
     let revoked = std::time::Instant::now();
@@ -282,8 +285,18 @@ async fn thousand_edits(sync: u8) {
     );
     let (got, _) = replay(&record);
     assert_eq!(got, text);
+    let changes = methods_of(&record, "textDocument/didChange");
     if sync == 2 {
-        assert_eq!(methods_of(&record, "textDocument/didChange").len(), 1000);
+        assert_eq!(changes.len(), 1000);
+    } else {
+        // `Full` 서버에는 범위 없는 전체 텍스트만 간다.
+        assert!(changes.iter().all(|m| {
+            m["params"]["contentChanges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| c.get("range").is_none())
+        }));
     }
 }
 
@@ -330,6 +343,50 @@ async fn early_edits_wait_for_their_turn() {
     let mut other = env.window();
     let e = other
         .call("lsp.document.change", change(3, 0, "x"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::NOT_FOUND);
+}
+
+/// 같은 연결이 같은 파일을 다시 열면 앞 문서를 닫고 연다 — 서버는 같은 URI 의 `didOpen` 을 겹쳐 받지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reopening_a_path_in_the_same_window_replaces_the_document() {
+    let env = Env::new(EnvOptions::default());
+    let record = env.fake("rust-analyzer", incremental());
+    let file = env.file("src/lib.rs", "");
+    let mut win = env.window();
+    let first = doc_id(&win.open(&env, &file, "Rust", "one").await);
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    let second = doc_id(&win.open(&env, &file, "Rust", "two").await);
+    assert_ne!(first, second);
+    assert!(
+        eventually(Duration::from_secs(2), || methods_of(
+            &record,
+            "textDocument/didOpen"
+        )
+        .len()
+            == 2)
+        .await
+    );
+    let kinds: Vec<String> = received(&record)
+        .into_iter()
+        .filter_map(|m| m["method"].as_str().map(str::to_owned))
+        .filter(|m| m.starts_with("textDocument/did"))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "textDocument/didOpen",
+            "textDocument/didClose",
+            "textDocument/didOpen"
+        ]
+    );
+    let e = win
+        .call(
+            "lsp.document.change",
+            json!({ "docId": first, "version": 1, "changes": [] }),
+        )
         .await
         .unwrap_err();
     assert_eq!(e.code, code::NOT_FOUND);
@@ -1034,8 +1091,9 @@ async fn stop_holds_until_restart_and_the_ledger_follows_the_server() {
 
 // ---- ⓐ 서버마다의 이벤트 채널 ------------------------------------------------------------------------------------------------
 
-/// ⓐ(M4-01 재리뷰 N2) 이벤트 채널은 서버마다 따로다 — 한 서버(ruff)가 자기 채널을 채워 끝나도 다른 서버(basedpyright)는
-/// 그때 알림을 내도 산다.
+/// ⓐ(M4-01 재리뷰 N2) 이벤트 채널은 서버마다 따로다 — 한 서버(ruff)가 자기 채널을 꽉 채운 동안 다른 서버(basedpyright)가 알림을
+/// 내도 끝나지 않는다. 받는 쪽(알림 처리기)을 일부러 느리게 해 ruff 가 채널을 정확히 채우게 한다(처리 중 하나 + 대기 4 — 넘지
+/// 않아 ruff 도 살아 있다). 채널을 나누면 그때 알림을 낸 basedpyright 가 끝난다(되돌림 실증 R20).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn one_server_filling_its_events_does_not_end_another() {
     let slow = Arc::new(AtomicBool::new(true));
@@ -1049,15 +1107,20 @@ async fn one_server_filling_its_events_does_not_end_another() {
             ..EnvOptions::default()
         },
         move |manager| {
-            // 받는 쪽을 느리게 — 채널이 찬다.
+            // 받는 쪽을 느리게 — ruff 의 채널이 찬 채로 있다.
             manager.on_notification("noise/x", move |_, _| {
-                if s.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
+                // 일꾼 스레드를 막지 않고(`block_in_place` — 그 일꾼의 다른 태스크는 다른 스레드로 옮겨진다) 이 서버의 이벤트
+                // 태스크만 붙잡는다. 시험이 실패해도 런타임이 끝나도록 5 s 로 묶는다.
+                tokio::task::block_in_place(|| {
+                    let until = std::time::Instant::now() + Duration::from_secs(5);
+                    while s.load(Ordering::SeqCst) && std::time::Instant::now() < until {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                });
             });
         },
     );
-    let noise: Vec<Action> = (0..40)
+    let noise: Vec<Action> = (0..5)
         .map(|_| Action::Notify {
             method: "noise/x".into(),
             params: json!({}),
@@ -1069,15 +1132,12 @@ async fn one_server_filling_its_events_does_not_end_another() {
             capabilities: json!({ "textDocumentSync": 2 }),
             ..Scenario::default()
         }
-        .on(
-            "initialized",
-            [vec![Action::Sleep { ms: 200 }], noise].concat(),
-        ),
+        .on("initialized", noise),
     );
-    let quiet: Vec<Action> = (0..20)
+    let quiet: Vec<Action> = (0..15)
         .flat_map(|_| {
             [
-                Action::Sleep { ms: 30 },
+                Action::Sleep { ms: 100 },
                 Action::Notify {
                     method: "quiet/x".into(),
                     params: json!({}),
@@ -1091,10 +1151,7 @@ async fn one_server_filling_its_events_does_not_end_another() {
             capabilities: json!({ "textDocumentSync": 2, "hoverProvider": true }),
             ..Scenario::default()
         }
-        .on(
-            "initialized",
-            [vec![Action::Sleep { ms: 200 }], quiet].concat(),
-        )
+        .on("initialized", quiet)
         .reply("textDocument/hover", Reply::result(json!("alive"))),
     );
     let file = env.file("app.py", "");
@@ -1102,13 +1159,12 @@ async fn one_server_filling_its_events_does_not_end_another() {
     let doc = doc_id(&win.open(&env, &file, "Python", "x = 1\n").await);
     env.wait_state("basedpyright", LspInstanceState::Ready)
         .await;
-    // ruff 는 자기 채널을 채워 끝난다(그 뒤 물러남으로 다시 뜰 수 있다 — 세지 않는다).
-    assert!(
-        eventually(Duration::from_secs(10), || env.manager.spawn_count() >= 3).await,
-        "ruff never filled its channel: {:?}",
-        env.states()
-    );
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    env.wait_state("ruff", LspInstanceState::Ready).await;
+    let quiet_pid = env.manager.pids_of(&env.id, Some("basedpyright"));
+    let noisy_pid = env.manager.pids_of(&env.id, Some("ruff"));
+    assert_eq!((quiet_pid.len(), noisy_pid.len()), (1, 1));
+    // basedpyright 가 알림을 다 낼 때까지(15 × 100 ms) ruff 의 채널은 찬 채로 있다.
+    tokio::time::sleep(Duration::from_millis(1800)).await;
     slow.store(false, Ordering::SeqCst);
     let hover = win
         .call(
@@ -1119,6 +1175,14 @@ async fn one_server_filling_its_events_does_not_end_another() {
         .unwrap();
     assert_eq!(hover["server"], "basedpyright");
     assert_eq!(hover["result"], "alive");
+    // 아무도 끝나지 않았다(물러남으로 다시 뜬 것이 아니다).
+    assert_eq!(
+        env.manager.pids_of(&env.id, Some("basedpyright")),
+        quiet_pid
+    );
+    assert_eq!(env.manager.pids_of(&env.id, Some("ruff")), noisy_pid);
+    assert!(alive(quiet_pid[0]) && alive(noisy_pid[0]));
+    assert_eq!(env.manager.spawn_count(), 2);
 }
 
 // ---- ⓑ Linux: 띄운 스레드 ----------------------------------------------------------------------------------------------------
@@ -1162,4 +1226,81 @@ fn servers_outlive_the_blocking_threads_that_prepared_them() {
         assert_eq!(hover["result"]["contents"], "docs");
         assert_eq!(env.manager.spawn_count(), 1);
     });
+}
+
+// ---- 설치본(M4-04) ------------------------------------------------------------------------------------------------------------
+
+/// 설치기의 설치본 찾기(`InstalledTools`)로 해석한 서버가 뜨고, 도구를 지우기 전(`ToolUsers::stop` → `stop_installed`)에 그
+/// 서버만 끝나 `notInstalled` 가 된다. PATH 등 다른 곳에서 찾은 서버는 그대로다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn servers_found_in_the_installed_tools_stop_before_the_tool_is_removed() {
+    use pw_tools::install::{InstallRecord, InstalledVersion, Layout};
+
+    let env = Env::new(EnvOptions::default());
+    // rust-analyzer: 설정에는 인자만 — 실행 파일은 설치본에서 찾는다.
+    let dir = env.base.join("fake");
+    fs::create_dir_all(&dir).unwrap();
+    let mut scenario = incremental();
+    scenario.record = Some(dir.join("installed.jsonl"));
+    let scenario = scenario.write(&dir, "installed").unwrap();
+    let settings = env.paths.config.join("settings.toml");
+    let text = fs::read_to_string(&settings).unwrap();
+    fs::write(
+        &settings,
+        format!(
+            "{text}[lsp.rust-analyzer]\nargs = [\"{}\"]\n",
+            scenario.display()
+        ),
+    )
+    .unwrap();
+    env.global.reload().unwrap();
+    let layout = Layout::new(env.base.join("data/tools"));
+    let version_dir = layout.version_dir("rust-analyzer", "2026-10-26");
+    fs::create_dir_all(version_dir.join("bin")).unwrap();
+    fs::copy(
+        common::env::fake_program(),
+        version_dir.join("bin/rust-analyzer"),
+    )
+    .unwrap();
+    let entry: InstalledVersion = serde_json::from_value(json!({
+        "version": "2026-10-26", "kind": "github", "registryVersion": "test", "sourceUrls": [], "files": [],
+        "checksum": "pinned", "licenses": ["MIT"], "size": 1, "installedAtMs": 0,
+        "bins": { "rust-analyzer": "bin/rust-analyzer" },
+    }))
+    .unwrap();
+    layout
+        .write_record("rust-analyzer", &InstallRecord::new("rust-analyzer", entry))
+        .unwrap();
+    env.servers
+        .set_tools(Arc::new(pw_tools::InstalledTools::new(layout)));
+    // ruff: 설정 경로(설치본이 아니다).
+    env.fake("ruff", incremental());
+
+    let mut win = env.window();
+    win.open(&env, &env.file("src/main.rs", ""), "Rust", "")
+        .await;
+    win.open(&env, &env.file("app.py", ""), "Python", "").await;
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    env.wait_state("ruff", LspInstanceState::Ready).await;
+    let pids = env.manager.pids(&env.id);
+    assert_eq!(pids.len(), 2);
+    env.manager.stop_installed("rust-analyzer").await;
+    assert_eq!(
+        env.state_of("rust-analyzer"),
+        Some(LspInstanceState::NotInstalled {
+            mason: Some("rust-analyzer".into())
+        })
+    );
+    assert_eq!(env.state_of("ruff"), Some(LspInstanceState::Ready));
+    let left = env.manager.pids(&env.id);
+    assert_eq!(left.len(), 1);
+    assert!(
+        pids.iter()
+            .filter(|p| !left.contains(p))
+            .all(|p| !alive(*p))
+    );
+    // 다른 패키지 이름은 아무것도 멈추지 않는다.
+    env.manager.stop_installed("ruff").await;
+    assert_eq!(env.state_of("ruff"), Some(LspInstanceState::Ready));
 }

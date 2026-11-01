@@ -69,6 +69,8 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+# 설치본 찾기(`InstalledTools` — M4-04)로 띄운 서버를 도구 제거 전에 멈추는 시험.
+pw-tools = { path = "../pw-tools" }
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "io-util"] }
 # 실 서버 시험이 기대 능력 표(scripts/lsp-live.toml)를 읽는다. 판은 Cargo.lock 에 이미 있는 것과 같다.
