@@ -77,7 +77,10 @@ function entry() {
     "install -o pitwall -m 600 /pw-ssh/authorized_keys /home/pitwall/.ssh/authorized_keys",
     "install -m 600 /pw-ssh/host_ed25519_key /etc/ssh/ssh_host_ed25519_key",
     `(nc -lk -p ${ECHO_PORT} -e cat &)`,
-    "exec /usr/sbin/sshd -D -e -h /etc/ssh/ssh_host_ed25519_key -o AllowTcpForwarding=yes -o PasswordAuthentication=no",
+    // 출처별 벌점(OpenSSH 9.8+ 기본값)을 끈다. 시험은 인증 없이 끊는 접속(준비 확인 · 모르는 호스트 키에서 멈추는 ssh)을 실행마다
+    // 열 개 넘게 하고 그것이 한 출처에 쌓여 15초를 넘으면 sshd 가 그 출처의 접속을 곧바로 닫는다 — 같은 sshd 로 다시 돌리면 거의 다
+    // 「Connection closed」 로 실패한다.
+    "exec /usr/sbin/sshd -D -e -h /etc/ssh/ssh_host_ed25519_key -o AllowTcpForwarding=yes -o PasswordAuthentication=no -o PerSourcePenalties=no",
   ].join(" && ");
 }
 
