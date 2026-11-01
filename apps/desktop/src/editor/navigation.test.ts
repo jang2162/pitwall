@@ -20,6 +20,8 @@ function harness(init: NavLocation = { path: "/a", line: 1, column: 1 }) {
   let here: NavLocation | undefined = init;
   const gone = new Set<string>();
   const opened: NavTarget[] = [];
+  /** 열 때마다 뒤로 · 앞으로의 열기였는가(`travel`). */
+  const travels: boolean[] = [];
   const listeners = new Map<string, Set<(c: DocumentChange) => void>>();
   let worktree: string | undefined;
   const nav = createNavigation({
@@ -32,8 +34,9 @@ function harness(init: NavLocation = { path: "/a", line: 1, column: 1 }) {
       },
     },
     here: () => here,
-    open: async (loc) => {
+    open: async (loc, how) => {
       opened.push(loc);
+      travels.push(how.travel);
       if (gone.has(loc.path)) return false;
       here = { ...loc, line: loc.line ?? here?.line ?? 1, column: loc.column ?? 1 };
       return true;
@@ -44,6 +47,7 @@ function harness(init: NavLocation = { path: "/a", line: 1, column: 1 }) {
     nav,
     gone,
     opened,
+    travels,
     here: () => here,
     /** 사람이 커서를 옮겼다(기록하지 않는 이동). */
     moveTo(loc: NavLocation) {
@@ -188,6 +192,54 @@ describe("navigation history", () => {
     h.nav.forgetPanel("p1");
     h.nav.cursorMoved("p1", tab, { line: 1, column: 1 }, false);
     expect(h.nav.entries()).toHaveLength(1);
+  });
+
+  it("keeps one slot for a run of big moves: the place the run started", () => {
+    const h = harness();
+    const tab = { path: "/a" };
+    h.nav.cursorMoved("p1", tab, { line: 1, column: 1 }, false);
+    // PageDown 을 이어 누른 것처럼 40줄씩 세 번.
+    for (const line of [41, 81, 121]) h.nav.cursorMoved("p1", tab, { line, column: 1 }, false);
+    expect(h.nav.entries()).toEqual([at("/a", 1)]);
+    // 작은 이동(화살표)은 연속을 끊지 않는다.
+    h.nav.cursorMoved("p1", tab, { line: 122, column: 1 }, false);
+    h.nav.cursorMoved("p1", tab, { line: 200, column: 1 }, false);
+    expect(h.nav.entries()).toEqual([at("/a", 1)]);
+  });
+
+  it("starts a new run after an edit, another record or a move in another tab", async () => {
+    const h = harness(at("/z", 1));
+    const tab = { path: "/a" };
+    h.nav.cursorMoved("p1", tab, { line: 1, column: 1 }, false);
+    h.nav.cursorMoved("p1", tab, { line: 50, column: 1 }, false);
+    // 편집(quiet 보고)이 끊는다.
+    h.nav.cursorMoved("p1", tab, { line: 50, column: 2 }, true);
+    h.nav.cursorMoved("p1", tab, { line: 100, column: 1 }, false);
+    expect(h.nav.entries()).toEqual([at("/a", 1), at("/a", 50, 2)]);
+    // 다른 탭의 커서 이동이 끊는다.
+    h.nav.cursorMoved("p2", { path: "/b" }, { line: 5, column: 1 }, false);
+    h.nav.cursorMoved("p1", tab, { line: 150, column: 1 }, false);
+    expect(h.nav.entries()).toHaveLength(3);
+    // 다른 기록(위치로 가기)이 끊는다.
+    await h.nav.navigateTo(at("/c", 1), { record: true });
+    h.nav.cursorMoved("p1", tab, { line: 200, column: 1 }, false);
+    expect(h.nav.entries()).toHaveLength(5);
+  });
+
+  it("opens quietly when going back or forward, and loudly for a chosen place", async () => {
+    const h = harness(at("/a", 1));
+    await h.nav.navigateTo(at("/b", 1), { record: true });
+    await h.nav.back();
+    await h.nav.forward();
+    expect(h.travels).toEqual([false, true, true]);
+  });
+
+  it("carries a root-outside token through back and forward", async () => {
+    const h = harness({ path: "/lib/vec.rs", token: "t1", line: 9, column: 1 });
+    await h.nav.navigateTo(at("/a", 3), { record: true });
+    expect(h.nav.entries()).toEqual([{ path: "/lib/vec.rs", token: "t1", line: 9, column: 1 }]);
+    await h.nav.back();
+    expect(h.opened.at(-1)).toMatchObject({ path: "/lib/vec.rs", token: "t1", line: 9 });
   });
 
   it("follows a rename of the entry's file or folder", async () => {

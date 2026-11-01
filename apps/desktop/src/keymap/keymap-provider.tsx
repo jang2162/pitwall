@@ -101,6 +101,11 @@ export interface KeymapContextValue {
   registerSearchSource(source: SearchSource): () => void;
   /** 팝업이 열렸다고 알린다(`useKeymapPopup`). 닫는 함수를 돌려준다. */
   enterPopup(): () => void;
+  /**
+   * 창이 띄운 팝업(Search Everywhere · `useKeymapPopup`)이 떠 있다. 키맵을 거치지 않는 창 단위 입력(마우스 뒤로 · 앞으로 버튼,
+   * src/editor/navigation-ui.tsx)이 키와 같이 쉬려고 읽는다.
+   */
+  popupOpen(): boolean;
 }
 
 const KeymapContext = createContext<KeymapContextValue | undefined>(undefined);
@@ -362,6 +367,7 @@ export function KeymapProvider({
       openSearch,
       registerSearchSource,
       enterPopup,
+      popupOpen: isPopupOpen,
       runnable: (action) => windowGate(action) && registry.isEnabled(action),
       takesKey: (e) => engine.peek(e),
     }),
@@ -371,6 +377,7 @@ export function KeymapProvider({
       platform,
       layout,
       enterPopup,
+      isPopupOpen,
       windowGate,
       engine,
       openSearch,

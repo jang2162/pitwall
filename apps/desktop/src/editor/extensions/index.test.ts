@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { EditorState, Facet } from "@codemirror/state";
+import { EditorSelection, EditorState, Facet } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { Judgment } from "@pitwall/rpc-client";
 import { expect, it, vi } from "vitest";
@@ -160,4 +160,35 @@ it("reports the cursor through the context, and the reconfigured callback after 
   expect(second).toHaveBeenLastCalledWith({ line: 1, column: 2 }, false);
   expect(first).toHaveBeenCalledTimes(3);
   view.destroy();
+});
+
+it("reports a selection with more than one cursor as quiet, before and after", () => {
+  const report = vi.fn();
+  const view = new EditorView({
+    parent: document.body,
+    state: EditorState.create({
+      doc: "one\ntwo\nthree",
+      extensions: [
+        EditorState.allowMultipleSelections.of(true),
+        editorExtensions({ ...context, onCursor: report }),
+      ],
+    }),
+  });
+  // 커서를 더하는 것(주 범위가 새 커서) · 빼는 것 모두 사람이 옮긴 「이동」 이 아니다 — 기록이 보는 자리는 주 커서다.
+  view.dispatch({
+    selection: EditorSelection.create([EditorSelection.cursor(0), EditorSelection.cursor(9)], 1),
+  });
+  expect(report).toHaveBeenLastCalledWith({ line: 3, column: 2 }, true);
+  view.dispatch({ selection: EditorSelection.single(0) });
+  expect(report).toHaveBeenLastCalledWith({ line: 1, column: 1 }, true);
+  view.dispatch({ selection: EditorSelection.single(4) });
+  expect(report).toHaveBeenLastCalledWith({ line: 2, column: 1 }, false);
+  view.destroy();
+});
+
+it("lets a feature report a cursor without the quiet flag", () => {
+  // 줄을 바꾸지 않는 보고(M4-14 의 컬럼 모드 켜고 끄기)는 인자 하나로 부른다 — `quiet` 는 선택 인자다(tsc 가 지킨다).
+  const report: EditorFeatureContext["onCursor"] = vi.fn();
+  report({ line: 1, column: 1 });
+  expect(report).toHaveBeenCalledWith({ line: 1, column: 1 });
 });

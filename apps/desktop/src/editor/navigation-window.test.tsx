@@ -3,6 +3,7 @@
 // ⌘L · ⌘⇧O)와 마우스 4 · 5 버튼(합성 이벤트)으로 뒤로 · 앞으로를 본다. 정의 이동(M4-08)은 아직 없다 — 같은 위치로 가기
 // (`navigateTo`)를 부르는 「파일로 이동」(⌘⇧O `main.rs:7`)이 그 자리를 대신한다.
 
+import { EditorSelection, EditorState, StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type {
   ConfigView,
@@ -357,6 +358,21 @@ async function moveCursor(line: number) {
   );
 }
 
+/** 문서 끝에 글자 하나를 붙인다 — 큰 이동의 연속을 끊는 편집(기록된 줄은 그대로). */
+async function editAtEnd() {
+  const view = activeView();
+  (document.activeElement as HTMLElement | null)?.blur();
+  await act(async () =>
+    view.dispatch({
+      changes: { from: view.state.doc.length, insert: "x" },
+      userEvent: "input.type",
+    }),
+  );
+}
+
+const toasts = () =>
+  [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent ?? "");
+
 /** 줄로 이동(⌘L) 대화상자에 `text` 를 넣고 이동한다. */
 async function gotoLine(text: string) {
   await press({ code: "KeyL", key: "l", metaKey: true });
@@ -484,9 +500,11 @@ it("records a cursor move of more than 10 lines, not a smaller one nor a move by
 it(`keeps the last ${NAV_HISTORY_LIMIT} places in Recent Locations, newest first, and opens the chosen one`, async () => {
   await mount();
   await openRequest(LIB, 299, 1);
-  // 큰 이동 101번: 첫 기록(299줄)이 빠진다.
-  for (let i = 0; i < NAV_HISTORY_LIMIT + 1; i++)
+  // 큰 이동 101번: 첫 기록(299줄)이 빠진다. 이어지는 큰 이동은 한 칸이라 이동마다 편집으로 연속을 끊는다.
+  for (let i = 0; i < NAV_HISTORY_LIMIT + 1; i++) {
     await moveCursor(i % 2 ? 1 + (i % 40) : 150 + (i % 40));
+    await editAtEnd();
+  }
   await recentLocations();
   const rows = recentRows();
   expect(rows).toHaveLength(NAV_HISTORY_LIMIT);
@@ -531,4 +549,95 @@ it("goes back on mouse button 4 and forward on button 5, once per press", async 
   await mouse("mousedown", 1);
   await mouse("auxclick", 1);
   expect(where()).toMatchObject({ path: LIB, line: 50 });
+});
+
+it("keeps one slot for a run of big moves (PageDown pressed again and again) and goes back to its start", async () => {
+  await mount();
+  await openRequest(LIB, 100, 1);
+  for (const line of [150, 200, 250]) await moveCursor(line);
+  await recentLocations();
+  expect(recentRows()).toHaveLength(1);
+  expect(recentRows()[0]).toContain("lib.rs:100");
+  await press({ code: "Escape", key: "Escape" });
+  await back();
+  await vi.waitFor(() => expect(where()).toMatchObject({ path: LIB, line: 100 }));
+});
+
+it("does not record adding or removing cursors, and ⌘[ leaves the cursors alone", async () => {
+  await mount();
+  await openRequest(LIB, 100, 1);
+  const view = activeView();
+  const at = (line: number) => view.state.doc.line(line).from;
+  (document.activeElement as HTMLElement | null)?.blur();
+  // 여러 커서는 M4-14 가 켠다 — 이 브랜치에서는 시험 뷰에만 켠다.
+  await act(async () =>
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(EditorState.allowMultipleSelections.of(true)),
+    }),
+  );
+  // ⌥⇧+클릭처럼 20줄 아래에 커서를 더한다 — 새 커서가 주 범위다.
+  await act(async () =>
+    view.dispatch({
+      selection: EditorSelection.create(
+        [EditorSelection.cursor(at(100)), EditorSelection.cursor(at(120))],
+        1,
+      ),
+      userEvent: "select.pointer",
+    }),
+  );
+  await back();
+  expect(activeView().state.selection.ranges).toHaveLength(2);
+  // 더한 커서를 뺀다(남은 커서는 20줄 위).
+  await act(async () =>
+    view.dispatch({ selection: EditorSelection.single(at(100)), userEvent: "select" }),
+  );
+  await recentLocations();
+  expect(recentRows()).toEqual([]);
+});
+
+it("takes the focus with Recent Locations, so keys do not edit the document under it", async () => {
+  await mount();
+  await openRequest(LIB, 100, 1);
+  await gotoLine("150");
+  const text = activeView().state.doc.toString();
+  await recentLocations();
+  const list = document.querySelector("[data-testid=recent-locations]");
+  expect(document.activeElement).toBe(list);
+  await press({ code: "Backspace", key: "Backspace" });
+  expect(activeView().state.doc.toString()).toBe(text);
+  // 한글 조합을 끝낸 ↩(keyCode 229)는 고르지 않는다.
+  await press({ code: "Enter", key: "Enter", keyCode: 229 } as KeyboardEventInit);
+  expect(document.querySelector("[data-testid=recent-locations]")).not.toBeNull();
+  await press({ code: "Escape", key: "Escape" });
+  expect(document.querySelector("[data-testid=recent-locations]")).toBeNull();
+  await vi.waitFor(() =>
+    expect(document.activeElement?.classList.contains("cm-content")).toBe(true),
+  );
+  expect(where()).toMatchObject({ path: LIB, line: 150 });
+});
+
+it("skips a deleted file's place when going back without an error notice", async () => {
+  await mount();
+  await openRequest(LIB, 40, 1);
+  await gotoFile("main.rs:5");
+  await vi.waitFor(() => expect(where().path).toBe(MAIN));
+  const lib = editorPanels(dock!).find((p) => tabParams(p).path === LIB)!;
+  await act(async () => lib.api.close());
+  host.files.delete(LIB);
+  await back();
+  await settle();
+  expect(where()).toMatchObject({ path: MAIN, line: 5 });
+  expect(toasts().filter((t) => t.includes("lib.rs"))).toEqual([]);
+});
+
+it("ignores the mouse back button while a popup of the window is open", async () => {
+  await mount();
+  await openRequest(LIB, 50, 1);
+  await gotoFile("main.rs:7");
+  await vi.waitFor(() => expect(where().path).toBe(MAIN));
+  await recentLocations();
+  await mouse("mousedown", 3);
+  await mouse("auxclick", 3);
+  expect(where()).toMatchObject({ path: MAIN, line: 7 });
+  expect(document.querySelector("[data-testid=recent-locations]")).not.toBeNull();
 });

@@ -35,7 +35,7 @@
 // 위치로 가기(`navigateTo`, 15-m4-plan M4-09): 위치를 여는 기능(정의 · 사용처 · 심볼 · 문제 · 구조 · 줄로 이동 · 파일로 이동 · 검색
 // 결과)은 `open` 대신 이것을 부른다 — 열기 · 커서 · 내비게이션 기록(navigation.ts)을 한 함수로 한다. 같은 파일의 활성 탭이면 파일을
 // 다시 보지 않고 커서만 옮긴다. 작업 공간이 둔 커서(위치로 가기 · 열기 요청 · 복원)와 편집으로 밀린 커서는 「큰 이동」 으로 기록하지
-// 않는다(`placing`).
+// 않는다(`placing`). 루트 밖 문서(토큰 든 위치 · 외부 소스 탭)는 `OutsideSources`(M4-08)가 열고 읽는다.
 
 import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -46,7 +46,12 @@ import { createStore } from "zustand/vanilla";
 
 import type { DocumentStore } from "./documents";
 import { bindDocumentLanguages } from "./language";
-import { createNavigation, type NavigateOptions, type NavTarget } from "./navigation";
+import {
+  createNavigation,
+  type NavigateOptions,
+  type NavLocation,
+  type NavTarget,
+} from "./navigation";
 import { createSyntaxSessions, type SyntaxSource } from "./syntax-sessions";
 import {
   baseName,
@@ -143,6 +148,22 @@ export interface EditorWorkspaceDeps {
   syntax?: SyntaxSource;
   /** 창의 활성 워크트리(프로젝트 창). 내비게이션 기록이 다른 워크트리의 자리를 건너뛴다. 없으면 가리지 않는다(파일 창). */
   activeWorktree?(): string | undefined;
+  /** 루트 밖 문서(「외부 소스」 탭, M4-08). 없으면 토큰 든 위치는 열지 않는다. */
+  outside?: OutsideSources;
+}
+
+/**
+ * 루트 밖 문서의 자리(결정 M4-D13 — M4-08 이 채운다). 위치로 가기 · 뒤로 · 앞으로가 토큰 든 위치를 `open` 으로 열고, 지금 자리 ·
+ * 큰 이동이 외부 소스 탭의 자리를 `locate` 로 읽는다 — 그래서 외부 소스로 간 뒤 `⌘[` · `⌘]` 가 오간다.
+ */
+export interface OutsideSources {
+  /** 토큰 든 위치를 외부 소스 탭으로 연다(커서까지 둔다). 열지 못했으면 `undefined` — 알리는 것은 `travel` 이 아닐 때만. */
+  open(
+    location: NavTarget & { token: string },
+    how: { travel: boolean },
+  ): Promise<IDockviewPanel | undefined>;
+  /** 탭이 외부 소스 탭이면 그 자리(토큰 포함). 아니면 `undefined`. */
+  locate(panel: IDockviewPanel, cursor: Cursor | undefined): NavLocation | undefined;
 }
 
 export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
@@ -266,13 +287,17 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     else refocus.add(panelId);
   }
 
-  async function open(request: OpenRequest): Promise<IDockviewPanel | undefined> {
+  /** `quiet` 면 열지 못해도 알리지 않는다(뒤로 · 앞으로가 지워진 파일의 기록을 건너뛸 때). */
+  async function open(
+    request: OpenRequest,
+    { quiet = false }: { quiet?: boolean } = {},
+  ): Promise<IDockviewPanel | undefined> {
     const started = performance.now();
     let stat: FsStat;
     try {
       stat = await deps.stat(request.path, request.worktree);
     } catch (e) {
-      deps.onOpenFailed(request.path, e instanceof Error ? e.message : String(e));
+      if (!quiet) deps.onOpenFailed(request.path, e instanceof Error ? e.message : String(e));
       return undefined;
     }
     if (!api) return undefined;
@@ -300,11 +325,24 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     return { worktree, file: path, cursor: view ? cursorOf(view) : undefined };
   }
 
-  /** 위치를 연다(위치로 가기 · 뒤로 · 앞으로). 열었으면 `true`. */
-  async function openLocation(loc: NavTarget): Promise<boolean> {
+  /** 외부 소스 탭이면 그 자리(`OutsideSources.locate`). */
+  function outsideAt(panel: IDockviewPanel | undefined): NavLocation | undefined {
+    if (!panel || !deps.outside) return undefined;
+    const view = views.get(panel.id);
+    return deps.outside.locate(panel, view ? cursorOf(view) : undefined);
+  }
+
+  /**
+   * 위치를 연다(위치로 가기 · 뒤로 · 앞으로). 열었으면 `true`. 토큰 든 위치(루트 밖 문서)는 `OutsideSources` 가 연다 — 뒤로 ·
+   * 앞으로도 여기를 지나므로 M4-08 은 그 구현만 넘기면 된다.
+   */
+  async function openLocation(loc: NavTarget, { travel }: { travel: boolean }): Promise<boolean> {
     let panel = activeTab();
     const params = panel && isFileTab(panel) ? tabParams(panel) : undefined;
-    if (
+    if (loc.token !== undefined) {
+      panel = await deps.outside?.open({ ...loc, token: loc.token }, { travel });
+      if (!panel) return false;
+    } else if (
       panel &&
       params?.path === loc.path &&
       params.worktree === loc.worktree &&
@@ -312,12 +350,10 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     ) {
       if (loc.line !== undefined) moveCursor(panel.id, { line: loc.line, column: loc.column ?? 1 });
     } else {
-      panel = await open({
-        path: loc.path,
-        worktree: loc.worktree,
-        line: loc.line,
-        column: loc.column,
-      });
+      panel = await open(
+        { path: loc.path, worktree: loc.worktree, line: loc.line, column: loc.column },
+        { quiet: travel },
+      );
       if (!panel) return false;
     }
     panel.api.setActive();
@@ -330,6 +366,8 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
   const navigation = createNavigation({
     documents: deps.documents,
     here() {
+      const outside = outsideAt(activeTab());
+      if (outside) return outside;
       const now = activeContext();
       if (!now?.file) return undefined;
       return {
@@ -522,7 +560,10 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
      */
     reportCursor(panelId: string, cursor: Cursor, quiet = false) {
       const panel = api?.getPanel(panelId);
-      if (panel && isFileTab(panel)) {
+      const outside = outsideAt(panel);
+      if (outside) {
+        navigation.cursorMoved(panelId, outside, cursor, quiet || placing.has(panelId));
+      } else if (panel && isFileTab(panel)) {
         const { path, worktree } = tabParams(panel);
         navigation.cursorMoved(
           panelId,
@@ -554,7 +595,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
      * 여는 기능은 `open` + 기록을 따로 짜지 않고 이것만 부른다(15-m4-plan 「공유 부품의 주인」).
      */
     navigateTo: (location: NavTarget, options?: NavigateOptions): Promise<boolean> =>
-      // 루트 밖 위치(읽기 토큰으로만 여는 「외부 소스」, 결정 M4-D13)의 갈래는 M4-08 이 여기 더한다.
+      // 루트 밖 위치(토큰 든 위치)의 갈래는 `openLocation` 에 있다 — 뒤로 · 앞으로도 그리로 간다.
       navigation.navigateTo(location, options),
     /** 창의 내비게이션 기록(뒤로 · 앞으로 · 최근 위치). */
     navigation,

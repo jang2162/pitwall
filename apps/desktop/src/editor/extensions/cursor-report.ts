@@ -12,7 +12,12 @@ export const cursorReport: EditorFeature = {
       if (!update.selectionSet) return;
       const head = update.state.selection.main.head;
       const line = update.state.doc.lineAt(head);
-      // 편집이 민 커서는 내비게이션 기록의 「큰 이동」 이 아니다(../navigation.ts).
-      c.onCursor({ line: line.number, column: head - line.from + 1 }, update.docChanged);
+      // 편집이 민 커서와 커서가 여럿인 선택(바뀌기 전이나 뒤 — 커서 더하기 · 빼기)은 내비게이션 기록의 「큰 이동」 이 아니다
+      // (../navigation.ts). 기록이 보는 자리는 주 커서다.
+      const quiet =
+        update.docChanged ||
+        update.startState.selection.ranges.length > 1 ||
+        update.state.selection.ranges.length > 1;
+      c.onCursor({ line: line.number, column: head - line.from + 1 }, quiet);
     }),
 };

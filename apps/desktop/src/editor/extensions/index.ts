@@ -84,9 +84,10 @@ export interface EditorFeatureContext {
   readonly appearance: "light" | "dark";
   /**
    * 이 뷰의 커서가 바뀌었다(상태바의 줄:열, M1-18 · 내비게이션 기록의 큰 이동, M4-09). 그 탭이 활성인지는 받는 쪽이 본다.
-   * `quiet` 면 사람이 옮긴 커서가 아니다 — 편집이 민 커서 · 뷰가 생길 때의 커서.
+   * `quiet` 면 사람이 옮긴 커서가 아니다 — 편집이 민 커서 · 커서가 여럿인 선택 · 뷰가 생길 때의 커서. 없으면 `false` — 줄을
+   * 바꾸지 않는 보고(컬럼 모드 켜고 끄기 등)는 넘기지 않아도 된다.
    */
-  readonly onCursor: (cursor: EditorCursor, quiet: boolean) => void;
+  readonly onCursor: (cursor: EditorCursor, quiet?: boolean) => void;
   /** 문서의 undo · redo(`editing`). 고친 내용은 뷰의 트랜잭션으로 문서에 간다 — 기능이 따로 알릴 것은 없다. */
   readonly history: EditorHistory;
   /** 창의 구문 세션(`highlight`, ../syntax-sessions.ts). Host 에 붙지 않은 창 · 시험에는 없다. */
