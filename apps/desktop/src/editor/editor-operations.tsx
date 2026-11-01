@@ -8,6 +8,7 @@ import { type ReactNode, useCallback, useMemo, useRef } from "react";
 
 import { useRegisterActions } from "../keymap/keymap-provider";
 import { useProjectStrings } from "../layout/strings";
+import { useNotify } from "../notifications/notifications";
 import { useRpcQuery } from "../rpc/host";
 import { editorOpsActions } from "./editor-ops";
 import { useEditorStatusItems } from "./editor-status";
@@ -54,6 +55,7 @@ export function useEditorOperations(
   );
   const goto = useGotoLine(go);
   const navigation = useNavigationUi(workspace);
+  const notify = useNotify();
   const actions = useMemo(
     () =>
       editorOpsActions({
@@ -61,8 +63,9 @@ export function useEditorOperations(
         strings,
         openGotoLine: goto.open,
         lineComment: (language) => comments.current.get(language),
+        notify,
       }),
-    [workspace, strings, goto.open],
+    [workspace, strings, goto.open, notify],
   );
   useRegisterActions(actions);
   const openGotoLine = useCallback(() => {

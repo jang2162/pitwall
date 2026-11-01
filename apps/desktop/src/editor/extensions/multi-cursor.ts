@@ -15,6 +15,7 @@
 
 import {
   closeSearchPanel,
+  RegExpCursor,
   selectNextOccurrence as cmSelectNextOccurrence,
   SearchCursor,
   searchPanelOpen,
@@ -39,8 +40,12 @@ import {
 
 import type { EditorFeature } from ".";
 
-/** 모든 일치 선택의 상한. 넘으면 앞에서부터 이만큼만 고른다. */
-export const MAX_OCCURRENCES = 10_000;
+/**
+ * 모든 일치 선택(⌃⌘G)의 상한. 넘으면 앞에서부터 이만큼만 고르고 알린다. 커서가 많으면 글자 하나를 넣는 데도 커서 수의 제곱으로
+ * 시간이 든다 — CodeMirror 의 편집 명령(입력 · 지우기 · 줄바꿈)이 범위마다 바뀜을 합성한다(`changeByRange`). 이 상한에서 한 글자
+ * 넣기가 한 프레임(16 ms) 안팎이 되게 골랐다. 재는 법: multi-cursor.test.ts 의 「types one character at the cap of cursors within a frame」(상한 개수 커서에 `replaceSelection`).
+ */
+export const MAX_OCCURRENCES = 300;
 
 // ── 다음 일치 · 마지막 추가 취소 ──────────────────────────────────────────────────────────────
 
@@ -111,46 +116,64 @@ export const unselectOccurrence: StateCommand = ({ state, dispatch }) => {
   return true;
 };
 
+/** 정규식에서 글자 그대로 맞추게 한다. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&");
+}
+
 /**
- * `⌃⌘G`: 주 범위의 글자와 같은 곳을 모두 고른다. 주 범위가 비었으면 커서의 낱말이고 그때는 낱말 단위로만 맞춘다.
- * 대소문자를 가린다(`⌃G` 와 같다).
+ * `⌃⌘G`: 주 범위의 글자와 같은 곳을 모두 고른다. 주 범위가 비었으면 커서의 낱말이고 그때는 낱말 단위로만 맞춘다 — 낱말 경계를
+ * 정규식으로 걸어 낱말 속 일치(`a` 를 찾을 때 모든 낱말의 `a`)는 훑지 않는다. 경계의 글자(문자 · 숫자 · `_`)와 CodeMirror 의
+ * 낱말 판정(언어별 `wordChars`)이 다를 수 있어 맞은 것을 `wordAt` 으로 한 번 더 본다. 대소문자를 가린다(`⌃G` 와 같다).
+ * 상한(`MAX_OCCURRENCES`)을 넘는 일치가 있으면 앞에서부터 상한까지만 고르고 `onCapped` 를 부른다.
  */
-export const selectAllOccurrences: StateCommand = ({ state, dispatch }) => {
-  const main = state.selection.main;
-  let { from, to } = main;
-  let wholeWord = false;
-  if (main.empty) {
-    const word = state.wordAt(main.head);
-    if (!word) return false;
-    ({ from, to } = word);
-    wholeWord = true;
-  }
-  const ranges: SelectionRange[] = [];
-  let mainIndex = 0;
-  for (const cur = new SearchCursor(state.doc, state.sliceDoc(from, to)); !cur.next().done;) {
-    const { from: f, to: t } = cur.value;
-    if (wholeWord) {
-      const word = state.wordAt(f);
-      if (!word || word.from !== f || word.to !== t) continue;
+export function selectAllOccurrences(onCapped?: (cap: number) => void): StateCommand {
+  return ({ state, dispatch }) => {
+    const main = state.selection.main;
+    let { from, to } = main;
+    let wholeWord = false;
+    if (main.empty) {
+      const word = state.wordAt(main.head);
+      if (!word) return false;
+      ({ from, to } = word);
+      wholeWord = true;
     }
-    if (f === from) mainIndex = ranges.length;
-    ranges.push(EditorSelection.range(f, t));
-    if (ranges.length >= MAX_OCCURRENCES) break;
-  }
-  if (ranges.length === 0) return false;
-  dispatch(
-    state.update({
-      selection: EditorSelection.create(ranges, mainIndex),
-      userEvent: "select.search.matches",
-    }),
-  );
-  return true;
-};
+    const text = state.sliceDoc(from, to);
+    const cursor = wholeWord
+      ? new RegExpCursor(state.doc, `(?<![\\p{L}\\p{N}_])${escapeRegExp(text)}(?![\\p{L}\\p{N}_])`)
+      : new SearchCursor(state.doc, text);
+    const ranges: SelectionRange[] = [];
+    let mainIndex = 0;
+    let capped = false;
+    for (let cur = cursor.next(); !cur.done; cur = cursor.next()) {
+      const { from: f, to: t } = cur.value;
+      if (wholeWord) {
+        const word = state.wordAt(f);
+        if (!word || word.from !== f || word.to !== t) continue;
+      }
+      if (ranges.length >= MAX_OCCURRENCES) {
+        capped = true;
+        break;
+      }
+      if (f === from) mainIndex = ranges.length;
+      ranges.push(EditorSelection.range(f, t));
+    }
+    if (ranges.length === 0) return false;
+    dispatch(
+      state.update({
+        selection: EditorSelection.create(ranges, mainIndex),
+        userEvent: "select.search.matches",
+      }),
+    );
+    if (capped) onCapped?.(MAX_OCCURRENCES);
+    return true;
+  };
+}
 
 // ── 위 · 아래 줄에 커서 ─────────────────────────────────────────────────────────────────────
 
 /**
- * `⌥⌥` 누른 채 `↑` · `↓`: 범위마다 한 줄 위 · 아래의 같은 화면 열에 커서를 더한다 — 이미 범위가 있는 자리는 건너뛰므로
+ * `⌥⌥` 누른 채 `↑` · `↓`: 범위마다 한 줄 위 · 아래의 같은 글자 열(`Point.col`)에 커서를 더한다 — 이미 범위가 있는 자리는 건너뛰므로
  * 맨 위 · 맨 아래에 하나씩 더해진다. 새 맨 끝 커서가 주 범위가 된다. 짧은 줄은 줄 끝에 두되 열을 기억해(`goalColumn`) 다음 긴 줄에서 그 열로 돌아간다.
  * CodeMirror 의 `addCursorBelow` 는 화면 좌표로 옮기는데, 에디터는 줄바꿈(soft wrap)을 늘 끄므로 논리 줄 · 열과 같고 이쪽이
  * 그리기 전 상태에서도 맞다.
@@ -192,7 +215,10 @@ export const addCursorBelow = addCursorVertically(true);
 interface Point {
   /** 1부터 센 줄. */
   readonly line: number;
-  /** 0부터 센 화면 열(탭은 `tabSize` 칸). */
+  /**
+   * 0부터 센 글자 열: 탭은 `tabSize` 칸, 그 밖의 글자는 넓은 글자(한글 · CJK)도 한 칸이다(CodeMirror `countColumn` — 마우스 사각
+   * 선택 `rectangularSelection` 과 같은 규칙이라 키 · 마우스가 같은 사각형을 고른다). 등폭 글꼴의 화면 칸과는 넓은 글자에서 다르다.
+   */
   readonly col: number;
 }
 
@@ -302,8 +328,8 @@ function lineEnd(state: EditorState, point: Point): number {
 
 /**
  * `Esc`: 찾기 막대가 열려 있으면 그것을 먼저 닫고, 아니면 주 커서 하나만 남긴다(선택이 하나면 그 머리로 접는다 — IntelliJ 와
- * 같다). 할 것이 없으면 거짓. 에디터의 팝업(자동완성 등 CodeMirror 툴팁)은 이 명령이 돌기 전에 그 팝업이 키를 받는다
- * (../multi-cursor-actions.ts `enabled`).
+ * 같다). 할 것이 없으면 거짓. 다른 처리기(찾기 칸 · 에디터 팝업)가 먼저 받은 Esc 에서는 돌지 않는다(../multi-cursor-actions.ts
+ * 머리 주석).
  */
 export const singleCursor: Command = (view) => {
   if (searchPanelOpen(view.state)) return closeSearchPanel(view);

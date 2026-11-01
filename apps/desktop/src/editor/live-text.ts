@@ -124,7 +124,12 @@ export class LiveText {
     this.separator = lineSeparatorOf(lineEnding);
     this.eol = eolOf(lineEnding);
     this.bom = bom;
-    this.hub = EditorState.create({ doc: text, extensions: [this.base(), history()] });
+    // 허브도 여러 선택을 받는다 — 받지 않으면 뷰의 선택을 맞출 때 주 범위 하나로 줄여 기록해, 커서 여럿에서 고친 것을 undo 하면
+    // 커서가 하나로 돌아온다(멀티 커서, M4-14).
+    this.hub = EditorState.create({
+      doc: text,
+      extensions: [this.base(), EditorState.allowMultipleSelections.of(true), history()],
+    });
     this.clean = this.hub.doc;
   }
 

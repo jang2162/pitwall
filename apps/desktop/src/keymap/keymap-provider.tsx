@@ -270,6 +270,7 @@ export function KeymapProvider({
           return ran;
         },
         allowsRepeat: (action) => registry.allowsRepeat(action),
+        yieldsToHandled: (action) => registry.yieldsToHandled(action),
         // 팝업이 열려 있는 동안 단축키는 팝업이 받는다 — 뒤의 창에서 액션이 돌지 않게. 팝업 액션은 팝업이 열려 있을 때만 돈다.
         isEnabled: (action) =>
           isPopupOpen() === registry.isPopup(action) && registry.isEnabled(action),
@@ -289,11 +290,15 @@ export function KeymapProvider({
     const onUp = (e: KeyboardEvent) => {
       if (engine.keyup(e).handled) e.preventDefault();
     };
+    // 창이 포커스를 잃으면 수정 키의 뗌이 오지 않을 수 있다 — 더블 탭 · 연속 키의 기다림을 버린다(엔진 `reset`).
+    const onBlur = () => engine.reset();
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onDown);
       window.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", onBlur);
     };
   }, [engine]);
 

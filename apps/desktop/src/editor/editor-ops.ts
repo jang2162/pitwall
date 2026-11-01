@@ -16,6 +16,7 @@ import { EditorView } from "@codemirror/view";
 import type { Action } from "@pitwall/keymap";
 
 import type { ProjectStrings } from "../layout/strings";
+import type { NotificationInput } from "../notifications/notifications";
 import {
   deleteLine,
   duplicateLine,
@@ -56,6 +57,8 @@ export function editorOpsActions(deps: {
   openGotoLine(view: EditorView): void;
   /** 언어(Linguist 이름)의 줄 주석 기호(`lang.list`). 모르면 `undefined`. */
   lineComment(language: string): string | undefined;
+  /** 창의 알림(멀티 커서의 「상한에 걸림」). 없으면 알리지 않는다. */
+  notify?: (input: NotificationInput) => void;
 }): Action[] {
   const T = deps.strings;
   const hasView = () => targetView(deps.workspace) !== undefined;
@@ -118,6 +121,6 @@ export function editorOpsActions(deps: {
       const token = path === undefined ? undefined : deps.lineComment(getDocLanguage(path));
       return token !== undefined && toggleLineComment(token)(view);
     }),
-    ...multiCursorActions({ workspace: deps.workspace, strings: T }),
+    ...multiCursorActions({ workspace: deps.workspace, strings: T, notify: deps.notify }),
   ];
 }

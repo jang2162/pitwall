@@ -21,6 +21,9 @@
 //   누르고 있는 동안 친 키가 그 바인딩과 맞으면 실행한다. 누르고 있는 길이에는 한도가 없고, 누른 채 몇 번이든 친다(반복 keydown
 //   은 액션이 허락할 때). 그 수정 키를 떼면 끝난다 — 그다음 같은 키는 보통 키(`⌥↓`)로 맞춘다. 누른 채 친 키가 실행됐으면 뗌은
 //   더블 탭(`"alt alt"`)으로 실행하지 않는다. 같은 누름의 보통 바인딩(`alt+down`)보다 먼저 본다.
+// - 창이 포커스를 잃으면 창이 `reset()` 을 불러 기다리던 연속 키 · 더블 탭을 버린다(수정 키의 뗌이 다른 앱으로 갈 수 있다).
+// - 다른 처리기가 먼저 처리한 keydown(`defaultPrevented`)은 보통 그대로 맞추되, `yieldsToHandled` 액션의 바인딩만 없는 것으로
+//   본다(registry.ts `Action.yieldsToHandled` — 찾기 칸 · 에디터 팝업이 닫은 Esc 에서 「커서 하나로」 가 또 돌지 않게).
 
 import {
   type KeySequence,
@@ -43,6 +46,8 @@ export interface KeyEventLike {
   readonly isComposing?: boolean;
   readonly keyCode?: number;
   readonly repeat?: boolean;
+  /** 다른 처리기가 먼저 처리한 이벤트(`yieldsToHandled` 액션만 본다). */
+  readonly defaultPrevented?: boolean;
 }
 
 export interface EngineOptions {
@@ -52,6 +57,8 @@ export interface EngineOptions {
   isEnabled(action: string): boolean;
   /** 누르고 있어 반복되는 keydown 으로도 실행하는가. 없으면 거짓. */
   allowsRepeat?(action: string): boolean;
+  /** 이미 처리된 keydown(`defaultPrevented`)에서는 이 액션의 바인딩을 없는 것으로 보는가. 없으면 거짓(registry.ts `yieldsToHandled`). */
+  yieldsToHandled?(action: string): boolean;
   /** 지금의 컨텍스트 층(안쪽부터). */
   context(): ContextLayers;
   /** 이 컨텍스트에서 바인딩을 볼 수 있는가(머리 주석 「창 규칙」). 없으면 늘 참. */
@@ -95,6 +102,8 @@ export class KeymapEngine {
   private bindings: readonly Binding[] = [];
   private pending?: { strokes: Stroke[]; at: number };
   private tap?: Tap;
+  /** 지금 보는 keydown 이 이미 처리된 것인가(`live` 가 `yieldsToHandled` 바인딩을 뺀다). */
+  private prevented = false;
   private readonly now: () => number;
   private readonly chordTimeoutMs: number;
   private readonly doubleTapMs: number;
@@ -112,7 +121,25 @@ export class KeymapEngine {
     this.tap = undefined;
   }
 
+  /**
+   * 기다리던 연속 키 · 더블 탭 상태를 버린다. 창이 포커스를 잃을 때 부른다 — 수정 키의 뗌을 다른 앱이 가져가면 더블 탭의 두 번째
+   * 누름이 「누른 채」 로 남아, 수정 키를 누른 채 돌아와 친 `↓` 가 `doubleHold` 로 돈다.
+   */
+  reset() {
+    this.pending = undefined;
+    this.tap = undefined;
+  }
+
   keydown(e: KeyEventLike): KeyOutcome {
+    this.prevented = e.defaultPrevented === true;
+    try {
+      return this.keydownNow(e);
+    } finally {
+      this.prevented = false;
+    }
+  }
+
+  private keydownNow(e: KeyEventLike): KeyOutcome {
     if (isComposingEvent(e)) {
       this.tap = undefined;
       return NOT_HANDLED;
@@ -148,6 +175,15 @@ export class KeymapEngine {
    * 키 · 더블 탭 상태도 건드리지 않는다.
    */
   peek(e: KeyEventLike): boolean {
+    this.prevented = e.defaultPrevented === true;
+    try {
+      return this.peekNow(e);
+    } finally {
+      this.prevented = false;
+    }
+  }
+
+  private peekNow(e: KeyEventLike): boolean {
     if (isComposingEvent(e) || MODIFIER_CODES[e.code]) return false;
     const stroke = strokeFromEvent(e);
     if (!stroke) return false;
@@ -257,6 +293,7 @@ export class KeymapEngine {
   private live(b: Binding, layers: ContextLayers): boolean {
     return (
       this.options.isEnabled(b.action) &&
+      !(this.prevented && this.options.yieldsToHandled?.(b.action)) &&
       (!b.whenExpr || evaluateWhen(b.whenExpr, layers)) &&
       (this.options.admits?.(b, layers) ?? true)
     );

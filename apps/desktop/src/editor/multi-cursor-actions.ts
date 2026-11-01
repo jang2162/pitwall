@@ -2,15 +2,17 @@
 // 창의 키맵에 거는 자리다. 기본 키는 extensions/keymap-default/keymaps/default.toml 의 「멀티 커서」 묶음이고 모두 글자 영역
 // (`editorFocus`)에서만 돈다 — 찾기 막대 안의 Esc 는 막대가 닫는다(../find-bar.tsx).
 //
-// `Esc`(커서 하나로)는 에디터에 팝업이 떠 있으면 꺼져 키를 그 팝업에 둔다: 창이 띄운 팝업은 키맵 엔진이 막고(`popupOpen`),
-// 에디터 안의 CodeMirror 툴팁(자동완성 목록 등)은 여기서 `.cm-tooltip` 으로 본다 — 툴팁의 Esc 는 CodeMirror 키맵이 받고
-// 이벤트는 창까지 올라와 이 액션이 또 돌기 때문이다.
+// `Esc`(커서 하나로)는 다른 처리기가 먼저 받은 Esc 에서는 돌지 않는다(`yieldsToHandled`): 찾기 칸 · CodeMirror 툴팁(자동완성
+// 목록 등) · git 거터 팝업 · blame 메뉴가 Esc 로 닫으며 `preventDefault` 한 눌림이 창까지 올라와도 커서 · 선택을 접지 않는다.
+// 그 처리기들은 Esc 를 받는 그 자리에서 자기를 닫으므로 「팝업이 열려 있는가」 로는 가를 수 없다. 창이 띄운 팝업은 키맵 엔진이
+// 막는다(`popupOpen`). Esc 를 처리하는 새 처리기는 `preventDefault` 해야 이 규칙 안에 든다.
 
 import type { StateCommand } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { Action } from "@pitwall/keymap";
 
 import type { ProjectStrings } from "../layout/strings";
+import type { NotificationInput } from "../notifications/notifications";
 import { targetView } from "./editor-ops";
 import type { EditorWorkspace } from "./editor-workspace";
 import {
@@ -24,13 +26,11 @@ import {
   unselectOccurrence,
 } from "./extensions/multi-cursor";
 
-function hasPopup(view: EditorView): boolean {
-  return view.dom.querySelector(".cm-tooltip") !== null;
-}
-
 export function multiCursorActions(deps: {
   workspace: EditorWorkspace;
   strings: ProjectStrings["editor"]["actions"];
+  /** 모든 일치 선택이 상한에 걸렸다고 알린다. 없으면 알리지 않는다(시험 · 키맵 표). */
+  notify?: (input: NotificationInput) => void;
 }): Action[] {
   const T = deps.strings;
   const view = () => targetView(deps.workspace);
@@ -63,7 +63,13 @@ export function multiCursorActions(deps: {
       label: T.selectAllOccurrences,
       keywords: ["Select All Occurrences", "Multiple Carets"],
       enabled: hasView,
-      run: command(state(selectAllOccurrences)),
+      run: command(
+        state(
+          selectAllOccurrences((cap) =>
+            deps.notify?.({ level: "info", title: T.occurrencesCapped(cap) }),
+          ),
+        ),
+      ),
     },
     {
       id: "editor.addCursorAbove",
@@ -94,8 +100,9 @@ export function multiCursorActions(deps: {
       keywords: ["Remove Secondary Carets", "Escape"],
       enabled: () => {
         const v = view();
-        return v !== undefined && !hasPopup(v) && hasExtraCursors(v.state);
+        return v !== undefined && hasExtraCursors(v.state);
       },
+      yieldsToHandled: true,
       run: command(singleCursor),
     },
   ];

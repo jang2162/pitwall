@@ -27,6 +27,13 @@ export interface Action {
    * `⌘↩` 같은 단축키는 돈다. 팝업이 열려 있을 때만 등록하거나 `enabled` 로 막는다. 액션 찾기에는 나오지 않는다.
    */
   readonly popup?: boolean;
+  /**
+   * 다른 처리기가 이미 처리한 keydown(`defaultPrevented` — 찾기 막대 · CodeMirror 툴팁 · 거터 팝업이 닫으며 막은 Esc)이면 이 액션의
+   * 바인딩은 없는 것으로 본다. 창의 키맵은 이벤트가 창까지 올라온 뒤 보므로, 그 처리기가 닫은 같은 눌림에서 이 액션이 또 돈다.
+   * 처리기가 이미 닫아 「팝업이 열려 있는가」 로는 가를 수 없다. 엔진 전체에 걸지 않는 까닭: 터미널(xterm)처럼 키를 처리하고도
+   * 창 액션에 키를 넘기는 곳이 있다.
+   */
+  readonly yieldsToHandled?: boolean;
 }
 
 export class ActionRegistry {
@@ -74,6 +81,11 @@ export class ActionRegistry {
 
   allowsRepeat(id: string): boolean {
     return this.actions.get(id)?.repeat === true;
+  }
+
+  /** 이미 처리된 keydown 에서는 돌지 않는 액션인가(`Action.yieldsToHandled`). */
+  yieldsToHandled(id: string): boolean {
+    return this.actions.get(id)?.yieldsToHandled === true;
   }
 
   list(): Action[] {

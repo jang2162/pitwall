@@ -16,7 +16,11 @@ function keymap(toml: string): Binding[] {
 
 function setup(
   bindings: Binding[],
-  { disabled = [] as string[], repeatable = [] as string[] } = {},
+  {
+    disabled = [] as string[],
+    repeatable = [] as string[],
+    yields = [] as string[],
+  }: { disabled?: string[]; repeatable?: string[]; yields?: string[] } = {},
 ) {
   let clock = 0;
   let layers: ContextLayers = [{}, {}, {}];
@@ -29,6 +33,7 @@ function setup(
     },
     isEnabled: (action) => !disabled.includes(action),
     allowsRepeat: (action) => repeatable.includes(action),
+    yieldsToHandled: (action) => yields.includes(action),
     context: () => layers,
     now: () => clock,
     chordTimeoutMs: 1000,
@@ -366,6 +371,15 @@ key = "alt alt"
     expect(t.engine.keydown(arrow("ArrowUp")).action).toBe("editor.addCursorAbove");
   });
 
+  it("forgets the held tap when the window loses focus (reset), so the key is plain on return", () => {
+    const t = setup(bindings);
+    holdAlt(t);
+    // ⌥ 의 뗌을 다른 앱이 가져갔다 — ⌥ 를 누른 채 돌아와 ↓.
+    t.engine.reset();
+    expect(t.engine.keydown(arrow("ArrowDown")).action).toBe("editor.shrinkSelection");
+    expect(t.ran).toEqual(["editor.shrinkSelection"]);
+  });
+
   it("is not a hold when the key comes without the modifier (its keyup was lost to another window)", () => {
     const t = setup(bindings);
     holdAlt(t);
@@ -377,6 +391,38 @@ key = "alt alt"
     const t = setup(bindings, { disabled: ["editor.addCursorBelow"] });
     holdAlt(t);
     expect(t.engine.keydown(arrow("ArrowDown")).action).toBe("editor.shrinkSelection");
+  });
+});
+
+// 다른 처리기가 먼저 처리한 keydown(찾기 칸 · CodeMirror 툴팁이 닫으며 막은 Esc)은 `yieldsToHandled` 액션에 가지 않는다.
+describe("KeymapEngine — keys another handler already took", () => {
+  const bindings = keymap(`
+[[bindings]]
+action = "editor.focus"
+key = "escape"
+[[bindings]]
+action = "editor.singleCursor"
+key = "escape"
+when = "editorFocus"
+`);
+
+  it("skips a yielding action on a handled keydown and falls back to the other binding", () => {
+    const t = setup(bindings, { yields: ["editor.singleCursor"] });
+    t.setContext([{ editorFocus: true }, {}, {}]);
+    expect(t.engine.keydown(key("Escape", {}, { defaultPrevented: true })).action).toBe(
+      "editor.focus",
+    );
+    expect(t.engine.peek(key("Escape", {}, { defaultPrevented: true }))).toBe(true);
+    expect(t.engine.keydown(key("Escape")).action).toBe("editor.singleCursor");
+    expect(t.ran).toEqual(["editor.focus", "editor.singleCursor"]);
+  });
+
+  it("runs other actions on a handled keydown as before", () => {
+    const t = setup(bindings);
+    t.setContext([{ editorFocus: true }, {}, {}]);
+    expect(t.engine.keydown(key("Escape", {}, { defaultPrevented: true })).action).toBe(
+      "editor.singleCursor",
+    );
   });
 });
 

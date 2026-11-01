@@ -6,8 +6,8 @@
 //
 // CodeMirror 는 불러올 때 macOS 인지 정한다(navigator.platform) — 그래서 불러오기 전에 Mac 으로 둔다.
 
-import { EditorSelection } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorSelection, Prec, StateEffect, StateField } from "@codemirror/state";
+import { EditorView, keymap, showTooltip } from "@codemirror/view";
 import type {
   ConfigView,
   JsonValue,
@@ -32,6 +32,7 @@ import { createThemeStore } from "../theme/theme-store";
 import { act, endTest, it } from "../test-support/ended-test";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
+import { MAX_OCCURRENCES } from "./extensions/multi-cursor";
 import type { fakeSyntaxServer } from "./syntax-testing";
 
 declare global {
@@ -245,6 +246,8 @@ const native = {
 const WORDS = "/work/demo/words.py";
 /** 가운데 줄이 짧다(사각 선택이 지나간다). */
 const BLOCK = "/work/demo/block.py";
+/** 모든 일치 선택의 상한(`MAX_OCCURRENCES`)을 넘는 낱말. */
+const MANY = "/work/demo/many.py";
 /** 커서 셋을 둘 같은 줄 셋. */
 const ROWS = "/work/demo/rows.py";
 
@@ -263,6 +266,7 @@ beforeEach(() => {
     [WORDS, "foo = 1\nbar = foo\nfoobar = foo\n"],
     [BLOCK, "abcdef\nab\nabcdef\n"],
     [ROWS, "a\nb\nc\n"],
+    [MANY, "foo\n".repeat(MAX_OCCURRENCES + 5)],
   ]);
   host.settings = {};
   host.subscribers = [];
@@ -517,19 +521,23 @@ it("drags a rectangle with ⌥ (or in column mode), and ⌥⇧+click — not ⌘
   expect(rectangular({})).toBe(true);
 });
 
-it("collapses to one cursor with Esc, after the find bar and any popup in the editor", async () => {
+/** React 가 듣는 입력 칸에 글자를 넣는다. */
+async function typeInto(input: HTMLInputElement, text: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+}
+
+const findInput = () => document.querySelector<HTMLInputElement>("input[aria-label='찾을 내용']")!;
+
+it("collapses to one cursor with Esc in the text, and closes a find bar opened over the text first", async () => {
   await mount();
   await open(WORDS, 1, 1);
   await ctrl("KeyG", { metaKey: true });
   expect(view().state.selection.ranges).toHaveLength(3);
-  // 에디터 안의 팝업(CodeMirror 툴팁)이 떠 있으면 Esc 는 그 팝업 몫이다.
-  const tooltip = document.createElement("div");
-  tooltip.className = "cm-tooltip";
-  view().dom.append(tooltip);
-  await keydown({ code: "Escape", key: "Escape" }, view().contentDOM);
-  expect(view().state.selection.ranges).toHaveLength(3);
-  tooltip.remove();
-  // 찾기 막대가 열려 있으면 그것을 먼저 닫는다.
+  // 찾기 막대가 열린 채 글자 영역에서 Esc — 막대를 먼저 닫는다.
   await keydown({ code: "KeyF", key: "f", metaKey: true });
   expect(document.querySelector("[role=search]")).not.toBeNull();
   await act(async () => view().focus());
@@ -541,6 +549,128 @@ it("collapses to one cursor with Esc, after the find bar and any popup in the ed
   expect(statusText("cursor")).toBe("1:4 (3자)");
   await keydown({ code: "Escape", key: "Escape" }, view().contentDOM);
   expect(ranges()).toEqual([[3, 3]]);
+});
+
+// 찾기 칸의 Esc 는 막대가 닫으며 막는다(`preventDefault`) — 같은 눌림이 창의 키맵까지 올라와도 커서 하나로가 돌지 않는다
+// (M1-18 의 찾기 흐름: 찾은 일치가 선택으로 남는다).
+it("leaves the found match selected when Esc closes the find bar from its field", async () => {
+  await mount();
+  await open(WORDS, 1, 1);
+  await keydown({ code: "KeyF", key: "f", metaKey: true });
+  await typeInto(findInput(), "bar");
+  await keydown({ code: "Enter", key: "Enter" }, findInput());
+  expect(ranges()).toEqual([[8, 11]]);
+  await keydown({ code: "Escape", key: "Escape" }, findInput());
+  expect(document.querySelector("[role=search]")).toBeNull();
+  expect(ranges()).toEqual([[8, 11]]);
+});
+
+it("keeps every cursor when Esc closes the find bar from its field", async () => {
+  await mount();
+  await open(WORDS, 1, 1);
+  await ctrl("KeyG", { metaKey: true });
+  await keydown({ code: "KeyF", key: "f", metaKey: true });
+  await act(async () => findInput().focus());
+  await keydown({ code: "Escape", key: "Escape" }, findInput());
+  expect(document.querySelector("[role=search]")).toBeNull();
+  expect(view().state.selection.ranges).toHaveLength(3);
+});
+
+// 자동완성 목록처럼 CodeMirror 키맵이 Esc 로 닫는 툴팁: 툴팁은 Esc 를 받는 그 업데이트에서 DOM 까지 사라지므로 창이 볼 때는 이미
+// 없다 — 「열려 있는가」 가 아니라 「이미 처리됐는가」 로 가른다.
+it("keeps every cursor when Esc closes an editor popup that CodeMirror's keymap handles", async () => {
+  await mount();
+  await open(WORDS, 1, 1);
+  await ctrl("KeyG", { metaKey: true });
+  const close = StateEffect.define<null>();
+  const popup = StateField.define<boolean>({
+    create: () => true,
+    update: (open, tr) => (tr.effects.some((e) => e.is(close)) ? false : open),
+    provide: (f) =>
+      showTooltip.from(f, (open) =>
+        open
+          ? {
+              pos: 0,
+              create: () => {
+                const dom = document.createElement("div");
+                dom.textContent = "completions";
+                return { dom };
+              },
+            }
+          : null,
+      ),
+  });
+  const escape = Prec.highest(
+    keymap.of([
+      {
+        key: "Escape",
+        run: (v) => {
+          if (!v.state.field(popup)) return false;
+          v.dispatch({ effects: close.of(null) });
+          return true;
+        },
+      },
+    ]),
+  );
+  await act(async () => view().dispatch({ effects: StateEffect.appendConfig.of([popup, escape]) }));
+  await settle();
+  expect(view().dom.querySelector(".cm-tooltip")).not.toBeNull();
+  await keydown({ code: "Escape", key: "Escape" }, view().contentDOM);
+  expect(view().dom.querySelector(".cm-tooltip")).toBeNull();
+  expect(view().state.selection.ranges).toHaveLength(3);
+  await keydown({ code: "Escape", key: "Escape" }, view().contentDOM);
+  expect(view().state.selection.ranges).toHaveLength(1);
+});
+
+// undo 기록은 문서의 허브(live-text.ts)에 있다 — 허브가 여러 선택을 받아야 undo · redo 가 커서 셋을 되돌린다.
+it("undoes and redoes an edit made at three cursors in one step, cursors included", async () => {
+  await mount();
+  await open(ROWS, 1, 2);
+  await act(async () =>
+    view().dispatch({
+      selection: EditorSelection.create([1, 3, 5].map((p) => EditorSelection.cursor(p))),
+    }),
+  );
+  await act(async () =>
+    view().dispatch(
+      view().state.update(view().state.replaceSelection("x"), { userEvent: "input.type" }),
+    ),
+  );
+  expect(view().state.doc.toString()).toBe("ax\nbx\ncx\n");
+  await keydown({ code: "KeyZ", key: "z", metaKey: true }, view().contentDOM);
+  expect(view().state.doc.toString()).toBe("a\nb\nc\n");
+  expect(ranges()).toEqual([
+    [1, 1],
+    [3, 3],
+    [5, 5],
+  ]);
+  await keydown({ code: "KeyZ", key: "z", metaKey: true, shiftKey: true }, view().contentDOM);
+  expect(view().state.doc.toString()).toBe("ax\nbx\ncx\n");
+  expect(ranges()).toEqual([
+    [2, 2],
+    [5, 5],
+    [8, 8],
+  ]);
+});
+
+it("says so when ⌃⌘G stops at the cap of occurrences", async () => {
+  await mount();
+  await open(MANY, 1, 1);
+  await ctrl("KeyG", { metaKey: true });
+  expect(view().state.selection.ranges).toHaveLength(MAX_OCCURRENCES);
+  expect(document.body.textContent).toContain(
+    `일치가 ${MAX_OCCURRENCES}개를 넘어 앞의 ${MAX_OCCURRENCES}개만 골랐다`,
+  );
+});
+
+// 창이 포커스를 잃는 사이 ⌥ 의 뗌이 다른 앱으로 가면 더블 탭의 두 번째 누름이 남는다 — 창의 blur 가 그것을 버린다.
+it("forgets a held ⌥⌥ when the window loses focus", async () => {
+  await mount();
+  await open(BLOCK, 1, 2);
+  await holdAltTwice();
+  await act(async () => window.dispatchEvent(new Event("blur")));
+  await keydown({ code: "ArrowDown", key: "ArrowDown", altKey: true });
+  expect(view().state.selection.ranges).toHaveLength(1);
 });
 
 it("pastes one clipboard line per cursor when the line count equals the cursor count", async () => {
