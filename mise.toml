@@ -86,6 +86,8 @@ run = [
   # 내장 언어 확장의 쿼리 · 저장소에 넣은 문법 파일이 출처표(scripts/grammars.toml)의 해시와, 문법 크레이트 판본이 Cargo.lock 과
   # 맞는지. 고치려면 `mise run grammars`.
   "node scripts/grammars.mjs check",
+  # 데스크톱의 기본 feature 가 측정용 가짜 DB 드라이버(perf-fake-db)를 켜지 않는지 — 위 clippy · 시험은 --all-features 라 못 잡는다.
+  "node scripts/perf-m3.mjs check-default",
 ]
 
 # 데스크톱 앱 release 번들을 만들고 콜드 스타트 · 유휴 메모리를 잰다(macOS). 측정 방법은 CONTRIBUTING.md 「성능 기준선」 절.

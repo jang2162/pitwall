@@ -1,6 +1,7 @@
 // M3-21 실기 측정을 한 번에 돌리고 결과를 보고서 폴더로 옮긴다(앱을 앞으로 띄우므로 사람이 기기를 비웠을 때만).
 //
 //   node scripts/perf-m3.mjs [--short] [--only <종류>,…] [--dry-run] [--keep-db]     (`mise run perf-m3 -- --short`)
+//   node scripts/perf-m3.mjs check-default    — 데스크톱 크레이트의 기본 feature 가 가짜 드라이버를 켜지 않는지(`mise run lint`)
 //
 // 차례(정본은 docs/ops/m3-realcheck.md, 측정 방법은 CONTRIBUTING.md 「성능 기준선」 의 「DB 시나리오」):
 //   ① 도커로 이 워크트리 전용 PG(10만 행 × 10열 테이블 `perf_rows` 와 같은 행의 뷰 `perf_stream`, trust 인증) · Redis(키 100만 개
@@ -145,6 +146,30 @@ export function measurements({ pg, redis, short, only }) {
     if (!all.some((m) => m.kind === kind))
       throw new Error(`--only: unknown step ${kind} (${all.map((m) => m.kind).join(", ")})`);
   return all.filter((m) => only.includes(m.kind));
+}
+
+/** 가짜 드라이버 feature 를 둔 크레이트(apps/desktop/src-tauri). */
+export const DESKTOP_CRATE = "pitwall-desktop";
+
+/**
+ * `cargo metadata` 에서 데스크톱 크레이트의 `default` feature 가 (다른 feature 를 거쳐서라도) 가짜 드라이버를 켜는지.
+ * 켜면 그 까닭을, 아니면 null. 시험 · 린트는 `--all-features` 로 돌아 기본으로 켜져도 실패하지 않으므로
+ * `mise run lint` 가 이것으로 본다(`check-default`). 다른 크레이트가 의존성 선언에서 이 feature 를 켜는 길은 보지 않는다.
+ */
+export function defaultFeatureProblem(metadata) {
+  const pkg = metadata.packages.find((p) => p.name === DESKTOP_CRATE);
+  if (!pkg) return `${DESKTOP_CRATE} is not in cargo metadata`;
+  const seen = new Set();
+  const stack = ["default"];
+  while (stack.length) {
+    const name = stack.pop();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    for (const item of pkg.features[name] ?? []) if (item in pkg.features) stack.push(item);
+  }
+  return seen.has(FAKE_FEATURE)
+    ? `${DESKTOP_CRATE}: the default features turn on ${FAKE_FEATURE} — release bundles would carry the fake driver`
+    : null;
 }
 
 /**
@@ -363,6 +388,13 @@ function displays() {
 }
 
 async function main(argv) {
+  if (argv[0] === "check-default") {
+    const problem = defaultFeatureProblem(
+      JSON.parse(must("cargo", ["metadata", "--no-deps", "--format-version", "1"])),
+    );
+    if (problem) console.error(`perf-m3: ${problem}`);
+    return problem ? 1 : 0;
+  }
   const short = argv.includes("--short");
   const dry = argv.includes("--dry-run");
   const keepDb = argv.includes("--keep-db");

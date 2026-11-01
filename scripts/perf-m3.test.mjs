@@ -8,6 +8,7 @@ import {
   FAKE_MARK,
   bundleProblem,
   contains,
+  defaultFeatureProblem,
   measurements,
   parseLoad,
   pgSeed,
@@ -105,4 +106,17 @@ test("nothing tracked is written while measuring; reports are copied at the end"
   assert.ok(pairs.some(([src]) => src === "target/perf/m3-db-pg-2026-11-01-120000/summary.md"));
   const short = reportCopies({ date: "d", stamp: "s", suffix: "-short", kinds: ["db-pg"] });
   assert.equal(short[2][1], "docs/superpowers/reports/d-m3-perf-db-pg-short-s.summary.md");
+});
+
+test("the desktop crate's default features must not reach the fake driver", () => {
+  const meta = (features) => ({ packages: [{ name: "pitwall-desktop", features }] });
+  const fake = { [FAKE_FEATURE]: ["pw-db-driver/test-support", "dep:pw-db-types"] };
+  assert.equal(defaultFeatureProblem(meta(fake)), null);
+  assert.equal(defaultFeatureProblem(meta({ ...fake, default: ["other"], other: [] })), null);
+  assert.match(defaultFeatureProblem(meta({ ...fake, default: [FAKE_FEATURE] })), /perf-fake-db/);
+  assert.match(
+    defaultFeatureProblem(meta({ ...fake, default: ["bench"], bench: [FAKE_FEATURE] })),
+    /perf-fake-db/,
+  );
+  assert.match(defaultFeatureProblem({ packages: [] }), /not in cargo metadata/);
 });
