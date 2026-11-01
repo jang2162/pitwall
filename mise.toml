@@ -52,6 +52,8 @@ run = [
   "node --test scripts/db-tls.test.mjs",
   # SSH 터널 시험의 sshd 스크립트(scripts/db-ssh.mjs)의 인자 읽기 — 도커 · ssh-keygen 없이 돈다.
   "node --test scripts/db-ssh.test.mjs",
+  # 도구 registry 판 올림 스크립트(scripts/tools-registry-bump.mjs)의 리다이렉트 검사 — 네트워크 없이 가짜 fetch 로 돈다.
+  "node --test scripts/tools-registry-bump.test.mjs",
 ]
 
 # 실 DB 시험(live_*)을 DB 마다 따로 돌리고 실행 개수를 하한(scripts/db-live.toml)과 견준다 — CI 의 `db-live` 잡과 같은 명령이다.

@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const CRATE = join(root, "crates", "pw-tools");
@@ -57,10 +57,30 @@ function tool(...args) {
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
+/** 리다이렉트를 따라가는 횟수의 상한(crates/pw-tools/src/fetch.rs 와 같다). */
+export const MAX_REDIRECTS = 5;
+
+/**
+ * `fetch` 를 리다이렉트 홉마다 검사하며 따라간다 — 모든 홉이 https 여야 하고 `MAX_REDIRECTS` 번까지(Rust 의 받기와 같은 규칙).
+ * `redirect: "follow"` 뒤 마지막 주소만 보면 중간의 http 홉을 놓친다(리뷰 F6). 어기면 던진다.
+ */
+export async function followHttps(url, init = {}, fetchImpl = fetch) {
+  let current = url;
+  for (let hop = 0; ; hop++) {
+    if (!current.startsWith("https://")) throw new Error(`refusing a non-https URL: ${current}`);
+    const res = await fetchImpl(current, { ...init, redirect: "manual" });
+    if (res.status < 300 || res.status >= 400 || res.status === 304) return res;
+    const location = res.headers.get("location");
+    if (!location) return res;
+    if (hop >= MAX_REDIRECTS) throw new Error(`more than ${MAX_REDIRECTS} redirects from ${url}`);
+    current = new URL(location, current).href;
+  }
+}
+
 async function get(url, { json = false, method = "GET", headers = {} } = {}) {
-  if (!url.startsWith("https://")) fail(`refusing a non-https URL: ${url}`);
-  const res = await fetch(url, { method, headers: { ...UA, ...headers }, redirect: "follow" });
-  if (!res.url.startsWith("https://")) fail(`redirected to a non-https URL: ${res.url}`);
+  const res = await followHttps(url, { method, headers: { ...UA, ...headers } }).catch((e) =>
+    fail(e.message),
+  );
   if (!res.ok) return { ok: false, status: res.status };
   if (method === "HEAD") return { ok: true, headers: res.headers };
   if (json) return { ok: true, value: await res.json() };
@@ -75,10 +95,8 @@ async function mustGet(url, opts) {
 
 /** 받아서 해시 · 크기를 잰다(메모리에 담지 않고 흘린다). */
 async function hashByDownload(url) {
-  if (!url.startsWith("https://")) fail(`refusing a non-https URL: ${url}`);
-  const res = await fetch(url, { headers: UA, redirect: "follow" });
-  if (!res.ok || !res.url.startsWith("https://"))
-    fail(`${url} answered ${res.status} (${res.url})`);
+  const res = await followHttps(url, { headers: UA }).catch((e) => fail(e.message));
+  if (!res.ok) fail(`${url} answered ${res.status}`);
   const hash = createHash("sha256");
   let size = 0;
   for await (const chunk of res.body) {
@@ -388,6 +406,8 @@ json_sha256 = ${q(registry.json_sha256)}
     }
   }
   writeFileSync(TOML, out);
+  // 커밋 훅의 포매터(oxfmt)와 같은 꼴로 둔다 — 안 그러면 다음 bump 마다 형식만 바뀐 diff 가 남는다.
+  run("pnpm", ["exec", "oxfmt", TOML]);
 }
 
 async function bump(tagArg, downloadAll) {
@@ -489,8 +509,11 @@ function check() {
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
 
-const [cmd, ...rest] = process.argv.slice(2);
-if (cmd === "bump") {
+const direct = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const [cmd, ...rest] = direct ? process.argv.slice(2) : ["--imported"];
+if (cmd === "--imported") {
+  // 시험(scripts/tools-registry-bump.test.mjs)이 불러 쓴다.
+} else if (cmd === "bump") {
   await bump(
     rest.find((a) => !a.startsWith("--")),
     rest.includes("--download-all"),

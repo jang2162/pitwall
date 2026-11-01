@@ -198,3 +198,20 @@ fn checksums_and_tags() {
         assert!(!valid_version(bad), "{bad}");
     }
 }
+
+/// 리뷰 F7: 실제 HTTPS(rustls · 루트 인증서 · github.com → 객체 저장소 리다이렉트)로 고정 판 산출물을 받아 고정 해시와 견준다.
+/// 네트워크가 필요해 기본 시험에서 빠진다 — `cargo nextest run -p pw-tools --run-ignored only -E 'test(/live_tools_/)'`
+/// (CONTRIBUTING.md 「도구 registry」).
+#[tokio::test]
+#[ignore = "network: downloads the pinned registry artifact from GitHub"]
+async fn live_tools_the_pinned_registry_artifact_downloads_over_https() {
+    let pinned = crate::pinned::Pinned::builtin();
+    let f = Fetcher::new().unwrap();
+    let zip = f
+        .get(&pinned.registry.url, MAX_REGISTRY_ZIP_BYTES, None)
+        .await
+        .unwrap();
+    assert_eq!(sha256_hex(&zip), pinned.registry.sha256);
+    let json = unzip_registry(&zip).unwrap();
+    assert_eq!(sha256_hex(&json), pinned.registry.json_sha256);
+}
