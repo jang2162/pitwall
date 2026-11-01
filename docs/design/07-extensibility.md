@@ -193,11 +193,11 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 | 항목 | 설계 |
 |---|---|
 | 데이터 | 패키지별 `package.yaml`: 이름 · 설명 · **라이선스(SPDX)** · 언어 · 분류(LSP/DAP/Formatter/Linter) · `source.id`(purl + 버전) · 플랫폼별 자산 · `bin` · `share` |
-| 가져오기 | registry 릴리스 산출물(`registry.json.zip` — 안에 `registry.json` 하나 — 과 `checksums.txt`)을 HTTPS 로 받아 해시를 확인한 뒤 `$CACHE/registry/<판>/` 에 푼다. 받은 것은 미신뢰다 — 크기 · 패키지 수 상한, zip 의 폴더 밖 이름 · 링크 · 풀린 크기 상한, 모르는 키가 있는 패키지는 「지원하지 않음(까닭)」 으로 두고 나머지는 읽는다. 받기 · 확인이 실패하면(오프라인 포함) 캐시에 넣지 않고 마지막 캐시를 쓴다(15-m4-plan.md M4-03) |
+| 가져오기 | registry 릴리스 산출물(`registry.json.zip` — 안에 `registry.json` 하나 — 과 `checksums.txt`)을 HTTPS 로 받아 해시를 확인한 뒤 `$CACHE/registry/<판>/` 에 푼다. 받은 것은 미신뢰다 — 크기 · 패키지 수 상한, zip 의 폴더 밖 이름 · 링크 · 풀린 크기 상한, 모르는 키가 있는 패키지는 「지원하지 않음(까닭)」 으로 두고 나머지는 읽는다. 받기 · 확인이 실패하면(오프라인 포함) 캐시에 넣지 않는다 — 고정 모드는 앱에 든 내장 스냅숏(고정 판)으로만, 「최신」 모드만 마지막 캐시로 물러난다. 고정 판의 캐시는 고정 해시와 같아야 쓴다(15-m4-plan.md M4-03) |
 | 고정 | Pitwall 판마다 registry 판 하나를 고정한다 — `crates/pw-tools/registry.toml` 에 판 · 주소 · 산출물 해시와 **기본 번들 패키지의 (판, 대상, 파일)별 SHA-256**(결정 M4-D16 · D17). 판은 `node scripts/tools-registry-bump.mjs bump` 로 올린다. 설정 `settings.toml` 의 `[tools] registry = "pinned"`(기본) · `"latest"`(하루 한 번 최신 태그를 보고 그 판의 `checksums.txt` 로 확인) |
 | 내장 스냅숏 | 기본 번들 패키지의 정의를 고정 판에서 뽑아 바이너리에 묶는다(`crates/pw-tools/snapshot/bundled.json`) — 첫 실행 · 오프라인에서도 「어디서 무엇을 받는지」 안다. 캐시가 없으면 이것만으로 답한다 |
-| 덮어쓰기 | registry 정의가 그대로 쓸 수 없는 패키지는 `crates/pw-tools/overrides/<패키지>.toml` 이 받을 판 · 주소 · `bin` 을 덮어 고정한다(jdtls — 결정 M4-D4) |
-| 읽는 범위(M4) | purl `github` · `generic` · `npm` · `pypi`, `bin` 위임 `npm:` · `pypi:` · `python:` 과 설치 폴더 안 경로, 표현식 `{{version}}` · `{{source.asset.*}}` · `{{source.download.*}}` · 필터 `strip_prefix`. 그 밖(`cargo` · `golang` · `openvsx` purl, `node:` · `java-jar:` 등 위임, 모르는 필터 · 함수)은 그 패키지(대상별 항목이면 그 대상)를 「지원하지 않음」 으로 — 추측해 채우지 않는다 |
+| 덮어쓰기 | registry 정의가 그대로 쓸 수 없는 패키지는 `crates/pw-tools/overrides/<패키지>.toml` 이 받을 판 · 주소 · `bin` 을 덮어 고정하고, 실행 파일 별칭(`[bin_alias]`)을 둔다(jdtls — 결정 M4-D4, kotlin-lsp 의 `kotlin-lsp` → `intellij-server`) |
+| 읽는 범위(M4) | purl `github` · `generic` · `npm` · `pypi`, `bin` 위임 `npm:` · `pypi:` · `python:` 과 설치 폴더 안 경로, 표현식 `{{version}}` · `{{source.asset.*}}` · `{{source.download.*}}` · 필터 `strip_prefix`. 그 밖(`cargo` · `golang` · `openvsx` purl, `node:` · `java-jar:` 등 위임, 모르는 필터 · 함수)은 그 패키지(대상별 항목이면 그 대상)를 「지원하지 않음」 으로 — 추측해 채우지 않는다. npm · PyPI 이름은 각 레지스트리의 이름 문법으로 보고 `-` 로 시작하는 이름 · 판은 거절한다(설치기 인자로 넘어간다) |
 | 설치 위치 | `$DATA/tools/<패키지>/<버전>/`, 실행 파일 링크는 `$DATA/tools/bin/` (PATH에 넣지 않고 Pitwall이 절대 경로로 실행) |
 | 설치기 (purl 유형별) | `github`(릴리스 자산 다운로드 · 압축 해제), `generic`(URL), `npm`, `pypi`(전용 venv), `cargo`, `golang`, `openvsx`(VS Code 확장 형태 디버거: codelldb · js-debug 등) — 우선 `github` · `generic` · `npm` · `pypi` · `openvsx` 구현 |
 | 툴체인 | `npm` · `pypi` · `cargo` · `golang` 설치에 필요한 node · python 등은 **런타임 제공자(03 §5-1, mise 등)**에서 찾음. 없으면 "node가 필요합니다 — mise로 설치" 안내 |
