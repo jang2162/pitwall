@@ -26,7 +26,15 @@ serde_json = { workspace = true }
 sha2 = "0.10.9"
 specta = { workspace = true, features = ["derive"] }
 # 설치 받기 · npm · pip 실행(`process` — 작업을 취소하면 프로세스를 죽인다).
-tokio = { workspace = true, features = ["rt", "fs", "sync", "time", "process", "io-util", "macros"] }
+tokio = { workspace = true, features = [
+  "rt",
+  "fs",
+  "sync",
+  "time",
+  "process",
+  "io-util",
+  "macros",
+] }
 # registry.toml · 덮어쓰기 정의를 읽는다. 버전은 pw-core 와 같게 둔다.
 toml_edit = "0.25.17"
 tracing = "0.1.44"
