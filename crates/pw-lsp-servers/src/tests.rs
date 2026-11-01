@@ -651,11 +651,13 @@ fn setup_rejects_a_directory_outside_the_project_root() {
 #[test]
 fn project_local_lookup_never_climbs_above_the_real_root() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("project");
+    // 실제 경로로 시작한다 — macOS 의 /var → /private/var 가 어휘 비교를 우연히 막아 되돌림을 가리지 않게.
+    let base = fs::canonicalize(tmp.path()).unwrap();
+    let root = base.join("project");
     fs::create_dir_all(root.join("a")).unwrap();
     let name = "typescript-language-server";
-    executable(&tmp.path().join("node_modules/.bin").join(name), "true");
-    let elsewhere = tmp.path().join("elsewhere");
+    executable(&base.join("node_modules/.bin").join(name), "true");
+    let elsewhere = base.join("elsewhere");
     executable(&elsewhere.join("node_modules/.bin").join(name), "true");
     std::os::unix::fs::symlink(&elsewhere, root.join("link")).unwrap();
     let ts = def(name);
