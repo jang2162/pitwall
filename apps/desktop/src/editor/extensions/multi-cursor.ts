@@ -393,7 +393,8 @@ export const multiCursor: EditorFeature = {
       if (isColumnMode(u.startState) !== isColumnMode(u.state)) {
         const head = u.state.selection.main.head;
         const line = u.state.doc.lineAt(head);
-        c.onCursor({ line: line.number, column: head - line.from + 1 });
+        // 사람이 옮긴 커서가 아니다(`quiet` — 내비게이션 기록의 큰 이동이 아니다, ../navigation.ts).
+        c.onCursor({ line: line.number, column: head - line.from + 1 }, true);
       }
     }),
   ],
