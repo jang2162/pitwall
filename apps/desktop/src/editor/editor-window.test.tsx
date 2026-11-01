@@ -26,6 +26,7 @@ import defaultTheme from "../../../../extensions/theme-default/themes/default.js
 import { App } from "../App";
 import type { KeymapNative } from "../keymap/native";
 import { LAYOUT_STORAGE_KEY } from "../layout/project-layout";
+import { CLOSE_FLUSH_LIMIT_MS } from "../layout/project-state";
 import { resetWindowFileTree } from "../file-tree/project-view";
 import { activeWorktreeStore } from "../open-with/active-worktree";
 import { projectOpenInbox } from "../project-open";
@@ -352,6 +353,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
   closeGuard = undefined;
   menuListener = undefined;
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -819,17 +821,21 @@ it("writes the tab set and layout at once when the window is about to close (qui
   expect(savedState()?.layout).toBeDefined();
 });
 
+// 기다림은 가짜 시계로 흘린다 — 벽시계로 1.5 초를 실제로 기다리면 부하에서 시험 제한(5 초)을 먹는다. 상한 직전에는 닫히지 않고
+// 상한에서 닫히는 것으로 「잠깐만 기다린다」를 본다.
 it("closes the window when the Host does not answer the last write, after a short wait", async () => {
   await mount();
   await openRequest(LIB);
   host.stateSetHangs = true;
-  const started = Date.now();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   let closed: boolean | undefined;
-  await act(async () => {
-    closed = await closeGuard!();
-  });
+  const closing = closeGuard!().then((c) => (closed = c));
+  await act(async () => vi.advanceTimersByTimeAsync(CLOSE_FLUSH_LIMIT_MS - 1));
+  expect(closed).toBeUndefined();
+  await act(async () => vi.advanceTimersByTimeAsync(1));
+  vi.useRealTimers();
   expect(closed).toBe(true);
-  expect(Date.now() - started).toBeLessThan(3000);
+  await closing;
 });
 
 it("keeps the recent files (⌘E) over a restart, closed tabs and other worktrees included", async () => {

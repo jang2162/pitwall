@@ -319,7 +319,9 @@ const dirtyTabs = () =>
     (e) => e.title,
   );
 
-it("applies Git review with ⌃⌥2 and DB with ⌃⌥3 under a Korean IME, keeps the tabs and unsaved edits, and restores them after a restart", async () => {
+// 다시 띄움 넷을 한 시험에 담으면 한가할 때 1 초를 넘고 부하(빌드와 함께 도는 전체 실행)에서 5 초 제한에 닿는다(4.1 s 를 쟀다) —
+// ⌃⌥2 와 ⌃⌥1 · ⌃⌥3 을 두 시험으로 나눈다. 둘 다 한글 IME(`Process` · 229) 키로 누른다.
+it("applies Git review with ⌃⌥2 under a Korean IME, keeps the tabs and unsaved edits, and restores it after a restart", async () => {
   await mount();
   expect(layoutOf()).toEqual(DEFAULT);
   await openRequest(LIB);
@@ -350,6 +352,14 @@ it("applies Git review with ⌃⌥2 and DB with ⌃⌥3 under a Korean IME, keep
   await settle();
   expect(dirtyTabs()).toEqual([]);
   await restart();
+  expect(layoutOf()).toEqual(GIT_REVIEW);
+});
+
+it("goes back to the default with ⌃⌥1 and applies DB with ⌃⌥3 under a Korean IME, each kept over a restart", async () => {
+  await mount();
+  await openRequest(LIB);
+  await openRequest(MAIN);
+  await pressPreset(2);
   expect(layoutOf()).toEqual(GIT_REVIEW);
 
   await pressPreset(1);
