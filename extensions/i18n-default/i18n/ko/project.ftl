@@ -165,7 +165,7 @@ action-editor-add-cursor-below = 아래 줄에 커서 추가
 action-editor-toggle-column-mode = 컬럼 선택 모드
 action-editor-single-cursor = 커서 하나로
 # $cap: 모든 일치 선택의 상한(멀티 커서, M4-14)
-editor-occurrences-capped = 일치가 { $cap }개를 넘어 앞의 { $cap }개만 골랐다
+editor-occurrences-capped = 일치가 { $cap }개를 넘어 커서 주변 { $cap }곳만 골랐다
 action-editor-open-as-text = 텍스트로 열기
 action-editor-open-as-hex = hex 로 열기
 action-editor-open-as-default = 기본 뷰어로 열기

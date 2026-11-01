@@ -246,7 +246,7 @@ const native = {
 const WORDS = "/work/demo/words.py";
 /** 가운데 줄이 짧다(사각 선택이 지나간다). */
 const BLOCK = "/work/demo/block.py";
-/** 모든 일치 선택의 상한(`MAX_OCCURRENCES`)을 넘는 낱말. */
+/** 모든 일치 선택의 상한(`MAX_OCCURRENCES`)을 넘는 낱말(400 줄). */
 const MANY = "/work/demo/many.py";
 /** 커서 셋을 둘 같은 줄 셋. */
 const ROWS = "/work/demo/rows.py";
@@ -266,7 +266,7 @@ beforeEach(() => {
     [WORDS, "foo = 1\nbar = foo\nfoobar = foo\n"],
     [BLOCK, "abcdef\nab\nabcdef\n"],
     [ROWS, "a\nb\nc\n"],
-    [MANY, "foo\n".repeat(MAX_OCCURRENCES + 5)],
+    [MANY, "foo\n".repeat(400)],
   ]);
   host.settings = {};
   host.subscribers = [];
@@ -653,13 +653,15 @@ it("undoes and redoes an edit made at three cursors in one step, cursors include
   ]);
 });
 
-it("says so when ⌃⌘G stops at the cap of occurrences", async () => {
+it("selects the occurrences around the caret when ⌃⌘G stops at the cap, and says so", async () => {
   await mount();
-  await open(MANY, 1, 1);
+  await open(MANY, 351, 1);
   await ctrl("KeyG", { metaKey: true });
   expect(view().state.selection.ranges).toHaveLength(MAX_OCCURRENCES);
+  // 커서 자리(351행)의 일치가 주 범위다 — 타이핑이 보이는 자리에서 시작한다.
+  expect(view().state.doc.lineAt(view().state.selection.main.from).number).toBe(351);
   expect(document.body.textContent).toContain(
-    `일치가 ${MAX_OCCURRENCES}개를 넘어 앞의 ${MAX_OCCURRENCES}개만 골랐다`,
+    `일치가 ${MAX_OCCURRENCES}개를 넘어 커서 주변 ${MAX_OCCURRENCES}곳만 골랐다`,
   );
 });
 

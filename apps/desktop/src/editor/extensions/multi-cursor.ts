@@ -41,7 +41,7 @@ import {
 import type { EditorFeature } from ".";
 
 /**
- * 모든 일치 선택(⌃⌘G)의 상한. 넘으면 앞에서부터 이만큼만 고르고 알린다. 커서가 많으면 글자 하나를 넣는 데도 커서 수의 제곱으로
+ * 모든 일치 선택(⌃⌘G)의 상한. 넘으면 커서 자리의 일치와 그 주변(앞뒤로 가까운 순)에서 이만큼만 고르고 알린다. 커서가 많으면 글자 하나를 넣는 데도 커서 수의 제곱으로
  * 시간이 든다 — CodeMirror 의 편집 명령(입력 · 지우기 · 줄바꿈)이 범위마다 바뀜을 합성한다(`changeByRange`). 이 상한에서 한 글자
  * 넣기가 한 프레임(16 ms) 안팎이 되게 골랐다. 재는 법: multi-cursor.test.ts 의 「types one character at the cap of cursors within a frame」(상한 개수 커서에 `replaceSelection`).
  */
@@ -125,7 +125,8 @@ function escapeRegExp(text: string): string {
  * `⌃⌘G`: 주 범위의 글자와 같은 곳을 모두 고른다. 주 범위가 비었으면 커서의 낱말이고 그때는 낱말 단위로만 맞춘다 — 낱말 경계를
  * 정규식으로 걸어 낱말 속 일치(`a` 를 찾을 때 모든 낱말의 `a`)는 훑지 않는다. 경계의 글자(문자 · 숫자 · `_`)와 CodeMirror 의
  * 낱말 판정(언어별 `wordChars`)이 다를 수 있어 맞은 것을 `wordAt` 으로 한 번 더 본다. 대소문자를 가린다(`⌃G` 와 같다).
- * 상한(`MAX_OCCURRENCES`)을 넘는 일치가 있으면 앞에서부터 상한까지만 고르고 `onCapped` 를 부른다.
+ * 상한(`MAX_OCCURRENCES`)을 넘는 일치가 있으면 커서 자리의 일치를 주 범위로 두고 그 앞뒤로 가까운 순으로 상한까지만 고르고
+ * `onCapped` 를 부른다 — 앞에서부터 자르면 커서 자리가 빠지고 주 범위가 화면 밖으로 가, 보이지 않는 곳만 고쳐진다.
  */
 export function selectAllOccurrences(onCapped?: (cap: number) => void): StateCommand {
   return ({ state, dispatch }) => {
@@ -142,23 +143,32 @@ export function selectAllOccurrences(onCapped?: (cap: number) => void): StateCom
     const cursor = wholeWord
       ? new RegExpCursor(state.doc, `(?<![\\p{L}\\p{N}_])${escapeRegExp(text)}(?![\\p{L}\\p{N}_])`)
       : new SearchCursor(state.doc, text);
-    const ranges: SelectionRange[] = [];
-    let mainIndex = 0;
-    let capped = false;
+    // 맞은 자리를 모두 모은다(선형). 커서 자리의 일치(`from` 에서 시작하는 것)는 늘 있다 — 낱말이면 그 낱말, 선택이면 그 글이다.
+    const starts: number[] = [];
+    let at = -1;
     for (let cur = cursor.next(); !cur.done; cur = cursor.next()) {
       const { from: f, to: t } = cur.value;
       if (wholeWord) {
         const word = state.wordAt(f);
         if (!word || word.from !== f || word.to !== t) continue;
       }
-      if (ranges.length >= MAX_OCCURRENCES) {
-        capped = true;
-        break;
-      }
-      if (f === from) mainIndex = ranges.length;
-      ranges.push(EditorSelection.range(f, t));
+      if (f === from) at = starts.length;
+      starts.push(f);
     }
-    if (ranges.length === 0) return false;
+    if (at < 0) return false;
+    // 커서 자리에서 앞뒤로 가까운 것부터 상한까지.
+    let lo = at;
+    let hi = at;
+    while (hi - lo + 1 < MAX_OCCURRENCES && (lo > 0 || hi < starts.length - 1)) {
+      const before = lo > 0 ? from - starts[lo - 1]! : Infinity;
+      const after = hi < starts.length - 1 ? starts[hi + 1]! - from : Infinity;
+      if (before <= after) lo--;
+      else hi++;
+    }
+    const capped = hi - lo + 1 < starts.length;
+    const length = to - from;
+    const ranges = starts.slice(lo, hi + 1).map((f) => EditorSelection.range(f, f + length));
+    const mainIndex = at - lo;
     dispatch(
       state.update({
         selection: EditorSelection.create(ranges, mainIndex),

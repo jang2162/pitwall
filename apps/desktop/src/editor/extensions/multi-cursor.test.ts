@@ -41,11 +41,43 @@ describe("selectAllOccurrences", () => {
     ]);
   });
 
-  it("selects the first matches up to the cap and says it stopped there", () => {
-    const onCapped = vi.fn();
-    const next = run(stateOf("foo\n".repeat(MAX_OCCURRENCES + 5), 0), onCapped)!;
-    expect(next.selection.ranges).toHaveLength(MAX_OCCURRENCES);
-    expect(onCapped).toHaveBeenCalledWith(MAX_OCCURRENCES);
+  // 재리뷰 N1: 앞에서부터 자르면 커서 자리(351행)의 일치가 빠지고 주 범위가 1행으로 가, 화면 밖 300곳만 고쳐졌다.
+  it.each([
+    ["the caret's word", (doc: string) => stateOf(doc, 1400)],
+    [
+      "a selected text",
+      (doc: string) =>
+        EditorState.create({
+          doc,
+          selection: EditorSelection.range(1400, 1403),
+          extensions: EditorState.allowMultipleSelections.of(true),
+        }),
+    ],
+  ] as const)(
+    "keeps the caret's match as the main one and fills the cap around it (%s)",
+    (_, make) => {
+      const onCapped = vi.fn();
+      // `foo` 400 줄, 커서는 351행(1400) — 가까운 순으로 채우면 뒤쪽 끝(400행)에 닿고 나머지는 앞쪽에서 101행까지.
+      const next = run(make("foo\n".repeat(400)), onCapped)!;
+      const { ranges, main } = next.selection;
+      expect(ranges).toHaveLength(MAX_OCCURRENCES);
+      expect([main.from, main.to]).toEqual([1400, 1403]);
+      expect(ranges[0]!.from).toBe(400);
+      expect(ranges[ranges.length - 1]!.from).toBe(1596);
+      expect(onCapped).toHaveBeenCalledWith(MAX_OCCURRENCES);
+    },
+  );
+
+  it("fills both sides evenly when the caret is in the middle", () => {
+    const next = run(stateOf("foo\n".repeat(1000), 500 * 4))!;
+    const { ranges, main } = next.selection;
+    expect(ranges).toHaveLength(MAX_OCCURRENCES);
+    expect(main.from).toBe(2000);
+    expect(ranges[0]!.from).toBe((500 - 150) * 4);
+    expect(ranges[ranges.length - 1]!.from).toBe((500 + 149) * 4);
+  });
+
+  it("does not report the cap when every match fits", () => {
     const exact = vi.fn();
     expect(run(stateOf("foo\n".repeat(MAX_OCCURRENCES), 0), exact)!.selection.ranges).toHaveLength(
       MAX_OCCURRENCES,

@@ -165,7 +165,7 @@ action-editor-add-cursor-below = Clone Caret Below
 action-editor-toggle-column-mode = Column Selection Mode
 action-editor-single-cursor = Remove Secondary Carets
 # $cap: the limit of Select All Occurrences (multiple carets, M4-14)
-editor-occurrences-capped = More than { $cap } occurrences: selected the first { $cap }
+editor-occurrences-capped = More than { $cap } occurrences: selected the { $cap } around the caret
 action-editor-open-as-text = Open as Text
 action-editor-open-as-hex = Open as Hex
 action-editor-open-as-default = Open with Default Viewer
