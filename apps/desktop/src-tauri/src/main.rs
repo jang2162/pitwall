@@ -212,7 +212,8 @@ fn local_host(
                 pw_db::config::subscribe_files(host.bus()),
                 db_connections,
             ));
-            // 세션은 전역 설정(`[db] grid_max_rows`)을 읽고, 연결 설정이 바뀌면(`config.changed`) 그 세션을 「설정 바뀜」 으로 둔다.
+            // 세션은 전역 설정의 `[db]` 항목(그리드 보유 행 · 바이트 상한, 셀 상한, 타임아웃 등 — `pw_db::settings`)을 읽고, 연결
+            // 설정이 바뀌면(`config.changed`) 그 세션을 「설정 바뀜」 으로 둔다.
             db_sessions.attach_settings(config.global.clone());
             tauri::async_runtime::spawn(pw_db::session::follow_config(
                 pw_db::session::subscribe_config(host.bus()),
