@@ -6,8 +6,10 @@
 //! - **고정**(`[tools] registry = "pinned"`, 기본): `registry.toml` 의 판 · 주소 · 해시로 받는다. zip 과 그 안 `registry.json` 의
 //!   해시가 고정 값과 같을 때만 캐시에 넣는다.
 //! - **최신**(`"latest"`): 하루 한 번 `/releases/latest` 의 태그를 보고, 새 판이면 그 판의 `checksums.txt` 로 확인한다.
-//! - 받기 · 확인이 실패하면(오프라인 포함) 캐시에 넣지 않고 **마지막 캐시**(받은 때가 가장 늦은 온전한 판)를 쓴다. 캐시가 없으면
-//!   내장 스냅숏이다.
+//! - 받기 · 확인이 실패하면(오프라인 포함) 캐시에 넣지 않는다. 물러나는 곳은 모드마다 다르다(메인 결정, 리뷰 F2): **고정**
+//!   모드는 앱에 든 내장 스냅숏(고정 판의 번들 정의 — 고정 해시가 다 있다)으로만 물러난다 — 다른 판의 캐시(옛 Pitwall 의 고정 판 ·
+//!   최신 모드의 잔재)로 가면 번들 패키지가 고정 해시 없는 판으로 풀린다. **최신** 모드만 마지막 캐시(받은 때가 가장 늦은 온전한
+//!   판)로, 그것도 없으면 내장 스냅숏으로 물러난다.
 //!
 //! 캐시: `$CACHE/registry/<판>/registry.json` + `meta.json`(받은 때 · 해시). 읽을 때 `registry.json` 의 해시를 `meta.json` 과
 //! 다시 견준다(깨진 캐시를 쓰지 않는다). 쓸 때는 임시 폴더에 다 쓴 뒤 이름을 바꾼다. 받은 태그는 폴더 이름이 되므로 꼴을 검사한다.
@@ -188,6 +190,16 @@ impl Cache {
 
     /// 그 판의 캐시(온전할 때만).
     pub fn load(&self, version: &str) -> Result<Index, String> {
+        self.load_expecting(version, None)
+    }
+
+    /// 고정 판의 캐시. `meta.json` 만이 아니라 바이너리에 든 고정 해시(`registry.toml` 의 `json_sha256`)와도 같아야 한다 —
+    /// `meta.json` 대조는 손상 감지일 뿐 변조 감지가 아니다(리뷰 F1).
+    pub fn load_pinned(&self, pinned: &PinnedRegistry) -> Result<Index, String> {
+        self.load_expecting(&pinned.version, Some(&pinned.json_sha256))
+    }
+
+    fn load_expecting(&self, version: &str, expected_json: Option<&str>) -> Result<Index, String> {
         if !valid_version(version) {
             return Err(format!("not a registry version: {version}"));
         }
@@ -200,7 +212,13 @@ impl Cache {
             return Err(format!("{version}/meta.json names {}", meta.version));
         }
         let json = read_limited(&dir.join("registry.json"), MAX_REGISTRY_JSON_BYTES)?;
-        if sha256_hex(&json) != meta.json_sha256 {
+        let got = sha256_hex(&json);
+        if expected_json.is_some_and(|want| want != got) {
+            return Err(format!(
+                "{version}/registry.json does not match the pinned SHA-256"
+            ));
+        }
+        if got != meta.json_sha256 {
             return Err(format!(
                 "{version}/registry.json does not match its meta.json"
             ));

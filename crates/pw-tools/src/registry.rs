@@ -59,6 +59,8 @@ pub struct ToolsRegistry {
     #[cfg(test)]
     test_fetcher: Option<Fetcher>,
     host: OnceLock<Attached>,
+    /// 내장 스냅숏(고정 모드가 물러나는 곳).
+    snapshot: Arc<Index>,
     index: RwLock<Arc<Index>>,
     state: Mutex<RefreshState>,
     clock: Clock,
@@ -77,6 +79,7 @@ impl ToolsRegistry {
     }
 
     pub fn with_parts(pinned: Pinned, overrides: Overrides, snapshot: Index) -> ToolsRegistry {
+        let snapshot = Arc::new(snapshot);
         ToolsRegistry {
             pinned,
             overrides,
@@ -85,7 +88,8 @@ impl ToolsRegistry {
             #[cfg(test)]
             test_fetcher: None,
             host: OnceLock::new(),
-            index: RwLock::new(Arc::new(snapshot)),
+            index: RwLock::new(Arc::clone(&snapshot)),
+            snapshot,
             state: Mutex::new(RefreshState::default()),
             clock: Arc::new(SystemTime::now),
         }
@@ -168,7 +172,11 @@ impl ToolsRegistry {
     }
 
     fn set_index(&self, index: Index) {
-        *self.index.write().unwrap() = Arc::new(index);
+        self.set_index_arc(Arc::new(index));
+    }
+
+    fn set_index_arc(&self, index: Arc<Index>) {
+        *self.index.write().unwrap() = index;
     }
 
     /// 처음 한 번 캐시를 읽는다(디스크만). 고정 모드는 고정 판의 캐시만, 최신 모드는 마지막으로 본 판, 없으면 마지막 캐시.
@@ -186,11 +194,7 @@ impl ToolsRegistry {
         let mode = self.mode();
         let pinned = self.pinned.registry.clone();
         let loaded = tokio::task::spawn_blocking(move || match mode {
-            RegistryMode::Pinned => host
-                .cache
-                .load(&pinned.version)
-                .ok()
-                .filter(|i| i.version == pinned.version),
+            RegistryMode::Pinned => host.cache.load_pinned(&pinned).ok(),
             RegistryMode::Latest => host
                 .cache
                 .latest_state()
@@ -249,7 +253,8 @@ impl ToolsRegistry {
         }
     }
 
-    /// 지금 모드로 가져온다(기다린다). 실패하면 마지막 캐시를 쓴다. 이미 도는 중이면 아무것도 하지 않는다.
+    /// 지금 모드로 가져온다(기다린다). 실패하면 고정 모드는 내장 스냅숏, 최신 모드는 마지막 캐시를 쓴다. 이미 도는 중이면
+    /// 아무것도 하지 않는다.
     pub async fn refresh(&self) {
         let Some(host) = self.host.get().cloned() else {
             return;
@@ -269,23 +274,32 @@ impl ToolsRegistry {
             Ok(index) => self.set_index(index),
             Err(e) => {
                 tracing::warn!(target: "pw_tools", "registry: {e}");
-                let fallback = tokio::task::spawn_blocking({
-                    let cache = host.cache.clone();
-                    move || cache.load_last()
-                })
-                .await
-                .ok()
-                .flatten();
-                if let Some(index) = fallback {
-                    let current = self.index();
-                    // 이미 캐시를 쓰고 있으면(같은 판 · 더 늦게 받은 판) 바꾸지 않는다.
-                    if current.origin == RegistryOrigin::Snapshot
-                        || index.fetched_at_ms > current.fetched_at_ms
-                    {
-                        self.set_index(index);
+                match mode {
+                    // 고정 모드는 고정 판의 캐시가 아니면 내장 스냅숏으로만 물러난다(메인 결정, 리뷰 F2). 고정 판의 캐시는
+                    // `fetch` 가 먼저 읽어 봤으므로 여기 왔으면 없거나 고정 해시와 다르다.
+                    RegistryMode::Pinned => self.set_index_arc(Arc::clone(&self.snapshot)),
+                    RegistryMode::Latest => {
+                        let fallback = tokio::task::spawn_blocking({
+                            let cache = host.cache.clone();
+                            move || cache.load_last()
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        if let Some(index) = fallback {
+                            let current = self.index();
+                            // 이미 캐시를 쓰고 있으면(같은 판 · 더 늦게 받은 판) 바꾸지 않는다.
+                            if current.origin == RegistryOrigin::Snapshot
+                                || index.fetched_at_ms > current.fetched_at_ms
+                            {
+                                self.set_index(index);
+                            }
+                        }
                     }
                 }
-                self.state.lock().unwrap().last_error = Some(e);
+                // 화면 · 원격 기기에 로컬 경로를 내지 않는다(리뷰 F8).
+                let root = host.cache.root().display().to_string();
+                self.state.lock().unwrap().last_error = Some(e.replace(&root, "$CACHE/registry"));
             }
         }
         let mut state = self.state.lock().unwrap();
@@ -300,8 +314,9 @@ impl ToolsRegistry {
         let fetcher = self.fetcher()?;
         match mode {
             RegistryMode::Pinned => {
-                let (c, v) = (cache.clone(), self.pinned.registry.version.clone());
-                if let Ok(Ok(index)) = tokio::task::spawn_blocking(move || c.load(&v)).await {
+                let (c, p) = (cache.clone(), self.pinned.registry.clone());
+                if let Ok(Ok(index)) = tokio::task::spawn_blocking(move || c.load_pinned(&p)).await
+                {
                     return Ok(index);
                 }
                 source::fetch_pinned(&fetcher, &self.pinned.registry, cache, now_ms).await

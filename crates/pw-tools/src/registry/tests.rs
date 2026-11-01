@@ -102,9 +102,11 @@ impl Fixture {
     }
 }
 
-/// 완료 기준 ①: 고정 판 산출물의 해시가 틀리면 캐시에 넣지 않고 마지막 캐시를 쓴다.
+/// 완료 기준 ①: 고정 판 산출물의 해시가 틀리면 캐시에 넣지 않는다. 고정 모드는 다른 판의 캐시가 아니라 내장 스냅숏으로
+/// 물러난다(메인 결정, 리뷰 F2 — 계획 문장 「오프라인이면 마지막 캐시」 는 최신 모드만).
 #[tokio::test]
-async fn a_pinned_artifact_with_a_wrong_hash_is_not_cached_and_the_last_cache_is_used() {
+async fn a_pinned_artifact_with_a_wrong_hash_is_not_cached_and_pinned_mode_falls_back_to_the_snapshot()
+ {
     let f = Fixture::new().await;
     f.seed_cache(OLD, "old-marker", 1_700_000_000_000);
     let json = registry_json("pinned-marker");
@@ -117,14 +119,16 @@ async fn a_pinned_artifact_with_a_wrong_hash_is_not_cached_and_the_last_cache_is
         "a mismatching artifact must not be cached"
     );
     let index = r.index();
-    assert_eq!(index.version, OLD);
-    assert_eq!(index.origin, RegistryOrigin::Cache);
-    assert!(index.get("old-marker").is_some());
+    assert_eq!(index.origin, RegistryOrigin::Snapshot);
+    assert!(
+        index.get("old-marker").is_none(),
+        "another version's cache must not be used in pinned mode"
+    );
     let err = r.last_error().unwrap();
     assert!(err.contains("SHA-256"), "{err}");
     // 상태에도 그대로 보인다.
     let status = status_of(&r);
-    assert_eq!(status.version, OLD);
+    assert_eq!(status.origin, RegistryOrigin::Snapshot);
     assert_eq!(status.pinned_version, PINNED);
     assert!(status.last_error.is_some());
 
@@ -137,6 +141,114 @@ async fn a_pinned_artifact_with_a_wrong_hash_is_not_cached_and_the_last_cache_is
     assert!(!f2.cache_dir(PINNED).exists());
     assert_eq!(r.index().origin, RegistryOrigin::Snapshot);
     assert!(r.last_error().unwrap().contains("registry.json SHA-256"));
+}
+
+/// 리뷰 F1: 고정 판 폴더의 캐시라도 `registry.json` 이 고정 해시(`registry.toml` 의 `json_sha256`)와 다르면 쓰지 않는다 —
+/// `meta.json` 이 그 내용에 맞춰 고쳐져 있어도.
+#[tokio::test]
+async fn a_pinned_cache_that_differs_from_the_pinned_hash_is_not_used() {
+    let f = Fixture::new().await;
+    let json = registry_json("pinned-marker");
+    let zip = zip_of(&[("registry.json", &json)]);
+    // 같은 판 폴더에 다른 내용 + 그 내용의 해시를 적은 meta.json.
+    f.seed_cache(PINNED, "tampered-marker", 5);
+    let r = f.registry(RegistryMode::Pinned, &zip, &json, None);
+    r.load_local().await;
+    assert_eq!(r.index().origin, RegistryOrigin::Snapshot);
+    assert!(r.index().get("tampered-marker").is_none());
+    // 받기는 그 캐시를 「이미 있음」 으로 보지 않고 다시 받아 고정 해시대로 바꿔 넣는다.
+    assert!(r.due(RegistryMode::Pinned, SystemTime::now()));
+    r.refresh().await;
+    assert_eq!(f.server.hits("/pinned/registry.json.zip"), 1);
+    assert_eq!(r.index().origin, RegistryOrigin::Cache);
+    assert!(r.index().get("pinned-marker").is_some());
+    assert_eq!(
+        std::fs::read(f.cache_dir(PINNED).join("registry.json")).unwrap(),
+        json
+    );
+
+    // 실제 고정 표 · 스냅숏으로도: 고정 판 폴더의 rust-analyzer 주소를 바꾼 캐시는 쓰지 않는다(리뷰 재현).
+    let g = Fixture::new().await;
+    let pinned = Pinned::builtin();
+    let snapshot = Index::snapshot();
+    let mut ra = Value::Object(snapshot.get("rust-analyzer").unwrap().raw().clone());
+    ra["source"]["id"] = json!("pkg:github/evil-org/rust-analyzer@2026-10-26");
+    let evil = serde_json::to_vec(&json!([ra])).unwrap();
+    let dir = g.cache_dir(&pinned.registry.version);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("registry.json"), &evil).unwrap();
+    std::fs::write(
+        dir.join("meta.json"),
+        serde_json::to_vec(
+            &json!({"version": pinned.registry.version, "fetchedAtMs": 1,
+            "zipSha256": "0".repeat(64), "jsonSha256": sha256_hex(&evil)}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let real = ToolsRegistry::with_parts(pinned, Overrides::builtin(), snapshot);
+    real.attach_fixed(g.cache.path().to_path_buf(), RegistryMode::Pinned);
+    real.load_local().await;
+    assert_eq!(real.index().origin, RegistryOrigin::Snapshot);
+}
+
+/// 리뷰 F2: 고정 모드에서 받기가 실패하고 다른 판의 캐시(옛 Pitwall 의 고정 판)만 있으면, 번들 패키지는 내장 스냅숏(고정 판)으로
+/// 풀리고 고정 해시가 붙는다.
+#[tokio::test]
+async fn pinned_mode_without_the_pinned_cache_answers_bundled_packages_from_the_snapshot() {
+    let f = Fixture::new().await;
+    // 옛 판 캐시: rust-analyzer 의 판이 다르다.
+    let snapshot = Index::snapshot();
+    let mut ra = Value::Object(snapshot.get("rust-analyzer").unwrap().raw().clone());
+    ra["source"]["id"] = json!("pkg:github/rust-lang/rust-analyzer@2020-01-01");
+    let old = serde_json::to_vec(&json!([ra])).unwrap();
+    let dir = f.cache_dir(OLD);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("registry.json"), &old).unwrap();
+    std::fs::write(
+        dir.join("meta.json"),
+        serde_json::to_vec(&json!({"version": OLD, "fetchedAtMs": 9_999_999_999_999u64,
+            "zipSha256": "0".repeat(64), "jsonSha256": sha256_hex(&old)}))
+        .unwrap(),
+    )
+    .unwrap();
+    let closed = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap()
+    };
+    let mut pinned = Pinned::builtin();
+    pinned.registry.url = format!("http://{closed}/registry.json.zip");
+    let r = Arc::new(
+        ToolsRegistry::with_parts(pinned, Overrides::builtin(), Index::snapshot())
+            .with_test_network(Endpoints::default(), Arc::new(SystemTime::now)),
+    );
+    r.attach_fixed(f.cache.path().to_path_buf(), RegistryMode::Pinned);
+    r.load_local().await;
+    r.refresh().await;
+    assert!(r.last_error().is_some());
+    assert_eq!(r.index().origin, RegistryOrigin::Snapshot);
+    let d = get_in(&r, "rust-analyzer").unwrap();
+    assert_eq!(d.registry_version, Pinned::builtin().registry.version);
+    if ToolTarget::current().is_some() {
+        assert_eq!(d.resolved.unwrap().version, "2026-10-26");
+        assert!(!d.pinned.is_empty());
+    }
+}
+
+/// 리뷰 F8: 마지막 실패에 로컬 경로를 싣지 않는다(Read tier 라 원격 readonly 기기도 본다).
+#[tokio::test]
+async fn the_last_error_does_not_show_local_paths() {
+    let f = Fixture::new().await;
+    let json = registry_json("pinned-marker");
+    let zip = zip_of(&[("registry.json", &json)]);
+    // 캐시 폴더 자리에 파일을 두어 쓰기를 실패시킨다.
+    std::fs::write(f.cache.path().join("registry"), b"not a folder").unwrap();
+    let r = f.registry(RegistryMode::Pinned, &zip, &json, None);
+    r.refresh().await;
+    let err = r.last_error().unwrap();
+    let local = f.cache.path().display().to_string();
+    assert!(!err.contains(&local), "{err}");
+    assert!(err.contains("$CACHE/registry"), "{err}");
 }
 
 #[tokio::test]
