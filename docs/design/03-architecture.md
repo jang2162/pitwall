@@ -260,6 +260,28 @@ font_size = 14                                # px. 없으면 13
 - 설정이 다시 읽히면(`config.changed`) 열린 에디터가 재시작 없이 바뀐다 — 뷰를 다시 만들지 않고 같은 뷰를 다시 구성해 커서 · 스크롤 · undo 가 남는다
 - 틀린 값(문자열이 아니거나 빈 `font_family`, 수가 아니거나 6 ~ 72 밖의 `font_size`)은 없는 것으로 보고 기본값을 쓴다 — 설정 하나가 틀렸다고 에디터가 그려지지 않으면 안 된다
 
+### `[lsp.<서버 id>]` — 언어 서버 설정 (15-m4-plan.md 결정 M4-D22)
+
+서버 정의(실행 파일 이름 · 인자 · 설정 바탕)는 내장 언어 확장의 `[contributes.language_servers.<id>]` 다(07 §2). 설정은 그 위에 덮는다. 구현: `crates/pw-lsp-servers`(해석 · 합치기 · `lsp.servers.list`)
+
+```toml
+# $CONFIG/settings.toml 또는 .pitwall/project.toml (각각 .local.toml · 개인 전용 project.toml 도)
+[lsp.rust-analyzer]
+enabled = true                                  # false 면 그 서버를 쓰지 않는다
+path = "/opt/rust-analyzer/bin/rust-analyzer"   # 실행 파일 — 절대 경로 · PATH 의 이름 · (프로젝트 설정만) 프로젝트 루트 기준 상대 경로
+args = ["--log-file", "/tmp/ra.log"]            # 정의의 args 를 통째로 바꾼다
+env = { RA_LOG = "info" }                       # 변수마다 정의의 env 위에 덮는다
+features = { disable = ["formatting"] }         # 이 서버에 맡기지 않을 기능(정의의 것에 더한다)
+[lsp.rust-analyzer.settings]                    # workspace/configuration 의 답 — 정의 → 전역 → 프로젝트 순으로 깊게 합친다
+rust-analyzer = { cargo = { features = "all" } }
+```
+
+- 프로젝트 설정이 전역을 이긴다(키마다). `settings` 는 객체를 키마다 합치고 그 밖의 값(배열 포함)은 덮는다. `features.disable` 은 프로젝트 > 전역 중 하나를 정의의 목록에 더한다. 기능 이름은 `diagnostics` · `hover` · `definition` · `implementation` · `references` · `document_symbol` · `workspace_symbol` · `completion` · `signature_help` · `rename` · `code_action` · `formatting`
+- **미신뢰 프로젝트에서는 공유 레이어(`.pitwall/project.toml`)를 읽지 않는다**(`.local.toml` · 개인 전용 · 전역만) — 클론한 저장소가 실행 파일 · 인자 · 환경을 고르지 못하게. 신뢰해도 서버는 신뢰한 프로젝트에서만 뜬다(결정 M4-D8)
+- 실행 파일 해석: 설정 `path` → 프로젝트 로컬(신뢰한 프로젝트만 — 정의의 `project_local`, 해석하는 디렉터리에서 프로젝트 루트까지 올라가며) → 그 디렉터리의 런타임 환경 PATH(정의가 `resolve_hint = "rustup"` 이면 rustup 프록시는 `rustup which` 가 성공할 때만, 신뢰한 프로젝트에서만 돌린다) → Pitwall 설치본(`$DATA/tools`, 07 §4.4) → 「설치 필요」. **`path` 를 적었는데 쓸 수 없으면 다음 단계로 가지 않고 그렇다고 알린다** — 사람이 고른 경로가 틀린 것을 다른 실행 파일로 말없이 가리지 않는다. 판(`--version`)은 부르지 않는다(설치본만 설치 기록의 판)
+- 형식이 틀린 키 · 모르는 키 · 등록되지 않은 서버 id 는 경고하고 그 값만 버린다(`lsp.servers.list` 의 `warnings` 와 로그). `[lsp]` 바로 아래의 표가 아닌 값(`idle_shutdown_minutes` 등)은 서버 전역 설정이다(M4-05)
+- 프로젝트 설정은 **디스크에 쓰지 않고** 읽는다(「`[open_with]`」 과 같다)
+
 ## 5-1. 런타임 환경 (D26)
 
 GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버전(Node/Java/Python 등)을 모른다. Pitwall은 **런타임 버전을 직접 설치 · 관리하지 않고**, 외부 도구가 계산한 환경을 받아 프로세스를 띄울 때 적용한다.

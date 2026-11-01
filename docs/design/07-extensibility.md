@@ -32,11 +32,20 @@ grammar = "grammars/kotlin.wasm"          # tree-sitter WASM(외부 확장 — M
 queries = "queries/kotlin/"                # highlights.scm, outline.scm, tags.scm, injections.scm
 line_comment = "//"                         # (선택) 줄 주석 기호 — 에디터의 ⌘/(12-m1-plan.md M1-18). 없으면 그 언어의 ⌘/ 는 아무것도 하지 않는다
 
-[contributes.language_servers.kotlin-lsp]
-languages = ["kotlin"]
-mason = "kotlin-lsp"                        # Mason registry 패키지 이름 (§4.4) — 설치 정보는 registry에서
-# install = { github_release = "...", asset = "..." }   # registry에 없을 때만 직접 정의
-command = "kotlin-lsp"                      # registry의 bin 이름 또는 설치 폴더 기준 경로
+[contributes.language_servers.kotlin-lsp]   # 표 이름 = 서버 id = 설정 `[lsp.<id>]` 의 id (03 「`[lsp.<서버 id>]`」). 내장 확장만 (레지스트리 표)
+languages = ["kotlin"]                      # 맡는 언어 id — 이 확장이나 다른 확장의 `[contributes.languages.<id>]`
+mason = "kotlin-lsp"                        # (선택) Mason registry 패키지 이름 (§4.4) — 설치 정보는 registry(와 Pitwall 의 덮어쓰기 정의)에서
+command = "kotlin-lsp"                      # 실행 파일 이름 하나 (registry 의 bin 이름). 경로 · 공백 · 셸 문자열은 오류
+args = ["--stdio"]                          # (선택) 인자
+env = { KOTLIN_LSP_LOG = "info" }           # (선택) 서버 환경 변수 — 런타임 환경 위에 덮는다
+root_markers = ["settings.gradle.kts", "build.gradle.kts"]   # (선택) 작업 공간 루트를 정하는 파일 이름 글롭
+initialization_options = { }                # (선택) initialize 의 initializationOptions (TOML 표 → JSON)
+settings = { }                              # (선택) workspace/configuration 의 답의 바탕 (TOML 표 → JSON)
+features = { disable = ["formatting"] }     # (선택) 이 서버에 맡기지 않을 기능 (15-m4-plan 결정 M4-D12)
+requires = { java = ">=21" }                # (선택) 서버를 「돌리는」 런타임과 semver 범위 — node · python · java (결정 M4-D6)
+# resolve_hint = "rustup"                   # (선택) PATH 의 rustup 프록시는 컴포넌트가 있을 때만 (결정 M4-D7)
+# project_local = "node_modules/.bin/x"     # (선택) 신뢰한 프로젝트 안의 실행 파일 (프로젝트 루트 기준)
+# project_local_options = { "tsserver.path" = "node_modules/typescript/lib" }   # (선택) 프로젝트에 있으면 initialization_options 의 그 키에 절대 경로
 
 [contributes.debug_adapters.java]
 languages = ["kotlin", "java"]
@@ -77,11 +86,12 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 | 경로 | 매니페스트의 경로는 확장 폴더 기준 `/` 상대 경로. 절대 경로 · `..` · `\` · `:` 는 오류. 심볼릭 링크로 폴더 밖에 닿는 것도 오류. 가리키는 파일 · 폴더가 없으면 오류 |
 | 오류 처리 | 진단에 파일 · 줄 · 열을 붙인다. 오류가 하나라도 있는 확장은 **통째로 등록하지 않는다**(경고만 있으면 등록). 진단은 로그와 `ext.list` 로 나간다 |
 | 엔진 버전 | `engines.pitwall` 범위가 앱 버전을 포함하지 않으면 등록하지 않는다. 내장 확장은 앱과 함께 빌드되므로 `"*"` |
-| 겹침 | 내장 → 사용자 확장(폴더 이름순) 순서로 읽고, 확장 id · 테마 id · 키맵 id · 외부 도구 id · 언어 id · UI 번역 언어 태그(대소문자 무시, 한 매니페스트 안에서도)가 먼저 등록된 것과 겹치면 나중 것(그 확장 전체)을 거절한다. 사용자 확장이 내장 기본값을 말없이 가리지 못한다. UI 번역도 같은 언어 태그를 둘 받지 않는다 — i18n(M0-14)이 확장끼리 번역을 병합해야 하면 그때 이 규칙을 다시 정한다 |
+| 겹침 | 내장 → 사용자 확장(폴더 이름순) 순서로 읽고, 확장 id · 테마 id · 키맵 id · 외부 도구 id · 언어 id · 언어 서버 id · UI 번역 언어 태그(대소문자 무시, 한 매니페스트 안에서도)가 먼저 등록된 것과 겹치면 나중 것(그 확장 전체)을 거절한다. 사용자 확장이 내장 기본값을 말없이 가리지 못한다. UI 번역도 같은 언어 태그를 둘 받지 않는다 — i18n(M0-14)이 확장끼리 번역을 병합해야 하면 그때 이 규칙을 다시 정한다 |
 | 내용 | 레지스트리는 기여의 메타데이터와 파일 위치만 검사 · 보관한다. 내용은 지금 소비자가 있는 것만 읽는다: 테마는 시작할 때 읽어 겉모양(`id` · `label` · 변형 하나 이상)을 보고(토큰 검사는 화면의 `parseTheme`), 키맵은 `keymap.get` 이 텍스트로 내준다(형식 검사는 키맵 엔진). UI 번역은 시작할 때 언어 폴더의 `.ftl` 을 읽어 Fluent 문법을 검사한다(규칙은 §4.1 「리소스」). 통째로 읽는 이 파일들은 **1 MiB 를 넘으면 오류**다. 언어의 문법은 둘 중 하나다: `builtin_grammar`(앱에 링크한 tree-sitter 문법의 이름 — `crates/pw-syntax/src/native.rs` 의 표, 내장 확장이 쓴다) 또는 `grammar`(WASM 파일 — 외부 확장, M8). `grammar` · `queries`(폴더)는 있는지만 보고, 구문 분석 서비스(`crates/pw-syntax`)가 그 언어의 문서를 처음 열 때 읽는다 — 강조 쿼리는 그 폴더의 `highlights.scm` 이다(쿼리 1 MiB 상한). WASM 은 `pw-syntax` 의 `wasm` 기능에서만 올리고(앱은 켜지 않는다) 파일 이름(확장자 뺀 것)이 tree-sitter 문법 이름이다(모듈이 `tree_sitter_<이름>` 을 내보낸다, 32 MiB 상한). 없는 내장 문법 이름은 그 언어를 처음 열 때 오류다. **내장이 아닌 확장의 `builtin_grammar` · `grammar` · `queries` 는 등록하지 않는다** — 그 언어 기여(Linguist 이름 · 확장자 · 주석 기호)는 받고 경고 진단을 남긴다(이유는 §4.2 「문법 WASM 의 신뢰 경계」). Linguist 이름이 같은 기여가 여럿이면 먼저 등록된 것을 쓴다. `[wasm]` 은 읽고 검사만 한다 |
+| 언어 서버 | `[contributes.language_servers.<id>]`(§2 의 예가 키 전체다). `languages` · `command` 는 필수, `command` 는 실행 파일 이름 하나(경로 구분자 · 공백 · 제어 문자 · `-` 로 시작은 오류 — 인자는 `args`), `root_markers` 는 파일 이름 글롭(경로면 오류), `requires` 의 런타임은 `node` · `python` · `java` 이고 값은 semver 범위, `resolve_hint` 는 `rustup` 만, `project_local` · `project_local_options` 의 경로는 프로젝트 안 상대 경로(`..` · 절대 경로 오류). `initialization_options` · `settings` 는 JSON 으로 바꾼다(NaN · 무한대는 오류, 날짜는 문자열). `features.disable` 의 모르는 기능 이름은 경고하고 버린다. `languages` 의 언어 id 가 모든 확장을 읽은 뒤에도 없으면 경고하고 그 언어만 뺀다. 한 언어에 서버가 여럿이면 등록 순서(내장 확장 폴더 이름순, 한 확장 안에서는 적힌 순서)가 기능을 맡는 순서다(15-m4-plan 결정 M4-D12). **내장이 아닌 확장의 `language_servers` 는 M8 전까지 등록하지 않는다** — 경고를 남기고 그 기여만 버린다(외부 확장이 아무 실행 파일을 이름으로 골라 띄우게 하지 않는다 — 문법 WASM 과 같은 꼴). 해석 · 설정은 `crates/pw-lsp-servers`(03 「`[lsp.<서버 id>]`」) |
 | 내장 확장 | 저장소 `extensions/<폴더>/` 를 **빌드할 때 바이너리에 묶는다**(`crates/pw-ext/build.rs`). Tauri 리소스 폴더처럼 실행 중에 디스크에서 읽지 않는다 — 개발 실행 · 빌드본 · 시험에서 경로가 갈리지 않고, 설치본이 망가져도 기본 테마 · 키맵이 남고, Tauri 가 없는 relay 데몬도 같은 내장 확장을 쓴다. 묶지 않는 것: `.` 으로 시작하는 항목, `~` 로 끝나는 백업, `node_modules`, 심볼릭 링크. 이름이 UTF-8 이 아니면 빌드가 멈춘다. 내장 확장에는 문법 WASM 이 없다(내장 문법은 네이티브 — `mise run lint` 가 `extensions/` 아래의 `.wasm` 을 막는다) |
 | 사용자 확장 | `$DATA/extensions/<폴더>/extension.toml`(03 §5-0). 앱 시작 때 한 번 읽는다. `extension.toml` 이 없는 폴더는 경고하고 건너뛴다. 설치 흐름(§6)은 아직 없다 |
-| RPC | `ext.list`(확장 · 진단), `theme.list`, `theme.get { id }`(테마 파일 내용), `keymap.list`, `keymap.get { id }`(키맵 파일 텍스트). UI 번역은 `crates/pw-i18n` 의 `i18n.get` 이 내준다(§4.1) |
+| RPC | `ext.list`(확장 · 진단 — 기여 id 에 `languageServers` 포함), `lsp.servers.list { projectId, worktree? }`(언어 서버 정의 · 해석 결과 · 합친 설정 — `crates/pw-lsp-servers`), `theme.list`, `theme.get { id }`(테마 파일 내용), `keymap.list`, `keymap.get { id }`(키맵 파일 텍스트). UI 번역은 `crates/pw-i18n` 의 `i18n.get` 이 내준다(§4.1) |
 
 ## 3. 테마
 
