@@ -132,10 +132,10 @@ async fn a_server_that_stops_reading_and_floods_requests_is_ended() {
         matches!(&exit.reason, ExitReason::Killed(why) if why.contains("stopped reading its input")),
         "{exit:?}"
     );
-    let cap = (pw_lsp::server::MAX_QUEUED_BYTES >> 20) as u64;
+    // 상한은 상수에서 읽지 않고 적는다 — 상수를 키우는 변경도 이 시험이 잡게.
     assert!(
-        after <= before + cap + 48,
-        "RSS grew from {before} MiB to {after} MiB (queue cap {cap} MiB)"
+        after <= before + 64 + 48,
+        "RSS grew from {before} MiB to {after} MiB (queue cap 64 MiB)"
     );
 }
 
@@ -290,4 +290,101 @@ async fn a_held_grant_cannot_spawn_after_trust_is_revoked() {
     .await
     .unwrap();
     server.shutdown().await;
+}
+
+/// 리뷰 H2: 서버 → 클라이언트 요청은 동시에 64 개까지 처리하고, 넘으면 곧바로 `RequestFailed` 로 답한다(처리기가 끝나지 않아도
+/// 태스크가 끝없이 늘지 않는다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_requests_beyond_the_concurrency_cap_fail_at_once() {
+    let p = project();
+    let record = p.base.join("busy.jsonl");
+    let scenario = Scenario {
+        record: Some(record.clone()),
+        ..Scenario::default()
+    }
+    .on(
+        "go",
+        vec![Action::Flood {
+            method: "slow/thing".into(),
+            count: 100,
+            id_bytes: 1,
+        }],
+    );
+    let path = scenario.write(&p.base, "busy").unwrap();
+    let mut handlers = pw_lsp::Handlers::new();
+    handlers.on("slow/thing", |_params: Value| async {
+        std::future::pending::<()>().await;
+        Ok(Value::Null)
+    });
+    let server = pw_lsp::LanguageServer::spawn(
+        &p.grant,
+        common::fake_spec(&p.root, &path),
+        pw_lsp::ServerOptions {
+            handlers,
+            ..pw_lsp::ServerOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    server
+        .initialize(InitializeOptions::new(&p.root))
+        .await
+        .unwrap();
+    server.notify_raw("go", Value::Null).unwrap();
+    let refused = || {
+        received(&record)
+            .iter()
+            .filter(|m| {
+                m.get("method").is_none()
+                    && m["error"]["code"] == pw_lsp::message::code::REQUEST_FAILED
+            })
+            .count()
+    };
+    assert!(
+        common::eventually(Duration::from_secs(5), || refused() == 36).await,
+        "{}",
+        refused()
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(refused(), 36);
+    server.shutdown().await;
+}
+
+/// 리뷰 H2: 이벤트를 받아 가지 않으면 — `$/progress` 는 버리고 세며, 그 밖의 알림이 채널을 넘치면 그 서버를 끝낸다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_full_event_channel_drops_progress_and_ends_the_server_otherwise() {
+    let p = project();
+    let notify = |method: &str| Action::Notify {
+        method: method.into(),
+        params: Value::Null,
+    };
+    let mut actions: Vec<Action> = (0..10).map(|_| notify("$/progress")).collect();
+    actions.extend((0..10).map(|_| notify("textDocument/publishDiagnostics")));
+    let scenario = Scenario::default().on("go", actions);
+    let path = scenario.write(&p.base, "events").unwrap();
+    // 받는 쪽을 쥐되 읽지 않는다(채널 크기 4).
+    let (tx, _events) = tokio::sync::mpsc::channel(4);
+    let server = pw_lsp::LanguageServer::spawn(
+        &p.grant,
+        common::fake_spec(&p.root, &path),
+        pw_lsp::ServerOptions {
+            events: Some(tx),
+            ..pw_lsp::ServerOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    server
+        .initialize(InitializeOptions::new(&p.root))
+        .await
+        .unwrap();
+    server.notify_raw("go", Value::Null).unwrap();
+    let exit = tokio::time::timeout(Duration::from_secs(5), server.exited())
+        .await
+        .expect("the server was ended");
+    assert!(
+        matches!(&exit.reason, pw_lsp::ExitReason::Killed(why) if why.contains("not being handled")),
+        "{exit:?}"
+    );
+    assert_eq!(server.dropped_progress(), 6);
 }
