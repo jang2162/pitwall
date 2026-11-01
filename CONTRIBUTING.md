@@ -69,6 +69,8 @@ mise run test-release   # 위 release 판정 시험(검색 취소 100 ms · `fs.
 
 **전체 Vitest 가 `Test timed out` 으로 실패하면** `uptime` 의 load average 와 함께, 실패한 파일을 `pnpm exec vitest run <파일>` 로 단독 재실행한 결과를 보고에 적는다 — 단독에서 통과해도 실패를 「원래 흔들리는 시험」 으로 빼지 않는다. 시험 하나가 단독으로 1초에 가까우면 부하에서 5초 제한을 넘으므로 쪼갠다. 창 시험은 react 의 `act` · vitest 의 `it` 대신 `apps/desktop/src/test-support/ended-test.ts` 의 `act` · `it` 을 쓰고 `afterEach` 맨 앞에서 `endTest()` 를 기다린다 — 시간 초과한 시험의 본문이 끝나지 않고 계속 돌아 같은 파일의 다음 시험을 줄줄이 실패시키는 것을 끊는다.
 
+**시간을 거는 시험을 쓸 때** 「빠르다」를 재는 시험(기준이 계획 행 · 결정에서 온 것 — 기준은 두고 재는 범위만 그 기준에 맞춘다)과 「멈추지 않는다」만 보는 감시를 가른다. 감시 쪽은 일이 커지거나 기기가 바쁘면 넘으므로 실시간에 기대지 않게 쓴다: 제품이 정한 기다림은 가짜 시계로 흘려 상한 직전에는 아직 · 상한에서는 끝났음을 보고(`apps/desktop/src/editor/editor-window.test.tsx` 의 「Host does not answer the last write」), 데이터에 비례해 오래 걸리는 RPC 는 시험 도우미의 5초 무응답 감시(`crates/pw-db/tests/common/mod.rs` 의 `Conn::call`) 대신 제품이 그 호출에 거는 상한으로 기다린다(`Conn::call_within`). macOS 는 갓 쓴 실행 파일을 처음 exec 할 때 붙잡는다 — 한가할 때 200 ms 남짓, 병렬 시험 중에는 300 ms 를 넘고, 두 번째 exec 부터는 5 ms 다(sh 스크립트를 새 임시 폴더에 쓰고 곧바로 두 번 실행해 잰다). 가짜 도구 스크립트에 1초 아래 제한을 거는 시험은 써 둔 뒤 한 번 실행해 둔다(`crates/pw-runtime/src/login_shell.rs` 의 `tests::write_script`).
+
 **부하 아래에서 시험할 때** 부하 프로세스는 코어 수만큼만 띄우고 pid 를 **배열**로 모아 trap 으로 끈다: `pids=(); for i in $(seq $(sysctl -n hw.ncpu)); do yes >/dev/null & pids+=($!); done; trap 'kill $pids' EXIT`. zsh 는 따옴표 없는 문자열 변수를 낱말로 나누지 않아 `pids="$pids $!"` 로 모은 문자열은 `kill` 이 실패하고 부하가 고아로 남는다. 끝나면 `ps -o pid= -p <그 pid들>` 로 남은 것이 없는지 본다.
 
 `mise run fmt` 는 JSON 도 oxfmt 로 다시 쓴다 — 생성기가 만든 픽스처를 바이트로 견주는 시험은 그 폴더를 `.oxfmtrc.json` 의 `ignorePatterns` 에 더하거나 읽은 값으로 견준다.
