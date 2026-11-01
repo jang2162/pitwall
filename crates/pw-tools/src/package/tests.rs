@@ -606,3 +606,44 @@ jdtls = "plugins/org.eclipse.equinox.launcher.jar"
         Err(ToolUnsupported::InsecureUrl { .. })
     ));
 }
+
+/// 리뷰 X1(메인 결정): 덮어쓰기의 `bin_alias` 가 대상마다 풀린 경로를 그대로 따른다 — kotlin-lsp 의 `kotlin-lsp` 별칭.
+#[test]
+fn a_bin_alias_follows_the_resolved_path_on_every_target() {
+    let index = Index::snapshot();
+    let overrides = Overrides::builtin();
+    let kotlin = index.get("kotlin-lsp").unwrap();
+    let over = overrides
+        .get("kotlin-lsp")
+        .expect("crates/pw-tools/overrides/kotlin-lsp.toml");
+    for t in ToolTarget::ALL {
+        match kotlin.resolve(Some(t), Some(over)) {
+            Ok(r) => {
+                assert_eq!(r.bin["kotlin-lsp"], r.bin["intellij-server"], "{t}");
+                assert!(r.overridden);
+            }
+            // registry 의 `{{{` 오타 대상은 별칭과 상관없이 빠진다.
+            Err(e) => assert_eq!(t, ToolTarget::LinuxArm64Gnu, "{t}: {e}"),
+        }
+    }
+    // 받을 것은 바꾸지 않는다.
+    let plain = kotlin.resolve(Some(ToolTarget::DarwinArm64), None).unwrap();
+    let aliased = kotlin
+        .resolve(Some(ToolTarget::DarwinArm64), Some(over))
+        .unwrap();
+    assert_eq!(plain.source, aliased.source);
+    // 없는 `bin` 을 가리키는 별칭 · 경로 꼴 이름은 형식 오류.
+    for text in [
+        "reason = \"x\"\n[bin_alias]\nkotlin-lsp = \"missing\"\n",
+        "reason = \"x\"\n[bin_alias]\n\"../kotlin\" = \"intellij-server\"\n",
+    ] {
+        let o = Override::parse(text).unwrap();
+        assert!(
+            matches!(
+                kotlin.resolve(Some(ToolTarget::DarwinArm64), Some(&o)),
+                Err(ToolUnsupported::InvalidDefinition { .. })
+            ),
+            "{text}"
+        );
+    }
+}

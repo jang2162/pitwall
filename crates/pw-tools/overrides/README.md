@@ -6,4 +6,5 @@
 
 - 덮어쓰기를 더하거나 고치면 `node scripts/tools-registry-bump.mjs bump <지금 판>` 으로 `registry.toml` 의 고정 해시를 다시
   적는다 — 받을 주소가 바뀌므로 해시도 바뀐다. `mise run lint` 가 덮어쓴 주소와 고정 표가 맞는지 본다.
-- 지금은 비어 있다. jdtls 의 정식 마일스톤 · 판 고정 lombok 은 M4-18 이 더한다(결정 M4-D4).
+- `kotlin-lsp.toml`: 실행 파일 별칭 `kotlin-lsp` → `intellij-server`(언어 확장의 `command` 와 Mason `bin` 이름을 맞춘다).
+- jdtls 의 정식 마일스톤 · 판 고정 lombok 은 M4-18 이 더한다(결정 M4-D4).

@@ -20,7 +20,12 @@
 //!
 //! [share]
 //! "jdtls/lombok.jar" = "lombok.jar"
+//!
+//! [bin_alias]                                             # 새 이름 → 이미 있는 `bin` 이름(대상별로 풀린 경로를 따른다)
+//! kotlin-lsp = "intellij-server"
 //! ```
+//!
+//! `reason` 만 쓰고 `version` · `download` 가 없는 덮어쓰기(별칭만 등)는 받을 것을 바꾸지 않으므로 고정 해시도 그대로다.
 //!
 //! [`Package::resolve`]: crate::package::Package::resolve
 
@@ -45,6 +50,11 @@ pub struct Override {
     pub bin: BTreeMap<String, String>,
     #[serde(default)]
     pub share: BTreeMap<String, String>,
+    /// 새 실행 파일 이름 → 이미 있는(registry 또는 위 `bin` 의) 실행 파일 이름. 언어 확장의 `command` 가 registry 의 `bin`
+    /// 이름과 다를 때 쓴다(kotlin-lsp: `kotlin-lsp` → `intellij-server` — 메인 결정, 리뷰 X1). 대상마다 다른 경로를 다시 적지
+    /// 않고 그 대상에서 풀린 경로를 그대로 따른다.
+    #[serde(default)]
+    pub bin_alias: BTreeMap<String, String>,
 }
 
 impl Override {
@@ -142,5 +152,7 @@ mod tests {
         assert!(Override::parse("reason = \"x\"\n[[download]]\ntarget = \"linux\"\n").is_err());
         assert!(Override::parse("reason = \"x\"\ndownload = []\n").is_err());
         assert!(Override::parse("reason = \"x\"\n[bin]\na = 1\n").is_err());
+        assert!(Override::parse("reason = \"x\"\n[bin_alias]\na = \"b\"\n").is_ok());
+        assert!(Override::parse("reason = \"x\"\n[bin_alias]\na = 1\n").is_err());
     }
 }

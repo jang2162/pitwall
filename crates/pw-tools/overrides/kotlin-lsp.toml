@@ -1,0 +1,6 @@
+# kotlin-lsp: 언어 확장의 서버 정의(extensions/lang-kotlin — M4-02)는 `command = "kotlin-lsp"` 로 찾는데 Mason 정의의 `bin` 이름은
+# `intellij-server` 다. 정의는 그대로 두고 이 별칭으로 맞춘다(메인 결정 — 15-m4-plan.md M4-03 리뷰 X1). 받을 것은 바꾸지 않는다.
+reason = "the language extension launches `kotlin-lsp`, the Mason definition names the binary `intellij-server`"
+
+[bin_alias]
+kotlin-lsp = "intellij-server"

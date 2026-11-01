@@ -457,6 +457,17 @@ impl Package {
             let rendered = render(value, &ctx)?;
             bin.insert(name.clone(), ToolBin::parse(name, &rendered, kind)?);
         }
+        if let Some(o) = over {
+            for (alias, of) in &o.bin_alias {
+                if !valid_file_name(alias) {
+                    return Err(invalid(format!("bin alias `{alias}` is not a plain name")));
+                }
+                let target_bin = bin.get(of).cloned().ok_or_else(|| {
+                    invalid(format!("bin alias `{alias}` names a missing bin `{of}`"))
+                })?;
+                bin.insert(alias.clone(), target_bin);
+            }
+        }
         let share = render_paths(&share_raw, &ctx, "share")?;
         let opt = render_paths(&opt_raw, &ctx, "opt")?;
         Ok(ResolvedTool {
