@@ -20,7 +20,7 @@
 //!   `{capabilities, serverInfo}`, `shutdown` → `null`, 그 밖 → `MethodNotFound`.
 //! - **할 일**(`on` — 받은 요청 · 알림의 메서드 이름별, `start` — 뜨자마자): [`Action`] 의 목록을 차례로 한다 — 알림 · 서버 → 클라이언트
 //!   요청 보내기(id 는 `"fake-1"` 부터), stderr 한 줄, 틀 없이 바이트 그대로 쓰기(틀 상한 시험), 멈추기, 끝내기(죽기), 같은 프로세스
-//!   그룹에 오래 사는 자식 띄우기.
+//!   그룹에 오래 사는 자식 띄우기, stderr · 서버 요청 쏟기와 stdin 읽기 멈추기(망가진 서버 — Host 메모리 상한 시험).
 //! - **기록**(`record`): 받은 메시지마다 JSON 한 줄(클라이언트의 요청 · 알림 · 서버 요청에 대한 응답 그대로)을 덧붙인다. 띄운 자식의
 //!   pid 는 `{"childPid": n}` 줄로 남는다.
 //! - **끝**: `exit` 알림이나 stdin 의 끝에서 0 으로 끝난다. `ignoreExit` 면 둘 다 무시하고 죽을 때까지 돈다(SIGKILL 시험).
@@ -98,6 +98,16 @@ pub enum Action {
     Exit { code: i32 },
     /// 같은 프로세스 그룹에 `seconds` 동안 사는 자식을 띄운다(그룹째 끝내기 시험). pid 는 `record` 에.
     SpawnChild { seconds: u64 },
+    /// stderr 에 `bytes` 바이트의 `a` 를 쏟는다 — `newline` 이 거짓이면 줄바꿈 없이(stderr 상한 시험 — 리뷰 H1).
+    StderrFlood { bytes: u64, newline: bool },
+    /// 서버 → 클라이언트 요청 `method` 를 `count` 개 쏟는다. id 는 `id_bytes` 길이의 글이다(송신 큐 상한 시험 — 리뷰 H2).
+    Flood {
+        method: String,
+        count: u64,
+        id_bytes: usize,
+    },
+    /// 이 뒤로 stdin 을 읽지 않는다(파이프는 열어 둔 채 — 클라이언트의 송신이 막힌다).
+    Hang,
 }
 
 impl Scenario {

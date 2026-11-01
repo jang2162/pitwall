@@ -19,6 +19,8 @@ pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 const TERMINATOR: &[u8] = b"\r\n\r\n";
 /// 한 번에 더 읽을 크기의 바닥.
 const READ_CHUNK: usize = 64 * 1024;
+/// 틀을 낸 뒤 버퍼가 이보다 크면 줄인다.
+const SHRINK_ABOVE: usize = 1024 * 1024;
 
 #[derive(Debug)]
 pub enum FrameError {
@@ -93,6 +95,10 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
         }
         let body = self.buf[header_end..total].to_vec();
         self.buf.drain(..total);
+        // 큰 틀 하나 뒤에 그 크기의 버퍼를 서버가 끝날 때까지 쥐지 않는다(M4-01 리뷰 L3).
+        if self.buf.capacity() > SHRINK_ABOVE && self.buf.len() <= READ_CHUNK {
+            self.buf.shrink_to(READ_CHUNK);
+        }
         Ok(Some(body))
     }
 
@@ -321,6 +327,22 @@ mod tests {
             assert_eq!(name, want, "{bytes:?}");
         }
         assert_eq!(read_all(vec![]).await.unwrap(), Vec::<String>::new());
+    }
+
+    /// 리뷰 L3: 큰 틀 하나를 읽은 뒤 버퍼를 줄인다.
+    #[tokio::test]
+    async fn the_buffer_shrinks_after_a_big_frame() {
+        let big = format!("{{\"x\":\"{}\"}}", "a".repeat(8 * 1024 * 1024));
+        let mut bytes = frame(&big);
+        bytes.extend(frame("{}"));
+        let mut reader = FrameReader::new(Chunks::new([bytes]));
+        assert_eq!(reader.read_frame().await.unwrap().unwrap().len(), big.len());
+        assert!(
+            reader.buf.capacity() <= 2 * READ_CHUNK,
+            "{}",
+            reader.buf.capacity()
+        );
+        assert_eq!(reader.read_frame().await.unwrap().unwrap(), b"{}");
     }
 
     #[tokio::test]

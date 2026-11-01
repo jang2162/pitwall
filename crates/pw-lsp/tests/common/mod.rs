@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 
 /// 신뢰한 프로젝트 하나(임시 폴더)와 그 창의 허가.
 pub struct Project {
-    _tmp: tempfile::TempDir,
+    _tmp: Option<tempfile::TempDir>,
     pub base: PathBuf,
     pub root: PathBuf,
     pub state: PathBuf,
@@ -31,7 +31,15 @@ pub struct Project {
 
 pub fn project() -> Project {
     let tmp = tempfile::tempdir().unwrap();
-    let base = simplify(fs::canonicalize(tmp.path()).unwrap());
+    let mut p = project_at(tmp.path());
+    p._tmp = Some(tmp);
+    p
+}
+
+/// [`project`] 를 주어진 폴더 아래에(지우지 않는다 — 강제로 끝나는 도우미 프로세스가 쓴다).
+pub fn project_at(dir: &Path) -> Project {
+    fs::create_dir_all(dir).unwrap();
+    let base = simplify(fs::canonicalize(dir).unwrap());
     let app = AppPaths::under(&base.join("app"));
     let state = app.state.clone();
     let projects = Registry::new(app, None, EventBus::new(DEFAULT_CAPACITY));
@@ -47,7 +55,7 @@ pub fn project() -> Project {
     projects.set_trust(&id, true).unwrap();
     let grant = lsp_grant(&ConnectionScope::Project(id.clone()), &projects, &id, None).unwrap();
     Project {
-        _tmp: tmp,
+        _tmp: None,
         base,
         root,
         state,
@@ -59,7 +67,7 @@ pub fn project() -> Project {
 /// 띄운 가짜 서버와 그 주변.
 pub struct Fake {
     pub server: LanguageServer,
-    pub events: mpsc::UnboundedReceiver<ServerEvent>,
+    pub events: mpsc::Receiver<ServerEvent>,
     pub record: PathBuf,
     pub log_dir: PathBuf,
 }
@@ -72,7 +80,7 @@ impl Project {
         let path = scenario.write(&self.base, name).unwrap();
         let log_dir = lsp_log_dir(&self.state);
         let log = ServerLog::open(&log_dir, "fake", name, trace).unwrap();
-        let (tx, events) = mpsc::unbounded_channel();
+        let (tx, events) = mpsc::channel(1024);
         let server = LanguageServer::spawn(
             &self.grant,
             fake_spec(&self.root, &path),
@@ -130,7 +138,7 @@ pub async fn eventually(limit: Duration, mut check: impl FnMut() -> bool) -> boo
 
 /// 다음 이벤트 중 `pick` 이 고르는 것(최대 `limit`).
 pub async fn next_event<T>(
-    events: &mut mpsc::UnboundedReceiver<ServerEvent>,
+    events: &mut mpsc::Receiver<ServerEvent>,
     limit: Duration,
     mut pick: impl FnMut(ServerEvent) -> Option<T>,
 ) -> Option<T> {

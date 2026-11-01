@@ -430,6 +430,7 @@ async fn server_requests_are_answered_and_messages_are_routed() {
                 json!({ "items": [{ "section": "x" }] }),
             ),
             request("custom/handled", json!({ "n": 2 })),
+            request("unknown/thing", json!({})),
             Action::Notify {
                 method: "window/logMessage".into(),
                 params: json!({ "type": 3, "message": "logged line" }),
@@ -447,7 +448,7 @@ async fn server_requests_are_answered_and_messages_are_routed() {
     let path = scenario.write(&p.base, "routing").unwrap();
     let log_dir = pw_lsp::log::lsp_log_dir(&p.state);
     let log = pw_lsp::log::ServerLog::open(&log_dir, "fake", "routing", false).unwrap();
-    let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut events) = tokio::sync::mpsc::channel(1024);
     let mut handlers = pw_lsp::Handlers::new();
     handlers.on("custom/handled", |params: Value| async move {
         Ok(json!({ "doubled": params["n"].as_i64().unwrap_or(0) * 2 }))
@@ -460,6 +461,7 @@ async fn server_requests_are_answered_and_messages_are_routed() {
             log: Some(log),
             handlers,
             events: Some(tx),
+            ledger: None,
         },
     )
     .await
@@ -491,7 +493,7 @@ async fn server_requests_are_answered_and_messages_are_routed() {
             .collect::<Vec<_>>()
     };
     assert!(
-        eventually(SOON, || answers().len() == 4).await,
+        eventually(SOON, || answers().len() == 5).await,
         "{:?}",
         answers()
     );
@@ -503,8 +505,10 @@ async fn server_requests_are_answered_and_messages_are_routed() {
     };
     assert_eq!(by_id("fake-1")["result"], Value::Null);
     assert_eq!(by_id("fake-2")["result"], Value::Null);
+    // 처리기가 달리기 전의 설정 요청은 항목마다 `null`(리뷰 L2), 모르는 요청은 `MethodNotFound`.
+    assert_eq!(by_id("fake-3")["result"], json!([null]));
     assert_eq!(
-        by_id("fake-3")["error"]["code"],
+        by_id("fake-5")["error"]["code"],
         json!(code::METHOD_NOT_FOUND)
     );
     assert_eq!(by_id("fake-4")["result"], json!({ "doubled": 4 }));

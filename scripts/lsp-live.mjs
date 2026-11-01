@@ -118,12 +118,26 @@ export function filterExpr(filter) {
   return `test(/(^|::)${filter}_/)`;
 }
 
+/**
+ * 기대 능력(`[capabilities]`)을 판정하는 시험의 이름 — `crates/pw-lsp/tests/live_lsp.rs`. 판정은 정적 능력만 본다: 동적 등록으로만
+ * 알리는 서버(M4-18 의 JVM 서버 일부)를 넣을 때는 그 시험이 `supports()` 를 쓰도록 바꾼다.
+ */
+export function capabilityTest(server) {
+  return `live_lsp_${server}_initialize_and_shutdown`;
+}
+
 /** 한 서버의 판정. */
-export function judge({ server, selected, run, floor, exitCode: code }) {
+export function judge({ server, selected, run, floor, exitCode: code, required }) {
   const line = `${server}: ${run ?? "?"} run (selected ${selected.length}), floor ${floor}`;
   // 0개를 먼저 본다 — nextest 는 `--no-tests=fail` 로 그때도 실패하므로 종료 코드보다 까닭이 분명하다.
   if (selected.length === 0)
     return { ok: false, message: `${line} — the filter selected no tests` };
+  // 기대 능력 판정은 그 시험 안에 있다 — 지우거나 이름을 바꾸면 하한을 넘어도 판정이 조용히 사라지므로 있는지부터 본다(리뷰 M3).
+  if (required && !selected.some((name) => name.split(/::|\s/).at(-1) === required))
+    return {
+      ok: false,
+      message: `${line} — the capability check ${required} is not among the selected tests`,
+    };
   if (code !== 0) return { ok: false, message: `${line} — nextest failed (exit ${code})` };
   if (run === null)
     return {
@@ -288,6 +302,7 @@ async function runTarget(server, config, { ci, install }) {
     run: runCount(run.stderr + run.stdout),
     floor: config.floors[server],
     exitCode: run.status,
+    required: capabilityTest(server),
   });
 }
 

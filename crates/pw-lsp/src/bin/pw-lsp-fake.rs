@@ -18,8 +18,11 @@ use tokio::sync::mpsc;
 
 struct Fake {
     scenario: Scenario,
-    out: mpsc::UnboundedSender<Vec<u8>>,
+    // 크기가 있는 채널 — 쏟기 동작이 가짜 서버 자신의 메모리를 끝없이 쓰지 않게 stdout 에 맞춰 기다린다.
+    out: mpsc::Sender<Vec<u8>>,
     next_id: AtomicU64,
+    /// `Hang` 뒤로 stdin 을 읽지 않는다.
+    hung: std::sync::atomic::AtomicBool,
 }
 
 impl Fake {
@@ -32,28 +35,28 @@ impl Fake {
         }
     }
 
-    fn frame(&self, body: &[u8]) {
+    async fn frame(&self, body: &[u8]) {
         let mut bytes = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
         bytes.extend_from_slice(body);
-        let _ = self.out.send(bytes);
+        let _ = self.out.send(bytes).await;
     }
 
     async fn act(&self, actions: &[Action]) {
         for action in actions {
             match action {
                 Action::Notify { method, params } => {
-                    self.frame(&message::notification(method, params));
+                    self.frame(&message::notification(method, params)).await;
                 }
                 Action::Request { method, params } => {
                     let n = self.next_id.fetch_add(1, Ordering::SeqCst);
                     let id = RequestId::String(format!("fake-{n}"));
-                    self.frame(&message::request(&id, method, params));
+                    self.frame(&message::request(&id, method, params)).await;
                 }
                 Action::Stderr { text } => {
                     eprintln!("{text}");
                 }
                 Action::Raw { text } => {
-                    let _ = self.out.send(text.as_bytes().to_vec());
+                    let _ = self.out.send(text.as_bytes().to_vec()).await;
                 }
                 Action::Sleep { ms } => tokio::time::sleep(Duration::from_millis(*ms)).await,
                 Action::Exit { code } => {
@@ -62,6 +65,37 @@ impl Fake {
                     std::process::exit(*code);
                 }
                 Action::SpawnChild { seconds } => self.spawn_child(*seconds),
+                Action::StderrFlood { bytes, newline } => {
+                    use std::io::Write as _;
+                    let chunk = vec![b'a'; 64 * 1024];
+                    let mut stderr = std::io::stderr().lock();
+                    let mut left = *bytes;
+                    while left > 0 {
+                        let n =
+                            usize::try_from(left.min(chunk.len() as u64)).unwrap_or(chunk.len());
+                        if stderr.write_all(&chunk[..n]).is_err() {
+                            break;
+                        }
+                        left -= n as u64;
+                    }
+                    if *newline {
+                        let _ = stderr.write_all(b"\n");
+                    }
+                    let _ = stderr.flush();
+                }
+                Action::Flood {
+                    method,
+                    count,
+                    id_bytes,
+                } => {
+                    let pad = "i".repeat(*id_bytes);
+                    for n in 0..*count {
+                        let id = RequestId::String(format!("{n}-{pad}"));
+                        self.frame(&message::request(&id, method, &Value::Null))
+                            .await;
+                    }
+                }
+                Action::Hang => self.hung.store(true, Ordering::SeqCst),
             }
         }
     }
@@ -116,7 +150,7 @@ impl Fake {
             if delay > 0 {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
-            fake.frame(&message::response(&id, &result));
+            fake.frame(&message::response(&id, &result)).await;
             fake.act(&then).await;
         };
         if delay > 0 {
@@ -140,7 +174,7 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let (out, mut out_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (out, mut out_rx) = mpsc::channel::<Vec<u8>>(256);
     let writer = tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
         while let Some(bytes) = out_rx.recv().await {
@@ -153,10 +187,15 @@ async fn main() -> ExitCode {
         scenario,
         out,
         next_id: AtomicU64::new(1),
+        hung: std::sync::atomic::AtomicBool::new(false),
     });
     fake.act(&fake.scenario.start.clone()).await;
     let mut reader = FrameReader::new(tokio::io::stdin());
     loop {
+        if fake.hung.load(Ordering::SeqCst) {
+            // 읽지 않는다 — 쓰기 태스크(쏟기)는 계속 돈다.
+            std::future::pending::<()>().await;
+        }
         let body = match reader.read_frame().await {
             Ok(Some(body)) => body,
             Ok(None) | Err(_) => break,

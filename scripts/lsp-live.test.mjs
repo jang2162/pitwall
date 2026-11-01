@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import {
   TARGETS,
+  capabilityTest,
   exitCode,
   filterExpr,
   judge,
@@ -116,6 +117,28 @@ test("a run below the floor, with no tests, failed or miscounted fails", () => {
   assert.match(judge({ ...base, floor: 1, exitCode: 100 }).message, /nextest failed/);
   assert.match(judge({ ...base, floor: 1, run: null }).message, /no Summary line/);
   assert.match(judge({ ...base, floor: 0, run: 2 }).message, /ran 2 but the filter selected 1/);
+});
+
+test("the capability check must be among the selected tests", () => {
+  const required = capabilityTest("rust_analyzer");
+  assert.equal(required, "live_lsp_rust_analyzer_initialize_and_shutdown");
+  const with_ = [`pw-lsp::live_lsp ${required}`, "pw-lsp::live_lsp live_lsp_rust_analyzer_hover"];
+  const base = { server: "rust_analyzer", run: 2, floor: 2, exitCode: 0, required };
+  assert.equal(judge({ ...base, selected: with_ }).ok, true);
+  // 하한은 넘지만 능력 판정 시험이 없다(지워졌거나 이름이 바뀜) — 실패.
+  const without = [
+    "pw-lsp::live_lsp live_lsp_rust_analyzer_hover",
+    "pw-lsp::live_lsp live_lsp_rust_analyzer_definition",
+  ];
+  const missing = judge({ ...base, selected: without });
+  assert.equal(missing.ok, false);
+  assert.match(missing.message, /capability check/);
+  // 이름 조각 끝이 정확히 같아야 한다.
+  const lookalike = [
+    `pw-lsp::live_lsp ${required}_twice`,
+    "pw-lsp::live_lsp live_lsp_rust_analyzer_hover",
+  ];
+  assert.equal(judge({ ...base, selected: lookalike }).ok, false);
 });
 
 test("run counts, exit codes, targets and lockfile integrity", () => {

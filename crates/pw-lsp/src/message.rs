@@ -72,6 +72,8 @@ pub mod code {
     pub const CONTENT_MODIFIED: i32 = -32801;
     /// 서버가 스스로 취소했다(3.17).
     pub const SERVER_CANCELLED: i32 = -32802;
+    /// 요청은 맞지만 처리하지 못했다(3.17).
+    pub const REQUEST_FAILED: i32 = -32803;
 }
 
 /// 받은 메시지 하나.

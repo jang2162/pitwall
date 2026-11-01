@@ -4,7 +4,8 @@
 //! `workspace.configuration`, `didChangeWatchedFiles` 동적 등록(`RelativePattern` 포함 — M4-05b), `publishDiagnostics` 의
 //! `versionSupport` · `relatedInformation`, 그리고 `textDocument` 의 **M4 기능만** — 하지 않는 것(의미 토큰 · 인레이 힌트 · 코드 렌즈 ·
 //! 호출/타입 계층 · 같은 심볼 강조 · 연결 편집 · 폴딩 · 입력 중 포맷 등, 15 §3)은 알리지 않는다. 알리면 서버가 그 일을 하느라 시간을
-//! 쓰고 우리가 받지 않는 요청을 건다. 기능 행이 자기 기능의 세부(스니펫 · resolve 등)를 바꿀 때는 [`client_capabilities_json`] 의 그
+//! 쓰고 우리가 받지 않는 요청을 건다. 서버가 거는 요청 가운데 처리할 행이 아직 없는 것도 알리지 않는다 — `workspace.applyEdit` 은
+//! M4-12, `window.showDocument` 는 M4-08 이 처리기를 달면서 여기 함께 켠다(M4-01 리뷰 L2). 기능 행이 자기 기능의 세부(스니펫 · resolve 등)를 바꿀 때는 [`client_capabilities_json`] 의 그
 //! 칸만 고치고 이 모듈의 시험(알리지 않는 것 표)을 함께 본다.
 //!
 //! **서버 능력 조회**: [`supports`] 는 메서드 이름으로 묻는다 — 동적 등록(`client/registerCapability`)이 있으면 그것, 없으면
@@ -24,11 +25,9 @@ pub fn client_capabilities_json() -> Value {
             }
         },
         "window": {
-            "workDoneProgress": true,
-            "showDocument": { "support": true }
+            "workDoneProgress": true
         },
         "workspace": {
-            "applyEdit": true,
             "workspaceEdit": {
                 "documentChanges": true,
                 "resourceOperations": ["create", "rename", "delete"],
@@ -219,6 +218,9 @@ mod tests {
         ] {
             assert!(!text_document.contains_key(absent), "{absent}");
         }
+        // 처리할 행이 들어오기 전에는 서버의 편집 · 문서 열기 요청을 부르지 않는다(M4-12 · M4-08 이 켠다).
+        assert!(caps["workspace"].get("applyEdit").is_none());
+        assert!(caps["window"].get("showDocument").is_none());
         let workspace = caps["workspace"].as_object().unwrap();
         for absent in [
             "semanticTokens",

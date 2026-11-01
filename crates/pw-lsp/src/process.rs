@@ -76,6 +76,27 @@ pub(crate) fn spawn(spec: &LaunchSpec) -> io::Result<(Child, ProcessTree)> {
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
+    // Linux: 띄운 스레드가 끝나면(Host 가 죽으면 — tokio 의 일꾼 스레드는 런타임과 함께 끝난다) 서버에 SIGTERM(M4-01 리뷰 L1 — M3-11
+    // 의 ssh 와 같다). 이 줄 앞에서 Host 가 이미 죽었으면 부모가 바뀌었다 — 띄우지 않는다. 남은 손자는 `crate::ledger` 가 거둔다.
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: getpid(2) 는 메모리를 건드리지 않는다.
+        let parent = unsafe { libc::getpid() };
+        // SAFETY: fork 와 exec 사이에서 async-signal-safe 인 prctl(2) · getppid(2) 만 부른다.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::getppid() != parent {
+                    return Err(io::Error::other(
+                        "the host ended while the server was starting",
+                    ));
+                }
+                Ok(())
+            });
+        }
+    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;

@@ -19,6 +19,13 @@
 //! **알림** — `window/logMessage` · `window/showMessage` · `$/logTrace` 는 서버 로그와 `tracing` 으로, 나머지(`$/progress` ·
 //! `textDocument/publishDiagnostics` 등)는 [`ServerEvent::Notification`] 으로 넘긴다.
 //!
+//! **상한**(M4-01 리뷰 H1 · H2 — 서버 하나가 Host 메모리를 끝없이 먹지 않게): 보낼 틀이 [`MAX_QUEUED_BYTES`] 넘게 쌓이면(서버가
+//! stdin 을 읽지 않는다) 그 서버를 망가진 것으로 보고 트리째 끝낸다. 서버 → 클라이언트 요청은 동시에 [`MAX_SERVER_REQUESTS`] 개까지
+//! 처리하고 넘으면 곧바로 `RequestFailed` 로 답한다. 이벤트 채널([`ServerOptions::events`])은 부른 쪽이 정한 크기의 채널이고, 꽉
+//! 차면 `$/progress` 알림은 버리고 그 밖의 이벤트면 서버를 끝낸다(`Exited` 는 [`LanguageServer::exited`] 로도 알 수 있어 버릴 수
+//! 있다). stderr 는 줄마다 [`MAX_STDERR_LINE`] 바이트까지만 쥐고(줄바꿈이 오지 않아도 — 넘는 바이트는 세기만 한다), 로그 파일의
+//! 하루 상한은 `crate::log` 가 지킨다.
+//!
 //! **끝내기** — [`LanguageServer::shutdown`]: `shutdown`(시한 [`SHUTDOWN_TIMEOUT`]) → `exit` → stdin 닫기 → [`EXIT_GRACE`] 안에
 //! 끝나지 않으면 트리째 SIGKILL. 전체가 [`STOP_BUDGET`](2 s) 안이다. 서버가 끝나면(스스로든 우리가 끝냈든) 그룹에 남은 자손도
 //! 끝낸다. 손잡이를 버려도(`Drop`) 트리째 끝낸다.
@@ -28,19 +35,20 @@ use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use lsp_types::{Registration, RegistrationParams, UnregistrationParams};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::AsyncReadExt;
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::capabilities::{client_capabilities_json, static_supports};
-use crate::grant::LspGrant;
+use crate::grant::{LspGrant, real_path};
+use crate::ledger::{Ledger, Record};
 use crate::log::{Line, ServerLog};
 use crate::message::{self, Incoming, RequestId, ResponseError};
 use crate::process::{self, LaunchSpec, ProcessTree};
@@ -57,6 +65,15 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 pub const EXIT_GRACE: Duration = Duration::from_millis(500);
 /// 끝내기 전체의 상한.
 pub const STOP_BUDGET: Duration = Duration::from_secs(2);
+/// 보낼 틀이 쌓일 수 있는 바이트(본문 버퍼의 용량에 틀마다 [`FRAME_OVERHEAD`] 를 더해 센다). 넘으면 서버를 끝낸다 — 편집 등급 문서(≤ 5 MiB)의 전체
+/// 동기화가 여럿 쌓여도 닿지 않는 크기다.
+pub const MAX_QUEUED_BYTES: usize = 64 * 1024 * 1024;
+/// 틀 하나의 머리 몫.
+const FRAME_OVERHEAD: usize = 64;
+/// 동시에 처리하는 서버 → 클라이언트 요청 수.
+pub const MAX_SERVER_REQUESTS: usize = 64;
+/// stderr 한 줄에서 쥐는 바이트(UI 로그의 줄 상한과 같다).
+pub const MAX_STDERR_LINE: usize = 8 * 1024;
 
 /// 요청 하나의 시한과 취소.
 #[derive(Debug, Clone)]
@@ -103,6 +120,8 @@ pub enum RequestError {
     Closed(String),
     /// 매개변수 · 결과를 형으로 바꾸지 못했다.
     Decode(String),
+    /// 보내지 않았다 — 허가의 루트 밖 작업 공간 등(까닭).
+    Refused(String),
 }
 
 impl fmt::Display for RequestError {
@@ -113,6 +132,7 @@ impl fmt::Display for RequestError {
             Self::Server(e) => write!(f, "the language server answered with an error: {e}"),
             Self::Closed(reason) => write!(f, "the language server is gone: {reason}"),
             Self::Decode(detail) => write!(f, "cannot decode: {detail}"),
+            Self::Refused(why) => write!(f, "refused: {why}"),
         }
     }
 }
@@ -193,8 +213,10 @@ pub struct ServerOptions {
     /// 서버 로그(`crate::log`). 없으면 stderr 는 `tracing` 으로만 간다.
     pub log: Option<Arc<ServerLog>>,
     pub handlers: Handlers,
-    /// 알림 · 상태를 받을 곳.
-    pub events: Option<mpsc::UnboundedSender<ServerEvent>>,
+    /// 알림 · 상태를 받을 곳. 크기는 부른 쪽이 정한다 — 꽉 차면의 규칙은 머리 주석의 「상한」.
+    pub events: Option<mpsc::Sender<ServerEvent>>,
+    /// 강제 종료 뒤 거두기의 기록부(`crate::ledger`). 없으면 기록하지 않는다.
+    pub ledger: Option<Arc<Ledger>>,
 }
 
 /// `initialize` 의 선택.
@@ -228,7 +250,8 @@ pub struct Stopped {
 
 /// 보낼 것.
 enum Outgoing {
-    Frame(Vec<u8>),
+    /// 본문과 그것이 큐에서 차지한다고 센 바이트.
+    Frame(Vec<u8>, usize),
     /// stdin 을 닫는다(`exit` 뒤).
     Close,
 }
@@ -248,6 +271,16 @@ struct Shared {
     server_id: String,
     instance: String,
     outgoing: mpsc::UnboundedSender<Outgoing>,
+    /// 보내려고 쌓아 둔 바이트(쓰기 태스크가 쓰면 줄인다).
+    queued: Arc<AtomicUsize>,
+    /// 처리 중인 서버 → 클라이언트 요청 수.
+    serving: AtomicUsize,
+    /// 버린 `$/progress` 알림 수(이벤트 채널이 꽉 찼다).
+    dropped_progress: AtomicU64,
+    /// 허가의 루트(정규화).
+    root: PathBuf,
+    /// 기록부의 기록(서버 그룹이 끝나면 지운다).
+    record: Mutex<Option<Record>>,
     pending: Mutex<Pending>,
     next_id: AtomicI64,
     capabilities: Mutex<Capabilities>,
@@ -261,7 +294,7 @@ struct Shared {
     reaped: AtomicBool,
     late: AtomicU64,
     log: Option<Arc<ServerLog>>,
-    events: Option<mpsc::UnboundedSender<ServerEvent>>,
+    events: Option<mpsc::Sender<ServerEvent>>,
     handlers: Handlers,
     tree: ProcessTree,
 }
@@ -273,12 +306,27 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Shared {
     fn send(&self, body: Vec<u8>) -> Result<(), RequestError> {
         self.check_open()?;
+        // 길이가 아니라 잡은 메모리(용량)로 센다 — JSON 직렬화 버퍼는 길이의 두 배까지 잡는다.
+        let cost = body.capacity() + FRAME_OVERHEAD;
+        let before = self.queued.fetch_add(cost, Ordering::SeqCst);
+        if before + cost > MAX_QUEUED_BYTES {
+            self.queued.fetch_sub(cost, Ordering::SeqCst);
+            let reason = format!(
+                "the server stopped reading its input ({} MiB waiting to be sent)",
+                before >> 20
+            );
+            self.violate(reason.clone());
+            return Err(RequestError::Closed(reason));
+        }
         if let Some(log) = &self.log {
             log.message(Line::Sent, &body);
         }
         self.outgoing
-            .send(Outgoing::Frame(body))
-            .map_err(|_| RequestError::Closed("the connection is closed".to_owned()))
+            .send(Outgoing::Frame(body, cost))
+            .map_err(|_| {
+                self.queued.fetch_sub(cost, Ordering::SeqCst);
+                RequestError::Closed("the connection is closed".to_owned())
+            })
     }
 
     fn check_open(&self) -> Result<(), RequestError> {
@@ -288,9 +336,22 @@ impl Shared {
         }
     }
 
+    /// 이벤트를 넘긴다. 채널이 꽉 차면 `$/progress` 와 `Exited` 는 버리고, 그 밖이면 서버를 끝낸다(머리 주석의 「상한」).
     fn emit(&self, event: ServerEvent) {
-        if let Some(events) = &self.events {
-            let _ = events.send(event);
+        let Some(events) = &self.events else {
+            return;
+        };
+        let Err(mpsc::error::TrySendError::Full(event)) = events.try_send(event) else {
+            return;
+        };
+        match event {
+            ServerEvent::Notification { method, .. } if method == "$/progress" => {
+                self.dropped_progress.fetch_add(1, Ordering::SeqCst);
+            }
+            ServerEvent::Exited(_) => {}
+            other => self.violate(format!(
+                "server events are not being handled fast enough (queue full at {other:?})"
+            )),
         }
     }
 
@@ -355,6 +416,15 @@ impl Shared {
             }
             Ok(Incoming::Notification { method, params }) => self.notification(method, params),
             Ok(Incoming::Request { id, method, params }) => {
+                if self.serving.fetch_add(1, Ordering::SeqCst) >= MAX_SERVER_REQUESTS {
+                    self.serving.fetch_sub(1, Ordering::SeqCst);
+                    let busy = ResponseError::new(
+                        message::code::REQUEST_FAILED,
+                        "too many server requests in flight",
+                    );
+                    let _ = self.send(message::response(&id, &Err(busy)));
+                    return;
+                }
                 let shared = Arc::clone(self);
                 tokio::spawn(async move {
                     let result = shared.handle(&method, params).await;
@@ -362,6 +432,7 @@ impl Shared {
                         tracing::debug!(target: "pw_lsp", server = %shared.server_id, %method, %e, "answered a server request with an error");
                     }
                     let _ = shared.send(message::response(&id, &result));
+                    shared.serving.fetch_sub(1, Ordering::SeqCst);
                 });
             }
         }
@@ -389,6 +460,15 @@ impl Shared {
         }
         match method {
             "window/workDoneProgress/create" => Ok(Value::Null),
+            // 클라이언트 능력으로 알리므로 처리기가 달리기 전(M4-05)에는 항목마다 `null`(「설정 없음」)로 답한다 — 오류보다 서버가
+            // 덜 시끄럽다(M4-01 리뷰 L2).
+            "workspace/configuration" => {
+                let items = params
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
+                Ok(Value::Array(vec![Value::Null; items]))
+            }
             "window/showMessageRequest" => {
                 let kind = params.get("type").and_then(Value::as_i64).unwrap_or(3);
                 let message = params
@@ -474,24 +554,59 @@ impl fmt::Debug for LanguageServer {
 }
 
 impl LanguageServer {
-    /// 서버를 띄운다. 허가([`LspGrant`])가 있어야 부를 수 있다 — 신뢰와 실행의 연결 범위를 지났다는 증거다. `initialize` 는
-    /// [`Self::initialize`] 로 따로 보낸다. tokio 런타임 안에서 부른다.
+    /// 서버를 띄운다. 허가([`LspGrant`])가 있어야 부를 수 있다 — 신뢰와 실행의 연결 범위를 지났다는 증거다. 띄우기 전에 작업
+    /// 디렉터리가 허가의 루트 안인지와 지금도 신뢰하는지 다시 본다(아니면 `PermissionDenied`, 아무것도 띄우지 않는다 — 리뷰 M1 ·
+    /// M2). `initialize` 는 [`Self::initialize`] 로 따로 보낸다. tokio 런타임의 async 문맥에서 부른다(블로킹 풀 스레드가 아니다 —
+    /// Linux 의 `PR_SET_PDEATHSIG` 는 띄운 스레드가 끝나면 신호를 보낸다).
     pub async fn spawn(
         grant: &LspGrant,
         spec: LaunchSpec,
         options: ServerOptions,
     ) -> std::io::Result<Self> {
+        if !grant.contains(&spec.cwd) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} is outside the project root {}",
+                    spec.cwd.display(),
+                    grant.root().display()
+                ),
+            ));
+        }
+        if !grant.still_trusted() {
+            tracing::info!(target: "pw_lsp", project = grant.project_id(), "language server refused: trust was revoked");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("project `{}` is no longer trusted", grant.project_id()),
+            ));
+        }
         let (mut child, tree) = process::spawn(&spec)?;
         let pid = child.id();
+        let record = match (&options.ledger, pid) {
+            (Some(ledger), Some(pid)) => {
+                let argv: Vec<std::ffi::OsString> =
+                    std::iter::once(spec.program.clone().into_os_string())
+                        .chain(spec.args.iter().cloned())
+                        .collect();
+                ledger.record(pid, &argv)
+            }
+            _ => None,
+        };
         tracing::info!(target: "pw_lsp", project = grant.project_id(), server = %spec.server_id, instance = %options.instance, ?pid, program = %spec.program.display(), "language server started");
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let (outgoing, outgoing_rx) = mpsc::unbounded_channel();
+        let queued = Arc::new(AtomicUsize::new(0));
         let shared = Arc::new(Shared {
             server_id: spec.server_id,
             instance: options.instance,
             outgoing,
+            queued: Arc::clone(&queued),
+            serving: AtomicUsize::new(0),
+            dropped_progress: AtomicU64::new(0),
+            root: grant.root().to_path_buf(),
+            record: Mutex::new(record),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicI64::new(1),
             capabilities: Mutex::new(Capabilities::default()),
@@ -513,7 +628,7 @@ impl LanguageServer {
         }
         let (exit_tx, exit) = watch::channel(None);
         if let Some(stdin) = stdin {
-            tokio::spawn(write_loop(stdin, outgoing_rx));
+            tokio::spawn(write_loop(stdin, outgoing_rx, queued));
         }
         if let Some(stdout) = stdout {
             tokio::spawn(read_loop(Arc::clone(&shared), stdout));
@@ -543,6 +658,13 @@ impl LanguageServer {
         &self,
         options: InitializeOptions,
     ) -> Result<lsp_types::InitializeResult, RequestError> {
+        if !real_path(&options.root).is_some_and(|real| real.starts_with(&self.shared.root)) {
+            return Err(RequestError::Refused(format!(
+                "the workspace root {} is outside the project root {}",
+                options.root.display(),
+                self.shared.root.display()
+            )));
+        }
         let uri = file_uri(&options.root).ok_or_else(|| {
             RequestError::Decode(format!(
                 "{} is not an absolute path",
@@ -697,6 +819,16 @@ impl LanguageServer {
         self.shared.late.load(Ordering::SeqCst)
     }
 
+    /// 이벤트 채널이 꽉 차 버린 `$/progress` 알림 수.
+    pub fn dropped_progress(&self) -> u64 {
+        self.shared.dropped_progress.load(Ordering::SeqCst)
+    }
+
+    /// 보내려고 쌓아 둔 바이트(틀마다 머리 몫 포함).
+    pub fn queued_bytes(&self) -> usize {
+        self.shared.queued.load(Ordering::SeqCst)
+    }
+
     /// 끝났으면 그 결과.
     pub fn exit_status(&self) -> Option<Exit> {
         self.exit.borrow().clone()
@@ -781,17 +913,73 @@ impl Drop for LanguageServer {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cut(chunks: &[&[u8]]) -> (Vec<String>, LineCutter) {
+        let mut lines = Vec::new();
+        let mut cutter = LineCutter::default();
+        for chunk in chunks {
+            cutter.feed(chunk, &mut |l: &str| lines.push(l.to_owned()));
+        }
+        (lines, cutter)
+    }
+
+    #[test]
+    fn stderr_lines_split_on_newlines_and_carriage_returns_across_reads() {
+        let (lines, mut cutter) = cut(&[b"one\ntw", b"o\r\nthr", b"ee\r50%\r"]);
+        assert_eq!(lines, ["one", "two", "three", "50%"]);
+        let mut rest = Vec::new();
+        cutter.feed(b"tail", &mut |l: &str| rest.push(l.to_owned()));
+        cutter.finish(&mut |l: &str| rest.push(l.to_owned()));
+        assert_eq!(rest, ["tail"]);
+    }
+
+    /// 리뷰 H1: 줄바꿈이 오지 않아도 줄 상한만큼만 쥐고, 앞부분 한 줄과 「잘림」 한 줄을 낸다.
+    #[test]
+    fn a_line_without_a_newline_keeps_only_the_cap() {
+        let chunk = vec![b'a'; 64 * 1024];
+        let mut lines = Vec::new();
+        let mut cutter = LineCutter::default();
+        for _ in 0..160 {
+            // 10 MiB
+            cutter.feed(&chunk, &mut |l: &str| lines.push(l.to_owned()));
+            assert!(cutter.held() <= MAX_STDERR_LINE * 2, "{}", cutter.held());
+        }
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].len(), MAX_STDERR_LINE + " …".len());
+        cutter.feed(b"\nnext\n", &mut |l: &str| lines.push(l.to_owned()));
+        assert_eq!(lines.len(), 3);
+        assert_eq!(
+            lines[1],
+            format!(
+                "… (the line above was cut: {} more bytes dropped)",
+                10 * 1024 * 1024 - MAX_STDERR_LINE
+            )
+        );
+        assert_eq!(lines[2], "next");
+    }
+}
+
 fn folder_name(root: &Path) -> String {
     root.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| root.display().to_string())
 }
 
-async fn write_loop(mut stdin: ChildStdin, mut outgoing: mpsc::UnboundedReceiver<Outgoing>) {
+async fn write_loop(
+    mut stdin: ChildStdin,
+    mut outgoing: mpsc::UnboundedReceiver<Outgoing>,
+    queued: Arc<AtomicUsize>,
+) {
     while let Some(next) = outgoing.recv().await {
         match next {
-            Outgoing::Frame(body) => {
-                if let Err(e) = write_frame(&mut stdin, &body).await {
+            Outgoing::Frame(body, cost) => {
+                let written = write_frame(&mut stdin, &body).await;
+                drop(body);
+                queued.fetch_sub(cost, Ordering::SeqCst);
+                if let Err(e) = written {
                     tracing::debug!(target: "pw_lsp", %e, "cannot write to the language server");
                     break;
                 }
@@ -818,23 +1006,90 @@ async fn read_loop(shared: Arc<Shared>, stdout: ChildStdout) {
     }
 }
 
-async fn stderr_loop(shared: Arc<Shared>, stderr: ChildStderr) {
-    let mut lines = BufReader::new(stderr).lines();
+async fn stderr_loop(shared: Arc<Shared>, mut stderr: ChildStderr) {
+    let mut cutter = LineCutter::default();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut emit = |line: &str| {
+        tracing::trace!(target: "pw_lsp", server = %shared.server_id, stderr = %line);
+        if let Some(log) = &shared.log {
+            log.line(Line::Stderr, line);
+        }
+    };
     loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
-                tracing::trace!(target: "pw_lsp", server = %shared.server_id, stderr = %line);
-                if let Some(log) = &shared.log {
-                    log.line(Line::Stderr, &line);
-                }
-            }
-            Ok(None) => break,
+        match stderr.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => cutter.feed(&buf[..n], &mut emit),
             Err(e) => {
-                // 줄이 UTF-8 이 아니면 lines() 가 실패한다 — 그 뒤는 읽지 않고 남긴다.
                 tracing::debug!(target: "pw_lsp", server = %shared.server_id, %e, "stopped reading the language server's stderr");
                 break;
             }
         }
+    }
+    cutter.finish(&mut emit);
+}
+
+/// stderr 바이트를 줄로 가른다(`\n` · `\r` — 진행 표시의 `\r` 도 줄 끝으로 본다). 줄마다 [`MAX_STDERR_LINE`] 바이트까지만 쥔다:
+/// 넘으면 그 앞부분을 곧바로 한 줄로 내고(줄바꿈이 끝내 오지 않아도 무엇이 왔는지 남게) 나머지는 줄 끝까지 세기만 한 뒤 「잘림」
+/// 한 줄을 더 낸다.
+#[derive(Debug, Default)]
+pub(crate) struct LineCutter {
+    line: Vec<u8>,
+    cut: usize,
+}
+
+impl LineCutter {
+    pub(crate) fn feed(&mut self, mut bytes: &[u8], emit: &mut impl FnMut(&str)) {
+        while !bytes.is_empty() {
+            let end = bytes.iter().position(|&b| b == b'\n' || b == b'\r');
+            let (part, rest) = match end {
+                Some(at) => (&bytes[..at], Some(&bytes[at + 1..])),
+                None => (bytes, None),
+            };
+            let room = MAX_STDERR_LINE - self.line.len();
+            if part.len() <= room {
+                self.line.extend_from_slice(part);
+            } else {
+                if self.cut == 0 {
+                    self.line.extend_from_slice(&part[..room]);
+                    let head = String::from_utf8_lossy(&self.line).into_owned();
+                    emit(&format!("{head} …"));
+                    self.line.clear();
+                    self.cut = part.len() - room;
+                } else {
+                    self.cut += part.len();
+                }
+            }
+            match rest {
+                Some(rest) => {
+                    self.end_line(emit);
+                    bytes = rest;
+                }
+                None => break,
+            }
+        }
+    }
+
+    fn end_line(&mut self, emit: &mut impl FnMut(&str)) {
+        if self.cut > 0 {
+            emit(&format!(
+                "… (the line above was cut: {} more bytes dropped)",
+                self.cut
+            ));
+        } else if !self.line.is_empty() {
+            emit(&String::from_utf8_lossy(&self.line));
+        }
+        self.line.clear();
+        self.cut = 0;
+    }
+
+    pub(crate) fn finish(&mut self, emit: &mut impl FnMut(&str)) {
+        self.end_line(emit);
+    }
+
+    /// 쥔 바이트(시험).
+    #[cfg(test)]
+    fn held(&self) -> usize {
+        self.line.capacity()
     }
 }
 
@@ -843,6 +1098,8 @@ async fn wait_loop(shared: Arc<Shared>, mut child: Child, exit: watch::Sender<Op
     // 서버가 끝났다 — 그룹에 남은 자손(빌드 · 데몬)을 끝내고, 그 뒤로는 신호를 보내지 않는다.
     shared.kill_tree();
     shared.reaped.store(true, Ordering::SeqCst);
+    // 그룹을 끝냈다 — 강제 종료 뒤 거두기의 기록을 지운다.
+    drop(lock(&shared.record).take());
     let code = status
         .as_ref()
         .ok()
