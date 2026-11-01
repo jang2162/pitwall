@@ -37,6 +37,8 @@ pw-ext = { path = "../../../crates/pw-ext" }
 pw-fs = { path = "../../../crates/pw-fs" }
 pw-git = { path = "../../../crates/pw-git" }
 pw-i18n = { path = "../../../crates/pw-i18n" }
+# 심볼 인덱스(`index.*`, M4-15).
+pw-index = { path = "../../../crates/pw-index" }
 pw-lang = { path = "../../../crates/pw-lang" }
 pw-mcp = { path = "../../../crates/pw-mcp" }
 pw-lsp-servers = { path = "../../../crates/pw-lsp-servers" }

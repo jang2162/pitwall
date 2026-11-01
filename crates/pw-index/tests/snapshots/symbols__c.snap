@@ -1,0 +1,9 @@
+---
+source: crates/pw-index/tests/symbols.rs
+expression: table(&result)
+---
+Struct point 2:0-5:1 (2:7-2:12)
+TypeAlias point_t 7:0-7:29 (7:21-7:28)
+Enum color 9:0-9:25 (9:5-9:10)
+Function square 16:11-16:24 (16:11-16:17)
+Function main 20:4-20:14 (20:4-20:8)

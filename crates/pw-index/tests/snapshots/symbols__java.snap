@@ -1,0 +1,17 @@
+---
+source: crates/pw-index/tests/symbols.rs
+expression: table(&result)
+---
+Class Shapes 4:0-28:1 (4:13-4:19)
+  Field LIMIT 5:4-5:39 (5:29-5:34)
+  Field name 6:4-6:31 (6:19-6:23)
+  Field label 6:4-6:31 (6:25-6:30)
+  Constructor Shapes 8:4-10:5 (8:11-8:17)
+  Method area 12:4-14:5 (12:15-12:19)
+  Interface Shape 16:4-18:5 (16:14-16:19)
+    Method area 17:8-17:22 (17:15-17:19)
+  Enum Color 20:4-23:5 (20:9-20:14)
+    EnumMember RED 21:8-21:11 (21:8-21:11)
+    EnumMember GREEN 22:8-22:13 (22:8-22:13)
+  Class Point 25:4-25:33 (25:11-25:16)
+  Interface Marker 27:4-27:24 (27:15-27:21)

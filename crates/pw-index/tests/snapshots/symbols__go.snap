@@ -1,0 +1,9 @@
+---
+source: crates/pw-index/tests/symbols.rs
+expression: table(&result)
+---
+Struct Point 4:5-6:1 (4:5-4:10)
+Interface Shape 8:5-10:1 (8:5-8:10)
+TypeAlias ID 12:5-12:11 (12:5-12:7)
+Method Area 14:0-16:1 (14:15-14:19)
+Function NewPoint 18:0-20:1 (18:5-18:13)

@@ -1,0 +1,39 @@
+[package]
+name = "pw-index"
+description = "Pitwall symbol index: tree-sitter tags queries over the watched project files, fuzzy symbol search and per-file symbols"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 심볼 이름의 퍼지 매칭(결정 D31 — 파일 검색 `search.files` 와 같은 크레이트 · 판본).
+frizbee = "0.13.0"
+pw-core = { path = "../pw-core" }
+# 언어 확장의 문법 · 쿼리 폴더(`queries/<id>/tags.scm`).
+pw-ext = { path = "../pw-ext" }
+# 파일 목록 인덱스(M1-12)의 목록과 그 변경 · 프로젝트 루트 판정.
+pw-fs = { path = "../pw-fs" }
+# 파일 → 언어(Linguist 판별).
+pw-lang = { path = "../pw-lang" }
+pw-rpc = { path = "../pw-rpc" }
+# 앱에 링크한 내장 문법(`builtin_grammar` → tree-sitter 언어). 쿼리 파일 크기 상한도 함께 쓴다.
+pw-syntax = { path = "../pw-syntax" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+# 색인을 기다리는 요청(`watch`)과 블로킹 일(`rt`), 진행 알림 간격(`time`).
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+# 색인 작업(`pw_core::TaskSpawner::scoped`)에 넘기는 취소 토큰.
+tokio-util = { workspace = true }
+tracing = "0.1.44"
+# 판본은 pw-syntax 와 같다(같은 tree-sitter 런타임의 언어 · 쿼리를 쓴다).
+tree-sitter = "0.27.1"
+
+[dev-dependencies]
+# 언어마다 픽스처 하나의 심볼 표를 스냅숏으로 고정한다(tests/snapshots/).
+insta = "1.49.0"
+semver = "1.0.28"
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }

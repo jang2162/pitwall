@@ -81,6 +81,10 @@ fn local_host(
     let fs_index = pw_fs::index::FileIndex::new(Arc::clone(&fs));
     let fs_index_methods = fs_index.clone();
     fs_watch.attach_index(fs_index.clone());
+    // 심볼 인덱스(`index.*`, M4-15)는 파일 목록 인덱스의 목록을 따라간다(같은 수명 — 감시하는 루트마다).
+    let symbol_index = pw_index::SymbolIndex::new(Arc::clone(&fs), Arc::clone(&extensions));
+    fs_index.observe(symbol_index.observer());
+    let symbol_index_methods = symbol_index.clone();
     // 「Orca 에서 Pitwall 열기」 안내의 검사(`cli.status`): 「Shell 명령 설치」 의 대상과 이 바이너리.
     let cli_check = Arc::new(pw_open_with::cli::CliCheck::new(
         Arc::clone(&runtime),
@@ -146,6 +150,7 @@ fn local_host(
         .methods(move |router| pw_fs::methods::register(router, fs_methods))
         .methods(move |router| pw_fs::watch::register(router, fs_watch_methods))
         .methods(move |router| pw_fs::index::register(router, fs_index_methods))
+        .methods(move |router| pw_index::register(router, symbol_index_methods))
         .methods(move |router| pw_open_with::cli::register(router, cli_check))
         .methods(move |router| pw_run::methods::register(router, terminal_methods))
         .methods(move |router| pw_syntax::methods::register(router, syntax))
@@ -173,6 +178,10 @@ fn local_host(
     git_write.attach(host.tasks().clone());
     // 인덱스는 버스의 `fs.changed` 로 목록을 갱신하고, 목록을 만드는 동안을 작업으로 보인다.
     tauri::async_runtime::spawn(fs_index.attach(host.bus(), host.tasks().clone()));
+    // 심볼 색인을 처음 만드는 동안을 작업으로 보인다. 런타임 안에서 붙인다 — 목록은 런타임 밖 스레드에서도 오므로 그 런타임을
+    // 붙잡아 둔다.
+    let symbol_tasks = host.tasks().clone();
+    tauri::async_runtime::spawn(async move { symbol_index.attach(symbol_tasks) });
     // 큰 저장소의 전체 status 는 작업으로 보인다.
     git_status.attach(host.tasks().clone());
     if let Some(config) = host.config() {

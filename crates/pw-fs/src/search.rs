@@ -455,11 +455,12 @@ pub(crate) fn in_dot_git(roots: &Roots, real: &Path) -> bool {
     })
 }
 
-/// 벤더 · 생성 두 판정. 검색에서는 건너뛸 것, 파일 목록 인덱스에서는 그 파일의 판정이다.
+/// 벤더 · 생성 두 판정. 검색에서는 건너뛸 것, 파일 목록 인덱스에서는 그 파일의 판정이다(목록을 따라가는 쪽에는
+/// [`crate::index::FileFlags`] 로 나간다).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct Exclude {
-    pub(crate) vendored: bool,
-    pub(crate) generated: bool,
+pub struct Exclude {
+    pub vendored: bool,
+    pub generated: bool,
 }
 
 impl Exclude {

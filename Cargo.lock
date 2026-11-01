@@ -4989,6 +4989,7 @@ dependencies = [
  "pw-fs",
  "pw-git",
  "pw-i18n",
+ "pw-index",
  "pw-lang",
  "pw-lsp-servers",
  "pw-mcp",
@@ -5549,6 +5550,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-index"
+version = "0.0.0"
+dependencies = [
+ "frizbee",
+ "insta",
+ "pw-core",
+ "pw-ext",
+ "pw-fs",
+ "pw-lang",
+ "pw-rpc",
+ "pw-syntax",
+ "schemars 1.2.3",
+ "semver",
+ "serde",
+ "serde_json",
+ "specta",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tree-sitter",
+]
+
+[[package]]
 name = "pw-lang"
 version = "0.0.0"
 dependencies = [
@@ -5672,6 +5697,7 @@ dependencies = [
  "pw-fs",
  "pw-git",
  "pw-i18n",
+ "pw-index",
  "pw-lang",
  "pw-lsp-servers",
  "pw-open-with",

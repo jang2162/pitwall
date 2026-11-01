@@ -351,6 +351,7 @@ task-start-failed = 작업을 시작하지 못했다
 task-cancel-failed = 작업을 취소하지 못했다
 # Host 가 보내는 작업 제목(`task-title-*` id).
 task-title-indexing-files = 파일 목록 만드는 중
+task-title-indexing-symbols = 심볼 색인 만드는 중
 task-title-git-continue = git 작업 계속하는 중
 task-title-git-abort = git 작업 중단하는 중
 task-title-git-skip = git 작업의 단계 건너뛰는 중

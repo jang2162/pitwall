@@ -1,0 +1,11 @@
+---
+source: crates/pw-index/tests/symbols.rs
+expression: table(&result)
+---
+Class Counter 2:7-11:1 (2:13-2:20)
+  Method increment 7:2-10:3 (7:2-7:11)
+Function makeCounter 13:7-15:1 (13:16-13:27)
+Function double 17:13-17:34 (17:13-17:19)
+Function onClick 20:2-22:3 (20:2-20:9)
+Function onHover 23:2-23:24 (23:2-23:9)
+Function ids 26:0-28:1 (26:10-26:13)

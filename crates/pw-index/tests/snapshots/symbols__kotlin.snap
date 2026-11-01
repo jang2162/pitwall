@@ -1,0 +1,20 @@
+---
+source: crates/pw-index/tests/symbols.rs
+expression: table(&result)
+---
+Property LIMIT 4:0-4:19 (4:10-4:15)
+Interface Shape 6:0-8:1 (6:10-6:15)
+  Method area 7:4-7:22 (7:8-7:12)
+Enum Color 10:0-13:1 (10:11-10:16)
+  EnumMember RED 11:4-11:7 (11:4-11:7)
+  EnumMember GREEN 12:4-12:9 (12:4-12:9)
+Class Point 15:0-15:40 (15:11-15:16)
+Class Circle 17:0-25:1 (17:6-17:12)
+  Property name 18:4-18:23 (18:8-18:12)
+  Method area 20:4-20:56 (20:17-20:21)
+  Class Factory 22:4-24:5 (22:21-22:28)
+    Method unit 23:8-23:40 (23:12-23:16)
+Class Registry 27:0-29:1 (27:7-27:15)
+  Method register 28:4-28:33 (28:8-28:16)
+TypeAlias Shapes 31:0-31:30 (31:10-31:16)
+Function makeCircle 33:0-36:1 (33:4-33:14)

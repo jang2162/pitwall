@@ -23,7 +23,7 @@
 | 코드 인텔리전스 | **LSP 클라이언트** (`async-lsp` / `lsp-types`) | 서버 자동 설치 관리자 포함 |
 | 파일 검색 | `ignore` + `frizbee`(퍼지, MIT) | .gitignore 존중. `nucleo` 는 MPL-2.0 이라 쓰지 않는다(아래 「라이선스 검사」 행) |
 | 텍스트 검색 | `grep-searcher`/`grep-regex` (ripgrep 라이브러리) | |
-| 심볼 인덱스 | tree-sitter tags → SQLite(FTS5) | LSP 미기동/미지원 언어 폴백 |
+| 심볼 인덱스 | tree-sitter tags(`tags.scm`) → 메모리 색인 + `frizbee` 퍼지 | LSP 미기동/미지원 언어 폴백. 디스크 캐시는 첫 판에 없다(15-m4-plan.md M4-15 — 측정 뒤 필요하면 M4-19 가 제안) |
 | 파일 감시 | `notify` (+ debounce) | |
 | 파일 위치 | **XDG Base Directory** (`etcetera` 크레이트, macOS도 XDG) | 03 §5-0 |
 | 언어 판별 | **GitHub Linguist** 데이터(`languages.yml` · `heuristics.yml` 등) → 빌드 시 내장 테이블 | 07 §4.3 |

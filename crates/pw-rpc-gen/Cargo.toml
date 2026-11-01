@@ -19,6 +19,8 @@ pw-ext = { path = "../pw-ext" }
 pw-fs = { path = "../pw-fs" }
 pw-git = { path = "../pw-git" }
 pw-i18n = { path = "../pw-i18n" }
+# 심볼 인덱스(15-m4-plan.md M4-15): `index.*`.
+pw-index = { path = "../pw-index" }
 pw-lang = { path = "../pw-lang" }
 pw-lsp-servers = { path = "../pw-lsp-servers" }
 pw-open-with = { path = "../pw-open-with" }

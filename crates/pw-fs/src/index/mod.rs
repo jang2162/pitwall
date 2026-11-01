@@ -25,6 +25,8 @@
 //!   기다리고 「바쁨」 오류. Readonly · Mobile 기기도 부르는 Read 메서드라 이 상한이 방어선이다(100만 파일 목록의 매칭 하나는 수십
 //!   MB 를 잠깐 쓴다). 감시하는 루트를 만드는 걷기는 루트마다 하나라 이 상한에 넣지 않는다.
 //! - 점수와 일치 위치는 [`matching`].
+//! - **목록을 따라가는 쪽**([`FileListObserver`], 심볼 인덱스 `pw-index` — M4-15): 다 만든 목록 · 적용한 변경 · 버림을 같은 순서로
+//!   받는다. 같은 수명(감시하는 동안)과 같은 제외 규칙(ignore · 벤더 · 생성 판정)을 따로 다시 세우지 않으려는 것이다.
 
 mod matching;
 mod walk;
@@ -45,9 +47,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::Fs;
 use crate::scope::Roots;
+pub use crate::search::Exclude as FileFlags;
 use crate::watch::{FsChanged, FsWatchParams, TOPIC_CHANGED, watch_roots};
 pub(crate) use matching::Snapshot;
-use walk::{Flags, Walk};
+use walk::{Flags, Op, Walk};
 
 /// 결과 수의 기본값.
 pub const DEFAULT_LIMIT: u32 = 100;
@@ -140,6 +143,32 @@ rpc_method! {
     }
 }
 
+/// 파일 목록을 따라가는 쪽(심볼 인덱스 `pw-index`, M4-15). [`FileIndex::observe`] 로 붙인다.
+///
+/// 콜백은 잠금 안에서(`opened` · `dropped` 는 감시 표의, 나머지는 그 루트 목록의) 목록에 적용된 순서대로 불린다 — 받은 것을
+/// 채널에 넣거나 표에 자리 하나를 두는 만큼만 하고 곧바로 돌아와야 하며(그동안 파일 검색 · 변경 적용 · 감시 걸기가 기다린다)
+/// [`FileIndex`] 를 다시 부르지 않는다. 상대 경로는 루트 기준 `/` 구분이다.
+pub trait FileListObserver: Send + Sync + 'static {
+    /// 감시가 루트를 처음 걸어 목록을 만들기 시작했다 — 곧 [`Self::rebuilt`] 가 온다. 그사이 온 요청이 기다릴 자리를 두라는 것이다.
+    fn opened(&self, project_id: &str, root: &Path) {
+        let _ = (project_id, root);
+    }
+    /// 루트의 목록을 (다시) 다 만들었다(처음 · `rescan` · 버스 큐 넘침 · 취소 뒤). `files` 는 경로순 전부다.
+    fn rebuilt(&self, project_id: &str, root: &Path, files: Vec<(Arc<str>, FileFlags)>);
+    /// `fs.changed` 를 목록에 적용했다. `removed` 의 상대 경로와 그 아래를 지운 뒤(빈 문자열이면 전부) `inserted` 를 넣었다 — 내용이
+    /// 바뀐 파일은 둘 다에 있다.
+    fn changed(
+        &self,
+        project_id: &str,
+        root: &Path,
+        removed: Vec<String>,
+        inserted: Vec<(Arc<str>, FileFlags)>,
+    );
+    /// 그 루트의 마지막 감시가 풀려 목록을 버렸다. 목록 작업이 취소돼 목록만 버린 것은 알리지 않는다 — 감시가 살아 있으므로 다시
+    /// 만들면 [`Self::rebuilt`] 가 다시 온다.
+    fn dropped(&self, project_id: &str, root: &Path);
+}
+
 /// 인덱스 하나의 단계.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -165,6 +194,8 @@ struct RootIndex {
     phase: watch::Sender<Phase>,
     /// 버렸다(감시를 놓음). 다시 만들지 않는다.
     closed: AtomicBool,
+    /// 목록을 따라가는 쪽(만들 때의 것).
+    observer: Option<Arc<dyn FileListObserver>>,
 }
 
 #[derive(Default)]
@@ -247,6 +278,14 @@ impl RootIndex {
                         state.snapshot = None;
                         state.build = None;
                         state.dropped = false;
+                        if let Some(observer) = &self.observer {
+                            let all: Vec<(Arc<str>, Flags)> = state
+                                .files
+                                .iter()
+                                .map(|(k, v)| (Arc::clone(k), *v))
+                                .collect();
+                            observer.rebuilt(&self.project_id, &self.root, all);
+                        }
                         self.phase.send_replace(Phase::Ready);
                         return;
                     }
@@ -291,6 +330,17 @@ impl RootIndex {
         if state.dropped {
             return;
         }
+        if let Some(observer) = &self.observer {
+            let mut removed = Vec::new();
+            let mut inserted = Vec::new();
+            for op in &ops {
+                match op {
+                    Op::Remove(rel) => removed.push(rel.clone()),
+                    Op::Insert(rel, flags) => inserted.push((Arc::clone(rel), *flags)),
+                }
+            }
+            observer.changed(&self.project_id, &self.root, removed, inserted);
+        }
         walk::apply(&mut state.files, ops);
         state.snapshot = None;
     }
@@ -318,6 +368,7 @@ type Key = (String, PathBuf);
 struct Inner {
     fs: Arc<Fs>,
     tasks: OnceLock<TaskSpawner>,
+    observer: OnceLock<Arc<dyn FileListObserver>>,
     roots: Mutex<HashMap<Key, Arc<RootIndex>>>,
     /// 걷기 · 매칭의 차례([`MAX_SEARCHES`]).
     searches: Semaphore,
@@ -384,6 +435,7 @@ impl FileIndex {
             inner: Arc::new(Inner {
                 fs,
                 tasks: OnceLock::new(),
+                observer: OnceLock::new(),
                 roots: Mutex::default(),
                 searches: Semaphore::new(MAX_SEARCHES),
                 adhoc: Mutex::default(),
@@ -436,6 +488,12 @@ impl FileIndex {
         }
     }
 
+    /// 목록을 따라가는 쪽을 붙인다. 감시가 루트를 걸기 전에(Host 를 만들 때) 붙인다 — 이미 있는 루트의 목록은 보내지 않는다. 두 번째부터는
+    /// 무시한다.
+    pub fn observe(&self, observer: Arc<dyn FileListObserver>) {
+        let _ = self.inner.observer.set(observer);
+    }
+
     /// 루트의 목록을 만들기 시작한다. 이미 있으면 아무것도 하지 않는다. 감시가 그 루트를 처음 걸 때 부른다.
     pub(crate) fn open(&self, project_id: &str, root: &Path, worktree: Option<&str>) {
         let key = (project_id.to_owned(), root.to_path_buf());
@@ -460,8 +518,12 @@ impl FileIndex {
             }),
             phase: watch::Sender::new(Phase::Building),
             closed: AtomicBool::new(false),
+            observer: self.inner.observer.get().cloned(),
         });
         self.inner.roots().insert(key, Arc::clone(&entry));
+        if let Some(observer) = &entry.observer {
+            observer.opened(project_id, root);
+        }
         self.spawn_build(entry, stop);
     }
 
@@ -473,9 +535,14 @@ impl FileIndex {
             .remove(&(project_id.to_owned(), root.to_path_buf()));
         if let Some(entry) = removed {
             entry.closed.store(true, Ordering::Relaxed);
-            if let Some(stop) = entry.state().build.take() {
+            let mut state = entry.state();
+            if let Some(stop) = state.build.take() {
                 stop.store(true, Ordering::Relaxed);
             }
+            if let Some(observer) = &entry.observer {
+                observer.dropped(&entry.project_id, &entry.root);
+            }
+            drop(state);
             entry.phase.send_replace(Phase::Closed);
         }
     }

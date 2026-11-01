@@ -1051,3 +1051,108 @@ async fn walks_and_matches_wait_for_a_turn_then_report_busy() {
     let found = waiting.await.unwrap().unwrap();
     assert_eq!(relatives(&found), ["src/main.rs"]);
 }
+
+/// 목록을 따라가는 쪽(M4-15 의 심볼 인덱스)이 받은 것.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Observed {
+    Opened,
+    Rebuilt(Vec<String>),
+    Changed(Vec<String>, Vec<String>),
+    Dropped,
+}
+
+#[derive(Default)]
+struct Recorder(Mutex<Vec<Observed>>);
+
+impl Recorder {
+    fn take(&self) -> Vec<Observed> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+impl FileListObserver for Recorder {
+    fn opened(&self, _: &str, _: &Path) {
+        self.0.lock().unwrap().push(Observed::Opened);
+    }
+
+    fn rebuilt(&self, _: &str, _: &Path, files: Vec<(Arc<str>, FileFlags)>) {
+        let rels = files.iter().map(|(r, _)| r.to_string()).collect();
+        self.0.lock().unwrap().push(Observed::Rebuilt(rels));
+    }
+
+    fn changed(
+        &self,
+        _: &str,
+        _: &Path,
+        removed: Vec<String>,
+        inserted: Vec<(Arc<str>, FileFlags)>,
+    ) {
+        let inserted = inserted.iter().map(|(r, _)| r.to_string()).collect();
+        self.0
+            .lock()
+            .unwrap()
+            .push(Observed::Changed(removed, inserted));
+    }
+
+    fn dropped(&self, _: &str, _: &Path) {
+        self.0.lock().unwrap().push(Observed::Dropped);
+    }
+}
+
+/// 관찰자는 감시 걸기 · 다 만든 목록 · 적용한 변경(지움 · 넣음) · 버림을 목록에 적용된 순서대로 받는다. 벤더 판정도 함께 온다.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_observer_follows_the_list() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/a.rs"), "");
+    write(&root.join("vendor/v.js"), "");
+    let index = FileIndex::new(Arc::clone(&f.fs));
+    let recorder = Arc::new(Recorder::default());
+    index.observe(Arc::clone(&recorder) as Arc<dyn FileListObserver>);
+    let tasks = TaskSpawner::new(f.bus.clone(), Scope::Host, CancellationToken::new());
+    tokio::spawn(index.attach(&f.bus, tasks));
+    let watch = f.watch(&index);
+    let lease = watch
+        .acquire(&FsWatchParams {
+            project_id: id.clone(),
+            worktree: None,
+        })
+        .unwrap();
+    assert!(index.ready(&id, &root).await);
+    assert_eq!(
+        recorder.take(),
+        [
+            Observed::Opened,
+            Observed::Rebuilt(vec!["src/a.rs".into(), "vendor/v.js".into()])
+        ]
+    );
+    let entry = index.inner.get(&id, &root).unwrap();
+    assert!(entry.state().files.get("vendor/v.js").unwrap().vendored);
+
+    write(&root.join("src/b.rs"), "");
+    tokio::task::spawn_blocking({
+        let entry = Arc::clone(&entry);
+        let path = root.join("src/b.rs");
+        move || entry.changed(vec![path])
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        recorder.take(),
+        [Observed::Changed(
+            vec!["src/b.rs".into()],
+            vec!["src/b.rs".into()]
+        )]
+    );
+
+    drop(lease);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let seen = recorder.take();
+        if seen.contains(&Observed::Dropped) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "never dropped: {seen:?}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}

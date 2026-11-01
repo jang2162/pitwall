@@ -550,6 +550,21 @@ export type UnaryMethods = {
 	 */
 	"i18n.setLanguage": { params: SetLanguageParams; result: null };
 	/**
+	 * 파일 하나의 심볼(아웃라인 · 파일 구조 팝업의 대체 — 언어 서버가 없거나 준비 전 · 미신뢰일 때, M4-10). `text` 를 주면 그
+	 * 내용을, 아니면 색인에 있는 것을(없으면 디스크에서 읽어) 쓴다.
+	 */
+	"index.file.symbols": { params: IndexFileSymbolsParams; result: IndexFileSymbols };
+	/**
+	 * 프로젝트의 루트마다 심볼 색인 상태. 기다리지 않는다.
+	 */
+	"index.status": { params: IndexStatusParams; result: IndexStatus };
+	/**
+	 * 프로젝트의 심볼(함수 · 타입 · 메서드 …)을 이름으로 퍼지 매칭한다(심볼로 이동 · 클래스로 이동 · Search Everywhere 의 심볼 탭 —
+	 * M4-16). 색인은 창이 `fs.watch` 로 보는 루트마다 메모리에 있고 파일 변경을 따라간다(`pw_index` 머리 주석). 처음 만드는 중이면 다
+	 * 만들 때까지 기다리고, 그 작업이 취소되면 `CANCELLED` 다. 미신뢰 프로젝트에서도 돈다(코드를 돌리지 않는다 — 결정 M4-D8).
+	 */
+	"index.symbols.search": { params: IndexSymbolSearchParams; result: IndexSymbolSearch };
+	/**
 	 * 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.
 	 */
 	"keymap.get": { params: KeymapGetParams; result: KeymapFile };
@@ -960,6 +975,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"host.ping": {"name":"host.ping","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"PingParams","output":"Pong","doc":" 연결 확인. 받은 `nonce` 와 응답한 Host 의 id 를 돌려준다.\n","mcp":false,"fileScope":true},
 	"i18n.get": {"name":"i18n.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"I18nState","doc":" 지금 쓸 UI 언어와 그 Fluent 리소스, 등록된 언어 목록.\n","mcp":false,"fileScope":true},
 	"i18n.setLanguage": {"name":"i18n.setLanguage","kind":"unary","tier":"write","roles":["owner"],"params":"SetLanguageParams","output":"()","doc":" UI 언어 설정(전역 `settings.toml` 의 `ui.language`)을 바꾼다. 그 키만 고쳐 쓰고 설정을 다시 읽는다 — 열린 창 ·\n 메뉴는 `config.changed` 로 바뀐다. 모르는 언어면 invalid params, 파일을 고칠 수 없으면(TOML 이 깨졌다 등) 쓰지\n 않고 오류다.\n","mcp":false,"fileScope":true},
+	"index.file.symbols": {"name":"index.file.symbols","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"IndexFileSymbolsParams","output":"IndexFileSymbols","doc":" 파일 하나의 심볼(아웃라인 · 파일 구조 팝업의 대체 — 언어 서버가 없거나 준비 전 · 미신뢰일 때, M4-10). `text` 를 주면 그\n 내용을, 아니면 색인에 있는 것을(없으면 디스크에서 읽어) 쓴다.\n","mcp":false,"fileScope":false},
+	"index.status": {"name":"index.status","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"IndexStatusParams","output":"IndexStatus","doc":" 프로젝트의 루트마다 심볼 색인 상태. 기다리지 않는다.\n","mcp":false,"fileScope":false},
+	"index.symbols.search": {"name":"index.symbols.search","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"IndexSymbolSearchParams","output":"IndexSymbolSearch","doc":" 프로젝트의 심볼(함수 · 타입 · 메서드 …)을 이름으로 퍼지 매칭한다(심볼로 이동 · 클래스로 이동 · Search Everywhere 의 심볼 탭 —\n M4-16). 색인은 창이 `fs.watch` 로 보는 루트마다 메모리에 있고 파일 변경을 따라간다(`pw_index` 머리 주석). 처음 만드는 중이면 다\n 만들 때까지 기다리고, 그 작업이 취소되면 `CANCELLED` 다. 미신뢰 프로젝트에서도 돈다(코드를 돌리지 않는다 — 결정 M4-D8).\n","mcp":false,"fileScope":false},
 	"keymap.get": {"name":"keymap.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"KeymapGetParams","output":"KeymapFile","doc":" 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.\n","mcp":false,"fileScope":true},
 	"keymap.list": {"name":"keymap.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"KeymapList","doc":" 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.\n","mcp":false,"fileScope":true},
 	"lang.detect": {"name":"lang.detect","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"LangDetectParams","output":"LangDetectResult","doc":" 파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·\n 그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.\n","mcp":false,"fileScope":true},
@@ -4171,6 +4189,22 @@ export type I18nState = {
  */
 export type Id = number | string | null;
 
+export type IndexFileSymbols = {
+	/**  언어 확장의 언어 id. 정의 쿼리가 있는 언어가 아니면 `null`(심볼도 없다). */
+	language: string | null,
+	/**  문서 순서(정의 시작 위치, 같으면 바깥 것 먼저). */
+	symbols: IndexSymbol[],
+};
+
+export type IndexFileSymbolsParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  절대 경로. 프로젝트 루트(활성 워크트리 포함) 안이어야 한다. */
+	path: string,
+	/**  저장하지 않은 문서 내용. 있으면 디스크 대신 이것을 파싱한다(편집 중 아웃라인 — M4-10). 1 MiB 를 넘으면 심볼이 없다. */
+	text?: string | null,
+};
+
 /**  인덱스. 그리드 편집의 키 판정(M3-10 — PK 또는 NOT NULL 열만으로 된 유일 인덱스)이 `primary` · `unique` · `partial` 을 본다. */
 export type IndexInfo = {
 	name: string,
@@ -4179,6 +4213,121 @@ export type IndexInfo = {
 	unique: boolean,
 	/**  조건이 붙은 인덱스(PG 부분 인덱스). 키로 쓰지 않는다. */
 	partial: boolean,
+};
+
+/**  문서 안의 위치. 줄은 0 부터, `character` 는 줄 안의 UTF-16 코드 단위(LSP 의 기본 위치 인코딩과 같다). */
+export type IndexPosition = {
+	line: number,
+	character: number,
+};
+
+/**  `[start, end)` 범위(LSP `Range` 와 같은 꼴). */
+export type IndexRange = {
+	start: IndexPosition,
+	end: IndexPosition,
+};
+
+/**  루트 하나의 색인 상태. */
+export type IndexRootState = 
+/**  창이 감시하지 않아 색인이 없다. */
+"none" | 
+/**  처음 만드는 중(작업 `task-title-indexing-symbols` 가 돈다). 요청은 다 만들 때까지 기다린다. */
+"building" | 
+/**  다 만들었다(바뀐 파일을 다시 읽는 중일 수 있다 — 그동안은 옛 심볼로 답한다). */
+"ready" | 
+/**  작업이 취소돼 버렸다. 다음 요청이 다시 만든다. */
+"cancelled";
+
+export type IndexRootStatus = {
+	root: string,
+	state: IndexRootState,
+	/**  심볼을 뽑은 파일 수(정의 쿼리가 있는 언어의 파일). */
+	files: number,
+	symbols: number,
+	/**  아직 다시 읽지 않은 파일 수. */
+	pending: number,
+};
+
+export type IndexStatus = {
+	roots: IndexRootStatus[],
+};
+
+export type IndexStatusParams = {
+	projectId: string,
+	worktree?: string | null,
+};
+
+/**  파일의 심볼 하나. */
+export type IndexSymbol = {
+	name: string,
+	kind: IndexSymbolKind,
+	/**  바깥 심볼의 `symbols` 안 색인(앞쪽에 있다). 없으면 `null`. 이것으로 트리를 만든다(LSP `DocumentSymbol` 의 `children`). */
+	parent: number | null,
+	range: IndexRange,
+	selectionRange: IndexRange,
+};
+
+/**  심볼 종류. */
+export type IndexSymbolKind = "module" | "class" | "struct" | "interface" | "trait" | "enum" | "enumMember" | "typeAlias" | "function" | "method" | "constructor" | "field" | "property" | "constant" | "variable" | "macro" | 
+/**
+ *  구현 블록(Rust 의 `impl`). 이름은 대상 타입이다. 그 안 메서드의 컨테이너가 되려고 잡는다 — 심볼 검색은 `kinds` 로 따로 고르지
+ *  않으면 내지 않는다(같은 이름의 타입과 겹친다).
+ */
+"impl";
+
+/**  맞는 심볼 하나. */
+export type IndexSymbolMatch = {
+	name: string,
+	kind: IndexSymbolKind,
+	/**  바깥 심볼의 이름(클래스 안 메서드의 클래스 등). 없으면 `null`. 화면은 흐린 글자로 보인다. */
+	container: string | null,
+	/**  파일의 절대 경로(루트 안 심링크를 지났으면 링크 쪽 경로 — `search.files` 와 같다). */
+	path: string,
+	/**  그 루트(정규화한 실제 경로). */
+	root: string,
+	/**  루트 기준 상대 경로(`/` 구분). */
+	relative: string,
+	/**  언어 확장의 언어 id(`rust` · `typescript` …). */
+	language: string,
+	/**  정의 전체. */
+	range: IndexRange,
+	/**  이름. 고르면 이 자리로 간다. */
+	selectionRange: IndexRange,
+	/**  `name` 안의 일치 글자 위치(UTF-16 코드 단위, 오름차순, 중복 없음). */
+	positions: number[],
+	/**  높을수록 위다. 같은 질의 안에서만 비교한다. */
+	score: number,
+};
+
+export type IndexSymbolSearch = {
+	/**  점수순(같으면 짧은 이름 · 경로 · 위치 순). `offset` 부터 `limit` 개. */
+	symbols: IndexSymbolMatch[],
+	/**  맞은 심볼 수(`symbols` 는 그 `offset` 부터의 한 쪽). */
+	matched: number,
+	/**  찾아본 심볼 수(종류로 거른 뒤). */
+	indexed: number,
+	/**  색인이 없어 찾지 않은 루트(창이 감시하지 않는 루트 — 색인은 창이 `fs.watch` 로 보는 동안만 있다). */
+	unindexed: string[],
+};
+
+export type IndexSymbolSearchParams = {
+	projectId: string,
+	/**
+	 *  창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 있으면 그 워크트리 안의 프로젝트 루트를, 없으면 등록 루트를 찾는다
+	 *  (`fs.watch` · `search.files` 와 같다).
+	 */
+	worktree?: string | null,
+	/**
+	 *  찾을 것. 공백으로 가른 낱말이 모두 심볼 이름에 맞아야 한다(낱말마다 퍼지, 대소문자는 대문자가 있을 때만 가린다). 비어 있으면
+	 *  경로 · 위치 순 앞에서부터. 글자 수 상한 [`MAX_QUERY_CHARS`].
+	 */
+	query: string,
+	/**  이 종류만. 없으면 `impl` 을 뺀 모든 종류. */
+	kinds?: IndexSymbolKind[] | null,
+	/**  결과 수. 기본 [`DEFAULT_LIMIT`], 1 ~ [`MAX_LIMIT`]. */
+	limit?: number | null,
+	/**  앞에서 건너뛸 수(쪽 넘기기). 기본 0, 상한 [`MAX_OFFSET`]. */
+	offset?: number | null,
 };
 
 /**  [`insert_text`] 의 실패: 어느 셀(머리면 행이 없다)과 까닭. */

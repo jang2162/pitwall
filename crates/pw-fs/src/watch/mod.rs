@@ -307,7 +307,7 @@ impl Drop for Lease {
 
 /// 감시할 루트: 활성 워크트리가 있으면 그 안의 프로젝트 루트, 없으면 프로젝트의 등록 루트. 파일 목록 인덱스도 이 루트마다 둔다.
 /// 지금 다른 실제 경로로 풀리는 루트는 뺀다([`Roots::confirmed`]).
-pub(crate) fn watch_roots(fs: &Fs, params: &FsWatchParams) -> Result<Vec<PathBuf>, RpcError> {
+pub fn watch_roots(fs: &Fs, params: &FsWatchParams) -> Result<Vec<PathBuf>, RpcError> {
     let projects = fs.projects.get().ok_or_else(|| {
         RpcError::internal("the file system service is not attached to a project registry")
     })?;

@@ -21,6 +21,7 @@
     "/apps/desktop/src/git/gutter/fixtures/",
     "/crates/pw-lang/linguist/",
     "/crates/pw-syntax/tests/fixtures/",
-    "/crates/pw-tools/snapshot/"
+    "/crates/pw-tools/snapshot/",
+    "/crates/pw-index/tests/fixtures/"
   ]
 }
