@@ -236,6 +236,34 @@ function highlightBlocks(
   }
 }
 
+/**
+ * 팝업 본문을 `parent` 에 그린다 — Markdown 은 안전한 렌더(raw HTML 끔)와 링크 가로채기 · 코드 블록 강조, 글은 문자열 그대로, `dom` 은
+ * 기능이 그린다. 팝업 밖에서 같은 규칙으로 서버의 글을 그리는 자리(자동완성 목록의 문서 패널 — M4-11)도 이것을 쓴다.
+ */
+export function renderPopupBody(parent: HTMLElement, content: PopupBody, view: EditorView) {
+  const services = servicesOf(view);
+  if (content.kind === "markdown") {
+    parent.classList.add("pw-lsp-popup-markdown");
+    // raw HTML 을 끈 렌더라 서버가 보낸 태그는 글자로 보인다(markdown.ts).
+    parent.innerHTML = renderMarkdown(content.markdown);
+    const path = view.state.facet(editorContext)?.path ?? "";
+    parent.addEventListener("click", (e) => {
+      const link = (e.target as Element | null)?.closest?.("a");
+      if (!link) return;
+      e.preventDefault();
+      const target = classifyLink(link.getAttribute("href") ?? "", path, undefined);
+      if (target.kind === "external") services.openExternal?.(target.url);
+    });
+    highlightBlocks(
+      parent,
+      services,
+      content.language ?? view.state.facet(editorContext)?.lsp?.language,
+    );
+  } else if (content.kind === "text") {
+    parent.textContent = content.text;
+  } else content.render(parent, view);
+}
+
 function popupDom(view: EditorView, spec: PopupSpec, id: string): HTMLElement {
   const services = servicesOf(view);
   const slot = slotOf(spec.kind);
@@ -253,27 +281,7 @@ function popupDom(view: EditorView, spec: PopupSpec, id: string): HTMLElement {
   });
   const body = document.createElement("div");
   body.className = "pw-lsp-popup-body";
-  const { body: content } = spec;
-  if (content.kind === "markdown") {
-    body.classList.add("pw-lsp-popup-markdown");
-    // raw HTML 을 끈 렌더라 서버가 보낸 태그는 글자로 보인다(markdown.ts).
-    body.innerHTML = renderMarkdown(content.markdown);
-    const path = view.state.facet(editorContext)?.path ?? "";
-    body.addEventListener("click", (e) => {
-      const link = (e.target as Element | null)?.closest?.("a");
-      if (!link) return;
-      e.preventDefault();
-      const target = classifyLink(link.getAttribute("href") ?? "", path, undefined);
-      if (target.kind === "external") services.openExternal?.(target.url);
-    });
-    highlightBlocks(
-      body,
-      services,
-      content.language ?? view.state.facet(editorContext)?.lsp?.language,
-    );
-  } else if (content.kind === "text") {
-    body.textContent = content.text;
-  } else content.render(body, view);
+  renderPopupBody(body, spec.body, view);
   dom.append(body);
   const actions = view.state
     .facet(popupActions)
