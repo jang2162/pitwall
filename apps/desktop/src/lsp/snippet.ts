@@ -5,6 +5,8 @@
 //
 // CodeMirror 템플릿에서는 `{` `}` 가 필드 표지라 글의 중괄호는 `\{` `\}` 로 적는다. 자리 표시 기본값 안의 중괄호는 CodeMirror 가 받지
 // 않아(`${1:…}` 의 기본값은 `}` 까지다) 뺀다. 자리 표시 안에 든 탭 정지는 그 기본 글만 남긴다(CodeMirror 의 필드는 겹치지 않는다).
+// CodeMirror 는 템플릿을 줄마다 나눠 필드를 찾으므로 여러 줄 자리 표시는 첫 줄만 필드로 두고 나머지 줄은 그 뒤에 글로 넣는다 — 그대로
+// 두면 필드가 아니라 템플릿 원문(`${1:a`)이 들어간다(리뷰 L-5).
 
 /** 읽은 조각. */
 type Piece = { text: string } | { field: number; value: string };
@@ -133,7 +135,11 @@ function fail(r: Reader, start: number): undefined {
 }
 
 const escapeText = (s: string) => s.replace(/[{}]/g, (c) => `\\${c}`);
-const field = (n: number, value: string) => (value ? `\${${n}:${value}}` : `\${${n}}`);
+const field = (n: number, value: string): string => {
+  const line = value.indexOf("\n");
+  if (line >= 0) return field(n, value.slice(0, line)) + escapeText(value.slice(line));
+  return value ? `\${${n}:${value}}` : `\${${n}}`;
+};
 
 /** LSP 스니펫 → CodeMirror 스니펫 템플릿. */
 export function snippetTemplate(lsp: string): string {
