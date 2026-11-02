@@ -594,3 +594,52 @@ async fn signature_help_marks_parameters_in_the_label_and_passes_the_context() {
         .unwrap();
     assert_eq!(none["help"], Value::Null);
 }
+
+/// 완성 명령은 완성 기능의 라우팅을 탄다 — 사람이 그 서버의 코드 액션만 꺼도(`features.disable = ["code_action"]`) 완성 항목의 명령은
+/// 서버에 간다(재리뷰 N-1). 코드 액션의 명령 길(`lsp.command.execute`)은 꺼진 기능이라 5001 이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_completion_command_runs_when_code_actions_are_turned_off() {
+    let env = Env::new(EnvOptions::default());
+    let known = json!({ "title": "import", "command": COMMAND, "arguments": ["a"] });
+    let record = env.fake(
+        "rust-analyzer",
+        scenario(Reply::result(
+            json!([{ "label": "area", "command": known }]),
+        ))
+        .reply("workspace/executeCommand", Reply::result(json!("done"))),
+    );
+    let settings = env.paths.config.join("settings.toml");
+    let mut text = std::fs::read_to_string(&settings).unwrap();
+    text.push_str("[lsp.rust-analyzer.features]\ndisable = [\"code_action\"]\n");
+    std::fs::write(&settings, text).unwrap();
+    env.global.reload().unwrap();
+    let mut win = env.window();
+    let doc = ready(&env, &mut win).await;
+    let list = win
+        .call("lsp.completion", complete_at(&doc, 0, AFTER_DOT))
+        .await
+        .unwrap();
+    assert_eq!(list["items"][0]["label"], "area");
+    let as_action = win
+        .call(
+            "lsp.command.execute",
+            json!({ "docId": doc, "flowId": "f1", "server": "rust-analyzer", "command": known }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        as_action.code,
+        pw_lsp::manager::code::NO_SERVER,
+        "{as_action:?}"
+    );
+    assert!(methods_of(&record, "workspace/executeCommand").is_empty());
+    let done = win
+        .call(
+            "lsp.completion.execute",
+            json!({ "docId": doc, "version": 0, "flowId": "f2", "command": known }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(done["result"], "done");
+    assert_eq!(methods_of(&record, "workspace/executeCommand").len(), 1);
+}

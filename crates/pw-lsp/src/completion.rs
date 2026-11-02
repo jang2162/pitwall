@@ -841,7 +841,8 @@ async fn execute(
         return Err(denied("the language server does not offer this command"));
     }
     // 보내는 길은 하나다(M4-12): 그 서버에만 보내고, 도는 동안 그 서버가 거는 편집은 이 창의 흐름으로 넘어간다.
-    let done = crate::edit::execute_command(
+    // 완성 기능의 라우팅으로 — 코드 액션을 끈 서버의 완성 명령도 돈다(재리뷰 N-1).
+    let done = crate::edit::execute_command_for(
         m,
         ctx,
         crate::edit::LspCommandExecuteParams {
@@ -850,6 +851,7 @@ async fn execute(
             flow_id: p.flow_id,
             command: p.command,
         },
+        LspFeature::Completion,
     )
     .await?;
     Ok(LspCompletionExecuted {
