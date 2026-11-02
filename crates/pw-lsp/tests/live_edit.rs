@@ -118,7 +118,11 @@ mod live {
         let at = text.find(anchor).unwrap() + anchor.len();
         let offset = text[..at].encode_utf16().count();
 
-        // 색인이 끝날 때까지(파일 둘 · 편집 넷이 될 때까지) 다시 묻는다. 색인이 바뀌는 동안은 `ContentModified`(5002 의 -32801)다.
+        // 서버가 준비될 때까지 다시 묻는다: prepare 가 범위를 줄 때까지 기다리고, 그 회차의 rename 이 파일 둘 · 편집 넷일 때만
+        // 빠져나간다. 색인 중의 rust-analyzer 는 prepare 에 `null`(→ `invalid`) · `-32602 No references found at position`(→
+        // `invalid`)으로 답하거나 시한(5003)까지 답하지 않는데, 바로 뒤의 rename 은 그사이 색인이 끝나 다 된 편집을 줄 수 있다 —
+        // rename 만 보고 빠져나가면 그 회차의 준비 안 된 prepare 를 단정하게 된다. `ContentModified` 는 Host 가 한 번 다시 묻는다
+        // (manager `request`).
         let mut edit = LspWorkspaceEdit::default();
         let mut prepared = Value::Null;
         for _ in 0..150 {
@@ -130,8 +134,13 @@ mod live {
                 .await
             {
                 Ok(p) => p,
-                Err(_) => Value::Null,
+                // 실패하면 끝에 단정이 그 오류를 보이게 남긴다.
+                Err(e) => json!({ "error": format!("{e:?}") }),
             };
+            if prepared["target"]["kind"] != "range" {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                continue;
+            }
             let answer = win
                 .call(
                     "lsp.rename",
