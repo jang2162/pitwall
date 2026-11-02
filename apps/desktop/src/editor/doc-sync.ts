@@ -241,9 +241,30 @@ export class DocSync {
    * Host 가 버전 `version` 까지 받을 때까지 기다린다. 그사이 다시 열거나 · 끄거나 · 물러서거나 · 닫으면 곧바로 풀린다 — 부른 쪽은
    * 풀린 뒤 문서 id · 버전을 다시 본다.
    */
-  synced(version: number): Promise<void> {
-    if (this.phase.kind !== "open" || version <= this.acked) return Promise.resolve();
-    return new Promise((wake) => this.waiters.push({ version, wake }));
+  synced(version: number, signal?: AbortSignal): Promise<void> {
+    if (this.phase.kind !== "open" || version <= this.acked || signal?.aborted)
+      return Promise.resolve();
+    return new Promise((resolve) => {
+      // 부른 쪽이 그만두면(같은 종류 새 요청) 기다림을 빼고 곧바로 푼다 — Host 가 편집에 답하지 않는 동안 쌓이지 않게(재리뷰 N-3).
+      const waiter = {
+        version,
+        wake: () => {
+          signal?.removeEventListener("abort", abort);
+          resolve();
+        },
+      };
+      const abort = () => {
+        this.waiters = this.waiters.filter((w) => w !== waiter);
+        resolve();
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      this.waiters.push(waiter);
+    });
+  }
+
+  /** 지금 텍스트(바뀔 때마다 새 객체). 부른 쪽이 잰 위치가 아직 맞는지 동일성으로 본다(재리뷰 N-2). */
+  get currentText(): Text | undefined {
+    return this.text;
   }
 
   /** 세대가 바뀌었다 — 닿음을 처음으로 하고 기다리던 쪽을 모두 깨운다. */

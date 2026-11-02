@@ -186,6 +186,45 @@ describe("request helper (③)", () => {
     expect(asked).toEqual([2]);
   });
 
+  it("drops an answer whose position was measured before an edit made while the document was opening (N-2)", async () => {
+    let open!: () => void;
+    const openGate = new Promise<void>((r) => (open = r));
+    const { server, documents, sessions } = setup({ "/p/a.rs": "fn a() { x }" }, { openGate });
+    const { document } = sessions.acquire("/p/a.rs", "Rust");
+    // 기능 행은 위치를 지금 텍스트로 잰다 — offset 10 은 `x`.
+    const offset = 10;
+    const call = vi.fn(async (at: { docId: string; version: number }) => ({
+      staleVersion: server.stale(at),
+      word: server.docs.get(at.docId)!.text[offset],
+    }));
+    const pending = document.request("hover", call);
+    await settle();
+    documents.edit("/p/a.rs", 0, 0, "// ");
+    open();
+    expect(await pending).toBeUndefined();
+    expect(call).not.toHaveBeenCalled();
+    // 그 뒤에 낸 요청은 새 텍스트로 잰 것이라 묻는다.
+    expect(await document.request("hover", call)).toMatchObject({ staleVersion: false });
+  });
+
+  it("lets go of a request waiting for an unanswered edit when a newer one of the same kind replaces it (N-3)", async () => {
+    let answer!: () => void;
+    const changeGate = new Promise<void>((r) => (answer = r));
+    const { documents, sessions } = setup({ "/p/a.rs": "fn a() { x }" }, { changeGate });
+    const { document } = sessions.acquire("/p/a.rs", "Rust");
+    await settle();
+    documents.edit("/p/a.rs", 10, 10, ".");
+    let first: unknown = "pending";
+    void document
+      .request("completion", async () => ({ staleVersion: false }))
+      .then((a) => (first = a));
+    await settle();
+    void document.request("completion", async () => ({ staleVersion: false }));
+    await settle();
+    expect(first).toBeUndefined();
+    answer();
+  });
+
   it("cancels the older request of the same kind and keeps other kinds", async () => {
     const { sessions } = setup();
     const { document } = sessions.acquire("/p/a.rs", "Rust");

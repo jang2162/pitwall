@@ -333,6 +333,9 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
       this.inflight.set(kind, controller);
       const { signal } = controller;
       const { sync } = this;
+      // 부른 쪽은 위치를 지금 텍스트로 쟀다 — 여는 중 · 물러섬을 기다리는 사이 고치면 그 위치는 새 텍스트에 맞지 않으므로
+      // 버린다(재리뷰 N-2). 텍스트는 바뀔 때마다 새 객체라 동일성으로 본다.
+      const text = sync.currentText;
       try {
         if (sync.holding) return undefined;
         const settled = await sync.settled();
@@ -340,9 +343,10 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
         const version = sync.version;
         // 이 버전의 편집이 Host 에 닿은 뒤에 묻는다 — 같은 틱에 나간 편집보다 요청이 먼저 도착하면 지난 버전으로 답해 버려진다
         // (리뷰 H-1: `.` 직후의 완성).
-        await sync.synced(version);
+        await sync.synced(version, signal);
         if (
           signal.aborted ||
+          sync.currentText !== text ||
           !sync.isCurrent(settled.docId) ||
           sync.version !== version ||
           sync.holding

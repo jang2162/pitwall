@@ -35,6 +35,10 @@ export interface FakeLspOptions {
    * 경합(데스크톱 IPC 는 프레임 순서를 지키지 않는다 — 리뷰 H-1)을 만든다.
    */
   changeDelay?: number | ((version: number) => number);
+  /** 주면 `open` 이 이것이 풀릴 때까지 답하지 않는다(여는 중에 고치는 시험 — 재리뷰 N-2). */
+  openGate?: Promise<unknown>;
+  /** 주면 `change` 가 이것이 풀릴 때까지 답하지 않는다(Host 가 편집에 답하지 않음 — 재리뷰 N-3). */
+  changeGate?: Promise<unknown>;
 }
 
 export function fakeLspServer(options: FakeLspOptions = {}) {
@@ -49,6 +53,7 @@ export function fakeLspServer(options: FakeLspOptions = {}) {
       calls.push({ method: "open", params });
       if (options.refuse !== undefined)
         throw new RpcCallError({ code: options.refuse, message: "refused" });
+      await options.openGate;
       const off = options.off?.(params.language) ?? null;
       if (off) return { docId: "", off, instances: [] };
       const docId = `d${++seq}`;
@@ -67,6 +72,7 @@ export function fakeLspServer(options: FakeLspOptions = {}) {
           ? options.changeDelay(params.version)
           : options.changeDelay;
       if (delay) await new Promise((r) => setTimeout(r, delay));
+      await options.changeGate;
       const doc = docs.get(params.docId);
       if (!doc) throw notFound(params.docId);
       if (params.version <= doc.version)
