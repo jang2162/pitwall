@@ -15,7 +15,7 @@ import type { EventMessage, LspWorkspaceEdit } from "@pitwall/rpc-client";
 import type { FsChangedEvent } from "../editor/documents";
 import type { NotificationHandle, NotificationInput } from "../notifications/notifications";
 import type { LspEditStrings } from "./edit-strings";
-import type { LspDocument, LspServices } from "./lsp-sessions";
+import type { LspAt, LspDocument, LspServices } from "./lsp-sessions";
 import {
   EditApplier,
   type EditApplierDeps,
@@ -46,6 +46,10 @@ export interface EditWindowDeps extends Omit<EditApplierDeps, "synced"> {
   lightbulb(): boolean;
 }
 
+/** 명령을 보내는 RPC 하나(흐름 id 를 실어 부른다). 기본은 `lsp.command.execute` — 완성 항목의 명령은 같은 Host 길을 부르는 감싸개
+ *  `lsp.completion.execute`(그 답으로 내준 · 서버가 알린 명령만 — M4-11)로 보낸다. */
+export type CommandSender = (at: LspAt, flowId: string, signal: AbortSignal) => Promise<unknown>;
+
 export interface EditWindow {
   readonly applier: EditApplier;
   strings(): LspEditStrings;
@@ -57,9 +61,15 @@ export interface EditWindow {
   report(outcome: EditOutcome, failed?: (message: string) => string): void;
   /**
    * 서버 `server`(그 명령을 준 서버 — 목록 · resolve 의 답)의 명령을 돌린다. 그동안 그 서버가 건 편집을 적용기에 넘긴다. `flow` 를
-   * 주면 그 기준으로(코드 액션 목록 때 연 것), 없으면 명령을 보내기 직전에 연다.
+   * 주면 그 기준으로(코드 액션 목록 때 연 것), 없으면 명령을 보내기 직전에 연다. `send` 를 주면 그 RPC 로 보낸다(완성 항목 — M4-11).
    */
-  execute(doc: LspDocument, command: unknown, server: string, flow?: EditFlow): Promise<void>;
+  execute(
+    doc: LspDocument,
+    command: unknown,
+    server: string,
+    flow?: EditFlow,
+    send?: CommandSender,
+  ): Promise<void>;
   /** 마지막 일괄 편집을 되돌리고 알린다. */
   undoLast(): Promise<void>;
   dispose(): void;
@@ -199,17 +209,19 @@ export function createEditWindow(deps: EditWindowDeps): EditWindow {
       };
     },
     report,
-    async execute(doc, command, server, flow) {
+    async execute(doc, command, server, flow, send) {
       const flowId = `flow-${Date.now().toString(36)}-${++seq}`;
       // 기준은 명령을 보내기 전에 연다 — 서버가 편집을 계산하는 동안의 바뀜도 「요청 뒤」 다.
       flows.set(flowId, { flow: flow ?? applier.begin() });
       try {
         await doc.request(`command-${flowId}`, (at, signal) =>
-          deps.services.call(
-            "lsp.command.execute",
-            { docId: at.docId, flowId, server, command: command as never },
-            { signal },
-          ),
+          send
+            ? send(at, flowId, signal)
+            : deps.services.call(
+                "lsp.command.execute",
+                { docId: at.docId, flowId, server, command: command as never },
+                { signal },
+              ),
         );
       } finally {
         flows.delete(flowId);

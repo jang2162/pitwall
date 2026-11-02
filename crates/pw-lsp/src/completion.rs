@@ -10,9 +10,10 @@
 //!   것은 **Host 가 같은 문서 · 같은 버전의 완성 답으로 내준 항목**(웹뷰가 보낸 번호로 Host 가 쥔 것을 찾는다 — 웹뷰가 보낸 JSON 이
 //!   아니다)뿐이고, 서버가 빈 답을 주면 그 원래 항목을 쓴다(메인 판정 2026-11-02, 리뷰 H-2).
 //! - `lsp.completion.execute`: 받아들인 항목의 `command` 를 `workspace/executeCommand` 로(결정 M4-D15). 보내는 것은 **이 Host 가
-//!   같은 문서 · 같은 버전의 완성 답으로 내준 항목의 명령 또는 그 항목의 resolve 답의 명령**이고 **그 서버가 `executeCommandProvider.commands` 로 알린 것**뿐이다 — 아니면
-//!   거절하고 보내지 않는다(메인 판정 2026-11-02). 명령 끝에 서버가 거는 `workspace/applyEdit` 은 M4-12 의 처리기 · 받는 창이 맡는다 —
-//!   그 전에는 클라이언트 능력에 `workspace.applyEdit` 이 없어 서버가 보내지 않는다.
+//!   같은 문서 · 같은 버전의 완성 답으로 내준 항목의 명령 또는 그 항목의 resolve 답의 명령**이고 **그 답을 준 서버가
+//!   `executeCommandProvider.commands` 로 알린 것**뿐이다 — 아니면 거절하고 보내지 않는다(메인 판정 2026-11-02). 가드를 지나면 M4-12 의
+//!   명령 길([`crate::edit::execute_command`] — `lsp.command.execute` 와 같다)로 보낸다: 도는 동안 그 서버가 거는 `workspace/applyEdit`
+//!   은 이 창의 흐름(`flowId`)으로 넘어가 웹뷰의 편집 적용기를 지난다.
 //! - `lsp.signatureHelp`: `textDocument/signatureHelp`. 매개변수 이름(문자열 꼴)은 시그니처 글 안의 UTF-16 범위로 바꾼다.
 //!
 //! 서버가 준 글(문서 · 시그니처)은 [`MARKUP_LIMIT`] 에서 자른다 — 웹뷰는 문자열(또는 HTML 을 끈 Markdown)로만 그린다.
@@ -188,6 +189,8 @@ pub struct LspCompletionExecuteParams {
     pub doc_id: String,
     /// 그 항목을 받은 완성 답의 문서 버전.
     pub version: u32,
+    /// 이 명령의 흐름 id(웹뷰가 정한다 — `lsp.command.execute` 와 같다). 그 처리 중에 서버가 건 편집의 이벤트에 실린다.
+    pub flow_id: String,
     /// 항목의 `command`(`{ title, command, arguments? }`).
     #[specta(type = JsonValue)]
     pub command: Value,
@@ -293,11 +296,13 @@ rpc_method! {
     }
 
     /// 받아들인 완성 항목의 명령을 서버에 보낸다(`workspace/executeCommand` — 결정 M4-D15). 같은 문서 · 버전의 완성 답으로 내준
-    /// 명령이고 그 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다.
+    /// 항목(과 그 resolve 답)의 명령이고 그 답을 준 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다. 보내는 길은
+    /// `lsp.command.execute`(M4-12 의 `pw_lsp::edit::execute_command`) 하나다 — 도는 동안 그 서버가 거는 `workspace/applyEdit` 은
+    /// 이 창에 이벤트 `lsp.applyEdit`(흐름 id 실림)로 넘어와 편집 적용기를 지난다. 등급도 그것과 같다(write).
     pub LspCompletionExecute: "lsp.completion.execute" {
         params: LspCompletionExecuteParams,
         result: LspCompletionExecuted,
-        tier: Read,
+        tier: Write,
         roles: [Owner],
     }
 
@@ -633,15 +638,15 @@ struct OfferedItem {
     resolved: Option<Value>,
 }
 
-/// 문서마다 마지막 완성 답의 버전과 그 답으로 내준 항목들(`id` 순서).
+/// 문서마다 마지막 완성 답: 그 버전 · 답을 준 서버 · 내준 항목들(`id` 순서).
 #[derive(Default)]
 struct Offered {
-    docs: HashMap<String, (u32, Vec<OfferedItem>)>,
+    docs: HashMap<String, (u32, String, Vec<OfferedItem>)>,
     order: VecDeque<String>,
 }
 
 impl Offered {
-    fn remember(&mut self, doc_id: &str, version: u32, items: Vec<OfferedItem>) {
+    fn remember(&mut self, doc_id: &str, version: u32, server: &str, items: Vec<OfferedItem>) {
         if !self.docs.contains_key(doc_id) {
             self.order.push_back(doc_id.to_owned());
             while self.order.len() > REMEMBERED_DOCS {
@@ -650,23 +655,28 @@ impl Offered {
                 }
             }
         }
-        self.docs.insert(doc_id.to_owned(), (version, items));
+        self.docs
+            .insert(doc_id.to_owned(), (version, server.to_owned(), items));
     }
 
     fn item_mut(&mut self, doc_id: &str, version: u32, id: u32) -> Option<&mut OfferedItem> {
         self.docs
             .get_mut(doc_id)
-            .filter(|(v, _)| *v == version)
-            .and_then(|(_, items)| items.get_mut(id as usize))
+            .filter(|(v, _, _)| *v == version)
+            .and_then(|(_, _, items)| items.get_mut(id as usize))
     }
 
-    fn offered(&self, doc_id: &str, version: u32, command: &Value) -> bool {
-        self.docs.get(doc_id).is_some_and(|(v, items)| {
-            *v == version
-                && items.iter().any(|i| {
-                    i.command.as_ref() == Some(command) || i.resolved.as_ref() == Some(command)
-                })
-        })
+    /// 그 답으로 내준 명령이면 그 답을 준 서버.
+    fn offered(&self, doc_id: &str, version: u32, command: &Value) -> Option<String> {
+        self.docs
+            .get(doc_id)
+            .filter(|(v, _, items)| {
+                *v == version
+                    && items.iter().any(|i| {
+                        i.command.as_ref() == Some(command) || i.resolved.as_ref() == Some(command)
+                    })
+            })
+            .map(|(_, server, _)| server.clone())
     }
 }
 
@@ -727,7 +737,7 @@ async fn complete(
         offered
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remember(&p.doc_id, answer.doc.version, kept);
+            .remember(&p.doc_id, answer.doc.version, &answer.server, kept);
     }
     Ok(LspCompletionList {
         server: answer.server,
@@ -802,20 +812,21 @@ async fn execute(
     let Some(name) = p.command.get("command").and_then(Value::as_str) else {
         return Err(RpcError::invalid_params("command must have a command name"));
     };
-    if !offered
+    let Some(server) = offered
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .offered(&p.doc_id, p.version, &p.command)
-    {
+    else {
         return Err(denied(
             "this command was not offered by a completion of this document version",
         ));
-    }
-    // 그 서버가 알린 명령인가 — 요청 길과 같은 라우팅으로 고른 서버의 `executeCommandProvider`(없는 문서 · 다른 창은 not found).
-    let routes = m.feature_routes(
+    };
+    // 그 답을 준 서버가 알린 명령인가 — 그 서버의 `executeCommandProvider`(없는 문서 · 다른 창은 not found).
+    let routes = m.feature_route_keys(
         ctx.session(),
         &p.doc_id,
         &[(LspFeature::Completion, "workspace/executeCommand")],
+        Some(&server),
     )?;
     let Some((_, _, options)) = routes.first() else {
         return Err(denied(
@@ -829,26 +840,21 @@ async fn execute(
     if !known {
         return Err(denied("the language server does not offer this command"));
     }
-    let mut body = json!({ "command": name });
-    if let Some(arguments) = p.command.get("arguments") {
-        body["arguments"] = arguments.clone();
-    }
-    let answer = m
-        .request(
-            ctx,
-            FeatureRequest {
-                doc_id: &p.doc_id,
-                feature: LspFeature::Completion,
-                method: "workspace/executeCommand",
-                expected_version: None,
-                timeout: None,
-            },
-            move |_| Ok(body.clone()),
-        )
-        .await?;
+    // 보내는 길은 하나다(M4-12): 그 서버에만 보내고, 도는 동안 그 서버가 거는 편집은 이 창의 흐름으로 넘어간다.
+    let done = crate::edit::execute_command(
+        m,
+        ctx,
+        crate::edit::LspCommandExecuteParams {
+            doc_id: p.doc_id,
+            server,
+            flow_id: p.flow_id,
+            command: p.command,
+        },
+    )
+    .await?;
     Ok(LspCompletionExecuted {
-        server: answer.server,
-        result: answer.result,
+        server: done.server,
+        result: done.result,
     })
 }
 
@@ -1079,23 +1085,26 @@ mod tests {
             resolved: None,
         };
         let mut o = Offered::default();
-        o.remember("d1", 3, vec![item(Some(&c)), item(None)]);
-        assert!(o.offered("d1", 3, &c));
-        assert!(!o.offered("d1", 4, &c));
-        assert!(!o.offered("d2", 3, &c));
+        o.remember("d1", 3, "ra", vec![item(Some(&c)), item(None)]);
+        assert_eq!(o.offered("d1", 3, &c).as_deref(), Some("ra"));
+        assert!(o.offered("d1", 4, &c).is_none());
+        assert!(o.offered("d2", 3, &c).is_none());
         assert!(o.item_mut("d1", 3, 1).is_some());
         assert!(o.item_mut("d1", 3, 2).is_none(), "no such item");
         assert!(o.item_mut("d1", 4, 0).is_none(), "another version");
         // resolve 답의 명령은 그 항목의 것으로 — 바꾸면 앞의 것은 잊는다.
         o.item_mut("d1", 3, 1).unwrap().resolved = Some(r.clone());
-        assert!(o.offered("d1", 3, &r));
+        assert_eq!(o.offered("d1", 3, &r).as_deref(), Some("ra"));
         o.item_mut("d1", 3, 1).unwrap().resolved = None;
-        assert!(!o.offered("d1", 3, &r));
-        o.remember("d1", 5, vec![]);
-        assert!(!o.offered("d1", 3, &c));
+        assert!(o.offered("d1", 3, &r).is_none());
+        o.remember("d1", 5, "ra", vec![]);
+        assert!(o.offered("d1", 3, &c).is_none());
         for i in 0..=REMEMBERED_DOCS {
-            o.remember(&format!("n{i}"), 1, vec![item(Some(&c))]);
+            o.remember(&format!("n{i}"), 1, "ra", vec![item(Some(&c))]);
         }
-        assert!(!o.offered("d1", 5, &c), "the oldest document is forgotten");
+        assert!(
+            o.offered("d1", 5, &c).is_none(),
+            "the oldest document is forgotten"
+        );
     }
 }

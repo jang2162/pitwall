@@ -18,9 +18,10 @@
 //   넣는다(스니펫은 주 커서만).
 // - 문서: 고른 항목만 `lsp.completion.resolve`(그 답 안의 번호로 — Host 가 쥔 원래 항목을 서버에 보낸다)로 늦게 받아 옆 패널에(팝업 바탕의 `renderPopupBody` — HTML 끈 Markdown). 빠르게
 //   옮기면 지난 resolve 는 요청 도우미가 취소한다(같은 `kind`).
-// - 명령: 받아들인 항목의 `command` 는 `lsp.completion.execute`(Host 가 그 답으로 내준 · 서버가 알린 명령만 보낸다 — 결정 M4-D15).
-//   서버가 그 명령 끝에 거는 `workspace/applyEdit` 은 M4-12 가 받는다 — 그 전에는 효과가 없다. 클라이언트 쪽 명령
-//   (`editor.action.triggerParameterHints` · `triggerSuggest`)은 여기서 한다.
+// - 명령: 받아들인 항목의 `command` 는 M4-12 의 명령 흐름(`editWindowOf(...).execute` — 그동안 서버가 거는 `workspace/applyEdit` 을
+//   편집 적용기에 넘긴다)으로, RPC 는 `lsp.completion.execute`(Host 가 그 답으로 내준 · 서버가 알린 명령만 `lsp.command.execute` 와
+//   같은 길로 보낸다 — 결정 M4-D15). 편집 창이 없는 창(파일 창 등)에서는 서버 명령을 돌리지 않는다(그 편집을 받을 곳이 없다).
+//   클라이언트 쪽 명령(`editor.action.triggerParameterHints` · `triggerSuggest`)은 여기서 한다.
 // - 한글 조합 중에는 목록을 열지 않고(소스가 묻지 않는다) `↩` 는 조합에 쓴다(항목을 고르지 않는다 — 10-ui 「한글 조합 중의 Enter」).
 //   `Esc` 는 목록을 먼저 닫고 `preventDefault` 한다(팝업 바탕 · 멀티 커서의 Esc 보다 앞 — M4-14).
 // - 미신뢰 프로젝트 · 서버 없음이면 능력 칸이 비어 소스가 조용히 아무것도 열지 않는다(결정 M4-D8).
@@ -57,6 +58,7 @@ import type {
   LspOffsetEdit,
 } from "@pitwall/rpc-client";
 
+import { editWindowOf } from "./edit-window";
 import type { LspEditorFeature } from "./features";
 import type { LspAt, LspDocument } from "./lsp-sessions";
 import { renderPopupBody } from "./popup";
@@ -119,8 +121,9 @@ const views = new WeakMap<EditorView, ViewState>();
 interface ListContext {
   readonly doc: LspDocument;
   readonly view: EditorView;
-  /** 답을 받은 문서(`docId` · `version`). */
+  /** 답을 받은 문서(`docId` · `version`)와 답을 준 서버. */
   readonly at: LspAt;
+  readonly server: string;
   /** 요청한 커서 · 목록의 시작(항목들의 편집 시작점 중 가장 앞) · 커서 앞 낱말의 시작 · 그때 문서 길이(편집 범위를 지금 문서로
    *  옮길 때). */
   readonly requestPos: number;
@@ -356,6 +359,7 @@ function lspSource(doc: LspDocument) {
       doc,
       view,
       at,
+      server: list.server,
       requestPos: pos,
       from,
       wordFrom,
@@ -589,8 +593,20 @@ function runCommand(view: EditorView, list: ListContext, command: unknown, versi
     queueMicrotask(() => triggerCompletion(view));
     return;
   }
-  list.doc.services
-    .call("lsp.completion.execute", { docId: list.at.docId, version, command: command as never })
+  // 서버 명령은 M4-12 의 흐름으로 — 그동안 그 서버가 거는 편집이 이 창의 적용기(미리 확인 · 미리보기 · 되돌리기)를 지난다.
+  const win = editWindowOf(list.doc.services);
+  if (!win) {
+    console.info("[lsp] no edit window here to take the edits of a completion command", name);
+    return;
+  }
+  win
+    .execute(list.doc, command, list.server, undefined, (at, flowId, signal) =>
+      list.doc.services.call(
+        "lsp.completion.execute",
+        { docId: at.docId, version, flowId, command: command as never },
+        { signal },
+      ),
+    )
     .catch((e: unknown) => console.warn("[lsp] completion command failed", name, e));
 }
 

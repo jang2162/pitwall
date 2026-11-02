@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use pw_lsp::fake::{Reply, Scenario};
 use pw_lsp::methods::LspInstanceState;
-use pw_rpc::code;
+use pw_rpc::{Outbound, code};
 use serde_json::{Value, json};
 
 use common::env::{Env, EnvOptions};
@@ -19,6 +19,43 @@ use common::received;
 
 fn doc_id(opened: &Value) -> String {
     opened["docId"].as_str().unwrap().to_owned()
+}
+
+/// 가짜 서버가 보낸 서버 → 클라이언트 요청 `id` 에 Pitwall 이 준 답(10 s 기다림).
+async fn answer_to(record: &Path, id: &str) -> Value {
+    let answered = |m: &Value| m["id"] == id && m.get("method").is_none();
+    let found = common::eventually(Duration::from_secs(10), || {
+        received(record).iter().any(answered)
+    })
+    .await;
+    assert!(found, "no answer to {id}: {:?}", received(record));
+    received(record).into_iter().find(answered).unwrap()["result"].clone()
+}
+
+/// 창에 온 이벤트 `topic`(`limit` 동안).
+async fn next_event(win: &mut common::env::Conn, topic: &str, limit: Duration) -> Option<Value> {
+    let is_event = |m: &Outbound| {
+        matches!(m, Outbound::Notification(n)
+            if n.method == pw_rpc::protocol::EVENTS_EVENT && n.params["topic"] == topic)
+    };
+    if let Some(at) = win.pending.iter().position(is_event)
+        && let Outbound::Notification(n) = win.pending.remove(at)
+    {
+        return Some(n.params["payload"].clone());
+    }
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        let msg = tokio::time::timeout_at(deadline, win.rx.recv())
+            .await
+            .ok()??;
+        if is_event(&msg) {
+            let Outbound::Notification(n) = msg else {
+                unreachable!()
+            };
+            return Some(n.params["payload"].clone());
+        }
+        win.pending.push(msg);
+    }
 }
 
 fn methods_of(record: &Path, method: &str) -> Vec<Value> {
@@ -249,7 +286,7 @@ async fn only_offered_commands_the_server_announced_reach_execute_command() {
     win.call("lsp.completion", complete_at(&doc, 0, AFTER_DOT))
         .await
         .unwrap();
-    let execute = |version: u32, command: &Value| json!({ "docId": doc, "version": version, "command": command });
+    let execute = |version: u32, command: &Value| json!({ "docId": doc, "version": version, "flowId": "f1", "command": command });
     // 서버가 알리지 않은 명령은 답으로 내주었어도 보내지 않는다.
     let refused = win
         .call("lsp.completion.execute", execute(0, &unknown))
@@ -350,7 +387,7 @@ async fn resolve_sends_only_items_the_host_offered_and_a_forged_command_never_ru
     let denied = win
         .call(
             "lsp.completion.execute",
-            json!({ "docId": doc, "version": 0, "command": forged }),
+            json!({ "docId": doc, "version": 0, "flowId": "f1", "command": forged }),
         )
         .await
         .unwrap_err();
@@ -378,7 +415,7 @@ async fn a_command_from_the_resolve_answer_of_an_offered_item_runs() {
     win.call("lsp.completion", complete_at(&doc, 0, AFTER_DOT))
         .await
         .unwrap();
-    let execute = json!({ "docId": doc, "version": 0, "command": first });
+    let execute = json!({ "docId": doc, "version": 0, "flowId": "f1", "command": first });
     let before = win
         .call("lsp.completion.execute", execute.clone())
         .await
@@ -396,6 +433,76 @@ async fn a_command_from_the_resolve_answer_of_an_offered_item_runs() {
     assert_eq!(
         methods_of(&record, "workspace/executeCommand")[0]["params"],
         json!({ "command": COMMAND, "arguments": ["a", 1] })
+    );
+}
+
+/// 완성 항목의 명령은 M4-12 의 명령 길(`lsp.command.execute` 와 같은 `pw_lsp::edit::execute_command`)로 간다: 도는 동안 그 서버가
+/// 건 `workspace/applyEdit` 은 이 창에 이벤트 `lsp.applyEdit`(흐름 id 실림)로 넘어오고 창의 답이 서버에 간다. 명령이 끝난 뒤 온 것은
+/// `applied: false` 다(결정 M4-D15 — 메인 판정 2026-11-02: 나중에 병합하는 행이 두 길을 합친다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_completion_command_hands_the_servers_edit_to_the_window_like_any_command() {
+    let env = Env::new(EnvOptions::default());
+    let main = env.root.join("src/main.rs");
+    let edit_request = || pw_lsp::fake::Action::Request {
+        method: "workspace/applyEdit".into(),
+        params: json!({ "label": "Import", "edit": { "changes": {
+            pw_lsp::uri::file_uri(&main).unwrap(): [{ "range": range((0, 0), (0, 0)), "newText": "use a::Shape;\n" }]
+        }}}),
+    };
+    let command = json!({ "title": "import", "command": COMMAND, "arguments": ["a"] });
+    let record = env.fake(
+        "rust-analyzer",
+        scenario(Reply::result(
+            json!([{ "label": "Shape", "command": command }]),
+        ))
+        .on("workspace/executeCommand", vec![edit_request()])
+        .reply(
+            "workspace/executeCommand",
+            Reply {
+                result: Some(json!("done")),
+                delay_ms: 500,
+                then: vec![edit_request()],
+                ..Reply::default()
+            },
+        ),
+    );
+    let mut win = env.window();
+    win.call(
+        "events.subscribe",
+        json!({ "projectId": env.id, "topics": ["lsp.applyEdit"] }),
+    )
+    .await
+    .unwrap();
+    let doc = ready(&env, &mut win).await;
+    win.call("lsp.completion", complete_at(&doc, 0, AFTER_DOT))
+        .await
+        .unwrap();
+    let call = win.send(
+        "lsp.completion.execute",
+        json!({ "docId": doc, "version": 0, "flowId": "c1", "command": command }),
+    );
+    let event = next_event(&mut win, "lsp.applyEdit", Duration::from_secs(10))
+        .await
+        .expect("the window gets the server's edit");
+    assert_eq!(event["flowId"], "c1");
+    assert_eq!(event["server"], "rust-analyzer");
+    assert_eq!(event["edit"]["changes"][0]["path"], json!(main));
+    win.call(
+        "lsp.applyEdit.answer",
+        json!({ "flowId": "c1", "requestId": event["requestId"], "applied": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(answer_to(&record, "fake-1").await["applied"], true);
+    assert_eq!(
+        win.response(call).await.unwrap(),
+        json!({ "server": "rust-analyzer", "result": "done" })
+    );
+    // 명령이 끝난 뒤 온 편집은 창에 넘기지 않는다.
+    assert_eq!(answer_to(&record, "fake-2").await["applied"], false);
+    assert_eq!(
+        methods_of(&record, "workspace/executeCommand")[0]["params"],
+        json!({ "command": COMMAND, "arguments": ["a"] })
     );
 }
 
@@ -420,7 +527,7 @@ async fn an_untrusted_project_completes_nothing_and_runs_no_command() {
     let refused = win
         .call(
             "lsp.completion.execute",
-            json!({ "docId": doc, "version": 0, "command": { "title": "x", "command": COMMAND } }),
+            json!({ "docId": doc, "version": 0, "flowId": "f1", "command": { "title": "x", "command": COMMAND } }),
         )
         .await
         .unwrap_err();

@@ -1007,3 +1007,91 @@ it("moves the focus with ↓ through every file of the preview (M5)", async () =
   await act(async () => button("취소")!.click());
   expect(host.disk.text(LIB)).toBe(LIB_TEXT);
 });
+
+// ---- 완성 항목의 명령(M4-11 — 같은 명령 흐름) ----------------------------------------------------------------------------------
+
+it("runs a completion item's command in the same flow, so the server's edit goes through the applier (M4-11)", async () => {
+  let flowId: string | undefined;
+  let finish: (() => void) | undefined;
+  const command = { title: "Import", command: "fix.it", arguments: [1] };
+  host.lsp!.handle("lsp.completion", async () => ({
+    server: "rust-analyzer",
+    staleVersion: false,
+    isIncomplete: false,
+    truncated: false,
+    items: [
+      {
+        label: "older",
+        labelDetail: null,
+        labelDescription: null,
+        kind: 3,
+        detail: null,
+        documentation: null,
+        filterText: null,
+        sortText: null,
+        preselect: false,
+        deprecated: false,
+        edit: null,
+        insertText: null,
+        snippet: false,
+        additionalEdits: [],
+        commitCharacters: null,
+        command,
+        id: 0,
+      },
+    ],
+  }));
+  host.lsp!.handle("lsp.completion.execute", (params) => {
+    flowId = (params as { flowId: string }).flowId;
+    return new Promise((resolve) => {
+      finish = () => resolve({ server: "rust-analyzer", result: null });
+    });
+  });
+  host.lsp!.handle("lsp.applyEdit.answer", async () => null);
+  host.lsp!.setFeatures({
+    ...FEATURES,
+    completion: {
+      server: "rust-analyzer",
+      options: { triggerCharacters: ["."], resolveProvider: false },
+      optionsTruncated: false,
+    },
+  } as never);
+  await mount();
+  await open(MAIN, 1, 7);
+  await emit("lsp.status", { projectId: "p1", instances: [] });
+  await until(() => view().state.facet(editorContext)?.lsp?.capabilities.completion !== undefined);
+  await act(async () => view().focus());
+  await keydown({ key: " ", code: "Space", altKey: true }, view().contentDOM);
+  await act(async () => new Promise((r) => setTimeout(r, 90)));
+  await keydown({ key: "Enter", code: "Enter" }, view().contentDOM);
+  await until(() => flowId !== undefined);
+  // 완성의 가드(그 답으로 내준 · 서버가 알린 명령만)를 지나는 RPC 로, 흐름 id 를 실어 보낸다.
+  expect(host.lsp!.called("call:lsp.completion.execute")).toEqual([
+    { docId: expect.any(String), version: expect.any(Number), flowId, command },
+  ]);
+  expect(host.lsp!.called("call:lsp.command.execute")).toEqual([]);
+  const edit = {
+    changes: [
+      {
+        kind: "text",
+        path: LIB,
+        version: null,
+        edits: [{ range: range(0, 0, 0, 0), newText: "// imported\n" }],
+      },
+    ],
+  };
+  await emit("lsp.applyEdit", {
+    flowId,
+    requestId: 1,
+    server: "rust-analyzer",
+    label: "Import",
+    edit,
+  });
+  await until(() => host.lsp!.called("call:lsp.applyEdit.answer").length > 0);
+  expect(host.lsp!.called("call:lsp.applyEdit.answer")).toEqual([
+    { flowId, requestId: 1, applied: true, failureReason: null },
+  ]);
+  expect(host.disk.text(LIB)).toBe("// imported\n" + LIB_TEXT);
+  await act(async () => finish!());
+  await settle();
+});

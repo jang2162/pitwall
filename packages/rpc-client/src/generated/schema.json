@@ -25626,7 +25626,7 @@
       "tier": "read"
     },
     "lsp.completion.execute": {
-      "description": "받아들인 완성 항목의 명령을 서버에 보낸다(`workspace/executeCommand` — 결정 M4-D15). 같은 문서 · 버전의 완성 답으로 내준\n명령이고 그 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다.",
+      "description": "받아들인 완성 항목의 명령을 서버에 보낸다(`workspace/executeCommand` — 결정 M4-D15). 같은 문서 · 버전의 완성 답으로 내준\n항목(과 그 resolve 답)의 명령이고 그 답을 준 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다. 보내는 길은\n`lsp.command.execute`(M4-12 의 `pw_lsp::edit::execute_command`) 하나다 — 도는 동안 그 서버가 거는 `workspace/applyEdit` 은\n이 창에 이벤트 `lsp.applyEdit`(흐름 id 실림)로 넘어와 편집 적용기를 지난다. 등급도 그것과 같다(write).",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -25635,6 +25635,10 @@
             "description": "항목의 `command`(`{ title, command, arguments? }`)."
           },
           "docId": {
+            "type": "string"
+          },
+          "flowId": {
+            "description": "이 명령의 흐름 id(웹뷰가 정한다 — `lsp.command.execute` 와 같다). 그 처리 중에 서버가 건 편집의 이벤트에 실린다.",
             "type": "string"
           },
           "version": {
@@ -25647,6 +25651,7 @@
         "required": [
           "docId",
           "version",
+          "flowId",
           "command"
         ],
         "type": "object"
@@ -25668,7 +25673,7 @@
       "roles": [
         "owner"
       ],
-      "tier": "read"
+      "tier": "write"
     },
     "lsp.completion.resolve": {
       "description": "완성 항목 하나를 서버에 다시 물어(`completionItem/resolve`) 문서 · 자동 import 편집을 받는다.",

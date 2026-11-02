@@ -610,7 +610,9 @@ export type UnaryMethods = {
 	"lsp.completion": { params: LspCompletionParams; result: LspCompletionList };
 	/**
 	 * 받아들인 완성 항목의 명령을 서버에 보낸다(`workspace/executeCommand` — 결정 M4-D15). 같은 문서 · 버전의 완성 답으로 내준
-	 * 명령이고 그 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다.
+	 * 항목(과 그 resolve 답)의 명령이고 그 답을 준 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다. 보내는 길은
+	 * `lsp.command.execute`(M4-12 의 `pw_lsp::edit::execute_command`) 하나다 — 도는 동안 그 서버가 거는 `workspace/applyEdit` 은
+	 * 이 창에 이벤트 `lsp.applyEdit`(흐름 id 실림)로 넘어와 편집 적용기를 지난다. 등급도 그것과 같다(write).
 	 */
 	"lsp.completion.execute": { params: LspCompletionExecuteParams; result: LspCompletionExecuted };
 	/**
@@ -1147,7 +1149,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.codeAction.resolve": {"name":"lsp.codeAction.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"LspCodeActionResolveParams","output":"LspCodeActionResolved","doc":" 코드 액션 하나의 편집 · 명령. 편집이 없고 서버가 `codeAction/resolve` 를 하면 묻는다.\n","mcp":false,"fileScope":false},
 	"lsp.command.execute": {"name":"lsp.command.execute","kind":"unary","tier":"write","roles":["owner"],"params":"LspCommandExecuteParams","output":"LspCommandExecuted","doc":" 서버 명령(`workspace/executeCommand`)을 돌린다. 그동안 그 서버가 거는 `workspace/applyEdit` 만 이 창에 이벤트\n `lsp.applyEdit`(흐름 id 실림)로 넘어오고, 창은 `lsp.applyEdit.answer` 로 답한다(결정 M4-D15).\n","mcp":false,"fileScope":false},
 	"lsp.completion": {"name":"lsp.completion","kind":"unary","tier":"read","roles":["owner"],"params":"LspCompletionParams","output":"LspCompletionList","doc":" 자동완성(`textDocument/completion`). 위치 · 편집 범위는 UTF-16 오프셋(요청 때 문서 기준), 목록은 서버 순서로 200개까지.\n 요청 사이 문서가 바뀌었으면 `staleVersion`. 맡을 서버가 없으면 5001.\n","mcp":false,"fileScope":false},
-	"lsp.completion.execute": {"name":"lsp.completion.execute","kind":"unary","tier":"read","roles":["owner"],"params":"LspCompletionExecuteParams","output":"LspCompletionExecuted","doc":" 받아들인 완성 항목의 명령을 서버에 보낸다(`workspace/executeCommand` — 결정 M4-D15). 같은 문서 · 버전의 완성 답으로 내준\n 명령이고 그 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다.\n","mcp":false,"fileScope":false},
+	"lsp.completion.execute": {"name":"lsp.completion.execute","kind":"unary","tier":"write","roles":["owner"],"params":"LspCompletionExecuteParams","output":"LspCompletionExecuted","doc":" 받아들인 완성 항목의 명령을 서버에 보낸다(`workspace/executeCommand` — 결정 M4-D15). 같은 문서 · 버전의 완성 답으로 내준\n 항목(과 그 resolve 답)의 명령이고 그 답을 준 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다. 보내는 길은\n `lsp.command.execute`(M4-12 의 `pw_lsp::edit::execute_command`) 하나다 — 도는 동안 그 서버가 거는 `workspace/applyEdit` 은\n 이 창에 이벤트 `lsp.applyEdit`(흐름 id 실림)로 넘어와 편집 적용기를 지난다. 등급도 그것과 같다(write).\n","mcp":false,"fileScope":false},
 	"lsp.completion.resolve": {"name":"lsp.completion.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"LspCompletionResolveParams","output":"LspCompletionResolved","doc":" 완성 항목 하나를 서버에 다시 물어(`completionItem/resolve`) 문서 · 자동 import 편집을 받는다.\n","mcp":false,"fileScope":false},
 	"lsp.declaration": {"name":"lsp.declaration","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 선언으로(`textDocument/declaration`).\n","mcp":false,"fileScope":false},
 	"lsp.definition": {"name":"lsp.definition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 정의로(`textDocument/definition`). 위치는 절대 경로, 루트 밖이면 읽기 토큰과 함께.\n","mcp":false,"fileScope":false},
@@ -5031,6 +5033,8 @@ export type LspCompletionExecuteParams = {
 	docId: string,
 	/**  그 항목을 받은 완성 답의 문서 버전. */
 	version: number,
+	/**  이 명령의 흐름 id(웹뷰가 정한다 — `lsp.command.execute` 와 같다). 그 처리 중에 서버가 건 편집의 이벤트에 실린다. */
+	flowId: string,
 	/**  항목의 `command`(`{ title, command, arguments? }`). */
 	command: JsonValue,
 };

@@ -882,7 +882,10 @@ it("runs the accepted item's command on the Host, and a parameter-hint command o
   await press("ArrowUp");
   expect(executed).toEqual([]);
   await press("Enter");
-  expect(executed).toEqual([{ docId: "d1", version: 0, command }]);
+  // 서버 명령은 M4-12 의 흐름으로(흐름 id 를 실어) — 그동안 서버가 거는 편집은 적용기를 지난다(lsp-edit-window.test.tsx).
+  expect(executed).toEqual([
+    { docId: "d1", version: 0, flowId: expect.stringMatching(/^flow-/), command },
+  ]);
   // 둘째 줄의 `q.` 뒤(`r.area\n` 다음)에서 다시 연다.
   await act(async () => view().dispatch({ selection: { anchor: "r.area\nq.".length } }));
   await optionSpace();

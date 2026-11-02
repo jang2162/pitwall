@@ -323,7 +323,7 @@ mod tests {
                 ("lsp.codeAction.resolve", Tier::Read, false, false),
                 ("lsp.command.execute", Tier::Write, false, false),
                 ("lsp.completion", Tier::Read, false, false),
-                ("lsp.completion.execute", Tier::Read, false, false),
+                ("lsp.completion.execute", Tier::Write, false, false),
                 ("lsp.completion.resolve", Tier::Read, false, false),
                 ("lsp.declaration", Tier::Read, false, false),
                 ("lsp.definition", Tier::Read, false, false),
