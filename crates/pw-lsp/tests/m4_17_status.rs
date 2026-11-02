@@ -82,6 +82,19 @@ async fn the_document_status_names_the_instance_serving_the_path() {
         .unwrap();
     assert_eq!(got["servers"], json!([]));
 
+    // 서버 정의마다의 Mason 패키지(설정 창 — 프로젝트 없이).
+    let mut settings = env.connect(ConnectionScope::Host);
+    let packages = settings
+        .call("lsp.servers.packages", Value::Null)
+        .await
+        .unwrap();
+    assert!(
+        packages.as_array().unwrap().contains(
+            &json!({ "server": "basedpyright", "mason": "basedpyright", "languages": ["python"] })
+        ),
+        "{packages}"
+    );
+
     let mut other = env.connect(ConnectionScope::Project(env.other.clone()));
     let e = other
         .call("lsp.status.document", status(&a, "Rust"))

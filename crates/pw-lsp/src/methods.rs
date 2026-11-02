@@ -312,7 +312,11 @@ mod tests {
         let tiers: Vec<(&str, Tier, bool, bool)> = pw_rpc::methods()
             .into_iter()
             .map(|m: &MethodInfo| &m.meta)
-            .filter(|m| m.name.starts_with("lsp.") && m.name != "lsp.servers.list")
+            .filter(|m| {
+                m.name.starts_with("lsp.")
+                    && m.name != "lsp.servers.list"
+                    && m.name != "lsp.servers.packages"
+            })
             .map(|m| (m.name, m.tier, m.mcp, m.file_scope))
             .collect();
         assert_eq!(

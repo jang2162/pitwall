@@ -7,6 +7,7 @@
 //!   (`pw_lsp_servers::LspServers::write_local` — 커밋되는 `.pitwall/project.toml` 에는 쓰지 않는다). 그 프로젝트 창 · 신뢰한
 //!   프로젝트만(`lsp_grant` — 다른 창 · 웰컴 · 설정 · 파일 창 · 미신뢰는 거절). `enabled` 를 쓰면 그 서버의 이 워크트리 인스턴스를
 //!   `lsp.server.restart` 길로 다시 지나게 한다 — 끄면 `disabled` 로 서버가 끝나고, 켜면 다시 뜬다(허가를 다시 받는다).
+//! - `lsp.servers.packages` — 서버 정의마다 그 서버가 쓰는 Mason 패키지(설정 창 「도구」 의 「쓰는 서버」 칸 — 프로젝트가 없다).
 //! - `lsp.server.log` — 인스턴스의 서버 로그(`$STATE/logs/lsp/<서버>-<인스턴스>.<날짜>.log` 중 가장 최근 날짜) 끝 256 KiB. 상태
 //!   팝업의 「로그 열기」 가 글로 보인다. 권한은 `lsp.status.get` 과 같다.
 
@@ -70,6 +71,19 @@ pub struct LspServerSetLocalResult {
     pub file: String,
 }
 
+/// 서버 정의 하나와 그 Mason 패키지.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct LspServerPackage {
+    pub server: String,
+    /// 정의의 `mason`. 없으면 `null`(설치를 제안하지 않는 서버).
+    pub mason: Option<String>,
+    /// 맡는 언어 id.
+    pub languages: Vec<String>,
+}
+
 /// 로그를 돌려주는 바이트 상한(끝에서부터).
 const MAX_LOG_BYTES: usize = 256 * 1024;
 
@@ -90,6 +104,14 @@ rpc_method! {
     pub LspStatusDocument: "lsp.status.document" {
         params: LspDocumentStatusParams,
         result: LspDocumentStatus,
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// 등록된 서버 정의마다 그 서버가 쓰는 Mason 패키지(정의 순서). 프로젝트 없이 읽는다(설정 창 「도구」).
+    pub LspServersPackages: "lsp.servers.packages" {
+        params: (),
+        result: Vec<LspServerPackage>,
         tier: Read,
         roles: [Owner],
     }
@@ -251,6 +273,20 @@ pub fn server_log(
 
 /// 핸들러를 붙인다(`crate::register` 가 부른다).
 pub fn register(router: &mut Router, manager: &LspManager) {
+    let m = manager.clone();
+    router.unary(LspServersPackages, move |_ctx, ()| {
+        let servers = m.servers();
+        async move {
+            Ok(servers
+                .definitions()
+                .map(|(_, def)| LspServerPackage {
+                    server: def.id.clone(),
+                    mason: def.mason.clone(),
+                    languages: def.languages.iter().map(|l| l.name.clone()).collect(),
+                })
+                .collect::<Vec<_>>())
+        }
+    });
     let m = manager.clone();
     router.unary(
         LspStatusDocument,

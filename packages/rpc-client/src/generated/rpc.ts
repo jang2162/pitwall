@@ -720,6 +720,10 @@ export type UnaryMethods = {
 	 */
 	"lsp.servers.list": { params: LspServersListParams; result: LspServerList };
 	/**
+	 * 등록된 서버 정의마다 그 서버가 쓰는 Mason 패키지(정의 순서). 프로젝트 없이 읽는다(설정 창 「도구」).
+	 */
+	"lsp.servers.packages": { params: null; result: LspServerPackage[] };
+	/**
 	 * 시그니처 도움말(`textDocument/signatureHelp`). 매개변수는 시그니처 글 안의 UTF-16 범위.
 	 */
 	"lsp.signatureHelp": { params: LspSignatureHelpParams; result: LspSignatureHelpAnswer };
@@ -1201,6 +1205,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.server.setLocal": {"name":"lsp.server.setLocal","kind":"unary","tier":"write","roles":["owner"],"params":"LspServerSetLocalParams","output":"LspServerSetLocalResult","doc":" 그 프로젝트의 개인 파일(`project.local.toml`)에 `[lsp.<id>] enabled` · `install_prompt` 를 쓴다(「이 프로젝트에서 끄기」 ·\n 「이 프로젝트에서 묻지 않기」). 커밋되는 `.pitwall/project.toml` 에는 쓰지 않는다. 그 프로젝트 창 · 신뢰한 프로젝트만.\n `enabled` 면 그 서버의 인스턴스를 다시 지나게 한다(끄면 끝난다).\n","mcp":false,"fileScope":false},
 	"lsp.server.stop": {"name":"lsp.server.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의\n 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.servers.list": {"name":"lsp.servers.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspServersListParams","output":"LspServerList","doc":" 언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params\n 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).\n","mcp":false,"fileScope":false},
+	"lsp.servers.packages": {"name":"lsp.servers.packages","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<LspServerPackage>","doc":" 등록된 서버 정의마다 그 서버가 쓰는 Mason 패키지(정의 순서). 프로젝트 없이 읽는다(설정 창 「도구」).\n","mcp":false,"fileScope":false},
 	"lsp.signatureHelp": {"name":"lsp.signatureHelp","kind":"unary","tier":"read","roles":["owner"],"params":"LspSignatureHelpParams","output":"LspSignatureHelpAnswer","doc":" 시그니처 도움말(`textDocument/signatureHelp`). 매개변수는 시그니처 글 안의 UTF-16 범위.\n","mcp":false,"fileScope":false},
 	"lsp.status.document": {"name":"lsp.status.document","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentStatusParams","output":"LspDocumentStatus","doc":" 문서 하나를 맡는 서버와 그 인스턴스 상태(상태바 `lsp` 항목 · 설치 배너). 서버를 띄우지 않는다. 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
 	"lsp.status.get": {"name":"lsp.status.get","kind":"unary","tier":"read","roles":["owner"],"params":"LspStatusGetParams","output":"LspStatus","doc":" 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다. 그 프로젝트 창의 연결만(다른 연결은\n permission denied).\n","mcp":false,"fileScope":false},
@@ -5720,6 +5725,15 @@ export type LspServerLog = {
 	file: string | null,
 };
 
+/**  서버 정의 하나와 그 Mason 패키지. */
+export type LspServerPackage = {
+	server: string,
+	/**  정의의 `mason`. 없으면 `null`(설치를 제안하지 않는 서버). */
+	mason: string | null,
+	/**  맡는 언어 id. */
+	languages: string[],
+};
+
 /**  서버를 돌리는 런타임. 서버 관리자가 결정 M4-D6 의 순서로 찾는다 — Pitwall 은 런타임을 설치하지 않는다(D26). */
 export type LspServerRuntime = "node" | "python" | "java";
 
@@ -7017,6 +7031,24 @@ export type ToolBroken = {
 
 /**  받을 것의 고정 해시 여부. */
 export type ToolChecksum = "pinned" | "none";
+
+/**  [`super::code::CONFIRM_REQUIRED`](4001)의 `data`. */
+export type ToolConfirmRequired = {
+	name: string,
+	version: string,
+	/**  Mason `licenses` 위에 Pitwall 의 덮어쓰기 표(`license-notes.toml`)를 먼저 본 것. */
+	licenses: string[],
+	/**  받는 곳의 도메인(이름순). 라이선스 · 이것이 바뀐 판은 다시 묻는다. */
+	sourceDomains: string[],
+	/**  받을 바이트(고정 표에 있을 때만). */
+	size: number | null,
+	/**  받을 것에 고정 해시가 있나(`none` 이면 「체크섬 없음」 을 함께 보인다 — 결정 M4-D17). */
+	checksum: ToolChecksum,
+	/**  덮어쓰기 표의 설명(있으면). */
+	note: string | null,
+	/**  앞서 실은 `confirmed` 를 받지 않았으면 `changed`(다이얼로그를 띄운 뒤 판 · 라이선스 · 출처가 바뀌었다). 처음이면 `null`. */
+	rejected: string | null,
+};
 
 /**  사람이 확인한 값 — [`ToolConfirmRequired`] 의 셋을 그대로 돌려준다. */
 export type ToolConfirmed = {

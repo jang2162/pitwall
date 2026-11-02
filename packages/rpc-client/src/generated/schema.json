@@ -29213,6 +29213,55 @@
       ],
       "tier": "read"
     },
+    "lsp.servers.packages": {
+      "description": "등록된 서버 정의마다 그 서버가 쓰는 Mason 패키지(정의 순서). 프로젝트 없이 읽는다(설정 창 「도구」).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "LspServerPackage": {
+            "description": "서버 정의 하나와 그 Mason 패키지.",
+            "properties": {
+              "languages": {
+                "description": "맡는 언어 id.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "mason": {
+                "description": "정의의 `mason`. 없으면 `null`(설치를 제안하지 않는 서버).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "server": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "server",
+              "mason",
+              "languages"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/LspServerPackage"
+        },
+        "type": "array"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "lsp.signatureHelp": {
       "description": "시그니처 도움말(`textDocument/signatureHelp`). 매개변수는 시그니처 글 안의 UTF-16 범위.",
       "kind": "unary",

@@ -246,6 +246,9 @@ rpc_method! {
     }
 }
 
+// `4001` 의 data 는 메서드 꼴에 들지 않아 생성물로 따로 낸다 — 확인 다이얼로그(M4-17)가 읽는다.
+pw_rpc::rpc_type!(ToolConfirmRequired);
+
 fn grant_of(installer: &ToolsInstaller, ctx: &Ctx) -> Result<super::ToolGrant, RpcError> {
     let host = installer.host()?;
     let settings = Arc::clone(&host.settings_window);
