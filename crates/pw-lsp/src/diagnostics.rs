@@ -29,7 +29,7 @@
 //!
 //! 코드 액션 요청의 진단 문맥(M4-12)은 [`DiagnosticStore::in_range`] 로 읽는다.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -351,6 +351,37 @@ fn at(p: LspPosition) -> (u32, u32) {
 struct ProjectDiags {
     files: BTreeMap<String, FileDiags>,
     total: usize,
+    /// 프로젝트 상한에 잘린 pull 항목(경로, 출처). 자리가 나면 다시 당긴다([`ProjectDiags::take_refills`]). push 는 서버에 다시
+    /// 달라고 할 길이 없어 넣지 않는다 — 서버가 다시 보낼 때까지 `truncated` 로 남는다.
+    cut_pulls: BTreeSet<(String, EntryKey)>,
+}
+
+impl ProjectDiags {
+    /// 자리가 있으면 상한에 잘린 pull 을 모두 꺼낸다(다시 당길 출처 · URI). 다시 잘리면 넣기가 도로 넣는다.
+    fn take_refills(&mut self, project_id: &str) -> Vec<(NotificationSource, String)> {
+        if self.total >= PROJECT_LIMIT || self.cut_pulls.is_empty() {
+            return Vec::new();
+        }
+        std::mem::take(&mut self.cut_pulls)
+            .into_iter()
+            .filter_map(|(path, key)| {
+                let entry = self.files.get(&path)?.entries.get(&key)?;
+                let (server, root, _) = key;
+                Some((
+                    NotificationSource {
+                        key: InstanceKey {
+                            project_id: project_id.to_owned(),
+                            worktree: entry.worktree.clone(),
+                            server,
+                            root,
+                        },
+                        generation: entry.generation,
+                    },
+                    entry.uri.clone(),
+                ))
+            })
+            .collect()
+    }
 }
 
 #[derive(Default)]
@@ -650,7 +681,7 @@ impl DiagnosticStore {
         let uri = uri.as_str();
         let path = path.to_string_lossy().into_owned();
         let (items, truncated) = diagnostics(&source.key.server, origin, version, raw);
-        {
+        let refills = {
             let mut state = lock(&self.inner.state);
             // 잠금 차례: 저장소 → 관리자(머리 주석). 판정과 넣기가 한 잠금 안이라 지우기(`prune`)와 엇갈리지 않는다.
             if !self.inner.manager.is_current(source) {
@@ -676,9 +707,14 @@ impl DiagnosticStore {
             let mut items = items;
             let mut truncated = truncated;
             let room = PROJECT_LIMIT.saturating_sub(project.total);
+            let slot = (path.clone(), key.clone());
+            project.cut_pulls.remove(&slot);
             if items.len() > room {
                 items.truncate(room);
                 truncated = true;
+                if origin == Origin::Pull {
+                    project.cut_pulls.insert(slot);
+                }
             }
             project.total += items.len();
             if items.is_empty() && !truncated {
@@ -706,9 +742,21 @@ impl DiagnosticStore {
                     diagnostics: Vec::new(),
                     truncated: false,
                 });
+            let refills = project.take_refills(&source.key.project_id);
             // 잠금 안에서 낸다 — 같은 경로의 이벤트가 상태가 바뀐 차례대로 나간다(잠금 밖이면 늦게 나간 옛 이벤트가 웹뷰의 마지막
             // 상태가 될 수 있다 — M4-06 리뷰 L1). 버스는 자기 잠금만 쓰고 이 저장소 · 관리자를 부르지 않는다.
             self.emit(&state, &[event]);
+            refills
+        };
+        self.refill(refills);
+    }
+
+    /// 상한에 잘렸던 pull 을 다시 당긴다(그 문서가 아직 그 서버에 열려 있을 때만 — 동시 상한은 여느 pull 과 같다).
+    fn refill(&self, refills: Vec<(NotificationSource, String)>) {
+        for (source, uri) in refills {
+            if let Some(version) = self.inner.manager.synced_version(&source, &uri) {
+                drop(self.schedule_pull(source, uri, version));
+            }
         }
     }
 
@@ -930,7 +978,7 @@ impl DiagnosticStore {
 
     /// 상태가 바뀌었다(관리자 잠금 밖): 지금 세대가 아닌 출처의 진단, 서버에 더는 열려 있지 않은 문서의 pull 진단을 지운다.
     fn prune(&self, project_id: &str) {
-        {
+        let refills = {
             let mut state = lock(&self.inner.state);
             let Some(project) = state.projects.get_mut(project_id) else {
                 return;
@@ -982,6 +1030,10 @@ impl DiagnosticStore {
                 }
             }
             project.total -= removed;
+            let files = &project.files;
+            project
+                .cut_pulls
+                .retain(|(path, key)| files.get(path).is_some_and(|f| f.entries.contains_key(key)));
             let mut events = Vec::new();
             for path in changed {
                 let file = project.files.get(&path);
@@ -998,8 +1050,11 @@ impl DiagnosticStore {
                 }
                 events.push(event);
             }
+            let refills = project.take_refills(project_id);
             self.emit(&state, &events);
-        }
+            refills
+        };
+        self.refill(refills);
     }
 
     /// 이벤트를 낸다. 저장소 잠금을 쥔 채로만 부른다(`_held` — 차례가 상태가 바뀐 차례와 같게).

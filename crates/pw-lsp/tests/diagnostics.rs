@@ -821,6 +821,84 @@ async fn a_flood_is_cut_at_the_file_and_project_limits() {
     assert_eq!(list["truncated"], true);
 }
 
+/// 프로젝트 상한에 잘린 진단: 자리가 나면 열린 문서의 pull 은 다시 당겨 채우고 `truncated` 가 풀린다. push 는 서버에 다시 달라고 할
+/// 길이 없어 진단 0개 + `truncated` 로 남는다(M4-06 리뷰 L3 — 메인 판정 A).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cut_pull_is_pulled_again_when_room_frees_while_a_cut_push_stays_cut() {
+    let env = Env::new(EnvOptions::default());
+    let first = env.file("first.py", "");
+    let app = env.file("app.py", "");
+    let pushed_late = env.root.join("late.py");
+    // ruff(push 만): 뜨자마자 프로젝트 상한을 채우고, 그 뒤의 push 하나는 잘린다. 첫 문서를 닫으면 한 파일을 비운다.
+    let flood_file = |n: usize| env.root.join(format!("f{n}.py"));
+    let mut flood: Vec<Action> = (0..PROJECT_LIMIT / FILE_LIMIT)
+        .map(|n| {
+            publish(
+                &uri(&flood_file(n)),
+                None,
+                (0..FILE_LIMIT)
+                    .map(|i| diag(u32::try_from(i).unwrap(), 2, "w"))
+                    .collect(),
+            )
+        })
+        .collect();
+    flood.push(publish(
+        &uri(&pushed_late),
+        None,
+        vec![diag(0, 1, "late push")],
+    ));
+    env.fake(
+        "ruff",
+        Scenario {
+            capabilities: incremental(),
+            ..Scenario::default()
+        }
+        .on("initialized", flood)
+        .on(
+            "textDocument/didClose",
+            vec![publish(&uri(&flood_file(0)), None, vec![])],
+        ),
+    );
+    // basedpyright(pull): 어느 문서든 진단 하나.
+    env.fake(
+        "basedpyright",
+        Scenario {
+            capabilities: pull_capable(),
+            ..Scenario::default()
+        }
+        .reply(
+            "textDocument/diagnostic",
+            Reply::result(json!({ "kind": "full", "items": [diag(0, 1, "pulled")] })),
+        ),
+    );
+    let mut events = subscribe(&env);
+    let mut win = env.window();
+    let first_doc = doc_id(&win.open(&env, &first, "Python", "").await);
+    // 9 MB 남짓한 알림 백여 개를 debug 빌드로 읽는다 — 기기 부하에서 10 s 를 넘는다.
+    let slow = Duration::from_secs(90);
+    let late = next_within(&mut events, &pushed_late, slow).await;
+    assert_eq!(late["truncated"], true);
+    assert_eq!(late["diagnostics"], json!([]));
+    // 상한이 찬 뒤에 연 문서의 pull 은 잘린다.
+    win.open(&env, &app, "Python", "").await;
+    let cut = next_within(&mut events, &app, slow).await;
+    assert_eq!(cut["truncated"], true, "{cut}");
+    assert_eq!(cut["diagnostics"], json!([]));
+    // 첫 문서를 닫으면 ruff 가 한 파일을 비우고 첫 문서의 pull 진단도 지워진다 — 자리가 나 app 의 pull 을 다시 당긴다.
+    win.call("lsp.document.close", json!({ "docId": first_doc }))
+        .await
+        .unwrap();
+    let refilled = next_within(&mut events, &app, slow).await;
+    assert_eq!(messages(&refilled["diagnostics"]), ["pulled"], "{refilled}");
+    assert_eq!(refilled["truncated"], false);
+    // 잘린 push 는 그대로 — 상태바 수의 `+` 가 남는다(목록은 진단이 0개인 파일을 싣지 않는다).
+    let counts = win
+        .call("lsp.diagnostics.counts", json!({ "projectId": env.id }))
+        .await
+        .unwrap();
+    assert_eq!(counts["truncated"], true, "{counts}");
+}
+
 /// 미신뢰 프로젝트에서는 서버가 뜨지 않는다(결정 M4-D8) — 진단 RPC 는 오류 없이 비어 있다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_untrusted_project_has_empty_diagnostics_without_errors() {
