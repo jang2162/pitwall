@@ -24798,6 +24798,103 @@
       ],
       "tier": "write"
     },
+    "lsp.document.capabilities": {
+      "description": "문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고\n끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈\n칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "docId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspFeatureCapability": {
+            "description": "기능 하나를 맡을 서버와 그 능력.",
+            "properties": {
+              "options": {
+                "description": "서버가 알린 능력: 그 메서드의 동적 등록 옵션, 없으면 정적 능력 칸 그대로(`true` 또는 옵션 객체 — `completionProvider` 의\n`triggerCharacters` 등). [`OPTIONS_LIMIT`] 를 넘으면 `{}`."
+              },
+              "optionsTruncated": {
+                "description": "옵션이 [`OPTIONS_LIMIT`] 를 넘어 비웠다.",
+                "type": "boolean"
+              },
+              "server": {
+                "description": "맡을 서버 id.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "server",
+              "options",
+              "optionsTruncated"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`lsp.document.capabilities` 의 결과.",
+        "properties": {
+          "features": {
+            "additionalProperties": false,
+            "description": "맡을 서버가 있는 기능만(진단은 넣지 않는다). 키는 `LspFeature` 이름(`hover` · `completion` …).",
+            "properties": {
+              "code_action": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "completion": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "definition": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "diagnostics": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "document_symbol": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "formatting": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "hover": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "implementation": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "references": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "rename": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "signature_help": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              },
+              "workspace_symbol": {
+                "$ref": "#/$defs/LspFeatureCapability"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "features"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "lsp.document.change": {
       "description": "문서에 편집을 적용하고 떠 있는 서버에 `didChange` 를 보낸다(서버가 `Incremental` 이면 증분, 아니면 전체). 서버를 띄우지\n않는다. 없는 문서 · 다른 연결의 문서는 not found, 지난 버전 · 빠진 편집은 conflict(`data.version` 에 지금 버전 — 다시 연다),\n범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다).",
       "kind": "unary",

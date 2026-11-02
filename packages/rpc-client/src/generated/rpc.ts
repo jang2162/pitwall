@@ -587,6 +587,12 @@ export type UnaryMethods = {
 	 */
 	"log.write": { params: UiLogBatch; result: null };
 	/**
+	 * 문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고
+	 * 끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈
+	 * 칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.
+	 */
+	"lsp.document.capabilities": { params: LspDocumentRef; result: LspDocumentCapabilities };
+	/**
 	 * 문서에 편집을 적용하고 떠 있는 서버에 `didChange` 를 보낸다(서버가 `Incremental` 이면 증분, 아니면 전체). 서버를 띄우지
 	 * 않는다. 없는 문서 · 다른 연결의 문서는 not found, 지난 버전 · 빠진 편집은 conflict(`data.version` 에 지금 버전 — 다시 연다),
 	 * 범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다).
@@ -1048,6 +1054,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lang.detect": {"name":"lang.detect","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"LangDetectParams","output":"LangDetectResult","doc":" 파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·\n 그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.\n","mcp":false,"fileScope":true},
 	"lang.list": {"name":"lang.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"LangList","doc":" 고를 수 있는 언어(상태바의 언어 수동 변경, F4-12)와 언어마다의 줄 주석. 앱이 시작할 때 읽은 확장 레지스트리 기준이다.\n","mcp":false,"fileScope":true},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n","mcp":false,"fileScope":true},
+	"lsp.document.capabilities": {"name":"lsp.document.capabilities","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"LspDocumentCapabilities","doc":" 문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고\n 끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈\n 칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.document.change": {"name":"lsp.document.change","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentChangeParams","output":"LspDocumentChangeResult","doc":" 문서에 편집을 적용하고 떠 있는 서버에 `didChange` 를 보낸다(서버가 `Incremental` 이면 증분, 아니면 전체). 서버를 띄우지\n 않는다. 없는 문서 · 다른 연결의 문서는 not found, 지난 버전 · 빠진 편집은 conflict(`data.version` 에 지금 버전 — 다시 연다),\n 범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다).\n","mcp":false,"fileScope":false},
 	"lsp.document.close": {"name":"lsp.document.close","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"()","doc":" 문서를 닫는다(`didClose`). 인스턴스의 마지막 문서면 유휴 시한(`[lsp] idle_shutdown_minutes`, 기본 10분) 뒤 서버를 끝낸다.\n 없는 id 도 성공이다.\n","mcp":false,"fileScope":false},
 	"lsp.document.open": {"name":"lsp.document.open","kind":"unary","tier":"exec","roles":["owner"],"params":"LspDocumentOpenParams","output":"LspDocumentOpened","doc":" 문서를 연다: Host 가 텍스트를 쥐고, 그 언어의 서버 인스턴스마다(없으면 띄운다 — 지연 기동) `didOpen` 을 보낸다. 그 프로젝트\n 창의 연결만 부를 수 있다(다른 창 · 웰컴 · 설정 · 파일 창은 permission denied — 서버를 띄우지 않는다). 미신뢰 프로젝트는 띄우지\n 않고 인스턴스 상태 `untrusted` 로 답한다. 편집 등급 밖 · 서버 없는 언어는 `off`. 경로가 프로젝트 루트 밖이면 invalid params.\n","mcp":false,"fileScope":false},
@@ -4828,6 +4835,12 @@ export type LogRow = {
 	graph: GraphRow | null,
 };
 
+/**  `lsp.document.capabilities` 의 결과. */
+export type LspDocumentCapabilities = {
+	/**  맡을 서버가 있는 기능만(진단은 넣지 않는다). 키는 `LspFeature` 이름(`hover` · `completion` …). */
+	features: Partial<{ [key in LspFeature]: LspFeatureCapability }>,
+};
+
 export type LspDocumentChangeParams = {
 	docId: string,
 	/**  이 편집을 적용한 뒤의 버전 = 앞 버전 + 1. */
@@ -4877,6 +4890,19 @@ export type LspDocumentRef = {
 
 /**  서버에 맡기는 기능의 이름(`features.disable` 의 값). 서버 관리자의 기능 라우팅(결정 M4-D12)이 쓴다. */
 export type LspFeature = "diagnostics" | "hover" | "definition" | "implementation" | "references" | "document_symbol" | "workspace_symbol" | "completion" | "signature_help" | "rename" | "code_action" | "formatting";
+
+/**  기능 하나를 맡을 서버와 그 능력. */
+export type LspFeatureCapability = {
+	/**  맡을 서버 id. */
+	server: string,
+	/**
+	 *  서버가 알린 능력: 그 메서드의 동적 등록 옵션, 없으면 정적 능력 칸 그대로(`true` 또는 옵션 객체 — `completionProvider` 의
+	 *  `triggerCharacters` 등). [`OPTIONS_LIMIT`] 를 넘으면 `{}`.
+	 */
+	options: JsonValue,
+	/**  옵션이 [`OPTIONS_LIMIT`] 를 넘어 비웠다. */
+	optionsTruncated: boolean,
+};
 
 /**  인스턴스의 상태. */
 export type LspInstanceState = 

@@ -318,6 +318,7 @@ mod tests {
         assert_eq!(
             tiers,
             [
+                ("lsp.document.capabilities", Tier::Read, false, false),
                 ("lsp.document.change", Tier::Read, false, false),
                 ("lsp.document.close", Tier::Read, false, false),
                 ("lsp.document.open", Tier::Exec, false, false),

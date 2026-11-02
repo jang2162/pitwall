@@ -8,12 +8,14 @@
 //!
 //! 그 위의 서버 관리자(M4-05): 인스턴스 · 수명 · 문서 동기화 · 요청 길([`manager`]), 문서 텍스트와 UTF-16 위치([`document`]),
 //! 작업 공간 루트([`root`]), 서버 런타임 찾기([`requires`]), 진행 → `Task`([`progress`]), 서버 → 클라이언트 요청 처리기의 등록부
-//! ([`handlers`]), RPC([`methods`] — [`register`]). 기능 행(진단 · 내비게이션 · 완성 · 편집 · 포맷 · 심볼)은 자기 모듈을 이
+//! ([`handlers`]), RPC([`methods`] — [`register`]). 웹뷰 LSP 다리(M4-07)의 Host 쪽은 문서의 기능 칸([`bridge`] —
+//! `lsp.document.capabilities`). 기능 행(진단 · 내비게이션 · 완성 · 편집 · 포맷 · 심볼)은 자기 모듈을 이
 //! 크레이트에 두고 서버에는 [`LspManager::request`] 로만 닿는다(15 「공유 부품의 주인」).
 //!
 //! 참고 구현은 읽기만 했다 — VS Code `vscode-languageserver-node`(MIT)의 취소 · 진행 · 동기화 규칙과 LSP 3.17 명세. Zed(GPL) ·
 //! Helix(MPL)의 코드는 보지 않았다(작업 공간 루트의 「가장 위 마커」 규칙은 Helix 의 동작 설명만 견줬다).
 
+pub mod bridge;
 pub mod capabilities;
 pub mod document;
 pub mod fake;
@@ -46,4 +48,5 @@ pub use server::{
 /// 이 크레이트의 RPC 를 붙인다. 기능 행은 자기 모듈의 `register` 를 여기에 한 줄씩 더한다(15 「공유 부품의 주인」).
 pub fn register(router: &mut pw_rpc::Router, manager: &LspManager) {
     methods::register(router, manager);
+    bridge::register(router, manager);
 }

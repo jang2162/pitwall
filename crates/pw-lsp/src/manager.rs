@@ -1196,7 +1196,9 @@ impl LspManager {
                             listener(&source, &params);
                         }
                     }
-                    ServerEvent::ShowMessageRequest { .. } | ServerEvent::CapabilitiesChanged => {}
+                    // 동적 등록 · 해제 — 웹뷰의 능력 칸(M4-07 `lsp.document.capabilities`)이 상태 이벤트를 받고 다시 묻는다.
+                    ServerEvent::CapabilitiesChanged => this.publish(&key.project_id),
+                    ServerEvent::ShowMessageRequest { .. } => {}
                     ServerEvent::Exited(_) => break,
                 }
             }
@@ -1747,31 +1749,19 @@ impl LspManager {
             .get(request.doc_id)
             .filter(|d| d.session == session)
             .ok_or_else(|| not_found(request.doc_id))?;
-        let mut candidates: Vec<(&InstanceKey, &Instance)> = doc
-            .instances
-            .iter()
-            .filter_map(|k| instances.get_key_value(k))
-            .collect();
-        candidates.sort_by_key(|(_, i)| i.order);
-        let chosen = candidates.iter().find_map(|(key, instance)| {
-            let server = instance.server.as_ref()?;
-            if !instance.state.is_running() || !instance.is_synced(request.doc_id, &doc.uri) {
-                return None;
-            }
-            if instance
-                .config
-                .as_ref()
-                .is_some_and(|c| c.disabled_features.contains(&request.feature))
-            {
-                return None;
-            }
-            server
-                .supports(request.method)
-                .then(|| (Arc::clone(server), (*key).clone()))
-        });
+        let chosen = route(
+            request.doc_id,
+            doc,
+            instances,
+            request.feature,
+            request.method,
+        )
+        .map(|(key, server)| (Arc::clone(server), key.clone()));
         let Some((server, key)) = chosen else {
-            let instances: Vec<LspInstanceStatus> =
-                candidates.iter().map(|(k, i)| status_of(k, i)).collect();
+            let instances: Vec<LspInstanceStatus> = candidates(doc, instances)
+                .iter()
+                .map(|(k, i)| status_of(k, i))
+                .collect();
             return Err(RpcError::new(
                 code::NO_SERVER,
                 format!(
@@ -1804,6 +1794,93 @@ impl LspManager {
             },
         ))
     }
+}
+
+impl LspManager {
+    /// 문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(`routes` 의 (기능, 메서드)마다 — 웹뷰 다리 M4-07 의
+    /// `lsp.document.capabilities`). 고르는 규칙은 요청 길(`request`)과 같은 [`route`] 다 — 떠서 그 문서를 동기화한, 능력이
+    /// 있고 끄지 않은 첫 서버(결정 M4-D12). 능력은 그 메서드의 첫 동적 등록의 옵션, 없으면 정적 능력 칸(`hoverProvider` 등)
+    /// 그대로다. 맡을 서버가 없는 기능은 빠진다. 서버를 띄우지 않는다. 없는 문서 · 다른 연결의 문서는 not found.
+    pub fn feature_routes(
+        &self,
+        session: SessionId,
+        doc_id: &str,
+        routes: &[(LspFeature, &str)],
+    ) -> Result<Vec<(LspFeature, String, Value)>, RpcError> {
+        let state = lock(&self.inner.state);
+        let doc = state
+            .docs
+            .get(doc_id)
+            .filter(|d| d.session == session)
+            .ok_or_else(|| not_found(doc_id))?;
+        Ok(routes
+            .iter()
+            .filter_map(|&(feature, method)| {
+                let (key, server) = route(doc_id, doc, &state.instances, feature, method)?;
+                let options = server
+                    .registrations(method)
+                    .into_iter()
+                    .find_map(|r| r.register_options)
+                    .unwrap_or_else(|| static_capability(&server.capabilities_json(), method));
+                Some((feature, key.server.clone(), options))
+            })
+            .collect())
+    }
+}
+
+/// 문서를 맡는 인스턴스들(정의 순서 — 결정 M4-D12).
+fn candidates<'a>(
+    doc: &Doc,
+    instances: &'a BTreeMap<InstanceKey, Instance>,
+) -> Vec<(&'a InstanceKey, &'a Instance)> {
+    let mut candidates: Vec<(&InstanceKey, &Instance)> = doc
+        .instances
+        .iter()
+        .filter_map(|k| instances.get_key_value(k))
+        .collect();
+    candidates.sort_by_key(|(_, i)| i.order);
+    candidates
+}
+
+/// 기능을 맡을 서버(결정 M4-D12): 떠서 그 문서를 동기화했고, 정의 · 설정에서 그 기능을 끄지 않았고, `method` 를 다루는 첫
+/// 인스턴스. 요청 길과 웹뷰의 능력 칸(`feature_routes`)이 함께 쓰는 하나뿐인 규칙이다.
+fn route<'a>(
+    doc_id: &str,
+    doc: &Doc,
+    instances: &'a BTreeMap<InstanceKey, Instance>,
+    feature: LspFeature,
+    method: &str,
+) -> Option<(&'a InstanceKey, &'a Arc<LanguageServer>)> {
+    candidates(doc, instances)
+        .into_iter()
+        .find_map(|(key, instance)| {
+            let server = instance.server.as_ref()?;
+            if !instance.state.is_running() || !instance.is_synced(doc_id, &doc.uri) {
+                return None;
+            }
+            if instance
+                .config
+                .as_ref()
+                .is_some_and(|c| c.disabled_features.contains(&feature))
+            {
+                return None;
+            }
+            server.supports(method).then_some((key, server))
+        })
+}
+
+/// 정적 능력에서 `method` 의 칸(`METHOD_CAPABILITIES` 의 경로 그대로 — `hoverProvider` 등). 없으면 `null`.
+fn static_capability(capabilities: &Value, method: &str) -> Value {
+    let Some((_, path)) = crate::capabilities::METHOD_CAPABILITIES
+        .iter()
+        .find(|(m, _)| *m == method)
+    else {
+        return Value::Null;
+    };
+    path.split('.')
+        .try_fold(capabilities, |at, key| at.get(key))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 /// 요청을 맡은 서버 쪽: 인스턴스, URI, 요청을 보낼 때 서버에 보낸 마지막 버전(`Synced::version`).
