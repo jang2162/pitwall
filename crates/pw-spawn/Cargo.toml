@@ -1,0 +1,17 @@
+[package]
+name = "pw-spawn"
+description = "Pitwall child process launcher: forks on one long-lived thread so Linux PR_SET_PDEATHSIG follows the app, not a runtime thread"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# 드라이버 계약 크레이트(pw-db-driver)도 이것을 쓴다 — 의존을 가볍게 둔다(tokio · tracing 만).
+[dependencies]
+# 띄우기를 부른 쪽 런타임에 들어가서 하고(`Handle::enter`), 결과를 그 런타임으로 돌려준다(`oneshot`).
+tokio = { workspace = true, features = ["rt", "sync"] }
+# 띄우기 스레드를 시작하지 못한 것을 남긴다.
+tracing = "0.1.44"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }

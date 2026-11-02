@@ -13,7 +13,6 @@ use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::OnceLock;
 
 use pw_runtime::RuntimeEnv;
 use tokio::process::{Child, Command};
@@ -60,55 +59,18 @@ impl ProcessTree {
     }
 }
 
-type Job = Box<dyn FnOnce() + Send>;
-
-/// 서버를 띄우는(fork 하는) 전용 스레드. 프로세스가 끝날 때까지 산다 — 보내는 쪽을 `static` 이 쥐어 받는 고리가 끝나지 않는다.
+/// [`spawn`] 을 전용 띄우기 스레드(`pw_spawn::on_launcher` — 프로세스가 끝날 때까지 사는 `pw-launcher`)에서 한다.
 ///
 /// Linux 의 `PR_SET_PDEATHSIG` 는 프로세스가 아니라 **fork 한 스레드**가 끝날 때 신호를 보낸다. 런타임의 스레드는 끝날 수 있다 —
 /// 블로킹 풀 스레드는 쉬다 끝나고(약 10 s), 일꾼 스레드도 `block_in_place` 를 한 번 하면 블로킹 풀로 넘어가 같이 끝난다(M4-05 리뷰
-/// M4). 그 스레드에서 띄운 서버는 SIGTERM 으로 조용히 끝나므로(macOS 에는 없는 증상), fork 는 늘 이 스레드에서 한다. 띄우는 쪽이
-/// 어느 스레드든(블로킹 풀 · `block_in_place` 안 포함) 상관없다.
-fn launcher() -> io::Result<&'static std::sync::mpsc::Sender<Job>> {
-    static LAUNCHER: OnceLock<Option<std::sync::mpsc::Sender<Job>>> = OnceLock::new();
-    LAUNCHER
-        .get_or_init(|| {
-            let (tx, rx) = std::sync::mpsc::channel::<Job>();
-            let started = std::thread::Builder::new()
-                .name("pw-lsp-launcher".to_owned())
-                .spawn(move || {
-                    for job in rx {
-                        // 한 번의 패닉이 이 스레드를(그래서 그 뒤의 모든 띄우기를) 끝내지 않게.
-                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
-                    }
-                });
-            match started {
-                Ok(_) => Some(tx),
-                Err(e) => {
-                    tracing::error!(target: "pw_lsp", %e, "cannot start the language server launcher thread");
-                    None
-                }
-            }
-        })
-        .as_ref()
-        .ok_or_else(|| io::Error::other("the language server launcher thread is not running"))
-}
-
-/// [`spawn`] 을 전용 띄우기 스레드([`launcher`])에서 한다. 자식의 파이프는 부른 쪽의 tokio 런타임에 붙는다(그 런타임에 들어가서
-/// 띄운다). 기다리던 쪽이 사라지면 띄운 자식은 버려진다(`kill_on_drop`).
+/// M4). 그 스레드에서 띄운 서버는 SIGTERM 으로 조용히 끝나므로(macOS 에는 없는 증상), fork 는 늘 그 스레드에서 한다. 띄우는 쪽이
+/// 어느 스레드든(블로킹 풀 · `block_in_place` 안 포함) 상관없다. 자식의 파이프는 부른 쪽의 tokio 런타임에 붙는다. 기다리던 쪽이
+/// 사라지면 띄운 자식은 버려진다(`kill_on_drop`).
 pub(crate) async fn spawn_on_launcher(
     spec: LaunchSpec,
     marker: Option<String>,
 ) -> io::Result<(Child, ProcessTree)> {
-    let runtime = tokio::runtime::Handle::current();
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    launcher()?
-        .send(Box::new(move || {
-            let _entered = runtime.enter();
-            let _ = tx.send(spawn(&spec, marker.as_deref()));
-        }))
-        .map_err(|_| io::Error::other("the language server launcher thread is not running"))?;
-    rx.await
-        .map_err(|_| io::Error::other("the language server launcher thread dropped the launch"))?
+    pw_spawn::on_launcher(move || spawn(&spec, marker.as_deref())).await
 }
 
 /// `spec` 을 띄운다. stdin · stdout · stderr 는 파이프다. `marker` 가 있으면 환경의 [`crate::ledger::MARKER_ENV`] 로 넣는다(덮어쓸

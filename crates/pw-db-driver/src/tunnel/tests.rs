@@ -613,6 +613,52 @@ mod fake {
             "the app environment leaked: {env}"
         );
     }
+
+    /// 터널을 연 스레드가 곧 끝나도 ssh 는 산다 — fork 는 프로세스 수명 동안 사는 전용 스레드(`pw_spawn`)가 한다. Linux 의
+    /// `PR_SET_PDEATHSIG` 는 fork 한 스레드가 끝날 때 신호를 보내므로, 터널을 연 스레드에서 fork 하면(여기선 쉬다 0.1 s 뒤 끝나는
+    /// 블로킹 풀 스레드 — `block_in_place` 를 한 일꾼 스레드도 같은 풀로 넘어가 끝난다) 이 시험이 Linux 에서 실패한다(macOS 에서는
+    /// 늘 통과).
+    #[test]
+    fn an_ssh_outlives_the_thread_that_opened_its_tunnel() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_keep_alive(Duration::from_millis(100))
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            // `-L` 의 로컬 포트를 듣는 ssh(같은 pid 로 — `exec`).
+            let fake = Fake::new(concat!(
+                "prev=''\nfor a in \"$@\"; do\n  if [ \"$prev\" = -L ]; then port=$(echo \"$a\" | cut -d: -f2); fi\n  prev=\"$a\"\ndone\n",
+                "exec perl -MIO::Socket::INET -e '$s = IO::Socket::INET->new(LocalAddr => \"127.0.0.1\", LocalPort => $ARGV[0], Listen => 5, ReuseAddr => 1) or die \"bind [127.0.0.1]:$ARGV[0]: $!\\n\"; while (my $c = $s->accept) { close $c }' \"$port\"",
+            ));
+            let launch = fake.launch(None);
+            let tunnels = Tunnels::new();
+            let opener = tunnels.clone();
+            let handle = tokio::runtime::Handle::current();
+            let lease = tokio::task::spawn_blocking(move || {
+                handle.block_on(opener.open(key("bastion"), move || async move { Ok(launch) }))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            let (ssh, lost) = (lease.pid(), lease.lost());
+            // 그 블로킹 스레드가 쉬다 끝날 때까지.
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert!(
+                !lost.is_cancelled() && alive(ssh),
+                "ssh {ssh} died with the thread that opened the tunnel"
+            );
+            tokio::net::TcpStream::connect((LOOPBACK, lease.local().port))
+                .await
+                .expect("the tunnel's local port no longer listens");
+            drop(lease);
+            assert!(
+                gone_within(ssh, Duration::from_secs(2)).await,
+                "ssh {ssh} still runs"
+            );
+        });
+    }
 }
 
 #[cfg(pw_live_ssh)]

@@ -19,7 +19,9 @@
 //!   부르는 쪽 — `pw_db::session`), 다시 붙는 것은 사람이 누를 때다(다음 [`Tunnels::open`] 이 새로 띄운다).
 //! - **앱이 끝날 때**: [`shutdown`] 이 남은 ssh 그룹을 모두 끝낸다(데스크톱의 `RunEvent::Exit`). **강제로 끝나면**(SIGKILL ·
 //!   크래시) `shutdown` 이 돌지 않는다 — 띄운 ssh 마다 상태 디렉터리에 기록을 두고([`Tunnels::recording`]) 다음 시작 때
-//!   [`reap_orphans`] 가 (pid, 시작 시각, argv)가 모두 맞는 것만 끈다. Linux 는 ssh 에 `PR_SET_PDEATHSIG` 도 건다.
+//!   [`reap_orphans`] 가 (pid, 시작 시각, argv)가 모두 맞는 것만 끈다. Linux 는 ssh 에 `PR_SET_PDEATHSIG` 도 건다 — 그 신호는
+//!   fork 한 **스레드**가 끝날 때 오므로 fork 는 프로세스 수명 동안 사는 전용 스레드(`pw_spawn::on_launcher`)가 한다. 터널을 연
+//!   런타임 스레드(쉬다 끝나는 블로킹 풀 · `block_in_place` 를 한 일꾼)에서 fork 하면 그 스레드가 끝날 때 ssh 가 조용히 죽는다.
 //! - askpass(비밀번호 · 패스프레이즈 · 모르는 호스트 키)는 부르는 쪽이 [`AskpassGuard`] 로 환경을 준다(M2-06 의 길 — `pw_git`).
 //!   없으면 ssh 는 묻지 못하고 실패한다(제어 터미널이 없다).
 
@@ -488,8 +490,8 @@ async fn spawn_until_ready(
                 if libc::setsid() == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
-                // Linux: 띄운 스레드가 끝나면(앱이 죽으면 — tokio 의 일꾼 스레드는 런타임과 함께 끝난다) ssh 에 SIGTERM. 이 줄 앞에서
-                // 앱이 이미 죽었으면 부모가 바뀌었다 — 띄우지 않는다.
+                // Linux: 띄운 스레드(`pw_spawn` 의 전용 스레드 — 프로세스와 함께 끝난다)가 끝나면, 곧 앱이 죽으면 ssh 에 SIGTERM.
+                // 이 줄 앞에서 앱이 이미 죽었으면 부모가 바뀌었다 — 띄우지 않는다.
                 #[cfg(target_os = "linux")]
                 {
                     if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
@@ -505,7 +507,8 @@ async fn spawn_until_ready(
             });
         }
     }
-    let mut child: Child = match command.spawn() {
+    // fork 는 전용 띄우기 스레드에서(머리 주석 — 이 future 를 도는 스레드는 끝날 수 있다). 자식의 대기 · stderr 는 이 런타임에서.
+    let mut child: Child = match pw_spawn::on_launcher(move || command.spawn()).await {
         Ok(child) => child,
         Err(e) => {
             return Attempt::Failed(DbError::new(
