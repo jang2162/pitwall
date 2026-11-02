@@ -344,13 +344,16 @@ struct Instance {
     /// 띄운 서버. `initialize` 를 기다리는 동안(`starting`)에도 여기 있다 — 신뢰 해제 · 창 닫힘 · restart · stop 이 그 서버에 닿는다
     /// (M4-05 리뷰 H1). 동기화 · 요청은 `state.is_running()` 일 때만 간다.
     server: Option<Arc<LanguageServer>>,
-    /// 띄우기 · 끝내기마다 오른다 — 지난 시도의 결과를 버린다.
+    /// 띄우기 · 끝내기마다 오른다 — 지난 시도의 결과를 버린다. 관리자 전체의 단조 증가 수([`Instance::bump`])에서 받는다: 창을
+    /// 닫으면 인스턴스가 지워지므로 인스턴스마다 0 부터 세면 같은 키로 다시 연 인스턴스가 끝나는 옛 서버와 같은 세대가 된다(M4-06
+    /// 리뷰 M1 — 옛 서버의 늦은 알림 · 답이 새 서버의 것으로 받아들여진다).
     generation: u64,
-    /// 이 인스턴스 값을 만든 차례(관리자 전체에서 하나씩 오른다). 인스턴스가 표에서 빠졌다 다시 생기면 `generation` 이 0 부터
-    /// 다시 세므로, 세대 표지([`InstanceEpoch`])는 이것과 함께 본다.
+    /// 이 인스턴스 값을 만든 차례(관리자 전체에서 하나씩 오른다). 세대 표지([`InstanceEpoch`])는 이것과 함께 본다(M4-08). `generation`
+    /// 도 이제 관리자 전체에서 오르므로(M4-06 리뷰 M1) 다시 생긴 인스턴스와 겹치지 않는다 — 표지는 그대로 둘을 함께 본다.
     born: u64,
     /// 가장 최근에 이 서버를 쓴 연결(문서 열기 · 요청 — `window/showDocument` 를 보일 창, M4-08 리뷰 M2).
     last_user: Option<SessionId>,
+    generations: Arc<AtomicU64>,
     docs: BTreeSet<String>,
     /// 지금 서버에 열어 둔 URI(→ 그 URI 를 연 문서들).
     synced: BTreeMap<String, Synced>,
@@ -371,19 +374,20 @@ struct Instance {
 }
 
 impl Instance {
-    fn new(order: usize, scope: PathBuf) -> Self {
+    fn new(order: usize, scope: PathBuf, generations: Arc<AtomicU64>) -> Self {
         Self {
             order,
             scope,
             feed: None,
             state: LspInstanceState::Starting,
             server: None,
-            generation: 0,
             born: {
                 static BORN: AtomicU64 = AtomicU64::new(0);
                 BORN.fetch_add(1, Ordering::Relaxed)
             },
             last_user: None,
+            generation: generations.fetch_add(1, Ordering::Relaxed) + 1,
+            generations,
             docs: BTreeSet::new(),
             synced: BTreeMap::new(),
             holders: BTreeSet::new(),
@@ -400,10 +404,15 @@ impl Instance {
         }
     }
 
+    /// 세대를 올린다 — 관리자 전체에서 한 번도 쓰지 않은 수로.
+    fn bump(&mut self) {
+        self.generation = self.generations.fetch_add(1, Ordering::Relaxed) + 1;
+    }
+
     /// 서버를 내려놓는다(끝내는 것은 부른 쪽 — [`Taken::end`]).
     fn take_server(&mut self, state: LspInstanceState) -> Option<Taken> {
         let initialized = self.state.is_running();
-        self.generation += 1;
+        self.bump();
         self.synced.clear();
         self.progress.end_all();
         self.sync_hook = None;
@@ -444,6 +453,8 @@ struct Inner {
     host: OnceLock<Host>,
     state: Mutex<State>,
     spawns: AtomicU64,
+    /// 인스턴스 세대의 원천(관리자 수명 안에서 단조 증가 — [`Instance::generation`]).
+    generations: Arc<AtomicU64>,
     listeners: RwLock<HashMap<String, Vec<Listener>>>,
     status_listeners: RwLock<Vec<StatusListener>>,
     sync_listeners: RwLock<Vec<SyncListener>>,
@@ -500,6 +511,7 @@ impl LspManager {
                 host: OnceLock::new(),
                 state: Mutex::new(State::default()),
                 spawns: AtomicU64::new(0),
+                generations: Arc::new(AtomicU64::new(0)),
                 listeners: RwLock::new(HashMap::new()),
                 status_listeners: RwLock::new(Vec::new()),
                 sync_listeners: RwLock::new(Vec::new()),
@@ -796,9 +808,9 @@ impl LspManager {
             let doc = &docs[&doc_id];
             for (order, key) in &keys {
                 let created = !instances.contains_key(key);
-                let instance = instances
-                    .entry(key.clone())
-                    .or_insert_with(|| Instance::new(*order, root.clone()));
+                let instance = instances.entry(key.clone()).or_insert_with(|| {
+                    Instance::new(*order, root.clone(), Arc::clone(&self.inner.generations))
+                });
                 instance.docs.insert(doc_id.clone());
                 instance.holders.insert(session);
                 instance.last_user = Some(session);
@@ -812,11 +824,11 @@ impl LspManager {
                     sync_open(&server, instance, &doc_id, doc, docs);
                 } else if untrusted {
                     if instance.server.is_none() {
-                        instance.generation += 1;
+                        instance.bump();
                         instance.state = LspInstanceState::Untrusted;
                     }
                 } else if created || retry_on_open(&instance.state) {
-                    instance.generation += 1;
+                    instance.bump();
                     instance.state = LspInstanceState::Starting;
                     starts.push((key.clone(), instance.generation));
                 }

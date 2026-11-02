@@ -398,6 +398,53 @@ async fn closing_the_window_clears_its_servers_diagnostics() {
     assert!(listed(&mut other, &env, &file).await.is_empty());
 }
 
+/// 창을 닫고 곧바로 다시 열면 같은 키의 새 인스턴스가 생긴다 — 끝나는 옛 서버가 늦게 보낸 진단이 새 서버의 진단을 덮지 않는다
+/// (세대가 인스턴스마다 0 부터면 옛 서버와 새 서버의 세대가 같아진다 — M4-06 리뷰 M1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reopening_a_closed_window_ignores_the_ending_servers_late_diagnostics() {
+    let (env, seen) = counting_env(EnvOptions::default());
+    let file = env.file("src/lib.rs", "");
+    env.fake(
+        "rust-analyzer",
+        Scenario {
+            capabilities: incremental(),
+            ignore_exit: true,
+            ..Scenario::default()
+        }
+        .on(
+            "textDocument/didOpen",
+            vec![publish(&uri(&file), Some(0), vec![diag(0, 1, "fresh")])],
+        )
+        // 새 창이 새 서버를 띄운 뒤에 옛 서버가 진단을 내게 `shutdown` 을 늦게 답한다.
+        .reply(
+            "shutdown",
+            Reply {
+                result: Some(Value::Null),
+                delay_ms: 900,
+                then: vec![publish(&uri(&file), None, vec![diag(0, 1, "late")])],
+                ..Reply::default()
+            },
+        ),
+    );
+    let mut events = subscribe(&env);
+    let mut win = env.window();
+    win.open(&env, &file, "Rust", "").await;
+    next_for(&mut events, &file).await;
+    win.session.close();
+    assert_eq!(next_for(&mut events, &file).await["diagnostics"], json!([]));
+    let mut again = env.window();
+    again.open(&env, &file, "Rust", "").await;
+    assert_eq!(
+        messages(&next_for(&mut events, &file).await["diagnostics"]),
+        ["fresh"]
+    );
+    assert!(
+        eventually(Duration::from_secs(10), || seen.load(Ordering::SeqCst) >= 3).await,
+        "the ending server's late notification never arrived"
+    );
+    assert_eq!(listed(&mut again, &env, &file).await, ["fresh"]);
+}
+
 /// 멈춘 서버가 끝나는 동안 보낸 진단(`shutdown` 을 받고 낸 것)은 받지 않는다 — 지운 뒤에 다시 쌓이지 않는다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stopped_servers_late_diagnostics_are_dropped() {
