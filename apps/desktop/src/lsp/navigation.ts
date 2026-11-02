@@ -111,8 +111,10 @@ export interface NavigationHost {
   /** 외부 소스 탭이 쓸 토큰의 머리 정보(경로 · 출처 서버 · 언어)를 적는다. */
   rememberToken?(
     token: string,
-    meta: { path: string; server: string; language: string | null },
+    meta: { path: string; server: string; language: string | null; worktree?: string },
   ): void;
+  /** 외부 소스 탭이 연 때 읽어 둔 토큰 문서의 글(없으면 `undefined` — 미리보기가 그것을 먼저 쓴다). */
+  outsideText?(token: string): string | undefined;
 }
 
 let host: NavigationHost | undefined;
@@ -169,6 +171,8 @@ export function tokenSource(spec: {
   token: string;
   path: string;
   language: string | null;
+  /** 그 토큰을 받은 문서의 워크트리(루트 안 위치를 열 때 — 리뷰 L4). */
+  worktree?: string;
   services: LspServices;
 }): NavSource {
   const pending = new Map<string, AbortController>();
@@ -190,6 +194,7 @@ export function tokenSource(spec: {
     language: spec.language,
     services,
     path: spec.path,
+    ...(spec.worktree !== undefined && { worktree: spec.worktree }),
     token,
     offers: () => true,
     hover: (offset) =>
@@ -224,6 +229,7 @@ function remember(result: LspLocationsResult, source: NavSource) {
         path: loc.path,
         server: result.server ?? "",
         language: source.language,
+        ...(source.worktree !== undefined && { worktree: source.worktree }),
       });
 }
 
@@ -511,7 +517,17 @@ export function previewMarkdown(lines: string, language: string | null) {
   return `${fence}${language ?? ""}\n${lines}\n${fence}`;
 }
 
-/** 위치의 앞 몇 줄을 읽는다: 루트 안은 `fs.read`, 루트 밖은 토큰의 `lsp.document.read`. 못 읽으면 위치의 한 줄. */
+/** 선언 미리보기가 루트 안 파일에서 읽는 앞부분의 상한(바이트). 그보다 뒤의 정의는 위치의 한 줄로 물러난다(리뷰 L3). */
+export const PREVIEW_READ_BYTES = 256 * 1024;
+/** 토큰 문서의 미리보기를 기억하는 수 — 토큰 문서는 바뀌지 않으므로 같은 정의 위의 `⌘+호버` 가 다시 읽지 않는다. */
+const PREVIEW_CACHE = 64;
+const tokenPreviews = new Map<string, string>();
+
+/**
+ * 위치의 앞 몇 줄을 읽는다(리뷰 L3 — 파일 전체를 매번 받지 않는다). 루트 밖(토큰)은 외부 소스 탭이 들고 있는 글을 먼저 쓰고, 없으면
+ * `lsp.document.read` 로 한 번 읽어 그 줄들만 기억한다. 루트 안은 `fs.read` 로 앞 [`PREVIEW_READ_BYTES`] 까지만 읽고, 그 안에 정의
+ * 줄들이 없으면(잘린 끝 줄은 쓰지 않는다) 위치의 한 줄로 물러난다. 못 읽어도 위치의 한 줄.
+ */
 async function previewLines(loc: LspLocation, source: NavSource, projectId: string | undefined) {
   const cut = (text: string) =>
     text
@@ -520,20 +536,51 @@ async function previewLines(loc: LspLocation, source: NavSource, projectId: stri
       .join("\n")
       .replace(/\n+$/, "");
   try {
-    if (loc.token)
-      return cut((await source.services.call("lsp.document.read", { token: loc.token })).text);
+    if (loc.token) {
+      const key = `${loc.token}:${loc.line}`;
+      const known = tokenPreviews.get(key);
+      if (known !== undefined) return known;
+      const text =
+        host?.outsideText?.(loc.token) ??
+        (await source.services.call("lsp.document.read", { token: loc.token })).text;
+      const lines = cut(text);
+      tokenPreviews.set(key, lines);
+      if (tokenPreviews.size > PREVIEW_CACHE)
+        tokenPreviews.delete(tokenPreviews.keys().next().value!);
+      return lines;
+    }
     if (projectId !== undefined) {
       const read = await source.services.call("fs.read", {
         projectId,
         worktree: source.worktree ?? null,
         path: loc.path,
+        offset: 0,
+        length: PREVIEW_READ_BYTES,
       });
-      if (read.content.kind === "text") return cut(read.content.text);
+      if (read.content.kind === "text") {
+        const lines = read.content.text.split(/\r\n|\r|\n/);
+        // 끝까지 읽지 않았으면 마지막 줄은 잘렸을 수 있다 — 쓰지 않는다.
+        const whole = read.eof ? lines : lines.slice(0, -1);
+        if (loc.line <= whole.length) return cut(whole.join("\n"));
+      }
     }
   } catch {
     // 아래의 한 줄로 물러난다.
   }
   return loc.preview ?? undefined;
+}
+
+/**
+ * 마우스 아래의 낱말. 줄 끝 오른쪽 빈 곳(또는 줄 머리 왼쪽)은 가장 가까운 위치(줄 끝)로 잡히므로, 그 낱말의 화면 범위 밖이면
+ * 낱말이 아니다(리뷰 L5). 배치가 없으면(너비 0 — 시험) 범위를 보지 않는다.
+ */
+function wordUnder(view: EditorView, pos: number, x: number) {
+  const word = view.state.wordAt(pos);
+  if (!word) return null;
+  const start = view.coordsAtPos(word.from, 1);
+  const end = view.coordsAtPos(word.to, -1);
+  if (start && end && end.right > start.left && (x < start.left || x > end.right)) return null;
+  return word;
 }
 
 class Hovering implements PluginValue {
@@ -561,14 +608,15 @@ class Hovering implements PluginValue {
   private move(e: MouseEvent) {
     const pos = this.view.posAtCoords({ x: e.clientX, y: e.clientY }, false);
     const mod = modKey(e);
-    const word = this.view.state.wordAt(pos);
+    const word = wordUnder(this.view, pos, e.clientX);
     // 팝업이 가리킨 낱말 밖으로 나가면(고정 팝업이 아니면) 닫는다.
     const popup = currentPopup(this.view, "main");
     const data =
       popup?.kind === "hover"
         ? (popup.data as { pinned?: boolean; from: number; to: number })
         : undefined;
-    if (data && !data.pinned && (pos < data.from || pos > data.to)) closePopup(this.view, "main");
+    if (data && !data.pinned && (!word || pos < data.from || pos > data.to))
+      closePopup(this.view, "main");
     if (!word) {
       this.clear();
       return;

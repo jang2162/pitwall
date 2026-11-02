@@ -35,6 +35,7 @@ import { parseTheme } from "../theme/tokens";
 import { editorContext } from "../editor/extensions/context";
 import type { fakeSyntaxServer } from "../editor/syntax-testing";
 import { fakeLspServer } from "./lsp-testing";
+import { PREVIEW_READ_BYTES } from "./navigation";
 import { currentPopup } from "./popup";
 
 declare global {
@@ -65,6 +66,14 @@ const host = vi.hoisted(() => ({
   opened: [] as string[],
   /** 받은 RPC(메서드 · 매개변수). */
   calls: [] as { method: string; params: unknown }[],
+}));
+
+/** 이 창의 label 과 창을 앞으로 가져온 횟수(./window-focus — Tauri 밖이라 시험이 정한다). */
+const focus = vi.hoisted(() => ({ label: null as string | null, forward: 0 }));
+
+vi.mock("./window-focus", () => ({
+  windowLabel: () => focus.label,
+  bringForward: async () => void focus.forward++,
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -198,15 +207,18 @@ vi.mock("../tauri-transport", async () => {
               readonly: false,
               sizeClass: host.sizeClass.get(path) ?? "editable",
             } satisfies FsStat);
-          case "fs.read":
+          case "fs.read": {
+            const whole = host.files.get(path)!;
+            const { offset = 0, length } = m.params as { offset?: number; length?: number };
+            const text = length === undefined ? whole : whole.slice(offset, offset + length);
             return reply({
               path,
-              size: host.files.get(path)!.length,
+              size: whole.length,
               mtimeMs: 1,
-              offset: 0,
-              eof: true,
-              version: "1",
-              content: { kind: "text", text: host.files.get(path)! },
+              offset,
+              eof: offset + text.length >= whole.length,
+              version: length === undefined ? "1" : null,
+              content: { kind: "text", text },
               judgment: {
                 binary: false,
                 encoding: "UTF-8",
@@ -219,6 +231,7 @@ vi.mock("../tauri-transport", async () => {
                 highlight: true,
               },
             } satisfies FsRead);
+          }
           case "lang.detect": {
             const { files } = m.params as { files: { path: string }[] };
             return reply({
@@ -299,6 +312,8 @@ beforeEach(() => {
   host.subscribers = [];
   host.syntax = undefined;
   host.lsp = fakeLspServer();
+  focus.label = null;
+  focus.forward = 0;
   host.sizeClass = new Map();
   host.opened = [];
   host.calls = [];
@@ -678,6 +693,41 @@ it("opens a location outside the root read-only through its token, asks the same
   await settle();
 });
 
+it("opens a location inside the root from an outside tab in the worktree its token came from (review L4)", async () => {
+  const WT = "/work/demo-wt";
+  const WMAIN = `${WT}/src/main.rs`;
+  const WLIB = `${WT}/src/lib.rs`;
+  host.files.set(WMAIN, host.files.get(MAIN)!);
+  host.files.set(WLIB, host.files.get(LIB)!);
+  serve();
+  host.lsp!.handle("lsp.definition", async (p) =>
+    (p as { token?: string }).token
+      ? answer(loc(WLIB, 1, 8, 14, "pub fn helper() {}"))
+      : answer(loc(VEC, 1, 12, 15, "pub struct Vec;", "tok-l4")),
+  );
+  host.lsp!.handle("lsp.document.read", async () => ({
+    text: "pub struct Vec;\n",
+    uri: `file://${VEC}`,
+    path: VEC,
+    server: "rust-analyzer",
+  }));
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: WT, file: WMAIN, line: 2, col: 6 }));
+  await settle();
+  await cmd("KeyB", "b");
+  await settle();
+  expect(here().path).toBe(VEC);
+  // 외부 소스 탭 안에서 루트 안 위치로 — 그 토큰을 받은 문서의 워크트리로 연다.
+  await cmd("KeyB", "b");
+  await settle();
+  expect(here().path).toBe(WLIB);
+  const reads = host.calls.filter(
+    (c) => c.method === "fs.read" && (c.params as { path: string }).path === WLIB,
+  );
+  expect(reads.length).toBeGreaterThan(0);
+  expect(reads.every((c) => (c.params as { worktree: string | null }).worktree === WT)).toBe(true);
+});
+
 it("does not open an outside tab when the token cannot be read", async () => {
   serve();
   host.lsp!.handle("lsp.definition", async () => answer(loc(VEC, 1, 1, 4, "x", "tok-gone")));
@@ -698,6 +748,7 @@ it("opens a file the server shows with window/showDocument (③ — the Host let
   await mount();
   await open(MAIN, 1, 1);
   await emit("lsp.showDocument", {
+    window: null,
     path: LIB,
     worktree: null,
     line: 2,
@@ -706,6 +757,40 @@ it("opens a file the server shows with window/showDocument (③ — the Host let
     server: "rust-analyzer",
   });
   expect(here()).toEqual({ path: LIB, line: 2, column: 5 });
+});
+
+it("opens a shown document only in the window the Host picked, and moves focus only when the server asks (review M2)", async () => {
+  focus.label = "project-a";
+  serve();
+  await mount();
+  await open(MAIN, 1, 1);
+  const show = (window: string | null, takeFocus: boolean, line: number) =>
+    emit("lsp.showDocument", {
+      window,
+      path: LIB,
+      worktree: null,
+      line,
+      column: 1,
+      takeFocus,
+      server: "rust-analyzer",
+    });
+  // 다른 창을 가리키는 이벤트(그 서버를 더 최근에 쓴 창) · label 없는 이벤트는 이 창이 열지 않는다.
+  await show("project-b", true, 2);
+  await show(null, true, 2);
+  expect(here().path).toBe(MAIN);
+  expect(focus.forward).toBe(0);
+  // takeFocus 가 아니면 (새 탭으로) 열되 키보드 포커스는 그 전 자리 그대로, 창도 건드리지 않는다.
+  const field = document.createElement("input");
+  document.body.append(field);
+  field.focus();
+  await show("project-a", false, 3);
+  expect(here()).toEqual({ path: LIB, line: 3, column: 1 });
+  expect(document.activeElement).toBe(field);
+  expect(focus.forward).toBe(0);
+  // takeFocus 면 열고 창을 앞으로 가져오기를 부른다(앱이 포커스를 가졌을 때만 가져오는 것은 window-focus.test.ts).
+  await show("project-a", true, 2);
+  expect(here()).toEqual({ path: LIB, line: 2, column: 1 });
+  expect(focus.forward).toBe(1);
 });
 
 it("shows quick documentation as a pinned popup and never lets the server's Markdown run as HTML", async () => {
@@ -795,6 +880,96 @@ it("hovers after 0.5 s, underlines with ⌘ and previews the declaration, and cl
   expect(code.textContent).toBe("pub fn helper() {}\npub fn other() {}\npub fn third() {}\n");
   await act(async () => window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta" })));
   expect(view().dom.querySelector(".pw-lsp-link")).toBeNull();
+});
+
+/** `⌘` 를 누른 채 「helper」 위에 머물러 선언 미리보기의 글을 받고, 마우스를 낱말 밖으로 뺀다. */
+async function cmdPreview() {
+  pointer = 17;
+  await mouse("mousemove", { metaKey: true });
+  await act(async () => vi.advanceTimersByTimeAsync(550));
+  await settle();
+  const text = popupDom()?.querySelector("pre code")?.textContent;
+  pointer = 40;
+  await mouse("mousemove", { metaKey: true });
+  return text;
+}
+
+it("reads only the head of a file inside the root for the ⌘ preview (review L3)", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  serve();
+  // 정의가 앞부분 상한 뒤에 있는 큰 파일 — 앞부분만 읽고 위치의 한 줄로 물러난다.
+  host.files.set(LIB, `${"x".repeat(PREVIEW_READ_BYTES)}\npub fn helper() {}\npub fn other() {}\n`);
+  host.lsp!.handle("lsp.definition", async () => answer(loc(LIB, 2, 8, 14, "pub fn helper() {}")));
+  await mount();
+  await open(MAIN, 1, 1);
+  expect(await cmdPreview()).toBe("pub fn helper() {}\n");
+  expect(
+    host.calls.filter((c) => c.method === "fs.read" && (c.params as { path: string }).path === LIB),
+  ).toEqual([
+    {
+      method: "fs.read",
+      params: { projectId: "p1", worktree: null, path: LIB, offset: 0, length: PREVIEW_READ_BYTES },
+    },
+  ]);
+});
+
+it("reads a token document once for the ⌘ preview of a location outside the root (review L3)", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  serve();
+  host.lsp!.handle("lsp.definition", async () =>
+    answer(loc(VEC, 1, 12, 15, "pub struct Vec;", "tok-l3")),
+  );
+  let reads = 0;
+  host.lsp!.handle("lsp.document.read", async () => {
+    reads++;
+    return {
+      text: "pub struct Vec;\nimpl Vec {}\n",
+      uri: `file://${VEC}`,
+      path: VEC,
+      server: "rust-analyzer",
+    };
+  });
+  await mount();
+  await open(MAIN, 1, 1);
+  // 한 번 읽은 미리보기를 기억한다 — 같은 정의 위에서 다시 ⌘ 를 눌러도 다시 읽지 않는다.
+  expect(await cmdPreview()).toBe("pub struct Vec;\nimpl Vec {}\n");
+  expect(await cmdPreview()).toBe("pub struct Vec;\nimpl Vec {}\n");
+  expect(reads).toBe(1);
+});
+
+it("does not hover past the end of a line that ends with a word (review L5)", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  serve();
+  host.files.set(MAIN, "fn main() {\n    let x = helper\n}\n");
+  host.lsp!.handle("lsp.hover", async () => ({
+    staleVersion: false,
+    hover: { kind: "plaintext", value: "fn helper()", from: null, to: null },
+  }));
+  // 글자 하나가 10px 인 배치(happy-dom 은 배치가 없다). 「helper」 는 24..30 — 화면에서 240..300.
+  vi.spyOn(EditorView.prototype, "coordsAtPos").mockImplementation((pos: number) => ({
+    left: pos * 10,
+    right: pos * 10,
+    top: 0,
+    bottom: 10,
+  }));
+  await mount();
+  await open(MAIN, 1, 1);
+  // 줄 끝 오른쪽 빈 곳 — 가장 가까운 위치는 줄 끝(30)이지만 낱말 밖이다.
+  pointer = 30;
+  await mouse("mousemove", { clientX: 500 });
+  await act(async () => vi.advanceTimersByTimeAsync(600));
+  await settle();
+  expect(host.lsp!.called("call:lsp.hover")).toEqual([]);
+  // 낱말 위면 묻고, 거기서 줄 끝 너머로 나가면 팝업이 닫힌다.
+  pointer = 27;
+  await mouse("mousemove", { clientX: 270 });
+  await act(async () => vi.advanceTimersByTimeAsync(600));
+  await settle();
+  expect(host.lsp!.called("call:lsp.hover")).toHaveLength(1);
+  expect(popupDom()!.textContent).toBe("fn helper()");
+  pointer = 30;
+  await mouse("mousemove", { clientX: 500 });
+  expect(popupDom()).toBeNull();
 });
 
 it("stays silent when no server takes the feature (an untrusted project starts none)", async () => {

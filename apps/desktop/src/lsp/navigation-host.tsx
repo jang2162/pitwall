@@ -1,6 +1,8 @@
 // 프로젝트 창에 내비게이션(15-m4-plan M4-08)을 붙인다: 키맵 액션(선언 · 구현 · 사용처 · 빠른 문서), 위치 팝업이 쓰는 창의 것
 // (위치로 가기 · 문자열 · 사용처 고정), 외부 소스 탭의 Host 연결, 서버의 `window/showDocument`(Host 가 루트 안 파일만 받아 낸
-// `lsp.showDocument` 이벤트 — 위치로 가기로 연다).
+// `lsp.showDocument` 이벤트 — 위치로 가기로 연다). 그 이벤트는 프로젝트의 모든 창에 오지만 Host 가 고른 창(그 서버에 문서를 연
+// 창 중 가장 최근에 그 서버를 쓴 창, `window`)만 연다. `takeFocus` 가 아니면 키보드 포커스를 그 전 자리에 두고, `takeFocus` 면
+// 앱이 포커스를 가졌을 때만 창을 앞으로 가져온다(리뷰 M2).
 //
 // 액션은 글자 영역(`editorFocus`)에서 돈다(기본 키맵의 「코드 (LSP · 편집)」 묶음). 대상은 포커스를 가진 에디터, 없으면 활성 탭의
 // 뷰다(멀티 커서 액션과 같다). 그 뷰에 요청 길(`navSource` — 열린 문서 · 외부 소스)이 없거나 맡을 서버가 없으면 아무것도 하지
@@ -27,6 +29,7 @@ import {
   setNavigationHost,
 } from "./navigation";
 import type { OutsideSourcesRuntime } from "./outside-sources";
+import { bringForward, windowLabel } from "./window-focus";
 
 /** 서버가 루트 안 문서를 열라고 했다(crates/pw-lsp/src/navigation.rs 의 `TOPIC_SHOW_DOCUMENT`). */
 export const LSP_SHOW_DOCUMENT_TOPIC = "lsp.showDocument";
@@ -107,6 +110,7 @@ export function useLspNavigation(
         mac: isMac(platform),
         pinUsages: (title, files) => pinUsages(workspace.api(), title, files),
         rememberToken: (token, meta) => outside?.remember(token, meta),
+        outsideText: (token) => outside?.text(token),
       }),
     [workspace, strings, platform, outside],
   );
@@ -126,18 +130,34 @@ export function useLspNavigation(
     if (!services) return;
     return services.subscribe([LSP_SHOW_DOCUMENT_TOPIC], (event) => {
       const show = event.payload as unknown as LspShowDocument;
-      void workspace.navigateTo(
-        {
-          path: show.path,
-          ...(show.worktree !== null && { worktree: show.worktree }),
-          ...(show.line !== null && { line: show.line, column: show.column ?? 1 }),
-        },
-        { record: true },
-      );
+      if ((show.window ?? null) !== windowLabel()) return;
+      void showDocument(workspace, show);
     });
   }, [workspace]);
   const actions = useMemo(() => lspNavigationActions({ workspace, strings }), [workspace, strings]);
   useRegisterActions(actions);
+}
+
+/** 서버가 보이라고 한 문서를 연다(위치로 가기 — 기록이 남는다). 포커스는 머리 주석. */
+async function showDocument(workspace: EditorWorkspace, show: LspShowDocument) {
+  const before = document.activeElement;
+  const opened = await workspace.navigateTo(
+    {
+      path: show.path,
+      ...(show.worktree !== null && { worktree: show.worktree }),
+      ...(show.line !== null && { line: show.line, column: show.column ?? 1 }),
+    },
+    { record: true },
+  );
+  if (!opened) return;
+  if (show.takeFocus) return bringForward();
+  // 위치로 가기는 다음 프레임에 에디터로 포커스를 준다(새 탭이면 뷰가 붙을 때) — 그 뒤에 그 전 자리로 돌려놓는다.
+  if (!(before instanceof HTMLElement)) return;
+  await new Promise<void>((done) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => done())),
+  );
+  if (before.isConnected && document.activeElement !== before)
+    before.focus({ preventScroll: true });
 }
 
 function isMac(platform: Platform) {

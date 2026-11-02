@@ -65,6 +65,8 @@ export interface OutsideSpec {
   readonly server: string;
   /** Linguist 언어 이름(구문 강조 · 미리보기). 모르면 `null`. */
   readonly language: string | null;
+  /** 그 토큰을 받은 문서의 워크트리 — 이 탭 안에서 루트 안 위치로 갈 때 · 미리볼 때 쓴다(리뷰 L4). 메인 체크아웃이면 없다. */
+  readonly worktree?: string;
 }
 
 /** 탭의 외부 소스 칸. 외부 소스 탭이 아니면 `undefined`. */
@@ -77,6 +79,7 @@ interface Meta {
   path: string;
   server: string;
   language: string | null;
+  worktree?: string;
 }
 
 /** 창의 것(늦게 붙는다 — 작업 공간을 만든 뒤). */
@@ -152,6 +155,7 @@ export function createOutsideSources(): OutsideSourcesRuntime {
             path: read.path,
             server: read.server,
             language: known?.language ?? null,
+            ...(known?.worktree !== undefined && { worktree: known.worktree }),
           });
         } catch (e) {
           if (!travel) b.failed?.(e instanceof Error ? e.message : String(e));
@@ -239,7 +243,13 @@ export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: O
           revisionHighlight(syntax && revisionSyntax(syntax, spec.language, text)),
           popupBase,
           navigationExtension(
-            tokenSource({ token: spec.token, path: spec.path, language: spec.language, services }),
+            tokenSource({
+              token: spec.token,
+              path: spec.path,
+              language: spec.language,
+              ...(spec.worktree !== undefined && { worktree: spec.worktree }),
+              services,
+            }),
             projectId,
           ),
           EditorView.updateListener.of((u) => {

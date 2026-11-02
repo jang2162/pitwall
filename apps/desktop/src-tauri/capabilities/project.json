@@ -1,9 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "project",
-  "description": "에디터가 있는 창(프로젝트 창 · 단일 파일 창 M1-24)만 쓰는 권한: Markdown 미리보기(M1-22)의 링크를 외부 브라우저 · 메일 앱으로 여는 것(opener open-url, 범위는 http · https · mailto 만 — 기본 범위 allow-default-urls 는 tel 도 열어 쓰지 않는다). 웹뷰 쪽도 http(s) · mailto 밖의 스킴은 넘기지 않는다(src/editor/markdown.ts). 모든 창에 공통인 권한은 default.json 에 있다.",
+  "description": "에디터가 있는 창(프로젝트 창 · 단일 파일 창 M1-24)만 쓰는 권한: Markdown 미리보기(M1-22)의 링크를 외부 브라우저 · 메일 앱으로 여는 것(opener open-url, 범위는 http · https · mailto 만 — 기본 범위 allow-default-urls 는 tel 도 열어 쓰지 않는다). 웹뷰 쪽도 http(s) · mailto 밖의 스킴은 넘기지 않는다(src/editor/markdown.ts). 언어 서버의 window/showDocument 가 takeFocus 일 때 앱이 포커스를 가졌으면 그 창을 앞으로 가져오는 것(창 목록 · 포커스 묻기 · 포커스 주기, src/lsp/window-focus.ts — M4-08). 모든 창에 공통인 권한은 default.json 에 있다.",
   "windows": ["project-*", "file-*"],
   "permissions": [
+    "core:window:allow-get-all-windows",
+    "core:window:allow-is-focused",
+    "core:window:allow-set-focus",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "http://*" }, { "url": "https://*" }, { "url": "mailto:*" }]
