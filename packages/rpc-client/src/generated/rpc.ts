@@ -5376,7 +5376,10 @@ export type LspFormatted = {
 	range: boolean,
 	/**  요청 사이에 문서가 바뀌었다 — 웹뷰는 넣지 않는다. */
 	staleVersion: boolean,
-	/**  요청을 보낼 때의 문서 기준 편집(LSP 위치 그대로, 겹치지 않음 · 문서 안). 서버가 `null` 이면 빈 목록. */
+	/**
+	 *  요청을 보낼 때의 문서 기준 편집(LSP 위치 그대로, 겹치지 않음 · 문서 안). 서버가 `null` 이거나 낡은 답(`stale_version`)이면
+	 *  빈 목록.
+	 */
 	edits: LspTextEdit[],
 };
 

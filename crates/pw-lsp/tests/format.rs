@@ -327,7 +327,8 @@ async fn edits_outside_the_document_or_overlapping_are_refused() {
     assert_eq!(overlap.data.as_ref().unwrap()["reason"], "overlap");
 }
 
-/// 답이 오는 사이에 문서가 바뀌면 `staleVersion` 이다(웹뷰는 넣지 않는다). 편집은 요청을 보낼 때의 문서로 검사한다.
+/// 답이 오는 사이에 문서가 바뀌면 `staleVersion` 이다(웹뷰는 넣지 않는다). 낡은 답은 검사하지 않고 빈 편집이다 — 문서 밖 편집이
+/// 섞여 있어도 「거절」(5130)이 아니라 「문서가 바뀌었다」 로 끝난다(M4-13 리뷰 L3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_edit_while_formatting_marks_the_answer_stale() {
     let env = Env::new(EnvOptions::default());
@@ -335,7 +336,7 @@ async fn an_edit_while_formatting_marks_the_answer_stale() {
         "rust-analyzer",
         server(json!({ "documentFormattingProvider": true })).reply(
             "textDocument/formatting",
-            Reply::result(json!([edit(1, 2, 1, 4, " ")])).delayed(400),
+            Reply::result(json!([edit(1, 2, 1, 4, " "), edit(40, 0, 40, 0, "x")])).delayed(400),
         ),
     );
     let mut win = env.window();
@@ -350,5 +351,5 @@ async fn an_edit_while_formatting_marks_the_answer_stale() {
     .unwrap();
     let stale = win.response(pending).await.unwrap();
     assert_eq!(stale["staleVersion"], true);
-    assert_eq!(stale["edits"], json!([edit(1, 2, 1, 4, " ")]));
+    assert_eq!(stale["edits"], json!([]));
 }

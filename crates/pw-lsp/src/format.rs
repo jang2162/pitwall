@@ -16,8 +16,11 @@
 //!
 //! **거절**([`code::FORMAT_REFUSED`] — 아무것도 넣지 않는다): 편집 수가 [`MAX_FORMAT_EDITS`] 를 넘거나 넣을 글의 합이
 //! [`MAX_FORMAT_TEXT`] 를 넘음, 문서 밖 범위(요청을 보낼 때의 문서 기준 — 마지막 줄 뒤의 줄, 시작이 끝보다 뒤), 서로 겹치는 편집,
-//! 꼴이 틀린 답. 줄 끝을 넘는 글자는 문서 밖이 아니다 — LSP 명세대로 줄 끝으로 맞춘다(웹뷰의 `lspOffset` 도 같다). 문서 끝 바로 뒤
-//! 줄의 0 글자(`{ line: 줄 수, character: 0 }`)는 문서 끝으로 받는다 — 문서 전체를 바꾸는 편집의 끝을 그렇게 주는 서버가 있다.
+//! 꼴이 틀린 답, 대리쌍 가운데(한 글자의 두 UTF-16 단위 사이)를 가리키는 위치(`malformed`). 줄 끝을 넘는 글자는 문서 밖이 아니다 —
+//! LSP 명세대로 줄 끝으로 맞춘다(웹뷰의 `lspOffset` 도 같다 — 같은 것은 이 줄 끝 맞춤뿐이다. 대리쌍 가운데는 `DocText::offset` 이
+//! 글자 앞으로 당기지만 `lspOffset` 은 그 가운데에 넣으므로 거절해 둘이 다른 자리를 보지 않게 한다). 문서 끝 바로 뒤 줄의 0 글자
+//! (`{ line: 줄 수, character: 0 }`)는 문서 끝으로 받는다 — 문서 전체를 바꾸는 편집의 끝을 그렇게 주는 서버가 있다. 낡은 답
+//! (`stale_version`)은 검사하지 않고 빈 편집이다 — 웹뷰가 넣지 않는다.
 
 use std::time::Duration;
 
@@ -78,7 +81,8 @@ pub struct LspFormatted {
     pub range: bool,
     /// 요청 사이에 문서가 바뀌었다 — 웹뷰는 넣지 않는다.
     pub stale_version: bool,
-    /// 요청을 보낼 때의 문서 기준 편집(LSP 위치 그대로, 겹치지 않음 · 문서 안). 서버가 `null` 이면 빈 목록.
+    /// 요청을 보낼 때의 문서 기준 편집(LSP 위치 그대로, 겹치지 않음 · 문서 안). 서버가 `null` 이거나 낡은 답(`stale_version`)이면
+    /// 빈 목록.
     pub edits: Vec<LspTextEdit>,
 }
 
@@ -146,6 +150,17 @@ pub fn checked_edits(
         line < lines || (line == lines && p.character == 0)
     };
     let offset = |p: &crate::edit::LspPosition| text.offset(Position::new(p.line, p.character));
+    // 줄 안의 글자가 대리쌍 가운데(두 UTF-16 단위 사이)인가. `DocText::offset` 은 그 자리를 글자 앞으로 당기지만 웹뷰의 적용기
+    // (`lspOffset`)는 그 가운데에 넣어 외톨이 대리쌍을 만들므로, 받지 않는다(M4-13 리뷰 M2).
+    let splits_pair = |p: &crate::edit::LspPosition| {
+        if p.line as usize >= lines {
+            return false;
+        }
+        let start = text.offset(Position::new(p.line, 0));
+        let end = text.offset(Position::new(p.line, u32::MAX));
+        let want = start + p.character as usize;
+        want < end && text.byte_of(want).is_none()
+    };
     let mut spans = Vec::with_capacity(edits.len());
     for (i, edit) in edits.iter().enumerate() {
         let LspRange { start, end } = edit.range;
@@ -157,6 +172,13 @@ pub fn checked_edits(
                     "the formatter edits line {} of a document with {lines} lines",
                     start.line.max(end.line)
                 ),
+            ));
+        }
+        if splits_pair(&start) || splits_pair(&end) {
+            return Err(refused(
+                "malformed",
+                server,
+                "the formatter sent a position inside a character (between the halves of a UTF-16 surrogate pair)",
             ));
         }
         let (from, to) = (offset(&start), offset(&end));
@@ -264,7 +286,13 @@ pub async fn format(
         }
     }
     .map_err(mark_timeout)?;
-    let edits = checked_edits(&answer.result, &answer.doc.text, &answer.server)?;
+    // 낡은 답은 웹뷰가 넣지 않는다 — 검사하지 않고 빈 편집으로 답해, 「문서가 바뀌었다」 대신 「거절」 이 뜨지 않게 한다(M4-13
+    // 리뷰 L3).
+    let edits = if answer.stale_version {
+        Vec::new()
+    } else {
+        checked_edits(&answer.result, &answer.doc.text, &answer.server)?
+    };
     Ok(LspFormatted {
         server: answer.server,
         range: range_server.is_some(),
@@ -359,6 +387,32 @@ mod tests {
             reason(&checked_edits(&json!([{ "newText": "x" }]), &text, "s").unwrap_err()),
             "malformed"
         );
+    }
+
+    #[test]
+    fn a_position_inside_a_surrogate_pair_is_refused_whole() {
+        // `😀` 은 UTF-16 두 단위(글자 1 ~ 3)다 — 2 는 그 가운데.
+        let text = DocText::new("a😀b\n");
+        checked_edits(
+            &json!([edit(0, 1, 0, 3, "x"), edit(0, 4, 0, 4, "y")]),
+            &text,
+            "s",
+        )
+        .unwrap();
+        for bad in [
+            edit(0, 2, 0, 2, "x"),
+            edit(0, 0, 0, 2, "x"),
+            edit(0, 2, 0, 4, "x"),
+        ] {
+            assert_eq!(
+                reason(
+                    &checked_edits(&json!([edit(0, 0, 0, 0, "ok"), bad]), &text, "s").unwrap_err()
+                ),
+                "malformed"
+            );
+        }
+        // 줄 끝을 넘는 글자는 대리쌍 판정과 무관하게 줄 끝이다.
+        checked_edits(&json!([edit(0, 99, 0, 99, "x")]), &text, "s").unwrap();
     }
 
     #[test]
