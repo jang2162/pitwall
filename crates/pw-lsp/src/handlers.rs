@@ -14,6 +14,9 @@ use serde_json::Value;
 
 use crate::server::Handlers;
 
+/// 서버 → 클라이언트 요청을 관리자의 알림 받는 쪽(`LspManager::on_notification`)에 넘기는 길. 그 인스턴스 · 세대를 출처로 단다.
+pub type Forward = Arc<dyn Fn(&str, &Value) + Send + Sync>;
+
 /// 처리기가 받는 인스턴스 문맥.
 #[derive(Clone)]
 pub struct HandlerContext {
@@ -30,6 +33,8 @@ pub struct HandlerContext {
     pub projects: Option<Registry>,
     /// 관리자(약한 참조 — `window/showDocument` 가 보일 창을 고른다, M4-08 리뷰 M2). 없으면 그 처리기는 거절한다.
     pub manager: Option<crate::manager::WeakLspManager>,
+    /// 답이 `null` 뿐인 알림성 요청(`workspace/diagnostic/refresh`)을 알림처럼 넘긴다 — 받는 쪽은 그 메서드의 `on_notification`.
+    pub forward: Forward,
 }
 
 /// 인스턴스 하나의 처리기 표.
@@ -39,7 +44,17 @@ pub(crate) fn server_handlers(cx: &HandlerContext) -> Handlers {
     // 기능 행이 여기에 한 줄씩: `workspace/applyEdit`(M4-12), `window/showDocument`(M4-08).
     crate::edit::apply_edit(&mut handlers, cx);
     crate::navigation::show_document(&mut handlers, cx);
+    forwarded(&mut handlers, cx, "workspace/diagnostic/refresh"); // M4-06 — 열린 문서의 진단을 다시 당긴다(`crate::diagnostics`)
     handlers
+}
+
+/// 답이 `null` 인 알림성 요청: 곧바로 답하고 `on_notification(method)` 의 받는 쪽에 넘긴다(받는 쪽은 채널 · 태스크에 넣기만 한다).
+fn forwarded(handlers: &mut Handlers, cx: &HandlerContext, method: &'static str) {
+    let forward = Arc::clone(&cx.forward);
+    handlers.on(method, move |params: Value| {
+        forward(method, &params);
+        async { Ok(Value::Null) }
+    });
 }
 
 /// `workspace/configuration` — M4-02 의 합친 설정(`ServerConfig::settings`)에서 답한다.

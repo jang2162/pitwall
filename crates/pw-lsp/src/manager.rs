@@ -224,9 +224,18 @@ impl WeakLspManager {
 #[derive(Debug, Clone)]
 pub struct NotificationSource {
     pub key: InstanceKey,
+    /// 그 서버를 띄운 시도의 세대. 서버를 내려놓으면(끝 · 재기동 · 신뢰 해제) 인스턴스의 세대가 올라 이 출처는 지난 것이 된다 —
+    /// 끝난 서버가 늦게 보낸 알림을 받는 쪽이 [`LspManager::is_current`] 로 가른다(M4-06).
+    pub generation: u64,
 }
 
 type Listener = Arc<dyn Fn(&NotificationSource, &Value) + Send + Sync>;
+/// 상태가 바뀌어 `lsp.status` 를 낼 때(프로젝트 id). 잠금 밖에서 불린다.
+type StatusListener = Arc<dyn Fn(&str) + Send + Sync>;
+/// 서버에 문서 텍스트(`didOpen` · `didChange`)를 보냈을 때(출처, URI, 서버 쪽 버전). **관리자 잠금 안에서** 불린다.
+type SyncListener = Arc<dyn Fn(&NotificationSource, &str, i64) + Send + Sync>;
+/// 인스턴스 하나의 [`SyncListener`] 들을 그 출처로 부르는 것.
+type SyncHook = Arc<dyn Fn(&str, i64) + Send + Sync>;
 
 /// 문서를 연 연결.
 #[derive(Clone)]
@@ -290,6 +299,8 @@ struct Synced {
     refs: BTreeSet<String>,
     /// 서버에 보낸 마지막 버전.
     version: i64,
+    /// 텍스트를 보낸 뒤 부를 것(`LspManager::on_synced` — 인스턴스의 것).
+    hook: Option<SyncHook>,
 }
 
 impl Synced {
@@ -297,6 +308,13 @@ impl Synced {
     fn next_version(&mut self, wanted: u32) -> i64 {
         self.version = (self.version + 1).max(i64::from(wanted));
         self.version
+    }
+
+    /// 서버에 지금 버전의 텍스트를 보냈다고 알린다(잠금 안 — 받는 쪽은 태스크에 넣기만).
+    fn sent(&self, uri: &str) {
+        if let Some(hook) = &self.hook {
+            hook(uri, self.version);
+        }
     }
 }
 
@@ -348,6 +366,8 @@ struct Instance {
     scope: PathBuf,
     /// 떠 있는 서버로 가는 파일 감시 전달의 자리(`ready` 때 만들고 서버를 내려놓을 때 닫는다).
     feed: Option<Arc<Feed>>,
+    /// 이 세대의 [`SyncHook`](떠서 `ready` 가 될 때 단다).
+    sync_hook: Option<SyncHook>,
 }
 
 impl Instance {
@@ -376,6 +396,7 @@ impl Instance {
                 save: None,
             },
             progress: Tracker::default(),
+            sync_hook: None,
         }
     }
 
@@ -385,6 +406,7 @@ impl Instance {
         self.generation += 1;
         self.synced.clear();
         self.progress.end_all();
+        self.sync_hook = None;
         self.state = state;
         self.idle = None;
         if let Some(feed) = self.feed.take() {
@@ -423,6 +445,8 @@ struct Inner {
     state: Mutex<State>,
     spawns: AtomicU64,
     listeners: RwLock<HashMap<String, Vec<Listener>>>,
+    status_listeners: RwLock<Vec<StatusListener>>,
+    sync_listeners: RwLock<Vec<SyncListener>>,
 }
 
 /// [`LspManager::subscribe`] 의 구독 둘(제어 · 파일 바뀜). [`LspManager::follow`] 에 넘긴다.
@@ -477,6 +501,8 @@ impl LspManager {
                 state: Mutex::new(State::default()),
                 spawns: AtomicU64::new(0),
                 listeners: RwLock::new(HashMap::new()),
+                status_listeners: RwLock::new(Vec::new()),
+                sync_listeners: RwLock::new(Vec::new()),
             }),
         }
     }
@@ -526,6 +552,118 @@ impl LspManager {
             .entry(method.to_owned())
             .or_default()
             .push(Arc::new(listener));
+    }
+
+    /// 상태가 바뀌어 `lsp.status` 를 낼 때마다 그 프로젝트 id 로 부른다(서버 뜸 · 끝 · 재기동 · 신뢰 해제 · 창 닫힘 — M4-06 이
+    /// 지난 세대의 진단을 지운다). 관리자 잠금 밖에서 불리므로 받는 쪽이 관리자의 읽기 함수를 불러도 된다.
+    pub fn on_status(&self, listener: impl Fn(&str) + Send + Sync + 'static) {
+        self.inner
+            .status_listeners
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::new(listener));
+    }
+
+    /// 떠 있는 서버에 문서 텍스트(`didOpen` · `didChange`)를 보낼 때마다 (출처, URI, 서버 쪽 버전)으로 부른다(M4-06 의 진단 pull).
+    /// **관리자 잠금 안에서** 불린다 — 받는 쪽은 태스크 · 채널에 넣기만 하고, 관리자의 읽기 함수는 그 태스크에서 부른다(같은
+    /// 스레드에서 부르면 교착).
+    pub fn on_synced(
+        &self,
+        listener: impl Fn(&NotificationSource, &str, i64) + Send + Sync + 'static,
+    ) {
+        self.inner
+            .sync_listeners
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::new(listener));
+    }
+
+    /// 인스턴스 하나의 [`SyncHook`]. 인스턴스가 쥐므로 관리자를 약하게 가리킨다.
+    fn sync_hook(&self, key: &InstanceKey, generation: u64) -> SyncHook {
+        let inner = Arc::downgrade(&self.inner);
+        let source = NotificationSource {
+            key: key.clone(),
+            generation,
+        };
+        Arc::new(move |uri, version| {
+            let Some(inner) = inner.upgrade() else {
+                return;
+            };
+            let listeners = inner
+                .sync_listeners
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            for listener in listeners {
+                listener(&source, uri, version);
+            }
+        })
+    }
+
+    /// 알림 `method` 의 받는 쪽들을 부른다(서버의 알림 · 처리기가 넘긴 알림성 요청).
+    fn notify_listeners(&self, method: &str, source: &NotificationSource, params: &Value) {
+        let listeners = self
+            .inner
+            .listeners
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(method)
+            .cloned()
+            .unwrap_or_default();
+        for listener in listeners {
+            listener(source, params);
+        }
+    }
+
+    /// 출처가 지금 인스턴스의 세대이고 그 서버를 쥐고 있는가(끝난 서버의 늦은 알림 · 답을 버린다 — M4-06).
+    pub fn is_current(&self, source: &NotificationSource) -> bool {
+        lock(&self.inner.state)
+            .instances
+            .get(&source.key)
+            .is_some_and(|i| i.generation == source.generation && i.server.is_some())
+    }
+
+    /// 출처의 서버가 지금 세대로 떠서 동기화 · 요청을 받는 중이면 그 서버(M4-06 의 진단 pull — 요청 길의 라우팅과 따로, 진단은
+    /// 모든 서버에 묻는다).
+    pub fn running_server(&self, source: &NotificationSource) -> Option<Arc<LanguageServer>> {
+        let state = lock(&self.inner.state);
+        let instance = state.instances.get(&source.key)?;
+        if instance.generation != source.generation || !instance.state.is_running() {
+            return None;
+        }
+        instance.server.clone()
+    }
+
+    /// 출처의 서버에 지금 열려 있는 URI 와 그 서버 쪽 버전(`Synced::version`). 지난 출처면 빈 목록.
+    pub fn synced_documents(&self, source: &NotificationSource) -> Vec<(String, i64)> {
+        let state = lock(&self.inner.state);
+        state
+            .instances
+            .get(&source.key)
+            .filter(|i| i.generation == source.generation)
+            .map(|i| {
+                i.synced
+                    .iter()
+                    .map(|(uri, s)| (uri.clone(), s.version))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 출처의 서버에 열린 URI 의 서버 쪽 버전(M4-05 재리뷰 N3 — 진단의 `version` 을 이것과 견준다). 열려 있지 않거나 지난 출처면
+    /// `None`.
+    pub fn synced_version(&self, source: &NotificationSource, uri: &str) -> Option<i64> {
+        let state = lock(&self.inner.state);
+        let instance = state
+            .instances
+            .get(&source.key)
+            .filter(|i| i.generation == source.generation)?;
+        instance.synced.get(uri).map(|s| s.version)
+    }
+
+    /// Host 의 이벤트 버스(붙기 전이면 `None`).
+    pub fn bus(&self) -> Option<EventBus> {
+        self.inner.host.get().map(|h| h.parts.bus.clone())
     }
 
     /// 그 언어(Linguist 이름 또는 확장의 언어 id)를 맡는 서버 정의: (확장 언어 id, [(정의 순서, 서버 id, root_markers)]).
@@ -1136,6 +1274,18 @@ impl LspManager {
             bus: Some(host.parts.bus.clone()),
             projects: Some(host.parts.projects.clone()),
             manager: Some(self.downgrade()),
+            forward: {
+                let this = Arc::downgrade(&self.inner);
+                let source = NotificationSource {
+                    key: key.clone(),
+                    generation,
+                };
+                Arc::new(move |method: &str, params: &Value| {
+                    if let Some(inner) = this.upgrade() {
+                        LspManager { inner }.notify_listeners(method, &source, params);
+                    }
+                })
+            },
         });
         let spawned = LanguageServer::spawn(
             &grant,
@@ -1217,6 +1367,7 @@ impl LspManager {
                     let feed = Feed::new(self.inner.options.watch.max_pending);
                     instance.feed = Some(Arc::clone(&feed));
                     feeding = Some((feed, instance.scope.clone()));
+                    instance.sync_hook = Some(self.sync_hook(&key, generation));
                     for doc_id in instance.docs.clone() {
                         if let Some(doc) = docs.get(&doc_id) {
                             sync_open(&server, instance, &doc_id, doc, docs);
@@ -1372,24 +1523,17 @@ impl LspManager {
         let key = key.clone();
         let weak = Arc::downgrade(server);
         tokio::spawn(async move {
-            let source = NotificationSource { key: key.clone() };
+            let source = NotificationSource {
+                key: key.clone(),
+                generation,
+            };
             while let Some(event) = events.recv().await {
                 match event {
                     ServerEvent::Notification { method, params } if method == "$/progress" => {
                         this.progress(&key, generation, &params, weak.clone());
                     }
                     ServerEvent::Notification { method, params } => {
-                        let listeners = this
-                            .inner
-                            .listeners
-                            .read()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .get(&method)
-                            .cloned()
-                            .unwrap_or_default();
-                        for listener in listeners {
-                            listener(&source, &params);
-                        }
+                        this.notify_listeners(&method, &source, &params);
                     }
                     // 동적 등록 · 해제 — 웹뷰의 능력 칸(M4-07 `lsp.document.capabilities`)이 상태 이벤트를 받고 다시 묻는다.
                     ServerEvent::CapabilitiesChanged => this.publish(&key.project_id),
@@ -1686,6 +1830,15 @@ impl LspManager {
     }
 
     fn publish(&self, project_id: &str) {
+        let listeners = self
+            .inner
+            .status_listeners
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        for listener in listeners {
+            listener(project_id);
+        }
         let Some(host) = self.inner.host.get() else {
             return;
         };
@@ -2679,14 +2832,14 @@ fn sync_open(
         }
         None => {
             did_open(server, doc);
-            instance.synced.insert(
-                doc.uri.clone(),
-                Synced {
-                    owner: doc_id.to_owned(),
-                    refs: BTreeSet::from([doc_id.to_owned()]),
-                    version: i64::from(doc.version),
-                },
-            );
+            let synced = Synced {
+                owner: doc_id.to_owned(),
+                refs: BTreeSet::from([doc_id.to_owned()]),
+                version: i64::from(doc.version),
+                hook: instance.sync_hook.clone(),
+            };
+            synced.sent(&doc.uri);
+            instance.synced.insert(doc.uri.clone(), synced);
         }
     }
 }
@@ -2725,6 +2878,7 @@ fn full_change(server: &LanguageServer, sync: SyncKind, synced: &mut Synced, doc
             "contentChanges": [{ "text": doc.text.as_str() }],
         }),
     );
+    synced.sent(&doc.uri);
 }
 
 /// 문서의 편집들(버전, 증분 변경)을 그 문서를 연 서버들에 보낸다(잠금 안 — 머리 주석 「문서 동기화」). `Full` 서버에는 마지막
@@ -2766,6 +2920,7 @@ fn send_change(
                     }),
                 );
             }
+            synced.sent(&doc.uri);
         } else {
             full_change(&server, sync, synced, doc);
         }

@@ -2,7 +2,7 @@
 //!
 //! **클라이언트 능력**(15-m4-plan.md M4-01 ②): 위치 인코딩은 `utf-16` 하나(결정 M4-D10), `window.workDoneProgress`,
 //! `workspace.configuration`, `didChangeWatchedFiles` 동적 등록(`RelativePattern` 포함 — M4-05b), `publishDiagnostics` 의
-//! `versionSupport` · `relatedInformation`, 그리고 `textDocument` 의 **M4 기능만** — 하지 않는 것(의미 토큰 · 인레이 힌트 · 코드 렌즈 ·
+//! `versionSupport` · `relatedInformation`, 진단 pull 과 그 `workspace.diagnostics.refreshSupport`(M4-06), 그리고 `textDocument` 의 **M4 기능만** — 하지 않는 것(의미 토큰 · 인레이 힌트 · 코드 렌즈 ·
 //! 호출/타입 계층 · 같은 심볼 강조 · 연결 편집 · 폴딩 · 입력 중 포맷 등, 15 §3)은 알리지 않는다. 알리면 서버가 그 일을 하느라 시간을
 //! 쓰고 우리가 받지 않는 요청을 건다. 서버가 거는 요청 가운데 처리할 행이 아직 없는 것도 알리지 않는다 — `workspace.applyEdit` 은
 //! M4-12(켰다 — `crate::edit`), `window.showDocument` 는 M4-08(켰다 — `crate::navigation`, M4-01 리뷰 L2). 기능 행이 자기 기능의 세부(스니펫 · resolve 등)를 바꿀 때는 [`client_capabilities_json`] 의 그
@@ -46,7 +46,10 @@ pub fn client_capabilities_json() -> Value {
             "symbol": {
                 "dynamicRegistration": false,
                 "symbolKind": { "valueSet": symbol_kinds() }
-            }
+            },
+            // 서버가 「진단을 다시 당겨 가라」 고 할 수 있다(`workspace/diagnostic/refresh` — 처리기는 `crate::handlers`, 다시 당기기는
+            // `crate::diagnostics`, M4-06). rust-analyzer 는 색인이 끝나면 이것으로 열린 문서의 진단을 다시 당기게 한다.
+            "diagnostics": { "refreshSupport": true }
         },
         "textDocument": {
             "synchronization": {
@@ -224,6 +227,11 @@ mod tests {
         // 서버가 거는 편집(M4-12)과 문서 열기(M4-08)는 각 행이 처리기와 함께 켰다.
         assert_eq!(caps["workspace"]["applyEdit"], json!(true));
         assert_eq!(caps["window"]["showDocument"], json!({ "support": true }));
+        // 진단 다시 당기기는 처리기가 있어 켠다(M4-06).
+        assert_eq!(
+            caps["workspace"]["diagnostics"],
+            json!({ "refreshSupport": true })
+        );
         let workspace = caps["workspace"].as_object().unwrap();
         for absent in [
             "semanticTokens",
