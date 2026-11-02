@@ -466,8 +466,38 @@ pub fn completion_item(view: &DocView, raw: Value) -> Option<LspCompletionItem> 
     })
 }
 
-/// `textDocument/completion` 의 답 → 목록(서버 순서로 [`ITEM_LIMIT`] 까지).
-pub fn completion_list(view: &DocView, result: &Value) -> (Vec<LspCompletionItem>, bool, bool) {
+/// 커서(`offset`) 앞 낱말(글자 · 숫자 · `_` · `$`).
+pub fn word_before(view: &DocView, offset: u32) -> String {
+    let text = view.text.as_str();
+    let Some(end) = view.text.byte_of(offset as usize) else {
+        return String::new();
+    };
+    let before = &text[..end];
+    let start = before
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_alphanumeric() || *c == '_' || *c == '$')
+        .last()
+        .map_or(end, |(i, _)| i);
+    before[start..].to_owned()
+}
+
+/// `word` 의 글자가 차례로(대소문자 무시) `name` 에 드는가. 창의 거르기(CodeMirror 의 퍼지 일치)가 남길 수 있는 항목은 모두 참이다.
+fn may_match(name: &str, word: &str) -> bool {
+    let mut name = name.chars().flat_map(char::to_lowercase);
+    word.chars()
+        .flat_map(char::to_lowercase)
+        .all(|w| name.any(|n| n == w))
+}
+
+/// `textDocument/completion` 의 답 → 목록(서버 순서로 [`ITEM_LIMIT`] 까지). 서버가 상한보다 많이 주면 자르기 전에 커서 앞 낱말
+/// `word` 와 맞을 수 없는 항목(창의 거르기가 어차피 버릴 것)을 뺀다 — 접두어로 거르지 않고 전역 이름까지 다 주는 서버(TS)의 자동
+/// import 후보가 서버 순서 뒤쪽에서 잘려 나가지 않게.
+pub fn completion_list(
+    view: &DocView,
+    result: &Value,
+    word: &str,
+) -> (Vec<LspCompletionItem>, bool, bool) {
     let (items, incomplete, defaults) = match result {
         Value::Array(items) => (items.as_slice(), false, None),
         Value::Object(list) => (
@@ -482,6 +512,16 @@ pub fn completion_list(view: &DocView, result: &Value) -> (Vec<LspCompletionItem
     let truncated = items.len() > ITEM_LIMIT;
     let items = items
         .iter()
+        .filter(|item| {
+            !truncated || word.is_empty() || {
+                let name = item
+                    .get("filterText")
+                    .or_else(|| item.get("label"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                may_match(name, word)
+            }
+        })
         .take(ITEM_LIMIT)
         .filter_map(|item| completion_item(view, with_defaults(item.clone(), defaults)))
         .collect();
@@ -651,7 +691,8 @@ async fn complete(
             },
         )
         .await?;
-    let (items, is_incomplete, truncated) = completion_list(&answer.doc, &answer.result);
+    let word = word_before(&answer.doc, p.offset);
+    let (items, is_incomplete, truncated) = completion_list(&answer.doc, &answer.result, &word);
     if !answer.stale_version {
         let commands = items.iter().filter_map(|i| i.command.clone()).collect();
         offered
@@ -934,6 +975,32 @@ mod tests {
         assert_eq!(out.signatures[0].active_parameter, None);
         assert_eq!(signature_help(&json!({ "signatures": [] })), None);
         assert_eq!(signature_help(&Value::Null), None);
+    }
+
+    #[test]
+    fn a_long_list_keeps_what_the_typed_word_can_match_before_cutting() {
+        let view = DocView {
+            uri: "file:///a.ts".into(),
+            version: 0,
+            text: std::sync::Arc::new(crate::document::DocText::new("x = 값Sc")),
+        };
+        assert_eq!(word_before(&view, 7), "값Sc");
+        assert_eq!(word_before(&view, 4), "");
+        let mut items: Vec<Value> = (0..300)
+            .map(|i| json!({ "label": format!("g{i}") }))
+            .collect();
+        items.push(json!({ "label": "값Scale", "filterText": "값Scale" }));
+        items.push(json!({ "label": "zzz", "filterText": "값_s_c" }));
+        let (kept, _, truncated) = completion_list(&view, &json!(items), "값Sc");
+        assert!(truncated);
+        let labels: Vec<&str> = kept.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, ["값Scale", "zzz"]);
+        // 낱말이 없으면 서버 순서 그대로 200 개.
+        let (kept, _, _) = completion_list(&view, &json!(items), "");
+        assert_eq!(kept.len(), ITEM_LIMIT);
+        assert_eq!(kept[0].label, "g0");
+        assert!(may_match("AbortController", "abc"));
+        assert!(!may_match("scale", "sx"));
     }
 
     #[test]
