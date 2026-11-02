@@ -1849,9 +1849,32 @@ impl LspManager {
         request: FeatureRequest<'_>,
         params: impl Fn(&DocView) -> Result<Value, RpcError>,
     ) -> Result<FeatureAnswer, RpcError> {
+        self.request_via(ctx, None, request, params).await
+    }
+
+    /// [`Self::request`] 와 같은 길(같은 문서 주인 · 라우팅 규칙 · 재시도 · `stale_version`)이되 그 문서의 서버 중 id 가 `server` 인
+    /// 인스턴스에만 묻는다. 그 인스턴스가 그 메서드를 맡지 못하면(떠 있지 않음 · 끔 · 능력 없음) 5001 — 다른 서버로 가지 않는다
+    /// (M4-12: 코드 액션의 resolve · 명령은 목록을 준 서버로만).
+    pub async fn request_on(
+        &self,
+        ctx: &Ctx,
+        server: &str,
+        request: FeatureRequest<'_>,
+        params: impl Fn(&DocView) -> Result<Value, RpcError>,
+    ) -> Result<FeatureAnswer, RpcError> {
+        self.request_via(ctx, Some(server), request, params).await
+    }
+
+    async fn request_via(
+        &self,
+        ctx: &Ctx,
+        only: Option<&str>,
+        request: FeatureRequest<'_>,
+        params: impl Fn(&DocView) -> Result<Value, RpcError>,
+    ) -> Result<FeatureAnswer, RpcError> {
         let mut retried = false;
         loop {
-            let (server, picked, view) = self.pick(ctx.session(), &request)?;
+            let (server, picked, view) = self.pick(ctx.session(), &request, only)?;
             let server_id = picked.key.server.clone();
             let body = params(&view)?;
             let options = RequestOptions {
@@ -1869,6 +1892,7 @@ impl LspManager {
                         || self.server_text_moved(&picked, request.doc_id);
                     return Ok(FeatureAnswer {
                         result,
+                        key: picked.key.clone(),
                         server: server_id,
                         stale_version: stale,
                         doc: view,
@@ -1925,6 +1949,7 @@ impl LspManager {
         &self,
         session: SessionId,
         request: &FeatureRequest<'_>,
+        only: Option<&str>,
     ) -> Result<(Arc<LanguageServer>, Picked, DocView), RpcError> {
         let mut state = lock(&self.inner.state);
         let State {
@@ -1934,12 +1959,13 @@ impl LspManager {
             .get(request.doc_id)
             .filter(|d| d.session == session)
             .ok_or_else(|| not_found(request.doc_id))?;
-        let chosen = route(
+        let chosen = route_on(
             request.doc_id,
             doc,
             instances,
             request.feature,
             request.method,
+            only,
         )
         .map(|(key, server)| (Arc::clone(server), key.clone()));
         let Some((server, key)) = chosen else {
@@ -1992,6 +2018,22 @@ impl LspManager {
         doc_id: &str,
         routes: &[(LspFeature, &str)],
     ) -> Result<Vec<(LspFeature, String, Value)>, RpcError> {
+        Ok(self
+            .feature_route_keys(session, doc_id, routes, None)?
+            .into_iter()
+            .map(|(feature, key, options)| (feature, key.server, options))
+            .collect())
+    }
+
+    /// [`Self::feature_routes`] 와 같되 서버 id 대신 인스턴스 열쇠 전체를 돌려주고, `only` 가 있으면 id 가 그것인 인스턴스만 본다
+    /// (M4-12: 명령의 흐름이 「그 인스턴스」 를 쥐고, resolve · 명령은 목록을 준 서버로만 간다).
+    pub fn feature_route_keys(
+        &self,
+        session: SessionId,
+        doc_id: &str,
+        routes: &[(LspFeature, &str)],
+        only: Option<&str>,
+    ) -> Result<Vec<(LspFeature, InstanceKey, Value)>, RpcError> {
         let state = lock(&self.inner.state);
         let doc = state
             .docs
@@ -2001,7 +2043,7 @@ impl LspManager {
         Ok(routes
             .iter()
             .filter_map(|&(feature, method)| {
-                let (key, server) = route(doc_id, doc, &state.instances, feature, method)?;
+                let (key, server) = route_on(doc_id, doc, &state.instances, feature, method, only)?;
                 // 동적 등록은 그 문서에 맞는 것(`documentSelector`)만 본다 — 한 서버가 언어마다 다른 옵션을 등록할 수 있다(리뷰 L-5).
                 let options = server
                     .registrations(method)
@@ -2009,9 +2051,45 @@ impl LspManager {
                     .filter_map(|r| r.register_options)
                     .find(|o| selects(o, doc))
                     .unwrap_or_else(|| static_capability(&server.capabilities_json(), method));
-                Some((feature, key.server.clone(), options))
+                Some((feature, key.clone(), options))
             })
             .collect())
+    }
+}
+
+impl LspManager {
+    /// 인스턴스 `key` 가 `paths` 중 어느 것을 **다른 연결(창)의 문서 텍스트로** 갖고 있나(M4-12 — 결정 M4-D14 ①). 같은 URI 는 서버에
+    /// 한 번 열리고 그 텍스트는 주인 문서의 것이라(`Synced::owner`), 주인이 `session` 밖이면 서버가 그 파일에 준 편집의 범위는 그 창의
+    /// (미저장일 수 있는) 텍스트 기준이다 — 이 창이 디스크에 쓰면 범위가 어긋나고 그 창의 버퍼 아래 디스크를 덮는다. 아무도 열지
+    /// 않은 파일(서버는 디스크를 봤다) · 이 연결이 주인인 파일은 들지 않는다. 판정만 한다(잠금은 표를 한 번 훑는 동안만).
+    pub fn foreign_paths<'p>(
+        &self,
+        key: &InstanceKey,
+        session: SessionId,
+        paths: impl IntoIterator<Item = &'p Path>,
+    ) -> BTreeSet<PathBuf> {
+        let foreign: BTreeSet<PathBuf> = {
+            let state = lock(&self.inner.state);
+            let Some(instance) = state.instances.get(key) else {
+                return BTreeSet::new();
+            };
+            instance
+                .synced
+                .iter()
+                .filter(|(_, s)| {
+                    state
+                        .docs
+                        .get(&s.owner)
+                        .is_none_or(|d| d.session != session)
+                })
+                .filter_map(|(uri, _)| crate::uri::uri_path(uri))
+                .collect()
+        };
+        paths
+            .into_iter()
+            .filter(|p| foreign.contains(*p))
+            .map(Path::to_path_buf)
+            .collect()
     }
 }
 
@@ -2031,15 +2109,19 @@ fn candidates<'a>(
 
 /// 기능을 맡을 서버(결정 M4-D12): 떠서 그 문서를 동기화했고, 정의 · 설정에서 그 기능을 끄지 않았고, `method` 를 다루는 첫
 /// 인스턴스. 요청 길과 웹뷰의 능력 칸(`feature_routes`)이 함께 쓰는 하나뿐인 규칙이다.
-fn route<'a>(
+///
+/// `only` 이 있으면 서버 id 가 그것인 인스턴스만 본다(한 문서에서 서버 id 하나는 인스턴스 하나다 — 루트는 문서마다 하나로 정해진다).
+fn route_on<'a>(
     doc_id: &str,
     doc: &Doc,
     instances: &'a BTreeMap<InstanceKey, Instance>,
     feature: LspFeature,
     method: &str,
+    only: Option<&str>,
 ) -> Option<(&'a InstanceKey, &'a Arc<LanguageServer>)> {
     candidates(doc, instances)
         .into_iter()
+        .filter(|(key, _)| only.is_none_or(|s| key.server == s))
         .find_map(|(key, instance)| {
             let server = instance.server.as_ref()?;
             if !instance.state.is_running() || !instance.is_synced(doc_id, &doc.uri) {
@@ -2148,6 +2230,8 @@ impl DocView {
 #[derive(Debug, Clone)]
 pub struct FeatureAnswer {
     pub result: Value,
+    /// 답한 인스턴스(M4-12 — 편집이 건드리는 파일을 그 인스턴스가 다른 창의 텍스트로 갖고 있는지 [`LspManager::foreign_paths`] 로 본다).
+    pub key: InstanceKey,
     /// 답한 서버 id.
     pub server: String,
     /// 요청 사이에 문서가 바뀌었다 — 위치를 그대로 쓰면 어긋날 수 있다.
