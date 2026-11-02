@@ -190,6 +190,26 @@ describe("git · graph · diff tokens (M2-12)", () => {
     expect(short).toEqual([]);
   });
 
+  it("keep popup text at body-text contrast (4.5:1) on the popup, its code blocks and, for the main text, the selected row", () => {
+    const pairs = [
+      ["popup.foreground", "popup.background"],
+      ["popup.foreground", "popup.codeBackground"],
+      ["popup.foreground", "popup.selectionBackground"],
+      ["popup.mutedForeground", "popup.background"],
+      ["popup.mutedForeground", "popup.codeBackground"],
+    ] as const;
+    const short: string[] = [];
+    for (const appearance of ["light", "dark"] as const) {
+      const values = defaultTheme.variants[appearance]!;
+      for (const [text, background] of pairs) {
+        const ratio = contrast(values[text], values[background]);
+        if (ratio < 4.5)
+          short.push(`${appearance} ${text} on ${background}: ${ratio.toFixed(2)} < 4.50`);
+      }
+    }
+    expect(short).toEqual([]);
+  });
+
   it("cycle graph lanes through graph.lane.1..GRAPH_LANES", () => {
     expect(GRAPH_TOKENS.filter((t) => /^graph\.lane\.\d+$/.test(t))).toHaveLength(GRAPH_LANES);
     expect(graphLaneToken(0)).toBe("graph.lane.1");

@@ -33,6 +33,7 @@ import type { EditorView, Panel } from "@codemirror/view";
 import type { Judgment } from "@pitwall/rpc-client";
 
 import type { EditorGit } from "../../git/gutter/gutter-extension";
+import type { LspDocument } from "../../lsp/lsp-sessions";
 import { base } from "./base";
 import { editorContext } from "./context";
 import { blame } from "./blame";
@@ -41,6 +42,7 @@ import type { SyntaxSessions } from "../syntax-sessions";
 import { editing } from "./editing";
 import { gitGutter } from "./git-gutter";
 import { highlight } from "./highlight";
+import { lsp } from "./lsp";
 import { multiCursor } from "./multi-cursor";
 import { navigation } from "./navigation";
 import { operations } from "./operations";
@@ -99,6 +101,11 @@ export interface EditorFeatureContext {
   readonly createFindPanel: (view: EditorView) => Panel;
   /** 창의 git 거터 · blame 호스트와 이 문서의 텍스트(`gitGutter` · `blame`, M2-17). 프로젝트 창만 넘긴다. */
   readonly git?: EditorGit;
+  /**
+   * 언어 서버에 연 문서(`lsp` — 세션 · 요청 도우미 · 서버 능력 칸, src/lsp/lsp-sessions.ts, 15-m4-plan M4-07). 탭이 잡고 놓는다. 프로젝트
+   * 창의 파일 탭 중 편집 등급 텍스트 문서만 있다(`lspEligible`) — git · DB 문서 · 파일 창 · 시험에는 없다.
+   */
+  readonly lsp?: LspDocument;
 }
 
 export interface EditorFeature {
@@ -122,6 +129,7 @@ export const EDITOR_FEATURES: readonly EditorFeature[] = [
   blame,
   editing,
   operations,
+  lsp,
   multiCursor,
   navigation,
 ];

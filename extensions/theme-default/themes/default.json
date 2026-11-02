@@ -122,7 +122,13 @@
       "grid.headerHover": "#dfe1e5",
       "grid.border": "#ebecf0",
       "grid.selection": "#e1eafc",
-      "grid.accent": "#2559c4"
+      "grid.accent": "#2559c4",
+      "popup.background": "#ffffff",
+      "popup.foreground": "#1e1f22",
+      "popup.mutedForeground": "#6c707e",
+      "popup.border": "#c9ccd6",
+      "popup.codeBackground": "#f7f8fa",
+      "popup.selectionBackground": "#d5e1fb"
     },
     "dark": {
       "ui.background": "#1e1f22",
@@ -244,7 +250,13 @@
       "grid.headerHover": "#393b40",
       "grid.border": "#393b40",
       "grid.selection": "#23324f",
-      "grid.accent": "#8db1f7"
+      "grid.accent": "#8db1f7",
+      "popup.background": "#2b2d30",
+      "popup.foreground": "#dfe1e5",
+      "popup.mutedForeground": "#9da0a8",
+      "popup.border": "#4e5157",
+      "popup.codeBackground": "#1e1f22",
+      "popup.selectionBackground": "#2e436e"
     }
   }
 }

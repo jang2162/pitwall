@@ -52,6 +52,7 @@ import {
   type NavLocation,
   type NavTarget,
 } from "./navigation";
+import { createLspSessions, type LspSessionsDeps } from "../lsp/lsp-sessions";
 import { createSyntaxSessions, type SyntaxSource } from "./syntax-sessions";
 import {
   baseName,
@@ -146,6 +147,8 @@ export interface EditorWorkspaceDeps {
   log?(message: string): void;
   /** 구문 분석 서비스의 문서 세션 RPC(syntax-sessions.ts). 없으면 강조하지 않는다. */
   syntax?: SyntaxSource;
+  /** 언어 서버의 문서 RPC 와 창의 것(src/lsp/lsp-sessions.ts, M4-07). 프로젝트 창만 넘긴다 — 없으면 언어 서버에 문서를 열지 않는다. */
+  lsp?: Omit<LspSessionsDeps, "documents">;
   /** 창의 활성 워크트리(프로젝트 창). 내비게이션 기록이 다른 워크트리의 자리를 건너뛴다. 없으면 가리지 않는다(파일 창). */
   activeWorktree?(): string | undefined;
   /** 루트 밖 문서(「외부 소스」 탭, M4-08). 없으면 토큰 든 위치는 열지 않는다. */
@@ -382,6 +385,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
   });
 
   const syntax = deps.syntax && createSyntaxSessions(deps.syntax, deps.documents);
+  const lsp = deps.lsp && createLspSessions({ ...deps.lsp, documents: deps.documents });
 
   return {
     documents: deps.documents,
@@ -408,6 +412,8 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     log: deps.log,
     /** 창의 구문 세션. 강조 기능이 탭의 context 로 받는다. */
     syntax,
+    /** 창의 LSP 세션. 탭(텍스트 뷰어)이 문서를 잡아 context 의 `lsp` 로 넘긴다. 창은 `lsp.status` 이벤트를 `statusChanged` 로 알린다. */
+    lsp,
 
     /** 도킹 영역이 준비되면 붙는다. 해제 함수를 돌려준다. */
     attach(next: DockviewApi): () => void {

@@ -93,6 +93,7 @@ import type { KeymapNative } from "../keymap/native";
 import { activeWorktree, activeWorktreeStore } from "../open-with/active-worktree";
 import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
 import { DbStatus } from "../db/safety/db-status";
+import { LSP_STATUS_TOPIC, snippetHighlighter } from "../lsp/lsp-sessions";
 import { projectIdFromQuery, projectOpenInbox } from "../project-open";
 import { useHost, useRpcQuery } from "../rpc/host";
 import { useRuntimeActions } from "../runtime/runtime-actions";
@@ -522,6 +523,26 @@ function useWindowEditor(
         highlights: (params) => host().call("syntax.highlights", params),
         close: (params) => host().call("syntax.close", params),
       },
+      ...(projectId !== undefined && {
+        lsp: {
+          projectId,
+          source: {
+            open: (params) => host().call("lsp.document.open", params),
+            change: (params) => host().call("lsp.document.change", params),
+            save: (params) => host().call("lsp.document.save", params),
+            close: (params) => host().call("lsp.document.close", params),
+            capabilities: (params) => host().call("lsp.document.capabilities", params),
+          },
+          services: {
+            openExternal: (url) => void openUrl(url).catch(() => {}),
+            highlight: snippetHighlighter({
+              open: (params) => host().call("syntax.open", params),
+              highlights: (params) => host().call("syntax.highlights", params),
+              close: (params) => host().call("syntax.close", params),
+            }),
+          },
+        },
+      }),
       confirmUnsaved: (paths) => latest.current.ask(paths),
       onCloseAborted: () =>
         latest.current.notify({
@@ -611,6 +632,30 @@ function useDocumentSync(workspace: EditorWorkspace, projectId: string | undefin
         if (disposed) void unsubscribe().catch(() => {});
       })
       .catch((e: unknown) => console.warn("[editor] fs.changed subscription failed", e));
+    return () => {
+      disposed = true;
+      void unsubscribe?.().catch(() => {});
+    };
+  }, [client, projectId, workspace]);
+}
+
+/** 이 창의 프로젝트의 `lsp.status`(서버가 뜸 · 끝남 · 동적 등록)를 LSP 세션에 넘긴다 — 열린 문서의 능력 칸을 다시 묻는다(M4-07). */
+function useLspStatus(workspace: EditorWorkspace, projectId: string | undefined) {
+  const { client } = useHost();
+  useEffect(() => {
+    const sessions = workspace.lsp;
+    if (!client || projectId === undefined || !sessions) return;
+    let disposed = false;
+    let unsubscribe: (() => Promise<void>) | undefined;
+    client
+      .subscribe({ projectId, topics: [LSP_STATUS_TOPIC] }, (event) => {
+        if (!disposed && event.topic === LSP_STATUS_TOPIC) sessions.statusChanged();
+      })
+      .then((subscription) => {
+        unsubscribe = () => subscription.unsubscribe();
+        if (disposed) void unsubscribe().catch(() => {});
+      })
+      .catch((e: unknown) => console.warn("[lsp] lsp.status subscription failed", e));
     return () => {
       disposed = true;
       void unsubscribe?.().catch(() => {});
@@ -725,6 +770,7 @@ function ProjectWindowBody({
   const projectState = useWindowProjectState(projectId);
   useEffect(() => (api ? workspace.attach(api) : undefined), [api, workspace]);
   useDocumentSync(workspace, projectId);
+  useLspStatus(workspace, projectId);
   // 최근 파일(⌘E)도 프로젝트 상태에 둔다 — 창이 열리면 저장해 둔 목록을 잇고, 바뀔 때마다 저장한다.
   const [recentFiles] = useState(createRecentFiles);
   useEffect(() => {

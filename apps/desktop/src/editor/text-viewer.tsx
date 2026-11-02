@@ -22,12 +22,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { gitGutterHost } from "../git/gutter/host-store";
+import { type LspDocument, lspEligible } from "../lsp/lsp-sessions";
 import { useProjectStrings } from "../layout/strings";
 import { useTheme } from "../theme/theme-switcher";
 import { CompareView, DiskBanner } from "./disk-banner";
 import type { TextDocumentState } from "./documents";
 import { useEditorFont } from "./editor-font";
-import type { EditorTabParams } from "./editor-tabs";
+import { type EditorTabParams, isFileParams } from "./editor-tabs";
 import { type EditorWorkspace, useEditorWorkspace } from "./editor-workspace";
 import { type EditorFeatureContext, editorExtensions, reconfigureEditor } from "./extensions";
 import { FindBar, findPanel } from "./find-bar";
@@ -35,10 +36,38 @@ import { useDocLanguage } from "./language";
 import type { LiveText } from "./live-text";
 import type { ViewerProps } from "./viewers";
 
+/**
+ * 이 탭이 언어 서버에 연 문서(M4-07). 탭이 보이는 동안 잡고(같은 파일의 다른 탭과 세션 하나를 함께 쓴다) 사라지면 놓는다. 파일 탭의
+ * 편집 등급 텍스트 문서만(`lspEligible`). 언어를 바꾸면 놓고 다시 잡는다 — 문서를 디스크에서 다시 읽은 것은 세션이 스스로 다시 연다.
+ */
+function useLspDocument(
+  workspace: EditorWorkspace,
+  fileTab: boolean,
+  params: EditorTabParams,
+  text: TextDocumentState | undefined,
+  language: string | null,
+): LspDocument | undefined {
+  const sessions = workspace.lsp;
+  const eligible = sessions !== undefined && lspEligible(fileTab, text, language);
+  const [held, setHeld] = useState<LspDocument>();
+  const { path, worktree } = params;
+  useEffect(() => {
+    if (!sessions || !eligible || language === null) return;
+    const handle = sessions.acquire(path, language, worktree);
+    setHeld(handle.document);
+    return () => {
+      handle.release();
+      setHeld(undefined);
+    };
+  }, [sessions, eligible, path, worktree, language]);
+  return eligible ? held : undefined;
+}
+
 /** 탭 · 문서 · 창에서 기능이 볼 정보. 값이 같으면 같은 객체다(바뀔 때만 다시 구성한다). */
 function useFeatureContext(
   workspace: EditorWorkspace,
   panelId: string,
+  fileTab: boolean,
   params: EditorTabParams,
   text: TextDocumentState | undefined,
   createFindPanel: EditorFeatureContext["createFindPanel"],
@@ -46,6 +75,7 @@ function useFeatureContext(
   const appearance = useTheme((s) => s.appearance);
   const font = useEditorFont();
   const language = useDocLanguage(params.path);
+  const lsp = useLspDocument(workspace, fileTab, params, text, language);
   const live = text?.live;
   const judgment = text?.judgment;
   const readOnly = text?.readOnly;
@@ -70,6 +100,7 @@ function useFeatureContext(
             font,
             createFindPanel,
             ...(git && { git }),
+            ...(lsp && { lsp }),
           }
         : undefined,
     [
@@ -84,6 +115,7 @@ function useFeatureContext(
       font,
       createFindPanel,
       git,
+      lsp,
     ],
   );
 }
@@ -101,7 +133,14 @@ export function TextViewer({ panel, params, doc }: ViewerProps) {
       findPanel(view, setFind, (dom) => setFind((f) => (f?.dom === dom ? undefined : f))),
     [],
   );
-  const context = useFeatureContext(workspace, panel.id, params, text, createFindPanel);
+  const context = useFeatureContext(
+    workspace,
+    panel.id,
+    isFileParams(params),
+    params,
+    text,
+    createFindPanel,
+  );
   const latest = useRef(context);
   latest.current = context;
   // 지금 뷰와 그 뷰를 마지막으로 구성한 context.

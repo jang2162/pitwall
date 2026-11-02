@@ -49,6 +49,7 @@ it("assembles one extension per feature, in list order", () => {
     "blame",
     "editing",
     "operations",
+    "lsp",
     "multiCursor",
     "navigation",
   ]);

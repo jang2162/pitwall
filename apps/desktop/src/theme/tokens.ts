@@ -146,6 +146,20 @@ export const GRID_TOKENS = [
   "grid.accent",
 ] as const;
 
+/**
+ * 에디터 팝업(M4-07 의 LSP 팝업 바탕 — src/lsp/popup.ts: 호버 · 진단 · 시그니처 · 코드 액션 · 위치 목록, 자동완성 목록(M4-11)).
+ * `codeBackground` 는 팝업 안 코드 블록, `selectionBackground` 는 목록의 고른 행. 글자(`foreground` · `mutedForeground`)는 팝업 ·
+ * 코드 블록 배경 위에서, `foreground` 는 고른 행 위에서도 본문 대비(4.5:1)를 지킨다(tokens.test.ts).
+ */
+export const POPUP_TOKENS = [
+  "popup.background",
+  "popup.foreground",
+  "popup.mutedForeground",
+  "popup.border",
+  "popup.codeBackground",
+  "popup.selectionBackground",
+] as const;
+
 /** 화면이 읽는 토큰. 테마 파일의 변형(light·dark)은 있으면 이것을 전부 정의해야 한다. */
 export const TOKENS = [
   "ui.background",
@@ -194,6 +208,7 @@ export const TOKENS = [
   ...DIFF_TOKENS,
   ...DB_TOKENS,
   ...GRID_TOKENS,
+  ...POPUP_TOKENS,
 ] as const;
 
 export type TokenName = (typeof TOKENS)[number];

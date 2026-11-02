@@ -67,7 +67,11 @@ export function isDbTab(panel: IDockviewPanel): boolean {
 
 /** 파일 문서 탭인가(git 문서 · DB 문서가 아니다) — 경로를 쓰는 탭 동작(경로 복사 · 저장 · 뷰어 · 최근 파일)은 이것에만 뜻이 있다. */
 export function isFileTab(panel: IDockviewPanel): boolean {
-  const { git, db } = tabParams(panel);
+  return isFileParams(tabParams(panel));
+}
+
+/** 탭 인자가 파일 문서의 것인가(`isFileTab` 의 판정 — 패널이 아니라 인자를 쥔 곳이 쓴다). */
+export function isFileParams({ git, db }: EditorTabParams): boolean {
   return git === undefined && db === undefined;
 }
 
