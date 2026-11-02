@@ -774,6 +774,7 @@ structure-empty-symbols = 심볼이 없다
 structure-failed = 심볼을 읽지 못했다
 structure-truncated = 심볼이 많아 일부만 보인다
 structure-too-large = 파일이 커서 심볼 인덱스로 읽지 않는다
+structure-server-failed = 언어 서버가 답하지 않아 앞서 읽은 심볼을 보인다
 structure-action-file-structure = 파일 구조
 structure-popup-placeholder = 심볼 이름으로 거르기
 structure-popup-empty = 맞는 심볼이 없다

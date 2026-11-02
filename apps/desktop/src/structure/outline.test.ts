@@ -174,10 +174,8 @@ describe("outline", () => {
     // 앞에서 `limit` 줄까지, 전체 수는 따로.
     expect(filterRows(o, "", "position", 2)).toMatchObject({ total: 3 });
     expect(filterRows(o, "", "position", 2).rows).toHaveLength(2);
-    expect(filterRows(o, "x", "position", 1)).toEqual({
-      rows: [{ id: 0, depth: 0, match: false }],
-      total: 2,
-    });
+    // 맞은 줄이 조상과 함께 들 자리가 없으면 조상만 홀로 그리지 않는다.
+    expect(filterRows(o, "x", "position", 1)).toEqual({ rows: [], total: 2, best: 1 });
   });
 
   it("cuts a deep chain from the index at 32 levels and marks it truncated, whatever the source", () => {
@@ -258,66 +256,127 @@ describe("outline", () => {
     expect(filterRows(o, `f${depth - 1}`, "position").total).toBe(depth);
   });
 
-  it("filters 20,000 symbols without building their search keys again on each key (time per key is logged)", () => {
-    // 2만 심볼(Host 상한) — 모듈 200 개 아래 함수 99 개씩. 이름은 리뷰가 잰 꼴.
-    const big = fromLsp({
+  /** 모듈 `count / 100` 개 아래 함수 99 개씩 — 이름은 `name(i)`. */
+  const modules = (count: number, name: (i: number) => string) =>
+    fromLsp({
       ...lsp,
-      symbols: Array.from({ length: MAX_SYMBOLS }, (_, i) => ({
+      symbols: Array.from({ length: count }, (_, i) => ({
         ...lsp.symbols[2]!,
-        name: `someLongerFunctionName_${i}_한글이름`,
+        name: name(i),
         parent: i % 100 === 0 ? null : i - (i % 100),
         kind: i % 100 === 0 ? 2 : 12,
       })),
     });
+  // 키 입력 하나씩 — 영문 · 한글 조합(ㅎ → 하 → 한) · 지움 · 맞는 것 없음.
+  const KEYS = ["s", "sl", "slf", "slfn", "slf", "z", "zzz", "ㅎ", "하", "한", "한ㄱ", "한글", ""];
+
+  it("filters incrementally to what a fresh filter gives, matching exactly the fuzzy matches", () => {
+    // 증분 거르기(앞 질의의 맞은 것만 다시 본다)가 처음부터 거른 것과 같은지 — 심볼 수와 무관한 성질이라 2천으로 본다(2만 전수
+    // 대조는 부하에서 5초 제한을 넘었다, M4-10 재리뷰 N3).
+    const big = modules(2_000, (i) => `someLongerFunctionName_${i}_한글이름`);
+    for (const q of KEYS) {
+      const incremental = filterRows(big, q, "position", 300);
+      // 새 객체 — 거르기 준비물(앞 질의)이 없다.
+      expect(incremental, q).toEqual(filterRows({ ...big }, q, "position", 300));
+      const brute = big.symbols.filter((s) => fuzzyMatches(s.name, q)).map((s) => s.id);
+      expect(
+        filterRows(big, q, "position")
+          .rows.filter((r) => r.match)
+          .map((r) => r.id),
+        q,
+      ).toEqual(brute);
+    }
+  });
+
+  it("fills the row limit by how well a name matches, so a name typed to the end is always drawn", () => {
+    // 리뷰의 재현: `domain_handler_0 … _999` 뒤의 `main` — 트리 차례로 앞 300 개를 자르면 `main` 이 빠졌다.
+    const flat = (names: string[]) =>
+      fromLsp({ ...lsp, symbols: names.map((name) => ({ ...lsp.symbols[2]!, name })) });
+    const o = flat([...Array.from({ length: 1000 }, (_, i) => `domain_handler_${i}`), "main"]);
+    const found = filterRows(o, "main", "position", 300);
+    expect(found.total).toBe(1001);
+    expect(found.rows).toHaveLength(300);
+    expect(found.rows.at(-1)).toEqual({ id: 1000, depth: 0, match: true });
+    expect(found.best).toBe(1000);
+    // 등급: 같음 > 앞부분 > 이어진 부분 > 차례로 듦. 같은 등급은 트리 차례로. 그리는 줄은 트리 차례다.
+    const g = flat(["m_a_i_n", "xmainy", "mainly", "main", "amain"]);
+    const kept = (limit: number) =>
+      filterRows(g, "main", "position", limit).rows.map((r) => g.symbols[r.id]!.name);
+    expect(kept(1)).toEqual(["main"]);
+    expect(kept(2)).toEqual(["mainly", "main"]);
+    expect(kept(3)).toEqual(["xmainy", "mainly", "main"]);
+    expect(kept(5)).toEqual(["m_a_i_n", "xmainy", "mainly", "main", "amain"]);
+    expect(filterRows(g, "mai", "position").best).toBe(2);
+    // 맞은 심볼은 조상과 함께 든다.
+    const nested = fromLsp({
+      ...lsp,
+      symbols: [
+        ...Array.from({ length: 5 }, (_, i) => ({ ...lsp.symbols[2]!, name: `xmainy${i}` })),
+        { ...lsp.symbols[0]!, name: "Holder" },
+        { ...lsp.symbols[2]!, name: "main", parent: 5 },
+      ],
+    });
+    expect(
+      filterRows(nested, "main", "position", 3).rows.map((r) => [
+        nested.symbols[r.id]!.name,
+        r.match,
+      ]),
+    ).toEqual([
+      // `Holder` 는 위치가 앞이다(트리 차례).
+      ["Holder", false],
+      ["main", true],
+      ["xmainy0", true],
+    ]);
+  });
+
+  it("draws the rows around the cursor's symbol when the query is empty and it lies past the limit", () => {
+    const o = modules(1000, (i) => `f${i}`);
+    // 커서의 심볼(모듈 9 의 함수 — 트리 차례 950)과 그 조상, 앞뒤 줄.
+    const { rows, total } = filterRows(o, "", "position", 300, 950);
+    expect(total).toBe(1000);
+    expect(rows).toHaveLength(300);
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(950);
+    expect(ids).toContain(900);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    // 앞 300 줄 안이면 앞에서부터 그대로.
+    expect(filterRows(o, "", "position", 300, 5).rows.map((r) => r.id)).toEqual(
+      Array.from({ length: 300 }, (_, i) => i),
+    );
+  });
+
+  it("filters 20,000 symbols without building their search keys again on each key, drawing a name typed to the end (time per key is logged)", () => {
+    // 2만 심볼(Host 상한) — 모듈 200 개 아래 함수 99 개씩, 이름은 리뷰가 잰 꼴. 맨 끝 함수 하나만 `main` 이다 — 다른 이름에 모두
+    // 이어진 부분(`domain`)으로 든다.
+    const big = modules(MAX_SYMBOLS, (i) =>
+      i === MAX_SYMBOLS - 1 ? "main" : `domain_handler_${i}_한글이름`,
+    );
     const keyCalls = vi.mocked(searchKey);
     // 트리가 바뀔 때 한 번(팝업을 열 때) — 키 입력과 따로 잰다.
     let at = performance.now();
     filterRows(big, "", "position", 300);
     const prepared = performance.now() - at;
-    // 키 입력 하나 — 영문 · 한글 조합(ㅎ → 하 → 한) · 지움 · 맞는 것 없음.
-    const keys = [
-      "s",
-      "sl",
-      "slf",
-      "slfn",
-      "slf",
-      "z",
-      "zzz",
-      "ㅎ",
-      "하",
-      "한",
-      "한ㄱ",
-      "한글",
-      "",
-    ];
+    const keys = ["m", "ma", "mai", "main", ...KEYS];
     const times: number[] = [];
     const results = keys.map((q) => {
       keyCalls.mockClear();
       at = performance.now();
-      const rows = filterRows(big, q, "position", 300).rows;
+      const found = filterRows(big, q, "position", 300);
       times.push(performance.now() - at);
       // 검색 키는 질의 하나만 — 심볼마다 다시 만들지 않는다.
       expect(keyCalls.mock.calls.length, q).toBeLessThanOrEqual(1);
-      return rows.filter((r) => r.match).map((r) => r.id);
+      return found;
     });
-    // 결과(앞 300 줄)는 모든 심볼을 하나씩 본 것과 같다(앞 질의의 맞은 것만 다시 보는 증분 거르기도).
-    const full = keys.map((q) => filterRows(big, q, "position").rows);
-    // 벽시계는 콘솔에만 남긴다(부하에 흔들리는 최댓값은 단언하지 않는다 — 계획 M4-10 ⓗ 의 규칙). 목표는 키 입력당 30 ms(결정 M4-D19 ⑤).
+    // 벽시계는 콘솔에만 남긴다 — 이 시험은 시간을 단언하지 않는다(부하에 흔들린다 — 계획 M4-10 ⓗ 의 규칙, 판정은 성능 시험이
+    // 한다). 목표는 키 입력당 30 ms(결정 M4-D19 ⑤).
     console.log(
       `[perf] file structure filter, 20,000 symbols: prepare ${prepared.toFixed(1)} ms, ms per key ${times.map((t) => t.toFixed(1)).join(" / ")}`,
     );
-    keys.forEach((q, i) => {
-      const brute = big.symbols.filter((s) => fuzzyMatches(s.name, q)).map((s) => s.id);
-      expect(
-        full[i]!.filter((r) => r.match).map((r) => r.id),
-        q,
-      ).toEqual(brute);
-      expect(results[i], q).toEqual(
-        full[i]!.slice(0, 300)
-          .filter((r) => r.match)
-          .map((r) => r.id),
-      );
-    });
+    const main = results[3]!;
+    expect(main.total).toBe(MAX_SYMBOLS);
+    expect(main.rows).toHaveLength(300);
+    expect(main.best).toBe(MAX_SYMBOLS - 1);
+    expect(main.rows.at(-1)).toEqual({ id: MAX_SYMBOLS - 1, depth: 1, match: true });
   });
 
   it("gives a symbol the same key when a re-read shifts the indexes", () => {
@@ -335,5 +394,26 @@ describe("outline", () => {
     expect(kb[2]).toBe(ka[1]);
     expect(kb[0]).toBe(ka[2]);
     expect(new Set(ka).size).toBe(3);
+  });
+
+  it("tells apart siblings of the same kind and name by their order, and their children with them", () => {
+    // `impl Foo` 블록 둘(자식 `a` · `a`) · getter/setter 쌍 — 열쇠가 같으면 고름이 첫째로 돌아간다(M4-10 재리뷰 N1).
+    const twin = (prefix: LspOutlineSymbol[]) =>
+      fromLsp({
+        ...lsp,
+        symbols: [
+          ...prefix,
+          { ...lsp.symbols[0]!, name: "impl Foo", parent: null },
+          { ...lsp.symbols[2]!, name: "a", parent: prefix.length },
+          { ...lsp.symbols[0]!, name: "impl Foo", parent: null },
+          { ...lsp.symbols[2]!, name: "a", parent: prefix.length + 2 },
+        ],
+      });
+    const a = twin([]);
+    const keys = symbolKeys(a);
+    expect(new Set(keys).size).toBe(4);
+    // 위에 다른 심볼이 생겨도 각자 열쇠는 그대로다.
+    const b = twin([{ ...lsp.symbols[2]!, name: "added" }]);
+    expect(symbolKeys(b).slice(1)).toEqual(keys);
   });
 });

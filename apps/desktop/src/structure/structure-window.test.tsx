@@ -1027,3 +1027,183 @@ it("keeps a folded symbol folded when a re-read puts a new symbol above it", asy
   await serverReady(true);
   expect(rows().map((r) => r[0])).toEqual(["added", "Point", "main", "tail"]);
 });
+
+// ---- 재리뷰 뒤(M4-10 재리뷰 N1 · N2 · N4) ----------------------------------------------------------------------------------------
+
+/** 구조 트리에서 고른 줄의 심볼 색인. */
+const selectedRowId = () =>
+  structure().querySelector<HTMLElement>('[aria-selected="true"]')?.dataset.structureRow;
+
+it("moves through and picks siblings of the same kind and name one by one", async () => {
+  // 같은 부모 아래 같은 종류 · 이름 형제(`impl Foo` 둘 · getter/setter) — 색인은 Point 0, x 1, main 2, tail 3, dup 4, dup 5.
+  const dup = (line: number) => ({
+    name: "dup",
+    from: off(line, 0),
+    to: off(line, 0),
+    selectionFrom: off(line, 0),
+    selectionTo: off(line, 0),
+  });
+  serve(() => lspSymbols([dup(6), dup(8)]));
+  await mount();
+  await open(MAIN, 1, 1);
+  await serverReady(true);
+  await openStructure();
+  expect(rows().map((r) => r[0])).toEqual(["Point", "x", "main", "dup", "dup", "tail"]);
+  const tree = structure().querySelector<HTMLElement>('[role="tree"]')!;
+  await act(async () => tree.focus());
+  await keydown({ key: "Home" }, tree);
+  const walked = [];
+  for (let i = 0; i < 6; i++) {
+    await keydown({ key: "ArrowDown" }, tree);
+    walked.push(selectedRowId());
+  }
+  // `↓` 가 둘째 dup 에서 갇히지 않고 끝 줄까지 간다.
+  expect(walked).toEqual(["1", "2", "4", "5", "3", "3"]);
+  // 둘째 dup 에서 ↩ 는 둘째의 자리로.
+  await keydown({ key: "ArrowUp" }, tree);
+  expect(selectedRowId()).toBe("5");
+  await keydown({ key: "Enter" }, tree);
+  expect(cursor()).toBe(off(8, 0));
+  // 클릭도 그 줄을 고른다(커서 따라가기도 둘째를 고른다).
+  const row = (id: number) =>
+    structure().querySelector<HTMLElement>(`[data-structure-row="${id}"]`)!;
+  await act(async () => row(4).click());
+  await settle();
+  expect(selectedRowId()).toBe("4");
+  expect(cursor()).toBe(off(6, 0));
+  await act(async () => row(5).click());
+  await settle();
+  expect(selectedRowId()).toBe("5");
+});
+
+/** 줄마다 함수 하나인 파일과 그 서버 답. 이름 자리는 `fn ` 뒤. */
+function functionsFile(names: string[]) {
+  const text = `${names.map((n) => `fn ${n}() {}`).join("\n")}\n`;
+  let at = 0;
+  const symbols = names.map((name) => {
+    const from = at;
+    at += `fn ${name}() {}`.length + 1;
+    return {
+      name,
+      detail: null,
+      kind: 12,
+      deprecated: false,
+      parent: null,
+      from,
+      to: at - 1,
+      selectionFrom: from + 3,
+      selectionTo: from + 3 + name.length,
+    };
+  });
+  return { text, symbols };
+}
+
+async function popupOver(names: string[], line: number) {
+  const { text, symbols } = functionsFile(names);
+  host.files.set(MAIN, text);
+  host.handlers.set("lsp.symbols.document", async () => ({
+    server: "rust-analyzer",
+    staleVersion: false,
+    truncated: false,
+    symbols,
+  }));
+  await mount();
+  await open(MAIN, line, 5);
+  await serverReady(true);
+  await keydown({ code: "F12", key: "F12", metaKey: true }, view().contentDOM);
+  return symbols;
+}
+
+it("selects the cursor's symbol on ⌘F12 even past the first 300 rows of the popup", async () => {
+  const symbols = await popupOver(
+    Array.from({ length: 1000 }, (_, i) => `f${i}`),
+    902,
+  );
+  expect(popup()!.querySelectorAll("[data-structure-item]")).toHaveLength(300);
+  expect(selectedItem()).toBe("f901");
+  expect(popup()!.querySelector("[data-structure-more]")!.textContent).toBe(
+    "700줄 더 — 더 입력해 좁힌다",
+  );
+  await keydown({ key: "Enter" }, popup()!.querySelector("input"));
+  expect(popup()).toBeNull();
+  expect(cursor()).toBe(symbols[901]!.selectionFrom);
+});
+
+it("draws and selects a name typed to the end in the popup, however many other names it lies in", async () => {
+  // 리뷰의 재현: `domain_handler_*` 1000 개 뒤의 `main` — 모두 「main」 을 담아 트리 차례로 300 개를 자르면 빠졌다.
+  const symbols = await popupOver(
+    [...Array.from({ length: 1000 }, (_, i) => `domain_handler_${i}`), "main"],
+    1,
+  );
+  const input = await typeInPopup("main");
+  expect(items()).toHaveLength(300);
+  expect(items()).toContainEqual(["main", "match"]);
+  expect(selectedItem()).toBe("main");
+  // 사람이 옮긴 고름은 그대로 받는다 — 키(↑ ↓)와 마우스.
+  await keydown({ key: "ArrowUp" }, input);
+  expect(selectedItem()).not.toBe("main");
+  await keydown({ key: "ArrowDown" }, input);
+  expect(selectedItem()).toBe("main");
+  const first = popup()!.querySelector<HTMLElement>("[data-structure-item]")!;
+  await act(
+    async () => void first.dispatchEvent(new PointerEvent("pointermove", { bubbles: true })),
+  );
+  await settle();
+  expect(selectedItem()).toBe(items()[0]![0]);
+  await keydown({ key: "End" }, input);
+  expect(selectedItem()).toBe("main");
+  await keydown({ key: "Enter" }, input);
+  expect(cursor()).toBe(symbols[1000]!.selectionFrom);
+});
+
+it("keeps the server's tree of a file over 1 MiB when the server fails once, and says so", async () => {
+  // 1 MiB 를 넘어 인덱스로는 읽지 않는 파일. 서버가 한 번 실패해도 「너무 크다」 로 트리를 지우지 않는다.
+  host.files.set(MAIN, `${MAIN_TEXT}${"// padding\n".repeat(100_000)}`);
+  let fail = false;
+  host.handlers.set("lsp.symbols.document", async () => {
+    if (fail) throw { code: 5003, message: "timed out" };
+    return lspSymbols();
+  });
+  host.handlers.set("index.file.symbols", async () => indexSymbols());
+  await mount();
+  await open(MAIN, 1, 1);
+  await serverReady(true);
+  await openStructure();
+  expect(source()).toEqual(["lsp", "LSP · rust-analyzer"]);
+  fail = true;
+  await serverReady(true);
+  expect(called("lsp.symbols.document")).toHaveLength(2);
+  expect(rows().map((r) => r[0])).toEqual(["Point", "x", "main", "tail"]);
+  expect(source()).toEqual(["lsp", "LSP · rust-analyzer"]);
+  expect(structure().textContent).not.toContain("파일이 커서 심볼 인덱스로 읽지 않는다");
+  expect(structure().querySelector("[data-structure-notice]")!.textContent).toBe(
+    "언어 서버가 답하지 않아 앞서 읽은 심볼을 보인다",
+  );
+  expect(called("index.file.symbols")).toEqual([]);
+  // 서버가 다시 답하면 알림이 걷힌다.
+  fail = false;
+  await serverReady(true);
+  expect(structure().querySelector("[data-structure-notice]")).toBeNull();
+  // 서버가 정말 멈추면(능력 칸에서 빠짐) 그때는 「너무 크다」 다.
+  await serverReady(false);
+  expect(structure().textContent).toContain("파일이 커서 심볼 인덱스로 읽지 않는다");
+});
+
+it("asks the server again when its first answer for a file over 1 MiB is stale, instead of saying the file is too large", async () => {
+  host.files.set(MAIN, `${MAIN_TEXT}${"// padding\n".repeat(100_000)}`);
+  let stale = true;
+  serve(() => ({ ...lspSymbols(), staleVersion: stale }));
+  await mount();
+  await open(MAIN, 1, 1);
+  await serverReady(true);
+  await openStructure();
+  expect(called("lsp.symbols.document")).toHaveLength(1);
+  expect(structure().textContent).not.toContain("파일이 커서 심볼 인덱스로 읽지 않는다");
+  stale = false;
+  for (let i = 0; i < 50 && called("lsp.symbols.document").length < 2; i++)
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+  await settle();
+  expect(called("lsp.symbols.document")).toHaveLength(2);
+  expect(source()).toEqual(["lsp", "LSP · rust-analyzer"]);
+  expect(called("index.file.symbols")).toEqual([]);
+});

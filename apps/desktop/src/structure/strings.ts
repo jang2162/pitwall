@@ -48,6 +48,7 @@ export function structureStrings(t: Translate) {
     failed: t("structure-failed"),
     truncated: t("structure-truncated"),
     tooLarge: t("structure-too-large"),
+    serverFailed: t("structure-server-failed"),
     fileStructure: t("structure-action-file-structure"),
     popupPlaceholder: t("structure-popup-placeholder"),
     popupEmpty: t("structure-popup-empty"),

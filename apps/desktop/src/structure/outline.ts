@@ -393,6 +393,9 @@ interface FilterIndex {
   /** 위치 순 트리 차례(모두 펼침). */
   readonly order: readonly OutlineRow[];
   last?: { key: string; matched: readonly number[] };
+  /** 심볼마다 한 칸 — 키마다 새로 만들지 않고 비워 쓴다(GC). `grades` 는 맞음의 등급, `mark` 는 남길 줄. */
+  readonly grades: Uint8Array;
+  readonly mark: Uint8Array;
 }
 
 const filterIndexes = new WeakMap<Outline, FilterIndex>();
@@ -403,6 +406,8 @@ function filterIndex(outline: Outline): FilterIndex {
     index = {
       keys: outline.symbols.map((s) => nameKey(s.name)),
       order: visibleRows(outline, "position", new Set()),
+      grades: new Uint8Array(outline.symbols.length),
+      mark: new Uint8Array(outline.symbols.length),
     };
     filterIndexes.set(outline, index);
   }
@@ -412,35 +417,81 @@ function filterIndex(outline: Outline): FilterIndex {
 export type FilterRow = OutlineRow & { readonly match: boolean };
 
 /**
+ * 맞음의 등급(작을수록 잘 맞음): 이름과 같음 · 앞부분 · 이어진 부분 · 차례로 듦(퍼지). 줄이 상한을 넘으면 높은 등급부터 채운다.
+ */
+function grade(name: string, query: string): number {
+  if (name === query) return 1;
+  if (name.startsWith(query)) return 2;
+  if (name.includes(query)) return 3;
+  return 4;
+}
+
+/**
  * 파일 구조 팝업의 거르기: 이름이 질의에 퍼지로 맞는 심볼(`fuzzyMatches`)과 그 조상(흐리게 — 맞지 않음)을 트리 차례로. 질의가
- * 비면 모든 심볼. 줄은 앞에서 `limit` 개까지만 만들고(팝업이 그리는 만큼 — 키마다 2만 개의 줄 객체를 만들지 않는다) 전체 수는
- * `total` 로 준다. 검색 키 · 트리 차례는 트리마다 한 번 만들어 둔다(`filterIndex`).
+ * 비면 모든 심볼. 줄은 `limit` 개까지만 만들고(팝업이 그리는 만큼 — 키마다 2만 개의 줄 객체를 만들지 않는다) 전체 수는 `total` 로
+ * 준다. 검색 키 · 트리 차례는 트리마다 한 번 만들어 둔다(`filterIndex`).
+ *
+ * 줄이 `limit` 를 넘을 때 무엇을 남기나(M4-10 재리뷰 N2 — 트리 차례로 앞에서 자르면 퍼지가 넓게 맞아 이름을 끝까지 친 심볼도 밀려
+ * 났다):
+ * - 질의가 있으면 맞음의 등급(`grade` — 같음 · 앞부분 · 이어진 부분 · 차례로 듦) 순으로, 같은 등급은 트리 차례로 채운다. 맞은
+ *   심볼마다 그 조상도 함께 넣는다(깊이 상한 32 라 많아야 31 줄). 이름을 끝까지 친 심볼은 늘 남는다.
+ * - 질의가 비고 `focus`(커서의 심볼)가 앞 `limit` 줄 밖이면, 그 심볼과 조상에 트리 차례로 앞뒤 줄을 더해 `limit` 줄을 채운다.
+ *
+ * `best` 는 가장 잘 맞는 심볼이다(등급이 같으면 트리 차례로 앞의 것) — 팝업이 거를 때 그것을 고른다. 질의가 비면 없다.
  */
 export function filterRows(
   outline: Outline,
   query: string,
   sort: OutlineSort,
   limit = Number.POSITIVE_INFINITY,
-): { rows: FilterRow[]; total: number } {
+  focus?: number,
+): { rows: FilterRow[]; total: number; best?: number } {
   const index = filterIndex(outline);
   const key = queryKey(query);
   const order = sort === "position" ? index.order : visibleRows(outline, sort, new Set());
   const rows: FilterRow[] = [];
   if (key === "") {
-    for (const r of order) {
-      if (rows.length >= limit) break;
-      rows.push({ ...r, match: true });
+    const at = focus === undefined ? -1 : order.findIndex((r) => r.id === focus);
+    if (at < limit) {
+      for (const r of order) {
+        if (rows.length >= limit) break;
+        rows.push({ ...r, match: true });
+      }
+      return { rows, total: order.length };
     }
+    // 커서의 심볼이 앞 `limit` 줄 밖 — 그 둘레를 보인다.
+    const keep = new Uint8Array(outline.symbols.length);
+    let count = 0;
+    for (const id of [focus!, ...ancestors(outline, focus!)]) {
+      keep[id] = 1;
+      count++;
+    }
+    for (let d = 1; count < limit && (at + d < order.length || at - d >= 0); d++) {
+      for (const i of [at + d, at - d]) {
+        const id = order[i]?.id;
+        if (id === undefined || keep[id] || count >= limit) continue;
+        keep[id] = 1;
+        count++;
+      }
+    }
+    for (const r of order) if (keep[r.id]) rows.push({ ...r, match: true });
     return { rows, total: order.length };
   }
   const last = index.last;
   const candidates: Iterable<number> =
     last && key.startsWith(last.key) ? last.matched : outline.symbols.keys();
   const matched: number[] = [];
-  for (const id of candidates) if (subsequence(key, index.keys[id]!)) matched.push(id);
+  /** 0 = 맞지 않음, 1 ~ 4 = 등급(`grade`). */
+  const grades = index.grades.fill(0);
+  for (const id of candidates) {
+    const name = index.keys[id]!;
+    if (!subsequence(key, name)) continue;
+    matched.push(id);
+    grades[id] = grade(name, key);
+  }
   index.last = { key, matched };
   // 0 = 뺌, 1 = 조상(흐리게), 2 = 맞음.
-  const mark = new Uint8Array(outline.symbols.length);
+  const mark = index.mark.fill(0);
   let total = 0;
   for (const id of matched) {
     mark[id] = 2;
@@ -451,24 +502,56 @@ export function filterRows(
       at = outline.symbols[at]!.parent;
     }
   }
+  // 가장 잘 맞는 것(같은 등급이면 트리 차례로 앞).
+  let best: number | undefined;
+  for (const r of order)
+    if (grades[r.id]! > 0 && (best === undefined || grades[r.id]! < grades[best]!)) best = r.id;
+  if (total > limit) {
+    // 등급 순으로(같은 등급은 트리 차례로) 맞은 심볼과 그 조상을 `limit` 줄까지 남긴다 — 등급마다 트리 차례를 훑는다.
+    mark.fill(0);
+    let count = 0;
+    for (let g = 1; g <= 4 && count < limit; g++) {
+      for (const r of order) {
+        if (count >= limit) break;
+        if (grades[r.id] !== g || mark[r.id]) continue;
+        const up: number[] = [];
+        for (let at = outline.symbols[r.id]!.parent; at !== undefined && !mark[at];) {
+          up.push(at);
+          at = outline.symbols[at]!.parent;
+        }
+        // 조상까지 넣을 자리가 없으면 이 심볼은 건너뛴다(더 얕은 다음 심볼은 들 수 있다).
+        if (count + 1 + up.length > limit) continue;
+        mark[r.id] = 2;
+        for (const at of up) mark[at] = 1;
+        count += 1 + up.length;
+      }
+    }
+  }
   for (const r of order) {
     if (rows.length >= limit) break;
-    if (mark[r.id]! > 0) rows.push({ ...r, match: mark[r.id] === 2 });
+    if (mark[r.id]! > 0) rows.push({ ...r, match: grades[r.id]! > 0 });
   }
-  return { rows, total };
+  return { rows, total, ...(best !== undefined && { best }) };
 }
 
 /**
- * 심볼마다 다시 읽어도 같은 열쇠(조상의 종류 · 이름 경로의 해시) — 편집 뒤 다시 읽은 트리에서 접힘 · 고름을 이어 둔다(색인은 위쪽에
- * 심볼이 하나 생기면 밀린다, M4-10 리뷰 L4). 같은 부모 아래 같은 종류 · 이름이 둘이면 열쇠가 같다 — 둘이 함께 접힐 뿐이다.
+ * 심볼마다 다시 읽어도 같은 열쇠(조상 경로 · 종류 · 이름 · 같은 꼴 안의 순번의 해시) — 편집 뒤 다시 읽은 트리에서 접힘 · 고름을
+ * 이어 둔다(색인은 위쪽에 심볼이 하나 생기면 밀린다, M4-10 리뷰 L4). 순번은 같은 부모 아래 같은 종류 · 이름 형제(`impl Foo`
+ * 블록 둘 · getter/setter · 오버로드) 중 몇 번째인가다 — 빼면 그 형제들이 한 열쇠가 되어 고름이 늘 첫째로 돌아가고 `↓` 가 거기서
+ * 갇힌다(M4-10 재리뷰 N1). 다른 이름의 심볼이 위에 생겨도 순번은 그대로다.
  */
 export function symbolKeys(outline: Outline): readonly number[] {
   let keys = symbolKeyCache.get(outline);
   if (!keys) {
     const out: number[] = [];
+    /** (부모 열쇠, 종류, 이름) → 지금까지 나온 수. */
+    const seen = new Map<string, number>();
     for (const s of outline.symbols) {
       const up = s.parent === undefined ? "" : out[s.parent]!;
-      out.push(hash(`${up}\u0000${s.kind}\u0000${s.name}`));
+      const shape = `${up}\u0000${s.kind}\u0000${s.name}`;
+      const nth = seen.get(shape) ?? 0;
+      seen.set(shape, nth + 1);
+      out.push(hash(`${shape}\u0000${nth}`));
     }
     symbolKeyCache.set(outline, (keys = out));
   }

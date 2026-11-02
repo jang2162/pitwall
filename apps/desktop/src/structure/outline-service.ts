@@ -73,6 +73,11 @@ export interface OutlineState {
   readonly outline?: Outline;
   /** 탭의 주 커서(UTF-16 오프셋). */
   readonly cursor?: number;
+  /**
+   * 언어 서버가 이번 읽기에 답하지 못했는데(실패 · 시한) 파일이 인덱스의 상한보다 커서 대신 읽지 못했다 — 앞의 트리를 그대로
+   * 보이며 그렇다고 적는다(M4-10 재리뷰 N4). 다음에 트리를 새로 읽으면 풀린다.
+   */
+  readonly serverFailed?: boolean;
 }
 
 export interface OutlineService {
@@ -108,6 +113,8 @@ function createOutlineService(workspace: EditorWorkspace): OutlineService {
   /** 읽기마다 오른다 — 늦게 온 앞 답을 버린다. */
   let seq = 0;
   let inflight: AbortController | undefined;
+  /** 첫 서버 답이 낡아 한 번 더 물었다(큰 파일 — 인덱스로 대신 못 그릴 때). 탭을 옮기면 풀린다. */
+  let askedAgain = false;
 
   const panel = (): IDockviewPanel | undefined => {
     const id = store.getState().panelId;
@@ -129,6 +136,7 @@ function createOutlineService(workspace: EditorWorkspace): OutlineService {
     offCapabilities?.();
     offCapabilities = undefined;
     boundLsp = undefined;
+    askedAgain = false;
   }
 
   /** 활성 탭을 다시 본다. 같은 탭 · 같은 경로면 그대로. */
@@ -193,6 +201,8 @@ function createOutlineService(workspace: EditorWorkspace): OutlineService {
     const current = () => id === seq && view()?.state.doc === text;
     /** 첫 읽기의 서버 답이 낡았다 — 인덱스 트리를 그린 뒤 서버에 한 번 더 묻는다. */
     let askAgain = false;
+    /** 서버에 물었는데 답을 못 받았다(실패 · 시한) — 인덱스는 대신일 뿐이다. */
+    let serverFailed = false;
     if (doc?.capabilities.document_symbol) {
       try {
         // 요청 도우미(`doc.request` — `doc.call` 과 같은 규칙: 편집이 Host 에 닿은 뒤 묻고, 같은 종류의 앞 요청을 취소하고,
@@ -221,10 +231,20 @@ function createOutlineService(workspace: EditorWorkspace): OutlineService {
         if (id !== seq) return;
         // 서버 오류 · 시한 · 문서를 잃음 — 인덱스로 대신한다.
         if (errorCode(e) === ERROR_CODE.CANCELLED) return;
+        serverFailed = true;
       }
     }
     if (exceedsUtf8(text, INDEX_MAX_TEXT_BYTES)) {
-      if (current()) store.setState({ status: "tooLarge", outline: undefined });
+      if (!current()) return;
+      // 「너무 크다」 는 서버가 이 문서를 맡지 않을 때만이다(M4-10 재리뷰 N4). 서버가 맡는데 이번에 실패했거나 첫 답이 낡았으면
+      // 앞의 서버 트리를 지우지 않는다 — 실패면 그대로 두고 알리고, 낡은 답이면 조금 뒤 한 번 더 묻는다.
+      if (askAgain && !askedAgain) {
+        askedAgain = true;
+        schedule(OUTLINE_REREAD_MS);
+      } else if (serverFailed || askAgain) {
+        if (store.getState().outline) store.setState({ serverFailed: true });
+        else store.setState({ status: "failed" });
+      } else store.setState({ status: "tooLarge", outline: undefined, serverFailed: false });
       return;
     }
     try {
@@ -248,7 +268,7 @@ function createOutlineService(workspace: EditorWorkspace): OutlineService {
   }
 
   function finish(outline: Outline) {
-    store.setState({ status: "ready", outline });
+    store.setState({ status: "ready", outline, serverFailed: false });
   }
 
   function cursorOf(): number | undefined {

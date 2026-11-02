@@ -127,6 +127,14 @@ export function StructureToolWindow(props: IDockviewPanelProps) {
           {emptyText(T, state.status)}
         </p>
       )}
+      {outline && state.serverFailed && (
+        <p
+          className="flex-none border-t border-ui-border px-2 py-1 text-[11px] text-ui-muted-foreground"
+          data-structure-notice=""
+        >
+          {T.serverFailed}
+        </p>
+      )}
       {outline?.truncated && (
         <p className="flex-none border-t border-ui-border px-2 py-1 text-[11px] text-ui-muted-foreground">
           {T.truncated}
