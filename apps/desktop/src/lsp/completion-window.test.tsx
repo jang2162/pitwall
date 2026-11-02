@@ -361,13 +361,14 @@ async function open(file: string, line?: number, col?: number) {
   await settle();
 }
 
+/** 키를 누른다. 보낸 이벤트를 돌려준다(`defaultPrevented` 를 보려고). */
 async function keydown(init: KeyboardEventInit, target?: Element | null) {
+  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
   await act(async () => {
-    (target ?? document.activeElement ?? document.body).dispatchEvent(
-      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
-    );
+    (target ?? document.activeElement ?? document.body).dispatchEvent(event);
   });
   await settle();
+  return event;
 }
 
 const view = () =>
@@ -448,7 +449,7 @@ function item(label: string, extra: Partial<LspCompletionItem> = {}): LspComplet
     additionalEdits: [],
     commitCharacters: null,
     command: null,
-    raw: { label },
+    id: 0,
     ...extra,
   };
 }
@@ -459,13 +460,15 @@ function serveCompletion(answer: (ask: CompletionAsk) => Partial<LspCompletionLi
   host.lsp!.handle("lsp.completion", async (params) => {
     const ask = params as CompletionAsk;
     asked.push(ask);
+    const list = answer(ask);
     return {
       server: "ra",
       staleVersion: host.lsp!.stale(ask),
       isIncomplete: false,
       truncated: false,
-      items: [],
-      ...answer(ask),
+      ...list,
+      // Host 처럼 답 안의 차례를 번호로 단다.
+      items: (list.items ?? []).map((it, id) => ({ ...it, id })),
     } satisfies LspCompletionList;
   });
   return asked;
@@ -665,16 +668,17 @@ it("applies the replace range with Tab, the insert range with Enter, and the imp
 });
 
 it("waits for resolve to bring the auto-import of the accepted item, still in one undo (③)", async () => {
-  serveCompletion(() => ({ items: [item("Shape", { raw: { label: "Shape", data: 1 } })] }));
+  serveCompletion(() => ({ items: [item("Shape")] }));
+  const resolves: unknown[] = [];
   // resolve 는 ↩ 보다 늦게 온다(목록이 열린 뒤 200 ms) — 받아들이기가 그 답을 기다려야 import 가 든다.
   host.lsp!.handle("lsp.completion.resolve", async (params) => {
+    resolves.push(params);
     await new Promise((r) => setTimeout(r, 200));
     return {
       server: "ra",
       staleVersion: false,
       item: item("Shape", {
         additionalEdits: [{ from: 0, to: 0, newText: "import { Shape } from './shapes';\n" }],
-        raw: (params as { item: JsonValue }).item,
       }),
     };
   });
@@ -688,6 +692,8 @@ it("waits for resolve to bring the auto-import of the accepted item, still in on
   expect(text()).toBe("import { Shape } from './shapes';\nlet s: Shape\n");
   await keydown({ key: "z", code: "KeyZ", metaKey: true }, view().contentDOM);
   expect(text()).toBe("let s: Sha\n");
+  // resolve 는 항목을 답 안의 번호와 그 답의 버전으로 묻는다(Host 가 쥔 원래 항목을 서버에 보낸다 — 리뷰 H-2).
+  expect(resolves[0]).toEqual({ docId: "d1", version: 0, listVersion: 0, id: 0 });
 });
 
 it("moves through snippet tab stops (④)", async () => {
@@ -711,7 +717,7 @@ it("resolves only the selected item, cancels the one left behind, and draws its 
   serveCompletion(() => ({ items: ["a1", "b2", "c3", "d4"].map((l) => item(l)) }));
   const resolves: { label: string; signal?: AbortSignal }[] = [];
   host.lsp!.handle("lsp.completion.resolve", (params, signal) => {
-    const label = ((params as { item: { label: string } }).item as { label: string }).label;
+    const label = ["a1", "b2", "c3", "d4"][(params as { id: number }).id]!;
     resolves.push({ label, signal });
     return new Promise((resolve, reject) => {
       signal?.addEventListener("abort", () => reject(new Error("aborted")));
@@ -756,6 +762,10 @@ it("keeps Enter for the Korean IME while composing and opens no list for compose
   expect(listOpen()).toBe(false);
   await compose("compositionend");
   await settle();
+  await settle();
+  // 조합 중에 연 질의는 조합이 끝난 뒤에도 서버에 닿지 않는다(리뷰 L-4 — 소스의 가드와 M4-07 의 쥐기가 함께 빠진 회귀를 잡는다).
+  expect(asked).toEqual([]);
+  expect(listOpen()).toBe(false);
   await act(async () => view().dispatch({ changes: { from: 2, to: 3 }, selection: { anchor: 2 } }));
   await optionSpace();
   await afterInteractionDelay();
@@ -932,11 +942,228 @@ it("closes the list with Esc before the signature popup", async () => {
   expect(currentPopup(view(), "signature")).not.toBeNull();
   await optionSpace();
   expect(listOpen()).toBe(true);
-  await press("Escape");
+  // 목록을 닫은 Esc 는 처리했다고 답한다(`preventDefault` — M4-14: 바탕 키맵의 Esc 액션이 건너뛴다).
+  expect((await press("Escape")).defaultPrevented).toBe(true);
   expect(listOpen()).toBe(false);
   expect(currentPopup(view(), "signature")).not.toBeNull();
   await press("Escape");
   expect(currentPopup(view(), "signature")).toBeNull();
+});
+
+it("keeps every caret when Esc closes the list (the multi-cursor Esc waits for the next one)", async () => {
+  serveCompletion(() => ({ items: [item("area")] }));
+  await openMain("r.\nr.\n", 2);
+  await act(async () =>
+    view().dispatch({
+      selection: EditorSelection.create([EditorSelection.cursor(2), EditorSelection.cursor(5)]),
+    }),
+  );
+  await optionSpace();
+  expect(listOpen()).toBe(true);
+  expect((await press("Escape")).defaultPrevented).toBe(true);
+  expect(listOpen()).toBe(false);
+  expect(view().state.selection.ranges).toHaveLength(2);
+  await press("Escape");
+  expect(view().state.selection.ranges).toHaveLength(1);
+});
+
+// ---- 항목마다 다른 편집 시작점 · 점 붙은 filterText(리뷰 H-1 — typescript-language-server 6.0.2 의 실제 답 꼴) -------------------------
+
+/** TS 의 `headers.` 답 꼴: 식별자 멤버는 편집이 점 뒤에서 시작하는데 `filterText` 는 점부터(`.accept`), 식별자가 아닌 키는 편집이 점에서
+ *  시작한다(`.["content-type"]`). `dot` 는 점의 자리. */
+function tsMembers(dot: number, order: "member-first" | "key-first" = "member-first") {
+  const after = { from: dot + 1, to: dot + 1 };
+  const member = (name: string) =>
+    item(name, {
+      kind: 5,
+      filterText: `.${name}`,
+      sortText: "11",
+      edit: { newText: name, insert: after, replace: after },
+    });
+  const key = item("content-type", {
+    kind: 5,
+    filterText: '.["content-type"]',
+    sortText: "11",
+    edit: {
+      newText: '["content-type"]',
+      insert: { from: dot, to: dot + 1 },
+      replace: { from: dot, to: dot + 1 },
+    },
+  });
+  const members = [member("accept"), member("authorization")];
+  return order === "member-first" ? [...members, key] : [key, ...members];
+}
+
+it("keeps TypeScript members after the first letter typed past the dot (H-1)", async () => {
+  serveCompletion(() => ({ items: tsMembers(7) }));
+  await openMain("headers\n", 7);
+  await type(".");
+  expect(listLabels()).toEqual(["accept", "authorization", "content-type"]);
+  await type("a");
+  expect(listLabels()).toEqual(["accept", "authorization"]);
+  await type("c");
+  expect(listLabels()).toEqual(["accept"]);
+  await afterInteractionDelay();
+  await press("Enter");
+  expect(text()).toBe("headers.accept\n");
+});
+
+it("keeps the other items when the first item's edit starts at the dot (H-1)", async () => {
+  serveCompletion(() => ({ items: tsMembers(7, "key-first") }));
+  await openMain("headers\n", 7);
+  await type(".");
+  // 같은 점수 · 같은 sortText 는 서버 순서다.
+  expect(listLabels()).toEqual(["content-type", "accept", "authorization"]);
+  await type("a");
+  expect(listLabels()).toEqual(["accept", "authorization"]);
+  // 리뷰의 재현: `obj.fo` 에서 첫 항목만 점에서 시작한다.
+  await press("Escape");
+  serveCompletion(() => ({
+    items: [
+      item("bar-baz", {
+        filterText: '.["bar-baz"]',
+        edit: {
+          newText: '["bar-baz"]',
+          insert: { from: 3, to: 6 },
+          replace: { from: 3, to: 6 },
+        },
+      }),
+      item("foo", {
+        edit: { newText: "foo", insert: { from: 4, to: 6 }, replace: { from: 4, to: 6 } },
+      }),
+      item("fob", {
+        edit: { newText: "fob", insert: { from: 4, to: 6 }, replace: { from: 4, to: 6 } },
+      }),
+    ],
+  }));
+  await act(async () =>
+    view().dispatch({ changes: { from: 0, to: view().state.doc.length, insert: "obj.fo\n" } }),
+  );
+  await act(async () => view().dispatch({ selection: { anchor: 6 } }));
+  await optionSpace();
+  expect(listLabels()).toEqual(["fob", "foo"]);
+});
+
+it("keeps the live TypeScript shapes: every edit at the dot, or a comment between the dot and the caret (H-1)", async () => {
+  // typescript-language-server 6.0.2 의 live 답(live_lsp_typescript_language_server_member_items_start_at_the_dot_or_the_caret):
+  // `headers.` 바로 뒤면 모든 항목이 점에서 시작한다.
+  const atDot = (name: string, newText = `.${name}`) =>
+    item(name, {
+      kind: 5,
+      filterText: `.${name === "content-type" ? '["content-type"]' : name}`,
+      edit: { newText, insert: { from: 7, to: 8 }, replace: { from: 7, to: 8 } },
+    });
+  serveCompletion(() => ({
+    items: [atDot("accept"), atDot("authorization"), atDot("content-type", '["content-type"]')],
+  }));
+  await openMain("headers\n", 7);
+  await type(".");
+  expect(listLabels()).toEqual(["accept", "authorization", "content-type"]);
+  await type("a");
+  expect(listLabels()).toEqual(["accept", "authorization"]);
+  await afterInteractionDelay();
+  await press("Enter");
+  expect(text()).toBe("headers.accept\n");
+  // 점과 커서 사이에 주석이 있으면 식별자 멤버는 커서에서, 식별자가 아닌 키는 점에서 시작한다(시작점이 항목마다 다르다).
+  const comment = "headers./*c*/\n";
+  const caret = comment.indexOf("\n");
+  serveCompletion(() => ({
+    items: [
+      item("content-type", {
+        filterText: ".content-type",
+        edit: {
+          newText: '["content-type"]',
+          insert: { from: 7, to: caret },
+          replace: { from: 7, to: caret },
+        },
+      }),
+      ...["accept", "authorization"].map((name) =>
+        item(name, {
+          edit: {
+            newText: name,
+            insert: { from: caret, to: caret },
+            replace: { from: caret, to: caret },
+          },
+        }),
+      ),
+    ],
+  }));
+  await act(async () =>
+    view().dispatch({ changes: { from: 0, to: view().state.doc.length, insert: comment } }),
+  );
+  await act(async () => view().dispatch({ selection: { anchor: caret } }));
+  await optionSpace();
+  // 첫 항목이 점에서 시작해도 나머지가 남는다. `content-type` 은 그 편집 범위의 글(`./*c*/`)이 `filterText` 와 맞지 않아 빠진다 —
+  // LSP 의 거르기 그대로다(거르는 글은 편집 시작부터 커서까지의 글에 맞춘다).
+  expect(listLabels()).toEqual(["accept", "authorization"]);
+  await type("au");
+  expect(listLabels()).toEqual(["authorization"]);
+});
+
+it("applies a member whose edit starts at the dot (optional chaining, quoted keys) (H-1)", async () => {
+  const atDot = (name: string, newText: string) =>
+    item(name, {
+      kind: 5,
+      filterText: `.${newText}`,
+      edit: { newText, insert: { from: 1, to: 2 }, replace: { from: 1, to: 2 } },
+    });
+  serveCompletion(() => ({ items: [atDot("limit", "?.limit"), atDot("reading", "?.reading")] }));
+  await openMain("m\n", 1);
+  await type(".");
+  expect(listLabels()).toEqual(["limit", "reading"]);
+  await type("l");
+  expect(listLabels()).toEqual(["limit"]);
+  await afterInteractionDelay();
+  await press("Enter");
+  expect(text()).toBe("m?.limit\n");
+});
+
+// ---- resolve 를 기다리는 사이 친 글자(리뷰 L-1) -------------------------------------------------------------------------------
+
+function slowImport(ms: number) {
+  host.lsp!.handle("lsp.completion.resolve", async () => {
+    await new Promise((r) => setTimeout(r, ms));
+    return {
+      server: "ra",
+      staleVersion: false,
+      item: item("Shape", {
+        additionalEdits: [{ from: 0, to: 0, newText: "import { Shape } from './shapes';\n" }],
+      }),
+    };
+  });
+}
+
+it("puts the accepted item in at once when a letter is typed while waiting for resolve, and the import after (L-1)", async () => {
+  serveCompletion(() => ({ items: [item("Shape")] }));
+  slowImport(200);
+  await openMain("let s: Sha\n", 10, true);
+  await optionSpace();
+  await afterInteractionDelay();
+  await press("Enter");
+  expect(text()).toBe("let s: Sha\n");
+  // ↩ 바로 뒤에 친 글자: 항목이 그 앞에 들어가고 커서는 친 글자 뒤에 남는다.
+  await type("(");
+  expect(text()).toBe("let s: Shape(\n");
+  expect(view().state.selection.main.head).toBe("let s: Shape(".length);
+  // 자동 import 는 답이 오면 따로 붙는다.
+  await act(async () => new Promise((r) => setTimeout(r, 250)));
+  expect(text()).toBe("import { Shape } from './shapes';\nlet s: Shape(\n");
+  expect(view().state.selection.main.head).toBe(text().indexOf("(") + 1);
+});
+
+it("drops the accepted item when the word itself changes while waiting for resolve (L-1)", async () => {
+  serveCompletion(() => ({ items: [item("Shape")] }));
+  slowImport(200);
+  await openMain("let s: Sha\n", 10, true);
+  await optionSpace();
+  await afterInteractionDelay();
+  await press("Enter");
+  await act(async () =>
+    view().dispatch({ changes: { from: 9, to: 10 }, userEvent: "delete.backward" }),
+  );
+  await settle();
+  await act(async () => new Promise((r) => setTimeout(r, 250)));
+  expect(text()).toBe("let s: Sh\n");
 });
 
 it("switches between overloads with ↑ ↓ while the caret stays", async () => {

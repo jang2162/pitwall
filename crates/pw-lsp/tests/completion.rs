@@ -122,11 +122,13 @@ async fn completion_items_come_with_offsets_defaults_and_the_server_order() {
         area["documentation"],
         json!({ "markdown": true, "value": "**넓이**" })
     );
-    assert_eq!(area["raw"]["data"], json!({ "from": "defaults" }));
+    // 서버가 준 원래 항목은 Host 가 쥐고 웹뷰에는 답 안의 번호만 간다.
+    assert_eq!(area["id"], 0);
+    assert!(area.get("raw").is_none());
     let width = &list["items"][1];
     assert_eq!(width["filterText"], "w");
     assert_eq!(width["snippet"], false);
-    assert_eq!(width["raw"]["data"], 7);
+    assert_eq!(width["id"], 1);
     assert_eq!(width["edit"]["insert"], json!({ "from": 15, "to": 16 }));
     // 서버가 받은 것: 위치(LSP 줄 · 글자)와 트리거.
     let asked = &methods_of(&record, "textDocument/completion")[0]["params"];
@@ -207,11 +209,12 @@ async fn resolve_brings_late_documentation_and_import_edits() {
     let resolved = win
         .call(
             "lsp.completion.resolve",
-            json!({ "docId": doc, "version": 0, "item": list["items"][0]["raw"] }),
+            json!({ "docId": doc, "version": 0, "listVersion": 0, "id": list["items"][0]["id"] }),
         )
         .await
         .unwrap();
     assert_eq!(resolved["staleVersion"], false);
+    assert_eq!(resolved["item"]["id"], 0);
     assert_eq!(
         resolved["item"]["documentation"],
         json!({ "markdown": false, "value": "넓이를 돌려준다 <script>" })
@@ -283,6 +286,115 @@ async fn only_offered_commands_the_server_announced_reach_execute_command() {
     assert_eq!(sent.len(), 1);
     assert_eq!(
         sent[0]["params"],
+        json!({ "command": COMMAND, "arguments": ["a", 1] })
+    );
+}
+
+/// resolve 는 Host 가 그 답으로 내준 항목만 서버에 보낸다 — 웹뷰가 지어낸 `command` 를 단 항목을 resolve 에 보내 「내준 명령」 으로
+/// 만들 수 없다(리뷰 H-2 의 재현: resolve 답 `null` → 예전에는 웹뷰가 보낸 항목을 답으로 썼다). 서버가 받는 것은 Host 가 쥔 원래
+/// 항목이므로 받은 항목을 되돌려 주는 서버여도 지어낸 명령이 돌아올 길이 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resolve_sends_only_items_the_host_offered_and_a_forged_command_never_runs() {
+    let forged =
+        json!({ "title": "import", "command": COMMAND, "arguments": ["/etc/passwd", "FORGED"] });
+    let env = Env::new(EnvOptions::default());
+    let record = env.fake(
+        "rust-analyzer",
+        scenario(Reply::result(json!([
+            { "label": "area", "data": 1 },
+            { "label": "width", "data": 2 },
+        ])))
+        .reply("completionItem/resolve", Reply::result(Value::Null))
+        .reply("workspace/executeCommand", Reply::result(json!("done"))),
+    );
+    let mut win = env.window();
+    let doc = ready(&env, &mut win).await;
+    win.call("lsp.completion", complete_at(&doc, 0, AFTER_DOT))
+        .await
+        .unwrap();
+    // 옛 꼴(웹뷰가 항목 JSON 을 보냄)은 받지 않는다 — 번호가 없으면 잘못된 인자다.
+    let old = win
+        .call(
+            "lsp.completion.resolve",
+            json!({ "docId": doc, "version": 0, "item": { "label": "nope", "command": forged } }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(old.code, code::INVALID_PARAMS);
+    // 내주지 않은 번호 · 다른 버전의 답은 서버에 묻지 않고 거절한다.
+    for (list_version, id) in [(0, 2), (1, 0)] {
+        let refused = win
+            .call(
+                "lsp.completion.resolve",
+                json!({ "docId": doc, "version": 0, "listVersion": list_version, "id": id }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, code::PERMISSION_DENIED);
+    }
+    assert!(methods_of(&record, "completionItem/resolve").is_empty());
+    // 내준 항목: 서버가 받는 것은 Host 가 쥔 원래 항목이고, 빈 답이면 그 원래 항목 그대로다.
+    let resolved = win
+        .call(
+            "lsp.completion.resolve",
+            json!({ "docId": doc, "version": 0, "listVersion": 0, "id": 1 }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        methods_of(&record, "completionItem/resolve")[0]["params"],
+        json!({ "label": "width", "data": 2 })
+    );
+    assert_eq!(resolved["item"]["label"], "width");
+    assert_eq!(resolved["item"]["command"], Value::Null);
+    let denied = win
+        .call(
+            "lsp.completion.execute",
+            json!({ "docId": doc, "version": 0, "command": forged }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code, code::PERMISSION_DENIED);
+    assert!(methods_of(&record, "workspace/executeCommand").is_empty());
+}
+
+/// 내준 항목의 resolve 답이 준 명령은 그 항목의 것이다 — resolve 전에는 보내지 않고, 뒤에는 같은 답 버전으로 보낸다. 같은 항목을 두 번
+/// resolve 해도 명령은 그 항목에 하나다(앞 답의 명령을 잊는 것은 단위 시험 `offered_items_and_commands_are_kept_per_document_and_version`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_from_the_resolve_answer_of_an_offered_item_runs() {
+    let first = json!({ "title": "import", "command": COMMAND, "arguments": ["a", 1] });
+    let env = Env::new(EnvOptions::default());
+    let record = env.fake(
+        "rust-analyzer",
+        scenario(Reply::result(json!([{ "label": "area", "data": 1 }])))
+            .reply(
+                "completionItem/resolve",
+                Reply::result(json!({ "label": "area", "data": 1, "command": first })),
+            )
+            .reply("workspace/executeCommand", Reply::result(json!("done"))),
+    );
+    let mut win = env.window();
+    let doc = ready(&env, &mut win).await;
+    win.call("lsp.completion", complete_at(&doc, 0, AFTER_DOT))
+        .await
+        .unwrap();
+    let execute = json!({ "docId": doc, "version": 0, "command": first });
+    let before = win
+        .call("lsp.completion.execute", execute.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(before.code, code::PERMISSION_DENIED, "not resolved yet");
+    for _ in 0..2 {
+        win.call(
+            "lsp.completion.resolve",
+            json!({ "docId": doc, "version": 0, "listVersion": 0, "id": 0 }),
+        )
+        .await
+        .unwrap();
+    }
+    win.call("lsp.completion.execute", execute).await.unwrap();
+    assert_eq!(
+        methods_of(&record, "workspace/executeCommand")[0]["params"],
         json!({ "command": COMMAND, "arguments": ["a", 1] })
     );
 }

@@ -4,10 +4,13 @@
 //! - `lsp.completion`: `textDocument/completion`. 목록은 서버 순서로 [`ITEM_LIMIT`] 개까지(넘으면 `truncated` — 창의 거르기는 받은
 //!   것만 보므로 웹뷰는 그 목록을 「다시 물어야 하는 목록」으로 다룬다). `CompletionList.itemDefaults`(`editRange` ·
 //!   `insertTextFormat` · `commitCharacters` · `data`)는 항목마다 채워 보낸다. 항목의 `textEdit`(삽입 · 바꾸기 범위)와
-//!   `additionalTextEdits` 는 오프셋으로, 서버가 준 원래 항목(`raw`)은 resolve 에 되돌려 보내려고 함께 싣는다.
-//! - `lsp.completion.resolve`: `completionItem/resolve` — 문서 · `additionalTextEdits`(자동 import)를 늦게 받는다.
+//!   `additionalTextEdits` 는 오프셋으로 보낸다. 서버가 준 원래 항목은 Host 가 쥐고(문서마다 마지막 답 하나) 웹뷰에는 그 답 안의
+//!   번호(`id`)만 준다.
+//! - `lsp.completion.resolve`: `completionItem/resolve` — 문서 · `additionalTextEdits`(자동 import)를 늦게 받는다. 서버에 보내는
+//!   것은 **Host 가 같은 문서 · 같은 버전의 완성 답으로 내준 항목**(웹뷰가 보낸 번호로 Host 가 쥔 것을 찾는다 — 웹뷰가 보낸 JSON 이
+//!   아니다)뿐이고, 서버가 빈 답을 주면 그 원래 항목을 쓴다(메인 판정 2026-11-02, 리뷰 H-2).
 //! - `lsp.completion.execute`: 받아들인 항목의 `command` 를 `workspace/executeCommand` 로(결정 M4-D15). 보내는 것은 **이 Host 가
-//!   같은 문서 · 같은 버전의 완성 답으로 내준 명령**이고 **그 서버가 `executeCommandProvider.commands` 로 알린 것**뿐이다 — 아니면
+//!   같은 문서 · 같은 버전의 완성 답으로 내준 항목의 명령 또는 그 항목의 resolve 답의 명령**이고 **그 서버가 `executeCommandProvider.commands` 로 알린 것**뿐이다 — 아니면
 //!   거절하고 보내지 않는다(메인 판정 2026-11-02). 명령 끝에 서버가 거는 `workspace/applyEdit` 은 M4-12 의 처리기 · 받는 창이 맡는다 —
 //!   그 전에는 클라이언트 능력에 `workspace.applyEdit` 이 없어 서버가 보내지 않는다.
 //! - `lsp.signatureHelp`: `textDocument/signatureHelp`. 매개변수 이름(문자열 꼴)은 시그니처 글 안의 UTF-16 범위로 바꾼다.
@@ -29,7 +32,7 @@ use crate::manager::{DocView, FeatureRequest, LspManager, code};
 pub const ITEM_LIMIT: usize = 200;
 /// 서버가 준 글(문서 · 세부) 하나의 상한(UTF-8 바이트). 넘으면 자르고 `…` 를 붙인다.
 pub const MARKUP_LIMIT: usize = 32 * 1024;
-/// 명령을 기억하는 문서 수(오래된 것부터 잊는다).
+/// 내준 항목 · 명령을 기억하는 문서 수(오래된 것부터 잊는다).
 const REMEMBERED_DOCS: usize = 64;
 
 // ---- 형 -----------------------------------------------------------------------------------------------------------------------
@@ -142,9 +145,8 @@ pub struct LspCompletionItem {
     /// 받아들인 뒤 부를 명령(`Command` 그대로).
     #[specta(type = Option<JsonValue>)]
     pub command: Option<Value>,
-    /// 서버가 준 항목(`itemDefaults.data` 를 채운 것) — `lsp.completion.resolve` 에 그대로 되돌린다.
-    #[specta(type = JsonValue)]
-    pub raw: Value,
+    /// 이 답 안의 번호 — `lsp.completion.resolve` 에 보낸다(서버가 준 원래 항목은 Host 가 쥔다).
+    pub id: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
@@ -164,10 +166,12 @@ pub struct LspCompletionList {
 #[serde(rename_all = "camelCase")]
 pub struct LspCompletionResolveParams {
     pub doc_id: String,
+    /// 지금 문서 버전(요청은 이 버전에 맞춰 보낸다 — 목록을 거르는 사이 친 글자로 목록의 버전보다 앞설 수 있다).
     pub version: u32,
-    /// `LspCompletionItem.raw`.
-    #[specta(type = JsonValue)]
-    pub item: Value,
+    /// 그 항목을 받은 완성 답의 문서 버전.
+    pub list_version: u32,
+    /// `LspCompletionItem.id`.
+    pub id: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
@@ -403,8 +407,8 @@ fn with_defaults(mut item: Value, defaults: Option<&Value>) -> Value {
     item
 }
 
-/// 서버의 `CompletionItem`(기본값을 채운 것) → 웹뷰의 항목.
-pub fn completion_item(view: &DocView, raw: Value) -> Option<LspCompletionItem> {
+/// 서버의 `CompletionItem`(기본값을 채운 것) → 웹뷰의 항목(`id` 는 답 안의 번호).
+pub fn completion_item(view: &DocView, raw: &Value, id: u32) -> Option<LspCompletionItem> {
     let label = string(raw.get("label")?)?;
     let edit = raw.get("textEdit").and_then(|e| {
         let new_text = string(e.get("newText")?)?;
@@ -462,7 +466,7 @@ pub fn completion_item(view: &DocView, raw: Value) -> Option<LspCompletionItem> 
             .get("command")
             .filter(|c| c.get("command").is_some_and(Value::is_string))
             .cloned(),
-        raw,
+        id,
     })
 }
 
@@ -490,14 +494,14 @@ fn may_match(name: &str, word: &str) -> bool {
         .all(|w| name.any(|n| n == w))
 }
 
-/// `textDocument/completion` 의 답 → 목록(서버 순서로 [`ITEM_LIMIT`] 까지). 서버가 상한보다 많이 주면 자르기 전에 커서 앞 낱말
+/// `textDocument/completion` 의 답 → 목록(서버 순서로 [`ITEM_LIMIT`] 까지)과 항목마다 서버가 준 원래 항목(기본값을 채운 것). 서버가 상한보다 많이 주면 자르기 전에 커서 앞 낱말
 /// `word` 와 맞을 수 없는 항목(창의 거르기가 어차피 버릴 것)을 뺀다 — 접두어로 거르지 않고 전역 이름까지 다 주는 서버(TS)의 자동
 /// import 후보가 서버 순서 뒤쪽에서 잘려 나가지 않게.
 pub fn completion_list(
     view: &DocView,
     result: &Value,
     word: &str,
-) -> (Vec<LspCompletionItem>, bool, bool) {
+) -> (Vec<(LspCompletionItem, Value)>, bool, bool) {
     let (items, incomplete, defaults) = match result {
         Value::Array(items) => (items.as_slice(), false, None),
         Value::Object(list) => (
@@ -510,6 +514,7 @@ pub fn completion_list(
         _ => (&[][..], false, None),
     };
     let truncated = items.len() > ITEM_LIMIT;
+    let mut order = 0usize;
     let items = items
         .iter()
         .filter(|item| {
@@ -523,7 +528,13 @@ pub fn completion_list(
             }
         })
         .take(ITEM_LIMIT)
-        .filter_map(|item| completion_item(view, with_defaults(item.clone(), defaults)))
+        .map(|item| with_defaults(item.clone(), defaults))
+        .filter_map(|raw| {
+            let id = u32::try_from(order).ok()?;
+            let item = completion_item(view, &raw, id)?;
+            order += 1;
+            Some((item, raw))
+        })
         .collect();
     (items, incomplete, truncated)
 }
@@ -615,15 +626,22 @@ pub fn signature_help(result: &Value) -> Option<LspSignatureHelp> {
 
 // ---- 명령 기억 ----------------------------------------------------------------------------------------------------------------
 
-/// 문서마다 마지막 완성 답의 버전과 그 답으로 내준 명령들.
+/// 완성 답으로 내준 항목 하나: 서버가 준 원래 항목, 그 명령, 그 항목의 resolve 답의 명령.
+struct OfferedItem {
+    raw: Value,
+    command: Option<Value>,
+    resolved: Option<Value>,
+}
+
+/// 문서마다 마지막 완성 답의 버전과 그 답으로 내준 항목들(`id` 순서).
 #[derive(Default)]
 struct Offered {
-    docs: HashMap<String, (u32, Vec<Value>)>,
+    docs: HashMap<String, (u32, Vec<OfferedItem>)>,
     order: VecDeque<String>,
 }
 
 impl Offered {
-    fn remember(&mut self, doc_id: &str, version: u32, commands: Vec<Value>, replace: bool) {
+    fn remember(&mut self, doc_id: &str, version: u32, items: Vec<OfferedItem>) {
         if !self.docs.contains_key(doc_id) {
             self.order.push_back(doc_id.to_owned());
             while self.order.len() > REMEMBERED_DOCS {
@@ -632,21 +650,23 @@ impl Offered {
                 }
             }
         }
-        let entry = self
-            .docs
-            .entry(doc_id.to_owned())
-            .or_insert_with(|| (version, Vec::new()));
-        if replace || entry.0 != version {
-            *entry = (version, commands);
-        } else {
-            entry.1.extend(commands);
-        }
+        self.docs.insert(doc_id.to_owned(), (version, items));
+    }
+
+    fn item_mut(&mut self, doc_id: &str, version: u32, id: u32) -> Option<&mut OfferedItem> {
+        self.docs
+            .get_mut(doc_id)
+            .filter(|(v, _)| *v == version)
+            .and_then(|(_, items)| items.get_mut(id as usize))
     }
 
     fn offered(&self, doc_id: &str, version: u32, command: &Value) -> bool {
-        self.docs
-            .get(doc_id)
-            .is_some_and(|(v, commands)| *v == version && commands.contains(command))
+        self.docs.get(doc_id).is_some_and(|(v, items)| {
+            *v == version
+                && items.iter().any(|i| {
+                    i.command.as_ref() == Some(command) || i.resolved.as_ref() == Some(command)
+                })
+        })
     }
 }
 
@@ -692,13 +712,22 @@ async fn complete(
         )
         .await?;
     let word = word_before(&answer.doc, p.offset);
-    let (items, is_incomplete, truncated) = completion_list(&answer.doc, &answer.result, &word);
+    let (list, is_incomplete, truncated) = completion_list(&answer.doc, &answer.result, &word);
+    let (items, raws): (Vec<_>, Vec<_>) = list.into_iter().unzip();
     if !answer.stale_version {
-        let commands = items.iter().filter_map(|i| i.command.clone()).collect();
+        let kept = items
+            .iter()
+            .zip(raws)
+            .map(|(item, raw)| OfferedItem {
+                raw,
+                command: item.command.clone(),
+                resolved: None,
+            })
+            .collect();
         offered
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remember(&p.doc_id, answer.doc.version, commands, true);
+            .remember(&p.doc_id, answer.doc.version, kept);
     }
     Ok(LspCompletionList {
         server: answer.server,
@@ -715,10 +744,18 @@ async fn resolve(
     ctx: &Ctx,
     p: LspCompletionResolveParams,
 ) -> Result<LspCompletionResolved, RpcError> {
-    if !p.item.is_object() {
-        return Err(RpcError::invalid_params("item must be a completion item"));
-    }
-    let item = p.item.clone();
+    // 웹뷰가 보낸 항목이 아니라 Host 가 그 답으로 내준 항목을 보낸다 — 지어낸 `command` 가 resolve 답을 거쳐 「내준 명령」 이 되지 않게.
+    let Some(item) = offered
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .item_mut(&p.doc_id, p.list_version, p.id)
+        .map(|i| i.raw.clone())
+    else {
+        return Err(denied(
+            "this item was not offered by the last completion of this document version",
+        ));
+    };
+    let sent = item.clone();
     let answer = m
         .request(
             ctx,
@@ -729,24 +766,25 @@ async fn resolve(
                 expected_version: Some(p.version),
                 timeout: None,
             },
-            move |_| Ok(item.clone()),
+            move |_| Ok(sent.clone()),
         )
         .await?;
-    // 서버가 빈 답을 주면 원래 항목 그대로다.
+    // 서버가 빈 답을 주면 Host 가 쥔 원래 항목 그대로다.
     let raw = if answer.result.is_object() {
         answer.result
     } else {
-        p.item
+        item
     };
-    let item = completion_item(&answer.doc, raw)
+    let item = completion_item(&answer.doc, &raw, p.id)
         .ok_or_else(|| RpcError::new(code::SERVER_ERROR, "the server resolved a malformed item"))?;
     if !answer.stale_version
-        && let Some(command) = &item.command
-    {
-        offered
+        && let Some(kept) = offered
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remember(&p.doc_id, answer.doc.version, vec![command.clone()], false);
+            .item_mut(&p.doc_id, p.list_version, p.id)
+    {
+        // 항목마다 마지막 resolve 답의 명령 하나만(덧붙이지 않는다).
+        kept.resolved.clone_from(&item.command);
     }
     Ok(LspCompletionResolved {
         server: answer.server,
@@ -993,12 +1031,16 @@ mod tests {
         items.push(json!({ "label": "zzz", "filterText": "값_s_c" }));
         let (kept, _, truncated) = completion_list(&view, &json!(items), "값Sc");
         assert!(truncated);
-        let labels: Vec<&str> = kept.iter().map(|i| i.label.as_str()).collect();
+        let labels: Vec<&str> = kept.iter().map(|(i, _)| i.label.as_str()).collect();
         assert_eq!(labels, ["값Scale", "zzz"]);
+        // 번호는 내보낸 목록 안의 차례다(서버 답 안의 자리가 아니다).
+        let ids: Vec<u32> = kept.iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [0, 1]);
+        assert_eq!(kept[1].1["filterText"], "값_s_c");
         // 낱말이 없으면 서버 순서 그대로 200 개.
         let (kept, _, _) = completion_list(&view, &json!(items), "");
         assert_eq!(kept.len(), ITEM_LIMIT);
-        assert_eq!(kept[0].label, "g0");
+        assert_eq!(kept[0].0.label, "g0");
         assert!(may_match("AbortController", "abc"));
         assert!(!may_match("scale", "sx"));
     }
@@ -1028,17 +1070,31 @@ mod tests {
     }
 
     #[test]
-    fn offered_commands_are_kept_per_document_and_version() {
-        let mut o = Offered::default();
+    fn offered_items_and_commands_are_kept_per_document_and_version() {
         let c = json!({ "title": "t", "command": "x" });
-        o.remember("d1", 3, vec![c.clone()], true);
+        let r = json!({ "title": "t", "command": "x", "arguments": [1] });
+        let item = |command: Option<&Value>| OfferedItem {
+            raw: json!({ "label": "a" }),
+            command: command.cloned(),
+            resolved: None,
+        };
+        let mut o = Offered::default();
+        o.remember("d1", 3, vec![item(Some(&c)), item(None)]);
         assert!(o.offered("d1", 3, &c));
         assert!(!o.offered("d1", 4, &c));
         assert!(!o.offered("d2", 3, &c));
-        o.remember("d1", 5, vec![], true);
+        assert!(o.item_mut("d1", 3, 1).is_some());
+        assert!(o.item_mut("d1", 3, 2).is_none(), "no such item");
+        assert!(o.item_mut("d1", 4, 0).is_none(), "another version");
+        // resolve 답의 명령은 그 항목의 것으로 — 바꾸면 앞의 것은 잊는다.
+        o.item_mut("d1", 3, 1).unwrap().resolved = Some(r.clone());
+        assert!(o.offered("d1", 3, &r));
+        o.item_mut("d1", 3, 1).unwrap().resolved = None;
+        assert!(!o.offered("d1", 3, &r));
+        o.remember("d1", 5, vec![]);
         assert!(!o.offered("d1", 3, &c));
         for i in 0..=REMEMBERED_DOCS {
-            o.remember(&format!("n{i}"), 1, vec![c.clone()], true);
+            o.remember(&format!("n{i}"), 1, vec![item(Some(&c))]);
         }
         assert!(!o.offered("d1", 5, &c), "the oldest document is forgotten");
     }

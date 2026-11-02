@@ -7,13 +7,16 @@
 //   입력과 같은 길로 연다(`triggerCompletion`).
 // - 거르기: 목록이 완전하면(`isIncomplete` 아님) 받은 것을 창에서 거르고 다시 묻지 않는다(`validFor` — 낱말 글자). 모자라면
 //   (`isIncomplete` · 200 개에서 잘림) 글자마다 다시 묻는다(`triggerKind: incomplete`). 거르기 · 순위는 CodeMirror 의 것이고 `filterText`
-//   로 거르며 같은 점수는 `sortText` 순(글자 순 비교)이다.
+//   로 거르며 같은 점수는 `sortText` 순(글자 순 비교)이다. 항목마다 편집 시작점이 다를 수 있어(TS 의 `.["content-type"]` · `?.limit`
+//   은 점에서, 나머지는 점 뒤에서) 목록은 가장 앞의 시작점에서 거르고, 거르는 글은 항목마다 그 시작점에 맞춘다(`filterLabel` —
+//   리뷰 H-1).
 // - 적용: `↩` 는 삽입 범위, `⇥` 는 바꾸기 범위(`InsertReplaceEdit` — 커서 뒤 낱말까지), 마우스로 고르면 삽입. `textEdit` 의 범위는 요청
 //   때 문서 기준이라 그 뒤 친 글자만큼 늘인다. 스니펫(`insertTextFormat = 2`)은 CodeMirror 스니펫으로(탭 정지 · 자리 표시 — ./snippet.ts),
 //   `additionalTextEdits`(자동 import)는 본 편집과 한 트랜잭션에 넣어 undo 한 번으로 함께 돌아간다. 서버가 resolve 로 자동 import 를
-//   주면(TS) 받아들일 때 그 답을 기다린다(이미 받았으면 곧바로). 멀티 커서는 CodeMirror 기본 — 같은 낱말 범위의 커서에 같은 글을
+//   주면(TS) 받아들일 때 그 답을 기다린다(이미 받았으면 곧바로). 기다리는 사이 사람이 치면 그 자리에서 본 편집을 넣고(친 글자는 그
+//   뒤에 남는다) 자동 import 는 답이 오면 따로 붙인다 — 고르던 낱말 자체를 고쳤으면 넣지 않는다. 멀티 커서는 CodeMirror 기본 — 같은 낱말 범위의 커서에 같은 글을
 //   넣는다(스니펫은 주 커서만).
-// - 문서: 고른 항목만 `lsp.completion.resolve` 로 늦게 받아 옆 패널에(팝업 바탕의 `renderPopupBody` — HTML 끈 Markdown). 빠르게
+// - 문서: 고른 항목만 `lsp.completion.resolve`(그 답 안의 번호로 — Host 가 쥔 원래 항목을 서버에 보낸다)로 늦게 받아 옆 패널에(팝업 바탕의 `renderPopupBody` — HTML 끈 Markdown). 빠르게
 //   옮기면 지난 resolve 는 요청 도우미가 취소한다(같은 `kind`).
 // - 명령: 받아들인 항목의 `command` 는 `lsp.completion.execute`(Host 가 그 답으로 내준 · 서버가 알린 명령만 보낸다 — 결정 M4-D15).
 //   서버가 그 명령 끝에 거는 `workspace/applyEdit` 은 M4-12 가 받는다 — 그 전에는 효과가 없다. 클라이언트 쪽 명령
@@ -43,6 +46,7 @@ import {
   Prec,
   StateEffect,
   StateField,
+  type Text,
   Transaction,
 } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin } from "@codemirror/view";
@@ -63,6 +67,9 @@ import { snippetTemplate } from "./snippet";
 const WORD = /^[\p{L}\p{N}_$]*$/u;
 const WORD_BEFORE = /[\p{L}\p{N}_$]+$/u;
 const WORD_AFTER = /^[\p{L}\p{N}_$]+/u;
+const WORD_CHAR = /[\p{L}\p{N}_$]/u;
+/** `filterText` 머리가 앞 문서 글과 겹치는지 볼 길이의 상한(`.` · `?.` · `->` · `::` 정도). */
+const MAX_OVERLAP = 4;
 /** 받아들일 때 resolve 를 기다리는 한도. 넘으면 받은 것만으로 적용한다. */
 export const RESOLVE_WAIT_MS = 1500;
 /** 목록에 그리는 상한(Host 가 200 에서 자른다). */
@@ -86,10 +93,24 @@ function completionOptions(doc: LspDocument): CompletionOptions | undefined {
 interface ViewState {
   /** 다음 질의가 직접 부른 것이다(`⌃Space`). */
   explicit: boolean;
-  /** 앞 목록이 모자랐으면 그 시작 — 그 낱말을 이어 치면 `incomplete` 로 다시 묻는다. */
+  /** 앞 목록이 모자랐으면 그 낱말의 시작 — 그 낱말을 이어 치면 `incomplete` 로 다시 묻는다. */
   incompleteFrom?: number;
   /** 받아들이는 중(resolve 를 기다림) — 두 번 넣지 않는다. */
-  applying: boolean;
+  pending?: Pending;
+}
+
+/** resolve 를 기다리는 받아들이기 하나. */
+interface Pending {
+  readonly completion: Completion;
+  readonly item: LspCompletionItem;
+  readonly list: ListContext;
+  readonly from: number;
+  readonly to: number;
+  readonly mode: "insert" | "replace";
+  /** 받아들일 때 `from..to` 의 글(그사이 사람이 이 낱말을 고쳤는지 본다). */
+  readonly word: string;
+  /** 받아들인 뒤 문서에 든 편집(받아들일 때 문서 기준). */
+  changes: ChangeSet;
 }
 
 const views = new WeakMap<EditorView, ViewState>();
@@ -100,9 +121,11 @@ interface ListContext {
   readonly view: EditorView;
   /** 답을 받은 문서(`docId` · `version`). */
   readonly at: LspAt;
-  /** 요청한 커서 · 목록의 시작 · 그때 문서 길이(편집 범위를 지금 문서로 옮길 때). */
+  /** 요청한 커서 · 목록의 시작(항목들의 편집 시작점 중 가장 앞) · 커서 앞 낱말의 시작 · 그때 문서 길이(편집 범위를 지금 문서로
+   *  옮길 때). */
   readonly requestPos: number;
   readonly from: number;
+  readonly wordFrom: number;
   readonly docLength: number;
   readonly resolveProvider: boolean;
   /** resolve 한 항목(받은 것 · 받는 중). */
@@ -110,10 +133,9 @@ interface ListContext {
   readonly done: Map<LspCompletionItem, Resolved>;
 }
 
-/** resolve 의 답과 그 편집이 잰 문서. */
+/** resolve 의 답과 그 편집이 잰 문서의 길이. */
 interface Resolved {
   readonly item: LspCompletionItem;
-  readonly version: number;
   readonly docLength: number;
 }
 
@@ -170,11 +192,9 @@ function resolveItem(item: LspCompletionItem, list: ListContext): Promise<Resolv
   const known = list.resolved.get(item);
   if (known) return known;
   const docLength = list.view.state.doc.length;
-  let version = list.at.version;
   const asked = list.doc
     .call("completionResolve", "lsp.completion.resolve", (at) => {
-      version = at.version;
-      return { docId: at.docId, version: at.version, item: item.raw };
+      return { docId: at.docId, version: at.version, listVersion: list.at.version, id: item.id };
     })
     .then(
       (answer) => {
@@ -183,7 +203,7 @@ function resolveItem(item: LspCompletionItem, list: ListContext): Promise<Resolv
           list.resolved.delete(item);
           return undefined;
         }
-        const resolved: Resolved = { item: answer.item, version, docLength };
+        const resolved: Resolved = { item: answer.item, docLength };
         list.done.set(item, resolved);
         return resolved;
       },
@@ -222,12 +242,19 @@ async function itemInfo(item: LspCompletionItem, list: ListContext): Promise<Com
 
 /** 지운(deprecated) 항목 — 목록에서 줄을 긋는다. */
 const deprecated = new WeakMap<Completion, boolean>();
+/** 거르는 글 머리에 붙인 문서 글의 길이(`filterLabel`) — 일치 강조를 표시 이름에 옮길 때 뺀다. */
+const leads = new WeakMap<Completion, number>();
 
 /** 받아들이는 키: `↩` 는 삽입, `⇥` 는 바꾸기. 마우스로 고르면 삽입이다. */
 let acceptMode: "insert" | "replace" = "insert";
 
-function toOption(item: LspCompletionItem, list: ListContext): Completion {
-  const filter = item.filterText ?? item.label;
+function toOption(item: LspCompletionItem, list: ListContext, doc: Text): Completion {
+  const { label: filter, lead } = filterLabel(
+    item.filterText ?? item.label,
+    doc,
+    list.from,
+    itemStart(item, list.requestPos, list.wordFrom),
+  );
   const display = item.label + (item.labelDetail ?? "");
   const option: Completion = {
     label: filter,
@@ -242,16 +269,44 @@ function toOption(item: LspCompletionItem, list: ListContext): Completion {
   if (list.resolveProvider || item.detail || item.documentation)
     option.info = () => itemInfo(item, list);
   deprecated.set(option, item.deprecated);
+  if (lead > 0) leads.set(option, lead);
   return option;
 }
 
-/** 낱말이 시작되는 곳(편집 범위가 있으면 그 시작 — 거르기는 그 뒤의 글을 본다). */
+/** 항목의 편집이 시작되는 곳(편집 범위가 없거나 커서 뒤면 커서 앞 낱말의 시작). */
+function itemStart(item: LspCompletionItem, pos: number, word: number): number {
+  const start = item.edit?.insert.from;
+  return start !== undefined && start <= pos ? start : word;
+}
+
+/** 목록의 시작: 항목들의 편집 시작점과 낱말 시작 중 가장 앞. 첫 항목 하나로 정하지 않는다 — 서버 순서의 첫 항목이 점에서 시작하면
+ *  점 뒤에서 시작하는 나머지가 모두 걸러진다(리뷰 H-1). */
 function listStart(items: readonly LspCompletionItem[], pos: number, word: number): number {
-  for (const item of items) {
-    const start = item.edit?.insert.from;
-    if (start !== undefined && start <= pos) return start;
+  let from = word;
+  for (const item of items) from = Math.min(from, itemStart(item, pos, word));
+  return from;
+}
+
+/**
+ * CodeMirror 가 거르는 글(패턴은 목록 시작부터 커서까지의 문서 글이다): 목록 시작부터 그 항목의 시작까지의 문서 글 + `filterText`.
+ * `filterText` 가 항목 시작 바로 앞의 낱말 아닌 문서 글로 시작하면(TS 의 `.accept` — 편집은 점 뒤에서 시작하는데 거르는 글은 점부터다)
+ * 그 머리는 앞 문서 글과 겹치므로 뗀다. 그래서 거르는 글과 패턴이 같은 자리에서 시작한다 — CodeMirror 는 한 글자 패턴을 첫 글자로만
+ * 맞추므로, 어긋나면 `.` 뒤 첫 글자에서 목록이 사라진다(리뷰 H-1). `lead` 는 머리에 붙인 문서 글의 길이.
+ */
+export function filterLabel(
+  filter: string,
+  doc: Text,
+  from: number,
+  start: number,
+): { label: string; lead: number } {
+  const lead = doc.sliceString(from, start);
+  const lineStart = doc.lineAt(start).from;
+  let overlap = Math.min(filter.length, start - lineStart, MAX_OVERLAP);
+  for (; overlap > 0; overlap--) {
+    const head = doc.sliceString(start - overlap, start);
+    if (!WORD_CHAR.test(head) && filter.startsWith(head)) break;
   }
-  return word;
+  return { label: lead + filter.slice(overlap), lead: lead.length };
 }
 
 function lspSource(doc: LspDocument) {
@@ -293,35 +348,54 @@ function lspSource(doc: LspDocument) {
       return null;
     }
     if (!list || !at || context.aborted) return null;
-    const from = listStart(list.items, pos, word?.from ?? pos);
+    const wordFrom = word?.from ?? pos;
+    const from = listStart(list.items, pos, wordFrom);
     const more = list.isIncomplete || list.truncated;
-    vs.incompleteFrom = more ? from : undefined;
+    vs.incompleteFrom = more ? wordFrom : undefined;
     const shared: ListContext = {
       doc,
       view,
       at,
       requestPos: pos,
       from,
+      wordFrom,
       docLength,
       resolveProvider: options.resolveProvider === true,
       resolved: new Map(),
       done: new Map(),
     };
     if (view.state.field(moreField, false) !== more) view.dispatch({ effects: setMore.of(more) });
+    // 목록 시작부터 낱말 시작까지(점 등)는 그대로 두고 그 뒤로 낱말 글자만 치는 동안 이 목록을 창에서 거른다.
+    const prefix = context.state.sliceDoc(from, wordFrom);
     return {
       from,
-      options: list.items.map((item) => toOption(item, shared)),
-      // 표시 이름(`이름(매개변수)`)이 거르는 글로 시작하면 일치 강조가 그대로 맞는다.
-      getMatch: (c, matched) =>
-        c.displayLabel === undefined || c.displayLabel.startsWith(c.label) ? (matched ?? []) : [],
-      ...(!more && { validFor: WORD }),
+      options: list.items.map((item) => toOption(item, shared, context.state.doc)),
+      getMatch,
+      ...(!more && {
+        validFor: (typed: string) =>
+          typed.startsWith(prefix) && WORD.test(typed.slice(prefix.length)),
+      }),
     };
   };
 }
 
+/** 일치 강조: 표시 이름(`이름(매개변수)`)이 거르는 글(머리에 붙인 문서 글을 뺀 것)로 시작하면 그 자리를 옮겨 쓴다. */
+function getMatch(c: Completion, matched?: readonly number[]): readonly number[] {
+  const lead = leads.get(c) ?? 0;
+  const shown = c.displayLabel ?? c.label;
+  if (!shown.startsWith(c.label.slice(lead)) || !matched) return [];
+  const out: number[] = [];
+  for (let i = 0; i + 1 < matched.length; i += 2) {
+    const from = Math.max(0, matched[i]! - lead);
+    const to = matched[i + 1]! - lead;
+    if (to > from) out.push(from, to);
+  }
+  return out;
+}
+
 function viewState(view: EditorView): ViewState {
   let vs = views.get(view);
-  if (!vs) views.set(view, (vs = { explicit: false, applying: false }));
+  if (!vs) views.set(view, (vs = { explicit: false }));
   return vs;
 }
 
@@ -348,23 +422,79 @@ function applyItem(
 ) {
   const mode = acceptMode;
   const vs = viewState(view);
-  if (vs.applying) return;
+  if (vs.pending) return;
   const ready = list.done.get(item);
   // 자동 import 를 resolve 로 주는 서버(TS)면 그 답을 기다린다 — 이미 받았으면 곧바로.
   if (list.resolveProvider && item.additionalEdits.length === 0 && !ready) {
-    vs.applying = true;
-    const before = view.state.doc;
-    const timeout = new Promise<undefined>((r) => setTimeout(() => r(undefined), RESOLVE_WAIT_MS));
-    void Promise.race([resolveItem(item, list), timeout]).then((resolved) => {
-      vs.applying = false;
-      // 기다리는 사이 사람이 고쳤으면 넣지 않는다(위치가 그 뒤의 문서에 맞지 않는다).
-      if (view.state.doc !== before) return;
-      commit(view, completion, item, list, from, to, mode, resolved);
-    });
+    const pending: Pending = {
+      completion,
+      item,
+      list,
+      from,
+      to,
+      mode,
+      word: view.state.sliceDoc(from, to),
+      changes: ChangeSet.empty(view.state.doc.length),
+    };
+    vs.pending = pending;
+    void withTimeout(resolveItem(item, list)).then((resolved) => settle(view, pending, resolved));
     return;
   }
   commit(view, completion, item, list, from, to, mode, ready);
 }
+
+function withTimeout<T>(promise: Promise<T | undefined>): Promise<T | undefined> {
+  const timeout = new Promise<undefined>((r) => setTimeout(() => r(undefined), RESOLVE_WAIT_MS));
+  return Promise.race([promise, timeout]);
+}
+
+/** 기다리던 받아들이기를 끝낸다 — resolve 답이 왔거나(시간 초과 포함), 기다리는 사이 사람이 쳤다(`watchPending`). */
+function settle(view: EditorView, p: Pending, resolved: Resolved | undefined) {
+  const vs = viewState(view);
+  if (vs.pending !== p) return;
+  vs.pending = undefined;
+  if (p.changes.empty) {
+    commit(view, p.completion, p.item, p.list, p.from, p.to, p.mode, resolved);
+    return;
+  }
+  // 기다리는 사이 사람이 쳤다: 받아들인 자리(친 글자 앞)에 지금 넣는다. 그 낱말 자체를 고쳤으면 고른 것이 더는 맞지 않는다.
+  const from = p.changes.mapPos(p.from, -1);
+  const to = p.changes.mapPos(p.to, -1);
+  if (view.state.sliceDoc(from, to) !== p.word) {
+    console.info("[lsp] dropped a completion: its word changed while waiting for resolve");
+    return;
+  }
+  const head = view.state.sliceDoc(0, from);
+  commit(view, p.completion, p.item, p.list, from, to, p.mode, resolved, true);
+  if (resolved || p.item.additionalEdits.length > 0) return;
+  // 자동 import 는 답이 오면 따로 붙인다(그 위의 글이 그대로일 때만 — 위치가 그 글 기준이다). 기다리던 답은 방금 친 글자로 문서가
+  // 바뀌어 요청 도우미가 버렸을 수 있다 — 그러면 지금 문서로 한 번 더 묻는다.
+  const askLate = async () =>
+    (await withTimeout(resolveItem(p.item, p.list))) ??
+    (await withTimeout(resolveItem(p.item, p.list)));
+  void askLate().then((late) => {
+    const edits = late?.item.additionalEdits.filter((e) => e.to <= p.list.from) ?? [];
+    if (edits.length === 0) return;
+    if (view.state.doc.length < from || view.state.sliceDoc(0, from) !== head) {
+      console.info("[lsp] dropped a late auto-import: the text above it changed");
+      return;
+    }
+    view.dispatch({
+      changes: edits.map((e) => ({ from: e.from, to: e.to, insert: e.newText })),
+      userEvent: "input.complete",
+    });
+  });
+}
+
+/** 받아들이기가 resolve 를 기다리는 동안 든 편집을 모으고, 들면 곧바로 끝낸다(친 글자가 항목을 버리지 않게 — 리뷰 L-1). */
+const watchPending = ViewPlugin.define((view) => ({
+  update(update) {
+    const p = views.get(view)?.pending;
+    if (!p || !update.docChanged) return;
+    p.changes = p.changes.compose(update.changes);
+    queueMicrotask(() => settle(view, p, p.list.done.get(p.item)));
+  },
+}));
 
 function commit(
   view: EditorView,
@@ -375,6 +505,8 @@ function commit(
   to: number,
   mode: "insert" | "replace",
   resolved: Resolved | undefined,
+  /** 기다리는 사이 사람이 쳤다 — 그 사람의 커서를 두고, 스니펫은 필드 없이 글로 넣는다. */
+  typed = false,
 ) {
   const { state } = view;
   const length = state.doc.length;
@@ -386,8 +518,10 @@ function commit(
     const range = mode === "replace" ? item.edit.replace : item.edit.insert;
     start = from + (range.from - list.from);
     end = to + Math.max(0, range.to - list.requestPos);
-  } else if (mode === "replace") {
-    end = to + (WORD_AFTER.exec(state.sliceDoc(to, state.doc.lineAt(to).to))?.[0].length ?? 0);
+  } else {
+    start = from + (list.wordFrom - list.from);
+    if (mode === "replace")
+      end = to + (WORD_AFTER.exec(state.sliceDoc(to, state.doc.lineAt(to).to))?.[0].length ?? 0);
   }
   start = Math.max(0, Math.min(start, length));
   end = Math.max(start, Math.min(end, length));
@@ -428,18 +562,20 @@ function commit(
   } else main = state.update(insertCompletionText(state, text, start, end));
   const after = additional.map(main.changes);
   const changes = main.changes.compose(after);
-  const selection =
-    main.selection?.map(after) ??
-    EditorSelection.cursor(after.mapPos(main.changes.mapPos(end, 1), 1));
+  const selection = typed
+    ? state.selection.map(changes, 1)
+    : (main.selection?.map(after) ??
+      EditorSelection.cursor(after.mapPos(main.changes.mapPos(end, 1), 1)));
   view.dispatch({
     changes,
     selection,
-    effects: StateEffect.mapEffects(main.effects, after),
+    effects: typed ? [] : StateEffect.mapEffects(main.effects, after),
     annotations: [pickedCompletion.of(completion), Transaction.userEvent.of("input.complete")],
     scrollIntoView: true,
   });
+  // 명령은 그 항목을 받은 완성 답의 버전으로 보낸다 — Host 는 그 답으로 내준 항목(과 그 resolve 답)의 명령만 보낸다.
   const command = item.command ?? resolved?.item.command;
-  if (command) runCommand(view, list, command, item.command ? list.at.version : resolved!.version);
+  if (command) runCommand(view, list, command, list.at.version);
 }
 
 /** 받아들인 항목의 명령. 클라이언트 쪽 명령은 여기서, 나머지는 Host 로(그 답으로 내준 · 서버가 알린 것만 간다). */
@@ -580,6 +716,7 @@ export const completion: LspEditorFeature = {
     }),
     completionKeys,
     registerView,
+    watchPending,
     completionTheme,
     signatureHelp(doc),
   ],

@@ -25452,6 +25452,12 @@
                   "null"
                 ]
               },
+              "id": {
+                "description": "이 답 안의 번호 — `lsp.completion.resolve` 에 보낸다(서버가 준 원래 항목은 Host 가 쥔다).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
               "insertText": {
                 "type": [
                   "string",
@@ -25487,9 +25493,6 @@
               "preselect": {
                 "type": "boolean"
               },
-              "raw": {
-                "description": "서버가 준 항목(`itemDefaults.data` 를 채운 것) — `lsp.completion.resolve` 에 그대로 되돌린다."
-              },
               "snippet": {
                 "description": "`insertTextFormat = 2` — 넣을 글이 LSP 스니펫이다.",
                 "type": "boolean"
@@ -25518,7 +25521,7 @@
               "additionalEdits",
               "commitCharacters",
               "command",
-              "raw"
+              "id"
             ],
             "type": "object"
           },
@@ -25676,10 +25679,20 @@
           "docId": {
             "type": "string"
           },
-          "item": {
-            "description": "`LspCompletionItem.raw`."
+          "id": {
+            "description": "`LspCompletionItem.id`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "listVersion": {
+            "description": "그 항목을 받은 완성 답의 문서 버전.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
           },
           "version": {
+            "description": "지금 문서 버전(요청은 이 버전에 맞춰 보낸다 — 목록을 거르는 사이 친 글자로 목록의 버전보다 앞설 수 있다).",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
@@ -25688,7 +25701,8 @@
         "required": [
           "docId",
           "version",
-          "item"
+          "listVersion",
+          "id"
         ],
         "type": "object"
       },
@@ -25771,6 +25785,12 @@
                   "null"
                 ]
               },
+              "id": {
+                "description": "이 답 안의 번호 — `lsp.completion.resolve` 에 보낸다(서버가 준 원래 항목은 Host 가 쥔다).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
               "insertText": {
                 "type": [
                   "string",
@@ -25806,9 +25826,6 @@
               "preselect": {
                 "type": "boolean"
               },
-              "raw": {
-                "description": "서버가 준 항목(`itemDefaults.data` 를 채운 것) — `lsp.completion.resolve` 에 그대로 되돌린다."
-              },
               "snippet": {
                 "description": "`insertTextFormat = 2` — 넣을 글이 LSP 스니펫이다.",
                 "type": "boolean"
@@ -25837,7 +25854,7 @@
               "additionalEdits",
               "commitCharacters",
               "command",
-              "raw"
+              "id"
             ],
             "type": "object"
           },

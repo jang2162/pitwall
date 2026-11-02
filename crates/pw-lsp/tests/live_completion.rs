@@ -128,8 +128,8 @@ mod live {
             .unwrap_or_default()
     }
 
-    /// `.` 바로 뒤에서 묻는 완성의 후보에 `want` 가 모두 든다.
-    pub async fn members_after_dot(o: &mut Opened, anchor: &str, want: &[&str]) {
+    /// `.` 바로 뒤에서 묻는 완성의 후보에 `want` 가 모두 든다. 받은 목록을 돌려준다.
+    pub async fn members_after_dot(o: &mut Opened, anchor: &str, want: &[&str]) -> Value {
         let offset = o.anchor(anchor);
         let params = json!({ "docId": o.doc, "version": 0, "offset": offset,
                               "trigger": { "kind": "character", "character": "." } });
@@ -143,6 +143,23 @@ mod live {
         .await;
         assert_eq!(list["staleVersion"], false);
         eprintln!("completion: {:?}", labels(&list));
+        list
+    }
+
+    /// 항목의 `(편집 시작점, filterText)`.
+    pub fn starts(list: &Value) -> Vec<(String, Option<u64>, Option<String>)> {
+        list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| {
+                (
+                    i["label"].as_str().unwrap().to_owned(),
+                    i["edit"]["insert"]["from"].as_u64(),
+                    i["filterText"].as_str().map(str::to_owned),
+                )
+            })
+            .collect()
     }
 
     /// 시그니처 도움말의 지금 인자가 `want`(그 시그니처 글 안의 조각)다.
@@ -184,7 +201,20 @@ async fn live_lsp_rust_analyzer_completion_after_self() {
         "Rust",
     )
     .await;
-    live::members_after_dot(&mut o, "m4-11.self-members", &["reading", "limit"]).await;
+    let list = live::members_after_dot(&mut o, "m4-11.self-members", &["reading", "limit"]).await;
+    // 창의 거르기가 기대는 꼴(리뷰 H-1 의 대조): rust-analyzer 는 모든 항목의 편집이 점 뒤(물은 자리)에서 시작하고 `filterText` 에 점이
+    // 없다 — 그래서 목록의 시작이 낱말 시작 그대로다(H-1 고침 전과 같은 거르기).
+    let at = u64::from(o.anchor("m4-11.self-members"));
+    for (label, start, filter) in live::starts(&list) {
+        assert!(
+            start.is_none_or(|s| s == at),
+            "{label} starts at {start:?}, not {at}"
+        );
+        assert!(
+            !filter.as_deref().is_some_and(|f| f.starts_with('.')),
+            "{label} filters by {filter:?}"
+        );
+    }
 }
 
 #[cfg(pw_live_lsp_rust_analyzer)]
@@ -229,6 +259,67 @@ async fn live_lsp_typescript_language_server_signature_help_marks_the_argument()
     live::active_parameter(&mut o, "signature.scale", "width").await;
 }
 
+/// TS 의 멤버 꼴(리뷰 H-1): `filterText` 가 점부터(`.accept`)이고, 항목마다 편집 시작점이 다를 수 있다. 창은 목록을 가장 앞의 시작점에서
+/// 거르고 거르는 글을 항목마다 그 시작점에 맞춘다(`apps/desktop/src/lsp/completion.ts` 의 `filterLabel`) — 같은 꼴의 창 시험이
+/// `completion-window.test.tsx` 의 H-1 시험들이다. 서버가 꼴을 바꾸면 이 시험이 먼저 알린다.
+///
+/// - 점과 커서 사이에 아무것도 없으면(`headers.`) 이 판(6.0.2)은 모든 항목의 편집을 점에서 시작한다.
+/// - 사이에 주석이 있으면(표지 자리 그대로) 식별자 멤버는 커서에서, 식별자가 아닌 키(`content-type`)는 점에서 시작한다 — 시작점이
+///   항목마다 다른 실제 답이다(서버 순서로 첫 항목의 시작을 목록 시작으로 삼으면 나머지가 걸러진다).
+#[cfg(pw_live_lsp_typescript_language_server)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lsp_typescript_language_server_member_items_start_at_the_dot_or_the_caret() {
+    use serde_json::json;
+
+    let mut o = live::open(
+        pw_lsp::live::LiveServer::TypescriptLanguageServer,
+        "typescript",
+        None,
+        "src/m4_11_completion.ts",
+        "TypeScript",
+    )
+    .await;
+    let want = ["accept", "authorization", "content-type"];
+    let at = o.anchor("m4-11.headers-members");
+    let marker = u32::try_from("/*@m4-11.headers-members*/".encode_utf16().count()).unwrap();
+    let dot = u64::from(at - marker - 1);
+    // 표지 자리 그대로(점 · 주석 · 커서): 시작점이 항목마다 다르다.
+    let list = live::members_after_dot(&mut o, "m4-11.headers-members", &want).await;
+    let starts = live::starts(&list);
+    eprintln!("with a comment: {starts:?}");
+    let of = |starts: &[(String, Option<u64>, Option<String>)], name: &str| {
+        starts.iter().find(|(l, _, _)| l == name).unwrap().clone()
+    };
+    assert_eq!(of(&starts, "accept").1, Some(u64::from(at)));
+    let (_, start, filter) = of(&starts, "content-type");
+    assert_eq!(start, Some(dot));
+    assert!(filter.is_some_and(|f| f.starts_with('.')));
+    // 주석과 그 뒤의 `accept` 를 지워 `headers.;` 로(버전 1): 모든 항목이 점에서 시작하고 `filterText` 는 점부터다.
+    let after_dot = at - marker;
+    o.win
+        .call(
+            "lsp.document.change",
+            json!({ "docId": o.doc, "version": 1, "changes": [{ "from": after_dot, "to": at + 6, "insert": "" }] }),
+        )
+        .await
+        .unwrap();
+    let params = json!({ "docId": o.doc, "version": 1, "offset": after_dot,
+                          "trigger": { "kind": "character", "character": "." } });
+    let list = live::until(&mut o.win, "lsp.completion", params, |l| {
+        let got = live::labels(l);
+        want.iter().all(|w| got.iter().any(|g| g == w))
+    })
+    .await;
+    assert_eq!(list["staleVersion"], false);
+    let starts = live::starts(&list);
+    eprintln!("right after the dot: {starts:?}");
+    for name in want {
+        let (_, start, filter) = of(&starts, name);
+        assert_eq!(start, Some(dot), "{name}");
+        assert!(filter.is_some_and(|f| f.starts_with('.')), "{name}");
+    }
+}
+
 /// TS 의 자동 import: `scal` 끝에서 고른 `scale`(./shapes)을 resolve 하면 import 줄을 주고, 그 편집을 적용한 글에 import 가 생긴다.
 #[cfg(pw_live_lsp_typescript_language_server)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -271,7 +362,7 @@ async fn live_lsp_typescript_language_server_auto_import_adds_the_import_line() 
         .win
         .call(
             "lsp.completion.resolve",
-            json!({ "docId": o.doc, "version": 1, "item": item["raw"] }),
+            json!({ "docId": o.doc, "version": 1, "listVersion": 1, "id": item["id"] }),
         )
         .await
         .unwrap();

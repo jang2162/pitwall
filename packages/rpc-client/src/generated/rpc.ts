@@ -5064,8 +5064,8 @@ export type LspCompletionItem = {
 	commitCharacters: string[] | null,
 	/**  받아들인 뒤 부를 명령(`Command` 그대로). */
 	command: JsonValue | null,
-	/**  서버가 준 항목(`itemDefaults.data` 를 채운 것) — `lsp.completion.resolve` 에 그대로 되돌린다. */
-	raw: JsonValue,
+	/**  이 답 안의 번호 — `lsp.completion.resolve` 에 보낸다(서버가 준 원래 항목은 Host 가 쥔다). */
+	id: number,
 };
 
 export type LspCompletionList = {
@@ -5090,9 +5090,12 @@ export type LspCompletionParams = {
 
 export type LspCompletionResolveParams = {
 	docId: string,
+	/**  지금 문서 버전(요청은 이 버전에 맞춰 보낸다 — 목록을 거르는 사이 친 글자로 목록의 버전보다 앞설 수 있다). */
 	version: number,
-	/**  `LspCompletionItem.raw`. */
-	item: JsonValue,
+	/**  그 항목을 받은 완성 답의 문서 버전. */
+	listVersion: number,
+	/**  `LspCompletionItem.id`. */
+	id: number,
 };
 
 export type LspCompletionResolved = {
