@@ -15,6 +15,9 @@
 //!
 //! 사건마다 먼저 [`FileListObserver::wants`] 로 그 (프로젝트, 루트)를 받을지 묻고, 받는 관찰자에게만 복제한다 — 마지막 대상에는
 //! 옮긴다(목록 하나를 관찰자 수만큼 복제하지 않게).
+//!
+//! 관찰자 하나에만 가는 사건도 있다 — [`super::FileIndex::replay`] 가 청한 지금 목록(`rebuilt`)은 그 관찰자에게만 가고, 첫 목록을
+//! 만드는 중에 청했으면 그 관찰자만 첫 목록을 `listed` 가 아니라 `rebuilt` 로 받는다.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -129,6 +132,15 @@ impl Observers {
         self.add(Delivery::Queued(observer, tx))
     }
 
+    /// 그 관찰자가 붙어 있는가.
+    pub(crate) fn contains(&self, id: ObserverId) -> bool {
+        self.slots
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|s| s.id == id.0)
+    }
+
     pub(crate) fn remove(&self, id: ObserverId) -> bool {
         let mut slots = self.slots.write().unwrap_or_else(PoisonError::into_inner);
         let before = slots.len();
@@ -150,53 +162,95 @@ impl Observers {
             .is_empty()
     }
 
-    /// 그 (프로젝트, 루트)를 받는 관찰자들에게. 목록을 읽는 잠금은 부르기 전에 놓는다 — 콜백 안에서 붙이고 떼도 막히지 않게.
-    fn deliver(&self, project_id: &str, root: &Path, what: What) {
-        let targets: Vec<Delivery> = self
+    /// 그 (프로젝트, 루트)를 받는 관찰자들에게(`only` 면 그 관찰자에게만). 첫 목록(`Listed`)은 `owed` 의 관찰자에게 `Rebuilt` 로
+    /// 바꿔 보낸다. 받은 관찰자가 있으면 `true`. 목록을 읽는 잠금은 부르기 전에 놓는다 — 콜백 안에서 붙이고 떼도 막히지 않게.
+    fn deliver_to(
+        &self,
+        only: Option<ObserverId>,
+        owed: &[ObserverId],
+        project_id: &str,
+        root: &Path,
+        what: What,
+    ) -> bool {
+        let targets: Vec<(u64, Delivery)> = self
             .slots
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .map(|s| s.delivery.clone())
+            .filter(|s| only.is_none_or(|o| o.0 == s.id))
+            .map(|s| (s.id, s.delivery.clone()))
             .collect();
-        let mut targets: Vec<Delivery> = targets
+        let mut targets: Vec<(u64, Delivery)> = targets
             .into_iter()
-            .filter(|t| {
+            .filter(|(_, t)| {
                 catch_unwind(AssertUnwindSafe(|| t.observer().wants(project_id, root)))
                     .unwrap_or(false)
             })
             .collect();
         let Some(last) = targets.pop() else {
-            return;
+            return false;
         };
         let call = Call {
             project_id: project_id.to_owned(),
             root: root.to_path_buf(),
             what,
         };
-        let send = |target: Delivery, call: Call| match target {
-            Delivery::Inline(observer) => guarded(observer.as_ref(), call),
-            // 받는 스레드가 끝났으면(뗌) 버린다.
-            Delivery::Queued(_, tx) => {
-                let _ = tx.send(call);
+        let send = |(id, target): (u64, Delivery), mut call: Call| {
+            if owed.iter().any(|o| o.0 == id)
+                && let What::Listed(files) = call.what
+            {
+                call.what = What::Rebuilt(files);
+            }
+            match target {
+                Delivery::Inline(observer) => guarded(observer.as_ref(), call),
+                // 받는 스레드가 끝났으면(뗌) 버린다.
+                Delivery::Queued(_, tx) => {
+                    let _ = tx.send(call);
+                }
             }
         };
         for target in targets {
             send(target, call.clone());
         }
         send(last, call);
+        true
+    }
+
+    fn deliver(&self, project_id: &str, root: &Path, what: What) {
+        self.deliver_to(None, &[], project_id, root, what);
     }
 
     pub(crate) fn opened(&self, project_id: &str, root: &Path) {
         self.deliver(project_id, root, What::Opened);
     }
 
-    pub(crate) fn listed(&self, project_id: &str, root: &Path, files: Vec<(Arc<str>, FileFlags)>) {
-        self.deliver(project_id, root, What::Listed(files));
+    /// 다 만든 목록: 첫 목록이면 `listed`(다만 `owed` — 그사이 [`super::FileIndex::replay`] 를 청한 관찰자 — 에게는 `rebuilt`),
+    /// 아니면 모두에게 `rebuilt`.
+    pub(crate) fn built(
+        &self,
+        project_id: &str,
+        root: &Path,
+        files: Vec<(Arc<str>, FileFlags)>,
+        first: bool,
+        owed: &[ObserverId],
+    ) {
+        let what = if first {
+            What::Listed(files)
+        } else {
+            What::Rebuilt(files)
+        };
+        self.deliver_to(None, owed, project_id, root, what);
     }
 
-    pub(crate) fn rebuilt(&self, project_id: &str, root: &Path, files: Vec<(Arc<str>, FileFlags)>) {
-        self.deliver(project_id, root, What::Rebuilt(files));
+    /// 그 관찰자 하나에만 `rebuilt`. 붙어 있지 않거나 그 루트를 받지 않으면 `false`.
+    pub(crate) fn rebuilt_to(
+        &self,
+        id: ObserverId,
+        project_id: &str,
+        root: &Path,
+        files: Vec<(Arc<str>, FileFlags)>,
+    ) -> bool {
+        self.deliver_to(Some(id), &[], project_id, root, What::Rebuilt(files))
     }
 
     pub(crate) fn changed(

@@ -27,7 +27,8 @@
 //! - 점수와 일치 위치는 [`matching`].
 //! - **목록을 따라가는 쪽**([`FileListObserver`], 심볼 인덱스 `pw-index` — M4-15, 언어 서버 파일 감시 `pw-lsp` — M4-05b): 다 만든
 //!   목록 · 적용한 변경 · 버림을 같은 순서로 받는다. 같은 수명(감시하는 동안)과 같은 제외 규칙(ignore · 벤더 · 생성 판정)을 따로 다시
-//!   세우지 않으려는 것이다. 여럿이 붙고 뗀다 — 받는 방식 둘(바로 · 차례로)과 서로 막지 않는 규칙은 [`observers`] 머리 주석.
+//!   세우지 않으려는 것이다. 여럿이 붙고 뗀다 — 받는 방식 둘(바로 · 차례로)과 서로 막지 않는 규칙은 [`observers`] 머리 주석. 제
+//!   쪽에서 바뀜을 버린 관찰자는 [`FileIndex::replay`] 로 그 루트의 지금 목록을 혼자 다시 받는다(다른 관찰자 · 버스는 움직이지 않는다).
 
 mod matching;
 mod observers;
@@ -36,7 +37,7 @@ mod walk;
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -172,7 +173,8 @@ pub trait FileListObserver: Send + Sync + 'static {
         self.rebuilt(project_id, root, files);
     }
     /// 루트의 목록을 다시 다 만들었다(`rescan` · 버스 큐 넘침 · 목록이 있던 뒤의 취소 다음 · 첫 목록이면 기본 구현의
-    /// [`Self::listed`] 에서). 그 사이의 변경을 놓쳤을 수 있다는 뜻이다. `files` 는 경로순 전부다.
+    /// [`Self::listed`] 에서). 그 사이의 변경을 놓쳤을 수 있다는 뜻이다. 이 관찰자가 청한 [`FileIndex::replay`] 의 지금 목록도 이것으로
+    /// 온다(이 관찰자에게만). `files` 는 경로순 전부다.
     fn rebuilt(&self, project_id: &str, root: &Path, files: Vec<(Arc<str>, FileFlags)>);
     /// `fs.changed` 를 목록에 적용했다. `removed` 의 상대 경로와 그 아래를 지운 뒤(빈 문자열이면 전부) `inserted` 를 넣었다 — 내용이
     /// 바뀐 파일은 둘 다에 있다.
@@ -236,11 +238,22 @@ struct State {
     rescan: bool,
     /// 취소로 목록을 버렸다. 다시 만들 때까지 변경을 적용하지 않는다.
     dropped: bool,
+    /// 목록이 없을 때(만드는 중 · 취소 뒤) [`FileIndex::replay`] 를 청한 관찰자 — 다음에 다 만든 목록을 첫 목록이어도 `rebuilt` 로
+    /// 받는다.
+    owed: Vec<ObserverId>,
 }
 
 impl State {
     fn current(&self, stop: &Stop) -> bool {
         self.build.as_ref().is_some_and(|b| Arc::ptr_eq(b, stop))
+    }
+
+    /// 목록 전부(경로순).
+    fn list(&self) -> Vec<(Arc<str>, Flags)> {
+        self.files
+            .iter()
+            .map(|(k, v)| (Arc::clone(k), *v))
+            .collect()
     }
 }
 
@@ -304,17 +317,11 @@ impl RootIndex {
                         state.build = None;
                         state.dropped = false;
                         let first = !self.listed.swap(true, Ordering::Relaxed);
+                        let owed = std::mem::take(&mut state.owed);
                         if !self.observers.is_empty() {
-                            let all: Vec<(Arc<str>, Flags)> = state
-                                .files
-                                .iter()
-                                .map(|(k, v)| (Arc::clone(k), *v))
-                                .collect();
-                            if first {
-                                self.observers.listed(&self.project_id, &self.root, all);
-                            } else {
-                                self.observers.rebuilt(&self.project_id, &self.root, all);
-                            }
+                            let all = state.list();
+                            self.observers
+                                .built(&self.project_id, &self.root, all, first, &owed);
                         }
                         self.phase.send_replace(Phase::Ready);
                         return;
@@ -333,8 +340,10 @@ impl RootIndex {
         if !state.current(stop) {
             return;
         }
+        let owed = std::mem::take(&mut state.owed);
         *state = State {
             dropped: true,
+            owed,
             ..State::default()
         };
         if !self.closed.load(Ordering::Relaxed) {
@@ -379,6 +388,24 @@ impl RootIndex {
         state.snapshot = None;
     }
 
+    /// 지금 목록을 그 관찰자 하나에만 `rebuilt` 로 보낸다([`FileIndex::replay`]). 목록이 없으면(만드는 중 · 취소 뒤) 다음에 다 만든
+    /// 목록을 그 관찰자가 `rebuilt` 로 받게 한다. 버린 루트 · 그 루트를 받지 않는 관찰자면 `false`.
+    fn replay(&self, id: ObserverId) -> bool {
+        let mut state = self.state();
+        if self.closed.load(Ordering::Relaxed) {
+            return false;
+        }
+        if state.build.is_some() || state.dropped {
+            if !state.owed.contains(&id) {
+                state.owed.push(id);
+            }
+            return true;
+        }
+        let all = state.list();
+        self.observers
+            .rebuilt_to(id, &self.project_id, &self.root, all)
+    }
+
     /// 만드는 중이면 모아 두고(넘치면 다시 걷게 한다) `true`. 버린 목록이면 버리고 `true`.
     fn defer(&self, paths: &[PathBuf]) -> bool {
         let mut state = self.state();
@@ -408,7 +435,14 @@ struct Inner {
     searches: Semaphore,
     /// 감시하지 않는 루트의 목록(루트 · `worktree` 별).
     adhoc: Mutex<HashMap<AdhocKey, Arc<Adhoc>>>,
+    /// 버스를 따라가는 중이다([`FileIndex::attach`]) — 청한 [`FileIndex::replay`] 를 그 소비자가 차례에 맞춰 보낸다.
+    attached: AtomicUsize,
+    /// 청한 [`FileIndex::replay`](관찰자, 프로젝트, 루트)와 그것을 알리는 신호.
+    replays: Mutex<Vec<Replay>>,
+    replay_wake: tokio::sync::Notify,
 }
+
+type Replay = (ObserverId, String, PathBuf);
 
 impl Inner {
     fn roots(&self) -> MutexGuard<'_, HashMap<Key, Arc<RootIndex>>> {
@@ -420,6 +454,10 @@ impl Inner {
         self.roots()
             .get(&(project_id.to_owned(), root.to_path_buf()))
             .cloned()
+    }
+
+    fn replays(&self) -> MutexGuard<'_, Vec<Replay>> {
+        self.replays.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn adhoc(&self) -> MutexGuard<'_, HashMap<AdhocKey, Arc<Adhoc>>> {
@@ -473,12 +511,16 @@ impl FileIndex {
                 roots: Mutex::default(),
                 searches: Semaphore::new(MAX_SEARCHES),
                 adhoc: Mutex::default(),
+                attached: AtomicUsize::new(0),
+                replays: Mutex::default(),
+                replay_wake: tokio::sync::Notify::new(),
             }),
         }
     }
 
     /// 버스의 `fs.changed` 를 구독하고 목록을 만드는 작업을 띄울 곳을 정한다. 돌려준 future 가 변경을 적용한다 — Host 의 런타임에
     /// 띄운다(버스가 사라지면 끝난다). 구독은 이 호출 안에서 하므로 그 뒤의 변경은 놓치지 않는다. 두 번째부터 작업 자리는 무시한다.
+    /// 청한 [`Self::replay`] 도 이 future 가 보낸다.
     pub fn attach(
         &self,
         bus: &EventBus,
@@ -486,40 +528,95 @@ impl FileIndex {
     ) -> impl Future<Output = ()> + Send + 'static {
         let _ = self.inner.tasks.set(tasks);
         let mut changes = bus.subscribe(Filter::all().topics([TOPIC_CHANGED]));
+        let capacity = bus.capacity();
+        self.inner.attached.fetch_add(1, Ordering::SeqCst);
         let index = self.clone();
         async move {
-            while let Some(received) = changes.recv().await {
-                match received {
-                    Received::Event(event) => {
-                        let Scope::Project(project_id) = &event.scope else {
-                            continue;
-                        };
-                        let Ok(changed) =
-                            serde_json::from_value::<FsChanged>(event.payload.clone())
-                        else {
-                            continue;
-                        };
-                        let Some(entry) = index.inner.get(project_id, Path::new(&changed.root))
-                        else {
-                            continue;
-                        };
-                        if changed.rescan {
-                            index.rebuild(&entry);
-                            continue;
+            loop {
+                tokio::select! {
+                    biased;
+                    () = index.inner.replay_wake.notified() => {
+                        // 청하기 전에 버스에 난 `fs.changed` 는 이미 이 구독의 큐에 있다(버스는 모든 구독의 큐에 한꺼번에 넣는다) —
+                        // 그것들을 먼저 적용한 뒤 보낸다. 그래야 청한 쪽이 이미 받은 바뀜이 목록에 든다. 큐는 버스 용량보다 길지 않다.
+                        let replays = std::mem::take(&mut *index.inner.replays());
+                        for _ in 0..capacity {
+                            let Some(received) = changes.try_recv() else {
+                                break;
+                            };
+                            index.received(received).await;
                         }
-                        let paths = changed.paths.into_iter().map(PathBuf::from).collect();
-                        let _ = tokio::task::spawn_blocking(move || entry.changed(paths)).await;
+                        for (id, project_id, root) in replays {
+                            if let Some(entry) = index.inner.get(&project_id, &root) {
+                                let _ = tokio::task::spawn_blocking(move || entry.replay(id)).await;
+                            }
+                        }
                     }
-                    // 어느 루트의 변경을 놓쳤는지 모른다.
-                    Received::Lagged(_) => {
-                        let all: Vec<_> = index.inner.roots().values().cloned().collect();
-                        for entry in &all {
-                            index.rebuild(entry);
-                        }
+                    received = changes.recv() => {
+                        let Some(received) = received else {
+                            break;
+                        };
+                        index.received(received).await;
                     }
                 }
             }
+            index.inner.attached.fetch_sub(1, Ordering::SeqCst);
         }
+    }
+
+    /// 버스에서 받은 것 하나를 적용한다.
+    async fn received(&self, received: Received) {
+        match received {
+            Received::Event(event) => {
+                let Scope::Project(project_id) = &event.scope else {
+                    return;
+                };
+                let Ok(changed) = serde_json::from_value::<FsChanged>(event.payload.clone()) else {
+                    return;
+                };
+                let Some(entry) = self.inner.get(project_id, Path::new(&changed.root)) else {
+                    return;
+                };
+                if changed.rescan {
+                    self.rebuild(&entry);
+                    return;
+                }
+                let paths = changed.paths.into_iter().map(PathBuf::from).collect();
+                let _ = tokio::task::spawn_blocking(move || entry.changed(paths)).await;
+            }
+            // 어느 루트의 변경을 놓쳤는지 모른다.
+            Received::Lagged(_) => {
+                let all: Vec<_> = self.inner.roots().values().cloned().collect();
+                for entry in &all {
+                    self.rebuild(entry);
+                }
+            }
+        }
+    }
+
+    /// 그 루트의 **지금 목록**을 관찰자 `id` 하나에만 [`FileListObserver::rebuilt`] 로 다시 보낸다 — 다시 만들지 않고, 다른 관찰자 ·
+    /// 버스의 구독자는 아무것도 받지 않는다. 관찰자가 제 쪽에서 바뀜을 버렸을 때(언어 서버 파일 감시의 쌓기 넘침 · 버스 큐 넘침 —
+    /// M4-05b) 그 관찰자 하나만 메우는 길이다(지운 파일은 목록에 없어 메우지 못한다).
+    ///
+    /// 버스를 따라가는 중이면([`Self::attach`]) 그 소비자가 보낸다 — 청하기 전에 버스에 난 `fs.changed` 를 목록에 먼저 적용한 뒤다.
+    /// 목록이 없으면(처음 만드는 중 · 다시 만드는 중 · 취소 뒤) 다음에 다 만든 목록을 그 관찰자가 `rebuilt` 로 받는다(첫 목록이어도 —
+    /// 다른 관찰자에게는 `listed` 그대로). 그 루트가 열려 있지 않거나 그 관찰자가 붙어 있지 않으면 `false`(보낼 것이 없다). 그
+    /// 관찰자가 그 루트를 받지 않으면(`wants`) 아무것도 가지 않는다.
+    pub fn replay(&self, id: ObserverId, project_id: &str, root: &Path) -> bool {
+        let Some(entry) = self.inner.get(project_id, root) else {
+            return false;
+        };
+        if !self.inner.observers.contains(id) {
+            return false;
+        }
+        if self.inner.attached.load(Ordering::SeqCst) > 0 {
+            self.inner
+                .replays()
+                .push((id, project_id.to_owned(), root.to_path_buf()));
+            self.inner.replay_wake.notify_one();
+            return true;
+        }
+        entry.replay(id);
+        true
     }
 
     /// 목록을 따라가는 쪽을 붙인다 — 잠금 안에서 바로 부른다([`observers`] 머리 주석 「바로」). 감시가 루트를 걸기 전에(Host 를

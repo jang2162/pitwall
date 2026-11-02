@@ -1433,12 +1433,52 @@ async fn the_first_list_of_each_opening_is_listed_and_later_ones_are_rebuilt() {
     drop(first);
     drop(second);
     assert_eq!(kinds.until(&["dropped"]).await, ["proj:dropped"]);
-    let _again = watch.acquire(&params).unwrap();
+    let again = watch.acquire(&params).unwrap();
     assert!(index.ready(&id, &root).await);
     assert_eq!(
         kinds.until(&["opened", "listed"]).await,
         ["proj:opened", "proj:listed"]
     );
+
+    // 첫 목록을 만드는 중에 `rescan` 이 끼어도 처음 다 만든 목록은 `listed` 하나다(재리뷰 R4).
+    drop(again);
+    assert_eq!(kinds.until(&["dropped"]).await, ["proj:dropped"]);
+    set_after_walk(&root, || std::thread::sleep(Duration::from_millis(300)));
+    let third = watch.acquire(&params).unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    assert!(index.ready(&id, &root).await);
+    assert_eq!(
+        kinds.until(&["opened", "listed"]).await,
+        ["proj:opened", "proj:listed"]
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(kinds.take(), Vec::<String>::new());
+
+    // 첫 목록을 만드는 중에 취소가 끼어도 그 뒤 처음 다 만든 목록은 `listed` 다.
+    drop(third);
+    assert_eq!(kinds.until(&["dropped"]).await, ["proj:dropped"]);
+    let _fourth = watch.acquire(&params).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let running = loop {
+        let running = tasks.running(Some(&id));
+        if !running.is_empty() || Instant::now() > deadline {
+            break running;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(tasks.cancel(running[0].task_id));
+    set_after_walk(&root, || {});
+    assert_eq!(
+        kinds.until(&["opened", "suspended"]).await,
+        ["proj:opened", "proj:suspended"]
+    );
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    assert_eq!(kinds.until(&["listed"]).await, ["proj:listed"]);
 }
 
 /// 버스 큐가 넘쳐(`Lagged`) 다시 만든 목록은 `rebuilt` 다(첫 목록은 `listed`).
@@ -1468,8 +1508,8 @@ async fn a_list_rebuilt_after_a_lagged_bus_is_rebuilt() {
     assert_eq!(kinds.until(&["rebuilt"]).await, ["proj:rebuilt"]);
 }
 
-/// `wants` 가 거짓인 루트의 콜백은 어떤 것도(`opened` · `listed` · `changed` · `suspended` · `dropped`) 오지 않는다 — 바로 받는 쪽 ·
-/// 차례로 받는 쪽 모두.
+/// `wants` 가 거짓인 루트의 콜백은 어떤 것도(`opened` · `listed` · `changed` · `rebuilt` · `suspended` · `dropped`) 오지 않는다 —
+/// 바로 받는 쪽 · 차례로 받는 쪽 모두.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_observer_hears_nothing_of_a_root_it_does_not_want() {
     let f = Fixture::new();
@@ -1503,8 +1543,7 @@ async fn an_observer_hears_nothing_of_a_root_it_does_not_want() {
             .await
             .unwrap();
     }
-    // b 의 목록을 취소(suspended)하고 닫는다(dropped).
-    set_after_walk(&root_b, || std::thread::sleep(Duration::from_millis(300)));
+    // b 를 다시 만들고(rebuilt), 다시 만들기를 취소(suspended)하고 닫는다(dropped).
     let rescan = FsChanged {
         root: root_b.display().to_string(),
         worktree: None,
@@ -1512,6 +1551,18 @@ async fn an_observer_hears_nothing_of_a_root_it_does_not_want() {
         kinds: Vec::new(),
         rescan: true,
     };
+    f.bus
+        .publish(Scope::Project(b.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !all.seen.lock().unwrap().iter().any(|e| e == "b:rebuilt") && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // 그 다시 만들기의 작업이 끝난 뒤에(아래에서 다음 만들기의 작업을 취소한다).
+    while !tasks.running(Some(&b)).is_empty() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    set_after_walk(&root_b, || std::thread::sleep(Duration::from_millis(300)));
     f.bus
         .publish(Scope::Project(b.clone()), TOPIC_CHANGED, &rescan)
         .unwrap();
@@ -1524,6 +1575,11 @@ async fn an_observer_hears_nothing_of_a_root_it_does_not_want() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     };
     assert!(tasks.cancel(running[0].task_id));
+    // 취소는 작업이 버려질 때 적용된다 — 닫기 전에 기다린다.
+    while !all.seen.lock().unwrap().iter().any(|e| e == "b:suspended") && Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     set_after_walk(&root_b, || {});
     index.close(&b, &root_b);
     index.close(&a, &root_a);
@@ -1532,6 +1588,7 @@ async fn an_observer_hears_nothing_of_a_root_it_does_not_want() {
         "b:opened",
         "b:listed",
         "b:changed",
+        "b:rebuilt",
         "b:suspended",
         "b:dropped",
     ] {
@@ -1576,4 +1633,184 @@ async fn an_observer_attached_while_building_gets_the_first_list_as_listed() {
         .unwrap();
     assert_eq!(after.until(&["rebuilt"]).await, ["proj:rebuilt"]);
     assert_eq!(during.until(&["rebuilt"]).await, ["proj:rebuilt"]);
+}
+
+/// 기록자가 사건 `count` 개를 받을 때까지(많아야 5 s) 기다려 받은 것 전부.
+async fn recorded(recorder: &Recorder, count: usize) -> Vec<Observed> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut seen = Vec::new();
+    loop {
+        seen.extend(recorder.take());
+        if seen.len() >= count || Instant::now() > deadline {
+            return seen;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// `replay`(M4-05b 재리뷰 R1): 그 루트의 지금 목록을 청한 관찰자 하나에만 `rebuilt` 로 보낸다 — 다시 만들지 않으므로 다른 관찰자
+/// (바로 · 차례로)와 버스의 구독자는 아무것도 받지 않는다. 청하기 전에 버스에 난 `fs.changed` 를 먼저 적용한 목록이다(관찰자가 이미
+/// 받은 바뀜이 든다). 열리지 않은 루트 · 뗀 관찰자면 `false`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replay_reaches_only_the_observer_that_asked() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/lib.rs"), "");
+    let index = f.index();
+    index.open(&id, &root, None);
+    assert!(index.ready(&id, &root).await);
+    let asker = Arc::new(Recorder::default());
+    let queued = Arc::new(Recorder::default());
+    let inline = Arc::new(Recorder::default());
+    let asker_id = index.observe_queued(Arc::clone(&asker) as Arc<dyn FileListObserver>);
+    index.observe_queued(Arc::clone(&queued) as Arc<dyn FileListObserver>);
+    index.observe(Arc::clone(&inline) as Arc<dyn FileListObserver>);
+    // 첫 목록 작업의 끝(`task.finished`)이 버스에 다 난 뒤부터 센다.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut bus = f.bus.subscribe(Filter::all());
+
+    // 버스에 난 바뀜 바로 뒤에 청해도 그 바뀜이 목록에 든다.
+    let added = root.join("src/new.rs");
+    write(&added, "");
+    let changed = FsChanged {
+        root: root.display().to_string(),
+        worktree: None,
+        paths: vec![added.display().to_string()],
+        kinds: vec![crate::watch::FsChangeKind::Created],
+        rescan: false,
+    };
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &changed)
+        .unwrap();
+    assert!(index.replay(asker_id, &id, &root));
+    let got = recorded(&asker, 2).await;
+    let rebuilt: Vec<&Observed> = got
+        .iter()
+        .filter(|o| matches!(o, Observed::Rebuilt(_)))
+        .collect();
+    assert_eq!(
+        rebuilt,
+        [&Observed::Rebuilt(vec![
+            "src/lib.rs".into(),
+            "src/new.rs".into()
+        ])],
+        "{got:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for other in [&queued, &inline] {
+        assert!(
+            other
+                .take()
+                .iter()
+                .all(|o| matches!(o, Observed::Changed(..))),
+            "another observer got the list"
+        );
+    }
+    let mut published = Vec::new();
+    while let Some(received) = bus.try_recv() {
+        published.push(received);
+    }
+    // 내가 낸 `fs.changed` 하나뿐 — 다시 만들었으면 작업 사건(`task.*`)이 났다.
+    assert_eq!(published.len(), 1, "{published:?}");
+
+    assert!(!index.replay(asker_id, &id, &root.join("src")));
+    assert!(!index.replay(asker_id, "other", &root));
+    assert!(index.unobserve(asker_id));
+    assert!(!index.replay(asker_id, &id, &root));
+}
+
+/// 재리뷰 R2: 첫 목록을 만드는 중에 청한 `replay` 는 버려지지 않는다 — 그 관찰자는 첫 목록을 `rebuilt` 로 받고(다른 관찰자는
+/// `listed` 그대로), 목록이 다 된 뒤 다시 청하면 그때의 목록을 또 받는다. 취소로 목록을 버린 동안 청한 것도 다음 목록으로 받는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replay_asked_while_the_first_list_is_built_comes_with_it() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/lib.rs"), "");
+    set_after_walk(&root, || std::thread::sleep(Duration::from_millis(300)));
+    let tasks = TaskSpawner::new(f.bus.clone(), Scope::Host, CancellationToken::new());
+    let index = FileIndex::new(Arc::clone(&f.fs));
+    tokio::spawn(index.attach(&f.bus, tasks.clone()));
+    let asker = Arc::new(Kinds::default());
+    let other = Arc::new(Kinds::default());
+    let asker_id = index.observe_queued(Arc::clone(&asker) as Arc<dyn FileListObserver>);
+    index.observe_queued(Arc::clone(&other) as Arc<dyn FileListObserver>);
+    index.open(&id, &root, None);
+    assert!(index.replay(asker_id, &id, &root));
+    assert!(index.ready(&id, &root).await);
+    assert_eq!(
+        asker.until(&["opened", "rebuilt"]).await,
+        ["proj:opened", "proj:rebuilt"]
+    );
+    assert_eq!(
+        other.until(&["opened", "listed"]).await,
+        ["proj:opened", "proj:listed"]
+    );
+
+    set_after_walk(&root, || {});
+    assert!(index.replay(asker_id, &id, &root));
+    assert_eq!(asker.until(&["rebuilt"]).await, ["proj:rebuilt"]);
+
+    // 다시 만들기를 취소한 뒤(목록 없음) 청한 것은 다음 다시 만들기의 목록으로 온다(한 번).
+    set_after_walk(&root, || std::thread::sleep(Duration::from_millis(300)));
+    let rescan = FsChanged {
+        root: root.display().to_string(),
+        worktree: None,
+        paths: Vec::new(),
+        kinds: Vec::new(),
+        rescan: true,
+    };
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let running = loop {
+        let running = tasks.running(Some(&id));
+        if !running.is_empty() || Instant::now() > deadline {
+            break running;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(tasks.cancel(running[0].task_id));
+    assert_eq!(asker.until(&["suspended"]).await, ["proj:suspended"]);
+    assert!(index.replay(asker_id, &id, &root));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(asker.take().is_empty());
+    set_after_walk(&root, || {});
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    assert_eq!(asker.until(&["rebuilt"]).await, ["proj:rebuilt"]);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(asker.take().is_empty());
+
+    // 닫았다 다시 연 루트의 첫 목록을 만드는 중에 청하고 그 만들기가 취소돼도, 다음에 처음 다 만든 목록을 `rebuilt` 로 받는다.
+    index.close(&id, &root);
+    set_after_walk(&root, || std::thread::sleep(Duration::from_millis(300)));
+    index.open(&id, &root, None);
+    assert!(index.replay(asker_id, &id, &root));
+    // 청한 것이 인덱스의 소비자에 닿은 뒤(만들기는 걷기 뒤 300 ms 멈춰 있다) 취소한다.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let running = loop {
+        let running = tasks.running(Some(&id));
+        if !running.is_empty() || Instant::now() > deadline {
+            break running;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(tasks.cancel(running[0].task_id));
+    assert_eq!(
+        asker.until(&["dropped", "opened", "suspended"]).await,
+        ["proj:dropped", "proj:opened", "proj:suspended"]
+    );
+    set_after_walk(&root, || {});
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    assert_eq!(asker.until(&["rebuilt"]).await, ["proj:rebuilt"]);
+    other.take();
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    assert_eq!(other.until(&["rebuilt"]).await, ["proj:rebuilt"]);
 }
