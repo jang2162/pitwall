@@ -1937,6 +1937,7 @@ impl LspManager {
                     {
                         self.trust_changed(&project_id).await;
                         self.recheck_trust().await;
+                        self.start_trusted().await;
                     }
                 }
                 Received::Event(event) if event.topic == pw_runtime::runtime::TOPIC_CHANGED => {
@@ -1960,6 +1961,7 @@ impl LspManager {
                         .collect();
                     self.bump_trust(projects);
                     self.recheck_trust().await;
+                    self.start_trusted().await;
                     self.config_changed().await;
                 }
             }
@@ -2008,6 +2010,76 @@ impl LspManager {
             taken.server.kill();
         }
         for project in untrusted {
+            self.publish(&project);
+        }
+    }
+
+    /// 신뢰를 얻은 프로젝트의 `untrusted` 인스턴스 중 문서가 열린 것을 띄운다(15-m4-plan M4-17 — 웹뷰는 문서를 다시 열지 않는다).
+    /// 허가는 물러남 재기동처럼 그 인스턴스에 문서를 연 연결 중 닫히지 않은 것으로 `start` 가 다시 받는다 — 그 사이 신뢰가 다시
+    /// 풀렸으면 `start` 의 `lsp_grant` 가 거절해 `untrusted` 로 남는다. 문서가 없거나 연 연결이 모두 닫힌 인스턴스는 띄우지 않는다.
+    pub async fn start_trusted(&self) {
+        let Ok(host) = self.host() else {
+            return;
+        };
+        let projects = host.parts.projects.clone();
+        let candidates: BTreeSet<String> = lock(&self.inner.state)
+            .instances
+            .iter()
+            .filter(|(_, i)| i.state == LspInstanceState::Untrusted && !i.docs.is_empty())
+            .map(|(k, _)| k.project_id.clone())
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let trusted: BTreeSet<String> = tokio::task::spawn_blocking(move || {
+            candidates
+                .into_iter()
+                .filter(|id| projects.is_trusted(id))
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
+        if trusted.is_empty() {
+            return;
+        }
+        let starts: Vec<(InstanceKey, u64, Holder)> = {
+            let mut state = lock(&self.inner.state);
+            let State {
+                docs,
+                instances,
+                sessions,
+                ..
+            } = &mut *state;
+            let mut starts = Vec::new();
+            for (key, instance) in instances.iter_mut() {
+                if !trusted.contains(&key.project_id)
+                    || instance.state != LspInstanceState::Untrusted
+                {
+                    continue;
+                }
+                let holder = instance
+                    .docs
+                    .iter()
+                    .filter_map(|d| docs.get(d))
+                    .filter_map(|d| sessions.get(&d.session))
+                    .find(|h| !h.closed.is_cancelled())
+                    .cloned();
+                let Some(holder) = holder else { continue };
+                // 미신뢰 인스턴스는 서버를 쥐지 않는다 — 세대만 올려 앞선 시도의 결과를 버린다.
+                if let Some(taken) = instance.take_server(LspInstanceState::Starting) {
+                    taken.server.kill();
+                }
+                starts.push((key.clone(), instance.generation, holder));
+            }
+            starts
+        };
+        let mut published = BTreeSet::new();
+        for (key, generation, holder) in starts {
+            tracing::info!(target: "pw_lsp", project = %key.project_id, server = %key.server, "project trusted; starting its language server");
+            published.insert(key.project_id.clone());
+            self.spawn_start(key, generation, holder);
+        }
+        for project in published {
             self.publish(&project);
         }
     }
