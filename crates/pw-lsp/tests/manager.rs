@@ -551,11 +551,16 @@ async fn closing_the_window_ends_its_servers_within_2_s() {
             == 3)
         .await
     );
-    let children: Vec<u32> = received(&record)
-        .iter()
-        .filter_map(|m| m["childPid"].as_u64())
-        .map(|p| p as u32)
-        .collect();
+    // 서버 pid 는 띄우자마자 보이지만 자식은 가짜 서버가 시작 동작을 돈 뒤에 기록된다 — 부하가 높으면 수백 ms 뒤다.
+    let children_of = || -> Vec<u32> {
+        received(&record)
+            .iter()
+            .filter_map(|m| m["childPid"].as_u64())
+            .map(|p| p as u32)
+            .collect()
+    };
+    assert!(eventually(Duration::from_secs(10), || children_of().len() == 3).await);
+    let children = children_of();
     assert_eq!(children.len(), 3);
     let c_root = env.root.join("c").display().to_string();
     let survivor = env
