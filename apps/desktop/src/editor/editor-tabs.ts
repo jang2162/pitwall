@@ -71,8 +71,9 @@ export function isFileTab(panel: IDockviewPanel): boolean {
 }
 
 /** 탭 인자가 파일 문서의 것인가(`isFileTab` 의 판정 — 패널이 아니라 인자를 쥔 곳이 쓴다). */
-export function isFileParams({ git, db }: EditorTabParams): boolean {
-  return git === undefined && db === undefined;
+export function isFileParams(params: EditorTabParams): boolean {
+  // 루트 밖 문서(`outside` — src/lsp/outside-sources.tsx, M4-08)도 파일 문서가 아니다.
+  return params.git === undefined && params.db === undefined && !("outside" in params);
 }
 
 export function editorPanels(api: DockviewApi): IDockviewPanel[] {

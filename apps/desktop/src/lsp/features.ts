@@ -26,6 +26,7 @@ import type { EditorFeatureContext } from "../editor/extensions";
 import { editorContext } from "../editor/extensions/context";
 import { lspEdit } from "./edit-feature";
 import type { LspCapabilities, LspDocument } from "./lsp-sessions";
+import { navigationFeature } from "./navigation";
 
 export interface LspEditorFeature {
   /** 기능 이름(시험 · 로그). */
@@ -46,6 +47,8 @@ export const lspCapabilities = StateField.define<LspCapabilities>({
 });
 
 export const LSP_FEATURES: readonly LspEditorFeature[] = [
+  // hover · 정의 · 구현 · 사용처(M4-08).
+  navigationFeature,
   // rename · 코드 액션 · 빠른 수정(M4-12).
   lspEdit,
 ];

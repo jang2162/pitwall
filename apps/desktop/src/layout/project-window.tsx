@@ -94,6 +94,8 @@ import { activeWorktree, activeWorktreeStore } from "../open-with/active-worktre
 import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
 import { DbStatus } from "../db/safety/db-status";
 import { LSP_STATUS_TOPIC, snippetHighlighter } from "../lsp/lsp-sessions";
+import { useLspNavigation } from "../lsp/navigation-host";
+import { createOutsideSources } from "../lsp/outside-sources";
 import { projectSubscriptions } from "../lsp/project-subscriptions";
 import { projectIdFromQuery, projectOpenInbox } from "../project-open";
 import { useHost, useRpcQuery } from "../rpc/host";
@@ -476,6 +478,8 @@ function useWindowEditor(
     projectId === undefined ? undefined : projectSubscriptions(projectId),
   );
   useEffect(() => subscriptions?.connect(client), [subscriptions, client]);
+  // 루트 밖 문서(외부 소스 탭, M4-08) — 작업 공간에 넘기고 아래 `useLspNavigation` 이 Host 연결을 붙인다.
+  const [outside] = useState(createOutsideSources);
   latest.current = { client, notify, strings, log, ask };
   const [workspace] = useState(() => {
     const host = () => {
@@ -552,6 +556,7 @@ function useWindowEditor(
           },
         },
       }),
+      outside,
       confirmUnsaved: (paths) => latest.current.ask(paths),
       onCloseAborted: () =>
         latest.current.notify({
@@ -561,6 +566,7 @@ function useWindowEditor(
       log: (message) => latest.current.log?.info(message, "editor"),
     });
   });
+  useLspNavigation(workspace, outside, projectId);
   return workspace;
 }
 
