@@ -41,6 +41,7 @@ import { createDocumentStore } from "../editor/documents";
 import { createEditorWorkspace } from "../editor/editor-workspace";
 import { bundledTranslator } from "../i18n/testing";
 import { fileStructureActions } from "./file-structure-popup";
+import { OUTLINE_REREAD_MS } from "./outline-service";
 import { structureStrings } from "./strings";
 
 declare global {
@@ -72,7 +73,7 @@ const host = vi.hoisted(() => ({
   /** 기능 행의 Host RPC(`lsp.symbols.document` · `index.file.symbols`) 처리기. */
   handlers: new Map<string, (params: never) => Promise<unknown>>(),
   /** 기능 행의 Host RPC 호출 기록(메서드, 매개변수). */
-  calls: [] as { method: string; params: unknown }[],
+  calls: [] as { method: string; params: unknown; at: number }[],
   trusted: true,
 }));
 
@@ -129,7 +130,7 @@ vi.mock("../tauri-transport", async () => {
         }
         const handler = host.handlers.get(m.method);
         if (handler) {
-          host.calls.push({ method: m.method, params: m.params });
+          host.calls.push({ method: m.method, params: m.params, at: performance.now() });
           return void handler(m.params).then(reply, (e: { code?: number; message: string }) =>
             send({ id: m.id, error: { code: e.code ?? -32603, message: e.message } }),
           );
@@ -591,18 +592,31 @@ it("reads again 300 ms after the edits stop", async () => {
   await serverReady(true);
   await openStructure();
   expect(called("lsp.symbols.document")).toHaveLength(1);
-  await act(async () => view().dispatch({ changes: { from: 0, insert: "// a\n" } }));
+  // 시간은 아래 한계만 본다 — 기기 부하는 타이머를 늦출 뿐 앞당기지 않는다(전체 실행에서 150 ms 대기가 300 ms 를 넘을 수 있다).
+  const edit = async (insert: string) => {
+    await act(async () => view().dispatch({ changes: { from: 0, insert } }));
+    return performance.now();
+  };
+  const first = await edit("// a\n");
   await act(async () => new Promise((r) => setTimeout(r, 150)));
-  await act(async () => view().dispatch({ changes: { from: 0, insert: "// b\n" } }));
-  await act(async () => new Promise((r) => setTimeout(r, 150)));
-  // 마지막 편집 뒤 300 ms 가 아직 안 됐다.
-  expect(called("lsp.symbols.document")).toHaveLength(1);
-  await act(async () => new Promise((r) => setTimeout(r, 300)));
-  await settle();
-  expect(called("lsp.symbols.document")).toEqual([
-    { docId: "d1", version: 0 },
-    { docId: "d1", version: 2 },
-  ]);
+  const second = await edit("// b\n");
+  const reads = () => host.calls.filter((c) => c.method === "lsp.symbols.document").slice(1);
+  for (
+    let i = 0;
+    i < 100 && !reads().some((c) => (c.params as { version: number }).version === 2);
+    i++
+  )
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+  const after = reads();
+  // 둘째 편집의 읽기는 그 편집 뒤 300 ms 가 지나서다.
+  const last = after.find((c) => (c.params as { version: number }).version === 2)!;
+  expect(last).toBeDefined();
+  expect(last.at - second).toBeGreaterThanOrEqual(OUTLINE_REREAD_MS - 5);
+  // 두 편집 사이가 300 ms 보다 짧았으면 첫 편집만의 읽기는 없다(멈춘 뒤 한 번). 부하로 그 사이가 길어졌으면 첫 편집의 읽기도 300 ms 뒤다.
+  const early = after.filter((c) => (c.params as { version: number }).version === 1);
+  if (second - first < OUTLINE_REREAD_MS - 5) expect(early).toEqual([]);
+  else for (const c of early) expect(c.at - first).toBeGreaterThanOrEqual(OUTLINE_REREAD_MS - 5);
+  expect(after.at(-1)!.params).toEqual({ docId: "d1", version: 2 });
 });
 
 it("follows the cursor to the innermost symbol, and stops when the toggle is off", async () => {
@@ -698,6 +712,9 @@ it("filters the file structure popup fuzzily on ⌘F12, goes on Enter and closes
   const selectedItem = () =>
     popup()!.querySelector('[data-selected="true"] [data-structure-name]')?.textContent;
 
+  // 커서를 main 안에 둔다 — 첫 줄(Point)이 아닌 커서의 심볼이 골라져야 한다.
+  await act(async () => view().dispatch({ selection: { anchor: off(4, 5) } }));
+  await settle();
   await keydown({ code: "F12", key: "F12", metaKey: true }, view().contentDOM);
   expect(popup()).not.toBeNull();
   expect(items()).toEqual([
@@ -706,8 +723,8 @@ it("filters the file structure popup fuzzily on ⌘F12, goes on Enter and closes
     ["main", "match"],
     ["tail", "match"],
   ]);
-  // 커서(1:1)를 담은 심볼이 골라져 있고, 출처를 적는다.
-  expect(selectedItem()).toBe("Point");
+  // 커서를 담은 심볼이 골라져 있고, 출처를 적는다.
+  expect(selectedItem()).toBe("main");
   expect(popup()!.querySelector("[data-structure-source]")!.textContent).toBe(
     "LSP · rust-analyzer",
   );

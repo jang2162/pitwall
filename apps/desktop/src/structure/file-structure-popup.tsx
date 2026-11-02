@@ -14,7 +14,7 @@
 import type { Action } from "@pitwall/keymap";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Command } from "cmdk";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 
 import { useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
 import type { EditorWorkspace } from "../editor/editor-workspace";
@@ -83,21 +83,24 @@ function FileStructurePopup({
     [outline, query],
   );
   const shown = rows.slice(0, POPUP_ROWS);
-  const [value, setValue] = useState("");
-  // 처음(트리가 오면)은 커서의 심볼, 거르면 첫 맞은 줄. 커서는 처음 한 번만 본다(떠 있는 동안 에디터는 키를 받지 않는다).
+  // 사람이 고른 줄(↑↓ · 마우스). 없으면 — 처음은 커서의 심볼, 거르면 첫 맞은 줄. 이 값을 렌더에서 바로 정한다: 항목이 처음
+  // 그려지는 커밋에 이미 들어 있어야 cmdk 가 자기 규칙(첫 줄)으로 고르지 않는다. 커서는 처음 한 번만 본다(떠 있는 동안 에디터는
+  // 키를 받지 않는다).
+  const [picked, setPicked] = useState<string>();
   const cursor = useRef(state.cursor);
   cursor.current ??= state.cursor;
-  const placed = useRef(false);
-  useEffect(() => {
-    if (!outline) return;
-    if (!placed.current && query === "") {
-      placed.current = true;
-      const id = cursor.current === undefined ? undefined : innermostAt(outline, cursor.current);
-      if (id !== undefined) return setValue(String(id));
-    }
-    const first = rows.find((r) => r.match);
-    setValue(first ? String(first.id) : "");
-  }, [outline, query, rows]);
+  const atCursor = useMemo(() => {
+    if (!outline || cursor.current === undefined) return undefined;
+    const id = innermostAt(outline, cursor.current);
+    return id === undefined ? undefined : String(id);
+  }, [outline]);
+  const firstMatch = rows.find((r) => r.match);
+  const value =
+    picked ?? (query === "" ? atCursor : undefined) ?? (firstMatch ? String(firstMatch.id) : "");
+  const filter = (next: string) => {
+    setQuery(next);
+    setPicked(undefined);
+  };
 
   const go = (id: number) => {
     const symbol = outline?.symbols[id];
@@ -123,7 +126,7 @@ function FileStructurePopup({
             label={T.fileStructure}
             shouldFilter={false}
             value={value}
-            onValueChange={setValue}
+            onValueChange={setPicked}
             loop
           >
             <div className="flex items-center gap-2 border-b border-ui-border px-3 py-1">
@@ -135,7 +138,7 @@ function FileStructurePopup({
             <Command.Input
               autoFocus
               value={query}
-              onValueChange={setQuery}
+              onValueChange={filter}
               placeholder={T.popupPlaceholder}
               className="w-full border-b border-ui-border bg-transparent px-3 py-2 outline-none placeholder:text-ui-muted-foreground"
             />
