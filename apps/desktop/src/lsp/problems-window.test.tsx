@@ -532,6 +532,29 @@ it("shows the counts lsp.diagnostics.counts answers in the status bar and asks a
   expect(after - before).toBeLessThanOrEqual(2);
 });
 
+it("shows the partial-view notice only while some file is still cut by a limit", async () => {
+  treeHeight(400);
+  serveList(new Map());
+  serveCounts(() => ZERO);
+  await mount();
+  await openProblems();
+  const notice = () => document.querySelector('[data-testid="problems-truncated"]');
+  const send = (truncated: boolean) =>
+    emit("lsp.diagnostics", {
+      projectId: "p1",
+      worktree: null,
+      path: MAIN,
+      diagnostics: [diag(0, 3, "error")],
+      truncated,
+    });
+  await send(true);
+  await vi.waitFor(() => expect(notice()).not.toBeNull());
+  // 범람이 지나가 그 파일이 더는 잘리지 않으면 안내도 꺼진다(M4-06 리뷰 L4 — 한 번 켜진 채 남지 않는다).
+  await send(false);
+  await vi.waitFor(() => expect(notice()).toBeNull());
+  expect(problemRows().map((r) => r.dataset.problemRow)).toEqual([MAIN, `${MAIN}\n0`]);
+});
+
 it("opens a diagnostic's place with a double click or Enter, shows the current file only on its tab and filters severities", async () => {
   treeHeight(400);
   const other = "/work/demo/src/other.rs";

@@ -222,7 +222,6 @@ function useProblemsData(connection: DiagnosticsConnection): ProblemsData {
     const files = new Map<string, FileProblems>();
     /** 읽는 사이 이벤트로 받은 경로 — 쪽의 것보다 새것이다. */
     const evented = new Set<string>();
-    let truncated = false;
     let loading = true;
     let scheduled = false;
     // 이벤트가 몰려도 한 프레임에 한 번 그린다(진단 1만 개를 경로마다 다시 그리지 않게).
@@ -231,6 +230,9 @@ function useProblemsData(connection: DiagnosticsConnection): ProblemsData {
       scheduled = true;
       queueMicrotask(() => {
         scheduled = false;
+        // 머리 안내는 지금 파일들의 것으로 매번 센다 — 한 번 켜진 채 남지 않는다(M4-06 리뷰 L4). Host 는 상한에 잘려 진단이
+        // 0개인 파일도 싣는다.
+        const truncated = [...files.values()].some((f) => f.truncated);
         if (alive) setData({ files: new Map(files), truncated, loading });
       });
     };
@@ -245,7 +247,6 @@ function useProblemsData(connection: DiagnosticsConnection): ProblemsData {
           diagnostics: payload.diagnostics,
           truncated: payload.truncated,
         });
-      truncated ||= payload.truncated;
       publish();
     });
     const read = async (cursor: string | null) => {
@@ -256,7 +257,6 @@ function useProblemsData(connection: DiagnosticsConnection): ProblemsData {
         limit: PAGE,
       });
       if (!alive) return;
-      truncated ||= page.truncated;
       for (const file of page.files) {
         if (evented.has(file.path)) continue;
         const before = cursor === null ? undefined : files.get(file.path);

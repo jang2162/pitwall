@@ -1121,7 +1121,9 @@ impl DiagnosticStore {
             } else {
                 0
             };
-            if from >= items.len() {
+            // 진단이 남지 않은 파일은 건너뛰되, 상한에 잘려 0개인 파일은 싣는다 — 받는 쪽(문제 툴 윈도우)은 파일마다의
+            // `truncated` 로 머리 안내를 매번 계산한다(M4-06 리뷰 L4).
+            if from >= items.len() && !(from == 0 && truncated) {
                 continue;
             }
             let room = limit - taken;

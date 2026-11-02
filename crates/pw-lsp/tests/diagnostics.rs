@@ -891,7 +891,17 @@ async fn a_cut_pull_is_pulled_again_when_room_frees_while_a_cut_push_stays_cut()
     let refilled = next_within(&mut events, &app, slow).await;
     assert_eq!(messages(&refilled["diagnostics"]), ["pulled"], "{refilled}");
     assert_eq!(refilled["truncated"], false);
-    // 잘린 push 는 그대로 — 상태바 수의 `+` 가 남는다(목록은 진단이 0개인 파일을 싣지 않는다).
+    // 잘린 push 는 그대로 — 진단 0개인 채 목록에 실리고(문제 툴 윈도우의 머리 안내가 파일마다의 `truncated` 로 센다) 상태바 수의
+    // `+` 도 남는다.
+    let list = win
+        .call(
+            "lsp.diagnostics.list",
+            json!({ "projectId": env.id, "path": pushed_late, "limit": 10 }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list["files"][0]["truncated"], true, "{list}");
+    assert_eq!(list["files"][0]["diagnostics"], json!([]));
     let counts = win
         .call("lsp.diagnostics.counts", json!({ "projectId": env.id }))
         .await
