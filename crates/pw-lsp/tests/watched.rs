@@ -185,6 +185,11 @@ async fn only_matching_changes_inside_the_root_reach_the_server_without_open_doc
         &env.other,
         &fs_changed(root, &[(&root.join("src/z.rs"), FsChangeKind::Created)]),
     );
+    // 버스를 거치지 않고 다른 프로젝트로 불러도(관리자의 판정만으로) 닿지 않는다.
+    env.manager.fs_changed(
+        &env.other,
+        &fs_changed(root, &[(&root.join("src/y.rs"), FsChangeKind::Created)]),
+    );
     publish(
         &env,
         &env.id,
