@@ -981,7 +981,8 @@ async fn a_flood_is_cut_at_the_file_and_project_limits() {
 }
 
 /// 프로젝트 상한에 잘린 진단: 자리가 나면 열린 문서의 pull 은 다시 당겨 채우고 `truncated` 가 풀린다. push 는 서버에 다시 달라고 할
-/// 길이 없어 진단 0개 + `truncated` 로 남는다(M4-06 리뷰 L3 — 메인 판정 A).
+/// 길이 없어 진단 0개 + `truncated` 로 남는다(M4-06 리뷰 L3 — 메인 판정 A). 다시 당길 때는 잘린 답의 `resultId` 를
+/// `previousResultId` 로 싣지 않는다 — 실으면 서버가 `unchanged` 로 답해 잘린 채 남는다(M4-06 재리뷰 N2).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cut_pull_is_pulled_again_when_room_frees_while_a_cut_push_stays_cut() {
     let env = Env::new(EnvOptions::default());
@@ -1018,8 +1019,8 @@ async fn a_cut_pull_is_pulled_again_when_room_frees_while_a_cut_push_stays_cut()
             vec![publish(&uri(&flood_file(0)), None, vec![])],
         ),
     );
-    // basedpyright(pull): 어느 문서든 진단 하나.
-    env.fake(
+    // basedpyright(pull): 어느 문서든 진단 하나 — `resultId` 를 붙여(`unchanged` 를 쓰는 서버).
+    let pulls = env.fake(
         "basedpyright",
         Scenario {
             capabilities: pull_capable(),
@@ -1027,7 +1028,9 @@ async fn a_cut_pull_is_pulled_again_when_room_frees_while_a_cut_push_stays_cut()
         }
         .reply(
             "textDocument/diagnostic",
-            Reply::result(json!({ "kind": "full", "items": [diag(0, 1, "pulled")] })),
+            Reply::result(
+                json!({ "kind": "full", "resultId": "r1", "items": [diag(0, 1, "pulled")] }),
+            ),
         ),
     );
     let mut events = subscribe(&env);
@@ -1050,6 +1053,18 @@ async fn a_cut_pull_is_pulled_again_when_room_frees_while_a_cut_push_stays_cut()
     let refilled = next_within(&mut events, &app, slow).await;
     assert_eq!(messages(&refilled["diagnostics"]), ["pulled"], "{refilled}");
     assert_eq!(refilled["truncated"], false);
+    // 다시 당긴 pull 은 잘린 답의 `resultId` 를 싣지 않았다 — 서버가 전체를 다시 준다.
+    let app_pulls: Vec<Value> = methods_of(&pulls, "textDocument/diagnostic")
+        .into_iter()
+        .filter(|m| m["params"]["textDocument"]["uri"] == uri(&app).as_str())
+        .collect();
+    assert!(app_pulls.len() >= 2, "{app_pulls:?}");
+    assert!(
+        app_pulls
+            .iter()
+            .all(|m| m["params"].get("previousResultId").is_none()),
+        "{app_pulls:?}"
+    );
     // 잘린 push 는 그대로 — 진단 0개인 채 목록에 실리고(문제 툴 윈도우의 머리 안내가 파일마다의 `truncated` 로 센다) 상태바 수의
     // `+` 도 남는다.
     let list = win

@@ -711,12 +711,16 @@ impl DiagnosticStore {
             let room = PROJECT_LIMIT.saturating_sub(project.total);
             let slot = (path.clone(), key.clone());
             project.cut_pulls.remove(&slot);
+            let mut result_id = result_id;
             if items.len() > room {
                 items.truncate(room);
                 truncated = true;
                 if origin == Origin::Pull {
                     project.cut_pulls.insert(slot);
                 }
+                // 잘린 답의 `resultId` 는 두지 않는다 — 다음 pull(다시 당기기)이 그것을 `previousResultId` 로 실으면 서버가
+                // `unchanged` 로 답해 잘린 채 남는다. 없으면 서버가 전체를 다시 준다(M4-06 재리뷰 N2).
+                result_id = None;
             }
             project.total += items.len();
             if items.is_empty() && !truncated {
