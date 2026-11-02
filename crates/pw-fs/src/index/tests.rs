@@ -1306,3 +1306,274 @@ async fn a_removed_observer_hears_nothing_more() {
     assert!(inline.take().is_empty());
     assert!(queued.take().is_empty());
 }
+
+/// 첫 목록(`listed`)과 다시 만든 목록(`rebuilt`)을 가르는 기록자. `only` 가 있으면 그 루트만 받는다(`wants`).
+#[derive(Default)]
+struct Kinds {
+    seen: Mutex<Vec<String>>,
+    only: Option<PathBuf>,
+}
+
+impl Kinds {
+    fn take(&self) -> Vec<String> {
+        std::mem::take(&mut *self.seen.lock().unwrap())
+    }
+
+    fn push(&self, root: &Path, what: &str) {
+        let name = root.file_name().unwrap().to_string_lossy();
+        self.seen.lock().unwrap().push(format!("{name}:{what}"));
+    }
+
+    async fn until(&self, want: &[&str]) -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut seen = Vec::new();
+        loop {
+            seen.extend(self.take());
+            if seen.len() >= want.len() || Instant::now() > deadline {
+                return seen;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+}
+
+impl FileListObserver for Kinds {
+    fn wants(&self, _: &str, root: &Path) -> bool {
+        self.only.as_deref().is_none_or(|only| only == root)
+    }
+
+    fn opened(&self, _: &str, root: &Path) {
+        self.push(root, "opened");
+    }
+
+    fn listed(&self, _: &str, root: &Path, _: Vec<(Arc<str>, FileFlags)>) {
+        self.push(root, "listed");
+    }
+
+    fn rebuilt(&self, _: &str, root: &Path, _: Vec<(Arc<str>, FileFlags)>) {
+        self.push(root, "rebuilt");
+    }
+
+    fn changed(&self, _: &str, root: &Path, _: Vec<String>, _: Vec<(Arc<str>, FileFlags)>) {
+        self.push(root, "changed");
+    }
+
+    fn suspended(&self, _: &str, root: &Path) {
+        self.push(root, "suspended");
+    }
+
+    fn dropped(&self, _: &str, root: &Path) {
+        self.push(root, "dropped");
+    }
+}
+
+/// 첫 목록의 정의(M4-05b — 메인 판정): 감시가 루트를 열 때마다 처음 다 만든 목록은 `listed`, 둘째 임대는 콜백 없음, `rescan` ·
+/// 목록이 있던 뒤의 취소 다음은 `rebuilt`, 닫았다 다시 열면 다시 `listed`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_first_list_of_each_opening_is_listed_and_later_ones_are_rebuilt() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/lib.rs"), "");
+    let index = FileIndex::new(Arc::clone(&f.fs));
+    let kinds = Arc::new(Kinds::default());
+    index.observe_queued(Arc::clone(&kinds) as Arc<dyn FileListObserver>);
+    let tasks = TaskSpawner::new(f.bus.clone(), Scope::Host, CancellationToken::new());
+    tokio::spawn(index.attach(&f.bus, tasks.clone()));
+    let watch = f.watch(&index);
+    let params = FsWatchParams {
+        project_id: id.clone(),
+        worktree: None,
+    };
+    let first = watch.acquire(&params).unwrap();
+    assert!(index.ready(&id, &root).await);
+    assert_eq!(
+        kinds.until(&["opened", "listed"]).await,
+        ["proj:opened", "proj:listed"]
+    );
+
+    // 둘째 임대: 다시 걷지 않는다.
+    let second = watch.acquire(&params).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(kinds.take(), Vec::<String>::new());
+
+    let rescan = FsChanged {
+        root: root.display().to_string(),
+        worktree: None,
+        paths: Vec::new(),
+        kinds: Vec::new(),
+        rescan: true,
+    };
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    assert_eq!(kinds.until(&["rebuilt"]).await, ["proj:rebuilt"]);
+
+    // 목록이 있던 뒤 다시 만들기를 취소 → 다음 다시 만들기는 `rebuilt`.
+    set_after_walk(&root, || std::thread::sleep(Duration::from_millis(300)));
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let running = loop {
+        let running = tasks.running(Some(&id));
+        if !running.is_empty() || Instant::now() > deadline {
+            break running;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(tasks.cancel(running[0].task_id));
+    assert_eq!(kinds.until(&["suspended"]).await, ["proj:suspended"]);
+    set_after_walk(&root, || {});
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    assert_eq!(kinds.until(&["rebuilt"]).await, ["proj:rebuilt"]);
+
+    // 닫았다 다시 열면 다시 첫 목록.
+    drop(first);
+    drop(second);
+    assert_eq!(kinds.until(&["dropped"]).await, ["proj:dropped"]);
+    let _again = watch.acquire(&params).unwrap();
+    assert!(index.ready(&id, &root).await);
+    assert_eq!(
+        kinds.until(&["opened", "listed"]).await,
+        ["proj:opened", "proj:listed"]
+    );
+}
+
+/// 버스 큐가 넘쳐(`Lagged`) 다시 만든 목록은 `rebuilt` 다(첫 목록은 `listed`).
+#[tokio::test(flavor = "current_thread")]
+async fn a_list_rebuilt_after_a_lagged_bus_is_rebuilt() {
+    let f = Fixture::with_bus(EventBus::new(1));
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/lib.rs"), "");
+    let index = f.index();
+    let kinds = Arc::new(Kinds::default());
+    index.observe(Arc::clone(&kinds) as Arc<dyn FileListObserver>);
+    index.open(&id, &root, None);
+    assert!(index.ready(&id, &root).await);
+    assert_eq!(kinds.take(), ["proj:opened", "proj:listed"]);
+    let nothing = FsChanged {
+        root: root.display().to_string(),
+        worktree: None,
+        paths: Vec::new(),
+        kinds: Vec::new(),
+        rescan: false,
+    };
+    for _ in 0..2 {
+        f.bus
+            .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &nothing)
+            .unwrap();
+    }
+    assert_eq!(kinds.until(&["rebuilt"]).await, ["proj:rebuilt"]);
+}
+
+/// `wants` 가 거짓인 루트의 콜백은 어떤 것도(`opened` · `listed` · `changed` · `suspended` · `dropped`) 오지 않는다 — 바로 받는 쪽 ·
+/// 차례로 받는 쪽 모두.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_observer_hears_nothing_of_a_root_it_does_not_want() {
+    let f = Fixture::new();
+    let (a, root_a) = f.repo("a");
+    let (b, root_b) = f.repo("b");
+    write(&root_a.join("x.rs"), "");
+    write(&root_b.join("y.rs"), "");
+    let index = FileIndex::new(Arc::clone(&f.fs));
+    let inline = Arc::new(Kinds {
+        only: Some(root_a.clone()),
+        ..Kinds::default()
+    });
+    let queued = Arc::new(Kinds {
+        only: Some(root_a.clone()),
+        ..Kinds::default()
+    });
+    // 모두 받는 기록자 — b 쪽 사건이 실제로 났는지 본다.
+    let all = Arc::new(Kinds::default());
+    index.observe(Arc::clone(&inline) as Arc<dyn FileListObserver>);
+    index.observe_queued(Arc::clone(&queued) as Arc<dyn FileListObserver>);
+    index.observe(Arc::clone(&all) as Arc<dyn FileListObserver>);
+    let tasks = TaskSpawner::new(f.bus.clone(), Scope::Host, CancellationToken::new());
+    tokio::spawn(index.attach(&f.bus, tasks.clone()));
+    for (id, root) in [(&a, &root_a), (&b, &root_b)] {
+        index.open(id, root, None);
+        assert!(index.ready(id, root).await);
+        let entry = index.inner.get(id, root).unwrap();
+        let path = root.join("z.rs");
+        write(&path, "");
+        tokio::task::spawn_blocking(move || entry.changed(vec![path]))
+            .await
+            .unwrap();
+    }
+    // b 의 목록을 취소(suspended)하고 닫는다(dropped).
+    set_after_walk(&root_b, || std::thread::sleep(Duration::from_millis(300)));
+    let rescan = FsChanged {
+        root: root_b.display().to_string(),
+        worktree: None,
+        paths: Vec::new(),
+        kinds: Vec::new(),
+        rescan: true,
+    };
+    f.bus
+        .publish(Scope::Project(b.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let running = loop {
+        let running = tasks.running(Some(&b));
+        if !running.is_empty() || Instant::now() > deadline {
+            break running;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(tasks.cancel(running[0].task_id));
+    set_after_walk(&root_b, || {});
+    index.close(&b, &root_b);
+    index.close(&a, &root_a);
+    let everything = all.take();
+    for event in [
+        "b:opened",
+        "b:listed",
+        "b:changed",
+        "b:suspended",
+        "b:dropped",
+    ] {
+        assert!(everything.iter().any(|e| e == event), "{everything:?}");
+    }
+    let want = ["a:opened", "a:listed", "a:changed", "a:dropped"];
+    assert_eq!(inline.take(), want);
+    assert_eq!(queued.until(&want).await, want);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(queued.take().is_empty());
+}
+
+/// 목록을 만드는 중에 붙은 관찰자(세션 복원으로 언어 서버가 먼저 뜨는 꼴 — M4-05b 리뷰 M1)는 `opened` 를 못 받았어도 그 루트의 첫
+/// 목록을 `listed` 로 받는다(`rebuilt` 가 아니다). 목록이 다 만들어진 뒤 붙은 관찰자는 목록을 받지 않고 다음 다시 만들기부터 받는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_observer_attached_while_building_gets_the_first_list_as_listed() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/lib.rs"), "");
+    set_after_walk(&root, || std::thread::sleep(Duration::from_millis(300)));
+    let index = f.index();
+    index.open(&id, &root, None);
+    let during = Arc::new(Kinds::default());
+    index.observe_queued(Arc::clone(&during) as Arc<dyn FileListObserver>);
+    assert!(index.ready(&id, &root).await);
+    set_after_walk(&root, || {});
+    assert_eq!(during.until(&["listed"]).await, ["proj:listed"]);
+
+    let after = Arc::new(Kinds::default());
+    index.observe_queued(Arc::clone(&after) as Arc<dyn FileListObserver>);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(after.take().is_empty());
+    let rescan = FsChanged {
+        root: root.display().to_string(),
+        worktree: None,
+        paths: Vec::new(),
+        kinds: Vec::new(),
+        rescan: true,
+    };
+    f.bus
+        .publish(Scope::Project(id.clone()), TOPIC_CHANGED, &rescan)
+        .unwrap();
+    assert_eq!(after.until(&["rebuilt"]).await, ["proj:rebuilt"]);
+    assert_eq!(during.until(&["rebuilt"]).await, ["proj:rebuilt"]);
+}

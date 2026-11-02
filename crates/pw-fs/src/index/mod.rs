@@ -154,11 +154,25 @@ rpc_method! {
 /// 받은 것을 채널에 넣거나 표에 자리 하나를 두는 만큼만 하고 곧바로 돌아와야 하며(그동안 파일 검색 · 변경 적용 · 감시 걸기가
 /// 기다린다), 어느 쪽이든 [`FileIndex`] 를 다시 부르지 않는다. 상대 경로는 루트 기준 `/` 구분이다.
 pub trait FileListObserver: Send + Sync + 'static {
-    /// 감시가 루트를 처음 걸어 목록을 만들기 시작했다 — 곧 [`Self::rebuilt`] 가 온다. 그사이 온 요청이 기다릴 자리를 두라는 것이다.
+    /// 그 (프로젝트, 루트)의 사건을 받는가. `false` 면 그 루트의 **어떤 콜백도**(`opened` · `listed` · `rebuilt` · `changed` ·
+    /// `suspended` · `dropped`) 오지 않는다. 사건마다 목록의 잠금 안에서 불리므로 곧바로 답한다. 기본은 모두 받는다.
+    fn wants(&self, project_id: &str, root: &Path) -> bool {
+        let _ = (project_id, root);
+        true
+    }
+    /// 감시가 루트를 처음 걸어 목록을 만들기 시작했다 — 곧 [`Self::listed`] 가 온다. 그사이 온 요청이 기다릴 자리를 두라는 것이다.
     fn opened(&self, project_id: &str, root: &Path) {
         let _ = (project_id, root);
     }
-    /// 루트의 목록을 (다시) 다 만들었다(처음 · `rescan` · 버스 큐 넘침 · 취소 뒤). `files` 는 경로순 전부다.
+    /// 루트의 **첫 목록**: 감시가 루트를 열 때마다([`Self::opened`] 뒤) 처음 다 만든 목록이다(그 사이 취소가 끼어도 처음 다 만든
+    /// 것이면 이것). 닫았다(`dropped`) 다시 열면 다시 이것으로 온다. 같은 루트에 감시 임대가 둘째로 붙는 것은 다시 걷지 않으므로
+    /// 아무 콜백도 없다. 그 뒤 다시 만든 목록은 [`Self::rebuilt`]. 기본은 `rebuilt` 로 넘긴다 — 둘을 가를 필요가 없는 관찰자(심볼
+    /// 인덱스)는 이것을 구현하지 않는다. 바뀜을 알리는 관찰자(언어 서버 파일 감시)는 이것을 기준선으로 보고 알리지 않는다.
+    fn listed(&self, project_id: &str, root: &Path, files: Vec<(Arc<str>, FileFlags)>) {
+        self.rebuilt(project_id, root, files);
+    }
+    /// 루트의 목록을 다시 다 만들었다(`rescan` · 버스 큐 넘침 · 목록이 있던 뒤의 취소 다음 · 첫 목록이면 기본 구현의
+    /// [`Self::listed`] 에서). 그 사이의 변경을 놓쳤을 수 있다는 뜻이다. `files` 는 경로순 전부다.
     fn rebuilt(&self, project_id: &str, root: &Path, files: Vec<(Arc<str>, FileFlags)>);
     /// `fs.changed` 를 목록에 적용했다. `removed` 의 상대 경로와 그 아래를 지운 뒤(빈 문자열이면 전부) `inserted` 를 넣었다 — 내용이
     /// 바뀐 파일은 둘 다에 있다.
@@ -205,6 +219,8 @@ struct RootIndex {
     closed: AtomicBool,
     /// 목록을 따라가는 쪽들(인덱스 전체와 같은 표 — 붙이고 떼는 것이 이미 있는 루트에도 닿는다).
     observers: Arc<Observers>,
+    /// 이 열림의 첫 목록을 다 만들었다(그 뒤는 `rebuilt` — [`FileListObserver::listed`]).
+    listed: AtomicBool,
 }
 
 #[derive(Default)]
@@ -287,13 +303,18 @@ impl RootIndex {
                         state.snapshot = None;
                         state.build = None;
                         state.dropped = false;
+                        let first = !self.listed.swap(true, Ordering::Relaxed);
                         if !self.observers.is_empty() {
                             let all: Vec<(Arc<str>, Flags)> = state
                                 .files
                                 .iter()
                                 .map(|(k, v)| (Arc::clone(k), *v))
                                 .collect();
-                            self.observers.rebuilt(&self.project_id, &self.root, all);
+                            if first {
+                                self.observers.listed(&self.project_id, &self.root, all);
+                            } else {
+                                self.observers.rebuilt(&self.project_id, &self.root, all);
+                            }
                         }
                         self.phase.send_replace(Phase::Ready);
                         return;
@@ -548,6 +569,7 @@ impl FileIndex {
             phase: watch::Sender::new(Phase::Building),
             closed: AtomicBool::new(false),
             observers: Arc::clone(&self.inner.observers),
+            listed: AtomicBool::new(false),
         });
         self.inner.roots().insert(key, Arc::clone(&entry));
         entry.observers.opened(project_id, root);

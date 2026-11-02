@@ -11,7 +11,10 @@
 //!
 //! 어느 쪽이든 콜백의 패닉은 그 호출에서 멈춘다(로그만 남는다) — 다른 관찰자와 목록의 적용은 이어진다. 붙인 관찰자는
 //! [`super::FileIndex::unobserve`] 로 뗀다(차례로 받는 쪽은 큐에 남은 것을 다 부른 뒤 스레드가 끝난다). 붙은 뒤의 사건만 받는다 —
-//! 이미 있는 루트의 목록은 보내지 않는다.
+//! 이미 있는 루트의 목록은 보내지 않는다(늦게 붙은 관찰자는 그 루트의 다음 [`FileListObserver::rebuilt`] 부터 받는다).
+//!
+//! 사건마다 먼저 [`FileListObserver::wants`] 로 그 (프로젝트, 루트)를 받을지 묻고, 받는 관찰자에게만 복제한다 — 마지막 대상에는
+//! 옮긴다(목록 하나를 관찰자 수만큼 복제하지 않게).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -29,6 +32,7 @@ pub struct ObserverId(u64);
 #[derive(Clone)]
 enum What {
     Opened,
+    Listed(Vec<(Arc<str>, FileFlags)>),
     Rebuilt(Vec<(Arc<str>, FileFlags)>),
     Changed(Vec<String>, Vec<(Arc<str>, FileFlags)>),
     Suspended,
@@ -45,7 +49,15 @@ struct Call {
 #[derive(Clone)]
 enum Delivery {
     Inline(Arc<dyn FileListObserver>),
-    Queued(Sender<Call>),
+    Queued(Arc<dyn FileListObserver>, Sender<Call>),
+}
+
+impl Delivery {
+    fn observer(&self) -> &dyn FileListObserver {
+        match self {
+            Self::Inline(o) | Self::Queued(o, _) => o.as_ref(),
+        }
+    }
 }
 
 struct Slot {
@@ -68,6 +80,7 @@ fn dispatch(observer: &dyn FileListObserver, call: Call) {
     } = call;
     match what {
         What::Opened => observer.opened(&project_id, &root),
+        What::Listed(files) => observer.listed(&project_id, &root, files),
         What::Rebuilt(files) => observer.rebuilt(&project_id, &root, files),
         What::Changed(removed, inserted) => {
             observer.changed(&project_id, &root, removed, inserted);
@@ -101,18 +114,19 @@ impl Observers {
 
     pub(crate) fn add_queued(&self, observer: Arc<dyn FileListObserver>) -> ObserverId {
         let (tx, rx) = channel::<Call>();
+        let worker = Arc::clone(&observer);
         let spawned = std::thread::Builder::new()
             .name("pw-fs-observer".to_owned())
             .spawn(move || {
                 for call in rx {
-                    guarded(observer.as_ref(), call);
+                    guarded(worker.as_ref(), call);
                 }
             });
         if let Err(e) = spawned {
             // 받는 스레드가 없으면 큐에 넣은 것이 버려질 뿐이다(목록은 막히지 않는다).
             tracing::warn!(error = %e, "file list observer thread not started");
         }
-        self.add(Delivery::Queued(tx))
+        self.add(Delivery::Queued(observer, tx))
     }
 
     pub(crate) fn remove(&self, id: ObserverId) -> bool {
@@ -136,7 +150,7 @@ impl Observers {
             .is_empty()
     }
 
-    /// 붙은 관찰자 모두에게. 목록을 읽는 잠금은 부르기 전에 놓는다 — 콜백 안에서 붙이고 떼도 막히지 않게.
+    /// 그 (프로젝트, 루트)를 받는 관찰자들에게. 목록을 읽는 잠금은 부르기 전에 놓는다 — 콜백 안에서 붙이고 떼도 막히지 않게.
     fn deliver(&self, project_id: &str, root: &Path, what: What) {
         let targets: Vec<Delivery> = self
             .slots
@@ -145,24 +159,40 @@ impl Observers {
             .iter()
             .map(|s| s.delivery.clone())
             .collect();
+        let mut targets: Vec<Delivery> = targets
+            .into_iter()
+            .filter(|t| {
+                catch_unwind(AssertUnwindSafe(|| t.observer().wants(project_id, root)))
+                    .unwrap_or(false)
+            })
+            .collect();
+        let Some(last) = targets.pop() else {
+            return;
+        };
         let call = Call {
             project_id: project_id.to_owned(),
             root: root.to_path_buf(),
             what,
         };
-        for target in targets {
-            match target {
-                Delivery::Inline(observer) => guarded(observer.as_ref(), call.clone()),
-                // 받는 스레드가 끝났으면(뗌) 버린다.
-                Delivery::Queued(tx) => {
-                    let _ = tx.send(call.clone());
-                }
+        let send = |target: Delivery, call: Call| match target {
+            Delivery::Inline(observer) => guarded(observer.as_ref(), call),
+            // 받는 스레드가 끝났으면(뗌) 버린다.
+            Delivery::Queued(_, tx) => {
+                let _ = tx.send(call);
             }
+        };
+        for target in targets {
+            send(target, call.clone());
         }
+        send(last, call);
     }
 
     pub(crate) fn opened(&self, project_id: &str, root: &Path) {
         self.deliver(project_id, root, What::Opened);
+    }
+
+    pub(crate) fn listed(&self, project_id: &str, root: &Path, files: Vec<(Arc<str>, FileFlags)>) {
+        self.deliver(project_id, root, What::Listed(files));
     }
 
     pub(crate) fn rebuilt(&self, project_id: &str, root: &Path, files: Vec<(Arc<str>, FileFlags)>) {
