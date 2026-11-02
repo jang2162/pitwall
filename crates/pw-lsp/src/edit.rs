@@ -10,13 +10,23 @@
 //! 실행까지 간다 — `pw_fs::Fs::write_roots`), 상한([`MAX_EDIT_FILES`] · [`MAX_TEXT_EDITS`])을 넘는 편집. 루트 밖 경로는 웹뷰가 쓰기
 //! 전에 `fs.stat` 으로 모두 확인한다(실제 경로 · 연결 범위 판정은 `fs.*` 의 것 하나다).
 //!
+//! **다른 창이 연 파일**(결정 M4-D14 ①): 같은 프로젝트의 창은 여럿일 수 있고 같은 URI 는 서버에 한 번 열린다 — 서버의 텍스트는
+//! 주인 문서의 것이다(M4-05 `Synced`). 편집을 계산한 인스턴스가 어느 파일을 다른 연결(창)의 텍스트로 갖고 있으면 그 파일의
+//! [`LspFileChange::Text`] 에 `foreign` 을 단다([`LspManager::foreign_paths`]). 웹뷰는 그런 파일이 끼면 아무것도 쓰지 않는다 — 그
+//! 범위는 그 창의 미저장 텍스트 기준이라 디스크에 쓰면 어긋나고, 그 창의 버퍼 아래 디스크를 덮는다.
+//!
 //! **서버가 거는 편집(결정 M4-D15)**: `workspace/applyEdit` 은 사람이 고른 명령(`lsp.command.execute` — 코드 액션의 `command`,
-//! M4-11 의 완성 항목 `command` 도 같은 길)이 그 서버에서 도는 동안에만 받는다. 그 명령을 부른 창에 이벤트 [`TOPIC_APPLY_EDIT`] 로
-//! 넘기고 창의 답(`lsp.applyEdit.answer`)을 [`ANSWER_TIMEOUT`] 까지 기다린다. 명령 밖 · 다른 서버 · 명령이 끝난 뒤 · 창이 닫힘 ·
-//! 시한 넘김은 모두 `applied: false` 이고 아무것도 바뀌지 않는다.
+//! M4-11 의 완성 항목 `command` 도 같은 길)이 **그 인스턴스**(프로젝트 · 서버 · 루트 — 같은 서버 id 의 다른 루트는 다른 인스턴스다)
+//! 에서 도는 동안에만 받는다. 그 명령을 부른 창에 이벤트 [`TOPIC_APPLY_EDIT`] 로 넘기고 창의 답(`lsp.applyEdit.answer`)을
+//! [`ANSWER_TIMEOUT`] 까지 기다린다. 명령 밖 · 다른 인스턴스 · 명령이 끝난 뒤 · 창이 닫힘 · 시한 넘김 · 같은 명령의 앞 편집이 아직
+//! 답을 기다림은 모두 `applied: false` 이고 아무것도 바뀌지 않는다.
+//!
+//! **목록을 준 서버로만**: 코드 액션의 resolve · 명령은 목록(`lsp.codeAction.list`)을 준 서버(웹뷰가 `server` 로 돌려준다)에만
+//! 간다 — 메서드마다 첫 서버를 고르는 라우팅(결정 M4-D12)으로 다른 서버가 그 액션의 `data` · 명령을 받지 않게. 그 서버가 resolve 를
+//! 하지 않으면 받은 그대로, 명령을 하지 않으면 5001.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -31,7 +41,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::handlers::HandlerContext;
-use crate::manager::{FeatureRequest, LspManager, code as manager_code};
+use crate::manager::{FeatureRequest, InstanceKey, LspManager, code as manager_code};
 use crate::message::ResponseError;
 use crate::server::Handlers;
 use crate::uri::uri_path;
@@ -107,6 +117,8 @@ pub enum LspFileChange {
         path: String,
         version: Option<i32>,
         edits: Vec<LspTextEdit>,
+        /// 편집을 계산한 서버가 이 파일을 다른 창(연결)의 문서 텍스트로 갖고 있다 — 웹뷰는 아무것도 쓰지 않는다(머리 주석).
+        foreign: bool,
     },
     Create {
         path: String,
@@ -258,6 +270,7 @@ pub fn normalize_edit(edit: &Value) -> Result<LspWorkspaceEdit, RpcError> {
                             .and_then(Value::as_i64)
                             .and_then(|v| i32::try_from(v).ok()),
                         edits: text_edits(item.get("edits").unwrap_or(&Value::Null))?,
+                        foreign: false,
                     }
                 }
             };
@@ -274,6 +287,7 @@ pub fn normalize_edit(edit: &Value) -> Result<LspWorkspaceEdit, RpcError> {
             path,
             version: None,
             edits,
+            foreign: false,
         }));
     }
     let text_count: usize = changes
@@ -294,6 +308,34 @@ pub fn normalize_edit(edit: &Value) -> Result<LspWorkspaceEdit, RpcError> {
         ));
     }
     Ok(LspWorkspaceEdit { changes })
+}
+
+/// 인스턴스 `key` 가 다른 창의 텍스트로 가진 파일에 `foreign` 을 단다(머리 주석 「다른 창이 연 파일」).
+fn mark_foreign(
+    m: &LspManager,
+    key: &InstanceKey,
+    session: SessionId,
+    edit: &mut LspWorkspaceEdit,
+) {
+    let paths: Vec<PathBuf> = edit
+        .changes
+        .iter()
+        .filter_map(|c| match c {
+            LspFileChange::Text { path, .. } => Some(PathBuf::from(path)),
+            _ => None,
+        })
+        .collect();
+    let foreign = m.foreign_paths(key, session, paths.iter().map(PathBuf::as_path));
+    for change in &mut edit.changes {
+        if let LspFileChange::Text {
+            path,
+            foreign: mark,
+            ..
+        } = change
+        {
+            *mark = foreign.contains(Path::new(path.as_str()));
+        }
+    }
 }
 
 // ---- rename ------------------------------------------------------------------------------------------------------------------
@@ -445,6 +487,8 @@ pub struct LspCodeActionList {
 #[serde(rename_all = "camelCase")]
 pub struct LspCodeActionResolveParams {
     pub doc_id: String,
+    /// 목록을 준 서버([`LspCodeActionList::server`]) — 그 서버에만 묻는다.
+    pub server: String,
     /// [`LspCodeActionItem::raw`] 그대로.
     #[specta(type = JsonValue)]
     pub action: Value,
@@ -467,6 +511,8 @@ pub struct LspCodeActionResolved {
 #[serde(rename_all = "camelCase")]
 pub struct LspCommandExecuteParams {
     pub doc_id: String,
+    /// 그 명령을 준 서버(코드 액션 목록 · 완성 항목의 서버) — 그 서버에만 보낸다.
+    pub server: String,
     /// 이 명령의 흐름 id(웹뷰가 정한다). 그 처리 중에 서버가 건 편집의 이벤트에 실린다.
     pub flow_id: String,
     /// 서버가 준 `Command`(`{ title, command, arguments? }`).
@@ -569,8 +615,10 @@ struct Answer {
 /// 도는 명령 하나.
 struct Flow {
     id: String,
-    project_id: String,
-    server: String,
+    /// 명령을 보낸 인스턴스(프로젝트 · 서버 · 루트로 견준다 — `InstanceKey` 의 같음).
+    key: InstanceKey,
+    /// 그 인스턴스가 다른 창의 텍스트로 가진 파일을 판정한다(`foreign`).
+    manager: LspManager,
     session: SessionId,
     hub: EventHub,
     closed: CancellationToken,
@@ -600,17 +648,22 @@ fn not_applied(reason: &str) -> Value {
 
 /// 서버 → 클라이언트 `workspace/applyEdit` 처리기(인스턴스마다 — `crate::handlers`).
 pub(crate) fn apply_edit(handlers: &mut Handlers, cx: &HandlerContext) {
-    let project = cx.project_id.clone();
-    let server = cx.server.clone();
+    // 이 인스턴스의 열쇠(`InstanceKey` 의 같음은 프로젝트 · 서버 · 루트다 — 워크트리는 보지 않는다).
+    let key = InstanceKey {
+        project_id: cx.project_id.clone(),
+        worktree: cx.worktree.clone(),
+        server: cx.server.clone(),
+        root: cx.root.clone(),
+    };
     handlers.on("workspace/applyEdit", move |params: Value| {
-        let (project, server) = (project.clone(), server.clone());
-        async move { Ok::<_, ResponseError>(forward(&project, &server, &params).await) }
+        let key = key.clone();
+        async move { Ok::<_, ResponseError>(forward(&key, &params).await) }
     });
 }
 
-/// 도는 명령의 창에 넘기고 답을 기다린다.
-async fn forward(project: &str, server: &str, params: &Value) -> Value {
-    let edit = match normalize_edit(params.get("edit").unwrap_or(&Value::Null)) {
+/// 인스턴스 `key` 의 명령이 돌고 있으면 그 창에 넘기고 답을 기다린다.
+async fn forward(key: &InstanceKey, params: &Value) -> Value {
+    let mut edit = match normalize_edit(params.get("edit").unwrap_or(&Value::Null)) {
         Ok(edit) => edit,
         Err(e) => return not_applied(&e.message),
     };
@@ -618,17 +671,31 @@ async fn forward(project: &str, server: &str, params: &Value) -> Value {
         .get("label")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let (rx, closed) = {
-        let mut flows = flows();
-        // 같은 서버의 명령이 둘 돌면 나중 것(창은 한 번에 하나만 돌린다).
-        let Some(flow) = flows
-            .iter_mut()
-            .rev()
-            .find(|f| f.project_id == project && f.server == server)
-        else {
+    let (id, session, manager) = {
+        let flows = flows();
+        // 같은 인스턴스의 명령이 둘 돌면 나중 것(창은 한 번에 하나만 돌린다).
+        let Some(at) = flows.iter().rposition(|f| f.key == *key) else {
             return not_applied(
                 "Pitwall applies a server's edit only while running a command the person chose",
             );
+        };
+        let flow = &flows[at];
+        // 한 명령의 편집은 한 번에 하나 — 앞 편집에 창이 답하기 전에 온 것은 받지 않는다(쏟아붓기에 창의 미리보기가 줄줄이 뜨지 않게).
+        if !flow.waiting.is_empty() {
+            return not_applied("an earlier edit of this command is still waiting for the window");
+        }
+        (flow.id.clone(), flow.session, flow.manager.clone())
+    };
+    // 판정은 흐름 표의 잠금 밖에서(관리자의 잠금을 겹쳐 쥐지 않는다).
+    mark_foreign(&manager, key, session, &mut edit);
+    let (rx, closed) = {
+        let mut flows = flows();
+        let Some(flow) = flows
+            .iter_mut()
+            .find(|f| f.id == id && f.session == session && f.key == *key)
+            .filter(|f| f.waiting.is_empty())
+        else {
+            return not_applied("the command ended before the window answered");
         };
         flow.next += 1;
         let request_id = flow.next;
@@ -637,13 +704,13 @@ async fn forward(project: &str, server: &str, params: &Value) -> Value {
         let event = LspApplyEditEvent {
             flow_id: flow.id.clone(),
             request_id,
-            server: server.to_owned(),
+            server: key.server.clone(),
             label,
             edit,
         };
         if flow
             .hub
-            .publish(project, TOPIC_APPLY_EDIT, &event)
+            .publish(&key.project_id, TOPIC_APPLY_EDIT, &event)
             .unwrap_or(0)
             == 0
         {
@@ -800,8 +867,10 @@ async fn rename(m: &LspManager, ctx: &Ctx, p: LspRenameParams) -> Result<LspEdit
             },
         )
         .await?;
+    let mut edit = normalize_edit(&answer.result)?;
+    mark_foreign(m, &answer.key, ctx.session(), &mut edit);
     Ok(LspEditAnswer {
-        edit: normalize_edit(&answer.result)?,
+        edit,
         server: answer.server,
         stale_version: answer.stale_version,
     })
@@ -912,38 +981,39 @@ async fn resolve_action(
     ctx: &Ctx,
     p: LspCodeActionResolveParams,
 ) -> Result<LspCodeActionResolved, RpcError> {
-    // `Command` 자체 — 돌릴 명령뿐이다.
+    // `Command` 자체 — 돌릴 명령뿐이다(`lsp.command.execute` 가 그 서버로 보낸다).
     if p.action.get("command").is_some_and(Value::is_string) {
-        let server = m
-            .feature_routes(
-                ctx.session(),
-                &p.doc_id,
-                &[(LspFeature::CodeAction, "textDocument/codeAction")],
-            )?
-            .into_iter()
-            .next()
-            .map(|(_, server, _)| server)
-            .unwrap_or_default();
         return Ok(LspCodeActionResolved {
-            server,
+            server: p.server,
             edit: None,
             command: Some(p.action),
         });
     }
-    let mut action = p.action;
-    let mut server = String::new();
-    let resolvable = m
-        .feature_routes(
+    // 목록을 준 서버만 본다 — 그 서버가 resolve 를 하지 않으면 받은 그대로.
+    let route = |method: &str| -> Result<Option<InstanceKey>, RpcError> {
+        Ok(m.feature_route_keys(
             ctx.session(),
             &p.doc_id,
-            &[(LspFeature::CodeAction, "codeAction/resolve")],
+            &[(LspFeature::CodeAction, method)],
+            Some(&p.server),
         )?
         .into_iter()
-        .next();
-    if action.get("edit").is_none_or(Value::is_null) && resolvable.is_some() {
+        .next()
+        .map(|(_, key, _)| key))
+    };
+    let resolver = route("codeAction/resolve")?;
+    let resolvable = resolver.is_some();
+    // 편집의 「다른 창」 표지를 판정할 인스턴스(그 서버가 목록을 준 인스턴스).
+    let mut key = match resolver {
+        Some(key) => Some(key),
+        None => route("textDocument/codeAction")?,
+    };
+    let mut action = p.action;
+    if action.get("edit").is_none_or(Value::is_null) && resolvable {
         let answer = m
-            .request(
+            .request_on(
                 ctx,
+                &p.server,
                 FeatureRequest {
                     doc_id: &p.doc_id,
                     feature: LspFeature::CodeAction,
@@ -954,17 +1024,21 @@ async fn resolve_action(
                 |_| Ok(action.clone()),
             )
             .await?;
-        server = answer.server;
+        key = Some(answer.key);
         action = answer.result;
-    } else if let Some((_, s, _)) = resolvable {
-        server = s;
     }
     let edit = match action.get("edit").filter(|e| !e.is_null()) {
-        Some(edit) => Some(normalize_edit(edit)?),
+        Some(edit) => {
+            let mut edit = normalize_edit(edit)?;
+            if let Some(key) = &key {
+                mark_foreign(m, key, ctx.session(), &mut edit);
+            }
+            Some(edit)
+        }
         None => None,
     };
     Ok(LspCodeActionResolved {
-        server,
+        server: p.server,
         edit,
         command: action.get("command").filter(|c| !c.is_null()).cloned(),
     })
@@ -978,7 +1052,8 @@ pub async fn execute_command(
     ctx: &Ctx,
     p: LspCommandExecuteParams,
 ) -> Result<LspCommandExecuted, RpcError> {
-    let project_id = window_project(ctx)?;
+    // 프로젝트 창만(흐름의 이벤트는 그 프로젝트 범위로 간다 — 인스턴스 열쇠의 프로젝트).
+    window_project(ctx)?;
     let command = p
         .command
         .get("command")
@@ -986,19 +1061,24 @@ pub async fn execute_command(
         .ok_or_else(|| RpcError::invalid_params("`command.command` must be a string"))?
         .to_owned();
     let arguments = p.command.get("arguments").cloned();
-    let server = m
-        .feature_routes(
+    // 그 명령을 준 서버의 인스턴스만 — 그 서버가 명령을 하지 않으면 5001(다른 서버로 보내지 않는다).
+    let key = m
+        .feature_route_keys(
             ctx.session(),
             &p.doc_id,
             &[(LspFeature::CodeAction, "workspace/executeCommand")],
+            Some(&p.server),
         )?
         .into_iter()
         .next()
-        .map(|(_, server, _)| server)
+        .map(|(_, key, _)| key)
         .ok_or_else(|| {
             RpcError::new(
                 manager_code::NO_SERVER,
-                "no running language server runs commands for this document",
+                format!(
+                    "the language server `{}` does not run commands for this document",
+                    p.server
+                ),
             )
         })?;
     {
@@ -1014,8 +1094,8 @@ pub async fn execute_command(
         }
         flows.push(Flow {
             id: p.flow_id.clone(),
-            project_id,
-            server: server.clone(),
+            key,
+            manager: m.clone(),
             session: ctx.session(),
             hub: ctx.events().clone(),
             closed: ctx.connection_closed(),
@@ -1025,8 +1105,9 @@ pub async fn execute_command(
     }
     let _guard = FlowGuard(p.flow_id.clone(), ctx.session());
     let answer = m
-        .request(
+        .request_on(
             ctx,
+            &p.server,
             FeatureRequest {
                 doc_id: &p.doc_id,
                 feature: LspFeature::CodeAction,
@@ -1139,7 +1220,8 @@ mod tests {
                             end: pos(0, 2)
                         },
                         new_text: "x".into()
-                    }]
+                    }],
+                    foreign: false,
                 },
                 LspFileChange::Rename {
                     from: "/p/a.rs".into(),

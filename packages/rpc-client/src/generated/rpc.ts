@@ -4909,6 +4909,8 @@ export type LspCodeActionListParams = {
 
 export type LspCodeActionResolveParams = {
 	docId: string,
+	/**  목록을 준 서버([`LspCodeActionList::server`]) — 그 서버에만 묻는다. */
+	server: string,
 	/**  [`LspCodeActionItem::raw`] 그대로. */
 	action: JsonValue,
 };
@@ -4930,6 +4932,8 @@ export type LspCodeActionTrigger =
 
 export type LspCommandExecuteParams = {
 	docId: string,
+	/**  그 명령을 준 서버(코드 액션 목록 · 완성 항목의 서버) — 그 서버에만 보낸다. */
+	server: string,
 	/**  이 명령의 흐름 id(웹뷰가 정한다). 그 처리 중에 서버가 건 편집의 이벤트에 실린다. */
 	flowId: string,
 	/**  서버가 준 `Command`(`{ title, command, arguments? }`). */
@@ -5032,7 +5036,9 @@ export type LspFileChange =
  *  텍스트 바꾸기. `version` 은 서버가 이 편집을 계산한 문서 버전(`TextDocumentEdit.textDocument.version` — 열린 문서면 웹뷰가
  *  보낸 버전이다). 없으면 서버가 디스크(또는 버전 없이 받은 텍스트)를 기준으로 했다.
  */
-{ kind: "text"; path: string; version: number | null; edits: LspTextEdit[] } | { kind: "create"; path: string; overwrite: boolean; ignoreIfExists: boolean } | { kind: "rename"; from: string; to: string; overwrite: boolean; ignoreIfExists: boolean } | { kind: "delete"; path: string; recursive: boolean; ignoreIfNotExists: boolean };
+{ kind: "text"; path: string; version: number | null; edits: LspTextEdit[]; 
+/**  편집을 계산한 서버가 이 파일을 다른 창(연결)의 문서 텍스트로 갖고 있다 — 웹뷰는 아무것도 쓰지 않는다(머리 주석). */
+foreign: boolean } | { kind: "create"; path: string; overwrite: boolean; ignoreIfExists: boolean } | { kind: "rename"; from: string; to: string; overwrite: boolean; ignoreIfExists: boolean } | { kind: "delete"; path: string; recursive: boolean; ignoreIfNotExists: boolean };
 
 /**  인스턴스의 상태. */
 export type LspInstanceState = 

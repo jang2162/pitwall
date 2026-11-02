@@ -153,9 +153,9 @@ async fn rename_gives_the_prepared_range_and_a_normalized_edit() {
     assert_eq!(
         answer["edit"]["changes"],
         json!([
-            { "kind": "text", "path": main, "version": 0,
+            { "kind": "text", "path": main, "version": 0, "foreign": false,
               "edits": [{ "range": range(1, 3, 1, 7), "newText": "start" }] },
-            { "kind": "text", "path": lib, "version": null,
+            { "kind": "text", "path": lib, "version": null, "foreign": false,
               "edits": [{ "range": range(0, 0, 0, 4), "newText": "start" }] },
         ])
     );
@@ -334,7 +334,7 @@ async fn resolving_asks_the_server_for_the_edit_and_keeps_commands() {
     let resolved = win
         .call(
             "lsp.codeAction.resolve",
-            json!({ "docId": doc, "action": { "title": "Fix", "data": 1 } }),
+            json!({ "docId": doc, "server": "rust-analyzer", "action": { "title": "Fix", "data": 1 } }),
         )
         .await
         .unwrap();
@@ -348,7 +348,7 @@ async fn resolving_asks_the_server_for_the_edit_and_keeps_commands() {
     let resolved = win
         .call(
             "lsp.codeAction.resolve",
-            json!({ "docId": doc, "action": command }),
+            json!({ "docId": doc, "server": "rust-analyzer", "action": command }),
         )
         .await
         .unwrap();
@@ -407,7 +407,7 @@ async fn a_server_edit_reaches_the_window_only_while_its_command_runs() {
 
     let call = win.send(
         "lsp.command.execute",
-        json!({ "docId": doc, "flowId": "f1", "command": { "title": "Fix", "command": "fix.it", "arguments": [1] } }),
+        json!({ "docId": doc, "flowId": "f1", "server": "rust-analyzer", "command": { "title": "Fix", "command": "fix.it", "arguments": [1] } }),
     );
     let event = next_event(&mut win, "lsp.applyEdit", Duration::from_secs(10))
         .await
@@ -484,7 +484,7 @@ async fn another_servers_edit_during_a_command_is_not_applied() {
     env.wait_state("ruff", LspInstanceState::Ready).await;
     let call = win.send(
         "lsp.command.execute",
-        json!({ "docId": doc, "flowId": "f1", "command": { "title": "Fix", "command": "fix.it" } }),
+        json!({ "docId": doc, "flowId": "f1", "server": "basedpyright", "command": { "title": "Fix", "command": "fix.it" } }),
     );
     let event = next_event(&mut win, "lsp.applyEdit", Duration::from_secs(10))
         .await
@@ -554,7 +554,7 @@ async fn a_closed_window_answers_no() {
     let doc = ready(&env, &mut win, "src/main.rs", "Rust", "fn main() {}\n").await;
     win.send(
         "lsp.command.execute",
-        json!({ "docId": doc, "flowId": "f1", "command": { "title": "Fix", "command": "fix.it" } }),
+        json!({ "docId": doc, "flowId": "f1", "server": "rust-analyzer", "command": { "title": "Fix", "command": "fix.it" } }),
     );
     next_event(&mut win, "lsp.applyEdit", Duration::from_secs(10))
         .await
@@ -571,9 +571,304 @@ async fn commands_need_a_project_window() {
     let e = host
         .call(
             "lsp.command.execute",
-            json!({ "docId": "d1", "flowId": "f1", "command": { "title": "x", "command": "x" } }),
+            json!({ "docId": "d1", "flowId": "f1", "server": "rust-analyzer", "command": { "title": "x", "command": "x" } }),
         )
         .await
         .unwrap_err();
     assert_eq!(e.code, code::PERMISSION_DENIED);
+}
+
+/// 같은 프로젝트의 다른 창이 연 파일은 서버의 텍스트가 그 창의 것이다 — 그 파일의 편집에 `foreign` 이 달린다. 같은 창이 연 파일 ·
+/// 아무도 열지 않은 파일에는 달리지 않는다(결정 M4-D14 ① — 리뷰 H1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_edit_marks_files_another_window_has_open() {
+    let env = Env::new(EnvOptions::default());
+    let main = env.root.join("src/main.rs");
+    let theirs = env.file("src/theirs.rs", "pub fn old() {}\n");
+    let mine = env.file("src/mine.rs", "pub fn old2() {}\n");
+    let closed = env.file("src/closed.rs", "use crate::old;\n");
+    let text = |path: &Path| {
+        json!({ "textDocument": { "uri": uri(path), "version": null },
+                "edits": [{ "range": range(0, 0, 0, 0), "newText": "// x\n" }] })
+    };
+    env.fake(
+        "rust-analyzer",
+        Scenario {
+            capabilities: json!({ "textDocumentSync": 2, "renameProvider": true }),
+            ..Scenario::default()
+        }
+        .reply(
+            "textDocument/rename",
+            Reply::result(json!({ "documentChanges": [
+                text(&main), text(&theirs), text(&mine), text(&closed),
+            ]})),
+        ),
+    );
+    let mut a = env.window();
+    let mut b = env.window();
+    let doc = ready(&env, &mut a, "src/main.rs", "Rust", "fn main() {}\n").await;
+    a.open(&env, &mine, "Rust", "pub fn old2() {}\n").await;
+    // 창 B 가 연 채 고친다(미저장) — 서버의 `theirs.rs` 텍스트는 B 의 버퍼다.
+    let other = doc_id(&b.open(&env, &theirs, "Rust", "pub fn old() {}\n").await);
+    b.call(
+        "lsp.document.change",
+        json!({ "docId": other, "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "added\n" }] }),
+    )
+    .await
+    .unwrap();
+    let answer = a
+        .call(
+            "lsp.rename",
+            json!({ "docId": doc, "version": 0, "offset": 3, "newName": "start" }),
+        )
+        .await
+        .unwrap();
+    let marks: Vec<(String, bool)> = answer["edit"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let path = Path::new(c["path"].as_str().unwrap());
+            (
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                c["foreign"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            ("main.rs".to_owned(), false),
+            ("theirs.rs".to_owned(), true),
+            ("mine.rs".to_owned(), false),
+            ("closed.rs".to_owned(), false),
+        ]
+    );
+}
+
+/// 같은 서버 id 의 두 인스턴스(형제 Cargo 작업 공간 둘): 한 인스턴스의 명령이 도는 동안 다른 인스턴스가 건 편집은 그 흐름의 창에
+/// 가지 않고 `applied: false` 다(리뷰 M3 — 흐름은 인스턴스 열쇠 전체로 맞춘다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_edit_from_another_instance_of_the_same_server_is_not_applied() {
+    let env = Env::new(EnvOptions::default());
+    env.file("a/Cargo.toml", "[package]\nname = \"a\"\n");
+    env.file("b/Cargo.toml", "[package]\nname = \"b\"\n");
+    let a_main = env.root.join("a/src/main.rs");
+    let record = env.fake(
+        "rust-analyzer",
+        Scenario {
+            capabilities: json!({
+                "textDocumentSync": 2, "codeActionProvider": true,
+                "executeCommandProvider": { "commands": ["fix.it"] },
+            }),
+            ..Scenario::default()
+        }
+        // 명령을 받은 인스턴스(a)가 건다.
+        .on(
+            "workspace/executeCommand",
+            vec![apply_edit_request(&a_main)],
+        )
+        .reply(
+            "workspace/executeCommand",
+            Reply::result(json!(null)).delayed(3000),
+        )
+        // 문서가 바뀐 인스턴스(b)가 건다.
+        .on("textDocument/didChange", vec![apply_edit_request(&a_main)]),
+    );
+    let mut win = env.window();
+    win.call(
+        "events.subscribe",
+        json!({ "projectId": env.id, "topics": ["lsp.applyEdit"] }),
+    )
+    .await
+    .unwrap();
+    let doc_a = doc_id(
+        &win.open(
+            &env,
+            &env.file("a/src/main.rs", "fn main() {}\n"),
+            "Rust",
+            "fn main() {}\n",
+        )
+        .await,
+    );
+    let doc_b = doc_id(
+        &win.open(
+            &env,
+            &env.file("b/src/main.rs", "fn main() {}\n"),
+            "Rust",
+            "fn main() {}\n",
+        )
+        .await,
+    );
+    let both = eventually(Duration::from_secs(10), || {
+        let states = env.states();
+        states.len() == 2 && states.iter().all(|(_, s)| *s == LspInstanceState::Ready)
+    })
+    .await;
+    assert!(both, "two rust-analyzer instances: {:?}", env.states());
+    let call = win.send(
+        "lsp.command.execute",
+        json!({ "docId": doc_a, "flowId": "f1", "server": "rust-analyzer", "command": { "title": "Fix", "command": "fix.it" } }),
+    );
+    let event = next_event(&mut win, "lsp.applyEdit", Duration::from_secs(10))
+        .await
+        .expect("the window gets a's edit");
+    win.call(
+        "lsp.applyEdit.answer",
+        json!({ "flowId": "f1", "requestId": event["requestId"], "applied": true }),
+    )
+    .await
+    .unwrap();
+    // 명령이 아직 도는 동안 b 의 문서를 고친다 → b 가 편집을 건다.
+    win.call(
+        "lsp.document.change",
+        json!({ "docId": doc_b, "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "y" }] }),
+    )
+    .await
+    .unwrap();
+    // 두 인스턴스가 같은 기록 파일에 쓴다 — 둘 다 첫 요청이 `fake-1` 이다. a 의 답(true) 다음에 b 의 답(false)이 온다.
+    let answers = |record: &Path| -> Vec<Value> {
+        received(record)
+            .into_iter()
+            .filter(|m| m["id"] == "fake-1" && m.get("method").is_none())
+            .map(|m| m["result"].clone())
+            .collect()
+    };
+    let two = eventually(Duration::from_secs(10), || answers(&record).len() == 2).await;
+    assert!(two, "{:?}", answers(&record));
+    assert_eq!(answers(&record)[0]["applied"], true);
+    assert_eq!(answers(&record)[1]["applied"], false);
+    assert!(
+        next_event(&mut win, "lsp.applyEdit", Duration::from_millis(300))
+            .await
+            .is_none(),
+        "b's edit must not reach the window"
+    );
+    win.response(call).await.unwrap();
+}
+
+/// resolve · 명령은 목록을 준 서버로만 간다 — 그 서버가 명령을 하지 않으면 5001 이고, 명령을 하는 다른 서버로 가지 않는다(리뷰 M4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn commands_go_only_to_the_server_that_listed_the_action() {
+    let env = Env::new(EnvOptions::default());
+    // 정의 순서로 basedpyright 가 먼저다 — 명령만 하고 코드 액션은 ruff 가 준다.
+    let pyright = env.fake(
+        "basedpyright",
+        Scenario {
+            capabilities: json!({
+                "textDocumentSync": 2,
+                "executeCommandProvider": { "commands": ["fix.it"] },
+            }),
+            ..Scenario::default()
+        }
+        .reply(
+            "workspace/executeCommand",
+            Reply::result(json!("pyright ran it")),
+        ),
+    );
+    env.fake(
+        "ruff",
+        Scenario {
+            capabilities: json!({ "textDocumentSync": 2, "codeActionProvider": true }),
+            ..Scenario::default()
+        }
+        .reply(
+            "textDocument/codeAction",
+            Reply::result(
+                json!([{ "title": "Fix", "command": { "title": "Fix", "command": "fix.it" } }]),
+            ),
+        ),
+    );
+    let mut win = env.window();
+    let doc = ready(&env, &mut win, "app.py", "Python", "x = 1\n").await;
+    env.wait_state("ruff", LspInstanceState::Ready).await;
+    let list = win
+        .call(
+            "lsp.codeAction.list",
+            json!({ "docId": doc, "version": 0, "from": 0, "to": 0 }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list["server"], "ruff");
+    let action = list["actions"][0]["raw"].clone();
+    let resolved = win
+        .call(
+            "lsp.codeAction.resolve",
+            json!({ "docId": doc, "server": "ruff", "action": action }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolved["server"], "ruff");
+    let e = win
+        .call(
+            "lsp.command.execute",
+            json!({ "docId": doc, "flowId": "f1", "server": "ruff", "command": resolved["command"] }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, pw_lsp::manager::code::NO_SERVER, "{e:?}");
+    assert!(last_request(&pyright, "workspace/executeCommand").is_none());
+    // 그 서버가 준 명령이면 그 서버로 간다.
+    let ran = win
+        .call(
+            "lsp.command.execute",
+            json!({ "docId": doc, "flowId": "f2", "server": "basedpyright", "command": { "title": "Fix", "command": "fix.it" } }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ran["result"], "pyright ran it");
+}
+
+/// 한 명령의 편집은 한 번에 하나다 — 앞 편집에 창이 답하기 전에 온 편집은 창에 넘기지 않고 곧바로 `applied: false`(리뷰 L4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_edit_while_the_first_waits_is_refused() {
+    let env = Env::new(EnvOptions::default());
+    let main = env.root.join("src/main.rs");
+    let record = env.fake(
+        "rust-analyzer",
+        Scenario {
+            capabilities: json!({
+                "textDocumentSync": 2, "codeActionProvider": true,
+                "executeCommandProvider": { "commands": ["fix.it"] },
+            }),
+            ..Scenario::default()
+        }
+        .on(
+            "workspace/executeCommand",
+            vec![apply_edit_request(&main), apply_edit_request(&main)],
+        )
+        .reply(
+            "workspace/executeCommand",
+            Reply::result(json!(null)).delayed(1500),
+        ),
+    );
+    let mut win = env.window();
+    win.call(
+        "events.subscribe",
+        json!({ "projectId": env.id, "topics": ["lsp.applyEdit"] }),
+    )
+    .await
+    .unwrap();
+    let doc = ready(&env, &mut win, "src/main.rs", "Rust", "fn main() {}\n").await;
+    let call = win.send(
+        "lsp.command.execute",
+        json!({ "docId": doc, "flowId": "f1", "server": "rust-analyzer", "command": { "title": "Fix", "command": "fix.it" } }),
+    );
+    let event = next_event(&mut win, "lsp.applyEdit", Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(answer_to(&record, "fake-2").await["applied"], false);
+    assert!(
+        next_event(&mut win, "lsp.applyEdit", Duration::from_millis(300))
+            .await
+            .is_none()
+    );
+    win.call(
+        "lsp.applyEdit.answer",
+        json!({ "flowId": "f1", "requestId": event["requestId"], "applied": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(answer_to(&record, "fake-1").await["applied"], true);
+    win.response(call).await.unwrap();
 }
