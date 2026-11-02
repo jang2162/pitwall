@@ -346,6 +346,7 @@ mod tests {
                 ("lsp.status.get", Tier::Read, false, false),
                 ("lsp.symbols.document", Tier::Read, false, false),
                 ("lsp.typeDefinition", Tier::Read, false, false),
+                ("lsp.workspaceSymbol", Tier::Read, false, false),
             ]
         );
     }

@@ -724,6 +724,11 @@ export type UnaryMethods = {
 	 */
 	"lsp.typeDefinition": { params: LspPositionParams; result: LspLocationsResult };
 	/**
+	 * 프로젝트의 언어 서버들에 `workspace/symbol` 을 묻는다(심볼로 이동 · 클래스로 이동 · SE 「심볼」 탭 — M4-16). 이 창이 문서를 연
+	 * 떠 있는 서버에만 묻고 서버를 띄우지 않는다. 루트 밖 위치는 읽기 토큰과 함께(결정 M4-D13). 미신뢰면 untrusted.
+	 */
+	"lsp.workspaceSymbol": { params: LspWorkspaceSymbolParams; result: LspWorkspaceSymbols };
+	/**
 	 * 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.
 	 */
 	"openWith.list": { params: OpenWithListParams; result: OpenWithList };
@@ -1173,6 +1178,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.status.get": {"name":"lsp.status.get","kind":"unary","tier":"read","roles":["owner"],"params":"LspStatusGetParams","output":"LspStatus","doc":" 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다. 그 프로젝트 창의 연결만(다른 연결은\n permission denied).\n","mcp":false,"fileScope":false},
 	"lsp.symbols.document": {"name":"lsp.symbols.document","kind":"unary","tier":"read","roles":["owner"],"params":"LspSymbolsDocumentParams","output":"LspDocumentSymbols","doc":" 문서의 심볼(구조 툴 윈도우 · 파일 구조 팝업 — M4-10). 서버의 계층 · 평면 답을 평면 목록 + 부모 색인으로 바꾼다(위치는\n UTF-16 오프셋). 맡을 서버가 없으면(서버 없음 · 준비 전 · 미신뢰) `5001` — 웹뷰는 `index.file.symbols` 로 대신한다. 없는\n 문서 · 다른 연결의 문서는 not found. 서버를 띄우지 않는다.\n","mcp":false,"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":false,"fileScope":false},
+	"lsp.workspaceSymbol": {"name":"lsp.workspaceSymbol","kind":"unary","tier":"read","roles":["owner"],"params":"LspWorkspaceSymbolParams","output":"LspWorkspaceSymbols","doc":" 프로젝트의 언어 서버들에 `workspace/symbol` 을 묻는다(심볼로 이동 · 클래스로 이동 · SE 「심볼」 탭 — M4-16). 이 창이 문서를 연\n 떠 있는 서버에만 묻고 서버를 띄우지 않는다. 루트 밖 위치는 읽기 토큰과 함께(결정 M4-D13). 미신뢰면 untrusted.\n","mcp":false,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false,"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":false,"fileScope":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":false,"fileScope":false},
@@ -5738,6 +5744,47 @@ export type LspTextEdit = {
 /**  고르게 바꾼 `WorkspaceEdit`. */
 export type LspWorkspaceEdit = {
 	changes: LspFileChange[],
+};
+
+/**  서버가 준 심볼 하나. */
+export type LspWorkspaceSymbol = {
+	/**  서버가 준 이름(글로만 그린다). [`MAX_TEXT`] 바이트까지. */
+	name: string,
+	/**  LSP `SymbolKind`(1 `File` ~ 26 `TypeParameter`). 범위 밖이면 0. */
+	kind: number,
+	/**  서버가 준 컨테이너 이름(흐린 글자로). 없으면 `None`. */
+	container: string | null,
+	/**  답한 서버 id. */
+	server: string,
+	/**  그 서버에 이 창이 연 문서의 언어(Linguist 이름 — 루트 밖 위치를 여는 외부 소스 탭의 언어). */
+	language: string,
+	/**  위치(이름 자리 — 서버가 범위를 주지 않았으면 파일의 처음). 루트 밖이면 읽기 토큰과 함께. */
+	location: LspLocation,
+	/**  루트 안이면 루트 기준 상대 경로(`/` 구분) — 인덱스 결과와 합칠 열쇠. */
+	relative: string | null,
+};
+
+export type LspWorkspaceSymbolParams = {
+	projectId: string,
+	/**  창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 없으면 메인 체크아웃. */
+	worktree?: string | null,
+	/**  찾을 것(서버에 그대로). 비어 있으면 묻지 않는다. 글자 수 상한 [`MAX_QUERY_CHARS`]. */
+	query: string,
+	/**  이 LSP `SymbolKind` 만(클래스로 이동 — 타입 종류). 없으면 모두. */
+	kinds?: number[] | null,
+	/**  결과 수. 기본 [`DEFAULT_LIMIT`], 1 ~ [`MAX_LIMIT`]. */
+	limit?: number | null,
+};
+
+export type LspWorkspaceSymbols = {
+	/**  서버의 정의 순서, 한 서버 안은 서버가 준 순서. `limit` 개까지. */
+	symbols: LspWorkspaceSymbol[],
+	/**  답한 서버 id(정의 순서). */
+	servers: string[],
+	/**  답하지 못한 서버 id(시한 · 오류 · 서버를 다시 띄움). */
+	failed: string[],
+	/**  상한(`limit`)에 걸려 일부를 버렸다. */
+	truncated: boolean,
 };
 
 export type MergeLines = {

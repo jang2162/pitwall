@@ -29663,6 +29663,207 @@
       ],
       "tier": "read"
     },
+    "lsp.workspaceSymbol": {
+      "description": "프로젝트의 언어 서버들에 `workspace/symbol` 을 묻는다(심볼로 이동 · 클래스로 이동 · SE 「심볼」 탭 — M4-16). 이 창이 문서를 연\n떠 있는 서버에만 묻고 서버를 띄우지 않는다. 루트 밖 위치는 읽기 토큰과 함께(결정 M4-D13). 미신뢰면 untrusted.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "kinds": {
+            "default": null,
+            "description": "이 LSP `SymbolKind` 만(클래스로 이동 — 타입 종류). 없으면 모두.",
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "결과 수. 기본 [`DEFAULT_LIMIT`], 1 ~ [`MAX_LIMIT`].",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "query": {
+            "description": "찾을 것(서버에 그대로). 비어 있으면 묻지 않는다. 글자 수 상한 [`MAX_QUERY_CHARS`].",
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 없으면 메인 체크아웃.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "query"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspLocation": {
+            "description": "결과 위치 하나.",
+            "properties": {
+              "column": {
+                "description": "1 부터, UTF-16.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endColumn": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "description": "1 부터.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "절대 경로(루트 안이면 정규화한 실제 경로). 파일이 아닌 URI 면 URI 그대로.",
+                "type": "string"
+              },
+              "preview": {
+                "description": "그 줄의 글(앞뒤 공백 그대로, [`PREVIEW_CHARS`] 까지). 읽지 못했으면 없다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token": {
+                "description": "루트 밖이거나 파일이 아니면 읽기 토큰 — `lsp.document.read` 와 토큰 문서 안의 요청에 쓴다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "token",
+              "line",
+              "column",
+              "endLine",
+              "endColumn",
+              "preview"
+            ],
+            "type": "object"
+          },
+          "LspWorkspaceSymbol": {
+            "description": "서버가 준 심볼 하나.",
+            "properties": {
+              "container": {
+                "description": "서버가 준 컨테이너 이름(흐린 글자로). 없으면 `None`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "description": "LSP `SymbolKind`(1 `File` ~ 26 `TypeParameter`). 범위 밖이면 0.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "language": {
+                "description": "그 서버에 이 창이 연 문서의 언어(Linguist 이름 — 루트 밖 위치를 여는 외부 소스 탭의 언어).",
+                "type": "string"
+              },
+              "location": {
+                "$ref": "#/$defs/LspLocation",
+                "description": "위치(이름 자리 — 서버가 범위를 주지 않았으면 파일의 처음). 루트 밖이면 읽기 토큰과 함께."
+              },
+              "name": {
+                "description": "서버가 준 이름(글로만 그린다). [`MAX_TEXT`] 바이트까지.",
+                "type": "string"
+              },
+              "relative": {
+                "description": "루트 안이면 루트 기준 상대 경로(`/` 구분) — 인덱스 결과와 합칠 열쇠.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "server": {
+                "description": "답한 서버 id.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "container",
+              "server",
+              "language",
+              "location",
+              "relative"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "failed": {
+            "description": "답하지 못한 서버 id(시한 · 오류 · 서버를 다시 띄움).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "servers": {
+            "description": "답한 서버 id(정의 순서).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "symbols": {
+            "description": "서버의 정의 순서, 한 서버 안은 서버가 준 순서. `limit` 개까지.",
+            "items": {
+              "$ref": "#/$defs/LspWorkspaceSymbol"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "상한(`limit`)에 걸려 일부를 버렸다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "symbols",
+          "servers",
+          "failed",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "openWith.list": {
       "description": "이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.",
       "kind": "unary",

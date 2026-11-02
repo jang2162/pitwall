@@ -9,7 +9,9 @@
 //! 그 위의 서버 관리자(M4-05): 인스턴스 · 수명 · 문서 동기화 · 요청 길([`manager`]), 문서 텍스트와 UTF-16 위치([`document`]),
 //! 작업 공간 루트([`root`]), 서버 런타임 찾기([`requires`]), 진행 → `Task`([`progress`]), 서버 → 클라이언트 요청 처리기의 등록부
 //! ([`handlers`]), RPC([`methods`] — [`register`]). 웹뷰 LSP 다리(M4-07)의 Host 쪽은 문서의 기능 칸([`bridge`] —
-//! `lsp.document.capabilities`), 문서 심볼([`symbols`] — `lsp.symbols.document`, M4-10), 서버가 등록한 글롭대로 파일 바뀜 전하기([`watched`] — M4-05b). 진단 저장 · 문제 툴 윈도우의 Host 쪽(M4-06)은 [`diagnostics`]. 기능 행(진단 · 내비게이션 · 완성 · 편집 · 포맷 · 심볼)은 자기 모듈을 이
+//! `lsp.document.capabilities`), 문서 심볼([`symbols`] — `lsp.symbols.document`, M4-10), 서버가 등록한 글롭대로 파일 바뀜 전하기([`watched`]
+//! — M4-05b), 작업 공간 심볼([`workspace_symbols`] — `lsp.workspaceSymbol`, M4-16). 진단 저장 · 문제 툴 윈도우의 Host 쪽(M4-06)은
+//! [`diagnostics`]. 기능 행(진단 · 내비게이션 · 완성 · 편집 · 포맷 · 심볼)은 자기 모듈을 이
 //! 크레이트에 두고 서버에는 [`LspManager::request`] 로만 닿는다(15 「공유 부품의 주인」).
 //!
 //! 참고 구현은 읽기만 했다 — VS Code `vscode-languageserver-node`(MIT)의 취소 · 진행 · 동기화 규칙과 LSP 3.17 명세. Zed(GPL) ·
@@ -40,10 +42,12 @@ pub mod symbols;
 pub mod transport;
 pub mod uri;
 pub mod watched;
+pub mod workspace_symbols;
 
 pub use grant::{LspGrant, lsp_grant};
 pub use manager::{
     DocView, FeatureAnswer, FeatureRequest, HostParts, InstanceKey, LspManager, ManagerOptions,
+    SessionInstance,
 };
 pub use process::LaunchSpec;
 pub use server::{
@@ -55,8 +59,9 @@ pub use server::{
 pub fn register(router: &mut pw_rpc::Router, manager: &LspManager) {
     methods::register(router, manager);
     bridge::register(router, manager);
-    navigation::register(router, manager);
+    let nav = navigation::register(router, manager);
     symbols::register(router, manager);
+    workspace_symbols::register(router, manager, &nav);
     // 코드 액션의 진단 문맥(M4-12)은 진단 저장(M4-06)의 범위 조회로 채운다.
     let diagnostics = diagnostics::register(router, manager);
     edit::register(router, manager, diagnostics);
