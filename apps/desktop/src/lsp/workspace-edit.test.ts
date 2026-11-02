@@ -248,6 +248,8 @@ describe("EditApplier", () => {
       ],
     });
     expect(outcome.kind).toBe("refused");
+    // 까닭은 연결 범위의 거절이다(「없다」 가 아니다).
+    expect(outcome.message).toMatch(/outside the project/);
     expect(snapshot(env, Object.keys(FILES))).toEqual(before);
     expect(env.disk.calls).toEqual([]);
     // 덮어쓰기 옵션은 무시한다 — 있는 파일을 만들면 멈춘다.

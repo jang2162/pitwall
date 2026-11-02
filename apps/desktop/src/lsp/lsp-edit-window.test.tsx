@@ -422,7 +422,8 @@ async function openMain() {
   await mount();
   await open(MAIN, 1, 5);
   await emit("lsp.status", { projectId: "p1", instances: [] });
-  for (let i = 0; i < 20 && !view().state.facet(editorContext)?.lsp?.capabilities.rename; i++)
+  const deadline = Date.now() + 5000;
+  while (!view().state.facet(editorContext)?.lsp?.capabilities.rename && Date.now() < deadline)
     await settle();
   expect(view().state.facet(editorContext)?.lsp?.capabilities.rename).toBeDefined();
   await act(async () => view().focus());
@@ -435,8 +436,10 @@ const button = (text: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (b) => b.textContent?.trim() === text,
   );
+/** `check` 가 참이 될 때까지(최대 5 s — 기기 부하에서도). */
 const until = async (check: () => boolean) => {
-  for (let i = 0; i < 50 && !check(); i++) await settle();
+  const deadline = Date.now() + 5000;
+  while (!check() && Date.now() < deadline) await settle();
   expect(check()).toBe(true);
 };
 
