@@ -34,6 +34,7 @@
 | `error.type-mismatch` | `src/errors.rs` | `src/errors.ts` | 타입 오류 하나(rust E0308 · ts TS2322) |
 | `error.unresolved` | `src/errors.rs` | `src/errors.ts` | 없는 이름 하나(rust E0425 · ts TS2304) |
 | `format.messy` | `src/messy.rs` | `src/messy.ts` | 흐트러진 서식 파일 — 포맷하면 바뀐다(정의 이름 자리) |
+| `format.two-space` | — | `src/m4_13_two_space.ts` | 2칸 들여쓰기 · 여러 줄 JSDoc 파일(M4-13) — 웹뷰의 들여쓰기 판정이 2 를 내고(`apps/desktop/src/lsp/format.test.ts`), 공백 2칸으로 포맷하면 그대로다(인터페이스 이름 자리) |
 | `unused.rect` | `src/unused.rs` | `src/unused.ts` | 쓰지 않는 import(rust 경고 `unused_imports` · ts TS6133) — 「import 지우기」 코드 액션 |
 | `m4_06.type-error` | `src/m4_06_diagnostics.rs` | `src/m4_06_diagnostics.ts` | M4-06 의 타입 오류 하나 — rust 는 `"three"`(일곱 글자, rust-analyzer 의 pull 진단 `source: rust-analyzer` · flycheck 의 E0308), ts 는 이름 `total`(다섯 글자, TS2322). rust 시험은 임시 복사본의 `lib.rs` 에 `pub mod m4_06_diagnostics;` 를 더한다 |
 | `rename.m4-12` | `src/m4_12_target.rs` | `src/m4_12_target.ts` | 함수 `relabel` 의 정의(M4-12). rename 하면 정의 하나와 `m4_12_user` 의 import 하나 · 호출 둘이 바뀐다 — 파일 둘, 편집 넷(rust 는 임시 복사본의 `lib.rs` 에 두 모듈을 더한다) |

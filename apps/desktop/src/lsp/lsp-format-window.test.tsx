@@ -6,6 +6,7 @@
 //
 // CodeMirror 는 불러올 때 macOS 인지 정한다(navigator.platform) — 그래서 불러오기 전에 Mac 으로 둔다.
 
+import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type {
   ConfigView,
@@ -466,6 +467,11 @@ async function toasts() {
     [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent ?? "");
 }
 
+const dirtyTabs = () =>
+  [...document.querySelectorAll<HTMLElement>("[data-editor-tab-header][data-dirty]")].map(
+    (e) => e.title,
+  );
+
 const placeCursor = (anchor: number, head = anchor) =>
   act(async () => view().dispatch({ selection: { anchor, head } }));
 
@@ -485,12 +491,81 @@ it("puts the formatter's edits into the document as one undo step, keeps the cur
   expect(asked).toHaveLength(1);
   expect(asked[0]!.options).toEqual({ tabSize: 4, insertSpaces: true });
   expect(asked[0]).not.toHaveProperty("range");
-  // 디스크에는 아무것도 쓰지 않았다 — 저장은 ⌘S.
+  // 디스크에는 아무것도 쓰지 않았다 — 저장은 ⌘S. 탭은 미저장으로 보인다.
   expect(host.disk.text(MAIN)).toBe(MAIN_TEXT);
   expect(host.disk.calls).toEqual([]);
-  // ⌘Z 한 번이 포맷 전체를 되돌린다.
+  await until(() => dirtyTabs().length === 1);
+  // ⌘Z 한 번이 포맷 전체를 되돌린다 — 디스크와 같아져 미저장 표시도 사라진다.
   await undoKey();
   expect(view().state.doc.toString()).toBe(MAIN_TEXT);
+  await until(() => dirtyTabs().length === 0);
+});
+
+it("keeps every cursor of a multi-cursor selection on its word", async () => {
+  host.lsp!.handle("lsp.format", async () => formatted());
+  await openMain();
+  const old = MAIN_TEXT.indexOf("old") + 1;
+  const main = MAIN_TEXT.indexOf("main") + 2;
+  await act(async () =>
+    view().dispatch({
+      selection: EditorSelection.create(
+        [EditorSelection.cursor(old), EditorSelection.cursor(main)],
+        1,
+      ),
+    }),
+  );
+  await formatKey();
+  await until(() => view().state.doc.toString() === FORMATTED);
+  // 빈 커서뿐이라 문서 전체를 물었다.
+  expect(host.lsp!.called("call:lsp.format")[0]).not.toHaveProperty("range");
+  const heads = view().state.selection.ranges.map((r) => r.head);
+  expect(heads).toEqual([FORMATTED.indexOf("old") + 1, FORMATTED.indexOf("main") + 2]);
+  expect(view().state.selection.mainIndex).toBe(1);
+});
+
+it("formats a CRLF document from CRLF text without doubling its line breaks", async () => {
+  // M4-13 리뷰 M1: 서버가 CRLF 로 답하면(rustfmt `newline_style` 등) 나누기가 `\r` 만 넣는 조각을 만들어 줄이 늘었다.
+  const crlf = (t: string) => t.replace(/\n/g, "\r\n");
+  host.lsp!.handle("lsp.format", async () => formatted([{ ...WHOLE, newText: crlf(FORMATTED) }]));
+  host.disk = fakeDisk(ROOT, { [MAIN]: crlf(MAIN_TEXT) });
+  await openMain();
+  await placeCursor(MAIN_TEXT.indexOf("main") + 2);
+  await formatKey();
+  await until(() => view().state.doc.toString() === FORMATTED);
+  expect(view().state.doc.lines).toBe(FORMATTED.split("\n").length);
+  expect(view().state.selection.main.head).toBe(FORMATTED.indexOf("main") + 2);
+  expect(host.disk.calls).toEqual([]);
+});
+
+it("stays quiet when the tab closes before the answer comes", async () => {
+  let answer!: (value: unknown) => void;
+  host.lsp!.handle("lsp.format", () => new Promise((resolve) => (answer = resolve)));
+  await openMain();
+  const fresh = await toasts();
+  await formatKey();
+  await until(() => host.lsp!.called("call:lsp.format").length === 1);
+  await keydown({ code: "KeyW", key: "w", metaKey: true }, view().contentDOM);
+  await until(() => document.querySelector(".dv-active-group .cm-editor") === null);
+  await act(async () => answer(formatted()));
+  await settle();
+  await settle();
+  // 문서는 바뀌지 않았다 — 「포맷하는 사이 문서가 바뀌었다」 가 아니다.
+  expect(fresh()).toEqual([]);
+  expect(host.disk.calls).toEqual([]);
+});
+
+it("does nothing in a read-only document", async () => {
+  host.lsp!.handle("lsp.format", async () => formatted());
+  const stat = host.disk.fs.stat;
+  host.disk.fs.stat = async (path) => ({ ...(await stat(path)), readonly: true });
+  await openMain();
+  expect(view().state.facet(editorContext)?.readOnly).toBe(true);
+  const fresh = await toasts();
+  await formatKey();
+  await settle();
+  expect(host.lsp!.called("call:lsp.format")).toEqual([]);
+  expect(view().state.doc.toString()).toBe(MAIN_TEXT);
+  expect(fresh()).toEqual([]);
 });
 
 it("asks for the selection's range with the document's indentation", async () => {
