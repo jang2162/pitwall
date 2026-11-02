@@ -845,9 +845,14 @@ async fn show_document_is_rate_limited_per_window() {
         .subscribe(Filter::all().topics([TOPIC_SHOW_DOCUMENT]));
     let (mut win, doc) = ready(&env, "fn main() {}").await;
     at(&mut win, "lsp.hover", &doc, 0).await.unwrap();
-    let mut want = vec![json!(true); SHOW_DOCUMENT_BURST];
-    want.extend(vec![json!(false); count - SHOW_DOCUMENT_BURST]);
-    assert_eq!(show_answers(&record, count).await, want);
+    // 처리기는 요청마다 따로 돌아 답의 차례는 요청의 차례와 다를 수 있다 — 받은 수만 본다.
+    let answers = show_answers(&record, count).await;
+    assert_eq!(
+        answers.iter().filter(|a| **a == json!(true)).count(),
+        SHOW_DOCUMENT_BURST,
+        "{answers:?}"
+    );
+    assert_eq!(answers.len(), count, "{answers:?}");
     for _ in 0..SHOW_DOCUMENT_BURST {
         assert!(next_show(&mut events).await.is_some());
     }
