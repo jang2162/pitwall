@@ -665,6 +665,27 @@ it("opens a location outside the root read-only through its token, asks the same
     host.calls.filter((c) => c.method === "fs.write" || c.method.startsWith("lsp.document.change")),
   ).toEqual([]);
   expect(host.lsp!.called("open")).toHaveLength(1);
+  // 이 탭에서 나간 LSP 요청(문서 요청 · 토큰 요청)을 센다 — 문맥의 `lsp` 칸은 서버에 연 문서가 아니다(M4-12 와 병합 때 확인).
+  const LSP_CALLS = [
+    "lsp.hover",
+    "lsp.definition",
+    "lsp.declaration",
+    "lsp.implementation",
+    "lsp.references",
+    "lsp.rename.prepare",
+    "lsp.rename",
+    "lsp.codeAction.list",
+    "lsp.codeAction.resolve",
+    "lsp.command.execute",
+  ];
+  const counts = () => LSP_CALLS.map((m) => host.lsp!.called(`call:${m}`).length);
+  const before = counts();
+  const since = () => LSP_CALLS.flatMap((m, i) => host.lsp!.called(`call:${m}`).slice(before[i]));
+  // rename(⇧F6) · 코드 액션(⌥↩, M4-12)은 아무것도 묻지 않고, 오류 없이 조용히 지나간다.
+  await keydown({ code: "F6", key: "F6", shiftKey: true }, view().contentDOM);
+  await keydown({ code: "Enter", key: "Enter", altKey: true }, view().contentDOM);
+  await settle();
+  expect(since()).toEqual([]);
   // 그 문서 안의 hover · 정의는 같은 서버로(토큰).
   await keydown({ code: "F1", key: "F1" }, view().contentDOM);
   await settle();
@@ -674,6 +695,11 @@ it("opens a location outside the root read-only through its token, asks the same
   await settle();
   expect(host.lsp!.called("call:lsp.definition").at(-1)).toEqual({ token: "tok-1", offset: 21 });
   expect(here()).toEqual({ path: VEC, line: 1, column: 12 });
+  // 이 탭에서 나간 요청은 모두 토큰 요청이다(문서 요청 — `docId` — 은 없다).
+  expect(since()).toEqual([
+    { token: "tok-1", offset: 21 },
+    { token: "tok-1", offset: 21 },
+  ]);
   // 같은 토큰은 탭 하나.
   expect(document.querySelectorAll('[data-outside-source="tok-1"]')).toHaveLength(1);
   // 뒤로 가기가 외부 소스 탭 안에서도 오가고 원래 파일로 돌아온다.

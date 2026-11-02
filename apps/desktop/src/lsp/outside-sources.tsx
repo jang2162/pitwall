@@ -49,7 +49,7 @@ import { editorTheme } from "../editor/extensions/theme";
 import type { NavLocation, NavTarget } from "../editor/navigation";
 import { revisionHighlight, revisionSyntax } from "../git/diff/revision-syntax";
 import { useProjectStrings } from "../layout/strings";
-import type { LspServices } from "./lsp-sessions";
+import type { LspDocument, LspServices } from "./lsp-sessions";
 import { navigationExtension, tokenSource } from "./navigation";
 import { popupBase } from "./popup";
 
@@ -206,6 +206,28 @@ export function outsideSources(): OutsideSourcesRuntime | undefined {
   return current;
 }
 
+/**
+ * 외부 소스 탭 문맥의 `lsp` 칸. 서버에 연 문서가 아니다 — 능력 칸이 비어 문맥의 `lsp` 를 보고 도는 문서 액션(rename · 코드 액션,
+ * M4-12)은 「맡을 서버 없음」 으로 조용히 지나가고, 요청 도우미는 묻지 않고 `undefined` 다. 팝업 바탕은 `services` · `language` 를
+ * 읽는다. 그 안의 hover · 정의는 이 칸이 아니라 토큰 길(`tokenSource`)로 간다.
+ */
+function outsideDocument(spec: OutsideSpec, services: LspServices, projectId: string): LspDocument {
+  return {
+    projectId,
+    ...(spec.worktree !== undefined && { worktree: spec.worktree }),
+    path: spec.path,
+    // 모르는 언어(`null`)는 빈 이름 — 팝업의 코드 강조가 「언어 없음」 으로 건너뛴다.
+    language: spec.language ?? "",
+    version: 0,
+    capabilities: {},
+    onCapabilities: () => () => {},
+    request: async () => undefined,
+    call: async () => undefined,
+    hold: () => () => {},
+    services,
+  };
+}
+
 /** 외부 소스 탭의 내용(editor-panel.tsx 가 그린다). */
 export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: OutsideSpec }) {
   const T = useProjectStrings().editor;
@@ -224,7 +246,7 @@ export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: O
       panelId,
       path: spec.path,
       language: spec.language,
-      lsp: { services, language: spec.language },
+      lsp: outsideDocument(spec, services, projectId),
     } as unknown as EditorFeatureContext;
     const view = new EditorView({
       parent,
