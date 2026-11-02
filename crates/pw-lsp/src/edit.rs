@@ -40,6 +40,7 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use crate::diagnostics::DiagnosticStore;
 use crate::handlers::HandlerContext;
 use crate::manager::{FeatureRequest, InstanceKey, LspManager, code as manager_code};
 use crate::message::ResponseError;
@@ -943,41 +944,96 @@ pub fn code_action_items(result: &Value) -> (Vec<LspCodeActionItem>, bool) {
     (items, truncated)
 }
 
+/// 진단 저장(M4-06)에서 `view` 의 `from..to` 와 겹치는 진단 — `key` 의 서버가 낸 것이고 요청 문서 버전의 것만, 상한 안에서.
+fn stored_diagnostics(
+    store: &DiagnosticStore,
+    key: &InstanceKey,
+    view: &crate::manager::DocView,
+    from: u32,
+    to: u32,
+) -> Result<Vec<Value>, RpcError> {
+    let Some(path) = uri_path(&view.uri) else {
+        return Ok(Vec::new());
+    };
+    let at = |offset| {
+        view.position(offset).map(|p| LspPosition {
+            line: p.line,
+            character: p.character,
+        })
+    };
+    let range = LspRange {
+        start: at(from)?,
+        end: at(to)?,
+    };
+    let version = i32::try_from(view.version).ok();
+    let mut size = 0;
+    Ok(store
+        .in_range(&key.project_id, &path, range)
+        .iter()
+        .filter(|d| d.server == key.server && d.version.is_some() && d.version == version)
+        .take(MAX_CONTEXT_DIAGNOSTICS)
+        .map(crate::diagnostics::to_lsp)
+        .take_while(|d| {
+            size += serde_json::to_vec(d).map_or(usize::MAX / 2, |v| v.len());
+            size <= MAX_CONTEXT_DIAGNOSTICS_BYTES
+        })
+        .collect())
+}
+
 async fn code_actions(
     m: &LspManager,
+    store: &DiagnosticStore,
     ctx: &Ctx,
     p: LspCodeActionListParams,
 ) -> Result<LspCodeActionList, RpcError> {
+    // `⌥↩` · 전구는 진단 없이 묻는다 — 그때는 진단 저장(M4-06)의 범위 조회로 채운다(메인 판정 2026-11-02 — 나중에 병합하는 쪽이
+    // 더한다). 코드 액션을 맡을 서버가 낸 것만 그 서버에 넘기므로 그 서버로만 묻는다. 「빠른 수정」 처럼 부른 쪽이 준 진단은 그것만.
+    let stored = match &p.diagnostics {
+        Some(_) => None,
+        None => m
+            .feature_route_keys(
+                ctx.session(),
+                &p.doc_id,
+                &[(LspFeature::CodeAction, "textDocument/codeAction")],
+                None,
+            )
+            .ok()
+            .and_then(|routes| routes.into_iter().next())
+            .map(|(_, key, _)| key),
+    };
     let diagnostics = context_diagnostics(p.diagnostics, p.version);
-    let answer = m
-        .request(
-            ctx,
-            FeatureRequest {
-                doc_id: &p.doc_id,
-                feature: LspFeature::CodeAction,
-                method: "textDocument/codeAction",
-                expected_version: Some(p.version),
-                timeout: None,
+    let request = FeatureRequest {
+        doc_id: &p.doc_id,
+        feature: LspFeature::CodeAction,
+        method: "textDocument/codeAction",
+        expected_version: Some(p.version),
+        timeout: None,
+    };
+    let params = |view: &crate::manager::DocView| {
+        let diagnostics = match &stored {
+            Some(key) => stored_diagnostics(store, key, view, p.from, p.to)?,
+            None => diagnostics.clone(),
+        };
+        let mut context = json!({
+            "diagnostics": diagnostics,
+            "triggerKind": match p.trigger {
+                LspCodeActionTrigger::Invoked => 1,
+                LspCodeActionTrigger::Automatic => 2,
             },
-            |view| {
-                let mut context = json!({
-                    "diagnostics": diagnostics,
-                    "triggerKind": match p.trigger {
-                        LspCodeActionTrigger::Invoked => 1,
-                        LspCodeActionTrigger::Automatic => 2,
-                    },
-                });
-                if let Some(only) = &p.only {
-                    context["only"] = json!(only);
-                }
-                Ok(json!({
-                    "textDocument": view.text_document(),
-                    "range": { "start": view.position(p.from)?, "end": view.position(p.to)? },
-                    "context": context,
-                }))
-            },
-        )
-        .await?;
+        });
+        if let Some(only) = &p.only {
+            context["only"] = json!(only);
+        }
+        Ok(json!({
+            "textDocument": view.text_document(),
+            "range": { "start": view.position(p.from)?, "end": view.position(p.to)? },
+            "context": context,
+        }))
+    };
+    let answer = match &stored {
+        Some(key) => m.request_on(ctx, &key.server, request, params).await?,
+        None => m.request(ctx, request, params).await?,
+    };
     let (actions, truncated) = code_action_items(&answer.result);
     Ok(LspCodeActionList {
         server: answer.server,
@@ -1164,7 +1220,7 @@ fn answer(ctx: &Ctx, p: LspApplyEditAnswerParams) -> Result<(), RpcError> {
 }
 
 /// 핸들러를 붙인다(`crate::register` 가 부른다).
-pub fn register(router: &mut Router, manager: &LspManager) {
+pub fn register(router: &mut Router, manager: &LspManager, diagnostics: DiagnosticStore) {
     let m = Arc::new(manager.clone());
     let at = Arc::clone(&m);
     router.unary(LspRenamePrepare, move |ctx, p| {
@@ -1179,7 +1235,8 @@ pub fn register(router: &mut Router, manager: &LspManager) {
     let at = Arc::clone(&m);
     router.unary(LspCodeActionListMethod, move |ctx, p| {
         let m = Arc::clone(&at);
-        async move { code_actions(&m, &ctx, p).await }
+        let store = diagnostics.clone();
+        async move { code_actions(&m, &store, &ctx, p).await }
     });
     let at = Arc::clone(&m);
     router.unary(LspCodeActionResolve, move |ctx, p| {

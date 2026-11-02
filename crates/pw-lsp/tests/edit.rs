@@ -309,6 +309,99 @@ async fn code_actions_carry_the_diagnostics_of_the_same_version_and_put_preferre
     assert_eq!(sent["context"]["triggerKind"], 2);
 }
 
+/// 진단 없이 물으면(`⌥↩` · 전구) Host 가 진단 저장(M4-06)의 범위 조회로 채운다 — 코드 액션을 맡은 서버가 낸 것이고 요청 문서
+/// 버전의 것만(메인 판정 2026-11-02 — 나중에 병합한 M4-06 이 더했다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_actions_without_diagnostics_take_the_answering_servers_stored_ones() {
+    let env = Env::new(EnvOptions::default());
+    let file = env.root.join("app.py");
+    let mut records = std::collections::HashMap::new();
+    for server in ["basedpyright", "ruff"] {
+        let diagnostic = json!({ "range": range(0, 0, 0, 1), "severity": 1, "message": format!("{server} says"), "code": "E1", "data": { "fix": server } });
+        records.insert(
+            server,
+            env.fake(
+                server,
+                Scenario {
+                    capabilities: json!({ "textDocumentSync": 2, "codeActionProvider": true }),
+                    ..Scenario::default()
+                }
+                .on(
+                    "textDocument/didOpen",
+                    vec![Action::Notify {
+                        method: "textDocument/publishDiagnostics".into(),
+                        params: json!({ "uri": uri(&file), "version": 0, "diagnostics": [diagnostic] }),
+                    }],
+                )
+                .reply("textDocument/codeAction", Reply::result(json!([]))),
+            ),
+        );
+    }
+    let mut win = env.window();
+    let doc = ready(&env, &mut win, "app.py", "Python", "x = 1\n").await;
+    // 두 서버의 진단이 다 쌓일 때까지.
+    let stored = || {
+        let mut win = env.window();
+        let env = &env;
+        let file = file.clone();
+        async move {
+            let list = win
+                .call(
+                    "lsp.diagnostics.list",
+                    json!({ "projectId": env.id, "path": file, "limit": 10 }),
+                )
+                .await
+                .unwrap();
+            list["files"][0]["diagnostics"]
+                .as_array()
+                .map_or(0, Vec::len)
+        }
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while stored().await < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "both servers' diagnostics never arrived"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let list = win
+        .call(
+            "lsp.codeAction.list",
+            json!({ "docId": doc, "version": 0, "from": 0, "to": 0 }),
+        )
+        .await
+        .unwrap();
+    let server = list["server"].as_str().unwrap().to_owned();
+    let other = if server == "ruff" {
+        "basedpyright"
+    } else {
+        "ruff"
+    };
+    let sent = last_request(&records[server.as_str()], "textDocument/codeAction").unwrap();
+    assert_eq!(
+        sent["context"]["diagnostics"],
+        json!([{ "range": range(0, 0, 0, 1), "severity": 1, "message": format!("{server} says"), "code": "E1", "data": { "fix": server } }]),
+        "{sent}"
+    );
+    assert!(last_request(&records[other], "textDocument/codeAction").is_none());
+    // 문서가 바뀐 뒤(버전 1) 저장된 진단은 지난 텍스트의 것이라 싣지 않는다.
+    win.call(
+        "lsp.document.change",
+        json!({ "docId": doc, "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "y" }] }),
+    )
+    .await
+    .unwrap();
+    win.call(
+        "lsp.codeAction.list",
+        json!({ "docId": doc, "version": 1, "from": 0, "to": 0 }),
+    )
+    .await
+    .unwrap();
+    let sent = last_request(&records[server.as_str()], "textDocument/codeAction").unwrap();
+    assert_eq!(sent["context"]["diagnostics"], json!([]), "{sent}");
+}
+
 /// 편집이 없는 액션은 서버가 `codeAction/resolve` 를 하면 물어 편집 · 명령을 받는다. `Command` 는 그대로 명령이다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resolving_asks_the_server_for_the_edit_and_keeps_commands() {

@@ -1200,6 +1200,47 @@ impl DiagnosticStore {
     }
 }
 
+/// 다듬은 진단 → LSP `Diagnostic`(코드 액션 요청의 문맥 — M4-12. 웹뷰의 `lspDiagnostic` 과 같은 꼴).
+pub fn to_lsp(d: &LspDiagnostic) -> Value {
+    let mut out = json!({
+        "range": d.range,
+        "severity": d.severity.index() + 1,
+        "message": d.message,
+    });
+    if let Some(code) = &d.code {
+        out["code"] = json!(code);
+    }
+    if let Some(source) = &d.source {
+        out["source"] = json!(source);
+    }
+    if let Some(href) = &d.code_href {
+        out["codeDescription"] = json!({ "href": href });
+    }
+    if !d.tags.is_empty() {
+        out["tags"] = d
+            .tags
+            .iter()
+            .map(|t| match t {
+                LspDiagnosticTag::Unnecessary => 1,
+                LspDiagnosticTag::Deprecated => 2,
+            })
+            .collect();
+    }
+    if !d.related.is_empty() {
+        out["relatedInformation"] = d
+            .related
+            .iter()
+            .map(
+                |r| json!({ "location": { "uri": r.uri, "range": r.range }, "message": r.message }),
+            )
+            .collect();
+    }
+    if let Some(data) = &d.data {
+        out["data"] = data.clone();
+    }
+    out
+}
+
 fn event_of(project_id: &str, path: &str, file: Option<&FileDiags>) -> Option<LspDiagnosticsEvent> {
     let file = file?;
     let (diagnostics, truncated) = file.merged();

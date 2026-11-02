@@ -17,7 +17,12 @@ import {
   gotoDiagnostic,
   HOVER_DELAY,
 } from "./diagnostics";
-import { type DiagnosticPopupData, diagnosticsUi, ENGLISH_STRINGS } from "./diagnostics-model";
+import {
+  type DiagnosticPopupData,
+  diagnosticsUi,
+  ENGLISH_STRINGS,
+  popupData,
+} from "./diagnostics-model";
 import type { LspDocument } from "./lsp-sessions";
 import { fakeLspServer } from "./lsp-testing";
 import { currentPopup, popupBase } from "./popup";
@@ -330,6 +335,13 @@ describe("moving and popups", () => {
       tags: [2],
       data: { rendered: "x" },
     });
+    // 버전이 없는 진단이 섞이면 버전을 싣지 않는다(M4-12 의 「빠른 수정」 은 그때 진단을 넘기지 않는다).
+    expect(data.version).toBeUndefined();
+    // 모두 같은 버전이면 그 버전 — 범위가 맞는 문서 버전이다. 서로 다르면 싣지 않는다.
+    const at = (version: number | null) =>
+      diag(1, 13, 16, "error", { origin: "pull", version, message: `v${version}` });
+    expect(popupData([at(3), at(3)]).version).toBe(3);
+    expect(popupData([at(3), at(2)]).version).toBeUndefined();
   });
 
   it("opens the diagnostic popup after the pointer rests on a range, with the message, server, source and a web link", () => {

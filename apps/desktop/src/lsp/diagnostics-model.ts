@@ -67,13 +67,21 @@ export interface DiagnosticPopupData {
   readonly lsp: readonly Record<string, unknown>[];
   /** `diagnostics[i]` 를 낸 서버 id. */
   readonly servers: readonly string[];
+  /**
+   * `lsp` 의 범위가 맞는 문서 버전 — 모든 진단이 같은 버전일 때만 있다(버전이 없거나 서로 다르면 없다). M4-12 의 「빠른 수정」 은
+   * 이것이 없으면 진단을 싣지 않고, Host 는 지금 문서 버전과 다르면 버린다(편집 뒤의 지난 범위를 서버에 넘기지 않는다).
+   */
+  readonly version?: number;
 }
 
 export function popupData(diagnostics: readonly LspDiagnostic[]): DiagnosticPopupData {
+  const versions = new Set(diagnostics.map((d) => d.version));
+  const [version] = versions;
   return {
     diagnostics,
     lsp: diagnostics.map(lspDiagnostic),
     servers: diagnostics.map((d) => d.server),
+    ...(versions.size === 1 && typeof version === "number" && { version }),
   };
 }
 
