@@ -7,9 +7,12 @@
 mod common;
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use pw_core::bus::Scope;
+use pw_core::bus::{Filter, Scope};
+use pw_fs::index::{FileFlags, FileListObserver};
 use pw_fs::watch::{FsChangeKind, FsChanged, TOPIC_CHANGED};
 use pw_lsp::fake::{Action, Reply, Scenario};
 use pw_lsp::manager::ManagerOptions;
@@ -542,7 +545,8 @@ async fn the_first_list_of_a_watch_is_a_baseline() {
     assert!(announced.iter().any(|(p, _)| p == "Cargo.toml"));
 }
 
-/// 리뷰 H1: 쌓기 상한을 넘친 바뀜은 버리되 조용히 잃지 않는다 — 그 루트를 다시 알려(`rescan` → 다시 만든 목록) 버린 파일도 간다.
+/// 리뷰 H1: 쌓기 상한을 넘친 바뀜은 버리되 조용히 잃지 않는다 — 그 서버에만 인덱스의 지금 목록을 다시 청해(`FileIndex::replay`)
+/// 버린 파일도 간다. 재리뷰 R1: 버스에 `rescan` 을 내지 않고 같은 루트의 다른 관찰자도 아무것도 받지 않는다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_overflow_announces_the_folder_again() {
     let env = Env::new(options(
@@ -562,6 +566,12 @@ async fn an_overflow_announces_the_folder_again() {
     );
     let _win = ready(&env, &record, "src/open.rs").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
+    let other = Arc::new(Lists::default());
+    env.files
+        .as_ref()
+        .unwrap()
+        .observe_queued(Arc::clone(&other) as Arc<dyn FileListObserver>);
+    let mut bus = env.bus.subscribe(Filter::all().topics([TOPIC_CHANGED]));
     let before = notifications(&env, &record).len();
     let events: Vec<_> = paths
         .iter()
@@ -587,4 +597,71 @@ async fn an_overflow_announces_the_folder_again() {
         .filter(|(_, t)| *t == 1)
         .count();
     assert_eq!(created, 3, "three fitted in the queue");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(other.count(), 0, "another observer got a list");
+    let mut published = Vec::new();
+    while let Some(received) = bus.try_recv() {
+        published.push(received);
+    }
+    // 이 시험이 낸 `fs.changed` 하나뿐(`rescan` 없음).
+    assert_eq!(published.len(), 1, "{published:?}");
+}
+
+/// 관리자의 파일 바뀜 구독이 넘치면(`Lagged` — `LspManager::fs_lagged`) 떠 있는 서버마다 그 루트의 지금 목록으로 다시 알린다 —
+/// 그 사이 잃은 바뀜을 메운다. 버스에 아무것도 내지 않고 같은 루트의 다른 관찰자는 받지 않는다(재리뷰 R1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lagged_subscription_announces_the_folder_again() {
+    let env = Env::new(options(WatchLimits::default(), true, true));
+    env.file("src/a.rs", "");
+    env.file("notes.txt", "");
+    let _lease = env.watch_project().await;
+    let record = env.fake(
+        "rust-analyzer",
+        watching(json!([{ "globPattern": "**/*.rs" }])),
+    );
+    let _win = ready(&env, &record, "src/open.rs").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let other = Arc::new(Lists::default());
+    env.files
+        .as_ref()
+        .unwrap()
+        .observe_queued(Arc::clone(&other) as Arc<dyn FileListObserver>);
+    let mut bus = env.bus.subscribe(Filter::all().topics([TOPIC_CHANGED]));
+    let before = notifications(&env, &record).len();
+    env.manager.fs_lagged();
+    settle(&env, &record, before + 1).await;
+    let mut announced: Vec<(String, u64)> = notifications(&env, &record)[before..]
+        .iter()
+        .flatten()
+        .cloned()
+        .collect();
+    announced.sort();
+    announced.dedup();
+    assert_eq!(announced, [("src/a.rs".to_owned(), 2)]);
+    assert_eq!(other.count(), 0, "another observer got a list");
+    assert!(bus.try_recv().is_none(), "something went out on the bus");
+}
+
+/// 받은 목록(`listed` · `rebuilt`) 수를 세는 관찰자.
+#[derive(Default)]
+struct Lists(AtomicUsize);
+
+impl Lists {
+    fn count(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+impl FileListObserver for Lists {
+    fn listed(&self, _: &str, _: &Path, _: Vec<(Arc<str>, FileFlags)>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn rebuilt(&self, _: &str, _: &Path, _: Vec<(Arc<str>, FileFlags)>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn changed(&self, _: &str, _: &Path, _: Vec<String>, _: Vec<(Arc<str>, FileFlags)>) {}
+
+    fn dropped(&self, _: &str, _: &Path) {}
 }

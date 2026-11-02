@@ -25,20 +25,23 @@
 //! **상한과 넘칠 때**([`WatchLimits`]) — 맞는 바뀜을 조용히 버리는 길을 두지 않는다(리뷰 H1):
 //! - 글롭 수 · 글롭 길이를 넘거나 읽지 못하는 글롭은 버리지 않고 **모두 맞음**으로 둔다(그 기준 폴더 · 종류 안에서) — 넘치게 보내는
 //!   것이 빠뜨리는 것보다 낫다(서버는 내용이 같으면 무시한다).
-//! - 보내기 전에 쌓아 둘 바뀜 수를 넘치면 그 뒤 것은 버리되, 그 루트를 **다시 알리게** 한다 — 관리자가 버스에 그 루트의 `rescan` 을
-//!   내고 인덱스가 다시 만든 목록으로 메운다(지운 파일은 목록에 없어 알리지 못한다).
+//! - 보내기 전에 쌓아 둘 바뀜 수를 넘치면 그 뒤 것은 버리되, 그 자리에만 그 루트를 **다시 알리게** 한다 — 관리자가 파일 목록
+//!   인덱스에 이 자리의 관찰자 하나에만 지금 목록을 청하고(`FileIndex::replay` — 다시 만들지 않는다) 그 목록으로 메운다(지운 파일은
+//!   목록에 없어 알리지 못한다). 관리자의 버스 구독이 넘쳐도(`Lagged`) 자리마다 같은 길로 메운다. 버스에 `rescan` 을 내지 않는다 —
+//!   내면 그 토픽의 구독자 전부(런타임 → 서버마다 「다시 시작 권함」, git · 트리 · 열린 문서 · 심볼 인덱스)가 움직인다(재리뷰 R1).
+//!   글롭 바이트 합([`WatchLimits::max_total_pattern_bytes`])을 넘는 등록도 「모두 맞음」 이다(재리뷰 R3).
 //! - 보내는 속도: 알림 하나에 [`WatchLimits::batch_events`] 바뀜, 알림 사이 [`WatchLimits::batch_interval`]. 글롭 맞추기는 블로킹
 //!   스레드에서 한 번에 [`WatchLimits::scan_step`] 경로까지 — 큰 다시 알리기도 목록을 앞에서부터 차례로 걷는다(버리지 않는다).
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 use std::time::Duration;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use lsp_types::Registration;
-use pw_fs::index::{FileFlags, FileListObserver};
+use pw_fs::index::{FileFlags, FileListObserver, ObserverId};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
@@ -55,6 +58,9 @@ pub struct WatchLimits {
     pub max_watchers: usize,
     /// 글롭 하나의 바이트 수. 넘는 글롭은 그 기준 폴더 · 종류의 모든 경로로 본다(정규식이 커지는 것을 막는다).
     pub max_pattern_bytes: usize,
+    /// 서버 하나가 등록한 (쓸 수 있는) 글롭의 바이트 합. 넘으면 그 서버는 모든 경로 · 종류를 받는다(경고) — 컴파일 비용은 글롭 수가
+    /// 아니라 정규식 크기를 따른다(긴 글롭 1만 개는 블로킹 스레드를 수십 초 쥔다 · 재리뷰 R3).
+    pub max_total_pattern_bytes: usize,
     /// 보내기 전에 쌓아 둘 바뀜 수. 넘친 것은 버리고 그 루트를 다시 알리게 한다.
     pub max_pending: usize,
     /// 블로킹 스레드에서 한 번에 글롭에 맞춰 볼 경로 수(그 사이 런타임 · 다른 서버가 기다리지 않게 나눈다).
@@ -70,6 +76,7 @@ impl Default for WatchLimits {
         Self {
             max_watchers: 10_000,
             max_pattern_bytes: 4_096,
+            max_total_pattern_bytes: 256 * 1024,
             max_pending: 65_536,
             scan_step: 20_000,
             batch_events: 1_000,
@@ -176,6 +183,15 @@ impl Watchers {
         }
         if total > limits.max_watchers {
             tracing::warn!(target: "pw_lsp", %server, total, max = limits.max_watchers, "too many file watchers; sending every change instead");
+            out.everything = 7;
+            return out;
+        }
+        let bytes: usize = parsed
+            .iter()
+            .filter_map(|(_, _, glob)| glob.as_ref().ok().map(String::len))
+            .sum();
+        if bytes > limits.max_total_pattern_bytes {
+            tracing::warn!(target: "pw_lsp", %server, bytes, max = limits.max_total_pattern_bytes, "file watcher globs are too large; sending every change instead");
             out.everything = 7;
             return out;
         }
@@ -316,9 +332,11 @@ pub(crate) struct Feed {
     pending: Mutex<Pending>,
     wake: Notify,
     closed: AtomicBool,
-    /// 쌓기가 넘쳐 그 루트를 다시 알리게 했다 — 다시 만든 목록이 올 때까지 다시 청하지 않는다.
+    /// 쌓기가 넘쳐 그 루트의 지금 목록을 다시 청했다 — 그 목록이 올 때까지 다시 청하지 않는다.
     refilling: AtomicBool,
     max_pending: usize,
+    /// 파일 목록 인덱스에 붙인 이 자리의 관찰자(`FileIndex::replay` 로 이 자리에만 지금 목록을 다시 청한다).
+    observer: OnceLock<ObserverId>,
 }
 
 impl Feed {
@@ -329,6 +347,7 @@ impl Feed {
             closed: AtomicBool::new(false),
             refilling: AtomicBool::new(false),
             max_pending,
+            observer: OnceLock::new(),
         })
     }
 
@@ -348,7 +367,20 @@ impl Feed {
         overflowed && !self.refilling.swap(true, Ordering::SeqCst)
     }
 
-    /// 다시 만든 목록으로 다시 알린다.
+    /// 다시 청할 수 없었다(인덱스에 그 루트 · 관찰자가 없다) — 다음 넘침에 다시 청한다.
+    pub(crate) fn refill_failed(&self) {
+        self.refilling.store(false, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_observer(&self, id: ObserverId) {
+        let _ = self.observer.set(id);
+    }
+
+    pub(crate) fn observer(&self) -> Option<ObserverId> {
+        self.observer.get().copied()
+    }
+
+    /// 다시 만든 목록(또는 다시 청한 지금 목록)으로 다시 알린다.
     pub(crate) fn rescan(&self, files: Vec<Arc<str>>) {
         self.refilling.store(false, Ordering::SeqCst);
         self.pending().rescan = Some(Arc::new(files));
@@ -674,7 +706,7 @@ mod tests {
     }
 
     /// 상한 · 읽지 못하는 글롭은 버리지 않고 「모두 맞음」 으로 둔다(리뷰 H1): 기준 폴더가 있으면 그 폴더 · 종류 안에서, 기준 없는
-    /// 글롭이나 글롭 수를 넘으면 모든 경로 · 종류. 다른 메서드의 등록은 보지 않는다.
+    /// 글롭이나 글롭 수 · 글롭 바이트 합(재리뷰 R3)을 넘으면 모든 경로 · 종류. 다른 메서드의 등록은 보지 않는다.
     #[test]
     fn watchers_over_the_limits_or_unreadable_match_everything_they_could() {
         let limits = WatchLimits {
@@ -738,6 +770,31 @@ mod tests {
             },
         );
         assert!(wants(&w, "/w/root/x.txt", Change::Deleted));
+        // 글롭 바이트 합 상한을 넘으면(글롭 하나하나는 길이 상한 안) 모든 경로 · 종류. 상한 안이면 글롭대로.
+        let three = [registration(json!([
+            { "globPattern": "**/*.rs" },
+            { "globPattern": "**/*.ts" },
+            { "globPattern": "**/*.md" },
+        ]))];
+        let w = Watchers::compile(
+            "s",
+            &three,
+            &WatchLimits {
+                max_total_pattern_bytes: 20,
+                ..WatchLimits::default()
+            },
+        );
+        assert!(wants(&w, "/w/root/x.txt", Change::Deleted));
+        let w = Watchers::compile(
+            "s",
+            &three,
+            &WatchLimits {
+                max_total_pattern_bytes: 21,
+                ..WatchLimits::default()
+            },
+        );
+        assert!(!wants(&w, "/w/root/x.txt", Change::Deleted));
+        assert!(wants(&w, "/w/root/x.md", Change::Deleted));
     }
 
     /// 리뷰 H1 재현: rust-analyzer 꼴로 패키지 300 개(기준 폴더마다 글롭 셋 — 900 개)를 등록하고 다시 만든 목록 30,000 파일(모두
@@ -848,7 +905,7 @@ mod tests {
         assert_eq!(feed.take().unwrap().rescan.unwrap().len(), 1);
     }
 
-    /// 쌓기 상한을 처음 넘칠 때 한 번만 다시 알리기를 청한다 — 다시 만든 목록이 오면 다시 청할 수 있다.
+    /// 쌓기 상한을 처음 넘칠 때 한 번만 다시 알리기를 청한다 — 목록이 오거나 청하지 못했으면 다시 청할 수 있다.
     #[test]
     fn an_overflow_asks_for_one_refill() {
         let feed = Feed::new(2);
@@ -863,5 +920,8 @@ mod tests {
         feed.rescan(Vec::new());
         assert!(!feed.push(&[e(4), e(5)]));
         assert!(feed.push(&[e(6)]));
+        // 청하지 못했으면(인덱스에 그 루트가 없음) 다음 넘침에 다시 청한다.
+        feed.refill_failed();
+        assert!(feed.push(&[e(7)]));
     }
 }

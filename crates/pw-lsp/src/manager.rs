@@ -1208,11 +1208,13 @@ impl LspManager {
     ) {
         let files = self.inner.host.get().and_then(|h| h.parts.files.clone());
         let observation = files.as_ref().map(|files| {
-            files.observe_queued(Arc::new(FeedObserver {
+            let id = files.observe_queued(Arc::new(FeedObserver {
                 project_id: key.project_id.clone(),
                 root: scope.clone(),
                 feed: Arc::downgrade(&feed),
-            }))
+            }));
+            feed.set_observer(id);
+            id
         });
         let link = FeedLink {
             manager: self.clone(),
@@ -1245,8 +1247,8 @@ impl LspManager {
     }
 
     /// `fs.changed` 하나를 그 루트의 떠 있는 서버들의 자리에 쌓는다(`follow` 가 부른다). `rescan` 이면 경로가 없다 — 파일 목록
-    /// 인덱스가 다시 만든 목록으로 다시 알린다(`crate::watched` 머리 주석). 쌓기가 넘친 자리가 있으면 그 루트의 `rescan` 을 버스에
-    /// 내어 다시 만든 목록으로 메운다(리뷰 H1 — 버린 바뀜을 조용히 잃지 않게).
+    /// 인덱스가 다시 만든 목록으로 다시 알린다(`crate::watched` 머리 주석). 쌓기가 넘친 자리는 그 자리에만 인덱스의 지금 목록을 다시
+    /// 청해 메운다(리뷰 H1 — 버린 바뀜을 조용히 잃지 않게, [`Self::refill`]).
     pub fn fs_changed(&self, project_id: &str, changed: &pw_fs::watch::FsChanged) {
         if changed.paths.is_empty() {
             return;
@@ -1270,39 +1272,42 @@ impl LspManager {
                 change: (*kind).into(),
             })
             .collect();
-        let mut refill = false;
-        for feed in feeds {
-            refill |= feed.push(&events);
-        }
-        if refill {
-            self.refill(project_id, changed);
+        let overflowed: Vec<Arc<Feed>> = feeds.into_iter().filter(|f| f.push(&events)).collect();
+        if !overflowed.is_empty() {
+            tracing::warn!(target: "pw_lsp", root = %changed.root, servers = overflowed.len(), "file changes overflowed; announcing the folder again");
+            self.refill(project_id, root, &overflowed);
         }
     }
 
-    /// 그 루트를 다시 알리게 한다: 버스에 그 루트의 `rescan` 을 낸다 — 파일 목록 인덱스가 다시 만들고 그 목록(`rebuilt`)으로 자리를
-    /// 메운다. 같은 루트를 보는 다른 관찰자(심볼 인덱스 · 다른 서버)도 다시 만든다 — 쌓기 상한(기본 65,536)을 넘는 드문 때의 값이다.
-    fn refill(&self, project_id: &str, changed: &pw_fs::watch::FsChanged) {
-        let Some(host) = self.inner.host.get() else {
-            return;
-        };
-        if host.parts.files.is_none() {
-            tracing::warn!(target: "pw_lsp", root = %changed.root, "file changes overflowed and there is no file index to announce the folder again; some changes are lost");
-            return;
+    /// 관리자의 파일 바뀜 구독이 넘쳤다(`Lagged` — 어느 루트의 `fs.changed` 를 잃었는지 모른다): 떠 있는 서버의 자리마다 그 루트의
+    /// 지금 목록을 다시 청해 메운다([`Self::refill`]).
+    pub fn fs_lagged(&self) {
+        let feeds: Vec<(String, PathBuf, Arc<Feed>)> = lock(&self.inner.state)
+            .instances
+            .iter()
+            .filter_map(|(k, i)| Some((k.project_id.clone(), i.scope.clone(), i.feed.clone()?)))
+            .collect();
+        for (project_id, root, feed) in feeds {
+            self.refill(&project_id, &root, &[feed]);
         }
-        tracing::warn!(target: "pw_lsp", root = %changed.root, "file changes overflowed; announcing the folder again");
-        let rescan = pw_fs::watch::FsChanged {
-            root: changed.root.clone(),
-            worktree: changed.worktree.clone(),
-            paths: Vec::new(),
-            kinds: Vec::new(),
-            rescan: true,
-        };
-        if let Err(e) = host.parts.bus.publish(
-            Scope::Project(project_id.to_owned()),
-            pw_fs::watch::TOPIC_CHANGED,
-            &rescan,
-        ) {
-            tracing::warn!(target: "pw_lsp", %e, "cannot ask for the folder to be announced again");
+    }
+
+    /// 그 자리들에 그 루트의 지금 목록을 다시 보내게 한다: 파일 목록 인덱스에 그 자리의 관찰자 하나에만 지금 목록을 청한다
+    /// (`FileIndex::replay` — 다시 만들지 않는다). 그 목록(`rebuilt`)으로 버린 바뀜을 메운다(지운 파일은 목록에 없어 메우지 못한다).
+    /// 같은 루트를 보는 다른 관찰자(심볼 인덱스 · 다른 서버)와 버스의 `fs.changed` 구독자(런타임 · git · 트리 · 열린 문서)는 움직이지
+    /// 않는다 — 버스에 `rescan` 을 내면 런타임이 그 프로젝트의 서버 전부를 「다시 시작 권함」 으로 바꾸는 등 모두가 움직인다(재리뷰
+    /// R1). 인덱스가 없거나 그 루트를 열지 않았으면 메우지 못한다(경고).
+    fn refill(&self, project_id: &str, root: &Path, feeds: &[Arc<Feed>]) {
+        let files = self.inner.host.get().and_then(|h| h.parts.files.clone());
+        for feed in feeds {
+            let asked = match (&files, feed.observer()) {
+                (Some(files), Some(id)) => files.replay(id, project_id, root),
+                _ => false,
+            };
+            if !asked {
+                feed.refill_failed();
+                tracing::warn!(target: "pw_lsp", root = %root.display(), "there is no file list to announce the folder again; some file changes are lost");
+            }
         }
     }
 
@@ -1687,11 +1692,10 @@ impl LspManager {
                     }
                 }
                 Received::Lagged(n) => {
-                    // 그 사이의 `fs.changed` 는 되찾지 않는다. 버스의 큐는 구독마다 따로 넘친다 — 파일 목록 인덱스의 구독이 함께
-                    // 넘쳐 다시 만들 때만 그 목록으로 메워진다. 이 구독만 넘치면 잃는다(드묾: 큐 256, 감시는 루트마다 75 ms 창에
-                    // 하나 — 이 루프가 수십 초 막혀야 넘친다). 되찾으려면 「관찰자 하나에 지금 목록을 다시 보내기」 가 필요하다 —
-                    // 15-m4-plan §3(v1.0 전).
-                    tracing::warn!(target: "pw_lsp", dropped = n, "missed file change events; some changes may not reach language servers");
+                    // 버스의 큐는 구독마다 따로 넘친다 — 이 구독만 넘쳤으면 파일 목록 인덱스는 그 바뀜을 적용했다. 자리마다 그
+                    // 루트의 지금 목록을 다시 청해 메운다(지운 파일은 메우지 못한다).
+                    tracing::warn!(target: "pw_lsp", dropped = n, "missed file change events; announcing the watched folders again");
+                    self.fs_lagged();
                 }
             }
         }
