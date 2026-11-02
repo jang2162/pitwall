@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use pw_core::registry::exec::{Launch, exec_grant};
 use pw_rpc::{Router, rpc_method};
 use serde::{Deserialize, Serialize};
 
@@ -223,7 +224,8 @@ rpc_method! {
         roles: [Owner],
     }
 
-    /// 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다.
+    /// 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다. 그 프로젝트 창의 연결만(다른 연결은
+    /// permission denied).
     pub LspStatusGet: "lsp.status.get" {
         params: LspStatusGetParams,
         result: LspStatus,
@@ -276,9 +278,14 @@ pub fn register(router: &mut Router, manager: &LspManager) {
         }
     });
     let m = manager.clone();
-    router.unary(LspStatusGet, move |_ctx, params: LspStatusGetParams| {
+    router.unary(LspStatusGet, move |ctx, params: LspStatusGetParams| {
         let m = m.clone();
-        async move { Ok(m.status(&params.project_id)) }
+        async move {
+            // 그 프로젝트 창의 연결만 읽는다 — 상태에는 작업 공간 루트(실제 경로)가 든다. 이벤트 `lsp.status` 도 프로젝트 범위로만
+            // 나간다(M4-05 리뷰 L2). 미신뢰여도 읽는다(`untrusted` 를 보여야 한다).
+            exec_grant(ctx.scope(), &params.project_id, &Launch::Process)?;
+            Ok(m.status(&params.project_id))
+        }
     });
     let m = manager.clone();
     router.unary(LspServerRestart, move |ctx, params| {

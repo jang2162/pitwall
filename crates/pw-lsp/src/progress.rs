@@ -5,6 +5,10 @@
 //! 서버가 취소를 받는다고 알린 진행(`cancellable`)에 `window/workDoneProgress/cancel` 을 보낸다.
 //!
 //! 진행 토큰은 서버가 정한 값(글 · 수)이라 서버마다 따로 센다 — 인스턴스마다 [`Tracker`] 하나다.
+//!
+//! 상태 이벤트(`lsp.status`)는 진행이 생기고 끝날 때와 진행률이 바뀔 때만 다시 낸다 — 문구만 바뀐 `report`(큰 작업 공간을 색인하는
+//! rust-analyzer 는 많이 낸다)는 `Task` 로만 나간다. 동시 진행은 서버마다 [`MAX_ACTIVE`] 개까지 — `end` 없는 `begin` 이 쌓이지
+//! 않게, 넘는 `begin` 은 버린다(M4-05 리뷰 L3).
 
 use std::collections::BTreeMap;
 use std::sync::Weak;
@@ -17,6 +21,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::methods::LspProgress;
 use crate::server::LanguageServer;
+
+/// 서버 하나가 동시에 가질 수 있는 진행 수.
+pub(crate) const MAX_ACTIVE: usize = 64;
 
 /// 진행 하나.
 struct Active {
@@ -51,7 +58,7 @@ fn task_progress(info: &LspProgress) -> TaskProgress {
 }
 
 impl Tracker {
-    /// `$/progress` 하나. 바뀌었으면 참(상태 이벤트를 다시 낸다). 진행이 아닌 것(부분 결과 등)은 무시한다.
+    /// `$/progress` 하나. 상태 이벤트를 다시 낼 만큼 바뀌었으면 참(머리 주석). 진행이 아닌 것(부분 결과 등)은 무시한다.
     pub(crate) fn handle(
         &mut self,
         params: &Value,
@@ -73,6 +80,10 @@ impl Tracker {
         self.clock += 1;
         match value.get("kind").and_then(Value::as_str) {
             Some("begin") => {
+                if !self.active.contains_key(&key) && self.active.len() >= MAX_ACTIVE {
+                    tracing::debug!(target: "pw_lsp", "dropping a progress beyond {MAX_ACTIVE} at once");
+                    return false;
+                }
                 let info = LspProgress {
                     title: text("title").unwrap_or_default(),
                     message: text("message"),
@@ -100,12 +111,13 @@ impl Tracker {
                 if let Some(message) = text("message") {
                     active.info.message = Some(message);
                 }
-                if percentage.is_some() {
+                let moved = percentage.is_some() && percentage != active.info.percentage;
+                if moved {
                     active.info.percentage = percentage;
                 }
                 active.touched = self.clock;
                 let _ = active.tx.send(task_progress(&active.info));
-                true
+                moved
             }
             Some("end") => self.active.remove(&key).is_some(),
             _ => false,
@@ -156,4 +168,60 @@ fn start_task(
         }
     });
     tx
+}
+
+#[cfg(test)]
+mod tests {
+    use pw_core::bus::{DEFAULT_CAPACITY, EventBus};
+
+    use super::*;
+
+    fn progress(token: u64, value: Value) -> Value {
+        json!({ "token": token, "value": value })
+    }
+
+    /// 리뷰 L3: 상태 이벤트는 생기고 끝날 때 · 진행률이 바뀔 때만. 동시 진행은 [`MAX_ACTIVE`] 개까지.
+    #[tokio::test]
+    async fn only_begin_end_and_percentage_changes_republish_and_actives_are_capped() {
+        let tasks = TaskSpawner::new(
+            EventBus::new(DEFAULT_CAPACITY),
+            Scope::Host,
+            CancellationToken::new(),
+        );
+        let mut tracker = Tracker::default();
+        let mut handle = |p: Value| tracker.handle(&p, &tasks, "p", Weak::new());
+        assert!(handle(progress(
+            1,
+            json!({ "kind": "begin", "title": "index" })
+        )));
+        assert!(!handle(progress(
+            1,
+            json!({ "kind": "report", "message": "a.rs" })
+        )));
+        assert!(handle(progress(
+            1,
+            json!({ "kind": "report", "percentage": 10 })
+        )));
+        assert!(!handle(progress(
+            1,
+            json!({ "kind": "report", "percentage": 10, "message": "b.rs" })
+        )));
+        assert!(handle(progress(
+            1,
+            json!({ "kind": "report", "percentage": 11 })
+        )));
+        assert!(handle(progress(1, json!({ "kind": "end" }))));
+        for token in 0..MAX_ACTIVE as u64 {
+            assert!(handle(progress(
+                100 + token,
+                json!({ "kind": "begin", "title": "t" })
+            )));
+        }
+        assert!(!handle(progress(
+            9999,
+            json!({ "kind": "begin", "title": "too many" })
+        )));
+        assert_eq!(tracker.active.len(), MAX_ACTIVE);
+        assert_eq!(tracker.latest().unwrap().title, "t");
+    }
 }

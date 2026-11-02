@@ -72,7 +72,12 @@ async fn an_untrusted_project_starts_nothing_until_trusted_and_revoking_ends_it_
     env.wait_state("rust-analyzer", LspInstanceState::Ready)
         .await;
     assert_eq!(env.manager.spawn_count(), 1);
-    // 신뢰 전에 연 문서(lib.rs)도 서버가 뜨면 열린다. main.rs 는 다시 연 것 하나만.
+    // 신뢰 전에 연 문서(lib.rs)도 서버가 뜨면 열린다. main.rs 는 다시 연 것 하나만. 가짜 서버가 기록 파일에 적을 때까지 기다린다.
+    eventually(Duration::from_secs(2), || {
+        methods_of(&record, "textDocument/didOpen").len() >= 2
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
     let opened: Vec<Value> = methods_of(&record, "textDocument/didOpen");
     assert_eq!(opened.len(), 2, "{opened:?}");
     let pid = env.manager.pids(&env.id)[0];
@@ -190,20 +195,36 @@ fn boundaries(text: &str) -> Vec<(u32, usize)> {
     out
 }
 
-/// LSP 위치 → 바이트(시험이 따로 계산한다 — 구현의 표를 쓰지 않는다).
+/// LSP 위치 → 바이트. 시험이 LSP 3.17 「Text Documents」 의 문장대로 따로 계산한다 — 구현의 표를 쓰지 않는다: 줄 끝은 `\r\n` ·
+/// `\r` · `\n`, 줄 길이를 넘는 `character` 는 줄 끝으로(M4-05 리뷰 M3 — 앞의 판은 구현처럼 `\n` 만 줄 끝으로 봐 이 차이를 못 봤다).
 fn byte_at(text: &str, line: u64, character: u64) -> usize {
-    let mut start = 0;
-    for _ in 0..line {
-        start += text[start..].find('\n').unwrap() + 1;
-    }
+    let b = text.as_bytes();
+    let (mut start, mut i, mut at) = (0, 0, 0);
+    let end = loop {
+        let ending = match b.get(i) {
+            None => break b.len(),
+            Some(b'\r') if b.get(i + 1) == Some(&b'\n') => 2,
+            Some(b'\r' | b'\n') => 1,
+            Some(_) => 0,
+        };
+        if ending == 0 {
+            i += 1;
+        } else if at == line {
+            break i;
+        } else {
+            at += 1;
+            i += ending;
+            start = i;
+        }
+    };
     let mut u = 0;
-    for (i, ch) in text[start..].char_indices() {
-        if u >= character || ch == '\n' {
+    for (i, ch) in text[start..end].char_indices() {
+        if u >= character {
             return start + i;
         }
         u += ch.len_utf16() as u64;
     }
-    text.len()
+    end
 }
 
 /// 서버가 받은 `didOpen` · `didChange` 를 차례로 적용한 텍스트.
@@ -257,13 +278,16 @@ async fn thousand_edits(sync: u8) {
         },
     );
     let file = env.file("src/lib.rs", "");
-    let mut text = String::from("// 한글 주석 🦀\nfn main() {\n    let s = \"😀👍🏽\";\n}\n");
+    let mut text = String::from("// 한글 주석 🦀\r\nfn main() {\n    let s = \"😀👍🏽\";\r}\n");
     let mut win = env.window();
     let opened = win.open(&env, &file, "Rust", &text).await;
     let doc = doc_id(&opened);
     env.wait_state("rust-analyzer", LspInstanceState::Ready)
         .await;
-    let pool = ["한", "🦀", "a", "\n", "글자 ", "😀x", "", "\r\n", "👍🏽"];
+    // 섞인 줄바꿈(`\r` · `\r\n` · `\n`) — 웹뷰는 섞인 문서의 `\r` 을 글자로 남긴다(리뷰 M3).
+    let pool = [
+        "한", "🦀", "a", "\n", "글자 ", "😀x", "", "\r\n", "👍🏽", "\r", "x\r",
+    ];
     let mut rng = Rng(0x5eed_1234_abcd);
     for version in 1..=1000u32 {
         let b = boundaries(&text);
@@ -1110,7 +1134,8 @@ async fn one_server_filling_its_events_does_not_end_another() {
             // 받는 쪽을 느리게 — ruff 의 채널이 찬 채로 있다.
             manager.on_notification("noise/x", move |_, _| {
                 // 일꾼 스레드를 막지 않고(`block_in_place` — 그 일꾼의 다른 태스크는 다른 스레드로 옮겨진다) 이 서버의 이벤트
-                // 태스크만 붙잡는다. 시험이 실패해도 런타임이 끝나도록 5 s 로 묶는다.
+                // 태스크만 붙잡는다. 시험이 실패해도 런타임이 끝나도록 5 s 로 묶는다. 그 일꾼 스레드는 블로킹 풀로 넘어가 쉬다 끝날
+                // 수 있지만 서버에는 닿지 않는다 — fork 는 전용 띄우기 스레드가 한다(`a_server_outlives_the_thread_that_asked_for_it`).
                 tokio::task::block_in_place(|| {
                     let until = std::time::Instant::now() + Duration::from_secs(5);
                     while s.load(Ordering::SeqCst) && std::time::Instant::now() < until {
@@ -1187,9 +1212,10 @@ async fn one_server_filling_its_events_does_not_end_another() {
 
 // ---- ⓑ Linux: 띄운 스레드 ----------------------------------------------------------------------------------------------------
 
-/// ⓑ(M4-01 재리뷰 N3) 서버는 async 문맥에서 띄운다 — 해석을 한 블로킹 스레드가 쉬다 끝나도(여기선 0.1 s) 서버는 산다. Linux 의
-/// `PR_SET_PDEATHSIG` 는 띄운 스레드가 끝날 때 신호를 보내므로, 블로킹 스레드에서 띄우면 이 시험이 실패한다(macOS 에는 없는
-/// 증상이라 macOS 에서는 늘 통과한다 — CI ubuntu `check` 가 본다).
+/// ⓑ(M4-01 재리뷰 N3) 관리자를 거쳐 띄운 서버는 해석을 한 블로킹 스레드가 쉬다 끝나도(여기선 0.1 s) 산다. Linux 의
+/// `PR_SET_PDEATHSIG` 는 fork 한 스레드가 끝날 때 신호를 보내므로, 그 스레드에서 fork 하면 이 시험이 실패한다(macOS 에는 없는
+/// 증상이라 macOS 에서는 늘 통과한다 — CI ubuntu `check` 가 본다). 부른 스레드가 어디든 fork 는 전용 스레드가 한다는 것은
+/// `a_server_outlives_the_thread_that_asked_for_it`(리뷰 M4).
 #[test]
 fn servers_outlive_the_blocking_threads_that_prepared_them() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1303,4 +1329,307 @@ async fn servers_found_in_the_installed_tools_stop_before_the_tool_is_removed() 
     // 다른 패키지 이름은 아무것도 멈추지 않는다.
     env.manager.stop_installed("ruff").await;
     assert_eq!(env.state_of("ruff"), Some(LspInstanceState::Ready));
+}
+
+// ---- 리뷰 H1: 기동 중(`initialize` 를 기다리는) 서버 -------------------------------------------------------------------------
+
+/// `initialize` 에 `ms` 늦게 답하고, 그동안 다른 것에는 답하지 않는 가짜 서버(기동에 묶인 서버 — `shutdown` 에 답하지 않고 `exit`
+/// 로 끝나지 않는다. 그래서 `shutdown` 으로 끝내면 상한 2 s 를 다 쓴다).
+fn slow_initialize(ms: u64) -> Scenario {
+    Scenario {
+        ignore_exit: true,
+        ..incremental()
+    }
+    .reply(
+        "initialize",
+        Reply::result(json!({ "capabilities": { "textDocumentSync": 2 } })).delayed(ms),
+    )
+    .reply("shutdown", Reply::silent())
+}
+
+/// 기동 중인 서버 하나를 띄우고 그 pid 를 돌려준다(관리자는 기동 중에도 서버를 쥔다 — `pids` 에 보인다).
+async fn starting_server(env: &Env, win: &mut common::env::Conn) -> u32 {
+    win.open(env, &env.file("src/main.rs", ""), "Rust", "")
+        .await;
+    assert!(
+        eventually(Duration::from_secs(5), || env.manager.pids(&env.id).len()
+            == 1)
+        .await,
+        "{:?}",
+        env.states()
+    );
+    assert_eq!(
+        env.state_of("rust-analyzer"),
+        Some(LspInstanceState::Starting)
+    );
+    env.manager.pids(&env.id)[0]
+}
+
+/// ①(리뷰 H1) `initialize` 를 기다리는 서버도 신뢰를 풀면 1 s 안에 끝난다 — 앞의 판은 답(여기선 6 s)을 기다린 뒤에야 끝냈다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoking_trust_ends_a_server_that_is_still_initializing_within_1_s() {
+    let env = Env::new(EnvOptions::default());
+    env.fake("rust-analyzer", slow_initialize(6000));
+    let mut win = env.window();
+    let pid = starting_server(&env, &mut win).await;
+    let revoked = std::time::Instant::now();
+    env.projects.set_trust(&env.id, false).unwrap();
+    assert!(
+        eventually(Duration::from_secs(1), || !alive(pid)).await,
+        "the initializing server outlived the trust by 1 s"
+    );
+    eprintln!("ended {:?} after the trust was revoked", revoked.elapsed());
+    env.wait_state("rust-analyzer", LspInstanceState::Untrusted)
+        .await;
+    assert!(env.manager.pids(&env.id).is_empty());
+    assert_eq!(env.manager.spawn_count(), 1);
+}
+
+/// ⑥(리뷰 H1) `initialize` 를 기다리는 서버도 창을 닫으면 2 s 안에 끝난다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closing_the_window_ends_a_server_that_is_still_initializing_within_2_s() {
+    let env = Env::new(EnvOptions::default());
+    env.fake("rust-analyzer", slow_initialize(6000));
+    let mut win = env.window();
+    let pid = starting_server(&env, &mut win).await;
+    let closed = std::time::Instant::now();
+    win.session.close();
+    assert!(
+        eventually(Duration::from_secs(2), || !alive(pid)).await,
+        "the initializing server outlived its window by 2 s"
+    );
+    eprintln!("ended {:?} after the window closed", closed.elapsed());
+    assert!(env.states().is_empty(), "{:?}", env.states());
+}
+
+/// 리뷰 H1: `lsp.server.stop` · `restart` 도 기동 중인 서버에 곧바로 닿는다(기다리지 않고 트리째 끝낸다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_and_restart_reach_a_server_that_is_still_initializing() {
+    let env = Env::new(EnvOptions::default());
+    env.fake("rust-analyzer", slow_initialize(6000));
+    let mut win = env.window();
+    let first = starting_server(&env, &mut win).await;
+    let root = env.manager.status(&env.id).instances[0].root.clone();
+    let control = json!({ "projectId": env.id, "server": "rust-analyzer", "root": root });
+    let started = std::time::Instant::now();
+    let restarted = win
+        .call("lsp.server.restart", control.clone())
+        .await
+        .unwrap();
+    assert_eq!(restarted["state"]["kind"], "starting");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(eventually(Duration::from_secs(1), || !alive(first)).await);
+    assert!(
+        eventually(Duration::from_secs(5), || env
+            .manager
+            .pids(&env.id)
+            .first()
+            .is_some_and(|p| *p != first))
+        .await
+    );
+    let second = env.manager.pids(&env.id)[0];
+    let started = std::time::Instant::now();
+    let stopped = win.call("lsp.server.stop", control).await.unwrap();
+    assert_eq!(stopped["state"]["kind"], "stopped");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(eventually(Duration::from_secs(1), || !alive(second)).await);
+    assert!(env.manager.pids(&env.id).is_empty());
+    // 그 뒤 `initialize` 답이 올 자리(6 s)가 지나도 되살아나지 않는다 — 여기선 짧게 본다.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        env.state_of("rust-analyzer"),
+        Some(LspInstanceState::Stopped)
+    );
+    assert_eq!(env.manager.spawn_count(), 2);
+}
+
+// ---- 리뷰 M1: 문서 없이 제어를 부른 연결 ----------------------------------------------------------------------------------
+
+/// 리뷰 M1: 문서를 연 적 없는 연결(같은 프로젝트의 다른 창 연결)이 `lsp.server.restart` 를 부른 뒤 문서를 열고 닫혀도 그 연결의
+/// 닫힘을 지켜본다 — 두 연결이 다 닫히면 서버가 끝난다. 앞의 판은 그 연결을 지켜보지 않아 서버가 창보다 오래 살았다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connection_that_only_restarted_is_still_watched() {
+    let env = Env::new(EnvOptions::default());
+    env.fake("rust-analyzer", incremental());
+    let mut a = env.window();
+    a.open(&env, &env.file("src/a.rs", ""), "Rust", "").await;
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    let root = env.manager.status(&env.id).instances[0].root.clone();
+    let mut b = env.window();
+    b.call(
+        "lsp.server.restart",
+        json!({ "projectId": env.id, "server": "rust-analyzer", "root": root }),
+    )
+    .await
+    .unwrap();
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    b.open(&env, &env.file("src/b.rs", ""), "Rust", "").await;
+    let pid = env.manager.pids(&env.id)[0];
+    a.session.close();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(alive(pid), "b still holds the server");
+    b.session.close();
+    assert!(
+        eventually(Duration::from_secs(2), || !alive(pid)).await,
+        "the server outlived both windows: {:?}",
+        env.states()
+    );
+    assert!(env.states().is_empty(), "{:?}", env.states());
+}
+
+// ---- 리뷰 M2: 같은 파일을 연 두 연결 ---------------------------------------------------------------------------------------
+
+/// 리뷰 M2: 두 연결(창)이 같은 파일을 열면 서버에는 `didOpen` 한 번이고, 마지막 연결이 닫을 때만 `didClose` 다. 서버의 텍스트는
+/// 마지막에 편집 · 요청한 문서의 것이고(다르면 전체 텍스트로 맞춘다), 버전은 한 줄로 오른다(`replay` 가 본다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_windows_share_one_server_document() {
+    let env = Env::new(EnvOptions::default());
+    let record = env.fake("rust-analyzer", hover_scenario(0));
+    let file = env.file("src/lib.rs", "");
+    let mut a = env.window();
+    let mut b = env.window();
+    let da = doc_id(&a.open(&env, &file, "Rust", "one").await);
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    let db = doc_id(&b.open(&env, &file, "Rust", "one").await);
+    let edit = |doc: &str, version: u32, at: u32, insert: &str| json!({ "docId": doc, "version": version, "changes": [{ "from": at, "to": at, "insert": insert }] });
+    a.call("lsp.document.change", edit(&da, 1, 0, "A"))
+        .await
+        .unwrap();
+    b.call("lsp.document.change", edit(&db, 1, 3, "B"))
+        .await
+        .unwrap();
+    // a 가 묻는다 — 서버의 텍스트가 a 의 것("Aone")으로 돌아온 뒤 묻는다.
+    a.call(
+        "test.lsp.feature",
+        feature(&da, "hover", "textDocument/hover", 1, None),
+    )
+    .await
+    .unwrap();
+    a.call("lsp.document.close", json!({ "docId": da }))
+        .await
+        .unwrap();
+    b.call("lsp.document.change", edit(&db, 2, 4, "!"))
+        .await
+        .unwrap();
+    let wanted = [
+        "textDocument/didOpen",
+        "textDocument/didChange",
+        "textDocument/didChange",
+        "textDocument/didChange",
+        "textDocument/hover",
+        "textDocument/didChange",
+        "textDocument/didChange",
+    ];
+    let kinds = || -> Vec<String> {
+        received(&record)
+            .into_iter()
+            .filter_map(|m| m["method"].as_str().map(str::to_owned))
+            .filter(|m| m.starts_with("textDocument/"))
+            .collect()
+    };
+    assert!(
+        eventually(Duration::from_secs(5), || kinds().len() >= wanted.len()).await,
+        "{:?}",
+        kinds()
+    );
+    assert_eq!(kinds(), wanted);
+    let changes = methods_of(&record, "textDocument/didChange");
+    let full = |i: usize| changes[i]["params"]["contentChanges"][0]["text"].clone();
+    assert_eq!(full(1), "oneB", "b took over with its whole text");
+    assert_eq!(full(2), "Aone", "a's request first put a's text back");
+    assert_eq!(full(3), "oneB", "a closed; b's text is the server's again");
+    let (text, version) = replay(&record);
+    assert_eq!(text, "oneB!");
+    assert_eq!(version, 5);
+    b.session.close();
+    assert!(
+        eventually(Duration::from_secs(2), || kinds()
+            .last()
+            .map(String::as_str)
+            == Some("textDocument/didClose"))
+        .await,
+        "{:?}",
+        kinds()
+    );
+    assert_eq!(methods_of(&record, "textDocument/didOpen").len(), 1);
+    assert_eq!(methods_of(&record, "textDocument/didClose").len(), 1);
+}
+
+// ---- 리뷰 L2: 상태 읽기의 범위 ------------------------------------------------------------------------------------------------
+
+/// 리뷰 L2: `lsp.status.get` 은 그 프로젝트 창의 연결만 읽는다(상태에 작업 공간 루트가 든다). 미신뢰여도 읽는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_projects_window_reads_its_status() {
+    let env = Env::new(EnvOptions {
+        trusted: false,
+        ..EnvOptions::default()
+    });
+    env.fake("rust-analyzer", incremental());
+    let mut win = env.window();
+    win.open(&env, &env.file("src/main.rs", ""), "Rust", "")
+        .await;
+    let own = win
+        .call("lsp.status.get", json!({ "projectId": env.id }))
+        .await
+        .unwrap();
+    assert_eq!(own["instances"][0]["state"]["kind"], "untrusted");
+    for scope in [
+        ConnectionScope::Project(env.other.clone()),
+        ConnectionScope::Host,
+    ] {
+        let e = env
+            .connect(scope.clone())
+            .call("lsp.status.get", json!({ "projectId": env.id }))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, code::PERMISSION_DENIED, "{scope:?}");
+    }
+}
+
+// ---- 리뷰 M4: 띄운 스레드가 끝나도 ------------------------------------------------------------------------------------------
+
+/// ⓑ(리뷰 M4) 서버를 띄우라고 한 스레드가 곧 끝나도 서버는 산다 — fork 는 프로세스 수명 동안 사는 전용 스레드가 한다. Linux 의
+/// `PR_SET_PDEATHSIG` 는 fork 한 스레드가 끝날 때 신호를 보내므로, 부른 스레드에서 fork 하면(여기선 쉬다 0.1 s 뒤 끝나는 블로킹 풀
+/// 스레드 — `block_in_place` 를 한 일꾼 스레드도 같은 풀로 넘어가 끝난다) 이 시험이 Linux 에서 실패한다(macOS 에서는 늘 통과).
+#[test]
+fn a_server_outlives_the_thread_that_asked_for_it() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_keep_alive(Duration::from_millis(100))
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let handle = tokio::runtime::Handle::current();
+        let (project, fake) = tokio::task::spawn_blocking(move || {
+            let project = common::project();
+            let fake = handle.block_on(project.fake("short-lived", Scenario::default(), false));
+            (project, fake)
+        })
+        .await
+        .unwrap();
+        let pid = fake.server.pid().unwrap();
+        // 그 블로킹 스레드가 끝날 때까지.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(
+            alive(pid),
+            "the server died with the thread that asked for it"
+        );
+        fake.server
+            .initialize(pw_lsp::InitializeOptions::new(&project.root))
+            .await
+            .unwrap();
+        fake.server.shutdown().await;
+    });
 }

@@ -6,13 +6,15 @@
 //! **띄우기**(`start`) — 매번 [`lsp_grant`] 를 다시 지난다(연 연결의 범위 · 닫힘 토큰으로 — 물러남 재기동 · `lsp.server.restart`
 //! 도 같다). 미신뢰면 `untrusted` 로 두고 띄우지 않는다(결정 M4-D8). 해석 · 합친 설정은 `pw_lsp_servers::LspServers::setup`,
 //! 서버 런타임은 `crate::requires`(결정 M4-D6 — 찾으면 `ServerSetup::with_runtime`, 못 찾으면 `runtimeMissing`). 이 둘은 로그인 셸
-//! · 실행 파일을 기다리므로 블로킹 스레드에서 구하고, **서버 프로세스는 그 밖의 async 문맥(런타임 일꾼 스레드)에서 띄운다** —
-//! Linux 의 `PR_SET_PDEATHSIG` 는 띄운 스레드에 묶여, 쉬다 끝나는 블로킹 풀 스레드에서 띄우면 서버가 조용히 죽는다(M4-01 재리뷰 N3).
+//! · 실행 파일을 기다리므로 블로킹 스레드에서 구한다. 서버 프로세스의 fork 는 `crate::process` 의 전용 스레드가 한다 — Linux 의
+//! `PR_SET_PDEATHSIG` 는 fork 한 스레드에 묶이고 런타임의 스레드는 끝날 수 있다(M4-01 재리뷰 N3 · M4-05 리뷰 M4). 띄운 서버는
+//! `initialize` 를 기다리는 동안에도 인스턴스가 쥔다 — 그사이 신뢰 해제 · 창 닫힘 · restart · stop 이 곧바로 끝낸다(리뷰 H1).
 //! 이벤트 채널은 서버마다 따로 만든다(N2 — 나누면 채널을 채운 서버가 아니라 그때 알림을 낸 서버가 끝난다).
 //!
 //! **수명**:
 //! - 인스턴스의 마지막 문서가 닫히면 유휴 시한(`[lsp] idle_shutdown_minutes`, 기본 10분) 뒤 끝낸다. 그사이 다시 열면 그대로 쓴다.
 //! - **연결(창)이 닫히면** 그 연결이 연 문서를 모두 닫고, 연 연결이 하나도 남지 않은 인스턴스는 곧바로 끝낸다(유휴 시한 없이).
+//!   문서를 열거나 `lsp.server.restart` · `stop` 을 부른 연결은 모두 그 닫힘을 지켜본다(리뷰 M1).
 //!   같은 창의 새 연결(새로고침)이 이어받지 않는다 — 새 연결이 문서를 다시 열면 다시 띄운다. 그래서 창을 닫으면 그 창이 띄운
 //!   서버가 2 s(`LanguageServer::shutdown` 의 상한) 안에 모두 끝난다.
 //! - 서버가 스스로 죽으면 지수 물러남(기본 1 s 부터 두 배, 30 s 까지)으로 다시 띄우되 3분 안에 5번이면 `crashed` 로 멈춘다.
@@ -23,7 +25,8 @@
 //!
 //! **문서 동기화**(결정 M4-D10) — Host 가 문서마다 텍스트(`crate::document`)를 쥐고, 떠 있는 서버에 `didOpen` · `didChange`(서버가
 //! `Incremental` 이면 증분, 아니면 전체) · `didSave` · `didClose` 를 보낸다. 보내기는 잠금 안에서 곧바로 송신 큐에 넣는다 — 그래서
-//! 요청 길의 요청이 그보다 앞선 편집을 앞지르지 않는다. 편집 등급 밖 문서는 열지 않는다(`off`).
+//! 요청 길의 요청이 그보다 앞선 편집을 앞지르지 않는다. 편집 등급 밖 문서는 열지 않는다(`off`). 같은 파일을 여러 연결(창)이
+//! 열어도 서버에는 한 번 열린다(`Synced` — 리뷰 M2).
 //!
 //! **요청 길** — [`LspManager::request`] 하나. 기능 행은 서버에 직접 닿지 않는다(15 「공유 부품의 주인」).
 
@@ -137,14 +140,48 @@ struct Host {
     log_dir: PathBuf,
 }
 
-/// 인스턴스의 열쇠.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// 인스턴스의 열쇠. 같음 · 차례는 (프로젝트, 서버, 루트)만 본다 — 루트는 실제 경로라 워크트리를 정하고, `worktree` 는 창이 준 글
+/// 그대로라 같은 워크트리를 `/x/wt` · `/x/wt/` 처럼 달리 적을 수 있다(그래도 인스턴스는 하나 — M4-05 리뷰 L5). `worktree` 는 처음
+/// 연 요청의 것을 쥐고 허가 · 설정을 구할 때 넘긴다.
+#[derive(Debug, Clone)]
 pub struct InstanceKey {
     pub project_id: String,
     pub worktree: Option<String>,
     pub server: String,
     /// 작업 공간 루트(실제 경로).
     pub root: PathBuf,
+}
+
+impl InstanceKey {
+    fn identity(&self) -> (&str, &str, &Path) {
+        (&self.project_id, &self.server, &self.root)
+    }
+}
+
+impl PartialEq for InstanceKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity() == other.identity()
+    }
+}
+
+impl Eq for InstanceKey {}
+
+impl std::hash::Hash for InstanceKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.identity().hash(state);
+    }
+}
+
+impl PartialOrd for InstanceKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for InstanceKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.identity().cmp(&other.identity())
+    }
 }
 
 /// 알림을 받는 쪽이 아는 출처.
@@ -160,6 +197,26 @@ type Listener = Arc<dyn Fn(&NotificationSource, &Value) + Send + Sync>;
 struct Holder {
     scope: ConnectionScope,
     closed: CancellationToken,
+}
+
+impl Holder {
+    fn of(ctx: &Ctx) -> Self {
+        Self {
+            scope: ctx.scope().clone(),
+            closed: ctx.connection_closed(),
+        }
+    }
+}
+
+/// 연결을 문서 · 서버를 쥔 쪽으로 적는다(`open` · `lsp.server.restart` · `lsp.server.stop` — M4-05 리뷰 M1). 처음 적은 연결이면 그
+/// 닫힘 토큰을 돌려준다 — 부른 쪽이 잠금 밖에서 `LspManager::watch_close` 로 지켜본다(연결마다 한 번).
+fn hold(sessions: &mut HashMap<SessionId, Holder>, ctx: &Ctx) -> Option<CancellationToken> {
+    match sessions.entry(ctx.session()) {
+        std::collections::hash_map::Entry::Occupied(_) => None,
+        std::collections::hash_map::Entry::Vacant(slot) => {
+            Some(slot.insert(Holder::of(ctx)).closed.clone())
+        }
+    }
 }
 
 struct Doc {
@@ -183,16 +240,55 @@ struct SyncKind {
     save: Option<bool>,
 }
 
+/// 서버에 열어 둔 URI 하나(M4-05 리뷰 M2). 같은 파일을 여러 연결(창)이 열어도 서버에는 `didOpen` 한 번이고, 그 문서들을 `refs` 로
+/// 세어 마지막 문서가 닫힐 때만 `didClose` 한다. 서버의 텍스트는 `owner` 문서의 것이다 — 다른 문서가 편집 · 요청 · 저장하면 그
+/// 문서가 주인이 되고(텍스트가 다르면 전체 텍스트 `didChange`), 버전은 문서와 상관없이 한 줄로 오른다.
+struct Synced {
+    owner: String,
+    refs: BTreeSet<String>,
+    /// 서버에 보낸 마지막 버전.
+    version: i64,
+}
+
+impl Synced {
+    /// 다음 버전: 문서의 버전(`wanted`)을 따르되 늘 오른다 — 연결이 하나면 웹뷰의 버전 그대로다.
+    fn next_version(&mut self, wanted: u32) -> i64 {
+        self.version = (self.version + 1).max(i64::from(wanted));
+        self.version
+    }
+}
+
+/// 인스턴스에서 내려놓은 서버. 끝내는 것은 내려놓은 쪽이다.
+struct Taken {
+    server: Arc<LanguageServer>,
+    /// `initialize` 의 답을 받았는가. 아니면(기동 중) 기다리지 않고 트리째 끝낸다 — LSP 는 `initialize` 의 답 전에 `shutdown` 을
+    /// 보내지 못하고, 답을 미루는 서버(JVM · 고장 · 악의)가 시한(10 s)을 버는 길이 된다(M4-05 리뷰 H1).
+    initialized: bool,
+}
+
+impl Taken {
+    /// 끝낸다: 떠 있던 서버는 `shutdown`(상한 2 s), 기동 중이던 서버는 곧바로 트리째.
+    async fn end(self) {
+        if self.initialized {
+            self.server.shutdown().await;
+        } else {
+            self.server.kill();
+        }
+    }
+}
+
 struct Instance {
     /// 정의 순서(요청을 맡을 서버를 고른다).
     order: usize,
     state: LspInstanceState,
+    /// 띄운 서버. `initialize` 를 기다리는 동안(`starting`)에도 여기 있다 — 신뢰 해제 · 창 닫힘 · restart · stop 이 그 서버에 닿는다
+    /// (M4-05 리뷰 H1). 동기화 · 요청은 `state.is_running()` 일 때만 간다.
     server: Option<Arc<LanguageServer>>,
     /// 띄우기 · 끝내기마다 오른다 — 지난 시도의 결과를 버린다.
     generation: u64,
     docs: BTreeSet<String>,
-    /// 지금 서버에 `didOpen` 한 문서.
-    synced: BTreeSet<String>,
+    /// 지금 서버에 열어 둔 URI(→ 그 URI 를 연 문서들).
+    synced: BTreeMap<String, Synced>,
     holders: BTreeSet<SessionId>,
     crashes: VecDeque<Instant>,
     idle: Option<(u64, CancellationToken)>,
@@ -211,7 +307,7 @@ impl Instance {
             server: None,
             generation: 0,
             docs: BTreeSet::new(),
-            synced: BTreeSet::new(),
+            synced: BTreeMap::new(),
             holders: BTreeSet::new(),
             crashes: VecDeque::new(),
             idle: None,
@@ -225,14 +321,25 @@ impl Instance {
         }
     }
 
-    /// 서버를 내려놓는다(끝내는 것은 부른 쪽).
-    fn take_server(&mut self, state: LspInstanceState) -> Option<Arc<LanguageServer>> {
+    /// 서버를 내려놓는다(끝내는 것은 부른 쪽 — [`Taken::end`]).
+    fn take_server(&mut self, state: LspInstanceState) -> Option<Taken> {
+        let initialized = self.state.is_running();
         self.generation += 1;
         self.synced.clear();
         self.progress.end_all();
         self.state = state;
         self.idle = None;
-        self.server.take()
+        self.server.take().map(|server| Taken {
+            server,
+            initialized,
+        })
+    }
+
+    /// 문서 `doc_id` 가 지금 서버에 동기화돼 있는가(그 URI 를 연 문서 중 하나인가).
+    fn is_synced(&self, doc_id: &str, uri: &str) -> bool {
+        self.synced
+            .get(uri)
+            .is_some_and(|s| s.refs.contains(doc_id))
     }
 }
 
@@ -450,18 +557,9 @@ impl LspManager {
         let (doc_id, watch, instances) = {
             let mut state = lock(&self.inner.state);
             let state = &mut *state;
-            let watch = match state.sessions.entry(session) {
-                std::collections::hash_map::Entry::Occupied(_) => None,
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    let holder = slot.insert(Holder {
-                        scope: ctx.scope().clone(),
-                        closed: ctx.connection_closed(),
-                    });
-                    Some(holder.closed.clone())
-                }
-            };
-            // 같은 연결이 같은 파일을 다시 열면 앞 문서를 닫고 연다(`syntax.open` 의 「다시 연다」 와 같은 뜻) — 서버가 같은 URI 의
-            // `didOpen` 을 두 번 받지 않게.
+            let watch = hold(&mut state.sessions, ctx);
+            // 같은 연결이 같은 파일을 다시 열면 앞 문서를 닫고 연다(`syntax.open` 의 「다시 연다」 와 같은 뜻). 다른 연결이 연 같은
+            // 파일은 서버에 한 번만 열린다(`Synced`).
             let reopened: Vec<String> = state
                 .docs
                 .iter()
@@ -484,10 +582,14 @@ impl LspManager {
                 early: BTreeMap::new(),
                 diverged: false,
             };
+            state.docs.insert(doc_id.clone(), doc);
+            let State {
+                docs, instances, ..
+            } = state;
+            let doc = &docs[&doc_id];
             for (order, key) in &keys {
-                let created = !state.instances.contains_key(key);
-                let instance = state
-                    .instances
+                let created = !instances.contains_key(key);
+                let instance = instances
                     .entry(key.clone())
                     .or_insert_with(|| Instance::new(*order));
                 instance.docs.insert(doc_id.clone());
@@ -497,10 +599,9 @@ impl LspManager {
                     idle.cancel();
                 }
                 if instance.state.is_running()
-                    && let Some(server) = &instance.server
+                    && let Some(server) = instance.server.clone()
                 {
-                    did_open(server, &doc, instance.sync);
-                    instance.synced.insert(doc_id.clone());
+                    sync_open(&server, instance, &doc_id, doc, docs);
                 } else if untrusted {
                     if instance.server.is_none() {
                         instance.generation += 1;
@@ -512,24 +613,16 @@ impl LspManager {
                     starts.push((key.clone(), instance.generation));
                 }
             }
-            state.docs.insert(doc_id.clone(), doc);
-            let instances = keys
+            let statuses = keys
                 .iter()
-                .filter_map(|(_, k)| state.instances.get(k).map(|i| status_of(k, i)))
+                .filter_map(|(_, k)| instances.get(k).map(|i| status_of(k, i)))
                 .collect();
-            (doc_id, watch, instances)
+            (doc_id, watch, statuses)
         };
         if let Some(closed) = watch {
-            let this = self.clone();
-            tokio::spawn(async move {
-                closed.cancelled().await;
-                this.session_closed(session);
-            });
+            self.watch_close(session, closed);
         }
-        let holder = Holder {
-            scope: ctx.scope().clone(),
-            closed: ctx.connection_closed(),
-        };
+        let holder = Holder::of(ctx);
         for (key, generation) in starts {
             self.spawn_start(key, generation, holder.clone());
         }
@@ -635,22 +728,32 @@ impl LspManager {
 
     /// `lsp.document.save`.
     pub fn save(&self, ctx: &Ctx, doc_id: &str) -> Result<(), RpcError> {
-        let state = lock(&self.inner.state);
-        let doc = state
-            .docs
+        let mut state = lock(&self.inner.state);
+        let State {
+            docs, instances, ..
+        } = &mut *state;
+        let doc = docs
             .get(doc_id)
             .filter(|d| d.session == ctx.session())
             .ok_or_else(|| not_found(doc_id))?;
         for key in &doc.instances {
-            let Some(instance) = state.instances.get(key) else {
+            let Some(instance) = instances.get_mut(key) else {
                 continue;
             };
-            let (Some(server), Some(include_text)) = (&instance.server, instance.sync.save) else {
+            let (Some(server), Some(include_text)) = (instance.server.clone(), instance.sync.save)
+            else {
                 continue;
             };
-            if !instance.synced.contains(doc_id) {
+            let sync = instance.sync;
+            let Some(synced) = instance
+                .synced
+                .get_mut(&doc.uri)
+                .filter(|s| s.refs.contains(doc_id))
+            else {
                 continue;
-            }
+            };
+            // 저장한 텍스트가 서버의 텍스트다.
+            take_over(&server, sync, synced, doc_id, doc, docs);
             let mut params = json!({ "textDocument": { "uri": doc.uri } });
             if include_text {
                 params["text"] = Value::String(doc.text.as_str().to_owned());
@@ -680,7 +783,8 @@ impl LspManager {
         }
     }
 
-    /// 문서를 빼고 서버에 `didClose` 를 보낸다. 마지막 문서를 잃은 인스턴스(유휴 시한을 걸 것)를 돌려준다.
+    /// 문서를 뺀다. 그 URI 를 연 마지막 문서면 서버에 `didClose`, 다른 연결의 문서가 남았으면 그 문서가 서버 텍스트의 주인이 된다.
+    /// 마지막 문서를 잃은 인스턴스(유휴 시한을 걸 것)를 돌려준다.
     fn remove_doc(&self, state: &mut State, doc_id: &str) -> Vec<InstanceKey> {
         let Some(doc) = state.docs.remove(doc_id) else {
             return Vec::new();
@@ -691,13 +795,30 @@ impl LspManager {
                 continue;
             };
             instance.docs.remove(doc_id);
-            if instance.synced.remove(doc_id)
-                && let Some(server) = &instance.server
+            let sync = instance.sync;
+            if let Some(synced) = instance.synced.get_mut(&doc.uri)
+                && synced.refs.remove(doc_id)
             {
-                let _ = server.notify_raw(
-                    "textDocument/didClose",
-                    json!({ "textDocument": { "uri": doc.uri } }),
-                );
+                let server = instance.server.clone();
+                if synced.refs.is_empty() {
+                    instance.synced.remove(&doc.uri);
+                    if let Some(server) = server {
+                        let _ = server.notify_raw(
+                            "textDocument/didClose",
+                            json!({ "textDocument": { "uri": doc.uri } }),
+                        );
+                    }
+                } else if synced.owner == doc_id
+                    && let Some(next) = synced.refs.first().cloned()
+                    && let Some(next_doc) = state.docs.get(&next)
+                {
+                    synced.owner = next.clone();
+                    if next_doc.text.as_str() != doc.text.as_str()
+                        && let Some(server) = server
+                    {
+                        full_change(&server, sync, synced, next_doc);
+                    }
+                }
             }
             if instance.docs.is_empty() {
                 emptied.push(key.clone());
@@ -770,7 +891,7 @@ impl LspManager {
         tracing::info!(target: "pw_lsp", project = %key.project_id, server = %key.server, root = %key.root.display(), "language server idle; stopping it");
         self.publish(&key.project_id);
         if let Some(server) = server {
-            server.shutdown().await;
+            server.end().await;
         }
     }
 
@@ -818,9 +939,7 @@ impl LspManager {
         idle.retain(|key| !stopping.iter().any(|(k, _)| k == key));
         for (key, server) in stopping {
             tracing::info!(target: "pw_lsp", project = %key.project_id, server = %key.server, "the window's connection closed; stopping its language server");
-            tokio::spawn(async move {
-                server.shutdown().await;
-            });
+            tokio::spawn(server.end());
         }
         for key in idle {
             self.schedule_idle(key);
@@ -830,7 +949,16 @@ impl LspManager {
         }
     }
 
-    /// 띄우기를 런타임 일꾼 태스크로 보낸다(머리 주석 — 블로킹 풀이 아니다).
+    /// 연결의 닫힘을 지켜본다 — 닫히면 [`Self::session_closed`]. [`hold`] 가 처음 적은 연결에 한 번.
+    fn watch_close(&self, session: SessionId, closed: CancellationToken) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            closed.cancelled().await;
+            this.session_closed(session);
+        });
+    }
+
+    /// 띄우기를 태스크로 보낸다(fork 는 `crate::process` 의 전용 스레드가 한다).
     fn spawn_start(&self, key: InstanceKey, generation: u64, holder: Holder) {
         let this = self.clone();
         tokio::spawn(async move { this.start(key, generation, holder).await });
@@ -928,7 +1056,6 @@ impl LspManager {
             root: key.root.clone(),
             config: Arc::clone(&config),
         });
-        // 여기는 async 문맥이다(런타임 일꾼) — `spawn_blocking` 안에서 띄우지 않는다(머리 주석, N3).
         let spawned = LanguageServer::spawn(
             &grant,
             prepared.spec,
@@ -959,6 +1086,22 @@ impl LspManager {
             }
         };
         self.inner.spawns.fetch_add(1, Ordering::SeqCst);
+        // `initialize` 를 기다리는 동안에도 인스턴스가 서버를 쥔다(`starting` 그대로) — 그사이의 신뢰 해제 · 창 닫힘 · restart ·
+        // stop 이 이 서버를 곧바로 끝낸다(M4-05 리뷰 H1). 그새 시도가 바뀌었으면(세대) 띄운 것을 버린다.
+        let placed = {
+            let mut state = lock(&self.inner.state);
+            match state.instances.get_mut(&key) {
+                Some(instance) if instance.generation == generation => {
+                    instance.server = Some(Arc::clone(&server));
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !placed {
+            server.kill();
+            return;
+        }
         self.watch_events(&key, generation, &server, events_rx);
         let mut init = InitializeOptions::new(&key.root);
         init.initialization_options = Some(prepared.initialization_options);
@@ -966,7 +1109,7 @@ impl LspManager {
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(target: "pw_lsp", project = %key.project_id, server = %key.server, %e, "language server failed to initialize");
-                self.failed(&key, generation, None);
+                self.failed(&key, generation, Some(&server));
                 return;
             }
         }
@@ -978,16 +1121,20 @@ impl LspManager {
                 docs, instances, ..
             } = &mut *state;
             match instances.get_mut(&key) {
-                Some(instance) if instance.generation == generation => {
-                    instance.server = Some(Arc::clone(&server));
+                Some(instance)
+                    if instance.generation == generation
+                        && instance
+                            .server
+                            .as_ref()
+                            .is_some_and(|s| Arc::ptr_eq(s, &server)) =>
+                {
                     instance.state = LspInstanceState::Ready;
                     instance.config = Some(config);
                     instance.installed = installed;
                     instance.sync = sync;
                     for doc_id in instance.docs.clone() {
                         if let Some(doc) = docs.get(&doc_id) {
-                            did_open(&server, doc, sync);
-                            instance.synced.insert(doc_id);
+                            sync_open(&server, instance, &doc_id, doc, docs);
                         }
                     }
                     true
@@ -1006,10 +1153,8 @@ impl LspManager {
                     this.failed(&key, generation, Some(&watched));
                 }
             });
-        } else {
-            // 그사이 끝내라는 말이 왔다(창 닫힘 · 신뢰 해제 · 다시 시작).
-            server.shutdown().await;
         }
+        // 아니면 그사이 끝내라는 말이 왔다(창 닫힘 · 신뢰 해제 · 다시 시작 · 멈춤) — 서버를 내려놓은 쪽이 이미 끝냈다.
     }
 
     /// 서버의 이벤트를 받는 태스크(서버마다 따로).
@@ -1110,12 +1255,17 @@ impl LspManager {
                 instance.crashes.pop_front();
             }
             if instance.crashes.len() >= options.crash_limit {
-                instance.take_server(LspInstanceState::Crashed);
+                // 죽은 서버거나 `initialize` 에 실패한(시한을 넘긴 — 아직 살아 있을 수 있는) 서버다.
+                if let Some(taken) = instance.take_server(LspInstanceState::Crashed) {
+                    taken.server.kill();
+                }
                 tracing::warn!(target: "pw_lsp", project = %key.project_id, server = %key.server, deaths = instance.crashes.len(), "language server keeps dying; not starting it again");
                 None
             } else {
                 let deaths = instance.crashes.len();
-                instance.take_server(LspInstanceState::Starting);
+                if let Some(taken) = instance.take_server(LspInstanceState::Starting) {
+                    taken.server.kill();
+                }
                 let holder = instance
                     .holders
                     .iter()
@@ -1172,11 +1322,8 @@ impl LspManager {
         };
         drop(grant);
         let session = ctx.session();
-        let holder = Holder {
-            scope: ctx.scope().clone(),
-            closed: ctx.connection_closed(),
-        };
-        let (old, generation) = {
+        let holder = Holder::of(ctx);
+        let (old, generation, watch) = {
             let mut state = lock(&self.inner.state);
             let State {
                 instances,
@@ -1188,16 +1335,20 @@ impl LspManager {
             })?;
             instance.crashes.clear();
             instance.holders.insert(session);
-            sessions.entry(session).or_insert_with(|| holder.clone());
+            // 문서를 연 적 없는 연결이어도 그 닫힘을 지켜본다 — 이 연결이 쥔 서버가 창보다 오래 살지 않게(M4-05 리뷰 M1).
+            let watch = hold(sessions, ctx);
             let next = if untrusted {
                 LspInstanceState::Untrusted
             } else {
                 LspInstanceState::Starting
             };
-            (instance.take_server(next), instance.generation)
+            (instance.take_server(next), instance.generation, watch)
         };
+        if let Some(closed) = watch {
+            self.watch_close(session, closed);
+        }
         if let Some(old) = old {
-            old.shutdown().await;
+            old.end().await;
         }
         if !untrusted {
             self.spawn_start(key.clone(), generation, holder);
@@ -1225,16 +1376,27 @@ impl LspManager {
             Err(e) if reason(&e) == Some("untrusted") => {}
             Err(e) => return Err(e),
         }
-        let old = {
+        let (old, watch) = {
             let mut state = lock(&self.inner.state);
-            let instance = state.instances.get_mut(&key).ok_or_else(|| {
+            let State {
+                instances,
+                sessions,
+                ..
+            } = &mut *state;
+            let instance = instances.get_mut(&key).ok_or_else(|| {
                 RpcError::new(rpc_code::NOT_FOUND, "no such language server instance")
             })?;
-            instance.take_server(LspInstanceState::Stopped)
+            (
+                instance.take_server(LspInstanceState::Stopped),
+                hold(sessions, ctx),
+            )
         };
+        if let Some(closed) = watch {
+            self.watch_close(ctx.session(), closed);
+        }
         self.publish(&key.project_id);
         if let Some(old) = old {
-            old.shutdown().await;
+            old.end().await;
         }
         self.instance_status(&key)
     }
@@ -1263,9 +1425,9 @@ impl LspManager {
         for project in projects {
             self.publish(&project);
         }
-        for server in servers {
-            tracing::info!(target: "pw_lsp", package, server = server.server_id(), "stopping a language server before its tool is removed");
-            server.shutdown().await;
+        for taken in servers {
+            tracing::info!(target: "pw_lsp", package, server = taken.server.server_id(), "stopping a language server before its tool is removed");
+            taken.end().await;
         }
     }
 
@@ -1397,7 +1559,7 @@ impl LspManager {
         if untrusted.is_empty() {
             return;
         }
-        let killed: Vec<(InstanceKey, Arc<LanguageServer>)> = {
+        let killed: Vec<(InstanceKey, Taken)> = {
             let mut state = lock(&self.inner.state);
             let mut killed = Vec::new();
             for (key, instance) in &mut state.instances {
@@ -1413,9 +1575,9 @@ impl LspManager {
             }
             killed
         };
-        for (key, server) in &killed {
+        for (key, taken) in &killed {
             tracing::info!(target: "pw_lsp", project = %key.project_id, server = %key.server, "project trust revoked; ending its language server");
-            server.kill();
+            taken.server.kill();
         }
         for project in untrusted {
             self.publish(&project);
@@ -1556,21 +1718,23 @@ impl LspManager {
         session: SessionId,
         request: &FeatureRequest<'_>,
     ) -> Result<(Arc<LanguageServer>, String, DocView), RpcError> {
-        let state = lock(&self.inner.state);
-        let doc = state
-            .docs
+        let mut state = lock(&self.inner.state);
+        let State {
+            docs, instances, ..
+        } = &mut *state;
+        let doc = docs
             .get(request.doc_id)
             .filter(|d| d.session == session)
             .ok_or_else(|| not_found(request.doc_id))?;
         let mut candidates: Vec<(&InstanceKey, &Instance)> = doc
             .instances
             .iter()
-            .filter_map(|k| state.instances.get(k).map(|i| (k, i)))
+            .filter_map(|k| instances.get_key_value(k))
             .collect();
         candidates.sort_by_key(|(_, i)| i.order);
         let chosen = candidates.iter().find_map(|(key, instance)| {
             let server = instance.server.as_ref()?;
-            if !instance.state.is_running() || !instance.synced.contains(request.doc_id) {
+            if !instance.state.is_running() || !instance.is_synced(request.doc_id, &doc.uri) {
                 return None;
             }
             if instance
@@ -1582,9 +1746,9 @@ impl LspManager {
             }
             server
                 .supports(request.method)
-                .then(|| (Arc::clone(server), key.server.clone()))
+                .then(|| (Arc::clone(server), (*key).clone()))
         });
-        let Some((server, server_id)) = chosen else {
+        let Some((server, key)) = chosen else {
             let instances: Vec<LspInstanceStatus> =
                 candidates.iter().map(|(k, i)| status_of(k, i)).collect();
             return Err(RpcError::new(
@@ -1596,9 +1760,16 @@ impl LspManager {
             )
             .with_data(json!({ "feature": request.feature, "instances": instances })));
         };
+        // 다른 연결(창)이 같은 파일을 연 채 편집했으면 서버의 텍스트가 그 문서의 것이다 — 이 문서로 맞춘 뒤 묻는다(위치는 이 문서
+        // 기준이다).
+        if let Some(instance) = instances.get_mut(&key)
+            && let Some(synced) = instance.synced.get_mut(&doc.uri)
+        {
+            take_over(&server, instance.sync, synced, request.doc_id, doc, docs);
+        }
         Ok((
             server,
-            server_id,
+            key.server,
             DocView {
                 uri: doc.uri.clone(),
                 version: doc.version,
@@ -1778,7 +1949,7 @@ fn sync_of(caps: &lsp_types::ServerCapabilities) -> SyncKind {
     }
 }
 
-fn did_open(server: &LanguageServer, doc: &Doc, _sync: SyncKind) {
+fn did_open(server: &LanguageServer, doc: &Doc) {
     let _ = server.notify_raw(
         "textDocument/didOpen",
         json!({ "textDocument": {
@@ -1790,42 +1961,112 @@ fn did_open(server: &LanguageServer, doc: &Doc, _sync: SyncKind) {
     );
 }
 
+/// 문서를 그 서버에 연다(`Synced`). 그 URI 가 이미 열려 있으면(다른 연결의 문서) `didOpen` 없이 세고 서버의 텍스트를 이 문서로
+/// 맞춘다 — 서버는 같은 URI 의 `didOpen` 을 겹쳐 받지 않는다(M4-05 리뷰 M2).
+fn sync_open(
+    server: &LanguageServer,
+    instance: &mut Instance,
+    doc_id: &str,
+    doc: &Doc,
+    docs: &HashMap<String, Doc>,
+) {
+    let sync = instance.sync;
+    match instance.synced.get_mut(&doc.uri) {
+        Some(synced) => {
+            synced.refs.insert(doc_id.to_owned());
+            take_over(server, sync, synced, doc_id, doc, docs);
+        }
+        None => {
+            did_open(server, doc);
+            instance.synced.insert(
+                doc.uri.clone(),
+                Synced {
+                    owner: doc_id.to_owned(),
+                    refs: BTreeSet::from([doc_id.to_owned()]),
+                    version: i64::from(doc.version),
+                },
+            );
+        }
+    }
+}
+
+/// 서버의 텍스트를 문서 `doc_id` 의 것으로 맞춘다(주인을 바꾼다). 앞 주인과 텍스트가 같으면 보내지 않는다.
+fn take_over(
+    server: &LanguageServer,
+    sync: SyncKind,
+    synced: &mut Synced,
+    doc_id: &str,
+    doc: &Doc,
+    docs: &HashMap<String, Doc>,
+) {
+    if synced.owner == doc_id {
+        return;
+    }
+    let same = docs
+        .get(&synced.owner)
+        .is_some_and(|owner| owner.text.as_str() == doc.text.as_str());
+    synced.owner = doc_id.to_owned();
+    if !same {
+        full_change(server, sync, synced, doc);
+    }
+}
+
+/// 문서의 전체 텍스트를 `didChange` 로 보낸다(`Incremental` 서버도 범위 없는 변경을 받는다). 동기화 `None` 서버에는 보내지 않는다.
+fn full_change(server: &LanguageServer, sync: SyncKind, synced: &mut Synced, doc: &Doc) {
+    if sync.change == TextDocumentSyncKind::NONE {
+        return;
+    }
+    let version = synced.next_version(doc.version);
+    let _ = server.notify_raw(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": doc.uri, "version": version },
+            "contentChanges": [{ "text": doc.text.as_str() }],
+        }),
+    );
+}
+
 /// 문서의 편집들(버전, 증분 변경)을 그 문서를 연 서버들에 보낸다(잠금 안 — 머리 주석 「문서 동기화」). `Full` 서버에는 마지막
-/// 버전의 전체 텍스트 한 번.
+/// 버전의 전체 텍스트 한 번. 서버의 텍스트가 다른 연결의 문서 것이었으면(`Synced::owner`) 이 문서의 전체 텍스트로 맞춘다.
 fn send_change(
     doc_id: &str,
     doc: &Doc,
-    instances: &BTreeMap<InstanceKey, Instance>,
+    instances: &mut BTreeMap<InstanceKey, Instance>,
     batches: &[(u32, Vec<lsp_types::TextDocumentContentChangeEvent>)],
 ) {
     for key in &doc.instances {
-        let Some(instance) = instances.get(key) else {
+        let Some(instance) = instances.get_mut(key) else {
             continue;
         };
-        let Some(server) = &instance.server else {
+        let Some(server) = instance.server.clone() else {
             continue;
         };
-        if !instance.synced.contains(doc_id) {
+        let sync = instance.sync;
+        let Some(synced) = instance
+            .synced
+            .get_mut(&doc.uri)
+            .filter(|s| s.refs.contains(doc_id))
+        else {
+            continue;
+        };
+        if synced.owner != doc_id {
+            synced.owner = doc_id.to_owned();
+            full_change(&server, sync, synced, doc);
             continue;
         }
-        let send = |version: u32, changes: Value| {
-            let _ = server.notify_raw(
-                "textDocument/didChange",
-                json!({
-                    "textDocument": { "uri": doc.uri, "version": version },
-                    "contentChanges": changes,
-                }),
-            );
-        };
-        if instance.sync.change == TextDocumentSyncKind::INCREMENTAL {
+        if sync.change == TextDocumentSyncKind::INCREMENTAL {
             for (version, events) in batches {
-                send(
-                    *version,
-                    serde_json::to_value(events).unwrap_or(Value::Null),
+                let version = synced.next_version(*version);
+                let _ = server.notify_raw(
+                    "textDocument/didChange",
+                    json!({
+                        "textDocument": { "uri": doc.uri, "version": version },
+                        "contentChanges": serde_json::to_value(events).unwrap_or(Value::Null),
+                    }),
                 );
             }
-        } else if instance.sync.change == TextDocumentSyncKind::FULL {
-            send(doc.version, json!([{ "text": doc.text.as_str() }]));
+        } else {
+            full_change(&server, sync, synced, doc);
         }
     }
 }
@@ -1851,4 +2092,28 @@ fn project_root(
             root.display()
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 리뷰 L5: 같은 워크트리를 다르게 적어도(끝의 `/`) 루트(실제 경로)가 같으면 같은 인스턴스다. 루트가 다르면 다르다.
+    #[test]
+    fn instance_keys_ignore_how_the_worktree_was_written() {
+        let key = |worktree: Option<&str>, root: &str| InstanceKey {
+            project_id: "p".into(),
+            worktree: worktree.map(str::to_owned),
+            server: "rust-analyzer".into(),
+            root: PathBuf::from(root),
+        };
+        let mut instances = BTreeMap::new();
+        instances.insert(key(Some("/x/wt"), "/x/wt/crate"), 1);
+        assert_eq!(instances.get(&key(Some("/x/wt/"), "/x/wt/crate")), Some(&1));
+        assert_eq!(instances.get(&key(None, "/x/wt/crate")), Some(&1));
+        assert_eq!(instances.get(&key(Some("/x/wt"), "/x/main/crate")), None);
+        let mut set = std::collections::HashSet::new();
+        set.insert(key(Some("/x/wt"), "/x/wt/crate"));
+        assert!(set.contains(&key(Some("/x/wt/"), "/x/wt/crate")));
+    }
 }

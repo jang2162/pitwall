@@ -559,10 +559,9 @@ impl fmt::Debug for LanguageServer {
 impl LanguageServer {
     /// 서버를 띄운다. 허가([`LspGrant`])가 있어야 부를 수 있다 — 신뢰와 실행의 연결 범위를 지났다는 증거다. 띄우기 전에 작업
     /// 디렉터리가 허가의 루트 안인지, 허가를 만든 연결이 아직 열려 있는지, 지금도 신뢰하는지 다시 본다(아니면 `PermissionDenied`,
-    /// 아무것도 띄우지 않는다 — 리뷰 M1 · M2, 재리뷰 N5). `initialize` 는 [`Self::initialize`] 로 따로 보낸다. **tokio 런타임의 async 문맥(일꾼 스레드)에서만 부른다** —
-    /// `spawn_blocking` · `block_in_place` 안에서 부르지 않는다: Linux 의 `PR_SET_PDEATHSIG` 는 프로세스가 아니라 **띄운 스레드**가
-    /// 끝나면 신호를 보내므로, 블로킹 풀 스레드가 쉬다 끝날 때(약 10 s) 서버가 SIGTERM 으로 조용히 끝난다(M4-01 재리뷰 N3 — macOS 에는
-    /// 없는 증상이다).
+    /// 아무것도 띄우지 않는다 — 리뷰 M1 · M2, 재리뷰 N5). `initialize` 는 [`Self::initialize`] 로 따로 보낸다. tokio 런타임 안이면 어느 스레드에서 불러도 된다 — fork 는 프로세스
+    /// 수명 동안 사는 전용 스레드가 한다(Linux 의 `PR_SET_PDEATHSIG` 는 fork 한 스레드에 묶인다 — `crate::process` 의 `launcher`,
+    /// M4-01 재리뷰 N3 · M4-05 리뷰 M4).
     pub async fn spawn(
         grant: &LspGrant,
         spec: LaunchSpec,
@@ -593,7 +592,7 @@ impl LanguageServer {
             ));
         }
         let marker = options.ledger.as_ref().and_then(|_| Ledger::marker());
-        let (mut child, tree) = process::spawn(&spec, marker.as_deref())?;
+        let (mut child, tree) = process::spawn_on_launcher(spec.clone(), marker.clone()).await?;
         let pid = child.id();
         let record = match (&options.ledger, pid, &marker) {
             (Some(ledger), Some(pid), Some(marker)) => {
