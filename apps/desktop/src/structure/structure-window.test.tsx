@@ -593,9 +593,13 @@ it("reads again 300 ms after the edits stop", async () => {
   await openStructure();
   expect(called("lsp.symbols.document")).toHaveLength(1);
   // 시간은 아래 한계만 본다 — 기기 부하는 타이머를 늦출 뿐 앞당기지 않는다(전체 실행에서 150 ms 대기가 300 ms 를 넘을 수 있다).
+  // 시각은 편집 직전에 잰다 — 다시 읽기 타이머는 편집(dispatch) 안에서 걸리므로 그보다 앞이다. Node 의 타이머는 1 ms 단위로
+  // 반올림돼 아주 조금 일찍 돌 수 있어 2 ms 를 둔다.
+  const LOWER = OUTLINE_REREAD_MS - 2;
   const edit = async (insert: string) => {
+    const at = performance.now();
     await act(async () => view().dispatch({ changes: { from: 0, insert } }));
-    return performance.now();
+    return at;
   };
   const first = await edit("// a\n");
   await act(async () => new Promise((r) => setTimeout(r, 150)));
@@ -611,11 +615,11 @@ it("reads again 300 ms after the edits stop", async () => {
   // 둘째 편집의 읽기는 그 편집 뒤 300 ms 가 지나서다.
   const last = after.find((c) => (c.params as { version: number }).version === 2)!;
   expect(last).toBeDefined();
-  expect(last.at - second).toBeGreaterThanOrEqual(OUTLINE_REREAD_MS - 5);
+  expect(last.at - second).toBeGreaterThanOrEqual(LOWER);
   // 두 편집 사이가 300 ms 보다 짧았으면 첫 편집만의 읽기는 없다(멈춘 뒤 한 번). 부하로 그 사이가 길어졌으면 첫 편집의 읽기도 300 ms 뒤다.
   const early = after.filter((c) => (c.params as { version: number }).version === 1);
-  if (second - first < OUTLINE_REREAD_MS - 5) expect(early).toEqual([]);
-  else for (const c of early) expect(c.at - first).toBeGreaterThanOrEqual(OUTLINE_REREAD_MS - 5);
+  if (second - first < LOWER) expect(early).toEqual([]);
+  else for (const c of early) expect(c.at - first).toBeGreaterThanOrEqual(LOWER);
   expect(after.at(-1)!.params).toEqual({ docId: "d1", version: 2 });
 });
 
