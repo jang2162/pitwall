@@ -36,5 +36,8 @@
 | `format.messy` | `src/messy.rs` | `src/messy.ts` | 흐트러진 서식 파일 — 포맷하면 바뀐다(정의 이름 자리) |
 | `unused.rect` | `src/unused.rs` | `src/unused.ts` | 쓰지 않는 import(rust 경고 `unused_imports` · ts TS6133) — 「import 지우기」 코드 액션 |
 | `rename.m4-12` | `src/m4_12_target.rs` | `src/m4_12_target.ts` | 함수 `relabel` 의 정의(M4-12). rename 하면 정의 하나와 `m4_12_user` 의 import 하나 · 호출 둘이 바뀐다 — 파일 둘, 편집 넷(rust 는 임시 복사본의 `lib.rs` 에 두 모듈을 더한다) |
+| `nav.def` | `src/m4_08_nav.rs` | `src/m4_08_nav.ts` | 함수 `greet` 의 정의 이름(M4-08 — 시험이 임시 복사본의 rust `lib.rs` 에 모듈 한 줄을 더한다) |
+| `nav.call-1` · `nav.call-2` | `src/m4_08_nav.rs` | `src/m4_08_nav.ts` | `greet` 호출 둘. 정의로 이동하면 `nav.def`, 사용처(선언 포함)는 이 파일 안에 셋 |
+| `nav.vec` | `src/m4_08_nav.rs` | — | `Vec::new()` 의 `Vec` — 정의가 표준 라이브러리 소스(루트 밖)라 읽기 토큰으로 연다. rust-src 가 있어야 한다(live 시험 `live_lsp_rust_analyzer_navigation` 은 없으면 「rust-src 없음」 으로 실패한다) |
 
 `errors` · `unused` 파일은 일부러 오류 · 경고를 낸다 — 다른 파일의 진단을 세는 시험은 이 파일들을 빼고 센다(「자기 파일 안」 규칙).

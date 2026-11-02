@@ -28,6 +28,7 @@ pub mod log;
 pub mod manager;
 pub mod message;
 pub mod methods;
+pub mod navigation;
 pub mod process;
 pub mod progress;
 pub mod requires;
@@ -52,4 +53,5 @@ pub fn register(router: &mut pw_rpc::Router, manager: &LspManager) {
     methods::register(router, manager);
     bridge::register(router, manager);
     edit::register(router, manager);
+    navigation::register(router, manager);
 }

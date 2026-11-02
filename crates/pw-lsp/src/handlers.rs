@@ -36,6 +36,7 @@ pub(crate) fn server_handlers(cx: &HandlerContext) -> Handlers {
     configuration(&mut handlers, cx);
     // 기능 행이 여기에 한 줄씩: `workspace/applyEdit`(M4-12), `window/showDocument`(M4-08).
     crate::edit::apply_edit(&mut handlers, cx);
+    crate::navigation::show_document(&mut handlers, cx);
     handlers
 }
 

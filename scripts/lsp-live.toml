@@ -9,8 +9,8 @@
 # (15 「공유 부품의 주인」).
 
 [floors]
-rust_analyzer = 5
-typescript_language_server = 4
+rust_analyzer = 6
+typescript_language_server = 5
 
 [capabilities]
 rust_analyzer = ["hoverProvider", "definitionProvider", "referencesProvider"]

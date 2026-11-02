@@ -604,6 +604,14 @@ export type UnaryMethods = {
 	 */
 	"lsp.command.execute": { params: LspCommandExecuteParams; result: LspCommandExecuted };
 	/**
+	 * 선언으로(`textDocument/declaration`).
+	 */
+	"lsp.declaration": { params: LspPositionParams; result: LspLocationsResult };
+	/**
+	 * 정의로(`textDocument/definition`). 위치는 절대 경로, 루트 밖이면 읽기 토큰과 함께.
+	 */
+	"lsp.definition": { params: LspPositionParams; result: LspLocationsResult };
+	/**
 	 * 문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고
 	 * 끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈
 	 * 칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.
@@ -627,9 +635,25 @@ export type UnaryMethods = {
 	 */
 	"lsp.document.open": { params: LspDocumentOpenParams; result: LspDocumentOpened };
 	/**
+	 * 루트 밖 문서를 읽기 토큰으로 읽는다(결정 M4-D13 — 이 연결이 받은 토큰만, 읽기 전용). 원격 role 로는 열지 않는다.
+	 */
+	"lsp.document.read": { params: LspDocumentReadParams; result: LspDocumentReadResult };
+	/**
 	 * 저장을 알린다(`didSave` — 서버가 원하면 텍스트 포함). 없는 문서는 not found.
 	 */
 	"lsp.document.save": { params: LspDocumentRef; result: null };
+	/**
+	 * 위치의 hover(결정 M4-D12 의 서버). 문서 또는 루트 밖 문서의 토큰.
+	 */
+	"lsp.hover": { params: LspPositionParams; result: LspHoverResult };
+	/**
+	 * 구현으로(`textDocument/implementation`).
+	 */
+	"lsp.implementation": { params: LspPositionParams; result: LspLocationsResult };
+	/**
+	 * 사용처(`textDocument/references`).
+	 */
+	"lsp.references": { params: LspReferencesParams; result: LspLocationsResult };
 	/**
 	 * rename 의 편집(`textDocument/rename`). 쓰지 않는다 — 웹뷰의 적용기가 미리 확인 · 미리보기 · 쓰기를 한다(결정 M4-D14). 서버가
 	 * 이름을 거절하면 5002(서버의 글). 받을 수 없는 편집(루트 밖 스킴 · `.git` · 상한)은 5120.
@@ -660,6 +684,10 @@ export type UnaryMethods = {
 	 * permission denied).
 	 */
 	"lsp.status.get": { params: LspStatusGetParams; result: LspStatus };
+	/**
+	 * 타입 정의로(`textDocument/typeDefinition`).
+	 */
+	"lsp.typeDefinition": { params: LspPositionParams; result: LspLocationsResult };
 	/**
 	 * 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.
 	 */
@@ -1085,17 +1113,24 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.codeAction.list": {"name":"lsp.codeAction.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspCodeActionListParams","output":"LspCodeActionList","doc":" 범위(와 그 자리의 진단)의 코드 액션(`textDocument/codeAction`). 선호 액션이 먼저다.\n","mcp":false,"fileScope":false},
 	"lsp.codeAction.resolve": {"name":"lsp.codeAction.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"LspCodeActionResolveParams","output":"LspCodeActionResolved","doc":" 코드 액션 하나의 편집 · 명령. 편집이 없고 서버가 `codeAction/resolve` 를 하면 묻는다.\n","mcp":false,"fileScope":false},
 	"lsp.command.execute": {"name":"lsp.command.execute","kind":"unary","tier":"write","roles":["owner"],"params":"LspCommandExecuteParams","output":"LspCommandExecuted","doc":" 서버 명령(`workspace/executeCommand`)을 돌린다. 그동안 그 서버가 거는 `workspace/applyEdit` 만 이 창에 이벤트\n `lsp.applyEdit`(흐름 id 실림)로 넘어오고, 창은 `lsp.applyEdit.answer` 로 답한다(결정 M4-D15).\n","mcp":false,"fileScope":false},
+	"lsp.declaration": {"name":"lsp.declaration","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 선언으로(`textDocument/declaration`).\n","mcp":false,"fileScope":false},
+	"lsp.definition": {"name":"lsp.definition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 정의로(`textDocument/definition`). 위치는 절대 경로, 루트 밖이면 읽기 토큰과 함께.\n","mcp":false,"fileScope":false},
 	"lsp.document.capabilities": {"name":"lsp.document.capabilities","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"LspDocumentCapabilities","doc":" 문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고\n 끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈\n 칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.document.change": {"name":"lsp.document.change","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentChangeParams","output":"LspDocumentChangeResult","doc":" 문서에 편집을 적용하고 떠 있는 서버에 `didChange` 를 보낸다(서버가 `Incremental` 이면 증분, 아니면 전체). 서버를 띄우지\n 않는다. 없는 문서 · 다른 연결의 문서는 not found, 지난 버전 · 빠진 편집은 conflict(`data.version` 에 지금 버전 — 다시 연다),\n 범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다).\n","mcp":false,"fileScope":false},
 	"lsp.document.close": {"name":"lsp.document.close","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"()","doc":" 문서를 닫는다(`didClose`). 인스턴스의 마지막 문서면 유휴 시한(`[lsp] idle_shutdown_minutes`, 기본 10분) 뒤 서버를 끝낸다.\n 없는 id 도 성공이다.\n","mcp":false,"fileScope":false},
 	"lsp.document.open": {"name":"lsp.document.open","kind":"unary","tier":"exec","roles":["owner"],"params":"LspDocumentOpenParams","output":"LspDocumentOpened","doc":" 문서를 연다: Host 가 텍스트를 쥐고, 그 언어의 서버 인스턴스마다(없으면 띄운다 — 지연 기동) `didOpen` 을 보낸다. 그 프로젝트\n 창의 연결만 부를 수 있다(다른 창 · 웰컴 · 설정 · 파일 창은 permission denied — 서버를 띄우지 않는다). 미신뢰 프로젝트는 띄우지\n 않고 인스턴스 상태 `untrusted` 로 답한다. 편집 등급 밖 · 서버 없는 언어는 `off`. 경로가 프로젝트 루트 밖이면 invalid params.\n","mcp":false,"fileScope":false},
+	"lsp.document.read": {"name":"lsp.document.read","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentReadParams","output":"LspDocumentReadResult","doc":" 루트 밖 문서를 읽기 토큰으로 읽는다(결정 M4-D13 — 이 연결이 받은 토큰만, 읽기 전용). 원격 role 로는 열지 않는다.\n","mcp":false,"fileScope":false},
 	"lsp.document.save": {"name":"lsp.document.save","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"()","doc":" 저장을 알린다(`didSave` — 서버가 원하면 텍스트 포함). 없는 문서는 not found.\n","mcp":false,"fileScope":false},
+	"lsp.hover": {"name":"lsp.hover","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspHoverResult","doc":" 위치의 hover(결정 M4-D12 의 서버). 문서 또는 루트 밖 문서의 토큰.\n","mcp":false,"fileScope":false},
+	"lsp.implementation": {"name":"lsp.implementation","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 구현으로(`textDocument/implementation`).\n","mcp":false,"fileScope":false},
+	"lsp.references": {"name":"lsp.references","kind":"unary","tier":"read","roles":["owner"],"params":"LspReferencesParams","output":"LspLocationsResult","doc":" 사용처(`textDocument/references`).\n","mcp":false,"fileScope":false},
 	"lsp.rename": {"name":"lsp.rename","kind":"unary","tier":"read","roles":["owner"],"params":"LspRenameParams","output":"LspEditAnswer","doc":" rename 의 편집(`textDocument/rename`). 쓰지 않는다 — 웹뷰의 적용기가 미리 확인 · 미리보기 · 쓰기를 한다(결정 M4-D14). 서버가\n 이름을 거절하면 5002(서버의 글). 받을 수 없는 편집(루트 밖 스킴 · `.git` · 상한)은 5120.\n","mcp":false,"fileScope":false},
 	"lsp.rename.prepare": {"name":"lsp.rename.prepare","kind":"unary","tier":"read","roles":["owner"],"params":"LspRenamePrepareParams","output":"LspRenamePrepared","doc":" rename 의 대상: 서버의 `prepareRename` 이 준 범위 · 처음 이름. 서버가 `prepareRename` 을 하지 않으면 `default`(웹뷰가 커서의\n 낱말을 쓴다), 그 자리를 바꿀 수 없으면 `invalid`. 맡을 서버가 없으면 5001.\n","mcp":false,"fileScope":false},
 	"lsp.server.restart": {"name":"lsp.server.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시\n 받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.server.stop": {"name":"lsp.server.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의\n 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.servers.list": {"name":"lsp.servers.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspServersListParams","output":"LspServerList","doc":" 언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params\n 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).\n","mcp":false,"fileScope":false},
 	"lsp.status.get": {"name":"lsp.status.get","kind":"unary","tier":"read","roles":["owner"],"params":"LspStatusGetParams","output":"LspStatus","doc":" 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다. 그 프로젝트 창의 연결만(다른 연결은\n permission denied).\n","mcp":false,"fileScope":false},
+	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":false,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false,"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":false,"fileScope":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":false,"fileScope":false},
@@ -5003,6 +5038,20 @@ export type LspDocumentOpened = {
 	instances: LspInstanceStatus[],
 };
 
+export type LspDocumentReadParams = {
+	token: string,
+};
+
+/**  루트 밖 문서(읽기 전용). */
+export type LspDocumentReadResult = {
+	text: string,
+	uri: string,
+	/**  보일 경로(파일이면 절대 경로, 아니면 URI). */
+	path: string,
+	/**  이 위치를 돌려준 서버 id(탭 머리의 「출처」). */
+	server: string,
+};
+
 export type LspDocumentRef = {
 	docId: string,
 };
@@ -5040,6 +5089,21 @@ export type LspFileChange =
 /**  편집을 계산한 서버가 이 파일을 다른 창(연결)의 문서 텍스트로 갖고 있다 — 웹뷰는 아무것도 쓰지 않는다(머리 주석). */
 foreign: boolean } | { kind: "create"; path: string; overwrite: boolean; ignoreIfExists: boolean } | { kind: "rename"; from: string; to: string; overwrite: boolean; ignoreIfExists: boolean } | { kind: "delete"; path: string; recursive: boolean; ignoreIfNotExists: boolean };
 
+/**  hover 본문. 서버가 보낸 글 그대로다 — 웹뷰는 HTML 을 끈 렌더로만 그린다(서버의 글을 믿지 않는다). */
+export type LspHover = {
+	kind: LspMarkupKind,
+	value: string,
+	/**  서버가 준 범위(UTF-16 오프셋). 없으면 웹뷰가 단어로 잡는다. */
+	from: number | null,
+	to: number | null,
+};
+
+export type LspHoverResult = {
+	/**  요청 사이에 문서가 바뀌었다 — 버린다. */
+	staleVersion: boolean,
+	hover: LspHover | null,
+};
+
 /**  인스턴스의 상태. */
 export type LspInstanceState = 
 /**  띄우는 중(`initialize` 를 기다림 · 죽은 뒤 물러남 재기동을 기다림). */
@@ -5076,10 +5140,50 @@ export type LspInstanceStatus = {
 	progress: LspProgress | null,
 };
 
+/**  결과 위치 하나. */
+export type LspLocation = {
+	/**  절대 경로(루트 안이면 정규화한 실제 경로). 파일이 아닌 URI 면 URI 그대로. */
+	path: string,
+	/**  루트 밖이거나 파일이 아니면 읽기 토큰 — `lsp.document.read` 와 토큰 문서 안의 요청에 쓴다. */
+	token: string | null,
+	/**  1 부터. */
+	line: number,
+	/**  1 부터, UTF-16. */
+	column: number,
+	endLine: number,
+	endColumn: number,
+	/**  그 줄의 글(앞뒤 공백 그대로, [`PREVIEW_CHARS`] 까지). 읽지 못했으면 없다. */
+	preview: string | null,
+};
+
+export type LspLocationsResult = {
+	staleVersion: boolean,
+	/**  답한 서버 id. */
+	server: string | null,
+	locations: LspLocation[],
+	/**  [`LOCATIONS_LIMIT`] 를 넘어 잘랐다. */
+	truncated: boolean,
+};
+
+/**  hover 본문의 꼴. */
+export type LspMarkupKind = "markdown" | "plaintext";
+
 /**  LSP 위치(줄 · UTF-16 글자 — 결정 M4-D10). 서버가 준 그대로다. */
 export type LspPosition = {
 	line: number,
 	character: number,
+};
+
+/**  위치 하나. 열린 문서(`docId`)나 루트 밖 문서(`token`) 중 하나를 준다. */
+export type LspPositionParams = {
+	/**  `lsp.document.open` 의 문서. */
+	docId?: string | null,
+	/**  루트 밖 문서의 읽기 토큰(이 연결이 받은 것). */
+	token?: string | null,
+	/**  웹뷰가 위치를 계산한 문서 버전(`docId` 일 때). 다르면 `staleVersion`. */
+	version?: number | null,
+	/**  UTF-16 오프셋. */
+	offset: number,
 };
 
 /**  서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`). */
@@ -5093,6 +5197,16 @@ export type LspProgress = {
 export type LspRange = {
 	start: LspPosition,
 	end: LspPosition,
+};
+
+/**  `lsp.references` 의 매개변수. */
+export type LspReferencesParams = {
+	docId?: string | null,
+	token?: string | null,
+	version?: number | null,
+	offset: number,
+	/**  선언 자리도 넣는가(LSP `context.includeDeclaration`). */
+	includeDeclaration: boolean,
 };
 
 export type LspRenameParams = {
@@ -5211,6 +5325,18 @@ export type LspSettingsOrigin =
 "global" | 
 /**  `.pitwall/project.toml` · `project.local.toml`(또는 개인 전용 폴더). */
 "project";
+
+/**  [`TOPIC_SHOW_DOCUMENT`] 의 내용. */
+export type LspShowDocument = {
+	/**  정규화한 실제 경로(루트 안). */
+	path: string,
+	worktree: string | null,
+	/**  1 부터. 없으면 파일만 연다. */
+	line: number | null,
+	column: number | null,
+	takeFocus: boolean,
+	server: string,
+};
 
 /**  보았지만 고르지 않은 후보와 그 까닭(상태 팝업 · 설치 안내가 보인다). */
 export type LspSkipped = {

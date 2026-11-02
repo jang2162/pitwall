@@ -25297,6 +25297,284 @@
       ],
       "tier": "write"
     },
+    "lsp.declaration": {
+      "description": "선언으로(`textDocument/declaration`).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "위치 하나. 열린 문서(`docId`)나 루트 밖 문서(`token`) 중 하나를 준다.",
+        "properties": {
+          "docId": {
+            "default": null,
+            "description": "`lsp.document.open` 의 문서.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "UTF-16 오프셋.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "token": {
+            "default": null,
+            "description": "루트 밖 문서의 읽기 토큰(이 연결이 받은 것).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "default": null,
+            "description": "웹뷰가 위치를 계산한 문서 버전(`docId` 일 때). 다르면 `staleVersion`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "offset"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspLocation": {
+            "description": "결과 위치 하나.",
+            "properties": {
+              "column": {
+                "description": "1 부터, UTF-16.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endColumn": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "description": "1 부터.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "절대 경로(루트 안이면 정규화한 실제 경로). 파일이 아닌 URI 면 URI 그대로.",
+                "type": "string"
+              },
+              "preview": {
+                "description": "그 줄의 글(앞뒤 공백 그대로, [`PREVIEW_CHARS`] 까지). 읽지 못했으면 없다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token": {
+                "description": "루트 밖이거나 파일이 아니면 읽기 토큰 — `lsp.document.read` 와 토큰 문서 안의 요청에 쓴다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "token",
+              "line",
+              "column",
+              "endLine",
+              "endColumn",
+              "preview"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "locations": {
+            "items": {
+              "$ref": "#/$defs/LspLocation"
+            },
+            "type": "array"
+          },
+          "server": {
+            "description": "답한 서버 id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "staleVersion": {
+            "type": "boolean"
+          },
+          "truncated": {
+            "description": "[`LOCATIONS_LIMIT`] 를 넘어 잘랐다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "staleVersion",
+          "server",
+          "locations",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.definition": {
+      "description": "정의로(`textDocument/definition`). 위치는 절대 경로, 루트 밖이면 읽기 토큰과 함께.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "위치 하나. 열린 문서(`docId`)나 루트 밖 문서(`token`) 중 하나를 준다.",
+        "properties": {
+          "docId": {
+            "default": null,
+            "description": "`lsp.document.open` 의 문서.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "UTF-16 오프셋.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "token": {
+            "default": null,
+            "description": "루트 밖 문서의 읽기 토큰(이 연결이 받은 것).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "default": null,
+            "description": "웹뷰가 위치를 계산한 문서 버전(`docId` 일 때). 다르면 `staleVersion`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "offset"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspLocation": {
+            "description": "결과 위치 하나.",
+            "properties": {
+              "column": {
+                "description": "1 부터, UTF-16.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endColumn": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "description": "1 부터.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "절대 경로(루트 안이면 정규화한 실제 경로). 파일이 아닌 URI 면 URI 그대로.",
+                "type": "string"
+              },
+              "preview": {
+                "description": "그 줄의 글(앞뒤 공백 그대로, [`PREVIEW_CHARS`] 까지). 읽지 못했으면 없다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token": {
+                "description": "루트 밖이거나 파일이 아니면 읽기 토큰 — `lsp.document.read` 와 토큰 문서 안의 요청에 쓴다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "token",
+              "line",
+              "column",
+              "endLine",
+              "endColumn",
+              "preview"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "locations": {
+            "items": {
+              "$ref": "#/$defs/LspLocation"
+            },
+            "type": "array"
+          },
+          "server": {
+            "description": "답한 서버 id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "staleVersion": {
+            "type": "boolean"
+          },
+          "truncated": {
+            "description": "[`LOCATIONS_LIMIT`] 를 넘어 잘랐다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "staleVersion",
+          "server",
+          "locations",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "lsp.document.capabilities": {
       "description": "문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고\n끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈\n칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.",
       "kind": "unary",
@@ -25854,6 +26132,53 @@
       ],
       "tier": "exec"
     },
+    "lsp.document.read": {
+      "description": "루트 밖 문서를 읽기 토큰으로 읽는다(결정 M4-D13 — 이 연결이 받은 토큰만, 읽기 전용). 원격 role 로는 열지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "루트 밖 문서(읽기 전용).",
+        "properties": {
+          "path": {
+            "description": "보일 경로(파일이면 절대 경로, 아니면 URI).",
+            "type": "string"
+          },
+          "server": {
+            "description": "이 위치를 돌려준 서버 id(탭 머리의 「출처」).",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "uri",
+          "path",
+          "server"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "lsp.document.save": {
       "description": "저장을 알린다(`didSave` — 서버가 원하면 텍스트 포함). 없는 문서는 not found.",
       "kind": "unary",
@@ -25872,6 +26197,404 @@
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.hover": {
+      "description": "위치의 hover(결정 M4-D12 의 서버). 문서 또는 루트 밖 문서의 토큰.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "위치 하나. 열린 문서(`docId`)나 루트 밖 문서(`token`) 중 하나를 준다.",
+        "properties": {
+          "docId": {
+            "default": null,
+            "description": "`lsp.document.open` 의 문서.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "UTF-16 오프셋.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "token": {
+            "default": null,
+            "description": "루트 밖 문서의 읽기 토큰(이 연결이 받은 것).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "default": null,
+            "description": "웹뷰가 위치를 계산한 문서 버전(`docId` 일 때). 다르면 `staleVersion`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "offset"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspHover": {
+            "description": "hover 본문. 서버가 보낸 글 그대로다 — 웹뷰는 HTML 을 끈 렌더로만 그린다(서버의 글을 믿지 않는다).",
+            "properties": {
+              "from": {
+                "description": "서버가 준 범위(UTF-16 오프셋). 없으면 웹뷰가 단어로 잡는다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/LspMarkupKind"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value",
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          "LspMarkupKind": {
+            "description": "hover 본문의 꼴.",
+            "enum": [
+              "markdown",
+              "plaintext"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "hover": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LspHover"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "staleVersion": {
+            "description": "요청 사이에 문서가 바뀌었다 — 버린다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "staleVersion",
+          "hover"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.implementation": {
+      "description": "구현으로(`textDocument/implementation`).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "위치 하나. 열린 문서(`docId`)나 루트 밖 문서(`token`) 중 하나를 준다.",
+        "properties": {
+          "docId": {
+            "default": null,
+            "description": "`lsp.document.open` 의 문서.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "UTF-16 오프셋.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "token": {
+            "default": null,
+            "description": "루트 밖 문서의 읽기 토큰(이 연결이 받은 것).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "default": null,
+            "description": "웹뷰가 위치를 계산한 문서 버전(`docId` 일 때). 다르면 `staleVersion`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "offset"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspLocation": {
+            "description": "결과 위치 하나.",
+            "properties": {
+              "column": {
+                "description": "1 부터, UTF-16.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endColumn": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "description": "1 부터.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "절대 경로(루트 안이면 정규화한 실제 경로). 파일이 아닌 URI 면 URI 그대로.",
+                "type": "string"
+              },
+              "preview": {
+                "description": "그 줄의 글(앞뒤 공백 그대로, [`PREVIEW_CHARS`] 까지). 읽지 못했으면 없다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token": {
+                "description": "루트 밖이거나 파일이 아니면 읽기 토큰 — `lsp.document.read` 와 토큰 문서 안의 요청에 쓴다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "token",
+              "line",
+              "column",
+              "endLine",
+              "endColumn",
+              "preview"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "locations": {
+            "items": {
+              "$ref": "#/$defs/LspLocation"
+            },
+            "type": "array"
+          },
+          "server": {
+            "description": "답한 서버 id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "staleVersion": {
+            "type": "boolean"
+          },
+          "truncated": {
+            "description": "[`LOCATIONS_LIMIT`] 를 넘어 잘랐다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "staleVersion",
+          "server",
+          "locations",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.references": {
+      "description": "사용처(`textDocument/references`).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`lsp.references` 의 매개변수.",
+        "properties": {
+          "docId": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "includeDeclaration": {
+            "description": "선언 자리도 넣는가(LSP `context.includeDeclaration`).",
+            "type": "boolean"
+          },
+          "offset": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "token": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "offset",
+          "includeDeclaration"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspLocation": {
+            "description": "결과 위치 하나.",
+            "properties": {
+              "column": {
+                "description": "1 부터, UTF-16.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endColumn": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "description": "1 부터.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "절대 경로(루트 안이면 정규화한 실제 경로). 파일이 아닌 URI 면 URI 그대로.",
+                "type": "string"
+              },
+              "preview": {
+                "description": "그 줄의 글(앞뒤 공백 그대로, [`PREVIEW_CHARS`] 까지). 읽지 못했으면 없다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token": {
+                "description": "루트 밖이거나 파일이 아니면 읽기 토큰 — `lsp.document.read` 와 토큰 문서 안의 요청에 쓴다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "token",
+              "line",
+              "column",
+              "endLine",
+              "endColumn",
+              "preview"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "locations": {
+            "items": {
+              "$ref": "#/$defs/LspLocation"
+            },
+            "type": "array"
+          },
+          "server": {
+            "description": "답한 서버 id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "staleVersion": {
+            "type": "boolean"
+          },
+          "truncated": {
+            "description": "[`LOCATIONS_LIMIT`] 를 넘어 잘랐다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "staleVersion",
+          "server",
+          "locations",
+          "truncated"
+        ],
+        "type": "object"
       },
       "roles": [
         "owner"
@@ -27414,6 +28137,145 @@
         "required": [
           "projectId",
           "instances"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.typeDefinition": {
+      "description": "타입 정의로(`textDocument/typeDefinition`).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "위치 하나. 열린 문서(`docId`)나 루트 밖 문서(`token`) 중 하나를 준다.",
+        "properties": {
+          "docId": {
+            "default": null,
+            "description": "`lsp.document.open` 의 문서.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "UTF-16 오프셋.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "token": {
+            "default": null,
+            "description": "루트 밖 문서의 읽기 토큰(이 연결이 받은 것).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "default": null,
+            "description": "웹뷰가 위치를 계산한 문서 버전(`docId` 일 때). 다르면 `staleVersion`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "offset"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspLocation": {
+            "description": "결과 위치 하나.",
+            "properties": {
+              "column": {
+                "description": "1 부터, UTF-16.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endColumn": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "description": "1 부터.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "절대 경로(루트 안이면 정규화한 실제 경로). 파일이 아닌 URI 면 URI 그대로.",
+                "type": "string"
+              },
+              "preview": {
+                "description": "그 줄의 글(앞뒤 공백 그대로, [`PREVIEW_CHARS`] 까지). 읽지 못했으면 없다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token": {
+                "description": "루트 밖이거나 파일이 아니면 읽기 토큰 — `lsp.document.read` 와 토큰 문서 안의 요청에 쓴다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "token",
+              "line",
+              "column",
+              "endLine",
+              "endColumn",
+              "preview"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "locations": {
+            "items": {
+              "$ref": "#/$defs/LspLocation"
+            },
+            "type": "array"
+          },
+          "server": {
+            "description": "답한 서버 id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "staleVersion": {
+            "type": "boolean"
+          },
+          "truncated": {
+            "description": "[`LOCATIONS_LIMIT`] 를 넘어 잘랐다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "staleVersion",
+          "server",
+          "locations",
+          "truncated"
         ],
         "type": "object"
       },

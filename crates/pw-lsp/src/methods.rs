@@ -322,16 +322,23 @@ mod tests {
                 ("lsp.codeAction.list", Tier::Read, false, false),
                 ("lsp.codeAction.resolve", Tier::Read, false, false),
                 ("lsp.command.execute", Tier::Write, false, false),
+                ("lsp.declaration", Tier::Read, false, false),
+                ("lsp.definition", Tier::Read, false, false),
                 ("lsp.document.capabilities", Tier::Read, false, false),
                 ("lsp.document.change", Tier::Read, false, false),
                 ("lsp.document.close", Tier::Read, false, false),
                 ("lsp.document.open", Tier::Exec, false, false),
+                ("lsp.document.read", Tier::Read, false, false),
                 ("lsp.document.save", Tier::Read, false, false),
+                ("lsp.hover", Tier::Read, false, false),
+                ("lsp.implementation", Tier::Read, false, false),
+                ("lsp.references", Tier::Read, false, false),
                 ("lsp.rename", Tier::Read, false, false),
                 ("lsp.rename.prepare", Tier::Read, false, false),
                 ("lsp.server.restart", Tier::Exec, false, false),
                 ("lsp.server.stop", Tier::Exec, false, false),
                 ("lsp.status.get", Tier::Read, false, false),
+                ("lsp.typeDefinition", Tier::Read, false, false),
             ]
         );
     }
