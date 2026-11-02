@@ -430,7 +430,7 @@ function keyOf(file: string, line: number, name: string): string {
 
 /**
  * 두 출처를 합친다: 서버 결과(서버의 정의 순서 · 서버가 준 순서)를 앞에, 그 뒤 인덱스 결과(점수순). 같은 (파일, 줄, 이름)은 하나 —
- * 앞의 것(서버)을 둔다. `types` 면 타입 종류만 남긴다(출처가 거르지 않았어도). 결과 `SYMBOL_LIMIT` 개, 이름 · 컨테이너 `NAME_LIMIT`.
+ * 앞의 것(서버)을 두고 열만 인덱스의 이름 자리로 고친다. `types` 면 타입 종류만 남긴다(출처가 거르지 않았어도). 결과 `SYMBOL_LIMIT` 개, 이름 · 컨테이너 `NAME_LIMIT`.
  */
 export function mergeSymbols(
   lsp: LspWorkspaceSymbols | undefined,
@@ -440,16 +440,25 @@ export function mergeSymbols(
   limit = SYMBOL_LIMIT,
 ): { rows: SymbolRow[]; truncated: boolean } {
   const rows: SymbolRow[] = [];
-  const seen = new Set<string>();
+  /** 열쇠 → `rows` 의 자리. */
+  const seen = new Map<string, number>();
   let truncated = false;
   const push = (row: SymbolRow) => {
-    if (seen.has(row.key)) return;
+    const at = seen.get(row.key);
+    if (at !== undefined) {
+      // 같은 심볼: 앞의 것(서버)을 두되, 인덱스가 아는 이름 자리의 열을 쓴다 — 서버에 따라 선언 줄의 처음(typescript-language-
+      // server 는 1열)을 주므로, 고르면 이름에 커서가 가게.
+      const kept = rows[at]!;
+      if (row.source === "index" && kept.source === "lsp" && kept.column !== row.column)
+        rows[at] = { ...kept, column: row.column };
+      return;
+    }
     if (types && !TYPE_KINDS.includes(row.kind)) return;
     if (rows.length >= limit) {
       truncated = true;
       return;
     }
-    seen.add(row.key);
+    seen.set(row.key, rows.length);
     rows.push(row);
   };
   for (const s of lsp?.symbols ?? []) {

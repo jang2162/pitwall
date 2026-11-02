@@ -186,6 +186,8 @@ describe("SymbolSearch", () => {
       "index:Widget",
     ]);
     expect(search.get().rows[3]!.relative).toBe("src/other.rs");
+    // 서버는 4열(선언 처음 등)을 줬어도 인덱스가 아는 이름 자리(4열 — 같다)로. 다른 열이면 인덱스 것.
+    expect(search.get().rows[0]).toMatchObject({ source: "lsp", column: 4 });
     // 한 번에 그렸다(인덱스만 보인 순간이 없다).
     expect(seen.filter((s) => s.rows.length > 0)).toHaveLength(1);
     expect(search.get().lspPending).toBe(false);
@@ -337,6 +339,21 @@ describe("SymbolSearch", () => {
 });
 
 describe("mergeSymbols", () => {
+  it("takes the index's name column for a server symbol that points at the start of its declaration line", () => {
+    const declaration = {
+      ...lspSymbol("Widget", 3, 5),
+      location: { ...lspSymbol("Widget", 3).location, column: 1 },
+    };
+    const { rows } = mergeSymbols(
+      lspAnswer([declaration]),
+      indexAnswer([indexMatch("Widget", 3, "class")]),
+      "w",
+      false,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ source: "lsp", line: 3, column: 4, server: "rust-analyzer" });
+  });
+
   it("caps the rows and the name length whatever the source", () => {
     const long = "x".repeat(NAME_LIMIT + 40);
     const index = indexAnswer(
