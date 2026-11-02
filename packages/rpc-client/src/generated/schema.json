@@ -25575,6 +25575,366 @@
       ],
       "tier": "read"
     },
+    "lsp.diagnostics.counts": {
+      "description": "프로젝트(활성 워크트리)의 심각도별 진단 수(상태바의 `⚠ n ⛔ n`). 그 프로젝트 창의 연결만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "심각도별 수(상태바).",
+        "properties": {
+          "error": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hint": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "information": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "상한에 걸려 센 것보다 많다.",
+            "type": "boolean"
+          },
+          "warning": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "error",
+          "warning",
+          "information",
+          "hint",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.diagnostics.list": {
+      "description": "프로젝트(활성 워크트리)의 진단을 쪽 단위로: 경로 차례, 파일 안은 심각도 · 위치 차례. 서버가 보낸 만큼만 — 열지 않은 파일은\n서버가 스스로 보낸 것만 있다. 그 프로젝트 창의 연결만(미신뢰면 서버가 없어 빈 목록이다).",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "LspSeverity": {
+            "description": "심각도. 차례는 오류가 먼저다(작을수록 심하다 — LSP 의 수와 같은 차례).",
+            "enum": [
+              "error",
+              "warning",
+              "information",
+              "hint"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`lsp.diagnostics.list` 의 입력(M5 의 `diagnostics` 툴이 될 꼴 — 결정 M4-D21).",
+        "properties": {
+          "cursor": {
+            "default": null,
+            "description": "앞 쪽의 `nextCursor`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "한 쪽의 진단 수(1 ~ [`LIST_LIMIT`]).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minSeverity": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LspSeverity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "이 심각도와 그보다 심한 것만."
+          },
+          "path": {
+            "default": null,
+            "description": "이 파일만(절대 경로).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리(없으면 메인 체크아웃).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspDiagnostic": {
+            "description": "진단 하나.",
+            "properties": {
+              "code": {
+                "description": "서버 · 도구의 진단 코드(`E0308` 등).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "codeHref": {
+                "description": "코드 설명 링크(`http(s)` 만).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "data": {
+                "description": "서버가 코드 액션 요청에서 되돌려 받는 값([`DATA_LIMIT`] 안일 때만)."
+              },
+              "message": {
+                "type": "string"
+              },
+              "range": {
+                "$ref": "#/$defs/LspRange"
+              },
+              "related": {
+                "items": {
+                  "$ref": "#/$defs/LspRelatedInformation"
+                },
+                "type": "array"
+              },
+              "server": {
+                "description": "낸 서버 id.",
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/LspSeverity"
+              },
+              "source": {
+                "description": "진단을 낸 도구(`rustc` · `ts` 등 — 서버가 알린 것).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tags": {
+                "items": {
+                  "$ref": "#/$defs/LspDiagnosticTag"
+                },
+                "type": "array"
+              },
+              "version": {
+                "description": "이 진단이 기준으로 한 서버 쪽 문서 버전(없으면 서버가 알리지 않았다 — 열지 않은 파일 등). LSP 의 `integer`(i32).",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "server",
+              "version",
+              "range",
+              "severity",
+              "message",
+              "code",
+              "source",
+              "codeHref",
+              "tags",
+              "related",
+              "data"
+            ],
+            "type": "object"
+          },
+          "LspDiagnosticTag": {
+            "description": "진단 꼬리표.",
+            "oneOf": [
+              {
+                "const": "unnecessary",
+                "description": "쓰이지 않는 코드(흐리게).",
+                "type": "string"
+              },
+              {
+                "const": "deprecated",
+                "description": "낡은 것(취소선).",
+                "type": "string"
+              }
+            ]
+          },
+          "LspDiagnosticsFile": {
+            "description": "파일 하나의 진단.",
+            "properties": {
+              "diagnostics": {
+                "items": {
+                  "$ref": "#/$defs/LspDiagnostic"
+                },
+                "type": "array"
+              },
+              "path": {
+                "type": "string"
+              },
+              "truncated": {
+                "description": "이 파일의 진단이 상한에 걸려 일부만 있다.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "diagnostics",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "LspPosition": {
+            "description": "LSP 위치(줄 · UTF-16 글자 — 결정 M4-D10). 서버가 준 그대로다.",
+            "properties": {
+              "character": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "line",
+              "character"
+            ],
+            "type": "object"
+          },
+          "LspRange": {
+            "properties": {
+              "end": {
+                "$ref": "#/$defs/LspPosition"
+              },
+              "start": {
+                "$ref": "#/$defs/LspPosition"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "type": "object"
+          },
+          "LspRelatedInformation": {
+            "description": "진단의 관련 정보(다른 자리 — 루트 밖일 수 있다. 여는 것은 M4-08 의 토큰 길로만).",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "description": "`file:` URI 면 그 경로.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "range": {
+                "$ref": "#/$defs/LspRange"
+              },
+              "uri": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "uri",
+              "range",
+              "message"
+            ],
+            "type": "object"
+          },
+          "LspSeverity": {
+            "description": "심각도. 차례는 오류가 먼저다(작을수록 심하다 — LSP 의 수와 같은 차례).",
+            "enum": [
+              "error",
+              "warning",
+              "information",
+              "hint"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`lsp.diagnostics.list` 의 결과: 경로 차례로 파일들. 한 파일의 진단이 두 쪽에 걸칠 수 있다.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/$defs/LspDiagnosticsFile"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "다음 쪽이 있으면 그 커서.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "truncated": {
+            "description": "프로젝트의 진단이 상한에 걸렸다(어느 파일이든).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "files",
+          "nextCursor",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "lsp.document.capabilities": {
       "description": "문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고\n끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈\n칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.",
       "kind": "unary",

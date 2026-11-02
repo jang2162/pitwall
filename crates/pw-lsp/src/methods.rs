@@ -324,6 +324,8 @@ mod tests {
                 ("lsp.command.execute", Tier::Write, false, false),
                 ("lsp.declaration", Tier::Read, false, false),
                 ("lsp.definition", Tier::Read, false, false),
+                ("lsp.diagnostics.counts", Tier::Read, false, false),
+                ("lsp.diagnostics.list", Tier::Read, false, false),
                 ("lsp.document.capabilities", Tier::Read, false, false),
                 ("lsp.document.change", Tier::Read, false, false),
                 ("lsp.document.close", Tier::Read, false, false),

@@ -612,6 +612,15 @@ export type UnaryMethods = {
 	 */
 	"lsp.definition": { params: LspPositionParams; result: LspLocationsResult };
 	/**
+	 * 프로젝트(활성 워크트리)의 심각도별 진단 수(상태바의 `⚠ n ⛔ n`). 그 프로젝트 창의 연결만.
+	 */
+	"lsp.diagnostics.counts": { params: LspDiagnosticsCountsParams; result: LspDiagnosticsCounts };
+	/**
+	 * 프로젝트(활성 워크트리)의 진단을 쪽 단위로: 경로 차례, 파일 안은 심각도 · 위치 차례. 서버가 보낸 만큼만 — 열지 않은 파일은
+	 * 서버가 스스로 보낸 것만 있다. 그 프로젝트 창의 연결만(미신뢰면 서버가 없어 빈 목록이다).
+	 */
+	"lsp.diagnostics.list": { params: LspDiagnosticsListParams; result: LspDiagnosticsList };
+	/**
 	 * 문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고
 	 * 끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈
 	 * 칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.
@@ -1121,6 +1130,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.command.execute": {"name":"lsp.command.execute","kind":"unary","tier":"write","roles":["owner"],"params":"LspCommandExecuteParams","output":"LspCommandExecuted","doc":" 서버 명령(`workspace/executeCommand`)을 돌린다. 그동안 그 서버가 거는 `workspace/applyEdit` 만 이 창에 이벤트\n `lsp.applyEdit`(흐름 id 실림)로 넘어오고, 창은 `lsp.applyEdit.answer` 로 답한다(결정 M4-D15).\n","mcp":false,"fileScope":false},
 	"lsp.declaration": {"name":"lsp.declaration","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 선언으로(`textDocument/declaration`).\n","mcp":false,"fileScope":false},
 	"lsp.definition": {"name":"lsp.definition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 정의로(`textDocument/definition`). 위치는 절대 경로, 루트 밖이면 읽기 토큰과 함께.\n","mcp":false,"fileScope":false},
+	"lsp.diagnostics.counts": {"name":"lsp.diagnostics.counts","kind":"unary","tier":"read","roles":["owner"],"params":"LspDiagnosticsCountsParams","output":"LspDiagnosticsCounts","doc":" 프로젝트(활성 워크트리)의 심각도별 진단 수(상태바의 `⚠ n ⛔ n`). 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
+	"lsp.diagnostics.list": {"name":"lsp.diagnostics.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspDiagnosticsListParams","output":"LspDiagnosticsList","doc":" 프로젝트(활성 워크트리)의 진단을 쪽 단위로: 경로 차례, 파일 안은 심각도 · 위치 차례. 서버가 보낸 만큼만 — 열지 않은 파일은\n 서버가 스스로 보낸 것만 있다. 그 프로젝트 창의 연결만(미신뢰면 서버가 없어 빈 목록이다).\n","mcp":false,"fileScope":false},
 	"lsp.document.capabilities": {"name":"lsp.document.capabilities","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"LspDocumentCapabilities","doc":" 문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고\n 끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈\n 칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.document.change": {"name":"lsp.document.change","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentChangeParams","output":"LspDocumentChangeResult","doc":" 문서에 편집을 적용하고 떠 있는 서버에 `didChange` 를 보낸다(서버가 `Incremental` 이면 증분, 아니면 전체). 서버를 띄우지\n 않는다. 없는 문서 · 다른 연결의 문서는 not found, 지난 버전 · 빠진 편집은 conflict(`data.version` 에 지금 버전 — 다시 연다),\n 범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다).\n","mcp":false,"fileScope":false},
 	"lsp.document.close": {"name":"lsp.document.close","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"()","doc":" 문서를 닫는다(`didClose`). 인스턴스의 마지막 문서면 유휴 시한(`[lsp] idle_shutdown_minutes`, 기본 10분) 뒤 서버를 끝낸다.\n 없는 id 도 성공이다.\n","mcp":false,"fileScope":false},
@@ -4996,6 +5007,92 @@ export type LspContextDiagnostics = {
 	items: JsonValue[],
 };
 
+/**  진단 하나. */
+export type LspDiagnostic = {
+	/**  낸 서버 id. */
+	server: string,
+	/**  이 진단이 기준으로 한 서버 쪽 문서 버전(없으면 서버가 알리지 않았다 — 열지 않은 파일 등). LSP 의 `integer`(i32). */
+	version: number | null,
+	range: LspRange,
+	severity: LspSeverity,
+	message: string,
+	/**  서버 · 도구의 진단 코드(`E0308` 등). */
+	code: string | null,
+	/**  진단을 낸 도구(`rustc` · `ts` 등 — 서버가 알린 것). */
+	source: string | null,
+	/**  코드 설명 링크(`http(s)` 만). */
+	codeHref: string | null,
+	tags: LspDiagnosticTag[],
+	related: LspRelatedInformation[],
+	/**  서버가 코드 액션 요청에서 되돌려 받는 값([`DATA_LIMIT`] 안일 때만). */
+	data: JsonValue | null,
+};
+
+/**  진단 꼬리표. */
+export type LspDiagnosticTag = 
+/**  쓰이지 않는 코드(흐리게). */
+"unnecessary" | 
+/**  낡은 것(취소선). */
+"deprecated";
+
+/**  심각도별 수(상태바). */
+export type LspDiagnosticsCounts = {
+	error: number,
+	warning: number,
+	information: number,
+	hint: number,
+	/**  상한에 걸려 센 것보다 많다. */
+	truncated: boolean,
+};
+
+export type LspDiagnosticsCountsParams = {
+	projectId: string,
+	worktree?: string | null,
+};
+
+/**  [`TOPIC_DIAGNOSTICS`] 의 내용: 경로 하나의 지금 진단 전부(모든 서버 — 심각도 · 위치 순). */
+export type LspDiagnosticsEvent = {
+	projectId: string,
+	/**  그 진단을 낸 인스턴스의 워크트리(메인 체크아웃이면 없다). */
+	worktree: string | null,
+	path: string,
+	diagnostics: LspDiagnostic[],
+	/**  상한에 걸려 일부만 실었다. */
+	truncated: boolean,
+};
+
+/**  파일 하나의 진단. */
+export type LspDiagnosticsFile = {
+	path: string,
+	diagnostics: LspDiagnostic[],
+	/**  이 파일의 진단이 상한에 걸려 일부만 있다. */
+	truncated: boolean,
+};
+
+/**  `lsp.diagnostics.list` 의 결과: 경로 차례로 파일들. 한 파일의 진단이 두 쪽에 걸칠 수 있다. */
+export type LspDiagnosticsList = {
+	files: LspDiagnosticsFile[],
+	/**  다음 쪽이 있으면 그 커서. */
+	nextCursor: string | null,
+	/**  프로젝트의 진단이 상한에 걸렸다(어느 파일이든). */
+	truncated: boolean,
+};
+
+/**  `lsp.diagnostics.list` 의 입력(M5 의 `diagnostics` 툴이 될 꼴 — 결정 M4-D21). */
+export type LspDiagnosticsListParams = {
+	projectId: string,
+	/**  활성 워크트리(없으면 메인 체크아웃). */
+	worktree?: string | null,
+	/**  이 파일만(절대 경로). */
+	path?: string | null,
+	/**  이 심각도와 그보다 심한 것만. */
+	minSeverity?: LspSeverity | null,
+	/**  앞 쪽의 `nextCursor`. */
+	cursor?: string | null,
+	/**  한 쪽의 진단 수(1 ~ [`LIST_LIMIT`]). */
+	limit: number,
+};
+
 /**  `lsp.document.capabilities` 의 결과. */
 export type LspDocumentCapabilities = {
 	/**  맡을 서버가 있는 기능만(진단은 넣지 않는다). 키는 `LspFeature` 이름(`hover` · `completion` …). */
@@ -5247,6 +5344,15 @@ export type LspReferencesParams = {
 	includeDeclaration: boolean,
 };
 
+/**  진단의 관련 정보(다른 자리 — 루트 밖일 수 있다. 여는 것은 M4-08 의 토큰 길로만). */
+export type LspRelatedInformation = {
+	/**  `file:` URI 면 그 경로. */
+	path: string | null,
+	uri: string,
+	range: LspRange,
+	message: string,
+};
+
 export type LspRenameParams = {
 	docId: string,
 	version: number,
@@ -5363,6 +5469,9 @@ export type LspSettingsOrigin =
 "global" | 
 /**  `.pitwall/project.toml` · `project.local.toml`(또는 개인 전용 폴더). */
 "project";
+
+/**  심각도. 차례는 오류가 먼저다(작을수록 심하다 — LSP 의 수와 같은 차례). */
+export type LspSeverity = "error" | "warning" | "information" | "hint";
 
 /**  [`TOPIC_SHOW_DOCUMENT`] 의 내용. */
 export type LspShowDocument = {
