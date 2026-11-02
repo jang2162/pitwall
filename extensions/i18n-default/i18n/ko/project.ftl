@@ -759,3 +759,46 @@ lsp-edit-preview-create = 새 파일
 # $from: 옛 이름
 lsp-edit-preview-rename = { $from } 에서 이름 바뀜
 lsp-edit-preview-delete = 지움
+
+## 구조 툴 윈도우 · 파일 구조 팝업(src/structure, M4-10). 서버가 준 이름은 글로만 보인다.
+# 출처 표지. $server: 언어 서버 id(rust-analyzer)
+structure-source-lsp = LSP · { $server }
+structure-source-index = 인덱스
+structure-source-label = 심볼 출처
+structure-tree = 구조
+structure-follow-cursor = 커서 따라가기
+structure-sort-name = 이름 순으로 정렬
+structure-empty-none = 열린 파일이 없다
+structure-empty-loading = 심볼을 읽는 중…
+structure-empty-symbols = 심볼이 없다
+structure-failed = 심볼을 읽지 못했다
+structure-truncated = 심볼이 많아 일부만 보인다
+structure-action-file-structure = 파일 구조
+structure-popup-placeholder = 심볼 이름으로 거르기
+structure-popup-empty = 맞는 심볼이 없다
+# $count: 보이지 않는 줄 수
+structure-popup-more = { $count }줄 더 — 더 입력해 좁힌다
+# 화면 읽기 프로그램용 줄 이름. $name: 심볼 이름, $kind: 종류
+structure-row = { $name }, { $kind }
+structure-kind-module = 모듈
+structure-kind-class = 클래스
+structure-kind-method = 메서드
+structure-kind-property = 속성
+structure-kind-field = 필드
+structure-kind-constructor = 생성자
+structure-kind-enum = 열거형
+structure-kind-interface = 인터페이스
+structure-kind-function = 함수
+structure-kind-variable = 변수
+structure-kind-constant = 상수
+structure-kind-value = 값
+structure-kind-enum-member = 열거 멤버
+structure-kind-struct = 구조체
+structure-kind-event = 이벤트
+structure-kind-operator = 연산자
+structure-kind-type-parameter = 타입 매개변수
+structure-kind-trait = 트레이트
+structure-kind-type-alias = 타입 별칭
+structure-kind-macro = 매크로
+structure-kind-impl = 구현
+structure-kind-symbol = 심볼

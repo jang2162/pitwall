@@ -16,6 +16,8 @@ import { createEditorWorkspace } from "../editor/editor-workspace";
 import { navigationActions } from "../editor/navigation-ui";
 import { lspEditActions } from "../lsp/edit-ui";
 import { lspNavigationActions } from "../lsp/navigation-host";
+import { fileStructureActions } from "../structure/file-structure-popup";
+import { structureStrings } from "../structure/strings";
 import { fileOpsActions } from "../file-tree/file-ops";
 import { fileTreeStrings } from "../file-tree/strings";
 import { explorerActions } from "../db/explorer/explorer-feature";
@@ -45,7 +47,7 @@ import { appActions, toolWindowActions } from "./actions";
 import { DEFAULT_KEYMAP_TOML } from "./default-keymap";
 import { sharesKey } from "./keymap-provider";
 import { resolveKeymap } from "./resolve";
-import { KO_APP, KO_PROJECT, KO_WELCOME } from "../i18n/testing";
+import { bundledTranslator, KO_APP, KO_PROJECT, KO_WELCOME } from "../i18n/testing";
 
 const PLATFORMS: Platform[] = ["mac", "win", "linux"];
 const defaults = (platform: Platform) =>
@@ -169,6 +171,21 @@ const ACTION_IDS = new Set(
       }),
       strings: KO_PROJECT.editor.lsp,
     }),
+    ...fileStructureActions({
+      workspace: createEditorWorkspace({
+        documents: createDocumentStore({
+          stat: () => Promise.reject(new Error("none")),
+          read: () => Promise.reject(new Error("none")),
+        }),
+        stat: () => Promise.reject(new Error("none")),
+        onOpenFailed() {},
+        onSaveFailed() {},
+        onSaveBlocked() {},
+        confirmUnsaved: async () => "cancel",
+      }),
+      strings: structureStrings(bundledTranslator("ko")),
+      open() {},
+    }),
     ...terminalActions({
       strings: KO_PROJECT.terminal,
       tabs: new TerminalTabs(),
@@ -284,6 +301,8 @@ describe("default keymap file", () => {
     expect(label("linux", "navigate.forward")).toEqual(["Ctrl+Alt+→"]);
     expect(label("mac", "navigate.recentLocations")).toEqual(["⇧⌘E"]);
     expect(label("win", "navigate.recentLocations")).toEqual(["Ctrl+Shift+E"]);
+    expect(label("mac", "navigate.fileStructure")).toEqual(["⌘F12"]);
+    expect(label("linux", "navigate.fileStructure")).toEqual(["Ctrl+F12"]);
     // 10-ui 「툴 윈도우 · 창」 의 레이아웃 프리셋(M2-21 · M3-20)
     expect(label("mac", "layout.preset.default")).toEqual(["⌃⌥1"]);
     expect(label("mac", "layout.preset.gitReview")).toEqual(["⌃⌥2"]);

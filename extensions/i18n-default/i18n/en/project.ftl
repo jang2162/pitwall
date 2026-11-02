@@ -780,3 +780,46 @@ lsp-edit-preview-lines =
 lsp-edit-preview-create = New file
 lsp-edit-preview-rename = Renamed from { $from }
 lsp-edit-preview-delete = Deleted
+
+## Structure tool window and file structure popup (src/structure, M4-10). Names from the server are shown as plain text.
+# Source label. $server: language server id (rust-analyzer)
+structure-source-lsp = LSP · { $server }
+structure-source-index = Index
+structure-source-label = Symbol source
+structure-tree = Structure
+structure-follow-cursor = Follow cursor
+structure-sort-name = Sort by name
+structure-empty-none = No open file
+structure-empty-loading = Reading symbols…
+structure-empty-symbols = No symbols
+structure-failed = Could not read the symbols
+structure-truncated = Too many symbols — only some are shown
+structure-action-file-structure = File Structure
+structure-popup-placeholder = Filter by symbol name
+structure-popup-empty = No matching symbols
+# $count: rows not shown
+structure-popup-more = { $count } more rows — type more to narrow
+# Screen reader row name. $name: symbol name, $kind: kind
+structure-row = { $name }, { $kind }
+structure-kind-module = Module
+structure-kind-class = Class
+structure-kind-method = Method
+structure-kind-property = Property
+structure-kind-field = Field
+structure-kind-constructor = Constructor
+structure-kind-enum = Enum
+structure-kind-interface = Interface
+structure-kind-function = Function
+structure-kind-variable = Variable
+structure-kind-constant = Constant
+structure-kind-value = Value
+structure-kind-enum-member = Enum member
+structure-kind-struct = Struct
+structure-kind-event = Event
+structure-kind-operator = Operator
+structure-kind-type-parameter = Type parameter
+structure-kind-trait = Trait
+structure-kind-type-alias = Type alias
+structure-kind-macro = Macro
+structure-kind-impl = Implementation
+structure-kind-symbol = Symbol

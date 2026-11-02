@@ -104,6 +104,7 @@ import { FindInFiles } from "../search/find-in-files";
 import { ProjectSearch } from "../search-everywhere/project-search";
 import { createRecentFiles } from "../search-everywhere/recent-files";
 import { SearchResultsToolWindow } from "../search/search-results";
+import { StructureToolWindow } from "../structure/structure-tool-window";
 import { RuntimeStatus } from "../runtime/runtime-status";
 import {
   STATUS_SLOTS,
@@ -163,6 +164,7 @@ const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>>
   notifications: NotificationsToolWindow,
   project: FileTreeToolWindow,
   searchResults: SearchResultsToolWindow,
+  structure: StructureToolWindow,
   terminal: TerminalToolWindow,
 };
 
