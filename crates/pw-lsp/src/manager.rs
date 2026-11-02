@@ -203,6 +203,17 @@ pub struct InstanceEpoch {
     trust: u64,
 }
 
+/// 연결이 문서를 연 인스턴스 하나([`LspManager::session_instances`]).
+#[derive(Debug, Clone)]
+pub struct SessionInstance {
+    pub key: InstanceKey,
+    /// 목록을 만들 때의 세대 표지 — [`LspManager::request_instance`] 의 `expected` 로 넘긴다.
+    pub epoch: InstanceEpoch,
+    /// 그 연결이 그 인스턴스에 연 문서 하나의 언어 — 언어 확장의 Linguist 이름(웹뷰의 문서 언어와 같은 꼴, 루트 밖 위치를 연 외부
+    /// 소스 탭의 언어). 확장에 없는 언어면 LSP 의 `languageId`.
+    pub language: String,
+}
+
 /// `window/showDocument` 을 보일 창([`LspManager::show_document_window`]).
 #[derive(Debug, Clone)]
 pub(crate) struct ShowWindow {
@@ -2286,6 +2297,90 @@ impl LspManager {
         };
         drop(state);
         Ok((grant, epoch))
+    }
+
+    /// 문서 없이 프로젝트의 서버들에 묻는 기능(`workspace/symbol` — M4-16)이 물을 인스턴스들. `lsp_grant`(그 프로젝트 창의
+    /// 연결인가 · 지금 신뢰하는가 — 미신뢰면 신뢰 세대를 올리고 untrusted)를 지난 뒤, 그 허가의 루트 아래 그 프로젝트의 인스턴스 중
+    /// 떠 있고 · `method` 를 다루고 · 정의 · 설정에서 `feature` 를 끄지 않았고 · **부른 연결이 그 인스턴스에 문서를 연**(그 인스턴스
+    /// `docs` 의 문서 주인 세션 — 15 M4-08 ⓔ, 재시작 · 정지만 한 연결은 아니다) 것을 정의 순서로 준다. 하나하나에 지금의 세대
+    /// 표지와 그 연결이 연 문서 하나의 언어(Linguist 이름)를 싣는다 — 부른 쪽은 [`Self::request_instance`] 에 그 표지를 넘긴다. 잠금은 표를 한
+    /// 번 훑는 동안만 쥔다. 서버를 띄우지 않는다.
+    pub fn session_instances(
+        &self,
+        ctx: &Ctx,
+        project_id: &str,
+        worktree: Option<&str>,
+        feature: LspFeature,
+        method: &str,
+    ) -> Result<(PathBuf, Vec<SessionInstance>), RpcError> {
+        let host = self.host()?;
+        let grant = lsp_grant(
+            ctx.scope(),
+            ctx.connection_closed(),
+            &host.parts.projects,
+            project_id,
+            worktree,
+        )
+        .inspect_err(|e| {
+            if reason(e) == Some("untrusted") {
+                self.bump_trust([project_id.to_owned()]);
+            }
+        })?;
+        let root = grant.root().to_path_buf();
+        drop(grant);
+        let session = ctx.session();
+        let state = lock(&self.inner.state);
+        let trust = state.trust_epochs.get(project_id).copied().unwrap_or(0);
+        let mut found: Vec<(usize, SessionInstance)> = state
+            .instances
+            .iter()
+            .filter(|(key, _)| key.project_id == project_id && key.root.starts_with(&root))
+            .filter_map(|(key, instance)| {
+                let server = instance.server.as_ref()?;
+                if !instance.state.is_running()
+                    || instance
+                        .config
+                        .as_ref()
+                        .is_some_and(|c| c.disabled_features.contains(&feature))
+                    || !server.supports(method)
+                {
+                    return None;
+                }
+                let language = instance
+                    .docs
+                    .iter()
+                    .filter_map(|id| state.docs.get(id))
+                    .find(|doc| doc.session == session)?
+                    .language_id
+                    .clone();
+                Some((
+                    instance.order,
+                    SessionInstance {
+                        key: key.clone(),
+                        epoch: InstanceEpoch {
+                            born: instance.born,
+                            generation: instance.generation,
+                            trust,
+                        },
+                        language,
+                    },
+                ))
+            })
+            .collect();
+        drop(state);
+        found.sort_by_key(|(order, _)| *order);
+        // LSP 의 `languageId` → 언어 확장의 Linguist 이름(웹뷰의 문서 언어와 같은 꼴 — 외부 소스 탭의 강조).
+        for (_, found) in &mut found {
+            if let Some((_, l)) = self
+                .inner
+                .extensions
+                .languages()
+                .find(|(_, l)| lsp_language_id(&l.id) == found.language)
+            {
+                found.language = l.linguist.clone();
+            }
+        }
+        Ok((root, found.into_iter().map(|(_, i)| i).collect()))
     }
 
     /// 프로젝트들의 신뢰 세대를 올린다(머리의 [`InstanceEpoch`]).
