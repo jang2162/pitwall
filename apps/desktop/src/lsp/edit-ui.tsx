@@ -100,7 +100,7 @@ export function useLspEditUi(workspace: EditorWorkspace): ReactNode {
   const strings = useProjectStrings().editor.lspEdit;
   const notify = useRetirableNotify();
   const config = useRpcQuery("config.get", {});
-  const preview = useEditPreview(() => latest.current.strings);
+  const preview = useEditPreview(strings);
   const latest = useRef({ strings, notify, lightbulb: lightbulbOf(config.data), ask: preview.ask });
   latest.current = { strings, notify, lightbulb: lightbulbOf(config.data), ask: preview.ask };
   const win = useRef<EditWindow>(undefined);

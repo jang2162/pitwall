@@ -139,7 +139,7 @@ function EditPreview({
 }
 
 /** 미리보기를 묻는 함수와 그 대화상자(`element` 를 창에 그린다). 한 번에 하나만 묻는다 — 떠 있는 동안 온 것은 취소다. */
-export function useEditPreview(strings: () => LspEditStrings): {
+export function useEditPreview(strings: LspEditStrings): {
   ask(files: readonly PreviewFile[], label: string | undefined): Promise<boolean>;
   element: ReactNode;
 } {
@@ -172,7 +172,7 @@ export function useEditPreview(strings: () => LspEditStrings): {
       <EditPreview
         files={question.files}
         label={question.label}
-        strings={strings().preview}
+        strings={strings.preview}
         onAnswer={question.answer}
       />
     ),

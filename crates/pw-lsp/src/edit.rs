@@ -970,7 +970,10 @@ async fn resolve_action(
     })
 }
 
-async fn execute(
+/// 서버 명령을 돌린다(`workspace/executeCommand`) — 도는 동안 그 서버가 거는 `workspace/applyEdit` 은 이 연결(창)에 흐름
+/// `p.flow_id` 로 넘어간다(결정 M4-D15). 서버에 명령을 보내는 하나뿐인 길이다 — 완성 항목의 `command`(M4-11)도 이것을 부른다
+/// (나중에 병합하는 쪽이 `lsp.completion.execute` 를 이 도우미로 합친다 — 메인 판정 2026-11-02).
+pub async fn execute_command(
     m: &LspManager,
     ctx: &Ctx,
     p: LspCommandExecuteParams,
@@ -1094,7 +1097,7 @@ pub fn register(router: &mut Router, manager: &LspManager) {
     let at = Arc::clone(&m);
     router.unary(LspCommandExecute, move |ctx, p| {
         let m = Arc::clone(&at);
-        async move { execute(&m, &ctx, p).await }
+        async move { execute_command(&m, &ctx, p).await }
     });
     router.unary(
         LspApplyEditAnswer,
