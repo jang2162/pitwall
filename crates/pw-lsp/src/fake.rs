@@ -18,6 +18,8 @@
 //! - **답**(`replies`, 메서드 이름별): `result`(없으면 `null`) 또는 `error`(`{code, message}`), `delayMs`(그만큼 뒤에 답 — 그사이
 //!   다른 메시지도 읽는다), `noReply`(답하지 않는다), `then`(답한 뒤 할 일). `replies` 에 없는 요청의 기본 답: `initialize` →
 //!   `{capabilities, serverInfo}`, `shutdown` → `null`, 그 밖 → `MethodNotFound`.
+//! - **차례 답**(`sequence`, 메서드 이름별 답 목록): 그 메서드의 n 번째 요청(0 부터)은 목록의 n 번째 답, 다 쓰면 `replies` 를 따른다
+//!   (같은 요청에 처음과 나중의 답이 달라야 할 때 — M4-06 의 pull `unchanged`).
 //! - **할 일**(`on` — 받은 요청 · 알림의 메서드 이름별, `start` — 뜨자마자): [`Action`] 의 목록을 차례로 한다 — 알림 · 서버 → 클라이언트
 //!   요청 보내기(id 는 `"fake-1"` 부터), stderr 한 줄, 틀 없이 바이트 그대로 쓰기(틀 상한 시험), 멈추기, 끝내기(죽기), 같은 프로세스
 //!   그룹에 오래 사는 자식 띄우기, stderr · 서버 요청 쏟기와 stdin 읽기 멈추기(망가진 서버 — Host 메모리 상한 시험).
@@ -46,6 +48,9 @@ pub struct Scenario {
     pub server_info: Option<Value>,
     #[serde(default)]
     pub replies: BTreeMap<String, Reply>,
+    /// 메서드마다 차례로 쓰는 답(다 쓰면 [`Self::replies`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sequence: BTreeMap<String, Vec<Reply>>,
     #[serde(default)]
     pub on: BTreeMap<String, Vec<Action>>,
     #[serde(default)]
@@ -127,6 +132,12 @@ impl Scenario {
 
     pub fn reply(mut self, method: &str, reply: Reply) -> Self {
         self.replies.insert(method.to_owned(), reply);
+        self
+    }
+
+    /// `method` 의 요청에 차례로 `replies` 를 답한다(다 쓰면 [`Self::reply`] 의 답).
+    pub fn sequence(mut self, method: &str, replies: Vec<Reply>) -> Self {
+        self.sequence.insert(method.to_owned(), replies);
         self
     }
 

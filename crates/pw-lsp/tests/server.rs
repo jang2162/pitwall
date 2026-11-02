@@ -67,6 +67,44 @@ async fn initialize_stores_capabilities_and_sends_initialized() {
 }
 
 /// ② 요청을 보낸 뒤 취소하면 `$/cancelRequest` 가 나가고, 늦게 온 응답은 버린다.
+/// 가짜 서버의 차례 답(`sequence`): 그 메서드의 n 번째 요청은 n 번째 답, 다 쓰면 `replies` 의 답.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_fake_answers_a_method_in_sequence_then_with_its_reply() {
+    let p = project();
+    let scenario = Scenario::default()
+        .sequence(
+            "seq/one",
+            vec![
+                Reply::result(json!("first")),
+                Reply {
+                    error: Some(json!({ "code": code::CONTENT_MODIFIED, "message": "second" })),
+                    ..Reply::default()
+                },
+            ],
+        )
+        .reply("seq/one", Reply::result(json!("after")))
+        .reply("other", Reply::result(json!("other")));
+    let f = p.fake("sequence", scenario, false).await;
+    f.server
+        .initialize(InitializeOptions::new(&p.root))
+        .await
+        .unwrap();
+    let ask = |method: &'static str| {
+        f.server
+            .request_raw(method, Value::Null, RequestOptions::default())
+    };
+    assert_eq!(ask("seq/one").await, Ok(json!("first")));
+    // 다른 메서드는 차례를 쓰지 않는다.
+    assert_eq!(ask("other").await, Ok(json!("other")));
+    assert!(matches!(
+        ask("seq/one").await,
+        Err(RequestError::Server(e)) if e.code == code::CONTENT_MODIFIED
+    ));
+    assert_eq!(ask("seq/one").await, Ok(json!("after")));
+    assert_eq!(ask("seq/one").await, Ok(json!("after")));
+    f.server.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancelled_request_sends_cancel_and_drops_the_late_answer() {
     let p = project();

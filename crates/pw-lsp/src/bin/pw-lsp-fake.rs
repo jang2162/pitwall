@@ -23,6 +23,8 @@ struct Fake {
     next_id: AtomicU64,
     /// `Hang` 뒤로 stdin 을 읽지 않는다.
     hung: std::sync::atomic::AtomicBool,
+    /// 메서드마다 받은 요청 수(`sequence` 의 차례).
+    asked: std::sync::Mutex<std::collections::HashMap<String, usize>>,
 }
 
 impl Fake {
@@ -124,7 +126,22 @@ impl Fake {
     }
 
     async fn answer(self: &Arc<Self>, id: RequestId, method: String) {
-        let reply = self.scenario.replies.get(&method).cloned();
+        let nth = {
+            let mut asked = self
+                .asked
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let n = asked.entry(method.clone()).or_default();
+            *n += 1;
+            *n - 1
+        };
+        let reply = self
+            .scenario
+            .sequence
+            .get(&method)
+            .and_then(|replies| replies.get(nth))
+            .or_else(|| self.scenario.replies.get(&method))
+            .cloned();
         let result = match &reply {
             Some(Reply { no_reply: true, .. }) => return,
             Some(Reply {
@@ -194,6 +211,7 @@ async fn main() -> ExitCode {
         out,
         next_id: AtomicU64::new(1),
         hung: std::sync::atomic::AtomicBool::new(false),
+        asked: std::sync::Mutex::default(),
     });
     fake.act(&fake.scenario.start.clone()).await;
     let mut reader = FrameReader::new(tokio::io::stdin());
