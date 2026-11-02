@@ -63,6 +63,12 @@ interface OpenPopup {
   readonly spec: PopupSpec;
   /** DOM id(`aria-describedby`). */
   readonly id: string;
+  /**
+   * 툴팁 뷰를 만드는 함수 — 열 때 한 번 만들고 자리를 옮겨도 이어받는다. CodeMirror 는 앞 툴팁 뷰를 이 함수의 동일성으로 찾아 다시
+   * 쓰므로, 매번 새로 만들면 편집 · 다른 칸이 바뀔 때마다 DOM 을 새로 그린다(코드 강조 RPC 가 다시 나가고 팝업 안 포커스가 빠진다 —
+   * 재리뷰 N-1).
+   */
+  readonly create: (view: EditorView) => { dom: HTMLElement };
 }
 
 type Popups = Readonly<Record<PopupSlot, OpenPopup | null>>;
@@ -107,9 +113,12 @@ export const popupField = StateField.define<Popups>({
     for (const e of tr.effects)
       if (e.is(setPopup)) {
         set.add(e.value.slot);
-        next[e.value.slot] = e.value.spec && {
-          spec: e.value.spec,
-          id: `pw-lsp-popup-${++popupSeq}`,
+        const spec = e.value.spec;
+        const id = `pw-lsp-popup-${++popupSeq}`;
+        next[e.value.slot] = spec && {
+          spec,
+          id,
+          create: (view: EditorView) => ({ dom: popupDom(view, spec, id) }),
         };
       }
     if (tr.docChanged)
@@ -131,7 +140,7 @@ export const popupField = StateField.define<Popups>({
             ...(spec.end !== undefined && { end: spec.end }),
             above: spec.above ?? false,
             arrow: false,
-            create: (view) => ({ dom: popupDom(view, open) }),
+            create: open.create,
           },
         ];
       }),
@@ -227,7 +236,7 @@ function highlightBlocks(
   }
 }
 
-function popupDom(view: EditorView, { spec, id }: OpenPopup): HTMLElement {
+function popupDom(view: EditorView, spec: PopupSpec, id: string): HTMLElement {
   const services = servicesOf(view);
   const slot = slotOf(spec.kind);
   const dom = document.createElement("div");

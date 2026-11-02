@@ -637,6 +637,42 @@ it("keeps a signature popup through edits and scrolls in its own slot, under a h
   expect(currentPopup(view(), "signature")).toBeNull();
 });
 
+it("keeps the same signature popup node through edits and a hover, so code is coloured once and focus stays inside (N-1)", async () => {
+  host.syntax = fakeSyntaxServer();
+  await mount();
+  await open(MAIN, 1, 1);
+  await act(async () =>
+    openPopup(view(), {
+      kind: "signature",
+      pos: 8,
+      keepOnEdit: true,
+      body: {
+        kind: "markdown",
+        markdown: "```\nfn main(x: i32)\n```\n\n[docs](https://doc.rust-lang.org/)",
+        language: "Mini",
+      },
+    }),
+  );
+  await settle();
+  const signature = () =>
+    view().dom.querySelector<HTMLElement>('.pw-lsp-popup[data-popup-kind="signature"]');
+  const node = signature()!;
+  const coloured = host.syntax.called("open").length;
+  expect(node.querySelector("pre code span")).not.toBeNull();
+  const link = node.querySelector<HTMLAnchorElement>("a")!;
+  link.focus();
+  for (const ch of ["a", "b", "c"])
+    await act(async () => view().dispatch({ changes: { from: 0, insert: ch } }));
+  await act(async () =>
+    openPopup(view(), { kind: "hover", pos: 5, body: { kind: "text", text: "fn main" } }),
+  );
+  await settle();
+  expect(signature()).toBe(node);
+  expect(currentPopup(view(), "signature")?.pos).toBe(11);
+  expect(host.syntax.called("open")).toHaveLength(coloured);
+  expect(document.activeElement).toBe(link);
+});
+
 it("closes the popup with Esc from a focused action button without folding the cursors, and links it for screen readers (M-3, L-1)", async () => {
   await mount();
   await open(WORDS, 1, 1);
