@@ -197,6 +197,13 @@ async fn definitions_and_references_come_back_as_absolute_lines_with_previews() 
     );
     assert_eq!(got["server"], "rust-analyzer");
 
+    // 열린 문서의 줄 미리보기는 Host 의 글이다(디스크가 아니다) — 둘째 줄 앞에 저장하지 않은 편집.
+    win.call(
+        "lsp.document.change",
+        json!({ "docId": doc, "version": 1, "changes": [{ "from": 12, "to": 12, "insert": "/*a*/" }] }),
+    )
+    .await
+    .unwrap();
     let got = win
         .call(
             "lsp.references",
@@ -214,7 +221,7 @@ async fn definitions_and_references_come_back_as_absolute_lines_with_previews() 
         lines,
         [
             (2, "pub fn helper() {}"),
-            (2, "    helper();"),
+            (2, "/*a*/    helper();"),
             (3, "pub fn other() {}"),
         ]
     );
@@ -357,6 +364,16 @@ async fn outside_locations_are_read_only_through_this_windows_token() {
         .await
         .unwrap_err();
     assert_eq!(e.code, code::NOT_FOUND);
+    // 그 인스턴스에 문서를 연 적이 없는 창도 읽지 못한다(토큰의 연결 묶음과 인스턴스 허가가 함께 지킨다).
+    let mut third = env.window();
+    let e = third
+        .call("lsp.document.read", json!({ "token": token }))
+        .await
+        .unwrap_err();
+    assert!(
+        [code::NOT_FOUND, code::PERMISSION_DENIED].contains(&e.code),
+        "{e:?}"
+    );
     // 쓰기 길은 없다: 문서 RPC 는 토큰을 문서로 받지 않는다.
     let e = win
         .call(
@@ -667,4 +684,85 @@ async fn show_document_is_refused_while_untrusted() {
             .await
             .is_err()
     );
+}
+
+/// ② 토큰 문서는 편집 등급 상한(5 MiB)까지만 읽는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_token_document_over_the_edit_tier_is_refused() {
+    let env = Env::new(EnvOptions::default());
+    let big = outside_file(
+        &env,
+        "big.rs",
+        &"a".repeat(usize::try_from(pw_lsp::navigation::READ_LIMIT).unwrap() + 1),
+    );
+    let fits = outside_file(
+        &env,
+        "fits.rs",
+        &"a".repeat(usize::try_from(pw_lsp::navigation::READ_LIMIT).unwrap()),
+    );
+    env.fake("rust-analyzer", outside_scenario(&[(&big, 0), (&fits, 0)]));
+    let (mut win, doc) = ready(&env, "fn main() {}").await;
+    let got = at(&mut win, "lsp.definition", &doc, 3).await.unwrap();
+    let token = |i: usize| got["locations"][i]["token"].as_str().unwrap().to_owned();
+    let e = win
+        .call("lsp.document.read", json!({ "token": token(0) }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::INVALID_PARAMS);
+    assert_eq!(e.data.unwrap()["reason"], "tooLarge");
+    let read = win
+        .call("lsp.document.read", json!({ "token": token(1) }))
+        .await
+        .unwrap();
+    assert_eq!(
+        read["text"].as_str().unwrap().len() as u64,
+        pw_lsp::navigation::READ_LIMIT
+    );
+}
+
+/// ② 토큰을 준 인스턴스가 다시 뜨는 중(`starting`)이면 토큰을 쓰지 못한다 — 한 번 읽어 둔 글도 내주지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_token_waits_for_its_restarting_instance() {
+    let env = Env::new(EnvOptions::default());
+    let file = outside_file(&env, "lib.rs", "x\n");
+    env.fake(
+        "rust-analyzer",
+        outside_scenario(&[(&file, 0)]).reply(
+            "initialize",
+            Reply::result(json!({ "capabilities": caps() })).delayed(1500),
+        ),
+    );
+    let (mut win, doc) = ready(&env, "fn main() {}").await;
+    let got = at(&mut win, "lsp.definition", &doc, 3).await.unwrap();
+    let token = got["locations"][0]["token"].as_str().unwrap().to_owned();
+    win.call("lsp.document.read", json!({ "token": token }))
+        .await
+        .unwrap();
+    let root = env.manager.status(&env.id).instances[0].root.clone();
+    win.call(
+        "lsp.server.restart",
+        json!({ "projectId": env.id, "server": "rust-analyzer", "root": root }),
+    )
+    .await
+    .unwrap();
+    // 새 서버가 떠서(프로세스가 있다) `initialize` 를 기다리는 동안 — 서버는 있지만 아직 준비되지 않았다.
+    let spawned = common::eventually(Duration::from_secs(5), || {
+        env.manager.spawn_count() == 2 && !env.manager.pids(&env.id).is_empty()
+    })
+    .await;
+    assert!(spawned);
+    assert_eq!(
+        env.state_of("rust-analyzer"),
+        Some(LspInstanceState::Starting)
+    );
+    let e = win
+        .call("lsp.document.read", json!({ "token": token }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, 5001, "{e:?}");
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    win.call("lsp.document.read", json!({ "token": token }))
+        .await
+        .unwrap();
 }
