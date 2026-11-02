@@ -7,6 +7,8 @@
 //!   (`pw_lsp_servers::LspServers::write_local` — 커밋되는 `.pitwall/project.toml` 에는 쓰지 않는다). 그 프로젝트 창 · 신뢰한
 //!   프로젝트만(`lsp_grant` — 다른 창 · 웰컴 · 설정 · 파일 창 · 미신뢰는 거절). `enabled` 를 쓰면 그 서버의 이 워크트리 인스턴스를
 //!   `lsp.server.restart` 길로 다시 지나게 한다 — 끄면 `disabled` 로 서버가 끝나고, 켜면 다시 뜬다(허가를 다시 받는다).
+//! - `lsp.server.log` — 인스턴스의 서버 로그(`$STATE/logs/lsp/<서버>-<인스턴스>.<날짜>.log` 중 가장 최근 날짜) 끝 256 KiB. 상태
+//!   팝업의 「로그 열기」 가 글로 보인다. 권한은 `lsp.status.get` 과 같다.
 
 use std::path::{Path, PathBuf};
 
@@ -68,11 +70,34 @@ pub struct LspServerSetLocalResult {
     pub file: String,
 }
 
+/// 로그를 돌려주는 바이트 상한(끝에서부터).
+const MAX_LOG_BYTES: usize = 256 * 1024;
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct LspServerLog {
+    /// 로그 끝(상한까지). 로그가 없으면 빈 글.
+    pub text: String,
+    pub truncated: bool,
+    /// 읽은 파일(절대 경로). 없으면 `null`.
+    pub file: Option<String>,
+}
+
 rpc_method! {
     /// 문서 하나를 맡는 서버와 그 인스턴스 상태(상태바 `lsp` 항목 · 설치 배너). 서버를 띄우지 않는다. 그 프로젝트 창의 연결만.
     pub LspStatusDocument: "lsp.status.document" {
         params: LspDocumentStatusParams,
         result: LspDocumentStatus,
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// 인스턴스의 서버 로그 끝(가장 최근 날짜의 파일, 256 KiB). 그 프로젝트 창의 연결만.
+    pub LspServerLogGet: "lsp.server.log" {
+        params: LspServerControlParams,
+        result: LspServerLog,
         tier: Read,
         roles: [Owner],
     }
@@ -176,6 +201,54 @@ pub async fn set_local(
     })
 }
 
+pub fn server_log(
+    manager: &LspManager,
+    ctx: &Ctx,
+    params: &LspServerControlParams,
+) -> Result<LspServerLog, RpcError> {
+    exec_grant(ctx.scope(), &params.project_id, &Launch::Process)?;
+    let (dir, component) = manager.log_files(params)?;
+    let prefix = format!("{component}.");
+    let newest = std::fs::read_dir(&dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| {
+            name.strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix(".log"))
+                .is_some_and(|date| date.len() == 10 && !date.contains('.'))
+        })
+        .max();
+    let Some(name) = newest else {
+        return Ok(LspServerLog {
+            text: String::new(),
+            truncated: false,
+            file: None,
+        });
+    };
+    let file = dir.join(name);
+    let bytes = std::fs::read(&file)
+        .map_err(|e| RpcError::internal(format!("cannot read {}: {e}", file.display())))?;
+    let truncated = bytes.len() > MAX_LOG_BYTES;
+    let tail = &bytes[bytes.len().saturating_sub(MAX_LOG_BYTES)..];
+    let text = String::from_utf8_lossy(tail);
+    // 잘린 첫 글자 조각(대체 문자)은 첫 줄째 버린다.
+    let text = if truncated {
+        text.split_once('\n')
+            .map_or("", |(_, rest)| rest)
+            .to_owned()
+    } else {
+        text.into_owned()
+    };
+    Ok(LspServerLog {
+        text,
+        truncated,
+        file: Some(file.display().to_string()),
+    })
+}
+
 /// 핸들러를 붙인다(`crate::register` 가 부른다).
 pub fn register(router: &mut Router, manager: &LspManager) {
     let m = manager.clone();
@@ -184,6 +257,18 @@ pub fn register(router: &mut Router, manager: &LspManager) {
         move |ctx, params: LspDocumentStatusParams| {
             let m = m.clone();
             async move { document_status(&m, &ctx, &params) }
+        },
+    );
+    let m = manager.clone();
+    router.unary(
+        LspServerLogGet,
+        move |ctx, params: LspServerControlParams| {
+            let m = m.clone();
+            async move {
+                tokio::task::spawn_blocking(move || server_log(&m, &ctx, &params))
+                    .await
+                    .map_err(|e| RpcError::internal(e.to_string()))?
+            }
         },
     );
     let m = manager.clone();

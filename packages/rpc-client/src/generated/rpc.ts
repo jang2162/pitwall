@@ -695,6 +695,10 @@ export type UnaryMethods = {
 	 */
 	"lsp.rename.prepare": { params: LspRenamePrepareParams; result: LspRenamePrepared };
 	/**
+	 * 인스턴스의 서버 로그 끝(가장 최근 날짜의 파일, 256 KiB). 그 프로젝트 창의 연결만.
+	 */
+	"lsp.server.log": { params: LspServerControlParams; result: LspServerLog };
+	/**
 	 * 인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시
 	 * 받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.
 	 */
@@ -1192,6 +1196,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.references": {"name":"lsp.references","kind":"unary","tier":"read","roles":["owner"],"params":"LspReferencesParams","output":"LspLocationsResult","doc":" 사용처(`textDocument/references`).\n","mcp":false,"fileScope":false},
 	"lsp.rename": {"name":"lsp.rename","kind":"unary","tier":"read","roles":["owner"],"params":"LspRenameParams","output":"LspEditAnswer","doc":" rename 의 편집(`textDocument/rename`). 쓰지 않는다 — 웹뷰의 적용기가 미리 확인 · 미리보기 · 쓰기를 한다(결정 M4-D14). 서버가\n 이름을 거절하면 5002(서버의 글). 받을 수 없는 편집(루트 밖 스킴 · `.git` · 상한)은 5120.\n","mcp":false,"fileScope":false},
 	"lsp.rename.prepare": {"name":"lsp.rename.prepare","kind":"unary","tier":"read","roles":["owner"],"params":"LspRenamePrepareParams","output":"LspRenamePrepared","doc":" rename 의 대상: 서버의 `prepareRename` 이 준 범위 · 처음 이름. 서버가 `prepareRename` 을 하지 않으면 `default`(웹뷰가 커서의\n 낱말을 쓴다), 그 자리를 바꿀 수 없으면 `invalid`. 맡을 서버가 없으면 5001.\n","mcp":false,"fileScope":false},
+	"lsp.server.log": {"name":"lsp.server.log","kind":"unary","tier":"read","roles":["owner"],"params":"LspServerControlParams","output":"LspServerLog","doc":" 인스턴스의 서버 로그 끝(가장 최근 날짜의 파일, 256 KiB). 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
 	"lsp.server.restart": {"name":"lsp.server.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시\n 받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.server.setLocal": {"name":"lsp.server.setLocal","kind":"unary","tier":"write","roles":["owner"],"params":"LspServerSetLocalParams","output":"LspServerSetLocalResult","doc":" 그 프로젝트의 개인 파일(`project.local.toml`)에 `[lsp.<id>] enabled` · `install_prompt` 를 쓴다(「이 프로젝트에서 끄기」 ·\n 「이 프로젝트에서 묻지 않기」). 커밋되는 `.pitwall/project.toml` 에는 쓰지 않는다. 그 프로젝트 창 · 신뢰한 프로젝트만.\n `enabled` 면 그 서버의 인스턴스를 다시 지나게 한다(끄면 끝난다).\n","mcp":false,"fileScope":false},
 	"lsp.server.stop": {"name":"lsp.server.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의\n 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
@@ -5705,6 +5710,14 @@ export type LspServerList = {
 	problem: string | null,
 	/**  설정의 형식 오류 · 모르는 키 · 모르는 서버(그 값은 버렸다). */
 	warnings: string[],
+};
+
+export type LspServerLog = {
+	/**  로그 끝(상한까지). 로그가 없으면 빈 글. */
+	text: string,
+	truncated: boolean,
+	/**  읽은 파일(절대 경로). 없으면 `null`. */
+	file: string | null,
 };
 
 /**  서버를 돌리는 런타임. 서버 관리자가 결정 M4-D6 의 순서로 찾는다 — Pitwall 은 런타임을 설치하지 않는다(D26). */

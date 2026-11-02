@@ -341,6 +341,7 @@ mod tests {
                 ("lsp.references", Tier::Read, false, false),
                 ("lsp.rename", Tier::Read, false, false),
                 ("lsp.rename.prepare", Tier::Read, false, false),
+                ("lsp.server.log", Tier::Read, false, false),
                 ("lsp.server.restart", Tier::Exec, false, false),
                 ("lsp.server.setLocal", Tier::Write, false, false),
                 ("lsp.server.stop", Tier::Exec, false, false),

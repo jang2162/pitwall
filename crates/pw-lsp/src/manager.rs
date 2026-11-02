@@ -1825,6 +1825,19 @@ impl LspManager {
         }
     }
 
+    /// 인스턴스의 로그 폴더와 파일 구성요소 이름(`crate::log::log_component`) — 상태 팝업의 「로그 열기」(`crate::status`).
+    pub(crate) fn log_files(
+        &self,
+        params: &LspServerControlParams,
+    ) -> Result<(PathBuf, String), RpcError> {
+        let host = self.host()?;
+        let key = self.control_key(params);
+        Ok((
+            host.log_dir.clone(),
+            crate::log::log_component(&key.server, &instance_name(&key)),
+        ))
+    }
+
     fn instance_status(&self, key: &InstanceKey) -> Result<LspInstanceStatus, RpcError> {
         lock(&self.inner.state)
             .instances

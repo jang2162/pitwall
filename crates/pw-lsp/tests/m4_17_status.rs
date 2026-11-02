@@ -270,3 +270,62 @@ async fn a_restart_after_install_asks_for_the_grant_again() {
         .await;
     assert_eq!(env.manager.spawn_count(), 1);
 }
+
+// ---- 로그 ---------------------------------------------------------------------------------------------------------------------
+
+/// 「로그 열기」: 그 인스턴스의 서버 로그(stderr 포함)를 글로 돌려준다. 다른 프로젝트의 창은 permission denied, 로그가 없는
+/// 인스턴스는 빈 글.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_log_of_an_instance_is_read_as_text() {
+    use pw_lsp::fake::Action;
+    let env = Env::new(EnvOptions::default());
+    env.fake(
+        "rust-analyzer",
+        incremental().on(
+            "initialized",
+            vec![Action::Stderr {
+                text: "hello from the server 한글".into(),
+            }],
+        ),
+    );
+    let file = env.file("src/main.rs", "");
+    let mut win = env.window();
+    let opened = win.open(&env, &file, "Rust", "").await;
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    let params = json!({
+        "projectId": env.id,
+        "server": "rust-analyzer",
+        "root": opened["instances"][0]["root"],
+    });
+    let mut text = String::new();
+    for _ in 0..50 {
+        let log = win.call("lsp.server.log", params.clone()).await.unwrap();
+        text = log["text"].as_str().unwrap().to_owned();
+        if text.contains("hello from the server 한글") {
+            assert!(log["file"].as_str().unwrap().ends_with(".log"), "{log}");
+            assert_eq!(log["truncated"], false);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(text.contains("hello from the server 한글"), "{text}");
+
+    let mut other = env.connect(ConnectionScope::Project(env.other.clone()));
+    let e = other
+        .call("lsp.server.log", params.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::PERMISSION_DENIED);
+    let none = win
+        .call(
+            "lsp.server.log",
+            json!({ "projectId": env.id, "server": "ruff", "root": "/nowhere" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        none,
+        json!({ "text": "", "truncated": false, "file": null })
+    );
+}

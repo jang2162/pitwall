@@ -26,6 +26,12 @@ pub fn lsp_log_dir(state: &Path) -> PathBuf {
     state.join("logs").join("lsp")
 }
 
+/// 인스턴스 로그 파일의 구성요소 이름 — 파일은 `<이것>.<YYYY-MM-DD>.log` 다(`pw_diag::rolling`). 상태 팝업의 「로그 열기」
+/// (`crate::status`)가 같은 이름으로 찾는다.
+pub fn log_component(server_id: &str, instance: &str) -> String {
+    format!("{}-{}", file_safe(server_id), file_safe(instance))
+}
+
 /// 줄의 종류.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Line {
@@ -79,7 +85,7 @@ impl ServerLog {
         trace: bool,
         daily_limit: usize,
     ) -> io::Result<Arc<Self>> {
-        let component = format!("{}-{}", file_safe(server_id), file_safe(instance));
+        let component = log_component(server_id, instance);
         let file = RollingFile::open(
             dir,
             component,

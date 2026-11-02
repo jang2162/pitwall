@@ -28175,6 +28175,68 @@
       ],
       "tier": "read"
     },
+    "lsp.server.log": {
+      "description": "인스턴스의 서버 로그 끝(가장 최근 날짜의 파일, 256 KiB). 그 프로젝트 창의 연결만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`lsp.server.restart` · `lsp.server.stop` 의 대상 — 상태 이벤트의 인스턴스 하나.",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "root": {
+            "description": "[`LspInstanceStatus::root`] 그대로.",
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "server",
+          "root"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "file": {
+            "description": "읽은 파일(절대 경로). 없으면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "로그 끝(상한까지). 로그가 없으면 빈 글.",
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "truncated",
+          "file"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "lsp.server.restart": {
       "description": "인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시\n받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.",
       "kind": "unary",
