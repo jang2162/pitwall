@@ -91,6 +91,8 @@ fn local_host(
     // 파일 목록 인덱스(`search.files`)는 감시하는 루트마다 목록을 둔다.
     let fs_index = pw_fs::index::FileIndex::new(Arc::clone(&fs));
     let fs_index_methods = fs_index.clone();
+    // 언어 서버의 파일 감시 전달(M4-05b)이 다시 만든 목록을 받는다.
+    let fs_index_lsp = fs_index.clone();
     fs_watch.attach_index(fs_index.clone());
     // 심볼 인덱스(`index.*`, M4-15)는 파일 목록 인덱스의 목록을 따라간다(같은 수명 — 감시하는 루트마다).
     let symbol_index = pw_index::SymbolIndex::new(Arc::clone(&fs), Arc::clone(&extensions));
@@ -251,6 +253,7 @@ fn local_host(
                 tasks: host.tasks().clone(),
                 global: config.global.clone(),
                 state_dir: config.paths.state.clone(),
+                files: Some(fs_index_lsp.clone()),
             });
             tauri::async_runtime::spawn(
                 lsp.clone()

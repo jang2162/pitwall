@@ -261,6 +261,163 @@ mod live {
         );
     }
 
+    /// 파일 감시 전달(15-m4-plan.md M4-05b live — 메인 판정 2026-11-02): 임시 복사본의 `lib.rs` 가 아직 디스크에 없는 모듈
+    /// (`m4_05b_late`)을 선언하고 탐침(`src/m4_05b_watch.rs`)이 그 함수를 부른다. 색인이 끝난 뒤 탐침의 정의는 풀리지 않는다 → 그
+    /// 파일을 디스크에 만들면 실제 OS 감시(`pw_fs`) → `fs.changed` → 관리자 → `workspace/didChangeWatchedFiles` 로 서버가 알게 되어
+    /// 정의가 그 파일로 풀린다. rust-analyzer 는 클라이언트가 감시 동적 등록을 알리면 스스로 감시하지 않는다(`files.watcher` 기본
+    /// `client`) — 전달이 없으면 끝까지 풀리지 않는다.
+    #[cfg(unix)]
+    pub async fn watched_files(server: LiveServer) {
+        use pw_core::Filter;
+        use pw_core::task::{TOPIC_FINISHED, TOPIC_PROGRESS};
+        use pw_lsp::methods::LspInstanceState;
+        use serde_json::{Value, json};
+
+        use super::common::env::{Env, EnvOptions};
+
+        let env = Env::new(EnvOptions {
+            isolated_shell: false,
+            files: true,
+            ..EnvOptions::default()
+        });
+        copy_dir(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/rust"),
+            &env.root,
+        );
+        // 이 행 몫의 임시 파일(픽스처 규칙: 임시 복사본의 lib.rs 끝에 줄을 더한다).
+        let probe = env.file(
+            "src/m4_05b_watch.rs",
+            "//! 파일 감시 탐침: 디스크에 늦게 생기는 모듈의 함수를 부른다.\npub fn probe() -> u32 {\n    crate::m4_05b_late::/*@watch.late*/late()\n}\n",
+        );
+        let lib = env.root.join("src/lib.rs");
+        let mut text = std::fs::read_to_string(&lib).unwrap();
+        text.push_str("pub mod m4_05b_watch;\npub mod m4_05b_late;\n");
+        std::fs::write(&lib, text).unwrap();
+        env.configure(
+            server.server_id(),
+            &server.program(),
+            &server
+                .args()
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+        );
+        let _lease = env.watch_project().await;
+        let mut events = env
+            .bus
+            .subscribe(Filter::all().topics([TOPIC_PROGRESS, TOPIC_FINISHED]));
+        let probe_text = std::fs::read_to_string(&probe).unwrap();
+        let mut win = env.window();
+        let opened = win.open(&env, &probe, "Rust", &probe_text).await;
+        let doc = opened["docId"].as_str().unwrap().to_owned();
+        let ready = common::eventually(Duration::from_secs(60), || {
+            env.state_of(server.server_id()) == Some(LspInstanceState::Ready)
+        })
+        .await;
+        assert!(ready, "{:?}", env.states());
+        settle_progress(&env, &mut events).await;
+
+        let anchor = "/*@watch.late*/";
+        let at = probe_text.find(anchor).unwrap() + anchor.len();
+        let offset = probe_text[..at].encode_utf16().count();
+        let mut definition = async || -> Vec<Value> {
+            let found = win
+                .call(
+                    "test.lsp.feature",
+                    json!({ "docId": doc, "feature": "definition", "method": "textDocument/definition",
+                            "offset": offset, "version": 0 }),
+                )
+                .await;
+            match found {
+                Err(e) if e.data.as_ref().is_some_and(|d| d["code"] == -32801) => Vec::new(),
+                other => match other.unwrap()["result"].clone() {
+                    Value::Array(list) => list,
+                    Value::Null => Vec::new(),
+                    one => vec![one],
+                },
+            }
+        };
+        let before = definition().await;
+        assert!(
+            before.is_empty(),
+            "resolved before the file existed: {before:?}"
+        );
+
+        let late = env.file("src/m4_05b_late.rs", "pub fn late() -> u32 {\n    7\n}\n");
+        let started = std::time::Instant::now();
+        let mut targets = Vec::new();
+        while started.elapsed() < Duration::from_secs(60) {
+            targets = definition().await;
+            if !targets.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        eprintln!(
+            "late() goes to {targets:?} {:?} after the file appeared",
+            started.elapsed()
+        );
+        let uri = pw_lsp::uri::file_uri(&late).unwrap();
+        assert!(
+            targets
+                .iter()
+                .any(|t| t["uri"] == uri || t["targetUri"] == uri),
+            "{targets:?}"
+        );
+        win.session.close();
+        assert!(
+            common::eventually(Duration::from_secs(3), || env
+                .manager
+                .pids(&env.id)
+                .is_empty())
+            .await
+        );
+    }
+
+    /// 진행이 하나 이상 나왔다가 모두 끝나고 3 s 동안 새 진행이 없을 때까지 기다린다(서버가 색인을 마친다).
+    #[cfg(unix)]
+    async fn settle_progress(
+        env: &super::common::env::Env,
+        events: &mut pw_core::bus::Subscription,
+    ) {
+        use std::collections::BTreeSet;
+
+        use pw_core::bus::{Received, Scope};
+        use pw_core::task::TOPIC_PROGRESS;
+
+        let mut started = BTreeSet::new();
+        let mut finished = BTreeSet::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+        let quiet = Duration::from_secs(3);
+        loop {
+            let settled = !started.is_empty()
+                && started.is_subset(&finished)
+                && env.tasks.running(Some(&env.id)).is_empty();
+            let wait = if settled {
+                (tokio::time::Instant::now() + quiet).min(deadline)
+            } else {
+                deadline
+            };
+            let Ok(Some(Received::Event(event))) =
+                tokio::time::timeout_at(wait, events.recv()).await
+            else {
+                assert!(
+                    settled,
+                    "progress did not finish: started {started:?}, finished {finished:?}"
+                );
+                return;
+            };
+            assert_eq!(event.scope, Scope::Project(env.id.clone()));
+            let id = event.payload["taskId"].as_u64().unwrap();
+            if event.topic == TOPIC_PROGRESS {
+                started.insert(id);
+            } else {
+                assert_eq!(event.payload["status"], "completed", "{}", event.payload);
+                finished.insert(id);
+            }
+        }
+    }
+
     /// 시험 프로세스의 `rustc` 툴체인에 rust-src 가 있는가.
     #[cfg(unix)]
     fn rust_src_installed() -> bool {
@@ -388,6 +545,13 @@ async fn live_lsp_rust_analyzer_document_sync() {
         false,
     )
     .await;
+}
+
+/// 파일 감시 전달(M4-05b): 디스크에 새로 생긴 모듈 파일을 감시 전달로 알게 되어 정의가 풀린다.
+#[cfg(all(unix, pw_live_lsp_rust_analyzer))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lsp_rust_analyzer_watched_files() {
+    live::watched_files(pw_lsp::live::LiveServer::RustAnalyzer).await;
 }
 
 /// 픽스처가 rust-src 없이도 돈다(fixtures/README.md 「rust-src 없이도 돈다」 · 계획 리뷰 H2 · M4-05 리뷰 L4).

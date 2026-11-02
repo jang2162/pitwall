@@ -98,6 +98,9 @@ pub struct Env {
     pub other: String,
     /// 가짜 로그인 셸 PATH 의 첫 폴더(가짜 런타임을 둔다).
     pub bin: PathBuf,
+    /// 파일 목록 인덱스와 실제 OS 감시(`EnvOptions::files`).
+    pub files: Option<pw_fs::index::FileIndex>,
+    pub watch: Option<pw_fs::watch::Watch>,
 }
 
 pub struct EnvOptions {
@@ -106,6 +109,8 @@ pub struct EnvOptions {
     pub manager: ManagerOptions,
     /// 가짜 로그인 셸이 PATH · HOME 을 시험 폴더로 바꾸는가. 끄면 시험 프로세스의 환경을 그대로 넘긴다(실 서버 시험 — cargo · node).
     pub isolated_shell: bool,
+    /// 파일 목록 인덱스와 실제 OS 감시(`pw_fs`)를 관리자에 붙인다(파일 감시 전달 — M4-05b). 감시는 [`Env::watch_project`] 로 건다.
+    pub files: bool,
 }
 
 impl Default for EnvOptions {
@@ -114,6 +119,7 @@ impl Default for EnvOptions {
             trusted: true,
             follow: true,
             isolated_shell: true,
+            files: false,
             manager: ManagerOptions {
                 backoff_base: Duration::from_millis(10),
                 backoff_max: Duration::from_millis(50),
@@ -170,12 +176,25 @@ impl Env {
         });
         let manager = LspManager::new(Arc::clone(&servers), extensions, options.manager);
         let tasks = TaskSpawner::new(bus.clone(), Scope::Host, CancellationToken::new());
+        let (files, watch) = if options.files {
+            let fs = Arc::new(pw_fs::Fs::new());
+            fs.attach(projects.clone());
+            let files = pw_fs::index::FileIndex::new(Arc::clone(&fs));
+            tokio::spawn(files.attach(&bus, tasks.clone()));
+            let watch = pw_fs::watch::Watch::new(fs);
+            watch.attach(bus.clone());
+            watch.attach_index(files.clone());
+            (Some(files), Some(watch))
+        } else {
+            (None, None)
+        };
         manager.attach(HostParts {
             projects: projects.clone(),
             bus: bus.clone(),
             tasks: tasks.clone(),
             global: global.clone(),
             state_dir: paths.state.clone(),
+            files: files.clone(),
         });
         extra(&manager);
         if options.follow {
@@ -248,7 +267,28 @@ impl Env {
             root,
             other,
             bin,
+            files,
+            watch,
         }
+    }
+
+    /// 프로젝트 루트에 실제 OS 감시를 걸고(창의 `fs.watch` 와 같다) 파일 목록을 다 만들 때까지 기다린다. 돌려준 임대를 쥐는 동안 감시한다.
+    pub async fn watch_project(&self) -> pw_fs::watch::Lease {
+        let lease = self
+            .watch
+            .as_ref()
+            .expect("EnvOptions::files")
+            .acquire(&pw_fs::watch::FsWatchParams {
+                project_id: self.id.clone(),
+                worktree: None,
+            })
+            .unwrap();
+        let files = self.files.as_ref().unwrap();
+        assert!(
+            files.ready(&self.id, &self.root).await,
+            "the file list was not built"
+        );
+        lease
     }
 
     /// 서버 `server` 의 실행 파일 · 인자를 설정(`[lsp.<id>] path` · `args`)으로 정한다.

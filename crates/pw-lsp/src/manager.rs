@@ -29,6 +29,9 @@
 //! 열어도 서버에는 한 번 열린다(`Synced` — 리뷰 M2).
 //!
 //! **요청 길** — [`LspManager::request`] 하나. 기능 행은 서버에 직접 닿지 않는다(15 「공유 부품의 주인」).
+//!
+//! **파일 감시 전달**(M4-05b) — 떠 있는 서버마다 자리(`crate::watched::Feed`)를 두고 `fs.changed` 와 파일 목록 인덱스의 다시 만든
+//! 목록을 그 서버가 등록한 글롭대로 보낸다. 규칙과 상한은 `crate::watched` 머리 주석.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::hash::{Hash as _, Hasher as _};
@@ -72,6 +75,7 @@ use crate::server::{
     ServerOptions,
 };
 use crate::uri::file_uri;
+use crate::watched::{Event as WatchEvent, Feed, FeedHost, FeedObserver, Gate, WatchLimits};
 
 /// 서버 관리자의 애플리케이션 오류 코드(`pw-lsp` 5001~ — 15 「공유 부품의 주인」 의 오류 코드 칸). 기능 행은 이 범위에 더한다.
 pub mod code {
@@ -102,6 +106,8 @@ pub struct ManagerOptions {
     pub event_capacity: usize,
     /// 서버 로그에 프로토콜(보낸 · 받은 메시지)도 적는가.
     pub trace: bool,
+    /// 파일 감시 전달의 상한(M4-05b).
+    pub watch: WatchLimits,
 }
 
 impl Default for ManagerOptions {
@@ -114,6 +120,7 @@ impl Default for ManagerOptions {
             backoff_max: Duration::from_secs(30),
             event_capacity: 4096,
             trace: false,
+            watch: WatchLimits::default(),
         }
     }
 }
@@ -132,6 +139,8 @@ pub struct HostParts {
     pub global: ConfigStore,
     /// `$STATE` — 서버 로그(`logs/lsp/`)와 강제 종료 뒤 거두기의 기록부(`lsp/running/`).
     pub state_dir: PathBuf,
+    /// 파일 목록 인덱스 — 다시 만든 목록으로 감시 글롭에 맞는 파일을 다시 알린다(M4-05b). 없으면 증분(`fs.changed`)만 보낸다.
+    pub files: Option<pw_fs::index::FileIndex>,
 }
 
 struct Host {
@@ -297,12 +306,18 @@ struct Instance {
     installed: Option<String>,
     sync: SyncKind,
     progress: Tracker,
+    /// 프로젝트(활성 워크트리면 그 워크트리) 루트의 실제 경로 — 감시 전달은 이 루트의 `fs.changed` 만 받는다.
+    scope: PathBuf,
+    /// 떠 있는 서버로 가는 파일 감시 전달의 자리(`ready` 때 만들고 서버를 내려놓을 때 닫는다).
+    feed: Option<Arc<Feed>>,
 }
 
 impl Instance {
-    fn new(order: usize) -> Self {
+    fn new(order: usize, scope: PathBuf) -> Self {
         Self {
             order,
+            scope,
+            feed: None,
             state: LspInstanceState::Starting,
             server: None,
             generation: 0,
@@ -329,6 +344,9 @@ impl Instance {
         self.progress.end_all();
         self.state = state;
         self.idle = None;
+        if let Some(feed) = self.feed.take() {
+            feed.close();
+        }
         self.server.take().map(|server| Taken {
             server,
             initialized,
@@ -591,7 +609,7 @@ impl LspManager {
                 let created = !instances.contains_key(key);
                 let instance = instances
                     .entry(key.clone())
-                    .or_insert_with(|| Instance::new(*order));
+                    .or_insert_with(|| Instance::new(*order, root.clone()));
                 instance.docs.insert(doc_id.clone());
                 instance.holders.insert(session);
                 // 유휴 시한을 거둔다(그 태스크를 끝낸다).
@@ -1123,6 +1141,7 @@ impl LspManager {
         }
         let sync = sync_of(&server.capabilities());
         let installed = prepared_installed;
+        let mut feeding = None;
         let installed = {
             let mut state = lock(&self.inner.state);
             let State {
@@ -1140,6 +1159,9 @@ impl LspManager {
                     instance.config = Some(config);
                     instance.installed = installed;
                     instance.sync = sync;
+                    let feed = Feed::new(self.inner.options.watch.max_pending);
+                    instance.feed = Some(Arc::clone(&feed));
+                    feeding = Some((feed, instance.scope.clone()));
                     for doc_id in instance.docs.clone() {
                         if let Some(doc) = docs.get(&doc_id) {
                             sync_open(&server, instance, &doc_id, doc, docs);
@@ -1152,6 +1174,9 @@ impl LspManager {
         };
         if installed {
             tracing::info!(target: "pw_lsp", project = %key.project_id, server = %key.server, root = %key.root.display(), "language server ready");
+            if let Some((feed, scope)) = feeding {
+                self.spawn_feed(&key, generation, &server, feed, scope);
+            }
             self.publish(&key.project_id);
             let this = self.clone();
             let watched = Arc::clone(&server);
@@ -1163,6 +1188,76 @@ impl LspManager {
             });
         }
         // 아니면 그사이 끝내라는 말이 왔다(창 닫힘 · 신뢰 해제 · 다시 시작 · 멈춤) — 서버를 내려놓은 쪽이 이미 끝냈다.
+    }
+
+    /// 떠 있는 서버의 파일 감시 전달을 띄운다: 파일 목록 인덱스의 다시 만든 목록을 받는 관찰자를 붙이고, 자리를 비우는 태스크가
+    /// 끝날 때(자리 닫힘 · 서버 끝) 뗀다.
+    fn spawn_feed(
+        &self,
+        key: &InstanceKey,
+        generation: u64,
+        server: &Arc<LanguageServer>,
+        feed: Arc<Feed>,
+        scope: PathBuf,
+    ) {
+        let files = self.inner.host.get().and_then(|h| h.parts.files.clone());
+        let observation = files.as_ref().map(|files| {
+            files.observe_queued(Arc::new(FeedObserver {
+                project_id: key.project_id.clone(),
+                root: scope.clone(),
+                feed: Arc::downgrade(&feed),
+            }))
+        });
+        let link = FeedLink {
+            manager: self.clone(),
+            key: key.clone(),
+            generation,
+        };
+        let run = crate::watched::run(
+            link,
+            key.server.clone(),
+            scope,
+            key.root.clone(),
+            Arc::downgrade(server),
+            feed,
+            self.inner.options.watch.clone(),
+        );
+        tokio::spawn(async move {
+            run.await;
+            if let (Some(files), Some(id)) = (files, observation) {
+                files.unobserve(id);
+            }
+        });
+    }
+
+    /// `fs.changed` 하나를 그 루트의 떠 있는 서버들의 자리에 쌓는다(`follow` 가 부른다). `rescan` 이면 경로가 없다 — 파일 목록
+    /// 인덱스가 다시 만든 목록으로 다시 알린다(`crate::watched` 머리 주석).
+    pub fn fs_changed(&self, project_id: &str, changed: &pw_fs::watch::FsChanged) {
+        if changed.paths.is_empty() {
+            return;
+        }
+        let root = Path::new(&changed.root);
+        let feeds: Vec<Arc<Feed>> = lock(&self.inner.state)
+            .instances
+            .iter()
+            .filter(|(k, i)| k.project_id == project_id && i.scope == root)
+            .filter_map(|(_, i)| i.feed.clone())
+            .collect();
+        if feeds.is_empty() {
+            return;
+        }
+        let events: Vec<WatchEvent> = changed
+            .paths
+            .iter()
+            .zip(&changed.kinds)
+            .map(|(path, kind)| WatchEvent {
+                path: PathBuf::from(path),
+                change: (*kind).into(),
+            })
+            .collect();
+        for feed in feeds {
+            feed.push(&events);
+        }
     }
 
     /// 서버의 이벤트를 받는 태스크(서버마다 따로).
@@ -1506,16 +1601,17 @@ impl LspManager {
 
     // ---- 버스 --------------------------------------------------------------------------------------------------------------
 
-    /// [`Self::follow`] 가 받는 구독: 레지스트리 변경(신뢰) · `runtime.changed` · `config.changed`.
+    /// [`Self::follow`] 가 받는 구독: 레지스트리 변경(신뢰) · `runtime.changed` · `config.changed` · `fs.changed`(M4-05b).
     pub fn subscribe(bus: &EventBus) -> Subscription {
         bus.subscribe(Filter::all().topics([
             registry::TOPIC_CHANGED,
             pw_runtime::runtime::TOPIC_CHANGED,
             pw_core::config::TOPIC_CHANGED,
+            pw_fs::watch::TOPIC_CHANGED,
         ]))
     }
 
-    /// 구독이 닫힐 때까지 신뢰 해제 · 런타임 변경 · 설정 변경을 인스턴스에 반영한다.
+    /// 구독이 닫힐 때까지 신뢰 해제 · 런타임 변경 · 설정 변경을 인스턴스에 반영하고 파일 바뀜을 서버에 전한다.
     pub async fn follow(self, mut events: Subscription) {
         while let Some(received) = events.recv().await {
             match received {
@@ -1538,9 +1634,19 @@ impl LspManager {
                 Received::Event(event) if event.topic == pw_core::config::TOPIC_CHANGED => {
                     self.config_changed().await;
                 }
+                Received::Event(event) if event.topic == pw_fs::watch::TOPIC_CHANGED => {
+                    if let Scope::Project(project) = &event.scope
+                        && let Ok(changed) =
+                            serde_json::from_value::<pw_fs::watch::FsChanged>(event.payload.clone())
+                    {
+                        self.fs_changed(project, &changed);
+                    }
+                }
                 Received::Event(_) => {}
                 Received::Lagged(n) => {
-                    tracing::warn!(target: "pw_lsp", dropped = n, "missed events; checking trust and settings again");
+                    // 놓친 `fs.changed` 는 되찾지 않는다 — 같은 버스를 보는 파일 목록 인덱스도 넘쳐 다시 만들면 그 목록으로 다시
+                    // 알린다(`crate::watched` 머리 주석).
+                    tracing::warn!(target: "pw_lsp", dropped = n, "missed events; checking trust and settings again (file changes may be lost)");
                     self.recheck_trust().await;
                     self.config_changed().await;
                 }
@@ -1978,6 +2084,39 @@ struct Prepared {
     initialization_options: Value,
     /// 설치본에서 찾았으면 그 Mason 패키지.
     installed: Option<String>,
+}
+
+/// 파일 감시 전달의 태스크가 관리자에게 묻는 손잡이(그 인스턴스 · 시도).
+struct FeedLink {
+    manager: LspManager,
+    key: InstanceKey,
+    generation: u64,
+}
+
+impl FeedHost for FeedLink {
+    async fn gate(&self) -> Gate {
+        let Some(host) = self.manager.inner.host.get() else {
+            return Gate::Gone;
+        };
+        let projects = host.parts.projects.clone();
+        let project = self.key.project_id.clone();
+        // 보내기 묶음마다 신뢰를 다시 본다 — 신뢰 해제는 서버를 끝내지만(`recheck_trust`) 그 알림을 받기 전의 틈에도 보내지 않게.
+        let trusted = tokio::task::spawn_blocking(move || projects.is_trusted(&project))
+            .await
+            .unwrap_or(false);
+        if !trusted {
+            return Gate::Hold;
+        }
+        let state = lock(&self.manager.inner.state);
+        match state.instances.get(&self.key) {
+            Some(instance)
+                if instance.generation == self.generation && instance.state.is_running() =>
+            {
+                Gate::Open(instance.synced.keys().cloned().collect())
+            }
+            _ => Gate::Gone,
+        }
+    }
 }
 
 /// 해석 · 서버 런타임(블로킹). 띄울 수 없으면 그 상태.
