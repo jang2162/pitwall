@@ -1034,8 +1034,16 @@ impl LspManager {
                 return;
             }
         };
-        if !self.current(&key, generation) {
-            return;
+        // 설치본에서 찾았으면 띄우기 전에 적는다 — 그사이(기동 중 포함) 도구를 지우면 `stop_installed` 가 이 시도를 버리고 띄운
+        // 서버를 끝낸다(재리뷰 N1).
+        {
+            let mut state = lock(&self.inner.state);
+            match state.instances.get_mut(&key) {
+                Some(instance) if instance.generation == generation => {
+                    instance.installed = prepared.installed.clone();
+                }
+                _ => return,
+            }
         }
         let prepared_installed = prepared.installed.clone();
         let instance_name = instance_name(&key);
@@ -1656,7 +1664,8 @@ impl LspManager {
     ) -> Result<FeatureAnswer, RpcError> {
         let mut retried = false;
         loop {
-            let (server, server_id, view) = self.pick(ctx.session(), &request)?;
+            let (server, picked, view) = self.pick(ctx.session(), &request)?;
+            let server_id = picked.key.server.clone();
             let body = params(&view)?;
             let options = RequestOptions {
                 timeout: request
@@ -1667,8 +1676,10 @@ impl LspManager {
             match server.request_raw(request.method, body, options).await {
                 Ok(result) => {
                     let now = self.doc_version(request.doc_id);
+                    // 같은 파일을 연 다른 연결이 그사이 서버의 텍스트를 바꿨어도(`Synced`) 답은 다른 텍스트 기준이다(재리뷰 N2).
                     let stale = now != Some(view.version)
-                        || request.expected_version.is_some_and(|v| v != view.version);
+                        || request.expected_version.is_some_and(|v| v != view.version)
+                        || self.server_text_moved(&picked, request.doc_id);
                     return Ok(FeatureAnswer {
                         result,
                         server: server_id,
@@ -1708,6 +1719,16 @@ impl LspManager {
         }
     }
 
+    /// 요청을 보낸 뒤 서버의 그 URI 텍스트가 바뀌었는가(주인이 바뀌었거나 버전이 올랐거나 닫혔다).
+    fn server_text_moved(&self, picked: &Picked, doc_id: &str) -> bool {
+        let state = lock(&self.inner.state);
+        state
+            .instances
+            .get(&picked.key)
+            .and_then(|i| i.synced.get(&picked.uri))
+            .is_none_or(|s| s.owner != doc_id || s.version != picked.version)
+    }
+
     fn doc_version(&self, doc_id: &str) -> Option<u32> {
         lock(&self.inner.state).docs.get(doc_id).map(|d| d.version)
     }
@@ -1717,7 +1738,7 @@ impl LspManager {
         &self,
         session: SessionId,
         request: &FeatureRequest<'_>,
-    ) -> Result<(Arc<LanguageServer>, String, DocView), RpcError> {
+    ) -> Result<(Arc<LanguageServer>, Picked, DocView), RpcError> {
         let mut state = lock(&self.inner.state);
         let State {
             docs, instances, ..
@@ -1762,14 +1783,20 @@ impl LspManager {
         };
         // 다른 연결(창)이 같은 파일을 연 채 편집했으면 서버의 텍스트가 그 문서의 것이다 — 이 문서로 맞춘 뒤 묻는다(위치는 이 문서
         // 기준이다).
+        let mut sent = 0;
         if let Some(instance) = instances.get_mut(&key)
             && let Some(synced) = instance.synced.get_mut(&doc.uri)
         {
             take_over(&server, instance.sync, synced, request.doc_id, doc, docs);
+            sent = synced.version;
         }
         Ok((
             server,
-            key.server,
+            Picked {
+                key,
+                uri: doc.uri.clone(),
+                version: sent,
+            },
             DocView {
                 uri: doc.uri.clone(),
                 version: doc.version,
@@ -1777,6 +1804,13 @@ impl LspManager {
             },
         ))
     }
+}
+
+/// 요청을 맡은 서버 쪽: 인스턴스, URI, 요청을 보낼 때 서버에 보낸 마지막 버전(`Synced::version`).
+struct Picked {
+    key: InstanceKey,
+    uri: String,
+    version: i64,
 }
 
 /// 요청 하나(기능 행이 채운다).

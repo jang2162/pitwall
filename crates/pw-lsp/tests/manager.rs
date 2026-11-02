@@ -1633,3 +1633,101 @@ fn a_server_outlives_the_thread_that_asked_for_it() {
         fake.server.shutdown().await;
     });
 }
+
+// ---- 재리뷰 N1 · N2 ------------------------------------------------------------------------------------------------------------
+
+/// 재리뷰 N1: 설치본에서 찾은 서버가 아직 `initialize` 를 기다리는 동안 도구를 지워도(`stop_installed`) 그 서버가 곧바로 끝나고
+/// `notInstalled` 다 — 앞의 판은 설치본 패키지를 `ready` 때에야 적어 기동 중인 서버를 못 찾았다(지울 실행 파일로 계속 돌았다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_the_tool_ends_an_installed_server_that_is_still_initializing() {
+    use pw_tools::install::{InstallRecord, InstalledVersion, Layout};
+
+    let env = Env::new(EnvOptions::default());
+    let dir = env.base.join("fake");
+    fs::create_dir_all(&dir).unwrap();
+    let scenario = slow_initialize(6000).write(&dir, "installed").unwrap();
+    let settings = env.paths.config.join("settings.toml");
+    let text = fs::read_to_string(&settings).unwrap();
+    fs::write(
+        &settings,
+        format!(
+            "{text}[lsp.rust-analyzer]\nargs = [\"{}\"]\n",
+            scenario.display()
+        ),
+    )
+    .unwrap();
+    env.global.reload().unwrap();
+    let layout = Layout::new(env.base.join("data/tools"));
+    let version_dir = layout.version_dir("rust-analyzer", "2026-10-26");
+    fs::create_dir_all(version_dir.join("bin")).unwrap();
+    fs::copy(
+        common::env::fake_program(),
+        version_dir.join("bin/rust-analyzer"),
+    )
+    .unwrap();
+    let entry: InstalledVersion = serde_json::from_value(json!({
+        "version": "2026-10-26", "kind": "github", "registryVersion": "test", "sourceUrls": [], "files": [],
+        "checksum": "pinned", "licenses": ["MIT"], "size": 1, "installedAtMs": 0,
+        "bins": { "rust-analyzer": "bin/rust-analyzer" },
+    }))
+    .unwrap();
+    layout
+        .write_record("rust-analyzer", &InstallRecord::new("rust-analyzer", entry))
+        .unwrap();
+    env.servers
+        .set_tools(Arc::new(pw_tools::InstalledTools::new(layout)));
+    let mut win = env.window();
+    let pid = starting_server(&env, &mut win).await;
+    let started = std::time::Instant::now();
+    env.manager.stop_installed("rust-analyzer").await;
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(eventually(Duration::from_secs(1), || !alive(pid)).await);
+    assert_eq!(
+        env.state_of("rust-analyzer"),
+        Some(LspInstanceState::NotInstalled {
+            mason: Some("rust-analyzer".into())
+        })
+    );
+    assert!(env.manager.pids(&env.id).is_empty());
+}
+
+/// 재리뷰 N2: A 의 요청이 서버에 가 있는 동안 같은 파일을 연 B 가 편집하면(서버의 텍스트가 B 의 것이 된다) A 의 답은 다른 텍스트
+/// 기준이다 — A 의 문서 버전은 그대로여도 `staleVersion`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_window_taking_the_file_marks_an_answer_stale() {
+    let env = Env::new(EnvOptions::default());
+    env.fake("rust-analyzer", hover_scenario(500));
+    let file = env.file("src/lib.rs", "");
+    let mut a = env.window();
+    let mut b = env.window();
+    let da = doc_id(&a.open(&env, &file, "Rust", "one").await);
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    let db = doc_id(&b.open(&env, &file, "Rust", "one").await);
+    // 겹침이 없으면 stale 이 아니다.
+    let quiet = a
+        .call(
+            "test.lsp.feature",
+            feature(&da, "hover", "textDocument/hover", 1, Some(0)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(quiet["staleVersion"], false);
+    let asked = a.send(
+        "test.lsp.feature",
+        feature(&da, "hover", "textDocument/hover", 1, Some(0)),
+    );
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    b.call(
+        "lsp.document.change",
+        json!({ "docId": db, "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "B" }] }),
+    )
+    .await
+    .unwrap();
+    let answer = a.response(asked).await.unwrap();
+    assert_eq!(answer["staleVersion"], true, "{answer}");
+}
