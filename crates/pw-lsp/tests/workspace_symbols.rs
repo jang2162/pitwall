@@ -260,6 +260,26 @@ async fn a_window_without_a_document_in_the_server_gets_nothing() {
     let mut other = env.window();
     let got = search(&mut other, &env, "x", json!({})).await.unwrap();
     assert_eq!(got["servers"], json!([]));
+    // 고르는 단계에서 빠진다 — 물으려다 허가에서 막힌 것(`failed`)도 아니다.
+    assert_eq!(got["failed"], json!([]));
+    assert_eq!(asked(&record), 0);
+    // 서버를 재시작만 한 연결(`holders` 에 들지만 문서는 없다)도 고르지 않는다(M4-08 ⓔ — 문서를 연 연결만).
+    other
+        .call(
+            "lsp.server.restart",
+            json!({
+                "projectId": env.id,
+                "server": "rust-analyzer",
+                "root": env.manager.status(&env.id).instances[0].root.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    let got = search(&mut other, &env, "x", json!({})).await.unwrap();
+    assert_eq!(got["servers"], json!([]));
+    assert_eq!(got["failed"], json!([]));
     assert_eq!(asked(&record), 0);
 }
 
@@ -294,6 +314,7 @@ async fn another_projects_window_never_sees_these_servers() {
         .await
         .unwrap();
     assert_eq!(own["servers"], json!([]));
+    assert_eq!(own["failed"], json!([]));
     assert_eq!(asked(&record), 0);
 }
 
