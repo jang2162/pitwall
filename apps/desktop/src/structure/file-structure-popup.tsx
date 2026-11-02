@@ -23,7 +23,7 @@ import { filterRows, innermostAt } from "./outline";
 import { outlineService } from "./outline-service";
 import { useOutline } from "./structure-tool-window";
 import { goToSymbol, SourceLabel, SymbolLabel } from "./symbol-row";
-import { type StructureStrings, useStructureStrings } from "./strings";
+import { emptyText, type StructureStrings, useStructureStrings } from "./strings";
 
 /** 팝업이 한 번에 그리는 줄 수. */
 export const POPUP_ROWS = 300;
@@ -78,11 +78,10 @@ function FileStructurePopup({
   const state = useOutline(service, true, workspace.api());
   const outline = state.status === "ready" ? state.outline : undefined;
   const [query, setQuery] = useState("");
-  const rows = useMemo(
-    () => (outline ? filterRows(outline, query, "position") : []),
+  const { rows: shown, total } = useMemo(
+    () => (outline ? filterRows(outline, query, "position", POPUP_ROWS) : { rows: [], total: 0 }),
     [outline, query],
   );
-  const shown = rows.slice(0, POPUP_ROWS);
   // 사람이 고른 줄(↑↓ · 마우스). 없으면 — 처음은 커서의 심볼, 거르면 첫 맞은 줄. 이 값을 렌더에서 바로 정한다: 항목이 처음
   // 그려지는 커밋에 이미 들어 있어야 cmdk 가 자기 규칙(첫 줄)으로 고르지 않는다. 커서는 처음 한 번만 본다(떠 있는 동안 에디터는
   // 키를 받지 않는다).
@@ -94,7 +93,8 @@ function FileStructurePopup({
     const id = innermostAt(outline, cursor.current);
     return id === undefined ? undefined : String(id);
   }, [outline]);
-  const firstMatch = rows.find((r) => r.match);
+  // 맞은 줄 앞에는 그 조상(깊이 32 까지)만 오므로 첫 맞은 줄은 늘 그린 줄 안에 있다.
+  const firstMatch = shown.find((r) => r.match);
   const value =
     picked ?? (query === "" ? atCursor : undefined) ?? (firstMatch ? String(firstMatch.id) : "");
   const filter = (next: string) => {
@@ -148,8 +148,8 @@ function FileStructurePopup({
                   {T.popupEmpty}
                 </Command.Empty>
               ) : (
-                <p className="px-3 py-2 text-ui-muted-foreground">
-                  {state.status === "failed" ? T.failed : T.emptyLoading}
+                <p className="px-3 py-2 text-ui-muted-foreground" data-structure-empty="">
+                  {emptyText(T, state.status)}
                 </p>
               )}
               {outline &&
@@ -170,12 +170,12 @@ function FileStructurePopup({
                     </Command.Item>
                   );
                 })}
-              {rows.length > shown.length && (
+              {total > shown.length && (
                 <p
                   className="px-3 py-1 text-[11px] text-ui-muted-foreground"
                   data-structure-more=""
                 >
-                  {T.popupMore(rows.length - shown.length)}
+                  {T.popupMore(total - shown.length)}
                 </p>
               )}
             </Command.List>

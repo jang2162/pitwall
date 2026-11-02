@@ -32,11 +32,12 @@ import {
   type Outline,
   type OutlineSort,
   type OutlineSymbol,
+  symbolKeys,
   visibleRows,
 } from "./outline";
 import { outlineService, type OutlineService } from "./outline-service";
 import { goToSymbol, SourceLabel, SymbolLabel } from "./symbol-row";
-import { useStructureStrings } from "./strings";
+import { emptyText, useStructureStrings } from "./strings";
 
 export const ROW_HEIGHT = 22;
 
@@ -123,13 +124,7 @@ export function StructureToolWindow(props: IDockviewPanelProps) {
         />
       ) : (
         <p className="p-2 text-[12px] text-ui-muted-foreground" data-structure-empty="">
-          {state.status === "none"
-            ? T.emptyNone
-            : state.status === "loading"
-              ? T.emptyLoading
-              : state.status === "failed"
-                ? T.failed
-                : T.emptySymbols}
+          {emptyText(T, state.status)}
         </p>
       )}
       {outline?.truncated && (
@@ -182,11 +177,27 @@ function StructureTree({
   onGo(symbol: OutlineSymbol): void;
 }) {
   const T = useStructureStrings();
-  const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(new Set());
-  const [selectedId, setSelectedId] = useState<number>();
+  // 접힘 · 고름은 색인이 아니라 심볼 열쇠(`symbolKeys` — 조상 경로)로 둔다: 편집 뒤 다시 읽은 트리에서 위쪽에 심볼이 생겨 색인이
+  // 밀려도 같은 심볼이 접혀 있고 골라져 있다.
+  const [collapsedKeys, setCollapsedKeys] = useState<ReadonlySet<number>>(new Set());
+  const [selectedKey, setSelectedKey] = useState<number>();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const keys = symbolKeys(outline);
+  const collapsed = useMemo(() => {
+    const ids = new Set<number>();
+    if (collapsedKeys.size > 0)
+      keys.forEach((key, id) => {
+        if (collapsedKeys.has(key)) ids.add(id);
+      });
+    return ids;
+  }, [keys, collapsedKeys]);
+  const selectedId = useMemo(
+    () => (selectedKey === undefined ? undefined : keys.indexOf(selectedKey)),
+    [keys, selectedKey],
+  );
   const rows = useMemo(() => visibleRows(outline, sort, collapsed), [outline, sort, collapsed]);
-  const selected = selectedId === undefined ? -1 : rows.findIndex((r) => r.id === selectedId);
+  const selected =
+    selectedId === undefined || selectedId < 0 ? -1 : rows.findIndex((r) => r.id === selectedId);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -200,6 +211,7 @@ function StructureTree({
     if (scrollPending > 0 && selected >= 0) virtualizer.scrollToIndex(selected, { align: "auto" });
   }, [scrollPending, selected, virtualizer]);
 
+  const setSelectedId = (id: number) => setSelectedKey(keys[id]);
   const select = (id: number | undefined) => {
     if (id === undefined) return;
     setSelectedId(id);
@@ -211,20 +223,22 @@ function StructureTree({
     if (!follow || cursor === undefined) return;
     const id = innermostAt(outline, cursor);
     if (id === undefined) return;
-    const up = ancestors(outline, id);
-    setCollapsed((prev) =>
+    const keys = symbolKeys(outline);
+    const up = ancestors(outline, id).map((a) => keys[a]!);
+    setCollapsedKeys((prev) =>
       up.some((a) => prev.has(a)) ? new Set([...prev].filter((c) => !up.includes(c))) : prev,
     );
-    setSelectedId(id);
+    setSelectedKey(keys[id]);
     setScrollPending((n) => n + 1);
   }, [follow, cursor, outline]);
 
   const toggle = (id: number, open?: boolean) =>
-    setCollapsed((prev) => {
+    setCollapsedKeys((prev) => {
+      const key = keys[id]!;
       const next = new Set(prev);
-      const close = open === undefined ? !next.has(id) : !open;
-      if (close) next.add(id);
-      else next.delete(id);
+      const close = open === undefined ? !next.has(key) : !open;
+      if (close) next.add(key);
+      else next.delete(key);
       return next;
     });
 

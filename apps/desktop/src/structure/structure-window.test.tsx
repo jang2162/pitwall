@@ -22,6 +22,7 @@ import type {
   Project,
   ProjectTrust,
 } from "@pitwall/rpc-client";
+import type { DockviewApi } from "dockview-react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 
@@ -39,6 +40,7 @@ import { fakeSyntaxServer } from "../editor/syntax-testing";
 import { fakeLspServer } from "../lsp/lsp-testing";
 import { createDocumentStore } from "../editor/documents";
 import { createEditorWorkspace } from "../editor/editor-workspace";
+import { openTab } from "../editor/editor-tabs";
 import { bundledTranslator } from "../i18n/testing";
 import { fileStructureActions } from "./file-structure-popup";
 import { OUTLINE_REREAD_MS } from "./outline-service";
@@ -291,6 +293,7 @@ const MAIN = "/work/demo/src/main.rs";
 const MAIN_TEXT = `struct Point {\n    x: u8,\n}\n\nfn main() {}\n${"\n".repeat(21)}fn tail() {}\n`;
 
 let root: Root | undefined;
+let dock: DockviewApi | undefined;
 
 function useUserAgent(ua: string) {
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue(ua);
@@ -331,6 +334,7 @@ afterEach(async () => {
   await endTest();
   act(() => root?.unmount());
   root = undefined;
+  dock = undefined;
   document.body.innerHTML = "";
   vi.restoreAllMocks();
 });
@@ -352,7 +356,7 @@ async function mount() {
   await act(async () =>
     root!.render(
       <ThemeStoreProvider store={store}>
-        <App kind="project" native={native} />
+        <App kind="project" native={native} onDockApi={(a) => (dock = a)} />
       </ThemeStoreProvider>,
     ),
   );
@@ -505,7 +509,7 @@ async function serverReady(ready: boolean) {
 
 const cursor = () => view().state.selection.main.head;
 
-it("shows the server's symbols as a tree, then the index when the server stops, and the server again when it is back", async () => {
+it("shows the server's symbols as a tree with the server as the source", async () => {
   serve();
   await mount();
   await open(MAIN, 1, 1);
@@ -521,6 +525,15 @@ it("shows the server's symbols as a tree, then the index when the server stops, 
   expect(called("lsp.symbols.document")).toEqual([{ docId: "d1", version: 0 }]);
   expect(structure().textContent).toContain("u8");
   expect(called("index.file.symbols")).toEqual([]);
+});
+
+it("switches to the index when the server stops, and to the server again when it is back", async () => {
+  serve();
+  await mount();
+  await open(MAIN, 1, 1);
+  await serverReady(true);
+  await openStructure();
+  expect(source()).toEqual(["lsp", "LSP · rust-analyzer"]);
 
   // 서버가 멈추면 능력 칸에서 빠진다 — 인덱스(저장하지 않은 내용을 싣는다)로 바뀌고 출처 표지가 바뀐다.
   await serverReady(false);
@@ -702,19 +715,31 @@ it("draws server names and details as text, not HTML", async () => {
   expect(structure().querySelector("img, b")).toBeNull();
 });
 
-it("filters the file structure popup fuzzily on ⌘F12, goes on Enter and closes on Esc without reaching the window", async () => {
+const popup = () => document.querySelector<HTMLElement>("[data-file-structure]");
+const items = () =>
+  [...popup()!.querySelectorAll<HTMLElement>("[data-structure-item]")].map((i) => [
+    i.querySelector("[data-structure-name]")!.textContent,
+    i.getAttribute("data-disabled") === "true" ? "dim" : "match",
+  ]);
+const selectedItem = () =>
+  popup()!.querySelector('[data-selected="true"] [data-structure-name]')?.textContent;
+
+async function typeInPopup(text: string) {
+  const input = popup()!.querySelector<HTMLInputElement>("input")!;
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    set.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+  return input;
+}
+
+it("filters the file structure popup fuzzily on ⌘F12 and goes on Enter", async () => {
   serve();
   await mount();
   await open(MAIN, 1, 1);
   await serverReady(true);
-  const popup = () => document.querySelector<HTMLElement>("[data-file-structure]");
-  const items = () =>
-    [...popup()!.querySelectorAll<HTMLElement>("[data-structure-item]")].map((i) => [
-      i.querySelector("[data-structure-name]")!.textContent,
-      i.getAttribute("data-disabled") === "true" ? "dim" : "match",
-    ]);
-  const selectedItem = () =>
-    popup()!.querySelector('[data-selected="true"] [data-structure-name]')?.textContent;
 
   // 커서를 main 안에 둔다 — 첫 줄(Point)이 아닌 커서의 심볼이 골라져야 한다.
   await act(async () => view().dispatch({ selection: { anchor: off(4, 5) } }));
@@ -734,28 +759,21 @@ it("filters the file structure popup fuzzily on ⌘F12, goes on Enter and closes
   );
 
   // 퍼지: 「tl」 은 tail 에 맞는다.
-  const input = popup()!.querySelector<HTMLInputElement>("input")!;
-  await act(async () => {
-    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    set.call(input, "tl");
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await settle();
+  const input = await typeInPopup("tl");
   expect(items()).toEqual([["tail", "match"]]);
   expect(selectedItem()).toBe("tail");
   await keydown({ key: "Enter" }, input);
   expect(popup()).toBeNull();
   expect(cursor()).toBe(off(26, 3));
+});
 
-  // 조상은 흐리게 남는다.
+it("keeps the ancestors of a match dim in the popup and closes on Esc without reaching the window", async () => {
+  serve();
+  await mount();
+  await open(MAIN, 1, 1);
+  await serverReady(true);
   await keydown({ code: "F12", key: "F12", metaKey: true }, view().contentDOM);
-  const input2 = popup()!.querySelector<HTMLInputElement>("input")!;
-  await act(async () => {
-    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    set.call(input2, "x");
-    input2.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await settle();
+  const input = await typeInPopup("x");
   expect(items()).toEqual([
     ["Point", "dim"],
     ["x", "match"],
@@ -767,7 +785,7 @@ it("filters the file structure popup fuzzily on ⌘F12, goes on Enter and closes
     bubbles: true,
     cancelable: true,
   });
-  await act(async () => void input2.dispatchEvent(esc));
+  await act(async () => void input.dispatchEvent(esc));
   await settle();
   expect(esc.defaultPrevented).toBe(true);
   expect(popup()).toBeNull();
@@ -880,9 +898,132 @@ it("draws only the first rows of a large file in the popup and says how many mor
   await open(MAIN, 1, 1);
   await serverReady(true);
   await keydown({ code: "F12", key: "F12", metaKey: true }, view().contentDOM);
-  const popup = document.querySelector<HTMLElement>("[data-file-structure]")!;
-  expect(popup.querySelectorAll("[data-structure-item]")).toHaveLength(300);
-  expect(popup.querySelector("[data-structure-more]")!.textContent).toBe(
+  expect(popup()!.querySelectorAll("[data-structure-item]")).toHaveLength(300);
+  expect(popup()!.querySelector("[data-structure-more]")!.textContent).toBe(
     "700줄 더 — 더 입력해 좁힌다",
   );
+});
+
+// ---- 리뷰 뒤(M4-10 리뷰 H1 · L1 ~ L4) ------------------------------------------------------------------------------------------
+
+/** 인덱스 답: `fn f{i}(){` 가 `depth` 단 겹친 사슬(심볼 i 의 부모는 i - 1). */
+function deepIndex(depth: number): IndexFileSymbols {
+  return {
+    language: "Rust",
+    symbols: Array.from({ length: depth }, (_, i) => ({
+      name: `f${i}`,
+      kind: "function" as const,
+      parent: i === 0 ? null : i - 1,
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+    })),
+  };
+}
+
+it("survives a deeply nested file from the index in an untrusted project, showing 32 levels and saying it is cut", async () => {
+  // 리뷰의 재현: 미신뢰 저장소의 70 KB 파일 하나(깊이 6000 의 중첩 함수)가 인덱스 출처로 와서 렌더 중 스택을 넘기고 창 전체를
+  // 지웠다. 상한(깊이 32)은 출처와 무관하게 그리는 쪽에서 건다.
+  const DEPTH = 6000;
+  host.files.set(MAIN, `${"fn f(){".repeat(DEPTH)}${"}".repeat(DEPTH)}\n`);
+  host.trusted = false;
+  host.handlers.set("index.file.symbols", async () => deepIndex(DEPTH));
+  await mount();
+  await open(MAIN, 1, 1);
+  await openStructure();
+  // 창이 살아 있다.
+  expect(document.querySelector(".cm-editor")).not.toBeNull();
+  expect(source()).toEqual(["index", "인덱스"]);
+  expect(rows()[0]).toEqual(["f0", 1]);
+  expect(structure().textContent).toContain("심볼이 많아 일부만 보인다");
+  // 맨 끝 줄이 32 단이다.
+  const tree = structure().querySelector<HTMLElement>('[role="tree"]')!;
+  await act(async () => tree.focus());
+  await keydown({ key: "End" }, tree);
+  const last = structure().querySelector<HTMLElement>('[aria-selected="true"]')!;
+  expect(last.getAttribute("aria-level")).toBe("32");
+  expect(last.querySelector("[data-structure-name]")!.textContent).toBe("f31");
+  // ⌘F12 팝업도 같은 트리다.
+  await keydown({ code: "F12", key: "F12", metaKey: true }, view().contentDOM);
+  await typeInPopup("f31");
+  expect(items().at(-1)).toEqual(["f31", "match"]);
+  expect(items()).toHaveLength(32);
+});
+
+it("does not send a file larger than the index reads, and says so", async () => {
+  // 인덱스는 1 MiB 를 넘는 텍스트에 빈 답을 준다 — 보내지 않고 「심볼이 없다」 대신 까닭을 적는다.
+  host.files.set(MAIN, `${"// padding\n".repeat(100_000)}fn main() {}\n`);
+  host.trusted = false;
+  serve();
+  await mount();
+  await open(MAIN, 1, 1);
+  await openStructure();
+  expect(called("index.file.symbols")).toEqual([]);
+  expect(structure().textContent).toContain("파일이 커서 심볼 인덱스로 읽지 않는다");
+});
+
+it("draws the index when the first server answer is stale, then asks the server again", async () => {
+  let stale = true;
+  serve(() => ({ ...lspSymbols(), staleVersion: stale }));
+  await mount();
+  await open(MAIN, 1, 1);
+  await serverReady(true);
+  await openStructure();
+  // 첫 답이 낡았다 — 「읽는 중」 에 머물지 않고 인덱스 트리를 그린다.
+  expect(called("lsp.symbols.document")).toHaveLength(1);
+  expect(source()).toEqual(["index", "인덱스"]);
+  expect(rows().map((r) => r[0])).toEqual(["Point", "x", "main", "tail"]);
+  stale = false;
+  for (let i = 0; i < 50 && called("lsp.symbols.document").length < 2; i++)
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+  await settle();
+  expect(called("lsp.symbols.document")).toHaveLength(2);
+  expect(source()).toEqual(["lsp", "LSP · rust-analyzer"]);
+});
+
+it("says no file is open in the popup when the active tab is not a file", async () => {
+  serve();
+  await mount();
+  await open(MAIN, 1, 1);
+  await act(async () =>
+    openTab(dock!, { path: "git:commit:abc", git: { kind: "commit", rev: "abc" } }),
+  );
+  await settle();
+  await keydown({ code: "F12", key: "F12", metaKey: true });
+  expect(popup()).not.toBeNull();
+  expect(popup()!.querySelector("[data-structure-empty]")!.textContent).toBe("열린 파일이 없다");
+});
+
+it("keeps a folded symbol folded when a re-read puts a new symbol above it", async () => {
+  let above = false;
+  serve(() => {
+    const answer = lspSymbols();
+    if (!above) return answer;
+    // 맨 위에 심볼 하나가 생겨 색인이 하나씩 밀린다.
+    const top: LspOutlineSymbol = {
+      ...answer.symbols[2]!,
+      name: "added",
+      parent: null,
+      from: 0,
+      to: 0,
+      selectionFrom: 0,
+      selectionTo: 0,
+    };
+    return {
+      ...answer,
+      symbols: [
+        top,
+        ...answer.symbols.map((s) => ({ ...s, parent: s.parent === null ? null : s.parent + 1 })),
+      ],
+    };
+  });
+  await mount();
+  await open(MAIN, 1, 1);
+  await serverReady(true);
+  await openStructure();
+  const chevron = structure().querySelector<HTMLButtonElement>('[data-structure-row="0"] button')!;
+  await act(async () => chevron.click());
+  expect(rows().map((r) => r[0])).toEqual(["Point", "main", "tail"]);
+  above = true;
+  await serverReady(true);
+  expect(rows().map((r) => r[0])).toEqual(["added", "Point", "main", "tail"]);
 });

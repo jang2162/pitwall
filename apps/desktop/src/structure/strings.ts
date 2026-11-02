@@ -7,6 +7,7 @@ import { useMemo } from "react";
 
 import { type Translate, translator } from "../i18n/localization";
 import type { OutlineKind } from "./outline";
+import type { OutlineStatus } from "./outline-service";
 
 const KINDS: readonly OutlineKind[] = [
   "module",
@@ -46,6 +47,7 @@ export function structureStrings(t: Translate) {
     emptySymbols: t("structure-empty-symbols"),
     failed: t("structure-failed"),
     truncated: t("structure-truncated"),
+    tooLarge: t("structure-too-large"),
     fileStructure: t("structure-action-file-structure"),
     popupPlaceholder: t("structure-popup-placeholder"),
     popupEmpty: t("structure-popup-empty"),
@@ -65,4 +67,20 @@ export type StructureStrings = ReturnType<typeof structureStrings>;
 export function useStructureStrings(): StructureStrings {
   const { l10n } = useLocalization();
   return useMemo(() => structureStrings(translator(l10n)), [l10n]);
+}
+
+/** 트리가 없을 때(또는 비었을 때) 그 자리에 적는 문구. */
+export function emptyText(T: StructureStrings, status: OutlineStatus): string {
+  switch (status) {
+    case "none":
+      return T.emptyNone;
+    case "loading":
+      return T.emptyLoading;
+    case "failed":
+      return T.failed;
+    case "tooLarge":
+      return T.tooLarge;
+    case "ready":
+      return T.emptySymbols;
+  }
 }

@@ -427,6 +427,23 @@ it("has no file tree, search or terminal: their keys do nothing and their action
   expect((await findActions("프로젝트로 열기")).length).toBe(1);
 });
 
+it("leaves ⌘F12 alone: the file structure popup needs a project (M4-10)", async () => {
+  await mount();
+  await act(async () => views()[0]!.focus());
+  const f12 = new KeyboardEvent("keydown", {
+    code: "F12",
+    key: "F12",
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => void (document.activeElement ?? document.body).dispatchEvent(f12));
+  await settle();
+  // 액션이 비활성이라 키맵 엔진이 가져가지 않는다 — 막지 않고, 팝업도 없다.
+  expect(f12.defaultPrevented).toBe(false);
+  expect(document.querySelector("[data-file-structure]")).toBeNull();
+});
+
 it("opens as a project through the native command from the status bar", async () => {
   await mount();
   const status = document.querySelector<HTMLElement>("[data-testid=status-file-window]")!;

@@ -794,6 +794,7 @@ structure-empty-loading = Reading symbols…
 structure-empty-symbols = No symbols
 structure-failed = Could not read the symbols
 structure-truncated = Too many symbols — only some are shown
+structure-too-large = The file is too large for the symbol index
 structure-action-file-structure = File Structure
 structure-popup-placeholder = Filter by symbol name
 structure-popup-empty = No matching symbols

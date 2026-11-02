@@ -31,6 +31,28 @@ const NO_SERVER = { noServer: true } as const;
 /** 편집 뒤 이만큼(ms) 멈추면 다시 읽는다(계획 행). */
 export const OUTLINE_REREAD_MS = 300;
 
+/**
+ * 인덱스가 읽는 텍스트의 상한(UTF-8 바이트, crates/pw-index/src/lib.rs `MAX_FILE_BYTES`). 넘는 텍스트에는 빈 답이 오므로 보내지
+ * 않는다 — 큰 파일을 편집이 멈출 때마다 통째로 보내고 「심볼이 없다」를 보이지 않게(M4-10 리뷰 L1).
+ */
+export const INDEX_MAX_TEXT_BYTES = 1024 * 1024;
+
+/** `text` 의 UTF-8 바이트 수가 `limit` 를 넘는가. UTF-16 단위 하나는 1 ~ 3 바이트라 대부분 세지 않고 정한다. */
+export function exceedsUtf8(text: Text, limit: number): boolean {
+  if (text.length > limit) return true;
+  if (text.length * 3 <= limit) return false;
+  let bytes = text.lines - 1; // 줄바꿈
+  for (const chunk of text.iterLines()) {
+    for (let i = 0; i < chunk.length; i++) {
+      const c = chunk.charCodeAt(i);
+      // 대리쌍은 둘이 합쳐 4 바이트 — 하나에 2 씩.
+      bytes += c < 0x80 ? 1 : c < 0x800 || (c >= 0xd800 && c < 0xe000) ? 2 : 3;
+    }
+    if (bytes > limit) return true;
+  }
+  return false;
+}
+
 export type OutlineStatus =
   /** 보일 것이 없다 — 에디터 탭이 없거나 파일 탭이 아니거나 파일 창이다. */
   | "none"
@@ -39,7 +61,9 @@ export type OutlineStatus =
   /** 트리가 있다(다시 읽는 중이어도 앞의 것을 보인다). */
   | "ready"
   /** 두 출처 모두 실패했다. */
-  | "failed";
+  | "failed"
+  /** 언어 서버가 답하지 않고 파일이 인덱스의 상한(`INDEX_MAX_TEXT_BYTES`)보다 커서 인덱스로도 읽지 않았다. */
+  | "tooLarge";
 
 export interface OutlineState {
   readonly status: OutlineStatus;
@@ -167,6 +191,8 @@ function createOutlineService(workspace: EditorWorkspace): OutlineService {
     const doc = v.state.facet(editorContext)?.lsp;
     bindLsp(doc);
     const current = () => id === seq && view()?.state.doc === text;
+    /** 첫 읽기의 서버 답이 낡았다 — 인덱스 트리를 그린 뒤 서버에 한 번 더 묻는다. */
+    let askAgain = false;
     if (doc?.capabilities.document_symbol) {
       try {
         // 요청 도우미(`doc.request` — `doc.call` 과 같은 규칙: 편집이 Host 에 닿은 뒤 묻고, 같은 종류의 앞 요청을 취소하고,
@@ -185,13 +211,21 @@ function createOutlineService(workspace: EditorWorkspace): OutlineService {
           }
         });
         if (id !== seq) return;
-        if (answer === undefined) return;
-        if (!("noServer" in answer)) return finish(fromLsp(answer));
+        if (answer === undefined) {
+          // 낡은 답: 앞 트리가 있으면 그대로 두고 다음 읽기(편집 · 능력 칸)를 기다린다. 첫 읽기면 「읽는 중」 에 머물지 않게
+          // 이번은 인덱스로 대신하고 조금 뒤 서버에 한 번 더 묻는다(그때 낡으면 인덱스 트리가 남는다, M4-10 리뷰 L2).
+          if (store.getState().outline) return;
+          askAgain = true;
+        } else if (!("noServer" in answer)) return finish(fromLsp(answer));
       } catch (e) {
         if (id !== seq) return;
         // 서버 오류 · 시한 · 문서를 잃음 — 인덱스로 대신한다.
         if (errorCode(e) === ERROR_CODE.CANCELLED) return;
       }
+    }
+    if (exceedsUtf8(text, INDEX_MAX_TEXT_BYTES)) {
+      if (current()) store.setState({ status: "tooLarge", outline: undefined });
+      return;
     }
     try {
       const answer = await sessions.services.call(
@@ -206,6 +240,7 @@ function createOutlineService(workspace: EditorWorkspace): OutlineService {
       );
       if (!current()) return;
       finish(fromIndex(answer, text));
+      if (askAgain) schedule(OUTLINE_REREAD_MS);
     } catch {
       if (!current()) return;
       if (!store.getState().outline) store.setState({ status: "failed" });
