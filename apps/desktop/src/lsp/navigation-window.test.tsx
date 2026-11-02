@@ -508,7 +508,12 @@ it("goes to the one declaration, back with ⌘[, and lists several in a popup (�
   expect(popupDom()!.textContent).toContain("pub fn other() {}");
   const list = popupDom()!.querySelector<HTMLElement>("[role=listbox]")!;
   expect(document.activeElement).toBe(list);
+  // 목록이 받은 키는 창(키맵)까지 가지 않는다.
+  const reached = vi.fn();
+  window.addEventListener("keydown", reached);
   await keydown({ code: "ArrowDown", key: "ArrowDown" }, list);
+  window.removeEventListener("keydown", reached);
+  expect(reached).not.toHaveBeenCalled();
   await keydown({ code: "Enter", key: "Enter" }, list);
   await settle();
   expect(here()).toEqual({ path: LIB, line: 2, column: 8 });
@@ -662,6 +667,15 @@ it("opens a location outside the root read-only through its token, asks the same
   await keydown({ code: "BracketLeft", key: "[", metaKey: true }, view().contentDOM);
   await settle();
   expect(here()).toEqual({ path: MAIN, line: 2, column: 6 });
+  // 파일 탭이 아니다 — 최근 파일(⌘E)에 들지 않는다(활성 탭이 아닐 때 본다 — 목록은 지금 탭을 빼고 보인다).
+  await keydown({ code: "KeyE", key: "e", metaKey: true }, view().contentDOM);
+  await settle();
+  const recent = document.querySelector<HTMLElement>("[data-search-everywhere]")!;
+  expect(recent.textContent).toContain("main.rs");
+  expect(recent.textContent).not.toContain("mod.rs");
+  expect(recent.textContent).not.toContain("tok-1");
+  await keydown({ code: "Escape", key: "Escape" });
+  await settle();
 });
 
 it("does not open an outside tab when the token cannot be read", async () => {
@@ -751,6 +765,24 @@ it("hovers after 0.5 s, underlines with ⌘ and previews the declaration, and cl
   expect(popupDom()!.textContent).toBe("fn helper()");
   pointer = 40;
   await mouse("mousemove");
+  expect(popupDom()).toBeNull();
+
+  // 답을 기다리는 사이 마우스가 낱말을 떠나면 그 답은 버린다.
+  let answerLate: (v: unknown) => void = () => {};
+  host.lsp!.handle("lsp.hover", () => new Promise((r) => (answerLate = r)));
+  pointer = 17;
+  await mouse("mousemove");
+  await act(async () => vi.advanceTimersByTimeAsync(550));
+  await settle();
+  pointer = 40;
+  await mouse("mousemove");
+  await act(async () =>
+    answerLate({
+      staleVersion: false,
+      hover: { kind: "plaintext", value: "late", from: null, to: null },
+    }),
+  );
+  await settle();
   expect(popupDom()).toBeNull();
 
   // ⌘ 를 누른 채: 밑줄과 선언 미리보기(정의의 앞 줄들을 코드 블록으로).
