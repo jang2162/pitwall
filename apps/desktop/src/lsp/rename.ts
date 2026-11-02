@@ -72,7 +72,10 @@ function renameDom(view: EditorView, input: RenameInput) {
   field.addEventListener("keydown", (event) => {
     if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter") {
+      // 입력이 받은 ↩ 는 창 키맵에 가지 않는다 — `⌥↩`(코드 액션) 등 수정 키가 붙은 ↩ 는 이름을 정하지도 않는다.
       event.preventDefault();
+      event.stopPropagation();
+      if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
       finish(field.value);
     } else if (event.key === "Escape") {
       event.preventDefault();
@@ -177,6 +180,7 @@ export async function renameAt(view: EditorView, win: EditWindow): Promise<void>
     win.notify({ level: "warning", title: T.stale });
     return;
   }
+  // `apply` 는 던지지 않는다(뜻밖의 오류도 `failed` 결과) — 알림 없이 끝나는 길이 없다.
   win.report(await flow.apply(answer.edit, { label: name }), T.renameFailed);
 }
 

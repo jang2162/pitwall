@@ -4,9 +4,11 @@
 // 결정 M4-D15)에 넘긴다. 진단 호버의 액션 줄에는 「빠른 수정」 을 끼운다(`quickfix` 만, 그 진단을 문맥으로).
 //
 // 진단 문맥: 진단 저장은 M4-06 의 것이다. 「빠른 수정」 은 진단 팝업의 `data` 에서 코드 액션을 맡을 서버가 낸 원래 `Diagnostic`
-// (`data.lsp` · `data.servers` — `contextDiagnostic`)과 그 버전(`data.version`, 없으면 지금 문서 버전)을 꺼내 넘긴다 — Host 는 버전이
-// 다른 진단을 버린다. `⌥↩` 은 지금 진단 없이
+// (`data.lsp` · `data.servers` — `contextDiagnostic`)과 그 버전(`data.version` — 없으면 진단을 싣지 않는다)을 꺼내 넘긴다 — Host 는
+// 버전이 다른 진단을 버린다. `⌥↩` 은 지금 진단 없이
 // 묻는다(나중에 병합하는 쪽이 Host 에서 M4-06 의 범위 조회로 채운다 — 계획 M4-12 행 「구현에서 정한 것」).
+//
+// 서버: resolve · 명령은 목록을 준 서버(`LspCodeActionList.server`)로만 간다 — 다른 서버가 그 액션의 `data` · 명령을 받지 않게.
 //
 // 전구: 서버가 코드 액션을 하고 설정 `[lsp] lightbulb` 가 켜져 있으면(기본 켬) 커서가 멈추고 300 ms 뒤 그 자리를 묻고(`automatic`),
 // 쓸 수 있는 액션이 있으면 커서 줄의 거터에 전구를 둔다. 누르면 `⌥↩` 과 같다.
@@ -46,15 +48,16 @@ export interface CodeActionRequest {
 /**
  * 진단 팝업의 `data` → 코드 액션을 맡을 서버(`server`)가 낸 원래 진단과 그 버전. M4-06 의 팝업은 `data.lsp` 에 그 자리의 진단 전부
  * (`Diagnostic[]`)를, `data.servers[i]` 에 i 번째 진단을 낸 서버 id 를 싣는다 — 다른 서버의 진단은 넘기지 않는다(그 서버의 `data` ·
- * 코드를 이 서버가 모른다). `data.lsp` 가 진단 하나여도 받는다(서버를 모르면 넘긴다). 버전은 `data.version`, 없으면 지금 문서 버전.
+ * 코드를 이 서버가 모른다). `data.lsp` 가 진단 하나여도 받는다(서버를 모르면 넘긴다). 버전은 `data.version` — 없으면 싣지 않는다
+ * (지금 문서 버전을 찍으면 지난 버전의 진단이 Host 의 버전 검사를 지난다).
  */
 export function contextDiagnostic(
   data: unknown,
-  version: number,
   server: string | undefined,
 ): { version: number; items: unknown[] } | undefined {
   if (data === null || typeof data !== "object") return undefined;
   const d = data as { lsp?: unknown; servers?: unknown; version?: unknown };
+  if (typeof d.version !== "number") return undefined;
   const servers = Array.isArray(d.servers) ? (d.servers as unknown[]) : undefined;
   let items: unknown[];
   if (Array.isArray(d.lsp))
@@ -63,18 +66,22 @@ export function contextDiagnostic(
     items = servers === undefined || servers[0] === server ? [d.lsp] : [];
   else return undefined;
   if (items.length === 0) return undefined;
-  return { version: typeof d.version === "number" ? d.version : version, items };
+  return { version: d.version, items };
 }
 
 function errorText(e: unknown) {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** 액션 하나를 적용한다(resolve → 편집 → 명령). `flow` 는 목록을 물을 때 잡은 적용기 기준이다. */
+/**
+ * 액션 하나를 적용한다(resolve → 편집 → 명령). `server` 는 목록을 준 서버(resolve · 명령이 그 서버로만 간다), `flow` 는 목록을 물을
+ * 때 잡은 적용기 기준이다.
+ */
 export async function runCodeAction(
   doc: LspDocument,
   win: EditWindow,
   item: LspCodeActionItem,
+  server: string,
   flow = win.applier.begin(),
 ): Promise<void> {
   const T = win.strings();
@@ -82,7 +89,7 @@ export async function runCodeAction(
     const resolved = await doc.request("codeAction.resolve", (at, signal) =>
       doc.services.call(
         "lsp.codeAction.resolve",
-        { docId: at.docId, action: item.raw as never },
+        { docId: at.docId, server, action: item.raw as never },
         { signal },
       ),
     );
@@ -90,12 +97,16 @@ export async function runCodeAction(
       win.notify({ level: "warning", title: T.stale });
       return;
     }
+    let edited = false;
     if (resolved.edit) {
       const outcome = await flow.apply(resolved.edit, { label: item.title });
       win.report(outcome, T.codeActionFailed);
       if (outcome.kind !== "applied" && outcome.kind !== "nothing") return;
+      edited = outcome.kind === "applied";
     }
-    if (resolved.command) await win.execute(doc, resolved.command);
+    // 편집을 넣었으면 명령의 기준은 그 뒤다(명령을 보내기 직전에 연다). 아니면 목록 때의 기준 그대로.
+    if (resolved.command)
+      await win.execute(doc, resolved.command, server, edited ? undefined : flow);
   } catch (e) {
     win.notify({ level: "error", title: T.codeActionFailed(errorText(e)) });
   }
@@ -171,7 +182,6 @@ export async function showCodeActions(
           ? null
           : ((contextDiagnostic(
               request.diagnostic,
-              at.version,
               doc.capabilities.code_action?.server,
             ) as LspContextDiagnostics) ?? null),
       only: request.only ?? null,
@@ -195,7 +205,7 @@ export async function showCodeActions(
       render: renderList(answered, T.codeActions, (item) => {
         closePopup(view, "main");
         view.focus();
-        void runCodeAction(doc, win, item, flow);
+        void runCodeAction(doc, win, item, answered.server, flow);
       }),
     },
   });

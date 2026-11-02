@@ -677,3 +677,237 @@ it("stays quiet without a server for the document (an untrusted project starts n
   // 이 행의 알림(오류 · 안내)이 새로 뜨지 않았다.
   expect(toastTexts().filter((t) => !before.includes(t))).toEqual([]);
 });
+
+// ---- 리뷰 수정 회차(M4-12) ------------------------------------------------------------------------------------------------
+
+/** 목록을 준 서버 — 문서 능력 칸의 서버(rust-analyzer)와 다르게 두어 resolve · 명령이 목록의 서버로 가는지 본다(M4). */
+const LIST_SERVER = "list-server";
+
+/** `⌥↩` → 「Fix it」(명령만) → 명령이 도는 동안. `finish` 로 명령을 끝낸다. */
+async function runFixIt() {
+  const run = {
+    flowId: undefined as string | undefined,
+    finish: undefined as (() => void) | undefined,
+  };
+  host.lsp!.handle("lsp.codeAction.list", async () => ({
+    server: LIST_SERVER,
+    staleVersion: false,
+    truncated: false,
+    actions: [
+      {
+        title: "Fix it",
+        kind: "quickfix",
+        isPreferred: true,
+        disabled: null,
+        raw: { title: "Fix it", data: 1 },
+      },
+    ],
+  }));
+  host.lsp!.handle("lsp.codeAction.resolve", async () => ({
+    server: LIST_SERVER,
+    edit: null,
+    command: { title: "Fix it", command: "fix.it" },
+  }));
+  host.lsp!.handle("lsp.command.execute", (params) => {
+    run.flowId = (params as { flowId: string }).flowId;
+    return new Promise((resolve) => {
+      run.finish = () => resolve({ server: LIST_SERVER, result: null });
+    });
+  });
+  host.lsp!.handle("lsp.applyEdit.answer", async () => null);
+  await openMain();
+  await optionEnter();
+  await act(async () => document.querySelector<HTMLButtonElement>(".pw-lsp-code-action")!.click());
+  await until(() => run.flowId !== undefined);
+  return run;
+}
+
+const libEdit = (newText = "// fixed\n") => ({
+  kind: "text",
+  path: LIB,
+  version: null,
+  foreign: false,
+  edits: [{ range: range(0, 0, 0, 0), newText }],
+});
+const mainEdit = {
+  kind: "text",
+  path: MAIN,
+  version: null,
+  foreign: false,
+  edits: [{ range: range(0, 0, 0, 0), newText: "// main\n" }],
+};
+const answers = () => host.lsp!.called("call:lsp.applyEdit.answer");
+
+it("sends resolve and the command to the server that listed the action (M4)", async () => {
+  const run = await runFixIt();
+  expect(host.lsp!.called("call:lsp.codeAction.resolve")).toEqual([
+    expect.objectContaining({ server: LIST_SERVER }),
+  ]);
+  expect(host.lsp!.called("call:lsp.command.execute")).toEqual([
+    expect.objectContaining({ server: LIST_SERVER, flowId: run.flowId }),
+  ]);
+  await act(async () => run.finish!());
+});
+
+it("measures a server edit from before the command was sent — a file changed meanwhile stops it (M1)", async () => {
+  const run = await runFixIt();
+  // 명령을 보낸 뒤 · 서버가 편집을 계산하는 동안 LIB 가 바뀌었다.
+  await emit("fs.changed", {
+    root: ROOT,
+    worktree: null,
+    paths: [LIB],
+    kinds: ["modified"],
+    rescan: false,
+  });
+  await emit("lsp.applyEdit", {
+    flowId: run.flowId,
+    requestId: 1,
+    server: LIST_SERVER,
+    label: null,
+    edit: { changes: [libEdit()] },
+  });
+  await until(() => answers().length > 0);
+  expect(answers()).toEqual([expect.objectContaining({ requestId: 1, applied: false })]);
+  expect(host.disk.text(LIB)).toBe(LIB_TEXT);
+  await act(async () => run.finish!());
+});
+
+it("does not write a server edit whose command ended while the preview was open (M2)", async () => {
+  const run = await runFixIt();
+  await emit("lsp.applyEdit", {
+    flowId: run.flowId,
+    requestId: 1,
+    server: LIST_SERVER,
+    label: null,
+    edit: { changes: [mainEdit, libEdit()] },
+  });
+  await until(() => document.querySelector("[data-testid='lsp-edit-preview']") !== null);
+  // 미리보기를 보는 사이 명령이 끝났다 — Host 는 서버에 `applied: false` 를 이미 줬다.
+  await act(async () => run.finish!());
+  await settle();
+  await act(async () => button("적용")!.click());
+  await until(() => document.body.textContent!.includes("명령이 끝나 편집을 적용하지 않았다"));
+  expect(host.disk.text(LIB)).toBe(LIB_TEXT);
+  expect(host.disk.text(MAIN)).toBe(MAIN_TEXT);
+  expect(view().state.doc.toString()).toBe(MAIN_TEXT);
+});
+
+it("answers applied: false when part of a server edit could not be written (L3)", async () => {
+  const run = await runFixIt();
+  host.disk.beforeWrite = (path) => {
+    if (path !== LIB) return;
+    host.disk.beforeWrite = undefined;
+    host.disk.edit(LIB, "someone else\n");
+  };
+  await emit("lsp.applyEdit", {
+    flowId: run.flowId,
+    requestId: 1,
+    server: LIST_SERVER,
+    label: null,
+    edit: { changes: [mainEdit, libEdit()] },
+  });
+  await until(() => document.querySelector("[data-testid='lsp-edit-preview']") !== null);
+  await act(async () => button("적용")!.click());
+  await until(() => answers().length > 0);
+  expect(answers()).toEqual([
+    expect.objectContaining({
+      applied: false,
+      failureReason: expect.stringContaining(LIB),
+    }),
+  ]);
+  // 쓴 것(MAIN)은 남는다 — 알린 `failureHandling: abort`.
+  expect(host.disk.text(MAIN)).toBe(`// main\n${MAIN_TEXT}`);
+  expect(host.disk.text(LIB)).toBe("someone else\n");
+  await act(async () => run.finish!());
+});
+
+it("stops a rename that touches a file open in another window and says so (H1)", async () => {
+  renameHandlers();
+  host.lsp!.handle("lsp.rename", async (params) => ({
+    server: "rust-analyzer",
+    staleVersion: false,
+    edit: {
+      changes: [
+        {
+          kind: "text",
+          path: MAIN,
+          version: (params as { version: number }).version,
+          foreign: false,
+          edits: [{ range: range(0, 3, 0, 6), newText: "neo" }],
+        },
+        { ...libEdit("neo"), foreign: true },
+      ],
+    },
+  }));
+  await openMain();
+  await shiftF6();
+  const input = document.querySelector<HTMLInputElement>(".cm-lsp-rename-input")!;
+  input.value = "neo";
+  await keydown({ key: "Enter", code: "Enter" }, input);
+  await until(() => document.body.textContent!.includes("다른 창에서 연 파일이 있다"));
+  expect(document.body.textContent).toContain("lib.rs");
+  expect(document.querySelector("[data-testid='lsp-edit-preview']")).toBeNull();
+  expect(host.disk.text(LIB)).toBe(LIB_TEXT);
+  expect(host.disk.text(MAIN)).toBe(MAIN_TEXT);
+  expect(view().state.doc.toString()).toBe(MAIN_TEXT);
+});
+
+it("keeps ⌥↩ in the rename input from renaming or opening code actions (L9)", async () => {
+  renameHandlers();
+  host.lsp!.handle("lsp.codeAction.list", async () => ({
+    server: "rust-analyzer",
+    staleVersion: false,
+    truncated: false,
+    actions: [],
+  }));
+  await openMain();
+  await shiftF6();
+  const input = document.querySelector<HTMLInputElement>(".cm-lsp-rename-input")!;
+  input.value = "neo";
+  await keydown({ key: "Enter", code: "Enter", altKey: true }, input);
+  expect(host.lsp!.called("call:lsp.rename")).toEqual([]);
+  expect(host.lsp!.called("call:lsp.codeAction.list")).toEqual([]);
+  expect(document.querySelector(".cm-lsp-rename-input")).not.toBeNull();
+});
+
+it("moves the focus with ↓ through every file of the preview (M5)", async () => {
+  const more = ["/work/demo/src/a.rs", "/work/demo/src/b.rs"];
+  host.disk = fakeDisk(ROOT, {
+    [MAIN]: MAIN_TEXT,
+    [LIB]: LIB_TEXT,
+    [more[0]!]: "use crate::old;\n",
+    [more[1]!]: "use crate::old;\n",
+  });
+  renameHandlers();
+  host.lsp!.handle("lsp.rename", async () => ({
+    server: "rust-analyzer",
+    staleVersion: false,
+    edit: {
+      changes: [LIB, ...more].map((path) => ({
+        kind: "text",
+        path,
+        version: null,
+        foreign: false,
+        edits: [{ range: range(0, 0, 0, 0), newText: "// x\n" }],
+      })),
+    },
+  }));
+  await openMain();
+  await shiftF6();
+  const input = document.querySelector<HTMLInputElement>(".cm-lsp-rename-input")!;
+  input.value = "neo";
+  await keydown({ key: "Enter", code: "Enter" }, input);
+  await until(() => document.querySelector("[data-testid='lsp-edit-preview']") !== null);
+  const options = () => [...document.querySelectorAll<HTMLElement>("[role='option']")];
+  expect(options()).toHaveLength(3);
+  await act(async () => options()[0]!.focus());
+  for (let i = 0; i < 2; i++) await keydown({ key: "ArrowDown", code: "ArrowDown" });
+  expect(options()[2]!.getAttribute("aria-selected")).toBe("true");
+  expect(document.activeElement).toBe(options()[2]);
+  await keydown({ key: "Home", code: "Home" });
+  expect(document.activeElement).toBe(options()[0]);
+  await keydown({ key: "End", code: "End" });
+  expect(document.activeElement).toBe(options()[2]);
+  await act(async () => button("취소")!.click());
+  expect(host.disk.text(LIB)).toBe(LIB_TEXT);
+});

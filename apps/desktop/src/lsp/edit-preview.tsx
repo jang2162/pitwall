@@ -60,6 +60,12 @@ function EditPreview({
   useKeymapPopup(true);
   const [picked, setPicked] = useState(0);
   const file = files[picked] ?? files[0]!;
+  const items = useRef<(HTMLLIElement | null)[]>([]);
+  /** 키로 고른 항목에 포커스를 옮긴다(다음 ↑↓ 가 그 항목에서 온다 — 로빙 tabindex). */
+  const pick = (i: number) => {
+    setPicked(i);
+    items.current[i]?.focus();
+  };
   const tag = (f: PreviewFile) =>
     f.op === "create"
       ? T.create
@@ -95,11 +101,16 @@ function EditPreview({
                   role="option"
                   aria-selected={i === picked}
                   tabIndex={i === picked ? 0 : -1}
+                  ref={(el) => {
+                    items.current[i] = el;
+                  }}
                   data-path={f.path}
                   onClick={() => setPicked(i)}
                   onKeyDown={(e) => {
-                    if (e.key === "ArrowDown") setPicked(Math.min(i + 1, files.length - 1));
-                    else if (e.key === "ArrowUp") setPicked(Math.max(i - 1, 0));
+                    if (e.key === "ArrowDown") pick(Math.min(i + 1, files.length - 1));
+                    else if (e.key === "ArrowUp") pick(Math.max(i - 1, 0));
+                    else if (e.key === "Home") pick(0);
+                    else if (e.key === "End") pick(files.length - 1);
                     else return;
                     e.preventDefault();
                   }}

@@ -3,7 +3,8 @@
 // `lsp.codeActions`(`⌥↩`) · `lsp.undoLastEdit`(「마지막 일괄 편집 되돌리기」 — 기본 키 없음, 액션 찾기 · 알림의 [되돌리기]). 미리보기
 // 대화상자(edit-preview.tsx)는 돌려준 `element` 로 창이 그린다(editor-operations.tsx).
 //
-// 파일 RPC(`fs.*`)는 창의 Host 연결(`workspace.lsp.services.call`)로, 접근 범위는 활성 탭의 워크트리다. 설정 `[lsp] lightbulb`
+// 파일 RPC(`fs.*`)는 창의 Host 연결(`workspace.lsp.services.call`)로, 접근 범위는 편집 흐름을 연 때(`EditFs.pin`) 활성 탭의
+// 워크트리다 — 미리보기 · 쓰기 사이에 다른 워크트리 탭으로 옮겨도 범위가 바뀌지 않는다. 설정 `[lsp] lightbulb`
 // (기본 켬)는 전역 `settings.toml` 에서 읽는다(설정이 다시 읽히면 따라간다).
 
 import type { ConfigView } from "@pitwall/rpc-client";
@@ -33,7 +34,7 @@ export function lightbulbOf(config: ConfigView | undefined): boolean {
   return settings?.lsp?.lightbulb !== false;
 }
 
-/** 창의 Host 연결로 부르는 파일 RPC(접근 범위 = `worktree()`). */
+/** 창의 Host 연결로 부르는 파일 RPC(접근 범위 = 부를 때의 `worktree()`, `pin()` 은 지금 것에 묶은 것). */
 export function editFs(
   services: LspServices,
   projectId: string,
@@ -48,6 +49,10 @@ export function editFs(
     create: (path) => services.call("fs.create", { ...scope(), path, kind: "file" }),
     rename: (from, to) => services.call("fs.rename", { ...scope(), from, to }),
     trash: (path) => services.call("fs.trash", { ...scope(), paths: [path] }),
+    pin: () => {
+      const fixed = worktree();
+      return editFs(services, projectId, () => fixed);
+    },
   };
 }
 

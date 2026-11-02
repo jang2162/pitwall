@@ -712,6 +712,9 @@ lsp-edit-code-actions-none = 이 자리에는 코드 액션이 없다
 # $message: 언어 서버 · 적용기가 준 오류
 lsp-edit-code-action-failed = 코드 액션을 적용하지 못했다: { $message }
 lsp-edit-stale = 서버가 본 뒤 파일이 바뀌었다 — 다시 시도한다
+# $files: 다른 창에서 연 파일 이름(쉼표로 이음)
+lsp-edit-foreign = 다른 창에서 연 파일이 있다 — 그 창에서 저장한 뒤 다시 시도한다: { $files }
+lsp-edit-ended = 명령이 끝나 편집을 적용하지 않았다
 # $message: 거절한 까닭(영어 원문)
 lsp-edit-refused = 이 편집은 적용하지 않는다: { $message }
 # $message: 오류 원문

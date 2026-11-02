@@ -20,6 +20,8 @@ export function lspEditStrings(t: Translate) {
     codeActionsNone: t("lsp-edit-code-actions-none"),
     codeActionFailed: (message: string) => t("lsp-edit-code-action-failed", { message }),
     stale: t("lsp-edit-stale"),
+    foreign: (files: string) => t("lsp-edit-foreign", { files }),
+    ended: t("lsp-edit-ended"),
     refused: (message: string) => t("lsp-edit-refused", { message }),
     failed: (message: string) => t("lsp-edit-failed", { message }),
     applied: (count: number) => t("lsp-edit-applied", { count }),
