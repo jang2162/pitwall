@@ -395,6 +395,7 @@ function diag(
 ): Diagnostic {
   return {
     server: "rust-analyzer",
+    origin: "push",
     version: null,
     range: { start: { line, character }, end: { line, character: character + 1 } },
     severity,

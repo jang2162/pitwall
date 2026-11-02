@@ -5,9 +5,11 @@
 //   서버 진단 — 바뀔 때마다)를 듣는다. 이벤트를 받으면 **곧바로** 장식이 든 트랜잭션을 낸다 — 대기열 · 디바운스가 없다(완료
 //   기준 ①). 단, 한글 조합 중이면 조합이 끝날 때까지 쥔다(조합 중의 글자 영역을 다시 그리면 입력기가 끊긴다 — M4-07 의 쥐기와 같은
 //   까닭). 목록의 답보다 이벤트가 먼저 오면 목록의 답은 버린다(이벤트가 새것이다).
-// - 지난 버전: 진단의 `version` 이 문서의 지금 버전보다 앞서면 그 진단은 그리지 않고(완료 기준 ②), 그 서버가 앞서 그린 버전 있는
-//   진단을 편집에 맞춰 옮긴 채 둔다 — 서버가 새 버전의 진단을 보내면 바뀐다. 버전이 없는 진단(열지 않은 파일 · 버전을 알리지 않는
-//   서버)은 받은 대로 그린다.
+// - 지난 버전: 진단의 `version` 이 문서의 지금 버전보다 앞서면 그 진단은 그리지 않고(완료 기준 ②), 같은 서버 · 같은 길(`origin` —
+//   push | pull)이 앞서 그린 진단을 편집에 맞춰 옮긴 채 둔다 — 그 서버가 그 길로 새 버전의 진단을 보내면 바뀐다. 한 서버가 두 길로
+//   낸다(rust-analyzer — 자체 진단은 pull, flycheck 는 push): 한 이벤트에 새 버전 pull 과 옛 버전 flycheck 가 섞여 오므로 (서버, 길)
+//   마다 따로 판정한다 — 서버 단위로 판정하면 편집마다 pull 진단이 한 벌씩 쌓인다(M4-06 리뷰 H1). 버전이 없는 진단(열지 않은 파일 ·
+//   버전을 알리지 않는 서버)은 받은 대로 그린다.
 // - 편집으로 밀린 범위는 CodeMirror 매핑(`tr.changes`)으로 옮겨 그린다. 다음 진단이 오기 전까지다.
 // - 그리기: 범위에 심각도별 밑줄(오류 · 경고 물결, 정보 점선, 힌트 파선 — 색 `diagnostic.*` 토큰)과 거터 표지(줄마다 가장 심한 것
 //   — 오류 ✖ · 경고 ▲ · 정보 ● · 힌트 ◇ 로 모양이 다르다, 화면 읽기 이름은 심각도). 색만으로 가르지 않는다(완료 기준 ⑦). 빈 범위는
@@ -165,7 +167,12 @@ const EMPTY: DiagnosticsState = {
   markers: RangeSet.empty,
 };
 
-/** 새 진단 목록을 놓는다: 지난 버전의 진단은 버리고, 그런 서버가 앞서 그린 버전 있는 진단은 옮긴 채 둔다(머리 주석). */
+/** 진단을 낸 묶음: (서버, 길). Host 는 묶음마다 진단을 통째로 바꾼다. */
+function batchOf(d: LspDiagnostic): string {
+  return `${d.origin}\u0000${d.server}`;
+}
+
+/** 새 진단 목록을 놓는다: (서버, 길)마다 지난 버전이면 그 묶음이 앞서 그린 진단을 옮긴 채 두고, 아니면 새로 놓는다(머리 주석). */
 function receive(
   doc: Text,
   old: readonly PlacedDiagnostic[],
@@ -173,12 +180,9 @@ function receive(
   version: number,
 ): PlacedDiagnostic[] {
   const stale = new Set<string>();
-  const fresh: PlacedDiagnostic[] = [];
-  for (const d of incoming) {
-    if (d.version !== null && d.version < version) stale.add(d.server);
-    else fresh.push(place(doc, d));
-  }
-  const kept = old.filter((p) => stale.has(p.diagnostic.server) && p.diagnostic.version !== null);
+  for (const d of incoming) if (d.version !== null && d.version < version) stale.add(batchOf(d));
+  const fresh = incoming.filter((d) => !stale.has(batchOf(d))).map((d) => place(doc, d));
+  const kept = old.filter((p) => stale.has(batchOf(p.diagnostic)));
   return [...fresh, ...kept].sort(
     (a, b) =>
       a.from - b.from || severityRank(a.diagnostic.severity) - severityRank(b.diagnostic.severity),

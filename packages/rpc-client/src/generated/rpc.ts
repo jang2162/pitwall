@@ -5011,6 +5011,8 @@ export type LspContextDiagnostics = {
 export type LspDiagnostic = {
 	/**  낸 서버 id. */
 	server: string,
+	/**  받은 길. */
+	origin: LspDiagnosticOrigin,
 	/**  이 진단이 기준으로 한 서버 쪽 문서 버전(없으면 서버가 알리지 않았다 — 열지 않은 파일 등). LSP 의 `integer`(i32). */
 	version: number | null,
 	range: LspRange,
@@ -5027,6 +5029,16 @@ export type LspDiagnostic = {
 	/**  서버가 코드 액션 요청에서 되돌려 받는 값([`DATA_LIMIT`] 안일 때만). */
 	data: JsonValue | null,
 };
+
+/**
+ *  진단을 받은 길. 같은 서버가 둘 다 낸다(rust-analyzer — 자체 진단은 pull, flycheck 는 push). 한 서버의 진단은 길마다 따로 바뀐다 —
+ *  웹뷰는 (서버, 길)마다 바꿔 끼운다.
+ */
+export type LspDiagnosticOrigin = 
+/**  `textDocument/publishDiagnostics`. */
+"push" | 
+/**  `textDocument/diagnostic`. */
+"pull";
 
 /**  진단 꼬리표. */
 export type LspDiagnosticTag = 

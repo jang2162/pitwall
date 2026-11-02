@@ -25736,6 +25736,10 @@
               "message": {
                 "type": "string"
               },
+              "origin": {
+                "$ref": "#/$defs/LspDiagnosticOrigin",
+                "description": "받은 길."
+              },
               "range": {
                 "$ref": "#/$defs/LspRange"
               },
@@ -25776,6 +25780,7 @@
             },
             "required": [
               "server",
+              "origin",
               "version",
               "range",
               "severity",
@@ -25788,6 +25793,21 @@
               "data"
             ],
             "type": "object"
+          },
+          "LspDiagnosticOrigin": {
+            "description": "진단을 받은 길. 같은 서버가 둘 다 낸다(rust-analyzer — 자체 진단은 pull, flycheck 는 push). 한 서버의 진단은 길마다 따로 바뀐다 —\n웹뷰는 (서버, 길)마다 바꿔 끼운다.",
+            "oneOf": [
+              {
+                "const": "push",
+                "description": "`textDocument/publishDiagnostics`.",
+                "type": "string"
+              },
+              {
+                "const": "pull",
+                "description": "`textDocument/diagnostic`.",
+                "type": "string"
+              }
+            ]
           },
           "LspDiagnosticTag": {
             "description": "진단 꼬리표.",

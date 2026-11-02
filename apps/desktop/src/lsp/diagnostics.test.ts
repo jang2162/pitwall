@@ -33,6 +33,7 @@ function diag(
 ): LspDiagnostic {
   return {
     server: "rust-analyzer",
+    origin: "push",
     version: null,
     range: { start: { line, character: start }, end: { line, character: end } },
     severity,
@@ -152,6 +153,30 @@ describe("drawing", () => {
     // 버전이 없는 진단(열지 않은 파일 · 버전을 알리지 않는 서버)은 받은 대로 그린다.
     emit([diag(0, 0, 2, "hint", { message: "unversioned" })]);
     expect(diagnosticsOf(view).map((p) => p.diagnostic.message)).toEqual(["unversioned"]);
+  });
+
+  it("swaps one server's pulled diagnostics on each edit while its older pushed ones stay (rust-analyzer: pull + flycheck)", () => {
+    const { view, doc, emit } = setup(TEXT);
+    const pull = (v: number) =>
+      diag(0, 0, 2, "error", { origin: "pull", version: v, message: `pull@${v}` });
+    // flycheck(push)는 저장 때만 바뀐다 — 열 때(버전 0) 같은 버전의 pull 과 함께 온다.
+    const flycheck = diag(2, 4, 5, "warning", {
+      origin: "push",
+      version: 0,
+      message: "flycheck@0",
+    });
+    emit([pull(0), flycheck]);
+    for (let v = 1; v <= 4; v += 1) {
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      doc.version = v;
+      // Host 의 이벤트: 새 버전 pull + 아직 남은 옛 버전 flycheck(live 로 본 꼴 — M4-06 리뷰 H1).
+      emit([pull(v), flycheck]);
+    }
+    expect(diagnosticsOf(view).map((p) => p.diagnostic.message)).toEqual(["pull@4", "flycheck@0"]);
+    expect(view.contentDOM.querySelectorAll(".pw-diagnostic")).toHaveLength(2);
+    // 새 flycheck 가 오면 그 묶음만 바뀐다.
+    emit([pull(4), { ...flycheck, version: 4, message: "flycheck@4" }]);
+    expect(diagnosticsOf(view).map((p) => p.diagnostic.message)).toEqual(["pull@4", "flycheck@4"]);
   });
 
   it("moves drawn ranges with edits until the next diagnostics arrive", () => {

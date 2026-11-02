@@ -172,6 +172,7 @@ async fn published_diagnostics_reach_the_list_counts_and_event() {
         ["error", "warning", "hint"]
     );
     assert_eq!(event["diagnostics"][0]["server"], "rust-analyzer");
+    assert_eq!(event["diagnostics"][0]["origin"], "push");
     assert_eq!(event["diagnostics"][0]["version"], 0);
     assert_eq!(event["truncated"], false);
 
@@ -575,6 +576,8 @@ async fn pulled_diagnostics_follow_the_document_and_cancel_older_pulls() {
     let event = next_for(&mut events, &file).await;
     assert_eq!(messages(&event["diagnostics"]), ["pulled"]);
     assert_eq!(event["diagnostics"][0]["version"], 1, "{event}");
+    // 웹뷰는 (서버, 길)마다 바꿔 끼운다 — 같은 서버의 push 와 가른다(M4-06 리뷰 H1).
+    assert_eq!(event["diagnostics"][0]["origin"], "pull", "{event}");
     let pulls = methods_of(&record, "textDocument/diagnostic");
     assert_eq!(pulls.len(), 2, "{pulls:?}");
     let cancelled: Vec<Value> = methods_of(&record, "$/cancelRequest")

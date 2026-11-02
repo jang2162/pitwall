@@ -136,12 +136,38 @@ pub struct LspRelatedInformation {
     pub message: String,
 }
 
+/// 진단을 받은 길. 같은 서버가 둘 다 낸다(rust-analyzer — 자체 진단은 pull, flycheck 는 push). 한 서버의 진단은 길마다 따로 바뀐다 —
+/// 웹뷰는 (서버, 길)마다 바꿔 끼운다.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum LspDiagnosticOrigin {
+    /// `textDocument/publishDiagnostics`.
+    Push,
+    /// `textDocument/diagnostic`.
+    Pull,
+}
+
 /// 진단 하나.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LspDiagnostic {
     /// 낸 서버 id.
     pub server: String,
+    /// 받은 길.
+    pub origin: LspDiagnosticOrigin,
     /// 이 진단이 기준으로 한 서버 쪽 문서 버전(없으면 서버가 알리지 않았다 — 열지 않은 파일 등). LSP 의 `integer`(i32).
     pub version: Option<i32>,
     pub range: LspRange,
@@ -260,12 +286,7 @@ pw_rpc::rpc_type!(LspDiagnosticsEvent);
 
 // ---- 저장 ----------------------------------------------------------------------------------------------------------------------
 
-/// 진단을 받은 길. 같은 서버가 둘 다 낸다(rust-analyzer — 자체 진단은 pull, flycheck 는 push).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum Origin {
-    Push,
-    Pull,
-}
+use LspDiagnosticOrigin as Origin;
 
 /// 지우기에서 출처 하나의 판정 열쇠: (서버, 작업 공간 루트, 워크트리, 세대).
 type Judged = (String, PathBuf, Option<String>, u64);
@@ -407,7 +428,12 @@ fn range(value: &Value) -> LspRange {
 }
 
 /// 서버가 보낸 진단 하나를 상한 안의 꼴로. 범위가 없으면 버린다.
-fn diagnostic(server: &str, version: Option<i64>, raw: &Value) -> Option<LspDiagnostic> {
+fn diagnostic(
+    server: &str,
+    origin: Origin,
+    version: Option<i64>,
+    raw: &Value,
+) -> Option<LspDiagnostic> {
     let range_value = raw.get("range")?;
     let message = raw.get("message").and_then(Value::as_str).unwrap_or("");
     let code = match raw.get("code") {
@@ -464,6 +490,7 @@ fn diagnostic(server: &str, version: Option<i64>, raw: &Value) -> Option<LspDiag
         .cloned();
     Some(LspDiagnostic {
         server: server.to_owned(),
+        origin,
         version: version.and_then(|v| i32::try_from(v).ok()),
         range: range(range_value),
         severity: LspSeverity::from_lsp(raw.get("severity")),
@@ -481,7 +508,12 @@ fn diagnostic(server: &str, version: Option<i64>, raw: &Value) -> Option<LspDiag
 }
 
 /// 서버가 보낸 진단 목록을 상한 안의 꼴로: 읽을 수 있는 것만, 심각도 · 위치 차례, [`FILE_LIMIT`] 까지. (목록, 잘렸는가).
-fn diagnostics(server: &str, version: Option<i64>, raw: &Value) -> (Vec<LspDiagnostic>, bool) {
+fn diagnostics(
+    server: &str,
+    origin: Origin,
+    version: Option<i64>,
+    raw: &Value,
+) -> (Vec<LspDiagnostic>, bool) {
     let Some(items) = raw.as_array() else {
         return (Vec::new(), false);
     };
@@ -489,7 +521,7 @@ fn diagnostics(server: &str, version: Option<i64>, raw: &Value) -> (Vec<LspDiagn
     let mut out: Vec<LspDiagnostic> = items
         .iter()
         .take(FILE_LIMIT * 4)
-        .filter_map(|d| diagnostic(server, version, d))
+        .filter_map(|d| diagnostic(server, origin, version, d))
         .collect();
     out.sort_by_key(order);
     let truncated = items.len() > FILE_LIMIT * 4 || out.len() > FILE_LIMIT;
@@ -576,7 +608,7 @@ impl DiagnosticStore {
         };
         let uri = uri.as_str();
         let path = path.to_string_lossy().into_owned();
-        let (items, truncated) = diagnostics(&source.key.server, version, raw);
+        let (items, truncated) = diagnostics(&source.key.server, origin, version, raw);
         let event = {
             let mut state = lock(&self.inner.state);
             // 잠금 차례: 저장소 → 관리자(머리 주석). 판정과 넣기가 한 잠금 안이라 지우기(`prune`)와 엇갈리지 않는다.
@@ -1129,7 +1161,7 @@ mod tests {
             })).collect::<Vec<_>>(),
             "data": { "big": "x".repeat(DATA_LIMIT) },
         });
-        let d = diagnostic("s1", Some(4), &raw).unwrap();
+        let d = diagnostic("s1", Origin::Push, Some(4), &raw).unwrap();
         assert_eq!(d.severity, LspSeverity::Warning);
         assert_eq!(d.code.as_deref(), Some("2322"));
         // 거꾸로 온 범위는 바로 선다.
@@ -1148,6 +1180,7 @@ mod tests {
         assert_eq!(
             diagnostic(
                 "s1",
+                Origin::Push,
                 None,
                 &json!({ "range": raw["range"], "message": "m" })
             )
@@ -1155,7 +1188,7 @@ mod tests {
             .severity,
             LspSeverity::Error
         );
-        assert!(diagnostic("s1", None, &json!({ "message": "m" })).is_none());
+        assert!(diagnostic("s1", Origin::Push, None, &json!({ "message": "m" })).is_none());
     }
 
     #[test]
@@ -1169,7 +1202,7 @@ mod tests {
         };
         let mut raw: Vec<Value> = (0..3_000).map(|i| at(i, 4)).collect();
         raw.push(at(5_000, 1));
-        let (items, truncated) = diagnostics("s", None, &Value::Array(raw));
+        let (items, truncated) = diagnostics("s", Origin::Push, None, &Value::Array(raw));
         assert!(truncated);
         assert_eq!(items.len(), FILE_LIMIT);
         assert_eq!(items[0].severity, LspSeverity::Error);
