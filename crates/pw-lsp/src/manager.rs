@@ -380,6 +380,12 @@ struct Inner {
     listeners: RwLock<HashMap<String, Vec<Listener>>>,
 }
 
+/// [`LspManager::subscribe`] 의 구독 둘(제어 · 파일 바뀜). [`LspManager::follow`] 에 넘긴다.
+pub struct ManagerEvents {
+    control: Subscription,
+    files: Subscription,
+}
+
 /// 서버 관리자. 복제는 같은 관리자를 가리킨다.
 #[derive(Clone)]
 pub struct LspManager {
@@ -1230,8 +1236,17 @@ impl LspManager {
         });
     }
 
+    /// 그 프로젝트에 파일 감시 전달의 자리가 있는가(없으면 `fs.changed` 를 읽지도 않는다 — 리뷰 L1).
+    fn has_feeds(&self, project_id: &str) -> bool {
+        lock(&self.inner.state)
+            .instances
+            .iter()
+            .any(|(k, i)| k.project_id == project_id && i.feed.is_some())
+    }
+
     /// `fs.changed` 하나를 그 루트의 떠 있는 서버들의 자리에 쌓는다(`follow` 가 부른다). `rescan` 이면 경로가 없다 — 파일 목록
-    /// 인덱스가 다시 만든 목록으로 다시 알린다(`crate::watched` 머리 주석).
+    /// 인덱스가 다시 만든 목록으로 다시 알린다(`crate::watched` 머리 주석). 쌓기가 넘친 자리가 있으면 그 루트의 `rescan` 을 버스에
+    /// 내어 다시 만든 목록으로 메운다(리뷰 H1 — 버린 바뀜을 조용히 잃지 않게).
     pub fn fs_changed(&self, project_id: &str, changed: &pw_fs::watch::FsChanged) {
         if changed.paths.is_empty() {
             return;
@@ -1255,8 +1270,39 @@ impl LspManager {
                 change: (*kind).into(),
             })
             .collect();
+        let mut refill = false;
         for feed in feeds {
-            feed.push(&events);
+            refill |= feed.push(&events);
+        }
+        if refill {
+            self.refill(project_id, changed);
+        }
+    }
+
+    /// 그 루트를 다시 알리게 한다: 버스에 그 루트의 `rescan` 을 낸다 — 파일 목록 인덱스가 다시 만들고 그 목록(`rebuilt`)으로 자리를
+    /// 메운다. 같은 루트를 보는 다른 관찰자(심볼 인덱스 · 다른 서버)도 다시 만든다 — 쌓기 상한(기본 65,536)을 넘는 드문 때의 값이다.
+    fn refill(&self, project_id: &str, changed: &pw_fs::watch::FsChanged) {
+        let Some(host) = self.inner.host.get() else {
+            return;
+        };
+        if host.parts.files.is_none() {
+            tracing::warn!(target: "pw_lsp", root = %changed.root, "file changes overflowed and there is no file index to announce the folder again; some changes are lost");
+            return;
+        }
+        tracing::warn!(target: "pw_lsp", root = %changed.root, "file changes overflowed; announcing the folder again");
+        let rescan = pw_fs::watch::FsChanged {
+            root: changed.root.clone(),
+            worktree: changed.worktree.clone(),
+            paths: Vec::new(),
+            kinds: Vec::new(),
+            rescan: true,
+        };
+        if let Err(e) = host.parts.bus.publish(
+            Scope::Project(project_id.to_owned()),
+            pw_fs::watch::TOPIC_CHANGED,
+            &rescan,
+        ) {
+            tracing::warn!(target: "pw_lsp", %e, "cannot ask for the folder to be announced again");
         }
     }
 
@@ -1601,18 +1647,57 @@ impl LspManager {
 
     // ---- 버스 --------------------------------------------------------------------------------------------------------------
 
-    /// [`Self::follow`] 가 받는 구독: 레지스트리 변경(신뢰) · `runtime.changed` · `config.changed` · `fs.changed`(M4-05b).
-    pub fn subscribe(bus: &EventBus) -> Subscription {
-        bus.subscribe(Filter::all().topics([
-            registry::TOPIC_CHANGED,
-            pw_runtime::runtime::TOPIC_CHANGED,
-            pw_core::config::TOPIC_CHANGED,
-            pw_fs::watch::TOPIC_CHANGED,
-        ]))
+    /// [`Self::follow`] 가 받는 구독 둘: 제어(레지스트리 변경(신뢰) · `runtime.changed` · `config.changed`)와 파일 바뀜
+    /// (`fs.changed` — M4-05b). 따로 구독한다 — 많이 오는 파일 바뀜이 넘쳐도 제어의 처리(신뢰 · 설정 다시 보기)가 돌지 않고, 제어
+    /// 처리가 오래 걸려도 파일 바뀜이 넘치지 않게(리뷰 L1). 버스의 큐는 구독마다 따로다.
+    pub fn subscribe(bus: &EventBus) -> ManagerEvents {
+        ManagerEvents {
+            control: bus.subscribe(Filter::all().topics([
+                registry::TOPIC_CHANGED,
+                pw_runtime::runtime::TOPIC_CHANGED,
+                pw_core::config::TOPIC_CHANGED,
+            ])),
+            files: bus.subscribe(Filter::all().topics([pw_fs::watch::TOPIC_CHANGED])),
+        }
     }
 
-    /// 구독이 닫힐 때까지 신뢰 해제 · 런타임 변경 · 설정 변경을 인스턴스에 반영하고 파일 바뀜을 서버에 전한다.
-    pub async fn follow(self, mut events: Subscription) {
+    /// 구독이 닫힐 때까지 신뢰 해제 · 런타임 변경 · 설정 변경을 인스턴스에 반영하고, 파일 바뀜을 서버에 전한다(둘은 따로 돈다).
+    pub async fn follow(self, events: ManagerEvents) {
+        let ManagerEvents { control, files } = events;
+        tokio::join!(
+            self.clone().follow_control(control),
+            self.follow_files(files)
+        );
+    }
+
+    async fn follow_files(self, mut files: Subscription) {
+        while let Some(received) = files.recv().await {
+            match received {
+                Received::Event(event) => {
+                    let Scope::Project(project) = &event.scope else {
+                        continue;
+                    };
+                    if !self.has_feeds(project) {
+                        continue;
+                    }
+                    if let Ok(changed) =
+                        serde_json::from_value::<pw_fs::watch::FsChanged>(event.payload.clone())
+                    {
+                        self.fs_changed(project, &changed);
+                    }
+                }
+                Received::Lagged(n) => {
+                    // 그 사이의 `fs.changed` 는 되찾지 않는다. 버스의 큐는 구독마다 따로 넘친다 — 파일 목록 인덱스의 구독이 함께
+                    // 넘쳐 다시 만들 때만 그 목록으로 메워진다. 이 구독만 넘치면 잃는다(드묾: 큐 256, 감시는 루트마다 75 ms 창에
+                    // 하나 — 이 루프가 수십 초 막혀야 넘친다). 되찾으려면 「관찰자 하나에 지금 목록을 다시 보내기」 가 필요하다 —
+                    // 15-m4-plan §3(v1.0 전).
+                    tracing::warn!(target: "pw_lsp", dropped = n, "missed file change events; some changes may not reach language servers");
+                }
+            }
+        }
+    }
+
+    async fn follow_control(self, mut events: Subscription) {
         while let Some(received) = events.recv().await {
             match received {
                 Received::Event(event) if event.topic == registry::TOPIC_CHANGED => {
@@ -1634,19 +1719,9 @@ impl LspManager {
                 Received::Event(event) if event.topic == pw_core::config::TOPIC_CHANGED => {
                     self.config_changed().await;
                 }
-                Received::Event(event) if event.topic == pw_fs::watch::TOPIC_CHANGED => {
-                    if let Scope::Project(project) = &event.scope
-                        && let Ok(changed) =
-                            serde_json::from_value::<pw_fs::watch::FsChanged>(event.payload.clone())
-                    {
-                        self.fs_changed(project, &changed);
-                    }
-                }
                 Received::Event(_) => {}
                 Received::Lagged(n) => {
-                    // 놓친 `fs.changed` 는 되찾지 않는다 — 같은 버스를 보는 파일 목록 인덱스도 넘쳐 다시 만들면 그 목록으로 다시
-                    // 알린다(`crate::watched` 머리 주석).
-                    tracing::warn!(target: "pw_lsp", dropped = n, "missed events; checking trust and settings again (file changes may be lost)");
+                    tracing::warn!(target: "pw_lsp", dropped = n, "missed events; checking trust and settings again");
                     self.recheck_trust().await;
                     self.config_changed().await;
                 }

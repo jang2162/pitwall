@@ -492,3 +492,94 @@ async fn the_observation_ends_with_the_server() {
         .await;
     assert!(eventually(Duration::from_secs(2), || files.observer_count() == 1).await);
 }
+
+// ---- 첫 목록 · 넘침 (리뷰 M1 · H1) ------------------------------------------------------------------------------------------------
+
+/// 리뷰 M1 재현: 서버가 먼저 뜬 뒤 감시가 걸려 목록이 처음 만들어져도 그 목록은 기준선이라 알리지 않는다. 같은 루트의 둘째 임대 ·
+/// 닫았다 다시 연 감시의 첫 목록도 알리지 않고, 그 뒤 `rescan` 은 맞는 파일을 모두 다시 알린다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_first_list_of_a_watch_is_a_baseline() {
+    let env = Env::new(options(WatchLimits::default(), true, true));
+    for n in 0..40 {
+        env.file(&format!("src/m{n}.rs"), "");
+    }
+    env.file("Cargo.toml", "");
+    let record = env.fake(
+        "rust-analyzer",
+        watching(json!([{ "globPattern": "**/*.rs" }, { "globPattern": "**/Cargo.toml" }])),
+    );
+    let _win = ready(&env, &record, "src/open.rs").await;
+    let first = env.watch_project().await;
+    let second = env.watch_project().await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        notifications(&env, &record).len(),
+        0,
+        "the first list was announced"
+    );
+    drop((first, second));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let _again = env.watch_project().await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(
+        notifications(&env, &record).len(),
+        0,
+        "the reopened list was announced"
+    );
+
+    rescan(&env);
+    settle(&env, &record, 1).await;
+    let mut announced = changes(&env, &record);
+    announced.sort();
+    announced.dedup();
+    assert_eq!(announced.len(), 41, "{announced:?}");
+    assert!(announced.iter().all(|(_, t)| *t == 2));
+    assert!(announced.iter().any(|(p, _)| p == "Cargo.toml"));
+}
+
+/// 리뷰 H1: 쌓기 상한을 넘친 바뀜은 버리되 조용히 잃지 않는다 — 그 루트를 다시 알려(`rescan` → 다시 만든 목록) 버린 파일도 간다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_overflow_announces_the_folder_again() {
+    let env = Env::new(options(
+        WatchLimits {
+            max_pending: 3,
+            ..WatchLimits::default()
+        },
+        true,
+        true,
+    ));
+    let root = env.root.clone();
+    let paths: Vec<_> = (0..5).map(|n| env.file(&format!("{n}.rs"), "")).collect();
+    let _lease = env.watch_project().await;
+    let record = env.fake(
+        "rust-analyzer",
+        watching(json!([{ "globPattern": "*.rs" }])),
+    );
+    let _win = ready(&env, &record, "src/open.rs").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let before = notifications(&env, &record).len();
+    let events: Vec<_> = paths
+        .iter()
+        .map(|p| (p.as_path(), FsChangeKind::Created))
+        .collect();
+    publish(&env, &env.id, &fs_changed(&root, &events));
+    let all_five = || {
+        let got: std::collections::BTreeSet<String> = notifications(&env, &record)[before..]
+            .iter()
+            .flatten()
+            .filter(|(_, t)| *t == 2)
+            .map(|(p, _)| p.clone())
+            .collect();
+        got.len() == 5
+    };
+    assert!(
+        eventually(Duration::from_secs(5), all_five).await,
+        "{:?}",
+        notifications(&env, &record)
+    );
+    let created = changes(&env, &record)
+        .into_iter()
+        .filter(|(_, t)| *t == 1)
+        .count();
+    assert_eq!(created, 3, "three fitted in the queue");
+}
