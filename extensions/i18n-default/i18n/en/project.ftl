@@ -52,6 +52,8 @@ editor-show-hex = View as Hex
 editor-head-notice = Showing only the first { $shown } (of { $size }) · read-only
 editor-binary-as-text = Showing a binary file as text (bytes that are not UTF-8 show as �) · read-only
 editor-read-only-large = Opened read-only: the file is larger than 5 MiB (highlighting and wrapping off)
+# Actions row of an editor popup (M4-07) — the name screen readers read.
+lsp-popup-actions = Popup actions
 # $encoding: the guessed encoding name (e.g. EUC-KR, UTF-16LE)
 editor-read-only-encoding = Read as { $encoding } · opened read-only because it is not UTF-8
 editor-read-only-lossy = Read as UTF-8 · opened read-only because some bytes are invalid (�)

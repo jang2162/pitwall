@@ -3,17 +3,25 @@
 // 「빠른 수정」 은 M4-12 가 붙인다.
 //
 // - 그리는 자리: CodeMirror 툴팁(`showTooltip`)이라 `view.dom` 안에 그려진다. 위치 잡기 · 창 가장자리에서 위아래 뒤집기 · 가로로
-//   창 안에 붙이기는 CodeMirror 의 툴팁이 한다(공간이 모자란 쪽을 피해 고른다). 한 뷰에 팝업은 하나다 — 새로 띄우면 앞 것을 바꾼다.
-// - 닫힘: 편집(문서가 바뀜) · 스크롤 · `Esc`. `Esc` 는 CodeMirror 키맵(가장 높은 우선순위)이 받아 처리했다고 답하므로 keydown 이
+//   창 안에 붙이기는 CodeMirror 의 툴팁이 한다(공간이 모자란 쪽을 피해 고른다).
+// - 칸 둘: 시그니처(`signature`)는 자기 칸, 나머지(호버 · 진단 · 코드 액션 · 위치 목록)는 `main` 칸 하나를 나눠 쓴다 — 칸마다
+//   팝업은 하나이고 새로 띄우면 그 칸의 앞 것을 바꾼다. 인자를 치는 동안 진단 위로 마우스가 지나도 시그니처가 남는다(리뷰 M-2).
+// - 닫힘: 편집(문서가 바뀜) · 스크롤 · `Esc`. `keepOnEdit` 인 팝업(시그니처 도움말처럼 치는 동안 서야 하는 것)은 편집 · 스크롤에
+//   닫히지 않고 자리(`pos` · `end`)를 편집에 맞춰 옮긴다 — 치면 스크롤도 따라오므로 스크롤에도 남는다. `Esc` 는 `main` 칸을 먼저,
+//   없으면 `signature` 칸을 닫는다. `Esc` 는 CodeMirror 키맵(가장 높은 우선순위)이 받아 처리했다고 답하므로 keydown 이
 //   `preventDefault` 된다 — 창 키맵의 `Esc` 「커서 하나로」(`yieldsToHandled`, M4-14)가 그 눌림에서 돌지 않아 멀티 커서가 남는다
 //   (10-ui.md §4.4 「이미 처리된 키」). 팝업이 `view.dom` 밖(포털)에 그려지는 기능이 생기면 그 기능은 `useKeymapPopup` 으로 팝업이
 //   열렸다고 알려야 Esc 가 팝업 몫이 된다(M4-14 ⓖ). 한글 조합 중의 Esc 는 CodeMirror 가 키맵에 넘기지 않아 조합만 취소한다.
+//   포커스가 팝업 안(액션 단추 · 링크 — Tab 으로 간다)에 있으면 CodeMirror 키맵에 닿지 않으므로 팝업이 직접 Esc 를 받아 닫고
+//   `preventDefault` 한 뒤 에디터로 포커스를 돌린다(리뷰 M-3).
+// - 접근성: 팝업마다 id 를 두고 열려 있는 동안 글자 영역(`contentDOM`)의 `aria-describedby` 로 잇는다. 액션 줄은
+//   `role="toolbar"`(이름은 창의 문자열 `LspServices.popupActionsLabel`, 리뷰 L-1).
 // - 본문: Markdown 은 M1 의 안전한 렌더(src/editor/markdown.ts — raw HTML 끔)를 쓰고, 링크는 누름을 가로채 `http(s)` · `mailto` 만
 //   외부 브라우저로 연다(`LspServices.openExternal` — 그 밖의 스킴 · 상대 경로는 열지 않는다). 코드 블록은 구문 강조 서비스로
 //   칠한다(`LspServices.highlight` — 코드 블록의 언어, 없으면 문서의 언어). 서버가 준 글은 문자열로만 넣는다.
 // - 색: 테마 토큰 `popup.*`(src/theme/tokens.ts).
 
-import { Facet, Prec, StateEffect, StateField } from "@codemirror/state";
+import { Facet, MapMode, Prec, StateEffect, StateField, type Transaction } from "@codemirror/state";
 import { EditorView, keymap, showTooltip, type Tooltip, ViewPlugin } from "@codemirror/view";
 
 import { editorContext } from "../editor/extensions/context";
@@ -42,7 +50,25 @@ export interface PopupSpec {
   readonly body: PopupBody;
   /** 이 팝업의 값(진단 등) — 액션 칸이 읽는다. */
   readonly data?: unknown;
+  /** 편집 · 스크롤에 닫지 않고 자리를 편집에 맞춰 옮긴다(시그니처 도움말). 없으면 닫는다. */
+  readonly keepOnEdit?: boolean;
 }
+
+/** 팝업 칸. 시그니처는 자기 칸, 나머지는 `main` 하나를 나눠 쓴다(머리 주석). */
+export type PopupSlot = "main" | "signature";
+
+export const slotOf = (kind: PopupKind): PopupSlot => (kind === "signature" ? "signature" : "main");
+
+interface OpenPopup {
+  readonly spec: PopupSpec;
+  /** DOM id(`aria-describedby`). */
+  readonly id: string;
+}
+
+type Popups = Readonly<Record<PopupSlot, OpenPopup | null>>;
+
+const SLOTS: readonly PopupSlot[] = ["main", "signature"];
+let popupSeq = 0;
 
 export interface PopupAction {
   /** 시험 · 로그. */
@@ -60,47 +86,88 @@ export interface PopupActionSource {
 /** 액션 칸. 기능 행이 자기 LSP 기능(`LSP_FEATURES`)의 확장에 `popupActions.of(…)` 를 넣는다. */
 export const popupActions = Facet.define<PopupActionSource>();
 
-/** 팝업을 띄운다(앞 것은 바뀐다). `null` 이면 닫는다. */
-export const setPopup = StateEffect.define<PopupSpec | null>();
+/** 칸 `slot` 에 팝업을 띄운다(그 칸의 앞 것은 바뀐다). `spec` 이 `null` 이면 그 칸을 닫는다. */
+export const setPopup = StateEffect.define<{ slot: PopupSlot; spec: PopupSpec | null }>();
 
-/** 지금 팝업. 편집하면 닫힌다. */
-export const popupField = StateField.define<PopupSpec | null>({
-  create: () => null,
+/** 편집에 남는 팝업의 자리를 옮긴다. 자리가 지워졌으면 닫는다. */
+function mapped(open: OpenPopup, tr: Transaction): OpenPopup | null {
+  const { spec } = open;
+  const pos = tr.changes.mapPos(spec.pos, 1, MapMode.TrackDel);
+  if (pos === null) return null;
+  const end = spec.end === undefined ? undefined : tr.changes.mapPos(spec.end, -1);
+  return { ...open, spec: { ...spec, pos, ...(end !== undefined && { end: Math.max(pos, end) }) } };
+}
+
+/** 지금 팝업들. 편집하면 `keepOnEdit` 가 아닌 것은 닫힌다. */
+export const popupField = StateField.define<Popups>({
+  create: () => ({ main: null, signature: null }),
   update(value, tr) {
-    let next = value;
-    for (const e of tr.effects) if (e.is(setPopup)) next = e.value;
-    if (next !== null && tr.docChanged && next === value) return null;
-    return next;
+    const next: Record<PopupSlot, OpenPopup | null> = { ...value };
+    const set = new Set<PopupSlot>();
+    for (const e of tr.effects)
+      if (e.is(setPopup)) {
+        set.add(e.value.slot);
+        next[e.value.slot] = e.value.spec && {
+          spec: e.value.spec,
+          id: `pw-lsp-popup-${++popupSeq}`,
+        };
+      }
+    if (tr.docChanged)
+      for (const slot of SLOTS) {
+        const open = next[slot];
+        if (open && !set.has(slot)) next[slot] = open.spec.keepOnEdit ? mapped(open, tr) : null;
+      }
+    return SLOTS.every((slot) => next[slot] === value[slot]) ? value : next;
   },
-  provide: (f) =>
-    showTooltip.from(f, (spec): Tooltip | null =>
-      spec === null
-        ? null
-        : {
+  provide: (f) => [
+    showTooltip.computeN([f], (state) =>
+      SLOTS.flatMap((slot): Tooltip[] => {
+        const open = state.field(f)[slot];
+        if (!open) return [];
+        const { spec } = open;
+        return [
+          {
             pos: spec.pos,
             ...(spec.end !== undefined && { end: spec.end }),
             above: spec.above ?? false,
             arrow: false,
-            create: (view) => ({ dom: popupDom(view, spec) }),
+            create: (view) => ({ dom: popupDom(view, open) }),
           },
+        ];
+      }),
     ),
+    // 화면 읽기 프로그램이 글자 영역에서 팝업 내용을 읽게 잇는다(리뷰 L-1).
+    EditorView.contentAttributes.compute([f], (state): Record<string, string> => {
+      const ids = SLOTS.flatMap((slot) => state.field(f)[slot]?.id ?? []);
+      return ids.length > 0 ? { "aria-describedby": ids.join(" ") } : {};
+    }),
+  ],
 });
 
+/** 팝업을 그 종류의 칸에 띄운다. */
 export function openPopup(view: EditorView, spec: PopupSpec) {
-  view.dispatch({ effects: setPopup.of(spec) });
+  view.dispatch({ effects: setPopup.of({ slot: slotOf(spec.kind), spec }) });
 }
 
-export function closePopup(view: EditorView) {
-  if (view.state.field(popupField, false)) view.dispatch({ effects: setPopup.of(null) });
+/** 칸 `slot` 을(없으면 모두) 닫는다. */
+export function closePopup(view: EditorView, slot?: PopupSlot) {
+  const popups = view.state.field(popupField, false);
+  if (!popups) return;
+  const effects = (slot ? [slot] : SLOTS)
+    .filter((s) => popups[s] !== null)
+    .map((s) => setPopup.of({ slot: s, spec: null }));
+  if (effects.length > 0) view.dispatch({ effects });
 }
 
-/** 지금 팝업(없거나 바탕이 없는 뷰면 `null`). */
-export function currentPopup(view: EditorView): PopupSpec | null {
-  return view.state.field(popupField, false) ?? null;
+/** 칸 `slot` 의 팝업(없으면 `main` · `signature` 순으로 첫 것). 없거나 바탕이 없는 뷰면 `null`. */
+export function currentPopup(view: EditorView, slot?: PopupSlot): PopupSpec | null {
+  const popups = view.state.field(popupField, false);
+  if (!popups) return null;
+  return (slot ? popups[slot] : (popups.main ?? popups.signature))?.spec ?? null;
 }
 
 /** 이 창의 것(링크 · 코드 강조). 없으면 링크를 누를 수 없고 코드를 칠하지 않는다. */
-function servicesOf(view: EditorView): LspServices {
+function servicesOf(view: EditorView): Partial<LspServices> {
   return view.state.facet(editorContext)?.lsp?.services ?? {};
 }
 
@@ -126,7 +193,11 @@ export function codeLanguage(info: string | undefined, fallback: string | undefi
 }
 
 /** 코드 블록을 구문 강조 서비스로 칠한다(답이 오면 글자를 토큰 클래스의 조각으로 바꾼다). */
-function highlightBlocks(root: HTMLElement, services: LspServices, fallback: string | undefined) {
+function highlightBlocks(
+  root: HTMLElement,
+  services: Partial<LspServices>,
+  fallback: string | undefined,
+) {
   const { highlight } = services;
   if (!highlight) return;
   for (const code of root.querySelectorAll<HTMLElement>("pre > code")) {
@@ -156,12 +227,21 @@ function highlightBlocks(root: HTMLElement, services: LspServices, fallback: str
   }
 }
 
-function popupDom(view: EditorView, spec: PopupSpec): HTMLElement {
+function popupDom(view: EditorView, { spec, id }: OpenPopup): HTMLElement {
   const services = servicesOf(view);
+  const slot = slotOf(spec.kind);
   const dom = document.createElement("div");
   dom.className = "pw-lsp-popup";
+  dom.id = id;
   dom.dataset.popupKind = spec.kind;
   dom.setAttribute("role", "tooltip");
+  // 포커스가 팝업 안(단추 · 링크)이면 Esc 가 CodeMirror 키맵에 닿지 않는다 — 여기서 닫고 처리했다고 표시한다(리뷰 M-3).
+  dom.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.isComposing) return;
+    e.preventDefault();
+    closePopup(view, slot);
+    view.focus();
+  });
   const body = document.createElement("div");
   body.className = "pw-lsp-popup-body";
   const { body: content } = spec;
@@ -193,6 +273,9 @@ function popupDom(view: EditorView, spec: PopupSpec): HTMLElement {
   if (actions.length > 0) {
     const row = document.createElement("div");
     row.className = "pw-lsp-popup-actions";
+    row.setAttribute("role", "toolbar");
+    const label = services.popupActionsLabel?.();
+    if (label) row.setAttribute("aria-label", label);
     for (const action of actions) {
       const button = document.createElement("button");
       button.type = "button";
@@ -202,7 +285,8 @@ function popupDom(view: EditorView, spec: PopupSpec): HTMLElement {
       // 누름이 에디터의 포커스 · 선택을 빼앗지 않게 한다.
       button.addEventListener("mousedown", (e) => e.preventDefault());
       button.addEventListener("click", () => {
-        closePopup(view);
+        closePopup(view, slot);
+        view.focus();
         action.run(view);
       });
       row.append(button);
@@ -216,7 +300,9 @@ function popupDom(view: EditorView, spec: PopupSpec): HTMLElement {
 const closeOnScroll = ViewPlugin.fromClass(
   class {
     private readonly onScroll = () => {
-      if (currentPopup(this.view)) closePopup(this.view);
+      const popups = this.view.state.field(popupField, false);
+      for (const slot of SLOTS)
+        if (popups?.[slot] && !popups[slot].spec.keepOnEdit) closePopup(this.view, slot);
     };
     constructor(private readonly view: EditorView) {
       view.scrollDOM.addEventListener("scroll", this.onScroll, { passive: true });
@@ -233,8 +319,10 @@ const closeOnEscape = Prec.highest(
     {
       key: "Escape",
       run: (view) => {
-        if (!currentPopup(view)) return false;
-        closePopup(view);
+        const popups = view.state.field(popupField, false);
+        const slot = SLOTS.find((s) => popups?.[s]);
+        if (!slot) return false;
+        closePopup(view, slot);
         return true;
       },
     },

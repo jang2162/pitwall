@@ -35,6 +35,7 @@ import { parseTheme } from "../theme/tokens";
 import { editorContext } from "../editor/extensions/context";
 import { fakeSyntaxServer, miniHighlight } from "../editor/syntax-testing";
 import { fakeLspServer } from "./lsp-testing";
+import { lspCapabilities } from "./features";
 import { currentPopup, openPopup, popupActions, popupField } from "./popup";
 
 declare global {
@@ -588,7 +589,86 @@ it("reads the server capabilities into the tab's context and asks again after an
     hover: { server: "rust-analyzer", options: true, optionsTruncated: false },
   });
   await emit("lsp.status", { projectId: "p1", instances: [] });
-  expect(lspContext()?.capabilities).toEqual({
-    hover: { server: "rust-analyzer", options: true, optionsTruncated: false },
+  const hover = { server: "rust-analyzer", options: true, optionsTruncated: false };
+  expect(lspContext()?.capabilities).toEqual({ hover });
+  // 뷰 상태로도 온다 — 기능 행이 구독하지 않고 읽는다(리뷰 L-2).
+  expect(view().state.field(lspCapabilities)).toEqual({ hover });
+  // 기능 행의 Host RPC 는 창의 연결로 간다(리뷰 H-2) — 문서 · 프로젝트를 싣는다.
+  const answer = await act(async () =>
+    lspContext()!.call("caps", "lsp.document.capabilities", (at) => {
+      expect([at.projectId, at.path]).toEqual(["p1", MAIN]);
+      return { docId: at.docId };
+    }),
+  );
+  expect(answer).toEqual({ features: { hover } });
+});
+
+it("keeps a signature popup through edits and scrolls in its own slot, under a hover, and Esc closes the hover first (M-2)", async () => {
+  await mount();
+  await open(MAIN, 1, 1);
+  await act(async () =>
+    openPopup(view(), {
+      kind: "signature",
+      pos: 8,
+      body: { kind: "text", text: "main()" },
+      keepOnEdit: true,
+    }),
+  );
+  await act(async () =>
+    openPopup(view(), { kind: "hover", pos: 3, body: { kind: "text", text: "fn main" } }),
+  );
+  await settle();
+  expect(view().dom.querySelectorAll(".pw-lsp-popup")).toHaveLength(2);
+  await act(async () => view().dispatch({ changes: { from: 0, insert: "// x\n" } }));
+  // 편집에 호버는 닫히고 시그니처는 남아 자리를 옮긴다.
+  expect(currentPopup(view(), "main")).toBeNull();
+  expect(currentPopup(view(), "signature")?.pos).toBe(13);
+  await act(async () => {
+    view().scrollDOM.dispatchEvent(new Event("scroll"));
   });
+  expect(currentPopup(view(), "signature")).not.toBeNull();
+  await act(async () =>
+    openPopup(view(), { kind: "hover", pos: 3, body: { kind: "text", text: "fn main" } }),
+  );
+  await keydown({ code: "Escape", key: "Escape" }, view().contentDOM);
+  expect(currentPopup(view(), "main")).toBeNull();
+  expect(currentPopup(view(), "signature")).not.toBeNull();
+  await keydown({ code: "Escape", key: "Escape" }, view().contentDOM);
+  expect(currentPopup(view(), "signature")).toBeNull();
+});
+
+it("closes the popup with Esc from a focused action button without folding the cursors, and links it for screen readers (M-3, L-1)", async () => {
+  await mount();
+  await open(WORDS, 1, 1);
+  await ctrl("KeyG", { metaKey: true });
+  expect(ranges()).toHaveLength(3);
+  await act(async () =>
+    view().dispatch({
+      effects: StateEffect.appendConfig.of(
+        popupActions.of({
+          kinds: ["diagnostic"],
+          actions: () => [{ id: "quickFix", label: "빠른 수정", run: () => {} }],
+        }),
+      ),
+    }),
+  );
+  await act(async () =>
+    openPopup(view(), { kind: "diagnostic", pos: 0, body: { kind: "text", text: "unused" } }),
+  );
+  await settle();
+  const popup = popupDom()!;
+  expect(view().contentDOM.getAttribute("aria-describedby")).toBe(popup.id);
+  const toolbar = popup.querySelector(".pw-lsp-popup-actions")!;
+  expect([toolbar.getAttribute("role"), toolbar.getAttribute("aria-label")]).toEqual([
+    "toolbar",
+    "팝업 동작",
+  ]);
+  const button = popup.querySelector<HTMLButtonElement>("[data-popup-action=quickFix]")!;
+  button.focus();
+  expect(document.activeElement).toBe(button);
+  await keydown({ code: "Escape", key: "Escape" }, button);
+  expect(popupDom()).toBeNull();
+  expect(ranges()).toHaveLength(3);
+  expect(document.activeElement).toBe(view().contentDOM);
+  expect(view().contentDOM.hasAttribute("aria-describedby")).toBe(false);
 });

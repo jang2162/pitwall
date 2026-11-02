@@ -52,6 +52,8 @@ editor-show-hex = hex 로 보기
 editor-head-notice = 앞부분 { $shown } 만 보인다(전체 { $size }) · 읽기 전용
 editor-binary-as-text = 바이너리 파일을 텍스트로 보인다(UTF-8 로 읽을 수 없는 바이트는 �) · 읽기 전용
 editor-read-only-large = 5 MiB 를 넘는 파일이라 읽기 전용으로 연다(구문 강조 · 줄바꿈 끔)
+# 에디터 팝업(M4-07)의 액션 줄 — 화면 읽기 프로그램이 읽는 이름.
+lsp-popup-actions = 팝업 동작
 # $encoding: 짐작한 인코딩 이름(예: EUC-KR, UTF-16LE)
 editor-read-only-encoding = { $encoding } 로 읽었다 · UTF-8 이 아니라 읽기 전용으로 연다
 editor-read-only-lossy = UTF-8 로 읽었다 · 깨진 바이트가 있어(�) 읽기 전용으로 연다

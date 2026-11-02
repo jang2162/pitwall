@@ -59,6 +59,7 @@ export function projectStrings(t: Translate) {
       headNotice: (shown: string, size: string) => t("editor-head-notice", { shown, size }),
       binaryAsText: t("editor-binary-as-text"),
       readOnlyLarge: t("editor-read-only-large"),
+      lspPopupActions: t("lsp-popup-actions"),
       /** UTF-8 이 아닌 텍스트(결정 M1-D12). `encoding`: WHATWG 이름(예: EUC-KR). */
       readOnlyEncoding: (encoding: string) => t("editor-read-only-encoding", { encoding }),
       /** UTF-8 이지만 깨진 바이트가 있다(판정의 `lossy`). */
