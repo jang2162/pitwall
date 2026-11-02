@@ -392,6 +392,16 @@ pub struct Navigation {
     tokens: Arc<Mutex<Tokens>>,
 }
 
+/// 결과 위치의 자리([`Navigation::place`]).
+pub(crate) struct Placed {
+    /// 파일이면 푼 실제 경로(없는 파일 · 파일이 아닌 URI 면 `None`).
+    pub real: Option<PathBuf>,
+    /// 보일 경로(루트 안이면 실제 경로, 밖이면 URI 의 경로 또는 URI 그대로).
+    pub path: String,
+    /// 루트 밖 · 파일이 아니면 읽기 토큰.
+    pub token: Option<String>,
+}
+
 /// 요청 하나의 답과 그 문서.
 struct Answered {
     result: Value,
@@ -454,6 +464,31 @@ impl Navigation {
             });
         }
         token
+    }
+
+    /// 서버가 돌려준 URI 하나를 결과 위치의 경로 · 토큰으로(머리 주석 「결과 위치」 · 「읽기 토큰」): 그 창의 루트(`root` — `lsp_grant`
+    /// 의 루트) 안의 실제 경로면 경로만, 루트 밖 · 파일이 아닌 URI 면 이 연결 · 인스턴스 · 세대 표지(`epoch` — 방금 받은
+    /// `instance_grant` 의 것)에 묶인 토큰을 함께 준다. 위치 목록과 `workspace/symbol`(M4-16 — `crate::workspace_symbols`)이 함께 쓴다.
+    pub(crate) fn place(
+        &self,
+        ctx: &Ctx,
+        (instance, epoch): (&InstanceKey, InstanceEpoch),
+        root: &Path,
+        uri: &str,
+    ) -> Placed {
+        let at_file = uri.starts_with("file:").then(|| uri_path(uri)).flatten();
+        let real = at_file.as_deref().and_then(real_path);
+        let inside = real.as_ref().is_some_and(|r| r.starts_with(root));
+        let (path, token) = match (&real, inside) {
+            (Some(real), true) => (real.display().to_string(), None),
+            _ => (
+                at_file
+                    .as_ref()
+                    .map_or_else(|| uri.to_owned(), |p| p.display().to_string()),
+                Some(self.mint(ctx, (instance, epoch), uri, real.clone())),
+            ),
+        };
+        Placed { real, path, token }
     }
 
     /// 이 연결의 토큰. 없거나 다른 연결의 것이면 not found(있는지도 알리지 않는다).
@@ -664,18 +699,8 @@ impl Navigation {
         // 미리보기를 읽을 파일(경로 → 줄 번호들). 요청한 문서 자신은 Host 의 글을 쓴다.
         let mut wanted: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
         for (uri, start, end) in raw {
-            let at_file = uri.starts_with("file:").then(|| uri_path(&uri)).flatten();
-            let real = at_file.as_deref().and_then(real_path);
-            let inside = real.as_ref().is_some_and(|r| r.starts_with(&root));
-            let (path, token) = match (&real, inside) {
-                (Some(real), true) => (real.display().to_string(), None),
-                _ => (
-                    at_file
-                        .as_ref()
-                        .map_or_else(|| uri.clone(), |p| p.display().to_string()),
-                    Some(self.mint(ctx, (&answer.instance, epoch), &uri, real.clone())),
-                ),
-            };
+            let Placed { real, path, token } =
+                self.place(ctx, (&answer.instance, epoch), &root, &uri);
             let preview = if uri == answer.uri {
                 line_text(answer.text.as_str(), start.line as usize)
             } else {
@@ -999,8 +1024,9 @@ fn locations_method<M>(
     });
 }
 
-/// 핸들러를 붙인다(`crate::register` 가 부른다).
-pub fn register(router: &mut Router, manager: &LspManager) {
+/// 핸들러를 붙인다(`crate::register` 가 부른다). 토큰 표를 쥔 [`Navigation`] 을 돌려준다 — 루트 밖 위치를 내는 다른 행
+/// (`workspace/symbol` — M4-16)이 같은 표로 토큰을 만든다(15 M4-08 「구현에서 정한 것」 ⓞ).
+pub fn register(router: &mut Router, manager: &LspManager) -> Navigation {
     let nav = Navigation::new(manager.clone());
     let n = nav.clone();
     router.unary(LspHoverMethod, move |ctx, p: LspPositionParams| {
@@ -1049,7 +1075,7 @@ pub fn register(router: &mut Router, manager: &LspManager) {
             .await
         }
     });
-    let n = nav;
+    let n = nav.clone();
     router.unary(
         LspDocumentReadMethod,
         move |ctx, p: LspDocumentReadParams| {
@@ -1057,4 +1083,5 @@ pub fn register(router: &mut Router, manager: &LspManager) {
             async move { n.read(&ctx, &p.token).await }
         },
     );
+    nav
 }
