@@ -63,6 +63,8 @@ pub struct LspServerInfo {
     #[specta(type = JsonValue)]
     pub initialization_options: Value,
     pub resolution: LspResolution,
+    /// 서버가 없을 때 설치 안내를 띄우는가(`[lsp.<id>] install_prompt` — 기본 `true`, M4-17).
+    pub install_prompt: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]

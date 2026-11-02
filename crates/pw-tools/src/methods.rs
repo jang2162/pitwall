@@ -150,6 +150,15 @@ pub struct ToolPackageDetail {
     pub registry_version: String,
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsRegistrySetModeParams {
+    /// `pinned`(이 Pitwall 판이 고정한 registry) · `latest`(하루 한 번 최신 판).
+    pub mode: RegistryMode,
+}
+
 /// 받을 것의 고정 해시 여부.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -176,6 +185,14 @@ rpc_method! {
         tier: Read,
     }
 
+    /// 설정 `[tools] registry` 를 바꾼다(설정 창 「도구」 의 「최신 registry 사용」 — M4-17, `settings.toml` 의 그 키 하나만 쓴다).
+    /// 바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다.
+    pub ToolsRegistrySetModeMethod: "tools.registry.setMode" {
+        params: ToolsRegistrySetModeParams,
+        result: ToolsRegistryStatus,
+        tier: Write,
+    }
+
     /// 패키지 하나의 정의와 이 기기에서 받을 것. 없으면 not found.
     pub ToolsRegistryGetMethod: "tools.registry.get" {
         params: ToolsRegistryGetParams,
@@ -185,7 +202,11 @@ rpc_method! {
 }
 
 pub fn register(router: &mut Router, registry: Arc<ToolsRegistry>) {
-    let (status, search) = (Arc::clone(&registry), Arc::clone(&registry));
+    let (status, search, set_mode) = (
+        Arc::clone(&registry),
+        Arc::clone(&registry),
+        Arc::clone(&registry),
+    );
     router
         .unary(ToolsRegistryStatusMethod, move |_ctx, ()| {
             let r = Arc::clone(&status);
@@ -201,6 +222,21 @@ pub fn register(router: &mut Router, registry: Arc<ToolsRegistry>) {
                 async move {
                     r.ensure().await;
                     search_in(&r, &params)
+                }
+            },
+        )
+        .unary(
+            ToolsRegistrySetModeMethod,
+            move |_ctx, params: ToolsRegistrySetModeParams| {
+                let r = Arc::clone(&set_mode);
+                async move {
+                    let w = Arc::clone(&r);
+                    tokio::task::spawn_blocking(move || w.set_mode(params.mode))
+                        .await
+                        .map_err(|e| RpcError::internal(e.to_string()))?
+                        .map_err(RpcError::internal)?;
+                    r.ensure().await;
+                    Ok(status_of(&r))
                 }
             },
         )

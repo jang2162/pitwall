@@ -17,6 +17,8 @@ serde_json = { workspace = true }
 specta = { workspace = true, features = ["derive"] }
 # 해석(로그인 셸 환경 기다리기 · `rustup which`)을 블로킹 스레드로 보낸다.
 tokio = { workspace = true, features = ["rt"] }
+# 개인 설정 파일에 키 하나를 쓴다(`LspServers::write_local` — pw_core::config::write 의 값 형식). 버전은 pw-core 와 같게 둔다.
+toml_edit = "0.25.17"
 tracing = "0.1.44"
 
 [dev-dependencies]

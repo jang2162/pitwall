@@ -1,5 +1,6 @@
 //! `[lsp.<서버 id>]` 설정(결정 M4-D22): 전역 `settings.toml` 과 프로젝트 `.pitwall/project.toml` 의 같은 표를 읽어 정의 위에
-//! 합친다. 키는 `enabled` · `path` · `args` · `env` · `settings` · `features.disable` 이다. `[lsp]` 바로 아래의 표가 아닌 값
+//! 합친다. 키는 `enabled` · `path` · `args` · `env` · `settings` · `features.disable` · `install_prompt` 이다(`install_prompt` 는 서버를
+//! 띄우는 값이 아니라 「설치하라」 안내를 띄울지라서 [`ServerConfig`] 에 들지 않는다 — [`install_prompt`], 15-m4-plan M4-17). `[lsp]` 바로 아래의 표가 아닌 값
 //! (`idle_shutdown_minutes` 등)은 서버 전역 설정이라 여기서 읽지 않는다(서버 관리자 M4-05 의 몫).
 //!
 //! 합치는 규칙: 프로젝트가 전역을 이긴다(키마다). `settings` 는 정의 → 전역 → 프로젝트 순으로 깊게 합친다(객체는 키마다, 그 밖의
@@ -25,6 +26,8 @@ pub struct ServerSettings {
     pub env: BTreeMap<String, String>,
     pub settings: Option<Json>,
     pub disable: Option<Vec<LspFeature>>,
+    /// `false` 면 서버가 없을 때 프로젝트 창이 설치 안내 배너를 띄우지 않는다(「이 프로젝트에서 묻지 않기」 — M4-17).
+    pub install_prompt: Option<bool>,
 }
 
 /// 설정이 어느 겹에서 왔는가. 상대 경로 `path` 를 무엇에 맞춰 풀지가 이것으로 갈린다.
@@ -132,6 +135,10 @@ fn parse_server(entry: &Map<String, Json>, at: &str, warnings: &mut Vec<String>)
         match key.as_str() {
             "enabled" => match value.as_bool() {
                 Some(b) => s.enabled = Some(b),
+                None => bad("true or false"),
+            },
+            "install_prompt" => match value.as_bool() {
+                Some(b) => s.install_prompt = Some(b),
                 None => bad("true or false"),
             },
             "path" => match value.as_str() {
@@ -246,6 +253,37 @@ pub fn server_config(
         disabled_features,
         format_unreliable_while_progress: def.format_unreliable_while_progress.clone(),
     }
+}
+
+/// 프로젝트의 개인 파일에 쓸 수 있는 `[lsp.<id>]` 키(상태 팝업의 「이 프로젝트에서 끄기」 · 설치 배너의 「이 프로젝트에서 묻지
+/// 않기」 — 15-m4-plan M4-17). 다른 키는 쓰지 않는다.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum LspLocalSetting {
+    /// `enabled`.
+    Enabled,
+    /// `install_prompt`.
+    InstallPrompt,
+}
+
+impl LspLocalSetting {
+    /// 파일의 키 이름.
+    pub fn file_key(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::InstallPrompt => "install_prompt",
+        }
+    }
+}
+
+/// 서버가 없을 때 설치 안내를 띄우는가(`[lsp.<id>] install_prompt`, 기본 `true`). 프로젝트가 전역을 이긴다.
+pub fn install_prompt(global: Option<&ServerSettings>, project: Option<&ServerSettings>) -> bool {
+    project
+        .and_then(|s| s.install_prompt)
+        .or_else(|| global.and_then(|s| s.install_prompt))
+        .unwrap_or(true)
 }
 
 /// `over` 를 `base` 위에 깊게 합친다: 둘 다 객체면 키마다 합치고, 아니면 `over` 가 이긴다.
@@ -434,5 +472,25 @@ mod tests {
                 "x": {"y": true},
             })
         );
+    }
+
+    /// `install_prompt`(M4-17): 기본 참, 프로젝트가 전역을 이기고, bool 이 아니면 경고하고 버린다.
+    #[test]
+    fn install_prompt_defaults_to_true_and_the_project_wins() {
+        let mut warnings = Vec::new();
+        let off = layer(json!({ "ls": { "install_prompt": false } }), &mut warnings);
+        let on = layer(json!({ "ls": { "install_prompt": true } }), &mut warnings);
+        let none = layer(json!({ "ls": {} }), &mut warnings);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert!(install_prompt(None, None));
+        assert!(install_prompt(Some(&none), Some(&none)));
+        assert!(!install_prompt(Some(&off), None));
+        assert!(install_prompt(Some(&off), Some(&on)));
+        assert!(!install_prompt(Some(&on), Some(&off)));
+        let bad = layer(json!({ "ls": { "install_prompt": "no" } }), &mut warnings);
+        assert_eq!(bad.install_prompt, None);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(LspLocalSetting::InstallPrompt.file_key(), "install_prompt");
+        assert_eq!(LspLocalSetting::Enabled.file_key(), "enabled");
     }
 }

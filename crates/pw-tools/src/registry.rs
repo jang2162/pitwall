@@ -153,6 +153,30 @@ impl ToolsRegistry {
         }
     }
 
+    /// 설정 `[tools] registry` 를 쓴다(설정 창 「도구」 의 「최신 registry 사용」 — 15-m4-plan M4-17). `settings.toml` 의 그 키 하나만
+    /// 고치고(`pw_core::config::write`) 전역 설정을 다시 읽는다 — 다음 [`Self::ensure`] 가 바뀐 모드로 가져온다. 바꿨으면 참.
+    /// 블로킹(파일 IO)이다.
+    pub fn set_mode(&self, mode: RegistryMode) -> Result<bool, String> {
+        let Some(ModeSource::Config(store)) = self.host.get().map(|h| &h.mode) else {
+            return Err("the tools registry is not attached to the global settings".into());
+        };
+        let value = match mode {
+            RegistryMode::Pinned => "pinned",
+            RegistryMode::Latest => "latest",
+        };
+        let changed = pw_core::config::write::write_setting(
+            store.source().dir(),
+            SETTINGS_KEY,
+            Some(toml_edit::Value::from(value)),
+        )
+        .map_err(|e| e.to_string())?;
+        if changed {
+            tracing::info!(target: "pw_tools", mode = value, "registry mode written");
+            store.reload().map_err(|e| e.to_string())?;
+        }
+        Ok(changed)
+    }
+
     pub fn fetching(&self) -> bool {
         self.state.lock().unwrap().running
     }

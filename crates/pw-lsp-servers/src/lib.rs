@@ -33,7 +33,9 @@ use serde_json::{Map, Value as Json};
 pub use resolve::{
     Located, LspResolution, LspResolveStep, LspSkipped, NoTools, ResolveContext, ToolLocator,
 };
-pub use settings::{ConfiguredPath, LspSettingsOrigin, ServerConfig, ServerSettings};
+pub use settings::{
+    ConfiguredPath, LspLocalSetting, LspSettingsOrigin, ServerConfig, ServerSettings,
+};
 
 use crate::methods::{LspRuntimeRequirement, LspServerInfo, LspServerList, LspServersListParams};
 
@@ -295,6 +297,43 @@ impl LspServers {
         Ok(self.setup_in(&view, &extension.manifest.id, def, &dir))
     }
 
+    /// 그 프로젝트의 개인 파일(`project.local.toml` — 활성 워크트리의 설정 폴더 기준, 고칠 파일은 [`ConfigSource::local_file`] 이
+    /// 정한다: 워크트리에 없으면 메인 체크아웃 것, 개인 전용이면 그 폴더)에 `[lsp.<server>] <key> = <value>` 한 키만 쓴다. 커밋되는
+    /// `.pitwall/project.toml` 에는 쓰지 않는다(사람의 설정을 커밋하지 않게 — 15-m4-plan M4-17). 등록되지 않은 서버 id 는 invalid
+    /// params(모르는 표를 만들지 않는다). 쓴 파일을 돌려준다. 블로킹(파일 IO)이다.
+    ///
+    /// [`ConfigSource::local_file`]: pw_core::config::ConfigSource::local_file
+    pub fn write_local(
+        &self,
+        project_id: &str,
+        worktree: Option<&str>,
+        server_id: &str,
+        key: settings::LspLocalSetting,
+        value: bool,
+    ) -> Result<PathBuf, RpcError> {
+        if self.extensions.language_server(server_id).is_none() {
+            return Err(RpcError::invalid_params(format!(
+                "no language server `{server_id}`"
+            )));
+        }
+        let host = self.host()?;
+        let project = host.projects.get(project_id).map_err(registry_error)?;
+        let root = active_root(&project, worktree)?;
+        let source = project
+            .config_source(&host.paths, &root)
+            .map_err(|e| RpcError::internal(e.to_string()))?;
+        let file = source.local_file("project");
+        pw_core::config::write::write_key(
+            &file,
+            "project",
+            &[settings::SETTINGS_KEY, server_id, key.file_key()],
+            Some(toml_edit::Value::from(value)),
+        )
+        .map_err(|e| RpcError::internal(e.to_string()))?;
+        tracing::info!(target: "pw_lsp_servers", project = %project_id, server = %server_id, key = key.file_key(), value, file = %file.display(), "wrote a personal language server setting");
+        Ok(file)
+    }
+
     /// 서버마다의 합친 설정. 설정이 바뀌었을 때 [`changed_servers`] 로 견줄 값이다.
     pub fn configs(
         &self,
@@ -315,7 +354,12 @@ impl LspServers {
             .definitions()
             .map(|(extension, def)| {
                 let setup = self.setup_in(&view, extension, def, &view.root);
-                LspServerInfo::new(setup)
+                let mut info = LspServerInfo::new(setup);
+                info.install_prompt = settings::install_prompt(
+                    view.global_layer.get(&def.id),
+                    view.project_layer.get(&def.id),
+                );
+                info
             })
             .collect();
         Ok(LspServerList {
@@ -359,6 +403,7 @@ impl LspServerInfo {
             settings: config.settings,
             initialization_options,
             resolution,
+            install_prompt: true,
         }
     }
 }

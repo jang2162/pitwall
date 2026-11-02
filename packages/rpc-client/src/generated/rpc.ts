@@ -700,6 +700,12 @@ export type UnaryMethods = {
 	 */
 	"lsp.server.restart": { params: LspServerControlParams; result: LspInstanceStatus };
 	/**
+	 * 그 프로젝트의 개인 파일(`project.local.toml`)에 `[lsp.<id>] enabled` · `install_prompt` 를 쓴다(「이 프로젝트에서 끄기」 ·
+	 * 「이 프로젝트에서 묻지 않기」). 커밋되는 `.pitwall/project.toml` 에는 쓰지 않는다. 그 프로젝트 창 · 신뢰한 프로젝트만.
+	 * `enabled` 면 그 서버의 인스턴스를 다시 지나게 한다(끄면 끝난다).
+	 */
+	"lsp.server.setLocal": { params: LspServerSetLocalParams; result: LspServerSetLocalResult };
+	/**
 	 * 인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의
 	 * 연결만. 없는 인스턴스는 not found.
 	 */
@@ -713,6 +719,10 @@ export type UnaryMethods = {
 	 * 시그니처 도움말(`textDocument/signatureHelp`). 매개변수는 시그니처 글 안의 UTF-16 범위.
 	 */
 	"lsp.signatureHelp": { params: LspSignatureHelpParams; result: LspSignatureHelpAnswer };
+	/**
+	 * 문서 하나를 맡는 서버와 그 인스턴스 상태(상태바 `lsp` 항목 · 설치 배너). 서버를 띄우지 않는다. 그 프로젝트 창의 연결만.
+	 */
+	"lsp.status.document": { params: LspDocumentStatusParams; result: LspDocumentStatus };
 	/**
 	 * 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다. 그 프로젝트 창의 연결만(다른 연결은
 	 * permission denied).
@@ -923,6 +933,11 @@ export type UnaryMethods = {
 	 * 패키지 찾기(이름 · 설명, 분류 · 언어 거르기).
 	 */
 	"tools.registry.search": { params: ToolsRegistrySearchParams; result: ToolsRegistrySearch };
+	/**
+	 * 설정 `[tools] registry` 를 바꾼다(설정 창 「도구」 의 「최신 registry 사용」 — M4-17, `settings.toml` 의 그 키 하나만 쓴다).
+	 * 바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다.
+	 */
+	"tools.registry.setMode": { params: ToolsRegistrySetModeParams; result: ToolsRegistryStatus };
 	/**
 	 * registry 의 판 · 받은 때 · 이 기기에서 지원하는 패키지 수와 지원하지 않는 까닭별 수. 처음 부르면 캐시를 읽고 가져오기를
 	 * 뒤에서 시작한다(`fetching`).
@@ -1178,9 +1193,11 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.rename": {"name":"lsp.rename","kind":"unary","tier":"read","roles":["owner"],"params":"LspRenameParams","output":"LspEditAnswer","doc":" rename 의 편집(`textDocument/rename`). 쓰지 않는다 — 웹뷰의 적용기가 미리 확인 · 미리보기 · 쓰기를 한다(결정 M4-D14). 서버가\n 이름을 거절하면 5002(서버의 글). 받을 수 없는 편집(루트 밖 스킴 · `.git` · 상한)은 5120.\n","mcp":false,"fileScope":false},
 	"lsp.rename.prepare": {"name":"lsp.rename.prepare","kind":"unary","tier":"read","roles":["owner"],"params":"LspRenamePrepareParams","output":"LspRenamePrepared","doc":" rename 의 대상: 서버의 `prepareRename` 이 준 범위 · 처음 이름. 서버가 `prepareRename` 을 하지 않으면 `default`(웹뷰가 커서의\n 낱말을 쓴다), 그 자리를 바꿀 수 없으면 `invalid`. 맡을 서버가 없으면 5001.\n","mcp":false,"fileScope":false},
 	"lsp.server.restart": {"name":"lsp.server.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시\n 받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
+	"lsp.server.setLocal": {"name":"lsp.server.setLocal","kind":"unary","tier":"write","roles":["owner"],"params":"LspServerSetLocalParams","output":"LspServerSetLocalResult","doc":" 그 프로젝트의 개인 파일(`project.local.toml`)에 `[lsp.<id>] enabled` · `install_prompt` 를 쓴다(「이 프로젝트에서 끄기」 ·\n 「이 프로젝트에서 묻지 않기」). 커밋되는 `.pitwall/project.toml` 에는 쓰지 않는다. 그 프로젝트 창 · 신뢰한 프로젝트만.\n `enabled` 면 그 서버의 인스턴스를 다시 지나게 한다(끄면 끝난다).\n","mcp":false,"fileScope":false},
 	"lsp.server.stop": {"name":"lsp.server.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의\n 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.servers.list": {"name":"lsp.servers.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspServersListParams","output":"LspServerList","doc":" 언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params\n 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).\n","mcp":false,"fileScope":false},
 	"lsp.signatureHelp": {"name":"lsp.signatureHelp","kind":"unary","tier":"read","roles":["owner"],"params":"LspSignatureHelpParams","output":"LspSignatureHelpAnswer","doc":" 시그니처 도움말(`textDocument/signatureHelp`). 매개변수는 시그니처 글 안의 UTF-16 범위.\n","mcp":false,"fileScope":false},
+	"lsp.status.document": {"name":"lsp.status.document","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentStatusParams","output":"LspDocumentStatus","doc":" 문서 하나를 맡는 서버와 그 인스턴스 상태(상태바 `lsp` 항목 · 설치 배너). 서버를 띄우지 않는다. 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
 	"lsp.status.get": {"name":"lsp.status.get","kind":"unary","tier":"read","roles":["owner"],"params":"LspStatusGetParams","output":"LspStatus","doc":" 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다. 그 프로젝트 창의 연결만(다른 연결은\n permission denied).\n","mcp":false,"fileScope":false},
 	"lsp.symbols.document": {"name":"lsp.symbols.document","kind":"unary","tier":"read","roles":["owner"],"params":"LspSymbolsDocumentParams","output":"LspDocumentSymbols","doc":" 문서의 심볼(구조 툴 윈도우 · 파일 구조 팝업 — M4-10). 서버의 계층 · 평면 답을 평면 목록 + 부모 색인으로 바꾼다(위치는\n UTF-16 오프셋). 맡을 서버가 없으면(서버 없음 · 준비 전 · 미신뢰) `5001` — 웹뷰는 `index.file.symbols` 로 대신한다. 없는\n 문서 · 다른 연결의 문서는 not found. 서버를 띄우지 않는다.\n","mcp":false,"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":false,"fileScope":false},
@@ -1228,6 +1245,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"tools.log": {"name":"tools.log","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsNameParams","output":"ToolLog","doc":" 패키지의 설치 로그.\n","mcp":false,"fileScope":false},
 	"tools.registry.get": {"name":"tools.registry.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsRegistryGetParams","output":"ToolPackageDetail","doc":" 패키지 하나의 정의와 이 기기에서 받을 것. 없으면 not found.\n","mcp":false,"fileScope":false},
 	"tools.registry.search": {"name":"tools.registry.search","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsRegistrySearchParams","output":"ToolsRegistrySearch","doc":" 패키지 찾기(이름 · 설명, 분류 · 언어 거르기).\n","mcp":false,"fileScope":false},
+	"tools.registry.setMode": {"name":"tools.registry.setMode","kind":"unary","tier":"write","roles":["owner"],"params":"ToolsRegistrySetModeParams","output":"ToolsRegistryStatus","doc":" 설정 `[tools] registry` 를 바꾼다(설정 창 「도구」 의 「최신 registry 사용」 — M4-17, `settings.toml` 의 그 키 하나만 쓴다).\n 바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다.\n","mcp":false,"fileScope":false},
 	"tools.registry.status": {"name":"tools.registry.status","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ToolsRegistryStatus","doc":" registry 의 판 · 받은 때 · 이 기기에서 지원하는 패키지 수와 지원하지 않는 까닭별 수. 처음 부르면 캐시를 읽고 가져오기를\n 뒤에서 시작한다(`fetching`).\n","mcp":false,"fileScope":false},
 	"tools.rollback": {"name":"tools.rollback","kind":"unary","tier":"exec","roles":["owner"],"params":"ToolsNameParams","output":"ToolInstalledInfo","doc":" 남겨 둔 이전 판으로 링크를 돌린다(지금 판이 이전 판이 된다). 이전 판이 없으면 4006.\n","mcp":false,"fileScope":false},
 	"tools.uninstall": {"name":"tools.uninstall","kind":"unary","tier":"exec","roles":["owner"],"params":"ToolsNameParams","output":"()","doc":" 설치본을 지운다(쓰는 서버가 있으면 멈춘 뒤). 확인 기록은 남긴다.\n","mcp":false,"fileScope":false},
@@ -5310,6 +5328,25 @@ export type LspDocumentRef = {
 	docId: string,
 };
 
+export type LspDocumentStatus = {
+	/**  확장의 언어 id(`rust`). */
+	language: string,
+	/**  이 언어를 맡는 서버 id(정의 순서 — 결정 M4-D12). 비면 그 언어의 언어 서버 정의가 없다. */
+	servers: string[],
+	/**  이 문서를 맡는 인스턴스(`servers` 순서). 아직 문서를 열지 않은 서버는 없다. */
+	instances: LspInstanceStatus[],
+};
+
+export type LspDocumentStatusParams = {
+	projectId: string,
+	/**  탭의 워크트리 꼭대기(`ActiveWorktree.top`). 메인 체크아웃이면 없다. */
+	worktree?: string | null,
+	/**  문서 파일의 절대 경로. */
+	path: string,
+	/**  문서 언어 — `lang.detect` 의 Linguist 이름 또는 확장의 언어 id(`lsp.document.open` 과 같다). */
+	language: string,
+};
+
 export type LspDocumentSymbols = {
 	/**  앞에서부터(부모가 자식보다 앞) — 같은 부모의 자식은 서버가 준 차례. */
 	symbols: LspOutlineSymbol[],
@@ -5438,6 +5475,16 @@ export type LspInstanceStatus = {
 	/**  서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다. */
 	progress: LspProgress | null,
 };
+
+/**
+ *  프로젝트의 개인 파일에 쓸 수 있는 `[lsp.<id>]` 키(상태 팝업의 「이 프로젝트에서 끄기」 · 설치 배너의 「이 프로젝트에서 묻지
+ *  않기」 — 15-m4-plan M4-17). 다른 키는 쓰지 않는다.
+ */
+export type LspLocalSetting = 
+/**  `enabled`. */
+"enabled" | 
+/**  `install_prompt`. */
+"installPrompt";
 
 /**  결과 위치 하나. */
 export type LspLocation = {
@@ -5645,6 +5692,8 @@ export type LspServerInfo = {
 	/**  `initialize` 의 `initializationOptions`. */
 	initializationOptions: JsonValue,
 	resolution: LspResolution,
+	/**  서버가 없을 때 설치 안내를 띄우는가(`[lsp.<id>] install_prompt` — 기본 `true`, M4-17). */
+	installPrompt: boolean,
 };
 
 export type LspServerList = {
@@ -5660,6 +5709,20 @@ export type LspServerList = {
 
 /**  서버를 돌리는 런타임. 서버 관리자가 결정 M4-D6 의 순서로 찾는다 — Pitwall 은 런타임을 설치하지 않는다(D26). */
 export type LspServerRuntime = "node" | "python" | "java";
+
+export type LspServerSetLocalParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  서버 id. 등록되지 않은 id 는 invalid params. */
+	server: string,
+	key: LspLocalSetting,
+	value: boolean,
+};
+
+export type LspServerSetLocalResult = {
+	/**  쓴 개인 파일(절대 경로) — 알림에 「어디에 썼나」 를 보인다. */
+	file: string,
+};
 
 export type LspServersListParams = {
 	projectId: string,
@@ -7132,6 +7195,11 @@ export type ToolsRegistrySearchParams = {
 	language?: string | null,
 	/**  기본 100, 최대 1000. */
 	limit?: number | null,
+};
+
+export type ToolsRegistrySetModeParams = {
+	/**  `pinned`(이 Pitwall 판이 고정한 registry) · `latest`(하루 한 번 최신 판). */
+	mode: RegistryMode,
 };
 
 export type ToolsRegistryStatus = {

@@ -541,6 +541,7 @@ fn lists_the_default_bundle_with_merged_settings() {
             "enabled": true,
             "settings": {"basedpyright": {"analysis": {"typeCheckingMode": "basic", "diagnosticMode": "workspace"}}},
             "initializationOptions": {},
+            "installPrompt": true,
             "resolution": {"kind": "notInstalled", "mason": "basedpyright", "reinstall": null, "skipped": []},
         })
     );

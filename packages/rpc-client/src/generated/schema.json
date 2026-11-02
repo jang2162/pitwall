@@ -28445,6 +28445,76 @@
       ],
       "tier": "exec"
     },
+    "lsp.server.setLocal": {
+      "description": "그 프로젝트의 개인 파일(`project.local.toml`)에 `[lsp.<id>] enabled` · `install_prompt` 를 쓴다(「이 프로젝트에서 끄기」 ·\n「이 프로젝트에서 묻지 않기」). 커밋되는 `.pitwall/project.toml` 에는 쓰지 않는다. 그 프로젝트 창 · 신뢰한 프로젝트만.\n`enabled` 면 그 서버의 인스턴스를 다시 지나게 한다(끄면 끝난다).",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "LspLocalSetting": {
+            "description": "프로젝트의 개인 파일에 쓸 수 있는 `[lsp.<id>]` 키(상태 팝업의 「이 프로젝트에서 끄기」 · 설치 배너의 「이 프로젝트에서 묻지\n않기」 — 15-m4-plan M4-17). 다른 키는 쓰지 않는다.",
+            "oneOf": [
+              {
+                "const": "enabled",
+                "description": "`enabled`.",
+                "type": "string"
+              },
+              {
+                "const": "installPrompt",
+                "description": "`install_prompt`.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "key": {
+            "$ref": "#/$defs/LspLocalSetting"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "server": {
+            "description": "서버 id. 등록되지 않은 id 는 invalid params.",
+            "type": "string"
+          },
+          "value": {
+            "type": "boolean"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "server",
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "file": {
+            "description": "쓴 개인 파일(절대 경로) — 알림에 「어디에 썼나」 를 보인다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "lsp.server.stop": {
       "description": "인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의\n연결만. 없는 인스턴스는 not found.",
       "kind": "unary",
@@ -28938,6 +29008,10 @@
               "initializationOptions": {
                 "description": "`initialize` 의 `initializationOptions`."
               },
+              "installPrompt": {
+                "description": "서버가 없을 때 설치 안내를 띄우는가(`[lsp.<id>] install_prompt` — 기본 `true`, M4-17).",
+                "type": "boolean"
+              },
               "languages": {
                 "description": "이 서버가 맡는 언어 id. 같은 언어의 서버가 여럿이면 목록 순서가 기능을 맡는 순서다(결정 M4-D12).",
                 "items": {
@@ -28986,7 +29060,8 @@
               "enabled",
               "settings",
               "initializationOptions",
-              "resolution"
+              "resolution",
+              "installPrompt"
             ],
             "type": "object"
           },
@@ -29283,6 +29358,305 @@
           "server",
           "staleVersion",
           "help"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.status.document": {
+      "description": "문서 하나를 맡는 서버와 그 인스턴스 상태(상태바 `lsp` 항목 · 설치 배너). 서버를 띄우지 않는다. 그 프로젝트 창의 연결만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "language": {
+            "description": "문서 언어 — `lang.detect` 의 Linguist 이름 또는 확장의 언어 id(`lsp.document.open` 과 같다).",
+            "type": "string"
+          },
+          "path": {
+            "description": "문서 파일의 절대 경로.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "탭의 워크트리 꼭대기(`ActiveWorktree.top`). 메인 체크아웃이면 없다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "language"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspInstanceState": {
+            "description": "인스턴스의 상태.",
+            "oneOf": [
+              {
+                "description": "띄우는 중(`initialize` 를 기다림 · 죽은 뒤 물러남 재기동을 기다림).",
+                "properties": {
+                  "kind": {
+                    "const": "starting",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "ready",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 · 정의가 바뀌었다 — 다시 시작해야 새 값이 든다. 서버는 그대로 답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "restartNeeded",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "런타임 환경이 바뀌었다(`runtime.changed`) — 다시 시작을 권한다. 서버는 그대로 답한다(저절로 다시 띄우지 않는다).",
+                "properties": {
+                  "kind": {
+                    "const": "restartSuggested",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "3분 안에 5번 죽어 멈췄다 — `lsp.server.restart` 로만 다시 띄운다.",
+                "properties": {
+                  "kind": {
+                    "const": "crashed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "사람이 멈췄다(`lsp.server.stop`).",
+                "properties": {
+                  "kind": {
+                    "const": "stopped",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트를 신뢰하지 않아 띄우지 않는다(결정 M4-D8).",
+                "properties": {
+                  "kind": {
+                    "const": "untrusted",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "실행 파일을 찾지 못했다 — 설치를 제안한다(M4-17).",
+                "properties": {
+                  "kind": {
+                    "const": "notInstalled",
+                    "type": "string"
+                  },
+                  "mason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "서버를 돌릴 런타임(`requires`)을 찾지 못했다(결정 M4-D6). `tool` 은 `node` · `python` · `java`, `needed` 는 판 범위.",
+                "properties": {
+                  "kind": {
+                    "const": "runtimeMissing",
+                    "type": "string"
+                  },
+                  "needed": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tool",
+                  "needed"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정에서 껐다(`[lsp.<id>] enabled = false`).",
+                "properties": {
+                  "kind": {
+                    "const": "disabled",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "띄우지 못했다(설정 경로가 틀림 · 실행 실패 등 — 까닭).",
+                "properties": {
+                  "kind": {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "LspInstanceStatus": {
+            "description": "서버 인스턴스 하나 — (프로젝트, 워크트리, 서버, 작업 공간 루트)마다 하나(결정 M4-D11).",
+            "properties": {
+              "progress": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LspProgress"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다."
+              },
+              "root": {
+                "description": "작업 공간 루트(실제 경로 — 워크트리마다 다르다). `lsp.server.restart` · `stop` 은 이것과 그 창의 활성 워크트리로 고른다.",
+                "type": "string"
+              },
+              "server": {
+                "description": "서버 id(`[contributes.language_servers.<id>]`).",
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/LspInstanceState"
+              }
+            },
+            "required": [
+              "server",
+              "root",
+              "state",
+              "progress"
+            ],
+            "type": "object"
+          },
+          "LspProgress": {
+            "description": "서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`).",
+            "properties": {
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "percentage": {
+                "description": "0 ~ 100. 서버가 모르면 없다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "message",
+              "percentage"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "instances": {
+            "description": "이 문서를 맡는 인스턴스(`servers` 순서). 아직 문서를 열지 않은 서버는 없다.",
+            "items": {
+              "$ref": "#/$defs/LspInstanceStatus"
+            },
+            "type": "array"
+          },
+          "language": {
+            "description": "확장의 언어 id(`rust`).",
+            "type": "string"
+          },
+          "servers": {
+            "description": "이 언어를 맡는 서버 id(정의 순서 — 결정 M4-D12). 비면 그 언어의 언어 서버 정의가 없다.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "language",
+          "servers",
+          "instances"
         ],
         "type": "object"
       },
@@ -34901,6 +35275,182 @@
         "readonly"
       ],
       "tier": "read"
+    },
+    "tools.registry.setMode": {
+      "description": "설정 `[tools] registry` 를 바꾼다(설정 창 「도구」 의 「최신 registry 사용」 — M4-17, `settings.toml` 의 그 키 하나만 쓴다).\n바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "RegistryMode": {
+            "description": "설정 `[tools] registry`.",
+            "enum": [
+              "pinned",
+              "latest"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "mode": {
+            "$ref": "#/$defs/RegistryMode",
+            "description": "`pinned`(이 Pitwall 판이 고정한 registry) · `latest`(하루 한 번 최신 판)."
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RegistryMode": {
+            "description": "설정 `[tools] registry`.",
+            "enum": [
+              "pinned",
+              "latest"
+            ],
+            "type": "string"
+          },
+          "RegistryOrigin": {
+            "description": "목록을 어디서 읽었나.",
+            "oneOf": [
+              {
+                "const": "snapshot",
+                "description": "바이너리에 묶인 스냅숏(기본 번들 패키지만).",
+                "type": "string"
+              },
+              {
+                "const": "cache",
+                "description": "`$CACHE/registry/<판>/` 에 받아 둔 판 전체.",
+                "type": "string"
+              }
+            ]
+          },
+          "ToolTarget": {
+            "description": "Pitwall 이 도구를 설치하는 대상. 이 밖의 기기에서는 [`ToolTarget::current`] 가 `None` 이고 모든 패키지가 「지원하지 않음」 이다.",
+            "enum": [
+              "darwin_arm64",
+              "darwin_x64",
+              "linux_x64_gnu",
+              "linux_arm64_gnu",
+              "linux_x64_musl",
+              "win_x64"
+            ],
+            "type": "string"
+          },
+          "UnsupportedCount": {
+            "properties": {
+              "count": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "description": "[`ToolUnsupported`] 의 `reason`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "count"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "fetchedAtMs": {
+            "description": "받은 때(유닉스 밀리초). 스냅숏이면 `null`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fetching": {
+            "description": "지금 뒤에서 가져오는 중.",
+            "type": "boolean"
+          },
+          "lastError": {
+            "description": "마지막 가져오기의 실패(성공하면 지운다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/$defs/RegistryMode",
+            "description": "설정 `[tools] registry`."
+          },
+          "origin": {
+            "$ref": "#/$defs/RegistryOrigin",
+            "description": "스냅숏이면 기본 번들 패키지만 있다."
+          },
+          "pinnedVersion": {
+            "description": "이 Pitwall 판이 고정한 판(`registry.toml`).",
+            "type": "string"
+          },
+          "supported": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolTarget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "이 기기의 대상. Pitwall 이 지원하지 않는 기기면 `null`(모든 패키지가 지원하지 않음)."
+          },
+          "unreadable": {
+            "description": "패키지로 읽지 못해 뺀 항목 수.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsupported": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsupportedByReason": {
+            "description": "까닭별 수(까닭 이름순).",
+            "items": {
+              "$ref": "#/$defs/UnsupportedCount"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "지금 쓰는 registry 판(릴리스 태그).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "pinnedVersion",
+          "mode",
+          "origin",
+          "fetchedAtMs",
+          "target",
+          "supported",
+          "unsupported",
+          "unsupportedByReason",
+          "unreadable",
+          "fetching",
+          "lastError"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
     },
     "tools.registry.status": {
       "description": "registry 의 판 · 받은 때 · 이 기기에서 지원하는 패키지 수와 지원하지 않는 까닭별 수. 처음 부르면 캐시를 읽고 가져오기를\n뒤에서 시작한다(`fetching`).",

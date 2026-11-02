@@ -557,6 +557,16 @@ impl LspManager {
     }
 
     /// 지금까지 띄운 서버 프로세스 수(시험 · 진단).
+    /// 프로젝트 레지스트리(허가 판정 — `crate::status`). 붙지 않았으면 오류.
+    pub(crate) fn projects(&self) -> Result<Registry, RpcError> {
+        Ok(self.host()?.parts.projects.clone())
+    }
+
+    /// 서버 정의 · 해석 · 설정(`crate::status` 의 개인 설정 쓰기).
+    pub(crate) fn servers(&self) -> Arc<LspServers> {
+        Arc::clone(&self.inner.servers)
+    }
+
     pub fn spawn_count(&self) -> u64 {
         self.inner.spawns.load(Ordering::SeqCst)
     }
@@ -690,7 +700,10 @@ impl LspManager {
     }
 
     /// 그 언어(Linguist 이름 또는 확장의 언어 id)를 맡는 서버 정의: (확장 언어 id, [(정의 순서, 서버 id, root_markers)]).
-    fn language_servers(&self, language: &str) -> (String, Vec<(usize, String, Vec<String>)>) {
+    pub(crate) fn language_servers(
+        &self,
+        language: &str,
+    ) -> (String, Vec<(usize, String, Vec<String>)>) {
         let id = self
             .inner
             .extensions

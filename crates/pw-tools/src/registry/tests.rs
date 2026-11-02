@@ -564,3 +564,40 @@ async fn get_pairs_pinned_hashes_with_what_will_be_downloaded() {
         assert!(d.pinned.is_empty(), "{name}");
     }
 }
+
+/// 「최신 registry 사용」 토글(M4-17): `settings.toml` 의 `[tools] registry` 한 키만 쓰고(주석 · 다른 키 보존) 전역 설정을 다시
+/// 읽어 모드가 바로 바뀐다. 같은 값이면 쓰지 않는다. RPC 의 모드는 `pinned` · `latest` 둘만 받는다.
+#[test]
+fn set_mode_writes_only_the_registry_key() {
+    use pw_core::bus::{EventBus, Scope};
+    use pw_core::config::{AppPaths, ConfigSource, ConfigStore};
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(tmp.path());
+    std::fs::create_dir_all(&paths.config).unwrap();
+    let file = paths.config.join("settings.toml");
+    std::fs::write(&file, "schema = 1\n# 내 설정\n[ui]\nlanguage = \"ko\"\n").unwrap();
+    let store = ConfigStore::open(ConfigSource::global(&paths), EventBus::new(16), Scope::Host);
+    let r = ToolsRegistry::new();
+    r.attach(paths.cache.clone(), store);
+    assert_eq!(r.mode(), RegistryMode::Pinned);
+    assert!(r.set_mode(RegistryMode::Latest).unwrap());
+    assert_eq!(r.mode(), RegistryMode::Latest);
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "schema = 1\n# 내 설정\n[ui]\nlanguage = \"ko\"\n\n[tools]\nregistry = \"latest\"\n"
+    );
+    assert!(!r.set_mode(RegistryMode::Latest).unwrap());
+    assert!(r.set_mode(RegistryMode::Pinned).unwrap());
+    assert_eq!(r.mode(), RegistryMode::Pinned);
+    for bad in ["newest", "", "Latest"] {
+        assert!(
+            serde_json::from_value::<crate::methods::ToolsRegistrySetModeParams>(
+                json!({ "mode": bad })
+            )
+            .is_err(),
+            "{bad}"
+        );
+    }
+    // 붙지 않은 registry 는 쓰지 않는다.
+    assert!(ToolsRegistry::new().set_mode(RegistryMode::Latest).is_err());
+}
