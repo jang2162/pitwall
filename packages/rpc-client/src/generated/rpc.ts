@@ -604,6 +604,20 @@ export type UnaryMethods = {
 	 */
 	"lsp.command.execute": { params: LspCommandExecuteParams; result: LspCommandExecuted };
 	/**
+	 * 자동완성(`textDocument/completion`). 위치 · 편집 범위는 UTF-16 오프셋(요청 때 문서 기준), 목록은 서버 순서로 200개까지.
+	 * 요청 사이 문서가 바뀌었으면 `staleVersion`. 맡을 서버가 없으면 5001.
+	 */
+	"lsp.completion": { params: LspCompletionParams; result: LspCompletionList };
+	/**
+	 * 받아들인 완성 항목의 명령을 서버에 보낸다(`workspace/executeCommand` — 결정 M4-D15). 같은 문서 · 버전의 완성 답으로 내준
+	 * 명령이고 그 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다.
+	 */
+	"lsp.completion.execute": { params: LspCompletionExecuteParams; result: LspCompletionExecuted };
+	/**
+	 * 완성 항목 하나를 서버에 다시 물어(`completionItem/resolve`) 문서 · 자동 import 편집을 받는다.
+	 */
+	"lsp.completion.resolve": { params: LspCompletionResolveParams; result: LspCompletionResolved };
+	/**
 	 * 선언으로(`textDocument/declaration`).
 	 */
 	"lsp.declaration": { params: LspPositionParams; result: LspLocationsResult };
@@ -688,6 +702,10 @@ export type UnaryMethods = {
 	 * 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).
 	 */
 	"lsp.servers.list": { params: LspServersListParams; result: LspServerList };
+	/**
+	 * 시그니처 도움말(`textDocument/signatureHelp`). 매개변수는 시그니처 글 안의 UTF-16 범위.
+	 */
+	"lsp.signatureHelp": { params: LspSignatureHelpParams; result: LspSignatureHelpAnswer };
 	/**
 	 * 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다. 그 프로젝트 창의 연결만(다른 연결은
 	 * permission denied).
@@ -1128,6 +1146,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.codeAction.list": {"name":"lsp.codeAction.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspCodeActionListParams","output":"LspCodeActionList","doc":" 범위(와 그 자리의 진단)의 코드 액션(`textDocument/codeAction`). 선호 액션이 먼저다.\n","mcp":false,"fileScope":false},
 	"lsp.codeAction.resolve": {"name":"lsp.codeAction.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"LspCodeActionResolveParams","output":"LspCodeActionResolved","doc":" 코드 액션 하나의 편집 · 명령. 편집이 없고 서버가 `codeAction/resolve` 를 하면 묻는다.\n","mcp":false,"fileScope":false},
 	"lsp.command.execute": {"name":"lsp.command.execute","kind":"unary","tier":"write","roles":["owner"],"params":"LspCommandExecuteParams","output":"LspCommandExecuted","doc":" 서버 명령(`workspace/executeCommand`)을 돌린다. 그동안 그 서버가 거는 `workspace/applyEdit` 만 이 창에 이벤트\n `lsp.applyEdit`(흐름 id 실림)로 넘어오고, 창은 `lsp.applyEdit.answer` 로 답한다(결정 M4-D15).\n","mcp":false,"fileScope":false},
+	"lsp.completion": {"name":"lsp.completion","kind":"unary","tier":"read","roles":["owner"],"params":"LspCompletionParams","output":"LspCompletionList","doc":" 자동완성(`textDocument/completion`). 위치 · 편집 범위는 UTF-16 오프셋(요청 때 문서 기준), 목록은 서버 순서로 200개까지.\n 요청 사이 문서가 바뀌었으면 `staleVersion`. 맡을 서버가 없으면 5001.\n","mcp":false,"fileScope":false},
+	"lsp.completion.execute": {"name":"lsp.completion.execute","kind":"unary","tier":"read","roles":["owner"],"params":"LspCompletionExecuteParams","output":"LspCompletionExecuted","doc":" 받아들인 완성 항목의 명령을 서버에 보낸다(`workspace/executeCommand` — 결정 M4-D15). 같은 문서 · 버전의 완성 답으로 내준\n 명령이고 그 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다.\n","mcp":false,"fileScope":false},
+	"lsp.completion.resolve": {"name":"lsp.completion.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"LspCompletionResolveParams","output":"LspCompletionResolved","doc":" 완성 항목 하나를 서버에 다시 물어(`completionItem/resolve`) 문서 · 자동 import 편집을 받는다.\n","mcp":false,"fileScope":false},
 	"lsp.declaration": {"name":"lsp.declaration","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 선언으로(`textDocument/declaration`).\n","mcp":false,"fileScope":false},
 	"lsp.definition": {"name":"lsp.definition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 정의로(`textDocument/definition`). 위치는 절대 경로, 루트 밖이면 읽기 토큰과 함께.\n","mcp":false,"fileScope":false},
 	"lsp.diagnostics.counts": {"name":"lsp.diagnostics.counts","kind":"unary","tier":"read","roles":["owner"],"params":"LspDiagnosticsCountsParams","output":"LspDiagnosticsCounts","doc":" 프로젝트(활성 워크트리)의 심각도별 진단 수(상태바의 `⚠ n ⛔ n`). 그 프로젝트 창의 연결만.\n","mcp":false,"fileScope":false},
@@ -1146,6 +1167,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.server.restart": {"name":"lsp.server.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시\n 받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.server.stop": {"name":"lsp.server.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의\n 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.servers.list": {"name":"lsp.servers.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspServersListParams","output":"LspServerList","doc":" 언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params\n 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).\n","mcp":false,"fileScope":false},
+	"lsp.signatureHelp": {"name":"lsp.signatureHelp","kind":"unary","tier":"read","roles":["owner"],"params":"LspSignatureHelpParams","output":"LspSignatureHelpAnswer","doc":" 시그니처 도움말(`textDocument/signatureHelp`). 매개변수는 시그니처 글 안의 UTF-16 범위.\n","mcp":false,"fileScope":false},
 	"lsp.status.get": {"name":"lsp.status.get","kind":"unary","tier":"read","roles":["owner"],"params":"LspStatusGetParams","output":"LspStatus","doc":" 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다. 그 프로젝트 창의 연결만(다른 연결은\n permission denied).\n","mcp":false,"fileScope":false},
 	"lsp.symbols.document": {"name":"lsp.symbols.document","kind":"unary","tier":"read","roles":["owner"],"params":"LspSymbolsDocumentParams","output":"LspDocumentSymbols","doc":" 문서의 심볼(구조 툴 윈도우 · 파일 구조 팝업 — M4-10). 서버의 계층 · 평면 답을 평면 목록 + 부모 색인으로 바꾼다(위치는\n UTF-16 오프셋). 맡을 서버가 없으면(서버 없음 · 준비 전 · 미신뢰) `5001` — 웹뷰는 `index.file.symbols` 로 대신한다. 없는\n 문서 · 다른 연결의 문서는 not found. 서버를 띄우지 않는다.\n","mcp":false,"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":false,"fileScope":false},
@@ -4998,6 +5020,102 @@ export type LspCommandExecuted = {
 	result: JsonValue,
 };
 
+/**  완성 항목의 본 편집: 넣을 글과 삽입 · 바꾸기 범위(`TextEdit` 이면 둘이 같다). */
+export type LspCompletionEdit = {
+	newText: string,
+	insert: LspOffsetRange,
+	replace: LspOffsetRange,
+};
+
+export type LspCompletionExecuteParams = {
+	docId: string,
+	/**  그 항목을 받은 완성 답의 문서 버전. */
+	version: number,
+	/**  항목의 `command`(`{ title, command, arguments? }`). */
+	command: JsonValue,
+};
+
+export type LspCompletionExecuted = {
+	server: string,
+	result: JsonValue,
+};
+
+export type LspCompletionItem = {
+	label: string,
+	/**  `labelDetails.detail`(이름 바로 뒤 — 매개변수 등). */
+	labelDetail: string | null,
+	/**  `labelDetails.description`(오른쪽 — 모듈 · 타입). */
+	labelDescription: string | null,
+	/**  `CompletionItemKind`(1 ~ 25). */
+	kind: number | null,
+	detail: string | null,
+	documentation: LspMarkup | null,
+	filterText: string | null,
+	sortText: string | null,
+	preselect: boolean,
+	deprecated: boolean,
+	/**  본 편집. 없으면 `insertText`(없으면 `label`)를 커서 앞 낱말 자리에 넣는다. */
+	edit: LspCompletionEdit | null,
+	insertText: string | null,
+	/**  `insertTextFormat = 2` — 넣을 글이 LSP 스니펫이다. */
+	snippet: boolean,
+	/**  `additionalTextEdits`(자동 import 등). */
+	additionalEdits: LspOffsetEdit[],
+	commitCharacters: string[] | null,
+	/**  받아들인 뒤 부를 명령(`Command` 그대로). */
+	command: JsonValue | null,
+	/**  서버가 준 항목(`itemDefaults.data` 를 채운 것) — `lsp.completion.resolve` 에 그대로 되돌린다. */
+	raw: JsonValue,
+};
+
+export type LspCompletionList = {
+	server: string,
+	/**  요청 사이에 문서가 바뀌었다 — 버린다. */
+	staleVersion: boolean,
+	/**  서버가 목록이 모자란다고 했다(글자마다 다시 묻는다). */
+	isIncomplete: boolean,
+	/**  서버가 [`ITEM_LIMIT`] 보다 많이 주어 잘랐다. */
+	truncated: boolean,
+	items: LspCompletionItem[],
+};
+
+export type LspCompletionParams = {
+	docId: string,
+	/**  웹뷰가 위치를 잰 문서 버전. */
+	version: number,
+	/**  커서(UTF-16 오프셋). */
+	offset: number,
+	trigger: LspCompletionTrigger,
+};
+
+export type LspCompletionResolveParams = {
+	docId: string,
+	version: number,
+	/**  `LspCompletionItem.raw`. */
+	item: JsonValue,
+};
+
+export type LspCompletionResolved = {
+	server: string,
+	staleVersion: boolean,
+	item: LspCompletionItem,
+};
+
+export type LspCompletionTrigger = {
+	kind: LspCompletionTriggerKind,
+	/**  `character` 일 때 친 글자. */
+	character?: string | null,
+};
+
+/**  완성을 연 까닭(LSP `CompletionTriggerKind`). */
+export type LspCompletionTriggerKind = 
+/**  사람이 불렀거나(`⌃Space`) 낱말을 쳤다. */
+"invoked" | 
+/**  서버의 트리거 문자를 쳤다. */
+"character" | 
+/**  앞 목록이 `isIncomplete` 였다 — 글자마다 다시 묻는다. */
+"incomplete";
+
 /**
  *  코드 액션 요청에 실을 진단(부른 쪽이 준 서버의 `Diagnostic` 그대로). `version` 은 그 진단이 맞는 문서 버전 — 요청의 버전과
  *  다르면 버린다(위치가 어긋난 진단은 서버가 다른 수정을 고른다). `null` 은 「버전 모름」 — 진단에 버전을 싣지 않는 서버
@@ -5293,8 +5411,28 @@ export type LspLocationsResult = {
 	truncated: boolean,
 };
 
+/**  서버가 준 글(`MarkupContent` · 문자열). */
+export type LspMarkup = {
+	/**  Markdown 인가(아니면 그대로의 글). */
+	markdown: boolean,
+	value: string,
+};
+
 /**  hover 본문의 꼴. */
 export type LspMarkupKind = "markdown" | "plaintext";
+
+/**  편집 하나(오프셋). */
+export type LspOffsetEdit = {
+	from: number,
+	to: number,
+	newText: string,
+};
+
+/**  문서 안의 범위(UTF-16 오프셋, 요청을 보낼 때의 문서 기준). */
+export type LspOffsetRange = {
+	from: number,
+	to: number,
+};
 
 /**  아웃라인의 심볼 하나. */
 export type LspOutlineSymbol = {
@@ -5502,6 +5640,56 @@ export type LspShowDocument = {
 	takeFocus: boolean,
 	server: string,
 };
+
+export type LspSignature = {
+	label: string,
+	documentation: LspMarkup | null,
+	parameters: LspSignatureParameter[],
+	/**  지금 인자(시그니처의 것, 없으면 도움말의 것). 범위 밖이면 없다. */
+	activeParameter: number | null,
+};
+
+export type LspSignatureHelp = {
+	signatures: LspSignature[],
+	activeSignature: number,
+	/**  서버의 답 그대로(다시 물을 때 `active` 로 되돌린다). */
+	raw: JsonValue,
+};
+
+export type LspSignatureHelpAnswer = {
+	server: string,
+	staleVersion: boolean,
+	/**  도움말. 서버가 없다고 했거나(커서가 호출 밖) 시그니처가 비었으면 없다. */
+	help: LspSignatureHelp | null,
+};
+
+export type LspSignatureHelpParams = {
+	docId: string,
+	version: number,
+	offset: number,
+	triggerKind: LspSignatureTriggerKind,
+	triggerCharacter?: string | null,
+	/**  이미 보이는 도움말이 있다. */
+	isRetrigger: boolean,
+	/**  보이는 도움말(앞 답의 `raw`) — 서버가 고른 시그니처를 이어 간다. */
+	active?: JsonValue | null,
+};
+
+/**  매개변수 하나: 시그니처 글 안의 범위(UTF-16). */
+export type LspSignatureParameter = {
+	from: number,
+	to: number,
+	documentation: LspMarkup | null,
+};
+
+/**  시그니처 도움말을 연 까닭(LSP `SignatureHelpTriggerKind`). */
+export type LspSignatureTriggerKind = 
+/**  사람이 불렀다(`⌘P`). */
+"invoked" | 
+/**  트리거 · 다시 트리거 문자를 쳤다. */
+"character" | 
+/**  열린 동안 글이 바뀌었거나 커서가 움직였다. */
+"contentChange";
 
 /**  보았지만 고르지 않은 후보와 그 까닭(상태 팝업 · 설치 안내가 보인다). */
 export type LspSkipped = {

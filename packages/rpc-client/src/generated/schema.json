@@ -25299,6 +25299,634 @@
       ],
       "tier": "write"
     },
+    "lsp.completion": {
+      "description": "자동완성(`textDocument/completion`). 위치 · 편집 범위는 UTF-16 오프셋(요청 때 문서 기준), 목록은 서버 순서로 200개까지.\n요청 사이 문서가 바뀌었으면 `staleVersion`. 맡을 서버가 없으면 5001.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "LspCompletionTrigger": {
+            "properties": {
+              "character": {
+                "default": null,
+                "description": "`character` 일 때 친 글자.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/LspCompletionTriggerKind"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "LspCompletionTriggerKind": {
+            "description": "완성을 연 까닭(LSP `CompletionTriggerKind`).",
+            "oneOf": [
+              {
+                "const": "invoked",
+                "description": "사람이 불렀거나(`⌃Space`) 낱말을 쳤다.",
+                "type": "string"
+              },
+              {
+                "const": "character",
+                "description": "서버의 트리거 문자를 쳤다.",
+                "type": "string"
+              },
+              {
+                "const": "incomplete",
+                "description": "앞 목록이 `isIncomplete` 였다 — 글자마다 다시 묻는다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "type": "string"
+          },
+          "offset": {
+            "description": "커서(UTF-16 오프셋).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trigger": {
+            "$ref": "#/$defs/LspCompletionTrigger"
+          },
+          "version": {
+            "description": "웹뷰가 위치를 잰 문서 버전.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "docId",
+          "version",
+          "offset",
+          "trigger"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspCompletionEdit": {
+            "description": "완성 항목의 본 편집: 넣을 글과 삽입 · 바꾸기 범위(`TextEdit` 이면 둘이 같다).",
+            "properties": {
+              "insert": {
+                "$ref": "#/$defs/LspOffsetRange"
+              },
+              "newText": {
+                "type": "string"
+              },
+              "replace": {
+                "$ref": "#/$defs/LspOffsetRange"
+              }
+            },
+            "required": [
+              "newText",
+              "insert",
+              "replace"
+            ],
+            "type": "object"
+          },
+          "LspCompletionItem": {
+            "properties": {
+              "additionalEdits": {
+                "description": "`additionalTextEdits`(자동 import 등).",
+                "items": {
+                  "$ref": "#/$defs/LspOffsetEdit"
+                },
+                "type": "array"
+              },
+              "command": {
+                "description": "받아들인 뒤 부를 명령(`Command` 그대로)."
+              },
+              "commitCharacters": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "deprecated": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "documentation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LspMarkup"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "edit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LspCompletionEdit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "본 편집. 없으면 `insertText`(없으면 `label`)를 커서 앞 낱말 자리에 넣는다."
+              },
+              "filterText": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "insertText": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "description": "`CompletionItemKind`(1 ~ 25).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "labelDescription": {
+                "description": "`labelDetails.description`(오른쪽 — 모듈 · 타입).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "labelDetail": {
+                "description": "`labelDetails.detail`(이름 바로 뒤 — 매개변수 등).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "preselect": {
+                "type": "boolean"
+              },
+              "raw": {
+                "description": "서버가 준 항목(`itemDefaults.data` 를 채운 것) — `lsp.completion.resolve` 에 그대로 되돌린다."
+              },
+              "snippet": {
+                "description": "`insertTextFormat = 2` — 넣을 글이 LSP 스니펫이다.",
+                "type": "boolean"
+              },
+              "sortText": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "label",
+              "labelDetail",
+              "labelDescription",
+              "kind",
+              "detail",
+              "documentation",
+              "filterText",
+              "sortText",
+              "preselect",
+              "deprecated",
+              "edit",
+              "insertText",
+              "snippet",
+              "additionalEdits",
+              "commitCharacters",
+              "command",
+              "raw"
+            ],
+            "type": "object"
+          },
+          "LspMarkup": {
+            "description": "서버가 준 글(`MarkupContent` · 문자열).",
+            "properties": {
+              "markdown": {
+                "description": "Markdown 인가(아니면 그대로의 글).",
+                "type": "boolean"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "markdown",
+              "value"
+            ],
+            "type": "object"
+          },
+          "LspOffsetEdit": {
+            "description": "편집 하나(오프셋).",
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "newText": {
+                "type": "string"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "newText"
+            ],
+            "type": "object"
+          },
+          "LspOffsetRange": {
+            "description": "문서 안의 범위(UTF-16 오프셋, 요청을 보낼 때의 문서 기준).",
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "isIncomplete": {
+            "description": "서버가 목록이 모자란다고 했다(글자마다 다시 묻는다).",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/$defs/LspCompletionItem"
+            },
+            "type": "array"
+          },
+          "server": {
+            "type": "string"
+          },
+          "staleVersion": {
+            "description": "요청 사이에 문서가 바뀌었다 — 버린다.",
+            "type": "boolean"
+          },
+          "truncated": {
+            "description": "서버가 [`ITEM_LIMIT`] 보다 많이 주어 잘랐다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "server",
+          "staleVersion",
+          "isIncomplete",
+          "truncated",
+          "items"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.completion.execute": {
+      "description": "받아들인 완성 항목의 명령을 서버에 보낸다(`workspace/executeCommand` — 결정 M4-D15). 같은 문서 · 버전의 완성 답으로 내준\n명령이고 그 서버가 알린 명령일 때만 — 아니면 permission denied 로 보내지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "command": {
+            "description": "항목의 `command`(`{ title, command, arguments? }`)."
+          },
+          "docId": {
+            "type": "string"
+          },
+          "version": {
+            "description": "그 항목을 받은 완성 답의 문서 버전.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "docId",
+          "version",
+          "command"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "result": true,
+          "server": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "server",
+          "result"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.completion.resolve": {
+      "description": "완성 항목 하나를 서버에 다시 물어(`completionItem/resolve`) 문서 · 자동 import 편집을 받는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "type": "string"
+          },
+          "item": {
+            "description": "`LspCompletionItem.raw`."
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "docId",
+          "version",
+          "item"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspCompletionEdit": {
+            "description": "완성 항목의 본 편집: 넣을 글과 삽입 · 바꾸기 범위(`TextEdit` 이면 둘이 같다).",
+            "properties": {
+              "insert": {
+                "$ref": "#/$defs/LspOffsetRange"
+              },
+              "newText": {
+                "type": "string"
+              },
+              "replace": {
+                "$ref": "#/$defs/LspOffsetRange"
+              }
+            },
+            "required": [
+              "newText",
+              "insert",
+              "replace"
+            ],
+            "type": "object"
+          },
+          "LspCompletionItem": {
+            "properties": {
+              "additionalEdits": {
+                "description": "`additionalTextEdits`(자동 import 등).",
+                "items": {
+                  "$ref": "#/$defs/LspOffsetEdit"
+                },
+                "type": "array"
+              },
+              "command": {
+                "description": "받아들인 뒤 부를 명령(`Command` 그대로)."
+              },
+              "commitCharacters": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "deprecated": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "documentation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LspMarkup"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "edit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LspCompletionEdit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "본 편집. 없으면 `insertText`(없으면 `label`)를 커서 앞 낱말 자리에 넣는다."
+              },
+              "filterText": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "insertText": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "description": "`CompletionItemKind`(1 ~ 25).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "labelDescription": {
+                "description": "`labelDetails.description`(오른쪽 — 모듈 · 타입).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "labelDetail": {
+                "description": "`labelDetails.detail`(이름 바로 뒤 — 매개변수 등).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "preselect": {
+                "type": "boolean"
+              },
+              "raw": {
+                "description": "서버가 준 항목(`itemDefaults.data` 를 채운 것) — `lsp.completion.resolve` 에 그대로 되돌린다."
+              },
+              "snippet": {
+                "description": "`insertTextFormat = 2` — 넣을 글이 LSP 스니펫이다.",
+                "type": "boolean"
+              },
+              "sortText": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "label",
+              "labelDetail",
+              "labelDescription",
+              "kind",
+              "detail",
+              "documentation",
+              "filterText",
+              "sortText",
+              "preselect",
+              "deprecated",
+              "edit",
+              "insertText",
+              "snippet",
+              "additionalEdits",
+              "commitCharacters",
+              "command",
+              "raw"
+            ],
+            "type": "object"
+          },
+          "LspMarkup": {
+            "description": "서버가 준 글(`MarkupContent` · 문자열).",
+            "properties": {
+              "markdown": {
+                "description": "Markdown 인가(아니면 그대로의 글).",
+                "type": "boolean"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "markdown",
+              "value"
+            ],
+            "type": "object"
+          },
+          "LspOffsetEdit": {
+            "description": "편집 하나(오프셋).",
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "newText": {
+                "type": "string"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "newText"
+            ],
+            "type": "object"
+          },
+          "LspOffsetRange": {
+            "description": "문서 안의 범위(UTF-16 오프셋, 요청을 보낼 때의 문서 기준).",
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "item": {
+            "$ref": "#/$defs/LspCompletionItem"
+          },
+          "server": {
+            "type": "string"
+          },
+          "staleVersion": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "server",
+          "staleVersion",
+          "item"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "lsp.declaration": {
       "description": "선언으로(`textDocument/declaration`).",
       "kind": "unary",
@@ -28246,6 +28874,221 @@
           "trusted",
           "problem",
           "warnings"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.signatureHelp": {
+      "description": "시그니처 도움말(`textDocument/signatureHelp`). 매개변수는 시그니처 글 안의 UTF-16 범위.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "LspSignatureTriggerKind": {
+            "description": "시그니처 도움말을 연 까닭(LSP `SignatureHelpTriggerKind`).",
+            "oneOf": [
+              {
+                "const": "invoked",
+                "description": "사람이 불렀다(`⌘P`).",
+                "type": "string"
+              },
+              {
+                "const": "character",
+                "description": "트리거 · 다시 트리거 문자를 쳤다.",
+                "type": "string"
+              },
+              {
+                "const": "contentChange",
+                "description": "열린 동안 글이 바뀌었거나 커서가 움직였다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "active": {
+            "default": null,
+            "description": "보이는 도움말(앞 답의 `raw`) — 서버가 고른 시그니처를 이어 간다."
+          },
+          "docId": {
+            "type": "string"
+          },
+          "isRetrigger": {
+            "description": "이미 보이는 도움말이 있다.",
+            "type": "boolean"
+          },
+          "offset": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "triggerCharacter": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "triggerKind": {
+            "$ref": "#/$defs/LspSignatureTriggerKind"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "docId",
+          "version",
+          "offset",
+          "triggerKind",
+          "isRetrigger"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspMarkup": {
+            "description": "서버가 준 글(`MarkupContent` · 문자열).",
+            "properties": {
+              "markdown": {
+                "description": "Markdown 인가(아니면 그대로의 글).",
+                "type": "boolean"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "markdown",
+              "value"
+            ],
+            "type": "object"
+          },
+          "LspSignature": {
+            "properties": {
+              "activeParameter": {
+                "description": "지금 인자(시그니처의 것, 없으면 도움말의 것). 범위 밖이면 없다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "documentation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LspMarkup"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "parameters": {
+                "items": {
+                  "$ref": "#/$defs/LspSignatureParameter"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "label",
+              "documentation",
+              "parameters",
+              "activeParameter"
+            ],
+            "type": "object"
+          },
+          "LspSignatureHelp": {
+            "properties": {
+              "activeSignature": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "raw": {
+                "description": "서버의 답 그대로(다시 물을 때 `active` 로 되돌린다)."
+              },
+              "signatures": {
+                "items": {
+                  "$ref": "#/$defs/LspSignature"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "signatures",
+              "activeSignature",
+              "raw"
+            ],
+            "type": "object"
+          },
+          "LspSignatureParameter": {
+            "description": "매개변수 하나: 시그니처 글 안의 범위(UTF-16).",
+            "properties": {
+              "documentation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LspMarkup"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "documentation"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "help": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LspSignatureHelp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "도움말. 서버가 없다고 했거나(커서가 호출 밖) 시그니처가 비었으면 없다."
+          },
+          "server": {
+            "type": "string"
+          },
+          "staleVersion": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "server",
+          "staleVersion",
+          "help"
         ],
         "type": "object"
       },

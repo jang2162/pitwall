@@ -69,8 +69,12 @@ pub fn client_capabilities_json() -> Value {
             "completion": {
                 "dynamicRegistration": false,
                 "contextSupport": true,
+                "completionItemKind": { "valueSet": (1..=25).collect::<Vec<u32>>() },
                 "completionItem": {
                     "snippetSupport": true,
+                    "deprecatedSupport": true,
+                    "preselectSupport": true,
+                    "tagSupport": { "valueSet": [1] },
                     "documentationFormat": ["markdown", "plaintext"],
                     "insertReplaceSupport": true,
                     "labelDetailsSupport": true,

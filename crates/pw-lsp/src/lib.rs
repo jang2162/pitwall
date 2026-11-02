@@ -17,6 +17,7 @@
 
 pub mod bridge;
 pub mod capabilities;
+pub mod completion;
 pub mod diagnostics;
 pub mod document;
 pub mod edit;
@@ -59,4 +60,5 @@ pub fn register(router: &mut pw_rpc::Router, manager: &LspManager) {
     // 코드 액션의 진단 문맥(M4-12)은 진단 저장(M4-06)의 범위 조회로 채운다.
     let diagnostics = diagnostics::register(router, manager);
     edit::register(router, manager, diagnostics);
+    completion::register(router, manager);
 }
