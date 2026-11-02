@@ -1817,10 +1817,12 @@ impl LspManager {
             .iter()
             .filter_map(|&(feature, method)| {
                 let (key, server) = route(doc_id, doc, &state.instances, feature, method)?;
+                // 동적 등록은 그 문서에 맞는 것(`documentSelector`)만 본다 — 한 서버가 언어마다 다른 옵션을 등록할 수 있다(리뷰 L-5).
                 let options = server
                     .registrations(method)
                     .into_iter()
-                    .find_map(|r| r.register_options)
+                    .filter_map(|r| r.register_options)
+                    .find(|o| selects(o, doc))
                     .unwrap_or_else(|| static_capability(&server.capabilities_json(), method));
                 Some((feature, key.server.clone(), options))
             })
@@ -1867,6 +1869,29 @@ fn route<'a>(
             }
             server.supports(method).then_some((key, server))
         })
+}
+
+/// 등록 옵션의 `documentSelector` 가 문서에 맞는가. 없거나 `null` 이면 모든 문서다. 거르개(`DocumentFilter`)의 `language` ·
+/// `scheme` · `pattern`(글롭) 중 적힌 것이 모두 맞는 거르개가 하나라도 있으면 맞다. 읽을 수 없는 거르개는 맞지 않는다.
+fn selects(options: &Value, doc: &Doc) -> bool {
+    let Some(filters) = options.get("documentSelector").filter(|v| !v.is_null()) else {
+        return true;
+    };
+    let Some(filters) = filters.as_array() else {
+        return false;
+    };
+    let path = crate::uri::uri_path(&doc.uri);
+    filters.iter().any(|filter| {
+        let field = |key: &str| filter.get(key).and_then(Value::as_str);
+        field("language").is_none_or(|l| l == doc.language_id)
+            && field("scheme").is_none_or(|s| doc.uri.starts_with(&format!("{s}:")))
+            && field("pattern").is_none_or(|p| {
+                globset::Glob::new(p)
+                    .ok()
+                    .zip(path.as_ref())
+                    .is_some_and(|(g, path)| g.compile_matcher().is_match(path))
+            })
+    })
 }
 
 /// 정적 능력에서 `method` 의 칸(`METHOD_CAPABILITIES` 의 경로 그대로 — `hoverProvider` 등). 없으면 `null`.

@@ -221,3 +221,43 @@ async fn another_windows_document_is_not_found() {
         assert_eq!(e.code, code::NOT_FOUND, "{id}");
     }
 }
+
+/// 동적 등록은 그 문서에 맞는 것(`documentSelector`)의 옵션을 쓴다 — 한 서버가 언어마다 다른 트리거를 등록해도(리뷰 L-5). 옵션 없는
+/// 등록은 `true` 다(리뷰 L-4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dynamic_options_follow_the_document_selector() {
+    let env = Env::new(EnvOptions::default());
+    let register = Action::Request {
+        method: "client/registerCapability".into(),
+        params: json!({ "registrations": [
+            { "id": "py", "method": "textDocument/completion",
+              "registerOptions": { "documentSelector": [{ "language": "python" }], "triggerCharacters": ["#"] } },
+            { "id": "rs", "method": "textDocument/completion",
+              "registerOptions": { "documentSelector": [{ "language": "rust", "pattern": "**/*.rs" }], "triggerCharacters": ["."] } },
+            { "id": "sig", "method": "textDocument/signatureHelp" }
+        ]}),
+    };
+    env.fake(
+        "rust-analyzer",
+        Scenario {
+            capabilities: json!({ "textDocumentSync": 2 }),
+            ..Scenario::default()
+        }
+        .on("initialized", vec![register]),
+    );
+    let mut win = env.window();
+    let doc = doc_id(
+        &win.open(&env, &env.file("src/main.rs", ""), "Rust", "fn main() {}")
+            .await,
+    );
+    let got = until(&mut win, &doc, |f| {
+        f.get("completion").is_some() && f.get("signature_help").is_some()
+    })
+    .await;
+    assert_eq!(
+        got["completion"]["options"]["triggerCharacters"],
+        json!(["."]),
+        "{got}"
+    );
+    assert_eq!(got["signature_help"]["options"], json!(true), "{got}");
+}

@@ -71,8 +71,13 @@ rpc_method! {
     }
 }
 
-/// 옵션을 칸에 넣는다: `null` 은 없는 것과 같아 넣지 않고, 상한을 넘으면 비운다.
+/// 옵션을 칸에 넣는다: `null`(옵션 없는 동적 등록 — 그 기능은 된다)은 `true` 로, 상한을 넘으면 비운다.
 fn capability(server: String, options: Value) -> LspFeatureCapability {
+    let options = if options.is_null() {
+        Value::Bool(true)
+    } else {
+        options
+    };
     let size = serde_json::to_vec(&options).map_or(usize::MAX, |v| v.len());
     let truncated = size > OPTIONS_LIMIT;
     LspFeatureCapability {
@@ -124,6 +129,7 @@ mod tests {
         let small = capability("s".into(), json!({ "triggerCharacters": ["."] }));
         assert!(!small.options_truncated);
         assert_eq!(small.options, json!({ "triggerCharacters": ["."] }));
+        assert_eq!(capability("s".into(), Value::Null).options, json!(true));
         let big = capability(
             "s".into(),
             json!({ "triggerCharacters": ["x".repeat(OPTIONS_LIMIT)] }),
