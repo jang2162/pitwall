@@ -874,3 +874,54 @@ async fn an_ended_servers_notification_handled_after_a_new_server_started_is_dro
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(listed(&mut win, &env, &file).await, ["fresh"]);
 }
+
+/// 당기는 동안 온 refresh 는 잃지 않는다 — 그 당기기가 끝난 뒤 한 번 더 당긴다(마지막 refresh 뒤에 pull 이 있다). 몰려 와도 refresh
+/// 수만큼 당기지는 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refresh_during_a_pull_is_pulled_once_after_it() {
+    let env = Env::new(EnvOptions::default());
+    let file = env.file("src/lib.rs", "");
+    let mut spaced = Vec::new();
+    for _ in 0..8 {
+        spaced.push(Action::Request {
+            method: "workspace/diagnostic/refresh".into(),
+            params: Value::Null,
+        });
+        spaced.push(Action::Sleep { ms: 50 });
+    }
+    let record = env.fake(
+        "rust-analyzer",
+        Scenario {
+            capabilities: pull_capable(),
+            ..Scenario::default()
+        }
+        .reply(
+            "textDocument/diagnostic",
+            Reply::result(json!({ "kind": "full", "items": [diag(0, 1, "pulled")] })).delayed(150),
+        )
+        .on("textDocument/didOpen", spaced),
+    );
+    let mut win = env.window();
+    win.open(&env, &file, "Rust", "").await;
+    // 처리기가 refresh 여덟에 모두 답한 뒤 당기기가 가라앉을 때까지.
+    let answered = |m: &Value| m.get("method").is_none() && m["result"].is_null();
+    assert!(
+        eventually(Duration::from_secs(10), || {
+            received(&record).iter().filter(|m| answered(m)).count() >= 8
+        })
+        .await
+    );
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let messages = received(&record);
+    let last_refresh = messages.iter().rposition(answered).unwrap();
+    let last_pull = messages
+        .iter()
+        .rposition(|m| m["method"] == "textDocument/diagnostic")
+        .unwrap();
+    assert!(
+        last_pull > last_refresh,
+        "no pull after the last refresh: {messages:?}"
+    );
+    let pulls = methods_of(&record, "textDocument/diagnostic").len();
+    assert!(pulls < 1 + 8, "{pulls} pulls for eight refreshes");
+}
