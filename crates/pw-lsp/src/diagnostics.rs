@@ -16,8 +16,9 @@
 //!
 //! **상한**(망가진 서버가 진단을 쏟아부어도 Host · 웹뷰가 버틴다): 파일당 [`FILE_LIMIT`] 개, 프로젝트 [`PROJECT_LIMIT`] 개. 넘으면
 //! 심각도 순(오류 먼저)으로 앞의 것만 두고 `truncated`. 진단 하나의 글도 자른다(메시지 [`MESSAGE_LIMIT`] 바이트 · 코드 · 출처
-//! [`SHORT_LIMIT`] · 관련 정보 [`RELATED_LIMIT`] 개 · `data` [`DATA_LIMIT`] 바이트 — 넘는 `data` 는 버린다). `codeDescription` 링크는
-//! `http(s)` 만.
+//! [`SHORT_LIMIT`] · 관련 정보 [`RELATED_LIMIT`] 개 · `data` [`DATA_LIMIT`] 바이트 — 넘는 `data` 는 버린다)고, 진단 하나를 통째로
+//! [`DIAGNOSTIC_LIMIT`] 안에 둔다(넘으면 관련 정보를 버린다 — URI 가 [`HREF_LIMIT`] 를 넘는 관련 정보도 버린다). `codeDescription`
+//! 링크는 `http(s)` 만.
 //!
 //! **내보내기** — 이벤트 [`TOPIC_DIAGNOSTICS`](경로가 바뀔 때마다 그 경로의 모든 서버 진단 — 프로젝트 범위), RPC
 //! `lsp.diagnostics.list`(쪽 단위 · 입력 struct — M5 의 `diagnostics` 툴이 될 꼴, 결정 M4-D21 — `mcp: true` 는 달지 않는다) ·
@@ -63,6 +64,9 @@ pub const SHORT_LIMIT: usize = 256;
 pub const HREF_LIMIT: usize = 2048;
 /// 진단 하나의 관련 정보 수 상한.
 pub const RELATED_LIMIT: usize = 16;
+/// 진단 하나의 상한(직렬화 바이트 — 관련 정보의 경로 · URI 까지). 관련 정보를 뺀 나머지는 칸마다의 상한으로 이 안에 든다 — 넘으면
+/// 관련 정보를 뒤에서부터 버린다.
+pub const DIAGNOSTIC_LIMIT: usize = 16 * 1024;
 /// 진단 하나의 `data`(코드 액션이 되돌려 받는 값)의 상한(직렬화 바이트). 넘으면 버린다.
 pub const DATA_LIMIT: usize = 4 * 1024;
 /// 한 번에 도는 pull 의 상한(모든 서버 · 문서 합쳐).
@@ -462,7 +466,7 @@ fn diagnostic(
                 .collect()
         })
         .unwrap_or_default();
-    let related = raw
+    let related: Vec<LspRelatedInformation> = raw
         .get("relatedInformation")
         .and_then(Value::as_array)
         .map(|items| {
@@ -470,10 +474,14 @@ fn diagnostic(
                 .iter()
                 .take(RELATED_LIMIT)
                 .filter_map(|item| {
-                    let uri = item.pointer("/location/uri")?.as_str()?;
+                    // 자른 URI 는 다른 자리를 가리킨다 — 긴 것은 버린다(경로도 이 URI 에서 나오므로 그 길이 안이다).
+                    let uri = item
+                        .pointer("/location/uri")?
+                        .as_str()
+                        .filter(|u| u.len() <= HREF_LIMIT)?;
                     Some(LspRelatedInformation {
                         path: uri_path(uri).map(|p| p.to_string_lossy().into_owned()),
-                        uri: clip(uri, HREF_LIMIT),
+                        uri: uri.to_owned(),
                         range: range(item.pointer("/location/range")?),
                         message: clip(
                             item.get("message").and_then(Value::as_str).unwrap_or(""),
@@ -488,7 +496,7 @@ fn diagnostic(
         .get("data")
         .filter(|d| serde_json::to_vec(d).is_ok_and(|v| v.len() <= DATA_LIMIT))
         .cloned();
-    Some(LspDiagnostic {
+    let mut diagnostic = LspDiagnostic {
         server: server.to_owned(),
         origin,
         version: version.and_then(|v| i32::try_from(v).ok()),
@@ -502,9 +510,23 @@ fn diagnostic(
             .map(|s| clip(s, SHORT_LIMIT)),
         code_href,
         tags,
-        related,
+        related: Vec::new(),
         data,
-    })
+    };
+    // 진단 하나의 바이트 상한: 관련 정보를 뺀 크기에 관련 정보를 하나씩 더해 넘기 전까지만 둔다.
+    let mut size = serialized_len(&diagnostic);
+    for item in related {
+        size += serialized_len(&item) + 1;
+        if size > DIAGNOSTIC_LIMIT {
+            break;
+        }
+        diagnostic.related.push(item);
+    }
+    Some(diagnostic)
+}
+
+fn serialized_len<T: Serialize>(value: &T) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX / 2, |v| v.len())
 }
 
 /// 서버가 보낸 진단 목록을 상한 안의 꼴로: 읽을 수 있는 것만, 심각도 · 위치 차례, [`FILE_LIMIT`] 까지. (목록, 잘렸는가).
@@ -1189,6 +1211,51 @@ mod tests {
             LspSeverity::Error
         );
         assert!(diagnostic("s1", Origin::Push, None, &json!({ "message": "m" })).is_none());
+    }
+
+    #[test]
+    fn a_diagnostic_stays_within_its_byte_limit_with_related_paths() {
+        let line = |i: u32| json!({ "start": { "line": i, "character": 0 }, "end": { "line": i, "character": 1 } });
+        // 모든 칸을 상한까지 채우고, 관련 정보도 상한 길이의 URI · 메시지로 채운다. 맨 앞에는 아주 긴 URI(틀 상한 안 —
+        // 자르기 전 URI 에서 경로를 만들면 그 길이 그대로 실린다).
+        let long_dir = "d".repeat(64 * 1024);
+        let mut related = vec![json!({
+            "location": { "uri": format!("file:///{long_dir}/x.rs"), "range": line(0) },
+            "message": "too long",
+        })];
+        let fit_dir = "p".repeat(HREF_LIMIT - "file:///".len() - "/x.rs".len());
+        related.extend((0..40).map(|i| {
+            json!({
+                "location": { "uri": format!("file:///{fit_dir}/x.rs"), "range": line(i) },
+                "message": "m".repeat(RELATED_MESSAGE_LIMIT),
+            })
+        }));
+        let raw = json!({
+            "range": line(1),
+            "message": "가".repeat(MESSAGE_LIMIT),
+            "code": "c".repeat(SHORT_LIMIT),
+            "source": "s".repeat(SHORT_LIMIT),
+            "codeDescription": { "href": format!("https://e.x/{}", "h".repeat(HREF_LIMIT - 12)) },
+            "relatedInformation": related,
+            "data": { "d": "x".repeat(DATA_LIMIT - 16) },
+        });
+        let d = diagnostic("s1", Origin::Push, Some(1), &raw).unwrap();
+        assert!(d.code_href.is_some() && d.data.is_some());
+        let size = serde_json::to_vec(&d).unwrap().len();
+        assert!(size <= DIAGNOSTIC_LIMIT, "{size}");
+        // 긴 URI 의 관련 정보는 버리고, 나머지는 상한 안에서 앞에서부터 둔다.
+        assert!(!d.related.is_empty());
+        assert!(d.related.len() < RELATED_LIMIT);
+        assert!(
+            d.related
+                .iter()
+                .all(|r| r.message.len() == RELATED_MESSAGE_LIMIT)
+        );
+        assert!(
+            d.related
+                .iter()
+                .all(|r| r.uri.len() <= HREF_LIMIT && r.path.as_ref().unwrap().len() <= HREF_LIMIT)
+        );
     }
 
     #[test]
