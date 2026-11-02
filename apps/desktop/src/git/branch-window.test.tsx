@@ -783,7 +783,7 @@ it("finds a branch in the Search Everywhere branch tab and checks it out", async
   expect(se()?.getAttribute("data-search-everywhere")).toBe("all");
   const tabs = [...se()!.querySelectorAll("[role=tab]")].map((t) => t.textContent);
   // 이 창에는 프로젝트 창 열기(native)가 없어 프로젝트 탭이 없다.
-  expect(tabs).toEqual(["전체", "파일", "액션", "브랜치", "DB 객체"]);
+  expect(tabs).toEqual(["전체", "파일", "심볼", "액션", "브랜치", "DB 객체"]);
   await click([...se()!.querySelectorAll("[role=tab]")].find((t) => t.textContent === "브랜치")!);
   expect(se()?.getAttribute("data-search-everywhere")).toBe("branches");
   const seInput = se()!.querySelector<HTMLInputElement>("[cmdk-input]")!;
