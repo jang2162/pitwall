@@ -12,8 +12,9 @@
 //! - `lsp.completion.execute`: 받아들인 항목의 `command` 를 `workspace/executeCommand` 로(결정 M4-D15). 보내는 것은 **이 Host 가
 //!   같은 문서 · 같은 버전의 완성 답으로 내준 항목의 명령 또는 그 항목의 resolve 답의 명령**이고 **그 답을 준 서버가
 //!   `executeCommandProvider.commands` 로 알린 것**뿐이다 — 아니면 거절하고 보내지 않는다(메인 판정 2026-11-02). 가드를 지나면 M4-12 의
-//!   명령 길([`crate::edit::execute_command`] — `lsp.command.execute` 와 같다)로 보낸다: 도는 동안 그 서버가 거는 `workspace/applyEdit`
-//!   은 이 창의 흐름(`flowId`)으로 넘어가 웹뷰의 편집 적용기를 지난다.
+//!   명령 길(`crate::edit::execute_command_for` — `lsp.command.execute` 와 같은 길을 완성 기능의 라우팅으로, 재리뷰 N-1)로 보낸다:
+//!   도는 동안 그 서버가 거는 `workspace/applyEdit` 은 이 창의 흐름(`flowId`)으로 넘어가 웹뷰의 편집 적용기를 지난다. 완성 답 · 그
+//!   resolve 답이 내준 명령은 그 길이 보는 「내준 명령」 표에도 넣는다(`crate::edit::offer_completion_commands` — 재리뷰 Q).
 //! - `lsp.signatureHelp`: `textDocument/signatureHelp`. 매개변수 이름(문자열 꼴)은 시그니처 글 안의 UTF-16 범위로 바꾼다.
 //!
 //! 서버가 준 글(문서 · 시그니처)은 [`MARKUP_LIMIT`] 에서 자른다 — 웹뷰는 문자열(또는 HTML 을 끈 Markdown)로만 그린다.
@@ -666,6 +667,28 @@ impl Offered {
             .and_then(|(_, _, items)| items.get_mut(id as usize))
     }
 
+    /// 그 문서 · 그 버전의 답을 준 서버.
+    fn server(&self, doc_id: &str, version: u32) -> Option<&str> {
+        self.docs
+            .get(doc_id)
+            .filter(|(v, _, _)| *v == version)
+            .map(|(_, server, _)| server.as_str())
+    }
+
+    /// 그 문서의 마지막 답이 내준 명령(항목의 명령 · resolve 답의 명령).
+    fn commands(&self, doc_id: &str) -> Vec<Value> {
+        self.docs
+            .get(doc_id)
+            .map(|(_, _, items)| {
+                items
+                    .iter()
+                    .flat_map(|i| i.command.iter().chain(i.resolved.iter()))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// 그 답으로 내준 명령이면 그 답을 준 서버.
     fn offered(&self, doc_id: &str, version: u32, command: &Value) -> Option<String> {
         self.docs
@@ -734,10 +757,13 @@ async fn complete(
                 resolved: None,
             })
             .collect();
-        offered
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remember(&p.doc_id, answer.doc.version, &answer.server, kept);
+        let commands = {
+            let mut offered = offered.lock().unwrap_or_else(PoisonError::into_inner);
+            offered.remember(&p.doc_id, answer.doc.version, &answer.server, kept);
+            offered.commands(&p.doc_id)
+        };
+        // 서버에 명령을 보내는 길(`crate::edit::execute_command`)이 보는 「내준 명령」 표에도(재리뷰 Q).
+        crate::edit::offer_completion_commands(m, ctx, &p.doc_id, &answer.key, true, &commands);
     }
     Ok(LspCompletionList {
         server: answer.server,
@@ -755,12 +781,15 @@ async fn resolve(
     p: LspCompletionResolveParams,
 ) -> Result<LspCompletionResolved, RpcError> {
     // 웹뷰가 보낸 항목이 아니라 Host 가 그 답으로 내준 항목을 보낸다 — 지어낸 `command` 가 resolve 답을 거쳐 「내준 명령」 이 되지 않게.
-    let Some(item) = offered
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .item_mut(&p.doc_id, p.list_version, p.id)
-        .map(|i| i.raw.clone())
-    else {
+    let found = {
+        let mut offered = offered.lock().unwrap_or_else(PoisonError::into_inner);
+        let server = offered.server(&p.doc_id, p.list_version).map(str::to_owned);
+        offered
+            .item_mut(&p.doc_id, p.list_version, p.id)
+            .map(|i| i.raw.clone())
+            .zip(server)
+    };
+    let Some((item, list_server)) = found else {
         return Err(denied(
             "this item was not offered by the last completion of this document version",
         ));
@@ -787,14 +816,25 @@ async fn resolve(
     };
     let item = completion_item(&answer.doc, &raw, p.id)
         .ok_or_else(|| RpcError::new(code::SERVER_ERROR, "the server resolved a malformed item"))?;
-    if !answer.stale_version
-        && let Some(kept) = offered
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .item_mut(&p.doc_id, p.list_version, p.id)
-    {
-        // 항목마다 마지막 resolve 답의 명령 하나만(덧붙이지 않는다).
-        kept.resolved.clone_from(&item.command);
+    // 항목마다 마지막 resolve 답의 명령 하나만(덧붙이지 않는다). 목록을 준 서버의 답일 때만 — 명령은 그 서버로만 간다.
+    if !answer.stale_version && answer.server == list_server {
+        let commands = {
+            let mut offered = offered.lock().unwrap_or_else(PoisonError::into_inner);
+            offered
+                .item_mut(&p.doc_id, p.list_version, p.id)
+                .map(|kept| kept.resolved.clone_from(&item.command))
+                .map(|()| offered.commands(&p.doc_id))
+        };
+        if let Some(commands) = commands {
+            crate::edit::offer_completion_commands(
+                m,
+                ctx,
+                &p.doc_id,
+                &answer.key,
+                false,
+                &commands,
+            );
+        }
     }
     Ok(LspCompletionResolved {
         server: answer.server,
@@ -809,9 +849,9 @@ async fn execute(
     ctx: &Ctx,
     p: LspCompletionExecuteParams,
 ) -> Result<LspCompletionExecuted, RpcError> {
-    let Some(name) = p.command.get("command").and_then(Value::as_str) else {
+    if !p.command.get("command").is_some_and(Value::is_string) {
         return Err(RpcError::invalid_params("command must have a command name"));
-    };
+    }
     let Some(server) = offered
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -821,25 +861,7 @@ async fn execute(
             "this command was not offered by a completion of this document version",
         ));
     };
-    // 그 답을 준 서버가 알린 명령인가 — 그 서버의 `executeCommandProvider`(없는 문서 · 다른 창은 not found).
-    let routes = m.feature_route_keys(
-        ctx.session(),
-        &p.doc_id,
-        &[(LspFeature::Completion, "workspace/executeCommand")],
-        Some(&server),
-    )?;
-    let Some((_, _, options)) = routes.first() else {
-        return Err(denied(
-            "no running language server runs commands for this document",
-        ));
-    };
-    let known = options
-        .get("commands")
-        .and_then(Value::as_array)
-        .is_some_and(|c| c.iter().any(|c| c.as_str() == Some(name)));
-    if !known {
-        return Err(denied("the language server does not offer this command"));
-    }
+    // 그 서버가 알린 이름인가 · 이 창에 내준 명령인가는 보내는 길이 본다(`crate::edit::execute_command_for` — 재리뷰 Q).
     // 보내는 길은 하나다(M4-12): 그 서버에만 보내고, 도는 동안 그 서버가 거는 편집은 이 창의 흐름으로 넘어간다.
     // 완성 기능의 라우팅으로 — 코드 액션을 끈 서버의 완성 명령도 돈다(재리뷰 N-1).
     let done = crate::edit::execute_command_for(

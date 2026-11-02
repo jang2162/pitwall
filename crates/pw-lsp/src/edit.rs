@@ -24,8 +24,12 @@
 //! **목록을 준 서버로만**: 코드 액션의 resolve · 명령은 목록(`lsp.codeAction.list`)을 준 서버(웹뷰가 `server` 로 돌려준다)에만
 //! 간다 — 메서드마다 첫 서버를 고르는 라우팅(결정 M4-D12)으로 다른 서버가 그 액션의 `data` · 명령을 받지 않게. 그 서버가 resolve 를
 //! 하지 않으면 받은 그대로, 명령을 하지 않으면 5001.
+//!
+//! **내준 명령만**(재리뷰 Q — 메인 판정 2026-11-02): 서버에 보내는 명령은 그 서버가 `executeCommandProvider.commands` 로 알린
+//! 이름이고, 그 서버가 이 연결 · 이 문서 · 이 인스턴스(지금 세대)에 답으로 내준 것(이름 + 인자)뿐이다 — 코드 액션 목록 · 그 목록
+//! 액션의 resolve 답, 완성 답 · 그 resolve 답(M4-11). 표는 [`execute_command`] 의 설명.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -42,7 +46,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::diagnostics::DiagnosticStore;
 use crate::handlers::HandlerContext;
-use crate::manager::{FeatureRequest, InstanceKey, LspManager, code as manager_code};
+use crate::manager::{
+    FeatureRequest, InstanceEpoch, InstanceKey, LspManager, code as manager_code,
+};
 use crate::message::ResponseError;
 use crate::server::Handlers;
 use crate::uri::uri_path;
@@ -753,6 +759,163 @@ fn window_project(ctx: &Ctx) -> Result<String, RpcError> {
     }
 }
 
+// ---- 내준 명령 ----------------------------------------------------------------------------------------------------------------
+
+/// 「내준 명령」 을 기억하는 (연결, 문서, 인스턴스) 수 — 넘으면 가장 오래 쓰지 않은 것부터 잊는다.
+const ISSUED_ENTRIES: usize = 64;
+
+/// 연결 하나 · 문서 하나 · 인스턴스 하나에 서버가 답으로 내준 명령(재리뷰 Q — 메인 판정 2026-11-02). 서버에 명령을 보내는 것은
+/// 이 표에 있는 명령(이름 + 인자)뿐이다. 인스턴스의 세대 표지([`InstanceEpoch`])에 묶여 서버를 다시 띄우거나 끝내면 맞지 않는다.
+/// 문서 id 는 다시 쓰지 않으므로(`lsp-<n>`) 닫힌 문서의 것은 다시 쓰이지 않고, 표를 채울 때 걷는다.
+struct Issued {
+    session: SessionId,
+    doc_id: String,
+    key: InstanceKey,
+    epoch: InstanceEpoch,
+    /// 마지막 코드 액션 목록의 항목(서버가 준 JSON) — resolve 가 받은 액션이 이 목록의 것일 때만 그 답의 명령을 더한다.
+    actions: Vec<Value>,
+    /// 마지막 코드 액션 목록 · 그 resolve 답들이 내준 명령.
+    action_commands: Vec<CommandId>,
+    /// 마지막 완성 답 · 그 resolve 답들이 내준 명령(완성 모듈이 통째로 바꾼다).
+    completion_commands: Vec<CommandId>,
+}
+
+/// 명령의 같음 — 이름과 인자(제목은 보지 않는다).
+#[derive(Debug, Clone, PartialEq)]
+struct CommandId {
+    name: String,
+    arguments: Value,
+}
+
+impl CommandId {
+    fn of(command: &Value) -> Option<Self> {
+        Some(Self {
+            name: command.get("command")?.as_str()?.to_owned(),
+            arguments: command
+                .get("arguments")
+                .filter(|a| !a.is_null())
+                .cloned()
+                .unwrap_or(Value::Null),
+        })
+    }
+}
+
+static ISSUED: LazyLock<Mutex<VecDeque<Issued>>> = LazyLock::new(|| Mutex::new(VecDeque::new()));
+
+/// 이 연결 · 문서 · 인스턴스의 칸(지금 세대). 없거나 세대가 지났으면 `create` 일 때 새로 만든다 — 가장 최근 것으로 뒤에 둔다. 닫힌 문서의 칸과
+/// 상한을 넘는 칸은 걷는다. 지금 세대를 모르면(서버가 떠 있지 않다 · 이 창의 허가가 없다) 아무것도 기억하지 않는다.
+fn issued_entry<R>(
+    m: &LspManager,
+    ctx: &Ctx,
+    doc_id: &str,
+    key: &InstanceKey,
+    create: bool,
+    change: impl FnOnce(&mut Issued) -> R,
+) -> Option<R> {
+    let (_, epoch) = m.instance_grant(ctx, key).ok()?;
+    let mut table = ISSUED.lock().unwrap_or_else(PoisonError::into_inner);
+    let session = ctx.session();
+    let at = table
+        .iter()
+        .position(|e| e.session == session && e.doc_id == doc_id && e.key == *key);
+    let mut entry = match at.and_then(|at| table.remove(at)) {
+        Some(entry) if entry.epoch == epoch => entry,
+        // 더하기만 하는 쪽(resolve 답)은 지금 세대의 목록이 있을 때만 — 앞 세대의 목록을 새 세대의 것으로 옮기지 않는다.
+        _ if !create => return None,
+        _ => Issued {
+            session,
+            doc_id: doc_id.to_owned(),
+            key: key.clone(),
+            epoch,
+            actions: Vec::new(),
+            action_commands: Vec::new(),
+            completion_commands: Vec::new(),
+        },
+    };
+    let out = change(&mut entry);
+    // 닫힌 문서(그 연결에 더는 없는 문서)의 칸을 걷는다.
+    table.retain(|e| {
+        m.feature_route_keys(e.session, &e.doc_id, &[], None)
+            .is_ok()
+    });
+    table.push_back(entry);
+    while table.len() > ISSUED_ENTRIES {
+        table.pop_front();
+    }
+    Some(out)
+}
+
+/// 코드 액션 목록이 내준 것을 기억한다(그 문서 · 그 인스턴스의 앞 목록과 그 resolve 들의 명령을 바꾼다).
+fn offer_actions(m: &LspManager, ctx: &Ctx, doc_id: &str, key: &InstanceKey, actions: &[Value]) {
+    issued_entry(m, ctx, doc_id, key, true, |e| {
+        e.actions = actions.to_vec();
+        e.action_commands = actions
+            .iter()
+            .filter_map(|raw| match raw.get("command") {
+                // `Command` 꼴은 항목 자체가 명령이다.
+                Some(Value::String(_)) => CommandId::of(raw),
+                Some(command) => CommandId::of(command),
+                None => None,
+            })
+            .collect();
+    });
+}
+
+/// resolve 답의 명령을 더한다 — 받은 액션이 그 목록이 내준 것일 때만(웹뷰가 지어낸 액션의 답이 「내준 명령」 이 되지 않게).
+fn offer_resolved_action(
+    m: &LspManager,
+    ctx: &Ctx,
+    doc_id: &str,
+    key: &InstanceKey,
+    action: &Value,
+    command: Option<&Value>,
+) {
+    let Some(command) = command.and_then(CommandId::of) else {
+        return;
+    };
+    issued_entry(m, ctx, doc_id, key, false, |e| {
+        if e.actions.contains(action) && !e.action_commands.contains(&command) {
+            e.action_commands.push(command);
+        }
+    });
+}
+
+/// 완성 답(과 그 resolve 답들)이 내준 명령으로 바꾼다(`crate::completion` — 문서마다 마지막 완성 답). `fresh` 는 새 완성 답이고,
+/// 아니면(resolve 답) 지금 세대의 칸이 있을 때만 바꾼다.
+pub(crate) fn offer_completion_commands<'a>(
+    m: &LspManager,
+    ctx: &Ctx,
+    doc_id: &str,
+    key: &InstanceKey,
+    fresh: bool,
+    commands: impl IntoIterator<Item = &'a Value>,
+) {
+    let commands: Vec<CommandId> = commands.into_iter().filter_map(CommandId::of).collect();
+    issued_entry(m, ctx, doc_id, key, fresh, |e| {
+        e.completion_commands = commands
+    });
+}
+
+/// 이 연결 · 이 문서 · 이 인스턴스(지금 세대)에 서버가 내준 명령인가.
+fn was_issued(m: &LspManager, ctx: &Ctx, doc_id: &str, key: &InstanceKey, command: &Value) -> bool {
+    let (Some(command), Ok((_, epoch))) = (CommandId::of(command), m.instance_grant(ctx, key))
+    else {
+        return false;
+    };
+    let session = ctx.session();
+    let mut table = ISSUED.lock().unwrap_or_else(PoisonError::into_inner);
+    // 서버를 다시 띄웠거나 끝낸 뒤의 칸은 걷는다(그 세대가 내준 명령은 다시 쓰이지 않는다).
+    table.retain(|e| {
+        !(e.session == session && e.doc_id == doc_id && e.key == *key && e.epoch != epoch)
+    });
+    table.iter().any(|e| {
+        e.session == session
+            && e.doc_id == doc_id
+            && e.key == *key
+            && (e.action_commands.contains(&command) || e.completion_commands.contains(&command))
+    })
+}
+
 // ---- RPC 처리 ----------------------------------------------------------------------------------------------------------------
 
 /// 서버 오류를 그대로 넘기되 `RpcError` 의 `data.message`(서버의 글)를 꺼낸다.
@@ -1039,6 +1202,9 @@ async fn code_actions(
         None => m.request(ctx, request, params).await?,
     };
     let (actions, truncated) = code_action_items(&answer.result);
+    // 이 목록이 내준 것(웹뷰에 준 항목 그대로) — 그 명령만 `lsp.command.execute` 로 돈다.
+    let raws: Vec<Value> = actions.iter().map(|a| a.raw.clone()).collect();
+    offer_actions(m, ctx, &p.doc_id, &answer.key, &raws);
     Ok(LspCodeActionList {
         server: answer.server,
         stale_version: answer.stale_version,
@@ -1079,6 +1245,7 @@ async fn resolve_action(
         Some(key) => Some(key),
         None => route("textDocument/codeAction")?,
     };
+    let asked = p.action.clone();
     let mut action = p.action;
     if action.get("edit").is_none_or(Value::is_null) && resolvable {
         let answer = m
@@ -1108,16 +1275,25 @@ async fn resolve_action(
         }
         None => None,
     };
+    let command = action.get("command").filter(|c| !c.is_null()).cloned();
+    if let Some(key) = &key {
+        offer_resolved_action(m, ctx, &p.doc_id, key, &asked, command.as_ref());
+    }
     Ok(LspCodeActionResolved {
         server: p.server,
         edit,
-        command: action.get("command").filter(|c| !c.is_null()).cloned(),
+        command,
     })
 }
 
 /// 서버 명령을 돌린다(`workspace/executeCommand`) — 도는 동안 그 서버가 거는 `workspace/applyEdit` 은 이 연결(창)에 흐름
 /// `p.flow_id` 로 넘어간다(결정 M4-D15). 서버에 명령을 보내는 하나뿐인 길이다 — 완성 항목의 `command`(M4-11)도 이것을 부른다
 /// (`lsp.completion.execute` 가 완성의 가드를 본 뒤 `execute_command_for` 로 — 메인 판정 2026-11-02).
+///
+/// 보내는 것은 둘을 지난 명령뿐이다(재리뷰 Q — 메인 판정 2026-11-02). 아니면 permission denied 이고 서버에 보내지 않는다.
+/// 1. 이름이 그 서버(인스턴스)가 `executeCommandProvider.commands` 로 알린 것이다(정적 능력 또는 그 문서에 맞는 동적 등록).
+/// 2. 그 명령(이름 + 인자)을 그 서버가 **이 연결 · 이 문서 · 이 인스턴스(지금 세대)** 에 답으로 내주었다 — 코드 액션 목록 · 그
+///    resolve 답, 완성 답 · 그 resolve 답(`offer_completion_commands`).
 pub async fn execute_command(
     m: &LspManager,
     ctx: &Ctx,
@@ -1144,7 +1320,7 @@ pub(crate) async fn execute_command_for(
         .to_owned();
     let arguments = p.command.get("arguments").cloned();
     // 그 명령을 준 서버의 인스턴스만 — 그 서버가 명령을 하지 않으면 5001(다른 서버로 보내지 않는다).
-    let key = m
+    let (key, options) = m
         .feature_route_keys(
             ctx.session(),
             &p.doc_id,
@@ -1153,7 +1329,7 @@ pub(crate) async fn execute_command_for(
         )?
         .into_iter()
         .next()
-        .map(|(_, key, _)| key)
+        .map(|(_, key, options)| (key, options))
         .ok_or_else(|| {
             RpcError::new(
                 manager_code::NO_SERVER,
@@ -1163,6 +1339,25 @@ pub(crate) async fn execute_command_for(
                 ),
             )
         })?;
+    let announced = options
+        .get("commands")
+        .and_then(Value::as_array)
+        .is_some_and(|c| c.iter().any(|c| c.as_str() == Some(command.as_str())));
+    if !announced {
+        return Err(RpcError::new(
+            rpc_code::PERMISSION_DENIED,
+            format!(
+                "the language server `{}` does not offer the command `{command}`",
+                p.server
+            ),
+        ));
+    }
+    if !was_issued(m, ctx, &p.doc_id, &key, &p.command) {
+        return Err(RpcError::new(
+            rpc_code::PERMISSION_DENIED,
+            "the language server did not offer this command to this window",
+        ));
+    }
     {
         let mut flows = flows();
         if flows
