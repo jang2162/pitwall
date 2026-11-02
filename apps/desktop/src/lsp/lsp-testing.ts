@@ -8,13 +8,14 @@ import {
   type LspDocumentCapabilities,
   type LspDocumentChangeParams,
   type LspDocumentOff,
+  type EventMessage,
   type LspDocumentOpenParams,
   RpcCallError,
 } from "@pitwall/rpc-client";
 import { createStore } from "zustand/vanilla";
 
 import type { DocumentChange, DocumentState } from "../editor/documents";
-import type { LspSource } from "./lsp-sessions";
+import type { LspServices, LspSource } from "./lsp-sessions";
 
 interface Doc {
   path: string;
@@ -27,6 +28,11 @@ export interface FakeLspOptions {
   off?: (language: string) => LspDocumentOff | null;
   /** 열기를 거절하는 오류 코드(루트 밖 등). */
   refuse?: number;
+  /**
+   * 편집이 Host 에 닿기까지(ms). 주면 `change` 는 그만큼 뒤에 적용하고 답한다 — 같은 틱에 나간 요청이 편집보다 먼저 도착하는
+   * 경합(데스크톱 IPC 는 프레임 순서를 지키지 않는다 — 리뷰 H-1)을 만든다.
+   */
+  changeDelay?: number;
 }
 
 export function fakeLspServer(options: FakeLspOptions = {}) {
@@ -49,6 +55,7 @@ export function fakeLspServer(options: FakeLspOptions = {}) {
     },
     async change(params: LspDocumentChangeParams) {
       calls.push({ method: "change", params });
+      if (options.changeDelay) await new Promise((r) => setTimeout(r, options.changeDelay));
       const doc = docs.get(params.docId);
       if (!doc) throw notFound(params.docId);
       if (params.version !== doc.version + 1)
@@ -78,9 +85,40 @@ export function fakeLspServer(options: FakeLspOptions = {}) {
       return { features };
     },
   };
+  // 기능 행의 Host RPC(`services.call`): 시험이 메서드마다 처리기를 단다. 이벤트는 `emit` 으로 보낸다.
+  const handlers = new Map<string, (params: unknown, signal?: AbortSignal) => Promise<unknown>>();
+  const listeners = new Set<{ topics: readonly string[]; listener: (e: EventMessage) => void }>();
+  const services: LspServices = {
+    call: ((method: string, params: unknown, options?: { signal?: AbortSignal }) => {
+      calls.push({ method: `call:${method}`, params });
+      const handler = handlers.get(method);
+      if (!handler)
+        return Promise.reject(
+          new RpcCallError({ code: ERROR_CODE.METHOD_NOT_FOUND, message: `no ${method}` }),
+        );
+      return handler(params, options?.signal);
+    }) as LspServices["call"],
+    subscribe(topics, listener) {
+      const entry = { topics, listener };
+      listeners.add(entry);
+      return () => void listeners.delete(entry);
+    },
+  };
   return {
     source,
+    services,
+    /** `services.call(method, …)` 의 처리기를 단다. */
+    handle(method: string, handler: (params: unknown, signal?: AbortSignal) => Promise<unknown>) {
+      handlers.set(method, handler);
+    },
+    emit(topic: string, payload: unknown) {
+      for (const { topics, listener } of listeners)
+        if (topics.includes(topic))
+          listener({ subscriptionId: 0, projectId: "proj", topic, payload: payload as never });
+    },
     docs,
+    /** Host 의 `stale_version` 규칙: 요청이 계산한 버전이 Host 문서의 버전과 다르다. */
+    stale: (at: { docId: string; version: number }) => docs.get(at.docId)?.version !== at.version,
     called: (method: string) => calls.filter((c) => c.method === method).map((c) => c.params),
     setFeatures(next: LspDocumentCapabilities["features"]) {
       features = next;

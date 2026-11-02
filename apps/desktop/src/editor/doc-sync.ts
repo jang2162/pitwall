@@ -15,6 +15,11 @@
 // 보내지 않는 문서(`off`): 기준(`protocol.skip` — 대용량 기준 limits.ts, 결정 M1-D9) 밖이거나 서비스가 끈 문서. 문서를 다시
 // 읽으면(`reset`) 다시 본다.
 //
+// 닿음(`synced`): Host 가 어느 버전까지 받았는지 센다 — 편집의 답이 1 부터 빠짐없이 온 가장 큰 버전. Host 는 앞당겨 온 편집을 답한
+// 뒤에 쌓아 두므로(차례가 오면 적용) 답 하나만으로는 그 버전이 적용됐다고 볼 수 없지만, 1 ~ N 이 모두 답했으면 N 까지 적용됐다. 요청은
+// 그 버전이 닿은 뒤에 보낸다(LSP 요청 도우미) — 편집과 요청이 같은 틱에 나가면(`.` 을 친 직후의 완성) 요청이 편집보다 먼저 도착해
+// 지난 버전으로 답하므로 버려진다(리뷰 H-1).
+//
 // 쥐기(`hold`): 쥔 동안의 바뀜은 보내지 않고 모았다가 마지막 쥔 쪽이 놓을 때 하나로 합쳐(버전 한 번) 보낸다 — 언어 서버에 한글 IME
 // 조합 중의 글자를 보내지 않으려고 LSP 세션이 쓴다(조합이 끝난 뒤 한 번). 구문 세션은 쥐지 않는다.
 //
@@ -82,6 +87,8 @@ export interface DocSyncHooks {
   opening?(): void;
   /** 문서가 열렸다(`open` 의 답을 받았다). */
   opened?(docId: string): void;
+  /** 보내지 않는 문서가 됐다(기준 밖 · 서비스가 끔). */
+  off?(): void;
 }
 
 type Phase =
@@ -122,6 +129,12 @@ export class DocSync {
   /** 이어진 실패 수. 답을 받으면 0 이다. */
   private failures = 0;
   private generation = 0;
+  /** Host 가 빠짐없이 받은 가장 큰 버전(머리 주석 「닿음」). 다시 열면 0. */
+  private acked = 0;
+  /** 답은 왔지만 그 앞 버전의 답이 아직인 버전. */
+  private answeredEarly = new Set<number>();
+  /** `synced` 를 기다리는 쪽. 버전이 닿거나 세대가 바뀌면 풀린다. */
+  private waiters: { version: number; wake: () => void }[] = [];
   private holds = 0;
   /** 쥔 동안 모은 바뀜. */
   private pending: ChangeSet | undefined;
@@ -195,7 +208,12 @@ export class DocSync {
   private send(edit: DocEdit, generation: number) {
     this.protocol.change(edit).then(
       (result) => {
-        if (result.off && this.current(generation)) this.phase = { kind: "off" };
+        if (!this.current(generation)) return;
+        if (result.off) {
+          this.goOff();
+          return;
+        }
+        this.ack(edit.version);
       },
       (e: unknown) => {
         if (!this.current(generation)) return;
@@ -203,6 +221,42 @@ export class DocSync {
         else this.fail("edit", e);
       },
     );
+  }
+
+  /** 편집 `version` 의 답이 왔다. 1 부터 이어진 데까지 `acked` 를 올리고 기다리던 쪽을 깨운다. */
+  private ack(version: number) {
+    this.answeredEarly.add(version);
+    while (this.answeredEarly.delete(this.acked + 1)) this.acked += 1;
+    this.wake((w) => w.version <= this.acked);
+  }
+
+  private wake(which: (w: { version: number }) => boolean) {
+    const ready = this.waiters.filter(which);
+    if (ready.length === 0) return;
+    this.waiters = this.waiters.filter((w) => !which(w));
+    for (const w of ready) w.wake();
+  }
+
+  /**
+   * Host 가 버전 `version` 까지 받을 때까지 기다린다. 그사이 다시 열거나 · 끄거나 · 물러서거나 · 닫으면 곧바로 풀린다 — 부른 쪽은
+   * 풀린 뒤 문서 id · 버전을 다시 본다.
+   */
+  synced(version: number): Promise<void> {
+    if (this.phase.kind !== "open" || version <= this.acked) return Promise.resolve();
+    return new Promise((wake) => this.waiters.push({ version, wake }));
+  }
+
+  /** 세대가 바뀌었다 — 닿음을 처음으로 하고 기다리던 쪽을 모두 깨운다. */
+  private resetAcks() {
+    this.acked = 0;
+    this.answeredEarly.clear();
+    this.wake(() => true);
+  }
+
+  private goOff() {
+    this.phase = { kind: "off" };
+    this.resetAcks();
+    this.hooks.off?.();
   }
 
   private current(generation: number) {
@@ -219,6 +273,9 @@ export class DocSync {
   open() {
     this.closeServerDoc();
     this.stopWaiting();
+    this.resetAcks();
+    // 새로 여는 텍스트(`this.text`)가 쥔 바뀜을 이미 담는다 — 남기면 놓을 때 같은 바뀜을 한 번 더 보낸다(리뷰 M-1).
+    this.pending = undefined;
     const text = this.text;
     if (!text || this.holders === 0) {
       this.phase = { kind: "idle" };
@@ -227,7 +284,7 @@ export class DocSync {
     this.version = 0;
     this.hooks.opening?.();
     if (this.protocol.skip?.(text)) {
-      this.phase = { kind: "off" };
+      this.goOff();
       return;
     }
     const generation = ++this.generation;
@@ -240,7 +297,7 @@ export class DocSync {
           return;
         }
         if (off) {
-          this.phase = { kind: "off" };
+          this.goOff();
           return;
         }
         this.phase = { kind: "open", generation, docId };
@@ -269,6 +326,7 @@ export class DocSync {
     const reopened = new Promise<void>((resolve) => (wake = resolve));
     const timer = setTimeout(() => this.open(), delay);
     this.phase = { kind: "waiting", timer, reopened, wake };
+    this.resetAcks();
   }
 
   /** 요청이 `docId` 에서 실패했다: 다시 열면 맞춰지는 오류면 다시 열고, 그 밖은 물러선다. 지난 문서의 실패는 무시한다. */
@@ -285,7 +343,7 @@ export class DocSync {
 
   /** 서비스가 이 문서를 껐다(답에 실렸다). 다시 읽을 때까지 보내지 않는다. */
   turnOff() {
-    this.phase = { kind: "off" };
+    this.goOff();
   }
 
   /** 물러서 있었으면 그만두고 기다리던 요청을 깨운다. */
@@ -326,6 +384,7 @@ export class DocSync {
     this.closeServerDoc();
     this.stopWaiting();
     this.phase = { kind: "idle" };
+    this.resetAcks();
   }
 }
 

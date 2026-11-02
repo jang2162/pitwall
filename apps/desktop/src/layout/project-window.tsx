@@ -2,7 +2,12 @@
 // 윈도우는 `TOOL_WINDOWS` 에 한 줄로 등록하고, 나머지는 자리만 잡는다. 에디터(src/editor)는 창마다 하나의 작업 공간
 // (`createEditorWorkspace`)을 두고, 창이 받은 열기 요청(src/project-open.ts 의 우편함)을 그것으로 연다.
 
-import { ERROR_CODE, RpcCallError } from "@pitwall/rpc-client";
+import {
+  ERROR_CODE,
+  type EventMessage,
+  RpcCallError,
+  type Subscription,
+} from "@pitwall/rpc-client";
 import "dockview-react/dist/styles/dockview.css";
 
 import type { UiLogger } from "@pitwall/logger";
@@ -534,7 +539,10 @@ function useWindowEditor(
             capabilities: (params) => host().call("lsp.document.capabilities", params),
           },
           services: {
+            call: (method, params, options) => host().call(method, params, options),
+            subscribe: (topics, listener) => subscribeProject(host(), projectId, topics, listener),
             openExternal: (url) => void openUrl(url).catch(() => {}),
+            popupActionsLabel: () => latest.current.strings.lspPopupActions,
             highlight: snippetHighlighter({
               open: (params) => host().call("syntax.open", params),
               highlights: (params) => host().call("syntax.highlights", params),
@@ -637,6 +645,33 @@ function useDocumentSync(workspace: EditorWorkspace, projectId: string | undefin
       void unsubscribe?.().catch(() => {});
     };
   }, [client, projectId, workspace]);
+}
+
+/**
+ * 프로젝트 범위 이벤트를 듣고 곧바로 해제 함수를 돌려준다(구독은 비동기로 붙는다 — 붙기 전에 해제하면 붙자마자 뗀다). LSP 기능 행의
+ * `services.subscribe`(M4-07).
+ */
+function subscribeProject(
+  client: NonNullable<ReturnType<typeof useHost>["client"]>,
+  projectId: string,
+  topics: readonly string[],
+  listener: (event: EventMessage) => void,
+): () => void {
+  let closed = false;
+  let subscription: Subscription | undefined;
+  client
+    .subscribe({ projectId, topics: [...topics] }, (event) => {
+      if (!closed) listener(event);
+    })
+    .then((s) => {
+      subscription = s;
+      if (closed) void s.unsubscribe().catch(() => {});
+    })
+    .catch((e: unknown) => console.warn("[lsp] subscription failed", topics, e));
+  return () => {
+    closed = true;
+    void subscription?.unsubscribe().catch(() => {});
+  };
 }
 
 /** 이 창의 프로젝트의 `lsp.status`(서버가 뜸 · 끝남 · 동적 등록)를 LSP 세션에 넘긴다 — 열린 문서의 능력 칸을 다시 묻는다(M4-07). */

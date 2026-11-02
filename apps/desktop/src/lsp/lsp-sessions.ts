@@ -28,6 +28,7 @@
 import type { Text } from "@codemirror/state";
 import {
   ERROR_CODE,
+  type EventMessage,
   type HighlightSpan,
   type LspDocumentCapabilities,
   type LspDocumentChangeParams,
@@ -37,6 +38,7 @@ import {
   type LspDocumentRef,
   type LspFeature,
   type LspFeatureCapability,
+  type UnaryMethods,
 } from "@pitwall/rpc-client";
 
 import { DocSync, DocSyncPool, errorCode } from "../editor/doc-sync";
@@ -69,9 +71,25 @@ export interface LspSource {
 }
 
 /** 팝업 바탕(src/lsp/popup.ts)이 쓰는 창의 것. */
+/** 이 창의 Host 연결로 부르는 RPC — 생성된 메서드 표(`UnaryMethods`)로 타입이 붙는다. */
+export type LspCall = <K extends keyof UnaryMethods & string>(
+  method: K,
+  params: UnaryMethods[K]["params"],
+  options?: { signal?: AbortSignal },
+) => Promise<UnaryMethods[K]["result"]>;
+
+/**
+ * 창의 것: 기능 행이 자기 Host RPC 를 부르고(`call` — `AbortSignal` 은 RPC 의 `request.cancel` 이 된다) 프로젝트 범위 이벤트를 듣는다
+ * (`subscribe` — 이 창의 프로젝트로 구독한다, 리뷰 H-2). 팝업 바탕(src/lsp/popup.ts)은 링크 · 코드 강조를 쓴다.
+ */
 export interface LspServices {
+  call: LspCall;
+  /** 이 창의 프로젝트의 이벤트 `topics` 를 듣는다. 해제 함수를 돌려준다. */
+  subscribe(topics: readonly string[], listener: (event: EventMessage) => void): () => void;
   /** 링크를 외부 브라우저로 연다(`http(s)` · `mailto` 만 — 팝업이 고른다). 없으면 링크를 누를 수 없다. */
   openExternal?(url: string): void;
+  /** 팝업 액션 줄의 접근성 이름(창의 언어). */
+  popupActionsLabel?(): string;
   /** 코드 조각(`language` 는 Linguist 이름)의 구문 강조 구간. 없거나 실패면 칠하지 않는다. */
   highlight?(language: string, code: string): Promise<readonly HighlightSpan[]>;
 }
@@ -79,14 +97,24 @@ export interface LspServices {
 /** 문서의 능력 칸: 기능 → 그 기능을 맡을 서버와 그 능력. 맡을 서버가 없는 기능은 없다. */
 export type LspCapabilities = Readonly<Partial<Record<LspFeature, LspFeatureCapability>>>;
 
-/** 요청을 계산한 문서. 기능 행은 이것을 자기 RPC 에 싣는다(`version` 은 Host 의 `expected_version`). */
+/**
+ * 요청을 계산한 문서. 기능 행은 이것을 자기 RPC 에 싣는다 — `docId` · `version`(Host 의 `expected_version`)은 문서 요청에,
+ * `projectId` · `worktree` · `path` 는 프로젝트 범위 조회(`lsp.diagnostics.list` 등)에.
+ */
 export interface LspAt {
   readonly docId: string;
   readonly version: number;
+  readonly projectId: string;
+  /** 탭의 워크트리 꼭대기(`ActiveWorktree.top`). 메인 체크아웃이면 없다. */
+  readonly worktree?: string;
+  readonly path: string;
 }
 
 /** LSP 기능이 보는 문서(`EditorFeatureContext.lsp`). 탭이 잡고 있는 동안 산다. */
 export interface LspDocument {
+  readonly projectId: string;
+  /** 탭의 워크트리 꼭대기. 메인 체크아웃이면 없다. */
+  readonly worktree?: string;
   readonly path: string;
   /** Linguist 언어 이름. */
   readonly language: string;
@@ -97,13 +125,24 @@ export interface LspDocument {
   /** 능력 칸이 바뀌면 부른다. 해제 함수를 돌려준다. */
   onCapabilities(listener: () => void): () => void;
   /**
-   * 같은 종류(`kind`)의 앞 요청을 취소하고 `call` 을 부른다. 답이 `staleVersion` 이거나 그사이 문서가 바뀌었거나 취소됐거나 맡을
-   * 서버가 없으면(`5001`) `undefined`. 그 밖의 실패는 그대로 던진다(문서를 잃었으면 — not found — 다시 연다).
+   * 같은 종류(`kind`)의 앞 요청을 취소하고, 그 버전의 편집이 Host 에 닿은 뒤 `call` 을 부른다. 답이 `staleVersion: true` 를
+   * 실었거나 그사이 문서가 바뀌었거나 취소됐거나 맡을 서버가 없으면(`5001`) `undefined`. 그 밖의 실패는 그대로 던진다(문서를
+   * 잃었으면 — not found — 다시 연다). 물러서 있는 동안은 다시 열 때까지(최대 30 s) 기다린다 — 답을 받아 팝업을 열기 전에 커서 ·
+   * 마우스가 아직 그 자리인지 본다.
    */
-  request<T extends { staleVersion: boolean }>(
+  request<T>(
     kind: string,
     call: (at: LspAt, signal: AbortSignal) => Promise<T>,
   ): Promise<T | undefined>;
+  /**
+   * 기능 행의 Host RPC 하나를 요청 도우미로 부른다: `params` 가 문서(`at`)로 매개변수를 만들고, 같은 `kind` 의 앞 요청은 취소된다.
+   * 답이 `staleVersion: true` 를 실었거나(문서 요청의 답) 그사이 문서가 바뀌었으면 `undefined` — 규칙은 `request` 와 같다.
+   */
+  call<K extends keyof UnaryMethods & string>(
+    kind: string,
+    method: K,
+    params: (at: LspAt) => UnaryMethods[K]["params"],
+  ): Promise<UnaryMethods[K]["result"] | undefined>;
   /** 바뀜을 쥔다(IME 조합 중). 돌려준 함수로 놓는다 — 마지막이 놓으면 모은 바뀜을 한 번에 보낸다. */
   hold(): () => void;
   readonly services: LspServices;
@@ -116,6 +155,9 @@ export interface LspHandle {
 }
 
 export interface LspSessions {
+  /** 이 창의 프로젝트. 문서 없이 부르는 기능(Search Everywhere 의 심볼 — M4-16)이 `services.call` 에 싣는다. */
+  readonly projectId: string;
+  readonly services: LspServices;
   /** 문서 `path` 를 언어 `language`(Linguist 이름)로 연다. `worktree` 는 그 탭의 워크트리 꼭대기(없으면 메인 체크아웃). */
   acquire(path: string, language: string, worktree?: string): LspHandle;
   /** 창이 `lsp.status` 이벤트를 받았다 — 열린 문서의 능력 칸을 다시 묻는다. */
@@ -126,7 +168,7 @@ export interface LspSessionsDeps {
   source: LspSource;
   documents: Pick<DocumentStore, "onChange" | "store">;
   projectId: string;
-  services?: LspServices;
+  services: LspServices;
 }
 
 /** 코드 조각을 강조하는 `LspServices.highlight`: 구문 분석 서비스에 조각 하나를 열어 전체를 묻고 닫는다. */
@@ -187,7 +229,7 @@ export function lspEligible(
 
 export function createLspSessions(deps: LspSessionsDeps): LspSessions {
   const { source, documents, projectId } = deps;
-  const services = deps.services ?? {};
+  const { services } = deps;
 
   class Session {
     readonly sync: DocSync;
@@ -231,6 +273,8 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
         {
           opening: () => this.setCapabilities({}),
           opened: () => this.refresh(),
+          // 서버가 받지 않는 문서의 칸은 비운다 — 기능 행이 트리거 문자에서 헛되이 묻지 않게(리뷰 L-3).
+          off: () => this.setCapabilities({}),
         },
       );
     }
@@ -280,7 +324,7 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
       if (docId !== undefined && !this.sync.holding) void source.save({ docId }).catch(() => {});
     }
 
-    async request<T extends { staleVersion: boolean }>(
+    async request<T>(
       kind: string,
       call: (at: LspAt, signal: AbortSignal) => Promise<T>,
     ): Promise<T | undefined> {
@@ -293,7 +337,24 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
         if (sync.holding) return undefined;
         const settled = await sync.settled();
         if (signal.aborted || settled.kind !== "open" || sync.holding) return undefined;
-        const at: LspAt = { docId: settled.docId, version: sync.version };
+        const version = sync.version;
+        // 이 버전의 편집이 Host 에 닿은 뒤에 묻는다 — 같은 틱에 나간 편집보다 요청이 먼저 도착하면 지난 버전으로 답해 버려진다
+        // (리뷰 H-1: `.` 직후의 완성).
+        await sync.synced(version);
+        if (
+          signal.aborted ||
+          !sync.isCurrent(settled.docId) ||
+          sync.version !== version ||
+          sync.holding
+        )
+          return undefined;
+        const at: LspAt = {
+          docId: settled.docId,
+          version,
+          projectId,
+          ...(this.worktree !== undefined && { worktree: this.worktree }),
+          path: this.path,
+        };
         let answer: T;
         try {
           answer = await call(at, signal);
@@ -303,7 +364,8 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
           throw e;
         }
         const moved = !sync.isCurrent(at.docId) || sync.version !== at.version || sync.holding;
-        return signal.aborted || answer.staleVersion || moved ? undefined : answer;
+        const stale = (answer as { staleVersion?: unknown } | null)?.staleVersion === true;
+        return signal.aborted || stale || moved ? undefined : answer;
       } finally {
         if (this.inflight.get(kind) === controller) this.inflight.delete(kind);
       }
@@ -338,9 +400,13 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
   });
 
   return {
+    projectId,
+    services,
     acquire(path, language, worktree) {
       const { entry, release } = pool.acquire(`${language}\u0000${worktree ?? ""}\u0000${path}`);
       const document: LspDocument = {
+        projectId,
+        ...(worktree !== undefined && { worktree }),
         path,
         language,
         get version() {
@@ -351,6 +417,8 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
         },
         onCapabilities: (listener) => entry.onCapabilities(listener),
         request: (kind, call) => entry.request(kind, call),
+        call: (kind, method, params) =>
+          entry.request(kind, (at, signal) => services.call(method, params(at), { signal })),
         hold: () => entry.sync.hold(),
         services,
       };

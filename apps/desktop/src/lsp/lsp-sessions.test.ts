@@ -18,7 +18,12 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 function setup(texts: Record<string, string> = { "/p/a.rs": "fn a() {}" }, options = {}) {
   const server = fakeLspServer(options);
   const documents = fakeLspDocuments(texts);
-  const sessions = createLspSessions({ source: server.source, documents, projectId: "proj" });
+  const sessions = createLspSessions({
+    source: server.source,
+    services: server.services,
+    documents,
+    projectId: "proj",
+  });
   return { server, documents, sessions };
 }
 
@@ -134,6 +139,34 @@ describe("request helper (③)", () => {
     expect(await document.request("hover", async () => ({ staleVersion: true }))).toBeUndefined();
   });
 
+  it("asks only after the edit made in the same tick reached the Host, so a completion right after `.` is kept (H-1)", async () => {
+    const { server, documents, sessions } = setup(
+      { "/p/a.rs": "fn a() { x }" },
+      { changeDelay: 5 },
+    );
+    const { document } = sessions.acquire("/p/a.rs", "Rust");
+    await settle();
+    documents.edit("/p/a.rs", 10, 10, ".");
+    const asked: number[] = [];
+    const answer = await document.request("completion", async (at) => {
+      asked.push(server.docs.get(at.docId)!.version);
+      return { staleVersion: server.stale(at), items: ["len"] };
+    });
+    expect(answer).toMatchObject({ items: ["len"] });
+    // Host 는 그 편집(버전 1)을 받은 뒤에 물음을 받았다.
+    expect(asked).toEqual([1]);
+    // 편집이 닿기를 기다리는 사이 또 고치면 묻지 않고 버린다.
+    documents.edit("/p/a.rs", 11, 11, "l");
+    const call = vi.fn(async (at: { docId: string; version: number }) => ({
+      staleVersion: server.stale(at),
+    }));
+    const pending = document.request("completion", call);
+    await settle();
+    documents.edit("/p/a.rs", 12, 12, "e");
+    expect(await pending).toBeUndefined();
+    expect(call).not.toHaveBeenCalled();
+  });
+
   it("cancels the older request of the same kind and keeps other kinds", async () => {
     const { sessions } = setup();
     const { document } = sessions.acquire("/p/a.rs", "Rust");
@@ -201,6 +234,73 @@ describe("IME composition (⑥)", () => {
       { docId: "d1", version: 1, changes: [{ from: 0, to: 0, insert: "한" }] },
     ]);
     expect(server.docs.get("d1")!.text).toBe("한");
+  });
+
+  it("keeps the Host text right when the document reopens while composing (M-1)", async () => {
+    const { server, documents, sessions } = setup();
+    const { document } = sessions.acquire("/p/a.rs", "Rust");
+    await settle();
+    const release = document.hold();
+    documents.edit("/p/a.rs", 0, 0, "한");
+    // Host 가 문서를 잃었다 — 능력 칸을 묻다 not found 로 다시 연다.
+    server.docs.delete("d1");
+    sessions.statusChanged();
+    await vi.waitFor(() => expect(server.called("open")).toHaveLength(2));
+    await settle();
+    release();
+    await settle();
+    expect(server.docs.get("d2")!.text).toBe("한fn a() {}");
+    expect(server.called("change")).toEqual([]);
+  });
+
+  it("empties the capabilities when the document goes off", async () => {
+    const { server, documents, sessions } = setup();
+    const { document } = sessions.acquire("/p/a.rs", "Rust");
+    server.setFeatures({ hover: { server: "x", options: true, optionsTruncated: false } });
+    await vi.waitFor(() => expect(document.capabilities.hover).toBeDefined());
+    // 편집으로 편집 등급을 벗어났다(1만 자 넘는 줄) — 다시 열 때 웹뷰가 끈다.
+    documents.edit("/p/a.rs", 0, 0, "x".repeat(10_001));
+    server.docs.delete("d1");
+    documents.edit("/p/a.rs", 0, 0, "y");
+    await vi.waitFor(() => expect(document.capabilities).toEqual({}));
+  });
+});
+
+describe("feature RPCs (H-2)", () => {
+  it("calls a feature row's Host RPC with the document, project and worktree, and drops stale answers", async () => {
+    const { server, sessions } = setup();
+    const { document } = sessions.acquire("/p/a.rs", "Rust", "/wt");
+    expect([document.projectId, document.worktree]).toEqual(["proj", "/wt"]);
+    expect(sessions.projectId).toBe("proj");
+    const seen: unknown[] = [];
+    server.handle("lsp.status.get", async (params) => {
+      seen.push(params);
+      return { projectId: "proj", instances: [] };
+    });
+    const answer = await document.call("status", "lsp.status.get", (at) => {
+      seen.push(at);
+      return { projectId: at.projectId };
+    });
+    expect(answer).toEqual({ projectId: "proj", instances: [] });
+    expect(seen).toEqual([
+      { docId: "d1", version: 0, projectId: "proj", worktree: "/wt", path: "/p/a.rs" },
+      { projectId: "proj" },
+    ]);
+    server.handle("lsp.status.get", async () => ({ staleVersion: true }));
+    expect(
+      await document.call("status", "lsp.status.get", (at) => ({ projectId: at.projectId })),
+    ).toBeUndefined();
+  });
+
+  it("lets a feature row listen to project events through the window", () => {
+    const { server, sessions } = setup();
+    const got: unknown[] = [];
+    const off = sessions.services.subscribe(["lsp.diagnostics"], (e) => got.push(e.payload));
+    server.emit("lsp.diagnostics", { path: "/p/a.rs" });
+    server.emit("other", {});
+    off();
+    server.emit("lsp.diagnostics", { path: "/p/b.rs" });
+    expect(got).toEqual([{ path: "/p/a.rs" }]);
   });
 });
 

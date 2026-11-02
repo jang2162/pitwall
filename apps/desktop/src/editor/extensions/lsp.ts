@@ -9,7 +9,7 @@
 
 import { ViewPlugin, type ViewUpdate } from "@codemirror/view";
 
-import { LSP_FEATURES } from "../../lsp/features";
+import { LSP_FEATURES, lspCapabilities, lspCapabilitiesChanged } from "../../lsp/features";
 import type { LspDocument } from "../../lsp/lsp-sessions";
 import { popupBase } from "../../lsp/popup";
 import type { EditorFeature } from ".";
@@ -53,11 +53,36 @@ function compositionHold(doc: LspDocument) {
   });
 }
 
+/** 문서의 능력 칸이 바뀌면 뷰에 `lspCapabilitiesChanged` 로 알린다 — 기능 행이 저마다 구독하지 않게(리뷰 L-2). */
+function capabilityEvents(doc: LspDocument) {
+  return ViewPlugin.define((view) => {
+    let alive = true;
+    const off = doc.onCapabilities(() =>
+      // 알림은 다른 뷰의 업데이트 도중(문서 다시 열기)에 올 수 있다 — 한 마이크로태스크 뒤에 보낸다.
+      queueMicrotask(() => {
+        if (alive) view.dispatch({ effects: lspCapabilitiesChanged.of(doc.capabilities) });
+      }),
+    );
+    return {
+      destroy() {
+        alive = false;
+        off();
+      },
+    };
+  });
+}
+
 export const lsp: EditorFeature = {
   id: "lsp",
   extension: (c) => {
     const doc = c.lsp;
     if (!doc) return [];
-    return [popupBase, compositionHold(doc), ...LSP_FEATURES.map((f) => f.extension(c, doc))];
+    return [
+      popupBase,
+      lspCapabilities,
+      capabilityEvents(doc),
+      compositionHold(doc),
+      ...LSP_FEATURES.map((f) => f.extension(c, doc)),
+    ];
   },
 };
