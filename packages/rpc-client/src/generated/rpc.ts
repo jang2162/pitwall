@@ -5000,10 +5000,11 @@ export type LspCommandExecuted = {
 
 /**
  *  코드 액션 요청에 실을 진단(부른 쪽이 준 서버의 `Diagnostic` 그대로). `version` 은 그 진단이 맞는 문서 버전 — 요청의 버전과
- *  다르면 버린다(위치가 어긋난 진단은 서버가 다른 수정을 고른다).
+ *  다르면 버린다(위치가 어긋난 진단은 서버가 다른 수정을 고른다). `null` 은 「버전 모름」 — 진단에 버전을 싣지 않는 서버
+ *  (typescript-language-server 의 push 등)의 것이라 그대로 넘긴다(M4-06 재리뷰 N1).
  */
 export type LspContextDiagnostics = {
-	version: number,
+	version: number | null,
 	items: JsonValue[],
 };
 

@@ -411,11 +411,12 @@ pub struct LspEditAnswer {
 // ---- 코드 액션 ---------------------------------------------------------------------------------------------------------------
 
 /// 코드 액션 요청에 실을 진단(부른 쪽이 준 서버의 `Diagnostic` 그대로). `version` 은 그 진단이 맞는 문서 버전 — 요청의 버전과
-/// 다르면 버린다(위치가 어긋난 진단은 서버가 다른 수정을 고른다).
+/// 다르면 버린다(위치가 어긋난 진단은 서버가 다른 수정을 고른다). `null` 은 「버전 모름」 — 진단에 버전을 싣지 않는 서버
+/// (typescript-language-server 의 push 등)의 것이라 그대로 넘긴다(M4-06 재리뷰 N1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LspContextDiagnostics {
-    pub version: u32,
+    pub version: Option<u32>,
     #[specta(type = Vec<JsonValue>)]
     pub items: Vec<Value>,
 }
@@ -888,9 +889,9 @@ async fn rename(m: &LspManager, ctx: &Ctx, p: LspRenameParams) -> Result<LspEdit
     })
 }
 
-/// 부른 쪽이 준 진단 — 그 문서 버전의 것이고 상한 안이면 그대로, 아니면 없다.
+/// 부른 쪽이 준 진단 — 그 문서 버전의 것(버전 모름이면 통과)이고 상한 안이면 그대로, 아니면 없다.
 fn context_diagnostics(given: Option<LspContextDiagnostics>, version: u32) -> Vec<Value> {
-    let Some(given) = given.filter(|d| d.version == version) else {
+    let Some(given) = given.filter(|d| d.version.is_none_or(|v| v == version)) else {
         return Vec::new();
     };
     let mut items = given.items;
@@ -945,6 +946,9 @@ pub fn code_action_items(result: &Value) -> (Vec<LspCodeActionItem>, bool) {
 }
 
 /// 진단 저장(M4-06)에서 `view` 의 `from..to` 와 겹치는 진단 — `key` 의 서버가 낸 것이고 요청 문서 버전의 것만, 상한 안에서.
+/// 버전이 없는 진단은 통과한다 — 버전을 싣지 않는 서버(typescript-language-server 의 push)는 가를 길을 주지 않았고, 거르면 그
+/// 서버에는 빠른 수정이 하나도 안 온다(M4-06 재리뷰 N1). 범위가 편집 뒤 밀렸을 수 있지만 서버가 다시 보내기 전까지의 짧은 창이고,
+/// 틀린 범위면 서버가 고칠 것을 못 찾을 뿐이다.
 fn stored_diagnostics(
     store: &DiagnosticStore,
     key: &InstanceKey,
@@ -970,7 +974,7 @@ fn stored_diagnostics(
     Ok(store
         .in_range(&key.project_id, &path, range)
         .iter()
-        .filter(|d| d.server == key.server && d.version.is_some() && d.version == version)
+        .filter(|d| d.server == key.server && d.version.is_none_or(|v| Some(v) == version))
         .take(MAX_CONTEXT_DIAGNOSTICS)
         .map(crate::diagnostics::to_lsp)
         .take_while(|d| {
@@ -1388,15 +1392,17 @@ mod tests {
             version,
             items: (0..n).map(|i| json!({ "message": i })).collect(),
         };
-        assert_eq!(context_diagnostics(Some(given(3, 2)), 3).len(), 2);
-        assert!(context_diagnostics(Some(given(2, 2)), 3).is_empty());
+        assert_eq!(context_diagnostics(Some(given(Some(3), 2)), 3).len(), 2);
+        assert!(context_diagnostics(Some(given(Some(2), 2)), 3).is_empty());
+        // 버전 모름(버전을 싣지 않는 서버의 진단)은 통과한다(M4-06 재리뷰 N1).
+        assert_eq!(context_diagnostics(Some(given(None, 2)), 3).len(), 2);
         assert!(context_diagnostics(None, 3).is_empty());
         assert_eq!(
-            context_diagnostics(Some(given(3, MAX_CONTEXT_DIAGNOSTICS + 5)), 3).len(),
+            context_diagnostics(Some(given(Some(3), MAX_CONTEXT_DIAGNOSTICS + 5)), 3).len(),
             MAX_CONTEXT_DIAGNOSTICS
         );
         let huge = LspContextDiagnostics {
-            version: 3,
+            version: Some(3),
             items: vec![json!({ "message": "x".repeat(MAX_CONTEXT_DIAGNOSTICS_BYTES) })],
         };
         assert!(context_diagnostics(Some(huge), 3).is_empty());

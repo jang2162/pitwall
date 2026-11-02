@@ -402,6 +402,92 @@ async fn code_actions_without_diagnostics_take_the_answering_servers_stored_ones
     assert_eq!(sent["context"]["diagnostics"], json!([]), "{sent}");
 }
 
+/// 진단에 버전을 싣지 않는 서버(typescript-language-server 의 push)의 진단은 「버전 모름」 으로 통과한다 — `⌥↩` 의 저장 조회도,
+/// 「빠른 수정」 이 `version: null` 로 준 문맥도(M4-06 재리뷰 N1). 그 서버가 낸 것만 그 서버에 가는 규칙은 그대로다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_actions_take_diagnostics_whose_server_gave_no_version() {
+    let env = Env::new(EnvOptions::default());
+    let file = env.root.join("app.py");
+    let said = |server: &str| json!({ "range": range(0, 0, 0, 1), "severity": 1, "message": format!("{server} says"), "code": "6133" });
+    let mut records = std::collections::HashMap::new();
+    for server in ["basedpyright", "ruff"] {
+        records.insert(
+            server,
+            env.fake(
+                server,
+                Scenario {
+                    capabilities: json!({ "textDocumentSync": 2, "codeActionProvider": true }),
+                    ..Scenario::default()
+                }
+                .on(
+                    "textDocument/didOpen",
+                    vec![Action::Notify {
+                        method: "textDocument/publishDiagnostics".into(),
+                        // `version` 이 없다.
+                        params: json!({ "uri": uri(&file), "diagnostics": [said(server)] }),
+                    }],
+                )
+                .reply("textDocument/codeAction", Reply::result(json!([]))),
+            ),
+        );
+    }
+    let mut win = env.window();
+    let doc = ready(&env, &mut win, "app.py", "Python", "x = 1\n").await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let list = win
+            .call(
+                "lsp.diagnostics.list",
+                json!({ "projectId": env.id, "path": file, "limit": 10 }),
+            )
+            .await
+            .unwrap();
+        let ds = list["files"][0]["diagnostics"].as_array().cloned();
+        if ds.as_ref().map_or(0, Vec::len) == 2 {
+            assert!(ds.unwrap().iter().all(|d| d["version"].is_null()));
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "both servers' diagnostics never arrived"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // `⌥↩`: 진단 없이 — 저장된 버전 없는 진단 중 맡은 서버의 것.
+    let list = win
+        .call(
+            "lsp.codeAction.list",
+            json!({ "docId": doc, "version": 0, "from": 0, "to": 0 }),
+        )
+        .await
+        .unwrap();
+    let server = list["server"].as_str().unwrap().to_owned();
+    let other = if server == "ruff" {
+        "basedpyright"
+    } else {
+        "ruff"
+    };
+    let sent = last_request(&records[server.as_str()], "textDocument/codeAction").unwrap();
+    assert_eq!(
+        sent["context"]["diagnostics"],
+        json!([said(&server)]),
+        "{sent}"
+    );
+    assert!(last_request(&records[other], "textDocument/codeAction").is_none());
+    // 「빠른 수정」: 팝업이 버전 모름(`null`)으로 준 진단은 그대로 간다.
+    let given = json!({ "range": range(0, 0, 0, 1), "message": "given", "code": 6133 });
+    win.call(
+        "lsp.codeAction.list",
+        json!({ "docId": doc, "version": 0, "from": 0, "to": 1, "only": ["quickfix"],
+                "diagnostics": { "version": null, "items": [given] } }),
+    )
+    .await
+    .unwrap();
+    let sent = last_request(&records[server.as_str()], "textDocument/codeAction").unwrap();
+    assert_eq!(sent["context"]["diagnostics"], json!([given]), "{sent}");
+    assert_eq!(sent["context"]["only"], json!(["quickfix"]));
+}
+
 /// 편집이 없는 액션은 서버가 `codeAction/resolve` 를 하면 물어 편집 · 명령을 받는다. `Command` 는 그대로 명령이다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resolving_asks_the_server_for_the_edit_and_keeps_commands() {

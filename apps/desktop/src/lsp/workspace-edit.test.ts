@@ -646,4 +646,14 @@ describe("contextDiagnostic", () => {
       items: [d],
     });
   });
+
+  it("sends diagnostics whose server gave no version as of an unknown version (M4-06 N1)", () => {
+    const d = { message: "unused" };
+    expect(contextDiagnostic({ lsp: [d], servers: ["s"], version: null }, "s")).toEqual({
+      version: null,
+      items: [d],
+    });
+    // 다른 서버의 진단은 여전히 넘기지 않는다.
+    expect(contextDiagnostic({ lsp: [d], servers: ["t"], version: null }, "s")).toBeUndefined();
+  });
 });

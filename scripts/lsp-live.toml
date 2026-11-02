@@ -10,7 +10,7 @@
 
 [floors]
 rust_analyzer = 9
-typescript_language_server = 7
+typescript_language_server = 8
 
 [capabilities]
 rust_analyzer = ["hoverProvider", "definitionProvider", "referencesProvider"]

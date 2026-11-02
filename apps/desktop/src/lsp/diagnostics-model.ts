@@ -68,20 +68,23 @@ export interface DiagnosticPopupData {
   /** `diagnostics[i]` 를 낸 서버 id. */
   readonly servers: readonly string[];
   /**
-   * `lsp` 의 범위가 맞는 문서 버전 — 모든 진단이 같은 버전일 때만 있다(버전이 없거나 서로 다르면 없다). M4-12 의 「빠른 수정」 은
-   * 이것이 없으면 진단을 싣지 않고, Host 는 지금 문서 버전과 다르면 버린다(편집 뒤의 지난 범위를 서버에 넘기지 않는다).
+   * `lsp` 의 범위가 맞는 문서 버전 — 버전이 있는 진단이 모두 같은 버전일 때 그 수, 모두 버전이 없으면 `null`(버전 모름 — 진단에
+   * 버전을 싣지 않는 서버, typescript-language-server 의 push 등), 버전이 서로 다르면 없다. M4-12 의 「빠른 수정」 은 이것이 없으면
+   * 진단을 싣지 않는다. Host 는 수가 지금 문서 버전과 다르면 버리고(편집 뒤의 지난 범위를 서버에 넘기지 않는다) `null` 은 그대로
+   * 넘긴다(M4-06 재리뷰 N1 — 거르면 그 서버에는 빠른 수정이 하나도 안 온다).
    */
-  readonly version?: number;
+  readonly version?: number | null;
 }
 
 export function popupData(diagnostics: readonly LspDiagnostic[]): DiagnosticPopupData {
-  const versions = new Set(diagnostics.map((d) => d.version));
+  const versions = new Set(diagnostics.flatMap((d) => (d.version === null ? [] : [d.version])));
   const [version] = versions;
   return {
     diagnostics,
     lsp: diagnostics.map(lspDiagnostic),
     servers: diagnostics.map((d) => d.server),
-    ...(versions.size === 1 && typeof version === "number" && { version }),
+    ...(versions.size === 0 && diagnostics.length > 0 && { version: null }),
+    ...(versions.size === 1 && { version }),
   };
 }
 

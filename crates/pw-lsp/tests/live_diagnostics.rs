@@ -2,6 +2,9 @@
 //! `m4_06.type-error`)을 서버 관리자로 열면 타입 오류 하나가 그 줄 · 범위로 이벤트 · 목록에 온다. 진단 수는 그 파일 안으로만 본다
 //! (fixtures/README.md 「자기 파일 안」). rust-analyzer 는 pull(3.17)을 알리므로 자체 진단(`source: rust-analyzer`)이 pull 로
 //! 온다 — 이 시험이 pull 길의 live 확인이다. 표지(`cfg(pw_live_lsp_<서버>)`)가 꺼져 있으면 시험이 목록에 없다(`src/live.rs`).
+//!
+//! typescript-language-server 는 진단에 `version` 을 싣지 않는다 — 그 진단이 「버전 모름」 으로 코드 액션 문맥에 실려 빠른 수정이
+//! 나오는지도 본다(M4-06 재리뷰 N1, 픽스처 `src/unused.ts` 의 앵커 `unused.rect` — TS6133).
 
 #![cfg(unix)]
 
@@ -20,7 +23,7 @@ mod live {
 
     use super::common::env::{Env, EnvOptions};
 
-    fn copy_dir(from: &Path, to: &Path) {
+    pub fn copy_dir(from: &Path, to: &Path) {
         std::fs::create_dir_all(to).unwrap();
         for entry in std::fs::read_dir(from).unwrap().flatten() {
             let target = to.join(entry.file_name());
@@ -33,7 +36,7 @@ mod live {
     }
 
     /// 앵커 `/*@name*/` 바로 뒤의 (줄, UTF-16 열).
-    fn anchor(text: &str, name: &str) -> (u64, u64) {
+    pub fn anchor(text: &str, name: &str) -> (u64, u64) {
         let marker = format!("/*@{name}*/");
         let at = text.find(&marker).expect("anchor") + marker.len();
         let before = &text[..at];
@@ -180,4 +183,120 @@ async fn live_lsp_typescript_language_server_diagnostics() {
         None,
     )
     .await;
+}
+
+/// `⌥↩`(진단 없이 — Host 가 진단 저장으로 채운다)과 「빠른 수정」(팝업이 버전 모름 `null` 로 준 진단) 모두 TS 의 빠른 수정을 받는다.
+/// typescript-language-server 는 진단의 오류 코드로만 빠른 수정을 계산하므로, 문맥에 진단이 안 실리면 리팩터만 나온다.
+#[cfg(pw_live_lsp_typescript_language_server)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lsp_typescript_language_server_quick_fix_without_a_diagnostic_version() {
+    use std::path::Path;
+    use std::time::Duration;
+
+    use common::env::{Env, EnvOptions};
+    use pw_core::Filter;
+    use pw_core::bus::Received;
+    use pw_lsp::diagnostics::TOPIC_DIAGNOSTICS;
+    use pw_lsp::live::LiveServer;
+    use serde_json::{Value, json};
+
+    let server = LiveServer::TypescriptLanguageServer;
+    let env = Env::new(EnvOptions {
+        isolated_shell: false,
+        ..EnvOptions::default()
+    });
+    live::copy_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/typescript"),
+        &env.root,
+    );
+    env.configure(
+        server.server_id(),
+        &server.program(),
+        &server
+            .args()
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+    );
+    let mut events = env.bus.subscribe(Filter::all().topics([TOPIC_DIAGNOSTICS]));
+    let path = env.root.join("src/unused.ts");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let (line, column) = live::anchor(&text, "unused.rect");
+    let mut win = env.window();
+    let opened = win.open(&env, &path, "TypeScript", &text).await;
+    let doc = opened["docId"].as_str().unwrap().to_owned();
+
+    let wanted = path.to_string_lossy().into_owned();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(240);
+    let unused = loop {
+        match tokio::time::timeout_at(deadline, events.recv()).await {
+            Ok(Some(Received::Event(event))) if event.payload["path"] == wanted.as_str() => {
+                eprintln!("{}: {}", server.executable(), event.payload["diagnostics"]);
+                if let Some(d) = event.payload["diagnostics"]
+                    .as_array()
+                    .and_then(|ds| ds.iter().find(|d| d["code"] == "6133"))
+                {
+                    break d.clone();
+                }
+            }
+            Ok(Some(_)) => {}
+            _ => panic!("no TS6133 in {wanted}"),
+        }
+    };
+    // 이 서버는 버전을 싣지 않는다 — 이 시험이 보는 경우가 맞는지.
+    assert!(unused["version"].is_null(), "{unused}");
+    assert_eq!(unused["range"]["start"]["line"], line, "{unused}");
+
+    let offset = |line: u64, character: u64| -> u64 {
+        let start: usize = text
+            .split_inclusive('\n')
+            .take(usize::try_from(line).unwrap())
+            .map(|l| l.encode_utf16().count())
+            .sum();
+        start as u64 + character
+    };
+    let from = offset(line, column);
+    let to = from + 4;
+    let quick_fixes = |list: &Value| -> Vec<String> {
+        list["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| {
+                a["kind"]
+                    .as_str()
+                    .is_some_and(|k| k.starts_with("quickfix"))
+            })
+            .map(|a| a["title"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+    // `⌥↩`: 진단 없이.
+    let invoked = win
+        .call(
+            "lsp.codeAction.list",
+            json!({ "docId": doc, "version": 0, "from": from, "to": to }),
+        )
+        .await
+        .unwrap();
+    assert!(!quick_fixes(&invoked).is_empty(), "{invoked}");
+    // 「빠른 수정」: 팝업의 LSP 진단(`lspDiagnostic` 꼴)을 버전 모름으로.
+    let items = json!([{
+        "range": unused["range"], "severity": 1, "message": unused["message"],
+        "code": unused["code"], "source": unused["source"],
+    }]);
+    let quick = win
+        .call(
+            "lsp.codeAction.list",
+            json!({ "docId": doc, "version": 0, "from": from, "to": to, "only": ["quickfix"],
+                    "diagnostics": { "version": null, "items": items } }),
+        )
+        .await
+        .unwrap();
+    assert!(!quick_fixes(&quick).is_empty(), "{quick}");
+    eprintln!(
+        "quick fixes: invoked {:?}, quick {:?}",
+        quick_fixes(&invoked),
+        quick_fixes(&quick)
+    );
+    win.session.close();
 }
