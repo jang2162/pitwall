@@ -24798,6 +24798,490 @@
       ],
       "tier": "write"
     },
+    "lsp.applyEdit.answer": {
+      "description": "`lsp.applyEdit` 이벤트에 답한다(그 명령을 부른 연결만).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          },
+          "failureReason": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "flowId": {
+            "type": "string"
+          },
+          "requestId": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "flowId",
+          "requestId",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "lsp.codeAction.list": {
+      "description": "범위(와 그 자리의 진단)의 코드 액션(`textDocument/codeAction`). 선호 액션이 먼저다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "LspCodeActionTrigger": {
+            "description": "코드 액션을 부른 까닭(LSP `CodeActionTriggerKind`).",
+            "oneOf": [
+              {
+                "const": "invoked",
+                "description": "사람이 불렀다(`⌥↩` · 「빠른 수정」).",
+                "type": "string"
+              },
+              {
+                "const": "automatic",
+                "description": "저절로(커서가 멈춘 뒤의 전구).",
+                "type": "string"
+              }
+            ]
+          },
+          "LspContextDiagnostics": {
+            "description": "코드 액션 요청에 실을 진단(부른 쪽이 준 서버의 `Diagnostic` 그대로). `version` 은 그 진단이 맞는 문서 버전 — 요청의 버전과\n다르면 버린다(위치가 어긋난 진단은 서버가 다른 수정을 고른다).",
+            "properties": {
+              "items": {
+                "items": true,
+                "type": "array"
+              },
+              "version": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "version",
+              "items"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LspContextDiagnostics"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "docId": {
+            "type": "string"
+          },
+          "from": {
+            "description": "선택 범위(웹뷰 오프셋). 커서뿐이면 `from == to`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "only": {
+            "default": null,
+            "description": "이 종류만(`quickfix` · `refactor` · `source` …). 없으면 모두.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "to": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trigger": {
+            "$ref": "#/$defs/LspCodeActionTrigger",
+            "default": "invoked"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "docId",
+          "version",
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspCodeActionItem": {
+            "description": "코드 액션 하나(`CodeAction` 또는 `Command`).",
+            "properties": {
+              "disabled": {
+                "description": "서버가 지금은 못 한다고 한 까닭(`disabled.reason`). 목록에 흐리게 보인다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "isPreferred": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "raw": {
+                "description": "서버가 준 그대로 — `lsp.codeAction.resolve` 에 돌려준다."
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "kind",
+              "isPreferred",
+              "disabled",
+              "raw"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "actions": {
+            "description": "선호 액션(`isPreferred`) 먼저, 나머지는 서버가 준 차례.",
+            "items": {
+              "$ref": "#/$defs/LspCodeActionItem"
+            },
+            "type": "array"
+          },
+          "server": {
+            "type": "string"
+          },
+          "staleVersion": {
+            "type": "boolean"
+          },
+          "truncated": {
+            "description": "[`MAX_CODE_ACTIONS`] · [`MAX_CODE_ACTION_BYTES`] 로 버린 것이 있다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "server",
+          "staleVersion",
+          "actions",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.codeAction.resolve": {
+      "description": "코드 액션 하나의 편집 · 명령. 편집이 없고 서버가 `codeAction/resolve` 를 하면 묻는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "action": {
+            "description": "[`LspCodeActionItem::raw`] 그대로."
+          },
+          "docId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "docId",
+          "action"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspFileChange": {
+            "description": "파일 하나의 바뀜. 목록의 차례대로 적용한다(LSP `documentChanges` 의 차례).",
+            "oneOf": [
+              {
+                "description": "텍스트 바꾸기. `version` 은 서버가 이 편집을 계산한 문서 버전(`TextDocumentEdit.textDocument.version` — 열린 문서면 웹뷰가\n보낸 버전이다). 없으면 서버가 디스크(또는 버전 없이 받은 텍스트)를 기준으로 했다.",
+                "properties": {
+                  "edits": {
+                    "items": {
+                      "$ref": "#/$defs/LspTextEdit"
+                    },
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "version",
+                  "edits"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "ignoreIfExists": {
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "create",
+                    "type": "string"
+                  },
+                  "overwrite": {
+                    "type": "boolean"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "overwrite",
+                  "ignoreIfExists"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "ignoreIfExists": {
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "rename",
+                    "type": "string"
+                  },
+                  "overwrite": {
+                    "type": "boolean"
+                  },
+                  "to": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "from",
+                  "to",
+                  "overwrite",
+                  "ignoreIfExists"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "ignoreIfNotExists": {
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "delete",
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "recursive": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "recursive",
+                  "ignoreIfNotExists"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "LspPosition": {
+            "description": "LSP 위치(줄 · UTF-16 글자 — 결정 M4-D10). 서버가 준 그대로다.",
+            "properties": {
+              "character": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "line",
+              "character"
+            ],
+            "type": "object"
+          },
+          "LspRange": {
+            "properties": {
+              "end": {
+                "$ref": "#/$defs/LspPosition"
+              },
+              "start": {
+                "$ref": "#/$defs/LspPosition"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "type": "object"
+          },
+          "LspTextEdit": {
+            "description": "텍스트 바꾸기 하나(`TextEdit`). 한 파일의 바꾸기들은 모두 같은 텍스트(바꾸기 전) 기준이고 겹치지 않는다(LSP 규칙).",
+            "properties": {
+              "newText": {
+                "type": "string"
+              },
+              "range": {
+                "$ref": "#/$defs/LspRange"
+              }
+            },
+            "required": [
+              "range",
+              "newText"
+            ],
+            "type": "object"
+          },
+          "LspWorkspaceEdit": {
+            "description": "고르게 바꾼 `WorkspaceEdit`.",
+            "properties": {
+              "changes": {
+                "items": {
+                  "$ref": "#/$defs/LspFileChange"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "changes"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "command": {
+            "description": "편집 뒤 돌릴 명령(`Command` — `lsp.command.execute` 에 그대로)."
+          },
+          "edit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LspWorkspaceEdit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "적용할 편집(없으면 명령만)."
+          },
+          "server": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "server",
+          "edit",
+          "command"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.command.execute": {
+      "description": "서버 명령(`workspace/executeCommand`)을 돌린다. 그동안 그 서버가 거는 `workspace/applyEdit` 만 이 창에 이벤트\n`lsp.applyEdit`(흐름 id 실림)로 넘어오고, 창은 `lsp.applyEdit.answer` 로 답한다(결정 M4-D15).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "command": {
+            "description": "서버가 준 `Command`(`{ title, command, arguments? }`)."
+          },
+          "docId": {
+            "type": "string"
+          },
+          "flowId": {
+            "description": "이 명령의 흐름 id(웹뷰가 정한다). 그 처리 중에 서버가 건 편집의 이벤트에 실린다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "docId",
+          "flowId",
+          "command"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "result": true,
+          "server": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "server",
+          "result"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "lsp.document.capabilities": {
       "description": "문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고\n끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈\n칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.",
       "kind": "unary",
@@ -25373,6 +25857,371 @@
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.rename": {
+      "description": "rename 의 편집(`textDocument/rename`). 쓰지 않는다 — 웹뷰의 적용기가 미리 확인 · 미리보기 · 쓰기를 한다(결정 M4-D14). 서버가\n이름을 거절하면 5002(서버의 글). 받을 수 없는 편집(루트 밖 스킴 · `.git` · 상한)은 5120.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "type": "string"
+          },
+          "newName": {
+            "type": "string"
+          },
+          "offset": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "docId",
+          "version",
+          "offset",
+          "newName"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspFileChange": {
+            "description": "파일 하나의 바뀜. 목록의 차례대로 적용한다(LSP `documentChanges` 의 차례).",
+            "oneOf": [
+              {
+                "description": "텍스트 바꾸기. `version` 은 서버가 이 편집을 계산한 문서 버전(`TextDocumentEdit.textDocument.version` — 열린 문서면 웹뷰가\n보낸 버전이다). 없으면 서버가 디스크(또는 버전 없이 받은 텍스트)를 기준으로 했다.",
+                "properties": {
+                  "edits": {
+                    "items": {
+                      "$ref": "#/$defs/LspTextEdit"
+                    },
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "version",
+                  "edits"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "ignoreIfExists": {
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "create",
+                    "type": "string"
+                  },
+                  "overwrite": {
+                    "type": "boolean"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "overwrite",
+                  "ignoreIfExists"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "ignoreIfExists": {
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "rename",
+                    "type": "string"
+                  },
+                  "overwrite": {
+                    "type": "boolean"
+                  },
+                  "to": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "from",
+                  "to",
+                  "overwrite",
+                  "ignoreIfExists"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "ignoreIfNotExists": {
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "delete",
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "recursive": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "recursive",
+                  "ignoreIfNotExists"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "LspPosition": {
+            "description": "LSP 위치(줄 · UTF-16 글자 — 결정 M4-D10). 서버가 준 그대로다.",
+            "properties": {
+              "character": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "line",
+              "character"
+            ],
+            "type": "object"
+          },
+          "LspRange": {
+            "properties": {
+              "end": {
+                "$ref": "#/$defs/LspPosition"
+              },
+              "start": {
+                "$ref": "#/$defs/LspPosition"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "type": "object"
+          },
+          "LspTextEdit": {
+            "description": "텍스트 바꾸기 하나(`TextEdit`). 한 파일의 바꾸기들은 모두 같은 텍스트(바꾸기 전) 기준이고 겹치지 않는다(LSP 규칙).",
+            "properties": {
+              "newText": {
+                "type": "string"
+              },
+              "range": {
+                "$ref": "#/$defs/LspRange"
+              }
+            },
+            "required": [
+              "range",
+              "newText"
+            ],
+            "type": "object"
+          },
+          "LspWorkspaceEdit": {
+            "description": "고르게 바꾼 `WorkspaceEdit`.",
+            "properties": {
+              "changes": {
+                "items": {
+                  "$ref": "#/$defs/LspFileChange"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "changes"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "서버가 계산한 편집(rename · 코드 액션 resolve).",
+        "properties": {
+          "edit": {
+            "$ref": "#/$defs/LspWorkspaceEdit"
+          },
+          "server": {
+            "type": "string"
+          },
+          "staleVersion": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "server",
+          "staleVersion",
+          "edit"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.rename.prepare": {
+      "description": "rename 의 대상: 서버의 `prepareRename` 이 준 범위 · 처음 이름. 서버가 `prepareRename` 을 하지 않으면 `default`(웹뷰가 커서의\n낱말을 쓴다), 그 자리를 바꿀 수 없으면 `invalid`. 맡을 서버가 없으면 5001.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "문서의 한 자리(웹뷰의 UTF-16 오프셋 — 결정 M4-D10).",
+        "properties": {
+          "docId": {
+            "type": "string"
+          },
+          "offset": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "웹뷰가 오프셋을 잰 문서 버전.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "docId",
+          "version",
+          "offset"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspRenameTarget": {
+            "oneOf": [
+              {
+                "description": "바꿀 범위(웹뷰 오프셋)와 서버가 권한 처음 이름.",
+                "properties": {
+                  "from": {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "range",
+                    "type": "string"
+                  },
+                  "placeholder": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "to": {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "from",
+                  "to",
+                  "placeholder"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "서버가 범위를 정하지 않는다(`prepareRename` 이 없거나 `defaultBehavior`) — 웹뷰가 커서의 낱말을 쓴다.",
+                "properties": {
+                  "kind": {
+                    "const": "default",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "이 자리는 이름을 바꿀 수 없다. `message` 는 서버가 준 까닭(있으면).",
+                "properties": {
+                  "kind": {
+                    "const": "invalid",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`lsp.rename.prepare` 의 결과.",
+        "properties": {
+          "server": {
+            "type": "string"
+          },
+          "staleVersion": {
+            "description": "묻는 사이 문서가 바뀌었다 — 버린다.",
+            "type": "boolean"
+          },
+          "target": {
+            "$ref": "#/$defs/LspRenameTarget"
+          }
+        },
+        "required": [
+          "server",
+          "staleVersion",
+          "target"
+        ],
+        "type": "object"
       },
       "roles": [
         "owner"

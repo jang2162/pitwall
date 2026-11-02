@@ -587,6 +587,23 @@ export type UnaryMethods = {
 	 */
 	"log.write": { params: UiLogBatch; result: null };
 	/**
+	 * `lsp.applyEdit` 이벤트에 답한다(그 명령을 부른 연결만).
+	 */
+	"lsp.applyEdit.answer": { params: LspApplyEditAnswerParams; result: null };
+	/**
+	 * 범위(와 그 자리의 진단)의 코드 액션(`textDocument/codeAction`). 선호 액션이 먼저다.
+	 */
+	"lsp.codeAction.list": { params: LspCodeActionListParams; result: LspCodeActionList };
+	/**
+	 * 코드 액션 하나의 편집 · 명령. 편집이 없고 서버가 `codeAction/resolve` 를 하면 묻는다.
+	 */
+	"lsp.codeAction.resolve": { params: LspCodeActionResolveParams; result: LspCodeActionResolved };
+	/**
+	 * 서버 명령(`workspace/executeCommand`)을 돌린다. 그동안 그 서버가 거는 `workspace/applyEdit` 만 이 창에 이벤트
+	 * `lsp.applyEdit`(흐름 id 실림)로 넘어오고, 창은 `lsp.applyEdit.answer` 로 답한다(결정 M4-D15).
+	 */
+	"lsp.command.execute": { params: LspCommandExecuteParams; result: LspCommandExecuted };
+	/**
 	 * 문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고
 	 * 끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈
 	 * 칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.
@@ -613,6 +630,16 @@ export type UnaryMethods = {
 	 * 저장을 알린다(`didSave` — 서버가 원하면 텍스트 포함). 없는 문서는 not found.
 	 */
 	"lsp.document.save": { params: LspDocumentRef; result: null };
+	/**
+	 * rename 의 편집(`textDocument/rename`). 쓰지 않는다 — 웹뷰의 적용기가 미리 확인 · 미리보기 · 쓰기를 한다(결정 M4-D14). 서버가
+	 * 이름을 거절하면 5002(서버의 글). 받을 수 없는 편집(루트 밖 스킴 · `.git` · 상한)은 5120.
+	 */
+	"lsp.rename": { params: LspRenameParams; result: LspEditAnswer };
+	/**
+	 * rename 의 대상: 서버의 `prepareRename` 이 준 범위 · 처음 이름. 서버가 `prepareRename` 을 하지 않으면 `default`(웹뷰가 커서의
+	 * 낱말을 쓴다), 그 자리를 바꿀 수 없으면 `invalid`. 맡을 서버가 없으면 5001.
+	 */
+	"lsp.rename.prepare": { params: LspRenamePrepareParams; result: LspRenamePrepared };
 	/**
 	 * 인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시
 	 * 받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.
@@ -1054,11 +1081,17 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lang.detect": {"name":"lang.detect","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"LangDetectParams","output":"LangDetectResult","doc":" 파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·\n 그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.\n","mcp":false,"fileScope":true},
 	"lang.list": {"name":"lang.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"LangList","doc":" 고를 수 있는 언어(상태바의 언어 수동 변경, F4-12)와 언어마다의 줄 주석. 앱이 시작할 때 읽은 확장 레지스트리 기준이다.\n","mcp":false,"fileScope":true},
 	"log.write": {"name":"log.write","kind":"unary","tier":"write","roles":["owner"],"params":"UiLogBatch","output":"()","doc":" UI(웹뷰)가 남긴 로그를 UI 로그 파일(`$STATE/logs/ui.<날짜>.log`)에 쓴다. 웹뷰는 항목을 모아 묶음으로 보낸다.\n 한 번에 200개, 메시지 하나에 8 KiB 까지 받고 넘는 것은 버리거나 자른다.\n","mcp":false,"fileScope":true},
+	"lsp.applyEdit.answer": {"name":"lsp.applyEdit.answer","kind":"unary","tier":"write","roles":["owner"],"params":"LspApplyEditAnswerParams","output":"()","doc":" `lsp.applyEdit` 이벤트에 답한다(그 명령을 부른 연결만).\n","mcp":false,"fileScope":false},
+	"lsp.codeAction.list": {"name":"lsp.codeAction.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspCodeActionListParams","output":"LspCodeActionList","doc":" 범위(와 그 자리의 진단)의 코드 액션(`textDocument/codeAction`). 선호 액션이 먼저다.\n","mcp":false,"fileScope":false},
+	"lsp.codeAction.resolve": {"name":"lsp.codeAction.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"LspCodeActionResolveParams","output":"LspCodeActionResolved","doc":" 코드 액션 하나의 편집 · 명령. 편집이 없고 서버가 `codeAction/resolve` 를 하면 묻는다.\n","mcp":false,"fileScope":false},
+	"lsp.command.execute": {"name":"lsp.command.execute","kind":"unary","tier":"write","roles":["owner"],"params":"LspCommandExecuteParams","output":"LspCommandExecuted","doc":" 서버 명령(`workspace/executeCommand`)을 돌린다. 그동안 그 서버가 거는 `workspace/applyEdit` 만 이 창에 이벤트\n `lsp.applyEdit`(흐름 id 실림)로 넘어오고, 창은 `lsp.applyEdit.answer` 로 답한다(결정 M4-D15).\n","mcp":false,"fileScope":false},
 	"lsp.document.capabilities": {"name":"lsp.document.capabilities","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"LspDocumentCapabilities","doc":" 문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(웹뷰의 기능 칸). 고르는 규칙은 기능 요청과 같다(능력이 있고\n 끄지 않은, 떠서 그 문서를 받은 첫 서버 — 결정 M4-D12). 진단은 넣지 않는다. 서버를 띄우지 않는다 — 아직 뜨지 않았으면 빈\n 칸이고 `lsp.status` 이벤트 뒤 다시 묻는다. 없는 문서 · 다른 연결의 문서는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.document.change": {"name":"lsp.document.change","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentChangeParams","output":"LspDocumentChangeResult","doc":" 문서에 편집을 적용하고 떠 있는 서버에 `didChange` 를 보낸다(서버가 `Incremental` 이면 증분, 아니면 전체). 서버를 띄우지\n 않는다. 없는 문서 · 다른 연결의 문서는 not found, 지난 버전 · 빠진 편집은 conflict(`data.version` 에 지금 버전 — 다시 연다),\n 범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다).\n","mcp":false,"fileScope":false},
 	"lsp.document.close": {"name":"lsp.document.close","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"()","doc":" 문서를 닫는다(`didClose`). 인스턴스의 마지막 문서면 유휴 시한(`[lsp] idle_shutdown_minutes`, 기본 10분) 뒤 서버를 끝낸다.\n 없는 id 도 성공이다.\n","mcp":false,"fileScope":false},
 	"lsp.document.open": {"name":"lsp.document.open","kind":"unary","tier":"exec","roles":["owner"],"params":"LspDocumentOpenParams","output":"LspDocumentOpened","doc":" 문서를 연다: Host 가 텍스트를 쥐고, 그 언어의 서버 인스턴스마다(없으면 띄운다 — 지연 기동) `didOpen` 을 보낸다. 그 프로젝트\n 창의 연결만 부를 수 있다(다른 창 · 웰컴 · 설정 · 파일 창은 permission denied — 서버를 띄우지 않는다). 미신뢰 프로젝트는 띄우지\n 않고 인스턴스 상태 `untrusted` 로 답한다. 편집 등급 밖 · 서버 없는 언어는 `off`. 경로가 프로젝트 루트 밖이면 invalid params.\n","mcp":false,"fileScope":false},
 	"lsp.document.save": {"name":"lsp.document.save","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"()","doc":" 저장을 알린다(`didSave` — 서버가 원하면 텍스트 포함). 없는 문서는 not found.\n","mcp":false,"fileScope":false},
+	"lsp.rename": {"name":"lsp.rename","kind":"unary","tier":"read","roles":["owner"],"params":"LspRenameParams","output":"LspEditAnswer","doc":" rename 의 편집(`textDocument/rename`). 쓰지 않는다 — 웹뷰의 적용기가 미리 확인 · 미리보기 · 쓰기를 한다(결정 M4-D14). 서버가\n 이름을 거절하면 5002(서버의 글). 받을 수 없는 편집(루트 밖 스킴 · `.git` · 상한)은 5120.\n","mcp":false,"fileScope":false},
+	"lsp.rename.prepare": {"name":"lsp.rename.prepare","kind":"unary","tier":"read","roles":["owner"],"params":"LspRenamePrepareParams","output":"LspRenamePrepared","doc":" rename 의 대상: 서버의 `prepareRename` 이 준 범위 · 처음 이름. 서버가 `prepareRename` 을 하지 않으면 `default`(웹뷰가 커서의\n 낱말을 쓴다), 그 자리를 바꿀 수 없으면 `invalid`. 맡을 서버가 없으면 5001.\n","mcp":false,"fileScope":false},
 	"lsp.server.restart": {"name":"lsp.server.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 다시 띄운다(떠 있으면 끝내고). 죽음 기록을 비운다 — `crashed` · `stopped` 에서 다시 띄우는 길이다. 허가를 다시\n 받는다(미신뢰면 `untrusted`). 그 프로젝트 창의 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.server.stop": {"name":"lsp.server.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의\n 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.servers.list": {"name":"lsp.servers.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspServersListParams","output":"LspServerList","doc":" 언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params\n 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).\n","mcp":false,"fileScope":false},
@@ -4835,6 +4868,88 @@ export type LogRow = {
 	graph: GraphRow | null,
 };
 
+export type LspApplyEditAnswerParams = {
+	flowId: string,
+	requestId: number,
+	applied: boolean,
+	failureReason?: string | null,
+};
+
+/**  코드 액션 하나(`CodeAction` 또는 `Command`). */
+export type LspCodeActionItem = {
+	title: string,
+	kind: string | null,
+	isPreferred: boolean,
+	/**  서버가 지금은 못 한다고 한 까닭(`disabled.reason`). 목록에 흐리게 보인다. */
+	disabled: string | null,
+	/**  서버가 준 그대로 — `lsp.codeAction.resolve` 에 돌려준다. */
+	raw: JsonValue,
+};
+
+export type LspCodeActionList = {
+	server: string,
+	staleVersion: boolean,
+	/**  선호 액션(`isPreferred`) 먼저, 나머지는 서버가 준 차례. */
+	actions: LspCodeActionItem[],
+	/**  [`MAX_CODE_ACTIONS`] · [`MAX_CODE_ACTION_BYTES`] 로 버린 것이 있다. */
+	truncated: boolean,
+};
+
+export type LspCodeActionListParams = {
+	docId: string,
+	version: number,
+	/**  선택 범위(웹뷰 오프셋). 커서뿐이면 `from == to`. */
+	from: number,
+	to: number,
+	diagnostics?: LspContextDiagnostics | null,
+	/**  이 종류만(`quickfix` · `refactor` · `source` …). 없으면 모두. */
+	only?: string[] | null,
+	trigger?: LspCodeActionTrigger,
+};
+
+export type LspCodeActionResolveParams = {
+	docId: string,
+	/**  [`LspCodeActionItem::raw`] 그대로. */
+	action: JsonValue,
+};
+
+export type LspCodeActionResolved = {
+	server: string,
+	/**  적용할 편집(없으면 명령만). */
+	edit: LspWorkspaceEdit | null,
+	/**  편집 뒤 돌릴 명령(`Command` — `lsp.command.execute` 에 그대로). */
+	command: JsonValue | null,
+};
+
+/**  코드 액션을 부른 까닭(LSP `CodeActionTriggerKind`). */
+export type LspCodeActionTrigger = 
+/**  사람이 불렀다(`⌥↩` · 「빠른 수정」). */
+"invoked" | 
+/**  저절로(커서가 멈춘 뒤의 전구). */
+"automatic";
+
+export type LspCommandExecuteParams = {
+	docId: string,
+	/**  이 명령의 흐름 id(웹뷰가 정한다). 그 처리 중에 서버가 건 편집의 이벤트에 실린다. */
+	flowId: string,
+	/**  서버가 준 `Command`(`{ title, command, arguments? }`). */
+	command: JsonValue,
+};
+
+export type LspCommandExecuted = {
+	server: string,
+	result: JsonValue,
+};
+
+/**
+ *  코드 액션 요청에 실을 진단(부른 쪽이 준 서버의 `Diagnostic` 그대로). `version` 은 그 진단이 맞는 문서 버전 — 요청의 버전과
+ *  다르면 버린다(위치가 어긋난 진단은 서버가 다른 수정을 고른다).
+ */
+export type LspContextDiagnostics = {
+	version: number,
+	items: JsonValue[],
+};
+
 /**  `lsp.document.capabilities` 의 결과. */
 export type LspDocumentCapabilities = {
 	/**  맡을 서버가 있는 기능만(진단은 넣지 않는다). 키는 `LspFeature` 이름(`hover` · `completion` …). */
@@ -4888,6 +5003,13 @@ export type LspDocumentRef = {
 	docId: string,
 };
 
+/**  서버가 계산한 편집(rename · 코드 액션 resolve). */
+export type LspEditAnswer = {
+	server: string,
+	staleVersion: boolean,
+	edit: LspWorkspaceEdit,
+};
+
 /**  서버에 맡기는 기능의 이름(`features.disable` 의 값). 서버 관리자의 기능 라우팅(결정 M4-D12)이 쓴다. */
 export type LspFeature = "diagnostics" | "hover" | "definition" | "implementation" | "references" | "document_symbol" | "workspace_symbol" | "completion" | "signature_help" | "rename" | "code_action" | "formatting";
 
@@ -4903,6 +5025,14 @@ export type LspFeatureCapability = {
 	/**  옵션이 [`OPTIONS_LIMIT`] 를 넘어 비웠다. */
 	optionsTruncated: boolean,
 };
+
+/**  파일 하나의 바뀜. 목록의 차례대로 적용한다(LSP `documentChanges` 의 차례). */
+export type LspFileChange = 
+/**
+ *  텍스트 바꾸기. `version` 은 서버가 이 편집을 계산한 문서 버전(`TextDocumentEdit.textDocument.version` — 열린 문서면 웹뷰가
+ *  보낸 버전이다). 없으면 서버가 디스크(또는 버전 없이 받은 텍스트)를 기준으로 했다.
+ */
+{ kind: "text"; path: string; version: number | null; edits: LspTextEdit[] } | { kind: "create"; path: string; overwrite: boolean; ignoreIfExists: boolean } | { kind: "rename"; from: string; to: string; overwrite: boolean; ignoreIfExists: boolean } | { kind: "delete"; path: string; recursive: boolean; ignoreIfNotExists: boolean };
 
 /**  인스턴스의 상태. */
 export type LspInstanceState = 
@@ -4940,6 +5070,12 @@ export type LspInstanceStatus = {
 	progress: LspProgress | null,
 };
 
+/**  LSP 위치(줄 · UTF-16 글자 — 결정 M4-D10). 서버가 준 그대로다. */
+export type LspPosition = {
+	line: number,
+	character: number,
+};
+
 /**  서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`). */
 export type LspProgress = {
 	title: string,
@@ -4947,6 +5083,42 @@ export type LspProgress = {
 	/**  0 ~ 100. 서버가 모르면 없다. */
 	percentage: number | null,
 };
+
+export type LspRange = {
+	start: LspPosition,
+	end: LspPosition,
+};
+
+export type LspRenameParams = {
+	docId: string,
+	version: number,
+	offset: number,
+	newName: string,
+};
+
+/**  문서의 한 자리(웹뷰의 UTF-16 오프셋 — 결정 M4-D10). */
+export type LspRenamePrepareParams = {
+	docId: string,
+	/**  웹뷰가 오프셋을 잰 문서 버전. */
+	version: number,
+	offset: number,
+};
+
+/**  `lsp.rename.prepare` 의 결과. */
+export type LspRenamePrepared = {
+	server: string,
+	/**  묻는 사이 문서가 바뀌었다 — 버린다. */
+	staleVersion: boolean,
+	target: LspRenameTarget,
+};
+
+export type LspRenameTarget = 
+/**  바꿀 범위(웹뷰 오프셋)와 서버가 권한 처음 이름. */
+{ kind: "range"; from: number; to: number; placeholder: string | null } | 
+/**  서버가 범위를 정하지 않는다(`prepareRename` 이 없거나 `defaultBehavior`) — 웹뷰가 커서의 낱말을 쓴다. */
+{ kind: "default" } | 
+/**  이 자리는 이름을 바꿀 수 없다. `message` 는 서버가 준 까닭(있으면). */
+{ kind: "invalid"; message: string | null };
 
 /**  해석 결과. */
 export type LspResolution = { kind: "found"; 
@@ -5057,6 +5229,17 @@ export type LspTextChange = {
 	from: number,
 	to: number,
 	insert: string,
+};
+
+/**  텍스트 바꾸기 하나(`TextEdit`). 한 파일의 바꾸기들은 모두 같은 텍스트(바꾸기 전) 기준이고 겹치지 않는다(LSP 규칙). */
+export type LspTextEdit = {
+	range: LspRange,
+	newText: string,
+};
+
+/**  고르게 바꾼 `WorkspaceEdit`. */
+export type LspWorkspaceEdit = {
+	changes: LspFileChange[],
 };
 
 export type MergeLines = {

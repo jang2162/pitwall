@@ -18,6 +18,7 @@
 pub mod bridge;
 pub mod capabilities;
 pub mod document;
+pub mod edit;
 pub mod fake;
 pub mod grant;
 pub mod handlers;
@@ -50,4 +51,5 @@ pub use server::{
 pub fn register(router: &mut pw_rpc::Router, manager: &LspManager) {
     methods::register(router, manager);
     bridge::register(router, manager);
+    edit::register(router, manager);
 }
