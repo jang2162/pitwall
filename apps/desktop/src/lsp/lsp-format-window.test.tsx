@@ -20,6 +20,7 @@ import type {
   ProjectTrust,
 } from "@pitwall/rpc-client";
 import { createRoot, type Root } from "react-dom/client";
+import { toast } from "sonner";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
@@ -454,15 +455,15 @@ const formatted = (edits: unknown[] = [WHOLE]) => ({
   edits,
 });
 
-/** 시험에서 새로 뜬 토스트 글(sonner 의 토스트는 앞 시험의 것이 전역에 남는다). */
-function toasts() {
-  const before = new Set(
-    [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent ?? ""),
-  );
+/**
+ * 이 뒤로 뜬 토스트 글. sonner 의 토스트는 앞 시험의 것이 전역에 남고, 같은 알림(같은 등급 · 제목 — 같은 토스트 id)은 그 토스트를
+ * 다시 그려 「새로 뜬 것」 으로 보이지 않는다 — 그래서 먼저 모두 닫고 사라질 때까지 기다린다.
+ */
+async function toasts() {
+  await act(async () => void toast.dismiss());
+  await until(() => document.querySelectorAll("[data-sonner-toast]").length === 0);
   return () =>
-    [...document.querySelectorAll("[data-sonner-toast]")]
-      .map((t) => t.textContent ?? "")
-      .filter((t) => !before.has(t));
+    [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent ?? "");
 }
 
 const placeCursor = (anchor: number, head = anchor) =>
@@ -516,7 +517,7 @@ it("leaves the document as it was and says so when formatting runs past the time
     });
   });
   await openMain();
-  const fresh = toasts();
+  const fresh = await toasts();
   await formatKey();
   await until(() => fresh().some((t) => t.includes("10초 안에 끝나지 않아")));
   expect(view().state.doc.toString()).toBe(MAIN_TEXT);
@@ -527,7 +528,7 @@ it("does not put a late answer into a document that changed while formatting", a
   let answer!: (value: unknown) => void;
   host.lsp!.handle("lsp.format", () => new Promise((resolve) => (answer = resolve)));
   await openMain();
-  const fresh = toasts();
+  const fresh = await toasts();
   await formatKey();
   await until(() => host.lsp!.called("call:lsp.format").length === 1);
   // 답을 기다리는 사이 사람이 친다.
@@ -543,7 +544,7 @@ it("does not put a late answer into a document that changed while formatting", a
 it("says there is no formatter when the running server cannot format", async () => {
   host.lsp!.handle("lsp.format", async () => formatted());
   await openMain({ rename: FEATURES.rename });
-  const fresh = toasts();
+  const fresh = await toasts();
   await formatKey();
   await until(() => fresh().some((t) => t.includes("이 언어의 포매터가 없다")));
   expect(host.lsp!.called("call:lsp.format")).toEqual([]);
@@ -555,7 +556,7 @@ it("stays quiet without a server for the document (an untrusted project starts n
   await mount();
   await open(MAIN, 1, 5);
   await act(async () => view().focus());
-  const fresh = toasts();
+  const fresh = await toasts();
   await formatKey();
   expect(host.lsp!.called("call:lsp.format")).toEqual([]);
   expect(view().state.doc.toString()).toBe(MAIN_TEXT);
