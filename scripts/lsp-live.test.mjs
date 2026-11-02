@@ -46,7 +46,7 @@ test("the config has a floor, capabilities and a pinned download for every serve
     /has no \[capabilities\] rust_analyzer/,
   );
   assert.throws(
-    () => readConfig(configText.replace(/^typescript_language_server = 1$/m, "")),
+    () => readConfig(configText.replace(/^typescript_language_server = \d+$/m, "")),
     /has no \[floors\] typescript_language_server/,
   );
   assert.throws(
