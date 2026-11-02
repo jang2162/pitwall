@@ -7,6 +7,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use pw_core::bus::EventBus;
+use pw_core::registry::Registry;
 use pw_lsp_servers::ServerConfig;
 use serde_json::Value;
 
@@ -22,6 +24,10 @@ pub struct HandlerContext {
     pub root: PathBuf,
     /// 띄울 때의 합친 설정(M4-02). 설정이 바뀌면 인스턴스는 `restartNeeded` 이고, 다시 띄울 때 새 값이 든다.
     pub config: Arc<ServerConfig>,
+    /// 처리기가 웹뷰에 이벤트를 낼 버스(`window/showDocument` — M4-08). 관리자가 붙기 전에 만든 문맥이면 없다.
+    pub bus: Option<EventBus>,
+    /// 프로젝트 레지스트리(처리기가 신뢰를 다시 본다 — M4-08). 없으면 신뢰를 요구하는 처리기는 거절한다.
+    pub projects: Option<Registry>,
 }
 
 /// 인스턴스 하나의 처리기 표.

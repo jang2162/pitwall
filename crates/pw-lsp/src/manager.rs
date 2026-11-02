@@ -57,7 +57,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::document::{DocText, LspTextChange, OverLimit};
-use crate::grant::{lsp_grant, real_path};
+use crate::grant::{LspGrant, lsp_grant, real_path};
 use crate::handlers::{HandlerContext, server_handlers};
 use crate::ledger::{Ledger, ledger_dir};
 use crate::log::{ServerLog, lsp_log_dir};
@@ -1087,6 +1087,8 @@ impl LspManager {
             server: key.server.clone(),
             root: key.root.clone(),
             config: Arc::clone(&config),
+            bus: Some(host.parts.bus.clone()),
+            projects: Some(host.parts.projects.clone()),
         });
         let spawned = LanguageServer::spawn(
             &grant,
@@ -2008,6 +2010,103 @@ impl LspManager {
 }
 
 impl LspManager {
+    /// 인스턴스 `key` 의 허가를 다시 받는다(M4-08 — 루트 밖 문서의 토큰 길, 메인 판정 2026-11-02): `lsp_grant`(그 프로젝트 창의
+    /// 연결인가 · 지금 신뢰하는가)를 지나고, 허가의 루트가 인스턴스의 작업 공간 루트를 품고, 그 인스턴스가 떠 있고, 부른 연결이 그
+    /// 인스턴스에 문서를 연 적이 있을(`holders`) 때만. 아니면 permission denied · untrusted · not found(`NO_SERVER`).
+    pub fn instance_grant(&self, ctx: &Ctx, key: &InstanceKey) -> Result<LspGrant, RpcError> {
+        let host = self.host()?;
+        let grant = lsp_grant(
+            ctx.scope(),
+            ctx.connection_closed(),
+            &host.parts.projects,
+            &key.project_id,
+            key.worktree.as_deref(),
+        )?;
+        if !key.root.starts_with(grant.root()) {
+            return Err(RpcError::new(
+                rpc_code::PERMISSION_DENIED,
+                "the language server instance is not under this window's root",
+            ));
+        }
+        let state = lock(&self.inner.state);
+        let instance = state
+            .instances
+            .get(key)
+            .filter(|i| i.state.is_running() && i.server.is_some())
+            .ok_or_else(|| {
+                RpcError::new(code::NO_SERVER, "the language server is not running")
+                    .with_data(json!({ "server": key.server }))
+            })?;
+        if !instance.holders.contains(&ctx.session()) {
+            return Err(RpcError::new(
+                rpc_code::PERMISSION_DENIED,
+                "this connection has no document in that language server",
+            ));
+        }
+        Ok(grant)
+    }
+
+    /// 문서 없이 인스턴스 `key` 의 서버에 묻는다(M4-08 — 루트 밖 문서 안의 hover · 정의, `jdt://` 의 `java/classFileContents`).
+    /// 허가는 [`Self::instance_grant`] 그대로(부를 때마다 다시 본다). 오류의 꼴은 [`Self::request`] 와 같다(`ContentModified` ·
+    /// `ServerCancelled` 는 한 번 다시 묻는다).
+    pub async fn request_instance(
+        &self,
+        ctx: &Ctx,
+        key: &InstanceKey,
+        method: &str,
+        params: Value,
+        timeout: Option<Duration>,
+    ) -> Result<Value, RpcError> {
+        let mut retried = false;
+        loop {
+            drop(self.instance_grant(ctx, key)?);
+            let server = lock(&self.inner.state)
+                .instances
+                .get(key)
+                .and_then(|i| i.server.clone())
+                .ok_or_else(|| {
+                    RpcError::new(code::NO_SERVER, "the language server is not running")
+                })?;
+            let options = RequestOptions {
+                timeout: timeout.unwrap_or(crate::server::DEFAULT_REQUEST_TIMEOUT),
+                cancel: ctx.cancellation().clone(),
+            };
+            match server.request_raw(method, params.clone(), options).await {
+                Ok(result) => return Ok(result),
+                Err(RequestError::Server(e))
+                    if !retried
+                        && (e.code == lsp_code::CONTENT_MODIFIED
+                            || e.code == lsp_code::SERVER_CANCELLED) =>
+                {
+                    retried = true;
+                }
+                Err(RequestError::Server(e)) => {
+                    return Err(
+                        RpcError::new(code::SERVER_ERROR, e.message.clone()).with_data(
+                            json!({ "server": key.server, "code": e.code, "message": e.message }),
+                        ),
+                    );
+                }
+                Err(RequestError::Cancelled) => {
+                    return Err(RpcError::new(
+                        rpc_code::CANCELLED,
+                        "the request was cancelled",
+                    ));
+                }
+                Err(
+                    e
+                    @ (RequestError::Timeout | RequestError::Closed(_) | RequestError::Refused(_)),
+                ) => {
+                    return Err(RpcError::new(code::SERVER_UNAVAILABLE, e.to_string())
+                        .with_data(json!({ "server": key.server, "reason": e.to_string() })));
+                }
+                Err(RequestError::Decode(e)) => return Err(RpcError::internal(e)),
+            }
+        }
+    }
+}
+
+impl LspManager {
     /// 문서의 기능마다 그 기능을 맡을 서버와 그 서버가 알린 능력(`routes` 의 (기능, 메서드)마다 — 웹뷰 다리 M4-07 의
     /// `lsp.document.capabilities`). 고르는 규칙은 요청 길(`request`)과 같은 [`route`] 다 — 떠서 그 문서를 동기화한, 능력이
     /// 있고 끄지 않은 첫 서버(결정 M4-D12). 능력은 그 메서드의 첫 동적 등록의 옵션, 없으면 정적 능력 칸(`hoverProvider` 등)
@@ -2230,7 +2329,8 @@ impl DocView {
 #[derive(Debug, Clone)]
 pub struct FeatureAnswer {
     pub result: Value,
-    /// 답한 인스턴스(M4-12 — 편집이 건드리는 파일을 그 인스턴스가 다른 창의 텍스트로 갖고 있는지 [`LspManager::foreign_paths`] 로 본다).
+    /// 답한 인스턴스(M4-12 — 편집이 건드리는 파일을 그 인스턴스가 다른 창의 텍스트로 갖고 있는지 [`LspManager::foreign_paths`] 로 본다.
+    /// M4-08 — 루트 밖 문서(결정 M4-D13)가 그 문서 안의 요청을 같은 서버에 묻는다, [`LspManager::request_instance`]).
     pub key: InstanceKey,
     /// 답한 서버 id.
     pub server: String,
