@@ -8,6 +8,7 @@
 
 import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { ActionRegistry } from "@pitwall/keymap";
 import type {
   ConfigView,
   JsonValue,
@@ -726,6 +727,38 @@ it("opens a location inside the root from an outside tab in the worktree its tok
   );
   expect(reads.length).toBeGreaterThan(0);
   expect(reads.every((c) => (c.params as { worktree: string | null }).worktree === WT)).toBe(true);
+});
+
+it("does not ask git for the history of an outside source tab (review L6)", async () => {
+  const registries = new Set<ActionRegistry>();
+  const register = ActionRegistry.prototype.register;
+  vi.spyOn(ActionRegistry.prototype, "register").mockImplementation(function (
+    this: ActionRegistry,
+    action,
+  ) {
+    registries.add(this);
+    return register.call(this, action);
+  });
+  serve();
+  host.lsp!.handle("lsp.definition", async () => answer(loc(VEC, 1, 12, 15, "x", "tok-l6")));
+  host.lsp!.handle("lsp.document.read", async () => ({
+    text: "pub struct Vec;\n",
+    uri: `file://${VEC}`,
+    path: VEC,
+    server: "rust-analyzer",
+  }));
+  await mount();
+  await open(MAIN, 1, 1);
+  await caret(2, 6);
+  await cmd("KeyB", "b");
+  await settle();
+  expect(here().path).toBe(VEC);
+  const registry = [...registries].find((r) => r.get("git.showFileHistory"))!;
+  const before = host.calls.length;
+  await act(async () => void registry.run("git.showFileHistory"));
+  await settle();
+  // 파일이 아니다 — 「히스토리를 볼 파일이 없다」 로 끝나고 가짜 경로(`lsp:outside:…`)로 git 에 묻지 않는다.
+  expect(host.calls.slice(before).map((c) => c.method)).toEqual([]);
 });
 
 it("does not open an outside tab when the token cannot be read", async () => {

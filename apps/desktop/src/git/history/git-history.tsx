@@ -14,7 +14,7 @@
 import type { Action } from "@pitwall/keymap";
 import { useMemo, useRef } from "react";
 
-import { isGitTab, tabParams } from "../../editor/editor-tabs";
+import { isFileTab, tabParams } from "../../editor/editor-tabs";
 import type { EditorWorkspace } from "../../editor/editor-workspace";
 import type { FileTreeModel } from "../../file-tree/tree-model";
 import { treeScope, windowFileTree } from "../../file-tree/project-view";
@@ -67,7 +67,7 @@ export function nestedRepository(tree: FileTreeModel, path: string): string | un
   return undefined;
 }
 
-/** 인자 없이 부른 때의 파일: 트리에 포커스가 있으면 고른 항목, 아니면 활성 에디터 탭(git 문서 탭은 파일이 아니다). */
+/** 인자 없이 부른 때의 파일: 트리에 포커스가 있으면 고른 항목, 아니면 활성 에디터 탭(git 문서 · DB · 외부 소스 탭은 파일이 아니다). */
 function currentTarget(workspace: EditorWorkspace): HistoryTarget | undefined {
   const focused = document.activeElement
     ?.closest("[data-tool-window]")
@@ -80,7 +80,7 @@ function currentTarget(workspace: EditorWorkspace): HistoryTarget | undefined {
     return { path, worktree: treeScope.getState().worktree, dir: entry?.dir };
   }
   const tab = workspace.activeTab();
-  if (!tab || isGitTab(tab)) return undefined;
+  if (!tab || !isFileTab(tab)) return undefined;
   const { path, worktree } = tabParams(tab);
   return { path, worktree };
 }
