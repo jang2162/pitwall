@@ -338,6 +338,7 @@ mod tests {
                 ("lsp.server.restart", Tier::Exec, false, false),
                 ("lsp.server.stop", Tier::Exec, false, false),
                 ("lsp.status.get", Tier::Read, false, false),
+                ("lsp.symbols.document", Tier::Read, false, false),
                 ("lsp.typeDefinition", Tier::Read, false, false),
             ]
         );

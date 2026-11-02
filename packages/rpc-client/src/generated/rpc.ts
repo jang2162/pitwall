@@ -685,6 +685,12 @@ export type UnaryMethods = {
 	 */
 	"lsp.status.get": { params: LspStatusGetParams; result: LspStatus };
 	/**
+	 * 문서의 심볼(구조 툴 윈도우 · 파일 구조 팝업 — M4-10). 서버의 계층 · 평면 답을 평면 목록 + 부모 색인으로 바꾼다(위치는
+	 * UTF-16 오프셋). 맡을 서버가 없으면(서버 없음 · 준비 전 · 미신뢰) `5001` — 웹뷰는 `index.file.symbols` 로 대신한다. 없는
+	 * 문서 · 다른 연결의 문서는 not found. 서버를 띄우지 않는다.
+	 */
+	"lsp.symbols.document": { params: LspSymbolsDocumentParams; result: LspDocumentSymbols };
+	/**
 	 * 타입 정의로(`textDocument/typeDefinition`).
 	 */
 	"lsp.typeDefinition": { params: LspPositionParams; result: LspLocationsResult };
@@ -1130,6 +1136,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.server.stop": {"name":"lsp.server.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"LspServerControlParams","output":"LspInstanceStatus","doc":" 인스턴스를 끝내고 `stopped` 로 둔다 — 문서를 다시 열어도 띄우지 않는다(`lsp.server.restart` 로 다시). 그 프로젝트 창의\n 연결만. 없는 인스턴스는 not found.\n","mcp":false,"fileScope":false},
 	"lsp.servers.list": {"name":"lsp.servers.list","kind":"unary","tier":"read","roles":["owner"],"params":"LspServersListParams","output":"LspServerList","doc":" 언어 서버 정의와 그 프로젝트에서의 해석 결과 · 합친 설정. 없는 프로젝트 · 그 프로젝트의 것이 아닌 워크트리는 invalid params\n 오류. 신뢰한 프로젝트에서 rustup 프록시를 확인하느라 `rustup which` 를 돌릴 수 있다(결정 M4-D7).\n","mcp":false,"fileScope":false},
 	"lsp.status.get": {"name":"lsp.status.get","kind":"unary","tier":"read","roles":["owner"],"params":"LspStatusGetParams","output":"LspStatus","doc":" 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다. 그 프로젝트 창의 연결만(다른 연결은\n permission denied).\n","mcp":false,"fileScope":false},
+	"lsp.symbols.document": {"name":"lsp.symbols.document","kind":"unary","tier":"read","roles":["owner"],"params":"LspSymbolsDocumentParams","output":"LspDocumentSymbols","doc":" 문서의 심볼(구조 툴 윈도우 · 파일 구조 팝업 — M4-10). 서버의 계층 · 평면 답을 평면 목록 + 부모 색인으로 바꾼다(위치는\n UTF-16 오프셋). 맡을 서버가 없으면(서버 없음 · 준비 전 · 미신뢰) `5001` — 웹뷰는 `index.file.symbols` 로 대신한다. 없는\n 문서 · 다른 연결의 문서는 not found. 서버를 띄우지 않는다.\n","mcp":false,"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":false,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":false,"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":false,"fileScope":false},
@@ -5056,6 +5063,17 @@ export type LspDocumentRef = {
 	docId: string,
 };
 
+export type LspDocumentSymbols = {
+	/**  앞에서부터(부모가 자식보다 앞) — 같은 부모의 자식은 서버가 준 차례. */
+	symbols: LspOutlineSymbol[],
+	/**  답한 서버 id. */
+	server: string,
+	/**  요청 사이에 문서가 바뀌었다 — 오프셋이 지금 문서와 어긋날 수 있다(웹뷰는 버린다). */
+	staleVersion: boolean,
+	/**  상한(수 · 깊이)에 걸려 일부를 버렸다. */
+	truncated: boolean,
+};
+
 /**  서버가 계산한 편집(rename · 코드 액션 resolve). */
 export type LspEditAnswer = {
 	server: string,
@@ -5167,6 +5185,26 @@ export type LspLocationsResult = {
 
 /**  hover 본문의 꼴. */
 export type LspMarkupKind = "markdown" | "plaintext";
+
+/**  아웃라인의 심볼 하나. */
+export type LspOutlineSymbol = {
+	/**  서버가 준 이름(글로만 그린다 — HTML 로 해석하지 않는다). [`MAX_TEXT`] 바이트까지. */
+	name: string,
+	/**  서버가 준 세부(시그니처 · 타입 등). 없으면 `None`. */
+	detail: string | null,
+	/**  LSP `SymbolKind`(1 `File` ~ 26 `TypeParameter`). 범위 밖이면 0. */
+	kind: number,
+	/**  서버가 낡았다고 알렸다(`deprecated` · 태그 1). */
+	deprecated: boolean,
+	/**  부모의 색인(이 목록 안 — 늘 자기보다 앞). 맨 위면 `None`. */
+	parent: number | null,
+	/**  심볼 전체 범위(UTF-16 오프셋, 끝 제외). */
+	from: number,
+	to: number,
+	/**  이름 자리(고르면 커서가 가는 곳). 평면 답은 범위의 처음이다. */
+	selectionFrom: number,
+	selectionTo: number,
+};
 
 /**  LSP 위치(줄 · UTF-16 글자 — 결정 M4-D10). 서버가 준 그대로다. */
 export type LspPosition = {
@@ -5359,6 +5397,12 @@ export type LspStatus = {
 
 export type LspStatusGetParams = {
 	projectId: string,
+};
+
+export type LspSymbolsDocumentParams = {
+	docId: string,
+	/**  웹뷰가 요청을 만든 문서 버전. 요청을 보낼 때의 문서와 다르면 답에 `staleVersion`. */
+	version?: number | null,
 };
 
 /**  바꾸기 하나(UTF-16 범위 — `syntax.edit` 의 `TextChange` 와 같은 꼴). */

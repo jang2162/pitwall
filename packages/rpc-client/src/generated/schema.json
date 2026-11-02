@@ -28145,6 +28145,138 @@
       ],
       "tier": "read"
     },
+    "lsp.symbols.document": {
+      "description": "문서의 심볼(구조 툴 윈도우 · 파일 구조 팝업 — M4-10). 서버의 계층 · 평면 답을 평면 목록 + 부모 색인으로 바꾼다(위치는\nUTF-16 오프셋). 맡을 서버가 없으면(서버 없음 · 준비 전 · 미신뢰) `5001` — 웹뷰는 `index.file.symbols` 로 대신한다. 없는\n문서 · 다른 연결의 문서는 not found. 서버를 띄우지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "docId": {
+            "type": "string"
+          },
+          "version": {
+            "default": null,
+            "description": "웹뷰가 요청을 만든 문서 버전. 요청을 보낼 때의 문서와 다르면 답에 `staleVersion`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "docId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LspOutlineSymbol": {
+            "description": "아웃라인의 심볼 하나.",
+            "properties": {
+              "deprecated": {
+                "description": "서버가 낡았다고 알렸다(`deprecated` · 태그 1).",
+                "type": "boolean"
+              },
+              "detail": {
+                "description": "서버가 준 세부(시그니처 · 타입 등). 없으면 `None`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "from": {
+                "description": "심볼 전체 범위(UTF-16 오프셋, 끝 제외).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "description": "LSP `SymbolKind`(1 `File` ~ 26 `TypeParameter`). 범위 밖이면 0.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "description": "서버가 준 이름(글로만 그린다 — HTML 로 해석하지 않는다). [`MAX_TEXT`] 바이트까지.",
+                "type": "string"
+              },
+              "parent": {
+                "description": "부모의 색인(이 목록 안 — 늘 자기보다 앞). 맨 위면 `None`.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "selectionFrom": {
+                "description": "이름 자리(고르면 커서가 가는 곳). 평면 답은 범위의 처음이다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "selectionTo": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "detail",
+              "kind",
+              "deprecated",
+              "parent",
+              "from",
+              "to",
+              "selectionFrom",
+              "selectionTo"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "server": {
+            "description": "답한 서버 id.",
+            "type": "string"
+          },
+          "staleVersion": {
+            "description": "요청 사이에 문서가 바뀌었다 — 오프셋이 지금 문서와 어긋날 수 있다(웹뷰는 버린다).",
+            "type": "boolean"
+          },
+          "symbols": {
+            "description": "앞에서부터(부모가 자식보다 앞) — 같은 부모의 자식은 서버가 준 차례.",
+            "items": {
+              "$ref": "#/$defs/LspOutlineSymbol"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "상한(수 · 깊이)에 걸려 일부를 버렸다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "symbols",
+          "server",
+          "staleVersion",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "lsp.typeDefinition": {
       "description": "타입 정의로(`textDocument/typeDefinition`).",
       "kind": "unary",
