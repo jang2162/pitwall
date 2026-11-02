@@ -668,6 +668,11 @@ export type UnaryMethods = {
 	 */
 	"lsp.document.save": { params: LspDocumentRef; result: null };
 	/**
+	 * 문서(또는 선택 범위)의 포맷 편집. 쓰지 않는다 — 웹뷰가 문서에만 넣는다(저장은 `⌘S`). 맡을 서버가 없으면 5001, 서버 오류는
+	 * 5002, 시한(10 s) · 서버 끝남은 5003(시한이면 `data.timedOut`), 받을 수 없는 결과(상한 · 문서 밖 · 겹침)는 5130.
+	 */
+	"lsp.format": { params: LspFormatParams; result: LspFormatted };
+	/**
 	 * 위치의 hover(결정 M4-D12 의 서버). 문서 또는 루트 밖 문서의 토큰.
 	 */
 	"lsp.hover": { params: LspPositionParams; result: LspHoverResult };
@@ -1166,6 +1171,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.document.open": {"name":"lsp.document.open","kind":"unary","tier":"exec","roles":["owner"],"params":"LspDocumentOpenParams","output":"LspDocumentOpened","doc":" 문서를 연다: Host 가 텍스트를 쥐고, 그 언어의 서버 인스턴스마다(없으면 띄운다 — 지연 기동) `didOpen` 을 보낸다. 그 프로젝트\n 창의 연결만 부를 수 있다(다른 창 · 웰컴 · 설정 · 파일 창은 permission denied — 서버를 띄우지 않는다). 미신뢰 프로젝트는 띄우지\n 않고 인스턴스 상태 `untrusted` 로 답한다. 편집 등급 밖 · 서버 없는 언어는 `off`. 경로가 프로젝트 루트 밖이면 invalid params.\n","mcp":false,"fileScope":false},
 	"lsp.document.read": {"name":"lsp.document.read","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentReadParams","output":"LspDocumentReadResult","doc":" 루트 밖 문서를 읽기 토큰으로 읽는다(결정 M4-D13 — 이 연결이 받은 토큰만, 읽기 전용). 원격 role 로는 열지 않는다.\n","mcp":false,"fileScope":false},
 	"lsp.document.save": {"name":"lsp.document.save","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentRef","output":"()","doc":" 저장을 알린다(`didSave` — 서버가 원하면 텍스트 포함). 없는 문서는 not found.\n","mcp":false,"fileScope":false},
+	"lsp.format": {"name":"lsp.format","kind":"unary","tier":"read","roles":["owner"],"params":"LspFormatParams","output":"LspFormatted","doc":" 문서(또는 선택 범위)의 포맷 편집. 쓰지 않는다 — 웹뷰가 문서에만 넣는다(저장은 `⌘S`). 맡을 서버가 없으면 5001, 서버 오류는\n 5002, 시한(10 s) · 서버 끝남은 5003(시한이면 `data.timedOut`), 받을 수 없는 결과(상한 · 문서 밖 · 겹침)는 5130.\n","mcp":false,"fileScope":false},
 	"lsp.hover": {"name":"lsp.hover","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspHoverResult","doc":" 위치의 hover(결정 M4-D12 의 서버). 문서 또는 루트 밖 문서의 토큰.\n","mcp":false,"fileScope":false},
 	"lsp.implementation": {"name":"lsp.implementation","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 구현으로(`textDocument/implementation`).\n","mcp":false,"fileScope":false},
 	"lsp.references": {"name":"lsp.references","kind":"unary","tier":"read","roles":["owner"],"params":"LspReferencesParams","output":"LspLocationsResult","doc":" 사용처(`textDocument/references`).\n","mcp":false,"fileScope":false},
@@ -5347,6 +5353,32 @@ export type LspFileChange =
 { kind: "text"; path: string; version: number | null; edits: LspTextEdit[]; 
 /**  편집을 계산한 서버가 이 파일을 다른 창(연결)의 문서 텍스트로 갖고 있다 — 웹뷰는 아무것도 쓰지 않는다(머리 주석). */
 foreign: boolean } | { kind: "create"; path: string; overwrite: boolean; ignoreIfExists: boolean } | { kind: "rename"; from: string; to: string; overwrite: boolean; ignoreIfExists: boolean } | { kind: "delete"; path: string; recursive: boolean; ignoreIfNotExists: boolean };
+
+/**  서버에 보내는 포맷 옵션(`FormattingOptions` 의 두 칸만). */
+export type LspFormatOptions = {
+	tabSize: number,
+	insertSpaces: boolean,
+};
+
+export type LspFormatParams = {
+	docId: string,
+	/**  웹뷰가 범위 · 옵션을 잰 문서 버전. */
+	version: number,
+	/**  선택 범위. 없으면 문서 전체. */
+	range?: LspOffsetRange | null,
+	options: LspFormatOptions,
+};
+
+export type LspFormatted = {
+	/**  포맷한 서버 id. */
+	server: string,
+	/**  범위 포맷(`textDocument/rangeFormatting`)으로 물었다. */
+	range: boolean,
+	/**  요청 사이에 문서가 바뀌었다 — 웹뷰는 넣지 않는다. */
+	staleVersion: boolean,
+	/**  요청을 보낼 때의 문서 기준 편집(LSP 위치 그대로, 겹치지 않음 · 문서 안). 서버가 `null` 이면 빈 목록. */
+	edits: LspTextEdit[],
+};
 
 /**  hover 본문. 서버가 보낸 글 그대로다 — 웹뷰는 HTML 을 끈 렌더로만 그린다(서버의 글을 믿지 않는다). */
 export type LspHover = {

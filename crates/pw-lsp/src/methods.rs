@@ -335,6 +335,7 @@ mod tests {
                 ("lsp.document.open", Tier::Exec, false, false),
                 ("lsp.document.read", Tier::Read, false, false),
                 ("lsp.document.save", Tier::Read, false, false),
+                ("lsp.format", Tier::Read, false, false),
                 ("lsp.hover", Tier::Read, false, false),
                 ("lsp.implementation", Tier::Read, false, false),
                 ("lsp.references", Tier::Read, false, false),

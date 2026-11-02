@@ -24,6 +24,7 @@ pub mod diagnostics;
 pub mod document;
 pub mod edit;
 pub mod fake;
+pub mod format;
 pub mod grant;
 pub mod handlers;
 pub mod ledger;
@@ -66,4 +67,5 @@ pub fn register(router: &mut pw_rpc::Router, manager: &LspManager) {
     let diagnostics = diagnostics::register(router, manager);
     edit::register(router, manager, diagnostics);
     completion::register(router, manager);
+    format::register(router, manager);
 }
