@@ -995,7 +995,7 @@ function tsMembers(dot: number, order: "member-first" | "key-first" = "member-fi
 }
 
 it("keeps TypeScript members after the first letter typed past the dot (H-1)", async () => {
-  serveCompletion(() => ({ items: tsMembers(7) }));
+  const asked = serveCompletion(() => ({ items: tsMembers(7) }));
   await openMain("headers\n", 7);
   await type(".");
   expect(listLabels()).toEqual(["accept", "authorization", "content-type"]);
@@ -1003,9 +1003,40 @@ it("keeps TypeScript members after the first letter typed past the dot (H-1)", a
   expect(listLabels()).toEqual(["accept", "authorization"]);
   await type("c");
   expect(listLabels()).toEqual(["accept"]);
+  // 완전한 목록은 점 뒤에 낱말 글자를 치는 동안 다시 묻지 않는다.
+  expect(asked).toHaveLength(1);
   await afterInteractionDelay();
   await press("Enter");
   expect(text()).toBe("headers.accept\n");
+});
+
+it("keeps members whose filterText starts with the dot when no item starts at the dot (H-1)", async () => {
+  // 리뷰의 첫 재현: 모든 편집이 점 뒤에서 시작하고 `filterText` 는 점부터다 — 한 글자 패턴(`a`)이 첫 글자(`.`)에 막히면 안 된다.
+  serveCompletion(() => ({ items: tsMembers(7).slice(0, 2) }));
+  await openMain("headers\n", 7);
+  await type(".");
+  expect(listLabels()).toEqual(["accept", "authorization"]);
+  await type("a");
+  expect(listLabels()).toEqual(["accept", "authorization"]);
+  await type("u");
+  expect(listLabels()).toEqual(["authorization"]);
+});
+
+it("keeps an item starting at the dot after the first letter when an item starting past the dot comes first (H-1)", async () => {
+  serveCompletion(() => ({
+    items: [
+      tsMembers(1)[0]!,
+      item("limit", {
+        filterText: ".?.limit",
+        edit: { newText: "?.limit", insert: { from: 1, to: 2 }, replace: { from: 1, to: 2 } },
+      }),
+    ],
+  }));
+  await openMain("m\n", 1);
+  await type(".");
+  expect(listLabels()).toEqual(["accept", "limit"]);
+  await type("l");
+  expect(listLabels()).toEqual(["limit"]);
 });
 
 it("keeps the other items when the first item's edit starts at the dot (H-1)", async () => {
@@ -1120,9 +1151,12 @@ it("applies a member whose edit starts at the dot (optional chaining, quoted key
 
 // ---- resolve 를 기다리는 사이 친 글자(리뷰 L-1) -------------------------------------------------------------------------------
 
-function slowImport(ms: number) {
+/** resolve 는 시험이 `release()` 를 부를 때 답한다(시계 · 부하에 기대지 않게). */
+function heldImport() {
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
   host.lsp!.handle("lsp.completion.resolve", async () => {
-    await new Promise((r) => setTimeout(r, ms));
+    await held;
     return {
       server: "ra",
       staleVersion: false,
@@ -1131,11 +1165,12 @@ function slowImport(ms: number) {
       }),
     };
   });
+  return () => act(async () => release());
 }
 
 it("puts the accepted item in at once when a letter is typed while waiting for resolve, and the import after (L-1)", async () => {
   serveCompletion(() => ({ items: [item("Shape")] }));
-  slowImport(200);
+  const release = heldImport();
   await openMain("let s: Sha\n", 10, true);
   await optionSpace();
   await afterInteractionDelay();
@@ -1146,14 +1181,16 @@ it("puts the accepted item in at once when a letter is typed while waiting for r
   expect(text()).toBe("let s: Shape(\n");
   expect(view().state.selection.main.head).toBe("let s: Shape(".length);
   // 자동 import 는 답이 오면 따로 붙는다.
-  await act(async () => new Promise((r) => setTimeout(r, 250)));
+  await release();
+  await settle();
+  await settle();
   expect(text()).toBe("import { Shape } from './shapes';\nlet s: Shape(\n");
   expect(view().state.selection.main.head).toBe(text().indexOf("(") + 1);
 });
 
 it("drops the accepted item when the word itself changes while waiting for resolve (L-1)", async () => {
   serveCompletion(() => ({ items: [item("Shape")] }));
-  slowImport(200);
+  const release = heldImport();
   await openMain("let s: Sha\n", 10, true);
   await optionSpace();
   await afterInteractionDelay();
@@ -1162,7 +1199,8 @@ it("drops the accepted item when the word itself changes while waiting for resol
     view().dispatch({ changes: { from: 9, to: 10 }, userEvent: "delete.backward" }),
   );
   await settle();
-  await act(async () => new Promise((r) => setTimeout(r, 250)));
+  await release();
+  await settle();
   expect(text()).toBe("let s: Sh\n");
 });
 
