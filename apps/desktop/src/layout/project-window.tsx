@@ -103,6 +103,7 @@ import { useHost, useRpcQuery } from "../rpc/host";
 import { useRuntimeActions } from "../runtime/runtime-actions";
 import { FindInFiles } from "../search/find-in-files";
 import { ProjectSearch } from "../search-everywhere/project-search";
+import { SymbolSearchFeature } from "../search-everywhere/symbol-tab";
 import { createRecentFiles } from "../search-everywhere/recent-files";
 import { SearchResultsToolWindow } from "../search/search-results";
 import { StructureToolWindow } from "../structure/structure-tool-window";
@@ -910,6 +911,9 @@ function ProjectWindowBody({
             <DbRedisFeature projectId={projectId} workspace={workspace} />
           )}
           {projectId !== undefined && <DbObjectSearch projectId={projectId} api={api} />}
+          {projectId !== undefined && (
+            <SymbolSearchFeature projectId={projectId} workspace={workspace} />
+          )}
           {projectId !== undefined && (
             <DbTableDataFeature projectId={projectId} workspace={workspace} api={api} />
           )}
