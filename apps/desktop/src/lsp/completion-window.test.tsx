@@ -666,18 +666,25 @@ it("applies the replace range with Tab, the insert range with Enter, and the imp
 
 it("waits for resolve to bring the auto-import of the accepted item, still in one undo (③)", async () => {
   serveCompletion(() => ({ items: [item("Shape", { raw: { label: "Shape", data: 1 } })] }));
-  host.lsp!.handle("lsp.completion.resolve", async (params) => ({
-    server: "ra",
-    staleVersion: false,
-    item: item("Shape", {
-      additionalEdits: [{ from: 0, to: 0, newText: "import { Shape } from './shapes';\n" }],
-      raw: (params as { item: JsonValue }).item,
-    }),
-  }));
+  // resolve 는 ↩ 보다 늦게 온다(목록이 열린 뒤 200 ms) — 받아들이기가 그 답을 기다려야 import 가 든다.
+  host.lsp!.handle("lsp.completion.resolve", async (params) => {
+    await new Promise((r) => setTimeout(r, 200));
+    return {
+      server: "ra",
+      staleVersion: false,
+      item: item("Shape", {
+        additionalEdits: [{ from: 0, to: 0, newText: "import { Shape } from './shapes';\n" }],
+        raw: (params as { item: JsonValue }).item,
+      }),
+    };
+  });
   await openMain("let s: Sha\n", 10, true);
   await optionSpace();
   await afterInteractionDelay();
   await press("Enter");
+  // 아직 resolve 를 기다린다 — 본 편집만 먼저 들어가지 않는다.
+  expect(text()).toBe("let s: Sha\n");
+  await act(async () => new Promise((r) => setTimeout(r, 250)));
   expect(text()).toBe("import { Shape } from './shapes';\nlet s: Shape\n");
   await keydown({ key: "z", code: "KeyZ", metaKey: true }, view().contentDOM);
   expect(text()).toBe("let s: Sha\n");
@@ -739,7 +746,7 @@ it("resolves only the selected item, cancels the one left behind, and draws its 
 });
 
 it("keeps Enter for the Korean IME while composing and opens no list for composed text (⑥)", async () => {
-  const asked = serveCompletion(() => ({ items: [item("area"), item("width")] }));
+  const asked = serveCompletion(() => ({ items: [item("한글값"), item("width")] }));
   await openMain("r.\n", 2);
   await compose("compositionstart");
   await composeText(2, 2, "ㅎ");
@@ -755,8 +762,11 @@ it("keeps Enter for the Korean IME while composing and opens no list for compose
   expect(listOpen()).toBe(true);
   await compose("compositionstart");
   await composeText(2, 2, "한");
+  await settle();
+  // 조합 중의 글자(「한」)로 걸러진 목록이 열려 있다 — 그래도 ↩ 는 조합에 쓴다.
+  expect(listLabels()).toEqual(["한글값"]);
   await press("Enter", { isComposing: true, keyCode: 229 });
-  expect(text()).not.toContain("area");
+  expect(text()).not.toContain("한글값");
   await compose("compositionend");
 });
 
