@@ -119,6 +119,8 @@ describe("default keymap overlaps", () => {
         ["⌘T", ["terminal.newTab [terminalFocus]", "git.pull.open []"]],
         // 변경 롤백(M2) 과 테이블 데이터의 변경 되돌리기(M3-17 — 10-ui §4.2 「DB」, 테이블 데이터에 포커스가 있을 때만).
         ["⌥⌘Z", ["git.rollback []", "db.tableData.revert [dbTableDataFocus]"]],
+        // 에디터의 선언으로 이동(M4-08)과 DB 탐색기의 DDL 보기(M3-13) — 10-ui §4.2 「코드」 · 「DB」.
+        ["⌘B", ["db.explorer.ddl [dbExplorerFocus]", "lsp.gotoDeclaration [editorFocus]"]],
       ],
       win: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
@@ -151,6 +153,8 @@ describe("default keymap overlaps", () => {
         ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
         // 변경 롤백(M2)과 테이블 데이터의 변경 되돌리기(M3-17).
         ["Ctrl+Alt+Z", ["git.rollback []", "db.tableData.revert [dbTableDataFocus]"]],
+        // 에디터의 선언으로 이동(M4-08)과 DB 탐색기의 DDL 보기(M3-13).
+        ["Ctrl+B", ["db.explorer.ddl [dbExplorerFocus]", "lsp.gotoDeclaration [editorFocus]"]],
       ],
       linux: [
         // 웰컴 창에만 등록되는 「목록에서 제거」 와 프로젝트 창 파일 트리의 삭제(10-ui §4.2 「웰컴 창」 · §5.4).
@@ -182,6 +186,8 @@ describe("default keymap overlaps", () => {
         ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
         // 변경 롤백(M2)과 테이블 데이터의 변경 되돌리기(M3-17).
         ["Ctrl+Alt+Z", ["git.rollback []", "db.tableData.revert [dbTableDataFocus]"]],
+        // 에디터의 선언으로 이동(M4-08)과 DB 탐색기의 DDL 보기(M3-13).
+        ["Ctrl+B", ["db.explorer.ddl [dbExplorerFocus]", "lsp.gotoDeclaration [editorFocus]"]],
       ],
     });
   });

@@ -595,9 +595,37 @@ win = "ctrl+b"
 linux = "ctrl+b"
 when = "dbExplorerFocus"
 
-# 코드 (LSP · 편집)(10-ui §4.2 「코드」, 15-m4-plan). 글자 영역(`editorFocus`)에서만 돈다.
+# 코드 (LSP · 편집)(10-ui §4.2 「코드 (LSP · 편집)」, 15-m4-plan §2 — 행마다 이 묶음 아래에 더한다). 글자 영역(`editorFocus`)에서만 돈다.
+# 내비게이션(M4-08, src/lsp/navigation-host.tsx): ⌘B 는 DB 탐색기의 DDL 보기(`dbExplorerFocus`)와 범위가 갈린다. ⌘+클릭 · ⌘⌥+클릭은
+# 키맵이 아니라 에디터 확장이다(src/lsp/navigation.ts). 사용처 팝업의 ⌘↩(검색 결과에 고정)는 팝업 목록이 받는다.
 # rename · 코드 액션(M4-12, src/lsp/edit-ui.tsx): `⇧F6` 은 파일 트리 포커스의 이름 바꾸기(`fileTree.rename`, `when = "fileTree"`)와
 # 컨텍스트로 갈린다. 「마지막 일괄 편집 되돌리기」(`lsp.undoLastEdit`)는 기본 키가 없다 — 액션 찾기와 알림의 [되돌리기].
+
+[[bindings]]
+action = "lsp.gotoDeclaration"
+mac = "cmd+b"
+win = "ctrl+b"
+linux = "ctrl+b"
+when = "editorFocus"
+
+[[bindings]]
+action = "lsp.gotoImplementation"
+mac = "cmd+alt+b"
+win = "ctrl+alt+b"
+linux = "ctrl+alt+b"
+when = "editorFocus"
+
+[[bindings]]
+action = "lsp.findUsages"
+key = "alt+f7"
+when = "editorFocus"
+
+[[bindings]]
+action = "lsp.quickDocumentation"
+mac = "f1"
+win = "ctrl+q"
+linux = "ctrl+q"
+when = "editorFocus"
 
 [[bindings]]
 action = "lsp.rename"

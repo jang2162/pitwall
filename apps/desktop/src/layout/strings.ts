@@ -63,6 +63,20 @@ export function projectStrings(t: Translate) {
       lspPopupActions: t("lsp-popup-actions"),
       /** rename · 코드 액션 · 일괄 편집(M4-12). */
       lspEdit: lspEditStrings(t),
+      /** 내비게이션(M4-08 — src/lsp/navigation.ts): 액션 · 위치 팝업 · 외부 소스 탭. */
+      lsp: {
+        gotoDeclaration: t("action-lsp-goto-declaration"),
+        gotoImplementation: t("action-lsp-goto-implementation"),
+        findUsages: t("action-lsp-find-usages"),
+        quickDocumentation: t("action-lsp-quick-documentation"),
+        definitions: (count: number) => t("lsp-locations-definitions", { count }),
+        implementations: (count: number) => t("lsp-locations-implementations", { count }),
+        usages: (name: string, count: number) => t("lsp-locations-usages", { name, count }),
+        none: t("lsp-locations-none"),
+        pin: (key: string) => t("lsp-locations-pin", { key }),
+        outsideBar: (server: string) => t("lsp-outside-bar", { server }),
+        outsideFailed: (message: string) => t("lsp-outside-failed", { message }),
+      },
       /** UTF-8 이 아닌 텍스트(결정 M1-D12). `encoding`: WHATWG 이름(예: EUC-KR). */
       readOnlyEncoding: (encoding: string) => t("editor-read-only-encoding", { encoding }),
       /** UTF-8 이지만 깨진 바이트가 있다(판정의 `lossy`). */

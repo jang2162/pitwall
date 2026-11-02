@@ -15,6 +15,7 @@ import { editorOpsActions } from "../editor/editor-ops";
 import { createEditorWorkspace } from "../editor/editor-workspace";
 import { navigationActions } from "../editor/navigation-ui";
 import { lspEditActions } from "../lsp/edit-ui";
+import { lspNavigationActions } from "../lsp/navigation-host";
 import { fileOpsActions } from "../file-tree/file-ops";
 import { fileTreeStrings } from "../file-tree/strings";
 import { explorerActions } from "../db/explorer/explorer-feature";
@@ -153,6 +154,20 @@ const ACTION_IDS = new Set(
       }),
       strings: KO_PROJECT.editor.lspEdit.actions,
       window: () => undefined,
+    }),
+    ...lspNavigationActions({
+      workspace: createEditorWorkspace({
+        documents: createDocumentStore({
+          stat: () => Promise.reject(new Error("none")),
+          read: () => Promise.reject(new Error("none")),
+        }),
+        stat: () => Promise.reject(new Error("none")),
+        onOpenFailed() {},
+        onSaveFailed() {},
+        onSaveBlocked() {},
+        confirmUnsaved: async () => "cancel",
+      }),
+      strings: KO_PROJECT.editor.lsp,
     }),
     ...terminalActions({
       strings: KO_PROJECT.terminal,

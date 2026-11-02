@@ -54,6 +54,23 @@ editor-binary-as-text = Showing a binary file as text (bytes that are not UTF-8 
 editor-read-only-large = Opened read-only: the file is larger than 5 MiB (highlighting and wrapping off)
 # Actions row of an editor popup (M4-07) — the name screen readers read.
 lsp-popup-actions = Popup actions
+# Navigation (M4-08): declaration, implementation, usages, quick documentation, the location popup and outside sources.
+action-lsp-goto-declaration = Go to Declaration or Usages
+action-lsp-goto-implementation = Go to Implementation
+action-lsp-find-usages = Find Usages
+action-lsp-quick-documentation = Quick Documentation
+# $count: number of locations
+lsp-locations-definitions = Choose Declaration · { $count }
+lsp-locations-implementations = Choose Implementation · { $count }
+# $name: symbol name, $count: number of usages
+lsp-locations-usages = Usages of “{ $name }” · { $count }
+lsp-locations-none = Nothing found
+# $key: the key that pins the list
+lsp-locations-pin = { $key } to pin in Search Results
+# $server: the language server that returned the location
+lsp-outside-bar = Outside source · read-only · { $server }
+# $message: the error text
+lsp-outside-failed = Could not open the outside source: { $message }
 # $encoding: the guessed encoding name (e.g. EUC-KR, UTF-16LE)
 editor-read-only-encoding = Read as { $encoding } · opened read-only because it is not UTF-8
 editor-read-only-lossy = Read as UTF-8 · opened read-only because some bytes are invalid (�)

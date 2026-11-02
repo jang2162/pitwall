@@ -6,6 +6,8 @@
 //   워크트리를 함께 실어 에디터 탭이 그 루트를 접근 범위로 쓴다(M1-09 의 열기 경로).
 // - 팝업이 닫히면 그 검색을 멈춘다. 「툴 윈도우에서 열기」 는 도는 검색을 그대로 「검색 결과」 툴 윈도우(search-results.tsx)로 넘기고
 //   팝업은 다음에 새 검색을 쓴다. 툴 윈도우는 고정한 결과 하나를 보이고, 다시 고정하면 앞의 것을 멈추고 바꾼다.
+// - 결과 종류는 둘이다(결정 M4-D22): 찾기(`find` — 도는 검색)와 언어 서버의 사용처(`usages` — 위치 팝업의 `⌘↩`, M4-08
+//   src/lsp/navigation.ts). 사용처는 이미 받은 목록이라 멈출 것이 없고, 루트 밖 파일의 줄은 읽기 토큰째 연다(외부 소스 탭).
 
 import type { RpcClient } from "@pitwall/rpc-client";
 import { useEffect, useMemo } from "react";
@@ -13,6 +15,7 @@ import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 
 import type { EditorWorkspace } from "../editor/editor-workspace";
+import type { UsageFile } from "../lsp/navigation";
 import { treeScope, windowFileTree } from "../file-tree/project-view";
 import { separatorOf } from "../file-tree/tree-model";
 import { useRegisterActions } from "../keymap/keymap-provider";
@@ -41,9 +44,14 @@ interface FindWindowState {
   options: FindOptions;
   /** 팝업이 쓰는 검색. 고정하면 툴 윈도우로 가고 새것으로 바뀐다. */
   session: FindSession;
-  /** 툴 윈도우에 고정한 검색과 그때의 옵션. `seq` 는 고정할 때마다 오른다. */
-  pinned: { session: FindSession; options: FindOptions; seq: number } | undefined;
+  /** 툴 윈도우에 고정한 결과(찾기 · 사용처). `seq` 는 고정할 때마다 오른다. */
+  pinned: PinnedResult | undefined;
 }
+
+/** 고정한 결과. 찾기는 그 검색과 옵션, 사용처는 받은 파일 목록(결정 M4-D22). */
+export type PinnedResult =
+  | { kind: "find"; session: FindSession; options: FindOptions; seq: number }
+  | { kind: "usages"; title: string; files: readonly UsageFile[]; seq: number };
 
 let client: RpcClient | undefined;
 
@@ -68,7 +76,7 @@ export const findWindow = createStore<FindWindowState>()(emptyState);
 export function resetFindWindow() {
   const { session, pinned } = findWindow.getState();
   session.clear();
-  pinned?.session.clear();
+  if (pinned?.kind === "find") pinned.session.clear();
   findWindow.setState(emptyState(), true);
 }
 
@@ -109,7 +117,7 @@ export function searchPlace(): SearchPlace | undefined {
 /** 팝업의 검색을 툴 윈도우로 넘기고 팝업을 닫는다. 도는 검색은 툴 윈도우에서 이어진다. */
 export function pinFindResults(api: Parameters<typeof showPanel>[0] | undefined) {
   const { session, options, pinned } = findWindow.getState();
-  pinned?.session.cancel();
+  if (pinned?.kind === "find") pinned.session.cancel();
   // 칸을 막 고쳐 새 검색이 아직 안 갔으면(팝업의 지연 타이머는 닫히며 지워진다) 여기서 보낸다.
   if (session.searchDue) {
     const place = searchPlace();
@@ -118,9 +126,21 @@ export function pinFindResults(api: Parameters<typeof showPanel>[0] | undefined)
   }
   findWindow.setState({
     open: false,
-    pinned: { session, options, seq: (pinned?.seq ?? 0) + 1 },
+    pinned: { kind: "find", session, options, seq: (pinned?.seq ?? 0) + 1 },
     session: new FindSession(runSearch),
   });
+  if (api) showPanel(api, SEARCH_RESULTS_TOOL_WINDOW);
+}
+
+/** 언어 서버의 사용처를 툴 윈도우에 고정한다(위치 팝업의 `⌘↩`, M4-08). 앞에 고정한 찾기는 멈춘다. */
+export function pinUsages(
+  api: Parameters<typeof showPanel>[0] | undefined,
+  title: string,
+  files: readonly UsageFile[],
+) {
+  const { pinned } = findWindow.getState();
+  if (pinned?.kind === "find") pinned.session.cancel();
+  findWindow.setState({ pinned: { kind: "usages", title, files, seq: (pinned?.seq ?? 0) + 1 } });
   if (api) showPanel(api, SEARCH_RESULTS_TOOL_WINDOW);
 }
 

@@ -54,6 +54,23 @@ editor-binary-as-text = 바이너리 파일을 텍스트로 보인다(UTF-8 로 
 editor-read-only-large = 5 MiB 를 넘는 파일이라 읽기 전용으로 연다(구문 강조 · 줄바꿈 끔)
 # 에디터 팝업(M4-07)의 액션 줄 — 화면 읽기 프로그램이 읽는 이름.
 lsp-popup-actions = 팝업 동작
+# 내비게이션(M4-08): 선언 · 구현 · 사용처 · 빠른 문서와 그 위치 팝업, 루트 밖 문서(외부 소스 탭).
+action-lsp-goto-declaration = 선언으로 이동
+action-lsp-goto-implementation = 구현으로 이동
+action-lsp-find-usages = 사용처 찾기
+action-lsp-quick-documentation = 빠른 문서
+# $count: 위치 수
+lsp-locations-definitions = 선언 고르기 · { $count }곳
+lsp-locations-implementations = 구현 고르기 · { $count }곳
+# $name: 심볼 이름, $count: 사용처 수
+lsp-locations-usages = 「{ $name }」 의 사용처 · { $count }곳
+lsp-locations-none = 찾은 곳이 없다
+# 위치 팝업의 키 안내(⌘↩ · Ctrl+Enter 는 플랫폼마다 다르게 적는다). $key: 키
+lsp-locations-pin = { $key } 검색 결과에 고정
+# 루트 밖 문서(외부 소스) 탭의 머리. $server: 그 위치를 돌려준 언어 서버
+lsp-outside-bar = 외부 소스 · 읽기 전용 · { $server }
+# $message: 오류 원문
+lsp-outside-failed = 외부 소스를 열지 못했다: { $message }
 # $encoding: 짐작한 인코딩 이름(예: EUC-KR, UTF-16LE)
 editor-read-only-encoding = { $encoding } 로 읽었다 · UTF-8 이 아니라 읽기 전용으로 연다
 editor-read-only-lossy = UTF-8 로 읽었다 · 깨진 바이트가 있어(�) 읽기 전용으로 연다
