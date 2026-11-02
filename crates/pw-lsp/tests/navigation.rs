@@ -487,7 +487,119 @@ async fn tokens_die_with_trust_and_with_their_instance() {
                 "revoke={revoke} {method}: {e:?}"
             );
         }
+        // 「무효」 는 영구다(M4-08 리뷰 M1): 신뢰를 다시 걸거나 서버를 다시 띄워도 그 토큰은 살아나지 않는다.
+        if revoke {
+            env.projects.set_trust(&env.id, true).unwrap();
+        } else {
+            let root = env.manager.status(&env.id).instances[0].root.clone();
+            win.call(
+                "lsp.server.restart",
+                json!({ "projectId": env.id, "server": "rust-analyzer", "root": root }),
+            )
+            .await
+            .unwrap();
+            env.wait_state("rust-analyzer", LspInstanceState::Ready)
+                .await;
+        }
+        // 옛 토큰을 쓰기 전에 같은 위치를 다시 물어도 옛 토큰이 아니라 새 토큰이 나오고, 그것은 읽힌다.
+        let again = at(&mut win, "lsp.definition", &doc, 3).await.unwrap();
+        let fresh = again["locations"][0]["token"].as_str().unwrap();
+        assert_ne!(fresh, token, "revoke={revoke}");
+        win.call("lsp.document.read", json!({ "token": fresh }))
+            .await
+            .unwrap();
+        for (method, params) in [
+            ("lsp.document.read", json!({ "token": token })),
+            ("lsp.hover", json!({ "token": token, "offset": 0 })),
+        ] {
+            let e = win.call(method, params).await.unwrap_err();
+            assert_eq!(
+                e.code,
+                code::NOT_FOUND,
+                "revoke={revoke} {method} again: {e:?}"
+            );
+        }
     }
+}
+
+/// ② 리뷰 M1 의 재현 그대로: 읽은 토큰 → 신뢰 해제(읽기 거절) → 신뢰 다시 → 서버 재시작 → 준비 — 그 토큰은 다시 읽히지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_token_stays_dead_after_trust_comes_back_and_the_server_restarts() {
+    let env = Env::new(EnvOptions::default());
+    let file = outside_file(&env, "lib.rs", "x\n");
+    env.fake("rust-analyzer", outside_scenario(&[(&file, 0)]));
+    let (mut win, doc) = ready(&env, "fn main() {}").await;
+    let got = at(&mut win, "lsp.definition", &doc, 3).await.unwrap();
+    let token = got["locations"][0]["token"].as_str().unwrap().to_owned();
+    let read = win
+        .call("lsp.document.read", json!({ "token": token }))
+        .await
+        .unwrap();
+    assert_eq!(read["text"], "x\n");
+    env.projects.set_trust(&env.id, false).unwrap();
+    let e = win
+        .call("lsp.document.read", json!({ "token": token }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, -32001, "{e:?}");
+    env.projects.set_trust(&env.id, true).unwrap();
+    let root = env.manager.status(&env.id).instances[0].root.clone();
+    win.call(
+        "lsp.server.restart",
+        json!({ "projectId": env.id, "server": "rust-analyzer", "root": root }),
+    )
+    .await
+    .unwrap();
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    let e = win
+        .call("lsp.document.read", json!({ "token": token }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::NOT_FOUND, "{e:?}");
+}
+
+/// ② 신뢰를 풀었다 곧바로 다시 걸어 관리자가 서버를 끝내지 않았어도(그 사이 토큰을 쓰지 않았어도) 신뢰 변경 알림이 토큰을
+/// 죽인다 — 신뢰 세대.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_trust_change_kills_tokens_even_when_the_server_kept_running() {
+    let env = Env::new(EnvOptions {
+        follow: false,
+        ..EnvOptions::default()
+    });
+    let file = outside_file(&env, "lib.rs", "x\n");
+    env.fake("rust-analyzer", outside_scenario(&[(&file, 0)]));
+    let (mut win, doc) = ready(&env, "fn main() {}").await;
+    let got = at(&mut win, "lsp.definition", &doc, 3).await.unwrap();
+    let token = got["locations"][0]["token"].as_str().unwrap().to_owned();
+    win.call("lsp.document.read", json!({ "token": token }))
+        .await
+        .unwrap();
+    let pids = env.manager.pids(&env.id);
+    // 두 알림이 모두 버스에 쌓인 뒤에야 관리자가 따르기 시작한다 — 따를 때는 이미 신뢰가 돌아와 서버를 끝내지 않는다.
+    let events = pw_lsp::manager::LspManager::subscribe(&env.bus);
+    env.projects.set_trust(&env.id, false).unwrap();
+    env.projects.set_trust(&env.id, true).unwrap();
+    tokio::spawn(env.manager.clone().follow(events));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let last = loop {
+        let got = win
+            .call("lsp.document.read", json!({ "token": token }))
+            .await;
+        if got.as_ref().is_err_and(|e| e.code == code::NOT_FOUND)
+            || std::time::Instant::now() >= deadline
+        {
+            break got;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        last.as_ref().map_err(|e| e.code).err(),
+        Some(code::NOT_FOUND),
+        "the token outlived a trust change: {last:?}"
+    );
+    assert_eq!(env.manager.pids(&env.id), pids, "the server kept running");
+    assert_eq!(env.state_of("rust-analyzer"), Some(LspInstanceState::Ready));
 }
 
 /// ② `jdt://` 는 디스크로 풀지 않고 그 인스턴스의 `java/classFileContents` 로만 읽는다. 그 밖의 스킴은 읽지 않는다.
@@ -648,8 +760,8 @@ async fn show_document_opens_only_files_inside_the_root() {
     let real = std::fs::canonicalize(&inside).unwrap();
     assert_eq!(
         event.payload,
-        json!({ "path": real.display().to_string(), "worktree": null, "line": 2, "column": 1,
-                "takeFocus": true, "server": "rust-analyzer" })
+        json!({ "window": null, "path": real.display().to_string(), "worktree": null, "line": 2,
+                "column": 1, "takeFocus": true, "server": "rust-analyzer" })
     );
     assert!(
         tokio::time::timeout(Duration::from_millis(300), events.recv())
@@ -657,6 +769,89 @@ async fn show_document_opens_only_files_inside_the_root() {
             .is_err(),
         "only the file inside the root opens"
     );
+}
+
+/// 다음 showDocument 이벤트의 `window`(1 s 안에 없으면 `None`).
+async fn next_show(events: &mut pw_core::bus::Subscription) -> Option<Value> {
+    match tokio::time::timeout(Duration::from_secs(1), events.recv()).await {
+        Ok(Some(Received::Event(event))) => Some(event.payload["window"].clone()),
+        _ => None,
+    }
+}
+
+/// ③ 이벤트는 프로젝트의 모든 창이 아니라 그 인스턴스에 문서를 연 창 중 가장 최근에 그 서버를 쓴 창 하나를 가리킨다(리뷰 M2) —
+/// 문서를 열지 않은 창은 가리키지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn show_document_goes_to_the_window_that_last_used_the_server() {
+    let env = Env::new(EnvOptions::default());
+    let inside = env.file("src/lib.rs", "a\n");
+    env.fake(
+        "rust-analyzer",
+        show_after_hover(vec![json!({ "uri": uri(&inside) })]),
+    );
+    let mut events = env
+        .bus
+        .subscribe(Filter::all().topics([TOPIC_SHOW_DOCUMENT]));
+    let mut a = env.window_named("project-a");
+    let a_doc = doc_id(
+        &a.open(
+            &env,
+            &env.file("src/main.rs", "fn main() {}"),
+            "Rust",
+            "fn main() {}",
+        )
+        .await,
+    );
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    let mut b = env.window_named("project-b");
+    let b_doc = doc_id(
+        &b.open(
+            &env,
+            &env.file("src/b.rs", "fn b() {}"),
+            "Rust",
+            "fn b() {}",
+        )
+        .await,
+    );
+    // 문서를 열지 않은 창 — 어느 이벤트도 이 창을 가리키지 않는다.
+    let _idle = env.window_named("project-c");
+    at(&mut b, "lsp.hover", &b_doc, 0).await.unwrap();
+    assert_eq!(next_show(&mut events).await, Some(json!("project-b")));
+    // 1 s 상한 창을 넘긴 뒤 A 가 서버를 쓰면 A 다.
+    tokio::time::sleep(pw_lsp::navigation::SHOW_DOCUMENT_PERIOD).await;
+    at(&mut a, "lsp.hover", &a_doc, 0).await.unwrap();
+    assert_eq!(next_show(&mut events).await, Some(json!("project-a")));
+    // 다시 B 가 쓰면 B 다. 문서를 열지 않은 C 는 한 번도 가리키지 않는다.
+    tokio::time::sleep(pw_lsp::navigation::SHOW_DOCUMENT_PERIOD).await;
+    at(&mut b, "lsp.hover", &b_doc, 0).await.unwrap();
+    assert_eq!(next_show(&mut events).await, Some(json!("project-b")));
+    assert!(next_show(&mut events).await.is_none());
+}
+
+/// ③ 한 창에 보이는 showDocument 에는 빈도 상한이 있다 — 넘는 요청은 `false` 이고 이벤트가 없다(리뷰 M2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn show_document_is_rate_limited_per_window() {
+    use pw_lsp::navigation::SHOW_DOCUMENT_BURST;
+    let env = Env::new(EnvOptions::default());
+    let inside = env.file("src/lib.rs", "a\n");
+    let count = SHOW_DOCUMENT_BURST + 3;
+    let record = env.fake(
+        "rust-analyzer",
+        show_after_hover(vec![json!({ "uri": uri(&inside) }); count]),
+    );
+    let mut events = env
+        .bus
+        .subscribe(Filter::all().topics([TOPIC_SHOW_DOCUMENT]));
+    let (mut win, doc) = ready(&env, "fn main() {}").await;
+    at(&mut win, "lsp.hover", &doc, 0).await.unwrap();
+    let mut want = vec![json!(true); SHOW_DOCUMENT_BURST];
+    want.extend(vec![json!(false); count - SHOW_DOCUMENT_BURST]);
+    assert_eq!(show_answers(&record, count).await, want);
+    for _ in 0..SHOW_DOCUMENT_BURST {
+        assert!(next_show(&mut events).await.is_some());
+    }
+    assert!(next_show(&mut events).await.is_none(), "over the limit");
 }
 
 /// ③ 미신뢰 프로젝트에서는(떠 있던 서버가 남아 있어도) 받지 않고 이벤트를 내지 않는다.
@@ -684,6 +879,48 @@ async fn show_document_is_refused_while_untrusted() {
             .await
             .is_err()
     );
+}
+
+/// ② 한 연결이 들고 있는 토큰 글에는 상한이 있다(리뷰 L2) — 넘으면 가장 오래 쓰지 않은 글을 버리고, 그 토큰은 다음에 쓸 때 다시
+/// 읽는다(그래서 그사이 바뀐 디스크의 글이 보인다). 토큰은 산다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_texts_over_the_cache_limit_are_dropped_and_read_again() {
+    use pw_lsp::navigation::{READ_LIMIT, TEXT_CACHE_LIMIT};
+    let env = Env::new(EnvOptions::default());
+    let size = usize::try_from(READ_LIMIT).unwrap();
+    let n = usize::try_from(TEXT_CACHE_LIMIT / READ_LIMIT).unwrap() + 1;
+    let files: Vec<_> = (0..n)
+        .map(|i| outside_file(&env, &format!("big{i}.rs"), &"a".repeat(size)))
+        .collect();
+    let targets: Vec<_> = files.iter().map(|f| (f.as_path(), 0)).collect();
+    env.fake("rust-analyzer", outside_scenario(&targets));
+    let (mut win, doc) = ready(&env, "fn main() {}").await;
+    let got = at(&mut win, "lsp.definition", &doc, 3).await.unwrap();
+    let token = |i: usize| got["locations"][i]["token"].as_str().unwrap().to_owned();
+    let first_char = |v: &Value| v["text"].as_str().unwrap().chars().next().unwrap();
+    let read = win
+        .call("lsp.document.read", json!({ "token": token(0) }))
+        .await
+        .unwrap();
+    assert_eq!(first_char(&read), 'a');
+    // 들고 있는 동안은 디스크가 바뀌어도 그 글이다(같은 크기 — 실제 경로는 그대로).
+    std::fs::write(&files[0], "b".repeat(size)).unwrap();
+    let read = win
+        .call("lsp.document.read", json!({ "token": token(0) }))
+        .await
+        .unwrap();
+    assert_eq!(first_char(&read), 'a');
+    for i in 1..n {
+        win.call("lsp.document.read", json!({ "token": token(i) }))
+            .await
+            .unwrap();
+    }
+    // 상한을 넘어 가장 오래 쓰지 않은 첫 글이 버려졌다 — 다시 읽는다.
+    let read = win
+        .call("lsp.document.read", json!({ "token": token(0) }))
+        .await
+        .unwrap();
+    assert_eq!(first_char(&read), 'b');
 }
 
 /// ② 토큰 문서는 편집 등급 상한(5 MiB)까지만 읽는다.
@@ -720,9 +957,10 @@ async fn a_token_document_over_the_edit_tier_is_refused() {
     );
 }
 
-/// ② 토큰을 준 인스턴스가 다시 뜨는 중(`starting`)이면 토큰을 쓰지 못한다 — 한 번 읽어 둔 글도 내주지 않는다.
+/// ② 토큰을 준 인스턴스가 다시 뜨는 중(`starting`)이면 토큰을 쓰지 못하고 — 한 번 읽어 둔 글도 내주지 않는다 — 다시 떠도
+/// 그 토큰은 죽은 채다(M4-08 리뷰 M1). 같은 위치를 다시 물으면 새 토큰이 나온다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_token_waits_for_its_restarting_instance() {
+async fn a_token_does_not_come_back_after_its_instance_restarts() {
     let env = Env::new(EnvOptions::default());
     let file = outside_file(&env, "lib.rs", "x\n");
     env.fake(
@@ -762,7 +1000,15 @@ async fn a_token_waits_for_its_restarting_instance() {
     assert_eq!(e.code, 5001, "{e:?}");
     env.wait_state("rust-analyzer", LspInstanceState::Ready)
         .await;
-    win.call("lsp.document.read", json!({ "token": token }))
+    let e = win
+        .call("lsp.document.read", json!({ "token": token }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::NOT_FOUND, "{e:?}");
+    let again = at(&mut win, "lsp.definition", &doc, 3).await.unwrap();
+    let fresh = again["locations"][0]["token"].as_str().unwrap();
+    assert_ne!(fresh, token);
+    win.call("lsp.document.read", json!({ "token": fresh }))
         .await
         .unwrap();
 }

@@ -5328,6 +5328,11 @@ export type LspSettingsOrigin =
 
 /**  [`TOPIC_SHOW_DOCUMENT`] 의 내용. */
 export type LspShowDocument = {
+	/**
+	 *  이 이벤트를 보일 창의 label — 그 인스턴스에 문서를 연 창 중 가장 최근에 그 서버를 쓴 창. 다른 창은 버린다. `null` 은
+	 *  label 이 없는 연결(창이 아닌 Host 연결)이다.
+	 */
+	window: string | null,
 	/**  정규화한 실제 경로(루트 안). */
 	path: string,
 	worktree: string | null,

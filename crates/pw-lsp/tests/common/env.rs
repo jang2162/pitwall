@@ -352,6 +352,22 @@ impl Env {
         self.connect(ConnectionScope::Project(self.id.clone()))
     }
 
+    /// 창 label 이 `label` 인 프로젝트 창의 연결(데스크톱 IPC 가 싣는 `Caller::window` — M4-08 `window/showDocument`).
+    pub fn window_named(&self, label: &str) -> Conn {
+        let caller = Caller {
+            role: Role::Owner,
+            scope: ConnectionScope::Project(self.id.clone()),
+            window: Some(label.to_owned()),
+        };
+        let (session, rx) = Session::new(Arc::clone(&self.router), EventHub::new(), caller);
+        Conn {
+            session,
+            rx,
+            next_id: 0,
+            pending: Vec::new(),
+        }
+    }
+
     pub fn states(&self) -> Vec<(String, LspInstanceState)> {
         self.manager
             .status(&self.id)

@@ -13,22 +13,27 @@
 //! **읽기 토큰**(결정 M4-D13 · 메인 판정 2026-11-02): 서버가 이 연결(창 세션)의 응답에서 돌려준 루트 밖 URI 만 토큰이 된다 — 토큰은
 //! (연결, 인스턴스, URI)에 묶이고, 그 연결이 닫히면 지워진다. 읽기(`lsp.document.read`)와 토큰 문서 안의 요청은 부를 때마다
 //! 인스턴스의 허가를 다시 받는다(`LspManager::instance_grant` — 그 프로젝트 창의 연결 · 지금 신뢰 · 인스턴스가 떠 있음 · 그 연결이
-//! 그 인스턴스에 문서를 연 적이 있음). 그래서 다른 창 · 다른 서버 · 신뢰 해제 뒤의 토큰은 읽지 못한다. 파일은 실제 경로를 다시 풀어
+//! 그 인스턴스에 문서를 열었거나 재시작 · 정지한 적이 있음). 그래서 다른 창 · 다른 서버 · 신뢰 해제 뒤의 토큰은 읽지 못한다. 토큰은
+//! 발급 때 인스턴스의 세대 표지([`InstanceEpoch`])에 묶여, 서버를 다시 띄우거나 신뢰를 풀었다 다시 걸어도 살아나지 않는다(리뷰
+//! M1 — 「무효」 는 영구다). 읽은 글은 연결마다 [`TEXT_CACHE_LIMIT`] 까지 든다. 파일은 실제 경로를 다시 풀어
 //! 토큰을 만들 때와 같은지 보고, 막히지 않게 연 핸들이 일반 파일일 때만(FIFO · 장치 · 폴더 거절) [`READ_LIMIT`] 까지 읽는다.
 //! `jdt://` 는 디스크로 풀지 않고 그 인스턴스의 `java/classFileContents` 에만 묻는다. 그 밖의 스킴은 읽지 않는다. 쓰기 RPC 는 없다.
 //! `fs.*` 의 루트 판정(결정 M1-D8)은 그대로다 — 토큰은 이 모듈의 RPC 로만 읽힌다.
 //!
 //! **`window/showDocument`**: `file://` 이고 실제 경로가 인스턴스의 작업 공간 루트 안이며 프로젝트를 지금 신뢰할 때만 받아
-//! (`success: true`) 그 프로젝트 창에 [`TOPIC_SHOW_DOCUMENT`] 이벤트를 낸다. `external: true` · 다른 스킴 · 루트 밖(`..` · 링크로
+//! (`success: true`) 그 프로젝트에 [`TOPIC_SHOW_DOCUMENT`] 이벤트를 낸다 — 보일 창은 그 인스턴스에 문서를 연 창 중 가장 최근에
+//! 그 서버를 쓴 창 하나(`window`, 웹뷰가 자기 label 일 때만 연다)이고, 한 창에 [`SHOW_DOCUMENT_PERIOD`] 에
+//! [`SHOW_DOCUMENT_BURST`] 번까지다(리뷰 M2). `external: true` · 다른 스킴 · 루트 밖(`..` · 링크로
 //! 벗어난 것 포함) · 미신뢰는 `success: false` 이고 아무것도 열지 않는다(브라우저 · 외부 앱도) — 응답에 없던 루트 밖 경로를 서버가
 //! 열게 하지 못한다.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{BuildHasher as _, Hasher as _};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use lsp_types::Position;
 use pw_core::bus::Scope;
@@ -40,7 +45,7 @@ use serde_json::{Value, json};
 use crate::document::DocText;
 use crate::grant::real_path;
 use crate::handlers::HandlerContext;
-use crate::manager::{FeatureRequest, InstanceKey, LspManager};
+use crate::manager::{FeatureRequest, InstanceEpoch, InstanceKey, LspManager, WeakLspManager};
 use crate::message::ResponseError;
 use crate::server::Handlers;
 use crate::uri::uri_path;
@@ -57,6 +62,12 @@ pub const PREVIEW_FILES_LIMIT: usize = 200;
 pub const PREVIEW_CHARS: usize = 240;
 /// hover 본문의 상한(바이트). 넘으면 잘라 낸다.
 pub const HOVER_LIMIT: usize = 64 * 1024;
+/// 연결마다 토큰 문서의 읽은 글을 들고 있는 상한(바이트, M4-08 리뷰 L2). 넘으면 가장 오래 쓰지 않은 글부터 버린다 — 토큰은
+/// 남고, 다음에 쓰면 다시 읽는다.
+pub const TEXT_CACHE_LIMIT: u64 = 32 * 1024 * 1024;
+/// `window/showDocument` 를 한 창에 [`SHOW_DOCUMENT_PERIOD`] 안에 보이는 상한(M4-08 리뷰 M2). 넘는 요청은 `success: false`.
+pub const SHOW_DOCUMENT_BURST: usize = 2;
+pub const SHOW_DOCUMENT_PERIOD: Duration = Duration::from_secs(1);
 
 // ---- RPC 꼴 -------------------------------------------------------------------------------------------------------------------
 
@@ -190,6 +201,9 @@ pub struct LspDocumentReadResult {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct LspShowDocument {
+    /// 이 이벤트를 보일 창의 label — 그 인스턴스에 문서를 연 창 중 가장 최근에 그 서버를 쓴 창. 다른 창은 버린다. `null` 은
+    /// label 이 없는 연결(창이 아닌 Host 연결)이다.
+    pub window: Option<String>,
     /// 정규화한 실제 경로(루트 안).
     pub path: String,
     pub worktree: Option<String>,
@@ -282,7 +296,9 @@ struct TokenEntry {
     /// 파일이면 토큰을 만들 때 푼 실제 경로(없는 파일이면 `None` — 읽기가 거절한다).
     path: Option<PathBuf>,
     instance: InstanceKey,
-    /// 한 번 읽은 글(바뀌지 않는 문서로 다룬다 — 탭이 연 때의 글).
+    /// 발급 때 인스턴스의 세대 표지. 지금 표지와 다르면(서버를 다시 띄움 · 신뢰가 바뀜) 토큰은 죽는다(M4-08 리뷰 M1).
+    epoch: InstanceEpoch,
+    /// 한 번 읽은 글(바뀌지 않는 문서로 다룬다 — 탭이 연 때의 글). 연결마다 [`TEXT_CACHE_LIMIT`] 를 넘으면 버린다.
     text: Option<Arc<DocText>>,
 }
 
@@ -293,6 +309,8 @@ struct Tokens {
     by_place: HashMap<(SessionId, InstanceKey, String), String>,
     /// 닫힘을 지켜보는 연결.
     watched: HashSet<SessionId>,
+    /// 연결마다 들고 있는 글의 바이트 수와 그 토큰들(오래 쓰지 않은 것이 앞).
+    cached: HashMap<SessionId, (u64, VecDeque<String>)>,
 }
 
 impl Tokens {
@@ -300,6 +318,54 @@ impl Tokens {
         self.by_token.retain(|_, e| e.session != session);
         self.by_place.retain(|(s, _, _), _| *s != session);
         self.watched.remove(&session);
+        self.cached.remove(&session);
+    }
+
+    /// 죽은 토큰 하나를 지운다.
+    fn kill(&mut self, token: &str) {
+        let Some(entry) = self.by_token.remove(token) else {
+            return;
+        };
+        self.by_place
+            .remove(&(entry.session, entry.instance, entry.uri));
+        if let Some((bytes, order)) = self.cached.get_mut(&entry.session) {
+            order.retain(|t| t != token);
+            if let Some(text) = entry.text {
+                *bytes -= text.as_str().len() as u64;
+            }
+        }
+    }
+
+    /// 읽은 글을 든다. 그 연결의 글이 상한을 넘으면 가장 오래 쓰지 않은 것부터 버린다(방금 든 것은 남긴다).
+    fn keep(&mut self, token: &str, text: &Arc<DocText>) {
+        let Some(entry) = self.by_token.get_mut(token) else {
+            return;
+        };
+        if entry.text.is_some() {
+            return;
+        }
+        entry.text = Some(Arc::clone(text));
+        let (bytes, order) = self.cached.entry(entry.session).or_default();
+        *bytes += text.as_str().len() as u64;
+        order.push_back(token.to_owned());
+        while *bytes > TEXT_CACHE_LIMIT && order.len() > 1 {
+            let Some(old) = order.pop_front() else {
+                break;
+            };
+            if let Some(text) = self.by_token.get_mut(&old).and_then(|e| e.text.take()) {
+                *bytes -= text.as_str().len() as u64;
+            }
+        }
+    }
+
+    /// 든 글을 썼다 — 가장 나중으로 옮긴다.
+    fn touch(&mut self, session: SessionId, token: &str) {
+        if let Some((_, order)) = self.cached.get_mut(&session)
+            && let Some(at) = order.iter().position(|t| t == token)
+            && let Some(t) = order.remove(at)
+        {
+            order.push_back(t);
+        }
     }
 }
 
@@ -344,13 +410,27 @@ impl Navigation {
         }
     }
 
-    /// 루트 밖 URI 의 토큰(이 연결 · 인스턴스에 묶는다). 처음 받은 연결이면 닫힘을 지켜본다.
-    fn mint(&self, ctx: &Ctx, instance: &InstanceKey, uri: &str, path: Option<PathBuf>) -> String {
+    /// 루트 밖 URI 의 토큰(이 연결 · 인스턴스 · 그 세대 표지에 묶는다). 같은 자리의 산 토큰이 있으면 그것, 표지가 달라진 옛
+    /// 토큰이면 지우고 새로 만든다. 처음 받은 연결이면 닫힘을 지켜본다.
+    fn mint(
+        &self,
+        ctx: &Ctx,
+        (instance, epoch): (&InstanceKey, InstanceEpoch),
+        uri: &str,
+        path: Option<PathBuf>,
+    ) -> String {
         let session = ctx.session();
         let mut tokens = lock(&self.tokens);
         let place = (session, instance.clone(), uri.to_owned());
-        if let Some(token) = tokens.by_place.get(&place) {
-            return token.clone();
+        if let Some(token) = tokens.by_place.get(&place).cloned() {
+            if tokens
+                .by_token
+                .get(&token)
+                .is_some_and(|e| e.epoch == epoch)
+            {
+                return token;
+            }
+            tokens.kill(&token);
         }
         let token = new_token();
         tokens.by_token.insert(
@@ -360,6 +440,7 @@ impl Navigation {
                 uri: uri.to_owned(),
                 path,
                 instance: instance.clone(),
+                epoch,
                 text: None,
             },
         );
@@ -385,15 +466,21 @@ impl Navigation {
             .ok_or_else(|| RpcError::new(rpc_code::NOT_FOUND, "no such document token"))
     }
 
-    /// 토큰 문서의 글. 부를 때마다 허가를 다시 받는다.
+    /// 토큰 문서의 글. 부를 때마다 허가를 다시 받고, 인스턴스의 세대 표지가 발급 때와 다르면 토큰을 지우고 not found 다 —
+    /// 서버를 다시 띄우거나 신뢰를 풀었다 다시 걸어도 옛 토큰은 살아나지 않는다(M4-08 리뷰 M1).
     async fn text_of(
         &self,
         ctx: &Ctx,
         token: &str,
     ) -> Result<(TokenEntry, Arc<DocText>), RpcError> {
         let entry = self.entry(ctx, token)?;
-        drop(self.manager.instance_grant(ctx, &entry.instance)?);
+        let (_, epoch) = self.manager.instance_grant(ctx, &entry.instance)?;
+        if epoch != entry.epoch {
+            lock(&self.tokens).kill(token);
+            return Err(RpcError::new(rpc_code::NOT_FOUND, "no such document token"));
+        }
         if let Some(text) = &entry.text {
+            lock(&self.tokens).touch(entry.session, token);
             return Ok((entry.clone(), Arc::clone(text)));
         }
         let text = if entry.uri.starts_with("file:") {
@@ -407,6 +494,7 @@ impl Navigation {
                 .request_instance(
                     ctx,
                     &entry.instance,
+                    Some(entry.epoch),
                     "java/classFileContents",
                     json!({ "uri": entry.uri }),
                     None,
@@ -424,9 +512,7 @@ impl Navigation {
             )));
         };
         let text = Arc::new(DocText::new(text));
-        if let Some(e) = lock(&self.tokens).by_token.get_mut(token) {
-            e.text = Some(Arc::clone(&text));
-        }
+        lock(&self.tokens).keep(token, &text);
         Ok((entry, text))
     }
 
@@ -500,7 +586,14 @@ impl Navigation {
                 }));
                 let result = self
                     .manager
-                    .request_instance(ctx, &entry.instance, method, params, None)
+                    .request_instance(
+                        ctx,
+                        &entry.instance,
+                        Some(entry.epoch),
+                        method,
+                        params,
+                        None,
+                    )
                     .await?;
                 Ok(Answered {
                     result,
@@ -561,7 +654,7 @@ impl Navigation {
                 ..LspLocationsResult::default()
             });
         }
-        let grant = self.manager.instance_grant(ctx, &answer.instance)?;
+        let (grant, epoch) = self.manager.instance_grant(ctx, &answer.instance)?;
         let root = grant.root().to_path_buf();
         drop(grant);
         let mut raw = raw_locations(&answer.result);
@@ -580,7 +673,7 @@ impl Navigation {
                     at_file
                         .as_ref()
                         .map_or_else(|| uri.clone(), |p| p.display().to_string()),
-                    Some(self.mint(ctx, &answer.instance, &uri, real.clone())),
+                    Some(self.mint(ctx, (&answer.instance, epoch), &uri, real.clone())),
                 ),
             };
             let preview = if uri == answer.uri {
@@ -818,17 +911,34 @@ fn show_document_answer(cx: &HandlerContext, params: &Value) -> bool {
     if !real.starts_with(&cx.root) {
         return false;
     }
-    let (Some(bus), Some(projects)) = (&cx.bus, &cx.projects) else {
+    let (Some(bus), Some(projects), Some(manager)) = (
+        &cx.bus,
+        &cx.projects,
+        cx.manager.as_ref().and_then(WeakLspManager::upgrade),
+    ) else {
         return false;
     };
     if !projects.is_trusted(&cx.project_id) {
         return false;
     }
+    let key = InstanceKey {
+        project_id: cx.project_id.clone(),
+        worktree: cx.worktree.clone(),
+        server: cx.server.clone(),
+        root: cx.root.clone(),
+    };
+    // 그 인스턴스에 문서를 연 창 하나에만, 빈도 상한 안에서만(M4-08 리뷰 M2).
+    let Some(target) =
+        manager.show_document_window(&key, SHOW_DOCUMENT_BURST, SHOW_DOCUMENT_PERIOD)
+    else {
+        return false;
+    };
     let start = params
         .get("selection")
         .and_then(|s| s.get("start"))
         .and_then(position_of);
     let event = LspShowDocument {
+        window: target.window,
         path: real.display().to_string(),
         worktree: cx.worktree.clone(),
         line: start.map(|p| p.line + 1),

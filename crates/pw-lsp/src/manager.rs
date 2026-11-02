@@ -193,6 +193,33 @@ impl Ord for InstanceKey {
     }
 }
 
+/// 인스턴스의 세대 표지(M4-08 리뷰 M1 — [`LspManager::instance_grant`]). 인스턴스를 다시 띄우거나 끝내면(`generation`),
+/// 표에서 빠졌다 다시 생기면(`born`), 그 프로젝트의 신뢰가 바뀌거나 미신뢰가 관찰되면(`trust`) 달라진다. 루트 밖 읽기 토큰은
+/// 발급 때의 표지에 묶여, 표지가 달라지면 다시 살아나지 않는다(신뢰를 다시 걸거나 서버를 다시 띄워도).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstanceEpoch {
+    born: u64,
+    generation: u64,
+    trust: u64,
+}
+
+/// `window/showDocument` 을 보일 창([`LspManager::show_document_window`]).
+#[derive(Debug, Clone)]
+pub(crate) struct ShowWindow {
+    /// 그 연결을 연 창의 label. 모르면(창이 아닌 연결) `None`.
+    pub window: Option<String>,
+}
+
+/// 관리자를 약하게 가리킨다(인스턴스의 처리기가 쥔다 — [`LspManager::downgrade`]).
+#[derive(Clone)]
+pub struct WeakLspManager(std::sync::Weak<Inner>);
+
+impl WeakLspManager {
+    pub fn upgrade(&self) -> Option<LspManager> {
+        self.0.upgrade().map(|inner| LspManager { inner })
+    }
+}
+
 /// 알림을 받는 쪽이 아는 출처.
 #[derive(Debug, Clone)]
 pub struct NotificationSource {
@@ -206,6 +233,10 @@ type Listener = Arc<dyn Fn(&NotificationSource, &Value) + Send + Sync>;
 struct Holder {
     scope: ConnectionScope,
     closed: CancellationToken,
+    /// 그 연결을 연 창의 label([`Ctx::window`]) — `window/showDocument` 를 보일 창(M4-08 리뷰 M2).
+    window: Option<String>,
+    /// 이 창에 보낸 `window/showDocument` 의 시각(빈도 상한 — [`LspManager::show_document_window`]).
+    shown: VecDeque<Instant>,
 }
 
 impl Holder {
@@ -213,6 +244,8 @@ impl Holder {
         Self {
             scope: ctx.scope().clone(),
             closed: ctx.connection_closed(),
+            window: ctx.window().map(str::to_owned),
+            shown: VecDeque::new(),
         }
     }
 }
@@ -295,6 +328,11 @@ struct Instance {
     server: Option<Arc<LanguageServer>>,
     /// 띄우기 · 끝내기마다 오른다 — 지난 시도의 결과를 버린다.
     generation: u64,
+    /// 이 인스턴스 값을 만든 차례(관리자 전체에서 하나씩 오른다). 인스턴스가 표에서 빠졌다 다시 생기면 `generation` 이 0 부터
+    /// 다시 세므로, 세대 표지([`InstanceEpoch`])는 이것과 함께 본다.
+    born: u64,
+    /// 가장 최근에 이 서버를 쓴 연결(문서 열기 · 요청 — `window/showDocument` 를 보일 창, M4-08 리뷰 M2).
+    last_user: Option<SessionId>,
     docs: BTreeSet<String>,
     /// 지금 서버에 열어 둔 URI(→ 그 URI 를 연 문서들).
     synced: BTreeMap<String, Synced>,
@@ -321,6 +359,11 @@ impl Instance {
             state: LspInstanceState::Starting,
             server: None,
             generation: 0,
+            born: {
+                static BORN: AtomicU64 = AtomicU64::new(0);
+                BORN.fetch_add(1, Ordering::Relaxed)
+            },
+            last_user: None,
             docs: BTreeSet::new(),
             synced: BTreeMap::new(),
             holders: BTreeSet::new(),
@@ -368,6 +411,8 @@ struct State {
     sessions: HashMap<SessionId, Holder>,
     next_doc: u64,
     next_idle: u64,
+    /// 프로젝트(인스턴스의 `project_id`)마다 신뢰 세대 — 신뢰가 바뀌었다는 알림을 받거나 미신뢰를 본 때마다 오른다(M4-08 리뷰 M1).
+    trust_epochs: HashMap<String, u64>,
 }
 
 struct Inner {
@@ -618,6 +663,7 @@ impl LspManager {
                     .or_insert_with(|| Instance::new(*order, root.clone()));
                 instance.docs.insert(doc_id.clone());
                 instance.holders.insert(session);
+                instance.last_user = Some(session);
                 // 유휴 시한을 거둔다(그 태스크를 끝낸다).
                 if let Some((_, idle)) = instance.idle.take() {
                     idle.cancel();
@@ -1089,6 +1135,7 @@ impl LspManager {
             config: Arc::clone(&config),
             bus: Some(host.parts.bus.clone()),
             projects: Some(host.parts.projects.clone()),
+            manager: Some(self.downgrade()),
         });
         let spawned = LanguageServer::spawn(
             &grant,
@@ -1709,9 +1756,10 @@ impl LspManager {
                 Received::Event(event) if event.topic == registry::TOPIC_CHANGED => {
                     if let Ok(ProjectChanged {
                         kind: ChangeKind::Trust,
-                        ..
+                        project_id,
                     }) = serde_json::from_value(event.payload.clone())
                     {
+                        self.trust_changed(&project_id).await;
                         self.recheck_trust().await;
                     }
                 }
@@ -1728,6 +1776,13 @@ impl LspManager {
                 Received::Event(_) => {}
                 Received::Lagged(n) => {
                     tracing::warn!(target: "pw_lsp", dropped = n, "missed events; checking trust and settings again");
+                    // 놓친 것이 신뢰 변경일 수 있다 — 모든 프로젝트의 신뢰 세대를 올린다(토큰을 잃는 쪽으로).
+                    let projects: Vec<String> = lock(&self.inner.state)
+                        .instances
+                        .keys()
+                        .map(|k| k.project_id.clone())
+                        .collect();
+                    self.bump_trust(projects);
                     self.recheck_trust().await;
                     self.config_changed().await;
                 }
@@ -1987,11 +2042,12 @@ impl LspManager {
         // 다른 연결(창)이 같은 파일을 연 채 편집했으면 서버의 텍스트가 그 문서의 것이다 — 이 문서로 맞춘 뒤 묻는다(위치는 이 문서
         // 기준이다).
         let mut sent = 0;
-        if let Some(instance) = instances.get_mut(&key)
-            && let Some(synced) = instance.synced.get_mut(&doc.uri)
-        {
-            take_over(&server, instance.sync, synced, request.doc_id, doc, docs);
-            sent = synced.version;
+        if let Some(instance) = instances.get_mut(&key) {
+            instance.last_user = Some(session);
+            if let Some(synced) = instance.synced.get_mut(&doc.uri) {
+                take_over(&server, instance.sync, synced, request.doc_id, doc, docs);
+                sent = synced.version;
+            }
         }
         Ok((
             server,
@@ -2012,8 +2068,14 @@ impl LspManager {
 impl LspManager {
     /// 인스턴스 `key` 의 허가를 다시 받는다(M4-08 — 루트 밖 문서의 토큰 길, 메인 판정 2026-11-02): `lsp_grant`(그 프로젝트 창의
     /// 연결인가 · 지금 신뢰하는가)를 지나고, 허가의 루트가 인스턴스의 작업 공간 루트를 품고, 그 인스턴스가 떠 있고, 부른 연결이 그
-    /// 인스턴스에 문서를 연 적이 있을(`holders`) 때만. 아니면 permission denied · untrusted · not found(`NO_SERVER`).
-    pub fn instance_grant(&self, ctx: &Ctx, key: &InstanceKey) -> Result<LspGrant, RpcError> {
+    /// 인스턴스에 문서를 열었거나 그 인스턴스를 재시작 · 정지한 적이 있을(`holders`) 때만. 아니면 permission denied · untrusted ·
+    /// not found(`NO_SERVER`). 허가와 함께 지금의 세대 표지([`InstanceEpoch`])를 돌려준다 — 부른 쪽이 발급 때의 표지와 견준다.
+    /// 미신뢰를 보면 그 프로젝트의 신뢰 세대를 올린다(신뢰를 다시 걸어도 그 전의 표지는 맞지 않는다).
+    pub fn instance_grant(
+        &self,
+        ctx: &Ctx,
+        key: &InstanceKey,
+    ) -> Result<(LspGrant, InstanceEpoch), RpcError> {
         let host = self.host()?;
         let grant = lsp_grant(
             ctx.scope(),
@@ -2021,7 +2083,12 @@ impl LspManager {
             &host.parts.projects,
             &key.project_id,
             key.worktree.as_deref(),
-        )?;
+        )
+        .inspect_err(|e| {
+            if reason(e) == Some("untrusted") {
+                self.bump_trust([key.project_id.clone()]);
+            }
+        })?;
         if !key.root.starts_with(grant.root()) {
             return Err(RpcError::new(
                 rpc_code::PERMISSION_DENIED,
@@ -2043,7 +2110,92 @@ impl LspManager {
                 "this connection has no document in that language server",
             ));
         }
-        Ok(grant)
+        let epoch = InstanceEpoch {
+            born: instance.born,
+            generation: instance.generation,
+            trust: state
+                .trust_epochs
+                .get(&key.project_id)
+                .copied()
+                .unwrap_or(0),
+        };
+        drop(state);
+        Ok((grant, epoch))
+    }
+
+    /// 프로젝트들의 신뢰 세대를 올린다(머리의 [`InstanceEpoch`]).
+    fn bump_trust(&self, projects: impl IntoIterator<Item = String>) {
+        let mut state = lock(&self.inner.state);
+        for project in projects {
+            *state.trust_epochs.entry(project).or_default() += 1;
+        }
+    }
+
+    /// 신뢰를 가진 프로젝트 `owner` 의 신뢰가 바뀌었다는 알림: 그 신뢰를 따르는 프로젝트(워크트리 프로젝트 포함)의 신뢰 세대를
+    /// 올린다. 해제든 부여든 올린다 — 해제와 부여가 잇달아 와 서버를 끝내기 전에 신뢰가 돌아왔어도 그 전의 토큰은 살아나지 않는다.
+    async fn trust_changed(&self, owner: &str) {
+        let Ok(host) = self.host() else {
+            return;
+        };
+        let projects = host.parts.projects.clone();
+        let owner_id = owner.to_owned();
+        let followers = tokio::task::spawn_blocking(move || projects.trust_followers(&owner_id))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_else(|| vec![owner.to_owned()]);
+        self.bump_trust(followers);
+    }
+
+    /// `window/showDocument` 을 보일 창(M4-08 리뷰 M2): 인스턴스 `key` 에 지금 문서를 연 연결 중 가장 최근에 그 서버를 쓴 것(그것이
+    /// 문서를 닫았으면 문서를 연 연결 중 하나), 닫히지 않은 것. 그 연결에 `period` 안에 `burst` 번을 이미 보였으면 `None`(버린다
+    /// — 서버가 창을 마구 움직이지 못하게). 문서를 연 연결이 없어도 `None`.
+    pub(crate) fn show_document_window(
+        &self,
+        key: &InstanceKey,
+        burst: usize,
+        period: Duration,
+    ) -> Option<ShowWindow> {
+        let now = Instant::now();
+        let mut state = lock(&self.inner.state);
+        let State {
+            docs,
+            instances,
+            sessions,
+            ..
+        } = &mut *state;
+        let instance = instances.get(key)?;
+        let openers: BTreeSet<SessionId> = instance
+            .docs
+            .iter()
+            .filter_map(|d| docs.get(d))
+            .map(|d| d.session)
+            .filter(|s| sessions.get(s).is_some_and(|h| !h.closed.is_cancelled()))
+            .collect();
+        let session = instance
+            .last_user
+            .filter(|s| openers.contains(s))
+            .or_else(|| openers.iter().next().copied())?;
+        let holder = sessions.get_mut(&session)?;
+        while holder
+            .shown
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= period)
+        {
+            holder.shown.pop_front();
+        }
+        if holder.shown.len() >= burst {
+            return None;
+        }
+        holder.shown.push_back(now);
+        Some(ShowWindow {
+            window: holder.window.clone(),
+        })
+    }
+
+    /// 처리기가 쥘 약한 참조(서버 → 처리기 → 관리자로 순환하지 않게).
+    pub(crate) fn downgrade(&self) -> WeakLspManager {
+        WeakLspManager(Arc::downgrade(&self.inner))
     }
 
     /// 문서 없이 인스턴스 `key` 의 서버에 묻는다(M4-08 — 루트 밖 문서 안의 hover · 정의, `jdt://` 의 `java/classFileContents`).
@@ -2053,20 +2205,31 @@ impl LspManager {
         &self,
         ctx: &Ctx,
         key: &InstanceKey,
+        expected: Option<InstanceEpoch>,
         method: &str,
         params: Value,
         timeout: Option<Duration>,
     ) -> Result<Value, RpcError> {
         let mut retried = false;
         loop {
-            drop(self.instance_grant(ctx, key)?);
-            let server = lock(&self.inner.state)
-                .instances
-                .get(key)
-                .and_then(|i| i.server.clone())
-                .ok_or_else(|| {
+            let (_, epoch) = self.instance_grant(ctx, key)?;
+            if expected.is_some_and(|e| e != epoch) {
+                return Err(RpcError::new(
+                    rpc_code::NOT_FOUND,
+                    "the language server instance is not the one that was asked before",
+                ));
+            }
+            let server = {
+                let mut state = lock(&self.inner.state);
+                let instance = state.instances.get_mut(key);
+                let server = instance.and_then(|i| {
+                    i.last_user = Some(ctx.session());
+                    i.server.clone()
+                });
+                server.ok_or_else(|| {
                     RpcError::new(code::NO_SERVER, "the language server is not running")
-                })?;
+                })?
+            };
             let options = RequestOptions {
                 timeout: timeout.unwrap_or(crate::server::DEFAULT_REQUEST_TIMEOUT),
                 cancel: ctx.cancellation().clone(),

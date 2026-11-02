@@ -28,6 +28,8 @@ pub struct HandlerContext {
     pub bus: Option<EventBus>,
     /// 프로젝트 레지스트리(처리기가 신뢰를 다시 본다 — M4-08). 없으면 신뢰를 요구하는 처리기는 거절한다.
     pub projects: Option<Registry>,
+    /// 관리자(약한 참조 — `window/showDocument` 가 보일 창을 고른다, M4-08 리뷰 M2). 없으면 그 처리기는 거절한다.
+    pub manager: Option<crate::manager::WeakLspManager>,
 }
 
 /// 인스턴스 하나의 처리기 표.
