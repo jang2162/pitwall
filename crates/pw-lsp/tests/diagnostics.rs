@@ -342,6 +342,59 @@ async fn stopping_one_server_clears_only_its_diagnostics() {
     assert_eq!(listed(&mut win, &env, &file).await, ["pyright"]);
 }
 
+/// 두 서버가 같은 파일의 진단을 잇달아 바꿔도 그 경로의 이벤트는 저장소가 바뀐 차례대로 나간다 — 한 서버의 진단이 이벤트
+/// 흐름에서 뒤로 돌아가지 않는다(이벤트를 저장소 잠금 밖에서 내면 늦게 나간 옛 이벤트가 앞지른다 — M4-06 리뷰 L1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn events_for_one_path_leave_in_the_order_the_store_changed() {
+    const ROUNDS: usize = 150;
+    let env = Env::new(EnvOptions::default());
+    let file = env.file("app.py", "x = 1\n");
+    for server in ["basedpyright", "ruff"] {
+        // 한 번에 진단 여럿 — 이벤트를 만드는 데 시간이 들어 엇갈릴 틈이 넓어진다.
+        let rounds = (0..ROUNDS)
+            .map(|round| {
+                publish(
+                    &uri(&file),
+                    Some(0),
+                    (0..200)
+                        .map(|line| diag(line, 2, &format!("{server}:{round}")))
+                        .collect(),
+                )
+            })
+            .collect();
+        env.fake(
+            server,
+            Scenario {
+                capabilities: incremental(),
+                ..Scenario::default()
+            }
+            .on("textDocument/didOpen", rounds),
+        );
+    }
+    let mut events = subscribe(&env);
+    let mut win = env.window();
+    win.open(&env, &file, "Python", "x = 1\n").await;
+    let mut last = std::collections::HashMap::<String, usize>::new();
+    let done = |last: &std::collections::HashMap<String, usize>| {
+        ["basedpyright", "ruff"]
+            .iter()
+            .all(|s| last.get(*s) == Some(&(ROUNDS - 1)))
+    };
+    while !done(&last) {
+        let event = next_within(&mut events, &file, Duration::from_secs(60)).await;
+        for message in messages(&event["diagnostics"]) {
+            let (server, round) = message.split_once(':').unwrap();
+            let round: usize = round.parse().unwrap();
+            let seen = last.entry(server.to_owned()).or_insert(0);
+            assert!(
+                round >= *seen,
+                "{server}'s diagnostics went back from round {seen} to {round}"
+            );
+            *seen = round;
+        }
+    }
+}
+
 /// 신뢰를 풀면 그 프로젝트의 서버가 끝나고 그 진단도 지운다(결정 M4-D8).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn revoking_trust_clears_the_projects_diagnostics() {

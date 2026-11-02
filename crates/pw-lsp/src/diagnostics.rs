@@ -631,7 +631,7 @@ impl DiagnosticStore {
         let uri = uri.as_str();
         let path = path.to_string_lossy().into_owned();
         let (items, truncated) = diagnostics(&source.key.server, origin, version, raw);
-        let event = {
+        {
             let mut state = lock(&self.inner.state);
             // 잠금 차례: 저장소 → 관리자(머리 주석). 판정과 넣기가 한 잠금 안이라 지우기(`prune`)와 엇갈리지 않는다.
             if !self.inner.manager.is_current(source) {
@@ -679,17 +679,18 @@ impl DiagnosticStore {
                     },
                 );
             }
-            event_of(&source.key.project_id, &path, project.files.get(&path)).unwrap_or_else(|| {
-                LspDiagnosticsEvent {
+            let event = event_of(&source.key.project_id, &path, project.files.get(&path))
+                .unwrap_or_else(|| LspDiagnosticsEvent {
                     project_id: source.key.project_id.clone(),
                     worktree: normalize_worktree(source.key.worktree.as_deref()),
                     path: path.clone(),
                     diagnostics: Vec::new(),
                     truncated: false,
-                }
-            })
-        };
-        self.emit(&[event]);
+                });
+            // 잠금 안에서 낸다 — 같은 경로의 이벤트가 상태가 바뀐 차례대로 나간다(잠금 밖이면 늦게 나간 옛 이벤트가 웹뷰의 마지막
+            // 상태가 될 수 있다 — M4-06 리뷰 L1). 버스는 자기 잠금만 쓰고 이 저장소 · 관리자를 부르지 않는다.
+            self.emit(&state, &[event]);
+        }
     }
 
     // ---- pull ----------------------------------------------------------------------------------------------------------------
@@ -837,7 +838,7 @@ impl DiagnosticStore {
         let Some(path) = uri_path(uri).map(|p| p.to_string_lossy().into_owned()) else {
             return;
         };
-        let event = {
+        {
             let mut state = lock(&self.inner.state);
             if !self.inner.manager.is_current(source) {
                 return;
@@ -859,10 +860,9 @@ impl DiagnosticStore {
             for item in &mut entry.items {
                 item.version = i32::try_from(version).ok();
             }
-            event_of(&source.key.project_id, &path, Some(file))
-        };
-        if let Some(event) = event {
-            self.emit(&[event]);
+            if let Some(event) = event_of(&source.key.project_id, &path, Some(file)) {
+                self.emit(&state, &[event]);
+            }
         }
     }
 
@@ -911,7 +911,7 @@ impl DiagnosticStore {
 
     /// 상태가 바뀌었다(관리자 잠금 밖): 지금 세대가 아닌 출처의 진단, 서버에 더는 열려 있지 않은 문서의 pull 진단을 지운다.
     fn prune(&self, project_id: &str) {
-        let events = {
+        {
             let mut state = lock(&self.inner.state);
             let Some(project) = state.projects.get_mut(project_id) else {
                 return;
@@ -979,12 +979,12 @@ impl DiagnosticStore {
                 }
                 events.push(event);
             }
-            events
-        };
-        self.emit(&events);
+            self.emit(&state, &events);
+        }
     }
 
-    fn emit(&self, events: &[LspDiagnosticsEvent]) {
+    /// 이벤트를 낸다. 저장소 잠금을 쥔 채로만 부른다(`_held` — 차례가 상태가 바뀐 차례와 같게).
+    fn emit(&self, _held: &MutexGuard<'_, State>, events: &[LspDiagnosticsEvent]) {
         let Some(bus) = self.inner.manager.bus() else {
             return;
         };
