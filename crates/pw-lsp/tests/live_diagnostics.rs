@@ -101,6 +101,12 @@ mod live {
                 ds.iter()
                     .any(|d| d["severity"] == "error" && at(d, line, column, column + width))
                     && pulled.is_none_or(|source| ds.iter().any(|d| d["source"] == source))
+                    // rust-analyzer 의 flycheck(rustc) 진단은 `data.rendered` 를 싣는다 — Host 의 `data` 상한(4 KiB)이 실제 진단의
+                    // data 를 버리지 않는지 본다(버리면 「빠른 수정」 이 그것을 서버에 돌려주지 못한다 — M4-12).
+                    && (fixture != "rust"
+                        || ds
+                            .iter()
+                            .any(|d| d["source"] == "rustc" && !d["data"].is_null()))
             });
             if found {
                 break;
