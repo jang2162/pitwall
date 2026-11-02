@@ -273,6 +273,7 @@ path = "/opt/rust-analyzer/bin/rust-analyzer"   # 실행 파일 — 절대 경�
 args = ["--log-file", "/tmp/ra.log"]            # 정의의 args 를 통째로 바꾼다
 env = { RA_LOG = "info" }                       # 변수마다 정의의 env 위에 덮는다
 features = { disable = ["formatting"] }         # 이 서버에 맡기지 않을 기능(정의의 것에 더한다)
+install_prompt = false                          # 서버가 없을 때 탭 위 설치 안내를 띄우지 않는다(기본 true — 「이 프로젝트에서 묻지 않기」, M4-17)
 [lsp.rust-analyzer.settings]                    # workspace/configuration 의 답 — 정의 → 전역 → 프로젝트 순으로 깊게 합친다
 rust-analyzer = { cargo = { features = "all" } }
 ```
@@ -283,7 +284,7 @@ rust-analyzer = { cargo = { features = "all" } }
 - 형식이 틀린 키 · 모르는 키 · 등록되지 않은 서버 id 는 경고하고 그 값만 버린다(`lsp.servers.list` 의 `warnings` 와 로그). `[lsp]` 바로 아래의 표가 아닌 값(`idle_shutdown_minutes` 등)은 서버 전역 설정이다(M4-05). `lightbulb`(참 · 거짓, 기본 참)는 커서 줄에 코드 액션이 있으면 거터에 전구를 둘지다(M4-12 — 웹뷰가 읽는다)
 - 해석하는 디렉터리(서버의 작업 공간 루트)는 프로젝트 루트 안의 있는 폴더여야 한다 — `..` · `.` 마디가 있거나 실제 경로(심볼릭 링크를 푼 것)가 루트 밖이면 거절하고, 프로젝트 로컬을 찾는 올라가기도 실제 경로로 루트에서 멈춘다. Windows 에서 경로로 적은 실행 파일(프로젝트 로컬 · 설정 경로)은 PATHEXT 확장자를 붙인 이름만 본다(`node_modules/.bin` 의 확장자 없는 sh 스크립트가 아니라 `.cmd`)
 - 서버 프로세스의 환경은 그 디렉터리의 런타임 환경 위에 정의 · 설정의 `env` 를 덮은 것이고, 정의의 `requires` 로 찾은 런타임(결정 M4-D6)은 PATH 맨 앞에 그 `bin` 을, java 는 `JAVA_HOME` 도 넣는다(설정 `env` 의 `JAVA_HOME` 이 있으면 그것) — 그래서 PATH 에서 고른 런처도 프로젝트의 JDK 가 아니라 서버용 JDK 로 뜬다(`ServerSetup::env` · `with_runtime`)
-- 프로젝트 설정은 **디스크에 쓰지 않고** 읽는다(「`[open_with]`」 과 같다)
+- 프로젝트 설정은 **디스크에 쓰지 않고** 읽는다(「`[open_with]`」 과 같다). 쓰는 것은 상태 팝업의 「이 프로젝트에서 끄기」(`enabled = false`)와 설치 배너의 「이 프로젝트에서 묻지 않기」(`install_prompt = false`)뿐이고, **커밋되지 않는 개인 파일 `project.local.toml` 에만** 쓴다(`lsp.server.setLocal` — 고칠 파일은 `ConfigSource::local_file`: 워크트리에 없으면 메인 체크아웃 것, 개인 전용이면 그 폴더. 15-m4-plan M4-17)
 
 ## 5-1. 런타임 환경 (D26)
 
