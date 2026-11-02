@@ -290,6 +290,26 @@ export class LiveText {
     this.spread(tr.changes, before, origin, userEvent);
   }
 
+  /**
+   * 뷰 밖에서 만든 편집(언어 서버의 일괄 편집 — 15-m4-plan M4-12 · 포맷 M4-13)을 허브에 넣는다. 붙은 뷰가 있든 없든(뒤쪽 탭)
+   * 같다 — 허브의 undo 기록에 한 단계(`isolate` 면 앞뒤 편집과 묶이지 않는다)로 쌓이고, 붙은 뷰는 모두 그 변경을 받아 커서 ·
+   * 선택을 매핑한다. `changes` 는 지금 텍스트 기준이다. 바뀐 뒤 텍스트를 돌려준다.
+   */
+  applyChanges(
+    changes: ChangeSet,
+    { userEvent, isolate = true }: { userEvent?: string; isolate?: boolean } = {},
+  ): Text {
+    if (changes.empty) return this.hub.doc;
+    const before = this.hub.doc;
+    this.hub = this.hub.update({
+      changes,
+      ...(userEvent !== undefined && { userEvent }),
+      ...(isolate && { annotations: isolateHistory.of("full") }),
+    }).state;
+    this.spread(changes, before, undefined, userEvent);
+    return this.hub.doc;
+  }
+
   /** 이 문서의 undo 를 `view` 에서 했다. 되돌릴 것이 없으면 `false`. */
   undo(view: EditorView): boolean {
     return undo({ state: this.hub, dispatch: (tr) => this.commit(tr, view) });
