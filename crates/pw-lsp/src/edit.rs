@@ -688,15 +688,18 @@ async fn forward(key: &InstanceKey, params: &Value) -> Value {
     };
     // 판정은 흐름 표의 잠금 밖에서(관리자의 잠금을 겹쳐 쥐지 않는다).
     mark_foreign(&manager, key, session, &mut edit);
-    let (rx, closed) = {
+    let (rx, closed, request_id) = {
         let mut flows = flows();
         let Some(flow) = flows
             .iter_mut()
             .find(|f| f.id == id && f.session == session && f.key == *key)
-            .filter(|f| f.waiting.is_empty())
         else {
             return not_applied("the command ended before the window answered");
         };
+        // 판정하는 사이 같은 명령의 다른 편집이 먼저 자리를 잡았다.
+        if !flow.waiting.is_empty() {
+            return not_applied("an earlier edit of this command is still waiting for the window");
+        }
         flow.next += 1;
         let request_id = flow.next;
         let (tx, rx) = oneshot::channel();
@@ -717,16 +720,24 @@ async fn forward(key: &InstanceKey, params: &Value) -> Value {
             flow.waiting.remove(&request_id);
             return not_applied("the window that ran the command is not listening");
         }
-        (rx, flow.closed.clone())
+        (rx, flow.closed.clone(), request_id)
     };
-    tokio::select! {
-        answer = rx => match answer {
+    let answer = tokio::select! {
+        answer = rx => return match answer {
             Ok(answer) => json!({ "applied": answer.applied, "failureReason": answer.failure_reason }),
             Err(_) => not_applied("the command ended before the window answered"),
         },
         () = closed.cancelled() => not_applied("the window closed"),
         () = tokio::time::sleep(ANSWER_TIMEOUT) => not_applied("the window did not answer in time"),
+    };
+    // 답 없이 끝났다 — 자리를 비운다(남겨 두면 같은 명령의 다음 편집이 「앞 편집이 기다리는 중」 으로 거절된다).
+    if let Some(flow) = flows()
+        .iter_mut()
+        .find(|f| f.id == id && f.session == session)
+    {
+        flow.waiting.remove(&request_id);
     }
+    answer
 }
 
 /// 연결이 프로젝트 창이면 그 프로젝트.

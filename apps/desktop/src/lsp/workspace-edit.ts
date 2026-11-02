@@ -337,6 +337,8 @@ export interface ApplyOptions {
 export interface EditFlow {
   /** 편집을 적용한다(미리 확인 → 미리보기 → 쓰기 → 기록). 던지지 않는다 — 뜻밖의 오류도 `failed` 결과다. */
   apply(edit: LspWorkspaceEdit, options?: ApplyOptions): Promise<EditOutcome>;
+  /** 이 흐름이 잡은 파일 범위(같은 명령의 다음 편집이 `begin(fs)` 로 이어받는다). */
+  readonly fs: EditFs;
 }
 
 const nothing = (kind: EditOutcome["kind"], message?: string): EditOutcome => ({
@@ -383,11 +385,13 @@ export class EditApplier {
   }
 
   /** 요청을 보내기 직전에 연다 — 그 뒤의 `fs.changed` 와 동기화한 문서의 버전을 기준으로 미리 확인한다. */
-  begin(): EditFlow {
+  begin(scope?: EditFs): EditFlow {
     const since = this.seq;
     const versions = new Map(this.deps.synced());
-    const fs = this.deps.fs.pin?.() ?? this.deps.fs;
+    // `scope` — 같은 흐름을 이어 여는 쪽(같은 명령의 다음 편집)이 앞 흐름의 범위를 그대로 쓴다.
+    const fs = scope ?? this.deps.fs.pin?.() ?? this.deps.fs;
     return {
+      fs,
       apply: (edit, options = {}) =>
         this.serial(() => this.applyNow(edit, options, since, versions, fs)).catch(
           (e: unknown): EditOutcome => nothing("failed", errorText(e)),

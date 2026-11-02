@@ -630,6 +630,9 @@ describe("EditApplier", () => {
     expect(env.disk.text("/r/c.ts")).toBe("const x = neo;");
     // 되돌리기도 그 범위로.
     expect((await env.applier.undoLast()).reverted).toEqual(["/r/c.ts"]);
+    // 같은 명령의 다음 편집은 앞 흐름의 범위를 잇는다.
+    const first = env.applier.begin();
+    expect(env.applier.begin(first.fs).fs).toBe(first.fs);
     expect(env.disk.text("/r/c.ts")).toBe("const x = old;");
   });
 });

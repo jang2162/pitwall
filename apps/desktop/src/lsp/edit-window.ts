@@ -159,9 +159,11 @@ export function createEditWindow(deps: EditWindowDeps): EditWindow {
           wanted: () =>
             flows.get(request.flowId) === running && Date.now() - received < ANSWER_TIMEOUT_MS,
         });
-        // 같은 명령이 편집을 더 걸면 이 편집 뒤의 문서 · 파일이 기준이다(이 편집이 올린 버전을 「요청 뒤의 바뀜」 으로 세지 않게).
+        // 같은 명령이 편집을 더 걸면 이 편집 뒤의 동기화 문서 버전이 기준이다(이 편집이 올린 버전을 「요청 뒤의 바뀜」 으로 세지
+        // 않게). 파일 범위는 처음 흐름의 것을 잇는다. 닫힌 파일은 이 편집이 쓴 것의 `fs.changed` 가 늦게 와 다음 편집이 `stale`
+        // 이 될 수 있다(안전한 쪽 — 계획 M4-12 행 이월).
         if (outcome.kind === "applied" && flows.get(request.flowId) === running)
-          running.flow = applier.begin();
+          running.flow = applier.begin(running.flow.fs);
         report(outcome);
         const applied =
           (outcome.kind === "applied" && outcome.notWritten.length === 0) ||
