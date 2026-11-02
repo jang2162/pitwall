@@ -712,3 +712,51 @@ git-diff-no-content-change = The content is unchanged
 git-diff-mode-change = Mode { $old } → { $new }
 git-diff-renamed = Renamed from { $old }
 git-diff-side-unreadable = One side cannot be read as text
+
+## Rename · code actions · batch edits (15-m4-plan M4-12)
+lsp-edit-action-rename = Rename Symbol
+lsp-edit-action-code-actions = Show Code Actions
+lsp-edit-action-undo-last = Undo Last Batch Edit
+lsp-edit-quick-fix = Quick Fix
+lsp-edit-rename-input = New name
+lsp-edit-rename-hint = ↩ to rename · Esc to cancel
+lsp-edit-rename-invalid = This cannot be renamed
+lsp-edit-rename-invalid-reason = This cannot be renamed: { $message }
+lsp-edit-rename-failed = Could not rename: { $message }
+lsp-edit-code-actions = Code actions
+lsp-edit-code-actions-none = No code actions here
+lsp-edit-code-action-failed = Could not apply the code action: { $message }
+lsp-edit-stale = Files changed after the language server read them — try again
+lsp-edit-refused = This edit is not applied: { $message }
+lsp-edit-failed = Could not apply the edit: { $message }
+lsp-edit-applied =
+    { $count ->
+        [one] Changed 1 file
+       *[other] Changed { $count } files
+    }
+lsp-edit-editor-only = Put in the editor only because of unsaved edits: { $files }
+lsp-edit-not-written = Not written because they changed meanwhile: { $files }
+lsp-edit-undo = Undo
+lsp-edit-reverted =
+    { $count ->
+        [one] Reverted 1 file
+       *[other] Reverted { $count } files
+    }
+lsp-edit-not-reverted = Not reverted because they changed since: { $files }
+lsp-edit-nothing-to-undo = No batch edit to undo
+lsp-edit-preview-title =
+    { $count ->
+        [one] 1 file will change
+       *[other] { $count } files will change
+    }
+lsp-edit-preview-apply = Apply
+lsp-edit-preview-cancel = Cancel
+lsp-edit-preview-editor-only = Editor only (unsaved edits)
+lsp-edit-preview-lines =
+    { $lines ->
+        [one] 1 line
+       *[other] { $lines } lines
+    }
+lsp-edit-preview-create = New file
+lsp-edit-preview-rename = Renamed from { $from }
+lsp-edit-preview-delete = Deleted

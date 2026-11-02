@@ -595,6 +595,20 @@ win = "ctrl+b"
 linux = "ctrl+b"
 when = "dbExplorerFocus"
 
+# 코드 (LSP · 편집)(10-ui §4.2 「코드」, 15-m4-plan). 글자 영역(`editorFocus`)에서만 돈다.
+# rename · 코드 액션(M4-12, src/lsp/edit-ui.tsx): `⇧F6` 은 파일 트리 포커스의 이름 바꾸기(`fileTree.rename`, `when = "fileTree"`)와
+# 컨텍스트로 갈린다. 「마지막 일괄 편집 되돌리기」(`lsp.undoLastEdit`)는 기본 키가 없다 — 액션 찾기와 알림의 [되돌리기].
+
+[[bindings]]
+action = "lsp.rename"
+key = "shift+f6"
+when = "editorFocus"
+
+[[bindings]]
+action = "lsp.codeActions"
+key = "alt+enter"
+when = "editorFocus"
+
 # 멀티 커서(10-ui §4.2 「멀티 커서」 · §5.3, 15-m4-plan M4-14, src/editor/multi-cursor-actions.ts). 글자 영역(`editorFocus`)에서만 돈다.
 # 위 · 아래 줄에 커서 추가는 「수정 키 더블 탭 후 누른 채」(packages/keymap 의 `doubleHold`)다 — macOS `⌥⌥` 를 누른 채 `↑` `↓`,
 # Win/Linux `Ctrl Ctrl` 을 누른 채. 수정 키를 떼면 끝나 다음 `⌥↓` 는 보통 키다. Esc 는 툴 윈도우의 「에디터로 포커스」

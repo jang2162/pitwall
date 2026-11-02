@@ -113,6 +113,8 @@ describe("default keymap overlaps", () => {
         ["⌘W", ["window.close []", "terminal.closeTab [terminalFocus]"]],
         // 텍스트 에디터의 줄로 이동과 hex 뷰어의 오프셋으로 이동 — hex 뷰어는 `editorFocus` 를 가린다(src/keymap/context.ts).
         ["⌘L", ["editor.gotoLine [editorFocus]", "hex.gotoOffset [hexFocus]"]],
+        // 파일 트리의 이름 바꾸기와 에디터의 rename(M4-12 — 10-ui §4.2 「코드」 · §5.4, 포커스로 갈린다).
+        ["⇧F6", ["fileTree.rename [fileTree]", "lsp.rename [editorFocus]"]],
         // 업데이트(풀, M2-20)와 터미널의 새 탭 — IntelliJ 처럼 터미널에 포커스가 있으면 새 탭이다.
         ["⌘T", ["terminal.newTab [terminalFocus]", "git.pull.open []"]],
         // 변경 롤백(M2) 과 테이블 데이터의 변경 되돌리기(M3-17 — 10-ui §4.2 「DB」, 테이블 데이터에 포커스가 있을 때만).
@@ -143,6 +145,8 @@ describe("default keymap overlaps", () => {
             "db.tableData.deleteRow [dbTableDataFocus && !inputFocus]",
           ],
         ],
+        // 파일 트리의 이름 바꾸기와 에디터의 rename(M4-12).
+        ["Shift+F6", ["fileTree.rename [fileTree]", "lsp.rename [editorFocus]"]],
         // 터미널의 복사와 결과 그리드의 다른 형식으로 복사(M3-16) — 포커스 범위가 갈린다.
         ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
         // 변경 롤백(M2)과 테이블 데이터의 변경 되돌리기(M3-17).
@@ -173,6 +177,8 @@ describe("default keymap overlaps", () => {
             "db.tableData.deleteRow [dbTableDataFocus && !inputFocus]",
           ],
         ],
+        // 파일 트리의 이름 바꾸기와 에디터의 rename(M4-12).
+        ["Shift+F6", ["fileTree.rename [fileTree]", "lsp.rename [editorFocus]"]],
         ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
         // 변경 롤백(M2)과 테이블 데이터의 변경 되돌리기(M3-17).
         ["Ctrl+Alt+Z", ["git.rollback []", "db.tableData.revert [dbTableDataFocus]"]],

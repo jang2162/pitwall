@@ -694,3 +694,46 @@ git-diff-no-content-change = 내용은 그대로다
 git-diff-mode-change = 모드 { $old } → { $new }
 git-diff-renamed = { $old } 에서 이름이 바뀜
 git-diff-side-unreadable = 한쪽 내용을 텍스트로 읽을 수 없다
+
+## rename · 코드 액션 · 일괄 편집(15-m4-plan M4-12)
+lsp-edit-action-rename = 이름 바꾸기
+lsp-edit-action-code-actions = 코드 액션 · 빠른 수정 보기
+lsp-edit-action-undo-last = 마지막 일괄 편집 되돌리기
+lsp-edit-quick-fix = 빠른 수정
+lsp-edit-rename-input = 새 이름
+lsp-edit-rename-hint = ↩ 바꾸기 · Esc 취소
+lsp-edit-rename-invalid = 이 자리는 이름을 바꿀 수 없다
+# $message: 언어 서버가 준 까닭
+lsp-edit-rename-invalid-reason = 이 자리는 이름을 바꿀 수 없다: { $message }
+# $message: 언어 서버가 준 오류
+lsp-edit-rename-failed = 이름을 바꾸지 못했다: { $message }
+lsp-edit-code-actions = 코드 액션
+lsp-edit-code-actions-none = 이 자리에는 코드 액션이 없다
+# $message: 언어 서버 · 적용기가 준 오류
+lsp-edit-code-action-failed = 코드 액션을 적용하지 못했다: { $message }
+lsp-edit-stale = 서버가 본 뒤 파일이 바뀌었다 — 다시 시도한다
+# $message: 거절한 까닭(영어 원문)
+lsp-edit-refused = 이 편집은 적용하지 않는다: { $message }
+# $message: 오류 원문
+lsp-edit-failed = 편집을 적용하지 못했다: { $message }
+# $count: 디스크에 쓴 파일 수(에디터에만 넣은 문서 포함)
+lsp-edit-applied = { $count }개 파일을 바꿨다
+# $files: 파일 이름 목록
+lsp-edit-editor-only = 미저장 편집이 있어 에디터에만 넣었다: { $files }
+lsp-edit-not-written = 그사이 바뀌어 쓰지 못했다: { $files }
+lsp-edit-undo = 되돌리기
+# $count: 되돌린 파일 수
+lsp-edit-reverted = { $count }개 파일을 되돌렸다
+lsp-edit-not-reverted = 그사이 고쳐 되돌리지 않은 파일: { $files }
+lsp-edit-nothing-to-undo = 되돌릴 일괄 편집이 없다
+# $count: 바뀔 파일 수
+lsp-edit-preview-title = 바뀔 파일 { $count }개
+lsp-edit-preview-apply = 적용
+lsp-edit-preview-cancel = 취소
+lsp-edit-preview-editor-only = 에디터에만 들어감(미저장 편집 있음)
+# $lines: 바뀌는 줄 수
+lsp-edit-preview-lines = { $lines }줄
+lsp-edit-preview-create = 새 파일
+# $from: 옛 이름
+lsp-edit-preview-rename = { $from } 에서 이름 바뀜
+lsp-edit-preview-delete = 지움

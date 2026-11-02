@@ -24,6 +24,7 @@ import { type Extension, StateEffect, StateField } from "@codemirror/state";
 
 import type { EditorFeatureContext } from "../editor/extensions";
 import { editorContext } from "../editor/extensions/context";
+import { lspEdit } from "./edit-feature";
 import type { LspCapabilities, LspDocument } from "./lsp-sessions";
 
 export interface LspEditorFeature {
@@ -44,4 +45,7 @@ export const lspCapabilities = StateField.define<LspCapabilities>({
   },
 });
 
-export const LSP_FEATURES: readonly LspEditorFeature[] = [];
+export const LSP_FEATURES: readonly LspEditorFeature[] = [
+  // rename · 코드 액션 · 빠른 수정(M4-12).
+  lspEdit,
+];

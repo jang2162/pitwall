@@ -8,6 +8,7 @@ import type { GitChange, GitConflict, RuntimeProblem } from "@pitwall/rpc-client
 import { useMemo } from "react";
 
 import { type Translate, translator } from "../i18n/localization";
+import { lspEditStrings } from "../lsp/edit-strings";
 import { PANELS } from "./project-layout";
 
 /** 툴 윈도우 id(`queryResults`) → 이름 메시지 id(`tool-window-query-results`). */
@@ -60,6 +61,8 @@ export function projectStrings(t: Translate) {
       binaryAsText: t("editor-binary-as-text"),
       readOnlyLarge: t("editor-read-only-large"),
       lspPopupActions: t("lsp-popup-actions"),
+      /** rename · 코드 액션 · 일괄 편집(M4-12). */
+      lspEdit: lspEditStrings(t),
       /** UTF-8 이 아닌 텍스트(결정 M1-D12). `encoding`: WHATWG 이름(예: EUC-KR). */
       readOnlyEncoding: (encoding: string) => t("editor-read-only-encoding", { encoding }),
       /** UTF-8 이지만 깨진 바이트가 있다(판정의 `lossy`). */
