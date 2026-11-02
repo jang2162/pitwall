@@ -52,7 +52,7 @@ search-tab-actions = Actions
 search-tab-projects = Projects
 search-tab-branches = Branches
 search-tab-db-objects = DB Objects
-search-placeholder-all = Files, actions, projects, branches, DB objects
+search-placeholder-all = Files, symbols, actions, projects, branches, DB objects
 search-placeholder-files = File name, or name:line to go to the line
 search-placeholder-projects = Project name
 search-placeholder-branches = Branch or tag name
@@ -78,6 +78,39 @@ search-db-open-data = { $key } data
 search-db-none = No cached names yet. Expand a connection in the Database Explorer and its names show up here
 search-db-untrusted = DB objects are hidden in a project you have not trusted
 search-db-truncated = Too many cached names, searching only the first part
+
+## Go to Symbol (Cmd+Alt+O), Go to Class (Cmd+O) and the Symbols tab of Search Everywhere (M4-16). src/search-everywhere/symbol-tab.tsx.
+
+action-goto-symbol = Go to Symbol
+action-goto-class = Go to Class
+search-tab-symbols = Symbols
+search-classes-label = Go to Class
+search-placeholder-symbols = Function, type or method name
+search-placeholder-classes = Class, struct, interface or enum name
+search-symbols-busy = The symbol index is busy, searching again shortly
+search-symbols-waiting-server = Waiting for the language server…
+search-symbols-suspended = The file list was cancelled, so no symbols were found
+search-symbols-rebuild = Rebuild
+search-symbols-outside = external
+# $line: the line (from 1)
+search-symbols-at = line { $line }
+search-symbol-kind-module = module
+search-symbol-kind-class = class
+search-symbol-kind-struct = struct
+search-symbol-kind-interface = interface
+search-symbol-kind-trait = trait
+search-symbol-kind-enum = enum
+search-symbol-kind-enumMember = enum member
+search-symbol-kind-typeAlias = type alias
+search-symbol-kind-function = function
+search-symbol-kind-method = method
+search-symbol-kind-constructor = constructor
+search-symbol-kind-field = field
+search-symbol-kind-property = property
+search-symbol-kind-constant = constant
+search-symbol-kind-variable = variable
+search-symbol-kind-macro = macro
+search-symbol-kind-impl = impl
 
 ## Settings window: Appearance, and "External Tools > Open Pitwall from Orca" (docs/design/04-features.md F8-6). The keys are mapped in apps/desktop/src/settings/strings.ts.
 

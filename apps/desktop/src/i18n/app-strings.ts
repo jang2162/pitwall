@@ -5,6 +5,8 @@
 import { useLocalization } from "@fluent/react";
 import { useMemo } from "react";
 
+import type { IndexSymbolKind } from "@pitwall/rpc-client";
+
 import type { ThemePreference } from "../theme/theme-store";
 import { type Translate, translator } from "./localization";
 
@@ -18,6 +20,8 @@ export function appStrings(t: Translate) {
       find: t("action-find"),
       searchEverywhere: t("action-search-everywhere"),
       gotoFile: t("action-goto-file"),
+      gotoSymbol: t("action-goto-symbol"),
+      gotoClass: t("action-goto-class"),
       recentFiles: t("action-recent-files"),
       projectSwitcher: t("action-project-switcher"),
       settings: t("action-settings"),
@@ -37,9 +41,11 @@ export function appStrings(t: Translate) {
     search: {
       label: t("search-everywhere-label"),
       recentFiles: t("search-recent-files-label"),
+      classes: t("search-classes-label"),
       tabs: {
         all: t("search-tab-all"),
         files: t("search-tab-files"),
+        symbols: t("search-tab-symbols"),
         actions: t("search-tab-actions"),
         projects: t("search-tab-projects"),
         branches: t("search-tab-branches"),
@@ -48,6 +54,8 @@ export function appStrings(t: Translate) {
       placeholder: {
         all: t("search-placeholder-all"),
         files: t("search-placeholder-files"),
+        symbols: t("search-placeholder-symbols"),
+        classes: t("search-placeholder-classes"),
         projects: t("search-placeholder-projects"),
         branches: t("search-placeholder-branches"),
         dbObjects: t("search-placeholder-db-objects"),
@@ -73,6 +81,33 @@ export function appStrings(t: Translate) {
         t("search-files-truncated", { shown, matched }),
       /** `파일:줄` 로 칠 때 결과 옆의 「줄 N」. */
       atLine: (line: number) => t("search-files-at-line", { line }),
+      symbols: {
+        busy: t("search-symbols-busy"),
+        waitingServer: t("search-symbols-waiting-server"),
+        suspended: t("search-symbols-suspended"),
+        rebuild: t("search-symbols-rebuild"),
+        outside: t("search-symbols-outside"),
+        at: (line: number) => t("search-symbols-at", { line }),
+        kinds: {
+          module: t("search-symbol-kind-module"),
+          class: t("search-symbol-kind-class"),
+          struct: t("search-symbol-kind-struct"),
+          interface: t("search-symbol-kind-interface"),
+          trait: t("search-symbol-kind-trait"),
+          enum: t("search-symbol-kind-enum"),
+          enumMember: t("search-symbol-kind-enumMember"),
+          typeAlias: t("search-symbol-kind-typeAlias"),
+          function: t("search-symbol-kind-function"),
+          method: t("search-symbol-kind-method"),
+          constructor: t("search-symbol-kind-constructor"),
+          field: t("search-symbol-kind-field"),
+          property: t("search-symbol-kind-property"),
+          constant: t("search-symbol-kind-constant"),
+          variable: t("search-symbol-kind-variable"),
+          macro: t("search-symbol-kind-macro"),
+          impl: t("search-symbol-kind-impl"),
+        } satisfies Record<IndexSymbolKind, string>,
+      },
       recentBadge: t("search-recent-badge"),
       currentProject: t("search-current-project"),
     },

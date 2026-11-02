@@ -23,6 +23,20 @@ mac = "cmd+shift+o"
 win = "ctrl+shift+n"
 linux = "ctrl+shift+n"
 
+# 클래스로 이동 · 심볼로 이동(M4-16, src/search-everywhere/symbol-tab.tsx — 같은 팝업의 심볼 탭). 프로젝트 창에만 등록된다 — ⌘O · Win/Linux
+# Ctrl+N 은 웰컴 창에만 등록되는 폴더 열기 · 새 프로젝트와 같은 키다(10-ui §4.2 「웰컴 창」, 엔진은 그 창에 등록된 액션만 고른다).
+[[bindings]]
+action = "search.gotoClass"
+mac = "cmd+o"
+win = "ctrl+n"
+linux = "ctrl+n"
+
+[[bindings]]
+action = "search.gotoSymbol"
+mac = "cmd+alt+o"
+win = "ctrl+alt+shift+n"
+linux = "ctrl+alt+shift+n"
+
 [[bindings]]
 action = "search.recentFiles"
 mac = "cmd+e"

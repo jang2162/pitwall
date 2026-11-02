@@ -484,7 +484,7 @@ it("shows actions and files together in the All tab of ⇧⇧", async () => {
   expect(popup()?.getAttribute("data-search-everywhere")).toBe("all");
   const tabs = [...popup()!.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
   // 브랜치 탭은 프로젝트 창의 git 기능이(M2-13), DB 객체 탭은 DB 기능이(M3-20) 더한다. 이 가짜 Host 는 저장소 · 캐시가 없어 결과가 빈다.
-  expect(tabs).toEqual(["전체", "파일", "액션", "프로젝트", "브랜치", "DB 객체"]);
+  expect(tabs).toEqual(["전체", "파일", "심볼", "액션", "프로젝트", "브랜치", "DB 객체"]);
   await type("settings");
   await vi.waitFor(() => expect(values()).toContain("file:/work/demo/src/settings.rs"));
   expect(values()).toContain("action:settings.open");
@@ -511,6 +511,9 @@ it("opens ⇧⇧ and ⌘⇧O while the IME is in Korean, but not while composing
 it("cycles the tabs with Tab and keeps a single popup when another search key is pressed", async () => {
   await mount();
   await gotoFile();
+  // 파일 → 심볼(M4-16) → 액션 → 프로젝트.
+  await press({ code: "Tab", key: "Tab" }, input());
+  expect(popup()?.getAttribute("data-search-everywhere")).toBe("symbols");
   await press({ code: "Tab", key: "Tab" }, input());
   expect(popup()?.getAttribute("data-search-everywhere")).toBe("actions");
   await press({ code: "Tab", key: "Tab" }, input());
@@ -610,9 +613,9 @@ it("stops the busy retries when the query is emptied or another tab is chosen", 
   await type("lib");
   await settle(300);
   expect(host.fileSearches.length - atEmpty).toBeGreaterThanOrEqual(2);
-  // 파일 → 액션 탭.
+  // 파일 → 심볼 탭(M4-16 — 파일 결과를 그리지 않는 탭).
   await press({ code: "Tab", key: "Tab" });
-  expect(popup()?.getAttribute("data-search-everywhere")).toBe("actions");
+  expect(popup()?.getAttribute("data-search-everywhere")).toBe("symbols");
   const atTab = host.fileSearches.length;
   await settle(600);
   expect(host.fileSearches.length - atTab).toBe(0);

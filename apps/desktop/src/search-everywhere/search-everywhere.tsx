@@ -1,10 +1,12 @@
-// Search Everywhere(⇧⇧, 10-ui §4.2, 결정 M1-D18): 화면 상단의 검색 팝업 하나에 탭(전체 · 파일 · 액션 · 프로젝트 · 브랜치 · DB 객체)을 둔다. 액션 찾기
+// Search Everywhere(⇧⇧, 10-ui §4.2, 결정 M1-D18): 화면 상단의 검색 팝업 하나에 탭(전체 · 파일 · 심볼 · 액션 · 프로젝트 · 브랜치 · DB 객체)을 둔다. 액션 찾기
 // (⌘⇧A) · 파일로 이동(⌘⇧O) · 프로젝트 스위처(⌘⇧P)는 이 팝업을 그 탭으로 연 것이고, 최근 파일(⌘E)은 탭 없이 최근 파일만 보이는 모드다.
 // 창에 cmdk 팝업이 하나뿐이라 둘이 서로 포커스를 뺏지 않는다(KeymapProvider 가 연다).
 //
 // - 액션 탭은 모든 창에 있다. 파일 · 최근 파일 · 프로젝트는 그 창이 `SearchSource` 로 등록한다(프로젝트 창, src/search-everywhere/
 //   project-search.tsx). 브랜치는 프로젝트 창의 git 기능이(src/git/branch-search.tsx, M2-13), DB 객체는 DB 기능이 등록한다
-//   (src/db/search/db-object-search.tsx, M3-20). 액션밖에 없는 창(웰컴 · 설정)에서는 탭 줄을 두지 않는다 — 예전 액션 찾기와 같다.
+//   (src/db/search/db-object-search.tsx, M3-20), 심볼은 프로젝트 창의 심볼 검색이(src/search-everywhere/symbol-tab.tsx, M4-16 — 심볼로
+//   이동 ⌘⌥O). 클래스로 이동(⌘O)은 탭이 따로 없는 `classes` 모드다 — 심볼 탭을 켠 채 타입 종류만 보인다. 액션밖에 없는 창(웰컴 ·
+//   설정)에서는 탭 줄을 두지 않는다 — 예전 액션 찾기와 같다.
 // - 목록의 거르기 · 순서는 cmdk 가 아니라 결과를 그리는 쪽이 정한다(`shouldFilter={false}`) — 파일 결과는 Host 가 이미 걸러
 //   점수순으로 준다. 액션은 액션 찾기와 같은 비교(ui/search-popup.tsx `searchFilter`, 한글 자모 단위)로 거른다.
 // - cmdk 는 질의가 바뀐 순간에만 첫 줄을 고른다. 그때는 옛 결과가 보이므로, 늦게 온 결과(파일)를 그리면 결과 쪽이 `onResults` 로
@@ -35,6 +37,8 @@ import { SEARCH_ITEM_CLASS, searchFilter } from "../ui/search-popup";
 export type SearchMode =
   | "all"
   | "files"
+  | "symbols"
+  | "classes"
   | "actions"
   | "projects"
   | "branches"
@@ -42,12 +46,20 @@ export type SearchMode =
   | "recentFiles";
 
 /** 창이 등록하는 결과 묶음. 액션은 팝업이 직접 그린다. */
-export type SearchSourceId = "files" | "projects" | "branches" | "dbObjects" | "recentFiles";
+export type SearchSourceId =
+  | "files"
+  | "symbols"
+  | "classes"
+  | "projects"
+  | "branches"
+  | "dbObjects"
+  | "recentFiles";
 
 /** 탭 줄의 차례. */
 export const SEARCH_TABS = [
   "all",
   "files",
+  "symbols",
   "actions",
   "projects",
   "branches",
@@ -125,8 +137,14 @@ export function SearchEverywhere({
 
 function modeLabel(T: AppStrings, mode: SearchMode, tabs: readonly SearchMode[]): string {
   if (mode === "recentFiles") return T.search.recentFiles;
+  if (mode === "classes") return T.search.classes;
   if (mode === "actions" || tabs.length === 0) return T.findAction.label;
   return T.search.label;
+}
+
+/** 탭 줄에서 켜 둘 탭: 클래스로 이동은 심볼 탭이다. */
+function tabOf(mode: SearchMode): SearchMode {
+  return mode === "classes" ? "symbols" : mode;
 }
 
 function placeholder(T: AppStrings, mode: SearchMode, tabs: readonly SearchMode[]): string {
@@ -176,7 +194,7 @@ function SearchContent({
   const onKeyDown = (e: ReactKeyboardEvent) => {
     if (e.key !== "Tab" || tabs.length === 0 || isComposingKey(e.nativeEvent)) return;
     e.preventDefault();
-    const at = tabs.indexOf(mode);
+    const at = tabs.indexOf(tabOf(mode));
     onModeChange(tabs[(at + (e.shiftKey ? -1 : 1) + tabs.length) % tabs.length]);
   };
 
@@ -202,6 +220,7 @@ function SearchContent({
       return (
         <>
           {group("files", T.search.tabs.files)}
+          {group("symbols", T.search.tabs.symbols)}
           <ActionResults
             {...common}
             limit={ALL_TAB_LIMIT}
@@ -243,14 +262,14 @@ function SearchContent({
                 key={tab}
                 type="button"
                 role="tab"
-                aria-selected={tab === mode}
+                aria-selected={tab === tabOf(mode)}
                 tabIndex={-1}
                 // 입력 칸의 포커스를 뺏지 않는다.
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onModeChange(tab)}
                 className="rounded-t-sm px-2 py-0.5 text-[12px] text-ui-muted-foreground aria-selected:bg-ui-active aria-selected:text-ui-foreground"
               >
-                {T.search.tabs[tab as Exclude<SearchMode, "recentFiles">]}
+                {T.search.tabs[tab as (typeof SEARCH_TABS)[number]]}
               </button>
             ))}
           </div>

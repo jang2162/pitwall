@@ -41,6 +41,7 @@ import { FileTreeModel } from "../file-tree/tree-model";
 import { openWithActions } from "../open-with/open-with";
 import { findActions } from "../search/find-actions";
 import { projectSearchActions } from "../search-everywhere/project-search";
+import { symbolSearchActions } from "../search-everywhere/symbol-tab";
 import { terminalActions } from "../terminal/terminal-actions";
 import { TerminalTabs } from "../terminal/terminal-tabs";
 import { createProjectActions, welcomeActions } from "../welcome/actions";
@@ -217,6 +218,7 @@ const ACTION_IDS = new Set(
       openSearch() {},
       canSwitchProjects: true,
     }),
+    ...symbolSearchActions(KO_APP.actions, () => {}),
     ...gitGutterActions({
       view: () => undefined,
       strings: gitGutterStrings((id) => id),
@@ -316,6 +318,11 @@ describe("default keymap file", () => {
     expect(label("mac", "project.switcher")).toEqual(["⇧⌘P"]);
     expect(label("win", "project.switcher")).toEqual(["Ctrl+Shift+P"]);
     expect(label("win", "settings.open")).toEqual(["Ctrl+Alt+S"]);
+    // 클래스로 이동 · 심볼로 이동(M4-16)
+    expect(label("mac", "search.gotoClass")).toEqual(["⌘O"]);
+    expect(label("win", "search.gotoClass")).toEqual(["Ctrl+N"]);
+    expect(label("mac", "search.gotoSymbol")).toEqual(["⌥⌘O"]);
+    expect(label("linux", "search.gotoSymbol")).toEqual(["Ctrl+Alt+Shift+N"]);
     // 뒤로 · 앞으로 · 최근 위치(M4-09)
     expect(label("mac", "navigate.back")).toEqual(["⌘["]);
     expect(label("mac", "navigate.forward")).toEqual(["⌘]"]);

@@ -4,7 +4,7 @@
 // 1. `when` 이 `terminalFocus` 를 읽는 바인딩 — 터미널 전용 액션(새 탭 · 탭 닫기 · Win/Linux 의 복사 · 붙여넣기)과, 사용자가
 //    keymap.toml 에 `when = "terminalFocus"` 로 더한 키. 사용자가 셸 대신 앱이 받게 하고 싶은 키는 이렇게 더한다.
 // 2. `TERMINAL_APP_ACTIONS` 의 액션 — 터미널에 있어도 쓰는 창 단위 액션(액션 찾기 · Search Everywhere 와 그 탭(파일로 이동 ·
-//    최근 파일 · 프로젝트 스위처) · 툴 윈도우 열고 닫기 · 레이아웃 프리셋 · 설정 · 외부 도구 · 탭 전환기). 단 Shift · Alt · ⌘ 없는 Ctrl+글자는
+//    클래스 · 심볼로 이동 · 최근 파일 · 프로젝트 스위처) · 툴 윈도우 열고 닫기 · 레이아웃 프리셋 · 설정 · 외부 도구 · 탭 전환기). 단 Shift · Alt · ⌘ 없는 Ctrl+글자는
 //    셸의 제어 문자(Ctrl+E 줄 끝 · Ctrl+N · Ctrl+P 기록 이동 등)라 이 액션의 키여도 셸로 보낸다 — Win/Linux 의 최근 파일
 //    (Ctrl+E)이 그렇다.
 //
@@ -21,6 +21,8 @@ export const TERMINAL_APP_ACTIONS: ReadonlySet<string> = new Set([
   "action.find",
   "search.everywhere",
   "search.gotoFile",
+  "search.gotoClass",
+  "search.gotoSymbol",
   "search.recentFiles",
   "project.switcher",
   "settings.open",

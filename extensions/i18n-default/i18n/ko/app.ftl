@@ -52,7 +52,7 @@ search-tab-actions = 액션
 search-tab-projects = 프로젝트
 search-tab-branches = 브랜치
 search-tab-db-objects = DB 객체
-search-placeholder-all = 파일 · 액션 · 프로젝트 · 브랜치 · DB 객체
+search-placeholder-all = 파일 · 심볼 · 액션 · 프로젝트 · 브랜치 · DB 객체
 search-placeholder-files = 파일 이름 — 「이름:줄」 이면 그 줄로
 search-placeholder-projects = 프로젝트 이름
 search-placeholder-branches = 브랜치 · 태그 이름
@@ -78,6 +78,39 @@ search-db-open-data = { $key } 데이터
 search-db-none = 캐시된 이름이 없다 — DB 탐색기에서 연결을 펼치면 그 이름이 여기에 보인다
 search-db-untrusted = 신뢰하지 않은 프로젝트라 DB 객체를 보이지 않는다
 search-db-truncated = 캐시된 이름이 많아 앞부분만 찾는다
+
+## 심볼로 이동(⌘⌥O) · 클래스로 이동(⌘O) · Search Everywhere 의 심볼 탭(M4-16). src/search-everywhere/symbol-tab.tsx.
+
+action-goto-symbol = 심볼로 이동
+action-goto-class = 클래스로 이동
+search-tab-symbols = 심볼
+search-classes-label = 클래스로 이동
+search-placeholder-symbols = 함수 · 타입 · 메서드 이름
+search-placeholder-classes = 클래스 · 구조체 · 인터페이스 · 열거 이름
+search-symbols-busy = 심볼 인덱스가 바쁘다 — 잠시 뒤 다시 찾는다
+search-symbols-waiting-server = 언어 서버의 결과를 기다리는 중…
+search-symbols-suspended = 파일 목록이 취소돼 심볼을 찾지 못했다
+search-symbols-rebuild = 다시 만들기
+search-symbols-outside = 외부
+# $line: 줄(1부터)
+search-symbols-at = { $line }줄
+search-symbol-kind-module = 모듈
+search-symbol-kind-class = 클래스
+search-symbol-kind-struct = 구조체
+search-symbol-kind-interface = 인터페이스
+search-symbol-kind-trait = 트레이트
+search-symbol-kind-enum = 열거
+search-symbol-kind-enumMember = 열거 항목
+search-symbol-kind-typeAlias = 타입 별칭
+search-symbol-kind-function = 함수
+search-symbol-kind-method = 메서드
+search-symbol-kind-constructor = 생성자
+search-symbol-kind-field = 필드
+search-symbol-kind-property = 속성
+search-symbol-kind-constant = 상수
+search-symbol-kind-variable = 변수
+search-symbol-kind-macro = 매크로
+search-symbol-kind-impl = 구현
 
 ## 설정 창의 외관과 「외부 도구 > Orca 에서 Pitwall 열기」(docs/design/04-features.md F8-6). 키는 apps/desktop/src/settings/strings.ts 가 잇는다.
 

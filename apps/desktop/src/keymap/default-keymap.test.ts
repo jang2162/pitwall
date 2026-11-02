@@ -40,6 +40,28 @@ describe("registryKeymapProblem", () => {
 // 키맵 겹침 검사: 기본 키맵에서 한 키를 둘 이상의 액션이 쓰는 자리. 같은 `when` 이면 어느 쪽이 도는지가 파일 순서에 달려 버리므로
 // 없어야 하고, `when` 이 다르면(범위가 갈린다) 아래 표에 이유와 함께 적어 둔 것만 있어야 한다 — 새 키가 기존 키와 겹치면 이 시험이
 // 먼저 알린다.
+// 창이 가르는 겹침: 같은 키 · 같은 `when` 이지만 두 액션이 한 창에 함께 등록되지 않는다 — 엔진은 그 창에 등록된 액션의 바인딩만
+// 고른다(packages/keymap/src/registry.ts 머리 주석). 웰컴 창에만 등록되는 액션과 프로젝트 창에만 등록되는 액션의 짝만 둔다(10-ui
+// §4.2 「웰컴 창」). 아래 두 검사(같은 `when` · 한 범위)는 이 짝을 하나로 센다 — 표에 없는 같은 `when` 겹침은 여전히 실패한다.
+const WINDOW_SEPARATED: Record<Platform, readonly (readonly [string, string, string])[]> = {
+  // 웰컴 창의 「폴더 열기」 와 프로젝트 창의 「클래스로 이동」(M4-16).
+  mac: [["⌘O", "project.openFolder", "search.gotoClass"]],
+  // 웰컴 창의 「새 프로젝트」 와 프로젝트 창의 「클래스로 이동」(M4-16).
+  win: [["Ctrl+N", "project.new", "search.gotoClass"]],
+  linux: [["Ctrl+N", "project.new", "search.gotoClass"]],
+};
+
+/** `key` 의 액션 목록에서 창이 가르는 짝의 프로젝트 창 쪽을 뺀다(짝이 둘 다 있을 때만). */
+function withoutWindowSeparated(platform: Platform, key: string, actions: string[]): string[] {
+  const name = (a: string) => a.slice(0, a.indexOf(" [") < 0 ? undefined : a.indexOf(" ["));
+  let out = actions;
+  for (const [k, welcome, project] of WINDOW_SEPARATED[platform]) {
+    if (k !== key || !out.some((a) => name(a) === welcome)) continue;
+    out = out.filter((a) => name(a) !== project);
+  }
+  return out;
+}
+
 describe("default keymap overlaps", () => {
   const overlaps = (platform: Platform) => {
     const byKey = new Map<string, string[]>();
@@ -47,8 +69,23 @@ describe("default keymap overlaps", () => {
       const key = formatSequence(b.sequence, platform);
       byKey.set(key, [...(byKey.get(key) ?? []), `${b.action} [${b.when ?? ""}]`]);
     }
-    return [...byKey].filter(([, actions]) => actions.length > 1);
+    return [...byKey]
+      .map(([key, actions]) => [key, withoutWindowSeparated(platform, key, actions)] as const)
+      .filter(([, actions]) => actions.length > 1);
   };
+
+  it.each(["mac", "win", "linux"] as const)(
+    "lists only window-separated pairs that really share a key on %s",
+    (platform) => {
+      const bindings = chooseDefaultKeymap(undefined, platform).bindings;
+      for (const [key, welcome, project] of WINDOW_SEPARATED[platform]) {
+        const on = bindings
+          .filter((b) => formatSequence(b.sequence, platform) === key)
+          .map((b) => b.action);
+        expect(on, key).toEqual(expect.arrayContaining([welcome, project]));
+      }
+    },
+  );
 
   it.each(["mac", "win", "linux"] as const)(
     "never binds one key to two actions under the same when on %s",
@@ -217,8 +254,14 @@ describe("default keymap conflicts", () => {
       }
       for (const [k, list] of byKey) {
         const top = Math.max(...list.map((b) => whenDepth(b.whenExpr, layers)));
+        const tops = list.filter((b) => whenDepth(b.whenExpr, layers) === top);
+        const key = tops[0] ? formatSequence(tops[0].sequence, platform) : "";
         const winners = new Set(
-          list.filter((b) => whenDepth(b.whenExpr, layers) === top).map((b) => b.action),
+          withoutWindowSeparated(
+            platform,
+            key,
+            tops.map((b) => `${b.action} []`),
+          ).map((a) => a.slice(0, -3)),
         );
         if (winners.size > 1) out.push(`${platform} ${scope} ${k}: ${[...winners].join(", ")}`);
       }

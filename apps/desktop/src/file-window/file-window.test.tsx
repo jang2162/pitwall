@@ -410,6 +410,20 @@ it("moves the cursor when the same file is opened again with a line", async () =
   expect(cursorOf(views()[0]!)).toEqual({ line: 20, column: 3 });
 });
 
+it("has no symbol search: ⌘⌥O · ⌘O open nothing and the popup has no symbols tab (M4-16)", async () => {
+  await mount();
+  await press("KeyO", { metaKey: true, altKey: true }, "ø");
+  await press("KeyO", { metaKey: true }, "o");
+  expect(document.querySelector("[cmdk-dialog]")).toBeNull();
+  expect(calls("index.symbols.search")).toEqual([]);
+  expect(calls("lsp.workspaceSymbol")).toEqual([]);
+  expect(await findActions("심볼로 이동")).toEqual([]);
+  expect(await findActions("클래스로 이동")).toEqual([]);
+  await press("KeyA", { metaKey: true, shiftKey: true }, "a");
+  expect(document.querySelector("[cmdk-dialog] [role=tablist]")).toBeNull();
+  await press("Escape", {}, "Escape");
+});
+
 it("has no file tree, search or terminal: their keys do nothing and their actions are absent", async () => {
   await mount();
   const panels = () => dock!.panels.map((p) => p.id).sort();
