@@ -24,6 +24,7 @@ import { type Extension, StateEffect, StateField } from "@codemirror/state";
 
 import type { EditorFeatureContext } from "../editor/extensions";
 import { editorContext } from "../editor/extensions/context";
+import { completion } from "./completion";
 import { diagnosticsFeature } from "./diagnostics";
 import { lspEdit } from "./edit-feature";
 import type { LspCapabilities, LspDocument } from "./lsp-sessions";
@@ -52,6 +53,8 @@ export const LSP_FEATURES: readonly LspEditorFeature[] = [
   diagnosticsFeature,
   // hover · 정의 · 구현 · 사용처(M4-08).
   navigationFeature,
+  // 자동완성 · 시그니처 도움말(M4-11).
+  completion,
   // rename · 코드 액션 · 빠른 수정(M4-12).
   lspEdit,
 ];

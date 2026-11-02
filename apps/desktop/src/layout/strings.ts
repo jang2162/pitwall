@@ -201,6 +201,8 @@ export function projectStrings(t: Translate) {
         addCursorBelow: t("action-editor-add-cursor-below"),
         toggleColumnMode: t("action-editor-toggle-column-mode"),
         singleCursor: t("action-editor-single-cursor"),
+        completion: t("action-editor-completion"),
+        parameterInfo: t("action-editor-parameter-info"),
         /** 모든 일치 선택이 상한에 걸렸다(M4-14). */
         occurrencesCapped: (cap: number) => t("editor-occurrences-capped", { cap }),
         openAsText: t("action-editor-open-as-text"),

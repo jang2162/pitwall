@@ -274,6 +274,12 @@ const ACTION_IDS = new Set(
   ].map((a) => a.id),
 );
 
+/**
+ * OS 가 가져갈 수 있는데도 일부러 둔 기본 키. macOS 의 `⌃Space` 는 입력 소스가 둘 이상일 때만 OS 가 가져간다 — 자동완성은 IntelliJ 의
+ * 그 키와 두 번째 키 `⌥Space` 를 함께 둔다(10-ui §4.2 「코드 (LSP · 편집)」, 15-m4-plan §5 #13). 입력 소스가 하나면 `⌃Space` 가 앱에 온다.
+ */
+const RESERVED_ON_PURPOSE = new Set(["mac editor.completion ctrl+space"]);
+
 describe("default keymap file", () => {
   it.each(PLATFORMS)("reads on %s, binds only actions that exist, and no OS-reserved key", (p) => {
     const { bindings, warnings } = readDefaultKeymapWithWarnings(
@@ -284,6 +290,7 @@ describe("default keymap file", () => {
     expect(bindings.length).toBeGreaterThan(0);
     for (const b of bindings) {
       expect(ACTION_IDS, b.action).toContain(b.action);
+      if (RESERVED_ON_PURPOSE.has(`${p} ${b.action} ${b.key}`)) continue;
       expect(reservedReason(b.sequence, p), `${b.action} ${b.key}`).toBeUndefined();
     }
   });
@@ -313,6 +320,12 @@ describe("default keymap file", () => {
     expect(label("mac", "navigate.back")).toEqual(["⌘["]);
     expect(label("mac", "navigate.forward")).toEqual(["⌘]"]);
     expect(label("win", "navigate.back")).toEqual(["Ctrl+Alt+←"]);
+    // 자동완성 · 시그니처 도움말(M4-11) — macOS 의 자동완성은 ⌃Space 와 ⌥Space 둘이다.
+    expect(label("mac", "editor.completion")).toEqual(["⌃Space", "⌥Space"]);
+    expect(label("win", "editor.completion")).toEqual(["Ctrl+Space"]);
+    expect(label("linux", "editor.completion")).toEqual(["Ctrl+Space"]);
+    expect(label("mac", "editor.parameterInfo")).toEqual(["⌘P"]);
+    expect(label("win", "editor.parameterInfo")).toEqual(["Ctrl+P"]);
     expect(label("linux", "navigate.forward")).toEqual(["Ctrl+Alt+→"]);
     expect(label("mac", "navigate.recentLocations")).toEqual(["⇧⌘E"]);
     expect(label("win", "navigate.recentLocations")).toEqual(["Ctrl+Shift+E"]);

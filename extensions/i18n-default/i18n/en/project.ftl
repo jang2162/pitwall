@@ -183,6 +183,9 @@ action-editor-add-cursor-above = Clone Caret Above
 action-editor-add-cursor-below = Clone Caret Below
 action-editor-toggle-column-mode = Column Selection Mode
 action-editor-single-cursor = Remove Secondary Carets
+# Code completion and parameter info from the language server (M4-11)
+action-editor-completion = Basic Completion
+action-editor-parameter-info = Parameter Info
 # $cap: the limit of Select All Occurrences (multiple carets, M4-14)
 editor-occurrences-capped = More than { $cap } occurrences: selected the { $cap } around the caret
 action-editor-open-as-text = Open as Text

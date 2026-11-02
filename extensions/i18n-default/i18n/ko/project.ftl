@@ -183,6 +183,9 @@ action-editor-add-cursor-above = 위 줄에 커서 추가
 action-editor-add-cursor-below = 아래 줄에 커서 추가
 action-editor-toggle-column-mode = 컬럼 선택 모드
 action-editor-single-cursor = 커서 하나로
+# 언어 서버의 자동완성 · 시그니처 도움말(M4-11)
+action-editor-completion = 자동완성
+action-editor-parameter-info = 시그니처 도움말
 # $cap: 모든 일치 선택의 상한(멀티 커서, M4-14)
 editor-occurrences-capped = 일치가 { $cap }개를 넘어 커서 주변 { $cap }곳만 골랐다
 action-editor-open-as-text = 텍스트로 열기

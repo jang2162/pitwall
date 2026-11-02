@@ -30,6 +30,7 @@ import { historyCommand } from "./extensions/editing";
 import { openFind } from "./find-bar";
 import { getDocLanguage } from "./language";
 import { multiCursorActions } from "./multi-cursor-actions";
+import { lspCompletionActions } from "../lsp/completion-actions";
 
 /** 포커스가 든 에디터 뷰, 없으면 활성 탭의 뷰. */
 export function targetView(workspace: EditorWorkspace): EditorView | undefined {
@@ -122,5 +123,6 @@ export function editorOpsActions(deps: {
       return token !== undefined && toggleLineComment(token)(view);
     }),
     ...multiCursorActions({ workspace: deps.workspace, strings: T, notify: deps.notify }),
+    ...lspCompletionActions({ workspace: deps.workspace, strings: T }),
   ];
 }

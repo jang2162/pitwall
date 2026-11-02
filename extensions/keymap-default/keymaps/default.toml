@@ -710,3 +710,27 @@ when = "editorFocus"
 action = "editor.singleCursor"
 key = "escape"
 when = "editorFocus"
+
+# 코드 (LSP · 편집) — 자동완성 · 시그니처 도움말(10-ui §4.2, 15-m4-plan M4-11, src/lsp/completion-actions.ts). 글자 영역(`editorFocus`)
+# 에서만 돈다. macOS 의 자동완성은 키가 둘이다: ⌃Space(IntelliJ)와 ⌥Space — 입력 소스가 둘 이상이면 macOS 가 ⌃Space 를 먼저
+# 가져가 앱에 오지 않는다(한글 자판을 쓰는 기본 설정). ⌥Space 는 IntelliJ 의 「빠른 정의」 키와 겹친다(10-ui §4.2 아래 문단).
+# 완성 목록 · 시그니처 팝업 안의 ↑ ↓ ↩ ⇥ Esc 는 키맵이 아니라 에디터 확장이다(src/lsp/completion.ts).
+
+[[bindings]]
+action = "editor.completion"
+mac = "ctrl+space"
+win = "ctrl+space"
+linux = "ctrl+space"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.completion"
+mac = "alt+space"
+when = "editorFocus"
+
+[[bindings]]
+action = "editor.parameterInfo"
+mac = "cmd+p"
+win = "ctrl+p"
+linux = "ctrl+p"
+when = "editorFocus"
