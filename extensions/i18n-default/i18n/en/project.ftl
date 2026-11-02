@@ -784,6 +784,14 @@ lsp-edit-preview-create = New file
 lsp-edit-preview-rename = Renamed from { $from }
 lsp-edit-preview-delete = Deleted
 
+# Formatting (15-m4-plan M4-13, src/lsp/format.ts)
+lsp-format-action = Reformat Code
+lsp-format-no-formatter = No formatter for this language
+lsp-format-stale = The document changed while formatting, so the result was not applied — format again
+lsp-format-timed-out = Formatting did not finish within 10 seconds and was stopped — the document is unchanged
+lsp-format-failed = Could not format: { $message }
+lsp-format-refused = Not applying the language server's formatting: { $message }
+
 ## Structure tool window and file structure popup (src/structure, M4-10). Names from the server are shown as plain text.
 # Source label. $server: language server id (rust-analyzer)
 structure-source-lsp = LSP · { $server }

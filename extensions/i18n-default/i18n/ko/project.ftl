@@ -763,6 +763,16 @@ lsp-edit-preview-create = 새 파일
 lsp-edit-preview-rename = { $from } 에서 이름 바뀜
 lsp-edit-preview-delete = 지움
 
+# 포맷(15-m4-plan M4-13, src/lsp/format.ts)
+lsp-format-action = 코드 포맷
+lsp-format-no-formatter = 이 언어의 포매터가 없다
+lsp-format-stale = 포맷하는 사이 문서가 바뀌어 결과를 넣지 않았다 — 다시 포맷한다
+lsp-format-timed-out = 포맷이 10초 안에 끝나지 않아 그만뒀다 — 문서는 그대로다
+# $message: 언어 서버가 준 오류
+lsp-format-failed = 포맷하지 못했다: { $message }
+# $message: 거절한 까닭(영어 원문)
+lsp-format-refused = 언어 서버의 포맷 결과를 넣지 않는다: { $message }
+
 ## 구조 툴 윈도우 · 파일 구조 팝업(src/structure, M4-10). 서버가 준 이름은 글로만 보인다.
 # 출처 표지. $server: 언어 서버 id(rust-analyzer)
 structure-source-lsp = LSP · { $server }

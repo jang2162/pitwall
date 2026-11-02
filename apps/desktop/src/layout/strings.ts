@@ -9,6 +9,7 @@ import { useMemo } from "react";
 
 import { type Translate, translator } from "../i18n/localization";
 import { lspEditStrings } from "../lsp/edit-strings";
+import { lspFormatStrings } from "../lsp/format-strings";
 import { PANELS } from "./project-layout";
 
 /** 툴 윈도우 id(`queryResults`) → 이름 메시지 id(`tool-window-query-results`). */
@@ -109,6 +110,8 @@ export function projectStrings(t: Translate) {
         outsideBar: (server: string) => t("lsp-outside-bar", { server }),
         outsideFailed: (message: string) => t("lsp-outside-failed", { message }),
       },
+      /** 포맷(M4-13). */
+      lspFormat: lspFormatStrings(t),
       /** UTF-8 이 아닌 텍스트(결정 M1-D12). `encoding`: WHATWG 이름(예: EUC-KR). */
       readOnlyEncoding: (encoding: string) => t("editor-read-only-encoding", { encoding }),
       /** UTF-8 이지만 깨진 바이트가 있다(판정의 `lossy`). */
