@@ -167,6 +167,25 @@ describe("request helper (③)", () => {
     expect(call).not.toHaveBeenCalled();
   });
 
+  it("waits for every edit up to the asked version, not only the last answer, when edits arrive out of order (H-1)", async () => {
+    // 첫 편집이 늦게 닿는다 — 둘째 편집은 Host 가 답만 하고 쌓아 둔다.
+    const { server, documents, sessions } = setup(
+      { "/p/a.rs": "fn a() { x }" },
+      { changeDelay: (version: number) => (version === 1 ? 20 : 0) },
+    );
+    const { document } = sessions.acquire("/p/a.rs", "Rust");
+    await settle();
+    documents.edit("/p/a.rs", 10, 10, ".");
+    documents.edit("/p/a.rs", 11, 11, "l");
+    const asked: number[] = [];
+    const answer = await document.request("completion", async (at) => {
+      asked.push(server.docs.get(at.docId)!.version);
+      return { staleVersion: server.stale(at) };
+    });
+    expect(answer).toEqual({ staleVersion: false });
+    expect(asked).toEqual([2]);
+  });
+
   it("cancels the older request of the same kind and keeps other kinds", async () => {
     const { sessions } = setup();
     const { document } = sessions.acquire("/p/a.rs", "Rust");
@@ -258,11 +277,10 @@ describe("IME composition (⑥)", () => {
     const { document } = sessions.acquire("/p/a.rs", "Rust");
     server.setFeatures({ hover: { server: "x", options: true, optionsTruncated: false } });
     await vi.waitFor(() => expect(document.capabilities.hover).toBeDefined());
-    // 편집으로 편집 등급을 벗어났다(1만 자 넘는 줄) — 다시 열 때 웹뷰가 끈다.
+    // 편집으로 편집 등급을 벗어났다(1만 자 넘는 줄) — Host 가 편집의 답에 `off` 를 싣는다.
     documents.edit("/p/a.rs", 0, 0, "x".repeat(10_001));
-    server.docs.delete("d1");
-    documents.edit("/p/a.rs", 0, 0, "y");
     await vi.waitFor(() => expect(document.capabilities).toEqual({}));
+    expect(server.called("open")).toHaveLength(1);
   });
 });
 

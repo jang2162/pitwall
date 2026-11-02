@@ -21,6 +21,8 @@ interface Doc {
   path: string;
   text: string;
   version: number;
+  /** 앞당겨 온 편집(버전 → 바꾸기). Host 처럼 답은 곧바로 하고 차례가 오면 적용한다. */
+  early: Map<number, LspDocumentChangeParams["changes"]>;
 }
 
 export interface FakeLspOptions {
@@ -32,7 +34,7 @@ export interface FakeLspOptions {
    * 편집이 Host 에 닿기까지(ms). 주면 `change` 는 그만큼 뒤에 적용하고 답한다 — 같은 틱에 나간 요청이 편집보다 먼저 도착하는
    * 경합(데스크톱 IPC 는 프레임 순서를 지키지 않는다 — 리뷰 H-1)을 만든다.
    */
-  changeDelay?: number;
+  changeDelay?: number | ((version: number) => number);
 }
 
 export function fakeLspServer(options: FakeLspOptions = {}) {
@@ -50,23 +52,43 @@ export function fakeLspServer(options: FakeLspOptions = {}) {
       const off = options.off?.(params.language) ?? null;
       if (off) return { docId: "", off, instances: [] };
       const docId = `d${++seq}`;
-      docs.set(docId, { path: params.path, text: params.text, version: params.version });
+      docs.set(docId, {
+        path: params.path,
+        text: params.text,
+        version: params.version,
+        early: new Map(),
+      });
       return { docId, off: null, instances: [] };
     },
     async change(params: LspDocumentChangeParams) {
       calls.push({ method: "change", params });
-      if (options.changeDelay) await new Promise((r) => setTimeout(r, options.changeDelay));
+      const delay =
+        typeof options.changeDelay === "function"
+          ? options.changeDelay(params.version)
+          : options.changeDelay;
+      if (delay) await new Promise((r) => setTimeout(r, delay));
       const doc = docs.get(params.docId);
       if (!doc) throw notFound(params.docId);
-      if (params.version !== doc.version + 1)
+      if (params.version <= doc.version)
         throw new RpcCallError({
           code: ERROR_CODE.CONFLICT,
           message: "version",
           data: { version: doc.version },
         });
-      for (const { from, to, insert } of params.changes)
-        doc.text = doc.text.slice(0, from) + insert + doc.text.slice(to);
-      doc.version = params.version;
+      // crates/pw-lsp manager.rs 의 `change`: 앞당겨 온 편집은 답만 하고 쌓아 둔다.
+      doc.early.set(params.version, params.changes);
+      let next: LspDocumentChangeParams["changes"] | undefined;
+      while ((next = doc.early.get(doc.version + 1))) {
+        doc.early.delete(doc.version + 1);
+        for (const { from, to, insert } of next)
+          doc.text = doc.text.slice(0, from) + insert + doc.text.slice(to);
+        doc.version += 1;
+      }
+      // 편집 등급 밖(1만 자 넘는 줄)이 되면 Host 는 끈다.
+      if (doc.text.split("\n").some((line) => line.length > 10_000)) {
+        docs.delete(params.docId);
+        return { off: "longLine" as const };
+      }
       return { off: null };
     },
     async save(params) {
