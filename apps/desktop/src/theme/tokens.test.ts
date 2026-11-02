@@ -11,6 +11,7 @@ import { documentThemeApplier } from "./adapters";
 import defaultThemeFile from "../../../../extensions/theme-default/themes/default.json";
 import {
   DB_TOKENS,
+  DIAGNOSTIC_TOKENS,
   DIFF_TOKENS,
   GIT_STATUS_TOKENS,
   GRAPH_LANES,
@@ -206,6 +207,28 @@ describe("git · graph · diff tokens (M2-12)", () => {
         if (ratio < 4.5)
           short.push(`${appearance} ${text} on ${background}: ${ratio.toFixed(2)} < 4.50`);
       }
+    }
+    expect(short).toEqual([]);
+  });
+
+  it("keep diagnostic underlines and markers at graphics contrast (3:1) on the editor, tool windows, status bar, popups and their rows", () => {
+    const backgrounds = [
+      "editor.background",
+      "ui.panelBackground",
+      "ui.statusBarBackground",
+      "ui.hoverBackground",
+      "ui.activeBackground",
+      "popup.background",
+    ] as const;
+    const short: string[] = [];
+    for (const appearance of ["light", "dark"] as const) {
+      const values = defaultTheme.variants[appearance]!;
+      for (const background of backgrounds)
+        for (const token of DIAGNOSTIC_TOKENS) {
+          const ratio = contrast(values[token], values[background]);
+          if (ratio < 3)
+            short.push(`${appearance} ${token} on ${background}: ${ratio.toFixed(2)} < 3.00`);
+        }
     }
     expect(short).toEqual([]);
   });

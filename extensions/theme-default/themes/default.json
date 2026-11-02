@@ -128,7 +128,11 @@
       "popup.mutedForeground": "#6c707e",
       "popup.border": "#c9ccd6",
       "popup.codeBackground": "#f7f8fa",
-      "popup.selectionBackground": "#d5e1fb"
+      "popup.selectionBackground": "#d5e1fb",
+      "diagnostic.error": "#d22b2b",
+      "diagnostic.warning": "#9c6200",
+      "diagnostic.info": "#1f5fc6",
+      "diagnostic.hint": "#5b6e5b"
     },
     "dark": {
       "ui.background": "#1e1f22",
@@ -256,7 +260,11 @@
       "popup.mutedForeground": "#9da0a8",
       "popup.border": "#4e5157",
       "popup.codeBackground": "#1e1f22",
-      "popup.selectionBackground": "#2e436e"
+      "popup.selectionBackground": "#2e436e",
+      "diagnostic.error": "#f0656f",
+      "diagnostic.warning": "#e2b14d",
+      "diagnostic.info": "#7ab4ff",
+      "diagnostic.hint": "#9fb59f"
     }
   }
 }

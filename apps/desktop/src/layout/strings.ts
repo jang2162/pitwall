@@ -44,6 +44,38 @@ export function projectStrings(t: Translate) {
       right: t("tool-window-bar-right"),
     },
     placeholder: (name: string) => t("tool-window-placeholder", { name }),
+    /** 진단 · 문제 툴 윈도우 · 상태바의 진단 수(15-m4-plan M4-06, src/lsp/problems.tsx · diagnostics.ts). */
+    diagnostics: {
+      title: t("lsp-problems-title"),
+      currentFile: t("lsp-problems-current-file"),
+      project: t("lsp-problems-project"),
+      filter: t("lsp-problems-filter"),
+      loading: t("lsp-problems-loading"),
+      empty: t("lsp-problems-empty"),
+      noFile: t("lsp-problems-no-file"),
+      /** 상한에 걸려 일부만 보인다. */
+      truncated: (perFile: number, perProject: number) =>
+        t("lsp-problems-truncated", { perFile, perProject }),
+      /** 파일 줄의 진단 수(상한에 걸렸으면 그렇다고). */
+      fileCount: (count: number, truncated: boolean) =>
+        t("lsp-problems-file-count", { count, truncated: truncated ? "yes" : "no" }),
+      severity: {
+        error: t("lsp-severity-error"),
+        warning: t("lsp-severity-warning"),
+        information: t("lsp-severity-information"),
+        hint: t("lsp-severity-hint"),
+      },
+      /** 진단을 낸 서버와 출처 · 코드(`rustc E0308`). */
+      source: (server: string, code: string | null) =>
+        code ? t("lsp-diagnostic-source", { server, code }) : server,
+      openDocs: t("lsp-diagnostic-open-docs"),
+      related: t("lsp-diagnostic-related"),
+      /** 상태바 항목의 이름(화면 읽기 · 툴팁). */
+      statusLabel: (errors: number, warnings: number, truncated: boolean) =>
+        t("lsp-problems-status", { errors, warnings, truncated: truncated ? "yes" : "no" }),
+      nextError: t("action-editor-next-error"),
+      previousError: t("action-editor-previous-error"),
+    },
     editor: {
       /** 가운데에 탭이 하나도 없을 때(빈 영역 표시). */
       empty: t("editor-empty"),

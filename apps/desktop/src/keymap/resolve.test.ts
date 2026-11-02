@@ -36,6 +36,7 @@ import { fileHistoryAction } from "../git/history/git-history";
 import { gitHistoryStrings } from "../git/history/strings";
 import { gitGutterActions } from "../git/gutter/git-gutter";
 import { gitGutterStrings } from "../git/gutter/strings";
+import { diagnosticActions } from "../lsp/problems";
 import { FileTreeModel } from "../file-tree/tree-model";
 import { openWithActions } from "../open-with/open-with";
 import { findActions } from "../search/find-actions";
@@ -185,6 +186,20 @@ const ACTION_IDS = new Set(
       }),
       strings: structureStrings(bundledTranslator("ko")),
       open() {},
+    }),
+    ...diagnosticActions({
+      workspace: createEditorWorkspace({
+        documents: createDocumentStore({
+          stat: () => Promise.reject(new Error("none")),
+          read: () => Promise.reject(new Error("none")),
+        }),
+        stat: () => Promise.reject(new Error("none")),
+        onOpenFailed() {},
+        onSaveFailed() {},
+        onSaveBlocked() {},
+        confirmUnsaved: async () => "cancel",
+      }),
+      strings: KO_PROJECT.diagnostics,
     }),
     ...terminalActions({
       strings: KO_PROJECT.terminal,

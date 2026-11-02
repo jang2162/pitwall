@@ -24,6 +24,7 @@ import { type Extension, StateEffect, StateField } from "@codemirror/state";
 
 import type { EditorFeatureContext } from "../editor/extensions";
 import { editorContext } from "../editor/extensions/context";
+import { diagnosticsFeature } from "./diagnostics";
 import { lspEdit } from "./edit-feature";
 import type { LspCapabilities, LspDocument } from "./lsp-sessions";
 import { navigationFeature } from "./navigation";
@@ -47,6 +48,8 @@ export const lspCapabilities = StateField.define<LspCapabilities>({
 });
 
 export const LSP_FEATURES: readonly LspEditorFeature[] = [
+  // 진단(M4-06).
+  diagnosticsFeature,
   // hover · 정의 · 구현 · 사용처(M4-08).
   navigationFeature,
   // rename · 코드 액션 · 빠른 수정(M4-12).

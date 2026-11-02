@@ -825,3 +825,36 @@ structure-kind-type-alias = Type alias
 structure-kind-macro = Macro
 structure-kind-impl = Implementation
 structure-kind-symbol = Symbol
+
+# Diagnostics and the Problems tool window (M4-06 — src/lsp/problems.tsx · diagnostics.ts)
+lsp-problems-title = Problems
+lsp-problems-current-file = Current File
+lsp-problems-project = Project
+lsp-problems-filter = Filter by severity
+lsp-problems-loading = Reading diagnostics…
+lsp-problems-empty = No problems
+lsp-problems-no-file = No file is open
+# $perFile · $perProject: the limits (per file · per project)
+lsp-problems-truncated = Too many diagnostics; showing some (up to { $perFile } per file · { $perProject } per project)
+# $count: diagnostics shown for the file, $truncated: yes · no (hit the limit)
+lsp-problems-file-count =
+    { $truncated ->
+        [yes] { $count }+
+       *[no] { $count }
+    }
+lsp-severity-error = Error
+lsp-severity-warning = Warning
+lsp-severity-information = Information
+lsp-severity-hint = Hint
+# $server: language server id, $code: source and diagnostic code (e.g. rustc E0308)
+lsp-diagnostic-source = { $server } · { $code }
+lsp-diagnostic-open-docs = Open documentation
+lsp-diagnostic-related = Related locations
+# Status bar item. $errors · $warnings: counts, $truncated: yes · no
+lsp-problems-status =
+    { $truncated ->
+        [yes] { $errors }+ errors · { $warnings }+ warnings — open the Problems tool window
+       *[no] { $errors } errors · { $warnings } warnings — open the Problems tool window
+    }
+action-editor-next-error = Next Error
+action-editor-previous-error = Previous Error

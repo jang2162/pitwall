@@ -160,6 +160,18 @@ export const POPUP_TOKENS = [
   "popup.selectionBackground",
 ] as const;
 
+/**
+ * 진단(M4-06 — src/lsp/diagnostics.ts 의 밑줄 · 거터 표지, 문제 툴 윈도우 · 상태바의 표지). 밑줄 · 표지는 글자가 아닌 그래픽이라
+ * 에디터 · 툴 윈도우 · 상태바 · 팝업 배경과 그 위의 고른 · 마우스 올린 행에서 3:1 이상이다(tokens.test.ts). 색만으로 가르지 않는다 —
+ * 밑줄 모양(물결 · 점선 · 파선)과 표지 모양(✖ ▲ ● ◇)이 심각도마다 다르다.
+ */
+export const DIAGNOSTIC_TOKENS = [
+  "diagnostic.error",
+  "diagnostic.warning",
+  "diagnostic.info",
+  "diagnostic.hint",
+] as const;
+
 /** 화면이 읽는 토큰. 테마 파일의 변형(light·dark)은 있으면 이것을 전부 정의해야 한다. */
 export const TOKENS = [
   "ui.background",
@@ -209,6 +221,7 @@ export const TOKENS = [
   ...DB_TOKENS,
   ...GRID_TOKENS,
   ...POPUP_TOKENS,
+  ...DIAGNOSTIC_TOKENS,
 ] as const;
 
 export type TokenName = (typeof TOKENS)[number];

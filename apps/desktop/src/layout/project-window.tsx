@@ -96,6 +96,7 @@ import { DbStatus } from "../db/safety/db-status";
 import { LSP_STATUS_TOPIC, snippetHighlighter } from "../lsp/lsp-sessions";
 import { useLspNavigation } from "../lsp/navigation-host";
 import { createOutsideSources } from "../lsp/outside-sources";
+import { ProblemsToolWindow, useDiagnosticsUi } from "../lsp/problems";
 import { projectSubscriptions } from "../lsp/project-subscriptions";
 import { projectIdFromQuery, projectOpenInbox } from "../project-open";
 import { useHost, useRpcQuery } from "../rpc/host";
@@ -162,6 +163,7 @@ const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>>
   database: DbExplorerToolWindow,
   git: GitLogToolWindow,
   notifications: NotificationsToolWindow,
+  problems: ProblemsToolWindow,
   project: FileTreeToolWindow,
   searchResults: SearchResultsToolWindow,
   structure: StructureToolWindow,
@@ -788,6 +790,7 @@ function ProjectWindowBody({
   useEffect(() => (api ? workspace.attach(api) : undefined), [api, workspace]);
   useDocumentSync(workspace, projectId);
   useLspStatus(workspace, projectId);
+  useDiagnosticsUi(workspace);
   // 최근 파일(⌘E)도 프로젝트 상태에 둔다 — 창이 열리면 저장해 둔 목록을 잇고, 바뀔 때마다 저장한다.
   const [recentFiles] = useState(createRecentFiles);
   useEffect(() => {

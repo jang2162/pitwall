@@ -804,3 +804,36 @@ structure-kind-type-alias = 타입 별칭
 structure-kind-macro = 매크로
 structure-kind-impl = 구현
 structure-kind-symbol = 심볼
+
+# 진단 · 문제 툴 윈도우(M4-06 — src/lsp/problems.tsx · diagnostics.ts)
+lsp-problems-title = 문제
+lsp-problems-current-file = 현재 파일
+lsp-problems-project = 프로젝트
+lsp-problems-filter = 심각도 거르기
+lsp-problems-loading = 진단을 읽는 중…
+lsp-problems-empty = 문제가 없다
+lsp-problems-no-file = 열린 파일이 없다
+# $perFile · $perProject: 상한(파일당 · 프로젝트)
+lsp-problems-truncated = 진단이 많아 일부만 보인다(파일당 { $perFile }개 · 프로젝트 { $perProject }개까지)
+# $count: 그 파일에서 보이는 진단 수, $truncated: yes · no(상한에 걸림)
+lsp-problems-file-count =
+    { $truncated ->
+        [yes] { $count }개 이상
+       *[no] { $count }개
+    }
+lsp-severity-error = 오류
+lsp-severity-warning = 경고
+lsp-severity-information = 정보
+lsp-severity-hint = 힌트
+# $server: 언어 서버 id, $code: 출처와 진단 코드(예: rustc E0308)
+lsp-diagnostic-source = { $server } · { $code }
+lsp-diagnostic-open-docs = 설명 보기
+lsp-diagnostic-related = 관련 위치
+# 상태바 항목. $errors · $warnings: 수, $truncated: yes · no
+lsp-problems-status =
+    { $truncated ->
+        [yes] 오류 { $errors }개 이상 · 경고 { $warnings }개 이상 — 문제 툴 윈도우 열기
+       *[no] 오류 { $errors }개 · 경고 { $warnings }개 — 문제 툴 윈도우 열기
+    }
+action-editor-next-error = 다음 오류
+action-editor-previous-error = 이전 오류
