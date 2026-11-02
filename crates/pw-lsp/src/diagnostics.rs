@@ -5,7 +5,7 @@
 //! - pull(LSP 3.17 `textDocument/diagnostic`, 서버가 지원하면 — 열린 문서만): 서버에 문서 텍스트를 보낼 때마다
 //!   (`LspManager::on_synced`) 그 문서를 당긴다. 같은 문서의 새 버전이 오면 앞 pull 을 취소(`$/cancelRequest`)하고 그 답은 버린다.
 //!   동시에 도는 pull 은 [`PULL_CONCURRENCY`] 개까지다. 서버의 `workspace/diagnostic/refresh`(`crate::handlers` 가 넘긴다)는 그
-//!   서버에 열린 문서를 모두 다시 당기되, 몰려 와도 [`REFRESH_SETTLE`] 안의 것은 한 번으로 합친다. rust-analyzer 는 pull 을 알리면
+//!   서버에 열린 문서를 모두 다시 당기되, 몰려 와도 합친다([`REFRESH_SETTLE`] 동안 모으고, 당기는 동안 온 것은 끝난 뒤 한 번). rust-analyzer 는 pull 을 알리면
 //!   열린 문서의 자체 진단을 pull 로만 주고(flycheck 는 push), 색인이 끝나면 refresh 를 보낸다.
 //!   push 와 pull 은 따로 쌓는다(같은 서버가 둘 다 낸다 — rust-analyzer).
 //!
@@ -344,7 +344,8 @@ struct Inner {
     state: Mutex<State>,
     pulls: Mutex<HashMap<(InstanceKey, u64, String), Pull>>,
     next_pull: Mutex<u64>,
-    refreshing: Mutex<HashSet<(InstanceKey, u64)>>,
+    /// 도는 refresh(출처 → 당기는 동안 또 왔는가).
+    refreshing: Mutex<HashMap<(InstanceKey, u64), bool>>,
     permits: Arc<Semaphore>,
 }
 
@@ -505,7 +506,7 @@ impl DiagnosticStore {
                 state: Mutex::new(State::default()),
                 pulls: Mutex::new(HashMap::new()),
                 next_pull: Mutex::new(0),
-                refreshing: Mutex::new(HashSet::new()),
+                refreshing: Mutex::new(HashMap::new()),
                 permits: Arc::new(Semaphore::new(PULL_CONCURRENCY)),
             }),
         };
@@ -532,7 +533,7 @@ impl DiagnosticStore {
             // 관리자 잠금 안 — 태스크만 띄운다(관리자의 읽기 함수는 그 태스크에서).
             move |source, uri, version| {
                 if let Some(inner) = weak.upgrade() {
-                    Self { inner }.schedule_pull(source.clone(), uri.to_owned(), version);
+                    drop(Self { inner }.schedule_pull(source.clone(), uri.to_owned(), version));
                 }
             }
         });
@@ -640,7 +641,12 @@ impl DiagnosticStore {
     // ---- pull ----------------------------------------------------------------------------------------------------------------
 
     /// 문서 텍스트를 서버에 보냈다(관리자 잠금 안): 그 문서를 당기는 태스크를 띄운다. 같은 출처 · 문서의 앞 pull 은 취소한다.
-    fn schedule_pull(&self, source: NotificationSource, uri: String, version: i64) {
+    fn schedule_pull(
+        &self,
+        source: NotificationSource,
+        uri: String,
+        version: i64,
+    ) -> tokio::task::JoinHandle<()> {
         let cancel = CancellationToken::new();
         let seq = {
             let mut next = lock(&self.inner.next_pull);
@@ -664,7 +670,7 @@ impl DiagnosticStore {
             if pulls.get(&slot).is_some_and(|p| p.seq == seq) {
                 pulls.remove(&slot);
             }
-        });
+        })
     }
 
     async fn pull(
@@ -806,19 +812,43 @@ impl DiagnosticStore {
         }
     }
 
-    /// `workspace/diagnostic/refresh`: 그 서버에 열린 문서를 모두 다시 당긴다. [`REFRESH_SETTLE`] 안에 온 것은 한 번으로.
+    /// `workspace/diagnostic/refresh`: 그 서버에 열린 문서를 모두 다시 당긴다. 몰려 와도 합친다 — [`REFRESH_SETTLE`] 동안 모은 뒤 한
+    /// 번 당기고, 당기는 동안 온 refresh 는 그 당기기가 끝난 뒤 한 번으로(출처마다 도는 당기기는 하나다).
     fn refresh(&self, source: &NotificationSource) {
         let slot = (source.key.clone(), source.generation);
-        if !lock(&self.inner.refreshing).insert(slot.clone()) {
-            return;
+        {
+            let mut refreshing = lock(&self.inner.refreshing);
+            if let Some(again) = refreshing.get_mut(&slot) {
+                *again = true;
+                return;
+            }
+            refreshing.insert(slot.clone(), false);
         }
         let this = self.clone();
         let source = source.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(REFRESH_SETTLE).await;
-            lock(&this.inner.refreshing).remove(&slot);
-            for (uri, version) in this.inner.manager.synced_documents(&source) {
-                this.schedule_pull(source.clone(), uri, version);
+            loop {
+                tokio::time::sleep(REFRESH_SETTLE).await;
+                // 모으는 동안 온 것은 이번 당기기에 든다.
+                if let Some(again) = lock(&this.inner.refreshing).get_mut(&slot) {
+                    *again = false;
+                }
+                let pulls: Vec<_> = this
+                    .inner
+                    .manager
+                    .synced_documents(&source)
+                    .into_iter()
+                    .map(|(uri, version)| this.schedule_pull(source.clone(), uri, version))
+                    .collect();
+                for pull in pulls {
+                    let _ = pull.await;
+                }
+                let mut refreshing = lock(&this.inner.refreshing);
+                if refreshing.get(&slot) == Some(&true) {
+                    continue;
+                }
+                refreshing.remove(&slot);
+                break;
             }
         });
     }

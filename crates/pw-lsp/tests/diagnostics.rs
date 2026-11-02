@@ -407,6 +407,8 @@ async fn a_stopped_servers_late_diagnostics_are_dropped() {
         "rust-analyzer",
         Scenario {
             capabilities: incremental(),
+            // `exit` 를 받으면 가짜 서버가 쓰기를 끊어 그 앞에 낸 알림을 잃을 수 있다 — 끝내기 상한(2 s) 뒤 죽게 둔다.
+            ignore_exit: true,
             ..Scenario::default()
         }
         .on(
@@ -445,6 +447,8 @@ async fn a_restart_keeps_only_the_new_servers_diagnostics() {
         "rust-analyzer",
         Scenario {
             capabilities: incremental(),
+            // `exit` 를 받으면 가짜 서버가 쓰기를 끊어 그 앞에 낸 알림을 잃을 수 있다 — 끝내기 상한(2 s) 뒤 죽게 둔다.
+            ignore_exit: true,
             ..Scenario::default()
         }
         .on(
@@ -634,7 +638,8 @@ async fn refreshes_pull_again_once_however_many_arrive() {
     );
     tokio::time::sleep(Duration::from_millis(300)).await;
     let pulls = methods_of(&record, "textDocument/diagnostic").len();
-    // 열 때 하나 + 몰려 온 refresh 스물을 합친 하나(경계에 걸리면 둘).
+    // 열 때 하나 + 몰려 온 refresh 스물을 합친 것 — 모으는 창(20 ms)에 다 들거나, 당기는 동안 온 나머지가 끝난 뒤 한 번 더(합치지
+    // 않으면 스물하나).
     assert!((2..=3).contains(&pulls), "{pulls} pulls");
 }
 
@@ -791,4 +796,81 @@ async fn listeners_that_read_the_manager_do_not_deadlock() {
     assert_eq!(version, 1);
     assert!(read.is_some_and(|v| v >= 1));
     assert!(statuses.load(Ordering::SeqCst) > 0);
+}
+
+/// 세대: 끝난 서버의 알림이 밀려 새 서버가 뜬 **뒤에** 처리돼도(이벤트 태스크가 밀림) 버린다 — 그때 인스턴스에는 새 서버가 있으므로
+/// 「서버가 있는가」 만으로는 가를 수 없다. 앞의 받는 쪽이 옛 서버의 「late」 를 새 서버가 진단을 낸 뒤까지 붙잡아 경합을 만든다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_ended_servers_notification_handled_after_a_new_server_started_is_dropped() {
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let go_rx = std::sync::Mutex::new(Some(go_rx));
+    let held = Arc::new(AtomicUsize::new(0));
+    let env = Env::with_listener(EnvOptions::default(), {
+        let held = Arc::clone(&held);
+        move |manager| {
+            manager.on_notification("textDocument/publishDiagnostics", move |_, params| {
+                if params["diagnostics"][0]["message"] != "late" {
+                    return;
+                }
+                let Some(rx) = go_rx.lock().unwrap().take() else {
+                    return;
+                };
+                held.fetch_add(1, Ordering::SeqCst);
+                // 옛 서버의 이벤트 태스크를 붙잡는다 — 진단 저장은 이 뒤에 같은 알림을 받는다.
+                tokio::task::block_in_place(|| {
+                    let _ = rx.recv_timeout(Duration::from_secs(20));
+                });
+            });
+        }
+    });
+    let file = env.file("src/lib.rs", "");
+    env.fake(
+        "rust-analyzer",
+        Scenario {
+            capabilities: incremental(),
+            ..Scenario::default()
+        }
+        .on(
+            "textDocument/didOpen",
+            vec![publish(&uri(&file), None, vec![diag(0, 1, "fresh")])],
+        )
+        .on(
+            "textDocument/didChange",
+            vec![publish(&uri(&file), None, vec![diag(0, 1, "late")])],
+        ),
+    );
+    let mut events = subscribe(&env);
+    let mut win = env.window();
+    let doc = doc_id(&win.open(&env, &file, "Rust", "").await);
+    next_for(&mut events, &file).await;
+    win.call(
+        "lsp.document.change",
+        json!({ "docId": doc, "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "x" }] }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        eventually(Duration::from_secs(5), || held.load(Ordering::SeqCst) == 1).await,
+        "the old server's late notification never arrived"
+    );
+    let root = env.manager.status(&env.id).instances[0].root.clone();
+    win.call(
+        "lsp.server.restart",
+        json!({ "projectId": env.id, "server": "rust-analyzer", "root": root }),
+    )
+    .await
+    .unwrap();
+    env.wait_state("rust-analyzer", LspInstanceState::Ready)
+        .await;
+    // 옛 진단을 지운 빈 이벤트 뒤에 새 서버가 문서를 받고 「fresh」 를 낸다.
+    loop {
+        let event = next_for(&mut events, &file).await;
+        if messages(&event["diagnostics"]) == ["fresh"] {
+            break;
+        }
+    }
+    // 이제 옛 서버의 「late」 를 놓는다 — 인스턴스에는 새 서버가 있고 세대만 다르다.
+    go_tx.send(()).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(listed(&mut win, &env, &file).await, ["fresh"]);
 }
