@@ -552,11 +552,13 @@ it("falls back to the index quietly in an untrusted project, without asking the 
   expect(document.body.textContent).not.toContain("심볼을 읽지 못했다");
 });
 
-it("uses the index when the server request fails", async () => {
+it.each([
+  // 서버를 내려놓는 중에 칸이 아직 남아 있으면 Host 가 「맡을 서버 없음」 으로 답한다 — 요청 도우미가 삼키는 코드라 따로 받는다.
+  { code: 5001, message: "no running language server offers document_symbol" },
+  { code: 5003, message: "the server is gone" },
+])("uses the index when the server request fails with $code", async ({ code, message }) => {
   serve();
-  host.handlers.set("lsp.symbols.document", () =>
-    Promise.reject({ code: 5003, message: "the server is gone" }),
-  );
+  host.handlers.set("lsp.symbols.document", () => Promise.reject({ code, message }));
   await mount();
   await open(MAIN, 1, 1);
   await serverReady(true);
