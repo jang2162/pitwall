@@ -1161,3 +1161,148 @@ async fn the_observer_follows_the_list() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
+
+/// 사건마다 오래 걸리는 관찰자.
+struct Slow(Duration);
+
+impl FileListObserver for Slow {
+    fn rebuilt(&self, _: &str, _: &Path, _: Vec<(Arc<str>, FileFlags)>) {
+        std::thread::sleep(self.0);
+    }
+
+    fn changed(&self, _: &str, _: &Path, _: Vec<String>, _: Vec<(Arc<str>, FileFlags)>) {
+        std::thread::sleep(self.0);
+    }
+
+    fn dropped(&self, _: &str, _: &Path) {}
+}
+
+/// 목록 · 변경을 받으면 패닉하는 관찰자.
+struct Panicky;
+
+impl FileListObserver for Panicky {
+    fn rebuilt(&self, _: &str, _: &Path, _: Vec<(Arc<str>, FileFlags)>) {
+        panic!("observer panics on purpose (rebuilt)");
+    }
+
+    fn changed(&self, _: &str, _: &Path, _: Vec<String>, _: Vec<(Arc<str>, FileFlags)>) {
+        panic!("observer panics on purpose (changed)");
+    }
+
+    fn dropped(&self, _: &str, _: &Path) {}
+}
+
+async fn until_seen(recorder: &Recorder, want: usize, within: Duration) -> Vec<Observed> {
+    let deadline = Instant::now() + within;
+    let mut seen = Vec::new();
+    loop {
+        seen.extend(recorder.take());
+        if seen.len() >= want || Instant::now() > deadline {
+            return seen;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// 관찰자끼리 독립(M4-05b — 관찰 훅을 여럿 받게 넓힌 조건): 차례로 받는 관찰자 하나가 사건마다 1.5 s 걸리고 다른 둘(바로 하나 ·
+/// 차례로 하나)이 패닉해도, 나머지 관찰자는 곧바로 받고 목록 만들기 · 파일 검색 · 변경 적용이 기다리지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn observers_do_not_hold_each_other_up() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/a.rs"), "");
+    let index = f.index();
+    let inline = Arc::new(Recorder::default());
+    let queued = Arc::new(Recorder::default());
+    index.observe(Arc::new(Panicky));
+    index.observe(Arc::clone(&inline) as Arc<dyn FileListObserver>);
+    index.observe_queued(Arc::new(Slow(Duration::from_millis(1500))));
+    index.observe_queued(Arc::new(Panicky));
+    index.observe_queued(Arc::clone(&queued) as Arc<dyn FileListObserver>);
+
+    let started = Instant::now();
+    index.open(&id, &root, None);
+    // 패닉이 목록 만들기를 끝내 버리면 다 만들지 못한다 — 기다리지 않고 실패로 본다.
+    let built = tokio::time::timeout(Duration::from_secs(3), index.ready(&id, &root)).await;
+    assert_eq!(built, Ok(true), "the list was not built");
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "building waited {:?}",
+        started.elapsed()
+    );
+    let want = [Observed::Opened, Observed::Rebuilt(vec!["src/a.rs".into()])];
+    assert_eq!(inline.take(), want);
+    assert_eq!(
+        until_seen(&queued, 2, Duration::from_millis(500)).await,
+        want
+    );
+    let searched = Instant::now();
+    assert!(all_files(&index, &id).await.contains("src/a.rs"));
+    assert!(searched.elapsed() < Duration::from_millis(500));
+
+    // 변경 적용도 기다리지 않는다 — 패닉한 관찰자 뒤에도 사건이 이어진다.
+    for name in ["src/b.rs", "src/c.rs"] {
+        write(&root.join(name), "");
+        let entry = index.inner.get(&id, &root).unwrap();
+        let path = root.join(name);
+        let applied = Instant::now();
+        tokio::task::spawn_blocking(move || entry.changed(vec![path]))
+            .await
+            .unwrap();
+        assert!(
+            applied.elapsed() < Duration::from_millis(500),
+            "applying a change waited {:?}",
+            applied.elapsed()
+        );
+        let want = [Observed::Changed(vec![name.into()], vec![name.into()])];
+        assert_eq!(inline.take(), want);
+        assert_eq!(
+            until_seen(&queued, 1, Duration::from_millis(500)).await,
+            want
+        );
+    }
+    assert!(all_files(&index, &id).await.contains("src/c.rs"));
+}
+
+/// 뗀 관찰자는 더 받지 않는다. 늦게 붙인 관찰자는 붙은 뒤의 사건만 받는다(이미 있는 루트의 목록은 보내지 않는다).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removed_observer_hears_nothing_more() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    write(&root.join("src/a.rs"), "");
+    let index = f.index();
+    let inline = Arc::new(Recorder::default());
+    let queued = Arc::new(Recorder::default());
+    let inline_id = index.observe(Arc::clone(&inline) as Arc<dyn FileListObserver>);
+    let queued_id = index.observe_queued(Arc::clone(&queued) as Arc<dyn FileListObserver>);
+    index.open(&id, &root, None);
+    assert!(index.ready(&id, &root).await);
+    assert_eq!(inline.take().len(), 2);
+    assert_eq!(
+        until_seen(&queued, 2, Duration::from_secs(2)).await.len(),
+        2
+    );
+
+    let late = Arc::new(Recorder::default());
+    index.observe_queued(Arc::clone(&late) as Arc<dyn FileListObserver>);
+    assert!(index.unobserve(inline_id));
+    assert!(index.unobserve(queued_id));
+    assert!(!index.unobserve(queued_id), "already removed");
+
+    write(&root.join("src/b.rs"), "");
+    let entry = index.inner.get(&id, &root).unwrap();
+    let path = root.join("src/b.rs");
+    tokio::task::spawn_blocking(move || entry.changed(vec![path]))
+        .await
+        .unwrap();
+    assert_eq!(
+        until_seen(&late, 1, Duration::from_secs(2)).await,
+        [Observed::Changed(
+            vec!["src/b.rs".into()],
+            vec!["src/b.rs".into()]
+        )]
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(inline.take().is_empty());
+    assert!(queued.take().is_empty());
+}

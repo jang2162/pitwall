@@ -25,10 +25,12 @@
 //!   기다리고 「바쁨」 오류. Readonly · Mobile 기기도 부르는 Read 메서드라 이 상한이 방어선이다(100만 파일 목록의 매칭 하나는 수십
 //!   MB 를 잠깐 쓴다). 감시하는 루트를 만드는 걷기는 루트마다 하나라 이 상한에 넣지 않는다.
 //! - 점수와 일치 위치는 [`matching`].
-//! - **목록을 따라가는 쪽**([`FileListObserver`], 심볼 인덱스 `pw-index` — M4-15): 다 만든 목록 · 적용한 변경 · 버림을 같은 순서로
-//!   받는다. 같은 수명(감시하는 동안)과 같은 제외 규칙(ignore · 벤더 · 생성 판정)을 따로 다시 세우지 않으려는 것이다.
+//! - **목록을 따라가는 쪽**([`FileListObserver`], 심볼 인덱스 `pw-index` — M4-15, 언어 서버 파일 감시 `pw-lsp` — M4-05b): 다 만든
+//!   목록 · 적용한 변경 · 버림을 같은 순서로 받는다. 같은 수명(감시하는 동안)과 같은 제외 규칙(ignore · 벤더 · 생성 판정)을 따로 다시
+//!   세우지 않으려는 것이다. 여럿이 붙고 뗀다 — 받는 방식 둘(바로 · 차례로)과 서로 막지 않는 규칙은 [`observers`] 머리 주석.
 
 mod matching;
+mod observers;
 mod walk;
 
 use std::collections::{BTreeMap, HashMap};
@@ -50,6 +52,8 @@ use crate::scope::Roots;
 pub use crate::search::Exclude as FileFlags;
 use crate::watch::{FsChanged, FsWatchParams, TOPIC_CHANGED, watch_roots};
 pub(crate) use matching::Snapshot;
+pub use observers::ObserverId;
+use observers::Observers;
 use walk::{Flags, Op, Walk};
 
 /// 결과 수의 기본값.
@@ -143,11 +147,12 @@ rpc_method! {
     }
 }
 
-/// 파일 목록을 따라가는 쪽(심볼 인덱스 `pw-index`, M4-15). [`FileIndex::observe`] 로 붙인다.
+/// 파일 목록을 따라가는 쪽(심볼 인덱스 `pw-index` M4-15, 언어 서버 파일 감시 `pw-lsp` M4-05b). [`FileIndex::observe`](바로) ·
+/// [`FileIndex::observe_queued`](차례로)로 붙인다 — [`observers`] 머리 주석.
 ///
-/// 콜백은 잠금 안에서(`opened` · `dropped` 는 감시 표의, 나머지는 그 루트 목록의) 목록에 적용된 순서대로 불린다 — 받은 것을
-/// 채널에 넣거나 표에 자리 하나를 두는 만큼만 하고 곧바로 돌아와야 하며(그동안 파일 검색 · 변경 적용 · 감시 걸기가 기다린다)
-/// [`FileIndex`] 를 다시 부르지 않는다. 상대 경로는 루트 기준 `/` 구분이다.
+/// 콜백은 목록에 적용된 순서대로 불린다. 바로 받으면 잠금 안에서(`opened` · `dropped` 는 감시 표의, 나머지는 그 루트 목록의) 불리므로
+/// 받은 것을 채널에 넣거나 표에 자리 하나를 두는 만큼만 하고 곧바로 돌아와야 하며(그동안 파일 검색 · 변경 적용 · 감시 걸기가
+/// 기다린다), 어느 쪽이든 [`FileIndex`] 를 다시 부르지 않는다. 상대 경로는 루트 기준 `/` 구분이다.
 pub trait FileListObserver: Send + Sync + 'static {
     /// 감시가 루트를 처음 걸어 목록을 만들기 시작했다 — 곧 [`Self::rebuilt`] 가 온다. 그사이 온 요청이 기다릴 자리를 두라는 것이다.
     fn opened(&self, project_id: &str, root: &Path) {
@@ -198,8 +203,8 @@ struct RootIndex {
     phase: watch::Sender<Phase>,
     /// 버렸다(감시를 놓음). 다시 만들지 않는다.
     closed: AtomicBool,
-    /// 목록을 따라가는 쪽(만들 때의 것).
-    observer: Option<Arc<dyn FileListObserver>>,
+    /// 목록을 따라가는 쪽들(인덱스 전체와 같은 표 — 붙이고 떼는 것이 이미 있는 루트에도 닿는다).
+    observers: Arc<Observers>,
 }
 
 #[derive(Default)]
@@ -282,13 +287,13 @@ impl RootIndex {
                         state.snapshot = None;
                         state.build = None;
                         state.dropped = false;
-                        if let Some(observer) = &self.observer {
+                        if !self.observers.is_empty() {
                             let all: Vec<(Arc<str>, Flags)> = state
                                 .files
                                 .iter()
                                 .map(|(k, v)| (Arc::clone(k), *v))
                                 .collect();
-                            observer.rebuilt(&self.project_id, &self.root, all);
+                            self.observers.rebuilt(&self.project_id, &self.root, all);
                         }
                         self.phase.send_replace(Phase::Ready);
                         return;
@@ -311,10 +316,8 @@ impl RootIndex {
             dropped: true,
             ..State::default()
         };
-        if !self.closed.load(Ordering::Relaxed)
-            && let Some(observer) = &self.observer
-        {
-            observer.suspended(&self.project_id, &self.root);
+        if !self.closed.load(Ordering::Relaxed) {
+            self.observers.suspended(&self.project_id, &self.root);
         }
         if !self.closed.load(Ordering::Relaxed) {
             self.phase.send_replace(Phase::Cancelled);
@@ -339,7 +342,7 @@ impl RootIndex {
         if state.dropped {
             return;
         }
-        if let Some(observer) = &self.observer {
+        if !self.observers.is_empty() {
             let mut removed = Vec::new();
             let mut inserted = Vec::new();
             for op in &ops {
@@ -348,7 +351,8 @@ impl RootIndex {
                     Op::Insert(rel, flags) => inserted.push((Arc::clone(rel), *flags)),
                 }
             }
-            observer.changed(&self.project_id, &self.root, removed, inserted);
+            self.observers
+                .changed(&self.project_id, &self.root, removed, inserted);
         }
         walk::apply(&mut state.files, ops);
         state.snapshot = None;
@@ -377,7 +381,7 @@ type Key = (String, PathBuf);
 struct Inner {
     fs: Arc<Fs>,
     tasks: OnceLock<TaskSpawner>,
-    observer: OnceLock<Arc<dyn FileListObserver>>,
+    observers: Arc<Observers>,
     roots: Mutex<HashMap<Key, Arc<RootIndex>>>,
     /// 걷기 · 매칭의 차례([`MAX_SEARCHES`]).
     searches: Semaphore,
@@ -444,7 +448,7 @@ impl FileIndex {
             inner: Arc::new(Inner {
                 fs,
                 tasks: OnceLock::new(),
-                observer: OnceLock::new(),
+                observers: Arc::default(),
                 roots: Mutex::default(),
                 searches: Semaphore::new(MAX_SEARCHES),
                 adhoc: Mutex::default(),
@@ -497,10 +501,26 @@ impl FileIndex {
         }
     }
 
-    /// 목록을 따라가는 쪽을 붙인다. 감시가 루트를 걸기 전에(Host 를 만들 때) 붙인다 — 이미 있는 루트의 목록은 보내지 않는다. 두 번째부터는
-    /// 무시한다.
-    pub fn observe(&self, observer: Arc<dyn FileListObserver>) {
-        let _ = self.inner.observer.set(observer);
+    /// 목록을 따라가는 쪽을 붙인다 — 잠금 안에서 바로 부른다([`observers`] 머리 주석 「바로」). 감시가 루트를 걸기 전에(Host 를
+    /// 만들 때) 붙인다 — 이미 있는 루트의 목록은 보내지 않는다.
+    pub fn observe(&self, observer: Arc<dyn FileListObserver>) -> ObserverId {
+        self.inner.observers.add_inline(observer)
+    }
+
+    /// 목록을 따라가는 쪽을 붙인다 — 그 관찰자의 스레드가 차례로 부른다([`observers`] 머리 주석 「차례로」). 언제든 붙이고
+    /// ([`Self::unobserve`]) 뗄 수 있다. 붙은 뒤의 사건만 받는다.
+    pub fn observe_queued(&self, observer: Arc<dyn FileListObserver>) -> ObserverId {
+        self.inner.observers.add_queued(observer)
+    }
+
+    /// 붙인 관찰자를 뗀다. 이미 뗐으면 `false`.
+    pub fn unobserve(&self, id: ObserverId) -> bool {
+        self.inner.observers.remove(id)
+    }
+
+    /// 붙어 있는 관찰자 수(시험 · 진단).
+    pub fn observer_count(&self) -> usize {
+        self.inner.observers.len()
     }
 
     /// 루트의 목록을 만들기 시작한다. 이미 있으면 아무것도 하지 않는다. 감시가 그 루트를 처음 걸 때 부른다.
@@ -527,12 +547,10 @@ impl FileIndex {
             }),
             phase: watch::Sender::new(Phase::Building),
             closed: AtomicBool::new(false),
-            observer: self.inner.observer.get().cloned(),
+            observers: Arc::clone(&self.inner.observers),
         });
         self.inner.roots().insert(key, Arc::clone(&entry));
-        if let Some(observer) = &entry.observer {
-            observer.opened(project_id, root);
-        }
+        entry.observers.opened(project_id, root);
         self.spawn_build(entry, stop);
     }
 
@@ -548,9 +566,7 @@ impl FileIndex {
             if let Some(stop) = state.build.take() {
                 stop.store(true, Ordering::Relaxed);
             }
-            if let Some(observer) = &entry.observer {
-                observer.dropped(&entry.project_id, &entry.root);
-            }
+            entry.observers.dropped(&entry.project_id, &entry.root);
             drop(state);
             entry.phase.send_replace(Phase::Closed);
         }
