@@ -15,7 +15,7 @@ use common::env::{Env, EnvOptions};
 use common::{eventually, received};
 use pw_core::Filter;
 use pw_core::bus::{Received, Subscription};
-use pw_lsp::diagnostics::{FILE_LIMIT, PROJECT_LIMIT, TOPIC_DIAGNOSTICS};
+use pw_lsp::diagnostics::{FILE_LIMIT, PROJECT_LIMIT, PULL_CONCURRENCY, TOPIC_DIAGNOSTICS};
 use pw_lsp::fake::{Action, Reply, Scenario};
 use pw_lsp::methods::LspInstanceState;
 use pw_lsp::uri::file_uri;
@@ -710,6 +710,165 @@ async fn a_stopped_servers_late_pull_answer_is_dropped() {
     .unwrap();
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert!(listed(&mut win, &env, &file).await.is_empty());
+}
+
+/// 동시에 도는 pull 은 [`PULL_CONCURRENCY`] 개까지다 — 나머지는 기다렸다가 자리가 나면 간다(M4-06 리뷰 L5).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pulls_run_at_most_the_concurrency_limit_at_once() {
+    let env = Env::new(EnvOptions::default());
+    let record = env.fake(
+        "rust-analyzer",
+        Scenario {
+            capabilities: pull_capable(),
+            ..Scenario::default()
+        }
+        // 답하지 않는다 — 도는 pull 이 자리를 쥔 채 남는다.
+        .reply(
+            "textDocument/diagnostic",
+            Reply {
+                no_reply: true,
+                ..Reply::default()
+            },
+        ),
+    );
+    let mut win = env.window();
+    let mut docs = std::collections::HashMap::new();
+    for n in 0..PULL_CONCURRENCY + 2 {
+        let file = env.file(&format!("src/m{n}.rs"), "");
+        docs.insert(uri(&file), doc_id(&win.open(&env, &file, "Rust", "").await));
+    }
+    let pulls = || methods_of(&record, "textDocument/diagnostic");
+    assert!(
+        eventually(Duration::from_secs(10), || pulls().len()
+            >= PULL_CONCURRENCY)
+        .await,
+        "the first pulls never went out"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(pulls().len(), PULL_CONCURRENCY);
+    // 도는 pull 하나를 새 편집이 취소하면 자리가 하나 나고 기다리던 것 하나가 간다.
+    let running = pulls()[0]["params"]["textDocument"]["uri"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    win.call(
+        "lsp.document.change",
+        json!({ "docId": docs[&running], "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "x" }] }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        eventually(Duration::from_secs(10), || pulls().len() > PULL_CONCURRENCY).await,
+        "a waiting pull never went out after a running one was cancelled"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(pulls().len(), PULL_CONCURRENCY + 1);
+    assert_eq!(methods_of(&record, "$/cancelRequest").len(), 1);
+}
+
+/// pull 이 「바뀌지 않음」(`kind: "unchanged"`)으로 답하면 진단은 그대로 두고 버전 · `resultId` 만 새로 한다(M4-06 리뷰 L5).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unchanged_pull_keeps_the_diagnostics_at_the_new_version() {
+    let env = Env::new(EnvOptions::default());
+    let file = env.file("src/lib.rs", "");
+    let record = env.fake(
+        "rust-analyzer",
+        Scenario {
+            capabilities: pull_capable(),
+            ..Scenario::default()
+        }
+        .sequence(
+            "textDocument/diagnostic",
+            vec![
+                Reply::result(
+                    json!({ "kind": "full", "resultId": "r1", "items": [diag(0, 1, "pulled")] }),
+                ),
+                Reply::result(json!({ "kind": "unchanged", "resultId": "r2" })),
+            ],
+        ),
+    );
+    let mut events = subscribe(&env);
+    let mut win = env.window();
+    let doc = doc_id(&win.open(&env, &file, "Rust", "").await);
+    let first = next_for(&mut events, &file).await;
+    assert_eq!(messages(&first["diagnostics"]), ["pulled"]);
+    assert_eq!(first["diagnostics"][0]["version"], 0);
+    let change = |version: i64| json!({ "docId": doc, "version": version, "changes": [{ "from": 0, "to": 0, "insert": "x" }] });
+    win.call("lsp.document.change", change(1)).await.unwrap();
+    let unchanged = next_for(&mut events, &file).await;
+    assert_eq!(
+        messages(&unchanged["diagnostics"]),
+        ["pulled"],
+        "{unchanged}"
+    );
+    assert_eq!(unchanged["diagnostics"][0]["version"], 1, "{unchanged}");
+    // 다음 pull 은 「바뀌지 않음」 의 resultId 를 싣는다.
+    win.call("lsp.document.change", change(2)).await.unwrap();
+    assert!(
+        eventually(Duration::from_secs(10), || {
+            methods_of(&record, "textDocument/diagnostic").len() == 3
+        })
+        .await
+    );
+    let pulls = methods_of(&record, "textDocument/diagnostic");
+    assert_eq!(pulls[1]["params"]["previousResultId"], "r1");
+    assert_eq!(pulls[2]["params"]["previousResultId"], "r2");
+}
+
+/// 서버가 아직 준비되지 않았다고 답하면(`ServerCancelled` · `ContentModified` — rust-analyzer 의 색인 중) 앞 진단을 그대로 둔다
+/// (준비되면 서버가 refresh 를 보낸다 — M4-06 리뷰 L5).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pull_the_server_is_not_ready_for_keeps_the_previous_diagnostics() {
+    let env = Env::new(EnvOptions::default());
+    let file = env.file("src/lib.rs", "");
+    let not_ready = |code: i32| Reply {
+        error: Some(json!({ "code": code, "message": "not ready" })),
+        ..Reply::default()
+    };
+    let record = env.fake(
+        "rust-analyzer",
+        Scenario {
+            capabilities: pull_capable(),
+            ..Scenario::default()
+        }
+        .sequence(
+            "textDocument/diagnostic",
+            vec![
+                Reply::result(json!({ "kind": "full", "items": [diag(0, 1, "pulled")] })),
+                not_ready(-32802),
+                not_ready(-32801),
+            ],
+        ),
+    );
+    let mut events = subscribe(&env);
+    let mut win = env.window();
+    let doc = doc_id(&win.open(&env, &file, "Rust", "").await);
+    assert_eq!(
+        messages(&next_for(&mut events, &file).await["diagnostics"]),
+        ["pulled"]
+    );
+    for version in [1, 2] {
+        win.call(
+            "lsp.document.change",
+            json!({ "docId": doc, "version": version, "changes": [{ "from": 0, "to": 0, "insert": "x" }] }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            eventually(Duration::from_secs(10), || {
+                methods_of(&record, "textDocument/diagnostic").len() == version as usize + 1
+            })
+            .await
+        );
+    }
+    // 둘째 · 셋째 답(서버 취소 · 내용 바뀜)이 처리될 틈을 준다 — 그 뒤에도 앞 진단이 남고 이 경로의 이벤트는 나지 않았다.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(listed(&mut win, &env, &file).await, ["pulled"]);
+    while let Some(received) = events.try_recv() {
+        if let Received::Event(e) = received {
+            assert_ne!(e.payload["path"], json!(file), "{}", e.payload);
+        }
+    }
 }
 
 /// `workspace/diagnostic/refresh` 는 열린 문서를 다시 당기되 몰려 와도 한 번으로 합친다.
