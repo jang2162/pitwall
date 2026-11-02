@@ -138,6 +138,13 @@ async fn published_diagnostics_reach_the_list_counts_and_event() {
     let env = Env::new(EnvOptions::default());
     let file = env.file("src/lib.rs", "a\nb\nc\nd\n");
     let outside = env.base.join("elsewhere.rs");
+    // 루트 안 폴더에서 `..%2F` 로 루트 밖(`outside`)을 가리키는 URI — 디코드하면 루트로 시작하는 글자다(M4-06 리뷰 L2).
+    let dir = file.parent().unwrap();
+    let climb = format!(
+        "{}/{}elsewhere.rs",
+        uri(dir),
+        "..%2F".repeat(dir.strip_prefix(&env.base).unwrap().components().count())
+    );
     env.fake(
         "rust-analyzer",
         Scenario {
@@ -146,7 +153,11 @@ async fn published_diagnostics_reach_the_list_counts_and_event() {
         }
         .on(
             "textDocument/didOpen",
+            // 버릴 것을 먼저 보낸다 — 서버의 알림은 차례대로 처리되므로 `file` 의 이벤트가 오면 앞의 것은 이미 판정됐다.
             vec![
+                publish(&uri(&outside), None, vec![diag(0, 1, "outside")]),
+                publish(&climb, None, vec![diag(0, 1, "climbed out")]),
+                publish("untitled:x", None, vec![diag(0, 1, "untitled")]),
                 publish(
                     &uri(&file),
                     Some(0),
@@ -156,8 +167,6 @@ async fn published_diagnostics_reach_the_list_counts_and_event() {
                         diag(3, 1, "error"),
                     ],
                 ),
-                publish(&uri(&outside), None, vec![diag(0, 1, "outside")]),
-                publish("untitled:x", None, vec![diag(0, 1, "untitled")]),
             ],
         ),
     );

@@ -392,6 +392,21 @@ fn normalize_worktree(worktree: Option<&str>) -> Option<String> {
     })
 }
 
+/// 경로의 `.` · `..` 를 글자로 접는다(디스크를 보지 않는다 — 링크는 풀지 않는다).
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// 바이트 상한까지 글자 경계에서 자른다(넘으면 `…`).
 fn clip(text: &str, limit: usize) -> String {
     if text.len() <= limit {
@@ -621,7 +636,11 @@ impl DiagnosticStore {
         raw: &Value,
         result_id: Option<String>,
     ) {
-        let Some(path) = uri_path(uri).filter(|p| p.starts_with(&source.key.root)) else {
+        // 디코드한 뒤 `..` 를 글자로 접고 견준다 — `..%2F` 는 URI 로는 한 조각이라 url 크레이트가 접지 않는다(M4-06 리뷰 L2).
+        let Some(path) = uri_path(uri)
+            .map(|p| lexical(&p))
+            .filter(|p| p.starts_with(&source.key.root))
+        else {
             return;
         };
         // 서버마다 URI 의 인코딩이 조금씩 다르다 — 관리자가 쥔 꼴(`file_uri`)로 맞춰 견준다.
