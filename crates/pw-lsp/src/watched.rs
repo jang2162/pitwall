@@ -542,7 +542,8 @@ fn select(
     out
 }
 
-#[cfg(test)]
+// 시험은 유닉스 경로(`/w/root/…`)로 쓴다.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -561,7 +562,6 @@ mod tests {
 
     /// LSP 3.17 글롭 꼴: `**` · `{a,b}` · `[…]` · `[!…]` · `?`, `*` 는 `/` 를 넘지 않는다. 글 꼴은 절대 경로나 작업 공간 루트 기준
     /// 상대 경로에, `RelativePattern` 은 `baseUri` 기준에 맞춘다(`WorkspaceFolder` 꼴의 `baseUri` 도). 종류 마스크를 지킨다.
-    #[cfg(unix)]
     #[test]
     fn lsp_globs_relative_patterns_and_kind_masks() {
         let w = Watchers::compile(
@@ -601,7 +601,6 @@ mod tests {
     }
 
     /// 상한: 서버마다 글롭 수 · 글롭 길이. 읽지 못하는 글롭은 버리고 나머지는 쓴다. 다른 메서드의 등록은 보지 않는다.
-    #[cfg(unix)]
     #[test]
     fn watcher_limits_and_bad_patterns() {
         let limits = WatchLimits {
@@ -643,7 +642,6 @@ mod tests {
     }
 
     /// 루트 밖 · `..` 가 낀 경로 · 상대 경로는 보내지 않는다. 평가 상한을 넘으면 그 뒤는 버린다. 다시 만든 목록은 `Changed` 로.
-    #[cfg(unix)]
     #[test]
     fn selection_keeps_to_the_root_and_the_evaluation_budget() {
         let w = Watchers::compile(
