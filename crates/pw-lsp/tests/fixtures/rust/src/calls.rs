@@ -16,3 +16,8 @@ pub fn total(a: &Rect, b: &Rect) -> u32 {
 pub fn half(side: u32) -> u32 {
     scale(/*@signature.scale*/side, 1) / 2
 }
+
+/// 자동완성 자리: 점 바로 뒤(`area` · `width` · `height` 가 후보 — `area` 는 `Shape` 를 들여와서).
+pub fn complete(r: &Rect) -> u32 {
+    r./*@complete.rect-members*/width
+}

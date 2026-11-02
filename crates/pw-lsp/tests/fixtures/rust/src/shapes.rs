@@ -18,7 +18,7 @@ impl Shape for /*@impl.rect-shape*/Rect {
     }
 }
 
-/// 두 변으로 넓이를 낸다. rename 대상(이 정의와 calls.rs 의 호출 둘).
+/// 두 변으로 넓이를 낸다. rename 대상(이 정의와 calls.rs 의 import 하나 · 호출 셋).
 pub fn /*@rename.scale*/scale(width: u32, height: u32) -> u32 {
     width * height
 }

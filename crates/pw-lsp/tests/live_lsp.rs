@@ -18,8 +18,21 @@ mod live {
 
     /// 문서 동기화 끝까지(15-m4-plan.md M4-05 live): 픽스처를 임시 폴더에 복사해 서버 관리자로 연다 → 진행이 `Task` 로 나왔다
     /// 끝난다 → 요청 길로 사용처를 묻는다(앵커 표의 「`scale` 의 사용처 다섯」) → 편집 · 저장 · 닫기 → 서버 로그에 오류가 없다.
+    ///
+    /// `hide_rust_src`(rust-analyzer 만): 표준 라이브러리 소스(rust-src)를 가린 채 돈다 — 서버 환경(`[lsp.rust-analyzer.env]`)의
+    /// `RUST_SRC_PATH` 를 `core` 폴더 하나만 든 빈 폴더로(rust-analyzer 는 `core` 가 있는 폴더만 받고, 그 안에 크레이트가 없으니
+    /// 표준 라이브러리 크레이트가 하나도 없다 — rust-src 가 없는 툴체인과 같은 분석). 설정 `cargo.sysrootSrc` 는 `workspace/
+    /// configuration` 으로 가도 이 판(2026-10-26)이 기동 때 쓰지 않아 가리지 못한다. 가려졌는지는 임시 복사본에 더한 파일
+    /// (`src/m4_05_std.rs`)의 `String` 정의가 풀리지 않는 것으로 본다. 가리지 않은 rust 실행은 rust-src 가 있는 기기에서 그 정의가
+    /// 풀리는 것을 본다(대조 — M4-05 리뷰 L4).
     #[cfg(unix)]
-    pub async fn document_sync(server: LiveServer, fixture: &str, file: &str, language: &str) {
+    pub async fn document_sync(
+        server: LiveServer,
+        fixture: &str,
+        file: &str,
+        language: &str,
+        hide_rust_src: bool,
+    ) {
         use std::collections::BTreeSet;
 
         use pw_core::Filter;
@@ -39,6 +52,18 @@ mod live {
             .join("tests/fixtures")
             .join(fixture);
         copy_dir(&from, &env.root);
+        let std_probe = (fixture == "rust").then(|| {
+            // 이 행 몫의 임시 파일(픽스처 규칙: 임시 복사본의 lib.rs 끝에 한 줄).
+            let probe = env.file(
+                "src/m4_05_std.rs",
+                "//! rust-src 탐침: 표준 라이브러리 항목의 정의.\npub fn text() -> String {\n    /*@std.string*/String::new()\n}\n",
+            );
+            let lib = env.root.join("src/lib.rs");
+            let mut text = std::fs::read_to_string(&lib).unwrap();
+            text.push_str("pub mod m4_05_std;\n");
+            std::fs::write(&lib, text).unwrap();
+            probe
+        });
         env.configure(
             server.server_id(),
             &server.program(),
@@ -48,6 +73,18 @@ mod live {
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect::<Vec<_>>(),
         );
+        if hide_rust_src {
+            let empty = env.base.join("no-rust-src");
+            std::fs::create_dir_all(empty.join("core")).unwrap();
+            let settings = env.paths.config.join("settings.toml");
+            let mut text = std::fs::read_to_string(&settings).unwrap();
+            text.push_str(&format!(
+                "[lsp.rust-analyzer.env]\nRUST_SRC_PATH = \"{}\"\n",
+                empty.display()
+            ));
+            std::fs::write(&settings, text).unwrap();
+            env.global.reload().unwrap();
+        }
         let mut events = env
             .bus
             .subscribe(Filter::all().topics([TOPIC_PROGRESS, TOPIC_FINISHED]));
@@ -133,6 +170,52 @@ mod live {
         assert_eq!(found.len(), 5, "{found:?}");
         assert_eq!(files.len(), 2, "{files:?}");
 
+        if let Some(probe) = &std_probe {
+            let probe_text = std::fs::read_to_string(probe).unwrap();
+            let probe_doc = win.open(&env, probe, language, &probe_text).await["docId"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let anchor = "/*@std.string*/";
+            let at = probe_text.find(anchor).unwrap() + anchor.len();
+            let offset = probe_text[..at].encode_utf16().count();
+            let mut targets = Vec::new();
+            for _ in 0..50 {
+                let found = win
+                    .call(
+                        "test.lsp.feature",
+                        json!({ "docId": probe_doc, "feature": "definition", "method": "textDocument/definition",
+                                "offset": offset, "version": 0 }),
+                    )
+                    .await;
+                let found = match found {
+                    Err(e) if e.data.as_ref().is_some_and(|d| d["code"] == -32801) => Value::Null,
+                    other => other.unwrap()["result"].clone(),
+                };
+                targets = match found {
+                    Value::Array(list) => list,
+                    Value::Null => Vec::new(),
+                    one => vec![one],
+                };
+                if !targets.is_empty() || hide_rust_src {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            eprintln!("String goes to {targets:?}");
+            if hide_rust_src {
+                assert!(targets.is_empty(), "rust-src was not hidden: {targets:?}");
+            } else if rust_src_installed() {
+                assert!(
+                    targets.iter().any(|t| t.to_string().contains("string.rs")),
+                    "{targets:?}"
+                );
+            }
+            win.call("lsp.document.close", json!({ "docId": probe_doc }))
+                .await
+                .unwrap();
+        }
+
         // 편집 · 저장 · 닫기.
         let edit = json!({ "docId": doc, "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "// 편집 🦀\n" }] });
         assert_eq!(
@@ -176,6 +259,21 @@ mod live {
                 .is_empty())
             .await
         );
+    }
+
+    /// 시험 프로세스의 `rustc` 툴체인에 rust-src 가 있는가.
+    #[cfg(unix)]
+    fn rust_src_installed() -> bool {
+        std::process::Command::new("rustc")
+            .args(["--print", "sysroot"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            .is_some_and(|root| {
+                Path::new(&root)
+                    .join("lib/rustlib/src/rust/library")
+                    .is_dir()
+            })
     }
 
     #[cfg(unix)]
@@ -287,6 +385,21 @@ async fn live_lsp_rust_analyzer_document_sync() {
         "rust",
         "src/calls.rs",
         "Rust",
+        false,
+    )
+    .await;
+}
+
+/// 픽스처가 rust-src 없이도 돈다(fixtures/README.md 「rust-src 없이도 돈다」 · 계획 리뷰 H2 · M4-05 리뷰 L4).
+#[cfg(all(unix, pw_live_lsp_rust_analyzer))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lsp_rust_analyzer_fixture_without_rust_src() {
+    live::document_sync(
+        pw_lsp::live::LiveServer::RustAnalyzer,
+        "rust",
+        "src/calls.rs",
+        "Rust",
+        true,
     )
     .await;
 }
@@ -299,6 +412,7 @@ async fn live_lsp_typescript_language_server_document_sync() {
         "typescript",
         "src/calls.ts",
         "TypeScript",
+        false,
     )
     .await;
 }
