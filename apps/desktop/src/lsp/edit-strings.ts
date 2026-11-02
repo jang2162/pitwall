@@ -15,6 +15,7 @@ export function lspEditStrings(t: Translate) {
     renameHint: t("lsp-edit-rename-hint"),
     renameInvalid: (message: string | null | undefined) =>
       message ? t("lsp-edit-rename-invalid-reason", { message }) : t("lsp-edit-rename-invalid"),
+    renameNotReady: t("lsp-edit-rename-not-ready"),
     renameFailed: (message: string) => t("lsp-edit-rename-failed", { message }),
     codeActions: t("lsp-edit-code-actions"),
     codeActionsNone: t("lsp-edit-code-actions-none"),

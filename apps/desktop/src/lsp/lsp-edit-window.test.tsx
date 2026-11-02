@@ -20,6 +20,7 @@ import type {
   ProjectTrust,
 } from "@pitwall/rpc-client";
 import { createRoot, type Root } from "react-dom/client";
+import { toast } from "sonner";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
@@ -660,14 +661,109 @@ it("asks for quick fixes with only the diagnostics of the code action server fro
   expect(currentPopup(view())).toBeNull();
 });
 
+/** 지금 떠 있는 알림의 글. sonner 의 토스트는 앞 시험의 것이 전역에 남는다 — 견줄 때는 시험 앞의 것을 빼거나 먼저 걷는다. */
+const toastTexts = () =>
+  [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent ?? "");
+/** `check` 가 참이 될 때까지(최대 2 s — 시험 시한 5 s 안에서 단언이 먼저 실패하게) 기다린다. 단언하지 않는다. */
+const waitFor = async (check: () => boolean) => {
+  const deadline = Date.now() + 2000;
+  while (!check() && Date.now() < deadline) await settle();
+};
+/**
+ * 앞 시험의 토스트를 걷는다. sonner 는 전역 상태이고 토스트 id 가 `등급:제목`(notifications.tsx)이라, 같은 제목이 남아 있으면 새
+ * 알림이 그 자리를 덮어써 새로 뜬 것으로 보이지 않는다.
+ */
+async function clearToasts() {
+  await act(async () => void toast.dismiss());
+  await waitFor(() => toastTexts().length === 0);
+  expect(toastTexts()).toEqual([]);
+}
+
+/** `run` 동안 처리되지 않은 거부를 모은다. */
+async function rejectionsDuring(run: () => Promise<void>): Promise<unknown[]> {
+  const rejections: unknown[] = [];
+  const listener = (reason: unknown) => void rejections.push(reason);
+  process.on("unhandledRejection", listener);
+  try {
+    await run();
+    // 처리 안 된 거부는 마이크로태스크가 빈 뒤에 알려진다.
+    for (let i = 0; i < 5; i++) await settle();
+  } finally {
+    process.off("unhandledRejection", listener);
+  }
+  return rejections;
+}
+
+it.each([
+  { code: 5003, message: "the language server did not answer prepareRename within 10 s" },
+  { code: -32603, message: "prepareRename broke on the server" },
+])(
+  "says once that the rename failed when prepare fails, leaving no unhandled rejection ($code)",
+  async (error) => {
+    renameHandlers();
+    host.lsp!.handle("lsp.rename.prepare", () => Promise.reject(error));
+    await openMain();
+    await clearToasts();
+    const rejections = await rejectionsDuring(async () => {
+      await shiftF6();
+      await waitFor(() => toastTexts().length > 0);
+    });
+    expect(rejections).toEqual([]);
+    expect(toastTexts()).toEqual([
+      expect.stringContaining(`이름을 바꾸지 못했다: ${error.message}`),
+    ]);
+    expect(document.querySelector(".cm-lsp-rename-input")).toBeNull();
+    expect(host.lsp!.called("call:lsp.rename")).toEqual([]);
+  },
+);
+
+/** prepare 가 까닭 없이 거절(`null`)하고 `lsp.status.get` 이 `instances` 를 줄 때 새로 뜬 알림. */
+async function renameRefusedWhile(
+  instances: {
+    server: string;
+    progress: { title: string; message: null; percentage: number } | null;
+  }[],
+): Promise<string[]> {
+  renameHandlers();
+  host.lsp!.handle("lsp.rename.prepare", async () => ({
+    server: "rust-analyzer",
+    staleVersion: false,
+    target: { kind: "invalid", message: null },
+  }));
+  host.lsp!.handle("lsp.status.get", async () => ({
+    projectId: "p1",
+    instances: instances.map((i) => ({ ...i, root: "/repo", state: { kind: "ready" } })),
+  }));
+  await openMain();
+  await clearToasts();
+  await shiftF6();
+  await waitFor(() => toastTexts().length > 0);
+  expect(document.querySelector(".cm-lsp-rename-input")).toBeNull();
+  return toastTexts();
+}
+
+it("says the language server is not ready yet when prepare answers null while it indexes", async () => {
+  const shown = await renameRefusedWhile([
+    { server: "rust-analyzer", progress: { title: "Indexing", message: null, percentage: 37 } },
+  ]);
+  expect(shown).toEqual([expect.stringContaining("언어 서버가 아직 준비 중이다")]);
+  expect(host.lsp!.called("call:lsp.status.get")).toEqual([{ projectId: "p1" }]);
+});
+
+it("says it cannot be renamed when prepare answers null and that server shows no progress", async () => {
+  // 다른 서버의 진행은 이 서버가 준비 중이라는 뜻이 아니다.
+  const shown = await renameRefusedWhile([
+    { server: "rust-analyzer", progress: null },
+    { server: "taplo", progress: { title: "Indexing", message: null, percentage: 5 } },
+  ]);
+  expect(shown).toEqual([expect.stringContaining("이 자리는 이름을 바꿀 수 없다")]);
+});
+
 it("stays quiet without a server for the document (an untrusted project starts none — M4-D8)", async () => {
   renameHandlers();
   await mount();
   await open(MAIN, 1, 5);
   await act(async () => view().focus());
-  // sonner 의 토스트는 앞 시험의 것이 전역에 남는다 — 이 시험에서 새로 뜬 것만 본다.
-  const toastTexts = () =>
-    [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent ?? "");
   const before = toastTexts();
   await shiftF6();
   await optionEnter();

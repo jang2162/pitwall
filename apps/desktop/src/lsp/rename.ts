@@ -1,7 +1,8 @@
 // rename(15-m4-plan M4-12, 10-ui §4.2 「코드」 의 `⇧F6` — 에디터 포커스. 파일 트리 포커스의 `⇧F6` 은 파일 이름 바꾸기다):
 // 커서 자리를 서버에 물어(`lsp.rename.prepare` — 범위 · 처음 이름, 서버가 범위를 정하지 않으면 커서의 낱말) 그 자리에 인라인 입력을
 // 띄우고, ↩ 로 정한 이름의 편집(`lsp.rename`)을 적용기(workspace-edit.ts)에 넘긴다 — 여러 파일이면 미리보기를 거쳐 디스크에 쓰고
-// 「되돌리기」 알림(결정 M4-D14).
+// 「되돌리기」 알림(결정 M4-D14). prepare 가 시한 · 오류면 「이름을 바꾸지 못했다」, 까닭 없는 거절이면 「바꿀 수 없다」 — 그 서버가
+// 색인 등 진행을 걸고 있으면 「아직 준비 중」 이다.
 //
 // 입력: 이름 범위 아래에 붙는 CodeMirror 툴팁(`view.dom` 안). ↩ 는 한글 조합 중이 아닐 때만 정한다. `Esc` · 포커스를 잃음 · 문서
 // 편집은 취소다 — `Esc` 는 `preventDefault` 해 창 키맵의 「커서 하나로」(M4-14)가 그 눌림에서 돌지 않게 한다.
@@ -11,6 +12,7 @@ import { EditorView, showTooltip, type Tooltip } from "@codemirror/view";
 
 import { editorContext } from "../editor/extensions/context";
 import type { EditWindow } from "./edit-window";
+import type { LspDocument } from "./lsp-sessions";
 
 interface RenameInput {
   readonly from: number;
@@ -114,7 +116,22 @@ export function askName(
   );
 }
 
-/** 뷰의 커서 자리를 rename 한다(`⇧F6`). */
+const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * 서버 `server` 가 이 프로젝트에서 진행(`$/progress` — 색인 등)을 걸고 있는가. M4-05 의 상태(`lsp.status.get` — `lsp.status` 이벤트와
+ * 같은 꼴)를 그때 묻는다. 루트는 가리지 않는다. 묻지 못하면 아니다(알림은 지금 문구로).
+ */
+async function indexing(doc: LspDocument, server: string): Promise<boolean> {
+  try {
+    const status = await doc.services.call("lsp.status.get", { projectId: doc.projectId });
+    return status.instances.some((i) => i.server === server && i.progress !== null);
+  } catch {
+    return false;
+  }
+}
+
+/** 뷰의 커서 자리를 rename 한다(`⇧F6`). 던지지 않는다 — 실패는 모두 알림이다(`edit-ui.tsx` 가 `void` 로 부른다). */
 export async function renameAt(view: EditorView, win: EditWindow): Promise<void> {
   const T = win.strings();
   const doc = view.state.facet(editorContext)?.lsp;
@@ -122,11 +139,19 @@ export async function renameAt(view: EditorView, win: EditWindow): Promise<void>
   if (!doc?.capabilities.rename) return;
   const head = view.state.selection.main.head;
   const text = view.state.doc;
-  const prepared = await doc.call("rename", "lsp.rename.prepare", (at) => ({
-    docId: at.docId,
-    version: at.version,
-    offset: head,
-  }));
+  let prepared;
+  try {
+    prepared = await doc.call("rename", "lsp.rename.prepare", (at) => ({
+      docId: at.docId,
+      version: at.version,
+      offset: head,
+    }));
+  } catch (e) {
+    // 요청 시한(5003 — 색인 중의 rust-analyzer 는 prepare 에 답하지 않기도 한다) · 서버 오류. `edit-ui.tsx` 는 `void` 로 부르므로
+    // 여기서 받지 않으면 알림 없이 처리 안 된 거부가 된다.
+    win.notify({ level: "error", title: T.renameFailed(reason(e)) });
+    return;
+  }
   // 묻는 사이 문서 · 커서가 바뀌었으면 그만둔다(답은 그 전 텍스트 기준이다).
   if (!prepared || !view.state.doc.eq(text) || view.state.selection.main.head !== head) return;
   let from: number;
@@ -134,7 +159,12 @@ export async function renameAt(view: EditorView, win: EditWindow): Promise<void>
   let value: string;
   const target = prepared.target;
   if (target.kind === "invalid") {
-    win.notify({ level: "info", title: T.renameInvalid(target.message) });
+    // 까닭 없는 거절(`null`)은 색인 중인 서버도 준다 — 그 서버가 진행을 걸고 있으면 「바꿀 수 없다」 대신 「아직 준비 중」.
+    const notReady = !target.message && (await indexing(doc, prepared.server));
+    win.notify({
+      level: "info",
+      title: notReady ? T.renameNotReady : T.renameInvalid(target.message),
+    });
     return;
   }
   if (target.kind === "range") {
@@ -170,10 +200,7 @@ export async function renameAt(view: EditorView, win: EditWindow): Promise<void>
       newName: name,
     }));
   } catch (e) {
-    win.notify({
-      level: "error",
-      title: T.renameFailed(e instanceof Error ? e.message : String(e)),
-    });
+    win.notify({ level: "error", title: T.renameFailed(reason(e)) });
     return;
   }
   if (!answer) {
