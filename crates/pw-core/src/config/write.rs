@@ -88,9 +88,40 @@ pub fn write_setting_with(
     value: Option<toml_edit::Value>,
     before_recheck: &mut dyn FnMut(&Path),
 ) -> Result<bool, WriteError> {
+    let path = config_dir.join(SETTINGS_FILE);
+    let Some((table, name)) = key.split_once('.') else {
+        return Err(WriteError::Invalid {
+            path,
+            message: format!("`{key}` is not a `table.key` setting"),
+        });
+    };
+    write_in(&path, SETTINGS_KIND, &[table, name], value, before_recheck)
+}
+
+/// 설정 파일 `file`(종류 `kind` — `project` · `settings` 등, `schema` 판정에 쓴다)의 키 `path`(표 이름들 + 키, 조각마다 그대로 —
+/// 점 · 따옴표가 든 조각도 한 조각이다. TOML 로 쓸 때 따옴표 규칙대로 감싼다)를 `value` 로 둔다. `None` 이면 그 키를 지운다.
+/// [`write_setting`] 과 같은 규칙(주석 · 다른 키 보존, 없는 파일은 `schema = 1` 로 만듦, 경합 · 심링크 · 새 `schema` 거절, 같은
+/// 프로세스 잠금)이다. 처음 만드는 중간 표는 머리글을 따로 두지 않는다(`[lsp.ruff]` 한 줄). 프로젝트의 개인 파일
+/// (`ConfigSource::local_file`)을 고칠 때 쓴다(15-m4-plan M4-17).
+pub fn write_key(
+    file: &Path,
+    kind: &str,
+    path: &[&str],
+    value: Option<toml_edit::Value>,
+) -> Result<bool, WriteError> {
+    write_in(file, kind, path, value, &mut |_| {})
+}
+
+fn write_in(
+    path: &Path,
+    kind: &str,
+    keys: &[&str],
+    value: Option<toml_edit::Value>,
+    before_recheck: &mut dyn FnMut(&Path),
+) -> Result<bool, WriteError> {
     // 쓰다 패닉한 쪽이 있어도 파일은 rename 으로만 바뀌므로 반쯤 쓴 내용은 없다 — 독은 무시한다.
     let _one_at_a_time = IN_PROCESS.lock().unwrap_or_else(PoisonError::into_inner);
-    let path = config_dir.join(SETTINGS_FILE);
+    let path = path.to_path_buf();
     let io_err = |error| WriteError::Io {
         path: path.clone(),
         error,
@@ -100,7 +131,7 @@ pub fn write_setting_with(
         if current.is_none() && value.is_none() {
             return Ok(false);
         }
-        let next = with_key(current.as_deref(), key, value.as_ref()).map_err(|message| {
+        let next = with_key(current.as_deref(), kind, keys, value.as_ref()).map_err(|message| {
             WriteError::Invalid {
                 path: path.clone(),
                 message,
@@ -158,10 +189,11 @@ fn create(path: &Path, contents: &str) -> io::Result<()> {
     file.sync_all()
 }
 
-/// `current`(없으면 새 파일)의 `key` 를 `value` 로 바꾸거나(`None` 이면 지운) 내용.
+/// `current`(없으면 새 파일)의 키 `keys` 를 `value` 로 바꾸거나(`None` 이면 지운) 내용.
 fn with_key(
     current: Option<&str>,
-    key: &str,
+    kind: &str,
+    keys: &[&str],
     value: Option<&toml_edit::Value>,
 ) -> Result<String, String> {
     let mut doc: DocumentMut = match current {
@@ -170,9 +202,7 @@ fn with_key(
             .map_err(|e: toml_edit::TomlError| format!("not valid TOML, not changing it: {e}"))?,
         None => "schema = 1\n".parse().expect("constant TOML"),
     };
-    let supported = Schemas::builtin()
-        .get(SETTINGS_KIND)
-        .map_or(0, |m| m.current());
+    let supported = Schemas::builtin().get(kind).map_or(0, |m| m.current());
     match schema_of(&doc) {
         Ok(version) if version <= supported => {}
         Ok(version) => {
@@ -182,32 +212,45 @@ fn with_key(
         }
         Err(e) => return Err(format!("{e}, not changing it")),
     }
-    let Some((table, name)) = key.split_once('.') else {
-        return Err(format!("`{key}` is not a `table.key` setting"));
+    let Some((name, tables)) = keys.split_last().filter(|(_, t)| !t.is_empty()) else {
+        return Err(format!("`{}` is not a `table.key` setting", keys.join(".")));
     };
+    let shown = |upto: usize| tables[..=upto].join(".");
     let Some(value) = value else {
-        match doc.get_mut(table) {
-            None => {}
-            Some(item) => {
-                let Some(t) = item.as_table_like_mut() else {
-                    return Err(format!("`{table}` is not a table, not changing it"));
-                };
-                t.remove(name);
+        let mut table: &mut dyn toml_edit::TableLike = doc.as_table_mut();
+        for (i, t) in tables.iter().enumerate() {
+            match table.get_mut(t) {
+                None => return Ok(doc.to_string()),
+                Some(item) => {
+                    let Some(next) = item.as_table_like_mut() else {
+                        return Err(format!("`{}` is not a table, not changing it", shown(i)));
+                    };
+                    table = next;
+                }
             }
         }
+        table.remove(name);
         return Ok(doc.to_string());
     };
-    let item = doc
-        .entry(table)
-        .or_insert_with(|| Item::Table(Table::new()));
-    let Some(t) = item.as_table_like_mut() else {
-        return Err(format!("`{table}` is not a table, not changing it"));
-    };
+    let mut table: &mut dyn toml_edit::TableLike = doc.as_table_mut();
+    for (i, t) in tables.iter().enumerate() {
+        // 맨 바깥 표는 머리글을 둔다(`[db]`). 안쪽에 새로 만드는 표의 바깥 것은 머리글 없이 둔다(`[lsp.ruff]` 만 — 빈 `[lsp]` 없이).
+        let last = i + 1 == tables.len();
+        let item = table.entry(t).or_insert_with(|| {
+            let mut new = Table::new();
+            new.set_implicit(!last);
+            Item::Table(new)
+        });
+        let Some(next) = item.as_table_like_mut() else {
+            return Err(format!("`{}` is not a table, not changing it", shown(i)));
+        };
+        table = next;
+    }
     let mut next = value.clone();
-    if let Some(old) = t.get(name).and_then(Item::as_value) {
+    if let Some(old) = table.get(name).and_then(Item::as_value) {
         *next.decor_mut() = old.decor().clone();
     }
-    t.insert(name, Item::Value(next));
+    table.insert(name, Item::Value(next));
     Ok(doc.to_string())
 }
 
@@ -306,5 +349,82 @@ mod tests {
             assert!(matches!(e, WriteError::Invalid { .. }), "{e}");
         }
         assert_eq!(fs::read_to_string(&file).unwrap(), "schema = 1\ndb = 3\n");
+    }
+
+    /// 키 조각은 그대로 한 조각이다 — 점 · 따옴표 · 제어 문자가 든 서버 id 도 `[lsp."<id>"]` 하나로 쓰고 다시 읽으면 같은 이름이다.
+    /// 새 파일은 `schema = 1` 과 그 표 하나(빈 `[lsp]` 머리글 없이), 있던 키 · 주석은 그대로(15-m4-plan M4-17).
+    #[test]
+    fn write_key_quotes_each_piece_and_nests_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".pitwall/project.local.toml");
+        let f = Some(toml_edit::Value::from(false));
+        assert!(write_key(&file, "project", &["lsp", "ruff", "enabled"], f.clone()).unwrap());
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "schema = 1\n\n[lsp.ruff]\nenabled = false\n"
+        );
+        assert!(!write_key(&file, "project", &["lsp", "ruff", "enabled"], f.clone()).unwrap());
+        for id in ["a.b", "q\"uote", "tab\there", "새.서버"] {
+            assert!(
+                write_key(&file, "project", &["lsp", id, "install_prompt"], f.clone()).unwrap()
+            );
+            let doc: toml_edit::DocumentMut = fs::read_to_string(&file).unwrap().parse().unwrap();
+            assert_eq!(
+                doc["lsp"][id]["install_prompt"].as_bool(),
+                Some(false),
+                "{id}: {doc}"
+            );
+            // 조각이 점에서 갈라지지 않았다.
+            assert!(doc["lsp"].get("a").is_none(), "{doc}");
+        }
+        assert!(write_key(&file, "project", &["lsp", "a.b", "install_prompt"], None).unwrap());
+        let doc: toml_edit::DocumentMut = fs::read_to_string(&file).unwrap().parse().unwrap();
+        assert!(doc["lsp"]["a.b"].get("install_prompt").is_none());
+        assert_eq!(doc["lsp"]["ruff"]["enabled"].as_bool(), Some(false));
+        // 지울 것이 없으면 바꾸지 않는다.
+        assert!(!write_key(&file, "project", &["lsp", "none", "enabled"], None).unwrap());
+    }
+
+    #[test]
+    fn write_key_keeps_comments_and_refuses_non_tables_and_newer_schemas() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("project.local.toml");
+        fs::write(
+            &file,
+            "schema = 1\n# 내 메모\n[lsp.ruff]\nenabled = true # 켬\n",
+        )
+        .unwrap();
+        assert!(
+            write_key(
+                &file,
+                "project",
+                &["lsp", "ruff", "enabled"],
+                Some(false.into())
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "schema = 1\n# 내 메모\n[lsp.ruff]\nenabled = false # 켬\n"
+        );
+        fs::write(&file, "schema = 1\nlsp = 3\n").unwrap();
+        let e = write_key(
+            &file,
+            "project",
+            &["lsp", "ruff", "enabled"],
+            Some(false.into()),
+        )
+        .unwrap_err();
+        assert!(matches!(e, WriteError::Invalid { .. }), "{e}");
+        fs::write(&file, "schema = 99\n").unwrap();
+        let e = write_key(
+            &file,
+            "project",
+            &["lsp", "ruff", "enabled"],
+            Some(false.into()),
+        )
+        .unwrap_err();
+        assert!(matches!(e, WriteError::Invalid { .. }), "{e}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "schema = 99\n");
     }
 }

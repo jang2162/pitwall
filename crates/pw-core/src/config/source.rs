@@ -322,6 +322,21 @@ impl ConfigSource {
         self.local_fallback.as_ref().map(|s| s.dir.as_path())
     }
 
+    /// 개인 덮어쓰기 `<id>.local.toml` 을 고칠 때 쓸 파일 — [`Self::load`] 가 그 id 의 local 레이어로 읽는 파일이다. 폴백은 파일
+    /// 단위다: 이 폴더에 그 파일이 있으면 그것, 없고 폴백 폴더(메인 체크아웃)에 있으면 그것. 둘 다 없으면 새로 만들 자리 — 폴백이
+    /// 있으면(연결 워크트리) 메인 체크아웃 쪽이다(그 프로젝트의 모든 워크트리가 읽는 개인 파일). `id` 는 `project` · `db/pg` 꼴.
+    pub fn local_file(&self, id: &str) -> PathBuf {
+        let name = format!("{id}.local.toml");
+        let exists = |dir: &Path| fs::symlink_metadata(dir.join(&name)).is_ok();
+        if exists(&self.primary.dir) {
+            return self.primary.dir.join(&name);
+        }
+        match &self.local_fallback {
+            Some(fallback) => fallback.dir.join(&name),
+            None => self.primary.dir.join(&name),
+        }
+    }
+
     /// 감시할 폴더와 재귀 여부. 없는 폴더는 생기는 것을 보도록 가장 가까운 있는 조상을 비재귀로 본다.
     pub(crate) fn watch_targets(&self) -> Vec<(PathBuf, bool)> {
         let recursive = !self.subdirs.is_empty();
@@ -731,6 +746,57 @@ mod tests {
         // 경로 문자열과 비교한다 — 마디마다 join 해야 Windows 에서 구분자가 같다.
         let own = wt.join(PROJECT_DIR).join("project.local.toml");
         assert_eq!(local.path, Some(own.display().to_string()));
+    }
+
+    /// 고칠 개인 파일(`local_file`)이 읽는 local 레이어와 같다: 워크트리에 없으면 메인 체크아웃 것(없으면 거기 만들 자리), 있으면
+    /// 워크트리 것. 폴백이 없는 폴더는 그 폴더.
+    #[test]
+    fn the_local_file_to_write_is_the_one_load_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, wt) = fake_worktree(tmp.path());
+        let source = ConfigSource::project(&wt);
+        let main_local = main.join(PROJECT_DIR).join("project.local.toml");
+        let wt_local = wt.join(PROJECT_DIR).join("project.local.toml");
+        let same = |a: &Path, b: &Path| {
+            assert_eq!(
+                fs::canonicalize(a.parent().unwrap())
+                    .ok()
+                    .map(|p| p.join(a.file_name().unwrap())),
+                fs::canonicalize(b.parent().unwrap())
+                    .ok()
+                    .map(|p| p.join(b.file_name().unwrap()))
+            );
+        };
+        // 아무것도 없으면 메인 체크아웃에 만든다.
+        fs::create_dir_all(main.join(PROJECT_DIR)).unwrap();
+        same(&source.local_file("project"), &main_local);
+        write(&main_local, "schema = 1\nport = 2\n");
+        same(&source.local_file("project"), &main_local);
+        let layer = |s: &ConfigSource| {
+            PathBuf::from(
+                s.load()
+                    .unwrap()
+                    .file("project")
+                    .unwrap()
+                    .layers
+                    .last()
+                    .unwrap()
+                    .path
+                    .clone()
+                    .unwrap(),
+            )
+        };
+        same(&layer(&source), &source.local_file("project"));
+        write(&wt_local, "schema = 1\nport = 1\n");
+        same(&source.local_file("project"), &wt_local);
+        same(&layer(&source), &source.local_file("project"));
+        // 폴백이 없는 폴더(메인 체크아웃).
+        let plain = ConfigSource::project(&main);
+        same(&plain.local_file("project"), &main_local);
+        assert_eq!(
+            plain.local_file("db/pg"),
+            main.join(PROJECT_DIR).join("db/pg.local.toml")
+        );
     }
 
     #[test]
