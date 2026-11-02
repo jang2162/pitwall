@@ -27,6 +27,7 @@ import { editorContext } from "../editor/extensions/context";
 import { completion } from "./completion";
 import { diagnosticsFeature } from "./diagnostics";
 import { lspEdit } from "./edit-feature";
+import { installBanner } from "./install-banner";
 import type { LspCapabilities, LspDocument } from "./lsp-sessions";
 import { navigationFeature } from "./navigation";
 
@@ -57,4 +58,6 @@ export const LSP_FEATURES: readonly LspEditorFeature[] = [
   completion,
   // rename · 코드 액션 · 빠른 수정(M4-12).
   lspEdit,
+  // 서버가 없음 · 런타임 없음 · 미신뢰 배너(M4-17).
+  installBanner,
 ];

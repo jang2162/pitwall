@@ -32,6 +32,7 @@ import { projectStrings } from "../layout/strings";
 import { findStrings } from "../search/strings";
 import { structureStrings } from "../structure/strings";
 import { settingsStrings } from "../settings/strings";
+import { toolsStrings } from "../tools/strings";
 import { welcomeStrings } from "../welcome/strings";
 import { appStrings } from "./app-strings";
 import {
@@ -99,6 +100,7 @@ describe("built-in translations", () => {
     callAll(appStrings(t));
     callAll(projectStrings(t));
     callAll(settingsStrings(t));
+    callAll(toolsStrings(t));
     callAll(fileTreeStrings(t));
     callAll(findStrings(t));
     callAll(structureStrings(t));

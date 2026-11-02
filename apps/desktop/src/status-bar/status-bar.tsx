@@ -53,6 +53,8 @@ export const STATUS_SLOTS = {
   db: { side: "left", order: 400 },
   /** 진단 수 `⚠ n ⛔ n` — 누르면 문제 툴 윈도우(M4-06, src/lsp/problems.tsx). */
   problems: { side: "right", order: 50 },
+  /** 활성 탭 문서의 언어 서버 이름 · 상태(M4-17, src/lsp/lsp-status.tsx). 10-ui §2.4 그림의 「Kotlin LSP ✓」 — 문제 수 다음, 작업 앞. */
+  lsp: { side: "right", order: 75 },
   /** 백그라운드 작업(F11-5). */
   tasks: { side: "right", order: 100 },
   /** 커서 줄:열 · 선택 길이(M1-18). */

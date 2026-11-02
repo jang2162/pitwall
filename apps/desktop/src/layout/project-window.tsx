@@ -94,6 +94,7 @@ import { activeWorktree, activeWorktreeStore } from "../open-with/active-worktre
 import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
 import { DbStatus } from "../db/safety/db-status";
 import { LSP_STATUS_TOPIC, snippetHighlighter } from "../lsp/lsp-sessions";
+import { useLspStatusUi } from "../lsp/lsp-status";
 import { useLspNavigation } from "../lsp/navigation-host";
 import { createOutsideSources } from "../lsp/outside-sources";
 import { ProblemsToolWindow, useDiagnosticsUi } from "../lsp/problems";
@@ -792,6 +793,7 @@ function ProjectWindowBody({
   useDocumentSync(workspace, projectId);
   useLspStatus(workspace, projectId);
   useDiagnosticsUi(workspace);
+  useLspStatusUi(workspace, projectId, api);
   // 최근 파일(⌘E)도 프로젝트 상태에 둔다 — 창이 열리면 저장해 둔 목록을 잇고, 바뀔 때마다 저장한다.
   const [recentFiles] = useState(createRecentFiles);
   useEffect(() => {
