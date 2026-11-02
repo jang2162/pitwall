@@ -40,5 +40,8 @@
 | `nav.def` | `src/m4_08_nav.rs` | `src/m4_08_nav.ts` | 함수 `greet` 의 정의 이름(M4-08 — 시험이 임시 복사본의 rust `lib.rs` 에 모듈 한 줄을 더한다) |
 | `nav.call-1` · `nav.call-2` | `src/m4_08_nav.rs` | `src/m4_08_nav.ts` | `greet` 호출 둘. 정의로 이동하면 `nav.def`, 사용처(선언 포함)는 이 파일 안에 셋 |
 | `nav.vec` | `src/m4_08_nav.rs` | — | `Vec::new()` 의 `Vec` — 정의가 표준 라이브러리 소스(루트 밖)라 읽기 토큰으로 연다. rust-src 가 있어야 한다(live 시험 `live_lsp_rust_analyzer_navigation` 은 없으면 「rust-src 없음」 으로 실패한다) |
+| `sym.gadget` | `src/m4_16_symbols.rs` | `src/m4_16_symbols.ts` | 구조체 · 클래스 `M416Gadget` 의 정의 이름(M4-16 — `workspace/symbol` 의 결과 자리, 심볼 인덱스의 이름 자리와 같은 줄 · 열이어야 두 출처가 하나로 합쳐진다. rust 는 시험이 임시 복사본의 `lib.rs` 에 모듈 한 줄을 더한다) |
+| `sym.spin` | `src/m4_16_symbols.rs` | `src/m4_16_symbols.ts` | 트레이트 · 인터페이스 `M416Spin` — 클래스로 이동(타입 종류)에 든다 |
+| `sym.build` | `src/m4_16_symbols.rs` | `src/m4_16_symbols.ts` | 함수 `m416_build_gadget` · `m416BuildGadget` — 클래스로 이동은 뺀다 |
 
 `errors` · `unused` 파일은 일부러 오류 · 경고를 낸다 — 다른 파일의 진단을 세는 시험은 이 파일들을 빼고 센다(「자기 파일 안」 규칙).

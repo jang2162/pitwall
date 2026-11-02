@@ -5631,6 +5631,7 @@ dependencies = [
  "pw-diag",
  "pw-ext",
  "pw-fs",
+ "pw-index",
  "pw-lsp-servers",
  "pw-rpc",
  "pw-runtime",

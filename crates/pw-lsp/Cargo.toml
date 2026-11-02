@@ -71,6 +71,9 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+# 작업 공간 심볼의 live 시험(M4-16)이 같은 파일의 심볼 인덱스 결과와 열쇠(파일 · 줄 · 이름)가 같은지 본다 — 시험에만(라이브러리는
+# pw-index 에 의존하지 않는다).
+pw-index = { path = "../pw-index" }
 # 설치본 찾기(`InstalledTools` — M4-04)로 띄운 서버를 도구 제거 전에 멈추는 시험.
 pw-tools = { path = "../pw-tools" }
 tempfile = "3.27.0"
