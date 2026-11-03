@@ -861,7 +861,37 @@ it("closes with Esc without folding the editor's cursors (M4-14)", async () => {
   expect(view.state.selection.ranges).toHaveLength(2);
 });
 
-it("keeps the webview's share of a keystroke under 30 ms over 500,000 index symbols", async () => {
+/** 한 키 입력: 칸을 `text` 로 바꾼 때부터 그 질의의 결과가 DOM 에 든 순간(`data-symbol-query`)까지. 폴링 · act 의 시간은 세지 않는다. */
+async function keystroke(text: string): Promise<{ total: number; host: number }> {
+  const before = host.indexMs.length;
+  let drawn: number | undefined;
+  const seen = () =>
+    popup()!.querySelector(`[data-symbol-query="${text}"]`) !== null &&
+    host.indexMs.length > before;
+  const observer = new MutationObserver(() => {
+    if (drawn === undefined && seen()) drawn = performance.now();
+  });
+  observer.observe(popup()!, { subtree: true, childList: true, attributes: true });
+  const started = performance.now();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input(), text);
+    input().dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  while (drawn === undefined) {
+    await act(async () => new Promise((r) => setTimeout(r, 1)));
+    if (performance.now() - started > 20_000) throw new Error(`no rows for ${text}`);
+  }
+  observer.disconnect();
+  return { total: drawn - started, host: host.indexMs.at(-1)! };
+}
+
+const ms = (v: number) => v.toFixed(1);
+function spread(label: string, values: number[]): string {
+  const sorted = [...values].sort((a, b) => a - b);
+  return `${label} median ${ms(sorted[sorted.length >> 1]!)} max ${ms(sorted.at(-1)!)}`;
+}
+
+it("measures a keystroke over 500,000 index symbols: the round trip with the Host's index time, its webview share, and the first search", async () => {
   host.symbols = [];
   for (let file = 0; file < 20_000; file++) {
     const path = `src/m${file}.rs`;
@@ -877,60 +907,35 @@ it("keeps the webview's share of a keystroke under 30 ms over 500,000 index symb
   }
   expect(host.symbols).toHaveLength(500_000);
   await mount();
-  // 창을 연 뒤 첫 사용(코드 예열 — 한 세션에 한 번)은 따로 적는다: 한 번 찾고 닫은 뒤 다시 연 팝업에서 잰다. 다시 연 팝업도 목록을
-  // 처음부터 만든다(닫으면 결과 줄이 사라진다) — 팝업을 열 때마다의 비용은 잰 값에 든다.
-  await gotoSymbol();
-  const warmStarted = performance.now();
-  await type("handleItem9");
-  await vi.waitFor(() =>
-    expect(popup()!.querySelector('[data-symbol-query="handleItem9"]')).not.toBeNull(),
-  );
-  console.log(
-    `[perf] symbol first search after the window opened: ${(performance.now() - warmStarted).toFixed(1)} ms (with settle)`,
-  );
-  await press({ code: "Escape", key: "Escape" });
-  await gotoSymbol();
   const query = "handleItem1234x5";
+  // 창을 연 뒤 첫 검색(코드 예열 — 사람이 창을 열고 처음 누르는 ⌘⌥O · ⌘O 의 실제 경로)의 첫 키: 대기 없이 그 키 하나만 잰다.
+  await gotoSymbol();
+  const first = await keystroke(query.slice(0, 1));
+  for (let i = 2; i <= query.length; i++) await keystroke(query.slice(0, i));
+  await press({ code: "Escape", key: "Escape" });
+  // 팝업을 한 번 쓴 뒤 다시 연 팝업의 키 입력마다. 다시 연 팝업도 목록을 처음부터 만든다(닫으면 결과 줄이 사라진다).
+  await gotoSymbol();
+  const total: number[] = [];
+  const hostShare: number[] = [];
   const webview: number[] = [];
-  const split: string[] = [];
   for (let i = 1; i <= query.length; i++) {
-    const text = query.slice(0, i);
-    const before = host.indexMs.length;
-    // 그 질의의 결과가 DOM 에 든 순간(`data-symbol-query`). 폴링 · act 의 시간은 세지 않는다.
-    let drawn: number | undefined;
-    const seen = () =>
-      popup()!.querySelector(`[data-symbol-query="${text}"]`) !== null &&
-      host.indexMs.length > before;
-    const observer = new MutationObserver(() => {
-      if (drawn === undefined && seen()) drawn = performance.now();
-    });
-    observer.observe(popup()!, { subtree: true, childList: true, attributes: true });
-    const started = performance.now();
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-        input(),
-        text,
-      );
-      input().dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    while (drawn === undefined) {
-      await act(async () => new Promise((r) => setTimeout(r, 1)));
-      if (performance.now() - started > 10_000) throw new Error(`no rows for ${text}`);
-    }
-    observer.disconnect();
-    // 가짜 Host 가 50만 개를 훑은 시간(Host 쪽 — 실제 색인의 질의 시간은 M4-15 가 잰다)을 뺀다.
-    webview.push(drawn - started - host.indexMs[host.indexMs.length - 1]!);
-    split.push(
-      `${(host.indexAt.at(-1)! - started).toFixed(0)}/${(drawn - host.indexAt.at(-1)! - host.indexMs.at(-1)!).toFixed(0)}`,
-    );
+    const k = await keystroke(query.slice(0, i));
+    total.push(k.total);
+    hostShare.push(k.host);
+    webview.push(k.total - k.host);
   }
-  const sorted = [...webview].sort((a, b) => a - b);
+  // 「Pitwall 쪽 왕복」(결정 M4-D19 — 서버 응답 밖): 입력 → 그 질의의 결과가 DOM 에 든 순간. Host 몫은 가짜 Host 가 50만 개를
+  // JS 로 훑은 시간이라 실제 색인(pw-index, M4-15 release 실측 키당 최대 11 ~ 22 ms)의 대역일 뿐이고, IPC 는 메모리 전송이다 —
+  // 실제 Host · IPC · WebKit 을 합친 판정은 M4-19(release 번들 실측)가 한다.
   console.log(
-    `[perf] symbol keystroke webview ms: median ${sorted[sorted.length >> 1]!.toFixed(1)}, max ${sorted.at(-1)!.toFixed(1)} (${webview.map((w) => w.toFixed(1)).join(" ")}) split ${split.join(" ")}`,
+    `[perf] symbol first search after the window opened, first key: round trip ${ms(first.total)} ms (fake Host ${ms(first.host)}, webview ${ms(first.total - first.host)})`,
   );
-  // 판정은 단독 측정에서만 한다(`PW_PERF=1 pnpm --filter @pitwall/desktop exec vitest run
+  console.log(
+    `[perf] symbol keystroke ms (popup used once): ${spread("round trip", total)}; ${spread("fake Host", hostShare)}; ${spread("webview", webview)} (${webview.map(ms).join(" ")})`,
+  );
+  // 회귀 가드는 웹뷰 몫만, 단독 측정에서만 한다(`PW_PERF=1 pnpm --filter @pitwall/desktop exec vitest run
   // src/search-everywhere/symbol-search-window.test.tsx -t 500,000`, CONTRIBUTING 「명령」) — 데스크톱 시험 150 파일이 함께 도는
-  // 기본 실행에서는 다른 일꾼의 CPU · GC 가 중앙값까지 30 ms 를 넘겨(실측 34.6 ms) 시험이 흔들린다. 기본 실행은 50만 심볼로 결과가
-  // 그려지는 길을 지나고 시간을 적기만 한다.
-  if (process.env.PW_PERF) expect(sorted.at(-1)!).toBeLessThan(30);
-});
+  // 기본 실행에서는 다른 일꾼의 CPU · GC 가 중앙값까지 30 ms 를 넘겨(실측 34.6 ms) 흔들린다. 완료 기준(키 입력당 Pitwall 쪽
+  // 30 ms)의 판정이 아니다 — 그것은 M4-19.
+  if (process.env.PW_PERF) expect(Math.max(...webview)).toBeLessThan(30);
+}, 120_000);
