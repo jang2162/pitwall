@@ -16689,3 +16689,35 @@ SOFTWARE.
       incurred by, or claims asserted against, such Contributor by reason
       of your accepting any such warranty or additional liability.
 ```
+
+### Visual Studio Code (indentation guessing rules)
+
+- Source: https://github.com/microsoft/vscode, file `src/vs/editor/common/model/indentationGuesser.ts` (`guessIndentation` and its `spacesDiff`; read from the `main` branch in 2026-10, no commit pinned)
+- Derived code: `apps/desktop/src/lsp/format.ts` (`detectIndent` and its `indentStep`), rewritten in TypeScript after the original's rules (`indentStep` follows the branches of `spacesDiff`; no code was copied verbatim). The rules followed are the candidate steps `[2, 4, 6, 8, 3, 5, 7]`, the score threshold, preferring 2 over 4, counting tab-indented against space-indented lines (two or more spaces), the default when they tie, skipping alignment lines, and the shared-prefix difference that turns mixed leads into 0. Changes: the alignment position is measured over the whole leading whitespace, and lines inside comments and strings are skipped (both described in the function's comment).
+- License: MIT
+
+```text
+MIT License
+
+Copyright (c) 2015 - present Microsoft Corporation
+
+All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
