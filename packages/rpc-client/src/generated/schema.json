@@ -35388,7 +35388,7 @@
       "tier": "read"
     },
     "tools.registry.setMode": {
-      "description": "설정 `[tools] registry` 를 바꾼다(설정 창 「도구」 의 「최신 registry 사용」 — M4-17, `settings.toml` 의 그 키 하나만 쓴다).\n바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다.",
+      "description": "설정 `[tools] registry` 를 바꾼다(설정 창 「도구」 의 「최신 registry 사용」 — M4-17, `settings.toml` 의 그 키 하나만 쓴다).\n바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다. 「최신」 은 고정 해시 밖의 판을 받게 하는 스위치라 설치와 같은\n연결 범위(`ToolGrant` — 설정 창 · 프로젝트 창)만 받는다 — 붙이는 곳은 `install::methods::register`.",
       "kind": "unary",
       "params": {
         "$defs": {

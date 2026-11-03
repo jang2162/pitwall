@@ -943,7 +943,8 @@ export type UnaryMethods = {
 	"tools.registry.search": { params: ToolsRegistrySearchParams; result: ToolsRegistrySearch };
 	/**
 	 * 설정 `[tools] registry` 를 바꾼다(설정 창 「도구」 의 「최신 registry 사용」 — M4-17, `settings.toml` 의 그 키 하나만 쓴다).
-	 * 바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다.
+	 * 바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다. 「최신」 은 고정 해시 밖의 판을 받게 하는 스위치라 설치와 같은
+	 * 연결 범위(`ToolGrant` — 설정 창 · 프로젝트 창)만 받는다 — 붙이는 곳은 `install::methods::register`.
 	 */
 	"tools.registry.setMode": { params: ToolsRegistrySetModeParams; result: ToolsRegistryStatus };
 	/**
@@ -1255,7 +1256,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"tools.log": {"name":"tools.log","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsNameParams","output":"ToolLog","doc":" 패키지의 설치 로그.\n","mcp":false,"fileScope":false},
 	"tools.registry.get": {"name":"tools.registry.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsRegistryGetParams","output":"ToolPackageDetail","doc":" 패키지 하나의 정의와 이 기기에서 받을 것. 없으면 not found.\n","mcp":false,"fileScope":false},
 	"tools.registry.search": {"name":"tools.registry.search","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ToolsRegistrySearchParams","output":"ToolsRegistrySearch","doc":" 패키지 찾기(이름 · 설명, 분류 · 언어 거르기).\n","mcp":false,"fileScope":false},
-	"tools.registry.setMode": {"name":"tools.registry.setMode","kind":"unary","tier":"write","roles":["owner"],"params":"ToolsRegistrySetModeParams","output":"ToolsRegistryStatus","doc":" 설정 `[tools] registry` 를 바꾼다(설정 창 「도구」 의 「최신 registry 사용」 — M4-17, `settings.toml` 의 그 키 하나만 쓴다).\n 바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다.\n","mcp":false,"fileScope":false},
+	"tools.registry.setMode": {"name":"tools.registry.setMode","kind":"unary","tier":"write","roles":["owner"],"params":"ToolsRegistrySetModeParams","output":"ToolsRegistryStatus","doc":" 설정 `[tools] registry` 를 바꾼다(설정 창 「도구」 의 「최신 registry 사용」 — M4-17, `settings.toml` 의 그 키 하나만 쓴다).\n 바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다. 「최신」 은 고정 해시 밖의 판을 받게 하는 스위치라 설치와 같은\n 연결 범위(`ToolGrant` — 설정 창 · 프로젝트 창)만 받는다 — 붙이는 곳은 `install::methods::register`.\n","mcp":false,"fileScope":false},
 	"tools.registry.status": {"name":"tools.registry.status","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ToolsRegistryStatus","doc":" registry 의 판 · 받은 때 · 이 기기에서 지원하는 패키지 수와 지원하지 않는 까닭별 수. 처음 부르면 캐시를 읽고 가져오기를\n 뒤에서 시작한다(`fetching`).\n","mcp":false,"fileScope":false},
 	"tools.rollback": {"name":"tools.rollback","kind":"unary","tier":"exec","roles":["owner"],"params":"ToolsNameParams","output":"ToolInstalledInfo","doc":" 남겨 둔 이전 판으로 링크를 돌린다(지금 판이 이전 판이 된다). 이전 판이 없으면 4006.\n","mcp":false,"fileScope":false},
 	"tools.uninstall": {"name":"tools.uninstall","kind":"unary","tier":"exec","roles":["owner"],"params":"ToolsNameParams","output":"()","doc":" 설치본을 지운다(쓰는 서버가 있으면 멈춘 뒤). 확인 기록은 남긴다.\n","mcp":false,"fileScope":false},
