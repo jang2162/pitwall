@@ -928,6 +928,116 @@ async fn token_texts_over_the_cache_limit_are_dropped_and_read_again() {
     assert_eq!(first_char(&read), 'b');
 }
 
+/// 토큰 상한 시험의 메서드(요청마다 서로 다른 루트 밖 위치 `LOCATIONS_LIMIT` 개 — 상한을 넘을 만큼 메서드마다 하나씩).
+const LIMIT_METHODS: [(&str, &str); 4] = [
+    ("textDocument/definition", "lsp.definition"),
+    ("textDocument/declaration", "lsp.declaration"),
+    ("textDocument/typeDefinition", "lsp.typeDefinition"),
+    ("textDocument/implementation", "lsp.implementation"),
+];
+
+/// 메서드 `b` 의 답은 루트 밖 위치 `LOCATIONS_LIMIT` 개 — 앞 위치들은 `leading[b]`(있는 파일 — 읽힌다), 나머지는 없는 파일(그래도
+/// 토큰이 된다). 상한을 넘기는 데 드는 메서드 수도 준다.
+fn limit_scenario(env: &Env, leading: &[&[&Path]]) -> (Scenario, usize) {
+    use pw_lsp::navigation::{LOCATIONS_LIMIT, TOKENS_PER_SESSION};
+    let batches = TOKENS_PER_SESSION / LOCATIONS_LIMIT + 1;
+    assert!(
+        batches <= LIMIT_METHODS.len(),
+        "more methods are needed to pass the limit"
+    );
+    let mut scenario = Scenario {
+        capabilities: caps(),
+        ..Scenario::default()
+    };
+    for (b, (method, _)) in LIMIT_METHODS.iter().enumerate().take(batches) {
+        let locations: Vec<Value> = (0..LOCATIONS_LIMIT)
+            .map(|i| {
+                let path = match leading.get(b).and_then(|l| l.get(i)) {
+                    Some(file) => file.to_path_buf(),
+                    None => env.base.join(format!("outside/none/{b}-{i}.rs")),
+                };
+                json!({ "uri": uri(&path), "range": range(0, 0, 1) })
+            })
+            .collect();
+        scenario = scenario.reply(method, Reply::result(Value::Array(locations)));
+    }
+    (scenario, batches)
+}
+
+/// ② 한 연결이 들고 있는 토큰 수에는 상한이 있다(M4-16 리뷰 L3 — 작업 공간 심볼이 키 입력마다 토큰을 만든다). 넘으면 가장 오래
+/// 쓰지 않은 토큰부터 지워 not found 가 되고, 그사이 읽은(쓴) 토큰은 남는다. 같은 위치를 다시 받으면 새 토큰이 나온다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tokens_over_the_per_window_limit_drop_the_least_recently_used() {
+    let env = Env::new(EnvOptions::default());
+    let first = outside_file(&env, "first.rs", "pub fn first() {}\n");
+    let kept = outside_file(&env, "kept.rs", "pub fn kept() {}\n");
+    // `kept` 는 첫 답의 두 번째 위치다.
+    let (scenario, batches) = limit_scenario(&env, &[&[&first, &kept]]);
+    env.fake("rust-analyzer", scenario);
+    let (mut win, doc) = ready(&env, "fn main() {}").await;
+    let got = at(&mut win, LIMIT_METHODS[0].1, &doc, 3).await.unwrap();
+    let token = |i: usize| got["locations"][i]["token"].as_str().unwrap().to_owned();
+    let (first_token, kept_token) = (token(0), token(1));
+    // `kept` 만 읽어(써) 가장 나중 차례로 옮긴다 — `first` 는 이 연결에서 가장 먼저 만든 채 쓰지 않았다.
+    win.call("lsp.document.read", json!({ "token": kept_token }))
+        .await
+        .unwrap();
+    for (_, rpc) in LIMIT_METHODS.iter().take(batches).skip(1) {
+        let more = at(&mut win, rpc, &doc, 3).await.unwrap();
+        assert!(more["locations"][0]["token"].is_string());
+    }
+    // 상한을 넘었다: 가장 오래 쓰지 않은 `first` 는 지워졌고, 그 뒤에 쓴 `kept` 는 남는다.
+    let e = win
+        .call("lsp.document.read", json!({ "token": first_token }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::NOT_FOUND);
+    let read = win
+        .call("lsp.document.read", json!({ "token": kept_token }))
+        .await
+        .unwrap();
+    assert_eq!(read["text"], "pub fn kept() {}\n");
+    // 같은 위치를 다시 받으면 새 토큰이다(지운 토큰은 살아나지 않는다).
+    let again = at(&mut win, LIMIT_METHODS[0].1, &doc, 3).await.unwrap();
+    let renewed = again["locations"][0]["token"].as_str().unwrap();
+    assert_ne!(renewed, first_token);
+    win.call("lsp.document.read", json!({ "token": renewed }))
+        .await
+        .unwrap();
+}
+
+/// ② 같은 위치를 다시 받는 것도 토큰을 쓴 것이다(작업 공간 심볼이 키 입력마다 같은 라이브러리 심볼을 다시 줄 때 그 토큰이 먼저
+/// 지워지지 않게): 다시 받은 답의 토큰은 남고, 그 사이의 답이 먼저 지워진다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_location_received_again_counts_as_a_use_for_the_token_limit() {
+    let env = Env::new(EnvOptions::default());
+    let first = outside_file(&env, "first.rs", "pub fn first() {}\n");
+    let second = outside_file(&env, "second.rs", "pub fn second() {}\n");
+    let (scenario, batches) = limit_scenario(&env, &[&[&first], &[&second]]);
+    assert!(batches >= 3, "the limit needs three answers to pass");
+    env.fake("rust-analyzer", scenario);
+    let (mut win, doc) = ready(&env, "fn main() {}").await;
+    let token_of = |v: &Value| v["locations"][0]["token"].as_str().unwrap().to_owned();
+    let first_token = token_of(&at(&mut win, LIMIT_METHODS[0].1, &doc, 3).await.unwrap());
+    let second_token = token_of(&at(&mut win, LIMIT_METHODS[1].1, &doc, 3).await.unwrap());
+    // 첫 답을 다시 받는다 — 같은 토큰이고, 둘째 답보다 나중에 쓴 것이 된다.
+    let again = token_of(&at(&mut win, LIMIT_METHODS[0].1, &doc, 3).await.unwrap());
+    assert_eq!(again, first_token);
+    for (_, rpc) in LIMIT_METHODS.iter().take(batches).skip(2) {
+        at(&mut win, rpc, &doc, 3).await.unwrap();
+    }
+    let e = win
+        .call("lsp.document.read", json!({ "token": second_token }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::NOT_FOUND);
+    let read = win
+        .call("lsp.document.read", json!({ "token": first_token }))
+        .await
+        .unwrap();
+    assert_eq!(read["text"], "pub fn first() {}\n");
+}
+
 /// ② 토큰 문서는 편집 등급 상한(5 MiB)까지만 읽는다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_token_document_over_the_edit_tier_is_refused() {

@@ -15,7 +15,8 @@
 //! 인스턴스의 허가를 다시 받는다(`LspManager::instance_grant` — 그 프로젝트 창의 연결 · 지금 신뢰 · 인스턴스가 떠 있음 · 그 연결이
 //! 그 인스턴스에 문서를 열었거나 재시작 · 정지한 적이 있음). 그래서 다른 창 · 다른 서버 · 신뢰 해제 뒤의 토큰은 읽지 못한다. 토큰은
 //! 발급 때 인스턴스의 세대 표지([`InstanceEpoch`])에 묶여, 서버를 다시 띄우거나 신뢰를 풀었다 다시 걸어도 살아나지 않는다(리뷰
-//! M1 — 「무효」 는 영구다). 읽은 글은 연결마다 [`TEXT_CACHE_LIMIT`] 까지 든다. 파일은 실제 경로를 다시 풀어
+//! M1 — 「무효」 는 영구다). 토큰은 연결마다 [`TOKENS_PER_SESSION`] 개까지 든다(넘으면 가장 오래 쓰지 않은 토큰부터 지운다 — M4-16
+//! 리뷰 L3). 읽은 글은 연결마다 [`TEXT_CACHE_LIMIT`] 까지 든다. 파일은 실제 경로를 다시 풀어
 //! 토큰을 만들 때와 같은지 보고, 막히지 않게 연 핸들이 일반 파일일 때만(FIFO · 장치 · 폴더 거절) [`READ_LIMIT`] 까지 읽는다.
 //! `jdt://` 는 디스크로 풀지 않고 그 인스턴스의 `java/classFileContents` 에만 묻는다. 그 밖의 스킴은 읽지 않는다. 쓰기 RPC 는 없다.
 //! `fs.*` 의 루트 판정(결정 M1-D8)은 그대로다 — 토큰은 이 모듈의 RPC 로만 읽힌다.
@@ -65,6 +66,10 @@ pub const HOVER_LIMIT: usize = 64 * 1024;
 /// 연결마다 토큰 문서의 읽은 글을 들고 있는 상한(바이트, M4-08 리뷰 L2). 넘으면 가장 오래 쓰지 않은 글부터 버린다 — 토큰은
 /// 남고, 다음에 쓰면 다시 읽는다.
 pub const TEXT_CACHE_LIMIT: u64 = 32 * 1024 * 1024;
+/// 연결마다 들고 있는 토큰 수의 상한(M4-16 리뷰 L3 — 작업 공간 심볼이 키 입력마다 루트 밖 결과의 토큰을 만든다). 넘으면 가장 오래
+/// 쓰지 않은(만들거나 · 같은 자리로 다시 받거나 · 읽거나 · 그 문서 안에서 물은 때가 가장 이른) 토큰부터 지운다 — 지운 토큰은 not
+/// found 이고, 같은 위치를 다시 받으면 새 토큰이 나온다.
+pub const TOKENS_PER_SESSION: usize = 4096;
 /// `window/showDocument` 를 한 창에 [`SHOW_DOCUMENT_PERIOD`] 안에 보이는 상한(M4-08 리뷰 M2). 넘는 요청은 `success: false`.
 pub const SHOW_DOCUMENT_BURST: usize = 2;
 pub const SHOW_DOCUMENT_PERIOD: Duration = Duration::from_secs(1);
@@ -300,6 +305,8 @@ struct TokenEntry {
     epoch: InstanceEpoch,
     /// 한 번 읽은 글(바뀌지 않는 문서로 다룬다 — 탭이 연 때의 글). 연결마다 [`TEXT_CACHE_LIMIT`] 를 넘으면 버린다.
     text: Option<Arc<DocText>>,
+    /// 마지막으로 쓴 차례(`Tokens::ages` 의 열쇠).
+    used: u64,
 }
 
 #[derive(Default)]
@@ -311,6 +318,10 @@ struct Tokens {
     watched: HashSet<SessionId>,
     /// 연결마다 들고 있는 글의 바이트 수와 그 토큰들(오래 쓰지 않은 것이 앞).
     cached: HashMap<SessionId, (u64, VecDeque<String>)>,
+    /// 연결마다 토큰을 마지막으로 쓴 차례 → 토큰(가장 오래 쓰지 않은 것이 처음). [`TOKENS_PER_SESSION`] 을 넘으면 처음부터 지운다.
+    ages: HashMap<SessionId, BTreeMap<u64, String>>,
+    /// 다음 차례.
+    clock: u64,
 }
 
 impl Tokens {
@@ -319,6 +330,41 @@ impl Tokens {
         self.by_place.retain(|(s, _, _), _| *s != session);
         self.watched.remove(&session);
         self.cached.remove(&session);
+        self.ages.remove(&session);
+    }
+
+    /// 토큰을 썼다 — 가장 나중 차례로 옮긴다.
+    fn used(&mut self, token: &str) {
+        let Some(entry) = self.by_token.get_mut(token) else {
+            return;
+        };
+        let ages = self.ages.entry(entry.session).or_default();
+        ages.remove(&entry.used);
+        self.clock += 1;
+        entry.used = self.clock;
+        ages.insert(self.clock, token.to_owned());
+    }
+
+    /// 새 토큰을 든다. 그 연결의 토큰이 [`TOKENS_PER_SESSION`] 을 넘으면 가장 오래 쓰지 않은 것부터 지운다.
+    fn insert(&mut self, token: String, mut entry: TokenEntry) {
+        let session = entry.session;
+        self.clock += 1;
+        entry.used = self.clock;
+        self.by_place.insert(
+            (session, entry.instance.clone(), entry.uri.clone()),
+            token.clone(),
+        );
+        self.by_token.insert(token.clone(), entry);
+        let ages = self.ages.entry(session).or_default();
+        ages.insert(self.clock, token);
+        let mut over = ages.len().saturating_sub(TOKENS_PER_SESSION);
+        while over > 0 {
+            let Some((_, old)) = self.ages.get_mut(&session).and_then(BTreeMap::pop_first) else {
+                break;
+            };
+            self.kill(&old);
+            over -= 1;
+        }
     }
 
     /// 죽은 토큰 하나를 지운다.
@@ -328,6 +374,9 @@ impl Tokens {
         };
         self.by_place
             .remove(&(entry.session, entry.instance, entry.uri));
+        if let Some(ages) = self.ages.get_mut(&entry.session) {
+            ages.remove(&entry.used);
+        }
         if let Some((bytes, order)) = self.cached.get_mut(&entry.session) {
             order.retain(|t| t != token);
             if let Some(text) = entry.text {
@@ -438,12 +487,13 @@ impl Navigation {
                 .get(&token)
                 .is_some_and(|e| e.epoch == epoch)
             {
+                tokens.used(&token);
                 return token;
             }
             tokens.kill(&token);
         }
         let token = new_token();
-        tokens.by_token.insert(
+        tokens.insert(
             token.clone(),
             TokenEntry {
                 session,
@@ -452,9 +502,9 @@ impl Navigation {
                 instance: instance.clone(),
                 epoch,
                 text: None,
+                used: 0,
             },
         );
-        tokens.by_place.insert(place, token.clone());
         if tokens.watched.insert(session) {
             let closed = ctx.connection_closed();
             let table = Arc::clone(&self.tokens);
@@ -491,14 +541,17 @@ impl Navigation {
         Placed { real, path, token }
     }
 
-    /// 이 연결의 토큰. 없거나 다른 연결의 것이면 not found(있는지도 알리지 않는다).
+    /// 이 연결의 토큰(쓴 것으로 센다 — [`TOKENS_PER_SESSION`]). 없거나 다른 연결의 것이면 not found(있는지도 알리지 않는다).
     fn entry(&self, ctx: &Ctx, token: &str) -> Result<TokenEntry, RpcError> {
-        lock(&self.tokens)
+        let mut tokens = lock(&self.tokens);
+        let entry = tokens
             .by_token
             .get(token)
             .filter(|e| e.session == ctx.session())
             .cloned()
-            .ok_or_else(|| RpcError::new(rpc_code::NOT_FOUND, "no such document token"))
+            .ok_or_else(|| RpcError::new(rpc_code::NOT_FOUND, "no such document token"))?;
+        tokens.used(token);
+        Ok(entry)
     }
 
     /// 토큰 문서의 글. 부를 때마다 허가를 다시 받고, 인스턴스의 세대 표지가 발급 때와 다르면 토큰을 지우고 not found 다 —
