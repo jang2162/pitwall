@@ -1053,6 +1053,59 @@ async fn progress_becomes_a_task_and_configuration_is_answered() {
     );
 }
 
+/// 프로젝트가 쓰는 JDK(그 디렉터리 런타임 환경의 PATH 의 java — 링크를 푼 설치 폴더)가 jdtls 의 `java.configuration.runtimes` 로
+/// 간다: `initializationOptions.settings` 와 `workspace/configuration` 의 답이 같은 값이다(15-m4-plan.md M4-18, 결정 M4-D6).
+/// 서버는 설치해 둔 JDK(mise 의 25)로 돈다 — 프로젝트의 17 은 서버 런타임 범위 밖이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_project_jdk_reaches_jdtls_the_same_way_on_both_paths() {
+    let env = Env::new(EnvOptions::default());
+    let jdk17 = env.base.join("jdk17");
+    executable(
+        &jdk17.join("bin/java"),
+        "echo 'openjdk version \"17.0.2\" 2022-01-18' >&2",
+    );
+    std::os::unix::fs::symlink(jdk17.join("bin/java"), env.bin.join("java")).unwrap();
+    // 서버 런타임은 mise 설치 폴더의 25(가짜 셸의 HOME 아래).
+    executable(
+        &env.base
+            .join("home/.local/share/mise/installs/java/25.0.1/bin/java"),
+        "echo 'openjdk version \"25.0.1\"' >&2",
+    );
+    let record = env.fake(
+        "jdtls",
+        incremental().on(
+            "initialized",
+            vec![Action::Request {
+                method: "workspace/configuration".into(),
+                params: json!({ "items": [{ "section": "java.configuration.runtimes" }] }),
+            }],
+        ),
+    );
+    let mut win = env.window();
+    win.open(&env, &env.file("src/Main.java", ""), "Java", "")
+        .await;
+    env.wait_state("jdtls", LspInstanceState::Ready).await;
+    let want =
+        json!([{ "name": "JavaSE-17", "path": jdk17.display().to_string(), "default": true }]);
+    let got = eventually(Duration::from_secs(5), || {
+        received(&record).iter().any(|m| m["id"] == "fake-1")
+    })
+    .await;
+    assert!(got, "no configuration answer: {:?}", received(&record));
+    let messages = received(&record);
+    let initialize = messages
+        .iter()
+        .find(|m| m["method"] == "initialize")
+        .unwrap();
+    assert_eq!(
+        initialize["params"]["initializationOptions"]["settings"]["java"]["configuration"]["runtimes"],
+        want,
+        "{initialize}"
+    );
+    let answer = messages.iter().find(|m| m["id"] == "fake-1").unwrap();
+    assert_eq!(answer["result"], json!([want]));
+}
+
 /// 사람이 작업을 취소하면 서버에 `window/workDoneProgress/cancel` 이 간다(서버가 취소를 받는다고 알린 진행만).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelling_the_task_cancels_the_servers_progress() {

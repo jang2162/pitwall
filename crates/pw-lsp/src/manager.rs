@@ -69,7 +69,7 @@ use crate::methods::{
 };
 use crate::process::LaunchSpec;
 use crate::progress::Tracker;
-use crate::requires::{find_runtime, runtime_name};
+use crate::requires::{find_project_jdk, find_runtime, runtime_name};
 use crate::server::{
     ExitReason, InitializeOptions, LanguageServer, RequestError, RequestOptions, ServerEvent,
     ServerOptions,
@@ -2974,6 +2974,12 @@ fn prepare(servers: &LspServers, key: &InstanceKey) -> Result<Prepared, LspInsta
     };
     if !setup.config.enabled {
         return Err(LspInstanceState::Disabled);
+    }
+    // 프로젝트가 쓰는 JDK(정의의 `project_jdk_setting` — jdtls, 15-m4-plan.md M4-18). 서버 런타임을 넣기 전의 그 디렉터리 런타임
+    // 환경에서만 찾는다.
+    if setup.definition.project_jdk_setting.is_some() {
+        let jdk = find_project_jdk(&setup.project_env);
+        setup.with_project_jdk(jdk.as_ref());
     }
     for req in setup.definition.requires.clone() {
         match find_runtime(&req, &setup.env) {

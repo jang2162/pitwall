@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use pw_ext::{LspServerRuntime, RuntimeRequirement};
-use pw_lsp_servers::FoundRuntime;
+use pw_lsp_servers::{FoundRuntime, ProjectJdk};
 use pw_runtime::RuntimeEnv;
 use pw_runtime::program::find_program;
 use semver::Version;
@@ -32,6 +32,42 @@ pub fn find_runtime(req: &RuntimeRequirement, env: &RuntimeEnv) -> Option<FoundR
     from_path(req, env)
         .or_else(|| from_mise(req, env))
         .or_else(|| from_java_home(req))
+}
+
+/// 프로젝트가 **쓰는** JDK(결정 M4-D6 · 15-m4-plan.md M4-18 — 정의의 `project_jdk_setting`). 그 디렉터리의 런타임 환경
+/// (`ServerSetup::project_env` — 정의 · 설정의 `env` 를 덮기 전)에서만 찾는다: `JAVA_HOME` 의 `bin/java`, 없으면 PATH 의 `java`
+/// (macOS 의 `/usr/bin/java` 껍데기는 건너뛴다). 판은 실행해서 읽는다 — 신뢰한 프로젝트에서 서버를 띄울 때만 돈다(허가 뒤).
+/// 설치해 둔 JDK 목록(mise · `java_home`)은 보지 않는다 — 프로젝트가 고른 JDK 가 아니므로. 블로킹이다.
+pub fn find_project_jdk(env: &RuntimeEnv) -> Option<ProjectJdk> {
+    let from_home = env
+        .get("JAVA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(|home| {
+            PathBuf::from(home)
+                .join("bin")
+                .join(if cfg!(windows) { "java.exe" } else { "java" })
+        })
+        .filter(|exe| exe.is_file());
+    let candidates = from_home
+        .into_iter()
+        .chain(find_program("java", &env.path))
+        .filter(|exe| !(cfg!(target_os = "macos") && exe.parent() == Some(Path::new("/usr/bin"))));
+    for exe in candidates {
+        let Some(version) = probe_version(LspServerRuntime::Java, &exe, env) else {
+            continue;
+        };
+        // `1.8.0_292` 는 8 이다.
+        let major = if version.major == 1 {
+            version.minor
+        } else {
+            version.major
+        };
+        let real = std::fs::canonicalize(&exe).unwrap_or(exe);
+        let bin = real.parent()?;
+        let home = bin.parent().unwrap_or(bin).to_path_buf();
+        return Some(ProjectJdk { home, major });
+    }
+    None
 }
 
 /// 런타임의 실행 파일 이름(찾는 순서).
@@ -353,5 +389,58 @@ mod tests {
             node
         );
         assert_eq!(find_runtime(&req(LspServerRuntime::Node, ">=22"), &e), None);
+    }
+
+    /// 프로젝트 JDK 는 그 디렉터리 런타임 환경의 `JAVA_HOME`, 없으면 PATH 의 `java` 에서만 찾는다(링크를 푼 설치 폴더, 1.8 은 8) —
+    /// 설치해 둔 JDK(mise)는 프로젝트가 고른 것이 아니라 보지 않는다(15-m4-plan.md M4-18).
+    #[test]
+    fn the_project_jdk_comes_from_java_home_then_path_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(tmp.path()).unwrap();
+        let jdk17 = base.join("jdk17");
+        script(
+            &jdk17.join("bin/java"),
+            "echo 'openjdk version \"17.0.2\" 2022-01-18' >&2",
+        );
+        let jdk8 = base.join("jdk8");
+        script(
+            &jdk8.join("bin/java"),
+            "echo 'java version \"1.8.0_292\"' >&2",
+        );
+        let shims = base.join("shims");
+        fs::create_dir_all(&shims).unwrap();
+        std::os::unix::fs::symlink(jdk17.join("bin/java"), shims.join("java")).unwrap();
+        script(
+            &base.join("mise/installs/java/25.0.1/bin/java"),
+            "echo 'openjdk version \"25.0.1\"' >&2",
+        );
+
+        // PATH 의 링크 → 실제 설치 폴더.
+        let e = env(
+            &[&shims, Path::new("/bin")],
+            &[("MISE_DATA_DIR", &base.join("mise"))],
+        );
+        assert_eq!(
+            find_project_jdk(&e),
+            Some(ProjectJdk {
+                home: jdk17.clone(),
+                major: 17
+            })
+        );
+        // JAVA_HOME 이 PATH 보다 먼저.
+        let e = env(&[&shims], &[("JAVA_HOME", &jdk8)]);
+        assert_eq!(
+            find_project_jdk(&e),
+            Some(ProjectJdk {
+                home: jdk8.clone(),
+                major: 8
+            })
+        );
+        // 런타임 환경에 java 가 없으면 설치해 둔 판(mise)이 있어도 없음.
+        let e = env(
+            &[Path::new("/nonexistent")],
+            &[("MISE_DATA_DIR", &base.join("mise"))],
+        );
+        assert_eq!(find_project_jdk(&e), None);
     }
 }
