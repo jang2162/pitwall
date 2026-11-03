@@ -8,7 +8,7 @@
 | `typescript/` | typescript-language-server | `package.json` · `tsconfig.json`(strict · `noUnusedLocals`), 의존 없음 — 서버에 묶인 `typescript` 를 쓴다 |
 | `python/` | basedpyright · ruff | `pyproject.toml`(basedpyright 는 `standard` 검사 — 기본 `recommended` 는 진단이 많다), 의존 없음. 모듈은 루트에 바로(`calls.py` 가 `from shapes import …`) — M4-18 |
 | `java/` | jdtls | Gradle(`java` 플러그인만 — Gradle 에 들어 있어 받지 않는다, 언어 수준 17), 저장소 · 의존 없음, wrapper 판 고정(`gradle/wrapper/gradle-wrapper.properties` — 서버의 Gradle 가져오기가 그 배포판을 받는다. jar · 스크립트는 두지 않는다). 도형은 `Shapes` 의 중첩 형이다(한 파일의 두 번째 최상위 형은 다른 파일에서 이름으로 찾지 못한다 — jdtls 실측) — M4-18 |
-| `kotlin/` | kotlin-lsp | Gradle(Kotlin Gradle 플러그인 `kotlin("jvm")` 판 고정 + `mavenCentral()` — 그 플러그인 · kotlin-stdlib 만 받는다, 그 밖의 의존 없음). kotlin-lsp 는 Kotlin 플러그인이 없는 빌드(빌드 파일 없음 · `java` 플러그인만)를 분석하지 않는다(hover · 완성 · 진단이 빈다 — 실측, 메인 판정 2026-11-03). wrapper 판은 `java/` 와 같다 — M4-18 |
+| `kotlin/` | kotlin-lsp | Gradle(Kotlin Gradle 플러그인 `kotlin("jvm")` 판 고정 + `mavenCentral()` — 그 플러그인 · kotlin-stdlib 와 그 전이 의존을 받는다 — 해시는 `gradle/verification-metadata.xml`(sha256, Gradle 의존 검증)이 고정한다. 플러그인 판을 올리면 픽스처 복사본에서 `gradle --write-verification-metadata sha256 help` 로 다시 만들고, kotlin-lsp 가 가져오기 때 더 받는 소스 jar(`annotations` · `kotlin-stdlib` 의 `-sources.jar` — 없으면 Gradle 이 가져오기를 멈춰 진단 · 완성이 빈다)의 sha256 을 손으로 더한다(Maven Central 의 `.sha1` 과 견준다)). kotlin-lsp 는 Kotlin 플러그인이 없는 빌드(빌드 파일 없음 · `java` 플러그인만)를 분석하지 않는다(hover · 완성 · 진단이 빈다 — 실측, 메인 판정 2026-11-03). wrapper 판은 `java/` 와 같다 — M4-18 |
 
 ## 규칙
 
