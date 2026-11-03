@@ -556,7 +556,6 @@ impl LspManager {
             .map_or(0, |host| host.ledger.reap_orphans())
     }
 
-    /// 지금까지 띄운 서버 프로세스 수(시험 · 진단).
     /// 프로젝트 레지스트리(허가 판정 — `crate::status`). 붙지 않았으면 오류.
     pub(crate) fn projects(&self) -> Result<Registry, RpcError> {
         Ok(self.host()?.parts.projects.clone())
@@ -567,6 +566,27 @@ impl LspManager {
         Arc::clone(&self.inner.servers)
     }
 
+    /// 그 프로젝트 · 서버의 인스턴스를 부를 키(워크트리 · 루트 그대로)(`crate::status` 의 개인 설정 쓰기 — 15-m4-plan M4-17).
+    /// `lsp.status` 의 인스턴스에는 워크트리가 없어, 루트로 고르면 다른 워크트리의 인스턴스를 엉뚱한 워크트리 키로 부르게 된다.
+    pub(crate) fn instance_controls(
+        &self,
+        project_id: &str,
+        server: &str,
+    ) -> Vec<LspServerControlParams> {
+        lock(&self.inner.state)
+            .instances
+            .keys()
+            .filter(|k| k.project_id == project_id && k.server == server)
+            .map(|k| LspServerControlParams {
+                project_id: k.project_id.clone(),
+                worktree: k.worktree.clone(),
+                server: k.server.clone(),
+                root: k.root.display().to_string(),
+            })
+            .collect()
+    }
+
+    /// 지금까지 띄운 서버 프로세스 수(시험 · 진단).
     pub fn spawn_count(&self) -> u64 {
         self.inner.spawns.load(Ordering::SeqCst)
     }
