@@ -1252,3 +1252,55 @@ async fn a_broken_file_is_a_list_problem() {
         "{list}"
     );
 }
+
+/// 개인 파일(`location: local`)은 git 이 커밋할 새 파일로 생기지 않는다 — 처음 만드는 쓰기가 `.pitwall/.gitignore` 에
+/// `*.local.toml` 을 둔다(03 「하이브리드 정책 (D9)」, 15-m4-plan M4-17 리뷰 M1). 개인 파일이 공유 파일을 가리키는 링크면 거절하고
+/// 공유 파일은 바이트까지 그대로다(리뷰 M2).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_personal_connection_file_is_ignored_by_git_and_not_written_through_a_link() {
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let f = Fixture::new(true);
+    git(&f.root, &["init", "-q"]);
+    let mut w = f.window();
+    let mut params = upsert_params(&f, "prod", remote_config());
+    params["location"] = json!("local");
+    w.call("db.connection.upsert", params).await.unwrap();
+    assert!(f.db_file("prod.local.toml").is_file());
+    let status = git(&f.root, &["status", "--porcelain", "--untracked-files=all"]);
+    assert!(!status.contains("local.toml"), "{status}");
+    assert_eq!(
+        fs::read_to_string(f.root.join(".pitwall/.gitignore")).unwrap(),
+        "*.local.toml\n"
+    );
+
+    let f = Fixture::new(true);
+    let shared = "schema = 1\nname = \"shared\"\ndriver = \"sqlite\"\npath = \"a.db\"\n";
+    f.write_db("dev.toml", shared);
+    std::os::unix::fs::symlink("dev.toml", f.db_file("dev.local.toml")).unwrap();
+    let mut w = f.window();
+    let mut params = upsert_params(&f, "dev", remote_config());
+    params["location"] = json!("local");
+    let e = w.call("db.connection.upsert", params).await.unwrap_err();
+    assert_eq!(e.code, rpc_code::CONFLICT, "{e:?}");
+    assert!(
+        e.message.contains("dev.local.toml") && e.message.contains("symbolic link"),
+        "{e:?}"
+    );
+    assert_eq!(fs::read(f.db_file("dev.toml")).unwrap(), shared.as_bytes());
+}

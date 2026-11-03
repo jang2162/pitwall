@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use pw_core::bus::{EventBus, Filter, Received, Scope, Subscription};
+use pw_core::config::write::{Links, WriteError};
 use pw_core::config::{AppPaths, ConfigChanged, ConfigSnapshot, ConfigSource, LayerOrigin};
 use pw_core::registry::state::scope_may_write;
 use pw_core::registry::{Project, Registry, RegistryError};
@@ -702,6 +703,8 @@ pub(crate) struct Loaded {
     pub source: ConfigSource,
     /// 개인 파일(`.local.toml`)을 쓰는 폴더 — 메인 체크아웃(개인 전용 모드면 그 폴더). 프로젝트 하나에 하나.
     pub local_dir: PathBuf,
+    /// `local_dir` 의 설정(개인 파일을 쓰기 전의 확인 · `.gitignore` — `ConfigSource::prepare_local_write`).
+    pub local_source: ConfigSource,
     pub connections: Result<Vec<LoadedConnection>, String>,
 }
 
@@ -788,11 +791,10 @@ impl Connections {
         let source = project
             .config_source(&host.paths, &root)
             .map_err(config_error)?;
-        let local_dir = project
+        let local_source = project
             .config_source(&host.paths, project.root())
-            .map_err(config_error)?
-            .dir()
-            .to_path_buf();
+            .map_err(config_error)?;
+        let local_dir = local_source.dir().to_path_buf();
         let connections = source
             .clone()
             .without_writes()
@@ -808,6 +810,7 @@ impl Connections {
             root,
             source,
             local_dir,
+            local_source,
             connections,
         })
     }
@@ -1014,6 +1017,15 @@ impl Connections {
                 DbConfigLocation::Local => loaded.local_dir.as_path(),
             };
             let file = config_file(dir, &params.connection_id, params.location);
+            // 저장소 안의 개인 파일은 링크를 따르지 않고(링크 · 프로젝트 밖으로 풀리는 `.pitwall` 은 거절), 처음 만들면
+            // `.pitwall/.gitignore` 에 `*.local.toml` 을 둔다(03 「하이브리드 정책 (D9)」, 15-m4-plan M4-17 리뷰 M1 · M2).
+            let links = match params.location {
+                DbConfigLocation::Shared => Links::Follow,
+                DbConfigLocation::Local => loaded
+                    .local_source
+                    .prepare_local_write(&file)
+                    .map_err(local_write_error)?,
+            };
             let mut doc = match fs::read_to_string(&file) {
                 Ok(text) => text.parse::<toml_edit::DocumentMut>().map_err(|e| {
                     RpcError::invalid_params(format!("cannot rewrite {}: {e}", file.display()))
@@ -1032,7 +1044,7 @@ impl Connections {
                 ));
             }
             write_document(&mut doc, &params.config);
-            write_file(&file, &doc.to_string())?;
+            write_file_with(&file, &doc.to_string(), links)?;
             tracing::info!(target: "pw_db", project = %params.project_id, connection = %params.connection_id, path = %file.display(), "db connection config written");
         }
         self.refresh(&params.project_id, params.worktree.as_deref());
@@ -1110,8 +1122,31 @@ pub(crate) fn config_file(dir: &Path, connection_id: &str, location: DbConfigLoc
     dir.join("db").join(name)
 }
 
+fn local_write_error(e: WriteError) -> RpcError {
+    match e {
+        WriteError::Refused { .. } => RpcError::new(code::CONFLICT, e.to_string()),
+        e => RpcError::internal(e.to_string()),
+    }
+}
+
 /// 같은 폴더의 임시 파일에 쓰고 rename 한다. 있는 파일은 `pw_core` 의 설정 쓰기(심링크면 대상을 고치고 권한을 옮긴다)로.
 pub(crate) fn write_file(path: &Path, contents: &str) -> Result<(), RpcError> {
+    write_file_with(path, contents, Links::Follow)
+}
+
+/// [`write_file`]. `Links::Refuse` 면 쓰기 직전에 `path` 가 링크인지 다시 보고 링크면 거절한다(저장소 안의 개인 파일).
+fn write_file_with(path: &Path, contents: &str, links: Links) -> Result<(), RpcError> {
+    if links == Links::Refuse
+        && fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return Err(RpcError::new(
+            code::CONFLICT,
+            format!(
+                "{}: is a symbolic link; Pitwall does not write a personal setting through a link inside the repository",
+                path.display()
+            ),
+        ));
+    }
     if path.exists() {
         return pw_core::config::migrate::write_atomic(path, contents)
             .map_err(|e| io_error("write", path, &e));
