@@ -13,9 +13,10 @@ builtin_grammar = "java"
 queries = "queries/java"
 line_comment = "//"
 
-# 언어 서버(docs/design/15-m4-plan.md 결정 M4-D1 · D4 · D6). 서버는 JDK 21 이상으로 돈다 — 프로젝트의 JDK(17 등)와 따로다:
-# 서버 관리자가 requires 로 찾은 JDK 를 서버 환경의 PATH 맨 앞 · JAVA_HOME 에 넣는다. 설치본은 덮어쓰기 정의(M4-03 틀 · M4-18
-# 내용)가 설치 폴더에 bin/jdtls 런처("$JAVA_HOME/bin/java" -jar …)를 두므로 command 는 "jdtls" 그대로다.
+# 언어 서버(docs/design/15-m4-plan.md 결정 M4-D1 · D4 · D6). 서버는 JDK 25 이상으로 돈다(jdtls 1.62.0 부터 번들이 JavaSE-25 를
+# 요구한다 — JDK 21 로는 기동 직후 끝난다, M4-18 실측) — 프로젝트의 JDK(17 등)와 따로다: 서버 관리자가 requires 로 찾은 JDK 를
+# 서버 환경의 PATH 맨 앞 · JAVA_HOME 에 넣는다. 설치본은 덮어쓰기 정의(crates/pw-tools/overrides/jdtls.toml)가 설치 폴더에 런처
+# pitwall/jdtls("$JAVA_HOME/bin/java" -jar …)를 두므로 command 는 "jdtls" 그대로다.
 [contributes.language_servers.jdtls]
 languages = ["java"]
 mason = "jdtls"
@@ -27,6 +28,6 @@ root_markers = [
   "build.gradle.kts",
   "pom.xml",
 ]
-requires = { java = ">=21" }
+requires = { java = ">=25" }
 # 프로젝트가 쓰는 JDK(서버를 돌리는 JDK 와 따로다 — 결정 M4-D6)를 서버 관리자가 이 설정 경로로 넘긴다(15-m4-plan.md M4-18).
 project_jdk_setting = "java.configuration.runtimes"

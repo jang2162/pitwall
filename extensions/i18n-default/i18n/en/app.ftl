@@ -297,7 +297,7 @@ lsp-status-crashed-detail = It died five times within three minutes — Restart 
 
 ## Why a server cannot start (banner and popup)
 
-# $tool: JDK, Node or Python, $needed: version range (>=21), $install: the mise command
+# $tool: JDK, Node or Python, $needed: version range (>=25), $install: the mise command
 lsp-runtime-missing = The server needs { $tool } { $needed } — `{ $install }` (the project's pinned version is not changed)
 lsp-untrusted = Trust the project to turn on language servers
 lsp-trust = Trust…

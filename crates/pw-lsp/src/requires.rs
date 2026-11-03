@@ -8,7 +8,7 @@
 //!    `~/.local/share/mise` 의 `installs/<도구>/<판>`), macOS 는 `/usr/libexec/java_home -V` 의 JDK 목록. 맞는 것 중 가장 높은 판.
 //! 3. 그래도 없으면 `None` — 서버를 띄우지 않고 상태 `runtimeMissing`(안내 문구는 M4-17).
 //!
-//! 프로젝트가 **쓰는** 런타임과 따로다 — `java@17` 을 고정한 프로젝트에서도 서버는 기기에 설치된 JDK 21 로 돈다.
+//! 프로젝트가 **쓰는** 런타임과 따로다 — `java@17` 을 고정한 프로젝트에서도 서버는 기기에 설치된 JDK 25 로 돈다(jdtls).
 //!
 //! macOS 의 `/usr/bin/java` · `/usr/bin/python3` 는 JDK · 명령줄 도구가 없으면 설치 창을 띄우는 껍데기라 실행하지 않는다(1 단계에서
 //! 건너뛰고 2 단계의 `java_home` 이 맡는다).

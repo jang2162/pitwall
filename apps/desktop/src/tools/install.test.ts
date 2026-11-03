@@ -192,6 +192,8 @@ describe("links and text", () => {
 
   it("names the server runtime and the mise command without touching the project pin", () => {
     expect(runtimeHint("java", ">=21")).toEqual({ name: "JDK", install: "mise install java@21" });
+    // jdtls 의 정의(extensions/lang-java — 15-m4-plan.md M4-18, 서버 JDK 25).
+    expect(runtimeHint("java", ">=25")).toEqual({ name: "JDK", install: "mise install java@25" });
     expect(runtimeHint("python", ">=3.10")).toEqual({
       name: "Python",
       install: "mise install python@3.10",

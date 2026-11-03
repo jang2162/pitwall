@@ -297,7 +297,7 @@ lsp-status-crashed-detail = 3분 안에 다섯 번 죽어 멈췄다 — [다시 
 
 ## 서버를 띄울 수 없는 까닭(배너 · 팝업)
 
-# $tool: JDK · Node · Python, $needed: 판 범위(>=21), $install: mise 명령
+# $tool: JDK · Node · Python, $needed: 판 범위(>=25), $install: mise 명령
 lsp-runtime-missing = 서버용 { $tool } { $needed } 가 필요하다 — `{ $install }`(프로젝트 고정은 바꾸지 않는다)
 lsp-untrusted = 프로젝트를 신뢰해야 언어 서버를 켠다
 lsp-trust = 신뢰…
