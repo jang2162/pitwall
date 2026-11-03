@@ -21,3 +21,5 @@ mason = "rust-analyzer"
 command = "rust-analyzer"
 root_markers = ["Cargo.toml", "rust-project.json"]
 resolve_hint = "rustup"
+# 작업 공간을 읽는 동안 받은 편집을 분석에 넣지 않은 채 포맷에 답한다(옛 글 기준 편집) — 그 진행 중의 포맷 답은 버린다(M4-13).
+format_unreliable_while_progress = ["Roots Scanned"]

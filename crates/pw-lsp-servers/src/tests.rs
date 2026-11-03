@@ -803,3 +803,20 @@ fn debug_output_of_a_setup_has_no_secret_values() {
     let shown = format!("{configs:?}");
     assert!(!shown.contains("env-s3cr3t") && !shown.contains("settings-s3cr3t"));
 }
+
+/// 포맷 답을 믿지 않을 진행(M4-13 재리뷰 N1): 내장 정의 중 rust-analyzer 만 `Roots Scanned` 를 적는다 — 다른 서버는 진행이
+/// 있어도 포맷을 막지 않는다(빈 목록이 기본).
+#[test]
+fn only_rust_analyzer_marks_a_progress_that_makes_its_format_answers_unreliable() {
+    let registry = builtin();
+    let marked: Vec<(&str, &[String])> = registry
+        .language_servers()
+        .map(|(_, d)| (d.id.as_str(), d.format_unreliable_while_progress.as_slice()))
+        .filter(|(_, titles)| !titles.is_empty())
+        .collect();
+    assert_eq!(
+        marked,
+        [("rust-analyzer", &["Roots Scanned".to_owned()][..])]
+    );
+    assert!(registry.language_servers().count() > 1);
+}

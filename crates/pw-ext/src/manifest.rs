@@ -198,6 +198,10 @@ pub struct LanguageServerDecl {
     /// 프로젝트 안에 있으면 `initialization_options` 에 그 절대 경로를 넣을 값: (`.` 으로 나눈 JSON 키 경로, 프로젝트 루트 기준
     /// 상대 경로). 신뢰한 프로젝트에서만 본다 — TS 의 `tsserver.path`(결정 M4-D7). 적힌 순서다.
     pub project_local_options: Vec<(String, RelPath)>,
+    /// 이 제목의 진행(`$/progress` begin 의 `title`, 정확히 같은 글)이 열려 있는 동안 서버의 포맷 답을 믿지 않는다(M4-13 — 포맷 요청을
+    /// 보낼 때나 답이 올 때 열려 있으면 그 답은 버린다). 받은 편집을 그동안 반영하지 않는 서버가 적는다 — rust-analyzer 는 작업
+    /// 공간을 읽는 동안(`Roots Scanned`) 받은 `didChange` 를 분석에 넣지 않고 옛 글로 포맷한다. 비면(기본) 포맷을 막지 않는다.
+    pub format_unreliable_while_progress: Vec<String>,
 }
 
 /// 서버에 맡기는 기능의 이름(`features.disable` 의 값). 서버 관리자의 기능 라우팅(결정 M4-D12)이 쓴다.
@@ -723,6 +727,9 @@ impl Parser<'_> {
             .table(self, "project_local_options", false)
             .map(|(table, _)| self.project_local_options(table, &what))
             .unwrap_or_default();
+        let format_unreliable_while_progress = f
+            .strings(self, "format_unreliable_while_progress")
+            .unwrap_or_default();
         f.finish(self);
         Some(LanguageServerDecl {
             pos: self.pos(&at),
@@ -740,6 +747,7 @@ impl Parser<'_> {
             resolve_hint,
             project_local,
             project_local_options,
+            format_unreliable_while_progress,
         })
     }
 
@@ -1488,6 +1496,7 @@ requires = { node = ">=20", python = ">=3.10" }
 resolve_hint = "rustup"
 project_local = "node_modules/.bin/typescript-language-server"
 project_local_options = { "tsserver.path" = "node_modules/typescript/lib" }
+format_unreliable_while_progress = ["Roots Scanned", "Loading"]
 
 [contributes.language_servers.ts.settings]
 typescript = { inlayHints = { enabled = true }, ratio = 0.5, when = 1979-05-27 }
@@ -1567,6 +1576,10 @@ list = [1, "two", [false]]
                 RelPath::parse("node_modules/typescript/lib").unwrap()
             )]
         );
+        assert_eq!(
+            s.format_unreliable_while_progress,
+            ["Roots Scanned", "Loading"]
+        );
     }
 
     #[test]
@@ -1581,12 +1594,13 @@ list = [1, "two", [false]]
             (None, 0, None)
         );
         assert!(s.requires.is_empty() && s.disabled_features.is_empty());
+        assert!(s.format_unreliable_while_progress.is_empty());
     }
 
     /// 키마다의 형식 오류. 오류가 하나라도 있으면 매니페스트가 없고, 진단은 그 값의 줄 · 열을 가리킨다.
     #[test]
     fn language_server_format_errors_point_at_the_value() {
-        let cases: [(&str, &str); 22] = [
+        let cases: [(&str, &str); 23] = [
             (
                 "languages = [\"rust\"]\ncommand = \"x\"\nmason = \"../evil\"",
                 "10:9: error: language server `s`: `mason` `../evil` must be a registry package name (lowercase letters, digits, `.`, `_`, `-`)",
@@ -1638,6 +1652,10 @@ list = [1, "two", [false]]
             (
                 "languages = [\"rust\"]\ncommand = \"x\"\nargs = \"--stdio\"",
                 "10:8: error: language server `s`: `args` must be an array of strings",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nformat_unreliable_while_progress = \"Roots Scanned\"",
+                "10:36: error: language server `s`: `format_unreliable_while_progress` must be an array of strings",
             ),
             (
                 "languages = [\"rust\"]\ncommand = \"x\"\nenv = { A = 1 }",

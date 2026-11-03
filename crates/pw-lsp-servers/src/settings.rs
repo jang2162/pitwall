@@ -63,6 +63,9 @@ pub struct ServerConfig {
     pub settings: Json,
     /// 정렬돼 있고 겹치지 않는다.
     pub disabled_features: Vec<LspFeature>,
+    /// 이 제목의 진행이 열려 있는 동안 포맷 답을 믿지 않는다(정의의 `format_unreliable_while_progress` 그대로 — 설정으로 바꾸지
+    /// 않는다).
+    pub format_unreliable_while_progress: Vec<String>,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -74,6 +77,10 @@ impl std::fmt::Debug for ServerConfig {
             .field("env_names", &self.env.keys().collect::<Vec<_>>())
             .field("settings_keys", &top_keys(&self.settings))
             .field("disabled_features", &self.disabled_features)
+            .field(
+                "format_unreliable_while_progress",
+                &self.format_unreliable_while_progress,
+            )
             .finish()
     }
 }
@@ -237,6 +244,7 @@ pub fn server_config(
         env,
         settings,
         disabled_features,
+        format_unreliable_while_progress: def.format_unreliable_while_progress.clone(),
     }
 }
 
