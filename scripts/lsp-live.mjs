@@ -39,16 +39,26 @@ export const TARGETS = {
 };
 
 /**
- * lsp-live.toml 이 쓰는 TOML 의 부분집합: `[절]` · `[절.하위]` 머리, `키 = 정수 | "글" | ["글", …]`(한 줄), `#` 주석. 키는 글자 ·
+ * lsp-live.toml 이 쓰는 TOML 의 부분집합: `[절]` · `[절.하위]` 머리, `키 = 정수 | "글" | ["글", …]`(배열은 여러 줄 · 끝 쉼표 가능), `#` 주석. 키는 글자 ·
  * 숫자 · `_` · `-`. 모르는 꼴 · 같은 키 두 번은 오류다. `{ 절: { 키: 값 } }`(하위 절은 중첩)을 돌려준다.
  */
 export function parseToml(text, file = "lsp-live.toml") {
   const out = {};
   let table = out;
-  text.split("\n").forEach((raw, i) => {
-    const line = stripComment(raw).trim();
-    if (line === "") return;
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    let line = stripComment(raw).trim();
+    if (line === "") continue;
     const where = `${file} line ${i + 1}`;
+    // 여러 줄 배열: `키 = [` 로 열리고 `]` 로 끝나는 줄까지 이어 붙인다.
+    if (/=\s*\[[^\]]*$/.test(line)) {
+      while (!line.endsWith("]")) {
+        i++;
+        if (i >= lines.length) throw new Error(`${where}: array is not closed`);
+        line += ` ${stripComment(lines[i]).trim()}`;
+      }
+    }
     const head = /^\[([A-Za-z0-9_.-]+)\]$/.exec(line);
     if (head) {
       table = out;
@@ -56,14 +66,14 @@ export function parseToml(text, file = "lsp-live.toml") {
         table[part] ??= {};
         table = table[part];
       }
-      return;
+      continue;
     }
     const pair = /^([A-Za-z0-9_-]+)\s*=\s*(.+)$/.exec(line);
     if (!pair) throw new Error(`${where}: expected \`key = value\` or \`[table]\`, got ${raw}`);
     const [, key, value] = pair;
     if (Object.hasOwn(table, key)) throw new Error(`${where}: ${key} is listed twice`);
     table[key] = parseValue(value, where);
-  });
+  }
   return out;
 }
 
@@ -82,8 +92,9 @@ function parseValue(value, where) {
   if (/^\[.*\]$/.test(value)) {
     const inner = value.slice(1, -1).trim();
     if (inner === "") return [];
-    return inner.split(",").map((item) => {
-      const s = item.trim();
+    const items = inner.split(",").map((item) => item.trim());
+    if (items.at(-1) === "") items.pop();
+    return items.map((s) => {
       if (!/^"[^"]*"$/.test(s)) throw new Error(`${where}: array items must be strings, got ${s}`);
       return s.slice(1, -1);
     });

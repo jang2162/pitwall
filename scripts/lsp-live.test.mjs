@@ -61,6 +61,10 @@ test("the TOML subset reads tables, numbers, strings, arrays and comments", () =
   assert.deepEqual(parsed, {
     a: { n: 3, s: "x # not a comment", list: ["p", "q"], empty: [], b: { "k-1": "v" } },
   });
+  assert.deepEqual(parseToml('[a]\nlist = [\n  "p", # first\n  "q",\n]\nn = 1\n'), {
+    a: { list: ["p", "q"], n: 1 },
+  });
+  assert.throws(() => parseToml('[a]\nlist = [\n  "p",\n'), /not closed/);
   assert.throws(() => parseToml("[a]\nn = 1\nn = 2"), /twice/);
   assert.throws(() => parseToml("[a]\nn = true"), /unsupported value/);
   assert.throws(() => parseToml("[a]\nlist = [1]"), /must be strings/);

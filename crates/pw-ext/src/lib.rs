@@ -111,8 +111,8 @@ mod tests {
         assert_eq!(ra.resolve_hint, Some(ResolveHint::Rustup));
         let (_, jdtls) = registry.language_server("jdtls").unwrap();
         assert_eq!(jdtls.requires[0].runtime, LspServerRuntime::Java);
-        assert!(jdtls.requires[0].version.matches(&Version::new(21, 0, 0)));
-        assert!(!jdtls.requires[0].version.matches(&Version::new(17, 0, 0)));
+        assert!(jdtls.requires[0].version.matches(&Version::new(25, 0, 0)));
+        assert!(!jdtls.requires[0].version.matches(&Version::new(21, 0, 0)));
     }
 
     #[test]
