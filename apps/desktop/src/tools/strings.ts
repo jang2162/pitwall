@@ -1,5 +1,5 @@
 // 언어 서버 상태 항목 · 상태 팝업 · 탭 위 배너 · 도구 관리(설정 창 「도구」) · 라이선스 · 출처 확인 다이얼로그가 보이는 문자열
-// (15-m4-plan M4-17). 내용은 extensions/i18n-default/i18n/*/tools.ftl 이다 — 프로젝트 창과 설정 창이 함께 쓰므로 창 문자열
+// (15-m4-plan M4-17). 내용은 extensions/i18n-default/i18n/*/app.ftl 의 끝 묶음(`lsp-…` · `tools-…`)이다 — 프로젝트 창과 설정 창이 함께 쓰므로 창 문자열
 // (layout/strings.ts · settings/strings.ts)에 넣지 않고 여기 둔다. id 가 두 언어에 모두 있는지는 src/i18n/resources.test.ts 가 본다.
 
 import { useLocalization } from "@fluent/react";
