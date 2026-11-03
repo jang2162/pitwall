@@ -723,6 +723,15 @@ fn the_server_environment_puts_the_found_runtime_first() {
         kotlin.env.get("JAVA_HOME"),
         Some(std::ffi::OsStr::new("/mine"))
     );
+    // 프로젝트 런타임 환경(프로젝트 JDK 를 찾는 곳)에는 서버용으로 적은 env 가 들지 않는다(M4-18).
+    assert_ne!(
+        kotlin.project_env.get("JAVA_HOME"),
+        Some(std::ffi::OsStr::new("/mine"))
+    );
+    assert_eq!(
+        std::env::split_paths(&kotlin.project_env.path).collect::<Vec<_>>(),
+        before
+    );
     // node · python 은 PATH 만.
     let mut ts = f
         .servers
@@ -820,4 +829,100 @@ fn only_rust_analyzer_marks_a_progress_that_makes_its_format_answers_unreliable(
         [("rust-analyzer", &["Roots Scanned".to_owned()][..])]
     );
     assert!(registry.language_servers().count() > 1);
+}
+
+/// 프로젝트 JDK 는 정의의 `project_jdk_setting`(jdtls `java.configuration.runtimes`) 경로에 합친 설정 · `initializationOptions.settings`
+/// 두 곳에 같은 값으로 들어간다(15-m4-plan.md M4-18, 결정 M4-D6). 못 찾으면 빈 목록, 사람이 적은 값은 지킨다, 키가 없는 정의는
+/// 그대로다.
+#[test]
+fn the_project_jdk_goes_to_the_named_setting_in_both_places() {
+    let f = Fixture::new("schema = 1\n");
+    let (id, root) = f.project(&[], true);
+    let at = |v: &serde_json::Value, path: &str| -> serde_json::Value {
+        path.split('.')
+            .try_fold(v, |v, k| v.get(k))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null)
+    };
+    let jdk17 = ProjectJdk {
+        home: PathBuf::from("/jdks/17"),
+        major: 17,
+    };
+    assert_eq!(
+        ProjectJdk {
+            home: PathBuf::from("/jdks/8"),
+            major: 8
+        }
+        .execution_environment(),
+        "JavaSE-1.8"
+    );
+
+    let mut jdtls = f.servers.setup(&id, None, "jdtls", &root).unwrap();
+    jdtls.with_project_jdk(Some(&jdk17));
+    let want = serde_json::json!([{ "name": "JavaSE-17", "path": "/jdks/17", "default": true }]);
+    assert_eq!(
+        at(&jdtls.config.settings, "java.configuration.runtimes"),
+        want
+    );
+    assert_eq!(
+        at(
+            &jdtls.initialization_options,
+            "settings.java.configuration.runtimes"
+        ),
+        want
+    );
+
+    // 못 찾았으면 빈 목록(서버 JDK 를 내세우지 않는다).
+    let mut none = f.servers.setup(&id, None, "jdtls", &root).unwrap();
+    none.with_project_jdk(None);
+    assert_eq!(
+        at(&none.config.settings, "java.configuration.runtimes"),
+        serde_json::json!([])
+    );
+    assert_eq!(
+        at(
+            &none.initialization_options,
+            "settings.java.configuration.runtimes"
+        ),
+        serde_json::json!([])
+    );
+
+    // 키가 없는 정의는 그대로다.
+    let mut kotlin = f.servers.setup(&id, None, "kotlin-lsp", &root).unwrap();
+    let (settings, options) = (
+        kotlin.config.settings.clone(),
+        kotlin.initialization_options.clone(),
+    );
+    kotlin.with_project_jdk(Some(&jdk17));
+    assert_eq!(
+        (kotlin.config.settings, kotlin.initialization_options),
+        (settings, options)
+    );
+}
+
+/// 사람이 `[lsp.jdtls] settings` 에 `java.configuration.runtimes` 를 적었으면 찾은 JDK 대신 그 값을 두 곳에 쓴다.
+#[test]
+fn a_configured_runtimes_list_wins_over_the_found_jdk() {
+    let f = Fixture::new("schema = 1\n");
+    let (id, root) = f.project(
+        &[(
+            ".pitwall/project.toml",
+            "schema = 1\n[lsp.jdtls.settings.java.configuration]\nruntimes = [{ name = \"JavaSE-11\", path = \"/mine/11\" }]\n",
+        )],
+        true,
+    );
+    let mut jdtls = f.servers.setup(&id, None, "jdtls", &root).unwrap();
+    jdtls.with_project_jdk(Some(&ProjectJdk {
+        home: PathBuf::from("/jdks/17"),
+        major: 17,
+    }));
+    let want = serde_json::json!([{ "name": "JavaSE-11", "path": "/mine/11" }]);
+    assert_eq!(
+        jdtls.config.settings["java"]["configuration"]["runtimes"],
+        want
+    );
+    assert_eq!(
+        jdtls.initialization_options["settings"]["java"]["configuration"]["runtimes"],
+        want
+    );
 }

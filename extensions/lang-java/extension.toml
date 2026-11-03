@@ -28,3 +28,5 @@ root_markers = [
   "pom.xml",
 ]
 requires = { java = ">=21" }
+# 프로젝트가 쓰는 JDK(서버를 돌리는 JDK 와 따로다 — 결정 M4-D6)를 서버 관리자가 이 설정 경로로 넘긴다(15-m4-plan.md M4-18).
+project_jdk_setting = "java.configuration.runtimes"

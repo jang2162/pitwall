@@ -202,6 +202,12 @@ pub struct LanguageServerDecl {
     /// 보낼 때나 답이 올 때 열려 있으면 그 답은 버린다). 받은 편집을 그동안 반영하지 않는 서버가 적는다 — rust-analyzer 는 작업
     /// 공간을 읽는 동안(`Roots Scanned`) 받은 `didChange` 를 분석에 넣지 않고 옛 글로 포맷한다. 비면(기본) 포맷을 막지 않는다.
     pub format_unreliable_while_progress: Vec<String>,
+    /// 프로젝트가 **쓰는** JDK 를 서버에 알리는 설정 키(`.` 으로 나눈 경로 — jdtls 는 `java.configuration.runtimes`, 결정 M4-D6 ·
+    /// 15-m4-plan.md M4-18). 서버 관리자가 그 프로젝트 디렉터리의 런타임 환경에서 JDK 를 찾아 `[{ name: "JavaSE-<판>", path,
+    /// default: true }]`(VS Code Java 의 꼴)를 합친 설정(`workspace/configuration` 의 답)과 `initializationOptions.settings` 의 이
+    /// 경로에 넣는다 — 못 찾으면 빈 목록(서버를 돌리는 JDK 를 프로젝트 JDK 로 내세우지 않는다). 사람이 설정에 그 경로를 적었으면
+    /// 그 값을 지킨다. 없으면(기본) 넣지 않는다.
+    pub project_jdk_setting: Option<String>,
 }
 
 /// 서버에 맡기는 기능의 이름(`features.disable` 의 값). 서버 관리자의 기능 라우팅(결정 M4-D12)이 쓴다.
@@ -730,6 +736,19 @@ impl Parser<'_> {
         let format_unreliable_while_progress = f
             .strings(self, "format_unreliable_while_progress")
             .unwrap_or_default();
+        let project_jdk_setting = f
+            .string(self, "project_jdk_setting", false)
+            .and_then(|(raw, span)| {
+                if raw.split('.').any(str::is_empty) {
+                    self.error(
+                        span,
+                        format!("{what}: `project_jdk_setting` `{raw}` must be dot-separated setting names"),
+                    );
+                    None
+                } else {
+                    Some(raw)
+                }
+            });
         f.finish(self);
         Some(LanguageServerDecl {
             pos: self.pos(&at),
@@ -748,6 +767,7 @@ impl Parser<'_> {
             project_local,
             project_local_options,
             format_unreliable_while_progress,
+            project_jdk_setting,
         })
     }
 
@@ -1497,6 +1517,7 @@ resolve_hint = "rustup"
 project_local = "node_modules/.bin/typescript-language-server"
 project_local_options = { "tsserver.path" = "node_modules/typescript/lib" }
 format_unreliable_while_progress = ["Roots Scanned", "Loading"]
+project_jdk_setting = "java.configuration.runtimes"
 
 [contributes.language_servers.ts.settings]
 typescript = { inlayHints = { enabled = true }, ratio = 0.5, when = 1979-05-27 }
@@ -1580,6 +1601,10 @@ list = [1, "two", [false]]
             s.format_unreliable_while_progress,
             ["Roots Scanned", "Loading"]
         );
+        assert_eq!(
+            s.project_jdk_setting.as_deref(),
+            Some("java.configuration.runtimes")
+        );
     }
 
     #[test]
@@ -1595,12 +1620,13 @@ list = [1, "two", [false]]
         );
         assert!(s.requires.is_empty() && s.disabled_features.is_empty());
         assert!(s.format_unreliable_while_progress.is_empty());
+        assert_eq!(s.project_jdk_setting, None);
     }
 
     /// 키마다의 형식 오류. 오류가 하나라도 있으면 매니페스트가 없고, 진단은 그 값의 줄 · 열을 가리킨다.
     #[test]
     fn language_server_format_errors_point_at_the_value() {
-        let cases: [(&str, &str); 23] = [
+        let cases: [(&str, &str); 25] = [
             (
                 "languages = [\"rust\"]\ncommand = \"x\"\nmason = \"../evil\"",
                 "10:9: error: language server `s`: `mason` `../evil` must be a registry package name (lowercase letters, digits, `.`, `_`, `-`)",
@@ -1652,6 +1678,14 @@ list = [1, "two", [false]]
             (
                 "languages = [\"rust\"]\ncommand = \"x\"\nargs = \"--stdio\"",
                 "10:8: error: language server `s`: `args` must be an array of strings",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nproject_jdk_setting = \"java..runtimes\"",
+                "10:23: error: language server `s`: `project_jdk_setting` `java..runtimes` must be dot-separated setting names",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\nproject_jdk_setting = [\"java\"]",
+                "10:23: error: language server `s`: `project_jdk_setting` must be a string",
             ),
             (
                 "languages = [\"rust\"]\ncommand = \"x\"\nformat_unreliable_while_progress = \"Roots Scanned\"",

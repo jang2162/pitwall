@@ -72,6 +72,9 @@ pub struct ServerSetup {
     /// 서버 프로세스에 넘길 환경 전체: 그 디렉터리의 런타임 환경 위에 정의 · 설정의 `env` 를 덮은 것. 서버 관리자는 `requires`
     /// 로 찾은 런타임을 [`ServerSetup::with_runtime`] 으로 더한 뒤 이것을 그대로 준다(앱 프로세스의 환경을 따로 물려주지 않는다).
     pub env: RuntimeEnv,
+    /// 그 디렉터리의 런타임 환경 그대로(정의 · 설정의 `env` 를 덮기 전). 프로젝트가 **쓰는** 런타임(프로젝트 JDK —
+    /// [`ServerSetup::with_project_jdk`])은 여기서만 찾는다 — 서버용으로 적은 `JAVA_HOME` 을 프로젝트 JDK 로 읽지 않게.
+    pub project_env: RuntimeEnv,
 }
 
 impl std::fmt::Debug for ServerSetup {
@@ -87,6 +90,7 @@ impl std::fmt::Debug for ServerSetup {
             )
             .field("resolution", &self.resolution)
             .field("env", &self.env)
+            .field("project_env", &self.project_env)
             .finish()
     }
 }
@@ -116,6 +120,63 @@ impl ServerSetup {
                 .vars
                 .insert("JAVA_HOME".into(), found.home.clone().into_os_string());
         }
+    }
+}
+
+/// 프로젝트가 **쓰는** JDK(결정 M4-D6 — 서버를 돌리는 JDK 와 따로다). 찾는 것은 서버 관리자(그 프로젝트 디렉터리의 런타임 환경).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectJdk {
+    /// JDK 폴더(`JAVA_HOME` 이 되는 곳).
+    pub home: PathBuf,
+    /// 주 판(`17`, `21` … — 1.8 은 `8`).
+    pub major: u64,
+}
+
+impl ProjectJdk {
+    /// 실행 환경 이름(jdtls · Eclipse 의 `JavaSE-17` · `JavaSE-1.8`).
+    pub fn execution_environment(&self) -> String {
+        if self.major <= 8 {
+            format!("JavaSE-1.{}", self.major)
+        } else {
+            format!("JavaSE-{}", self.major)
+        }
+    }
+}
+
+impl ServerSetup {
+    /// 정의의 `project_jdk_setting`(jdtls 의 `java.configuration.runtimes`) 경로에 프로젝트 JDK 를 넣는다 — 합친 설정
+    /// (`workspace/configuration` 의 답)과 `initializationOptions.settings` 의 같은 경로에 같은 값(15-m4-plan.md M4-18, 결정
+    /// M4-D6). 값은 `[{ name: "JavaSE-<판>", path, default: true }]`, 못 찾았으면(`None`) 빈 목록이다 — 서버를 돌리는 JDK 를
+    /// 프로젝트 JDK 로 내세우지 않는다. 사람이 설정(`[lsp.<id>] settings`)에 그 경로를 적었으면 그 값을 두 곳에 쓴다. 정의에 키가
+    /// 없으면 아무것도 하지 않는다.
+    pub fn with_project_jdk(&mut self, jdk: Option<&ProjectJdk>) {
+        let Some(path) = self.definition.project_jdk_setting.clone() else {
+            return;
+        };
+        let configured = path
+            .split('.')
+            .try_fold(&self.config.settings, |value, key| value.get(key))
+            .filter(|v| !v.is_null())
+            .cloned();
+        let value = configured.unwrap_or_else(|| {
+            Json::Array(
+                jdk.map(|jdk| {
+                    let mut entry = Map::new();
+                    entry.insert("name".into(), Json::String(jdk.execution_environment()));
+                    entry.insert("path".into(), Json::String(jdk.home.display().to_string()));
+                    entry.insert("default".into(), Json::Bool(true));
+                    Json::Object(entry)
+                })
+                .into_iter()
+                .collect(),
+            )
+        });
+        settings::set_path(&mut self.config.settings, &path, value.clone());
+        settings::set_path(
+            &mut self.initialization_options,
+            &format!("settings.{path}"),
+            value,
+        );
     }
 }
 
@@ -268,6 +329,7 @@ impl LspServers {
             config,
             resolution,
             env,
+            project_env: resolved.env.clone(),
         }
     }
 
@@ -407,6 +469,7 @@ impl LspServerInfo {
             initialization_options,
             resolution,
             env: _,
+            project_env: _,
         } = setup;
         Self {
             id: def.id,
