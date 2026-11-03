@@ -5,8 +5,11 @@
 //!   그 경로를 담는 것(여럿이면 가장 깊은 것). 서버를 띄우지 않는다. 권한은 `lsp.status.get` 과 같다(그 프로젝트 창만).
 //! - `lsp.server.setLocal` — 그 프로젝트의 **개인** 파일 `project.local.toml` 에 `[lsp.<id>] enabled` · `install_prompt` 한 키만 쓴다
 //!   (`pw_lsp_servers::LspServers::write_local` — 커밋되는 `.pitwall/project.toml` 에는 쓰지 않는다). 그 프로젝트 창 · 신뢰한
-//!   프로젝트만(`lsp_grant` — 다른 창 · 웰컴 · 설정 · 파일 창 · 미신뢰는 거절). `enabled` 를 쓰면 그 서버의 이 워크트리 인스턴스를
-//!   `lsp.server.restart` 길로 다시 지나게 한다 — 끄면 `disabled` 로 서버가 끝나고, 켜면 다시 뜬다(허가를 다시 받는다).
+//!   프로젝트만(`lsp_grant` — 다른 창 · 웰컴 · 설정 · 파일 창 · 미신뢰는 거절). `enabled` 를 쓰면 그 서버의 인스턴스 중 그 개인
+//!   파일을 읽는 워크트리의 것(제 파일이 없어 메인 체크아웃 것을 폴백으로 읽는 워크트리 포함 — 인스턴스 키 그대로)을
+//!   `lsp.server.restart` 길로 다시 지나게 한다 — 끄면 `disabled` 로 서버가 끝나고, 켜면 다시 뜬다(허가를 다시 받는다). 저장소 안의
+//!   개인 파일이 링크이거나 `.pitwall` 이 프로젝트 밖으로 풀리면 쓰지 않고 conflict(어느 파일 · 왜), 처음 만들면
+//!   `.pitwall/.gitignore` 에 `*.local.toml` 을 둔다(`pw_core::config::ConfigSource::prepare_local_write`).
 //! - `lsp.servers.packages` — 서버 정의마다 그 서버가 쓰는 Mason 패키지(설정 창 「도구」 의 「쓰는 서버」 칸 — 프로젝트가 없다).
 //! - `lsp.server.log` — 인스턴스의 서버 로그(`$STATE/logs/lsp/<서버>-<인스턴스>.<날짜>.log` 중 가장 최근 날짜) 끝 256 KiB. 상태
 //!   팝업의 「로그 열기」 가 글로 보인다. 권한은 `lsp.status.get` 과 같다.
@@ -175,16 +178,13 @@ pub async fn set_local(
     params: LspServerSetLocalParams,
 ) -> Result<LspServerSetLocalResult, RpcError> {
     let projects = manager.projects()?;
-    let root = {
-        let grant = lsp_grant(
-            ctx.scope(),
-            ctx.connection_closed(),
-            &projects,
-            &params.project_id,
-            params.worktree.as_deref(),
-        )?;
-        grant.root().to_path_buf()
-    };
+    lsp_grant(
+        ctx.scope(),
+        ctx.connection_closed(),
+        &projects,
+        &params.project_id,
+        params.worktree.as_deref(),
+    )?;
     let servers = manager.servers();
     let p = params.clone();
     let file = tokio::task::spawn_blocking(move || {
@@ -199,20 +199,7 @@ pub async fn set_local(
     .await
     .map_err(|e| RpcError::internal(e.to_string()))??;
     if params.key == LspLocalSetting::Enabled {
-        let roots: Vec<String> = manager
-            .status(&params.project_id)
-            .instances
-            .into_iter()
-            .filter(|i| i.server == params.server && Path::new(&i.root).starts_with(&root))
-            .map(|i| i.root)
-            .collect();
-        for root in roots {
-            let control = LspServerControlParams {
-                project_id: params.project_id.clone(),
-                worktree: params.worktree.clone(),
-                server: params.server.clone(),
-                root,
-            };
+        for control in readers_of(manager, &params, &file).await {
             if let Err(e) = manager.restart(ctx, control).await {
                 tracing::warn!(target: "pw_lsp", %e, server = %params.server, "cannot apply the personal enabled setting to a running instance");
             }
@@ -221,6 +208,31 @@ pub async fn set_local(
     Ok(LspServerSetLocalResult {
         file: file.display().to_string(),
     })
+}
+
+/// 그 서버의 인스턴스 중 개인 파일 `file` 을 local 레이어로 읽는 워크트리의 것(인스턴스 키 그대로). 쓴 창의 워크트리만이 아니다 —
+/// 제 개인 파일이 없어 메인 체크아웃 것을 폴백으로 읽는 워크트리도 같은 파일을 읽는다. 제 파일이 따로 있는 워크트리는 빠진다.
+async fn readers_of(
+    manager: &LspManager,
+    params: &LspServerSetLocalParams,
+    file: &Path,
+) -> Vec<LspServerControlParams> {
+    let servers = manager.servers();
+    let controls = manager.instance_controls(&params.project_id, &params.server);
+    let project = params.project_id.clone();
+    let written = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    tokio::task::spawn_blocking(move || {
+        controls
+            .into_iter()
+            .filter(|c| {
+                servers
+                    .local_file(&project, c.worktree.as_deref())
+                    .is_ok_and(|f| std::fs::canonicalize(&f).unwrap_or(f) == written)
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 pub fn server_log(

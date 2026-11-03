@@ -7,7 +7,9 @@
 //!   오류다 — 사람이 고치다 만 파일을 덮지 않는다. 설정 계층이 손대지 않는 파일(`schema` 가 앱보다 새 버전이거나 정수가 아님,
 //!   [`super::migrate`])도 쓰지 않는다 — 새 버전 Pitwall 이 쓴 파일에 옛 모양의 키를 섞지 않는다. 옛 버전(`schema` 없음)은 고쳐
 //!   쓴다 — 다시 읽을 때 설정 계층이 마이그레이션한다.
-//! - 심링크는 링크가 아니라 대상 파일을 고친다(dotfiles 연결을 끊지 않는다). 대상이 없는 링크는 오류다.
+//! - 심링크는 링크가 아니라 대상 파일을 고친다(dotfiles 연결을 끊지 않는다). 대상이 없는 링크는 오류다. 저장소 안의 개인 파일
+//!   ([`write_key`] 에 [`Links::Refuse`])은 링크면 쓰지 않는다 — 그 링크는 저장소가 정한 것이라 대상이 커밋되는 파일일 수 있다
+//!   ([`prepare_repository_local`], 15-m4-plan M4-17).
 //! - 같은 파일을 다른 프로세스(편집기 · 다른 Pitwall)가 쓰는 경합: 읽은 내용으로 새 내용을 만든 뒤 쓰기 직전에 다시 읽어
 //!   달라졌으면 새로 읽은 것으로 다시 만든다([`ATTEMPTS`] 번까지). 파일 잠금은 두지 않는다(편집기 · dotfiles 도구가 잠금을 보지
 //!   않는다).
@@ -52,13 +54,30 @@ pub enum WriteError {
     Busy {
         path: PathBuf,
     },
+    /// 쓰면 안 되는 자리다(저장소 안 개인 파일이 링크다 · 쓸 폴더가 프로젝트 밖으로 풀린다). `message` 가 까닭이다.
+    Refused {
+        path: PathBuf,
+        message: String,
+    },
+}
+
+/// 쓸 파일이 심볼릭 링크일 때.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Links {
+    /// 링크가 아니라 대상 파일을 고친다(전역 설정 — 사람의 dotfiles 연결을 끊지 않는다).
+    Follow,
+    /// 링크면 쓰지 않는다([`WriteError::Refused`]) — 저장소 안의 개인 파일. 링크를 끊지도 않는다(사람이 만든 링크를 말없이
+    /// 바꾸지 않는다).
+    Refuse,
 }
 
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             WriteError::Io { path, error } => write!(f, "{}: {error}", path.display()),
-            WriteError::Invalid { path, message } => write!(f, "{}: {message}", path.display()),
+            WriteError::Invalid { path, message } | WriteError::Refused { path, message } => {
+                write!(f, "{}: {message}", path.display())
+            }
             WriteError::Busy { path } => write!(
                 f,
                 "{}: the file kept changing while it was being written; try again",
@@ -95,21 +114,30 @@ pub fn write_setting_with(
             message: format!("`{key}` is not a `table.key` setting"),
         });
     };
-    write_in(&path, SETTINGS_KIND, &[table, name], value, before_recheck)
+    write_in(
+        &path,
+        SETTINGS_KIND,
+        &[table, name],
+        value,
+        Links::Follow,
+        before_recheck,
+    )
 }
 
 /// 설정 파일 `file`(종류 `kind` — `project` · `settings` 등, `schema` 판정에 쓴다)의 키 `path`(표 이름들 + 키, 조각마다 그대로 —
 /// 점 · 따옴표가 든 조각도 한 조각이다. TOML 로 쓸 때 따옴표 규칙대로 감싼다)를 `value` 로 둔다. `None` 이면 그 키를 지운다.
 /// [`write_setting`] 과 같은 규칙(주석 · 다른 키 보존, 없는 파일은 `schema = 1` 로 만듦, 경합 · 심링크 · 새 `schema` 거절, 같은
 /// 프로세스 잠금)이다. 처음 만드는 중간 표는 머리글을 따로 두지 않는다(`[lsp.ruff]` 한 줄). 프로젝트의 개인 파일
-/// (`ConfigSource::local_file`)을 고칠 때 쓴다(15-m4-plan M4-17).
+/// (`ConfigSource::local_file`)을 고칠 때 쓴다(15-m4-plan M4-17) — 쓰기 전에 `ConfigSource::prepare_local_write` 를 부르고
+/// 그것이 돌려준 `links` 를 넘긴다.
 pub fn write_key(
     file: &Path,
     kind: &str,
     path: &[&str],
     value: Option<toml_edit::Value>,
+    links: Links,
 ) -> Result<bool, WriteError> {
-    write_in(file, kind, path, value, &mut |_| {})
+    write_in(file, kind, path, value, links, &mut |_| {})
 }
 
 fn write_in(
@@ -117,6 +145,7 @@ fn write_in(
     kind: &str,
     keys: &[&str],
     value: Option<toml_edit::Value>,
+    links: Links,
     before_recheck: &mut dyn FnMut(&Path),
 ) -> Result<bool, WriteError> {
     // 쓰다 패닉한 쪽이 있어도 파일은 rename 으로만 바뀌므로 반쯤 쓴 내용은 없다 — 독은 무시한다.
@@ -127,6 +156,9 @@ fn write_in(
         error,
     };
     for _ in 0..ATTEMPTS {
+        if links == Links::Refuse {
+            refuse_link(&path)?;
+        }
         let current = read(&path).map_err(io_err)?;
         if current.is_none() && value.is_none() {
             return Ok(false);
@@ -145,6 +177,9 @@ fn write_in(
         if read(&path).map_err(io_err)? != current {
             continue;
         }
+        if links == Links::Refuse {
+            refuse_link(&path)?;
+        }
         match current {
             Some(_) => write_atomic(&path, &next).map_err(io_err)?,
             None => match create(&path, &next) {
@@ -155,6 +190,124 @@ fn write_in(
             },
         }
         return Ok(true);
+    }
+    Err(WriteError::Busy { path })
+}
+
+/// `path` 가 심볼릭 링크면 [`WriteError::Refused`].
+fn refuse_link(path: &Path) -> Result<(), WriteError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(WriteError::Refused {
+            path: path.to_path_buf(),
+            message: "is a symbolic link; Pitwall does not write a personal setting through a link \
+                      inside the repository (its target may be a committed file) — replace the link \
+                      with a plain file or edit the setting by hand"
+                .to_owned(),
+        }),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(WriteError::Io {
+            path: path.to_path_buf(),
+            error,
+        }),
+    }
+}
+
+/// 개인 파일을 무시하게 하는 `.pitwall/.gitignore` 줄(03-architecture 「하이브리드 정책 (D9)」).
+pub const LOCAL_IGNORE: &str = "*.local.toml";
+
+/// 저장소 안 `.pitwall/` 의 개인 파일 `file`(`<id>.local.toml`)을 쓰기 전에 부른다(15-m4-plan M4-17 리뷰 M1 · M2). `checkout` 은
+/// 그 `.pitwall/` 을 담는 체크아웃 루트(메인 체크아웃 또는 연결 워크트리)다.
+///
+/// - `file` 이 심볼릭 링크면 거절한다([`WriteError::Refused`]). 링크를 끊지 않는다.
+/// - 쓸 폴더(없으면 가장 가까운 있는 조상)의 실제 경로가 `checkout` 의 실제 경로 안이 아니면 거절한다 — `.pitwall` 이 링크로
+///   프로젝트 밖을 가리키는 경우.
+/// - `file` 이 아직 없으면(이 쓰기가 만든다) `.pitwall/.gitignore` 에 [`LOCAL_IGNORE`] 줄이 없을 때 더한다(파일이 없으면 그 줄
+///   하나로 만든다). D9 의 「프로젝트 생성 시 자동 추가」 를 맡는 화면이 아직 없어 개인 파일을 처음 만드는 쓰기가 그 자리다.
+///   `.gitignore` 가 링크이고 그 줄이 없으면 거절한다(링크 너머를 고치지 않는다).
+pub fn prepare_repository_local(checkout: &Path, file: &Path) -> Result<(), WriteError> {
+    let refused = |message: String| WriteError::Refused {
+        path: file.to_path_buf(),
+        message,
+    };
+    let config_dir = checkout.join(super::PROJECT_DIR);
+    if !file.starts_with(&config_dir) {
+        return Err(refused(format!(
+            "is not inside {}, not writing it",
+            config_dir.display()
+        )));
+    }
+    refuse_link(file)?;
+    let io_err = |path: &Path| {
+        let path = path.to_path_buf();
+        move |error| WriteError::Io { path, error }
+    };
+    let real_checkout = fs::canonicalize(checkout).map_err(io_err(checkout))?;
+    let folder = file.parent().unwrap_or(&config_dir);
+    let existing = folder
+        .ancestors()
+        .find(|a| fs::symlink_metadata(a).is_ok())
+        .unwrap_or(checkout);
+    let real_folder = fs::canonicalize(existing).map_err(io_err(existing))?;
+    if !real_folder.starts_with(&real_checkout) {
+        return Err(refused(format!(
+            "{} resolves to {}, outside the project {}; Pitwall does not write a personal setting \
+             there — remove the link or edit the setting by hand",
+            existing.display(),
+            real_folder.display(),
+            real_checkout.display()
+        )));
+    }
+    match fs::symlink_metadata(file) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => ignore_local_files(&config_dir),
+        Err(error) => Err(WriteError::Io {
+            path: file.to_path_buf(),
+            error,
+        }),
+    }
+}
+
+/// `config_dir/.gitignore` 에 [`LOCAL_IGNORE`] 줄이 없으면 더한다. 있는 줄 · 주석은 그대로 둔다.
+fn ignore_local_files(config_dir: &Path) -> Result<(), WriteError> {
+    let path = config_dir.join(".gitignore");
+    let io_err = |error| WriteError::Io {
+        path: path.clone(),
+        error,
+    };
+    let has_line = |text: &str| text.lines().any(|l| l.trim() == LOCAL_IGNORE);
+    fs::create_dir_all(config_dir).map_err(io_err)?;
+    for _ in 0..ATTEMPTS {
+        let link = fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+        let current = read(&path).map_err(io_err)?;
+        if current.as_deref().is_some_and(has_line) {
+            return Ok(());
+        }
+        if link {
+            return Err(WriteError::Refused {
+                path: path.clone(),
+                message: format!(
+                    "is a symbolic link without a `{LOCAL_IGNORE}` line; Pitwall does not write \
+                     through it — add the line yourself so personal settings are not committed"
+                ),
+            });
+        }
+        match current {
+            None => match create(&path, &format!("{LOCAL_IGNORE}\n")) {
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(io_err(e)),
+            },
+            Some(text) => {
+                let sep = if text.is_empty() || text.ends_with('\n') {
+                    ""
+                } else {
+                    "\n"
+                };
+                write_atomic(&path, &format!("{text}{sep}{LOCAL_IGNORE}\n")).map_err(io_err)?;
+                return Ok(());
+            }
+        }
     }
     Err(WriteError::Busy { path })
 }
@@ -358,15 +511,40 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join(".pitwall/project.local.toml");
         let f = Some(toml_edit::Value::from(false));
-        assert!(write_key(&file, "project", &["lsp", "ruff", "enabled"], f.clone()).unwrap());
+        assert!(
+            write_key(
+                &file,
+                "project",
+                &["lsp", "ruff", "enabled"],
+                f.clone(),
+                Links::Follow
+            )
+            .unwrap()
+        );
         assert_eq!(
             fs::read_to_string(&file).unwrap(),
             "schema = 1\n\n[lsp.ruff]\nenabled = false\n"
         );
-        assert!(!write_key(&file, "project", &["lsp", "ruff", "enabled"], f.clone()).unwrap());
+        assert!(
+            !write_key(
+                &file,
+                "project",
+                &["lsp", "ruff", "enabled"],
+                f.clone(),
+                Links::Follow
+            )
+            .unwrap()
+        );
         for id in ["a.b", "q\"uote", "tab\there", "새.서버"] {
             assert!(
-                write_key(&file, "project", &["lsp", id, "install_prompt"], f.clone()).unwrap()
+                write_key(
+                    &file,
+                    "project",
+                    &["lsp", id, "install_prompt"],
+                    f.clone(),
+                    Links::Follow
+                )
+                .unwrap()
             );
             let doc: toml_edit::DocumentMut = fs::read_to_string(&file).unwrap().parse().unwrap();
             assert_eq!(
@@ -377,12 +555,30 @@ mod tests {
             // 조각이 점에서 갈라지지 않았다.
             assert!(doc["lsp"].get("a").is_none(), "{doc}");
         }
-        assert!(write_key(&file, "project", &["lsp", "a.b", "install_prompt"], None).unwrap());
+        assert!(
+            write_key(
+                &file,
+                "project",
+                &["lsp", "a.b", "install_prompt"],
+                None,
+                Links::Follow
+            )
+            .unwrap()
+        );
         let doc: toml_edit::DocumentMut = fs::read_to_string(&file).unwrap().parse().unwrap();
         assert!(doc["lsp"]["a.b"].get("install_prompt").is_none());
         assert_eq!(doc["lsp"]["ruff"]["enabled"].as_bool(), Some(false));
         // 지울 것이 없으면 바꾸지 않는다.
-        assert!(!write_key(&file, "project", &["lsp", "none", "enabled"], None).unwrap());
+        assert!(
+            !write_key(
+                &file,
+                "project",
+                &["lsp", "none", "enabled"],
+                None,
+                Links::Follow
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -399,7 +595,8 @@ mod tests {
                 &file,
                 "project",
                 &["lsp", "ruff", "enabled"],
-                Some(false.into())
+                Some(false.into()),
+                Links::Follow,
             )
             .unwrap()
         );
@@ -413,6 +610,7 @@ mod tests {
             "project",
             &["lsp", "ruff", "enabled"],
             Some(false.into()),
+            Links::Follow,
         )
         .unwrap_err();
         assert!(matches!(e, WriteError::Invalid { .. }), "{e}");
@@ -422,9 +620,39 @@ mod tests {
             "project",
             &["lsp", "ruff", "enabled"],
             Some(false.into()),
+            Links::Follow,
         )
         .unwrap_err();
         assert!(matches!(e, WriteError::Invalid { .. }), "{e}");
         assert_eq!(fs::read_to_string(&file).unwrap(), "schema = 99\n");
+    }
+
+    /// `Links::Refuse` 는 링크를 따르지 않는다 — 대상(커밋되는 파일일 수 있다)도 링크도 그대로 두고 거절한다. `Links::Follow`
+    /// 는 전역 설정처럼 대상을 고친다(15-m4-plan M4-17 리뷰 M2).
+    #[cfg(unix)]
+    #[test]
+    fn write_key_refuses_a_link_only_when_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("project.toml");
+        fs::write(&target, "schema = 1\n").unwrap();
+        let link = dir.path().join("project.local.toml");
+        std::os::unix::fs::symlink("project.toml", &link).unwrap();
+        let keys = ["lsp", "ruff", "enabled"];
+        let e = write_key(&link, "project", &keys, Some(false.into()), Links::Refuse).unwrap_err();
+        assert!(matches!(e, WriteError::Refused { .. }), "{e}");
+        assert!(e.to_string().contains("project.local.toml"), "{e}");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "schema = 1\n");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(write_key(&link, "project", &keys, Some(false.into()), Links::Follow).unwrap());
+        assert!(
+            fs::read_to_string(&target)
+                .unwrap()
+                .contains("enabled = false")
+        );
     }
 }

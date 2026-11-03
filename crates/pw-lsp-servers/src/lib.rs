@@ -302,7 +302,12 @@ impl LspServers {
     /// `.pitwall/project.toml` 에는 쓰지 않는다(사람의 설정을 커밋하지 않게 — 15-m4-plan M4-17). 등록되지 않은 서버 id 는 invalid
     /// params(모르는 표를 만들지 않는다). 쓴 파일을 돌려준다. 블로킹(파일 IO)이다.
     ///
+    /// 저장소 안의 개인 파일은 [`ConfigSource::prepare_local_write`] 를 지난다 — 그 파일이 링크이거나 `.pitwall` 이 프로젝트 밖으로
+    /// 풀리면 쓰지 않고 [`code::CONFLICT`](어느 파일 · 왜를 글로), 처음 만드는 파일이면 `.pitwall/.gitignore` 에 `*.local.toml` 을
+    /// 둔다(03-architecture 「하이브리드 정책 (D9)」).
+    ///
     /// [`ConfigSource::local_file`]: pw_core::config::ConfigSource::local_file
+    /// [`ConfigSource::prepare_local_write`]: pw_core::config::ConfigSource::prepare_local_write
     pub fn write_local(
         &self,
         project_id: &str,
@@ -316,22 +321,44 @@ impl LspServers {
                 "no language server `{server_id}`"
             )));
         }
-        let host = self.host()?;
-        let project = host.projects.get(project_id).map_err(registry_error)?;
-        let root = active_root(&project, worktree)?;
-        let source = project
-            .config_source(&host.paths, &root)
-            .map_err(|e| RpcError::internal(e.to_string()))?;
+        let source = self.local_source(project_id, worktree)?;
         let file = source.local_file("project");
+        let links = source.prepare_local_write(&file).map_err(write_error)?;
         pw_core::config::write::write_key(
             &file,
             "project",
             &[settings::SETTINGS_KEY, server_id, key.file_key()],
             Some(toml_edit::Value::from(value)),
+            links,
         )
-        .map_err(|e| RpcError::internal(e.to_string()))?;
+        .map_err(write_error)?;
         tracing::info!(target: "pw_lsp_servers", project = %project_id, server = %server_id, key = key.file_key(), value, file = %file.display(), "wrote a personal language server setting");
         Ok(file)
+    }
+
+    /// 그 워크트리(`None` 이면 메인 체크아웃)가 local 레이어로 읽는 개인 파일 `project.local.toml`([`Self::write_local`] 이 쓸
+    /// 파일). 개인 설정을 쓴 뒤 같은 파일을 읽는 워크트리의 인스턴스를 고르는 데 쓴다. 블로킹(파일 IO)이다.
+    pub fn local_file(
+        &self,
+        project_id: &str,
+        worktree: Option<&str>,
+    ) -> Result<PathBuf, RpcError> {
+        Ok(self
+            .local_source(project_id, worktree)?
+            .local_file("project"))
+    }
+
+    fn local_source(
+        &self,
+        project_id: &str,
+        worktree: Option<&str>,
+    ) -> Result<pw_core::config::ConfigSource, RpcError> {
+        let host = self.host()?;
+        let project = host.projects.get(project_id).map_err(registry_error)?;
+        let root = active_root(&project, worktree)?;
+        project
+            .config_source(&host.paths, &root)
+            .map_err(|e| RpcError::internal(e.to_string()))
     }
 
     /// 서버마다의 합친 설정. 설정이 바뀌었을 때 [`changed_servers`] 로 견줄 값이다.
@@ -506,6 +533,16 @@ fn active_root(project: &Project, worktree: Option<&str>) -> Result<PathBuf, Rpc
             project.id
         )),
     })
+}
+
+/// 개인 파일 쓰기 실패. 거절(링크 · 프로젝트 밖)은 [`code::CONFLICT`], 나머지는 internal — 둘 다 어느 파일 · 왜를 글로 싣는다.
+fn write_error(e: pw_core::config::write::WriteError) -> RpcError {
+    match e {
+        pw_core::config::write::WriteError::Refused { .. } => {
+            RpcError::new(code::CONFLICT, e.to_string())
+        }
+        e => RpcError::internal(e.to_string()),
+    }
 }
 
 fn registry_error(e: RegistryError) -> RpcError {

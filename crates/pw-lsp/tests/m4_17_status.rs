@@ -241,6 +241,226 @@ async fn set_local_refuses_unknown_servers_other_windows_and_untrusted_projects(
     assert!(!env.root.join(".pitwall/project.local.toml").exists());
 }
 
+/// `git` 을 `dir` 에서 돌리고 표준 출력을 돌려준다. 실패하면 시험 실패.
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// 리뷰 M1: `.pitwall/` 이 없던 git 저장소에서 「끄기」 를 눌러도 git 이 커밋할 새 개인 파일이 생기지 않는다 — 개인 파일을 처음
+/// 만드는 쓰기가 `.pitwall/.gitignore` 에 `*.local.toml` 을 둔다(03 「하이브리드 정책 (D9)」). 이미 있는 `.gitignore` 는 줄만 더하고
+/// 있던 줄은 그대로, 줄이 이미 있으면 다시 더하지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turning_a_server_off_leaves_no_personal_file_for_git_to_commit() {
+    let env = Env::new(EnvOptions::default());
+    git(&env.root, &["init", "-q"]);
+    let mut win = env.window();
+    win.call(
+        "lsp.server.setLocal",
+        set_local(&env, "ruff", "enabled", false),
+    )
+    .await
+    .unwrap();
+    assert!(env.root.join(".pitwall/project.local.toml").is_file());
+    let status = git(
+        &env.root,
+        &["status", "--porcelain", "--untracked-files=all"],
+    );
+    assert!(!status.contains("local.toml"), "{status}");
+    assert!(status.contains(".pitwall/.gitignore"), "{status}");
+    assert_eq!(
+        fs::read_to_string(env.root.join(".pitwall/.gitignore")).unwrap(),
+        "*.local.toml\n"
+    );
+    // 두 번째 쓰기는 파일이 있으므로 `.gitignore` 를 건드리지 않는다.
+    win.call(
+        "lsp.server.setLocal",
+        set_local(&env, "ruff", "installPrompt", false),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(env.root.join(".pitwall/.gitignore")).unwrap(),
+        "*.local.toml\n"
+    );
+
+    // 사람이 둔 `.gitignore`(끝 줄바꿈 없음)는 줄만 더한다.
+    let env = Env::new(EnvOptions::default());
+    git(&env.root, &["init", "-q"]);
+    env.file(".pitwall/.gitignore", "# 팀\n.backup/");
+    let mut win = env.window();
+    win.call(
+        "lsp.server.setLocal",
+        set_local(&env, "ruff", "enabled", false),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(env.root.join(".pitwall/.gitignore")).unwrap(),
+        "# 팀\n.backup/\n*.local.toml\n"
+    );
+    let status = git(
+        &env.root,
+        &["status", "--porcelain", "--untracked-files=all"],
+    );
+    assert!(!status.contains("local.toml"), "{status}");
+}
+
+/// 리뷰 M2: 저장소 안의 개인 파일은 링크를 따르지 않는다. ① `project.local.toml` 이 커밋되는 `project.toml` 을 가리키는 링크면
+/// 거절하고 `project.toml` 은 바이트까지 그대로, 링크도 그대로다. ② `.pitwall` 이 프로젝트 밖 폴더를 가리키는 링크면 거절하고 밖에
+/// 아무것도 만들지 않는다. 거절은 conflict 이고 어느 파일 · 왜를 글로 싣는다(창이 알림으로 보인다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_personal_file_behind_a_link_is_refused() {
+    let env = Env::new(EnvOptions::default());
+    let shared = "schema = 1\n";
+    env.file(".pitwall/project.toml", shared);
+    let local = env.root.join(".pitwall/project.local.toml");
+    std::os::unix::fs::symlink("project.toml", &local).unwrap();
+    let mut win = env.window();
+    let e = win
+        .call(
+            "lsp.server.setLocal",
+            set_local(&env, "ruff", "enabled", false),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::CONFLICT, "{e:?}");
+    assert!(
+        e.message.contains("project.local.toml") && e.message.contains("symbolic link"),
+        "{e:?}"
+    );
+    assert_eq!(
+        fs::read(env.root.join(".pitwall/project.toml")).unwrap(),
+        shared.as_bytes()
+    );
+    assert!(
+        fs::symlink_metadata(&local)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    let env = Env::new(EnvOptions::default());
+    let outside = env.base.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, env.root.join(".pitwall")).unwrap();
+    let mut win = env.window();
+    let e = win
+        .call(
+            "lsp.server.setLocal",
+            set_local(&env, "ruff", "installPrompt", false),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::CONFLICT, "{e:?}");
+    assert!(
+        e.message.contains("project.local.toml") && e.message.contains("outside the project"),
+        "{e:?}"
+    );
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+}
+
+/// 리뷰 L1: 메인 체크아웃 창에서 끄면 제 개인 파일이 없어 메인 것을 폴백으로 읽는 워크트리(`<메인>/.worktrees/w` — 이 저장소의
+/// 꼴)의 인스턴스도 그 워크트리 키로 다시 지나 `disabled` 로 끝난다. 제 개인 파일이 있는 워크트리는 그 파일을 따른다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turning_a_server_off_reaches_worktrees_reading_the_same_personal_file() {
+    let env = Env::new(EnvOptions::default());
+    env.fake("rust-analyzer", incremental());
+    let main_file = env.file("src/main.rs", "");
+    git(&env.root, &["init", "-q"]);
+    git(&env.root, &["add", "src/main.rs"]);
+    git(&env.root, &["commit", "-q", "-m", "init"]);
+    git(&env.root, &["worktree", "add", "-q", ".worktrees/w"]);
+    let top = env.root.join(".worktrees/w");
+    let wt_file = top.join("src/main.rs");
+    let mut win = env.window();
+    win.open(&env, &main_file, "Rust", "").await;
+    let mut wt = env.window();
+    wt.call(
+        "lsp.document.open",
+        json!({
+            "projectId": env.id,
+            "worktree": top,
+            "path": wt_file,
+            "language": "Rust",
+            "version": 0,
+            "text": "",
+        }),
+    )
+    .await
+    .unwrap();
+    let state_at = |root: &Path| {
+        env.manager
+            .status(&env.id)
+            .instances
+            .into_iter()
+            .find(|i| i.server == "rust-analyzer" && Path::new(&i.root) == root)
+            .map(|i| i.state)
+    };
+    let both = |want: LspInstanceState| {
+        let want = Some(want);
+        let (root, top) = (env.root.clone(), top.clone());
+        let state_at = &state_at;
+        async move {
+            eventually(Duration::from_secs(10), || {
+                state_at(&root) == want && state_at(&top) == want
+            })
+            .await
+        }
+    };
+    assert!(both(LspInstanceState::Ready).await, "{:?}", env.states());
+
+    win.call(
+        "lsp.server.setLocal",
+        set_local(&env, "rust-analyzer", "enabled", false),
+    )
+    .await
+    .unwrap();
+    assert!(!top.join(".pitwall/project.local.toml").exists());
+    assert!(both(LspInstanceState::Disabled).await, "{:?}", env.states());
+
+    // 워크트리에 제 개인 파일(끔)이 있으면 메인에서 켜도 워크트리는 꺼진 채다.
+    fs::create_dir_all(top.join(".pitwall")).unwrap();
+    fs::write(
+        top.join(".pitwall/project.local.toml"),
+        "schema = 1\n[lsp.rust-analyzer]\nenabled = false\n",
+    )
+    .unwrap();
+    win.call(
+        "lsp.server.setLocal",
+        set_local(&env, "rust-analyzer", "enabled", true),
+    )
+    .await
+    .unwrap();
+    assert!(
+        eventually(Duration::from_secs(10), || state_at(&env.root)
+            == Some(LspInstanceState::Ready))
+        .await,
+        "{:?}",
+        env.states()
+    );
+    assert_eq!(state_at(&top), Some(LspInstanceState::Disabled));
+}
+
 // ---- 설치 뒤 기동 ------------------------------------------------------------------------------------------------------------
 
 /// 설치 뒤 기동은 웹뷰가 `lsp.server.restart` 를 부른다: 그사이 신뢰를 풀었으면 허가가 거절돼 `untrusted` 로 남고 띄우지 않는다.

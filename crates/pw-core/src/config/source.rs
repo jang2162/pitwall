@@ -200,6 +200,9 @@ pub struct ConfigSource {
     writes: bool,
     /// 공유 레이어(`<id>.toml`)를 읽는가([`Self::without_shared`]).
     shared: bool,
+    /// 저장소 안의 `.pitwall/` 인가([`Self::project`]). 개인 파일을 쓸 때 링크 · 위치 · `.gitignore` 를 본다
+    /// ([`Self::prepare_local_write`]).
+    repository: bool,
 }
 
 impl ConfigSource {
@@ -231,6 +234,7 @@ impl ConfigSource {
             schemas: Arc::new(Schemas::builtin()),
             writes: true,
             shared: true,
+            repository: true,
         }
     }
 
@@ -258,6 +262,7 @@ impl ConfigSource {
             schemas: Arc::new(Schemas::builtin()),
             writes: true,
             shared: true,
+            repository: false,
         })
     }
 
@@ -274,6 +279,7 @@ impl ConfigSource {
             schemas: Arc::new(Schemas::builtin()),
             writes: true,
             shared: true,
+            repository: false,
         }
     }
 
@@ -335,6 +341,32 @@ impl ConfigSource {
             Some(fallback) => fallback.dir.join(&name),
             None => self.primary.dir.join(&name),
         }
+    }
+
+    /// 개인 파일 `file`(`<id>.local.toml` — [`Self::local_file`] 이 돌려준 것, 또는 이 설정의 폴더 · 폴백 폴더 안의 개인 파일)을
+    /// 쓰기 전에 부른다. 쓸 때 넘길 링크 규칙을 돌려준다(`write::write_key`).
+    ///
+    /// 저장소 안(`.pitwall/`)이면 [`write::prepare_repository_local`](super::write::prepare_repository_local) — 링크 · 프로젝트
+    /// 밖으로 풀리는 폴더는 거절하고, 새로 만드는 파일이면 `.pitwall/.gitignore` 에 `*.local.toml` 을 둔다 — 를 하고
+    /// [`Links::Refuse`](super::write::Links::Refuse). 개인 전용 폴더(`$CONFIG/projects/<slug>/`)는 커밋되지 않는 사람의 설정이라
+    /// 전역 설정과 같이 [`Links::Follow`](super::write::Links::Follow)다(15-m4-plan M4-17 리뷰 M1 · M2).
+    pub fn prepare_local_write(
+        &self,
+        file: &Path,
+    ) -> Result<super::write::Links, super::write::WriteError> {
+        if !self.repository {
+            return Ok(super::write::Links::Follow);
+        }
+        let checkout = std::iter::once(&self.primary)
+            .chain(&self.local_fallback)
+            .find(|s| file.starts_with(&s.dir))
+            .and_then(|s| s.dir.parent())
+            .ok_or_else(|| super::write::WriteError::Refused {
+                path: file.to_path_buf(),
+                message: "is not a personal file of this project, not writing it".to_owned(),
+            })?;
+        super::write::prepare_repository_local(checkout, file)?;
+        Ok(super::write::Links::Refuse)
     }
 
     /// 감시할 폴더와 재귀 여부. 없는 폴더는 생기는 것을 보도록 가장 가까운 있는 조상을 비재귀로 본다.
