@@ -43,5 +43,7 @@
 | `sym.gadget` | `src/m4_16_symbols.rs` | `src/m4_16_symbols.ts` | 구조체 · 클래스 `M416Gadget` 의 정의 이름(M4-16 — `workspace/symbol` 의 결과 자리, 심볼 인덱스의 이름 자리와 같은 줄 · 열이어야 두 출처가 하나로 합쳐진다. rust 는 시험이 임시 복사본의 `lib.rs` 에 모듈 한 줄을 더한다) |
 | `sym.spin` | `src/m4_16_symbols.rs` | `src/m4_16_symbols.ts` | 트레이트 · 인터페이스 `M416Spin` — 클래스로 이동(타입 종류)에 든다 |
 | `sym.build` | `src/m4_16_symbols.rs` | `src/m4_16_symbols.ts` | 함수 `m416_build_gadget` · `m416BuildGadget` — 클래스로 이동은 뺀다 |
+| `sym.decorated` | — | `src/m4_16_decorated.ts` | 데코레이터(여러 줄 — `@m416Component({ … })`)가 붙은 클래스 `M416Panel` 의 이름(M4-16 — 서버는 데코레이터 줄 1열과 선언 전체 범위를 준다, 범위가 이 줄을 담는다) |
+| `sym.split` | — | `src/m4_16_decorated.ts` | 이름이 다음 줄인 선언 `export class` / `M416Split` 의 이름(서버는 `class` 줄을 준다) |
 
 `errors` · `unused` 파일은 일부러 오류 · 경고를 낸다 — 다른 파일의 진단을 세는 시험은 이 파일들을 빼고 센다(「자기 파일 안」 규칙).

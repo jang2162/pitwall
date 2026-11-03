@@ -2,6 +2,8 @@
 //! `lsp.workspaceSymbol` 이 그 파일의 심볼을 정의 줄(앵커 `sym.*` — rust-analyzer 는 이름 자리, TS 는 선언 줄의 처음)로 돌려주는지, 클래스로 이동의 종류(`kinds`)가 함수를 빼는지,
 //! 그리고 **같은 파일의 심볼 인덱스(M4-15) 결과와 열쇠(루트 기준 상대 경로 · 줄 · 이름)가 같은지** 본다 — 웹뷰는 이 열쇠로 두 출처를
 //! 한 줄로 합친다(apps/desktop/src/search-everywhere/symbol-search.ts `mergeSymbols`). 열쇠가 어긋나면 같은 심볼이 두 번 보인다.
+//! 서버가 선언의 처음을 주는 꼴(데코레이터 클래스 · 이름이 다음 줄인 선언 — `m4_16_decorated.ts`)은 줄이 어긋나고, 서버 범위가
+//! 인덱스의 이름 줄을 담는지를 본다(`declaration_starts` — 웹뷰는 이 포함으로 합친다).
 //! 표지(`cfg(pw_live_lsp_<서버>)`)가 꺼져 있으면 시험이 목록에 없다(`src/live.rs` 머리 주석).
 
 #![cfg(unix)]
@@ -72,7 +74,13 @@ mod live {
         }
     }
 
-    pub async fn workspace_symbols(server: LiveServer, fixture: &str, file: &str, language: &str) {
+    /// 픽스처를 임시 폴더에 복사하고 `file` 을 창에서 연다(서버가 준비될 때까지). (환경, 창, 실제 경로, 글).
+    async fn open(
+        server: LiveServer,
+        fixture: &str,
+        file: &str,
+        language: &str,
+    ) -> (Env, Conn, std::path::PathBuf, String) {
         let rust = fixture == "rust";
         let env = Env::new(EnvOptions {
             // cargo · node 를 찾도록 시험 프로세스의 환경을 넘긴다.
@@ -109,6 +117,22 @@ mod live {
         })
         .await;
         assert!(ready, "{:?}", env.states());
+        (env, win, real, text)
+    }
+
+    /// 심볼 인덱스(M4-15)가 같은 글에서 뽑은 심볼.
+    fn index_of(file: &str, text: &str) -> pw_index::methods::IndexFileSymbols {
+        let fs = Arc::new(pw_fs::Fs::new());
+        let extensions = Arc::new(pw_ext::Registry::from_roots(
+            &semver::Version::new(0, 0, 0),
+            pw_ext::builtin::roots(),
+        ));
+        pw_index::SymbolIndex::new(fs, extensions).parse_text(file, text)
+    }
+
+    pub async fn workspace_symbols(server: LiveServer, fixture: &str, file: &str, language: &str) {
+        let rust = fixture == "rust";
+        let (env, mut win, real, text) = open(server, fixture, file, language).await;
 
         // 심볼로 이동: 그 파일의 셋이 정의 이름 자리로.
         let got = symbols(&mut win, &env, "M416", Value::Null, "M416Gadget").await;
@@ -130,8 +154,8 @@ mod live {
             "m416BuildGadget"
         };
         // rust-analyzer 는 기본 설정(`workspace.symbol.search.kind = "only_types"`)에서 타입만 준다 — 함수는 심볼 인덱스가 낸다(웹뷰가
-        // 합친다). typescript-language-server 는 함수도 주고, 위치는 선언 줄의 처음(1열)이다 — 줄이 이름 줄과 같아 합쳐지고, 열은
-        // 웹뷰가 인덱스의 이름 자리로 고친다(symbol-search.ts `mergeSymbols`).
+        // 합친다). typescript-language-server 는 함수도 주고, 위치는 선언의 처음(1열)이다 — 이 파일의 선언은 이름과 같은 줄에서
+        // 시작해 줄이 같고, 열은 웹뷰가 인덱스의 이름 자리로 고친다(symbol-search.ts `mergeSymbols`). 줄이 다른 꼴은 `declaration_starts`.
         let expected: &[(&str, &str)] = if rust {
             &[("M416Gadget", "sym.gadget"), ("M416Spin", "sym.spin")]
         } else {
@@ -181,12 +205,7 @@ mod live {
         assert!(!names.contains(&build), "{types}");
 
         // 심볼 인덱스가 같은 파일에서 뽑은 이름 자리와 열쇠가 같다 — 웹뷰가 한 줄로 합친다.
-        let fs = Arc::new(pw_fs::Fs::new());
-        let extensions = Arc::new(pw_ext::Registry::from_roots(
-            &semver::Version::new(0, 0, 0),
-            pw_ext::builtin::roots(),
-        ));
-        let index = pw_index::SymbolIndex::new(fs, extensions).parse_text(file, &text);
+        let index = index_of(file, &text);
         for &(name, _) in expected {
             let from_index = index
                 .symbols
@@ -206,6 +225,48 @@ mod live {
                     from_server["name"].as_str().unwrap(),
                 ),
                 "the index and the server must share the merge key for {name}"
+            );
+        }
+        win.session.close();
+    }
+
+    /// 서버가 이름 자리가 아니라 **선언의 처음**(데코레이터 줄 · `class` 줄)을 주는 꼴(`m4_16_decorated.ts`): 서버 위치의 줄은 인덱스의
+    /// 이름 줄과 다를 수 있지만 서버 범위가 그 줄을 담는다 — 웹뷰가 같은 파일 · 같은 이름의 두 줄을 이 포함으로 하나로 합친다
+    /// (symbol-search.ts `mergeSymbols` 의 `covers`). 서버가 준 실제 답은 시험 출력(`--nocapture`)에 적는다 — 웹뷰 시험의 녹화
+    /// (symbol-search.test.ts 「typescript-language-server」)와 견준다.
+    pub async fn declaration_starts(server: LiveServer) {
+        let file = "src/m4_16_decorated.ts";
+        let (env, mut win, real, text) = open(server, "typescript", file, "TypeScript").await;
+        let got = symbols(&mut win, &env, "M416", Value::Null, "M416Split").await;
+        let index = index_of(file, &text);
+        for (name, anchor_name) in [("M416Panel", "sym.decorated"), ("M416Split", "sym.split")] {
+            let found = got["symbols"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["name"] == name && s["location"]["path"] == real.display().to_string())
+                .unwrap_or_else(|| panic!("{name} is not in {got}"));
+            let from_index = index
+                .symbols
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("the index has no {name}: {:?}", index.symbols));
+            let name_line = u64::from(from_index.selection_range.start.line) + 1;
+            let (line, end_line) = (
+                found["location"]["line"].as_u64().unwrap(),
+                found["location"]["endLine"].as_u64().unwrap(),
+            );
+            eprintln!(
+                "{}: {name} server line {line}..{end_line} column {}, index name line {name_line} column {}",
+                server.executable(),
+                found["location"]["column"],
+                from_index.selection_range.start.character + 1
+            );
+            assert_eq!(anchor(&text, anchor_name).0, name_line, "{name}");
+            assert_eq!(found["relative"], file, "{found}");
+            assert!(
+                line <= name_line && name_line <= end_line,
+                "{name}: the server range {line}..{end_line} must hold the index's name line {name_line} — {found}"
             );
         }
         win.session.close();
@@ -234,4 +295,10 @@ async fn live_lsp_typescript_language_server_workspace_symbols() {
         "TypeScript",
     )
     .await;
+}
+
+#[cfg(pw_live_lsp_typescript_language_server)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lsp_typescript_language_server_workspace_symbols_declaration_start() {
+    live::declaration_starts(pw_lsp::live::LiveServer::TypescriptLanguageServer).await;
 }
