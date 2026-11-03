@@ -9,7 +9,8 @@
 //! - **저장소**: `CARGO_TARGET_TMPDIR/perf-index-v3/` 에 한 번 만들고 다시 쓴다(여섯 언어 — Rust · TypeScript · JavaScript ·
 //!   Python · Java · Kotlin — 를 돌려 가며 파일마다 심볼 25개: 타입 하나 + 메서드 24개, Rust 는 구조체 · impl · 메서드 23개). 메서드마다
 //!   문서 주석과 본문 열 줄쯤 — 심볼당 바이트를 이 저장소의 실제 코드 비율(약 450 B, M4-15 리뷰 L3)에 맞췄다. 만든 직후라 파일이
-//!   OS 캐시에 있다 — 콜드 디스크보다 낙관적이다(콜드 디스크는 M4-19).
+//!   OS 캐시에 있다 — 콜드 디스크보다 낙관적이다(콜드 디스크는 M4-19). 만드는 코드는 `support/perf_repo.rs` — 앱으로 재는
+//!   예제 `examples/perf_repo.rs`(M4-19)가 같은 저장소를 만들도록 함께 쓴다.
 //! - **「8 코어」**: 파싱 · 매칭 스레드를 7(코어 8 − 1)로 묶는다(`SymbolIndex::with_threads`) — 이 기기의 코어가 더 많아도.
 //! - **첫 색인**: 창이 `fs.watch` 를 연 것처럼 감시를 잡은 때부터 심볼 색인이 다 만들어지고 쉴 때까지(파일 목록 걷기 포함)의 벽시계.
 //! - **메모리**: 같은 구간의 Rust 힙 증가(이 시험 바이너리의 전역 할당자가 센다 — tree-sitter 의 C 할당은 들지 않지만 트리 · 파서는
@@ -18,7 +19,6 @@
 //!   대소문자 섞인 질의 · 흔한 한 글자 질의를 함께. 키 입력마다 30 ms 안이어야 한다.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -37,6 +37,10 @@ use pw_index::SymbolIndex;
 use pw_index::methods::IndexSymbolSearchParams;
 use semver::Version;
 use tokio_util::sync::CancellationToken;
+
+#[path = "support/perf_repo.rs"]
+mod perf_repo;
+use perf_repo::{FILES, SYMBOLS_PER_FILE};
 
 /// 이 바이너리의 Rust 힙(살아 있는 바이트).
 struct Counting;
@@ -81,141 +85,15 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
 
-const FILES: usize = 20_000;
 /// 목표의 기준 기기(코어 8).
 const EIGHT_CORES: usize = 8;
-const SYMBOLS_PER_FILE: usize = 25;
 const TARGET_FIRST_INDEX: Duration = Duration::from_secs(15);
 const TARGET_MEMORY_BYTES: isize = 120 * 1024 * 1024;
 const TARGET_QUERY: Duration = Duration::from_millis(30);
 
-/// 메서드 하나의 본문(문장 여러 줄 — 심볼당 바이트를 이 저장소의 실제 코드 비율 400 ~ 500 B 에 맞춘다, 리뷰 L3). `{in}` 은 들여쓰기.
-fn body(lang: usize) -> &'static str {
-    match lang {
-        0 => {
-            "        // Doubles the input, then folds a few steps of noise into it.\n        let doubled = input * 2;\n        let mut total = doubled;\n        for step in 0..input.min(16) {\n            total = total.wrapping_add(step * 3 + 1);\n            if total % 7 == 0 {\n                total /= 2;\n            }\n        }\n        let label = format!(\"{total}:{doubled}\");\n        total + label.len() as u64\n"
-        }
-        1 => {
-            "    // Doubles the input, then folds a few steps of noise into it.\n    const doubled = input * 2;\n    let total = doubled;\n    for (let step = 0; step < Math.min(input, 16); step++) {\n      total += step * 3 + 1;\n      if (total % 7 === 0) {\n        total = Math.floor(total / 2);\n      }\n    }\n    const label = `${total}:${doubled}`;\n    return total + label.length;\n"
-        }
-        2 => {
-            "        # Doubles the value, then folds a few steps of noise into it.\n        doubled = value * 2\n        total = doubled\n        for step in range(min(value, 16)):\n            total += step * 3 + 1\n            if total % 7 == 0:\n                total //= 2\n        label = f\"{total}:{doubled}\"\n        return total + len(label)\n"
-        }
-        3 => {
-            "        // Doubles the input, then folds a few steps of noise into it.\n        int doubled = input * 2;\n        int total = doubled;\n        for (int step = 0; step < Math.min(input, 16); step++) {\n            total += step * 3 + 1;\n            if (total % 7 == 0) {\n                total /= 2;\n            }\n        }\n        String label = total + \":\" + doubled;\n        return total + label.length();\n"
-        }
-        4 => {
-            "        // Doubles the input, then folds a few steps of noise into it.\n        val doubled = input * 2\n        var total = doubled\n        for (step in 0 until minOf(input, 16)) {\n            total += step * 3 + 1\n            if (total % 7 == 0) {\n                total /= 2\n            }\n        }\n        val label = \"$total:$doubled\"\n        return total + label.length\n"
-        }
-        _ => {
-            "    // Doubles the input, then folds a few steps of noise into it.\n    const doubled = input * 2;\n    let total = doubled;\n    for (let step = 0; step < Math.min(input, 16); step++) {\n      total += step * 3 + 1;\n      if (total % 7 === 0) {\n        total = Math.floor(total / 2);\n      }\n    }\n    const label = `${total}:${doubled}`;\n    return total + label.length;\n"
-        }
-    }
-}
-
-/// 파일 `i` 의 (상대 경로, 내용). 심볼은 정확히 [`SYMBOLS_PER_FILE`] 개.
-fn file(i: usize) -> (String, String) {
-    let dir = format!("pkg{:03}/mod{:02}", i / 200, (i / 10) % 20);
-    let methods = SYMBOLS_PER_FILE - 1;
-    let mut s = String::new();
-    let verbs = ["handle", "render", "parse", "load", "update", "compute"];
-    let name = |k: usize| format!("{}Item{i}x{k}", verbs[k % verbs.len()]);
-    let lang = i % 6;
-    let b = body(lang);
-    match lang {
-        0 => {
-            let _ = writeln!(s, "pub struct Widget{i};\n\nimpl Widget{i} {{");
-            for k in 0..methods - 1 {
-                let _ = writeln!(
-                    s,
-                    "    /// Computes one item of the widget.\n    pub fn {}(&self, input: u64) -> u64 {{\n{b}    }}\n",
-                    name(k)
-                );
-            }
-            s.push_str("}\n");
-            (format!("{dir}/widget{i}.rs"), s)
-        }
-        1 => {
-            let _ = writeln!(s, "export class Widget{i} {{");
-            for k in 0..methods {
-                let _ = writeln!(
-                    s,
-                    "  /** Computes one item of the widget. */\n  {}(input: number): number {{\n{b}  }}\n",
-                    name(k)
-                );
-            }
-            s.push_str("}\n");
-            (format!("{dir}/widget{i}.ts"), s)
-        }
-        2 => {
-            let _ = writeln!(s, "class Widget{i}:");
-            for k in 0..methods {
-                let _ = writeln!(
-                    s,
-                    "    def {}(self, value):\n        \"\"\"Computes one item of the widget.\"\"\"\n{b}",
-                    name(k)
-                );
-            }
-            (format!("{dir}/widget{i}.py"), s)
-        }
-        3 => {
-            let _ = writeln!(s, "package demo;\n\npublic class Widget{i} {{");
-            for k in 0..methods {
-                let _ = writeln!(
-                    s,
-                    "    /** Computes one item of the widget. */\n    public int {}(int input) {{\n{b}    }}\n",
-                    name(k)
-                );
-            }
-            s.push_str("}\n");
-            (format!("{dir}/Widget{i}.java"), s)
-        }
-        4 => {
-            let _ = writeln!(s, "package demo\n\nclass Widget{i} {{");
-            for k in 0..methods {
-                let _ = writeln!(
-                    s,
-                    "    /** Computes one item of the widget. */\n    fun {}(input: Int): Int {{\n{b}    }}\n",
-                    name(k)
-                );
-            }
-            s.push_str("}\n");
-            (format!("{dir}/Widget{i}.kt"), s)
-        }
-        _ => {
-            let _ = writeln!(s, "export class Widget{i} {{");
-            for k in 0..methods {
-                let _ = writeln!(
-                    s,
-                    "  /** Computes one item of the widget. */\n  {}(input) {{\n{b}  }}\n",
-                    name(k)
-                );
-            }
-            s.push_str("}\n");
-            (format!("{dir}/widget{i}.js"), s)
-        }
-    }
-}
-
-/// 합성 저장소. 다 만든 뒤 표식을 쓰고, 표식이 있으면 다시 만들지 않는다.
+/// 합성 저장소(`support/perf_repo.rs`). 한 번 만들고 다시 쓴다.
 fn repository() -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("perf-index-v3");
-    let marker = dir.join(".pitwall-perf-ready");
-    if marker.exists() {
-        return dir;
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).unwrap();
-    let mut bytes = 0usize;
-    for i in 0..FILES {
-        let (rel, text) = file(i);
-        let path = dir.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        bytes += text.len();
-        std::fs::write(path, text).unwrap();
-    }
-    std::fs::write(&marker, bytes.to_string()).unwrap();
-    dir
+    perf_repo::ensure(&PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("perf-index-v3"))
 }
 
 fn rss_bytes() -> Option<u64> {
@@ -255,7 +133,7 @@ async fn twenty_thousand_files_index_within_the_targets() {
     let made = Instant::now();
     let root = simplify(std::fs::canonicalize(repository()).unwrap());
     println!("machine: {}", machine());
-    let bytes: u64 = std::fs::read_to_string(root.join(".pitwall-perf-ready"))
+    let bytes: u64 = std::fs::read_to_string(root.join(perf_repo::MARKER))
         .ok()
         .and_then(|b| b.trim().parse().ok())
         .unwrap_or(0);
