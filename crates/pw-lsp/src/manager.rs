@@ -2453,6 +2453,26 @@ impl LspManager {
         })
     }
 
+    /// 인스턴스 `key` 에 지금 열린 진행(`$/progress`)의 제목 모두 — 상태(`LspInstanceStatus::progress`)의 가장 최근 하나가 아니라.
+    /// 인스턴스가 없으면 빈 목록. 포맷(M4-13)이 서버 정의의 「포맷 답을 믿지 않을 진행」 과 견준다.
+    ///
+    /// 진행 알림은 서버의 이벤트 채널을 거쳐 여기에 들어오고 요청의 답은 곧바로 돌아오므로, 서버가 답 바로 앞에 보낸 begin 은 그
+    /// 답을 받은 순간 아직 안 들어와 있을 수 있다(그 사이는 이벤트 처리 한 번).
+    pub fn open_progress_titles(&self, key: &InstanceKey) -> Vec<String> {
+        let state = lock(&self.inner.state);
+        state
+            .instances
+            .get(key)
+            .map(|i| i.progress.titles())
+            .unwrap_or_default()
+    }
+
+    /// 인스턴스 `key` 를 띄운 설정(정의 위에 설정을 합친 것). 떠 있지 않으면 `None`.
+    pub fn instance_config(&self, key: &InstanceKey) -> Option<Arc<ServerConfig>> {
+        let state = lock(&self.inner.state);
+        state.instances.get(key).and_then(|i| i.config.clone())
+    }
+
     /// 처리기가 쥘 약한 참조(서버 → 처리기 → 관리자로 순환하지 않게).
     pub(crate) fn downgrade(&self) -> WeakLspManager {
         WeakLspManager(Arc::downgrade(&self.inner))

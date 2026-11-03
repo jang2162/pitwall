@@ -132,6 +132,11 @@ impl Tracker {
             .map(|a| a.info.clone())
     }
 
+    /// 지금 열린 진행의 제목 모두(토큰 차례).
+    pub(crate) fn titles(&self) -> Vec<String> {
+        self.active.values().map(|a| a.info.title.clone()).collect()
+    }
+
     /// 모든 진행을 끝낸다(서버가 끝났다).
     pub(crate) fn end_all(&mut self) {
         self.active.clear();
@@ -223,5 +228,33 @@ mod tests {
         )));
         assert_eq!(tracker.active.len(), MAX_ACTIVE);
         assert_eq!(tracker.latest().unwrap().title, "t");
+    }
+
+    /// M4-13: 열린 진행의 제목은 모두 보인다 — 나중에 바뀐 진행이 앞의 것을 가리지 않는다. 끝난 진행은 빠진다.
+    #[tokio::test]
+    async fn every_open_progress_title_is_listed_not_only_the_latest() {
+        let tasks = TaskSpawner::new(
+            EventBus::new(DEFAULT_CAPACITY),
+            Scope::Host,
+            CancellationToken::new(),
+        );
+        let mut tracker = Tracker::default();
+        let handle = |t: &mut Tracker, p: Value| t.handle(&p, &tasks, "p", Weak::new());
+        handle(
+            &mut tracker,
+            progress(1, json!({ "kind": "begin", "title": "Roots Scanned" })),
+        );
+        handle(
+            &mut tracker,
+            progress(2, json!({ "kind": "begin", "title": "Indexing" })),
+        );
+        handle(
+            &mut tracker,
+            progress(2, json!({ "kind": "report", "percentage": 50 })),
+        );
+        assert_eq!(tracker.latest().unwrap().title, "Indexing");
+        assert_eq!(tracker.titles(), ["Roots Scanned", "Indexing"]);
+        handle(&mut tracker, progress(1, json!({ "kind": "end" })));
+        assert_eq!(tracker.titles(), ["Indexing"]);
     }
 }
