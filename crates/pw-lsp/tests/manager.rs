@@ -734,7 +734,16 @@ async fn documents_over_the_edit_tier_never_reach_the_server() {
         .await
         .unwrap();
     assert_eq!(result["off"], "tooLarge");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // 정해진 잠 대신 `didClose` 가 적히기를 기다린다 — 서버로 가는 글은 한 줄로 나가므로, 잘못 보낸 큰 문서의 `didOpen` ·
+    // 넘은 편집의 `didChange` 가 있었다면 그 앞에 이미 적혀 있다.
+    assert!(
+        eventually(Duration::from_secs(2), || !methods_of(
+            &record,
+            "textDocument/didClose"
+        )
+        .is_empty())
+        .await
+    );
     assert_eq!(methods_of(&record, "textDocument/didOpen").len(), 1);
     assert!(methods_of(&record, "textDocument/didChange").is_empty());
     assert_eq!(methods_of(&record, "textDocument/didClose").len(), 1);
@@ -881,9 +890,6 @@ async fn features_go_to_the_first_capable_enabled_server() {
     env.wait_state("basedpyright", LspInstanceState::Ready)
         .await;
     env.wait_state("ruff", LspInstanceState::Ready).await;
-    for record in [&pyright, &ruff] {
-        assert_eq!(methods_of(record, "textDocument/didOpen").len(), 1);
-    }
     let hover = win
         .call(
             "test.lsp.feature",
@@ -906,6 +912,13 @@ async fn features_go_to_the_first_capable_enabled_server() {
         (format["server"].clone(), format["result"].clone()),
         (json!("ruff"), json!("ruff"))
     );
+    // 기록은 여기서 센다 — `Ready` 직후에 세면 0 개로 들쭉날쭉하다. 관리자는 `Ready` 를 세울 때 `didOpen` 을 보낼 줄에
+    // 넣을 뿐이고, 가짜 서버가 파이프에서 읽어 기록 파일에 적는 것은 그 뒤다. 한 서버로 가는 글은 한 줄로 나가고 가짜 서버는
+    // 읽은 차례대로 적은 뒤 답하므로, 각 서버가 `didOpen` 뒤에 보낸 요청(basedpyright 는 hover, ruff 는 포맷)에 답했으면
+    // 그 서버의 `didOpen` 은 이미 적혀 있다.
+    for record in [&pyright, &ruff] {
+        assert_eq!(methods_of(record, "textDocument/didOpen").len(), 1);
+    }
 }
 
 /// 서버 런타임(`requires`)을 찾지 못하면 `runtimeMissing` 이고 띄우지 않는다 — TS 서버는 node ≥ 20 이 필요한데 가짜 셸의 PATH 에
