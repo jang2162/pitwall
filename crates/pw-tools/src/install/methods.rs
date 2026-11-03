@@ -10,7 +10,9 @@ use pw_rpc::{Ctx, JsNumber, Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use super::{InstallOutcome, ToolsInstaller, consent, source_domains, tool_grant};
-use crate::methods::ToolChecksum;
+use crate::methods::{
+    ToolChecksum, ToolsRegistrySetModeMethod, ToolsRegistrySetModeParams, status_of,
+};
 use crate::package::PurlKind;
 use crate::target::ToolTarget;
 
@@ -257,9 +259,27 @@ fn grant_of(installer: &ToolsInstaller, ctx: &Ctx) -> Result<super::ToolGrant, R
 
 pub fn register(router: &mut Router, installer: Arc<ToolsInstaller>) {
     let i = || Arc::clone(&installer);
-    let (list, updates, log, install, update, rollback, uninstall) =
-        (i(), i(), i(), i(), i(), i(), i());
+    let (list, updates, log, install, update, rollback, uninstall, set_mode) =
+        (i(), i(), i(), i(), i(), i(), i(), i());
     router
+        .unary(
+            ToolsRegistrySetModeMethod,
+            move |ctx, params: ToolsRegistrySetModeParams| {
+                let r = Arc::clone(&set_mode);
+                let grant = grant_of(&r, &ctx);
+                async move {
+                    grant?;
+                    let registry = r.registry();
+                    let w = Arc::clone(registry);
+                    tokio::task::spawn_blocking(move || w.set_mode(params.mode))
+                        .await
+                        .map_err(|e| RpcError::internal(e.to_string()))?
+                        .map_err(RpcError::internal)?;
+                    registry.ensure().await;
+                    Ok(status_of(registry))
+                }
+            },
+        )
         .unary(ToolsListMethod, move |_ctx, ()| {
             let r = Arc::clone(&list);
             async move { list_of(&r) }

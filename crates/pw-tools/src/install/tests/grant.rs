@@ -114,6 +114,8 @@ async fn file_mcp_and_welcome_connections_cannot_install() {
         ("tools.update", json!({"name": "demo"})),
         ("tools.rollback", json!({"name": "demo"})),
         ("tools.uninstall", json!({"name": "demo"})),
+        // 「최신 registry 사용」 도 설치와 같은 범위다(M4-17 리뷰 L3) — 고정 해시 밖의 판을 받게 하는 스위치.
+        ("tools.registry.setMode", json!({"mode": "latest"})),
     ];
     for (label, caller) in &callers {
         for (method, params) in &calls {

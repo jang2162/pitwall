@@ -186,7 +186,8 @@ rpc_method! {
     }
 
     /// 설정 `[tools] registry` 를 바꾼다(설정 창 「도구」 의 「최신 registry 사용」 — M4-17, `settings.toml` 의 그 키 하나만 쓴다).
-    /// 바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다.
+    /// 바뀐 모드로 가져오기를 뒤에서 시작하고 지금 상태를 돌려준다. 「최신」 은 고정 해시 밖의 판을 받게 하는 스위치라 설치와 같은
+    /// 연결 범위(`ToolGrant` — 설정 창 · 프로젝트 창)만 받는다 — 붙이는 곳은 `install::methods::register`.
     pub ToolsRegistrySetModeMethod: "tools.registry.setMode" {
         params: ToolsRegistrySetModeParams,
         result: ToolsRegistryStatus,
@@ -202,11 +203,7 @@ rpc_method! {
 }
 
 pub fn register(router: &mut Router, registry: Arc<ToolsRegistry>) {
-    let (status, search, set_mode) = (
-        Arc::clone(&registry),
-        Arc::clone(&registry),
-        Arc::clone(&registry),
-    );
+    let (status, search) = (Arc::clone(&registry), Arc::clone(&registry));
     router
         .unary(ToolsRegistryStatusMethod, move |_ctx, ()| {
             let r = Arc::clone(&status);
@@ -222,21 +219,6 @@ pub fn register(router: &mut Router, registry: Arc<ToolsRegistry>) {
                 async move {
                     r.ensure().await;
                     search_in(&r, &params)
-                }
-            },
-        )
-        .unary(
-            ToolsRegistrySetModeMethod,
-            move |_ctx, params: ToolsRegistrySetModeParams| {
-                let r = Arc::clone(&set_mode);
-                async move {
-                    let w = Arc::clone(&r);
-                    tokio::task::spawn_blocking(move || w.set_mode(params.mode))
-                        .await
-                        .map_err(|e| RpcError::internal(e.to_string()))?
-                        .map_err(RpcError::internal)?;
-                    r.ensure().await;
-                    Ok(status_of(&r))
                 }
             },
         )
