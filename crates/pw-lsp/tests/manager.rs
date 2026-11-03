@@ -1064,6 +1064,8 @@ async fn the_project_jdk_reaches_jdtls_the_same_way_on_both_paths() {
         &jdk17.join("bin/java"),
         "echo 'openjdk version \"17.0.2\" 2022-01-18' >&2",
     );
+    // JDK 폴더의 표지 — 없으면 프로젝트 JDK 로 치지 않는다.
+    std::fs::write(jdk17.join("release"), "JAVA_VERSION=\"17.0.2\"\n").unwrap();
     std::os::unix::fs::symlink(jdk17.join("bin/java"), env.bin.join("java")).unwrap();
     // 서버 런타임은 mise 설치 폴더의 25(가짜 셸의 HOME 아래).
     executable(

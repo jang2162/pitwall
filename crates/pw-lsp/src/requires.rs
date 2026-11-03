@@ -62,12 +62,50 @@ pub fn find_project_jdk(env: &RuntimeEnv) -> Option<ProjectJdk> {
         } else {
             version.major
         };
-        let real = std::fs::canonicalize(&exe).unwrap_or(exe);
-        let bin = real.parent()?;
-        let home = bin.parent().unwrap_or(bin).to_path_buf();
+        // 이 경로는 jdtls 에 JDK 로 간다 — JDK 가 아닌 폴더를 보내면 jdtls 가 조용히 다른 JDK 로 빌드한다. asdf · jenv 의 shim 은
+        // 링크가 아니라 스크립트라 풀리지 않으므로, 두 단계 위가 JDK 가 아니면 JVM 이 알려 주는 `java.home` 을 읽는다.
+        let real = std::fs::canonicalize(&exe).unwrap_or_else(|_| exe.clone());
+        let beside = real.parent().and_then(Path::parent).map(Path::to_path_buf);
+        let home = beside
+            .filter(|home| is_jdk_home(home))
+            .or_else(|| java_home_property(&exe, env));
+        let Some(home) = home else {
+            tracing::debug!(target: "pw_lsp", exe = %exe.display(), "project java has no JDK home we can name");
+            return None;
+        };
         return Some(ProjectJdk { home, major });
     }
     None
+}
+
+/// JDK(또는 JRE)의 설치 폴더인가 — 9 부터는 `lib/modules`, 모든 판의 설치본에 `release` 가 있다.
+fn is_jdk_home(home: &Path) -> bool {
+    home.join("release").is_file() || home.join("lib").join("modules").is_file()
+}
+
+/// `java -XshowSettings:properties -version` 이 알려 주는 `java.home`(shim 이 실제 JDK 로 실행을 넘기므로 실제 위치가 나온다).
+/// 8 은 `<JDK>/jre` 를 알려 주므로 그 부모가 JDK 면 부모. JDK 폴더가 아니면 `None`.
+fn java_home_property(exe: &Path, env: &RuntimeEnv) -> Option<PathBuf> {
+    let output = run(
+        exe,
+        &[
+            OsStr::new("-XshowSettings:properties"),
+            OsStr::new("-version"),
+        ],
+        Some(env),
+    )?;
+    let value = output.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "java.home").then(|| value.trim().to_owned())
+    })?;
+    let home = PathBuf::from(value);
+    let home = std::fs::canonicalize(&home).unwrap_or(home);
+    if home.file_name() == Some(OsStr::new("jre"))
+        && let Some(jdk) = home.parent().filter(|jdk| is_jdk_home(jdk))
+    {
+        return Some(jdk.to_path_buf());
+    }
+    is_jdk_home(&home).then_some(home)
 }
 
 /// 런타임의 실행 파일 이름(찾는 순서).
@@ -402,11 +440,13 @@ mod tests {
             &jdk17.join("bin/java"),
             "echo 'openjdk version \"17.0.2\" 2022-01-18' >&2",
         );
+        fs::write(jdk17.join("release"), "JAVA_VERSION=\"17.0.2\"\n").unwrap();
         let jdk8 = base.join("jdk8");
         script(
             &jdk8.join("bin/java"),
             "echo 'java version \"1.8.0_292\"' >&2",
         );
+        fs::write(jdk8.join("release"), "JAVA_VERSION=\"1.8.0_292\"\n").unwrap();
         let shims = base.join("shims");
         fs::create_dir_all(&shims).unwrap();
         std::os::unix::fs::symlink(jdk17.join("bin/java"), shims.join("java")).unwrap();
@@ -442,5 +482,53 @@ mod tests {
             &[("MISE_DATA_DIR", &base.join("mise"))],
         );
         assert_eq!(find_project_jdk(&e), None);
+    }
+
+    /// asdf · jenv 의 shim 은 링크가 아니라 스크립트다 — 두 단계 위(`~/.asdf`)는 JDK 가 아니므로 JVM 이 알려 주는 `java.home` 을
+    /// 쓴다. 그것도 JDK 폴더가 아니면(또는 알려 주지 않으면) 프로젝트 JDK 는 없다 — JDK 가 아닌 경로를 jdtls 에 보내지 않는다.
+    #[test]
+    fn a_script_shim_resolves_to_the_jdk_it_runs_or_to_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(tmp.path()).unwrap();
+        let jdk17 = base.join("jdk17");
+        fs::create_dir_all(jdk17.join("lib")).unwrap();
+        fs::write(jdk17.join("lib/modules"), "").unwrap();
+        let version = "echo 'openjdk version \"17.0.2\" 2022-01-18' >&2";
+
+        // shim 이 실제 JDK 로 실행을 넘긴다 — `java.home` 이 그 JDK.
+        let shims = base.join(".asdf/shims");
+        script(
+            &shims.join("java"),
+            &format!(
+                "[ \"$1\" = -XshowSettings:properties ] && echo '    java.home = {}' >&2\n{version}",
+                jdk17.display()
+            ),
+        );
+        let e = env(&[&shims], &[]);
+        assert_eq!(
+            find_project_jdk(&e),
+            Some(ProjectJdk {
+                home: jdk17.clone(),
+                major: 17
+            })
+        );
+
+        // 판은 맞게 찍지만 `java.home` 을 알려 주지 않는 shim — 두 단계 위(`.jenv`)는 JDK 가 아니다.
+        let jenv = base.join(".jenv/shims");
+        script(&jenv.join("java"), version);
+        assert_eq!(find_project_jdk(&env(&[&jenv], &[])), None);
+
+        // `java.home` 이 가리키는 곳에 `release` · `lib/modules` 가 없으면 JDK 가 아니다.
+        let not_jdk = base.join("not-a-jdk");
+        fs::create_dir_all(&not_jdk).unwrap();
+        let liar = base.join("liar/shims");
+        script(
+            &liar.join("java"),
+            &format!(
+                "[ \"$1\" = -XshowSettings:properties ] && echo '    java.home = {}' >&2\n{version}",
+                not_jdk.display()
+            ),
+        );
+        assert_eq!(find_project_jdk(&env(&[&liar], &[])), None);
     }
 }
