@@ -1,0 +1,112 @@
+# jdtls(결정 M4-D4 · 15-m4-plan.md M4-18): registry 정의는 ① 스냅숏 주소(download.eclipse.org/jdtls/snapshots — 서버에서
+# 지워진다) ② 판 없는 lombok 주소(projectlombok.org/downloads/lombok.jar — 같은 주소의 내용이 바뀐다) ③ python 런처
+# (`bin: python:bin/jdtls`)라 그대로 쓰지 않는다. 같은 판의 정식 마일스톤 · 판 고정 lombok(Maven Central)을 받고, 설치 폴더에
+# Pitwall 의 런처(`pitwall/jdtls` — 셸 · cmd)를 두어 `java -jar plugins/org.eclipse.equinox.launcher_*.jar` 로 바로 띄운다.
+# 런처는 JAVA_HOME 의 java 를 쓴다 — 서버 관리자가 정의의 `requires java`(extensions/lang-java — JDK 25, jdtls 1.62.0 부터
+# 번들이 JavaSE-25 를 요구한다)로 찾은 JDK 다. 작업 공간 색인 폴더(`-data`)는 JDTLS_DATA, 없으면 사용자 캐시 아래 프로젝트
+# 폴더마다 하나(registry 의 python 런처와 같은 자리 — 이름만 프로젝트 경로 전체에서 만든다).
+# 받을 것을 바꾸면 `node scripts/tools-registry-bump.mjs bump <지금 판>` 으로 registry.toml 의 고정 해시를 다시 적는다.
+reason = "the registry definition downloads a snapshot that the server deletes, an unversioned lombok.jar and runs a python launcher"
+version = "v1.63.0"
+
+# `config` 는 registry 정의의 `share` 표현식(`{{source.download.config}}`)이 읽는다 — 대상마다 registry 와 같은 값.
+[[download]]
+target = ["darwin_x64", "darwin_arm64"]
+files = { "jdtls.tar.gz" = "https://download.eclipse.org/jdtls/milestones/{{ version | strip_prefix \"v\" }}/jdt-language-server-{{ version | strip_prefix \"v\" }}-202610191322.tar.gz", "lombok.jar" = "https://repo1.maven.org/maven2/org/projectlombok/lombok/1.18.48/lombok-1.18.48.jar" }
+config = "config_mac/"
+
+[[download]]
+target = "linux"
+files = { "jdtls.tar.gz" = "https://download.eclipse.org/jdtls/milestones/{{ version | strip_prefix \"v\" }}/jdt-language-server-{{ version | strip_prefix \"v\" }}-202610191322.tar.gz", "lombok.jar" = "https://repo1.maven.org/maven2/org/projectlombok/lombok/1.18.48/lombok-1.18.48.jar" }
+config = "config_linux/"
+
+[[download]]
+target = "win"
+files = { "jdtls.tar.gz" = "https://download.eclipse.org/jdtls/milestones/{{ version | strip_prefix \"v\" }}/jdt-language-server-{{ version | strip_prefix \"v\" }}-202610191322.tar.gz", "lombok.jar" = "https://repo1.maven.org/maven2/org/projectlombok/lombok/1.18.48/lombok-1.18.48.jar" }
+config = "config_win/"
+
+[bin]
+jdtls = "pitwall/jdtls"
+
+# 셸 런처. 실행 링크($DATA/tools/bin/jdtls)로 불려도 링크를 따라가 설치 폴더를 찾는다. JVM 인자는 registry 의 python 런처
+# (bin/jdtls.py)와 같다(JDK 24+ 의 XML 상한 두 개는 판과 무관하게 준다 — 시스템 속성이라 옛 JDK 에도 해가 없다). lombok.jar 가
+# 있으면 javaagent 로 싣는다. OSGi 의 설치별 설정 폴더(`-configuration`)는 작업 공간 색인 폴더 아래에 둔다 — 설치 폴더를 함께 쓰는
+# 서버 둘이 같은 설정 폴더를 잠그지 않게.
+[launcher."pitwall/jdtls"]
+sh = '''
+#!/bin/sh
+set -e
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
+done
+base=$(cd "$(dirname "$self")/.." && pwd -P)
+if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+  java=$JAVA_HOME/bin/java
+else
+  java=java
+fi
+case $(uname -s) in
+  Darwin) config=config_mac; cache=${HOME:-/tmp}/Library/Caches ;;
+  *) config=config_linux; cache=${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache} ;;
+esac
+launcher=
+for jar in "$base"/plugins/org.eclipse.equinox.launcher_*.jar; do
+  launcher=$jar
+done
+if [ ! -f "$launcher" ]; then
+  echo "jdtls: no equinox launcher under $base/plugins" >&2
+  exit 1
+fi
+data=${JDTLS_DATA:-$cache/jdtls/pitwall-$(printf '%s' "$PWD" | cksum | cut -d ' ' -f 1)}
+agent=
+if [ -f "$base/lombok.jar" ]; then
+  agent=-javaagent:$base/lombok.jar
+fi
+exec "$java" \
+  -Djdk.xml.maxGeneralEntitySizeLimit=0 -Djdk.xml.totalEntitySizeLimit=0 \
+  -Declipse.application=org.eclipse.jdt.ls.core.id1 \
+  -Dosgi.bundles.defaultStartLevel=4 \
+  -Declipse.product=org.eclipse.jdt.ls.core.product \
+  -Dosgi.checkConfiguration=true \
+  "-Dosgi.sharedConfiguration.area=$base/$config" \
+  -Dosgi.sharedConfiguration.area.readOnly=true \
+  -Dosgi.configuration.cascaded=true \
+  -Xms1G \
+  --add-modules=ALL-SYSTEM \
+  --add-opens java.base/java.util=ALL-UNNAMED \
+  --add-opens java.base/java.lang=ALL-UNNAMED \
+  ${agent:+"$agent"} \
+  -jar "$launcher" \
+  -configuration "$data/.osgi" \
+  -data "$data" \
+  "$@"
+'''
+# Windows 런처(Windows 의 JVM 서버 실기 확인은 이후 — 15 §3). 작업 공간 색인 폴더 이름은 지금 폴더 경로에서 `\` · `:` 를 바꿔
+# 만든다(cmd 에 해시가 없다).
+cmd = '''
+@echo off
+setlocal
+set "BASE=%~dp0.."
+set "JAVA=java"
+if defined JAVA_HOME if exist "%JAVA_HOME%\bin\java.exe" set "JAVA=%JAVA_HOME%\bin\java.exe"
+set "LAUNCHER="
+for %%f in ("%BASE%\plugins\org.eclipse.equinox.launcher_*.jar") do set "LAUNCHER=%%~ff"
+if not defined LAUNCHER (
+  echo jdtls: no equinox launcher under %BASE%\plugins 1>&2
+  exit /b 1
+)
+set "DATA=%JDTLS_DATA%"
+if not defined DATA (
+  set "NAME=%CD::=%"
+  call set "NAME=%%NAME:\=_%%"
+  call set "DATA=%%LOCALAPPDATA%%\jdtls\pitwall-%%NAME%%"
+)
+set "AGENT="
+if exist "%BASE%\lombok.jar" set "AGENT=-javaagent:%BASE%\lombok.jar"
+"%JAVA%" -Djdk.xml.maxGeneralEntitySizeLimit=0 -Djdk.xml.totalEntitySizeLimit=0 -Declipse.application=org.eclipse.jdt.ls.core.id1 -Dosgi.bundles.defaultStartLevel=4 -Declipse.product=org.eclipse.jdt.ls.core.product -Dosgi.checkConfiguration=true "-Dosgi.sharedConfiguration.area=%BASE%\config_win" -Dosgi.sharedConfiguration.area.readOnly=true -Dosgi.configuration.cascaded=true -Xms1G --add-modules=ALL-SYSTEM --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED %AGENT% -jar "%LAUNCHER%" -configuration "%DATA%\.osgi" -data "%DATA%" %*
+'''
