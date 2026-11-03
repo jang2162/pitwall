@@ -3,8 +3,10 @@
 //
 // - 두 길은 따로 「요청 하나씩 · 마지막 것만 이어 보냄」(M1-19 의 파일 검색과 같은 규칙 — file-search.ts): 도는 동안 친 글자는 마지막
 //   것만 남겼다가 답이 오면 보낸다. 느린 서버가 인덱스의 차례를 막지 않는다.
-// - 합치기: 같은 (파일, 줄, 이름)은 하나로, 서버 결과를 앞에(서버의 정의 순서 · 서버가 준 순서), 그 뒤 인덱스 결과(점수순). 파일은
-//   루트 기준 상대 경로로 맞춘다 — 루트가 심링크를 지나도 두 출처의 열쇠가 같다.
+// - 합치기: 같은 심볼은 하나로, 서버 결과를 앞에(서버의 정의 순서 · 서버가 준 순서), 그 뒤 인덱스 결과(점수순). 같은 심볼은 같은
+//   파일 · 같은 이름이고 줄이 같거나 서버 범위가 인덱스의 이름 줄을 담는 것이다(`mergeSymbols` — 서버에 따라 데코레이터 줄 · 선언의
+//   처음을 준다). 합친 줄의 위치 · 종류 · 열쇠는 인덱스 것이다. 파일은 루트 기준 상대 경로로 맞춘다 — 루트가 심링크를 지나도 두
+//   출처의 열쇠가 같다.
 // - 200 ms 규칙: 인덱스 답이 와도 서버 답을 `LSP_GRACE_MS` 까지 기다렸다 함께 그린다(목록이 두 번 뒤바뀌지 않게). 그때까지 서버가
 //   답하지 않으면 인덱스 결과를 먼저 그리고 서버 답이 오면 앞에 더한다. 지난 답에서 물을 서버가 없었으면(미신뢰 · 서버 없음 · 준비
 //   전) 기다리지 않는다. 서버 쪽 실패는 조용히 넘긴다(인덱스 결과만 — 미신뢰면 서버가 없다, 결정 M4-D8).
@@ -371,12 +373,24 @@ export class SymbolSearch {
     // 않는다 — 지난 결과 · 「바쁨」 표시를 지우지 않게.
     const lspRows = (a.lsp?.symbols.length ?? 0) > 0;
     if (!(indexIn && !waitLsp) && !lspRows) {
+      if (a.indexError !== undefined) {
+        // 인덱스가 (바쁨이 아닌) 실패를 냈고 서버 결과도 없다 — 지난 질의의 결과를 이 질의의 것처럼 남기지 않는다(고르면 열린다).
+        this.set({
+          query: a.wanted.text,
+          types: a.wanted.types,
+          scope: a.wanted.scope,
+          rows: [],
+          truncated: false,
+          lspPending: !a.lspDone,
+          suspended: a.suspended,
+          error: a.indexError,
+          busy: false,
+          pending: false,
+        });
+        return;
+      }
       // 아직 그릴 것이 없다 — 지난 결과를 두고 상태만.
-      this.set({
-        lspPending: !a.lspDone,
-        suspended: a.suspended,
-        ...(a.indexError !== undefined && { error: a.indexError, busy: false, pending: false }),
-      });
+      this.set({ lspPending: !a.lspDone, suspended: a.suspended });
       return;
     }
     const merged = mergeSymbols(a.lsp, a.index, a.wanted.text, a.wanted.types);
@@ -429,8 +443,32 @@ function keyOf(file: string, line: number, name: string): string {
 }
 
 /**
- * 두 출처를 합친다: 서버 결과(서버의 정의 순서 · 서버가 준 순서)를 앞에, 그 뒤 인덱스 결과(점수순). 같은 (파일, 줄, 이름)은 하나 —
- * 앞의 것(서버)을 두고 열만 인덱스의 이름 자리로 고친다. `types` 면 타입 종류만 남긴다(출처가 거르지 않았어도). 결과 `SYMBOL_LIMIT` 개, 이름 · 컨테이너 `NAME_LIMIT`.
+ * 서버 위치가 이름 줄보다 이만큼 위까지는 같은 심볼로 본다(서버가 범위의 끝을 이름 줄 앞에서 맺은 경우 — 범위가 이름 줄을 담으면
+ * 수와 무관하게 같은 심볼이다).
+ */
+export const NEAR_LINES = 3;
+
+/** 서버 결과 한 줄과 그 위치 범위의 끝 줄(합치기에만 쓴다). */
+interface ServerRow {
+  row: SymbolRow;
+  endLine: number;
+}
+
+/**
+ * 서버 줄 `s` 가 같은 파일 · 같은 이름의 인덱스 줄(이름 줄 `line`)과 같은 심볼인가: 서버의 위치 범위가 그 줄을 담거나, 서버 위치가
+ * 그 줄보다 `NEAR_LINES` 줄 위까지(데코레이터 · 속성 · 이름이 다음 줄인 선언 — 서버에 따라 선언의 처음을 준다,
+ * typescript-language-server 는 데코레이터 줄 1열).
+ */
+function covers(s: ServerRow, line: number): boolean {
+  return line >= s.row.line && (line <= s.endLine || line - s.row.line <= NEAR_LINES);
+}
+
+/**
+ * 두 출처를 합친다: 서버 결과(서버의 정의 순서 · 서버가 준 순서)를 앞에, 그 뒤 인덱스 결과(점수순). 같은 심볼은 하나 — 자리는
+ * 앞(서버의 차례)이고 위치 · 종류 · 열쇠는 인덱스 것이다(서버에 따라 위치가 선언의 처음 · 데코레이터 줄이고, 종류가 거칠다 — TS 의
+ * 타입 별칭은 변수). 같은 심볼: 같은 파일 · 같은 이름이고 먼저 같은 줄을, 없으면 서버 범위가 인덱스의 이름 줄을 담는 것(`covers`
+ * — 서버 위치가 이름 줄에 가까운 것)을 짝짓는다. 한 줄은 한 짝만 갖는다. `types` 면 타입 종류만 남긴다(출처가 거르지 않았어도). 결과
+ * `SYMBOL_LIMIT` 개, 이름 · 컨테이너 `NAME_LIMIT`.
  */
 export function mergeSymbols(
   lsp: LspWorkspaceSymbols | undefined,
@@ -439,52 +477,43 @@ export function mergeSymbols(
   types: boolean,
   limit = SYMBOL_LIMIT,
 ): { rows: SymbolRow[]; truncated: boolean } {
-  const rows: SymbolRow[] = [];
-  /** 열쇠 → `rows` 의 자리. */
-  const seen = new Map<string, number>();
-  let truncated = false;
-  const push = (row: SymbolRow) => {
-    const at = seen.get(row.key);
-    if (at !== undefined) {
-      // 같은 심볼: 앞의 것(서버)을 두되, 인덱스가 아는 이름 자리의 열을 쓴다 — 서버에 따라 선언 줄의 처음(typescript-language-
-      // server 는 1열)을 주므로, 고르면 이름에 커서가 가게.
-      const kept = rows[at]!;
-      if (row.source === "index" && kept.source === "lsp" && kept.column !== row.column)
-        rows[at] = { ...kept, column: row.column };
-      return;
-    }
-    if (types && !TYPE_KINDS.includes(row.kind)) return;
-    if (rows.length >= limit) {
-      truncated = true;
-      return;
-    }
-    seen.set(row.key, rows.length);
-    rows.push(row);
-  };
+  const servers: ServerRow[] = [];
+  const serverKeys = new Set<string>();
   for (const s of lsp?.symbols ?? []) {
     const name = clip(s.name);
     const file = s.relative ?? s.location.path;
-    push({
-      key: keyOf(file, s.location.line, name),
-      name,
-      kind: kindOfLsp(s.kind),
-      ...(s.container && { container: clip(s.container) }),
-      path: s.location.path,
-      ...(s.relative !== null && { relative: s.relative }),
-      line: s.location.line,
-      column: s.location.column,
-      ...(s.location.token && { token: s.location.token }),
-      server: s.server,
-      language: s.language,
-      positions: matchPositions(name, query),
-      source: "lsp",
+    const key = keyOf(file, s.location.line, name);
+    if (serverKeys.has(key)) continue;
+    serverKeys.add(key);
+    servers.push({
+      row: {
+        key,
+        name,
+        kind: kindOfLsp(s.kind),
+        ...(s.container && { container: clip(s.container) }),
+        path: s.location.path,
+        ...(s.relative !== null && { relative: s.relative }),
+        line: s.location.line,
+        column: s.location.column,
+        ...(s.location.token && { token: s.location.token }),
+        server: s.server,
+        language: s.language,
+        positions: matchPositions(name, query),
+        source: "lsp",
+      },
+      endLine: Math.max(s.location.endLine, s.location.line),
     });
   }
+  const indexed: SymbolRow[] = [];
+  const indexKeys = new Set<string>();
   for (const m of index?.symbols ?? []) {
     const name = clip(m.name);
     const line = m.selectionRange.start.line + 1;
-    push({
-      key: keyOf(m.relative, line, name),
+    const key = keyOf(m.relative, line, name);
+    if (indexKeys.has(key)) continue;
+    indexKeys.add(key);
+    indexed.push({
+      key,
       name,
       kind: m.kind,
       ...(m.container && { container: clip(m.container) }),
@@ -496,5 +525,57 @@ export function mergeSymbols(
       source: "index",
     });
   }
+  // 짝짓기: 서버 줄 자리 → 그 짝인 인덱스 줄. 루트 밖 서버 줄(`relative` 없음)은 인덱스에 없으므로 짝이 없다.
+  const pair = new Map<number, SymbolRow>();
+  const paired = new Set<SymbolRow>();
+  const byKey = new Map(servers.map((s, i) => [s.row.key, i]));
+  for (const row of indexed) {
+    const at = byKey.get(row.key);
+    if (at === undefined) continue;
+    pair.set(at, row);
+    paired.add(row);
+  }
+  for (const row of indexed) {
+    if (paired.has(row)) continue;
+    let best: number | undefined;
+    servers.forEach((s, i) => {
+      if (pair.has(i) || s.row.relative !== row.relative || s.row.name !== row.name) return;
+      if (!covers(s, row.line)) return;
+      // 이름 줄에 가까운 것(안에 든 같은 이름 — 데코레이터 클래스 안의 데코레이터 메서드 등). 같은 줄에서 시작하는 서버 줄은 열쇠가
+      // 같아 이미 하나다.
+      if (best === undefined || s.row.line > servers[best]!.row.line) best = i;
+    });
+    if (best === undefined) continue;
+    pair.set(best, row);
+    paired.add(row);
+  }
+  const rows: SymbolRow[] = [];
+  let truncated = false;
+  const push = (row: SymbolRow) => {
+    if (types && !TYPE_KINDS.includes(row.kind)) return;
+    if (rows.length >= limit) {
+      truncated = true;
+      return;
+    }
+    rows.push(row);
+  };
+  servers.forEach((s, i) => {
+    const mate = pair.get(i);
+    // 짝이 있으면 서버의 차례 · 서버 정보(서버 · 언어 · 컨테이너 · 칠하기)를 두고 위치 · 종류 · 열쇠는 인덱스 것 — 고르면 이름에
+    // 커서가 가고, 서버 답이 늦게 와 합쳐져도 열쇠(고른 값)가 그대로다.
+    push(
+      mate === undefined
+        ? s.row
+        : {
+            ...s.row,
+            key: mate.key,
+            kind: mate.kind,
+            path: mate.path,
+            line: mate.line,
+            column: mate.column,
+          },
+    );
+  });
+  for (const row of indexed) if (!paired.has(row)) push(row);
   return { rows, truncated };
 }

@@ -601,6 +601,14 @@ const rows = () =>
       (i) =>
         `${i.getAttribute("data-symbol-source")}:${i.querySelector("[data-symbol-name]")!.textContent}`,
     );
+/** 고른 줄(`source:이름`). */
+const selectedRow = () => {
+  const item = popup()!.querySelector<HTMLElement>('[cmdk-item][aria-selected="true"]');
+  return (
+    item &&
+    `${item.getAttribute("data-symbol-source")}:${item.querySelector("[data-symbol-name]")?.textContent}`
+  );
+};
 const selectedTab = () => popup()!.querySelector("[role=tab][aria-selected=true]")?.textContent;
 const notes = () =>
   [...popup()!.querySelectorAll("[role=status],[role=alert]")].map((n) => n.textContent);
@@ -705,10 +713,39 @@ it("draws the index results first when the server is slow and puts the server's 
   await type("wid");
   await vi.waitFor(() => expect(rows()).toEqual(["index:Widget", "index:wide"]));
   expect(notes()).toContain("언어 서버의 결과를 기다리는 중…");
+  expect(selectedRow()).toBe("index:Widget");
   await vi.waitFor(() => expect(rows()).toEqual(["lsp:WidgetKind", "lsp:Widget", "index:wide"]), {
     timeout: 3000,
   });
   expect(notes()).not.toContain("언어 서버의 결과를 기다리는 중…");
+  // 첫 줄에서 옮기지 않았으면 새 첫 줄을 고른다.
+  expect(selectedRow()).toBe("lsp:WidgetKind");
+});
+
+it("keeps the row the user moved to when the server's results come late on top", async () => {
+  host.symbols = [
+    sym("Widget", "struct", "src/lib.rs", 1),
+    sym("wide", "function", "src/main.rs", 7),
+  ];
+  host.lsp = () => [
+    lspSym("WidgetKind", 10, "src/main.rs", 12),
+    lspSym("Widget", 23, "src/lib.rs", 1),
+  ];
+  host.lspDelay = 800;
+  await mount();
+  await gotoSymbol();
+  await type("wid");
+  await vi.waitFor(() => expect(rows()).toEqual(["index:Widget", "index:wide"]));
+  await press({ code: "ArrowDown", key: "ArrowDown" });
+  expect(selectedRow()).toBe("index:wide");
+  await vi.waitFor(() => expect(rows()).toEqual(["lsp:WidgetKind", "lsp:Widget", "index:wide"]), {
+    timeout: 3000,
+  });
+  // 서버 결과가 위에 붙어도 고른 줄은 그대로 — Enter 가 옮겨 둔 심볼을 연다.
+  expect(selectedRow()).toBe("index:wide");
+  await press({ code: "Enter", key: "Enter" });
+  expect(popup()).toBeNull();
+  await vi.waitFor(() => expect(editorLine()).toEqual([7, 4]));
 });
 
 it("opens a library symbol outside the root read-only through its token", async () => {

@@ -21,6 +21,7 @@ import {
   LSP_GRACE_MS,
   mergeSymbols,
   NAME_LIMIT,
+  NEAR_LINES,
   SYMBOL_LIMIT,
   SymbolSearch,
   type SymbolSearchState,
@@ -329,6 +330,26 @@ describe("SymbolSearch", () => {
     expect(search.get().suspended).toBe(false);
   });
 
+  it("drops the last query's rows when the index fails (not busy) and the servers have none", async () => {
+    const { search, index, lsp } = setup();
+    search.request("wid", false, SCOPE);
+    index.calls[0]!.resolve(indexAnswer([indexMatch("Widget", 3, "struct")]));
+    lsp.calls[0]!.resolve(lspAnswer([]));
+    await flush();
+    expect(names(search.get())).toEqual(["index:Widget"]);
+    search.request("widx", false, SCOPE);
+    index.calls[1]!.reject(new Error("the symbol index broke"));
+    lsp.calls[1]!.resolve(lspAnswer([]));
+    await flush();
+    // 오류와 함께 「wid」 의 결과가 「widx」 의 것처럼 남아 Enter 로 열리지 않는다.
+    expect(search.get()).toMatchObject({
+      query: "widx",
+      rows: [],
+      error: "the symbol index broke",
+    });
+    expect(search.get().busy).toBe(false);
+  });
+
   it("cancels what is in flight when stopped", async () => {
     const { search, index, lsp } = setup();
     search.request("a", false, SCOPE);
@@ -338,7 +359,145 @@ describe("SymbolSearch", () => {
   });
 });
 
+/** 인덱스 줄: 이름이 `line` 줄 `column` 열(1 부터). */
+function indexAt(
+  name: string,
+  line: number,
+  column: number,
+  kind: IndexSymbolKind,
+  file = "src/m4_16_decorated.ts",
+): IndexSymbolMatch {
+  const at = {
+    start: { line: line - 1, character: column - 1 },
+    end: { line: line - 1, character: column - 1 + name.length },
+  };
+  return { ...indexMatch(name, line, kind, file), range: at, selectionRange: at };
+}
+
+/** 서버 줄: `line` ~ `endLine` 줄 범위(서버가 준 그대로). */
+function serverAt(
+  name: string,
+  kind: number,
+  line: number,
+  endLine: number,
+  file = "src/m4_16_decorated.ts",
+): LspWorkspaceSymbol {
+  const base = lspSymbol(name, line, kind, file);
+  return {
+    ...base,
+    container: null,
+    server: "typescript-language-server",
+    language: "TypeScript",
+    location: { ...base.location, column: 1, endLine, endColumn: 2 },
+  };
+}
+
 describe("mergeSymbols", () => {
+  it("merges what typescript-language-server answers for a decorated class and a name on the next line (recorded)", () => {
+    // live `live_lsp_typescript_language_server_workspace_symbols_declaration_start`(typescript-language-server 6.0.2-ts6.0.3,
+    // 픽스처 crates/pw-lsp/tests/fixtures/typescript/src/m4_16_decorated.ts)의 답: 서버는 선언의 처음(데코레이터 줄 · `class` 줄)
+    // 1열과 선언 전체 범위를, 인덱스는 이름 자리를 준다.
+    const lsp = lspAnswer(
+      [serverAt("M416Panel", 5, 9, 14), serverAt("M416Split", 5, 16, 19)],
+      ["typescript-language-server"],
+    );
+    const index = indexAnswer([
+      indexAt("M416Panel", 12, 32, "class"),
+      indexAt("M416Split", 17, 17, "class"),
+    ]);
+    const { rows } = mergeSymbols(lsp, index, "m416", false);
+    expect(rows.map((r) => [r.source, r.name, r.line, r.column, r.kind])).toEqual([
+      ["lsp", "M416Panel", 12, 32, "class"],
+      ["lsp", "M416Split", 17, 17, "class"],
+    ]);
+    // 열쇠 · 연 경로는 인덱스 것(서버 답이 늦게 와 합쳐져도 고른 값이 그대로다).
+    expect(rows[0]!.key).toBe("src/m4_16_decorated.ts\n12\nM416Panel");
+    expect(rows[0]!.path).toBe("/work/demo/src/m4_16_decorated.ts");
+    expect(rows[0]!.server).toBe("typescript-language-server");
+  });
+
+  it("takes the index's kind for a merged row (typescript-language-server calls a type alias a variable)", () => {
+    // 리뷰 재현의 답: `export type AliasThing = …` 이 kind 13(Variable), 줄은 이름 줄과 같다.
+    const lsp = lspAnswer([serverAt("AliasThing", 13, 9, 9)]);
+    const index = indexAnswer([indexAt("AliasThing", 9, 13, "typeAlias")]);
+    expect(mergeSymbols(lsp, index, "alias", false).rows.map((r) => [r.source, r.kind])).toEqual([
+      ["lsp", "typeAlias"],
+    ]);
+  });
+
+  it("pairs a server position at most NEAR_LINES above the name when its range ends before the name", () => {
+    const near = mergeSymbols(
+      lspAnswer([serverAt("Thing", 5, 3, 3)]),
+      indexAnswer([indexAt("Thing", 3 + NEAR_LINES, 8, "struct")]),
+      "t",
+      false,
+    ).rows;
+    expect(near.map((r) => [r.source, r.line])).toEqual([["lsp", 3 + NEAR_LINES]]);
+    const far = mergeSymbols(
+      lspAnswer([serverAt("Thing", 5, 3, 3)]),
+      indexAnswer([indexAt("Thing", 4 + NEAR_LINES, 8, "struct")]),
+      "t",
+      false,
+    ).rows;
+    expect(far.map((r) => [r.source, r.line])).toEqual([
+      ["lsp", 3],
+      ["index", 4 + NEAR_LINES],
+    ]);
+  });
+
+  it("keeps same-named symbols of a file apart: the same line pairs first, then the nearest range, one mate each", () => {
+    // 클래스 `Foo`(데코레이터 1줄 · 이름 2줄 · 범위 1 ~ 10) 안의 같은 이름 생성자(5줄), 범위 밖의 같은 이름(30줄 — 인덱스만).
+    const lsp = lspAnswer([serverAt("Foo", 5, 1, 10), serverAt("Foo", 9, 5, 5)]);
+    const index = indexAnswer([
+      indexAt("Foo", 5, 3, "constructor"),
+      indexAt("Foo", 2, 14, "class"),
+      indexAt("Foo", 30, 7, "function"),
+      // 범위 안의 같은 이름이 하나 더(서버가 주지 않은 필드) — 짝이 이미 있는 서버 줄을 빼앗지 않는다.
+      indexAt("Foo", 7, 5, "field"),
+    ]);
+    const { rows } = mergeSymbols(lsp, index, "foo", false);
+    expect(rows.map((r) => [r.source, r.line, r.kind])).toEqual([
+      ["lsp", 2, "class"],
+      ["lsp", 5, "constructor"],
+      ["index", 30, "function"],
+      ["index", 7, "field"],
+    ]);
+  });
+
+  it("pairs by range with the nearest server position, whatever order the server gave", () => {
+    // 데코레이터 클래스 `Foo`(1 ~ 20, 이름 3줄) 안의 데코레이터 메서드 `Foo`(10 ~ 12, 이름 11줄) — 같은 줄의 서버 위치는 없다.
+    const klass = serverAt("Foo", 5, 1, 20);
+    const method = serverAt("Foo", 6, 10, 12);
+    const index = indexAnswer([indexAt("Foo", 11, 3, "method"), indexAt("Foo", 3, 14, "class")]);
+    for (const order of [
+      [klass, method],
+      [method, klass],
+    ]) {
+      const { rows } = mergeSymbols(lspAnswer(order), index, "foo", false);
+      expect(rows.map((r) => [r.line, r.kind]).sort()).toEqual(
+        [
+          [11, "method"],
+          [3, "class"],
+        ].sort(),
+      );
+      expect(rows.every((r) => r.source === "lsp")).toBe(true);
+    }
+  });
+
+  it("never pairs across files or names", () => {
+    const lsp = lspAnswer([serverAt("Panel", 5, 1, 10, "src/a.ts"), serverAt("Panel", 5, 1, 10)]);
+    const index = indexAnswer([
+      indexAt("Panel", 3, 1, "class", "src/b.ts"),
+      indexAt("Panels", 3, 1, "class"),
+    ]);
+    expect(mergeSymbols(lsp, index, "p", false).rows.map((r) => r.source)).toEqual([
+      "lsp",
+      "lsp",
+      "index",
+      "index",
+    ]);
+  });
+
   it("takes the index's name column for a server symbol that points at the start of its declaration line", () => {
     const declaration = {
       ...lspSymbol("Widget", 3, 5),

@@ -15,6 +15,7 @@ import { Command } from "cmdk";
 import {
   memo,
   type ReactNode,
+  type Ref,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -141,6 +142,7 @@ const SymbolItem = memo(function SymbolItem({
   scope,
   deps,
   choose,
+  itemRef,
 }: {
   row: SymbolRow;
   /** 이 줄을 낸 질의(`data-symbol-query` — 어느 질의의 결과가 그려졌는지 밖에서 본다). */
@@ -148,6 +150,8 @@ const SymbolItem = memo(function SymbolItem({
   scope: SymbolScope | undefined;
   deps: Deps;
   choose: SearchResultsProps["choose"];
+  /** 목록의 첫 줄에만 — 고른 값을 cmdk 목록에서 읽는 자리(`keepsSelection`). */
+  itemRef?: Ref<HTMLDivElement>;
 }) {
   const onSelect = () => choose(() => openRow(deps, row, scope));
   const T = useAppStrings().search;
@@ -155,6 +159,7 @@ const SymbolItem = memo(function SymbolItem({
   const name = file.slice(file.lastIndexOf("/") + 1);
   return (
     <Command.Item
+      ref={itemRef}
       value={`symbol:${row.key}`}
       onSelect={onSelect}
       className={SEARCH_ITEM_CLASS}
@@ -204,6 +209,19 @@ function Note({ children, alert }: { children: ReactNode; alert?: boolean }) {
 
 const NO_ROWS: readonly SymbolRow[] = [];
 
+/**
+ * 같은 질의의 결과가 다시 그려졌을 때(늦은 서버 결과가 위에 붙음 · 「바쁨」 뒤 다시 받음) 지금 고른 것을 그대로 둘지: 사용자가 첫
+ * 줄(`firstBefore` — 지난 그림의 첫 줄)에서 옮겨 둔 줄이 새 목록에 남아 있으면 둔다 — 서버는 5 초까지 늦을 수 있어, 화살표로
+ * 내려간 뒤 Enter 직전에 붙으면 다른 심볼이 열린다. 첫 줄에 그대로 있었으면 새 첫 줄을 고른다(팝업의 `onResults`).
+ */
+function keepsSelection(item: HTMLElement | null, firstBefore: string | undefined): boolean {
+  const selected = item
+    ?.closest("[cmdk-list]")
+    ?.querySelector('[cmdk-item][aria-selected="true"]')
+    ?.getAttribute("data-value");
+  return selected != null && selected !== "" && selected !== firstBefore;
+}
+
 function makeSymbolResults(deps: Deps, types: boolean) {
   return function SymbolResults({
     query,
@@ -226,13 +244,26 @@ function makeSymbolResults(deps: Deps, types: boolean) {
     const rows = text && state.types === types ? state.rows : NO_ROWS;
     const max = limit ?? SYMBOL_LIMIT;
     const shown = rows.slice(0, max);
-    // 결과는 질의보다 늦게 온다(서버 결과는 더 늦게 앞에 더해진다) — 새 결과를 그리면 팝업이 첫 줄을 고른다.
+    // 결과는 질의보다 늦게 온다(서버 결과는 더 늦게 앞에 더해진다) — 새 질의의 결과를 그리면 팝업이 첫 줄을 고른다. 같은 질의의
+    // 결과를 다시 그린 것이면 사용자가 옮겨 둔 고르기를 둔다(`keepsSelection`).
+    const firstItem = useRef<HTMLDivElement>(null);
+    const drawn = useRef<{ query?: string; types?: boolean; first?: string }>({});
     useLayoutEffect(() => {
-      if (rows !== NO_ROWS) onResults();
+      if (rows === NO_ROWS) return;
+      const before = drawn.current;
+      drawn.current = {
+        query: state.query,
+        types: state.types,
+        first: rows[0] && `symbol:${rows[0].key}`,
+      };
+      const again = before.query === state.query && before.types === state.types;
+      if (again && keepsSelection(firstItem.current, before.first)) return;
+      onResults();
     }, [rows, onResults]);
-    const items = shown.map((row) => (
+    const items = shown.map((row, i) => (
       <SymbolItem
         key={row.key}
+        itemRef={i === 0 ? firstItem : undefined}
         row={row}
         query={state.query}
         scope={state.scope}
