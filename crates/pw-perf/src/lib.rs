@@ -4,6 +4,8 @@
 
 pub mod db;
 pub mod git;
+pub mod lsp;
+pub mod lsp_fake;
 pub mod marks;
 pub mod report;
 pub mod stats;

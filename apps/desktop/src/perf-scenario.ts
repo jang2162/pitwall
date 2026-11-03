@@ -32,7 +32,17 @@ import { EditorView } from "@codemirror/view";
 import { ROW_HEIGHT } from "./git/log/graph-render";
 import { type FrameWork, installFrameWork, scrollFrames } from "./perf-frames";
 
-export const SCENARIOS = ["git", "db", "db-idle"] as const;
+export const SCENARIOS = [
+  "git",
+  "db",
+  "db-idle",
+  "lsp",
+  "lsp-typing",
+  "lsp-typing-off",
+  "lsp-idle",
+  "symbols",
+  "classes",
+] as const;
 export type Scenario = (typeof SCENARIOS)[number];
 
 export const FLING_FRAMES = 2000;
@@ -547,10 +557,14 @@ export async function runScenario(
       watchBlocks: () => watchBlocks(() => performance.now()),
     };
     if (scenario === "git") await runGitScenario(env);
-    else {
+    else if (scenario === "db" || scenario === "db-idle") {
       // DB 시나리오(perf-scenario-db.ts)는 그때 불러온다.
       const db = await import("./perf-scenario-db");
       await (scenario === "db" ? db.runDbScenario(env) : db.runDbIdleScenario(env));
+    } else {
+      // LSP · 심볼 시나리오(perf-scenario-lsp.ts)도 그때 불러온다.
+      const lsp = await import("./perf-scenario-lsp");
+      await lsp.runLspScenario(env, scenario);
     }
   } finally {
     work.restore();

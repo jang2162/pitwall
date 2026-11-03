@@ -47,6 +47,7 @@ mod measure {
         self, Acted, Action, GitReport, GitRun, GitSettings, Progress, RepoResult, RunFailure,
         refresh_share,
     };
+    use pw_perf::lsp::{self, LspProgress, LspReport, LspRun, LspSettings};
     use pw_perf::macos;
     use pw_perf::marks::{self, Mark};
     use pw_perf::report::{
@@ -54,7 +55,7 @@ mod measure {
         summarize_runs, targets, too_few_valid, valid_runs,
     };
 
-    const USAGE: &str = "usage: pw-perf --app <Pitwall.app | binary> [--runs N] [--warmup N] [--idle-secs S] [--timeout-secs S] [--out DIR] [--project DIR | --db-idle --pg HOST:PORT/DB] [--label TEXT]\n       pw-perf --app <Pitwall.app | binary> --git-repo <synth repo> [--git-repo <synth repo> ...] [--checkout BRANCH] [--scenario-timeout-secs S] [--runs N] [--warmup N] [--out DIR]\n       pw-perf --app <Pitwall.app | binary> --db [--fake-db | --pg HOST:PORT/DB] [--redis HOST:PORT] [--scenario-timeout-secs S] [--runs N] [--warmup N] [--out DIR] [--label TEXT]";
+    const USAGE: &str = "usage: pw-perf --app <Pitwall.app | binary> [--runs N] [--warmup N] [--idle-secs S] [--timeout-secs S] [--out DIR] [--project DIR | --db-idle --pg HOST:PORT/DB] [--label TEXT]\n       pw-perf --app <Pitwall.app | binary> --git-repo <synth repo> [--git-repo <synth repo> ...] [--checkout BRANCH] [--scenario-timeout-secs S] [--runs N] [--warmup N] [--out DIR]\n       pw-perf --app <Pitwall.app | binary> --db [--fake-db | --pg HOST:PORT/DB] [--redis HOST:PORT] [--scenario-timeout-secs S] [--runs N] [--warmup N] [--out DIR] [--label TEXT]\n       pw-perf --app <Pitwall.app | binary> --scenario <lsp | lsp-typing | lsp-typing-off> [--lsp-fake <pw-perf-lsp>] [--runs N] [--warmup N] [--out DIR] [--label TEXT]\n       pw-perf --app <Pitwall.app | binary> --scenario <symbols | classes> --project <synthetic repo> [--runs N] [--warmup N] [--out DIR] [--label TEXT]\n       pw-perf --app <Pitwall.app | binary> --scenario lsp-idle --project DIR --lsp-server <server binary> [--idle-secs S] [--scenario-timeout-secs S] [--runs N] [--warmup N] [--out DIR] [--label TEXT]";
 
     /// 앱이 측정하는 프로세스(이 하네스)의 pid 를 받는 변수(`apps/desktop/src-tauri/src/perf.rs` 의 `PARENT_ENV`).
     const PARENT_ENV: &str = "PITWALL_PERF_PARENT";
@@ -117,6 +118,12 @@ mod measure {
         fake_db: bool,
         /// 회마다 임시 프로젝트에 적을 연결. 있으면 프로젝트를 신뢰로 등록한다.
         connections: Vec<Connection>,
+        /// LSP · 심볼 시나리오(`--scenario`, [`lsp::SCENARIOS`]).
+        scenario: Option<String>,
+        /// LSP 시나리오에 끼울 가짜 서버(`pw-perf-lsp`).
+        lsp_fake: Option<PathBuf>,
+        /// `lsp-idle` 에 끼울 실제 서버(`[lsp.rust-analyzer] path`).
+        lsp_server: Option<PathBuf>,
     }
 
     fn parse(args: Vec<String>) -> Result<Options, String> {
@@ -136,6 +143,9 @@ mod measure {
         let mut fake_db = false;
         let mut pg: Option<String> = None;
         let mut redis: Option<String> = None;
+        let mut scenario: Option<String> = None;
+        let mut lsp_fake: Option<PathBuf> = None;
+        let mut lsp_server: Option<PathBuf> = None;
         let mut it = args.into_iter();
         while let Some(flag) = it.next() {
             let mut value = || {
@@ -160,6 +170,9 @@ mod measure {
                 "--fake-db" => fake_db = true,
                 "--pg" => pg = Some(value()?),
                 "--redis" => redis = Some(value()?),
+                "--scenario" => scenario = Some(value()?),
+                "--lsp-fake" => lsp_fake = Some(PathBuf::from(value()?)),
+                "--lsp-server" => lsp_server = Some(PathBuf::from(value()?)),
                 "-h" | "--help" => return Err(USAGE.into()),
                 other => return Err(format!("unknown argument {other}\n{USAGE}")),
             }
@@ -192,6 +205,42 @@ mod measure {
         if !db_mode && !db_idle && (fake_db || pg.is_some() || redis.is_some()) {
             return Err(format!(
                 "--fake-db, --pg and --redis need --db or --db-idle\n{USAGE}"
+            ));
+        }
+        if let Some(name) = &scenario {
+            if !lsp::SCENARIOS.contains(&name.as_str()) {
+                return Err(format!(
+                    "--scenario: unknown {name} ({})\n{USAGE}",
+                    lsp::SCENARIOS.join(", ")
+                ));
+            }
+            if db_mode || db_idle || !git_repos.is_empty() {
+                return Err(format!(
+                    "--scenario does not mix with --db, --db-idle or --git-repo\n{USAGE}"
+                ));
+            }
+            let fixture = matches!(name.as_str(), "lsp" | "lsp-typing" | "lsp-typing-off");
+            if fixture && project.is_some() {
+                return Err(format!(
+                    "--scenario {name} writes a fixture project of its own; it does not take --project\n{USAGE}"
+                ));
+            }
+            if !fixture && project.is_none() {
+                return Err(format!("--scenario {name} needs --project\n{USAGE}"));
+            }
+            if matches!(name.as_str(), "lsp" | "lsp-typing") != lsp_fake.is_some() {
+                return Err(format!(
+                    "--lsp-fake is for --scenario lsp and lsp-typing (and they need it)\n{USAGE}"
+                ));
+            }
+            if (name == "lsp-idle") != lsp_server.is_some() {
+                return Err(format!(
+                    "--lsp-server is for --scenario lsp-idle (and it needs it)\n{USAGE}"
+                ));
+            }
+        } else if lsp_fake.is_some() || lsp_server.is_some() {
+            return Err(format!(
+                "--lsp-fake and --lsp-server need --scenario\n{USAGE}"
             ));
         }
         let mut connections = Vec::new();
@@ -230,6 +279,8 @@ mod measure {
             std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))
         };
         let project = project.map(resolve).transpose()?;
+        let lsp_fake = lsp_fake.map(resolve).transpose()?;
+        let lsp_server = lsp_server.map(resolve).transpose()?;
         let git_repos = git_repos
             .into_iter()
             .map(resolve)
@@ -255,6 +306,9 @@ mod measure {
             db_idle,
             fake_db,
             connections,
+            scenario,
+            lsp_fake,
+            lsp_server,
         })
     }
 
@@ -329,6 +383,9 @@ mod measure {
         }
         if opts.db {
             return run_db(&opts, &scratch.0, &out);
+        }
+        if opts.scenario.is_some() {
+            return run_lsp(&opts, &scratch.0, &out);
         }
         let total = opts.warmup + opts.runs;
         say(format!(
@@ -531,8 +588,9 @@ mod measure {
             scratch: &Path,
             index: usize,
             project: Option<&Path>,
-            connections: &[Connection],
+            opts: &Options,
         ) -> Result<Self, String> {
+            let connections = &opts.connections;
             let root = scratch.join(format!("run-{index}"));
             let paths = AppPaths::under(&root);
             // MCP 소켓이 `$STATE/run` 에 들어가는지 앱과 같은 규칙으로 본다 — 넘으면 공용 temp 로 가서 남는다.
@@ -545,8 +603,26 @@ mod measure {
                 ));
             }
             std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+            let fixture = matches!(
+                opts.scenario.as_deref(),
+                Some("lsp" | "lsp-typing" | "lsp-typing-off")
+            );
             let project = match project {
                 Some(project) => project.to_path_buf(),
+                None if fixture => {
+                    // 가짜 서버가 답하는 URI 가 앱이 아는 경로와 같도록 정규화한다(`$TMPDIR` 은 /var → /private/var 링크).
+                    let project = root.join("project");
+                    std::fs::create_dir_all(&project).map_err(|e| e.to_string())?;
+                    let project = std::fs::canonicalize(&project).map_err(|e| e.to_string())?;
+                    let run_root = std::fs::canonicalize(&root).map_err(|e| e.to_string())?;
+                    lsp::write_fixture(
+                        &project,
+                        &run_root,
+                        &paths.config,
+                        opts.lsp_fake.as_deref(),
+                    )?;
+                    project
+                }
                 None => {
                     let project = root.join("project");
                     std::fs::create_dir_all(&project).map_err(|e| e.to_string())?;
@@ -555,7 +631,17 @@ mod measure {
                     project
                 }
             };
-            if connections.is_empty() {
+            if let Some(server) = &opts.lsp_server {
+                std::fs::create_dir_all(&paths.config).map_err(|e| e.to_string())?;
+                std::fs::write(
+                    paths.config.join("settings.toml"),
+                    lsp::server_settings(server, &[]),
+                )
+                .map_err(|e| e.to_string())?;
+                pw_perf::register_trusted(&paths, &project)?;
+            } else if fixture {
+                pw_perf::register_trusted(&paths, &project)?;
+            } else if connections.is_empty() {
                 pw_perf::register_untrusted(&paths, &project)?;
             } else {
                 for connection in connections {
@@ -592,6 +678,10 @@ mod measure {
         fn keep_and_remove(&self, out: &Path) {
             let _ = std::fs::create_dir_all(out.join("logs"));
             let _ = std::fs::copy(&self.marks, out.join("marks.jsonl"));
+            let stamps = self.root.join(lsp::STAMPS_FILE);
+            if stamps.exists() {
+                let _ = std::fs::copy(&stamps, out.join(lsp::STAMPS_FILE));
+            }
             if let Ok(entries) = std::fs::read_dir(self.paths.state.join("logs")) {
                 for entry in entries.flatten() {
                     let _ = std::fs::copy(entry.path(), out.join("logs").join(entry.file_name()));
@@ -657,6 +747,15 @@ mod measure {
         }
     }
 
+    impl Observed for LspRun {
+        fn group(&self) -> u32 {
+            self.group
+        }
+        fn killed(self, killed: bool) -> Self {
+            LspRun { killed, ..self }
+        }
+    }
+
     impl Observed for GitRun {
         fn group(&self) -> u32 {
             self.group
@@ -688,8 +787,7 @@ mod measure {
         observe: impl FnOnce(&Launch, &RunDir) -> Result<T, String>,
     ) -> Result<T, RunError> {
         preflight().map_err(RunError::run)?;
-        let dir =
-            RunDir::create(scratch, index, project, &opts.connections).map_err(RunError::fatal)?;
+        let dir = RunDir::create(scratch, index, project, opts).map_err(RunError::fatal)?;
 
         let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
             .filter(|(k, _)| {
@@ -1439,6 +1537,261 @@ mod measure {
             cold_start_ms,
             measure,
             memory,
+            killed: false,
+        })
+    }
+
+    /// LSP · 심볼 시나리오(`--scenario`): 준비 + 측정 회를 돌려 `result.json` · `summary.md` 를 쓴다. 회가 멈추거나 실패하면 그 회를
+    /// 실패로 적고 다음 회로 간다(앱은 그 회의 pid 로만 끈다 — 서버 프로세스는 그 앱의 묶음이라 함께 끈다). 회가 끝날 때마다 결과 파일을 다시 쓴다.
+    fn run_lsp(opts: &Options, scratch: &Path, out: &Path) -> Result<bool, String> {
+        let scenario = opts.scenario.clone().expect("run_lsp needs --scenario");
+        let total = opts.warmup + opts.runs;
+        say(format!(
+            "pw-perf: LSP scenario {scenario} × ({} warm-up + {} measured); each run opens one project window → {}",
+            opts.warmup,
+            opts.runs,
+            out.display()
+        ));
+        let store_root = webkit_store_root(&opts.app);
+        let mut runs = Vec::new();
+        let mut failures = Vec::new();
+        let mut stopped = None;
+        for index in 0..total {
+            if let Err(e) = check_interrupted() {
+                stopped = Some(e);
+                break;
+            }
+            let warmup = index < opts.warmup;
+            let run = run_once(
+                opts,
+                scratch,
+                out,
+                store_root.as_deref(),
+                index,
+                opts.project.as_deref(),
+                Some(&scenario),
+                |launch, dir| {
+                    let started = first_frame(opts, launch, dir, index)?;
+                    observe_lsp(opts, &scenario, started, launch, dir, index, warmup)
+                },
+            );
+            match run {
+                Ok(run) => {
+                    say(format!(
+                        "pw-perf: {scenario} run {index}{}{}: cold start {:.0} ms, footprint {:.1} MB (app {:.1} MB, server {:.1} MB)",
+                        if run.warmup { " (warm-up)" } else { "" },
+                        run.excluded
+                            .as_deref()
+                            .map_or(String::new(), |why| format!(" (excluded: {why})")),
+                        run.cold_start_ms,
+                        run.memory.footprint_bytes as f64 / 1e6,
+                        run.split.app_footprint_bytes as f64 / 1e6,
+                        run.split.server_footprint_bytes as f64 / 1e6,
+                    ));
+                    runs.push(run);
+                }
+                Err(e) => {
+                    say(format!(
+                        "pw-perf: {scenario} run {index}{} failed: {}",
+                        if warmup { " (warm-up)" } else { "" },
+                        e.message
+                    ));
+                    failures.push(RunFailure {
+                        index,
+                        warmup,
+                        reason: e.message.clone(),
+                    });
+                    if e.fatal {
+                        stopped = Some(e.message);
+                    }
+                }
+            }
+            write_lsp_report(
+                opts,
+                &scenario,
+                out,
+                &runs,
+                &failures,
+                stopped.as_deref(),
+                false,
+            )?;
+            if stopped.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        let report = write_lsp_report(
+            opts,
+            &scenario,
+            out,
+            &runs,
+            &failures,
+            stopped.as_deref(),
+            true,
+        )?;
+        if let Some(stopped) = stopped {
+            return Err(format!(
+                "{stopped} (the runs before it are in {})",
+                out.join("summary.md").display()
+            ));
+        }
+        Ok(report.warning.is_none())
+    }
+
+    fn write_lsp_report(
+        opts: &Options,
+        scenario: &str,
+        out: &Path,
+        runs: &[LspRun],
+        failures: &[RunFailure],
+        stopped: Option<&str>,
+        last: bool,
+    ) -> Result<LspReport, String> {
+        let valid = runs
+            .iter()
+            .filter(|r| !r.warmup && r.excluded.is_none())
+            .count();
+        let report = LspReport {
+            schema: 1,
+            scenario: scenario.to_owned(),
+            definitions: lsp::definitions(),
+            build: build(opts),
+            commit: commit(),
+            os: os(),
+            hardware: hardware(),
+            settings: LspSettings {
+                scenario: scenario.to_owned(),
+                runs: opts.runs,
+                warmup: opts.warmup,
+                idle_secs: opts.idle.as_secs(),
+                project: opts.project.as_ref().map(|p| p.display().to_string()),
+                server: opts
+                    .lsp_server
+                    .as_ref()
+                    .or(opts.lsp_fake.as_ref())
+                    .map(|p| p.display().to_string()),
+                label: opts.label.clone(),
+            },
+            rows: lsp::summarize_lsp(runs),
+            runs: runs.to_vec(),
+            failures: failures.to_vec(),
+            valid_runs: valid,
+            warning: too_few_valid(valid, opts.runs),
+            stopped: stopped.map(str::to_owned),
+        };
+        let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+        std::fs::write(out.join("result.json"), json + "\n").map_err(|e| e.to_string())?;
+        let md = lsp::lsp_report_markdown(&report);
+        std::fs::write(out.join("summary.md"), &md).map_err(|e| e.to_string())?;
+        if last {
+            let _ = writeln!(std::io::stdout(), "{md}");
+            say(format!(
+                "pw-perf: wrote {} and {}",
+                out.join("result.json").display(),
+                out.join("summary.md").display()
+            ));
+            if let Some(warning) = &report.warning {
+                say(format!("pw-perf: warning: {warning}"));
+            }
+        }
+        Ok(report)
+    }
+
+    /// 앱의 LSP · 심볼 시나리오가 끝나기를 기다려 메모리를 잰다. `lsp-idle` 은 서버가 준비된 표시(`server_ready`)부터 `--idle-secs` 를
+    /// 기다린 뒤에 잰다.
+    #[allow(clippy::too_many_arguments)] // 회 하나의 설정 — observe_db · observe_git 과 같은 꼴.
+    fn observe_lsp(
+        opts: &Options,
+        scenario: &str,
+        started: Started,
+        launch: &Launch,
+        dir: &RunDir,
+        index: usize,
+        warmup: bool,
+    ) -> Result<LspRun, String> {
+        let Started {
+            frame,
+            app_pid,
+            group,
+            cold_start_ms,
+        } = started;
+        let deadline = Instant::now() + opts.scenario_timeout;
+        let stamps_file = dir.root.join(lsp::STAMPS_FILE);
+        let read_stamps =
+            || lsp::parse_stamps(&std::fs::read_to_string(&stamps_file).unwrap_or_default());
+        let mut locked = false;
+        let mut next_lock_check = Instant::now();
+        let measure = loop {
+            check_interrupted()?;
+            if Instant::now() >= next_lock_check {
+                locked |= screen_locked()?;
+                next_lock_check = Instant::now() + LOCK_CHECK;
+            }
+            let all = marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
+            match lsp::progress(&all, &read_stamps(), app_pid, scenario) {
+                LspProgress::Waiting => {}
+                LspProgress::Done(m) => break *m,
+                LspProgress::Failed(e) => return Err(format!("run {index}: {e}")),
+            }
+            if !macos::alive(app_pid) {
+                return Err(format!(
+                    "run {index}: the app {app_pid} exited during the scenario"
+                ));
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "run {index}: the scenario did not finish within {}s ({})",
+                    opts.scenario_timeout.as_secs(),
+                    marks::stall_note(&all, epoch_ms(), locked)
+                ));
+            }
+            std::thread::sleep(POLL);
+        };
+        if scenario == "lsp-idle" {
+            // 유휴: 표본 시각까지 기다리며 신호와 화면 잠금을 본다.
+            let sample_at = Instant::now() + opts.idle;
+            while Instant::now() < sample_at {
+                check_interrupted()?;
+                if Instant::now() >= next_lock_check {
+                    locked |= screen_locked()?;
+                    next_lock_check = Instant::now() + Duration::from_millis(500);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        locked |= screen_locked()?;
+        let ended = epoch_ms();
+        let memory = sample(group);
+        if !memory.processes.iter().any(|p| p.pid == app_pid) {
+            return Err(format!(
+                "run {index}: the app {app_pid} exited before the memory sample"
+            ));
+        }
+        let all = marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
+        let hidden = all
+            .iter()
+            .any(|m| m.event == "hidden" && m.pid == app_pid && m.epoch_ms <= ended);
+        let excluded = if frame.hidden == Some(true) {
+            Some("window hidden before its first frame".to_owned())
+        } else if hidden {
+            Some("window hidden during the scenario".to_owned())
+        } else if locked {
+            Some("screen locked during the run".to_owned())
+        } else {
+            None
+        };
+        let split = lsp::split(&memory);
+        Ok(LspRun {
+            index,
+            warmup,
+            excluded,
+            app_pid,
+            group,
+            cold_start_ms,
+            launch_epoch_ms: launch.t0,
+            measure,
+            memory,
+            split,
             killed: false,
         })
     }

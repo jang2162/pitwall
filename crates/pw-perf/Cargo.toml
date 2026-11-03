@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# `cargo run -p pw-perf` 는 측정 하네스다 — LSP 측정의 가짜 서버(`pw-perf-lsp`, src/bin)는 따로 짓는다.
+default-run = "pw-perf"
 
 [dependencies]
 # 측정마다 임시 `$DATA` 에 프로젝트 하나를 등록한다.

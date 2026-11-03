@@ -16,7 +16,17 @@ export function perfMarkRequested(search: string): boolean {
 }
 
 /** 아는 시나리오(src/perf-scenario.ts 의 `SCENARIOS` 와 같다 — 시험이 본다. 그 모듈은 측정 모드에서만 불러오므로 여기 따로 둔다). */
-export const PERF_SCENARIOS = ["git", "db", "db-idle"] as const;
+export const PERF_SCENARIOS = [
+  "git",
+  "db",
+  "db-idle",
+  "lsp",
+  "lsp-typing",
+  "lsp-typing-off",
+  "lsp-idle",
+  "symbols",
+  "classes",
+] as const;
 export type PerfScenario = (typeof PERF_SCENARIOS)[number];
 
 /** 첫 프레임 뒤에 돌릴 측정 시나리오(src/perf-scenario.ts). 측정 모드가 아니거나 모르는 이름이면 없다. */
