@@ -729,14 +729,29 @@ impl ToolsInstaller {
             }
         };
 
+        // 덮어쓰기 정의의 런처(jdtls — 15-m4-plan.md M4-18). 실행 파일을 고르기 전에 둔다.
+        let launchers = self
+            .registry
+            .overrides()
+            .get(&name)
+            .map(|o| o.launcher.clone())
+            .unwrap_or_default();
+        write_launchers(&dir, &launchers).map_err(|e| failed("bin", &name, e))?;
+
         // 실행 파일.
         let mut bins = BTreeMap::new();
         for (bin, at) in &plan.resolved.bin {
             let rel = match at {
                 ToolBin::Path(p) => {
-                    extract::make_executable(&dir, p)
+                    // Windows 에서 런처를 가리키는 실행 파일은 그 `.cmd` 다.
+                    let p = if cfg!(windows) && launchers.contains_key(p) {
+                        format!("{p}.cmd")
+                    } else {
+                        p.clone()
+                    };
+                    extract::make_executable(&dir, &p)
                         .map_err(|e| failed("bin", &name, e.to_string()))?;
-                    p.clone()
+                    p
                 }
                 ToolBin::Npm(n) => npm_bin(n),
                 ToolBin::Pypi(n) => venv_bin(n),
@@ -1602,6 +1617,33 @@ fn show_args(args: &[OsString]) -> String {
         .map(|a| a.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// 런처를 설치 폴더에 쓴다 — 유닉스는 그 경로에 셸 스크립트(0755), Windows 는 `<경로>.cmd`. 받은 보관 파일에 같은 경로가 이미
+/// 있으면 실패한다(받은 배포물을 덮어쓰지 않는다 — 경로는 덮어쓰기 정의를 읽을 때 본다, `Override::parse`).
+fn write_launchers(
+    dir: &Path,
+    launchers: &BTreeMap<String, crate::overrides::Launcher>,
+) -> Result<(), String> {
+    for (rel, launcher) in launchers {
+        let (rel, body) = if cfg!(windows) {
+            (format!("{rel}.cmd"), launcher.cmd.as_str())
+        } else {
+            (rel.clone(), launcher.sh.as_str())
+        };
+        let path = dir.join(&rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("launcher {rel}: {e}"))?;
+        }
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| format!("launcher {rel}: {e}"))?;
+        std::io::Write::write_all(&mut file, body.as_bytes())
+            .map_err(|e| format!("launcher {rel}: {e}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

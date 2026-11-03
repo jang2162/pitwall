@@ -5,6 +5,7 @@ mod archive;
 mod consent;
 mod files;
 mod grant;
+mod launcher;
 mod locator;
 #[cfg(unix)]
 mod npm_pip;
@@ -148,10 +149,21 @@ pub fn pypi_pkg(name: &str, version: &str) -> Value {
 }
 
 pub fn registry(packages: Vec<Value>, rows: &[Row]) -> Arc<ToolsRegistry> {
+    registry_with_overrides(packages, rows, &[])
+}
+
+/// 덮어쓰기 정의 `(패키지 이름, TOML 글)` 를 함께 둔 registry.
+pub fn registry_with_overrides(
+    packages: Vec<Value>,
+    rows: &[Row],
+    overrides: &[(&str, &str)],
+) -> Arc<ToolsRegistry> {
     let json = json!({"registry": "test", "packages": packages}).to_string();
+    let (overrides, errors) = Overrides::from_files(overrides);
+    assert!(errors.is_empty(), "{errors:?}");
     Arc::new(ToolsRegistry::with_parts(
         pinned_toml(rows),
-        Overrides::from_files(&[]).0,
+        overrides,
         Index::from_snapshot_json(&json).unwrap(),
     ))
 }

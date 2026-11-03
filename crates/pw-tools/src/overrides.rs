@@ -23,7 +23,14 @@
 //!
 //! [bin_alias]                                             # 새 이름 → 이미 있는 `bin` 이름(대상별로 풀린 경로를 따른다)
 //! kotlin-lsp = "intellij-server"
+//!
+//! [launcher."pitwall/jdtls"]                              # 설치기가 풀기 뒤 설치 폴더에 쓰는 런처(설치 폴더 기준 경로)
+//! sh = "#!/bin/sh\n…"                                     # 유닉스: 그 경로에 0755 로
+//! cmd = "@echo off\r\n…"                                 # Windows: `<경로>.cmd` 로 — 그 경로를 가리키는 `bin` 도 `.cmd` 를 쓴다
 //! ```
+//!
+//! 런처는 registry 정의의 실행 방법을 쓸 수 없을 때(jdtls 의 python 런처 — 결정 M4-D4) Pitwall 이 둔다. 받은 보관 파일에 같은
+//! 경로가 있으면 설치가 실패한다(받은 배포물을 덮어쓰지 않는다).
 //!
 //! `reason` 만 쓰고 `version` · `download` 가 없는 덮어쓰기(별칭만 등)는 받을 것을 바꾸지 않으므로 고정 해시도 그대로다.
 //!
@@ -55,6 +62,30 @@ pub struct Override {
     /// 않고 그 대상에서 풀린 경로를 그대로 따른다.
     #[serde(default)]
     pub bin_alias: BTreeMap<String, String>,
+    /// 설치 폴더 기준 경로 → 런처 내용. 설치기가 풀기를 마친 뒤 쓴다([`Launcher`]).
+    #[serde(default)]
+    pub launcher: BTreeMap<String, Launcher>,
+}
+
+/// 설치 폴더에 쓰는 런처 한 벌(15-m4-plan.md M4-18 — jdtls 를 python 없이 `java -jar` 로 띄운다).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Launcher {
+    /// 유닉스 셸 스크립트(그 경로에 0755).
+    pub sh: String,
+    /// Windows 배치 파일(`<경로>.cmd`).
+    pub cmd: String,
+}
+
+/// 런처 경로가 설치 폴더 안의 평범한 상대 경로인가(`/` 구분, 빈 · `.` · `..` 마디 없음).
+fn valid_launcher_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains(':')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 impl Override {
@@ -74,6 +105,16 @@ impl Override {
                 if !entry.get("files").is_some_and(Value::is_object) {
                     return Err("a `download` entry has no `files` table".into());
                 }
+            }
+        }
+        for (path, launcher) in &over.launcher {
+            if !valid_launcher_path(path) {
+                return Err(format!(
+                    "launcher path `{path}` is not a plain relative path"
+                ));
+            }
+            if launcher.sh.trim().is_empty() || launcher.cmd.trim().is_empty() {
+                return Err(format!("launcher `{path}` has an empty script"));
             }
         }
         Ok(over)
@@ -154,5 +195,21 @@ mod tests {
         assert!(Override::parse("reason = \"x\"\n[bin]\na = 1\n").is_err());
         assert!(Override::parse("reason = \"x\"\n[bin_alias]\na = \"b\"\n").is_ok());
         assert!(Override::parse("reason = \"x\"\n[bin_alias]\na = 1\n").is_err());
+        let launcher = |path: &str, body: &str| {
+            Override::parse(&format!("reason = \"x\"\n[launcher.\"{path}\"]\n{body}\n"))
+        };
+        assert!(launcher("pitwall/jdtls", "sh = \"#!/bin/sh\"\ncmd = \"@echo off\"").is_ok());
+        assert!(launcher("pitwall/jdtls", "sh = \"#!/bin/sh\"").is_err());
+        assert!(launcher("pitwall/jdtls", "sh = \" \"\ncmd = \"@echo off\"").is_err());
+        assert!(
+            launcher("pitwall/jdtls", "sh = \"a\"\ncmd = \"b\"\nps1 = \"c\"").is_err(),
+            "unknown keys"
+        );
+        for bad in ["../jdtls", "/abs", "a//b", "./a", "a\\\\b", "c:x"] {
+            assert!(
+                launcher(bad, "sh = \"a\"\ncmd = \"b\"").is_err(),
+                "{bad} must be refused"
+            );
+        }
     }
 }
