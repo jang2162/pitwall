@@ -31,3 +31,10 @@ root_markers = [
 requires = { java = ">=25" }
 # 프로젝트가 쓰는 JDK(서버를 돌리는 JDK 와 따로다 — 결정 M4-D6)를 서버 관리자가 이 설정 경로로 넘긴다(15-m4-plan.md M4-18).
 project_jdk_setting = "java.configuration.runtimes"
+
+# jdtls 는 시그니처 도움말이 기본으로 꺼져 있다(`java.signatureHelp.enabled` 기본 false — 꺼져 있으면 늘 `signatures: []`, M4-18
+# 실측). jdtls 는 `workspace/configuration` 을 묻지 않고 `initializationOptions.settings` 와 `workspace/didChangeConfiguration` 으로만
+# 설정을 받는다 — 서버 관리자가 `initialized` 바로 뒤에 합친 설정(이 값 위에 사람의 `[lsp.jdtls] settings`)을 `didChangeConfiguration`
+# 으로 민다(M4-18). 사람이 `[lsp.jdtls.settings.java.signatureHelp] enabled = false` 로 끌 수 있다.
+[contributes.language_servers.jdtls.settings.java.signatureHelp]
+enabled = true
