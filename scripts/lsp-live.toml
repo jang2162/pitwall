@@ -4,22 +4,26 @@
 #
 # [floors]: 서버마다 그 필터(`test(/(^|::)live_lsp_<서버>_/)`)가 고른 시험 수의 하한. 0 이어도 필터가 0개를 고르면 실패한다
 #   (`--no-tests=fail`). 값은 M4-18 이 정했다 — rust-analyzer · typescript-language-server · basedpyright · jdtls · kotlin-lsp 는 10 이상
-#   (앞의 둘은 기능 행이 더한 시험 수 그대로), ruff 는 진단 · 포맷 · 코드 액션 3(정의 · 완성 · rename 이 없는 서버다). 서버 실측
-#   (2026-11-03): basedpyright 11 · ruff 4 · jdtls 14 · kotlin-lsp 12 개가 돈다.
+#   (앞의 둘은 기능 행이 더한 시험 수 그대로), ruff 는 진단 · 포맷 · 코드 액션 3(정의 · 완성 · rename 이 없는 서버다). 하한은 실제로
+#   도는 수다(리뷰 L4 — 하한이 실제보다 낮으면 그 차이만큼 시험이 조용히 빠질 수 있다). 시험을 더하면 하한도 함께 올린다.
 # [capabilities]: 서버가 `initialize` 에 알려야 하는 정적 능력 칸(ServerCapabilities 의 키). 알리지 않으면 initialize 시험이 실패한다.
 #   능력 하나마다 그 능력의 live 시험이 하나 있다(crates/pw-lsp/tests/live_matrix.rs · 기능 행의 live_*.rs) — 그 시험도 먼저 문서의
 #   능력 칸(`lsp.document.capabilities` — 정적 능력과 동적 등록)에 그 능력이 있는지 본다. 진단은 서버가 보내는 알림이라 칸이 없다
 #   (pull 진단을 쓰는 서버는 `diagnosticProvider`).
+# [capability_tests]: [capabilities] 의 칸마다 그 능력을 보는 live 시험(`live_lsp_<서버>_<이름>` 의 <이름>). 스크립트가 칸마다 그 시험이
+#   고른 목록에 있는지 본다 — 능력별 시험을 지우거나 이름을 바꾸면 하한을 넘어도 실패한다. [capability_tests.default] 가 기본 이름이고
+#   [capability_tests.<서버>] 가 그 서버의 다른 이름으로 덮는다. 칸에 이름이 없으면 설정 읽기가 실패한다. 값 "" 는 「그 칸의 live 시험이
+#   아직 없다」 를 드러내 적은 것이다 — 스크립트가 판정 줄에 그 칸을 찍는다(2026-11-03 M4-18 이 표를 만들 때 이미 비어 있던 칸이다).
 # 줄을 지우거나 값을 내리는 변경 · 「하한 아래면 실패」 · 「알리지 않은 기대 능력은 실패」 를 지우는 변경은 리뷰에서 거절한다
 # (15 「공유 부품의 주인」 — 표에서 능력을 빼는 변경은 리뷰에서 사람이 본다).
 
 [floors]
 rust_analyzer = 14
 typescript_language_server = 16
-basedpyright = 10
-ruff = 3
-jdtls = 10
-kotlin_lsp = 10
+basedpyright = 11
+ruff = 4
+jdtls = 15
+kotlin_lsp = 12
 
 [capabilities]
 rust_analyzer = [
@@ -85,6 +89,43 @@ kotlin_lsp = [
   "documentFormattingProvider",
   "codeActionProvider",
 ]
+
+[capability_tests.default]
+hoverProvider = "hover"
+definitionProvider = "definition"
+referencesProvider = "references"
+documentSymbolProvider = "document_symbols"
+workspaceSymbolProvider = "workspace_symbols"
+completionProvider = "completion"
+signatureHelpProvider = "signature"
+renameProvider = "rename"
+documentFormattingProvider = "format"
+codeActionProvider = "code_action"
+diagnosticProvider = "diagnostics"
+
+# rust-analyzer · typescript-language-server 의 시험은 기능 행(M4-06 ~ M4-13)이 단 이름이다. 내비게이션 시험 하나가 hover · 정의 ·
+# 참조를 함께 본다. 구현으로 가기(`lsp.implementation`)와 rust-analyzer 의 코드 액션은 live 시험이 없다.
+[capability_tests.rust_analyzer]
+hoverProvider = "navigation"
+definitionProvider = "navigation"
+implementationProvider = ""
+referencesProvider = "navigation"
+completionProvider = "completion_after_self"
+signatureHelpProvider = "signature_help_marks_the_argument"
+renameProvider = "rename_across_two_files"
+documentFormattingProvider = "format_matches_rustfmt"
+codeActionProvider = ""
+
+[capability_tests.typescript_language_server]
+hoverProvider = "navigation"
+definitionProvider = "navigation"
+implementationProvider = ""
+referencesProvider = "navigation"
+completionProvider = "completion_after_obj"
+signatureHelpProvider = "signature_help_marks_the_argument"
+renameProvider = "rename_across_two_files"
+documentFormattingProvider = "format_the_messy_file"
+codeActionProvider = "quick_fix_without_a_diagnostic_version"
 
 # 서버를 받는 Mason 패키지(설치기의 이름)와 실행 파일 이름(설치 결과 JSON 의 `bins` 키). 기본 번들 패키지는 crates/pw-tools/registry.toml
 # 의 `bundled` 이고 판 · 해시는 거기 고정돼 있다 — 판을 올리면 거기서 bump 한다.

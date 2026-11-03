@@ -2,13 +2,14 @@
 // 실행: node --test scripts/lsp-live.test.mjs   (`mise run test` 에 든다)
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 import {
   TARGETS,
   capabilityTest,
+  capabilityTests,
   exitCode,
   filterExpr,
   filterName,
@@ -173,4 +174,73 @@ test("run counts, exit codes and the installer call", () => {
     () => installedProgram(JSON.stringify({ ...JSON.parse(out), checksum: "none" }), "kotlin-lsp"),
     /without a pinned hash/,
   );
+});
+
+// crates/pw-lsp/tests 의 live 시험 함수 이름(`fn live_lsp_…`). 표지(cfg)와 무관하게 글에서 센다 — 실 서버 없이 표와 시험이 맞는지 본다.
+function definedLiveTests() {
+  const dir = resolve(import.meta.dirname, "..", "crates", "pw-lsp", "tests");
+  const names = new Set();
+  for (const file of readdirSync(dir).filter((f) => f.endsWith(".rs")))
+    for (const m of readFileSync(join(dir, file), "utf8").matchAll(/\bfn\s+(live_lsp_\w+)\s*\(/g))
+      names.add(m[1]);
+  return names;
+}
+
+test("every capability names a live test that exists, and the floor is the number of live tests", () => {
+  const config = readConfig(configText);
+  const defined = definedLiveTests();
+  for (const name of Object.keys(TARGETS)) {
+    const { tests, gaps } = capabilityTests(config, name);
+    for (const t of tests) assert.ok(defined.has(t), `${name}: ${t} is not a live test`);
+    // 드러내 적은 빈 칸은 지금 셋뿐이다(M4-18 이 표를 만들 때 이미 비어 있던 칸) — 늘리려면 이 단언을 함께 고친다.
+    const knownGaps = {
+      rust_analyzer: ["implementationProvider", "codeActionProvider"],
+      typescript_language_server: ["implementationProvider"],
+    };
+    assert.deepEqual(gaps, knownGaps[name] ?? [], name);
+    const count = [...defined].filter((t) => t.startsWith(`${filterName(name)}_`)).length;
+    assert.equal(config.floors[name], count, `${name}: floor vs live tests in crates/pw-lsp/tests`);
+  }
+});
+
+test("a capability with no test name, a stray name or a missing capability test fails", () => {
+  assert.throws(
+    () => readConfig(configText.replace(/^renameProvider = "rename"$/m, "")),
+    /no live test named for renameProvider of basedpyright/,
+  );
+  assert.throws(
+    () =>
+      readConfig(
+        configText.replace(
+          /^\[capability_tests\.rust_analyzer\]$/m,
+          '[capability_tests.rust_analyzer]\ncallHierarchyProvider = "calls"',
+        ),
+      ),
+    /names callHierarchyProvider, which is not in \[capabilities\] rust_analyzer/,
+  );
+  assert.throws(
+    () => readConfig(`${configText}\n[capability_tests.mystery]\nhoverProvider = "hover"\n`),
+    /unknown server mystery in \[capability_tests\]/,
+  );
+
+  const perCapability = { tests: ["live_lsp_ruff_format", "live_lsp_ruff_code_action"], gaps: [] };
+  const selected = [
+    "pw-lsp::live_matrix live_lsp_ruff_initialize_and_shutdown",
+    "pw-lsp::live_matrix live_lsp_ruff_format",
+    "pw-lsp::live_matrix live_lsp_ruff_diagnostics",
+  ];
+  const base = { server: "ruff", selected, run: 3, floor: 3, exitCode: 0 };
+  const required = capabilityTest("ruff");
+  const missing = judge({ ...base, required, perCapability });
+  assert.equal(missing.ok, false);
+  assert.match(missing.message, /capability tests live_lsp_ruff_code_action are not among/);
+  const all = judge({
+    ...base,
+    selected: [...selected, "pw-lsp::live_matrix live_lsp_ruff_code_action"],
+    run: 4,
+    required,
+    perCapability: { ...perCapability, gaps: ["implementationProvider"] },
+  });
+  assert.equal(all.ok, true, all.message);
+  assert.match(all.message, /no live test yet for implementationProvider/);
 });

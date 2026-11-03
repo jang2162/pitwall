@@ -118,7 +118,39 @@ export function readConfig(text) {
     if (!TARGETS[name])
       throw new Error(`scripts/lsp-live.toml: unknown server ${name} in [floors]`);
   }
+  for (const [name, named] of Object.entries(config.capability_tests ?? {})) {
+    if (name === "default") continue;
+    if (!TARGETS[name])
+      throw new Error(`scripts/lsp-live.toml: unknown server ${name} in [capability_tests]`);
+    for (const capability of Object.keys(named)) {
+      if (!config.capabilities[name].includes(capability))
+        throw new Error(
+          `scripts/lsp-live.toml: [capability_tests.${name}] names ${capability}, which is not in [capabilities] ${name}`,
+        );
+    }
+  }
+  for (const name of Object.keys(TARGETS)) capabilityTests(config, name);
   return config;
+}
+
+/**
+ * 그 서버의 기대 능력 칸마다 그 능력을 보는 live 시험 이름(`[capability_tests]` — 서버 표가 기본 표를 덮는다). 이름이 `""` 인 칸은
+ * 시험이 아직 없다고 드러내 적은 것이라 `gaps` 로 돌려준다. 칸에 이름이 없으면 오류다.
+ */
+export function capabilityTests(config, server) {
+  const named = { ...config.capability_tests?.default, ...config.capability_tests?.[server] };
+  const tests = [];
+  const gaps = [];
+  for (const capability of config.capabilities[server]) {
+    const name = named[capability];
+    if (typeof name !== "string")
+      throw new Error(
+        `scripts/lsp-live.toml: no live test named for ${capability} of ${server} in [capability_tests]`,
+      );
+    if (name === "") gaps.push(capability);
+    else tests.push(`${filterName(server)}_${name}`);
+  }
+  return { tests: [...new Set(tests)], gaps };
 }
 
 /** 그 서버의 nextest 필터 이름 조각(`live_lsp_<서버>`). */
@@ -142,17 +174,33 @@ export function capabilityTest(server) {
   return `live_lsp_${server}_initialize_and_shutdown`;
 }
 
-/** 한 서버의 판정. */
-export function judge({ server, selected, run, floor, exitCode: code, required }) {
+/** 한 서버의 판정. `perCapability` 는 기대 능력 칸마다의 시험(`capabilityTests`). */
+export function judge({
+  server,
+  selected,
+  run,
+  floor,
+  exitCode: code,
+  required,
+  perCapability = { tests: [], gaps: [] },
+}) {
   const line = `${server}: ${run ?? "?"} run (selected ${selected.length}), floor ${floor}`;
   // 0개를 먼저 본다 — nextest 는 `--no-tests=fail` 로 그때도 실패하므로 종료 코드보다 까닭이 분명하다.
   if (selected.length === 0)
     return { ok: false, message: `${line} — the filter selected no tests` };
+  const isSelected = (test) => selected.some((name) => name.split(/::|\s/).at(-1) === test);
   // 기대 능력 판정은 그 시험 안에 있다 — 지우거나 이름을 바꾸면 하한을 넘어도 판정이 조용히 사라지므로 있는지부터 본다(리뷰 M3).
-  if (required && !selected.some((name) => name.split(/::|\s/).at(-1) === required))
+  if (required && !isSelected(required))
     return {
       ok: false,
       message: `${line} — the capability check ${required} is not among the selected tests`,
+    };
+  // 능력 칸마다의 시험도 같다(리뷰 L4).
+  const missing = perCapability.tests.filter((test) => !isSelected(test));
+  if (missing.length > 0)
+    return {
+      ok: false,
+      message: `${line} — the capability tests ${missing.join(", ")} are not among the selected tests (scripts/lsp-live.toml [capability_tests])`,
     };
   if (code !== 0) return { ok: false, message: `${line} — nextest failed (exit ${code})` };
   if (run === null)
@@ -167,7 +215,9 @@ export function judge({ server, selected, run, floor, exitCode: code, required }
     };
   if (run < floor)
     return { ok: false, message: `${line} — below the floor in scripts/lsp-live.toml` };
-  return { ok: true, message: `${line} — ok` };
+  const gaps =
+    perCapability.gaps.length > 0 ? ` (no live test yet for ${perCapability.gaps.join(", ")})` : "";
+  return { ok: true, message: `${line} — ok${gaps}` };
 }
 
 function serversDir() {
@@ -306,6 +356,7 @@ async function runTarget(server, config, { ci, install: wantInstall }) {
     floor: config.floors[server],
     exitCode: run.status,
     required: capabilityTest(server),
+    perCapability: capabilityTests(config, server),
   });
 }
 
