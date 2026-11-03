@@ -66,6 +66,14 @@ fn configuration(handlers: &mut Handlers, cx: &HandlerContext) {
     });
 }
 
+/// `workspace/didChangeConfiguration` 의 매개변수: `{ settings: <설정 전체> }` — `workspace/configuration` 에 `section` 없이 물었을 때의
+/// 답과 같은 값(같은 함수로 만든다 — 15-m4-plan.md M4-18). jdtls 는 사람의 `[lsp.jdtls] settings` 를 이것으로만 받는다(그 서버는
+/// `workspace/configuration` 을 묻지 않는다).
+pub fn did_change_configuration_params(settings: &Value) -> Value {
+    let mut whole = configuration_answer(settings, &serde_json::json!({ "items": [{}] }));
+    serde_json::json!({ "settings": whole[0].take() })
+}
+
 /// `items` 마다 하나: `section` 이 없으면 설정 전체, 있으면 그 점 경로(`rust-analyzer.cargo`)의 값, 없으면 `null`(「설정 없음」 —
 /// 서버가 기본값을 쓴다). `scopeUri` 는 보지 않는다 — 설정은 인스턴스(작업 공간 루트)마다 하나다.
 pub fn configuration_answer(settings: &Value, params: &Value) -> Value {

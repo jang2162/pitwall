@@ -1104,6 +1104,15 @@ async fn the_project_jdk_reaches_jdtls_the_same_way_on_both_paths() {
     );
     let answer = messages.iter().find(|m| m["id"] == "fake-1").unwrap();
     assert_eq!(answer["result"], json!([want]));
+    // `initialized` 뒤에 민 설정도 같은 값이다.
+    let pushed = messages
+        .iter()
+        .find(|m| m["method"] == "workspace/didChangeConfiguration")
+        .unwrap();
+    assert_eq!(
+        pushed["params"]["settings"]["java"]["configuration"]["runtimes"],
+        want
+    );
     // 다른 서버의 설정만 바뀌어도 jdtls 는 `restartNeeded` 가 되지 않는다 — 넣은 프로젝트 JDK 는 「설정이 바뀌었나」 에 들지 않는다.
     let settings = env.paths.config.join("settings.toml");
     let text = fs::read_to_string(&settings).unwrap();
@@ -1115,6 +1124,111 @@ async fn the_project_jdk_reaches_jdtls_the_same_way_on_both_paths() {
     env.global.reload().unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(env.state_of("jdtls"), Some(LspInstanceState::Ready));
+}
+
+/// `initialized` 바로 뒤 · 문서를 열기 전에 `workspace/didChangeConfiguration { settings }` 가 가고, 그 값은 `workspace/configuration`
+/// 에 `section` 없이 물은 답과 같다(15-m4-plan.md M4-18 — jdtls 는 설정을 이 길로만 받는다). 프로젝트 둘의 설정이 섞이지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_merged_settings_are_pushed_after_initialized_per_project() {
+    let env = Env::new(EnvOptions::default());
+    let record = env.fake(
+        "rust-analyzer",
+        incremental().on(
+            "initialized",
+            vec![Action::Request {
+                method: "workspace/configuration".into(),
+                params: json!({ "items": [{}] }),
+            }],
+        ),
+    );
+    env.projects.set_trust(&env.other, true).unwrap();
+    let other_root = env.base.join("p2");
+    for (root, value) in [(&env.root, "one"), (&other_root, "two")] {
+        let dir = root.join(".pitwall");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("project.toml"),
+            format!("schema = 1\n[lsp.rust-analyzer.settings.probe]\nvalue = \"{value}\"\n"),
+        )
+        .unwrap();
+    }
+    let mut win = env.window();
+    win.open(&env, &env.file("src/main.rs", ""), "Rust", "")
+        .await;
+    // 순서(첫 인스턴스만 떠 있을 때): initialized → didChangeConfiguration → didOpen.
+    let opened = eventually(Duration::from_secs(10), || {
+        received(&record)
+            .iter()
+            .any(|m| m["method"] == "textDocument/didOpen")
+    })
+    .await;
+    assert!(opened, "{:?}", received(&record));
+    let order: Vec<String> = received(&record)
+        .iter()
+        .filter_map(|m| m["method"].as_str().map(str::to_owned))
+        .filter(|m| {
+            matches!(
+                m.as_str(),
+                "initialized" | "workspace/didChangeConfiguration" | "textDocument/didOpen"
+            )
+        })
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "initialized",
+            "workspace/didChangeConfiguration",
+            "textDocument/didOpen"
+        ]
+    );
+    let mut other = env.connect(ConnectionScope::Project(env.other.clone()));
+    let path = other_root.join("src/lib.rs");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "").unwrap();
+    other
+        .call(
+            "lsp.document.open",
+            json!({ "projectId": env.other, "path": path, "language": "Rust", "version": 0, "text": "" }),
+        )
+        .await
+        .unwrap();
+    let both = eventually(Duration::from_secs(10), || {
+        received(&record)
+            .iter()
+            .filter(|m| m["method"] == "workspace/didChangeConfiguration")
+            .count()
+            == 2
+            && received(&record)
+                .iter()
+                .filter(|m| m["id"] == "fake-1" && m.get("result").is_some())
+                .count()
+                == 2
+    })
+    .await;
+    let messages = received(&record);
+    assert!(both, "{messages:?}");
+    let pushed: Vec<Value> = messages
+        .iter()
+        .filter(|m| m["method"] == "workspace/didChangeConfiguration")
+        .map(|m| m["params"]["settings"].clone())
+        .collect();
+    let answered: Vec<Value> = messages
+        .iter()
+        .filter(|m| m["id"] == "fake-1")
+        .map(|m| m["result"][0].clone())
+        .collect();
+    let sorted = |mut v: Vec<Value>| {
+        v.sort_by_key(|v| v.to_string());
+        v
+    };
+    assert_eq!(
+        sorted(pushed.clone()),
+        vec![
+            json!({ "probe": { "value": "one" } }),
+            json!({ "probe": { "value": "two" } })
+        ]
+    );
+    assert_eq!(sorted(answered), sorted(pushed));
 }
 
 /// 사람이 작업을 취소하면 서버에 `window/workDoneProgress/cancel` 이 간다(서버가 취소를 받는다고 알린 진행만).

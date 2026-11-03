@@ -1401,6 +1401,15 @@ impl LspManager {
                 return;
             }
         }
+        // `initialized` 바로 뒤(문서를 열기 전)에 서버에 주는 설정 전체를 민다 — `workspace/configuration` 을 묻지 않는 서버(jdtls)도
+        // 사람의 `[lsp.<id>] settings` 를 받는다(M4-18). 설정이 바뀌면 인스턴스는 `restartNeeded` 이고 다시 띄울 때 새 값이 이 길로
+        // 간다 — 떠 있는 서버에 새 값을 밀면 `workspace/configuration` 의 답(띄울 때의 값)과 갈라진다.
+        if let Err(e) = server.notify_raw(
+            "workspace/didChangeConfiguration",
+            crate::handlers::did_change_configuration_params(&config.settings),
+        ) {
+            tracing::warn!(target: "pw_lsp", project = %key.project_id, server = %key.server, %e, "cannot send the settings");
+        }
         let sync = sync_of(&server.capabilities());
         let installed = prepared_installed;
         let mut feeding = None;
