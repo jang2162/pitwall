@@ -1,35 +1,113 @@
-# 실 서버 시험(live_lsp_*)의 실행 개수 하한 · 기대 능력 표 · 서버 받기 고정(15-m4-plan.md M4-01 ⑧, M3 의 scripts/db-live.toml 꼴).
-# `scripts/lsp-live.mjs` 가 [floors] · [download.*] 를, `crates/pw-lsp/tests/live_lsp.rs` 가 [capabilities] 를 읽는다.
+# 실 서버 시험(live_lsp_*)의 실행 개수 하한 · 기대 능력 표(15-m4-plan.md M4-01 ⑧ · M4-18, M3 의 scripts/db-live.toml 꼴).
+# `scripts/lsp-live.mjs` 가 [floors] 를, `crates/pw-lsp/tests/live_lsp.rs` 가 [capabilities] 를 읽는다. 서버는 이 표가 아니라 Pitwall 의
+# 설치기(`cargo run -p pw-tools --example tools_install` — crates/pw-tools/registry.toml 의 고정 판 · 해시)로 받는다(M4-18).
 #
 # [floors]: 서버마다 그 필터(`test(/(^|::)live_lsp_<서버>_/)`)가 고른 시험 수의 하한. 0 이어도 필터가 0개를 고르면 실패한다
-#   (`--no-tests=fail`). M4-01 이 두 서버를 1 로 두었고, 기능 행이 자기 live 시험을 더하며 올리고, M4-18 이 서버를 넓히며 값을 정한다.
+#   (`--no-tests=fail`). 값은 M4-18 이 정했다 — rust-analyzer · typescript-language-server · basedpyright · jdtls · kotlin-lsp 는 10 이상
+#   (앞의 둘은 기능 행이 더한 시험 수 그대로), ruff 는 진단 · 포맷 · 코드 액션 3(정의 · 완성 · rename 이 없는 서버다). 서버 실측
+#   (2026-11-03): basedpyright 11 · ruff 4 · jdtls 14 · kotlin-lsp 12 개가 돈다.
 # [capabilities]: 서버가 `initialize` 에 알려야 하는 정적 능력 칸(ServerCapabilities 의 키). 알리지 않으면 initialize 시험이 실패한다.
-#   값은 M4-18 이 정한다.
+#   능력 하나마다 그 능력의 live 시험이 하나 있다(crates/pw-lsp/tests/live_matrix.rs · 기능 행의 live_*.rs) — 그 시험도 먼저 문서의
+#   능력 칸(`lsp.document.capabilities` — 정적 능력과 동적 등록)에 그 능력이 있는지 본다. 진단은 서버가 보내는 알림이라 칸이 없다
+#   (pull 진단을 쓰는 서버는 `diagnosticProvider`).
 # 줄을 지우거나 값을 내리는 변경 · 「하한 아래면 실패」 · 「알리지 않은 기대 능력은 실패」 를 지우는 변경은 리뷰에서 거절한다
-# (15 「공유 부품의 주인」).
+# (15 「공유 부품의 주인」 — 표에서 능력을 빼는 변경은 리뷰에서 사람이 본다).
 
 [floors]
 rust_analyzer = 14
 typescript_language_server = 16
+basedpyright = 10
+ruff = 3
+jdtls = 10
+kotlin_lsp = 10
 
 [capabilities]
-rust_analyzer = ["hoverProvider", "definitionProvider", "referencesProvider"]
-typescript_language_server = ["hoverProvider", "definitionProvider", "referencesProvider"]
+rust_analyzer = [
+  "hoverProvider",
+  "definitionProvider",
+  "implementationProvider",
+  "referencesProvider",
+  "documentSymbolProvider",
+  "workspaceSymbolProvider",
+  "completionProvider",
+  "signatureHelpProvider",
+  "renameProvider",
+  "documentFormattingProvider",
+  "codeActionProvider",
+  "diagnosticProvider",
+]
+typescript_language_server = [
+  "hoverProvider",
+  "definitionProvider",
+  "implementationProvider",
+  "referencesProvider",
+  "documentSymbolProvider",
+  "workspaceSymbolProvider",
+  "completionProvider",
+  "signatureHelpProvider",
+  "renameProvider",
+  "documentFormattingProvider",
+  "codeActionProvider",
+]
+basedpyright = [
+  "hoverProvider",
+  "definitionProvider",
+  "referencesProvider",
+  "documentSymbolProvider",
+  "workspaceSymbolProvider",
+  "completionProvider",
+  "signatureHelpProvider",
+  "renameProvider",
+  "codeActionProvider",
+]
+ruff = ["documentFormattingProvider", "codeActionProvider"]
+jdtls = [
+  "hoverProvider",
+  "definitionProvider",
+  "referencesProvider",
+  "documentSymbolProvider",
+  "workspaceSymbolProvider",
+  "completionProvider",
+  "signatureHelpProvider",
+  "renameProvider",
+  "documentFormattingProvider",
+  "codeActionProvider",
+]
+kotlin_lsp = [
+  "hoverProvider",
+  "definitionProvider",
+  "referencesProvider",
+  "documentSymbolProvider",
+  "workspaceSymbolProvider",
+  "completionProvider",
+  "signatureHelpProvider",
+  "renameProvider",
+  "documentFormattingProvider",
+  "codeActionProvider",
+]
 
-# 서버를 판 고정으로 직접 받는다(Mason 없이 — M4-04 의 설치기가 이 절을 대신하고, M4-18 이 서버를 넓힌다). 받은 것은
-# target/lsp-servers/<서버>/<판>/ 에 둔다. 해시가 다르면 받은 것을 버리고 실패한다.
-[download.rust_analyzer]
-# GitHub 릴리스 태그. 자산 `rust-analyzer-<대상>.gz` 의 SHA-256(릴리스 API 의 digest).
-version = "2026-10-26"
-aarch64-apple-darwin = "8fb90cb58f5910d8d8b24ac1a93cca49f053365cbf0eb3c682144ad0a0027dcf"
-x86_64-apple-darwin = "b3e4904877bcf7013a4a342c449cff1bf0ea0b91d5a1a30ac8df3d32142519c0"
-aarch64-unknown-linux-gnu = "1b225c4c9ae329ca96e8a75a5bbcb5562a7f1d25c57c8b55d3e02299a3dbe836"
-x86_64-unknown-linux-gnu = "4c83773525f93b636ed79761389568b4d2a89c05fa7ecc440245032d49ad80ce"
+# 서버를 받는 Mason 패키지(설치기의 이름)와 실행 파일 이름(설치 결과 JSON 의 `bins` 키). 기본 번들 패키지는 crates/pw-tools/registry.toml
+# 의 `bundled` 이고 판 · 해시는 거기 고정돼 있다 — 판을 올리면 거기서 bump 한다.
+[install.rust_analyzer]
+package = "rust-analyzer"
+bin = "rust-analyzer"
 
-[download.typescript_language_server]
-# npm 판과 레지스트리의 `dist.integrity`. 서버가 쓸 `typescript`(tsserver 가 든 JS 판 — 7.x 는 네이티브라 tsserver 가 없다)를 함께 받는다.
-# 설치는 `--ignore-scripts`(설치가 패키지 코드를 돌리지 않게 — 결정 M4-D17).
-version = "6.0.2"
-integrity = "sha512-Ph7Ql+xkUJvMamnkh1h+aKP6HxLR7lrWIYkPn9/LZBkJdJZgtIj7OoVhkDYtQ7zFPTPmqZHOVXaUKGyz9M2q1Q=="
-typescript = "6.0.3"
-typescript-integrity = "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="
+[install.typescript_language_server]
+package = "typescript-language-server"
+bin = "typescript-language-server"
+
+[install.basedpyright]
+package = "basedpyright"
+bin = "basedpyright-langserver"
+
+[install.ruff]
+package = "ruff"
+bin = "ruff"
+
+[install.jdtls]
+package = "jdtls"
+bin = "jdtls"
+
+[install.kotlin_lsp]
+package = "kotlin-lsp"
+bin = "kotlin-lsp"

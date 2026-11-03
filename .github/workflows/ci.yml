@@ -283,12 +283,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: mise run test-db -- --ci ssh_tunnel
 
-  # 실 언어 서버 시험(15-m4-plan.md M4-01 틀 · M4-18 이 서버를 넓힌다). 서버마다 단계 하나 — scripts/lsp-live.mjs 가 scripts/lsp-live.toml
-  # 의 판 고정 서버를 받아(`--install` — 해시 · integrity 확인, M4-04 의 설치기가 대신할 때까지) 그 서버의 live 시험(`live_lsp_<서버>_`)만
-  # 돌리고, 필터가 0개를 고르거나 실행 개수가 하한([floors]) 아래면 실패한다. 서버가 기대 능력([capabilities])을 알리지 않으면 시험이
-  # 실패한다. 「하한 아래면 실패」 · 「알리지 않은 기대 능력은 실패」 를 지우는 변경은 리뷰에서 거절한다(15 「공유 부품의 주인」). 병합을
-  # 막으려면 저장소 설정에서 필수 검사로 둔다(사람이 한다). ubuntu 는 서버를 돌릴 런타임(python · JDK 21 — M4-18 의 basedpyright ·
-  # jdtls · kotlin-lsp)도 깔고, macOS 는 rust-analyzer · typescript-language-server 두 서버만 돈다.
+  # 실 언어 서버 시험(15-m4-plan.md M4-01 틀 · M4-18 이 기본 번들 서버 전부로 넓혔다). 서버마다 단계 하나 — scripts/lsp-live.mjs 가 서버를
+  # Pitwall 의 설치기(`cargo run -p pw-tools --example tools_install` — crates/pw-tools/registry.toml 의 고정 판 · 고정 해시)로 받아
+  # (`--install`) 그 서버의 live 시험(`live_lsp_<서버>_`)만 돌리고, 필터가 0개를 고르거나 실행 개수가 하한(scripts/lsp-live.toml 의
+  # [floors]) 아래면 실패한다. 서버가 기대 능력([capabilities])을 알리지 않으면 시험이 실패한다. 「하한 아래면 실패」 · 「알리지 않은
+  # 기대 능력은 실패」 를 지우는 변경은 리뷰에서 거절한다(15 「공유 부품의 주인」). 병합을 막으려면 저장소 설정에서 필수 검사로 둔다
+  # (사람이 한다). ubuntu 는 여섯 서버 모두(basedpyright · ruff · jdtls · kotlin-lsp 는 ubuntu 만), macOS 는 rust-analyzer ·
+  # typescript-language-server 둘만 돈다. 단계마다 걸린 시간은 Actions 의 단계 시간, 받기 · 설치 폴더 크기는 스크립트 출력에 있다.
   lsp-live:
     name: lsp-live (${{ matrix.os }})
     if: github.event_name != 'schedule'
@@ -297,23 +298,26 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       # mise run 은 기본으로 mise.toml 의 빠진 도구를 전부 설치한다. 아래 install_args 로 고른 것만 쓰게 끈다.
       MISE_TASK_RUN_AUTO_INSTALL: "false"
       NEXTEST_PROFILE: ci
-      # 받은 서버 설치본(scripts/lsp-live.mjs). 아래 캐시가 덮는다 — 키는 고정 판이 적힌 lsp-live.toml(M4-03 의 registry 판으로 바뀐다).
+      # 설치기의 $DATA · $STATE(scripts/lsp-live.mjs). 아래 캐시가 덮는다 — 키는 registry 고정 표와 덮어쓰기 정의(서버 판 · 해시가
+      # 여기서 정해진다).
       PW_LSP_SERVERS_DIR: ${{ github.workspace }}/.lsp-servers
-      # 서버를 돌리는 런타임의 판(ubuntu 만). 프로젝트가 쓰는 런타임과 따로다(결정 M4-D6).
+      # 서버를 돌리는 런타임의 판(ubuntu 만): basedpyright 설치용 python(>=3.10), jdtls 의 JDK 25(1.62.0 부터 JavaSE-25 — 결정 M4-D6).
+      # 프로젝트가 쓰는 런타임과 따로다 — JDK 17 은 jdtls 의 「프로젝트 17 · 서버 25」 시험용(PW_TEST_JDK17).
       LSP_LIVE_PYTHON: "3.13.18"
-      LSP_LIVE_JAVA: temurin-21.0.13+9.0.LTS
+      LSP_LIVE_JAVA: temurin-25.0.5+8.0.LTS
+      LSP_LIVE_PROJECT_JAVA: temurin-17.0.21+9
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           version: ${{ env.MISE_VERSION }}
-          # 스크립트(node) · 빌드(rust) · 시험(nextest) · TS 서버 받기(pnpm)만 쓴다. 저장소의 pnpm 의존성은 설치하지 않는다.
+          # 스크립트 · TS 서버 설치(node · npm) · 빌드(rust) · 시험(nextest)만 쓴다. 저장소의 pnpm 의존성은 설치하지 않는다.
           install_args: node rust aqua:nextest-rs/nextest/cargo-nextest npm:pnpm
 
       # rust-toolchain.toml 의 components(rust-src — rust-analyzer 가 표준 라이브러리 소스를 읽는다)를 깐다. 까닭은 check 잡의 같은 단계.
@@ -321,22 +325,41 @@ jobs:
         shell: bash
         run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
 
-      # 서버를 돌리는 런타임(M4-18 이 쓴다). mise 로 받아 PATH 에 올린다 — 저장소의 mise.toml 은 바꾸지 않는다(개발자 기기에 JDK ·
-      # python 을 깔지 않게).
-      - name: server runtimes (python · JDK 21)
+      # 서버를 돌리는 런타임. mise 로 받아 PATH 에 올린다 — 저장소의 mise.toml 은 바꾸지 않는다(개발자 기기에 JDK · python 을 깔지
+      # 않게). 러너가 미리 둔 JAVA_HOME 은 지운다 — 프로젝트 JDK(서버 관리자가 프로젝트 런타임 환경의 JAVA_HOME · PATH 에서 찾는다)가
+      # 러너의 기본 JDK 가 되지 않게.
+      - name: server runtimes (python · JDK 25 · project JDK 17)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          mise install "python@$LSP_LIVE_PYTHON" "java@$LSP_LIVE_JAVA"
+          mise install "python@$LSP_LIVE_PYTHON" "java@$LSP_LIVE_JAVA" "java@$LSP_LIVE_PROJECT_JAVA"
           echo "$(mise where "java@$LSP_LIVE_JAVA")/bin" >> "$GITHUB_PATH"
           echo "$(mise where "python@$LSP_LIVE_PYTHON")/bin" >> "$GITHUB_PATH"
+          echo "PW_TEST_JDK17=$(mise where "java@$LSP_LIVE_PROJECT_JAVA")" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.PW_LSP_SERVERS_DIR }}
-          key: lsp-servers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/lsp-live.toml') }}
+          key: lsp-servers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/pw-tools/registry.toml', 'crates/pw-tools/overrides/**') }}
+
+      # Java · Kotlin 서버의 Gradle 가져오기는 픽스처의 wrapper 판(Gradle 배포판)과 Kotlin Gradle 플러그인 · kotlin-stdlib 를 받는다
+      # (crates/pw-lsp/tests/fixtures/{java,kotlin}/). 키는 그 빌드 파일들.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.os == 'Linux'
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper/dists
+          key: lsp-gradle-${{ runner.os }}-${{ hashFiles('crates/pw-lsp/tests/fixtures/java/**/*.gradle', 'crates/pw-lsp/tests/fixtures/kotlin/**/*.kts', 'crates/pw-lsp/tests/fixtures/*/gradle/wrapper/gradle-wrapper.properties') }}
+
+      # 실제 HTTPS 받기 · 설치기 시험(`#[ignore]` — 네트워크, M4-03 · M4-04): 고정 registry 산출물, 설치기로 rust-analyzer ·
+      # typescript-language-server 받기. 0개를 고르면 실패한다.
+      - name: live tools (registry download · installer)
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p pw-tools --run-ignored only -E 'test(/(^|::)live_tools_/)' --no-tests=fail
 
       # `--ci`: 서버 경로가 없으면 건너뛰지 않고 실패한다. 단계마다 고른 · 돈 시험 수와 하한을 출력한다. 한 서버가 실패해도 나머지 서버의
       # 단계는 돈다(`!cancelled()`) — 판정은 서버마다 따로다.
@@ -346,6 +369,18 @@ jobs:
       - name: live typescript_language_server
         if: ${{ !cancelled() }}
         run: mise run test-lsp -- --ci --install typescript_language_server
+      - name: live basedpyright
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: mise run test-lsp -- --ci --install basedpyright
+      - name: live ruff
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: mise run test-lsp -- --ci --install ruff
+      - name: live jdtls
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: mise run test-lsp -- --ci --install jdtls
+      - name: live kotlin_lsp
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: mise run test-lsp -- --ci --install kotlin_lsp
 
   advisories:
     name: advisories

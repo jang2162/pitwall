@@ -67,11 +67,11 @@ description = "실 DB 시험(PG · MySQL · MariaDB · Redis · SSH 터널)을 D
 run = "node scripts/db-live.mjs"
 
 # 실 언어 서버 시험(live_lsp_*)을 서버마다 따로 돌리고 실행 개수를 하한(scripts/lsp-live.toml)과 견준다 — CI 의 `lsp-live` 잡과 같은
-# 명령이다(15-m4-plan.md M4-01). 실행 파일 경로(PW_TEST_LSP_RUST_ANALYZER · PW_TEST_LSP_TYPESCRIPT_LANGUAGE_SERVER)가 없는 서버는 건너뛰고
-# 그렇게 알린다 — 통과로 세지 않는다(모두 건너뛰면 종료 코드 3). `--install` 은 lsp-live.toml 의 판 고정 서버를 target/lsp-servers/ 에
-# 받아 쓴다(네트워크). 인자로 서버를 고른다 — 예: `mise run test-lsp -- --install rust_analyzer`.
+# 명령이다(15-m4-plan.md M4-01 · M4-18). 실행 파일 경로(PW_TEST_LSP_<서버> 또는 PW_TEST_TOOLS_DIR/bin)가 없는 서버는 건너뛰고
+# 그렇게 알린다 — 통과로 세지 않는다(모두 건너뛰면 종료 코드 3). `--install` 은 Pitwall 의 설치기(tools_install 예제)로 서버를
+# target/lsp-servers/ 에 받아 쓴다(네트워크). 인자로 서버를 고른다 — 예: `mise run test-lsp -- --install jdtls`.
 [tasks.test-lsp]
-description = "실 언어 서버 시험(rust-analyzer · typescript-language-server)을 서버마다 돌리고 실행 개수 하한 검사(경로가 없는 서버는 건너뜀, --install 로 받기)"
+description = "실 언어 서버 시험(기본 번들 여섯 서버)을 서버마다 돌리고 실행 개수 하한 검사(경로가 없는 서버는 건너뜀, --install 로 설치기로 받기)"
 run = "node scripts/lsp-live.mjs"
 
 # 「release 빌드에서만 판정」하는 시험을 모아 돈다 — 기본 `test` 는 debug 라 시간 상한(검색 취소 100 ms · `fs.list` 1만 개 100 ms ·

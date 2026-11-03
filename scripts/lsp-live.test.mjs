@@ -11,36 +11,31 @@ import {
   capabilityTest,
   exitCode,
   filterExpr,
+  filterName,
+  installArgs,
+  installedProgram,
   judge,
-  lockIntegrity,
   parseToml,
   readConfig,
   runCount,
-  rustTarget,
   selectedTests,
 } from "./lsp-live.mjs";
 
 const configText = readFileSync(resolve(import.meta.dirname, "lsp-live.toml"), "utf8");
 
-test("the config has a floor, capabilities and a pinned download for every server and nothing else", () => {
+test("the config has a floor, capabilities and an installer package for every server and nothing else", () => {
   const config = readConfig(configText);
   assert.deepEqual(Object.keys(config.floors).sort(), Object.keys(TARGETS).sort());
   assert.deepEqual(Object.keys(config.capabilities).sort(), Object.keys(TARGETS).sort());
+  assert.deepEqual(Object.keys(config.install).sort(), Object.keys(TARGETS).sort());
   for (const name of Object.keys(TARGETS)) {
-    assert.ok(config.floors[name] >= 1, `${name}: M4-01 sets every floor to at least 1`);
     assert.ok(config.capabilities[name].length > 0, `${name}: expected capabilities`);
+    // 실행 파일 이름이 시험 쪽(crates/pw-lsp/src/live.rs 의 executable)과 같다 — 설치 결과의 그 이름을 쓴다.
+    assert.equal(config.install[name].bin, TARGETS[name].exe, name);
   }
-  const ra = config.download.rust_analyzer;
-  for (const target of [
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-unknown-linux-gnu",
-  ])
-    assert.match(ra[target], /^[0-9a-f]{64}$/, target);
-  const ts = config.download.typescript_language_server;
-  assert.match(ts.integrity, /^sha512-/);
-  assert.match(ts["typescript-integrity"], /^sha512-/);
+  // 하한(15-m4-plan.md M4-18): ruff 는 3, 나머지는 10 이상.
+  for (const [name, floor] of Object.entries(config.floors))
+    assert.ok(floor >= (name === "ruff" ? 3 : 10), `${name}: floor ${floor}`);
   assert.throws(
     () => readConfig("[floors]\nrust_analyzer = 1\n"),
     /has no \[capabilities\] rust_analyzer/,
@@ -52,6 +47,10 @@ test("the config has a floor, capabilities and a pinned download for every serve
   assert.throws(
     () => readConfig(configText.replace(/^\[floors\]$/m, "[floors]\nmystery = 1")),
     /unknown server mystery/,
+  );
+  assert.throws(
+    () => readConfig(configText.replace(/^package = "jdtls"$/m, "")),
+    /has no \[install.jdtls\] package and bin/,
   );
 });
 
@@ -141,24 +140,33 @@ test("the capability check must be among the selected tests", () => {
   assert.equal(judge({ ...base, selected: lookalike }).ok, false);
 });
 
-test("run counts, exit codes, targets and lockfile integrity", () => {
+test("run counts, exit codes and the installer call", () => {
   assert.equal(runCount("     Summary [   0.355s] 1 test run: 1 passed, 33 skipped"), 1);
   assert.equal(exitCode([{ ok: true, skipped: true }]), 3);
   assert.equal(exitCode([{ ok: true }, { ok: false }]), 1);
-  assert.equal(rustTarget("darwin", "arm64"), "aarch64-apple-darwin");
-  assert.equal(rustTarget("linux", "x64"), "x86_64-unknown-linux-gnu");
-  assert.equal(rustTarget("win32", "x64"), null);
-  const lock = [
-    "packages:",
-    "",
-    "  typescript-language-server@6.0.2:",
-    "    resolution: {integrity: sha512-AAA==}",
-    "    engines: {node: '>=22'}",
-    "",
-    "  typescript@6.0.3:",
-    "    resolution: {integrity: sha512-BBB==}",
-  ].join("\n");
-  assert.equal(lockIntegrity(lock, "typescript-language-server", "6.0.2"), "sha512-AAA==");
-  assert.equal(lockIntegrity(lock, "typescript", "6.0.3"), "sha512-BBB==");
-  assert.equal(lockIntegrity(lock, "typescript", "6.0.2"), null);
+  assert.equal(filterName("kotlin_lsp"), "live_lsp_kotlin_lsp");
+  assert.deepEqual(installArgs("jdtls", "/s"), [
+    "run",
+    "-q",
+    "-p",
+    "pw-tools",
+    "--example",
+    "tools_install",
+    "--",
+    "jdtls",
+    "/s/data",
+    "/s/state",
+  ]);
+  const out = JSON.stringify({
+    name: "kotlin-lsp",
+    version: "kotlin-lsp/v263.7084.0",
+    checksum: "pinned",
+    bins: { "intellij-server": "/s/a/intellij-server", "kotlin-lsp": "/s/a/intellij-server" },
+  });
+  assert.equal(installedProgram(out, "kotlin-lsp").program, "/s/a/intellij-server");
+  assert.throws(() => installedProgram(out, "jdtls"), /gave no jdtls/);
+  assert.throws(
+    () => installedProgram(JSON.stringify({ ...JSON.parse(out), checksum: "none" }), "kotlin-lsp"),
+    /without a pinned hash/,
+  );
 });

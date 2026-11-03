@@ -1,23 +1,22 @@
 // 실 언어 서버 시험(live_lsp_*)을 서버마다 따로 돌리고 실행 개수를 하한(scripts/lsp-live.toml 의 [floors])과 견준다
-// (15-m4-plan.md M4-01 ⑧ — M3 의 scripts/db-live.mjs 와 같은 판정).
+// (15-m4-plan.md M4-01 ⑧ · M4-18 — M3 의 scripts/db-live.mjs 와 같은 판정).
 //
-//   node scripts/lsp-live.mjs [--ci] [--install] [server …]     server: rust_analyzer · typescript_language_server(없으면 전부)
+//   node scripts/lsp-live.mjs [--ci] [--install] [server …]
+//     server: rust_analyzer · typescript_language_server · basedpyright · ruff · jdtls · kotlin_lsp(없으면 전부)
 //
 // CI 의 `lsp-live` 잡이 서버마다 한 단계씩(`--ci --install`), `mise run test-lsp` 가 전부를 한 번에 부른다. 서버마다:
-//   1. 실행 파일 경로(PW_TEST_LSP_<서버>)가 없으면: `--install` 이면 scripts/lsp-live.toml 의 [download.<서버>] 대로 판 고정 · 해시
-//      확인으로 받아(target/lsp-servers/ — PW_LSP_SERVERS_DIR 로 바꾼다) 그 경로를 준다. 아니면 로컬은 「건너뜀」 으로 알리고 통과로
-//      세지 않는다(모두 건너뛰었으면 종료 코드 3). `--ci` 인데 경로가 없으면 실패다.
+//   1. 실행 파일 경로: PW_TEST_LSP_<서버>, 없으면 PW_TEST_TOOLS_DIR/bin/<실행 파일>(설치기의 실행 링크 폴더). 둘 다 없고 `--install`
+//      이면 Pitwall 의 설치기로 받는다 — `cargo run -q -p pw-tools --example tools_install -- <패키지> <$DATA> <$STATE>`(앱과 같은
+//      고정 registry 판 · 고정 해시 · 풀기 검사, `$DATA` · `$STATE` 는 PW_LSP_SERVERS_DIR — 기본 target/lsp-servers/ — 아래). 아니면
+//      로컬은 「건너뜀」 으로 알리고 통과로 세지 않는다(모두 건너뛰었으면 종료 코드 3). `--ci` 인데 경로가 없으면 실패다.
 //   2. `cargo nextest list` 로 필터가 고른 시험을 세고, `cargo nextest run --no-tests=fail` 로 돌린다 — 필터가 0개를 고르면 실패다.
 //   3. 돈 수(nextest 의 Summary 줄)가 고른 수와 같은지, 하한 이상인지 본다.
-// 받기는 M4-04 의 설치기가 대신하고(그때 [download] 와 install 을 걷는다), M4-18 이 서버를 넓힌다. 시험을 다는 법은
-// crates/pw-lsp/src/live.rs 머리 주석.
+// 시험을 다는 법은 crates/pw-lsp/src/live.rs 머리 주석.
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { gunzipSync } from "node:zlib";
 
 import { exitCode, runCount, selectedTests } from "./db-live.mjs";
 
@@ -25,18 +24,18 @@ export { exitCode, runCount, selectedTests };
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-// 서버 → (실행 파일 경로 변수, nextest 이름 필터, 받기). 새 서버는 여기와 lsp-live.toml, crates/pw-lsp 의 live_cfg.rs · src/live.rs 에 한 줄씩.
+// 서버 → (실행 파일 경로 변수, 실행 파일 이름, nextest 이름 필터). 받을 패키지는 lsp-live.toml 의 [install.<서버>]. 새 서버는 여기와
+// lsp-live.toml, crates/pw-lsp 의 live_cfg.rs · src/live.rs 에 한 줄씩.
 export const TARGETS = {
-  rust_analyzer: {
-    env: "PW_TEST_LSP_RUST_ANALYZER",
-    filter: "live_lsp_rust_analyzer",
-    install: installRustAnalyzer,
-  },
+  rust_analyzer: { env: "PW_TEST_LSP_RUST_ANALYZER", exe: "rust-analyzer" },
   typescript_language_server: {
     env: "PW_TEST_LSP_TYPESCRIPT_LANGUAGE_SERVER",
-    filter: "live_lsp_typescript_language_server",
-    install: installTypescriptLanguageServer,
+    exe: "typescript-language-server",
   },
+  basedpyright: { env: "PW_TEST_LSP_BASEDPYRIGHT", exe: "basedpyright-langserver" },
+  ruff: { env: "PW_TEST_LSP_RUFF", exe: "ruff" },
+  jdtls: { env: "PW_TEST_LSP_JDTLS", exe: "jdtls" },
+  kotlin_lsp: { env: "PW_TEST_LSP_KOTLIN_LSP", exe: "kotlin-lsp" },
 };
 
 /**
@@ -92,7 +91,7 @@ function parseValue(value, where) {
   throw new Error(`${where}: unsupported value ${value}`);
 }
 
-/** 설정 전체를 읽고 서버마다 하한 · 기대 능력 표 · 받기 절이 있는지 본다. */
+/** 설정 전체를 읽고 서버마다 하한 · 기대 능력 표 · 받을 패키지가 있는지 본다. */
 export function readConfig(text) {
   const config = parseToml(text);
   for (const name of Object.keys(TARGETS)) {
@@ -100,14 +99,20 @@ export function readConfig(text) {
       throw new Error(`scripts/lsp-live.toml has no [floors] ${name}`);
     if (!Array.isArray(config.capabilities?.[name]))
       throw new Error(`scripts/lsp-live.toml has no [capabilities] ${name}`);
-    if (!config.download?.[name])
-      throw new Error(`scripts/lsp-live.toml has no [download.${name}]`);
+    const install = config.install?.[name];
+    if (typeof install?.package !== "string" || typeof install?.bin !== "string")
+      throw new Error(`scripts/lsp-live.toml has no [install.${name}] package and bin`);
   }
   for (const name of Object.keys(config.floors ?? {})) {
     if (!TARGETS[name])
       throw new Error(`scripts/lsp-live.toml: unknown server ${name} in [floors]`);
   }
   return config;
+}
+
+/** 그 서버의 nextest 필터 이름 조각(`live_lsp_<서버>`). */
+export function filterName(server) {
+  return `live_lsp_${server}`;
 }
 
 /**
@@ -154,92 +159,79 @@ export function judge({ server, selected, run, floor, exitCode: code, required }
   return { ok: true, message: `${line} — ok` };
 }
 
-/** rust-analyzer 릴리스 자산의 대상 이름. 받을 수 없는 기기면 null. */
-export function rustTarget(platform = process.platform, arch = process.arch) {
-  const cpu = { arm64: "aarch64", x64: "x86_64" }[arch];
-  const os = { darwin: "apple-darwin", linux: "unknown-linux-gnu" }[platform];
-  return cpu && os ? `${cpu}-${os}` : null;
-}
-
-/** pnpm-lock.yaml 에서 `<이름>@<판>` 의 integrity. 없으면 null. */
-export function lockIntegrity(lock, name, version) {
-  const escaped = `${name}@${version}`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(
-    `^ {2}'?${escaped}'?:\\s*\\n\\s+resolution: \\{integrity: ([^,}]+)`,
-    "m",
-  ).exec(lock);
-  return match ? match[1].trim() : null;
-}
-
 function serversDir() {
   return process.env.PW_LSP_SERVERS_DIR || join(root, "target", "lsp-servers");
 }
 
-async function download(url) {
-  const response = await fetch(url, { redirect: "follow" });
-  if (!response.ok) throw new Error(`GET ${url}: ${response.status}`);
-  if (!response.url.startsWith("https://"))
-    throw new Error(`GET ${url}: redirected off HTTPS to ${response.url}`);
-  return Buffer.from(await response.arrayBuffer());
+/** 설치기 예제의 cargo 인자(`$DATA` · `$STATE` 는 `dir` 아래). */
+export function installArgs(pkg, dir) {
+  return [
+    "run",
+    "-q",
+    "-p",
+    "pw-tools",
+    "--example",
+    "tools_install",
+    "--",
+    pkg,
+    join(dir, "data"),
+    join(dir, "state"),
+  ];
 }
 
-async function installRustAnalyzer(pins) {
-  const target = rustTarget();
-  if (!target) throw new Error(`no rust-analyzer build for ${process.platform}/${process.arch}`);
-  const sha256 = pins[target];
-  if (!sha256) throw new Error(`scripts/lsp-live.toml [download.rust_analyzer] has no ${target}`);
-  const dir = join(serversDir(), "rust-analyzer", pins.version);
-  const exe = join(dir, "rust-analyzer");
-  if (existsSync(exe)) return exe;
-  const url = `https://github.com/rust-lang/rust-analyzer/releases/download/${pins.version}/rust-analyzer-${target}.gz`;
-  console.log(`== rust_analyzer: GET ${url}`);
-  const gz = await download(url);
-  const got = createHash("sha256").update(gz).digest("hex");
-  if (got !== sha256)
-    throw new Error(`rust-analyzer ${pins.version} ${target}: sha256 ${got}, pinned ${sha256}`);
-  mkdirSync(dir, { recursive: true });
-  // 다 쓴 뒤 이름을 바꾼다 — 끊긴 받기가 「있음」 으로 남지 않게.
-  writeFileSync(`${exe}.part`, gunzipSync(gz));
-  chmodSync(`${exe}.part`, 0o755);
-  renameSync(`${exe}.part`, exe);
-  return exe;
-}
-
-function installTypescriptLanguageServer(pins) {
-  const dir = join(
-    serversDir(),
-    "typescript-language-server",
-    `${pins.version}-ts${pins.typescript}`,
-  );
-  const exe = join(dir, "node_modules", ".bin", "typescript-language-server");
-  const lockFile = join(dir, "pnpm-lock.yaml");
-  if (!existsSync(exe) || !existsSync(lockFile)) {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "package.json"), '{ "private": true }\n');
-    const packages = [
-      `typescript-language-server@${pins.version}`,
-      `typescript@${pins.typescript}`,
-    ];
-    console.log(`== typescript_language_server: pnpm add ${packages.join(" ")} (in ${dir})`);
-    // 저장소의 pnpm 작업 공간에 섞이지 않게(--ignore-workspace), 설치가 패키지 코드를 돌리지 않게(--ignore-scripts).
-    const result = spawnSync(
-      "pnpm",
-      ["add", "--ignore-workspace", "--ignore-scripts", "--dir", dir, ...packages],
-      { encoding: "utf8", stdio: ["ignore", "inherit", "inherit"] },
+/** 설치 결과 JSON(`{name, version, checksum, bins}`)에서 실행 파일 경로. 없으면 오류. */
+export function installedProgram(stdout, bin) {
+  const out = JSON.parse(stdout);
+  const program = out.bins?.[bin];
+  if (typeof program !== "string")
+    throw new Error(`the installer gave no ${bin} for ${out.name}: ${stdout.trim()}`);
+  if (out.checksum !== "pinned")
+    throw new Error(
+      `${out.name} ${out.version} was installed without a pinned hash (${out.checksum})`,
     );
-    if (result.error) throw result.error;
-    if (result.status !== 0) throw new Error(`pnpm add failed (exit ${result.status})`);
+  return { program, name: out.name, version: out.version };
+}
+
+/** 폴더의 바이트(링크는 따라가지 않는다). */
+function folderBytes(dir) {
+  let total = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) total += folderBytes(path);
+    else total += lstatSync(path).size;
   }
-  const lock = readFileSync(lockFile, "utf8");
-  for (const [name, version, pinned] of [
-    ["typescript-language-server", pins.version, pins.integrity],
-    ["typescript", pins.typescript, pins["typescript-integrity"]],
-  ]) {
-    const got = lockIntegrity(lock, name, version);
-    if (got !== pinned) throw new Error(`${name}@${version}: integrity ${got}, pinned ${pinned}`);
-  }
-  if (!existsSync(exe)) throw new Error(`${exe} is missing after the install`);
-  return exe;
+  return total;
+}
+
+/** Pitwall 의 설치기로 그 서버를 받는다(이미 그 판이면 받지 않는다). 걸린 시간 · 설치 폴더 크기를 찍는다(CI 단계 보고). */
+function install(server, spec) {
+  const dir = serversDir();
+  const started = Date.now();
+  console.log(`== ${server}: tools_install ${spec.package} (${dir})`);
+  const result = spawnSync("cargo", installArgs(spec.package, dir), {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0)
+    throw new Error(`tools_install ${spec.package} failed (exit ${result.status})`);
+  const { program, name, version } = installedProgram(result.stdout, spec.bin);
+  const folder = join(dir, "data", "tools", name);
+  const mb = existsSync(folder) ? (folderBytes(folder) / 1e6).toFixed(1) : "?";
+  console.log(
+    `   ${name} ${version}: ${((Date.now() - started) / 1000).toFixed(1)} s, install folder ${mb} MB — ${program}`,
+  );
+  return program;
+}
+
+/** 시험 프로세스가 쓸 실행 파일 경로: 변수, 없으면 PW_TEST_TOOLS_DIR/bin/<실행 파일>. */
+function givenProgram(target) {
+  if (process.env[target.env]) return process.env[target.env];
+  const tools = process.env.PW_TEST_TOOLS_DIR;
+  if (tools && existsSync(join(tools, "bin", target.exe))) return join(tools, "bin", target.exe);
+  return null;
 }
 
 /** 사람이 끊었다(Ctrl-C). */
@@ -259,10 +251,10 @@ function cargo(args, env, { capture }) {
   return result;
 }
 
-async function runTarget(server, config, { ci, install }) {
+async function runTarget(server, config, { ci, install: wantInstall }) {
   const target = TARGETS[server];
-  let program = process.env[target.env];
-  if (!program && install) program = await target.install(config.download[server]);
+  let program = givenProgram(target);
+  if (!program && wantInstall) program = install(server, config.install[server]);
   if (!program) {
     const message = `${server}: ${target.env} is not set — not run`;
     return ci
@@ -270,11 +262,11 @@ async function runTarget(server, config, { ci, install }) {
       : {
           ok: true,
           skipped: true,
-          message: `${message}; skipped, not counted as passed (--install fetches the pinned server)`,
+          message: `${message}; skipped, not counted as passed (--install fetches it with the Pitwall installer)`,
         };
   }
   const env = { ...process.env, [target.env]: program };
-  const expr = filterExpr(target.filter);
+  const expr = filterExpr(filterName(server));
   console.log(
     `\n== ${server}: cargo nextest run -p pw-lsp -E '${expr}' (${target.env}=${program})`,
   );
