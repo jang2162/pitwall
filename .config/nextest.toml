@@ -3,3 +3,12 @@
 # 한 OS 에서 처음 도는 시험이 여럿 실패해도 한 번의 실행으로 전부 드러낸다.
 fail-fast = false
 
+
+# JVM 언어 서버(jdtls · kotlin-lsp)의 실 서버 시험은 시험마다 서버 하나(1 ~ 2.5 GB)를 띄운다 — 동시에 둘까지만(15-m4-plan.md M4-18,
+# CI 러너 메모리). 기본 프로필의 덮어쓰기는 다른 프로필(ci)에도 붙는다.
+[test-groups]
+lsp-jvm = { max-threads = 2 }
+
+[[profile.default.overrides]]
+filter = 'test(/(^|::)live_lsp_(jdtls|kotlin_lsp)_/)'
+test-group = 'lsp-jvm'

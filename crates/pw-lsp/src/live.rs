@@ -1,6 +1,6 @@
 //! 실 서버 시험 도우미(15-m4-plan.md M4-01 ⑦ — M3 의 `pw_db_driver::live` 와 같은 규칙).
 //!
-//! **시험을 다는 법**: `#[cfg(pw_live_lsp_rust_analyzer)]`(TS 는 `pw_live_lsp_typescript_language_server`)를 달고 함수 이름을
+//! **시험을 다는 법**: `#[cfg(pw_live_lsp_rust_analyzer)]`(다른 서버는 `pw_live_lsp_<서버 이름>` — [`LiveServer::name`])를 달고 함수 이름을
 //! `live_lsp_<서버>_` 로 시작한다 — `scripts/lsp-live.mjs` 의 필터(`test(/(^|::)live_lsp_<서버>_/)`)는 이름 조각의 처음만 보고, 실
 //! 서버 없이 도는 시험은 이 접두어로 시작하지 않는다. 서버가 없으면 시험이 목록에 없다(빌드 스크립트 `live_cfg.rs` 머리 주석).
 //! **live 시험은 `pw-lsp` 크레이트에만 둔다** — 표지는 이 크레이트의 빌드 스크립트가 켜고, `scripts/lsp-live.mjs` 는 `pw-lsp` 만
@@ -16,22 +16,41 @@ use std::path::PathBuf;
 pub enum LiveServer {
     RustAnalyzer,
     TypescriptLanguageServer,
+    Basedpyright,
+    Ruff,
+    Jdtls,
+    KotlinLsp,
 }
 
 impl LiveServer {
-    pub const ALL: [Self; 2] = [Self::RustAnalyzer, Self::TypescriptLanguageServer];
+    pub const ALL: [Self; 6] = [
+        Self::RustAnalyzer,
+        Self::TypescriptLanguageServer,
+        Self::Basedpyright,
+        Self::Ruff,
+        Self::Jdtls,
+        Self::KotlinLsp,
+    ];
 
     /// 시험 이름 · 필터 · `scripts/lsp-live.toml` 의 키.
     pub fn name(self) -> &'static str {
         match self {
             Self::RustAnalyzer => "rust_analyzer",
             Self::TypescriptLanguageServer => "typescript_language_server",
+            Self::Basedpyright => "basedpyright",
+            Self::Ruff => "ruff",
+            Self::Jdtls => "jdtls",
+            Self::KotlinLsp => "kotlin_lsp",
         }
     }
 
-    /// 서버 id(정의의 id — 로그 파일 이름).
+    /// 서버 id(내장 언어 확장의 정의 id — 로그 파일 이름).
     pub fn server_id(self) -> &'static str {
-        self.executable()
+        match self {
+            Self::Basedpyright => "basedpyright",
+            Self::KotlinLsp => "kotlin-lsp",
+            other => other.executable(),
+        }
     }
 
     /// 실행 파일 이름.
@@ -39,6 +58,10 @@ impl LiveServer {
         match self {
             Self::RustAnalyzer => "rust-analyzer",
             Self::TypescriptLanguageServer => "typescript-language-server",
+            Self::Basedpyright => "basedpyright-langserver",
+            Self::Ruff => "ruff",
+            Self::Jdtls => "jdtls",
+            Self::KotlinLsp => "kotlin-lsp",
         }
     }
 
@@ -50,8 +73,11 @@ impl LiveServer {
     /// stdio 로 띄우는 인자.
     pub fn args(self) -> Vec<OsString> {
         match self {
-            Self::RustAnalyzer => Vec::new(),
-            Self::TypescriptLanguageServer => vec!["--stdio".into()],
+            Self::RustAnalyzer | Self::Jdtls => Vec::new(),
+            Self::TypescriptLanguageServer | Self::Basedpyright | Self::KotlinLsp => {
+                vec!["--stdio".into()]
+            }
+            Self::Ruff => vec!["server".into()],
         }
     }
 

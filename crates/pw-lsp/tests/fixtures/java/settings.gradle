@@ -1,0 +1,2 @@
+// live 시험 픽스처(../README.md). 의존을 받지 않는다 — 저장소(repositories) · 의존(dependencies)이 없다.
+rootProject.name = 'fixture'

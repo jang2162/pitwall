@@ -9,9 +9,13 @@
 //! 값이 바뀌면 이 스크립트가 다시 돌고 크레이트가 다시 컴파일된다.
 
 /// (서버 이름 — 시험 이름 · 필터 조각, 실행 파일 이름).
-const SERVERS: [(&str, &str); 2] = [
+const SERVERS: [(&str, &str); 6] = [
     ("rust_analyzer", "rust-analyzer"),
     ("typescript_language_server", "typescript-language-server"),
+    ("basedpyright", "basedpyright-langserver"),
+    ("ruff", "ruff"),
+    ("jdtls", "jdtls"),
+    ("kotlin_lsp", "kotlin-lsp"),
 ];
 
 const TOOLS_DIR: &str = "PW_TEST_TOOLS_DIR";

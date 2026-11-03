@@ -111,6 +111,8 @@ pub struct EnvOptions {
     pub isolated_shell: bool,
     /// 파일 목록 인덱스와 실제 OS 감시(`pw_fs`)를 관리자에 붙인다(파일 감시 전달 — M4-05b). 감시는 [`Env::watch_project`] 로 건다.
     pub files: bool,
+    /// 가짜 로그인 셸이 명령 앞에 돌리는 셸 줄(프로젝트 런타임 환경을 바꾼다 — `export JAVA_HOME=…`, M4-18).
+    pub shell_prelude: Option<String>,
 }
 
 impl Default for EnvOptions {
@@ -120,6 +122,7 @@ impl Default for EnvOptions {
             follow: true,
             isolated_shell: true,
             files: false,
+            shell_prelude: None,
             manager: ManagerOptions {
                 backoff_base: Duration::from_millis(10),
                 backoff_max: Duration::from_millis(50),
@@ -150,14 +153,15 @@ impl Env {
         executable(&bin.join("python3"), "echo 'Python 3.12.4'");
         let home = base.join("home");
         fs::create_dir_all(&home).unwrap();
+        let prelude = options.shell_prelude.as_deref().unwrap_or_default();
         let body = if options.isolated_shell {
             format!(
-                "PATH='{}:/usr/bin:/bin'; export PATH\nHOME='{}'; export HOME\nunset MISE_DATA_DIR XDG_DATA_HOME\neval \"$4\"",
+                "PATH='{}:/usr/bin:/bin'; export PATH\nHOME='{}'; export HOME\nunset MISE_DATA_DIR XDG_DATA_HOME\n{prelude}\neval \"$4\"",
                 bin.display(),
                 home.display()
             )
         } else {
-            "eval \"$4\"".to_owned()
+            format!("{prelude}\neval \"$4\"")
         };
         let shell = executable(&base.join("fake-shell"), &body);
         let runtime = Arc::new(Runtime::new(LoginShell::new(

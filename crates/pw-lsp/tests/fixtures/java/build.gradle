@@ -1,0 +1,9 @@
+// java 플러그인은 Gradle 에 들어 있다(받지 않는다). 언어 수준은 17 — 서버는 JDK 25 로 돌아도 프로젝트는 17 이다(결정 M4-D6).
+plugins {
+    id 'java'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}

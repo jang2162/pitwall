@@ -1,0 +1,12 @@
+# live 시험 픽스처(../README.md). 의존이 없다 — 서버(basedpyright · ruff)만 이 파일을 읽는다.
+[project]
+name = "fixture"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+# 기본(recommended)은 진단이 많다 — 앵커의 오류만 보이게 표준 검사로 둔다.
+[tool.basedpyright]
+typeCheckingMode = "standard"
+
+[tool.ruff]
+line-length = 100

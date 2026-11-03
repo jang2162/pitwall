@@ -3,7 +3,18 @@
 
 mod common;
 
-#[cfg(any(pw_live_lsp_rust_analyzer, pw_live_lsp_typescript_language_server))]
+#[cfg(any(
+    pw_live_lsp_rust_analyzer,
+    pw_live_lsp_typescript_language_server,
+    pw_live_lsp_basedpyright,
+    pw_live_lsp_ruff,
+    pw_live_lsp_jdtls,
+    pw_live_lsp_kotlin_lsp
+))]
+#[allow(
+    dead_code,
+    reason = "the document sync and watch helpers are for rust-analyzer and the TypeScript server"
+)]
 mod live {
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -464,13 +475,44 @@ mod live {
         // 빈 작업 공간이면 충분하다 — 픽스처 프로젝트(crates/pw-lsp/tests/fixtures/)는 M4-05 의 몫이다.
         let log =
             ServerLog::open(&lsp_log_dir(&p.state), server.server_id(), "live", true).unwrap();
+        // 서버를 돌리는 런타임(정의의 `requires` — jdtls 의 JDK 25, basedpyright 의 python)을 서버 관리자와 같은 함수로 찾아 넣는다
+        // (PATH 맨 앞 · java 면 `JAVA_HOME` — `ServerSetup::with_runtime` 과 같은 규칙).
+        let mut env = RuntimeEnv::process();
+        let extensions =
+            pw_ext::Registry::from_roots(&semver::Version::new(0, 0, 0), pw_ext::builtin::roots());
+        let (_, def) = extensions
+            .language_server(server.server_id())
+            .unwrap_or_else(|| panic!("no bundled definition {}", server.server_id()));
+        for req in &def.requires {
+            let found = pw_lsp::requires::find_runtime(req, &env).unwrap_or_else(|| {
+                panic!(
+                    "{}: no runtime for {:?} {} on this machine",
+                    server.executable(),
+                    req.runtime,
+                    req.version
+                )
+            });
+            let mut dirs = vec![found.bin.clone()];
+            dirs.extend(std::env::split_paths(&env.path).filter(|d| *d != found.bin));
+            env.path = std::env::join_paths(dirs).unwrap();
+            if req.runtime == pw_ext::LspServerRuntime::Java {
+                env.vars
+                    .insert("JAVA_HOME".into(), found.home.clone().into_os_string());
+            }
+        }
+        let mut extra_env = BTreeMap::new();
+        // jdtls 의 작업 공간 색인 폴더(덮어쓰기 정의의 런처가 읽는다)를 시험 폴더 안에.
+        extra_env.insert(
+            "JDTLS_DATA".into(),
+            p.base.join("jdtls-data").into_os_string(),
+        );
         let spec = LaunchSpec {
             server_id: server.server_id().to_owned(),
             program: server.program(),
             args: server.args(),
             cwd: p.root.clone(),
-            env: RuntimeEnv::process(),
-            extra_env: BTreeMap::new(),
+            env,
+            extra_env,
         };
         let lsp = LanguageServer::spawn(
             &p.grant,
@@ -579,4 +621,28 @@ async fn live_lsp_typescript_language_server_document_sync() {
         false,
     )
     .await;
+}
+
+#[cfg(pw_live_lsp_basedpyright)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lsp_basedpyright_initialize_and_shutdown() {
+    live::initialize_and_shutdown(pw_lsp::live::LiveServer::Basedpyright).await;
+}
+
+#[cfg(pw_live_lsp_ruff)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lsp_ruff_initialize_and_shutdown() {
+    live::initialize_and_shutdown(pw_lsp::live::LiveServer::Ruff).await;
+}
+
+#[cfg(pw_live_lsp_jdtls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lsp_jdtls_initialize_and_shutdown() {
+    live::initialize_and_shutdown(pw_lsp::live::LiveServer::Jdtls).await;
+}
+
+#[cfg(pw_live_lsp_kotlin_lsp)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lsp_kotlin_lsp_initialize_and_shutdown() {
+    live::initialize_and_shutdown(pw_lsp::live::LiveServer::KotlinLsp).await;
 }

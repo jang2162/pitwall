@@ -6,6 +6,9 @@
 |---|---|---|
 | `rust/` | rust-analyzer | 독립 Cargo 작업 공간(`[workspace]` — 저장소 작업 공간에 들지 않는다), 의존 없음 |
 | `typescript/` | typescript-language-server | `package.json` · `tsconfig.json`(strict · `noUnusedLocals`), 의존 없음 — 서버에 묶인 `typescript` 를 쓴다 |
+| `python/` | basedpyright · ruff | `pyproject.toml`(basedpyright 는 `standard` 검사 — 기본 `recommended` 는 진단이 많다), 의존 없음. 모듈은 루트에 바로(`calls.py` 가 `from shapes import …`) — M4-18 |
+| `java/` | jdtls | Gradle(`java` 플러그인만 — Gradle 에 들어 있어 받지 않는다, 언어 수준 17), 저장소 · 의존 없음, wrapper 판 고정(`gradle/wrapper/gradle-wrapper.properties` — 서버의 Gradle 가져오기가 그 배포판을 받는다. jar · 스크립트는 두지 않는다). 도형은 `Shapes` 의 중첩 형이다(한 파일의 두 번째 최상위 형은 다른 파일에서 이름으로 찾지 못한다 — jdtls 실측) — M4-18 |
+| `kotlin/` | kotlin-lsp | Gradle(Kotlin Gradle 플러그인 `kotlin("jvm")` 판 고정 + `mavenCentral()` — 그 플러그인 · kotlin-stdlib 만 받는다, 그 밖의 의존 없음). kotlin-lsp 는 Kotlin 플러그인이 없는 빌드(빌드 파일 없음 · `java` 플러그인만)를 분석하지 않는다(hover · 완성 · 진단이 빈다 — 실측, 메인 판정 2026-11-03). wrapper 판은 `java/` 와 같다 — M4-18 |
 
 ## 규칙
 
@@ -17,7 +20,9 @@
 
 ## 앵커 표
 
-앵커는 표지 주석 `/*@이름*/` 이다. **표지 바로 뒤 글자가 그 앵커의 위치**다 — 시험은 파일에서 `/*@이름*/` 를 찾아 그 끝의 UTF-16 오프셋을 쓴다(표지 주석 자체는 코드에 영향이 없다). 같은 이름은 두 언어에서 같은 뜻이다.
+앵커는 표지 주석 `/*@이름*/` 이다. **표지 바로 뒤 글자가 그 앵커의 위치**다 — 시험은 파일에서 `/*@이름*/` 를 찾아 그 끝의 UTF-16 오프셋을 쓴다(표지 주석 자체는 코드에 영향이 없다). 같은 이름은 모든 언어에서 같은 뜻이다. **Python** 은 식 가운데 주석을 둘 수 없어 줄 끝 주석 `# @이름 "앞글"` 로 쓴다 — 그 줄의 코드(` # @` 앞)에서 처음 나오는 `앞글` 바로 뒤 글자가 위치다(한 주석에 `@이름 "앞글"` 을 여럿 둘 수 있다, `crates/pw-lsp/tests/live_matrix.rs` 의 `anchor`). Java · Kotlin 은 `/*@이름*/` 그대로다.
+
+Python · Java · Kotlin(M4-18 — `live_matrix.rs`)이 쓰는 앵커는 아래 표의 rust · typescript 와 같은 이름이고 파일은 `shapes` · `calls` · `errors` · `messy`(Java 는 `src/main/java/fixture/{Shapes,Calls,Errors,Messy}.java`, Kotlin 은 `src/main/kotlin/fixture/…kt`, Python 은 루트의 `….py`)다: `def.shape` · `def.shape-area` · `impl.rect-shape` · `rename.scale`(정의 — rename 하면 정의 하나와 호출 파일의 호출 셋, Python 은 import 하나 더) · `call.scale-1` · `call.scale-2` · `call.area-1` · `signature.scale` · `complete.rect-members` · `error.type-mismatch`(오류 하나 — 그 진단이 이 자리에서 시작한다: Java 는 `"text"`, Kotlin 은 `=`, Python 은 `"text"`) · `format.messy`. `scale` 의 사용처(선언 포함)는 Python 다섯(정의 · import · 호출 셋), Java · Kotlin 넷(같은 패키지라 import 가 없다). Python 의 `errors.py` 에는 `unused.os`(쓰지 않는 `import os` — ruff F401, 「import 지우기」 빠른 수정)가 더 있다.
 
 | 앵커 | rust | typescript | 무엇 · 기대 |
 |---|---|---|---|
