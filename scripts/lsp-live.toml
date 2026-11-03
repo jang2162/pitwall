@@ -9,7 +9,7 @@
 # (15 「공유 부품의 주인」).
 
 [floors]
-rust_analyzer = 13
+rust_analyzer = 14
 typescript_language_server = 16
 
 [capabilities]
