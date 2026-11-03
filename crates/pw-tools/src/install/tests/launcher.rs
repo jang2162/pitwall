@@ -122,3 +122,34 @@ async fn a_launcher_does_not_overwrite_a_file_from_the_archive() {
     assert!(!fx.layout().version_dir("demo", "1.0.0").exists());
     assert!(fx.layout().read_record("demo").unwrap().is_none());
 }
+
+/// 설치 폴더 안의 링크 폴더가 밖을 가리키면 런처를 쓰지 않는다 — 밖에 폴더도 만들지 않는다(리뷰 L6). 풀기 단계가 밖을 가리키는 링크를
+/// 이미 거절하므로 설치 흐름으로는 만들 수 없어 쓰기 함수를 바로 부른다.
+#[cfg(unix)]
+#[test]
+fn a_launcher_is_not_written_through_a_link_that_leaves_the_install_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("install");
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("pitwall")).unwrap();
+    let launcher = crate::overrides::Launcher {
+        sh: "#!/bin/sh\n".into(),
+        cmd: "@echo off\r\n".into(),
+    };
+
+    for rel in ["pitwall/demo", "pitwall/deeper/demo"] {
+        let launchers = BTreeMap::from([(rel.to_owned(), launcher.clone())]);
+        let e = write_launchers(&root, &launchers).unwrap_err();
+        assert!(e.contains("outside the install folder"), "{e}");
+    }
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+
+    // 안쪽을 가리키는 링크 폴더는 그대로 쓴다.
+    std::fs::create_dir_all(root.join("real")).unwrap();
+    std::os::unix::fs::symlink(root.join("real"), root.join("inner")).unwrap();
+    let launchers = BTreeMap::from([("inner/demo".to_owned(), launcher)]);
+    write_launchers(&root, &launchers).unwrap();
+    assert!(root.join("real/demo").is_file());
+}

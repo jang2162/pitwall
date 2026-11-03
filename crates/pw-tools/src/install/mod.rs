@@ -1633,7 +1633,23 @@ fn write_launchers(
         };
         let path = dir.join(&rel);
         if let Some(parent) = path.parent() {
+            // 경로 글자는 덮어쓰기를 읽을 때 봤다(`Override::parse`). 받은 것 속의 링크 폴더가 밖을 가리키면 그 밖에 쓰게 되므로,
+            // 만들기 전에 이미 있는 가장 가까운 조상을, 만든 뒤에 부모를 실제 경로로 풀어 설치 폴더 안인지 본다(`make_executable` 과
+            // 같은 규칙).
+            let root = fs::canonicalize(dir).map_err(|e| format!("launcher {rel}: {e}"))?;
+            let inside = |at: &Path| fs::canonicalize(at).is_ok_and(|real| real.starts_with(&root));
+            let existing = parent.ancestors().find(|a| a.exists()).unwrap_or(dir);
+            if !inside(existing) {
+                return Err(format!(
+                    "launcher {rel}: its folder is outside the install folder"
+                ));
+            }
             fs::create_dir_all(parent).map_err(|e| format!("launcher {rel}: {e}"))?;
+            if !inside(parent) {
+                return Err(format!(
+                    "launcher {rel}: its folder is outside the install folder"
+                ));
+            }
         }
         let mut file = fs::OpenOptions::new()
             .write(true)
