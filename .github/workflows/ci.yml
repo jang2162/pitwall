@@ -340,10 +340,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      # 설치본 캐시. 키는 받는 것(고정 표 · 덮어쓰기)과 설치기 코드(받기 · 풀기 · 런처 · 실행 링크 — 시험은 뺀다)다. 설치기만 바뀌어도
+      # 캐시가 맞으면 `tools_install` 이 기록을 보고 `AlreadyInstalled` 로 끝나 새 설치기 코드가 이 서버들에서 돌지 않는다.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.PW_LSP_SERVERS_DIR }}
-          key: lsp-servers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/pw-tools/registry.toml', 'crates/pw-tools/overrides/**') }}
+          key: lsp-servers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/pw-tools/registry.toml', 'crates/pw-tools/overrides/**', 'crates/pw-tools/src/install/**', '!crates/pw-tools/src/install/tests/**') }}
 
       # Java · Kotlin 서버의 Gradle 가져오기는 픽스처의 wrapper 판(Gradle 배포판)과 Kotlin Gradle 플러그인 · kotlin-stdlib 를 받는다
       # (crates/pw-lsp/tests/fixtures/{java,kotlin}/). 키는 그 빌드 파일들.
