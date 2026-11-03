@@ -698,7 +698,8 @@ fn show_after_hover(params: Vec<Value>) -> Scenario {
     )
 }
 
-/// 가짜 서버가 받은 `window/showDocument` 의 답들(보낸 차례).
+/// 가짜 서버가 받은 `window/showDocument` 의 답들(보낸 차례 — 요청 id `fake-<n>` 의 차례. 클라이언트는 요청을 함께 처리하므로 답이
+/// 오는 차례는 부하에 따라 바뀐다, M4-16 리뷰 L5).
 async fn show_answers(record: &Path, count: usize) -> Vec<Value> {
     let ok = common::eventually(Duration::from_secs(5), || {
         received(record)
@@ -712,13 +713,16 @@ async fn show_answers(record: &Path, count: usize) -> Vec<Value> {
         ok,
         "the client did not answer {count} showDocument requests"
     );
-    received(record)
+    let mut answers: Vec<(u64, Value)> = received(record)
         .into_iter()
-        .filter(|m| {
-            m.get("method").is_none() && m["id"].as_str().is_some_and(|id| id.starts_with("fake-"))
+        .filter(|m| m.get("method").is_none())
+        .filter_map(|m| {
+            let n = m["id"].as_str()?.strip_prefix("fake-")?.parse().ok()?;
+            Some((n, m["result"]["success"].clone()))
         })
-        .map(|m| m["result"]["success"].clone())
-        .collect()
+        .collect();
+    answers.sort_by_key(|(n, _)| *n);
+    answers.into_iter().map(|(_, success)| success).collect()
 }
 
 /// ③ 루트 안 파일만 받아 그 창에 이벤트를 낸다. 응답에 없던 루트 밖 경로 · `..` 로 벗어난 경로 · 밖을 가리키는 링크 · `external` ·
