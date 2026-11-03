@@ -277,9 +277,11 @@ lsp-status-found-path = 런타임 환경의 PATH
 lsp-status-found-installed = Pitwall 설치본
 lsp-status-unknown = —
 lsp-status-restart = 다시 시작
-lsp-status-stop = 멈춤
+lsp-status-stop = 멈추기
 lsp-status-log = 로그 열기
 lsp-status-disable = 이 프로젝트에서 끄기
+lsp-status-enable = 이 프로젝트에서 켜기
+lsp-status-ask-again = 설치 안내 다시 보기
 lsp-status-install = 설치…
 lsp-status-close = 닫기
 # $file: 쓴 개인 설정 파일
@@ -393,6 +395,7 @@ tools-registry-error = 마지막 가져오기 실패: { $error }
 tools-busy = { $name } 작업 중…
 # $name: 패키지, $message: 오류 원문
 tools-failed = { $name }: { $message }
+tools-open-failed = { $url } 을 열지 못했다: { $message }
 # $name: 패키지, $version: 판
 tools-done = { $name } { $version }
 # $runtime: node · python

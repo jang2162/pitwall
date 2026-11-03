@@ -90,12 +90,22 @@ export function ToolsSection() {
     () => (client ? (method, params) => client.call(method, params) : undefined),
     [client],
   );
-  const open = useCallback((url: string) => void openUrl(url).catch(() => {}), []);
-  const confirm = useToolConfirm(call, open);
   const [data, setData] = useState<Data>({ summaries: {} });
   const [loadError, setLoadError] = useState<string>();
   const [busy, setBusy] = useState<string>();
   const [result, setResult] = useState<{ ok: boolean; text: string }>();
+  // 열지 못하면(권한 — capabilities/settings.json, 브라우저 없음) 버리지 않고 결과 줄에 알린다.
+  const open = useCallback(
+    (url: string) =>
+      void openUrl(url).catch((e: unknown) =>
+        setResult({
+          ok: false,
+          text: T.openFailed(url, e instanceof Error ? e.message : String(e)),
+        }),
+      ),
+    [T],
+  );
+  const confirm = useToolConfirm(call, open);
   const [log, setLog] = useState<{ name: string; log: ToolLog }>();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");

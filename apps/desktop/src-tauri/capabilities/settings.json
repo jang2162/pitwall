@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "설정 창(S7)만 쓰는 권한: 「도구」 쪽과 그 확인 다이얼로그의 라이선스 · 받을 곳 · 홈페이지 링크를 외부 브라우저로 여는 것(opener open-url, 범위는 http · https 만 — M4-17. 웹뷰 쪽도 http(s) 밖의 주소는 링크로 만들지 않는다, src/tools/strings.ts 의 safeUrl). 모든 창에 공통인 권한은 default.json 에 있다.",
+  "windows": ["settings"],
+  "permissions": [
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+    }
+  ]
+}

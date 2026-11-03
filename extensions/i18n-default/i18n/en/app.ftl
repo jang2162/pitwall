@@ -280,6 +280,8 @@ lsp-status-restart = Restart
 lsp-status-stop = Stop
 lsp-status-log = Open Log
 lsp-status-disable = Turn Off in This Project
+lsp-status-enable = Turn On in This Project
+lsp-status-ask-again = Offer the Install Again
 lsp-status-install = Install…
 lsp-status-close = Close
 # $file: the personal settings file written
@@ -393,6 +395,7 @@ tools-registry-error = Last fetch failed: { $error }
 tools-busy = Working on { $name }…
 # $name: package, $message: the error text
 tools-failed = { $name }: { $message }
+tools-open-failed = Could not open { $url }: { $message }
 # $name: package, $version: version
 tools-done = { $name } { $version }
 # $runtime: node or python

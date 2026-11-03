@@ -71,6 +71,8 @@ const host = vi.hoisted(() => ({
   instances: {} as Record<string, import("@pitwall/rpc-client").LspInstanceStatus[]>,
   /** 서버 정의(`lsp.servers.list`). */
   servers: [] as Record<string, unknown>[],
+  /** 있으면 `lsp.server.setLocal` 이 이 글로 거절한다(conflict — 개인 파일이 링크 등). */
+  setLocalRefusal: undefined as string | undefined,
   /** 설치기가 확인을 바라는 값(없으면 묻지 않고 설치한다). */
   consent: undefined as import("@pitwall/rpc-client").ToolConfirmRequired | undefined,
   /** 프로젝트 신뢰. */
@@ -130,11 +132,16 @@ function handle(
       return true;
     case "lsp.server.setLocal": {
       record();
+      if (host.setLocalRefusal) {
+        fail(-32004, host.setLocalRefusal);
+        return true;
+      }
       const server = host.servers.find((s) => s.id === p.server);
       if (server && p.key === "installPrompt") server.installPrompt = p.value;
       if (p.key === "enabled")
         for (const list of Object.values(host.instances))
-          for (const i of list) if (i.server === p.server) i.state = { kind: "disabled" };
+          for (const i of list)
+            if (i.server === p.server) i.state = p.value ? { kind: "ready" } : { kind: "disabled" };
       reply({ file: "/work/demo/.pitwall/project.local.toml" });
       return true;
     }
@@ -482,6 +489,7 @@ beforeEach(() => {
     server("rust-analyzer", "rust-analyzer"),
   ];
   host.consent = undefined;
+  host.setLocalRefusal = undefined;
   host.trust = "trusted";
   host.updates = [];
   activeWorktreeStore.setState({ top: undefined });
@@ -669,6 +677,72 @@ it("turns a server off in this project only through the personal setting", async
   expect(item()!.dataset.state).toBe("disabled");
   // 쓴 개인 파일을 알린다.
   expect(document.body.textContent).toContain("project.local.toml");
+});
+
+it("turns a server back on and offers the install again only through the personal setting", async () => {
+  await mount();
+  host.instances.Python = [instance("basedpyright", { kind: "disabled" })];
+  await open(WORDS, 1, 1);
+  await settle();
+  await click(item());
+  let popup = document.querySelector('[data-testid="lsp-status-popup"]')!;
+  expect(popup.querySelector('[data-testid="lsp-status-disable"]')).toBeNull();
+  expect(popup.querySelector('[data-testid="lsp-status-ask-again"]')).toBeNull();
+  await click(popup.querySelector('[data-testid="lsp-status-enable"]'));
+  expect(called("lsp.server.setLocal")).toEqual([
+    { projectId: "p1", worktree: null, server: "basedpyright", key: "enabled", value: true },
+  ]);
+  expect(item()!.dataset.state).toBe("ready");
+
+  // 「묻지 않기」 를 되돌린다.
+  host.calls = [];
+  host.servers.find((s) => s.id === "basedpyright")!.installPrompt = false;
+  host.instances.Python = [
+    instance("basedpyright", { kind: "notInstalled", mason: "basedpyright" }),
+  ];
+  await emit("config.changed", {});
+  popup = document.querySelector('[data-testid="lsp-status-popup"]')!;
+  await click(popup.querySelector('[data-testid="lsp-status-ask-again"]'));
+  expect(called("lsp.server.setLocal")).toEqual([
+    { projectId: "p1", worktree: null, server: "basedpyright", key: "installPrompt", value: true },
+  ]);
+  expect(host.calls.map((c) => c.method).filter((m) => /write|set|save|fs\./.test(m))).toEqual([
+    "lsp.server.setLocal",
+  ]);
+  expect(document.querySelector('[data-testid="lsp-status-ask-again"]')).toBeNull();
+  expect(banner()!.hidden).toBe(false);
+});
+
+it("tells which file and why when the personal setting cannot be written", async () => {
+  host.setLocalRefusal =
+    "/work/demo/.pitwall/project.local.toml: is a symbolic link; Pitwall does not write a personal setting through a link";
+  await mount();
+  host.instances.Python = [instance("basedpyright", { kind: "ready" })];
+  await open(WORDS, 1, 1);
+  await settle();
+  await click(item());
+  await click(document.querySelector('[data-testid="lsp-status-disable"]'));
+  expect(document.body.textContent).toContain(T.popup.actionFailed);
+  expect(document.body.textContent).toContain("project.local.toml: is a symbolic link");
+  expect(item()!.dataset.state).toBe("ready");
+});
+
+it("puts the first focus of the status popup on Close, not on an action", async () => {
+  await mount();
+  host.instances.Python = [
+    instance("basedpyright", { kind: "notInstalled", mason: "basedpyright" }),
+  ];
+  await open(WORDS, 1, 1);
+  await settle();
+  await click(item());
+  expect(document.querySelector('[data-testid="lsp-status-install"]')).toBeTruthy();
+  expect(document.activeElement?.getAttribute("data-testid")).toBe("lsp-status-close");
+  // 떠 있는 서버여도 [다시 시작] 이 아니다.
+  await click(document.querySelector('[data-testid="lsp-status-close"]'));
+  host.instances.Python = [instance("basedpyright", { kind: "ready" })];
+  await changed();
+  await click(item());
+  expect(document.activeElement?.getAttribute("data-testid")).toBe("lsp-status-close");
 });
 
 it("restarts, stops and shows the log of an instance from the popup", async () => {

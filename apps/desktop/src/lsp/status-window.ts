@@ -7,8 +7,9 @@
 // - 설치: 설치기의 확인 흐름(src/tools/install.ts — `4001` 이면 확인 다이얼로그, [설치] 를 누른 때만 `confirmed` 를 실어 다시
 //   부른다). 끝나면 그 서버의 `notInstalled` 인스턴스마다 `lsp.server.restart` — Host 가 허가를 다시 받으므로 그사이 신뢰를 풀었으면
 //   `untrusted` 로 남고 띄우지 않는다.
-// - 「이 프로젝트에서 끄기」 · 「이 프로젝트에서 묻지 않기」: `lsp.server.setLocal` — 커밋되지 않는 개인 파일(`project.local.toml`)에만
-//   쓴다. 끄면 Host 가 그 인스턴스를 끝낸다.
+// - 「이 프로젝트에서 끄기」 · 「이 프로젝트에서 묻지 않기」 와 그 되돌리기(「이 프로젝트에서 켜기」 · 「설치 안내 다시 보기」):
+//   `lsp.server.setLocal` — 커밋되지 않는 개인 파일(`project.local.toml`)에만 쓴다. 끄면 Host 가 그 인스턴스를 끝내고, 켜면 다시
+//   띄운다. 쓰지 못하면(그 파일이 링크 · `.pitwall` 이 프로젝트 밖 등) Host 의 까닭을 알림으로 보인다.
 // - 다시 시작 · 멈춤 · 로그 열기(`lsp.server.log` — 글로 보인다).
 // - 신뢰: 창의 신뢰 액션(다이얼로그 — trust/trust.tsx). 신뢰를 얻으면 Host 가 열린 문서의 서버를 띄운다(M4-17 Host 규칙).
 //
@@ -94,7 +95,11 @@ export interface LspStatusWindow {
   serverInfo(server: string, worktree: string | undefined): LspServerInfo | undefined;
   install(server: string, worktree: string | undefined): Promise<void>;
   dontAsk(server: string, worktree: string | undefined): Promise<void>;
+  /** 「묻지 않기」 를 되돌린다(`install_prompt = true`). */
+  askAgain(server: string, worktree: string | undefined): Promise<void>;
   disable(server: string, worktree: string | undefined): Promise<void>;
+  /** 「끄기」 를 되돌린다(`enabled = true`). */
+  enable(server: string, worktree: string | undefined): Promise<void>;
   restart(instance: LspInstanceStatus, worktree: string | undefined): Promise<void>;
   stop(instance: LspInstanceStatus, worktree: string | undefined): Promise<void>;
   openLog(instance: LspInstanceStatus, worktree: string | undefined): Promise<void>;
@@ -272,6 +277,37 @@ export function createStatusWindow(deps: StatusWindowDeps): LspStatusWindow {
   const failed = (e: unknown) =>
     deps.notify({ level: "error", title: deps.strings().popup.actionFailed, body: message(e) });
 
+  async function setInstallPrompt(server: string, worktree: string | undefined, value: boolean) {
+    try {
+      await services.call("lsp.server.setLocal", {
+        projectId,
+        worktree: worktree ?? null,
+        server,
+        key: "installPrompt",
+        value,
+      });
+      await loadServers(worktree);
+    } catch (e) {
+      failed(e);
+    }
+  }
+
+  async function setEnabled(server: string, worktree: string | undefined, value: boolean) {
+    try {
+      const { file } = await services.call("lsp.server.setLocal", {
+        projectId,
+        worktree: worktree ?? null,
+        server,
+        key: "enabled",
+        value,
+      });
+      if (!value) deps.notify({ level: "info", title: deps.strings().popup.disabledNote(file) });
+      await refresh();
+    } catch (e) {
+      failed(e);
+    }
+  }
+
   const win: LspStatusWindow = {
     store,
     projectId,
@@ -336,35 +372,10 @@ export function createStatusWindow(deps: StatusWindowDeps): LspStatusWindow {
         });
       }
     },
-    async dontAsk(server, worktree) {
-      try {
-        await services.call("lsp.server.setLocal", {
-          projectId,
-          worktree: worktree ?? null,
-          server,
-          key: "installPrompt",
-          value: false,
-        });
-        await loadServers(worktree);
-      } catch (e) {
-        failed(e);
-      }
-    },
-    async disable(server, worktree) {
-      try {
-        const { file } = await services.call("lsp.server.setLocal", {
-          projectId,
-          worktree: worktree ?? null,
-          server,
-          key: "enabled",
-          value: false,
-        });
-        deps.notify({ level: "info", title: deps.strings().popup.disabledNote(file) });
-        await refresh();
-      } catch (e) {
-        failed(e);
-      }
-    },
+    dontAsk: (server, worktree) => setInstallPrompt(server, worktree, false),
+    askAgain: (server, worktree) => setInstallPrompt(server, worktree, true),
+    disable: (server, worktree) => setEnabled(server, worktree, false),
+    enable: (server, worktree) => setEnabled(server, worktree, true),
     async restart(instance, worktree) {
       try {
         await services.call("lsp.server.restart", control(instance, worktree));

@@ -1,13 +1,16 @@
 // 상태바 `lsp` 항목 · 상태 팝업 · 도구 업데이트 알림 · 「도구 관리 열기」 액션(15-m4-plan M4-17). 항목은 활성 탭 문서를 맡는 서버의
 // 이름과 상태(시작 중 · 준비 · 진행 % · 오류 · 다시 시작 · 설치 필요 · 런타임 없음 · 미신뢰 · 꺼짐 · 멈춤)를 글자와 표지로 보인다 —
 // 색만으로 가르지 않는다(10-ui §6). 진행 %는 서버 관리자가 같은 진행을 `Task` 로도 내므로 상태바 작업 항목과 같은 것이다. 누르면
-// 상태 팝업: 인스턴스마다 루트 · 판 · 찾은 곳과 [다시 시작] [멈춤] [로그 열기] [이 프로젝트에서 끄기] [설치…].
+// 상태 팝업: 인스턴스마다 루트 · 판 · 찾은 곳과 [다시 시작] [멈추기] [로그 열기] [이 프로젝트에서 끄기] [설치…], 꺼진 서버면
+// [이 프로젝트에서 켜기], 설치 안내를 끈 서버면 [설치 안내 다시 보기](둘 다 개인 설정을 되돌린다). 팝업을 열면 처음 포커스는 [닫기]
+// 다 — 키보드로 연 사람의 다음 Enter 가 서버를 다시 띄우거나 설치를 시작하지 않게.
 //
 // 표 · 동작은 창의 상태 표(status-window.ts)에 있다. 확인 다이얼로그 · 로그 대화상자도 항목 컴포넌트가 그린다(항목은 창이 사는 동안
 // 마운트돼 있다 — 보일 것이 없으면 단추만 그리지 않는다).
 //
 // 업데이트 알림: 하루 한 번 `tools.updates` 를 보고 업데이트가 있으면 알림(기록에 남는다)을 낸다. 마지막으로 본 때는 이 앱의 웹뷰
-// 저장소에 둔다(창마다 따로 묻지 않게 — 실패해도 알림이 한 번 더 뜰 뿐이다).
+// 저장소에 두고, 부르기 **전에** 적어 자리를 잡는다 — 세션 복원으로 창 여럿이 함께 떠도 먼저 적은 창만 묻는다(실패하면 되돌려 다음에
+// 다시 묻는다). 저장소를 못 쓰면 모듈 변수에 둬 그 창 안에서 하루 한 번이다(창마다 한 번은 더 알릴 수 있다).
 
 import type { Action } from "@pitwall/keymap";
 import {
@@ -262,6 +265,26 @@ function InstanceRow({
             {P.disable}
           </button>
         )}
+        {kind === "disabled" && (
+          <button
+            type="button"
+            data-testid="lsp-status-enable"
+            className={BUTTON}
+            onClick={() => void win.enable(instance.server, worktree)}
+          >
+            {P.enable}
+          </button>
+        )}
+        {info?.installPrompt === false && (
+          <button
+            type="button"
+            data-testid="lsp-status-ask-again"
+            className={BUTTON}
+            onClick={() => void win.askAgain(instance.server, worktree)}
+          >
+            {P.askAgain}
+          </button>
+        )}
       </div>
     </li>
   );
@@ -272,12 +295,18 @@ function StatusPopup({ win, doc }: { win: LspStatusWindow; doc: StatusDoc & { ke
   useKeymapPopup(true);
   const status = useStore(win.store, (s) => s.docs[doc.key]?.status);
   const close = () => win.store.setState({ popup: false });
+  const closeButton = useRef<HTMLButtonElement>(null);
   return (
     <Dialog.Root open onOpenChange={(open) => !open && close()}>
       <Dialog.Portal>
         <Dialog.Content
           data-testid="lsp-status-popup"
           aria-describedby={undefined}
+          // Radix 기본은 첫 단추(인스턴스의 [설치…] · [다시 시작])다 — 동작 단추가 아닌 [닫기] 에 둔다.
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            closeButton.current?.focus();
+          }}
           className="fixed bottom-7 left-2 flex max-h-[70vh] w-[480px] max-w-[94vw] flex-col gap-1 overflow-y-auto rounded-md border border-ui-border bg-ui-panel px-3 py-2 text-ui-foreground shadow-lg"
         >
           <Dialog.Title className="text-sm font-semibold">{T.title}</Dialog.Title>
@@ -292,7 +321,13 @@ function StatusPopup({ win, doc }: { win: LspStatusWindow; doc: StatusDoc & { ke
             ))}
           </ul>
           <div className="flex justify-end">
-            <button type="button" className={BUTTON} onClick={close}>
+            <button
+              ref={closeButton}
+              type="button"
+              data-testid="lsp-status-close"
+              className={BUTTON}
+              onClick={close}
+            >
               {T.close}
             </button>
           </div>
@@ -420,7 +455,17 @@ function activeDoc(workspace: EditorWorkspace): StatusDoc | undefined {
   return doc ? { path: doc.path, language: doc.language, worktree: doc.worktree } : undefined;
 }
 
-/** 업데이트가 있으면 알린다(하루 한 번). `now` · `storage` 는 시험이 준다. */
+/** 저장소를 못 쓸 때 마지막으로 본 때(epoch ms). 창(웹뷰) 하나에 하나다. */
+const updatesMemory = { at: 0 };
+
+type UpdatesStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+/**
+ * 업데이트가 있으면 알린다(하루 한 번). `now` · `storage` · `memory` 는 시험이 준다.
+ *
+ * 부르기 전에 지금 시각을 적어 자리를 잡는다(먼저 적은 창이 이긴다 — 다른 창은 적힌 시각을 보고 묻지 않는다). `tools.updates` 가
+ * 실패하면 자리를 되돌려 다음에 다시 묻는다. 저장소를 읽거나 쓸 수 없으면 `memory`(모듈 변수)로 그 창 안에서 하루 한 번이다.
+ */
 export async function checkToolUpdates(deps: {
   call: LspStatusWindow["services"]["call"];
   notify(input: {
@@ -433,27 +478,54 @@ export async function checkToolUpdates(deps: {
   strings(): ToolsStrings;
   openTools(): void;
   now?: number;
-  storage?: Pick<Storage, "getItem" | "setItem">;
+  storage?: UpdatesStorage;
+  memory?: { at: number };
 }): Promise<boolean> {
   const now = deps.now ?? Date.now();
-  let storage: Pick<Storage, "getItem" | "setItem"> | undefined;
+  const memory = deps.memory ?? updatesMemory;
+  let storage: UpdatesStorage | undefined;
   try {
     storage = deps.storage ?? localStorage;
   } catch {
     storage = undefined;
   }
-  let last = 0;
+  // 저장소에 적힌 원래 값(되돌릴 때). 저장소를 못 쓰면 `undefined` 이고 `memory` 를 쓴다.
+  let stored: string | null | undefined;
   try {
-    last = Number(storage?.getItem(UPDATES_CHECKED_KEY) ?? 0) || 0;
+    stored = storage ? storage.getItem(UPDATES_CHECKED_KEY) : undefined;
   } catch {
-    last = 0;
+    stored = undefined;
   }
+  const last = stored === undefined ? memory.at : Number(stored ?? 0) || 0;
   if (now - last < UPDATES_INTERVAL_MS) return false;
-  const updates = await deps.call("tools.updates", null);
+  const before = memory.at;
+  memory.at = now;
+  let claimed = false;
+  if (stored !== undefined) {
+    try {
+      storage!.setItem(UPDATES_CHECKED_KEY, String(now));
+      claimed = true;
+    } catch {
+      // 쓰지 못하면 이 창은 `memory` 로만 하루 한 번이다.
+    }
+  }
+  let updates;
   try {
-    storage?.setItem(UPDATES_CHECKED_KEY, String(now));
-  } catch {
-    // 저장소가 막혀 있으면 다음에 한 번 더 묻는다.
+    updates = await deps.call("tools.updates", null);
+  } catch (e) {
+    // 자리를 되돌린다 — 그사이 다른 창이 다시 적었으면(드물다) 그대로 둔다.
+    if (memory.at === now) memory.at = before;
+    if (claimed) {
+      try {
+        if (storage!.getItem(UPDATES_CHECKED_KEY) === String(now)) {
+          if (stored === null) storage!.removeItem(UPDATES_CHECKED_KEY);
+          else storage!.setItem(UPDATES_CHECKED_KEY, stored!);
+        }
+      } catch {
+        // 되돌리지 못하면 다음 날 다시 묻는다.
+      }
+    }
+    throw e;
   }
   if (updates.items.length === 0) return false;
   const T = deps.strings();

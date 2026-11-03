@@ -14,6 +14,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
+import settingsCapability from "../../src-tauri/capabilities/settings.json";
 import { App } from "../App";
 import { bundledTranslator } from "../i18n/testing";
 import type { KeymapNative } from "../keymap/native";
@@ -41,10 +42,15 @@ const host = vi.hoisted(() => ({
     checksum: "pinned" | "none";
   }[],
   opened: [] as string[],
+  /** 있으면 `openUrl` 이 이 글로 거절한다(창에 opener 권한이 없을 때의 Tauri 와 같다). */
+  openError: undefined as string | undefined,
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: async (url: string) => void host.opened.push(url),
+  openUrl: async (url: string) => {
+    if (host.openError) throw new Error(host.openError);
+    host.opened.push(url);
+  },
 }));
 
 function summary(name: string, over: Partial<ToolPackageSummary> = {}): ToolPackageSummary {
@@ -244,6 +250,7 @@ beforeEach(() => {
   host.mode = "pinned";
   host.updates = [];
   host.opened = [];
+  host.openError = undefined;
   localStorage.clear();
 });
 
@@ -362,6 +369,39 @@ it("installs from the registry only through the dialog and calls nothing more wh
   expect(section().querySelector('[data-testid="tools-result"]')!.textContent).toBe(
     T.manage.done("basedpyright", "2.0.0"),
   );
+});
+
+it("tells that a link could not be opened instead of dropping it", async () => {
+  host.consent.basedpyright = {
+    name: "basedpyright",
+    version: "2.0.0",
+    licenses: ["MIT"],
+    sourceDomains: ["pypi.org"],
+    size: null,
+    checksum: "none",
+    note: null,
+    rejected: null,
+  };
+  host.openError = "url not allowed on the configured scope";
+  await mount();
+  await click(resultRow("basedpyright").querySelector('[data-testid="tools-install"]'));
+  await click(dialog()!.querySelector('a[href="https://github.com/x/y"]'));
+  expect(host.opened).toEqual([]);
+  expect(section().querySelector('[data-testid="tools-result"]')!.textContent).toBe(
+    T.manage.openFailed("https://github.com/x/y", "url not allowed on the configured scope"),
+  );
+});
+
+// 설정 창의 링크는 Tauri ACL 이 열게 해야 열린다 — 가짜 Host 시험은 ACL 을 보지 못하므로 capability 파일을 본다(실제 창의 클릭은
+// 사람 확인 몫). 범위는 http(s) 만이다.
+it("lets the settings window open only http(s) links", async () => {
+  expect(settingsCapability.windows).toEqual(["settings"]);
+  expect(settingsCapability.permissions).toEqual([
+    {
+      identifier: "opener:allow-open-url",
+      allow: [{ url: "http://*" }, { url: "https://*" }],
+    },
+  ]);
 });
 
 it("asks again before an update whose license changed", async () => {
