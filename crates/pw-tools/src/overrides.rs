@@ -212,4 +212,146 @@ mod tests {
             );
         }
     }
+
+    fn jdtls_cmd() -> String {
+        let (overrides, _) = Overrides::from_files(builtin_files());
+        overrides.get("jdtls").unwrap().launcher["pitwall/jdtls"]
+            .cmd
+            .clone()
+    }
+
+    /// Windows 프로그램이 명령줄을 인자로 나누는 대로(따옴표 밖의 공백에서) 나누고 따옴표를 걷는다. `""` 는 빈 인자 하나다.
+    fn split_command_line(line: &str) -> Vec<String> {
+        let (mut args, mut current, mut quoted, mut started) =
+            (Vec::new(), String::new(), false, false);
+        for c in line.chars() {
+            match c {
+                '"' => {
+                    quoted = !quoted;
+                    started = true;
+                }
+                ' ' | '\t' if !quoted => {
+                    if started {
+                        args.push(std::mem::take(&mut current));
+                        started = false;
+                    }
+                }
+                _ => {
+                    current.push(c);
+                    started = true;
+                }
+            }
+        }
+        if started {
+            args.push(current);
+        }
+        args
+    }
+
+    /// `set "NAME=VALUE"` 은 따옴표를 걷고, `set NAME=VALUE` 는 따옴표까지 값이다(cmd 의 규칙).
+    fn set_value(statement: &str) -> String {
+        let assignment = statement.trim();
+        let assignment = assignment
+            .strip_prefix('"')
+            .and_then(|a| a.strip_suffix('"'))
+            .unwrap_or(assignment);
+        assignment.split_once('=').unwrap().1.to_owned()
+    }
+
+    /// jdtls 의 cmd 런처가 설치 폴더 경로(사용자 폴더 이름에 공백이 있을 수 있다 — `C:\Users\Jane Doe`)를 javaagent 인자 하나로
+    /// 넘기고, lombok 이 없으면 빈 인자를 넘기지 않는다(리뷰 M2). cmd 를 돌릴 수 없는 곳에서도 보도록 `%변수%` 를 펼쳐 나눈다 —
+    /// 실제 cmd 실행은 아래 Windows 시험.
+    #[test]
+    fn the_jdtls_cmd_launcher_passes_a_spaced_lombok_path_as_one_argument() {
+        let cmd = jdtls_cmd();
+        let base = r"C:\Users\Jane Doe\AppData\Local\pitwall\tools\jdtls\v1.63.0\pitwall\..";
+        let agent_line = cmd
+            .lines()
+            .find_map(|l| {
+                l.trim()
+                    .strip_prefix(r#"if exist "%BASE%\lombok.jar" set "#)
+            })
+            .expect("the AGENT line");
+        let agent = set_value(agent_line).replace("%BASE%", base);
+        let java_line = cmd
+            .lines()
+            .find(|l| l.starts_with(r#""%JAVA%""#))
+            .expect("the java line");
+        let expand = |agent: &str| {
+            java_line
+                .replace("%JAVA%", r"C:\Program Files\Java\jdk-25\bin\java.exe")
+                .replace("%BASE%", base)
+                .replace("%LAUNCHER%", &format!(r"{base}\plugins\launcher.jar"))
+                .replace("%DATA%", r"C:\Users\Jane Doe\AppData\Local\jdtls\pitwall-x")
+                .replace("%AGENT%", agent)
+                .replace("%*", "")
+        };
+
+        let args = split_command_line(&expand(&agent));
+        let want = format!(r"-javaagent:{base}\lombok.jar");
+        assert!(args.contains(&want), "{args:#?}");
+        let jar = args.iter().position(|a| a == "-jar").unwrap();
+        assert_eq!(args[jar + 1], format!(r"{base}\plugins\launcher.jar"));
+        // lombok 이 없으면 AGENT 는 정의되지 않아 `%AGENT%` 는 빈 글이 된다.
+        let args = split_command_line(&expand(""));
+        assert!(!args.iter().any(String::is_empty), "{args:#?}");
+        assert!(
+            !args.iter().any(|a| a.starts_with("-javaagent")),
+            "{args:#?}"
+        );
+    }
+
+    /// 위 시험을 실제 cmd 로 — 공백이 든 설치 폴더에서 런처를 띄우고, PATH 의 가짜 `java.cmd` 가 받은 인자를 한 줄씩 적는다.
+    #[cfg(windows)]
+    #[test]
+    fn the_jdtls_cmd_launcher_runs_from_a_spaced_install_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("Jane Doe").join("jdtls");
+        std::fs::create_dir_all(base.join("pitwall")).unwrap();
+        std::fs::create_dir_all(base.join("plugins")).unwrap();
+        std::fs::write(
+            base.join("plugins")
+                .join("org.eclipse.equinox.launcher_1.0.0.jar"),
+            "",
+        )
+        .unwrap();
+        std::fs::write(base.join("lombok.jar"), "").unwrap();
+        let script = base.join("pitwall").join("jdtls.cmd");
+        std::fs::write(&script, jdtls_cmd()).unwrap();
+        let fake = tmp.path().join("fake");
+        std::fs::create_dir_all(&fake).unwrap();
+        std::fs::write(
+            fake.join("java.cmd"),
+            "@echo off\r\n:next\r\nif \"%~1\"==\"\" exit /b 0\r\n>>\"%PW_ARGS%\" echo(%~1\r\nshift\r\ngoto next\r\n",
+        )
+        .unwrap();
+        let record = tmp.path().join("args.txt");
+        let system = std::env::var_os("SystemRoot").map_or_else(
+            || std::path::PathBuf::from(r"C:\Windows\System32"),
+            |root| std::path::PathBuf::from(root).join("System32"),
+        );
+        let output = std::process::Command::new(&script)
+            .current_dir(tmp.path())
+            .env_remove("JAVA_HOME")
+            .env(
+                "PATH",
+                std::env::join_paths([fake.clone(), system]).unwrap(),
+            )
+            .env("JDTLS_DATA", tmp.path().join("data"))
+            .env("PW_ARGS", &record)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let args = std::fs::read_to_string(&record).unwrap();
+        let agents: Vec<&str> = args
+            .lines()
+            .filter_map(|l| l.strip_prefix("-javaagent:"))
+            .collect();
+        assert_eq!(agents.len(), 1, "{args}");
+        assert_eq!(
+            std::fs::canonicalize(agents[0]).ok(),
+            std::fs::canonicalize(base.join("lombok.jar")).ok(),
+            "{args}"
+        );
+    }
 }

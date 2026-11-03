@@ -6,6 +6,8 @@
 # 번들이 JavaSE-25 를 요구한다)로 찾은 JDK 다. 작업 공간 색인 폴더(`-data`)는 JDTLS_DATA, 없으면 사용자 캐시 아래 프로젝트
 # 폴더마다 하나(registry 의 python 런처와 같은 자리 — 이름만 프로젝트 경로 전체에서 만든다).
 # 받을 것을 바꾸면 `node scripts/tools-registry-bump.mjs bump <지금 판>` 으로 registry.toml 의 고정 해시를 다시 적는다.
+# 판을 올릴 때는 `version` 만이 아니라 주소의 빌드 표지(`-202610191322`)와 lombok 판(`1.18.48`)도 함께 바꾼다 — 표지는 판마다
+# 다르고 템플릿이 아니라, 판만 바꾸면 주소가 없는 파일을 가리켜 bump 가 404 로 실패한다.
 reason = "the registry definition downloads a snapshot that the server deletes, an unversioned lombok.jar and runs a python launcher"
 version = "v1.63.0"
 
@@ -87,7 +89,8 @@ exec "$java" \
   "$@"
 '''
 # Windows 런처(Windows 의 JVM 서버 실기 확인은 이후 — 15 §3). 작업 공간 색인 폴더 이름은 지금 폴더 경로에서 `\` · `:` 를 바꿔
-# 만든다(cmd 에 해시가 없다).
+# 만든다(cmd 에 해시가 없다). AGENT 는 값에 따옴표까지 담는다 — 명령줄의 `%AGENT%` 를 따옴표로 감싸면 lombok 이 없을 때 빈 인자
+# `""` 가 가고, 감싸지 않으면 사용자 폴더 이름의 공백에서 인자가 갈라진다.
 cmd = '''
 @echo off
 setlocal
@@ -107,6 +110,6 @@ if not defined DATA (
   call set "DATA=%%LOCALAPPDATA%%\jdtls\pitwall-%%NAME%%"
 )
 set "AGENT="
-if exist "%BASE%\lombok.jar" set "AGENT=-javaagent:%BASE%\lombok.jar"
+if exist "%BASE%\lombok.jar" set AGENT="-javaagent:%BASE%\lombok.jar"
 "%JAVA%" -Djdk.xml.maxGeneralEntitySizeLimit=0 -Djdk.xml.totalEntitySizeLimit=0 -Declipse.application=org.eclipse.jdt.ls.core.id1 -Dosgi.bundles.defaultStartLevel=4 -Declipse.product=org.eclipse.jdt.ls.core.product -Dosgi.checkConfiguration=true "-Dosgi.sharedConfiguration.area=%BASE%\config_win" -Dosgi.sharedConfiguration.area.readOnly=true -Dosgi.configuration.cascaded=true -Xms1G --add-modules=ALL-SYSTEM --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED %AGENT% -jar "%LAUNCHER%" -configuration "%DATA%\.osgi" -data "%DATA%" %*
 '''
