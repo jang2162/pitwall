@@ -98,7 +98,8 @@ export function ToolConfirmDialog({
           data-testid="tool-confirm-dialog"
           data-kind={kind}
           onOpenAutoFocus={(e) => {
-            // 처음 포커스는 [취소] — Radix 의 기본(첫 포커스 가능 요소 = 링크)을 쓰지 않는다.
+            // 처음 포커스는 [취소]. Radix 의 기본(링크를 건너뛴 첫 요소)은 지금 단추 순서에서 [취소] 와 같지만, 순서가
+            // 바뀌어도 [설치] 로 가지 않게 직접 둔다.
             e.preventDefault();
             cancel.current?.focus();
           }}
