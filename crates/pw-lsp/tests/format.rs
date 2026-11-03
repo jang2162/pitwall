@@ -9,7 +9,7 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use pw_lsp::fake::{Reply, Scenario};
+use pw_lsp::fake::{Action, Reply, Scenario};
 use pw_lsp::format::{FORMAT_TIMEOUT, code as format_code};
 use pw_lsp::manager::code as manager_code;
 use pw_lsp::methods::LspInstanceState;
@@ -96,6 +96,7 @@ async fn the_whole_document_is_formatted_with_only_the_two_options() {
             "server": "rust-analyzer",
             "range": false,
             "staleVersion": false,
+            "notReady": false,
             "edits": [edit(1, 2, 1, 4, " "), edit(2, 0, 2, 0, "    ")],
         })
     );
@@ -352,4 +353,114 @@ async fn an_edit_while_formatting_marks_the_answer_stale() {
     let stale = win.response(pending).await.unwrap();
     assert_eq!(stale["staleVersion"], true);
     assert_eq!(stale["edits"], json!([]));
+}
+
+/// 진행(`$/progress`) 하나를 열거나 닫는 알림. 토큰은 제목이다.
+fn progress(kind: &str, title: &str) -> Action {
+    Action::Notify {
+        method: "$/progress".into(),
+        params: json!({ "token": title, "value": { "kind": kind, "title": title } }),
+    }
+}
+
+/// 가짜 서버 `server` 가 `initialized` 에 `opened` 진행을 차례로 열고(닫지 않는다), 포맷 요청을 받으면 `on_format` 을 곧바로 한 뒤
+/// 100 ms 뒤에 편집 하나로 답할 때 `lsp.format` 의 답. 포맷을 묻기 전에 열린 진행이 상태에 다 들어올 때까지(가장 최근 것이
+/// `opened` 의 마지막) 기다린다.
+async fn format_while(server: &str, opened: &[&str], on_format: Vec<Action>) -> Value {
+    let env = Env::new(EnvOptions::default());
+    let mut scenario = self::server(json!({ "documentFormattingProvider": true }))
+        .reply(
+            "textDocument/formatting",
+            Reply::result(json!([edit(1, 2, 1, 4, " ")])).delayed(100),
+        )
+        .on(
+            "initialized",
+            opened.iter().map(|t| progress("begin", t)).collect(),
+        );
+    if !on_format.is_empty() {
+        scenario = scenario.on("textDocument/formatting", on_format);
+    }
+    env.fake(server, scenario);
+    if server == "typescript-language-server" {
+        // TS 서버 정의는 node ≥ 20 을 요구한다 — 가짜 셸의 PATH 에 둔다.
+        common::env::executable(&env.bin.join("node"), "echo v22.11.0");
+    }
+    let mut win = env.window();
+    let (file, language) = match server {
+        "rust-analyzer" => ("src/main.rs", "Rust"),
+        _ => ("src/main.ts", "TypeScript"),
+    };
+    let doc = doc_id(&win.open(&env, &env.file(file, RUST), language, RUST).await);
+    env.wait_state(server, LspInstanceState::Ready).await;
+    if let Some(last) = opened.last() {
+        let seen = common::eventually(Duration::from_secs(10), || {
+            env.manager.status(&env.id).instances.iter().any(|i| {
+                i.server == server && i.progress.as_ref().is_some_and(|p| p.title == *last)
+            })
+        })
+        .await;
+        assert!(seen, "{:?}", env.manager.status(&env.id));
+    }
+    win.call("lsp.format", format_params(&doc, None))
+        .await
+        .unwrap()
+}
+
+/// 재리뷰 N1: rust-analyzer 정의는 작업 공간을 읽는 동안(`Roots Scanned`)의 포맷 답을 믿지 않는다 — 열려 있으면 `notReady` 이고
+/// 편집은 비어 있다(웹뷰는 넣지 않고 「아직 준비 중」). 답 자체는 Host 의 버전 판정으로는 낡지 않았다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_format_answer_while_roots_are_scanned_is_not_ready() {
+    let answer = format_while("rust-analyzer", &["Roots Scanned"], vec![]).await;
+    assert_eq!(answer["notReady"], true, "{answer}");
+    assert_eq!(answer["staleVersion"], false, "{answer}");
+    assert_eq!(answer["edits"], json!([]), "{answer}");
+}
+
+/// 다른 진행(캐시 준비 `Indexing`)만 열려 있으면 답은 그대로 들어간다 — 그때의 답은 받은 편집을 반영한 글 기준이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_format_answer_while_only_indexing_goes_in() {
+    let answer = format_while("rust-analyzer", &["Indexing"], vec![]).await;
+    assert_eq!(answer["notReady"], false, "{answer}");
+    assert_eq!(answer["edits"], json!([edit(1, 2, 1, 4, " ")]), "{answer}");
+}
+
+/// 두 진행이 겹치면(가장 최근 진행은 `Indexing` — 상태에는 그것만 보인다) 열린 `Roots Scanned` 로 버린다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_format_answer_while_roots_are_scanned_under_a_later_indexing_is_not_ready() {
+    let answer = format_while("rust-analyzer", &["Roots Scanned", "Indexing"], vec![]).await;
+    assert_eq!(answer["notReady"], true, "{answer}");
+    assert_eq!(answer["edits"], json!([]), "{answer}");
+}
+
+/// 보낸 뒤 답 전에 열린 진행도(서버가 포맷 요청을 받고 begin 을 보낸 뒤 답한다) 답을 버린다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_format_answer_after_roots_scanning_began_is_not_ready() {
+    let answer = format_while(
+        "rust-analyzer",
+        &[],
+        vec![progress("begin", "Roots Scanned")],
+    )
+    .await;
+    assert_eq!(answer["notReady"], true, "{answer}");
+}
+
+/// 보낼 때 열려 있다가 답 전에 닫힌 진행도 버린다 — 서버는 그 진행 동안 받은 요청을 옛 글로 포맷하고 있었을 수 있다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_format_answer_sent_while_roots_were_scanned_is_not_ready_after_they_end() {
+    let answer = format_while(
+        "rust-analyzer",
+        &["Roots Scanned"],
+        vec![progress("end", "Roots Scanned")],
+    )
+    .await;
+    assert_eq!(answer["notReady"], true, "{answer}");
+}
+
+/// 정의에 그 진행을 적지 않은 서버(기본 — 빈 목록)는 같은 제목의 진행이 열려 있어도 답이 들어간다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_servers_progress_does_not_hold_its_format_answer() {
+    let answer = format_while("typescript-language-server", &["Roots Scanned"], vec![]).await;
+    assert_eq!(answer["server"], "typescript-language-server", "{answer}");
+    assert_eq!(answer["notReady"], false, "{answer}");
+    assert_eq!(answer["edits"], json!([edit(1, 2, 1, 4, " ")]), "{answer}");
 }

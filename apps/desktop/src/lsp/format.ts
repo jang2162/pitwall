@@ -16,6 +16,9 @@
 //
 // 늦은 답: 묻는 사이 문서가 바뀌었으면(요청 도우미가 버린 답 · Host 의 `staleVersion` · 뷰의 텍스트가 다름) 넣지 않고 「포맷하는
 // 사이 문서가 바뀌었다」 를 알린다. 같은 키를 다시 눌러 앞 요청이 취소된 것은 조용히 끝난다.
+// 진행 중인 서버의 답: Host 가 답에 `notReady` 를 달면(서버가 받은 편집을 늦게 반영하는 진행 — rust-analyzer 의 작업 공간 읽기 —
+// 가 보낼 때나 답할 때 열려 있었다, crates/pw-lsp/src/format.rs 「진행 중의 답」) 넣지 않고 rename 과 같은 문구 「언어 서버가 아직
+// 준비 중」 을 알린다(M4-13 재리뷰 N1).
 // 시한(Host 10 s): 넘으면 Host 가 서버의 요청을 취소하고 `timedOut` 으로 답한다 — 문서는 그대로, 알림.
 //
 // 커서: 서버가 문서를 통째로(또는 큰 덩어리로) 바꾸는 편집을 주면(ruff 등) 매핑한 커서가 덩어리 끝으로 밀린다. 그래서 넣기 전에
@@ -154,7 +157,8 @@ function indentStep(
 
 /**
  * 문서의 들여쓰기(서버에 보낼 `tabSize` · `insertSpaces`). 규칙은 VS Code 의 들여쓰기 추측을 따랐다 — microsoft/vscode
- * `src/vs/editor/common/model/indentationGuesser.ts` 의 `guessIndentation`(MIT). 코드는 옮기지 않고 규칙만 따라 새로 썼다:
+ * `src/vs/editor/common/model/indentationGuesser.ts` 의 `guessIndentation`(MIT — 고지는 licenses/vendored.md). 코드는 옮기지 않고
+ * 규칙만 따라 새로 썼다:
  *   - 앞 1만 줄을 본다. 빈 줄(공백뿐인 줄 포함)은 건너뛴다.
  *   - 머리에 탭이 있는 줄과 공백만 두 칸 이상인 줄을 센다. 탭 줄이 많으면 탭(`tabSize` 는 에디터의 탭 너비), 공백 줄이 많으면 공백,
  *     같으면 공백(기본).
@@ -342,6 +346,8 @@ export type FormatOutcome =
   | "noFormatter"
   /** 묻는 사이 문서가 바뀌어 넣지 않았다. */
   | "stale"
+  /** 그 서버가 받은 편집을 늦게 반영하는 진행(작업 공간 읽기 등) 중의 답이라 넣지 않았다(Host 의 `notReady`). */
+  | "notReady"
   /** 시한 · 서버 오류 · 거절 — 문서는 그대로. */
   | "failed"
   /** 서버가 바꿀 것이 없다고 했다. */
@@ -352,6 +358,7 @@ export type FormatOutcome =
 export interface FormatStrings {
   noFormatter: string;
   stale: string;
+  notReady: string;
   timedOut: string;
   failed: (message: string) => string;
   refused: (message: string) => string;
@@ -410,6 +417,10 @@ export async function formatView(view: EditorView, deps: FormatDeps): Promise<Fo
     if (!answer && !moved) return "quiet";
     deps.notify({ level: "info", title: T.stale });
     return "stale";
+  }
+  if (answer.notReady) {
+    deps.notify({ level: "info", title: T.notReady });
+    return "notReady";
   }
   if (answer.edits.length === 0) return "unchanged";
   let edits;

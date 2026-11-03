@@ -5377,8 +5377,13 @@ export type LspFormatted = {
 	/**  요청 사이에 문서가 바뀌었다 — 웹뷰는 넣지 않는다. */
 	staleVersion: boolean,
 	/**
-	 *  요청을 보낼 때의 문서 기준 편집(LSP 위치 그대로, 겹치지 않음 · 문서 안). 서버가 `null` 이거나 낡은 답(`stale_version`)이면
-	 *  빈 목록.
+	 *  보낼 때나 답할 때 서버가 「포맷 답을 믿지 않을 진행」(정의의 `format_unreliable_while_progress`)을 열고 있었다 — 옛 글 기준일
+	 *  수 있어 웹뷰는 넣지 않고 「언어 서버가 아직 준비 중」 을 알린다. 편집은 빈 목록.
+	 */
+	notReady: boolean,
+	/**
+	 *  요청을 보낼 때의 문서 기준 편집(LSP 위치 그대로, 겹치지 않음 · 문서 안). 서버가 `null` 이거나 낡은 답(`stale_version` ·
+	 *  `not_ready`)이면 빈 목록.
 	 */
 	edits: LspTextEdit[],
 };

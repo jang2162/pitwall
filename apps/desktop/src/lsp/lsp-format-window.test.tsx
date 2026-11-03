@@ -453,6 +453,7 @@ const formatted = (edits: unknown[] = [WHOLE]) => ({
   server: "rust-analyzer",
   range: false,
   staleVersion: false,
+  notReady: false,
   edits,
 });
 
@@ -636,4 +637,20 @@ it("stays quiet without a server for the document (an untrusted project starts n
   expect(host.lsp!.called("call:lsp.format")).toEqual([]);
   expect(view().state.doc.toString()).toBe(MAIN_TEXT);
   expect(fresh()).toEqual([]);
+});
+
+it("does not put an answer the host marks not ready into the document and says the server is still getting ready", async () => {
+  // M4-13 재리뷰 N1: rust-analyzer 가 작업 공간을 읽는 동안의 답은 옛 글 기준일 수 있어 Host 가 `notReady` 를 단다. 편집이 실려
+  // 와도(Host 는 비워 보낸다) 넣지 않는다 — 문구는 rename 의 「아직 준비 중」 과 같다.
+  host.lsp!.handle("lsp.format", async () => ({ ...formatted(), notReady: true }));
+  await openMain();
+  const fresh = await toasts();
+  await formatKey();
+  // 알림이 뜨거나 문서가 바뀔 때까지(되돌림 실증에서 시한이 아니라 아래 단언이 실패하게).
+  await until(() => fresh().length > 0 || view().state.doc.toString() !== MAIN_TEXT);
+  expect(fresh()).toEqual([expect.stringContaining("언어 서버가 아직 준비 중이다")]);
+  expect(view().state.doc.toString()).toBe(MAIN_TEXT);
+  expect(host.disk.calls).toEqual([]);
+  // 웹뷰는 서버 상태를 따로 묻지 않는다 — 판정은 Host 가 한다.
+  expect(host.lsp!.called("call:lsp.status.get")).toEqual([]);
 });

@@ -12,7 +12,7 @@ import { EditorView, showTooltip, type Tooltip } from "@codemirror/view";
 
 import { editorContext } from "../editor/extensions/context";
 import type { EditWindow } from "./edit-window";
-import type { LspDocument } from "./lsp-sessions";
+import { indexing } from "./server-progress";
 
 interface RenameInput {
   readonly from: number;
@@ -117,19 +117,6 @@ export function askName(
 }
 
 const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-/**
- * 서버 `server` 가 이 프로젝트에서 진행(`$/progress` — 색인 등)을 걸고 있는가. M4-05 의 상태(`lsp.status.get` — `lsp.status` 이벤트와
- * 같은 꼴)를 그때 묻는다. 루트는 가리지 않는다. 묻지 못하면 아니다(알림은 지금 문구로).
- */
-async function indexing(doc: LspDocument, server: string): Promise<boolean> {
-  try {
-    const status = await doc.services.call("lsp.status.get", { projectId: doc.projectId });
-    return status.instances.some((i) => i.server === server && i.progress !== null);
-  } catch {
-    return false;
-  }
-}
 
 /** 뷰의 커서 자리를 rename 한다(`⇧F6`). 던지지 않는다 — 실패는 모두 알림이다(`edit-ui.tsx` 가 `void` 로 부른다). */
 export async function renameAt(view: EditorView, win: EditWindow): Promise<void> {

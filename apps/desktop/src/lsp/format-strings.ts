@@ -9,6 +9,8 @@ export function lspFormatStrings(t: Translate) {
     action: t("lsp-format-action"),
     noFormatter: t("lsp-format-no-formatter"),
     stale: t("lsp-format-stale"),
+    // rename 의 「아직 준비 중」 과 같은 문구(같은 판정 — server-progress.ts).
+    notReady: t("lsp-server-not-ready"),
     timedOut: t("lsp-format-timed-out"),
     failed: (message: string) => t("lsp-format-failed", { message }),
     refused: (message: string) => t("lsp-format-refused", { message }),

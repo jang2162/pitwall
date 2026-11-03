@@ -725,8 +725,8 @@ lsp-edit-rename-hint = ↩ 바꾸기 · Esc 취소
 lsp-edit-rename-invalid = 이 자리는 이름을 바꿀 수 없다
 # $message: 언어 서버가 준 까닭
 lsp-edit-rename-invalid-reason = 이 자리는 이름을 바꿀 수 없다: { $message }
-# 서버가 진행(색인 등)을 걸고 있는 동안 prepareRename 이 까닭 없이 거절했다
-lsp-edit-rename-not-ready = 언어 서버가 아직 준비 중이다 — 잠시 뒤 다시 시도한다
+# 서버가 진행(색인 등)을 걸고 있어 답을 믿을 수 없다 — rename 의 까닭 없는 거절, 그 사이의 포맷 답(M4-13)
+lsp-server-not-ready = 언어 서버가 아직 준비 중이다 — 잠시 뒤 다시 시도한다
 # $message: 언어 서버가 준 오류
 lsp-edit-rename-failed = 이름을 바꾸지 못했다: { $message }
 lsp-edit-code-actions = 코드 액션

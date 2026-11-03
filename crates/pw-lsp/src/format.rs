@@ -21,6 +21,15 @@
 //! 글자 앞으로 당기지만 `lspOffset` 은 그 가운데에 넣으므로 거절해 둘이 다른 자리를 보지 않게 한다). 문서 끝 바로 뒤 줄의 0 글자
 //! (`{ line: 줄 수, character: 0 }`)는 문서 끝으로 받는다 — 문서 전체를 바꾸는 편집의 끝을 그렇게 주는 서버가 있다. 낡은 답
 //! (`stale_version`)은 검사하지 않고 빈 편집이다 — 웹뷰가 넣지 않는다.
+//!
+//! **진행 중의 답**(`not_ready`, M4-13 재리뷰 N1): LSP 의 포맷 답에는 어느 글 기준인지가 없어 버전으로는 못 잡는 낡음이 있다 —
+//! rust-analyzer 는 작업 공간을 읽는 동안(`$/progress` 「Roots Scanned」) 받은 `didChange` 를 분석에 넣지 않은 채 옛 글로 포맷한다.
+//! 서버 정의의 `format_unreliable_while_progress`(진행 제목, 정확히 같은 글)가 그런 진행을 적고, 요청을 보내기 전이나 답을 받은 뒤에
+//! 그 인스턴스에 그 제목의 진행이 열려 있으면 답을 버린다(검사하지 않고 빈 편집 — 웹뷰는 「언어 서버가 아직 준비 중」). 보낼 때 열려
+//! 있다가 답 전에 닫힌 것은 앞쪽이, 보낸 뒤에 열린 것은 뒤쪽이 잡는다 — rust-analyzer 는 그 진행의 begin 을 읽기를 시작하는 처리에서
+//! 보내므로 그 사이에 받은 포맷의 답보다 늘 먼저 온다. 남는 틈: 진행 알림은 이벤트 채널을 거쳐 들어오므로(`open_progress_titles`)
+//! 답 바로 앞의 begin 이 아직 안 들어왔을 수 있고, 보낸 뒤 열렸다 답 전에 닫힌 진행은 못 본다. 다른 진행(Indexing · cargo check
+//! 등)은 포맷을 막지 않는다 — 그때의 답은 받은 편집을 반영한 글 기준이다.
 
 use std::time::Duration;
 
@@ -33,7 +42,9 @@ use serde_json::{Value, json};
 use crate::completion::LspOffsetRange;
 use crate::document::DocText;
 use crate::edit::{LspRange, LspTextEdit};
-use crate::manager::{FeatureAnswer, FeatureRequest, LspManager, code as manager_code};
+use crate::manager::{
+    FeatureAnswer, FeatureRequest, InstanceKey, LspManager, code as manager_code,
+};
 use crate::server::RequestError;
 
 /// 이 행의 오류 코드(`pw-lsp` 5001~ 의 칸 — 행마다 겹치지 않게 513x 를 쓴다).
@@ -81,8 +92,11 @@ pub struct LspFormatted {
     pub range: bool,
     /// 요청 사이에 문서가 바뀌었다 — 웹뷰는 넣지 않는다.
     pub stale_version: bool,
-    /// 요청을 보낼 때의 문서 기준 편집(LSP 위치 그대로, 겹치지 않음 · 문서 안). 서버가 `null` 이거나 낡은 답(`stale_version`)이면
-    /// 빈 목록.
+    /// 보낼 때나 답할 때 서버가 「포맷 답을 믿지 않을 진행」(정의의 `format_unreliable_while_progress`)을 열고 있었다 — 옛 글 기준일
+    /// 수 있어 웹뷰는 넣지 않고 「언어 서버가 아직 준비 중」 을 알린다. 편집은 빈 목록.
+    pub not_ready: bool,
+    /// 요청을 보낼 때의 문서 기준 편집(LSP 위치 그대로, 겹치지 않음 · 문서 안). 서버가 `null` 이거나 낡은 답(`stale_version` ·
+    /// `not_ready`)이면 빈 목록.
     pub edits: Vec<LspTextEdit>,
 }
 
@@ -243,30 +257,32 @@ pub async fn format(
         timeout: Some(FORMAT_TIMEOUT),
     };
     // 문서 전체를 맡을 서버(결정 M4-D12). 범위를 주었고 그 서버가 범위 포맷을 하면 그 서버에만 범위로 묻는다.
-    let range_server = match p.range.filter(|r| r.from < r.to) {
-        None => None,
-        Some(range) => {
-            let full = m.feature_route_keys(
+    let routed = m
+        .feature_route_keys(
+            ctx.session(),
+            &p.doc_id,
+            &[(LspFeature::Formatting, "textDocument/formatting")],
+            None,
+        )?
+        .into_iter()
+        .next()
+        .map(|(_, key, _)| key);
+    let range_server = match (p.range.filter(|r| r.from < r.to), &routed) {
+        (Some(range), Some(key)) => m
+            .feature_route_keys(
                 ctx.session(),
                 &p.doc_id,
-                &[(LspFeature::Formatting, "textDocument/formatting")],
-                None,
-            )?;
-            full.into_iter()
-                .next()
-                .map(|(_, key, _)| key.server)
-                .filter(|server| {
-                    m.feature_route_keys(
-                        ctx.session(),
-                        &p.doc_id,
-                        &[(LspFeature::Formatting, "textDocument/rangeFormatting")],
-                        Some(server),
-                    )
-                    .is_ok_and(|r| !r.is_empty())
-                })
-                .map(|server| (server, range))
-        }
+                &[(LspFeature::Formatting, "textDocument/rangeFormatting")],
+                Some(&key.server),
+            )
+            .is_ok_and(|r| !r.is_empty())
+            .then(|| (key.server.clone(), range)),
+        _ => None,
     };
+    // 보내기 전에 열린 진행(머리 주석 「진행 중의 답」).
+    let before = routed
+        .as_ref()
+        .map(|key| (key.clone(), m.open_progress_titles(key)));
     let answer: FeatureAnswer = match &range_server {
         Some((server, range)) => {
             let range = *range;
@@ -286,9 +302,10 @@ pub async fn format(
         }
     }
     .map_err(mark_timeout)?;
-    // 낡은 답은 웹뷰가 넣지 않는다 — 검사하지 않고 빈 편집으로 답해, 「문서가 바뀌었다」 대신 「거절」 이 뜨지 않게 한다(M4-13
-    // 리뷰 L3).
-    let edits = if answer.stale_version {
+    let not_ready = unreliable_progress(m, &answer.key, before);
+    // 낡은 답 · 진행 중의 답은 웹뷰가 넣지 않는다 — 검사하지 않고 빈 편집으로 답해, 「문서가 바뀌었다」 · 「준비 중」 대신 「거절」 이
+    // 뜨지 않게 한다(M4-13 리뷰 L3).
+    let edits = if answer.stale_version || not_ready {
         Vec::new()
     } else {
         checked_edits(&answer.result, &answer.doc.text, &answer.server)?
@@ -297,8 +314,33 @@ pub async fn format(
         server: answer.server,
         range: range_server.is_some(),
         stale_version: answer.stale_version,
+        not_ready,
         edits,
     })
+}
+
+/// 답한 인스턴스 `key` 에 보내기 전(`before` — 그때 맡을 인스턴스와 그 열린 진행) 또는 지금 「포맷 답을 믿지 않을 진행」 이
+/// 열려 있는가. 제목은 정확히 같아야 한다.
+fn unreliable_progress(
+    m: &LspManager,
+    key: &InstanceKey,
+    before: Option<(InstanceKey, Vec<String>)>,
+) -> bool {
+    let Some(config) = m.instance_config(key) else {
+        return false;
+    };
+    let unreliable = &config.format_unreliable_while_progress;
+    if unreliable.is_empty() {
+        return false;
+    }
+    let before = before
+        .filter(|(at, _)| at.server == key.server && at.root == key.root)
+        .map(|(_, titles)| titles)
+        .unwrap_or_default();
+    before
+        .iter()
+        .chain(&m.open_progress_titles(key))
+        .any(|title| unreliable.contains(title))
 }
 
 /// 핸들러를 붙인다(`crate::register` 가 부른다).
