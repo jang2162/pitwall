@@ -10,7 +10,13 @@
 // 저장소에 둔다(창마다 따로 묻지 않게 — 실패해도 알림이 한 번 더 뜰 뿐이다).
 
 import type { Action } from "@pitwall/keymap";
-import type { LspInstanceState, LspInstanceStatus, LspServerInfo } from "@pitwall/rpc-client";
+import {
+  ERROR_CODE,
+  type LspInstanceState,
+  type LspInstanceStatus,
+  type LspServerInfo,
+  RpcCallError,
+} from "@pitwall/rpc-client";
 import * as Dialog from "@radix-ui/react-dialog";
 import type { DockviewApi } from "dockview-react";
 import {
@@ -540,7 +546,10 @@ export function useLspStatusUi(
         notify: (input) => live && latest.current.notify(input),
         strings: () => latest.current.strings,
         openTools: () => void latest.current.registry.run(SETTINGS_ACTION),
-      }).catch((e: unknown) => console.warn("[tools] tools.updates failed", e));
+      }).catch((e: unknown) => {
+        if (!(e instanceof RpcCallError && e.code === ERROR_CODE.METHOD_NOT_FOUND))
+          console.warn("[tools] tools.updates failed", e);
+      });
     check();
     const timer = setInterval(check, 60 * 60 * 1000);
     return () => {

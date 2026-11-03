@@ -16,6 +16,7 @@
 // `doc.services` 로 찾는다(`statusWindowOf` — edit-window.ts 와 같은 꼴).
 
 import {
+  ERROR_CODE,
   type LspDocumentStatus,
   type LspInstanceStatus,
   type LspServerInfo,
@@ -115,6 +116,12 @@ export function docKey(doc: StatusDoc): string {
 
 const worktreeKey = (worktree: string | undefined) => worktree ?? "";
 
+/** 읽기 실패를 남긴다. 그 메서드가 없는 Host(이 행 전의 판 · 원격)는 상태를 보이지 않을 뿐이라 남기지 않는다. */
+function warn(what: string, e: unknown, ...more: unknown[]) {
+  if (e instanceof RpcCallError && e.code === ERROR_CODE.METHOD_NOT_FOUND) return;
+  console.warn(`[lsp-status] ${what} failed`, ...more, e);
+}
+
 function message(e: unknown): string {
   if (e instanceof RpcCallError && typeof e.data === "string") return `${e.message}: ${e.data}`;
   return e instanceof Error ? e.message : String(e);
@@ -153,7 +160,7 @@ export function createStatusWindow(deps: StatusWindowDeps): LspStatusWindow {
       });
       set((s) => (s.docs[key] ? { docs: { ...s.docs, [key]: { ...s.docs[key], status } } } : {}));
     } catch (e) {
-      console.warn("[lsp] lsp.status.document failed", doc.path, e);
+      warn("lsp.status.document", e, doc.path);
     }
   }
 
@@ -165,7 +172,7 @@ export function createStatusWindow(deps: StatusWindowDeps): LspStatusWindow {
       });
       set((s) => ({ servers: { ...s.servers, [worktreeKey(worktree)]: list.servers } }));
     } catch (e) {
-      console.warn("[lsp] lsp.servers.list failed", e);
+      warn("lsp.servers.list", e);
     }
   }
 
