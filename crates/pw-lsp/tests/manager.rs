@@ -1104,6 +1104,17 @@ async fn the_project_jdk_reaches_jdtls_the_same_way_on_both_paths() {
     );
     let answer = messages.iter().find(|m| m["id"] == "fake-1").unwrap();
     assert_eq!(answer["result"], json!([want]));
+    // 다른 서버의 설정만 바뀌어도 jdtls 는 `restartNeeded` 가 되지 않는다 — 넣은 프로젝트 JDK 는 「설정이 바뀌었나」 에 들지 않는다.
+    let settings = env.paths.config.join("settings.toml");
+    let text = fs::read_to_string(&settings).unwrap();
+    fs::write(
+        &settings,
+        format!("{text}[lsp.rust-analyzer.settings.rust-analyzer.check]\ncommand = \"clippy\"\n"),
+    )
+    .unwrap();
+    env.global.reload().unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(env.state_of("jdtls"), Some(LspInstanceState::Ready));
 }
 
 /// 사람이 작업을 취소하면 서버에 `window/workDoneProgress/cancel` 이 간다(서버가 취소를 받는다고 알린 진행만).

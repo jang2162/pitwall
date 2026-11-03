@@ -1321,6 +1321,7 @@ impl LspManager {
         .ok();
         let (events_tx, events_rx) = mpsc::channel(self.inner.options.event_capacity.max(1));
         let config = Arc::new(prepared.config);
+        let merged = Arc::new(prepared.merged);
         let handlers = server_handlers(&HandlerContext {
             project_id: key.project_id.clone(),
             worktree: key.worktree.clone(),
@@ -1417,7 +1418,7 @@ impl LspManager {
                             .is_some_and(|s| Arc::ptr_eq(s, &server)) =>
                 {
                     instance.state = LspInstanceState::Ready;
-                    instance.config = Some(config);
+                    instance.config = Some(merged);
                     instance.installed = installed;
                     instance.sync = sync;
                     let feed = Feed::new(self.inner.options.watch.max_pending);
@@ -2904,7 +2905,11 @@ pub struct FeatureAnswer {
 /// 띄울 준비가 된 것.
 struct Prepared {
     spec: LaunchSpec,
+    /// 서버에 주는 설정(`workspace/configuration` · `didChangeConfiguration`) — 합친 설정에 프로젝트 JDK(`project_jdk_setting`)를 넣은 것.
     config: ServerConfig,
+    /// 합친 설정 그대로(프로젝트 JDK 를 넣기 전). 설정이 바뀌었는지(`config_changed`)는 이것과 새로 읽은 합친 설정을 견준다 — 넣은
+    /// 값 때문에 늘 「다름」 이 되지 않게(M4-18).
+    merged: ServerConfig,
     initialization_options: Value,
     /// 설치본에서 찾았으면 그 Mason 패키지.
     installed: Option<String>,
@@ -2975,6 +2980,7 @@ fn prepare(servers: &LspServers, key: &InstanceKey) -> Result<Prepared, LspInsta
     if !setup.config.enabled {
         return Err(LspInstanceState::Disabled);
     }
+    let merged = setup.config.clone();
     // 프로젝트가 쓰는 JDK(정의의 `project_jdk_setting` — jdtls, 15-m4-plan.md M4-18). 서버 런타임을 넣기 전의 그 디렉터리 런타임
     // 환경에서만 찾는다.
     if setup.definition.project_jdk_setting.is_some() {
@@ -3003,6 +3009,7 @@ fn prepare(servers: &LspServers, key: &InstanceKey) -> Result<Prepared, LspInsta
         },
         initialization_options: setup.initialization_options.clone(),
         config: setup.config,
+        merged,
         installed,
     })
 }
