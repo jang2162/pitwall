@@ -110,7 +110,7 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
 | 프로젝트 공유 설정 | `<project>/.pitwall/project.toml`, `run/*.toml`, `db/*.toml` | TOML | 커밋 가능. 실행 구성, DB 연결(비밀 제외), 기본 외부 도구 고르기(명령은 정의하지 못한다 — 「`[open_with]`」) |
 | 비밀 | OS 키체인 | | DB 비밀번호, SSH 패스프레이즈, 토큰. 설정 파일에는 `secret_ref`만 |
 
-- **하이브리드 정책 (D9)**: `.pitwall/*.toml`은 커밋, 개인용 덮어쓰기는 `.pitwall/*.local.toml` — 프로젝트 생성 시 `.pitwall/.gitignore`에 `*.local.toml` 과 `.backup/` 자동 추가
+- **하이브리드 정책 (D9)**: `.pitwall/*.toml`은 커밋, 개인용 덮어쓰기는 `.pitwall/*.local.toml` — 프로젝트 생성 시 `.pitwall/.gitignore`에 `*.local.toml` 과 `.backup/` 자동 추가(15-m4-plan M4-17: `*.local.toml` 을 처음 만드는 쓰기(`LspServers::write_local` · `pw-db` 개인 연결)는 `.pitwall/.gitignore` 에 `*.local.toml` 이 없으면 더한다 — 프로젝트 생성 화면이 아직 없어 이것이 D9 의 유일한 구현 자리다(`pw_core::config::ConfigSource::prepare_local_write`). 저장소 안의 개인 파일은 링크를 따르지 않는다 — 그 파일이 심볼릭 링크이거나 쓸 폴더가 프로젝트(또는 그 워크트리) 밖으로 풀리면 쓰지 않고 어느 파일 · 왜를 알린다. 전역 설정 · 개인 전용 폴더는 링크 대상을 고친다(dotfiles))
 - 병합 순서: 내장 기본값 → `.pitwall/*.toml` → `.pitwall/*.local.toml`
   - 단위는 파일 id(`.pitwall/` 기준 경로에서 `.toml`/`.local.toml` 을 뗀 것: `project`, `run/dev-server`). 읽는 범위는 `.pitwall/*.toml` 과 `run/` · `db/` 한 단계, 전역은 `$CONFIG/*.toml`(하위 폴더 제외)
   - 병합 규칙: 양쪽이 테이블이면 키별 재귀 병합, 그 밖(스칼라 · 배열 · 테이블의 배열 · 타입이 다른 값)은 위 레이어가 통째로 이긴다. 배열은 이어 붙이지 않는다. 위 레이어에서 키를 지우는 문법은 없다(`pw_core::config::merge`)
