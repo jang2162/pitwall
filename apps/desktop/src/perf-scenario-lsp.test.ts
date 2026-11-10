@@ -1,4 +1,8 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { RpcClient } from "@pitwall/rpc-client";
@@ -7,6 +11,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   editorStartingWith,
   MAIN_FIRST_LINE,
+  shownThenPainted,
   SYMBOL_QUERY,
   symbolKeys,
   watchSymbolCalls,
@@ -153,4 +158,47 @@ it("ends a symbol key at the frame its rows were painted in, not two frames afte
   }
   // 시작이 rAF 위상에서 떨어져 있다 — 값이 한 가지로 묶이지 않는다.
   expect(new Set(result.keys.map((k) => k.totalMs)).size).toBeGreaterThan(3);
+});
+
+it("ends at the first frame after the DOM change and the task after it, wherever the change lands in the frame", async () => {
+  const clock = fakeClock();
+  // DOM 변경이 프레임 안 여러 자리(머리 가까이 · 가운데 · 끝 가까이 · 여러 프레임 뒤)에 든다 — 지연이 한 값이면 「값이 몇 종인가」
+  // 로는 끝 표지가 프레임을 건너뛰었는지 가르지 못한다.
+  for (const delay of [0.4, 5.3, 9.9, 16.4, 23.2, 41.0]) {
+    const started = clock.env.now();
+    const id = `mark-${delay}`;
+    clock.at(started + delay, () => {
+      const el = document.createElement("div");
+      el.id = id;
+      document.body.append(el);
+    });
+    const shown = await clock.drive(
+      shownThenPainted(clock.env, id, () => document.getElementById(id), 1000),
+    );
+    expect(shown.seen).toBeCloseTo(started + delay, 5);
+    // 하한: 끝은 seen 뒤 첫 rAF 경계를 지난다(프레임을 기다리지 않고 seen 에서 끝내면 여기서 걸린다).
+    const firstFrame = (Math.floor(shown.seen / clock.FRAME + 1e-9) + 1) * clock.FRAME;
+    expect(shown.frame).toBeCloseTo(firstFrame, 5);
+    expect(shown.painted).toBeGreaterThanOrEqual(shown.frame);
+    // 상한: 한 프레임 안이다(rAF 를 하나 덧붙이면 여기서 걸린다).
+    expect(shown.painted - shown.seen).toBeLessThan(clock.FRAME);
+    await clock.drive(clock.env.sleep(3.1));
+  }
+});
+
+it("ends every frame row of the lsp and symbol scenarios through shownThenPainted", () => {
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "perf-scenario-lsp.ts"),
+    "utf8",
+  );
+  const body = (name: string) => {
+    const from = src.search(new RegExp(`function ${name}\\b`));
+    expect(from, name).toBeGreaterThanOrEqual(0);
+    return src.slice(from, src.indexOf("\n}\n", from));
+  };
+  // 옛 끝 표지(`until` 폴링 뒤 `env.work.frame()`)로 되돌린 호출 자리가 없다 — rAF 는 `afterPaint` 한 곳에서만 건다.
+  expect(src.match(/\.frame\(/g)?.length).toBe(1);
+  expect(body("afterPaint")).toMatch(/\.frame\(/);
+  for (const name of ["completion", "diagnostics", "definition", "problems", "symbolKeys"])
+    expect(body(name), name).toContain("shownThenPainted(");
 });
