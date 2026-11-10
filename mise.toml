@@ -170,8 +170,9 @@ run = "node scripts/perf-m3.mjs"
 
 # M4-19 실기 측정 한 번에(CONTRIBUTING.md 「성능 기준선」 의 「LSP 시나리오」): 데스크톱 release 번들 · 가짜 언어 서버(pw-perf-lsp) ·
 # 합성 저장소(심볼 50만) · 이 저장소의 사본 · rust-analyzer(Pitwall 설치기)를 준비하고, pw-index 의 release 성능 시험 5회와 빈 프로젝트 ·
-# LSP(자동완성 · 진단 · 정의 · 문제 창) · 타이핑(켬 · 끔) · 심볼로 이동 · 클래스로 이동 · 이 저장소 + rust-analyzer 를 차례로 재고 결과를
-# docs/superpowers/reports/ 로 복사한다. 화면이 잠겨 있으면 풀릴 때까지 기다린다. `mise run perf-m4 -- --short` 는 단계마다 1회.
+# LSP(자동완성 · 진단 · 정의 · 문제 창) · 타이핑(켬 · 끔을 회 단위로 번갈아) · 심볼로 이동 · 클래스로 이동 · 이 저장소 + rust-analyzer 를
+# 차례로 재고 결과를 docs/superpowers/reports/ 로 복사한다. 화면이 잠겨 있거나 화면 구성이 기준선(내장 화면 하나)과 다르면 기다린다.
+# `mise run perf-m4 -- --short` 는 단계마다 1회.
 # 앱이 앞으로 뜨므로 사람이 기기를 비웠을 때만 — OS 키 입력은 보내지 않는다.
 [tasks.perf-m4]
 description = "M4-19 실기 측정(LSP · 심볼 · 콜드 스타트 · 유휴 메모리)을 돌리고 결과를 보고서 폴더로 복사"

@@ -11,19 +11,28 @@
 //      Pitwall 의 설치기(`pw-tools` 의 `tools_install` — lsp-live 와 같은 고정 판 · 해시)로 `target/perf-m4/servers` 에(`--ra` 면 그것).
 //   ③ 앱 없이: `rust-index` — M4-15 의 release 시험(`cargo test --release -p pw-index --test perf`)을 5회(Host 의 첫 색인 · 힙 · 질의).
 //   ④ pw-perf 를 차례로: `empty`(빈 프로젝트 콜드 스타트 · 유휴 메모리 — M3 기준선과 같은 측정), `lsp`(가짜 서버: 자동완성 · 진단 ·
-//      정의로 이동 · 문제 툴 윈도우), `typing-on` · `typing-off`(타이핑 지연), `symbols` · `classes`(합성 저장소: 첫 색인 · ⌘⌥O · ⌘O),
+//      정의로 이동 · 문제 툴 윈도우), `typing`(타이핑 지연 — 켬 · 끔을 회 단위로 번갈아), `symbols` · `classes`(합성 저장소: 첫 색인 · ⌘⌥O · ⌘O),
 //      `ra-idle`(이 저장소 + rust-analyzer: 콜드 스타트 · 유휴 메모리, 서버는 따로).
 //   ⑤ 끝나면(실패해도) 끝난 단계마다 `result.json` · `summary.md` 를 `docs/superpowers/reports/<날짜>-m4-perf-<종류>[-short]-<시각>.json|
 //      .summary.md` 로 복사하고, 조건(커밋 · 단계별 load average · 기다린 시간 · 화면)을 `…-m4-perf-conditions[-short]-<시각>.json` 에
 //      남긴다. 측정 도중에는 `target/perf/` 에만 쓴다 — 추적되는 경로에 쓰면 다음 단계의 `commit.dirty` 가 true 가 된다.
 //
 // 단계를 시작하기 직전마다 화면 잠금을 보고 **잠겨 있으면 풀릴 때까지 기다린다**(키 입력은 보내지 않는다 — 앱 안 시나리오의 키는
-// 웹뷰 안에서 만든 이벤트다). 1분 load average 가 코어 수를 넘으면 내려갈 때까지 기다린다. 기다린 시간은 조건 파일에 적는다.
+// 웹뷰 안에서 만든 이벤트다). 화면 구성이 기준선(내장 화면 하나, 외부 모니터 없음)과 다르면 같아질 때까지, 1분 load average 가
+// 코어 수를 넘으면 내려갈 때까지 기다린다. 기다린 시간과 시작 때의 화면은 조건 파일에 적는다.
 // 종료 코드: 0 — 모든 단계가 0. 3 — 결과는 복사했지만 어느 단계든 유효한 회가 적었다. 그 밖 — 실패한 단계의 코드 그대로이고 뒤
 // 단계는 돌지 않는다. macOS 전용이다.
 
 import { spawnSync } from "node:child_process";
-import { constants, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -40,6 +49,8 @@ export const REPO_COPY = "target/perf-m4/repo";
 export const SERVERS = "target/perf-m4/servers";
 /** M4-15 의 release 시험(앱 없이 — Host 몫). */
 export const RUST_RUNS = 5;
+/** 타이핑 켬 · 끔 짝의 수(회마다 켬 한 번 · 끔 한 번). */
+export const TYPING_ROUNDS = 5;
 /** `lsp-idle` 의 시나리오 시간 — rust-analyzer 가 이 저장소를 처음 읽는 데(빌드 스크립트 · 프록 매크로) 몇 분 걸린다. */
 export const IDLE_TIMEOUT_SECS = 1800;
 
@@ -55,27 +66,34 @@ export function measurements({ short, only, ra }) {
       args: [...app, "--scenario", "lsp", "--lsp-fake", FAKE, "--label", "fake server", ...extra],
     },
     {
-      kind: "typing-on",
-      args: [
-        ...app,
-        "--scenario",
-        "lsp-typing",
-        "--lsp-fake",
-        FAKE,
-        "--label",
-        "typing, LSP on (fake server)",
-        ...extra,
-      ],
-    },
-    {
-      kind: "typing-off",
-      args: [
-        ...app,
-        "--scenario",
-        "lsp-typing-off",
-        "--label",
-        "typing, LSP off ([lsp.rust-analyzer] enabled = false)",
-        ...extra,
+      // 켬 · 끔을 회 단위로 번갈아 돈다(on, off, on, off …) — 차례로 한 번씩 돌면 앞쪽이 부하가 다른 때에 돈다(M4-19 리뷰 M1).
+      // pw-perf 를 회마다 `--runs 1` 로 부르고(첫 짝만 준비 1회), 회마다 시작 load 를 적는다.
+      kind: "typing",
+      rounds: short ? 1 : TYPING_ROUNDS,
+      warmupFirst: short ? 0 : 1,
+      alternate: [
+        {
+          kind: "typing-on",
+          args: [
+            ...app,
+            "--scenario",
+            "lsp-typing",
+            "--lsp-fake",
+            FAKE,
+            "--label",
+            "typing, LSP on (fake server)",
+          ],
+        },
+        {
+          kind: "typing-off",
+          args: [
+            ...app,
+            "--scenario",
+            "lsp-typing-off",
+            "--label",
+            "typing, LSP off ([lsp.rust-analyzer] enabled = false)",
+          ],
+        },
       ],
     },
     {
@@ -187,6 +205,86 @@ export function lockedIn(ioreg) {
   return /CGSSessionScreenIsLocked<\/key>\s*<true\/>/.test(ioreg);
 }
 
+/**
+ * 화면 구성이 기준선(M1 · M2 · M3 와 같은 내장 화면 하나, 외부 모니터 없음)인가. 외부 1x 모니터에서는 WebKit GPU 프로세스가 약
+ * 100 MB → 17 MB 로 줄어 유휴 메모리가 낮게 나온다(M4-19 리뷰 H2). `displays` 가 없으면(읽지 못했으면) 기준선이 아니다.
+ */
+export function baselineDisplays(displays) {
+  if (!Array.isArray(displays)) return { ok: false, why: "the displays could not be read" };
+  const shown = displays.map((d) => `${d.name} ${d.resolution}${d.internal ? " (built-in)" : ""}`);
+  if (displays.length === 1 && displays[0].internal) return { ok: true, why: shown[0] };
+  return {
+    ok: false,
+    why: `${shown.join(", ") || "no display"} — the baseline is one built-in display, no external monitor`,
+  };
+}
+
+/** pw-perf 단계 하나를 띄우는 명령 · 인자 · 옵션 — 단계의 `env` 는 그 실행에만 더한다(`base` 는 바꾸지 않는다). */
+export function stepSpawn(step, args, out, base = process.env) {
+  return {
+    command: "cargo",
+    args: ["run", "-q", "--release", "-p", "pw-perf", "--", ...args, "--out", out],
+    options: { cwd: root, stdio: "inherit", env: { ...base, ...step.env } },
+  };
+}
+
+/** pw-perf 의 `result.json` 에서 측정 회(준비 · 제외 아닌 첫 회)의 타이핑 값. 없으면 null. */
+export function typingRun(result) {
+  const run = (result?.runs ?? []).find((r) => !r.warmup && !r.excluded && r.measure?.typing);
+  if (!run) return null;
+  const { painted, frame } = run.measure.typing;
+  return {
+    p95: painted.p95,
+    p50: painted.p50,
+    max: painted.max,
+    within16_7: painted.within16_7,
+    frameP95: frame.p95,
+  };
+}
+
+const median = (xs) => {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+/**
+ * 번갈아 돈 타이핑 회(`{ round, kind, lsp, typing, loadAtStart }`)의 판정: 06 은 켬 − 끔 ≤ 2 ms 를 회별 p95 의 중앙값끼리 견준다.
+ * 같은 짝(같은 회 번호)의 켬 − 끔도 참고로 싣는다. 값이 없는 회(제외 · 실패)는 빼고, 남은 회 수를 적는다.
+ */
+export function typingSummary(rounds, targetMs = 2) {
+  const p95 = (lsp) => rounds.filter((r) => r.lsp === lsp && r.typing).map((r) => r.typing.p95);
+  const on = p95(true);
+  const off = p95(false);
+  const mOn = median(on);
+  const mOff = median(off);
+  const delta = mOn === null || mOff === null ? null : Math.round((mOn - mOff) * 100) / 100;
+  const pairs = [];
+  for (const r of rounds.filter((x) => x.lsp && x.typing)) {
+    const o = rounds.find((x) => !x.lsp && x.round === r.round && x.typing);
+    if (o) pairs.push(Math.round((r.typing.p95 - o.typing.p95) * 100) / 100);
+  }
+  return {
+    on: {
+      n: on.length,
+      median: mOn,
+      min: on.length ? Math.min(...on) : null,
+      max: on.length ? Math.max(...on) : null,
+    },
+    off: {
+      n: off.length,
+      median: mOff,
+      min: off.length ? Math.min(...off) : null,
+      max: off.length ? Math.max(...off) : null,
+    },
+    deltaMs: delta,
+    pairDeltasMs: pairs,
+    targetMs,
+    met: delta === null ? null : delta <= targetMs,
+  };
+}
+
 function run(cmd, args, opts = {}) {
   return spawnSync(cmd, args, { cwd: root, encoding: "utf8", maxBuffer: 1 << 28, ...opts });
 }
@@ -206,19 +304,33 @@ const load = () => parseLoad(must("sysctl", ["-n", "vm.loadavg"]));
 const cores = () => Number(must("sysctl", ["-n", "hw.ncpu"]).trim());
 
 /**
- * 화면이 풀리고(`screen` 일 때 — 앱이 없는 단계는 잠금과 무관하다) 1분 load average 가 코어 수 이하가 될 때까지 기다린다. 기다린 초와
+ * 화면이 풀리고 화면 구성이 기준선이고(`screen` 일 때 — 앱이 없는 단계는 둘과 무관하다) 1분 load average 가 코어 수 이하가 될 때까지 기다린다. 기다린 초와
  * 시작할 때의 load.
  */
 async function waitForStart(label, screen = true) {
   const limit = cores();
   const started = Date.now();
   let lockedSecs = 0;
+  let displaySecs = 0;
+  let shown;
   for (;;) {
     if (screen && locked()) {
       console.error(`perf-m4: ${label}: the screen is locked — waiting (no keys are sent)`);
       await sleep(30_000);
       lockedSecs += 30;
       continue;
+    }
+    if (screen) {
+      shown = displays();
+      const base = baselineDisplays(shown);
+      if (!base.ok) {
+        console.error(
+          `perf-m4: ${label}: displays differ from the baseline: ${base.why} — waiting`,
+        );
+        await sleep(30_000);
+        displaySecs += 30;
+        continue;
+      }
     }
     const now = load();
     if (now[0] > limit) {
@@ -229,6 +341,8 @@ async function waitForStart(label, screen = true) {
     return {
       waitedSecs: Math.round((Date.now() - started) / 1000),
       lockedSecs,
+      displaySecs,
+      ...(screen ? { displays: shown } : {}),
       loadAtStart: now,
     };
   }
@@ -343,6 +457,103 @@ function rustIndex(out, short) {
   );
 }
 
+/** 번갈아 도는 단계의 회 `r` 인자 — 회마다 측정 1회, 첫 짝만 준비 1회. */
+export function alternateArgs(step, side, r) {
+  return [...side.args, "--runs", "1", "--warmup", r === 0 ? String(step.warmupFirst) : "0"];
+}
+
+/** 번갈아 도는 단계의 차례: 회마다 `alternate` 를 한 번씩(on, off, on, off …). */
+export function alternateRuns(step) {
+  const runs = [];
+  for (let round = 0; round < step.rounds; round++)
+    for (const side of step.alternate)
+      runs.push({ round, side, args: alternateArgs(step, side, round) });
+  return runs;
+}
+
+export function alternateOut(step, side, r, suffix, date, stamp) {
+  return `target/perf/m4-${step.kind}${suffix}-${date}-${stamp}/${side.kind}-r${r}`;
+}
+
+/**
+ * pw-perf 단계 하나: 시작 조건(잠금 · 부하 · 화면)을 기다려 돌리고 조건 파일에 적는다. 끝날 때 화면 구성이 바뀌었으면
+ * `displaysKept: false` 로 적고 경고한다(그 단계는 판정하지 않는다). 0 · 3 밖의 종료는 던진다.
+ */
+async function pwPerf(step, args, out, conditions, save, extra = {}) {
+  const waited = await waitForStart(step.kind);
+  const spawn = stepSpawn(step, args, out);
+  console.log(`perf-m4: cargo ${spawn.args.join(" ")}`);
+  const record = {
+    kind: step.kind,
+    ...extra,
+    args,
+    env: step.env ?? null,
+    ...waited,
+    startedAt: new Date().toISOString(),
+  };
+  conditions.steps.push(record);
+  save();
+  const r = spawnSync(spawn.command, spawn.args, spawn.options);
+  record.endedAt = new Date().toISOString();
+  record.loadAtEnd = load();
+  const after = displays();
+  record.displaysKept = JSON.stringify(after) === JSON.stringify(waited.displays);
+  if (!record.displaysKept) {
+    record.displaysAtEnd = after;
+    console.error(
+      `perf-m4: ${step.kind}: the displays changed during the step (${baselineDisplays(after).why}) — do not judge it`,
+    );
+  }
+  record.exit = r.status;
+  save();
+  if (r.status !== 0 && r.status !== 3)
+    throw Object.assign(
+      new Error(
+        `${step.kind} failed (exit ${r.status ?? `signal ${r.signal}`}); results already written stay in ${out}`,
+      ),
+      { exit: r.status ?? 1 },
+    );
+  for (const from of ["result.json", "summary.md"])
+    if (!existsSync(join(root, out, from)))
+      throw new Error(`${step.kind}: ${join(out, from)} was not written`);
+  return record;
+}
+
+/** 번갈아 돈 타이핑 회를 한 결과(`result.json` · `summary.md`)로 묶는다. */
+function writeTyping(out, rounds) {
+  const summary = typingSummary(rounds);
+  const result = {
+    schema: "pitwall-perf-m4-typing/1",
+    definition:
+      "LSP on and off alternate run by run (on, off, on, off …), each a pw-perf `lsp-typing` / `lsp-typing-off` run with `--runs 1` (the first pair adds one warm-up); per run: insert → after the next frame's rendering, p95 over 300 keys; 06 judges median(on p95) − median(off p95) ≤ 2 ms",
+    rounds,
+    summary,
+  };
+  writeFileSync(join(root, out, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+  const f = (x) => (x === null || x === undefined ? "—" : String(x));
+  const lines = rounds.map(
+    (r) =>
+      `| ${r.round} | ${r.lsp ? "on" : "off"} | ${f(r.typing?.p95)} | ${f(r.typing?.p50)} | ${f(r.typing?.frameP95)} | ${f(r.typing?.within16_7)} | ${r.loadAtStart?.join(" / ")} | ${r.exit}${r.displaysKept ? "" : " (displays changed)"} |`,
+  );
+  writeFileSync(
+    join(root, out, "summary.md"),
+    [
+      "## Typing latency, LSP on − off, alternating runs (M4-19)",
+      "",
+      `- commit: \`${f(rounds[0]?.commit?.sha)}\` (dirty ${f(rounds[0]?.commit?.dirty)})`,
+      `- os: ${rounds[0]?.os ? `${rounds[0].os.name} ${rounds[0].os.version} (${rounds[0].os.build})` : "—"}`,
+      `- on: median p95 ${f(summary.on.median)} ms (${f(summary.on.min)}–${f(summary.on.max)}, n=${summary.on.n})`,
+      `- off: median p95 ${f(summary.off.median)} ms (${f(summary.off.min)}–${f(summary.off.max)}, n=${summary.off.n})`,
+      `- on − off: **${f(summary.deltaMs)} ms** (target ≤ ${summary.targetMs} ms → ${summary.met === null ? "no verdict" : summary.met ? "met" : "not met"}); per pair: ${summary.pairDeltasMs.join(", ")}`,
+      "",
+      "| Round | LSP | p95 ms | p50 ms | frame p95 ms | ≤16.7 share | 1/5/15-min load at start | exit |",
+      "|---|---|---|---|---|---|---|---|",
+      ...lines,
+      "",
+    ].join("\n"),
+  );
+}
+
 async function main(argv) {
   const short = argv.includes("--short");
   const dry = argv.includes("--dry-run");
@@ -362,11 +573,17 @@ async function main(argv) {
   const suffix = short ? "-short" : "";
   if (dry) {
     for (const m of measurements({ short, only, ra: raGiven }))
-      console.log(
-        m.args
-          ? `perf-m4: pw-perf ${m.args.join(" ")} --out target/perf/m4-${m.kind}${suffix}-${date}-${stamp}`
-          : `perf-m4: ${m.kind}: cargo test --release -p pw-index --test perf × ${short ? 1 : RUST_RUNS}`,
-      );
+      if (m.alternate)
+        for (const { round, side, args } of alternateRuns(m))
+          console.log(
+            `perf-m4: ${m.kind} round ${round}: pw-perf ${args.join(" ")} --out ${alternateOut(m, side, round, suffix, date, stamp)}`,
+          );
+      else
+        console.log(
+          m.args
+            ? `perf-m4: pw-perf ${m.args.join(" ")} --out target/perf/m4-${m.kind}${suffix}-${date}-${stamp}`
+            : `perf-m4: ${m.kind}: cargo test --release -p pw-index --test perf × ${short ? 1 : RUST_RUNS}`,
+        );
     return 0;
   }
   const conditions = {
@@ -374,6 +591,7 @@ async function main(argv) {
     commit: must("git", ["rev-parse", "HEAD"]).trim(),
     dirty: must("git", ["status", "--porcelain"]).trim() !== "",
     cores: cores(),
+    os: `${must("sw_vers", ["-productVersion"]).trim()} (${must("sw_vers", ["-buildVersion"]).trim()})`,
     displays: displays(),
     steps: [],
   };
@@ -398,7 +616,7 @@ async function main(argv) {
     save();
     for (const step of measurements({ short, only, ra: ready.ra })) {
       const out = `target/perf/m4-${step.kind}${suffix}-${date}-${stamp}`;
-      if (!step.args) {
+      if (step.kind === "rust-index") {
         const waited = await waitForStart(step.kind, false);
         const record = { kind: step.kind, ...waited, startedAt: new Date().toISOString() };
         conditions.steps.push(record);
@@ -410,39 +628,34 @@ async function main(argv) {
         done.push(step.kind);
         continue;
       }
-      const waited = await waitForStart(step.kind);
-      const args = ["run", "-q", "--release", "-p", "pw-perf", "--", ...step.args, "--out", out];
-      console.log(`perf-m4: cargo ${args.join(" ")}`);
-      const record = {
-        kind: step.kind,
-        args: step.args,
-        env: step.env ?? null,
-        ...waited,
-        startedAt: new Date().toISOString(),
-      };
-      conditions.steps.push(record);
-      save();
-      const r = spawnSync("cargo", args, {
-        cwd: root,
-        stdio: "inherit",
-        env: { ...process.env, ...step.env },
-      });
-      record.endedAt = new Date().toISOString();
-      record.loadAtEnd = load();
-      record.exit = r.status;
-      save();
-      if (r.status !== 0 && r.status !== 3)
-        throw Object.assign(
-          new Error(
-            `${step.kind} failed (exit ${r.status ?? `signal ${r.signal}`}); results already written stay in ${out}`,
-          ),
-          { exit: r.status ?? 1 },
-        );
-      for (const from of ["result.json", "summary.md"])
-        if (!existsSync(join(root, out, from)))
-          throw new Error(`${step.kind}: ${join(out, from)} was not written`);
+      if (step.alternate) {
+        const rounds = [];
+        for (const { round: r, side, args } of alternateRuns(step)) {
+          const sub = alternateOut(step, side, r, suffix, date, stamp);
+          const record = await pwPerf(side, args, sub, conditions, save, { round: r });
+          if (record.exit === 3) worst = 3;
+          const result = JSON.parse(readFileSync(join(root, sub, "result.json"), "utf8"));
+          rounds.push({
+            round: r,
+            kind: side.kind,
+            lsp: side.kind === "typing-on",
+            exit: record.exit,
+            loadAtStart: record.loadAtStart,
+            loadAtEnd: record.loadAtEnd,
+            displaysKept: record.displaysKept,
+            typing: typingRun(result),
+            coldStartMs: result.runs?.find((x) => !x.warmup)?.cold_start_ms ?? null,
+            os: result.os ?? null,
+            commit: result.commit ?? null,
+          });
+        }
+        writeTyping(out, rounds);
+        done.push(step.kind);
+        continue;
+      }
+      const record = await pwPerf(step, step.args, out, conditions, save);
       done.push(step.kind);
-      if (r.status === 3) {
+      if (record.exit === 3) {
         worst = 3;
         console.error(`perf-m4: ${step.kind}: too few valid runs (exit 3) — see its summary`);
       }
