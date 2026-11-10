@@ -1307,11 +1307,14 @@ async fn a_removed_observer_hears_nothing_more() {
     assert!(queued.take().is_empty());
 }
 
-/// 첫 목록(`listed`)과 다시 만든 목록(`rebuilt`)을 가르는 기록자. `only` 가 있으면 그 루트만 받는다(`wants`).
+/// 첫 목록(`listed`)과 다시 만든 목록(`rebuilt`)을 가르는 기록자. `only` 가 있으면 그 루트만 받는다(`wants`). `no_changes` 면
+/// `changed` 를 적지 않는다 — 목록의 종류만 보는 시험에서, Windows 가 감시 전에 쓴 파일의 변경을 늦게 알리는 것(NTFS 는 크기 ·
+/// 쓴 시각 변경을 캐시를 비울 때 알린다)이 끼지 않게.
 #[derive(Default)]
 struct Kinds {
     seen: Mutex<Vec<String>>,
     only: Option<PathBuf>,
+    no_changes: bool,
 }
 
 impl Kinds {
@@ -1355,7 +1358,9 @@ impl FileListObserver for Kinds {
     }
 
     fn changed(&self, _: &str, root: &Path, _: Vec<String>, _: Vec<(Arc<str>, FileFlags)>) {
-        self.push(root, "changed");
+        if !self.no_changes {
+            self.push(root, "changed");
+        }
     }
 
     fn suspended(&self, _: &str, root: &Path) {
@@ -1375,7 +1380,10 @@ async fn the_first_list_of_each_opening_is_listed_and_later_ones_are_rebuilt() {
     let (id, root) = f.repo("proj");
     write(&root.join("src/lib.rs"), "");
     let index = FileIndex::new(Arc::clone(&f.fs));
-    let kinds = Arc::new(Kinds::default());
+    let kinds = Arc::new(Kinds {
+        no_changes: true,
+        ..Kinds::default()
+    });
     index.observe_queued(Arc::clone(&kinds) as Arc<dyn FileListObserver>);
     let tasks = TaskSpawner::new(f.bus.clone(), Scope::Host, CancellationToken::new());
     tokio::spawn(index.attach(&f.bus, tasks.clone()));

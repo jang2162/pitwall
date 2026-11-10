@@ -253,7 +253,11 @@ async fn watching_a_project_indexes_its_symbols() {
     assert_eq!(render.kind, IndexSymbolKind::Method);
     assert_eq!(render.container.as_deref(), Some("Widget"));
     assert_eq!(render.language, "rust");
-    assert_eq!(render.path, root.join("src/lib.rs").display().to_string());
+    // 경로는 OS 의 구분자로 온다(Windows 는 `\\`) — `join("src/lib.rs")` 는 Windows 에서 `/` 를 그대로 둔다.
+    assert_eq!(
+        render.path,
+        root.join("src").join("lib.rs").display().to_string()
+    );
     assert_eq!(render.selection_range.start.line, 1);
     assert_eq!(render.positions, [0, 1, 2, 3, 4, 5]);
     assert!(found.unindexed.is_empty());

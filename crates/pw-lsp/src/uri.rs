@@ -22,6 +22,22 @@ pub fn lsp_uri(path: &Path) -> Option<lsp_types::Uri> {
     file_uri(path)?.parse().ok()
 }
 
+/// 시험용: 유닉스 꼴 절대 경로(`/p/a.rs`)를 이 OS 의 절대 경로로 — Windows 는 드라이브가 있어야 절대 경로라 `C:\p\a.rs`.
+#[cfg(test)]
+pub(crate) fn native(unix: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!("C:{}", unix.replace('/', "\\")))
+    } else {
+        PathBuf::from(unix)
+    }
+}
+
+/// 시험용: [`native`] 경로의 `file://` URI(Windows 는 `file:///C:/p/a.rs`).
+#[cfg(test)]
+pub(crate) fn native_uri(unix: &str) -> String {
+    file_uri(&native(unix)).expect("an absolute path")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

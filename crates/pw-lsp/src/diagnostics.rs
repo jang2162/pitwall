@@ -1289,6 +1289,7 @@ pub fn register(router: &mut Router, manager: &LspManager) -> DiagnosticStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::uri::{native, native_uri};
 
     #[test]
     fn a_diagnostic_is_read_within_its_limits() {
@@ -1301,7 +1302,7 @@ mod tests {
             "codeDescription": { "href": "javascript:alert(1)" },
             "tags": [1, 2, 7],
             "relatedInformation": (0..40).map(|i| json!({
-                "location": { "uri": "file:///x/a.rs", "range": { "start": { "line": i, "character": 0 }, "end": { "line": i, "character": 1 } } },
+                "location": { "uri": native_uri("/x/a.rs"), "range": { "start": { "line": i, "character": 0 }, "end": { "line": i, "character": 1 } } },
                 "message": "m",
             })).collect::<Vec<_>>(),
             "data": { "big": "x".repeat(DATA_LIMIT) },
@@ -1319,7 +1320,10 @@ mod tests {
             [LspDiagnosticTag::Unnecessary, LspDiagnosticTag::Deprecated]
         );
         assert_eq!(d.related.len(), RELATED_LIMIT);
-        assert_eq!(d.related[0].path.as_deref(), Some("/x/a.rs"));
+        assert_eq!(
+            d.related[0].path,
+            Some(native("/x/a.rs").display().to_string())
+        );
         assert_eq!(d.data, None);
         // 심각도가 없으면 오류, 범위가 없으면 버린다.
         assert_eq!(
@@ -1341,15 +1345,17 @@ mod tests {
         let line = |i: u32| json!({ "start": { "line": i, "character": 0 }, "end": { "line": i, "character": 1 } });
         // 모든 칸을 상한까지 채우고, 관련 정보도 상한 길이의 URI · 메시지로 채운다. 맨 앞에는 아주 긴 URI(틀 상한 안 —
         // 자르기 전 URI 에서 경로를 만들면 그 길이 그대로 실린다).
+        // 이 OS 의 루트 URI(`file:///`, Windows 는 `file:///C:/`) — 드라이브 없는 URI 는 Windows 에서 경로가 아니다.
+        let root = native_uri("/");
         let long_dir = "d".repeat(64 * 1024);
         let mut related = vec![json!({
-            "location": { "uri": format!("file:///{long_dir}/x.rs"), "range": line(0) },
+            "location": { "uri": format!("{root}{long_dir}/x.rs"), "range": line(0) },
             "message": "too long",
         })];
-        let fit_dir = "p".repeat(HREF_LIMIT - "file:///".len() - "/x.rs".len());
+        let fit_dir = "p".repeat(HREF_LIMIT - root.len() - "/x.rs".len());
         related.extend((0..40).map(|i| {
             json!({
-                "location": { "uri": format!("file:///{fit_dir}/x.rs"), "range": line(i) },
+                "location": { "uri": format!("{root}{fit_dir}/x.rs"), "range": line(i) },
                 "message": "m".repeat(RELATED_MESSAGE_LIMIT),
             })
         }));

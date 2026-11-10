@@ -538,6 +538,9 @@ mod tests {
         assert!(!runs(&own(&["--stdio"]), &rec));
     }
 
+    /// 유닉스만: Windows 는 Job Object 가 Host 와 함께 닫혀 서버 트리가 끝나므로 기록하지 않고(머리 주석), 그 OS 의 Host 생존 ·
+    /// 시작 시각 판정도 없다 — 아래 `forged` 와 같은 이유.
+    #[cfg(unix)]
     #[test]
     fn a_record_of_a_living_owner_or_a_stranger_is_not_reaped() {
         let tmp = tempfile::tempdir().unwrap();

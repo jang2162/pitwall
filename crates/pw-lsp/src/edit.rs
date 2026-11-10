@@ -1472,25 +1472,32 @@ mod tests {
         LspPosition { line, character }
     }
 
+    /// 이 OS 의 절대 경로 글과 그 URI(시험의 `/p/…` 를 Windows 에서는 `C:\\p\\…` 로).
+    fn path(unix: &str) -> String {
+        crate::uri::native(unix).display().to_string()
+    }
+
+    use crate::uri::native_uri as uri;
+
     #[test]
     fn document_changes_keep_their_order_and_options() {
         let edit = json!({ "documentChanges": [
-            { "kind": "create", "uri": "file:///p/new.rs", "options": { "ignoreIfExists": true } },
-            { "textDocument": { "uri": "file:///p/a.rs", "version": 3 },
+            { "kind": "create", "uri": uri("/p/new.rs"), "options": { "ignoreIfExists": true } },
+            { "textDocument": { "uri": uri("/p/a.rs"), "version": 3 },
               "edits": [{ "range": { "start": { "line": 0, "character": 1 }, "end": { "line": 0, "character": 2 } }, "newText": "x" }] },
-            { "kind": "rename", "oldUri": "file:///p/a.rs", "newUri": "file:///p/b.rs" },
-            { "kind": "delete", "uri": "file:///p/old", "options": { "recursive": true } },
+            { "kind": "rename", "oldUri": uri("/p/a.rs"), "newUri": uri("/p/b.rs") },
+            { "kind": "delete", "uri": uri("/p/old"), "options": { "recursive": true } },
         ]});
         assert_eq!(
             normalize_edit(&edit).unwrap().changes,
             [
                 LspFileChange::Create {
-                    path: "/p/new.rs".into(),
+                    path: path("/p/new.rs"),
                     overwrite: false,
                     ignore_if_exists: true
                 },
                 LspFileChange::Text {
-                    path: "/p/a.rs".into(),
+                    path: path("/p/a.rs"),
                     version: Some(3),
                     edits: vec![LspTextEdit {
                         range: LspRange {
@@ -1502,22 +1509,23 @@ mod tests {
                     foreign: false,
                 },
                 LspFileChange::Rename {
-                    from: "/p/a.rs".into(),
-                    to: "/p/b.rs".into(),
+                    from: path("/p/a.rs"),
+                    to: path("/p/b.rs"),
                     overwrite: false,
                     ignore_if_exists: false
                 },
                 LspFileChange::Delete {
-                    path: "/p/old".into(),
+                    path: path("/p/old"),
                     recursive: true,
                     ignore_if_not_exists: false
                 },
             ]
         );
         // `changes` 표는 경로 순, 버전 없음.
+        let (z, a) = (uri("/p/z.rs"), uri("/p/a.rs"));
         let edit = json!({ "changes": {
-            "file:///p/z.rs": [],
-            "file:///p/a.rs": [{ "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 0 } }, "newText": "" }],
+            z: [],
+            a: [{ "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 0 } }, "newText": "" }],
         }});
         let paths: Vec<_> = normalize_edit(&edit)
             .unwrap()
@@ -1528,10 +1536,7 @@ mod tests {
                 other => panic!("{other:?}"),
             })
             .collect();
-        assert_eq!(
-            paths,
-            [("/p/a.rs".to_owned(), None), ("/p/z.rs".to_owned(), None)]
-        );
+        assert_eq!(paths, [(path("/p/a.rs"), None), (path("/p/z.rs"), None)]);
         assert_eq!(
             normalize_edit(&Value::Null).unwrap(),
             LspWorkspaceEdit::default()
@@ -1545,31 +1550,33 @@ mod tests {
             assert_eq!(e.code, code::EDIT_REFUSED);
             e.data.unwrap()["reason"].as_str().unwrap().to_owned()
         };
-        let text = |uri: &str| json!({ "changes": { "file:///p/ok.rs": [], uri: [] } });
+        let ok = uri("/p/ok.rs");
+        let text = |other: &str| json!({ "changes": { ok.clone(): [], other: [] } });
         assert_eq!(reason(text("jdt://contents/x")), "notFile");
         assert_eq!(reason(text("untitled:Untitled-1")), "notFile");
         assert_eq!(
             reason(
-                json!({ "documentChanges": [{ "kind": "create", "uri": "file:///p/.git/hooks/pre-commit" }] })
+                json!({ "documentChanges": [{ "kind": "create", "uri": uri("/p/.git/hooks/pre-commit") }] })
             ),
             "git"
         );
         assert_eq!(
             reason(
-                json!({ "documentChanges": [{ "kind": "rename", "oldUri": "file:///p/a", "newUri": "file:///p/.GIT/config" }] })
+                json!({ "documentChanges": [{ "kind": "rename", "oldUri": uri("/p/a"), "newUri": uri("/p/.GIT/config") }] })
             ),
             "git"
         );
         assert_eq!(
-            reason(json!({ "documentChanges": [{ "kind": "explode", "uri": "file:///p/a" }] })),
+            reason(json!({ "documentChanges": [{ "kind": "explode", "uri": uri("/p/a") }] })),
             "malformed"
         );
+        let a = uri("/p/a");
         assert_eq!(
-            reason(json!({ "changes": { "file:///p/a": [{ "newText": "x" }] } })),
+            reason(json!({ "changes": { a: [{ "newText": "x" }] } })),
             "malformed"
         );
         let many: serde_json::Map<String, Value> = (0..=MAX_EDIT_FILES)
-            .map(|i| (format!("file:///p/{i}.rs"), json!([])))
+            .map(|i| (uri(&format!("/p/{i}.rs")), json!([])))
             .collect();
         assert_eq!(reason(json!({ "changes": many })), "tooLarge");
     }
