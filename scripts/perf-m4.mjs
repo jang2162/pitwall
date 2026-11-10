@@ -120,6 +120,9 @@ export function measurements({ short, only, ra }) {
         "this repository + rust-analyzer",
         ...extra,
       ],
+      // 사본의 `mise.toml` 을 이 측정에서만 신뢰한다 — 아니면 Pitwall 의 런타임 환경이 mise 의 NotTrusted 로 빠져 서버가 툴체인
+      // 없이 뜬다(2026-11-10 실측). 사람의 trust 목록(`mise trust`)은 건드리지 않는다. 앱 → 로그인 셸 → `mise env` 로 이어진다.
+      env: { MISE_TRUSTED_CONFIG_PATHS: join(root, REPO_COPY) },
     },
   ];
   if (!only) return all;
@@ -413,12 +416,17 @@ async function main(argv) {
       const record = {
         kind: step.kind,
         args: step.args,
+        env: step.env ?? null,
         ...waited,
         startedAt: new Date().toISOString(),
       };
       conditions.steps.push(record);
       save();
-      const r = spawnSync("cargo", args, { cwd: root, stdio: "inherit" });
+      const r = spawnSync("cargo", args, {
+        cwd: root,
+        stdio: "inherit",
+        env: { ...process.env, ...step.env },
+      });
       record.endedAt = new Date().toISOString();
       record.loadAtEnd = load();
       record.exit = r.status;

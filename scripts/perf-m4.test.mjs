@@ -44,6 +44,11 @@ test("each step runs the scenario it is about on the release bundle", () => {
   assert.equal(arg(by.classes, "--scenario"), "classes");
   assert.equal(arg(by["ra-idle"], "--project"), REPO_COPY);
   assert.equal(arg(by["ra-idle"], "--lsp-server"), "/servers/rust-analyzer");
+  // 실 서버 단계만 사본의 mise 설정을 신뢰한다(그 사본 경로만 — 다른 단계는 환경을 바꾸지 않는다).
+  const env = Object.fromEntries(steps.map((s) => [s.kind, s.env]));
+  assert.match(env["ra-idle"].MISE_TRUSTED_CONFIG_PATHS, /\/target\/perf-m4\/repo$/);
+  for (const [kind, e] of Object.entries(env))
+    if (kind !== "ra-idle") assert.equal(e, undefined, kind);
   const short = measurements({ short: true, ra: "x" });
   for (const s of short)
     if (s.args) assert.deepEqual(s.args.slice(-4), ["--runs", "1", "--warmup", "0"]);
