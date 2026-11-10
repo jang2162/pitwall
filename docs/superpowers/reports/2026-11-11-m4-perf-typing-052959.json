@@ -1,0 +1,370 @@
+{
+  "schema": "pitwall-perf-m4-typing/1",
+  "definition": "LSP on and off alternate run by run (on, off, on, off …), each a pw-perf `lsp-typing` / `lsp-typing-off` run with `--runs 1` (the first pair adds one warm-up); per run: insert → after the next frame's rendering, p95 over 300 keys; 06 judges median(on p95) − median(off p95) ≤ 2 ms",
+  "rounds": [
+    {
+      "round": 0,
+      "kind": "typing-on",
+      "lsp": true,
+      "exit": 0,
+      "loadAtStart": [
+        1.9,
+        2.4,
+        2.7
+      ],
+      "loadAtEnd": [
+        1.97,
+        2.35,
+        2.66
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 17,
+        "p50": 9,
+        "max": 21,
+        "within16_7": 0.92,
+        "frameP95": 15
+      },
+      "coldStartMs": 472.257080078125,
+      "os": {
+        "name": "macOS",
+        "version": "27.2",
+        "build": "26B123"
+      },
+      "commit": {
+        "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+        "dirty": false
+      }
+    },
+    {
+      "round": 0,
+      "kind": "typing-off",
+      "lsp": false,
+      "exit": 0,
+      "loadAtStart": [
+        1.97,
+        2.35,
+        2.66
+      ],
+      "loadAtEnd": [
+        3.14,
+        2.65,
+        2.75
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 14,
+        "p50": 8,
+        "max": 20,
+        "within16_7": 0.96,
+        "frameP95": 8
+      },
+      "coldStartMs": 463.069091796875,
+      "os": {
+        "name": "macOS",
+        "version": "27.2",
+        "build": "26B123"
+      },
+      "commit": {
+        "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+        "dirty": false
+      }
+    },
+    {
+      "round": 1,
+      "kind": "typing-on",
+      "lsp": true,
+      "exit": 0,
+      "loadAtStart": [
+        3.14,
+        2.65,
+        2.75
+      ],
+      "loadAtEnd": [
+        2.99,
+        2.65,
+        2.75
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 17,
+        "p50": 9,
+        "max": 21,
+        "within16_7": 0.9,
+        "frameP95": 15
+      },
+      "coldStartMs": 465.047119140625,
+      "os": {
+        "name": "macOS",
+        "version": "27.2",
+        "build": "26B123"
+      },
+      "commit": {
+        "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+        "dirty": false
+      }
+    },
+    {
+      "round": 1,
+      "kind": "typing-off",
+      "lsp": false,
+      "exit": 0,
+      "loadAtStart": [
+        2.99,
+        2.65,
+        2.75
+      ],
+      "loadAtEnd": [
+        2.69,
+        2.6,
+        2.73
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 15,
+        "p50": 9,
+        "max": 20,
+        "within16_7": 0.97,
+        "frameP95": 8
+      },
+      "coldStartMs": 470.916748046875,
+      "os": {
+        "name": "macOS",
+        "version": "27.2",
+        "build": "26B123"
+      },
+      "commit": {
+        "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+        "dirty": false
+      }
+    },
+    {
+      "round": 2,
+      "kind": "typing-on",
+      "lsp": true,
+      "exit": 0,
+      "loadAtStart": [
+        2.69,
+        2.6,
+        2.73
+      ],
+      "loadAtEnd": [
+        2.16,
+        2.49,
+        2.68
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 17,
+        "p50": 9,
+        "max": 21,
+        "within16_7": 0.91,
+        "frameP95": 15
+      },
+      "coldStartMs": 475.233154296875,
+      "os": {
+        "name": "macOS",
+        "version": "27.2",
+        "build": "26B123"
+      },
+      "commit": {
+        "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+        "dirty": false
+      }
+    },
+    {
+      "round": 2,
+      "kind": "typing-off",
+      "lsp": false,
+      "exit": 0,
+      "loadAtStart": [
+        2.16,
+        2.49,
+        2.68
+      ],
+      "loadAtEnd": [
+        1.89,
+        2.4,
+        2.64
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 14,
+        "p50": 8,
+        "max": 19,
+        "within16_7": 0.97,
+        "frameP95": 11
+      },
+      "coldStartMs": 474.5791015625,
+      "os": {
+        "name": "macOS",
+        "version": "27.2",
+        "build": "26B123"
+      },
+      "commit": {
+        "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+        "dirty": false
+      }
+    },
+    {
+      "round": 3,
+      "kind": "typing-on",
+      "lsp": true,
+      "exit": 0,
+      "loadAtStart": [
+        1.82,
+        2.37,
+        2.63
+      ],
+      "loadAtEnd": [
+        1.66,
+        2.29,
+        2.6
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 17,
+        "p50": 10,
+        "max": 21,
+        "within16_7": 0.89,
+        "frameP95": 15
+      },
+      "coldStartMs": 466.283935546875,
+      "os": {
+        "name": "macOS",
+        "version": "27.2",
+        "build": "26B123"
+      },
+      "commit": {
+        "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+        "dirty": false
+      }
+    },
+    {
+      "round": 3,
+      "kind": "typing-off",
+      "lsp": false,
+      "exit": 0,
+      "loadAtStart": [
+        1.66,
+        2.29,
+        2.6
+      ],
+      "loadAtEnd": [
+        1.16,
+        2.12,
+        2.52
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 14,
+        "p50": 8,
+        "max": 19,
+        "within16_7": 0.96,
+        "frameP95": 13
+      },
+      "coldStartMs": 466.65380859375,
+      "os": {
+        "name": "macOS",
+        "version": "27.2",
+        "build": "26B123"
+      },
+      "commit": {
+        "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+        "dirty": false
+      }
+    },
+    {
+      "round": 4,
+      "kind": "typing-on",
+      "lsp": true,
+      "exit": 0,
+      "loadAtStart": [
+        1.16,
+        2.12,
+        2.52
+      ],
+      "loadAtEnd": [
+        1.63,
+        2.14,
+        2.52
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 17,
+        "p50": 9,
+        "max": 20,
+        "within16_7": 0.88,
+        "frameP95": 15
+      },
+      "coldStartMs": 470.857177734375,
+      "os": {
+        "name": "macOS",
+        "version": "27.2",
+        "build": "26B123"
+      },
+      "commit": {
+        "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+        "dirty": false
+      }
+    },
+    {
+      "round": 4,
+      "kind": "typing-off",
+      "lsp": false,
+      "exit": 0,
+      "loadAtStart": [
+        1.63,
+        2.14,
+        2.52
+      ],
+      "loadAtEnd": [
+        2.31,
+        2.26,
+        2.55
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 14,
+        "p50": 8,
+        "max": 18,
+        "within16_7": 0.97,
+        "frameP95": 11
+      },
+      "coldStartMs": 474.24609375,
+      "os": {
+        "name": "macOS",
+        "version": "27.2",
+        "build": "26B123"
+      },
+      "commit": {
+        "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+        "dirty": false
+      }
+    }
+  ],
+  "summary": {
+    "on": {
+      "n": 5,
+      "median": 17,
+      "min": 17,
+      "max": 17
+    },
+    "off": {
+      "n": 5,
+      "median": 14,
+      "min": 14,
+      "max": 15
+    },
+    "deltaMs": 3,
+    "pairDeltasMs": [
+      3,
+      2,
+      3,
+      3,
+      3
+    ],
+    "targetMs": 2,
+    "met": false
+  }
+}

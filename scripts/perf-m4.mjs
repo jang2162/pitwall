@@ -206,8 +206,8 @@ export function lockedIn(ioreg) {
 }
 
 /**
- * 화면 구성이 기준선(M1 · M2 · M3 와 같은 내장 화면 하나, 외부 모니터 없음)인가. 외부 1x 모니터에서는 WebKit GPU 프로세스가 약
- * 100 MB → 17 MB 로 줄어 유휴 메모리가 낮게 나온다(M4-19 리뷰 H2). `displays` 가 없으면(읽지 못했으면) 기준선이 아니다.
+ * 화면 구성이 기준선(M1 · M2 · M3 와 같은 내장 화면 하나, 외부 모니터 없음)인가. 외부 1x 모니터에서는 WebKit(GPU · WebContent)
+ * 메모리가 작게 나와 유휴 메모리가 낮게 읽힌다(M4-19 리뷰 H2 — 빈 프로젝트 208.7 MB 대 내장 화면 226.7 MB). `displays` 가 없으면(읽지 못했으면) 기준선이 아니다.
  */
 export function baselineDisplays(displays) {
   if (!Array.isArray(displays)) return { ok: false, why: "the displays could not be read" };

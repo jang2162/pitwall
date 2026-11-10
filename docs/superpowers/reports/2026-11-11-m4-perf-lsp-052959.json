@@ -1,0 +1,1854 @@
+{
+  "schema": 1,
+  "scenario": "lsp",
+  "definitions": {
+    "completion": "in the webview: from inserting `.` (the server's trigger character, `view.dispatch` with `input.type`) to the frame that painted the autocomplete popup with the server's first item (the end mark of every \"frame\" row: the DOM change that made it true, seen by a MutationObserver → the next animation frame → the first task after that frame, as typing's `painted`; each sample starts after a 0 – 16.7 ms pause so the start is not locked to the frame phase); 20 per run; per-run value = median",
+    "definition": "answer → frame: from the fake server's stamp just before it wrote the `textDocument/definition` answer (a different file each time, so opening it is included) to the wall clock of the frame that painted that file's editor with the cursor on the target line; `gotoDeclaration` (⌘B's function) is called directly — keymap handling is not included; 10 per run; per-run value = median",
+    "diagnostics": "publish → frame: from the fake server's stamp just before it wrote the `publishDiagnostics` that marks the edited line to the wall clock of the frame that painted that line's underline (`.pw-diagnostic`); 20 per run; per-run value = median. edit → frame (reference) also holds the client's `didChange`",
+    "idle": "`lsp-idle`: this repository's copy registered trusted with the real server at `--lsp-server`; after the file opened and the server stayed ready for 15 s, wait idle_secs and sample phys_footprint; Pitwall's processes (`pitwall`, WebKit and the instance's helpers) and the server's (the descendants of the app process — the server is not in the app's responsible-pid group) are reported apart",
+    "memory": "phys_footprint by the responsible-pid group plus the descendants of the app process (the language server and its children), sampled after the scenario (symbols: after the popups — the Rust index lives in the `pitwall` process)",
+    "problems": "opening `src/problems.rs` makes the fake server publish 5 diagnostics to each of 2,000 files (10,000); after the status bar counts are complete: ⌘6 keydown → the frame that painted the first problem row; then fling top to bottom in 1500 frames, judged as 06 「스크롤 60fps」 (share within one refresh ≥ 0.95 and median interval ≤ 17 ms)",
+    "server": "a fake language server (`pw-perf-lsp`) plugged into the bundled `rust-analyzer` definition by the global setting `[lsp.rust-analyzer] path`; it answers at once and stamps the wall clock of what it sent (the targets are Pitwall's side only, M4-D19)",
+    "symbols": "a synthetic repository of 20,000 files and 500,000 symbols registered untrusted (no language server); first index = launch → `index.status` ready with nothing pending (polled every 50 ms on a connection of the same project); then, with no wait, the first popup (⌘⌥O for `symbols`, ⌘O for `classes`) and the query typed a character at a time: input event → the frame that painted that query's rows (`totalMs`), of which input event → the rows in the DOM (`seenMs`) and the `index.symbols.search` round trip (`rpcMs`, Host + IPC); the second popup is measured the same way afterwards (not a first use)",
+    "typing": "300 characters at 50 ms, each inserted with `view.dispatch` (`input.type`, keymap · IME not included); per key: insert → after the next frame's rendering (a message posted from the next animation frame); per-run value = p95. LSP on and off are separate runs (`lsp-typing` · `lsp-typing-off`, the latter with `[lsp.rust-analyzer] enabled = false`); 06 judges on − off ≤ 2 ms on the medians of the per-run p95"
+  },
+  "build": {
+    "profile": "release",
+    "app": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/release/perf-m4/Pitwall.app",
+    "binary": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/release/perf-m4/Pitwall.app/Contents/MacOS/pitwall"
+  },
+  "commit": {
+    "sha": "d1d962441c87e605dc9462ef970fa92844b206fd",
+    "dirty": false
+  },
+  "os": {
+    "name": "macOS",
+    "version": "27.2",
+    "build": "26B123"
+  },
+  "hardware": {
+    "model": "Mac17,9",
+    "cpu": "Apple M5 Pro",
+    "cpus": 15,
+    "memory_bytes": 51539607552
+  },
+  "settings": {
+    "scenario": "lsp",
+    "runs": 5,
+    "warmup": 1,
+    "idle_secs": 10,
+    "project": null,
+    "server": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/release/pw-perf-lsp",
+    "label": "fake server"
+  },
+  "runs": [
+    {
+      "index": 0,
+      "warmup": true,
+      "excluded": null,
+      "app_pid": 67523,
+      "group": 67523,
+      "cold_start_ms": 476.6240234375,
+      "launch_epoch_ms": 1794342869408.924,
+      "measure": {
+        "ready_ms": 323.0,
+        "completion_ms": [
+          27.0,
+          25.0,
+          30.0,
+          9.0,
+          22.0,
+          16.0,
+          22.0,
+          30.0,
+          13.0,
+          16.0,
+          25.0,
+          32.0,
+          32.0,
+          29.0,
+          15.0,
+          22.0,
+          32.0,
+          28.0,
+          30.0,
+          34.0
+        ],
+        "diagnostics": [
+          {
+            "client_ms": 7.0,
+            "server_ms": 4.5
+          },
+          {
+            "client_ms": 10.0,
+            "server_ms": 6.3
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 5.6
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 8.0
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.3
+          },
+          {
+            "client_ms": 6.0,
+            "server_ms": 3.3
+          },
+          {
+            "client_ms": 7.0,
+            "server_ms": 4.4
+          },
+          {
+            "client_ms": 12.0,
+            "server_ms": 7.9
+          },
+          {
+            "client_ms": 12.0,
+            "server_ms": 6.9
+          },
+          {
+            "client_ms": 15.0,
+            "server_ms": 9.4
+          },
+          {
+            "client_ms": 11.0,
+            "server_ms": 6.8
+          },
+          {
+            "client_ms": 8.0,
+            "server_ms": 4.4
+          },
+          {
+            "client_ms": 11.0,
+            "server_ms": 6.5
+          },
+          {
+            "client_ms": 11.0,
+            "server_ms": 6.6
+          },
+          {
+            "client_ms": 12.0,
+            "server_ms": 7.1
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.8
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.1
+          },
+          {
+            "client_ms": 5.0,
+            "server_ms": 2.6
+          },
+          {
+            "client_ms": 10.0,
+            "server_ms": 5.7
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.9
+          }
+        ],
+        "definition": [
+          {
+            "client_ms": 39.0,
+            "server_ms": 36.3
+          },
+          {
+            "client_ms": 27.0,
+            "server_ms": 26.2
+          },
+          {
+            "client_ms": 35.0,
+            "server_ms": 33.0
+          },
+          {
+            "client_ms": 18.0,
+            "server_ms": 16.8
+          },
+          {
+            "client_ms": 28.0,
+            "server_ms": 27.3
+          },
+          {
+            "client_ms": 31.0,
+            "server_ms": 29.6
+          },
+          {
+            "client_ms": 26.0,
+            "server_ms": 25.3
+          },
+          {
+            "client_ms": 29.0,
+            "server_ms": 28.0
+          },
+          {
+            "client_ms": 30.0,
+            "server_ms": 29.4
+          },
+          {
+            "client_ms": 28.0,
+            "server_ms": 27.1
+          }
+        ],
+        "typing": null,
+        "problems_loaded_ms": 824.0,
+        "problems_open": {
+          "ms": 26.0,
+          "rows": 19,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_scroll": {
+          "interval": {
+            "n": 1500,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 19.0,
+            "max": 25.0,
+            "within16_7": 0.42,
+            "over18": 0.08,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "within16_7": 0.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 0.0
+          },
+          "scrollHeight": 264000.0,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_published": 10000,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 993385696,
+        "rss_bytes": 1803059200,
+        "processes": [
+          {
+            "pid": 67526,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 654952248,
+            "rss_bytes": 1262649344
+          },
+          {
+            "pid": 67523,
+            "name": "pitwall",
+            "footprint_bytes": 198559208,
+            "rss_bytes": 426147840
+          },
+          {
+            "pid": 67525,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 109185328,
+            "rss_bytes": 44417024
+          },
+          {
+            "pid": 67574,
+            "name": "pw-perf-lsp",
+            "footprint_bytes": 18399664,
+            "rss_bytes": 39813120
+          },
+          {
+            "pid": 67528,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 67527,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4669944,
+            "rss_bytes": 8994816
+          },
+          {
+            "pid": 67524,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2146616,
+            "rss_bytes": 9486336
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 206178512,
+        "webkit_footprint_bytes": 768807520,
+        "server_footprint_bytes": 18399664,
+        "server_rss_bytes": 39813120
+      },
+      "killed": false
+    },
+    {
+      "index": 1,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 69073,
+      "group": 69073,
+      "cold_start_ms": 479.844970703125,
+      "launch_epoch_ms": 1794342913228.719,
+      "measure": {
+        "ready_ms": 62.0,
+        "completion_ms": [
+          25.0,
+          17.0,
+          34.0,
+          29.0,
+          22.0,
+          17.0,
+          24.0,
+          26.0,
+          29.0,
+          17.0,
+          13.0,
+          30.0,
+          36.0,
+          23.0,
+          27.0,
+          21.0,
+          19.0,
+          22.0,
+          34.0,
+          31.0
+        ],
+        "diagnostics": [
+          {
+            "client_ms": 8.0,
+            "server_ms": 4.3
+          },
+          {
+            "client_ms": 6.0,
+            "server_ms": 3.5
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.8
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 7.9
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.9
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.1
+          },
+          {
+            "client_ms": 8.0,
+            "server_ms": 4.2
+          },
+          {
+            "client_ms": 8.0,
+            "server_ms": 4.9
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.9
+          },
+          {
+            "client_ms": 12.0,
+            "server_ms": 7.5
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 8.6
+          },
+          {
+            "client_ms": 7.0,
+            "server_ms": 4.4
+          },
+          {
+            "client_ms": 6.0,
+            "server_ms": 3.0
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 5.3
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.2
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 5.3
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.8
+          },
+          {
+            "client_ms": 12.0,
+            "server_ms": 7.0
+          },
+          {
+            "client_ms": 7.0,
+            "server_ms": 3.7
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 5.3
+          }
+        ],
+        "definition": [
+          {
+            "client_ms": 39.0,
+            "server_ms": 36.7
+          },
+          {
+            "client_ms": 26.0,
+            "server_ms": 25.2
+          },
+          {
+            "client_ms": 30.0,
+            "server_ms": 28.5
+          },
+          {
+            "client_ms": 32.0,
+            "server_ms": 30.7
+          },
+          {
+            "client_ms": 22.0,
+            "server_ms": 20.9
+          },
+          {
+            "client_ms": 28.0,
+            "server_ms": 26.8
+          },
+          {
+            "client_ms": 25.0,
+            "server_ms": 24.1
+          },
+          {
+            "client_ms": 41.0,
+            "server_ms": 39.7
+          },
+          {
+            "client_ms": 36.0,
+            "server_ms": 34.9
+          },
+          {
+            "client_ms": 23.0,
+            "server_ms": 22.2
+          }
+        ],
+        "typing": null,
+        "problems_loaded_ms": 799.0,
+        "problems_open": {
+          "ms": 29.0,
+          "rows": 19,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_scroll": {
+          "interval": {
+            "n": 1500,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 19.0,
+            "max": 28.0,
+            "within16_7": 0.42,
+            "over18": 0.08,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "within16_7": 0.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 0.0
+          },
+          "scrollHeight": 264000.0,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_published": 10000,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 964713696,
+        "rss_bytes": 1786052608,
+        "processes": [
+          {
+            "pid": 69076,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 636225336,
+            "rss_bytes": 1256325120
+          },
+          {
+            "pid": 69073,
+            "name": "pitwall",
+            "footprint_bytes": 187319736,
+            "rss_bytes": 414580736
+          },
+          {
+            "pid": 69075,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 110430536,
+            "rss_bytes": 45383680
+          },
+          {
+            "pid": 69125,
+            "name": "pw-perf-lsp",
+            "footprint_bytes": 18350536,
+            "rss_bytes": 39583744
+          },
+          {
+            "pid": 69079,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 69077,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4719096,
+            "rss_bytes": 9076736
+          },
+          {
+            "pid": 69074,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2195768,
+            "rss_bytes": 9551872
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 194988192,
+        "webkit_footprint_bytes": 751374968,
+        "server_footprint_bytes": 18350536,
+        "server_rss_bytes": 39583744
+      },
+      "killed": false
+    },
+    {
+      "index": 2,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 70549,
+      "group": 70549,
+      "cold_start_ms": 475.572998046875,
+      "launch_epoch_ms": 1794342956705.958,
+      "measure": {
+        "ready_ms": 67.0,
+        "completion_ms": [
+          26.0,
+          13.0,
+          20.0,
+          22.0,
+          31.0,
+          24.0,
+          36.0,
+          30.0,
+          18.0,
+          27.0,
+          27.0,
+          16.0,
+          22.0,
+          26.0,
+          22.0,
+          22.0,
+          16.0,
+          21.0,
+          21.0,
+          29.0
+        ],
+        "diagnostics": [
+          {
+            "client_ms": 5.0,
+            "server_ms": 3.0
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 8.7
+          },
+          {
+            "client_ms": 5.0,
+            "server_ms": 2.7
+          },
+          {
+            "client_ms": 12.0,
+            "server_ms": 7.4
+          },
+          {
+            "client_ms": 12.0,
+            "server_ms": 7.1
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 8.1
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 4.6
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 4.6
+          },
+          {
+            "client_ms": 6.0,
+            "server_ms": 3.5
+          },
+          {
+            "client_ms": 12.0,
+            "server_ms": 7.0
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.1
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.0
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.9
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 8.6
+          },
+          {
+            "client_ms": 8.0,
+            "server_ms": 5.0
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.8
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 8.7
+          },
+          {
+            "client_ms": 12.0,
+            "server_ms": 7.5
+          },
+          {
+            "client_ms": 12.0,
+            "server_ms": 6.8
+          },
+          {
+            "client_ms": 8.0,
+            "server_ms": 4.3
+          }
+        ],
+        "definition": [
+          {
+            "client_ms": 32.0,
+            "server_ms": 30.5
+          },
+          {
+            "client_ms": 41.0,
+            "server_ms": 40.0
+          },
+          {
+            "client_ms": 25.0,
+            "server_ms": 23.3
+          },
+          {
+            "client_ms": 35.0,
+            "server_ms": 33.5
+          },
+          {
+            "client_ms": 32.0,
+            "server_ms": 30.8
+          },
+          {
+            "client_ms": 26.0,
+            "server_ms": 24.8
+          },
+          {
+            "client_ms": 26.0,
+            "server_ms": 24.7
+          },
+          {
+            "client_ms": 26.0,
+            "server_ms": 25.4
+          },
+          {
+            "client_ms": 33.0,
+            "server_ms": 31.1
+          },
+          {
+            "client_ms": 24.0,
+            "server_ms": 23.5
+          }
+        ],
+        "typing": null,
+        "problems_loaded_ms": 907.0,
+        "problems_open": {
+          "ms": 24.0,
+          "rows": 19,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_scroll": {
+          "interval": {
+            "n": 1500,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 19.0,
+            "max": 23.0,
+            "within16_7": 0.41,
+            "over18": 0.07,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "within16_7": 0.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 0.0
+          },
+          "scrollHeight": 264000.0,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_published": 10000,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 894459056,
+        "rss_bytes": 1804238848,
+        "processes": [
+          {
+            "pid": 70552,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 629131016,
+            "rss_bytes": 1204305920
+          },
+          {
+            "pid": 70549,
+            "name": "pitwall",
+            "footprint_bytes": 124732952,
+            "rss_bytes": 484737024
+          },
+          {
+            "pid": 70551,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 109873408,
+            "rss_bytes": 45285376
+          },
+          {
+            "pid": 70599,
+            "name": "pw-perf-lsp",
+            "footprint_bytes": 18399688,
+            "rss_bytes": 39796736
+          },
+          {
+            "pid": 70554,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5456304,
+            "rss_bytes": 11534336
+          },
+          {
+            "pid": 70553,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4637128,
+            "rss_bytes": 9043968
+          },
+          {
+            "pid": 70550,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2228560,
+            "rss_bytes": 9535488
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 132417816,
+        "webkit_footprint_bytes": 743641552,
+        "server_footprint_bytes": 18399688,
+        "server_rss_bytes": 39796736
+      },
+      "killed": false
+    },
+    {
+      "index": 3,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 72007,
+      "group": 72007,
+      "cold_start_ms": 474.066162109375,
+      "launch_epoch_ms": 1794343000270.7688,
+      "measure": {
+        "ready_ms": 40.0,
+        "completion_ms": [
+          34.0,
+          13.0,
+          29.0,
+          20.0,
+          20.0,
+          21.0,
+          24.0,
+          34.0,
+          26.0,
+          15.0,
+          18.0,
+          20.0,
+          17.0,
+          22.0,
+          34.0,
+          33.0,
+          27.0,
+          22.0,
+          15.0,
+          19.0
+        ],
+        "diagnostics": [
+          {
+            "client_ms": 10.0,
+            "server_ms": 5.5
+          },
+          {
+            "client_ms": 15.0,
+            "server_ms": 8.8
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.0
+          },
+          {
+            "client_ms": 5.0,
+            "server_ms": 2.6
+          },
+          {
+            "client_ms": 11.0,
+            "server_ms": 6.5
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.0
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 5.2
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.1
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.4
+          },
+          {
+            "client_ms": 5.0,
+            "server_ms": 2.9
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.0
+          },
+          {
+            "client_ms": 11.0,
+            "server_ms": 6.0
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 4.7
+          },
+          {
+            "client_ms": 8.0,
+            "server_ms": 4.7
+          },
+          {
+            "client_ms": 5.0,
+            "server_ms": 3.0
+          },
+          {
+            "client_ms": 4.0,
+            "server_ms": 2.0
+          },
+          {
+            "client_ms": 10.0,
+            "server_ms": 5.2
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 4.9
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 5.6
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.0
+          }
+        ],
+        "definition": [
+          {
+            "client_ms": 39.0,
+            "server_ms": 36.7
+          },
+          {
+            "client_ms": 25.0,
+            "server_ms": 24.2
+          },
+          {
+            "client_ms": 30.0,
+            "server_ms": 28.8
+          },
+          {
+            "client_ms": 29.0,
+            "server_ms": 27.6
+          },
+          {
+            "client_ms": 27.0,
+            "server_ms": 25.5
+          },
+          {
+            "client_ms": 34.0,
+            "server_ms": 33.1
+          },
+          {
+            "client_ms": 22.0,
+            "server_ms": 21.0
+          },
+          {
+            "client_ms": 31.0,
+            "server_ms": 29.3
+          },
+          {
+            "client_ms": 28.0,
+            "server_ms": 27.0
+          },
+          {
+            "client_ms": 35.0,
+            "server_ms": 33.9
+          }
+        ],
+        "typing": null,
+        "problems_loaded_ms": 831.0,
+        "problems_open": {
+          "ms": 21.0,
+          "rows": 19,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_scroll": {
+          "interval": {
+            "n": 1500,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 19.0,
+            "max": 24.0,
+            "within16_7": 0.43,
+            "over18": 0.07,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "within16_7": 0.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 0.0
+          },
+          "scrollHeight": 264000.0,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_published": 10000,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 1077189904,
+        "rss_bytes": 1795145728,
+        "processes": [
+          {
+            "pid": 72010,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 740689744,
+            "rss_bytes": 1260863488
+          },
+          {
+            "pid": 72007,
+            "name": "pitwall",
+            "footprint_bytes": 195823080,
+            "rss_bytes": 420216832
+          },
+          {
+            "pid": 72009,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 109906176,
+            "rss_bytes": 44285952
+          },
+          {
+            "pid": 72058,
+            "name": "pw-perf-lsp",
+            "footprint_bytes": 18383304,
+            "rss_bytes": 39616512
+          },
+          {
+            "pid": 72012,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 72011,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4669968,
+            "rss_bytes": 9060352
+          },
+          {
+            "pid": 72008,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2244944,
+            "rss_bytes": 9551872
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 203540712,
+        "webkit_footprint_bytes": 855265888,
+        "server_footprint_bytes": 18383304,
+        "server_rss_bytes": 39616512
+      },
+      "killed": false
+    },
+    {
+      "index": 4,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 73581,
+      "group": 73581,
+      "cold_start_ms": 486.049072265625,
+      "launch_epoch_ms": 1794343043734.576,
+      "measure": {
+        "ready_ms": 63.0,
+        "completion_ms": [
+          15.0,
+          20.0,
+          27.0,
+          21.0,
+          24.0,
+          33.0,
+          24.0,
+          12.0,
+          23.0,
+          20.0,
+          33.0,
+          30.0,
+          30.0,
+          15.0,
+          22.0,
+          25.0,
+          16.0,
+          20.0,
+          29.0,
+          17.0
+        ],
+        "diagnostics": [
+          {
+            "client_ms": 15.0,
+            "server_ms": 8.8
+          },
+          {
+            "client_ms": 10.0,
+            "server_ms": 6.2
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.1
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.8
+          },
+          {
+            "client_ms": 5.0,
+            "server_ms": 2.8
+          },
+          {
+            "client_ms": 8.0,
+            "server_ms": 4.8
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 4.7
+          },
+          {
+            "client_ms": 7.0,
+            "server_ms": 3.9
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.1
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.9
+          },
+          {
+            "client_ms": 5.0,
+            "server_ms": 3.2
+          },
+          {
+            "client_ms": 7.0,
+            "server_ms": 4.1
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.9
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 8.4
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 8.6
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 7.9
+          },
+          {
+            "client_ms": 5.0,
+            "server_ms": 2.6
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.4
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.7
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 6.7
+          }
+        ],
+        "definition": [
+          {
+            "client_ms": 39.0,
+            "server_ms": 37.2
+          },
+          {
+            "client_ms": 28.0,
+            "server_ms": 27.2
+          },
+          {
+            "client_ms": 23.0,
+            "server_ms": 21.7
+          },
+          {
+            "client_ms": 20.0,
+            "server_ms": 19.5
+          },
+          {
+            "client_ms": 35.0,
+            "server_ms": 33.3
+          },
+          {
+            "client_ms": 27.0,
+            "server_ms": 26.4
+          },
+          {
+            "client_ms": 31.0,
+            "server_ms": 30.2
+          },
+          {
+            "client_ms": 31.0,
+            "server_ms": 29.9
+          },
+          {
+            "client_ms": 28.0,
+            "server_ms": 26.5
+          },
+          {
+            "client_ms": 37.0,
+            "server_ms": 36.0
+          }
+        ],
+        "typing": null,
+        "problems_loaded_ms": 871.0,
+        "problems_open": {
+          "ms": 20.0,
+          "rows": 19,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_scroll": {
+          "interval": {
+            "n": 1500,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 19.0,
+            "max": 28.0,
+            "within16_7": 0.42,
+            "over18": 0.06,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "within16_7": 0.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 0.0
+          },
+          "scrollHeight": 264000.0,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_published": 10000,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 966712400,
+        "rss_bytes": 1722892288,
+        "processes": [
+          {
+            "pid": 73590,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 629999296,
+            "rss_bytes": 1184481280
+          },
+          {
+            "pid": 73581,
+            "name": "pitwall",
+            "footprint_bytes": 196806120,
+            "rss_bytes": 423739392
+          },
+          {
+            "pid": 73588,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 109136152,
+            "rss_bytes": 44908544
+          },
+          {
+            "pid": 73638,
+            "name": "pw-perf-lsp",
+            "footprint_bytes": 18383304,
+            "rss_bytes": 39616512
+          },
+          {
+            "pid": 73594,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 73593,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4669896,
+            "rss_bytes": 9027584
+          },
+          {
+            "pid": 73587,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2244944,
+            "rss_bytes": 9568256
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 204523752,
+        "webkit_footprint_bytes": 743805344,
+        "server_footprint_bytes": 18383304,
+        "server_rss_bytes": 39616512
+      },
+      "killed": false
+    },
+    {
+      "index": 5,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 75242,
+      "group": 75242,
+      "cold_start_ms": 505.286865234375,
+      "launch_epoch_ms": 1794343087252.464,
+      "measure": {
+        "ready_ms": 50.0,
+        "completion_ms": [
+          17.0,
+          13.0,
+          26.0,
+          25.0,
+          29.0,
+          27.0,
+          21.0,
+          24.0,
+          21.0,
+          30.0,
+          26.0,
+          29.0,
+          30.0,
+          18.0,
+          12.0,
+          31.0,
+          26.0,
+          23.0,
+          34.0,
+          24.0
+        ],
+        "diagnostics": [
+          {
+            "client_ms": 7.0,
+            "server_ms": 4.4
+          },
+          {
+            "client_ms": 7.0,
+            "server_ms": 4.1
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.4
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.4
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.3
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 5.1
+          },
+          {
+            "client_ms": 5.0,
+            "server_ms": 3.2
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 5.0
+          },
+          {
+            "client_ms": 11.0,
+            "server_ms": 6.4
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 8.4
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.0
+          },
+          {
+            "client_ms": 9.0,
+            "server_ms": 4.7
+          },
+          {
+            "client_ms": 6.0,
+            "server_ms": 3.5
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 8.1
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 8.5
+          },
+          {
+            "client_ms": 14.0,
+            "server_ms": 7.8
+          },
+          {
+            "client_ms": 15.0,
+            "server_ms": 9.0
+          },
+          {
+            "client_ms": 5.0,
+            "server_ms": 2.8
+          },
+          {
+            "client_ms": 11.0,
+            "server_ms": 6.9
+          },
+          {
+            "client_ms": 13.0,
+            "server_ms": 7.9
+          }
+        ],
+        "definition": [
+          {
+            "client_ms": 37.0,
+            "server_ms": 34.9
+          },
+          {
+            "client_ms": 28.0,
+            "server_ms": 26.7
+          },
+          {
+            "client_ms": 31.0,
+            "server_ms": 29.2
+          },
+          {
+            "client_ms": 23.0,
+            "server_ms": 22.4
+          },
+          {
+            "client_ms": 30.0,
+            "server_ms": 29.2
+          },
+          {
+            "client_ms": 27.0,
+            "server_ms": 25.8
+          },
+          {
+            "client_ms": 28.0,
+            "server_ms": 26.6
+          },
+          {
+            "client_ms": 32.0,
+            "server_ms": 30.7
+          },
+          {
+            "client_ms": 26.0,
+            "server_ms": 25.2
+          },
+          {
+            "client_ms": 24.0,
+            "server_ms": 23.4
+          }
+        ],
+        "typing": null,
+        "problems_loaded_ms": 805.0,
+        "problems_open": {
+          "ms": 18.0,
+          "rows": 19,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_scroll": {
+          "interval": {
+            "n": 1500,
+            "p50": 17.0,
+            "p95": 19.0,
+            "p99": 19.0,
+            "max": 21.0,
+            "within16_7": 0.41,
+            "over18": 0.06,
+            "vsyncMs": 17.0,
+            "withinVsync": 1.0
+          },
+          "work": {
+            "n": 0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "within16_7": 0.0,
+            "over18": 0.0,
+            "vsyncMs": 0.0,
+            "withinVsync": 0.0
+          },
+          "scrollHeight": 264000.0,
+          "viewport": {
+            "width": 696.0,
+            "height": 146.0
+          }
+        },
+        "problems_published": 10000,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 1004559320,
+        "rss_bytes": 1707884544,
+        "processes": [
+          {
+            "pid": 75307,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 678643416,
+            "rss_bytes": 1180876800
+          },
+          {
+            "pid": 75242,
+            "name": "pitwall",
+            "footprint_bytes": 185189864,
+            "rss_bytes": 412319744
+          },
+          {
+            "pid": 75294,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 109758552,
+            "rss_bytes": 44761088
+          },
+          {
+            "pid": 75659,
+            "name": "pw-perf-lsp",
+            "footprint_bytes": 18465224,
+            "rss_bytes": 39698432
+          },
+          {
+            "pid": 75362,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5538224,
+            "rss_bytes": 11616256
+          },
+          {
+            "pid": 75309,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4686328,
+            "rss_bytes": 9027584
+          },
+          {
+            "pid": 75292,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2277712,
+            "rss_bytes": 9584640
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 193005800,
+        "webkit_footprint_bytes": 793088296,
+        "server_footprint_bytes": 18465224,
+        "server_rss_bytes": 39698432
+      },
+      "killed": false
+    }
+  ],
+  "failures": [],
+  "valid_runs": 5,
+  "rows": [
+    {
+      "key": "completion_ms",
+      "item": "completion: `.` → popup frame (per-run median of 20)",
+      "summary": {
+        "median": 22.5,
+        "min": 21.5,
+        "max": 25.5,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 50 ms",
+      "met": true
+    },
+    {
+      "key": "completion_max_ms",
+      "item": "completion: slowest of the run (reference)",
+      "summary": {
+        "median": 34.0,
+        "min": 33.0,
+        "max": 36.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "diagnostics_ms",
+      "item": "diagnostics: server publish → underline frame (per-run median of 20)",
+      "summary": {
+        "median": 7.1,
+        "min": 5.55,
+        "max": 7.75,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 50 ms",
+      "met": true
+    },
+    {
+      "key": "diagnostics_max_ms",
+      "item": "diagnostics: publish → frame, slowest of the run (reference)",
+      "summary": {
+        "median": 8.8,
+        "min": 8.6,
+        "max": 9.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "diagnostics_edit_ms",
+      "item": "diagnostics: edit → underline frame, didChange included (reference)",
+      "summary": {
+        "median": 12.0,
+        "min": 10.0,
+        "max": 13.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "definition_ms",
+      "item": "go to definition: server answer → target frame, another file opened (per-run median of 10)",
+      "summary": {
+        "median": 27.95,
+        "min": 26.65,
+        "max": 28.549999999999997,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 100 ms",
+      "met": true
+    },
+    {
+      "key": "definition_max_ms",
+      "item": "go to definition: answer → frame, slowest of the run (reference)",
+      "summary": {
+        "median": 37.2,
+        "min": 34.9,
+        "max": 40.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "definition_ask_ms",
+      "item": "go to definition: request → target frame (reference)",
+      "summary": {
+        "median": 29.0,
+        "min": 28.0,
+        "max": 29.5,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "lsp_ready_ms",
+      "item": "open main.rs → language server ready (reference)",
+      "summary": {
+        "median": 62.0,
+        "min": 40.0,
+        "max": 67.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "problems_loaded_ms",
+      "item": "problems: open the trigger → 10,000 counted in the status bar (reference)",
+      "summary": {
+        "median": 831.0,
+        "min": 799.0,
+        "max": 907.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "problems_open_ms",
+      "item": "problems: ⌘6 → first row frame (10,000 diagnostics)",
+      "summary": {
+        "median": 21.0,
+        "min": 18.0,
+        "max": 29.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 200 ms",
+      "met": true
+    },
+    {
+      "key": "problems_scroll_share",
+      "item": "problems fling: frames within one display refresh",
+      "summary": {
+        "median": 1.0,
+        "min": 1.0,
+        "max": 1.0,
+        "n": 5
+      },
+      "unit": "",
+      "target": "≥ 0.95 and median interval ≤ 17 ms",
+      "met": true
+    },
+    {
+      "key": "problems_scroll_vsync_ms",
+      "item": "problems fling: median frame interval",
+      "summary": {
+        "median": 17.0,
+        "min": 17.0,
+        "max": 17.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "problems_scroll_16_7",
+      "item": "problems fling: frames within 16.7 ms (reference)",
+      "summary": {
+        "median": 0.42,
+        "min": 0.41,
+        "max": 0.43,
+        "n": 5
+      },
+      "unit": "",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "cold_start_ms",
+      "item": "cold start → first frame (reference)",
+      "summary": {
+        "median": 479.844970703125,
+        "min": 474.066162109375,
+        "max": 505.286865234375,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "footprint_mb",
+      "item": "footprint after the scenario, every process of the instance",
+      "summary": {
+        "median": 966.7124,
+        "min": 894.459056,
+        "max": 1077.189904,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "app_footprint_mb",
+      "item": "  of which the app process (`pitwall` — Host, LSP client, symbol index — and the instance's helpers)",
+      "summary": {
+        "median": 194.988192,
+        "min": 132.417816,
+        "max": 204.523752,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "webkit_footprint_mb",
+      "item": "  of which WebKit",
+      "summary": {
+        "median": 751.374968,
+        "min": 743.641552,
+        "max": 855.265888,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "server_footprint_mb",
+      "item": "  of which the language server's processes",
+      "summary": {
+        "median": 18.383304,
+        "min": 18.350536,
+        "max": 18.465224,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "server_rss_mb",
+      "item": "language server RSS (reported apart, not a target)",
+      "summary": {
+        "median": 39.616512,
+        "min": 39.583744,
+        "max": 39.796736,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    }
+  ],
+  "warning": null,
+  "stopped": null
+}

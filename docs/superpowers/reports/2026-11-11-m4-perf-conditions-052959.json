@@ -1,0 +1,631 @@
+{
+  "started": "2026-11-10T20:29:59.450Z",
+  "commit": "d1d962441c87e605dc9462ef970fa92844b206fd",
+  "dirty": false,
+  "cores": 15,
+  "os": "27.2 (26B123)",
+  "displays": [
+    {
+      "name": "Color LCD",
+      "resolution": "1512 x 982 @ 120.00Hz",
+      "pixels": "3024 x 1964",
+      "main": true,
+      "internal": true
+    }
+  ],
+  "steps": [
+    {
+      "kind": "empty",
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--label",
+        "default bundle, empty project"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        4.25,
+        3.61,
+        3.13
+      ],
+      "startedAt": "2026-11-10T20:32:46.664Z",
+      "endedAt": "2026-11-10T20:34:28.643Z",
+      "loadAtEnd": [
+        2.24,
+        3.08,
+        2.98
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "lsp",
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp",
+        "--lsp-fake",
+        "target/release/pw-perf-lsp",
+        "--label",
+        "fake server"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        2.24,
+        3.08,
+        2.98
+      ],
+      "startedAt": "2026-11-10T20:34:28.997Z",
+      "endedAt": "2026-11-10T20:38:50.559Z",
+      "loadAtEnd": [
+        1.9,
+        2.4,
+        2.7
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "typing-on",
+      "round": 0,
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp-typing",
+        "--lsp-fake",
+        "target/release/pw-perf-lsp",
+        "--label",
+        "typing, LSP on (fake server)",
+        "--runs",
+        "1",
+        "--warmup",
+        "1"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        1.9,
+        2.4,
+        2.7
+      ],
+      "startedAt": "2026-11-10T20:38:50.895Z",
+      "endedAt": "2026-11-10T20:39:43.547Z",
+      "loadAtEnd": [
+        1.97,
+        2.35,
+        2.66
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "typing-off",
+      "round": 0,
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp-typing-off",
+        "--label",
+        "typing, LSP off ([lsp.rust-analyzer] enabled = false)",
+        "--runs",
+        "1",
+        "--warmup",
+        "1"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        1.97,
+        2.35,
+        2.66
+      ],
+      "startedAt": "2026-11-10T20:39:43.944Z",
+      "endedAt": "2026-11-10T20:40:37.309Z",
+      "loadAtEnd": [
+        3.14,
+        2.65,
+        2.75
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "typing-on",
+      "round": 1,
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp-typing",
+        "--lsp-fake",
+        "target/release/pw-perf-lsp",
+        "--label",
+        "typing, LSP on (fake server)",
+        "--runs",
+        "1",
+        "--warmup",
+        "0"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        3.14,
+        2.65,
+        2.75
+      ],
+      "startedAt": "2026-11-10T20:40:37.640Z",
+      "endedAt": "2026-11-10T20:41:04.009Z",
+      "loadAtEnd": [
+        2.99,
+        2.65,
+        2.75
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "typing-off",
+      "round": 1,
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp-typing-off",
+        "--label",
+        "typing, LSP off ([lsp.rust-analyzer] enabled = false)",
+        "--runs",
+        "1",
+        "--warmup",
+        "0"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        2.99,
+        2.65,
+        2.75
+      ],
+      "startedAt": "2026-11-10T20:41:04.343Z",
+      "endedAt": "2026-11-10T20:41:31.197Z",
+      "loadAtEnd": [
+        2.69,
+        2.6,
+        2.73
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "typing-on",
+      "round": 2,
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp-typing",
+        "--lsp-fake",
+        "target/release/pw-perf-lsp",
+        "--label",
+        "typing, LSP on (fake server)",
+        "--runs",
+        "1",
+        "--warmup",
+        "0"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        2.69,
+        2.6,
+        2.73
+      ],
+      "startedAt": "2026-11-10T20:41:31.539Z",
+      "endedAt": "2026-11-10T20:41:57.827Z",
+      "loadAtEnd": [
+        2.16,
+        2.49,
+        2.68
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "typing-off",
+      "round": 2,
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp-typing-off",
+        "--label",
+        "typing, LSP off ([lsp.rust-analyzer] enabled = false)",
+        "--runs",
+        "1",
+        "--warmup",
+        "0"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        2.16,
+        2.49,
+        2.68
+      ],
+      "startedAt": "2026-11-10T20:41:58.231Z",
+      "endedAt": "2026-11-10T20:42:25.115Z",
+      "loadAtEnd": [
+        1.89,
+        2.4,
+        2.64
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "typing-on",
+      "round": 3,
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp-typing",
+        "--lsp-fake",
+        "target/release/pw-perf-lsp",
+        "--label",
+        "typing, LSP on (fake server)",
+        "--runs",
+        "1",
+        "--warmup",
+        "0"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        1.82,
+        2.37,
+        2.63
+      ],
+      "startedAt": "2026-11-10T20:42:25.516Z",
+      "endedAt": "2026-11-10T20:42:52.002Z",
+      "loadAtEnd": [
+        1.66,
+        2.29,
+        2.6
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "typing-off",
+      "round": 3,
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp-typing-off",
+        "--label",
+        "typing, LSP off ([lsp.rust-analyzer] enabled = false)",
+        "--runs",
+        "1",
+        "--warmup",
+        "0"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        1.66,
+        2.29,
+        2.6
+      ],
+      "startedAt": "2026-11-10T20:42:52.326Z",
+      "endedAt": "2026-11-10T20:43:19.134Z",
+      "loadAtEnd": [
+        1.16,
+        2.12,
+        2.52
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "typing-on",
+      "round": 4,
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp-typing",
+        "--lsp-fake",
+        "target/release/pw-perf-lsp",
+        "--label",
+        "typing, LSP on (fake server)",
+        "--runs",
+        "1",
+        "--warmup",
+        "0"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        1.16,
+        2.12,
+        2.52
+      ],
+      "startedAt": "2026-11-10T20:43:19.471Z",
+      "endedAt": "2026-11-10T20:43:45.839Z",
+      "loadAtEnd": [
+        1.63,
+        2.14,
+        2.52
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "typing-off",
+      "round": 4,
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp-typing-off",
+        "--label",
+        "typing, LSP off ([lsp.rust-analyzer] enabled = false)",
+        "--runs",
+        "1",
+        "--warmup",
+        "0"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        1.63,
+        2.14,
+        2.52
+      ],
+      "startedAt": "2026-11-10T20:43:46.251Z",
+      "endedAt": "2026-11-10T20:44:13.097Z",
+      "loadAtEnd": [
+        2.31,
+        2.26,
+        2.55
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "symbols",
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "symbols",
+        "--project",
+        "target/perf-m4/symbols-repo",
+        "--label",
+        "synthetic 20k files / 500k symbols, ⌘⌥O first"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        2.31,
+        2.26,
+        2.55
+      ],
+      "startedAt": "2026-11-10T20:44:13.427Z",
+      "endedAt": "2026-11-10T20:45:15.493Z",
+      "loadAtEnd": [
+        8.25,
+        4.07,
+        3.21
+      ],
+      "displaysKept": true,
+      "exit": 0
+    },
+    {
+      "kind": "classes",
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "classes",
+        "--project",
+        "target/perf-m4/symbols-repo",
+        "--label",
+        "synthetic 20k files / 500k symbols, ⌘O first"
+      ],
+      "env": null,
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "displaySecs": 0,
+      "displays": [
+        {
+          "name": "Color LCD",
+          "resolution": "1512 x 982 @ 120.00Hz",
+          "pixels": "3024 x 1964",
+          "main": true,
+          "internal": true
+        }
+      ],
+      "loadAtStart": [
+        7.99,
+        4.09,
+        3.22
+      ],
+      "startedAt": "2026-11-10T20:45:15.822Z",
+      "endedAt": "2026-11-10T20:46:17.816Z",
+      "loadAtEnd": [
+        3.63,
+        3.54,
+        3.07
+      ],
+      "displaysKept": true,
+      "exit": 0
+    }
+  ],
+  "prepared": {
+    "app": "target/release/perf-m4/Pitwall.app",
+    "fake": "target/release/pw-perf-lsp",
+    "symbolsRepo": "target/perf-m4/symbols-repo",
+    "repoCopy": "target/perf-m4/repo",
+    "ra": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/perf-m4/servers/data/tools/rust-analyzer/2026-10-26/rust-analyzer-aarch64-apple-darwin",
+    "raVersion": "2026-10-26",
+    "head": "d1d962441c87e605dc9462ef970fa92844b206fd"
+  },
+  "only": [
+    "empty",
+    "lsp",
+    "typing",
+    "symbols",
+    "classes"
+  ],
+  "ended": "2026-11-10T20:46:18.033Z"
+}
