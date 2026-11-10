@@ -7,19 +7,22 @@
 // 곧바로 답하고 보낸 때의 벽시계를 표지 파일에 남긴다 — 「서버 발행 → 밑줄」 · 「응답 → 대상 위치」 는 측정하는 쪽이 그 벽시계와 여기서
 // 남긴 「그 프레임의 벽시계」(`shownEpochMs`)로 낸다(git 시나리오의 체크아웃 → 상태바와 같은 방법).
 //
+// 「그려진 프레임」 의 끝 표지는 모두 타이핑의 `painted` 와 같다(`shownThenPainted`): 기다리는 것이 DOM 에 든 순간(MutationObserver)
+// → 그 뒤 첫 rAF → 그 프레임 뒤 첫 작업. 표본마다 시작 앞에 0 – 16.7 ms 를 쉬어(`offPhase`) 시작이 rAF 위상에 묶이지 않게 한다.
+//
 // `lsp` 시나리오 — 픽스처(`crates/pw-perf/src/lsp.rs` 의 `write_fixture`)의 `MAIN_PATH` 를 프로젝트 트리에서 열고 서버가 준비되면:
 //
 // 1. `lsp_ready`: 더블클릭 → 상태바의 LSP 표지가 준비(`data-state=ready`)인 때까지(참고).
 // 2. `completion`(06 「자동완성」): `COMPLETION_LINE` 끝에 `.`(서버의 트리거 글자)을 넣은 때부터 자동완성 팝업에 서버의 첫 항목이
-//    그려진 다음 프레임까지, `SAMPLES` 번. 매번 팝업을 닫고 글자를 지운다.
+//    그려진 프레임까지, `SAMPLES` 번. 매번 팝업을 닫고 글자를 지운다.
 // 3. `diagnostics`(06 「진단 표시」): `DIAG_LINE` 끝에 가짜가 진단을 다는 낱말(`DIAG_MARK`)을 넣고, 그 줄에 밑줄(`.pw-diagnostic`)이
-//    그려진 다음 프레임의 벽시계를 적는다(`editEpochMs` 는 넣기 직전). 낱말을 지우고 밑줄이 사라질 때까지 기다린다. `SAMPLES` 번.
+//    그려진 프레임의 벽시계를 적는다(`editEpochMs` 는 넣기 직전). 낱말을 지우고 밑줄이 사라질 때까지 기다린다. `SAMPLES` 번.
 // 4. `definition`(06 「정의로 이동」): `DEF_LINE` 의 `target_fn` 에서 선언으로 이동(⌘B 의 함수 `gotoDeclaration` 을 직접 부른다 —
 //    키맵 처리는 들지 않는다). 가짜는 요청마다 다른 파일(`src/t<k>.rs`)의 `DEF_TARGET_LINE` 을 답한다 — 대상 파일의 에디터가 보이고
-//    커서가 그 줄에 있는 다음 프레임의 벽시계를 적는다. ⌘[(웹뷰 안 이벤트)로 돌아온다. `DEFINITION_SAMPLES` 번(파일마다 처음 연다).
+//    커서가 그 줄에 있는 프레임의 벽시계를 적는다. ⌘[(웹뷰 안 이벤트)로 돌아온다. `DEFINITION_SAMPLES` 번(파일마다 처음 연다).
 // 5. `problems_loaded` → `problems_open` → `problems_scroll`(06 「문제 툴 윈도우」): `PROBLEMS_PATH` 를 열면 가짜가 `src/p/` 의 파일
 //    2,000개에 진단 5개씩(1만 개)을 보낸다. 상태바의 개수가 다 찬 뒤(`problems_loaded`), ⌘6 keydown 부터 문제 툴 윈도우에 첫 줄이 그려진
-//    다음 프레임까지(`problems_open` — 「프로젝트」 범위가 기본), 그 목록을 처음부터 끝까지 `PROBLEMS_FLING_FRAMES` 프레임에 스크롤한다.
+//    프레임까지(`problems_open` — 「프로젝트」 범위가 기본), 그 목록을 처음부터 끝까지 `PROBLEMS_FLING_FRAMES` 프레임에 스크롤한다.
 //
 // `lsp-typing` · `lsp-typing-off` 시나리오(06 「타이핑 지연」): `MAIN_PATH` 를 열고(켬이면 서버 준비까지) `TYPING_LINE` 끝에 `TYPING_TEXT`
 // 를 되풀이해 `TYPING_KEYS` 자를 `KEY_MS` 마다 넣는다. 키마다 「넣기 직전 → 다음 rAF」(`frame`)와 「→ 그 프레임 뒤 첫 작업」(`painted` —
@@ -27,9 +30,10 @@
 //
 // `symbols` · `classes` 시나리오(06 「심볼 인덱스」, M4-16): 합성 저장소(파일 2만 · 심볼 50만)를 연 창에서 `index.status`(이 창과 같은
 // 프로젝트의 Host 연결)가 준비(`ready` · 다시 읽을 파일 0)가 될 때까지 기다려 `index_ready` 를 적는다. 그 뒤 기다림 없이 첫 팝업 —
-// `symbols` 는 ⌘⌥O, `classes` 는 ⌘O — 을 열어 질의를 한 글자씩 친다: 키마다 「입력 이벤트 → 그 질의의 결과 줄이 DOM 에 든 다음
-// 프레임」(`totalMs`)과 그 안의 `index.symbols.search` 왕복(`rpcMs` — Host + IPC, `RpcClient.call` 을 감싸 잰다). 첫 키가 「창을 연 뒤
-// 첫 검색의 첫 키」 다. 팝업을 닫고 다른 쪽 팝업도 같은 질의로 잰다(`symbol_keys_second` — 첫 사용이 아니다).
+// `symbols` 는 ⌘⌥O, `classes` 는 ⌘O — 을 열어 질의를 한 글자씩 친다: 키마다 「입력 이벤트 → 그 질의의 결과 줄이 그려진 프레임」
+// (`totalMs`), 그중 결과 줄이 DOM 에 든 때(`seenMs`)와 `index.symbols.search` 왕복(`rpcMs` — Host + IPC, `RpcClient.call` 을
+// 감싸 잰다). 첫 키가 「창을 연 뒤 첫 검색의 첫 키」 다. 팝업을 닫고 다른 쪽 팝업도 같은 질의로 잰다(`symbol_keys_second` — 첫 사용이
+// 아니다).
 //
 // `lsp-idle` 시나리오(이 저장소 + rust-analyzer): `IDLE_PATH` 를 열고 서버가 준비 상태로 `IDLE_READY_HOLD_MS` 동안 머물면 `server_ready`
 // 를 적고 끝난다(측정하는 쪽이 그때부터 유휴 시간을 기다려 메모리를 잰다).
@@ -121,6 +125,85 @@ function projectOf(doc: Document): string {
 
 const visible = (el: Element) => el.getClientRects().length > 0;
 
+/** 표본마다 시작 앞에 두는 쉼의 폭 — 시작이 앞 표본의 rAF 위상에 묶이지 않게(한 프레임 안에서 고르게) 한다. */
+export const PHASE_JITTER_MS = 16.7;
+
+/** 시작을 rAF 위상에서 떼어 놓는다(앞 표본이 rAF · 그 뒤 작업에서 끝났으므로 곧바로 시작하면 늘 프레임 머리에서 시작한다). */
+export function offPhase(env: Pick<ScenarioEnv, "sleep">, random = Math.random): Promise<void> {
+  return env.sleep(random() * PHASE_JITTER_MS);
+}
+
+/** 그 프레임의 그리기 뒤 첫 작업까지 — rAF 콜백에서 건 메시지는 그 프레임의 렌더 갱신 뒤에 돈다. */
+function afterPaint(
+  env: Pick<ScenarioEnv, "work" | "now" | "epochNow">,
+): Promise<{ frame: number; painted: number; paintedEpochMs: number }> {
+  return new Promise((resolve) => {
+    void env.work.frame().then(() => {
+      const frame = env.now();
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        channel.port1.close();
+        resolve({ frame, painted: env.now(), paintedEpochMs: env.epochNow() });
+      };
+      channel.port2.postMessage(undefined);
+    });
+  });
+}
+
+export interface Shown<T> {
+  value: T;
+  /** `test` 가 처음 참이 된 DOM 변경을 본 시각. */
+  seen: number;
+  /** 그 뒤 첫 rAF. */
+  frame: number;
+  /** 그 프레임의 그리기 뒤 첫 작업 — 끝 표지(타이핑의 `painted` 와 같은 정의). */
+  painted: number;
+  paintedEpochMs: number;
+}
+
+/**
+ * 끝 표지: `test` 가 참이 된 DOM 변경(MutationObserver — 프레임마다 폴링하지 않는다) → 그 뒤 첫 rAF → 그 프레임 뒤 첫 작업. 폴링
+ * (`until`)에 rAF 하나를 덧붙이면 결과가 언제 들든 시작 뒤 두 프레임 아래로 내려가지 못한다(M4-19 리뷰 H1). 부르기 전에 이미 참이면
+ * 그때를 `seen` 으로 본다.
+ */
+export function shownThenPainted<T>(
+  env: Pick<ScenarioEnv, "doc" | "work" | "now" | "epochNow">,
+  what: string,
+  test: () => T | undefined | null | false,
+  timeoutMs: number,
+): Promise<Shown<T>> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const observer = new MutationObserver(() => check());
+    const stop = () => {
+      settled = true;
+      observer.disconnect();
+      clearTimeout(timer);
+    };
+    const check = () => {
+      if (settled) return;
+      const value = test();
+      if (!value) return;
+      stop();
+      const seen = env.now();
+      void afterPaint(env).then((p) => resolve({ value, seen, ...p }));
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      stop();
+      const held = test() ? " (it holds, but no DOM change reported it)" : "";
+      reject(new Error(`timed out waiting for ${what}${held}`));
+    }, timeoutMs);
+    observer.observe(env.doc, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    check();
+  });
+}
+
 /** 첫 줄이 `first` 로 시작하는, 보이는 에디터. */
 export function editorStartingWith(doc: Document, first: string): EditorView | undefined {
   for (const dom of doc.querySelectorAll<HTMLElement>(".cm-editor")) {
@@ -186,11 +269,16 @@ const completionShown = (view: EditorView) => {
 async function completion(env: ScenarioEnv, view: EditorView) {
   const samples: number[] = [];
   for (let i = 0; i < SAMPLES; i++) {
+    await offPhase(env);
     const started = env.now();
     const revert = appendToLine(view, COMPLETION_LINE, ".");
-    await until(env, "the completion popup", () => completionShown(view), 10_000);
-    await env.work.frame();
-    samples.push(ms(env.now() - started));
+    const shown = await shownThenPainted(
+      env,
+      "the completion popup",
+      () => completionShown(view),
+      10_000,
+    );
+    samples.push(ms(shown.painted - started));
     closeCompletion(view);
     revert();
     await until(env, "the completion popup to close", () => !completionShown(view), 10_000);
@@ -211,11 +299,16 @@ const underlined = (view: EditorView, line: number) => {
 async function diagnostics(env: ScenarioEnv, view: EditorView) {
   const samples: { editEpochMs: number; shownEpochMs: number }[] = [];
   for (let i = 0; i < SAMPLES; i++) {
+    await offPhase(env);
     const editEpochMs = env.epochNow();
     const revert = appendToLine(view, DIAG_LINE, ` ${DIAG_MARK}`);
-    await until(env, "the diagnostic underline", () => underlined(view, DIAG_LINE), 10_000);
-    await env.work.frame();
-    samples.push({ editEpochMs, shownEpochMs: env.epochNow() });
+    const shown = await shownThenPainted(
+      env,
+      "the diagnostic underline",
+      () => underlined(view, DIAG_LINE),
+      10_000,
+    );
+    samples.push({ editEpochMs, shownEpochMs: shown.paintedEpochMs });
     revert();
     await until(env, "the underline to go", () => !underlined(view, DIAG_LINE), 10_000);
     await env.sleep(SETTLE_MS);
@@ -232,9 +325,10 @@ async function definition(env: ScenarioEnv, view: EditorView) {
   if (offset <= line.from) throw new Error(`line ${DEF_LINE} has no ${DEF_WORD}`);
   for (let k = 0; k < DEFINITION_SAMPLES; k++) {
     const head = `${TARGET_FIRST_LINE} ${k}`;
+    await offPhase(env);
     const askEpochMs = env.epochNow();
     void gotoDeclaration(view, offset);
-    await until(
+    const shown = await shownThenPainted(
       env,
       `${targetPath(k)} at line ${DEF_TARGET_LINE}`,
       () => {
@@ -244,8 +338,7 @@ async function definition(env: ScenarioEnv, view: EditorView) {
       },
       10_000,
     );
-    await env.work.frame();
-    samples.push({ askEpochMs, shownEpochMs: env.epochNow(), path: targetPath(k) });
+    samples.push({ askEpochMs, shownEpochMs: shown.paintedEpochMs, path: targetPath(k) });
     // 돌아온다(⌘[ — 웹뷰 안 이벤트). 처음 누름이 키맵이 붙기 전이면 다시 넣는다.
     let pressed = -Infinity;
     await until(env, `back to ${MAIN_PATH}`, () => {
@@ -291,9 +384,10 @@ async function problems(env: ScenarioEnv) {
   );
   await env.report("problems_loaded", { ms: ms(env.now() - started) });
   await env.sleep(500);
+  await offPhase(env);
   const opened = env.now();
   doc.body.dispatchEvent(keydown("Digit6", "6"));
-  const list = await until(
+  const shown = await shownThenPainted(
     env,
     "the first problem row",
     () => {
@@ -302,9 +396,9 @@ async function problems(env: ScenarioEnv) {
     },
     30_000,
   );
-  await env.work.frame();
+  const list = shown.value;
   await env.report("problems_open", {
-    ms: ms(env.now() - opened),
+    ms: ms(shown.painted - opened),
     rows: list.querySelectorAll("[data-problem-row]").length,
     viewport: { width: list.clientWidth, height: list.clientHeight },
   });
@@ -327,18 +421,6 @@ async function problems(env: ScenarioEnv) {
     ...scroll,
     scrollHeight: list.scrollHeight,
     viewport: { width: list.clientWidth, height: list.clientHeight },
-  });
-}
-
-/** 그 프레임의 그리기 뒤 첫 작업까지 — rAF 콜백에서 건 메시지는 그 프레임의 렌더 갱신 뒤에 돈다. */
-function afterPaint(env: ScenarioEnv): Promise<{ frame: number; painted: number }> {
-  return new Promise((resolve) => {
-    void env.work.frame().then(() => {
-      const frame = env.now();
-      const channel = new MessageChannel();
-      channel.port1.onmessage = () => resolve({ frame, painted: env.now() });
-      channel.port2.postMessage(undefined);
-    });
   });
 }
 
@@ -435,10 +517,11 @@ function typeInto(input: HTMLInputElement, value: string) {
 }
 
 /** 팝업 하나를 열고(기다림 없이) 질의를 한 글자씩 친다. */
-async function symbolKeys(
-  env: ScenarioEnv,
+export async function symbolKeys(
+  env: Pick<ScenarioEnv, "doc" | "work" | "now" | "epochNow" | "sleep">,
   popup: "symbols" | "classes",
-  calls: ReturnType<typeof watchSymbolCalls>,
+  calls: Pick<ReturnType<typeof watchSymbolCalls>, "rpc">,
+  random = Math.random,
 ) {
   const { doc } = env;
   const query = popup === "symbols" ? SYMBOL_QUERY : CLASS_QUERY;
@@ -446,22 +529,24 @@ async function symbolKeys(
   doc.body.dispatchEvent(keydown("KeyO", "o", { alt: popup === "symbols" }));
   const input = await until(env, `the ${popup} popup`, () => seInput(doc), 10_000);
   const openMs = env.now() - opened;
-  const keys: { query: string; totalMs: number; rpcMs: number | null }[] = [];
+  const keys: { query: string; totalMs: number; seenMs: number; rpcMs: number | null }[] = [];
   for (let n = 1; n <= query.length; n++) {
     const q = query.slice(0, n);
+    // 첫 키는 팝업이 뜬 폴링 rAF 바로 뒤라 위상이 묶여 있다 — 모든 키 앞에서 뗀다.
+    await offPhase(env, random);
     const started = env.now();
     typeInto(input, q);
-    await until(
+    const shown = await shownThenPainted(
       env,
       `results for ${JSON.stringify(q)}`,
       () => doc.querySelector(`[data-search-everywhere] [data-symbol-query="${CSS.escape(q)}"]`),
       30_000,
     );
-    await env.work.frame();
     const rpc = calls.rpc(q);
     keys.push({
       query: q,
-      totalMs: ms(env.now() - started),
+      totalMs: ms(shown.painted - started),
+      seenMs: ms(shown.seen - started),
       rpcMs: rpc === undefined ? null : ms(rpc),
     });
   }

@@ -8,7 +8,8 @@
 //! - `symbols` · `classes`: `--project` 의 합성 저장소(`pw-index` 의 `perf_repo` 예제가 만든다)를 미신뢰로 등록한다 — 서버는 뜨지 않고
 //!   심볼 인덱스만 돈다.
 //! - `lsp-idle`: `--project`(이 저장소의 사본)를 신뢰로 등록하고 `[lsp.rust-analyzer] path` 를 `--lsp-server` 로. 서버가 준비된 뒤
-//!   `--idle-secs` 를 기다려 메모리를 잰다 — Pitwall 의 프로세스와 서버(그 밖의 이름)를 나눠 적는다.
+//!   `--idle-secs` 를 기다려 메모리를 잰다 — Pitwall 의 프로세스와 서버를 나눠 적는다. 서버는 앱 프로세스의 자손([`descendants`] —
+//!   서버는 앱의 책임 pid 그룹에 들지 않는다)이고, 그룹의 보조 프로세스(`SandboxHelper` 등)는 앱 몫이다.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -78,15 +79,15 @@ pub const DEFINITIONS: &[(&str, &str)] = &[
     ),
     (
         "completion",
-        "in the webview: from inserting `.` (the server's trigger character, `view.dispatch` with `input.type`) to the animation frame after the autocomplete popup showed the server's first item; 20 per run; per-run value = median",
+        "in the webview: from inserting `.` (the server's trigger character, `view.dispatch` with `input.type`) to the frame that painted the autocomplete popup with the server's first item (the end mark of every \"frame\" row: the DOM change that made it true, seen by a MutationObserver → the next animation frame → the first task after that frame, as typing's `painted`; each sample starts after a 0 – 16.7 ms pause so the start is not locked to the frame phase); 20 per run; per-run value = median",
     ),
     (
         "diagnostics",
-        "publish → frame: from the fake server's stamp just before it wrote the `publishDiagnostics` that marks the edited line to the wall clock of the frame after that line's underline (`.pw-diagnostic`) appeared; 20 per run; per-run value = median. edit → frame (reference) also holds the client's `didChange`",
+        "publish → frame: from the fake server's stamp just before it wrote the `publishDiagnostics` that marks the edited line to the wall clock of the frame that painted that line's underline (`.pw-diagnostic`); 20 per run; per-run value = median. edit → frame (reference) also holds the client's `didChange`",
     ),
     (
         "definition",
-        "answer → frame: from the fake server's stamp just before it wrote the `textDocument/definition` answer (a different file each time, so opening it is included) to the wall clock of the frame after that file's editor showed the cursor on the target line; `gotoDeclaration` (⌘B's function) is called directly — keymap handling is not included; 10 per run; per-run value = median",
+        "answer → frame: from the fake server's stamp just before it wrote the `textDocument/definition` answer (a different file each time, so opening it is included) to the wall clock of the frame that painted that file's editor with the cursor on the target line; `gotoDeclaration` (⌘B's function) is called directly — keymap handling is not included; 10 per run; per-run value = median",
     ),
     (
         "typing",
@@ -94,11 +95,11 @@ pub const DEFINITIONS: &[(&str, &str)] = &[
     ),
     (
         "problems",
-        "opening `src/problems.rs` makes the fake server publish 5 diagnostics to each of 2,000 files (10,000); after the status bar counts are complete: ⌘6 keydown → the frame after the first problem row; then fling top to bottom in 1500 frames, judged as 06 「스크롤 60fps」 (share within one refresh ≥ 0.95 and median interval ≤ 17 ms)",
+        "opening `src/problems.rs` makes the fake server publish 5 diagnostics to each of 2,000 files (10,000); after the status bar counts are complete: ⌘6 keydown → the frame that painted the first problem row; then fling top to bottom in 1500 frames, judged as 06 「스크롤 60fps」 (share within one refresh ≥ 0.95 and median interval ≤ 17 ms)",
     ),
     (
         "symbols",
-        "a synthetic repository of 20,000 files and 500,000 symbols registered untrusted (no language server); first index = launch → `index.status` ready with nothing pending (polled every 50 ms on a connection of the same project); then, with no wait, the first popup (⌘⌥O for `symbols`, ⌘O for `classes`) and the query typed a character at a time: input event → the frame after that query's rows were in the DOM (`totalMs`), of which `index.symbols.search` round trip (`rpcMs`, Host + IPC); the second popup is measured the same way afterwards (not a first use)",
+        "a synthetic repository of 20,000 files and 500,000 symbols registered untrusted (no language server); first index = launch → `index.status` ready with nothing pending (polled every 50 ms on a connection of the same project); then, with no wait, the first popup (⌘⌥O for `symbols`, ⌘O for `classes`) and the query typed a character at a time: input event → the frame that painted that query's rows (`totalMs`), of which input event → the rows in the DOM (`seenMs`) and the `index.symbols.search` round trip (`rpcMs`, Host + IPC); the second popup is measured the same way afterwards (not a first use)",
     ),
     (
         "idle",
@@ -316,6 +317,9 @@ pub struct IndexReady {
 pub struct KeyTime {
     pub query: String,
     pub total_ms: f64,
+    /// 입력 이벤트 → 결과 줄이 DOM 에 든 때(M4-19 리뷰 뒤의 시나리오만 적는다).
+    #[serde(default)]
+    pub seen_ms: Option<f64>,
     pub rpc_ms: Option<f64>,
 }
 
