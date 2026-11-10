@@ -381,6 +381,33 @@ impl Env {
             .collect()
     }
 
+    /// 그 서버 로그 파일들(`$STATE/logs/lsp/<서버>-*.log`)의 끝 `lines` 줄 — 실 서버 시험이 실패할 때 서버가 남긴 예외를 보인다.
+    pub fn server_log_tail(&self, server: &str, lines: usize) -> String {
+        let dir = pw_lsp::log::lsp_log_dir(&self.paths.state);
+        let mut files: Vec<PathBuf> = fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with(&format!("{server}-")))
+            })
+            .collect();
+        files.sort();
+        let mut out = String::new();
+        for file in files {
+            let text = fs::read_to_string(&file).unwrap_or_default();
+            let all: Vec<&str> = text.lines().collect();
+            out.push_str(&format!("--- {}\n", file.display()));
+            for line in &all[all.len().saturating_sub(lines)..] {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        out
+    }
+
     pub fn state_of(&self, server: &str) -> Option<LspInstanceState> {
         self.states()
             .into_iter()

@@ -725,9 +725,10 @@ mod live {
             };
             assert!(
                 Instant::now() < deadline,
-                "{}: rename never gave {:?}: {last}",
+                "{}: rename never gave {:?}: {last}\nserver log:\n{}",
                 spec.server.executable(),
-                spec.renamed
+                spec.renamed,
+                o.env.server_log_tail(spec.server.server_id(), 80)
             );
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
