@@ -1,7 +1,9 @@
 // scripts/perf-m4.mjs 의 단계 · 복사 이름 · 출력 읽기 — 앱 · 서버 없이 돈다.
 
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   APP,
@@ -22,6 +24,9 @@ import {
   typingRun,
   typingSummary,
 } from "./perf-m4.mjs";
+
+// 사본의 절대 경로 — OS 의 구분자로 이어 붙인다(Windows 는 `\\`).
+const REPO_COPY_PATH = join(fileURLToPath(new URL("..", import.meta.url)), REPO_COPY);
 
 test("each step runs the scenario it is about on the release bundle", () => {
   const steps = measurements({ short: false, ra: "/servers/rust-analyzer" });
@@ -60,7 +65,7 @@ test("each step runs the scenario it is about on the release bundle", () => {
   const env = Object.fromEntries(
     [...steps, ...typing.alternate].filter((s) => !s.alternate).map((s) => [s.kind, s.env]),
   );
-  assert.match(env["ra-idle"].MISE_TRUSTED_CONFIG_PATHS, /\/target\/perf-m4\/repo$/);
+  assert.equal(env["ra-idle"].MISE_TRUSTED_CONFIG_PATHS, REPO_COPY_PATH);
   for (const [kind, e] of Object.entries(env))
     if (kind !== "ra-idle") assert.equal(e, undefined, kind);
   const short = measurements({ short: true, ra: "x" });
@@ -196,7 +201,7 @@ test("only the real-server step runs pw-perf with the copy's mise config trusted
   assert.equal(spawn.command, "cargo");
   assert.deepEqual(spawn.args.slice(0, 5), ["run", "-q", "--release", "-p", "pw-perf"]);
   assert.deepEqual(spawn.args.slice(-2), ["--out", "target/perf/x"]);
-  assert.match(spawn.options.env.MISE_TRUSTED_CONFIG_PATHS, /\/target\/perf-m4\/repo$/);
+  assert.equal(spawn.options.env.MISE_TRUSTED_CONFIG_PATHS, REPO_COPY_PATH);
   assert.equal(spawn.options.env.PATH, "/usr/bin");
   assert.equal(
     base.MISE_TRUSTED_CONFIG_PATHS,

@@ -159,8 +159,9 @@ test("run counts, exit codes and the installer call", () => {
     "tools_install",
     "--",
     "jdtls",
-    "/s/data",
-    "/s/state",
+    // OS 의 구분자로 잇는다(Windows 는 `\\`).
+    join("/s", "data"),
+    join("/s", "state"),
   ]);
   const out = JSON.stringify({
     name: "kotlin-lsp",
