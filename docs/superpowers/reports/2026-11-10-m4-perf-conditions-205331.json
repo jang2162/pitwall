@@ -1,0 +1,62 @@
+{
+  "started": "2026-11-10T11:53:31.021Z",
+  "commit": "8019a2e3af664929d7c6ddae6db3e7dd08ecebff",
+  "dirty": false,
+  "cores": 15,
+  "displays": [
+    {
+      "name": "Color LCD",
+      "resolution": "1512 x 982 @ 120.00Hz",
+      "pixels": "3024 x 1964",
+      "main": true,
+      "internal": true
+    }
+  ],
+  "steps": [
+    {
+      "kind": "lsp",
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp",
+        "--lsp-fake",
+        "target/release/pw-perf-lsp",
+        "--label",
+        "fake server"
+      ],
+      "waitedSecs": 376,
+      "lockedSecs": 0,
+      "loadAtStart": [
+        14.18,
+        18.95,
+        23.23
+      ],
+      "startedAt": "2026-11-10T12:02:37.002Z",
+      "endedAt": "2026-11-10T12:07:01.218Z",
+      "loadAtEnd": [
+        20.84,
+        20.39,
+        22.72
+      ],
+      "exit": 0
+    }
+  ],
+  "prepared": {
+    "app": "target/release/perf-m4/Pitwall.app",
+    "fake": "target/release/pw-perf-lsp",
+    "symbolsRepo": "target/perf-m4/symbols-repo",
+    "repoCopy": "target/perf-m4/repo",
+    "ra": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/perf-m4/servers/data/tools/rust-analyzer/2026-10-26/rust-analyzer-aarch64-apple-darwin",
+    "raVersion": "2026-10-26",
+    "head": "8019a2e3af664929d7c6ddae6db3e7dd08ecebff"
+  },
+  "only": [
+    "lsp",
+    "typing-on",
+    "typing-off",
+    "symbols",
+    "classes",
+    "ra-idle"
+  ]
+}

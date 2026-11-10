@@ -1,0 +1,707 @@
+{
+  "schema": 1,
+  "scenario": "lsp-idle",
+  "definitions": {
+    "completion": "in the webview: from inserting `.` (the server's trigger character, `view.dispatch` with `input.type`) to the animation frame after the autocomplete popup showed the server's first item; 20 per run; per-run value = median",
+    "definition": "answer → frame: from the fake server's stamp just before it wrote the `textDocument/definition` answer (a different file each time, so opening it is included) to the wall clock of the frame after that file's editor showed the cursor on the target line; `gotoDeclaration` (⌘B's function) is called directly — keymap handling is not included; 10 per run; per-run value = median",
+    "diagnostics": "publish → frame: from the fake server's stamp just before it wrote the `publishDiagnostics` that marks the edited line to the wall clock of the frame after that line's underline (`.pw-diagnostic`) appeared; 20 per run; per-run value = median. edit → frame (reference) also holds the client's `didChange`",
+    "idle": "`lsp-idle`: this repository's copy registered trusted with the real server at `--lsp-server`; after the file opened and the server stayed ready for 15 s, wait idle_secs and sample phys_footprint; Pitwall's processes (`pitwall`, WebKit and the instance's helpers) and the server's (the descendants of the app process — the server is not in the app's responsible-pid group) are reported apart",
+    "memory": "phys_footprint by the responsible-pid group plus the descendants of the app process (the language server and its children), sampled after the scenario (symbols: after the popups — the Rust index lives in the `pitwall` process)",
+    "problems": "opening `src/problems.rs` makes the fake server publish 5 diagnostics to each of 2,000 files (10,000); after the status bar counts are complete: ⌘6 keydown → the frame after the first problem row; then fling top to bottom in 1500 frames, judged as 06 「스크롤 60fps」 (share within one refresh ≥ 0.95 and median interval ≤ 17 ms)",
+    "server": "a fake language server (`pw-perf-lsp`) plugged into the bundled `rust-analyzer` definition by the global setting `[lsp.rust-analyzer] path`; it answers at once and stamps the wall clock of what it sent (the targets are Pitwall's side only, M4-D19)",
+    "symbols": "a synthetic repository of 20,000 files and 500,000 symbols registered untrusted (no language server); first index = launch → `index.status` ready with nothing pending (polled every 50 ms on a connection of the same project); then, with no wait, the first popup (⌘⌥O for `symbols`, ⌘O for `classes`) and the query typed a character at a time: input event → the frame after that query's rows were in the DOM (`totalMs`), of which `index.symbols.search` round trip (`rpcMs`, Host + IPC); the second popup is measured the same way afterwards (not a first use)",
+    "typing": "300 characters at 50 ms, each inserted with `view.dispatch` (`input.type`, keymap · IME not included); per key: insert → after the next frame's rendering (a message posted from the next animation frame); per-run value = p95. LSP on and off are separate runs (`lsp-typing` · `lsp-typing-off`, the latter with `[lsp.rust-analyzer] enabled = false`); 06 judges on − off ≤ 2 ms on the medians of the per-run p95"
+  },
+  "build": {
+    "profile": "release",
+    "app": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/release/perf-m4/Pitwall.app",
+    "binary": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/release/perf-m4/Pitwall.app/Contents/MacOS/pitwall"
+  },
+  "commit": {
+    "sha": "11d265ba107e19a2c73da73cdc7081c0ae832752",
+    "dirty": false
+  },
+  "os": {
+    "name": "macOS",
+    "version": "27.2",
+    "build": "26B123"
+  },
+  "hardware": {
+    "model": "Mac17,9",
+    "cpu": "Apple M5 Pro",
+    "cpus": 15,
+    "memory_bytes": 51539607552
+  },
+  "settings": {
+    "scenario": "lsp-idle",
+    "runs": 5,
+    "warmup": 1,
+    "idle_secs": 10,
+    "project": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/perf-m4/repo",
+    "server": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/perf-m4/servers/data/tools/rust-analyzer/2026-10-26/rust-analyzer-aarch64-apple-darwin",
+    "label": "this repository + rust-analyzer"
+  },
+  "runs": [
+    {
+      "index": 0,
+      "warmup": true,
+      "excluded": null,
+      "app_pid": 72168,
+      "group": 72168,
+      "cold_start_ms": 538.971923828125,
+      "launch_epoch_ms": 1794315029783.08,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": {
+          "epochMs": 1794315053352.0,
+          "fromFrameMs": 23012.0
+        }
+      },
+      "memory": {
+        "footprint_bytes": 3524814928,
+        "rss_bytes": 4924063744,
+        "processes": [
+          {
+            "pid": 72227,
+            "name": "rust-analyzer-aarch64-apple-darwin",
+            "footprint_bytes": 3033681760,
+            "rss_bytes": 4165156864
+          },
+          {
+            "pid": 72172,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 229950712,
+            "rss_bytes": 294060032
+          },
+          {
+            "pid": 72171,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 100647800,
+            "rss_bytes": 32489472
+          },
+          {
+            "pid": 72168,
+            "name": "pitwall",
+            "footprint_bytes": 84247944,
+            "rss_bytes": 217694208
+          },
+          {
+            "pid": 72247,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 34161384,
+            "rss_bytes": 98779136
+          },
+          {
+            "pid": 72248,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 29704960,
+            "rss_bytes": 85721088
+          },
+          {
+            "pid": 72174,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 72173,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4686352,
+            "rss_bytes": 9011200
+          },
+          {
+            "pid": 72170,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2261328,
+            "rss_bytes": 9601024
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 91981960,
+        "webkit_footprint_bytes": 335284864,
+        "server_footprint_bytes": 3097548104,
+        "server_rss_bytes": 4349657088
+      },
+      "killed": false
+    },
+    {
+      "index": 1,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 73834,
+      "group": 73834,
+      "cold_start_ms": 488.791015625,
+      "launch_epoch_ms": 1794315069704.938,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": {
+          "epochMs": 1794315092235.0,
+          "fromFrameMs": 22034.0
+        }
+      },
+      "memory": {
+        "footprint_bytes": 3017517040,
+        "rss_bytes": 4937777152,
+        "processes": [
+          {
+            "pid": 73895,
+            "name": "rust-analyzer-aarch64-apple-darwin",
+            "footprint_bytes": 2507083592,
+            "rss_bytes": 4161945600
+          },
+          {
+            "pid": 73839,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 260867296,
+            "rss_bytes": 322846720
+          },
+          {
+            "pid": 73838,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 100664208,
+            "rss_bytes": 32636928
+          },
+          {
+            "pid": 73834,
+            "name": "pitwall",
+            "footprint_bytes": 76514672,
+            "rss_bytes": 209813504
+          },
+          {
+            "pid": 73915,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 36717312,
+            "rss_bytes": 98484224
+          },
+          {
+            "pid": 73914,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 23249616,
+            "rss_bytes": 81870848
+          },
+          {
+            "pid": 73846,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 73841,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4735504,
+            "rss_bytes": 9076736
+          },
+          {
+            "pid": 73837,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2212152,
+            "rss_bytes": 9551872
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 84199512,
+        "webkit_footprint_bytes": 366267008,
+        "server_footprint_bytes": 2567050520,
+        "server_rss_bytes": 4342300672
+      },
+      "killed": false
+    },
+    {
+      "index": 2,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 75531,
+      "group": 75531,
+      "cold_start_ms": 485.47412109375,
+      "launch_epoch_ms": 1794315108575.9028,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": {
+          "epochMs": 1794315131072.0,
+          "fromFrameMs": 22004.0
+        }
+      },
+      "memory": {
+        "footprint_bytes": 3531827184,
+        "rss_bytes": 4905615360,
+        "processes": [
+          {
+            "pid": 75581,
+            "name": "rust-analyzer-aarch64-apple-darwin",
+            "footprint_bytes": 3031666504,
+            "rss_bytes": 4165025792
+          },
+          {
+            "pid": 75534,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 221152456,
+            "rss_bytes": 279429120
+          },
+          {
+            "pid": 75531,
+            "name": "pitwall",
+            "footprint_bytes": 100763040,
+            "rss_bytes": 213303296
+          },
+          {
+            "pid": 75533,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 100320072,
+            "rss_bytes": 32669696
+          },
+          {
+            "pid": 75601,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 35291904,
+            "rss_bytes": 96157696
+          },
+          {
+            "pid": 75600,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 30229248,
+            "rss_bytes": 88883200
+          },
+          {
+            "pid": 75536,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 75535,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4702712,
+            "rss_bytes": 9043968
+          },
+          {
+            "pid": 75532,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2228560,
+            "rss_bytes": 9551872
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 108464288,
+        "webkit_footprint_bytes": 326175240,
+        "server_footprint_bytes": 3097187656,
+        "server_rss_bytes": 4350066688
+      },
+      "killed": false
+    },
+    {
+      "index": 3,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 77189,
+      "group": 77189,
+      "cold_start_ms": 493.133056640625,
+      "launch_epoch_ms": 1794315147448.717,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": {
+          "epochMs": 1794315170009.0,
+          "fromFrameMs": 22063.0
+        }
+      },
+      "memory": {
+        "footprint_bytes": 2951472968,
+        "rss_bytes": 4875173888,
+        "processes": [
+          {
+            "pid": 77242,
+            "name": "rust-analyzer-aarch64-apple-darwin",
+            "footprint_bytes": 2487275312,
+            "rss_bytes": 4153786368
+          },
+          {
+            "pid": 77195,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 217302216,
+            "rss_bytes": 270794752
+          },
+          {
+            "pid": 77194,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 100287280,
+            "rss_bytes": 32948224
+          },
+          {
+            "pid": 77189,
+            "name": "pitwall",
+            "footprint_bytes": 70649128,
+            "rss_bytes": 204718080
+          },
+          {
+            "pid": 77262,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 34849536,
+            "rss_bytes": 94650368
+          },
+          {
+            "pid": 77261,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 28672744,
+            "rss_bytes": 88178688
+          },
+          {
+            "pid": 77197,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 77196,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4735504,
+            "rss_bytes": 8994816
+          },
+          {
+            "pid": 77193,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2228560,
+            "rss_bytes": 9551872
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 78350376,
+        "webkit_footprint_bytes": 322325000,
+        "server_footprint_bytes": 2550797592,
+        "server_rss_bytes": 4336615424
+      },
+      "killed": false
+    },
+    {
+      "index": 4,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 78826,
+      "group": 78826,
+      "cold_start_ms": 485.464111328125,
+      "launch_epoch_ms": 1794315186300.2778,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": {
+          "epochMs": 1794315208726.0,
+          "fromFrameMs": 21934.0
+        }
+      },
+      "memory": {
+        "footprint_bytes": 2976016344,
+        "rss_bytes": 4912693248,
+        "processes": [
+          {
+            "pid": 78876,
+            "name": "rust-analyzer-aarch64-apple-darwin",
+            "footprint_bytes": 2495532896,
+            "rss_bytes": 4166336512
+          },
+          {
+            "pid": 78829,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 226297008,
+            "rss_bytes": 290127872
+          },
+          {
+            "pid": 78828,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 101024656,
+            "rss_bytes": 33161216
+          },
+          {
+            "pid": 78826,
+            "name": "pitwall",
+            "footprint_bytes": 74761560,
+            "rss_bytes": 207421440
+          },
+          {
+            "pid": 78896,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 36569856,
+            "rss_bytes": 95551488
+          },
+          {
+            "pid": 78895,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 29426432,
+            "rss_bytes": 89997312
+          },
+          {
+            "pid": 78831,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 78830,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4719072,
+            "rss_bytes": 9027584
+          },
+          {
+            "pid": 78827,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2212176,
+            "rss_bytes": 9519104
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 82446424,
+        "webkit_footprint_bytes": 332040736,
+        "server_footprint_bytes": 2561529184,
+        "server_rss_bytes": 4351885312
+      },
+      "killed": false
+    },
+    {
+      "index": 5,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 80320,
+      "group": 80320,
+      "cold_start_ms": 513.97802734375,
+      "launch_epoch_ms": 1794315225042.327,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": {
+          "epochMs": 1794315247526.0,
+          "fromFrameMs": 21966.0
+        }
+      },
+      "memory": {
+        "footprint_bytes": 3504728072,
+        "rss_bytes": 4920557568,
+        "processes": [
+          {
+            "pid": 80726,
+            "name": "rust-analyzer-aarch64-apple-darwin",
+            "footprint_bytes": 3016986440,
+            "rss_bytes": 4165582848
+          },
+          {
+            "pid": 80373,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 238421216,
+            "rss_bytes": 300597248
+          },
+          {
+            "pid": 80372,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 100320120,
+            "rss_bytes": 33013760
+          },
+          {
+            "pid": 80320,
+            "name": "pitwall",
+            "footprint_bytes": 71075208,
+            "rss_bytes": 205471744
+          },
+          {
+            "pid": 80856,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 35455744,
+            "rss_bytes": 96976896
+          },
+          {
+            "pid": 80857,
+            "name": "rust-analyzer-proc-macro-srv",
+            "footprint_bytes": 30016232,
+            "rss_bytes": 88752128
+          },
+          {
+            "pid": 80475,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5489072,
+            "rss_bytes": 11567104
+          },
+          {
+            "pid": 80394,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4719096,
+            "rss_bytes": 9027584
+          },
+          {
+            "pid": 80371,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2244944,
+            "rss_bytes": 9568256
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 78809224,
+        "webkit_footprint_bytes": 343460432,
+        "server_footprint_bytes": 3082458416,
+        "server_rss_bytes": 4351311872
+      },
+      "killed": false
+    }
+  ],
+  "failures": [],
+  "valid_runs": 5,
+  "rows": [
+    {
+      "key": "server_ready_ms",
+      "item": "first frame → the language server ready and quiet for 15 s (reference)",
+      "summary": {
+        "median": 22004.0,
+        "min": 21934.0,
+        "max": 22063.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "cold_start_ms",
+      "item": "cold start → first frame (reference)",
+      "summary": {
+        "median": 488.791015625,
+        "min": 485.464111328125,
+        "max": 513.97802734375,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "footprint_mb",
+      "item": "footprint after the scenario, every process of the instance",
+      "summary": {
+        "median": 3017.51704,
+        "min": 2951.472968,
+        "max": 3531.827184,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "app_footprint_mb",
+      "item": "  of which the app process (`pitwall` — Host, LSP client, symbol index — and the instance's helpers)",
+      "summary": {
+        "median": 82.446424,
+        "min": 78.350376,
+        "max": 108.464288,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "webkit_footprint_mb",
+      "item": "  of which WebKit",
+      "summary": {
+        "median": 332.040736,
+        "min": 322.325,
+        "max": 366.267008,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "server_footprint_mb",
+      "item": "  of which the language server's processes",
+      "summary": {
+        "median": 2567.05052,
+        "min": 2550.797592,
+        "max": 3097.187656,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "server_rss_mb",
+      "item": "language server RSS (reported apart, not a target)",
+      "summary": {
+        "median": 4350.066688,
+        "min": 4336.615424,
+        "max": 4351.885312,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    }
+  ],
+  "warning": null,
+  "stopped": null
+}

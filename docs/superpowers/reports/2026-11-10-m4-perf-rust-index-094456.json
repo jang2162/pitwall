@@ -1,0 +1,70 @@
+{
+  "command": "cargo test --release -p pw-index --test perf -- --ignored --nocapture --test-threads 1",
+  "runs": [
+    {
+      "firstIndexMs": 4198.997875,
+      "heapMiB": 38.6,
+      "rssMiB": 54,
+      "queryMedianMs": 6.101167,
+      "queryMaxMs": 6.809167,
+      "symbols": 500000,
+      "load": [
+        11.25,
+        15.27,
+        10.87
+      ]
+    },
+    {
+      "firstIndexMs": 4148.826166,
+      "heapMiB": 38.6,
+      "rssMiB": 53.5,
+      "queryMedianMs": 5.776167,
+      "queryMaxMs": 7.53725,
+      "symbols": 500000,
+      "load": [
+        11.31,
+        15.22,
+        10.87
+      ]
+    },
+    {
+      "firstIndexMs": 4122.638708,
+      "heapMiB": 38.6,
+      "rssMiB": 52.5,
+      "queryMedianMs": 6.023875,
+      "queryMaxMs": 7.725542,
+      "symbols": 500000,
+      "load": [
+        10.8,
+        15.05,
+        10.84
+      ]
+    },
+    {
+      "firstIndexMs": 3954.705833,
+      "heapMiB": 38.6,
+      "rssMiB": 53.1,
+      "queryMedianMs": 7.173834,
+      "queryMaxMs": 8.739375,
+      "symbols": 500000,
+      "load": [
+        10.8,
+        15.05,
+        10.84
+      ]
+    },
+    {
+      "firstIndexMs": 4413.082459,
+      "heapMiB": 38.6,
+      "rssMiB": 52.9,
+      "queryMedianMs": 7.039333,
+      "queryMaxMs": 8.945458,
+      "symbols": 500000,
+      "load": [
+        10.98,
+        15.01,
+        10.85
+      ]
+    }
+  ]
+}

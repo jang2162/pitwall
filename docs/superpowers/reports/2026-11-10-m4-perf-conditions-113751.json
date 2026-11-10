@@ -1,0 +1,87 @@
+{
+  "started": "2026-11-10T02:37:51.554Z",
+  "commit": "8019a2e3af664929d7c6ddae6db3e7dd08ecebff",
+  "dirty": false,
+  "cores": 15,
+  "displays": [
+    {
+      "name": "DP",
+      "resolution": "2560 x 1440 @ 75.00Hz",
+      "pixels": "2560 x 1440",
+      "main": true,
+      "internal": false
+    },
+    {
+      "name": "DP",
+      "resolution": "2560 x 1440 @ 75.00Hz",
+      "pixels": "2560 x 1440",
+      "main": false,
+      "internal": false
+    }
+  ],
+  "steps": [
+    {
+      "kind": "empty",
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--label",
+        "default bundle, empty project"
+      ],
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "loadAtStart": [
+        6.73,
+        4.96,
+        3.21
+      ],
+      "startedAt": "2026-11-10T02:40:42.925Z",
+      "endedAt": "2026-11-10T02:42:24.572Z",
+      "loadAtEnd": [
+        2.75,
+        4.02,
+        3.03
+      ],
+      "exit": 0
+    },
+    {
+      "kind": "lsp",
+      "args": [
+        "--app",
+        "target/release/perf-m4/Pitwall.app",
+        "--scenario",
+        "lsp",
+        "--lsp-fake",
+        "target/release/pw-perf-lsp",
+        "--label",
+        "fake server"
+      ],
+      "waitedSecs": 0,
+      "lockedSecs": 0,
+      "loadAtStart": [
+        2.75,
+        4.02,
+        3.03
+      ],
+      "startedAt": "2026-11-10T02:42:24.593Z"
+    }
+  ],
+  "prepared": {
+    "app": "target/release/perf-m4/Pitwall.app",
+    "fake": "target/release/pw-perf-lsp",
+    "symbolsRepo": "target/perf-m4/symbols-repo",
+    "repoCopy": "target/perf-m4/repo",
+    "ra": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/perf-m4/servers/data/tools/rust-analyzer/2026-10-26/rust-analyzer-aarch64-apple-darwin",
+    "raVersion": "2026-10-26",
+    "head": "8019a2e3af664929d7c6ddae6db3e7dd08ecebff"
+  },
+  "only": [
+    "empty",
+    "lsp",
+    "typing-on",
+    "typing-off",
+    "symbols",
+    "classes",
+    "ra-idle"
+  ]
+}

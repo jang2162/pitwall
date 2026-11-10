@@ -1,0 +1,1615 @@
+{
+  "schema": 1,
+  "scenario": "classes",
+  "definitions": {
+    "completion": "in the webview: from inserting `.` (the server's trigger character, `view.dispatch` with `input.type`) to the animation frame after the autocomplete popup showed the server's first item; 20 per run; per-run value = median",
+    "definition": "answer → frame: from the fake server's stamp just before it wrote the `textDocument/definition` answer (a different file each time, so opening it is included) to the wall clock of the frame after that file's editor showed the cursor on the target line; `gotoDeclaration` (⌘B's function) is called directly — keymap handling is not included; 10 per run; per-run value = median",
+    "diagnostics": "publish → frame: from the fake server's stamp just before it wrote the `publishDiagnostics` that marks the edited line to the wall clock of the frame after that line's underline (`.pw-diagnostic`) appeared; 20 per run; per-run value = median. edit → frame (reference) also holds the client's `didChange`",
+    "idle": "`lsp-idle`: this repository's copy registered trusted with the real server at `--lsp-server`; after the file opened and the server stayed ready for 15 s, wait idle_secs and sample phys_footprint; Pitwall's processes (`pitwall`, WebKit and the instance's helpers) and the server's (the descendants of the app process — the server is not in the app's responsible-pid group) are reported apart",
+    "memory": "phys_footprint by the responsible-pid group plus the descendants of the app process (the language server and its children), sampled after the scenario (symbols: after the popups — the Rust index lives in the `pitwall` process)",
+    "problems": "opening `src/problems.rs` makes the fake server publish 5 diagnostics to each of 2,000 files (10,000); after the status bar counts are complete: ⌘6 keydown → the frame after the first problem row; then fling top to bottom in 1500 frames, judged as 06 「스크롤 60fps」 (share within one refresh ≥ 0.95 and median interval ≤ 17 ms)",
+    "server": "a fake language server (`pw-perf-lsp`) plugged into the bundled `rust-analyzer` definition by the global setting `[lsp.rust-analyzer] path`; it answers at once and stamps the wall clock of what it sent (the targets are Pitwall's side only, M4-D19)",
+    "symbols": "a synthetic repository of 20,000 files and 500,000 symbols registered untrusted (no language server); first index = launch → `index.status` ready with nothing pending (polled every 50 ms on a connection of the same project); then, with no wait, the first popup (⌘⌥O for `symbols`, ⌘O for `classes`) and the query typed a character at a time: input event → the frame after that query's rows were in the DOM (`totalMs`), of which `index.symbols.search` round trip (`rpcMs`, Host + IPC); the second popup is measured the same way afterwards (not a first use)",
+    "typing": "300 characters at 50 ms, each inserted with `view.dispatch` (`input.type`, keymap · IME not included); per key: insert → after the next frame's rendering (a message posted from the next animation frame); per-run value = p95. LSP on and off are separate runs (`lsp-typing` · `lsp-typing-off`, the latter with `[lsp.rust-analyzer] enabled = false`); 06 judges on − off ≤ 2 ms on the medians of the per-run p95"
+  },
+  "build": {
+    "profile": "release",
+    "app": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/release/perf-m4/Pitwall.app",
+    "binary": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/release/perf-m4/Pitwall.app/Contents/MacOS/pitwall"
+  },
+  "commit": {
+    "sha": "11d265ba107e19a2c73da73cdc7081c0ae832752",
+    "dirty": false
+  },
+  "os": {
+    "name": "macOS",
+    "version": "27.2",
+    "build": "26B123"
+  },
+  "hardware": {
+    "model": "Mac17,9",
+    "cpu": "Apple M5 Pro",
+    "cpus": 15,
+    "memory_bytes": 51539607552
+  },
+  "settings": {
+    "scenario": "classes",
+    "runs": 5,
+    "warmup": 1,
+    "idle_secs": 10,
+    "project": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/perf-m4/symbols-repo",
+    "server": null,
+    "label": "synthetic 20k files / 500k symbols, ⌘O first"
+  },
+  "runs": [
+    {
+      "index": 0,
+      "warmup": true,
+      "excluded": null,
+      "app_pid": 69616,
+      "group": 69616,
+      "cold_start_ms": 484.138916015625,
+      "launch_epoch_ms": 1794314967162.067,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794314969726.0,
+          "fromFrameMs": 2073.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "classes",
+          "openMs": 8.0,
+          "first": {
+            "query": "W",
+            "totalMs": 41.0,
+            "rpcMs": 7.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 41.0,
+              "rpcMs": 7.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 31.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 31.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 35.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 36.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 31.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 34.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 33.0,
+              "rpcMs": 4.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "symbols",
+          "openMs": 13.0,
+          "first": {
+            "query": "h",
+            "totalMs": 35.0,
+            "rpcMs": 14.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 35.0,
+              "rpcMs": 14.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "han",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 34.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 34.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 617665120,
+        "rss_bytes": 664158208,
+        "processes": [
+          {
+            "pid": 69616,
+            "name": "pitwall",
+            "footprint_bytes": 253314608,
+            "rss_bytes": 362872832
+          },
+          {
+            "pid": 69619,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 248300576,
+            "rss_bytes": 238338048
+          },
+          {
+            "pid": 69618,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 103351040,
+            "rss_bytes": 32653312
+          },
+          {
+            "pid": 69621,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5521840,
+            "rss_bytes": 11599872
+          },
+          {
+            "pid": 69620,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4899344,
+            "rss_bytes": 9109504
+          },
+          {
+            "pid": 69617,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2277712,
+            "rss_bytes": 9584640
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 261114160,
+        "webkit_footprint_bytes": 356550960,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    },
+    {
+      "index": 1,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 69821,
+      "group": 69821,
+      "cold_start_ms": 493.38427734375,
+      "launch_epoch_ms": 1794314977437.5688,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794314980155.0,
+          "fromFrameMs": 2222.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "classes",
+          "openMs": 10.0,
+          "first": {
+            "query": "W",
+            "totalMs": 33.0,
+            "rpcMs": 7.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 33.0,
+              "rpcMs": 7.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 34.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 33.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 34.0,
+              "rpcMs": 4.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "symbols",
+          "openMs": 13.0,
+          "first": {
+            "query": "h",
+            "totalMs": 35.0,
+            "rpcMs": 16.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 35.0,
+              "rpcMs": 16.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "han",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 32.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 35.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 32.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 658379384,
+        "rss_bytes": 682344448,
+        "processes": [
+          {
+            "pid": 69824,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 284689488,
+            "rss_bytes": 255066112
+          },
+          {
+            "pid": 69821,
+            "name": "pitwall",
+            "footprint_bytes": 255051264,
+            "rss_bytes": 364445696
+          },
+          {
+            "pid": 69823,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 105874224,
+            "rss_bytes": 32505856
+          },
+          {
+            "pid": 69826,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5521840,
+            "rss_bytes": 11599872
+          },
+          {
+            "pid": 69825,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5014032,
+            "rss_bytes": 9175040
+          },
+          {
+            "pid": 69822,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2228536,
+            "rss_bytes": 9551872
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 262801640,
+        "webkit_footprint_bytes": 395577744,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    },
+    {
+      "index": 2,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 70472,
+      "group": 70472,
+      "cold_start_ms": 489.945068359375,
+      "launch_epoch_ms": 1794314987878.03,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794314990644.0,
+          "fromFrameMs": 2272.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "classes",
+          "openMs": 7.0,
+          "first": {
+            "query": "W",
+            "totalMs": 40.0,
+            "rpcMs": 8.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 40.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 31.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 34.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 33.0,
+              "rpcMs": 7.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 34.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 33.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 36.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 31.0,
+              "rpcMs": 5.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "symbols",
+          "openMs": 11.0,
+          "first": {
+            "query": "h",
+            "totalMs": 45.0,
+            "rpcMs": 13.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 45.0,
+              "rpcMs": 13.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 31.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "han",
+              "totalMs": 35.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 34.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 35.0,
+              "rpcMs": 5.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 624661064,
+        "rss_bytes": 675594240,
+        "processes": [
+          {
+            "pid": 70472,
+            "name": "pitwall",
+            "footprint_bytes": 257934872,
+            "rss_bytes": 367460352
+          },
+          {
+            "pid": 70475,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 250709048,
+            "rss_bytes": 245055488
+          },
+          {
+            "pid": 70474,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 103400288,
+            "rss_bytes": 32882688
+          },
+          {
+            "pid": 70477,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5538224,
+            "rss_bytes": 11616256
+          },
+          {
+            "pid": 70476,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4784560,
+            "rss_bytes": 8962048
+          },
+          {
+            "pid": 70473,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2294072,
+            "rss_bytes": 9617408
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 265767168,
+        "webkit_footprint_bytes": 358893896,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    },
+    {
+      "index": 3,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 70624,
+      "group": 70624,
+      "cold_start_ms": 482.013916015625,
+      "launch_epoch_ms": 1794314998365.6,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794315000872.0,
+          "fromFrameMs": 2005.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "classes",
+          "openMs": 8.0,
+          "first": {
+            "query": "W",
+            "totalMs": 26.0,
+            "rpcMs": 8.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 26.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 34.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 34.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 32.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 35.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "symbols",
+          "openMs": 12.0,
+          "first": {
+            "query": "h",
+            "totalMs": 36.0,
+            "rpcMs": 12.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 36.0,
+              "rpcMs": 12.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "han",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 35.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 31.0,
+              "rpcMs": 7.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 32.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 35.0,
+              "rpcMs": 5.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 660296288,
+        "rss_bytes": 686768128,
+        "processes": [
+          {
+            "pid": 70627,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 286770232,
+            "rss_bytes": 259489792
+          },
+          {
+            "pid": 70624,
+            "name": "pitwall",
+            "footprint_bytes": 254854728,
+            "rss_bytes": 364478464
+          },
+          {
+            "pid": 70626,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 105939712,
+            "rss_bytes": 32522240
+          },
+          {
+            "pid": 70629,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5521840,
+            "rss_bytes": 11599872
+          },
+          {
+            "pid": 70628,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4948472,
+            "rss_bytes": 9076736
+          },
+          {
+            "pid": 70625,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2261304,
+            "rss_bytes": 9601024
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 262637872,
+        "webkit_footprint_bytes": 397658416,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    },
+    {
+      "index": 4,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 71269,
+      "group": 71269,
+      "cold_start_ms": 493.275390625,
+      "launch_epoch_ms": 1794315008563.6748,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794315011174.0,
+          "fromFrameMs": 2113.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "classes",
+          "openMs": 7.0,
+          "first": {
+            "query": "W",
+            "totalMs": 25.0,
+            "rpcMs": 6.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 25.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 33.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 33.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 34.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 34.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 33.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 33.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 34.0,
+              "rpcMs": 3.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "symbols",
+          "openMs": 5.0,
+          "first": {
+            "query": "h",
+            "totalMs": 34.0,
+            "rpcMs": 9.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "han",
+              "totalMs": 34.0,
+              "rpcMs": 7.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 33.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 34.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 33.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 34.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 32.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 34.0,
+              "rpcMs": 7.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 33.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 33.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 33.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 34.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 33.0,
+              "rpcMs": 4.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 654578128,
+        "rss_bytes": 678936576,
+        "processes": [
+          {
+            "pid": 71272,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 285312080,
+            "rss_bytes": 256065536
+          },
+          {
+            "pid": 71269,
+            "name": "pitwall",
+            "footprint_bytes": 250480080,
+            "rss_bytes": 359989248
+          },
+          {
+            "pid": 71271,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 106119912,
+            "rss_bytes": 32571392
+          },
+          {
+            "pid": 71275,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5521840,
+            "rss_bytes": 11599872
+          },
+          {
+            "pid": 71273,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4899296,
+            "rss_bytes": 9125888
+          },
+          {
+            "pid": 71270,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2244920,
+            "rss_bytes": 9584640
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 258246840,
+        "webkit_footprint_bytes": 396331288,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    },
+    {
+      "index": 5,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 71421,
+      "group": 71421,
+      "cold_start_ms": 494.119140625,
+      "launch_epoch_ms": 1794315018861.4,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794315021422.0,
+          "fromFrameMs": 2065.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "classes",
+          "openMs": 7.0,
+          "first": {
+            "query": "W",
+            "totalMs": 40.0,
+            "rpcMs": 8.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 40.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 32.0,
+              "rpcMs": 8.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 33.0,
+              "rpcMs": 6.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 35.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 30.0,
+              "rpcMs": 4.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 35.0,
+              "rpcMs": 4.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "symbols",
+          "openMs": 14.0,
+          "first": {
+            "query": "h",
+            "totalMs": 34.0,
+            "rpcMs": 15.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 34.0,
+              "rpcMs": 15.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "han",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 34.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 35.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 32.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 33.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 33.0,
+              "rpcMs": 10.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 35.0,
+              "rpcMs": 9.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 31.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 34.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 35.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 32.0,
+              "rpcMs": 5.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 35.0,
+              "rpcMs": 5.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 624759368,
+        "rss_bytes": 664403968,
+        "processes": [
+          {
+            "pid": 71421,
+            "name": "pitwall",
+            "footprint_bytes": 254215704,
+            "rss_bytes": 362561536
+          },
+          {
+            "pid": 71424,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 251528248,
+            "rss_bytes": 238895104
+          },
+          {
+            "pid": 71423,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 106316616,
+            "rss_bytes": 32669696
+          },
+          {
+            "pid": 71426,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5521840,
+            "rss_bytes": 11599872
+          },
+          {
+            "pid": 71425,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4899272,
+            "rss_bytes": 9060352
+          },
+          {
+            "pid": 71422,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2277688,
+            "rss_bytes": 9617408
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 262015232,
+        "webkit_footprint_bytes": 362744136,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    }
+  ],
+  "failures": [],
+  "valid_runs": 5,
+  "rows": [
+    {
+      "key": "index_first_ms",
+      "item": "symbol index: launch → ready (first index, 20,000 files · 500,000 symbols)",
+      "summary": {
+        "median": 2610.3251953125,
+        "min": 2506.39990234375,
+        "max": 2765.969970703125,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 15000 ms (8 cores)",
+      "met": true
+    },
+    {
+      "key": "index_from_frame_ms",
+      "item": "symbol index: first frame → ready (reference)",
+      "summary": {
+        "median": 2113.0,
+        "min": 2005.0,
+        "max": 2272.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "index_symbols",
+      "item": "symbol index: symbols",
+      "summary": {
+        "median": 500000.0,
+        "min": 500000.0,
+        "max": 500000.0,
+        "n": 5
+      },
+      "unit": "",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "first_key_ms",
+      "item": "first popup after the window opened: first key → results frame",
+      "summary": {
+        "median": 33.0,
+        "min": 25.0,
+        "max": 40.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 30 ms",
+      "met": false
+    },
+    {
+      "key": "first_key_rpc_ms",
+      "item": "  of which index.symbols.search round trip (Host + IPC)",
+      "summary": {
+        "median": 8.0,
+        "min": 6.0,
+        "max": 8.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "first_open_ms",
+      "item": "first popup: key → input shown (reference)",
+      "summary": {
+        "median": 7.0,
+        "min": 7.0,
+        "max": 10.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "keys_max_ms",
+      "item": "first popup, keys after the first: slowest key → results frame (per run)",
+      "summary": {
+        "median": 35.0,
+        "min": 34.0,
+        "max": 36.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 30 ms",
+      "met": false
+    },
+    {
+      "key": "keys_median_ms",
+      "item": "first popup, keys after the first: median key (per run)",
+      "summary": {
+        "median": 33.0,
+        "min": 33.0,
+        "max": 33.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "keys_rpc_max_ms",
+      "item": "  of which the slowest index.symbols.search round trip (per run)",
+      "summary": {
+        "median": 6.0,
+        "min": 5.0,
+        "max": 8.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "second_first_key_ms",
+      "item": "second popup (not a first use): first key → results frame",
+      "summary": {
+        "median": 35.0,
+        "min": 34.0,
+        "max": 45.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "second_keys_max_ms",
+      "item": "second popup: slowest of the other keys (per run)",
+      "summary": {
+        "median": 35.0,
+        "min": 34.0,
+        "max": 35.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 30 ms",
+      "met": false
+    },
+    {
+      "key": "cold_start_ms",
+      "item": "cold start → first frame (reference)",
+      "summary": {
+        "median": 493.275390625,
+        "min": 482.013916015625,
+        "max": 494.119140625,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "footprint_mb",
+      "item": "footprint after the scenario, every process of the instance",
+      "summary": {
+        "median": 654.578128,
+        "min": 624.661064,
+        "max": 660.296288,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "app_footprint_mb",
+      "item": "  of which the app process (`pitwall` — Host, LSP client, symbol index — and the instance's helpers)",
+      "summary": {
+        "median": 262.637872,
+        "min": 258.24684,
+        "max": 265.767168,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "webkit_footprint_mb",
+      "item": "  of which WebKit",
+      "summary": {
+        "median": 395.577744,
+        "min": 358.893896,
+        "max": 397.658416,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    }
+  ],
+  "warning": null,
+  "stopped": null
+}

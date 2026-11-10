@@ -1,0 +1,783 @@
+{
+  "schema": 1,
+  "scenario": "lsp-typing",
+  "definitions": {
+    "completion": "in the webview: from inserting `.` (the server's trigger character, `view.dispatch` with `input.type`) to the animation frame after the autocomplete popup showed the server's first item; 20 per run; per-run value = median",
+    "definition": "answer → frame: from the fake server's stamp just before it wrote the `textDocument/definition` answer (a different file each time, so opening it is included) to the wall clock of the frame after that file's editor showed the cursor on the target line; `gotoDeclaration` (⌘B's function) is called directly — keymap handling is not included; 10 per run; per-run value = median",
+    "diagnostics": "publish → frame: from the fake server's stamp just before it wrote the `publishDiagnostics` that marks the edited line to the wall clock of the frame after that line's underline (`.pw-diagnostic`) appeared; 20 per run; per-run value = median. edit → frame (reference) also holds the client's `didChange`",
+    "idle": "`lsp-idle`: this repository's copy registered trusted with the real server at `--lsp-server`; after the file opened and the server stayed ready for 15 s, wait idle_secs and sample phys_footprint; Pitwall's processes (`pitwall` and WebKit) and the server's (every other process of the instance) are reported apart",
+    "memory": "phys_footprint by the responsible-pid group, sampled after the scenario (symbols: after the popups — the Rust index lives in the `pitwall` process)",
+    "problems": "opening `src/problems.rs` makes the fake server publish 5 diagnostics to each of 2,000 files (10,000); after the status bar counts are complete: ⌘6 keydown → the frame after the first problem row; then fling top to bottom in 1500 frames, judged as 06 「스크롤 60fps」 (share within one refresh ≥ 0.95 and median interval ≤ 17 ms)",
+    "server": "a fake language server (`pw-perf-lsp`) plugged into the bundled `rust-analyzer` definition by the global setting `[lsp.rust-analyzer] path`; it answers at once and stamps the wall clock of what it sent (the targets are Pitwall's side only, M4-D19)",
+    "symbols": "a synthetic repository of 20,000 files and 500,000 symbols registered untrusted (no language server); first index = launch → `index.status` ready with nothing pending (polled every 50 ms on a connection of the same project); then, with no wait, the first popup (⌘⌥O for `symbols`, ⌘O for `classes`) and the query typed a character at a time: input event → the frame after that query's rows were in the DOM (`totalMs`), of which `index.symbols.search` round trip (`rpcMs`, Host + IPC); the second popup is measured the same way afterwards (not a first use)",
+    "typing": "300 characters at 50 ms, each inserted with `view.dispatch` (`input.type`, keymap · IME not included); per key: insert → after the next frame's rendering (a message posted from the next animation frame); per-run value = p95. LSP on and off are separate runs (`lsp-typing` · `lsp-typing-off`, the latter with `[lsp.rust-analyzer] enabled = false`); 06 judges on − off ≤ 2 ms on the medians of the per-run p95"
+  },
+  "build": {
+    "profile": "release",
+    "app": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/release/perf-m4/Pitwall.app",
+    "binary": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/release/perf-m4/Pitwall.app/Contents/MacOS/pitwall"
+  },
+  "commit": {
+    "sha": "8019a2e3af664929d7c6ddae6db3e7dd08ecebff",
+    "dirty": false
+  },
+  "os": {
+    "name": "macOS",
+    "version": "27.2",
+    "build": "26B123"
+  },
+  "hardware": {
+    "model": "Mac17,9",
+    "cpu": "Apple M5 Pro",
+    "cpus": 15,
+    "memory_bytes": 51539607552
+  },
+  "settings": {
+    "scenario": "lsp-typing",
+    "runs": 5,
+    "warmup": 1,
+    "idle_secs": 10,
+    "project": null,
+    "server": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/pitwall/m4-19/target/release/pw-perf-lsp",
+    "label": "typing, LSP on (fake server)"
+  },
+  "runs": [
+    {
+      "index": 0,
+      "warmup": true,
+      "excluded": null,
+      "app_pid": 83400,
+      "group": 83400,
+      "cold_start_ms": 1643.490966796875,
+      "launch_epoch_ms": 1794312986283.488,
+      "measure": {
+        "ready_ms": 459.0,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": {
+          "lsp": true,
+          "keys": 300,
+          "frame": {
+            "n": 300,
+            "p50": 6.0,
+            "p95": 16.0,
+            "p99": 17.0,
+            "max": 17.0,
+            "within16_7": 0.98,
+            "over18": 0.0,
+            "vsyncMs": 6.0,
+            "withinVsync": 0.64
+          },
+          "painted": {
+            "n": 300,
+            "p50": 9.0,
+            "p95": 17.0,
+            "p99": 18.0,
+            "max": 19.0,
+            "within16_7": 0.86,
+            "over18": 0.01,
+            "vsyncMs": 9.0,
+            "withinVsync": 0.67
+          }
+        },
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 462852944,
+        "rss_bytes": 518520832,
+        "processes": [
+          {
+            "pid": 83404,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 272516200,
+            "rss_bytes": 285114368
+          },
+          {
+            "pid": 83403,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 105661616,
+            "rss_bytes": 34062336
+          },
+          {
+            "pid": 83400,
+            "name": "pitwall",
+            "footprint_bytes": 72140120,
+            "rss_bytes": 169115648
+          },
+          {
+            "pid": 83410,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 83406,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4817376,
+            "rss_bytes": 9125888
+          },
+          {
+            "pid": 83402,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2244944,
+            "rss_bytes": 9551872
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 72140120,
+        "webkit_footprint_bytes": 382995192,
+        "server_footprint_bytes": 7717632,
+        "server_rss_bytes": 21102592
+      },
+      "killed": false
+    },
+    {
+      "index": 1,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 84233,
+      "group": 84233,
+      "cold_start_ms": 495.17578125,
+      "launch_epoch_ms": 1794313014037.738,
+      "measure": {
+        "ready_ms": 62.0,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": {
+          "lsp": true,
+          "keys": 300,
+          "frame": {
+            "n": 300,
+            "p50": 7.0,
+            "p95": 15.0,
+            "p99": 17.0,
+            "max": 18.0,
+            "within16_7": 0.99,
+            "over18": 0.0,
+            "vsyncMs": 7.0,
+            "withinVsync": 0.71
+          },
+          "painted": {
+            "n": 300,
+            "p50": 10.0,
+            "p95": 18.0,
+            "p99": 19.0,
+            "max": 23.0,
+            "within16_7": 0.9,
+            "over18": 0.01,
+            "vsyncMs": 10.0,
+            "withinVsync": 0.81
+          }
+        },
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 469128064,
+        "rss_bytes": 539377664,
+        "processes": [
+          {
+            "pid": 84236,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 278152344,
+            "rss_bytes": 300892160
+          },
+          {
+            "pid": 84235,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 105465032,
+            "rss_bytes": 33882112
+          },
+          {
+            "pid": 84233,
+            "name": "pitwall",
+            "footprint_bytes": 72975656,
+            "rss_bytes": 174342144
+          },
+          {
+            "pid": 84238,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 84237,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4850192,
+            "rss_bytes": 9175040
+          },
+          {
+            "pid": 84234,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2212152,
+            "rss_bytes": 9535488
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 72975656,
+        "webkit_footprint_bytes": 388467568,
+        "server_footprint_bytes": 7684840,
+        "server_rss_bytes": 21086208
+      },
+      "killed": false
+    },
+    {
+      "index": 2,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 85058,
+      "group": 85058,
+      "cold_start_ms": 491.090087890625,
+      "launch_epoch_ms": 1794313040286.1929,
+      "measure": {
+        "ready_ms": 66.0,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": {
+          "lsp": true,
+          "keys": 300,
+          "frame": {
+            "n": 300,
+            "p50": 7.0,
+            "p95": 16.0,
+            "p99": 17.0,
+            "max": 20.0,
+            "within16_7": 0.98,
+            "over18": 0.0,
+            "vsyncMs": 7.0,
+            "withinVsync": 0.62
+          },
+          "painted": {
+            "n": 300,
+            "p50": 10.0,
+            "p95": 17.0,
+            "p99": 19.0,
+            "max": 21.0,
+            "within16_7": 0.85,
+            "over18": 0.01,
+            "vsyncMs": 10.0,
+            "withinVsync": 0.72
+          }
+        },
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 455201592,
+        "rss_bytes": 523780096,
+        "processes": [
+          {
+            "pid": 85061,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 263734328,
+            "rss_bytes": 284524544
+          },
+          {
+            "pid": 85060,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 105170120,
+            "rss_bytes": 33669120
+          },
+          {
+            "pid": 85058,
+            "name": "pitwall",
+            "footprint_bytes": 73680192,
+            "rss_bytes": 175226880
+          },
+          {
+            "pid": 85063,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 85062,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4882936,
+            "rss_bytes": 9224192
+          },
+          {
+            "pid": 85059,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2261328,
+            "rss_bytes": 9584640
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 73680192,
+        "webkit_footprint_bytes": 373787384,
+        "server_footprint_bytes": 7734016,
+        "server_rss_bytes": 21135360
+      },
+      "killed": false
+    },
+    {
+      "index": 3,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 86369,
+      "group": 86369,
+      "cold_start_ms": 485.174072265625,
+      "launch_epoch_ms": 1794313066685.426,
+      "measure": {
+        "ready_ms": 54.0,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": {
+          "lsp": true,
+          "keys": 300,
+          "frame": {
+            "n": 300,
+            "p50": 7.0,
+            "p95": 15.0,
+            "p99": 17.0,
+            "max": 18.0,
+            "within16_7": 0.98,
+            "over18": 0.0,
+            "vsyncMs": 7.0,
+            "withinVsync": 0.69
+          },
+          "painted": {
+            "n": 300,
+            "p50": 9.0,
+            "p95": 17.0,
+            "p99": 19.0,
+            "max": 20.0,
+            "within16_7": 0.9,
+            "over18": 0.02,
+            "vsyncMs": 9.0,
+            "withinVsync": 0.72
+          }
+        },
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 465572640,
+        "rss_bytes": 526483456,
+        "processes": [
+          {
+            "pid": 86372,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 275350632,
+            "rss_bytes": 288014336
+          },
+          {
+            "pid": 86371,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 105350248,
+            "rss_bytes": 34062336
+          },
+          {
+            "pid": 86369,
+            "name": "pitwall",
+            "footprint_bytes": 72303936,
+            "rss_bytes": 174129152
+          },
+          {
+            "pid": 86374,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 86373,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4882960,
+            "rss_bytes": 9207808
+          },
+          {
+            "pid": 86370,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2212176,
+            "rss_bytes": 9519104
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 72303936,
+        "webkit_footprint_bytes": 385583840,
+        "server_footprint_bytes": 7684864,
+        "server_rss_bytes": 21069824
+      },
+      "killed": false
+    },
+    {
+      "index": 4,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 87417,
+      "group": 87417,
+      "cold_start_ms": 489.629150390625,
+      "launch_epoch_ms": 1794313092880.702,
+      "measure": {
+        "ready_ms": 60.0,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": {
+          "lsp": true,
+          "keys": 300,
+          "frame": {
+            "n": 300,
+            "p50": 7.0,
+            "p95": 16.0,
+            "p99": 16.0,
+            "max": 18.0,
+            "within16_7": 0.99,
+            "over18": 0.0,
+            "vsyncMs": 7.0,
+            "withinVsync": 0.65
+          },
+          "painted": {
+            "n": 300,
+            "p50": 9.0,
+            "p95": 17.0,
+            "p99": 19.0,
+            "max": 20.0,
+            "within16_7": 0.87,
+            "over18": 0.01,
+            "vsyncMs": 9.0,
+            "withinVsync": 0.68
+          }
+        },
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 476451712,
+        "rss_bytes": 536133632,
+        "processes": [
+          {
+            "pid": 87420,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 287409280,
+            "rss_bytes": 298909696
+          },
+          {
+            "pid": 87419,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 105284808,
+            "rss_bytes": 33701888
+          },
+          {
+            "pid": 87417,
+            "name": "pitwall",
+            "footprint_bytes": 71206208,
+            "rss_bytes": 173293568
+          },
+          {
+            "pid": 87422,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 87421,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4833784,
+            "rss_bytes": 9109504
+          },
+          {
+            "pid": 87418,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2244944,
+            "rss_bytes": 9568256
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 71206208,
+        "webkit_footprint_bytes": 397527872,
+        "server_footprint_bytes": 7717632,
+        "server_rss_bytes": 21118976
+      },
+      "killed": false
+    },
+    {
+      "index": 5,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 88265,
+      "group": 88265,
+      "cold_start_ms": 486.968994140625,
+      "launch_epoch_ms": 1794313119097.146,
+      "measure": {
+        "ready_ms": 61.0,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": {
+          "lsp": true,
+          "keys": 300,
+          "frame": {
+            "n": 300,
+            "p50": 6.0,
+            "p95": 15.0,
+            "p99": 17.0,
+            "max": 22.0,
+            "within16_7": 0.99,
+            "over18": 0.0,
+            "vsyncMs": 6.0,
+            "withinVsync": 0.7
+          },
+          "painted": {
+            "n": 300,
+            "p50": 10.0,
+            "p95": 17.0,
+            "p99": 19.0,
+            "max": 23.0,
+            "within16_7": 0.9,
+            "over18": 0.02,
+            "vsyncMs": 10.0,
+            "withinVsync": 0.81
+          }
+        },
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": null,
+        "symbol_keys": null,
+        "symbol_keys_second": null,
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 471995312,
+        "rss_bytes": 533905408,
+        "processes": [
+          {
+            "pid": 88268,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 281609344,
+            "rss_bytes": 296157184
+          },
+          {
+            "pid": 88267,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 105448672,
+            "rss_bytes": 33669120
+          },
+          {
+            "pid": 88265,
+            "name": "pitwall",
+            "footprint_bytes": 72435032,
+            "rss_bytes": 173916160
+          },
+          {
+            "pid": 88270,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5472688,
+            "rss_bytes": 11550720
+          },
+          {
+            "pid": 88269,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4833808,
+            "rss_bytes": 9076736
+          },
+          {
+            "pid": 88266,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2195768,
+            "rss_bytes": 9535488
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 72435032,
+        "webkit_footprint_bytes": 391891824,
+        "server_footprint_bytes": 7668456,
+        "server_rss_bytes": 21086208
+      },
+      "killed": false
+    }
+  ],
+  "failures": [],
+  "valid_runs": 5,
+  "rows": [
+    {
+      "key": "lsp_ready_ms",
+      "item": "open main.rs → language server ready (reference)",
+      "summary": {
+        "median": 61.0,
+        "min": 54.0,
+        "max": 66.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "typing_p95_ms",
+      "item": "typing: key → after the frame, per-run p95 (compare LSP on and off: on − off ≤ 2 ms)",
+      "summary": {
+        "median": 17.0,
+        "min": 17.0,
+        "max": 18.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "on − off ≤ 2 ms",
+      "met": null
+    },
+    {
+      "key": "typing_p50_ms",
+      "item": "typing: key → after the frame, per-run p50 (reference)",
+      "summary": {
+        "median": 10.0,
+        "min": 9.0,
+        "max": 10.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "typing_max_ms",
+      "item": "typing: key → after the frame, slowest of the run (reference)",
+      "summary": {
+        "median": 21.0,
+        "min": 20.0,
+        "max": 23.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "typing_frame_p95_ms",
+      "item": "typing: key → next animation frame, per-run p95 (reference)",
+      "summary": {
+        "median": 15.0,
+        "min": 15.0,
+        "max": 16.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "cold_start_ms",
+      "item": "cold start → first frame (reference)",
+      "summary": {
+        "median": 489.629150390625,
+        "min": 485.174072265625,
+        "max": 495.17578125,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "footprint_mb",
+      "item": "footprint after the scenario, every process of the instance",
+      "summary": {
+        "median": 469.128064,
+        "min": 455.201592,
+        "max": 476.451712,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "app_footprint_mb",
+      "item": "  of which the app process (`pitwall` — Host, LSP client, symbol index)",
+      "summary": {
+        "median": 72.435032,
+        "min": 71.206208,
+        "max": 73.680192,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "webkit_footprint_mb",
+      "item": "  of which WebKit",
+      "summary": {
+        "median": 388.467568,
+        "min": 373.787384,
+        "max": 397.527872,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "server_footprint_mb",
+      "item": "  of which the language server's processes",
+      "summary": {
+        "median": 7.684864,
+        "min": 7.668456,
+        "max": 7.734016,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "server_rss_mb",
+      "item": "language server RSS (reported apart, not a target)",
+      "summary": {
+        "median": 21.086208,
+        "min": 21.069824,
+        "max": 21.13536,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    }
+  ],
+  "warning": null,
+  "stopped": null
+}
