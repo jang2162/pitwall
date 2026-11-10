@@ -15,7 +15,7 @@
 //! - **첫 색인**: 창이 `fs.watch` 를 연 것처럼 감시를 잡은 때부터 심볼 색인이 다 만들어지고 쉴 때까지(파일 목록 걷기 포함)의 벽시계.
 //! - **메모리**: 같은 구간의 Rust 힙 증가(이 시험 바이너리의 전역 할당자가 센다 — tree-sitter 의 C 할당은 들지 않지만 트리 · 파서는
 //!   파일마다 버린다)와 프로세스 RSS 증가(`ps`, 할당자 단편화 · C 할당 포함). 파일 목록 인덱스(같은 감시가 만든다)도 든다.
-//! - **질의**: 색인이 준비된 뒤 `handleItem1234x5` 를 한 글자씩 늘려 가며(키 입력마다 요청 하나) `index.symbols.search` 를 부른 시간 —
+//! - **질의**: 색인이 준비된 뒤 `handleItem1234x6` 을 한 글자씩 늘려 가며(키 입력마다 요청 하나) `index.symbols.search` 를 부른 시간 —
 //!   대소문자 섞인 질의 · 흔한 한 글자 질의를 함께. 키 입력마다 30 ms 안이어야 한다.
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -41,6 +41,51 @@ use tokio_util::sync::CancellationToken;
 #[path = "support/perf_repo.rs"]
 mod perf_repo;
 use perf_repo::{FILES, SYMBOLS_PER_FILE};
+
+/// 키마다 늘려 가며 치는 질의 — 저장소에 있는 메서드 이름이라 모든 접두가 결과를 낸다(아래 시험이 본다).
+const QUERY: &str = "handleItem1234x6";
+
+/// `name` 이 합성 저장소의 어느 파일에 식별자 하나로(앞뒤가 식별자 글자가 아니게) 있는가.
+fn names_a_symbol(name: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    (0..FILES).any(|i| {
+        let (_, text) = perf_repo::file(i);
+        text.match_indices(name).any(|(at, _)| {
+            !text[..at].chars().next_back().is_some_and(ident)
+                && !text[at + name.len()..].chars().next().is_some_and(ident)
+        })
+    })
+}
+
+/// 앱 안 시나리오(`apps/desktop/src/perf-scenario-lsp.ts`)와 이 시험의 질의가 합성 저장소의 이름이다. 시나리오는 키마다 그 질의의 결과
+/// 줄을 기다리므로 결과 0개인 접두가 있으면 시간 초과한다(M4-19 — `handleItem1234x5` 는 동사가 `compute` 라 저장소에 없었다). 온전한
+/// 이름이 있으면 그 모든 접두는 그 이름의 앞머리라 결과를 낸다.
+#[test]
+fn the_perf_queries_name_symbols_of_the_synthetic_repository() {
+    let ts = include_str!("../../../apps/desktop/src/perf-scenario-lsp.ts");
+    let constant = |name: &str| {
+        let head = format!("export const {name} = \"");
+        let at = ts
+            .find(&head)
+            .unwrap_or_else(|| panic!("{name} in perf-scenario-lsp.ts"))
+            + head.len();
+        ts[at..].split('"').next().unwrap().to_owned()
+    };
+    for (what, query) in [
+        ("SYMBOL_QUERY", constant("SYMBOL_QUERY")),
+        ("CLASS_QUERY", constant("CLASS_QUERY")),
+        ("this test's QUERY", QUERY.to_owned()),
+    ] {
+        assert!(
+            names_a_symbol(&query),
+            "{what} = {query:?} is no symbol of the synthetic repository"
+        );
+    }
+    assert!(
+        !names_a_symbol("handleItem1234x5"),
+        "the check tells a missing name"
+    );
+}
 
 /// 이 바이너리의 Rust 힙(살아 있는 바이트).
 struct Counting;
@@ -211,7 +256,7 @@ async fn twenty_thousand_files_index_within_the_targets() {
     );
 
     // 질의: 키 입력마다 요청 하나.
-    let word = "handleItem1234x5";
+    let word = QUERY;
     let mut queries: Vec<String> = (1..=word.len()).map(|n| word[..n].to_owned()).collect();
     queries.extend(["r", "Widget", "wdg", "compute item 199", "zzzz"].map(str::to_owned));
     let search = |query: &str| IndexSymbolSearchParams {
